@@ -131,29 +131,19 @@ test("实验规划: 返回计划文本", async ({ page }) => {
   await expect(page.getByTestId("export-md-btn")).toBeVisible();
 });
 
-test("数据分析: 上传后显示图表与AI初稿", async ({ page }) => {
+test("数据分析: AI写代码执行并输出结论", async ({ page }) => {
   await mockBase(page);
-  // 1x1 透明 PNG 的 base64
   const png =
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==";
   await page.route("**/api/analyze", (r) =>
     r.fulfill({
-      json: {
-        ok: true,
-        rows: 100,
-        cols: 3,
-        describe_md: "描述性统计：...",
-        stats_md: "统计检验：[两组比较] p=0.01",
-        charts: [{ title: "分布直方图", b64: png }],
-        facts: "- A组均值=5.0\n- 差异显著 p=0.01",
-      },
-    }),
-  );
-  await page.route("**/api/run", (r) =>
-    r.fulfill({
       contentType: "text/event-stream",
       body: sse(
-        { event: "delta", data: { text: "核心发现：A组显著高于B组。" } },
+        { event: "status", data: { message: "正在生成分析代码…" } },
+        { event: "code", data: { code: "print('t检验 p=0.01')" } },
+        { event: "charts", data: { items: [png] } },
+        { event: "output", data: { text: "t检验 p=0.01" } },
+        { event: "delta", data: { text: "核心发现：A组显著高于B组（p=0.01）。" } },
         { event: "done", data: {} },
       ),
     }),
@@ -165,9 +155,11 @@ test("数据分析: 上传后显示图表与AI初稿", async ({ page }) => {
     mimeType: "text/csv",
     buffer: Buffer.from("group,value\nA,5\nB,3\n"),
   });
+  await page.getByTestId("input-question").fill("A组和B组是否有差异");
   await page.getByTestId("run-btn").click();
-  await expect(page.getByTestId("analysis-block")).toBeVisible();
+  await expect(page.getByTestId("code-block")).toContainText("t检验");
   await expect(page.getByTestId("chart-0")).toBeVisible();
+  await expect(page.getByTestId("output-block")).toContainText("p=0.01");
   await expect(page.getByTestId("result-text")).toContainText("A组显著高于B组");
 });
 
@@ -189,36 +181,6 @@ test("期刊排版: 重排并出现下载按钮", async ({ page }) => {
   await page.getByTestId("run-btn").click();
   await expect(page.getByTestId("result-text")).toContainText("重排后的稿件正文");
   await expect(page.getByTestId("download-btn")).toBeVisible();
-});
-
-test("数据分析: 关闭AI时只出统计不调用模型", async ({ page }) => {
-  await mockBase(page);
-  let runCalled = false;
-  await page.route("**/api/analyze", (r) =>
-    r.fulfill({
-      json: {
-        ok: true, rows: 6, cols: 2,
-        describe_md: "描述性统计：...", stats_md: "统计检验：p=0.01",
-        charts: [], facts: "- 差异显著 p=0.01",
-      },
-    }),
-  );
-  await page.route("**/api/run", (r) => {
-    runCalled = true;
-    return r.fulfill({ contentType: "text/event-stream", body: sse({ event: "done", data: {} }) });
-  });
-  await page.goto("/");
-  await page.getByTestId("nav-analyze").click();
-  await page.getByTestId("with-ai").uncheck();
-  await page.getByTestId("input-file").setInputFiles({
-    name: "data.csv", mimeType: "text/csv", buffer: Buffer.from("group,value\nA,5\nB,9\n"),
-  });
-  await page.getByTestId("run-btn").click();
-  await expect(page.getByTestId("analysis-block")).toBeVisible();
-  // 未开启 AI: 不应出现 AI 结果面板
-  await expect(page.getByTestId("result-text")).toHaveCount(0);
-  await page.waitForTimeout(300);
-  expect(runCalled).toBe(false);
 });
 
 test("期刊排版: 上传Word自动填入稿件", async ({ page }) => {

@@ -19,8 +19,8 @@ from fastapi.responses import Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from .analysis import analyze as run_analysis
 from .config import settings
+from .dataanalysis import analyze_data
 from .extract import extract_text
 from .formatting import build_docx
 from .journals import list_journals
@@ -110,9 +110,20 @@ async def idea(req: RunRequest) -> StreamingResponse:
 
 
 @app.post("/api/analyze")
-async def analyze(file: UploadFile = File(...), question: str = Form("")) -> dict:
+async def analyze(file: UploadFile = File(...), question: str = Form("")) -> StreamingResponse:
+    """AI 看懂数据 → 写分析代码 → 本地执行 → 流式输出结论(SSE)。"""
     content = await file.read()
-    return run_analysis(file.filename or "data.csv", content, question)
+    filename = file.filename or "data.csv"
+
+    async def gen():
+        async for event, data in analyze_data(filename, content, question):
+            yield _sse(event, data)
+
+    return StreamingResponse(
+        gen(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 @app.post("/api/extract")

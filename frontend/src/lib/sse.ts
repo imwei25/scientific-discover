@@ -161,6 +161,70 @@ export async function streamIdea(
   }
 }
 
+export interface AnalyzeHandlers {
+  onStatus?: (message: string) => void;
+  onCode?: (code: string) => void;
+  onCharts?: (items: string[]) => void;
+  onOutput?: (text: string) => void;
+  onDelta: (text: string) => void;
+  onDone?: () => void;
+  onError?: (message: string) => void;
+  signal?: AbortSignal;
+}
+
+// AI 数据分析: 上传文件(multipart), 流式接收 status/code/charts/output/delta。
+export async function streamAnalyze(
+  file: File,
+  question: string,
+  h: AnalyzeHandlers,
+): Promise<void> {
+  const fd = new FormData();
+  fd.append("file", file);
+  fd.append("question", question);
+  let resp: Response;
+  try {
+    resp = await fetch(apiUrl("/api/analyze"), { method: "POST", body: fd, signal: h.signal });
+  } catch (e) {
+    h.onError?.(`无法连接本地服务: ${(e as Error).message}`);
+    return;
+  }
+  if (!resp.ok || !resp.body) {
+    h.onError?.(`服务返回错误: ${resp.status}`);
+    return;
+  }
+  const reader = resp.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const { events, rest } = parseChunk(buffer);
+      buffer = rest;
+      for (const ev of events) {
+        let data: any = {};
+        try {
+          data = JSON.parse(ev.data);
+        } catch {
+          /* ignore */
+        }
+        if (ev.event === "status") h.onStatus?.(data.message ?? "");
+        else if (ev.event === "code") h.onCode?.(data.code ?? "");
+        else if (ev.event === "charts") h.onCharts?.(data.items ?? []);
+        else if (ev.event === "output") h.onOutput?.(data.text ?? "");
+        else if (ev.event === "delta") h.onDelta(data.text ?? "");
+        else if (ev.event === "error") h.onError?.(data.message ?? ev.data);
+        else if (ev.event === "done") h.onDone?.();
+      }
+    }
+  } catch (e) {
+    if ((e as Error).name !== "AbortError") {
+      h.onError?.(`读取流出错: ${(e as Error).message}`);
+    }
+  }
+}
+
 // 运行一个文本类模块(找idea / 实验规划 / 写作)。
 export function runModule(
   module: string,
