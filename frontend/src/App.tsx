@@ -80,26 +80,28 @@ export default function App() {
           <span className="brand-name">科研助手</span>
         </div>
         <nav className="nav">
-          {NAV.map((m) => (
-            <button
-              key={m.id}
-              className={`nav-item ${active === m.id ? "active" : ""}`}
-              onClick={() => setActive(m.id)}
-              data-testid={`nav-${m.id}`}
-            >
-              <span className="nav-icon">{m.icon}</span>
-              <span className="nav-text">
-                <span className="nav-title">{m.title}</span>
-                <span className="nav-desc">{m.desc}</span>
-              </span>
-            </button>
-          ))}
+          <div className="pipeline">
+            {NAV.map((m, i) => (
+              <button
+                key={m.id}
+                className={`nav-item ${active === m.id ? "active" : ""}`}
+                onClick={() => setActive(m.id)}
+                data-testid={`nav-${m.id}`}
+              >
+                <span className="nav-num">{String(i + 1).padStart(2, "0")}</span>
+                <span className="nav-text">
+                  <span className="nav-title">{m.title}</span>
+                  <span className="nav-desc">{m.desc}</span>
+                </span>
+              </button>
+            ))}
+          </div>
           <button
-            className={`nav-item ${active === "history" ? "active" : ""}`}
+            className={`nav-item nav-aux ${active === "history" ? "active" : ""}`}
             onClick={() => setActive("history")}
             data-testid="nav-history"
           >
-            <span className="nav-icon">📜</span>
+            <span className="nav-num aux">📜</span>
             <span className="nav-text">
               <span className="nav-title">历史记录</span>
               <span className="nav-desc">回看与恢复过往结果</span>
@@ -163,13 +165,20 @@ export default function App() {
 function Home({ onPick }: { onPick: (m: ModuleId) => void }) {
   return (
     <div className="home">
-      <h1>欢迎使用科研助手</h1>
+      <p className="eyebrow">Research Workflow · 科研全流程</p>
+      <h1>从一个想法，到一篇可投稿的论文</h1>
       <p className="home-sub">
-        从找选题到投稿，四步陪你走完科研全流程。选择一个功能开始：
+        面向医学、药学与生物医学研究者的 AI 助手。沿着下面四个阶段，一步步把研究推进到投稿。
       </p>
       <div className="home-grid">
-        {NAV.map((m) => (
-          <button key={m.id} className="home-card" onClick={() => onPick(m.id)} data-testid={`card-${m.id}`}>
+        {NAV.map((m, i) => (
+          <button
+            key={m.id}
+            className="home-card"
+            data-step={`0${i + 1}`}
+            onClick={() => onPick(m.id)}
+            data-testid={`card-${m.id}`}
+          >
             <span className="home-card-icon">{m.icon}</span>
             <span className="home-card-title">{m.title}</span>
             <span className="home-card-desc">{m.desc}</span>
