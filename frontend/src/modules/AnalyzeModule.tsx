@@ -3,7 +3,7 @@ import { streamAnalyze } from "../lib/sse";
 import { usePersistentState } from "../lib/usePersistentState";
 import Markdown from "../components/Markdown";
 import Dropzone from "../components/Dropzone";
-import { downloadText, tsName } from "../lib/download";
+import { downloadText, tsName, downloadAnalysisReport } from "../lib/download";
 import type { Goto } from "../App";
 
 export default function AnalyzeModule({ goto }: { goto: Goto }) {
@@ -160,6 +160,24 @@ export default function AnalyzeModule({ goto }: { goto: Goto }) {
                   onClick={() => goto("format", { "format:manuscript": conclusion })}
                 >
                   用此结论去排版 →
+                </button>
+              )}
+              {conclusion && !running && (
+                <button
+                  className="btn-ghost"
+                  data-testid="export-report-btn"
+                  onClick={() =>
+                    downloadAnalysisReport({
+                      title: "数据分析报告",
+                      question,
+                      code,
+                      charts,
+                      output,
+                      conclusion,
+                    })
+                  }
+                >
+                  导出完整报告(HTML)
                 </button>
               )}
               {conclusion && !running && (

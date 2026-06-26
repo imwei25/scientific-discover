@@ -228,6 +228,8 @@ test("数据分析: AI写代码执行并输出结论", async ({ page }) => {
   await expect(page.getByTestId("chart-0")).toBeVisible();
   await expect(page.getByTestId("output-block")).toContainText("p=0.01");
   await expect(page.getByTestId("result-text")).toContainText("A组显著高于B组");
+  // 完成后可导出完整报告
+  await expect(page.getByTestId("export-report-btn")).toBeVisible();
 });
 
 test("期刊排版: 重排并出现下载按钮", async ({ page }) => {

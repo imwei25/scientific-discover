@@ -16,3 +16,65 @@ export function tsName(prefix: string, ext: string): string {
   const stamp = `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}`;
   return `${prefix}-${stamp}.${ext}`;
 }
+
+function escapeHtml(s: string): string {
+  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
+// 极简 Markdown→HTML(覆盖标题/加粗/链接/列表/段落), 用于报告导出。
+function mdToHtml(md: string): string {
+  const lines = escapeHtml(md).split("\n");
+  const out: string[] = [];
+  let inList = false;
+  const inline = (t: string) =>
+    t
+      .replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>")
+      .replace(/\[(.+?)\]\((https?:[^)]+)\)/g, '<a href="$2" target="_blank" rel="noreferrer">$1</a>');
+  for (const raw of lines) {
+    const line = raw.trimEnd();
+    if (/^###\s+/.test(line)) { if (inList) { out.push("</ul>"); inList = false; } out.push(`<h3>${inline(line.replace(/^###\s+/, ""))}</h3>`); }
+    else if (/^##\s+/.test(line)) { if (inList) { out.push("</ul>"); inList = false; } out.push(`<h2>${inline(line.replace(/^##\s+/, ""))}</h2>`); }
+    else if (/^#\s+/.test(line)) { if (inList) { out.push("</ul>"); inList = false; } out.push(`<h1>${inline(line.replace(/^#\s+/, ""))}</h1>`); }
+    else if (/^[-*]\s+/.test(line)) { if (!inList) { out.push("<ul>"); inList = true; } out.push(`<li>${inline(line.replace(/^[-*]\s+/, ""))}</li>`); }
+    else if (line === "") { if (inList) { out.push("</ul>"); inList = false; } }
+    else { if (inList) { out.push("</ul>"); inList = false; } out.push(`<p>${inline(line)}</p>`); }
+  }
+  if (inList) out.push("</ul>");
+  return out.join("\n");
+}
+
+export interface AnalysisReport {
+  title: string;
+  question: string;
+  code: string;
+  charts: string[]; // base64 png
+  output: string;
+  conclusion: string;
+}
+
+// 导出自包含的 HTML 分析报告(图表内嵌, 可用浏览器打开并打印成 PDF)。
+export function downloadAnalysisReport(report: AnalysisReport): void {
+  const charts = report.charts
+    .map((b64, i) => `<figure><img src="data:image/png;base64,${b64}" alt="图${i + 1}"/></figure>`)
+    .join("\n");
+  const html = `<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"/><title>${escapeHtml(report.title)}</title>
+<style>
+body{font-family:"Microsoft YaHei","Segoe UI",system-ui,sans-serif;max-width:820px;margin:32px auto;padding:0 20px;color:#1f2733;line-height:1.7}
+h1{font-size:24px}h2{font-size:19px;margin-top:24px}h3{font-size:16px}
+pre{background:#f7f9fc;border:1px solid #e3e8ef;border-radius:8px;padding:12px;overflow-x:auto;font-size:12.5px;white-space:pre-wrap}
+figure{margin:14px 0;text-align:center}img{max-width:100%;border:1px solid #e3e8ef;border-radius:8px}
+.muted{color:#5b6675}a{color:#2f6df6}
+details summary{cursor:pointer;font-weight:600;margin:16px 0 8px}
+</style></head><body>
+<h1>${escapeHtml(report.title)}</h1>
+${report.question ? `<p class="muted"><strong>研究目的：</strong>${escapeHtml(report.question)}</p>` : ""}
+<h2>分析结论</h2>
+${mdToHtml(report.conclusion)}
+${charts ? `<h2>图表</h2>${charts}` : ""}
+<details><summary>分析代码（本地执行，可复现）</summary><pre>${escapeHtml(report.code)}</pre></details>
+<details><summary>代码运行的原始输出</summary><pre>${escapeHtml(report.output)}</pre></details>
+<p class="muted" style="margin-top:28px;font-size:12px">本报告由科研助手生成；统计数字由本地代码真实计算，结论请人工核对后使用。</p>
+</body></html>`;
+  downloadText(tsName("数据分析报告", "html"), html, "text/html");
+}
