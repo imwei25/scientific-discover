@@ -9,9 +9,11 @@ if not exist ".venv\Scripts\python.exe" (
     exit /b
 )
 
-rem Read the configured port from the same config the backend uses (.env PORT, default 8756).
+rem Read the configured port from backend\.env (default 8756). cwd is already backend.
 set "PORT=8756"
-for /f "delims=" %%p in ('.venv\Scripts\python.exe -c "import sys;from app.config import settings;sys.stdout.write(str(settings.port))" 2^>nul') do set "PORT=%%p"
+if exist ".env" for /f "usebackq tokens=1,2 delims==" %%a in (".env") do (
+    if /i "%%a"=="PORT" set "PORT=%%b"
+)
 set "URL=http://127.0.0.1:%PORT%"
 
 rem If the service is already running, just open the browser (avoid a duplicate that fails to bind the port).

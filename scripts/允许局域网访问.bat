@@ -10,9 +10,17 @@ if %errorlevel% neq 0 (
     exit /b
 )
 
-rem ---- elevated: add inbound firewall rule for TCP 8756 (idempotent) ----
-echo Adding firewall rule to allow inbound TCP 8756 ...
-powershell -NoProfile -Command "Remove-NetFirewallRule -DisplayName 'KeyanAssistant 8756' -ErrorAction SilentlyContinue; New-NetFirewallRule -DisplayName 'KeyanAssistant 8756' -Direction Inbound -Protocol TCP -LocalPort 8756 -Action Allow -Profile Any | Out-Null; Write-Host '[OK] Inbound TCP 8756 allowed for all network profiles.'; (Get-NetIPAddress -AddressFamily IPv4 | Where-Object { $_.IPAddress -like '192.168.*' -or $_.IPAddress -like '10.*' -or ($_.IPAddress -like '172.*') }) | ForEach-Object { Write-Host (' Other devices open:  http://' + $_.IPAddress + ':8756') }"
+rem ---- read configured port from backend\.env (default 8756) ----
+set "PORT=8756"
+pushd "%~dp0..\backend"
+if exist ".env" for /f "usebackq tokens=1,2 delims==" %%a in (".env") do (
+    if /i "%%a"=="PORT" set "PORT=%%b"
+)
+popd
+
+rem ---- elevated: add inbound firewall rule for the configured TCP port (idempotent) ----
+echo Adding firewall rule to allow inbound TCP %PORT% ...
+powershell -NoProfile -Command "$port=%PORT%; Remove-NetFirewallRule -DisplayName ('KeyanAssistant '+$port) -ErrorAction SilentlyContinue; New-NetFirewallRule -DisplayName ('KeyanAssistant '+$port) -Direction Inbound -Protocol TCP -LocalPort $port -Action Allow -Profile Any | Out-Null; Write-Host ('[OK] Inbound TCP '+$port+' allowed for all network profiles.'); (Get-NetIPAddress -AddressFamily IPv4 | Where-Object { $_.IPAddress -like '192.168.*' -or $_.IPAddress -like '10.*' -or ($_.IPAddress -like '172.*') }) | ForEach-Object { Write-Host (' Other devices open:  http://' + $_.IPAddress + ':' + $port) }"
 
 echo.
 echo Next steps:
