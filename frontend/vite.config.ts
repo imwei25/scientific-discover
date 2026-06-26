@@ -10,7 +10,8 @@ export default defineConfig({
     strictPort: true,
     proxy: {
       "/api": {
-        target: "http://127.0.0.1:8756",
+        // 开发模式代理目标端口跟随后端 PORT(默认 8756)
+        target: `http://127.0.0.1:${process.env.PORT || 8756}`,
         changeOrigin: true,
       },
     },
