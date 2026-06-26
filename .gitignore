@@ -1,0 +1,21 @@
+# Python
+backend/.venv/
+__pycache__/
+*.pyc
+backend/.env
+
+# Node
+frontend/node_modules/
+frontend/dist/
+
+# Playwright
+frontend/test-results/
+frontend/playwright-report/
+
+# Tauri
+src-tauri/target/
+src-tauri/binaries/
+
+# OS
+.DS_Store
+Thumbs.db

@@ -1,0 +1,149 @@
+"""科研助手本地 sidecar —— FastAPI 服务。
+
+前端(Tauri webview)通过 http://127.0.0.1:<PORT> 访问。
+端点:
+  GET  /api/health      健康检查
+  GET  /api/journals    期刊列表
+  POST /api/run         文本类模块流式输出(找idea/实验规划/写作/排版)
+  POST /api/analyze     上传数据 -> 本地统计分析(返回 JSON)
+  POST /api/docx        把重排文本生成 Word 文件下载
+"""
+from __future__ import annotations
+
+import json
+from pathlib import Path
+
+from fastapi import FastAPI, File, Form, UploadFile
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import Response, StreamingResponse
+from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel
+
+from .analysis import analyze as run_analysis
+from .config import settings
+from .extract import extract_text
+from .formatting import build_docx
+from .journals import list_journals
+from .llm import LLMError, stream_chat
+from .prompts import build_messages
+from .research import deep_research_idea
+
+app = FastAPI(title="科研助手 sidecar", version="0.1.0")
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+
+class RunRequest(BaseModel):
+    module: str
+    inputs: dict
+
+
+class DocxRequest(BaseModel):
+    text: str
+    journal_id: str = ""
+
+
+@app.get("/api/health")
+async def health() -> dict:
+    return {
+        "status": "ok",
+        "provider": settings.provider,
+        "model": settings.model,
+        "mock": settings.mock,
+        "configured": settings.mock or bool(settings.api_key),
+    }
+
+
+@app.get("/api/journals")
+async def journals() -> dict:
+    return {"journals": list_journals()}
+
+
+def _sse(event: str, data: dict) -> str:
+    return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
+
+
+@app.post("/api/run")
+async def run(req: RunRequest) -> StreamingResponse:
+    try:
+        messages = build_messages(req.module, req.inputs)
+    except ValueError as e:
+        async def err_gen():
+            yield _sse("error", {"message": str(e)})
+        return StreamingResponse(err_gen(), media_type="text/event-stream")
+
+    async def gen():
+        try:
+            async for piece in stream_chat(messages):
+                yield _sse("delta", {"text": piece})
+        except LLMError as e:
+            yield _sse("error", {"message": str(e)})
+        except Exception as e:  # noqa: BLE001
+            yield _sse("error", {"message": f"内部错误: {e}"})
+        else:
+            yield _sse("done", {})
+
+    return StreamingResponse(
+        gen(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+@app.post("/api/idea")
+async def idea(req: RunRequest) -> StreamingResponse:
+    """医学/药学/生物 找选题: 检索 PubMed + 分析现状/空白/选题(带文献链接)。"""
+    async def gen():
+        async for event, data in deep_research_idea(req.inputs):
+            yield _sse(event, data)
+
+    return StreamingResponse(
+        gen(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+@app.post("/api/analyze")
+async def analyze(file: UploadFile = File(...), question: str = Form("")) -> dict:
+    content = await file.read()
+    return run_analysis(file.filename or "data.csv", content, question)
+
+
+@app.post("/api/extract")
+async def extract(file: UploadFile = File(...)) -> dict:
+    """抽取上传文档(Word/PDF/Excel/CSV/txt)的纯文本, 供分析或润色。"""
+    content = await file.read()
+    return extract_text(file.filename or "file", content)
+
+
+@app.post("/api/docx")
+async def docx(req: DocxRequest) -> Response:
+    data = build_docx(req.text, req.journal_id)
+    return Response(
+        content=data,
+        media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        headers={"Content-Disposition": "attachment; filename=manuscript.docx"},
+    )
+
+
+# 若前端已构建(frontend/dist 存在), 由本服务直接托管, 实现“单进程”部署:
+# 用户只需启动本服务并打开浏览器即可, 无需单独的前端服务器。
+_DIST = Path(__file__).resolve().parent.parent.parent / "frontend" / "dist"
+if _DIST.is_dir():
+    app.mount("/", StaticFiles(directory=str(_DIST), html=True), name="static")
+
+
+def run_server():
+    import uvicorn
+
+    uvicorn.run(app, host="127.0.0.1", port=settings.port)
+
+
+if __name__ == "__main__":
+    run_server()
