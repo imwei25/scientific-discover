@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { apiUrl } from "./lib/api";
-import { writePersisted } from "./lib/usePersistentState";
+import { writePersisted, usePersistentState } from "./lib/usePersistentState";
 import IdeaModule from "./modules/IdeaModule";
 import PlanModule from "./modules/PlanModule";
 import AnalyzeModule from "./modules/AnalyzeModule";
@@ -29,6 +29,7 @@ export default function App() {
   const [active, setActive] = useState<ModuleId>("home");
   const [health, setHealth] = useState<Health | null>(null);
   const [healthErr, setHealthErr] = useState(false);
+  const [disclaimerDismissed, setDisclaimerDismissed] = usePersistentState("ui:disclaimerDismissed", false);
 
   const goto: Goto = (target, patch) => {
     if (patch) {
@@ -107,6 +108,21 @@ export default function App() {
       </aside>
 
       <main className="content">
+        {!disclaimerDismissed && (
+          <div className="disclaimer" data-testid="disclaimer">
+            <span>
+              ⚠ 本工具由 AI 辅助：所有生成内容（数字、引用、结论）请务必<strong>人工核对</strong>后使用；
+              按 ICMJE / 期刊规范，论文中应<strong>声明 AI 使用情况</strong>。
+            </span>
+            <button
+              className="disclaimer-close"
+              data-testid="disclaimer-close"
+              onClick={() => setDisclaimerDismissed(true)}
+            >
+              我已知晓
+            </button>
+          </div>
+        )}
         {active === "home" && <Home onPick={setActive} />}
         {active === "idea" && <IdeaModule goto={goto} />}
         {active === "plan" && <PlanModule />}

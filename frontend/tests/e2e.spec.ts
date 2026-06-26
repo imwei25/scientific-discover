@@ -22,6 +22,14 @@ async function mockBase(page: Page) {
   );
 }
 
+test("AI免责声明可显示并关闭", async ({ page }) => {
+  await mockBase(page);
+  await page.goto("/");
+  await expect(page.getByTestId("disclaimer")).toContainText("人工核对");
+  await page.getByTestId("disclaimer-close").click();
+  await expect(page.getByTestId("disclaimer")).toHaveCount(0);
+});
+
 test("首页加载并显示四大功能", async ({ page }) => {
   await mockBase(page);
   await page.goto("/");

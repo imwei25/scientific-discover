@@ -125,6 +125,36 @@ body {
   padding: 36px 48px;
 }
 
+/* AI 免责声明横幅 */
+.disclaimer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 22px;
+  padding: 12px 16px;
+  background: #fdf6e3;
+  border: 1px solid #f0d9a0;
+  border-radius: 10px;
+  font-size: 13px;
+  color: #7a5b00;
+  line-height: 1.6;
+}
+.disclaimer-close {
+  flex-shrink: 0;
+  padding: 6px 14px;
+  background: #fff;
+  border: 1px solid #e6c870;
+  border-radius: 8px;
+  color: #7a5b00;
+  cursor: pointer;
+  font-size: 12.5px;
+  white-space: nowrap;
+}
+.disclaimer-close:hover {
+  background: #fbf0d5;
+}
+
 /* 首页 */
 .home h1 {
   font-size: 28px;
