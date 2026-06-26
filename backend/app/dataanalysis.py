@@ -51,6 +51,10 @@ def profile_data(df: pd.DataFrame) -> str:
         miss = int(df[col].isna().sum())
         sample = ", ".join(map(str, df[col].dropna().unique()[:5]))
         lines.append(f"  - {col}（{dtype}，唯一值{nuniq}，缺失{miss}）样例: {sample}")
+    numeric = list(df.select_dtypes(include="number").columns)
+    categorical = [c for c in df.columns if c not in numeric]
+    lines.append(f"\n数值型列：{', '.join(map(str, numeric)) or '无'}")
+    lines.append(f"分类型列：{', '.join(map(str, categorical)) or '无'}")
     lines.append("\n前 5 行：")
     lines.append(df.head(5).to_string())
     return "\n".join(lines)
@@ -98,7 +102,9 @@ def _gen_code_messages(profile: str, question: str) -> list[dict]:
         "⑤ 区分相关与因果，不要据观察性数据下因果结论；\n"
         "⑥ 用 print() 清晰打印每个关键结果并配中文说明；\n"
         "⑦ 画出出版级质量的图（清晰的轴标签、图例、单位；用 matplotlib 默认样式，不要用需要 LaTeX 的样式，不要调用 plt.show()）；\n"
-        "⑧ 只使用已加载的 df，不要读写文件或联网。\n"
+        "⑧ 只使用已加载的 df，列名务必使用上面【数据画像】中真实存在的列名，不要臆造列名。\n"
+        "pingouin 注意：当前版本结果列名为下划线（如 p_val、cohen_d、CI95），没有连字符或百分号；"
+        "获取数值建议先 print(整个结果表)，再用 res['p_val'].iloc[0] 这类按位置取值，切勿硬编码 'p-val' 等不存在的列名。\n"
         "只输出一个 Python 代码块，不要额外解释。"
     )
     user = f"【数据画像】\n{profile}\n\n【研究用途】\n{question or '（用户未填写，请你根据数据自行判断最有价值的分析方向）'}"
