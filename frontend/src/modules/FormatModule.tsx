@@ -1,6 +1,7 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useStream } from "../lib/useStream";
 import { usePersistentState } from "../lib/usePersistentState";
+import { addHistory } from "../lib/history";
 import { apiUrl } from "../lib/api";
 import ResultPanel from "../components/ResultPanel";
 import Dropzone from "../components/Dropzone";
@@ -23,6 +24,19 @@ export default function FormatModule() {
   const [fmtRefs, setFmtRefs] = usePersistentState<string[]>("format:fmtRefs", []);
   const [refsBusy, setRefsBusy] = useState(false);
   const [refsErr, setRefsErr] = useState<string | null>(null);
+
+  const savedRef = useRef("");
+  useEffect(() => {
+    if (!running && text && savedRef.current !== text) {
+      savedRef.current = text;
+      addHistory({
+        module: "format",
+        icon: "📄",
+        title: manuscript.slice(0, 40) || "期刊排版",
+        data: { "format:manuscript": manuscript, "format:journal": journalId, "format:result": text },
+      });
+    }
+  }, [running, text, manuscript, journalId]);
 
   const formatRefs = async () => {
     if (!refsInput.trim() || refsBusy) return;

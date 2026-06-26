@@ -453,6 +453,45 @@ select:focus {
   word-break: break-word;
 }
 
+/* 历史记录 */
+.history-list {
+  list-style: none;
+  padding: 0;
+  margin: 16px 0 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.history-item {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 14px 18px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  box-shadow: var(--shadow);
+}
+.history-icon {
+  font-size: 22px;
+}
+.history-main {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.history-title {
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.history-time {
+  font-size: 12.5px;
+  color: var(--ink-soft);
+}
+
 /* 深度调研: 状态行 / 文献列表 / Markdown */
 .status-line {
   display: flex;

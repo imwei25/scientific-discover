@@ -173,6 +173,28 @@ test("串联: 数据分析结论可一键送到期刊排版", async ({ page }) =
   await expect(page.getByTestId("input-manuscript")).toHaveValue(/两组差异显著/);
 });
 
+test("历史记录: 生成后可在历史中恢复", async ({ page }) => {
+  await mockBase(page);
+  await page.route("**/api/run", (r) =>
+    r.fulfill({
+      contentType: "text/event-stream",
+      body: sse({ event: "delta", data: { text: "实验方案内容XYZ" } }, { event: "done", data: {} }),
+    }),
+  );
+  await page.goto("/");
+  await page.getByTestId("nav-plan").click();
+  await page.getByTestId("input-idea").fill("研究某药对血压影响");
+  await page.getByTestId("run-btn").click();
+  await expect(page.getByTestId("result-text")).toContainText("实验方案内容XYZ");
+  // 打开历史，应有刚才的记录
+  await page.getByTestId("nav-history").click();
+  await expect(page.getByTestId("history-item").first()).toContainText("研究某药对血压影响");
+  // 恢复到实验规划
+  await page.getByTestId("restore-btn").first().click();
+  await expect(page.getByTestId("input-idea")).toHaveValue("研究某药对血压影响");
+  await expect(page.getByTestId("result-text")).toContainText("实验方案内容XYZ");
+});
+
 test("持久化: 切换模块后输入仍保留", async ({ page }) => {
   await mockBase(page);
   await page.goto("/");

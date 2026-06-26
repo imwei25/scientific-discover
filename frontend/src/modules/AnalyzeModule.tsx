@@ -1,6 +1,7 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { streamAnalyze } from "../lib/sse";
 import { usePersistentState } from "../lib/usePersistentState";
+import { addHistory } from "../lib/history";
 import Markdown from "../components/Markdown";
 import Dropzone from "../components/Dropzone";
 import { downloadText, tsName, downloadAnalysisReport } from "../lib/download";
@@ -18,6 +19,19 @@ export default function AnalyzeModule({ goto }: { goto: Goto }) {
   const [running, setRunning] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const ctrl = useRef<AbortController | null>(null);
+
+  const savedRef = useRef("");
+  useEffect(() => {
+    if (!running && conclusion && savedRef.current !== conclusion) {
+      savedRef.current = conclusion;
+      addHistory({
+        module: "analyze",
+        icon: "📊",
+        title: question.slice(0, 40) || "数据分析",
+        data: { "analyze:question": question, "analyze:conclusion": conclusion },
+      });
+    }
+  }, [running, conclusion, question]);
 
   const run = async () => {
     if (!file || running) return;

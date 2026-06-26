@@ -1,5 +1,7 @@
+import { useEffect, useRef } from "react";
 import { useStream } from "../lib/useStream";
 import { usePersistentState } from "../lib/usePersistentState";
+import { addHistory } from "../lib/history";
 import ResultPanel from "../components/ResultPanel";
 import Dropzone from "../components/Dropzone";
 
@@ -8,6 +10,19 @@ export default function PlanModule() {
   const [field, setField] = usePersistentState("plan:field", "");
   const [resources, setResources] = usePersistentState("plan:resources", "");
   const { text, running, error, start, stop, setText } = useStream("plan:result");
+
+  const savedRef = useRef("");
+  useEffect(() => {
+    if (!running && text && savedRef.current !== text) {
+      savedRef.current = text;
+      addHistory({
+        module: "plan",
+        icon: "🗺️",
+        title: idea.slice(0, 40) || "实验规划",
+        data: { "plan:idea": idea, "plan:field": field, "plan:resources": resources, "plan:result": text },
+      });
+    }
+  }, [running, text, idea, field, resources]);
 
   const submit = () => {
     if (!idea.trim() || running) return;

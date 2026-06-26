@@ -1,5 +1,6 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { streamIdea, Reference, Verification } from "../lib/sse";
+import { addHistory } from "../lib/history";
 import Markdown from "../components/Markdown";
 import Dropzone from "../components/Dropzone";
 import { downloadText, tsName } from "../lib/download";
@@ -18,6 +19,26 @@ export default function IdeaModule({ goto }: { goto: Goto }) {
   const [running, setRunning] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const ctrl = useRef<AbortController | null>(null);
+
+  const savedRef = useRef("");
+  useEffect(() => {
+    if (!running && text && savedRef.current !== text) {
+      savedRef.current = text;
+      addHistory({
+        module: "idea",
+        icon: "💡",
+        title: field || "选题调研",
+        data: {
+          "idea:field": field,
+          "idea:keywords": keywords,
+          "idea:background": background,
+          "idea:result": text,
+          "idea:refs": refs,
+          "idea:verify": verify,
+        },
+      });
+    }
+  }, [running, text, field, keywords, background, refs, verify]);
 
   const submit = async () => {
     if (!field.trim() || running) return;

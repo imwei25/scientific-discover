@@ -5,8 +5,9 @@ import IdeaModule from "./modules/IdeaModule";
 import PlanModule from "./modules/PlanModule";
 import AnalyzeModule from "./modules/AnalyzeModule";
 import FormatModule from "./modules/FormatModule";
+import HistoryView from "./modules/HistoryView";
 
-export type ModuleId = "home" | "idea" | "plan" | "analyze" | "format";
+export type ModuleId = "home" | "idea" | "plan" | "analyze" | "format" | "history";
 // 跨模块传递: 把数据写入目标模块的持久化字段, 再切换过去。
 export type Goto = (target: ModuleId, patch?: Record<string, unknown>) => void;
 
@@ -93,6 +94,17 @@ export default function App() {
               </span>
             </button>
           ))}
+          <button
+            className={`nav-item ${active === "history" ? "active" : ""}`}
+            onClick={() => setActive("history")}
+            data-testid="nav-history"
+          >
+            <span className="nav-icon">📜</span>
+            <span className="nav-text">
+              <span className="nav-title">历史记录</span>
+              <span className="nav-desc">回看与恢复过往结果</span>
+            </span>
+          </button>
         </nav>
         <div className="sidebar-foot">
           {health ? (
@@ -142,6 +154,7 @@ export default function App() {
         {active === "plan" && <PlanModule />}
         {active === "analyze" && <AnalyzeModule goto={goto} />}
         {active === "format" && <FormatModule />}
+        {active === "history" && <HistoryView goto={goto} />}
       </main>
     </div>
   );
