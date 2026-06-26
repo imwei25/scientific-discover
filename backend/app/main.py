@@ -19,15 +19,15 @@ from fastapi.responses import Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from .citations import format_references
 from .config import settings
-from .dataanalysis import analyze_data
-from .extract import extract_text
-from .formatting import build_docx
 from .journals import list_journals
 from .llm import LLMError, get_balance, stream_chat
 from .prompts import build_messages
 from .research import deep_research_idea
+
+# 说明: 依赖 pandas/scipy/matplotlib/citeproc/python-docx 等重库的模块
+# (dataanalysis / extract / citations / formatting) 改为"用到时才导入",
+# 让服务能秒级绑定端口、健康检查立即可用; 重库在首次实际使用相应功能时才加载。
 
 app = FastAPI(title="科研助手 sidecar", version="0.1.0")
 
@@ -124,6 +124,8 @@ async def idea(req: RunRequest) -> StreamingResponse:
 @app.post("/api/analyze")
 async def analyze(file: UploadFile = File(...), question: str = Form("")) -> StreamingResponse:
     """AI 看懂数据 → 写分析代码 → 本地执行 → 流式输出结论(SSE)。"""
+    from .dataanalysis import analyze_data
+
     content = await file.read()
     filename = file.filename or "data.csv"
 
@@ -141,6 +143,8 @@ async def analyze(file: UploadFile = File(...), question: str = Form("")) -> Str
 @app.post("/api/extract")
 async def extract(file: UploadFile = File(...)) -> dict:
     """抽取上传文档(Word/PDF/Excel/CSV/txt)的纯文本, 供分析或润色。"""
+    from .extract import extract_text
+
     content = await file.read()
     return extract_text(file.filename or "file", content)
 
@@ -148,11 +152,15 @@ async def extract(file: UploadFile = File(...)) -> dict:
 @app.post("/api/format-refs")
 async def format_refs(req: RefsRequest) -> dict:
     """按目标期刊的 CSL 样式格式化参考文献(LLM 解析 + citeproc 渲染)。"""
+    from .citations import format_references
+
     return await format_references(req.references, req.journal_id)
 
 
 @app.post("/api/docx")
 async def docx(req: DocxRequest) -> Response:
+    from .formatting import build_docx
+
     data = build_docx(req.text, req.journal_id, req.references)
     return Response(
         content=data,
@@ -181,19 +189,48 @@ def _lan_ip() -> str:
         return ""
 
 
-def run_server():
-    import uvicorn
+def _log(msg: str) -> None:
+    import datetime
 
-    port = settings.port
-    lines = ["=" * 56, f"  本机访问:   http://127.0.0.1:{port}"]
-    if settings.host == "0.0.0.0":
-        ip = _lan_ip()
-        if ip:
-            lines.append(f"  局域网访问: http://{ip}:{port}  （同一网络的其他设备可用）")
-        lines.append("  注意: 已开放局域网, 任何同网设备都能使用你的 API 额度。")
-    lines.append("=" * 56)
-    print("\n".join(lines), flush=True)
-    uvicorn.run(app, host=settings.host, port=port)
+    # 仅打印到 stdout; 由启动脚本把 stdout/stderr 重定向到 backend/server.log,
+    # 这样连"导入期"的报错也能一并捕获(那时本函数还没机会写文件)。
+    print(f"[{datetime.datetime.now():%Y-%m-%d %H:%M:%S}] {msg}", flush=True)
+
+
+def run_server():
+    import platform
+    import sys
+    import traceback
+
+    try:
+        _log(f"启动科研助手后端… Python {sys.version.split()[0]} on {platform.system()} {platform.release()}")
+        _log(f"工作目录: {Path.cwd()}")
+        _log(f"配置: host={settings.host} port={settings.port} mock={settings.mock} "
+             f"provider={settings.provider} model={settings.model} "
+             f"api_key={'已配置' if settings.api_key else '未配置'}")
+        _log(f"前端已构建(dist 存在): {_DIST.is_dir()} -> {_DIST}")
+        if not settings.api_key and not settings.mock:
+            _log("警告: 未配置 LLM_API_KEY 且未开启 MOCK_LLM, AI 功能将不可用(但服务仍会启动)。")
+
+        port = settings.port
+        lines = ["=" * 56, f"  本机访问:   http://127.0.0.1:{port}"]
+        if settings.host == "0.0.0.0":
+            ip = _lan_ip()
+            if ip:
+                lines.append(f"  局域网访问: http://{ip}:{port}  （同一网络的其他设备可用）")
+            lines.append("  注意: 已开放局域网, 任何同网设备都能使用你的 API 额度。")
+        lines.append("=" * 56)
+        print("\n".join(lines), flush=True)
+
+        import uvicorn
+
+        _log(f"开始监听 {settings.host}:{port} …")
+        uvicorn.run(app, host=settings.host, port=port, log_level="info")
+        _log("服务已正常退出。")
+    except Exception:  # noqa: BLE001
+        _log("启动失败! 错误详情如下:\n" + traceback.format_exc())
+        _log("请把 backend\\server.log 的内容发给开发者以便定位。")
+        raise
 
 
 if __name__ == "__main__":

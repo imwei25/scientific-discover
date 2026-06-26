@@ -19,3 +19,6 @@ src-tauri/binaries/
 # OS
 .DS_Store
 Thumbs.db
+
+# runtime
+backend/server.log
