@@ -55,6 +55,11 @@ class RefsRequest(BaseModel):
     journal_id: str = ""
 
 
+class SampleSizeRequest(BaseModel):
+    design: str
+    params: dict
+
+
 @app.get("/api/health")
 async def health() -> dict:
     return {
@@ -155,6 +160,14 @@ async def format_refs(req: RefsRequest) -> dict:
     from .citations import format_references
 
     return await format_references(req.references, req.journal_id)
+
+
+@app.post("/api/sample-size")
+async def sample_size(req: SampleSizeRequest) -> dict:
+    """确定性计算样本量 / 检验效能(不经 LLM, 零额度)。"""
+    from .samplesize import compute
+
+    return compute(req.design, req.params)
 
 
 @app.post("/api/docx")

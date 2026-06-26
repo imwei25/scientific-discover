@@ -218,6 +218,18 @@ test("找选题: 必填项为空时按钮禁用", async ({ page }) => {
   await expect(page.getByTestId("run-btn")).toBeEnabled();
 });
 
+test("实验规划: 样本量计算器", async ({ page }) => {
+  await mockBase(page);
+  await page.route("**/api/sample-size", (r) =>
+    r.fulfill({ json: { ok: true, per_group: 64, total: 128, note: "两独立样本 t 检验，d=0.5" } }),
+  );
+  await page.goto("/");
+  await page.getByTestId("nav-plan").click();
+  await page.getByTestId("ss-calc").click(); // 展开
+  await page.getByTestId("ss-calc-btn").click();
+  await expect(page.getByTestId("ss-result")).toContainText("每组 64 例，总计 128 例");
+});
+
 test("实验规划: 返回计划文本", async ({ page }) => {
   await mockBase(page);
   await page.route("**/api/run", (r) =>

@@ -453,6 +453,37 @@ select:focus {
   word-break: break-word;
 }
 
+/* 样本量计算器 */
+.ss-calc {
+  margin-top: 22px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 16px 20px;
+  box-shadow: var(--shadow);
+}
+.ss-calc summary {
+  cursor: pointer;
+  font-weight: 600;
+}
+.ss-row {
+  display: flex;
+  gap: 14px;
+}
+.ss-row .field {
+  flex: 1;
+}
+.ss-result {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 14px 16px;
+  background: #e8f0ff;
+  border: 1px solid #cfe0ff;
+  border-radius: 10px;
+  color: var(--ink);
+}
+
 /* 历史记录 */
 .history-list {
   list-style: none;
