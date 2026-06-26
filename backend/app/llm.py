@@ -173,6 +173,35 @@ async def _stream_with(cfg: ProviderConfig, messages: list[dict], **kwargs) -> A
 
 # ----------------------------- 对外入口 -----------------------------
 
+async def get_balance() -> dict:
+    """查询当前供应商余额(目前支持 DeepSeek 的 /user/balance)。"""
+    if settings.mock or "deepseek" not in settings.base_url:
+        return {"available": False}
+    try:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(10.0)) as client:
+            r = await client.get(
+                f"{settings.base_url}/user/balance",
+                headers={"Authorization": f"Bearer {settings.api_key}"},
+            )
+            if r.status_code != 200:
+                return {"available": False}
+            data = r.json()
+            cny = next(
+                (b for b in data.get("balance_infos", []) if b.get("currency") == "CNY"),
+                None,
+            )
+            if not cny:
+                return {"available": False}
+            return {
+                "available": True,
+                "provider": "DeepSeek",
+                "currency": "CNY",
+                "balance": cny.get("total_balance"),
+            }
+    except Exception:  # noqa: BLE001
+        return {"available": False}
+
+
 async def stream_chat(messages: list[dict], **kwargs) -> AsyncIterator[str]:
     """根据配置选择格式, 流式返回文本增量; 主供应商额度用尽时自动切到备用。"""
     if settings.mock:

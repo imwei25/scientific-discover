@@ -25,7 +25,7 @@ from .dataanalysis import analyze_data
 from .extract import extract_text
 from .formatting import build_docx
 from .journals import list_journals
-from .llm import LLMError, stream_chat
+from .llm import LLMError, get_balance, stream_chat
 from .prompts import build_messages
 from .research import deep_research_idea
 
@@ -69,6 +69,11 @@ async def health() -> dict:
 @app.get("/api/journals")
 async def journals() -> dict:
     return {"journals": list_journals()}
+
+
+@app.get("/api/usage")
+async def usage() -> dict:
+    return await get_balance()
 
 
 def _sse(event: str, data: dict) -> str:

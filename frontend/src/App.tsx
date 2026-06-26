@@ -30,6 +30,7 @@ export default function App() {
   const [health, setHealth] = useState<Health | null>(null);
   const [healthErr, setHealthErr] = useState(false);
   const [disclaimerDismissed, setDisclaimerDismissed] = usePersistentState("ui:disclaimerDismissed", false);
+  const [balance, setBalance] = useState<{ available: boolean; provider?: string; currency?: string; balance?: string } | null>(null);
 
   const goto: Goto = (target, patch) => {
     if (patch) {
@@ -37,6 +38,14 @@ export default function App() {
     }
     setActive(target);
   };
+
+  // 拉取余额(切换模块时刷新, 接近实时反映额度变化)
+  useEffect(() => {
+    fetch(apiUrl("/api/usage"))
+      .then((r) => r.json())
+      .then(setBalance)
+      .catch(() => setBalance(null));
+  }, [active]);
 
   useEffect(() => {
     let cancelled = false;
@@ -102,6 +111,11 @@ export default function App() {
           {health && !health.mock && health.configured === false && (
             <span className="status-warn" data-testid="status-warn">
               ⚠ 未配置密钥，请在 backend/.env 填写
+            </span>
+          )}
+          {balance?.available && (
+            <span className="status-balance" data-testid="balance">
+              💰 {balance.provider} 余额 ¥{balance.balance}
             </span>
           )}
         </div>

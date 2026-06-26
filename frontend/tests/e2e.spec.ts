@@ -20,6 +20,7 @@ async function mockBase(page: Page) {
       },
     }),
   );
+  await page.route("**/api/usage", (r) => r.fulfill({ json: { available: false } }));
 }
 
 test("AI免责声明可显示并关闭", async ({ page }) => {
@@ -28,6 +29,15 @@ test("AI免责声明可显示并关闭", async ({ page }) => {
   await expect(page.getByTestId("disclaimer")).toContainText("人工核对");
   await page.getByTestId("disclaimer-close").click();
   await expect(page.getByTestId("disclaimer")).toHaveCount(0);
+});
+
+test("侧栏显示账户余额", async ({ page }) => {
+  await mockBase(page);
+  await page.route("**/api/usage", (r) =>
+    r.fulfill({ json: { available: true, provider: "DeepSeek", currency: "CNY", balance: "1.50" } }),
+  );
+  await page.goto("/");
+  await expect(page.getByTestId("balance")).toContainText("余额 ¥1.50");
 });
 
 test("首页加载并显示四大功能", async ({ page }) => {

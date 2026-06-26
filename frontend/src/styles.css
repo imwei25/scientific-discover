@@ -117,6 +117,12 @@ body {
   color: #b8860b;
   font-size: 12px;
 }
+.status-balance {
+  display: block;
+  margin-top: 6px;
+  color: var(--ink-soft);
+  font-size: 12px;
+}
 
 /* ---------- 主区 ---------- */
 .content {
