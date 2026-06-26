@@ -30,7 +30,10 @@ def _add_runs_with_bold(paragraph, text: str) -> None:
         paragraph.add_run(text[pos:])
 
 
-def build_docx(text: str, journal_id: str = "") -> bytes:
+_BULLET = re.compile(r"^[-*]\s+")
+
+
+def build_docx(text: str, journal_id: str = "", references: list[str] | None = None) -> bytes:
     doc = Document()
 
     # 基础正文样式
@@ -55,9 +58,21 @@ def build_docx(text: str, journal_id: str = "") -> bytes:
             doc.add_heading(line[2:].strip(), level=1)
         elif _SECTION_BRACKET.match(line.strip()):
             doc.add_heading(line.strip().strip("【】"), level=2)
+        elif _BULLET.match(line):
+            p = doc.add_paragraph(style="List Bullet")
+            _add_runs_with_bold(p, _BULLET.sub("", line))
         else:
             p = doc.add_paragraph()
             _add_runs_with_bold(p, line)
+
+    # 追加按期刊样式格式化好的参考文献
+    if references:
+        cn = bool(journal) and journal_id == "general_cn"
+        doc.add_heading("参考文献" if cn else "References", level=1)
+        for ref in references:
+            ref = (ref or "").strip()
+            if ref:
+                doc.add_paragraph(ref)
 
     buf = io.BytesIO()
     doc.save(buf)

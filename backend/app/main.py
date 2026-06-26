@@ -47,6 +47,7 @@ class RunRequest(BaseModel):
 class DocxRequest(BaseModel):
     text: str
     journal_id: str = ""
+    references: list[str] = []
 
 
 class RefsRequest(BaseModel):
@@ -147,7 +148,7 @@ async def format_refs(req: RefsRequest) -> dict:
 
 @app.post("/api/docx")
 async def docx(req: DocxRequest) -> Response:
-    data = build_docx(req.text, req.journal_id)
+    data = build_docx(req.text, req.journal_id, req.references)
     return Response(
         content=data,
         media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",

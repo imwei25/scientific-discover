@@ -79,7 +79,7 @@ export default function FormatModule() {
       const resp = await fetch(apiUrl("/api/docx"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text, journal_id: journalId }),
+        body: JSON.stringify({ text, journal_id: journalId, references: fmtRefs }),
       });
       const blob = await resp.blob();
       const url = URL.createObjectURL(blob);
@@ -162,7 +162,7 @@ export default function FormatModule() {
 
       {text && !running && (
         <button className="btn-secondary" onClick={downloadDocx} disabled={downloading} data-testid="download-btn">
-          {downloading ? "正在生成…" : "⬇ 下载 Word 文件"}
+          {downloading ? "正在生成…" : fmtRefs.length ? "⬇ 下载 Word 文件（含格式化参考文献）" : "⬇ 下载 Word 文件"}
         </button>
       )}
 
