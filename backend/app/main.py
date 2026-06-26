@@ -168,10 +168,32 @@ if _DIST.is_dir():
     app.mount("/", StaticFiles(directory=str(_DIST), html=True), name="static")
 
 
+def _lan_ip() -> str:
+    import socket
+
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect(("8.8.8.8", 80))  # 不会真的发包, 仅用于取本机出口 IP
+        ip = s.getsockname()[0]
+        s.close()
+        return ip
+    except Exception:  # noqa: BLE001
+        return ""
+
+
 def run_server():
     import uvicorn
 
-    uvicorn.run(app, host="127.0.0.1", port=settings.port)
+    port = settings.port
+    lines = ["=" * 56, f"  本机访问:   http://127.0.0.1:{port}"]
+    if settings.host == "0.0.0.0":
+        ip = _lan_ip()
+        if ip:
+            lines.append(f"  局域网访问: http://{ip}:{port}  （同一网络的其他设备可用）")
+        lines.append("  注意: 已开放局域网, 任何同网设备都能使用你的 API 额度。")
+    lines.append("=" * 56)
+    print("\n".join(lines), flush=True)
+    uvicorn.run(app, host=settings.host, port=port)
 
 
 if __name__ == "__main__":
