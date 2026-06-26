@@ -88,6 +88,49 @@ test("找选题: 检索PubMed并返回带链接的结果", async ({ page }) => {
   await expect(inlineLink).toHaveAttribute("href", "https://pubmed.ncbi.nlm.nih.gov/12345/");
 });
 
+test("串联: 找选题结果可一键送到实验规划", async ({ page }) => {
+  await mockBase(page);
+  await page.route("**/api/idea", (r) =>
+    r.fulfill({
+      contentType: "text/event-stream",
+      body: sse(
+        { event: "delta", data: { text: "候选选题：PD-1 在 TNBC 的疗效。" } },
+        { event: "done", data: {} },
+      ),
+    }),
+  );
+  await page.goto("/");
+  await page.getByTestId("nav-idea").click();
+  await page.getByTestId("input-field").fill("三阴性乳腺癌 免疫治疗");
+  await page.getByTestId("run-btn").click();
+  await expect(page.getByTestId("result-text")).toContainText("候选选题");
+  await page.getByTestId("send-to-plan-btn").click();
+  // 已切到实验规划, 且选题被预填
+  await expect(page.getByTestId("input-idea")).toHaveValue(/候选选题：PD-1 在 TNBC 的疗效/);
+});
+
+test("串联: 数据分析结论可一键送到期刊排版", async ({ page }) => {
+  await mockBase(page);
+  await page.route("**/api/analyze", (r) =>
+    r.fulfill({
+      contentType: "text/event-stream",
+      body: sse(
+        { event: "delta", data: { text: "## 结论\n两组差异显著（p=0.01）。" } },
+        { event: "done", data: {} },
+      ),
+    }),
+  );
+  await page.goto("/");
+  await page.getByTestId("nav-analyze").click();
+  await page.getByTestId("input-file").setInputFiles({
+    name: "data.csv", mimeType: "text/csv", buffer: Buffer.from("g,v\nA,1\nB,2\n"),
+  });
+  await page.getByTestId("run-btn").click();
+  await expect(page.getByTestId("result-text")).toContainText("两组差异显著");
+  await page.getByTestId("send-to-format-btn").click();
+  await expect(page.getByTestId("input-manuscript")).toHaveValue(/两组差异显著/);
+});
+
 test("持久化: 切换模块后输入仍保留", async ({ page }) => {
   await mockBase(page);
   await page.goto("/");

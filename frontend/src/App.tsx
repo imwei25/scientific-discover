@@ -1,11 +1,14 @@
 import { useEffect, useState } from "react";
 import { apiUrl } from "./lib/api";
+import { writePersisted } from "./lib/usePersistentState";
 import IdeaModule from "./modules/IdeaModule";
 import PlanModule from "./modules/PlanModule";
 import AnalyzeModule from "./modules/AnalyzeModule";
 import FormatModule from "./modules/FormatModule";
 
-type ModuleId = "home" | "idea" | "plan" | "analyze" | "format";
+export type ModuleId = "home" | "idea" | "plan" | "analyze" | "format";
+// 跨模块传递: 把数据写入目标模块的持久化字段, 再切换过去。
+export type Goto = (target: ModuleId, patch?: Record<string, unknown>) => void;
 
 const NAV: { id: ModuleId; icon: string; title: string; desc: string }[] = [
   { id: "idea", icon: "💡", title: "找选题", desc: "发现研究方向与创新点" },
@@ -26,6 +29,13 @@ export default function App() {
   const [active, setActive] = useState<ModuleId>("home");
   const [health, setHealth] = useState<Health | null>(null);
   const [healthErr, setHealthErr] = useState(false);
+
+  const goto: Goto = (target, patch) => {
+    if (patch) {
+      for (const [key, value] of Object.entries(patch)) writePersisted(key, value);
+    }
+    setActive(target);
+  };
 
   useEffect(() => {
     let cancelled = false;
@@ -98,9 +108,9 @@ export default function App() {
 
       <main className="content">
         {active === "home" && <Home onPick={setActive} />}
-        {active === "idea" && <IdeaModule />}
+        {active === "idea" && <IdeaModule goto={goto} />}
         {active === "plan" && <PlanModule />}
-        {active === "analyze" && <AnalyzeModule />}
+        {active === "analyze" && <AnalyzeModule goto={goto} />}
         {active === "format" && <FormatModule />}
       </main>
     </div>

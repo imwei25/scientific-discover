@@ -4,8 +4,9 @@ import { usePersistentState } from "../lib/usePersistentState";
 import Markdown from "../components/Markdown";
 import Dropzone from "../components/Dropzone";
 import { downloadText, tsName } from "../lib/download";
+import type { Goto } from "../App";
 
-export default function AnalyzeModule() {
+export default function AnalyzeModule({ goto }: { goto: Goto }) {
   const [file, setFile] = useState<File | null>(null);
   const [question, setQuestion] = usePersistentState("analyze:question", "");
 
@@ -152,6 +153,15 @@ export default function AnalyzeModule() {
           <div className="result-panel">
             <div className="result-toolbar">
               <span className="result-status">{running ? "生成中…" : "已完成"}</span>
+              {conclusion && !running && (
+                <button
+                  className="btn-ghost"
+                  data-testid="send-to-format-btn"
+                  onClick={() => goto("format", { "format:manuscript": conclusion })}
+                >
+                  用此结论去排版 →
+                </button>
+              )}
               {conclusion && !running && (
                 <button
                   className="btn-ghost"

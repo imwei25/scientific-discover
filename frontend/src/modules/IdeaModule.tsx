@@ -4,8 +4,9 @@ import Markdown from "../components/Markdown";
 import Dropzone from "../components/Dropzone";
 import { downloadText, tsName } from "../lib/download";
 import { usePersistentState } from "../lib/usePersistentState";
+import type { Goto } from "../App";
 
-export default function IdeaModule() {
+export default function IdeaModule({ goto }: { goto: Goto }) {
   const [field, setField] = usePersistentState("idea:field", "");
   const [keywords, setKeywords] = usePersistentState("idea:keywords", "");
   const [background, setBackground] = usePersistentState("idea:background", "");
@@ -156,6 +157,15 @@ export default function IdeaModule() {
               {running && (
                 <button className="btn-ghost" onClick={stop} data-testid="stop-btn">
                   停止
+                </button>
+              )}
+              {text && !running && (
+                <button
+                  className="btn-ghost"
+                  data-testid="send-to-plan-btn"
+                  onClick={() => goto("plan", { "plan:idea": text })}
+                >
+                  用此结果做实验规划 →
                 </button>
               )}
               {text && !running && (

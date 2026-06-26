@@ -1,5 +1,14 @@
 import { useEffect, useState } from "react";
 
+// 直接写入持久化存储(供跨模块传递数据时, 预填目标模块的字段)。
+export function writePersisted(key: string, value: unknown): void {
+  try {
+    localStorage.setItem(`ra:${key}`, JSON.stringify(value));
+  } catch {
+    /* 忽略写入失败 */
+  }
+}
+
 // 与 useState 用法一致, 但自动把值同步到 localStorage,
 // 用于在切换模块/重开浏览器后保留用户的输入与结果。
 export function usePersistentState<T>(key: string, initial: T): [T, (v: T | ((p: T) => T)) => void] {
