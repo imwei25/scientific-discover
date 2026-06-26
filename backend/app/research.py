@@ -15,6 +15,7 @@
 from __future__ import annotations
 
 import json
+import re
 from typing import AsyncIterator
 
 from .config import settings
@@ -123,6 +124,7 @@ async def deep_research_idea(inputs: dict) -> AsyncIterator[tuple[str, dict]]:
     if settings.mock:
         async for ev in _mock_flow(field):
             yield ev
+        yield ("verify", {"total": 1, "verified": 1, "unverified": []})
         yield ("done", {})
         return
 
@@ -142,8 +144,20 @@ async def deep_research_idea(inputs: dict) -> AsyncIterator[tuple[str, dict]]:
         ]})
         yield ("status", {"message": f"已找到 {len(papers)} 篇文献，正在分析研究现状与空白…"})
 
+        full = ""
         async for piece in stream_chat(_synthesis_messages(field, papers)):
+            full += piece
             yield ("delta", {"text": piece})
+
+        # 引用自动核验: 正文里引用的每个 PubMed 链接, 必须来自本次检索到的文献。
+        valid = {p["pmid"] for p in papers}
+        cited = set(re.findall(r"pubmed\.ncbi\.nlm\.nih\.gov/(\d+)", full))
+        unverified = sorted(cited - valid)
+        yield ("verify", {
+            "total": len(cited),
+            "verified": len(cited & valid),
+            "unverified": unverified,
+        })
         yield ("done", {})
     except Exception as e:  # noqa: BLE001
         yield ("error", {"message": f"调研过程出错：{e}"})

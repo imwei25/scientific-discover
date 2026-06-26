@@ -100,10 +100,17 @@ export interface Reference {
   url: string;
 }
 
+export interface Verification {
+  total: number;
+  verified: number;
+  unverified: string[];
+}
+
 export interface IdeaHandlers {
   onStatus?: (message: string) => void;
   onReferences?: (items: Reference[]) => void;
   onDelta: (text: string) => void;
+  onVerify?: (v: Verification) => void;
   onDone?: () => void;
   onError?: (message: string) => void;
   signal?: AbortSignal;
@@ -150,6 +157,7 @@ export async function streamIdea(
         if (ev.event === "status") h.onStatus?.(data.message ?? "");
         else if (ev.event === "references") h.onReferences?.(data.items ?? []);
         else if (ev.event === "delta") h.onDelta(data.text ?? "");
+        else if (ev.event === "verify") h.onVerify?.(data as Verification);
         else if (ev.event === "error") h.onError?.(data.message ?? ev.data);
         else if (ev.event === "done") h.onDone?.();
       }

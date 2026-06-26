@@ -1,5 +1,5 @@
 import { useRef, useState } from "react";
-import { streamIdea, Reference } from "../lib/sse";
+import { streamIdea, Reference, Verification } from "../lib/sse";
 import Markdown from "../components/Markdown";
 import Dropzone from "../components/Dropzone";
 import { downloadText, tsName } from "../lib/download";
@@ -14,6 +14,7 @@ export default function IdeaModule({ goto }: { goto: Goto }) {
   const [status, setStatus] = useState("");
   const [refs, setRefs] = usePersistentState<Reference[]>("idea:refs", []);
   const [text, setText] = usePersistentState("idea:result", "");
+  const [verify, setVerify] = usePersistentState<Verification | null>("idea:verify", null);
   const [running, setRunning] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const ctrl = useRef<AbortController | null>(null);
@@ -23,6 +24,7 @@ export default function IdeaModule({ goto }: { goto: Goto }) {
     setStatus("");
     setRefs([]);
     setText("");
+    setVerify(null);
     setError(null);
     setRunning(true);
     ctrl.current = new AbortController();
@@ -33,6 +35,7 @@ export default function IdeaModule({ goto }: { goto: Goto }) {
         onStatus: setStatus,
         onReferences: setRefs,
         onDelta: (t) => setText((p) => p + t),
+        onVerify: setVerify,
         onError: (m) => {
           setError(m);
           setRunning(false);
@@ -58,6 +61,7 @@ export default function IdeaModule({ goto }: { goto: Goto }) {
     setBackground("");
     setRefs([]);
     setText("");
+    setVerify(null);
     setStatus("");
     setError(null);
   };
@@ -190,6 +194,28 @@ export default function IdeaModule({ goto }: { goto: Goto }) {
             {running && <span className="cursor-blink">▍</span>}
           </div>
         </div>
+      )}
+
+      {verify && !running && (
+        verify.unverified.length === 0 ? (
+          <div className="verify-ok" data-testid="verify">
+            ✓ 引用核验：正文 {verify.total} 处文献引用均来自本次检索到的真实文献。
+          </div>
+        ) : (
+          <div className="verify-bad" data-testid="verify">
+            ⚠ 引用核验：发现 {verify.unverified.length} 处引用未出现在检索结果中，可能不准确，请核实：
+            {verify.unverified.map((pmid) => (
+              <a
+                key={pmid}
+                href={`https://pubmed.ncbi.nlm.nih.gov/${pmid}/`}
+                target="_blank"
+                rel="noreferrer"
+              >
+                PMID {pmid}
+              </a>
+            ))}
+          </div>
+        )
       )}
     </div>
   );

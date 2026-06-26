@@ -461,6 +461,28 @@ select:focus {
   color: var(--ink-soft);
   font-style: italic;
 }
+.verify-ok,
+.verify-bad {
+  margin-top: 14px;
+  padding: 12px 16px;
+  border-radius: 10px;
+  font-size: 13.5px;
+}
+.verify-ok {
+  background: #e8f6ee;
+  border: 1px solid #b6e0c6;
+  color: var(--ok);
+}
+.verify-bad {
+  background: #fdf3e7;
+  border: 1px solid #f3d6a8;
+  color: #9a6a00;
+}
+.verify-bad a {
+  margin-left: 8px;
+  color: #9a6a00;
+  font-weight: 600;
+}
 .markdown a {
   color: var(--brand);
   text-decoration: underline;

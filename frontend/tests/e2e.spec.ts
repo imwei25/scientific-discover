@@ -71,6 +71,7 @@ test("找选题: 检索PubMed并返回带链接的结果", async ({ page }) => {
           },
         },
         { event: "delta", data: { text: "## 一、研究现状\n见 [Smith et al., 2023](https://pubmed.ncbi.nlm.nih.gov/12345/)。" } },
+        { event: "verify", data: { total: 1, verified: 1, unverified: [] } },
         { event: "done", data: {} },
       ),
     }),
@@ -86,6 +87,29 @@ test("找选题: 检索PubMed并返回带链接的结果", async ({ page }) => {
   // 正文里的引用渲染成可点击链接
   const inlineLink = page.getByTestId("result-text").getByRole("link", { name: /Smith et al., 2023/ });
   await expect(inlineLink).toHaveAttribute("href", "https://pubmed.ncbi.nlm.nih.gov/12345/");
+  // 引用核验通过提示
+  await expect(page.getByTestId("verify")).toContainText("引用核验");
+});
+
+test("找选题: 检测到幻觉引用时给出警告", async ({ page }) => {
+  await mockBase(page);
+  await page.route("**/api/idea", (r) =>
+    r.fulfill({
+      contentType: "text/event-stream",
+      body: sse(
+        { event: "references", data: { items: [{ pmid: "111", title: "T", first_author: "A", journal: "J", year: "2020", url: "https://pubmed.ncbi.nlm.nih.gov/111/" }] } },
+        { event: "delta", data: { text: "见 [假, 2099](https://pubmed.ncbi.nlm.nih.gov/999999/)。" } },
+        { event: "verify", data: { total: 1, verified: 0, unverified: ["999999"] } },
+        { event: "done", data: {} },
+      ),
+    }),
+  );
+  await page.goto("/");
+  await page.getByTestId("nav-idea").click();
+  await page.getByTestId("input-field").fill("x");
+  await page.getByTestId("run-btn").click();
+  await expect(page.getByTestId("verify")).toContainText("可能不准确");
+  await expect(page.getByTestId("verify").getByRole("link", { name: /999999/ })).toBeVisible();
 });
 
 test("串联: 找选题结果可一键送到实验规划", async ({ page }) => {
