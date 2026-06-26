@@ -18,6 +18,33 @@ export default function FormatModule() {
   const [downloading, setDownloading] = useState(false);
   const { text, running, error, start, stop, setText } = useStream("format:result");
 
+  // 参考文献格式化(CSL)
+  const [refsInput, setRefsInput] = usePersistentState("format:refs", "");
+  const [fmtRefs, setFmtRefs] = usePersistentState<string[]>("format:fmtRefs", []);
+  const [refsBusy, setRefsBusy] = useState(false);
+  const [refsErr, setRefsErr] = useState<string | null>(null);
+
+  const formatRefs = async () => {
+    if (!refsInput.trim() || refsBusy) return;
+    setRefsBusy(true);
+    setRefsErr(null);
+    setFmtRefs([]);
+    try {
+      const resp = await fetch(apiUrl("/api/format-refs"), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ references: refsInput, journal_id: journalId }),
+      });
+      const d = await resp.json();
+      if (d.ok) setFmtRefs(d.formatted || []);
+      else setRefsErr(d.error || "格式化失败");
+    } catch (e) {
+      setRefsErr(`格式化失败：${(e as Error).message}`);
+    } finally {
+      setRefsBusy(false);
+    }
+  };
+
   useEffect(() => {
     fetch(apiUrl("/api/journals"))
       .then((r) => r.json())
@@ -40,6 +67,9 @@ export default function FormatModule() {
     if (running) stop();
     setManuscript("");
     setText("");
+    setRefsInput("");
+    setFmtRefs([]);
+    setRefsErr(null);
   };
 
   const downloadDocx = async () => {
@@ -134,6 +164,58 @@ export default function FormatModule() {
         <button className="btn-secondary" onClick={downloadDocx} disabled={downloading} data-testid="download-btn">
           {downloading ? "正在生成…" : "⬇ 下载 Word 文件"}
         </button>
+      )}
+
+      <h2 className="section-title">参考文献格式化</h2>
+      <p className="section-hint">
+        粘贴你的参考文献，按所选期刊的引用规范（如 Vancouver、GB/T 7714、IEEE 等）自动排好。
+        采用标准 CSL 引用引擎渲染，格式准确。
+      </p>
+      <div className="form">
+        <label className="field">
+          <span className="field-label">参考文献（每条一行，或整段粘贴）</span>
+          <textarea
+            data-testid="input-refs"
+            value={refsInput}
+            onChange={(e) => setRefsInput(e.target.value)}
+            placeholder="例如：Cortes J, et al. Pembrolizumab plus chemotherapy ... Lancet 2020;396(10265):1817-1828."
+            rows={5}
+          />
+        </label>
+        <button
+          className="btn-primary"
+          onClick={formatRefs}
+          disabled={!refsInput.trim() || refsBusy}
+          data-testid="format-refs-btn"
+        >
+          {refsBusy ? "格式化中…" : "按该期刊格式化参考文献"}
+        </button>
+      </div>
+
+      {refsErr && (
+        <div className="result-error" data-testid="refs-error">
+          {refsErr}
+        </div>
+      )}
+
+      {fmtRefs.length > 0 && (
+        <div className="result-panel">
+          <div className="result-toolbar">
+            <span className="result-status">已格式化 {fmtRefs.length} 条</span>
+            <button
+              className="btn-ghost"
+              data-testid="copy-refs-btn"
+              onClick={() => navigator.clipboard.writeText(fmtRefs.join("\n"))}
+            >
+              复制全部
+            </button>
+          </div>
+          <div className="fmt-refs" data-testid="fmt-refs">
+            {fmtRefs.map((r, i) => (
+              <p key={i}>{r}</p>
+            ))}
+          </div>
+        </div>
       )}
     </div>
   );

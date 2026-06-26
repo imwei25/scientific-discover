@@ -11,6 +11,7 @@ JOURNALS: list[dict] = [
         "id": "general_en",
         "name": "通用学术论文（英文 IMRaD）",
         "summary": "标准 IMRaD 结构，适合大多数英文期刊初稿。",
+        "csl": "vancouver",
         "rules": (
             "- 章节顺序：Title, Abstract, Keywords, Introduction, Methods, "
             "Results, Discussion, Conclusion, References。\n"
@@ -24,6 +25,7 @@ JOURNALS: list[dict] = [
         "id": "general_cn",
         "name": "中文核心期刊（GB/T 7714）",
         "summary": "中文论文常用结构，参考文献采用 GB/T 7714 顺序编码。",
+        "csl": "china-national-standard-gb-t-7714-2015-numeric",
         "rules": (
             "- 章节顺序：题目, 中文摘要, 关键词, 引言, 材料与方法（或研究方法）, "
             "结果, 讨论, 结论, 参考文献。\n"
@@ -38,6 +40,7 @@ JOURNALS: list[dict] = [
         "id": "nature",
         "name": "Nature 系列",
         "summary": "结构化、字数严格，引用为上标编号。",
+        "csl": "nature",
         "rules": (
             "- 章节顺序：Title, Abstract, (正文，引言不单列标题), Results, "
             "Discussion, Methods（置于正文后）, References。\n"
@@ -51,6 +54,7 @@ JOURNALS: list[dict] = [
         "id": "ieee",
         "name": "IEEE Transactions",
         "summary": "工程领域，双栏、方括号引用。",
+        "csl": "ieee",
         "rules": (
             "- 章节顺序：Title, Abstract, Index Terms, I. Introduction, "
             "II. ... （罗马数字编号的章节）, Conclusion, References。\n"
@@ -64,6 +68,7 @@ JOURNALS: list[dict] = [
         "id": "plos_one",
         "name": "PLOS ONE",
         "summary": "开放获取，结构灵活，强调方法可复现。",
+        "csl": "plos",
         "rules": (
             "- 章节顺序：Title, Abstract, Introduction, Materials and Methods, "
             "Results, Discussion, (Conclusions 可选), References。\n"

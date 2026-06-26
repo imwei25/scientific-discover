@@ -250,6 +250,25 @@ test("期刊排版: 重排并出现下载按钮", async ({ page }) => {
   await expect(page.getByTestId("download-btn")).toBeVisible();
 });
 
+test("期刊排版: 参考文献按CSL格式化", async ({ page }) => {
+  await mockBase(page);
+  await page.route("**/api/format-refs", (r) =>
+    r.fulfill({
+      json: {
+        ok: true,
+        style: "vancouver",
+        formatted: ["1. Cortes J, et al. Title. Lancet. 2020;396:1817–28."],
+      },
+    }),
+  );
+  await page.goto("/");
+  await page.getByTestId("nav-format").click();
+  await page.getByTestId("input-refs").fill("Cortes J et al. Title. Lancet 2020.");
+  await page.getByTestId("format-refs-btn").click();
+  await expect(page.getByTestId("fmt-refs")).toContainText("Lancet. 2020;396:1817");
+  await expect(page.getByTestId("copy-refs-btn")).toBeVisible();
+});
+
 test("期刊排版: 上传Word自动填入稿件", async ({ page }) => {
   await mockBase(page);
   await page.route("**/api/extract", (r) =>

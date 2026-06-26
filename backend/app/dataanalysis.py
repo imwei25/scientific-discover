@@ -70,7 +70,12 @@ async def _complete(messages: list[dict], max_tokens: int = 1500) -> str:
 
 _LIBS_NOTE = (
     "可用库（已预装，且已为你导入好同名变量）：pandas as pd、numpy as np、"
-    "matplotlib.pyplot as plt、scipy.stats as stats、statsmodels.api as sm。"
+    "matplotlib.pyplot as plt、scipy.stats as stats、statsmodels.api as sm、"
+    "pingouin as pg（统计，优先用它，能一次给出效应量/置信区间/检验功效）、"
+    "lifelines（生存分析：lifelines.KaplanMeierFitter、CoxPHFitter、"
+    "lifelines.statistics.logrank_test）。scikit-learn 可自行 import sklearn。"
+    "画图用 matplotlib 默认样式即可（运行环境已配置为出版级清晰度）；"
+    "切勿使用需要 LaTeX 的绘图样式（如 plt.style.use(['science'])）或设置 text.usetex=True。"
     "数据已加载为 DataFrame `df`，无需也不要读取任何文件或访问网络。"
 )
 
@@ -80,10 +85,17 @@ def _gen_code_messages(profile: str, question: str) -> list[dict]:
         "你是资深的医学/药学/生物医学数据分析专家。"
         "请根据【数据画像】与【研究用途】，判断这份数据适合做什么分析，"
         "并写出一段 Python 代码来完成分析。\n" + _LIBS_NOTE + "\n"
-        "要求：① 依据研究用途和变量类型选择恰当的统计方法（如 t检验/方差分析/卡方/相关/回归/逻辑回归等），"
-        "必要时检查前提假设、处理缺失值；② 用 print() 清晰打印关键结果（统计量、p值、效应量、置信区间等），"
-        "每个结果配中文说明；③ 用 matplotlib 画出有助于理解的图（不要调用 plt.show()）；"
-        "④ 只使用已加载的 df，不要读写文件或联网。"
+        "要求：\n"
+        "① 依据研究用途和变量类型选择恰当的统计方法（t检验/方差分析/卡方/相关/回归/逻辑回归/生存分析等），"
+        "先检查前提假设（正态性、方差齐性等）并据此在参数与非参数方法间选择，妥善处理缺失值；\n"
+        "② 统计报告要规范：除 p 值外，必须给出效应量与 95% 置信区间，p 值给精确值（如 p=0.003）；"
+        "优先使用 pingouin（pg）以便一次得到效应量/CI/功效；\n"
+        "③ 涉及多组多次比较时，必须做多重比较校正（如 pg.pairwise_tests(..., padjust='holm')）；\n"
+        "④ 若数据包含时间到事件（生存/随访）变量，使用 lifelines 做 Kaplan-Meier 曲线与 log-rank 检验、必要时 Cox 回归；\n"
+        "⑤ 区分相关与因果，不要据观察性数据下因果结论；\n"
+        "⑥ 用 print() 清晰打印每个关键结果并配中文说明；\n"
+        "⑦ 画出出版级质量的图（清晰的轴标签、图例、单位；用 matplotlib 默认样式，不要用需要 LaTeX 的样式，不要调用 plt.show()）；\n"
+        "⑧ 只使用已加载的 df，不要读写文件或联网。\n"
         "只输出一个 Python 代码块，不要额外解释。"
     )
     user = f"【数据画像】\n{profile}\n\n【研究用途】\n{question or '（用户未填写，请你根据数据自行判断最有价值的分析方向）'}"
@@ -124,8 +136,28 @@ try:
     import statsmodels.api as sm
 except Exception:
     sm = None
-plt.rcParams["font.sans-serif"] = ["Microsoft YaHei", "SimHei", "DejaVu Sans"]
-plt.rcParams["axes.unicode_minus"] = False
+try:
+    import pingouin as pg
+except Exception:
+    pg = None
+try:
+    import lifelines
+except Exception:
+    lifelines = None
+# 出版级清晰度的默认样式(本机无 LaTeX, 不使用任何需要 LaTeX 的样式)
+plt.rcParams.update({
+    "font.sans-serif": ["Microsoft YaHei", "SimHei", "DejaVu Sans"],
+    "axes.unicode_minus": False,
+    "savefig.dpi": 150,
+    "font.size": 11,
+    "axes.titlesize": 12,
+    "axes.labelsize": 11,
+    "axes.spines.top": False,
+    "axes.spines.right": False,
+    "axes.grid": True,
+    "grid.alpha": 0.3,
+    "text.usetex": False,
+})
 
 def _load(p):
     if p.lower().endswith((".xlsx", ".xls")):
@@ -140,7 +172,7 @@ buf = io.StringIO()
 _old = sys.stdout
 sys.stdout = buf
 result = {"ok": True, "error": None}
-g = {"df": df, "pd": pd, "np": np, "plt": plt, "stats": stats, "sm": sm}
+g = {"df": df, "pd": pd, "np": np, "plt": plt, "stats": stats, "sm": sm, "pg": pg, "lifelines": lifelines}
 try:
     exec(compile(code, "analysis.py", "exec"), g)
 except Exception:
@@ -149,6 +181,8 @@ except Exception:
 finally:
     sys.stdout = _old
 
+# 即便代码用了需要 LaTeX 的样式, 也强制关闭 usetex, 避免本机无 LaTeX 时出图失败
+plt.rcParams["text.usetex"] = False
 charts = []
 for num in plt.get_fignums():
     fig = plt.figure(num)

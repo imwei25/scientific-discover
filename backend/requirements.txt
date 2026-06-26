@@ -9,6 +9,11 @@ numpy==2.2.1
 scipy==1.15.0
 statsmodels==0.14.4
 matplotlib==3.10.0
+pingouin==0.6.1
+lifelines==0.30.0
+scikit-learn==1.7.2
 openpyxl==3.1.5
 python-docx==1.1.2
 pypdf==5.1.0
+citeproc-py==0.9.3
+citeproc-py-styles==0.1.5

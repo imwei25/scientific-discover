@@ -19,6 +19,7 @@ from fastapi.responses import Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
+from .citations import format_references
 from .config import settings
 from .dataanalysis import analyze_data
 from .extract import extract_text
@@ -45,6 +46,11 @@ class RunRequest(BaseModel):
 
 class DocxRequest(BaseModel):
     text: str
+    journal_id: str = ""
+
+
+class RefsRequest(BaseModel):
+    references: str
     journal_id: str = ""
 
 
@@ -131,6 +137,12 @@ async def extract(file: UploadFile = File(...)) -> dict:
     """抽取上传文档(Word/PDF/Excel/CSV/txt)的纯文本, 供分析或润色。"""
     content = await file.read()
     return extract_text(file.filename or "file", content)
+
+
+@app.post("/api/format-refs")
+async def format_refs(req: RefsRequest) -> dict:
+    """按目标期刊的 CSL 样式格式化参考文献(LLM 解析 + citeproc 渲染)。"""
+    return await format_references(req.references, req.journal_id)
 
 
 @app.post("/api/docx")

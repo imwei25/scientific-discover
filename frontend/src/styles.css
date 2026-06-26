@@ -402,6 +402,20 @@ select:focus {
   font-size: 18px;
   margin: 26px 0 0;
 }
+.section-hint {
+  color: var(--ink-soft);
+  font-size: 13.5px;
+  margin: 6px 0 14px;
+}
+.fmt-refs {
+  padding: 16px 22px;
+}
+.fmt-refs p {
+  margin: 0 0 10px;
+  font-size: 13.5px;
+  line-height: 1.7;
+  word-break: break-word;
+}
 
 /* 深度调研: 状态行 / 文献列表 / Markdown */
 .status-line {
