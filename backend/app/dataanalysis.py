@@ -71,7 +71,10 @@ async def _complete(messages: list[dict], max_tokens: int = 1500) -> str:
 _LIBS_NOTE = (
     "可用库（已预装，且已为你导入好同名变量）：pandas as pd、numpy as np、"
     "matplotlib.pyplot as plt、scipy.stats as stats、statsmodels.api as sm、"
-    "pingouin as pg（统计，优先用它，能一次给出效应量/置信区间/检验功效）、"
+    "pingouin as pg（统计，优先用它，能一次给出效应量/置信区间/检验功效；"
+    "注意 pingouin 0.6.x 的结果列名是下划线形式，如 p_val、cohen_d、CI95，"
+    "没有连字符或百分号；获取数值时建议直接 print 整个结果表，或用 .iloc 按位置取，"
+    "不要硬编码诸如 'p-val' 这类可能不存在的列名）、"
     "lifelines（生存分析：lifelines.KaplanMeierFitter、CoxPHFitter、"
     "lifelines.statistics.logrank_test）。scikit-learn 可自行 import sklearn。"
     "画图用 matplotlib 默认样式即可（运行环境已配置为出版级清晰度）；"
@@ -269,9 +272,11 @@ async def analyze_data(filename: str, content: bytes, question: str) -> AsyncIte
         yield ("status", {"message": "正在本地执行分析…"})
         run = await asyncio.to_thread(_execute, code, filename, content)
 
-        # 自动纠错一次
-        if not run.get("ok"):
-            yield ("status", {"message": "执行出错，正在自动修正代码…"})
+        # 自动纠错: 最多重试 2 次
+        for attempt in range(2):
+            if run.get("ok"):
+                break
+            yield ("status", {"message": f"执行出错，正在自动修正代码（第 {attempt + 1} 次）…"})
             code = _extract_code(
                 await _complete(_fix_code_messages(profile, question, code, run.get("error", "")))
             )
