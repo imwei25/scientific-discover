@@ -61,6 +61,59 @@ def _parse_json_array(raw: str) -> list[dict]:
     return items
 
 
+_DOI_PREFIXES = (
+    "https://doi.org/", "http://doi.org/",
+    "https://dx.doi.org/", "http://dx.doi.org/",
+    "doi:", "doi ",
+)
+
+
+def _normalize_doi(doi: str) -> str:
+    """把 DOI 统一成裸 DOI（去掉 https://doi.org/ 前缀、doi: 前缀），便于显示与查重。"""
+    d = (doi or "").strip()
+    low = d.lower()
+    for pre in _DOI_PREFIXES:
+        if low.startswith(pre):
+            return d[len(pre):].strip()
+    return d
+
+
+def _dedup_key(it: dict):
+    """生成去重键：优先用 DOI；无 DOI 时退回 标题+年份+第一作者姓。无可识别信息则不参与去重。"""
+    doi = _normalize_doi(it.get("DOI", ""))
+    if doi:
+        return ("doi", doi.lower())
+    title = str(it.get("title", "")).strip().lower()
+    if not title:
+        return None
+    year = ""
+    try:
+        year = str(it["issued"]["date-parts"][0][0])
+    except Exception:  # noqa: BLE001
+        pass
+    authors = it.get("author") or []
+    first = str(authors[0].get("family", "")).lower() if authors and isinstance(authors[0], dict) else ""
+    return ("meta", title, year, first)
+
+
+def _normalize_and_dedup(items: list[dict]) -> list[dict]:
+    """规整 DOI 并按 _dedup_key 去掉重复条目，重排连续 id。"""
+    seen = set()
+    out = []
+    for it in items:
+        if it.get("DOI"):
+            it["DOI"] = _normalize_doi(it["DOI"])
+        key = _dedup_key(it)
+        if key is not None and key in seen:
+            continue
+        if key is not None:
+            seen.add(key)
+        out.append(it)
+    for i, it in enumerate(out, 1):
+        it["id"] = f"ref{i}"
+    return out
+
+
 def _resolve_style(style_name: str) -> CitationStylesStyle:
     try:
         path = get_style_filepath(style_name)
@@ -97,7 +150,12 @@ async def format_references(refs_text: str, journal_id: str) -> dict:
         csl_json = _parse_json_array(await _complete(_extract_messages(refs_text)))
         if not csl_json:
             return {"ok": False, "error": "未能解析出参考文献，请检查粘贴的内容格式。"}
+        raw_count = len(csl_json)
+        csl_json = _normalize_and_dedup(csl_json)
         formatted = render_bibliography(csl_json, style_name)
-        return {"ok": True, "style": style_name, "formatted": formatted}
+        result = {"ok": True, "style": style_name, "formatted": formatted}
+        if len(csl_json) < raw_count:
+            result["note"] = f"已自动去除 {raw_count - len(csl_json)} 条重复参考文献。"
+        return result
     except Exception as e:  # noqa: BLE001
         return {"ok": False, "error": f"格式化失败：{e}"}
