@@ -11,6 +11,7 @@ export default function IdeaModule({ goto }: { goto: Goto }) {
   const [field, setField] = usePersistentState("idea:field", "");
   const [keywords, setKeywords] = usePersistentState("idea:keywords", "");
   const [background, setBackground] = usePersistentState("idea:background", "");
+  const [depth, setDepth] = usePersistentState("idea:depth", "deep");
 
   const [status, setStatus] = useState("");
   const [refs, setRefs] = usePersistentState<Reference[]>("idea:refs", []);
@@ -50,7 +51,7 @@ export default function IdeaModule({ goto }: { goto: Goto }) {
     setRunning(true);
     ctrl.current = new AbortController();
     await streamIdea(
-      { field, keywords, background },
+      { field, keywords, background, depth },
       {
         signal: ctrl.current.signal,
         onStatus: setStatus,
@@ -125,6 +126,13 @@ export default function IdeaModule({ goto }: { goto: Goto }) {
             placeholder="例如：偏临床回顾性研究，可获取本院病理样本；不做动物实验"
             rows={3}
           />
+        </label>
+        <label className="field">
+          <span className="field-label">调研深度</span>
+          <select data-testid="input-depth" value={depth} onChange={(e) => setDepth(e.target.value)}>
+            <option value="deep">深入（多子方向 + 空白补检索 + 空白矩阵，推荐）</option>
+            <option value="fast">快速（单轮检索，省额度更快）</option>
+          </select>
         </label>
         <Dropzone
           testId="upload-doc"
