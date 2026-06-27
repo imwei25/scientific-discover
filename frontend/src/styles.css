@@ -989,6 +989,26 @@ select {
   color: var(--muted);
   font-style: italic;
 }
+.ref-badge {
+  display: inline-block;
+  font-size: 11px;
+  padding: 1px 6px;
+  border-radius: 4px;
+  margin-right: 6px;
+  vertical-align: 1px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+.ref-badge-preprint {
+  background: var(--warn-bg);
+  color: var(--warn);
+  border: 1px solid var(--warn-line);
+}
+.ref-badge-epmc {
+  background: var(--teal-soft);
+  color: var(--petrol);
+  border: 1px solid #c8e6e0;
+}
 .verify-ok,
 .verify-bad {
   margin-top: 16px;

@@ -52,6 +52,7 @@ export default function AnalyzeModule({ goto }: { goto: Goto }) {
       onDelta: (t) => setConclusion((p) => p + t),
       onError: (m) => {
         setError(m);
+        setStatus("");
         setRunning(false);
       },
       onDone: () => {

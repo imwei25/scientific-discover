@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { streamIdea, Reference, Verification } from "../lib/sse";
+import { streamIdea, Reference, Verification, RewritePayload } from "../lib/sse";
 import { addHistory } from "../lib/history";
 import Markdown from "../components/Markdown";
 import Dropzone from "../components/Dropzone";
@@ -19,6 +19,7 @@ export default function IdeaModule({ goto }: { goto: Goto }) {
   const [verify, setVerify] = usePersistentState<Verification | null>("idea:verify", null);
   const [running, setRunning] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [rewrite, setRewrite] = useState<RewritePayload | null>(null);
   const ctrl = useRef<AbortController | null>(null);
 
   const savedRef = useRef("");
@@ -41,25 +42,30 @@ export default function IdeaModule({ goto }: { goto: Goto }) {
     }
   }, [running, error, text, field, keywords, background, refs, verify]);
 
-  const submit = async () => {
-    if (!field.trim() || running) return;
+  const submit = async (override?: { field?: string; keywords?: string }) => {
+    const f = override?.field ?? field;
+    const k = override?.keywords ?? keywords;
+    if (!f.trim() || running) return;
     setStatus("");
     setRefs([]);
     setText("");
     setVerify(null);
     setError(null);
+    setRewrite(null);
     setRunning(true);
     ctrl.current = new AbortController();
     await streamIdea(
-      { field, keywords, background, depth },
+      { field: f, keywords: k, background, depth },
       {
         signal: ctrl.current.signal,
         onStatus: setStatus,
         onReferences: setRefs,
         onDelta: (t) => setText((p) => p + t),
         onVerify: setVerify,
+        onRewriteSuggestion: setRewrite,
         onError: (m) => {
           setError(m);
+          setStatus("");
           setRunning(false);
         },
         onDone: () => {
@@ -69,6 +75,20 @@ export default function IdeaModule({ goto }: { goto: Goto }) {
       },
     );
     setRunning(false);
+  };
+
+  const acceptRewrite = () => {
+    if (!rewrite?.suggestion) return;
+    const next = rewrite.suggestion;
+    setField(next.field);
+    setKeywords(next.keywords);
+    setRewrite(null);
+    setError(null);
+    submit({ field: next.field, keywords: next.keywords });
+  };
+
+  const dismissRewrite = () => {
+    setRewrite(null);
   };
 
   const stop = () => {
@@ -86,6 +106,7 @@ export default function IdeaModule({ goto }: { goto: Goto }) {
     setVerify(null);
     setStatus("");
     setError(null);
+    setRewrite(null);
   };
 
   return (
@@ -145,7 +166,7 @@ export default function IdeaModule({ goto }: { goto: Goto }) {
           }
         />
         <div className="form-actions">
-          <button className="btn-primary" onClick={submit} disabled={!field.trim() || running} data-testid="run-btn">
+          <button className="btn-primary" onClick={() => submit()} disabled={!field.trim() || running} data-testid="run-btn">
             {running ? "调研中…" : "开始文献调研"}
           </button>
           <button className="btn-ghost" onClick={reset} data-testid="reset-btn">
@@ -160,6 +181,50 @@ export default function IdeaModule({ goto }: { goto: Goto }) {
         </div>
       )}
 
+      {rewrite && !running && (
+        <div className="rewrite-suggest" data-testid="rewrite-suggest">
+          <div className="rewrite-title">PubMed 零命中 · AI 改写建议</div>
+          {rewrite.tried_queries.length > 0 && (
+            <details className="rewrite-tried">
+              <summary>本次实际跑过的检索式（{rewrite.tried_queries.length} 个，均零命中）</summary>
+              <ul>
+                {rewrite.tried_queries.map((q, i) => (
+                  <li key={i}><code>{q}</code></li>
+                ))}
+              </ul>
+            </details>
+          )}
+          {rewrite.suggestion ? (
+            <>
+              <div className="rewrite-row">
+                <span className="rewrite-label">建议方向</span>
+                <span className="rewrite-value" data-testid="rewrite-field">{rewrite.suggestion.field}</span>
+              </div>
+              <div className="rewrite-row">
+                <span className="rewrite-label">建议关键词</span>
+                <span className="rewrite-value" data-testid="rewrite-keywords">{rewrite.suggestion.keywords || "（无）"}</span>
+              </div>
+              {rewrite.suggestion.reason && (
+                <div className="rewrite-row">
+                  <span className="rewrite-label">为什么这样改</span>
+                  <span className="rewrite-value">{rewrite.suggestion.reason}</span>
+                </div>
+              )}
+              <div className="rewrite-actions">
+                <button className="btn-primary" onClick={acceptRewrite} data-testid="rewrite-accept">
+                  采纳并重试
+                </button>
+                <button className="btn-ghost" onClick={dismissRewrite} data-testid="rewrite-dismiss">
+                  我自己改
+                </button>
+              </div>
+            </>
+          ) : (
+            <div className="rewrite-row">AI 未能生成有效建议，请手动调整方向或关键词后重试。</div>
+          )}
+        </div>
+      )}
+
       {error && (
         <div className="result-error" data-testid="result-error">
           {error}
@@ -168,10 +233,12 @@ export default function IdeaModule({ goto }: { goto: Goto }) {
 
       {refs.length > 0 && (
         <details className="refs" open data-testid="refs">
-          <summary>检索到的文献（{refs.length} 篇，点击可打开 PubMed）</summary>
+          <summary>检索到的文献（{refs.length} 篇，点击打开原文）</summary>
           <ol className="ref-list">
-            {refs.map((r) => (
-              <li key={r.pmid}>
+            {refs.map((r, i) => (
+              <li key={r.pmid || r.url || i}>
+                {r.source === "preprint" && <span className="ref-badge ref-badge-preprint">预印本</span>}
+                {r.source === "europepmc" && <span className="ref-badge ref-badge-epmc">Europe PMC</span>}
                 <a href={r.url} target="_blank" rel="noreferrer">
                   {r.first_author} ({r.year}). {r.title}
                 </a>
@@ -233,14 +300,9 @@ export default function IdeaModule({ goto }: { goto: Goto }) {
         ) : (
           <div className="verify-bad" data-testid="verify">
             ⚠ 引用核验：发现 {verify.unverified.length} 处引用未出现在检索结果中，可能不准确，请核实：
-            {verify.unverified.map((pmid) => (
-              <a
-                key={pmid}
-                href={`https://pubmed.ncbi.nlm.nih.gov/${pmid}/`}
-                target="_blank"
-                rel="noreferrer"
-              >
-                PMID {pmid}
+            {verify.unverified.map((u) => (
+              <a key={u} href={u} target="_blank" rel="noreferrer">
+                {u}
               </a>
             ))}
           </div>

@@ -98,12 +98,24 @@ export interface Reference {
   journal: string;
   year: string;
   url: string;
+  source?: string; // "pubmed" | "preprint" | "europepmc"
 }
 
 export interface Verification {
   total: number;
   verified: number;
-  unverified: string[];
+  unverified: string[]; // URLs (PubMed / Europe PMC links)
+}
+
+export interface RewriteSuggestion {
+  field: string;
+  keywords: string;
+  reason: string;
+}
+
+export interface RewritePayload {
+  tried_queries: string[];
+  suggestion: RewriteSuggestion | null;
 }
 
 export interface IdeaHandlers {
@@ -111,6 +123,7 @@ export interface IdeaHandlers {
   onReferences?: (items: Reference[]) => void;
   onDelta: (text: string) => void;
   onVerify?: (v: Verification) => void;
+  onRewriteSuggestion?: (p: RewritePayload) => void;
   onDone?: () => void;
   onError?: (message: string) => void;
   signal?: AbortSignal;
@@ -158,6 +171,11 @@ export async function streamIdea(
         else if (ev.event === "references") h.onReferences?.(data.items ?? []);
         else if (ev.event === "delta") h.onDelta(data.text ?? "");
         else if (ev.event === "verify") h.onVerify?.(data as Verification);
+        else if (ev.event === "rewrite_suggestion")
+          h.onRewriteSuggestion?.({
+            tried_queries: data.tried_queries ?? [],
+            suggestion: data.suggestion ?? null,
+          });
         else if (ev.event === "error") h.onError?.(data.message ?? ev.data);
         else if (ev.event === "done") h.onDone?.();
       }

@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import json
 import re
+import traceback
 from typing import AsyncIterator
 
 from .config import settings
@@ -96,6 +97,45 @@ async def _gen_facets(field: str, keywords: str, background: str) -> list[dict]:
     return [{"name": f"方向{i + 1}", "query": q} for i, q in enumerate(qs)]
 
 
+async def _suggest_rewrite(
+    field: str, keywords: str, background: str, tried_queries: list[str]
+) -> dict | None:
+    """零命中时, 让 LLM 基于『原输入 + 实际跑过的 PubMed 检索式』给出改写建议。
+
+    返回 {"field": ..., "keywords": ..., "reason": ...} 或 None。
+    """
+    bg = background[:500]
+    tried = "\n".join(f"- {q}" for q in tried_queries) or "（无）"
+    system = (
+        "你是医学/生物医学文献检索专家。用户在 PubMed 上的检索零命中。"
+        "请基于用户的原始研究方向以及实际尝试过但都零命中的检索式，"
+        "推断一个更可能命中真实文献的『研究方向 (field)』和『英文关键词 (keywords)』。"
+        "要求：field 用简洁中文重述方向（避免过窄的限定），"
+        "keywords 用 2-4 个英文术语，逗号分隔，优先使用 PubMed/MeSH 常用词；"
+        "reason 用一句中文说明为何这样改更可能命中（如：原检索过窄/含中文/术语不规范等）。"
+        "只输出一个 JSON 对象：{\"field\":\"...\",\"keywords\":\"...\",\"reason\":\"...\"}，不要任何解释。"
+    )
+    user = (
+        f"用户原始 field：{field}\n"
+        f"用户原始 keywords：{keywords or '（空）'}\n"
+        f"用户背景（截断）：{bg or '（空）'}\n\n"
+        f"实际跑过且零命中的 PubMed 检索式：\n{tried}"
+    )
+    raw = await _complete(
+        [{"role": "system", "content": system}, {"role": "user", "content": user}],
+        max_tokens=300,
+    )
+    obj = _parse_json(raw, "{", "}")
+    if not isinstance(obj, dict):
+        return None
+    f = str(obj.get("field") or "").strip()
+    k = str(obj.get("keywords") or "").strip()
+    r = str(obj.get("reason") or "").strip()
+    if not f and not k:
+        return None
+    return {"field": f or field, "keywords": k, "reason": r}
+
+
 async def _gap_queries(field: str, papers: list[dict]) -> list[str]:
     """基于首轮文献标题, 找出值得补充检索的 2-3 个角度。"""
     titles = "\n".join(f"- {p['title']}" for p in papers[:20])
@@ -115,12 +155,20 @@ async def _gap_queries(field: str, papers: list[dict]) -> list[str]:
 
 
 def _merge_papers(base: list[dict], extra: list[dict], cap: int) -> list[dict]:
-    seen = {p["pmid"] for p in base}
+    """按 pmid / doi / url 去重合并（兼容无 pmid 的预印本）。"""
     out = list(base)
+    keys: set[str] = set()
+    for p in base:
+        for k in (p.get("pmid"), p.get("doi"), p.get("url")):
+            if k:
+                keys.add(k)
     for p in extra:
-        if p["pmid"] not in seen:
-            seen.add(p["pmid"])
-            out.append(p)
+        ids = [k for k in (p.get("pmid"), p.get("doi"), p.get("url")) if k]
+        if any(k in keys for k in ids):
+            continue
+        out.append(p)
+        for k in ids:
+            keys.add(k)
         if len(out) >= cap:
             break
     return out
@@ -179,18 +227,29 @@ async def _deep_flow(field: str, keywords: str, background: str) -> AsyncIterato
     facets = await _gen_facets(field, keywords, background)
     names = "、".join(f["name"] for f in facets)
     yield ("status", {"message": f"正在多角度检索 PubMed（{len(facets)} 个子方向：{names}）…"})
-    papers = await search_literature([f["query"] for f in facets], per_query=5, cap=24)
+    queries = [f["query"] for f in facets]
+    result = await search_literature(queries, per_query=5, cap=24)
+    papers = result["papers"]
     if not papers:
-        yield ("error", {"message": "未能从 PubMed 检索到相关文献，请换更具体的英文关键词。"})
+        if result["network_errors"] >= max(1, len(queries)):
+            yield ("error", {"message": "无法连接 PubMed（网络异常），请检查网络后重试。"})
+            return
+        yield ("status", {"message": "PubMed 零命中，正在请 AI 改写检索方向…"})
+        sugg = await _suggest_rewrite(field, keywords, background, result["queries_tried"])
+        yield ("rewrite_suggestion", {
+            "tried_queries": result["queries_tried"],
+            "suggestion": sugg,
+        })
+        yield ("error", {"message": "未能从 PubMed 检索到相关文献。可采纳上面的 AI 改写建议后重试。"})
         return
-    yield ("references", {"items": [{k: p[k] for k in ("pmid", "title", "first_author", "journal", "year", "url")} for p in papers]})
+    yield ("references", {"items": [{k: p.get(k, "") for k in ("pmid", "title", "first_author", "journal", "year", "url", "source")} for p in papers]})
 
     yield ("status", {"message": f"首轮找到 {len(papers)} 篇，正在识别空白并补充检索…"})
     gapq = await _gap_queries(field, papers)
     if gapq:
         extra = await search_literature(gapq, per_query=4, cap=12)
-        papers = _merge_papers(papers, extra, cap=34)
-        yield ("references", {"items": [{k: p[k] for k in ("pmid", "title", "first_author", "journal", "year", "url")} for p in papers]})
+        papers = _merge_papers(papers, extra["papers"], cap=34)
+        yield ("references", {"items": [{k: p.get(k, "") for k in ("pmid", "title", "first_author", "journal", "year", "url", "source")} for p in papers]})
 
     yield ("status", {"message": f"共 {len(papers)} 篇文献，正在综合（现状/空白矩阵/候选选题）…"})
     full = ""
@@ -258,12 +317,22 @@ async def deep_research_idea(inputs: dict) -> AsyncIterator[tuple[str, dict]]:
             yield ("status", {"message": "正在生成 PubMed 检索式…"})
             queries = await _gen_queries(field, keywords, background)
             yield ("status", {"message": f"正在检索 PubMed（{len(queries)} 个检索式）…"})
-            papers = await search_literature(queries, per_query=6, cap=18)
+            result = await search_literature(queries, per_query=6, cap=18)
+            papers = result["papers"]
             if not papers:
-                yield ("error", {"message": "未能从 PubMed 检索到相关文献，请尝试更换或细化关键词（建议用英文）。"})
+                if result["network_errors"] >= max(1, len(queries)):
+                    yield ("error", {"message": "无法连接 PubMed（网络异常），请检查网络后重试。"})
+                    return
+                yield ("status", {"message": "PubMed 零命中，正在请 AI 改写检索方向…"})
+                sugg = await _suggest_rewrite(field, keywords, background, result["queries_tried"])
+                yield ("rewrite_suggestion", {
+                    "tried_queries": result["queries_tried"],
+                    "suggestion": sugg,
+                })
+                yield ("error", {"message": "未能从 PubMed 检索到相关文献。可采纳上面的 AI 改写建议后重试。"})
                 return
             yield ("references", {"items": [
-                {k: p[k] for k in ("pmid", "title", "first_author", "journal", "year", "url")} for p in papers
+                {k: p.get(k, "") for k in ("pmid", "title", "first_author", "journal", "year", "url", "source")} for p in papers
             ]})
             yield ("status", {"message": f"已找到 {len(papers)} 篇文献，正在分析研究现状与空白…"})
             async for piece in stream_chat(_synthesis_messages(field, papers)):
@@ -273,15 +342,28 @@ async def deep_research_idea(inputs: dict) -> AsyncIterator[tuple[str, dict]]:
         if not papers:
             return
 
-        # 引用自动核验: 正文里引用的每个 PubMed 链接, 必须来自本次检索到的文献。
-        valid = {p["pmid"] for p in papers}
-        cited = set(re.findall(r"pubmed\.ncbi\.nlm\.nih\.gov/(\d+)", full))
-        unverified = sorted(cited - valid)
+        # 引用自动核验: 正文 Markdown 链接里出现的每个 URL, 必须命中本次检索得到的文献。
+        # 同时兼容 PubMed (pubmed.ncbi.nlm.nih.gov/<pmid>/) 与 Europe PMC (europepmc.org/article/...)。
+        valid_urls = {p["url"].rstrip("/") for p in papers if p.get("url")}
+        valid_pmids = {p["pmid"] for p in papers if p.get("pmid")}
+        link_urls = re.findall(r"\]\((https?://[^)\s]+)\)", full)
+        cited_urls: set[str] = set()
+        for u in link_urls:
+            if "pubmed.ncbi.nlm.nih.gov" in u or "europepmc.org" in u:
+                cited_urls.add(u.rstrip("/"))
+        unverified = sorted(
+            u for u in cited_urls
+            if u not in valid_urls
+            # PubMed PMID 命中也算 verified（处理同一 PMID 不同尾斜杠等情况）
+            and not any(pmid and pmid in u for pmid in valid_pmids if pmid in u)
+        )
         yield ("verify", {
-            "total": len(cited),
-            "verified": len(cited & valid),
+            "total": len(cited_urls),
+            "verified": len(cited_urls) - len(unverified),
             "unverified": unverified,
         })
         yield ("done", {})
     except Exception as e:  # noqa: BLE001
-        yield ("error", {"message": f"调研过程出错：{e}"})
+        # 把完整 traceback 打到 server.log, 友好错误返给前端。
+        print("[idea] exception:\n" + traceback.format_exc(), flush=True)
+        yield ("error", {"message": f"调研过程出错：{type(e).__name__}: {e}"})

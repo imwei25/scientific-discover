@@ -6,12 +6,14 @@
 from __future__ import annotations
 
 import asyncio
+import re
 import time
 import xml.etree.ElementTree as ET
 
 import httpx
 
 from .config import settings
+from .europepmc import search_epmc
 
 _BASE = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils"
 _TOOL = "research-assistant"
@@ -101,31 +103,42 @@ async def efetch(client: httpx.AsyncClient, pmids: list[str]) -> list[dict]:
         year = _text(art.find(".//JournalIssue/PubDate/Year")) or _text(
             art.find(".//JournalIssue/PubDate/MedlineDate")
         )
+        # DOI 用于跨源去重（与 Europe PMC 结果对齐）。
+        doi = ""
+        for aid in art.findall(".//ArticleIdList/ArticleId"):
+            if (aid.get("IdType") or "").lower() == "doi":
+                doi = _text(aid).lower()
+                break
         if not pmid or not title:
             continue
         papers.append(
             {
                 "pmid": pmid,
+                "doi": doi,
                 "title": title,
                 "abstract": abstract,
                 "first_author": first_author,
                 "journal": journal,
                 "year": year,
                 "url": pubmed_url(pmid),
+                "source": "pubmed",
             }
         )
     return papers
 
 
-async def search_literature(queries: list[str], per_query: int = 6, cap: int = 18) -> list[dict]:
-    """对多个检索式检索并合并去重, 返回带摘要的论文列表。"""
+async def _search_pubmed(queries: list[str], per_query: int, cap: int) -> dict:
+    """只跑 PubMed（NCBI E-utilities）的版本, 返回与 search_literature 同形 dict。"""
     seen: set[str] = set()
     collected: list[str] = []
+    network_errors = 0
+    queries_tried = list(queries)
     async with httpx.AsyncClient(timeout=httpx.Timeout(30.0)) as client:
         for q in queries:
             try:
                 ids = await esearch(client, q, retmax=per_query)
             except Exception:  # noqa: BLE001
+                network_errors += 1
                 continue
             for pid in ids:
                 if pid not in seen:
@@ -134,7 +147,70 @@ async def search_literature(queries: list[str], per_query: int = 6, cap: int = 1
             if len(collected) >= cap:
                 break
         collected = collected[:cap]
-        try:
-            return await efetch(client, collected)
-        except Exception:  # noqa: BLE001
-            return []
+        papers: list[dict] = []
+        if collected:
+            try:
+                papers = await efetch(client, collected)
+            except Exception:  # noqa: BLE001
+                network_errors += 1
+                papers = []
+    return {"papers": papers, "network_errors": network_errors, "queries_tried": queries_tried}
+
+
+_PUNCT_RE = re.compile(r"[^a-z0-9]+")
+
+
+def _title_key(title: str) -> str:
+    """标题归一化键（去标点+小写+折叠空白）, 用于跨源题名级去重。"""
+    return _PUNCT_RE.sub(" ", title.lower()).strip()
+
+
+def _merge_sources(pubmed: list[dict], epmc: list[dict], cap: int) -> list[dict]:
+    """合并 PubMed + Europe PMC, 优先保留 PubMed 版本（pmid/doi/title 三键去重）。"""
+    out: list[dict] = list(pubmed)
+    pmids = {p["pmid"] for p in pubmed if p.get("pmid")}
+    dois = {p["doi"] for p in pubmed if p.get("doi")}
+    titles = {_title_key(p["title"]) for p in pubmed if p.get("title")}
+    for p in epmc:
+        if p.get("pmid") and p["pmid"] in pmids:
+            continue
+        if p.get("doi") and p["doi"] in dois:
+            continue
+        tk = _title_key(p.get("title", ""))
+        if tk and tk in titles:
+            continue
+        out.append(p)
+        if p.get("pmid"):
+            pmids.add(p["pmid"])
+        if p.get("doi"):
+            dois.add(p["doi"])
+        if tk:
+            titles.add(tk)
+        if len(out) >= cap:
+            break
+    return out[:cap]
+
+
+async def search_literature(queries: list[str], per_query: int = 6, cap: int = 18) -> dict:
+    """并发检索 PubMed + Europe PMC, 合并去重。
+
+    返回 {"papers", "network_errors", "queries_tried"}。
+    network_errors 是两源失败次数之和（用于区分『检索式太窄』和『两源都连不上』）。
+    每篇 paper 多带一个 source 字段: "pubmed" / "preprint" / "europepmc"。
+    """
+    pubmed_share = max(2, per_query)
+    epmc_share = max(2, per_query)
+    pm_task = _search_pubmed(queries, pubmed_share, cap)
+    ep_task = search_epmc(queries, epmc_share, cap)
+    pm, ep = await asyncio.gather(pm_task, ep_task)
+    merged = _merge_sources(pm["papers"], ep["papers"], cap)
+    # 全部失败的边界: PubMed 全网络错 且 Europe PMC 也全错。
+    pm_total_fail = pm["network_errors"] >= max(1, len(queries))
+    ep_total_fail = ep["network_errors"] >= max(1, len(queries))
+    net_errs = pm["network_errors"] + ep["network_errors"]
+    return {
+        "papers": merged,
+        # 上游用 network_errors >= len(queries) 判断网络故障; 只要任一源能通就不算网络全败。
+        "network_errors": net_errs if (pm_total_fail and ep_total_fail) else 0,
+        "queries_tried": list(queries),
+    }
