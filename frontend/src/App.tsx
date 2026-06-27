@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { apiUrl } from "./lib/api";
 import { writePersisted, usePersistentState } from "./lib/usePersistentState";
 import { useSidebar } from "./lib/sidebar";
@@ -232,105 +232,193 @@ function Home({ onPick }: { onPick: (m: ModuleId) => void }) {
   );
 }
 
+// 缓慢自转 + 鼠标拖拽旋转的咖啡因分子骨架（C8H10N4O2）
+// 不用 React state 驱动角度，直接 ref + setAttribute 避免每帧重 render。
 function HeroArt() {
+  const containerRef = useRef<HTMLDivElement>(null);
+  const spinRef = useRef<SVGGElement>(null);
+  const stateRef = useRef({
+    angle: 0,
+    dragging: false,
+    lastCursorAngle: 0,
+  });
+
+  useEffect(() => {
+    let raf = 0;
+    let last = performance.now();
+    const tick = (now: number) => {
+      const dt = (now - last) / 1000;
+      last = now;
+      // 不在拖拽中时缓慢自转（2.5°/sec ≈ 一圈 144 秒）
+      if (!stateRef.current.dragging) {
+        stateRef.current.angle += 2.5 * dt;
+      }
+      if (spinRef.current) {
+        spinRef.current.setAttribute(
+          "transform",
+          `rotate(${stateRef.current.angle} 250 250)`,
+        );
+      }
+      raf = requestAnimationFrame(tick);
+    };
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
+  }, []);
+
+  const cursorAngleFromCenter = (clientX: number, clientY: number) => {
+    const rect = containerRef.current?.getBoundingClientRect();
+    if (!rect) return 0;
+    const cx = rect.left + rect.width / 2;
+    const cy = rect.top + rect.height / 2;
+    return (Math.atan2(clientY - cy, clientX - cx) * 180) / Math.PI;
+  };
+
+  const onPointerDown = (e: React.PointerEvent) => {
+    stateRef.current.dragging = true;
+    stateRef.current.lastCursorAngle = cursorAngleFromCenter(e.clientX, e.clientY);
+    (e.currentTarget as Element).setPointerCapture(e.pointerId);
+  };
+
+  const onPointerMove = (e: React.PointerEvent) => {
+    if (!stateRef.current.dragging) return;
+    const cur = cursorAngleFromCenter(e.clientX, e.clientY);
+    // 跨越 ±180° 时归一化，避免突然回弹
+    let delta = cur - stateRef.current.lastCursorAngle;
+    if (delta > 180) delta -= 360;
+    if (delta < -180) delta += 360;
+    stateRef.current.lastCursorAngle = cur;
+    stateRef.current.angle += delta;
+  };
+
+  const onPointerUp = (e: React.PointerEvent) => {
+    stateRef.current.dragging = false;
+    (e.currentTarget as Element).releasePointerCapture?.(e.pointerId);
+  };
+
   return (
-    <svg viewBox="0 0 500 500" className="hero-svg" role="img">
-      <defs>
-        <radialGradient id="hero-halo" cx="50%" cy="50%" r="50%">
-          <stop offset="0%" stopColor="var(--teal)" stopOpacity="0.18" />
-          <stop offset="55%" stopColor="var(--teal)" stopOpacity="0.05" />
-          <stop offset="100%" stopColor="var(--teal)" stopOpacity="0" />
-        </radialGradient>
-        <radialGradient id="hero-core" cx="50%" cy="50%" r="50%">
-          <stop offset="0%" stopColor="var(--paper-warm)" stopOpacity="1" />
-          <stop offset="100%" stopColor="var(--petrol)" stopOpacity="1" />
-        </radialGradient>
-      </defs>
+    <div
+      className="home-art-wrap"
+      ref={containerRef}
+      onPointerDown={onPointerDown}
+      onPointerMove={onPointerMove}
+      onPointerUp={onPointerUp}
+      onPointerCancel={onPointerUp}
+      data-testid="hero-art"
+    >
+      <svg
+        viewBox="0 0 500 500"
+        className="hero-svg"
+        role="img"
+        aria-label="caffeine molecule, C8H10N4O2"
+      >
+        <defs>
+          <radialGradient id="hero-halo" cx="50%" cy="50%" r="50%">
+            <stop offset="0%" stopColor="var(--teal)" stopOpacity="0.18" />
+            <stop offset="55%" stopColor="var(--teal)" stopOpacity="0.05" />
+            <stop offset="100%" stopColor="var(--teal)" stopOpacity="0" />
+          </radialGradient>
+        </defs>
 
-      {/* halo glow */}
-      <circle cx="250" cy="250" r="230" fill="url(#hero-halo)" />
+        {/* halo glow */}
+        <circle cx="250" cy="250" r="230" fill="url(#hero-halo)" />
 
-      {/* rotating constellation */}
-      <g className="hero-spin">
-        {/* concentric rings */}
-        <circle
-          cx="250"
-          cy="250"
-          r="228"
-          fill="none"
-          stroke="var(--line)"
-          strokeWidth="0.6"
-          strokeDasharray="1 7"
-        />
-        <circle
-          cx="250"
-          cy="250"
-          r="178"
-          fill="none"
-          stroke="var(--line)"
-          strokeWidth="0.8"
-        />
-        <circle
-          cx="250"
-          cy="250"
-          r="118"
-          fill="none"
-          stroke="var(--teal)"
-          strokeWidth="0.8"
-          opacity="0.5"
-          strokeDasharray="3 4"
-        />
-
-        {/* sparse network */}
-        <g
-          stroke="var(--teal)"
-          strokeWidth="0.7"
-          opacity="0.4"
-          fill="none"
-          strokeLinecap="round"
-        >
-          <line x1="250" y1="118" x2="376" y2="232" />
-          <line x1="376" y1="232" x2="316" y2="386" />
-          <line x1="316" y1="386" x2="158" y2="354" />
-          <line x1="158" y1="354" x2="108" y2="198" />
-          <line x1="108" y1="198" x2="250" y2="118" />
-          <line x1="250" y1="250" x2="376" y2="232" />
-          <line x1="250" y1="250" x2="158" y2="354" />
-          <line x1="250" y1="250" x2="108" y2="198" />
+        {/* 远景同心轨道 */}
+        <g className="hero-rings" fill="none">
+          <circle cx="250" cy="250" r="228" stroke="var(--line)" strokeWidth="0.6" strokeDasharray="1 7" />
+          <circle cx="250" cy="250" r="195" stroke="var(--line-soft)" strokeWidth="0.7" />
         </g>
 
-        {/* outer particles */}
-        <g className="hero-particles" fill="var(--teal)">
-          <circle cx="250" cy="118" r="5.5" />
-          <circle cx="376" cy="232" r="7" />
-          <circle cx="316" cy="386" r="4.5" />
-          <circle cx="158" cy="354" r="6" />
-          <circle cx="108" cy="198" r="5" />
+        {/* 分子骨架（拖拽 + 自转） */}
+        <g ref={spinRef} transform="rotate(0 250 250)">
+          <Molecule />
         </g>
 
-        {/* faint inner particles */}
-        <g className="hero-particles-soft" fill="var(--petrol)" opacity="0.45">
-          <circle cx="206" cy="180" r="3" />
-          <circle cx="320" cy="172" r="3.5" />
-          <circle cx="294" cy="324" r="3" />
-          <circle cx="178" cy="266" r="2.6" />
+        {/* 角标：化学式 */}
+        <g className="hero-caption">
+          <text x="250" y="450" textAnchor="middle" className="hero-formula">
+            C₈H₁₀N₄O₂
+          </text>
+          <text x="250" y="472" textAnchor="middle" className="hero-formula-sub">
+            CAFFEINE · 1,3,7-TRIMETHYLXANTHINE
+          </text>
         </g>
+      </svg>
+    </div>
+  );
+}
+
+// 咖啡因分子骨架。位置基于标准 2D 表达，自洽即可。
+function Molecule() {
+  return (
+    <g
+      className="molecule"
+      stroke="var(--ink)"
+      strokeWidth="1.7"
+      fill="none"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      {/* 6-mem pyrimidine ring 单键 */}
+      <line x1="157" y1="225" x2="200" y2="200" />
+      <line x1="200" y1="200" x2="243" y2="225" />
+      <line x1="243" y1="225" x2="243" y2="275" />
+      <line x1="200" y1="300" x2="157" y2="275" />
+      <line x1="157" y1="275" x2="157" y2="225" />
+
+      {/* C4=C5 共享双键 */}
+      <line x1="243" y1="275" x2="200" y2="300" />
+      <line x1="237" y1="270" x2="194" y2="295" />
+
+      {/* 5-mem imidazole ring 单键 */}
+      <line x1="200" y1="300" x2="210" y2="349" />
+      <line x1="210" y1="349" x2="260" y2="354" />
+      <line x1="280" y1="308" x2="243" y2="275" />
+
+      {/* C8=N9 双键 */}
+      <line x1="260" y1="354" x2="280" y2="308" />
+      <line x1="265" y1="356" x2="285" y2="310" />
+
+      {/* 取代基单键 */}
+      <line x1="157" y1="225" x2="127" y2="207" />
+      <line x1="243" y1="225" x2="273" y2="207" />
+      <line x1="210" y1="349" x2="190" y2="371" />
+      <line x1="260" y1="354" x2="275" y2="380" />
+
+      {/* C2=O 双键 */}
+      <line x1="200" y1="200" x2="200" y2="165" />
+      <line x1="206" y1="200" x2="206" y2="165" />
+
+      {/* C6=O 双键 */}
+      <line x1="157" y1="275" x2="127" y2="293" />
+      <line x1="161" y1="282" x2="131" y2="300" />
+
+      {/* 原子标签底色（遮住键的末端，呈现 "标签贴在键上" 的效果） */}
+      <g className="atom-halo" stroke="none">
+        <circle cx="157" cy="225" r="9" />
+        <circle cx="243" cy="225" r="9" />
+        <circle cx="210" cy="349" r="9" />
+        <circle cx="280" cy="308" r="9" />
+        <circle cx="200" cy="165" r="9" />
+        <circle cx="127" cy="293" r="9" />
+        <circle cx="127" cy="207" r="13" />
+        <circle cx="273" cy="207" r="13" />
+        <circle cx="190" cy="371" r="13" />
+        <circle cx="275" cy="380" r="9" />
       </g>
 
-      {/* central anchor (no rotation) */}
-      <g className="hero-anchor">
-        <circle
-          cx="250"
-          cy="250"
-          r="28"
-          fill="none"
-          stroke="var(--petrol)"
-          strokeWidth="1"
-          opacity="0.25"
-        />
-        <circle cx="250" cy="250" r="18" fill="url(#hero-core)" />
-        <circle cx="250" cy="250" r="6" fill="var(--paper-warm)" />
+      {/* 原子标签 */}
+      <g className="atom-label" stroke="none" textAnchor="middle" dominantBaseline="central">
+        <text x="157" y="225">N</text>
+        <text x="243" y="225">N</text>
+        <text x="210" y="349">N</text>
+        <text x="280" y="308">N</text>
+        <text x="200" y="165" className="atom-o">O</text>
+        <text x="127" y="293" className="atom-o">O</text>
+        <text x="127" y="207" className="atom-r">CH₃</text>
+        <text x="273" y="207" className="atom-r">CH₃</text>
+        <text x="190" y="371" className="atom-r">CH₃</text>
+        <text x="275" y="380">H</text>
       </g>
-    </svg>
+    </g>
   );
 }

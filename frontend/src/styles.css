@@ -499,7 +499,7 @@ body {
   color: var(--faint);
 }
 
-/* hero art */
+/* hero art —— 分子骨架 + 拖拽旋转 */
 .home-art {
   display: flex;
   align-items: center;
@@ -507,45 +507,61 @@ body {
   min-height: 460px;
   position: relative;
 }
-.hero-svg {
+.home-art-wrap {
   width: 100%;
   max-width: 560px;
+  cursor: grab;
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+}
+.home-art-wrap:active { cursor: grabbing; }
+.hero-svg {
+  width: 100%;
   height: auto;
   display: block;
+  /* 轻微 teal 投影，让分子像浮在纸面上 */
+  filter: drop-shadow(0 6px 14px rgba(15, 155, 148, 0.12));
 }
-.hero-spin {
-  transform-origin: 250px 250px;
-  animation: hero-rotate 140s linear infinite;
+[data-theme="midnight"] .hero-svg {
+  filter: drop-shadow(0 6px 16px rgba(22, 217, 200, 0.18));
 }
-@keyframes hero-rotate {
-  to { transform: rotate(360deg); }
+
+/* 分子骨架原子标签 */
+.molecule .atom-halo { fill: var(--paper); }
+[data-theme="midnight"] .molecule .atom-halo { fill: var(--paper-warm); }
+.molecule .atom-label {
+  font-family: var(--sans);
+  font-weight: 600;
+  font-size: 14px;
+  fill: var(--ink);
 }
-.hero-particles circle {
-  animation: hero-pulse 4.8s var(--ease-out-soft) infinite;
+.molecule .atom-label .atom-o { fill: var(--bad); }
+.molecule .atom-label .atom-r {
+  font-size: 11px;
+  fill: var(--muted);
+  font-weight: 500;
 }
-.hero-particles circle:nth-child(2n) {
-  animation-delay: 1.2s;
-  animation-duration: 5.6s;
+
+/* 化学式角标 */
+.hero-caption text { fill: var(--faint); font-family: var(--sans); }
+.hero-formula {
+  font-family: var(--mono);
+  font-size: 13px;
+  font-weight: 500;
+  letter-spacing: 0.04em;
 }
-.hero-particles circle:nth-child(3n) {
-  animation-delay: 2.4s;
-  animation-duration: 6.4s;
+.hero-formula-sub {
+  font-family: var(--serif);
+  font-size: 9.5px;
+  letter-spacing: 0.22em;
+  fill: var(--faint);
 }
-.hero-particles-soft circle {
-  animation: hero-pulse 5.4s var(--ease-out-soft) infinite;
-  animation-delay: 1s;
-}
-@keyframes hero-pulse {
-  0%, 100% { opacity: 0.45; }
-  50%      { opacity: 1; }
-}
-.hero-anchor circle:first-child {
-  transform-origin: 250px 250px;
-  animation: hero-breathe 5s var(--ease-out-soft) infinite;
-}
-@keyframes hero-breathe {
-  0%, 100% { opacity: 0.18; transform: scale(1); }
-  50%      { opacity: 0.4;  transform: scale(1.08); }
+
+/* 远景同心轨道很慢地反向飘动 */
+.hero-rings { animation: hero-rings-drift 90s linear infinite; transform-origin: 250px 250px; }
+@keyframes hero-rings-drift {
+  to { transform: rotate(-360deg); }
 }
 
 /* hero 入场 stagger */
@@ -781,6 +797,54 @@ select {
   border: 1px solid var(--bad-line);
   border-left: 3px solid var(--bad);
   border-radius: var(--radius-sm);
+}
+
+.rewrite-suggest {
+  margin-top: var(--sp-4);
+  padding: 14px 18px;
+  background: var(--warn-bg);
+  border: 1px solid var(--warn-line);
+  border-left: 3px solid var(--warn);
+  border-radius: var(--radius-sm);
+  color: var(--warn-fg);
+}
+.rewrite-suggest .rewrite-title {
+  font-weight: 600;
+  margin-bottom: 8px;
+}
+.rewrite-suggest .rewrite-row {
+  display: flex;
+  gap: 10px;
+  align-items: baseline;
+  margin: 4px 0;
+  font-size: 14px;
+}
+.rewrite-suggest .rewrite-label {
+  min-width: 90px;
+  opacity: 0.75;
+}
+.rewrite-suggest .rewrite-value {
+  flex: 1;
+  word-break: break-word;
+}
+.rewrite-suggest .rewrite-tried {
+  margin: 4px 0 8px;
+  font-size: 13px;
+}
+.rewrite-suggest .rewrite-tried ul {
+  margin: 6px 0 0;
+  padding-left: 20px;
+}
+.rewrite-suggest .rewrite-tried code {
+  font-size: 12px;
+  background: rgba(0, 0, 0, 0.04);
+  padding: 1px 4px;
+  border-radius: 3px;
+}
+.rewrite-suggest .rewrite-actions {
+  margin-top: 10px;
+  display: flex;
+  gap: 8px;
 }
 .cursor-blink {
   display: inline-block;
