@@ -330,6 +330,30 @@ test("投稿包: 预提交体检 + 生成投稿信", async ({ page }) => {
   await expect(page.getByTestId("cover-panel").getByTestId("export-docx-btn")).toBeVisible();
 });
 
+test("流程图: 生成 PRISMA 流程图并可下载", async ({ page }) => {
+  await mockBase(page);
+  const png =
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==";
+  await page.route("**/api/flow-diagram", (r) =>
+    r.fulfill({ json: { ok: true, png, svg: "PHN2Zz48L3N2Zz4=", pdf: "JVBERi0=" } }),
+  );
+  await page.goto("/");
+  await page.getByTestId("nav-checklist").click();
+  await page.getByTestId("flow-kind").selectOption("prisma");
+  await page.getByTestId("flow-identified").fill("1200");
+  await page.getByTestId("flow-included").fill("30");
+  await page.getByTestId("flow-btn").click();
+  await expect(page.getByTestId("flow-img")).toBeVisible();
+  // 切到 CONSORT 出现两臂字段
+  await page.getByTestId("flow-kind").selectOption("consort");
+  await expect(page.getByTestId("flow-randomized")).toBeVisible();
+  // 下载 SVG
+  const dl = page.waitForEvent("download");
+  await page.getByTestId("flow-btn").click();
+  await page.getByTestId("flow-download-svg").click();
+  expect((await dl).suggestedFilename()).toMatch(/\.svg$/);
+});
+
 test("统计自查: statcheck 标出不一致", async ({ page }) => {
   await mockBase(page);
   await page.route("**/api/statcheck", (r) =>

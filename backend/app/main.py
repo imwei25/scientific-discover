@@ -69,6 +69,11 @@ class StatcheckRequest(BaseModel):
     text: str
 
 
+class FlowRequest(BaseModel):
+    kind: str = "prisma"
+    counts: dict = {}
+
+
 @app.get("/api/health")
 async def health() -> dict:
     return {
@@ -231,6 +236,14 @@ async def check_refs(req: RefsRequest) -> dict:
     from .refcheck import check_references
 
     return await check_references(req.references)
+
+
+@app.post("/api/flow-diagram")
+async def flow_diagram(req: FlowRequest) -> dict:
+    """确定性绘制 PRISMA 2020 / CONSORT 2025 流程图(本地 matplotlib, 导出 png/svg/pdf)。"""
+    from .flowdiagram import render_flow
+
+    return render_flow(req.kind, req.counts)
 
 
 @app.post("/api/statcheck")

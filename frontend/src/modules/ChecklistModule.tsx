@@ -5,6 +5,7 @@ import { addHistory } from "../lib/history";
 import { apiUrl } from "../lib/api";
 import ResultPanel from "../components/ResultPanel";
 import Dropzone from "../components/Dropzone";
+import { downloadBase64, chartMime, tsName } from "../lib/download";
 
 interface StatItem {
   raw: string;
@@ -19,6 +20,43 @@ const STAT_BADGE: Record<string, { label: string; cls: string }> = {
   inconsistent: { label: "⚠ 不一致", cls: "rc-warn" },
   decision_error: { label: "✗ 严重(显著性翻转)", cls: "rc-bad" },
   unparsable: { label: "? 无法核验", cls: "rc-gray" },
+};
+
+type FlowField = { key: string; label: string; type: "num" | "text" };
+const FLOW_FIELDS: Record<string, FlowField[]> = {
+  prisma: [
+    { key: "identified", label: "数据库识别记录数", type: "num" },
+    { key: "duplicates", label: "筛选前剔除(去重等)", type: "num" },
+    { key: "screened", label: "筛选的记录数", type: "num" },
+    { key: "records_excluded", label: "排除的记录数", type: "num" },
+    { key: "sought", label: "获取全文的报告数", type: "num" },
+    { key: "not_retrieved", label: "未能获取全文数", type: "num" },
+    { key: "assessed", label: "评估合格性的全文数", type: "num" },
+    { key: "reports_excluded", label: "排除全文的原因/数量", type: "text" },
+    { key: "included", label: "纳入研究数", type: "num" },
+  ],
+  consort: [
+    { key: "assessed", label: "评估合格性", type: "num" },
+    { key: "excluded", label: "排除总数", type: "num" },
+    { key: "excluded_reasons", label: "排除原因", type: "text" },
+    { key: "randomized", label: "随机化总数", type: "num" },
+    { key: "arm1_label", label: "组1名称", type: "text" },
+    { key: "arm1_alloc", label: "组1分配", type: "num" },
+    { key: "arm1_received", label: "组1接受", type: "num" },
+    { key: "arm1_notreceived", label: "组1未接受", type: "num" },
+    { key: "arm1_lost", label: "组1失访", type: "num" },
+    { key: "arm1_discont", label: "组1中止", type: "num" },
+    { key: "arm1_analysed", label: "组1纳入分析", type: "num" },
+    { key: "arm1_excl", label: "组1剔除分析", type: "num" },
+    { key: "arm2_label", label: "组2名称", type: "text" },
+    { key: "arm2_alloc", label: "组2分配", type: "num" },
+    { key: "arm2_received", label: "组2接受", type: "num" },
+    { key: "arm2_notreceived", label: "组2未接受", type: "num" },
+    { key: "arm2_lost", label: "组2失访", type: "num" },
+    { key: "arm2_discont", label: "组2中止", type: "num" },
+    { key: "arm2_analysed", label: "组2纳入分析", type: "num" },
+    { key: "arm2_excl", label: "组2剔除分析", type: "num" },
+  ],
 };
 
 const GUIDELINES = [
@@ -40,6 +78,34 @@ export default function ChecklistModule() {
   const [statItems, setStatItems] = usePersistentState<StatItem[]>("checklist:statItems", []);
   const [statBusy, setStatBusy] = useState(false);
   const [statErr, setStatErr] = useState<string | null>(null);
+
+  // 流程图生成 (PRISMA / CONSORT)
+  const [flowKind, setFlowKind] = usePersistentState("checklist:flowKind", "prisma");
+  const [flowCounts, setFlowCounts] = usePersistentState<Record<string, string>>("checklist:flowCounts", {});
+  const [flowImg, setFlowImg] = useState<{ png: string; svg: string; pdf: string } | null>(null);
+  const [flowBusy, setFlowBusy] = useState(false);
+  const [flowErr, setFlowErr] = useState<string | null>(null);
+
+  const runFlow = async () => {
+    if (flowBusy) return;
+    setFlowBusy(true);
+    setFlowErr(null);
+    setFlowImg(null);
+    try {
+      const resp = await fetch(apiUrl("/api/flow-diagram"), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ kind: flowKind, counts: flowCounts }),
+      });
+      const d = await resp.json();
+      if (d.ok) setFlowImg({ png: d.png, svg: d.svg, pdf: d.pdf });
+      else setFlowErr(d.error || "绘制失败");
+    } catch (e) {
+      setFlowErr(`绘制失败：${(e as Error).message}`);
+    } finally {
+      setFlowBusy(false);
+    }
+  };
 
   const runStatcheck = async () => {
     if (!statText.trim() || statBusy) return;
@@ -167,6 +233,62 @@ export default function ChecklistModule() {
         onExportDocx={downloadDocx}
         exportingDocx={docxBusy}
       />
+
+      <h2 className="section-title">📈 流程图生成（PRISMA 2020 / CONSORT 2025）</h2>
+      <p className="section-hint">
+        填入各阶段数字，本地确定性绘制期刊级流程图（数字来自你的输入，不经 AI 编造），导出 PNG/SVG/PDF。
+      </p>
+      <div className="form">
+        <label className="field">
+          <span className="field-label">流程图类型</span>
+          <select data-testid="flow-kind" value={flowKind} onChange={(e) => setFlowKind(e.target.value)}>
+            <option value="prisma">PRISMA 2020（系统综述 / Meta 分析）</option>
+            <option value="consort">CONSORT 2025（随机对照试验）</option>
+          </select>
+        </label>
+        <div className="flow-grid">
+          {FLOW_FIELDS[flowKind].map((f) => (
+            <label key={f.key} className="field">
+              <span className="field-label">{f.label}</span>
+              <input
+                data-testid={`flow-${f.key}`}
+                value={flowCounts[f.key] ?? ""}
+                inputMode={f.type === "num" ? "numeric" : "text"}
+                onChange={(e) => setFlowCounts({ ...flowCounts, [f.key]: e.target.value })}
+              />
+            </label>
+          ))}
+        </div>
+        <button className="btn-primary" onClick={runFlow} disabled={flowBusy} data-testid="flow-btn">
+          {flowBusy ? "绘制中…" : "生成流程图"}
+        </button>
+      </div>
+
+      {flowErr && (
+        <div className="result-error" data-testid="flow-error">
+          {flowErr}
+        </div>
+      )}
+
+      {flowImg && (
+        <div className="analysis-block" data-testid="flow-result">
+          <figure className="chart">
+            <img src={`data:image/png;base64,${flowImg.png}`} alt="流程图" data-testid="flow-img" />
+            <figcaption className="flow-downloads">
+              {(["png", "svg", "pdf"] as const).map((fmt) => (
+                <button
+                  key={fmt}
+                  className="btn-ghost btn-sm"
+                  data-testid={`flow-download-${fmt}`}
+                  onClick={() => downloadBase64(tsName(flowKind === "consort" ? "CONSORT流程图" : "PRISMA流程图", fmt), flowImg[fmt], chartMime(fmt))}
+                >
+                  下载 {fmt.toUpperCase()}
+                </button>
+              ))}
+            </figcaption>
+          </figure>
+        </div>
+      )}
 
       <h2 className="section-title">🔢 统计一致性自查（statcheck）</h2>
       <p className="section-hint">

@@ -2,6 +2,12 @@
 
 > 每完成一个改进方向追加一条。最新在最上。
 
+## 2026-06-28 — PRISMA/CONSORT 流程图生成（loop 第4轮·方向④，确定性绘制）
+- **动机**：每篇 SR/Meta 必交 PRISMA 流程图、每个 RCT 必交 CONSORT 流程图，手画繁琐、期刊审查严；CONSORT 2025-04 刚改版。确定性绘图、零幻觉、与报告规范核对同源。
+- **改动**：新增 `flowdiagram.py` + `/api/flow-diagram`(JSON)：用 matplotlib 在本地**确定性绘制**(布局写死、数字来自用户表单，LLM 不参与) PRISMA 2020 / CONSORT 2025 两套模板(FancyBboxPatch 盒+箭头+阶段侧标)，一次导出 PNG(300dpi)/SVG/PDF base64，全离线。前端 ChecklistModule 增"流程图生成"区：类型选择 + 按类型动态数字表单 + 图片预览 + 逐格式下载。
+- **测试**：后端真实渲染 PRISMA(png 262KB/svg/pdf 魔数正确) 与 CONSORT(png 248KB) 均 ok；Playwright 37/37(新增流程图用例：PRISMA 生成+CONSORT 字段切换+SVG 下载)；dist 已重建。零额度。
+- **commit**：见本次提交（本轮还将做 ①IMRaD 初稿装配、结构式摘要+字数核对）
+
 ## 2026-06-28 — statcheck 统计一致性自查（loop 第3轮·方向③，本轮收官）
 - **动机**：论文里 t/F/χ²/r/z + 自由度 + p 三者算不上对极常见，越来越多期刊投稿环节直接跑 statcheck，作者却无自查工具；纯算法、范围可控、复用统计栈。
 - **改动**：新增 `statcheck.py` + `/api/statcheck`(JSON)：LLM 仅抽取统计量(type/df/value/p_text)，**p 值用 scipy 确定性重算**(t/F/chi2/z/r 双侧)，比对报告值——一致 / 不一致(数值不符但显著性同) / 严重(显著性在 .05 翻转) / 无法核验。前端 ChecklistModule 增"统计一致性自查"区(结果文字输入 + 徽章清单 + 报告值vs重算值)。

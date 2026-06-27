@@ -1104,6 +1104,22 @@ select {
   margin-top: 2px;
 }
 
+/* 流程图输入网格 */
+.flow-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px 12px;
+}
+.flow-grid .field-label {
+  font-size: 12px;
+}
+.flow-downloads {
+  display: flex;
+  gap: 8px;
+  justify-content: center;
+  margin-top: 6px;
+}
+
 /* 智能选刊卡片 */
 .journal-hits {
   display: flex;
