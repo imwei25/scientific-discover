@@ -10,6 +10,12 @@
 - **commit**：<short-hash>
 -->
 
+## 2026-06-27 — 子任务F 部署易用性 / F-a PORT 配置健壮性（修复启动崩溃）
+- **现状/动机**：`config.py` 用 `int(os.getenv("PORT","8756"))`，在**模块导入期**执行。若用户在 `.env` 把 PORT 写空（`PORT=`）或写成非数字，`int("")` 抛 ValueError，`from .config import settings` 直接崩，服务器起不来、只在 server.log 留个天书 traceback。项目有大量端口相关脚本，用户改 .env 改坏 PORT 是真实场景。
+- **改动**：`backend/app/config.py` 新增 `_int(name, default, lo, hi)`：空/纯空格/非法/越界都回退默认；`port` 改为 `_int("PORT", 8756, lo=1, hi=65535)`，顺带限定合法端口范围。
+- **测试**（.venv 离线）：① `test_config.py` 9 例全过（空/空格/非数字/越界/合法/带空格/未设置）；② 复现场景：`PORT=""` 时 import app.config 不再崩、port 回退 8756；③ 既有 4 个后端测试（fallback/network_retry/textio/danger_guard）全过；④ `import app.main` 通过。
+- **commit**：见下次提交
+
 ## 2026-06-27 — 子任务C 稳定性 / C3-a 数据分析安全护栏误杀修复
 - **现状/动机**：`dataanalysis._DANGER` 用 `\b(...|eval\s*\(|open\s*\()` 判危险。`\b` 是零宽词边界，`df.eval("a+b")`（合法 pandas）里 `.` 与 `eval` 间也算边界，于是被当成危险调用**误杀**，正常分析被拒并弹“包含不被允许的操作”。同时内置 `exec(` 当时未拦（注入面）。
 - **改动**：`backend/app/dataanalysis.py` 重写 `_DANGER`：模块/名称类仍用 `\b`；`eval/exec/open` 改为 `(?<![\w.])(?:eval|exec|open)\s*\(`——仅匹配“前面不是 . 或字母”的内置函数形式。这样挡住注入/读文件，又放行 `df.eval()`、`df.query()`、`re.compile()`、含 open 的列名。

@@ -16,13 +16,27 @@ def _bool(name: str, default: bool = False) -> bool:
     return val.strip().lower() in {"1", "true", "yes", "on"}
 
 
+def _int(name: str, default: int, lo: int | None = None, hi: int | None = None) -> int:
+    """健壮地读取整数环境变量: 空/非法/越界时回退默认值, 避免启动时崩溃。"""
+    val = os.getenv(name)
+    if val is None or not val.strip():
+        return default
+    try:
+        n = int(val.strip())
+    except ValueError:
+        return default
+    if (lo is not None and n < lo) or (hi is not None and n > hi):
+        return default
+    return n
+
+
 class Settings:
     provider: str = os.getenv("LLM_PROVIDER", "openai").strip().lower()
     api_key: str = os.getenv("LLM_API_KEY", "").strip()
     base_url: str = os.getenv("LLM_BASE_URL", "https://api.deepseek.com").strip().rstrip("/")
     model: str = os.getenv("LLM_MODEL", "deepseek-chat").strip()
     mock: bool = _bool("MOCK_LLM", False)
-    port: int = int(os.getenv("PORT", "8756"))
+    port: int = _int("PORT", 8756, lo=1, hi=65535)
     # 监听地址：127.0.0.1=仅本机；0.0.0.0=同时允许局域网访问
     host: str = os.getenv("HOST", "127.0.0.1").strip()
     # 可选: 提供给 NCBI E-utilities 的联系邮箱(礼貌且可提高限速容忍度)
