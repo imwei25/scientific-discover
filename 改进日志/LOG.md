@@ -10,6 +10,12 @@
 - **commit**：<short-hash>
 -->
 
+## 2026-06-27 — 子任务B 数据分析 / B5 自动纠错重试 2→3(真实端到端测试发现)
+- **现状/动机**：按 LOOP 指令“像真实用户那样测试”，用**真实 deepseek LLM** 端到端跑数据分析（小血压数据集，含 GBK 编码）。发现旗舰分析**间歇性失败**：AI 生成的统计代码（尤其 pingouin 的 `power_ttest`/`CI95` 等版本相关用法）首次常报错，自动纠错只重试 2 次（共 3 次执行），边缘情况下 3 次用尽仍失败 → 用户看到“分析代码执行失败”。多次实测：有的恰好第 3 次才成功、有的 3 次全失败。
+- **改动**：`backend/app/dataanalysis.py` 自动纠错 `range(2)`→`range(3)`（共 4 次执行），并更新注释说明原因。
+- **测试**（.venv 离线，mock LLM+执行，确定性）：① 新增 `test_analyze_retry.py`：mock `_execute` 失败 3 次后第 4 次成功→整体 done 且恰好执行 4 次；4 次全失败→报错且不超过 4 次。均 PASS；② 全部 8 个后端测试 + `import app.main` 通过；③ 另用真实 LLM 端到端验证分析能跑通（生成代码→本地执行→真实输出→结论），并确认 GBK 编码修复在真实链路生效。
+- **commit**：见下次提交
+
 ## 2026-06-27 — 子任务D 前端体验 / D6 流式出错不再误存历史
 - **现状/动机**：四个模块（idea/plan/analyze/format）的“完成后存历史” effect 守卫都是 `!running && text && savedRef!==text`，**没判 error**。当流式过程中先产出了部分内容再报错时，`running` 翻 false、`text/conclusion` 是残缺内容 → 被当成功结果存进历史，用户在历史里看到断章且不知其失败。
 - **改动**：四个模块的 effect 守卫统一加 `!error`，并把 `error` 加入依赖数组：`AnalyzeModule`、`PlanModule`、`IdeaModule`、`FormatModule`。

@@ -287,8 +287,9 @@ async def analyze_data(filename: str, content: bytes, question: str) -> AsyncIte
         yield ("status", {"message": "正在本地执行分析…"})
         run = await asyncio.to_thread(_execute, code, filename, content)
 
-        # 自动纠错: 最多重试 2 次
-        for attempt in range(2):
+        # 自动纠错: 最多重试 3 次(共 4 次执行)。AI 写的统计代码(尤其 pingouin 版本相关的
+        # 列名/函数签名)首次常报错, 2 次重试有时不够、导致整次分析失败; 多给一次显著提高成功率。
+        for attempt in range(3):
             if run.get("ok"):
                 break
             yield ("status", {"message": f"执行出错，正在自动修正代码（第 {attempt + 1} 次）…"})
