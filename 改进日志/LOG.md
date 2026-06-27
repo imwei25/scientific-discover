@@ -10,6 +10,13 @@
 - **commit**：<short-hash>
 -->
 
+## 2026-06-27 — 子任务C 稳定性 / C1 网络错误友好化 + 重试 + 降级
+- **现状/动机**：`llm._stream_openai/_anthropic` 用 httpx，网络超时/连不上会抛**原始 httpx 异常**，绕过 `LLMError`，在 `/api/run` 落到 `except Exception` → 用户看到 “内部错误: ConnectTimeout(...)” 之类天书；且无任何重试，弱网下一闪断就整次失败；也不会切备用。
+- **调研**：读 `main.py` 确认三个端点的错误路径；读 `test_fallback.py` 确认改动需保持其 4 个断言（401 非配额不降级、mid-stream 不重复降级等）不破。
+- **改动**：`backend/app/llm.py`：① `LLMError` 增 `retryable` 标志；② `_stream_with` 捕获 `httpx.TimeoutException/ConnectError/RequestError`，包装成友好中文且 `retryable=True` 的 `LLMError`；③ `stream_chat` 改为带重试循环：未产出内容时对瞬时错误退避重试 `_MAX_RETRIES=2` 次，重试耗尽后“配额错误 **或** 网络持续不可达”都尝试备用供应商；已产出内容则直接抛出不重试（防重复）。
+- **测试**（.venv 离线零成本）：① `test_fallback.py` 4 项全过，无回归；② 新增 `backend/test_network_retry.py` 4 项全过：httpx 错误→友好可重试 LLMError、持续超时→重试2次再降级、第二次成功不降级、mid-stream 断网不重试不重复；③ `import app.main` 通过。
+- **commit**：见下次提交
+
 ## 2026-06-27 — 遗留 P1 / 参考文献页码区间渲染修复
 - **现状/动机**：Vancouver CSL 用 `page-range-format="minimal"`，citeproc-py 的 minimal 实现对“尾页位数多于首页”的区间出错：`1-10`→`1–0`、`99-100`→`99–0`，给用户错误页码。
 - **调研**：读 Vancouver CSL 确认是 minimal 缩写规则；逐一测试不同页码，定位仅“尾页位数 > 首页”这一类出错，其余（1234-1245→1234–45 等 ICMJE 缩写）本是正确行为。验证 `style.root.set('page-range-format', …)` 可在样式对象上覆盖。

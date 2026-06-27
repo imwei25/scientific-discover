@@ -28,9 +28,16 @@ from .config import settings
 class LLMError(Exception):
     """对上层友好的错误类型。"""
 
-    def __init__(self, message: str, status: int | None = None):
+    def __init__(self, message: str, status: int | None = None, retryable: bool = False):
         super().__init__(message)
         self.status = status
+        # retryable: 瞬时网络/超时类错误, 在尚未产出内容时可安全重试或转用备用供应商。
+        self.retryable = retryable
+
+
+# 瞬时网络错误的重试参数(仅在尚未产出任何内容时生效)。
+_MAX_RETRIES = 2
+_RETRY_BACKOFF = 0.8  # 秒, 线性递增
 
 
 @dataclass
@@ -163,12 +170,19 @@ async def _stream_anthropic(cfg: ProviderConfig, messages: list[dict], **kwargs)
 async def _stream_with(cfg: ProviderConfig, messages: list[dict], **kwargs) -> AsyncIterator[str]:
     if not cfg.api_key:
         raise LLMError("未配置 API key, 且未开启 MOCK_LLM。")
-    if cfg.provider == "anthropic":
-        async for piece in _stream_anthropic(cfg, messages, **kwargs):
-            yield piece
-    else:
-        async for piece in _stream_openai(cfg, messages, **kwargs):
-            yield piece
+    try:
+        if cfg.provider == "anthropic":
+            async for piece in _stream_anthropic(cfg, messages, **kwargs):
+                yield piece
+        else:
+            async for piece in _stream_openai(cfg, messages, **kwargs):
+                yield piece
+    except httpx.TimeoutException as e:
+        raise LLMError("请求模型服务超时（网络较慢或服务繁忙），请稍后重试。", retryable=True) from e
+    except httpx.ConnectError as e:
+        raise LLMError("无法连接到模型服务，请检查网络连接后重试。", retryable=True) from e
+    except httpx.RequestError as e:  # 其余传输层错误(读写中断、协议错误等)
+        raise LLMError(f"网络请求出错，请稍后重试。（{type(e).__name__}）", retryable=True) from e
 
 
 # ----------------------------- 对外入口 -----------------------------
@@ -209,17 +223,32 @@ async def stream_chat(messages: list[dict], **kwargs) -> AsyncIterator[str]:
             yield piece
         return
 
-    yielded = False
-    try:
-        async for piece in _stream_with(_primary_cfg(), messages, **kwargs):
-            yielded = True
+    # 主供应商: 对瞬时网络/超时错误做有限重试(仅在尚未产出内容时, 避免重复输出)。
+    last_err: LLMError | None = None
+    for attempt in range(_MAX_RETRIES + 1):
+        yielded = False
+        try:
+            async for piece in _stream_with(_primary_cfg(), messages, **kwargs):
+                yielded = True
+                yield piece
+            return
+        except LLMError as e:
+            last_err = e
+            # 已产出内容则不能安全重试/降级(会重复), 直接抛出。
+            if yielded:
+                raise
+            # 瞬时网络错误且仍有重试次数: 退避后重试同一供应商。
+            if e.retryable and attempt < _MAX_RETRIES:
+                await asyncio.sleep(_RETRY_BACKOFF * (attempt + 1))
+                continue
+            break
+
+    # 到此: 主供应商失败且未产出任何内容。
+    # 配额耗尽 → 切备用; 网络持续不可达 → 也尝试备用(可能是另一家服务/线路可用)。
+    e = last_err
+    if settings.has_fallback and e is not None and (is_quota_error(e) or e.retryable):
+        async for piece in _stream_with(_fallback_cfg(), messages, **kwargs):
             yield piece
         return
-    except LLMError as e:
-        # 仅在“尚未产出任何内容”且命中配额错误且配置了备用时, 才降级重试。
-        if yielded or not settings.has_fallback or not is_quota_error(e):
-            raise
-
-    # 自动降级到备用供应商。
-    async for piece in _stream_with(_fallback_cfg(), messages, **kwargs):
-        yield piece
+    if e is not None:
+        raise e
