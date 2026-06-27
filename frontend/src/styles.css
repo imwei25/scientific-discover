@@ -1031,6 +1031,56 @@ select {
   word-break: break-word;
 }
 
+/* ---------- 主题切换器 ---------- */
+.theme-switcher {
+  margin-top: var(--sp-3);
+  padding-top: var(--sp-3);
+  border-top: 1px solid var(--line-soft);
+  display: flex;
+  gap: var(--sp-1);
+}
+.theme-seg {
+  flex: 1;
+  padding: 6px 4px;
+  border: 1.5px solid transparent;
+  border-radius: 8px;
+  background: transparent;
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  transition: background var(--dur-fast) var(--ease-out-soft),
+              border-color var(--dur-fast) var(--ease-out-soft);
+}
+.theme-seg:hover {
+  background: var(--surface-2);
+  border-color: var(--line);
+}
+.theme-seg.active {
+  background: var(--teal-soft);
+  border-color: var(--teal);
+}
+.theme-preview {
+  display: flex;
+  width: 100%;
+  height: 14px;
+  border-radius: 4px;
+  overflow: hidden;
+  box-shadow: inset 0 0 0 1px rgba(14, 58, 57, 0.06);
+}
+.theme-preview > span {
+  flex: 1;
+}
+.theme-preview > span:first-child { flex: 0 0 28%; }
+.theme-name {
+  font-family: var(--serif);
+  font-size: 10.5px;
+  color: var(--muted);
+  letter-spacing: 0.04em;
+}
+.theme-seg.active .theme-name { color: var(--petrol); }
+
 /* 滚动条 */
 .content::-webkit-scrollbar {
   width: 10px;
@@ -1054,4 +1104,90 @@ select {
     animation-duration: 0.01ms !important;
     transition-duration: 0.01ms !important;
   }
+}
+
+/* ============================================================
+   主题：Clinical · 临床冷调
+   ============================================================ */
+[data-theme="clinical"] {
+  --paper: #f4f6f9;
+  --paper-warm: #ffffff;
+  --surface: #ffffff;
+  --surface-2: #f8fafc;
+  --ink: #0f172a;
+  --petrol: #1e3a8a;
+  --petrol-700: #1e40af;
+  --teal: #0ea5e9;
+  --teal-soft: #e0f2fe;
+  --muted: #475569;
+  --faint: #94a3b8;
+  --line: #e2e8f0;
+  --line-soft: #eef2f6;
+  --ok: #047857;
+  --ok-soft: #d1fae5;
+  --bad: #be123c;
+  --warn: #92400e;
+  --serif: 'Inter', 'PingFang SC', 'Microsoft YaHei', system-ui, sans-serif;
+}
+
+[data-theme="clinical"] .eyebrow {
+  font-family: var(--sans);
+  font-weight: 600;
+}
+
+/* ============================================================
+   主题：Midnight · 深夜
+   ============================================================ */
+[data-theme="midnight"] {
+  --paper: #0d1817;
+  --paper-warm: #15201f;
+  --surface: #15201f;
+  --surface-2: #1a2625;
+  --ink: #e2eae9;
+  --petrol: #7fdfd6;
+  --petrol-700: #b5ece5;
+  --teal: #16d9c8;
+  --teal-soft: rgba(22, 217, 200, 0.12);
+  --muted: #8a9a97;
+  --faint: #5c6b69;
+  --line: #26302f;
+  --line-soft: #1f2a28;
+  --ok: #34d399;
+  --ok-soft: rgba(52, 211, 153, 0.12);
+  --bad: #f87171;
+  --warn: #fbbf24;
+}
+
+[data-theme="midnight"] .sidebar {
+  background: linear-gradient(to right, #0a1212, #15201f);
+}
+[data-theme="midnight"] .rail-tick.active {
+  box-shadow: 0 0 0 3px rgba(22, 217, 200, 0.2), 0 0 8px rgba(22, 217, 200, 0.5);
+}
+[data-theme="midnight"] .brand-logo {
+  background: var(--teal-soft);
+  color: var(--teal);
+}
+[data-theme="midnight"] .nav-num {
+  background: var(--surface-2);
+}
+[data-theme="midnight"] .nav-item.active .nav-num {
+  box-shadow: 0 0 8px rgba(22, 217, 200, 0.4);
+}
+[data-theme="midnight"] input,
+[data-theme="midnight"] textarea,
+[data-theme="midnight"] select {
+  background: var(--surface-2);
+  color: var(--ink);
+}
+[data-theme="midnight"] .disclaimer {
+  background: rgba(251, 191, 36, 0.08);
+  border-color: rgba(251, 191, 36, 0.2);
+  border-left-color: var(--warn);
+  color: #fbd884;
+}
+[data-theme="midnight"] .disclaimer-close {
+  background: var(--surface-2);
+  border-color: rgba(251, 191, 36, 0.3);
+  color: #fbd884;
 }

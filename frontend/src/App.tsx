@@ -7,6 +7,7 @@ import PlanModule from "./modules/PlanModule";
 import AnalyzeModule from "./modules/AnalyzeModule";
 import FormatModule from "./modules/FormatModule";
 import HistoryView from "./modules/HistoryView";
+import ThemeSwitcher from "./components/ThemeSwitcher";
 
 export type ModuleId = "home" | "idea" | "plan" | "analyze" | "format" | "history";
 // 跨模块传递: 把数据写入目标模块的持久化字段, 再切换过去。
@@ -158,6 +159,7 @@ export default function App() {
               💰 {balance.provider} 余额 ¥{balance.balance}
             </span>
           )}
+          <ThemeSwitcher />
         </div>
         {/* 折叠态指示条：24px 内的 ticks，用 CSS 在 expanded 下隐藏 */}
         <div className="rail-ticks" aria-hidden="true">
