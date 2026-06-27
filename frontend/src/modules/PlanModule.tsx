@@ -14,7 +14,7 @@ export default function PlanModule() {
 
   const savedRef = useRef("");
   useEffect(() => {
-    if (!running && text && savedRef.current !== text) {
+    if (!running && !error && text && savedRef.current !== text) {
       savedRef.current = text;
       addHistory({
         module: "plan",
@@ -23,7 +23,7 @@ export default function PlanModule() {
         data: { "plan:idea": idea, "plan:field": field, "plan:resources": resources, "plan:result": text },
       });
     }
-  }, [running, text, idea, field, resources]);
+  }, [running, error, text, idea, field, resources]);
 
   const submit = () => {
     if (!idea.trim() || running) return;

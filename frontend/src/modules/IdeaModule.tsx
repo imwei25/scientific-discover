@@ -23,7 +23,7 @@ export default function IdeaModule({ goto }: { goto: Goto }) {
 
   const savedRef = useRef("");
   useEffect(() => {
-    if (!running && text && savedRef.current !== text) {
+    if (!running && !error && text && savedRef.current !== text) {
       savedRef.current = text;
       addHistory({
         module: "idea",
@@ -39,7 +39,7 @@ export default function IdeaModule({ goto }: { goto: Goto }) {
         },
       });
     }
-  }, [running, text, field, keywords, background, refs, verify]);
+  }, [running, error, text, field, keywords, background, refs, verify]);
 
   const submit = async () => {
     if (!field.trim() || running) return;

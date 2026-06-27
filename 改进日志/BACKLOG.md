@@ -29,6 +29,7 @@
 - [x] D2：修复局域网 http(非安全上下文)下复制按钮失效——新增 lib/clipboard.ts（navigator.clipboard 失败/不可用时回退 execCommand），并给“复制失败”反馈；ResultPanel 与 FormatModule 复制全部均改用它。e2e 新增非安全上下文复制用例。
 - [ ] D3：移动端/窄屏与无障碍（对比度、focus）基本可用
 - [x] D4：历史记录 localStorage 配额不足时不再静默丢弃最新记录——addHistory 改为写失败时逐步淘汰最旧记录后重试，保证最新结果总能存下。e2e 新增配额压力用例。
+- [x] D6：流式出错(已有部分输出)不再误存历史——四个模块的历史保存 effect 之前只判 `!running && text`，中途报错会把残缺结果当成功存入；改为加 `!error` 守卫。e2e 新增用例。
 - [x] D5：文件下载健壮性——downloadText 把锚点挂载到 DOM 并延迟 revoke 对象URL，避免大文件(内嵌图表报告)下载被立即 revoke 中断。新增 e2e 真实下载用例(校验文件名+内容)，此前下载路径完全无测试。
 
 ### 子任务E：检索与引用（literature.py, citations.py, extract.py）

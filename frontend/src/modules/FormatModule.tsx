@@ -28,7 +28,7 @@ export default function FormatModule() {
 
   const savedRef = useRef("");
   useEffect(() => {
-    if (!running && text && savedRef.current !== text) {
+    if (!running && !error && text && savedRef.current !== text) {
       savedRef.current = text;
       addHistory({
         module: "format",
@@ -37,7 +37,7 @@ export default function FormatModule() {
         data: { "format:manuscript": manuscript, "format:journal": journalId, "format:result": text },
       });
     }
-  }, [running, text, manuscript, journalId]);
+  }, [running, error, text, manuscript, journalId]);
 
   const formatRefs = async () => {
     if (!refsInput.trim() || refsBusy) return;

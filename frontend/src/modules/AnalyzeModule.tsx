@@ -22,7 +22,7 @@ export default function AnalyzeModule({ goto }: { goto: Goto }) {
 
   const savedRef = useRef("");
   useEffect(() => {
-    if (!running && conclusion && savedRef.current !== conclusion) {
+    if (!running && !error && conclusion && savedRef.current !== conclusion) {
       savedRef.current = conclusion;
       addHistory({
         module: "analyze",
@@ -31,7 +31,7 @@ export default function AnalyzeModule({ goto }: { goto: Goto }) {
         data: { "analyze:question": question, "analyze:conclusion": conclusion },
       });
     }
-  }, [running, conclusion, question]);
+  }, [running, error, conclusion, question]);
 
   const run = async () => {
     if (!file || running) return;

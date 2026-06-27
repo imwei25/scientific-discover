@@ -10,6 +10,13 @@
 - **commit**：<short-hash>
 -->
 
+## 2026-06-27 — 子任务D 前端体验 / D6 流式出错不再误存历史
+- **现状/动机**：四个模块（idea/plan/analyze/format）的“完成后存历史” effect 守卫都是 `!running && text && savedRef!==text`，**没判 error**。当流式过程中先产出了部分内容再报错时，`running` 翻 false、`text/conclusion` 是残缺内容 → 被当成功结果存进历史，用户在历史里看到断章且不知其失败。
+- **改动**：四个模块的 effect 守卫统一加 `!error`，并把 `error` 加入依赖数组：`AnalyzeModule`、`PlanModule`、`IdeaModule`、`FormatModule`。
+- **测试**（Playwright）：① `tsc --noEmit` 通过；② 新增 e2e：mock `/api/run` 先发 delta 残缺内容再发 error，跑实验规划后断言显示错误、且历史里**不出现**该标题（修复前会出现）；③ **全量 23 个 e2e 全过**。
+- **部署**：已 `npm run build` 重建 dist。
+- **commit**：见下次提交
+
 ## 2026-06-27 — 子任务C 稳定性 / C3-c 后端上传大小上限(防直连绕过)
 - **现状/动机**：前端已挡 30MB（C3-b），但 LAN/直连 API 会绕过前端。`/api/analyze`、`/api/extract` 用 `await file.read()` 一次性读全部，超大文件可拖垮内存/磁盘。需后端再设一道。
 - **改动**：`backend/app/main.py` 新增 `MAX_UPLOAD_BYTES=30MB` 与 `_read_capped()`（按 1MB 分块读，累计超限立即停并返回 None，不把超大文件整体读入）。两个上传端点改用之：超限时 analyze 返回 SSE error 事件、extract 返回 `{ok:False,error}`，都给“文件过大”友好提示。limit 改为调用时读模块全局，便于测试覆盖。
@@ -38,7 +45,7 @@
 - **commit**：见下次提交
 
 ## 2026-06-27 — 子任务D 前端体验 / D4 历史记录配额不足时静默丢失修复
-- **现状/动机**：`history.addHistory` 写 localStorage 失败时 `catch{}` 直接忽略——新记录被静默丢弃。数据分析结果会把 base64 图表存进历史 `data`，单条很大，几次分析后 localStorage 很快撑满，此后历史**默默停止记录**，用户却以为存上了。
+- **现状/动机**：`history.addHistory` 写 localStorage 失败时 `catch{}` 直接忽略——新记录被静默丢弃。30 条历史每条都存整段结果文本（idea/plan/analyze 结论可达数十 KB），叠加各模块自身的结果持久化键，localStorage 容易撑满，此后历史**默默停止记录**，用户却以为存上了。（注：复盘发现历史 data 实际不含 base64 图，仅含文本；早先描述有误，特此更正——修复本身不受影响。）
 - **改动**：`frontend/src/lib/history.ts` 的 `addHistory` 改为：写失败时逐步把列表减半（`Math.ceil(len/2)`，保留含最新的较新一半）后重试，直到写入成功或只剩 1 条仍放不下才放弃。最新记录因始终在 index 0 而总能存下（只要它本身不超额）。
 - **测试**（Playwright，mock 后端零成本）：① `tsc --noEmit` 通过；② 新增 e2e 用例：预置 8 条较大旧历史并 override `Storage.setItem` 对 `ra:history` 施加 1200 字节上限触发淘汰，跑一次实验规划后断言历史第一条是“最新研究课题”（证明没被丢）且总条数 <9（证明发生淘汰）——旧实现此用例会失败；③ **全量 20 个 e2e 全过**，无回归。
 - **部署**：已 `npm run build` 重建 `frontend/dist`。

@@ -285,6 +285,28 @@ test("数据分析: AI写代码执行并输出结论", async ({ page }) => {
   await expect(page.getByTestId("export-report-btn")).toBeVisible();
 });
 
+test("历史记录: 流式出错(已有部分输出)不写入历史", async ({ page }) => {
+  await mockBase(page);
+  // 先产出部分内容, 再报错。修复前会把这段残缺内容当成功结果存进历史。
+  await page.route("**/api/run", (r) =>
+    r.fulfill({
+      contentType: "text/event-stream",
+      body: sse(
+        { event: "delta", data: { text: "残缺的部分方案……" } },
+        { event: "error", data: { message: "上游返回 500: 中断" } },
+      ),
+    }),
+  );
+  await page.goto("/");
+  await page.getByTestId("nav-plan").click();
+  await page.getByTestId("input-idea").fill("会出错的课题");
+  await page.getByTestId("run-btn").click();
+  await expect(page.getByTestId("result-error")).toContainText("中断");
+  // 历史里不应出现这条失败的记录
+  await page.getByTestId("nav-history").click();
+  await expect(page.getByText("会出错的课题")).toHaveCount(0);
+});
+
 test("上传: 超大文件被前端拒绝并提示", async ({ page }) => {
   await mockBase(page);
   await page.goto("/");
