@@ -33,17 +33,32 @@ EXEC_TIMEOUT = 60  # 秒
 # eval/exec/open 仅拦截“内置函数”形式(前面不是 . 或字母): 这样既挡住注入/读文件,
 # 又不会误伤合法的 pandas 方法 df.eval()/df.query() 等(它们前面有 . )。
 _DANGER = re.compile(
-    r"\b(?:subprocess|os\.system|os\.remove|os\.rmdir|os\.unlink|shutil\.(?:rmtree|move|copy)|"
+    r"\b(?:subprocess|os\.system|os\.popen|os\.remove|os\.rmdir|os\.unlink|shutil\.(?:rmtree|move|copy)|"
     r"socket|requests|urllib|httpx|Popen|__import__)\b"
     r"|(?<![\w.])(?:eval|exec|open)\s*\(",
 )
 
 
+def _dedup_columns(df: pd.DataFrame) -> pd.DataFrame:
+    """重命名重复列名(脏临床表常见), 避免 df[col] 返回 DataFrame 触发 .dtype 等崩溃。"""
+    seen: dict = {}
+    cols = []
+    for c in df.columns:
+        if c in seen:
+            seen[c] += 1
+            cols.append(f"{c}.{seen[c]}")
+        else:
+            seen[c] = 0
+            cols.append(c)
+    df.columns = cols
+    return df
+
+
 def _load(filename: str, content: bytes) -> pd.DataFrame:
     # CSV 用共享的健壮解码(兼容中文用户常见的 GBK/带BOM 编码), 见 textio.read_csv_bytes。
     if filename.lower().endswith((".xlsx", ".xls")):
-        return pd.read_excel(io.BytesIO(content))
-    return read_csv_bytes(content)
+        return _dedup_columns(pd.read_excel(io.BytesIO(content)))
+    return _dedup_columns(read_csv_bytes(content))
 
 
 def profile_data(df: pd.DataFrame) -> str:
@@ -203,6 +218,18 @@ if _PAL in _PALETTES:
         pass
 
 df = _load(sys.argv[1])
+# 重复列名去重(与主进程一致), 防 df[col] 返回 DataFrame 触发用户代码崩溃
+if getattr(df.columns, "duplicated", None) is not None and df.columns.duplicated().any():
+    _seen = {}
+    _cols = []
+    for _c in df.columns:
+        if _c in _seen:
+            _seen[_c] += 1
+            _cols.append(f"{_c}.{_seen[_c]}")
+        else:
+            _seen[_c] = 0
+            _cols.append(_c)
+    df.columns = _cols
 with open(sys.argv[2], "r", encoding="utf-8") as f:
     code = f.read()
 

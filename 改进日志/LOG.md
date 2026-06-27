@@ -2,6 +2,16 @@
 
 > 每完成一个改进方向追加一条。最新在最上。
 
+## 2026-06-28 — 抓bug（loop 第11轮）：核心模块审查，修复 4 个真实问题
+- 派 agent 审查核心模块(research/dataanalysis/literature/europepmc/openalex/citations/extract/llm)，修复 4 处：
+  - **(中)引用核验子串误判**：`_verify_citations` 用 `pmid in u` 子串匹配，PMID 456 会把伪造的 `.../4567890/` 判为已核验——削弱核心抗幻觉保证。改为**末尾路径段精确匹配**。
+  - **(中)重复列名崩溃**：`profile_data`/`df[col]` 遇重复列头(脏临床表常见)返回 DataFrame→`.dtype` AttributeError, 整次分析失败。新增 `_dedup_columns` 在主进程 `_load` 与子进程 runner 都重命名重复列(g→g.1)。实测含重复列文件端到端跑通。
+  - **(低)沙箱护栏漏 os.popen**：`_DANGER` 正则补 `os\.popen`。
+  - **(低)OpenAlex 检索式含逗号/冒号失效**：PubMed 检索式的逗号/冒号破坏 OpenAlex filter 语法致整源 4xx; `_params` 把 search 值里的逗号/冒号替换为空格。
+  - 审查确认 asyncio.gather 兜底、子进程超时、citeproc 非法 CSL、extract 损坏文件、llm 中断/usage 解析均已正确处理(无须改)。
+- **测试**：新增 `test_review_fixes.py`(4 项)全过; test_endpoints/danger/analyze_retry 回归通过; 含重复列文件 _execute 实测跑通。纯后端, 无前端变更。
+- **commit**：见本次提交
+
 ## 2026-06-28 — 抓bug（loop 第10轮）：派 agent 代码审查发现并修复 2 个真实 bug
 - **主题**：质量/抓 bug。派 agent 对近期新增的 10+ 模块做正确性审查，确认 2 个真实 bug：
   - **HIGH 修复**：`randomize.py` 区组随机当 `block_size="0"`(或负的单位倍数)时——"0" 为真值绕过 `or` 默认、`0%unit==0` 绕过取整 → base 为空、per=0 → `while len(seq)<n` **死循环/服务挂起(DoS)**。修复：取整后加 `bs = max(bs, unit)` 钳制。加回归 test(block_size 0/负不死循环)。

@@ -667,11 +667,13 @@ def _verify_citations(full: str, items: list[dict]) -> dict:
     for u in link_urls:
         if "pubmed.ncbi.nlm.nih.gov" in u or "europepmc.org" in u:
             cited_urls.add(u.rstrip("/"))
-    unverified = sorted(
-        u for u in cited_urls
-        if u not in valid_urls
-        and not any(pmid and pmid in u for pmid in valid_pmids if pmid in u)
-    )
+
+    def _pmid_ok(u: str) -> bool:
+        # 按"末尾路径段 == PMID"精确匹配, 避免子串误判(如 PMID 456 命中 .../4567890/)
+        tail = u.rstrip("/").rsplit("/", 1)[-1]
+        return tail in valid_pmids
+
+    unverified = sorted(u for u in cited_urls if u not in valid_urls and not _pmid_ok(u))
     return {
         "total": len(cited_urls),
         "verified": len(cited_urls) - len(unverified),

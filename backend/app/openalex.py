@@ -80,8 +80,11 @@ def _normalize(raw: dict) -> dict | None:
 
 
 def _params(query: str, per_query: int, filter_extra: str = "") -> dict:
+    # OpenAlex 的 filter 用逗号分隔 AND 子句、冒号分隔键值; PubMed 检索式里的逗号/冒号
+    # 会破坏 filter 语法导致整源 4xx 失效。这里把它们替换为空格(检索词仍保留)。
+    safe_q = query.replace(",", " ").replace(":", " ").strip()
     # title_and_abstract.search 比裸 search 更精准（只搜标题+摘要）; 过滤器并入同一 filter 串。
-    flt = f"title_and_abstract.search:{query}"
+    flt = f"title_and_abstract.search:{safe_q}"
     if filter_extra:
         flt += "," + filter_extra
     p = {
