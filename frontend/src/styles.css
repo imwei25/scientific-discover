@@ -54,7 +54,12 @@
   --ok: #15885f;
   --ok-soft: #e6f4ee;
   --bad: #c8453a;
+  --bad-soft: #fbece9;
+  --bad-line: #f1c7c1;
   --warn: #9a6a00;
+  --warn-bg: #fbf6ea;
+  --warn-line: #ecdcb4;
+  --warn-fg: #7a5b00;
 
   /* 字体 */
   --sans: 'Inter', 'PingFang SC', 'Microsoft YaHei', 'Segoe UI', system-ui, -apple-system, sans-serif;
@@ -390,12 +395,12 @@ body {
   gap: 16px;
   margin-bottom: var(--sp-5);
   padding: 13px 18px;
-  background: #fbf6ea;
-  border: 1px solid #ecdcb4;
-  border-left: 3px solid #d9b85a;
+  background: var(--warn-bg);
+  border: 1px solid var(--warn-line);
+  border-left: 3px solid var(--warn);
   border-radius: var(--radius-sm);
   font-size: 13px;
-  color: #7a5b00;
+  color: var(--warn-fg);
   line-height: 1.6;
   animation: disclaimer-in 380ms var(--ease-out-soft);
 }
@@ -406,17 +411,17 @@ body {
 .disclaimer-close {
   flex-shrink: 0;
   padding: 7px 15px;
-  background: #fff;
-  border: 1px solid #e6c870;
+  background: var(--surface);
+  border: 1px solid var(--warn-line);
   border-radius: 9px;
-  color: #7a5b00;
+  color: var(--warn-fg);
   cursor: pointer;
   font-size: 12.5px;
   white-space: nowrap;
   transition: background var(--dur-fast), transform var(--dur-fast) var(--spring);
 }
 .disclaimer-close:hover {
-  background: #fbf0d5;
+  background: var(--warn-bg);
   transform: translateY(-1px);
 }
 
@@ -728,9 +733,9 @@ select {
 .result-error {
   margin-top: var(--sp-4);
   padding: 14px 18px;
-  background: #fbece9;
+  background: var(--bad-soft);
   color: var(--bad);
-  border: 1px solid #f1c7c1;
+  border: 1px solid var(--bad-line);
   border-left: 3px solid var(--bad);
   border-radius: var(--radius-sm);
 }
@@ -891,13 +896,13 @@ select {
   font-size: 13.5px;
 }
 .verify-ok {
-  background: #e6f4ee;
-  border: 1px solid #b3ddc7;
+  background: var(--ok-soft);
+  border: 1px solid color-mix(in srgb, var(--ok) 30%, transparent);
   color: var(--ok);
 }
 .verify-bad {
-  background: #fbf2e3;
-  border: 1px solid #ecd6a8;
+  background: var(--warn-bg);
+  border: 1px solid var(--warn-line);
   color: var(--warn);
 }
 .verify-bad a {
@@ -1219,6 +1224,7 @@ select {
 .home .eyebrow   { animation: page-in 360ms var(--ease-out-soft) 0ms both; }
 .home h1         { animation: page-in 420ms var(--ease-out-soft) 60ms both; }
 .home .home-sub  { animation: page-in 420ms var(--ease-out-soft) 120ms both; }
+/* 父级关掉 page-in，让 .home-card 各自跑自己的 stagger 动画（避免双层动画叠加） */
 .home .home-grid { animation: none; }
 
 /* 滚动条 */
@@ -1263,7 +1269,12 @@ select {
   --ok: #047857;
   --ok-soft: #d1fae5;
   --bad: #be123c;
+  --bad-soft: #fef2f2;
+  --bad-line: #fecaca;
   --warn: #92400e;
+  --warn-bg: #fffbeb;
+  --warn-line: #fde68a;
+  --warn-fg: #92400e;
   --serif: 'Inter', 'PingFang SC', 'Microsoft YaHei', system-ui, sans-serif;
 }
 
@@ -1296,7 +1307,12 @@ select {
   --ok: #34d399;
   --ok-soft: rgba(52, 211, 153, 0.12);
   --bad: #f87171;
+  --bad-soft: rgba(248, 113, 113, 0.12);
+  --bad-line: rgba(248, 113, 113, 0.3);
   --warn: #fbbf24;
+  --warn-bg: rgba(251, 191, 36, 0.08);
+  --warn-line: rgba(251, 191, 36, 0.25);
+  --warn-fg: #fbd884;
 }
 
 [data-theme="midnight"] .sidebar {
@@ -1321,14 +1337,6 @@ select {
   background: var(--surface-2);
   color: var(--ink);
 }
-[data-theme="midnight"] .disclaimer {
-  background: rgba(251, 191, 36, 0.08);
-  border-color: rgba(251, 191, 36, 0.2);
-  border-left-color: var(--warn);
-  color: #fbd884;
-}
 [data-theme="midnight"] .disclaimer-close {
   background: var(--surface-2);
-  border-color: rgba(251, 191, 36, 0.3);
-  color: #fbd884;
 }

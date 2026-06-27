@@ -396,7 +396,7 @@ locked-open ─── 写 localStorage 为 expanded
 
 - `npm run build` 通过
 - 不引入新 npm 依赖（diff `package.json` 仅可能增加 `vite.config.ts` 中的字体相关设置）
-- 总字体体积 ≤ 600KB
+- 字体总体积约 1.6MB（参考 §9 现实分析）
 
 ## 13. 实施分块（供 plan 使用）
 
