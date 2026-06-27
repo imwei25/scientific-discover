@@ -23,6 +23,7 @@ from .config import settings
 from .journals import list_journals
 from .llm import LLMError, get_balance, get_session_usage, stream_chat
 from .prompts import build_messages
+from .imrad import assemble_imrad
 from .rebuttal import rebuttal
 from .research import deep_research_idea, idea_followup
 
@@ -153,6 +154,20 @@ async def idea(req: RunRequest) -> StreamingResponse:
     """医学/药学/生物 找选题: 检索 PubMed + 分析现状/空白/选题(带文献链接)。"""
     async def gen():
         async for event, data in deep_research_idea(req.inputs):
+            yield _sse(event, data)
+
+    return StreamingResponse(
+        gen(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+@app.post("/api/imrad")
+async def imrad_ep(req: RunRequest) -> StreamingResponse:
+    """IMRaD 初稿装配: 把已有材料分段拼成 Intro/Methods/Results/Discussion(本地, 只据材料)。"""
+    async def gen():
+        async for event, data in assemble_imrad(req.inputs):
             yield _sse(event, data)
 
     return StreamingResponse(

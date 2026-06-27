@@ -330,6 +330,44 @@ test("投稿包: 预提交体检 + 生成投稿信", async ({ page }) => {
   await expect(page.getByTestId("cover-panel").getByTestId("export-docx-btn")).toBeVisible();
 });
 
+test("论文初稿: IMRaD 装配 + 导入 + 结构式摘要字数", async ({ page }) => {
+  await mockBase(page);
+  await page.route("**/api/imrad", (r) =>
+    r.fulfill({
+      contentType: "text/event-stream",
+      body: sse(
+        { event: "status", data: { message: "正在撰写引言（1/4）…" } },
+        { event: "delta", data: { text: "## 一、引言 (Introduction)\n本研究针对该空白。" } },
+        { event: "done", data: {} },
+      ),
+    }),
+  );
+  await page.route("**/api/run", (r) =>
+    r.fulfill({
+      contentType: "text/event-stream",
+      body: sse(
+        { event: "delta", data: { text: "背景：本研究……方法：随机对照……结果：差异显著……结论：有效。" } },
+        { event: "done", data: {} },
+      ),
+    }),
+  );
+  await page.goto("/");
+  // 预置其它模块的成果, 测"从各模块导入"
+  await page.evaluate(() => localStorage.setItem("ra:idea:result", JSON.stringify("我的综述与研究空白")));
+  await page.getByTestId("nav-imrad").click();
+  await page.getByTestId("imrad-import-btn").click();
+  await expect(page.getByTestId("imrad-background")).toHaveValue(/综述与研究空白/);
+  // 装配初稿
+  await page.getByTestId("run-btn").click();
+  await expect(page.getByTestId("result-text")).toContainText("引言");
+  await expect(page.getByTestId("export-docx-btn")).toBeVisible();
+  // 结构式摘要 + 字数
+  await page.getByTestId("abs-points").fill("目的、方法、结果、结论要点");
+  await page.getByTestId("abs-btn").click();
+  await expect(page.getByTestId("abs-text")).toContainText("结论");
+  await expect(page.getByTestId("abs-count")).toContainText("字数");
+});
+
 test("流程图: 生成 PRISMA 流程图并可下载", async ({ page }) => {
   await mockBase(page);
   const png =

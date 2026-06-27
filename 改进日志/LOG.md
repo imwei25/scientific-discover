@@ -2,6 +2,15 @@
 
 > 每完成一个改进方向追加一条。最新在最上。
 
+## 2026-06-28 — 新模块 / 论文初稿 IMRaD 装配 + 结构式摘要（loop 第4轮·方向①，本轮收官）
+- **动机**：约半数研究者把"准备投稿稿件"列为最难环节；通用 AI 写作的致命伤是幻觉，而本产品独有解药——初稿每块都来自用户已产出的真实材料。这是把前面 8 个模块成果"变现"为论文的临门一脚。
+- **改动**：
+  - 后端 `imrad.py` + `/api/imrad`(SSE)：把 引言/方法/结果/讨论 四块材料**分段**(每段独立 prompt, 过去时, 铁律只据材料、禁编造数字/文献、缺失标 [待补充])流式拼成 IMRaD 初稿。prompts.py 加 `build_abstract`(结构式/非结构式摘要 + 目标字数硬约束, 结果数字必来自要点), 注册 module=abstract。
+  - 前端新模块 ImradModule：四块材料输入 + **"从各模块导入"**(读 localStorage：找选题综述→引言、实验规划/SAP→方法、数据分析结论→结果) + IMRaD 流式装配 + Word 导出；内置"结构式摘要+字数核对"区(中英文混排字数统计 + 超限提示)。usePersistentState 加 readPersisted 跨模块读取。App 加第 8 个 nav(分析→论文初稿→选刊)；README 更新。
+- **测试**：真实装配(二甲双胍×NAFLD)：4 段、引言/方法/结果/讨论齐全、**真实数字 2.1kPa/p=0.003 原样保留**(grounding 生效)；摘要结构式 204 字；Playwright 38/38(新增 IMRaD 装配+导入+摘要字数用例)；dist 已重建。
+- **commit**：见本次提交
+- **第4轮收官**：④PRISMA/CONSORT流程图 + ①IMRaD初稿装配/摘要 全部完成；产品达 **8 模块**。下一轮重新调研。
+
 ## 2026-06-28 — PRISMA/CONSORT 流程图生成（loop 第4轮·方向④，确定性绘制）
 - **动机**：每篇 SR/Meta 必交 PRISMA 流程图、每个 RCT 必交 CONSORT 流程图，手画繁琐、期刊审查严；CONSORT 2025-04 刚改版。确定性绘图、零幻觉、与报告规范核对同源。
 - **改动**：新增 `flowdiagram.py` + `/api/flow-diagram`(JSON)：用 matplotlib 在本地**确定性绘制**(布局写死、数字来自用户表单，LLM 不参与) PRISMA 2020 / CONSORT 2025 两套模板(FancyBboxPatch 盒+箭头+阶段侧标)，一次导出 PNG(300dpi)/SVG/PDF base64，全离线。前端 ChecklistModule 增"流程图生成"区：类型选择 + 按类型动态数字表单 + 图片预览 + 逐格式下载。

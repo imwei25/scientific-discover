@@ -286,6 +286,65 @@ export async function streamRebuttal(
   }
 }
 
+export interface ImradHandlers {
+  onStatus?: (message: string) => void;
+  onDelta: (text: string) => void;
+  onDone?: () => void;
+  onError?: (message: string) => void;
+  signal?: AbortSignal;
+}
+
+// IMRaD 初稿装配: 分段流式拼接。处理 status/delta/done/error。
+export async function streamImrad(
+  inputs: Record<string, unknown>,
+  h: ImradHandlers,
+): Promise<void> {
+  let resp: Response;
+  try {
+    resp = await fetch(apiUrl("/api/imrad"), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ module: "imrad", inputs }),
+      signal: h.signal,
+    });
+  } catch (e) {
+    h.onError?.(`无法连接本地服务: ${(e as Error).message}`);
+    return;
+  }
+  if (!resp.ok || !resp.body) {
+    h.onError?.(`服务返回错误: ${resp.status}`);
+    return;
+  }
+  const reader = resp.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const { events, rest } = parseChunk(buffer);
+      buffer = rest;
+      for (const ev of events) {
+        let data: any = {};
+        try {
+          data = JSON.parse(ev.data);
+        } catch {
+          /* ignore */
+        }
+        if (ev.event === "status") h.onStatus?.(data.message ?? "");
+        else if (ev.event === "delta") h.onDelta(data.text ?? "");
+        else if (ev.event === "error") h.onError?.(data.message ?? ev.data);
+        else if (ev.event === "done") h.onDone?.();
+      }
+    }
+  } catch (e) {
+    if ((e as Error).name !== "AbortError") {
+      h.onError?.(`读取流出错: ${(e as Error).message}`);
+    }
+  }
+}
+
 export interface FollowupHandlers {
   onDelta: (text: string) => void;
   onVerify?: (v: Verification) => void;

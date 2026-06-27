@@ -1104,6 +1104,11 @@ select {
   margin-top: 2px;
 }
 
+.abs-over {
+  color: var(--warn);
+  font-weight: 600;
+}
+
 /* 流程图输入网格 */
 .flow-grid {
   display: grid;

@@ -146,6 +146,28 @@ def build_format(inputs: dict) -> list[dict]:
     return [{"role": "system", "content": system}, {"role": "user", "content": user}]
 
 
+def build_abstract(inputs: dict) -> list[dict]:
+    structured = str(inputs.get("structured", "true")).lower() in ("true", "1", "yes")
+    try:
+        max_words = int(inputs.get("max_words") or 250)
+    except (ValueError, TypeError):
+        max_words = 250
+    fmt = (
+        "结构式摘要，分四个带小标题的段落：背景/目的(Background)、方法(Methods)、结果(Results)、结论(Conclusions)"
+        if structured
+        else "非结构式摘要（连贯单段）"
+    )
+    system = (
+        "你是医学/药学/生物医学论文写作助手。请基于用户提供的要点撰写论文摘要。\n"
+        f"格式：{fmt}。\n"
+        f"字数硬约束：总字数不超过 {max_words} 字，务必精炼；若要点过多则保留最关键信息。\n"
+        "铁律：只用用户提供的要点，结果段的数字必须来自要点，严禁编造数字/统计量/结论；"
+        "要点缺失处用 [待补充] 标注。用中文。只输出摘要正文（结构式则保留小标题），不要额外说明。"
+    )
+    user = f"【目标字数】{max_words}\n\n【要点/材料】\n{inputs.get('points', '')}"
+    return [{"role": "system", "content": system}, {"role": "user", "content": user}]
+
+
 def build_precheck(inputs: dict) -> list[dict]:
     journal = get_journal(inputs.get("journal_id", ""))
     name = journal["name"] if journal else "目标期刊"
@@ -189,6 +211,7 @@ _BUILDERS = {
     "plan": build_plan,
     "sap": build_sap,
     "checklist": build_checklist,
+    "abstract": build_abstract,
     "precheck": build_precheck,
     "coverletter": build_coverletter,
     "write": build_write,
