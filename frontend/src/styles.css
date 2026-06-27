@@ -1135,6 +1135,10 @@ select {
   font-weight: 600;
 }
 
+[data-theme="clinical"] .sidebar {
+  background: linear-gradient(to right, var(--paper-warm), var(--paper));
+}
+
 /* ============================================================
    主题：Midnight · 深夜
    ============================================================ */

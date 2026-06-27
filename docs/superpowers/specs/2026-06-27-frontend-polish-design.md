@@ -342,13 +342,13 @@ locked-open ─── 写 localStorage 为 expanded
 
 ## 10. localStorage 持久化键
 
-| Key | 值 | 默认 |
-|---|---|---|
-| `ui:theme` | `'editorial' \| 'clinical' \| 'midnight'` | `'editorial'` |
-| `ui:sidebar` | `'expanded' \| 'collapsed'` | `'expanded'` |
-| `ui:disclaimerDismissed` | `boolean` | `false`（已存在） |
+通过 `usePersistentState` 写入，自动加 `ra:` 前缀。
 
-读取/写入复用现有 `usePersistentState` 工具。
+| Key（实际 localStorage） | 值 | 默认 |
+|---|---|---|
+| `ra:theme` | `'editorial' \| 'clinical' \| 'midnight'` | `'editorial'` |
+| `ra:sidebar` | `'expanded' \| 'collapsed'` | `'expanded'` |
+| `ra:disclaimerDismissed` | `boolean` | `false`（已存在） |
 
 ## 11. 文件变更清单
 
