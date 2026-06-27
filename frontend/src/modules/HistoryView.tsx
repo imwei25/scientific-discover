@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { getHistory, clearHistory, formatTime } from "../lib/history";
 import type { Goto, ModuleId } from "../App";
 
@@ -12,13 +12,19 @@ const NAMES: Record<string, string> = {
 export default function HistoryView({ goto }: { goto: Goto }) {
   const [items, setItems] = useState(getHistory());
   const [exiting, setExiting] = useState(false);
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => () => {
+    if (timerRef.current) clearTimeout(timerRef.current);
+  }, []);
 
   const handleClear = () => {
     setExiting(true);
-    setTimeout(() => {
+    timerRef.current = setTimeout(() => {
       clearHistory();
       setItems([]);
       setExiting(false);
+      timerRef.current = null;
     }, 280);
   };
 

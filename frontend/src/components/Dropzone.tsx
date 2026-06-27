@@ -21,16 +21,24 @@ export default function Dropzone({ testId, accept, label, hint, mode, onFile, on
   const [busy, setBusy] = useState(false);
   const [info, setInfo] = useState<string>("");
   const [err, setErr] = useState<string>("");
+  const [successKey, setSuccessKey] = useState(0);
   const [success, setSuccess] = useState(false);
 
+  // 由 successKey 自增触发：清→次帧打开→700ms 关，确保 CSS 动画每次成功都重启。
   useEffect(() => {
-    if (info.startsWith("已导入") || info.startsWith("已选择")) {
-      setSuccess(false);
-      requestAnimationFrame(() => requestAnimationFrame(() => setSuccess(true)));
-      const t = setTimeout(() => setSuccess(false), 700);
-      return () => clearTimeout(t);
-    }
-  }, [info]);
+    if (successKey === 0) return;
+    setSuccess(false);
+    const r1 = requestAnimationFrame(() => {
+      requestAnimationFrame(() => setSuccess(true));
+    });
+    const t = setTimeout(() => setSuccess(false), 700);
+    return () => {
+      cancelAnimationFrame(r1);
+      clearTimeout(t);
+    };
+  }, [successKey]);
+
+  const triggerSuccess = () => setSuccessKey((k) => k + 1);
 
   const handle = async (file: File | undefined) => {
     if (!file) return;
@@ -43,6 +51,7 @@ export default function Dropzone({ testId, accept, label, hint, mode, onFile, on
     if (mode === "file") {
       setInfo(`已选择：${file.name}`);
       onFile?.(file);
+      triggerSuccess();
       return;
     }
     setBusy(true);
@@ -56,6 +65,7 @@ export default function Dropzone({ testId, accept, label, hint, mode, onFile, on
     }
     setInfo(`已导入：${file.name}${res.truncated ? "（内容较长已截断）" : ""}`);
     onText?.(res.text, file.name, !!res.truncated);
+    triggerSuccess();
   };
 
   return (
