@@ -75,6 +75,16 @@ class FlowRequest(BaseModel):
     counts: dict = {}
 
 
+class BundleFile(BaseModel):
+    name: str
+    content: str
+
+
+class BundleRequest(BaseModel):
+    files: list[BundleFile] = []   # 文本/Markdown 原样写入
+    docx: list[BundleFile] = []    # 用 build_docx 转成 Word 写入
+
+
 @app.get("/api/health")
 async def health() -> dict:
     return {
@@ -291,6 +301,35 @@ async def sample_size(req: SampleSizeRequest) -> dict:
     from .samplesize import compute
 
     return compute(req.design, req.params)
+
+
+def _safe_name(name: str) -> str:
+    """清理 zip 内文件名, 防路径穿越。"""
+    n = (name or "file").replace("\\", "/").split("/")[-1].strip()
+    return n or "file"
+
+
+@app.post("/api/bundle")
+async def bundle(req: BundleRequest) -> Response:
+    """把各模块产出打包成投稿包 ZIP(文本原样、docx 项转 Word)。"""
+    import io
+    import zipfile
+
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
+        for f in req.files:
+            if f.content and f.content.strip():
+                z.writestr(_safe_name(f.name), f.content)
+        if req.docx:
+            from .formatting import build_docx
+            for f in req.docx:
+                if f.content and f.content.strip():
+                    z.writestr(_safe_name(f.name), build_docx(f.content, "", []))
+    return Response(
+        content=buf.getvalue(),
+        media_type="application/zip",
+        headers={"Content-Disposition": "attachment; filename=research-package.zip"},
+    )
 
 
 @app.post("/api/docx")

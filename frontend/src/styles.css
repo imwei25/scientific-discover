@@ -1109,6 +1109,64 @@ select {
   font-weight: 600;
 }
 
+/* 首页工作流总览 */
+.home-overview {
+  margin: 40px auto 8px;
+  max-width: 1080px;
+  width: 100%;
+  padding: 0 8px;
+}
+.home-overview .eyebrow {
+  margin-bottom: 14px;
+}
+.home-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(230px, 1fr));
+  gap: 12px;
+}
+.home-card {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  text-align: left;
+  padding: 14px 16px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--card);
+  cursor: pointer;
+  transition: border-color 0.15s, transform 0.15s, box-shadow 0.15s;
+}
+.home-card:hover {
+  border-color: var(--teal);
+  transform: translateY(-2px);
+  box-shadow: 0 6px 18px rgba(14, 58, 57, 0.08);
+}
+.home-card-num {
+  font-family: Georgia, "Songti SC", serif;
+  font-size: 13px;
+  color: var(--teal);
+  font-weight: 700;
+  min-width: 20px;
+}
+.home-card-icon {
+  font-size: 18px;
+  line-height: 1.2;
+}
+.home-card-body {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.home-card-title {
+  font-weight: 600;
+  font-size: 14px;
+  color: var(--petrol);
+}
+.home-card-desc {
+  font-size: 12px;
+  color: var(--muted);
+}
+
 /* 流程图输入网格 */
 .flow-grid {
   display: grid;

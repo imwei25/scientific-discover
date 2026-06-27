@@ -330,6 +330,42 @@ test("投稿包: 预提交体检 + 生成投稿信", async ({ page }) => {
   await expect(page.getByTestId("cover-panel").getByTestId("export-docx-btn")).toBeVisible();
 });
 
+test("首页: 工作流总览卡片可导航", async ({ page }) => {
+  await mockBase(page);
+  await page.goto("/");
+  await expect(page.getByTestId("home-card-imrad")).toBeVisible();
+  await expect(page.getByTestId("home-card-rebuttal")).toBeVisible();
+  await page.getByTestId("home-card-journal").click();
+  await expect(page.getByTestId("input-abstract")).toBeVisible(); // 进入了智能选刊
+});
+
+test("投稿包: 一键打包 ZIP", async ({ page }) => {
+  await mockBase(page);
+  let posted: any = null;
+  await page.route("**/api/bundle", async (r) => {
+    posted = JSON.parse(r.request().postData() || "{}");
+    // 返回一个最小的 zip 字节(PK 头)
+    await r.fulfill({
+      status: 200,
+      contentType: "application/zip",
+      body: Buffer.from([0x50, 0x4b, 0x05, 0x06, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]),
+    });
+  });
+  await page.goto("/");
+  await page.evaluate(() => {
+    localStorage.setItem("ra:imrad:draft", JSON.stringify("## 一、引言\n初稿正文"));
+    localStorage.setItem("ra:idea:result", JSON.stringify("选题综述"));
+  });
+  await page.getByTestId("nav-imrad").click();
+  const dl = page.waitForEvent("download");
+  await page.getByTestId("bundle-btn").click();
+  expect((await dl).suggestedFilename()).toBe("research-package.zip");
+  await expect(page.getByTestId("bundle-msg")).toContainText("已打包");
+  // 校验确实收集到 draft(docx) 与 idea(md)
+  expect(posted.docx.some((f: any) => f.name.includes("论文初稿"))).toBeTruthy();
+  expect(posted.files.some((f: any) => f.name.includes("选题调研"))).toBeTruthy();
+});
+
 test("论文初稿: IMRaD 装配 + 导入 + 结构式摘要字数", async ({ page }) => {
   await mockBase(page);
   await page.route("**/api/imrad", (r) =>

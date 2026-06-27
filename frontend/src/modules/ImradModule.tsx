@@ -20,6 +20,60 @@ export default function ImradModule() {
   const [docxBusy, setDocxBusy] = useState(false);
   const ctrl = useRef<AbortController | null>(null);
 
+  // 投稿包打包
+  const [bundleBusy, setBundleBusy] = useState(false);
+  const [bundleMsg, setBundleMsg] = useState<string | null>(null);
+
+  const buildBundle = async () => {
+    if (bundleBusy) return;
+    const files: { name: string; content: string }[] = [];
+    const docx: { name: string; content: string }[] = [];
+    const addMd = (name: string, key: string) => {
+      const v = readPersisted(key, "");
+      if (typeof v === "string" && v.trim()) files.push({ name, content: v });
+    };
+    addMd("01_选题调研.md", "idea:result");
+    addMd("02_实验方案.md", "plan:result");
+    addMd("02_统计分析计划SAP.md", "plan:sap");
+    addMd("03_数据分析结论.md", "analyze:conclusion");
+    addMd("05_投稿信.md", "format:cover");
+    addMd("06_排版稿.md", "format:result");
+    addMd("07_报告规范核对.md", "checklist:result");
+    addMd("08_审稿回复.md", "rebuttal:letter");
+    const refsArr = readPersisted<string[]>("format:fmtRefs", []);
+    if (Array.isArray(refsArr) && refsArr.length) files.push({ name: "06_参考文献.md", content: refsArr.join("\n") });
+    const draftV = (readPersisted("imrad:draft", "") as string) || draft;
+    if (draftV && draftV.trim()) docx.push({ name: "04_论文初稿.docx", content: draftV });
+    const absV = (readPersisted("imrad:abstract", "") as string) || abstract;
+    if (absV && absV.trim()) files.push({ name: "04_摘要.md", content: absV });
+
+    if (!files.length && !docx.length) {
+      setBundleMsg("暂无可打包的材料，请先在各模块生成结果。");
+      return;
+    }
+    setBundleBusy(true);
+    setBundleMsg(null);
+    try {
+      const resp = await fetch(apiUrl("/api/bundle"), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ files, docx }),
+      });
+      const blob = await resp.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = "research-package.zip";
+      a.click();
+      URL.revokeObjectURL(url);
+      setBundleMsg(`已打包 ${files.length + docx.length} 份材料为 ZIP。`);
+    } catch (e) {
+      setBundleMsg(`打包失败：${(e as Error).message}`);
+    } finally {
+      setBundleBusy(false);
+    }
+  };
+
   // 结构式摘要
   const [absPoints, setAbsPoints] = usePersistentState("imrad:absPoints", "");
   const [absMax, setAbsMax] = usePersistentState("imrad:absMax", "250");
@@ -262,6 +316,18 @@ export default function ImradModule() {
           </div>
         </div>
       )}
+
+      <h2 className="section-title">📦 一键投稿包（ZIP）</h2>
+      <p className="section-hint">
+        把各模块已产出的材料（选题/方案/SAP/分析结论/初稿/摘要/投稿信/排版稿/参考文献/规范核对/审稿回复）
+        汇总打包成一个 ZIP，初稿与摘要会转为 Word。
+      </p>
+      <div className="form-actions">
+        <button className="btn-primary" onClick={buildBundle} disabled={bundleBusy} data-testid="bundle-btn">
+          {bundleBusy ? "打包中…" : "打包投稿包 ZIP"}
+        </button>
+        {bundleMsg && <span className="field-hint" data-testid="bundle-msg">{bundleMsg}</span>}
+      </div>
     </div>
   );
 }
