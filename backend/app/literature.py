@@ -231,30 +231,40 @@ def _merge_all(source_lists: list[list[dict]], cap: int) -> list[dict]:
     return ranked[:cap]
 
 
-async def search_literature(queries: list[str], per_query: int = 6, cap: int = 18) -> dict:
-    """并发检索 PubMed + Europe PMC + OpenAlex, 合并去重 + 排序选篇。
+_PAPER_SOURCES = ("pubmed", "europepmc", "openalex")
+
+
+async def search_literature(
+    queries: list[str], per_query: int = 6, cap: int = 18, sources: list[str] | None = None
+) -> dict:
+    """并发检索所选论文源(PubMed/Europe PMC/OpenAlex), 合并去重 + 排序选篇。
 
     返回 {"papers", "network_errors", "queries_tried"}。
-    - 三源各自召回至多 cap 篇 → 合并去重得到更大候选池 → 按 相关性+被引+新近 排序 → 取前 cap。
-    - network_errors 仅在三源全部失败时为非零(用于区分『检索式太窄』和『全网连不上』)。
+    - sources: 要启用的论文源子集; None 或空 → 三源全开。ClinicalTrials 不在此(走旁路)。
+    - 各源各自召回至多 cap 篇 → 合并去重得到更大候选池 → 按 相关性+被引+新近 排序 → 取前 cap。
+    - network_errors 仅在所选源全部失败时为非零(用于区分『检索式太窄』和『全网连不上』)。
     每篇 paper 带 source: "pubmed" / "preprint" / "europepmc" / "openalex"; OpenAlex 额外带 cited_by_count。
     """
+    enabled = [s for s in _PAPER_SOURCES if (not sources or s in sources)]
+    if not enabled:  # 防御: 一个论文源都没选 → 退回全开, 否则综述无文献可依
+        enabled = list(_PAPER_SOURCES)
     share = max(2, per_query)
+    runners = {
+        "pubmed": lambda: _search_pubmed(queries, share, cap),
+        "europepmc": lambda: search_epmc(queries, share, cap),
+        "openalex": lambda: search_openalex(queries, share, cap),
+    }
     results = await asyncio.gather(
-        _search_pubmed(queries, share, cap),
-        search_epmc(queries, share, cap),
-        search_openalex(queries, share, cap),
-        return_exceptions=True,
+        *(runners[s]() for s in enabled), return_exceptions=True
     )
-    norm: list[dict] = []
-    for res in results:
-        if isinstance(res, Exception):
-            norm.append({"papers": [], "network_errors": max(1, len(queries))})
-        else:
-            norm.append(res)
-    merged = _merge_all([norm[0]["papers"], norm[1]["papers"], norm[2]["papers"]], cap)
-    all_fail = all(r["network_errors"] >= max(1, len(queries)) for r in norm)
-    net_errs = sum(r["network_errors"] for r in norm)
+    # 保持 PubMed→EuropePMC→OpenAlex 的合并优先级顺序
+    by_source: dict[str, dict] = {}
+    for s, res in zip(enabled, results):
+        by_source[s] = {"papers": [], "network_errors": max(1, len(queries))} if isinstance(res, Exception) else res
+    ordered = [by_source[s] for s in _PAPER_SOURCES if s in by_source]
+    merged = _merge_all([r["papers"] for r in ordered], cap)
+    all_fail = all(r["network_errors"] >= max(1, len(queries)) for r in ordered)
+    net_errs = sum(r["network_errors"] for r in ordered)
     return {
         "papers": merged,
         # 上游用 network_errors >= len(queries) 判断网络故障; 只要任一源能通就不算网络全败。

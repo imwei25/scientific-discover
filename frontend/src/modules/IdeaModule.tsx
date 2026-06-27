@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { streamIdea, Reference, Verification, RewritePayload } from "../lib/sse";
+import { streamIdea, Reference, Trial, Verification, RewritePayload } from "../lib/sse";
 import { addHistory } from "../lib/history";
 import Markdown from "../components/Markdown";
 import Dropzone from "../components/Dropzone";
@@ -7,14 +7,28 @@ import { downloadText, tsName } from "../lib/download";
 import { usePersistentState } from "../lib/usePersistentState";
 import type { Goto } from "../App";
 
+const PAPER_SOURCES: { key: string; label: string; hint: string }[] = [
+  { key: "pubmed", label: "PubMed", hint: "NCBI 权威医学库" },
+  { key: "europepmc", label: "Europe PMC", hint: "含 bioRxiv/medRxiv 预印本" },
+  { key: "openalex", label: "OpenAlex", hint: "覆盖最广 + 被引数" },
+];
+const TRIAL_SOURCE = { key: "clinicaltrials", label: "ClinicalTrials.gov", hint: "在研临床试验（旁路）" };
+
 export default function IdeaModule({ goto }: { goto: Goto }) {
   const [field, setField] = usePersistentState("idea:field", "");
   const [keywords, setKeywords] = usePersistentState("idea:keywords", "");
   const [background, setBackground] = usePersistentState("idea:background", "");
   const [depth, setDepth] = usePersistentState("idea:depth", "deep");
+  const [sources, setSources] = usePersistentState<string[]>("idea:sources", [
+    "pubmed",
+    "europepmc",
+    "openalex",
+    "clinicaltrials",
+  ]);
 
   const [status, setStatus] = useState("");
   const [refs, setRefs] = usePersistentState<Reference[]>("idea:refs", []);
+  const [trials, setTrials] = usePersistentState<Trial[]>("idea:trials", []);
   const [text, setText] = usePersistentState("idea:result", "");
   const [verify, setVerify] = usePersistentState<Verification | null>("idea:verify", null);
   const [running, setRunning] = useState(false);
@@ -36,6 +50,7 @@ export default function IdeaModule({ goto }: { goto: Goto }) {
           "idea:background": background,
           "idea:result": text,
           "idea:refs": refs,
+          "idea:trials": trials,
           "idea:verify": verify,
         },
       });
@@ -48,6 +63,7 @@ export default function IdeaModule({ goto }: { goto: Goto }) {
     if (!f.trim() || running) return;
     setStatus("");
     setRefs([]);
+    setTrials([]);
     setText("");
     setVerify(null);
     setError(null);
@@ -55,11 +71,12 @@ export default function IdeaModule({ goto }: { goto: Goto }) {
     setRunning(true);
     ctrl.current = new AbortController();
     await streamIdea(
-      { field: f, keywords: k, background, depth },
+      { field: f, keywords: k, background, depth, sources },
       {
         signal: ctrl.current.signal,
         onStatus: setStatus,
         onReferences: setRefs,
+        onTrials: setTrials,
         onDelta: (t) => setText((p) => p + t),
         onVerify: setVerify,
         onRewriteSuggestion: setRewrite,
@@ -96,12 +113,19 @@ export default function IdeaModule({ goto }: { goto: Goto }) {
     setRunning(false);
   };
 
+  const toggleSource = (key: string) => {
+    setSources((prev) => (prev.includes(key) ? prev.filter((s) => s !== key) : [...prev, key]));
+  };
+  // 至少要选一个论文源, 否则无文献可综述。
+  const noPaperSource = !PAPER_SOURCES.some((s) => sources.includes(s.key));
+
   const reset = () => {
     if (running) stop();
     setField("");
     setKeywords("");
     setBackground("");
     setRefs([]);
+    setTrials([]);
     setText("");
     setVerify(null);
     setStatus("");
@@ -155,6 +179,38 @@ export default function IdeaModule({ goto }: { goto: Goto }) {
             <option value="fast">快速（单轮检索，省额度更快）</option>
           </select>
         </label>
+        <div className="field" data-testid="source-selector">
+          <span className="field-label">检索来源（可多选）</span>
+          <div className="source-grid">
+            {PAPER_SOURCES.map((s) => (
+              <label key={s.key} className={`source-chip${sources.includes(s.key) ? " on" : ""}`}>
+                <input
+                  type="checkbox"
+                  data-testid={`source-${s.key}`}
+                  checked={sources.includes(s.key)}
+                  onChange={() => toggleSource(s.key)}
+                />
+                <span className="source-name">{s.label}</span>
+                <span className="source-hint">{s.hint}</span>
+              </label>
+            ))}
+            <label className={`source-chip trial${sources.includes(TRIAL_SOURCE.key) ? " on" : ""}`}>
+              <input
+                type="checkbox"
+                data-testid={`source-${TRIAL_SOURCE.key}`}
+                checked={sources.includes(TRIAL_SOURCE.key)}
+                onChange={() => toggleSource(TRIAL_SOURCE.key)}
+              />
+              <span className="source-name">{TRIAL_SOURCE.label}</span>
+              <span className="source-hint">{TRIAL_SOURCE.hint}</span>
+            </label>
+          </div>
+          {noPaperSource && (
+            <span className="source-warn" data-testid="source-warn">
+              请至少选择一个论文源（PubMed / Europe PMC / OpenAlex），否则没有文献可供综述。
+            </span>
+          )}
+        </div>
         <Dropzone
           testId="upload-doc"
           accept=".docx,.pdf,.txt,.md"
@@ -166,7 +222,7 @@ export default function IdeaModule({ goto }: { goto: Goto }) {
           }
         />
         <div className="form-actions">
-          <button className="btn-primary" onClick={() => submit()} disabled={!field.trim() || running} data-testid="run-btn">
+          <button className="btn-primary" onClick={() => submit()} disabled={!field.trim() || running || noPaperSource} data-testid="run-btn">
             {running ? "调研中…" : "开始文献调研"}
           </button>
           <button className="btn-ghost" onClick={reset} data-testid="reset-btn">
@@ -244,6 +300,25 @@ export default function IdeaModule({ goto }: { goto: Goto }) {
                   {r.first_author} ({r.year}). {r.title}
                 </a>
                 {r.journal && <span className="ref-journal"> — {r.journal}</span>}
+              </li>
+            ))}
+          </ol>
+        </details>
+      )}
+
+      {trials.length > 0 && (
+        <details className="refs trials" open data-testid="trials">
+          <summary>🧪 相关在研临床试验（{trials.length} 项 · ClinicalTrials.gov，点击查看登记信息）</summary>
+          <ol className="ref-list">
+            {trials.map((t, i) => (
+              <li key={t.nct_id || i}>
+                {t.status && <span className="ref-badge ref-badge-trial">{t.status}</span>}
+                {t.phase && <span className="ref-badge ref-badge-phase">{t.phase}</span>}
+                <a href={t.url} target="_blank" rel="noreferrer">
+                  {t.title}
+                </a>
+                {t.conditions && <span className="ref-journal"> — {t.conditions}</span>}
+                <span className="trial-nct"> （{t.nct_id}{t.year ? `, ${t.year}` : ""}）</span>
               </li>
             ))}
           </ol>

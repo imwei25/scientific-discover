@@ -119,6 +119,67 @@ test("找选题: 检索PubMed并返回带链接的结果", async ({ page }) => {
   await expect(page.getByTestId("verify")).toContainText("引用核验");
 });
 
+test("找选题: 显示在研临床试验(ClinicalTrials旁路)并渲染空白矩阵表格", async ({ page }) => {
+  await mockBase(page);
+  await page.route("**/api/idea", (r) =>
+    r.fulfill({
+      contentType: "text/event-stream",
+      body: sse(
+        {
+          event: "references",
+          data: { items: [{ pmid: "1", title: "Paper A", first_author: "Doe A", journal: "J", year: "2024", url: "https://pubmed.ncbi.nlm.nih.gov/1/", source: "openalex" }] },
+        },
+        {
+          event: "trials",
+          data: {
+            items: [
+              { nct_id: "NCT01234567", title: "A recruiting trial", status: "RECRUITING", phase: "Phase 3", conditions: "TNBC", summary: "s", year: "2025", url: "https://clinicaltrials.gov/study/NCT01234567" },
+            ],
+          },
+        },
+        // 空白矩阵: GFM 表格, 需 remark-gfm 才能渲染成 <table>
+        { event: "delta", data: { text: "## 二、研究空白矩阵\n\n| 角度 | 证据 |\n| --- | --- |\n| 机制 | 充分 |\n| 耐药 | 空白 |\n" } },
+        { event: "done", data: {} },
+      ),
+    }),
+  );
+  await page.goto("/");
+  await page.getByTestId("nav-idea").click();
+  await page.getByTestId("input-field").fill("PD-1 三阴性乳腺癌");
+  await page.getByTestId("run-btn").click();
+  // OpenAlex 徽标
+  await expect(page.getByTestId("refs")).toContainText("OpenAlex");
+  // 在研试验旁路面板
+  await expect(page.getByTestId("trials")).toContainText("NCT01234567");
+  await expect(page.getByTestId("trials")).toContainText("RECRUITING");
+  await expect(page.getByTestId("trials").getByRole("link").first()).toHaveAttribute(
+    "href",
+    "https://clinicaltrials.gov/study/NCT01234567",
+  );
+  // 空白矩阵渲染为真正的表格(而非原始 | 文本)
+  await expect(page.getByTestId("result-text").locator("table")).toBeVisible();
+  await expect(page.getByTestId("result-text").locator("th").first()).toHaveText("角度");
+  await expect(page.getByTestId("result-text").locator("td")).toContainText(["机制", "充分", "耐药", "空白"]);
+});
+
+test("找选题: 取消所有论文源时禁用调研并提示", async ({ page }) => {
+  await mockBase(page);
+  await page.goto("/");
+  await page.getByTestId("nav-idea").click();
+  await page.getByTestId("input-field").fill("某方向");
+  // 默认四源全开, 按钮可用
+  await expect(page.getByTestId("run-btn")).toBeEnabled();
+  // 取消三个论文源
+  await page.getByTestId("source-pubmed").uncheck();
+  await page.getByTestId("source-europepmc").uncheck();
+  await page.getByTestId("source-openalex").uncheck();
+  await expect(page.getByTestId("source-warn")).toBeVisible();
+  await expect(page.getByTestId("run-btn")).toBeDisabled();
+  // 勾回一个论文源后恢复可用
+  await page.getByTestId("source-pubmed").check();
+  await expect(page.getByTestId("run-btn")).toBeEnabled();
+});
+
 test("找选题: 检测到幻觉引用时给出警告", async ({ page }) => {
   await mockBase(page);
   await page.route("**/api/idea", (r) =>

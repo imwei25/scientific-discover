@@ -107,6 +107,17 @@ export interface Verification {
   unverified: string[]; // URLs (PubMed / Europe PMC links)
 }
 
+export interface Trial {
+  nct_id: string;
+  title: string;
+  status: string;
+  phase: string;
+  conditions: string;
+  summary: string;
+  year: string;
+  url: string;
+}
+
 export interface RewriteSuggestion {
   field: string;
   keywords: string;
@@ -121,6 +132,7 @@ export interface RewritePayload {
 export interface IdeaHandlers {
   onStatus?: (message: string) => void;
   onReferences?: (items: Reference[]) => void;
+  onTrials?: (items: Trial[]) => void;
   onDelta: (text: string) => void;
   onVerify?: (v: Verification) => void;
   onRewriteSuggestion?: (p: RewritePayload) => void;
@@ -129,9 +141,9 @@ export interface IdeaHandlers {
   signal?: AbortSignal;
 }
 
-// 深度调研“找选题”: 处理 status / references / delta / done / error 事件。
+// 深度调研“找选题”: 处理 status / references / trials / delta / done / error 事件。
 export async function streamIdea(
-  inputs: Record<string, string>,
+  inputs: Record<string, unknown>,
   h: IdeaHandlers,
 ): Promise<void> {
   let resp: Response;
@@ -169,6 +181,7 @@ export async function streamIdea(
         }
         if (ev.event === "status") h.onStatus?.(data.message ?? "");
         else if (ev.event === "references") h.onReferences?.(data.items ?? []);
+        else if (ev.event === "trials") h.onTrials?.(data.items ?? []);
         else if (ev.event === "delta") h.onDelta(data.text ?? "");
         else if (ev.event === "verify") h.onVerify?.(data as Verification);
         else if (ev.event === "rewrite_suggestion")

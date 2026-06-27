@@ -20,9 +20,24 @@ import re
 import traceback
 from typing import AsyncIterator
 
+from .clinicaltrials import search_trials
 from .config import settings
 from .literature import search_literature
 from .llm import stream_chat
+
+_ALL_SOURCES = ["pubmed", "europepmc", "openalex", "clinicaltrials"]
+
+
+def _parse_sources(raw) -> list[str]:
+    """把前端传入的 sources(列表或逗号串)规整为合法源 key 列表; 缺省=全开。"""
+    if isinstance(raw, str):
+        items = [s.strip() for s in raw.split(",")]
+    elif isinstance(raw, list):
+        items = [str(s).strip() for s in raw]
+    else:
+        return list(_ALL_SOURCES)
+    items = [s for s in items if s in _ALL_SOURCES]
+    return items or list(_ALL_SOURCES)
 
 
 async def _complete(messages: list[dict], max_tokens: int = 300) -> str:
@@ -297,32 +312,52 @@ def _synthesis_messages_deep(field: str, papers: list[dict], context: str | None
     return [{"role": "system", "content": system}, {"role": "user", "content": user}]
 
 
-async def _deep_flow(field: str, keywords: str, background: str) -> AsyncIterator[tuple[str, dict]]:
+def _src_label(sources: list[str]) -> str:
+    names = {"pubmed": "PubMed", "europepmc": "Europe PMC", "openalex": "OpenAlex"}
+    enabled = [names[s] for s in ("pubmed", "europepmc", "openalex") if s in sources]
+    return " / ".join(enabled) if enabled else "PubMed"
+
+
+async def _emit_trials(queries: list[str], sources: list[str]) -> dict | None:
+    """ClinicalTrials.gov 旁路: 若启用则检索在研试验, 返回 trials 事件数据。"""
+    if "clinicaltrials" not in sources:
+        return None
+    res = await search_trials(queries, per_query=5, cap=12)
+    return {"items": res.get("trials", [])}
+
+
+async def _deep_flow(
+    field: str, keywords: str, background: str, sources: list[str]
+) -> AsyncIterator[tuple[str, dict]]:
     yield ("status", {"message": "正在把研究方向拆解为多个子方向…"})
     facets = await _gen_facets(field, keywords, background)
     names = "、".join(f["name"] for f in facets)
-    yield ("status", {"message": f"正在多角度检索 PubMed / Europe PMC / OpenAlex（{len(facets)} 个子方向：{names}）…"})
+    yield ("status", {"message": f"正在多角度检索 {_src_label(sources)}（{len(facets)} 个子方向：{names}）…"})
     queries = [f["query"] for f in facets]
-    result = await search_literature(queries, per_query=10, cap=50)
+    result = await search_literature(queries, per_query=10, cap=50, sources=sources)
     papers = result["papers"]
     if not papers:
         if result["network_errors"] >= max(1, len(queries)):
-            yield ("error", {"message": "无法连接 PubMed（网络异常），请检查网络后重试。"})
+            yield ("error", {"message": "无法连接文献源（网络异常），请检查网络后重试。"})
             return
-        yield ("status", {"message": "PubMed 零命中，正在请 AI 改写检索方向…"})
+        yield ("status", {"message": "文献源零命中，正在请 AI 改写检索方向…"})
         sugg = await _suggest_rewrite(field, keywords, background, result["queries_tried"])
         yield ("rewrite_suggestion", {
             "tried_queries": result["queries_tried"],
             "suggestion": sugg,
         })
-        yield ("error", {"message": "未能从 PubMed 检索到相关文献。可采纳上面的 AI 改写建议后重试。"})
+        yield ("error", {"message": "未能从所选文献源检索到相关文献。可采纳上面的 AI 改写建议后重试。"})
         return
     yield ("references", {"items": [{k: p.get(k, "") for k in ("pmid", "title", "first_author", "journal", "year", "url", "source")} for p in papers]})
+
+    trials = await _emit_trials(queries, sources)
+    if trials is not None:
+        yield ("trials", trials)
 
     yield ("status", {"message": f"首轮找到 {len(papers)} 篇，正在识别空白并补充检索…"})
     gapq = await _gap_queries(field, papers)
     if gapq:
-        extra = await search_literature(gapq, per_query=6, cap=24)
+        extra = await search_literature(gapq, per_query=6, cap=24, sources=sources)
         papers = _merge_papers(papers, extra["papers"], cap=70)
         yield ("references", {"items": [{k: p.get(k, "") for k in ("pmid", "title", "first_author", "journal", "year", "url", "source")} for p in papers]})
 
@@ -363,6 +398,18 @@ async def _mock_flow(field: str) -> AsyncIterator[tuple[str, dict]]:
         },
     ]
     yield ("references", {"items": items})
+    yield ("trials", {"items": [
+        {
+            "nct_id": "NCT00000000",
+            "title": f"[MOCK] A registered trial on {field}",
+            "status": "Recruiting",
+            "phase": "Phase 3",
+            "conditions": field,
+            "summary": "[MOCK] 在研试验示例。",
+            "year": "2025",
+            "url": "https://clinicaltrials.gov/study/NCT00000000",
+        }
+    ]})
     yield ("status", {"message": "正在分析研究现状与空白…"})
     text = (
         "## 一、研究现状\n已有工作见 [Smith et al., 2023](https://pubmed.ncbi.nlm.nih.gov/00000001/)。\n"
@@ -383,6 +430,7 @@ async def deep_research_idea(inputs: dict) -> AsyncIterator[tuple[str, dict]]:
         return
 
     depth = (inputs.get("depth") or "deep").strip()
+    sources = _parse_sources(inputs.get("sources"))
 
     if settings.mock:
         async for ev in _mock_flow(field):
@@ -396,7 +444,7 @@ async def deep_research_idea(inputs: dict) -> AsyncIterator[tuple[str, dict]]:
         full = ""
 
         if depth == "deep":
-            async for event, data in _deep_flow(field, keywords, background):
+            async for event, data in _deep_flow(field, keywords, background, sources):
                 if event == "__verify__":
                     papers, full = data["papers"], data["full"]
                 else:
@@ -404,26 +452,29 @@ async def deep_research_idea(inputs: dict) -> AsyncIterator[tuple[str, dict]]:
                     if event == "error":
                         return
         else:
-            yield ("status", {"message": "正在生成 PubMed 检索式…"})
+            yield ("status", {"message": "正在生成检索式…"})
             queries = await _gen_queries(field, keywords, background)
-            yield ("status", {"message": f"正在检索 PubMed / Europe PMC / OpenAlex（{len(queries)} 个检索式）…"})
-            result = await search_literature(queries, per_query=10, cap=28)
+            yield ("status", {"message": f"正在检索 {_src_label(sources)}（{len(queries)} 个检索式）…"})
+            result = await search_literature(queries, per_query=10, cap=28, sources=sources)
             papers = result["papers"]
             if not papers:
                 if result["network_errors"] >= max(1, len(queries)):
-                    yield ("error", {"message": "无法连接 PubMed（网络异常），请检查网络后重试。"})
+                    yield ("error", {"message": "无法连接文献源（网络异常），请检查网络后重试。"})
                     return
-                yield ("status", {"message": "PubMed 零命中，正在请 AI 改写检索方向…"})
+                yield ("status", {"message": "文献源零命中，正在请 AI 改写检索方向…"})
                 sugg = await _suggest_rewrite(field, keywords, background, result["queries_tried"])
                 yield ("rewrite_suggestion", {
                     "tried_queries": result["queries_tried"],
                     "suggestion": sugg,
                 })
-                yield ("error", {"message": "未能从 PubMed 检索到相关文献。可采纳上面的 AI 改写建议后重试。"})
+                yield ("error", {"message": "未能从所选文献源检索到相关文献。可采纳上面的 AI 改写建议后重试。"})
                 return
             yield ("references", {"items": [
                 {k: p.get(k, "") for k in ("pmid", "title", "first_author", "journal", "year", "url", "source")} for p in papers
             ]})
+            trials = await _emit_trials(queries, sources)
+            if trials is not None:
+                yield ("trials", trials)
             yield ("status", {"message": f"已找到 {len(papers)} 篇文献，正在分析研究现状与空白…"})
             async for piece in stream_chat(_synthesis_messages(field, papers)):
                 full += piece

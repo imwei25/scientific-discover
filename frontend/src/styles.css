@@ -1014,6 +1014,64 @@ select {
   color: #3b3f8f;
   border: 1px solid #d3d8f5;
 }
+.ref-badge-trial {
+  background: #fff4e6;
+  color: #9a5b00;
+  border: 1px solid #ffd9a8;
+}
+.ref-badge-phase {
+  background: var(--teal-soft);
+  color: var(--petrol);
+  border: 1px solid #c8e6e0;
+}
+.trial-nct {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+/* 检索来源多选 */
+.source-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 8px;
+}
+.source-chip {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  flex-wrap: wrap;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  cursor: pointer;
+  background: var(--card);
+  transition: border-color 0.15s, background 0.15s;
+}
+.source-chip.on {
+  border-color: var(--teal);
+  background: var(--teal-soft);
+}
+.source-chip.trial.on {
+  border-color: #ffd9a8;
+  background: #fff7ee;
+}
+.source-chip input {
+  margin: 0;
+}
+.source-name {
+  font-weight: 600;
+  font-size: 13px;
+}
+.source-hint {
+  font-size: 11px;
+  color: var(--muted);
+}
+.source-warn {
+  display: block;
+  margin-top: 6px;
+  font-size: 12px;
+  color: var(--warn);
+}
 .verify-ok,
 .verify-bad {
   margin-top: 16px;
@@ -1079,12 +1137,18 @@ select {
 .markdown ol,
 .markdown ul { padding-left: 22px; }
 .markdown li { margin: 6px 0; }
+.md-table-wrap {
+  overflow-x: auto;
+  margin: var(--sp-3) 0;
+}
 .markdown table {
   border-collapse: collapse;
   width: 100%;
-  margin: var(--sp-3) 0;
+  margin: 0;
   font-size: 13.5px;
 }
+.markdown th,
+.markdown td { white-space: normal; word-break: break-word; vertical-align: top; }
 .markdown th,
 .markdown td {
   border: 1px solid var(--line);

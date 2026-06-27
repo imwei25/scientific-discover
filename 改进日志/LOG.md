@@ -2,6 +2,17 @@
 
 > 每完成一个改进方向追加一条。最新在最上。
 
+## 2026-06-27 — 找选题增强 II / ClinicalTrials 旁路 + 源选择器 + 空白矩阵表格渲染
+- **现状/动机**：用户要求加 ClinicalTrials 旁路、让用户自选检索源；并反馈"空白矩阵几乎不可读"。
+- **改动**：
+  - 新增 `backend/app/clinicaltrials.py`：ClinicalTrials.gov v2 客户端（`query.term` 检索，解析 protocolSection→nct/状态/期相/适应症/简介），**作为"在研试验"旁路独立 normalize/事件，不混进论文去重池**。
+  - `literature.py`：`search_literature` 加 `sources` 参数，按所选论文源子集动态 gather（保持 PubMed→EPMC→OpenAlex 合并优先级）；空选兜底全开。
+  - `research.py`：`_parse_sources`（列表/逗号串/非法→全开）、`_src_label`、`_emit_trials`；deep/fast 两条流均按 sources 检索 + 启用时发 `trials` 事件；mock 流加 trials 样例。
+  - 前端：IdeaModule 加**检索来源多选器**（3 论文源 chip + ClinicalTrials 旁路 chip，持久化 `idea:sources`），无论文源时禁用按钮+提示；新增**在研试验面板**（状态/期相徽标、NCT 链接）；sse.ts 加 Trial 类型与 `trials` 事件。
+  - **空白矩阵不可读根因**：Markdown 组件未启用 `remark-gfm`，GFM 表格被当原始 `|` 文本。修复：安装并启用 remark-gfm，表格外包 `.md-table-wrap` 可横向滚动。
+- **测试**：① `test_clinicaltrials.py`（CT 归一化/`_parse_sources`/`_src_label`/sources 过滤，离线）全 PASS；② 真实 CT.gov v2 检索 TNBC 返回 5 项（状态/期相/适应症解析正确）；③ 新增 2 条 e2e（trials 旁路面板 + 空白矩阵渲染成真 `<table>`、源选择器禁用守卫）；Playwright **26/26 全绿**，dist 已重建。
+- **commit**：见本次提交
+
 ## 2026-06-27 — 找选题增强 / 多源(OpenAlex)+排序选篇+结构化证据表(调研驱动)
 - **现状/动机**：两份联网调研结论——①在 PubMed+Europe PMC 之上，**OpenAlex** 是最该加的源（免费无 key、覆盖最广、独有被引数），可支撑“排序选篇”；②“摘要全量拼接一次性塞 64K”是当前最弱环节（Lost-in-the-Middle/NoLiMa），同类系统普遍用结构化抽取/分批降本；纳入量 18-34 篇对“范围综述式选题”偏保守，建议快速档 25-30、深度档 60-80。
 - **改动**：
