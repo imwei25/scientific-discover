@@ -41,15 +41,24 @@ test("侧栏显示账户余额", async ({ page }) => {
   await expect(page.getByTestId("balance")).toContainText("余额 ¥1.50");
 });
 
-test("首页加载并显示四大功能", async ({ page }) => {
+test("首页加载并展示 hero + 侧栏入口", async ({ page }) => {
   await mockBase(page);
   await page.goto("/");
   await expect(page.getByTestId("brand")).toBeVisible();
-  await expect(page.getByTestId("card-idea")).toBeVisible();
-  await expect(page.getByTestId("card-plan")).toBeVisible();
-  await expect(page.getByTestId("card-analyze")).toBeVisible();
-  await expect(page.getByTestId("card-format")).toBeVisible();
+  // 新首页是编辑级 hero 形态：CTA + 侧栏 4 个入口
+  await expect(page.getByTestId("home-cta")).toBeVisible();
+  await expect(page.getByTestId("nav-idea")).toBeVisible();
+  await expect(page.getByTestId("nav-plan")).toBeVisible();
+  await expect(page.getByTestId("nav-analyze")).toBeVisible();
+  await expect(page.getByTestId("nav-format")).toBeVisible();
   await expect(page.getByTestId("status")).toContainText("已就绪");
+});
+
+test("首页 CTA 点击进入找选题", async ({ page }) => {
+  await mockBase(page);
+  await page.goto("/");
+  await page.getByTestId("home-cta").click();
+  await expect(page.getByTestId("input-field")).toBeVisible();
 });
 
 test("连接重试: 服务稍后就绪后自动显示已就绪", async ({ page }) => {

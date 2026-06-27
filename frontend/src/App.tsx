@@ -202,26 +202,135 @@ export default function App() {
 function Home({ onPick }: { onPick: (m: ModuleId) => void }) {
   return (
     <div className="home">
-      <p className="eyebrow">Research Workflow · 科研全流程</p>
-      <h1>从一个想法，到一篇可投稿的论文</h1>
-      <p className="home-sub">
-        面向医学、药学与生物医学研究者的 AI 助手。沿着下面四个阶段，一步步把研究推进到投稿。
-      </p>
-      <div className="home-grid">
-        {NAV.map((m, i) => (
-          <button
-            key={m.id}
-            className="home-card"
-            data-step={`0${i + 1}`}
-            onClick={() => onPick(m.id)}
-            data-testid={`card-${m.id}`}
-          >
-            <span className="home-card-icon">{m.icon}</span>
-            <span className="home-card-title">{m.title}</span>
-            <span className="home-card-desc">{m.desc}</span>
-          </button>
-        ))}
+      <div className="home-stage">
+        <div className="home-text">
+          <p className="eyebrow">A Quiet Workbench · 专注的工作台</p>
+          <h1>
+            把直觉，<br />
+            写成可被复现的方法。
+          </h1>
+          <p className="home-sub">
+            从一个粗糙的想法，到经得起评议的论文。<br />
+            一个安静的工作台，给一项需要专注的工作。
+          </p>
+          <div className="home-actions">
+            <button
+              className="home-cta"
+              onClick={() => onPick("idea")}
+              data-testid="home-cta"
+            >
+              从一个选题开始 <span aria-hidden="true">→</span>
+            </button>
+            <span className="home-meta">面向医学 · 药学 · 生物医学研究者</span>
+          </div>
+        </div>
+        <div className="home-art" aria-hidden="true">
+          <HeroArt />
+        </div>
       </div>
     </div>
+  );
+}
+
+function HeroArt() {
+  return (
+    <svg viewBox="0 0 500 500" className="hero-svg" role="img">
+      <defs>
+        <radialGradient id="hero-halo" cx="50%" cy="50%" r="50%">
+          <stop offset="0%" stopColor="var(--teal)" stopOpacity="0.18" />
+          <stop offset="55%" stopColor="var(--teal)" stopOpacity="0.05" />
+          <stop offset="100%" stopColor="var(--teal)" stopOpacity="0" />
+        </radialGradient>
+        <radialGradient id="hero-core" cx="50%" cy="50%" r="50%">
+          <stop offset="0%" stopColor="var(--paper-warm)" stopOpacity="1" />
+          <stop offset="100%" stopColor="var(--petrol)" stopOpacity="1" />
+        </radialGradient>
+      </defs>
+
+      {/* halo glow */}
+      <circle cx="250" cy="250" r="230" fill="url(#hero-halo)" />
+
+      {/* rotating constellation */}
+      <g className="hero-spin">
+        {/* concentric rings */}
+        <circle
+          cx="250"
+          cy="250"
+          r="228"
+          fill="none"
+          stroke="var(--line)"
+          strokeWidth="0.6"
+          strokeDasharray="1 7"
+        />
+        <circle
+          cx="250"
+          cy="250"
+          r="178"
+          fill="none"
+          stroke="var(--line)"
+          strokeWidth="0.8"
+        />
+        <circle
+          cx="250"
+          cy="250"
+          r="118"
+          fill="none"
+          stroke="var(--teal)"
+          strokeWidth="0.8"
+          opacity="0.5"
+          strokeDasharray="3 4"
+        />
+
+        {/* sparse network */}
+        <g
+          stroke="var(--teal)"
+          strokeWidth="0.7"
+          opacity="0.4"
+          fill="none"
+          strokeLinecap="round"
+        >
+          <line x1="250" y1="118" x2="376" y2="232" />
+          <line x1="376" y1="232" x2="316" y2="386" />
+          <line x1="316" y1="386" x2="158" y2="354" />
+          <line x1="158" y1="354" x2="108" y2="198" />
+          <line x1="108" y1="198" x2="250" y2="118" />
+          <line x1="250" y1="250" x2="376" y2="232" />
+          <line x1="250" y1="250" x2="158" y2="354" />
+          <line x1="250" y1="250" x2="108" y2="198" />
+        </g>
+
+        {/* outer particles */}
+        <g className="hero-particles" fill="var(--teal)">
+          <circle cx="250" cy="118" r="5.5" />
+          <circle cx="376" cy="232" r="7" />
+          <circle cx="316" cy="386" r="4.5" />
+          <circle cx="158" cy="354" r="6" />
+          <circle cx="108" cy="198" r="5" />
+        </g>
+
+        {/* faint inner particles */}
+        <g className="hero-particles-soft" fill="var(--petrol)" opacity="0.45">
+          <circle cx="206" cy="180" r="3" />
+          <circle cx="320" cy="172" r="3.5" />
+          <circle cx="294" cy="324" r="3" />
+          <circle cx="178" cy="266" r="2.6" />
+        </g>
+      </g>
+
+      {/* central anchor (no rotation) */}
+      <g className="hero-anchor">
+        <circle
+          cx="250"
+          cy="250"
+          r="28"
+          fill="none"
+          stroke="var(--petrol)"
+          strokeWidth="1"
+          opacity="0.25"
+        />
+        <circle cx="250" cy="250" r="18" fill="url(#hero-core)" />
+        <circle cx="250" cy="250" r="6" fill="var(--paper-warm)" />
+      </g>
+    </svg>
   );
 }
