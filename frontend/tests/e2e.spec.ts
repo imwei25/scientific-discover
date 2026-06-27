@@ -260,6 +260,41 @@ test("找选题: 追问追加问答 + 按意见修改报告", async ({ page }) =
   await expect(page.getByTestId("result-text")).toContainText("修改后的报告");
 });
 
+test("回复审稿: 拆解意见并生成逐条回复", async ({ page }) => {
+  await mockBase(page);
+  await page.route("**/api/rebuttal", (r) =>
+    r.fulfill({
+      contentType: "text/event-stream",
+      body: sse(
+        { event: "status", data: { message: "正在拆解审稿意见…" } },
+        {
+          event: "comments",
+          data: {
+            items: [
+              { reviewer: "R1", index: 1, comment: "样本量是否充分？", type: "补分析" },
+              { reviewer: "R2", index: 1, comment: "方法描述不清。", type: "方法" },
+            ],
+          },
+        },
+        { event: "delta", data: { text: "**审稿人1 · 意见1**：样本量？\n\n回应：已补充功效分析。" } },
+        { event: "done", data: {} },
+      ),
+    }),
+  );
+  await page.goto("/");
+  await page.getByTestId("nav-rebuttal").click();
+  await page.getByTestId("input-reviews").fill("Reviewer 1: sample size? Reviewer 2: methods unclear.");
+  await page.getByTestId("run-btn").click();
+  // 意见被拆解为清单
+  await expect(page.getByTestId("comments")).toContainText("样本量是否充分");
+  await expect(page.getByTestId("comments")).toContainText("补分析");
+  // 逐条回复正文
+  await expect(page.getByTestId("result-text")).toContainText("已补充功效分析");
+  // 导出按钮(MD + Word)
+  await expect(page.getByTestId("export-md-btn")).toBeVisible();
+  await expect(page.getByTestId("download-docx-btn")).toBeVisible();
+});
+
 test("侧栏显示本次 token 用量", async ({ page }) => {
   await mockBase(page);
   await page.route("**/api/usage", (r) =>

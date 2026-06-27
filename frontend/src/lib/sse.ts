@@ -218,6 +218,74 @@ export async function streamIdea(
   }
 }
 
+export interface ReviewComment {
+  reviewer: string;
+  index: number;
+  comment: string;
+  type: string;
+}
+
+export interface RebuttalHandlers {
+  onStatus?: (message: string) => void;
+  onComments?: (items: ReviewComment[]) => void;
+  onDelta: (text: string) => void;
+  onDone?: () => void;
+  onError?: (message: string) => void;
+  signal?: AbortSignal;
+}
+
+// 回复审稿意见: 拆解意见 + 流式生成 point-by-point 回复信。处理 status/comments/delta/done/error。
+export async function streamRebuttal(
+  inputs: Record<string, unknown>,
+  h: RebuttalHandlers,
+): Promise<void> {
+  let resp: Response;
+  try {
+    resp = await fetch(apiUrl("/api/rebuttal"), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ module: "rebuttal", inputs }),
+      signal: h.signal,
+    });
+  } catch (e) {
+    h.onError?.(`无法连接本地服务: ${(e as Error).message}`);
+    return;
+  }
+  if (!resp.ok || !resp.body) {
+    h.onError?.(`服务返回错误: ${resp.status}`);
+    return;
+  }
+  const reader = resp.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const { events, rest } = parseChunk(buffer);
+      buffer = rest;
+      for (const ev of events) {
+        let data: any = {};
+        try {
+          data = JSON.parse(ev.data);
+        } catch {
+          /* ignore */
+        }
+        if (ev.event === "status") h.onStatus?.(data.message ?? "");
+        else if (ev.event === "comments") h.onComments?.(data.items ?? []);
+        else if (ev.event === "delta") h.onDelta(data.text ?? "");
+        else if (ev.event === "error") h.onError?.(data.message ?? ev.data);
+        else if (ev.event === "done") h.onDone?.();
+      }
+    }
+  } catch (e) {
+    if ((e as Error).name !== "AbortError") {
+      h.onError?.(`读取流出错: ${(e as Error).message}`);
+    }
+  }
+}
+
 export interface FollowupHandlers {
   onDelta: (text: string) => void;
   onVerify?: (v: Verification) => void;

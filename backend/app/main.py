@@ -23,6 +23,7 @@ from .config import settings
 from .journals import list_journals
 from .llm import LLMError, get_balance, get_session_usage, stream_chat
 from .prompts import build_messages
+from .rebuttal import rebuttal
 from .research import deep_research_idea, idea_followup
 
 # 说明: 依赖 pandas/scipy/matplotlib/citeproc/python-docx 等重库的模块
@@ -139,6 +140,20 @@ async def idea(req: RunRequest) -> StreamingResponse:
     """医学/药学/生物 找选题: 检索 PubMed + 分析现状/空白/选题(带文献链接)。"""
     async def gen():
         async for event, data in deep_research_idea(req.inputs):
+            yield _sse(event, data)
+
+    return StreamingResponse(
+        gen(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+@app.post("/api/rebuttal")
+async def rebuttal_ep(req: RunRequest) -> StreamingResponse:
+    """回复审稿意见: 拆解意见 → 逐条生成 point-by-point 回复信(本地处理, 数据不出网)。"""
+    async def gen():
+        async for event, data in rebuttal(req.inputs):
             yield _sse(event, data)
 
     return StreamingResponse(
