@@ -1081,6 +1081,30 @@ select {
 }
 .theme-seg.active .theme-name { color: var(--petrol); }
 
+/* ---------- 页面级过渡 + stagger ---------- */
+@keyframes page-in {
+  from { opacity: 0; transform: translateY(8px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.page {
+  animation: page-in var(--dur-slow) var(--ease-out-soft) both;
+}
+
+/* 首页卡片 stagger 入场 */
+.home-card {
+  animation: page-in var(--dur-slow) var(--ease-out-soft) both;
+}
+.home-card:nth-child(1) { animation-delay: 0ms; }
+.home-card:nth-child(2) { animation-delay: 60ms; }
+.home-card:nth-child(3) { animation-delay: 120ms; }
+.home-card:nth-child(4) { animation-delay: 180ms; }
+
+/* eyebrow / h1 / sub 也淡入，稍微错开 */
+.home .eyebrow   { animation: page-in 360ms var(--ease-out-soft) 0ms both; }
+.home h1         { animation: page-in 420ms var(--ease-out-soft) 60ms both; }
+.home .home-sub  { animation: page-in 420ms var(--ease-out-soft) 120ms both; }
+.home .home-grid { animation: none; }
+
 /* 滚动条 */
 .content::-webkit-scrollbar {
   width: 10px;

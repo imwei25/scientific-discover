@@ -186,12 +186,14 @@ export default function App() {
             </button>
           </div>
         )}
-        {active === "home" && <Home onPick={setActive} />}
-        {active === "idea" && <IdeaModule goto={goto} />}
-        {active === "plan" && <PlanModule />}
-        {active === "analyze" && <AnalyzeModule goto={goto} />}
-        {active === "format" && <FormatModule />}
-        {active === "history" && <HistoryView goto={goto} />}
+        <div className="page" key={active}>
+          {active === "home" && <Home onPick={setActive} />}
+          {active === "idea" && <IdeaModule goto={goto} />}
+          {active === "plan" && <PlanModule />}
+          {active === "analyze" && <AnalyzeModule goto={goto} />}
+          {active === "format" && <FormatModule />}
+          {active === "history" && <HistoryView goto={goto} />}
+        </div>
       </main>
     </div>
   );
