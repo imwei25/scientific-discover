@@ -284,6 +284,42 @@ test("数据分析: AI写代码执行并输出结论", async ({ page }) => {
   await expect(page.getByTestId("export-report-btn")).toBeVisible();
 });
 
+test("历史记录: localStorage 配额不足时保留最新记录(淘汰旧的)", async ({ page }) => {
+  await mockBase(page);
+  await page.route("**/api/run", (r) =>
+    r.fulfill({
+      contentType: "text/event-stream",
+      body: sse({ event: "delta", data: { text: "最新方案ABC" } }, { event: "done", data: {} }),
+    }),
+  );
+  // 预置一批较大的旧历史, 并对 ra:history 施加配额上限以触发淘汰逻辑。
+  await page.addInitScript(() => {
+    const real = Storage.prototype.setItem;
+    const seed: unknown[] = [];
+    for (let i = 0; i < 8; i++) {
+      seed.push({ id: "old" + i, module: "plan", icon: "🗺️", title: "旧记录" + i, time: i, data: { pad: "x".repeat(400) } });
+    }
+    real.call(localStorage, "ra:history", JSON.stringify(seed));
+    Storage.prototype.setItem = function (k: string, v: string) {
+      if (k === "ra:history" && String(v).length > 1200) {
+        throw new DOMException("quota", "QuotaExceededError");
+      }
+      return real.call(this, k, v);
+    };
+  });
+  await page.goto("/");
+  await page.getByTestId("nav-plan").click();
+  await page.getByTestId("input-idea").fill("最新研究课题");
+  await page.getByTestId("run-btn").click();
+  await expect(page.getByTestId("result-text")).toContainText("最新方案ABC");
+  // 打开历史: 最新记录必须在(没被静默丢弃), 且发生了淘汰(条数 < 9)。
+  await page.getByTestId("nav-history").click();
+  await expect(page.getByTestId("history-item").first()).toContainText("最新研究课题");
+  const count = await page.getByTestId("history-item").count();
+  expect(count).toBeGreaterThan(0);
+  expect(count).toBeLessThan(9);
+});
+
 test("期刊排版: 重排并出现下载按钮", async ({ page }) => {
   await mockBase(page);
   await page.route("**/api/run", (r) =>

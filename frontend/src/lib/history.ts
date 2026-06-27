@@ -27,10 +27,17 @@ export function addHistory(e: Omit<HistoryEntry, "id" | "time">): void {
     time: Date.now(),
   };
   list.unshift(entry);
-  try {
-    localStorage.setItem(KEY, JSON.stringify(list.slice(0, CAP)));
-  } catch {
-    /* 忽略(超额等) */
+  // localStorage 配额有限(分析结果含 base64 图, 单条可能很大)。写入失败时不要静默丢掉
+  // 这条新记录, 而是逐步淘汰最旧的记录后重试, 保证最新结果总能存下。
+  let trimmed = list.slice(0, CAP);
+  while (trimmed.length > 0) {
+    try {
+      localStorage.setItem(KEY, JSON.stringify(trimmed));
+      return;
+    } catch {
+      if (trimmed.length === 1) return; // 连最新一条都放不下: 放弃, 不影响使用
+      trimmed = trimmed.slice(0, Math.ceil(trimmed.length / 2)); // 保留较新的一半(含最新)
+    }
   }
 }
 

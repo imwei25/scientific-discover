@@ -10,6 +10,13 @@
 - **commit**：<short-hash>
 -->
 
+## 2026-06-27 — 子任务D 前端体验 / D4 历史记录配额不足时静默丢失修复
+- **现状/动机**：`history.addHistory` 写 localStorage 失败时 `catch{}` 直接忽略——新记录被静默丢弃。数据分析结果会把 base64 图表存进历史 `data`，单条很大，几次分析后 localStorage 很快撑满，此后历史**默默停止记录**，用户却以为存上了。
+- **改动**：`frontend/src/lib/history.ts` 的 `addHistory` 改为：写失败时逐步把列表减半（`Math.ceil(len/2)`，保留含最新的较新一半）后重试，直到写入成功或只剩 1 条仍放不下才放弃。最新记录因始终在 index 0 而总能存下（只要它本身不超额）。
+- **测试**（Playwright，mock 后端零成本）：① `tsc --noEmit` 通过；② 新增 e2e 用例：预置 8 条较大旧历史并 override `Storage.setItem` 对 `ra:history` 施加 1200 字节上限触发淘汰，跑一次实验规划后断言历史第一条是“最新研究课题”（证明没被丢）且总条数 <9（证明发生淘汰）——旧实现此用例会失败；③ **全量 20 个 e2e 全过**，无回归。
+- **部署**：已 `npm run build` 重建 `frontend/dist`。
+- **commit**：见下次提交
+
 ## 2026-06-27 — 子任务F 部署易用性 / F-a PORT 配置健壮性（修复启动崩溃）
 - **现状/动机**：`config.py` 用 `int(os.getenv("PORT","8756"))`，在**模块导入期**执行。若用户在 `.env` 把 PORT 写空（`PORT=`）或写成非数字，`int("")` 抛 ValueError，`from .config import settings` 直接崩，服务器起不来、只在 server.log 留个天书 traceback。项目有大量端口相关脚本，用户改 .env 改坏 PORT 是真实场景。
 - **改动**：`backend/app/config.py` 新增 `_int(name, default, lo, hi)`：空/纯空格/非法/越界都回退默认；`port` 改为 `_int("PORT", 8756, lo=1, hi=65535)`，顺带限定合法端口范围。
