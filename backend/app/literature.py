@@ -5,6 +5,8 @@
 """
 from __future__ import annotations
 
+import asyncio
+import time
 import xml.etree.ElementTree as ET
 
 import httpx
@@ -13,6 +15,22 @@ from .config import settings
 
 _BASE = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils"
 _TOOL = "research-assistant"
+
+# NCBI E-utilities 无 api_key 时限速 3 次/秒, 超限会返回 429 甚至临时封 IP。
+# 深度调研会连发多次 esearch/efetch, 这里做全局节流, 保证请求间隔 >= 0.34s。
+_NCBI_MIN_INTERVAL = 0.34
+_ncbi_lock = asyncio.Lock()
+_ncbi_last = 0.0
+
+
+async def _throttle() -> None:
+    """确保相邻 NCBI 请求间隔不小于 _NCBI_MIN_INTERVAL 秒。"""
+    global _ncbi_last
+    async with _ncbi_lock:
+        wait = _NCBI_MIN_INTERVAL - (time.monotonic() - _ncbi_last)
+        if wait > 0:
+            await asyncio.sleep(wait)
+        _ncbi_last = time.monotonic()
 
 
 def pubmed_url(pmid: str) -> str:
@@ -36,6 +54,7 @@ async def esearch(client: httpx.AsyncClient, query: str, retmax: int = 8) -> lis
         "sort": "relevance",
         **_common_params(),
     }
+    await _throttle()
     r = await client.get(f"{_BASE}/esearch.fcgi", params=params)
     r.raise_for_status()
     data = r.json()
@@ -56,6 +75,7 @@ async def efetch(client: httpx.AsyncClient, pmids: list[str]) -> list[dict]:
         "rettype": "abstract",
         **_common_params(),
     }
+    await _throttle()
     r = await client.get(f"{_BASE}/efetch.fcgi", params=params)
     r.raise_for_status()
     root = ET.fromstring(r.text)

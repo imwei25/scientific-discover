@@ -10,6 +10,12 @@
 - **commit**：<short-hash>
 -->
 
+## 2026-06-27 — 子任务E 检索与引用 / E3-a PubMed 检索 NCBI 限速节流
+- **现状/动机**：`literature.py` 的 docstring 自己写了“限速 3 次/秒”，但代码没有任何节流。深度调研流程会连发 4-5 个 facet 的 esearch + gap 查询 + efetch，紧挨着发出，轻松超过 3 次/秒。NCBI 超限返回 429（甚至临时封 IP），而调用处 `except: continue` 会**静默吞掉**——表现为“未检索到文献”时有时无，损害旗舰“找选题”功能可靠性。
+- **改动**：`backend/app/literature.py` 新增全局异步节流 `_throttle()`（`asyncio.Lock` + `time.monotonic`，间隔 `_NCBI_MIN_INTERVAL=0.34s`），在每次 esearch/efetch 的 GET 前 `await _throttle()`。并发与顺序都被串行拉开。
+- **测试**（.venv 本地计时，零成本）：① 新增 `test_ncbi_throttle.py`：顺序 6 次耗时≥5×0.34s、相邻瞬时速率≤3/秒、并发 4 次也被串行拉开≥3 间隔，全 PASS；② 既有 5 个后端测试全过、`import app.main` 通过，无回归。
+- **commit**：见下次提交
+
 ## 2026-06-27 — 子任务D 前端体验 / D5 文件下载健壮性 + 首个真实下载测试
 - **现状/动机**：`downloadText` 创建对象 URL、`a.click()` 后**同步立即** `URL.revokeObjectURL`，且锚点未挂到 DOM。这是已知陷阱：部分浏览器要求锚点在 DOM 中才触发下载；大文件（数据分析报告内嵌多张 base64 图，可达数 MB）在 click 后被立即 revoke 会中断下载。导出按钮此前只有“可见”断言，真实下载路径零覆盖。
 - **改动**：`frontend/src/lib/download.ts` 的 `downloadText`：锚点 `appendChild` 到 body、`display:none`，click 后用 `setTimeout(…,1000)` 延迟 `revokeObjectURL` 并移除锚点。
