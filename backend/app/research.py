@@ -20,6 +20,7 @@ import re
 import traceback
 from typing import AsyncIterator
 
+from . import searchfilters
 from .clinicaltrials import search_trials
 from .config import settings
 from .literature import search_literature
@@ -55,6 +56,7 @@ async def _gen_queries(field: str, keywords: str, background: str) -> list[str]:
     system = (
         "你是医学/生物医学文献检索专家。把用户的研究主题转化为 3 个适合在 PubMed 检索的英文检索式，"
         "可使用布尔逻辑(AND/OR)与必要的 MeSH 术语，覆盖该主题的不同侧面。"
+        "若用户输入为中文，先把疾病/药物/方法等关键概念翻译为规范英文医学术语(优先 MeSH 词)，再构造检索式。"
         "只输出一个 JSON 字符串数组，不要任何解释。例如：[\"...\", \"...\", \"...\"]"
     )
     try:
@@ -95,6 +97,7 @@ async def _gen_facets(field: str, keywords: str, background: str) -> list[dict]:
         "你是医学/生物医学文献检索专家。把用户的研究方向拆解为 4-5 个互补的子方向"
         "（例如：发病机制、临床疗效/结局、生物标志物/诊断、耐药与安全性、方法学等，依主题而定），"
         "每个子方向配一个适合 PubMed 的英文检索式（可用 AND/OR 与 MeSH）。"
+        "若用户输入为中文，先把关键概念翻译为规范英文医学术语(优先 MeSH 词)再构造检索式。"
         "只输出 JSON 数组，每项形如 {\"name\":\"子方向中文名\",\"query\":\"PubMed 检索式\"}，不要任何解释。"
     )
     arr = _parse_json(
@@ -252,25 +255,113 @@ async def _extract_evidence(papers: list[dict], batch: int = 12) -> dict[int, di
     return evidence
 
 
+def _evidence_line(gi: int, p: dict, row: dict | None) -> str:
+    head = (
+        f"[{gi}] {p['first_author']} ({p['year']}). {p['title']} "
+        f"{p['journal']}. URL: {p['url']}"
+    )
+    if row:
+        body = (
+            f"对象: {row.get('pop') or '—'} | 设计: {row.get('design') or '—'} | "
+            f"发现: {row.get('finding') or '—'} | 局限: {row.get('gap') or '—'}"
+        )
+    else:
+        ab = (p.get("abstract") or "")[:400]
+        body = f"摘要: {ab or '（无摘要）'}"
+    return head + "\n" + body
+
+
 def _build_context_table(papers: list[dict], evidence: dict[int, dict]) -> str:
     """用结构化证据行构建综述上下文; 抽取缺失的文献回退到短摘要(400 字)。"""
-    lines = []
+    return "\n\n".join(_evidence_line(i, p, evidence.get(i)) for i, p in enumerate(papers, 1))
+
+
+def _evidence_items(papers: list[dict], evidence: dict[int, dict]) -> list[dict]:
+    """合并文献元数据 + 抽取要点, 供前端展示/导出证据表(A4)。"""
+    out = []
     for i, p in enumerate(papers, 1):
-        head = (
-            f"[{i}] {p['first_author']} ({p['year']}). {p['title']} "
-            f"{p['journal']}. URL: {p['url']}"
+        row = evidence.get(i) or {}
+        out.append({
+            "index": i,
+            "first_author": p.get("first_author", ""),
+            "year": p.get("year", ""),
+            "title": p.get("title", ""),
+            "journal": p.get("journal", ""),
+            "url": p.get("url", ""),
+            "source": p.get("source", ""),
+            "cited_by_count": p.get("cited_by_count", 0),
+            "pop": row.get("pop", ""),
+            "design": row.get("design", ""),
+            "finding": row.get("finding", ""),
+            "gap": row.get("gap", ""),
+        })
+    return out
+
+
+def _trials_note(trials: list[dict]) -> str:
+    """把在研试验压成简短列表, 供综述判断研究空白(B7)。"""
+    if not trials:
+        return ""
+    lines = []
+    for t in trials[:10]:
+        ph = f"/{t['phase']}" if t.get("phase") else ""
+        lines.append(f"- {t.get('title', '')}（{t.get('status', '')}{ph}，{t.get('nct_id', '')}）")
+    return "\n".join(lines)
+
+
+async def _summarize_chunk(field: str, context: str) -> str:
+    """Map 步: 把一批文献概括成研究现状要点(保留真实引用链接)。"""
+    system = (
+        "你是医学科研综述助手。下面是某研究方向的一批真实文献(结构化要点)。"
+        "请用 150-250 字概括这批文献反映的研究现状要点, 保留最关键的发现与方法; "
+        "引用时用 Markdown 链接 [第一作者 et al., 年份](URL)，URL 必须用所给真实 URL。"
+        "只输出概括段落, 不要逐篇罗列, 不要编造未给出的文献。"
+    )
+    user = f"研究方向：{field}\n\n【这批文献】\n{context}"
+    return await _complete(
+        [{"role": "system", "content": system}, {"role": "user", "content": user}],
+        max_tokens=500,
+    )
+
+
+async def _map_summaries(field: str, papers: list[dict], evidence: dict[int, dict], chunk: int = 18) -> list[str]:
+    """把全部文献按批并发归纳为多段现状小结(Map-Reduce 的 Map)。"""
+    chunks = []
+    for s in range(0, len(papers), chunk):
+        ctx = "\n\n".join(
+            _evidence_line(i + 1, papers[i], evidence.get(i + 1))
+            for i in range(s, min(s + chunk, len(papers)))
         )
-        row = evidence.get(i)
-        if row:
-            body = (
-                f"对象: {row.get('pop') or '—'} | 设计: {row.get('design') or '—'} | "
-                f"发现: {row.get('finding') or '—'} | 局限: {row.get('gap') or '—'}"
-            )
-        else:
-            ab = (p.get("abstract") or "")[:400]
-            body = f"摘要: {ab or '（无摘要）'}"
-        lines.append(head + "\n" + body)
-    return "\n\n".join(lines)
+        chunks.append(ctx)
+    results = await asyncio.gather(
+        *[_summarize_chunk(field, c) for c in chunks], return_exceptions=True
+    )
+    return [r for r in results if isinstance(r, str) and r.strip()]
+
+
+def _reduce_messages_deep(field: str, summaries: list[str], trials_note: str) -> list[dict]:
+    system = (
+        "你是资深的医学/药学/生物医学科研选题顾问。下面是对【两轮检索到的真实文献】分批归纳出的多段现状小结"
+        "（每段已含真实文献的 Markdown 链接）。请据此综合成一份有深度的调研报告，分四部分：\n"
+        "## 一、研究现状（按子方向组织）\n整合各小结，按几个子方向综述代表性进展，引用沿用小结中的"
+        " [第一作者 et al., 年份](真实URL) 链接。\n"
+        "## 二、研究空白矩阵\n用 Markdown 表格对比『已被充分研究 / 证据不足或有争议 / 几乎空白』三类，"
+        "明确指出最值得切入的空白。\n"
+        "## 三、候选选题（3-5 个，按推荐度排序）\n每个含：拟解决的科学问题、创新点、"
+        "可行性（设计/样本/方法）、**新颖性说明（对照检索结果，指出是否已有相近工作、本选题不同在哪）**、相关文献链接。\n"
+        "## 四、首选推荐\n给出你最推荐的一个并说明理由。\n\n"
+        "铁律：只能引用上面小结中出现过的文献链接，严禁编造任何文献、作者或链接；证据不足时明说‘现有检索结果有限’。"
+    )
+    joined = "\n\n".join(f"【现状小结 {i + 1}】\n{s}" for i, s in enumerate(summaries))
+    extra = ""
+    if trials_note:
+        extra = (
+            "\n\n【相关在研临床试验（ClinicalTrials.gov，仅供判断研究空白）】\n" + trials_note +
+            "\n注意：在『研究空白矩阵』里参考这些在研试验判断哪些方向已有团队布局、哪些仍空白；"
+            "但它们是注册试验、非已发表文献，不要作为文献引用。"
+        )
+    user = f"研究方向：{field}\n\n{joined}{extra}"
+    return [{"role": "system", "content": system}, {"role": "user", "content": user}]
 
 
 def _synthesis_messages(field: str, papers: list[dict]) -> list[dict]:
@@ -327,14 +418,16 @@ async def _emit_trials(queries: list[str], sources: list[str]) -> dict | None:
 
 
 async def _deep_flow(
-    field: str, keywords: str, background: str, sources: list[str]
+    field: str, keywords: str, background: str, sources: list[str], filters: dict
 ) -> AsyncIterator[tuple[str, dict]]:
+    flt_label = searchfilters.label(filters)
+    flt_tip = f"（过滤：{flt_label}）" if flt_label else ""
     yield ("status", {"message": "正在把研究方向拆解为多个子方向…"})
     facets = await _gen_facets(field, keywords, background)
     names = "、".join(f["name"] for f in facets)
-    yield ("status", {"message": f"正在多角度检索 {_src_label(sources)}（{len(facets)} 个子方向：{names}）…"})
+    yield ("status", {"message": f"正在多角度检索 {_src_label(sources)}{flt_tip}（{len(facets)} 个子方向：{names}）…"})
     queries = [f["query"] for f in facets]
-    result = await search_literature(queries, per_query=10, cap=50, sources=sources)
+    result = await search_literature(queries, per_query=10, cap=50, sources=sources, filters=filters)
     papers = result["papers"]
     if not papers:
         if result["network_errors"] >= max(1, len(queries)):
@@ -346,29 +439,36 @@ async def _deep_flow(
             "tried_queries": result["queries_tried"],
             "suggestion": sugg,
         })
-        yield ("error", {"message": "未能从所选文献源检索到相关文献。可采纳上面的 AI 改写建议后重试。"})
+        yield ("error", {"message": "未能从所选文献源检索到相关文献。可采纳上面的 AI 改写建议后重试（或放宽年份/证据等级过滤）。"})
         return
-    yield ("references", {"items": [{k: p.get(k, "") for k in ("pmid", "title", "first_author", "journal", "year", "url", "source")} for p in papers]})
+    yield ("references", {"items": [{k: p.get(k, "") for k in ("pmid", "title", "first_author", "journal", "year", "url", "source", "cited_by_count")} for p in papers]})
 
     trials = await _emit_trials(queries, sources)
     if trials is not None:
         yield ("trials", trials)
+    trial_items = (trials or {}).get("items", [])
 
     yield ("status", {"message": f"首轮找到 {len(papers)} 篇，正在识别空白并补充检索…"})
     gapq = await _gap_queries(field, papers)
     if gapq:
-        extra = await search_literature(gapq, per_query=6, cap=24, sources=sources)
+        extra = await search_literature(gapq, per_query=6, cap=24, sources=sources, filters=filters)
         papers = _merge_papers(papers, extra["papers"], cap=70)
-        yield ("references", {"items": [{k: p.get(k, "") for k in ("pmid", "title", "first_author", "journal", "year", "url", "source")} for p in papers]})
+        yield ("references", {"items": [{k: p.get(k, "") for k in ("pmid", "title", "first_author", "journal", "year", "url", "source", "cited_by_count")} for p in papers]})
 
     # 结构化证据表: 综述前把每篇压成要点行(并发抽取), 既能纳入更多文献又抗"中段被忽略"。
     yield ("status", {"message": f"共 {len(papers)} 篇文献，正在逐篇抽取结构化要点…"})
     evidence = await _extract_evidence(papers)
-    context = _build_context_table(papers, evidence)
+    yield ("evidence", {"items": _evidence_items(papers, evidence)})
 
-    yield ("status", {"message": f"已抽取 {len(evidence)}/{len(papers)} 篇要点，正在综合（现状/空白矩阵/候选选题）…"})
+    # Map-Reduce: 先按批归纳现状小结(保证每篇被读到), 再汇总成结构化报告。
+    yield ("status", {"message": f"已抽取 {len(evidence)}/{len(papers)} 篇要点，正在分批归纳现状…"})
+    summaries = await _map_summaries(field, papers, evidence)
+    if not summaries:  # 兜底: 分批失败则退回整表一次性综述
+        summaries = [_build_context_table(papers, evidence)]
+
+    yield ("status", {"message": f"正在汇总 {len(summaries)} 段小结（现状/空白矩阵/候选选题）…"})
     full = ""
-    async for piece in stream_chat(_synthesis_messages_deep(field, papers, context)):
+    async for piece in stream_chat(_reduce_messages_deep(field, summaries, _trials_note(trial_items))):
         full += piece
         yield ("delta", {"text": piece})
     yield ("__verify__", {"papers": papers, "full": full})
@@ -410,10 +510,15 @@ async def _mock_flow(field: str) -> AsyncIterator[tuple[str, dict]]:
             "url": "https://clinicaltrials.gov/study/NCT00000000",
         }
     ]})
+    yield ("evidence", {"items": [
+        {"index": 1, "first_author": "Smith J", "year": "2023", "title": f"[MOCK] A study related to {field}",
+         "journal": "Mock Journal", "url": "https://pubmed.ncbi.nlm.nih.gov/00000001/", "source": "pubmed",
+         "cited_by_count": 12, "pop": "成人患者", "design": "RCT", "finding": "[MOCK] 主要终点改善", "gap": "样本量小"},
+    ]})
     yield ("status", {"message": "正在分析研究现状与空白…"})
     text = (
         "## 一、研究现状\n已有工作见 [Smith et al., 2023](https://pubmed.ncbi.nlm.nih.gov/00000001/)。\n"
-        "## 二、研究空白\n[MOCK] 该方向仍缺乏前瞻性研究。\n"
+        "## 二、研究空白矩阵\n\n| 角度 | 证据强度 |\n| --- | --- |\n| 机制 | 充分 |\n| 长期结局 | 空白 |\n\n"
         "## 三、候选选题\n1. [MOCK] 一个示例选题。"
     )
     for ch in text:
@@ -431,6 +536,7 @@ async def deep_research_idea(inputs: dict) -> AsyncIterator[tuple[str, dict]]:
 
     depth = (inputs.get("depth") or "deep").strip()
     sources = _parse_sources(inputs.get("sources"))
+    filters = searchfilters.normalize(inputs.get("filters"))
 
     if settings.mock:
         async for ev in _mock_flow(field):
@@ -444,7 +550,7 @@ async def deep_research_idea(inputs: dict) -> AsyncIterator[tuple[str, dict]]:
         full = ""
 
         if depth == "deep":
-            async for event, data in _deep_flow(field, keywords, background, sources):
+            async for event, data in _deep_flow(field, keywords, background, sources, filters):
                 if event == "__verify__":
                     papers, full = data["papers"], data["full"]
                 else:
@@ -452,10 +558,12 @@ async def deep_research_idea(inputs: dict) -> AsyncIterator[tuple[str, dict]]:
                     if event == "error":
                         return
         else:
+            flt_label = searchfilters.label(filters)
+            flt_tip = f"（过滤：{flt_label}）" if flt_label else ""
             yield ("status", {"message": "正在生成检索式…"})
             queries = await _gen_queries(field, keywords, background)
-            yield ("status", {"message": f"正在检索 {_src_label(sources)}（{len(queries)} 个检索式）…"})
-            result = await search_literature(queries, per_query=10, cap=28, sources=sources)
+            yield ("status", {"message": f"正在检索 {_src_label(sources)}{flt_tip}（{len(queries)} 个检索式）…"})
+            result = await search_literature(queries, per_query=10, cap=28, sources=sources, filters=filters)
             papers = result["papers"]
             if not papers:
                 if result["network_errors"] >= max(1, len(queries)):
@@ -470,7 +578,7 @@ async def deep_research_idea(inputs: dict) -> AsyncIterator[tuple[str, dict]]:
                 yield ("error", {"message": "未能从所选文献源检索到相关文献。可采纳上面的 AI 改写建议后重试。"})
                 return
             yield ("references", {"items": [
-                {k: p.get(k, "") for k in ("pmid", "title", "first_author", "journal", "year", "url", "source")} for p in papers
+                {k: p.get(k, "") for k in ("pmid", "title", "first_author", "journal", "year", "url", "source", "cited_by_count")} for p in papers
             ]})
             trials = await _emit_trials(queries, sources)
             if trials is not None:

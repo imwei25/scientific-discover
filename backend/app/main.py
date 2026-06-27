@@ -21,7 +21,7 @@ from pydantic import BaseModel
 
 from .config import settings
 from .journals import list_journals
-from .llm import LLMError, get_balance, stream_chat
+from .llm import LLMError, get_balance, get_session_usage, stream_chat
 from .prompts import build_messages
 from .research import deep_research_idea
 
@@ -78,7 +78,9 @@ async def journals() -> dict:
 
 @app.get("/api/usage")
 async def usage() -> dict:
-    return await get_balance()
+    data = await get_balance()
+    data["tokens"] = get_session_usage()
+    return data
 
 
 def _sse(event: str, data: dict) -> str:

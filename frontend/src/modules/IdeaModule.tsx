@@ -1,9 +1,9 @@
 import { useEffect, useRef, useState } from "react";
-import { streamIdea, Reference, Trial, Verification, RewritePayload } from "../lib/sse";
+import { streamIdea, Reference, Trial, EvidenceItem, Verification, RewritePayload } from "../lib/sse";
 import { addHistory } from "../lib/history";
 import Markdown from "../components/Markdown";
 import Dropzone from "../components/Dropzone";
-import { downloadText, tsName } from "../lib/download";
+import { downloadText, downloadCsv, tsName } from "../lib/download";
 import { usePersistentState } from "../lib/usePersistentState";
 import type { Goto } from "../App";
 
@@ -13,6 +13,19 @@ const PAPER_SOURCES: { key: string; label: string; hint: string }[] = [
   { key: "openalex", label: "OpenAlex", hint: "覆盖最广 + 被引数" },
 ];
 const TRIAL_SOURCE = { key: "clinicaltrials", label: "ClinicalTrials.gov", hint: "在研临床试验（旁路）" };
+const STUDY_TYPES: { key: string; label: string }[] = [
+  { key: "rct", label: "随机对照试验" },
+  { key: "meta", label: "Meta 分析" },
+  { key: "systematic", label: "系统综述" },
+  { key: "review", label: "综述" },
+];
+
+// 文献列表排序: 相关性(原序) / 被引降序 / 年份降序
+function sortRefs(refs: Reference[], by: string): Reference[] {
+  if (by === "cited") return [...refs].sort((a, b) => (b.cited_by_count ?? 0) - (a.cited_by_count ?? 0));
+  if (by === "year") return [...refs].sort((a, b) => (parseInt(b.year) || 0) - (parseInt(a.year) || 0));
+  return refs;
+}
 
 export default function IdeaModule({ goto }: { goto: Goto }) {
   const [field, setField] = usePersistentState("idea:field", "");
@@ -25,10 +38,14 @@ export default function IdeaModule({ goto }: { goto: Goto }) {
     "openalex",
     "clinicaltrials",
   ]);
+  const [yearFrom, setYearFrom] = usePersistentState("idea:yearFrom", "");
+  const [studyTypes, setStudyTypes] = usePersistentState<string[]>("idea:studyTypes", []);
 
   const [status, setStatus] = useState("");
   const [refs, setRefs] = usePersistentState<Reference[]>("idea:refs", []);
+  const [refSort, setRefSort] = usePersistentState("idea:refSort", "relevance");
   const [trials, setTrials] = usePersistentState<Trial[]>("idea:trials", []);
+  const [evidence, setEvidence] = usePersistentState<EvidenceItem[]>("idea:evidence", []);
   const [text, setText] = usePersistentState("idea:result", "");
   const [verify, setVerify] = usePersistentState<Verification | null>("idea:verify", null);
   const [running, setRunning] = useState(false);
@@ -51,6 +68,7 @@ export default function IdeaModule({ goto }: { goto: Goto }) {
           "idea:result": text,
           "idea:refs": refs,
           "idea:trials": trials,
+          "idea:evidence": evidence,
           "idea:verify": verify,
         },
       });
@@ -64,6 +82,7 @@ export default function IdeaModule({ goto }: { goto: Goto }) {
     setStatus("");
     setRefs([]);
     setTrials([]);
+    setEvidence([]);
     setText("");
     setVerify(null);
     setError(null);
@@ -71,12 +90,20 @@ export default function IdeaModule({ goto }: { goto: Goto }) {
     setRunning(true);
     ctrl.current = new AbortController();
     await streamIdea(
-      { field: f, keywords: k, background, depth, sources },
+      {
+        field: f,
+        keywords: k,
+        background,
+        depth,
+        sources,
+        filters: { year_from: yearFrom, study_types: studyTypes },
+      },
       {
         signal: ctrl.current.signal,
         onStatus: setStatus,
         onReferences: setRefs,
         onTrials: setTrials,
+        onEvidence: setEvidence,
         onDelta: (t) => setText((p) => p + t),
         onVerify: setVerify,
         onRewriteSuggestion: setRewrite,
@@ -84,10 +111,12 @@ export default function IdeaModule({ goto }: { goto: Goto }) {
           setError(m);
           setStatus("");
           setRunning(false);
+          window.dispatchEvent(new Event("usage-updated"));
         },
         onDone: () => {
           setStatus("");
           setRunning(false);
+          window.dispatchEvent(new Event("usage-updated"));
         },
       },
     );
@@ -116,6 +145,9 @@ export default function IdeaModule({ goto }: { goto: Goto }) {
   const toggleSource = (key: string) => {
     setSources((prev) => (prev.includes(key) ? prev.filter((s) => s !== key) : [...prev, key]));
   };
+  const toggleStudyType = (key: string) => {
+    setStudyTypes((prev) => (prev.includes(key) ? prev.filter((s) => s !== key) : [...prev, key]));
+  };
   // 至少要选一个论文源, 否则无文献可综述。
   const noPaperSource = !PAPER_SOURCES.some((s) => sources.includes(s.key));
 
@@ -126,6 +158,7 @@ export default function IdeaModule({ goto }: { goto: Goto }) {
     setBackground("");
     setRefs([]);
     setTrials([]);
+    setEvidence([]);
     setText("");
     setVerify(null);
     setStatus("");
@@ -211,6 +244,35 @@ export default function IdeaModule({ goto }: { goto: Goto }) {
             </span>
           )}
         </div>
+        <div className="field" data-testid="filters">
+          <span className="field-label">检索过滤（可选）</span>
+          <div className="filter-row">
+            <label className="filter-year">
+              起始年份
+              <select data-testid="filter-year" value={yearFrom} onChange={(e) => setYearFrom(e.target.value)}>
+                <option value="">不限</option>
+                <option value="2021">近 5 年</option>
+                <option value="2019">近 7 年</option>
+                <option value="2014">近 10 年</option>
+              </select>
+            </label>
+            <div className="filter-types">
+              <span className="filter-types-label">证据等级</span>
+              {STUDY_TYPES.map((s) => (
+                <label key={s.key} className={`type-chip${studyTypes.includes(s.key) ? " on" : ""}`}>
+                  <input
+                    type="checkbox"
+                    data-testid={`type-${s.key}`}
+                    checked={studyTypes.includes(s.key)}
+                    onChange={() => toggleStudyType(s.key)}
+                  />
+                  {s.label}
+                </label>
+              ))}
+            </div>
+          </div>
+          <span className="filter-hint">证据等级过滤主要作用于 PubMed / Europe PMC（OpenAlex 仅能近似匹配综述）。</span>
+        </div>
         <Dropzone
           testId="upload-doc"
           accept=".docx,.pdf,.txt,.md"
@@ -290,12 +352,25 @@ export default function IdeaModule({ goto }: { goto: Goto }) {
       {refs.length > 0 && (
         <details className="refs" open data-testid="refs">
           <summary>检索到的文献（{refs.length} 篇，点击打开原文）</summary>
+          <div className="ref-toolbar">
+            <label>
+              排序
+              <select data-testid="ref-sort" value={refSort} onChange={(e) => setRefSort(e.target.value)}>
+                <option value="relevance">相关性</option>
+                <option value="cited">被引最多</option>
+                <option value="year">最新</option>
+              </select>
+            </label>
+          </div>
           <ol className="ref-list">
-            {refs.map((r, i) => (
+            {sortRefs(refs, refSort).map((r, i) => (
               <li key={r.pmid || r.url || i}>
                 {r.source === "preprint" && <span className="ref-badge ref-badge-preprint">预印本</span>}
                 {r.source === "europepmc" && <span className="ref-badge ref-badge-epmc">Europe PMC</span>}
                 {r.source === "openalex" && <span className="ref-badge ref-badge-openalex">OpenAlex</span>}
+                {(r.cited_by_count ?? 0) > 0 && (
+                  <span className="ref-badge ref-badge-cited">被引 {r.cited_by_count}</span>
+                )}
                 <a href={r.url} target="_blank" rel="noreferrer">
                   {r.first_author} ({r.year}). {r.title}
                 </a>
@@ -322,6 +397,53 @@ export default function IdeaModule({ goto }: { goto: Goto }) {
               </li>
             ))}
           </ol>
+        </details>
+      )}
+
+      {evidence.length > 0 && (
+        <details className="refs evidence" data-testid="evidence">
+          <summary>📋 证据表（{evidence.length} 篇 · 对象/设计/发现/局限，可导出）</summary>
+          <div className="ref-toolbar">
+            <button
+              className="btn-ghost"
+              data-testid="export-evidence-btn"
+              onClick={() => {
+                const headers = ["序号", "第一作者", "年份", "标题", "期刊", "来源", "被引", "研究对象", "设计/方法", "主要发现", "局限/空白", "链接"];
+                const rows = evidence.map((e) => [
+                  e.index, e.first_author, e.year, e.title, e.journal, e.source, e.cited_by_count,
+                  e.pop, e.design, e.finding, e.gap, e.url,
+                ]);
+                downloadCsv(tsName("证据表", "csv"), headers, rows);
+              }}
+            >
+              导出 CSV
+            </button>
+          </div>
+          <div className="md-table-wrap">
+            <table className="evidence-table">
+              <thead>
+                <tr>
+                  <th>#</th><th>文献</th><th>对象</th><th>设计</th><th>主要发现</th><th>局限/空白</th>
+                </tr>
+              </thead>
+              <tbody>
+                {evidence.map((e) => (
+                  <tr key={e.index}>
+                    <td>{e.index}</td>
+                    <td>
+                      <a href={e.url} target="_blank" rel="noreferrer">
+                        {e.first_author} ({e.year})
+                      </a>
+                    </td>
+                    <td>{e.pop || "—"}</td>
+                    <td>{e.design || "—"}</td>
+                    <td>{e.finding || "—"}</td>
+                    <td>{e.gap || "—"}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         </details>
       )}
 

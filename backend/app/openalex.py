@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import httpx
 
+from . import searchfilters
 from .config import settings
 
 _ENDPOINT = "https://api.openalex.org/works"
@@ -78,10 +79,13 @@ def _normalize(raw: dict) -> dict | None:
     }
 
 
-def _params(query: str, per_query: int) -> dict:
+def _params(query: str, per_query: int, filter_extra: str = "") -> dict:
+    # title_and_abstract.search 比裸 search 更精准（只搜标题+摘要）; 过滤器并入同一 filter 串。
+    flt = f"title_and_abstract.search:{query}"
+    if filter_extra:
+        flt += "," + filter_extra
     p = {
-        # title_and_abstract.search 比裸 search 更精准（只搜标题+摘要）。
-        "filter": f"title_and_abstract.search:{query}",
+        "filter": flt,
         "per_page": str(per_query),
         "select": _SELECT,
         "sort": "relevance_score:desc",
@@ -92,8 +96,8 @@ def _params(query: str, per_query: int) -> dict:
     return p
 
 
-async def _search_one(client: httpx.AsyncClient, query: str, per_query: int) -> list[dict]:
-    r = await client.get(_ENDPOINT, params=_params(query, per_query))
+async def _search_one(client: httpx.AsyncClient, query: str, per_query: int, filter_extra: str = "") -> list[dict]:
+    r = await client.get(_ENDPOINT, params=_params(query, per_query, filter_extra))
     r.raise_for_status()
     out: list[dict] = []
     for raw in r.json().get("results", []) or []:
@@ -103,8 +107,9 @@ async def _search_one(client: httpx.AsyncClient, query: str, per_query: int) -> 
     return out
 
 
-async def search_openalex(queries: list[str], per_query: int = 6, cap: int = 18) -> dict:
+async def search_openalex(queries: list[str], per_query: int = 6, cap: int = 18, filters: dict | None = None) -> dict:
     """对多个检索式跑 OpenAlex, 返回 {papers, network_errors, queries_tried}。"""
+    filter_extra = searchfilters.openalex_params(filters or {}).get("filter_extra", "")
     seen_keys: set[str] = set()
     collected: list[dict] = []
     network_errors = 0
@@ -112,7 +117,7 @@ async def search_openalex(queries: list[str], per_query: int = 6, cap: int = 18)
     async with httpx.AsyncClient(timeout=httpx.Timeout(30.0)) as client:
         for q in queries:
             try:
-                results = await _search_one(client, q, per_query)
+                results = await _search_one(client, q, per_query, filter_extra)
             except Exception:  # noqa: BLE001
                 network_errors += 1
                 continue

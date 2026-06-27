@@ -51,15 +51,15 @@ def test_literature_respects_sources():
     """sources 只含 openalex 时, 只应调用 OpenAlex 一个 runner。"""
     calls = []
 
-    async def fake_pm(q, s, c):
+    async def fake_pm(q, s, c, f=None):
         calls.append("pubmed")
         return {"papers": [], "network_errors": 0}
 
-    async def fake_ep(q, s, c):
+    async def fake_ep(q, s, c, f=None):
         calls.append("europepmc")
         return {"papers": [], "network_errors": 0}
 
-    async def fake_oa(q, s, c):
+    async def fake_oa(q, s, c, f=None):
         calls.append("openalex")
         return {"papers": [{"pmid": "1", "doi": "", "title": "T", "abstract": "",
                             "url": "u", "source": "openalex", "year": "2024", "cited_by_count": 3}],

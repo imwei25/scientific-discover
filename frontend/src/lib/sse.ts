@@ -99,6 +99,22 @@ export interface Reference {
   year: string;
   url: string;
   source?: string; // "pubmed" | "preprint" | "europepmc" | "openalex"
+  cited_by_count?: number;
+}
+
+export interface EvidenceItem {
+  index: number;
+  first_author: string;
+  year: string;
+  title: string;
+  journal: string;
+  url: string;
+  source: string;
+  cited_by_count: number;
+  pop: string;
+  design: string;
+  finding: string;
+  gap: string;
 }
 
 export interface Verification {
@@ -133,6 +149,7 @@ export interface IdeaHandlers {
   onStatus?: (message: string) => void;
   onReferences?: (items: Reference[]) => void;
   onTrials?: (items: Trial[]) => void;
+  onEvidence?: (items: EvidenceItem[]) => void;
   onDelta: (text: string) => void;
   onVerify?: (v: Verification) => void;
   onRewriteSuggestion?: (p: RewritePayload) => void;
@@ -182,6 +199,7 @@ export async function streamIdea(
         if (ev.event === "status") h.onStatus?.(data.message ?? "");
         else if (ev.event === "references") h.onReferences?.(data.items ?? []);
         else if (ev.event === "trials") h.onTrials?.(data.items ?? []);
+        else if (ev.event === "evidence") h.onEvidence?.(data.items ?? []);
         else if (ev.event === "delta") h.onDelta(data.text ?? "");
         else if (ev.event === "verify") h.onVerify?.(data as Verification);
         else if (ev.event === "rewrite_suggestion")

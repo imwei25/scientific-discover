@@ -11,6 +11,8 @@ from __future__ import annotations
 
 import httpx
 
+from . import searchcache
+
 _ENDPOINT = "https://clinicaltrials.gov/api/v2/studies"
 
 
@@ -61,6 +63,10 @@ async def _search_one(client: httpx.AsyncClient, query: str, per_query: int) -> 
 
 async def search_trials(queries: list[str], per_query: int = 5, cap: int = 12) -> dict:
     """对多个检索式跑 ClinicalTrials.gov, 按 NCT 去重, 返回 {trials, network_errors}。"""
+    cache_key = ("trials", tuple(queries), per_query, cap)
+    cached = searchcache.get(cache_key)
+    if cached is not None:
+        return cached
     seen: set[str] = set()
     collected: list[dict] = []
     network_errors = 0
@@ -80,4 +86,7 @@ async def search_trials(queries: list[str], per_query: int = 5, cap: int = 12) -
                     break
             if len(collected) >= cap:
                 break
-    return {"trials": collected, "network_errors": network_errors}
+    out = {"trials": collected, "network_errors": network_errors}
+    if collected or network_errors < max(1, len(queries)):
+        searchcache.put(cache_key, out)
+    return out

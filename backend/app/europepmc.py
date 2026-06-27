@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import httpx
 
+from . import searchfilters
+
 _ENDPOINT = "https://www.ebi.ac.uk/europepmc/webservices/rest/search"
 
 
@@ -64,8 +66,9 @@ async def _search_one(client: httpx.AsyncClient, query: str, per_query: int) -> 
     return out
 
 
-async def search_epmc(queries: list[str], per_query: int = 6, cap: int = 18) -> dict:
+async def search_epmc(queries: list[str], per_query: int = 6, cap: int = 18, filters: dict | None = None) -> dict:
     """对多个检索式跑 Europe PMC, 返回 {papers, network_errors, queries_tried}。"""
+    suffix = searchfilters.epmc_suffix(filters or {})
     seen_keys: set[str] = set()
     collected: list[dict] = []
     network_errors = 0
@@ -73,7 +76,7 @@ async def search_epmc(queries: list[str], per_query: int = 6, cap: int = 18) -> 
     async with httpx.AsyncClient(timeout=httpx.Timeout(30.0)) as client:
         for q in queries:
             try:
-                results = await _search_one(client, q, per_query)
+                results = await _search_one(client, q + suffix, per_query)
             except Exception:  # noqa: BLE001
                 network_errors += 1
                 continue

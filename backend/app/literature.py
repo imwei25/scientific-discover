@@ -14,6 +14,7 @@ import xml.etree.ElementTree as ET
 
 import httpx
 
+from . import searchcache, searchfilters
 from .config import settings
 from .europepmc import search_epmc
 from .openalex import search_openalex
@@ -130,8 +131,9 @@ async def efetch(client: httpx.AsyncClient, pmids: list[str]) -> list[dict]:
     return papers
 
 
-async def _search_pubmed(queries: list[str], per_query: int, cap: int) -> dict:
+async def _search_pubmed(queries: list[str], per_query: int, cap: int, filters: dict | None = None) -> dict:
     """只跑 PubMed（NCBI E-utilities）的版本, 返回与 search_literature 同形 dict。"""
+    suffix = searchfilters.pubmed_suffix(filters or {})
     seen: set[str] = set()
     collected: list[str] = []
     network_errors = 0
@@ -139,7 +141,7 @@ async def _search_pubmed(queries: list[str], per_query: int, cap: int) -> dict:
     async with httpx.AsyncClient(timeout=httpx.Timeout(30.0)) as client:
         for q in queries:
             try:
-                ids = await esearch(client, q, retmax=per_query)
+                ids = await esearch(client, q + suffix, retmax=per_query)
             except Exception:  # noqa: BLE001
                 network_errors += 1
                 continue
@@ -235,12 +237,17 @@ _PAPER_SOURCES = ("pubmed", "europepmc", "openalex")
 
 
 async def search_literature(
-    queries: list[str], per_query: int = 6, cap: int = 18, sources: list[str] | None = None
+    queries: list[str],
+    per_query: int = 6,
+    cap: int = 18,
+    sources: list[str] | None = None,
+    filters: dict | None = None,
 ) -> dict:
     """并发检索所选论文源(PubMed/Europe PMC/OpenAlex), 合并去重 + 排序选篇。
 
     返回 {"papers", "network_errors", "queries_tried"}。
     - sources: 要启用的论文源子集; None 或空 → 三源全开。ClinicalTrials 不在此(走旁路)。
+    - filters: {year_from, study_types} 年份/证据等级过滤(各源按各自语法落地)。
     - 各源各自召回至多 cap 篇 → 合并去重得到更大候选池 → 按 相关性+被引+新近 排序 → 取前 cap。
     - network_errors 仅在所选源全部失败时为非零(用于区分『检索式太窄』和『全网连不上』)。
     每篇 paper 带 source: "pubmed" / "preprint" / "europepmc" / "openalex"; OpenAlex 额外带 cited_by_count。
@@ -248,11 +255,21 @@ async def search_literature(
     enabled = [s for s in _PAPER_SOURCES if (not sources or s in sources)]
     if not enabled:  # 防御: 一个论文源都没选 → 退回全开, 否则综述无文献可依
         enabled = list(_PAPER_SOURCES)
+    f = searchfilters.normalize(filters)
+
+    cache_key = (
+        "lit", tuple(queries), per_query, cap, tuple(enabled),
+        f["year_from"], tuple(f["study_types"]),
+    )
+    cached = searchcache.get(cache_key)
+    if cached is not None:
+        return cached
+
     share = max(2, per_query)
     runners = {
-        "pubmed": lambda: _search_pubmed(queries, share, cap),
-        "europepmc": lambda: search_epmc(queries, share, cap),
-        "openalex": lambda: search_openalex(queries, share, cap),
+        "pubmed": lambda: _search_pubmed(queries, share, cap, f),
+        "europepmc": lambda: search_epmc(queries, share, cap, f),
+        "openalex": lambda: search_openalex(queries, share, cap, f),
     }
     results = await asyncio.gather(
         *(runners[s]() for s in enabled), return_exceptions=True
@@ -265,9 +282,12 @@ async def search_literature(
     merged = _merge_all([r["papers"] for r in ordered], cap)
     all_fail = all(r["network_errors"] >= max(1, len(queries)) for r in ordered)
     net_errs = sum(r["network_errors"] for r in ordered)
-    return {
+    out = {
         "papers": merged,
         # 上游用 network_errors >= len(queries) 判断网络故障; 只要任一源能通就不算网络全败。
         "network_errors": net_errs if all_fail else 0,
         "queries_tried": list(queries),
     }
+    if not all_fail:  # 不缓存"全失败"(可能只是一次偶发网络故障)
+        searchcache.put(cache_key, out)
+    return out

@@ -33,7 +33,13 @@ export default function App() {
   const [health, setHealth] = useState<Health | null>(null);
   const [healthErr, setHealthErr] = useState(false);
   const [disclaimerDismissed, setDisclaimerDismissed] = usePersistentState("ui:disclaimerDismissed", false);
-  const [balance, setBalance] = useState<{ available: boolean; provider?: string; currency?: string; balance?: string } | null>(null);
+  const [balance, setBalance] = useState<{
+    available: boolean;
+    provider?: string;
+    currency?: string;
+    balance?: string;
+    tokens?: { total_tokens: number; requests: number };
+  } | null>(null);
   const sidebar = useSidebar();
 
   const goto: Goto = (target, patch) => {
@@ -43,12 +49,16 @@ export default function App() {
     setActive(target);
   };
 
-  // 拉取余额(切换模块时刷新, 接近实时反映额度变化)
+  // 拉取余额/用量(切换模块时刷新; 任务完成时也刷新, 接近实时反映额度与 token 消耗)
   useEffect(() => {
-    fetch(apiUrl("/api/usage"))
-      .then((r) => r.json())
-      .then(setBalance)
-      .catch(() => setBalance(null));
+    const refresh = () =>
+      fetch(apiUrl("/api/usage"))
+        .then((r) => r.json())
+        .then(setBalance)
+        .catch(() => setBalance(null));
+    refresh();
+    window.addEventListener("usage-updated", refresh);
+    return () => window.removeEventListener("usage-updated", refresh);
   }, [active]);
 
   useEffect(() => {
@@ -157,6 +167,11 @@ export default function App() {
           {balance?.available && (
             <span className="status-balance" data-testid="balance">
               💰 {balance.provider} 余额 ¥{balance.balance}
+            </span>
+          )}
+          {balance?.tokens && balance.tokens.total_tokens > 0 && (
+            <span className="status-tokens" data-testid="token-usage">
+              🔢 本次已用 {balance.tokens.total_tokens.toLocaleString()} tokens · {balance.tokens.requests} 次调用
             </span>
           )}
           <ThemeSwitcher />

@@ -24,6 +24,16 @@ export function tsName(prefix: string, ext: string): string {
   return `${prefix}-${stamp}.${ext}`;
 }
 
+// 导出证据表为 CSV(A4)。前置 UTF-8 BOM 让 Excel 正确识别中文。
+export function downloadCsv(filename: string, headers: string[], rows: (string | number)[][]): void {
+  const esc = (v: string | number) => {
+    const s = String(v ?? "");
+    return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+  };
+  const lines = [headers.map(esc).join(","), ...rows.map((r) => r.map(esc).join(","))];
+  downloadText(filename, "﻿" + lines.join("\r\n"), "text/csv");
+}
+
 function escapeHtml(s: string): string {
   return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }

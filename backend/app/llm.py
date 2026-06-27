@@ -39,6 +39,25 @@ class LLMError(Exception):
 _MAX_RETRIES = 2
 _RETRY_BACKOFF = 0.8  # 秒, 线性递增
 
+# 本进程累计 token 用量(C8): 每次模型调用回报的 usage 累加, 供侧栏展示"本次会话已用"。
+_session_usage = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0, "requests": 0}
+
+
+def get_session_usage() -> dict:
+    return dict(_session_usage)
+
+
+def _add_usage(u: dict | None) -> None:
+    if not u:
+        return
+    pt = int(u.get("prompt_tokens") or u.get("input_tokens") or 0)
+    ct = int(u.get("completion_tokens") or u.get("output_tokens") or 0)
+    tt = int(u.get("total_tokens") or (pt + ct))
+    _session_usage["prompt_tokens"] += pt
+    _session_usage["completion_tokens"] += ct
+    _session_usage["total_tokens"] += tt
+    _session_usage["requests"] += 1
+
 
 @dataclass
 class ProviderConfig:
@@ -98,7 +117,14 @@ async def _stream_mock(messages: list[dict]) -> AsyncIterator[str]:
 async def _stream_openai(cfg: ProviderConfig, messages: list[dict], **kwargs) -> AsyncIterator[str]:
     url = f"{cfg.base_url}/chat/completions"
     headers = {"Authorization": f"Bearer {cfg.api_key}", "Content-Type": "application/json"}
-    payload = {"model": cfg.model, "messages": messages, "stream": True, **kwargs}
+    payload = {
+        "model": cfg.model,
+        "messages": messages,
+        "stream": True,
+        # 让上游在流末附带 usage(token 用量); 兼容服务器会忽略未知字段。
+        "stream_options": {"include_usage": True},
+        **kwargs,
+    }
     async with httpx.AsyncClient(timeout=httpx.Timeout(120.0)) as client:
         async with client.stream("POST", url, headers=headers, json=payload) as resp:
             if resp.status_code != 200:
@@ -117,6 +143,8 @@ async def _stream_openai(cfg: ProviderConfig, messages: list[dict], **kwargs) ->
                     obj = json.loads(data)
                 except json.JSONDecodeError:
                     continue
+                if obj.get("usage"):  # 流末 usage 块(choices 通常为空)
+                    _add_usage(obj["usage"])
                 choices = obj.get("choices") or []
                 if not choices:
                     continue
@@ -153,6 +181,7 @@ async def _stream_anthropic(cfg: ProviderConfig, messages: list[dict], **kwargs)
                     f"上游返回 {resp.status_code}: {body.decode('utf-8', 'ignore')[:300]}",
                     status=resp.status_code,
                 )
+            u_in = u_out = 0
             async for line in resp.aiter_lines():
                 if not line or not line.startswith("data:"):
                     continue
@@ -161,10 +190,17 @@ async def _stream_anthropic(cfg: ProviderConfig, messages: list[dict], **kwargs)
                     obj = json.loads(data)
                 except json.JSONDecodeError:
                     continue
-                if obj.get("type") == "content_block_delta":
+                t = obj.get("type")
+                if t == "message_start":
+                    u_in = int(((obj.get("message") or {}).get("usage") or {}).get("input_tokens") or 0)
+                elif t == "message_delta":
+                    u_out = int((obj.get("usage") or {}).get("output_tokens") or u_out)
+                elif t == "content_block_delta":
                     piece = (obj.get("delta") or {}).get("text")
                     if piece:
                         yield piece
+            if u_in or u_out:
+                _add_usage({"input_tokens": u_in, "output_tokens": u_out})
 
 
 async def _stream_with(cfg: ProviderConfig, messages: list[dict], **kwargs) -> AsyncIterator[str]:

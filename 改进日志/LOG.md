@@ -2,6 +2,20 @@
 
 > 每完成一个改进方向追加一条。最新在最上。
 
+## 2026-06-27 — 找选题增强 III / 8 项优化(Map-Reduce/被引/过滤/证据表导出/中文/试验入空白/token/缓存)
+- **动机**：用户在"进一步优化方向"菜单里选"除 OCR/需 key 源/Tauri/E2B 外其余全做"。E2B 因需 key+数据上云、违背本地隐私定位，跳过。
+- **改动**：
+  - **A1 Map-Reduce**：deep 综述改为先按批(每 18 篇)并发归纳现状小结(`_map_summaries`/`_summarize_chunk`)，再汇总成结构化报告(`_reduce_messages_deep`)，保证每篇都被读到、抗"中段忽略"；分批失败兜底退回整表。
+  - **A2 被引展示+排序**：references 事件带 `cited_by_count`；前端文献列表显示"被引 N"徽标 + 相关性/被引/最新 排序切换。
+  - **A3 检索过滤器**：新增 `searchfilters.py`，把 年份/证据等级(RCT/Meta/系统综述/综述) 翻译到 PubMed([pdat]/[pt])、Europe PMC(FIRST_PDATE/PUB_TYPE)、OpenAlex(from_publication_date/type:review)；前端起始年份下拉 + 证据等级 chip。
+  - **A4 导出证据表**：deep 抽取后发 `evidence` 事件(对象/设计/发现/局限+元数据)；前端证据表面板 + 导出 CSV(`downloadCsv`，带 BOM)。
+  - **B6 中文适配**：query/facet 生成提示词显式要求中文概念先转规范英文/MeSH。
+  - **B7 试验入空白判断**：在研试验摘要(`_trials_note`)喂给 reduce，用于判断哪些方向已有团队布局/仍空白(不作文献引用)。
+  - **C8 token 用量**：llm.py 累计每次调用 usage(OpenAI `stream_options.include_usage` + Anthropic message_delta)；/api/usage 增 tokens；侧栏显示"本次已用 N tokens·M 次调用"，任务完成时刷新。
+  - **C9 检索缓存**：新增 `searchcache.py`(15min TTL)，缓存 search_literature/search_trials 成功结果(不缓存全失败)。
+- **测试**：① `test_searchfilters.py`(过滤翻译+缓存)全 PASS；既有 10 套后端测试无回归；② 真实联网验证：过滤(2022/RCT 命中均≥2022)、缓存(二次 0.000s 命中)、token 用量(13→14 累加)；③ **真实 deep 端到端**(二甲双胍×NAFLD，2019+RCT)：16 篇→证据 16/16→map-reduce→引用核验 7/7 全真，¥1.48 几乎零消耗；④ Playwright **28/28**(新增被引排序/证据表导出/过滤UI/token 显示用例)，dist 已重建。
+- **commit**：见本次提交
+
 ## 2026-06-27 — 找选题增强 II / ClinicalTrials 旁路 + 源选择器 + 空白矩阵表格渲染
 - **现状/动机**：用户要求加 ClinicalTrials 旁路、让用户自选检索源；并反馈"空白矩阵几乎不可读"。
 - **改动**：
