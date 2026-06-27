@@ -136,21 +136,39 @@ body {
   margin: 0 0 10px;
 }
 
-/* ---------- 侧栏：研究流程管线（签名元素） ---------- */
+/* ---------- 侧栏：研究流程管线 + 折叠态 ---------- */
 .sidebar {
-  width: 272px;
+  width: var(--sidebar-w);
   flex-shrink: 0;
-  background: #e9efed;
+  background: linear-gradient(to right, var(--paper-warm), #e9efed);
   border-right: 1px solid var(--line);
   display: flex;
   flex-direction: column;
-  padding: 24px 18px;
+  padding: var(--sp-5) var(--sp-4);
+  transition: width var(--dur-slow) var(--ease-out-soft),
+              padding var(--dur-slow) var(--ease-out-soft),
+              background-color var(--dur-base) var(--ease-out-soft);
+  overflow: hidden;
+  position: relative;
+}
+.sidebar[data-state="expanded"] { --sidebar-w: 272px; }
+.sidebar[data-state="peeking"]  { --sidebar-w: 272px; }
+.sidebar[data-state="collapsed"] {
+  --sidebar-w: 24px;
+  padding: var(--sp-4) 0;
+}
+
+/* brand 行 */
+.brand-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: var(--sp-6);
 }
 .brand {
   display: flex;
   align-items: center;
-  gap: 12px;
-  padding: 4px 8px 26px;
+  gap: var(--sp-3);
   cursor: pointer;
 }
 .brand-logo {
@@ -163,25 +181,64 @@ body {
   background: var(--petrol);
   color: #fff;
   font-size: 19px;
+  flex-shrink: 0;
+  transition: transform var(--dur-base) var(--spring);
 }
+.brand:hover .brand-logo { transform: scale(1.05); }
 .brand-name {
+  font-family: var(--serif);
   font-size: 19px;
   font-weight: 700;
   color: var(--petrol);
   letter-spacing: 0.5px;
+  transition: opacity var(--dur-base) var(--ease-out-soft) var(--dur-fast),
+              max-width var(--dur-slow) var(--ease-out-soft);
+  white-space: nowrap;
+  overflow: hidden;
+}
+.sidebar[data-state="collapsed"] .brand-name { opacity: 0; max-width: 0; }
+.sidebar[data-state="expanded"]  .brand-name,
+.sidebar[data-state="peeking"]   .brand-name { opacity: 1; max-width: 200px; }
+
+.sidebar-toggle {
+  width: 26px;
+  height: 26px;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  background: var(--surface);
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 14px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: all var(--dur-fast) var(--ease-out-soft);
+  flex-shrink: 0;
+}
+.sidebar-toggle:hover {
+  color: var(--petrol);
+  border-color: var(--teal);
+  background: var(--teal-soft);
+}
+.sidebar[data-state="collapsed"] .sidebar-toggle {
+  display: none;
 }
 
+/* 折叠态：brand-row 直接隐藏整行（24px 不够放） */
+.sidebar[data-state="collapsed"] .brand-row { display: none; }
+
+/* nav */
 .nav {
   display: flex;
   flex-direction: column;
   flex: 1;
+  min-width: 0;
 }
-/* 四步管线：节点用衬线序号 + 竖向连接线 */
 .pipeline {
   position: relative;
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: var(--sp-1);
 }
 .pipeline::before {
   content: "";
@@ -205,10 +262,13 @@ body {
   text-align: left;
   color: var(--muted);
   position: relative;
-  transition: background 0.16s, color 0.16s;
+  transition: background var(--dur-fast) var(--ease-out-soft),
+              color var(--dur-fast) var(--ease-out-soft),
+              transform var(--dur-base) var(--spring);
 }
 .nav-item:hover {
   background: rgba(15, 155, 148, 0.07);
+  transform: translateX(2px);
 }
 .nav-item.active {
   background: var(--teal-soft);
@@ -227,61 +287,58 @@ body {
   background: var(--surface);
   font-family: var(--serif);
   font-size: 13px;
-  font-weight: 600;
+  font-weight: 700;
   color: var(--muted);
-  transition: background 0.16s, color 0.16s, border-color 0.16s;
+  transition: background var(--dur-fast), color var(--dur-fast), border-color var(--dur-fast);
 }
-.nav-item:hover .nav-num {
-  border-color: var(--teal);
-  color: var(--petrol);
-}
-.nav-item.active .nav-num {
-  background: var(--petrol);
-  border-color: var(--petrol);
-  color: #fff;
-}
+.nav-item:hover .nav-num { border-color: var(--teal); color: var(--petrol); }
+.nav-item.active .nav-num { background: var(--petrol); border-color: var(--petrol); color: #fff; }
 .nav-num.aux {
   border-style: dashed;
   font-family: var(--sans);
   font-size: 15px;
 }
-.nav-aux {
-  margin-top: 10px;
-}
+.nav-aux { margin-top: 10px; }
 .nav-text {
   display: flex;
   flex-direction: column;
+  min-width: 0;
+  transition: opacity var(--dur-base) var(--ease-out-soft) var(--dur-fast);
 }
 .nav-title {
   font-weight: 600;
   font-size: 14.5px;
   color: var(--ink);
+  white-space: nowrap;
 }
-.nav-item.active .nav-title {
-  color: var(--petrol);
-}
+.nav-item.active .nav-title { color: var(--petrol); }
 .nav-desc {
   font-size: 11.5px;
   color: var(--faint);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
+/* 折叠态：隐藏 nav 文本 */
+.sidebar[data-state="collapsed"] .nav-text { opacity: 0; }
+.sidebar[data-state="collapsed"] .pipeline,
+.sidebar[data-state="collapsed"] .nav-aux,
+.sidebar[data-state="collapsed"] .sidebar-foot { display: none; }
+
+/* sidebar-foot */
 .sidebar-foot {
-  padding: 14px 8px 2px;
+  padding: var(--sp-3) var(--sp-2) 2px;
   font-size: 12.5px;
   border-top: 1px solid var(--line);
   display: flex;
   flex-direction: column;
   gap: 3px;
+  margin-top: var(--sp-3);
 }
-.status-ok {
-  color: var(--ok);
-}
-.status-bad {
-  color: var(--bad);
-}
-.status-wait {
-  color: var(--faint);
-}
+.status-ok { color: var(--ok); }
+.status-bad { color: var(--bad); }
+.status-wait { color: var(--faint); }
 .status-warn {
   display: block;
   margin-top: 4px;
@@ -293,6 +350,27 @@ body {
   margin-top: 4px;
   color: var(--muted);
   font-size: 12px;
+}
+
+/* 折叠态 rail-ticks 指示器 */
+.rail-ticks {
+  display: none;
+  flex-direction: column;
+  align-items: center;
+  gap: 14px;
+  margin-top: 28px;
+}
+.sidebar[data-state="collapsed"] .rail-ticks { display: flex; }
+.rail-tick {
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: #bccac6;
+  transition: background var(--dur-fast), box-shadow var(--dur-fast);
+}
+.rail-tick.active {
+  background: var(--teal);
+  box-shadow: 0 0 0 3px rgba(15, 155, 148, 0.18);
 }
 
 /* ---------- 主区 ---------- */

@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { apiUrl } from "./lib/api";
 import { writePersisted, usePersistentState } from "./lib/usePersistentState";
+import { useSidebar } from "./lib/sidebar";
 import IdeaModule from "./modules/IdeaModule";
 import PlanModule from "./modules/PlanModule";
 import AnalyzeModule from "./modules/AnalyzeModule";
@@ -32,6 +33,7 @@ export default function App() {
   const [healthErr, setHealthErr] = useState(false);
   const [disclaimerDismissed, setDisclaimerDismissed] = usePersistentState("ui:disclaimerDismissed", false);
   const [balance, setBalance] = useState<{ available: boolean; provider?: string; currency?: string; balance?: string } | null>(null);
+  const sidebar = useSidebar();
 
   const goto: Goto = (target, patch) => {
     if (patch) {
@@ -74,10 +76,33 @@ export default function App() {
 
   return (
     <div className="app">
-      <aside className="sidebar">
-        <div className="brand" onClick={() => setActive("home")} data-testid="brand">
-          <span className="brand-logo">🔬</span>
-          <span className="brand-name">科研助手</span>
+      <aside
+        className="sidebar"
+        data-state={sidebar.state}
+        onMouseEnter={sidebar.onPeekEnter}
+        onMouseLeave={sidebar.onPeekLeave}
+        onClick={(e) => {
+          if (sidebar.mode === "collapsed") {
+            const t = e.target as HTMLElement;
+            if (!t.closest(".nav-item") && !t.closest(".sidebar-toggle")) {
+              sidebar.toggle();
+            }
+          }
+        }}
+      >
+        <div className="brand-row">
+          <div className="brand" onClick={() => setActive("home")} data-testid="brand">
+            <span className="brand-logo">🔬</span>
+            <span className="brand-name">科研助手</span>
+          </div>
+          <button
+            className="sidebar-toggle"
+            onClick={sidebar.toggle}
+            data-testid="sidebar-toggle"
+            aria-label={sidebar.mode === "expanded" ? "收起侧栏" : "展开侧栏"}
+          >
+            {sidebar.mode === "expanded" ? "«" : "»"}
+          </button>
         </div>
         <nav className="nav">
           <div className="pipeline">
@@ -132,6 +157,13 @@ export default function App() {
               💰 {balance.provider} 余额 ¥{balance.balance}
             </span>
           )}
+        </div>
+        {/* 折叠态指示条：24px 内的 ticks，用 CSS 在 expanded 下隐藏 */}
+        <div className="rail-ticks" aria-hidden="true">
+          <span className={`rail-tick ${active === "idea" ? "active" : ""}`} />
+          <span className={`rail-tick ${active === "plan" ? "active" : ""}`} />
+          <span className={`rail-tick ${active === "analyze" ? "active" : ""}`} />
+          <span className={`rail-tick ${active === "format" ? "active" : ""}`} />
         </div>
       </aside>
 
