@@ -10,6 +10,14 @@
 - **commit**：<short-hash>
 -->
 
+## 2026-06-27 — 子任务C 稳定性 / C3-b 上传文件大小校验
+- **现状/动机**：`Dropzone` 对选中的文件不做任何大小校验。用户拖入超大文件（如几百 MB 的 CSV/PDF）会被整个读入内存（前端抽取或后端 `file.read()`），导致页面卡死/上传巨慢/后端 OOM，且全程无提示。四个模块都用 Dropzone，缺口一致。
+- **改动**：`frontend/src/components/Dropzone.tsx` 加 `MAX_UPLOAD_BYTES=30MB`；`handle()` 先查大小，超限即 `setErr("文件过大（X MB），请上传小于 30MB 的文件。")` 并 return，不进入 onFile/onText（不交给上层与后端）。
+- **测试**（Playwright）：① `tsc --noEmit` 通过；② 新增 e2e：向数据分析的 input-file `setInputFiles` 一个 31MB 文件，断言显示 `input-file-error` 含“文件过大”、且无 `input-file-info`（未进入“已选择”）——无此守卫该用例会失败；③ **全量 22 个 e2e 全过**。
+- **部署**：已 `npm run build` 重建 dist。
+- **遗留**：后端 `/api/analyze`、`/api/extract` 也应加大小上限防直连绕过（记入 BACKLOG C3-c）。
+- **commit**：见下次提交
+
 ## 2026-06-27 — 子任务E 检索与引用 / E3-a PubMed 检索 NCBI 限速节流
 - **现状/动机**：`literature.py` 的 docstring 自己写了“限速 3 次/秒”，但代码没有任何节流。深度调研流程会连发 4-5 个 facet 的 esearch + gap 查询 + efetch，紧挨着发出，轻松超过 3 次/秒。NCBI 超限返回 429（甚至临时封 IP），而调用处 `except: continue` 会**静默吞掉**——表现为“未检索到文献”时有时无，损害旗舰“找选题”功能可靠性。
 - **改动**：`backend/app/literature.py` 新增全局异步节流 `_throttle()`（`asyncio.Lock` + `time.monotonic`，间隔 `_NCBI_MIN_INTERVAL=0.34s`），在每次 esearch/efetch 的 GET 前 `await _throttle()`。并发与顺序都被串行拉开。

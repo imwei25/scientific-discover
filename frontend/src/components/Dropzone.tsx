@@ -13,6 +13,9 @@ interface Props {
   onText?: (text: string, filename: string, truncated: boolean) => void;
 }
 
+// 单个上传文件大小上限: 超过则前端直接拒绝, 避免把超大文件读入内存/上传导致卡死或后端 OOM。
+const MAX_UPLOAD_BYTES = 30 * 1024 * 1024; // 30MB
+
 // 可复用的拖拽上传区: 支持点击选择与拖拽; 支持 Word/PDF/Excel/CSV/txt。
 export default function Dropzone({ testId, accept, label, hint, mode, onFile, onText }: Props) {
   const inputRef = useRef<HTMLInputElement>(null);
@@ -24,6 +27,11 @@ export default function Dropzone({ testId, accept, label, hint, mode, onFile, on
   const handle = async (file: File | undefined) => {
     if (!file) return;
     setErr("");
+    setInfo("");
+    if (file.size > MAX_UPLOAD_BYTES) {
+      setErr(`文件过大（${(file.size / 1024 / 1024).toFixed(1)}MB），请上传小于 30MB 的文件。`);
+      return;
+    }
     if (mode === "file") {
       setInfo(`已选择：${file.name}`);
       onFile?.(file);

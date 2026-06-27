@@ -20,7 +20,9 @@
 - [x] C1：LLM 超时/网络错误现包装成友好中文 LLMError，瞬时错误自动重试2次，重试耗尽再切备用供应商；已产出内容则不重试避免重复。新增 test_network_retry.py 回归。
 - [ ] C2：降级链路（主→FALLBACK）边界情况覆盖与日志可观测
 - [x] C3-a：数据分析安全护栏修复误杀——`_DANGER` 之前用 `\b` 会把合法的 pandas `df.eval()` 当危险拦掉；改为负向后顾仅拦内置 eval/open（并新增拦 exec），合法 pandas 方法/re.compile/含open列名不再误伤。新增 test_danger_guard.py。
-- [ ] C3：上传文件/参数校验，非法输入给友好提示
+- [x] C3-b：上传文件大小校验——Dropzone 对 >30MB 文件直接拒绝并提示，避免超大文件读入内存/上传卡死。e2e 新增 31MB 文件被拒用例。
+- [ ] C3-c：后端 /api/analyze、/api/extract 也应加大小上限（防 LAN/直连 API 绕过前端导致 OOM）。
+- [ ] C3：上传文件/参数校验，非法输入给友好提示（其余参数校验）
 
 ### 子任务D：前端体验（App.tsx, styles.css）
 - [ ] D1：错误态/空态/加载态统一与可读

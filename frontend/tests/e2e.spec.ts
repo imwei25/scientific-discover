@@ -285,6 +285,21 @@ test("数据分析: AI写代码执行并输出结论", async ({ page }) => {
   await expect(page.getByTestId("export-report-btn")).toBeVisible();
 });
 
+test("上传: 超大文件被前端拒绝并提示", async ({ page }) => {
+  await mockBase(page);
+  await page.goto("/");
+  await page.getByTestId("nav-analyze").click();
+  // 选择一个 31MB 的文件(超过 30MB 上限)
+  await page.getByTestId("input-file").setInputFiles({
+    name: "huge.csv",
+    mimeType: "text/csv",
+    buffer: Buffer.alloc(31 * 1024 * 1024, 97),
+  });
+  // 显示“文件过大”错误, 且不进入“已选择”状态(未把文件交给上层/后端)。
+  await expect(page.getByTestId("input-file-error")).toContainText("文件过大");
+  await expect(page.getByTestId("input-file-info")).toHaveCount(0);
+});
+
 test("导出: 结果可下载为 Markdown 且内容正确", async ({ page }) => {
   await mockBase(page);
   await page.route("**/api/run", (r) =>
