@@ -11,6 +11,16 @@ const NAMES: Record<string, string> = {
 
 export default function HistoryView({ goto }: { goto: Goto }) {
   const [items, setItems] = useState(getHistory());
+  const [exiting, setExiting] = useState(false);
+
+  const handleClear = () => {
+    setExiting(true);
+    setTimeout(() => {
+      clearHistory();
+      setItems([]);
+      setExiting(false);
+    }, 280);
+  };
 
   return (
     <div className="module">
@@ -26,14 +36,11 @@ export default function HistoryView({ goto }: { goto: Goto }) {
           <button
             className="btn-ghost"
             data-testid="clear-history"
-            onClick={() => {
-              clearHistory();
-              setItems([]);
-            }}
+            onClick={handleClear}
           >
             清空历史
           </button>
-          <ul className="history-list" data-testid="history-list">
+          <ul className={`history-list ${exiting ? "exiting" : ""}`} data-testid="history-list">
             {items.map((it) => (
               <li key={it.id} className="history-item" data-testid="history-item">
                 <span className="history-icon">{it.icon}</span>

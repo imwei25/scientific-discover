@@ -1078,6 +1078,12 @@ select {
   flex-direction: column;
   gap: 10px;
 }
+.history-list.exiting .history-item {
+  animation: history-exit 280ms var(--ease-out-soft) forwards;
+}
+@keyframes history-exit {
+  to { opacity: 0; transform: scale(0.96); }
+}
 .history-item {
   display: flex;
   align-items: center;

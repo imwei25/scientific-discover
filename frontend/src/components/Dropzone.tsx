@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { extractFile } from "../lib/extract";
 
 interface Props {
@@ -6,8 +6,6 @@ interface Props {
   accept: string;
   label: string;
   hint?: string;
-  // mode="file": 把原始文件交给上层(用于数据分析的统计管线)
-  // mode="text": 调用后端抽取纯文本后回调(用于润色/上下文)
   mode: "file" | "text";
   onFile?: (file: File) => void;
   onText?: (text: string, filename: string, truncated: boolean) => void;
@@ -23,6 +21,16 @@ export default function Dropzone({ testId, accept, label, hint, mode, onFile, on
   const [busy, setBusy] = useState(false);
   const [info, setInfo] = useState<string>("");
   const [err, setErr] = useState<string>("");
+  const [success, setSuccess] = useState(false);
+
+  useEffect(() => {
+    if (info.startsWith("已导入") || info.startsWith("已选择")) {
+      setSuccess(false);
+      requestAnimationFrame(() => requestAnimationFrame(() => setSuccess(true)));
+      const t = setTimeout(() => setSuccess(false), 700);
+      return () => clearTimeout(t);
+    }
+  }, [info]);
 
   const handle = async (file: File | undefined) => {
     if (!file) return;
@@ -54,7 +62,7 @@ export default function Dropzone({ testId, accept, label, hint, mode, onFile, on
     <div className="field">
       <span className="field-label">{label}</span>
       <div
-        className={`dropzone ${drag ? "dragover" : ""}`}
+        className={`dropzone ${drag ? "dragover" : ""} ${success ? "success" : ""}`}
         data-testid={`${testId}-zone`}
         onClick={() => inputRef.current?.click()}
         onDragOver={(e) => {
