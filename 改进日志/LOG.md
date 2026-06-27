@@ -10,6 +10,12 @@
 - **commit**：<short-hash>
 -->
 
+## 2026-06-27 — 子任务C 稳定性 / C3-c 后端上传大小上限(防直连绕过)
+- **现状/动机**：前端已挡 30MB（C3-b），但 LAN/直连 API 会绕过前端。`/api/analyze`、`/api/extract` 用 `await file.read()` 一次性读全部，超大文件可拖垮内存/磁盘。需后端再设一道。
+- **改动**：`backend/app/main.py` 新增 `MAX_UPLOAD_BYTES=30MB` 与 `_read_capped()`（按 1MB 分块读，累计超限立即停并返回 None，不把超大文件整体读入）。两个上传端点改用之：超限时 analyze 返回 SSE error 事件、extract 返回 `{ok:False,error}`，都给“文件过大”友好提示。limit 改为调用时读模块全局，便于测试覆盖。
+- **测试**（.venv 离线）：① 新增 `test_upload_limit.py`：`_read_capped` 单元（小文件完整/超限 None/恰好等于/空文件）+ **TestClient 端到端** `/api/extract`（临时把上限调 1KB，超限返 ok=False+“过大”、正常小文件 ok=True）；② 全部 7 个后端测试 + `import app.main` 通过。
+- **commit**：见下次提交
+
 ## 2026-06-27 — 子任务C 稳定性 / C3-b 上传文件大小校验
 - **现状/动机**：`Dropzone` 对选中的文件不做任何大小校验。用户拖入超大文件（如几百 MB 的 CSV/PDF）会被整个读入内存（前端抽取或后端 `file.read()`），导致页面卡死/上传巨慢/后端 OOM，且全程无提示。四个模块都用 Dropzone，缺口一致。
 - **改动**：`frontend/src/components/Dropzone.tsx` 加 `MAX_UPLOAD_BYTES=30MB`；`handle()` 先查大小，超限即 `setErr("文件过大（X MB），请上传小于 30MB 的文件。")` 并 return，不进入 onFile/onText（不交给上层与后端）。

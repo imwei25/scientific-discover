@@ -85,6 +85,26 @@ def _sse(event: str, data: dict) -> str:
     return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
 
 
+# 上传大小上限(与前端 Dropzone 一致); 后端再设一道, 防 LAN/直连绕过前端导致 OOM。
+MAX_UPLOAD_BYTES = 30 * 1024 * 1024
+
+
+async def _read_capped(file: UploadFile, limit: int | None = None) -> bytes | None:
+    """分块读取上传文件, 超过 limit 立即停止并返回 None(不把超大文件整个读入内存)。"""
+    lim = MAX_UPLOAD_BYTES if limit is None else limit
+    chunks: list[bytes] = []
+    total = 0
+    while True:
+        chunk = await file.read(1024 * 1024)
+        if not chunk:
+            break
+        total += len(chunk)
+        if total > lim:
+            return None
+        chunks.append(chunk)
+    return b"".join(chunks)
+
+
 @app.post("/api/run")
 async def run(req: RunRequest) -> StreamingResponse:
     try:
@@ -131,8 +151,13 @@ async def analyze(file: UploadFile = File(...), question: str = Form("")) -> Str
     """AI 看懂数据 → 写分析代码 → 本地执行 → 流式输出结论(SSE)。"""
     from .dataanalysis import analyze_data
 
-    content = await file.read()
+    content = await _read_capped(file)
     filename = file.filename or "data.csv"
+
+    if content is None:
+        async def too_big():
+            yield _sse("error", {"message": "文件过大（超过 30MB），请上传更小的数据文件。"})
+        return StreamingResponse(too_big(), media_type="text/event-stream")
 
     async def gen():
         async for event, data in analyze_data(filename, content, question):
@@ -150,7 +175,9 @@ async def extract(file: UploadFile = File(...)) -> dict:
     """抽取上传文档(Word/PDF/Excel/CSV/txt)的纯文本, 供分析或润色。"""
     from .extract import extract_text
 
-    content = await file.read()
+    content = await _read_capped(file)
+    if content is None:
+        return {"ok": False, "error": "文件过大（超过 30MB），请上传更小的文件。"}
     return extract_text(file.filename or "file", content)
 
 
