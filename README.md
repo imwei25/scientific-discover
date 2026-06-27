@@ -64,6 +64,8 @@ powershell -ExecutionPolicy Bypass -File scripts/setup.ps1
 
 配置模型 key：复制 `backend/.env.example` 为 `backend/.env`，填入你的 DeepSeek（或硅基流动 / OpenAI / Anthropic）key。
 
+> 遇到“起不来 / AI 不工作”？双击根目录的 **「检查环境.bat」**（或运行 `backend/.venv/Scripts/python.exe backend/doctor.py`）一键自检：会逐项检查 Python、依赖、`.env`/key、端口，并给出修复建议。
+
 开发模式（前后端分别热更新）：
 
 ```powershell
