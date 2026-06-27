@@ -332,12 +332,12 @@ locked-open ─── 写 localStorage 为 expanded
 
 ## 9. 字体打包
 
-- 在 `frontend/public/fonts/` 放三套 woff2 子集：
-  - `Inter-Variable.woff2`（Latin + Latin Ext）
-  - `NotoSansSC-Regular.woff2` + `NotoSansSC-Bold.woff2`（GB2312 子集）
-  - `NotoSerifSC-Bold.woff2`（GB2312 子集，仅 700 权重，只用于大标题）
+- 在 `frontend/public/fonts/` 放：
+  - `Inter-Regular/Medium/SemiBold/Bold.woff2`（Latin 子集，4 个静态权重，合计 ~96KB）
+  - `NotoSerifSC-Bold.woff2`（chinese-simplified 子集，仅 700 权重，~1.5MB；用于 display / h1 / eyebrow）
+- **不打包 Noto Sans SC**：中文正文走 `--sans` 栈中 `'PingFang SC', 'Microsoft YaHei'` 的系统字体，质量足够高且更"原生"，省 ~800KB。
 - `styles.css` 顶部 `@font-face` 引用 `/fonts/xxx.woff2`，`font-display: swap`
-- 总体积控制在 ≤ 600KB
+- 总体积 ~1.6MB（CJK serif 一旦自托管就无法做小，分析过：常用 6800 字 GB2312 子集本身就是 1.2-1.7MB；强行裁更小会丢科研术语字）
 - 不依赖外部 CDN（Tauri 离线场景必需）
 
 ## 10. localStorage 持久化键
