@@ -260,6 +260,29 @@ test("找选题: 追问追加问答 + 按意见修改报告", async ({ page }) =
   await expect(page.getByTestId("result-text")).toContainText("修改后的报告");
 });
 
+test("投稿包: 预提交体检 + 生成投稿信", async ({ page }) => {
+  await mockBase(page);
+  await page.route("**/api/run", (r) =>
+    r.fulfill({
+      contentType: "text/event-stream",
+      body: sse(
+        { event: "delta", data: { text: "投稿包草稿：缺少利益冲突声明，请补充。" } },
+        { event: "done", data: {} },
+      ),
+    }),
+  );
+  await page.goto("/");
+  await page.getByTestId("nav-format").click();
+  await page.getByTestId("input-manuscript").fill("我的论文稿件正文……");
+  // 预提交体检
+  await page.getByTestId("precheck-btn").click();
+  await expect(page.getByTestId("precheck-panel")).toContainText("缺少利益冲突声明");
+  // 投稿信 + Word 导出按钮
+  await page.getByTestId("cover-btn").click();
+  await expect(page.getByTestId("cover-panel")).toContainText("投稿包草稿");
+  await expect(page.getByTestId("cover-panel").getByTestId("export-docx-btn")).toBeVisible();
+});
+
 test("报告规范核对: 选择规范并逐条核对稿件", async ({ page }) => {
   await mockBase(page);
   await page.route("**/api/run", (r) =>

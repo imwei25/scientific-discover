@@ -146,11 +146,51 @@ def build_format(inputs: dict) -> list[dict]:
     return [{"role": "system", "content": system}, {"role": "user", "content": user}]
 
 
+def build_precheck(inputs: dict) -> list[dict]:
+    journal = get_journal(inputs.get("journal_id", ""))
+    name = journal["name"] if journal else "目标期刊"
+    rules = journal["rules"] if journal else "通用学术论文格式。"
+    system = (
+        "你是熟悉投稿流程的学术编辑，为作者做【投稿前预提交体检】，目标是投稿前自查、避免被秒退。\n"
+        f"目标期刊：《{name}》，其要求：\n{rules}\n\n"
+        "请对照下面稿件逐项检查，输出一个 Markdown 表格：| 检查项 | 状态 | 说明/位置 | 修改建议 |。"
+        "状态只用三选一：✅通过 / ⚠️注意 / ❌缺失。\n"
+        "检查项至少覆盖：① 必需章节是否齐全（标题/摘要/关键词/引言/方法/结果/讨论/结论/参考文献）；"
+        "② 结构与章节顺序是否符合该刊；③ 篇幅是否可能超限（给出正文与摘要的粗略字数统计）；"
+        "④ 必备声明是否具备：伦理审批与知情同意、利益冲突(COI)、数据可得性声明、资助来源、作者贡献、(如适用)试验注册号；"
+        "⑤ 参考文献是否完整、风格是否一致；⑥ 图表是否有标题且在正文被引用。\n"
+        "表格前先列【必须修复(❌)】要点，表格后给一句总体结论。"
+        "铁律：只依据稿件内容判断，不臆造；无法确定的标⚠️并提示作者确认。用中文。"
+    )
+    user = f"【稿件全文】\n{inputs.get('manuscript', '')}"
+    return [{"role": "system", "content": system}, {"role": "user", "content": user}]
+
+
+def build_coverletter(inputs: dict) -> list[dict]:
+    journal = get_journal(inputs.get("journal_id", ""))
+    name = journal["name"] if journal else "目标期刊"
+    system = (
+        f"你是资深通讯作者，正为向《{name}》投稿撰写投稿信(cover letter)。基于下面稿件，写一封专业、简洁"
+        "（约 250–350 字）的中文投稿信，包含：\n"
+        "① 称呼（Dear Editor / 尊敬的编辑）；② 一句话说明投稿稿件的标题与文章类型；"
+        "③ 2–3 句概述研究做了什么、主要发现与创新点（只用稿件中确有的内容，绝不编造数字或结论）；"
+        "④ 1–2 句说明为何契合该刊的读者与范围；"
+        "⑤ 常规声明：本研究为原创、未一稿多投/未在他处发表、全体作者已审阅并同意投稿、无重大利益冲突"
+        "（若稿件未提供相关信息，用 [占位：需作者确认] 标注，不要替作者断言）；"
+        "⑥ 礼貌结语与落款占位（[通讯作者姓名]/[单位与通讯地址]/[邮箱]/[日期]）。\n"
+        "铁律：不得编造稿件中不存在的结果、数据或作者信息；缺失信息一律用 [占位] 标注。用中文 Markdown。"
+    )
+    user = f"【稿件全文/摘要】\n{inputs.get('manuscript', '')}"
+    return [{"role": "system", "content": system}, {"role": "user", "content": user}]
+
+
 _BUILDERS = {
     "idea": build_idea,
     "plan": build_plan,
     "sap": build_sap,
     "checklist": build_checklist,
+    "precheck": build_precheck,
+    "coverletter": build_coverletter,
     "write": build_write,
     "format": build_format,
 }

@@ -19,6 +19,10 @@ export default function FormatModule() {
   const [manuscript, setManuscript] = usePersistentState("format:manuscript", "");
   const [downloading, setDownloading] = useState(false);
   const { text, running, error, start, stop, setText } = useStream("format:result");
+  // 投稿包: 预提交体检 + 投稿信(各自独立流)
+  const precheck = useStream("format:precheck");
+  const cover = useStream("format:cover");
+  const [coverDocxBusy, setCoverDocxBusy] = useState(false);
 
   // 参考文献格式化(CSL)
   const [refsInput, setRefsInput] = usePersistentState("format:refs", "");
@@ -78,10 +82,43 @@ export default function FormatModule() {
     start("format", { manuscript, journal_id: journalId });
   };
 
+  const runPrecheck = () => {
+    if (!manuscript.trim() || !journalId || precheck.running) return;
+    precheck.start("precheck", { manuscript, journal_id: journalId });
+  };
+  const runCover = () => {
+    if (!manuscript.trim() || !journalId || cover.running) return;
+    cover.start("coverletter", { manuscript, journal_id: journalId });
+  };
+  const downloadCover = async () => {
+    if (!cover.text || coverDocxBusy) return;
+    setCoverDocxBusy(true);
+    try {
+      const resp = await fetch(apiUrl("/api/docx"), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text: cover.text, journal_id: "", references: [] }),
+      });
+      const blob = await resp.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = "cover-letter.docx";
+      a.click();
+      URL.revokeObjectURL(url);
+    } finally {
+      setCoverDocxBusy(false);
+    }
+  };
+
   const reset = () => {
     if (running) stop();
+    if (precheck.running) precheck.stop();
+    if (cover.running) cover.stop();
     setManuscript("");
     setText("");
+    precheck.setText("");
+    cover.setText("");
     setRefsInput("");
     setFmtRefs([]);
     setRefsErr(null);
@@ -179,6 +216,62 @@ export default function FormatModule() {
         <button className="btn-secondary" onClick={downloadDocx} disabled={downloading} data-testid="download-btn">
           {downloading ? "正在生成…" : fmtRefs.length ? "⬇ 下载 Word 文件（含格式化参考文献）" : "⬇ 下载 Word 文件"}
         </button>
+      )}
+
+      <h2 className="section-title">🚀 投稿包（投稿前自查 + 投稿信）</h2>
+      <p className="section-hint">
+        基于上面的稿件与目标期刊：一键做<strong>预提交体检</strong>（必需章节/声明/字数/参考文献是否齐全），
+        并自动生成<strong>投稿信（Cover Letter）</strong>。
+      </p>
+      <div className="form-actions">
+        <button
+          className="btn-primary"
+          onClick={runPrecheck}
+          disabled={!manuscript.trim() || !journalId || precheck.running}
+          data-testid="precheck-btn"
+        >
+          {precheck.running ? "体检中…" : "预提交体检"}
+        </button>
+        <button
+          className="btn-secondary"
+          onClick={runCover}
+          disabled={!manuscript.trim() || !journalId || cover.running}
+          data-testid="cover-btn"
+        >
+          {cover.running ? "生成中…" : "生成投稿信"}
+        </button>
+      </div>
+
+      {(precheck.text || precheck.running || precheck.error) && (
+        <>
+          <h3 className="section-title" data-testid="precheck-title">✅ 预提交体检</h3>
+          <ResultPanel
+            text={precheck.text}
+            running={precheck.running}
+            error={precheck.error}
+            onStop={precheck.stop}
+            exportName="预提交体检"
+            placeholder="必需章节/声明/字数/参考文献等检查结果会显示在这里。"
+            panelTestId="precheck-panel"
+          />
+        </>
+      )}
+
+      {(cover.text || cover.running || cover.error) && (
+        <>
+          <h3 className="section-title" data-testid="cover-title">✉️ 投稿信</h3>
+          <ResultPanel
+            text={cover.text}
+            running={cover.running}
+            error={cover.error}
+            onStop={cover.stop}
+            exportName="投稿信"
+            placeholder="投稿信草稿会显示在这里。"
+            onExportDocx={downloadCover}
+            exportingDocx={coverDocxBusy}
+            panelTestId="cover-panel"
+          />
+        </>
       )}
 
       <h2 className="section-title">参考文献格式化</h2>
