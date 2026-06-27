@@ -2,6 +2,14 @@
 
 > 每完成一个改进方向追加一条。最新在最上。
 
+## 2026-06-28 — 质量打磨/一致性（loop 第8轮）：历史记录覆盖新模块 + 文档更新
+- **主题**：功能已全，转向一致性/文档/稳健性自查。
+- **自查结论**：后端 14 套测试全过、app.main 导入正常(健康)。发现并修复两处一致性问题：
+  - **历史记录模块名缺失**：HistoryView 的 NAMES 只含旧 4 模块，新模块(imrad/journal/checklist/rebuttal)在历史里显示英文 id。补全 8 模块中文名；并给"论文初稿"模块补上 addHistory(此前唯一未写历史的模块)，history.ts 注释同步。
+  - **使用说明过期**：仍写"四大功能"。改为完整流程介绍 + 8 模块功能表 + 更新拖拽/串联/历史说明。
+- **测试**：新增 e2e"历史记录新模块显示中文名并可恢复"(rebuttal→回复审稿、可恢复 input-reviews)；Playwright 45/45；dist 已重建。
+- **commit**：见本次提交
+
 ## 2026-06-28 — 实用增强（loop 第7轮）：图注生成 + PICO/纳排提取
 - **① 数据分析图注生成**：新增 `figcaptions.py` + `/api/figure-captions`(JSON)：基于研究目的/代码/真实输出/结论为每张图生成规范中文图注(『图N. ……』, 不编造数字, 数量对齐)。AnalyzeModule 图表区加"生成规范图注"按钮, 图注显示在每张图下。
 - **② PICO/纳排提取（找选题）**：prompts 加 `build_pico`(PICOTS 表格 + 建议纳入/排除标准, 信息不足标 [需明确])，module=pico。IdeaModule 加"提取 PICO/纳排标准"按钮 + 折叠面板(复用现有 field/keywords/background 输入)。

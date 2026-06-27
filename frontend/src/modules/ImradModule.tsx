@@ -1,6 +1,7 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { streamImrad, runModule } from "../lib/sse";
 import { usePersistentState, readPersisted } from "../lib/usePersistentState";
+import { addHistory } from "../lib/history";
 import { apiUrl } from "../lib/api";
 import Markdown from "../components/Markdown";
 import { downloadText, tsName } from "../lib/download";
@@ -19,6 +20,19 @@ export default function ImradModule() {
   const [error, setError] = useState<string | null>(null);
   const [docxBusy, setDocxBusy] = useState(false);
   const ctrl = useRef<AbortController | null>(null);
+
+  const savedRef = useRef("");
+  useEffect(() => {
+    if (!running && !error && draft && savedRef.current !== draft) {
+      savedRef.current = draft;
+      addHistory({
+        module: "imrad",
+        icon: "📝",
+        title: topic.slice(0, 40) || "论文初稿",
+        data: { "imrad:topic": topic, "imrad:background": background, "imrad:methods": methods, "imrad:results": results, "imrad:discussion": discussion, "imrad:draft": draft },
+      });
+    }
+  }, [running, error, draft, topic]);
 
   // 投稿包打包
   const [bundleBusy, setBundleBusy] = useState(false);

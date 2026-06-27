@@ -1,7 +1,7 @@
 // 本地历史记录: 保存每次生成的结果, 供回看/恢复到对应模块。
 export interface HistoryEntry {
   id: string;
-  module: string; // idea | plan | analyze | format
+  module: string; // idea | plan | analyze | imrad | journal | format | checklist | rebuttal
   icon: string;
   title: string;
   time: number;

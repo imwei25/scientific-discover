@@ -6,7 +6,11 @@ const NAMES: Record<string, string> = {
   idea: "找选题",
   plan: "实验规划",
   analyze: "数据分析",
+  imrad: "论文初稿",
+  journal: "智能选刊",
   format: "期刊排版",
+  checklist: "报告规范核对",
+  rebuttal: "回复审稿",
 };
 
 export default function HistoryView({ goto }: { goto: Goto }) {

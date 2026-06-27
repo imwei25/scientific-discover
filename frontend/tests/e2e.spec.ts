@@ -411,6 +411,27 @@ test("论文初稿: 关键词/MeSH 推荐", async ({ page }) => {
   await expect(page.getByTestId("kw-panel")).toContainText("MeSH");
 });
 
+test("历史记录: 新模块显示中文名并可恢复", async ({ page }) => {
+  await mockBase(page);
+  await page.goto("/");
+  await page.evaluate(() => {
+    localStorage.setItem("ra:history", JSON.stringify([
+      { id: "1", module: "rebuttal", icon: "✍️", title: "返修回复", time: 1750000000000, data: { "rebuttal:reviews": "R1: ..." } },
+      { id: "2", module: "imrad", icon: "📝", title: "我的初稿", time: 1750000000000, data: {} },
+      { id: "3", module: "journal", icon: "🎯", title: "选刊", time: 1750000000000, data: {} },
+    ]));
+  });
+  await page.getByTestId("nav-history").click();
+  const list = page.getByTestId("history-list");
+  await expect(list).toContainText("回复审稿");   // 不是 "rebuttal"
+  await expect(list).toContainText("论文初稿");
+  await expect(list).toContainText("智能选刊");
+  await expect(list).not.toContainText("rebuttal");
+  // 恢复回复审稿
+  await page.getByTestId("history-item").first().getByTestId("restore-btn").click();
+  await expect(page.getByTestId("input-reviews")).toHaveValue(/R1/);
+});
+
 test("首页: 工作流总览卡片可导航", async ({ page }) => {
   await mockBase(page);
   await page.goto("/");
