@@ -212,7 +212,9 @@ body {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  transition: all var(--dur-fast) var(--ease-out-soft);
+  transition: color var(--dur-fast) var(--ease-out-soft),
+              background var(--dur-fast) var(--ease-out-soft),
+              border-color var(--dur-fast) var(--ease-out-soft);
   flex-shrink: 0;
 }
 .sidebar-toggle:hover {
@@ -365,12 +367,12 @@ body {
   width: 4px;
   height: 4px;
   border-radius: 50%;
-  background: #bccac6;
+  background: var(--faint);
   transition: background var(--dur-fast), box-shadow var(--dur-fast);
 }
 .rail-tick.active {
   background: var(--teal);
-  box-shadow: 0 0 0 3px rgba(15, 155, 148, 0.18);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--teal) 22%, transparent);
 }
 
 /* ---------- 主区 ---------- */

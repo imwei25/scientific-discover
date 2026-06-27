@@ -76,6 +76,7 @@ export default function App() {
 
   return (
     <div className="app">
+      {/* 折叠态下，点击侧栏空白区（非 nav-item / sidebar-toggle）= 锁定展开 */}
       <aside
         className="sidebar"
         data-state={sidebar.state}

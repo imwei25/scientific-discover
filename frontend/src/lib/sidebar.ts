@@ -34,8 +34,8 @@ export function useSidebar(): SidebarApi {
   const toggle = useCallback(() => {
     clearTimer();
     setPeeking(false);
-    setMode(mode === "expanded" ? "collapsed" : "expanded");
-  }, [mode, setMode]);
+    setMode((prev) => (prev === "expanded" ? "collapsed" : "expanded"));
+  }, [setMode]);
 
   const onPeekEnter = useCallback(() => {
     if (mode !== "collapsed") return;
