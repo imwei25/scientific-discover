@@ -5,6 +5,7 @@ import { addHistory } from "../lib/history";
 import { apiUrl } from "../lib/api";
 import ResultPanel from "../components/ResultPanel";
 import Dropzone from "../components/Dropzone";
+import { downloadCsv, tsName } from "../lib/download";
 
 export default function PlanModule() {
   const [idea, setIdea] = usePersistentState("plan:idea", "");
@@ -79,6 +80,41 @@ export default function PlanModule() {
   const [ssK, setSsK] = useState("3");
   const [ssResult, setSsResult] = useState<{ per_group?: number; total?: number; note?: string; ok?: boolean; error?: string } | null>(null);
   const [ssBusy, setSsBusy] = useState(false);
+
+  // —— 随机化分组表（确定性，零额度）——
+  const [rzN, setRzN] = useState("60");
+  const [rzGroups, setRzGroups] = useState("试验组,对照组");
+  const [rzRatio, setRzRatio] = useState("1,1");
+  const [rzMethod, setRzMethod] = useState("block");
+  const [rzBlock, setRzBlock] = useState("4");
+  const [rzSeed, setRzSeed] = useState("2026");
+  const [rzResult, setRzResult] = useState<{ ok?: boolean; error?: string; rows?: { seq: number; group: string }[]; counts?: Record<string, number>; method?: string; block_size?: number | null } | null>(null);
+  const [rzBusy, setRzBusy] = useState(false);
+
+  const genRandomize = async () => {
+    setRzBusy(true);
+    setRzResult(null);
+    try {
+      const resp = await fetch(apiUrl("/api/randomize"), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          design: "randomize",
+          params: { n: rzN, groups: rzGroups, ratio: rzRatio, method: rzMethod, block_size: rzBlock, seed: rzSeed },
+        }),
+      });
+      setRzResult(await resp.json());
+    } catch (e) {
+      setRzResult({ ok: false, error: `生成失败：${(e as Error).message}` });
+    } finally {
+      setRzBusy(false);
+    }
+  };
+
+  const exportRandomize = () => {
+    if (!rzResult?.rows) return;
+    downloadCsv(tsName("随机化分组表", "csv"), ["序号", "分组"], rzResult.rows.map((r) => [r.seq, r.group]));
+  };
 
   const calcSampleSize = async () => {
     setSsBusy(true);
@@ -255,6 +291,78 @@ export default function PlanModule() {
               </div>
             ) : (
               <div className="result-error" data-testid="ss-error">{ssResult.error}</div>
+            )
+          )}
+        </div>
+      </details>
+
+      <details className="ss-calc" data-testid="rz-calc">
+        <summary>🎲 随机化分组表（确定性，固定种子可复现，免费）</summary>
+        <div className="form" style={{ marginTop: 12 }}>
+          <div className="ss-row">
+            <label className="field">
+              <span className="field-label">样本量 n</span>
+              <input data-testid="rz-n" value={rzN} onChange={(e) => setRzN(e.target.value)} />
+            </label>
+            <label className="field">
+              <span className="field-label">随机方法</span>
+              <select data-testid="rz-method" value={rzMethod} onChange={(e) => setRzMethod(e.target.value)}>
+                <option value="block">置换区组随机（推荐，均衡）</option>
+                <option value="simple">简单随机</option>
+              </select>
+            </label>
+          </div>
+          <div className="ss-row">
+            <label className="field">
+              <span className="field-label">分组（逗号分隔）</span>
+              <input data-testid="rz-groups" value={rzGroups} onChange={(e) => setRzGroups(e.target.value)} />
+            </label>
+            <label className="field">
+              <span className="field-label">分配比例（如 1,1 / 2,1）</span>
+              <input data-testid="rz-ratio" value={rzRatio} onChange={(e) => setRzRatio(e.target.value)} />
+            </label>
+          </div>
+          <div className="ss-row">
+            {rzMethod === "block" && (
+              <label className="field">
+                <span className="field-label">区组大小（比例和的整数倍）</span>
+                <input data-testid="rz-block" value={rzBlock} onChange={(e) => setRzBlock(e.target.value)} />
+              </label>
+            )}
+            <label className="field">
+              <span className="field-label">随机种子（同种子→同序列）</span>
+              <input data-testid="rz-seed" value={rzSeed} onChange={(e) => setRzSeed(e.target.value)} />
+            </label>
+          </div>
+          <button className="btn-primary" onClick={genRandomize} disabled={rzBusy} data-testid="rz-btn">
+            {rzBusy ? "生成中…" : "生成随机化分组表"}
+          </button>
+
+          {rzResult && (
+            rzResult.ok && rzResult.rows ? (
+              <div className="ss-result" data-testid="rz-result">
+                <strong>
+                  共 {rzResult.rows.length} 例：
+                  {Object.entries(rzResult.counts || {}).map(([g, c]) => `${g} ${c}`).join("，")}
+                </strong>
+                <span className="field-hint">
+                  方法：{rzResult.method === "block" ? `置换区组（区组大小 ${rzResult.block_size}）` : "简单随机"}，种子 {rzSeed}（可复现）
+                </span>
+                <div className="md-table-wrap" style={{ maxHeight: 220, overflow: "auto" }}>
+                  <table className="evidence-table">
+                    <thead><tr><th>序号</th><th>分组</th></tr></thead>
+                    <tbody>
+                      {rzResult.rows.slice(0, 20).map((r) => (
+                        <tr key={r.seq}><td>{r.seq}</td><td>{r.group}</td></tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+                {rzResult.rows.length > 20 && <span className="field-hint">（仅预览前 20 行，导出 CSV 查看全部）</span>}
+                <button className="btn-ghost btn-sm" onClick={exportRandomize} data-testid="rz-export-btn">导出 CSV</button>
+              </div>
+            ) : (
+              <div className="result-error" data-testid="rz-error">{rzResult.error}</div>
             )
           )}
         </div>

@@ -83,6 +83,33 @@ export default function ImradModule() {
   const [absErr, setAbsErr] = useState<string | null>(null);
   const absCtrl = useRef<AbortController | null>(null);
 
+  // 关键词 / MeSH 推荐
+  const [keywords, setKeywords] = usePersistentState("imrad:keywords", "");
+  const [kwRunning, setKwRunning] = useState(false);
+  const kwCtrl = useRef<AbortController | null>(null);
+
+  const genKeywords = async () => {
+    const src = absPoints.trim() || abstract.trim() || background.trim();
+    if (!src || kwRunning) return;
+    setKeywords("");
+    setKwRunning(true);
+    kwCtrl.current = new AbortController();
+    await runModule(
+      "keywords",
+      { points: src },
+      {
+        signal: kwCtrl.current.signal,
+        onDelta: (t) => setKeywords((p) => p + t),
+        onError: () => setKwRunning(false),
+        onDone: () => {
+          setKwRunning(false);
+          window.dispatchEvent(new Event("usage-updated"));
+        },
+      },
+    );
+    setKwRunning(false);
+  };
+
   const importFromModules = () => {
     const idea = readPersisted("idea:result", "");
     const plan = readPersisted("plan:result", "");
@@ -294,9 +321,14 @@ export default function ImradModule() {
             结构式（四段带小标题）
           </label>
         </div>
-        <button className="btn-primary" onClick={genAbstract} disabled={!absPoints.trim() || absRunning} data-testid="abs-btn">
-          {absRunning ? "生成中…" : "生成摘要"}
-        </button>
+        <div className="form-actions">
+          <button className="btn-primary" onClick={genAbstract} disabled={!absPoints.trim() || absRunning} data-testid="abs-btn">
+            {absRunning ? "生成中…" : "生成摘要"}
+          </button>
+          <button className="btn-secondary" onClick={genKeywords} disabled={kwRunning} data-testid="kw-btn">
+            {kwRunning ? "推荐中…" : "推荐关键词 / MeSH"}
+          </button>
+        </div>
       </div>
       {absErr && <div className="result-error" data-testid="abs-error">{absErr}</div>}
       {(abstract || absRunning) && (
@@ -313,6 +345,18 @@ export default function ImradModule() {
           <div className="result-text" data-testid="abs-text">
             {abstract ? <Markdown>{abstract}</Markdown> : <span className="result-placeholder">正在生成…</span>}
             {absRunning && <span className="cursor-blink">▍</span>}
+          </div>
+        </div>
+      )}
+
+      {(keywords || kwRunning) && (
+        <div className="result-panel" data-testid="kw-panel">
+          <div className="result-toolbar">
+            <span className="result-status">{kwRunning ? "推荐中…" : "关键词 / MeSH"}</span>
+          </div>
+          <div className="result-text" data-testid="kw-text">
+            {keywords ? <Markdown>{keywords}</Markdown> : <span className="result-placeholder">正在推荐…</span>}
+            {kwRunning && <span className="cursor-blink">▍</span>}
           </div>
         </div>
       )}

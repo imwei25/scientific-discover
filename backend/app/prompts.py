@@ -168,6 +168,19 @@ def build_abstract(inputs: dict) -> list[dict]:
     return [{"role": "system", "content": system}, {"role": "user", "content": user}]
 
 
+def build_keywords(inputs: dict) -> list[dict]:
+    system = (
+        "你是医学文献标引专家。基于用户提供的摘要/要点，推荐适合投稿与检索的关键词。"
+        "请用 Markdown 输出两部分：\n"
+        "## 关键词（Keywords）\n给出 5–8 个中英对照的自由关键词（每行：中文 / English）。\n"
+        "## MeSH 主题词\n给出 4–8 个**规范的 MeSH 标准主题词（英文术语）**，尽量用 PubMed MeSH 树中确有的词，"
+        "每个后用一句话标注其适用范围；不确定是否为标准 MeSH 词的，标注“（建议在 MeSH 数据库核对）”。\n"
+        "铁律：只依据用户内容，不编造与主题无关的词；不要输出解释性前后缀。用中文。"
+    )
+    user = f"【摘要/要点】\n{inputs.get('points', '')[:4000]}"
+    return [{"role": "system", "content": system}, {"role": "user", "content": user}]
+
+
 def build_precheck(inputs: dict) -> list[dict]:
     journal = get_journal(inputs.get("journal_id", ""))
     name = journal["name"] if journal else "目标期刊"
@@ -212,6 +225,7 @@ _BUILDERS = {
     "sap": build_sap,
     "checklist": build_checklist,
     "abstract": build_abstract,
+    "keywords": build_keywords,
     "precheck": build_precheck,
     "coverletter": build_coverletter,
     "write": build_write,

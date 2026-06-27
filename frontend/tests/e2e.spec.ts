@@ -330,6 +330,41 @@ test("投稿包: 预提交体检 + 生成投稿信", async ({ page }) => {
   await expect(page.getByTestId("cover-panel").getByTestId("export-docx-btn")).toBeVisible();
 });
 
+test("实验规划: 随机化分组表生成并导出", async ({ page }) => {
+  await mockBase(page);
+  await page.route("**/api/randomize", (r) =>
+    r.fulfill({ json: { ok: true, rows: [{ seq: 1, group: "试验组" }, { seq: 2, group: "对照组" }], counts: { 试验组: 1, 对照组: 1 }, method: "block", block_size: 4, seed: 2026 } }),
+  );
+  await page.goto("/");
+  await page.getByTestId("nav-plan").click();
+  await page.getByTestId("rz-calc").locator("summary").click();
+  await page.getByTestId("rz-n").fill("2");
+  await page.getByTestId("rz-btn").click();
+  await expect(page.getByTestId("rz-result")).toContainText("试验组 1");
+  const dl = page.waitForEvent("download");
+  await page.getByTestId("rz-export-btn").click();
+  expect((await dl).suggestedFilename()).toMatch(/随机化分组表.*\.csv/);
+});
+
+test("论文初稿: 关键词/MeSH 推荐", async ({ page }) => {
+  await mockBase(page);
+  await page.route("**/api/run", (r) =>
+    r.fulfill({
+      contentType: "text/event-stream",
+      body: sse(
+        { event: "delta", data: { text: "## 关键词\n糖尿病 / Diabetes\n## MeSH 主题词\nMetformin" } },
+        { event: "done", data: {} },
+      ),
+    }),
+  );
+  await page.goto("/");
+  await page.getByTestId("nav-imrad").click();
+  await page.getByTestId("abs-points").fill("二甲双胍治疗糖尿病合并脂肪肝");
+  await page.getByTestId("kw-btn").click();
+  await expect(page.getByTestId("kw-panel")).toContainText("关键词");
+  await expect(page.getByTestId("kw-panel")).toContainText("MeSH");
+});
+
 test("首页: 工作流总览卡片可导航", async ({ page }) => {
   await mockBase(page);
   await page.goto("/");

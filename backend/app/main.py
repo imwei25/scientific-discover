@@ -303,6 +303,14 @@ async def sample_size(req: SampleSizeRequest) -> dict:
     return compute(req.design, req.params)
 
 
+@app.post("/api/randomize")
+async def randomize_ep(req: SampleSizeRequest) -> dict:
+    """确定性生成随机化分组表(简单/置换区组, 固定种子可复现, 零额度)。"""
+    from .randomize import generate
+
+    return generate(req.params)
+
+
 def _safe_name(name: str) -> str:
     """清理 zip 内文件名, 防路径穿越。"""
     n = (name or "file").replace("\\", "/").split("/")[-1].strip()
