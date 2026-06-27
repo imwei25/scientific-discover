@@ -6,6 +6,8 @@
 from __future__ import annotations
 
 import asyncio
+import datetime
+import math
 import re
 import time
 import xml.etree.ElementTree as ET
@@ -14,6 +16,7 @@ import httpx
 
 from .config import settings
 from .europepmc import search_epmc
+from .openalex import search_openalex
 
 _BASE = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils"
 _TOOL = "research-assistant"
@@ -165,52 +168,96 @@ def _title_key(title: str) -> str:
     return _PUNCT_RE.sub(" ", title.lower()).strip()
 
 
-def _merge_sources(pubmed: list[dict], epmc: list[dict], cap: int) -> list[dict]:
-    """合并 PubMed + Europe PMC, 优先保留 PubMed 版本（pmid/doi/title 三键去重）。"""
-    out: list[dict] = list(pubmed)
-    pmids = {p["pmid"] for p in pubmed if p.get("pmid")}
-    dois = {p["doi"] for p in pubmed if p.get("doi")}
-    titles = {_title_key(p["title"]) for p in pubmed if p.get("title")}
-    for p in epmc:
-        if p.get("pmid") and p["pmid"] in pmids:
-            continue
-        if p.get("doi") and p["doi"] in dois:
-            continue
-        tk = _title_key(p.get("title", ""))
-        if tk and tk in titles:
-            continue
-        out.append(p)
-        if p.get("pmid"):
-            pmids.add(p["pmid"])
-        if p.get("doi"):
-            dois.add(p["doi"])
-        if tk:
-            titles.add(tk)
-        if len(out) >= cap:
-            break
-    return out[:cap]
+def _rank_papers(papers: list[dict]) -> list[dict]:
+    """对合并后的候选池排序选篇: 相关性(0.5) + 被引热度(0.3) + 新近(0.2) 加权。
+
+    - 相关性: 用各源返回顺序里的最佳位置 _pos（越靠前越相关）。
+    - 被引: log1p(cited_by_count) 归一（仅 OpenAlex 提供, 其它源 0）。
+    - 新近: 近 15 年内线性加权, 越新越高（找选题/找空白对新工作更敏感）。
+    被引数只作"热度信号"参与排序, 不当精确学术指标对外展示。
+    """
+    cur_year = datetime.date.today().year
+
+    def score(p: dict) -> float:
+        rel = 1.0 / (1.0 + p.get("_pos", 999))
+        cited = p.get("cited_by_count", 0) or 0
+        cite = min(1.0, math.log1p(cited) / math.log1p(1000))
+        try:
+            yr = int(p.get("year", "") or 0)
+        except (ValueError, TypeError):
+            yr = 0
+        recency = 0.0
+        if yr:
+            recency = max(0.0, min(1.0, (yr - (cur_year - 15)) / 15.0))
+        return 0.5 * rel + 0.3 * cite + 0.2 * recency
+
+    return sorted(papers, key=score, reverse=True)
+
+
+def _merge_all(source_lists: list[list[dict]], cap: int) -> list[dict]:
+    """合并多源候选(pmid/doi/title 三键去重), 再排序选篇取前 cap。
+
+    source_lists 顺序即"保留优先级": 第一个里先出现的版本胜出(PubMed 在前→链接走 PubMed)。
+    合并时: 被引数取 max、缺失摘要用其它源补、缺 pmid/doi 也互补。
+    """
+    merged: dict[str, dict] = {}
+    for papers in source_lists:
+        for pos, p in enumerate(papers):
+            key = p.get("doi") or p.get("pmid") or _title_key(p.get("title", ""))
+            if not key:
+                continue
+            if key not in merged:
+                q = dict(p)
+                q["_pos"] = pos
+                q.setdefault("cited_by_count", 0)
+                merged[key] = q
+            else:
+                cur = merged[key]
+                cur["_pos"] = min(cur["_pos"], pos)
+                cur["cited_by_count"] = max(
+                    cur.get("cited_by_count", 0) or 0, p.get("cited_by_count", 0) or 0
+                )
+                if not cur.get("abstract") and p.get("abstract"):
+                    cur["abstract"] = p["abstract"]
+                if not cur.get("pmid") and p.get("pmid"):
+                    cur["pmid"] = p["pmid"]
+                    cur["url"] = p["url"]
+                    cur["source"] = p["source"]
+                if not cur.get("doi") and p.get("doi"):
+                    cur["doi"] = p["doi"]
+    ranked = _rank_papers(list(merged.values()))
+    for p in ranked:
+        p.pop("_pos", None)
+    return ranked[:cap]
 
 
 async def search_literature(queries: list[str], per_query: int = 6, cap: int = 18) -> dict:
-    """并发检索 PubMed + Europe PMC, 合并去重。
+    """并发检索 PubMed + Europe PMC + OpenAlex, 合并去重 + 排序选篇。
 
     返回 {"papers", "network_errors", "queries_tried"}。
-    network_errors 是两源失败次数之和（用于区分『检索式太窄』和『两源都连不上』）。
-    每篇 paper 多带一个 source 字段: "pubmed" / "preprint" / "europepmc"。
+    - 三源各自召回至多 cap 篇 → 合并去重得到更大候选池 → 按 相关性+被引+新近 排序 → 取前 cap。
+    - network_errors 仅在三源全部失败时为非零(用于区分『检索式太窄』和『全网连不上』)。
+    每篇 paper 带 source: "pubmed" / "preprint" / "europepmc" / "openalex"; OpenAlex 额外带 cited_by_count。
     """
-    pubmed_share = max(2, per_query)
-    epmc_share = max(2, per_query)
-    pm_task = _search_pubmed(queries, pubmed_share, cap)
-    ep_task = search_epmc(queries, epmc_share, cap)
-    pm, ep = await asyncio.gather(pm_task, ep_task)
-    merged = _merge_sources(pm["papers"], ep["papers"], cap)
-    # 全部失败的边界: PubMed 全网络错 且 Europe PMC 也全错。
-    pm_total_fail = pm["network_errors"] >= max(1, len(queries))
-    ep_total_fail = ep["network_errors"] >= max(1, len(queries))
-    net_errs = pm["network_errors"] + ep["network_errors"]
+    share = max(2, per_query)
+    results = await asyncio.gather(
+        _search_pubmed(queries, share, cap),
+        search_epmc(queries, share, cap),
+        search_openalex(queries, share, cap),
+        return_exceptions=True,
+    )
+    norm: list[dict] = []
+    for res in results:
+        if isinstance(res, Exception):
+            norm.append({"papers": [], "network_errors": max(1, len(queries))})
+        else:
+            norm.append(res)
+    merged = _merge_all([norm[0]["papers"], norm[1]["papers"], norm[2]["papers"]], cap)
+    all_fail = all(r["network_errors"] >= max(1, len(queries)) for r in norm)
+    net_errs = sum(r["network_errors"] for r in norm)
     return {
         "papers": merged,
         # 上游用 network_errors >= len(queries) 判断网络故障; 只要任一源能通就不算网络全败。
-        "network_errors": net_errs if (pm_total_fail and ep_total_fail) else 0,
+        "network_errors": net_errs if all_fail else 0,
         "queries_tried": list(queries),
     }

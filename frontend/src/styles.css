@@ -1009,6 +1009,11 @@ select {
   color: var(--petrol);
   border: 1px solid #c8e6e0;
 }
+.ref-badge-openalex {
+  background: #eef0fb;
+  color: #3b3f8f;
+  border: 1px solid #d3d8f5;
+}
 .verify-ok,
 .verify-bad {
   margin-top: 16px;

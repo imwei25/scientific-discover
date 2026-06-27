@@ -14,6 +14,7 @@
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import re
 import traceback
@@ -185,6 +186,78 @@ def _build_context(papers: list[dict]) -> str:
     return "\n\n".join(lines)
 
 
+async def _extract_batch(items: list[tuple[int, dict]]) -> dict[int, dict]:
+    """把一批文献(摘要)抽成结构化要点行, 返回 {全局编号: row}。
+
+    每行字段: pop(对象/人群) / design(研究类型/方法) / finding(主要发现含关键数据) / gap(局限或未解决)。
+    这是 deep-research 常见的"结构化证据表"降本范式: 把 1200 字摘要压成 ~150 字要点,
+    既能把上下文成本降 5-8 倍(可安全纳入更多文献), 结构化输入也更抗"中段被忽略"、更难编造。
+    """
+    parts = []
+    for idx, p in items:
+        ab = (p.get("abstract") or "")[:1000]
+        parts.append(f"[{idx}] {p.get('title', '')}\n摘要: {ab or '（无摘要）'}")
+    system = (
+        "你是医学文献信息抽取助手。下面给出若干篇文献的编号、标题与摘要。"
+        "请为每篇抽取结构化要点，字段用简洁中文（每字段不超过 40 字，信息缺失填空字符串，严禁编造）。"
+        "只输出 JSON 数组，每项形如 "
+        "{\"i\":编号,\"pop\":\"研究对象/人群\",\"design\":\"研究类型/方法\","
+        "\"finding\":\"主要发现(含关键数据/效应量)\",\"gap\":\"局限或未解决的问题\"}，不要任何解释。"
+    )
+    user = "\n\n".join(parts)
+    arr = _parse_json(
+        await _complete(
+            [{"role": "system", "content": system}, {"role": "user", "content": user}],
+            max_tokens=1400,
+        ),
+        "[", "]",
+    )
+    out: dict[int, dict] = {}
+    if isinstance(arr, list):
+        for it in arr:
+            if isinstance(it, dict) and it.get("i") is not None:
+                try:
+                    out[int(it["i"])] = it
+                except (ValueError, TypeError):
+                    continue
+    return out
+
+
+async def _extract_evidence(papers: list[dict], batch: int = 12) -> dict[int, dict]:
+    """对全部纳入文献并发抽取结构化证据行, 返回 {全局编号(1-based): row}。"""
+    indexed = list(enumerate(papers, 1))
+    batches = [indexed[i : i + batch] for i in range(0, len(indexed), batch)]
+    results = await asyncio.gather(
+        *[_extract_batch(b) for b in batches], return_exceptions=True
+    )
+    evidence: dict[int, dict] = {}
+    for res in results:
+        if isinstance(res, dict):
+            evidence.update(res)
+    return evidence
+
+
+def _build_context_table(papers: list[dict], evidence: dict[int, dict]) -> str:
+    """用结构化证据行构建综述上下文; 抽取缺失的文献回退到短摘要(400 字)。"""
+    lines = []
+    for i, p in enumerate(papers, 1):
+        head = (
+            f"[{i}] {p['first_author']} ({p['year']}). {p['title']} "
+            f"{p['journal']}. URL: {p['url']}"
+        )
+        row = evidence.get(i)
+        if row:
+            body = (
+                f"对象: {row.get('pop') or '—'} | 设计: {row.get('design') or '—'} | "
+                f"发现: {row.get('finding') or '—'} | 局限: {row.get('gap') or '—'}"
+            )
+        else:
+            ab = (p.get("abstract") or "")[:400]
+            body = f"摘要: {ab or '（无摘要）'}"
+        lines.append(head + "\n" + body)
+    return "\n\n".join(lines)
+
+
 def _synthesis_messages(field: str, papers: list[dict]) -> list[dict]:
     system = (
         "你是资深的医学/药学/生物医学科研选题顾问。下面提供的是从 PubMed 检索到的【真实文献】。"
@@ -202,7 +275,7 @@ def _synthesis_messages(field: str, papers: list[dict]) -> list[dict]:
     return [{"role": "system", "content": system}, {"role": "user", "content": user}]
 
 
-def _synthesis_messages_deep(field: str, papers: list[dict]) -> list[dict]:
+def _synthesis_messages_deep(field: str, papers: list[dict], context: str | None = None) -> list[dict]:
     system = (
         "你是资深的医学/药学/生物医学科研选题顾问。下面是经【多角度+空白补充】两轮检索得到的真实文献。"
         "请做一份有深度的调研报告，分四部分：\n"
@@ -215,10 +288,12 @@ def _synthesis_messages_deep(field: str, papers: list[dict]) -> list[dict]:
         "相关文献链接。\n"
         "## 四、首选推荐\n给出你最推荐的一个并说明理由。\n\n"
         "铁律：只能引用下面列出的文献及其真实 URL，严禁编造任何文献、作者或链接；"
-        "证据不足时明说‘现有检索结果有限’。"
+        "证据不足时明说‘现有检索结果有限’。\n"
+        "注意：下面每篇文献已抽取为『对象/设计/发现/局限』要点行，请据此综合；"
+        "引用编号与 URL 必须与所给文献一致。"
     )
-    context = _build_context(papers)
-    user = f"研究方向：{field}\n\n【两轮检索到的真实文献】\n{context}"
+    ctx = context if context is not None else _build_context(papers)
+    user = f"研究方向：{field}\n\n【两轮检索到的真实文献（结构化要点）】\n{ctx}"
     return [{"role": "system", "content": system}, {"role": "user", "content": user}]
 
 
@@ -226,9 +301,9 @@ async def _deep_flow(field: str, keywords: str, background: str) -> AsyncIterato
     yield ("status", {"message": "正在把研究方向拆解为多个子方向…"})
     facets = await _gen_facets(field, keywords, background)
     names = "、".join(f["name"] for f in facets)
-    yield ("status", {"message": f"正在多角度检索 PubMed（{len(facets)} 个子方向：{names}）…"})
+    yield ("status", {"message": f"正在多角度检索 PubMed / Europe PMC / OpenAlex（{len(facets)} 个子方向：{names}）…"})
     queries = [f["query"] for f in facets]
-    result = await search_literature(queries, per_query=5, cap=24)
+    result = await search_literature(queries, per_query=10, cap=50)
     papers = result["papers"]
     if not papers:
         if result["network_errors"] >= max(1, len(queries)):
@@ -247,13 +322,18 @@ async def _deep_flow(field: str, keywords: str, background: str) -> AsyncIterato
     yield ("status", {"message": f"首轮找到 {len(papers)} 篇，正在识别空白并补充检索…"})
     gapq = await _gap_queries(field, papers)
     if gapq:
-        extra = await search_literature(gapq, per_query=4, cap=12)
-        papers = _merge_papers(papers, extra["papers"], cap=34)
+        extra = await search_literature(gapq, per_query=6, cap=24)
+        papers = _merge_papers(papers, extra["papers"], cap=70)
         yield ("references", {"items": [{k: p.get(k, "") for k in ("pmid", "title", "first_author", "journal", "year", "url", "source")} for p in papers]})
 
-    yield ("status", {"message": f"共 {len(papers)} 篇文献，正在综合（现状/空白矩阵/候选选题）…"})
+    # 结构化证据表: 综述前把每篇压成要点行(并发抽取), 既能纳入更多文献又抗"中段被忽略"。
+    yield ("status", {"message": f"共 {len(papers)} 篇文献，正在逐篇抽取结构化要点…"})
+    evidence = await _extract_evidence(papers)
+    context = _build_context_table(papers, evidence)
+
+    yield ("status", {"message": f"已抽取 {len(evidence)}/{len(papers)} 篇要点，正在综合（现状/空白矩阵/候选选题）…"})
     full = ""
-    async for piece in stream_chat(_synthesis_messages_deep(field, papers)):
+    async for piece in stream_chat(_synthesis_messages_deep(field, papers, context)):
         full += piece
         yield ("delta", {"text": piece})
     yield ("__verify__", {"papers": papers, "full": full})
@@ -270,7 +350,17 @@ async def _mock_flow(field: str) -> AsyncIterator[tuple[str, dict]]:
             "journal": "Mock Journal",
             "year": "2023",
             "url": "https://pubmed.ncbi.nlm.nih.gov/00000001/",
-        }
+            "source": "pubmed",
+        },
+        {
+            "pmid": "",
+            "title": f"[MOCK] OpenAlex-indexed work on {field}",
+            "first_author": "Doe A",
+            "journal": "Mock Open Journal",
+            "year": "2024",
+            "url": "https://openalex.org/W0000000001",
+            "source": "openalex",
+        },
     ]
     yield ("references", {"items": items})
     yield ("status", {"message": "正在分析研究现状与空白…"})
@@ -316,8 +406,8 @@ async def deep_research_idea(inputs: dict) -> AsyncIterator[tuple[str, dict]]:
         else:
             yield ("status", {"message": "正在生成 PubMed 检索式…"})
             queries = await _gen_queries(field, keywords, background)
-            yield ("status", {"message": f"正在检索 PubMed（{len(queries)} 个检索式）…"})
-            result = await search_literature(queries, per_query=6, cap=18)
+            yield ("status", {"message": f"正在检索 PubMed / Europe PMC / OpenAlex（{len(queries)} 个检索式）…"})
+            result = await search_literature(queries, per_query=10, cap=28)
             papers = result["papers"]
             if not papers:
                 if result["network_errors"] >= max(1, len(queries)):

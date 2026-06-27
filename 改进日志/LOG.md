@@ -2,6 +2,16 @@
 
 > 每完成一个改进方向追加一条。最新在最上。
 
+## 2026-06-27 — 找选题增强 / 多源(OpenAlex)+排序选篇+结构化证据表(调研驱动)
+- **现状/动机**：两份联网调研结论——①在 PubMed+Europe PMC 之上，**OpenAlex** 是最该加的源（免费无 key、覆盖最广、独有被引数），可支撑“排序选篇”；②“摘要全量拼接一次性塞 64K”是当前最弱环节（Lost-in-the-Middle/NoLiMa），同类系统普遍用结构化抽取/分批降本；纳入量 18-34 篇对“范围综述式选题”偏保守，建议快速档 25-30、深度档 60-80。
+- **改动**：
+  - 新增 `backend/app/openalex.py`：OpenAlex 客户端，倒排索引摘要重建、带 `cited_by_count`，与 europepmc.py 同构。
+  - `literature.py`：`search_literature` 升级为 **PubMed+Europe PMC+OpenAlex 三源 gather**；新 `_merge_all`（三键去重、被引取 max、缺摘要/缺 pmid 互补、PubMed 版本优先链接）+ `_rank_papers`（相关性 0.5 + 被引 0.3 + 新近 0.2 加权选篇）。
+  - `research.py`：deep 档纳入量 34→**70**（首轮 per_query 10/cap 50，空白补检索 6/24，合并 70）、fast 档 18→**28**；综述前新增**结构化证据表**抽取 `_extract_evidence`（批量并发 map，把 1200 字摘要压成 对象/设计/发现/局限 要点行，token 降 5-8 倍、抗中段忽略、更难编造），deep 综述改吃证据表。
+  - 前端：IdeaModule 加 OpenAlex 徽标 + 多源文案；styles 加 `.ref-badge-openalex`；sse.ts 类型注释；mock 流加 OpenAlex 样例。
+- **测试**：① `test_openalex.py`（倒排重建/归一化/合并取max/排序，离线）全 PASS；② 6 个既有后端测试套件无回归；③ 真实联网 3 源检索 TNBC 主题：OpenAlex 贡献摘要+被引、合并 20 篇按相关性+被引排序合理；④ 真实 DeepSeek 证据表抽取 3 篇 pop/design/finding/gap 全填、JSON 解析正常，额度几乎零消耗（¥1.48）；⑤ Playwright 24/24 全绿，dist 已重建。
+- **commit**：见本次提交
+
 ## 2026-06-27 — 循环收尾判定：暂停
 - **结论**：经多轮“拆解→调研→改进→真实用户测试→记录→commit/push”，已完成 16 项实质改进（15 个真实缺陷修复 + 1 个易用性功能），覆盖编码健壮性、引用、网络韧性、安全护栏、配置、持久化、下载、检索限速、上传限制、跨模块历史、分析可靠性、环境自检。
 - **真实用户测试**：三大旗舰链路均用真实服务端到端验证——数据分析（发现并修复间歇失败）、找选题 fast+deep（PubMed+LLM，引用核验全真、节流无 429）。

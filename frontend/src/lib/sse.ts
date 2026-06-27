@@ -98,7 +98,7 @@ export interface Reference {
   journal: string;
   year: string;
   url: string;
-  source?: string; // "pubmed" | "preprint" | "europepmc"
+  source?: string; // "pubmed" | "preprint" | "europepmc" | "openalex"
 }
 
 export interface Verification {

@@ -114,8 +114,8 @@ export default function IdeaModule({ goto }: { goto: Goto }) {
       <header className="module-head">
         <h1>💡 找选题 · 医学/药学/生物</h1>
         <p>
-          我会实际检索 <strong>PubMed</strong> 真实文献，梳理该方向已有哪些工作、还缺什么，
-          再给出有文献支撑的候选选题。文中引用均为可点击的文献链接。
+          我会实际检索 <strong>PubMed / Europe PMC / OpenAlex</strong> 多源真实文献（按相关性+被引+新近择优纳入），
+          梳理该方向已有哪些工作、还缺什么，再给出有文献支撑的候选选题。文中引用均为可点击的文献链接。
         </p>
       </header>
 
@@ -239,6 +239,7 @@ export default function IdeaModule({ goto }: { goto: Goto }) {
               <li key={r.pmid || r.url || i}>
                 {r.source === "preprint" && <span className="ref-badge ref-badge-preprint">预印本</span>}
                 {r.source === "europepmc" && <span className="ref-badge ref-badge-epmc">Europe PMC</span>}
+                {r.source === "openalex" && <span className="ref-badge ref-badge-openalex">OpenAlex</span>}
                 <a href={r.url} target="_blank" rel="noreferrer">
                   {r.first_author} ({r.year}). {r.title}
                 </a>
