@@ -1,37 +1,102 @@
-:root {
-  /* 临床纸白 / 表面 */
-  --paper: #eef2f1;
-  --surface: #ffffff;
+/* ── @font-face ───────────────────────────────────────────────── */
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url('/fonts/Inter-Regular.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url('/fonts/Inter-Medium.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  src: url('/fonts/Inter-SemiBold.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: url('/fonts/Inter-Bold.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'Noto Serif SC';
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: url('/fonts/NotoSerifSC-Bold.woff2') format('woff2');
+}
 
-  /* petrol 深青墨（主色/信任）+ 仪器 teal（唯一强调） */
+/* ── Design Tokens (Editorial default) ────────────────────────── */
+:root {
+  /* 颜色 */
+  --paper: #eef2f1;
+  --paper-warm: #fafbfb;
+  --surface: #ffffff;
+  --surface-2: #f7faf9;
   --petrol: #0e3a39;
   --petrol-700: #0a2b2a;
   --teal: #0f9b94;
   --teal-soft: #e2f1ee;
-
-  /* 文字 */
   --ink: #14201f;
   --muted: #5c6b69;
   --faint: #93a09d;
-
-  /* 线 */
   --line: #dce5e3;
   --line-soft: #e8eeec;
-
-  /* 语义 */
   --ok: #15885f;
+  --ok-soft: #e6f4ee;
   --bad: #c8453a;
   --warn: #9a6a00;
 
-  /* 阴影：低而柔，克制 */
+  /* 字体 */
+  --sans: 'Inter', 'PingFang SC', 'Microsoft YaHei', 'Segoe UI', system-ui, -apple-system, sans-serif;
+  --serif: 'Noto Serif SC', Georgia, 'Songti SC', 'SimSun', serif;
+  --mono: 'JetBrains Mono', 'SFMono-Regular', 'Consolas', 'Menlo', monospace;
+
+  /* 字号阶梯 */
+  --fs-display: 36px;
+  --fs-h1: 28px;
+  --fs-h2: 20px;
+  --fs-h3: 17px;
+  --fs-body: 15px;
+  --fs-small: 13px;
+  --fs-eyebrow: 11.5px;
+
+  /* 间距 */
+  --sp-1: 4px;
+  --sp-2: 8px;
+  --sp-3: 12px;
+  --sp-4: 20px;
+  --sp-5: 32px;
+  --sp-6: 48px;
+  --sp-7: 72px;
+  --sp-8: 96px;
+
+  /* 圆角 + 阴影 */
+  --radius-sm: 10px;
+  --radius: 14px;
+  --radius-lg: 18px;
   --shadow-sm: 0 1px 2px rgba(14, 58, 57, 0.04), 0 1px 3px rgba(14, 58, 57, 0.05);
   --shadow: 0 2px 8px rgba(14, 58, 57, 0.05), 0 14px 34px rgba(14, 58, 57, 0.07);
+  --shadow-lg: 0 4px 18px rgba(14, 58, 57, 0.08), 0 28px 56px rgba(14, 58, 57, 0.1);
 
-  --radius: 14px;
-  --radius-sm: 10px;
+  /* 动效 */
+  --spring: cubic-bezier(0.34, 1.56, 0.64, 1);
+  --ease-out-soft: cubic-bezier(0.16, 1, 0.3, 1);
+  --dur-fast: 150ms;
+  --dur-base: 280ms;
+  --dur-slow: 480ms;
 
-  --serif: Georgia, "Times New Roman", "Songti SC", "SimSun", serif;
-  --sans: "PingFang SC", "Microsoft YaHei", "Segoe UI", system-ui, -apple-system, sans-serif;
+  /* 侧栏宽度（由 sidebar hook 控制） */
+  --sidebar-w: 272px;
 }
 
 * {
@@ -47,10 +112,13 @@ body {
   background: var(--paper);
   color: var(--ink);
   font-family: var(--sans);
-  font-size: 15px;
+  font-size: var(--fs-body);
   line-height: 1.7;
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
+  font-variant-numeric: tabular-nums;
+  transition: background-color var(--dur-base) var(--ease-out-soft),
+              color var(--dur-base) var(--ease-out-soft);
 }
 
 .app {
