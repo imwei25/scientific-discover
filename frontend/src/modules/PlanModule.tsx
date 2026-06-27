@@ -11,6 +11,29 @@ export default function PlanModule() {
   const [field, setField] = usePersistentState("plan:field", "");
   const [resources, setResources] = usePersistentState("plan:resources", "");
   const { text, running, error, start, stop, setText } = useStream("plan:result");
+  const sap = useStream("plan:sap"); // 统计分析计划(SAP) 独立流
+  const [docxBusy, setDocxBusy] = useState(""); // "" | "plan" | "sap"
+
+  const downloadDocx = async (txt: string, name: string, which: string) => {
+    if (!txt || docxBusy) return;
+    setDocxBusy(which);
+    try {
+      const resp = await fetch(apiUrl("/api/docx"), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text: txt, journal_id: "", references: [] }),
+      });
+      const blob = await resp.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `${name}.docx`;
+      a.click();
+      URL.revokeObjectURL(url);
+    } finally {
+      setDocxBusy("");
+    }
+  };
 
   const savedRef = useRef("");
   useEffect(() => {
@@ -30,12 +53,19 @@ export default function PlanModule() {
     start("plan", { idea, field, resources });
   };
 
+  const genSap = () => {
+    if (!idea.trim() || sap.running) return;
+    sap.start("sap", { idea, field, resources });
+  };
+
   const reset = () => {
     if (running) stop();
+    if (sap.running) sap.stop();
     setIdea("");
     setField("");
     setResources("");
     setText("");
+    sap.setText("");
   };
 
   // —— 样本量 / 检验效能计算器（确定性，零额度）——
@@ -122,6 +152,9 @@ export default function PlanModule() {
           <button className="btn-primary" onClick={submit} disabled={!idea.trim() || running} data-testid="run-btn">
             {running ? "生成中…" : "生成实验计划"}
           </button>
+          <button className="btn-secondary" onClick={genSap} disabled={!idea.trim() || sap.running} data-testid="gen-sap-btn">
+            {sap.running ? "生成中…" : "生成统计分析计划(SAP)"}
+          </button>
           <button className="btn-ghost" onClick={reset} data-testid="reset-btn">
             清空
           </button>
@@ -135,7 +168,26 @@ export default function PlanModule() {
         onStop={stop}
         exportName="实验计划"
         placeholder="研究路线、实验设计、里程碑和风险点会显示在这里。"
+        onExportDocx={() => downloadDocx(text, "实验计划", "plan")}
+        exportingDocx={docxBusy === "plan"}
       />
+
+      {(sap.text || sap.running || sap.error) && (
+        <>
+          <h2 className="section-title" data-testid="sap-title">📐 统计分析计划（SAP · 基于 ICH E9 规范）</h2>
+          <ResultPanel
+            text={sap.text}
+            running={sap.running}
+            error={sap.error}
+            onStop={sap.stop}
+            exportName="统计分析计划"
+            placeholder="ITT/PP 分析集、主要终点分析、缺失数据与多重比较校正、敏感性分析等会显示在这里。"
+            onExportDocx={() => downloadDocx(sap.text, "统计分析计划", "sap")}
+            exportingDocx={docxBusy === "sap"}
+            panelTestId="sap-panel"
+          />
+        </>
+      )}
 
       <details className="ss-calc" data-testid="ss-calc">
         <summary>🧮 样本量 / 检验效能计算器（确定性，免费，不消耗额度）</summary>

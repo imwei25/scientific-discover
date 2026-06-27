@@ -260,6 +260,27 @@ test("找选题: 追问追加问答 + 按意见修改报告", async ({ page }) =
   await expect(page.getByTestId("result-text")).toContainText("修改后的报告");
 });
 
+test("实验规划: 生成统计分析计划(SAP)并提供 Word 导出", async ({ page }) => {
+  await mockBase(page);
+  await page.route("**/api/run", (r) =>
+    r.fulfill({
+      contentType: "text/event-stream",
+      body: sse(
+        { event: "delta", data: { text: "## 分析数据集\nITT 分析集纳入所有随机化受试者；缺失数据用多重插补做敏感性分析。" } },
+        { event: "done", data: {} },
+      ),
+    }),
+  );
+  await page.goto("/");
+  await page.getByTestId("nav-plan").click();
+  await page.getByTestId("input-idea").fill("二甲双胍对NAFLD肝纤维化的随机对照试验");
+  await page.getByTestId("gen-sap-btn").click();
+  await expect(page.getByTestId("sap-title")).toBeVisible();
+  await expect(page.getByTestId("sap-panel")).toContainText("ITT 分析集");
+  // SAP 面板提供 Word 导出
+  await expect(page.getByTestId("sap-panel").getByTestId("export-docx-btn")).toBeVisible();
+});
+
 test("回复审稿: 拆解意见并生成逐条回复", async ({ page }) => {
   await mockBase(page);
   await page.route("**/api/rebuttal", (r) =>

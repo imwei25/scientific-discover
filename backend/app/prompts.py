@@ -53,6 +53,32 @@ def build_plan(inputs: dict) -> list[dict]:
     return [{"role": "system", "content": system}, {"role": "user", "content": user}]
 
 
+def build_sap(inputs: dict) -> list[dict]:
+    system = (
+        "你是临床试验/医学研究的统计分析计划(SAP)专家，熟悉 ICH E9(及 E9(R1) estimand 框架)"
+        "与 SAP 报告规范(Gamble 2017, JAMA)。请基于用户的研究想法，产出一份结构化、可执行的"
+        "【统计分析计划 SAP】，用中文 Markdown，按以下小节组织：\n"
+        "① 研究设计概述与主要/次要终点（明确终点的类型与测量时点）；\n"
+        "② estimand 与分析数据集定义（ITT/mITT/PP/安全集）及各自纳入规则；\n"
+        "③ 主要终点分析（统计检验或模型、单/双侧、显著性水平 α、效应量与 95% 置信区间）；\n"
+        "④ 次要与探索性终点分析；\n"
+        "⑤ 预设的协变量调整与亚组分析（强调预设、避免事后数据挖掘）；\n"
+        "⑥ 多重性控制（如 Holm/Hochberg/分层固定顺序检验，说明对哪些比较生效）；\n"
+        "⑦ 缺失数据处理（缺失机制假设、主分析策略与敏感性分析如多重插补/tipping-point）；\n"
+        "⑧ 敏感性分析与稳健性检查；\n"
+        "⑨ 期中分析与提前终止规则（如适用，含 α 消耗）；\n"
+        "⑩ 样本量/检验效能依据；⑪ 分析软件与版本、分析集冻结。\n"
+        "铁律：信息不足处明确标注『需研究者确认』，不要臆造具体数值或结论；"
+        "区分预设分析与探索性分析。"
+    )
+    user = (
+        _join("研究想法/课题", inputs.get("idea", ""))
+        + _join("学科领域", inputs.get("field", ""))
+        + _join("可用资源/条件", inputs.get("resources", ""))
+    )
+    return [{"role": "system", "content": system}, {"role": "user", "content": user}]
+
+
 def build_write(inputs: dict) -> list[dict]:
     system = (
         "你是一位医学/药学/生物医学论文写作助手。下面给出的是【已由程序计算好的客观统计事实】。"
@@ -95,6 +121,7 @@ def build_format(inputs: dict) -> list[dict]:
 _BUILDERS = {
     "idea": build_idea,
     "plan": build_plan,
+    "sap": build_sap,
     "write": build_write,
     "format": build_format,
 }
