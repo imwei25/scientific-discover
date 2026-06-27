@@ -1,6 +1,7 @@
 import { useState } from "react";
 import Markdown from "./Markdown";
 import { downloadText, tsName } from "../lib/download";
+import { copyToClipboard } from "../lib/clipboard";
 
 interface Props {
   text: string;
@@ -13,12 +14,12 @@ interface Props {
 
 // 统一的结果展示区: 流式文本 + 复制 + 导出 + 停止 + 状态。
 export default function ResultPanel({ text, running, error, onStop, placeholder, exportName }: Props) {
-  const [copied, setCopied] = useState(false);
+  const [copied, setCopied] = useState<"ok" | "fail" | null>(null);
 
   const copy = async () => {
-    await navigator.clipboard.writeText(text);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 1500);
+    const ok = await copyToClipboard(text);
+    setCopied(ok ? "ok" : "fail");
+    setTimeout(() => setCopied(null), 1500);
   };
 
   const exportMd = () => downloadText(tsName(exportName ?? "结果", "md"), text);
@@ -37,7 +38,7 @@ export default function ResultPanel({ text, running, error, onStop, placeholder,
           )}
           {text && !running && (
             <button className="btn-ghost" onClick={copy} data-testid="copy-btn">
-              {copied ? "已复制" : "复制"}
+              {copied === "ok" ? "已复制" : copied === "fail" ? "复制失败" : "复制"}
             </button>
           )}
           {text && !running && (

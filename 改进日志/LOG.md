@@ -10,6 +10,13 @@
 - **commit**：<short-hash>
 -->
 
+## 2026-06-27 — 子任务D 前端体验 / D2 复制按钮在局域网 http 下失效修复
+- **现状/动机**：`navigator.clipboard` 仅在安全上下文（https/localhost）可用。本应用主推**局域网 http 访问**（仓库带 `允许局域网访问.bat`/`诊断局域网.bat`），此时 `navigator.clipboard` 为 undefined，复制按钮直接抛错、静默失效。两处中招：`ResultPanel.tsx`（四大模块共用的复制）与 `FormatModule.tsx` 的“复制全部”。
+- **改动**：新增 `frontend/src/lib/clipboard.ts` 的 `copyToClipboard()`：安全上下文用现代异步 API，否则/失败时回退到临时 textarea + `execCommand('copy')`，返回布尔成功值。两处调用改用它；`ResultPanel` 复制状态从布尔改为 `ok|fail|null`，失败显示“复制失败”。
+- **测试**（前端 Playwright，mock 后端零成本）：① `tsc --noEmit` 通过；② 新增 e2e 用例：`addInitScript` 把 `window.isSecureContext=false` 且 `navigator.clipboard=undefined` 模拟局域网 http，点击复制后断言按钮显示“已复制”（证明 execCommand 兜底生效、不抛错）；③ **全量 19 个 e2e 全过**，无回归。
+- **部署**：仓库版本管理 `frontend/dist`，已 `npm run build` 重建 dist，确保 `git pull` 即获修复界面。
+- **commit**：见下次提交
+
 ## 2026-06-27 — 子任务C 稳定性 / C1 网络错误友好化 + 重试 + 降级
 - **现状/动机**：`llm._stream_openai/_anthropic` 用 httpx，网络超时/连不上会抛**原始 httpx 异常**，绕过 `LLMError`，在 `/api/run` 落到 `except Exception` → 用户看到 “内部错误: ConnectTimeout(...)” 之类天书；且无任何重试，弱网下一闪断就整次失败；也不会切备用。
 - **调研**：读 `main.py` 确认三个端点的错误路径；读 `test_fallback.py` 确认改动需保持其 4 个断言（401 非配额不降级、mid-stream 不重复降级等）不破。

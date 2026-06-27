@@ -5,6 +5,7 @@ import { addHistory } from "../lib/history";
 import { apiUrl } from "../lib/api";
 import ResultPanel from "../components/ResultPanel";
 import Dropzone from "../components/Dropzone";
+import { copyToClipboard } from "../lib/clipboard";
 
 interface Journal {
   id: string;
@@ -219,7 +220,7 @@ export default function FormatModule() {
             <button
               className="btn-ghost"
               data-testid="copy-refs-btn"
-              onClick={() => navigator.clipboard.writeText(fmtRefs.join("\n"))}
+              onClick={() => copyToClipboard(fmtRefs.join("\n"))}
             >
               复制全部
             </button>

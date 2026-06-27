@@ -339,6 +339,36 @@ test("期刊排版: 上传Word自动填入稿件", async ({ page }) => {
   await expect(page.getByTestId("upload-manuscript-info")).toContainText("已导入");
 });
 
+test("复制: 局域网 http(非安全上下文)下复制按钮仍可用", async ({ page }) => {
+  await mockBase(page);
+  // 模拟通过局域网 IP 的 http 访问: 非安全上下文且 navigator.clipboard 不可用。
+  await page.addInitScript(() => {
+    Object.defineProperty(window, "isSecureContext", { value: false, configurable: true });
+    try {
+      Object.defineProperty(navigator, "clipboard", { value: undefined, configurable: true });
+    } catch {
+      /* 某些环境 clipboard 不可重定义, 忽略 */
+    }
+  });
+  await page.route("**/api/run", (r) =>
+    r.fulfill({
+      contentType: "text/event-stream",
+      body: sse(
+        { event: "delta", data: { text: "这是可复制的实验方案正文。" } },
+        { event: "done", data: {} },
+      ),
+    }),
+  );
+  await page.goto("/");
+  await page.getByTestId("nav-plan").click();
+  await page.getByTestId("input-idea").fill("测试复制");
+  await page.getByTestId("run-btn").click();
+  await expect(page.getByTestId("result-text")).toContainText("可复制的实验方案");
+  // 点击复制: 走 execCommand 兜底, 应显示“已复制”而非“复制失败”, 且不抛错。
+  await page.getByTestId("copy-btn").click();
+  await expect(page.getByTestId("copy-btn")).toHaveText("已复制");
+});
+
 test("错误处理: 后端返回 error 事件时友好提示", async ({ page }) => {
   await mockBase(page);
   await page.route("**/api/run", (r) =>
