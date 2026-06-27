@@ -28,6 +28,17 @@ def test_ratio_and_block_round():
     print("ok: ratio + block-size rounding")
 
 
+def test_block_size_zero_no_hang():
+    # 回归: block_size=0 曾导致 base 为空 → while 死循环(服务挂起)。
+    r = generate({"n": 12, "groups": "A,B", "ratio": "1,1", "method": "block", "block_size": "0", "seed": 1})
+    assert r["ok"] and len(r["rows"]) == 12
+    assert r["block_size"] >= 2
+    # 负数同样不应死循环
+    r2 = generate({"n": 8, "groups": "A,B", "method": "block", "block_size": "-4", "seed": 1})
+    assert r2["ok"] and len(r2["rows"]) == 8
+    print("ok: block_size 0/负 不死循环")
+
+
 def test_validation():
     assert generate({"n": 0, "groups": "A,B"})["ok"] is False
     assert generate({"n": 10, "groups": "A"})["ok"] is False
@@ -39,5 +50,6 @@ if __name__ == "__main__":
     test_reproducible()
     test_block_balance()
     test_ratio_and_block_round()
+    test_block_size_zero_no_hang()
     test_validation()
     print("\nALL RANDOMIZE TESTS PASSED")

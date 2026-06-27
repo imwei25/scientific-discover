@@ -166,7 +166,9 @@ async def _verify_one(client: httpx.AsyncClient, item: dict) -> dict:
         if hit and hit.get("DOI"):
             cand = _norm_doi(hit["DOI"])
             ht = (hit.get("title") or [""])[0]
-            if _norm_title(ht) and _norm_title(title)[:40] in _norm_title(ht) or _norm_title(ht)[:40] in _norm_title(title):
+            nt, nh = _norm_title(title), _norm_title(ht)
+            # 标题须非空且双向前缀任一匹配, 才认为是同一篇(防把无题命中错配 DOI)
+            if nh and (nt[:40] in nh or nh[:40] in nt):
                 doi = cand
                 completed = cand
                 if status == "unverifiable":

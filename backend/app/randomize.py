@@ -55,6 +55,7 @@ def generate(params: dict) -> dict:
             bs = unit * 2
         if bs % unit != 0:
             bs = unit * max(1, round(bs / unit))   # 取整为单位的整数倍
+        bs = max(bs, unit)                          # 防 0/负 区组大小导致 base 为空→死循环
         per = bs // unit
         base: list[str] = []
         for g, r in zip(groups, ratio):

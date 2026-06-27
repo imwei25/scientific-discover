@@ -2,6 +2,14 @@
 
 > 每完成一个改进方向追加一条。最新在最上。
 
+## 2026-06-28 — 抓bug（loop 第10轮）：派 agent 代码审查发现并修复 2 个真实 bug
+- **主题**：质量/抓 bug。派 agent 对近期新增的 10+ 模块做正确性审查，确认 2 个真实 bug：
+  - **HIGH 修复**：`randomize.py` 区组随机当 `block_size="0"`(或负的单位倍数)时——"0" 为真值绕过 `or` 默认、`0%unit==0` 绕过取整 → base 为空、per=0 → `while len(seq)<n` **死循环/服务挂起(DoS)**。修复：取整后加 `bs = max(bs, unit)` 钳制。加回归 test(block_size 0/负不死循环)。
+  - **LOW-MED 修复**：`refcheck.py` DOI 补全的标题匹配 `A and B or C` 运算符优先级——标题守卫只护住 B，CrossRef 命中无标题时 C(`""[:40] in title` 恒真) → 给文献错配 DOI。修复：改为 `nh and (nt[:40] in nh or nh[:40] in nt)`。
+  - 审查同时确认 statcheck 除零/自由度、flowdiagram 空值、imrad/rebuttal SSE 兜底、前端可选字段/JSON.parse 等均已正确处理。
+- **测试**：test_randomize(新增 0/负区组)、test_endpoints 全过。纯后端改动, 无前端/ dist 变更。
+- **commit**：见本次提交
+
 ## 2026-06-28 — 稳健性加固（loop 第9轮）：依赖审计 + 全端点冒烟测试
 - **主题**：质量/稳健性，不加功能。
 - **① 依赖审计**：grep app/ 全部第三方 import 比对 requirements.txt——全部覆盖(citeproc/docx/dotenv/fastapi/scipy/statsmodels/matplotlib/pandas 等；cycler 随 matplotlib 自带；其余为标准库)，新机器可正常安装，无缺漏，无需修改。doctor 自检 exit 0、13 项依赖齐全。
