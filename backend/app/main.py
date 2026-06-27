@@ -65,6 +65,10 @@ class MatchRequest(BaseModel):
     abstract: str
 
 
+class StatcheckRequest(BaseModel):
+    text: str
+
+
 @app.get("/api/health")
 async def health() -> dict:
     return {
@@ -227,6 +231,14 @@ async def check_refs(req: RefsRequest) -> dict:
     from .refcheck import check_references
 
     return await check_references(req.references)
+
+
+@app.post("/api/statcheck")
+async def statcheck_ep(req: StatcheckRequest) -> dict:
+    """statcheck 式统计一致性自查: LLM 抽取统计量 → scipy 确定性重算 p → 标不一致。"""
+    from .statcheck import check_stats
+
+    return await check_stats(req.text)
 
 
 @app.post("/api/journal-match")

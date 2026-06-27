@@ -330,6 +330,29 @@ test("投稿包: 预提交体检 + 生成投稿信", async ({ page }) => {
   await expect(page.getByTestId("cover-panel").getByTestId("export-docx-btn")).toBeVisible();
 });
 
+test("统计自查: statcheck 标出不一致", async ({ page }) => {
+  await mockBase(page);
+  await page.route("**/api/statcheck", (r) =>
+    r.fulfill({
+      json: {
+        ok: true,
+        items: [
+          { raw: "t(38)=2.10, p=0.04", type: "t", p_reported: "0.04", p_computed: 0.0424, status: "consistent" },
+          { raw: "t(28)=1.20, p=0.01", type: "t", p_reported: "0.01", p_computed: 0.24, status: "decision_error" },
+        ],
+        summary: { total: 2, inconsistent: 0, decision_error: 1 },
+      },
+    }),
+  );
+  await page.goto("/");
+  await page.getByTestId("nav-checklist").click();
+  await page.getByTestId("input-stattext").fill("t(38)=2.10, p=0.04; t(28)=1.20, p=0.01");
+  await page.getByTestId("statcheck-btn").click();
+  await expect(page.getByTestId("statcheck-list")).toContainText("✓ 一致");
+  await expect(page.getByTestId("statcheck-list")).toContainText("严重(显著性翻转)");
+  await expect(page.getByTestId("statcheck-list")).toContainText("重算 p≈0.24");
+});
+
 test("报告规范核对: 选择规范并逐条核对稿件", async ({ page }) => {
   await mockBase(page);
   await page.route("**/api/run", (r) =>

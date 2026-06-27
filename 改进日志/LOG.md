@@ -2,6 +2,13 @@
 
 > 每完成一个改进方向追加一条。最新在最上。
 
+## 2026-06-28 — statcheck 统计一致性自查（loop 第3轮·方向③，本轮收官）
+- **动机**：论文里 t/F/χ²/r/z + 自由度 + p 三者算不上对极常见，越来越多期刊投稿环节直接跑 statcheck，作者却无自查工具；纯算法、范围可控、复用统计栈。
+- **改动**：新增 `statcheck.py` + `/api/statcheck`(JSON)：LLM 仅抽取统计量(type/df/value/p_text)，**p 值用 scipy 确定性重算**(t/F/chi2/z/r 双侧)，比对报告值——一致 / 不一致(数值不符但显著性同) / 严重(显著性在 .05 翻转) / 无法核验。前端 ChecklistModule 增"统计一致性自查"区(结果文字输入 + 徽章清单 + 报告值vs重算值)。
+- **测试**：离线 test_statcheck(重算 t(38)=2.10→0.0424、chi2(1)=3.84→0.05、z=1.96→0.05、r=0.5,df18→0.0248；分类 一致/不一致/严重 正确)；Playwright 36/36(新增 statcheck 用例)；dist 已重建。额度零消耗。
+- **commit**：见本次提交
+- **第3轮收官**：①参考文献核验 + ②智能选刊匹配 + ③statcheck 三方向全部完成；下一轮重新调研。
+
 ## 2026-06-28 — 新模块 / 智能选刊匹配（loop 第3轮·方向②，OpenAlex 相似刊聚合）
 - **动机**：「投哪本期刊」是每篇必经决策，选错→拒稿/拖周期；同类(JANE/Elsevier Finder)无公开 API，用 OpenAlex 自建是稳妥路径，且与已有投稿包闭环。
 - **改动**：新增 `journalmatch.py` + `/api/journal-match`(JSON)：用摘要在 OpenAlex `search` 检索近 6 年、primary_location.source.type=journal 的相近文献(per_page 50)，按发表期刊聚合频次排序，取期刊 OA/DOAJ/ISSN 元数据(规避影响因子版权)，再用一次 LLM 给每本候选≤40字匹配理由。前端新模块 JournalMatchModule(摘要输入/上传 → 候选期刊卡片：排名/频次条/OA·DOAJ 徽章/匹配理由/相近文献样例)；App 加第 7 个 nav(位次：分析→选刊→排版)/路由/rail-tick。

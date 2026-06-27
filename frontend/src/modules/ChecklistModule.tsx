@@ -6,6 +6,21 @@ import { apiUrl } from "../lib/api";
 import ResultPanel from "../components/ResultPanel";
 import Dropzone from "../components/Dropzone";
 
+interface StatItem {
+  raw: string;
+  type: string;
+  p_reported: string;
+  p_computed: number | null;
+  status: string;
+}
+
+const STAT_BADGE: Record<string, { label: string; cls: string }> = {
+  consistent: { label: "✓ 一致", cls: "rc-real" },
+  inconsistent: { label: "⚠ 不一致", cls: "rc-warn" },
+  decision_error: { label: "✗ 严重(显著性翻转)", cls: "rc-bad" },
+  unparsable: { label: "? 无法核验", cls: "rc-gray" },
+};
+
 const GUIDELINES = [
   { key: "strobe", label: "STROBE · 观察性研究（队列/病例对照/横断面）" },
   { key: "consort", label: "CONSORT · 随机对照试验（RCT）" },
@@ -19,6 +34,34 @@ export default function ChecklistModule() {
   const [guideline, setGuideline] = usePersistentState("checklist:guideline", "strobe");
   const { text, running, error, start, stop, setText } = useStream("checklist:result");
   const [docxBusy, setDocxBusy] = useState(false);
+
+  // statcheck 统计一致性自查
+  const [statText, setStatText] = usePersistentState("checklist:statText", "");
+  const [statItems, setStatItems] = usePersistentState<StatItem[]>("checklist:statItems", []);
+  const [statBusy, setStatBusy] = useState(false);
+  const [statErr, setStatErr] = useState<string | null>(null);
+
+  const runStatcheck = async () => {
+    if (!statText.trim() || statBusy) return;
+    setStatBusy(true);
+    setStatErr(null);
+    setStatItems([]);
+    try {
+      const resp = await fetch(apiUrl("/api/statcheck"), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text: statText }),
+      });
+      const d = await resp.json();
+      if (d.ok) setStatItems(d.items || []);
+      else setStatErr(d.error || "统计自查失败");
+    } catch (e) {
+      setStatErr(`统计自查失败：${(e as Error).message}`);
+    } finally {
+      setStatBusy(false);
+      window.dispatchEvent(new Event("usage-updated"));
+    }
+  };
 
   const savedRef = useRef("");
   useEffect(() => {
@@ -124,6 +167,59 @@ export default function ChecklistModule() {
         onExportDocx={downloadDocx}
         exportingDocx={docxBusy}
       />
+
+      <h2 className="section-title">🔢 统计一致性自查（statcheck）</h2>
+      <p className="section-hint">
+        粘贴结果段/表格，自动抽取 t/F/χ²/r/z 统计量并<strong>本地重算 p 值</strong>，
+        标出报告值与重算值是否一致（重算用 scipy，确定性、可复现）。
+      </p>
+      <div className="form">
+        <label className="field">
+          <span className="field-label">结果文字（含统计量与 p 值）</span>
+          <textarea
+            data-testid="input-stattext"
+            value={statText}
+            onChange={(e) => setStatText(e.target.value)}
+            placeholder="例如：两组差异显著，t(38)=2.10, p=0.04；相关分析 r=0.31, p<0.001 ……"
+            rows={5}
+          />
+        </label>
+        <button className="btn-primary" onClick={runStatcheck} disabled={!statText.trim() || statBusy} data-testid="statcheck-btn">
+          {statBusy ? "核验中…" : "统计一致性自查"}
+        </button>
+      </div>
+
+      {statErr && (
+        <div className="result-error" data-testid="statcheck-error">
+          {statErr}
+        </div>
+      )}
+
+      {statItems.length > 0 && (
+        <div className="result-panel" data-testid="statcheck">
+          <div className="result-toolbar">
+            <span className="result-status">
+              核验 {statItems.length} 处 · 不一致 {statItems.filter((x) => x.status === "inconsistent" || x.status === "decision_error").length}
+            </span>
+          </div>
+          <ol className="ref-list" data-testid="statcheck-list">
+            {statItems.map((it, i) => {
+              const b = STAT_BADGE[it.status] || STAT_BADGE.unparsable;
+              return (
+                <li key={i}>
+                  <span className={`ref-badge ${b.cls}`}>{b.label}</span>
+                  <code>{it.raw}</code>
+                  {it.p_computed != null && (
+                    <span className="refcheck-note">
+                      报告 p={it.p_reported}，重算 p≈{it.p_computed}
+                    </span>
+                  )}
+                </li>
+              );
+            })}
+          </ol>
+        </div>
+      )}
     </div>
   );
 }
