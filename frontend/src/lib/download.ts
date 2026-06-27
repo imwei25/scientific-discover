@@ -5,8 +5,15 @@ export function downloadText(filename: string, text: string, mime = "text/markdo
   const a = document.createElement("a");
   a.href = url;
   a.download = filename;
+  a.style.display = "none";
+  document.body.appendChild(a); // 部分浏览器要求锚点在 DOM 中才会触发下载
   a.click();
-  URL.revokeObjectURL(url);
+  // 立即 revoke 在部分浏览器/大文件(如内嵌 base64 图表的分析报告)下会中断下载,
+  // 延迟后再清理对象 URL 与锚点。
+  setTimeout(() => {
+    URL.revokeObjectURL(url);
+    a.remove();
+  }, 1000);
 }
 
 // 生成带时间戳的文件名, 避免覆盖。形如 prefix-20260626-0655.md

@@ -1,4 +1,5 @@
 import { test, expect, Page } from "@playwright/test";
+import { readFileSync } from "fs";
 
 // SSE 响应体构造器
 function sse(...events: { event: string; data: unknown }[]): string {
@@ -282,6 +283,33 @@ test("数据分析: AI写代码执行并输出结论", async ({ page }) => {
   await expect(page.getByTestId("result-text")).toContainText("A组显著高于B组");
   // 完成后可导出完整报告
   await expect(page.getByTestId("export-report-btn")).toBeVisible();
+});
+
+test("导出: 结果可下载为 Markdown 且内容正确", async ({ page }) => {
+  await mockBase(page);
+  await page.route("**/api/run", (r) =>
+    r.fulfill({
+      contentType: "text/event-stream",
+      body: sse(
+        { event: "delta", data: { text: "# 实验方案\n这是要导出的方案正文。" } },
+        { event: "done", data: {} },
+      ),
+    }),
+  );
+  await page.goto("/");
+  await page.getByTestId("nav-plan").click();
+  await page.getByTestId("input-idea").fill("导出测试");
+  await page.getByTestId("run-btn").click();
+  await expect(page.getByTestId("result-text")).toContainText("实验方案");
+  // 实际触发并捕获下载, 验证文件名与内容(走 downloadText 真实路径)。
+  const [download] = await Promise.all([
+    page.waitForEvent("download"),
+    page.getByTestId("export-md-btn").click(),
+  ]);
+  expect(download.suggestedFilename()).toMatch(/实验计划-\d{8}-\d{4}\.md$/);
+  const path = await download.path();
+  const content = readFileSync(path, "utf-8");
+  expect(content).toContain("这是要导出的方案正文");
 });
 
 test("历史记录: localStorage 配额不足时保留最新记录(淘汰旧的)", async ({ page }) => {

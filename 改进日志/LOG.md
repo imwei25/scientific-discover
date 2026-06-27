@@ -10,6 +10,13 @@
 - **commit**：<short-hash>
 -->
 
+## 2026-06-27 — 子任务D 前端体验 / D5 文件下载健壮性 + 首个真实下载测试
+- **现状/动机**：`downloadText` 创建对象 URL、`a.click()` 后**同步立即** `URL.revokeObjectURL`，且锚点未挂到 DOM。这是已知陷阱：部分浏览器要求锚点在 DOM 中才触发下载；大文件（数据分析报告内嵌多张 base64 图，可达数 MB）在 click 后被立即 revoke 会中断下载。导出按钮此前只有“可见”断言，真实下载路径零覆盖。
+- **改动**：`frontend/src/lib/download.ts` 的 `downloadText`：锚点 `appendChild` 到 body、`display:none`，click 后用 `setTimeout(…,1000)` 延迟 `revokeObjectURL` 并移除锚点。
+- **测试**（Playwright，mock 后端）：① `tsc --noEmit` 通过；② 新增 e2e：实验规划出结果后点“导出 Markdown”，用 `page.waitForEvent('download')` 捕获下载，断言文件名匹配 `实验计划-YYYYMMDD-HHMM.md` 且读取文件内容含正文——真正走通 downloadText；③ **全量 21 个 e2e 全过**。
+- **部署**：已 `npm run build` 重建 dist。
+- **commit**：见下次提交
+
 ## 2026-06-27 — 子任务D 前端体验 / D4 历史记录配额不足时静默丢失修复
 - **现状/动机**：`history.addHistory` 写 localStorage 失败时 `catch{}` 直接忽略——新记录被静默丢弃。数据分析结果会把 base64 图表存进历史 `data`，单条很大，几次分析后 localStorage 很快撑满，此后历史**默默停止记录**，用户却以为存上了。
 - **改动**：`frontend/src/lib/history.ts` 的 `addHistory` 改为：写失败时逐步把列表减半（`Math.ceil(len/2)`，保留含最新的较新一半）后重试，直到写入成功或只剩 1 条仍放不下才放弃。最新记录因始终在 index 0 而总能存下（只要它本身不超额）。
