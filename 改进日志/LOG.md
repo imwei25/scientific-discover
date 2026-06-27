@@ -2,6 +2,13 @@
 
 > 每完成一个改进方向追加一条。最新在最上。
 
+## 2026-06-28 — 稳健性加固（loop 第9轮）：依赖审计 + 全端点冒烟测试
+- **主题**：质量/稳健性，不加功能。
+- **① 依赖审计**：grep app/ 全部第三方 import 比对 requirements.txt——全部覆盖(citeproc/docx/dotenv/fastapi/scipy/statsmodels/matplotlib/pandas 等；cycler 随 matplotlib 自带；其余为标准库)，新机器可正常安装，无缺漏，无需修改。doctor 自检 exit 0、13 项依赖齐全。
+- **② 全端点冒烟测试**：新增 `test_endpoints.py`(TestClient + mock 模式, 零额度)：逐个打 18 个 HTTP 端点(health/journals/usage + run/idea/imrad/rebuttal/idea-followup SSE + check-refs/journal-match/statcheck/figure-captions + sample-size/randomize/flow-diagram + docx/bundle)，断言无 500、关键结构正确(随机化 6 行、PRISMA png、bundle 为 PK)。锁死 8 模块+工具端点接线，防后续静默回归。
+- **测试**：test_endpoints 全过；既有 14 套后端测试 + doctor 均健康。纯后端改动, 无前端/ dist 变更。
+- **commit**：见本次提交
+
 ## 2026-06-28 — 质量打磨/一致性（loop 第8轮）：历史记录覆盖新模块 + 文档更新
 - **主题**：功能已全，转向一致性/文档/稳健性自查。
 - **自查结论**：后端 14 套测试全过、app.main 导入正常(健康)。发现并修复两处一致性问题：
