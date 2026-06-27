@@ -330,6 +330,52 @@ test("投稿包: 预提交体检 + 生成投稿信", async ({ page }) => {
   await expect(page.getByTestId("cover-panel").getByTestId("export-docx-btn")).toBeVisible();
 });
 
+test("数据分析: 生成图注", async ({ page }) => {
+  await mockBase(page);
+  const png =
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==";
+  await page.route("**/api/analyze", (r) =>
+    r.fulfill({
+      contentType: "text/event-stream",
+      body: sse(
+        { event: "code", data: { code: "sns.boxplot()" } },
+        { event: "charts", data: { items: [{ png, data: png, ext: "png" }] } },
+        { event: "delta", data: { text: "A组高于B组。" } },
+        { event: "done", data: {} },
+      ),
+    }),
+  );
+  await page.route("**/api/figure-captions", (r) =>
+    r.fulfill({ json: { ok: true, captions: ["图1. 箱线图展示两组疗效分布，A组中位数更高。"] } }),
+  );
+  await page.goto("/");
+  await page.getByTestId("nav-analyze").click();
+  await page.getByTestId("input-file").setInputFiles({ name: "d.csv", mimeType: "text/csv", buffer: Buffer.from("g,v\nA,5\nB,3\n") });
+  await page.getByTestId("run-btn").click();
+  await expect(page.getByTestId("chart-0")).toBeVisible();
+  await page.getByTestId("gen-captions-btn").click();
+  await expect(page.getByTestId("chart-caption-0")).toContainText("箱线图");
+});
+
+test("找选题: 提取 PICO / 纳排标准", async ({ page }) => {
+  await mockBase(page);
+  await page.route("**/api/run", (r) =>
+    r.fulfill({
+      contentType: "text/event-stream",
+      body: sse(
+        { event: "delta", data: { text: "## PICO\n| 要素 | 内容 |\n| --- | --- |\n| P | 患者 |\n## 建议纳入标准\n- 成人\n## 建议排除标准\n- 妊娠" } },
+        { event: "done", data: {} },
+      ),
+    }),
+  );
+  await page.goto("/");
+  await page.getByTestId("nav-idea").click();
+  await page.getByTestId("input-field").fill("二甲双胍治疗NAFLD");
+  await page.getByTestId("pico-btn").click();
+  await expect(page.getByTestId("pico-panel")).toContainText("PICO");
+  await expect(page.getByTestId("pico-panel")).toContainText("纳入标准");
+});
+
 test("实验规划: 随机化分组表生成并导出", async ({ page }) => {
   await mockBase(page);
   await page.route("**/api/randomize", (r) =>

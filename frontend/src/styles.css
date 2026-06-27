@@ -1108,6 +1108,16 @@ select {
   color: var(--warn);
   font-weight: 600;
 }
+.charts-toolbar {
+  margin-bottom: 8px;
+}
+.chart-caption {
+  font-size: 12px;
+  color: var(--muted);
+  margin: 4px 0;
+  text-align: left;
+  line-height: 1.5;
+}
 
 /* 首页工作流总览 */
 .home-overview {

@@ -75,6 +75,14 @@ class FlowRequest(BaseModel):
     counts: dict = {}
 
 
+class FigCapRequest(BaseModel):
+    count: int = 0
+    question: str = ""
+    code: str = ""
+    output: str = ""
+    conclusion: str = ""
+
+
 class BundleFile(BaseModel):
     name: str
     content: str
@@ -242,6 +250,14 @@ async def analyze(
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
+
+
+@app.post("/api/figure-captions")
+async def figure_captions(req: FigCapRequest) -> dict:
+    """为数据分析的每张图生成规范图注(基于代码/输出/结论, 不编造)。"""
+    from .figcaptions import caption
+
+    return await caption(req.model_dump())
 
 
 @app.post("/api/extract")

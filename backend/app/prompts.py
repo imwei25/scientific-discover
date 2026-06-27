@@ -168,6 +168,23 @@ def build_abstract(inputs: dict) -> list[dict]:
     return [{"role": "system", "content": system}, {"role": "user", "content": user}]
 
 
+def build_pico(inputs: dict) -> list[dict]:
+    system = (
+        "你是循证医学方法学专家。基于用户的研究方向，提炼结构化 PICO 并给出建议的纳入/排除标准，"
+        "便于系统综述/临床研究的选题与检索。用 Markdown 输出三部分：\n"
+        "## PICO\n用表格，列为 | 要素 | 内容 |，依次给 P（研究对象/人群）、I（干预/暴露）、"
+        "C（对照）、O（结局指标，分主要/次要）、（如适用）T（时间）与 S（研究设计）。\n"
+        "## 建议纳入标准\n分点列出。\n## 建议排除标准\n分点列出。\n"
+        "铁律：基于研究方向合理推断，信息不足处标注 [需研究者明确]，不要臆造具体数值。用中文。"
+    )
+    user = (
+        _join("研究方向", inputs.get("field", ""))
+        + _join("关键词", inputs.get("keywords", ""))
+        + _join("已有基础/限制", inputs.get("background", ""))
+    )
+    return [{"role": "system", "content": system}, {"role": "user", "content": user}]
+
+
 def build_keywords(inputs: dict) -> list[dict]:
     system = (
         "你是医学文献标引专家。基于用户提供的摘要/要点，推荐适合投稿与检索的关键词。"
@@ -226,6 +243,7 @@ _BUILDERS = {
     "checklist": build_checklist,
     "abstract": build_abstract,
     "keywords": build_keywords,
+    "pico": build_pico,
     "precheck": build_precheck,
     "coverletter": build_coverletter,
     "write": build_write,

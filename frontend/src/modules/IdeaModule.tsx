@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { streamIdea, streamIdeaFollowup, Reference, Trial, EvidenceItem, Verification, RewritePayload } from "../lib/sse";
+import { streamIdea, streamIdeaFollowup, runModule, Reference, Trial, EvidenceItem, Verification, RewritePayload } from "../lib/sse";
 import { addHistory } from "../lib/history";
 import Markdown from "../components/Markdown";
 import Dropzone from "../components/Dropzone";
@@ -195,6 +195,32 @@ export default function IdeaModule({ goto }: { goto: Goto }) {
     setFRunning(false);
   };
 
+  // PICO / 纳排标准提取
+  const [pico, setPico] = usePersistentState("idea:pico", "");
+  const [picoRunning, setPicoRunning] = useState(false);
+  const picoCtrl = useRef<AbortController | null>(null);
+
+  const genPico = async () => {
+    if (!field.trim() || picoRunning) return;
+    setPico("");
+    setPicoRunning(true);
+    picoCtrl.current = new AbortController();
+    await runModule(
+      "pico",
+      { field, keywords, background },
+      {
+        signal: picoCtrl.current.signal,
+        onDelta: (t) => setPico((p) => p + t),
+        onError: () => setPicoRunning(false),
+        onDone: () => {
+          setPicoRunning(false);
+          window.dispatchEvent(new Event("usage-updated"));
+        },
+      },
+    );
+    setPicoRunning(false);
+  };
+
   const toggleSource = (key: string) => {
     setSources((prev) => (prev.includes(key) ? prev.filter((s) => s !== key) : [...prev, key]));
   };
@@ -207,6 +233,8 @@ export default function IdeaModule({ goto }: { goto: Goto }) {
   const reset = () => {
     if (running) stop();
     fctrl.current?.abort();
+    picoCtrl.current?.abort();
+    setPico("");
     setFollowups([]);
     setCurrentAnswer("");
     setFollowupInput("");
@@ -345,11 +373,24 @@ export default function IdeaModule({ goto }: { goto: Goto }) {
           <button className="btn-primary" onClick={() => submit()} disabled={!field.trim() || running || noPaperSource} data-testid="run-btn">
             {running ? "调研中…" : "开始文献调研"}
           </button>
+          <button className="btn-secondary" onClick={genPico} disabled={!field.trim() || picoRunning} data-testid="pico-btn">
+            {picoRunning ? "提取中…" : "提取 PICO / 纳排标准"}
+          </button>
           <button className="btn-ghost" onClick={reset} data-testid="reset-btn">
             清空
           </button>
         </div>
       </div>
+
+      {(pico || picoRunning) && (
+        <details className="refs" open data-testid="pico-panel">
+          <summary>🔬 PICO 与纳入/排除标准</summary>
+          <div className="result-text">
+            {pico ? <Markdown>{pico}</Markdown> : <span className="result-placeholder">正在提取…</span>}
+            {picoRunning && <span className="cursor-blink">▍</span>}
+          </div>
+        </details>
+      )}
 
       {status && (
         <div className="status-line" data-testid="status-line">

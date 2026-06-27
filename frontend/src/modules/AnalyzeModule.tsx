@@ -4,6 +4,7 @@ import { usePersistentState } from "../lib/usePersistentState";
 import { addHistory } from "../lib/history";
 import Markdown from "../components/Markdown";
 import { downloadText, downloadBase64, chartMime, tsName, downloadAnalysisReport } from "../lib/download";
+import { apiUrl } from "../lib/api";
 import type { Goto } from "../App";
 
 const MAX_UPLOAD_BYTES = 30 * 1024 * 1024;
@@ -33,9 +34,28 @@ export default function AnalyzeModule({ goto }: { goto: Goto }) {
   const [charts, setCharts] = useState<ChartItem[]>([]);
   const [output, setOutput] = useState("");
   const [conclusion, setConclusion] = usePersistentState("analyze:conclusion", "");
+  const [captions, setCaptions] = useState<string[]>([]);
+  const [capBusy, setCapBusy] = useState(false);
   const [running, setRunning] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const ctrl = useRef<AbortController | null>(null);
+
+  const genCaptions = async () => {
+    if (!charts.length || capBusy) return;
+    setCapBusy(true);
+    try {
+      const resp = await fetch(apiUrl("/api/figure-captions"), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ count: charts.length, question, code, output, conclusion }),
+      });
+      const d = await resp.json();
+      if (d.ok) setCaptions(d.captions || []);
+    } finally {
+      setCapBusy(false);
+      window.dispatchEvent(new Event("usage-updated"));
+    }
+  };
 
   const savedRef = useRef("");
   useEffect(() => {
@@ -66,6 +86,7 @@ export default function AnalyzeModule({ goto }: { goto: Goto }) {
     setStatus("");
     setCode("");
     setCharts([]);
+    setCaptions([]);
     setOutput("");
     setConclusion("");
     setError(null);
@@ -104,6 +125,7 @@ export default function AnalyzeModule({ goto }: { goto: Goto }) {
     setQuestion("");
     setCode("");
     setCharts([]);
+    setCaptions([]);
     setOutput("");
     setConclusion("");
     setError(null);
@@ -232,11 +254,19 @@ export default function AnalyzeModule({ goto }: { goto: Goto }) {
 
       {charts.length > 0 && (
         <div className="analysis-block" data-testid="analysis-block">
+          {!running && (
+            <div className="charts-toolbar">
+              <button className="btn-ghost btn-sm" onClick={genCaptions} disabled={capBusy} data-testid="gen-captions-btn">
+                {capBusy ? "生成图注中…" : "✍️ 生成规范图注"}
+              </button>
+            </div>
+          )}
           <div className="charts">
             {charts.map((c, i) => (
               <figure key={i} className="chart">
                 <img src={`data:image/png;base64,${c.png}`} alt={`图 ${i + 1}`} data-testid={`chart-${i}`} />
                 <figcaption>
+                  {captions[i] && <p className="chart-caption" data-testid={`chart-caption-${i}`}>{captions[i]}</p>}
                   <button
                     className="btn-ghost btn-sm"
                     data-testid={`chart-download-${i}`}
