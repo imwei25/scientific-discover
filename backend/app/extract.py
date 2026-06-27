@@ -9,6 +9,8 @@ import io
 
 import pandas as pd
 
+from .textio import decode_text, read_csv_bytes
+
 MAX_CHARS = 50000  # 防止超长文档撑爆上下文/额度
 
 
@@ -58,12 +60,12 @@ def extract_text(filename: str, content: bytes) -> dict:
             return {"ok": True, "text": text, "kind": "excel", "truncated": truncated}
 
         if name.endswith(".csv"):
-            df = pd.read_csv(io.BytesIO(content))
+            df = read_csv_bytes(content)
             text, truncated = _cap(_table_text(df))
             return {"ok": True, "text": text, "kind": "csv", "truncated": truncated}
 
         if name.endswith((".txt", ".md")):
-            text, truncated = _cap(content.decode("utf-8", "ignore"))
+            text, truncated = _cap(decode_text(content))
             return {"ok": True, "text": text, "kind": "text", "truncated": truncated}
 
         return {"ok": False, "error": "暂不支持这种文件类型（支持 Word/PDF/Excel/CSV/txt）。"}

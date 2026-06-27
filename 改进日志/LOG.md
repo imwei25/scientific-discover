@@ -10,6 +10,12 @@
 - **commit**：<short-hash>
 -->
 
+## 2026-06-27 — 子任务E 检索与引用 / E2 文档提取编码健壮性
+- **现状/动机**：`extract.py` 抽取上传文档文本。两处编码缺陷：① `.csv` 用 `pd.read_csv` 默认 utf-8，GBK 文件崩溃；② `.txt/.md` 用 `content.decode("utf-8","ignore")`，GBK 文件里每个中文都是非法 utf-8 被 ignore **静默丢弃**——实测 14 个中文字只剩 1 个、正文变乱码，比报错更危险（用户拿到空/garbage 稿件却不知情）。
+- **改动**：新增共享模块 `backend/app/textio.py`，提供 `decode_text()` 与 `read_csv_bytes()`，统一编码回退链 `utf-8-sig→utf-8→gb18030→latin-1`。`extract.py` 的 csv/txt 改用之；`dataanalysis.py` 删除自己的重复实现、改 import 共享工具（DRY）。
+- **测试**（.venv 离线）：① 新增 `test_textio.py`：txt 的 GBK/带BOM/utf-8 均保留全文、GBK csv 正确提取、`_load` GBK 回归、decode 任意字节不抛错，全 PASS；② `test_fallback.py`/`test_network_retry.py` 全过（确认 dataanalysis 重构无回归）；③ `import app.main` 通过。
+- **commit**：见下次提交
+
 ## 2026-06-27 — 子任务D 前端体验 / D2 复制按钮在局域网 http 下失效修复
 - **现状/动机**：`navigator.clipboard` 仅在安全上下文（https/localhost）可用。本应用主推**局域网 http 访问**（仓库带 `允许局域网访问.bat`/`诊断局域网.bat`），此时 `navigator.clipboard` 为 undefined，复制按钮直接抛错、静默失效。两处中招：`ResultPanel.tsx`（四大模块共用的复制）与 `FormatModule.tsx` 的“复制全部”。
 - **改动**：新增 `frontend/src/lib/clipboard.ts` 的 `copyToClipboard()`：安全上下文用现代异步 API，否则/失败时回退到临时 textarea + `execCommand('copy')`，返回布尔成功值。两处调用改用它；`ResultPanel` 复制状态从布尔改为 `ok|fail|null`，失败显示“复制失败”。

@@ -25,6 +25,7 @@ import pandas as pd
 
 from .config import settings
 from .llm import stream_chat
+from .textio import read_csv_bytes
 
 EXEC_TIMEOUT = 60  # 秒
 
@@ -35,26 +36,11 @@ _DANGER = re.compile(
 )
 
 
-# 中文用户常从 Excel 导出 GBK/ANSI 编码的 CSV, 默认 utf-8 会直接 UnicodeDecodeError。
-# 依次尝试这些编码, gb18030 是 gbk/gb2312 的超集, latin-1 作为永不报错的兜底。
-_CSV_ENCODINGS = ("utf-8-sig", "utf-8", "gb18030", "latin-1")
-
-
-def _read_csv_bytes(content: bytes) -> pd.DataFrame:
-    last: Exception | None = None
-    for enc in _CSV_ENCODINGS:
-        try:
-            return pd.read_csv(io.BytesIO(content), encoding=enc)
-        except UnicodeDecodeError as e:
-            last = e
-            continue
-    raise last if last else ValueError("无法解析 CSV 文件。")
-
-
 def _load(filename: str, content: bytes) -> pd.DataFrame:
+    # CSV 用共享的健壮解码(兼容中文用户常见的 GBK/带BOM 编码), 见 textio.read_csv_bytes。
     if filename.lower().endswith((".xlsx", ".xls")):
         return pd.read_excel(io.BytesIO(content))
-    return _read_csv_bytes(content)
+    return read_csv_bytes(content)
 
 
 def profile_data(df: pd.DataFrame) -> str:

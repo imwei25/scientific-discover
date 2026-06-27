@@ -28,7 +28,7 @@
 
 ### 子任务E：检索与引用（literature.py, citations.py, extract.py）
 - [x] E1：引用 DOI 归一化（去 https://doi.org/、doi: 前缀）+ 自动去重（DOI 或 标题+年+作者），并提示去重条数
-- [ ] E2：文献提取的健壮性（异常 PDF/编码）
+- [x] E2：文档提取编码健壮性——新增共享 textio.py(decode_text/read_csv_bytes)；修复 extract.py 中 GBK CSV 崩溃、GBK txt 被 utf-8+ignore 静默丢字(14中文字→只剩1)；dataanalysis 复用同一工具去重。新增 test_textio.py。
 - [ ] E3：检索结果相关性排序与去噪
 
 ### 子任务F：部署易用性（scripts, .bat, 使用说明）
