@@ -1160,6 +1160,45 @@ select {
   font-size: 12px;
   color: var(--muted);
 }
+
+/* 追问 / 修改意见 */
+.followup {
+  margin-top: 18px;
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface-2, #f7f9f9);
+}
+.followup-head {
+  font-weight: 700;
+  margin-bottom: 4px;
+}
+.followup-tip {
+  font-size: 12px;
+  color: var(--muted);
+  margin: 0 0 10px;
+}
+.followup textarea {
+  width: 100%;
+  box-sizing: border-box;
+}
+.qa-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+.qa-item {
+  border-left: 3px solid var(--teal);
+  padding: 6px 0 6px 12px;
+}
+.qa-q {
+  font-weight: 600;
+  margin-bottom: 4px;
+}
+.qa-a {
+  font-size: 14px;
+}
 .verify-ok,
 .verify-bad {
   margin-top: 16px;

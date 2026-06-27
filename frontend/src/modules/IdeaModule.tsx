@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { streamIdea, Reference, Trial, EvidenceItem, Verification, RewritePayload } from "../lib/sse";
+import { streamIdea, streamIdeaFollowup, Reference, Trial, EvidenceItem, Verification, RewritePayload } from "../lib/sse";
 import { addHistory } from "../lib/history";
 import Markdown from "../components/Markdown";
 import Dropzone from "../components/Dropzone";
@@ -53,6 +53,14 @@ export default function IdeaModule({ goto }: { goto: Goto }) {
   const [rewrite, setRewrite] = useState<RewritePayload | null>(null);
   const ctrl = useRef<AbortController | null>(null);
 
+  // 追问 / 修改报告
+  const [followups, setFollowups] = usePersistentState<{ q: string; a: string }[]>("idea:qa", []);
+  const [followupInput, setFollowupInput] = useState("");
+  const [currentAnswer, setCurrentAnswer] = useState("");
+  const [fRunning, setFRunning] = useState(false);
+  const [fError, setFError] = useState<string | null>(null);
+  const fctrl = useRef<AbortController | null>(null);
+
   const savedRef = useRef("");
   useEffect(() => {
     if (!running && !error && text && savedRef.current !== text) {
@@ -69,6 +77,7 @@ export default function IdeaModule({ goto }: { goto: Goto }) {
           "idea:refs": refs,
           "idea:trials": trials,
           "idea:evidence": evidence,
+          "idea:qa": followups,
           "idea:verify": verify,
         },
       });
@@ -87,6 +96,9 @@ export default function IdeaModule({ goto }: { goto: Goto }) {
     setVerify(null);
     setError(null);
     setRewrite(null);
+    setFollowups([]);
+    setCurrentAnswer("");
+    setFError(null);
     setRunning(true);
     ctrl.current = new AbortController();
     await streamIdea(
@@ -142,6 +154,47 @@ export default function IdeaModule({ goto }: { goto: Goto }) {
     setRunning(false);
   };
 
+  const runFollowup = async (mode: "ask" | "revise") => {
+    const q = followupInput.trim();
+    if (!q || fRunning || running) return;
+    setFError(null);
+    setFRunning(true);
+    fctrl.current = new AbortController();
+    const baseReport = text; // revise 以当前报告为基准
+    let buf = "";
+    if (mode === "ask") setCurrentAnswer("…");
+    else setText(""); // revise: 流式重写报告
+    await streamIdeaFollowup(
+      { mode, question: q, report: baseReport, references: refs, evidence },
+      {
+        signal: fctrl.current.signal,
+        onDelta: (t) => {
+          buf += t;
+          if (mode === "ask") setCurrentAnswer(buf);
+          else setText((p) => p + t);
+        },
+        onVerify: (v) => {
+          if (mode === "revise") setVerify(v);
+        },
+        onError: (m) => {
+          setFError(m);
+          setFRunning(false);
+          if (mode === "revise") setText(baseReport); // 修改失败则回滚
+        },
+        onDone: () => {
+          if (mode === "ask") {
+            setFollowups((prev) => [...prev, { q, a: buf }]);
+            setCurrentAnswer("");
+          }
+          setFollowupInput("");
+          setFRunning(false);
+          window.dispatchEvent(new Event("usage-updated"));
+        },
+      },
+    );
+    setFRunning(false);
+  };
+
   const toggleSource = (key: string) => {
     setSources((prev) => (prev.includes(key) ? prev.filter((s) => s !== key) : [...prev, key]));
   };
@@ -153,6 +206,11 @@ export default function IdeaModule({ goto }: { goto: Goto }) {
 
   const reset = () => {
     if (running) stop();
+    fctrl.current?.abort();
+    setFollowups([]);
+    setCurrentAnswer("");
+    setFollowupInput("");
+    setFError(null);
     setField("");
     setKeywords("");
     setBackground("");
@@ -505,6 +563,67 @@ export default function IdeaModule({ goto }: { goto: Goto }) {
             ))}
           </div>
         )
+      )}
+
+      {text && !running && (
+        <div className="followup" data-testid="followup">
+          <div className="followup-head">追问 / 修改意见</div>
+          <p className="followup-tip">
+            可针对某篇文献或某条结论追问，或提出意见让 AI 修订报告。回答仍只基于本次检索到的真实文献。
+          </p>
+          {followups.length > 0 && (
+            <div className="qa-list" data-testid="qa-list">
+              {followups.map((qa, i) => (
+                <div key={i} className="qa-item">
+                  <div className="qa-q">❓ {qa.q}</div>
+                  <div className="qa-a">
+                    <Markdown>{qa.a}</Markdown>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+          {fRunning && currentAnswer && (
+            <div className="qa-item">
+              <div className="qa-a">
+                <Markdown>{currentAnswer}</Markdown>
+                <span className="cursor-blink">▍</span>
+              </div>
+            </div>
+          )}
+          <textarea
+            data-testid="followup-input"
+            value={followupInput}
+            onChange={(e) => setFollowupInput(e.target.value)}
+            placeholder="例如：第 3 篇的样本量是多少？/ 请把候选选题三改成偏机制研究 / 研究空白这部分再具体些"
+            rows={2}
+            disabled={fRunning}
+          />
+          {fError && <div className="result-error">{fError}</div>}
+          <div className="form-actions">
+            <button
+              className="btn-primary"
+              data-testid="ask-btn"
+              onClick={() => runFollowup("ask")}
+              disabled={!followupInput.trim() || fRunning}
+            >
+              追问
+            </button>
+            <button
+              className="btn-ghost"
+              data-testid="revise-btn"
+              onClick={() => runFollowup("revise")}
+              disabled={!followupInput.trim() || fRunning}
+            >
+              按此修改报告
+            </button>
+            {fRunning && (
+              <span className="status-line">
+                <span className="spinner" /> 处理中…
+              </span>
+            )}
+          </div>
+        </div>
       )}
     </div>
   );

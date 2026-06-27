@@ -218,6 +218,65 @@ export async function streamIdea(
   }
 }
 
+export interface FollowupHandlers {
+  onDelta: (text: string) => void;
+  onVerify?: (v: Verification) => void;
+  onDone?: () => void;
+  onError?: (message: string) => void;
+  signal?: AbortSignal;
+}
+
+// 对已生成的找选题报告追问/修改(基于回传文献, 不重新检索)。处理 delta / verify / done / error。
+export async function streamIdeaFollowup(
+  inputs: Record<string, unknown>,
+  h: FollowupHandlers,
+): Promise<void> {
+  let resp: Response;
+  try {
+    resp = await fetch(apiUrl("/api/idea-followup"), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ module: "idea", inputs }),
+      signal: h.signal,
+    });
+  } catch (e) {
+    h.onError?.(`无法连接本地服务: ${(e as Error).message}`);
+    return;
+  }
+  if (!resp.ok || !resp.body) {
+    h.onError?.(`服务返回错误: ${resp.status}`);
+    return;
+  }
+  const reader = resp.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const { events, rest } = parseChunk(buffer);
+      buffer = rest;
+      for (const ev of events) {
+        let data: any = {};
+        try {
+          data = JSON.parse(ev.data);
+        } catch {
+          /* ignore */
+        }
+        if (ev.event === "delta") h.onDelta(data.text ?? "");
+        else if (ev.event === "verify") h.onVerify?.(data as Verification);
+        else if (ev.event === "error") h.onError?.(data.message ?? ev.data);
+        else if (ev.event === "done") h.onDone?.();
+      }
+    }
+  } catch (e) {
+    if ((e as Error).name !== "AbortError") {
+      h.onError?.(`读取流出错: ${(e as Error).message}`);
+    }
+  }
+}
+
 export interface AnalyzeHandlers {
   onStatus?: (message: string) => void;
   onCode?: (code: string) => void;

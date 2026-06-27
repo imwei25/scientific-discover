@@ -216,6 +216,50 @@ test("找选题: 被引徽标/排序 + 证据表展示与导出 + 过滤器UI", 
   expect(d.suggestedFilename()).toMatch(/证据表.*\.csv/);
 });
 
+test("找选题: 追问追加问答 + 按意见修改报告", async ({ page }) => {
+  await mockBase(page);
+  await page.route("**/api/idea", (r) =>
+    r.fulfill({
+      contentType: "text/event-stream",
+      body: sse(
+        { event: "references", data: { items: [{ pmid: "1", title: "P1", first_author: "A", journal: "J", year: "2024", url: "https://pubmed.ncbi.nlm.nih.gov/1/", source: "pubmed" }] } },
+        { event: "delta", data: { text: "## 原始报告\n初始内容。" } },
+        { event: "verify", data: { total: 0, verified: 0, unverified: [] } },
+        { event: "done", data: {} },
+      ),
+    }),
+  );
+  // followup 按 mode 分支返回不同内容
+  await page.route("**/api/idea-followup", async (r) => {
+    const body = JSON.parse(r.request().postData() || "{}");
+    const mode = body?.inputs?.mode;
+    const text = mode === "revise" ? "## 修改后的报告\n已按意见修订。" : "这是针对追问的回答。";
+    r.fulfill({
+      contentType: "text/event-stream",
+      body: sse(
+        { event: "delta", data: { text } },
+        { event: "verify", data: { total: 0, verified: 0, unverified: [] } },
+        { event: "done", data: {} },
+      ),
+    });
+  });
+  await page.goto("/");
+  await page.getByTestId("nav-idea").click();
+  await page.getByTestId("input-field").fill("某方向");
+  await page.getByTestId("run-btn").click();
+  await expect(page.getByTestId("result-text")).toContainText("原始报告");
+  // 追问: 追加问答, 不改报告
+  await page.getByTestId("followup-input").fill("第1篇的结论是什么？");
+  await page.getByTestId("ask-btn").click();
+  await expect(page.getByTestId("qa-list")).toContainText("第1篇的结论是什么？");
+  await expect(page.getByTestId("qa-list")).toContainText("这是针对追问的回答");
+  await expect(page.getByTestId("result-text")).toContainText("原始报告"); // 报告未被改
+  // 修改: 替换报告
+  await page.getByTestId("followup-input").fill("精简为3个选题");
+  await page.getByTestId("revise-btn").click();
+  await expect(page.getByTestId("result-text")).toContainText("修改后的报告");
+});
+
 test("侧栏显示本次 token 用量", async ({ page }) => {
   await mockBase(page);
   await page.route("**/api/usage", (r) =>

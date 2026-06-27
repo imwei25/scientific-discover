@@ -23,7 +23,7 @@ from .config import settings
 from .journals import list_journals
 from .llm import LLMError, get_balance, get_session_usage, stream_chat
 from .prompts import build_messages
-from .research import deep_research_idea
+from .research import deep_research_idea, idea_followup
 
 # 说明: 依赖 pandas/scipy/matplotlib/citeproc/python-docx 等重库的模块
 # (dataanalysis / extract / citations / formatting) 改为"用到时才导入",
@@ -139,6 +139,20 @@ async def idea(req: RunRequest) -> StreamingResponse:
     """医学/药学/生物 找选题: 检索 PubMed + 分析现状/空白/选题(带文献链接)。"""
     async def gen():
         async for event, data in deep_research_idea(req.inputs):
+            yield _sse(event, data)
+
+    return StreamingResponse(
+        gen(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+@app.post("/api/idea-followup")
+async def idea_followup_ep(req: RunRequest) -> StreamingResponse:
+    """对已生成的找选题报告追问 / 按意见修改(基于回传的真实文献, 不重新检索)。"""
+    async def gen():
+        async for event, data in idea_followup(req.inputs):
             yield _sse(event, data)
 
     return StreamingResponse(

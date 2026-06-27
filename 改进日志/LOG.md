@@ -2,6 +2,15 @@
 
 > 每完成一个改进方向追加一条。最新在最上。
 
+## 2026-06-27 — 找选题增强 IV / 按子方向 Map-Reduce + 报告追问/修改
+- **动机**：用户要求 ①map-reduce 按子方向分组（更贴合空白矩阵结构）②允许对某篇文献/某条结论追问，或提意见让 LLM 修改报告。
+- **改动**：
+  - **按子方向分组**：deep 流改为 `_facet_grouped_search`——并发逐子方向检索、跨子方向去重(先到先得)、保留子方向归属；空白补检索作为「空白补充角度」独立组。Map 步 `_map_summaries_by_facet` 每个子方向各自归纳现状小结（`_summarize_chunk` 带 facet_name），Reduce 按子方向组织（`_reduce_messages_deep` 输入改为 [(子方向名, 小结)]）。证据抽取用全局 index 对齐。
+  - **追问/修改**：新增 `/api/idea-followup`(SSE) + `research.idea_followup`：ask=基于回传的真实文献+原报告回答追问；revise=按意见产出修改后完整报告。均严格 grounding、复用抽出的 `_verify_citations` 做引用核验。前端 IdeaModule 加「追问/修改意见」区：追问追加问答串(持久化 idea:qa)、修改流式重写报告(失败回滚)；sse.ts 加 streamIdeaFollowup。
+  - 重构：把引用核验逻辑抽成 `_verify_citations(full, items)`，deep/fast/followup 三处共用。
+- **测试**：① 真实 deep(肠道菌群×结直肠癌)：按子方向归纳→汇总，引用核验 6/6 全真、空白矩阵表格在；② 真实 followup：ask 基于文献作答、revise 重写报告引用核验 7/7 全真，额度几乎零消耗(¥1.47)；③ 5 套后端测试无回归；④ Playwright 29/29(新增追问追加问答+修改替换报告用例)，dist 已重建。
+- **commit**：见本次提交
+
 ## 2026-06-27 — 找选题增强 III / 8 项优化(Map-Reduce/被引/过滤/证据表导出/中文/试验入空白/token/缓存)
 - **动机**：用户在"进一步优化方向"菜单里选"除 OCR/需 key 源/Tauri/E2B 外其余全做"。E2B 因需 key+数据上云、违背本地隐私定位，跳过。
 - **改动**：
