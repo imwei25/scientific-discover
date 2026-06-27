@@ -2,6 +2,16 @@
 
 > 每完成一个改进方向追加一条。最新在最上。
 
+## 2026-06-27 — 数据分析画图增强 / 多格式导出 + 期刊配色 + 紧凑上传 + 画图提示
+- **动机**：用户问"能否让用户画图/以某种格式作图"。现状：能在研究目的里自然语言要求画图(AI 用 matplotlib)，但①不可发现②只产 ~120dpi PNG、无矢量/高清、不能逐图下载。用户选择：导出格式+逐图下载、期刊配色、输入框提示可画图、把大文件框改紧凑可拖拽。
+- **改动**：
+  - **多格式导出+逐图下载**：runner 每张图始终产展示用 PNG(120dpi)，另产用户所选格式的可下载资产——高清 PNG(300dpi)/SVG 矢量/PDF 矢量；charts 事件改为 `{png,data,ext}` 对象。前端每张图加"下载 XX"按钮(downloadBase64)，AnalyzeModule 加图表格式选择器。sse.ts normalizeCharts 兼容新旧两种 charts 形态。
+  - **期刊配色**：runner 按 palette 设 axes.prop_cycle——色盲友好(Okabe-Ito)/Nature(NPG)/Lancet；前端配色选择器。/api/analyze 增 chart_format、palette 两个 Form 字段，全程透传。
+  - **画图提示**：研究目的 placeholder 提示"可直接要求画图(箱线图/KM曲线/相关热图/ROC…)"；codegen 提示词要求"用户明确要求某图则务必画出、配色已统一无需手动指定"。
+  - **紧凑上传**：去掉数据分析页的大 Dropzone，改为"文件 chip + 提问"合一的紧凑输入区，可把文件拖到整块输入区或点击选择(保留 input-file/-info/-error testid 与 30MB 限制)。
+- **测试**：① 直接跑 _execute 验证 png/svg/pdf 三格式导出(SVG=`<?xml`、PDF=`%PDF` 魔数正确)、调色板不崩；② 真实 analyze 端到端(要求画箱线图+svg+lancet)：1 图 ext=svg、结论 1764 字、额度零消耗(¥1.43)；③ 后端测试修复 fake 签名后全过；④ Playwright 29/29(分析用例加格式/配色选择、文件 chip、逐图 SVG 下载断言)，dist 已重建。
+- **commit**：见本次提交
+
 ## 2026-06-27 — 找选题增强 IV / 按子方向 Map-Reduce + 报告追问/修改
 - **动机**：用户要求 ①map-reduce 按子方向分组（更贴合空白矩阵结构）②允许对某篇文献/某条结论追问，或提意见让 LLM 修改报告。
 - **改动**：

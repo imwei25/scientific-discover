@@ -1161,6 +1161,91 @@ select {
   color: var(--muted);
 }
 
+/* 数据分析: 紧凑文件+提问输入(可整体拖拽上传) */
+.analyze-input {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 10px 12px;
+  background: var(--card);
+  transition: border-color 0.15s, background 0.15s;
+}
+.analyze-input.dragover {
+  border-color: var(--teal);
+  background: var(--teal-soft);
+}
+.analyze-file-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding-bottom: 8px;
+  margin-bottom: 8px;
+  border-bottom: 1px dashed var(--line);
+  font-size: 13px;
+}
+.file-placeholder {
+  color: var(--muted);
+}
+.link-btn {
+  background: none;
+  border: none;
+  color: var(--teal);
+  cursor: pointer;
+  padding: 0;
+  font: inherit;
+  text-decoration: underline;
+}
+.file-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: var(--teal-soft);
+  color: var(--petrol);
+  border: 1px solid #c8e6e0;
+  border-radius: 14px;
+  padding: 3px 10px;
+  font-size: 13px;
+}
+.chip-x {
+  background: none;
+  border: none;
+  cursor: pointer;
+  color: var(--petrol);
+  font-size: 13px;
+  line-height: 1;
+  padding: 0;
+}
+.analyze-input textarea {
+  width: 100%;
+  box-sizing: border-box;
+  border: none;
+  background: transparent;
+  resize: vertical;
+  outline: none;
+  font: inherit;
+  color: inherit;
+}
+.chart-opts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 18px;
+  margin-top: 12px;
+}
+.field-inline {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  color: var(--muted);
+}
+.chart figcaption {
+  text-align: center;
+  margin-top: 4px;
+}
+.btn-sm {
+  font-size: 12px;
+  padding: 2px 10px;
+}
+
 /* 追问 / 修改意见 */
 .followup {
   margin-top: 18px;

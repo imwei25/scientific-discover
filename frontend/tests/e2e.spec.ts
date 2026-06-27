@@ -439,7 +439,7 @@ test("数据分析: AI写代码执行并输出结论", async ({ page }) => {
       body: sse(
         { event: "status", data: { message: "正在生成分析代码…" } },
         { event: "code", data: { code: "print('t检验 p=0.01')" } },
-        { event: "charts", data: { items: [png] } },
+        { event: "charts", data: { items: [{ png, data: png, ext: "svg" }] } },
         { event: "output", data: { text: "t检验 p=0.01" } },
         { event: "delta", data: { text: "核心发现：A组显著高于B组（p=0.01）。" } },
         { event: "done", data: {} },
@@ -448,17 +448,26 @@ test("数据分析: AI写代码执行并输出结论", async ({ page }) => {
   );
   await page.goto("/");
   await page.getByTestId("nav-analyze").click();
+  // 选择导出格式与配色(随请求发往后端)
+  await page.getByTestId("chart-format").selectOption("svg");
+  await page.getByTestId("chart-palette").selectOption("nature");
   await page.getByTestId("input-file").setInputFiles({
     name: "data.csv",
     mimeType: "text/csv",
     buffer: Buffer.from("group,value\nA,5\nB,3\n"),
   });
+  // 文件名以紧凑 chip 形式显示
+  await expect(page.getByTestId("input-file-info")).toContainText("data.csv");
   await page.getByTestId("input-question").fill("A组和B组是否有差异");
   await page.getByTestId("run-btn").click();
   await expect(page.getByTestId("code-block")).toContainText("t检验");
   await expect(page.getByTestId("chart-0")).toBeVisible();
   await expect(page.getByTestId("output-block")).toContainText("p=0.01");
   await expect(page.getByTestId("result-text")).toContainText("A组显著高于B组");
+  // 逐图下载按钮(按所选格式)
+  const dl = page.waitForEvent("download");
+  await page.getByTestId("chart-download-0").click();
+  expect((await dl).suggestedFilename()).toMatch(/\.svg$/);
   // 完成后可导出完整报告
   await expect(page.getByTestId("export-report-btn")).toBeVisible();
 });

@@ -16,6 +16,34 @@ export function downloadText(filename: string, text: string, mime = "text/markdo
   }, 1000);
 }
 
+// 下载 base64 编码的二进制(图表 png/svg/pdf 等)。
+export function downloadBase64(filename: string, b64: string, mime: string): void {
+  const bin = atob(b64);
+  const bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  const blob = new Blob([bytes], { type: mime });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  a.style.display = "none";
+  document.body.appendChild(a);
+  a.click();
+  setTimeout(() => {
+    URL.revokeObjectURL(url);
+    a.remove();
+  }, 1000);
+}
+
+const EXT_MIME: Record<string, string> = {
+  png: "image/png",
+  svg: "image/svg+xml",
+  pdf: "application/pdf",
+};
+export function chartMime(ext: string): string {
+  return EXT_MIME[ext] || "application/octet-stream";
+}
+
 // 生成带时间戳的文件名, 避免覆盖。形如 prefix-20260626-0655.md
 export function tsName(prefix: string, ext: string): string {
   const d = new Date();

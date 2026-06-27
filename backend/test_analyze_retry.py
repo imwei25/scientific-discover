@@ -20,7 +20,7 @@ async def _collect(fail_times: int):
     """让 _execute 前 fail_times 次失败, 之后成功; 返回(事件列表, 执行次数)。"""
     calls = {"n": 0}
 
-    def fake_execute(code, filename, content):
+    def fake_execute(code, filename, content, chart_format="png", palette="default"):
         calls["n"] += 1
         if calls["n"] <= fail_times:
             return {"ok": False, "error": "boom", "stdout": "", "charts": []}

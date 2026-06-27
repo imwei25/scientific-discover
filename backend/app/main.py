@@ -163,7 +163,12 @@ async def idea_followup_ep(req: RunRequest) -> StreamingResponse:
 
 
 @app.post("/api/analyze")
-async def analyze(file: UploadFile = File(...), question: str = Form("")) -> StreamingResponse:
+async def analyze(
+    file: UploadFile = File(...),
+    question: str = Form(""),
+    chart_format: str = Form("png"),
+    palette: str = Form("default"),
+) -> StreamingResponse:
     """AI 看懂数据 → 写分析代码 → 本地执行 → 流式输出结论(SSE)。"""
     from .dataanalysis import analyze_data
 
@@ -176,7 +181,7 @@ async def analyze(file: UploadFile = File(...), question: str = Form("")) -> Str
         return StreamingResponse(too_big(), media_type="text/event-stream")
 
     async def gen():
-        async for event, data in analyze_data(filename, content, question):
+        async for event, data in analyze_data(filename, content, question, chart_format, palette):
             yield _sse(event, data)
 
     return StreamingResponse(

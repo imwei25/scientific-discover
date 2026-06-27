@@ -277,10 +277,17 @@ export async function streamIdeaFollowup(
   }
 }
 
+// 一张图: png=用于网页内联展示的位图; data=用户所选格式的可下载资产; ext=下载扩展名。
+export interface ChartItem {
+  png: string;
+  data: string;
+  ext: string;
+}
+
 export interface AnalyzeHandlers {
   onStatus?: (message: string) => void;
   onCode?: (code: string) => void;
-  onCharts?: (items: string[]) => void;
+  onCharts?: (items: ChartItem[]) => void;
   onOutput?: (text: string) => void;
   onDelta: (text: string) => void;
   onDone?: () => void;
@@ -288,15 +295,26 @@ export interface AnalyzeHandlers {
   signal?: AbortSignal;
 }
 
+// 把后端可能的两种 charts 形态(老: base64 字符串; 新: {png,data,ext})统一成 ChartItem。
+function normalizeCharts(items: any[]): ChartItem[] {
+  return (items ?? []).map((c) =>
+    typeof c === "string" ? { png: c, data: c, ext: "png" } : { png: c.png, data: c.data ?? c.png, ext: c.ext ?? "png" },
+  );
+}
+
 // AI 数据分析: 上传文件(multipart), 流式接收 status/code/charts/output/delta。
 export async function streamAnalyze(
   file: File,
   question: string,
+  chartFormat: string,
+  palette: string,
   h: AnalyzeHandlers,
 ): Promise<void> {
   const fd = new FormData();
   fd.append("file", file);
   fd.append("question", question);
+  fd.append("chart_format", chartFormat);
+  fd.append("palette", palette);
   let resp: Response;
   try {
     resp = await fetch(apiUrl("/api/analyze"), { method: "POST", body: fd, signal: h.signal });
@@ -327,7 +345,7 @@ export async function streamAnalyze(
         }
         if (ev.event === "status") h.onStatus?.(data.message ?? "");
         else if (ev.event === "code") h.onCode?.(data.code ?? "");
-        else if (ev.event === "charts") h.onCharts?.(data.items ?? []);
+        else if (ev.event === "charts") h.onCharts?.(normalizeCharts(data.items));
         else if (ev.event === "output") h.onOutput?.(data.text ?? "");
         else if (ev.event === "delta") h.onDelta(data.text ?? "");
         else if (ev.event === "error") h.onError?.(data.message ?? ev.data);

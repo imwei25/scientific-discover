@@ -105,7 +105,9 @@ def _gen_code_messages(profile: str, question: str) -> list[dict]:
         "④ 若数据包含时间到事件（生存/随访）变量，使用 lifelines 做 Kaplan-Meier 曲线与 log-rank 检验、必要时 Cox 回归；\n"
         "⑤ 区分相关与因果，不要据观察性数据下因果结论；\n"
         "⑥ 用 print() 清晰打印每个关键结果并配中文说明；\n"
-        "⑦ 画出出版级质量的图（清晰的轴标签、图例、单位；用 matplotlib 默认样式，不要用需要 LaTeX 的样式，不要调用 plt.show()）；\n"
+        "⑦ 画出出版级质量的图（清晰的轴标签、图例、单位；用 matplotlib 默认样式，不要用需要 LaTeX 的样式，不要调用 plt.show()）；"
+        "若用户在【研究用途】中明确要求了某种图（如箱线图、小提琴图、KM 生存曲线、森林图、相关热图、ROC 曲线、带误差棒柱状图等），务必画出该图；"
+        "配色已由运行环境统一设置，无需手动指定颜色（除非用户特别要求）；\n"
         "⑧ 只使用已加载的 df，列名务必使用上面【数据画像】中真实存在的列名，不要臆造列名。\n"
         "pingouin 注意：当前版本结果列名为下划线（如 p_val、cohen_d、CI95），没有连字符或百分号；"
         "获取数值建议先 print(整个结果表)，再用 res['p_val'].iloc[0] 这类按位置取值，切勿硬编码 'p-val' 等不存在的列名。\n"
@@ -182,6 +184,24 @@ def _load(p):
             continue
     return pd.read_csv(p, encoding="latin-1")
 
+# 图表导出格式与期刊配色(由命令行传入)
+_FMT = (sys.argv[4] if len(sys.argv) > 4 else "png").lower()
+_PAL = (sys.argv[5] if len(sys.argv) > 5 else "default").lower()
+_PALETTES = {
+    # 色盲友好(Okabe-Ito)
+    "colorblind": ["#0072B2", "#D55E00", "#009E73", "#CC79A7", "#F0E442", "#56B4E9", "#E69F00", "#000000"],
+    # Nature 风格(NPG)
+    "nature": ["#E64B35", "#4DBBD5", "#00A087", "#3C5488", "#F39B7F", "#8491B4", "#91D1C2", "#DC0000"],
+    # Lancet 风格
+    "lancet": ["#00468B", "#ED0000", "#42B540", "#0099B4", "#925E9F", "#FDAF91", "#AD002A", "#ADB6B6"],
+}
+if _PAL in _PALETTES:
+    try:
+        from cycler import cycler
+        plt.rcParams["axes.prop_cycle"] = cycler(color=_PALETTES[_PAL])
+    except Exception:
+        pass
+
 df = _load(sys.argv[1])
 with open(sys.argv[2], "r", encoding="utf-8") as f:
     code = f.read()
@@ -201,15 +221,30 @@ finally:
 
 # 即便代码用了需要 LaTeX 的样式, 也强制关闭 usetex, 避免本机无 LaTeX 时出图失败
 plt.rcParams["text.usetex"] = False
+# 每张图: 始终产出用于网页内联展示的 png(120dpi); 另产出用户所选格式的可下载资产
+# (高清 png 300dpi / svg 矢量 / pdf 矢量), 满足投稿需求。
 charts = []
 for num in plt.get_fignums():
     fig = plt.figure(num)
-    b = io.BytesIO()
+    bd = io.BytesIO()
     try:
-        fig.savefig(b, format="png", dpi=120, bbox_inches="tight")
-        charts.append(base64.b64encode(b.getvalue()).decode())
+        fig.savefig(bd, format="png", dpi=120, bbox_inches="tight")
+        disp = base64.b64encode(bd.getvalue()).decode()
     except Exception:
-        pass
+        continue
+    data, ext = disp, "png"
+    try:
+        be = io.BytesIO()
+        if _FMT in ("svg", "pdf"):
+            fig.savefig(be, format=_FMT, bbox_inches="tight")
+            ext = _FMT
+        else:
+            fig.savefig(be, format="png", dpi=300, bbox_inches="tight")
+            ext = "png"
+        data = base64.b64encode(be.getvalue()).decode()
+    except Exception:
+        data, ext = disp, "png"
+    charts.append({"png": disp, "data": data, "ext": ext})
 result["stdout"] = buf.getvalue()
 result["charts"] = charts
 with open(sys.argv[3], "w", encoding="utf-8") as f:
@@ -217,7 +252,7 @@ with open(sys.argv[3], "w", encoding="utf-8") as f:
 '''
 
 
-def _execute(code: str, filename: str, content: bytes) -> dict:
+def _execute(code: str, filename: str, content: bytes, chart_format: str = "png", palette: str = "default") -> dict:
     """在子进程沙箱里执行 AI 生成的分析代码, 返回 {ok, stdout, charts, error}。"""
     if _DANGER.search(code):
         return {"ok": False, "error": "生成的代码包含不被允许的操作（文件/网络/系统调用），已拒绝执行。", "stdout": "", "charts": []}
@@ -237,7 +272,8 @@ def _execute(code: str, filename: str, content: bytes) -> dict:
 
         try:
             subprocess.run(
-                [sys.executable, runner_path, data_path, code_path, out_path],
+                [sys.executable, runner_path, data_path, code_path, out_path,
+                 (chart_format or "png"), (palette or "default")],
                 cwd=d,
                 timeout=EXEC_TIMEOUT,
                 capture_output=True,
@@ -261,7 +297,10 @@ async def _mock_flow(question: str) -> AsyncIterator[tuple[str, dict]]:
         yield ("delta", {"text": ch})
 
 
-async def analyze_data(filename: str, content: bytes, question: str) -> AsyncIterator[tuple[str, dict]]:
+async def analyze_data(
+    filename: str, content: bytes, question: str,
+    chart_format: str = "png", palette: str = "default",
+) -> AsyncIterator[tuple[str, dict]]:
     if settings.mock:
         async for ev in _mock_flow(question):
             yield ev
@@ -285,7 +324,7 @@ async def analyze_data(filename: str, content: bytes, question: str) -> AsyncIte
 
         yield ("code", {"code": code})
         yield ("status", {"message": "正在本地执行分析…"})
-        run = await asyncio.to_thread(_execute, code, filename, content)
+        run = await asyncio.to_thread(_execute, code, filename, content, chart_format, palette)
 
         # 自动纠错: 最多重试 3 次(共 4 次执行)。AI 写的统计代码(尤其 pingouin 版本相关的
         # 列名/函数签名)首次常报错, 2 次重试有时不够、导致整次分析失败; 多给一次显著提高成功率。
@@ -298,7 +337,7 @@ async def analyze_data(filename: str, content: bytes, question: str) -> AsyncIte
             )
             yield ("code", {"code": code})
             yield ("status", {"message": "正在重新执行…"})
-            run = await asyncio.to_thread(_execute, code, filename, content)
+            run = await asyncio.to_thread(_execute, code, filename, content, chart_format, palette)
 
         if run.get("charts"):
             yield ("charts", {"items": run["charts"]})
