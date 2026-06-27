@@ -260,6 +260,29 @@ test("找选题: 追问追加问答 + 按意见修改报告", async ({ page }) =
   await expect(page.getByTestId("result-text")).toContainText("修改后的报告");
 });
 
+test("报告规范核对: 选择规范并逐条核对稿件", async ({ page }) => {
+  await mockBase(page);
+  await page.route("**/api/run", (r) =>
+    r.fulfill({
+      contentType: "text/event-stream",
+      body: sse(
+        { event: "delta", data: { text: "【高优先级待补项】样本量估算缺失。\n\n| 条目 | 状态 |\n| --- | --- |\n| 标题 | ✅已报告 |\n| 样本量 | ❌缺失 |" } },
+        { event: "done", data: {} },
+      ),
+    }),
+  );
+  await page.goto("/");
+  await page.getByTestId("nav-checklist").click();
+  await page.getByTestId("input-guideline").selectOption("consort");
+  await page.getByTestId("input-manuscript").fill("一项随机对照试验……");
+  await page.getByTestId("run-btn").click();
+  await expect(page.getByTestId("result-text")).toContainText("高优先级待补项");
+  // 清单渲染成表格(remark-gfm)
+  await expect(page.getByTestId("result-text").locator("table")).toBeVisible();
+  await expect(page.getByTestId("result-text")).toContainText("❌缺失");
+  await expect(page.getByTestId("export-docx-btn")).toBeVisible();
+});
+
 test("实验规划: 生成统计分析计划(SAP)并提供 Word 导出", async ({ page }) => {
   await mockBase(page);
   await page.route("**/api/run", (r) =>

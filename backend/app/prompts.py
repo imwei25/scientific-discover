@@ -79,6 +79,34 @@ def build_sap(inputs: dict) -> list[dict]:
     return [{"role": "system", "content": system}, {"role": "user", "content": user}]
 
 
+_GUIDELINES = {
+    "strobe": ("STROBE", "观察性研究（队列/病例对照/横断面），22 个条目"),
+    "consort": ("CONSORT 2010", "随机对照试验（RCT），25 个条目"),
+    "prisma": ("PRISMA 2020", "系统综述与 Meta 分析，27 个条目"),
+    "spirit": ("SPIRIT 2013", "临床试验方案（protocol），33 个条目"),
+    "arrive": ("ARRIVE 2.0", "动物实验研究，Essential 10 + Recommended Set"),
+}
+
+
+def build_checklist(inputs: dict) -> list[dict]:
+    key = (inputs.get("guideline") or "strobe").strip().lower()
+    name, scope = _GUIDELINES.get(key, _GUIDELINES["strobe"])
+    system = (
+        f"你是熟悉 EQUATOR Network 报告规范的资深医学编辑。请依据《{name}》报告清单（适用于：{scope}），"
+        "逐条核对用户提供的稿件/方案是否满足每个条目。\n"
+        "请按该清单的标准条目顺序，输出一个 Markdown 表格，列为：\n"
+        "| 条目 | 规范要求 | 状态 | 正文位置/证据 | 修改建议 |\n"
+        "状态只用三选一：✅已报告 / ⚠️不充分 / ❌缺失。\n"
+        "表格之前，先给【高优先级待补项】：列出标为 ❌缺失 或 ⚠️不充分 的关键条目（尤其偏倚、样本量、"
+        "缺失数据处理、敏感性分析、伦理与注册、利益冲突/数据可得性声明等最常被审稿人挑的项）。\n"
+        "表格之后，给一句【总体合规度】小结（已报告/不充分/缺失 各几项）。\n"
+        "铁律：只依据用户提供的稿件内容判断，不要臆造稿件中不存在的信息；"
+        "无法判断的条目标⚠️并说明需作者确认。用中文。"
+    )
+    user = f"【报告规范】{name}\n\n【稿件/方案全文】\n{inputs.get('manuscript', '')}"
+    return [{"role": "system", "content": system}, {"role": "user", "content": user}]
+
+
 def build_write(inputs: dict) -> list[dict]:
     system = (
         "你是一位医学/药学/生物医学论文写作助手。下面给出的是【已由程序计算好的客观统计事实】。"
@@ -122,6 +150,7 @@ _BUILDERS = {
     "idea": build_idea,
     "plan": build_plan,
     "sap": build_sap,
+    "checklist": build_checklist,
     "write": build_write,
     "format": build_format,
 }

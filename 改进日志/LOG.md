@@ -2,6 +2,12 @@
 
 > 每完成一个改进方向追加一条。最新在最上。
 
+## 2026-06-27 — 新模块 / 报告规范核对 STROBE·CONSORT·PRISMA（loop 第2轮·方向①）
+- **动机**：顶刊投稿强制提交报告规范清单(EQUATOR)，偏倚/样本量/缺失数据/敏感性分析等条目最常被审稿人挑、最易被退稿；适合 LLM 做"条目↔正文位置"结构化核对。
+- **改动**：prompts.py 加 `build_checklist`(按所选规范逐条核对 → Markdown 表格 列=条目/要求/状态(✅已报告/⚠️不充分/❌缺失)/正文位置/修改建议，前置高优先级待补项、后附合规度小结；只据稿件不臆造)，注册 module="checklist"。前端新增 ChecklistModule(规范选择 STROBE/CONSORT/PRISMA/SPIRIT/ARRIVE + 稿件输入/上传 + 结果面板 + Word 导出，复用 useStream/ResultPanel)；App 加第 6 个 nav/路由/rail-tick(位次：排版→规范核对→回复审稿)；README 更新为 6 模块。
+- **测试**：真实核对 CONSORT(2384 字、表格+状态图标)、额度零消耗(¥1.42)；Playwright 32/32(新增规范核对用例：表格渲染+❌缺失+Word 导出)；dist 已重建。
+- **commit**：见本次提交
+
 ## 2026-06-27 — 实验规划升级 / 统计分析计划 SAP + Word 导出（loop 第2轮·方向③）
 - **动机**：实验规划是最单薄模块(仅一段文本)。本轮规则=多方向逐个做；先做最可控、医学/药学刚需的 SAP。
 - **改动**：prompts.py 加 `build_sap`(按 ICH E9/E9(R1) + Gamble 2017：研究设计与终点/estimand/ITT-mITT-PP 分析集/主要终点分析/次要探索性/预设协变量与亚组/多重性控制/缺失数据(机制+多重插补敏感性)/敏感性分析/期中分析/样本量依据/软件版本；信息不足标“需研究者确认”不臆造)，注册 module="sap" 走现有 /api/run。前端 PlanModule 加“生成统计分析计划(SAP)”按钮+独立 SAP 结果面板；ResultPanel 加可选 onExportDocx/panelTestId——实验计划与 SAP 均可一键导出 Word(复用 /api/docx)。

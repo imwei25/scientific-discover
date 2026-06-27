@@ -6,11 +6,12 @@ import IdeaModule from "./modules/IdeaModule";
 import PlanModule from "./modules/PlanModule";
 import AnalyzeModule from "./modules/AnalyzeModule";
 import FormatModule from "./modules/FormatModule";
+import ChecklistModule from "./modules/ChecklistModule";
 import RebuttalModule from "./modules/RebuttalModule";
 import HistoryView from "./modules/HistoryView";
 import ThemeSwitcher from "./components/ThemeSwitcher";
 
-export type ModuleId = "home" | "idea" | "plan" | "analyze" | "format" | "rebuttal" | "history";
+export type ModuleId = "home" | "idea" | "plan" | "analyze" | "format" | "checklist" | "rebuttal" | "history";
 // 跨模块传递: 把数据写入目标模块的持久化字段, 再切换过去。
 export type Goto = (target: ModuleId, patch?: Record<string, unknown>) => void;
 
@@ -19,6 +20,7 @@ const NAV: { id: ModuleId; icon: string; title: string; desc: string }[] = [
   { id: "plan", icon: "🗺️", title: "实验规划", desc: "把想法变成可执行的计划" },
   { id: "analyze", icon: "📊", title: "数据分析与写作", desc: "上传数据，分析并成文" },
   { id: "format", icon: "📄", title: "期刊排版", desc: "按目标期刊要求重排" },
+  { id: "checklist", icon: "✅", title: "报告规范核对", desc: "STROBE/CONSORT/PRISMA 自查" },
   { id: "rebuttal", icon: "✍️", title: "回复审稿", desc: "逐条回应审稿意见" },
 ];
 
@@ -184,6 +186,7 @@ export default function App() {
           <span className={`rail-tick ${active === "plan" ? "active" : ""}`} />
           <span className={`rail-tick ${active === "analyze" ? "active" : ""}`} />
           <span className={`rail-tick ${active === "format" ? "active" : ""}`} />
+          <span className={`rail-tick ${active === "checklist" ? "active" : ""}`} />
           <span className={`rail-tick ${active === "rebuttal" ? "active" : ""}`} />
         </div>
       </aside>
@@ -210,6 +213,7 @@ export default function App() {
           {active === "plan" && <PlanModule />}
           {active === "analyze" && <AnalyzeModule goto={goto} />}
           {active === "format" && <FormatModule />}
+          {active === "checklist" && <ChecklistModule />}
           {active === "rebuttal" && <RebuttalModule />}
           {active === "history" && <HistoryView goto={goto} />}
         </div>
