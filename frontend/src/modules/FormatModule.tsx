@@ -13,6 +13,24 @@ interface Journal {
   summary: string;
 }
 
+interface RefCheckItem {
+  raw: string;
+  doi: string;
+  pmid: string;
+  title: string;
+  status: string; // real | not_found | retracted | unverifiable
+  note: string;
+  completed: string;
+  duplicate_of?: number;
+}
+
+const REFCHECK_BADGE: Record<string, { label: string; cls: string }> = {
+  real: { label: "✓ 真实", cls: "rc-real" },
+  not_found: { label: "✗ 查无此文献", cls: "rc-bad" },
+  retracted: { label: "⚠ 已撤稿", cls: "rc-warn" },
+  unverifiable: { label: "? 无法核验", cls: "rc-gray" },
+};
+
 export default function FormatModule() {
   const [journals, setJournals] = useState<Journal[]>([]);
   const [journalId, setJournalId] = usePersistentState("format:journal", "");
@@ -29,6 +47,33 @@ export default function FormatModule() {
   const [fmtRefs, setFmtRefs] = usePersistentState<string[]>("format:fmtRefs", []);
   const [refsBusy, setRefsBusy] = useState(false);
   const [refsErr, setRefsErr] = useState<string | null>(null);
+
+  // 参考文献核验(真实性/撤稿/去重/补全)
+  const [checkResult, setCheckResult] = usePersistentState<RefCheckItem[]>("format:refcheck", []);
+  const [checkBusy, setCheckBusy] = useState(false);
+  const [checkErr, setCheckErr] = useState<string | null>(null);
+
+  const checkRefs = async () => {
+    if (!refsInput.trim() || checkBusy) return;
+    setCheckBusy(true);
+    setCheckErr(null);
+    setCheckResult([]);
+    try {
+      const resp = await fetch(apiUrl("/api/check-refs"), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ references: refsInput }),
+      });
+      const d = await resp.json();
+      if (d.ok) setCheckResult(d.items || []);
+      else setCheckErr(d.error || "核验失败");
+    } catch (e) {
+      setCheckErr(`核验失败：${(e as Error).message}`);
+    } finally {
+      setCheckBusy(false);
+      window.dispatchEvent(new Event("usage-updated"));
+    }
+  };
 
   const savedRef = useRef("");
   useEffect(() => {
@@ -122,6 +167,8 @@ export default function FormatModule() {
     setRefsInput("");
     setFmtRefs([]);
     setRefsErr(null);
+    setCheckResult([]);
+    setCheckErr(null);
   };
 
   const downloadDocx = async () => {
@@ -290,15 +337,58 @@ export default function FormatModule() {
             rows={5}
           />
         </label>
-        <button
-          className="btn-primary"
-          onClick={formatRefs}
-          disabled={!refsInput.trim() || refsBusy}
-          data-testid="format-refs-btn"
-        >
-          {refsBusy ? "格式化中…" : "按该期刊格式化参考文献"}
-        </button>
+        <div className="form-actions">
+          <button
+            className="btn-primary"
+            onClick={formatRefs}
+            disabled={!refsInput.trim() || refsBusy}
+            data-testid="format-refs-btn"
+          >
+            {refsBusy ? "格式化中…" : "按该期刊格式化参考文献"}
+          </button>
+          <button
+            className="btn-secondary"
+            onClick={checkRefs}
+            disabled={!refsInput.trim() || checkBusy}
+            data-testid="check-refs-btn"
+          >
+            {checkBusy ? "核验中…" : "核验真实性 / 撤稿 / 去重"}
+          </button>
+        </div>
       </div>
+
+      {checkErr && (
+        <div className="result-error" data-testid="refcheck-error">
+          {checkErr}
+        </div>
+      )}
+
+      {checkResult.length > 0 && (
+        <div className="result-panel" data-testid="refcheck">
+          <div className="result-toolbar">
+            <span className="result-status">
+              核验 {checkResult.length} 条 ·
+              {" "}真实 {checkResult.filter((x) => x.status === "real" && !x.duplicate_of).length}
+              {" "}/ 问题 {checkResult.filter((x) => x.status === "not_found" || x.status === "retracted" || x.duplicate_of).length}
+            </span>
+          </div>
+          <ol className="ref-list" data-testid="refcheck-list">
+            {checkResult.map((it, i) => {
+              const b = it.duplicate_of
+                ? { label: `⧉ 与第${it.duplicate_of}条重复`, cls: "rc-gray" }
+                : REFCHECK_BADGE[it.status] || REFCHECK_BADGE.unverifiable;
+              return (
+                <li key={i}>
+                  <span className={`ref-badge ${b.cls}`}>{b.label}</span>
+                  {it.title || it.raw}
+                  {it.doi && <span className="ref-journal"> — {it.doi}</span>}
+                  {it.note && <span className="refcheck-note">{it.note}</span>}
+                </li>
+              );
+            })}
+          </ol>
+        </div>
+      )}
 
       {refsErr && (
         <div className="result-error" data-testid="refs-error">

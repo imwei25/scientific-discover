@@ -1077,6 +1077,32 @@ select {
   color: #4a5568;
   border: 1px solid #d8e0e8;
 }
+.ref-badge.rc-real {
+  background: #e6f6ec;
+  color: #1a7f43;
+  border: 1px solid #b6e3c6;
+}
+.ref-badge.rc-bad {
+  background: var(--warn-bg, #fde8e8);
+  color: #b42318;
+  border: 1px solid #f5c2c0;
+}
+.ref-badge.rc-warn {
+  background: #fff4e6;
+  color: #9a5b00;
+  border: 1px solid #ffd9a8;
+}
+.ref-badge.rc-gray {
+  background: #f0f2f4;
+  color: #5b6675;
+  border: 1px solid #d8dde3;
+}
+.refcheck-note {
+  display: block;
+  font-size: 12px;
+  color: var(--muted);
+  margin-top: 2px;
+}
 
 /* 检索过滤器 */
 .filter-row {

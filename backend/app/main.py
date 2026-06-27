@@ -217,6 +217,14 @@ async def extract(file: UploadFile = File(...)) -> dict:
     return extract_text(file.filename or "file", content)
 
 
+@app.post("/api/check-refs")
+async def check_refs(req: RefsRequest) -> dict:
+    """参考文献核验: DOI 真实性 / 撤稿 / 去重 / 补全(确定性网络核验 + 一次 LLM 解析)。"""
+    from .refcheck import check_references
+
+    return await check_references(req.references)
+
+
 @app.post("/api/format-refs")
 async def format_refs(req: RefsRequest) -> dict:
     """按目标期刊的 CSL 样式格式化参考文献(LLM 解析 + citeproc 渲染)。"""
