@@ -10,6 +10,12 @@
 - **commit**：<short-hash>
 -->
 
+## 2026-06-27 — 子任务C 稳定性 / C3-a 数据分析安全护栏误杀修复
+- **现状/动机**：`dataanalysis._DANGER` 用 `\b(...|eval\s*\(|open\s*\()` 判危险。`\b` 是零宽词边界，`df.eval("a+b")`（合法 pandas）里 `.` 与 `eval` 间也算边界，于是被当成危险调用**误杀**，正常分析被拒并弹“包含不被允许的操作”。同时内置 `exec(` 当时未拦（注入面）。
+- **改动**：`backend/app/dataanalysis.py` 重写 `_DANGER`：模块/名称类仍用 `\b`；`eval/exec/open` 改为 `(?<![\w.])(?:eval|exec|open)\s*\(`——仅匹配“前面不是 . 或字母”的内置函数形式。这样挡住注入/读文件，又放行 `df.eval()`、`df.query()`、`re.compile()`、含 open 的列名。
+- **测试**（.venv 离线）：① `test_danger_guard.py` 12 例全过（合法 5 放行 / 危险 7 拦截，含新增 exec）；② **端到端** `_execute`：`df.eval` 代码 ok=True 输出 sum_c=21（修复前会被拒），`subprocess` 仍被拦并给友好中文；③ `import app.main` 通过。
+- **commit**：见下次提交
+
 ## 2026-06-27 — 子任务E 检索与引用 / E2 文档提取编码健壮性
 - **现状/动机**：`extract.py` 抽取上传文档文本。两处编码缺陷：① `.csv` 用 `pd.read_csv` 默认 utf-8，GBK 文件崩溃；② `.txt/.md` 用 `content.decode("utf-8","ignore")`，GBK 文件里每个中文都是非法 utf-8 被 ignore **静默丢弃**——实测 14 个中文字只剩 1 个、正文变乱码，比报错更危险（用户拿到空/garbage 稿件却不知情）。
 - **改动**：新增共享模块 `backend/app/textio.py`，提供 `decode_text()` 与 `read_csv_bytes()`，统一编码回退链 `utf-8-sig→utf-8→gb18030→latin-1`。`extract.py` 的 csv/txt 改用之；`dataanalysis.py` 删除自己的重复实现、改 import 共享工具（DRY）。

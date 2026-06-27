@@ -30,9 +30,12 @@ from .textio import read_csv_bytes
 EXEC_TIMEOUT = 60  # 秒
 
 # 轻量安全护栏: 命中这些明显危险的调用则拒绝执行(本地用户环境, 主要防误伤)。
+# eval/exec/open 仅拦截“内置函数”形式(前面不是 . 或字母): 这样既挡住注入/读文件,
+# 又不会误伤合法的 pandas 方法 df.eval()/df.query() 等(它们前面有 . )。
 _DANGER = re.compile(
-    r"\b(subprocess|os\.system|os\.remove|os\.rmdir|os\.unlink|shutil\.(rmtree|move|copy)|"
-    r"socket|requests|urllib|httpx|Popen|__import__|eval\s*\(|open\s*\()",
+    r"\b(?:subprocess|os\.system|os\.remove|os\.rmdir|os\.unlink|shutil\.(?:rmtree|move|copy)|"
+    r"socket|requests|urllib|httpx|Popen|__import__)\b"
+    r"|(?<![\w.])(?:eval|exec|open)\s*\(",
 )
 
 
