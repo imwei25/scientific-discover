@@ -232,64 +232,161 @@ function Home({ onPick }: { onPick: (m: ModuleId) => void }) {
   );
 }
 
-// 缓慢自转 + 鼠标拖拽旋转的咖啡因分子骨架（C8H10N4O2）
-// 不用 React state 驱动角度，直接 ref + setAttribute 避免每帧重 render。
+// ── 3D 球棍分子模型：咖啡因（C8H10N4O2）─────────────────────────
+// 数据：原子的 3D 坐标（埃，源自标准晶体结构）+ 键连接关系
+type AtomEl = "C" | "N" | "O" | "H";
+const ATOMS_3D: readonly { el: AtomEl; pos: readonly [number, number, number] }[] = [
+  { el: "N", pos: [-1.83,  1.41,  0.02] }, // 0  N1
+  { el: "C", pos: [-0.55,  2.00,  0.04] }, // 1  C2
+  { el: "N", pos: [ 0.55,  1.20,  0.04] }, // 2  N3
+  { el: "C", pos: [ 0.31, -0.16,  0.02] }, // 3  C4
+  { el: "C", pos: [-0.97, -0.79,  0.00] }, // 4  C5
+  { el: "C", pos: [-2.13, -0.05,  0.02] }, // 5  C6
+  { el: "N", pos: [-0.86, -2.18,  0.00] }, // 6  N7
+  { el: "C", pos: [ 0.52, -2.36,  0.04] }, // 7  C8
+  { el: "N", pos: [ 1.27, -1.16,  0.04] }, // 8  N9
+  { el: "O", pos: [-0.34,  3.21,  0.06] }, // 9  O on C2
+  { el: "O", pos: [-3.30, -0.45,  0.02] }, // 10 O on C6
+  { el: "C", pos: [-3.06,  2.22,  0.50] }, // 11 CH3 on N1
+  { el: "C", pos: [ 1.91,  1.69, -0.50] }, // 12 CH3 on N3
+  { el: "C", pos: [-1.94, -3.16,  0.55] }, // 13 CH3 on N7
+  { el: "H", pos: [ 1.05, -3.27,  0.06] }, // 14 H on C8
+];
+const BONDS_3D: readonly { a: number; b: number }[] = [
+  { a: 0,  b: 1 },  { a: 1,  b: 2 },  { a: 2,  b: 3 },
+  { a: 3,  b: 4 },  { a: 4,  b: 5 },  { a: 5,  b: 0 },
+  { a: 4,  b: 6 },  { a: 6,  b: 7 },  { a: 7,  b: 8 }, { a: 8, b: 3 },
+  { a: 1,  b: 9 },  { a: 5,  b: 10 },
+  { a: 0,  b: 11 }, { a: 2,  b: 12 }, { a: 6,  b: 13 }, { a: 7, b: 14 },
+];
+const ATOM_RADIUS: Record<AtomEl, number> = { C: 11, N: 12, O: 13, H: 7 };
+const ATOM_STICK_COLOR: Record<AtomEl, string> = {
+  C: "#42504e", N: "#0c5e58", O: "#9b1c14", H: "#a8b3b1",
+};
+
+const VIEW = 500;
+const CENTER = VIEW / 2;
+const SCALE = 38;       // 像素 / 埃
+const PERSP_K = 0.18;   // 透视强度（越大越夸张）
+const PERSP_D = 8;      // 焦距
+
+function project3D(
+  pos: readonly [number, number, number],
+  rx: number,
+  ry: number,
+) {
+  const [x, y, z] = pos;
+  // X 轴旋转（屏幕上下倾斜）
+  const cosX = Math.cos(rx), sinX = Math.sin(rx);
+  const y1 = y * cosX - z * sinX;
+  const z1 = y * sinX + z * cosX;
+  // Y 轴旋转（屏幕水平转）
+  const cosY = Math.cos(ry), sinY = Math.sin(ry);
+  const x2 = x * cosY + z1 * sinY;
+  const z2 = -x * sinY + z1 * cosY;
+  // 透视（远小近大）
+  const persp = PERSP_D / (PERSP_D + z2 * PERSP_K);
+  return {
+    x: CENTER + x2 * SCALE * persp,
+    y: CENTER - y1 * SCALE * persp,
+    z: z2,
+    persp,
+  };
+}
+
+// 3D 球棍模型 hero。自转 + 鼠标拖拽双轴旋转。
 function HeroArt() {
   const containerRef = useRef<HTMLDivElement>(null);
-  const spinRef = useRef<SVGGElement>(null);
+  const atomRefs = useRef<(SVGCircleElement | null)[]>([]);
+  const bondARefs = useRef<(SVGLineElement | null)[]>([]);
+  const bondBRefs = useRef<(SVGLineElement | null)[]>([]);
+
   const stateRef = useRef({
-    angle: 0,
+    rx: -0.35,            // 初始向下倾，避免正面看像贴片
+    ry: 0,
     dragging: false,
-    lastCursorAngle: 0,
+    lastX: 0,
+    lastY: 0,
   });
 
   useEffect(() => {
     let raf = 0;
     let last = performance.now();
+
+    const draw = () => {
+      const { rx, ry } = stateRef.current;
+      const projected = ATOMS_3D.map((a) => project3D(a.pos, rx, ry));
+
+      // 原子球（位置 + 半径透视缩放）
+      for (let i = 0; i < ATOMS_3D.length; i++) {
+        const ref = atomRefs.current[i];
+        if (!ref) continue;
+        const p = projected[i];
+        const r = ATOM_RADIUS[ATOMS_3D[i].el] * p.persp;
+        ref.setAttribute("cx", p.x.toFixed(2));
+        ref.setAttribute("cy", p.y.toFixed(2));
+        ref.setAttribute("r", r.toFixed(2));
+      }
+
+      // 化学键：每根拆成两半，各取所连原子的颜色
+      for (let i = 0; i < BONDS_3D.length; i++) {
+        const { a, b } = BONDS_3D[i];
+        const pa = projected[a];
+        const pb = projected[b];
+        const mx = (pa.x + pb.x) / 2;
+        const my = (pa.y + pb.y) / 2;
+        const sw = (3.4 * (pa.persp + pb.persp)) / 2;
+        const refA = bondARefs.current[i];
+        const refB = bondBRefs.current[i];
+        if (refA) {
+          refA.setAttribute("x1", pa.x.toFixed(2));
+          refA.setAttribute("y1", pa.y.toFixed(2));
+          refA.setAttribute("x2", mx.toFixed(2));
+          refA.setAttribute("y2", my.toFixed(2));
+          refA.setAttribute("stroke-width", sw.toFixed(2));
+        }
+        if (refB) {
+          refB.setAttribute("x1", mx.toFixed(2));
+          refB.setAttribute("y1", my.toFixed(2));
+          refB.setAttribute("x2", pb.x.toFixed(2));
+          refB.setAttribute("y2", pb.y.toFixed(2));
+          refB.setAttribute("stroke-width", sw.toFixed(2));
+        }
+      }
+    };
+
     const tick = (now: number) => {
       const dt = (now - last) / 1000;
       last = now;
-      // 不在拖拽中时缓慢自转（2.5°/sec ≈ 一圈 144 秒）
       if (!stateRef.current.dragging) {
-        stateRef.current.angle += 2.5 * dt;
+        stateRef.current.ry += 0.18 * dt; // 约 10.3°/sec，一圈 ~35s
       }
-      if (spinRef.current) {
-        spinRef.current.setAttribute(
-          "transform",
-          `rotate(${stateRef.current.angle} 250 250)`,
-        );
-      }
+      draw();
       raf = requestAnimationFrame(tick);
     };
     raf = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(raf);
   }, []);
 
-  const cursorAngleFromCenter = (clientX: number, clientY: number) => {
-    const rect = containerRef.current?.getBoundingClientRect();
-    if (!rect) return 0;
-    const cx = rect.left + rect.width / 2;
-    const cy = rect.top + rect.height / 2;
-    return (Math.atan2(clientY - cy, clientX - cx) * 180) / Math.PI;
-  };
-
   const onPointerDown = (e: React.PointerEvent) => {
     stateRef.current.dragging = true;
-    stateRef.current.lastCursorAngle = cursorAngleFromCenter(e.clientX, e.clientY);
+    stateRef.current.lastX = e.clientX;
+    stateRef.current.lastY = e.clientY;
     (e.currentTarget as Element).setPointerCapture(e.pointerId);
   };
-
   const onPointerMove = (e: React.PointerEvent) => {
     if (!stateRef.current.dragging) return;
-    const cur = cursorAngleFromCenter(e.clientX, e.clientY);
-    // 跨越 ±180° 时归一化，避免突然回弹
-    let delta = cur - stateRef.current.lastCursorAngle;
-    if (delta > 180) delta -= 360;
-    if (delta < -180) delta += 360;
-    stateRef.current.lastCursorAngle = cur;
-    stateRef.current.angle += delta;
+    const dx = e.clientX - stateRef.current.lastX;
+    const dy = e.clientY - stateRef.current.lastY;
+    stateRef.current.ry += dx * 0.012;  // 横向 → Y 轴（左右转）
+    stateRef.current.rx += dy * 0.012;  // 纵向 → X 轴（上下倾）
+    // 限制 X 倾不超过 ±80° 避免上下翻飞
+    const max = Math.PI / 2 - 0.1;
+    if (stateRef.current.rx > max) stateRef.current.rx = max;
+    if (stateRef.current.rx < -max) stateRef.current.rx = -max;
+    stateRef.current.lastX = e.clientX;
+    stateRef.current.lastY = e.clientY;
   };
-
   const onPointerUp = (e: React.PointerEvent) => {
     stateRef.current.dragging = false;
     (e.currentTarget as Element).releasePointerCapture?.(e.pointerId);
@@ -306,10 +403,10 @@ function HeroArt() {
       data-testid="hero-art"
     >
       <svg
-        viewBox="0 0 500 500"
+        viewBox={`0 0 ${VIEW} ${VIEW}`}
         className="hero-svg"
         role="img"
-        aria-label="caffeine molecule, C8H10N4O2"
+        aria-label="caffeine 3D ball-and-stick model"
       >
         <defs>
           <radialGradient id="hero-halo" cx="50%" cy="50%" r="50%">
@@ -317,108 +414,79 @@ function HeroArt() {
             <stop offset="55%" stopColor="var(--teal)" stopOpacity="0.05" />
             <stop offset="100%" stopColor="var(--teal)" stopOpacity="0" />
           </radialGradient>
+          {/* 各元素的 3D 球面径向渐变：高光在左上 */}
+          <radialGradient id="atom-c" cx="32%" cy="28%" r="68%">
+            <stop offset="0%" stopColor="#c8d2d0" />
+            <stop offset="55%" stopColor="#6c7876" />
+            <stop offset="100%" stopColor="#1f2928" />
+          </radialGradient>
+          <radialGradient id="atom-n" cx="32%" cy="28%" r="68%">
+            <stop offset="0%" stopColor="#9bebe2" />
+            <stop offset="55%" stopColor="#1d8e85" />
+            <stop offset="100%" stopColor="#062927" />
+          </radialGradient>
+          <radialGradient id="atom-o" cx="32%" cy="28%" r="68%">
+            <stop offset="0%" stopColor="#ffb3a8" />
+            <stop offset="55%" stopColor="#c84030" />
+            <stop offset="100%" stopColor="#5c1009" />
+          </radialGradient>
+          <radialGradient id="atom-h" cx="28%" cy="22%" r="74%">
+            <stop offset="0%" stopColor="#ffffff" />
+            <stop offset="60%" stopColor="#c5cecc" />
+            <stop offset="100%" stopColor="#6a7674" />
+          </radialGradient>
         </defs>
 
-        {/* halo glow */}
-        <circle cx="250" cy="250" r="230" fill="url(#hero-halo)" />
-
-        {/* 远景同心轨道 */}
+        {/* 背景光晕 + 远景同心轨道（不旋转） */}
+        <circle cx={CENTER} cy={CENTER} r="230" fill="url(#hero-halo)" />
         <g className="hero-rings" fill="none">
-          <circle cx="250" cy="250" r="228" stroke="var(--line)" strokeWidth="0.6" strokeDasharray="1 7" />
-          <circle cx="250" cy="250" r="195" stroke="var(--line-soft)" strokeWidth="0.7" />
+          <circle cx={CENTER} cy={CENTER} r="228" stroke="var(--line)" strokeWidth="0.6" strokeDasharray="1 7" />
+          <circle cx={CENTER} cy={CENTER} r="195" stroke="var(--line-soft)" strokeWidth="0.7" />
         </g>
 
-        {/* 分子骨架（拖拽 + 自转） */}
-        <g ref={spinRef} transform="rotate(0 250 250)">
-          <Molecule />
+        {/* 化学键：每根拆成两段，按所连原子着色 */}
+        <g className="bonds-group" strokeLinecap="round">
+          {BONDS_3D.map((bond, i) => (
+            <g key={`bond-${i}`}>
+              <line
+                ref={(el) => {
+                  bondARefs.current[i] = el;
+                }}
+                stroke={ATOM_STICK_COLOR[ATOMS_3D[bond.a].el]}
+              />
+              <line
+                ref={(el) => {
+                  bondBRefs.current[i] = el;
+                }}
+                stroke={ATOM_STICK_COLOR[ATOMS_3D[bond.b].el]}
+              />
+            </g>
+          ))}
         </g>
 
-        {/* 角标：化学式 */}
+        {/* 原子球 */}
+        <g className="atoms-group">
+          {ATOMS_3D.map((atom, i) => (
+            <circle
+              key={`atom-${i}`}
+              ref={(el) => {
+                atomRefs.current[i] = el;
+              }}
+              fill={`url(#atom-${atom.el.toLowerCase()})`}
+            />
+          ))}
+        </g>
+
+        {/* 角标 */}
         <g className="hero-caption">
-          <text x="250" y="450" textAnchor="middle" className="hero-formula">
+          <text x={CENTER} y="450" textAnchor="middle" className="hero-formula">
             C₈H₁₀N₄O₂
           </text>
-          <text x="250" y="472" textAnchor="middle" className="hero-formula-sub">
-            CAFFEINE · 1,3,7-TRIMETHYLXANTHINE
+          <text x={CENTER} y="472" textAnchor="middle" className="hero-formula-sub">
+            CAFFEINE · DRAG TO ROTATE
           </text>
         </g>
       </svg>
     </div>
-  );
-}
-
-// 咖啡因分子骨架。位置基于标准 2D 表达，自洽即可。
-function Molecule() {
-  return (
-    <g
-      className="molecule"
-      stroke="var(--ink)"
-      strokeWidth="1.7"
-      fill="none"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-    >
-      {/* 6-mem pyrimidine ring 单键 */}
-      <line x1="157" y1="225" x2="200" y2="200" />
-      <line x1="200" y1="200" x2="243" y2="225" />
-      <line x1="243" y1="225" x2="243" y2="275" />
-      <line x1="200" y1="300" x2="157" y2="275" />
-      <line x1="157" y1="275" x2="157" y2="225" />
-
-      {/* C4=C5 共享双键 */}
-      <line x1="243" y1="275" x2="200" y2="300" />
-      <line x1="237" y1="270" x2="194" y2="295" />
-
-      {/* 5-mem imidazole ring 单键 */}
-      <line x1="200" y1="300" x2="210" y2="349" />
-      <line x1="210" y1="349" x2="260" y2="354" />
-      <line x1="280" y1="308" x2="243" y2="275" />
-
-      {/* C8=N9 双键 */}
-      <line x1="260" y1="354" x2="280" y2="308" />
-      <line x1="265" y1="356" x2="285" y2="310" />
-
-      {/* 取代基单键 */}
-      <line x1="157" y1="225" x2="127" y2="207" />
-      <line x1="243" y1="225" x2="273" y2="207" />
-      <line x1="210" y1="349" x2="190" y2="371" />
-      <line x1="260" y1="354" x2="275" y2="380" />
-
-      {/* C2=O 双键 */}
-      <line x1="200" y1="200" x2="200" y2="165" />
-      <line x1="206" y1="200" x2="206" y2="165" />
-
-      {/* C6=O 双键 */}
-      <line x1="157" y1="275" x2="127" y2="293" />
-      <line x1="161" y1="282" x2="131" y2="300" />
-
-      {/* 原子标签底色（遮住键的末端，呈现 "标签贴在键上" 的效果） */}
-      <g className="atom-halo" stroke="none">
-        <circle cx="157" cy="225" r="9" />
-        <circle cx="243" cy="225" r="9" />
-        <circle cx="210" cy="349" r="9" />
-        <circle cx="280" cy="308" r="9" />
-        <circle cx="200" cy="165" r="9" />
-        <circle cx="127" cy="293" r="9" />
-        <circle cx="127" cy="207" r="13" />
-        <circle cx="273" cy="207" r="13" />
-        <circle cx="190" cy="371" r="13" />
-        <circle cx="275" cy="380" r="9" />
-      </g>
-
-      {/* 原子标签 */}
-      <g className="atom-label" stroke="none" textAnchor="middle" dominantBaseline="central">
-        <text x="157" y="225">N</text>
-        <text x="243" y="225">N</text>
-        <text x="210" y="349">N</text>
-        <text x="280" y="308">N</text>
-        <text x="200" y="165" className="atom-o">O</text>
-        <text x="127" y="293" className="atom-o">O</text>
-        <text x="127" y="207" className="atom-r">CH₃</text>
-        <text x="273" y="207" className="atom-r">CH₃</text>
-        <text x="190" y="371" className="atom-r">CH₃</text>
-        <text x="275" y="380">H</text>
-      </g>
-    </g>
   );
 }
