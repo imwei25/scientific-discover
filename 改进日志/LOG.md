@@ -10,6 +10,13 @@
 - **commit**：<short-hash>
 -->
 
+## 2026-06-27 — 遗留 P1 / 参考文献页码区间渲染修复
+- **现状/动机**：Vancouver CSL 用 `page-range-format="minimal"`，citeproc-py 的 minimal 实现对“尾页位数多于首页”的区间出错：`1-10`→`1–0`、`99-100`→`99–0`，给用户错误页码。
+- **调研**：读 Vancouver CSL 确认是 minimal 缩写规则；逐一测试不同页码，定位仅“尾页位数 > 首页”这一类出错，其余（1234-1245→1234–45 等 ICMJE 缩写）本是正确行为。验证 `style.root.set('page-range-format', …)` 可在样式对象上覆盖。
+- **改动**：`backend/app/citations._resolve_style` 检测到 `minimal` 时强制改为 `expanded`，输出完整页码区间——永不产生错误，用户粘贴的本就多是完整区间。
+- **测试**：① 渲染 6 组页码全 PASS（1-10→1–10、99-100→99–100、100-110→100–110、e123 不变等）；② **真实 LLM 端到端** `format_references`：3 条（含 URL-DOI vs 裸DOI 重复）→ 去重 1 条 + note 提示 + 页码 1–10/100–110 正确。
+- **commit**：见下次提交
+
 ## 2026-06-26 — 子任务E 检索与引用 / E1 引用去重 + DOI 归一化
 - **现状/动机**：`format_references` 把 LLM 解析出的 CSL-JSON 直接渲染。真实用户常粘贴重复条目（同一篇 DOI 一次写成 `https://doi.org/…` 一次写成裸 DOI），结果会重复列出；DOI 前缀也不统一。
 - **调研/测试发现**：离线用 citeproc 复现，确认重复条目原样输出、无任何归一化。顺带发现页码 `1-10` 被渲染成 `1–0`（见遗留 P1）。

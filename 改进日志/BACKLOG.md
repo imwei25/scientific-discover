@@ -38,4 +38,4 @@
 
 ## 遗留问题 (测试中发现，需修复)
 
-- [ ] P1：参考文献页码范围渲染异常——CSL Vancouver 把 `1-10` 折叠成 `1–0`（citeproc-py 的 minimal range 行为）。需在渲染前规整页码或调整 page-range-format，避免页码显示错误。（发现于 E1 测试）
+- [x] P1：参考文献页码范围渲染异常——`1-10` 渲染成 `1–0`。修复：`_resolve_style` 把 minimal 样式强制为 expanded，输出完整区间，永不出错。已真实 LLM 端到端验证。

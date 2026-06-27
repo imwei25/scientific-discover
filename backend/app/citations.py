@@ -119,7 +119,16 @@ def _resolve_style(style_name: str) -> CitationStylesStyle:
         path = get_style_filepath(style_name)
     except Exception:  # noqa: BLE001
         path = get_style_filepath(_DEFAULT_STYLE)
-    return CitationStylesStyle(path, validate=False)
+    style = CitationStylesStyle(path, validate=False)
+    # Vancouver 等样式用 page-range-format="minimal" 缩写页码区间；但 citeproc-py 的
+    # minimal 实现对“尾页位数多于首页”的区间会出错（1-10 → 1–0、99-100 → 99–0）。
+    # 强制为 expanded：输出完整区间，永不产生错误页码（用户粘贴的本就多是完整区间）。
+    try:
+        if style.root.get("page-range-format") == "minimal":
+            style.root.set("page-range-format", "expanded")
+    except Exception:  # noqa: BLE001
+        pass
+    return style
 
 
 def render_bibliography(csl_json: list[dict], style_name: str) -> list[str]:
