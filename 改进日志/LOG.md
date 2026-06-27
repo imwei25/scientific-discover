@@ -2,6 +2,12 @@
 
 > 每完成一个改进方向追加一条。最新在最上。
 
+## 2026-06-28 — 新模块 / 智能选刊匹配（loop 第3轮·方向②，OpenAlex 相似刊聚合）
+- **动机**：「投哪本期刊」是每篇必经决策，选错→拒稿/拖周期；同类(JANE/Elsevier Finder)无公开 API，用 OpenAlex 自建是稳妥路径，且与已有投稿包闭环。
+- **改动**：新增 `journalmatch.py` + `/api/journal-match`(JSON)：用摘要在 OpenAlex `search` 检索近 6 年、primary_location.source.type=journal 的相近文献(per_page 50)，按发表期刊聚合频次排序，取期刊 OA/DOAJ/ISSN 元数据(规避影响因子版权)，再用一次 LLM 给每本候选≤40字匹配理由。前端新模块 JournalMatchModule(摘要输入/上传 → 候选期刊卡片：排名/频次条/OA·DOAJ 徽章/匹配理由/相近文献样例)；App 加第 7 个 nav(位次：分析→选刊→排版)/路由/rail-tick。
+- **测试**：真实 TNBC 摘要 → Annals of Oncology/Cancers 等相关肿瘤刊+OA 标记+理由、额度零消耗(¥1.42)；Playwright 新增选刊用例通过；dist 已重建。
+- **commit**：见本次提交（本轮还剩 ③statcheck）
+
 ## 2026-06-28 — 参考文献核验中心（loop 第3轮·方向①：真实性/撤稿/去重/补全）
 - **动机**：派 agent 调研第3轮方向，锚点=参考文献核验(复用基建最高、痛点最硬)。LLM 时代最大投稿事故是 AI 杜撰出不存在的 DOI/文献、误引撤稿文献。
 - **改动**：新增 `refcheck.py` + `/api/check-refs`(JSON)：LLM 仅做一次半结构化解析(抽 doi/pmid/title)，核验全走确定性网络——① 真实性：CrossRef /works/{doi}，404=疑似杜撰；② 撤稿：PubMed esummary 出版类型含 "Retracted Publication"(医学域覆盖好)；③ 去重：DOI/PMID/归一化标题任一相同即判重(指向首次)；④ 补全：缺 DOI 用 CrossRef 题名反查回填。复用 literature 的 NCBI 全局节流。前端 FormatModule"参考文献"区加"核验真实性/撤稿/去重"按钮 + 结果清单(✓真实/✗查无/⚠已撤稿/⧉重复 徽章 + 说明)。

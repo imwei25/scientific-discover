@@ -260,6 +260,28 @@ test("找选题: 追问追加问答 + 按意见修改报告", async ({ page }) =
   await expect(page.getByTestId("result-text")).toContainText("修改后的报告");
 });
 
+test("智能选刊: 匹配并展示候选期刊", async ({ page }) => {
+  await mockBase(page);
+  await page.route("**/api/journal-match", (r) =>
+    r.fulfill({
+      json: {
+        ok: true,
+        journals: [
+          { journal: "Annals of Oncology", count: 6, is_oa: false, in_doaj: false, issn: "0923-7534", samples: ["TNBC trial"], reason: "肿瘤大刊，主题契合" },
+          { journal: "Cancers", count: 4, is_oa: true, in_doaj: true, issn: "2072-6694", samples: ["PD-L1 review"], reason: "OA，免疫治疗综述多" },
+        ],
+      },
+    }),
+  );
+  await page.goto("/");
+  await page.getByTestId("nav-journal").click();
+  await page.getByTestId("input-abstract").fill("Pembrolizumab in triple-negative breast cancer ...");
+  await page.getByTestId("run-btn").click();
+  await expect(page.getByTestId("journal-hits")).toContainText("Annals of Oncology");
+  await expect(page.getByTestId("journal-hits")).toContainText("开放获取"); // Cancers is OA
+  await expect(page.getByTestId("journal-hits")).toContainText("主题契合");
+});
+
 test("参考文献核验: 标出真实/杜撰/撤稿/重复", async ({ page }) => {
   await mockBase(page);
   await page.route("**/api/check-refs", (r) =>

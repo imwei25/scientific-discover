@@ -61,6 +61,10 @@ class SampleSizeRequest(BaseModel):
     params: dict
 
 
+class MatchRequest(BaseModel):
+    abstract: str
+
+
 @app.get("/api/health")
 async def health() -> dict:
     return {
@@ -223,6 +227,14 @@ async def check_refs(req: RefsRequest) -> dict:
     from .refcheck import check_references
 
     return await check_references(req.references)
+
+
+@app.post("/api/journal-match")
+async def journal_match(req: MatchRequest) -> dict:
+    """智能选刊: 用摘要在 OpenAlex 检索相近文献, 聚合期刊排序 + LLM 给匹配理由。"""
+    from .journalmatch import match_journals
+
+    return await match_journals(req.abstract)
 
 
 @app.post("/api/format-refs")
