@@ -4,9 +4,18 @@ title Research Assistant
 cd /d "%~dp0backend"
 
 if not exist ".venv\Scripts\python.exe" (
+    echo [未安装] 尚未安装运行环境。请右键 scripts\setup.ps1 - 用 PowerShell 运行 完成安装后再启动。
     echo [Not installed] Please run scripts\setup.ps1 first ^(right-click - Run with PowerShell^).
     pause
     exit /b
+)
+
+rem 启动前温馨提示: 未配置 .env 时 AI 功能需要先填 key(服务仍可启动)。
+if not exist ".env" (
+    echo [提示] 未发现 backend\.env, AI 功能可能不可用。
+    echo        如需使用 AI, 请复制 backend\.env.example 为 backend\.env 并填入模型 key,
+    echo        或双击根目录「检查环境.bat」自检。继续启动中...
+    echo.
 )
 
 rem Read the configured port from backend\.env (default 8756). cwd is already backend.
@@ -36,7 +45,14 @@ if %errorlevel%==0 goto ready
 set /a tries+=1
 if %tries% lss 25 goto waitloop
 echo.
-echo [启动失败] 服务未能就绪。请打开 backend\server.log 查看错误原因，并把内容发给开发者。
+echo [启动失败] 服务未能就绪。正在运行环境自检以定位原因...
+echo ============================================================
+rem 用 doctor 给出可操作的诊断(依赖缺失/端口被占/未配 key 等), 比直接看日志更友好。
+.venv\Scripts\python.exe doctor.py
+echo ============================================================
+echo.
+echo 上面 [X ] / [! ] 行即问题所在, 按其 -^> 提示修复后重试。
+echo 如仍无法解决, 请把 backend\server.log 的内容发给开发者。
 echo Log file: %~dp0backend\server.log
 echo.
 start "" notepad "%~dp0backend\server.log"

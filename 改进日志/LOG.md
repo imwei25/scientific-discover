@@ -2,6 +2,12 @@
 
 > 每完成一个改进方向追加一条。最新在最上。
 
+## 2026-06-28 — 部署易用性（全改·F1+F3）：启动失败自检引导 + 使用说明 FAQ 扩充
+- **F1**：`启动科研助手.bat` ① 启动前若 `backend\.env` 不存在，给中文提示(AI 功能需先配 key，服务仍会启动)；② **启动失败(25s 未就绪)时自动运行 `doctor.py` 环境自检**——逐项检查 Python/依赖/.env+key/端口并对问题行给 `->` 修复建议，比之前直接打开 server.log 让非 IT 用户自己看 traceback 友好得多；未装依赖分支补中文说明。
+- **F3**：`使用说明.md` 常见问题从 4 条扩到 10 条，覆盖最常见卡点：起不来/浏览器没自动打开(用「检查环境.bat」自检)、端口被占→改 PORT、额度不足→配 FALLBACK 备用、找选题零命中→采纳 AI 改写/放宽过滤、数据分析失败→自动重试3次+整理表头、引用"未核验"的含义与务必自核、如何切换更强/别的模型。
+- **测试**：`doctor.py` 实跑 exit 0、七项全 [OK]（启动失败分支调用的就是它）；.bat 全程 `chcp 65001` UTF-8，中文提示正常。文档 + 脚本改动，无后端代码变更。
+- **commit**：见本次提交
+
 ## 2026-06-28 — 稳定性（全改·C3）：/api/run 必填校验 + 修复错误流潜伏 bug
 - **审查**：逐个 JSON 端点(check-refs/format-refs/statcheck/journal-match/sample-size/flow-diagram/figure-captions/imrad/rebuttal)确认**都已**有 `{ok, error}` 空输入/异常守卫(前几轮已加固)。唯一缺口是 `/api/run` 文本模块——缺必填时白白调用一次 LLM 并产出空泛输出。
 - **改动**：`prompts.py` 加 `_REQUIRED` 映射(每模块关键字段+友好名)，`build_messages` 缺必填即抛友好 `ValueError`(由 /api/run 转 SSE error，省额度)。
