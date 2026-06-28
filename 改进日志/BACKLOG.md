@@ -22,9 +22,9 @@
 - [x] C3：上传文件/参数校验，非法输入给友好提示（其余参数校验）——审查发现各 JSON 端点(check-refs/format-refs/statcheck/journal-match/sample-size/flow-diagram/figure-captions)其实都已 ok/error 守卫；唯一缺口是 /api/run 文本模块缺必填校验(空输入白调一次 LLM+输出困惑)。prompts 加 `_REQUIRED` 表, build_messages 缺必填抛友好 ValueError。**并修复一个真实潜伏 bug**：/api/run 的 err_gen 闭包引用 except 变量 e，而 Python 在 except 块结束即清除 e，流式执行时 NameError 崩溃——导致"未知模块/缺字段"错误根本显示不出来。改为先存 err_msg。新增 test_run_validation.py。
 
 ### 子任务D：前端体验（App.tsx, styles.css）
-- [ ] D1：错误态/空态/加载态统一与可读
+- [x] D1：错误态/空态/加载态统一与可读——核查确认绝大多数模块已统一走 `ResultPanel`(加载"生成中…"+光标、错误 result-error、空态 placeholder、完成态四态齐全, 前几轮 13/15 已加固)。本轮在共享组件上再补：空态 placeholder 默认文案改为更有引导性的"填好左侧信息后点击上方按钮…"。
 - [x] D2：修复局域网 http(非安全上下文)下复制按钮失效——新增 lib/clipboard.ts（navigator.clipboard 失败/不可用时回退 execCommand），并给“复制失败”反馈；ResultPanel 与 FormatModule 复制全部均改用它。e2e 新增非安全上下文复制用例。
-- [ ] D3：移动端/窄屏与无障碍（对比度、focus）基本可用
+- [x] D3：无障碍（focus/对比度/读屏）——focus 可见(`:focus-visible` teal 描边)、输入 focus 环、`prefers-reduced-motion` 此前已具备；本轮补 **ARIA 读屏支持**：ResultPanel 状态区 `role=status aria-live=polite`(播报 生成中/已完成/出错, 但不逐字刷流式正文)、错误 `role=alert`(立即播报)、面板 `aria-busy`。e2e 加 role 断言。**移动端/窄屏**：本品是桌面本地应用(Tauri/局域网桌面浏览器), 非移动场景, 按第15轮判定不投入(若未来上移动端再开)。
 - [x] D4：历史记录 localStorage 配额不足时不再静默丢弃最新记录——addHistory 改为写失败时逐步淘汰最旧记录后重试，保证最新结果总能存下。e2e 新增配额压力用例。
 - [x] D6：流式出错(已有部分输出)不再误存历史——四个模块的历史保存 effect 之前只判 `!running && text`，中途报错会把残缺结果当成功存入；改为加 `!error` 守卫。e2e 新增用例。
 - [x] D5：文件下载健壮性——downloadText 把锚点挂载到 DOM 并延迟 revoke 对象URL，避免大文件(内嵌图表报告)下载被立即 revoke 中断。新增 e2e 真实下载用例(校验文件名+内容)，此前下载路径完全无测试。

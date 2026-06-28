@@ -28,9 +28,10 @@ export default function ResultPanel({ text, running, error, onStop, placeholder,
   const exportMd = () => downloadText(tsName(exportName ?? "结果", "md"), text);
 
   return (
-    <div className="result-panel" data-testid={panelTestId ?? "result-panel"}>
+    <div className="result-panel" data-testid={panelTestId ?? "result-panel"} aria-busy={running}>
       <div className="result-toolbar">
-        <span className="result-status">
+        {/* aria-live: 让读屏软件播报状态变化(生成中/已完成/出错), 但不逐字播报流式正文以免刷屏 */}
+        <span className="result-status" role="status" aria-live="polite">
           {running ? "生成中…" : error ? "出错了" : text ? "已完成" : "等待开始"}
         </span>
         <div className="result-actions">
@@ -57,7 +58,7 @@ export default function ResultPanel({ text, running, error, onStop, placeholder,
         </div>
       </div>
       {error ? (
-        <div className="result-error" data-testid="result-error">
+        <div className="result-error" data-testid="result-error" role="alert">
           {error}
         </div>
       ) : (
@@ -65,7 +66,7 @@ export default function ResultPanel({ text, running, error, onStop, placeholder,
           {text ? (
             <Markdown>{text}</Markdown>
           ) : (
-            <span className="result-placeholder">{placeholder ?? "结果会显示在这里。"}</span>
+            <span className="result-placeholder">{placeholder ?? "填好左侧信息后点击上方按钮，结果会显示在这里。"}</span>
           )}
           {running && <span className="cursor-blink">▍</span>}
         </div>

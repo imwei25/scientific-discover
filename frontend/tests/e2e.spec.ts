@@ -1112,4 +1112,7 @@ test("错误处理: 后端返回 error 事件时友好提示", async ({ page }) 
   await page.getByTestId("input-idea").fill("测试");
   await page.getByTestId("run-btn").click();
   await expect(page.getByTestId("result-error")).toContainText("余额不足");
+  // 可达性(D3): 错误用 role=alert 立即播报; 状态区用 role=status 播报"出错了"。
+  await expect(page.getByTestId("result-error")).toHaveAttribute("role", "alert");
+  await expect(page.locator(".result-status").first()).toHaveAttribute("aria-live", "polite");
 });
