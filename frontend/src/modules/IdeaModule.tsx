@@ -3,9 +3,36 @@ import { streamIdea, streamIdeaFollowup, runModule, Reference, Trial, EvidenceIt
 import { addHistory } from "../lib/history";
 import Markdown from "../components/Markdown";
 import Dropzone from "../components/Dropzone";
+import RefIO from "../components/RefIO";
 import { downloadText, downloadCsv, tsName } from "../lib/download";
 import { usePersistentState } from "../lib/usePersistentState";
 import type { Goto } from "../App";
+
+// 合并导入的 references 到现有列表, 按 DOI 优先去重, 缺 DOI 则按 (title|year) 兜底。
+// 返回 [合并后列表, 实际新增数, 跳过的重复数]
+function mergeRefs(existing: Reference[], incoming: Reference[]): { merged: Reference[]; added: number; dup: number } {
+  const norm = (s: string) => (s || "").trim().toLowerCase();
+  const keyOf = (r: Reference) => {
+    const doi = norm(r.pmid && r.pmid.startsWith("10.") ? r.pmid : "");
+    if (doi) return `doi:${doi}`;
+    // pmid 也作为强键
+    if (r.pmid) return `pmid:${norm(r.pmid)}`;
+    return `tit:${norm(r.title)}|${norm(r.year)}`;
+  };
+  const seen = new Set(existing.map(keyOf));
+  const merged = [...existing];
+  let added = 0;
+  let dup = 0;
+  for (const r of incoming) {
+    if (!r || (!r.title && !r.pmid)) { dup += 1; continue; }
+    const k = keyOf(r);
+    if (seen.has(k)) { dup += 1; continue; }
+    seen.add(k);
+    merged.push(r);
+    added += 1;
+  }
+  return { merged, added, dup };
+}
 
 const PAPER_SOURCES: { key: string; label: string; hint: string }[] = [
   { key: "pubmed", label: "PubMed", hint: "NCBI 权威医学库" },
@@ -463,6 +490,17 @@ export default function IdeaModule({ goto }: { goto: Goto }) {
           {error}
         </div>
       )}
+
+      <RefIO
+        currentRefs={refs}
+        exportFilename="找选题-文献"
+        onImport={(imported) => {
+          const { merged, added, dup } = mergeRefs(refs, imported);
+          setRefs(merged);
+          setStatus(`导入 ${added} 篇，去重 ${dup} 篇`);
+          window.setTimeout(() => setStatus((s) => (s.startsWith("导入") ? "" : s)), 4000);
+        }}
+      />
 
       {refs.length > 0 && (
         <details className="refs" open data-testid="refs">
