@@ -1658,6 +1658,58 @@ select {
   border-radius: var(--radius-sm);
   color: var(--ink);
 }
+.ss-explore {
+  display: grid;
+  grid-template-columns: minmax(260px, 1fr) minmax(320px, 1.2fr);
+  gap: 18px;
+  align-items: start;
+}
+@media (max-width: 880px) {
+  .ss-explore {
+    grid-template-columns: 1fr;
+  }
+}
+.ss-controls {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.ss-controls input[type="range"] {
+  width: 100%;
+  accent-color: var(--teal, #2f8074);
+}
+.ss-controls .field-label strong {
+  margin-left: 6px;
+  color: #2f8074;
+  font-variant-numeric: tabular-nums;
+}
+.ss-controls .field-label .field-hint {
+  display: block;
+  font-weight: 400;
+  font-size: 12px;
+  margin-top: 2px;
+}
+.ss-sweep-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-top: 4px;
+}
+.ss-chart {
+  background: #f6faf9;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  padding: 6px 8px;
+  min-height: 220px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.ss-chart svg {
+  max-width: 100%;
+  height: auto;
+}
 
 /* 历史记录 */
 .history-list {
