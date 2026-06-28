@@ -4,6 +4,7 @@ import { writePersisted, usePersistentState } from "./lib/usePersistentState";
 import { useSidebar } from "./lib/sidebar";
 import IdeaModule from "./modules/IdeaModule";
 import PlanModule from "./modules/PlanModule";
+import EthicsModule from "./modules/EthicsModule";
 import AnalyzeModule from "./modules/AnalyzeModule";
 import ImradModule from "./modules/ImradModule";
 import JournalMatchModule from "./modules/JournalMatchModule";
@@ -15,13 +16,14 @@ import ThemeSwitcher from "./components/ThemeSwitcher";
 import ProjectPicker from "./components/ProjectPicker";
 import { useProjects } from "./lib/projects";
 
-export type ModuleId = "home" | "idea" | "plan" | "analyze" | "imrad" | "journal" | "format" | "checklist" | "rebuttal" | "history";
+export type ModuleId = "home" | "idea" | "plan" | "ethics" | "analyze" | "imrad" | "journal" | "format" | "checklist" | "rebuttal" | "history";
 // 跨模块传递: 把数据写入目标模块的持久化字段, 再切换过去。
 export type Goto = (target: ModuleId, patch?: Record<string, unknown>) => void;
 
 const NAV: { id: ModuleId; icon: string; title: string; desc: string }[] = [
   { id: "idea", icon: "💡", title: "找选题", desc: "发现研究方向与创新点" },
   { id: "plan", icon: "🗺️", title: "实验规划", desc: "把想法变成可执行的计划" },
+  { id: "ethics", icon: "📋", title: "伦理材料", desc: "知情同意/方案/CRF" },
   { id: "analyze", icon: "📊", title: "数据分析与写作", desc: "上传数据，分析并成文" },
   { id: "imrad", icon: "📝", title: "论文初稿", desc: "装配 IMRaD 初稿与摘要" },
   { id: "journal", icon: "🎯", title: "智能选刊", desc: "匹配适合投稿的期刊" },
@@ -200,6 +202,7 @@ export default function App() {
         <div className="rail-ticks" aria-hidden="true">
           <span className={`rail-tick ${active === "idea" ? "active" : ""}`} />
           <span className={`rail-tick ${active === "plan" ? "active" : ""}`} />
+          <span className={`rail-tick ${active === "ethics" ? "active" : ""}`} />
           <span className={`rail-tick ${active === "analyze" ? "active" : ""}`} />
           <span className={`rail-tick ${active === "imrad" ? "active" : ""}`} />
           <span className={`rail-tick ${active === "journal" ? "active" : ""}`} />
@@ -232,6 +235,7 @@ export default function App() {
           {active === "home" && <Home onPick={setActive} />}
           {active === "idea" && <IdeaModule goto={goto} />}
           {active === "plan" && <PlanModule />}
+          {active === "ethics" && <EthicsModule />}
           {active === "analyze" && <AnalyzeModule goto={goto} />}
           {active === "imrad" && <ImradModule />}
           {active === "journal" && <JournalMatchModule />}

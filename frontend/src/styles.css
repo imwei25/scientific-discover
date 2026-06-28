@@ -2134,3 +2134,101 @@ select {
 .sync-badge { font-size: 11px; opacity: 0.7; display: block; margin-top: 4px; }
 .sync-badge.saving { color: var(--petrol); }
 .sync-badge.error { color: var(--warn-fg, #b91c1c); opacity: 1; cursor: pointer; }
+
+/* ── 伦理材料模块 (Wave 1-F) ─────────────────────────────────────── */
+.ethics-layout {
+  display: grid;
+  grid-template-columns: 220px 1fr;
+  gap: 20px;
+  align-items: start;
+}
+@media (max-width: 900px) {
+  .ethics-layout { grid-template-columns: 1fr; }
+}
+.ethics-nav {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  position: sticky;
+  top: 12px;
+}
+.ethics-nav-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface);
+  text-align: left;
+  cursor: pointer;
+  color: var(--ink);
+  transition: border-color 0.15s, background 0.15s, transform 0.05s;
+}
+.ethics-nav-item:hover { border-color: var(--teal); }
+.ethics-nav-item:active { transform: translateY(1px); }
+.ethics-nav-item.active {
+  border-color: var(--teal);
+  background: var(--surface-2);
+  box-shadow: inset 3px 0 0 var(--teal);
+}
+.ethics-nav-icon { font-size: 18px; line-height: 1; padding-top: 1px; }
+.ethics-nav-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.ethics-nav-title { font-weight: 600; font-size: 14px; }
+.ethics-nav-desc { font-size: 12px; color: var(--muted); }
+
+.ethics-main { min-width: 0; }
+.ethics-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface);
+  margin-bottom: 12px;
+  flex-wrap: wrap;
+}
+.ethics-progress {
+  font-size: 13px;
+  color: var(--muted);
+  margin-left: auto;
+}
+.ethics-cols {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+}
+@media (max-width: 1100px) {
+  .ethics-cols { grid-template-columns: 1fr; }
+}
+.ethics-form { margin: 0; }
+.ethics-preview {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface);
+  display: flex;
+  flex-direction: column;
+  max-height: 70vh;
+  overflow: hidden;
+  position: sticky;
+  top: 12px;
+}
+.ethics-preview-head {
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--line);
+  font-size: 12px;
+  color: var(--muted);
+  background: var(--surface-2);
+}
+.ethics-preview-body {
+  margin: 0;
+  padding: 12px 14px;
+  overflow: auto;
+  font-size: 13px;
+  line-height: 1.65;
+  white-space: pre-wrap;
+  font-family: "Microsoft YaHei", "Segoe UI", system-ui, sans-serif;
+  color: var(--ink);
+  flex: 1;
+}
