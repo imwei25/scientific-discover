@@ -31,23 +31,30 @@ def _int(name: str, default: int, lo: int | None = None, hi: int | None = None) 
 
 
 class Settings:
-    provider: str = os.getenv("LLM_PROVIDER", "openai").strip().lower()
-    api_key: str = os.getenv("LLM_API_KEY", "").strip()
-    base_url: str = os.getenv("LLM_BASE_URL", "https://api.deepseek.com").strip().rstrip("/")
-    model: str = os.getenv("LLM_MODEL", "deepseek-chat").strip()
-    mock: bool = _bool("MOCK_LLM", False)
-    port: int = _int("PORT", 8756, lo=1, hi=65535)
-    # 监听地址：127.0.0.1=仅本机；0.0.0.0=同时允许局域网访问
-    host: str = os.getenv("HOST", "127.0.0.1").strip()
-    # 可选: 提供给 NCBI E-utilities 的联系邮箱(礼貌且可提高限速容忍度)
-    ncbi_email: str = os.getenv("NCBI_EMAIL", "").strip()
+    def __init__(self) -> None:
+        self.reload()
 
-    # 备用供应商: 主供应商额度用完(余额不足/配额超限)时自动切换。
-    # 留空则不启用自动降级。
-    fallback_provider: str = os.getenv("FALLBACK_PROVIDER", "openai").strip().lower()
-    fallback_api_key: str = os.getenv("FALLBACK_API_KEY", "").strip()
-    fallback_base_url: str = os.getenv("FALLBACK_BASE_URL", "").strip().rstrip("/")
-    fallback_model: str = os.getenv("FALLBACK_MODEL", "").strip()
+    def reload(self) -> None:
+        """重新从 backend/.env(或系统环境变量)读取配置。"""
+        # 重新加载 .env 文件; override=True 让最新值覆盖旧的 process env
+        load_dotenv(_ENV_PATH, override=True)
+        self.provider = os.getenv("LLM_PROVIDER", "openai").strip().lower()
+        self.api_key = os.getenv("LLM_API_KEY", "").strip()
+        self.base_url = os.getenv("LLM_BASE_URL", "https://api.deepseek.com").strip().rstrip("/")
+        self.model = os.getenv("LLM_MODEL", "deepseek-chat").strip()
+        self.mock = _bool("MOCK_LLM", False)
+        self.port = _int("PORT", 8756, lo=1, hi=65535)
+        # 监听地址：127.0.0.1=仅本机；0.0.0.0=同时允许局域网访问
+        self.host = os.getenv("HOST", "127.0.0.1").strip()
+        # 可选: 提供给 NCBI E-utilities 的联系邮箱(礼貌且可提高限速容忍度)
+        self.ncbi_email = os.getenv("NCBI_EMAIL", "").strip()
+
+        # 备用供应商: 主供应商额度用完(余额不足/配额超限)时自动切换。
+        # 留空则不启用自动降级。
+        self.fallback_provider = os.getenv("FALLBACK_PROVIDER", "openai").strip().lower()
+        self.fallback_api_key = os.getenv("FALLBACK_API_KEY", "").strip()
+        self.fallback_base_url = os.getenv("FALLBACK_BASE_URL", "").strip().rstrip("/")
+        self.fallback_model = os.getenv("FALLBACK_MODEL", "").strip()
 
     @property
     def has_fallback(self) -> bool:

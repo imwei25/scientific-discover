@@ -14,6 +14,7 @@ import RebuttalModule from "./modules/RebuttalModule";
 import HistoryView from "./modules/HistoryView";
 import ThemeSwitcher from "./components/ThemeSwitcher";
 import ProjectPicker from "./components/ProjectPicker";
+import OnboardingWizard from "./components/OnboardingWizard";
 import { useProjects } from "./lib/projects";
 
 export type ModuleId = "home" | "idea" | "plan" | "ethics" | "analyze" | "imrad" | "journal" | "format" | "checklist" | "rebuttal" | "history";
@@ -45,6 +46,7 @@ export default function App() {
   const [health, setHealth] = useState<Health | null>(null);
   const [healthErr, setHealthErr] = useState(false);
   const [disclaimerDismissed, setDisclaimerDismissed] = usePersistentState("ui:disclaimerDismissed", false);
+  const [onboardingOpen, setOnboardingOpen] = useState(false);
   const [balance, setBalance] = useState<{
     available: boolean;
     provider?: string;
@@ -85,6 +87,15 @@ export default function App() {
         if (cancelled) return;
         setHealth(data);
         setHealthErr(false);
+        // 触发首次配置向导: configured=false 且尚未完成 onboarding
+        try {
+          const done = localStorage.getItem("onboarding:done") === "1";
+          if (!done && data && data.configured === false && !data.mock) {
+            setOnboardingOpen(true);
+          }
+        } catch {
+          /* localStorage 可能被禁用; 忽略 */
+        }
       } catch {
         if (cancelled) return;
         setHealthErr(true);
@@ -92,14 +103,34 @@ export default function App() {
       }
     };
     probe();
+    // 暴露给子组件: 完成 wizard 后可以触发重新拉取
+    (window as unknown as { __refreshHealth?: () => void }).__refreshHealth = probe;
     return () => {
       cancelled = true;
       clearTimeout(timer);
+      delete (window as unknown as { __refreshHealth?: () => void }).__refreshHealth;
     };
+  }, []);
+
+  // 允许其他组件(Toast 的"重新配置"按钮)调起 wizard
+  useEffect(() => {
+    const onReopen = () => setOnboardingOpen(true);
+    window.addEventListener("onboarding:reopen", onReopen);
+    return () => window.removeEventListener("onboarding:reopen", onReopen);
   }, []);
 
   return (
     <div className="app">
+      {onboardingOpen && (
+        <OnboardingWizard
+          onClose={() => {
+            setOnboardingOpen(false);
+            // 重新拉取 health 让 UI 立刻反映新配置 (mock 标志、configured 等)
+            const refresh = (window as unknown as { __refreshHealth?: () => void }).__refreshHealth;
+            if (refresh) refresh();
+          }}
+        />
+      )}
       {/* 折叠态下，点击侧栏空白区（非 nav-item / sidebar-toggle）= 锁定展开 */}
       <aside
         className="sidebar"
