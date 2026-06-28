@@ -125,6 +125,69 @@ def test_invalid_uuid_rejected(tmp_data):
         projects.create_project(id="not-a-uuid", name="x")
 
 
+# ── 路由层测试 ───────────────────────────────────────────────
+from fastapi.testclient import TestClient
+
+
+@pytest.fixture
+def client(tmp_data):
+    from app.main import app
+    return TestClient(app)
+
+
+def test_route_post_get_list_delete(client):
+    pid = "aaaa0000-0000-0000-0000-000000000001"
+    r = client.post("/api/projects", json={"id": pid, "name": "T1"})
+    assert r.status_code == 200
+    assert r.json()["name"] == "T1"
+
+    r = client.get("/api/projects")
+    assert r.status_code == 200
+    items = r.json()
+    assert any(x["id"] == pid for x in items)
+
+    r = client.get(f"/api/projects/{pid}")
+    assert r.status_code == 200
+    assert r.json()["state"] == {}
+
+    r = client.delete(f"/api/projects/{pid}")
+    assert r.status_code == 204
+
+    r = client.get(f"/api/projects/{pid}")
+    assert r.status_code == 404
+
+
+def test_route_put_state(client):
+    pid = "aaaa0000-0000-0000-0000-000000000002"
+    client.post("/api/projects", json={"id": pid, "name": "S"})
+    r = client.put(f"/api/projects/{pid}/state", json={"state": {"idea:field": "x"}, "history": []})
+    assert r.status_code == 200
+    assert "updated_at" in r.json()
+    r2 = client.get(f"/api/projects/{pid}")
+    assert r2.json()["state"]["idea:field"] == "x"
+
+
+def test_route_patch_name(client):
+    pid = "aaaa0000-0000-0000-0000-000000000003"
+    client.post("/api/projects", json={"id": pid, "name": "Old"})
+    r = client.patch(f"/api/projects/{pid}", json={"name": "New"})
+    assert r.status_code == 200
+    assert r.json()["name"] == "New"
+
+
+def test_route_413_on_oversize(client):
+    pid = "aaaa0000-0000-0000-0000-000000000004"
+    client.post("/api/projects", json={"id": pid, "name": "big"})
+    big = {"k": "x" * (60 * 1024 * 1024)}
+    r = client.put(f"/api/projects/{pid}/state", json={"state": big, "history": []})
+    assert r.status_code == 413
+
+
+def test_route_404_on_missing(client):
+    r = client.get("/api/projects/aaaa0000-0000-0000-0000-00000000ffff")
+    assert r.status_code == 404
+
+
 if __name__ == "__main__":
     import sys
     sys.exit(pytest.main([__file__, "-v"]))

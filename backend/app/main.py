@@ -26,6 +26,7 @@ from .prompts import build_messages
 from .imrad import assemble_imrad
 from .rebuttal import rebuttal
 from .research import deep_research_idea, idea_followup
+from .projects import router as projects_router
 
 # 说明: 依赖 pandas/scipy/matplotlib/citeproc/python-docx 等重库的模块
 # (dataanalysis / extract / citations / formatting) 改为"用到时才导入",
@@ -39,6 +40,8 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+app.include_router(projects_router)
 
 
 class RunRequest(BaseModel):

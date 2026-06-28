@@ -18,6 +18,9 @@ import uuid as uuid_mod
 from pathlib import Path
 from typing import Any, Optional
 
+from fastapi import APIRouter, HTTPException
+from pydantic import BaseModel, Field
+
 MAX_NAME_LEN = 80
 MAX_PROJECT_BYTES = 50 * 1024 * 1024  # 50 MB
 
@@ -216,3 +219,66 @@ def delete_project(pid: str) -> bool:
     path.unlink()
     _remove_from_index(pid)
     return True
+
+
+# ── FastAPI 路由 ─────────────────────────────────────────────
+router = APIRouter(prefix="/api/projects", tags=["projects"])
+
+
+class CreateBody(BaseModel):
+    id: str
+    name: str
+
+
+class UpdateStateBody(BaseModel):
+    state: dict[str, Any] = Field(default_factory=dict)
+    history: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class RenameBody(BaseModel):
+    name: str
+
+
+@router.get("")
+def route_list() -> list[dict[str, Any]]:
+    return list_projects()
+
+
+@router.post("")
+def route_create(body: CreateBody) -> dict[str, Any]:
+    try:
+        return create_project(id=body.id, name=body.name)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.get("/{pid}")
+def route_get(pid: str) -> dict[str, Any]:
+    p = get_project(pid)
+    if p is None:
+        raise HTTPException(status_code=404, detail=f"project {pid} not found")
+    return p
+
+
+@router.put("/{pid}/state")
+def route_update_state(pid: str, body: UpdateStateBody) -> dict[str, Any]:
+    try:
+        return update_state(pid, state=body.state, history=body.history)
+    except KeyError:
+        raise HTTPException(status_code=404, detail=f"project {pid} not found")
+    except PayloadTooLarge as e:
+        raise HTTPException(status_code=413, detail=str(e))
+
+
+@router.patch("/{pid}")
+def route_rename(pid: str, body: RenameBody) -> dict[str, Any]:
+    try:
+        return rename_project(pid, body.name)
+    except KeyError:
+        raise HTTPException(status_code=404, detail=f"project {pid} not found")
+
+
+@router.delete("/{pid}", status_code=204, response_model=None)
+def route_delete(pid: str) -> None:
+    if not delete_project(pid):
+        raise HTTPException(status_code=404, detail=f"project {pid} not found")
