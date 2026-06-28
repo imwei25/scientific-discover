@@ -376,6 +376,28 @@ test("找选题: 提取 PICO / 纳排标准", async ({ page }) => {
   await expect(page.getByTestId("pico-panel")).toContainText("纳入标准");
 });
 
+test("实验规划: 生成 DMP 与知情同意书草案", async ({ page }) => {
+  await mockBase(page);
+  await page.route("**/api/run", (r) =>
+    r.fulfill({
+      contentType: "text/event-stream",
+      body: sse(
+        { event: "delta", data: { text: "## 数据管理计划\n数据存储与备份……[需研究者明确]" } },
+        { event: "done", data: {} },
+      ),
+    }),
+  );
+  await page.goto("/");
+  await page.getByTestId("nav-plan").click();
+  await page.getByTestId("input-idea").fill("二甲双胍治疗NAFLD的随机对照试验");
+  await page.getByTestId("gen-dmp-btn").click();
+  await expect(page.getByTestId("dmp-panel")).toContainText("数据管理计划");
+  await page.getByTestId("gen-consent-btn").click();
+  await expect(page.getByTestId("consent-panel")).toBeVisible();
+  // 两个面板都提供 Word 导出
+  await expect(page.getByTestId("dmp-panel").getByTestId("export-docx-btn")).toBeVisible();
+});
+
 test("实验规划: 随机化分组表生成并导出", async ({ page }) => {
   await mockBase(page);
   await page.route("**/api/randomize", (r) =>

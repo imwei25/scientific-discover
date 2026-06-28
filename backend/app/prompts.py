@@ -107,6 +107,40 @@ def build_checklist(inputs: dict) -> list[dict]:
     return [{"role": "system", "content": system}, {"role": "user", "content": user}]
 
 
+def build_dmp(inputs: dict) -> list[dict]:
+    system = (
+        "你是科研数据管理与合规专家。基于研究想法，生成一份【数据管理计划 (DMP)】，"
+        "参考通用 DMP 框架(NIH / Horizon Europe / FAIR 原则)，用中文 Markdown 分节：\n"
+        "① 数据类型与来源（将产生哪些数据、格式、量级）；② 采集与组织（命名规则、版本、元数据标准）；"
+        "③ 存储与备份（位置、冗余、加密）；④ 安全与隐私（去标识化、访问控制、合规：IRB/《个人信息保护法》/GDPR）；"
+        "⑤ 共享与获取（是否公开、数据仓库如 GEO/Zenodo、许可、使用限制）；⑥ 保存与归档（保存期限、长期归档）；"
+        "⑦ 角色与责任。\n铁律：信息不足处标 [需研究者明确]，不要杜撰具体机构、编号或人员。"
+    )
+    user = (
+        _join("研究想法/课题", inputs.get("idea", ""))
+        + _join("学科领域", inputs.get("field", ""))
+        + _join("可用资源/条件", inputs.get("resources", ""))
+    )
+    return [{"role": "system", "content": system}, {"role": "user", "content": user}]
+
+
+def build_consent(inputs: dict) -> list[dict]:
+    system = (
+        "你是临床研究伦理与知情同意专家。基于研究想法，起草一份【知情同意书（草案）】，用中文 Markdown，包含："
+        "研究标题与负责人[占位]、研究背景与目的、研究流程与受试者需配合的事项、预期持续时间与样本量、"
+        "潜在风险与不适、潜在获益、替代方案、隐私与数据保密、自愿参加与随时退出的权利、费用与补偿、"
+        "发生研究相关损害时的处理、联系方式[占位]、知情同意签字栏。\n"
+        "铁律：风险/获益/流程按研究类型合理描述，但具体数值、机构、联系人、补偿金额一律用 [需研究者补充] 占位，"
+        "绝不杜撰；开头注明『本草案需经伦理委员会(IRB/EC)审核批准后方可使用』。"
+    )
+    user = (
+        _join("研究想法/课题", inputs.get("idea", ""))
+        + _join("学科领域", inputs.get("field", ""))
+        + _join("可用资源/条件", inputs.get("resources", ""))
+    )
+    return [{"role": "system", "content": system}, {"role": "user", "content": user}]
+
+
 def build_write(inputs: dict) -> list[dict]:
     system = (
         "你是一位医学/药学/生物医学论文写作助手。下面给出的是【已由程序计算好的客观统计事实】。"
@@ -240,6 +274,8 @@ _BUILDERS = {
     "idea": build_idea,
     "plan": build_plan,
     "sap": build_sap,
+    "dmp": build_dmp,
+    "consent": build_consent,
     "checklist": build_checklist,
     "abstract": build_abstract,
     "keywords": build_keywords,

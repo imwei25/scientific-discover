@@ -13,7 +13,9 @@ export default function PlanModule() {
   const [resources, setResources] = usePersistentState("plan:resources", "");
   const { text, running, error, start, stop, setText } = useStream("plan:result");
   const sap = useStream("plan:sap"); // 统计分析计划(SAP) 独立流
-  const [docxBusy, setDocxBusy] = useState(""); // "" | "plan" | "sap"
+  const dmp = useStream("plan:dmp"); // 数据管理计划
+  const consent = useStream("plan:consent"); // 知情同意书
+  const [docxBusy, setDocxBusy] = useState(""); // "" | "plan" | "sap" | "dmp" | "consent"
 
   const downloadDocx = async (txt: string, name: string, which: string) => {
     if (!txt || docxBusy) return;
@@ -58,15 +60,27 @@ export default function PlanModule() {
     if (!idea.trim() || sap.running) return;
     sap.start("sap", { idea, field, resources });
   };
+  const genDmp = () => {
+    if (!idea.trim() || dmp.running) return;
+    dmp.start("dmp", { idea, field, resources });
+  };
+  const genConsent = () => {
+    if (!idea.trim() || consent.running) return;
+    consent.start("consent", { idea, field, resources });
+  };
 
   const reset = () => {
     if (running) stop();
     if (sap.running) sap.stop();
+    if (dmp.running) dmp.stop();
+    if (consent.running) consent.stop();
     setIdea("");
     setField("");
     setResources("");
     setText("");
     sap.setText("");
+    dmp.setText("");
+    consent.setText("");
   };
 
   // —— 样本量 / 检验效能计算器（确定性，零额度）——
@@ -191,6 +205,12 @@ export default function PlanModule() {
           <button className="btn-secondary" onClick={genSap} disabled={!idea.trim() || sap.running} data-testid="gen-sap-btn">
             {sap.running ? "生成中…" : "生成统计分析计划(SAP)"}
           </button>
+          <button className="btn-secondary" onClick={genDmp} disabled={!idea.trim() || dmp.running} data-testid="gen-dmp-btn">
+            {dmp.running ? "生成中…" : "数据管理计划(DMP)"}
+          </button>
+          <button className="btn-secondary" onClick={genConsent} disabled={!idea.trim() || consent.running} data-testid="gen-consent-btn">
+            {consent.running ? "生成中…" : "知情同意书草案"}
+          </button>
           <button className="btn-ghost" onClick={reset} data-testid="reset-btn">
             清空
           </button>
@@ -221,6 +241,40 @@ export default function PlanModule() {
             onExportDocx={() => downloadDocx(sap.text, "统计分析计划", "sap")}
             exportingDocx={docxBusy === "sap"}
             panelTestId="sap-panel"
+          />
+        </>
+      )}
+
+      {(dmp.text || dmp.running || dmp.error) && (
+        <>
+          <h2 className="section-title" data-testid="dmp-title">🗄️ 数据管理计划（DMP）</h2>
+          <ResultPanel
+            text={dmp.text}
+            running={dmp.running}
+            error={dmp.error}
+            onStop={dmp.stop}
+            exportName="数据管理计划"
+            placeholder="数据类型/存储备份/安全隐私/共享归档等会显示在这里。"
+            onExportDocx={() => downloadDocx(dmp.text, "数据管理计划", "dmp")}
+            exportingDocx={docxBusy === "dmp"}
+            panelTestId="dmp-panel"
+          />
+        </>
+      )}
+
+      {(consent.text || consent.running || consent.error) && (
+        <>
+          <h2 className="section-title" data-testid="consent-title">📝 知情同意书（草案 · 需伦理委员会审核）</h2>
+          <ResultPanel
+            text={consent.text}
+            running={consent.running}
+            error={consent.error}
+            onStop={consent.stop}
+            exportName="知情同意书"
+            placeholder="研究目的/流程/风险获益/隐私/自愿退出/签字栏等会显示在这里。"
+            onExportDocx={() => downloadDocx(consent.text, "知情同意书", "consent")}
+            exportingDocx={docxBusy === "consent"}
+            panelTestId="consent-panel"
           />
         </>
       )}

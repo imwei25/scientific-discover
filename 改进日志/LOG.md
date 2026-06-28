@@ -2,6 +2,12 @@
 
 > 每完成一个改进方向追加一条。最新在最上。
 
+## 2026-06-28 — 实验规划增强（loop 第12轮）：数据管理计划(DMP) + 知情同意书草案
+- **动机**：标书必交 DMP、伦理申请必交知情同意书；属立项工作台范畴, 增强现有"实验规划"模块(非新模块)。
+- **改动**：prompts 加 `build_dmp`(NIH/Horizon/FAIR 框架: 数据类型/采集组织/存储备份/安全隐私合规/共享归档/角色责任, 缺失标[需研究者明确]) 与 `build_consent`(知情同意书草案: 目的/流程/风险获益/隐私/自愿退出/补偿/签字栏, 具体数值机构用[需研究者补充]占位, 注明需 IRB 审核, 不杜撰)，注册 module dmp/consent(走 /api/run)。PlanModule 加"数据管理计划(DMP)""知情同意书草案"两个按钮 + 独立结果面板(panelTestId dmp-panel/consent-panel)，均支持 Word 导出。
+- **测试**：真实生成 DMP(1346字含数据类型分节) 与 consent(1220字含风险/伦理委员会/[需研究者补充] 安全占位)；Playwright 46/46(新增 DMP/consent 生成+导出用例)；dist 已重建。
+- **commit**：见本次提交
+
 ## 2026-06-28 — 抓bug（loop 第11轮）：核心模块审查，修复 4 个真实问题
 - 派 agent 审查核心模块(research/dataanalysis/literature/europepmc/openalex/citations/extract/llm)，修复 4 处：
   - **(中)引用核验子串误判**：`_verify_citations` 用 `pmid in u` 子串匹配，PMID 456 会把伪造的 `.../4567890/` 判为已核验——削弱核心抗幻觉保证。改为**末尾路径段精确匹配**。
