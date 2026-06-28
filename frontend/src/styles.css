@@ -2017,3 +2017,93 @@ select {
 }
 .help-button:hover { background: var(--teal-soft); border-color: var(--teal); }
 /* === HelpModal 样式 end === */
+
+/* ── ProjectPicker ─────────────────────────────────────── */
+.project-picker {
+  position: relative;
+  padding: 8px 12px 0;
+}
+.project-picker-trigger {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 8px 10px;
+  background: var(--surface, #f4f6f9);
+  border: 1px solid var(--line, #e1e5ea);
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 13px;
+  color: var(--text, #1a1a1a);
+  text-align: left;
+}
+.project-picker-trigger:hover:not(:disabled) { border-color: var(--teal, #0e3a39); }
+.project-picker-trigger:disabled { opacity: 0.55; cursor: not-allowed; }
+.pp-icon { font-size: 14px; }
+.pp-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pp-caret { opacity: 0.5; }
+
+.project-picker-panel {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 12px;
+  right: 12px;
+  background: var(--surface, #fff);
+  border: 1px solid var(--line, #e1e5ea);
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.08);
+  z-index: 50;
+  padding: 6px 0;
+  max-height: 420px;
+  overflow-y: auto;
+}
+.pp-list { list-style: none; margin: 0; padding: 0; max-height: 240px; overflow-y: auto; }
+.pp-item {
+  display: flex; align-items: center; gap: 8px;
+  width: 100%; padding: 8px 12px;
+  background: transparent; border: none; cursor: pointer; text-align: left;
+  font-size: 13px; color: inherit;
+}
+.pp-item:hover { background: var(--surface-soft, #f0f3f7); }
+.pp-item.active { background: var(--surface-soft, #f0f3f7); font-weight: 600; }
+.pp-dot { opacity: 0.6; width: 12px; }
+.pp-item-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pp-current { font-size: 11px; opacity: 0.5; }
+.pp-sep { height: 1px; background: var(--line, #e1e5ea); margin: 6px 0; }
+.pp-action {
+  display: block; width: 100%; padding: 8px 12px;
+  background: transparent; border: none; cursor: pointer; text-align: left;
+  font-size: 13px; color: inherit;
+}
+.pp-action:hover:not(:disabled) { background: var(--surface-soft, #f0f3f7); }
+.pp-action:disabled { opacity: 0.4; cursor: not-allowed; }
+.pp-action.danger { color: #b91c1c; }
+
+.pp-form { padding: 10px 12px; display: flex; flex-direction: column; gap: 8px; }
+.pp-form label { font-size: 11px; opacity: 0.7; }
+.pp-form input {
+  padding: 6px 8px; font-size: 13px;
+  border: 1px solid var(--line, #e1e5ea); border-radius: 4px;
+  background: var(--surface, #fff); color: inherit;
+}
+.pp-form-actions { display: flex; justify-content: flex-end; gap: 6px; margin-top: 4px; }
+.pp-form-actions button {
+  padding: 5px 12px; font-size: 12px;
+  border: 1px solid var(--line, #e1e5ea); border-radius: 4px;
+  background: var(--surface, #fff); cursor: pointer; color: inherit;
+}
+.pp-form-actions button.primary { background: var(--teal, #0e3a39); color: #fff; border-color: var(--teal, #0e3a39); }
+.pp-form-actions button.danger { background: #b91c1c; color: #fff; border-color: #b91c1c; }
+.pp-form-actions button:disabled { opacity: 0.5; cursor: not-allowed; }
+.pp-confirm-text { font-size: 13px; line-height: 1.5; }
+
+/* ── 折叠态: 只显示图标 ─────────────────────────────────── */
+.sidebar[data-state="collapsed"] .project-picker { padding: 8px 6px 0; }
+.sidebar[data-state="collapsed"] .pp-name,
+.sidebar[data-state="collapsed"] .pp-caret { display: none; }
+.sidebar[data-state="collapsed"] .project-picker-trigger { justify-content: center; padding: 8px; }
+
+/* ── 保存状态角标 ───────────────────────────────────────── */
+.sync-badge { font-size: 11px; opacity: 0.7; display: block; margin-top: 4px; }
+.sync-badge.saving { color: var(--teal, #0e3a39); }
+.sync-badge.error { color: #b91c1c; opacity: 1; cursor: pointer; }
