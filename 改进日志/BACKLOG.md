@@ -19,7 +19,7 @@
 - [x] C3-a：数据分析安全护栏修复误杀——`_DANGER` 之前用 `\b` 会把合法的 pandas `df.eval()` 当危险拦掉；改为负向后顾仅拦内置 eval/open（并新增拦 exec），合法 pandas 方法/re.compile/含open列名不再误伤。新增 test_danger_guard.py。
 - [x] C3-b：上传文件大小校验——Dropzone 对 >30MB 文件直接拒绝并提示，避免超大文件读入内存/上传卡死。e2e 新增 31MB 文件被拒用例。
 - [x] C3-c：后端上传大小上限——main.py 新增 _read_capped 分块读取(超 30MB 即停并返回 None)，/api/analyze 与 /api/extract 都用它，超限给友好错误而非 500/OOM。新增 test_upload_limit.py（单元 + TestClient 端到端）。
-- [ ] C3：上传文件/参数校验，非法输入给友好提示（其余参数校验）
+- [x] C3：上传文件/参数校验，非法输入给友好提示（其余参数校验）——审查发现各 JSON 端点(check-refs/format-refs/statcheck/journal-match/sample-size/flow-diagram/figure-captions)其实都已 ok/error 守卫；唯一缺口是 /api/run 文本模块缺必填校验(空输入白调一次 LLM+输出困惑)。prompts 加 `_REQUIRED` 表, build_messages 缺必填抛友好 ValueError。**并修复一个真实潜伏 bug**：/api/run 的 err_gen 闭包引用 except 变量 e，而 Python 在 except 块结束即清除 e，流式执行时 NameError 崩溃——导致"未知模块/缺字段"错误根本显示不出来。改为先存 err_msg。新增 test_run_validation.py。
 
 ### 子任务D：前端体验（App.tsx, styles.css）
 - [ ] D1：错误态/空态/加载态统一与可读

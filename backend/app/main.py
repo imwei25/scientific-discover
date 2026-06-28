@@ -145,8 +145,12 @@ async def run(req: RunRequest) -> StreamingResponse:
     try:
         messages = build_messages(req.module, req.inputs)
     except ValueError as e:
+        # 注意: 把消息先取出为局部变量。Python 在 except 块结束时会清除异常变量 e,
+        # 而下面的生成器是延迟执行(流式时才跑), 若闭包里引用 e 会 NameError。
+        err_msg = str(e)
+
         async def err_gen():
-            yield _sse("error", {"message": str(e)})
+            yield _sse("error", {"message": err_msg})
         return StreamingResponse(err_gen(), media_type="text/event-stream")
 
     async def gen():

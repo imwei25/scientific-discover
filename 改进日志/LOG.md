@@ -2,6 +2,13 @@
 
 > 每完成一个改进方向追加一条。最新在最上。
 
+## 2026-06-28 — 稳定性（全改·C3）：/api/run 必填校验 + 修复错误流潜伏 bug
+- **审查**：逐个 JSON 端点(check-refs/format-refs/statcheck/journal-match/sample-size/flow-diagram/figure-captions/imrad/rebuttal)确认**都已**有 `{ok, error}` 空输入/异常守卫(前几轮已加固)。唯一缺口是 `/api/run` 文本模块——缺必填时白白调用一次 LLM 并产出空泛输出。
+- **改动**：`prompts.py` 加 `_REQUIRED` 映射(每模块关键字段+友好名)，`build_messages` 缺必填即抛友好 `ValueError`(由 /api/run 转 SSE error，省额度)。
+- **抓到真实 bug**：`/api/run` 捕获 ValueError 后，`err_gen` 闭包里引用了 `e`，但 Python 在 except 块结束时清除异常变量 `e`，而该生成器是流式时才执行 → `NameError: free variable 'e'`，使"未知模块/缺字段"错误**根本无法显示**(前端拿到的是崩溃而非提示)。改为先把 `str(e)` 存进 `err_msg` 再用。
+- **测试**：新增 `test_run_validation.py`(空必填/未知模块→友好 error、有效输入→done)；后端 18 套测试全过。mock 零额度。
+- **commit**：见本次提交
+
 ## 2026-06-28 — 稳定性（全改·C2）：降级链路可观测性(日志)
 - **动机**：主→备用供应商的重试/降级此前完全静默，线上一旦出现"AI 无响应/慢"无任何日志可查，无法判断是主供应商额度耗尽、瞬时网络、还是备用也挂了。
 - **改动**：`llm.py` 新增 `_log`(打到 stdout→server.log)，在关键转换点各记一条：① 主供应商瞬时错误退避重试(含状态码/第几次)；② 流式中途出错(已产出内容→不重试)；③ 切换到备用供应商(标注原因：额度不足 vs 网络不可达)；④ 备用成功接管 / 无输出 / 也失败。备用供应商异常也显式包成 LLMError 上抛并记录。

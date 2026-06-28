@@ -289,8 +289,29 @@ _BUILDERS = {
 }
 
 
+# 每个模块"必填"的关键输入字段及其友好名: 缺失时直接报错, 不白白调用一次 LLM、也不产出令人困惑的空泛输出。
+_REQUIRED = {
+    "idea": ("field", "研究领域/方向"),
+    "plan": ("idea", "研究想法/课题"),
+    "sap": ("idea", "研究想法/课题"),
+    "dmp": ("idea", "研究想法/课题"),
+    "consent": ("idea", "研究想法/课题"),
+    "checklist": ("manuscript", "稿件/方案全文"),
+    "abstract": ("points", "要点/材料"),
+    "keywords": ("points", "摘要/要点"),
+    "pico": ("field", "研究方向"),
+    "precheck": ("manuscript", "稿件全文"),
+    "coverletter": ("manuscript", "稿件全文/摘要"),
+    "write": ("facts", "统计事实/数据"),
+    "format": ("manuscript", "稿件内容"),
+}
+
+
 def build_messages(module: str, inputs: dict) -> list[dict]:
     builder = _BUILDERS.get(module)
     if not builder:
         raise ValueError(f"未知模块: {module}")
+    req = _REQUIRED.get(module)
+    if req and not str(inputs.get(req[0]) or "").strip():
+        raise ValueError(f"请先填写「{req[1]}」再生成。")
     return builder(inputs)
