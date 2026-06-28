@@ -4,6 +4,7 @@ import { usePersistentState, readPersisted } from "../lib/usePersistentState";
 import { addHistory } from "../lib/history";
 import { apiUrl } from "../lib/api";
 import Markdown from "../components/Markdown";
+import { HelpButton } from "../components/HelpButton";
 import { downloadText, downloadDocxFromText, downloadBlob, tsName } from "../lib/download";
 
 export default function ImradModule() {
@@ -342,6 +343,7 @@ export default function ImradModule() {
           <button className="btn-secondary" onClick={genKeywords} disabled={kwRunning} data-testid="kw-btn">
             {kwRunning ? "推荐中…" : "推荐关键词 / MeSH"}
           </button>
+          <HelpButton helpKey="keywords" />
         </div>
       </div>
       {absErr && <div className="result-error" data-testid="abs-error">{absErr}</div>}
@@ -382,7 +384,7 @@ export default function ImradModule() {
         </div>
       )}
 
-      <h2 className="section-title">📦 一键投稿包（ZIP）</h2>
+      <h2 className="section-title">📦 一键投稿包（ZIP）<HelpButton helpKey="bundle" /></h2>
       <p className="section-hint">
         把各模块已产出的材料（选题/方案/SAP/分析结论/初稿/摘要/投稿信/排版稿/参考文献/规范核对/审稿回复）
         汇总打包成一个 ZIP，初稿与摘要会转为 Word。

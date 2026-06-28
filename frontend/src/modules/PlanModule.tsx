@@ -5,6 +5,7 @@ import { addHistory } from "../lib/history";
 import { apiUrl } from "../lib/api";
 import ResultPanel from "../components/ResultPanel";
 import Dropzone from "../components/Dropzone";
+import { HelpButton } from "../components/HelpButton";
 import { downloadCsv, downloadDocxFromText, tsName } from "../lib/download";
 
 export default function PlanModule() {
@@ -242,7 +243,7 @@ export default function PlanModule() {
 
       {(dmp.text || dmp.running || dmp.error) && (
         <>
-          <h2 className="section-title" data-testid="dmp-title">🗄️ 数据管理计划（DMP）</h2>
+          <h2 className="section-title" data-testid="dmp-title">🗄️ 数据管理计划（DMP）<HelpButton helpKey="dmp" /></h2>
           <ResultPanel
             text={dmp.text}
             running={dmp.running}
@@ -259,7 +260,7 @@ export default function PlanModule() {
 
       {(consent.text || consent.running || consent.error) && (
         <>
-          <h2 className="section-title" data-testid="consent-title">📝 知情同意书（草案 · 需伦理委员会审核）</h2>
+          <h2 className="section-title" data-testid="consent-title">📝 知情同意书（草案 · 需伦理委员会审核）<HelpButton helpKey="consent" /></h2>
           <ResultPanel
             text={consent.text}
             running={consent.running}
@@ -346,7 +347,7 @@ export default function PlanModule() {
       </details>
 
       <details className="ss-calc" data-testid="rz-calc">
-        <summary>🎲 随机化分组表（确定性，固定种子可复现，免费）</summary>
+        <summary>🎲 随机化分组表（确定性，固定种子可复现，免费）<HelpButton helpKey="randomize" /></summary>
         <div className="form" style={{ marginTop: 12 }}>
           <div className="ss-row">
             <label className="field">

@@ -3,6 +3,7 @@ import { streamIdea, streamIdeaFollowup, runModule, Reference, Trial, EvidenceIt
 import { addHistory } from "../lib/history";
 import Markdown from "../components/Markdown";
 import Dropzone from "../components/Dropzone";
+import { HelpButton } from "../components/HelpButton";
 import { downloadText, downloadCsv, tsName } from "../lib/download";
 import { usePersistentState } from "../lib/usePersistentState";
 import type { Goto } from "../App";
@@ -386,6 +387,7 @@ export default function IdeaModule({ goto }: { goto: Goto }) {
           <button className="btn-secondary" onClick={genPico} disabled={!field.trim() || picoRunning} data-testid="pico-btn">
             {picoRunning ? "提取中…" : "提取 PICO / 纳排标准"}
           </button>
+          <HelpButton helpKey="pico" />
           <button className="btn-ghost" onClick={reset} data-testid="reset-btn">
             清空
           </button>

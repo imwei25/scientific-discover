@@ -3,6 +3,7 @@ import { streamAnalyze, ChartItem } from "../lib/sse";
 import { usePersistentState } from "../lib/usePersistentState";
 import { addHistory } from "../lib/history";
 import Markdown from "../components/Markdown";
+import { HelpButton } from "../components/HelpButton";
 import { downloadText, downloadBase64, chartMime, tsName, downloadAnalysisReport } from "../lib/download";
 import { apiUrl } from "../lib/api";
 import type { Goto } from "../App";
@@ -267,6 +268,7 @@ export default function AnalyzeModule({ goto }: { goto: Goto }) {
               <button className="btn-ghost btn-sm" onClick={genCaptions} disabled={capBusy} data-testid="gen-captions-btn">
                 {capBusy ? "生成图注中…" : "✍️ 生成规范图注"}
               </button>
+              <HelpButton helpKey="figcaptions" />
             </div>
           )}
           <div className="charts">
