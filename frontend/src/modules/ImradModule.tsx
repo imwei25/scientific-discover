@@ -5,7 +5,21 @@ import { addHistory } from "../lib/history";
 import { apiUrl } from "../lib/api";
 import Markdown from "../components/Markdown";
 import { HelpButton } from "../components/HelpButton";
+import Dropzone from "../components/Dropzone";
+import { extractFile } from "../lib/extract";
 import { downloadText, downloadDocxFromText, downloadBlob, tsName } from "../lib/download";
+import DeidentifyDialog from "../components/DeidentifyDialog";
+
+type PhiScanResult = {
+  columns: { name: string; phi_types: string[]; count: number; samples: string[] }[];
+  total_rows: number;
+};
+
+// 判断是否为表格类（csv/xlsx）：仅根据扩展名判断，避免依赖 MIME 不稳定。
+function isTabularFile(file: File): boolean {
+  const name = file.name.toLowerCase();
+  return name.endsWith(".csv") || name.endsWith(".xlsx") || name.endsWith(".xls");
+}
 
 export default function ImradModule() {
   const [topic, setTopic] = usePersistentState("imrad:topic", "");
@@ -21,6 +35,15 @@ export default function ImradModule() {
   const [error, setError] = useState<string | null>(null);
   const [docxBusy, setDocxBusy] = useState(false);
   const ctrl = useRef<AbortController | null>(null);
+
+  // 病例脱敏（PHI）相关：开关 + 对话框 + 扫描结果 + 暂存的原始文件。
+  const [deidEnabled, setDeidEnabled] = usePersistentState("imrad:deidEnabled", true);
+  const [deidOpen, setDeidOpen] = useState(false);
+  const [deidScan, setDeidScan] = useState<PhiScanResult | null>(null);
+  const [deidFile, setDeidFile] = useState<File | null>(null);
+  const [uploadBusy, setUploadBusy] = useState(false);
+  const [uploadInfo, setUploadInfo] = useState<string>("");
+  const [uploadErr, setUploadErr] = useState<string>("");
 
   const savedRef = useRef("");
   useEffect(() => {
@@ -123,6 +146,73 @@ export default function ImradModule() {
       },
     );
     setKwRunning(false);
+  };
+
+  // 把上传文件抽取为文本，追加到“方法素材”里（与 PlanModule 行为一致）。
+  const ingestFileAsText = async (file: File) => {
+    setUploadBusy(true);
+    setUploadInfo(`正在解析 ${file.name} …`);
+    setUploadErr("");
+    const res = await extractFile(file);
+    setUploadBusy(false);
+    if (!res.ok || !res.text) {
+      setUploadInfo("");
+      setUploadErr(res.error || "解析失败");
+      return;
+    }
+    setUploadInfo(`已导入：${file.name}${res.truncated ? "（内容较长已截断）" : ""}`);
+    setMethods((prev) => (prev ? prev + "\n\n" : "") + `[附加资料：${file.name}]\n` + res.text);
+  };
+
+  // Dropzone 收到文件：csv/xlsx 且开关开启时先做 PHI 扫描，命中则弹脱敏对话框；其余情况走原文件提取。
+  const handleUpload = async (file: File) => {
+    setUploadErr("");
+    setUploadInfo("");
+    if (deidEnabled && isTabularFile(file)) {
+      try {
+        setUploadBusy(true);
+        setUploadInfo(`正在检测患者信息（PHI）…`);
+        const fd = new FormData();
+        fd.append("file", file);
+        const resp = await fetch(apiUrl("/api/deidentify/scan"), { method: "POST", body: fd });
+        if (!resp.ok) throw new Error(`扫描接口返回 ${resp.status}`);
+        const data = (await resp.json()) as PhiScanResult;
+        setUploadBusy(false);
+        if (data && Array.isArray(data.columns) && data.columns.length > 0) {
+          setDeidScan(data);
+          setDeidFile(file);
+          setDeidOpen(true);
+          setUploadInfo(`检测到 ${data.columns.length} 个可能含 PHI 的列，请在弹窗中选择处理方式。`);
+          return;
+        }
+      } catch (e) {
+        // 扫描失败不阻塞主流程：提示后继续按原文件提取。
+        setUploadBusy(false);
+        setUploadInfo(`PHI 扫描失败（${(e as Error).message}），将按原文件继续。`);
+      }
+    }
+    await ingestFileAsText(file);
+  };
+
+  // 用户在脱敏对话框点“应用”：拿到脱敏后的文件，替换原文件继续走提取流程。
+  const handleDeidAccept = async (redactedFile: File, _mapping: Record<string, string>) => {
+    setDeidOpen(false);
+    setDeidScan(null);
+    setDeidFile(null);
+    setUploadInfo(`已脱敏并导入：${redactedFile.name}`);
+    await ingestFileAsText(redactedFile);
+  };
+
+  // 用户取消：关闭对话框，用原文件继续。
+  const handleDeidCancel = async () => {
+    const original = deidFile;
+    setDeidOpen(false);
+    setDeidScan(null);
+    setDeidFile(null);
+    if (original) {
+      setUploadInfo(`已跳过脱敏，按原文件导入：${original.name}`);
+      await ingestFileAsText(original);
+    }
   };
 
   const importFromModules = () => {
@@ -248,6 +338,15 @@ export default function ImradModule() {
           把你已产出的<strong>真实材料</strong>（综述/方法/结果/讨论）拼成连贯的 Introduction/Methods/Results/Discussion 初稿。
           铁律：<strong>只据你的材料、不编造数字与文献</strong>，缺失处标 [待补充]，导出 Word。
         </p>
+        <label className="field-inline" data-testid="imrad-deid-toggle">
+          <input
+            type="checkbox"
+            checked={deidEnabled}
+            onChange={(e) => setDeidEnabled(e.target.checked)}
+            data-testid="imrad-deid-enabled"
+          />
+          上传医学数据时自动检测患者信息（PHI）
+        </label>
       </header>
 
       <div className="form">
@@ -255,6 +354,17 @@ export default function ImradModule() {
           <span className="field-label">论文主题 / 题目（可选）</span>
           <input data-testid="imrad-topic" value={topic} onChange={(e) => setTopic(e.target.value)} placeholder="例如：二甲双胍对2型糖尿病合并NAFLD肝纤维化的疗效" />
         </label>
+        <Dropzone
+          testId="imrad-upload"
+          accept=".docx,.pdf,.txt,.md,.csv,.xlsx,.xls"
+          label="附加资料（可选：草案/方案/原始数据；表格类会自动检测 PHI）"
+          hint="支持 Word/PDF/Excel/CSV/txt；csv/xlsx 在上传时会先做患者信息检测"
+          mode="file"
+          onFile={handleUpload}
+        />
+        {uploadInfo && <span className="file-name" data-testid="imrad-upload-info">{uploadInfo}</span>}
+        {uploadErr && <span className="result-error" data-testid="imrad-upload-error">{uploadErr}</span>}
+        {uploadBusy && <span className="field-hint" data-testid="imrad-upload-busy">处理中…</span>}
         <div className="form-actions">
           <button className="btn-secondary" onClick={importFromModules} data-testid="imrad-import-btn">
             ↩ 从各模块导入已有成果
@@ -395,6 +505,14 @@ export default function ImradModule() {
         </button>
         {bundleMsg && <span className="field-hint" data-testid="bundle-msg">{bundleMsg}</span>}
       </div>
+
+      <DeidentifyDialog
+        open={deidOpen}
+        scanResult={deidScan}
+        originalFile={deidFile}
+        onAccept={handleDeidAccept}
+        onCancel={handleDeidCancel}
+      />
     </div>
   );
 }
