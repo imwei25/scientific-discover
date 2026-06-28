@@ -15,6 +15,8 @@ import HistoryView from "./modules/HistoryView";
 import ThemeSwitcher from "./components/ThemeSwitcher";
 import ProjectPicker from "./components/ProjectPicker";
 import OnboardingWizard from "./components/OnboardingWizard";
+import ToastContainer from "./components/Toast";
+import { showToast } from "./lib/toast";
 import { useProjects } from "./lib/projects";
 
 export type ModuleId = "home" | "idea" | "plan" | "ethics" | "analyze" | "imrad" | "journal" | "format" | "checklist" | "rebuttal" | "history";
@@ -119,8 +121,21 @@ export default function App() {
     return () => window.removeEventListener("onboarding:reopen", onReopen);
   }, []);
 
+  // W2-2: syncStatus 持续 error 超 5 秒, 弹 Toast 提示
+  useEffect(() => {
+    if (syncStatus !== "error") return;
+    const tm = setTimeout(() => {
+      showToast({
+        kind: "warn",
+        message: "项目数据未同步到本地数据库, 正在自动重试; 网络若仍不通可能丢失本次改动",
+      });
+    }, 5000);
+    return () => clearTimeout(tm);
+  }, [syncStatus]);
+
   return (
     <div className="app">
+      <ToastContainer />
       {onboardingOpen && (
         <OnboardingWizard
           onClose={() => {

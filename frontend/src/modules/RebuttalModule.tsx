@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { streamRebuttal, ReviewComment } from "../lib/sse";
+import { reportLLMError } from "../lib/errorToast";
 import { usePersistentState } from "../lib/usePersistentState";
 import { addHistory } from "../lib/history";
 import Markdown from "../components/Markdown";
@@ -56,6 +57,7 @@ export default function RebuttalModule() {
           setError(m);
           setStatus("");
           setRunning(false);
+          reportLLMError(m);
         },
         onDone: () => {
           setStatus("");

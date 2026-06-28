@@ -2182,10 +2182,24 @@ select {
 .pp-form-actions button:disabled { opacity: 0.5; cursor: not-allowed; }
 .pp-confirm-text { font-size: 13px; line-height: 1.6; color: var(--ink); }
 
-/* ── 保存状态角标 ───────────────────────────────────────── */
-.sync-badge { font-size: 11px; opacity: 0.7; display: block; margin-top: 4px; }
+/* ── 保存状态角标 (W2-2: 加大字号 + 错误态加红底加粗) ─────────── */
+.sync-badge {
+  font-size: 14px;
+  opacity: 0.85;
+  display: block;
+  margin-top: 6px;
+  padding: 2px 6px;
+  border-radius: 6px;
+}
 .sync-badge.saving { color: var(--petrol); }
-.sync-badge.error { color: var(--warn-fg, #b91c1c); opacity: 1; cursor: pointer; }
+.sync-badge.error {
+  background: var(--bad-soft);
+  color: var(--bad);
+  font-weight: 600;
+  opacity: 1;
+  cursor: pointer;
+  border: 1px solid var(--bad-line);
+}
 
 /* ── 伦理材料模块 (Wave 1-F) ─────────────────────────────────────── */
 .ethics-layout {
@@ -2478,3 +2492,93 @@ select {
   padding: 8px 12px;
   margin-top: 10px;
 }
+
+/* ── W2-2 Toast ─────────────────────────────────────────────── */
+.toast-container {
+  position: fixed;
+  top: 16px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 1100;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  pointer-events: none;
+  max-width: 560px;
+  width: calc(100% - 32px);
+}
+.toast {
+  pointer-events: auto;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: var(--surface);
+  box-shadow: var(--shadow);
+  border: 1px solid var(--line);
+  font-size: 14px;
+  color: var(--ink);
+  animation: toast-in 220ms var(--ease-out-soft);
+}
+@keyframes toast-in {
+  from { opacity: 0; transform: translateY(-12px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.toast-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  font-size: 13px;
+  font-weight: 600;
+  flex: 0 0 22px;
+}
+.toast-msg { flex: 1; line-height: 1.55; word-break: break-word; }
+.toast-action {
+  background: transparent;
+  border: 1px solid currentColor;
+  color: inherit;
+  border-radius: 6px;
+  padding: 4px 10px;
+  font-size: 13px;
+  cursor: pointer;
+  font-weight: 500;
+  white-space: nowrap;
+}
+.toast-action:hover { background: rgba(0,0,0,0.04); }
+.toast-close {
+  background: transparent;
+  border: none;
+  color: var(--muted);
+  font-size: 18px;
+  cursor: pointer;
+  padding: 0 4px;
+  line-height: 1;
+}
+.toast-close:hover { color: var(--ink); }
+
+.toast-info { border-color: var(--line); }
+.toast-info .toast-icon { background: var(--surface-2); color: var(--muted); }
+
+.toast-success {
+  border-color: var(--ok);
+  background: var(--ok-soft);
+}
+.toast-success .toast-icon { background: var(--ok); color: white; }
+
+.toast-warn {
+  border-color: var(--warn-line);
+  background: var(--warn-bg);
+  color: var(--warn-fg);
+}
+.toast-warn .toast-icon { background: var(--warn-fg); color: white; }
+
+.toast-error {
+  border-color: var(--bad-line);
+  background: var(--bad-soft);
+  color: var(--bad);
+}
+.toast-error .toast-icon { background: var(--bad); color: white; }

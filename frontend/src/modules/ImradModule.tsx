@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { streamImrad, runModule } from "../lib/sse";
+import { reportLLMError } from "../lib/errorToast";
 import { usePersistentState, readPersisted } from "../lib/usePersistentState";
 import { addHistory } from "../lib/history";
 import { apiUrl } from "../lib/api";
@@ -138,6 +139,7 @@ export default function ImradModule() {
         onError: (m) => {
           setKwErr(m);
           setKwRunning(false);
+          reportLLMError(m);
         },
         onDone: () => {
           setKwRunning(false);
@@ -246,6 +248,7 @@ export default function ImradModule() {
           setError(m);
           setStatus("");
           setRunning(false);
+          reportLLMError(m);
         },
         onDone: () => {
           setStatus("");
@@ -311,6 +314,7 @@ export default function ImradModule() {
         onError: (m) => {
           setAbsErr(m);
           setAbsRunning(false);
+          reportLLMError(m);
         },
         onDone: () => {
           setAbsRunning(false);

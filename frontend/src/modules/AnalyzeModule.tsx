@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { streamAnalyze, ChartItem } from "../lib/sse";
+import { reportLLMError } from "../lib/errorToast";
 import { usePersistentState } from "../lib/usePersistentState";
 import { addHistory } from "../lib/history";
 import Markdown from "../components/Markdown";
@@ -370,6 +371,7 @@ function DataPane({ goto }: { goto: Goto }) {
         setError(m);
         setStatus("");
         setRunning(false);
+        reportLLMError(m);
       },
       onDone: () => {
         setStatus("");
