@@ -162,7 +162,8 @@ export function ProjectProvider({ children }: { children: ReactNode }) {
     const id = currentIdRef.current;
     if (!id) return;
     if (inflightRef.current) {
-      await inflightRef.current;
+      // Join the existing flush; do not start a second one.
+      return inflightRef.current;
     }
     const state = dumpStateFromLocalStorage();
     const history = dumpHistoryFromLocalStorage();
@@ -173,7 +174,6 @@ export function ProjectProvider({ children }: { children: ReactNode }) {
         await api.updateState(id, state, history);
         setSyncStatus("idle");
         setOffline(false);
-        // 列表里这个项目的 updated_at 改了, 顺便刷一下
         refreshList().catch(() => {});
       } catch (e) {
         if (i < RETRY_DELAYS_MS.length) {
@@ -184,12 +184,11 @@ export function ProjectProvider({ children }: { children: ReactNode }) {
       }
     };
 
-    inflightRef.current = attempt(0);
-    try {
-      await inflightRef.current;
-    } finally {
+    const p = attempt(0).finally(() => {
       inflightRef.current = null;
-    }
+    });
+    inflightRef.current = p;
+    return p;
   }, [refreshList]);
 
   const scheduleFlush = useCallback(() => {
@@ -227,6 +226,7 @@ export function ProjectProvider({ children }: { children: ReactNode }) {
       replaceLocalStorage(target.state, target.history);
       // 4. 更新 context
       setCurrent({ id: target.id, name: target.name, updated_at: target.updated_at });
+      setSyncStatus("idle");
       await refreshList();
     } finally {
       // 允许下一帧后再放开事件(避免 React 重挂载触发的 setItem 立即又同步)
@@ -261,7 +261,8 @@ export function ProjectProvider({ children }: { children: ReactNode }) {
         await create("未命名项目");
         return;
       }
-      await switchTo(list[0].id);
+      const sorted = [...list].sort((a, b) => b.updated_at - a.updated_at);
+      await switchTo(sorted[0].id);
     }
   }, [create, refreshList, switchTo]);
 
@@ -287,7 +288,9 @@ export function ProjectProvider({ children }: { children: ReactNode }) {
             try {
               await api.updateState(id, legacyState, legacyHistory);
             } catch {
-              /* 即使迁移 state 失败, 项目本身已存在, 用户也不会丢 localStorage */
+              // 迁移失败: 回滚刚创建的空项目, 让下次启动再试一次, 避免后续 boot 把 localStorage 覆写为空。
+              try { await api.remove(id); } catch { /* ignore */ }
+              throw new Error("migration failed");
             }
           }
           await refreshList();
