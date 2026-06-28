@@ -77,17 +77,151 @@ export default function PlanModule() {
     consent.setText("");
   };
 
-  // —— 样本量 / 检验效能计算器（确定性，零额度）——
-  const [ssDesign, setSsDesign] = useState("ttest");
-  const [ssAlpha, setSsAlpha] = useState("0.05");
-  const [ssPower, setSsPower] = useState("0.8");
-  const [ssD, setSsD] = useState("0.5"); // Cohen's d
-  const [ssP1, setSsP1] = useState("0.3");
-  const [ssP2, setSsP2] = useState("0.5");
-  const [ssF, setSsF] = useState("0.25"); // Cohen's f
-  const [ssK, setSsK] = useState("3");
-  const [ssResult, setSsResult] = useState<{ per_group?: number; total?: number; note?: string; ok?: boolean; error?: string } | null>(null);
-  const [ssBusy, setSsBusy] = useState(false);
+  // —— 样本量交互式探索：场景 + 滑块 + 实时曲线（纯前端计算）——
+  // 场景：proportion = 双比例（两组率），ttest = 双均值（Cohen's d）
+  const [ssScene, setSsScene] = usePersistentState<string>("plan:samplesize:scene", "proportion");
+  const [ssEffect, setSsEffect] = usePersistentState<number>("plan:samplesize:effect", 0.3);
+  const [ssAlpha, setSsAlpha] = usePersistentState<number>("plan:samplesize:alpha", 0.05);
+  const [ssPower, setSsPower] = usePersistentState<number>("plan:samplesize:power", 0.8);
+  const [ssSweep, setSsSweep] = usePersistentState<string>("plan:samplesize:sweep", "effect");
+  const [ssChosen, setSsChosen] = usePersistentState<number>("plan:sampleSize", 0);
+  const [ssVerifyMsg, setSsVerifyMsg] = useState<string>("");
+  const [ssVerifyBusy, setSsVerifyBusy] = useState(false);
+
+  // 标准正态分位数表（常用 α/β 对应）
+  const zTable: Record<string, number> = {
+    "0.005": 2.576,
+    "0.010": 2.326,
+    "0.025": 1.96,
+    "0.050": 1.645,
+    "0.100": 1.282,
+    "0.200": 0.842,
+  };
+
+  // 简单近似 z 分位：用最接近的查表值（够用）；对 1-power 取右尾分位
+  const approxZ = (tail: number): number => {
+    // tail 是右尾概率 (0,1)，返回 z 使 P(Z>z)=tail
+    const keys = Object.keys(zTable)
+      .map((k) => ({ k, v: parseFloat(k) }))
+      .sort((a, b) => a.v - b.v);
+    // 线性插值
+    if (tail <= keys[0].v) return zTable[keys[0].k];
+    if (tail >= keys[keys.length - 1].v) return zTable[keys[keys.length - 1].k];
+    for (let i = 0; i < keys.length - 1; i++) {
+      const a = keys[i];
+      const b = keys[i + 1];
+      if (tail >= a.v && tail <= b.v) {
+        const t = (tail - a.v) / (b.v - a.v);
+        return zTable[a.k] + t * (zTable[b.k] - zTable[a.k]);
+      }
+    }
+    return 1.96;
+  };
+
+  // 公式：返回每组 N（向上取整，下限 2）
+  const calcN = (scene: string, effect: number, alpha: number, power: number): number => {
+    if (!isFinite(effect) || effect <= 0) return Infinity;
+    if (alpha <= 0 || alpha >= 1 || power <= 0 || power >= 1) return NaN;
+    const zA = approxZ(alpha / 2); // 双侧
+    const zB = approxZ(1 - power);
+    const c = (zA + zB) * (zA + zB);
+    let n: number;
+    if (scene === "proportion") {
+      // 双比例 Lehr 近似：假设 p1=0.3, p2=p1+effect（如超界则取对称）
+      const p1 = 0.3;
+      let p2 = p1 + effect;
+      if (p2 >= 1) p2 = 0.99;
+      const pbar = (p1 + p2) / 2;
+      const diff = p2 - p1;
+      n = (2 * c * pbar * (1 - pbar)) / (diff * diff);
+    } else {
+      // 双均值：n = 2 c / d^2
+      n = (2 * c) / (effect * effect);
+    }
+    return Math.max(2, Math.ceil(n));
+  };
+
+  const ssN = calcN(ssScene, ssEffect, ssAlpha, ssPower);
+
+  // 扫描曲线：固定其他两个参数，沿 sweep 变量扫描
+  const sweepCurve = (): { x: number; y: number }[] => {
+    const pts: { x: number; y: number }[] = [];
+    let minX = 0, maxX = 1, steps = 40;
+    if (ssSweep === "effect") { minX = 0.1; maxX = 1.0; }
+    else if (ssSweep === "alpha") { minX = 0.01; maxX = 0.1; }
+    else if (ssSweep === "power") { minX = 0.6; maxX = 0.99; }
+    for (let i = 0; i <= steps; i++) {
+      const x = minX + ((maxX - minX) * i) / steps;
+      let n: number;
+      if (ssSweep === "effect") n = calcN(ssScene, x, ssAlpha, ssPower);
+      else if (ssSweep === "alpha") n = calcN(ssScene, ssEffect, x, ssPower);
+      else n = calcN(ssScene, ssEffect, ssAlpha, x);
+      if (isFinite(n) && n < 100000) pts.push({ x, y: n });
+    }
+    return pts;
+  };
+
+  const curvePts = sweepCurve();
+  const currentX = ssSweep === "effect" ? ssEffect : ssSweep === "alpha" ? ssAlpha : ssPower;
+
+  // SVG 视口
+  const chartW = 420, chartH = 220, padL = 46, padR = 12, padT = 14, padB = 30;
+  const innerW = chartW - padL - padR;
+  const innerH = chartH - padT - padB;
+  const xs = curvePts.map((p) => p.x);
+  const ys = curvePts.map((p) => p.y);
+  const xMin = xs.length ? Math.min(...xs) : 0;
+  const xMax = xs.length ? Math.max(...xs) : 1;
+  const yMin = 0;
+  const yMax = ys.length ? Math.max(...ys) * 1.1 : 100;
+  const sx = (x: number) => padL + ((x - xMin) / (xMax - xMin || 1)) * innerW;
+  const sy = (y: number) => padT + innerH - ((y - yMin) / (yMax - yMin || 1)) * innerH;
+  const path = curvePts.map((p, i) => `${i === 0 ? "M" : "L"}${sx(p.x).toFixed(1)},${sy(p.y).toFixed(1)}`).join(" ");
+
+  const useThisN = async () => {
+    setSsChosen(ssN);
+    setSsVerifyMsg("");
+    setSsVerifyBusy(true);
+    try {
+      // 调后端精确验证（沿用现有 /api/sample-size）
+      const params: Record<string, string> = {
+        alpha: String(ssAlpha),
+        power: String(ssPower),
+      };
+      let design = "ttest";
+      if (ssScene === "proportion") {
+        design = "proportion";
+        const p1 = 0.3;
+        let p2 = p1 + ssEffect;
+        if (p2 >= 1) p2 = 0.99;
+        params.p1 = String(p1);
+        params.p2 = String(p2);
+      } else {
+        params.effect_size = String(ssEffect);
+      }
+      const resp = await fetch(apiUrl("/api/sample-size"), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ design, params }),
+      });
+      const j = await resp.json();
+      if (j.ok && j.per_group) {
+        const diff = Math.abs(j.per_group - ssN);
+        if (diff <= Math.max(2, ssN * 0.1)) {
+          setSsVerifyMsg(`已采用 N=${ssN}（后端精确验证：每组 ${j.per_group}，偏差 ≤ 10%，可信）`);
+        } else {
+          setSsVerifyMsg(`已采用 N=${ssN}（前端估算）。后端精确值为每组 ${j.per_group}，差异较大，建议参考精确值。`);
+        }
+      } else {
+        setSsVerifyMsg(`已采用 N=${ssN}（前端估算，后端验证未成功：${j.error || "未知错误"}）`);
+      }
+    } catch (e) {
+      setSsVerifyMsg(`已采用 N=${ssN}（前端估算，后端验证失败：${(e as Error).message}）`);
+    } finally {
+      setSsVerifyBusy(false);
+    }
+  };
+
 
   // —— 随机化分组表（确定性，零额度）——
   const [rzN, setRzN] = useState("60");
@@ -122,27 +256,6 @@ export default function PlanModule() {
   const exportRandomize = () => {
     if (!rzResult?.rows) return;
     downloadCsv(tsName("随机化分组表", "csv"), ["序号", "分组"], rzResult.rows.map((r) => [r.seq, r.group]));
-  };
-
-  const calcSampleSize = async () => {
-    setSsBusy(true);
-    setSsResult(null);
-    const params: Record<string, string> = { alpha: ssAlpha, power: ssPower };
-    if (ssDesign === "ttest") params.effect_size = ssD;
-    else if (ssDesign === "proportion") { params.p1 = ssP1; params.p2 = ssP2; }
-    else if (ssDesign === "anova") { params.effect_size = ssF; params.k_groups = ssK; }
-    try {
-      const resp = await fetch(apiUrl("/api/sample-size"), {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ design: ssDesign, params }),
-      });
-      setSsResult(await resp.json());
-    } catch (e) {
-      setSsResult({ ok: false, error: `计算失败：${(e as Error).message}` });
-    } finally {
-      setSsBusy(false);
-    }
   };
 
   return (
@@ -275,73 +388,146 @@ export default function PlanModule() {
         </>
       )}
 
-      <details className="ss-calc" data-testid="ss-calc">
-        <summary>🧮 样本量 / 检验效能计算器（确定性，免费，不消耗额度）</summary>
+      <details className="ss-calc" data-testid="ss-calc" open>
+        <summary>🧮 样本量交互式探索（滑块 + 实时曲线，免费不消耗额度）</summary>
         <div className="form" style={{ marginTop: 12 }}>
           <label className="field">
-            <span className="field-label">研究设计</span>
-            <select data-testid="ss-design" value={ssDesign} onChange={(e) => setSsDesign(e.target.value)}>
-              <option value="ttest">两组均值比较（t 检验）</option>
-              <option value="proportion">两组率比较（卡方/Z 检验）</option>
-              <option value="anova">多组均值比较（单因素方差分析）</option>
+            <span className="field-label">研究场景</span>
+            <select data-testid="ss-scene" value={ssScene} onChange={(e) => setSsScene(e.target.value)}>
+              <option value="proportion">双比例（两组率比较）</option>
+              <option value="ttest">双均值（两组均值比较，Cohen's d）</option>
             </select>
           </label>
 
-          <div className="ss-row">
-            <label className="field">
-              <span className="field-label">显著性水平 α</span>
-              <input data-testid="ss-alpha" value={ssAlpha} onChange={(e) => setSsAlpha(e.target.value)} />
-            </label>
-            <label className="field">
-              <span className="field-label">检验效能 power</span>
-              <input data-testid="ss-power" value={ssPower} onChange={(e) => setSsPower(e.target.value)} />
-            </label>
+          <div className="ss-explore">
+            <div className="ss-controls">
+              <label className="field">
+                <span className="field-label">
+                  效应量 <strong>{ssEffect.toFixed(2)}</strong>
+                  <span className="field-hint">
+                    {ssScene === "proportion" ? "（两组率差，参考 p₁=0.3）" : "（Cohen's d：小0.2 / 中0.5 / 大0.8）"}
+                  </span>
+                </span>
+                <input
+                  type="range" min={0.05} max={1.0} step={0.01}
+                  data-testid="ss-effect"
+                  value={ssEffect}
+                  onChange={(e) => setSsEffect(parseFloat(e.target.value))}
+                />
+              </label>
+              <label className="field">
+                <span className="field-label">
+                  显著性水平 α <strong>{ssAlpha.toFixed(3)}</strong>
+                  <span className="field-hint">（双侧，常用 0.05）</span>
+                </span>
+                <input
+                  type="range" min={0.01} max={0.1} step={0.005}
+                  data-testid="ss-alpha"
+                  value={ssAlpha}
+                  onChange={(e) => setSsAlpha(parseFloat(e.target.value))}
+                />
+              </label>
+              <label className="field">
+                <span className="field-label">
+                  检验效能 power <strong>{ssPower.toFixed(2)}</strong>
+                  <span className="field-hint">（常用 0.8 / 0.9）</span>
+                </span>
+                <input
+                  type="range" min={0.6} max={0.99} step={0.01}
+                  data-testid="ss-power"
+                  value={ssPower}
+                  onChange={(e) => setSsPower(parseFloat(e.target.value))}
+                />
+              </label>
+
+              <div className="ss-sweep-row">
+                <span className="field-label" style={{ marginBottom: 0 }}>扫描变量：</span>
+                {[
+                  { k: "effect", label: "效应量" },
+                  { k: "alpha", label: "α" },
+                  { k: "power", label: "power" },
+                ].map((opt) => (
+                  <button
+                    key={opt.k}
+                    type="button"
+                    className={ssSweep === opt.k ? "btn-primary btn-sm" : "btn-ghost btn-sm"}
+                    onClick={() => setSsSweep(opt.k)}
+                    data-testid={`ss-sweep-${opt.k}`}
+                  >
+                    {opt.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div className="ss-chart">
+              <svg viewBox={`0 0 ${chartW} ${chartH}`} width="100%" role="img" aria-label="样本量曲线" data-testid="ss-chart">
+                {/* 坐标轴 */}
+                <line x1={padL} y1={padT} x2={padL} y2={padT + innerH} stroke="#bcd0cb" strokeWidth={1} />
+                <line x1={padL} y1={padT + innerH} x2={padL + innerW} y2={padT + innerH} stroke="#bcd0cb" strokeWidth={1} />
+                {/* Y 轴刻度 */}
+                {[0, 0.25, 0.5, 0.75, 1].map((t, i) => {
+                  const v = yMin + (yMax - yMin) * (1 - t);
+                  const y = padT + innerH * t;
+                  return (
+                    <g key={`y${i}`}>
+                      <line x1={padL - 4} y1={y} x2={padL} y2={y} stroke="#bcd0cb" />
+                      <text x={padL - 6} y={y + 3} fontSize={10} textAnchor="end" fill="#5f6f6c">{Math.round(v)}</text>
+                    </g>
+                  );
+                })}
+                {/* X 轴刻度 */}
+                {[0, 0.5, 1].map((t, i) => {
+                  const x = padL + innerW * t;
+                  const v = xMin + (xMax - xMin) * t;
+                  return (
+                    <g key={`x${i}`}>
+                      <line x1={x} y1={padT + innerH} x2={x} y2={padT + innerH + 4} stroke="#bcd0cb" />
+                      <text x={x} y={padT + innerH + 16} fontSize={10} textAnchor="middle" fill="#5f6f6c">{v.toFixed(2)}</text>
+                    </g>
+                  );
+                })}
+                {/* 曲线 */}
+                {path && <path d={path} fill="none" stroke="#2f8074" strokeWidth={2} />}
+                {/* 当前点 */}
+                {isFinite(ssN) && currentX >= xMin && currentX <= xMax && (
+                  <g>
+                    <line x1={sx(currentX)} y1={padT} x2={sx(currentX)} y2={padT + innerH} stroke="#2f8074" strokeWidth={1} strokeDasharray="3 3" opacity={0.5} />
+                    <circle cx={sx(currentX)} cy={sy(Math.min(ssN, yMax))} r={5} fill="#fff" stroke="#2f8074" strokeWidth={2} />
+                  </g>
+                )}
+                {/* 轴标签 */}
+                <text x={padL + innerW / 2} y={chartH - 4} fontSize={11} textAnchor="middle" fill="#5f6f6c">
+                  {ssSweep === "effect" ? "效应量" : ssSweep === "alpha" ? "α" : "power"}
+                </text>
+                <text x={12} y={padT + innerH / 2} fontSize={11} textAnchor="middle" fill="#5f6f6c" transform={`rotate(-90 12 ${padT + innerH / 2})`}>每组 N</text>
+              </svg>
+            </div>
           </div>
 
-          {ssDesign === "ttest" && (
-            <label className="field">
-              <span className="field-label">效应量 Cohen's d（小0.2/中0.5/大0.8）</span>
-              <input data-testid="ss-d" value={ssD} onChange={(e) => setSsD(e.target.value)} />
-            </label>
-          )}
-          {ssDesign === "proportion" && (
-            <div className="ss-row">
-              <label className="field">
-                <span className="field-label">对照组率 p1（0~1）</span>
-                <input data-testid="ss-p1" value={ssP1} onChange={(e) => setSsP1(e.target.value)} />
-              </label>
-              <label className="field">
-                <span className="field-label">试验组率 p2（0~1）</span>
-                <input data-testid="ss-p2" value={ssP2} onChange={(e) => setSsP2(e.target.value)} />
-              </label>
-            </div>
-          )}
-          {ssDesign === "anova" && (
-            <div className="ss-row">
-              <label className="field">
-                <span className="field-label">效应量 Cohen's f（小0.1/中0.25/大0.4）</span>
-                <input data-testid="ss-f" value={ssF} onChange={(e) => setSsF(e.target.value)} />
-              </label>
-              <label className="field">
-                <span className="field-label">组数 k</span>
-                <input data-testid="ss-k" value={ssK} onChange={(e) => setSsK(e.target.value)} />
-              </label>
-            </div>
-          )}
+          <div className="ss-result" data-testid="ss-result">
+            <strong style={{ fontSize: 20 }}>
+              当前需要 N = {isFinite(ssN) ? ssN * 2 : "—"} 例（每组 {isFinite(ssN) ? ssN : "—"}）
+            </strong>
+            <span className="field-hint">
+              公式：{ssScene === "proportion"
+                ? "Lehr 近似 n ≈ 2(z_{α/2}+z_β)² p̄(1-p̄) / (p₁-p₂)²（默认 p₁=0.3）"
+                : "n ≈ 2(z_{α/2}+z_β)² / d²"}
+            </span>
+          </div>
 
-          <button className="btn-primary" onClick={calcSampleSize} disabled={ssBusy} data-testid="ss-calc-btn">
-            {ssBusy ? "计算中…" : "计算样本量"}
-          </button>
-
-          {ssResult && (
-            ssResult.ok ? (
-              <div className="ss-result" data-testid="ss-result">
-                <strong>每组 {ssResult.per_group} 例，总计 {ssResult.total} 例</strong>
-                <span className="field-hint">{ssResult.note}（结果由统计公式确定性计算，可写入方案）</span>
-              </div>
-            ) : (
-              <div className="result-error" data-testid="ss-error">{ssResult.error}</div>
-            )
+          <div className="form-actions" style={{ marginTop: 8 }}>
+            <button className="btn-primary" onClick={useThisN} disabled={ssVerifyBusy || !isFinite(ssN)} data-testid="ss-use-btn">
+              {ssVerifyBusy ? "验证中…" : "使用此参数"}
+            </button>
+            {ssChosen > 0 && (
+              <span className="field-hint" data-testid="ss-chosen">
+                已保存到方案：N = {ssChosen}（每组）
+              </span>
+            )}
+          </div>
+          {ssVerifyMsg && (
+            <div className="field-hint" data-testid="ss-verify-msg" style={{ marginTop: 6 }}>{ssVerifyMsg}</div>
           )}
         </div>
       </details>
