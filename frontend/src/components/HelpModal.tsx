@@ -14,6 +14,7 @@ export function HelpModal({ open, onClose, title, whenToUse, howToUse, example }
 
   useEffect(() => {
     if (!open) return;
+    const previouslyFocused = document.activeElement as HTMLElement | null;
     const prevOverflow = document.body.style.overflow;
     document.body.style.overflow = "hidden";
     const onKey = (e: KeyboardEvent) => {
@@ -24,6 +25,7 @@ export function HelpModal({ open, onClose, title, whenToUse, howToUse, example }
     return () => {
       document.body.style.overflow = prevOverflow;
       window.removeEventListener("keydown", onKey);
+      previouslyFocused?.focus?.();
     };
   }, [open, onClose]);
 
