@@ -30,11 +30,12 @@ export default function AnalyzeModule({ goto }: { goto: Goto }) {
   const fileInput = useRef<HTMLInputElement>(null);
 
   const [status, setStatus] = useState("");
-  const [code, setCode] = useState("");
-  const [charts, setCharts] = useState<ChartItem[]>([]);
-  const [output, setOutput] = useState("");
+  // 代码/图表/原始输出/图注 也持久化, 切模块或从历史恢复后能完整重现(不再只剩结论)。
+  const [code, setCode] = usePersistentState("analyze:code", "");
+  const [charts, setCharts] = usePersistentState<ChartItem[]>("analyze:charts", []);
+  const [output, setOutput] = usePersistentState("analyze:output", "");
   const [conclusion, setConclusion] = usePersistentState("analyze:conclusion", "");
-  const [captions, setCaptions] = useState<string[]>([]);
+  const [captions, setCaptions] = usePersistentState<string[]>("analyze:captions", []);
   const [capBusy, setCapBusy] = useState(false);
   const [running, setRunning] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -65,7 +66,14 @@ export default function AnalyzeModule({ goto }: { goto: Goto }) {
         module: "analyze",
         icon: "📊",
         title: question.slice(0, 40) || "数据分析",
-        data: { "analyze:question": question, "analyze:conclusion": conclusion },
+        data: {
+          "analyze:question": question,
+          "analyze:conclusion": conclusion,
+          "analyze:code": code,
+          "analyze:charts": charts,
+          "analyze:output": output,
+          "analyze:captions": captions,
+        },
       });
     }
   }, [running, error, conclusion, question]);

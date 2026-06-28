@@ -2,6 +2,12 @@
 
 > 每完成一个改进方向追加一条。最新在最上。
 
+## 2026-06-28 — 修复(loop 第14轮)：数据分析持久化补全(M4)
+- **问题**：AnalyzeModule 只持久化了 `analyze:conclusion`，代码/图表/原始输出/图注是普通 useState——切换模块或从历史恢复后，结论还在但**配图/代码/原始输出全丢**，呈现误导(以为分析完整实则缺图)。
+- **改动**：code/charts/output/captions 改为 `usePersistentState`(analyze:code/charts/output/captions)；历史记录条目也带上这四项, 恢复时完整重现。
+- **测试**：新增 e2e(跑分析→切到找选题→切回, 断言 chart-0/代码/原始输出/结论仍在)；Playwright 48/48; dist 已重建。
+- **commit**：见本次提交
+
 ## 2026-06-28 — UX 一致性/稳健性（loop 第13轮）：前端审查后修一致性缺陷
 - 派 agent 做前端可用性/一致性审查(确认 #7 跨模块 localStorage key 全部一致, 无 bug)。修复其报告的真实缺陷：
   - **H1 缺停止按钮**：PICO / 追问改写 / 摘要 / 关键词 4 个流式操作此前只有 spinner 无法中止——补停止按钮(abort+复位)。

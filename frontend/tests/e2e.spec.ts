@@ -330,6 +330,37 @@ test("投稿包: 预提交体检 + 生成投稿信", async ({ page }) => {
   await expect(page.getByTestId("cover-panel").getByTestId("export-docx-btn")).toBeVisible();
 });
 
+test("数据分析: 切换模块后图表/代码/结论仍保留", async ({ page }) => {
+  await mockBase(page);
+  const png =
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==";
+  await page.route("**/api/analyze", (r) =>
+    r.fulfill({
+      contentType: "text/event-stream",
+      body: sse(
+        { event: "code", data: { code: "print('t检验')" } },
+        { event: "charts", data: { items: [{ png, data: png, ext: "png" }] } },
+        { event: "output", data: { text: "t=2.1 p=0.04" } },
+        { event: "delta", data: { text: "A组显著高于B组。" } },
+        { event: "done", data: {} },
+      ),
+    }),
+  );
+  await page.goto("/");
+  await page.getByTestId("nav-analyze").click();
+  await page.getByTestId("input-file").setInputFiles({ name: "d.csv", mimeType: "text/csv", buffer: Buffer.from("g,v\nA,5\nB,3\n") });
+  await page.getByTestId("run-btn").click();
+  await expect(page.getByTestId("chart-0")).toBeVisible();
+  await expect(page.getByTestId("result-text")).toContainText("A组显著高于B组");
+  // 切到别的模块再切回 —— 图表/代码/结论应仍在(此前只有结论会保留)
+  await page.getByTestId("nav-idea").click();
+  await page.getByTestId("nav-analyze").click();
+  await expect(page.getByTestId("chart-0")).toBeVisible();
+  await expect(page.getByTestId("code-block")).toContainText("t检验");
+  await expect(page.getByTestId("output-block")).toContainText("p=0.04");
+  await expect(page.getByTestId("result-text")).toContainText("A组显著高于B组");
+});
+
 test("数据分析: 生成图注", async ({ page }) => {
   await mockBase(page);
   const png =
