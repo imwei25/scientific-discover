@@ -12,6 +12,8 @@ import ChecklistModule from "./modules/ChecklistModule";
 import RebuttalModule from "./modules/RebuttalModule";
 import HistoryView from "./modules/HistoryView";
 import ThemeSwitcher from "./components/ThemeSwitcher";
+import ProjectPicker from "./components/ProjectPicker";
+import { useProjects } from "./lib/projects";
 
 export type ModuleId = "home" | "idea" | "plan" | "analyze" | "imrad" | "journal" | "format" | "checklist" | "rebuttal" | "history";
 // 跨模块传递: 把数据写入目标模块的持久化字段, 再切换过去。
@@ -49,6 +51,7 @@ export default function App() {
     tokens?: { total_tokens: number; requests: number };
   } | null>(null);
   const sidebar = useSidebar();
+  const { current: currentProject, syncStatus } = useProjects();
 
   const goto: Goto = (target, patch) => {
     if (patch) {
@@ -124,6 +127,7 @@ export default function App() {
             {sidebar.mode === "expanded" ? "«" : "»"}
           </button>
         </div>
+        <ProjectPicker />
         <nav className="nav">
           <div className="pipeline">
             {NAV.map((m, i) => (
@@ -182,6 +186,15 @@ export default function App() {
               🔢 本次已用 {balance.tokens.total_tokens.toLocaleString()} tokens · {balance.tokens.requests} 次调用
             </span>
           )}
+          {syncStatus !== "idle" && (
+            <span
+              className={`sync-badge ${syncStatus}`}
+              data-testid="sync-badge"
+              title={syncStatus === "error" ? "未同步到本地数据库；将自动重试，或点击立即重试" : undefined}
+            >
+              {syncStatus === "saving" ? "… 保存中" : "⚠ 未同步"}
+            </span>
+          )}
           <ThemeSwitcher />
         </div>
         {/* 折叠态指示条：24px 内的 ticks，用 CSS 在 expanded 下隐藏 */}
@@ -213,7 +226,7 @@ export default function App() {
             </button>
           </div>
         )}
-        <div className="page" key={active}>
+        <div className="page" key={`${currentProject?.id ?? "boot"}::${active}`}>
           {active === "home" && <Home onPick={setActive} />}
           {active === "idea" && <IdeaModule goto={goto} />}
           {active === "plan" && <PlanModule />}
