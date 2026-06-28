@@ -127,7 +127,6 @@ export default function App() {
             {sidebar.mode === "expanded" ? "«" : "»"}
           </button>
         </div>
-        <ProjectPicker />
         <nav className="nav">
           <div className="pipeline">
             {NAV.map((m, i) => (
@@ -211,6 +210,9 @@ export default function App() {
       </aside>
 
       <main className="content">
+        <div className="content-topbar">
+          <ProjectPicker />
+        </div>
         {!disclaimerDismissed && (
           <div className="disclaimer" data-testid="disclaimer">
             <span>

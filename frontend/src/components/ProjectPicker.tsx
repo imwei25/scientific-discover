@@ -60,7 +60,7 @@ export default function ProjectPicker() {
   };
 
   return (
-    <div className="project-picker" ref={rootRef} data-testid="project-picker">
+    <div className="project-picker" ref={rootRef} data-open={open ? "true" : "false"} data-testid="project-picker">
       <button
         className="project-picker-trigger"
         onClick={() => setOpen((v) => !v)}
@@ -68,9 +68,15 @@ export default function ProjectPicker() {
         data-testid="project-picker-trigger"
         title={offline ? "离线，无法切换项目" : undefined}
       >
-        <span className="pp-icon" aria-hidden>📁</span>
+        <svg className="pp-icon" viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" strokeWidth="1.25" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+          <path d="M8 2.2 2.3 4.8 8 7.4l5.7-2.6L8 2.2z" />
+          <path d="M2.3 8 8 10.6 13.7 8" />
+          <path d="M2.3 11.2 8 13.8 13.7 11.2" />
+        </svg>
         <span className="pp-name">{current?.name ?? "（无项目）"}</span>
-        <span className="pp-caret" aria-hidden>▾</span>
+        <svg className="pp-caret" viewBox="0 0 10 6" width="9" height="6" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+          <path d="M1 1l4 4 4-4" />
+        </svg>
       </button>
 
       {open && (
