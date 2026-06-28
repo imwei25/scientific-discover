@@ -8,6 +8,7 @@ import time
 from pathlib import Path
 
 import pytest
+from fastapi.testclient import TestClient
 
 from app import projects
 
@@ -126,9 +127,6 @@ def test_invalid_uuid_rejected(tmp_data):
 
 
 # ── 路由层测试 ───────────────────────────────────────────────
-from fastapi.testclient import TestClient
-
-
 @pytest.fixture
 def client(tmp_data):
     from app.main import app
@@ -186,6 +184,20 @@ def test_route_413_on_oversize(client):
 def test_route_404_on_missing(client):
     r = client.get("/api/projects/aaaa0000-0000-0000-0000-00000000ffff")
     assert r.status_code == 404
+
+
+def test_route_400_on_invalid_pid(client):
+    # Path traversal attempt + non-UUID strings should be rejected before touching the filesystem.
+    for bad in ["../etc/passwd", "not-a-uuid", "a/b/c", "../../foo"]:
+        r = client.get(f"/api/projects/{bad}")
+        assert r.status_code in (400, 404), f"expected 400/404 for {bad!r}, got {r.status_code}"
+    # PUT/PATCH/DELETE should also reject invalid pids
+    r = client.put("/api/projects/not-a-uuid/state", json={"state": {}, "history": []})
+    assert r.status_code == 400
+    r = client.patch("/api/projects/not-a-uuid", json={"name": "x"})
+    assert r.status_code == 400
+    r = client.delete("/api/projects/not-a-uuid")
+    assert r.status_code == 400
 
 
 if __name__ == "__main__":

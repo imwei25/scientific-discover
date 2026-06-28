@@ -254,6 +254,10 @@ def route_create(body: CreateBody) -> dict[str, Any]:
 
 @router.get("/{pid}")
 def route_get(pid: str) -> dict[str, Any]:
+    try:
+        _validate_uuid(pid)
+    except ValueError:
+        raise HTTPException(status_code=400, detail=f"invalid project id: {pid!r}")
     p = get_project(pid)
     if p is None:
         raise HTTPException(status_code=404, detail=f"project {pid} not found")
@@ -262,6 +266,10 @@ def route_get(pid: str) -> dict[str, Any]:
 
 @router.put("/{pid}/state")
 def route_update_state(pid: str, body: UpdateStateBody) -> dict[str, Any]:
+    try:
+        _validate_uuid(pid)
+    except ValueError:
+        raise HTTPException(status_code=400, detail=f"invalid project id: {pid!r}")
     try:
         return update_state(pid, state=body.state, history=body.history)
     except KeyError:
@@ -273,6 +281,10 @@ def route_update_state(pid: str, body: UpdateStateBody) -> dict[str, Any]:
 @router.patch("/{pid}")
 def route_rename(pid: str, body: RenameBody) -> dict[str, Any]:
     try:
+        _validate_uuid(pid)
+    except ValueError:
+        raise HTTPException(status_code=400, detail=f"invalid project id: {pid!r}")
+    try:
         return rename_project(pid, body.name)
     except KeyError:
         raise HTTPException(status_code=404, detail=f"project {pid} not found")
@@ -280,5 +292,9 @@ def route_rename(pid: str, body: RenameBody) -> dict[str, Any]:
 
 @router.delete("/{pid}", status_code=204, response_model=None)
 def route_delete(pid: str) -> None:
+    try:
+        _validate_uuid(pid)
+    except ValueError:
+        raise HTTPException(status_code=400, detail=f"invalid project id: {pid!r}")
     if not delete_project(pid):
         raise HTTPException(status_code=404, detail=f"project {pid} not found")
