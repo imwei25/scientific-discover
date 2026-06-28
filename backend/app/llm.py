@@ -25,6 +25,13 @@ import httpx
 from .config import settings
 
 
+def _log(msg: str) -> None:
+    """LLM 调用链路日志: 打到 stdout(由启动脚本重定向进 backend/server.log), 便于排查降级/重试。"""
+    import datetime
+
+    print(f"[{datetime.datetime.now():%Y-%m-%d %H:%M:%S}] [llm] {msg}", flush=True)
+
+
 class LLMError(Exception):
     """对上层友好的错误类型。"""
 
@@ -272,9 +279,12 @@ async def stream_chat(messages: list[dict], **kwargs) -> AsyncIterator[str]:
             last_err = e
             # 已产出内容则不能安全重试/降级(会重复), 直接抛出。
             if yielded:
+                _log(f"主供应商({settings.provider}/{settings.model})流式中途出错(已产出内容, 不重试): {e}")
                 raise
             # 瞬时网络错误且仍有重试次数: 退避后重试同一供应商。
             if e.retryable and attempt < _MAX_RETRIES:
+                _log(f"主供应商({settings.provider})瞬时错误[{e.status or '-'}], "
+                     f"{_RETRY_BACKOFF * (attempt + 1):.1f}s 后重试({attempt + 1}/{_MAX_RETRIES}): {e}")
                 await asyncio.sleep(_RETRY_BACKOFF * (attempt + 1))
                 continue
             break
@@ -283,8 +293,19 @@ async def stream_chat(messages: list[dict], **kwargs) -> AsyncIterator[str]:
     # 配额耗尽 → 切备用; 网络持续不可达 → 也尝试备用(可能是另一家服务/线路可用)。
     e = last_err
     if settings.has_fallback and e is not None and (is_quota_error(e) or e.retryable):
-        async for piece in _stream_with(_fallback_cfg(), messages, **kwargs):
-            yield piece
+        reason = "额度不足/配额超限" if is_quota_error(e) else "网络持续不可达"
+        _log(f"主供应商({settings.provider})失败({reason}: {e}); 切换到备用供应商"
+             f"({settings.fallback_provider}/{settings.fallback_model})重试…")
+        try:
+            got = False
+            async for piece in _stream_with(_fallback_cfg(), messages, **kwargs):
+                got = True
+                yield piece
+            _log("备用供应商成功接管。" if got else "备用供应商无输出(空回复)。")
+        except LLMError as fe:
+            _log(f"备用供应商也失败: {fe}")
+            raise
         return
     if e is not None:
+        _log(f"主供应商({settings.provider})失败且无可用降级: {e}")
         raise e

@@ -15,7 +15,7 @@
 
 ### 子任务C：稳定性与错误处理（llm.py 降级, main.py）
 - [x] C1：LLM 超时/网络错误现包装成友好中文 LLMError，瞬时错误自动重试2次，重试耗尽再切备用供应商；已产出内容则不重试避免重复。新增 test_network_retry.py 回归。
-- [ ] C2：降级链路（主→FALLBACK）边界情况覆盖与日志可观测
+- [x] C2：降级链路（主→FALLBACK）日志可观测——llm.py 新增 `_log`(打到 server.log)，在①主供应商瞬时错误重试、②中途出错不重试、③切换到备用(标注原因:额度/网络)、④备用成功接管/失败 各打一条日志；备用供应商失败也包成 LLMError 上抛并记录。此前整条降级链路静默, 线上排查无据。
 - [x] C3-a：数据分析安全护栏修复误杀——`_DANGER` 之前用 `\b` 会把合法的 pandas `df.eval()` 当危险拦掉；改为负向后顾仅拦内置 eval/open（并新增拦 exec），合法 pandas 方法/re.compile/含open列名不再误伤。新增 test_danger_guard.py。
 - [x] C3-b：上传文件大小校验——Dropzone 对 >30MB 文件直接拒绝并提示，避免超大文件读入内存/上传卡死。e2e 新增 31MB 文件被拒用例。
 - [x] C3-c：后端上传大小上限——main.py 新增 _read_capped 分块读取(超 30MB 即停并返回 None)，/api/analyze 与 /api/extract 都用它，超限给友好错误而非 500/OOM。新增 test_upload_limit.py（单元 + TestClient 端到端）。
