@@ -9,6 +9,7 @@ import RefIO from "../components/RefIO";
 import type { Reference } from "../lib/sse";
 import { downloadDocxFromText } from "../lib/download";
 import { copyToClipboard } from "../lib/clipboard";
+import DiffView from "../components/DiffView";
 
 // 与 IdeaModule 同一套合并逻辑: DOI 优先, 兜底 title+year. 这里独立一份避免跨模块耦合.
 function mergeRefs(existing: Reference[], incoming: Reference[]): { merged: Reference[]; added: number; dup: number } {
@@ -178,8 +179,21 @@ export default function FormatModule() {
       .catch(() => setJournals([]));
   }, [setJournalId]);
 
+  // W2-3 Diff: 排版前快照原稿, 完成后弹 DiffView 让用户接受/拒绝。
+  const [diffOpen, setDiffOpen] = useState(false);
+  const [originalSnapshot, setOriginalSnapshot] = useState("");
+  const prevRunning = useRef(running);
+  useEffect(() => {
+    // 从 running 真→假 且无错误 且 text 非空 → 弹 diff
+    if (prevRunning.current && !running && !error && text && originalSnapshot) {
+      setDiffOpen(true);
+    }
+    prevRunning.current = running;
+  }, [running, error, text, originalSnapshot]);
+
   const submit = () => {
     if (!manuscript.trim() || !journalId || running) return;
+    setOriginalSnapshot(manuscript);  // 记录原文, 用于稍后 diff
     start("format", { manuscript, journal_id: journalId });
   };
 
@@ -239,6 +253,22 @@ export default function FormatModule() {
 
   return (
     <div className="module">
+      <DiffView
+        open={diffOpen}
+        original={originalSnapshot}
+        modified={text}
+        title="AI 重排后的稿件 · 对比"
+        onAccept={() => {
+          // 接受: 把重排后的稿件回填到 manuscript 输入框, 关闭 diff
+          setManuscript(text);
+          setDiffOpen(false);
+        }}
+        onReject={() => {
+          // 拒绝: 保留原稿, 清空 text(不影响 history 已存的旧记录)
+          setText("");
+          setDiffOpen(false);
+        }}
+      />
       <header className="module-head">
         <h1>📄 期刊排版</h1>
         <p>粘贴你的稿件，选择目标期刊，我按该刊的结构与格式要求重排，并导出 Word 文件。</p>
