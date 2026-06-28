@@ -5,7 +5,7 @@ import { addHistory } from "../lib/history";
 import { apiUrl } from "../lib/api";
 import ResultPanel from "../components/ResultPanel";
 import Dropzone from "../components/Dropzone";
-import { downloadBase64, chartMime, tsName } from "../lib/download";
+import { downloadBase64, chartMime, tsName, downloadDocxFromText } from "../lib/download";
 
 interface StatItem {
   raw: string;
@@ -153,22 +153,15 @@ export default function ChecklistModule() {
     setText("");
   };
 
+  const [docxErr, setDocxErr] = useState<string | null>(null);
   const downloadDocx = async () => {
     if (!text || docxBusy) return;
     setDocxBusy(true);
+    setDocxErr(null);
     try {
-      const resp = await fetch(apiUrl("/api/docx"), {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text, journal_id: "", references: [] }),
-      });
-      const blob = await resp.blob();
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = "报告规范核对.docx";
-      a.click();
-      URL.revokeObjectURL(url);
+      await downloadDocxFromText("报告规范核对.docx", text);
+    } catch (e) {
+      setDocxErr(`导出 Word 失败：${(e as Error).message}`);
     } finally {
       setDocxBusy(false);
     }
@@ -233,6 +226,7 @@ export default function ChecklistModule() {
         onExportDocx={downloadDocx}
         exportingDocx={docxBusy}
       />
+      {docxErr && <div className="result-error" data-testid="docx-error">{docxErr}</div>}
 
       <h2 className="section-title">📈 流程图生成（PRISMA 2020 / CONSORT 2025）</h2>
       <p className="section-hint">

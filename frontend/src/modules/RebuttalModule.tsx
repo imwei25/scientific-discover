@@ -2,10 +2,9 @@ import { useEffect, useRef, useState } from "react";
 import { streamRebuttal, ReviewComment } from "../lib/sse";
 import { usePersistentState } from "../lib/usePersistentState";
 import { addHistory } from "../lib/history";
-import { apiUrl } from "../lib/api";
 import Markdown from "../components/Markdown";
 import Dropzone from "../components/Dropzone";
-import { downloadText, tsName } from "../lib/download";
+import { downloadText, downloadDocxFromText, tsName } from "../lib/download";
 
 export default function RebuttalModule() {
   const [reviews, setReviews] = usePersistentState("rebuttal:reviews", "");
@@ -83,22 +82,15 @@ export default function RebuttalModule() {
     setStatus("");
   };
 
+  const [dlErr, setDlErr] = useState<string | null>(null);
   const downloadDocx = async () => {
     if (!letter || downloading) return;
     setDownloading(true);
+    setDlErr(null);
     try {
-      const resp = await fetch(apiUrl("/api/docx"), {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text: letter, journal_id: "", references: [] }),
-      });
-      const blob = await resp.blob();
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = "rebuttal.docx";
-      a.click();
-      URL.revokeObjectURL(url);
+      await downloadDocxFromText("rebuttal.docx", letter);
+    } catch (e) {
+      setDlErr(`导出 Word 失败：${(e as Error).message}`);
     } finally {
       setDownloading(false);
     }
@@ -225,6 +217,7 @@ export default function RebuttalModule() {
               {letter ? <Markdown>{letter}</Markdown> : <span className="result-placeholder">正在撰写…</span>}
               {running && <span className="cursor-blink">▍</span>}
             </div>
+            {dlErr && <div className="result-error" data-testid="dl-error">{dlErr}</div>}
           </div>
         </>
       )}

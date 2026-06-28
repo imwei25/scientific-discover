@@ -1,27 +1,7 @@
-// 把文本保存为本地文件(纯前端, 不经服务器)。
-export function downloadText(filename: string, text: string, mime = "text/markdown"): void {
-  const blob = new Blob([text], { type: `${mime};charset=utf-8` });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = filename;
-  a.style.display = "none";
-  document.body.appendChild(a); // 部分浏览器要求锚点在 DOM 中才会触发下载
-  a.click();
-  // 立即 revoke 在部分浏览器/大文件(如内嵌 base64 图表的分析报告)下会中断下载,
-  // 延迟后再清理对象 URL 与锚点。
-  setTimeout(() => {
-    URL.revokeObjectURL(url);
-    a.remove();
-  }, 1000);
-}
+import { apiUrl } from "./api";
 
-// 下载 base64 编码的二进制(图表 png/svg/pdf 等)。
-export function downloadBase64(filename: string, b64: string, mime: string): void {
-  const bin = atob(b64);
-  const bytes = new Uint8Array(bin.length);
-  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
-  const blob = new Blob([bytes], { type: mime });
+// 触发浏览器下载一个 Blob(安全模式: 锚点入 DOM + 延迟 revoke, 兼容 Firefox/大文件)。
+export function downloadBlob(filename: string, blob: Blob): void {
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
   a.href = url;
@@ -33,6 +13,34 @@ export function downloadBase64(filename: string, b64: string, mime: string): voi
     URL.revokeObjectURL(url);
     a.remove();
   }, 1000);
+}
+
+// 把文本(Markdown/纯文本)发到 /api/docx 转 Word 并下载。失败抛错(由调用方提示)。
+export async function downloadDocxFromText(
+  filename: string,
+  text: string,
+  body: Record<string, unknown> = {},
+): Promise<void> {
+  const resp = await fetch(apiUrl("/api/docx"), {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ text, journal_id: "", references: [], ...body }),
+  });
+  if (!resp.ok) throw new Error(`服务返回错误 ${resp.status}`);
+  downloadBlob(filename, await resp.blob());
+}
+
+// 把文本保存为本地文件(纯前端, 不经服务器)。
+export function downloadText(filename: string, text: string, mime = "text/markdown"): void {
+  downloadBlob(filename, new Blob([text], { type: `${mime};charset=utf-8` }));
+}
+
+// 下载 base64 编码的二进制(图表 png/svg/pdf 等)。
+export function downloadBase64(filename: string, b64: string, mime: string): void {
+  const bin = atob(b64);
+  const bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  downloadBlob(filename, new Blob([bytes], { type: mime }));
 }
 
 const EXT_MIME: Record<string, string> = {

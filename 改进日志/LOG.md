@@ -2,6 +2,16 @@
 
 > 每完成一个改进方向追加一条。最新在最上。
 
+## 2026-06-28 — UX 一致性/稳健性（loop 第13轮）：前端审查后修一致性缺陷
+- 派 agent 做前端可用性/一致性审查(确认 #7 跨模块 localStorage key 全部一致, 无 bug)。修复其报告的真实缺陷：
+  - **H1 缺停止按钮**：PICO / 追问改写 / 摘要 / 关键词 4 个流式操作此前只有 spinner 无法中止——补停止按钮(abort+复位)。
+  - **H2 出错静默冻结**：genPico/genKeywords 失败仅复位 running、无错误显示, 面板永远卡"提取/推荐中…"——补 picoErr/kwErr 状态与红字提示。
+  - **H3 下载静默损坏**：所有 docx/zip 下载 `fetch().blob()` 无 `resp.ok` 检查、无 catch——500 时会把错误体存成 .docx。新增 `download.ts` 集中助手 `downloadBlob`(安全锚点)+`downloadDocxFromText`(查 resp.ok、失败抛错)，Plan/Imrad/Format×2/Checklist/Rebuttal 全部改用并 catch→红字; bundle 加 resp.ok 检查。
+  - **M2/L1**：ImradModule.reset 现也中止并清空摘要/关键词流; IdeaModule.submit 开始新检索前中止进行中的 追问/PICO 流(防交叉写入)。
+  - M1(ResultPanel 内层 testid 未命名空间) 改动面大且动现有测试, 本轮暂不改。
+- **测试**：新增 e2e(PICO 出错显示错误而非卡住); Playwright 47/47; dist 已重建。
+- **commit**：见本次提交
+
 ## 2026-06-28 — 实验规划增强（loop 第12轮）：数据管理计划(DMP) + 知情同意书草案
 - **动机**：标书必交 DMP、伦理申请必交知情同意书；属立项工作台范畴, 增强现有"实验规划"模块(非新模块)。
 - **改动**：prompts 加 `build_dmp`(NIH/Horizon/FAIR 框架: 数据类型/采集组织/存储备份/安全隐私合规/共享归档/角色责任, 缺失标[需研究者明确]) 与 `build_consent`(知情同意书草案: 目的/流程/风险获益/隐私/自愿退出/补偿/签字栏, 具体数值机构用[需研究者补充]占位, 注明需 IRB 审核, 不杜撰)，注册 module dmp/consent(走 /api/run)。PlanModule 加"数据管理计划(DMP)""知情同意书草案"两个按钮 + 独立结果面板(panelTestId dmp-panel/consent-panel)，均支持 Word 导出。

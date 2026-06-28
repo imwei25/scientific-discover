@@ -88,6 +88,11 @@ export default function IdeaModule({ goto }: { goto: Goto }) {
     const f = override?.field ?? field;
     const k = override?.keywords ?? keywords;
     if (!f.trim() || running) return;
+    // 避免与进行中的 追问/PICO 流交叉写入
+    fctrl.current?.abort();
+    picoCtrl.current?.abort();
+    setFRunning(false);
+    setPicoRunning(false);
     setStatus("");
     setRefs([]);
     setTrials([]);
@@ -198,11 +203,13 @@ export default function IdeaModule({ goto }: { goto: Goto }) {
   // PICO / 纳排标准提取
   const [pico, setPico] = usePersistentState("idea:pico", "");
   const [picoRunning, setPicoRunning] = useState(false);
+  const [picoErr, setPicoErr] = useState<string | null>(null);
   const picoCtrl = useRef<AbortController | null>(null);
 
   const genPico = async () => {
     if (!field.trim() || picoRunning) return;
     setPico("");
+    setPicoErr(null);
     setPicoRunning(true);
     picoCtrl.current = new AbortController();
     await runModule(
@@ -211,7 +218,10 @@ export default function IdeaModule({ goto }: { goto: Goto }) {
       {
         signal: picoCtrl.current.signal,
         onDelta: (t) => setPico((p) => p + t),
-        onError: () => setPicoRunning(false),
+        onError: (m) => {
+          setPicoErr(m);
+          setPicoRunning(false);
+        },
         onDone: () => {
           setPicoRunning(false);
           window.dispatchEvent(new Event("usage-updated"));
@@ -382,9 +392,15 @@ export default function IdeaModule({ goto }: { goto: Goto }) {
         </div>
       </div>
 
+      {picoErr && <div className="result-error" data-testid="pico-error">{picoErr}</div>}
       {(pico || picoRunning) && (
         <details className="refs" open data-testid="pico-panel">
           <summary>🔬 PICO 与纳入/排除标准</summary>
+          {picoRunning && (
+            <div className="ref-toolbar">
+              <button className="btn-ghost" data-testid="pico-stop-btn" onClick={() => { picoCtrl.current?.abort(); setPicoRunning(false); }}>停止</button>
+            </div>
+          )}
           <div className="result-text">
             {pico ? <Markdown>{pico}</Markdown> : <span className="result-placeholder">正在提取…</span>}
             {picoRunning && <span className="cursor-blink">▍</span>}
@@ -658,6 +674,11 @@ export default function IdeaModule({ goto }: { goto: Goto }) {
             >
               按此修改报告
             </button>
+            {fRunning && (
+              <button className="btn-ghost" data-testid="followup-stop-btn" onClick={() => { fctrl.current?.abort(); setFRunning(false); }}>
+                停止
+              </button>
+            )}
             {fRunning && (
               <span className="status-line">
                 <span className="spinner" /> 处理中…

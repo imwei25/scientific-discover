@@ -4,7 +4,7 @@ import { usePersistentState, readPersisted } from "../lib/usePersistentState";
 import { addHistory } from "../lib/history";
 import { apiUrl } from "../lib/api";
 import Markdown from "../components/Markdown";
-import { downloadText, tsName } from "../lib/download";
+import { downloadText, downloadDocxFromText, downloadBlob, tsName } from "../lib/download";
 
 export default function ImradModule() {
   const [topic, setTopic] = usePersistentState("imrad:topic", "");
@@ -73,13 +73,8 @@ export default function ImradModule() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ files, docx }),
       });
-      const blob = await resp.blob();
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = "research-package.zip";
-      a.click();
-      URL.revokeObjectURL(url);
+      if (!resp.ok) throw new Error(`服务返回错误 ${resp.status}`);
+      downloadBlob("research-package.zip", await resp.blob());
       setBundleMsg(`已打包 ${files.length + docx.length} 份材料为 ZIP。`);
     } catch (e) {
       setBundleMsg(`打包失败：${(e as Error).message}`);
@@ -100,12 +95,14 @@ export default function ImradModule() {
   // 关键词 / MeSH 推荐
   const [keywords, setKeywords] = usePersistentState("imrad:keywords", "");
   const [kwRunning, setKwRunning] = useState(false);
+  const [kwErr, setKwErr] = useState<string | null>(null);
   const kwCtrl = useRef<AbortController | null>(null);
 
   const genKeywords = async () => {
     const src = absPoints.trim() || abstract.trim() || background.trim();
     if (!src || kwRunning) return;
     setKeywords("");
+    setKwErr(null);
     setKwRunning(true);
     kwCtrl.current = new AbortController();
     await runModule(
@@ -114,7 +111,10 @@ export default function ImradModule() {
       {
         signal: kwCtrl.current.signal,
         onDelta: (t) => setKeywords((p) => p + t),
-        onError: () => setKwRunning(false),
+        onError: (m) => {
+          setKwErr(m);
+          setKwRunning(false);
+        },
         onDone: () => {
           setKwRunning(false);
           window.dispatchEvent(new Event("usage-updated"));
@@ -173,6 +173,10 @@ export default function ImradModule() {
 
   const reset = () => {
     if (running) stop();
+    absCtrl.current?.abort();
+    kwCtrl.current?.abort();
+    setAbsRunning(false);
+    setKwRunning(false);
     setTopic("");
     setBackground("");
     setMethods("");
@@ -180,6 +184,11 @@ export default function ImradModule() {
     setDiscussion("");
     setRefs("");
     setDraft("");
+    setAbstract("");
+    setAbsPoints("");
+    setKeywords("");
+    setAbsErr(null);
+    setKwErr(null);
     setError(null);
     setStatus("");
   };
@@ -188,18 +197,9 @@ export default function ImradModule() {
     if (!draft || docxBusy) return;
     setDocxBusy(true);
     try {
-      const resp = await fetch(apiUrl("/api/docx"), {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text: draft, journal_id: "", references: [] }),
-      });
-      const blob = await resp.blob();
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = "manuscript-draft.docx";
-      a.click();
-      URL.revokeObjectURL(url);
+      await downloadDocxFromText("manuscript-draft.docx", draft);
+    } catch (e) {
+      setError(`导出 Word 失败：${(e as Error).message}`);
     } finally {
       setDocxBusy(false);
     }
@@ -352,6 +352,9 @@ export default function ImradModule() {
               字数 {absCount} / {absMax}
               {absOver ? <span className="abs-over"> · 超出 {absCount - (parseInt(absMax) || 250)}，建议精简</span> : abstract ? " · 符合" : ""}
             </span>
+            {absRunning && (
+              <button className="btn-ghost" data-testid="abs-stop-btn" onClick={() => { absCtrl.current?.abort(); setAbsRunning(false); }}>停止</button>
+            )}
             {abstract && !absRunning && (
               <button className="btn-ghost" data-testid="abs-export-btn" onClick={() => downloadText(tsName("摘要", "md"), abstract)}>导出 Markdown</button>
             )}
@@ -363,10 +366,14 @@ export default function ImradModule() {
         </div>
       )}
 
+      {kwErr && <div className="result-error" data-testid="kw-error">{kwErr}</div>}
       {(keywords || kwRunning) && (
         <div className="result-panel" data-testid="kw-panel">
           <div className="result-toolbar">
             <span className="result-status">{kwRunning ? "推荐中…" : "关键词 / MeSH"}</span>
+            {kwRunning && (
+              <button className="btn-ghost" data-testid="kw-stop-btn" onClick={() => { kwCtrl.current?.abort(); setKwRunning(false); }}>停止</button>
+            )}
           </div>
           <div className="result-text" data-testid="kw-text">
             {keywords ? <Markdown>{keywords}</Markdown> : <span className="result-placeholder">正在推荐…</span>}

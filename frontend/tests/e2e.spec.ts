@@ -357,6 +357,23 @@ test("数据分析: 生成图注", async ({ page }) => {
   await expect(page.getByTestId("chart-caption-0")).toContainText("箱线图");
 });
 
+test("找选题: PICO 出错时显示错误而非卡住", async ({ page }) => {
+  await mockBase(page);
+  await page.route("**/api/run", (r) =>
+    r.fulfill({
+      contentType: "text/event-stream",
+      body: sse({ event: "error", data: { message: "PICO 提取失败：上游错误" } }),
+    }),
+  );
+  await page.goto("/");
+  await page.getByTestId("nav-idea").click();
+  await page.getByTestId("input-field").fill("某方向");
+  await page.getByTestId("pico-btn").click();
+  await expect(page.getByTestId("pico-error")).toContainText("PICO 提取失败");
+  // 按钮恢复可用(未卡在"提取中…")
+  await expect(page.getByTestId("pico-btn")).toBeEnabled();
+});
+
 test("找选题: 提取 PICO / 纳排标准", async ({ page }) => {
   await mockBase(page);
   await page.route("**/api/run", (r) =>

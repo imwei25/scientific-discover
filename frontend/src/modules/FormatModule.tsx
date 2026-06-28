@@ -5,6 +5,7 @@ import { addHistory } from "../lib/history";
 import { apiUrl } from "../lib/api";
 import ResultPanel from "../components/ResultPanel";
 import Dropzone from "../components/Dropzone";
+import { downloadDocxFromText } from "../lib/download";
 import { copyToClipboard } from "../lib/clipboard";
 
 interface Journal {
@@ -138,19 +139,11 @@ export default function FormatModule() {
   const downloadCover = async () => {
     if (!cover.text || coverDocxBusy) return;
     setCoverDocxBusy(true);
+    setDlErr(null);
     try {
-      const resp = await fetch(apiUrl("/api/docx"), {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text: cover.text, journal_id: "", references: [] }),
-      });
-      const blob = await resp.blob();
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = "cover-letter.docx";
-      a.click();
-      URL.revokeObjectURL(url);
+      await downloadDocxFromText("cover-letter.docx", cover.text);
+    } catch (e) {
+      setDlErr(`导出 Word 失败：${(e as Error).message}`);
     } finally {
       setCoverDocxBusy(false);
     }
@@ -171,22 +164,15 @@ export default function FormatModule() {
     setCheckErr(null);
   };
 
+  const [dlErr, setDlErr] = useState<string | null>(null);
   const downloadDocx = async () => {
     if (!text || downloading) return;
     setDownloading(true);
+    setDlErr(null);
     try {
-      const resp = await fetch(apiUrl("/api/docx"), {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text, journal_id: journalId, references: fmtRefs }),
-      });
-      const blob = await resp.blob();
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = "manuscript.docx";
-      a.click();
-      URL.revokeObjectURL(url);
+      await downloadDocxFromText("manuscript.docx", text, { journal_id: journalId, references: fmtRefs });
+    } catch (e) {
+      setDlErr(`导出 Word 失败：${(e as Error).message}`);
     } finally {
       setDownloading(false);
     }
@@ -264,6 +250,7 @@ export default function FormatModule() {
           {downloading ? "正在生成…" : fmtRefs.length ? "⬇ 下载 Word 文件（含格式化参考文献）" : "⬇ 下载 Word 文件"}
         </button>
       )}
+      {dlErr && <div className="result-error" data-testid="dl-error">{dlErr}</div>}
 
       <h2 className="section-title">🚀 投稿包（投稿前自查 + 投稿信）</h2>
       <p className="section-hint">

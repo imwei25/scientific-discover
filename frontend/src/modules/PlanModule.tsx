@@ -5,7 +5,7 @@ import { addHistory } from "../lib/history";
 import { apiUrl } from "../lib/api";
 import ResultPanel from "../components/ResultPanel";
 import Dropzone from "../components/Dropzone";
-import { downloadCsv, tsName } from "../lib/download";
+import { downloadCsv, downloadDocxFromText, tsName } from "../lib/download";
 
 export default function PlanModule() {
   const [idea, setIdea] = usePersistentState("plan:idea", "");
@@ -17,22 +17,15 @@ export default function PlanModule() {
   const consent = useStream("plan:consent"); // 知情同意书
   const [docxBusy, setDocxBusy] = useState(""); // "" | "plan" | "sap" | "dmp" | "consent"
 
+  const [docxErr, setDocxErr] = useState("");
   const downloadDocx = async (txt: string, name: string, which: string) => {
     if (!txt || docxBusy) return;
     setDocxBusy(which);
+    setDocxErr("");
     try {
-      const resp = await fetch(apiUrl("/api/docx"), {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text: txt, journal_id: "", references: [] }),
-      });
-      const blob = await resp.blob();
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = `${name}.docx`;
-      a.click();
-      URL.revokeObjectURL(url);
+      await downloadDocxFromText(`${name}.docx`, txt);
+    } catch (e) {
+      setDocxErr(`导出 Word 失败：${(e as Error).message}`);
     } finally {
       setDocxBusy("");
     }
@@ -216,6 +209,8 @@ export default function PlanModule() {
           </button>
         </div>
       </div>
+
+      {docxErr && <div className="result-error" data-testid="docx-error">{docxErr}</div>}
 
       <ResultPanel
         text={text}
