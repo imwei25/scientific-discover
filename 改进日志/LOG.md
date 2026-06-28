@@ -2,6 +2,12 @@
 
 > 每完成一个改进方向追加一条。最新在最上。
 
+## 2026-06-28 — 检索质量（全改·E3）：相关性词面排序 + 非研究条目去噪
+- **动机**：原 `_rank_papers` 相关性只看"各源返回位置"，跨源合并后偶然靠前的离题命中会顶掉真正切题的文献；且 PubMed 常混入 Erratum/Correction/Comment/Retraction Note 等非研究条目，污染综述选篇。
+- **改动**：`literature.py` ① 新增 `_query_terms` 从 PubMed 检索式提主题词(剔除 AND/OR/字段标签[Title/Abstract]/MeSH 记号)，`_lexical_rel` 算主题词在标题(0.7)/摘要(0.3)的命中比；排序相关性改为 `0.6×位置 + 0.4×词面`(无主题词时退回纯位置, 向后兼容)；② 新增 `_is_noise`(正则匹配 erratum/corrigendum/correction/retraction/comment on/reply/editorial 等题首)，在 `_merge_all` 合并阶段剔除这些非研究条目。
+- **测试**：新增 `test_literature_rank.py`(主题词提取/去噪识别/词面分/合并后切题置顶+噪声剔除)全过；test_openalex / test_searchfilters / test_ncbi_throttle 回归通过。离线零额度。
+- **commit**：见本次提交
+
 ## 2026-06-28 — 数据分析正确性（全改·B1/B2/B3）：方法选择/假设检查/数据质量透明化
 - **动机**：分析过程对用户是黑盒——选了什么检验、为什么、前提满不满足、缺失/异常怎么处理都看不见，非专业用户无从判断结果可信度。
 - **改动**：`_gen_code_messages` 要求生成代码**先 print 三个固定标题区块**——『【方法选择】』(逐问题说明变量是连续/有序/分类、各组样本量→选哪种检验/模型+理由)、『【假设检查】』(实跑 Shapiro-Wilk/Levene 并 print 数值, 据结果决定参数/非参数)、『【数据质量】』(每个变量缺失数+处理策略、IQR 异常值)；出图要求**标题/带单位轴标签/组间显著性标注(* p<0.05 或精确 p)**；`_conclusion_messages` 增『方法与前提』段, 复述假设检查关键结果。

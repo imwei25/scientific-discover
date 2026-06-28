@@ -33,7 +33,7 @@
 - [x] E1：引用 DOI 归一化（去 https://doi.org/、doi: 前缀）+ 自动去重（DOI 或 标题+年+作者），并提示去重条数
 - [x] E2：文档提取编码健壮性——新增共享 textio.py(decode_text/read_csv_bytes)；修复 extract.py 中 GBK CSV 崩溃、GBK txt 被 utf-8+ignore 静默丢字(14中文字→只剩1)；dataanalysis 复用同一工具去重。新增 test_textio.py。
 - [x] E3-a：PubMed 检索加 NCBI 限速节流——深度调研连发多次 esearch/efetch 会超 3次/秒被 429 静默丢结果；新增全局 _throttle 保证请求间隔>=0.34s。新增 test_ncbi_throttle.py。
-- [ ] E3：检索结果相关性排序与去噪
+- [x] E3：检索结果相关性排序与去噪——已有 _rank_papers(位置相关0.5+被引0.3+新近0.2)基础上，新增**主题词词面相关性**(_query_terms 从检索式提主题词、_lexical_rel 算标题/摘要命中比, 相关性=0.6位置+0.4词面)，把跨源合并后"真正切题"的文献顶到前面；新增 **_is_noise 去噪**(更正/勘误/撤稿声明/评论/回复等非研究条目在合并阶段剔除)。新增 test_literature_rank.py。
 
 ### 子任务F：部署易用性（scripts, .bat, 使用说明）
 - [ ] F1：启动脚本对"未装依赖/端口被占/未配 key"给明确引导

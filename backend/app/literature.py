@@ -170,18 +170,65 @@ def _title_key(title: str) -> str:
     return _PUNCT_RE.sub(" ", title.lower()).strip()
 
 
-def _rank_papers(papers: list[dict]) -> list[dict]:
+# 检索式里的布尔/字段标签等"非主题"记号, 提取真实主题词时剔除。
+_QUERY_STOP = {
+    "and", "or", "not", "the", "of", "in", "on", "for", "with", "to", "a", "an",
+    "mesh", "tiab", "tw", "title", "abstract", "majr", "mh",
+}
+
+
+def _query_terms(queries: list[str]) -> set[str]:
+    """从 PubMed 检索式集合里提取主题词(去布尔逻辑/字段标签/MeSH 记号), 用于词面相关性打分。"""
+    terms: set[str] = set()
+    for q in queries or []:
+        # 去掉 [Title/Abstract] 这类字段标签与括号/引号
+        cleaned = re.sub(r"\[[^\]]*\]", " ", q or "")
+        for tok in _PUNCT_RE.sub(" ", cleaned.lower()).split():
+            if len(tok) >= 3 and tok not in _QUERY_STOP and not tok.isdigit():
+                terms.add(tok)
+    return terms
+
+
+def _lexical_rel(p: dict, terms: set[str]) -> float:
+    """主题词在标题/摘要中的命中比例(标题权重更高), 0~1。无主题词时返回 0.5(中性)。"""
+    if not terms:
+        return 0.5
+    title = (p.get("title") or "").lower()
+    abstract = (p.get("abstract") or "")[:1500].lower()
+    t_hits = sum(1 for w in terms if w in title)
+    a_hits = sum(1 for w in terms if w in abstract)
+    n = len(terms)
+    return min(1.0, 0.7 * (t_hits / n) + 0.3 * (a_hits / n))
+
+
+# 非研究型条目(更正/勘误/撤稿声明/评论/回复等)对"找选题/综述"是噪声, 检索阶段剔除。
+_NOISE_TITLE = re.compile(
+    r"^\s*(?:erratum|corrigendum|correction|author correction|publisher correction|"
+    r"retraction(?: note| of)?|withdrawn|comment on|reply to|response to|"
+    r"editorial|in this issue|book review|correspondence)\b",
+    re.IGNORECASE,
+)
+
+
+def _is_noise(p: dict) -> bool:
+    return bool(_NOISE_TITLE.match(p.get("title") or ""))
+
+
+def _rank_papers(papers: list[dict], terms: set[str] | None = None) -> list[dict]:
     """对合并后的候选池排序选篇: 相关性(0.5) + 被引热度(0.3) + 新近(0.2) 加权。
 
-    - 相关性: 用各源返回顺序里的最佳位置 _pos（越靠前越相关）。
+    - 相关性: 各源返回顺序里的最佳位置 _pos(位置相关) 与 主题词词面命中(词面相关) 的混合,
+      这样跨源合并后仍能把"真正切题"的文献顶到前面, 抑制偶然靠前的离题命中。
     - 被引: log1p(cited_by_count) 归一（仅 OpenAlex 提供, 其它源 0）。
     - 新近: 近 15 年内线性加权, 越新越高（找选题/找空白对新工作更敏感）。
     被引数只作"热度信号"参与排序, 不当精确学术指标对外展示。
     """
     cur_year = datetime.date.today().year
+    terms = terms or set()
 
     def score(p: dict) -> float:
-        rel = 1.0 / (1.0 + p.get("_pos", 999))
+        rel_pos = 1.0 / (1.0 + p.get("_pos", 999))
+        rel = 0.6 * rel_pos + 0.4 * _lexical_rel(p, terms) if terms else rel_pos
         cited = p.get("cited_by_count", 0) or 0
         cite = min(1.0, math.log1p(cited) / math.log1p(1000))
         try:
@@ -196,15 +243,18 @@ def _rank_papers(papers: list[dict]) -> list[dict]:
     return sorted(papers, key=score, reverse=True)
 
 
-def _merge_all(source_lists: list[list[dict]], cap: int) -> list[dict]:
-    """合并多源候选(pmid/doi/title 三键去重), 再排序选篇取前 cap。
+def _merge_all(source_lists: list[list[dict]], cap: int, terms: set[str] | None = None) -> list[dict]:
+    """合并多源候选(pmid/doi/title 三键去重), 去噪后排序选篇取前 cap。
 
     source_lists 顺序即"保留优先级": 第一个里先出现的版本胜出(PubMed 在前→链接走 PubMed)。
     合并时: 被引数取 max、缺失摘要用其它源补、缺 pmid/doi 也互补。
+    terms 给定时参与词面相关性排序; 更正/勘误/撤稿声明/评论等非研究条目在此剔除。
     """
     merged: dict[str, dict] = {}
     for papers in source_lists:
         for pos, p in enumerate(papers):
+            if _is_noise(p):  # 去噪: 丢弃更正/勘误/评论等非研究型条目
+                continue
             key = p.get("doi") or p.get("pmid") or _title_key(p.get("title", ""))
             if not key:
                 continue
@@ -227,7 +277,7 @@ def _merge_all(source_lists: list[list[dict]], cap: int) -> list[dict]:
                     cur["source"] = p["source"]
                 if not cur.get("doi") and p.get("doi"):
                     cur["doi"] = p["doi"]
-    ranked = _rank_papers(list(merged.values()))
+    ranked = _rank_papers(list(merged.values()), terms)
     for p in ranked:
         p.pop("_pos", None)
     return ranked[:cap]
@@ -279,7 +329,7 @@ async def search_literature(
     for s, res in zip(enabled, results):
         by_source[s] = {"papers": [], "network_errors": max(1, len(queries))} if isinstance(res, Exception) else res
     ordered = [by_source[s] for s in _PAPER_SOURCES if s in by_source]
-    merged = _merge_all([r["papers"] for r in ordered], cap)
+    merged = _merge_all([r["papers"] for r in ordered], cap, _query_terms(queries))
     all_fail = all(r["network_errors"] >= max(1, len(queries)) for r in ordered)
     net_errs = sum(r["network_errors"] for r in ordered)
     out = {
