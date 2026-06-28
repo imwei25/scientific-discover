@@ -1,4 +1,8 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
+import {
+  Lightbulb, Map, ClipboardList, BarChart3, FileText,
+  Target, FileType, CheckSquare, MessageSquareReply, ScrollText,
+} from "lucide-react";
 import { apiUrl } from "./lib/api";
 import { writePersisted, usePersistentState } from "./lib/usePersistentState";
 import { useSidebar } from "./lib/sidebar";
@@ -13,23 +17,30 @@ import ChecklistModule from "./modules/ChecklistModule";
 import RebuttalModule from "./modules/RebuttalModule";
 import HistoryView from "./modules/HistoryView";
 import ThemeSwitcher from "./components/ThemeSwitcher";
+import FontSizeSwitcher, { useFontSize } from "./components/FontSizeSwitcher";
 import ProjectPicker from "./components/ProjectPicker";
+import OnboardingWizard from "./components/OnboardingWizard";
+import ToastContainer from "./components/Toast";
+import CommandPalette, { restoreHistoryEntry } from "./components/CommandPalette";
+import { showToast } from "./lib/toast";
 import { useProjects } from "./lib/projects";
 
 export type ModuleId = "home" | "idea" | "plan" | "ethics" | "analyze" | "imrad" | "journal" | "format" | "checklist" | "rebuttal" | "history";
 // 跨模块传递: 把数据写入目标模块的持久化字段, 再切换过去。
 export type Goto = (target: ModuleId, patch?: Record<string, unknown>) => void;
 
-const NAV: { id: ModuleId; icon: string; title: string; desc: string }[] = [
-  { id: "idea", icon: "💡", title: "找选题", desc: "发现研究方向与创新点" },
-  { id: "plan", icon: "🗺️", title: "实验规划", desc: "把想法变成可执行的计划" },
-  { id: "ethics", icon: "📋", title: "伦理材料", desc: "知情同意/方案/CRF" },
-  { id: "analyze", icon: "📊", title: "数据分析与写作", desc: "上传数据，分析并成文" },
-  { id: "imrad", icon: "📝", title: "论文初稿", desc: "装配 IMRaD 初稿与摘要" },
-  { id: "journal", icon: "🎯", title: "智能选刊", desc: "匹配适合投稿的期刊" },
-  { id: "format", icon: "📄", title: "期刊排版", desc: "按目标期刊要求重排" },
-  { id: "checklist", icon: "✅", title: "报告规范核对", desc: "STROBE/CONSORT/PRISMA 自查" },
-  { id: "rebuttal", icon: "✍️", title: "回复审稿", desc: "逐条回应审稿意见" },
+// W2-4-c: 用 Lucide 图标替代 emoji; W2-4-h: 导航 desc 白话化
+const ICON_PROPS = { size: 18, strokeWidth: 1.75 } as const;
+const NAV: { id: ModuleId; icon: ReactNode; title: string; desc: string }[] = [
+  { id: "idea",     icon: <Lightbulb {...ICON_PROPS} />,           title: "找选题",       desc: "发现研究方向与创新点" },
+  { id: "plan",     icon: <Map {...ICON_PROPS} />,                 title: "实验规划",     desc: "把研究想法变成可执行方案 + 样本量" },
+  { id: "ethics",   icon: <ClipboardList {...ICON_PROPS} />,       title: "伦理材料",     desc: "知情同意/方案/CRF" },
+  { id: "analyze",  icon: <BarChart3 {...ICON_PROPS} />,           title: "数据分析与写作", desc: "上传数据自动分析 + 出图（数字本地算）" },
+  { id: "imrad",    icon: <FileText {...ICON_PROPS} />,            title: "论文初稿",     desc: "把材料拼成医学论文（IMRaD 结构）" },
+  { id: "journal",  icon: <Target {...ICON_PROPS} />,              title: "智能选刊",     desc: "AI 推荐适合你研究的期刊" },
+  { id: "format",   icon: <FileType {...ICON_PROPS} />,            title: "期刊排版",     desc: "按期刊要求重排 + 参考文献格式化" },
+  { id: "checklist", icon: <CheckSquare {...ICON_PROPS} />,        title: "报告规范核对", desc: "按医学研究报告规范逐条自查" },
+  { id: "rebuttal", icon: <MessageSquareReply {...ICON_PROPS} />,  title: "回复审稿",     desc: "AI 帮你逐条回应审稿人" },
 ];
 
 interface Health {
@@ -44,7 +55,12 @@ export default function App() {
   const [active, setActive] = useState<ModuleId>("home");
   const [health, setHealth] = useState<Health | null>(null);
   const [healthErr, setHealthErr] = useState(false);
-  const [disclaimerDismissed, setDisclaimerDismissed] = usePersistentState("ui:disclaimerDismissed", false);
+  const [cmdkOpen, setCmdkOpen] = useState(false);
+  // W2-4-f 免责声明: 用时间戳代替布尔, 7 天后自动重现
+  const [disclaimerDismissedAt, setDisclaimerDismissedAt] = usePersistentState<number>("disclaimer:lastDismissed", 0);
+  const SEVEN_DAYS_MS = 7 * 24 * 3600 * 1000;
+  const disclaimerDismissed = disclaimerDismissedAt > 0 && Date.now() - disclaimerDismissedAt < SEVEN_DAYS_MS;
+  const [onboardingOpen, setOnboardingOpen] = useState(false);
   const [balance, setBalance] = useState<{
     available: boolean;
     provider?: string;
@@ -54,6 +70,8 @@ export default function App() {
   } | null>(null);
   const sidebar = useSidebar();
   const { current: currentProject, syncStatus } = useProjects();
+  // W2-4-a: 副作用 — 注入 data-font-size 到 <html>
+  useFontSize();
 
   const goto: Goto = (target, patch) => {
     if (patch) {
@@ -85,6 +103,15 @@ export default function App() {
         if (cancelled) return;
         setHealth(data);
         setHealthErr(false);
+        // 触发首次配置向导: configured=false 且尚未完成 onboarding
+        try {
+          const done = localStorage.getItem("onboarding:done") === "1";
+          if (!done && data && data.configured === false && !data.mock) {
+            setOnboardingOpen(true);
+          }
+        } catch {
+          /* localStorage 可能被禁用; 忽略 */
+        }
       } catch {
         if (cancelled) return;
         setHealthErr(true);
@@ -92,14 +119,66 @@ export default function App() {
       }
     };
     probe();
+    // 暴露给子组件: 完成 wizard 后可以触发重新拉取
+    (window as unknown as { __refreshHealth?: () => void }).__refreshHealth = probe;
     return () => {
       cancelled = true;
       clearTimeout(timer);
+      delete (window as unknown as { __refreshHealth?: () => void }).__refreshHealth;
     };
   }, []);
 
+  // 允许其他组件(Toast 的"重新配置"按钮)调起 wizard
+  useEffect(() => {
+    const onReopen = () => setOnboardingOpen(true);
+    window.addEventListener("onboarding:reopen", onReopen);
+    return () => window.removeEventListener("onboarding:reopen", onReopen);
+  }, []);
+
+  // W2-4-g: Cmd/Ctrl+K 唤出命令面板
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && (e.key === "k" || e.key === "K")) {
+        e.preventDefault();
+        setCmdkOpen((v) => !v);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+
+  // W2-2: syncStatus 持续 error 超 5 秒, 弹 Toast 提示
+  useEffect(() => {
+    if (syncStatus !== "error") return;
+    const tm = setTimeout(() => {
+      showToast({
+        kind: "warn",
+        message: "项目数据未同步到本地数据库, 正在自动重试; 网络若仍不通可能丢失本次改动",
+      });
+    }, 5000);
+    return () => clearTimeout(tm);
+  }, [syncStatus]);
+
   return (
     <div className="app">
+      <ToastContainer />
+      <CommandPalette
+        open={cmdkOpen}
+        onClose={() => setCmdkOpen(false)}
+        modules={NAV.map((m) => ({ id: m.id, title: m.title, desc: m.desc, icon: m.icon }))}
+        onPickModule={(id) => setActive(id as ModuleId)}
+        onPickHistory={(entry) => restoreHistoryEntry(entry, (m) => setActive(m as ModuleId))}
+      />
+      {onboardingOpen && (
+        <OnboardingWizard
+          onClose={() => {
+            setOnboardingOpen(false);
+            // 重新拉取 health 让 UI 立刻反映新配置 (mock 标志、configured 等)
+            const refresh = (window as unknown as { __refreshHealth?: () => void }).__refreshHealth;
+            if (refresh) refresh();
+          }}
+        />
+      )}
       {/* 折叠态下，点击侧栏空白区（非 nav-item / sidebar-toggle）= 锁定展开 */}
       <aside
         className="sidebar"
@@ -129,6 +208,11 @@ export default function App() {
             {sidebar.mode === "expanded" ? "«" : "»"}
           </button>
         </div>
+        {/* W2-4-d 项目选择器移到 sidebar (brand 下方), breadcrumb 风格 */}
+        <div className="sidebar-project">
+          <span className="sidebar-project-arrow" aria-hidden="true">↳</span>
+          <ProjectPicker />
+        </div>
         <nav className="nav">
           <div className="pipeline">
             {NAV.map((m, i) => (
@@ -151,7 +235,7 @@ export default function App() {
             onClick={() => setActive("history")}
             data-testid="nav-history"
           >
-            <span className="nav-num aux">📜</span>
+            <span className="nav-num aux"><ScrollText size={16} strokeWidth={1.75} /></span>
             <span className="nav-text">
               <span className="nav-title">历史记录</span>
               <span className="nav-desc">回看与恢复过往结果</span>
@@ -196,6 +280,7 @@ export default function App() {
               {syncStatus === "saving" ? "… 保存中" : "⚠ 未同步"}
             </span>
           )}
+          <FontSizeSwitcher />
           <ThemeSwitcher />
         </div>
         {/* 折叠态指示条：24px 内的 ticks，用 CSS 在 expanded 下隐藏 */}
@@ -213,9 +298,25 @@ export default function App() {
       </aside>
 
       <main className="content">
-        <div className="content-topbar">
-          <ProjectPicker />
-        </div>
+        {/* W2-4-e 演示模式横条 */}
+        {health?.mock && (
+          <div className="demo-banner" data-testid="demo-banner">
+            <span className="demo-banner-icon" aria-hidden="true">⚠</span>
+            <span>
+              <strong>演示模式</strong> — 所有结果都是假数据, 仅供试用。配置真实 API key 后将自动消失。
+            </span>
+            <button
+              className="demo-banner-action"
+              data-testid="demo-banner-configure"
+              onClick={() => {
+                try { localStorage.removeItem("onboarding:done"); } catch { /* ignore */ }
+                setOnboardingOpen(true);
+              }}
+            >
+              现在配置
+            </button>
+          </div>
+        )}
         {!disclaimerDismissed && (
           <div className="disclaimer" data-testid="disclaimer">
             <span>
@@ -225,7 +326,7 @@ export default function App() {
             <button
               className="disclaimer-close"
               data-testid="disclaimer-close"
-              onClick={() => setDisclaimerDismissed(true)}
+              onClick={() => setDisclaimerDismissedAt(Date.now())}
             >
               我已知晓
             </button>

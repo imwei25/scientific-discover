@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { streamImrad, runModule } from "../lib/sse";
+import { reportLLMError } from "../lib/errorToast";
+import DiffView from "../components/DiffView";
 import { usePersistentState, readPersisted } from "../lib/usePersistentState";
 import { addHistory } from "../lib/history";
 import { apiUrl } from "../lib/api";
@@ -138,6 +140,7 @@ export default function ImradModule() {
         onError: (m) => {
           setKwErr(m);
           setKwRunning(false);
+          reportLLMError(m);
         },
         onDone: () => {
           setKwRunning(false);
@@ -225,6 +228,17 @@ export default function ImradModule() {
     if (concl) setResults((p) => p || concl);
   };
 
+  // W2-3 Diff: 若已有 draft, 重新生成时弹 DiffView 对比新旧版本。
+  const [diffOpen, setDiffOpen] = useState(false);
+  const [prevDraftSnapshot, setPrevDraftSnapshot] = useState("");
+  const prevRunning = useRef(running);
+  useEffect(() => {
+    if (prevRunning.current && !running && !error && draft && prevDraftSnapshot && draft !== prevDraftSnapshot) {
+      setDiffOpen(true);
+    }
+    prevRunning.current = running;
+  }, [running, error, draft, prevDraftSnapshot]);
+
   const submit = async () => {
     if (running) return;
     if (![background, methods, results, discussion].some((x) => x.trim())) {
@@ -232,6 +246,7 @@ export default function ImradModule() {
       return;
     }
     setStatus("");
+    setPrevDraftSnapshot(draft);  // 记录旧 draft, 用于 diff
     setDraft("");
     setError(null);
     setRunning(true);
@@ -246,6 +261,7 @@ export default function ImradModule() {
           setError(m);
           setStatus("");
           setRunning(false);
+          reportLLMError(m);
         },
         onDone: () => {
           setStatus("");
@@ -311,6 +327,7 @@ export default function ImradModule() {
         onError: (m) => {
           setAbsErr(m);
           setAbsRunning(false);
+          reportLLMError(m);
         },
         onDone: () => {
           setAbsRunning(false);
@@ -332,6 +349,18 @@ export default function ImradModule() {
 
   return (
     <div className="module">
+      <DiffView
+        open={diffOpen}
+        original={prevDraftSnapshot}
+        modified={draft}
+        title="重新生成的 IMRaD 初稿 · 对比旧版本"
+        onAccept={() => setDiffOpen(false)}
+        onReject={() => {
+          // 拒绝: 还原旧 draft
+          setDraft(prevDraftSnapshot);
+          setDiffOpen(false);
+        }}
+      />
       <header className="module-head">
         <h1>📝 论文初稿（IMRaD 装配 + 摘要）</h1>
         <p>

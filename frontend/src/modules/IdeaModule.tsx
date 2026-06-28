@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { streamIdea, streamIdeaFollowup, runModule, Reference, Trial, EvidenceItem, Verification, RewritePayload } from "../lib/sse";
+import { reportLLMError } from "../lib/errorToast";
 import { addHistory } from "../lib/history";
 import Markdown from "../components/Markdown";
 import Dropzone from "../components/Dropzone";
@@ -157,6 +158,7 @@ export default function IdeaModule({ goto }: { goto: Goto }) {
           setStatus("");
           setRunning(false);
           window.dispatchEvent(new Event("usage-updated"));
+          reportLLMError(m);
         },
         onDone: () => {
           setStatus("");
@@ -213,6 +215,7 @@ export default function IdeaModule({ goto }: { goto: Goto }) {
           setFError(m);
           setFRunning(false);
           if (mode === "revise") setText(baseReport); // 修改失败则回滚
+          reportLLMError(m);
         },
         onDone: () => {
           if (mode === "ask") {
@@ -249,6 +252,7 @@ export default function IdeaModule({ goto }: { goto: Goto }) {
         onError: (m) => {
           setPicoErr(m);
           setPicoRunning(false);
+          reportLLMError(m);
         },
         onDone: () => {
           setPicoRunning(false);

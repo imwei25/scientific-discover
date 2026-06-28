@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { streamRebuttal, ReviewComment } from "../lib/sse";
+import { reportLLMError } from "../lib/errorToast";
+import DiffView from "../components/DiffView";
 import { usePersistentState } from "../lib/usePersistentState";
 import { addHistory } from "../lib/history";
 import Markdown from "../components/Markdown";
@@ -37,10 +39,22 @@ export default function RebuttalModule() {
     }
   }, [running, error, letter, reviews, manuscript, comments]);
 
+  // W2-3 Diff: 已有 letter 时再次生成 → 弹 DiffView
+  const [diffOpen, setDiffOpen] = useState(false);
+  const [prevLetterSnapshot, setPrevLetterSnapshot] = useState("");
+  const prevRunningRef = useRef(running);
+  useEffect(() => {
+    if (prevRunningRef.current && !running && !error && letter && prevLetterSnapshot && letter !== prevLetterSnapshot) {
+      setDiffOpen(true);
+    }
+    prevRunningRef.current = running;
+  }, [running, error, letter, prevLetterSnapshot]);
+
   const submit = async () => {
     if (!reviews.trim() || running) return;
     setStatus("");
     setComments([]);
+    setPrevLetterSnapshot(letter);
     setLetter("");
     setError(null);
     setRunning(true);
@@ -56,6 +70,7 @@ export default function RebuttalModule() {
           setError(m);
           setStatus("");
           setRunning(false);
+          reportLLMError(m);
         },
         onDone: () => {
           setStatus("");
@@ -98,6 +113,17 @@ export default function RebuttalModule() {
 
   return (
     <div className="module">
+      <DiffView
+        open={diffOpen}
+        original={prevLetterSnapshot}
+        modified={letter}
+        title="新生成的回复信 · 对比旧版本"
+        onAccept={() => setDiffOpen(false)}
+        onReject={() => {
+          setLetter(prevLetterSnapshot);
+          setDiffOpen(false);
+        }}
+      />
       <header className="module-head">
         <h1>✍️ 回复审稿意见 · Rebuttal</h1>
         <p>

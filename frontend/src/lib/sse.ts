@@ -3,10 +3,82 @@
 
 import { apiUrl } from "./api";
 
+// ── W2-2 LLMError 分类 ───────────────────────────────────────────
+// 后端返回的错误消息(中/英)通过关键词识别为更精细的子类, 让 UI 决定如何 Toast。
+export class LLMError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "LLMError";
+  }
+}
+export class BalanceError extends LLMError {
+  constructor(message: string) {
+    super(message);
+    this.name = "BalanceError";
+  }
+}
+export class KeyError extends LLMError {
+  constructor(message: string) {
+    super(message);
+    this.name = "KeyError";
+  }
+}
+export class TimeoutError extends LLMError {
+  constructor(message: string) {
+    super(message);
+    this.name = "TimeoutError";
+  }
+}
+export class RateLimitError extends LLMError {
+  constructor(message: string) {
+    super(message);
+    this.name = "RateLimitError";
+  }
+}
+
+/** 把后端返回的错误字符串归类为合适的 LLMError 子类。 */
+export function classifyError(msg: string): LLMError {
+  const m = (msg || "").toLowerCase();
+  // 余额相关
+  if (
+    m.includes("余额") || m.includes("insufficient balance") ||
+    m.includes("insufficient_quota") || m.includes("配额") ||
+    m.includes("out of credit") || m.includes("balance") ||
+    m.includes("402")
+  ) {
+    return new BalanceError(msg);
+  }
+  // 鉴权/key 无效
+  if (
+    m.includes("401") || m.includes("403") ||
+    m.includes("invalid_api_key") || m.includes("invalid api key") ||
+    m.includes("unauthorized") || m.includes("forbidden") ||
+    m.includes("key 无效") || m.includes("key 失效") || m.includes("api key")
+  ) {
+    return new KeyError(msg);
+  }
+  // 超时
+  if (
+    m.includes("超时") || m.includes("timeout") || m.includes("timed out")
+  ) {
+    return new TimeoutError(msg);
+  }
+  // 限流
+  if (
+    m.includes("429") || m.includes("rate limit") || m.includes("ratelimit") ||
+    m.includes("速率") || m.includes("过于频繁")
+  ) {
+    return new RateLimitError(msg);
+  }
+  return new LLMError(msg);
+}
+
 export interface StreamHandlers {
   onDelta: (text: string) => void;
   onDone?: () => void;
   onError?: (message: string) => void;
+  /** W2-2: 后端可能发送 event: progress, data: {stage, detail?} 给 UI 显示进度文案 */
+  onProgress?: (stage: string, detail?: unknown) => void;
   signal?: AbortSignal;
 }
 
@@ -71,6 +143,10 @@ export async function streamPost(
           } catch {
             /* ignore malformed */
           }
+        } else if (ev.event === "progress") {
+          let data: { stage?: string; detail?: unknown } = {};
+          try { data = JSON.parse(ev.data); } catch { /* keep raw */ }
+          handlers.onProgress?.(data.stage ?? "", data.detail);
         } else if (ev.event === "error") {
           let msg = ev.data;
           try {
