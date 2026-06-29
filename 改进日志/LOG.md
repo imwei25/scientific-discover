@@ -2,6 +2,13 @@
 
 > 每完成一个改进方向追加一条。最新在最上。
 
+## 2026-06-29 — 桌面打包(实测跑通)：修 Tauri v2 Windows 下前端连不上 sidecar 的真 bug
+- **怎么发现的**：上次只单测了 sidecar + 确认安装包文件生成，没真正启动打包后的 app 本体。这次启动 `research-assistant.exe`：窗口开了、`/api/health` 也通(curl 直连)，但 `netstat` 显示 **webview 进程到 :8756 零连接**——即 UI 根本没在跟后端通信，装出来会显示"本地服务未连接"。
+- **根因**：`frontend/src/lib/api.ts` 用 `location.protocol` 判断是否 Tauri：非 http 才用 sidecar 绝对地址。但 **Tauri v2 在 Windows 上的源是 `http://tauri.localhost`(scheme 仍是 http:)**，于是被误判为同源、用相对路径把请求打到 webview 自身而非 sidecar。原注释"tauri://localhost 等非 http 源"是 v1/mac 的旧假设。
+- **修复**：改用 `window.__TAURI_INTERNALS__ / __TAURI__` 全局 + `location.hostname === 'tauri.localhost'` + `protocol === 'tauri:'` 综合判断；命中即用 `http://127.0.0.1:8756`。覆盖 v2 Windows/mac/linux、vite dev、单进程托管四种场景。
+- **复测**：重打包后再启动 app → `netstat` 显示 **msedgewebview2 → 127.0.0.1:8756 有连接**(CloseWait, 请求已完成)，UI↔后端打通 ✓。前端 e2e **48/48**(单 worker，避免并行争用导致的 goto 超时假阴)；安装包重新产出 `科研助手_0.1.0_x64-setup.exe`。
+- **commit**：见本次提交
+
 ## 2026-06-29 — 桌面打包（Tauri）：首次完整跑通 NSIS 安装包 + 修两个打包 bug
 - **成果**：端到端跑通桌面打包，产出 `src-tauri/target/release/bundle/nsis/科研助手_0.1.0_x64-setup.exe`(137MB)。MSVC(VS生成工具2026)、Tauri CLI 2.11、WebView2 齐备。
 - **正式分发关键改动**：`config.py` 改为打包(PyInstaller frozen)态从用户可写目录读 `.env`——exe 同级 → `%APPDATA%\科研助手\.env`，都没有则自动生成模板并提示用户填 `LLM_API_KEY` 后重开(系统环境变量始终优先)。否则 onefile 包里 `__file__` 指向临时解压目录，永远读不到 key，AI 全挂。dev 行为不变, test_config 回归通过。
