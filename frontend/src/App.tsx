@@ -279,16 +279,6 @@ export default function App() {
               {syncStatus === "saving" ? "… 保存中" : "⚠ 未同步"}
             </span>
           )}
-          <button
-            className="settings-btn"
-            data-testid="open-settings"
-            onClick={() => setOnboardingOpen(true)}
-            title="设置 API key / 模型"
-            aria-label="设置 API key / 模型"
-          >
-            ⚙ 设置
-          </button>
-          <FontSizeSwitcher />
           <ThemeSwitcher />
         </div>
         {/* 折叠态指示条：24px 内的 ticks，用 CSS 在 expanded 下隐藏 */}
@@ -306,9 +296,19 @@ export default function App() {
       </aside>
 
       <main className="content">
-        {/* 项目选择器: 主区右上角 */}
+        {/* 右上角工具栏: 项目选择器 + 字号 + 设置 并排 */}
         <div className="content-topbar">
           <ProjectPicker />
+          <FontSizeSwitcher />
+          <button
+            className="settings-btn"
+            data-testid="open-settings"
+            onClick={() => setOnboardingOpen(true)}
+            title="设置 API key / 模型"
+            aria-label="设置 API key / 模型"
+          >
+            ⚙ 设置
+          </button>
         </div>
         {/* W2-4-e 演示模式横条 */}
         {health?.mock && (

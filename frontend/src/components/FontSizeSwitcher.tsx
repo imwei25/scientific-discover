@@ -5,9 +5,9 @@ import { usePersistentState } from "../lib/usePersistentState";
 export type FontSize = "normal" | "large" | "xlarge";
 
 const OPTIONS: { id: FontSize; label: string }[] = [
-  { id: "normal", label: "标准 15px" },
-  { id: "large", label: "大 17px" },
-  { id: "xlarge", label: "特大 19px" },
+  { id: "normal", label: "标准" },
+  { id: "large", label: "大" },
+  { id: "xlarge", label: "特大" },
 ];
 
 export function useFontSize(): [FontSize, (s: FontSize) => void] {

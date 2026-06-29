@@ -853,12 +853,13 @@ test("实验规划: 样本量计算器", async ({ page }) => {
   await expect(result).not.toContainText("每组 —");
 });
 
-test("设置入口: 矮窗口下侧栏底部「设置」按钮仍可见(导航可滚动)", async ({ page }) => {
+test("设置入口: 矮窗口下「设置」按钮(右上角工具栏)可见", async ({ page }) => {
   await mockBase(page);
   await page.setViewportSize({ width: 1000, height: 560 });
   await page.goto("/");
-  // 此前 .sidebar overflow:hidden + nav 不滚动会把底部设置按钮裁掉, 用户找不到
+  // 设置/字号已移到主区右上角工具栏, 与项目选择器并排
   await expect(page.getByTestId("open-settings")).toBeVisible();
+  await expect(page.getByTestId("font-size-select")).toBeVisible();
 });
 
 test("实验规划: 返回计划文本", async ({ page }) => {

@@ -760,8 +760,12 @@ select {
 .content-topbar {
   display: flex;
   justify-content: flex-end;
+  align-items: center;
+  gap: 10px;
   margin-bottom: 14px;
 }
+/* 顶栏里的字号控件: 去掉自身竖向 margin, 与项目/设置同高对齐 */
+.content-topbar .font-size-switcher { margin: 0; }
 
 /* 侧栏底部: "设置"按钮 + "未配置·点此设置"做成可点 */
 .settings-btn {
@@ -2787,10 +2791,18 @@ select {
 }
 .font-size-label { color: var(--muted); }
 .font-size-select {
-  background: var(--surface-2);
+  appearance: none;
+  -webkit-appearance: none;
+  /* 用 background-color(非 shorthand), 否则会把下面的 caret 图覆盖掉 */
+  background-color: var(--surface-2);
+  /* 下拉箭头, 让人一看就知道可选 */
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='10' height='10' viewBox='0 0 12 12'><path d='M3 4.5L6 7.5L9 4.5' stroke='%235c6b69' stroke-width='1.4' fill='none' stroke-linecap='round' stroke-linejoin='round'/></svg>");
+  background-repeat: no-repeat;
+  background-position: right 6px center;
   border: 1px solid var(--line);
   border-radius: 6px;
-  padding: 3px 6px;
+  /* 右侧留出箭头空间; 整体更紧凑、不再过宽 */
+  padding: 3px 20px 3px 8px;
   font-size: 12px;
   color: var(--ink);
   cursor: pointer;
