@@ -10,6 +10,9 @@ Write-Host "==> Installing PyInstaller" -ForegroundColor Cyan
 & ".\.venv\Scripts\python.exe" -m pip install -i $mirror pyinstaller
 
 Write-Host "==> Bundling backend (scipy/matplotlib need --collect-all)" -ForegroundColor Cyan
+# --collect-submodules app: 把所有 app.* 后端模块都打进去(很多端点用函数体内的惰性 import,
+#   PyInstaller 静态分析可能漏掉 projects/config_io/refio/ethics/deidentify 等), 否则正式版缺功能。
+# bibtexparser/rispy: refio(引用导入导出)的第三方依赖, 显式 hidden-import 确保打入。
 & ".\.venv\Scripts\pyinstaller.exe" `
     --onefile `
     --name sidecar `
@@ -19,7 +22,10 @@ Write-Host "==> Bundling backend (scipy/matplotlib need --collect-all)" -Foregro
     --collect-all sklearn `
     --collect-all pingouin `
     --collect-all lifelines `
+    --collect-submodules app `
     --hidden-import app.main `
+    --hidden-import bibtexparser `
+    --hidden-import rispy `
     sidecar_entry.py
 
 # Tauri requires the sidecar filename to carry the target triple suffix
