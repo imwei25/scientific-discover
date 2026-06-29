@@ -1,5 +1,10 @@
 # 科研助手
 
+> 📦 **下载安装包（Windows）**：[最新 Release](https://github.com/imwei25/scientific-discover/releases/latest)
+> → 下载 `ResearchAssistant_*_x64-setup.exe` 双击安装，无需 Python。
+> 首次打开在 `%APPDATA%\科研助手\.env` 填入 `LLM_API_KEY` 即可。
+> （开发者发布新版本：`cargo tauri build` 后跑 `scripts\publish-release.ps1`。）
+
 面向普通（非 IT）科研人员的 AI 科研助手桌面应用。覆盖"选题→投稿"全流程：
 
 | 模块 | 作用 |

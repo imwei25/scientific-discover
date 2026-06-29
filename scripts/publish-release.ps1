@@ -1,43 +1,55 @@
-# 一键把打好的 Windows 安装包发布到 GitHub Release。
-# 前提: 已 `cargo tauri build` 出安装包, 且已执行过一次 `gh auth login`。
-# 用法: powershell -ExecutionPolicy Bypass -File scripts\publish-release.ps1
-$ErrorActionPreference = "Stop"
+# Publish the built Windows installer to a GitHub Release.
+# ASCII-only on purpose: Windows PowerShell 5.1 reads BOM-less .ps1 as the system
+# codepage, so non-ASCII here would corrupt. Chinese release notes live in
+# scripts/release-notes.md (read by gh as UTF-8).
+#
+# Prereqs: `cargo tauri build` produced the installer, and `gh auth login` was done once.
+# Usage:   powershell -ExecutionPolicy Bypass -File scripts\publish-release.ps1
+#
+# NOTE: do NOT set $ErrorActionPreference='Stop' here. gh writes to stderr on the
+# "release view" existence probe; under Stop, PS 5.1 turns that native stderr into a
+# terminating error and aborts. We check $LASTEXITCODE explicitly instead.
 $root = Split-Path $PSScriptRoot -Parent
 
-# 解析 gh: 优先 PATH, 否则用 winget 用户级安装位置兜底。
+function Die($msg) { Write-Host "ERROR: $msg" -ForegroundColor Red; exit 1 }
+
+# Resolve gh: prefer PATH, else fall back to the winget user-scope install location.
 $gh = (Get-Command gh -ErrorAction SilentlyContinue).Source
 if (-not $gh) {
     $cand = Get-ChildItem "$env:LOCALAPPDATA\Microsoft\WinGet\Packages" -Recurse -Filter gh.exe -ErrorAction SilentlyContinue | Select-Object -First 1
     if ($cand) { $gh = $cand.FullName }
 }
-if (-not $gh) { throw "未找到 gh(GitHub CLI)。先安装: winget install --id GitHub.cli" }
+if (-not $gh) { Die "gh (GitHub CLI) not found. Install: winget install --id GitHub.cli" }
 
-# 找安装包
+# Locate the installer.
 $exe = Get-ChildItem "$root\src-tauri\target\release\bundle\nsis\*-setup.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
-if (-not $exe) { throw "没找到安装包(*-setup.exe)。先运行 cargo tauri build。" }
+if (-not $exe) { Die "No installer (*-setup.exe) found. Run cargo tauri build first." }
 
-# 从 tauri.conf.json 读版本号作为 tag
+# Read version from tauri.conf.json -> tag.
 $conf = Get-Content "$root\src-tauri\tauri.conf.json" -Raw | ConvertFrom-Json
 $tag = "v$($conf.version)"
+$sizeMB = [math]::Round($exe.Length / 1MB)
 
-Write-Host "==> 发布 $tag : $($exe.Name) ($([math]::Round($exe.Length/1MB)) MB)" -ForegroundColor Cyan
+# GitHub strips non-ASCII from asset filenames (the productName is Chinese), which yields
+# an ugly "_0.1.0_x64-setup.exe". Upload an ASCII-named copy so the download link is clean.
+$asciiName = "ResearchAssistant_$($conf.version)_x64-setup.exe"
+$asset = Join-Path $exe.DirectoryName $asciiName
+Copy-Item $exe.FullName $asset -Force
+Write-Host "==> Publishing $tag : $asciiName ($sizeMB MB)" -ForegroundColor Cyan
 
-$notes = @"
-科研助手 Windows 桌面安装包。
+$notesFile = "$root\scripts\release-notes.md"
 
-- 下载 ``$($exe.Name)`` 后双击安装, 终端用户无需安装 Python。
-- 首次打开会在 ``%APPDATA%\科研助手\.env`` 生成配置模板,
-  填入你的 ``LLM_API_KEY`` 后重新打开应用即可使用 AI 功能。
-"@
+# Probe whether the release already exists (gh exits non-zero + stderr if not; that's fine).
+& $gh release view $tag *> $null
+$exists = ($LASTEXITCODE -eq 0)
 
-# release 不存在则创建, 已存在则覆盖上传同名资源
-& $gh release view $tag 2>$null | Out-Null
-if ($LASTEXITCODE -ne 0) {
-    & $gh release create $tag "$($exe.FullName)" --title "科研助手 $tag" --notes $notes
+if (-not $exists) {
+    & $gh release create $tag "$asset" --title "Research Assistant $tag" --notes-file "$notesFile"
 } else {
-    Write-Host "Release $tag 已存在, 覆盖上传安装包…" -ForegroundColor Yellow
-    & $gh release upload $tag "$($exe.FullName)" --clobber
+    Write-Host "Release $tag exists; re-uploading asset (clobber)..." -ForegroundColor Yellow
+    & $gh release upload $tag "$asset" --clobber
 }
+if ($LASTEXITCODE -ne 0) { Die "gh release step failed (exit $LASTEXITCODE)." }
 
-Write-Host "`n完成。下载页:" -ForegroundColor Green
+Write-Host "`nDone. Download page:" -ForegroundColor Green
 & $gh release view $tag --json url -q .url
