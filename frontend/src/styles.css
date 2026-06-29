@@ -177,6 +177,7 @@ body {
   align-items: center;
   justify-content: space-between;
   margin-bottom: var(--sp-6);
+  flex-shrink: 0;
 }
 .brand {
   display: flex;
@@ -246,8 +247,12 @@ body {
 .nav {
   display: flex;
   flex-direction: column;
-  flex: 1;
+  flex: 1 1 auto;
   min-width: 0;
+  /* 关键: 让导航区在矮屏/高DPI缩放下自己滚动, 而不是把底部(状态+⚙设置按钮)挤出可视区被裁掉。 */
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
 }
 .pipeline {
   position: relative;
@@ -350,6 +355,7 @@ body {
   flex-direction: column;
   gap: 3px;
   margin-top: var(--sp-3);
+  flex-shrink: 0; /* 始终固定在底部可见, 不被导航挤掉 */
 }
 .status-ok { color: var(--ok); }
 .status-bad { color: var(--bad); }
@@ -443,7 +449,8 @@ body {
   grid-template-columns: minmax(0, 1fr) minmax(0, 0.95fr);
   gap: var(--sp-6);
   align-items: center;
-  min-height: 64vh;
+  /* 不再硬撑 64vh: 矮屏会溢出/裁切。按视口自适应并设上下限。 */
+  min-height: clamp(320px, 52vh, 540px);
 }
 .home-text {
   max-width: 32em;
@@ -513,7 +520,7 @@ body {
   display: flex;
   align-items: center;
   justify-content: center;
-  min-height: 460px;
+  min-height: clamp(240px, 36vh, 460px);
   position: relative;
 }
 .home-art-wrap {
@@ -1719,6 +1726,20 @@ select {
 @media (max-width: 880px) {
   .ss-explore {
     grid-template-columns: 1fr;
+  }
+}
+
+/* 窄屏/小窗口/高DPI缩放: 首页 hero 从两栏堆叠为单栏, 收紧主区留白, 避免首页显示不全。 */
+@media (max-width: 1000px) {
+  .content { padding: 32px 28px 56px; }
+  .home-stage {
+    grid-template-columns: 1fr;
+    min-height: auto;
+    gap: var(--sp-4);
+  }
+  .home-art {
+    min-height: 220px;
+    max-width: 380px;
   }
 }
 .ss-controls {
