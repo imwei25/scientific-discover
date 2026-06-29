@@ -2,6 +2,14 @@
 
 > 每完成一个改进方向追加一条。最新在最上。
 
+## 2026-06-29 — 桌面打包（Tauri）：首次完整跑通 NSIS 安装包 + 修两个打包 bug
+- **成果**：端到端跑通桌面打包，产出 `src-tauri/target/release/bundle/nsis/科研助手_0.1.0_x64-setup.exe`(137MB)。MSVC(VS生成工具2026)、Tauri CLI 2.11、WebView2 齐备。
+- **正式分发关键改动**：`config.py` 改为打包(PyInstaller frozen)态从用户可写目录读 `.env`——exe 同级 → `%APPDATA%\科研助手\.env`，都没有则自动生成模板并提示用户填 `LLM_API_KEY` 后重开(系统环境变量始终优先)。否则 onefile 包里 `__file__` 指向临时解压目录，永远读不到 key，AI 全挂。dev 行为不变, test_config 回归通过。
+- **修 bug①**：`tauri.conf.json` 的 `beforeBuildCommand`/`beforeDevCommand` 用了 `npm --prefix ../frontend`，但 Tauri 从**项目根**跑钩子，`../frontend` 多上跳一级 → `Desktop/frontend` ENOENT。改为 `frontend`。
+- **修 bug②(环境)**：NSIS 打包阶段从 GitHub 下载 `nsis-3.11.zip`/`nsis_tauri_utils.dll`，国内网络首次 `timeout: global`；重跑一次即成功(Rust 已缓存)。已写进 src-tauri/README「踩过的坑」。
+- **验证**：sidecar 单文件 exe **独立启动自测**通过(`/api/health` 200, scipy/matplotlib 未漏)；占位 `logo.png` 生成全套图标；Rust 编译 2m54s；makensis 出包成功。binaries/dist/build 等大产物已 gitignore。
+- **commit**：见本次提交
+
 ## 2026-06-28 — 前端体验（全改·D1+D3）：ResultPanel 读屏可达性 + 空态引导
 - **核查**：D1(错误/空/加载/完成四态统一) 绝大多数模块已通过共享 `ResultPanel` 实现(前几轮 13/15 加固)；focus 可见、reduced-motion 也已具备。剩余真实缺口是**读屏(screen reader)可达性**。
 - **改动**：`ResultPanel` ① 状态区加 `role="status" aria-live="polite"`——读屏会播报"生成中…/已完成/出错了"状态切换，但有意不给流式正文加 live(避免逐 token 刷屏)；② 错误区加 `role="alert"`——出错立即播报；③ 面板加 `aria-busy={running}`；④ 空态默认 placeholder 改为更有引导性的"填好左侧信息后点击上方按钮，结果会显示在这里。"。

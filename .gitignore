@@ -16,6 +16,12 @@ frontend/playwright-report/
 # Tauri
 src-tauri/target/
 src-tauri/binaries/
+src-tauri/gen/
+
+# PyInstaller 打包中间产物(sidecar 由 scripts/build-sidecar.ps1 现打, 不入库)
+backend/build/
+backend/dist/
+backend/sidecar.spec
 
 # OS
 .DS_Store
