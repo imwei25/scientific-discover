@@ -10,9 +10,10 @@ Write-Host "==> Installing PyInstaller" -ForegroundColor Cyan
 & ".\.venv\Scripts\python.exe" -m pip install -i $mirror pyinstaller
 
 Write-Host "==> Bundling backend (scipy/matplotlib need --collect-all)" -ForegroundColor Cyan
-# --collect-submodules app: 把所有 app.* 后端模块都打进去(很多端点用函数体内的惰性 import,
-#   PyInstaller 静态分析可能漏掉 projects/config_io/refio/ethics/deidentify 等), 否则正式版缺功能。
-# bibtexparser/rispy: refio(引用导入导出)的第三方依赖, 显式 hidden-import 确保打入。
+# --collect-submodules app: bundle ALL app.* backend modules. Many endpoints use lazy
+#   (in-function) imports that PyInstaller's static analysis can miss (projects/config_io/
+#   refio/ethics/deidentify), which would ship a release missing those features.
+# bibtexparser/rispy: third-party deps of refio (reference import/export); hidden-import to be safe.
 & ".\.venv\Scripts\pyinstaller.exe" `
     --onefile `
     --name sidecar `
