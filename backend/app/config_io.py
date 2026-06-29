@@ -13,8 +13,10 @@ from typing import Iterable
 import httpx
 
 
-# .env 的默认位置(同 config.py)
-ENV_PATH = Path(__file__).resolve().parent.parent / ".env"
+# .env 位置: 复用 config 已解析好的同一路径, 保证"在线写 key"与"读配置"指向同一文件。
+# 开发态 = backend/.env; 打包态(PyInstaller frozen) = %APPDATA%\科研助手\.env。
+# 若各自硬编码, 打包版会把 key 写进 PyInstaller 临时解压目录, 而 config 从 %APPDATA% 读 → 在线改 key 不生效。
+from .config import _ENV_PATH as ENV_PATH
 
 
 # ── 各 provider 预设(default base_url + 推荐 model) ──────────────
