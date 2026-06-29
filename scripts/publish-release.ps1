@@ -21,14 +21,21 @@ if (-not $gh) {
 }
 if (-not $gh) { Die "gh (GitHub CLI) not found. Install: winget install --id GitHub.cli" }
 
-# Locate the installer.
-$exe = Get-ChildItem "$root\src-tauri\target\release\bundle\nsis\*-setup.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
-if (-not $exe) { Die "No installer (*-setup.exe) found. Run cargo tauri build first." }
-
-# Read version from tauri.conf.json -> tag.
+# Read version from tauri.conf.json -> tag (needed to pick the matching installer).
 $conf = Get-Content "$root\src-tauri\tauri.conf.json" -Raw | ConvertFrom-Json
 $tag = "v$($conf.version)"
+$ver = $conf.version
+
+# Locate THIS version's installer. The nsis folder accumulates every version's *-setup.exe,
+# so we MUST match the current version exactly. Exclude our own ASCII copies (ResearchAssistant_*)
+# to avoid re-picking a stale copy. (Earlier bug: Select -First 1 grabbed ResearchAssistant_0.1.0
+# alphabetically and re-uploaded 0.1.0 for every release.)
+$nsis = "$root\src-tauri\target\release\bundle\nsis"
+$exe = Get-ChildItem "$nsis\*_${ver}_x64-setup.exe" -ErrorAction SilentlyContinue |
+    Where-Object { $_.Name -notlike 'ResearchAssistant_*' } | Select-Object -First 1
+if (-not $exe) { Die "No installer matching version $ver found in $nsis. Run cargo tauri build first." }
 $sizeMB = [math]::Round($exe.Length / 1MB)
+Write-Host "    source installer: $($exe.Name) ($($exe.Length) bytes)" -ForegroundColor DarkGray
 
 # GitHub strips non-ASCII from asset filenames (the productName is Chinese), which yields
 # an ugly "_0.1.0_x64-setup.exe". Upload an ASCII-named copy so the download link is clean.
