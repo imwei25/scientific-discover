@@ -2401,6 +2401,30 @@ select {
   max-height: 90vh;
   overflow: auto;
   border: 1px solid var(--line);
+  position: relative;
+}
+.onboarding-close {
+  position: absolute;
+  top: 12px;
+  right: 14px;
+  width: 32px;
+  height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 22px;
+  line-height: 1;
+  color: var(--muted);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: background var(--dur-fast), color var(--dur-fast), border-color var(--dur-fast);
+}
+.onboarding-close:hover {
+  background: var(--surface-2);
+  color: var(--ink);
+  border-color: var(--line);
 }
 .onboarding-title {
   font-size: 22px;

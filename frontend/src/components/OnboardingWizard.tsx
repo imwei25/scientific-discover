@@ -152,6 +152,19 @@ export default function OnboardingWizard({ onClose }: OnboardingWizardProps) {
   return (
     <div className="onboarding-overlay" data-testid="onboarding-wizard">
       <div className="onboarding-modal" role="dialog" aria-modal="true" aria-labelledby="onboarding-title">
+        <button
+          className="onboarding-close"
+          onClick={() => {
+            // 标记已处理, 否则未配置时父组件刷新 health 会立刻把向导又弹回来。
+            try { localStorage.setItem("onboarding:done", "1"); } catch { /* 配额溢出忽略 */ }
+            onClose();
+          }}
+          aria-label="关闭"
+          title="关闭"
+          data-testid="onboarding-close"
+        >
+          ×
+        </button>
         <h1 id="onboarding-title" className="onboarding-title">
           欢迎使用科研助手 · 先做一个 1 分钟配置
         </h1>

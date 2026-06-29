@@ -862,6 +862,15 @@ test("设置入口: 矮窗口下「设置」按钮(右上角工具栏)可见", a
   await expect(page.getByTestId("font-size-select")).toBeVisible();
 });
 
+test("设置向导: 可用右上角 × 关闭", async ({ page }) => {
+  await mockBase(page);
+  await page.goto("/");
+  await page.getByTestId("open-settings").click();
+  await expect(page.getByTestId("onboarding-wizard")).toBeVisible();
+  await page.getByTestId("onboarding-close").click();
+  await expect(page.getByTestId("onboarding-wizard")).toHaveCount(0);
+});
+
 test("实验规划: 返回计划文本", async ({ page }) => {
   await mockBase(page);
   await page.route("**/api/run", (r) =>
