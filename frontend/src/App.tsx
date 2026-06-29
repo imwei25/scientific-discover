@@ -208,11 +208,6 @@ export default function App() {
             {sidebar.mode === "expanded" ? "«" : "»"}
           </button>
         </div>
-        {/* W2-4-d 项目选择器移到 sidebar (brand 下方), breadcrumb 风格 */}
-        <div className="sidebar-project">
-          <span className="sidebar-project-arrow" aria-hidden="true">↳</span>
-          <ProjectPicker />
-        </div>
         <nav className="nav">
           <div className="pipeline">
             {NAV.map((m, i) => (
@@ -257,9 +252,13 @@ export default function App() {
             </span>
           )}
           {health && !health.mock && health.configured === false && (
-            <span className="status-warn" data-testid="status-warn">
-              ⚠ 未配置密钥，请在 backend/.env 填写
-            </span>
+            <button
+              className="status-warn status-warn-btn"
+              data-testid="status-warn"
+              onClick={() => setOnboardingOpen(true)}
+            >
+              ⚠ 未配置密钥 · 点此设置
+            </button>
           )}
           {balance?.available && (
             <span className="status-balance" data-testid="balance">
@@ -280,6 +279,15 @@ export default function App() {
               {syncStatus === "saving" ? "… 保存中" : "⚠ 未同步"}
             </span>
           )}
+          <button
+            className="settings-btn"
+            data-testid="open-settings"
+            onClick={() => setOnboardingOpen(true)}
+            title="设置 API key / 模型"
+            aria-label="设置 API key / 模型"
+          >
+            ⚙ 设置
+          </button>
           <FontSizeSwitcher />
           <ThemeSwitcher />
         </div>
@@ -298,6 +306,10 @@ export default function App() {
       </aside>
 
       <main className="content">
+        {/* 项目选择器: 主区右上角 */}
+        <div className="content-topbar">
+          <ProjectPicker />
+        </div>
         {/* W2-4-e 演示模式横条 */}
         {health?.mock && (
           <div className="demo-banner" data-testid="demo-banner">
