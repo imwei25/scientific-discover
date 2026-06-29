@@ -272,6 +272,68 @@ def build_coverletter(inputs: dict) -> list[dict]:
     return [{"role": "system", "content": system}, {"role": "user", "content": user}]
 
 
+def build_stats_advice(question: str, data_meta: dict | None = None) -> list[dict]:
+    """统计顾问: 让 LLM 输出**严格 JSON**(无 Markdown), 前端解析后渲染推荐卡片。
+
+    JSON schema(对外契约, 前端按此渲染):
+      {
+        "recommended": {"test": str, "why": str},
+        "assumptions": [str, ...],
+        "cautions":    [str, ...],
+        "alternatives": [{"test": str, "when": str}, ...]
+      }
+    """
+    system = (
+        "你是临床医学统计顾问。请根据研究问题(以及可选的数据描述), "
+        "推荐最合适的统计检验/方法。\n"
+        "你必须只输出严格的 JSON 对象(UTF-8, 不要任何 markdown 代码块、不要前后缀文字), "
+        "结构如下:\n"
+        "{\n"
+        "  \"recommended\": {\"test\": \"<方法名, 例如: 独立样本 t 检验/Wilcoxon 秩和检验/卡方检验/Cox 回归 等\">,"
+        " \"why\": \"<一两句话说明为什么选这个方法>\"},\n"
+        "  \"assumptions\": [\"<前置假设 1>\", \"<前置假设 2>\"],\n"
+        "  \"cautions\": [\"<注意事项, 比如多重比较校正/缺失处理/相关 vs 因果>\"],\n"
+        "  \"alternatives\": ["
+        "{\"test\": \"<替代方法名>\", \"when\": \"<何时改用它>\"}, "
+        "{\"test\": \"...\", \"when\": \"...\"}"
+        "]\n"
+        "}\n"
+        "铁律: 1) 不要编造数据中不存在的列; 2) 当问题信息不足以确定方法时, "
+        "在 recommended.why 里说明需要补充什么; 3) cautions 必须给出至少 1 条; "
+        "4) alternatives 给出 1-3 条; 5) 所有文本用中文。"
+    )
+
+    user_parts = [f"研究问题: {(question or '').strip() or '(未填写, 仅参考数据元信息推断)'}"]
+    if data_meta:
+        # 把简洁的数据元信息(列名/类型/缺失率/分组数等)拼进去, 让模型不臆造列
+        cols = data_meta.get("columns") or []
+        if cols:
+            user_parts.append("\n数据列(由系统提供):")
+            for c in cols[:30]:
+                if isinstance(c, dict):
+                    name = c.get("name") or c.get("column") or ""
+                    dtype = c.get("dtype") or c.get("type") or ""
+                    extra = []
+                    if "n_unique" in c:
+                        extra.append(f"唯一值 {c['n_unique']}")
+                    if "missing" in c:
+                        extra.append(f"缺失 {c['missing']}")
+                    tag = f" ({dtype}{', ' + ', '.join(extra) if extra else ''})" if dtype or extra else ""
+                    user_parts.append(f"  - {name}{tag}")
+                else:
+                    user_parts.append(f"  - {c}")
+        n = data_meta.get("n_rows") or data_meta.get("n")
+        if n:
+            user_parts.append(f"\n样本量(行数): {n}")
+        if data_meta.get("groups"):
+            user_parts.append(f"分组情况: {data_meta['groups']}")
+
+    return [
+        {"role": "system", "content": system},
+        {"role": "user", "content": "\n".join(user_parts)},
+    ]
+
+
 _BUILDERS = {
     "idea": build_idea,
     "plan": build_plan,

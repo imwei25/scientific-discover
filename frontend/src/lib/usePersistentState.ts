@@ -1,9 +1,20 @@
 import { useEffect, useState } from "react";
 
+const STATE_CHANGED = "ra:state-changed";
+
+function notifyChange(): void {
+  try {
+    window.dispatchEvent(new Event(STATE_CHANGED));
+  } catch {
+    /* SSR / 极端环境忽略 */
+  }
+}
+
 // 直接写入持久化存储(供跨模块传递数据时, 预填目标模块的字段)。
 export function writePersisted(key: string, value: unknown): void {
   try {
     localStorage.setItem(`ra:${key}`, JSON.stringify(value));
+    notifyChange();
   } catch {
     /* 忽略写入失败 */
   }
@@ -35,6 +46,7 @@ export function usePersistentState<T>(key: string, initial: T): [T, (v: T | ((p:
   useEffect(() => {
     try {
       localStorage.setItem(storageKey, JSON.stringify(value));
+      notifyChange();
     } catch {
       /* 忽略写入失败(如隐私模式) */
     }

@@ -5,8 +5,46 @@ import { addHistory } from "../lib/history";
 import { apiUrl } from "../lib/api";
 import ResultPanel from "../components/ResultPanel";
 import Dropzone from "../components/Dropzone";
+import RefIO from "../components/RefIO";
+import type { Reference } from "../lib/sse";
 import { downloadDocxFromText } from "../lib/download";
 import { copyToClipboard } from "../lib/clipboard";
+import DiffView from "../components/DiffView";
+
+// 与 IdeaModule 同一套合并逻辑: DOI 优先, 兜底 title+year. 这里独立一份避免跨模块耦合.
+function mergeRefs(existing: Reference[], incoming: Reference[]): { merged: Reference[]; added: number; dup: number } {
+  const norm = (s: string) => (s || "").trim().toLowerCase();
+  const keyOf = (r: Reference) => {
+    const doi = norm(r.pmid && r.pmid.startsWith("10.") ? r.pmid : "");
+    if (doi) return `doi:${doi}`;
+    if (r.pmid) return `pmid:${norm(r.pmid)}`;
+    return `tit:${norm(r.title)}|${norm(r.year)}`;
+  };
+  const seen = new Set(existing.map(keyOf));
+  const merged = [...existing];
+  let added = 0;
+  let dup = 0;
+  for (const r of incoming) {
+    if (!r || (!r.title && !r.pmid)) { dup += 1; continue; }
+    const k = keyOf(r);
+    if (seen.has(k)) { dup += 1; continue; }
+    seen.add(k);
+    merged.push(r);
+    added += 1;
+  }
+  return { merged, added, dup };
+}
+
+// 把一条 Reference 渲染回纯文本, 用于追加到参考文献输入框 (粗略 Vancouver 形态).
+function refToLine(r: Reference): string {
+  const parts: string[] = [];
+  if (r.first_author) parts.push(r.first_author);
+  if (r.year) parts.push(`(${r.year})`);
+  if (r.title) parts.push(r.title + (r.title.endsWith(".") ? "" : "."));
+  if (r.journal) parts.push(r.journal + ".");
+  if (r.url) parts.push(r.url);
+  return parts.join(" ").trim();
+}
 
 interface Journal {
   id: string;
@@ -53,6 +91,24 @@ export default function FormatModule() {
   const [checkResult, setCheckResult] = usePersistentState<RefCheckItem[]>("format:refcheck", []);
   const [checkBusy, setCheckBusy] = useState(false);
   const [checkErr, setCheckErr] = useState<string | null>(null);
+
+  // 引用文件双向导入导出: 用户从 EndNote/Zotero 导入的结构化引用 + 用于导出.
+  const [importedRefs, setImportedRefs] = usePersistentState<Reference[]>("format:importedRefs", []);
+  const [importNote, setImportNote] = useState("");
+  // 导出来源: 已导入的引用 + 核验结果(真实条目, 已带 doi/pmid/title), 取并集.
+  const exportableRefs: Reference[] = (() => {
+    const fromCheck: Reference[] = (checkResult || [])
+      .filter((it) => !it.duplicate_of && (it.title || it.doi || it.pmid))
+      .map((it) => ({
+        pmid: it.doi || it.pmid || "",
+        title: it.title || it.raw || "",
+        first_author: "",
+        journal: "",
+        year: "",
+        url: it.doi ? `https://doi.org/${it.doi}` : (it.pmid ? `https://pubmed.ncbi.nlm.nih.gov/${it.pmid}/` : ""),
+      }));
+    return mergeRefs(importedRefs, fromCheck).merged;
+  })();
 
   const checkRefs = async () => {
     if (!refsInput.trim() || checkBusy) return;
@@ -123,8 +179,21 @@ export default function FormatModule() {
       .catch(() => setJournals([]));
   }, [setJournalId]);
 
+  // W2-3 Diff: 排版前快照原稿, 完成后弹 DiffView 让用户接受/拒绝。
+  const [diffOpen, setDiffOpen] = useState(false);
+  const [originalSnapshot, setOriginalSnapshot] = useState("");
+  const prevRunning = useRef(running);
+  useEffect(() => {
+    // 从 running 真→假 且无错误 且 text 非空 → 弹 diff
+    if (prevRunning.current && !running && !error && text && originalSnapshot) {
+      setDiffOpen(true);
+    }
+    prevRunning.current = running;
+  }, [running, error, text, originalSnapshot]);
+
   const submit = () => {
     if (!manuscript.trim() || !journalId || running) return;
+    setOriginalSnapshot(manuscript);  // 记录原文, 用于稍后 diff
     start("format", { manuscript, journal_id: journalId });
   };
 
@@ -162,6 +231,8 @@ export default function FormatModule() {
     setRefsErr(null);
     setCheckResult([]);
     setCheckErr(null);
+    setImportedRefs([]);
+    setImportNote("");
   };
 
   const [dlErr, setDlErr] = useState<string | null>(null);
@@ -182,6 +253,22 @@ export default function FormatModule() {
 
   return (
     <div className="module">
+      <DiffView
+        open={diffOpen}
+        original={originalSnapshot}
+        modified={text}
+        title="AI 重排后的稿件 · 对比"
+        onAccept={() => {
+          // 接受: 把重排后的稿件回填到 manuscript 输入框, 关闭 diff
+          setManuscript(text);
+          setDiffOpen(false);
+        }}
+        onReject={() => {
+          // 拒绝: 保留原稿, 清空 text(不影响 history 已存的旧记录)
+          setText("");
+          setDiffOpen(false);
+        }}
+      />
       <header className="module-head">
         <h1>📄 期刊排版</h1>
         <p>粘贴你的稿件，选择目标期刊，我按该刊的结构与格式要求重排，并导出 Word 文件。</p>
@@ -313,6 +400,45 @@ export default function FormatModule() {
         粘贴你的参考文献，按所选期刊的引用规范（如 Vancouver、GB/T 7714、IEEE 等）自动排好。
         采用标准 CSL 引用引擎渲染，格式准确。
       </p>
+      <RefIO
+        currentRefs={exportableRefs}
+        exportFilename="期刊排版-参考文献"
+        onImport={(imported) => {
+          const { merged, added, dup } = mergeRefs(importedRefs, imported);
+          setImportedRefs(merged);
+          // 同时把导入条目以文本形式追加到 refsInput, 直接可用于格式化/核验.
+          if (added > 0) {
+            const lines = imported
+              .filter((r) => r && (r.title || r.pmid))
+              .map(refToLine)
+              .filter(Boolean)
+              .join("\n");
+            if (lines) {
+              setRefsInput((prev) => (prev && prev.trim() ? prev.trimEnd() + "\n" + lines : lines));
+            }
+          }
+          setImportNote(`导入 ${added} 篇，去重 ${dup} 篇`);
+          window.setTimeout(() => setImportNote(""), 4000);
+        }}
+      />
+      {importNote && (
+        <div className="status-line" data-testid="refio-import-note">{importNote}</div>
+      )}
+      {importedRefs.length > 0 && (
+        <details className="refs" data-testid="imported-refs">
+          <summary>已导入的引用（{importedRefs.length} 篇，可在下方文本中编辑或直接导出）</summary>
+          <ol className="ref-list">
+            {importedRefs.map((r, i) => (
+              <li key={(r.pmid || r.url || "") + i}>
+                {r.first_author && <>{r.first_author} </>}
+                {r.year && <>({r.year}) </>}
+                {r.url ? <a href={r.url} target="_blank" rel="noreferrer">{r.title || r.url}</a> : (r.title || r.pmid)}
+                {r.journal && <span className="ref-journal"> — {r.journal}</span>}
+              </li>
+            ))}
+          </ol>
+        </details>
+      )}
       <div className="form">
         <label className="field">
           <span className="field-label">参考文献（每条一行，或整段粘贴）</span>

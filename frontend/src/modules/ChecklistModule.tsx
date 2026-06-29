@@ -5,6 +5,7 @@ import { addHistory } from "../lib/history";
 import { apiUrl } from "../lib/api";
 import ResultPanel from "../components/ResultPanel";
 import Dropzone from "../components/Dropzone";
+import { HelpButton } from "../components/HelpButton";
 import { downloadBase64, chartMime, tsName, downloadDocxFromText } from "../lib/download";
 
 interface StatItem {
@@ -228,7 +229,7 @@ export default function ChecklistModule() {
       />
       {docxErr && <div className="result-error" data-testid="docx-error">{docxErr}</div>}
 
-      <h2 className="section-title">📈 流程图生成（PRISMA 2020 / CONSORT 2025）</h2>
+      <h2 className="section-title">📈 流程图生成（PRISMA 2020 / CONSORT 2025）<HelpButton helpKey="flowdiagram" /></h2>
       <p className="section-hint">
         填入各阶段数字，本地确定性绘制期刊级流程图（数字来自你的输入，不经 AI 编造），导出 PNG/SVG/PDF。
       </p>
@@ -284,7 +285,7 @@ export default function ChecklistModule() {
         </div>
       )}
 
-      <h2 className="section-title">🔢 统计一致性自查（statcheck）</h2>
+      <h2 className="section-title">🔢 统计一致性自查（statcheck）<HelpButton helpKey="statcheck" /></h2>
       <p className="section-hint">
         粘贴结果段/表格，自动抽取 t/F/χ²/r/z 统计量并<strong>本地重算 p 值</strong>，
         标出报告值与重算值是否一致（重算用 scipy，确定性、可复现）。

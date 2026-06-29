@@ -841,14 +841,16 @@ test("找选题: 必填项为空时按钮禁用", async ({ page }) => {
 
 test("实验规划: 样本量计算器", async ({ page }) => {
   await mockBase(page);
-  await page.route("**/api/sample-size", (r) =>
-    r.fulfill({ json: { ok: true, per_group: 64, total: 128, note: "两独立样本 t 检验，d=0.5" } }),
-  );
   await page.goto("/");
   await page.getByTestId("nav-plan").click();
-  await page.getByTestId("ss-calc").click(); // 展开
-  await page.getByTestId("ss-calc-btn").click();
-  await expect(page.getByTestId("ss-result")).toContainText("每组 64 例，总计 128 例");
+  // 新版样本量为客户端滑块实时计算(无后端调用, ss-calc 默认展开)。
+  await page.getByTestId("ss-scene").selectOption("ttest");
+  await page.getByTestId("ss-effect").fill("0.5");
+  await page.getByTestId("ss-alpha").fill("0.05");
+  await page.getByTestId("ss-power").fill("0.8");
+  const result = page.getByTestId("ss-result");
+  await expect(result).toContainText(/每组\s*\d+/); // 实时算出有限的每组 N
+  await expect(result).not.toContainText("每组 —");
 });
 
 test("实验规划: 返回计划文本", async ({ page }) => {

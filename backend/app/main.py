@@ -13,7 +13,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from fastapi import FastAPI, File, Form, UploadFile
+from fastapi import FastAPI, File, Form, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
@@ -26,6 +26,7 @@ from .prompts import build_messages
 from .imrad import assemble_imrad
 from .rebuttal import rebuttal
 from .research import deep_research_idea, idea_followup
+from .projects import router as projects_router
 
 # 说明: 依赖 pandas/scipy/matplotlib/citeproc/python-docx 等重库的模块
 # (dataanalysis / extract / citations / formatting) 改为"用到时才导入",
@@ -39,6 +40,8 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+app.include_router(projects_router)
 
 
 class RunRequest(BaseModel):
@@ -369,6 +372,420 @@ async def docx(req: DocxRequest) -> Response:
         content=data,
         media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
         headers={"Content-Disposition": "attachment; filename=manuscript.docx"},
+    )
+
+
+# =====================================================================
+# Wave 1-A 新增路由(独立功能, 全部支持 mock 模式)
+# =====================================================================
+
+# ----- 病例数据脱敏 -----
+
+@app.post("/api/deidentify/scan")
+async def deidentify_scan(file: UploadFile = File(...)) -> dict:
+    """扫描 csv/xlsx, 返回每列检测到的 PHI 类型与计数。"""
+    from .deidentify import scan
+
+    content = await _read_capped(file)
+    if content is None:
+        return {"ok": False, "error": "文件过大（超过 30MB），请上传更小的文件。"}
+    try:
+        report = scan(content, file.filename or "data.csv")
+        return {"ok": True, **report}
+    except Exception as e:  # noqa: BLE001
+        return {"ok": False, "error": f"扫描失败: {e}"}
+
+
+@app.post("/api/deidentify/apply")
+async def deidentify_apply(
+    file: UploadFile = File(...),
+    columns: str = Form("[]"),
+) -> dict:
+    """按 columns(JSON 数组字符串) 脱敏, 返回 base64 字节 + 映射表。"""
+    from base64 import b64encode
+
+    from .deidentify import apply as do_apply
+
+    content = await _read_capped(file)
+    if content is None:
+        return {"ok": False, "error": "文件过大（超过 30MB），请上传更小的文件。"}
+    try:
+        cols = json.loads(columns) if columns else []
+        if not isinstance(cols, list):
+            return {"ok": False, "error": "columns 必须是 JSON 数组。"}
+        out_bytes, mapping = do_apply(content, file.filename or "data.csv", cols)
+        return {
+            "ok": True,
+            "data_base64": b64encode(out_bytes).decode("ascii"),
+            "filename": file.filename or "deidentified.csv",
+            "mapping": mapping,
+        }
+    except Exception as e:  # noqa: BLE001
+        return {"ok": False, "error": f"脱敏失败: {e}"}
+
+
+# ----- 引用导入导出 -----
+
+@app.post("/api/refs/import")
+async def refs_import(
+    file: UploadFile = File(...),
+    format: str = Form("ris"),
+) -> dict:
+    """multipart 上传 .ris/.bib/.enw, 返回统一 Reference 列表。"""
+    from .refio import parse
+
+    content = await _read_capped(file)
+    if content is None:
+        return {"ok": False, "error": "文件过大（超过 30MB），请上传更小的文件。"}
+    try:
+        refs = parse(content, format)
+        return {"ok": True, "refs": refs}
+    except Exception as e:  # noqa: BLE001
+        return {"ok": False, "error": f"解析失败: {e}"}
+
+
+class RefsExportRequest(BaseModel):
+    refs: list[dict] = []
+    format: str = "ris"
+
+
+@app.post("/api/refs/export")
+async def refs_export(req: RefsExportRequest) -> Response:
+    """把 Reference 列表导出为 .ris/.bib/.enw 字节流(下载)。"""
+    from .refio import serialize
+
+    try:
+        data = serialize(req.refs, req.format)
+    except ValueError as e:
+        return Response(content=str(e).encode("utf-8"), status_code=400, media_type="text/plain")
+    ext = (req.format or "ris").lower()
+    return Response(
+        content=data,
+        media_type="application/octet-stream",
+        headers={"Content-Disposition": f"attachment; filename=references.{ext}"},
+    )
+
+
+# ----- 医学图表三件套 -----
+
+class ForestRequest(BaseModel):
+    studies: list[dict]
+    effect: str = "OR"
+    format: str = "png"  # 前端要哪种主图: png/svg/pdf(其余仍随响应附带)
+
+
+@app.post("/api/analyze/forest")
+async def analyze_forest(req: ForestRequest) -> dict:
+    """森林图(Meta 分析)。返回 image_base64 + summary。
+
+    mock 模式: 直接返回演示数据(不画真图, 返回固定 base64 占位空)。
+    """
+    if settings.mock:
+        return {
+            "ok": True,
+            "image_base64": "",
+            "format": req.format,
+            "summary": {"pooled": 0.65, "ci_low": 0.45, "ci_high": 0.93,
+                        "i2": 25.3, "q_pvalue": 0.21, "k": len(req.studies) or 3},
+            "mock": True,
+        }
+    from base64 import b64encode
+
+    from .analysis import forest_plot
+
+    try:
+        out = forest_plot(req.studies, effect=req.effect or "OR")
+        fmt = (req.format or "png").lower()
+        if fmt == "svg":
+            image_b64 = b64encode(out["svg"].encode("utf-8")).decode("ascii")
+        elif fmt == "pdf":
+            image_b64 = b64encode(out["pdf"]).decode("ascii")
+        else:
+            image_b64 = b64encode(out["png"]).decode("ascii")
+        return {
+            "ok": True,
+            "image_base64": image_b64,
+            "format": fmt,
+            "summary": out["summary"],
+        }
+    except Exception as e:  # noqa: BLE001
+        return {"ok": False, "error": f"森林图生成失败: {e}"}
+
+
+@app.post("/api/analyze/km")
+async def analyze_km(
+    file: UploadFile = File(...),
+    time_col: str = Form(...),
+    event_col: str = Form(...),
+    group_col: str = Form(""),
+    format: str = Form("png"),
+) -> dict:
+    """Kaplan-Meier 曲线。multipart 上传 csv/xlsx + 列名映射。"""
+    if settings.mock:
+        return {
+            "ok": True, "image_base64": "", "format": format, "mock": True,
+            "logrank_p": 0.034,
+            "groups": [
+                {"name": "A", "median_survival": 18.5, "n": 60},
+                {"name": "B", "median_survival": 24.3, "n": 60},
+            ],
+        }
+    from base64 import b64encode
+
+    from .analysis import km_curve
+
+    content = await _read_capped(file)
+    if content is None:
+        return {"ok": False, "error": "文件过大（超过 30MB），请上传更小的文件。"}
+    try:
+        gc = group_col.strip() or None
+        out = km_curve(content, file.filename or "data.csv", time_col, event_col, gc)
+        fmt = (format or "png").lower()
+        if fmt == "svg":
+            image_b64 = b64encode(out["svg"].encode("utf-8")).decode("ascii")
+        elif fmt == "pdf":
+            image_b64 = b64encode(out["pdf"]).decode("ascii")
+        else:
+            image_b64 = b64encode(out["png"]).decode("ascii")
+        return {
+            "ok": True,
+            "image_base64": image_b64,
+            "format": fmt,
+            "logrank_p": out["logrank_p"],
+            "groups": out["groups"],
+        }
+    except Exception as e:  # noqa: BLE001
+        return {"ok": False, "error": f"KM 曲线生成失败: {e}"}
+
+
+@app.post("/api/analyze/roc")
+async def analyze_roc(
+    file: UploadFile = File(...),
+    y_true_col: str = Form(...),
+    y_score_col: str = Form(...),
+    format: str = Form("png"),
+) -> dict:
+    """ROC 曲线 + AUC + bootstrap 95% CI + Youden 最优阈值。"""
+    if settings.mock:
+        return {
+            "ok": True, "image_base64": "", "format": format, "mock": True,
+            "auc": 0.84, "auc_ci": [0.78, 0.89], "threshold": 0.51,
+        }
+    from base64 import b64encode
+
+    from .analysis import roc_curve_plot
+
+    content = await _read_capped(file)
+    if content is None:
+        return {"ok": False, "error": "文件过大（超过 30MB），请上传更小的文件。"}
+    try:
+        out = roc_curve_plot(content, file.filename or "data.csv", y_true_col, y_score_col)
+        fmt = (format or "png").lower()
+        if fmt == "svg":
+            image_b64 = b64encode(out["svg"].encode("utf-8")).decode("ascii")
+        elif fmt == "pdf":
+            image_b64 = b64encode(out["pdf"]).decode("ascii")
+        else:
+            image_b64 = b64encode(out["png"]).decode("ascii")
+        return {
+            "ok": True,
+            "image_base64": image_b64,
+            "format": fmt,
+            "auc": out["auc"],
+            "auc_ci": out["auc_ci"],
+            "threshold": out["optimal_threshold"],
+        }
+    except Exception as e:  # noqa: BLE001
+        return {"ok": False, "error": f"ROC 曲线生成失败: {e}"}
+
+
+# ----- 样本量扫描 -----
+
+class SampleSizeSweepRequest(BaseModel):
+    scenario: str
+    fixed_params: dict = {}
+    vary: str
+    range_values: list[float] = []
+
+
+@app.post("/api/samplesize/sweep")
+async def samplesize_sweep(req: SampleSizeSweepRequest) -> dict:
+    """单参数 sweep, 返回 [{value, n}, ...]。"""
+    from .samplesize import sweep
+
+    try:
+        pts = sweep(req.scenario, req.fixed_params, req.vary, req.range_values)
+        return {"ok": True, "points": [{"value": v, "n": n} for v, n in pts]}
+    except Exception as e:  # noqa: BLE001
+        return {"ok": False, "error": f"sweep 失败: {e}"}
+
+
+# ----- 统计顾问(SSE 流式) -----
+
+class StatsAdviceRequest(BaseModel):
+    question: str
+    data_meta: dict | None = None
+
+
+_STATS_ADVICE_DEMO = {
+    "recommended": {
+        "test": "独立样本 t 检验",
+        "why": "两个独立组比较一个连续变量的均值, 样本足够时用 t 检验; 若不满足正态性可改用 Wilcoxon 秩和检验。",
+    },
+    "assumptions": [
+        "两组独立同分布",
+        "结局变量近似正态分布(可用 Shapiro-Wilk 检验)",
+        "两组方差齐性(可用 Levene 检验; 不齐时用 Welch's t)",
+    ],
+    "cautions": [
+        "样本量较小时优先报告效应量 Cohen's d 与 95% 置信区间, 不要只报 p 值",
+        "若进行多组多次比较, 务必做多重比较校正(Bonferroni/Holm/FDR)",
+        "观察性数据下不能直接得出因果结论",
+    ],
+    "alternatives": [
+        {"test": "Wilcoxon 秩和检验(Mann-Whitney U)", "when": "结局非正态或样本量较小(每组 < 30)"},
+        {"test": "Welch's t 检验", "when": "两组方差不齐"},
+        {"test": "线性回归(协方差分析 ANCOVA)", "when": "需要调整其他协变量(如年龄/性别)"},
+    ],
+}
+
+
+@app.post("/api/stats/advice")
+async def stats_advice(req: StatsAdviceRequest) -> StreamingResponse:
+    """SSE: 让 LLM 流式输出严格 JSON, 前端解析后渲染推荐卡片。
+
+    mock 模式: 把固定演示 JSON 分块吐出, 保留前端流式 UI 体验。
+    """
+    if settings.mock:
+        async def mock_gen():
+            text = json.dumps(_STATS_ADVICE_DEMO, ensure_ascii=False)
+            # 30 字符一片
+            for i in range(0, len(text), 30):
+                yield _sse("delta", {"text": text[i:i + 30]})
+            yield _sse("done", {})
+        return StreamingResponse(mock_gen(), media_type="text/event-stream",
+                                 headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
+    from .prompts import build_stats_advice
+    messages = build_stats_advice(req.question, req.data_meta)
+
+    async def gen():
+        try:
+            async for piece in stream_chat(messages):
+                yield _sse("delta", {"text": piece})
+        except LLMError as e:
+            yield _sse("error", {"message": str(e)})
+        except Exception as e:  # noqa: BLE001
+            yield _sse("error", {"message": f"内部错误: {e}"})
+        else:
+            yield _sse("done", {})
+
+    return StreamingResponse(
+        gen(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+# ----- 伦理材料模板 -----
+
+class EthicsRenderRequest(BaseModel):
+    template: str
+    fields: dict = {}
+
+
+# ----- 配置写入 / key 测试 (W2-1 首次配置向导) -----
+
+class TestKeyRequest(BaseModel):
+    provider: str
+    key: str
+    base_url: str | None = None
+    model: str | None = None
+
+
+class SaveConfigRequest(BaseModel):
+    provider: str
+    key: str
+    base_url: str | None = None
+    model: str | None = None
+    mock: bool = False  # 演示模式: 写 MOCK_LLM=1, 其它字段可空
+
+
+def _is_localhost(request: Request) -> bool:
+    """只允许 127.0.0.1 / ::1 调用敏感配置接口。"""
+    client = request.client
+    if client is None:
+        return False
+    host = (client.host or "").strip()
+    return host in {"127.0.0.1", "::1", "localhost"}
+
+
+@app.post("/api/config/test-key")
+async def config_test_key(req: TestKeyRequest) -> dict:
+    """测试一个 LLM key 是否可用; 返回 {ok, msg}。"""
+    from .config_io import test_provider_key
+
+    ok, msg = await test_provider_key(
+        req.provider or "",
+        req.key or "",
+        (req.base_url or ""),
+        (req.model or ""),
+    )
+    return {"ok": ok, "msg": msg}
+
+
+@app.post("/api/config/save")
+async def config_save(req: SaveConfigRequest, request: Request) -> dict:
+    """写入 backend/.env 并热重载配置。仅允许 127.0.0.1 调用。"""
+    from fastapi.responses import JSONResponse
+
+    if not _is_localhost(request):
+        # 用 JSONResponse 返回 403, 不让远端写入 .env
+        return JSONResponse(status_code=403, content={"ok": False, "error": "禁止: 仅允许本机访问该接口"})
+
+    from .config_io import PROVIDER_PRESETS, write_env_file
+
+    try:
+        updates: dict[str, str] = {}
+        if req.mock:
+            # 演示模式: 把 MOCK_LLM 打开, key/base_url/model 清空(尊重用户)
+            updates["MOCK_LLM"] = "1"
+            updates["LLM_API_KEY"] = ""
+            # provider / base_url / model 保持上次值
+        else:
+            preset_key = (req.provider or "").strip().lower()
+            preset = PROVIDER_PRESETS.get(preset_key, {})
+            updates["MOCK_LLM"] = "0"
+            updates["LLM_PROVIDER"] = (preset.get("provider") or "openai")
+            updates["LLM_API_KEY"] = (req.key or "").strip()
+            updates["LLM_BASE_URL"] = (req.base_url or preset.get("base_url", "")).strip()
+            updates["LLM_MODEL"] = (req.model or preset.get("model", "")).strip()
+
+        write_env_file(updates)
+        # 热重载, 让运行时立即拿到新值
+        settings.reload()
+        return {"ok": True}
+    except Exception as e:  # noqa: BLE001
+        return {"ok": False, "error": f"保存失败: {e}"}
+
+
+@app.post("/api/ethics/render")
+async def ethics_render(req: EthicsRenderRequest) -> Response:
+    """生成伦理材料 .docx 文件(下载)。template ∈ {informed_consent, protocol, crf, data_use_commitment}。"""
+    from .ethics import render as do_render
+
+    try:
+        data = do_render(req.template, req.fields or {})
+    except ValueError as e:
+        return Response(content=str(e).encode("utf-8"), status_code=400, media_type="text/plain")
+    except Exception as e:  # noqa: BLE001
+        return Response(content=f"生成失败: {e}".encode("utf-8"), status_code=500, media_type="text/plain")
+
+    safe = (req.template or "ethics").replace("/", "_")
+    return Response(
+        content=data,
+        media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        headers={"Content-Disposition": f"attachment; filename={safe}.docx"},
     )
 
 
