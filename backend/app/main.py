@@ -25,7 +25,7 @@ from .llm import LLMError, get_balance, get_session_usage, stream_chat
 from .prompts import build_messages
 from .imrad import assemble_imrad
 from .rebuttal import rebuttal
-from .research import clarify_topic, deep_research_idea, idea_followup
+from .research import clarify_topic, deep_research_idea, idea_followup, refine_topic
 from .projects import router as projects_router
 
 # 说明: 依赖 pandas/scipy/matplotlib/citeproc/python-docx 等重库的模块
@@ -200,6 +200,20 @@ async def idea_clarify(req: RunRequest) -> JSONResponse:
         return JSONResponse(await clarify_topic(req.inputs))
     except Exception:  # noqa: BLE001
         return JSONResponse({"ready": True, "questions": []})
+
+
+@app.post("/api/idea/refine")
+async def idea_refine(req: RunRequest) -> JSONResponse:
+    """澄清回答后, 给出 2-3 个优化的研究方向/关键词候选(非流式)。失败/mock 返回空 options 放行。"""
+    if settings.mock:
+        f = (req.inputs.get("field") or "").strip()
+        return JSONResponse({"options": [
+            {"field": f + "（更聚焦）", "keywords": "mock, biomarker", "reason": "[MOCK] 补了人群与结局，更可检索。"},
+        ]})
+    try:
+        return JSONResponse(await refine_topic(req.inputs))
+    except Exception:  # noqa: BLE001
+        return JSONResponse({"options": []})
 
 
 @app.post("/api/imrad")

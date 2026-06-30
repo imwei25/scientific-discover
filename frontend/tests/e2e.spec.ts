@@ -26,6 +26,8 @@ async function mockBase(page: Page) {
   await page.route("**/api/idea/clarify", (r) =>
     r.fulfill({ json: { ready: true, questions: [] } }),
   );
+  // 方向优化: 默认无建议(直接检索), 用例可单独覆盖以验证优化候选卡。
+  await page.route("**/api/idea/refine", (r) => r.fulfill({ json: { options: [] } }));
 }
 
 test("AI免责声明可显示并关闭", async ({ page }) => {
@@ -152,6 +154,45 @@ test("找选题: 检索前澄清问题卡, 带着回答检索", async ({ page })
   // 澄清回答已并入 background 传给后端
   expect(ideaBody).toContain("检索前澄清");
   expect(ideaBody).toContain("新辅助");
+});
+
+test("找选题: 澄清后 AI 给方向优化候选, 采纳后检索", async ({ page }) => {
+  await mockBase(page);
+  await page.route("**/api/idea/clarify", (r) =>
+    r.fulfill({ json: { ready: false, questions: [{ q: "人群?", options: ["新辅助"] }] } }),
+  );
+  await page.route("**/api/idea/refine", (r) =>
+    r.fulfill({
+      json: {
+        options: [
+          { field: "PD-1 抑制剂在 TNBC 新辅助治疗中的疗效", keywords: "neoadjuvant, pCR", reason: "补了人群与结局" },
+          { field: "PD-1 抑制剂在 TNBC 中的耐药机制", keywords: "resistance", reason: "换一个机制角度" },
+        ],
+      },
+    }),
+  );
+  let ideaBody = "";
+  await page.route("**/api/idea", async (r) => {
+    ideaBody = r.request().postData() ?? "";
+    await r.fulfill({
+      contentType: "text/event-stream",
+      body: sse({ event: "delta", data: { text: "## 一、研究现状\n略。" } }, { event: "done", data: {} }),
+    });
+  });
+  await page.goto("/");
+  await page.getByTestId("nav-idea").click();
+  await page.getByTestId("input-field").fill("PD-1 三阴性乳腺癌");
+  await page.getByTestId("run-btn").click();
+  // 答澄清 → 下一步 → 出现优化候选卡
+  await page.getByTestId("clarify-q-0").getByText("新辅助").click();
+  await page.getByTestId("clarify-go-btn").click();
+  await expect(page.getByTestId("refine-card")).toContainText("方向优化");
+  await expect(page.getByTestId("refine-opt-0")).toContainText("新辅助治疗中的疗效");
+  // 采纳第一个候选 → 方向被替换并检索
+  await page.getByTestId("refine-pick-0").click();
+  await expect(page.getByTestId("result-text")).toContainText("研究现状");
+  await expect(page.getByTestId("input-field")).toHaveValue("PD-1 抑制剂在 TNBC 新辅助治疗中的疗效");
+  expect(ideaBody).toContain("neoadjuvant");
 });
 
 test("找选题: 结构化选题卡 → 按候选选题做实验规划", async ({ page }) => {

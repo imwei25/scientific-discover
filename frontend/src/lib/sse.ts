@@ -276,6 +276,37 @@ export async function clarifyTopic(
   }
 }
 
+// 澄清回答后的「方向优化」候选: AI 改写的研究方向 + 关键词 + 理由。
+export interface RefineOption {
+  field: string;
+  keywords: string;
+  reason: string;
+}
+
+export interface RefineResult {
+  options: RefineOption[];
+}
+
+// 调非流式优化接口; 任何失败都返回空 options(放行直接检索)。
+export async function refineTopic(
+  inputs: Record<string, unknown>,
+  signal?: AbortSignal,
+): Promise<RefineResult> {
+  try {
+    const resp = await fetch(apiUrl("/api/idea/refine"), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ module: "idea", inputs }),
+      signal,
+    });
+    if (!resp.ok) return { options: [] };
+    const data = await resp.json();
+    return { options: Array.isArray(data.options) ? data.options : [] };
+  } catch {
+    return { options: [] };
+  }
+}
+
 export interface IdeaHandlers {
   onStatus?: (message: string) => void;
   onReferences?: (items: Reference[]) => void;

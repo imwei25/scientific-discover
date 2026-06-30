@@ -194,6 +194,46 @@ async def clarify_topic(inputs: dict) -> dict:
     return {"ready": bool(obj.get("ready")) or not qs, "questions": qs}
 
 
+async def refine_topic(inputs: dict) -> dict:
+    """澄清回答后, 基于『原方向+关键词+补充背景(含澄清回答)』给出 2-3 个优化候选。
+
+    返回 {"options": [{"field": ..., "keywords": ..., "reason": ...}]}。
+    供前端让用户在检索前选一个更聚焦的方向; 失败/无建议返回空 options(放行直检)。
+    """
+    field = (inputs.get("field") or "").strip()
+    keywords = (inputs.get("keywords") or "").strip()
+    background = (inputs.get("background") or "").strip()[:800]
+    if not field:
+        return {"options": []}
+    system = (
+        "你是医学/生物医学科研选题顾问。下面是用户的研究方向、关键词，以及补充背景(可能含其对澄清问题的回答)。"
+        "请据此给出 2-3 个【优化后的研究方向 + 英文关键词】候选，帮用户把方向收敛得更适合检索与立题：\n"
+        "- field：用简洁中文重述一个更聚焦的方向(可补上人群/分期/结局等限定)；\n"
+        "- keywords：2-5 个英文术语(逗号分隔, 优先 PubMed/MeSH 常用词)；\n"
+        "- reason：一句中文说明这样改的理由(更聚焦/更可检索/补了人群或结局等)。\n"
+        "至少保留一个与用户原意最贴近的稳妥候选。各候选要彼此有区分度，不要雷同。"
+        "只输出 JSON：{\"options\":[{\"field\":\"...\",\"keywords\":\"...\",\"reason\":\"...\"}]}，不要任何解释。"
+    )
+    user = f"研究方向：{field}\n关键词：{keywords or '（空）'}\n补充背景/澄清回答：{background or '（空）'}"
+    obj = _parse_json(
+        await _complete([{"role": "system", "content": system}, {"role": "user", "content": user}], max_tokens=600),
+        "{", "}",
+    )
+    opts: list[dict] = []
+    if isinstance(obj, dict):
+        for o in obj.get("options") or []:
+            if not isinstance(o, dict) or not str(o.get("field") or "").strip():
+                continue
+            opts.append({
+                "field": str(o["field"]).strip(),
+                "keywords": str(o.get("keywords") or "").strip(),
+                "reason": str(o.get("reason") or "").strip(),
+            })
+            if len(opts) >= 3:
+                break
+    return {"options": opts}
+
+
 async def _gap_queries(field: str, papers: list[dict]) -> list[str]:
     """基于首轮文献标题, 找出值得补充检索的 2-3 个角度。"""
     titles = "\n".join(f"- {p['title']}" for p in papers[:20])

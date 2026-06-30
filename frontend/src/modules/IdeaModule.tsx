@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { streamIdea, streamIdeaFollowup, runModule, clarifyTopic, Reference, Trial, EvidenceItem, Verification, RewritePayload, TopicCard, ClarifyQuestion } from "../lib/sse";
+import { streamIdea, streamIdeaFollowup, runModule, clarifyTopic, refineTopic, Reference, Trial, EvidenceItem, Verification, RewritePayload, TopicCard, ClarifyQuestion, RefineOption } from "../lib/sse";
 import { reportLLMError } from "../lib/errorToast";
 import { addHistory } from "../lib/history";
 import Markdown from "../components/Markdown";
@@ -94,6 +94,11 @@ export default function IdeaModule({ goto }: { goto: Goto }) {
   const [clarifyAns, setClarifyAns] = useState<Record<number, string>>({});
   const [clarifying, setClarifying] = useState(false);
 
+  // 澄清回答后的「方向优化」: AI 给几个研究方向/关键词候选, 用户选一个再检索
+  const [refineOpts, setRefineOpts] = useState<RefineOption[] | null>(null);
+  const [refining, setRefining] = useState(false);
+  const [pendingBg, setPendingBg] = useState("");
+
   // 追问 / 修改报告
   const [followups, setFollowups] = usePersistentState<{ q: string; a: string }[]>("idea:qa", []);
   const [followupInput, setFollowupInput] = useState("");
@@ -137,6 +142,7 @@ export default function IdeaModule({ goto }: { goto: Goto }) {
     setFRunning(false);
     setPicoRunning(false);
     setClarifyQs(null);
+    setRefineOpts(null);
     setStatus("");
     setRefs([]);
     setTrials([]);
@@ -203,8 +209,8 @@ export default function IdeaModule({ goto }: { goto: Goto }) {
     }
   };
 
-  // 把澄清回答拼进背景后检索(用 override 传入, 规避 setState 异步)。
-  const submitWithClarify = () => {
+  // 把澄清回答拼进背景, 再让 AI 给方向优化候选(选一个再检索)。
+  const goRefine = async () => {
     if (!clarifyQs) return;
     const lines = clarifyQs
       .map((q, i) => {
@@ -216,8 +222,30 @@ export default function IdeaModule({ goto }: { goto: Goto }) {
       ? (background ? background + "\n\n" : "") + "[检索前澄清]\n" + lines.join("\n")
       : background;
     setBackground(composed);
+    setPendingBg(composed);
     setClarifyQs(null);
-    submit({ background: composed });
+    setRefining(true);
+    const res = await refineTopic({ field, keywords, background: composed });
+    setRefining(false);
+    if (res.options.length === 0) {
+      submit({ background: composed }); // 没有优化建议 → 直接检索
+    } else {
+      setRefineOpts(res.options);
+    }
+  };
+
+  // 采纳某个优化候选: 替换方向/关键词后检索。
+  const acceptRefine = (o: RefineOption) => {
+    setField(o.field);
+    setKeywords(o.keywords);
+    setRefineOpts(null);
+    submit({ field: o.field, keywords: o.keywords, background: pendingBg });
+  };
+
+  // 保持原方向(带上澄清回答)直接检索。
+  const keepOriginal = () => {
+    setRefineOpts(null);
+    submit({ background: pendingBg });
   };
 
   const skipClarify = () => {
@@ -348,6 +376,7 @@ export default function IdeaModule({ goto }: { goto: Goto }) {
     setCard(null);
     setPickIdx(0);
     setClarifyQs(null);
+    setRefineOpts(null);
     setStatus("");
     setError(null);
     setRewrite(null);
@@ -481,8 +510,8 @@ export default function IdeaModule({ goto }: { goto: Goto }) {
           }
         />
         <div className="form-actions">
-          <button className="btn-primary" onClick={onStart} disabled={!field.trim() || running || noPaperSource || clarifying} data-testid="run-btn">
-            {clarifying ? "聚焦方向中…" : running ? "调研中…" : "开始文献调研"}
+          <button className="btn-primary" onClick={onStart} disabled={!field.trim() || running || noPaperSource || clarifying || refining} data-testid="run-btn">
+            {clarifying ? "聚焦方向中…" : refining ? "优化方向中…" : running ? "调研中…" : "开始文献调研"}
           </button>
           <button className="btn-secondary" onClick={genPico} disabled={!field.trim() || picoRunning} data-testid="pico-btn">
             {picoRunning ? "提取中…" : "提取 PICO / 纳排标准"}
@@ -541,11 +570,35 @@ export default function IdeaModule({ goto }: { goto: Goto }) {
             </div>
           ))}
           <div className="form-actions">
-            <button className="btn-primary" data-testid="clarify-go-btn" onClick={submitWithClarify}>
-              带着回答检索
+            <button className="btn-primary" data-testid="clarify-go-btn" onClick={goRefine} disabled={refining}>
+              {refining ? "优化方向中…" : "下一步：AI 优化方向"}
             </button>
-            <button className="btn-ghost" data-testid="clarify-skip-btn" onClick={skipClarify}>
+            <button className="btn-ghost" data-testid="clarify-skip-btn" onClick={skipClarify} disabled={refining}>
               直接检索
+            </button>
+          </div>
+        </div>
+      )}
+
+      {refineOpts && !running && (
+        <div className="refine-card" data-testid="refine-card">
+          <div className="refine-title">AI 建议的方向优化（选一个采纳，或保持原方向）</div>
+          <p className="refine-tip">基于你的方向与澄清回答，AI 给出更聚焦、更易检索的候选。引用与检索仍以真实文献为准。</p>
+          <div className="refine-opts">
+            {refineOpts.map((o, i) => (
+              <div key={i} className="refine-opt" data-testid={`refine-opt-${i}`}>
+                <div className="refine-opt-field">{o.field}</div>
+                {o.keywords && <div className="refine-opt-kw">关键词：{o.keywords}</div>}
+                {o.reason && <div className="refine-opt-reason">{o.reason}</div>}
+                <button className="btn-primary" data-testid={`refine-pick-${i}`} onClick={() => acceptRefine(o)}>
+                  采纳并检索
+                </button>
+              </div>
+            ))}
+          </div>
+          <div className="form-actions">
+            <button className="btn-ghost" data-testid="refine-keep-btn" onClick={keepOriginal}>
+              保持我的原方向检索
             </button>
           </div>
         </div>

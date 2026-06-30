@@ -959,6 +959,52 @@ select {
   box-sizing: border-box;
 }
 
+/* 方向优化候选卡 */
+.refine-card {
+  margin-top: var(--sp-4);
+  padding: 14px 18px;
+  background: var(--teal-soft);
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--teal);
+  border-radius: var(--radius-sm);
+}
+.refine-card .refine-title {
+  font-weight: 600;
+  margin-bottom: 4px;
+}
+.refine-card .refine-tip {
+  margin: 0 0 10px;
+  font-size: 13px;
+  opacity: 0.75;
+}
+.refine-opts {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.refine-opt {
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--card);
+}
+.refine-opt-field {
+  font-size: 14px;
+  font-weight: 600;
+  margin-bottom: 4px;
+}
+.refine-opt-kw {
+  font-size: 13px;
+  color: var(--teal);
+  margin-bottom: 4px;
+  word-break: break-word;
+}
+.refine-opt-reason {
+  font-size: 13px;
+  opacity: 0.8;
+  margin-bottom: 8px;
+}
+
 /* 结构化选题卡 */
 .topic-card {
   margin-top: var(--sp-4);
