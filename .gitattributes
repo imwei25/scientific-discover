@@ -1,0 +1,5 @@
+# Windows 批处理/脚本必须用 CRLF 换行, 否则 cmd.exe 遇到 label/goto 会秒退关窗。
+# 仓库内统一规范化为 LF 存储, 检出到工作区时强制转 CRLF。
+*.bat text eol=crlf
+*.cmd text eol=crlf
+*.ps1 text eol=crlf
