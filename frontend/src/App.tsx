@@ -197,7 +197,7 @@ export default function App() {
         <div className="brand-row">
           <div className="brand" onClick={() => setActive("home")} data-testid="brand">
             <span className="brand-logo">🔬</span>
-            <span className="brand-name">科研助手</span>
+            <span className="brand-name brand-name-niuma">niuma-research</span>
           </div>
           <button
             className="sidebar-toggle"
@@ -298,6 +298,7 @@ export default function App() {
       <main className="content">
         {/* 右上角工具栏: 项目选择器 + 字号 + 设置 并排 */}
         <div className="content-topbar">
+          <NiumaMark onClick={() => setActive("home")} />
           <ProjectPicker />
           <FontSizeSwitcher />
           <button
@@ -443,5 +444,50 @@ function NiumaArt() {
       <NiumaCube cls="ox" emoji="🐂" label="牛" />
       <NiumaCube cls="horse" emoji="🐎" label="马" />
     </div>
+  );
+}
+
+// 顶栏「牛马」手绘 mark：窄长横幅, 一匹马 + 一头牛的侧影剪影, 点击回首页。
+function NiumaMark({ onClick }: { onClick?: () => void }) {
+  return (
+    <button
+      type="button"
+      className="niuma-mark"
+      onClick={onClick}
+      data-testid="niuma-mark"
+      aria-label="niuma-research · 返回首页"
+      title="niuma-research"
+    >
+      <svg viewBox="0 0 150 40" className="niuma-mark-svg" role="img" aria-hidden="true">
+        {/* 地面虚线 */}
+        <line className="nm-ground" x1="6" y1="34.5" x2="144" y2="34.5" />
+        {/* 马（左, 朝右）：圆身 + 四腿 + 上扬颈头 + 飘尾 */}
+        <g className="nm-fig">
+          <rect x="16" y="18" width="4" height="16" rx="1.6" />
+          <rect x="22" y="19" width="3.6" height="15" rx="1.6" />
+          <rect x="36" y="19" width="3.6" height="15" rx="1.6" />
+          <rect x="41" y="18" width="4" height="16" rx="1.6" />
+          <ellipse cx="30" cy="17" rx="15" ry="7.5" />
+          <path d="M16 12 C9 14 7 22 9 31 C12 23 13 19 19 16 Z" />
+          <polygon points="40,15 49,3 55,5 46,17" />
+          <polygon points="51,2 64,2 67,7 63,12 55,13 49,11" />
+          <polygon points="54,3 56,0 59,4.5" />
+        </g>
+        {/* 牛（右, 朝右）：圆身 + 四腿 + 低头 + 双角 + 尾穗 */}
+        <g className="nm-fig" transform="translate(80,0)">
+          <rect x="10" y="19" width="4" height="15" rx="1.6" />
+          <rect x="16" y="20" width="3.6" height="14" rx="1.6" />
+          <rect x="32" y="20" width="3.6" height="14" rx="1.6" />
+          <rect x="38" y="19" width="4" height="15" rx="1.6" />
+          <ellipse cx="24" cy="18" rx="16" ry="8" />
+          <polygon points="40,16 46,16 47,10 53,10 54,16 61,17 63,22 57,27 44,26 40,21" />
+          <polygon points="46,12 43,4 44.8,4 48,12" />
+          <polygon points="54,12 57,4 58.8,4 56,12" />
+          <polygon points="41,16 37,12.5 42,12.5" />
+          <path d="M9 13 C6 19 8 27 7 33 L9.5 33 C10.5 27 9.5 20 12 15 Z" />
+          <circle cx="8" cy="33" r="2" />
+        </g>
+      </svg>
+    </button>
   );
 }

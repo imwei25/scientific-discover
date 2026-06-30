@@ -555,6 +555,39 @@ body {
   color: transparent;
 }
 
+/* ── niuma-research · 侧栏品牌字样 ─────────────────────────────── */
+.brand-name-niuma {
+  font-family: var(--mono);
+  font-size: 16px;
+  letter-spacing: -0.4px;
+  text-transform: lowercase;
+}
+
+/* ── niuma-research · 顶栏「牛马」手绘 mark（窄长, 与字号同排）──────── */
+.niuma-mark {
+  margin-right: auto;       /* 推到最左, 右侧控件保持右对齐 */
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 6px;
+  background: none;
+  border: none;
+  cursor: pointer;
+  color: var(--petrol);
+  border-radius: 8px;
+  transition: transform var(--dur-base) var(--spring), color var(--dur-fast);
+}
+.niuma-mark:hover { transform: translateY(-1px); color: var(--teal); }
+.niuma-mark:active { transform: translateY(0) scale(0.97); }
+.niuma-mark-svg { height: 30px; width: auto; display: block; }
+.niuma-mark-svg .nm-fig { fill: currentColor; }
+.niuma-mark-svg .nm-ground {
+  stroke: var(--line);
+  stroke-width: 1.2;
+  stroke-linecap: round;
+  stroke-dasharray: 2 4.5;
+}
+[data-theme="midnight"] .niuma-mark { color: var(--teal); }
+
 /* ── niuma-research · 牛 + 马 3D 立方体装饰（纯 CSS）──────────────── */
 .niuma-art {
   --cube: clamp(96px, 12vw, 148px);
