@@ -411,16 +411,36 @@ export default function IdeaModule({ goto }: { goto: Goto }) {
             placeholder="逗号分隔，例如：immunotherapy, biomarker, resistance"
           />
         </label>
-        <label className="field">
-          <span className="field-label">已有基础 / 限制条件（可选）</span>
+        <div className="field" data-testid="background-field">
+          <span className="field-label">已有研究 / 相关资料（可选）</span>
+          <p className="field-hint">
+            可在此直接粘贴你<strong>之前的研究、综述、标书或草案</strong>，或把 Word / PDF / txt 文件拖到下方——
+            都会作为背景，让 AI 更懂你的工作基础与限制条件。
+          </p>
           <textarea
             data-testid="input-background"
             value={background}
             onChange={(e) => setBackground(e.target.value)}
-            placeholder="例如：偏临床回顾性研究，可获取本院病理样本；不做动物实验"
-            rows={3}
+            placeholder="例如：我们前期已发现 XX 与 YY 相关（把你之前的研究粘贴进来）；偏临床回顾性研究，可获取本院病理样本；不做动物实验"
+            rows={4}
           />
-        </label>
+          <Dropzone
+            testId="upload-doc"
+            accept=".docx,.pdf,.txt,.md"
+            label="或拖入文件一起作为背景"
+            hint="支持 Word / PDF / txt；解析后的文本会追加到上方输入框"
+            mode="text"
+            onText={(t, name) =>
+              setBackground((prev) => (prev ? prev + "\n\n" : "") + `[附加文档：${name}]\n` + t)
+            }
+          />
+        </div>
+        <details className="adv-settings" data-testid="adv-settings">
+          <summary className="adv-summary" data-testid="adv-settings-summary">
+            <span className="adv-summary-main">⚙ 高级检索设置</span>
+            <span className="adv-summary-sub">来源 · 深度 · 过滤 —— 默认已为你优选（深入 + 全部来源），一般无需改动</span>
+          </summary>
+          <div className="adv-body">
         <label className="field">
           <span className="field-label">调研深度</span>
           <select data-testid="input-depth" value={depth} onChange={(e) => setDepth(e.target.value)}>
@@ -499,16 +519,8 @@ export default function IdeaModule({ goto }: { goto: Goto }) {
           </div>
           <span className="filter-hint">证据等级过滤主要作用于 PubMed / Europe PMC（OpenAlex 仅能近似匹配综述）。</span>
         </div>
-        <Dropzone
-          testId="upload-doc"
-          accept=".docx,.pdf,.txt,.md"
-          label="附加文档（可选：已有综述/标书/草案）"
-          hint="支持 Word/PDF/txt；内容会作为背景补充"
-          mode="text"
-          onText={(t, name) =>
-            setBackground((prev) => (prev ? prev + "\n\n" : "") + `[附加文档：${name}]\n` + t)
-          }
-        />
+          </div>
+        </details>
         <div className="form-actions">
           <button className="btn-primary" onClick={onStart} disabled={!field.trim() || running || noPaperSource || clarifying || refining} data-testid="run-btn">
             {clarifying ? "聚焦方向中…" : refining ? "优化方向中…" : running ? "调研中…" : "开始文献调研"}

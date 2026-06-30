@@ -830,6 +830,8 @@ test("找选题: 取消所有论文源时禁用调研并提示", async ({ page }
   await page.getByTestId("input-field").fill("某方向");
   // 默认全开, 按钮可用
   await expect(page.getByTestId("run-btn")).toBeEnabled();
+  // 来源/深度已折叠进高级设置, 先展开
+  await page.getByTestId("adv-settings-summary").click();
   // 取消全部论文源(PubMed/Europe PMC/OpenAlex/Crossref)
   await page.getByTestId("source-pubmed").uncheck();
   await page.getByTestId("source-europepmc").uncheck();
