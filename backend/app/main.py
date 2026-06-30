@@ -60,6 +60,17 @@ class RefsRequest(BaseModel):
     journal_id: str = ""
 
 
+class LatexRequest(BaseModel):
+    text: str
+    journal_id: str = ""
+    references: str = ""
+
+
+class ReadinessRequest(BaseModel):
+    manuscript: str
+    journal_id: str = ""
+
+
 class SampleSizeRequest(BaseModel):
     design: str
     params: dict
@@ -344,6 +355,22 @@ async def format_refs(req: RefsRequest) -> dict:
     from .citations import format_references
 
     return await format_references(req.references, req.journal_id)
+
+
+@app.post("/api/latex")
+async def latex(req: LatexRequest) -> dict:
+    """导出 LaTeX 工程(.tex+.bib)为 base64 zip; 前端用于下载或在 Overleaf 打开。"""
+    from .latexexport import export_latex
+
+    return await export_latex(req.text, req.journal_id, req.references)
+
+
+@app.post("/api/readiness")
+async def readiness(req: ReadinessRequest) -> dict:
+    """投稿就绪检查(确定性, 不调 LLM): 必需章节/字数/参考文献/声明/图表。"""
+    from .readiness import check_readiness
+
+    return check_readiness(req.manuscript, req.journal_id)
 
 
 @app.post("/api/sample-size")

@@ -418,13 +418,28 @@ test("参考文献核验: 标出真实/杜撰/撤稿/重复", async ({ page }) =
   await expect(page.getByTestId("refcheck-list")).toContainText("与第1条重复");
 });
 
-test("投稿包: 预提交体检 + 生成投稿信", async ({ page }) => {
+test("投稿包: 投稿就绪检查 + 生成投稿信", async ({ page }) => {
   await mockBase(page);
+  // 投稿就绪检查走确定性后端 /api/readiness(不调 LLM)
+  await page.route("**/api/readiness", (r) =>
+    r.fulfill({
+      json: {
+        ok: true,
+        journal: "通用学术论文（英文 IMRaD）",
+        summary: { pass: 1, warn: 1, fail: 1 },
+        items: [
+          { key: "section_discussion", label: "必需章节 · 讨论", status: "fail", detail: "未检测到该章节", suggestion: "补充《讨论》章节" },
+          { key: "decl_coi", label: "声明 · 利益冲突声明", status: "warn", detail: "未检测到", suggestion: "如适用，请补充利益冲突声明" },
+        ],
+      },
+    }),
+  );
+  // 投稿信走 LLM 流式 /api/run
   await page.route("**/api/run", (r) =>
     r.fulfill({
       contentType: "text/event-stream",
       body: sse(
-        { event: "delta", data: { text: "投稿包草稿：缺少利益冲突声明，请补充。" } },
+        { event: "delta", data: { text: "投稿信草稿：尊敬的编辑……" } },
         { event: "done", data: {} },
       ),
     }),
@@ -432,12 +447,13 @@ test("投稿包: 预提交体检 + 生成投稿信", async ({ page }) => {
   await page.goto("/");
   await page.getByTestId("nav-format").click();
   await page.getByTestId("input-manuscript").fill("我的论文稿件正文……");
-  // 预提交体检
+  // 投稿就绪检查(确定性结构化结果)
   await page.getByTestId("precheck-btn").click();
-  await expect(page.getByTestId("precheck-panel")).toContainText("缺少利益冲突声明");
+  await expect(page.getByTestId("readiness")).toContainText("利益冲突");
+  await expect(page.getByTestId("readiness-list")).toContainText("补充《讨论》章节");
   // 投稿信 + Word 导出按钮
   await page.getByTestId("cover-btn").click();
-  await expect(page.getByTestId("cover-panel")).toContainText("投稿包草稿");
+  await expect(page.getByTestId("cover-panel")).toContainText("投稿信草稿");
   await expect(page.getByTestId("cover-panel").getByTestId("export-docx-btn")).toBeVisible();
 });
 
@@ -1166,6 +1182,32 @@ test("期刊排版: 重排并出现下载按钮", async ({ page }) => {
   await page.getByTestId("run-btn").click();
   await expect(page.getByTestId("result-text")).toContainText("重排后的稿件正文");
   await expect(page.getByTestId("download-btn")).toBeVisible();
+});
+
+test("期刊排版: 生成 LaTeX 工程并出现 Overleaf 按钮", async ({ page }) => {
+  await mockBase(page);
+  await page.route("**/api/run", (r) =>
+    r.fulfill({
+      contentType: "text/event-stream",
+      body: sse(
+        { event: "delta", data: { text: "# Introduction\n重排后的稿件正文。" } },
+        { event: "done", data: {} },
+      ),
+    }),
+  );
+  await page.route("**/api/latex", (r) =>
+    r.fulfill({ json: { ok: true, b64zip: "UEsDBAo=", files: ["main.tex"], note: "测试" } }),
+  );
+  await page.goto("/");
+  await page.getByTestId("nav-format").click();
+  await page.getByTestId("input-manuscript").fill("这是我的论文草稿。");
+  await page.getByTestId("run-btn").click();
+  await expect(page.getByTestId("result-text")).toContainText("重排后的稿件正文");
+  // 重排完成会弹 DiffView 遮罩，先接受以关闭遮罩
+  await page.getByTestId("diff-accept").click();
+  await page.getByTestId("latex-btn").click();
+  await expect(page.getByTestId("latex-download-btn")).toBeVisible();
+  await expect(page.getByTestId("overleaf-btn")).toBeVisible();
 });
 
 test("期刊排版: 参考文献按CSL格式化", async ({ page }) => {

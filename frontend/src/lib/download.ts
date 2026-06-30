@@ -35,6 +35,34 @@ export function downloadText(filename: string, text: string, mime = "text/markdo
   downloadBlob(filename, new Blob([text], { type: `${mime};charset=utf-8` }));
 }
 
+// 用 base64 zip 在 Overleaf 打开 LaTeX 工程: 向 overleaf.com/docs POST 一个
+// data:application/zip 的 snip_uri, 工程随表单走、无需任何服务器托管(官方机制)。
+// target=_blank 在浏览器/常规 webview 中新开标签。
+export function openInOverleaf(
+  b64zip: string,
+  opts: { engine?: string; mainDocument?: string } = {},
+): void {
+  const form = document.createElement("form");
+  form.method = "POST";
+  form.action = "https://www.overleaf.com/docs";
+  form.target = "_blank";
+  form.style.display = "none";
+  const add = (name: string, value: string) => {
+    const i = document.createElement("input");
+    i.type = "hidden";
+    i.name = name;
+    i.value = value;
+    form.appendChild(i);
+  };
+  add("snip_uri", "data:application/zip;base64," + b64zip);
+  add("snip_name", "manuscript");
+  add("engine", opts.engine || "pdflatex");
+  add("main_document", opts.mainDocument || "main.tex");
+  document.body.appendChild(form);
+  form.submit();
+  setTimeout(() => form.remove(), 1000);
+}
+
 // 下载 base64 编码的二进制(图表 png/svg/pdf 等)。
 export function downloadBase64(filename: string, b64: string, mime: string): void {
   const bin = atob(b64);

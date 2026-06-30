@@ -7,7 +7,9 @@
 """
 from __future__ import annotations
 
+import copy
 import json
+import re
 
 from citeproc import (
     Citation,
@@ -38,7 +40,8 @@ def _extract_messages(refs_text: str) -> list[dict]:
         "你是参考文献解析器。把用户提供的参考文献文本解析为 CSL-JSON 数组，"
         "每条包含可识别到的字段：type（如 article-journal）、title、"
         "author（[{\"family\":\"姓\",\"given\":\"名缩写\"}]）、issued（{\"date-parts\":[[年]]}）、"
-        "container-title（期刊名）、volume、issue、page、DOI。"
+        "container-title（期刊名）、volume、issue、page、DOI、"
+        "language（中文文献填 \"zh-CN\"，英文/西文文献填 \"en-US\"）。"
         "无法识别的字段就省略。只输出一个 JSON 数组，不要任何解释或代码块标记。"
     )
     return [{"role": "system", "content": system}, {"role": "user", "content": refs_text}]
@@ -131,15 +134,70 @@ def _resolve_style(style_name: str) -> CitationStylesStyle:
     return style
 
 
+# ---- 中英混排修正（方案 C：纯 Python 后处理，0 新依赖） ---------------------
+# citeproc-py 只支持标准 CSL 1.0.2，而 GB/T 7714 等样式的"按条目语言切换术语/
+# 姓名格式"依赖 citeproc-js 的 CSL-M 扩展。结果两个确定缺陷：
+#   1) 中英混排时英文条目也错用 et-al 词「等」(locale 锁中文)；
+#   2) 中文人名被插入西式空格（如「张 伟」）。
+# 修法：① 人名在 CSL-JSON 输入层把 CJK 的 family+given 合并 → 渲染即无空格，
+#        且不触碰标题/刊名，绝对安全；② et-al「等」→「et al」在输出层做，但
+#        严格按条目语言门控，只改英文条目（其标题里出现的「等」不可能是中文词）。
+_CJK = "一-鿿㐀-䶿豈-﫿"
+_CJK_RE = re.compile(f"[{_CJK}]")
+
+
+def _is_cjk_text(s: str) -> bool:
+    return bool(_CJK_RE.search(s or ""))
+
+
+def _entry_is_chinese(item: dict) -> bool:
+    lang = (item.get("language") or "").lower()
+    if lang:
+        return lang.startswith("zh") or lang.startswith("cn")
+    if _is_cjk_text(item.get("title", "")):
+        return True
+    for a in item.get("author") or []:
+        if isinstance(a, dict) and (_is_cjk_text(a.get("family", "")) or _is_cjk_text(a.get("given", ""))):
+            return True
+    return False
+
+
+def _preprocess_cjk_names(csl_json: list[dict]) -> list[dict]:
+    """把 CJK 作者的 family+given 合并进 family，去掉 given，避免渲染出空格。"""
+    out = []
+    for it in csl_json:
+        it = copy.deepcopy(it)
+        for a in it.get("author") or []:
+            if not isinstance(a, dict):
+                continue
+            fam, giv = a.get("family", ""), a.get("given", "")
+            if _is_cjk_text(fam) or _is_cjk_text(giv):
+                a["family"] = f"{fam}{giv}".strip()
+                a.pop("given", None)
+        out.append(it)
+    return out
+
+
+def _postprocess_line(line: str, item: dict) -> str:
+    """英文条目把中文 et-al 词「等」修正为「et al」。中文条目保持不动。"""
+    if not _entry_is_chinese(item):
+        return line.replace("等", "et al")
+    return line
+
+
 def render_bibliography(csl_json: list[dict], style_name: str) -> list[str]:
     if not csl_json:
         return []
-    source = CiteProcJSON(csl_json)
+    prepped = _preprocess_cjk_names(csl_json)
+    source = CiteProcJSON(prepped)
     style = _resolve_style(style_name)
     bib = CitationStylesBibliography(style, source, formatter.plain)
-    for item_id in source:
+    keys = list(source)  # CiteProcJSON 保序，键即各条目 id
+    for item_id in keys:
         bib.register(Citation([CitationItem(item_id)]))
-    return [str(entry).strip() for entry in bib.bibliography()]
+    rendered = [str(entry).strip() for entry in bib.bibliography()]
+    by_id = {it.get("id"): it for it in prepped}
+    return [_postprocess_line(line, by_id.get(k, {})) for k, line in zip(keys, rendered)]
 
 
 async def format_references(refs_text: str, journal_id: str) -> dict:

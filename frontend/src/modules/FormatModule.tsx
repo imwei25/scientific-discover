@@ -7,7 +7,7 @@ import ResultPanel from "../components/ResultPanel";
 import Dropzone from "../components/Dropzone";
 import RefIO from "../components/RefIO";
 import type { Reference } from "../lib/sse";
-import { downloadDocxFromText } from "../lib/download";
+import { downloadDocxFromText, downloadBase64, openInOverleaf } from "../lib/download";
 import { copyToClipboard } from "../lib/clipboard";
 import DiffView from "../components/DiffView";
 
@@ -70,14 +70,42 @@ const REFCHECK_BADGE: Record<string, { label: string; cls: string }> = {
   unverifiable: { label: "? 无法核验", cls: "rc-gray" },
 };
 
+interface ReadinessItem {
+  key: string;
+  label: string;
+  status: string; // pass | warn | fail | info
+  detail: string;
+  suggestion: string;
+}
+interface ReadinessResult {
+  ok: boolean;
+  journal?: string;
+  summary?: { pass: number; warn: number; fail: number };
+  items?: ReadinessItem[];
+  error?: string;
+}
+const READINESS_BADGE: Record<string, { label: string; cls: string }> = {
+  pass: { label: "✅ 通过", cls: "rc-real" },
+  warn: { label: "⚠️ 注意", cls: "rc-warn" },
+  fail: { label: "❌ 缺失", cls: "rc-bad" },
+  info: { label: "ℹ️ 提示", cls: "rc-gray" },
+};
+
 export default function FormatModule() {
   const [journals, setJournals] = useState<Journal[]>([]);
   const [journalId, setJournalId] = usePersistentState("format:journal", "");
   const [manuscript, setManuscript] = usePersistentState("format:manuscript", "");
   const [downloading, setDownloading] = useState(false);
+  // LaTeX / Overleaf 出口
+  const [latexBusy, setLatexBusy] = useState(false);
+  const [latexErr, setLatexErr] = useState<string | null>(null);
+  const [latexZip, setLatexZip] = useState("");
+  const [latexNote, setLatexNote] = useState("");
   const { text, running, error, start, stop, setText } = useStream("format:result");
-  // 投稿包: 预提交体检 + 投稿信(各自独立流)
-  const precheck = useStream("format:precheck");
+  // 投稿包: 投稿就绪检查(确定性) + 投稿信(LLM 流)
+  const [readiness, setReadiness] = usePersistentState<ReadinessResult | null>("format:readiness", null);
+  const [readinessBusy, setReadinessBusy] = useState(false);
+  const [readinessErr, setReadinessErr] = useState<string | null>(null);
   const cover = useStream("format:cover");
   const [coverDocxBusy, setCoverDocxBusy] = useState(false);
 
@@ -197,9 +225,26 @@ export default function FormatModule() {
     start("format", { manuscript, journal_id: journalId });
   };
 
-  const runPrecheck = () => {
-    if (!manuscript.trim() || !journalId || precheck.running) return;
-    precheck.start("precheck", { manuscript, journal_id: journalId });
+  // 投稿就绪检查: 确定性(后端纯规则), 即时、零额度、不调 LLM。
+  const runReadiness = async () => {
+    if (!manuscript.trim() || !journalId || readinessBusy) return;
+    setReadinessBusy(true);
+    setReadinessErr(null);
+    setReadiness(null);
+    try {
+      const resp = await fetch(apiUrl("/api/readiness"), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ manuscript, journal_id: journalId }),
+      });
+      const d: ReadinessResult = await resp.json();
+      if (d.ok) setReadiness(d);
+      else setReadinessErr(d.error || "检查失败");
+    } catch (e) {
+      setReadinessErr(`检查失败：${(e as Error).message}`);
+    } finally {
+      setReadinessBusy(false);
+    }
   };
   const runCover = () => {
     if (!manuscript.trim() || !journalId || cover.running) return;
@@ -220,11 +265,11 @@ export default function FormatModule() {
 
   const reset = () => {
     if (running) stop();
-    if (precheck.running) precheck.stop();
     if (cover.running) cover.stop();
     setManuscript("");
     setText("");
-    precheck.setText("");
+    setReadiness(null);
+    setReadinessErr(null);
     cover.setText("");
     setRefsInput("");
     setFmtRefs([]);
@@ -233,6 +278,9 @@ export default function FormatModule() {
     setCheckErr(null);
     setImportedRefs([]);
     setImportNote("");
+    setLatexZip("");
+    setLatexErr(null);
+    setLatexNote("");
   };
 
   const [dlErr, setDlErr] = useState<string | null>(null);
@@ -246,6 +294,34 @@ export default function FormatModule() {
       setDlErr(`导出 Word 失败：${(e as Error).message}`);
     } finally {
       setDownloading(false);
+    }
+  };
+
+  // 生成 LaTeX 工程(.tex+.bib),拿到 base64 zip 供下载 / 在 Overleaf 打开。
+  const exportLatex = async () => {
+    if (!text.trim() || latexBusy) return;
+    setLatexBusy(true);
+    setLatexErr(null);
+    setLatexZip("");
+    setLatexNote("");
+    try {
+      const resp = await fetch(apiUrl("/api/latex"), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text, journal_id: journalId, references: refsInput }),
+      });
+      const d = await resp.json();
+      if (d.ok) {
+        setLatexZip(d.b64zip || "");
+        setLatexNote(d.note || "");
+      } else {
+        setLatexErr(d.error || "生成失败");
+      }
+    } catch (e) {
+      setLatexErr(`生成失败：${(e as Error).message}`);
+    } finally {
+      setLatexBusy(false);
+      window.dispatchEvent(new Event("usage-updated"));
     }
   };
 
@@ -271,7 +347,10 @@ export default function FormatModule() {
       />
       <header className="module-head">
         <h1>📄 期刊排版</h1>
-        <p>粘贴你的稿件，选择目标期刊，我按该刊的结构与格式要求重排，并导出 Word 文件。</p>
+        <p>
+          粘贴你的稿件，选择目标期刊，我按该刊的结构与格式要求重排；可导出按该刊版式
+          （页边距/字体/行距/连续行号）排好的 Word 投稿稿，或生成 LaTeX 工程（IEEE 用官方 IEEEtran）一键在 Overleaf 打开。
+        </p>
       </header>
 
       <div className="form">
@@ -339,19 +418,52 @@ export default function FormatModule() {
       )}
       {dlErr && <div className="result-error" data-testid="dl-error">{dlErr}</div>}
 
-      <h2 className="section-title">🚀 投稿包（投稿前自查 + 投稿信）</h2>
+      {text && !running && (
+        <div className="form-actions" style={{ marginTop: 8 }}>
+          <button
+            className="btn-secondary"
+            onClick={exportLatex}
+            disabled={latexBusy}
+            data-testid="latex-btn"
+          >
+            {latexBusy ? "生成中…" : "📐 生成 LaTeX 工程（.tex + .bib）"}
+          </button>
+          {latexZip && (
+            <>
+              <button
+                className="btn-secondary"
+                onClick={() => downloadBase64("manuscript-latex.zip", latexZip, "application/zip")}
+                data-testid="latex-download-btn"
+              >
+                ⬇ 下载 LaTeX 工程（zip）
+              </button>
+              <button
+                className="btn-primary"
+                onClick={() => openInOverleaf(latexZip)}
+                data-testid="overleaf-btn"
+              >
+                ↗ 在 Overleaf 打开
+              </button>
+            </>
+          )}
+        </div>
+      )}
+      {latexErr && <div className="result-error" data-testid="latex-error">{latexErr}</div>}
+      {latexNote && <div className="field-hint" data-testid="latex-note">{latexNote}</div>}
+
+      <h2 className="section-title">🚀 投稿包（投稿就绪检查 + 投稿信）</h2>
       <p className="section-hint">
-        基于上面的稿件与目标期刊：一键做<strong>预提交体检</strong>（必需章节/声明/字数/参考文献是否齐全），
-        并自动生成<strong>投稿信（Cover Letter）</strong>。
+        基于上面的稿件与目标期刊：一键做<strong>投稿就绪检查</strong>（必需章节/字数/参考文献/必备声明/图表，
+        本地规则即时判断、不消耗 AI 额度），并自动生成<strong>投稿信（Cover Letter）</strong>。
       </p>
       <div className="form-actions">
         <button
           className="btn-primary"
-          onClick={runPrecheck}
-          disabled={!manuscript.trim() || !journalId || precheck.running}
+          onClick={runReadiness}
+          disabled={!manuscript.trim() || !journalId || readinessBusy}
           data-testid="precheck-btn"
         >
-          {precheck.running ? "体检中…" : "预提交体检"}
+          {readinessBusy ? "检查中…" : "投稿就绪检查"}
         </button>
         <button
           className="btn-secondary"
@@ -363,19 +475,32 @@ export default function FormatModule() {
         </button>
       </div>
 
-      {(precheck.text || precheck.running || precheck.error) && (
-        <>
-          <h3 className="section-title" data-testid="precheck-title">✅ 预提交体检</h3>
-          <ResultPanel
-            text={precheck.text}
-            running={precheck.running}
-            error={precheck.error}
-            onStop={precheck.stop}
-            exportName="预提交体检"
-            placeholder="必需章节/声明/字数/参考文献等检查结果会显示在这里。"
-            panelTestId="precheck-panel"
-          />
-        </>
+      {readinessErr && <div className="result-error" data-testid="readiness-error">{readinessErr}</div>}
+
+      {readiness?.items && (
+        <div className="result-panel" data-testid="readiness">
+          <h3 className="section-title" data-testid="precheck-title">✅ 投稿就绪检查</h3>
+          <div className="result-toolbar">
+            <span className="result-status">
+              ✅ 通过 {readiness.summary?.pass ?? 0}
+              {" "}· ⚠️ 注意 {readiness.summary?.warn ?? 0}
+              {" "}· ❌ 缺失 {readiness.summary?.fail ?? 0}
+            </span>
+          </div>
+          <ol className="ref-list" data-testid="readiness-list">
+            {readiness.items.map((it) => {
+              const b = READINESS_BADGE[it.status] || READINESS_BADGE.info;
+              return (
+                <li key={it.key}>
+                  <span className={`ref-badge ${b.cls}`}>{b.label}</span>
+                  {it.label}
+                  {it.detail && <span className="ref-journal"> — {it.detail}</span>}
+                  {it.suggestion && <span className="refcheck-note">{it.suggestion}</span>}
+                </li>
+              );
+            })}
+          </ol>
+        </div>
       )}
 
       {(cover.text || cover.running || cover.error) && (

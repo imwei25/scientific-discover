@@ -2,6 +2,16 @@
 
 > 每完成一个改进方向追加一条。最新在最上。
 
+## 2026-06-30 — 期刊排版重构（P0+P1+P2+P3，调研+原型+落地）：修参考文献中英混排真 bug + Word 投稿稿版式 + 投稿就绪检查 + LaTeX/Overleaf 出口
+- **背景/调研**：派多路 agent 联网核查 Nature/IEEE/PLOS/GB-T7714/IMRaD 真实投稿要求，再用 backend/.venv 实测，发现旧方案三处问题：① GB/T 7714 在 citeproc-py 下**能渲染但中英混排出洋相**——英文文献错用「等」而非「et al」、中文名被插空格（实测确认非静默回退）；② python-docx 从零拼 docx 无版式；③ 无 LaTeX 出口。又做 3 路**动手原型**确认：桌面打包约束下三个修法都**零新二进制、零体积**。
+- **P0 参考文献（citations.py）**：方案 C 纯 Python 后处理——CJK 作者在 CSL-JSON 输入层合并 family+given（渲染即无空格，不碰标题）；et-al「等」→「et al」严格按条目 `language` 门控只改英文条目。实测中英混排 + 复姓「欧阳修」+ 标题内合法「等」(脑卒中等急性病) 全部正确。解析提示词加 `language` 字段（CJK 自动探测兜底）。
+- **P1 Word 投稿稿（journals.py + formatting.py）**：每刊新增 `docx` 版式规格（页面/页边距/中英文字体/字号/行距/连续行号），`build_docx` 按规格设定；行号用 schema 感知 oxml 插入（非 append，保证 OOXML 顺序合法）。回读校验 general_en/cn/ieee/plos 四刊页面/字体/宋体 eastAsia/行距/行号全部正确。
+- **P3 LaTeX/Overleaf（latexexport.py + /api/latex + 前端）**：纯 Python 把排版稿 Markdown 解析为 IR → 生成 IEEEtran 等 `.tex` + BibTeX `.bib`，打包 base64 zip。前端「生成 LaTeX 工程」后可「下载 zip」或「在 Overleaf 打开」（POST data:zip 到 overleaf.com/docs，无需服务器托管）。不本地编译、不打包 LaTeX。数学 `$..$`/`$$..$$` 保留、特殊字符转义、作者信息缺失用占位符。
+- **P2 投稿就绪检查器（readiness.py + /api/readiness + 前端，取代 LLM 体检清单）**：纯规则确定性检查（不调 LLM、即时、零额度、不幻觉）——必需章节（中英标题/别名匹配）、摘要字数（中文按字/英文按词，对照各刊上下限）、标题/正文篇幅（Nature 75 字符/3500 词等）、参考文献条数、7 类必备声明关键词（伦理/知情同意/COI/数据可得性/资助/作者贡献/试验注册）、图件高分文件提醒。前端从 SSE 流式改为结构化清单（✅通过/⚠️注意/❌缺失/ℹ️提示 + 汇总计数）。journals.py 每刊加结构化 `check` 配置。实测 general_en/nature/general_cn 判定准确（缺讨论→❌、摘要字数、中文按字计、COI 命中→✅）。
+- **定位**：投稿稿(submission)可达 85–95%；印刷终稿属出版社专有流程，不在范围。
+- **测试**：后端 test_refio/test_refcheck/test_endpoints/test_run_validation **15 passed**；前端 `npm run build` 通过；e2e 新增/改写「投稿就绪检查」「生成 LaTeX 工程」测试通过，全套 63 passed（唯一失败「找选题:被引徽标」是 2afa31b「折叠高级设置」遗留的失效测试，与本次无关）。
+- **commit**：见本次提交
+
 ## 2026-06-29 — 桌面打包(实测跑通)：修 Tauri v2 Windows 下前端连不上 sidecar 的真 bug
 - **怎么发现的**：上次只单测了 sidecar + 确认安装包文件生成，没真正启动打包后的 app 本体。这次启动 `research-assistant.exe`：窗口开了、`/api/health` 也通(curl 直连)，但 `netstat` 显示 **webview 进程到 :8756 零连接**——即 UI 根本没在跟后端通信，装出来会显示"本地服务未连接"。
 - **根因**：`frontend/src/lib/api.ts` 用 `location.protocol` 判断是否 Tauri：非 http 才用 sidecar 绝对地址。但 **Tauri v2 在 Windows 上的源是 `http://tauri.localhost`(scheme 仍是 http:)**，于是被误判为同源、用相对路径把请求打到 webview 自身而非 sidecar。原注释"tauri://localhost 等非 http 源"是 v1/mac 的旧假设。
