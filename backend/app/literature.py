@@ -20,6 +20,7 @@ from .crossref import search_crossref
 from .europepmc import search_epmc
 from .impactfactor import enrich_impact
 from .openalex import search_openalex
+from .scimago import annotate_quartile
 from .unpaywall import enrich_oa
 
 _BASE = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils"
@@ -350,6 +351,7 @@ async def search_literature(
             await asyncio.gather(*jobs, return_exceptions=True)
         except Exception:  # noqa: BLE001
             pass
+        annotate_quartile(merged)  # 本地查表(Scimago 医学分区), 同步且零网络
     net_errs = sum(r["network_errors"] for r in ordered)
     out = {
         "papers": merged,

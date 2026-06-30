@@ -1479,6 +1479,29 @@ select {
   color: #9a5b00;
   border: 1px solid #f3dcae;
 }
+.ref-badge-q {
+  font-weight: 600;
+}
+.ref-badge-q1 {
+  background: #e6f6ec;
+  color: #1a7f43;
+  border: 1px solid #b7e3c6;
+}
+.ref-badge-q2 {
+  background: #eef7e0;
+  color: #4d7c0f;
+  border: 1px solid #d3e8ad;
+}
+.ref-badge-q3 {
+  background: #fdf3e0;
+  color: #92660e;
+  border: 1px solid #f0dcab;
+}
+.ref-badge-q4 {
+  background: #f2f3f5;
+  color: #5b6470;
+  border: 1px solid #dadee3;
+}
 .ref-badge.rc-real {
   background: #e6f6ec;
   color: #1a7f43;

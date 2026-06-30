@@ -52,31 +52,46 @@ const STUDY_TYPES: { key: string; label: string }[] = [
   { key: "review", label: "综述" },
 ];
 
-// 文献列表排序: 相关性(原序) / 被引降序 / 年份降序 / 影响力降序
-function sortRefs(refs: Reference[], by: string): Reference[] {
-  if (by === "cited") return [...refs].sort((a, b) => (b.cited_by_count ?? 0) - (a.cited_by_count ?? 0));
-  if (by === "year") return [...refs].sort((a, b) => (parseInt(b.year) || 0) - (parseInt(a.year) || 0));
-  if (by === "impact")
-    return [...refs].sort((a, b) => impactOf(b) - impactOf(a)); // 未知(null)按 -1 沉底
-  return refs;
-}
+const Q_RANK: Record<string, number> = { Q1: 1, Q2: 2, Q3: 3, Q4: 4 };
 
 // 取影响力数值; 未知/缺失返回 -1(用于排序沉底与过滤判定)。
 function impactOf(r: Reference): number {
   return typeof r.journal_impact === "number" ? r.journal_impact : -1;
 }
+// 取分区档位 1..4; 未知返回 99(排序沉底、分区过滤时不达标)。
+function quartileRank(r: Reference): number {
+  return r.journal_quartile ? Q_RANK[r.journal_quartile] ?? 99 : 99;
+}
+// 是否有可用于过滤/排序的期刊指标(影响力或分区任一)。
+function hasMetric(r: Reference): boolean {
+  return typeof r.journal_impact === "number" || !!r.journal_quartile;
+}
 
-// 按影响力过滤: 滤掉影响力 < min 的, 但至少保留影响力最高的 keepN 篇。
-// "至少保留 N 篇" = 阈值结果 ∪ 全体(有影响力的)按影响力 top-N。
-// keepUnknown=true 时, 无影响力数据的文献始终保留并在末尾展示。
-function filterByImpact(refs: Reference[], min: number, keepN: number, keepUnknown: boolean): Reference[] {
-  const known = refs.filter((r) => typeof r.journal_impact === "number");
-  const unknown = refs.filter((r) => typeof r.journal_impact !== "number");
-  let passed = known.filter((r) => impactOf(r) >= min);
+// 文献列表排序: 相关性(原序) / 被引 / 年份 / 影响力 / 分区
+function sortRefs(refs: Reference[], by: string): Reference[] {
+  if (by === "cited") return [...refs].sort((a, b) => (b.cited_by_count ?? 0) - (a.cited_by_count ?? 0));
+  if (by === "year") return [...refs].sort((a, b) => (parseInt(b.year) || 0) - (parseInt(a.year) || 0));
+  if (by === "impact") return [...refs].sort((a, b) => impactOf(b) - impactOf(a));
+  if (by === "quartile")
+    return [...refs].sort((a, b) => quartileRank(a) - quartileRank(b) || impactOf(b) - impactOf(a));
+  return refs;
+}
+
+// 过滤判定: 影响力 >= min 且 分区档位 <= maxQ(maxQ=99 表示不限分区, min<=0 表示不限影响力)。
+function passesMetric(r: Reference, min: number, maxQ: number): boolean {
+  return (min <= 0 || impactOf(r) >= min) && (maxQ >= 99 || quartileRank(r) <= maxQ);
+}
+
+// 按影响力/分区过滤, 但至少保留 keepN 篇(不足则从被刷掉的里按 分区→影响力 补足)。
+// 有任一指标的文献参与过滤; 两个指标都没有的文献按 keepUnknown 决定是否保留(置末尾)。
+function filterRefs(refs: Reference[], min: number, maxQ: number, keepN: number, keepUnknown: boolean): Reference[] {
+  const usable = refs.filter(hasMetric);
+  const unknown = refs.filter((r) => !hasMetric(r));
+  let passed = usable.filter((r) => passesMetric(r, min, maxQ));
   if (passed.length < keepN) {
-    const rest = known
-      .filter((r) => impactOf(r) < min)
-      .sort((a, b) => impactOf(b) - impactOf(a));
+    const rest = usable
+      .filter((r) => !passesMetric(r, min, maxQ))
+      .sort((a, b) => quartileRank(a) - quartileRank(b) || impactOf(b) - impactOf(a));
     passed = passed.concat(rest.slice(0, keepN - passed.length));
   }
   return keepUnknown ? [...passed, ...unknown] : passed;
@@ -103,6 +118,7 @@ export default function IdeaModule({ goto }: { goto: Goto }) {
   const [refSort, setRefSort] = usePersistentState("idea:refSort", "relevance");
   // 影响力过滤: 阈值(空=不过滤) / 至少保留篇数 / 是否保留无影响力数据的文献
   const [impactMin, setImpactMin] = usePersistentState("idea:impactMin", "");
+  const [minQuartile, setMinQuartile] = usePersistentState("idea:minQuartile", ""); // ""=不限, "1".."4"=最低到 Qn
   const [impactKeepN, setImpactKeepN] = usePersistentState("idea:impactKeepN", "10");
   const [keepUnknownImpact, setKeepUnknownImpact] = usePersistentState("idea:keepUnknownImpact", true);
   const [trials, setTrials] = usePersistentState<Trial[]>("idea:trials", []);
@@ -384,9 +400,15 @@ export default function IdeaModule({ goto }: { goto: Goto }) {
   // 至少要选一个论文源, 否则无文献可综述。
   const noPaperSource = !PAPER_SOURCES.some((s) => sources.includes(s.key));
 
-  // 文献列表: 先按影响力过滤(阈值+至少保留N+未知策略), 再按所选规则排序。
+  // 文献列表: 先按影响力/分区过滤(阈值+至少保留N+未知策略), 再按所选规则排序。
   const shownRefs = sortRefs(
-    filterByImpact(refs, parseFloat(impactMin) || 0, parseInt(impactKeepN, 10) || 0, keepUnknownImpact),
+    filterRefs(
+      refs,
+      parseFloat(impactMin) || 0,
+      minQuartile ? parseInt(minQuartile, 10) : 99,
+      parseInt(impactKeepN, 10) || 0,
+      keepUnknownImpact,
+    ),
     refSort,
   );
 
@@ -728,6 +750,7 @@ export default function IdeaModule({ goto }: { goto: Goto }) {
                 <option value="cited">被引最多</option>
                 <option value="year">最新</option>
                 <option value="impact">影响力</option>
+                <option value="quartile">分区</option>
               </select>
             </label>
             <label title="滤掉影响力低于该值的文献(影响力指数=OpenAlex 近2年篇均被引, 非官方影响因子)">
@@ -743,6 +766,15 @@ export default function IdeaModule({ goto }: { goto: Goto }) {
                 style={{ width: "4.5em" }}
               />
             </label>
+            <label title="按 Scimago 医学分区过滤(仅医学期刊有分区数据)">
+              分区≥
+              <select data-testid="filter-quartile" value={minQuartile} onChange={(e) => setMinQuartile(e.target.value)}>
+                <option value="">不限</option>
+                <option value="1">仅 Q1</option>
+                <option value="2">Q1–Q2</option>
+                <option value="3">Q1–Q3</option>
+              </select>
+            </label>
             <label title="即便高于阈值的不足这么多篇, 也按影响力从高到低补足到这么多篇">
               至少保留
               <input
@@ -756,14 +788,14 @@ export default function IdeaModule({ goto }: { goto: Goto }) {
               />
               篇
             </label>
-            <label className="type-chip" title="无影响力数据的文献(如新刊/部分会议/中文刊)是否保留">
+            <label className="type-chip" title="既无影响力也无分区数据的文献(如新刊/部分会议/中文刊)是否保留">
               <input
                 type="checkbox"
                 data-testid="impact-keep-unknown"
                 checked={keepUnknownImpact}
                 onChange={(e) => setKeepUnknownImpact(e.target.checked)}
               />
-              保留无影响力数据
+              保留无指标数据
             </label>
           </div>
           <ol className="ref-list">
@@ -773,6 +805,14 @@ export default function IdeaModule({ goto }: { goto: Goto }) {
                 {r.source === "europepmc" && <span className="ref-badge ref-badge-epmc">Europe PMC</span>}
                 {r.source === "openalex" && <span className="ref-badge ref-badge-openalex">OpenAlex</span>}
                 {r.source === "crossref" && <span className="ref-badge ref-badge-crossref">Crossref</span>}
+                {r.journal_quartile && (
+                  <span
+                    className={`ref-badge ref-badge-q ref-badge-${r.journal_quartile.toLowerCase()}`}
+                    title="Scimago 医学分区(SJR Best Quartile)"
+                  >
+                    {r.journal_quartile}
+                  </span>
+                )}
                 {typeof r.journal_impact === "number" && (
                   <span className="ref-badge ref-badge-impact" title="影响力指数: OpenAlex 近2年篇均被引(非官方影响因子)">
                     影响力 {r.journal_impact.toFixed(1)}

@@ -179,6 +179,7 @@ export interface Reference {
   cited_by_count?: number;
   oa_url?: string; // Unpaywall 发现的合法 OA 全文链接(优先 PDF)
   journal_impact?: number | null; // 影响力指数(OpenAlex 近2年篇均被引); 未知为 null
+  journal_quartile?: string | null; // Scimago 医学分区 Q1-Q4(仅医学刊有); 未知为 null
 }
 
 export interface EvidenceItem {
