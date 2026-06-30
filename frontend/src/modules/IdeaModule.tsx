@@ -127,7 +127,6 @@ export default function IdeaModule({ goto }: { goto: Goto }) {
   const [text, setText] = usePersistentState("idea:result", "");
   const [verify, setVerify] = usePersistentState<Verification | null>("idea:verify", null);
   const [card, setCard] = usePersistentState<TopicCard | null>("idea:card", null);
-  const [pickIdx, setPickIdx] = useState(0);
   const [running, setRunning] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [rewrite, setRewrite] = useState<RewritePayload | null>(null);
@@ -194,7 +193,6 @@ export default function IdeaModule({ goto }: { goto: Goto }) {
     setText("");
     setVerify(null);
     setCard(null);
-    setPickIdx(0);
     setError(null);
     setRewrite(null);
     setFollowups([]);
@@ -431,7 +429,6 @@ export default function IdeaModule({ goto }: { goto: Goto }) {
     setText("");
     setVerify(null);
     setCard(null);
-    setPickIdx(0);
     setClarifyQs(null);
     setRefineOpts(null);
     setStatus("");
@@ -911,7 +908,8 @@ export default function IdeaModule({ goto }: { goto: Goto }) {
                   停止
                 </button>
               )}
-              {text && !running && (
+              {/* 无结构化选题卡时, 提供整篇报告送规划的兜底入口; 有候选方向时改用每个方向后的按钮 */}
+              {text && !running && (!card || card.candidates.length === 0) && (
                 <button
                   className="btn-ghost"
                   data-testid="send-to-plan-btn"
@@ -969,7 +967,7 @@ export default function IdeaModule({ goto }: { goto: Goto }) {
 
       {card && card.candidates.length > 0 && !running && (
         <div className="topic-card" data-testid="topic-card">
-          <div className="topic-card-head">🧭 选题卡 · 选一个候选选题继续</div>
+          <div className="topic-card-head">🧭 选题卡 · AI 给出的候选方向，挑一个直接做实验规划</div>
           {card.facets.length > 0 && (
             <div className="topic-facets" data-testid="topic-facets">
               <span className="topic-facets-label">子方向：</span>
@@ -978,34 +976,34 @@ export default function IdeaModule({ goto }: { goto: Goto }) {
               ))}
             </div>
           )}
-          <div className="topic-pick">
-            <select
-              data-testid="candidate-select"
-              value={pickIdx}
-              onChange={(e) => setPickIdx(Number(e.target.value))}
-            >
-              {card.candidates.map((c, i) => (
-                <option key={i} value={i}>
-                  候选选题{c.n}：{c.title}
-                  {c.feasibility != null ? `（可行★${c.feasibility}｜创新★${c.innovation ?? "-"}）` : ""}
-                </option>
-              ))}
-            </select>
-            <button
-              className="btn-primary"
-              data-testid="card-to-plan-btn"
-              onClick={() => {
-                const c = card.candidates[pickIdx] ?? card.candidates[0];
-                goto("plan", {
-                  "plan:idea": `${c.title}\n\n${c.body}`,
-                  "plan:field": card.field,
-                  "plan:resources": background,
-                });
-              }}
-            >
-              用选定选题做实验规划 →
-            </button>
-          </div>
+          <ol className="candidate-list" data-testid="candidate-list">
+            {card.candidates.map((c, i) => (
+              <li key={i} className="candidate-item" data-testid={`candidate-${i}`}>
+                <div className="candidate-main">
+                  <div className="candidate-title">
+                    方向{c.n}：{c.title}
+                    {c.feasibility != null && (
+                      <span className="candidate-scores">可行★{c.feasibility}｜创新★{c.innovation ?? "-"}</span>
+                    )}
+                  </div>
+                  {c.body && <div className="candidate-body">{c.body}</div>}
+                </div>
+                <button
+                  className="btn-primary candidate-to-plan"
+                  data-testid={`candidate-to-plan-${i}`}
+                  onClick={() =>
+                    goto("plan", {
+                      "plan:idea": `${c.title}\n\n${c.body}`,
+                      "plan:field": card.field,
+                      "plan:resources": background,
+                    })
+                  }
+                >
+                  用此方向做实验规划 →
+                </button>
+              </li>
+            ))}
+          </ol>
         </div>
       )}
 

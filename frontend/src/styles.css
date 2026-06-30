@@ -1286,19 +1286,55 @@ select {
   background: var(--teal-soft);
   font-size: 12px;
 }
-.topic-pick {
+.candidate-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
   display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  align-items: center;
+  flex-direction: column;
+  gap: 10px;
 }
-.topic-pick select {
-  flex: 1;
-  min-width: 220px;
-  padding: 6px 10px;
+.candidate-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 12px 14px;
+  background: var(--surface);
   border: 1px solid var(--line);
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
+}
+.candidate-main {
+  flex: 1;
+  min-width: 0;
+}
+.candidate-title {
+  font-weight: 600;
+  line-height: 1.5;
+}
+.candidate-scores {
+  margin-left: 8px;
+  padding: 1px 8px;
+  border-radius: 10px;
+  background: var(--teal-soft);
+  font-size: 12px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+.candidate-body {
+  margin-top: 6px;
   font-size: 13px;
+  line-height: 1.65;
+  color: var(--muted);
+  white-space: pre-wrap;
+}
+.candidate-to-plan {
+  flex-shrink: 0;
+  align-self: center;
+  white-space: nowrap;
+}
+@media (max-width: 720px) {
+  .candidate-item { flex-direction: column; }
+  .candidate-to-plan { align-self: stretch; }
 }
 
 .cursor-blink {

@@ -221,12 +221,12 @@ test("找选题: 结构化选题卡 → 按候选选题做实验规划", async (
   await page.getByTestId("nav-idea").click();
   await page.getByTestId("input-field").fill("PD-1 TNBC");
   await page.getByTestId("run-btn").click();
-  // 选题卡出现, 含子方向与候选选题
+  // 选题卡出现, 含子方向与逐个候选方向
   await expect(page.getByTestId("topic-card")).toBeVisible();
   await expect(page.getByTestId("topic-facets")).toContainText("机制");
-  await expect(page.getByTestId("candidate-select")).toContainText("PD-1 标志物");
-  // 选定选题交接到实验规划
-  await page.getByTestId("card-to-plan-btn").click();
+  await expect(page.getByTestId("candidate-0")).toContainText("PD-1 标志物");
+  // 点该方向后面的按钮交接到实验规划
+  await page.getByTestId("candidate-to-plan-0").click();
   await expect(page.getByTestId("input-idea")).toHaveValue(/PD-1 标志物/);
 });
 
