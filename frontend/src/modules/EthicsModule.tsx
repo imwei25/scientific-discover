@@ -3,6 +3,7 @@ import { apiUrl } from "../lib/api";
 import { usePersistentState, readPersisted } from "../lib/usePersistentState";
 import { downloadBlob, tsName } from "../lib/download";
 import { addHistory } from "../lib/history";
+import { CanvasSlot } from "../components/Canvas";
 
 // ── 模板定义 ────────────────────────────────────────────────────────
 // 4 套伦理材料的占位符字段。后端 /api/ethics/render 据此填充 .docx 模板。
@@ -293,7 +294,6 @@ function EthicsEditor({ template }: { template: TemplateDef }) {
         </button>
       </div>
 
-      <div className="ethics-cols">
         <div className="ethics-form form">
           {template.fields.map((f) => (
             <label className="field" key={f.key}>
@@ -318,11 +318,12 @@ function EthicsEditor({ template }: { template: TemplateDef }) {
           ))}
         </div>
 
-        <div className="ethics-preview" data-testid="ethics-preview">
-          <div className="ethics-preview-head">实时预览（纯文本，仅供检查；Word 版样式由后端模板决定）</div>
-          <pre className="ethics-preview-body">{preview || "（填写左侧字段后这里会显示预览）"}</pre>
-        </div>
-      </div>
+        <CanvasSlot>
+          <div className="ethics-preview" data-testid="ethics-preview">
+            <div className="ethics-preview-head">实时预览（纯文本，仅供检查；Word 版样式由后端模板决定）</div>
+            <pre className="ethics-preview-body">{preview || "（填写左侧字段后这里会显示预览）"}</pre>
+          </div>
+        </CanvasSlot>
 
       {err && <div className="result-error" data-testid="ethics-error">{err}</div>}
 

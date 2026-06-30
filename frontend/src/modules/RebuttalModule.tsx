@@ -5,6 +5,7 @@ import DiffView from "../components/DiffView";
 import { usePersistentState } from "../lib/usePersistentState";
 import { addHistory } from "../lib/history";
 import Markdown from "../components/Markdown";
+import { CanvasSlot } from "../components/Canvas";
 import Dropzone from "../components/Dropzone";
 import { downloadText, downloadDocxFromText, tsName } from "../lib/download";
 
@@ -214,12 +215,12 @@ export default function RebuttalModule() {
         </details>
       )}
 
-      {(letter || (running && !error)) && (
+      <CanvasSlot>
         <>
           <h2 className="section-title">逐条回复信草稿</h2>
           <div className="result-panel">
             <div className="result-toolbar">
-              <span className="result-status">{running ? "生成中…" : "已完成"}</span>
+              <span className="result-status">{running ? "生成中…" : letter ? "已完成" : "等待开始"}</span>
               {running && (
                 <button className="btn-ghost" onClick={stop} data-testid="stop-btn">
                   停止
@@ -241,13 +242,19 @@ export default function RebuttalModule() {
               )}
             </div>
             <div className="result-text" data-testid="result-text">
-              {letter ? <Markdown>{letter}</Markdown> : <span className="result-placeholder">正在撰写…</span>}
+              {letter ? (
+                <Markdown>{letter}</Markdown>
+              ) : (
+                <span className="result-placeholder">
+                  {running ? "正在撰写…" : "填好左侧审稿意见与原稿后点击生成，回复信会显示在这里。"}
+                </span>
+              )}
               {running && <span className="cursor-blink">▍</span>}
             </div>
             {dlErr && <div className="result-error" data-testid="dl-error">{dlErr}</div>}
           </div>
         </>
-      )}
+      </CanvasSlot>
     </div>
   );
 }

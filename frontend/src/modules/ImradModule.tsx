@@ -6,6 +6,7 @@ import { usePersistentState, readPersisted } from "../lib/usePersistentState";
 import { addHistory } from "../lib/history";
 import { apiUrl } from "../lib/api";
 import Markdown from "../components/Markdown";
+import { CanvasSlot } from "../components/Canvas";
 import { HelpButton } from "../components/HelpButton";
 import Dropzone from "../components/Dropzone";
 import { extractFile } from "../lib/extract";
@@ -436,10 +437,10 @@ export default function ImradModule() {
       )}
       {error && <div className="result-error" data-testid="imrad-error">{error}</div>}
 
-      {(draft || (running && !error)) && (
+      <CanvasSlot>
         <div className="result-panel">
           <div className="result-toolbar">
-            <span className="result-status">{running ? "生成中…" : "已完成"}</span>
+            <span className="result-status">{running ? "生成中…" : draft ? "已完成" : "等待开始"}</span>
             <div className="result-actions">
               {running && <button className="btn-ghost" onClick={stop} data-testid="stop-btn">停止</button>}
               {draft && !running && (
@@ -453,11 +454,17 @@ export default function ImradModule() {
             </div>
           </div>
           <div className="result-text" data-testid="result-text">
-            {draft ? <Markdown>{draft}</Markdown> : <span className="result-placeholder">正在撰写…</span>}
+            {draft ? (
+              <Markdown>{draft}</Markdown>
+            ) : (
+              <span className="result-placeholder">
+                {running ? "正在撰写…" : "填好左侧材料后点击生成，论文初稿会显示在这里。"}
+              </span>
+            )}
             {running && <span className="cursor-blink">▍</span>}
           </div>
         </div>
-      )}
+      </CanvasSlot>
 
       <h2 className="section-title">🧾 结构式摘要 + 字数核对</h2>
       <p className="section-hint">输入要点与目标字数，生成 Background/Methods/Results/Conclusions 摘要并实时显示字数（超限会提示）。</p>
@@ -487,6 +494,7 @@ export default function ImradModule() {
         </div>
       </div>
       {absErr && <div className="result-error" data-testid="abs-error">{absErr}</div>}
+      <CanvasSlot>
       {(abstract || absRunning) && (
         <div className="result-panel">
           <div className="result-toolbar">
@@ -507,8 +515,10 @@ export default function ImradModule() {
           </div>
         </div>
       )}
+      </CanvasSlot>
 
       {kwErr && <div className="result-error" data-testid="kw-error">{kwErr}</div>}
+      <CanvasSlot>
       {(keywords || kwRunning) && (
         <div className="result-panel" data-testid="kw-panel">
           <div className="result-toolbar">
@@ -523,6 +533,7 @@ export default function ImradModule() {
           </div>
         </div>
       )}
+      </CanvasSlot>
 
       <h2 className="section-title">📦 一键投稿包（ZIP）<HelpButton helpKey="bundle" /></h2>
       <p className="section-hint">

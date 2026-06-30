@@ -4,6 +4,7 @@ import { reportLLMError } from "../lib/errorToast";
 import { usePersistentState } from "../lib/usePersistentState";
 import { addHistory } from "../lib/history";
 import Markdown from "../components/Markdown";
+import { CanvasSlot } from "../components/Canvas";
 import { HelpButton } from "../components/HelpButton";
 import DeidentifyDialog, { DeidScanResult } from "../components/DeidentifyDialog";
 import { downloadText, downloadBase64, chartMime, tsName, downloadAnalysisReport } from "../lib/download";
@@ -668,18 +669,18 @@ function DataPane({ goto }: { goto: Goto }) {
         <div className="result-error" data-testid="forest-error">{forestErr}</div>
       )}
       {chartType === "forest" && forestResult && (
-        <ForestResultPanel result={forestResult} effect={forestEffect} />
+        <CanvasSlot><ForestResultPanel result={forestResult} effect={forestEffect} /></CanvasSlot>
       )}
 
       {chartType === "km" && kmErr && (
         <div className="result-error" data-testid="km-error">{kmErr}</div>
       )}
-      {chartType === "km" && kmResult && <KMResultPanel result={kmResult} />}
+      {chartType === "km" && kmResult && <CanvasSlot><KMResultPanel result={kmResult} /></CanvasSlot>}
 
       {chartType === "roc" && rocErr && (
         <div className="result-error" data-testid="roc-error">{rocErr}</div>
       )}
-      {chartType === "roc" && rocResult && <ROCResultPanel result={rocResult} />}
+      {chartType === "roc" && rocResult && <CanvasSlot><ROCResultPanel result={rocResult} /></CanvasSlot>}
 
       {/* ─── 通用模式: 原有结果区 ───────────────────────────────── */}
       {chartType === "general" && (
@@ -699,6 +700,7 @@ function DataPane({ goto }: { goto: Goto }) {
             </details>
           )}
           {charts.length > 0 && (
+            <CanvasSlot>
             <div className="analysis-block" data-testid="analysis-block">
               {!running && (
                 <div className="charts-toolbar">
@@ -726,6 +728,7 @@ function DataPane({ goto }: { goto: Goto }) {
                 ))}
               </div>
             </div>
+            </CanvasSlot>
           )}
           {output && (
             <details className="stats-details" data-testid="output-block">
@@ -734,7 +737,7 @@ function DataPane({ goto }: { goto: Goto }) {
             </details>
           )}
           {(conclusion || (running && !error)) && (
-            <>
+            <CanvasSlot>
               <h2 className="section-title">分析结论</h2>
               <div className="result-panel">
                 <div className="result-toolbar">
@@ -781,7 +784,7 @@ function DataPane({ goto }: { goto: Goto }) {
                   {running && <span className="cursor-blink">▍</span>}
                 </div>
               </div>
-            </>
+            </CanvasSlot>
           )}
         </>
       )}
@@ -1129,6 +1132,7 @@ function AdvisorPane() {
       {error && <div className="result-error" data-testid="advisor-error">{error}</div>}
 
       {(hasResult || running) && (
+        <CanvasSlot>
         <div className="advisor-cards" data-testid="advisor-cards">
           <div className="advisor-card">
             <h4>✅ 推荐方法</h4>
@@ -1161,6 +1165,7 @@ function AdvisorPane() {
             )}
           </div>
         </div>
+        </CanvasSlot>
       )}
     </div>
   );

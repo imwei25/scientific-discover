@@ -3,6 +3,7 @@ import { streamIdea, streamIdeaFollowup, runModule, clarifyTopic, refineTopic, R
 import { reportLLMError } from "../lib/errorToast";
 import { addHistory } from "../lib/history";
 import Markdown from "../components/Markdown";
+import { CanvasSlot } from "../components/Canvas";
 import Dropzone from "../components/Dropzone";
 import { HelpButton } from "../components/HelpButton";
 import RefIO from "../components/RefIO";
@@ -900,10 +901,10 @@ export default function IdeaModule({ goto }: { goto: Goto }) {
         </details>
       )}
 
-      {(text || running) && (
+      <CanvasSlot>
         <div className="result-panel">
           <div className="result-toolbar">
-            <span className="result-status">{running ? "生成中…" : "已完成"}</span>
+            <span className="result-status">{running ? "生成中…" : text ? "已完成" : "等待开始"}</span>
             <div className="result-actions">
               {running && (
                 <button className="btn-ghost" onClick={stop} data-testid="stop-btn">
@@ -937,11 +938,17 @@ export default function IdeaModule({ goto }: { goto: Goto }) {
             </div>
           </div>
           <div className="result-text" data-testid="result-text">
-            {text ? <Markdown>{text}</Markdown> : <span className="result-placeholder">正在分析…</span>}
+            {text ? (
+              <Markdown>{text}</Markdown>
+            ) : (
+              <span className="result-placeholder">
+                {running ? "正在分析…" : "填好左侧信息后点击“开始文献调研”，调研报告会显示在这里。"}
+              </span>
+            )}
             {running && <span className="cursor-blink">▍</span>}
           </div>
         </div>
-      )}
+      </CanvasSlot>
 
       {verify && !running && (
         verify.unverified.length === 0 ? (

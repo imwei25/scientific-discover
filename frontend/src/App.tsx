@@ -22,10 +22,13 @@ import ProjectPicker from "./components/ProjectPicker";
 import OnboardingWizard from "./components/OnboardingWizard";
 import ToastContainer from "./components/Toast";
 import CommandPalette, { restoreHistoryEntry } from "./components/CommandPalette";
+import { CanvasProvider } from "./components/Canvas";
 import { showToast } from "./lib/toast";
 import { useProjects } from "./lib/projects";
 
 export type ModuleId = "home" | "idea" | "plan" | "ethics" | "analyze" | "imrad" | "journal" | "format" | "checklist" | "rebuttal" | "history";
+// 产出文稿的阶段: 进入这些模块时, 屏幕一分为二, 右半屏固定为「画布」展示最终产出。
+const STAGE_CANVAS = new Set<ModuleId>(["idea", "plan", "ethics", "analyze", "imrad", "rebuttal"]);
 // 跨模块传递: 把数据写入目标模块的持久化字段, 再切换过去。
 export type Goto = (target: ModuleId, patch?: Record<string, unknown>) => void;
 
@@ -53,6 +56,8 @@ interface Health {
 
 export default function App() {
   const [active, setActive] = useState<ModuleId>("home");
+  // 右画布的 Portal 目标节点; 用 ref 回调 setState 拿到, 拿到后触发一次 re-render 让 CanvasSlot 归位。
+  const [canvasEl, setCanvasEl] = useState<HTMLElement | null>(null);
   const [health, setHealth] = useState<Health | null>(null);
   const [healthErr, setHealthErr] = useState(false);
   const [cmdkOpen, setCmdkOpen] = useState(false);
@@ -79,6 +84,10 @@ export default function App() {
     }
     setActive(target);
   };
+
+  // 当前模块是否走「左工作区 + 右画布」分屏
+  const hasCanvas = STAGE_CANVAS.has(active);
+  const canvasTitle = NAV.find((n) => n.id === active)?.title ?? "";
 
   // 拉取余额/用量(切换模块时刷新; 任务完成时也刷新, 接近实时反映额度与 token 消耗)
   useEffect(() => {
@@ -311,6 +320,9 @@ export default function App() {
             ⚙ 设置
           </button>
         </div>
+        <CanvasProvider target={hasCanvas ? canvasEl : null}>
+        <div className={`content-body ${hasCanvas ? "has-canvas" : ""}`}>
+        <div className="work-pane">
         {/* W2-4-e 演示模式横条 */}
         {health?.mock && (
           <div className="demo-banner" data-testid="demo-banner">
@@ -358,6 +370,23 @@ export default function App() {
           {active === "rebuttal" && <RebuttalModule />}
           {active === "history" && <HistoryView goto={goto} />}
         </div>
+        </div>
+        {hasCanvas && (
+          <aside className="canvas-pane" data-testid="canvas-pane">
+            <div className="canvas-head">{canvasTitle} · 产出</div>
+            <div className="canvas-body">
+              {/* Portal 目标; 模块的最终产出渲染进这里 */}
+              <div className="canvas-target" data-testid="canvas-body" ref={setCanvasEl} />
+              {/* 目标为空(尚无产出)时显示占位; 用 :empty 兄弟选择器切换 */}
+              <div className="canvas-empty" data-testid="canvas-empty">
+                <p>结果会显示在这里</p>
+                <p className="canvas-empty-sub">在左侧填好信息并点击生成，产出会出现在右侧画布。</p>
+              </div>
+            </div>
+          </aside>
+        )}
+        </div>
+        </CanvasProvider>
       </main>
     </div>
   );

@@ -4,6 +4,7 @@ import { usePersistentState } from "../lib/usePersistentState";
 import { addHistory } from "../lib/history";
 import { apiUrl } from "../lib/api";
 import ResultPanel from "../components/ResultPanel";
+import { CanvasSlot } from "../components/Canvas";
 import Dropzone from "../components/Dropzone";
 import { HelpButton } from "../components/HelpButton";
 import { downloadCsv, downloadDocxFromText, tsName } from "../lib/download";
@@ -326,6 +327,7 @@ export default function PlanModule() {
 
       {docxErr && <div className="result-error" data-testid="docx-error">{docxErr}</div>}
 
+      <CanvasSlot>
       <ResultPanel
         text={text}
         running={running}
@@ -387,6 +389,7 @@ export default function PlanModule() {
           />
         </>
       )}
+      </CanvasSlot>
 
       <details className="ss-calc" data-testid="ss-calc" open>
         <summary>🧮 样本量交互式探索（滑块 + 实时曲线，免费不消耗额度）</summary>

@@ -397,8 +397,89 @@ body {
 /* ---------- 主区 ---------- */
 .content {
   flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  overflow: hidden;
+}
+/* topbar 固定在顶部, 滚动交给下方两个 pane */
+.content > .content-topbar {
+  flex-shrink: 0;
+}
+.content-body {
+  flex: 1;
+  display: flex;
+  min-height: 0;
+}
+/* 左工作区: 输入 + 中间数据, 独立滚动 */
+.work-pane {
+  flex: 1;
+  min-width: 0;
   overflow-y: auto;
   padding: 48px 56px 72px;
+}
+/* 右画布: 固定占半屏, 展示最终产出, 自带滚动条 */
+.canvas-pane {
+  flex: 0 0 50%;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  border-left: 1px solid var(--line);
+  background: var(--surface);
+  overflow: hidden;
+}
+.canvas-head {
+  flex-shrink: 0;
+  padding: 14px 28px;
+  border-bottom: 1px solid var(--line);
+  background: var(--surface-2);
+  font-family: var(--serif);
+  font-size: 13px;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+}
+.canvas-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 24px 28px 56px;
+}
+/* 画布内的产出面板: 去掉外层卡片自身的上间距, 顶到头部下方 */
+.canvas-target > .result-panel:first-child,
+.canvas-target > .section-title:first-child,
+.canvas-target > .ethics-preview:first-child {
+  margin-top: 0;
+}
+/* 空态占位: 仅当 Portal 目标无任何产出时显示 */
+.canvas-empty {
+  display: none;
+  padding: 56px 12px;
+  text-align: center;
+  color: var(--muted);
+}
+.canvas-target:empty ~ .canvas-empty {
+  display: block;
+}
+.canvas-empty p {
+  margin: 0;
+  font-family: var(--serif);
+  font-size: 15px;
+}
+.canvas-empty .canvas-empty-sub {
+  margin-top: 8px;
+  font-family: inherit;
+  font-size: 13px;
+  opacity: 0.8;
+}
+/* 窄屏: 画布落到工作区下方, 各自滚动 */
+@media (max-width: 1100px) {
+  .content-body { flex-direction: column; }
+  .canvas-pane {
+    flex: 0 0 auto;
+    max-height: 50vh;
+    border-left: none;
+    border-top: 1px solid var(--line);
+  }
 }
 
 /* 免责声明 */
@@ -2717,10 +2798,7 @@ select {
   background: var(--surface);
   display: flex;
   flex-direction: column;
-  max-height: 70vh;
   overflow: hidden;
-  position: sticky;
-  top: 12px;
 }
 .ethics-preview-head {
   padding: 8px 12px;
