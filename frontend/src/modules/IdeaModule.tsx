@@ -221,7 +221,8 @@ export default function IdeaModule({ goto }: { goto: Goto }) {
     const composed = lines.length
       ? (background ? background + "\n\n" : "") + "[检索前澄清]\n" + lines.join("\n")
       : background;
-    setBackground(composed);
+    // 注意: 只把澄清回答拼进 composed 发给后端(经 pendingBg / refineTopic),
+    // 不写回可见的「已有研究/相关资料」输入框, 否则会污染用户原始输入。
     setPendingBg(composed);
     setClarifyQs(null);
     setRefining(true);
