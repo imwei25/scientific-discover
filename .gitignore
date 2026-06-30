@@ -29,6 +29,7 @@ Thumbs.db
 
 # runtime
 backend/server.log
+backend/data/projects/
 .claude/scheduled_tasks.lock
 
 # Brainstorming companion
