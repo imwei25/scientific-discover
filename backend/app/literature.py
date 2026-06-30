@@ -16,8 +16,10 @@ import httpx
 
 from . import searchcache, searchfilters
 from .config import settings
+from .crossref import search_crossref
 from .europepmc import search_epmc
 from .openalex import search_openalex
+from .unpaywall import enrich_oa
 
 _BASE = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils"
 _TOOL = "research-assistant"
@@ -283,7 +285,7 @@ def _merge_all(source_lists: list[list[dict]], cap: int, terms: set[str] | None 
     return ranked[:cap]
 
 
-_PAPER_SOURCES = ("pubmed", "europepmc", "openalex")
+_PAPER_SOURCES = ("pubmed", "europepmc", "openalex", "crossref")
 
 
 async def search_literature(
@@ -293,23 +295,25 @@ async def search_literature(
     sources: list[str] | None = None,
     filters: dict | None = None,
 ) -> dict:
-    """并发检索所选论文源(PubMed/Europe PMC/OpenAlex), 合并去重 + 排序选篇。
+    """并发检索所选论文源(PubMed/Europe PMC/OpenAlex/Crossref), 合并去重 + 排序选篇。
 
     返回 {"papers", "network_errors", "queries_tried"}。
-    - sources: 要启用的论文源子集; None 或空 → 三源全开。ClinicalTrials 不在此(走旁路)。
+    - sources: 要启用的论文源子集; None 或空 → 论文源全开。ClinicalTrials 不在此(走旁路)。
+    - sources 含 "unpaywall" 时, 合并后用 Unpaywall 给带 DOI 的文献补 oa_url(OA 全文链接)。
     - filters: {year_from, study_types} 年份/证据等级过滤(各源按各自语法落地)。
     - 各源各自召回至多 cap 篇 → 合并去重得到更大候选池 → 按 相关性+被引+新近 排序 → 取前 cap。
     - network_errors 仅在所选源全部失败时为非零(用于区分『检索式太窄』和『全网连不上』)。
-    每篇 paper 带 source: "pubmed" / "preprint" / "europepmc" / "openalex"; OpenAlex 额外带 cited_by_count。
+    每篇 paper 带 source: "pubmed"/"preprint"/"europepmc"/"openalex"/"crossref"; 部分源额外带 cited_by_count。
     """
     enabled = [s for s in _PAPER_SOURCES if (not sources or s in sources)]
     if not enabled:  # 防御: 一个论文源都没选 → 退回全开, 否则综述无文献可依
         enabled = list(_PAPER_SOURCES)
+    want_oa = (sources is None) or ("unpaywall" in sources)
     f = searchfilters.normalize(filters)
 
     cache_key = (
         "lit", tuple(queries), per_query, cap, tuple(enabled),
-        f["year_from"], tuple(f["study_types"]),
+        f["year_from"], tuple(f["study_types"]), want_oa,
     )
     cached = searchcache.get(cache_key)
     if cached is not None:
@@ -320,6 +324,7 @@ async def search_literature(
         "pubmed": lambda: _search_pubmed(queries, share, cap, f),
         "europepmc": lambda: search_epmc(queries, share, cap, f),
         "openalex": lambda: search_openalex(queries, share, cap, f),
+        "crossref": lambda: search_crossref(queries, share, cap, f),
     }
     results = await asyncio.gather(
         *(runners[s]() for s in enabled), return_exceptions=True
@@ -331,6 +336,11 @@ async def search_literature(
     ordered = [by_source[s] for s in _PAPER_SOURCES if s in by_source]
     merged = _merge_all([r["papers"] for r in ordered], cap, _query_terms(queries))
     all_fail = all(r["network_errors"] >= max(1, len(queries)) for r in ordered)
+    if want_oa and not all_fail:  # 只对最终入选的 cap 篇做 OA 富集, 失败静默(不影响主流程)
+        try:
+            await enrich_oa(merged)
+        except Exception:  # noqa: BLE001
+            pass
     net_errs = sum(r["network_errors"] for r in ordered)
     out = {
         "papers": merged,

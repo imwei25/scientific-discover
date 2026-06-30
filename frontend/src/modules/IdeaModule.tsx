@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { streamIdea, streamIdeaFollowup, runModule, Reference, Trial, EvidenceItem, Verification, RewritePayload } from "../lib/sse";
+import { streamIdea, streamIdeaFollowup, runModule, clarifyTopic, Reference, Trial, EvidenceItem, Verification, RewritePayload, TopicCard, ClarifyQuestion } from "../lib/sse";
 import { reportLLMError } from "../lib/errorToast";
 import { addHistory } from "../lib/history";
 import Markdown from "../components/Markdown";
@@ -40,8 +40,11 @@ const PAPER_SOURCES: { key: string; label: string; hint: string }[] = [
   { key: "pubmed", label: "PubMed", hint: "NCBI 权威医学库" },
   { key: "europepmc", label: "Europe PMC", hint: "含 bioRxiv/medRxiv 预印本" },
   { key: "openalex", label: "OpenAlex", hint: "覆盖最广 + 被引数" },
+  { key: "crossref", label: "Crossref", hint: "跨学科 DOI + 被引数" },
 ];
 const TRIAL_SOURCE = { key: "clinicaltrials", label: "ClinicalTrials.gov", hint: "在研临床试验（旁路）" };
+// Unpaywall 不是检索源, 而是给结果补"合法免费全文(OA)"链接的富集开关。
+const OA_SOURCE = { key: "unpaywall", label: "免费全文", hint: "Unpaywall 找 OA 全文（需配置邮箱）" };
 const STUDY_TYPES: { key: string; label: string }[] = [
   { key: "rct", label: "随机对照试验" },
   { key: "meta", label: "Meta 分析" },
@@ -65,7 +68,9 @@ export default function IdeaModule({ goto }: { goto: Goto }) {
     "pubmed",
     "europepmc",
     "openalex",
+    "crossref",
     "clinicaltrials",
+    "unpaywall",
   ]);
   const [yearFrom, setYearFrom] = usePersistentState("idea:yearFrom", "");
   const [studyTypes, setStudyTypes] = usePersistentState<string[]>("idea:studyTypes", []);
@@ -77,10 +82,17 @@ export default function IdeaModule({ goto }: { goto: Goto }) {
   const [evidence, setEvidence] = usePersistentState<EvidenceItem[]>("idea:evidence", []);
   const [text, setText] = usePersistentState("idea:result", "");
   const [verify, setVerify] = usePersistentState<Verification | null>("idea:verify", null);
+  const [card, setCard] = usePersistentState<TopicCard | null>("idea:card", null);
+  const [pickIdx, setPickIdx] = useState(0);
   const [running, setRunning] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [rewrite, setRewrite] = useState<RewritePayload | null>(null);
   const ctrl = useRef<AbortController | null>(null);
+
+  // 检索前澄清: 方向不够具体时弹出问题卡, 用户可带着回答检索或直接检索
+  const [clarifyQs, setClarifyQs] = useState<ClarifyQuestion[] | null>(null);
+  const [clarifyAns, setClarifyAns] = useState<Record<number, string>>({});
+  const [clarifying, setClarifying] = useState(false);
 
   // 追问 / 修改报告
   const [followups, setFollowups] = usePersistentState<{ q: string; a: string }[]>("idea:qa", []);
@@ -108,26 +120,31 @@ export default function IdeaModule({ goto }: { goto: Goto }) {
           "idea:evidence": evidence,
           "idea:qa": followups,
           "idea:verify": verify,
+          "idea:card": card,
         },
       });
     }
   }, [running, error, text, field, keywords, background, refs, verify]);
 
-  const submit = async (override?: { field?: string; keywords?: string }) => {
+  const submit = async (override?: { field?: string; keywords?: string; background?: string }) => {
     const f = override?.field ?? field;
     const k = override?.keywords ?? keywords;
+    const b = override?.background ?? background;
     if (!f.trim() || running) return;
     // 避免与进行中的 追问/PICO 流交叉写入
     fctrl.current?.abort();
     picoCtrl.current?.abort();
     setFRunning(false);
     setPicoRunning(false);
+    setClarifyQs(null);
     setStatus("");
     setRefs([]);
     setTrials([]);
     setEvidence([]);
     setText("");
     setVerify(null);
+    setCard(null);
+    setPickIdx(0);
     setError(null);
     setRewrite(null);
     setFollowups([]);
@@ -139,7 +156,7 @@ export default function IdeaModule({ goto }: { goto: Goto }) {
       {
         field: f,
         keywords: k,
-        background,
+        background: b,
         depth,
         sources,
         filters: { year_from: yearFrom, study_types: studyTypes },
@@ -153,6 +170,7 @@ export default function IdeaModule({ goto }: { goto: Goto }) {
         onDelta: (t) => setText((p) => p + t),
         onVerify: setVerify,
         onRewriteSuggestion: setRewrite,
+        onTopicCard: setCard,
         onError: (m) => {
           setError(m);
           setStatus("");
@@ -168,6 +186,43 @@ export default function IdeaModule({ goto }: { goto: Goto }) {
       },
     );
     setRunning(false);
+  };
+
+  // 点「开始」先做一次廉价澄清: 方向够具体→直接检索; 不够→弹问题卡(可跳过)。
+  const onStart = async () => {
+    if (!field.trim() || running || noPaperSource || clarifying) return;
+    setClarifyQs(null);
+    setClarifying(true);
+    const res = await clarifyTopic({ field, keywords, background });
+    setClarifying(false);
+    if (res.ready || res.questions.length === 0) {
+      submit();
+    } else {
+      setClarifyAns({});
+      setClarifyQs(res.questions);
+    }
+  };
+
+  // 把澄清回答拼进背景后检索(用 override 传入, 规避 setState 异步)。
+  const submitWithClarify = () => {
+    if (!clarifyQs) return;
+    const lines = clarifyQs
+      .map((q, i) => {
+        const a = (clarifyAns[i] || "").trim();
+        return a ? `${q.q} ${a}` : "";
+      })
+      .filter(Boolean);
+    const composed = lines.length
+      ? (background ? background + "\n\n" : "") + "[检索前澄清]\n" + lines.join("\n")
+      : background;
+    setBackground(composed);
+    setClarifyQs(null);
+    submit({ background: composed });
+  };
+
+  const skipClarify = () => {
+    setClarifyQs(null);
+    submit();
   };
 
   const acceptRewrite = () => {
@@ -187,6 +242,7 @@ export default function IdeaModule({ goto }: { goto: Goto }) {
   const stop = () => {
     ctrl.current?.abort();
     setRunning(false);
+    setStatus(""); // 同时清掉状态行, 否则 spinner 会一直转
   };
 
   const runFollowup = async (mode: "ask" | "revise") => {
@@ -289,6 +345,9 @@ export default function IdeaModule({ goto }: { goto: Goto }) {
     setEvidence([]);
     setText("");
     setVerify(null);
+    setCard(null);
+    setPickIdx(0);
+    setClarifyQs(null);
     setStatus("");
     setError(null);
     setRewrite(null);
@@ -299,8 +358,8 @@ export default function IdeaModule({ goto }: { goto: Goto }) {
       <header className="module-head">
         <h1>💡 找选题 · 医学/药学/生物</h1>
         <p>
-          我会实际检索 <strong>PubMed / Europe PMC / OpenAlex</strong> 多源真实文献（按相关性+被引+新近择优纳入），
-          梳理该方向已有哪些工作、还缺什么，再给出有文献支撑的候选选题。文中引用均为可点击的文献链接。
+          我会实际检索 <strong>PubMed / Europe PMC / OpenAlex / Crossref</strong> 多源真实文献（按相关性+被引+新近择优纳入），
+          梳理该方向已有哪些工作、还缺什么，再给出有文献支撑的候选选题。文中引用均为可点击的文献链接，可选开启 Unpaywall 找免费全文。
         </p>
       </header>
 
@@ -365,10 +424,20 @@ export default function IdeaModule({ goto }: { goto: Goto }) {
               <span className="source-name">{TRIAL_SOURCE.label}</span>
               <span className="source-hint">{TRIAL_SOURCE.hint}</span>
             </label>
+            <label className={`source-chip oa${sources.includes(OA_SOURCE.key) ? " on" : ""}`}>
+              <input
+                type="checkbox"
+                data-testid={`source-${OA_SOURCE.key}`}
+                checked={sources.includes(OA_SOURCE.key)}
+                onChange={() => toggleSource(OA_SOURCE.key)}
+              />
+              <span className="source-name">🔓 {OA_SOURCE.label}</span>
+              <span className="source-hint">{OA_SOURCE.hint}</span>
+            </label>
           </div>
           {noPaperSource && (
             <span className="source-warn" data-testid="source-warn">
-              请至少选择一个论文源（PubMed / Europe PMC / OpenAlex），否则没有文献可供综述。
+              请至少选择一个论文源（PubMed / Europe PMC / OpenAlex / Crossref），否则没有文献可供综述。
             </span>
           )}
         </div>
@@ -412,8 +481,8 @@ export default function IdeaModule({ goto }: { goto: Goto }) {
           }
         />
         <div className="form-actions">
-          <button className="btn-primary" onClick={() => submit()} disabled={!field.trim() || running || noPaperSource} data-testid="run-btn">
-            {running ? "调研中…" : "开始文献调研"}
+          <button className="btn-primary" onClick={onStart} disabled={!field.trim() || running || noPaperSource || clarifying} data-testid="run-btn">
+            {clarifying ? "聚焦方向中…" : running ? "调研中…" : "开始文献调研"}
           </button>
           <button className="btn-secondary" onClick={genPico} disabled={!field.trim() || picoRunning} data-testid="pico-btn">
             {picoRunning ? "提取中…" : "提取 PICO / 纳排标准"}
@@ -439,6 +508,47 @@ export default function IdeaModule({ goto }: { goto: Goto }) {
             {picoRunning && <span className="cursor-blink">▍</span>}
           </div>
         </details>
+      )}
+
+      {clarifyQs && !running && (
+        <div className="clarify-card" data-testid="clarify-card">
+          <div className="clarify-title">先聚焦一下方向（{clarifyQs.length} 个问题，可选答）</div>
+          <p className="clarify-tip">方向较宽或较模糊时，回答下面问题能让检索更准；也可直接跳过。</p>
+          {clarifyQs.map((q, i) => (
+            <div key={i} className="clarify-q" data-testid={`clarify-q-${i}`}>
+              <div className="clarify-q-text">{q.q}</div>
+              {q.options.length > 0 && (
+                <div className="clarify-opts">
+                  {q.options.map((o) => (
+                    <button
+                      key={o}
+                      type="button"
+                      className={`clarify-chip${clarifyAns[i] === o ? " on" : ""}`}
+                      onClick={() => setClarifyAns((p) => ({ ...p, [i]: p[i] === o ? "" : o }))}
+                    >
+                      {o}
+                    </button>
+                  ))}
+                </div>
+              )}
+              <input
+                className="clarify-input"
+                data-testid={`clarify-input-${i}`}
+                value={clarifyAns[i] ?? ""}
+                onChange={(e) => setClarifyAns((p) => ({ ...p, [i]: e.target.value }))}
+                placeholder="或自行填写…"
+              />
+            </div>
+          ))}
+          <div className="form-actions">
+            <button className="btn-primary" data-testid="clarify-go-btn" onClick={submitWithClarify}>
+              带着回答检索
+            </button>
+            <button className="btn-ghost" data-testid="clarify-skip-btn" onClick={skipClarify}>
+              直接检索
+            </button>
+          </div>
+        </div>
       )}
 
       {status && (
@@ -527,6 +637,7 @@ export default function IdeaModule({ goto }: { goto: Goto }) {
                 {r.source === "preprint" && <span className="ref-badge ref-badge-preprint">预印本</span>}
                 {r.source === "europepmc" && <span className="ref-badge ref-badge-epmc">Europe PMC</span>}
                 {r.source === "openalex" && <span className="ref-badge ref-badge-openalex">OpenAlex</span>}
+                {r.source === "crossref" && <span className="ref-badge ref-badge-crossref">Crossref</span>}
                 {(r.cited_by_count ?? 0) > 0 && (
                   <span className="ref-badge ref-badge-cited">被引 {r.cited_by_count}</span>
                 )}
@@ -534,6 +645,9 @@ export default function IdeaModule({ goto }: { goto: Goto }) {
                   {r.first_author} ({r.year}). {r.title}
                 </a>
                 {r.journal && <span className="ref-journal"> — {r.journal}</span>}
+                {r.oa_url && (
+                  <a className="ref-oa" href={r.oa_url} target="_blank" rel="noreferrer">🔓 免费全文</a>
+                )}
               </li>
             ))}
           </ol>
@@ -567,10 +681,10 @@ export default function IdeaModule({ goto }: { goto: Goto }) {
               className="btn-ghost"
               data-testid="export-evidence-btn"
               onClick={() => {
-                const headers = ["序号", "第一作者", "年份", "标题", "期刊", "来源", "被引", "研究对象", "设计/方法", "主要发现", "局限/空白", "链接"];
+                const headers = ["序号", "第一作者", "年份", "标题", "期刊", "来源", "被引", "研究对象", "设计/方法", "主要发现", "局限/空白", "链接", "免费全文"];
                 const rows = evidence.map((e) => [
                   e.index, e.first_author, e.year, e.title, e.journal, e.source, e.cited_by_count,
-                  e.pop, e.design, e.finding, e.gap, e.url,
+                  e.pop, e.design, e.finding, e.gap, e.url, e.oa_url || "",
                 ]);
                 downloadCsv(tsName("证据表", "csv"), headers, rows);
               }}
@@ -664,6 +778,48 @@ export default function IdeaModule({ goto }: { goto: Goto }) {
             ))}
           </div>
         )
+      )}
+
+      {card && card.candidates.length > 0 && !running && (
+        <div className="topic-card" data-testid="topic-card">
+          <div className="topic-card-head">🧭 选题卡 · 选一个候选选题继续</div>
+          {card.facets.length > 0 && (
+            <div className="topic-facets" data-testid="topic-facets">
+              <span className="topic-facets-label">子方向：</span>
+              {card.facets.map((f) => (
+                <span key={f} className="facet-chip">{f}</span>
+              ))}
+            </div>
+          )}
+          <div className="topic-pick">
+            <select
+              data-testid="candidate-select"
+              value={pickIdx}
+              onChange={(e) => setPickIdx(Number(e.target.value))}
+            >
+              {card.candidates.map((c, i) => (
+                <option key={i} value={i}>
+                  候选选题{c.n}：{c.title}
+                  {c.feasibility != null ? `（可行★${c.feasibility}｜创新★${c.innovation ?? "-"}）` : ""}
+                </option>
+              ))}
+            </select>
+            <button
+              className="btn-primary"
+              data-testid="card-to-plan-btn"
+              onClick={() => {
+                const c = card.candidates[pickIdx] ?? card.candidates[0];
+                goto("plan", {
+                  "plan:idea": `${c.title}\n\n${c.body}`,
+                  "plan:field": card.field,
+                  "plan:resources": background,
+                });
+              }}
+            >
+              用选定选题做实验规划 →
+            </button>
+          </div>
+        </div>
       )}
 
       {text && !running && (

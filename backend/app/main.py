@@ -15,7 +15,7 @@ from pathlib import Path
 
 from fastapi import FastAPI, File, Form, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import Response, StreamingResponse
+from fastapi.responses import JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -25,7 +25,7 @@ from .llm import LLMError, get_balance, get_session_usage, stream_chat
 from .prompts import build_messages
 from .imrad import assemble_imrad
 from .rebuttal import rebuttal
-from .research import deep_research_idea, idea_followup
+from .research import clarify_topic, deep_research_idea, idea_followup
 from .projects import router as projects_router
 
 # 说明: 依赖 pandas/scipy/matplotlib/citeproc/python-docx 等重库的模块
@@ -186,6 +186,20 @@ async def idea(req: RunRequest) -> StreamingResponse:
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
+
+
+@app.post("/api/idea/clarify")
+async def idea_clarify(req: RunRequest) -> JSONResponse:
+    """检索前澄清: 判断方向是否够具体, 不够则回最多 3 个澄清问题(非流式)。
+
+    任何异常/mock 一律返回 ready=True 放行, 绝不阻塞用户检索。
+    """
+    if settings.mock:
+        return JSONResponse({"ready": True, "questions": []})
+    try:
+        return JSONResponse(await clarify_topic(req.inputs))
+    except Exception:  # noqa: BLE001
+        return JSONResponse({"ready": True, "questions": []})
 
 
 @app.post("/api/imrad")

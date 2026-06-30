@@ -22,6 +22,10 @@ async function mockBase(page: Page) {
     }),
   );
   await page.route("**/api/usage", (r) => r.fulfill({ json: { available: false } }));
+  // 检索前澄清: 默认放行(ready=true), 用例可单独覆盖以验证澄清问题卡。
+  await page.route("**/api/idea/clarify", (r) =>
+    r.fulfill({ json: { ready: true, questions: [] } }),
+  );
 }
 
 test("AI免责声明可显示并关闭", async ({ page }) => {
@@ -117,6 +121,72 @@ test("找选题: 检索PubMed并返回带链接的结果", async ({ page }) => {
   await expect(inlineLink).toHaveAttribute("href", "https://pubmed.ncbi.nlm.nih.gov/12345/");
   // 引用核验通过提示
   await expect(page.getByTestId("verify")).toContainText("引用核验");
+});
+
+test("找选题: 检索前澄清问题卡, 带着回答检索", async ({ page }) => {
+  await mockBase(page);
+  // 覆盖默认放行: 让澄清返回一个问题
+  await page.route("**/api/idea/clarify", (r) =>
+    r.fulfill({ json: { ready: false, questions: [{ q: "目标人群?", options: ["新辅助", "转移性"] }] } }),
+  );
+  let ideaBody = "";
+  await page.route("**/api/idea", async (r) => {
+    ideaBody = r.request().postData() ?? "";
+    await r.fulfill({
+      contentType: "text/event-stream",
+      body: sse(
+        { event: "delta", data: { text: "## 一、研究现状\n略。" } },
+        { event: "done", data: {} },
+      ),
+    });
+  });
+  await page.goto("/");
+  await page.getByTestId("nav-idea").click();
+  await page.getByTestId("input-field").fill("PD-1 三阴性乳腺癌");
+  await page.getByTestId("run-btn").click();
+  // 澄清卡出现, 选一个选项后带着回答检索
+  await expect(page.getByTestId("clarify-card")).toContainText("目标人群");
+  await page.getByTestId("clarify-q-0").getByText("新辅助").click();
+  await page.getByTestId("clarify-go-btn").click();
+  await expect(page.getByTestId("result-text")).toContainText("研究现状");
+  // 澄清回答已并入 background 传给后端
+  expect(ideaBody).toContain("检索前澄清");
+  expect(ideaBody).toContain("新辅助");
+});
+
+test("找选题: 结构化选题卡 → 按候选选题做实验规划", async ({ page }) => {
+  await mockBase(page);
+  await page.route("**/api/idea", (r) =>
+    r.fulfill({
+      contentType: "text/event-stream",
+      body: sse(
+        { event: "delta", data: { text: "## 三、候选选题\n### 候选选题1：PD-1 标志物\n详述。" } },
+        {
+          event: "topic_card",
+          data: {
+            field: "PD-1 TNBC",
+            keywords: "",
+            facets: ["机制", "疗效"],
+            keyword_seed: ["PD-1"],
+            candidates: [{ n: 1, title: "PD-1 标志物", feasibility: 4, innovation: 3, body: "拟解决: xxx" }],
+            ref_count: 1,
+          },
+        },
+        { event: "done", data: {} },
+      ),
+    }),
+  );
+  await page.goto("/");
+  await page.getByTestId("nav-idea").click();
+  await page.getByTestId("input-field").fill("PD-1 TNBC");
+  await page.getByTestId("run-btn").click();
+  // 选题卡出现, 含子方向与候选选题
+  await expect(page.getByTestId("topic-card")).toBeVisible();
+  await expect(page.getByTestId("topic-facets")).toContainText("机制");
+  await expect(page.getByTestId("candidate-select")).toContainText("PD-1 标志物");
+  // 选定选题交接到实验规划
+  await page.getByTestId("card-to-plan-btn").click();
+  await expect(page.getByTestId("input-idea")).toHaveValue(/PD-1 标志物/);
 });
 
 test("找选题: 显示在研临床试验(ClinicalTrials旁路)并渲染空白矩阵表格", async ({ page }) => {
@@ -717,12 +787,13 @@ test("找选题: 取消所有论文源时禁用调研并提示", async ({ page }
   await page.goto("/");
   await page.getByTestId("nav-idea").click();
   await page.getByTestId("input-field").fill("某方向");
-  // 默认四源全开, 按钮可用
+  // 默认全开, 按钮可用
   await expect(page.getByTestId("run-btn")).toBeEnabled();
-  // 取消三个论文源
+  // 取消全部论文源(PubMed/Europe PMC/OpenAlex/Crossref)
   await page.getByTestId("source-pubmed").uncheck();
   await page.getByTestId("source-europepmc").uncheck();
   await page.getByTestId("source-openalex").uncheck();
+  await page.getByTestId("source-crossref").uncheck();
   await expect(page.getByTestId("source-warn")).toBeVisible();
   await expect(page.getByTestId("run-btn")).toBeDisabled();
   // 勾回一个论文源后恢复可用

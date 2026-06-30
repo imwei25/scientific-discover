@@ -102,6 +102,15 @@ def openalex_params(filters: dict) -> dict:
     return {"filter_extra": ",".join(parts)}
 
 
+def crossref_filter(filters: dict) -> str:
+    """Crossref 的 filter 子句(逗号分隔)。Crossref 无 RCT/Meta 等证据等级分类, 仅落地年份。"""
+    parts = []
+    yf = filters.get("year_from")
+    if yf:
+        parts.append(f"from-pub-date:{yf}-01-01")
+    return ",".join(parts)
+
+
 def label(filters: dict) -> str:
     """人类可读的过滤摘要(用于状态提示)。"""
     bits = []

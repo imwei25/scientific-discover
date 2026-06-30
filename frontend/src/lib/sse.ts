@@ -169,13 +169,15 @@ export async function streamPost(
 
 export interface Reference {
   pmid: string;
+  doi?: string;
   title: string;
   first_author: string;
   journal: string;
   year: string;
   url: string;
-  source?: string; // "pubmed" | "preprint" | "europepmc" | "openalex"
+  source?: string; // "pubmed" | "preprint" | "europepmc" | "openalex" | "crossref"
   cited_by_count?: number;
+  oa_url?: string; // Unpaywall 发现的合法 OA 全文链接(优先 PDF)
 }
 
 export interface EvidenceItem {
@@ -187,6 +189,7 @@ export interface EvidenceItem {
   url: string;
   source: string;
   cited_by_count: number;
+  oa_url?: string;
   pop: string;
   design: string;
   finding: string;
@@ -221,6 +224,58 @@ export interface RewritePayload {
   suggestion: RewriteSuggestion | null;
 }
 
+// 结构化选题卡: 报告里解析出的候选选题 + 子方向, 供按选题精准交接给实验规划。
+export interface Candidate {
+  n: number;
+  title: string;
+  feasibility: number | null;
+  innovation: number | null;
+  body: string;
+}
+
+export interface TopicCard {
+  field: string;
+  keywords: string;
+  facets: string[];
+  keyword_seed: string[];
+  candidates: Candidate[];
+  ref_count: number;
+}
+
+// 检索前澄清: 方向不够具体时, 后端回最多 3 个澄清问题(每题带候选选项)。
+export interface ClarifyQuestion {
+  q: string;
+  options: string[];
+}
+
+export interface ClarifyResult {
+  ready: boolean;
+  questions: ClarifyQuestion[];
+}
+
+// 调一次非流式澄清接口; 任何失败都返回 ready=true(放行), 绝不卡住检索。
+export async function clarifyTopic(
+  inputs: Record<string, unknown>,
+  signal?: AbortSignal,
+): Promise<ClarifyResult> {
+  try {
+    const resp = await fetch(apiUrl("/api/idea/clarify"), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ module: "idea", inputs }),
+      signal,
+    });
+    if (!resp.ok) return { ready: true, questions: [] };
+    const data = await resp.json();
+    return {
+      ready: !!data.ready,
+      questions: Array.isArray(data.questions) ? data.questions : [],
+    };
+  } catch {
+    return { ready: true, questions: [] };
+  }
+}
+
 export interface IdeaHandlers {
   onStatus?: (message: string) => void;
   onReferences?: (items: Reference[]) => void;
@@ -229,6 +284,7 @@ export interface IdeaHandlers {
   onDelta: (text: string) => void;
   onVerify?: (v: Verification) => void;
   onRewriteSuggestion?: (p: RewritePayload) => void;
+  onTopicCard?: (card: TopicCard) => void;
   onDone?: () => void;
   onError?: (message: string) => void;
   signal?: AbortSignal;
@@ -283,6 +339,7 @@ export async function streamIdea(
             tried_queries: data.tried_queries ?? [],
             suggestion: data.suggestion ?? null,
           });
+        else if (ev.event === "topic_card") h.onTopicCard?.(data as TopicCard);
         else if (ev.event === "error") h.onError?.(data.message ?? ev.data);
         else if (ev.event === "done") h.onDone?.();
       }

@@ -26,7 +26,7 @@ from .config import settings
 from .literature import search_literature
 from .llm import stream_chat
 
-_ALL_SOURCES = ["pubmed", "europepmc", "openalex", "clinicaltrials"]
+_ALL_SOURCES = ["pubmed", "europepmc", "openalex", "crossref", "clinicaltrials", "unpaywall"]
 
 
 def _parse_sources(raw) -> list[str]:
@@ -153,6 +153,45 @@ async def _suggest_rewrite(
     if not f and not k:
         return None
     return {"field": f or field, "keywords": k, "reason": r}
+
+
+async def clarify_topic(inputs: dict) -> dict:
+    """检索前澄清: 判断研究方向是否够具体, 不够则回最多 3 个澄清问题(非流式)。
+
+    返回 {"ready": bool, "questions": [{"q": "...", "options": ["...", ...]}]}。
+    任何判断失败都返回 ready=True(放行), 绝不卡住用户的检索流程。
+    """
+    field = (inputs.get("field") or "").strip()
+    keywords = (inputs.get("keywords") or "").strip()
+    background = (inputs.get("background") or "").strip()[:500]
+    if not field:
+        return {"ready": True, "questions": []}
+    system = (
+        "你是医学/生物医学科研选题顾问。判断用户给的研究方向是否【足够具体到可以直接检索 PubMed】。"
+        "若足够具体，返回 {\"ready\":true,\"questions\":[]}。"
+        "若过宽/过窄/有歧义，返回最多 3 个最能缩小范围的澄清问题"
+        "（如：目标人群或疾病分期、干预/暴露、对照、主要结局指标、研究类型等，依主题而定），"
+        "每个问题给 2-4 个具体候选选项（用户也可自填）。"
+        "只输出一个 JSON 对象：{\"ready\":bool,\"questions\":[{\"q\":\"问题\",\"options\":[\"选项1\",\"选项2\"]}]}，"
+        "不要任何解释。"
+    )
+    user = field + (f"；关键词：{keywords}" if keywords else "") + (f"；背景：{background}" if background else "")
+    obj = _parse_json(
+        await _complete([{"role": "system", "content": system}, {"role": "user", "content": user}], max_tokens=500),
+        "{", "}",
+    )
+    if not isinstance(obj, dict):
+        return {"ready": True, "questions": []}
+    qs: list[dict] = []
+    for q in obj.get("questions") or []:
+        if not isinstance(q, dict) or not str(q.get("q") or "").strip():
+            continue
+        opts = [str(o).strip() for o in (q.get("options") or []) if str(o).strip()][:4]
+        qs.append({"q": str(q["q"]).strip(), "options": opts})
+        if len(qs) >= 3:
+            break
+    # ready 取 LLM 的判断; 若它说没准备好却又没给出问题, 视为放行避免空卡。
+    return {"ready": bool(obj.get("ready")) or not qs, "questions": qs}
 
 
 async def _gap_queries(field: str, papers: list[dict]) -> list[str]:
@@ -290,6 +329,7 @@ def _evidence_items(papers: list[dict], evidence: dict[int, dict]) -> list[dict]
             "url": p.get("url", ""),
             "source": p.get("source", ""),
             "cited_by_count": p.get("cited_by_count", 0),
+            "oa_url": p.get("oa_url", ""),
             "pop": row.get("pop", ""),
             "design": row.get("design", ""),
             "finding": row.get("finding", ""),
@@ -421,8 +461,8 @@ def _synthesis_messages_deep(field: str, papers: list[dict], context: str | None
 
 
 def _src_label(sources: list[str]) -> str:
-    names = {"pubmed": "PubMed", "europepmc": "Europe PMC", "openalex": "OpenAlex"}
-    enabled = [names[s] for s in ("pubmed", "europepmc", "openalex") if s in sources]
+    names = {"pubmed": "PubMed", "europepmc": "Europe PMC", "openalex": "OpenAlex", "crossref": "Crossref"}
+    enabled = [names[s] for s in ("pubmed", "europepmc", "openalex", "crossref") if s in sources]
     return " / ".join(enabled) if enabled else "PubMed"
 
 
@@ -499,7 +539,7 @@ async def _deep_flow(
         return [p for _, g in groups for p in g]
 
     papers = _flatten()
-    yield ("references", {"items": [{k: p.get(k, "") for k in ("pmid", "title", "first_author", "journal", "year", "url", "source", "cited_by_count")} for p in papers]})
+    yield ("references", {"items": [{k: p.get(k, "") for k in ("pmid", "doi", "title", "first_author", "journal", "year", "url", "source", "cited_by_count", "oa_url")} for p in papers]})
 
     queries = [f["query"] for f in facets]
     trials = await _emit_trials(queries, sources)
@@ -515,7 +555,7 @@ async def _deep_flow(
         if gap_grp:
             groups.append(("空白补充角度", gap_grp))
             papers = _flatten()
-            yield ("references", {"items": [{k: p.get(k, "") for k in ("pmid", "title", "first_author", "journal", "year", "url", "source", "cited_by_count")} for p in papers]})
+            yield ("references", {"items": [{k: p.get(k, "") for k in ("pmid", "doi", "title", "first_author", "journal", "year", "url", "source", "cited_by_count", "oa_url")} for p in papers]})
 
     # 结构化证据表: 综述前把每篇压成要点行(并发抽取), 既能纳入更多文献又抗"中段被忽略"。
     yield ("status", {"message": f"共 {len(papers)} 篇文献，正在逐篇抽取结构化要点…"})
@@ -534,6 +574,10 @@ async def _deep_flow(
     async for piece in stream_chat(_reduce_messages_deep(field, summaries, _trials_note(trial_items))):
         full += piece
         yield ("delta", {"text": piece})
+    yield ("topic_card", _build_topic_card(
+        field, keywords, full, papers,
+        [name for name, _ in groups], [f["query"] for f in facets],
+    ))
     yield ("__verify__", {"papers": papers, "full": full})
 
 
@@ -558,6 +602,8 @@ async def _mock_flow(field: str) -> AsyncIterator[tuple[str, dict]]:
             "year": "2024",
             "url": "https://openalex.org/W0000000001",
             "source": "openalex",
+            "doi": "10.0000/mock",
+            "oa_url": "https://example.org/mock-oa.pdf",
         },
     ]
     yield ("references", {"items": items})
@@ -576,13 +622,16 @@ async def _mock_flow(field: str) -> AsyncIterator[tuple[str, dict]]:
     yield ("evidence", {"items": [
         {"index": 1, "first_author": "Smith J", "year": "2023", "title": f"[MOCK] A study related to {field}",
          "journal": "Mock Journal", "url": "https://pubmed.ncbi.nlm.nih.gov/00000001/", "source": "pubmed",
-         "cited_by_count": 12, "pop": "成人患者", "design": "RCT", "finding": "[MOCK] 主要终点改善", "gap": "样本量小"},
+         "cited_by_count": 12, "oa_url": "https://example.org/mock-oa.pdf",
+         "pop": "成人患者", "design": "RCT", "finding": "[MOCK] 主要终点改善", "gap": "样本量小"},
     ]})
     yield ("status", {"message": "正在分析研究现状与空白…"})
     text = (
         "## 一、研究现状\n已有工作见 [Smith et al., 2023](https://pubmed.ncbi.nlm.nih.gov/00000001/)。\n"
         "## 二、研究空白矩阵\n\n| 角度 | 证据强度 |\n| --- | --- |\n| 机制 | 充分 |\n| 长期结局 | 空白 |\n\n"
-        "## 三、候选选题\n1. [MOCK] 一个示例选题。"
+        "## 三、候选选题\n\n"
+        "### 候选选题1：[MOCK] 一个示例选题\n拟解决的科学问题：示例。\n"
+        "> 可行性 ★4/5（示例理由）｜创新性 ★3/5（示例理由）\n"
     )
     for ch in text:
         yield ("delta", {"text": ch})
@@ -602,8 +651,14 @@ async def deep_research_idea(inputs: dict) -> AsyncIterator[tuple[str, dict]]:
     filters = searchfilters.normalize(inputs.get("filters"))
 
     if settings.mock:
+        full = ""
         async for ev in _mock_flow(field):
+            if ev[0] == "delta":
+                full += ev[1].get("text", "")
             yield ev
+        yield ("topic_card", _build_topic_card(
+            field, keywords, full, [{}], ["机制", "疗效"], ["mock query"],
+        ))
         yield ("verify", {"total": 1, "verified": 1, "unverified": []})
         yield ("done", {})
         return
@@ -641,7 +696,7 @@ async def deep_research_idea(inputs: dict) -> AsyncIterator[tuple[str, dict]]:
                 yield ("error", {"message": "未能从所选文献源检索到相关文献。可采纳上面的 AI 改写建议后重试。"})
                 return
             yield ("references", {"items": [
-                {k: p.get(k, "") for k in ("pmid", "title", "first_author", "journal", "year", "url", "source", "cited_by_count")} for p in papers
+                {k: p.get(k, "") for k in ("pmid", "doi", "title", "first_author", "journal", "year", "url", "source", "cited_by_count", "oa_url")} for p in papers
             ]})
             trials = await _emit_trials(queries, sources)
             if trials is not None:
@@ -650,6 +705,7 @@ async def deep_research_idea(inputs: dict) -> AsyncIterator[tuple[str, dict]]:
             async for piece in stream_chat(_synthesis_messages(field, papers)):
                 full += piece
                 yield ("delta", {"text": piece})
+            yield ("topic_card", _build_topic_card(field, keywords, full, papers, [], queries))
 
         if not papers:
             return
@@ -660,6 +716,48 @@ async def deep_research_idea(inputs: dict) -> AsyncIterator[tuple[str, dict]]:
         # 把完整 traceback 打到 server.log, 友好错误返给前端。
         print("[idea] exception:\n" + traceback.format_exc(), flush=True)
         yield ("error", {"message": f"调研过程出错：{type(e).__name__}: {e}"})
+
+
+def _parse_candidates(full: str) -> list[dict]:
+    """从报告正文按固定格式 `### 候选选题N：题名` 切出候选选题, 并解析自评分。
+
+    报告由 _reduce_messages_deep / _synthesis_messages 强制为该格式, 故正则解析可靠;
+    解析失败(格式漂移)时返回空列表, 前端选题卡自动隐藏, 不影响整段报告交接。
+    """
+    # 2 个捕获组(编号、题名), re.split 产出: [前言, n, 题名, 正文, n, 题名, 正文, ...]
+    parts = re.split(r"(?m)^###\s*候选选题\s*(\d+)\s*[：:]\s*(.+?)\s*$", full)
+    out: list[dict] = []
+    for i in range(1, len(parts) - 2, 3):
+        title = parts[i + 1].strip()
+        body = parts[i + 2].strip()
+        m = re.search(r"可行性\s*★\s*(\d).*?创新性\s*★\s*(\d)", body, re.S)
+        try:
+            n = int(parts[i])
+        except (ValueError, TypeError):
+            n = len(out) + 1
+        out.append({
+            "n": n,
+            "title": title,
+            "feasibility": int(m.group(1)) if m else None,
+            "innovation": int(m.group(2)) if m else None,
+            "body": body,
+        })
+    return out
+
+
+def _build_topic_card(
+    field: str, keywords: str, full: str, papers: list[dict],
+    facet_names: list[str], keyword_seed: list[str],
+) -> dict:
+    """把一次调研沉淀为结构化选题卡, 供前端按候选选题精准交接给实验规划。"""
+    return {
+        "field": field,
+        "keywords": keywords,
+        "facets": facet_names,
+        "keyword_seed": keyword_seed,
+        "candidates": _parse_candidates(full),
+        "ref_count": len(papers),
+    }
 
 
 def _verify_citations(full: str, items: list[dict]) -> dict:

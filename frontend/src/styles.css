@@ -903,6 +903,108 @@ select {
   display: flex;
   gap: 8px;
 }
+
+/* 检索前澄清问题卡 */
+.clarify-card {
+  margin-top: var(--sp-4);
+  padding: 14px 18px;
+  background: var(--teal-soft);
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--teal);
+  border-radius: var(--radius-sm);
+}
+.clarify-card .clarify-title {
+  font-weight: 600;
+  margin-bottom: 4px;
+}
+.clarify-card .clarify-tip {
+  margin: 0 0 10px;
+  font-size: 13px;
+  opacity: 0.75;
+}
+.clarify-q {
+  margin: 10px 0;
+}
+.clarify-q-text {
+  font-size: 14px;
+  font-weight: 500;
+  margin-bottom: 6px;
+}
+.clarify-opts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 6px;
+}
+.clarify-chip {
+  padding: 4px 10px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--card);
+  cursor: pointer;
+  font-size: 13px;
+  transition: border-color 0.15s, background 0.15s;
+}
+.clarify-chip.on {
+  border-color: var(--teal);
+  background: var(--teal-soft);
+  font-weight: 600;
+}
+.clarify-input {
+  width: 100%;
+  padding: 6px 10px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  font-size: 13px;
+  box-sizing: border-box;
+}
+
+/* 结构化选题卡 */
+.topic-card {
+  margin-top: var(--sp-4);
+  padding: 14px 18px;
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--teal);
+  border-radius: var(--radius-sm);
+}
+.topic-card .topic-card-head {
+  font-weight: 600;
+  margin-bottom: 10px;
+}
+.topic-facets {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 10px;
+  font-size: 13px;
+}
+.topic-facets .topic-facets-label {
+  opacity: 0.7;
+}
+.facet-chip {
+  padding: 2px 9px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--teal-soft);
+  font-size: 12px;
+}
+.topic-pick {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+.topic-pick select {
+  flex: 1;
+  min-width: 220px;
+  padding: 6px 10px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  font-size: 13px;
+}
+
 .cursor-blink {
   display: inline-block;
   margin-left: 2px;
@@ -1077,10 +1179,27 @@ select {
   color: #3b3f8f;
   border: 1px solid #d3d8f5;
 }
+.ref-badge-crossref {
+  background: #fdeef4;
+  color: #9b2c5e;
+  border: 1px solid #f5d3e2;
+}
 .ref-badge-trial {
   background: #fff4e6;
   color: #9a5b00;
   border: 1px solid #ffd9a8;
+}
+/* OA 免费全文链接 */
+.ref-oa {
+  margin-left: 8px;
+  font-size: 12px;
+  font-weight: 600;
+  color: #1a7f37;
+  white-space: nowrap;
+}
+.source-chip.oa.on {
+  border-color: #9bdcc0;
+  background: #e8f7ef;
 }
 .ref-badge-phase {
   background: var(--teal-soft);

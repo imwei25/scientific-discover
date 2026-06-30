@@ -276,6 +276,7 @@ export default function ImradModule() {
   const stop = () => {
     ctrl.current?.abort();
     setRunning(false);
+    setStatus(""); // 同时清掉状态行, 否则 spinner 会一直转
   };
 
   const reset = () => {
