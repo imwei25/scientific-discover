@@ -1094,8 +1094,101 @@ select {
   padding: var(--sp-5) var(--sp-5) var(--sp-5);
   word-break: break-word;
   min-height: 80px;
+  position: relative;
 }
 .result-placeholder { color: var(--faint); }
+
+/* ── 可编辑画布：编辑入口 + 所见即所得编辑器 ───────────────────── */
+/* 读模式右上角「✎ 编辑」按钮 */
+.editable-head {
+  position: absolute;
+  top: 8px;
+  right: 10px;
+  z-index: 1;
+}
+/* 编辑器外壳 */
+.canvas-editor {
+  display: flex;
+  flex-direction: column;
+}
+.editor-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--line);
+  background: var(--surface-2);
+  position: sticky;
+  top: 0;
+  z-index: 2;
+}
+.editor-toolbar .btn-sm { padding: 3px 8px; }
+.editor-toolbar .btn-sm.on {
+  background: var(--teal-soft);
+  border-color: var(--teal);
+}
+.editor-sep {
+  width: 1px;
+  align-self: stretch;
+  margin: 2px 4px;
+  background: var(--line);
+}
+.editor-actions {
+  display: inline-flex;
+  gap: 8px;
+  margin-left: auto;
+}
+.canvas-editor-body {
+  padding: var(--sp-4) var(--sp-5);
+  overflow-wrap: anywhere;
+}
+.canvas-editor-body .ProseMirror {
+  outline: none;
+  min-height: 160px;
+  line-height: 1.75;
+}
+.canvas-editor-body .ProseMirror:focus { outline: none; }
+.canvas-editor-body .ProseMirror > *:first-child { margin-top: 0; }
+/* 编辑器内表格：沿用阅读态观感 + 选中/拖拽手柄 */
+.canvas-editor-body table {
+  border-collapse: collapse;
+  width: 100%;
+  margin: var(--sp-3) 0;
+  font-size: 13.5px;
+  table-layout: fixed;
+  overflow: hidden;
+}
+.canvas-editor-body th,
+.canvas-editor-body td {
+  border: 1px solid var(--line);
+  padding: 8px 12px;
+  text-align: left;
+  vertical-align: top;
+  position: relative;
+  word-break: break-word;
+}
+.canvas-editor-body th {
+  background: var(--teal-soft);
+  font-weight: 700;
+}
+.canvas-editor-body .selectedCell::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: color-mix(in srgb, var(--teal) 16%, transparent);
+  pointer-events: none;
+}
+.canvas-editor-body .column-resize-handle {
+  position: absolute;
+  right: -2px;
+  top: 0;
+  bottom: 0;
+  width: 4px;
+  background: var(--teal);
+  cursor: col-resize;
+}
+.canvas-editor-body .tableWrapper { overflow-x: auto; }
 .result-error {
   margin-top: var(--sp-4);
   padding: 14px 18px;
@@ -1327,14 +1420,59 @@ select {
   color: var(--muted);
   white-space: pre-wrap;
 }
-.candidate-to-plan {
+.candidate-actions {
   flex-shrink: 0;
   align-self: center;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+/* 写标书: 大纲确认 + 逐节修改 */
+.grant-outline-edit {
+  margin: 6px 0 0;
+  padding-left: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.grant-outline-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.grant-outline-title { flex: 1; min-width: 0; }
+.grant-outline-budget { width: 130px; flex-shrink: 0; }
+.grant-revise-list {
+  margin: 8px 0 0;
+  padding-left: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.grant-revise-item {
+  padding: 10px 12px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+}
+.grant-revise-title { font-weight: 600; margin-bottom: 6px; }
+.grant-revise-controls { display: flex; gap: 8px; align-items: center; }
+.grant-revise-controls input { flex: 1; min-width: 0; }
+@media (max-width: 720px) {
+  .grant-revise-controls { flex-direction: column; align-items: stretch; }
+}
+.candidate-to-plan,
+.candidate-to-grant {
   white-space: nowrap;
 }
 @media (max-width: 720px) {
   .candidate-item { flex-direction: column; }
-  .candidate-to-plan { align-self: stretch; }
+  .candidate-actions { align-self: stretch; }
+  .candidate-to-plan,
+  .candidate-to-grant { align-self: stretch; }
 }
 
 .cursor-blink {

@@ -1,5 +1,5 @@
 import { useState } from "react";
-import Markdown from "./Markdown";
+import EditableMarkdown from "./EditableMarkdown";
 import { downloadText, tsName } from "../lib/download";
 import { copyToClipboard } from "../lib/clipboard";
 
@@ -13,10 +13,11 @@ interface Props {
   onExportDocx?: () => void;
   exportingDocx?: boolean;
   panelTestId?: string;
+  onSave?: (md: string) => void;   // 传入则正文可编辑保存
 }
 
 // 统一的结果展示区: 流式文本 + 复制 + 导出(MD/Word) + 停止 + 状态。
-export default function ResultPanel({ text, running, error, onStop, placeholder, exportName, onExportDocx, exportingDocx, panelTestId }: Props) {
+export default function ResultPanel({ text, running, error, onStop, placeholder, exportName, onExportDocx, exportingDocx, panelTestId, onSave }: Props) {
   const [copied, setCopied] = useState<"ok" | "fail" | null>(null);
 
   const copy = async () => {
@@ -62,14 +63,13 @@ export default function ResultPanel({ text, running, error, onStop, placeholder,
           {error}
         </div>
       ) : (
-        <div className="result-text" data-testid="result-text">
-          {text ? (
-            <Markdown>{text}</Markdown>
-          ) : (
-            <span className="result-placeholder">{placeholder ?? "填好左侧信息后点击上方按钮，结果会显示在这里。"}</span>
-          )}
-          {running && <span className="cursor-blink">▍</span>}
-        </div>
+        <EditableMarkdown
+          value={text}
+          onSave={onSave}
+          running={running}
+          placeholder={placeholder ?? "填好左侧信息后点击上方按钮，结果会显示在这里。"}
+          testId="result-text"
+        />
       )}
     </div>
   );

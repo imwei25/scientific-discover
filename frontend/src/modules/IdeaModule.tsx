@@ -3,6 +3,7 @@ import { streamIdea, streamIdeaFollowup, runModule, clarifyTopic, refineTopic, R
 import { reportLLMError } from "../lib/errorToast";
 import { addHistory } from "../lib/history";
 import Markdown from "../components/Markdown";
+import EditableMarkdown from "../components/EditableMarkdown";
 import { CanvasSlot } from "../components/Canvas";
 import Dropzone from "../components/Dropzone";
 import { HelpButton } from "../components/HelpButton";
@@ -63,11 +64,6 @@ function impactOf(r: Reference): number {
 function quartileRank(r: Reference): number {
   return r.journal_quartile ? Q_RANK[r.journal_quartile] ?? 99 : 99;
 }
-// 是否有可用于过滤/排序的期刊指标(影响力或分区任一)。
-function hasMetric(r: Reference): boolean {
-  return typeof r.journal_impact === "number" || !!r.journal_quartile;
-}
-
 // 文献列表排序: 相关性(原序) / 被引 / 年份 / 影响力 / 分区
 function sortRefs(refs: Reference[], by: string): Reference[] {
   if (by === "cited") return [...refs].sort((a, b) => (b.cited_by_count ?? 0) - (a.cited_by_count ?? 0));
@@ -78,25 +74,6 @@ function sortRefs(refs: Reference[], by: string): Reference[] {
   return refs;
 }
 
-// 过滤判定: 影响力 >= min 且 分区档位 <= maxQ(maxQ=99 表示不限分区, min<=0 表示不限影响力)。
-function passesMetric(r: Reference, min: number, maxQ: number): boolean {
-  return (min <= 0 || impactOf(r) >= min) && (maxQ >= 99 || quartileRank(r) <= maxQ);
-}
-
-// 按影响力/分区过滤, 但至少保留 keepN 篇(不足则从被刷掉的里按 分区→影响力 补足)。
-// 有任一指标的文献参与过滤; 两个指标都没有的文献按 keepUnknown 决定是否保留(置末尾)。
-function filterRefs(refs: Reference[], min: number, maxQ: number, keepN: number, keepUnknown: boolean): Reference[] {
-  const usable = refs.filter(hasMetric);
-  const unknown = refs.filter((r) => !hasMetric(r));
-  let passed = usable.filter((r) => passesMetric(r, min, maxQ));
-  if (passed.length < keepN) {
-    const rest = usable
-      .filter((r) => !passesMetric(r, min, maxQ))
-      .sort((a, b) => quartileRank(a) - quartileRank(b) || impactOf(b) - impactOf(a));
-    passed = passed.concat(rest.slice(0, keepN - passed.length));
-  }
-  return keepUnknown ? [...passed, ...unknown] : passed;
-}
 
 export default function IdeaModule({ goto }: { goto: Goto }) {
   const [field, setField] = usePersistentState("idea:field", "");
@@ -118,9 +95,9 @@ export default function IdeaModule({ goto }: { goto: Goto }) {
   const [refs, setRefs] = usePersistentState<Reference[]>("idea:refs", []);
   const [refSort, setRefSort] = usePersistentState("idea:refSort", "relevance");
   // 影响力过滤: 阈值(空=不过滤) / 至少保留篇数 / 是否保留无影响力数据的文献
+  // 质量预筛(高级检索设置内, 检索时生效): 默认不筛选(空=不限, 保留未知)。
   const [impactMin, setImpactMin] = usePersistentState("idea:impactMin", "");
   const [minQuartile, setMinQuartile] = usePersistentState("idea:minQuartile", ""); // ""=不限, "1".."4"=最低到 Qn
-  const [impactKeepN, setImpactKeepN] = usePersistentState("idea:impactKeepN", "10");
   const [keepUnknownImpact, setKeepUnknownImpact] = usePersistentState("idea:keepUnknownImpact", true);
   const [trials, setTrials] = usePersistentState<Trial[]>("idea:trials", []);
   const [evidence, setEvidence] = usePersistentState<EvidenceItem[]>("idea:evidence", []);
@@ -207,7 +184,13 @@ export default function IdeaModule({ goto }: { goto: Goto }) {
         background: b,
         depth,
         sources,
-        filters: { year_from: yearFrom, study_types: studyTypes },
+        filters: {
+          year_from: yearFrom,
+          study_types: studyTypes,
+          min_quartile: minQuartile,
+          min_impact: impactMin,
+          keep_unknown: keepUnknownImpact,
+        },
       },
       {
         signal: ctrl.current.signal,
@@ -399,17 +382,8 @@ export default function IdeaModule({ goto }: { goto: Goto }) {
   // 至少要选一个论文源, 否则无文献可综述。
   const noPaperSource = !PAPER_SOURCES.some((s) => sources.includes(s.key));
 
-  // 文献列表: 先按影响力/分区过滤(阈值+至少保留N+未知策略), 再按所选规则排序。
-  const shownRefs = sortRefs(
-    filterRefs(
-      refs,
-      parseFloat(impactMin) || 0,
-      minQuartile ? parseInt(minQuartile, 10) : 99,
-      parseInt(impactKeepN, 10) || 0,
-      keepUnknownImpact,
-    ),
-    refSort,
-  );
+  // 质量筛选已在检索时(高级检索设置)完成; 列表仅按所选规则排序展示。
+  const shownRefs = sortRefs(refs, refSort);
 
   const reset = () => {
     if (running) stop();
@@ -572,6 +546,48 @@ export default function IdeaModule({ goto }: { goto: Goto }) {
             </div>
           </div>
           <span className="filter-hint">证据等级过滤主要作用于 PubMed / Europe PMC（OpenAlex 仅能近似匹配综述）。</span>
+        </div>
+        <div className="field" data-testid="quality-filters">
+          <span className="field-label">
+            文献质量（检索时预筛，喂给 AI 前生效）
+            <HelpButton helpKey="quartile" />
+          </span>
+          <div className="filter-row">
+            <label className="filter-quartile-label" title="按 Scimago(SJR) 分区过滤; 仅医学期刊有分区数据">
+              分区≥
+              <select data-testid="filter-quartile" value={minQuartile} onChange={(e) => setMinQuartile(e.target.value)}>
+                <option value="">不限</option>
+                <option value="1">仅 Q1</option>
+                <option value="2">Q1–Q2</option>
+                <option value="3">Q1–Q3</option>
+              </select>
+            </label>
+            <label title="滤掉影响力低于该值的文献(影响力指数=OpenAlex 近2年篇均被引, 非官方影响因子)">
+              影响力≥
+              <input
+                type="number"
+                min="0"
+                step="0.5"
+                placeholder="不限"
+                data-testid="filter-impact"
+                value={impactMin}
+                onChange={(e) => setImpactMin(e.target.value)}
+                style={{ width: "4.5em" }}
+              />
+            </label>
+            <label className="type-chip" title="既无影响力也无分区数据的文献(如新刊/部分会议/中文刊/预印本)是否保留">
+              <input
+                type="checkbox"
+                data-testid="filter-keep-unknown"
+                checked={keepUnknownImpact}
+                onChange={(e) => setKeepUnknownImpact(e.target.checked)}
+              />
+              保留无指标数据
+            </label>
+          </div>
+          <span className="filter-hint">
+            默认不筛选。设门槛后仅剔除“已知低于门槛”的期刊；高质量文献太少时会自动放宽并提示。
+          </span>
         </div>
           </div>
         </details>
@@ -751,50 +767,7 @@ export default function IdeaModule({ goto }: { goto: Goto }) {
                 <option value="quartile">分区</option>
               </select>
             </label>
-            <label title="滤掉影响力低于该值的文献(影响力指数=OpenAlex 近2年篇均被引, 非官方影响因子)">
-              影响力≥
-              <input
-                type="number"
-                min="0"
-                step="0.5"
-                placeholder="不限"
-                data-testid="impact-min"
-                value={impactMin}
-                onChange={(e) => setImpactMin(e.target.value)}
-                style={{ width: "4.5em" }}
-              />
-            </label>
-            <label title="按 Scimago 医学分区过滤(仅医学期刊有分区数据)">
-              分区≥
-              <select data-testid="filter-quartile" value={minQuartile} onChange={(e) => setMinQuartile(e.target.value)}>
-                <option value="">不限</option>
-                <option value="1">仅 Q1</option>
-                <option value="2">Q1–Q2</option>
-                <option value="3">Q1–Q3</option>
-              </select>
-            </label>
-            <label title="即便高于阈值的不足这么多篇, 也按影响力从高到低补足到这么多篇">
-              至少保留
-              <input
-                type="number"
-                min="0"
-                step="1"
-                data-testid="impact-keepn"
-                value={impactKeepN}
-                onChange={(e) => setImpactKeepN(e.target.value)}
-                style={{ width: "4em" }}
-              />
-              篇
-            </label>
-            <label className="type-chip" title="既无影响力也无分区数据的文献(如新刊/部分会议/中文刊)是否保留">
-              <input
-                type="checkbox"
-                data-testid="impact-keep-unknown"
-                checked={keepUnknownImpact}
-                onChange={(e) => setKeepUnknownImpact(e.target.checked)}
-              />
-              保留无指标数据
-            </label>
+            <span className="filter-hint">质量筛选请在上方「⚙ 高级检索设置 → 文献质量」中设置（检索时生效）。</span>
           </div>
           <ol className="ref-list">
             {shownRefs.map((r, i) => (
@@ -918,6 +891,29 @@ export default function IdeaModule({ goto }: { goto: Goto }) {
                   用此结果做实验规划 →
                 </button>
               )}
+              {/* 无结构化选题卡时, 提供整篇报告写标书的兜底入口; 有候选方向时改用每个方向后的按钮 */}
+              {text && !running && (!card || card.candidates.length === 0) && (
+                <button
+                  className="btn-ghost"
+                  data-testid="send-to-grant-btn"
+                  onClick={() =>
+                    goto("grant", {
+                      "grant:title": (card?.field || field || "").trim(),
+                      "grant:idea": "",
+                      "grant:report": text,
+                      "grant:background": background,
+                      "grant:refs": refs,
+                      "grant:phase": "idle",
+                      "grant:scheme": null,
+                      "grant:outline": [],
+                      "grant:sections": [],
+                      "grant:verify": null,
+                    })
+                  }
+                >
+                  用此结果写标书 →
+                </button>
+              )}
               {text && !running && (
                 <button
                   className="btn-ghost"
@@ -935,16 +931,13 @@ export default function IdeaModule({ goto }: { goto: Goto }) {
               )}
             </div>
           </div>
-          <div className="result-text" data-testid="result-text">
-            {text ? (
-              <Markdown>{text}</Markdown>
-            ) : (
-              <span className="result-placeholder">
-                {running ? "正在分析…" : "填好左侧信息后点击“开始文献调研”，调研报告会显示在这里。"}
-              </span>
-            )}
-            {running && <span className="cursor-blink">▍</span>}
-          </div>
+          <EditableMarkdown
+            value={text}
+            onSave={setText}
+            running={running}
+            placeholder={running ? "正在分析…" : "填好左侧信息后点击“开始文献调研”，调研报告会显示在这里。"}
+            testId="result-text"
+          />
         </div>
       </CanvasSlot>
 
@@ -967,7 +960,7 @@ export default function IdeaModule({ goto }: { goto: Goto }) {
 
       {card && card.candidates.length > 0 && !running && (
         <div className="topic-card" data-testid="topic-card">
-          <div className="topic-card-head">🧭 选题卡 · AI 给出的候选方向，挑一个直接做实验规划</div>
+          <div className="topic-card-head">🧭 选题卡 · AI 给出的候选方向，挑一个直接做实验规划或写标书</div>
           {card.facets.length > 0 && (
             <div className="topic-facets" data-testid="topic-facets">
               <span className="topic-facets-label">子方向：</span>
@@ -988,19 +981,41 @@ export default function IdeaModule({ goto }: { goto: Goto }) {
                   </div>
                   {c.body && <div className="candidate-body">{c.body}</div>}
                 </div>
-                <button
-                  className="btn-primary candidate-to-plan"
-                  data-testid={`candidate-to-plan-${i}`}
-                  onClick={() =>
-                    goto("plan", {
-                      "plan:idea": `${c.title}\n\n${c.body}`,
-                      "plan:field": card.field,
-                      "plan:resources": background,
-                    })
-                  }
-                >
-                  用此方向做实验规划 →
-                </button>
+                <div className="candidate-actions">
+                  <button
+                    className="btn-primary candidate-to-plan"
+                    data-testid={`candidate-to-plan-${i}`}
+                    onClick={() =>
+                      goto("plan", {
+                        "plan:idea": `${c.title}\n\n${c.body}`,
+                        "plan:field": card.field,
+                        "plan:resources": background,
+                      })
+                    }
+                  >
+                    用此方向做实验规划 →
+                  </button>
+                  <button
+                    className="btn-ghost candidate-to-grant"
+                    data-testid={`candidate-to-grant-${i}`}
+                    onClick={() =>
+                      goto("grant", {
+                        "grant:title": c.title,
+                        "grant:idea": `${c.title}\n\n${c.body}`,
+                        "grant:report": text,
+                        "grant:background": background,
+                        "grant:refs": refs,
+                        "grant:phase": "idle",
+                        "grant:scheme": null,
+                        "grant:outline": [],
+                        "grant:sections": [],
+                        "grant:verify": null,
+                      })
+                    }
+                  >
+                    用此方向写标书 →
+                  </button>
+                </div>
               </li>
             ))}
           </ol>

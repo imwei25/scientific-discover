@@ -337,6 +337,7 @@ export default function PlanModule() {
         placeholder="研究路线、实验设计、里程碑和风险点会显示在这里。"
         onExportDocx={() => downloadDocx(text, "实验计划", "plan")}
         exportingDocx={docxBusy === "plan"}
+        onSave={setText}
       />
 
       {(sap.text || sap.running || sap.error) && (
@@ -352,6 +353,7 @@ export default function PlanModule() {
             onExportDocx={() => downloadDocx(sap.text, "统计分析计划", "sap")}
             exportingDocx={docxBusy === "sap"}
             panelTestId="sap-panel"
+            onSave={sap.setText}
           />
         </>
       )}
@@ -369,6 +371,7 @@ export default function PlanModule() {
             onExportDocx={() => downloadDocx(dmp.text, "数据管理计划", "dmp")}
             exportingDocx={docxBusy === "dmp"}
             panelTestId="dmp-panel"
+            onSave={dmp.setText}
           />
         </>
       )}
@@ -386,6 +389,7 @@ export default function PlanModule() {
             onExportDocx={() => downloadDocx(consent.text, "知情同意书", "consent")}
             exportingDocx={docxBusy === "consent"}
             panelTestId="consent-panel"
+            onSave={consent.setText}
           />
         </>
       )}

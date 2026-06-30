@@ -5,7 +5,7 @@ import DiffView from "../components/DiffView";
 import { usePersistentState, readPersisted } from "../lib/usePersistentState";
 import { addHistory } from "../lib/history";
 import { apiUrl } from "../lib/api";
-import Markdown from "../components/Markdown";
+import EditableMarkdown from "../components/EditableMarkdown";
 import { CanvasSlot } from "../components/Canvas";
 import { HelpButton } from "../components/HelpButton";
 import Dropzone from "../components/Dropzone";
@@ -453,16 +453,13 @@ export default function ImradModule() {
               )}
             </div>
           </div>
-          <div className="result-text" data-testid="result-text">
-            {draft ? (
-              <Markdown>{draft}</Markdown>
-            ) : (
-              <span className="result-placeholder">
-                {running ? "正在撰写…" : "填好左侧材料后点击生成，论文初稿会显示在这里。"}
-              </span>
-            )}
-            {running && <span className="cursor-blink">▍</span>}
-          </div>
+          <EditableMarkdown
+            value={draft}
+            onSave={setDraft}
+            running={running}
+            placeholder={running ? "正在撰写…" : "填好左侧材料后点击生成，论文初稿会显示在这里。"}
+            testId="result-text"
+          />
         </div>
       </CanvasSlot>
 
@@ -509,10 +506,13 @@ export default function ImradModule() {
               <button className="btn-ghost" data-testid="abs-export-btn" onClick={() => downloadText(tsName("摘要", "md"), abstract)}>导出 Markdown</button>
             )}
           </div>
-          <div className="result-text" data-testid="abs-text">
-            {abstract ? <Markdown>{abstract}</Markdown> : <span className="result-placeholder">正在生成…</span>}
-            {absRunning && <span className="cursor-blink">▍</span>}
-          </div>
+          <EditableMarkdown
+            value={abstract}
+            onSave={setAbstract}
+            running={absRunning}
+            placeholder="正在生成…"
+            testId="abs-text"
+          />
         </div>
       )}
       </CanvasSlot>
@@ -527,10 +527,13 @@ export default function ImradModule() {
               <button className="btn-ghost" data-testid="kw-stop-btn" onClick={() => { kwCtrl.current?.abort(); setKwRunning(false); }}>停止</button>
             )}
           </div>
-          <div className="result-text" data-testid="kw-text">
-            {keywords ? <Markdown>{keywords}</Markdown> : <span className="result-placeholder">正在推荐…</span>}
-            {kwRunning && <span className="cursor-blink">▍</span>}
-          </div>
+          <EditableMarkdown
+            value={keywords}
+            onSave={setKeywords}
+            running={kwRunning}
+            placeholder="正在推荐…"
+            testId="kw-text"
+          />
         </div>
       )}
       </CanvasSlot>

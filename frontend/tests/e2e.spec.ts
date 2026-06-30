@@ -225,6 +225,10 @@ test("找选题: 结构化选题卡 → 按候选选题做实验规划", async (
   await expect(page.getByTestId("topic-card")).toBeVisible();
   await expect(page.getByTestId("topic-facets")).toContainText("机制");
   await expect(page.getByTestId("candidate-0")).toContainText("PD-1 标志物");
+  // 有候选方向时, 顶层"整篇报告"兜底按钮(规划/标书)都应隐藏, 改由每个方向的按钮承担
+  await expect(page.getByTestId("send-to-plan-btn")).toHaveCount(0);
+  await expect(page.getByTestId("send-to-grant-btn")).toHaveCount(0);
+  await expect(page.getByTestId("candidate-to-grant-0")).toBeVisible();
   // 点该方向后面的按钮交接到实验规划
   await page.getByTestId("candidate-to-plan-0").click();
   await expect(page.getByTestId("input-idea")).toHaveValue(/PD-1 标志物/);
@@ -303,9 +307,12 @@ test("找选题: 被引徽标/排序 + 证据表展示与导出 + 过滤器UI", 
   );
   await page.goto("/");
   await page.getByTestId("nav-idea").click();
-  // 过滤器 UI 存在
+  // 过滤器在「高级检索设置」折叠里, 先展开
+  await page.getByTestId("adv-settings-summary").click();
+  // 过滤器 UI 存在(年份/证据等级 + 质量预筛分区)
   await expect(page.getByTestId("filter-year")).toBeVisible();
   await expect(page.getByTestId("type-rct")).toBeVisible();
+  await expect(page.getByTestId("filter-quartile")).toBeVisible();
   await page.getByTestId("input-field").fill("某方向");
   await page.getByTestId("run-btn").click();
   // 被引徽标
@@ -1291,4 +1298,60 @@ test("错误处理: 后端返回 error 事件时友好提示", async ({ page }) 
   // 可达性(D3): 错误用 role=alert 立即播报; 状态区用 role=status 播报"出错了"。
   await expect(page.getByTestId("result-error")).toHaveAttribute("role", "alert");
   await expect(page.locator(".result-status").first()).toHaveAttribute("aria-live", "polite");
+});
+
+// 进入找选题并生成一段调研报告(可带表格), 返回后可直接编辑右侧画布。
+async function runIdea(page: Page, text: string) {
+  await mockBase(page);
+  await page.route("**/api/idea", (r) =>
+    r.fulfill({
+      contentType: "text/event-stream",
+      body: sse({ event: "delta", data: { text } }, { event: "done", data: {} }),
+    }),
+  );
+  await page.goto("/");
+  await page.getByTestId("nav-idea").click();
+  await page.getByTestId("input-field").fill("某研究方向");
+  await page.getByTestId("run-btn").click();
+  // 生成完成且非流式时才出现「编辑」入口, 以此作为就绪信号
+  await expect(page.getByTestId("edit-btn")).toBeVisible();
+}
+
+test("画布编辑: 改文字保存后只读态与导出都用新内容", async ({ page }) => {
+  await runIdea(page, "## 调研报告\n初始正文内容。");
+  // 进入编辑 → 编辑器出现
+  await page.getByTestId("edit-btn").click();
+  await expect(page.getByTestId("editor-body")).toBeVisible();
+  // 在末尾追加文字后保存
+  await page.locator(".ProseMirror").click();
+  await page.keyboard.type(" 追加了一句话。");
+  await page.getByTestId("save-btn").click();
+  // 回到只读态, 正文含新内容
+  await expect(page.getByTestId("editor-body")).toHaveCount(0);
+  await expect(page.getByTestId("result-text")).toContainText("追加了一句话");
+  // 导出 Markdown 也用编辑后的内容
+  const [dl] = await Promise.all([
+    page.waitForEvent("download"),
+    page.getByTestId("export-md-btn").click(),
+  ]);
+  expect(readFileSync(await dl.path(), "utf-8")).toContain("追加了一句话");
+});
+
+test("画布编辑: 表格可像 Word 那样插入行", async ({ page }) => {
+  await runIdea(page, "初始说明\n\n| 组别 | 例数 |\n| --- | --- |\n| A | 10 |\n| B | 12 |\n");
+  await page.getByTestId("edit-btn").click();
+  const rows = page.locator(".ProseMirror table tr");
+  await expect(rows).toHaveCount(3); // 表头 + 2 行
+  // 光标点进某个单元格, 再在下方插入一行
+  await page.locator(".ProseMirror table tr").nth(1).locator("td,th").first().click();
+  await page.getByTestId("table-add-row").click();
+  await expect(rows).toHaveCount(4);
+});
+
+test("画布编辑: 撤回到上限提示无法再撤回", async ({ page }) => {
+  await runIdea(page, "## 报告\n一段正文。");
+  await page.getByTestId("edit-btn").click();
+  // 刚进入未做任何修改, 撤回栈为空 → 点撤回应提示无法再撤回
+  await page.getByTestId("undo-btn").click();
+  await expect(page.getByTestId("toast-warn")).toContainText("无法再撤回");
 });

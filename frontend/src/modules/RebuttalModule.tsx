@@ -4,7 +4,7 @@ import { reportLLMError } from "../lib/errorToast";
 import DiffView from "../components/DiffView";
 import { usePersistentState } from "../lib/usePersistentState";
 import { addHistory } from "../lib/history";
-import Markdown from "../components/Markdown";
+import EditableMarkdown from "../components/EditableMarkdown";
 import { CanvasSlot } from "../components/Canvas";
 import Dropzone from "../components/Dropzone";
 import { downloadText, downloadDocxFromText, tsName } from "../lib/download";
@@ -241,16 +241,13 @@ export default function RebuttalModule() {
                 </button>
               )}
             </div>
-            <div className="result-text" data-testid="result-text">
-              {letter ? (
-                <Markdown>{letter}</Markdown>
-              ) : (
-                <span className="result-placeholder">
-                  {running ? "正在撰写…" : "填好左侧审稿意见与原稿后点击生成，回复信会显示在这里。"}
-                </span>
-              )}
-              {running && <span className="cursor-blink">▍</span>}
-            </div>
+            <EditableMarkdown
+              value={letter}
+              onSave={setLetter}
+              running={running}
+              placeholder={running ? "正在撰写…" : "填好左侧审稿意见与原稿后点击生成，回复信会显示在这里。"}
+              testId="result-text"
+            />
             {dlErr && <div className="result-error" data-testid="dl-error">{dlErr}</div>}
           </div>
         </>

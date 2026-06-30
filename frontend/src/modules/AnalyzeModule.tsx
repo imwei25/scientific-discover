@@ -3,7 +3,7 @@ import { streamAnalyze, ChartItem } from "../lib/sse";
 import { reportLLMError } from "../lib/errorToast";
 import { usePersistentState } from "../lib/usePersistentState";
 import { addHistory } from "../lib/history";
-import Markdown from "../components/Markdown";
+import EditableMarkdown from "../components/EditableMarkdown";
 import { CanvasSlot } from "../components/Canvas";
 import { HelpButton } from "../components/HelpButton";
 import DeidentifyDialog, { DeidScanResult } from "../components/DeidentifyDialog";
@@ -779,10 +779,13 @@ function DataPane({ goto }: { goto: Goto }) {
                     </button>
                   )}
                 </div>
-                <div className="result-text" data-testid="result-text">
-                  {conclusion ? <Markdown>{conclusion}</Markdown> : <span className="result-placeholder">正在分析…</span>}
-                  {running && <span className="cursor-blink">▍</span>}
-                </div>
+                <EditableMarkdown
+                  value={conclusion}
+                  onSave={setConclusion}
+                  running={running}
+                  placeholder="正在分析…"
+                  testId="result-text"
+                />
               </div>
             </CanvasSlot>
           )}
