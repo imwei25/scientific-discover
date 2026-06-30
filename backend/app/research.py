@@ -579,7 +579,7 @@ async def _deep_flow(
         return [p for _, g in groups for p in g]
 
     papers = _flatten()
-    yield ("references", {"items": [{k: p.get(k, "") for k in ("pmid", "doi", "title", "first_author", "journal", "year", "url", "source", "cited_by_count", "oa_url")} for p in papers]})
+    yield ("references", {"items": [{k: p.get(k, "") for k in ("pmid", "doi", "title", "first_author", "journal", "year", "url", "source", "cited_by_count", "oa_url", "journal_impact")} for p in papers]})
 
     queries = [f["query"] for f in facets]
     trials = await _emit_trials(queries, sources)
@@ -595,7 +595,7 @@ async def _deep_flow(
         if gap_grp:
             groups.append(("空白补充角度", gap_grp))
             papers = _flatten()
-            yield ("references", {"items": [{k: p.get(k, "") for k in ("pmid", "doi", "title", "first_author", "journal", "year", "url", "source", "cited_by_count", "oa_url")} for p in papers]})
+            yield ("references", {"items": [{k: p.get(k, "") for k in ("pmid", "doi", "title", "first_author", "journal", "year", "url", "source", "cited_by_count", "oa_url", "journal_impact")} for p in papers]})
 
     # 结构化证据表: 综述前把每篇压成要点行(并发抽取), 既能纳入更多文献又抗"中段被忽略"。
     yield ("status", {"message": f"共 {len(papers)} 篇文献，正在逐篇抽取结构化要点…"})
@@ -736,7 +736,7 @@ async def deep_research_idea(inputs: dict) -> AsyncIterator[tuple[str, dict]]:
                 yield ("error", {"message": "未能从所选文献源检索到相关文献。可采纳上面的 AI 改写建议后重试。"})
                 return
             yield ("references", {"items": [
-                {k: p.get(k, "") for k in ("pmid", "doi", "title", "first_author", "journal", "year", "url", "source", "cited_by_count", "oa_url")} for p in papers
+                {k: p.get(k, "") for k in ("pmid", "doi", "title", "first_author", "journal", "year", "url", "source", "cited_by_count", "oa_url", "journal_impact")} for p in papers
             ]})
             trials = await _emit_trials(queries, sources)
             if trials is not None:

@@ -23,6 +23,7 @@ _SELECT = (
     "id,doi,ids,title,publication_year,authorships,"
     "primary_location,cited_by_count,abstract_inverted_index"
 )
+# 注: primary_location.source 内含 issn_l/issn, 已被 _SELECT 的 primary_location 覆盖, 无需额外字段。
 
 
 def _rebuild_abstract(inv: dict | None) -> str:
@@ -58,6 +59,8 @@ def _normalize(raw: dict) -> dict | None:
         first_author = ((authorships[0].get("author") or {}).get("display_name") or "").strip()
     src = (raw.get("primary_location") or {}).get("source") or {}
     journal = (src.get("display_name") or "").strip()
+    # 期刊 ISSN(规范化主刊号优先) —— 供影响力富集按 ISSN 精确匹配。
+    issn = (src.get("issn_l") or (src.get("issn") or [""])[0] or "").strip().upper()
     # 有 PMID 的优先指回 PubMed（与其它源对齐、链接更权威）；否则用 OpenAlex 落地页。
     if pmid:
         url = f"https://pubmed.ncbi.nlm.nih.gov/{pmid}/"
@@ -72,6 +75,7 @@ def _normalize(raw: dict) -> dict | None:
         "abstract": _rebuild_abstract(raw.get("abstract_inverted_index")),
         "first_author": first_author,
         "journal": journal,
+        "issn": issn,
         "year": str(raw.get("publication_year") or "").strip(),
         "url": url,
         "source": "openalex",

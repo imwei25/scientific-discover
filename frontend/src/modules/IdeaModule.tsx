@@ -52,11 +52,34 @@ const STUDY_TYPES: { key: string; label: string }[] = [
   { key: "review", label: "综述" },
 ];
 
-// 文献列表排序: 相关性(原序) / 被引降序 / 年份降序
+// 文献列表排序: 相关性(原序) / 被引降序 / 年份降序 / 影响力降序
 function sortRefs(refs: Reference[], by: string): Reference[] {
   if (by === "cited") return [...refs].sort((a, b) => (b.cited_by_count ?? 0) - (a.cited_by_count ?? 0));
   if (by === "year") return [...refs].sort((a, b) => (parseInt(b.year) || 0) - (parseInt(a.year) || 0));
+  if (by === "impact")
+    return [...refs].sort((a, b) => impactOf(b) - impactOf(a)); // 未知(null)按 -1 沉底
   return refs;
+}
+
+// 取影响力数值; 未知/缺失返回 -1(用于排序沉底与过滤判定)。
+function impactOf(r: Reference): number {
+  return typeof r.journal_impact === "number" ? r.journal_impact : -1;
+}
+
+// 按影响力过滤: 滤掉影响力 < min 的, 但至少保留影响力最高的 keepN 篇。
+// "至少保留 N 篇" = 阈值结果 ∪ 全体(有影响力的)按影响力 top-N。
+// keepUnknown=true 时, 无影响力数据的文献始终保留并在末尾展示。
+function filterByImpact(refs: Reference[], min: number, keepN: number, keepUnknown: boolean): Reference[] {
+  const known = refs.filter((r) => typeof r.journal_impact === "number");
+  const unknown = refs.filter((r) => typeof r.journal_impact !== "number");
+  let passed = known.filter((r) => impactOf(r) >= min);
+  if (passed.length < keepN) {
+    const rest = known
+      .filter((r) => impactOf(r) < min)
+      .sort((a, b) => impactOf(b) - impactOf(a));
+    passed = passed.concat(rest.slice(0, keepN - passed.length));
+  }
+  return keepUnknown ? [...passed, ...unknown] : passed;
 }
 
 export default function IdeaModule({ goto }: { goto: Goto }) {
@@ -78,6 +101,10 @@ export default function IdeaModule({ goto }: { goto: Goto }) {
   const [status, setStatus] = useState("");
   const [refs, setRefs] = usePersistentState<Reference[]>("idea:refs", []);
   const [refSort, setRefSort] = usePersistentState("idea:refSort", "relevance");
+  // 影响力过滤: 阈值(空=不过滤) / 至少保留篇数 / 是否保留无影响力数据的文献
+  const [impactMin, setImpactMin] = usePersistentState("idea:impactMin", "");
+  const [impactKeepN, setImpactKeepN] = usePersistentState("idea:impactKeepN", "10");
+  const [keepUnknownImpact, setKeepUnknownImpact] = usePersistentState("idea:keepUnknownImpact", true);
   const [trials, setTrials] = usePersistentState<Trial[]>("idea:trials", []);
   const [evidence, setEvidence] = usePersistentState<EvidenceItem[]>("idea:evidence", []);
   const [text, setText] = usePersistentState("idea:result", "");
@@ -356,6 +383,12 @@ export default function IdeaModule({ goto }: { goto: Goto }) {
   };
   // 至少要选一个论文源, 否则无文献可综述。
   const noPaperSource = !PAPER_SOURCES.some((s) => sources.includes(s.key));
+
+  // 文献列表: 先按影响力过滤(阈值+至少保留N+未知策略), 再按所选规则排序。
+  const shownRefs = sortRefs(
+    filterByImpact(refs, parseFloat(impactMin) || 0, parseInt(impactKeepN, 10) || 0, keepUnknownImpact),
+    refSort,
+  );
 
   const reset = () => {
     if (running) stop();
@@ -686,7 +719,7 @@ export default function IdeaModule({ goto }: { goto: Goto }) {
 
       {refs.length > 0 && (
         <details className="refs" open data-testid="refs">
-          <summary>检索到的文献（{refs.length} 篇，点击打开原文）</summary>
+          <summary>检索到的文献（显示 {shownRefs.length} / 共 {refs.length} 篇，点击打开原文）</summary>
           <div className="ref-toolbar">
             <label>
               排序
@@ -694,16 +727,57 @@ export default function IdeaModule({ goto }: { goto: Goto }) {
                 <option value="relevance">相关性</option>
                 <option value="cited">被引最多</option>
                 <option value="year">最新</option>
+                <option value="impact">影响力</option>
               </select>
+            </label>
+            <label title="滤掉影响力低于该值的文献(影响力指数=OpenAlex 近2年篇均被引, 非官方影响因子)">
+              影响力≥
+              <input
+                type="number"
+                min="0"
+                step="0.5"
+                placeholder="不限"
+                data-testid="impact-min"
+                value={impactMin}
+                onChange={(e) => setImpactMin(e.target.value)}
+                style={{ width: "4.5em" }}
+              />
+            </label>
+            <label title="即便高于阈值的不足这么多篇, 也按影响力从高到低补足到这么多篇">
+              至少保留
+              <input
+                type="number"
+                min="0"
+                step="1"
+                data-testid="impact-keepn"
+                value={impactKeepN}
+                onChange={(e) => setImpactKeepN(e.target.value)}
+                style={{ width: "4em" }}
+              />
+              篇
+            </label>
+            <label className="type-chip" title="无影响力数据的文献(如新刊/部分会议/中文刊)是否保留">
+              <input
+                type="checkbox"
+                data-testid="impact-keep-unknown"
+                checked={keepUnknownImpact}
+                onChange={(e) => setKeepUnknownImpact(e.target.checked)}
+              />
+              保留无影响力数据
             </label>
           </div>
           <ol className="ref-list">
-            {sortRefs(refs, refSort).map((r, i) => (
+            {shownRefs.map((r, i) => (
               <li key={r.pmid || r.url || i}>
                 {r.source === "preprint" && <span className="ref-badge ref-badge-preprint">预印本</span>}
                 {r.source === "europepmc" && <span className="ref-badge ref-badge-epmc">Europe PMC</span>}
                 {r.source === "openalex" && <span className="ref-badge ref-badge-openalex">OpenAlex</span>}
                 {r.source === "crossref" && <span className="ref-badge ref-badge-crossref">Crossref</span>}
+                {typeof r.journal_impact === "number" && (
+                  <span className="ref-badge ref-badge-impact" title="影响力指数: OpenAlex 近2年篇均被引(非官方影响因子)">
+                    影响力 {r.journal_impact.toFixed(1)}
+                  </span>
+                )}
                 {(r.cited_by_count ?? 0) > 0 && (
                   <span className="ref-badge ref-badge-cited">被引 {r.cited_by_count}</span>
                 )}

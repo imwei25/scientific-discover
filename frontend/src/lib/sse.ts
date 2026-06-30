@@ -178,6 +178,7 @@ export interface Reference {
   source?: string; // "pubmed" | "preprint" | "europepmc" | "openalex" | "crossref"
   cited_by_count?: number;
   oa_url?: string; // Unpaywall 发现的合法 OA 全文链接(优先 PDF)
+  journal_impact?: number | null; // 影响力指数(OpenAlex 近2年篇均被引); 未知为 null
 }
 
 export interface EvidenceItem {

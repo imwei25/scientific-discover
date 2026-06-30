@@ -21,7 +21,7 @@ from .config import settings
 _ENDPOINT = "https://api.crossref.org/works"
 # 只取需要的字段, 省带宽。
 _SELECT = (
-    "DOI,title,author,container-title,issued,published-print,published-online,"
+    "DOI,title,author,container-title,ISSN,issued,published-print,published-online,"
     "abstract,is-referenced-by-count,URL"
 )
 
@@ -73,6 +73,8 @@ def _normalize(item: dict) -> dict | None:
     doi = (item.get("DOI") or "").strip().lower()
     containers = item.get("container-title") or []
     journal = (containers[0] if containers else "").strip()
+    issns = item.get("ISSN") or []
+    issn = (issns[0] if issns else "").strip().upper()
     url = f"https://doi.org/{doi}" if doi else (item.get("URL") or "").strip()
     if not url:
         return None
@@ -83,6 +85,7 @@ def _normalize(item: dict) -> dict | None:
         "abstract": _strip_jats(item.get("abstract") or ""),
         "first_author": _first_author(item),
         "journal": journal,
+        "issn": issn,
         "year": _year(item),
         "url": url,
         "source": "crossref",

@@ -18,6 +18,7 @@ from . import searchcache, searchfilters
 from .config import settings
 from .crossref import search_crossref
 from .europepmc import search_epmc
+from .impactfactor import enrich_impact
 from .openalex import search_openalex
 from .unpaywall import enrich_oa
 
@@ -106,6 +107,8 @@ async def efetch(client: httpx.AsyncClient, pmids: list[str]) -> list[dict]:
             initials = _text(author.find("Initials"))
             first_author = f"{last} {initials}".strip()
         journal = _text(art.find(".//Journal/Title"))
+        # 期刊 ISSN: 优先 Journal/ISSN(印刷或电子), 退回 MedlineJournalInfo/ISSNLinking。
+        issn = (_text(art.find(".//Journal/ISSN")) or _text(art.find(".//MedlineJournalInfo/ISSNLinking"))).strip().upper()
         year = _text(art.find(".//JournalIssue/PubDate/Year")) or _text(
             art.find(".//JournalIssue/PubDate/MedlineDate")
         )
@@ -125,6 +128,7 @@ async def efetch(client: httpx.AsyncClient, pmids: list[str]) -> list[dict]:
                 "abstract": abstract,
                 "first_author": first_author,
                 "journal": journal,
+                "issn": issn,
                 "year": year,
                 "url": pubmed_url(pmid),
                 "source": "pubmed",
@@ -279,6 +283,8 @@ def _merge_all(source_lists: list[list[dict]], cap: int, terms: set[str] | None 
                     cur["source"] = p["source"]
                 if not cur.get("doi") and p.get("doi"):
                     cur["doi"] = p["doi"]
+                if not cur.get("issn") and p.get("issn"):
+                    cur["issn"] = p["issn"]
     ranked = _rank_papers(list(merged.values()), terms)
     for p in ranked:
         p.pop("_pos", None)
@@ -336,9 +342,12 @@ async def search_literature(
     ordered = [by_source[s] for s in _PAPER_SOURCES if s in by_source]
     merged = _merge_all([r["papers"] for r in ordered], cap, _query_terms(queries))
     all_fail = all(r["network_errors"] >= max(1, len(queries)) for r in ordered)
-    if want_oa and not all_fail:  # 只对最终入选的 cap 篇做 OA 富集, 失败静默(不影响主流程)
+    if not all_fail:  # 只对最终入选的 cap 篇做富集; 影响力与 OA 并发, 各自失败静默
+        jobs = [enrich_impact(merged)]
+        if want_oa:
+            jobs.append(enrich_oa(merged))
         try:
-            await enrich_oa(merged)
+            await asyncio.gather(*jobs, return_exceptions=True)
         except Exception:  # noqa: BLE001
             pass
     net_errs = sum(r["network_errors"] for r in ordered)

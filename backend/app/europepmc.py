@@ -35,6 +35,9 @@ def _normalize(raw: dict) -> dict | None:
         tag = "preprint" if src == "PPR" else "europepmc"
     author_string = raw.get("authorString") or ""
     first_author = author_string.split(",")[0].strip() if author_string else ""
+    # resultType=core 带 journalInfo.journal, 含 issn(印刷)/essn(电子) —— 供影响力按 ISSN 匹配。
+    jinfo = ((raw.get("journalInfo") or {}).get("journal")) or {}
+    issn = (jinfo.get("issn") or jinfo.get("essn") or "").strip().upper()
     return {
         "pmid": pmid,
         "doi": doi,
@@ -42,6 +45,7 @@ def _normalize(raw: dict) -> dict | None:
         "abstract": (raw.get("abstractText") or "").strip(),
         "first_author": first_author,
         "journal": (raw.get("journalTitle") or "").strip(),
+        "issn": issn,
         "year": str(raw.get("pubYear") or "").strip(),
         "url": url,
         "source": tag,

@@ -1474,6 +1474,11 @@ select {
   color: #4a5568;
   border: 1px solid #d8e0e8;
 }
+.ref-badge-impact {
+  background: #fff4e0;
+  color: #9a5b00;
+  border: 1px solid #f3dcae;
+}
 .ref-badge.rc-real {
   background: #e6f6ec;
   color: #1a7f43;
