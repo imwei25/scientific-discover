@@ -1,6 +1,6 @@
 [package]
 name = "research-assistant"
-version = "0.2.4"
+version = "0.2.5"
 description = "科研助手桌面端"
 edition = "2021"
 
