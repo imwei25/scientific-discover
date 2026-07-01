@@ -202,8 +202,9 @@ test("删除最后一个项目: 自动建未命名项目", async ({ page }) => {
 // ── 测试 6: 保存角标：编辑后出现，完成后消失 ─────────────────────
 
 test("保存角标: 编辑后出现 '保存中', 完成后消失", async ({ page }) => {
-  // stateDelay=400 让 PUT /state 响应慢 400ms，使"保存中"角标有足够时间被探测到
-  setupFakeBackend(page, 400);
+  // stateDelay=1200 让 PUT /state 响应慢 1200ms，使"保存中"角标可见窗口更宽，
+  // 避免并行跑测试时因窗口太窄(此前 400ms)偶发探测不到而 flaky。
+  setupFakeBackend(page, 1200);
   await page.goto("/");
 
   await page.getByTestId("nav-idea").click();

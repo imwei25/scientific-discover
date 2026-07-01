@@ -8,7 +8,8 @@ async function mockBase(page: Page) {
   await page.route("**/api/usage", (r) => r.fulfill({ json: { available: false } }));
 }
 
-test("帮助模态: 流程图 ? 按钮打开/三段内容齐全/关闭三路/焦点回归", async ({ page }) => {
+// 「报告规范核对」模块暂被隐藏, 其流程图帮助按钮不渲染 → 跳过; 恢复该模块后去掉 .skip。
+test.skip("帮助模态: 流程图 ? 按钮打开/三段内容齐全/关闭三路/焦点回归", async ({ page }) => {
   await mockBase(page);
   await page.goto("/");
   await page.getByTestId("nav-checklist").click();
@@ -38,7 +39,7 @@ test("帮助模态: 流程图 ? 按钮打开/三段内容齐全/关闭三路/焦
   await expect(modal).toHaveCount(0);
 });
 
-test("帮助按钮: 6 个静态可见的 ? 按钮在各模块都存在", async ({ page }) => {
+test("帮助按钮: 各模块可见的 ? 按钮存在", async ({ page }) => {
   await mockBase(page);
   await page.goto("/");
   await page.getByTestId("nav-idea").click();
@@ -48,7 +49,5 @@ test("帮助按钮: 6 个静态可见的 ? 按钮在各模块都存在", async (
   await page.getByTestId("nav-imrad").click();
   await expect(page.getByTestId("help-btn-keywords")).toBeVisible();
   await expect(page.getByTestId("help-btn-bundle")).toBeVisible();
-  await page.getByTestId("nav-checklist").click();
-  await expect(page.getByTestId("help-btn-flowdiagram")).toBeVisible();
-  await expect(page.getByTestId("help-btn-statcheck")).toBeVisible();
+  // 「报告规范核对」暂隐藏, 其 flowdiagram/statcheck 帮助按钮不再断言(恢复该模块后补回)。
 });

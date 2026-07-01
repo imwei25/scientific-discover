@@ -926,7 +926,8 @@ test("论文初稿: IMRaD 装配 + 导入 + 结构式摘要字数", async ({ pag
   await expect(page.getByTestId("abs-count")).toContainText("字数");
 });
 
-test("流程图: 生成 PRISMA 流程图并可下载", async ({ page }) => {
+// 「报告规范核对」模块暂被隐藏(App.tsx hidden:true), nav-checklist 不渲染 → 跳过; 恢复该模块后去掉 .skip。
+test.skip("流程图: 生成 PRISMA 流程图并可下载", async ({ page }) => {
   await mockBase(page);
   const png =
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==";
@@ -950,7 +951,8 @@ test("流程图: 生成 PRISMA 流程图并可下载", async ({ page }) => {
   expect((await dl).suggestedFilename()).toMatch(/\.svg$/);
 });
 
-test("统计自查: statcheck 标出不一致", async ({ page }) => {
+// 同上: 报告规范核对暂隐藏, 跳过。
+test.skip("统计自查: statcheck 标出不一致", async ({ page }) => {
   await mockBase(page);
   await page.route("**/api/statcheck", (r) =>
     r.fulfill({
@@ -973,7 +975,8 @@ test("统计自查: statcheck 标出不一致", async ({ page }) => {
   await expect(page.getByTestId("statcheck-list")).toContainText("重算 p≈0.24");
 });
 
-test("报告规范核对: 选择规范并逐条核对稿件", async ({ page }) => {
+// 同上: 报告规范核对暂隐藏, 跳过。
+test.skip("报告规范核对: 选择规范并逐条核对稿件", async ({ page }) => {
   await mockBase(page);
   await page.route("**/api/run", (r) =>
     r.fulfill({
