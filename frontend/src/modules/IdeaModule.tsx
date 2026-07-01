@@ -265,13 +265,22 @@ export default function IdeaModule({ goto }: { goto: Goto }) {
     if (!field.trim() || running || noPaperSource || clarifying) return;
     setClarifyQs(null);
     setClarifying(true);
-    const res = await clarifyTopic({ field, keywords, background });
-    setClarifying(false);
-    if (res.ready || res.questions.length === 0) {
+    setStatus("正在为你聚焦研究方向…"); // 复用 status-line 给出「在动」的反馈
+    try {
+      const res = await clarifyTopic({ field, keywords, background });
+      if (res.ready || res.questions.length === 0) {
+        submit(); // 方向够具体 → 直接检索(submit 接管 status)
+      } else {
+        setStatus(""); // 弹澄清卡, 收起 spinner
+        setClarifyAns({});
+        setClarifyQs(res.questions);
+      }
+    } catch {
+      // 澄清只是可跳过的增强步骤: 失败不锁死入口, 回退到直接检索(错误由 submit 的 onError 呈现)
+      setStatus("");
       submit();
-    } else {
-      setClarifyAns({});
-      setClarifyQs(res.questions);
+    } finally {
+      setClarifying(false);
     }
   };
 
@@ -292,12 +301,21 @@ export default function IdeaModule({ goto }: { goto: Goto }) {
     setPendingBg(composed);
     setClarifyQs(null);
     setRefining(true);
-    const res = await refineTopic({ field, keywords, background: composed });
-    setRefining(false);
-    if (res.options.length === 0) {
-      submit({ background: composed }); // 没有优化建议 → 直接检索
-    } else {
-      setRefineOpts(res.options);
+    setStatus("正在优化研究方向…");
+    try {
+      const res = await refineTopic({ field, keywords, background: composed });
+      if (res.options.length === 0) {
+        submit({ background: composed }); // 没有优化建议 → 直接检索
+      } else {
+        setStatus("");
+        setRefineOpts(res.options);
+      }
+    } catch {
+      // 优化失败不锁死: 直接用已拼好的背景检索
+      setStatus("");
+      submit({ background: composed });
+    } finally {
+      setRefining(false);
     }
   };
 
@@ -586,7 +604,11 @@ export default function IdeaModule({ goto }: { goto: Goto }) {
               ))}
             </div>
           </div>
-          <span className="filter-hint">证据等级过滤主要作用于 PubMed / Europe PMC（OpenAlex 仅能近似匹配综述）。</span>
+          <span className="filter-hint">
+            勾选后<strong>仅保留所勾的发表类型</strong>；想纳入队列/病例对照/横断面/机制等观察性或基础研究，
+            请<strong>取消全部勾选（= 不限类型）</strong>。此过滤主要作用于 PubMed / Europe PMC，
+            OpenAlex 仅能近似匹配综述、Crossref 不按类型过滤。
+          </span>
         </div>
         <div className="field" data-testid="quality-filters">
           <span className="field-label">
