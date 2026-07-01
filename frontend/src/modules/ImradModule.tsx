@@ -12,6 +12,7 @@ import Dropzone from "../components/Dropzone";
 import { extractFile } from "../lib/extract";
 import { downloadText, downloadDocxFromText, downloadBlob, tsName } from "../lib/download";
 import DeidentifyDialog from "../components/DeidentifyDialog";
+import type { Goto } from "../App";
 
 type PhiScanResult = {
   columns: { name: string; phi_types: string[]; count: number; samples: string[] }[];
@@ -24,7 +25,7 @@ function isTabularFile(file: File): boolean {
   return name.endsWith(".csv") || name.endsWith(".xlsx") || name.endsWith(".xls");
 }
 
-export default function ImradModule() {
+export default function ImradModule({ goto }: { goto: Goto }) {
   const [topic, setTopic] = usePersistentState("imrad:topic", "");
   const [background, setBackground] = usePersistentState("imrad:background", "");
   const [methods, setMethods] = usePersistentState("imrad:methods", "");
@@ -121,6 +122,18 @@ export default function ImradModule() {
 
   // 关键词 / MeSH 推荐
   const [keywords, setKeywords] = usePersistentState("imrad:keywords", "");
+
+  // 复制到剪贴板：按面板 key 给短暂「已复制 ✓」反馈（draft/abstract/keywords 共用）
+  const [copiedKey, setCopiedKey] = useState("");
+  const copyToClipboard = async (key: string, text: string) => {
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopiedKey(key);
+      window.setTimeout(() => setCopiedKey(""), 1800);
+    } catch {
+      /* 剪贴板未授权：忽略，用户可手动选择复制 */
+    }
+  };
   const [kwRunning, setKwRunning] = useState(false);
   const [kwErr, setKwErr] = useState<string | null>(null);
   const kwCtrl = useRef<AbortController | null>(null);
@@ -444,11 +457,36 @@ export default function ImradModule() {
             <div className="result-actions">
               {running && <button className="btn-ghost" onClick={stop} data-testid="stop-btn">停止</button>}
               {draft && !running && (
+                <button className="btn-ghost" data-testid="copy-draft-btn" title="复制论文初稿到剪贴板" onClick={() => copyToClipboard("draft", draft)}>
+                  {copiedKey === "draft" ? "已复制 ✓" : "复制"}
+                </button>
+              )}
+              {draft && !running && (
                 <button className="btn-ghost" data-testid="export-md-btn" onClick={() => downloadText(tsName("论文初稿", "md"), draft)}>导出 Markdown</button>
               )}
               {draft && !running && (
                 <button className="btn-ghost" data-testid="export-docx-btn" onClick={downloadDocx} disabled={docxBusy}>
                   {docxBusy ? "导出中…" : "导出 Word"}
+                </button>
+              )}
+              {draft && !running && (
+                <button
+                  className="btn-ghost"
+                  data-testid="imrad-to-journal-btn"
+                  title="带着这篇初稿去『智能选刊』匹配期刊"
+                  onClick={() => goto("journal", { "journal:abstract": abstract || draft })}
+                >
+                  用此初稿去选刊 →
+                </button>
+              )}
+              {draft && !running && (
+                <button
+                  className="btn-ghost"
+                  data-testid="imrad-to-format-btn"
+                  title="带着这篇初稿去『期刊排版』重排导出"
+                  onClick={() => goto("format", { "format:manuscript": draft, "format:refs": refs })}
+                >
+                  用此初稿去排版 →
                 </button>
               )}
             </div>
@@ -503,6 +541,11 @@ export default function ImradModule() {
               <button className="btn-ghost" data-testid="abs-stop-btn" onClick={() => { absCtrl.current?.abort(); setAbsRunning(false); }}>停止</button>
             )}
             {abstract && !absRunning && (
+              <button className="btn-ghost" data-testid="abs-copy-btn" title="复制摘要到剪贴板" onClick={() => copyToClipboard("abstract", abstract)}>
+                {copiedKey === "abstract" ? "已复制 ✓" : "复制"}
+              </button>
+            )}
+            {abstract && !absRunning && (
               <button className="btn-ghost" data-testid="abs-export-btn" onClick={() => downloadText(tsName("摘要", "md"), abstract)}>导出 Markdown</button>
             )}
           </div>
@@ -525,6 +568,11 @@ export default function ImradModule() {
             <span className="result-status">{kwRunning ? "推荐中…" : "关键词 / MeSH"}</span>
             {kwRunning && (
               <button className="btn-ghost" data-testid="kw-stop-btn" onClick={() => { kwCtrl.current?.abort(); setKwRunning(false); }}>停止</button>
+            )}
+            {keywords && !kwRunning && (
+              <button className="btn-ghost" data-testid="kw-copy-btn" title="复制关键词到剪贴板" onClick={() => copyToClipboard("keywords", keywords)}>
+                {copiedKey === "keywords" ? "已复制 ✓" : "复制"}
+              </button>
             )}
           </div>
           <EditableMarkdown

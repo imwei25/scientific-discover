@@ -369,7 +369,7 @@ export default function App() {
           {active === "plan" && <PlanModule />}
           {active === "ethics" && <EthicsModule />}
           {active === "analyze" && <AnalyzeModule goto={goto} />}
-          {active === "imrad" && <ImradModule />}
+          {active === "imrad" && <ImradModule goto={goto} />}
           {active === "journal" && <JournalMatchModule />}
           {active === "format" && <FormatModule />}
           {active === "checklist" && <ChecklistModule />}
