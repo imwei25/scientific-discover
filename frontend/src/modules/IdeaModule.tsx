@@ -8,7 +8,7 @@ import { CanvasSlot } from "../components/Canvas";
 import Dropzone from "../components/Dropzone";
 import { HelpButton } from "../components/HelpButton";
 import RefIO from "../components/RefIO";
-import { downloadText, downloadCsv, tsName } from "../lib/download";
+import { downloadText, downloadCsv, downloadDocxFromText, tsName } from "../lib/download";
 import { usePersistentState } from "../lib/usePersistentState";
 import type { Goto } from "../App";
 
@@ -142,6 +142,7 @@ export default function IdeaModule({ goto }: { goto: Goto }) {
   const [card, setCard] = usePersistentState<TopicCard | null>("idea:card", null);
   // 折叠报告: 让下方"选题卡"更突出(每次新检索重置为展开)。
   const [reportCollapsed, setReportCollapsed] = useState(false);
+  const [wordBusy, setWordBusy] = useState(false); // 导出 Word 进行中
   const [running, setRunning] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [rewrite, setRewrite] = useState<RewritePayload | null>(null);
@@ -977,6 +978,30 @@ export default function IdeaModule({ goto }: { goto: Goto }) {
                   }}
                 >
                   导出 Markdown
+                </button>
+              )}
+              {text && !running && (
+                <button
+                  className="btn-ghost"
+                  data-testid="export-docx-btn"
+                  disabled={wordBusy}
+                  onClick={async () => {
+                    setWordBusy(true);
+                    try {
+                      const refMd = refs.length
+                        ? "\n\n## 参考文献\n" +
+                          refs.map((r) => `- [${r.first_author} (${r.year}). ${r.title}](${r.url})`).join("\n")
+                        : "";
+                      await downloadDocxFromText(tsName("选题调研", "docx"), text + refMd);
+                    } catch (e) {
+                      setStatus(`导出 Word 失败：${(e as Error).message}`);
+                      window.setTimeout(() => setStatus((s) => (s.startsWith("导出 Word 失败") ? "" : s)), 5000);
+                    } finally {
+                      setWordBusy(false);
+                    }
+                  }}
+                >
+                  {wordBusy ? "导出中…" : "导出 Word"}
                 </button>
               )}
             </div>

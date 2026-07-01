@@ -352,6 +352,64 @@ test("找选题→写标书: 报告只带现状+空白, 砍掉候选选题各方
   expect(grantReport).not.toContain("方向甲乙丙");
 });
 
+test("找选题: 导出 Word 调用 /api/docx", async ({ page }) => {
+  await mockBase(page);
+  await page.route("**/api/idea", (r) =>
+    r.fulfill({ contentType: "text/event-stream", body: sse(
+      { event: "delta", data: { text: "## 报告\n内容。" } },
+      { event: "done", data: {} },
+    ) }),
+  );
+  let docxCalled = false;
+  await page.route("**/api/docx", (r) => {
+    docxCalled = true;
+    r.fulfill({ status: 200, contentType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document", body: "PK" });
+  });
+  await page.goto("/");
+  await page.getByTestId("nav-idea").click();
+  await page.getByTestId("input-field").fill("x");
+  await page.getByTestId("run-btn").click();
+  await expect(page.getByTestId("result-text")).toContainText("报告");
+  await page.getByTestId("export-docx-btn").click();
+  await expect.poll(() => docxCalled).toBe(true);
+});
+
+test("写标书: 撰写前默认重检索文献, 且产出可编辑", async ({ page }) => {
+  await mockBase(page);
+  await page.route("**/api/idea", (r) =>
+    r.fulfill({ contentType: "text/event-stream", body: sse(
+      { event: "delta", data: { text: "### 候选选题1：方向A\n见 [A, 2024](https://pubmed.ncbi.nlm.nih.gov/1/)。" } },
+      { event: "topic_card", data: { field: "F", keywords: "", facets: [], keyword_seed: [], candidates: [{ n: 1, title: "方向A", feasibility: 4, innovation: 3, body: "见 [A, 2024](https://pubmed.ncbi.nlm.nih.gov/1/)。" }], ref_count: 1 } },
+      { event: "done", data: {} },
+    ) }),
+  );
+  let grantBody: any = null;
+  await page.route("**/api/grant", (r) => {
+    grantBody = JSON.parse(r.request().postData() || "{}");
+    r.fulfill({ contentType: "text/event-stream", body: sse(
+      { event: "scheme", data: { title: "方向A项目", question: "Q", hypothesis: "H", goal: "G", contents: ["c1"], innovations: ["i1"], route: "r" } },
+      { event: "references", data: { items: [{ pmid: "9", title: "新文献", first_author: "Z", journal: "J", year: "2025", url: "https://pubmed.ncbi.nlm.nih.gov/9/", source: "pubmed" }] } },
+      { event: "outline", data: { items: [{ key: "rationale", title: "立项依据", budget: "" }] } },
+      { event: "section", data: { key: "rationale", title: "立项依据" } },
+      { event: "delta", data: { text: "立项依据正文。" } },
+      { event: "done", data: {} },
+    ) });
+  });
+  await page.goto("/");
+  await page.getByTestId("nav-idea").click();
+  await page.getByTestId("input-field").fill("x");
+  await page.getByTestId("run-btn").click();
+  await expect(page.getByTestId("topic-card")).toBeVisible();
+  await page.getByTestId("candidate-to-grant-0").click();
+  // 撰写前重检索开关默认勾选
+  await expect(page.getByTestId("grant-preresearch-toggle")).toBeChecked();
+  await page.getByTestId("grant-oneshot-btn").click();
+  await expect(page.getByTestId("grant-result")).toContainText("立项依据正文");
+  // 请求带了 research:true; 产出可编辑(出现"编辑"按钮)
+  expect(grantBody.inputs.research).toBe(true);
+  await expect(page.getByTestId("edit-btn")).toBeVisible();
+});
+
 test("找选题: 显示在研临床试验(ClinicalTrials旁路)并渲染空白矩阵表格", async ({ page }) => {
   await mockBase(page);
   await page.route("**/api/idea", (r) =>

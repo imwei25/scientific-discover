@@ -5,8 +5,7 @@ import {
 } from "../lib/sse";
 import { reportLLMError } from "../lib/errorToast";
 import { addHistory } from "../lib/history";
-import Markdown from "../components/Markdown";
-import DeaiPanel from "../components/DeaiPanel";
+import EditableMarkdown from "../components/EditableMarkdown";
 import { CanvasSlot } from "../components/Canvas";
 import Dropzone from "../components/Dropzone";
 import { usePersistentState } from "../lib/usePersistentState";
@@ -40,6 +39,8 @@ export default function GrantModule() {
   const [background, setBackground] = usePersistentState("grant:background", "");
   const [grantType, setGrantType] = usePersistentState("grant:type", "general");
   const [refs, setRefs] = usePersistentState<Reference[]>("grant:refs", []);
+  // 撰写前是否按方向重新检索文献并入池(默认开): 让立项依据据新鲜、针对本方向的文献来写。
+  const [preResearch, setPreResearch] = usePersistentState<boolean>("grant:preResearch", true);
 
   // phase: idle(未开始) | planned(大纲待确认) | writing | done
   const [phase, setPhase] = usePersistentState<string>("grant:phase", "idle");
@@ -129,6 +130,7 @@ export default function GrantModule() {
     ctrl.current = new AbortController();
     const payload: Record<string, unknown> = {
       title, idea, report, background, grant_type: grantType, references: refs,
+      research: preResearch, // 撰写前是否按方向重检索文献(默认开)
     };
     if (confirmed) {
       if (scheme) payload.scheme = scheme;
@@ -141,6 +143,8 @@ export default function GrantModule() {
       onStatus: setStatus,
       onScheme: (s) => setScheme(s),
       onOutline: (items) => setOutline(items.map((o) => ({ ...o, include: true }))),
+      onReferences: (items) => setRefs(items), // 撰写前重检索扩充的文献池写回
+
       onSection: (key, secTitle) =>
         setSections((prev) => [...prev, { key, title: secTitle, text: "" }]),
       onDelta: (t) =>
@@ -333,6 +337,16 @@ export default function GrantModule() {
           </div>
         )}
 
+        <label className="type-chip" data-testid="grant-preresearch" title="开启后, 撰写前会按本方向再检索一遍 PubMed 等, 把新文献并入后据此写立项依据(更贴合、稍慢)">
+          <input
+            type="checkbox"
+            data-testid="grant-preresearch-toggle"
+            checked={preResearch}
+            onChange={(e) => setPreResearch(e.target.checked)}
+          />
+          撰写前重新检索文献（推荐）
+        </label>
+
         <div className="form-actions">
           <button
             className="btn-primary"
@@ -489,9 +503,6 @@ export default function GrantModule() {
                 <button className="btn-ghost" onClick={stop} data-testid="grant-stop-btn">停止</button>
               )}
               {text && !running && (
-                <DeaiPanel value={text} onApply={applyDeai} disabled={running} />
-              )}
-              {text && !running && (
                 <button className="btn-ghost" data-testid="grant-export-md" onClick={exportMd}>导出 Markdown</button>
               )}
               {text && !running && (
@@ -502,16 +513,13 @@ export default function GrantModule() {
             </div>
           </div>
           {docxErr && <div className="result-error">{docxErr}</div>}
-          <div className="result-text" data-testid="grant-result">
-            {text ? (
-              <Markdown>{text}</Markdown>
-            ) : (
-              <span className="result-placeholder">
-                {running ? "正在撰写…" : "填好题名（或从「找选题」带入）后，点“生成大纲”确认，再撰写；申请书初稿会显示在这里。"}
-              </span>
-            )}
-            {running && <span className="cursor-blink">▍</span>}
-          </div>
+          <EditableMarkdown
+            value={text}
+            onSave={applyDeai}
+            running={running}
+            placeholder={running ? "正在撰写…" : "填好题名（或从「找选题」带入）后，点“生成大纲”确认，再撰写；申请书初稿会显示在这里。"}
+            testId="grant-result"
+          />
         </div>
       </CanvasSlot>
 

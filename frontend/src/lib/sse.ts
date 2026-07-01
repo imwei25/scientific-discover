@@ -505,6 +505,7 @@ export interface GrantHandlers {
   onStatus?: (message: string) => void;
   onScheme?: (s: GrantScheme) => void;
   onOutline?: (items: GrantOutlineItem[]) => void;
+  onReferences?: (items: Reference[]) => void;
   onSection?: (key: string, title: string) => void;
   onDelta: (text: string) => void;
   onVerify?: (v: Verification) => void;
@@ -554,6 +555,7 @@ export async function streamGrant(
         if (ev.event === "status") h.onStatus?.(data.message ?? "");
         else if (ev.event === "scheme") h.onScheme?.(data as GrantScheme);
         else if (ev.event === "outline") h.onOutline?.(data.items ?? []);
+        else if (ev.event === "references") h.onReferences?.(data.items ?? []);
         else if (ev.event === "section") h.onSection?.(data.key ?? "", data.title ?? "");
         else if (ev.event === "delta") h.onDelta(data.text ?? "");
         else if (ev.event === "verify") h.onVerify?.(data as Verification);

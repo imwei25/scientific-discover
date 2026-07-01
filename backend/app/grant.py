@@ -370,6 +370,24 @@ async def write_grant(inputs: dict) -> AsyncIterator[tuple[str, dict]]:
         final_title = scheme.get("title") or title or "（未命名项目）"
         scheme_brief = _scheme_brief(scheme)
 
+        # 撰写前默认按该方向重新检索一遍文献并入池(research 默认 True, 前端可关)。
+        # 让立项依据据"针对本方向、新鲜检索到"的文献来写, 而非只吃选题阶段带来的少量文献。
+        if inputs.get("research", True):
+            yield ("status", {"message": "撰写前正在按该方向重新检索文献…"})
+            direction = idea or final_title or title
+            try:
+                queries = await _gen_queries(direction, "", final_title)
+                res = await search_literature(queries, per_query=8, cap=16, sources=_RERESEARCH_SOURCES)
+                refs, added = _merge_refs(refs, res.get("papers", []))
+                if added:
+                    yield ("status", {"message": f"新增 {added} 篇相关文献，将据此撰写立项依据…"})
+                    yield ("references", {"items": refs})
+                else:
+                    yield ("status", {"message": "未检索到新文献，按已带入文献撰写…"})
+            except Exception:  # noqa: BLE001
+                # 撰写前检索失败不阻断写作, 退回用已带入的文献。
+                yield ("status", {"message": "撰写前检索未成功，按已带入文献继续…"})
+
         yield ("outline", {"items": [{"key": s["key"], "title": s["title"], "budget": s["budget"]} for s in sections]})
 
         refs_ctx = _refs_context(refs)
