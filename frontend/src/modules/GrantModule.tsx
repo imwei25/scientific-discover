@@ -101,31 +101,43 @@ export default function GrantModule() {
 
   const hasInput = !!(title.trim() || report.trim());
 
+  const [copied, setCopied] = useState(false); // 复制全文的短暂反馈
+
   // —— 第一步: 生成可编辑大纲(两段式); 传 note 时只按意见调整大纲, 不动已确认的方案骨架 ——
   const genPlan = async (note?: string) => {
     if (!hasInput || planning || running) return;
     setError(null);
     setPlanning(true);
     setStatus(note ? "正在按修改意见调整大纲…" : "正在凝练研究方案与大纲…");
-    const plan = await planGrant(
-      note
-        ? { title, idea, report, grant_type: grantType, outline_note: note, outline }
-        : { title, idea, report, grant_type: grantType },
-    );
-    if (note) {
-      // 只更新大纲, 保留用户已编辑的方案骨架与阶段。
-      setOutline(plan.outline.map((o) => ({ ...o, include: true })));
-      setOutlineNote("");
-    } else {
-      setScheme({ ...emptyScheme, ...plan.scheme });
-      setOutline(plan.outline.map((o) => ({ ...o, include: true })));
-      setSections([]);
-      setVerify(null);
-      setPhase("planned");
+    try {
+      const plan = await planGrant(
+        note
+          ? { title, idea, report, grant_type: grantType, outline_note: note, outline }
+          : { title, idea, report, grant_type: grantType },
+      );
+      // planGrant 失败会静默返回空大纲: 视为失败, 不清空已有大纲、不进空的确认面板。
+      if (!plan.outline || plan.outline.length === 0) {
+        setError("生成大纲失败（网络或服务波动），已保留你现有的内容，请重试。");
+        return;
+      }
+      if (note) {
+        // 只更新大纲, 保留用户已编辑的方案骨架与阶段。
+        setOutline(plan.outline.map((o) => ({ ...o, include: true })));
+        setOutlineNote("");
+      } else {
+        setScheme({ ...emptyScheme, ...plan.scheme });
+        setOutline(plan.outline.map((o) => ({ ...o, include: true })));
+        setSections([]);
+        setVerify(null);
+        setPhase("planned");
+      }
+      window.dispatchEvent(new Event("usage-updated"));
+    } catch {
+      setError("生成大纲失败（网络或服务错误），已保留你现有的内容，请重试。");
+    } finally {
+      setStatus("");
+      setPlanning(false);
     }
-    setStatus("");
-    setPlanning(false);
-    window.dispatchEvent(new Event("usage-updated"));
   };
 
   // —— 第二步(或一步到位): 撰写 ——
@@ -236,6 +248,9 @@ export default function GrantModule() {
   };
 
   const reset = () => {
+    // 有输入或已生成内容时二次确认, 避免一键抹掉辛苦写的整份申请书
+    const hasWork = title.trim() || report.trim() || idea.trim() || scheme || sections.length > 0;
+    if (hasWork && !confirm("将清空全部输入与已生成的方案/初稿，且不可撤销。确定清空？")) return;
     if (running) stop();
     rctrl.current?.abort();
     setTitle(""); setIdea(""); setReport(""); setBackground(""); setRefs([]);
@@ -382,6 +397,19 @@ export default function GrantModule() {
         {!hasInput && (
           <p className="field-hint" data-testid="grant-gate-hint" style={{ marginTop: 6 }}>
             开始前，请至少填写<strong>项目题名</strong>，或在上方粘贴一份<strong>选题调研报告</strong>——两者填其一即可生成。
+          </p>
+        )}
+        {phase === "idle" && scheme && outline.length > 0 && (
+          <p className="field-hint" style={{ marginTop: 6 }}>
+            你有一份已生成的方案骨架与大纲还在。
+            <button
+              className="btn-ghost btn-sm"
+              style={{ marginLeft: 8 }}
+              onClick={() => setPhase("planned")}
+              data-testid="grant-resume-plan-btn"
+            >
+              继续上次生成的大纲 →
+            </button>
           </p>
         )}
       </div>
@@ -535,6 +563,24 @@ export default function GrantModule() {
             <div className="result-actions">
               {running && (
                 <button className="btn-ghost" onClick={stop} data-testid="grant-stop-btn">停止</button>
+              )}
+              {text && !running && (
+                <button
+                  className="btn-ghost"
+                  data-testid="grant-copy-btn"
+                  title="复制申请书全文到剪贴板"
+                  onClick={async () => {
+                    try {
+                      await navigator.clipboard.writeText(text);
+                      setCopied(true);
+                      window.setTimeout(() => setCopied(false), 1800);
+                    } catch {
+                      /* 剪贴板未授权: 忽略 */
+                    }
+                  }}
+                >
+                  {copied ? "已复制 ✓" : "复制全文"}
+                </button>
               )}
               {text && !running && (
                 <button className="btn-ghost" data-testid="grant-export-md" onClick={exportMd}>导出 Markdown</button>
