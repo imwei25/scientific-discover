@@ -86,6 +86,56 @@ def test_test_key_missing_key() -> None:
     assert "未填写" in msg or "key" in msg.lower()
 
 
+def test_test_key_resolves_provider_endpoint(monkeypatch) -> None:
+    """回归: 只给 provider(不给 base_url/model)时, 必须打到该 provider 预设端点+预设 model,
+    而非默认落到 DeepSeek。历史 bug: 硅基流动/OpenAI 的 key 被打到 deepseek → 假 401,
+    连带"测不过 → 存不了"。"""
+    import app.config_io as cio
+
+    captured: dict[str, object] = {}
+
+    class _FakeResp:
+        status_code = 200
+        text = "{}"
+
+    class _FakeClient:
+        def __init__(self, *a, **k):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a):
+            return False
+
+        async def post(self, url, headers=None, json=None):
+            captured["url"] = url
+            captured["model"] = (json or {}).get("model")
+            return _FakeResp()
+
+    monkeypatch.setattr(cio.httpx, "AsyncClient", _FakeClient)
+
+    # 硅基流动: 无 base_url → 打到 siliconflow.cn, model 取预设
+    ok, _ = asyncio.run(_test_provider_key("siliconflow", "sk-x"))
+    assert ok is True
+    assert "siliconflow.cn" in str(captured["url"])
+    assert "deepseek.com" not in str(captured["url"])
+    assert captured["model"] == "deepseek-ai/DeepSeek-V3"
+
+    # OpenAI: 无 base_url → 打到 api.openai.com(此前会误落到 deepseek)
+    asyncio.run(_test_provider_key("openai", "sk-y"))
+    assert "api.openai.com" in str(captured["url"])
+
+    # 自定义 model 覆盖预设
+    asyncio.run(_test_provider_key("siliconflow", "sk-x", model="Qwen/Qwen2.5-72B-Instruct"))
+    assert captured["model"] == "Qwen/Qwen2.5-72B-Instruct"
+
+    # 未知 provider 且无 base_url → 拒绝猜端点
+    ok2, msg2 = asyncio.run(_test_provider_key("weird", "sk-z"))
+    assert ok2 is False
+    assert "base_url" in msg2
+
+
 def test_save_config_localhost_allowed(tmp_path: Path, monkeypatch) -> None:
     # 把 ENV_PATH 改成 tmp, 避免破坏真 .env
     import app.config_io as cio

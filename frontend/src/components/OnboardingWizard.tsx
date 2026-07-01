@@ -42,6 +42,7 @@ export default function OnboardingWizard({ onClose }: OnboardingWizardProps) {
   const [provider, setProvider] = useState<WizardProvider | null>(null);
   const [key, setKey] = useState("");
   const [baseUrl, setBaseUrl] = useState("");  // 选填, 留空用预设
+  const [model, setModel] = useState("");  // 选填, 留空用该 provider 预设默认 model
   const [testStatus, setTestStatus] = useState<TestStatus>("idle");
   const [testMsg, setTestMsg] = useState("");
   const [saveErr, setSaveErr] = useState("");
@@ -52,8 +53,10 @@ export default function OnboardingWizard({ onClose }: OnboardingWizardProps) {
     setTestMsg("");
     if (p === "mock") {
       // 演示模式跳过 key 直接 save
-      doSave(p, "", "");
+      doSave(p, "", "", "");
     } else {
+      // 预填该 provider 的推荐默认 model, 用户可改选/自填
+      setModel(defaultModel(p));
       setStep("key");
     }
   };
@@ -75,6 +78,7 @@ export default function OnboardingWizard({ onClose }: OnboardingWizardProps) {
           provider,
           key: key.trim(),
           base_url: baseUrl.trim() || undefined,
+          model: model.trim() || undefined,
         }),
       });
       const data = await resp.json();
@@ -91,7 +95,7 @@ export default function OnboardingWizard({ onClose }: OnboardingWizardProps) {
     }
   };
 
-  const doSave = async (p: WizardProvider, k: string, b: string) => {
+  const doSave = async (p: WizardProvider, k: string, b: string, m: string) => {
     setStep("saving");
     setSaveErr("");
     try {
@@ -102,6 +106,7 @@ export default function OnboardingWizard({ onClose }: OnboardingWizardProps) {
           provider: p,
           key: k.trim(),
           base_url: b.trim() || undefined,
+          model: m.trim() || undefined,
           mock: p === "mock",
         }),
       });
@@ -136,7 +141,7 @@ export default function OnboardingWizard({ onClose }: OnboardingWizardProps) {
       doTest();
       return;
     }
-    doSave(provider, key, baseUrl);
+    doSave(provider, key, baseUrl, model);
   };
 
   const back = () => {
@@ -144,6 +149,7 @@ export default function OnboardingWizard({ onClose }: OnboardingWizardProps) {
     setProvider(null);
     setKey("");
     setBaseUrl("");
+    setModel("");
     setTestStatus("idle");
     setTestMsg("");
     setSaveErr("");
@@ -212,6 +218,44 @@ export default function OnboardingWizard({ onClose }: OnboardingWizardProps) {
               spellCheck={false}
               autoFocus
             />
+
+            <div className="onboarding-model" data-testid="onboarding-model">
+              <div className="onboarding-model-label">
+                模型（可改选或自填 · 留空用默认 {defaultModel(provider)}）
+              </div>
+              {modelSuggestions(provider).length > 0 && (
+                <div className="onboarding-model-chips">
+                  {modelSuggestions(provider).map((m) => (
+                    <button
+                      key={m}
+                      type="button"
+                      className={`onboarding-model-chip${model.trim() === m ? " on" : ""}`}
+                      onClick={() => {
+                        setModel(m);
+                        setTestStatus("idle");
+                        setTestMsg("");
+                      }}
+                      data-testid={`onboarding-model-chip-${m}`}
+                    >
+                      {m}
+                    </button>
+                  ))}
+                </div>
+              )}
+              <input
+                className="onboarding-input"
+                data-testid="onboarding-model-input"
+                value={model}
+                onChange={(e) => {
+                  setModel(e.target.value);
+                  setTestStatus("idle");
+                  setTestMsg("");
+                }}
+                placeholder={`默认: ${defaultModel(provider)}`}
+                spellCheck={false}
+              />
+            </div>
+
             <details className="onboarding-advanced">
               <summary>高级 · 自定义 base_url(选填)</summary>
               <input
@@ -323,4 +367,26 @@ function defaultBaseUrl(p: WizardProvider): string {
     default:
       return "";
   }
+}
+
+// 各 provider 的常用模型建议(第一个即默认); 与后端 PROVIDER_PRESETS 默认保持一致。
+// 留空传给后端时后端仍会用预设默认, 这里只是给用户快捷选项。
+const MODEL_SUGGESTIONS: Record<WizardProvider, string[]> = {
+  deepseek: ["deepseek-chat", "deepseek-reasoner"],
+  siliconflow: [
+    "deepseek-ai/DeepSeek-V3",
+    "deepseek-ai/DeepSeek-R1",
+    "Qwen/Qwen2.5-72B-Instruct",
+  ],
+  openai: ["gpt-4o-mini", "gpt-4o", "gpt-4.1-mini"],
+  anthropic: ["claude-3-5-sonnet-latest", "claude-3-5-haiku-latest"],
+  mock: [],
+};
+
+function modelSuggestions(p: WizardProvider): string[] {
+  return MODEL_SUGGESTIONS[p] ?? [];
+}
+
+function defaultModel(p: WizardProvider): string {
+  return MODEL_SUGGESTIONS[p]?.[0] ?? "";
 }

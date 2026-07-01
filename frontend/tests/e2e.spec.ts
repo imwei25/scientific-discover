@@ -1008,6 +1008,41 @@ test("设置向导: 可用右上角 × 关闭", async ({ page }) => {
   await expect(page.getByTestId("onboarding-wizard")).toHaveCount(0);
 });
 
+test("设置向导: 硅基流动可换模型, 且模型随测试/保存一起发送", async ({ page }) => {
+  await mockBase(page);
+  let testBody: any = null;
+  let saveBody: any = null;
+  await page.route("**/api/config/test-key", (r) => {
+    testBody = JSON.parse(r.request().postData() || "{}");
+    r.fulfill({ json: { ok: true, msg: "连接成功" } });
+  });
+  await page.route("**/api/config/save", (r) => {
+    saveBody = JSON.parse(r.request().postData() || "{}");
+    r.fulfill({ json: { ok: true } });
+  });
+
+  await page.goto("/");
+  await page.getByTestId("open-settings").click();
+  await page.getByTestId("onboarding-provider-siliconflow").click();
+  // 选 provider 后默认 model 预填
+  await expect(page.getByTestId("onboarding-model-input")).toHaveValue("deepseek-ai/DeepSeek-V3");
+  // 点 chip 换一个模型
+  await page.getByTestId("onboarding-model-chip-Qwen/Qwen2.5-72B-Instruct").click();
+  await expect(page.getByTestId("onboarding-model-input")).toHaveValue("Qwen/Qwen2.5-72B-Instruct");
+  // 填 key + 测试连接
+  await page.getByTestId("onboarding-key-input").fill("sk-siliconflow-test");
+  await page.getByTestId("onboarding-test").click();
+  await expect(page.getByTestId("onboarding-test-msg")).toContainText("连接成功");
+  expect(testBody.provider).toBe("siliconflow");
+  expect(testBody.model).toBe("Qwen/Qwen2.5-72B-Instruct");
+  // 保存: model 也随保存发送
+  await page.getByTestId("onboarding-save").click();
+  await expect(page.getByTestId("onboarding-step-done")).toBeVisible();
+  expect(saveBody.provider).toBe("siliconflow");
+  expect(saveBody.key).toBe("sk-siliconflow-test");
+  expect(saveBody.model).toBe("Qwen/Qwen2.5-72B-Instruct");
+});
+
 test("实验规划: 返回计划文本", async ({ page }) => {
   await mockBase(page);
   await page.route("**/api/run", (r) =>

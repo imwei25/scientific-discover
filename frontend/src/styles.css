@@ -3141,6 +3141,31 @@ select {
   box-sizing: border-box;
   margin-top: 8px;
 }
+.onboarding-model { margin-top: 12px; }
+.onboarding-model-label { font-size: 13px; color: var(--muted); margin-bottom: 6px; }
+.onboarding-model-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 6px;
+}
+.onboarding-model-chip {
+  font-family: var(--mono);
+  font-size: 12px;
+  padding: 4px 10px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--card);
+  color: var(--ink);
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s;
+}
+.onboarding-model-chip:hover { border-color: var(--teal); }
+.onboarding-model-chip.on {
+  border-color: var(--teal);
+  background: var(--teal-soft);
+  font-weight: 600;
+}
 .onboarding-advanced { font-size: 13px; color: var(--muted); }
 .onboarding-advanced summary { cursor: pointer; padding: 4px 0; }
 .onboarding-actions {

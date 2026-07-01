@@ -130,13 +130,24 @@ async def test_provider_key(
     - 超时 / 连接失败: 网络问题
     - 其它非 200: 返回上游消息片段
     """
-    provider = (provider or "openai").strip().lower()
+    provider_id = (provider or "").strip().lower()
     api_key = (api_key or "").strip()
     if not api_key:
         return False, "未填写 API key"
 
-    if provider == "anthropic":
-        url = (base_url or "https://api.anthropic.com").rstrip("/") + "/v1/messages"
+    # 从预设解析 协议/base_url/model, 与 /api/config/save 保持一致。
+    # 关键: 前端"测试连接"通常只传 provider+key(base_url 选填、不传 model),
+    # 必须按 provider 取预设 base_url; 否则会拿默认值把 硅基流动/OpenAI 的 key
+    # 打到 DeepSeek 端点上 → 一律 401 假失败(历史 bug)。
+    preset = PROVIDER_PRESETS.get(provider_id, {})
+    # 协议(openai 兼容 / anthropic): 优先预设; 未知供应商按 id 兜底
+    protocol = (preset.get("provider") or ("anthropic" if provider_id == "anthropic" else "openai")).strip().lower()
+    base = (base_url or preset.get("base_url") or "").strip()
+    model = (model or preset.get("model") or "").strip()
+
+    if protocol == "anthropic":
+        base = base or "https://api.anthropic.com"
+        url = base.rstrip("/") + "/v1/messages"
         headers = {
             "x-api-key": api_key,
             "anthropic-version": "2023-06-01",
@@ -148,8 +159,11 @@ async def test_provider_key(
             "max_tokens": 8,
         }
     else:
-        # openai 兼容
-        url = (base_url or "https://api.deepseek.com").rstrip("/") + "/chat/completions"
+        # openai 兼容协议。已知 provider 的 base 已由预设解析; 未知且无 base 则
+        # 拒绝猜测端点(避免把 key 打到错误服务上导致误报), 提示补 base_url。
+        if not base:
+            return False, "未知供应商且未填写 base_url, 无法确定测试端点, 请在高级里填写 base_url"
+        url = base.rstrip("/") + "/chat/completions"
         headers = {
             "Authorization": f"Bearer {api_key}",
             "Content-Type": "application/json",
