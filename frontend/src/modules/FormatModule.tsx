@@ -368,6 +368,10 @@ export default function FormatModule() {
             ))}
           </select>
           {selected && <span className="field-hint">{selected.summary}</span>}
+          <span className="field-hint">
+            期刊库目前只内置少数通用/示例模板。<strong>没有你的目标刊？</strong>先选「通用英文 IMRaD」或
+            「中文核心 GB/T 7714」作为基础，投稿前再对照目标刊官网 Author Guidelines 微调即可。
+          </span>
         </label>
         <Dropzone
           testId="upload-manuscript"
@@ -400,6 +404,11 @@ export default function FormatModule() {
             清空
           </button>
         </div>
+        {!manuscript.trim() && (
+          <p className="field-hint" data-testid="format-gate-hint" style={{ marginTop: 6 }}>
+            开始前请先在上方粘贴稿件正文（或上传 Word/PDF 自动填入），才能按目标期刊重排。
+          </p>
+        )}
       </div>
 
       <ResultPanel
@@ -415,6 +424,11 @@ export default function FormatModule() {
         <button className="btn-secondary" onClick={downloadDocx} disabled={downloading} data-testid="download-btn">
           {downloading ? "正在生成…" : fmtRefs.length ? "⬇ 下载 Word 文件（含格式化参考文献）" : "⬇ 下载 Word 文件"}
         </button>
+      )}
+      {text && !running && fmtRefs.length === 0 && (
+        <p className="field-hint" data-testid="format-refs-note" style={{ marginTop: 4 }}>
+          提示：下载的 Word <strong>暂不含参考文献</strong>。如需带上，请到下方「参考文献」区点「按该期刊格式化参考文献」后再下载。
+        </p>
       )}
       {dlErr && <div className="result-error" data-testid="dl-error">{dlErr}</div>}
 
