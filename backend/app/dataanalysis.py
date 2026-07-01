@@ -38,6 +38,109 @@ _DANGER = re.compile(
     r"|(?<![\w.])(?:eval|exec|open)\s*\(",
 )
 
+# 危险扫描前先剥掉字符串字面量与注释: 否则出现在 print 文本/图表标题/注释里的
+# "open("、"eval(" 等会被误判为危险调用, 导致整段分析被拒、白白失败。
+_NONCODE = re.compile(
+    r'""".*?"""|\'\'\'.*?\'\'\'|"(?:\\.|[^"\\\n])*"|\'(?:\\.|[^\'\\\n])*\'|#[^\n]*',
+    re.DOTALL,
+)
+
+
+def _strip_noncode(code: str) -> str:
+    return _NONCODE.sub(" ", code)
+
+
+# 未被 pandas 识别、但常见于中文脏表的缺失哨兵(文本形式)。
+_MISSING_TOKENS = {
+    "", "-", "--", "/", "na", "n/a", "n.a.", "nan", "null", "none",
+    "缺失", "未知", "无", "空", "?", "？", "暂无", "待查",
+}
+# 常见数值哨兵缺失(问卷/临床表遗留)。
+_SENTINEL_NUMS = {"999", "9999", "-999", "-9999", "99", "888", "9998"}
+
+
+def _looks_numeric_frac(vals) -> float:
+    """样本中"去掉千分位/百分号/货币/删失符后能当数字解析"的比例。"""
+    ok = tot = 0
+    for v in vals:
+        s = str(v).strip()
+        if not s:
+            continue
+        tot += 1
+        s2 = s.lstrip("<>≤≥").replace(",", "").replace("%", "").replace("$", "").replace("￥", "").replace("元", "").strip()
+        try:
+            float(s2)
+            ok += 1
+        except ValueError:
+            pass
+    return ok / tot if tot else 0.0
+
+
+def _column_flags(s: pd.Series) -> list[str]:
+    """对单列做启发式体检, 返回给 AI 看的清洗提示(命中才返回)。"""
+    flags: list[str] = []
+    n = len(s)
+    nun = int(s.nunique(dropna=True))
+    non_null = s.dropna()
+    if s.dtype == object and len(non_null):
+        sample = non_null.astype(str).head(200)
+        if _looks_numeric_frac(sample) >= 0.9:
+            joined = " ".join(sample.head(30))
+            kinds = []
+            if "%" in joined:
+                kinds.append("百分号")
+            if re.search(r"\d,\d", joined):
+                kinds.append("千位逗号")
+            if re.search(r"[<>≤≥]", joined):
+                kinds.append("删失阈值(<、>)")
+            if re.search(r"[$￥元]", joined):
+                kinds.append("货币符号")
+            hint = "含" + "/".join(kinds) if kinds else "被存成文本"
+            flags.append(f"⚠疑似数值列({hint})，需清洗后 pd.to_numeric 再分析")
+        else:
+            try:
+                import warnings as _w
+                with _w.catch_warnings():
+                    _w.simplefilter("ignore")
+                    parsed = pd.to_datetime(non_null.head(50), errors="coerce")
+                if parsed.notna().mean() >= 0.8:
+                    flags.append("⚠疑似日期列，建议 pd.to_datetime")
+            except Exception:  # noqa: BLE001
+                pass
+    if n and nun / n >= 0.95 and nun >= 10:
+        flags.append("⚠疑似ID/编号列(近乎唯一)，一般不作分析变量")
+    if len(non_null):
+        as_str = non_null.astype(str).str.strip()
+        hit = as_str.str.lower().isin(_MISSING_TOKENS)
+        if 0 < float(hit.mean()) <= 0.5 and int(hit.sum()) >= 1:
+            toks = sorted(set(as_str[hit.values]))[:4]
+            flags.append(f"⚠疑似缺失标记 {toks} 未被当作缺失，建议替换为 NaN")
+        if pd.api.types.is_numeric_dtype(s):
+            sent = non_null.astype(str).isin(_SENTINEL_NUMS)
+            if 0 < float(sent.mean()) <= 0.3 and int(sent.sum()) >= 2:
+                flags.append("⚠数值列疑似含哨兵缺失(如 999/9999)，请确认是否代表缺失")
+    return flags
+
+
+def _sanity_checks(stdout: str) -> list[str]:
+    """对执行输出做确定性体检(不调用 LLM)。返回告警, 喂给结论环节让 AI 据实修正/说明。"""
+    warns: list[str] = []
+    if not stdout:
+        return warns
+    if re.search(r"(?i)\bp\s*[=＝:]\s*0\.0{3,}\b", stdout):
+        warns.append("输出把 p 值写成 0.000 之类，规范应写为 p<0.001。")
+    for m in re.finditer(r"(?i)\bp\s*(?:[-_]?val(?:ue)?)?\s*[=＝:]\s*(\d+\.\d+)", stdout):
+        try:
+            if float(m.group(1)) > 1:
+                warns.append(f"检测到疑似 p 值 {m.group(1)} 超出 [0,1]，请核对。")
+                break
+        except ValueError:
+            pass
+    for block in ("【方法选择】", "【假设检查】", "【数据质量】"):
+        if block not in stdout:
+            warns.append(f"输出缺少必需的『{block}』透明化区块。")
+    return warns
+
 
 def _dedup_columns(df: pd.DataFrame) -> pd.DataFrame:
     """重命名重复列名(脏临床表常见), 避免 df[col] 返回 DataFrame 触发 .dtype 等崩溃。"""
@@ -69,11 +172,29 @@ def profile_data(df: pd.DataFrame) -> str:
         nuniq = df[col].nunique(dropna=True)
         miss = int(df[col].isna().sum())
         sample = ", ".join(map(str, df[col].dropna().unique()[:5]))
-        lines.append(f"  - {col}（{dtype}，唯一值{nuniq}，缺失{miss}）样例: {sample}")
+        line = f"  - {col}（{dtype}，唯一值{nuniq}，缺失{miss}）样例: {sample}"
+        flags = _column_flags(df[col])
+        if flags:
+            line += "  【" + "；".join(flags) + "】"
+        lines.append(line)
     numeric = list(df.select_dtypes(include="number").columns)
     categorical = [c for c in df.columns if c not in numeric]
     lines.append(f"\n数值型列：{', '.join(map(str, numeric)) or '无'}")
     lines.append(f"分类型列：{', '.join(map(str, categorical)) or '无'}")
+    # 数值列描述统计: 让 AI 一眼看到量纲/分布/离群迹象, 减少臆测。
+    if numeric:
+        try:
+            lines.append("\n数值列描述统计：")
+            lines.append(df[numeric].describe().round(3).to_string())
+        except Exception:  # noqa: BLE001
+            pass
+    # 分类列主要取值: 关键是让 AI 看清"分组列到底几组、各组多少例", 避免把多组当两组。
+    if categorical:
+        lines.append("\n分类列主要取值(取值(计数))：")
+        for c in categorical[:12]:
+            vc = df[c].value_counts(dropna=True).head(6)
+            pairs = ", ".join(f"{k}({int(v)})" for k, v in vc.items())
+            lines.append(f"  - {c}: {pairs}")
     lines.append("\n前 5 行：")
     lines.append(df.head(5).to_string())
     return "\n".join(lines)
@@ -154,7 +275,14 @@ def _fix_code_messages(profile: str, question: str, code: str, error: str) -> li
     return [{"role": "system", "content": system}, {"role": "user", "content": user}]
 
 
-def _conclusion_messages(question: str, code: str, output: str) -> list[dict]:
+def _clip_output(text: str, head: int = 9000, tail: int = 3000) -> str:
+    """结论只喂真实输出; 过长时保留头尾(尾部常含主分析结果/p值), 避免整段截断丢数字。"""
+    if len(text) <= head + tail:
+        return text
+    return text[:head] + "\n…（中间省略以控制长度）…\n" + text[-tail:]
+
+
+def _conclusion_messages(question: str, code: str, output: str, warnings: list[str] | None = None) -> list[dict]:
     system = (
         "你是医学/药学/生物医学论文写作助手。下面是针对用户数据实际执行分析代码后得到的【真实输出】。"
         "请基于这些真实结果撰写结论，严禁编造或改动其中的数字；若某结论缺乏数据支撑请说明。"
@@ -163,8 +291,13 @@ def _conclusion_messages(question: str, code: str, output: str) -> list[dict]:
         "② 核心发现（引用输出中的具体数值/统计量/p值，并区分相关与因果）；"
         "③ 结果解读与意义；④ 主要局限（样本量、缺失/异常值处理、偏倚、混杂、假设是否满足等）。"
     )
-    user = f"【研究用途】\n{question}\n\n【分析代码】\n```python\n{code}\n```\n\n【代码真实输出】\n{output[:6000]}"
-    return [{"role": "system", "content": system}, {"role": "user", "content": user}]
+    parts = [f"【研究用途】\n{question}", f"【分析代码】\n```python\n{code}\n```", f"【代码真实输出】\n{_clip_output(output)}"]
+    if warnings:
+        parts.append(
+            "【自动核对提示（系统对输出的确定性检查，请在结论中据实说明或据此修正，勿忽略）】\n"
+            + "\n".join(f"- {w}" for w in warnings)
+        )
+    return [{"role": "system", "content": system}, {"role": "user", "content": "\n\n".join(parts)}]
 
 
 _RUNNER = r'''
@@ -201,16 +334,6 @@ plt.rcParams.update({
     "text.usetex": False,
 })
 
-def _load(p):
-    if p.lower().endswith((".xlsx", ".xls")):
-        return pd.read_excel(p)
-    for enc in ("utf-8-sig", "utf-8", "gb18030", "latin-1"):
-        try:
-            return pd.read_csv(p, encoding=enc)
-        except UnicodeDecodeError:
-            continue
-    return pd.read_csv(p, encoding="latin-1")
-
 # 图表导出格式与期刊配色(由命令行传入)
 _FMT = (sys.argv[4] if len(sys.argv) > 4 else "png").lower()
 _PAL = (sys.argv[5] if len(sys.argv) > 5 else "default").lower()
@@ -229,19 +352,10 @@ if _PAL in _PALETTES:
     except Exception:
         pass
 
-df = _load(sys.argv[1])
-# 重复列名去重(与主进程一致), 防 df[col] 返回 DataFrame 触发用户代码崩溃
-if getattr(df.columns, "duplicated", None) is not None and df.columns.duplicated().any():
-    _seen = {}
-    _cols = []
-    for _c in df.columns:
-        if _c in _seen:
-            _seen[_c] += 1
-            _cols.append(f"{_c}.{_seen[_c]}")
-        else:
-            _seen[_c] = 0
-            _cols.append(_c)
-    df.columns = _cols
+# 主进程已用统一的健壮解码(textio.read_csv_bytes)读入并完成列名去重, 这里直接反序列化
+# 同一个 DataFrame: 确保 AI 看到的数据画像与实际执行的数据完全一致, 消除两套解码导致的
+# 列名不一致 KeyError。
+df = pd.read_pickle(sys.argv[1])
 with open(sys.argv[2], "r", encoding="utf-8") as f:
     code = f.read()
 
@@ -291,18 +405,20 @@ with open(sys.argv[3], "w", encoding="utf-8") as f:
 '''
 
 
-def _execute(code: str, filename: str, content: bytes, chart_format: str = "png", palette: str = "default") -> dict:
-    """在子进程沙箱里执行 AI 生成的分析代码, 返回 {ok, stdout, charts, error}。"""
-    if _DANGER.search(code):
+def _execute(code: str, df: pd.DataFrame, chart_format: str = "png", palette: str = "default") -> dict:
+    """在子进程沙箱里执行 AI 生成的分析代码, 返回 {ok, stdout, charts, error}。
+
+    df 是主进程已用统一解码读入并去重列名后的 DataFrame; 以 pickle 传给子进程,
+    保证执行用的数据与生成画像时完全一致(消除两套解码导致的列名不一致 KeyError)。
+    """
+    if _DANGER.search(_strip_noncode(code)):
         return {"ok": False, "error": "生成的代码包含不被允许的操作（文件/网络/系统调用），已拒绝执行。", "stdout": "", "charts": []}
     with tempfile.TemporaryDirectory() as d:
-        ext = ".xlsx" if filename.lower().endswith((".xlsx", ".xls")) else ".csv"
-        data_path = os.path.join(d, "data" + ext)
+        data_path = os.path.join(d, "data.pkl")
         code_path = os.path.join(d, "user_code.py")
         runner_path = os.path.join(d, "runner.py")
         out_path = os.path.join(d, "out.json")
-        with open(data_path, "wb") as f:
-            f.write(content)
+        df.to_pickle(data_path)
         with open(code_path, "w", encoding="utf-8") as f:
             f.write(code)
         with open(runner_path, "w", encoding="utf-8") as f:
@@ -363,7 +479,7 @@ async def analyze_data(
 
         yield ("code", {"code": code})
         yield ("status", {"message": "正在本地执行分析…"})
-        run = await asyncio.to_thread(_execute, code, filename, content, chart_format, palette)
+        run = await asyncio.to_thread(_execute, code, df, chart_format, palette)
 
         # 自动纠错: 最多重试 3 次(共 4 次执行)。AI 写的统计代码(尤其 pingouin 版本相关的
         # 列名/函数签名)首次常报错, 2 次重试有时不够、导致整次分析失败; 多给一次显著提高成功率。
@@ -376,7 +492,7 @@ async def analyze_data(
             )
             yield ("code", {"code": code})
             yield ("status", {"message": "正在重新执行…"})
-            run = await asyncio.to_thread(_execute, code, filename, content, chart_format, palette)
+            run = await asyncio.to_thread(_execute, code, df, chart_format, palette)
 
         if run.get("charts"):
             yield ("charts", {"items": run["charts"]})
@@ -387,8 +503,11 @@ async def analyze_data(
             yield ("error", {"message": "分析代码执行失败：\n" + (run.get("error") or "未知错误")})
             return
 
+        # 确定性体检(不调用 LLM): 把可疑处作为提示喂给结论环节, 让 AI 据实修正/说明。
+        warnings = _sanity_checks(run.get("stdout", ""))
+
         yield ("status", {"message": "正在总结结论…"})
-        async for piece in stream_chat(_conclusion_messages(question, code, run.get("stdout", ""))):
+        async for piece in stream_chat(_conclusion_messages(question, code, run.get("stdout", ""), warnings)):
             yield ("delta", {"text": piece})
         yield ("done", {})
     except Exception as e:  # noqa: BLE001

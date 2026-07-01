@@ -68,12 +68,23 @@ interface ROCResult {
   threshold: number;
 }
 
-// 统计顾问结构化输出
+// 统计顾问结构化输出。
+// 注意: 后端 build_stats_advice 的契约是 recommended={test,why}、alternatives=[{test,when}]
+// (对象, 不是字符串)。这里按对象渲染; 同时兼容旧的/流式未完整的字符串形态, 避免把对象
+// 直接当 React 子节点导致 "Objects are not valid as a React child" 崩溃。
+interface AdvisorRecommended {
+  test?: string;
+  why?: string;
+}
+interface AdvisorAlternative {
+  test?: string;
+  when?: string;
+}
 interface AdvisorPayload {
-  recommended?: string;
+  recommended?: AdvisorRecommended | string;
   assumptions?: string[];
   cautions?: string[];
-  alternatives?: string[];
+  alternatives?: (AdvisorAlternative | string)[];
 }
 
 export default function AnalyzeModule({ goto }: { goto: Goto }) {
@@ -1140,8 +1151,15 @@ function AdvisorPane() {
           <div className="advisor-card">
             <h4>✅ 推荐方法</h4>
             <div className="reco">
-              {result.recommended || (running ? "…" : "—")}
+              {typeof result.recommended === "string"
+                ? result.recommended
+                : result.recommended?.test || (running ? "…" : "—")}
             </div>
+            {result.recommended && typeof result.recommended !== "string" && result.recommended.why && (
+              <p style={{ margin: "6px 0 0", fontSize: 13, color: "var(--faint)" }}>
+                {result.recommended.why}
+              </p>
+            )}
           </div>
           <div className="advisor-card">
             <h4>📋 前置假设</h4>
@@ -1162,7 +1180,20 @@ function AdvisorPane() {
           <div className="advisor-card">
             <h4>🔄 替代方法</h4>
             {result.alternatives && result.alternatives.length ? (
-              <ul>{result.alternatives.map((s, i) => <li key={i}>{s}</li>)}</ul>
+              <ul>
+                {result.alternatives.map((s, i) => (
+                  <li key={i}>
+                    {typeof s === "string" ? (
+                      s
+                    ) : (
+                      <>
+                        <strong>{s.test}</strong>
+                        {s.when ? `：${s.when}` : ""}
+                      </>
+                    )}
+                  </li>
+                ))}
+              </ul>
             ) : (
               <p style={{ margin: 0, color: "var(--faint)" }}>{running ? "…" : "—"}</p>
             )}
