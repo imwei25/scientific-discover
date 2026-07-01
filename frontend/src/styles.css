@@ -718,67 +718,68 @@ body {
 }
 [data-theme="midnight"] .niuma-mark { color: var(--teal); }
 
-/* ── niuma-research · 牛 + 马 3D 立方体装饰（纯 CSS）──────────────── */
-.niuma-art {
-  --cube: clamp(96px, 12vw, 148px);
-  display: flex;
-  align-items: flex-end;
-  justify-content: center;
-  gap: clamp(28px, 6vw, 72px);
-  width: 100%;
-  perspective: 1000px;
-}
-.niuma-cube-wrap {
+/* ── niuma-research · 手绘 3D「牛马」装饰（inline SVG）────────────── */
+.niuma3d {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 16px;
-}
-.niuma-scene {
-  width: var(--cube);
-  height: var(--cube);
-  animation: niuma-float 6s ease-in-out infinite;
-}
-.niuma-cube-wrap.horse .niuma-scene { animation-delay: -3s; }
-.niuma-cube {
-  position: relative;
+  gap: 12px;
   width: 100%;
-  height: 100%;
-  transform-style: preserve-3d;
-  animation: niuma-spin 18s linear infinite;
-  filter: drop-shadow(0 14px 22px rgba(14, 58, 57, 0.12));
 }
-.niuma-cube-wrap.horse .niuma-cube {
-  animation-duration: 22s;
-  animation-direction: reverse;
+.niuma3d-svg {
+  width: clamp(240px, 34vw, 400px);
+  height: auto;
+  display: block;
+  filter: drop-shadow(0 16px 20px rgba(14, 58, 57, 0.14));
 }
-.niuma-face {
-  position: absolute;
-  inset: 0;
-  display: grid;
-  place-items: center;
-  font-size: calc(var(--cube) * 0.52);
-  line-height: 1;
-  border-radius: 18px;
-  background: linear-gradient(150deg, var(--surface), var(--teal-soft));
-  border: 1px solid var(--line);
-  box-shadow: inset 0 0 28px rgba(15, 155, 148, 0.12);
+/* 统一的手绘描边（分面几何体）*/
+.n3 path,
+.n3 polygon,
+.n3 rect,
+.n3 ellipse {
+  stroke: var(--petrol);
+  stroke-width: 1.5;
+  stroke-linejoin: round;
+  stroke-linecap: round;
 }
-.nf-front  { transform: translateZ(calc(var(--cube) / 2)); }
-.nf-back   { transform: rotateY(180deg) translateZ(calc(var(--cube) / 2)); }
-.nf-right  { transform: rotateY(90deg)  translateZ(calc(var(--cube) / 2)); }
-.nf-left   { transform: rotateY(-90deg) translateZ(calc(var(--cube) / 2)); }
-.nf-top    { transform: rotateX(90deg)  translateZ(calc(var(--cube) / 2)); }
-.nf-bottom { transform: rotateX(-90deg) translateZ(calc(var(--cube) / 2)); }
-.niuma-emoji { filter: drop-shadow(0 2px 4px rgba(14, 58, 57, 0.2)); }
-.niuma-shadow {
-  width: calc(var(--cube) * 0.82);
-  height: 14px;
-  border-radius: 50%;
-  background: radial-gradient(ellipse at center, rgba(14, 58, 57, 0.2), transparent 72%);
-  animation: niuma-shadow 6s ease-in-out infinite;
+.n3 circle { stroke: none; }
+/* 分面着色：顶亮 / 正面中 / 侧暗 / 底最暗 —— 靠色阶出体积 */
+.n3-top { fill: var(--teal-soft); }
+.n3-front { fill: var(--teal); }
+.n3-side { fill: var(--petrol); }
+.n3-dark { fill: var(--petrol-700); }
+.n3-mane { fill: var(--petrol); }
+.n3-horn { fill: var(--surface); }
+.n3-paper { fill: var(--surface); }
+.n3-eye { fill: var(--petrol); }
+.n3-nostril { fill: var(--petrol-700); }
+.n3-spark { fill: var(--surface); }
+.n3-text {
+  stroke: var(--teal);
+  stroke-width: 2;
+  stroke-linecap: round;
 }
-.niuma-cube-wrap.horse .niuma-shadow { animation-delay: -3s; }
+.n3 .n3-shadow {
+  fill: rgba(14, 58, 57, 0.16);
+  stroke: none;
+}
+.n3-ground {
+  stroke: var(--line);
+  stroke-width: 1.4;
+  stroke-linecap: round;
+  stroke-dasharray: 2 5;
+}
+/* 只让身体漂浮, 影子留在地上（轻微呼吸）*/
+.n3-creature {
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: niuma3d-float 6s ease-in-out infinite;
+}
+.niuma3d .n3-shadow {
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: niuma3d-shadow 6s ease-in-out infinite;
+}
 .niuma-cap {
   font-family: var(--serif);
   font-size: 17px;
@@ -787,20 +788,17 @@ body {
   padding-left: 0.34em;
   color: var(--petrol);
 }
-@keyframes niuma-spin {
-  from { transform: rotateX(-20deg) rotateY(0deg); }
-  to   { transform: rotateX(-20deg) rotateY(360deg); }
-}
-@keyframes niuma-float {
+[data-theme="midnight"] .niuma-cap { color: var(--teal); }
+@keyframes niuma3d-float {
   0%, 100% { transform: translateY(0); }
-  50%      { transform: translateY(-14px); }
+  50%      { transform: translateY(-12px); }
 }
-@keyframes niuma-shadow {
-  0%, 100% { transform: scale(1); opacity: 0.55; }
-  50%      { transform: scale(0.8); opacity: 0.32; }
+@keyframes niuma3d-shadow {
+  0%, 100% { transform: scale(1); opacity: 1; }
+  50%      { transform: scale(0.86); opacity: 0.7; }
 }
 @media (prefers-reduced-motion: reduce) {
-  .niuma-scene, .niuma-cube, .niuma-shadow { animation: none; }
+  .n3-creature, .niuma3d .n3-shadow { animation: none; }
 }
 
 /* ── 表单：字段提示 + 高级检索设置折叠面板 ──────────────────────── */

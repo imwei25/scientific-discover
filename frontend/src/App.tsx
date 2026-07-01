@@ -442,7 +442,7 @@ function Home({ onPick }: { onPick: (m: ModuleId) => void }) {
           </div>
         </div>
         <div className="home-art" aria-hidden="true">
-          <NiumaArt />
+          <Niuma3D />
         </div>
       </div>
 
@@ -470,35 +470,83 @@ function Home({ onPick }: { onPick: (m: ModuleId) => void }) {
   );
 }
 
-// ── niuma-research · 牛 + 马 的简单 3D 装饰 ───────────────────────
-// 纯展示用：两个缓慢自转 + 漂浮的玻璃质感立方体, 分别贴「牛 / 马」,
-// 呼应 niuma-research 品牌。无 JS, 纯 CSS 3D(见 styles.css)。
-const CUBE_FACES = ["front", "back", "right", "left", "top", "bottom"] as const;
-
-function NiumaCube({ cls, emoji, label }: { cls: string; emoji: string; label: string }) {
+// ── niuma-research · 手绘 3D「牛马」装饰 ──────────────────────────
+// 一只手绘的低多边形（low-poly / 纸艺感）牛马：牛头双角 + 马鬃马尾,
+// 背上驮着一叠稿纸——「科研牛马」的自嘲。纯 inline SVG, 分面着色出
+// 立体感（顶面亮 / 正面中 / 侧面暗）, 配色全走主题 token, 轻微漂浮。
+function Niuma3D() {
   return (
-    <div className={`niuma-cube-wrap ${cls}`}>
-      <div className="niuma-scene">
-        <div className="niuma-cube">
-          {CUBE_FACES.map((f) => (
-            <div key={f} className={`niuma-face nf-${f}`}>
-              <span className="niuma-emoji">{emoji}</span>
-            </div>
-          ))}
-        </div>
-      </div>
-      <div className="niuma-shadow" aria-hidden="true" />
-      <div className="niuma-cap">{label}</div>
-    </div>
-  );
-}
+    <div className="niuma3d" data-testid="hero-art" aria-hidden="true">
+      <svg viewBox="0 0 340 300" className="niuma3d-svg" role="img" aria-hidden="true">
+        <g className="n3">
+          {/* 地面虚线 + 柔和投影（不随身体漂浮）*/}
+          <line className="n3-ground" x1="42" y1="248" x2="300" y2="248" />
+          <ellipse className="n3-shadow" cx="180" cy="250" rx="116" ry="15" />
 
-// 首页 hero 装饰：牛 + 马 两个 3D 立方体。
-function NiumaArt() {
-  return (
-    <div className="niuma-art" data-testid="hero-art" aria-hidden="true">
-      <NiumaCube cls="ox" emoji="🐂" label="牛" />
-      <NiumaCube cls="horse" emoji="🐎" label="马" />
+          {/* 会漂浮的牛马本体 */}
+          <g className="n3-creature">
+            {/* 马尾（从后臀垂到身体左侧, 上端掖在身后）*/}
+            <path
+              className="n3-side"
+              d="M120 92 C96 96 78 116 74 146 C70 172 80 190 92 198 C82 182 82 156 96 134 C106 118 116 104 128 96 Z"
+            />
+            <line className="n3-text" x1="88" y1="190" x2="80" y2="166" />
+            <line className="n3-text" x1="95" y1="180" x2="87" y2="156" />
+
+            {/* 远侧两腿（暗面）*/}
+            <rect className="n3-side" x="222" y="176" width="16" height="64" rx="7" />
+            <rect className="n3-dark" x="222" y="232" width="16" height="10" rx="4" />
+            <rect className="n3-side" x="126" y="178" width="16" height="62" rx="7" />
+            <rect className="n3-dark" x="126" y="232" width="16" height="10" rx="4" />
+
+            {/* 躯干：侧面（暗）/ 顶面（亮）/ 正面（中）分面出 3D */}
+            <polygon className="n3-side" points="210,190 210,104 245,82 245,168" />
+            <polygon className="n3-top" points="90,104 210,104 245,82 125,82" />
+            <polygon className="n3-front" points="90,104 210,104 210,190 90,190" />
+            <polygon className="n3-dark" points="90,190 210,190 210,183 90,183" />
+
+            {/* 背上驮的一叠稿纸 */}
+            <polygon className="n3-paper" points="152,101 198,101 216,90 170,90" />
+            <polygon className="n3-paper" points="148,105 194,105 212,94 166,94" />
+            <line className="n3-text" x1="168" y1="100" x2="200" y2="94" />
+            <line className="n3-text" x1="164" y1="103" x2="196" y2="97" />
+            <line className="n3-text" x1="160" y1="106" x2="184" y2="101" />
+
+            {/* 近侧两腿（亮面, 压在身前）*/}
+            <rect className="n3-front" x="190" y="182" width="19" height="64" rx="8" />
+            <rect className="n3-dark" x="190" y="238" width="19" height="10" rx="5" />
+            <rect className="n3-front" x="96" y="184" width="19" height="62" rx="8" />
+            <rect className="n3-dark" x="96" y="238" width="19" height="10" rx="5" />
+
+            {/* 颈 */}
+            <polygon className="n3-front" points="200,148 208,112 234,86 254,104 240,132 214,150" />
+
+            {/* 马鬃：沿颈背的一排鬃毛 */}
+            <polygon className="n3-mane" points="236,84 246,92 232,96" />
+            <polygon className="n3-mane" points="230,96 240,104 226,108" />
+            <polygon className="n3-mane" points="224,108 234,116 220,120" />
+            <polygon className="n3-mane" points="218,120 228,128 214,132" />
+            <polygon className="n3-mane" points="213,132 223,140 209,144" />
+
+            {/* 牛头（朝右）*/}
+            <path
+              className="n3-front"
+              d="M234 92 C232 74 246 64 264 64 C282 64 296 72 298 88 C300 100 292 110 276 112 C260 114 244 110 238 104 C234 100 234 96 234 92 Z"
+            />
+            {/* 耳 */}
+            <polygon className="n3-front" points="244,74 236,60 250,66" />
+            {/* 双角（骨白）*/}
+            <path className="n3-horn" d="M250 66 C244 52 246 40 256 34 C254 44 254 56 260 66 Z" />
+            <path className="n3-horn" d="M276 64 C286 52 300 48 308 52 C300 54 290 60 284 68 Z" />
+            {/* 口鼻 + 鼻孔 + 眼 */}
+            <ellipse className="n3-top" cx="286" cy="97" rx="11" ry="9" />
+            <circle className="n3-nostril" cx="290" cy="99" r="1.8" />
+            <circle className="n3-eye" cx="266" cy="84" r="3" />
+            <circle className="n3-spark" cx="267" cy="83" r="1" />
+          </g>
+        </g>
+      </svg>
+      <div className="niuma-cap">牛马</div>
     </div>
   );
 }
