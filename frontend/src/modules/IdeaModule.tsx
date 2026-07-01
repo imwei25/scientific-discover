@@ -128,6 +128,7 @@ export default function IdeaModule({ goto }: { goto: Goto }) {
   );
 
   const [status, setStatus] = useState("");
+  const [copied, setCopied] = useState(false); // 复制报告到剪贴板的短暂反馈
   const [refs, setRefs] = usePersistentState<Reference[]>("idea:refs", []);
   const [refSort, setRefSort] = usePersistentState("idea:refSort", "relevance");
   // 影响力过滤: 阈值(空=不过滤) / 至少保留篇数 / 是否保留无影响力数据的文献
@@ -963,6 +964,29 @@ export default function IdeaModule({ goto }: { goto: Goto }) {
                   }
                 >
                   用此结果写标书 →
+                </button>
+              )}
+              {text && !running && (
+                <button
+                  className="btn-ghost"
+                  data-testid="copy-report-btn"
+                  onClick={async () => {
+                    const refMd = refs.length
+                      ? "\n\n## 参考文献\n" +
+                        refs.map((r) => `- [${r.first_author} (${r.year}). ${r.title}](${r.url})`).join("\n")
+                      : "";
+                    try {
+                      await navigator.clipboard.writeText(text + refMd);
+                      setCopied(true);
+                      window.setTimeout(() => setCopied(false), 1800);
+                    } catch {
+                      setStatus("复制失败：浏览器未授权剪贴板，请手动选择复制");
+                      window.setTimeout(() => setStatus((s) => (s.startsWith("复制失败") ? "" : s)), 4000);
+                    }
+                  }}
+                  title="把调研报告（含参考文献）复制到剪贴板"
+                >
+                  {copied ? "已复制 ✓" : "复制"}
                 </button>
               )}
               {text && !running && (

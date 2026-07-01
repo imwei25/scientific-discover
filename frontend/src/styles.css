@@ -1108,11 +1108,13 @@ select {
   font-size: 12px;
   color: var(--muted);
   font-family: var(--serif);
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
 }
 .result-actions {
   display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
   gap: var(--sp-2);
 }
 .result-text {
