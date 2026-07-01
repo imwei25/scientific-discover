@@ -281,7 +281,7 @@ export default function GrantModule() {
 
       <div className="form">
         <label className="field">
-          <span className="field-label">项目题名 / 研究方向 <em>必填</em></span>
+          <span className="field-label">项目题名 / 研究方向</span>
           <input
             data-testid="grant-title"
             value={title}
@@ -379,6 +379,11 @@ export default function GrantModule() {
             清空
           </button>
         </div>
+        {!hasInput && (
+          <p className="field-hint" data-testid="grant-gate-hint" style={{ marginTop: 6 }}>
+            开始前，请至少填写<strong>项目题名</strong>，或在上方粘贴一份<strong>选题调研报告</strong>——两者填其一即可生成。
+          </p>
+        )}
       </div>
 
       {status && (
@@ -491,8 +496,13 @@ export default function GrantModule() {
               >
                 ② 确认大纲并撰写 →
               </button>
-              <button className="btn-ghost" onClick={() => setPhase("idle")} disabled={running}>
-                收起
+              <button
+                className="btn-ghost"
+                onClick={() => setPhase("idle")}
+                disabled={running}
+                title="返回上方表单继续修改；已填内容与已生成的大纲都会保留"
+              >
+                ← 返回修改（内容不丢）
               </button>
             </div>
           </div>
