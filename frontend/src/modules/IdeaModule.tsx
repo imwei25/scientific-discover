@@ -961,6 +961,8 @@ export default function IdeaModule({ goto }: { goto: Goto }) {
         )
       )}
 
+      {/* 选题卡也送进右画布, 紧贴报告下方: 候选方向 + 每个方向的「做实验规划/写标书」按钮 */}
+      <CanvasSlot>
       {card && card.candidates.length > 0 && !running && (
         <div className="topic-card" data-testid="topic-card">
           <div className="topic-card-head">🧭 选题卡 · AI 给出的候选方向，挑一个直接做实验规划或写标书</div>
@@ -1024,6 +1026,7 @@ export default function IdeaModule({ goto }: { goto: Goto }) {
           </ol>
         </div>
       )}
+      </CanvasSlot>
 
       {text && !running && (
         <div className="followup" data-testid="followup">

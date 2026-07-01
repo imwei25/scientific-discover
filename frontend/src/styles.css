@@ -431,6 +431,10 @@ body {
 }
 .canvas-head {
   flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
   padding: 14px 28px;
   border-bottom: 1px solid var(--line);
   background: var(--surface-2);
@@ -439,6 +443,42 @@ body {
   letter-spacing: 0.04em;
   color: var(--muted);
 }
+.canvas-collapse {
+  flex-shrink: 0;
+  border: 1px solid var(--line);
+  background: var(--card);
+  color: var(--muted);
+  border-radius: 6px;
+  padding: 3px 10px;
+  font-size: 12px;
+  letter-spacing: normal;
+  cursor: pointer;
+  transition: border-color 0.15s, color 0.15s;
+}
+.canvas-collapse:hover { border-color: var(--teal); color: var(--ink); }
+/* 收起态: 画布缩成右侧窄条, 左工作区占满, 只留竖排「产出」展开按钮。
+   canvas-body 仍在 DOM(只是隐藏), 保证 Portal 目标不丢、产出状态不重置。 */
+.canvas-pane.collapsed {
+  flex: 0 0 auto;
+  width: 34px;
+  min-width: 34px;
+}
+.canvas-pane.collapsed .canvas-body { display: none; }
+.canvas-expand {
+  width: 34px;
+  height: 100%;
+  border: none;
+  background: var(--surface-2);
+  color: var(--muted);
+  cursor: pointer;
+  writing-mode: vertical-rl;
+  text-orientation: mixed;
+  letter-spacing: 0.15em;
+  font-size: 13px;
+  font-family: var(--serif);
+  transition: color 0.15s, background 0.15s;
+}
+.canvas-expand:hover { color: var(--ink); background: var(--surface); }
 .canvas-body {
   flex: 1;
   overflow-y: auto;
@@ -478,6 +518,15 @@ body {
     flex: 0 0 auto;
     max-height: 50vh;
     border-left: none;
+    border-top: 1px solid var(--line);
+  }
+  /* 窄屏收起态: 改成整条横向展开条, 竖排按钮改横排 */
+  .canvas-pane.collapsed { width: auto; min-width: 0; max-height: none; }
+  .canvas-pane.collapsed .canvas-expand {
+    width: 100%;
+    height: auto;
+    padding: 8px;
+    writing-mode: horizontal-tb;
     border-top: 1px solid var(--line);
   }
 }

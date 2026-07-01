@@ -229,9 +229,28 @@ test("找选题: 结构化选题卡 → 按候选选题做实验规划", async (
   await expect(page.getByTestId("send-to-plan-btn")).toHaveCount(0);
   await expect(page.getByTestId("send-to-grant-btn")).toHaveCount(0);
   await expect(page.getByTestId("candidate-to-grant-0")).toBeVisible();
+  // 选题卡应渲染在右画布内(报告正下方), 而不是被甩到左工作区
+  await expect(page.getByTestId("canvas-pane").getByTestId("topic-card")).toBeVisible();
   // 点该方向后面的按钮交接到实验规划
   await page.getByTestId("candidate-to-plan-0").click();
   await expect(page.getByTestId("input-idea")).toHaveValue(/PD-1 标志物/);
+});
+
+test("产出画布: 可收起与展开", async ({ page }) => {
+  await mockBase(page);
+  await page.goto("/");
+  await page.getByTestId("nav-idea").click();
+  // 找选题走分屏, 画布默认展开, 带「收起」按钮
+  await expect(page.getByTestId("canvas-pane")).toBeVisible();
+  await expect(page.getByTestId("canvas-collapse")).toBeVisible();
+  // 收起 → 画布缩成窄条, 出现竖排「展开」按钮, 「收起」消失
+  await page.getByTestId("canvas-collapse").click();
+  await expect(page.getByTestId("canvas-expand")).toBeVisible();
+  await expect(page.getByTestId("canvas-collapse")).toHaveCount(0);
+  // 展开 → 恢复
+  await page.getByTestId("canvas-expand").click();
+  await expect(page.getByTestId("canvas-collapse")).toBeVisible();
+  await expect(page.getByTestId("canvas-expand")).toHaveCount(0);
 });
 
 test("找选题: 显示在研临床试验(ClinicalTrials旁路)并渲染空白矩阵表格", async ({ page }) => {

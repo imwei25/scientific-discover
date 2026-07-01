@@ -61,6 +61,8 @@ export default function App() {
   const [active, setActive] = useState<ModuleId>("home");
   // 右画布的 Portal 目标节点; 用 ref 回调 setState 拿到, 拿到后触发一次 re-render 让 CanvasSlot 归位。
   const [canvasEl, setCanvasEl] = useState<HTMLElement | null>(null);
+  // 右画布是否收起(记忆用户偏好); 收起时缩成右侧窄条, 左工作区占满, 只留一个展开按钮。
+  const [canvasCollapsed, setCanvasCollapsed] = usePersistentState<boolean>("canvas:collapsed", false);
   const [health, setHealth] = useState<Health | null>(null);
   const [healthErr, setHealthErr] = useState(false);
   const [cmdkOpen, setCmdkOpen] = useState(false);
@@ -376,8 +378,29 @@ export default function App() {
         </div>
         </div>
         {hasCanvas && (
-          <aside className="canvas-pane" data-testid="canvas-pane">
-            <div className="canvas-head">{canvasTitle} · 产出</div>
+          <aside className={`canvas-pane${canvasCollapsed ? " collapsed" : ""}`} data-testid="canvas-pane">
+            {canvasCollapsed ? (
+              <button
+                className="canvas-expand"
+                data-testid="canvas-expand"
+                onClick={() => setCanvasCollapsed(false)}
+                title="展开产出"
+              >
+                ◂ 产出
+              </button>
+            ) : (
+              <div className="canvas-head">
+                <span>{canvasTitle} · 产出</span>
+                <button
+                  className="canvas-collapse"
+                  data-testid="canvas-collapse"
+                  onClick={() => setCanvasCollapsed(true)}
+                  title="收起产出，让左侧占满"
+                >
+                  收起 ▸
+                </button>
+              </div>
+            )}
             <div className="canvas-body">
               {/* Portal 目标; 模块的最终产出渲染进这里 */}
               <div className="canvas-target" data-testid="canvas-body" ref={setCanvasEl} />
