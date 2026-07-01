@@ -1513,8 +1513,25 @@ select {
   align-items: center;
   gap: 8px;
 }
+/* 行内输入紧凑一些，避免整行过高、勾选框与文字错位 */
+.grant-outline-row input[type="checkbox"] {
+  flex-shrink: 0;
+  width: 17px;
+  height: 17px;
+  margin: 0;
+  accent-color: var(--teal);
+  cursor: pointer;
+}
+.grant-outline-title,
+.grant-outline-budget {
+  padding: 8px 10px;
+}
 .grant-outline-title { flex: 1; min-width: 0; }
-.grant-outline-budget { width: 130px; flex-shrink: 0; }
+.grant-outline-budget {
+  width: 150px;
+  flex-shrink: 0;
+  text-align: center;
+}
 .grant-revise-list {
   margin: 8px 0 0;
   padding-left: 0;
