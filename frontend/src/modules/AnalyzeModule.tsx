@@ -234,6 +234,7 @@ function DataPane({ goto }: { goto: Goto }) {
   const [deidOpen, setDeidOpen] = useState(false);
 
   const [status, setStatus] = useState("");
+  const [copyState, setCopyState] = useState<"idle" | "ok" | "err">("idle"); // 复制结论的短暂反馈
   const [plan, setPlan] = usePersistentState<PlanCard[]>("analyze:plan", []);
   const [code, setCode] = usePersistentState("analyze:code", "");
   const [charts, setCharts] = usePersistentState<ChartItem[]>("analyze:charts", []);
@@ -799,40 +800,54 @@ function DataPane({ goto }: { goto: Goto }) {
                 <div className="result-toolbar">
                   <span className="result-status">{running ? "生成中…" : "已完成"}</span>
                   {conclusion && !running && (
-                    <button
-                      className="btn-ghost"
-                      data-testid="send-to-format-btn"
-                      onClick={() => goto("format", { "format:manuscript": conclusion })}
-                    >
-                      用此结论去排版 →
-                    </button>
-                  )}
-                  {conclusion && !running && (
-                    <button
-                      className="btn-ghost"
-                      data-testid="export-report-btn"
-                      onClick={() =>
-                        downloadAnalysisReport({
-                          title: "数据分析报告",
-                          question,
-                          code,
-                          charts: charts.map((c) => c.png),
-                          output,
-                          conclusion,
-                        })
-                      }
-                    >
-                      导出完整报告(HTML)
-                    </button>
-                  )}
-                  {conclusion && !running && (
-                    <button
-                      className="btn-ghost"
-                      data-testid="export-md-btn"
-                      onClick={() => downloadText(tsName("数据分析", "md"), conclusion)}
-                    >
-                      导出 Markdown
-                    </button>
+                    <div className="result-actions">
+                      <button
+                        className="btn-ghost"
+                        data-testid="copy-conclusion-btn"
+                        title="把分析结论复制到剪贴板"
+                        onClick={async () => {
+                          try {
+                            await navigator.clipboard.writeText(conclusion);
+                            setCopyState("ok");
+                          } catch {
+                            setCopyState("err");
+                          }
+                          window.setTimeout(() => setCopyState("idle"), 2000);
+                        }}
+                      >
+                        {copyState === "ok" ? "已复制 ✓" : copyState === "err" ? "复制失败·请手动选择" : "复制结论"}
+                      </button>
+                      <button
+                        className="btn-ghost"
+                        data-testid="send-to-format-btn"
+                        onClick={() => goto("format", { "format:manuscript": conclusion })}
+                      >
+                        用此结论去排版 →
+                      </button>
+                      <button
+                        className="btn-ghost"
+                        data-testid="export-report-btn"
+                        onClick={() =>
+                          downloadAnalysisReport({
+                            title: "数据分析报告",
+                            question,
+                            code,
+                            charts: charts.map((c) => c.png),
+                            output,
+                            conclusion,
+                          })
+                        }
+                      >
+                        导出完整报告(HTML)
+                      </button>
+                      <button
+                        className="btn-ghost"
+                        data-testid="export-md-btn"
+                        onClick={() => downloadText(tsName("数据分析", "md"), conclusion)}
+                      >
+                        导出 Markdown
+                      </button>
+                    </div>
                   )}
                 </div>
                 <EditableMarkdown
@@ -957,27 +972,40 @@ function ColMapper({ title, file, headers, fields, busy, onRun, runTestId, runLa
   if (!file) {
     return <p className="field-hint">请先在上方上传 CSV 文件以选择列。</p>;
   }
-  if (headers.length === 0) {
-    return <p className="field-hint">未能从文件解析出表头（请上传 CSV；xlsx 暂不支持前端解析，请直接输入列名）。</p>;
-  }
+  // 未能解析出表头(如 xlsx)时, 退化为「手动输入列名」而非死路
+  const manual = headers.length === 0;
   return (
     <div data-testid="col-mapper">
       <p className="field-hint" style={{ marginTop: 10 }}>{title}</p>
+      {manual && (
+        <p className="field-hint" style={{ marginTop: 6 }}>
+          未能自动解析表头（xlsx 等）。请手动输入列名，需与表格首行列名<strong>完全一致</strong>（区分大小写与空格）。
+        </p>
+      )}
       <div className="col-map-grid">
         {fields.map((f) => (
           <Frag key={f.label}>
             <span>{f.label}</span>
-            <select
-              value={f.value}
-              onChange={(e) => f.onChange(e.target.value)}
-              data-testid={f.testId}
-            >
-              {f.allowEmpty && <option value="">(不使用)</option>}
-              {!f.allowEmpty && <option value="">请选择…</option>}
-              {headers.map((h) => (
-                <option key={h} value={h}>{h}</option>
-              ))}
-            </select>
+            {manual ? (
+              <input
+                value={f.value}
+                onChange={(e) => f.onChange(e.target.value)}
+                data-testid={f.testId}
+                placeholder={f.allowEmpty ? "列名（可留空 = 不使用）" : "输入列名"}
+              />
+            ) : (
+              <select
+                value={f.value}
+                onChange={(e) => f.onChange(e.target.value)}
+                data-testid={f.testId}
+              >
+                {f.allowEmpty && <option value="">(不使用)</option>}
+                {!f.allowEmpty && <option value="">请选择…</option>}
+                {headers.map((h) => (
+                  <option key={h} value={h}>{h}</option>
+                ))}
+              </select>
+            )}
           </Frag>
         ))}
       </div>
