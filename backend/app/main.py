@@ -936,8 +936,24 @@ async def ethics_render(req: EthicsRenderRequest) -> Response:
 # 若前端已构建(frontend/dist 存在), 由本服务直接托管, 实现“单进程”部署:
 # 用户只需启动本服务并打开浏览器即可, 无需单独的前端服务器。
 _DIST = Path(__file__).resolve().parent.parent.parent / "frontend" / "dist"
+
+
+class _NoCacheHtmlStatic(StaticFiles):
+    """入口 index.html 禁用缓存, 其余带内容 hash 的资源(js/css)仍可长缓存。
+
+    解决"更新/pull 后浏览器仍显示旧界面": 入口 HTML 不缓存 → 每次都取到最新的、
+    指向新 hash 资源的 index.html; 而 hash 资源名一变就自然 miss, 无需强刷。
+    """
+
+    async def get_response(self, path, scope):
+        resp = await super().get_response(path, scope)
+        if resp.headers.get("content-type", "").startswith("text/html"):
+            resp.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+        return resp
+
+
 if _DIST.is_dir():
-    app.mount("/", StaticFiles(directory=str(_DIST), html=True), name="static")
+    app.mount("/", _NoCacheHtmlStatic(directory=str(_DIST), html=True), name="static")
 
 
 def _lan_ip() -> str:

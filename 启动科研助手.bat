@@ -25,12 +25,13 @@ if exist ".env" for /f "usebackq tokens=1,2 delims==" %%a in (".env") do (
 )
 set "URL=http://127.0.0.1:%PORT%"
 
-rem If the service is already running, just open the browser (avoid a duplicate that fails to bind the port).
+rem 为确保 pull/更新后跑的是最新代码: 若已有旧服务在跑, 先停掉再重启,
+rem 否则双击只会重新连上旧进程(旧后端代码), 表现为"改了没生效/还是老样子"。
 curl -s -o nul --max-time 2 %URL%/api/health
 if %errorlevel%==0 (
-    echo Service already running on port %PORT%. Opening browser...
-    start "" %URL%
-    exit /b
+    echo Detected a running instance on port %PORT%. Restarting to load the latest code...
+    powershell -NoProfile -Command "Get-CimInstance Win32_Process -Filter \"Name='python.exe'\" | Where-Object { $_.CommandLine -like '*app.main*' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force }"
+    timeout /t 2 /nobreak >nul
 )
 
 echo Starting Research Assistant on port %PORT%, please wait...
