@@ -327,7 +327,8 @@ export default function GrantModule() {
           <div className="field" data-testid="grant-refs-info">
             <span className="field-label">已带入可引用文献</span>
             <span className="field-hint">
-              共 {refs.length} 篇（来自找选题）。立项依据会优先据实引用这些文献，写完做引用核验。
+              共 {refs.length} 篇（来自找选题里<strong>与该方向直接相关</strong>的文献）。立项依据会优先据实引用这些文献，写完做引用核验；
+              若某节需要更多支撑，用下方各节的「重新检索并重写」按需<strong>深度补检</strong>，避免一上来就堆砌不相关文献。
             </span>
           </div>
         )}

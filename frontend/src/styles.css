@@ -1397,6 +1397,28 @@ select {
   margin-bottom: 8px;
 }
 
+/* 报告折叠: 隐藏报告正文, 让下方选题卡更突出 */
+.report-body.is-collapsed { display: none; }
+.report-collapsed-bar {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 12px 16px;
+  margin: 4px 0 8px;
+  border: 1px dashed var(--line);
+  border-radius: 10px;
+  background: var(--surface-2);
+  color: var(--muted);
+  font-size: 13px;
+  cursor: pointer;
+  transition: border-color 0.15s, color 0.15s, background 0.15s;
+}
+.report-collapsed-bar:hover {
+  border-color: var(--teal);
+  color: var(--ink);
+  background: var(--surface);
+}
+
 /* 结构化选题卡 */
 .topic-card {
   margin-top: var(--sp-4);

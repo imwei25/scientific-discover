@@ -253,6 +253,69 @@ test("产出画布: 可收起与展开", async ({ page }) => {
   await expect(page.getByTestId("canvas-expand")).toHaveCount(0);
 });
 
+test("找选题: 可折叠调研报告以突出选题卡", async ({ page }) => {
+  await mockBase(page);
+  await page.route("**/api/idea", (r) =>
+    r.fulfill({
+      contentType: "text/event-stream",
+      body: sse(
+        { event: "delta", data: { text: "## 报告正文\n一些调研内容。" } },
+        { event: "done", data: {} },
+      ),
+    }),
+  );
+  await page.goto("/");
+  await page.getByTestId("nav-idea").click();
+  await page.getByTestId("input-field").fill("x");
+  await page.getByTestId("run-btn").click();
+  await expect(page.getByTestId("result-text")).toContainText("报告正文");
+  // 折叠 → 报告正文隐藏, 出现折叠条
+  await page.getByTestId("toggle-report-btn").click();
+  await expect(page.getByTestId("report-collapsed")).toBeVisible();
+  await expect(page.getByTestId("result-text")).toBeHidden();
+  // 点折叠条展开 → 报告正文恢复
+  await page.getByTestId("report-collapsed").click();
+  await expect(page.getByTestId("result-text")).toBeVisible();
+});
+
+test("找选题→写标书: 只带入该方向引用到的文献(而非整池)", async ({ page }) => {
+  await mockBase(page);
+  await page.route("**/api/idea", (r) =>
+    r.fulfill({
+      contentType: "text/event-stream",
+      body: sse(
+        {
+          event: "references",
+          data: {
+            items: [
+              { pmid: "1", title: "P1", first_author: "A", journal: "J", year: "2024", url: "https://pubmed.ncbi.nlm.nih.gov/1/", source: "pubmed" },
+              { pmid: "2", title: "P2", first_author: "B", journal: "J", year: "2024", url: "https://pubmed.ncbi.nlm.nih.gov/2/", source: "pubmed" },
+            ],
+          },
+        },
+        { event: "delta", data: { text: "### 候选选题1：方向A\n见 [A, 2024](https://pubmed.ncbi.nlm.nih.gov/1/)。" } },
+        {
+          event: "topic_card",
+          data: {
+            field: "F", keywords: "", facets: [], keyword_seed: [],
+            candidates: [{ n: 1, title: "方向A", feasibility: 4, innovation: 3, body: "见 [A, 2024](https://pubmed.ncbi.nlm.nih.gov/1/)。" }],
+            ref_count: 2,
+          },
+        },
+        { event: "done", data: {} },
+      ),
+    }),
+  );
+  await page.goto("/");
+  await page.getByTestId("nav-idea").click();
+  await page.getByTestId("input-field").fill("x");
+  await page.getByTestId("run-btn").click();
+  await expect(page.getByTestId("topic-card")).toBeVisible();
+  // 该方向正文只引用了第 1 篇 → 写标书只带入 1 篇(不是全部 2 篇)
+  await page.getByTestId("candidate-to-grant-0").click();
+  await expect(page.getByTestId("grant-refs-info")).toContainText("共 1 篇");
+});
+
 test("找选题: 显示在研临床试验(ClinicalTrials旁路)并渲染空白矩阵表格", async ({ page }) => {
   await mockBase(page);
   await page.route("**/api/idea", (r) =>

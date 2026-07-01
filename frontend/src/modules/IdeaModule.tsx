@@ -74,6 +74,27 @@ function sortRefs(refs: Reference[], by: string): Reference[] {
   return refs;
 }
 
+// 从候选方向正文里挑出【被它引用到的那几篇】文献(按正文 Markdown 链接的 URL/PMID 匹配)。
+// 用于"用此方向写标书"时只带入与该方向直接相关的文献, 而不是把整池 40 篇全塞进去;
+// 标书里需要更多文献时, 由标书模块的"逐节重写·重新检索"另行深度补检。
+function refsCitedIn(body: string, all: Reference[]): Reference[] {
+  const strip = (u: string) => u.replace(/\/+$/, "");
+  const urls = new Set<string>();
+  const re = /\]\((https?:\/\/[^)\s]+)\)/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(body)) !== null) urls.add(strip(m[1]));
+  if (urls.size === 0) return [];
+  return all.filter((r) => {
+    const u = strip(r.url || "");
+    if (u && urls.has(u)) return true;
+    // PMID 兜底: 正文链接末段 == pmid(兼容 URL 尾斜杠差异)
+    if (r.pmid) {
+      for (const cu of urls) if (cu.endsWith("/" + r.pmid)) return true;
+    }
+    return false;
+  });
+}
+
 
 export default function IdeaModule({ goto }: { goto: Goto }) {
   const [field, setField] = usePersistentState("idea:field", "");
@@ -107,6 +128,8 @@ export default function IdeaModule({ goto }: { goto: Goto }) {
   const [text, setText] = usePersistentState("idea:result", "");
   const [verify, setVerify] = usePersistentState<Verification | null>("idea:verify", null);
   const [card, setCard] = usePersistentState<TopicCard | null>("idea:card", null);
+  // 折叠报告: 让下方"选题卡"更突出(每次新检索重置为展开)。
+  const [reportCollapsed, setReportCollapsed] = useState(false);
   const [running, setRunning] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [rewrite, setRewrite] = useState<RewritePayload | null>(null);
@@ -173,6 +196,7 @@ export default function IdeaModule({ goto }: { goto: Goto }) {
     setText("");
     setVerify(null);
     setCard(null);
+    setReportCollapsed(false);
     setError(null);
     setRewrite(null);
     setFollowups([]);
@@ -884,6 +908,17 @@ export default function IdeaModule({ goto }: { goto: Goto }) {
                   停止
                 </button>
               )}
+              {/* 折叠调研报告, 让下方选题卡更突出 */}
+              {text && !running && (
+                <button
+                  className="btn-ghost"
+                  data-testid="toggle-report-btn"
+                  onClick={() => setReportCollapsed((v) => !v)}
+                  title={reportCollapsed ? "展开调研报告" : "折叠调研报告, 突出下方选题卡"}
+                >
+                  {reportCollapsed ? "展开报告 ▾" : "折叠报告 ▴"}
+                </button>
+              )}
               {/* 无结构化选题卡时, 提供整篇报告送规划的兜底入口; 有候选方向时改用每个方向后的按钮 */}
               {text && !running && (!card || card.candidates.length === 0) && (
                 <button
@@ -934,13 +969,25 @@ export default function IdeaModule({ goto }: { goto: Goto }) {
               )}
             </div>
           </div>
-          <EditableMarkdown
-            value={text}
-            onSave={setText}
-            running={running}
-            placeholder={running ? "正在分析…" : "填好左侧信息后点击“开始文献调研”，调研报告会显示在这里。"}
-            testId="result-text"
-          />
+          {reportCollapsed && text && !running && (
+            <button
+              className="report-collapsed-bar"
+              data-testid="report-collapsed"
+              onClick={() => setReportCollapsed(false)}
+              title="点击展开调研报告"
+            >
+              📄 调研报告已折叠 —— 点此展开（下方为 AI 候选选题）
+            </button>
+          )}
+          <div className={reportCollapsed && text && !running ? "report-body is-collapsed" : "report-body"}>
+            <EditableMarkdown
+              value={text}
+              onSave={setText}
+              running={running}
+              placeholder={running ? "正在分析…" : "填好左侧信息后点击“开始文献调研”，调研报告会显示在这里。"}
+              testId="result-text"
+            />
+          </div>
         </div>
       </CanvasSlot>
 
@@ -1003,20 +1050,22 @@ export default function IdeaModule({ goto }: { goto: Goto }) {
                   <button
                     className="btn-ghost candidate-to-grant"
                     data-testid={`candidate-to-grant-${i}`}
-                    onClick={() =>
+                    onClick={() => {
+                      // 只带入该方向正文引用到的那几篇文献; 解析不到时才兜底全带。
+                      const cited = refsCitedIn(c.body, refs);
                       goto("grant", {
                         "grant:title": c.title,
                         "grant:idea": `${c.title}\n\n${c.body}`,
                         "grant:report": text,
                         "grant:background": background,
-                        "grant:refs": refs,
+                        "grant:refs": cited.length ? cited : refs,
                         "grant:phase": "idle",
                         "grant:scheme": null,
                         "grant:outline": [],
                         "grant:sections": [],
                         "grant:verify": null,
-                      })
-                    }
+                      });
+                    }}
                   >
                     用此方向写标书 →
                   </button>
