@@ -17,12 +17,20 @@ _CSV = pd.DataFrame({"组别": ["A", "B"], "值": [1, 2]}).to_csv(index=False).e
 
 
 async def _collect(fail_times: int):
-    """让 _execute 前 fail_times 次失败, 之后成功; 返回(事件列表, 执行次数)。"""
-    calls = {"n": 0}
+    """让分析代码前 fail_times 次失败, 之后成功; 返回(事件列表, 分析执行次数)。
+
+    注意: T2 探索轮会在正式分析前先执行一次探索代码(第 1 次 _execute), 这里让它总是成功
+    且不计入分析重试计数, 从而单独验证"分析代码"的重试上限。
+    """
+    calls = {"n": 0, "analysis": 0}
 
     def fake_execute(code, df, chart_format="png", palette="default"):
         calls["n"] += 1
-        if calls["n"] <= fail_times:
+        if calls["n"] == 1:
+            # 探索轮: 恒成功, 不计入分析重试
+            return {"ok": True, "error": None, "stdout": "探索输出", "charts": []}
+        calls["analysis"] += 1
+        if calls["analysis"] <= fail_times:
             return {"ok": False, "error": "boom", "stdout": "", "charts": []}
         return {"ok": True, "error": None, "stdout": "结果输出", "charts": []}
 
@@ -35,21 +43,21 @@ async def _collect(fail_times: int):
     events = []
     async for ev, _ in da.analyze_data("d.csv", _CSV, "比较"):
         events.append(ev)
-    return events, calls["n"]
+    return events, calls["analysis"]
 
 
 def main() -> None:
-    # 失败 3 次, 第 4 次成功 -> 整体 done, 共 4 次执行
+    # 分析失败 3 次, 第 4 次成功 -> 整体 done, 共 4 次分析执行
     ev, n = asyncio.run(_collect(fail_times=3))
     assert "done" in ev and "error" not in ev, ev
-    assert n == 4, f"应执行 4 次, 实际 {n}"
-    print(f"失败3次后第4次成功 -> done, 执行 {n} 次: OK")
+    assert n == 4, f"应执行 4 次分析, 实际 {n}"
+    print(f"失败3次后第4次成功 -> done, 分析执行 {n} 次: OK")
 
-    # 4 次全失败 -> 报错, 且不超过 4 次执行
+    # 分析 4 次全失败 -> 报错, 且分析执行不超过 4 次
     ev2, n2 = asyncio.run(_collect(fail_times=99))
     assert "error" in ev2 and "done" not in ev2, ev2
-    assert n2 == 4, f"应执行 4 次后放弃, 实际 {n2}"
-    print(f"全失败 -> error, 执行 {n2} 次后停止: OK")
+    assert n2 == 4, f"应执行 4 次分析后放弃, 实际 {n2}"
+    print(f"全失败 -> error, 分析执行 {n2} 次后停止: OK")
 
     print("\nALL ANALYZE-RETRY TESTS PASSED")
 

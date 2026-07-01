@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { streamAnalyze, ChartItem } from "../lib/sse";
+import { streamAnalyze, ChartItem, PlanCard } from "../lib/sse";
 import { reportLLMError } from "../lib/errorToast";
 import { usePersistentState } from "../lib/usePersistentState";
 import { addHistory } from "../lib/history";
@@ -196,6 +196,21 @@ export default function AnalyzeModule({ goto }: { goto: Goto }) {
         .advisor-card h4 { margin: 0 0 8px; font-size: 14px; }
         .advisor-card ul { margin: 0; padding-left: 18px; font-size: 13.5px; line-height: 1.7; }
         .advisor-card .reco { font-size: 14.5px; font-weight: 600; color: var(--petrol, #14635c); }
+        .plan-cards { margin-top: 8px; }
+        .plan-title { font-size: 14px; margin: 0 0 10px; color: var(--ink, #1f2733); }
+        .plan-card {
+          padding: 12px 14px; border: 1px solid var(--line, #e3e8ef); border-radius: 10px;
+          background: var(--surface, #f7f9fc); margin-bottom: 10px;
+        }
+        .plan-goal { font-weight: 600; margin-bottom: 8px; }
+        .plan-row { display: grid; grid-template-columns: 44px 1fr; gap: 8px; font-size: 13.5px; margin: 4px 0; }
+        .plan-row .plan-k { color: var(--faint, #5b6675); font-size: 12px; padding-top: 1px; }
+        .plan-reco { font-weight: 600; color: var(--petrol, #14635c); }
+        .plan-note { font-size: 12.5px; color: var(--faint, #5b6675); margin-top: 6px; font-style: italic; }
+        .analyze-disclaimer {
+          padding: 8px 12px; margin: 6px 0 12px; border-radius: 8px;
+          background: #fff7ed; border: 1px solid #fed7aa; color: #9a3412; font-size: 12.5px; line-height: 1.6;
+        }
       `}</style>
     </div>
   );
@@ -219,6 +234,7 @@ function DataPane({ goto }: { goto: Goto }) {
   const [deidOpen, setDeidOpen] = useState(false);
 
   const [status, setStatus] = useState("");
+  const [plan, setPlan] = usePersistentState<PlanCard[]>("analyze:plan", []);
   const [code, setCode] = usePersistentState("analyze:code", "");
   const [charts, setCharts] = usePersistentState<ChartItem[]>("analyze:charts", []);
   const [output, setOutput] = usePersistentState("analyze:output", "");
@@ -364,6 +380,7 @@ function DataPane({ goto }: { goto: Goto }) {
   const run = async () => {
     if (!file || running) return;
     setStatus("");
+    setPlan([]);
     setCode("");
     setCharts([]);
     setCaptions([]);
@@ -375,6 +392,7 @@ function DataPane({ goto }: { goto: Goto }) {
     await streamAnalyze(file, question, chartFormat, palette, {
       signal: ctrl.current.signal,
       onStatus: setStatus,
+      onPlan: setPlan,
       onCode: setCode,
       onCharts: setCharts,
       onOutput: setOutput,
@@ -405,6 +423,7 @@ function DataPane({ goto }: { goto: Goto }) {
     setFile(null);
     setFileErr("");
     setQuestion("");
+    setPlan([]);
     setCode("");
     setCharts([]);
     setCaptions([]);
@@ -704,6 +723,28 @@ function DataPane({ goto }: { goto: Goto }) {
           {error && (
             <div className="result-error" data-testid="analyze-error">{error}</div>
           )}
+          {plan.length > 0 && (
+            <CanvasSlot>
+              <div className="plan-cards" data-testid="plan-cards">
+                <h3 className="plan-title">📐 分析方案（系统按你的数据自动判定的方法与前提，请核对分组是否正确）</h3>
+                {plan.map((c, i) => (
+                  <div className="plan-card" key={i} data-testid={`plan-card-${i}`}>
+                    <div className="plan-goal">{c.goal}</div>
+                    <div className="plan-row"><span className="plan-k">数据</span><span>{c.data}</span></div>
+                    {c.assumptions?.length > 0 && (
+                      <div className="plan-row">
+                        <span className="plan-k">前提</span>
+                        <span>{c.assumptions.map((a, j) => <div key={j}>{a}</div>)}</span>
+                      </div>
+                    )}
+                    <div className="plan-row"><span className="plan-k">方法</span><span className="plan-reco">{c.recommended}</span></div>
+                    {c.fallback && <div className="plan-row"><span className="plan-k">备选</span><span>{c.fallback}</span></div>}
+                    {c.note && <div className="plan-note">{c.note}</div>}
+                  </div>
+                ))}
+              </div>
+            </CanvasSlot>
+          )}
           {code && (
             <details className="stats-details" data-testid="code-block">
               <summary>查看 AI 生成的分析代码（本地执行，可复现）</summary>
@@ -750,6 +791,10 @@ function DataPane({ goto }: { goto: Goto }) {
           {(conclusion || (running && !error)) && (
             <CanvasSlot>
               <h2 className="section-title">分析结论</h2>
+              <div className="analyze-disclaimer" data-testid="analyze-disclaimer">
+                ⚠️ 本结论由 AI 基于代码真实运行结果自动生成，可能存在方法或解读上的偏差，
+                <strong>正式用于论文/决策前请由专业统计人员核对</strong>；显著性（如 p&lt;0.05）不代表临床意义。
+              </div>
               <div className="result-panel">
                 <div className="result-toolbar">
                   <span className="result-status">{running ? "生成中…" : "已完成"}</span>

@@ -758,8 +758,19 @@ export interface ChartItem {
   ext: string;
 }
 
+// T3 决策卡: 由后端确定性规则在真实数据上判定的"方法与前提"。
+export interface PlanCard {
+  goal: string;
+  data: string;
+  assumptions: string[];
+  recommended: string;
+  fallback?: string;
+  note?: string;
+}
+
 export interface AnalyzeHandlers {
   onStatus?: (message: string) => void;
+  onPlan?: (cards: PlanCard[]) => void;
   onCode?: (code: string) => void;
   onCharts?: (items: ChartItem[]) => void;
   onOutput?: (text: string) => void;
@@ -818,6 +829,7 @@ export async function streamAnalyze(
           /* ignore */
         }
         if (ev.event === "status") h.onStatus?.(data.message ?? "");
+        else if (ev.event === "plan") h.onPlan?.(data.cards ?? []);
         else if (ev.event === "code") h.onCode?.(data.code ?? "");
         else if (ev.event === "charts") h.onCharts?.(normalizeCharts(data.items));
         else if (ev.event === "output") h.onOutput?.(data.text ?? "");

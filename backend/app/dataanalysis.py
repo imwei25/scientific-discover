@@ -23,6 +23,7 @@ from typing import AsyncIterator
 
 import pandas as pd
 
+from . import statroute
 from .config import settings
 from .llm import stream_chat
 from .textio import read_csv_bytes
@@ -227,7 +228,26 @@ _LIBS_NOTE = (
 )
 
 
-def _gen_code_messages(profile: str, question: str) -> list[dict]:
+def _gen_explore_messages(profile: str, question: str) -> list[dict]:
+    """T2 探索轮: 让 AI 先写一段**只读探索代码**看真实数据, 再据此写正式分析,
+    从根上消灭"臆测列名/结构"和"前提没查"两大失败源(数据分析 agent 头号死因)。"""
+    system = (
+        "你是数据分析专家。在正式统计分析之前，请先写一段**只读探索代码**来真正了解这份数据，"
+        "避免凭空臆测。\n" + _LIBS_NOTE + "\n"
+        "严格要求：\n"
+        "① 只使用已加载的 df；**只 print，绝不画图、不做正式统计检验/建模/多重比较**；\n"
+        "② 打印这些内容帮助后续决策：将要用到的每个列的真实 dtype 与若干样例、缺失情况；"
+        "若研究涉及分组，打印分组列的**取值与各组样本量**（务必确认到底几组、各组 n）；"
+        "对将用于分析的连续变量打印基本分布（count/mean/std/min/中位数/max）与明显异常迹象；"
+        "确认你打算引用的列名在 df 中**真实存在**；\n"
+        "③ 代码要短、健壮，用 try/except 兜住每一步，**尽量不要报错**；\n"
+        "只输出一个 Python 代码块，不要额外解释。"
+    )
+    user = f"【数据画像】\n{profile}\n\n【研究用途】\n{question or '（用户未填写，请你判断最有价值的分析方向并据此探索）'}"
+    return [{"role": "system", "content": system}, {"role": "user", "content": user}]
+
+
+def _gen_code_messages(profile: str, question: str, explore: str = "", routing: str = "") -> list[dict]:
     system = (
         "你是资深的医学/药学/生物医学数据分析专家。"
         "请根据【数据画像】与【研究用途】，判断这份数据适合做什么分析，"
@@ -259,18 +279,89 @@ def _gen_code_messages(profile: str, question: str) -> list[dict]:
         "获取数值建议先 print(整个结果表)，再用 res['p_val'].iloc[0] 这类按位置取值，切勿硬编码 'p-val' 等不存在的列名。\n"
         "只输出一个 Python 代码块，不要额外解释。"
     )
-    user = f"【数据画像】\n{profile}\n\n【研究用途】\n{question or '（用户未填写，请你根据数据自行判断最有价值的分析方向）'}"
+    parts = [f"【数据画像】\n{profile}", f"【研究用途】\n{question or '（用户未填写，请你根据数据自行判断最有价值的分析方向）'}"]
+    if explore:
+        parts.append(
+            "【探索结果（上一步只读探索代码在真实数据上的实际输出，请以此为准，务必使用其中确认存在的列名与真实分组）】\n"
+            + explore
+        )
+    if routing:
+        parts.append(
+            "【系统判定的方法与前提（由确定性规则在真实数据上算出，请优先采用；如你有充分理由改用其他方法，请在【方法选择】中说明原因）】\n"
+            + routing
+        )
+    return [{"role": "system", "content": system}, {"role": "user", "content": "\n\n".join(parts)}]
+
+
+def _extract_spec_messages(profile: str, question: str, explore: str = "") -> list[dict]:
+    """T3: 让 LLM 只做它擅长的"语义抽取"——把研究问题拆成结构化【分析规格】,
+    交给 statroute 用确定性规则选方法(把 LLM 最弱的"适用性判断"从它手里拿走)。"""
+    system = (
+        "你是医学统计顾问。请把用户的研究问题拆解成结构化的【分析规格】，供后续由确定性规则"
+        "跑前提检验并选择统计方法。你只需做变量与设计的语义抽取，不要自己下方法结论。\n"
+        "只输出严格 JSON（无 markdown、无多余文字），结构：\n"
+        "{\"analyses\": [{"
+        "\"goal\": \"<该分析一句话目标>\", "
+        "\"outcome\": \"<结局变量真实列名>\", "
+        "\"outcome_type\": \"continuous|ordinal|binary|categorical|count|time_to_event\", "
+        "\"group\": \"<分组/自变量列名，无则 null>\", "
+        "\"paired\": false, "
+        "\"design\": \"between|within|correlation|single\", "
+        "\"x\": \"<相关分析自变量列名，否则省略>\", "
+        "\"y\": \"<相关分析因变量列名，否则省略>\""
+        "}]}\n"
+        "铁律：① 列名必须用【数据画像】/【探索结果】中真实存在的，不得臆造；"
+        "② 拿不准的分析宁可不列（宁缺毋滥）；③ 只输出 JSON。"
+    )
+    user = f"【数据画像】\n{profile}"
+    if explore:
+        user += f"\n\n【探索结果】\n{explore}"
+    user += f"\n\n【研究用途】\n{question or '（未填写，请根据数据推断最有价值的分析）'}"
     return [{"role": "system", "content": system}, {"role": "user", "content": user}]
 
 
-def _fix_code_messages(profile: str, question: str, code: str, error: str) -> list[dict]:
-    system = (
-        "你之前写的 Python 数据分析代码执行报错了。请修正它，仍只输出一个 Python 代码块。\n"
-        + _LIBS_NOTE
-    )
+def _parse_spec(text: str) -> list[dict]:
+    m = re.search(r"\{.*\}", text, re.DOTALL)
+    raw = m.group(0) if m else text
+    try:
+        obj = json.loads(raw)
+    except Exception:  # noqa: BLE001
+        return []
+    analyses = obj.get("analyses") if isinstance(obj, dict) else None
+    return [a for a in analyses if isinstance(a, dict)] if isinstance(analyses, list) else []
+
+
+def _err_sig(error: str) -> str:
+    """从报错里提取"错误签名"(异常类型), 用于判断是否在同一个错误上反复打转。"""
+    if not error:
+        return ""
+    for line in reversed([ln for ln in error.splitlines() if ln.strip()]):
+        m = re.match(r"([A-Za-z_][\w.]*(?:Error|Exception|Warning))\b", line.strip())
+        if m:
+            return m.group(1)
+    return ""
+
+
+def _fix_code_messages(profile: str, question: str, code: str, error: str, fresh: bool = False) -> list[dict]:
+    """修复提示。研究结论: 反馈质量>转数——所以让模型先解释错因、并附上数据诊断(dtypes/shape);
+    fresh=True 用于"在同一错误上反复失败"时——要求换一种完全不同的实现思路/库(策略降级)。"""
+    if fresh:
+        system = (
+            "你之前几次尝试的数据分析代码都栽在了同一个错误上。请**换一种完全不同的实现思路或库**"
+            "重新写：例如 pingouin 反复因列名/签名报错，就改用等价的 scipy.stats / statsmodels 实现；"
+            "避开先前出错的那种写法。请先用一句话说明先前为什么一直失败，再给出全新的完整代码。\n"
+            + _LIBS_NOTE
+        )
+    else:
+        system = (
+            "你之前写的 Python 数据分析代码执行报错了。请**先用一句话分析错误根因**，再修正代码。"
+            "若错误与某个库的版本/列名/函数签名有关（如 pingouin 的结果列名与硬编码不符），"
+            "可改用等价的 scipy.stats / statsmodels 实现绕开。仍只输出一个 Python 代码块。\n"
+            + _LIBS_NOTE
+        )
     user = (
         f"【数据画像】\n{profile}\n\n【研究用途】\n{question}\n\n"
-        f"【原代码】\n```python\n{code}\n```\n\n【报错信息】\n{error}\n\n请给出修正后的完整代码。"
+        f"【原代码】\n```python\n{code}\n```\n\n【报错信息与数据诊断】\n{error}\n\n请给出修正后的完整代码。"
     )
     return [{"role": "system", "content": system}, {"role": "user", "content": user}]
 
@@ -289,7 +380,8 @@ def _conclusion_messages(question: str, code: str, output: str, warnings: list[s
         "请用中文、Markdown 输出：① **方法与前提**（一句话说明选用了什么统计方法、为何适用，并复述输出中"
         "【假设检查】的关键结果——正态性/方差齐性是否满足、是否据此改用了非参数方法）；"
         "② 核心发现（引用输出中的具体数值/统计量/p值，并区分相关与因果）；"
-        "③ 结果解读与意义；④ 主要局限（样本量、缺失/异常值处理、偏倚、混杂、假设是否满足等）。"
+        "③ 结果解读与意义；④ 主要局限（样本量、缺失/异常值处理、偏倚、混杂、假设是否满足等）。\n"
+        "措辞审慎：统计显著（如 p<0.05）不等于临床意义或因果，不要夸大；观察性数据只能谈关联。"
     )
     parts = [f"【研究用途】\n{question}", f"【分析代码】\n```python\n{code}\n```", f"【代码真实输出】\n{_clip_output(output)}"]
     if warnings:
@@ -368,7 +460,19 @@ try:
     exec(compile(code, "analysis.py", "exec"), g)
 except Exception:
     result["ok"] = False
-    result["error"] = traceback.format_exc()
+    tb = traceback.format_exc()
+    # 附上真实数据诊断(列与 dtype、形状): 研究表明喂"运行时变量状态"比只喂 traceback
+    # 能显著提高自动修复成功率(尤其类型/列名类错误)。
+    try:
+        _cols = list(df.dtypes.items())[:40]
+        _diag = "df.shape=%s；列与类型: %s" % (
+            df.shape, ", ".join("%s:%s" % (c, t) for c, t in _cols),
+        )
+        if len(df.columns) > 40:
+            _diag += " …(列已截断)"
+    except Exception:
+        _diag = ""
+    result["error"] = tb + ("\n[数据诊断] " + _diag if _diag else "")
 finally:
     sys.stdout = _old
 
@@ -474,8 +578,35 @@ async def analyze_data(
             return
         profile = profile_data(df)
 
+        # T2 探索轮: 先让 AI 写只读探索代码在真实数据上跑一遍, 把真实观测(列是否存在、
+        # 分组几组各组多少例、连续变量分布)喂回正式代码生成。执行失败则静默跳过(非致命),
+        # 不比基线更差。
+        explore_out = ""
+        try:
+            yield ("status", {"message": "正在探索数据结构（确认列名与分组，避免臆测）…"})
+            explore_code = _extract_code(await _complete(_gen_explore_messages(profile, question), max_tokens=900))
+            explore_run = await asyncio.to_thread(_execute, explore_code, df, chart_format, palette)
+            if explore_run.get("ok"):
+                explore_out = _clip_output(explore_run.get("stdout", ""), head=4000, tail=1000)
+        except Exception:  # noqa: BLE001
+            explore_out = ""
+
+        # T3 方法路由: LLM 只做结构化抽取(分析规格), 由确定性规则在真实数据上跑前提检验并选方法,
+        # 生成"决策卡"给用户看、并把选定方法喂回代码生成——这样 AI 没机会"硬跑参数检验"。
+        # 任一步失败都静默降级为空(退回让 AI 自行判断), 不比基线更差。
+        routing = ""
+        try:
+            yield ("status", {"message": "正在判定统计方法与前提假设…"})
+            specs = _parse_spec(await _complete(_extract_spec_messages(profile, question, explore_out), max_tokens=700))
+            cards = statroute.route_analyses(df, specs)
+            routing = statroute.cards_to_prompt(cards)
+            if cards:
+                yield ("plan", {"cards": cards})
+        except Exception:  # noqa: BLE001
+            routing = ""
+
         yield ("status", {"message": "正在理解数据并生成分析代码…"})
-        code = _extract_code(await _complete(_gen_code_messages(profile, question)))
+        code = _extract_code(await _complete(_gen_code_messages(profile, question, explore=explore_out, routing=routing)))
 
         yield ("code", {"code": code})
         yield ("status", {"message": "正在本地执行分析…"})
@@ -483,12 +614,19 @@ async def analyze_data(
 
         # 自动纠错: 最多重试 3 次(共 4 次执行)。AI 写的统计代码(尤其 pingouin 版本相关的
         # 列名/函数签名)首次常报错, 2 次重试有时不够、导致整次分析失败; 多给一次显著提高成功率。
+        # T4: 若在"同一个错误签名"上反复失败, 就换一种实现思路/库从头重写(fresh), 而不是继续贴补丁
+        # ——研究表明"新开局"在同等预算下优于原地打转。
+        seen_sigs: list[str] = []
         for attempt in range(3):
             if run.get("ok"):
                 break
-            yield ("status", {"message": f"执行出错，正在自动修正代码（第 {attempt + 1} 次）…"})
+            sig = _err_sig(run.get("error", ""))
+            fresh = bool(sig) and sig in seen_sigs
+            seen_sigs.append(sig)
+            hint = "（换一种思路重写）" if fresh else ""
+            yield ("status", {"message": f"执行出错，正在自动修正代码（第 {attempt + 1} 次）{hint}…"})
             code = _extract_code(
-                await _complete(_fix_code_messages(profile, question, code, run.get("error", "")))
+                await _complete(_fix_code_messages(profile, question, code, run.get("error", ""), fresh=fresh))
             )
             yield ("code", {"code": code})
             yield ("status", {"message": "正在重新执行…"})
