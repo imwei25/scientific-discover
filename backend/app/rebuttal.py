@@ -71,7 +71,7 @@ async def _parse_comments(reviews: str) -> list[dict]:
     return items
 
 
-def _letter_messages(manuscript: str, reviews: str, tone: str) -> list[dict]:
+def _letter_messages(manuscript: str, reviews: str, tone: str, lang: str = "zh") -> list[dict]:
     tone_txt = (
         "礼貌但坚定、有理有据(对确不认同之处礼貌而明确地说明理由与证据)"
         if tone == "firm"
@@ -88,7 +88,11 @@ def _letter_messages(manuscript: str, reviews: str, tone: str) -> list[dict]:
         "开头写一句简短的总体致谢，结尾写一句礼貌结语。\n"
         "铁律：只能基于下面提供的稿件内容回应，严禁编造数据、结果或文献；"
         "凡涉及尚未做的新实验/新分析，一律用“我们将补充/拟开展……”表述，绝不杜撰具体数字或结论。"
-        "用中文输出。"
+        + (
+            "Write the entire response letter in English (fluent, formal academic English)."
+            if lang == "en"
+            else "用中文输出。"
+        )
     )
     user = (
         f"【稿件（节选，供你核对事实与定位修改处）】\n{ms or '（作者未提供稿件全文，请基于意见给出通用但具体的回应框架，并提示作者补全稿件细节）'}\n\n"
@@ -118,6 +122,7 @@ async def rebuttal(inputs: dict) -> AsyncIterator[tuple[str, dict]]:
     manuscript = (inputs.get("manuscript") or "").strip()
     reviews = (inputs.get("reviews") or "").strip()
     tone = (inputs.get("tone") or "balanced").strip()
+    lang = (inputs.get("lang") or "zh").strip()
 
     if not reviews:
         yield ("error", {"message": "请粘贴/上传审稿意见。"})
@@ -135,7 +140,7 @@ async def rebuttal(inputs: dict) -> AsyncIterator[tuple[str, dict]]:
         yield ("comments", {"items": comments})
         n = len(comments)
         yield ("status", {"message": (f"已识别 {n} 条意见，正在逐条撰写回复…" if n else "正在撰写逐条回复…")})
-        async for piece in stream_chat(_letter_messages(manuscript, reviews, tone)):
+        async for piece in stream_chat(_letter_messages(manuscript, reviews, tone, lang)):
             yield ("delta", {"text": piece})
         yield ("done", {})
     except Exception as e:  # noqa: BLE001

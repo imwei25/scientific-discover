@@ -13,8 +13,10 @@ export default function RebuttalModule() {
   const [reviews, setReviews] = usePersistentState("rebuttal:reviews", "");
   const [manuscript, setManuscript] = usePersistentState("rebuttal:manuscript", "");
   const [tone, setTone] = usePersistentState("rebuttal:tone", "balanced");
+  const [lang, setLang] = usePersistentState("rebuttal:lang", "en"); // 回复信语言: zh/en（默认英文，多数期刊要求）
 
   const [status, setStatus] = useState("");
+  const [copied, setCopied] = useState(false); // 复制回复信的短暂反馈
   const [comments, setComments] = usePersistentState<ReviewComment[]>("rebuttal:comments", []);
   const [letter, setLetter] = usePersistentState("rebuttal:letter", "");
   const [running, setRunning] = useState(false);
@@ -61,7 +63,7 @@ export default function RebuttalModule() {
     setRunning(true);
     ctrl.current = new AbortController();
     await streamRebuttal(
-      { reviews, manuscript, tone },
+      { reviews, manuscript, tone, lang },
       {
         signal: ctrl.current.signal,
         onStatus: setStatus,
@@ -178,6 +180,13 @@ export default function RebuttalModule() {
             <option value="firm">礼貌而坚定（有理有据地反驳不认同之处）</option>
           </select>
         </label>
+        <label className="field">
+          <span className="field-label">回复信语言</span>
+          <select data-testid="input-lang" value={lang} onChange={(e) => setLang(e.target.value)}>
+            <option value="en">English（多数期刊要求英文回复信）</option>
+            <option value="zh">中文</option>
+          </select>
+        </label>
         <div className="form-actions">
           <button className="btn-primary" onClick={submit} disabled={!reviews.trim() || running} data-testid="run-btn">
             {running ? "生成中…" : "生成逐条回复"}
@@ -186,6 +195,11 @@ export default function RebuttalModule() {
             清空
           </button>
         </div>
+        {!reviews.trim() && (
+          <p className="field-hint" data-testid="rebuttal-gate-hint" style={{ marginTop: 6 }}>
+            开始前请先在上方粘贴<strong>审稿意见</strong>（或上传文件），才能拆条并生成逐条回复。
+          </p>
+        )}
       </div>
 
       {status && (
@@ -197,6 +211,15 @@ export default function RebuttalModule() {
       {error && (
         <div className="result-error" data-testid="rebuttal-error">
           {error}
+          <button
+            className="btn-ghost btn-sm"
+            style={{ marginLeft: 10 }}
+            onClick={submit}
+            disabled={!reviews.trim() || running}
+            data-testid="rebuttal-retry-btn"
+          >
+            重试
+          </button>
         </div>
       )}
 
@@ -221,25 +244,45 @@ export default function RebuttalModule() {
           <div className="result-panel">
             <div className="result-toolbar">
               <span className="result-status">{running ? "生成中…" : letter ? "已完成" : "等待开始"}</span>
-              {running && (
-                <button className="btn-ghost" onClick={stop} data-testid="stop-btn">
-                  停止
-                </button>
-              )}
-              {letter && !running && (
-                <button
-                  className="btn-ghost"
-                  data-testid="export-md-btn"
-                  onClick={() => downloadText(tsName("审稿回复", "md"), letter)}
-                >
-                  导出 Markdown
-                </button>
-              )}
-              {letter && !running && (
-                <button className="btn-ghost" onClick={downloadDocx} disabled={downloading} data-testid="download-docx-btn">
-                  {downloading ? "导出中…" : "导出 Word"}
-                </button>
-              )}
+              <div className="result-actions">
+                {running && (
+                  <button className="btn-ghost" onClick={stop} data-testid="stop-btn">
+                    停止
+                  </button>
+                )}
+                {letter && !running && (
+                  <button
+                    className="btn-ghost"
+                    data-testid="copy-letter-btn"
+                    title="复制整封回复信到剪贴板"
+                    onClick={async () => {
+                      try {
+                        await navigator.clipboard.writeText(letter);
+                        setCopied(true);
+                        window.setTimeout(() => setCopied(false), 1800);
+                      } catch {
+                        /* 剪贴板未授权：忽略 */
+                      }
+                    }}
+                  >
+                    {copied ? "已复制 ✓" : "复制整封信"}
+                  </button>
+                )}
+                {letter && !running && (
+                  <button
+                    className="btn-ghost"
+                    data-testid="export-md-btn"
+                    onClick={() => downloadText(tsName("审稿回复", "md"), letter)}
+                  >
+                    导出 Markdown
+                  </button>
+                )}
+                {letter && !running && (
+                  <button className="btn-ghost" onClick={downloadDocx} disabled={downloading} data-testid="download-docx-btn">
+                    {downloading ? "导出中…" : "导出 Word"}
+                  </button>
+                )}
+              </div>
             </div>
             <EditableMarkdown
               value={letter}
