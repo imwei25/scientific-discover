@@ -185,24 +185,27 @@ export default function EthicsModule() {
       </header>
 
       <div className="ethics-layout">
-        <aside className="ethics-nav" data-testid="ethics-nav">
+        <nav className="ethics-tabs" data-testid="ethics-nav" role="tablist" aria-label="伦理材料类型">
           {TEMPLATES.map((t) => (
             <button
               key={t.id}
-              className={`ethics-nav-item ${active === t.id ? "active" : ""}`}
+              className={`ethics-tab ${active === t.id ? "active" : ""}`}
               onClick={() => setActive(t.id)}
               data-testid={`ethics-nav-${t.id}`}
+              role="tab"
+              aria-selected={active === t.id}
+              title={t.desc}
             >
-              <span className="ethics-nav-icon" aria-hidden="true">{t.icon}</span>
-              <span className="ethics-nav-text">
-                <span className="ethics-nav-title">{t.title}</span>
-                <span className="ethics-nav-desc">{t.desc}</span>
-              </span>
+              <span className="ethics-tab-icon" aria-hidden="true">{t.icon}</span>
+              <span className="ethics-tab-title">{t.title}</span>
             </button>
           ))}
-        </aside>
+        </nav>
 
         <section className="ethics-main">
+          <p className="ethics-active-desc" data-testid="ethics-active-desc">
+            <span aria-hidden="true">{tpl.icon}</span> {tpl.desc}
+          </p>
           <EthicsEditor key={active} template={tpl} />
         </section>
       </div>

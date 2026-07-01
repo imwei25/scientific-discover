@@ -35,7 +35,7 @@ export type Goto = (target: ModuleId, patch?: Record<string, unknown>) => void;
 
 // W2-4-c: 用 Lucide 图标替代 emoji; W2-4-h: 导航 desc 白话化
 const ICON_PROPS = { size: 18, strokeWidth: 1.75 } as const;
-const NAV: { id: ModuleId; icon: ReactNode; title: string; desc: string }[] = [
+const NAV: { id: ModuleId; icon: ReactNode; title: string; desc: string; hidden?: boolean }[] = [
   { id: "idea",     icon: <Lightbulb {...ICON_PROPS} />,           title: "找选题",       desc: "发现研究方向与创新点" },
   { id: "grant",    icon: <FileSignature {...ICON_PROPS} />,       title: "写标书",       desc: "把选题写成中文基金申请书初稿" },
   { id: "plan",     icon: <Map {...ICON_PROPS} />,                 title: "实验规划",     desc: "把研究想法变成可执行方案 + 样本量" },
@@ -44,7 +44,8 @@ const NAV: { id: ModuleId; icon: ReactNode; title: string; desc: string }[] = [
   { id: "imrad",    icon: <FileText {...ICON_PROPS} />,            title: "论文初稿",     desc: "把材料拼成医学论文（IMRaD 结构）" },
   { id: "journal",  icon: <Target {...ICON_PROPS} />,              title: "智能选刊",     desc: "AI 推荐适合你研究的期刊" },
   { id: "format",   icon: <FileType {...ICON_PROPS} />,            title: "期刊排版",     desc: "按期刊要求重排 + 参考文献格式化" },
-  { id: "checklist", icon: <CheckSquare {...ICON_PROPS} />,        title: "报告规范核对", desc: "按医学研究报告规范逐条自查" },
+  // 暂时隐藏「报告规范核对」，意义待明确，以后再说（hidden 过滤掉，模块代码保留）
+  { id: "checklist", icon: <CheckSquare {...ICON_PROPS} />,        title: "报告规范核对", desc: "按医学研究报告规范逐条自查", hidden: true },
   { id: "rebuttal", icon: <MessageSquareReply {...ICON_PROPS} />,  title: "回复审稿",     desc: "AI 帮你逐条回应审稿人" },
 ];
 
@@ -221,7 +222,7 @@ export default function App() {
         </div>
         <nav className="nav">
           <div className="pipeline">
-            {NAV.map((m, i) => (
+            {NAV.filter((m) => !m.hidden).map((m, i) => (
               <button
                 key={m.id}
                 className={`nav-item ${active === m.id ? "active" : ""}`}
@@ -302,7 +303,6 @@ export default function App() {
           <span className={`rail-tick ${active === "imrad" ? "active" : ""}`} />
           <span className={`rail-tick ${active === "journal" ? "active" : ""}`} />
           <span className={`rail-tick ${active === "format" ? "active" : ""}`} />
-          <span className={`rail-tick ${active === "checklist" ? "active" : ""}`} />
           <span className={`rail-tick ${active === "rebuttal" ? "active" : ""}`} />
         </div>
       </aside>
@@ -426,7 +426,7 @@ function Home({ onPick }: { onPick: (m: ModuleId) => void }) {
       <div className="home-overview">
         <p className="eyebrow">完整工作流 · 从想法到投稿</p>
         <div className="home-cards">
-          {NAV.map((m, i) => (
+          {NAV.filter((m) => !m.hidden).map((m, i) => (
             <button
               key={m.id}
               className="home-card"

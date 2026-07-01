@@ -89,7 +89,10 @@ export default function IdeaModule({ goto }: { goto: Goto }) {
     "unpaywall",
   ]);
   const [yearFrom, setYearFrom] = usePersistentState("idea:yearFrom", "");
-  const [studyTypes, setStudyTypes] = usePersistentState<string[]>("idea:studyTypes", []);
+  const [studyTypes, setStudyTypes] = usePersistentState<string[]>(
+    "idea:studyTypes",
+    STUDY_TYPES.map((s) => s.key),
+  );
 
   const [status, setStatus] = useState("");
   const [refs, setRefs] = usePersistentState<Reference[]>("idea:refs", []);
