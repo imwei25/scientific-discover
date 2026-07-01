@@ -74,6 +74,18 @@ function sortRefs(refs: Reference[], by: string): Reference[] {
   return refs;
 }
 
+// 从整篇调研报告里只截取【研究现状 + 研究空白】部分, 砍掉"候选选题(各方向)/首选推荐"。
+// 理由: 从某个具体方向进标书时, 报告里其它候选方向对写"这一份"标书是噪声(还白占截断额度);
+// 有用的是现状/空白(标书立项依据要综述的共享背景), 选中的方向另由 grant:idea 传入。
+// 找不到"候选选题"标题(格式漂移)时原样返回整篇, 保证不误删。
+function reportBackgroundOnly(full: string): string {
+  const m = full.match(/(^|\n)#{1,6}[^\n]*候选选题/);
+  if (!m || m.index == null) return full;
+  const cut = full.slice(0, m.index).trimEnd();
+  // 安全兜底: 若截得近乎为空(如报告没有现状/空白、开头就是候选选题), 宁可返回整篇。
+  return cut.length >= 20 ? cut : full;
+}
+
 // 从候选方向正文里挑出【被它引用到的那几篇】文献(按正文 Markdown 链接的 URL/PMID 匹配)。
 // 用于"用此方向写标书"时只带入与该方向直接相关的文献, 而不是把整池 40 篇全塞进去;
 // 标书里需要更多文献时, 由标书模块的"逐节重写·重新检索"另行深度补检。
@@ -1056,7 +1068,8 @@ export default function IdeaModule({ goto }: { goto: Goto }) {
                       goto("grant", {
                         "grant:title": c.title,
                         "grant:idea": `${c.title}\n\n${c.body}`,
-                        "grant:report": text,
+                        // 只带研究现状+空白(共享背景); 砍掉其它竞争方向, 选中方向由 grant:idea 承载。
+                        "grant:report": reportBackgroundOnly(text),
                         "grant:background": background,
                         "grant:refs": cited.length ? cited : refs,
                         "grant:phase": "idle",

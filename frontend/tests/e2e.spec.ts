@@ -316,6 +316,42 @@ test("找选题→写标书: 只带入该方向引用到的文献(而非整池)"
   await expect(page.getByTestId("grant-refs-info")).toContainText("共 1 篇");
 });
 
+test("找选题→写标书: 报告只带现状+空白, 砍掉候选选题各方向", async ({ page }) => {
+  await mockBase(page);
+  const report =
+    "## 一、研究现状\n现状内容ABC。\n\n## 二、研究空白\n空白内容DEF。\n\n### 三、候选选题\n#### 候选选题1：方向甲乙丙\n见 [A, 2024](https://pubmed.ncbi.nlm.nih.gov/1/)。";
+  await page.route("**/api/idea", (r) =>
+    r.fulfill({
+      contentType: "text/event-stream",
+      body: sse(
+        { event: "references", data: { items: [{ pmid: "1", title: "P1", first_author: "A", journal: "J", year: "2024", url: "https://pubmed.ncbi.nlm.nih.gov/1/", source: "pubmed" }] } },
+        { event: "delta", data: { text: report } },
+        {
+          event: "topic_card",
+          data: {
+            field: "F", keywords: "", facets: [], keyword_seed: [],
+            candidates: [{ n: 1, title: "方向甲乙丙", feasibility: 4, innovation: 3, body: "见 [A, 2024](https://pubmed.ncbi.nlm.nih.gov/1/)。" }],
+            ref_count: 1,
+          },
+        },
+        { event: "done", data: {} },
+      ),
+    }),
+  );
+  await page.goto("/");
+  await page.getByTestId("nav-idea").click();
+  await page.getByTestId("input-field").fill("x");
+  await page.getByTestId("run-btn").click();
+  await expect(page.getByTestId("topic-card")).toBeVisible();
+  await page.getByTestId("candidate-to-grant-0").click();
+  // 带过去的 report 只含研究现状+空白, 不含"候选选题"段与竞争方向
+  const grantReport = await page.evaluate(() => localStorage.getItem("ra:grant:report"));
+  expect(grantReport).toContain("研究现状");
+  expect(grantReport).toContain("空白内容DEF");
+  expect(grantReport).not.toContain("候选选题");
+  expect(grantReport).not.toContain("方向甲乙丙");
+});
+
 test("找选题: 显示在研临床试验(ClinicalTrials旁路)并渲染空白矩阵表格", async ({ page }) => {
   await mockBase(page);
   await page.route("**/api/idea", (r) =>
