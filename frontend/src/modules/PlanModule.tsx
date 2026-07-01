@@ -76,6 +76,10 @@ export default function PlanModule() {
     sap.setText("");
     dmp.setText("");
     consent.setText("");
+    // 一并清掉已确定的样本量, 否则换新课题会把上一课题的旧 N 悄悄注入下一份方案
+    setSsChosen(0);
+    setSsChosenMeta(null);
+    setSsVerifyMsg("");
   };
 
   // —— 样本量交互式探索：场景 + 滑块 + 实时曲线（纯前端计算）——
@@ -86,17 +90,27 @@ export default function PlanModule() {
   const [ssPower, setSsPower] = usePersistentState<number>("plan:samplesize:power", 0.8);
   const [ssSweep, setSsSweep] = usePersistentState<string>("plan:samplesize:sweep", "effect");
   const [ssChosen, setSsChosen] = usePersistentState<number>("plan:sampleSize", 0);
+  // 与 ssChosen 一起快照的参数(点「使用此参数」那一刻的 α/power/效应量/场景/来源)——
+  // 避免注入方案的 N 与实时滑块值对不上(拖了滑块却没重新确认)。
+  type SsMeta = { alpha: number; power: number; effect: number; scene: string; source: string };
+  const [ssChosenMeta, setSsChosenMeta] = usePersistentState<SsMeta | null>("plan:sampleSizeMeta", null);
   const [ssVerifyMsg, setSsVerifyMsg] = useState<string>("");
   const [ssVerifyBusy, setSsVerifyBusy] = useState(false);
 
   // 把用户在样本量计算器里确定的 N 作为事实并入生成载荷——避免"算了却没进方案"。
-  // 只在已通过"使用此参数"确定 N 时追加(ssChosen>0)。生成实验计划 / SAP 会读到它。
+  // 只在已通过"使用此参数"确定 N 时追加(ssChosen>0)。用固化的快照参数, 不用实时滑块值。
   const withSampleSize = (base: string): string => {
     if (!(ssChosen > 0)) return base;
-    const sceneLabel = ssScene === "proportion" ? "两组率比较(双比例)" : "两组均值比较(双均值, Cohen's d)";
+    const m = ssChosenMeta;
+    const scene = m?.scene ?? ssScene;
+    const alpha = m?.alpha ?? ssAlpha;
+    const power = m?.power ?? ssPower;
+    const effect = m?.effect ?? ssEffect;
+    const sceneLabel = scene === "proportion" ? "两组率比较(双比例)" : "两组均值比较(双均值, Cohen's d)";
+    const src = m?.source === "backend" ? "（本地精确计算）" : "";
     const note =
-      `【已确定样本量】用户已用样本量计算器确定：每组约 ${ssChosen} 例（合计约 ${ssChosen * 2} 例）；` +
-      `设计场景=${sceneLabel}，α=${ssAlpha}，检验效能(power)=${ssPower}，效应量=${ssEffect}。` +
+      `【已确定样本量】用户已用样本量计算器确定：每组约 ${ssChosen} 例${src}（合计约 ${ssChosen * 2} 例）；` +
+      `设计场景=${sceneLabel}，α=${alpha}，检验效能(power)=${power}，效应量=${effect}。` +
       `请在方案/统计部分直接采用该样本量并据此论证可行性；若为临床试验，请提醒按预期失访率（如 10–20%）适当上浮。`;
     return base ? base + "\n\n" + note : note;
   };
@@ -192,9 +206,10 @@ export default function PlanModule() {
   const path = curvePts.map((p, i) => `${i === 0 ? "M" : "L"}${sx(p.x).toFixed(1)},${sy(p.y).toFixed(1)}`).join(" ");
 
   const useThisN = async () => {
-    setSsChosen(ssN);
     setSsVerifyMsg("");
     setSsVerifyBusy(true);
+    // 固化当下的参数快照, 无论采用精确值还是回退估算, 注入方案的 N 与 α/power/效应量都一致。
+    const snap = { alpha: ssAlpha, power: ssPower, effect: ssEffect, scene: ssScene };
     try {
       // 调后端精确验证（沿用现有 /api/sample-size）
       const params: Record<string, string> = {
@@ -219,17 +234,25 @@ export default function PlanModule() {
       });
       const j = await resp.json();
       if (j.ok && j.per_group) {
+        // 采用后端精确值(权威), 而不是可能相差一倍的前端 Lehr 近似——这才是注入方案的数。
+        setSsChosen(j.per_group);
+        setSsChosenMeta({ ...snap, source: "backend" });
         const diff = Math.abs(j.per_group - ssN);
         if (diff <= Math.max(2, ssN * 0.1)) {
-          setSsVerifyMsg(`已采用 N=${ssN}（后端精确验证：每组 ${j.per_group}，偏差 ≤ 10%，可信）`);
+          setSsVerifyMsg(`已采用后端精确值：每组 ${j.per_group} 例（与前端快速近似 ${ssN} 基本一致）。`);
         } else {
-          setSsVerifyMsg(`已采用 N=${ssN}（前端估算）。后端精确值为每组 ${j.per_group}，差异较大，建议参考精确值。`);
+          setSsVerifyMsg(`已采用后端精确值：每组 ${j.per_group} 例。前端快速近似为 ${ssN}，两者差异较大——以精确值为准。`);
         }
       } else {
-        setSsVerifyMsg(`已采用 N=${ssN}（前端估算，后端验证未成功：${j.error || "未知错误"}）`);
+        // 后端不可用: 回退到前端估算, 并标注来源
+        setSsChosen(ssN);
+        setSsChosenMeta({ ...snap, source: "frontend" });
+        setSsVerifyMsg(`已采用前端快速估算：每组 ${ssN} 例（后端精确验证未成功：${j.error || "未知错误"}；建议联网后重新「使用此参数」以精确值为准）。`);
       }
     } catch (e) {
-      setSsVerifyMsg(`已采用 N=${ssN}（前端估算，后端验证失败：${(e as Error).message}）`);
+      setSsChosen(ssN);
+      setSsChosenMeta({ ...snap, source: "frontend" });
+      setSsVerifyMsg(`已采用前端快速估算：每组 ${ssN} 例（后端验证失败：${(e as Error).message}）。`);
     } finally {
       setSsVerifyBusy(false);
     }
@@ -531,9 +554,10 @@ export default function PlanModule() {
 
           <div className="ss-result" data-testid="ss-result">
             <strong style={{ fontSize: 20 }}>
-              当前需要 N = {isFinite(ssN) ? ssN * 2 : "—"} 例（每组 {isFinite(ssN) ? ssN : "—"}）
+              约需 N ≈ {isFinite(ssN) ? ssN * 2 : "—"} 例（每组 {isFinite(ssN) ? ssN : "—"}）
             </strong>
             <span className="field-hint">
+              这是<strong>快速近似</strong>（前端估算，可能与精确值有差异）；点「使用此参数」会用本地精确计算得到并采用的 N。
               公式：{ssScene === "proportion"
                 ? "Lehr 近似 n ≈ 2(z_{α/2}+z_β)² p̄(1-p̄) / (p₁-p₂)²（默认 p₁=0.3）"
                 : "n ≈ 2(z_{α/2}+z_β)² / d²"}
