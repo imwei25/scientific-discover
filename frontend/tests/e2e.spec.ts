@@ -410,6 +410,46 @@ test("写标书: 撰写前默认重检索文献, 且产出可编辑", async ({ p
   await expect(page.getByTestId("edit-btn")).toBeVisible();
 });
 
+test("写标书: 大纲无勾选框, 可按修改意见调整", async ({ page }) => {
+  await mockBase(page);
+  await page.route("**/api/idea", (r) =>
+    r.fulfill({ contentType: "text/event-stream", body: sse(
+      { event: "delta", data: { text: "### 候选选题1：方向A\n内容。" } },
+      { event: "topic_card", data: { field: "F", keywords: "", facets: [], keyword_seed: [], candidates: [{ n: 1, title: "方向A", feasibility: 4, innovation: 3, body: "内容。" }], ref_count: 0 } },
+      { event: "done", data: {} },
+    ) }),
+  );
+  await page.route("**/api/grant/plan", (r) => {
+    const body = JSON.parse(r.request().postData() || "{}");
+    const note = body.inputs?.outline_note;
+    const outline = note
+      ? [{ key: "rationale", title: "立项依据", budget: "" }, { key: "prelim", title: "前期工作基础", budget: "约 300 字" }]
+      : [{ key: "rationale", title: "立项依据", budget: "" }, { key: "content", title: "研究内容", budget: "" }];
+    r.fulfill({ json: { scheme: { title: "T", question: "Q", hypothesis: "H", goal: "G", contents: [], innovations: [], route: "" }, outline } });
+  });
+  await page.goto("/");
+  await page.getByTestId("nav-idea").click();
+  await page.getByTestId("input-field").fill("x");
+  await page.getByTestId("run-btn").click();
+  await page.getByTestId("candidate-to-grant-0").click();
+  // 生成大纲
+  await page.getByTestId("grant-plan-btn").click();
+  await expect(page.getByTestId("grant-confirm")).toBeVisible();
+  // 不再有每节勾选框
+  await expect(page.getByTestId("grant-outline-include-0")).toHaveCount(0);
+  // 大纲章节标题是可编辑输入框, 断言其值
+  const titleVals = () =>
+    page.getByTestId("grant-outline-edit").locator(".grant-outline-title").evaluateAll(
+      (els) => els.map((e) => (e as HTMLInputElement).value),
+    );
+  await expect.poll(titleVals).toContain("研究内容");
+  // 输入修改意见 → AI 调整大纲(新增“前期工作基础”, 且不再有“研究内容”)
+  await page.getByTestId("grant-outline-note").fill("加一节前期工作基础");
+  await page.getByTestId("grant-outline-adjust-btn").click();
+  await expect.poll(titleVals).toContain("前期工作基础");
+  expect(await titleVals()).not.toContain("研究内容");
+});
+
 test("找选题: 显示在研临床试验(ClinicalTrials旁路)并渲染空白矩阵表格", async ({ page }) => {
   await mockBase(page);
   await page.route("**/api/idea", (r) =>

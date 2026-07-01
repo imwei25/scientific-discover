@@ -51,6 +51,7 @@ export default function GrantModule() {
 
   const [status, setStatus] = useState("");
   const [planning, setPlanning] = useState(false);
+  const [outlineNote, setOutlineNote] = useState(""); // 大纲修改意见(交 AI 调整大纲)
   const [running, setRunning] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [docxBusy, setDocxBusy] = useState(false);
@@ -100,18 +101,28 @@ export default function GrantModule() {
 
   const hasInput = !!(title.trim() || report.trim());
 
-  // —— 第一步: 生成可编辑大纲(两段式) ——
-  const genPlan = async () => {
+  // —— 第一步: 生成可编辑大纲(两段式); 传 note 时只按意见调整大纲, 不动已确认的方案骨架 ——
+  const genPlan = async (note?: string) => {
     if (!hasInput || planning || running) return;
     setError(null);
     setPlanning(true);
-    setStatus("正在凝练研究方案与大纲…");
-    const plan = await planGrant({ title, idea, report, grant_type: grantType });
-    setScheme({ ...emptyScheme, ...plan.scheme });
-    setOutline(plan.outline.map((o) => ({ ...o, include: true })));
-    setSections([]);
-    setVerify(null);
-    setPhase("planned");
+    setStatus(note ? "正在按修改意见调整大纲…" : "正在凝练研究方案与大纲…");
+    const plan = await planGrant(
+      note
+        ? { title, idea, report, grant_type: grantType, outline_note: note, outline }
+        : { title, idea, report, grant_type: grantType },
+    );
+    if (note) {
+      // 只更新大纲, 保留用户已编辑的方案骨架与阶段。
+      setOutline(plan.outline.map((o) => ({ ...o, include: true })));
+      setOutlineNote("");
+    } else {
+      setScheme({ ...emptyScheme, ...plan.scheme });
+      setOutline(plan.outline.map((o) => ({ ...o, include: true })));
+      setSections([]);
+      setVerify(null);
+      setPhase("planned");
+    }
     setStatus("");
     setPlanning(false);
     window.dispatchEvent(new Event("usage-updated"));
@@ -350,7 +361,7 @@ export default function GrantModule() {
         <div className="form-actions">
           <button
             className="btn-primary"
-            onClick={genPlan}
+            onClick={() => genPlan()}
             disabled={!hasInput || planning || running}
             data-testid="grant-plan-btn"
           >
@@ -427,18 +438,10 @@ export default function GrantModule() {
             </label>
 
             <div className="field">
-              <span className="field-label">大纲章节（勾选要写的，可改标题与篇幅）</span>
+              <span className="field-label">大纲章节（可改标题与篇幅；如需增删/改结构，用下方“修改意见”交给 AI 调整）</span>
               <ol className="grant-outline-edit" data-testid="grant-outline-edit">
                 {outline.map((o, i) => (
                   <li key={o.key} className="grant-outline-row">
-                    <input
-                      type="checkbox"
-                      checked={o.include}
-                      data-testid={`grant-outline-include-${i}`}
-                      onChange={(e) =>
-                        setOutline((prev) => prev.map((x, j) => (j === i ? { ...x, include: e.target.checked } : x)))
-                      }
-                    />
                     <input
                       className="grant-outline-title"
                       value={o.title}
@@ -458,12 +461,33 @@ export default function GrantModule() {
               </ol>
             </div>
 
+            <div className="field">
+              <span className="field-label">修改意见（可选，让 AI 调整大纲：增删章节 / 改结构 / 改篇幅）</span>
+              <div className="grant-outline-note-row">
+                <input
+                  data-testid="grant-outline-note"
+                  value={outlineNote}
+                  onChange={(e) => setOutlineNote(e.target.value)}
+                  placeholder="例如：加一节“前期工作基础”；把技术路线并入研究方案；每节再精简些"
+                  disabled={planning || running}
+                />
+                <button
+                  className="btn-secondary btn-sm"
+                  data-testid="grant-outline-adjust-btn"
+                  onClick={() => genPlan(outlineNote.trim())}
+                  disabled={planning || running || !outlineNote.trim()}
+                >
+                  {planning ? "调整中…" : "按意见调整大纲"}
+                </button>
+              </div>
+            </div>
+
             <div className="form-actions">
               <button
                 className="btn-primary"
                 data-testid="grant-confirm-write-btn"
                 onClick={() => startWrite(true)}
-                disabled={running || !outline.some((o) => o.include)}
+                disabled={running || planning || outline.length === 0}
               >
                 ② 确认大纲并撰写 →
               </button>

@@ -1532,6 +1532,18 @@ select {
   flex-shrink: 0;
   text-align: center;
 }
+.grant-outline-note-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin-top: 4px;
+}
+.grant-outline-note-row input {
+  flex: 1;
+  min-width: 0;
+  padding: 8px 10px;
+}
+.grant-outline-note-row button { flex-shrink: 0; }
 .grant-revise-list {
   margin: 8px 0 0;
   padding-left: 0;

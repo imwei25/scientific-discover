@@ -197,6 +197,39 @@ def _default_outline() -> list[dict]:
     return [{"key": k, "title": _SECTION_MAP[k][0], "budget": _SECTION_MAP[k][2]} for k in _SECTION_ORDER]
 
 
+async def _adjust_outline(title: str, note: str, current: list[dict]) -> list[dict]:
+    """按用户「修改意见」调整大纲(可增删章节 / 改标题 / 改篇幅 / 调顺序)。
+
+    失败或解析不出时回退到 current(或标准大纲), 不阻断确认流程。
+    """
+    base = current if isinstance(current, list) and current else _default_outline()
+    listing = "\n".join(f"- {o.get('key', '')}｜{o.get('title', '')}｜{o.get('budget', '')}" for o in base)
+    system = (
+        "你是国家自然科学基金标书写作顾问。下面是一份申请书大纲(每行格式: key｜章节标题｜篇幅)。"
+        "请按照用户的修改意见调整这份大纲——可以增删章节、改标题、改篇幅、调整顺序。"
+        "只输出一个 JSON 数组, 每项形如 {\"key\":\"稳定的英文小写标识\",\"title\":\"章节标题\",\"budget\":\"篇幅描述\"}, "
+        "不要任何解释。尽量沿用原有 key; 新增章节用简短英文 key(如 prelim)。"
+    )
+    user = f"项目/方向：{title or '（未命名）'}\n\n【当前大纲】\n{listing}\n\n【修改意见】\n{note}"
+    try:
+        arr = _parse_json(await _complete([{"role": "system", "content": system}, {"role": "user", "content": user}], 600), "[", "]")
+    except Exception:  # noqa: BLE001
+        arr = None
+    if not isinstance(arr, list) or not arr:
+        return base
+    out: list[dict] = []
+    for it in arr:
+        if not isinstance(it, dict):
+            continue
+        ttl = str(it.get("title") or "").strip()
+        if not ttl:
+            continue
+        key = str(it.get("key") or "").strip() or f"sec{len(out) + 1}"
+        budget = str(it.get("budget") or "").strip() or "约 400-700 字"
+        out.append({"key": key, "title": ttl, "budget": budget})
+    return out or base
+
+
 def _resolve_sections(raw) -> list[dict]:
     """把前端回传的(可编辑)大纲规整为可写作的章节列表; 缺省=全部标准章节。
 
@@ -295,7 +328,13 @@ async def plan_grant(inputs: dict) -> dict:
     idea = (inputs.get("idea") or "").strip()
     report = (inputs.get("report") or "").strip()
     _, gt_hint = _grant_type(inputs)
+    # 用户可带「修改意见」+当前大纲来让 AI 调整大纲(增删/改名/改篇幅/调序)。
+    outline_note = (inputs.get("outline_note") or "").strip()
+    current_outline = inputs.get("outline") if isinstance(inputs.get("outline"), list) else None
     if settings.mock:
+        base = _default_outline()
+        if outline_note:  # 演示: 意见非空时示意性加一节
+            base = base + [{"key": "prelim", "title": "[MOCK] 新增：预实验基础", "budget": "约 300 字"}]
         return {
             "scheme": _norm_scheme({
                 "title": f"[MOCK] {title or '示例项目'}",
@@ -304,8 +343,12 @@ async def plan_grant(inputs: dict) -> dict:
                 "contents": ["[MOCK] 研究内容一", "[MOCK] 研究内容二"],
                 "innovations": ["[MOCK] 创新点一"], "route": "[MOCK] 技术路线主线。",
             }, title),
-            "outline": _default_outline(),
+            "outline": base,
         }
+    if outline_note:
+        # 只按意见调整大纲, 不重跑方案凝练(保留用户已确认/编辑的骨架)。
+        outline = await _adjust_outline(title, outline_note, current_outline or _default_outline())
+        return {"scheme": {}, "outline": outline}
     try:
         scheme = await _converge_scheme(title, idea, report, gt_hint)
     except Exception:  # noqa: BLE001
