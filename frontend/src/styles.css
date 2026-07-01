@@ -759,6 +759,13 @@ body {
   stroke-width: 2;
   stroke-linecap: round;
 }
+/* 眼镜：细描边、无填充（specificity 压过 .n3 circle{stroke:none}）*/
+.n3 .n3-specs {
+  fill: none;
+  stroke: var(--petrol);
+  stroke-width: 1.8;
+  stroke-linecap: round;
+}
 .n3 .n3-shadow {
   fill: rgba(14, 58, 57, 0.16);
   stroke: none;
@@ -780,15 +787,6 @@ body {
   transform-origin: center;
   animation: niuma3d-shadow 6s ease-in-out infinite;
 }
-.niuma-cap {
-  font-family: var(--serif);
-  font-size: 17px;
-  font-weight: 700;
-  letter-spacing: 0.34em;
-  padding-left: 0.34em;
-  color: var(--petrol);
-}
-[data-theme="midnight"] .niuma-cap { color: var(--teal); }
 @keyframes niuma3d-float {
   0%, 100% { transform: translateY(0); }
   50%      { transform: translateY(-12px); }
@@ -1899,10 +1897,10 @@ select {
 
 /* 首页工作流总览 */
 .home-overview {
-  margin: 40px auto 8px;
-  max-width: 1080px;
+  /* 与 hero 左对齐: 同宽、齐左, 不再窄居中(否则「完整工作流」比标题内缩一截) */
+  margin: 40px 0 8px;
   width: 100%;
-  padding: 0 8px;
+  padding: 0;
 }
 .home-overview .eyebrow {
   margin-bottom: 14px;

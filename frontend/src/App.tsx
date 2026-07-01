@@ -512,6 +512,11 @@ function Niuma3D() {
             <line className="n3-text" x1="164" y1="103" x2="196" y2="97" />
             <line className="n3-text" x1="160" y1="106" x2="184" y2="101" />
 
+            {/* 稿纸上立着一只锥形瓶（科研信号）*/}
+            <path className="n3-paper" d="M196 72 L200 72 L200 80 L206 93 L190 93 L196 80 Z" />
+            <polygon className="n3-front" points="193,89 203,89 206,93 190,93" />
+            <line className="n3-text" x1="197" y1="72" x2="199" y2="72" />
+
             {/* 近侧两腿（亮面, 压在身前）*/}
             <rect className="n3-front" x="190" y="182" width="19" height="64" rx="8" />
             <rect className="n3-dark" x="190" y="238" width="19" height="10" rx="5" />
@@ -543,10 +548,14 @@ function Niuma3D() {
             <circle className="n3-nostril" cx="290" cy="99" r="1.8" />
             <circle className="n3-eye" cx="266" cy="84" r="3" />
             <circle className="n3-spark" cx="267" cy="83" r="1" />
+            {/* 学究圆框眼镜（科研信号）*/}
+            <circle className="n3-specs" cx="264" cy="85" r="8" />
+            <circle className="n3-specs" cx="283" cy="86" r="7" />
+            <line className="n3-specs" x1="272" y1="85" x2="276" y2="85" />
+            <line className="n3-specs" x1="257" y1="83" x2="248" y2="79" />
           </g>
         </g>
       </svg>
-      <div className="niuma-cap">牛马</div>
     </div>
   );
 }
