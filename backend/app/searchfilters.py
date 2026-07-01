@@ -5,8 +5,14 @@
   - Europe PMC: 追加到 query 的布尔后缀(FIRST_PDATE 区间 + PUB_TYPE)
   - OpenAlex: 额外的 URL 参数(from_publication_date + 可选 type:review)
 
-filters 形如 {"year_from": int|None, "study_types": ["rct","meta","systematic","review"]}。
+filters 形如 {"year_from": int|None, "study_types": [...],
+            "min_quartile": int|None, "min_impact": float|None, "keep_unknown": bool}。
 study_types 为空表示不限类型。OpenAlex 仅能表达 review(无 RCT/Meta 精确分类), 据实降级。
+
+质量预筛(min_quartile / min_impact)在各源检索源上无法表达, 改为在结果富集了
+SJR 分区(scimago)与影响力代理(impactfactor)之后, 用 apply_quality_filter 在
+"喂给 AI 之前"统一过滤——这样 AI 写综述时不会过多倚重低质量文献。命中太少时自动
+放宽(保留全部), 避免综述因文献过少而单薄。
 """
 from __future__ import annotations
 
@@ -38,9 +44,9 @@ VALID_STUDY_TYPES = tuple(_STUDY_MAP.keys())
 
 
 def normalize(raw) -> dict:
-    """把前端传入的 filters 规整为 {year_from:int|None, study_types:[...]}。"""
+    """把前端传入的 filters 规整为统一结构(含质量预筛字段)。"""
     if not isinstance(raw, dict):
-        return {"year_from": None, "study_types": []}
+        raw = {}
     yf = raw.get("year_from")
     try:
         year_from = int(yf) if yf not in (None, "", "0") else None
@@ -52,7 +58,80 @@ def normalize(raw) -> dict:
     if isinstance(st, str):
         st = [s.strip() for s in st.split(",")]
     study_types = [s for s in st if s in _STUDY_MAP]
-    return {"year_from": year_from, "study_types": study_types}
+
+    # 质量预筛(可选): 最低分区档(1=仅Q1,2=Q1–Q2,...) + 最低影响力代理 + 未知是否保留。
+    mq = raw.get("min_quartile")
+    try:
+        min_quartile = int(mq) if mq not in (None, "", "0") else None
+    except (ValueError, TypeError):
+        min_quartile = None
+    if min_quartile is not None and not (1 <= min_quartile <= 4):
+        min_quartile = None
+    mi = raw.get("min_impact")
+    try:
+        min_impact = float(mi) if mi not in (None, "") else None
+    except (ValueError, TypeError):
+        min_impact = None
+    if min_impact is not None and min_impact <= 0:
+        min_impact = None
+    ku = raw.get("keep_unknown", True)
+    keep_unknown = ku.lower() in ("1", "true", "yes") if isinstance(ku, str) else bool(ku)
+
+    return {
+        "year_from": year_from, "study_types": study_types,
+        "min_quartile": min_quartile, "min_impact": min_impact, "keep_unknown": keep_unknown,
+    }
+
+
+# 质量预筛: 命中数低于该下限时自动放宽(保留全部), 避免综述文献过少。
+_QUALITY_FLOOR = 8
+_Q_RANK = {"Q1": 1, "Q2": 2, "Q3": 3, "Q4": 4}
+
+
+def quality_active(filters: dict) -> bool:
+    """是否启用了质量预筛(分区或影响力任一)。"""
+    return bool(filters.get("min_quartile") or filters.get("min_impact"))
+
+
+def _passes_quality(p: dict, filters: dict) -> bool:
+    """单篇是否通过质量门槛。指标未知时按 keep_unknown 决定(默认保留, 不误杀)。"""
+    keep_unknown = filters.get("keep_unknown", True)
+    mq = filters.get("min_quartile")
+    if mq:
+        q = p.get("journal_quartile")
+        rank = _Q_RANK.get(q) if q else None
+        if rank is None:
+            if not keep_unknown:
+                return False
+        elif rank > mq:
+            return False
+    mi = filters.get("min_impact")
+    if mi:
+        imp = p.get("journal_impact")
+        if imp is None:
+            if not keep_unknown:
+                return False
+        elif imp < mi:
+            return False
+    return True
+
+
+def apply_quality_filter(papers: list[dict], filters: dict) -> tuple[list[dict], int, bool]:
+    """喂给 AI 前的质量预筛。返回 (kept, dropped, relaxed)。
+
+    - 未启用 → 原样返回。
+    - 启用且有效 → 仅剔除"已知低于门槛"的(未知按 keep_unknown 保留)。
+    - 兜底: 通过的不足 _QUALITY_FLOOR 篇 → 放宽(保留全部, relaxed=True), 不让综述太单薄。
+    """
+    if not quality_active(filters):
+        return papers, 0, False
+    kept = [p for p in papers if _passes_quality(p, filters)]
+    dropped = len(papers) - len(kept)
+    if dropped == 0:
+        return papers, 0, False
+    if len(kept) < _QUALITY_FLOOR:
+        return papers, 0, True
+    return kept, dropped, False
 
 
 def _types_clause(filters: dict, source: str) -> str:
@@ -119,4 +198,10 @@ def label(filters: dict) -> str:
     types = filters.get("study_types") or []
     if types:
         bits.append("/".join(_STUDY_MAP[t]["label"] for t in types))
+    mq = filters.get("min_quartile")
+    if mq:
+        bits.append("仅 Q1" if mq == 1 else f"Q1–Q{mq}")
+    mi = filters.get("min_impact")
+    if mi:
+        bits.append(f"影响力≥{mi:g}")
     return "、".join(bits)

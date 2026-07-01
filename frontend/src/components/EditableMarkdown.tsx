@@ -1,5 +1,6 @@
 import { lazy, Suspense, useState } from "react";
 import Markdown from "./Markdown";
+import DeaiPanel from "./DeaiPanel";
 
 // 编辑器较重(TipTap + ProseMirror), 懒加载: 只在首次进入编辑时才拉进 bundle。
 const CanvasEditor = lazy(() => import("./CanvasEditor"));
@@ -36,6 +37,7 @@ export default function EditableMarkdown({ value, onSave, running, placeholder, 
           <button className="btn-ghost btn-sm" data-testid="edit-btn" onClick={() => setEditing(true)} title="编辑这份产出">
             ✎ 编辑
           </button>
+          <DeaiPanel value={value} onApply={onSave!} disabled={running} />
         </div>
       )}
       {value ? (

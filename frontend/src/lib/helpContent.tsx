@@ -3,7 +3,7 @@ import type { ReactNode } from "react";
 export type HelpKey =
   | "pico" | "randomize" | "dmp" | "consent"
   | "figcaptions" | "keywords" | "bundle"
-  | "statcheck" | "flowdiagram";
+  | "statcheck" | "flowdiagram" | "quartile";
 
 export interface HelpEntry {
   title: string;
@@ -13,6 +13,41 @@ export interface HelpEntry {
 }
 
 export const HELP: Record<HelpKey, HelpEntry> = {
+  quartile: {
+    title: "期刊分区（Q1–Q4）与影响力是怎么划分的？",
+    whenToUse: (
+      <p>
+        想在检索时就<strong>先筛掉质量相对较低的文献</strong>，让 AI 写综述/找选题时少倚重低质量来源时使用。
+        在「⚙ 高级检索设置 → 文献质量」里设置门槛即可，<strong>默认不筛选</strong>。
+      </p>
+    ),
+    howToUse: (
+      <>
+        <p>
+          <strong>分区（Q1–Q4）</strong>：按期刊在<strong>同一学科领域内</strong>的指标由高到低排序的四分位——
+          前 25% 为 Q1、25%–50% 为 Q2，依此类推。本工具用的是 <strong>SCImago（SJR）</strong>的免费分区
+          （基于 Scopus），<strong>不是 JCR 影响因子分区，也不是中科院分区</strong>。
+        </p>
+        <p>
+          <strong>影响力</strong>：用 OpenAlex「近 2 年篇均被引」作为<strong>代理指标</strong>，并非官方影响因子（IF）。
+        </p>
+        <p>
+          <strong>未知怎么处理</strong>：内置分区表为<strong>医学子集</strong>，非医学、无 ISSN 或预印本等查不到分区/影响力的期刊会显示
+          “未知”。勾选「保留无指标数据」时，未知文献<strong>一律保留、不参与筛除</strong>（默认勾选，避免误杀）。
+        </p>
+        <p>
+          <strong>太少自动放宽</strong>：若按门槛筛完高质量文献不足，会自动纳入全部检索结果并在状态栏提示，避免综述因文献过少而单薄。
+        </p>
+      </>
+    ),
+    example: (
+      <p>
+        例：选「分区 ≥ Q1–Q2」+ 勾选「保留无指标数据」→ 已知为 Q3/Q4 的期刊文献会被排除，
+        Q1/Q2 与分区未知的文献保留，再交给 AI 分析。
+      </p>
+    ),
+  },
+
   flowdiagram: {
     title: "PRISMA / CONSORT 流程图生成",
     whenToUse: (

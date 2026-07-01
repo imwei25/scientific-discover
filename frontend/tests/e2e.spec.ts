@@ -1355,3 +1355,59 @@ test("画布编辑: 撤回到上限提示无法再撤回", async ({ page }) => {
   await page.getByTestId("undo-btn").click();
   await expect(page.getByTestId("toast-warn")).toContainText("无法再撤回");
 });
+
+test("去AI味: 扫描→流式改写→采纳→撤回", async ({ page }) => {
+  const REPORT = "综上所述，本课题至关重要，具有重要意义。";
+  const REWRITTEN = "本课题聚焦一个明确的关键科学问题。";
+  await runIdea(page, REPORT);
+
+  await page.route("**/api/deai/scan", (r) =>
+    r.fulfill({
+      json: {
+        spans: [{ block: 0, sentence: REPORT, score: 6, reasons: ["套话「综上所述」", "套话「至关重要」"] }],
+        flagged_blocks: [0],
+        stats: { blocks: 1, prose_blocks: 1, sentences: 1, flagged: 1 },
+      },
+    }),
+  );
+  await page.route("**/api/deai/rewrite", (r) =>
+    r.fulfill({
+      contentType: "text/event-stream",
+      body: sse(
+        { event: "segment", data: { block: 0, start: 0, end: REPORT.length, original: REPORT } },
+        { event: "delta", data: { block: 0, text: REWRITTEN } },
+        { event: "segment_done", data: { block: 0, rewritten: REWRITTEN, citation_warn: false } },
+        { event: "done", data: {} },
+      ),
+    }),
+  );
+
+  // ① 扫描: 弹面板, 汇总命中数
+  await page.getByTestId("deai-btn").click();
+  await expect(page.getByTestId("deai-overlay")).toBeVisible();
+  await expect(page.getByTestId("deai-scan-summary")).toContainText("发现");
+  // ② 改写: 改前/改后对照出现改写文本
+  await page.getByTestId("deai-rewrite-btn").click();
+  await expect(page.getByTestId("deai-seg")).toContainText(REWRITTEN);
+  // ③ 采纳: 正文原地更新, 且出现「撤回去AI味」入口
+  await page.getByTestId("deai-apply-btn").click();
+  await expect(page.getByTestId("result-text")).toContainText(REWRITTEN);
+  await expect(page.getByTestId("result-text")).not.toContainText("综上所述");
+  await expect(page.getByTestId("deai-undo-btn")).toBeVisible();
+  // ④ 撤回: 还原到去AI味之前, 撤回入口消失
+  await page.getByTestId("deai-undo-btn").click();
+  await expect(page.getByTestId("result-text")).toContainText("综上所述");
+  await expect(page.getByTestId("deai-undo-btn")).toHaveCount(0);
+});
+
+test("去AI味: 无命中时提示无需改写、无改写按钮", async ({ page }) => {
+  await runIdea(page, "本研究纳入 120 例患者，随机分组，主要终点为 28 天死亡率。");
+  await page.route("**/api/deai/scan", (r) =>
+    r.fulfill({ json: { spans: [], flagged_blocks: [], stats: { blocks: 1, prose_blocks: 1, sentences: 1, flagged: 0 } } }),
+  );
+  await page.getByTestId("deai-btn").click();
+  await expect(page.getByTestId("deai-scan-summary")).toContainText("未发现明显");
+  await expect(page.getByTestId("deai-rewrite-btn")).toHaveCount(0);
+  await page.getByTestId("deai-close-btn").click();
+  await expect(page.getByTestId("deai-overlay")).toHaveCount(0);
+});

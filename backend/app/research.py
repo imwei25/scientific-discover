@@ -535,11 +535,14 @@ async def _facet_grouped_search(
     seen: set[str] = set()
     groups: list[tuple[str, list[dict]]] = []
     any_ok = False
+    relaxed_any = False
     for f, res in zip(facets, results):
         if isinstance(res, Exception):
             continue
         if res.get("network_errors", 0) == 0:
             any_ok = True
+        if res.get("quality", {}).get("relaxed"):
+            relaxed_any = True
         grp: list[dict] = []
         for p in res["papers"]:
             k = _pkey(p)
@@ -548,7 +551,7 @@ async def _facet_grouped_search(
             seen.add(k)
             grp.append(p)
         groups.append((f["name"], grp))
-    return groups, any_ok
+    return groups, any_ok, relaxed_any
 
 
 async def _deep_flow(
@@ -561,7 +564,7 @@ async def _deep_flow(
     names = "、".join(f["name"] for f in facets)
     yield ("status", {"message": f"正在按子方向检索 {_src_label(sources)}{flt_tip}（{len(facets)} 个子方向：{names}）…"})
 
-    groups, any_ok = await _facet_grouped_search(facets, sources, filters)
+    groups, any_ok, relaxed_any = await _facet_grouped_search(facets, sources, filters)
     total = sum(len(g) for _, g in groups)
     if total == 0:
         if not any_ok:
@@ -580,6 +583,8 @@ async def _deep_flow(
 
     papers = _flatten()
     yield ("references", {"items": [{k: p.get(k, "") for k in ("pmid", "doi", "title", "first_author", "journal", "year", "url", "source", "cited_by_count", "oa_url", "journal_impact", "journal_quartile")} for p in papers]})
+    if relaxed_any:
+        yield ("status", {"message": "高质量文献不足，已自动纳入全部检索结果（可在高级检索设置调整质量门槛）。"})
 
     queries = [f["query"] for f in facets]
     trials = await _emit_trials(queries, sources)
@@ -723,6 +728,8 @@ async def deep_research_idea(inputs: dict) -> AsyncIterator[tuple[str, dict]]:
             yield ("status", {"message": f"正在检索 {_src_label(sources)}{flt_tip}（{len(queries)} 个检索式）…"})
             result = await search_literature(queries, per_query=10, cap=28, sources=sources, filters=filters)
             papers = result["papers"]
+            if result.get("quality", {}).get("relaxed"):
+                yield ("status", {"message": "高质量文献不足，已自动纳入全部检索结果（可在高级检索设置调整质量门槛）。"})
             if not papers:
                 if result["network_errors"] >= max(1, len(queries)):
                     yield ("error", {"message": "无法连接文献源（网络异常），请检查网络后重试。"})
@@ -758,28 +765,80 @@ async def deep_research_idea(inputs: dict) -> AsyncIterator[tuple[str, dict]]:
         yield ("error", {"message": f"调研过程出错：{type(e).__name__}: {e}"})
 
 
-def _parse_candidates(full: str) -> list[dict]:
-    """从报告正文按固定格式 `### 候选选题N：题名` 切出候选选题, 并解析自评分。
+# 候选选题小标题匹配(容错): 允许
+#   - 任意标题级别 ## ~ ###### (AI 常因大节用 ### 而把候选嵌成 ####)
+#   - 可选的 **加粗** 包裹
+#   - "候选选题/候选课题/候选方向/选题/课题" 等措辞变体
+#   - 阿拉伯数字、全角数字或中文数字编号
+#   - 中文/英文冒号、顿号、点、右括号等分隔符
+# 2 个捕获组(编号、题名)。题名尾部可能残留加粗 **, 在解析时再 strip。
+_CAND_HEADING_RE = re.compile(
+    r"(?m)^\s*#{2,6}\s*\*{0,2}\s*(?:候选)?(?:选题|课题|方向)\s*"
+    r"([0-9０-９一二三四五六七八九十]+)\s*[：:、.．)）]\s*(.+?)\s*$"
+)
 
-    报告由 _reduce_messages_deep / _synthesis_messages 强制为该格式, 故正则解析可靠;
-    解析失败(格式漂移)时返回空列表, 前端选题卡自动隐藏, 不影响整段报告交接。
+# 中文数字 → int(仅覆盖候选选题可能用到的 1..十几)
+_CN_NUM = {c: i for i, c in enumerate("零一二三四五六七八九", 0)}
+
+
+def _rating_after(body: str, label: str) -> int | None:
+    """从自评分行解析 label(可行性/创新性) 的星级 1..5。
+
+    兼容两种 AI 实际写法: `可行性 ★4/5（…）` 与 `可行性 ★★★★☆（…）`。
+    优先取显式数字(N/5), 否则数实心 ★ 个数; 都没有则 None。
+    注意: label(如"可行性")可能先作为正文小标题出现(`可行性（设计/样本…）`),
+    故要求 label 后【紧跟】★ 或 N/5 才算命中自评分, 否则继续向后找真正的评分行。
+    """
+    m = re.search(label + r"[\s：:]*([★☆][★☆\d/\s]*|\d+\s*/\s*\d+)", body)
+    if not m:
+        return None
+    seg = m.group(1)
+    d = re.search(r"(\d+)", seg)
+    if d:
+        v = int(d.group(1))
+        return v if 1 <= v <= 5 else None
+    stars = seg.count("★")
+    return stars if 1 <= stars <= 5 else None
+
+
+def _to_int(token: str, fallback: int) -> int:
+    """把编号 token(阿拉伯/全角/中文数字)转成 int; 失败返回 fallback。"""
+    token = token.strip()
+    # 全角数字 → 半角
+    half = token.translate(str.maketrans("０１２３４５６７８９", "0123456789"))
+    if half.isdigit():
+        return int(half)
+    # 中文数字: 处理「十/十一/二十」等简单情形
+    if "十" in token:
+        left, _, right = token.partition("十")
+        tens = _CN_NUM.get(left, 1) if left else 1
+        ones = _CN_NUM.get(right, 0) if right else 0
+        return tens * 10 + ones
+    if len(token) == 1 and token in _CN_NUM:
+        return _CN_NUM[token]
+    return fallback
+
+
+def _parse_candidates(full: str) -> list[dict]:
+    """从报告正文里切出候选选题(题名/正文/自评分), 供前端选题卡按方向精准交接。
+
+    报告由 _reduce_messages_deep / _synthesis_messages 引导为
+    `### 候选选题N：题名` 格式, 但 AI 常有格式漂移(标题级别、加粗、措辞、编号写法),
+    故用 _CAND_HEADING_RE 做容错匹配; 仍解析失败时返回空列表, 前端选题卡自动隐藏。
     """
     # 2 个捕获组(编号、题名), re.split 产出: [前言, n, 题名, 正文, n, 题名, 正文, ...]
-    parts = re.split(r"(?m)^###\s*候选选题\s*(\d+)\s*[：:]\s*(.+?)\s*$", full)
+    parts = _CAND_HEADING_RE.split(full)
     out: list[dict] = []
     for i in range(1, len(parts) - 2, 3):
-        title = parts[i + 1].strip()
+        # 题名尾部可能带加粗收尾 **, 去掉
+        title = parts[i + 1].strip().rstrip("*").strip()
         body = parts[i + 2].strip()
-        m = re.search(r"可行性\s*★\s*(\d).*?创新性\s*★\s*(\d)", body, re.S)
-        try:
-            n = int(parts[i])
-        except (ValueError, TypeError):
-            n = len(out) + 1
+        n = _to_int(parts[i], len(out) + 1)
         out.append({
             "n": n,
             "title": title,
-            "feasibility": int(m.group(1)) if m else None,
-            "innovation": int(m.group(2)) if m else None,
+            "feasibility": _rating_after(body, "可行性"),
+            "innovation": _rating_after(body, "创新性"),
             "body": body,
         })
     return out

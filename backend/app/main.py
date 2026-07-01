@@ -20,10 +20,12 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from .config import settings
+from .deai import scan_ai_flavor, stream_rewrite
 from .journals import list_journals
 from .llm import LLMError, get_balance, get_session_usage, stream_chat
 from .prompts import build_messages
 from .imrad import assemble_imrad
+from .grant import write_grant, plan_grant, revise_section
 from .rebuttal import rebuttal
 from .research import clarify_topic, deep_research_idea, idea_followup, refine_topic
 from .projects import router as projects_router
@@ -82,6 +84,16 @@ class MatchRequest(BaseModel):
 
 class StatcheckRequest(BaseModel):
     text: str
+
+
+class DeaiScanRequest(BaseModel):
+    text: str
+
+
+class DeaiRewriteRequest(BaseModel):
+    text: str
+    blocks: list[int] = []   # 要改写的块索引(来自 scan 的 flagged_blocks); 空则自动扫描取全部命中块
+    style: str = ""          # 可选: 作者个人风格档案
 
 
 class FlowRequest(BaseModel):
@@ -185,6 +197,41 @@ async def run(req: RunRequest) -> StreamingResponse:
     )
 
 
+@app.post("/api/deai/scan")
+async def deai_scan(req: DeaiScanRequest) -> JSONResponse:
+    """去 AI 味 第一步: 启发式扫描, 标出 AI 味较重的句子(非流式, 不调 LLM)。
+
+    任何异常都返回空结果(放行不阻塞), 与其它"分析型"接口一致。
+    """
+    try:
+        return JSONResponse(scan_ai_flavor(req.text))
+    except Exception:  # noqa: BLE001
+        return JSONResponse({
+            "spans": [], "flagged_blocks": [],
+            "stats": {"blocks": 0, "prose_blocks": 0, "sentences": 0, "flagged": 0},
+        })
+
+
+@app.post("/api/deai/rewrite")
+async def deai_rewrite_ep(req: DeaiRewriteRequest) -> StreamingResponse:
+    """去 AI 味 第二步: 逐块流式改写被标记的散文块(可随时断流中断)。"""
+    async def gen():
+        try:
+            blocks = req.blocks or scan_ai_flavor(req.text)["flagged_blocks"]
+            async for event, data in stream_rewrite(req.text, blocks, style=req.style):
+                yield _sse(event, data)
+        except LLMError as e:
+            yield _sse("error", {"message": str(e)})
+        except Exception as e:  # noqa: BLE001
+            yield _sse("error", {"message": f"内部错误: {e}"})
+
+    return StreamingResponse(
+        gen(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
 @app.post("/api/idea")
 async def idea(req: RunRequest) -> StreamingResponse:
     """医学/药学/生物 找选题: 检索 PubMed + 分析现状/空白/选题(带文献链接)。"""
@@ -232,6 +279,48 @@ async def imrad_ep(req: RunRequest) -> StreamingResponse:
     """IMRaD 初稿装配: 把已有材料分段拼成 Intro/Methods/Results/Discussion(本地, 只据材料)。"""
     async def gen():
         async for event, data in assemble_imrad(req.inputs):
+            yield _sse(event, data)
+
+    return StreamingResponse(
+        gen(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+@app.post("/api/grant")
+async def grant_ep(req: RunRequest) -> StreamingResponse:
+    """写中文标书: 凝练方案 → 大纲 → 分节撰写 → 评审自查(据选题报告与真实文献, 接在找选题之后)。
+
+    若 inputs 含已确认的 scheme/sections, 则跳过凝练直接据此撰写(两段式)。
+    """
+    async def gen():
+        async for event, data in write_grant(req.inputs):
+            yield _sse(event, data)
+
+    return StreamingResponse(
+        gen(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+@app.post("/api/grant/plan")
+async def grant_plan_ep(req: RunRequest) -> JSONResponse:
+    """两段式第一步: 产出可编辑的【方案骨架 + 大纲】交用户确认(非流式)。失败也回退不阻断。"""
+    try:
+        return JSONResponse(await plan_grant(req.inputs))
+    except Exception:  # noqa: BLE001
+        from .grant import _default_outline, _norm_scheme
+        title = (req.inputs.get("title") or req.inputs.get("field") or "").strip()
+        return JSONResponse({"scheme": _norm_scheme({}, title), "outline": _default_outline()})
+
+
+@app.post("/api/grant/revise")
+async def grant_revise_ep(req: RunRequest) -> StreamingResponse:
+    """逐节重写: 仅按意见重写某一章节, 不重跑全篇(流式)。"""
+    async def gen():
+        async for event, data in revise_section(req.inputs):
             yield _sse(event, data)
 
     return StreamingResponse(

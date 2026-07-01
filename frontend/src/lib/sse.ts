@@ -452,6 +452,185 @@ export async function streamRebuttal(
   }
 }
 
+// 写标书: 方案骨架(helm 凝练结果)。
+export interface GrantScheme {
+  title: string;
+  question: string;
+  hypothesis: string;
+  goal: string;
+  contents: string[];
+  innovations: string[];
+  route: string;
+}
+
+export interface GrantOutlineItem {
+  key: string;
+  title: string;
+  budget: string;
+}
+
+export interface GrantPlan {
+  scheme: GrantScheme;
+  outline: GrantOutlineItem[];
+}
+
+// 两段式第一步: 取可编辑的【方案骨架 + 大纲】。失败回退到空骨架 + 标准大纲(不阻断)。
+export async function planGrant(
+  inputs: Record<string, unknown>,
+  signal?: AbortSignal,
+): Promise<GrantPlan> {
+  const fallback: GrantPlan = {
+    scheme: { title: String(inputs.title ?? ""), question: "", hypothesis: "", goal: "", contents: [], innovations: [], route: "" },
+    outline: [],
+  };
+  try {
+    const resp = await fetch(apiUrl("/api/grant/plan"), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ module: "grant", inputs }),
+      signal,
+    });
+    if (!resp.ok) return fallback;
+    const data = await resp.json();
+    return {
+      scheme: { ...fallback.scheme, ...(data.scheme ?? {}) },
+      outline: Array.isArray(data.outline) ? data.outline : [],
+    };
+  } catch {
+    return fallback;
+  }
+}
+
+export interface GrantHandlers {
+  onStatus?: (message: string) => void;
+  onScheme?: (s: GrantScheme) => void;
+  onOutline?: (items: GrantOutlineItem[]) => void;
+  onSection?: (key: string, title: string) => void;
+  onDelta: (text: string) => void;
+  onVerify?: (v: Verification) => void;
+  onDone?: () => void;
+  onError?: (message: string) => void;
+  signal?: AbortSignal;
+}
+
+// 写中文标书: 方案凝练 → 大纲 → 分节撰写 → 评审自查。处理 status/scheme/outline/section/delta/verify/done/error。
+export async function streamGrant(
+  inputs: Record<string, unknown>,
+  h: GrantHandlers,
+): Promise<void> {
+  let resp: Response;
+  try {
+    resp = await fetch(apiUrl("/api/grant"), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ module: "grant", inputs }),
+      signal: h.signal,
+    });
+  } catch (e) {
+    h.onError?.(`无法连接本地服务: ${(e as Error).message}`);
+    return;
+  }
+  if (!resp.ok || !resp.body) {
+    h.onError?.(`服务返回错误: ${resp.status}`);
+    return;
+  }
+  const reader = resp.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const { events, rest } = parseChunk(buffer);
+      buffer = rest;
+      for (const ev of events) {
+        let data: any = {};
+        try {
+          data = JSON.parse(ev.data);
+        } catch {
+          /* ignore */
+        }
+        if (ev.event === "status") h.onStatus?.(data.message ?? "");
+        else if (ev.event === "scheme") h.onScheme?.(data as GrantScheme);
+        else if (ev.event === "outline") h.onOutline?.(data.items ?? []);
+        else if (ev.event === "section") h.onSection?.(data.key ?? "", data.title ?? "");
+        else if (ev.event === "delta") h.onDelta(data.text ?? "");
+        else if (ev.event === "verify") h.onVerify?.(data as Verification);
+        else if (ev.event === "error") h.onError?.(data.message ?? ev.data);
+        else if (ev.event === "done") h.onDone?.();
+      }
+    }
+  } catch (e) {
+    if ((e as Error).name !== "AbortError") {
+      h.onError?.(`读取流出错: ${(e as Error).message}`);
+    }
+  }
+}
+
+export interface GrantReviseHandlers {
+  onStatus?: (message: string) => void;
+  onReferences?: (items: Reference[]) => void;
+  onDelta: (text: string) => void;
+  onVerify?: (v: Verification) => void;
+  onDone?: () => void;
+  onError?: (message: string) => void;
+  signal?: AbortSignal;
+}
+
+// 逐节重写: 仅按意见重写某一章节(可选先重新调研)。处理 status/references/delta/verify/done/error。
+export async function streamGrantRevise(
+  inputs: Record<string, unknown>,
+  h: GrantReviseHandlers,
+): Promise<void> {
+  let resp: Response;
+  try {
+    resp = await fetch(apiUrl("/api/grant/revise"), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ module: "grant", inputs }),
+      signal: h.signal,
+    });
+  } catch (e) {
+    h.onError?.(`无法连接本地服务: ${(e as Error).message}`);
+    return;
+  }
+  if (!resp.ok || !resp.body) {
+    h.onError?.(`服务返回错误: ${resp.status}`);
+    return;
+  }
+  const reader = resp.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const { events, rest } = parseChunk(buffer);
+      buffer = rest;
+      for (const ev of events) {
+        let data: any = {};
+        try {
+          data = JSON.parse(ev.data);
+        } catch {
+          /* ignore */
+        }
+        if (ev.event === "status") h.onStatus?.(data.message ?? "");
+        else if (ev.event === "references") h.onReferences?.(data.items ?? []);
+        else if (ev.event === "delta") h.onDelta(data.text ?? "");
+        else if (ev.event === "verify") h.onVerify?.(data as Verification);
+        else if (ev.event === "error") h.onError?.(data.message ?? ev.data);
+        else if (ev.event === "done") h.onDone?.();
+      }
+    }
+  } catch (e) {
+    if ((e as Error).name !== "AbortError") {
+      h.onError?.(`读取流出错: ${(e as Error).message}`);
+    }
+  }
+}
+
 export interface ImradHandlers {
   onStatus?: (message: string) => void;
   onDelta: (text: string) => void;
@@ -659,4 +838,115 @@ export function runModule(
   handlers: StreamHandlers,
 ): Promise<void> {
   return streamPost(apiUrl("/api/run"), { module, inputs }, handlers);
+}
+
+// ── 去 AI 味 ─────────────────────────────────────────────────────────
+// 两步: ① scanAiFlavor 启发式扫描(不调 LLM)标出 AI 味较重的句子;
+//       ② streamDeai 逐块流式改写(仅改标记的段落, 可随时 abort 中断)。
+export interface DeaiSpan {
+  block: number;       // 所在块的全局索引
+  sentence: string;    // 命中的句子原文
+  score: number;       // AI 味打分
+  reasons: string[];   // 命中原因标签(可读)
+}
+
+export interface DeaiScanResult {
+  spans: DeaiSpan[];
+  flagged_blocks: number[]; // 去重、文档顺序; 供改写按块处理
+  stats: { blocks: number; prose_blocks: number; sentences: number; flagged: number };
+}
+
+const _emptyScan: DeaiScanResult = {
+  spans: [], flagged_blocks: [],
+  stats: { blocks: 0, prose_blocks: 0, sentences: 0, flagged: 0 },
+};
+
+// 扫描(非流式)。任何失败都返回空结果(放行不阻塞), 与后端约定一致。
+export async function scanAiFlavor(text: string, signal?: AbortSignal): Promise<DeaiScanResult> {
+  try {
+    const resp = await fetch(apiUrl("/api/deai/scan"), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ text }),
+      signal,
+    });
+    if (!resp.ok) return _emptyScan;
+    const data = await resp.json();
+    return {
+      spans: Array.isArray(data.spans) ? data.spans : [],
+      flagged_blocks: Array.isArray(data.flagged_blocks) ? data.flagged_blocks : [],
+      stats: data.stats ?? _emptyScan.stats,
+    };
+  } catch {
+    return _emptyScan;
+  }
+}
+
+// 改写第二步: 一个待改写块(start/end 为其在原文中的字符区间)。
+export interface DeaiSegmentInfo {
+  block: number;
+  start: number;
+  end: number;
+  original: string;
+}
+
+export interface DeaiHandlers {
+  onSegment: (seg: DeaiSegmentInfo) => void;                          // 开始改写某块
+  onDelta: (block: number, text: string) => void;                    // 该块增量
+  onSegmentDone: (block: number, rewritten: string, citationWarn: boolean) => void; // 该块完成
+  onDone?: () => void;
+  onError?: (message: string) => void;
+  signal?: AbortSignal;
+}
+
+// 逐块流式改写。处理 segment/delta/segment_done/done/error。abort 后静默返回(由调用方转 review)。
+export async function streamDeai(
+  text: string,
+  blocks: number[],
+  style: string,
+  h: DeaiHandlers,
+): Promise<void> {
+  let resp: Response;
+  try {
+    resp = await fetch(apiUrl("/api/deai/rewrite"), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ text, blocks, style }),
+      signal: h.signal,
+    });
+  } catch (e) {
+    h.onError?.(`无法连接本地服务: ${(e as Error).message}`);
+    return;
+  }
+  if (!resp.ok || !resp.body) {
+    h.onError?.(`服务返回错误: ${resp.status}`);
+    return;
+  }
+  const reader = resp.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const { events, rest } = parseChunk(buffer);
+      buffer = rest;
+      for (const ev of events) {
+        let data: any = {};
+        try { data = JSON.parse(ev.data); } catch { /* ignore */ }
+        if (ev.event === "segment")
+          h.onSegment({ block: data.block, start: data.start, end: data.end, original: data.original ?? "" });
+        else if (ev.event === "delta") h.onDelta(data.block, data.text ?? "");
+        else if (ev.event === "segment_done")
+          h.onSegmentDone(data.block, data.rewritten ?? "", !!data.citation_warn);
+        else if (ev.event === "error") h.onError?.(data.message ?? ev.data);
+        else if (ev.event === "done") h.onDone?.();
+      }
+    }
+  } catch (e) {
+    if ((e as Error).name !== "AbortError") {
+      h.onError?.(`读取流出错: ${(e as Error).message}`);
+    }
+  }
 }

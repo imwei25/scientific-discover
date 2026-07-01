@@ -321,6 +321,7 @@ async def search_literature(
     cache_key = (
         "lit", tuple(queries), per_query, cap, tuple(enabled),
         f["year_from"], tuple(f["study_types"]), want_oa,
+        f["min_quartile"], f["min_impact"], f["keep_unknown"],
     )
     cached = searchcache.get(cache_key)
     if cached is not None:
@@ -352,12 +353,20 @@ async def search_literature(
         except Exception:  # noqa: BLE001
             pass
         annotate_quartile(merged)  # 本地查表(Scimago 医学分区), 同步且零网络
+    # 质量预筛(喂给 AI 前): 富集分区/影响力之后才能判定; 命中太少自动放宽。
+    q_dropped, q_relaxed = 0, False
+    if not all_fail:
+        merged, q_dropped, q_relaxed = searchfilters.apply_quality_filter(merged, f)
     net_errs = sum(r["network_errors"] for r in ordered)
     out = {
         "papers": merged,
         # 上游用 network_errors >= len(queries) 判断网络故障; 只要任一源能通就不算网络全败。
         "network_errors": net_errs if all_fail else 0,
         "queries_tried": list(queries),
+        "quality": {
+            "active": searchfilters.quality_active(f),
+            "dropped": q_dropped, "relaxed": q_relaxed, "kept": len(merged),
+        },
     }
     if not all_fail:  # 不缓存"全失败"(可能只是一次偶发网络故障)
         searchcache.put(cache_key, out)

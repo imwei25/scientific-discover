@@ -2,6 +2,27 @@
 
 > 每完成一个改进方向追加一条。最新在最上。
 
+## 2026-07-01 — 去 AI 味：全 Canvas「先扫描标记 → 逐段流式改写 → 逐段采纳 → 一步撤回」
+- **需求**：给所有重写作的 Canvas 加「去 AI 味」——先筛选 AI 味重的句子，再用科研人风格流式改写，可随时中断，采纳后可撤回（撤销由另一 session 已交付=编辑器内 10 步 TipTap，够不到只读 Canvas 的整篇替换，故本功能自带一步撤回）。
+- **调研结论**：网上「去 AI 味」多为自媒体写法（口语化/玩梗/逻辑跳跃/标点故障），科研写作要避开；可吸纳的是词表黑名单、打散句长(burstiness)、删过渡词堆砌、去三元排比、模糊→具体、个人风格档案。**不做「对抗 AIGC 检测」叙事**（不可靠且伦理敏感），定位为「提升真实学术质量」。
+- **后端 `deai.py`(纯启发式, 不调 LLM)**：`segment_blocks`（Markdown 分块，跳过标题/表格/代码/参考文献链接列表，带**精确字符偏移** `md[start:end]===text` 供原地拼接）；`scan_ai_flavor` 中英双语套话/句首过渡词/`随着…发展`模式/空洞措辞/三元排比打分。**两条护栏防误伤真科研表达**：① `显著/significant/相关/具有统计学意义` 等合法词不入表；② 英文软词按 `max(0,个数-1)` 计分（单个不触发、成堆才标）。
+- **后端改写 `stream_rewrite`**：逐块流式(`segment→delta→segment_done→done`)，只动被标记的散文块，复用 `llm.stream_chat`+abort；system prompt 克制书面语、硬保留数据/引用/公式/结构、禁口语化。**引用护栏** `_citation_keys`：改写前后 `[1]/[3,4]/[@key]/URL` 集合变化即 `citation_warn=true`，前端默认不采纳该段。
+- **端点**：`POST /api/deai/scan`(非流式，异常放行) + `POST /api/deai/rewrite`(SSE)。
+- **前端 `DeaiPanel.tsx`(自包含组件)**：触发按钮 + 模态（扫描汇总/命中列表 → 改前改后对照卡逐段采纳 → 停止/放弃 → 采纳原地写回）。采纳/撤回走唯一 `onApply` 路径；**自带一步「↩ 撤回去AI味」**，重新生成时自动失效。`sse.ts` 加 `scanAiFlavor`/`streamDeai`。
+- **一处集成覆盖全部**：塞进 `EditableMarkdown` → 覆盖 找选题/实验规划/SAP/DMP/知情同意/回复审稿/IMRaD/数据分析；Grant 正文由 `fullDoc(sections)` 拼成，单独接入并按 `## ` 切回 sections 写回（去AI味不动标题，round-trip 安全）。
+- **测试**：后端 `test_deai.py` **13 passed**（分块偏移精确、引用集合、改写事件序列、引用告警，均用桩函数不调真实 LLM）；前端 `npm run build` 通过；**e2e 全套 69 passed**（新增「扫描→流式改写→采纳→撤回」「无命中提示」2 例）。
+- **commit**：见本次提交
+
+## 2026-06-30 — 找选题：文献质量「检索时预筛」(分区/影响力) + 「?」分区说明 + 修旧失效测试
+- **需求澄清**：原本分区/影响力筛选只在结果出来后于「文献列表」客户端筛选(post)；用户要的是**检索时就预筛**，让 AI 写综述/找选题时不过多倚重低质量文献，**且命中太少时自动放宽**。
+- **关键发现(已有基建)**：`scimago.py`(本地 SJR 分区表，仅医学子集，按 ISSN) + `impactfactor.py`(OpenAlex 近2年篇均被引代理) 早已在 `search_literature` 富集 `journal_quartile`/`journal_impact`；缺的是把门槛接进检索管线。
+- **后端**：`searchfilters.normalize` 增 `min_quartile/min_impact/keep_unknown`；新增 `apply_quality_filter`(仅剔除「已知低于门槛」，未知按 keep_unknown 保留=默认保留不误杀；通过数 <8 自动放宽 relaxed=True)。`literature.py` 在富集后调用、纳入缓存键、返回 `quality` 信息。`research.py` 深度/快速流在放宽时发 status 提示。
+- **前端**：把分区/影响力/保留未知三个控件从「文献列表工具条」**移进「⚙ 高级检索设置 → 文献质量」**，随 `filters` 传后端(检索时生效)，**默认不筛选**；列表工具条只留排序。新增 `quartile` 帮助条目(HelpButton「?」)，讲清用的是 SJR 分区(非 JCR/非中科院)、医学子集、未知保留、太少放宽。删除已无用的客户端 `filterRefs/passesMetric/hasMetric` 与 `impactKeepN`。
+- **顺手修**：`找选题:被引徽标` e2e 旧测试因 2afa31b「折叠高级设置」后过滤器进了折叠区而失效——测试改为先展开高级设置再断言(并加 filter-quartile 可见断言)。
+- **测试**：后端 22 passed(新增 `test_quality_filter` + 扩 `test_normalize/test_label`)；前端 build 通过；**e2e 全套 64 passed(0 失败，套件恢复全绿)**。
+- **过程说明**：经 brainstorming 厘清需求+定标准(SJR/未知保留/自动放宽)+用户批准设计后直接实现(沿用本项目 implement→验收 的既有节奏，未单独落 spec 文档)。
+- **commit**：见本次提交
+
 ## 2026-06-30 — 期刊排版重构（P0+P1+P2+P3，调研+原型+落地）：修参考文献中英混排真 bug + Word 投稿稿版式 + 投稿就绪检查 + LaTeX/Overleaf 出口
 - **背景/调研**：派多路 agent 联网核查 Nature/IEEE/PLOS/GB-T7714/IMRaD 真实投稿要求，再用 backend/.venv 实测，发现旧方案三处问题：① GB/T 7714 在 citeproc-py 下**能渲染但中英混排出洋相**——英文文献错用「等」而非「et al」、中文名被插空格（实测确认非静默回退）；② python-docx 从零拼 docx 无版式；③ 无 LaTeX 出口。又做 3 路**动手原型**确认：桌面打包约束下三个修法都**零新二进制、零体积**。
 - **P0 参考文献（citations.py）**：方案 C 纯 Python 后处理——CJK 作者在 CSL-JSON 输入层合并 family+given（渲染即无空格，不碰标题）；et-al「等」→「et al」严格按条目 `language` 门控只改英文条目。实测中英混排 + 复姓「欧阳修」+ 标题内合法「等」(脑卒中等急性病) 全部正确。解析提示词加 `language` 字段（CJK 自动探测兜底）。

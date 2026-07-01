@@ -1,7 +1,7 @@
 import { useEffect, useState, type ReactNode } from "react";
 import {
   Lightbulb, Map, ClipboardList, BarChart3, FileText,
-  Target, FileType, CheckSquare, MessageSquareReply, ScrollText,
+  Target, FileType, CheckSquare, MessageSquareReply, ScrollText, FileSignature,
 } from "lucide-react";
 import { apiUrl } from "./lib/api";
 import { writePersisted, usePersistentState } from "./lib/usePersistentState";
@@ -11,6 +11,7 @@ import PlanModule from "./modules/PlanModule";
 import EthicsModule from "./modules/EthicsModule";
 import AnalyzeModule from "./modules/AnalyzeModule";
 import ImradModule from "./modules/ImradModule";
+import GrantModule from "./modules/GrantModule";
 import JournalMatchModule from "./modules/JournalMatchModule";
 import FormatModule from "./modules/FormatModule";
 import ChecklistModule from "./modules/ChecklistModule";
@@ -26,9 +27,9 @@ import { CanvasProvider } from "./components/Canvas";
 import { showToast } from "./lib/toast";
 import { useProjects } from "./lib/projects";
 
-export type ModuleId = "home" | "idea" | "plan" | "ethics" | "analyze" | "imrad" | "journal" | "format" | "checklist" | "rebuttal" | "history";
+export type ModuleId = "home" | "idea" | "grant" | "plan" | "ethics" | "analyze" | "imrad" | "journal" | "format" | "checklist" | "rebuttal" | "history";
 // 产出文稿的阶段: 进入这些模块时, 屏幕一分为二, 右半屏固定为「画布」展示最终产出。
-const STAGE_CANVAS = new Set<ModuleId>(["idea", "plan", "ethics", "analyze", "imrad", "rebuttal"]);
+const STAGE_CANVAS = new Set<ModuleId>(["idea", "grant", "plan", "ethics", "analyze", "imrad", "rebuttal"]);
 // 跨模块传递: 把数据写入目标模块的持久化字段, 再切换过去。
 export type Goto = (target: ModuleId, patch?: Record<string, unknown>) => void;
 
@@ -36,6 +37,7 @@ export type Goto = (target: ModuleId, patch?: Record<string, unknown>) => void;
 const ICON_PROPS = { size: 18, strokeWidth: 1.75 } as const;
 const NAV: { id: ModuleId; icon: ReactNode; title: string; desc: string }[] = [
   { id: "idea",     icon: <Lightbulb {...ICON_PROPS} />,           title: "找选题",       desc: "发现研究方向与创新点" },
+  { id: "grant",    icon: <FileSignature {...ICON_PROPS} />,       title: "写标书",       desc: "把选题写成中文基金申请书初稿" },
   { id: "plan",     icon: <Map {...ICON_PROPS} />,                 title: "实验规划",     desc: "把研究想法变成可执行方案 + 样本量" },
   { id: "ethics",   icon: <ClipboardList {...ICON_PROPS} />,       title: "伦理材料",     desc: "知情同意/方案/CRF" },
   { id: "analyze",  icon: <BarChart3 {...ICON_PROPS} />,           title: "数据分析与写作", desc: "上传数据自动分析 + 出图（数字本地算）" },
@@ -293,6 +295,7 @@ export default function App() {
         {/* 折叠态指示条：24px 内的 ticks，用 CSS 在 expanded 下隐藏 */}
         <div className="rail-ticks" aria-hidden="true">
           <span className={`rail-tick ${active === "idea" ? "active" : ""}`} />
+          <span className={`rail-tick ${active === "grant" ? "active" : ""}`} />
           <span className={`rail-tick ${active === "plan" ? "active" : ""}`} />
           <span className={`rail-tick ${active === "ethics" ? "active" : ""}`} />
           <span className={`rail-tick ${active === "analyze" ? "active" : ""}`} />
@@ -360,6 +363,7 @@ export default function App() {
         <div className="page" key={`${currentProject?.id ?? "boot"}::${active}`}>
           {active === "home" && <Home onPick={setActive} />}
           {active === "idea" && <IdeaModule goto={goto} />}
+          {active === "grant" && <GrantModule />}
           {active === "plan" && <PlanModule />}
           {active === "ethics" && <EthicsModule />}
           {active === "analyze" && <AnalyzeModule goto={goto} />}
