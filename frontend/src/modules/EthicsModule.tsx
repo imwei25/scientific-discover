@@ -126,19 +126,23 @@ const REQUIRED: Record<TemplateId, string[]> = {
 // ── 从实验规划字段尝试自动填充 ──────────────────────────────────────
 // plan 模块持久化字段: plan:idea / plan:field / plan:resources / plan:result
 // 这里做尽力匹配, 不强求完美; 没匹配到的留空让用户填。
-function importFromPlan(template: TemplateId, current: Record<string, string>): Record<string, string> {
+function importFromPlan(
+  template: TemplateId,
+  current: Record<string, string>,
+): { fields: Record<string, string>; planFilled: number } {
   const idea = readPersisted<string>("plan:idea", "");
   const field = readPersisted<string>("plan:field", "");
   const resources = readPersisted<string>("plan:resources", "");
   const planResult = readPersisted<string>("plan:result", "");
 
   const next: Record<string, string> = { ...current };
-  // 只填空字段, 不覆盖用户已填的
+  // 只填空字段, 不覆盖用户已填的; 统计「真正来自实验规划内容」的填充数
+  let planFilled = 0;
   const fill = (key: string, value: string) => {
-    if (value && !next[key]?.trim()) next[key] = value;
+    if (value && !next[key]?.trim()) { next[key] = value; planFilled++; }
   };
 
-  // 通用映射
+  // 通用映射（均来自 plan 的真实内容）
   fill("研究名称", idea);
   fill("研究目的", idea);
   fill("研究背景", field ? `研究领域：${field}\n\n${planResult.slice(0, 400)}` : planResult.slice(0, 400));
@@ -153,20 +157,24 @@ function importFromPlan(template: TemplateId, current: Record<string, string>): 
   fill("研究时间", extractSection(planResult, ["时间", "里程碑"]));
   if (resources) fill("研究背景", resources);
 
-  // 提示性默认值
-  fill("自愿原则", "您参加本研究完全出于自愿，可随时退出且不影响您接受其他常规医疗服务。");
-  fill("隐私保护", "您的个人信息将被严格保密，仅授权研究人员可访问；数据将去标识化后用于研究分析。");
-
-  // 当前日期
-  const today = new Date();
-  const ymd = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
-  fill("日期", ymd);
+  // 仅当确有 plan 内容被导入时, 才补通用样板默认（否则保持「未找到可导入内容」的诚实反馈,
+  // 也避免 plan 为空却因样板默认而虚报「已导入 N 项」）。样板默认不计入 planFilled。
+  if (planFilled > 0) {
+    const fillDefault = (key: string, value: string) => {
+      if (value && !next[key]?.trim()) next[key] = value;
+    };
+    fillDefault("自愿原则", "您参加本研究完全出于自愿，可随时退出且不影响您接受其他常规医疗服务。");
+    fillDefault("隐私保护", "您的个人信息将被严格保密，仅授权研究人员可访问；数据将去标识化后用于研究分析。");
+    const today = new Date();
+    const ymd = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
+    fillDefault("日期", ymd);
+  }
 
   // 仅返回本模板需要的字段
   const def = TEMPLATES.find((t) => t.id === template)!;
   const result: Record<string, string> = {};
   for (const f of def.fields) result[f.key] = next[f.key] ?? "";
-  return result;
+  return { fields: result, planFilled };
 }
 
 // 极简段落抽取: 在长文里找包含关键词的段落首句, 用作初始建议
@@ -229,6 +237,7 @@ function EthicsEditor({ template }: { template: TemplateDef }) {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
   const [msg, setMsg] = useState(""); // 中性反馈（导入结果等），区别于红色 err
+  const [copied, setCopied] = useState(false); // 复制预览的短暂反馈
   const lastSavedRef = useRef("");
 
   const requiredKeys = REQUIRED[template.id];
@@ -240,17 +249,12 @@ function EthicsEditor({ template }: { template: TemplateDef }) {
     setFields((prev) => ({ ...prev, [key]: value }));
   };
 
-  const countFilled = (src: Record<string, string>) =>
-    template.fields.filter((f) => (src[f.key] || "").trim()).length;
-
   const doImport = () => {
-    const before = countFilled(fields);
-    const next = importFromPlan(template.id, fields);
+    const { fields: next, planFilled } = importFromPlan(template.id, fields);
     setFields(next);
-    const added = countFilled(next) - before;
     setMsg(
-      added > 0
-        ? `已从「实验规划」导入 ${added} 项`
+      planFilled > 0
+        ? `已从「实验规划」导入 ${planFilled} 项`
         : "未找到可导入内容——请先在「实验规划」里填写或生成方案，再回来导入"
     );
     window.setTimeout(() => setMsg(""), 5000);
@@ -278,9 +282,9 @@ function EthicsEditor({ template }: { template: TemplateDef }) {
         body: JSON.stringify({ template: template.id, fields }),
       });
       if (!resp.ok) {
-        // 尝试读取错误正文
+        // 后端错误正文是 text/plain（如「生成失败: 某字段…」），直接读文本, 别当 JSON 吞掉
         let detail = "";
-        try { detail = (await resp.json()).detail || ""; } catch { /* 忽略 */ }
+        try { detail = (await resp.text()).trim(); } catch { /* 忽略 */ }
         throw new Error(`服务返回 ${resp.status}${detail ? ` · ${detail}` : ""}`);
       }
       const blob = await resp.blob();
@@ -357,7 +361,27 @@ function EthicsEditor({ template }: { template: TemplateDef }) {
 
         <CanvasSlot>
           <div className="ethics-preview" data-testid="ethics-preview">
-            <div className="ethics-preview-head">实时预览（纯文本，仅供检查；Word 版样式由后端模板决定）</div>
+            <div className="ethics-preview-head" style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
+              <span>以下为填写内容速览，正式排版以下载的 Word 为准</span>
+              {preview && (
+                <button
+                  className="btn-ghost btn-sm"
+                  data-testid="ethics-copy-btn"
+                  title="复制预览全文到剪贴板"
+                  onClick={async () => {
+                    try {
+                      await navigator.clipboard.writeText(preview);
+                      setCopied(true);
+                      window.setTimeout(() => setCopied(false), 1800);
+                    } catch {
+                      /* 剪贴板未授权: 忽略 */
+                    }
+                  }}
+                >
+                  {copied ? "已复制 ✓" : "复制全文"}
+                </button>
+              )}
+            </div>
             <pre className="ethics-preview-body">{preview || "（填写左侧字段后这里会显示预览）"}</pre>
           </div>
         </CanvasSlot>
