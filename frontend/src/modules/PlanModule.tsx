@@ -48,12 +48,12 @@ export default function PlanModule() {
 
   const submit = () => {
     if (!idea.trim() || running) return;
-    start("plan", { idea, field, resources });
+    start("plan", { idea, field, resources: withSampleSize(resources) });
   };
 
   const genSap = () => {
     if (!idea.trim() || sap.running) return;
-    sap.start("sap", { idea, field, resources });
+    sap.start("sap", { idea, field, resources: withSampleSize(resources) });
   };
   const genDmp = () => {
     if (!idea.trim() || dmp.running) return;
@@ -88,6 +88,18 @@ export default function PlanModule() {
   const [ssChosen, setSsChosen] = usePersistentState<number>("plan:sampleSize", 0);
   const [ssVerifyMsg, setSsVerifyMsg] = useState<string>("");
   const [ssVerifyBusy, setSsVerifyBusy] = useState(false);
+
+  // 把用户在样本量计算器里确定的 N 作为事实并入生成载荷——避免"算了却没进方案"。
+  // 只在已通过"使用此参数"确定 N 时追加(ssChosen>0)。生成实验计划 / SAP 会读到它。
+  const withSampleSize = (base: string): string => {
+    if (!(ssChosen > 0)) return base;
+    const sceneLabel = ssScene === "proportion" ? "两组率比较(双比例)" : "两组均值比较(双均值, Cohen's d)";
+    const note =
+      `【已确定样本量】用户已用样本量计算器确定：每组约 ${ssChosen} 例（合计约 ${ssChosen * 2} 例）；` +
+      `设计场景=${sceneLabel}，α=${ssAlpha}，检验效能(power)=${ssPower}，效应量=${ssEffect}。` +
+      `请在方案/统计部分直接采用该样本量并据此论证可行性；若为临床试验，请提醒按预期失访率（如 10–20%）适当上浮。`;
+    return base ? base + "\n\n" + note : note;
+  };
 
   // 标准正态分位数表（常用 α/β 对应）
   const zTable: Record<string, number> = {
@@ -323,6 +335,11 @@ export default function PlanModule() {
             清空
           </button>
         </div>
+        {!idea.trim() && (
+          <p className="field-hint" data-testid="plan-gate-hint" style={{ marginTop: 6 }}>
+            开始前请先填写<strong>你的研究想法 / 课题</strong>，才能生成实验计划、SAP、DMP 或知情同意书。
+          </p>
+        )}
       </div>
 
       {docxErr && <div className="result-error" data-testid="docx-error">{docxErr}</div>}
@@ -529,7 +546,7 @@ export default function PlanModule() {
             </button>
             {ssChosen > 0 && (
               <span className="field-hint" data-testid="ss-chosen">
-                已保存到方案：N = {ssChosen}（每组）
+                ✓ 已采用 N = {ssChosen}（每组）——生成「实验计划」/「SAP」时会带入此样本量
               </span>
             )}
           </div>
