@@ -456,12 +456,13 @@ function Home({ onPick }: { onPick: (m: ModuleId) => void }) {
               onClick={() => onPick(m.id)}
               data-testid={`home-card-${m.id}`}
             >
-              <span className="home-card-num">{String(i + 1).padStart(2, "0")}</span>
+              <span className="home-card-num" aria-hidden="true">{String(i + 1).padStart(2, "0")}</span>
               <span className="home-card-icon" aria-hidden="true">{m.icon}</span>
               <span className="home-card-body">
                 <span className="home-card-title">{m.title}</span>
                 <span className="home-card-desc">{m.desc}</span>
               </span>
+              <span className="home-card-go" aria-hidden="true">→</span>
             </button>
           ))}
         </div>

@@ -641,11 +641,11 @@ body {
 .home-meta {
   font-family: var(--serif);
   font-size: 12px;
-  letter-spacing: 0.12em;
-  color: var(--faint);
+  letter-spacing: 0.06em;
+  color: var(--muted);
 }
 
-/* hero art —— 分子骨架 + 拖拽旋转 */
+/* hero art —— 手绘 3D「牛马」装饰 */
 .home-art {
   display: flex;
   align-items: center;
@@ -1893,6 +1893,10 @@ select {
   grid-template-columns: repeat(auto-fill, minmax(230px, 1fr));
   gap: 12px;
 }
+/* 9 张卡在宽屏固定 3 列(3/3/3 齐整), 避免 4 列时末行只剩一张「孤儿卡」 */
+@media (min-width: 900px) {
+  .home-cards { grid-template-columns: repeat(3, 1fr); }
+}
 .home-card {
   display: flex;
   align-items: flex-start;
@@ -1911,15 +1915,27 @@ select {
   box-shadow: 0 6px 18px rgba(14, 58, 57, 0.08);
 }
 .home-card-num {
-  font-family: Georgia, "Songti SC", serif;
+  font-family: var(--serif);
   font-size: 13px;
   color: var(--teal);
   font-weight: 700;
   min-width: 20px;
 }
 .home-card-icon {
-  font-size: 18px;
   line-height: 1.2;
+}
+/* 「→」入口提示: 让卡片一眼看出可点(不靠 hover), 悬停时更明显并右移 */
+.home-card-go {
+  align-self: center;
+  margin-left: auto;
+  color: var(--teal);
+  font-size: 15px;
+  opacity: 0.4;
+  transition: transform var(--dur-base) var(--spring), opacity var(--dur-base);
+}
+.home-card:hover .home-card-go {
+  opacity: 1;
+  transform: translateX(3px);
 }
 .home-card-body {
   display: flex;
@@ -2626,9 +2642,14 @@ select {
   animation: page-in var(--dur-slow) var(--ease-out-soft) both;
 }
 .home-card:nth-child(1) { animation-delay: 0ms; }
-.home-card:nth-child(2) { animation-delay: 60ms; }
-.home-card:nth-child(3) { animation-delay: 120ms; }
-.home-card:nth-child(4) { animation-delay: 180ms; }
+.home-card:nth-child(2) { animation-delay: 45ms; }
+.home-card:nth-child(3) { animation-delay: 90ms; }
+.home-card:nth-child(4) { animation-delay: 135ms; }
+.home-card:nth-child(5) { animation-delay: 180ms; }
+.home-card:nth-child(6) { animation-delay: 225ms; }
+.home-card:nth-child(7) { animation-delay: 270ms; }
+.home-card:nth-child(8) { animation-delay: 315ms; }
+.home-card:nth-child(9) { animation-delay: 360ms; }
 
 /* 概览区(第二个 eyebrow)淡入; hero 的 eyebrow/h1/sub 由上方 .home-text 规则负责 */
 .home-overview .eyebrow { animation: page-in 360ms var(--ease-out-soft) 0ms both; }
