@@ -114,6 +114,15 @@ const FILE_PREFIX: Record<TemplateId, string> = {
   data_use_commitment: "数据使用承诺",
 };
 
+// 各材料「必填」字段：缺失最易被伦理委员会退回的核心项。
+// 用于下载前校验 + 红星标记，帮首次送审的用户看清哪些不能空。
+const REQUIRED: Record<TemplateId, string[]> = {
+  informed_consent: ["研究名称", "研究目的", "风险", "隐私保护", "研究者", "联系方式", "机构", "日期"],
+  protocol: ["研究名称", "研究目的", "研究设计", "研究者", "机构", "日期"],
+  crf: ["研究名称", "研究者", "机构", "日期"],
+  data_use_commitment: ["研究名称", "保密措施", "研究者", "机构", "日期"],
+};
+
 // ── 从实验规划字段尝试自动填充 ──────────────────────────────────────
 // plan 模块持久化字段: plan:idea / plan:field / plan:resources / plan:result
 // 这里做尽力匹配, 不强求完美; 没匹配到的留空让用户填。
@@ -219,15 +228,32 @@ function EthicsEditor({ template }: { template: TemplateDef }) {
   const [fields, setFields] = usePersistentState<Record<string, string>>(storageKey, {});
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
+  const [msg, setMsg] = useState(""); // 中性反馈（导入结果等），区别于红色 err
   const lastSavedRef = useRef("");
+
+  const requiredKeys = REQUIRED[template.id];
+  const missingRequired = template.fields.filter(
+    (f) => requiredKeys.includes(f.key) && !(fields[f.key] || "").trim()
+  );
 
   const setField = (key: string, value: string) => {
     setFields((prev) => ({ ...prev, [key]: value }));
   };
 
+  const countFilled = (src: Record<string, string>) =>
+    template.fields.filter((f) => (src[f.key] || "").trim()).length;
+
   const doImport = () => {
+    const before = countFilled(fields);
     const next = importFromPlan(template.id, fields);
     setFields(next);
+    const added = countFilled(next) - before;
+    setMsg(
+      added > 0
+        ? `已从「实验规划」导入 ${added} 项`
+        : "未找到可导入内容——请先在「实验规划」里填写或生成方案，再回来导入"
+    );
+    window.setTimeout(() => setMsg(""), 5000);
   };
 
   const clearAll = () => {
@@ -296,11 +322,19 @@ function EthicsEditor({ template }: { template: TemplateDef }) {
           清空字段
         </button>
       </div>
+      {msg && (
+        <div className="field-hint" data-testid="ethics-import-msg" style={{ marginBottom: 8 }}>
+          {msg}
+        </div>
+      )}
 
         <div className="ethics-form form">
           {template.fields.map((f) => (
             <label className="field" key={f.key}>
-              <span className="field-label">{f.label}</span>
+              <span className="field-label">
+                {f.label}
+                {requiredKeys.includes(f.key) && <em>必填</em>}
+              </span>
               {f.rows && f.rows > 1 ? (
                 <textarea
                   data-testid={`ethics-field-${f.key}`}
@@ -331,11 +365,21 @@ function EthicsEditor({ template }: { template: TemplateDef }) {
       {err && <div className="result-error" data-testid="ethics-error">{err}</div>}
 
       <div className="form-actions">
-        <button className="btn-primary" onClick={download} disabled={busy} data-testid="ethics-download-btn">
+        <button
+          className="btn-primary"
+          onClick={download}
+          disabled={busy || missingRequired.length > 0}
+          data-testid="ethics-download-btn"
+        >
           {busy ? "生成中…" : "⬇ 下载 Word"}
         </button>
         <span className="field-hint">下载后请人工核对每一项；最终版本须经伦理委员会审核通过方可使用。</span>
       </div>
+      {missingRequired.length > 0 && (
+        <p className="field-hint" data-testid="ethics-required-hint" style={{ marginTop: 6, color: "var(--danger, #c0392b)" }}>
+          还有 {missingRequired.length} 个必填项未填，补齐后才能下载：{missingRequired.map((f) => f.label).join("、")}
+        </p>
+      )}
     </div>
   );
 }
