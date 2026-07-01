@@ -653,26 +653,6 @@ body {
   min-height: clamp(240px, 36vh, 460px);
   position: relative;
 }
-.home-art-wrap {
-  width: 100%;
-  max-width: 560px;
-  cursor: grab;
-  touch-action: none;
-  user-select: none;
-  -webkit-user-select: none;
-}
-.home-art-wrap:active { cursor: grabbing; }
-.hero-svg {
-  width: 100%;
-  height: auto;
-  display: block;
-  /* 轻微 teal 投影，让分子像浮在纸面上 */
-  filter: drop-shadow(0 6px 14px rgba(15, 155, 148, 0.12));
-}
-[data-theme="midnight"] .hero-svg {
-  filter: drop-shadow(0 6px 16px rgba(22, 217, 200, 0.18));
-}
-
 /* ── niuma-research · 首页大标题（品牌字样）─────────────────────── */
 .home-title-niuma {
   font-family: var(--mono);
@@ -2647,12 +2627,8 @@ select {
 .home-card:nth-child(3) { animation-delay: 120ms; }
 .home-card:nth-child(4) { animation-delay: 180ms; }
 
-/* eyebrow / h1 / sub 也淡入，稍微错开 */
-.home .eyebrow   { animation: page-in 360ms var(--ease-out-soft) 0ms both; }
-.home h1         { animation: page-in 420ms var(--ease-out-soft) 60ms both; }
-.home .home-sub  { animation: page-in 420ms var(--ease-out-soft) 120ms both; }
-/* 父级关掉 page-in，让 .home-card 各自跑自己的 stagger 动画（避免双层动画叠加） */
-.home .home-grid { animation: none; }
+/* 概览区(第二个 eyebrow)淡入; hero 的 eyebrow/h1/sub 由上方 .home-text 规则负责 */
+.home-overview .eyebrow { animation: page-in 360ms var(--ease-out-soft) 0ms both; }
 
 /* 滚动条 */
 .content::-webkit-scrollbar { width: 8px; }

@@ -447,7 +447,7 @@ function Home({ onPick }: { onPick: (m: ModuleId) => void }) {
       </div>
 
       <div className="home-overview">
-        <p className="eyebrow">完整工作流 · 从想法到投稿</p>
+        <p className="eyebrow">覆盖选题到投稿 · 每个工具都能单独用</p>
         <div className="home-cards">
           {NAV.filter((m) => !m.hidden).map((m, i) => (
             <button
