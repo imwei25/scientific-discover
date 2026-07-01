@@ -5,7 +5,7 @@
 import asyncio
 
 from app.clinicaltrials import _normalize
-from app.research import _parse_sources, _src_label
+from app.research import _ALL_SOURCES, _parse_sources, _src_label
 import app.literature as lit
 
 
@@ -33,11 +33,12 @@ def test_ct_normalize():
 
 
 def test_parse_sources():
-    assert _parse_sources(None) == ["pubmed", "europepmc", "openalex", "clinicaltrials"]
+    # 缺省/非法/空 → 全开(引用 _ALL_SOURCES, 避免以后加检索源时又漏改断言)
+    assert _parse_sources(None) == list(_ALL_SOURCES)
     assert _parse_sources(["pubmed", "openalex"]) == ["pubmed", "openalex"]
     assert _parse_sources("pubmed,clinicaltrials") == ["pubmed", "clinicaltrials"]
-    assert _parse_sources(["bogus"]) == ["pubmed", "europepmc", "openalex", "clinicaltrials"]  # 非法→全开
-    assert _parse_sources([]) == ["pubmed", "europepmc", "openalex", "clinicaltrials"]
+    assert _parse_sources(["bogus"]) == list(_ALL_SOURCES)  # 非法→全开
+    assert _parse_sources([]) == list(_ALL_SOURCES)
     print("ok: _parse_sources")
 
 
