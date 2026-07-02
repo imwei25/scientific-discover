@@ -280,6 +280,27 @@ async def _gap_queries(field: str, papers: list[dict]) -> list[str]:
     return []
 
 
+def _ref_to_paper(r: dict) -> dict:
+    """把前端回传/导入的 Reference 规整成下游 papers 期望的 dict(补齐所有硬取键)。"""
+    authors = r.get("authors")
+    first = r.get("first_author") or (authors[0] if isinstance(authors, list) and authors else "")
+    doi = r.get("doi") or ""
+    return {
+        "pmid": r.get("pmid") or "",
+        "doi": doi,
+        "title": r.get("title") or "",
+        "first_author": first or "",
+        "journal": r.get("journal") or "",
+        "year": str(r.get("year") or ""),
+        "url": r.get("url") or (f"https://doi.org/{doi}" if doi else ""),
+        "abstract": r.get("abstract") or "",
+        "source": r.get("source") or "import",
+        "cited_by_count": r.get("cited_by_count"),
+        "journal_impact": r.get("journal_impact"),
+        "journal_quartile": r.get("journal_quartile"),
+    }
+
+
 def _merge_papers(base: list[dict], extra: list[dict], cap: int) -> list[dict]:
     """按 pmid / doi / url 去重合并（兼容无 pmid 的预印本）。"""
     out = list(base)
@@ -732,6 +753,26 @@ async def deep_research_idea(inputs: dict) -> AsyncIterator[tuple[str, dict]]:
     sources = _parse_sources(inputs.get("sources"))
     filters = searchfilters.normalize(inputs.get("filters"))
 
+    source_mode = (inputs.get("source_mode") or "auto").strip()
+    _imported = inputs.get("references") if isinstance(inputs.get("references"), list) else []
+    imported_papers = [_ref_to_paper(r) for r in _imported]
+
+    if source_mode == "import_only":
+        if not imported_papers:
+            yield ("error", {"message": "未提供可用文献。请先从 Zotero 或文件导入文献,或改用自动检索。"})
+            return
+        papers = imported_papers[:40]
+        yield ("references", {"items": [_ref_item(p) for p in papers]})
+        yield ("status", {"message": f"已带入 {len(papers)} 篇文献,正在分析研究现状与空白…"})
+        full = ""
+        async for piece in stream_chat(_synthesis_messages(field, papers), task="research"):
+            full += piece
+            yield ("delta", {"text": piece})
+        yield ("topic_card", _build_topic_card(field, keywords, full, papers, [], []))
+        yield ("verify", _verify_citations(full, papers))
+        yield ("done", {})
+        return
+
     if settings.mock:
         full = ""
         async for ev in _mock_flow(field):
@@ -791,6 +832,10 @@ async def deep_research_idea(inputs: dict) -> AsyncIterator[tuple[str, dict]]:
 
         if not papers:
             return
+
+        if source_mode == "import_then_search" and imported_papers:
+            papers = _merge_papers(papers, imported_papers, cap=max(40, len(papers) + len(imported_papers)))
+            yield ("references", {"items": [_ref_item(p) for p in papers]})
 
         yield ("verify", _verify_citations(full, papers))
         yield ("done", {})
