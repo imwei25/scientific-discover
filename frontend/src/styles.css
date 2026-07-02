@@ -3831,3 +3831,78 @@ select {
 @media (max-width: 640px) {
   .deai-seg { grid-template-columns: 1fr; }
 }
+
+/* ── Mermaid 图表(标书技术路线图/甘特图等) ─────────────────────── */
+/* 图表在 <pre><code> 里被替换成组件: 抵消外层 pre 的代码块样式 */
+.markdown pre:has(.mermaid-figure),
+.markdown pre:has(.mermaid-fallback) {
+  background: transparent;
+  border: none;
+  padding: 0;
+}
+.mermaid-figure {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  padding: 12px;
+  overflow-x: auto;
+  text-align: center;
+}
+.mermaid-figure svg { max-width: 100%; height: auto; }
+.mermaid-fallback pre {
+  margin: 0;
+  background: var(--surface-2);
+  border: 1px dashed var(--line);
+  border-radius: var(--radius-sm);
+  padding: 12px 14px;
+  overflow-x: auto;
+}
+.mermaid-note {
+  font-size: 12px;
+  color: var(--muted);
+  margin: 4px 0;
+  font-family: var(--sans);
+}
+
+/* ── 写标书: 评审组摘要卡 + 按评审意见修订 ───────────────────── */
+.grant-review-summary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  padding: 10px 14px;
+  margin-top: 12px;
+  font-size: 13.5px;
+}
+.grant-grade-badge {
+  display: inline-block;
+  font-weight: 700;
+  padding: 2px 10px;
+  border-radius: 999px;
+  font-size: 13px;
+}
+.grant-grade-A { background: var(--ok-soft); color: var(--ok); }
+.grant-grade-B { background: var(--warn-bg); color: var(--warn-fg); }
+.grant-grade-C { background: var(--bad-soft); color: var(--bad); }
+.grant-score-chip {
+  display: inline-block;
+  background: var(--surface-2);
+  border: 1px solid var(--line-soft);
+  border-radius: 6px;
+  padding: 1px 8px;
+  font-size: 12.5px;
+  color: var(--muted);
+}
+.grant-revise-issues {
+  margin: 4px 0 6px;
+  padding: 6px 10px;
+  background: var(--warn-bg);
+  border: 1px solid var(--warn-line);
+  border-radius: 6px;
+  font-size: 12.5px;
+  color: var(--warn-fg);
+  line-height: 1.6;
+}

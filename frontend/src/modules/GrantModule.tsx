@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import {
-  streamGrant, planGrant, streamGrantRevise,
+  streamGrant, planGrant, streamGrantRevise, streamGrantReview,
   Reference, Verification, GrantScheme, GrantOutlineItem,
+  GrantReviewData, GrantReviewIssue,
 } from "../lib/sse";
 import { reportLLMError } from "../lib/errorToast";
 import { addHistory } from "../lib/history";
@@ -48,6 +49,8 @@ export default function GrantModule() {
   const [outline, setOutline] = usePersistentState<EditableOutline[]>("grant:outline", []);
   const [sections, setSections] = usePersistentState<DocSection[]>("grant:sections", []);
   const [verify, setVerify] = usePersistentState<Verification | null>("grant:verify", null);
+  // 评审组结构化结果: 摘要卡 + 「按评审意见修订」联动
+  const [review, setReview] = usePersistentState<GrantReviewData | null>("grant:review", null);
 
   const [status, setStatus] = useState("");
   const [planning, setPlanning] = useState(false);
@@ -64,6 +67,10 @@ export default function GrantModule() {
   const [reviseErr, setReviseErr] = useState<string | null>(null);
   const [reviseStatus, setReviseStatus] = useState("");
   const rctrl = useRef<AbortController | null>(null);
+  // 重新评审 / 一键修订薄弱章节
+  const [rereviewing, setRereviewing] = useState(false);
+  const [batchBusy, setBatchBusy] = useState(false);
+  const rvctrl = useRef<AbortController | null>(null);
 
   const text = fullDoc(sections);
 
@@ -93,7 +100,7 @@ export default function GrantModule() {
           "grant:title": title, "grant:idea": idea, "grant:report": report,
           "grant:background": background, "grant:type": grantType, "grant:refs": refs,
           "grant:scheme": scheme, "grant:outline": outline, "grant:sections": sections,
-          "grant:phase": "done", "grant:verify": verify,
+          "grant:phase": "done", "grant:verify": verify, "grant:review": review,
         },
       });
     }
@@ -147,6 +154,7 @@ export default function GrantModule() {
     setError(null);
     setSections([]);
     setVerify(null);
+    setReview(null);
     setReviseErr(null);
     setPhase("writing");
     setRunning(true);
@@ -178,6 +186,7 @@ export default function GrantModule() {
           next[next.length - 1] = { ...last, text: last.text + t };
           return next;
         }),
+      onReviewData: setReview,
       onVerify: setVerify,
       onError: (m) => {
         setError(m);
@@ -203,22 +212,21 @@ export default function GrantModule() {
     setPhase("done");
   };
 
-  // —— 逐节重写 —— research=true 时先按新方向重新检索文献再写。
-  const reviseSection = async (sec: DocSection, research: boolean) => {
-    const note = (reviseNote[sec.key] || "").trim();
-    if (!note || revisingKey || running) return;
+  // —— 逐节重写 —— research=true 时先按新方向重新检索文献再写。返回是否成功(供批量修订串行)。
+  const reviseSectionWith = async (sec: DocSection, note: string, research: boolean): Promise<boolean> => {
+    if (!note.trim() || running) return false;
     setReviseErr(null);
-    setReviseStatus("");
     setRevisingKey(sec.key);
     rctrl.current = new AbortController();
     const budget = outline.find((o) => o.key === sec.key)?.budget || "";
     let buf = "";
+    let ok = false;
     await streamGrantRevise(
       {
         title, report, background, grant_type: grantType, references: refs, scheme,
         section: { key: sec.key, title: sec.title, budget },
         current: sec.text,
-        note,
+        note: note.trim(),
         research,
       },
       {
@@ -237,6 +245,7 @@ export default function GrantModule() {
           reportLLMError(m);
         },
         onDone: () => {
+          ok = true;
           setReviseNote((prev) => ({ ...prev, [sec.key]: "" }));
           setRevisingKey(null);
           setReviseStatus("");
@@ -245,6 +254,97 @@ export default function GrantModule() {
       },
     );
     setRevisingKey(null);
+    return ok;
+  };
+
+  const reviseSection = (sec: DocSection, research: boolean) =>
+    reviseSectionWith(sec, (reviseNote[sec.key] || "").trim(), research);
+
+  // 评审组给某章节的问题清单(结构化 review_data 联动)。
+  const issuesFor = (key: string): GrantReviewIssue[] =>
+    review?.sections.find((s) => s.key === key)?.issues ?? [];
+
+  // 把评审问题拼成"修改意见", 喂给逐节重写。
+  const noteFromIssues = (issues: GrantReviewIssue[]) =>
+    issues
+      .map((i) => `${i.severity ? `【${i.severity}】` : ""}${i.problem}${i.advice ? `（建议：${i.advice}）` : ""}`)
+      .join("\n")
+      .slice(0, 1500);
+
+  const anyBusy = running || !!revisingKey || rereviewing || batchBusy;
+
+  // 评审认定的薄弱章节(均分 <8 且有问题), 供一键修订。
+  const weakTargets = () => {
+    if (!review) return [] as { sec: DocSection; note: string }[];
+    const out: { sec: DocSection; note: string }[] = [];
+    for (const rs of review.sections) {
+      if (!rs.issues.length) continue;
+      if (rs.score != null && rs.score >= 8) continue;
+      const sec = sections.find((s) => s.key === rs.key && s.key !== "review");
+      if (sec) out.push({ sec, note: noteFromIssues(rs.issues) });
+    }
+    return out;
+  };
+
+  // 一键按评审意见依次修订薄弱章节(串行, 出错即停)。改完建议点「重新评审」看改进。
+  const batchRevise = async () => {
+    if (anyBusy) return;
+    const targets = weakTargets();
+    if (!targets.length) return;
+    setBatchBusy(true);
+    setReviseErr(null);
+    let done = 0;
+    for (const t of targets) {
+      setReviseStatus(`按评审意见修订薄弱章节（${done + 1}/${targets.length}）：《${t.sec.title}》…`);
+      const ok = await reviseSectionWith(t.sec, t.note, false);
+      if (!ok) break;
+      done += 1;
+    }
+    setReviseStatus(done ? `已修订 ${done}/${targets.length} 个薄弱章节，建议点「重新评审」看看分数变化。` : "");
+    setBatchBusy(false);
+  };
+
+  // 重新评审: 把当前全文(不含旧评审节)交回评审组重打分。
+  const reReview = async () => {
+    if (anyBusy) return;
+    const body = sections
+      .filter((s) => s.key !== "review" && s.text.trim())
+      .map((s) => ({ key: s.key, title: s.title, text: s.text }));
+    if (!body.length) return;
+    setRereviewing(true);
+    setError(null);
+    setSections((prev) => prev.filter((s) => s.key !== "review")); // 移除旧评审, 新评审节会流式追加
+    rvctrl.current = new AbortController();
+    await streamGrantReview(
+      { title: scheme?.title || title, grant_type: grantType, scheme, references: refs, sections: body },
+      {
+        signal: rvctrl.current.signal,
+        onStatus: setStatus,
+        onSection: (key, secTitle) =>
+          setSections((prev) => [...prev, { key, title: secTitle, text: "" }]),
+        onDelta: (t) =>
+          setSections((prev) => {
+            if (!prev.length) return prev;
+            const next = [...prev];
+            const last = next[next.length - 1];
+            next[next.length - 1] = { ...last, text: last.text + t };
+            return next;
+          }),
+        onReviewData: setReview,
+        onError: (m) => {
+          setError(`重新评审失败：${m}`);
+          setStatus("");
+          setRereviewing(false);
+          reportLLMError(m);
+        },
+        onDone: () => {
+          setStatus("");
+          setRereviewing(false);
+          window.dispatchEvent(new Event("usage-updated"));
+        },
+      },
+    );
+    setRereviewing(false);
   };
 
   const reset = () => {
@@ -253,9 +353,11 @@ export default function GrantModule() {
     if (hasWork && !confirm("将清空全部输入与已生成的方案/初稿，且不可撤销。确定清空？")) return;
     if (running) stop();
     rctrl.current?.abort();
+    rvctrl.current?.abort();
     setTitle(""); setIdea(""); setReport(""); setBackground(""); setRefs([]);
-    setScheme(null); setOutline([]); setSections([]); setVerify(null);
+    setScheme(null); setOutline([]); setSections([]); setVerify(null); setReview(null);
     setReviseNote({}); setRevisingKey(null); setReviseErr(null);
+    setRereviewing(false); setBatchBusy(false);
     setStatus(""); setError(null); setPhase("idle");
   };
 
@@ -582,6 +684,17 @@ export default function GrantModule() {
                   {copied ? "已复制 ✓" : "复制全文"}
                 </button>
               )}
+              {text && !running && phase === "done" && (
+                <button
+                  className="btn-ghost"
+                  data-testid="grant-rereview-btn"
+                  onClick={reReview}
+                  disabled={anyBusy}
+                  title="把当前全文（含你手动编辑/逐节修订后的版本）交回评审组重新打分合议"
+                >
+                  {rereviewing ? "评审中…" : "🔁 重新评审"}
+                </button>
+              )}
               {text && !running && (
                 <button className="btn-ghost" data-testid="grant-export-md" onClick={exportMd}>导出 Markdown</button>
               )}
@@ -602,6 +715,30 @@ export default function GrantModule() {
           />
         </div>
       </CanvasSlot>
+
+      {/* —— 评审组摘要卡: 资助建议 + 均分 + 各节得分 + 覆盖度 —— */}
+      {review && !running && phase === "done" && (
+        <div className="grant-review-summary" data-testid="grant-review-summary">
+          <span className={`grant-grade-badge grant-grade-${review.grade}`}>
+            资助建议 {review.grade} · {review.grade_label}
+          </span>
+          {review.overall != null && (
+            <span>总体均分 <strong>{review.overall}</strong>/10（{review.personas.length} 位评审专家）</span>
+          )}
+          {review.sections.filter((s) => s.score != null).map((s) => (
+            <span key={s.key} className="grant-score-chip" title={s.title}>
+              {s.title.replace(/^[一二三四五六七八九十]+、/, "").slice(0, 8)} {s.score}
+            </span>
+          ))}
+          {review.coverage.length > 0 && (
+            <span className="grant-score-chip" title="申报要求覆盖度（详见评审节内表格）">
+              覆盖度 ✅{review.coverage.filter((c) => c.status === "covered").length}
+              {" ⚠️"}{review.coverage.filter((c) => c.status === "partial").length}
+              {" ❌"}{review.coverage.filter((c) => c.status === "missing").length}
+            </span>
+          )}
+        </div>
+      )}
 
       {verify && !running && (
         verify.unverified.length === 0 ? (
@@ -625,7 +762,21 @@ export default function GrantModule() {
           <p className="followup-tip">
             对某一章节不满意？写下修改意见，让 AI 只重写这一节（不动其它章节）。普通重写只用现有文献；
             <strong>立项依据</strong>可选「🔍 重新调研重写」——按你的新方向再检索 PubMed 等并把新文献并入后重写（更慢、更耗额度）。
+            评审组指出问题的章节还可直接「按评审意见修订」；改完点上方「🔁 重新评审」看分数变化。
           </p>
+          {review && weakTargets().length > 0 && (
+            <div className="form-actions" style={{ marginBottom: 8 }}>
+              <button
+                className="btn-secondary btn-sm"
+                data-testid="grant-batch-revise-btn"
+                onClick={batchRevise}
+                disabled={anyBusy}
+                title="把评审组打分低于 8 分且有具体问题的章节，按评审意见依次自动重写"
+              >
+                {batchBusy ? "批量修订中…" : `⚡ 一键修订评审认定的薄弱章节（${weakTargets().length} 节）`}
+              </button>
+            </div>
+          )}
           {reviseErr && <div className="result-error">{reviseErr}</div>}
           {reviseStatus && (
             <div className="status-line" data-testid="grant-revise-status">
@@ -636,28 +787,50 @@ export default function GrantModule() {
             {sections.map((s) => (
               <li key={s.key} className="grant-revise-item" data-testid={`grant-revise-${s.key}`}>
                 <div className="grant-revise-title">{s.title}</div>
+                {s.key !== "review" && issuesFor(s.key).length > 0 && (
+                  <div className="grant-revise-issues" data-testid={`grant-review-issues-${s.key}`}>
+                    {issuesFor(s.key).map((it, i) => (
+                      <div key={i}>
+                        • 【{it.severity || "中"}】{it.problem}
+                        {it.advice ? `　建议：${it.advice}` : ""}
+                        {it.by ? `（${it.by}）` : ""}
+                      </div>
+                    ))}
+                  </div>
+                )}
                 <div className="grant-revise-controls">
                   <input
                     data-testid={`grant-revise-note-${s.key}`}
                     value={reviseNote[s.key] || ""}
                     onChange={(e) => setReviseNote((prev) => ({ ...prev, [s.key]: e.target.value }))}
                     placeholder="例如：补一段技术路线图说明 / 创新点更聚焦机制 / 这节再精简些"
-                    disabled={!!revisingKey}
+                    disabled={anyBusy}
                   />
                   <button
                     className="btn-ghost btn-sm"
                     data-testid={`grant-revise-btn-${s.key}`}
                     onClick={() => reviseSection(s, false)}
-                    disabled={!!revisingKey || !(reviseNote[s.key] || "").trim()}
+                    disabled={anyBusy || !(reviseNote[s.key] || "").trim()}
                   >
                     {revisingKey === s.key ? "重写中…" : "重写本节"}
                   </button>
+                  {s.key !== "review" && issuesFor(s.key).length > 0 && (
+                    <button
+                      className="btn-secondary btn-sm"
+                      data-testid={`grant-revise-by-review-btn-${s.key}`}
+                      onClick={() => reviseSectionWith(s, noteFromIssues(issuesFor(s.key)), false)}
+                      disabled={anyBusy}
+                      title="把评审组对本节的问题与建议作为修改意见，重写本节"
+                    >
+                      按评审意见修订
+                    </button>
+                  )}
                   {s.key === "rationale" && (
                     <button
                       className="btn-secondary btn-sm"
                       data-testid={`grant-research-btn-${s.key}`}
                       onClick={() => reviseSection(s, true)}
-                      disabled={!!revisingKey || !(reviseNote[s.key] || "").trim()}
+                      disabled={anyBusy || !(reviseNote[s.key] || "").trim()}
                       title="按你的修改意见作为新方向，重新检索文献后再写"
                     >
                       🔍 重新调研重写

@@ -211,7 +211,9 @@ async def _stream_anthropic(cfg: ProviderConfig, messages: list[dict], **kwargs)
     payload = {
         "model": cfg.model,
         "messages": convo,
-        "max_tokens": kwargs.pop("max_tokens", 4096),
+        # Anthropic 协议要求必须带 max_tokens; 给一个宽松上限, 避免长结论/长代码被拦腰截断
+        # (输出是流式的, 用户可随时点「停止」中断, 无需靠小上限来控长度)。
+        "max_tokens": kwargs.pop("max_tokens", 16384),
         "stream": True,
         **kwargs,
     }

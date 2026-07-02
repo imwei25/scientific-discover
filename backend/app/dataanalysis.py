@@ -384,6 +384,39 @@ def _fix_code_messages(profile: str, question: str, code: str, error: str, fresh
     return [{"role": "system", "content": system}, {"role": "user", "content": user}]
 
 
+def _refine_code_messages(
+    profile: str, question: str, current_code: str, prev_summary: str, requirement: str,
+) -> list[dict]:
+    """对话式改代码: 在**已跑通的现有代码**上按用户新需求做最小改动, 而不是从头重写。
+
+    设计要点(与用户约定): 只带三样进上下文——当前代码 + 上一轮结论摘要 + 新需求——
+    不缓存完整对话历史, 因此 token 不随轮数增长; 数据仍以 df 形式实际执行(画像由真实 df 生成,
+    保证列名可靠)。
+    """
+    system = (
+        "你是资深的医学/生物医学数据分析专家。用户已经有一份**能正常运行**的分析代码，现在提出新的修改需求。"
+        "请在**保留原有正确逻辑与三大透明化区块(【方法选择】【假设检查】【数据质量】)**的前提下，"
+        "针对新需求做**最小必要修改**——新需求可能是换图型(如柱状图改箱线/小提琴)、改配色、加显著性标注、"
+        "新增某项分析(如亚组/相关/回归)、更换分析变量或分组等。不要推倒重来，除非新需求确实要求全新分析。\n"
+        + _LIBS_NOTE + "\n"
+        "统计与作图仍须规范：需要检验时先查前提(正态/方差齐性)并据此在参数/非参数间选择；"
+        "除 p 值外给出效应量与 95% CI，p 给精确值；多组多次比较做多重校正；"
+        "每张图有信息明确的标题、带单位的轴标签、必要时图例，组间比较图在显著处标注显著性；"
+        "只使用已加载的 df，列名用【数据画像】中真实存在的列名，不要臆造。\n"
+        "**必须输出一个完整、可独立运行的 Python 代码块**(把改动整合进完整脚本，不要只给 diff 片段、"
+        "不要额外解释)。"
+    )
+    parts = [
+        f"【数据画像】\n{profile}",
+        f"【原始研究用途】\n{question or '（未填写）'}",
+        f"【当前分析代码（已跑通，请在此基础上改）】\n```python\n{current_code}\n```",
+    ]
+    if prev_summary:
+        parts.append(f"【上一轮分析结论摘要（供理解语境，数字以本轮真实执行为准）】\n{prev_summary}")
+    parts.append(f"【本轮新需求】\n{requirement}")
+    return [{"role": "system", "content": system}, {"role": "user", "content": "\n\n".join(parts)}]
+
+
 def _clip_output(text: str, head: int = 9000, tail: int = 3000) -> str:
     """结论只喂真实输出; 过长时保留头尾(尾部常含主分析结果/p值), 避免整段截断丢数字。"""
     if len(text) <= head + tail:
@@ -442,6 +475,11 @@ plt.rcParams.update({
     "axes.grid": True,
     "grid.alpha": 0.3,
     "text.usetex": False,
+    # 投稿刚需(借鉴 nature-figure): 矢量导出时文字保留为可编辑文本对象, 而非曲线路径,
+    # 这样期刊排版/Illustrator/Inkscape 里能选中、搜索、微调标签。matplotlib 默认
+    # svg.fonttype='path' 会把每个字形转成 bezier 路径 -> 文字不可编辑, 投稿常被要求返修。
+    "svg.fonttype": "none",   # SVG 文字保留为 <text> 节点
+    "pdf.fonttype": 42,       # PDF 内嵌 TrueType, 文字可编辑可搜索
 })
 
 # 图表导出格式与期刊配色(由命令行传入)
@@ -624,11 +662,12 @@ async def analyze_data(
             routing = ""
 
         yield ("status", {"message": "正在理解数据并生成分析代码…"})
-        # 4096: 提示词要求三大透明区块+前提检验+效应量/CI+出版级图, 认真写完轻松超 1500 token;
-        # 实测 1500 会系统性拦腰截断 -> 闭围栏丢失 -> SyntaxError 死循环。
+        # 8192: 提示词要求三大透明区块+前提检验+效应量/CI+出版级图, 认真写完轻松超 1500 token;
+        # 实测 1500 会系统性拦腰截断 -> 闭围栏丢失 -> SyntaxError 死循环; 放宽到 8192 留足余量。
+        # (代码由 _complete 整体接收, 用户点「停止」会取消整个 SSE 任务, 故不靠小上限控长度。)
         code = _extract_code(await _complete(
             _gen_code_messages(profile, question, explore=explore_out, routing=routing),
-            max_tokens=4096,
+            max_tokens=8192,
         ))
 
         yield ("code", {"code": code})
@@ -651,7 +690,7 @@ async def analyze_data(
             code = _extract_code(
                 await _complete(
                     _fix_code_messages(profile, question, code, run.get("error", ""), fresh=fresh),
-                    max_tokens=4096,
+                    max_tokens=8192,
                 )
             )
             yield ("code", {"code": code})
@@ -676,3 +715,92 @@ async def analyze_data(
         yield ("done", {})
     except Exception as e:  # noqa: BLE001
         yield ("error", {"message": f"分析过程出错：{e}"})
+
+
+async def _refine_mock(requirement: str) -> AsyncIterator[tuple[str, dict]]:
+    yield ("status", {"message": "正在按新需求修改分析代码…"})
+    yield ("code", {"code": f"# [MOCK] 按新需求修改: {requirement}\nprint('已按新需求重跑，p=0.008')"})
+    yield ("status", {"message": "正在本地执行分析…"})
+    yield ("charts", {"items": []})
+    yield ("output", {"text": "已按新需求重跑，p=0.008"})
+    yield ("status", {"message": "正在总结结论…"})
+    for ch in f"## 更新结论\n[MOCK] 已按「{requirement}」调整，结果显著（p=0.008）。":
+        yield ("delta", {"text": ch})
+
+
+async def refine_analysis(
+    filename: str, content: bytes, current_code: str, prev_summary: str, requirement: str,
+    question: str = "", chart_format: str = "png", palette: str = "default",
+) -> AsyncIterator[tuple[str, dict]]:
+    """对话式续跑: 在已有分析代码上按用户新需求改一版并重新执行。
+
+    与 analyze_data 复用同一套执行/自动纠错/结论机制, 但**跳过探索轮与方法路由**
+    (现有代码已证明列名与分组存在, 无需再探索), 因此更快更省。上下文只含
+    当前代码 + 上轮结论摘要 + 新需求, 不随对话轮数膨胀。
+    """
+    if settings.mock:
+        async for ev in _refine_mock(requirement):
+            yield ev
+        yield ("done", {})
+        return
+
+    try:
+        yield ("status", {"message": "正在读取数据…"})
+        try:
+            df = _load(filename, content)
+        except Exception as e:  # noqa: BLE001
+            yield ("error", {"message": f"无法读取数据文件：{e}"})
+            return
+        if df.empty:
+            yield ("error", {"message": "数据为空。"})
+            return
+        if not (current_code or "").strip():
+            yield ("error", {"message": "缺少可修改的现有分析代码，请先完成一次分析。"})
+            return
+        profile = profile_data(df)
+
+        yield ("status", {"message": "正在按新需求修改分析代码…"})
+        code = _extract_code(await _complete(
+            _refine_code_messages(profile, question, current_code, _clip_output(prev_summary, 3000, 500), requirement),
+            max_tokens=8192,
+        ))
+        yield ("code", {"code": code})
+        yield ("status", {"message": "正在本地执行分析…"})
+        run = await asyncio.to_thread(_execute, code, df, chart_format, palette)
+
+        # 自动纠错(与首轮一致): 最多重试 3 次; 同一错误签名反复失败则换思路重写。
+        seen_sigs: list[str] = []
+        for attempt in range(3):
+            if run.get("ok"):
+                break
+            sig = _err_sig(run.get("error", ""))
+            fresh = bool(sig) and sig in seen_sigs
+            seen_sigs.append(sig)
+            hint = "（换一种思路重写）" if fresh else ""
+            yield ("status", {"message": f"执行出错，正在自动修正代码（第 {attempt + 1} 次）{hint}…"})
+            code = _extract_code(await _complete(
+                _fix_code_messages(profile, requirement, code, run.get("error", ""), fresh=fresh),
+                max_tokens=8192,
+            ))
+            yield ("code", {"code": code})
+            yield ("status", {"message": "正在重新执行…"})
+            run = await asyncio.to_thread(_execute, code, df, chart_format, palette)
+
+        if run.get("charts"):
+            yield ("charts", {"items": run["charts"]})
+        if run.get("stdout"):
+            yield ("output", {"text": run["stdout"]})
+
+        if not run.get("ok"):
+            yield ("error", {"message": "分析代码执行失败：\n" + (run.get("error") or "未知错误")})
+            return
+
+        warnings = _sanity_checks(run.get("stdout", ""))
+        yield ("status", {"message": "正在总结结论…"})
+        # 结论以"新需求"为研究用途, 让更新后的结论紧扣本轮改动。
+        conc_q = (question + "\n【本轮新需求】" + requirement) if question else requirement
+        async for piece in stream_chat(_conclusion_messages(conc_q, code, run.get("stdout", ""), warnings), task="analysis"):
+            yield ("delta", {"text": piece})
+        yield ("done", {})
+    except Exception as e:  # noqa: BLE001
+        yield ("error", {"message": f"续跑过程出错：{e}"})

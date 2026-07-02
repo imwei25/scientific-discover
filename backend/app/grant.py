@@ -22,11 +22,13 @@
   ("outline", {"items": [...]})       标书大纲(章节 + 字数预算)
   ("section", {"key": ..., "title": ...})  下面的 delta 属于该章节
   ("delta", {"text": ...})            正文流式片段(仅章节正文, 不含大标题)
+  ("review_data", {...})              评审组结构化结果(均分/等级/分节问题/覆盖度), 供前端联动逐节修订
   ("verify", {...})                   引用核验结果
   ("error", {"message": ...})
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import traceback
 from typing import AsyncIterator
@@ -66,14 +68,21 @@ _SECTION_MAP = {
         "(3) 拟解决的关键科学问题——凝练 1-2 个真正的『科学问题』(非工作任务)。",
         "约 600-900 字"),
     "scheme": ("三、研究方案与可行性分析",
-        "分: (1) 研究方法与技术路线(可用文字描述技术路线图各环节的逻辑与衔接); (2) 实验设计与关键技术; "
-        "(3) 可行性分析(从科学依据、研究基础、技术条件三方面论证)。方法学要具体、可落地。",
+        "分: (1) 研究方法与技术路线; (2) 实验设计与关键技术; "
+        "(3) 可行性分析(从科学依据、研究基础、技术条件三方面论证)。方法学要具体、可落地。"
+        "在(1)末尾用一个 ```mermaid 代码块画技术路线图: 第一行 flowchart TD; 节点写成 A[\"简短中文标签\"] 形式"
+        "(标签一律用双引号包住, 内不含引号/括号), 用 --> 连接、可用 -->|标注| 表示分支; 共 8-14 个节点, "
+        "覆盖『科学问题→研究内容→关键方法→验证→预期产出』主线, 与正文描述一致。",
         "约 800-1100 字"),
     "innovation": ("四、本项目的特色与创新之处",
         "分点给出 2-4 条特色与创新; 每条对照研究现状指出『新在哪、与已有工作的差异』, 避免空泛口号。",
         "约 300-500 字"),
     "plan": ("五、年度研究计划与预期研究成果",
-        "(1) 年度研究计划——按年度(如 3 年)列出阶段任务与里程碑(用 Markdown 表格或分点); "
+        "(1) 年度研究计划——按年度(如 3 年)列出阶段任务与里程碑(用 Markdown 表格或分点), 之后再用一个 "
+        "```mermaid 代码块画甘特图: 第一行 gantt, 第二行 dateFormat YYYY-MM, 第三行 axisFormat %Y-%m; "
+        "每年一个 section(如 section 第1年), 每行任务写成 `任务名 :y1a, 2027-01, 6M`"
+        "(任务 id 用 y1a 这类简短英文且不重复, 起始年月按项目从 2027-01 开始的占位、供申请人改, 时长以 M 结尾; "
+        "任务名内不要出现冒号或逗号); "
         "(2) 预期成果——论文/专利/人才培养等, 数量与去向用 [需申请人补充] 占位, 不虚报。",
         "约 300-500 字"),
     "foundation": ("六、研究基础与工作条件",
@@ -304,6 +313,7 @@ def _revise_messages(
 
 
 def _review_messages(title: str, scheme_brief: str, full: str) -> list[dict]:
+    """单评委自查(多评委评审全部失败时的兜底)。"""
     system = (
         "你是国家自然科学基金的资深评审专家。下面是一份申请书初稿。请站在评审视角, 给出一份简短的『评审自查』, "
         "用 Markdown 输出:\n"
@@ -316,9 +326,339 @@ def _review_messages(title: str, scheme_brief: str, full: str) -> list[dict]:
     return [{"role": "system", "content": system}, {"role": "user", "content": user}]
 
 
+# ---------------------------------------------------------------------------
+# 评审组模拟评审: 多评委独立评审(JSON 打分+问题) → 确定性汇总 → 合议意见(流式)
+# 借鉴 Granted AI「独立评审+合议共识」、LXLTX 定量打分、jinyh 评审挂靠文献证据。
+# ---------------------------------------------------------------------------
+
+# 各资助子类型的评审侧重(与 _GRANT_TYPES 的"写作侧重"相对应, 注入每位评委的评审 prompt)。
+_REVIEW_FOCUS = {
+    "youth": "本子类型(青年科学基金)的评审侧重: 重点看申请人创新潜力与研究方案的匹配、科学问题是否聚焦不贪大、"
+             "前期基础是否足以支撑; 对研究体系的完整性与团队规模要求相对宽松。",
+    "general": "本子类型(面上项目)的评审侧重: 重点看科学问题的重要性与深度、研究设计的系统性、"
+               "团队积累与前期工作的连续性; 创新性与可行性并重。",
+    "regional": "本子类型(地区科学基金)的评审侧重: 兼顾科学价值与地区特色/资源优势, "
+                "重点看依托单位条件是否支撑、研究是否结合区域实际问题。",
+    "general_other": "本子类型(通用申请书)的评审侧重: 重点看研究意义、内容设置的合理性与可行性论证是否完整规范。",
+}
+
+# 评审组: key → (评委名称, 人设与关注点)。各自独立评审后由"组长"合议。
+_PERSONAS: list[tuple[str, str, str]] = [
+    ("peer", "同行领域专家",
+     "你精通本领域研究现状。重点评: 科学问题是否重要且凝练、立项依据是否扎实、创新点相对已有工作是否成立; "
+     "点评研究现状相关问题时, 尽量对照【可引用的真实文献】给出依据。"),
+    ("methods", "方法学与统计专家",
+     "你负责技术路线与研究设计。重点评: 技术路线是否完整可行、实验设计与统计考虑是否严谨、"
+     "样本量/对照/偏倚控制是否交代、关键环节有无备选方案与风险预案。"),
+    ("admin", "形式审查与申报要求专家",
+     "你负责对照申报要求清单逐项检查完整性与规范性(清单见用户消息), 并关注占位符是否留待补充、预期成果是否虚报。"),
+    ("devil", "以挑剔著称的资深评委",
+     "你的任务是找致命伤: 科学假设可能不成立之处、与已有工作的实质性重复、工作量与研究周期是否匹配、"
+     "研究基础能否支撑、论证链条的断点。宁可苛刻, 不可放过。"),
+]
+
+# 申报要求覆盖度清单(NSFC 通用): 由"形式审查"评委逐项判定 covered/partial/missing。
+_COVERAGE_ITEMS = [
+    "科学问题明确且凝练(是科学问题而非工作任务)",
+    "科学假设清晰、可检验",
+    "对照国内外研究现状, 指出了明确的研究空白",
+    "创新点具体, 说清了『新在哪、与已有工作差异』",
+    "研究内容与研究目标一一对应、聚焦不发散",
+    "技术路线完整可行, 关键环节有备选方案或风险预案",
+    "可行性从科学依据、研究基础、技术条件三方面论证",
+    "年度计划有阶段任务与里程碑, 与研究内容匹配",
+    "预期成果具体且不虚报(数量/去向留待申请人核实)",
+    "研究基础与工作条件能支撑本项目(缺失处已用占位符标明)",
+    "引用文献均为真实可溯源文献(带可点击链接)",
+    "无法推断的申请人/经费/设备信息用 [需申请人补充] 占位而非杜撰",
+]
+
+_GRADE_LABELS = {"A": "优先资助", "B": "可资助", "C": "暂不建议资助（建议修改后再申报）"}
+
+# 申报合规提醒(静态, 不走 LLM): 评审报告末尾固定追加。
+_COMPLIANCE_NOTE = """
+
+---
+
+### ⚖️ 申报合规提醒
+
+- 国家自然科学基金委已明确规范申请中的 AI 使用：**不得将生成式 AI 直接生成的内容作为申请书提交**。本产出仅为辅助初稿，请逐句人工改写、核实后再用于申报，并按依托单位要求如实说明 AI 辅助情况。
+- 引用文献的真实性与恰当性由申请人负责——请点开正文中每条文献链接逐一核对（自动引用核验结果供参考）。
+- 提交前请自查当年《项目指南》的**限项规定**、申请代码、研究期限与经费编制口径。
+- 所有 `[需申请人补充]` 与 `[待验证]` 占位处必须补齐、核实后方可提交。
+"""
+
+
+def _persona_messages(
+    pkey: str, pname: str, pfocus: str, gt_name: str, review_focus: str,
+    title: str, scheme_brief: str, sec_keys: list[tuple[str, str]], full: str, refs_ctx: str,
+) -> list[dict]:
+    key_listing = "\n".join(f"  {k} = {t}" for k, t in sec_keys)
+    coverage_field = ""
+    coverage_block = ""
+    if pkey == "admin":
+        coverage_field = (
+            ',\n  "coverage": [{"item": "原样照抄清单条目", "status": "covered|partial|missing", '
+            '"note": "一句话依据"}]  // 对【申报要求清单】逐项判定'
+        )
+        coverage_block = "\n\n【申报要求清单(逐项判定)】\n" + "\n".join(f"- {it}" for it in _COVERAGE_ITEMS)
+    system = (
+        f"你是{gt_name}评审组中的一位评审专家: {pname}。{pfocus}\n{review_focus}\n"
+        "请独立评审下面的申请书初稿, 只输出一个 JSON 对象(不要任何解释), 字段:\n"
+        "{\n"
+        '  "scores": {"<章节key>": 0到10的整数, ...},  // 逐章节打分, 章节key对照见下\n'
+        '  "overall": 0到10的整数,                      // 总体印象分\n'
+        '  "grade": "A|B|C",                            // A=优先资助, B=可资助, C=暂不建议资助\n'
+        '  "strengths": ["优点", ...],                  // 1-3 条\n'
+        '  "issues": [                                   // 3-6 条, 按严重度从高到低\n'
+        '    {"section": "<章节key>", "severity": "高|中|低",\n'
+        '     "problem": "问题描述(具体、指向稿件内容)",\n'
+        '     "advice": "一句话修改建议",\n'
+        '     "evidence": "若与研究现状有关且【可引用的真实文献】里有依据, 给 [第一作者 et al., 年份](URL); 否则留空字符串"}\n'
+        "  ]" + coverage_field + "\n"
+        "}\n"
+        f"章节key对照:\n{key_listing}\n"
+        "铁律: 只基于稿件与所给材料点评, 不编造稿件没有的内容; evidence 只能用【可引用的真实文献】中确有的链接, 不确定就留空。"
+    )
+    user = (
+        f"【项目题名】{title}\n\n【方案骨架】\n{scheme_brief or '（无）'}\n\n"
+        f"【申请书初稿(截断)】\n{full[:7000]}\n\n"
+        f"【可引用的真实文献】\n{refs_ctx or '（无）'}" + coverage_block
+    )
+    return [{"role": "system", "content": system}, {"role": "user", "content": user}]
+
+
+def _clamp_score(v) -> int | None:
+    try:
+        return max(0, min(10, int(round(float(v)))))
+    except (TypeError, ValueError):
+        return None
+
+
+async def _persona_review(
+    pkey: str, pname: str, pfocus: str, gt_name: str, review_focus: str,
+    title: str, scheme_brief: str, sec_keys: list[tuple[str, str]], full: str, refs_ctx: str,
+) -> dict | None:
+    """一位评委的独立评审; 任何失败(网络/解析)都返回 None, 不阻断其他评委。"""
+    try:
+        raw = await _complete(
+            _persona_messages(pkey, pname, pfocus, gt_name, review_focus,
+                              title, scheme_brief, sec_keys, full, refs_ctx),
+            max_tokens=2000, task="grant_review",
+        )
+    except Exception as exc:  # noqa: BLE001
+        log_swallow(f"写标书/评审组: 评委「{pname}」评审失败(跳过该评委)", exc)
+        return None
+    obj = _parse_json(raw, "{", "}")
+    if not isinstance(obj, dict):
+        return None
+    valid_keys = {k for k, _ in sec_keys}
+    scores = {}
+    if isinstance(obj.get("scores"), dict):
+        for k, v in obj["scores"].items():
+            s = _clamp_score(v)
+            if k in valid_keys and s is not None:
+                scores[k] = s
+    issues = []
+    for it in obj.get("issues") or []:
+        if not isinstance(it, dict):
+            continue
+        problem = str(it.get("problem") or "").strip()
+        if not problem:
+            continue
+        issues.append({
+            "section": str(it.get("section") or "").strip(),
+            "severity": str(it.get("severity") or "中").strip() or "中",
+            "problem": problem[:400],
+            "advice": str(it.get("advice") or "").strip()[:300],
+            "evidence": str(it.get("evidence") or "").strip()[:300],
+        })
+    coverage = []
+    for it in obj.get("coverage") or []:
+        if not isinstance(it, dict):
+            continue
+        item = str(it.get("item") or "").strip()
+        status = str(it.get("status") or "").strip().lower()
+        if item and status in {"covered", "partial", "missing"}:
+            coverage.append({"item": item[:120], "status": status,
+                             "note": str(it.get("note") or "").strip()[:200]})
+    grade = str(obj.get("grade") or "").strip().upper()
+    return {
+        "key": pkey, "persona": pname,
+        "scores": scores,
+        "overall": _clamp_score(obj.get("overall")),
+        "grade": grade if grade in ("A", "B", "C") else None,
+        "strengths": [str(s).strip()[:200] for s in (obj.get("strengths") or []) if str(s).strip()][:3],
+        "issues": issues[:6],
+        "coverage": coverage,
+    }
+
+
+def _aggregate_reviews(results: list[dict], sec_keys: list[tuple[str, str]]) -> dict:
+    """把各评委的 JSON 汇总成结构化评审数据(均分/等级/分节问题/覆盖度)。"""
+    sec_scores: dict[str, float | None] = {}
+    for k, _t in sec_keys:
+        vals = [r["scores"][k] for r in results if k in r.get("scores", {})]
+        sec_scores[k] = round(sum(vals) / len(vals), 1) if vals else None
+    overalls = [r["overall"] for r in results if r.get("overall") is not None]
+    overall = round(sum(overalls) / len(overalls), 1) if overalls else None
+    if overall is None:
+        grade = "B"
+    elif overall >= 8:
+        grade = "A"
+    elif overall >= 6:
+        grade = "B"
+    else:
+        grade = "C"
+    votes = {"A": 0, "B": 0, "C": 0}
+    for r in results:
+        if r.get("grade") in votes:
+            votes[r["grade"]] += 1
+    issues_by_sec: dict[str, list[dict]] = {}
+    for r in results:
+        for it in r.get("issues") or []:
+            k = it.get("section") or "general"
+            issues_by_sec.setdefault(k, []).append({**it, "by": r["persona"]})
+    coverage = next((r["coverage"] for r in results if r.get("coverage")), [])
+    return {
+        "personas": [r["persona"] for r in results],
+        "overall": overall,
+        "grade": grade,
+        "grade_label": _GRADE_LABELS[grade],
+        "votes": votes,
+        "scores": sec_scores,
+        "sections": [
+            {"key": k, "title": t, "score": sec_scores.get(k), "issues": issues_by_sec.get(k, [])}
+            for k, t in sec_keys
+        ],
+        "general_issues": issues_by_sec.get("general", []),
+        "coverage": coverage,
+    }
+
+
+_COVER_MARKS = {"covered": "✅", "partial": "⚠️", "missing": "❌"}
+
+
+def _score_tables_md(agg: dict, results: list[dict], sec_keys: list[tuple[str, str]]) -> str:
+    """确定性生成评分表 + 资助建议 + 覆盖度表(不走 LLM, 保证数字与 review_data 一致)。"""
+    names = [r["persona"] for r in results]
+    lines = [f"### 评审组评分（{len(results)} 位专家独立打分）", ""]
+    lines.append("| 章节 | " + " | ".join(names) + " | 均分 |")
+    lines.append("|---" * (len(names) + 2) + "|")
+    for k, t in sec_keys:
+        row = [t]
+        for r in results:
+            v = r.get("scores", {}).get(k)
+            row.append("—" if v is None else str(v))
+        avg = agg["scores"].get(k)
+        row.append("—" if avg is None else f"**{avg}**")
+        lines.append("| " + " | ".join(row) + " |")
+    row = ["**总体**"]
+    for r in results:
+        row.append("—" if r.get("overall") is None else str(r["overall"]))
+    row.append("—" if agg["overall"] is None else f"**{agg['overall']}**")
+    lines.append("| " + " | ".join(row) + " |")
+    votes = agg["votes"]
+    vote_txt = " / ".join(f"{g}×{n}" for g, n in votes.items() if n)
+    lines.append("")
+    lines.append(f"**资助建议：{agg['grade']}（{agg['grade_label']}）**" + (f"（专家评级：{vote_txt}）" if vote_txt else ""))
+    if agg.get("coverage"):
+        lines += ["", "### 申报要求覆盖度", "", "| 申报要求 | 覆盖 | 说明 |", "|---|---|---|"]
+        for c in agg["coverage"]:
+            mark = _COVER_MARKS.get(c["status"], "⚠️")
+            lines.append(f"| {c['item']} | {mark} | {c['note'] or '—'} |")
+    lines.append("")
+    return "\n".join(lines) + "\n"
+
+
+def _consensus_messages(title: str, agg: dict, results: list[dict]) -> list[dict]:
+    """合议: 组长把各评委意见合并去重成一份可操作的评审报告(流式)。"""
+    system = (
+        "你是基金评审组组长, 正在主持合议。下面给出各位评审专家的独立意见(JSON)。"
+        "请把它们综合成一份合议评审意见, 用 Markdown 输出(不要输出评分表, 评分表已单独给出):\n"
+        "### 合议意见\n一小段综合评价: 主要优点与总体判断, 结论须与给定的资助建议一致。\n"
+        "### 主要问题与修改建议\n把各专家的问题合并去重后按严重度从高到低列 4-8 条; 每条格式:\n"
+        "**［严重度·章节］** 问题描述。**修改建议：** 一句话。多位专家共同指出的, 注明(N 位专家指出); "
+        "专家意见里带文献链接(evidence)的, 原样保留该 Markdown 链接作为依据。\n"
+        "### 提交前完善清单\n用 `- [ ]` 勾选项列出提交前必须补充/核实的事项(尤其占位符与覆盖度为 partial/missing 的项)。\n"
+        "铁律: 只综合专家意见与所给事实, 不新增编造; 文献链接只能原样搬运专家意见中已有的, 不得自造。"
+    )
+    user = (
+        f"【项目题名】{title}\n\n【资助建议(已定)】{agg['grade']}（{agg['grade_label']}），总体均分 {agg['overall']}\n\n"
+        f"【各专家独立意见(JSON)】\n{json.dumps(results, ensure_ascii=False)[:9000]}"
+    )
+    return [{"role": "system", "content": system}, {"role": "user", "content": user}]
+
+
+async def _run_review(
+    title: str, gt_key: str, scheme_brief: str, written: list[dict], refs: list[dict],
+) -> AsyncIterator[tuple[str, dict]]:
+    """评审组模拟评审流程, yield: section/status/review_data/delta。
+
+    written: [{key,title,text}] 已写好的正文章节(不含评审节)。
+    """
+    gt_name, _ = _GRANT_TYPES.get(gt_key, _GRANT_TYPES["general"])
+    review_focus = _REVIEW_FOCUS.get(gt_key, _REVIEW_FOCUS["general"])
+    refs_ctx = _refs_context(refs)
+    sec_keys = [(w["key"], w["title"]) for w in written]
+    full = "\n\n".join(f"## {w['title']}\n{w['text']}" for w in written)
+
+    yield ("section", {"key": "review", "title": "评审组模拟评审"})
+    yield ("status", {"message": f"评审组 {len(_PERSONAS)} 位专家正在独立评审…"})
+
+    tasks = [
+        asyncio.create_task(_persona_review(
+            pk, pn, pf, gt_name, review_focus, title, scheme_brief, sec_keys, full, refs_ctx))
+        for pk, pn, pf in _PERSONAS
+    ]
+    results: list[dict] = []
+    done_n = 0
+    for fut in asyncio.as_completed(tasks):
+        res = await fut
+        done_n += 1
+        yield ("status", {"message": f"独立评审进行中（{done_n}/{len(_PERSONAS)} 位专家完成）…"})
+        if res:
+            results.append(res)
+    # 按评审组固定顺序排, 保证评分表列序稳定。
+    order = {pk: i for i, (pk, _n, _f) in enumerate(_PERSONAS)}
+    results.sort(key=lambda r: order.get(r["key"], 99))
+
+    if not results:
+        # 多评委全部失败: 退回单评委自查, 不阻断产出。
+        yield ("status", {"message": "评审组评审未成功，退回单视角自查…"})
+        async for piece in stream_chat(_review_messages(title, scheme_brief, full), task="grant_review"):
+            yield ("delta", {"text": piece})
+        yield ("delta", {"text": _COMPLIANCE_NOTE})
+        return
+
+    agg = _aggregate_reviews(results, sec_keys)
+    yield ("review_data", agg)
+    yield ("delta", {"text": _score_tables_md(agg, results, sec_keys)})
+
+    yield ("status", {"message": "评审组正在合议…"})
+    try:
+        async for piece in stream_chat(_consensus_messages(title, agg, results), task="grant_review"):
+            yield ("delta", {"text": piece})
+    except Exception as exc:  # noqa: BLE001
+        # 合议失败不吞掉已有产出: 评分表已给出, 直接罗列各评委原始问题兜底。
+        log_swallow("写标书/评审组: 合议生成失败, 罗列各评委问题兜底", exc)
+        lines = ["", "### 各评委主要问题（合议生成失败，原样罗列）", ""]
+        for r in results:
+            for it in r.get("issues") or []:
+                ev = f" 依据: {it['evidence']}" if it.get("evidence") else ""
+                lines.append(f"- **［{it['severity']}］**（{r['persona']}）{it['problem']}"
+                             f"{' **建议：**' + it['advice'] if it.get('advice') else ''}{ev}")
+        yield ("delta", {"text": "\n".join(lines) + "\n"})
+    yield ("delta", {"text": _COMPLIANCE_NOTE})
+
+
+def _grant_key(inputs: dict) -> str:
+    k = (inputs.get("grant_type") or "general").strip()
+    return k if k in _GRANT_TYPES else "general"
+
+
 def _grant_type(inputs: dict) -> tuple[str, str]:
-    gt_key = (inputs.get("grant_type") or "general").strip()
-    return _GRANT_TYPES.get(gt_key, _GRANT_TYPES["general"])
+    return _GRANT_TYPES[_grant_key(inputs)]
 
 
 # ---------------------------------------------------------------------------
@@ -361,15 +701,37 @@ async def plan_grant(inputs: dict) -> dict:
 # ---------------------------------------------------------------------------
 # 阶段二: 分节撰写 + 评审自查(流式)
 # ---------------------------------------------------------------------------
+def _mock_review_data(sections: list[dict]) -> dict:
+    """演示/测试用的确定性评审结构化数据。"""
+    secs = [s for s in sections if s.get("key") != "review"]
+    return {
+        "personas": ["同行领域专家", "方法学与统计专家", "形式审查与申报要求专家", "以挑剔著称的资深评委"],
+        "overall": 7.0, "grade": "B", "grade_label": _GRADE_LABELS["B"],
+        "votes": {"A": 0, "B": 3, "C": 1},
+        "scores": {s["key"]: 7.0 for s in secs},
+        "sections": [
+            {"key": s["key"], "title": s["title"], "score": 7.0,
+             "issues": [{"section": s["key"], "severity": "中",
+                         "problem": f"[MOCK] 《{s['title']}》论证还可更充分。",
+                         "advice": "[MOCK] 补充关键细节。", "evidence": "", "by": "同行领域专家"}]}
+            for s in secs[:2]
+        ],
+        "general_issues": [],
+        "coverage": [{"item": _COVERAGE_ITEMS[0], "status": "covered", "note": "[MOCK] 已覆盖"}],
+    }
+
+
 async def _mock_write(sections: list[dict]) -> AsyncIterator[tuple[str, dict]]:
     for s in sections:
         yield ("status", {"message": f"正在撰写{s['title']}…"})
         yield ("section", {"key": s["key"], "title": s["title"]})
         for ch in f"[MOCK] 本节（{s['title']}）为演示文本, 真实模式下会据选题报告与文献撰写。\n\n":
             yield ("delta", {"text": ch})
-    yield ("status", {"message": "正在做评审视角自查…"})
-    yield ("section", {"key": "review", "title": "评审自查"})
-    for ch in "## 模拟评审意见\n[MOCK] 1. 科学问题需更聚焦。【应对建议】在第二节凝练为单一核心问题。\n":
+    yield ("status", {"message": "评审组 4 位专家正在独立评审…"})
+    yield ("section", {"key": "review", "title": "评审组模拟评审"})
+    yield ("review_data", _mock_review_data(sections))
+    for ch in ("### 评审组评分（4 位专家独立打分）\n\n[MOCK] 评分表见结构化数据。\n\n"
+               "**资助建议：B（可资助）**\n\n### 合议意见\n[MOCK] 科学问题需更聚焦。**修改建议：** 在第二节凝练为单一核心问题。\n"):
         yield ("delta", {"text": ch})
     yield ("verify", {"total": 0, "verified": 0, "unverified": []})
 
@@ -437,6 +799,7 @@ async def write_grant(inputs: dict) -> AsyncIterator[tuple[str, dict]]:
 
         refs_ctx = _refs_context(refs)
         full = ""
+        written: list[dict] = []  # [{key,title,text}] 供评审组按章节打分
         n = len(sections)
         for i, s in enumerate(sections):
             yield ("status", {"message": f"正在撰写《{s['title']}》（{i + 1}/{n}）…"})
@@ -446,16 +809,19 @@ async def write_grant(inputs: dict) -> AsyncIterator[tuple[str, dict]]:
                 s["title"], s["guide"], s["budget"], gt_name, gt_hint,
                 final_title, scheme_brief, report, refs_ctx, background,
             )
+            sec_buf = ""
             async for piece in stream_chat(msgs, task="grant_write"):
+                sec_buf += piece
                 full += piece
                 yield ("delta", {"text": piece})
+            written.append({"key": s["key"], "title": s["title"], "text": sec_buf})
 
-        # 评审自查
-        yield ("status", {"message": "初稿完成, 正在做评审视角自查…"})
-        yield ("section", {"key": "review", "title": "评审自查"})
-        async for piece in stream_chat(_review_messages(final_title, scheme_brief, full), task="grant_review"):
-            full += piece
-            yield ("delta", {"text": piece})
+        # 评审组模拟评审(多评委独立评审 + 合议)
+        yield ("status", {"message": "初稿完成, 评审组开始独立评审…"})
+        async for event, data in _run_review(final_title, _grant_key(inputs), scheme_brief, written, refs):
+            if event == "delta":
+                full += data.get("text", "")
+            yield (event, data)
 
         if refs:
             yield ("verify", _verify_citations(full, refs))
@@ -536,3 +902,46 @@ async def revise_section(inputs: dict) -> AsyncIterator[tuple[str, dict]]:
     except Exception as e:  # noqa: BLE001
         print("[grant-revise] exception:\n" + traceback.format_exc(), flush=True)
         yield ("error", {"message": f"章节修改出错：{type(e).__name__}: {e}"})
+
+
+# ---------------------------------------------------------------------------
+# 独立重评(流式): 对当前全文重新跑一遍评审组(修订后回头看改进了没)
+# ---------------------------------------------------------------------------
+async def review_grant(inputs: dict) -> AsyncIterator[tuple[str, dict]]:
+    """inputs.sections = [{key,title,text}] 为正文章节(不含评审节); 产出与写作末尾的评审一致。"""
+    title = (inputs.get("title") or "").strip()
+    scheme = inputs.get("scheme") if isinstance(inputs.get("scheme"), dict) else {}
+    refs = inputs.get("references") or inputs.get("refs") or []
+    if not isinstance(refs, list):
+        refs = []
+    raw_secs = inputs.get("sections")
+    written = []
+    if isinstance(raw_secs, list):
+        for s in raw_secs:
+            if not isinstance(s, dict):
+                continue
+            text = str(s.get("text") or "").strip()
+            t = str(s.get("title") or "").strip()
+            if not text or not t or s.get("key") == "review":
+                continue
+            written.append({"key": str(s.get("key") or f"sec{len(written) + 1}"), "title": t, "text": text})
+    if not written:
+        yield ("error", {"message": "没有可评审的章节正文，请先生成或粘贴申请书内容。"})
+        return
+
+    if settings.mock:
+        yield ("section", {"key": "review", "title": "评审组模拟评审"})
+        yield ("review_data", _mock_review_data(written))
+        for ch in "[MOCK] 重新评审完成：**资助建议：B（可资助）**\n":
+            yield ("delta", {"text": ch})
+        yield ("done", {})
+        return
+
+    try:
+        scheme_brief = _scheme_brief(_norm_scheme(scheme, title)) if scheme else ""
+        async for event, data in _run_review(title or "（未命名项目）", _grant_key(inputs), scheme_brief, written, refs):
+            yield (event, data)
+        yield ("done", {})
+    except Exception as e:  # noqa: BLE001
+        print("[grant-review] exception:\n" + traceback.format_exc(), flush=True)
+        yield ("error", {"message": f"重新评审出错：{type(e).__name__}: {e}"})

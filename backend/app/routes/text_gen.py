@@ -10,7 +10,7 @@ from pydantic import BaseModel
 
 from ..config import settings
 from ..deai import scan_ai_flavor, stream_rewrite
-from ..grant import write_grant, plan_grant, revise_section
+from ..grant import write_grant, plan_grant, review_grant, revise_section
 from ..http_common import SSE_HEADERS, _sse
 from ..imrad import assemble_imrad
 from ..llm import LLMError, stream_chat
@@ -169,6 +169,16 @@ async def grant_plan_ep(req: RunRequest) -> JSONResponse:
         from ..grant import _default_outline, _norm_scheme
         title = (req.inputs.get("title") or req.inputs.get("field") or "").strip()
         return JSONResponse({"scheme": _norm_scheme({}, title), "outline": _default_outline()})
+
+
+@router.post("/api/grant/review")
+async def grant_review_ep(req: RunRequest) -> StreamingResponse:
+    """对当前申请书全文重新跑一遍评审组模拟评审(修订后回头看改进了没), 流式。"""
+    async def gen():
+        async for event, data in review_grant(req.inputs):
+            yield _sse(event, data)
+
+    return StreamingResponse(gen(), media_type="text/event-stream", headers=SSE_HEADERS)
 
 
 @router.post("/api/grant/revise")

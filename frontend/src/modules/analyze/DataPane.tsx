@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { streamAnalyze, ChartItem, PlanCard } from "../../lib/sse";
+import { streamAnalyze, streamAnalyzeRefine, ChartItem, PlanCard } from "../../lib/sse";
 import { reportLLMError } from "../../lib/errorToast";
 import { usePersistentState } from "../../lib/usePersistentState";
 import { addHistory } from "../../lib/history";
@@ -48,6 +48,7 @@ export default function DataPane({ goto }: { goto: Goto }) {
   const [captions, setCaptions] = usePersistentState<string[]>("analyze:captions", []);
   const [running, setRunning] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [refineInput, setRefineInput] = useState(""); // 「继续对话」的新需求输入(临时, 不持久化)
   const ctrl = useRef<AbortController | null>(null);
 
   // ─── 森林图 / KM / ROC 各自状态 ────────────────────────────
@@ -197,6 +198,48 @@ export default function DataPane({ goto }: { goto: Goto }) {
       onDone: () => {
         setStatus("");
         setRunning(false);
+        window.dispatchEvent(new Event("usage-updated"));
+      },
+    });
+    setRunning(false);
+  };
+
+  // 对话式续跑: 在已有分析代码上按新需求改一版并重跑。只回传 当前代码 + 上轮结论 + 新需求,
+  // 数据仍带本次文件——因此不缓存完整对话历史, 每轮 token 固定、不随轮数增长。
+  const runRefine = async () => {
+    if (!file || running) return;
+    const req = refineInput.trim();
+    if (!req || !code) return;
+    const baseCode = code; // 先抓取当前代码/结论, 再清结果区(避免被清空)
+    const baseSummary = conclusion;
+    abortedRef.current = false;
+    setStatus("");
+    setPlan([]);
+    setCharts([]);
+    setCaptions([]);
+    setOutput("");
+    setConclusion("");
+    setError(null);
+    setRunning(true);
+    ctrl.current = new AbortController();
+    await streamAnalyzeRefine(file, baseCode, req, baseSummary, question, chartFormat, palette, {
+      signal: ctrl.current.signal,
+      onStatus: setStatus,
+      onPlan: setPlan,
+      onCode: setCode,
+      onCharts: setCharts,
+      onOutput: setOutput,
+      onDelta: (t) => setConclusion((p) => p + t),
+      onError: (m) => {
+        setError(m);
+        setStatus("");
+        setRunning(false);
+        reportLLMError(m);
+      },
+      onDone: () => {
+        setStatus("");
+        setRunning(false);
+        setRefineInput("");
         window.dispatchEvent(new Event("usage-updated"));
       },
     });
@@ -478,6 +521,41 @@ export default function DataPane({ goto }: { goto: Goto }) {
         running={running}
         question={question}
       />
+
+      {/* 继续对话: 首轮分析出结果后, 可反复提新需求让 AI 在现有代码上改 */}
+      {chartType === "general" && code && (
+        <div className="refine-bar" data-testid="refine-bar" style={{ marginTop: 14 }}>
+          <label className="field" style={{ display: "block" }}>
+            继续对话 · 让 AI 按新需求修改上面的分析
+            <textarea
+              data-testid="refine-input"
+              value={refineInput}
+              onChange={(e) => setRefineInput(e.target.value)}
+              placeholder="例如：把柱状图改成箱线图并标注显著性 / 增加按性别的亚组分析 / 配色换成柳叶刀风格 / 对数变换后重跑"
+              rows={2}
+              disabled={running || !file}
+            />
+          </label>
+          <div className="form-actions">
+            <button
+              className="btn-primary"
+              onClick={runRefine}
+              disabled={!file || running || !refineInput.trim()}
+              data-testid="refine-btn"
+            >
+              {running ? "修改中…" : "按新需求修改"}
+            </button>
+            {running && (
+              <button className="btn-ghost" onClick={stop} data-testid="refine-stop-btn">停止</button>
+            )}
+          </div>
+          {!file && (
+            <p className="field-hint" data-testid="refine-need-file">
+              续跑需要原始数据；当前文件已不在，请重新上传<strong>同一份数据</strong>后再修改。
+            </p>
+          )}
+        </div>
+      )}
 
       {/* 脱敏对话框 */}
       <DeidentifyDialog

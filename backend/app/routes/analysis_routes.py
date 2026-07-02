@@ -59,6 +59,41 @@ async def analyze(
     return StreamingResponse(gen(), media_type="text/event-stream", headers=SSE_HEADERS)
 
 
+@router.post("/api/analyze/refine")
+async def analyze_refine(
+    file: UploadFile = File(...),
+    current_code: str = Form(...),
+    requirement: str = Form(...),
+    prev_summary: str = Form(""),
+    question: str = Form(""),
+    chart_format: str = Form("png"),
+    palette: str = Form("default"),
+) -> StreamingResponse:
+    """对话式续跑: 在已有分析代码上按用户新需求改一版并重新执行(SSE)。
+
+    只带 当前代码 + 上轮结论摘要 + 新需求 进上下文, 不缓存完整对话历史;
+    数据仍由本次上传的文件提供(执行代码所需)。事件与 /api/analyze 完全一致。
+    """
+    from ..dataanalysis import refine_analysis
+
+    content = await _read_capped(file)
+    filename = file.filename or "data.csv"
+
+    if content is None:
+        async def too_big():
+            yield _sse("error", {"message": "文件过大（超过 30MB），请上传更小的数据文件。"})
+        return StreamingResponse(too_big(), media_type="text/event-stream")
+
+    async def gen():
+        async for event, data in refine_analysis(
+            filename, content, current_code, prev_summary, requirement,
+            question, chart_format, palette,
+        ):
+            yield _sse(event, data)
+
+    return StreamingResponse(gen(), media_type="text/event-stream", headers=SSE_HEADERS)
+
+
 @router.post("/api/figure-captions")
 async def figure_captions(req: FigCapRequest) -> dict:
     """为数据分析的每张图生成规范图注(基于代码/输出/结论, 不编造)。"""

@@ -501,6 +501,35 @@ export async function planGrant(
   }
 }
 
+// 评审组模拟评审的结构化结果(后端 review_data 事件): 供摘要卡与「按评审意见修订」联动。
+export interface GrantReviewIssue {
+  section: string;
+  severity: string; // 高|中|低
+  problem: string;
+  advice: string;
+  evidence?: string;
+  by?: string; // 提出该问题的评委
+}
+
+export interface GrantReviewSection {
+  key: string;
+  title: string;
+  score: number | null;
+  issues: GrantReviewIssue[];
+}
+
+export interface GrantReviewData {
+  personas: string[];
+  overall: number | null;
+  grade: string; // A|B|C
+  grade_label: string;
+  votes: Record<string, number>;
+  scores: Record<string, number | null>;
+  sections: GrantReviewSection[];
+  general_issues: GrantReviewIssue[];
+  coverage: { item: string; status: string; note: string }[];
+}
+
 export interface GrantHandlers {
   onStatus?: (message: string) => void;
   onScheme?: (s: GrantScheme) => void;
@@ -508,6 +537,7 @@ export interface GrantHandlers {
   onReferences?: (items: Reference[]) => void;
   onSection?: (key: string, title: string) => void;
   onDelta: (text: string) => void;
+  onReviewData?: (d: GrantReviewData) => void;
   onVerify?: (v: Verification) => void;
   onDone?: () => void;
   onError?: (message: string) => void;
@@ -558,7 +588,72 @@ export async function streamGrant(
         else if (ev.event === "references") h.onReferences?.(data.items ?? []);
         else if (ev.event === "section") h.onSection?.(data.key ?? "", data.title ?? "");
         else if (ev.event === "delta") h.onDelta(data.text ?? "");
+        else if (ev.event === "review_data") h.onReviewData?.(data as GrantReviewData);
         else if (ev.event === "verify") h.onVerify?.(data as Verification);
+        else if (ev.event === "error") h.onError?.(data.message ?? ev.data);
+        else if (ev.event === "done") h.onDone?.();
+      }
+    }
+  } catch (e) {
+    if ((e as Error).name !== "AbortError") {
+      h.onError?.(`读取流出错: ${(e as Error).message}`);
+    }
+  }
+}
+
+export interface GrantReviewHandlers {
+  onStatus?: (message: string) => void;
+  onSection?: (key: string, title: string) => void;
+  onDelta: (text: string) => void;
+  onReviewData?: (d: GrantReviewData) => void;
+  onDone?: () => void;
+  onError?: (message: string) => void;
+  signal?: AbortSignal;
+}
+
+// 重新评审: 把当前全文交回评审组重新打分合议(修订后回头看改进了没)。
+// 处理 status/section/delta/review_data/done/error。
+export async function streamGrantReview(
+  inputs: Record<string, unknown>,
+  h: GrantReviewHandlers,
+): Promise<void> {
+  let resp: Response;
+  try {
+    resp = await fetch(apiUrl("/api/grant/review"), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ module: "grant", inputs }),
+      signal: h.signal,
+    });
+  } catch (e) {
+    h.onError?.(`无法连接本地服务: ${(e as Error).message}`);
+    return;
+  }
+  if (!resp.ok || !resp.body) {
+    h.onError?.(`服务返回错误: ${resp.status}`);
+    return;
+  }
+  const reader = resp.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const { events, rest } = parseChunk(buffer);
+      buffer = rest;
+      for (const ev of events) {
+        let data: any = {};
+        try {
+          data = JSON.parse(ev.data);
+        } catch {
+          /* ignore */
+        }
+        if (ev.event === "status") h.onStatus?.(data.message ?? "");
+        else if (ev.event === "section") h.onSection?.(data.key ?? "", data.title ?? "");
+        else if (ev.event === "delta") h.onDelta(data.text ?? "");
+        else if (ev.event === "review_data") h.onReviewData?.(data as GrantReviewData);
         else if (ev.event === "error") h.onError?.(data.message ?? ev.data);
         else if (ev.event === "done") h.onDone?.();
       }
@@ -803,6 +898,71 @@ export async function streamAnalyze(
   let resp: Response;
   try {
     resp = await fetch(apiUrl("/api/analyze"), { method: "POST", body: fd, signal: h.signal });
+  } catch (e) {
+    h.onError?.(`无法连接本地服务: ${(e as Error).message}`);
+    return;
+  }
+  if (!resp.ok || !resp.body) {
+    h.onError?.(`服务返回错误: ${resp.status}`);
+    return;
+  }
+  const reader = resp.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const { events, rest } = parseChunk(buffer);
+      buffer = rest;
+      for (const ev of events) {
+        let data: any = {};
+        try {
+          data = JSON.parse(ev.data);
+        } catch {
+          /* ignore */
+        }
+        if (ev.event === "status") h.onStatus?.(data.message ?? "");
+        else if (ev.event === "plan") h.onPlan?.(data.cards ?? []);
+        else if (ev.event === "code") h.onCode?.(data.code ?? "");
+        else if (ev.event === "charts") h.onCharts?.(normalizeCharts(data.items));
+        else if (ev.event === "output") h.onOutput?.(data.text ?? "");
+        else if (ev.event === "delta") h.onDelta(data.text ?? "");
+        else if (ev.event === "error") h.onError?.(data.message ?? ev.data);
+        else if (ev.event === "done") h.onDone?.();
+      }
+    }
+  } catch (e) {
+    if ((e as Error).name !== "AbortError") {
+      h.onError?.(`读取流出错: ${(e as Error).message}`);
+    }
+  }
+}
+
+// 对话式续跑: 在已有分析代码上按用户新需求改一版并重跑。事件与 streamAnalyze 一致,
+// 但只回传 当前代码 + 上轮结论摘要 + 新需求(不缓存完整对话历史), 数据仍带本次文件。
+export async function streamAnalyzeRefine(
+  file: File,
+  currentCode: string,
+  requirement: string,
+  prevSummary: string,
+  question: string,
+  chartFormat: string,
+  palette: string,
+  h: AnalyzeHandlers,
+): Promise<void> {
+  const fd = new FormData();
+  fd.append("file", file);
+  fd.append("current_code", currentCode);
+  fd.append("requirement", requirement);
+  fd.append("prev_summary", prevSummary);
+  fd.append("question", question);
+  fd.append("chart_format", chartFormat);
+  fd.append("palette", palette);
+  let resp: Response;
+  try {
+    resp = await fetch(apiUrl("/api/analyze/refine"), { method: "POST", body: fd, signal: h.signal });
   } catch (e) {
     h.onError?.(`无法连接本地服务: ${(e as Error).message}`);
     return;

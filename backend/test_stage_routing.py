@@ -9,16 +9,20 @@ import os
 from app import config
 from app.config import _parse_stage_overrides
 
-config.settings.mock = False
-config.settings.provider = "openai"
-config.settings.api_key = "primary-key"
-config.settings.base_url = "https://primary"
-config.settings.model = "primary-model"
-config.settings.fallback_api_key = "fb-key"
-config.settings.fallback_base_url = "https://fb"
-config.settings.fallback_model = "fb-model"
-
 import app.llm as llm  # noqa: E402
+
+
+def _set_base_config():
+    """在每个测试内设置(而非模块 import 时): 避免与其它测试文件的模块级配置互相污染。"""
+    config.settings.mock = False
+    config.settings.provider = "openai"
+    config.settings.api_key = "primary-key"
+    config.settings.base_url = "https://primary"
+    config.settings.model = "primary-model"
+    config.settings.fallback_provider = "openai"
+    config.settings.fallback_api_key = "fb-key"
+    config.settings.fallback_base_url = "https://fb"
+    config.settings.fallback_model = "fb-model"
 
 
 async def collect(agen) -> str:
@@ -58,6 +62,7 @@ def test_parse_stage_overrides_suffixes():
 
 
 def test_stream_chat_routes_by_task():
+    _set_base_config()
     config.settings.stage_overrides = {"grant_review": {"model": "review-model"}}
 
     async def fake_stream(cfg, messages, **kw):
@@ -80,6 +85,7 @@ def test_stream_chat_routes_by_task():
 
 
 def test_stage_quota_falls_back_to_primary_then_fallback():
+    _set_base_config()
     config.settings.stage_overrides = {"grant_review": {"model": "review-model"}}
     calls: list[str] = []
 
