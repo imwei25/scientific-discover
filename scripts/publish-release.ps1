@@ -60,7 +60,10 @@ $latest = @{
     notes    = "https://github.com/$repo/releases/tag/$tag"
     platforms = @{
         "windows-x86_64" = @{
-            signature = (Get-Content $sig -Raw)
+            # NOTE: must be a clean .NET string. PS 5.1's Get-Content attaches ETS
+            # properties (PSPath etc.) that ConvertTo-Json would serialize into an
+            # object, producing a latest.json the updater cannot parse.
+            signature = [System.IO.File]::ReadAllText($sig).Trim()
             url       = "https://github.com/$repo/releases/download/$tag/$asciiName"
         }
     }
