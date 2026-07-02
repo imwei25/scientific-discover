@@ -10,8 +10,35 @@ import { addHistory } from "../lib/history";
 import EditableMarkdown from "../components/EditableMarkdown";
 import { CanvasSlot } from "../components/Canvas";
 import Dropzone from "../components/Dropzone";
+import RefIO from "../components/RefIO";
 import { usePersistentState } from "../lib/usePersistentState";
 import { downloadText, downloadDocxFromText, tsName } from "../lib/download";
+
+// 合并导入的 references 到现有列表, 按 DOI 优先去重, 缺 DOI 则按 (title|year) 兜底。
+// 返回 [合并后列表, 实际新增数, 跳过的重复数]
+function mergeRefs(existing: Reference[], incoming: Reference[]): { merged: Reference[]; added: number; dup: number } {
+  const norm = (s: string) => (s || "").trim().toLowerCase();
+  const keyOf = (r: Reference) => {
+    const doi = norm(r.pmid && r.pmid.startsWith("10.") ? r.pmid : "");
+    if (doi) return `doi:${doi}`;
+    // pmid 也作为强键
+    if (r.pmid) return `pmid:${norm(r.pmid)}`;
+    return `tit:${norm(r.title)}|${norm(r.year)}`;
+  };
+  const seen = new Set(existing.map(keyOf));
+  const merged = [...existing];
+  let added = 0;
+  let dup = 0;
+  for (const r of incoming) {
+    if (!r || (!r.title && !r.pmid)) { dup += 1; continue; }
+    const k = keyOf(r);
+    if (seen.has(k)) { dup += 1; continue; }
+    seen.add(k);
+    merged.push(r);
+    added += 1;
+  }
+  return { merged, added, dup };
+}
 
 const GRANT_TYPES: { key: string; label: string }[] = [
   { key: "general", label: "国家自然科学基金·面上项目" },
@@ -465,15 +492,21 @@ export default function GrantModule() {
           }
         />
 
-        {refs.length > 0 && (
-          <div className="field" data-testid="grant-refs-info">
-            <span className="field-label">已带入可引用文献</span>
-            <span className="field-hint">
-              共 {refs.length} 篇（来自找选题里<strong>与该方向直接相关</strong>的文献）。立项依据会优先据实引用这些文献，写完做引用核验；
-              若某节需要更多支撑，用下方各节的「重新检索并重写」按需<strong>深度补检</strong>，避免一上来就堆砌不相关文献。
-            </span>
-          </div>
-        )}
+        <div className="field" data-testid="grant-refs-info">
+          <span className="field-label">可引用文献</span>
+          <span className="field-hint">
+            共 {refs.length} 篇。可来自找选题带入，也可从 Zotero 或文件(.ris/.bib/.enw)导入。
+            立项依据会据实引用这些文献；若想在写作前按方向补充新文献，勾选下方“撰写前重新检索”。
+          </span>
+          <RefIO
+            currentRefs={refs}
+            exportFilename="标书-文献"
+            onImport={(imported) => {
+              const { merged } = mergeRefs(refs, imported);
+              setRefs(merged);
+            }}
+          />
+        </div>
 
         <label className="type-chip" data-testid="grant-preresearch" title="开启后, 撰写前会按本方向再检索一遍 PubMed 等, 把新文献并入后据此写立项依据(更贴合、稍慢)">
           <input
