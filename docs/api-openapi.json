@@ -43,6 +43,26 @@
         }
       }
     },
+    "/api/config/stages": {
+      "get": {
+        "summary": "Config Stages",
+        "description": "列出每个环节(stage)当前生效的模型, 便于核对 LLM_STAGE_* 配置。不回传 key。",
+        "operationId": "config_stages_api_config_stages_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "title": "Response Config Stages Api Config Stages Get"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/config/test-key": {
       "post": {
         "summary": "Config Test Key",
@@ -455,6 +475,43 @@
         }
       }
     },
+    "/api/grant/review": {
+      "post": {
+        "summary": "Grant Review Ep",
+        "description": "对当前申请书全文重新跑一遍评审组模拟评审(修订后回头看改进了没), 流式。",
+        "operationId": "grant_review_ep_api_grant_review_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RunRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/grant/revise": {
       "post": {
         "summary": "Grant Revise Ep",
@@ -613,6 +670,43 @@
             "multipart/form-data": {
               "schema": {
                 "$ref": "#/components/schemas/Body_analyze_api_analyze_post"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/analyze/refine": {
+      "post": {
+        "summary": "Analyze Refine",
+        "description": "对话式续跑: 在已有分析代码上按用户新需求改一版并重新执行(SSE)。\n\n只带 当前代码 + 上轮结论摘要 + 新需求 进上下文, 不缓存完整对话历史;\n数据仍由本次上传的文件提供(执行代码所需)。事件与 /api/analyze 完全一致。",
+        "operationId": "analyze_refine_api_analyze_refine_post",
+        "requestBody": {
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_analyze_refine_api_analyze_refine_post"
               }
             }
           },
@@ -1489,6 +1583,123 @@
         }
       }
     },
+    "/api/zotero/status": {
+      "get": {
+        "summary": "Zotero Status",
+        "description": "探测本机 Zotero 是否可用(读/写)。离线也返回 200,便于前端优雅回退。",
+        "operationId": "zotero_status_api_zotero_status_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "title": "Response Zotero Status Api Zotero Status Get"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/zotero/collections": {
+      "get": {
+        "summary": "Zotero Collections",
+        "operationId": "zotero_collections_api_zotero_collections_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "title": "Response Zotero Collections Api Zotero Collections Get"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/zotero/import": {
+      "post": {
+        "summary": "Zotero Import",
+        "operationId": "zotero_import_api_zotero_import_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ZoteroImportRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "title": "Response Zotero Import Api Zotero Import Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/zotero/push": {
+      "post": {
+        "summary": "Zotero Push",
+        "operationId": "zotero_push_api_zotero_push_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ZoteroPushRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "title": "Response Zotero Push Api Zotero Push Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/ethics/render": {
       "post": {
         "summary": "Ethics Render",
@@ -1836,6 +2047,50 @@
           "event_col"
         ],
         "title": "Body_analyze_km_api_analyze_km_post"
+      },
+      "Body_analyze_refine_api_analyze_refine_post": {
+        "properties": {
+          "file": {
+            "type": "string",
+            "format": "binary",
+            "title": "File"
+          },
+          "current_code": {
+            "type": "string",
+            "title": "Current Code"
+          },
+          "requirement": {
+            "type": "string",
+            "title": "Requirement"
+          },
+          "prev_summary": {
+            "type": "string",
+            "title": "Prev Summary",
+            "default": ""
+          },
+          "question": {
+            "type": "string",
+            "title": "Question",
+            "default": ""
+          },
+          "chart_format": {
+            "type": "string",
+            "title": "Chart Format",
+            "default": "png"
+          },
+          "palette": {
+            "type": "string",
+            "title": "Palette",
+            "default": "default"
+          }
+        },
+        "type": "object",
+        "required": [
+          "file",
+          "current_code",
+          "requirement"
+        ],
+        "title": "Body_analyze_refine_api_analyze_refine_post"
       },
       "Body_analyze_roc_api_analyze_roc_post": {
         "properties": {
@@ -2501,6 +2756,35 @@
           "type"
         ],
         "title": "ValidationError"
+      },
+      "ZoteroImportRequest": {
+        "properties": {
+          "collection_key": {
+            "type": "string",
+            "title": "Collection Key"
+          }
+        },
+        "type": "object",
+        "required": [
+          "collection_key"
+        ],
+        "title": "ZoteroImportRequest"
+      },
+      "ZoteroPushRequest": {
+        "properties": {
+          "refs": {
+            "items": {
+              "type": "object"
+            },
+            "type": "array",
+            "title": "Refs"
+          }
+        },
+        "type": "object",
+        "required": [
+          "refs"
+        ],
+        "title": "ZoteroPushRequest"
       }
     }
   }

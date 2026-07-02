@@ -55,6 +55,14 @@ class RefsExportRequest(BaseModel):
     format: str = "ris"
 
 
+class ZoteroImportRequest(BaseModel):
+    collection_key: str
+
+
+class ZoteroPushRequest(BaseModel):
+    refs: list[dict]
+
+
 class EthicsRenderRequest(BaseModel):
     template: str
     fields: dict = {}
@@ -226,6 +234,45 @@ async def refs_export(req: RefsExportRequest) -> Response:
         media_type="application/octet-stream",
         headers={"Content-Disposition": f"attachment; filename=references.{ext}"},
     )
+
+
+@router.get("/api/zotero/status")
+async def zotero_status() -> dict:
+    """探测本机 Zotero 是否可用(读/写)。离线也返回 200,便于前端优雅回退。"""
+    from .. import zotero
+    try:
+        return await zotero.probe()
+    except Exception:  # noqa: BLE001
+        return {"running": False, "api": False, "connector": False}
+
+
+@router.get("/api/zotero/collections")
+async def zotero_collections() -> dict:
+    from .. import zotero
+    try:
+        return {"ok": True, "collections": await zotero.list_collections()}
+    except Exception as e:  # noqa: BLE001
+        return {"ok": False, "error": f"读取 Zotero 分类失败(请确认 Zotero 已运行并允许本机通信): {e}"}
+
+
+@router.post("/api/zotero/import")
+async def zotero_import(req: ZoteroImportRequest) -> dict:
+    from .. import zotero
+    try:
+        refs = await zotero.import_collection(req.collection_key)
+        return {"ok": True, "refs": refs}
+    except Exception as e:  # noqa: BLE001
+        return {"ok": False, "error": f"从 Zotero 导入失败(请确认 Zotero 已运行并允许本机通信): {e}"}
+
+
+@router.post("/api/zotero/push")
+async def zotero_push(req: ZoteroPushRequest) -> dict:
+    from .. import zotero
+    try:
+        saved = await zotero.push(req.refs)
+        return {"ok": True, "saved": saved}
+    except Exception as e:  # noqa: BLE001
+        return {"ok": False, "error": f"推送到 Zotero 失败(请确认 Zotero 已运行并允许本机通信): {e}"}
 
 
 @router.post("/api/ethics/render")
