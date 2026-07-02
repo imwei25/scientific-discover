@@ -11,6 +11,7 @@ import EditableMarkdown from "../components/EditableMarkdown";
 import { CanvasSlot } from "../components/Canvas";
 import Dropzone from "../components/Dropzone";
 import RefIO from "../components/RefIO";
+import ZoteroPanel from "../components/ZoteroPanel";
 import { usePersistentState } from "../lib/usePersistentState";
 import { downloadText, downloadDocxFromText, tsName } from "../lib/download";
 
@@ -580,6 +581,13 @@ export default function GrantModule() {
           <RefIO
             currentRefs={refs}
             exportFilename="标书-文献"
+            onImport={(imported) => {
+              const { merged } = mergeRefs(refs, imported);
+              setRefs(merged);
+            }}
+          />
+          <ZoteroPanel
+            currentRefs={refs}
             onImport={(imported) => {
               const { merged } = mergeRefs(refs, imported);
               setRefs(merged);

@@ -9,6 +9,7 @@ import { CanvasSlot } from "../components/Canvas";
 import Dropzone from "../components/Dropzone";
 import { HelpButton } from "../components/HelpButton";
 import RefIO from "../components/RefIO";
+import ZoteroPanel from "../components/ZoteroPanel";
 import { downloadText, downloadCsv, downloadDocxFromText, tsName } from "../lib/download";
 import { usePersistentState } from "../lib/usePersistentState";
 import type { Goto } from "../App";
@@ -132,6 +133,8 @@ export default function IdeaModule({ goto }: { goto: Goto }) {
   const [status, setStatus] = useState("");
   const [copied, setCopied] = useState(false); // 复制报告到剪贴板的短暂反馈
   const [refs, setRefs] = usePersistentState<Reference[]>("idea:refs", []);
+  const [pushSel, setPushSel] = useState<Set<string>>(new Set());
+  const refKey = (r: Reference) => r.pmid || r.url || r.title;
   const [sourceMode, setSourceMode] = usePersistentState<"auto" | "import_then_search" | "import_only">("idea:sourceMode", "auto");
   const [refSort, setRefSort] = usePersistentState("idea:refSort", "relevance");
   // 影响力过滤: 阈值(空=不过滤) / 至少保留篇数 / 是否保留无影响力数据的文献
@@ -553,7 +556,7 @@ export default function IdeaModule({ goto }: { goto: Goto }) {
               ["import_then_search", "导入 + 再补检索"],
               ["import_only", "只用导入的文献(跳过检索)"],
             ] as const).map(([val, label]) => (
-              <label key={val} className="type-chip">
+              <label key={val} className={`type-chip${sourceMode === val ? " on" : ""}`}>
                 <input
                   type="radio"
                   name="idea-source-mode"
@@ -861,9 +864,21 @@ export default function IdeaModule({ goto }: { goto: Goto }) {
         onImport={(imported) => {
           const { merged, added, dup } = mergeRefs(refs, imported);
           setRefs(merged);
+          setError(null);
           setStatus(`导入 ${added} 篇，去重 ${dup} 篇`);
           window.setTimeout(() => setStatus((s) => (s.startsWith("导入") ? "" : s)), 4000);
         }}
+      />
+      <ZoteroPanel
+        currentRefs={refs}
+        onImport={(imported) => {
+          const { merged, added, dup } = mergeRefs(refs, imported);
+          setRefs(merged);
+          setError(null);
+          setStatus(`从 Zotero 导入 ${added} 篇，去重 ${dup} 篇`);
+          window.setTimeout(() => setStatus((s) => (s.startsWith("从 Zotero") ? "" : s)), 4000);
+        }}
+        selectedForPush={refs.filter((r) => pushSel.has(refKey(r)))}
       />
 
       {refs.length > 0 && (
@@ -885,6 +900,18 @@ export default function IdeaModule({ goto }: { goto: Goto }) {
           <ol className="ref-list">
             {shownRefs.map((r, i) => (
               <li key={r.pmid || r.url || i}>
+                <input
+                  type="checkbox"
+                  data-testid={`ref-push-${i}`}
+                  checked={pushSel.has(refKey(r))}
+                  onChange={(e) => setPushSel((prev) => {
+                    const next = new Set(prev);
+                    if (e.target.checked) next.add(refKey(r)); else next.delete(refKey(r));
+                    return next;
+                  })}
+                  title="勾选后可只把选中的文献推送到 Zotero"
+                  style={{ marginRight: 6 }}
+                />
                 {r.source === "preprint" && <span className="ref-badge ref-badge-preprint">预印本</span>}
                 {r.source === "europepmc" && <span className="ref-badge ref-badge-epmc">Europe PMC</span>}
                 {r.source === "openalex" && <span className="ref-badge ref-badge-openalex">OpenAlex</span>}
