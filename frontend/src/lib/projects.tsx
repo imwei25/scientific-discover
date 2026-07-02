@@ -271,7 +271,27 @@ export function ProjectProvider({ children }: { children: ReactNode }) {
     let cancelled = false;
     (async () => {
       try {
-        const list = await api.list();
+        // 桌面版(Tauri)里本地服务是 PyInstaller 单文件, 冷启动要 20-30 秒才开始监听;
+        // 前端秒开, 首次请求几乎必然"连接被拒"。必须带重试等它起来——
+        // 否则一次失败就永久落入 offline 态, 右上角只剩"（无项目）"且无法新建。
+        // 关键: 首次失败就先放行渲染(booted=true, 离线态), 后台继续重试;
+        // 整个应用在 booted 前不渲染, 绝不能让用户对着白屏等重试。
+        const list = await (async () => {
+          const BOOT_RETRIES = 30;
+          const BOOT_RETRY_MS = 2000;
+          for (let i = 0; ; i++) {
+            try {
+              return await api.list();
+            } catch (e) {
+              if (cancelled || i >= BOOT_RETRIES) throw e;
+              if (i === 0) {
+                setOffline(true);
+                setBooted(true);
+              }
+              await new Promise((res) => setTimeout(res, BOOT_RETRY_MS));
+            }
+          }
+        })();
         if (cancelled) return;
         if (list.length > 0) {
           setProjects(list);

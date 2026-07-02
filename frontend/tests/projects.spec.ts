@@ -260,3 +260,40 @@ test("迁移: 启动前预置 ra:* 数据, 应被打包为'默认项目'", async
   await page.getByTestId("nav-idea").click();
   await expect(page.getByTestId("input-field")).toHaveValue("LEGACY");
 });
+
+// ─── 回归: 本地服务冷启动 20-30 秒, 前端启动重试等它起来 ───────────
+// 桌面版(Tauri)里 sidecar 是 PyInstaller 单文件, 冷启动远慢于前端;
+// 此前首次列表请求"连接被拒"就永久落入 offline 态: 右上角只剩"（无项目）"
+// 且新建禁用。现在启动拉取带重试(2 秒间隔), 服务起来后应自动恢复并建出默认项目。
+test("项目启动: 后端冷启动期间连接失败, 恢复后自动建出项目", async ({ page }) => {
+  const store = new Map<string, { id: string; name: string; updated_at: number }>();
+  let listCalls = 0;
+  await page.route("**/api/health", (r) =>
+    r.fulfill({ json: { status: "ok", provider: "openai", model: "deepseek-chat", mock: true } }),
+  );
+  await page.route("**/api/journals", (r) => r.fulfill({ json: { journals: [] } }));
+  await page.route("**/api/usage", (r) => r.fulfill({ json: { available: false } }));
+  await page.route("**/api/projects", async (route, req) => {
+    if (req.method() === "GET") {
+      listCalls += 1;
+      if (listCalls <= 2) return route.abort("connectionrefused"); // 模拟服务还没起来
+      return route.fulfill({ json: Array.from(store.values()) });
+    }
+    if (req.method() === "POST") {
+      const body = JSON.parse(req.postData() || "{}") as { id: string; name: string };
+      const p = { id: body.id, name: body.name || "未命名项目", updated_at: Date.now() };
+      store.set(p.id, p);
+      return route.fulfill({ json: { ...p, created_at: p.updated_at, state: {}, history: [] } });
+    }
+    return route.fulfill({ status: 405 });
+  });
+  await page.route(/.*\/api\/projects\/[^/]+(\/state)?$/, (route) =>
+    route.fulfill({ json: { updated_at: Date.now() } }),
+  );
+
+  await page.goto("/");
+  // 首次失败立即放行渲染(离线态, 不白屏); 每 2 秒重试, 第三次成功后自动建出项目并恢复可用。
+  // 名字两种都合法: 离线窗口期模块若已把默认状态写进 localStorage, 会按"老数据迁移"起名"默认项目"。
+  await expect(page.getByTestId("project-picker-trigger")).toContainText(/未命名项目|默认项目/, { timeout: 15_000 });
+  await expect(page.getByTestId("project-picker-trigger")).toBeEnabled();
+});
