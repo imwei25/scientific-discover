@@ -1,5 +1,14 @@
+# 所有文本统一 LF 存储: CI(Linux) 上的 dist 一致性校验要求跨平台构建产物逐字节可比,
+# 否则 Windows 提交的 CRLF 会让 Linux 构建结果"全文件不同"。二进制交给 git 自动识别。
+* text=auto
+
 # Windows 批处理/脚本必须用 CRLF 换行, 否则 cmd.exe 遇到 label/goto 会秒退关窗。
 # 仓库内统一规范化为 LF 存储, 检出到工作区时强制转 CRLF。
 *.bat text eol=crlf
 *.cmd text eol=crlf
 *.ps1 text eol=crlf
+
+# 字体/图标等按二进制处理, 永不做换行转换
+*.woff2 binary
+*.png binary
+*.ico binary
