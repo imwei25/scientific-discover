@@ -49,14 +49,15 @@
 - `GET  /api/zotero/status` → `{ ok, running: bool, api: bool, connector: bool }`。探测本地 Zotero;超时(≤1.5s)即视为未运行。
 - `GET  /api/zotero/collections` → `{ ok, collections: [{key, name, count}] }`。读 `/api/users/0/collections`。
 - `POST /api/zotero/import` `{ collection_key }` → `{ ok, refs: [统一Reference] }`。读该分类条目(`/api/users/0/collections/<key>/items`),用 `zotero.py` 映射为统一结构。省略 `collection_key` 时可导入"My Library"顶层(可选,先不做以免过量)。
-- `POST /api/zotero/push` `{ refs: [统一Reference] }` → `{ ok, saved: n }`。把统一结构转为 connector 期望的条目 JSON,`POST /connector/saveItems`,存进用户当前在 Zotero 里选中的分类。
+- `POST /api/zotero/push` `{ refs: [统一Reference] }` → `{ ok, saved: n }`。把统一结构转为 connector 期望的条目 JSON,`POST /connector/saveItems`,存进用户当前在 Zotero 里选中的分类。`refs` 由前端决定是整池还是勾选子集。
 
 `zotero.py` 只负责:探测、读分类/条目、结构映射(Zotero item ↔ 统一 Reference)、connector 载荷构造。网络与超时复用 `http_common.py` 风格。
 
 ### 4.2 前端组件
 
 - `ZoteroPanel.tsx`(新):挂载时静默 `GET /api/zotero/status`。
-  - Zotero 在线:显示"🔗 从 Zotero 导入"(点开→拉分类列表→选分类→导入合并进 `refs`,复用 `mergeRefs`)与"🔗 推送到 Zotero"(把当前 `refs` 推送)。
+  - Zotero 在线:显示"🔗 从 Zotero 导入"(点开→拉分类列表→选分类→导入合并进 `refs`,复用 `mergeRefs`)与"🔗 推送到 Zotero"。
+    - **推送支持两种粒度**:文献列表每条前加一个可选勾选框;点"推送到 Zotero"时——**有勾选**则只推勾选子集,**无勾选**则推整池。按钮文案随选中数变化(如"推送到 Zotero(全部 40)"/"推送到 Zotero(已选 6)")。
   - Zotero 离线:整块折叠为一行灰字提示"未检测到运行中的 Zotero",并引导用户用旁边的 `RefIO` 文件互导 / 去 Zotero 勾选设置。
 - `RefIO`(现有):保持不变,作为**始终可用**的兜底(含"当前选中条目"经由 Zotero 拖拽/导出文件的路径)。
 
@@ -107,8 +108,8 @@
 - **P1(本地活连接)**:`zotero.py` + 4 端点 + `ZoteroPanel`,读分类 / 回写。Zotero 在线时免倒文件。
 - **暂不做**:云端 Web API(方案 D)、"当前选中条目"直读(需插件)。
 
-## 9. 待用户确认
+## 9. 已确认决策(2026-07-02)
 
-1. **推送方式**:本设计取"手动按钮·推当前整池到 Zotero 当前选中分类"(用户此前离开未答,采用最简默认)。是否认可?或要"勾选部分再推"?
-2. **"当前选中条目"**:确认可接受用"文件/拖拽"替代(built-in 无此端点),不为它引入 Better BibTeX 依赖?
-3. **导入上限**:单次导入分类上限 200 篇是否合适?
+1. **推送方式**:手动按钮,存进 Zotero 当前选中分类;支持**整池推送**与**勾选部分推送**两种粒度(文献列表加勾选框,有勾选推子集、无勾选推整池)。✅
+2. **"当前选中条目"**:接受用**文件/拖拽**路径替代(built-in 端点不支持读取 Zotero 面板选中项),**不**引入 Better BibTeX 依赖。✅
+3. **导入上限**:单次分类导入上限 **200 篇**,超出截断并提示。✅
