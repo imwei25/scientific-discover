@@ -5,6 +5,8 @@
 """
 from __future__ import annotations
 
+import re
+
 import httpx
 
 ZOTERO_BASE = "http://127.0.0.1:23119"
@@ -40,11 +42,8 @@ def map_item(raw: dict) -> dict | None:
     authors = [_split_name(c) for c in creators if _split_name(c)]
     doi = (d.get("DOI") or "").strip()
     date = (d.get("date") or "").strip()
-    year = ""
-    for tok in date.replace("/", "-").split("-"):
-        if len(tok) == 4 and tok.isdigit():
-            year = tok
-            break
+    m = re.search(r"\b(\d{4})\b", date)
+    year = m.group(1) if m else ""
     url = (d.get("url") or "").strip() or (f"https://doi.org/{doi}" if doi else "")
     return {
         "title": (d.get("title") or "").strip(),
@@ -70,7 +69,7 @@ def _push_creators(ref: dict) -> list[dict]:
         if len(parts) >= 2:
             out.append({"creatorType": "author", "lastName": parts[0], "firstName": " ".join(parts[1:])})
         else:
-            out.append({"creatorType": "author", "lastName": n, "firstName": ""})
+            out.append({"creatorType": "author", "name": n})
     return out
 
 
@@ -127,13 +126,25 @@ async def list_collections() -> list[dict]:
 
 
 async def import_collection(collection_key: str, cap: int = 200) -> list[dict]:
-    """读某分类的条目 → 统一 Reference 列表(上限 cap)。"""
+    """读某分类的条目 → 统一 Reference 列表(上限 cap)。本地 API 单页上限 100,分页累积。"""
+    out: list[dict] = []
+    start = 0
     async with httpx.AsyncClient(timeout=_IO_TIMEOUT) as client:
-        r = await client.get(f"{_API}/collections/{collection_key}/items?limit={cap}")
-        r.raise_for_status()
-        data = r.json()
-    refs = [map_item(x) for x in data]
-    return [x for x in refs if x][:cap]
+        while len(out) < cap:
+            page = min(100, cap - len(out))
+            r = await client.get(
+                f"{_API}/collections/{collection_key}/items"
+                f"?limit={page}&start={start}"
+            )
+            r.raise_for_status()
+            data = r.json()
+            if not data:
+                break
+            out.extend(x for x in (map_item(v) for v in data) if x)
+            if len(data) < page:   # 最后一页
+                break
+            start += page
+    return out[:cap]
 
 
 async def push(refs: list[dict]) -> int:
@@ -143,6 +154,7 @@ async def push(refs: list[dict]) -> int:
     async with httpx.AsyncClient(timeout=_IO_TIMEOUT + 3) as client:
         r = await client.post(f"{_CONNECTOR}/saveItems",
                               json=build_push_payload(refs),
-                              headers={"Content-Type": "application/json"})
+                              headers={"Content-Type": "application/json",
+                                       "X-Zotero-Connector-API-Version": "3.0"})
         r.raise_for_status()
     return len(refs)

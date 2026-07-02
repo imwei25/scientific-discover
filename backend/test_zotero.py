@@ -16,6 +16,17 @@ def test_map_item_to_reference():
     assert r["url"] == "https://doi.org/10.1000/x"  # 无 url 时用 doi 兜底
 
 
+def test_map_item_year_from_text_date():
+    assert map_item({"data": {"itemType": "journalArticle", "date": "May 2021"}})["year"] == "2021"
+    assert map_item({"data": {"itemType": "journalArticle", "date": "n.d."}})["year"] == ""
+    assert map_item({"data": {"itemType": "journalArticle", "date": ""}})["year"] == ""
+
+
+def test_build_push_payload_single_token_name_uses_name_field():
+    body = build_push_payload([{"first_author": "WHO", "authors": ["WHO"]}])
+    assert body["items"][0]["creators"][0] == {"creatorType": "author", "name": "WHO"}
+
+
 def test_map_item_skips_non_reference_types():
     assert map_item({"data": {"itemType": "attachment"}}) is None
     assert map_item({"data": {"itemType": "note"}}) is None
