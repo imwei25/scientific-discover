@@ -20,6 +20,7 @@ from typing import AsyncIterator
 
 from .config import settings
 from .llm import stream_chat
+from .logutil import log_swallow
 
 
 async def _complete(messages: list[dict], max_tokens: int = 800) -> str:
@@ -35,7 +36,8 @@ def _parse_json(raw: str, opener: str, closer: str):
         return None
     try:
         return json.loads(raw[s : e + 1])
-    except Exception:  # noqa: BLE001
+    except Exception as exc:  # noqa: BLE001
+        log_swallow("回复审稿: LLM 输出无法解析为 JSON(将走默认兜底)", exc)
         return None
 
 

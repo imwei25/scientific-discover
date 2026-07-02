@@ -36,6 +36,7 @@ from .literature import search_literature
 from .llm import stream_chat
 # 复用找选题的: 引用核验 / 主题→PubMed检索式 / 文献去重键
 from .research import _verify_citations, _gen_queries, _pkey
+from .logutil import log_swallow
 
 # 重新调研重写时, 检索的默认论文源(与找选题默认一致)。
 _RERESEARCH_SOURCES = ["pubmed", "europepmc", "openalex"]
@@ -96,7 +97,8 @@ def _parse_json(raw: str, opener: str, closer: str):
         return None
     try:
         return json.loads(raw[s : e + 1])
-    except Exception:  # noqa: BLE001
+    except Exception as exc:  # noqa: BLE001
+        log_swallow("写标书: LLM 输出无法解析为 JSON(将走默认兜底)", exc)
         return None
 
 

@@ -25,6 +25,15 @@ jobs:
         working-directory: backend
         env:
           MOCK_LLM: "1"
+      # docs/api-openapi.json 由代码生成: 改了接口忘了重新导出, 这里会红。
+      - name: 校验 API 契约与代码同步
+        run: |
+          python export_openapi.py
+          git diff --exit-code ../docs/api-openapi.json || {
+            echo "::error::docs/api-openapi.json 与代码不同步——本地跑 backend/export_openapi.py 后一起提交。"
+            exit 1
+          }
+        working-directory: backend
 
   frontend:
     name: 前端构建 + e2e (Playwright)

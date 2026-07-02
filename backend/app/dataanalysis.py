@@ -26,6 +26,7 @@ import pandas as pd
 from . import statroute
 from .config import settings
 from .llm import stream_chat
+from .logutil import log_swallow
 from .textio import read_csv_bytes
 
 EXEC_TIMEOUT = 60  # 秒
@@ -187,8 +188,8 @@ def profile_data(df: pd.DataFrame) -> str:
         try:
             lines.append("\n数值列描述统计：")
             lines.append(df[numeric].describe().round(3).to_string())
-        except Exception:  # noqa: BLE001
-            pass
+        except Exception as e:  # noqa: BLE001
+            log_swallow("数据画像: 数值列描述统计生成失败(AI 将缺少分布信息)", e)
     # 分类列主要取值: 关键是让 AI 看清"分组列到底几组、各组多少例", 避免把多组当两组。
     if categorical:
         lines.append("\n分类列主要取值(取值(计数))：")
@@ -325,7 +326,8 @@ def _parse_spec(text: str) -> list[dict]:
     raw = m.group(0) if m else text
     try:
         obj = json.loads(raw)
-    except Exception:  # noqa: BLE001
+    except Exception as e:  # noqa: BLE001
+        log_swallow("数据分析: AI 输出的分析计划无法解析为 JSON", e)
         return []
     analyses = obj.get("analyses") if isinstance(obj, dict) else None
     return [a for a in analyses if isinstance(a, dict)] if isinstance(analyses, list) else []

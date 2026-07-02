@@ -16,6 +16,7 @@ import re
 
 from .config import settings
 from .llm import stream_chat
+from .logutil import log_swallow
 
 
 async def _extract(text: str) -> list[dict]:
@@ -37,7 +38,8 @@ async def _extract(text: str) -> list[dict]:
         return []
     try:
         arr = json.loads(buf[s : e + 1])
-    except Exception:  # noqa: BLE001
+    except Exception as exc:  # noqa: BLE001
+        log_swallow("统计自查: LLM 抽取结果不是合法 JSON, 本次自查为空", exc)
         return []
     return [it for it in arr if isinstance(it, dict) and it.get("type") and it.get("value") is not None]
 

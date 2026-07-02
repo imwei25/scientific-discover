@@ -1,5 +1,9 @@
 # API 契约对照表 (Wave 1-A)
 
+> ⚠️ 本文档是历史快照, 可能与代码漂移。**权威契约见同目录 `api-openapi.json`**——
+> 由 `backend/export_openapi.py` 从 FastAPI 代码直接生成, CI 校验其与代码同步。
+> 改接口后重新生成: `cd backend && .venv\Scripts\python.exe export_openapi.py`。
+
 本文档给出 Wave 1-A 后端新增 10 条 API 的请求/响应 schema, 供 W1-B/C/D/E/F 前端 agent 实现时对照。
 
 所有路由都挂在 FastAPI `app` 下, 前缀 `/api/...`。所有 multipart 上传走共享的 30MB 上限保护 (`_read_capped`), 超过返回 `{"ok": false, "error": "文件过大..."}`。

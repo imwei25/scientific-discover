@@ -143,7 +143,7 @@ def test_save_config_localhost_allowed(tmp_path: Path, monkeypatch) -> None:
 
     client = TestClient(app)
     # TestClient 的客户端 host 默认是 testclient, 我们 monkey-patch 一下 _is_localhost
-    import app.main as m
+    import app.routes.system as m
     monkeypatch.setattr(m, "_is_localhost", lambda r: True)
 
     resp = client.post(
@@ -165,7 +165,7 @@ def test_save_config_remote_forbidden(tmp_path: Path, monkeypatch) -> None:
 
     client = TestClient(app)
     # 模拟来自远端 IP 的请求
-    import app.main as m
+    import app.routes.system as m
     monkeypatch.setattr(m, "_is_localhost", lambda r: False)
 
     resp = client.post(
@@ -183,7 +183,7 @@ def test_save_config_mock_mode(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setattr(cio, "ENV_PATH", tmp_path / ".env")
 
     client = TestClient(app)
-    import app.main as m
+    import app.routes.system as m
     monkeypatch.setattr(m, "_is_localhost", lambda r: True)
 
     resp = client.post(

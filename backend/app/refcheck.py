@@ -21,6 +21,7 @@ import httpx
 from .config import settings
 from .literature import _throttle  # 复用 NCBI 全局节流(>=0.34s/次)
 from .llm import stream_chat
+from .logutil import log_swallow
 
 _CROSSREF = "https://api.crossref.org/works"
 _EUTILS = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils"
@@ -60,7 +61,8 @@ async def _parse_refs(text: str) -> list[dict]:
         return []
     try:
         arr = json.loads(buf[s : e + 1])
-    except Exception:  # noqa: BLE001
+    except Exception as exc:  # noqa: BLE001
+        log_swallow("参考文献核验: LLM 解析结果不是合法 JSON, 本次核验为空", exc)
         return []
     out = []
     for it in arr:

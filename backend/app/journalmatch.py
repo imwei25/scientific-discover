@@ -16,6 +16,7 @@ import httpx
 
 from .config import settings
 from .llm import stream_chat
+from .logutil import log_swallow
 
 _ENDPOINT = "https://api.openalex.org/works"
 
@@ -46,7 +47,8 @@ async def _annotate(abstract: str, journals: list[dict]) -> dict[str, str]:
             buf += piece
         s, e = buf.find("["), buf.rfind("]")
         arr = json.loads(buf[s : e + 1]) if s != -1 and e != -1 else []
-    except Exception:  # noqa: BLE001
+    except Exception as exc:  # noqa: BLE001
+        log_swallow("智能选刊: 匹配理由生成失败(结果将不带理由)", exc)
         return {}
     out: dict[str, str] = {}
     if isinstance(arr, list):
