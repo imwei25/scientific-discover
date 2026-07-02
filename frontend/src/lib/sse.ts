@@ -504,6 +504,23 @@ export async function planGrant(
   }
 }
 
+// 从文风样例提炼『文风档案』(非流式)。失败/空返回空档案, 不阻断撰写。
+export async function grantStyle(sample: string, signal?: AbortSignal): Promise<{ profile: string }> {
+  try {
+    const resp = await fetch(apiUrl("/api/grant/style"), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ sample }),
+      signal,
+    });
+    if (!resp.ok) return { profile: "" };
+    const data = await resp.json();
+    return { profile: typeof data.profile === "string" ? data.profile : "" };
+  } catch {
+    return { profile: "" };
+  }
+}
+
 // 评审组模拟评审的结构化结果(后端 review_data 事件): 供摘要卡与「按评审意见修订」联动。
 export interface GrantReviewIssue {
   section: string;
