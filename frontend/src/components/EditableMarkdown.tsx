@@ -12,10 +12,11 @@ interface Props {
   placeholder?: string;
   testId?: string;                      // 透传给只读容器, 保持既有选择器不变
   refInfo?: Record<string, CiteInfo>;   // 引用悬浮卡数据(支持句/文献要点), 透传给只读渲染
+  deaiStyle?: string;                   // 文风档案, 透传给 DeaiPanel 让"去AI味"也向样例靠拢
 }
 
 // 读模式沿用 <Markdown> 渲染; 点「编辑」切到所见即所得编辑器, 保存写回 onSave。
-export default function EditableMarkdown({ value, onSave, running, placeholder, testId, refInfo }: Props) {
+export default function EditableMarkdown({ value, onSave, running, placeholder, testId, refInfo, deaiStyle }: Props) {
   const [editing, setEditing] = useState(false);
   const canEdit = !!onSave && !!value && !running;
 
@@ -38,7 +39,7 @@ export default function EditableMarkdown({ value, onSave, running, placeholder, 
           <button className="btn-ghost btn-sm" data-testid="edit-btn" onClick={() => setEditing(true)} title="编辑这份产出">
             ✎ 编辑
           </button>
-          <DeaiPanel value={value} onApply={onSave!} disabled={running} />
+          <DeaiPanel value={value} onApply={onSave!} disabled={running} styleProfile={deaiStyle} />
         </div>
       )}
       {value ? (

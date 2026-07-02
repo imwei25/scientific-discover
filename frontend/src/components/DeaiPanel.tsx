@@ -21,9 +21,10 @@ interface Props {
   value: string;               // 当前 Canvas 正文(Markdown)
   onApply: (md: string) => void; // 写回正文(采纳与撤回共用)
   disabled?: boolean;          // 生成中: 禁用入口, 并让上一次的撤回失效
+  styleProfile?: string;       // 可选: 文风档案, 改写时让 AI 向该风格靠拢
 }
 
-export default function DeaiPanel({ value, onApply, disabled }: Props) {
+export default function DeaiPanel({ value, onApply, disabled, styleProfile }: Props) {
   const [open, setOpen] = useState(false);
   const [phase, setPhase] = useState<Phase>("scanning");
   const [scan, setScan] = useState<DeaiScanResult | null>(null);
@@ -59,7 +60,7 @@ export default function DeaiPanel({ value, onApply, disabled }: Props) {
     setPhase("rewriting");
     const c = new AbortController();
     ctrl.current = c;
-    streamDeai(value, scan.flagged_blocks, "", {
+    streamDeai(value, scan.flagged_blocks, styleProfile ?? "", {
       onSegment: (s) =>
         setSegs((prev) => [...prev, { ...s, rewritten: "", streaming: true, done: false, citationWarn: false, accepted: true }]),
       onDelta: (block, t) =>
