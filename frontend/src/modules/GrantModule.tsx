@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
-  streamGrant, planGrant, streamGrantRevise, streamGrantReview,
+  streamGrant, planGrant, grantStyle, streamGrantRevise, streamGrantReview,
   Reference, Verification, GrantScheme, GrantOutlineItem,
   GrantReviewData, GrantReviewIssue,
 } from "../lib/sse";
@@ -70,6 +70,13 @@ export default function GrantModule() {
   const [refs, setRefs] = usePersistentState<Reference[]>("grant:refs", []);
   // 撰写前是否按方向重新检索文献并入池(默认开): 让立项依据据新鲜、针对本方向的文献来写。
   const [preResearch, setPreResearch] = usePersistentState<boolean>("grant:preResearch", true);
+
+  // 文风样例: 上传样例原文 → 提炼文风档案(可编辑) → 撰写/去AI味时按开关注入。
+  const [styleSample, setStyleSample] = usePersistentState("grant:styleSample", "");
+  const [styleProfile, setStyleProfile] = usePersistentState("grant:styleProfile", "");
+  const [styleOn, setStyleOn] = usePersistentState<boolean>("grant:styleOn", true);
+  const [styleBusy, setStyleBusy] = useState(false);
+  const [styleErr, setStyleErr] = useState("");
 
   // phase: idle(未开始) | planned(大纲待确认) | writing | done
   const [phase, setPhase] = usePersistentState<string>("grant:phase", "idle");
@@ -147,6 +154,24 @@ export default function GrantModule() {
 
   const [copied, setCopied] = useState(false); // 复制全文的短暂反馈
 
+  // 生效的文风档案: 关掉开关或没档案时为空串(=不模仿, 维持现状)。
+  const effStyle = styleOn ? styleProfile : "";
+
+  const extractStyle = async () => {
+    if (!styleSample.trim() || styleBusy) return;
+    setStyleErr("");
+    setStyleBusy(true);
+    try {
+      const { profile } = await grantStyle(styleSample);
+      if (profile) setStyleProfile(profile);
+      else setStyleErr("未能提炼出文风档案，请换一份更完整的样例或重试。");
+    } catch {
+      setStyleErr("提炼文风失败（网络或服务错误），请重试。");
+    } finally {
+      setStyleBusy(false);
+    }
+  };
+
   // —— 第一步: 生成可编辑大纲(两段式); 传 note 时只按意见调整大纲, 不动已确认的方案骨架 ——
   const genPlan = async (note?: string) => {
     if (!hasInput || planning || running) return;
@@ -199,6 +224,7 @@ export default function GrantModule() {
     const payload: Record<string, unknown> = {
       title, idea, report, background, grant_type: grantType, references: refs,
       research: preResearch, // 撰写前是否按方向重检索文献(默认开)
+      style_profile: effStyle,
     };
     if (confirmed) {
       if (scheme) payload.scheme = scheme;
@@ -265,6 +291,7 @@ export default function GrantModule() {
         current: sec.text,
         note: note.trim(),
         research,
+        style_profile: effStyle,
       },
       {
         signal: rctrl.current.signal,
@@ -395,6 +422,7 @@ export default function GrantModule() {
     setScheme(null); setOutline([]); setSections([]); setVerify(null); setReview(null);
     setReviseNote({}); setRevisingKey(null); setReviseErr(null);
     setRereviewing(false); setBatchBusy(false);
+    setStyleSample(""); setStyleProfile(""); setStyleOn(true); setStyleErr("");
     setStatus(""); setError(null); setPhase("idle");
   };
 
@@ -491,6 +519,57 @@ export default function GrantModule() {
             setBackground((prev) => (prev ? prev + "\n\n" : "") + `[附加材料：${name}]\n` + t)
           }
         />
+
+        <div className="field" data-testid="grant-style">
+          <span className="field-label">文风样例（可选）</span>
+          <p className="field-hint">
+            上传一份你满意的 Word / PDF / txt（如你以往的标书或论文），AI 会<strong>提炼它的语言风格</strong>并在撰写时模仿，
+            兼起去 AI 味的作用。<strong>只学“怎么写”，不会把样例里的内容或事实写进你的标书。</strong>
+          </p>
+          <Dropzone
+            testId="grant-style-upload"
+            accept=".docx,.pdf,.txt,.md"
+            label="拖入文风样例"
+            hint="支持 Word / PDF / txt；仅用于学习语言风格"
+            mode="text"
+            onText={(t) => setStyleSample(t)}
+          />
+          {styleSample && (
+            <div className="grant-style-body">
+              <div className="form-actions">
+                <button
+                  className="btn-secondary btn-sm"
+                  data-testid="grant-style-extract-btn"
+                  onClick={extractStyle}
+                  disabled={styleBusy}
+                >
+                  {styleBusy ? "提炼中…" : styleProfile ? "重新提炼文风" : "提炼文风"}
+                </button>
+                <label className="type-chip" title="撰写与去 AI 味时是否模仿此文风">
+                  <input
+                    type="checkbox"
+                    data-testid="grant-style-toggle"
+                    checked={styleOn}
+                    onChange={(e) => setStyleOn(e.target.checked)}
+                  />
+                  撰写时模仿此文风
+                </label>
+              </div>
+              {styleErr && <div className="result-error" data-testid="grant-style-error">{styleErr}</div>}
+              {styleProfile && (
+                <label className="field">
+                  <span className="field-label">文风档案（可编辑）</span>
+                  <textarea
+                    data-testid="grant-style-profile"
+                    value={styleProfile}
+                    rows={5}
+                    onChange={(e) => setStyleProfile(e.target.value)}
+                  />
+                </label>
+              )}
+            </div>
+          )}
+        </div>
 
         <div className="field" data-testid="grant-refs-info">
           <span className="field-label">可引用文献</span>
@@ -754,6 +833,7 @@ export default function GrantModule() {
             onSave={applyDeai}
             running={running}
             refInfo={citeInfo}
+            deaiStyle={effStyle}
             placeholder={running ? "正在撰写…" : "填好题名（或从「找选题」带入）后，点“生成大纲”确认，再撰写；申请书初稿会显示在这里。"}
             testId="grant-result"
           />
