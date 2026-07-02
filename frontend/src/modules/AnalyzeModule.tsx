@@ -281,8 +281,11 @@ function DataPane({ goto }: { goto: Goto }) {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ count: charts.length, question, code, output, conclusion }),
       });
-      const d = await resp.json();
-      if (d.ok) setCaptions(d.captions || []);
+      const d = resp.ok ? await resp.json() : null;
+      if (d?.ok) setCaptions(d.captions || []);
+      else reportLLMError(d?.error || `生成图注失败（服务返回 ${resp.status}）`);
+    } catch (e) {
+      reportLLMError(`生成图注失败：${(e as Error).message}`);
     } finally {
       setCapBusy(false);
       window.dispatchEvent(new Event("usage-updated"));
@@ -290,8 +293,9 @@ function DataPane({ goto }: { goto: Goto }) {
   };
 
   const savedRef = useRef("");
+  const abortedRef = useRef(false); // 手动「停止」时置真, 避免把半截结论当「已完成」写入历史
   useEffect(() => {
-    if (!running && !error && conclusion && savedRef.current !== conclusion) {
+    if (!running && !error && !abortedRef.current && conclusion && savedRef.current !== conclusion) {
       savedRef.current = conclusion;
       addHistory({
         module: "analyze",
@@ -364,6 +368,7 @@ function DataPane({ goto }: { goto: Goto }) {
     }
     setFileErr("");
     setFile(f);
+    clearResults(); // 换文件: 丢弃与旧文件绑定的结果, 避免结论与当前文件对不上
     // 顺便解析表头, 供 KM/ROC 用
     if (/\.csv$/i.test(f.name)) readCsvHeaders(f);
     else setCsvHeaders([]);
@@ -380,6 +385,7 @@ function DataPane({ goto }: { goto: Goto }) {
 
   const run = async () => {
     if (!file || running) return;
+    abortedRef.current = false;
     setStatus("");
     setPlan([]);
     setCode("");
@@ -415,15 +421,14 @@ function DataPane({ goto }: { goto: Goto }) {
 
   const stop = () => {
     ctrl.current?.abort();
+    abortedRef.current = true; // 标记为手动中止, 半截结论不入历史
     setRunning(false);
     setStatus(""); // 同时清掉状态行, 否则 spinner 会一直转
   };
 
-  const reset = () => {
-    if (running) stop();
-    setFile(null);
-    setFileErr("");
-    setQuestion("");
+  // 清掉与「某份数据文件」绑定的全部结果(不含 question 等用户输入)。
+  // 换文件时调用, 避免出现「屏幕结论来自旧文件、顶部却是新文件」的错乱。
+  const clearResults = () => {
     setPlan([]);
     setCode("");
     setCharts([]);
@@ -438,6 +443,15 @@ function DataPane({ goto }: { goto: Goto }) {
     setForestErr(null);
     setKmErr(null);
     setRocErr(null);
+    savedRef.current = ""; // 允许新一轮结果重新入历史
+  };
+
+  const reset = () => {
+    if (running) stop();
+    setFile(null);
+    setFileErr("");
+    setQuestion("");
+    clearResults();
   };
 
   // ─── 森林图: 调 /api/analyze/forest ───────────────────────────
@@ -642,6 +656,11 @@ function DataPane({ goto }: { goto: Goto }) {
               )}
               <button className="btn-ghost" onClick={reset} data-testid="reset-btn">清空</button>
             </div>
+            {!file && (conclusion || charts.length > 0 || output) && (
+              <p className="field-hint" data-testid="analyze-stale-hint" style={{ marginTop: 6 }}>
+                下方结果是上次分析的本地存档；原数据文件已不在，<strong>如需重新分析请重新上传文件</strong>。
+              </p>
+            )}
           </>
         )}
 
