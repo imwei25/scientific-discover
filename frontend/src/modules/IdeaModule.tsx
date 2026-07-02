@@ -132,6 +132,7 @@ export default function IdeaModule({ goto }: { goto: Goto }) {
   const [status, setStatus] = useState("");
   const [copied, setCopied] = useState(false); // 复制报告到剪贴板的短暂反馈
   const [refs, setRefs] = usePersistentState<Reference[]>("idea:refs", []);
+  const [sourceMode, setSourceMode] = usePersistentState<"auto" | "import_then_search" | "import_only">("idea:sourceMode", "auto");
   const [refSort, setRefSort] = usePersistentState("idea:refSort", "relevance");
   // 影响力过滤: 阈值(空=不过滤) / 至少保留篇数 / 是否保留无影响力数据的文献
   // 质量预筛(高级检索设置内, 检索时生效): 默认不筛选(空=不限, 保留未知)。
@@ -198,6 +199,10 @@ export default function IdeaModule({ goto }: { goto: Goto }) {
     const k = override?.keywords ?? keywords;
     const b = override?.background ?? background;
     if (!f.trim() || running) return;
+    if (sourceMode === "import_only" && refs.length === 0) {
+      setError("已选择“只用导入的文献”，但当前没有文献。请先用下方“导入文献”从 Zotero 或文件导入，或改回自动检索。");
+      return;
+    }
     // 避免与进行中的 追问/PICO 流交叉写入
     fctrl.current?.abort();
     picoCtrl.current?.abort();
@@ -206,7 +211,7 @@ export default function IdeaModule({ goto }: { goto: Goto }) {
     setClarifyQs(null);
     setRefineOpts(null);
     setStatus("");
-    setRefs([]);
+    if (sourceMode === "auto") setRefs([]);
     setTrials([]);
     setEvidence([]);
     setText("");
@@ -234,6 +239,8 @@ export default function IdeaModule({ goto }: { goto: Goto }) {
           min_impact: impactMin,
           keep_unknown: keepUnknownImpact,
         },
+        source_mode: sourceMode,
+        references: sourceMode === "auto" ? undefined : refs,
       },
       {
         signal: ctrl.current.signal,
@@ -537,6 +544,33 @@ export default function IdeaModule({ goto }: { goto: Goto }) {
               setBackground((prev) => (prev ? prev + "\n\n" : "") + `[附加文档：${name}]\n` + t)
             }
           />
+        </div>
+        <div className="field" data-testid="idea-source-mode">
+          <span className="field-label">文献来源</span>
+          <div role="radiogroup">
+            {([
+              ["auto", "自动检索"],
+              ["import_then_search", "导入 + 再补检索"],
+              ["import_only", "只用导入的文献(跳过检索)"],
+            ] as const).map(([val, label]) => (
+              <label key={val} className="type-chip">
+                <input
+                  type="radio"
+                  name="idea-source-mode"
+                  checked={sourceMode === val}
+                  onChange={() => setSourceMode(val)}
+                  data-testid={`idea-source-${val}`}
+                />
+                {label}
+              </label>
+            ))}
+          </div>
+          {sourceMode !== "auto" && (
+            <span className="field-hint">
+              用下方「📥 导入文献」从 Zotero 或文件(.ris/.bib/.enw)带入文献
+              {sourceMode === "import_only" ? "；将跳过自动检索，直接据此生成综述与选题。" : "；随后仍会检索并与导入文献合并。"}
+            </span>
+          )}
         </div>
         <details className="adv-settings" data-testid="adv-settings">
           <summary className="adv-summary" data-testid="adv-settings-summary">
