@@ -858,6 +858,10 @@ export default function IdeaModule({ goto }: { goto: Goto }) {
         </div>
       )}
 
+      <div className="refio-title" style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 8 }}>
+        <span className="field-label" style={{ margin: 0 }}>文献导入 / 导出 · Zotero</span>
+        <HelpButton helpKey="zotero" />
+      </div>
       <RefIO
         currentRefs={refs}
         exportFilename="找选题-文献"

@@ -12,6 +12,7 @@ import { CanvasSlot } from "../components/Canvas";
 import Dropzone from "../components/Dropzone";
 import RefIO from "../components/RefIO";
 import ZoteroPanel from "../components/ZoteroPanel";
+import { HelpButton } from "../components/HelpButton";
 import { usePersistentState } from "../lib/usePersistentState";
 import { downloadText, downloadDocxFromText, tsName } from "../lib/download";
 
@@ -573,7 +574,10 @@ export default function GrantModule() {
         </div>
 
         <div className="field" data-testid="grant-refs-info">
-          <span className="field-label">可引用文献</span>
+          <span className="field-label" style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+            可引用文献 · Zotero
+            <HelpButton helpKey="zotero" />
+          </span>
           <span className="field-hint">
             共 {refs.length} 篇。可来自找选题带入，也可从 Zotero 或文件(.ris/.bib/.enw)导入。
             立项依据会据实引用这些文献；若想在写作前按方向补充新文献，勾选下方“撰写前重新检索”。

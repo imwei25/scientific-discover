@@ -3,7 +3,7 @@ import type { ReactNode } from "react";
 export type HelpKey =
   | "pico" | "randomize" | "dmp" | "consent"
   | "figcaptions" | "keywords" | "bundle"
-  | "statcheck" | "flowdiagram" | "quartile";
+  | "statcheck" | "flowdiagram" | "quartile" | "zotero";
 
 export interface HelpEntry {
   title: string;
@@ -274,6 +274,48 @@ PICOTS 表：
   T = 12 周
   S = RCT
 + 6 条纳入 + 5 条排除`}</pre>
+    ),
+  },
+
+  zotero: {
+    title: "和 Zotero 打通（导入 / 导出文献）",
+    whenToUse: (
+      <p>
+        你已经在 <strong>Zotero</strong> 里攒了一批文献，想直接拿来用；或者想把这里检索 / 带入的文献
+        <strong>存回 Zotero</strong> 归档。两种方式：Zotero 开着时可<strong>免倒文件</strong>直连，
+        没开也能用<strong>文件</strong>互导。
+      </p>
+    ),
+    howToUse: (
+      <>
+        <p><strong>方式一 · 直连（推荐，不用倒文件）</strong></p>
+        <ol>
+          <li>打开 Zotero 桌面端，在 <strong>设置 → 高级</strong> 勾选「允许本机其它应用与 Zotero 通信」。</li>
+          <li>页面会出现「🔗 从 Zotero 导入」——点开选一个<strong>分类</strong>，整组文献并入当前文献池（自动去重）。</li>
+          <li>「🔗 推送到 Zotero」把当前文献存回 Zotero <strong>当前选中的分类</strong>；在找选题的文献列表里<strong>勾选</strong>几篇，就只推选中的（不勾则推全部）。</li>
+        </ol>
+        <p><strong>方式二 · 文件互导（任何情况都行）</strong></p>
+        <ol>
+          <li>Zotero 里选中条目 → 右键 <strong>导出条目</strong> → 选 <strong>RIS</strong> 或 <strong>BibTeX</strong> → 存成 <code>.ris</code>/<code>.bib</code>。</li>
+          <li>本页点「📥 导入文献」把该文件拖进来；反向点「📤 导出」下载 <code>.ris</code>/<code>.bib</code>，再拖进 Zotero。</li>
+        </ol>
+        <p>
+          <strong>小技巧：</strong>在「找选题」把<strong>文献来源</strong>设成「只用导入的文献（跳过检索）」，
+          就能<strong>跳过联网检索</strong>，直接用你从 Zotero 带来的文献生成研究现状综述与候选选题；
+          也可选「导入 + 再补检索」把你的库和新检索到的合并起来。
+        </p>
+        <p style={{ color: "var(--muted, #78877f)" }}>
+          注：直连读的是<strong>本机</strong> Zotero 库、不联网；未检测到运行中的 Zotero 时，直连按钮会自动隐藏，
+          用文件互导即可。「当前选中条目」暂不支持直读，用上面的导出文件方式代替。
+        </p>
+      </>
+    ),
+    example: (
+      <pre>{`Zotero 里建个「二甲双胍-NAFLD」分类，攒了 30 篇 →
+勾选设置里的"允许本机通信" →
+找选题点「🔗 从 Zotero 导入」选该分类 → 30 篇入池 →
+文献来源选"只用导入的文献" → 直接出综述与选题（不联网检索）→
+写完点「🔗 推送到 Zotero」把补充的文献存回去`}</pre>
     ),
   },
 };
