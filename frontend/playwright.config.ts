@@ -11,8 +11,13 @@ export default defineConfig({
     baseURL: "http://localhost:5173",
     trace: "on-first-retry",
   },
-  // 使用系统自带的 Edge(Chromium 内核), 免去下载浏览器二进制(国内镜像常缺特定版本)。
-  projects: [{ name: "edge", use: { ...devices["Desktop Edge"], channel: "msedge" } }],
+  // 本地用系统自带的 Edge(Chromium 内核), 免去下载浏览器二进制(国内镜像常缺特定版本);
+  // CI(Linux) 没有 Edge, 用 Playwright 自带 Chromium。
+  projects: [
+    process.env.CI
+      ? { name: "chromium", use: { ...devices["Desktop Chrome"] } }
+      : { name: "edge", use: { ...devices["Desktop Edge"], channel: "msedge" } },
+  ],
   webServer: {
     command: "npm run dev",
     url: "http://localhost:5173",

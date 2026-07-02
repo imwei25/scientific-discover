@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { streamAnalyze, ChartItem, PlanCard } from "../lib/sse";
+import { streamAnalyze, streamPost, ChartItem, PlanCard } from "../lib/sse";
 import { reportLLMError } from "../lib/errorToast";
 import { usePersistentState } from "../lib/usePersistentState";
 import { addHistory } from "../lib/history";
@@ -1145,48 +1145,25 @@ function AdvisorPane() {
     setError(null);
     setResult({});
     ctrl.current = new AbortController();
-    let lastValid: AdvisorPayload = {};
+    // 后端按 token 碎片流式发 delta({text}), 结束发 done——必须先累积拼成完整文本,
+    // done 后剥掉可能的 ```json 围栏再一次性解析(单个碎片永远不是完整 payload)。
+    let acc = "";
+    let finished = false;
     try {
-      const resp = await fetch(apiUrl("/api/stats/advice"), {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ question }),
+      await streamPost(apiUrl("/api/stats/advice"), { question }, {
         signal: ctrl.current.signal,
+        onDelta: (text) => { acc += text; },
+        onError: (msg) => { setError(msg); },
+        onDone: () => { finished = true; },
       });
-      if (!resp.ok || !resp.body) {
-        setError(`服务返回错误 ${resp.status}`);
-        setRunning(false);
-        return;
-      }
-      const reader = resp.body.getReader();
-      const decoder = new TextDecoder();
-      let buffer = "";
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        buffer += decoder.decode(value, { stream: true });
-        // SSE 解析: 按 \n\n 切块, 每块取 data:
-        const parts = buffer.split("\n\n");
-        buffer = parts.pop() ?? "";
-        for (const block of parts) {
-          const dataLines: string[] = [];
-          for (const line of block.split("\n")) {
-            if (line.startsWith("data:")) dataLines.push(line.slice(5).trim());
-          }
-          const raw = dataLines.join("\n");
-          if (!raw) continue;
-          // 尝试解析为 JSON; 失败说明还是不完整, 显示 lastValid
-          try {
-            const parsed = JSON.parse(raw) as AdvisorPayload;
-            lastValid = parsed;
-            setResult(parsed);
-          } catch {
-            /* 不完整, 继续累积 */
-          }
+      if (finished) {
+        const raw = acc.replace(/^\s*```(?:json)?\s*/i, "").replace(/\s*```\s*$/, "").trim();
+        try {
+          setResult(JSON.parse(raw) as AdvisorPayload);
+        } catch {
+          setError("AI 返回的内容无法解析为推荐结果，请重试。");
         }
       }
-      // 流结束: 即便最后一段未完整, 也保留最后一次成功解析
-      setResult(lastValid);
     } catch (e) {
       if ((e as Error).name !== "AbortError") {
         setError(`请求失败: ${(e as Error).message}`);

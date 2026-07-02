@@ -200,6 +200,35 @@ def test_route_400_on_invalid_pid(client):
     assert r.status_code == 400
 
 
+def test_frozen_data_dir_uses_user_config_dir(monkeypatch):
+    """打包态(sys.frozen)下数据目录必须落在用户配置目录, 绝不能落在 __file__ 相对路径。
+
+    PyInstaller --onefile 的 __file__ 在 _MEI 临时解压目录里, 进程退出即删——
+    若落在那里, 用户项目数据每次关应用就整个丢失(回归保护)。
+    """
+    import sys as _sys
+
+    monkeypatch.delenv("RA_DATA_DIR", raising=False)
+    monkeypatch.setattr(projects, "_explicit_data_dir", None)
+    monkeypatch.setattr(_sys, "frozen", True, raising=False)
+    d = projects._data_dir()
+    from app.config import _user_config_dir
+
+    assert d == _user_config_dir() / "data"
+    # 兜底路径与 backend 源码目录无关
+    assert Path(__file__).resolve().parent not in d.parents
+
+
+def test_dev_data_dir_stays_in_backend(monkeypatch):
+    """开发态(非 frozen)保持历史行为: backend/data。"""
+    import sys as _sys
+
+    monkeypatch.delenv("RA_DATA_DIR", raising=False)
+    monkeypatch.setattr(projects, "_explicit_data_dir", None)
+    monkeypatch.setattr(_sys, "frozen", False, raising=False)
+    assert projects._data_dir() == Path(__file__).resolve().parent / "data"
+
+
 if __name__ == "__main__":
     import sys
     sys.exit(pytest.main([__file__, "-v"]))

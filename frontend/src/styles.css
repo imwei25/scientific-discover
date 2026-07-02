@@ -311,6 +311,7 @@ body {
   color: var(--muted);
   transition: background var(--dur-fast), color var(--dur-fast), border-color var(--dur-fast);
 }
+.nav-num svg { width: 16px; height: 16px; }
 .nav-item:hover .nav-num { border-color: var(--teal); color: var(--petrol); }
 .nav-item.active .nav-num { background: var(--petrol); border-color: var(--petrol); color: #fff; }
 .nav-num.aux {
@@ -383,15 +384,19 @@ body {
 }
 .sidebar[data-state="collapsed"] .rail-ticks { display: flex; }
 .rail-tick {
-  width: 4px;
-  height: 4px;
-  border-radius: 50%;
-  background: var(--faint);
-  transition: background var(--dur-fast), box-shadow var(--dur-fast);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 6px;
+  color: var(--faint);
+  transition: color var(--dur-fast), background var(--dur-fast);
 }
+.rail-tick svg { width: 15px; height: 15px; }
 .rail-tick.active {
-  background: var(--teal);
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--teal) 22%, transparent);
+  color: var(--teal);
+  background: var(--teal-soft);
 }
 
 /* ---------- 主区 ---------- */
@@ -2749,7 +2754,7 @@ select {
   background: linear-gradient(to right, #0a1212, #15201f);
 }
 [data-theme="midnight"] .rail-tick.active {
-  box-shadow: 0 0 0 3px rgba(22, 217, 200, 0.2), 0 0 8px rgba(22, 217, 200, 0.5);
+  box-shadow: 0 0 8px rgba(22, 217, 200, 0.35);
 }
 [data-theme="midnight"] .brand-logo {
   background: var(--teal-soft);

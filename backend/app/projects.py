@@ -6,13 +6,17 @@
 
 DATA_DIR 解析顺序:
   1. 环境变量 RA_DATA_DIR (测试/CI 用)
-  2. 模块全局 set_data_dir(...) (Tauri 启动时由 main.py 调用)
-  3. 默认: backend/data/
+  2. 模块全局 set_data_dir(...) (可选覆盖)
+  3. 打包态(PyInstaller, sys.frozen): 用户配置目录(%APPDATA%\\科研助手\\data)。
+     绝不能落在 __file__ 相对路径——onefile 下那是每次退出即删的 _MEI 临时解压目录,
+     项目数据会随进程结束整个丢失。
+  4. 开发态默认: backend/data/
 """
 from __future__ import annotations
 
 import json
 import os
+import sys
 import time
 import uuid as uuid_mod
 from pathlib import Path
@@ -46,6 +50,9 @@ def _data_dir() -> Path:
         return Path(env)
     if _explicit_data_dir is not None:
         return _explicit_data_dir
+    if getattr(sys, "frozen", False):
+        from .config import _user_config_dir
+        return _user_config_dir() / "data"
     return Path(__file__).resolve().parent.parent / "data"
 
 

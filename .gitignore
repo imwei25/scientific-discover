@@ -6,6 +6,7 @@ backend/.env
 
 # Node
 frontend/node_modules/
+frontend/tsconfig.tsbuildinfo
 # 注: frontend/dist 纳入版本管理(选项B)，pull 即最新界面，无需 build。
 # 改前端后需 npm run build 再提交 dist。
 

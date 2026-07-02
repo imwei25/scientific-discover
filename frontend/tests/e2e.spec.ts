@@ -1665,3 +1665,51 @@ test("去AI味: 无命中时提示无需改写、无改写按钮", async ({ page
   await page.getByTestId("deai-close-btn").click();
   await expect(page.getByTestId("deai-overlay")).toHaveCount(0);
 });
+
+// ─── 统计顾问: 后端按 token 碎片流式返回, 前端必须拼完再解析 ──────────
+// 回归保护: 此前前端把每个 SSE 块当完整 JSON 解析, 碎片流下永远渲染不出结果
+// (2026-06-28 验收 P1)。mock 按真实后端行为把 JSON 切成小片逐块发送。
+test("统计顾问: token碎片流式返回能渲染出推荐卡片", async ({ page }) => {
+  await mockBase(page);
+  const payload = JSON.stringify({
+    recommended: { test: "log-rank 检验", why: "生存数据含删失, 比较两组生存曲线" },
+    assumptions: ["删失与分组无关"],
+    cautions: ["样本量较小时功效不足"],
+    alternatives: [{ test: "Cox 回归", when: "需要校正混杂因素时" }],
+  });
+  // 模拟真实 LLM: 带 ```json 围栏 + 30 字符一片
+  const fenced = "```json\n" + payload + "\n```";
+  const chunks: { event: string; data: unknown }[] = [];
+  for (let i = 0; i < fenced.length; i += 30) {
+    chunks.push({ event: "delta", data: { text: fenced.slice(i, i + 30) } });
+  }
+  chunks.push({ event: "done", data: {} });
+  await page.route("**/api/stats/advice", (r) =>
+    r.fulfill({ contentType: "text/event-stream", body: sse(...chunks) }),
+  );
+  await page.goto("/");
+  await page.getByTestId("nav-analyze").click();
+  await page.getByTestId("analyze-tab-advisor").click();
+  await page.getByTestId("advisor-question").fill("两组各60例术后5年生存数据(含删失), 比较生存率差异");
+  await page.getByTestId("advisor-ask-btn").click();
+  await expect(page.getByTestId("advisor-cards")).toBeVisible();
+  await expect(page.getByTestId("advisor-cards")).toContainText("log-rank 检验");
+  await expect(page.getByTestId("advisor-cards")).toContainText("删失与分组无关");
+  await expect(page.getByTestId("advisor-cards")).toContainText("Cox 回归");
+});
+
+test("统计顾问: 服务端 error 事件如实显示", async ({ page }) => {
+  await mockBase(page);
+  await page.route("**/api/stats/advice", (r) =>
+    r.fulfill({
+      contentType: "text/event-stream",
+      body: sse({ event: "error", data: { message: "AI 服务暂时不可用, 请稍后重试" } }),
+    }),
+  );
+  await page.goto("/");
+  await page.getByTestId("nav-analyze").click();
+  await page.getByTestId("analyze-tab-advisor").click();
+  await page.getByTestId("advisor-question").fill("问题");
+  await page.getByTestId("advisor-ask-btn").click();
+  await expect(page.getByTestId("advisor-error")).toContainText("AI 服务暂时不可用");
+});

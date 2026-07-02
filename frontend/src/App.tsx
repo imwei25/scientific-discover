@@ -224,14 +224,14 @@ export default function App() {
         </div>
         <nav className="nav">
           <div className="pipeline">
-            {NAV.filter((m) => !m.hidden).map((m, i) => (
+            {NAV.filter((m) => !m.hidden).map((m) => (
               <button
                 key={m.id}
                 className={`nav-item ${active === m.id ? "active" : ""}`}
                 onClick={() => setActive(m.id)}
                 data-testid={`nav-${m.id}`}
               >
-                <span className="nav-num">{String(i + 1).padStart(2, "0")}</span>
+                <span className="nav-num" aria-hidden="true">{m.icon}</span>
                 <span className="nav-text">
                   <span className="nav-title">{m.title}</span>
                   <span className="nav-desc">{m.desc}</span>
@@ -295,17 +295,13 @@ export default function App() {
           )}
           <ThemeSwitcher />
         </div>
-        {/* 折叠态指示条：24px 内的 ticks，用 CSS 在 expanded 下隐藏 */}
+        {/* 折叠态指示条：24px 内显示各模块小图标（一眼可识别），hover 即临时展开交互 */}
         <div className="rail-ticks" aria-hidden="true">
-          <span className={`rail-tick ${active === "idea" ? "active" : ""}`} />
-          <span className={`rail-tick ${active === "grant" ? "active" : ""}`} />
-          <span className={`rail-tick ${active === "plan" ? "active" : ""}`} />
-          <span className={`rail-tick ${active === "ethics" ? "active" : ""}`} />
-          <span className={`rail-tick ${active === "analyze" ? "active" : ""}`} />
-          <span className={`rail-tick ${active === "imrad" ? "active" : ""}`} />
-          <span className={`rail-tick ${active === "journal" ? "active" : ""}`} />
-          <span className={`rail-tick ${active === "format" ? "active" : ""}`} />
-          <span className={`rail-tick ${active === "rebuttal" ? "active" : ""}`} />
+          {NAV.filter((m) => !m.hidden).map((m) => (
+            <span key={m.id} className={`rail-tick ${active === m.id ? "active" : ""}`} title={m.title}>
+              {m.icon}
+            </span>
+          ))}
         </div>
       </aside>
 

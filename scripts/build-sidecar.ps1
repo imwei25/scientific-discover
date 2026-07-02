@@ -14,6 +14,10 @@ Write-Host "==> Bundling backend (scipy/matplotlib need --collect-all)" -Foregro
 #   (in-function) imports that PyInstaller's static analysis can miss (projects/config_io/
 #   refio/ethics/deidentify), which would ship a release missing those features.
 # bibtexparser/rispy: third-party deps of refio (reference import/export); hidden-import to be safe.
+# --add-data app\data: --collect-submodules only grabs .py modules, NOT data files;
+#   without it the exe silently loses scimago quartile annotation (scimago.py degrades to {}).
+# --collect-all citeproc/citeproc_styles: both read CSL locale/style files from package
+#   data at runtime; missing them breaks reference checking/formatting in the exe.
 & ".\.venv\Scripts\pyinstaller.exe" `
     --onefile `
     --name sidecar `
@@ -23,7 +27,10 @@ Write-Host "==> Bundling backend (scipy/matplotlib need --collect-all)" -Foregro
     --collect-all sklearn `
     --collect-all pingouin `
     --collect-all lifelines `
+    --collect-all citeproc `
+    --collect-all citeproc_styles `
     --collect-submodules app `
+    --add-data "app\data;app\data" `
     --hidden-import app.main `
     --hidden-import bibtexparser `
     --hidden-import rispy `

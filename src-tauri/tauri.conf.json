@@ -28,10 +28,19 @@
     "targets": ["nsis"],
     "icon": ["icons/icon.ico"],
     "externalBin": ["binaries/sidecar"],
+    "createUpdaterArtifacts": true,
     "windows": {
       "nsis": {
         "installerHooks": "nsis-hooks.nsh"
       }
+    }
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDEzNjFFNzk1OEFDRTM5QUYKUldTdk9jNktsZWRoRTgwUnpXVmU4Z1JPUlM0UGhJNlNTM016dDlqQU1xNFVCcSttQTArdmYrU2IK",
+      "endpoints": [
+        "https://github.com/imwei25/scientific-discover/releases/latest/download/latest.json"
+      ]
     }
   }
 }

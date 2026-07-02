@@ -44,6 +44,30 @@ $asset = Join-Path $exe.DirectoryName $asciiName
 Copy-Item $exe.FullName $asset -Force
 Write-Host "==> Publishing $tag : $asciiName ($sizeMB MB)" -ForegroundColor Cyan
 
+# Auto-updater artifacts. `cargo tauri build` with createUpdaterArtifacts=true emits a
+# minisign signature next to the installer (requires TAURI_SIGNING_PRIVATE_KEY_PATH env,
+# see README). latest.json is what installed apps poll via the updater endpoint.
+$sig = "$($exe.FullName).sig"
+if (-not (Test-Path $sig)) {
+    Die "Signature $($exe.Name).sig not found. Build with signing env set, e.g.:`n  `$env:TAURI_SIGNING_PRIVATE_KEY_PATH=`"`$env:USERPROFILE\.tauri\research-assistant.key`"; cargo tauri build"
+}
+$repo = (& $gh repo view --json nameWithOwner -q .nameWithOwner)
+if ($LASTEXITCODE -ne 0 -or -not $repo) { Die "Cannot resolve GitHub repo (gh repo view failed)." }
+$latestJson = Join-Path $exe.DirectoryName "latest.json"
+$latest = @{
+    version  = $ver
+    pub_date = [DateTime]::UtcNow.ToString("yyyy-MM-ddTHH:mm:ssZ")
+    notes    = "https://github.com/$repo/releases/tag/$tag"
+    platforms = @{
+        "windows-x86_64" = @{
+            signature = (Get-Content $sig -Raw)
+            url       = "https://github.com/$repo/releases/download/$tag/$asciiName"
+        }
+    }
+}
+$latest | ConvertTo-Json -Depth 5 | Out-File $latestJson -Encoding ascii
+Write-Host "    updater manifest: latest.json -> $tag/$asciiName" -ForegroundColor DarkGray
+
 $notesFile = "$root\scripts\release-notes.md"
 
 # Probe whether the release already exists (gh exits non-zero + stderr if not; that's fine).
@@ -51,10 +75,10 @@ $notesFile = "$root\scripts\release-notes.md"
 $exists = ($LASTEXITCODE -eq 0)
 
 if (-not $exists) {
-    & $gh release create $tag "$asset" --title "Research Assistant $tag" --notes-file "$notesFile"
+    & $gh release create $tag "$asset" "$latestJson" --title "Research Assistant $tag" --notes-file "$notesFile"
 } else {
-    Write-Host "Release $tag exists; re-uploading asset (clobber)..." -ForegroundColor Yellow
-    & $gh release upload $tag "$asset" --clobber
+    Write-Host "Release $tag exists; re-uploading assets (clobber)..." -ForegroundColor Yellow
+    & $gh release upload $tag "$asset" "$latestJson" --clobber
 }
 if ($LASTEXITCODE -ne 0) { Die "gh release step failed (exit $LASTEXITCODE)." }
 
