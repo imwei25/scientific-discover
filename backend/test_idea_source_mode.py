@@ -6,7 +6,9 @@ from app.research import deep_research_idea, _ref_to_paper
 def _collect(inputs):
     async def run():
         return [ev async for ev in deep_research_idea(inputs)]
-    return asyncio.get_event_loop().run_until_complete(run())
+    # asyncio.run 每次新建并关闭事件循环, 避免全量跑测时前序用例关闭 loop 后
+    # get_event_loop() 报 "no current event loop"。
+    return asyncio.run(run())
 
 
 def test_ref_to_paper_fills_hard_keys():
