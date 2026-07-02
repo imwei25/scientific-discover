@@ -834,7 +834,7 @@ async def deep_research_idea(inputs: dict) -> AsyncIterator[tuple[str, dict]]:
             return
 
         if source_mode == "import_then_search" and imported_papers:
-            papers = _merge_papers(papers, imported_papers, cap=max(40, len(papers) + len(imported_papers)))
+            papers = _merge_papers(papers, imported_papers, cap=60)
             yield ("references", {"items": [_ref_item(p) for p in papers]})
 
         yield ("verify", _verify_citations(full, papers))
