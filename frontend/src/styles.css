@@ -2286,6 +2286,71 @@ select {
   color: var(--teal);
   border-bottom-width: 2px;
 }
+
+/* —— 引用悬浮卡: 鼠标移到文献引用上, 浮出"支持此观点的原文句子" —— */
+.cite-wrap {
+  position: relative;
+  display: inline;
+  outline: none;
+}
+/* 用点划下划线暗示"可悬停看支持句", 与普通链接的实线下划线区分 */
+.cite-wrap > a {
+  border-bottom-style: dotted;
+}
+.cite-pop {
+  position: absolute;
+  left: 0;
+  top: 1.7em;
+  z-index: 60;
+  width: max-content;
+  max-width: min(30em, 80vw);
+  padding: 10px 12px;
+  background: var(--surface);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: var(--shadow-2, 0 6px 24px rgba(0, 0, 0, 0.18));
+  font-size: var(--fs-small, 13px);
+  line-height: 1.6;
+  text-align: left;
+  white-space: normal;
+  opacity: 0;
+  visibility: hidden;
+  transform: translateY(-4px);
+  transition: opacity var(--dur-fast), transform var(--dur-fast), visibility var(--dur-fast);
+  pointer-events: none;
+}
+.cite-wrap:hover .cite-pop,
+.cite-wrap:focus-within .cite-pop,
+.cite-wrap:focus .cite-pop {
+  opacity: 1;
+  visibility: visible;
+  transform: translateY(0);
+}
+.cite-pop-head {
+  display: block;
+  font-weight: 600;
+  color: var(--text-2, var(--text));
+  margin-bottom: 4px;
+}
+.cite-pop-tag {
+  display: inline-block;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--petrol);
+  background: var(--surface-2);
+  border-radius: 4px;
+  padding: 1px 6px;
+  margin-bottom: 4px;
+}
+.cite-pop-body {
+  display: block;
+  color: var(--text);
+}
+.verify-quote-note {
+  color: var(--text-2, var(--text));
+}
+
 .markdown h1 {
   font-family: var(--serif);
   font-size: 22px;

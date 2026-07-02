@@ -110,7 +110,8 @@ function mdToHtml(md: string): string {
   const inline = (t: string) =>
     t
       .replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>")
-      .replace(/\[(.+?)\]\((https?:[^)]+)\)/g, '<a href="$2" target="_blank" rel="noreferrer">$1</a>');
+      // 链接可能带『支持句』title(](url "…"))；只取 URL 作 href, title 不进导出文档。
+      .replace(/\[(.+?)\]\((https?:[^)\s]+)(?:\s+[^)]*)?\)/g, '<a href="$2" target="_blank" rel="noreferrer">$1</a>');
   for (const raw of lines) {
     const line = raw.trimEnd();
     if (/^###\s+/.test(line)) { if (inList) { out.push("</ul>"); inList = false; } out.push(`<h3>${inline(line.replace(/^###\s+/, ""))}</h3>`); }

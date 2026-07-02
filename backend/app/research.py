@@ -29,6 +29,30 @@ from .logutil import log_swallow
 
 _ALL_SOURCES = ["pubmed", "europepmc", "openalex", "crossref", "clinicaltrials", "unpaywall"]
 
+# 引用『支持句』规则(选题/标书共用理念): 让 AI 在引用链接的 title 里附上支持该论断的原文原句,
+# 前端悬停即可看到"是哪句话支持了这个观点"。铁律是逐字摘录、不得编造, 生成后有子串核验兜底。
+_QUOTE_RULE = (
+    "引用文献时，请在 Markdown 链接里附上『支持句』作为链接 title，格式为："
+    "[第一作者 et al., 年份](真实URL \"支持句：<从该文献摘要中逐字摘录、直接支持你此处论断的原句>\")。"
+    "支持句必须【逐字来自所给文献摘要原文】(可只取其中一句、可用省略号截断，但不得改写、翻译或编造)；"
+    "确无合适原句时可省略 title，但绝不能编造支持句。"
+)
+
+# references 事件推送给前端的字段。abstract 单独附加(见 _ref_item), 供写标书阶段据实摘录支持句。
+_REF_FIELDS = (
+    "pmid", "doi", "title", "first_author", "journal", "year", "url", "source",
+    "cited_by_count", "oa_url", "journal_impact", "journal_quartile",
+)
+
+
+def _ref_item(p: dict) -> dict:
+    """构造一条 references 载荷; 附带截断摘要(供标书阶段摘录支持句, 控制体积上限 800 字)。"""
+    item = {k: p.get(k, "") for k in _REF_FIELDS}
+    ab = (p.get("abstract") or "").strip()
+    if ab:
+        item["abstract"] = ab[:800]
+    return item
+
 
 def _parse_sources(raw) -> list[str]:
     """把前端传入的 sources(列表或逗号串)规整为合法源 key 列表; 缺省=全开。"""
@@ -346,6 +370,10 @@ def _evidence_line(gi: int, p: dict, row: dict | None) -> str:
             f"对象: {row.get('pop') or '—'} | 设计: {row.get('design') or '—'} | "
             f"发现: {row.get('finding') or '—'} | 局限: {row.get('gap') or '—'}"
         )
+        # 附一段摘要节选(原文), 供归纳时逐字摘录『支持句』, 不改写。
+        ab = (p.get("abstract") or "").strip()
+        if ab:
+            body += f"\n原文摘要(节选): {ab[:500]}"
     else:
         ab = (p.get("abstract") or "")[:400]
         body = f"摘要: {ab or '（无摘要）'}"
@@ -397,7 +425,8 @@ async def _summarize_chunk(field: str, context: str, facet_name: str | None = No
     system = (
         f"你是医学科研综述助手。下面是某研究方向中{scope}的真实文献(结构化要点)。"
         f"请用 150-280 字概括{scope}的研究现状要点, 保留最关键的发现与方法、并指出该子方向尚存的争议或空白; "
-        "引用时用 Markdown 链接 [第一作者 et al., 年份](URL)，URL 必须用所给真实 URL。"
+        + _QUOTE_RULE +
+        "URL 必须用所给真实 URL, 支持句必须逐字取自该文献的『原文摘要(节选)』。"
         "只输出概括段落, 不要逐篇罗列, 不要编造未给出的文献。"
     )
     user = f"研究方向：{field}\n\n【文献】\n{context}"
@@ -434,8 +463,8 @@ def _reduce_messages_deep(field: str, summaries: list[tuple[str, str]], trials_n
     system = (
         "你是资深的医学/药学/生物医学科研选题顾问。下面是按【子方向】分别归纳出的研究现状小结"
         "（每段已含真实文献的 Markdown 链接）。请据此综合成一份有深度的调研报告，分四部分：\n"
-        "## 一、研究现状（按子方向组织）\n沿用下面给出的子方向，逐个综述代表性进展，引用沿用小结中的"
-        " [第一作者 et al., 年份](真实URL) 链接。\n"
+        "## 一、研究现状（按子方向组织）\n沿用下面给出的子方向，逐个综述代表性进展，引用时"
+        "【原样复制】小结中出现的完整 Markdown 链接——包括括号内引号里的『支持句』title，不要改写或删掉支持句。\n"
         "## 二、研究空白矩阵\n用 Markdown 表格对比『已被充分研究 / 证据不足或有争议 / 几乎空白』三类，"
         "可结合各子方向，明确指出最值得切入的空白。\n"
         "## 三、候选选题（3-5 个，按推荐度排序）\n"
@@ -465,7 +494,7 @@ def _synthesis_messages(field: str, papers: list[dict]) -> list[dict]:
         "你是资深的医学/药学/生物医学科研选题顾问。下面提供的是从 PubMed 检索到的【真实文献】。"
         "请严格基于这些文献完成分析，分三部分：\n"
         "## 一、研究现状\n综述该方向已有的代表性工作。每次引用某篇文献时，"
-        "必须使用 Markdown 超链接，格式为 [第一作者 et al., 年份](文献URL)，URL 用文献给出的真实 URL。\n"
+        + _QUOTE_RULE + "URL 用文献给出的真实 URL, 支持句逐字取自该文献摘要。\n"
         "## 二、研究空白\n基于现状，指出尚未充分解决或较少被研究的问题、争议点或方法学局限。\n"
         "## 三、候选选题\n提出 3-5 个有文献支撑、有创新性且可行的研究课题。"
         "每个课题用 `### 候选选题N：一句话题名` 作小标题，分点给出：拟解决的科学问题、创新点、可行性、相关文献链接，"
@@ -584,7 +613,7 @@ async def _deep_flow(
         return [p for _, g in groups for p in g]
 
     papers = _flatten()
-    yield ("references", {"items": [{k: p.get(k, "") for k in ("pmid", "doi", "title", "first_author", "journal", "year", "url", "source", "cited_by_count", "oa_url", "journal_impact", "journal_quartile")} for p in papers]})
+    yield ("references", {"items": [_ref_item(p) for p in papers]})
     if relaxed_any:
         yield ("status", {"message": "高质量文献不足，已自动纳入全部检索结果（可在高级检索设置调整质量门槛）。"})
 
@@ -602,7 +631,7 @@ async def _deep_flow(
         if gap_grp:
             groups.append(("空白补充角度", gap_grp))
             papers = _flatten()
-            yield ("references", {"items": [{k: p.get(k, "") for k in ("pmid", "doi", "title", "first_author", "journal", "year", "url", "source", "cited_by_count", "oa_url", "journal_impact", "journal_quartile")} for p in papers]})
+            yield ("references", {"items": [_ref_item(p) for p in papers]})
 
     # 结构化证据表: 综述前把每篇压成要点行(并发抽取), 既能纳入更多文献又抗"中段被忽略"。
     yield ("status", {"message": f"共 {len(papers)} 篇文献，正在逐篇抽取结构化要点…"})
@@ -744,9 +773,7 @@ async def deep_research_idea(inputs: dict) -> AsyncIterator[tuple[str, dict]]:
                 })
                 yield ("error", {"message": "未能从所选文献源检索到相关文献。可采纳上面的 AI 改写建议后重试。"})
                 return
-            yield ("references", {"items": [
-                {k: p.get(k, "") for k in ("pmid", "doi", "title", "first_author", "journal", "year", "url", "source", "cited_by_count", "oa_url", "journal_impact", "journal_quartile")} for p in papers
-            ]})
+            yield ("references", {"items": [_ref_item(p) for p in papers]})
             trials = await _emit_trials(queries, sources)
             if trials is not None:
                 yield ("trials", trials)
@@ -861,19 +888,37 @@ def _build_topic_card(
     }
 
 
+def _norm_txt(s: str) -> str:
+    """归一化文本以做支持句子串核验: NFKC + 拉直引号 + 折叠空白 + 小写。"""
+    import unicodedata
+
+    s = unicodedata.normalize("NFKC", s or "")
+    s = s.replace("’", "'").replace("“", '"').replace("”", '"')
+    return re.sub(r"\s+", " ", s).strip().lower()
+
+
+# 正文引用链接: 捕获 URL 与可选的 title(支持句)。title 可选, 兼容旧的无 title 链接。
+_LINK_RE = re.compile(r'\]\((https?://[^)\s]+)(?:\s+"([^"]*)")?\)')
+
+
 def _verify_citations(full: str, items: list[dict]) -> dict:
-    """引用自动核验: 正文 Markdown 链接里的每个 URL 必须命中给定文献。
+    """引用自动核验: 正文 Markdown 链接里的每个 URL 必须命中给定文献; 并核验『支持句』是否逐字来自摘要。
 
     兼容 PubMed (pubmed.ncbi.nlm.nih.gov/<pmid>/) 与 Europe PMC (europepmc.org/...)。
-    items 可为检索到的 papers 或前端回传的 references/evidence(都含 url, 部分含 pmid)。
+    items 可为检索到的 papers 或前端回传的 references/evidence(都含 url, 部分含 pmid/abstract)。
+    支持句核验仅在 items 带 abstract 时进行(带不出摘要的场景 quotes_total=0)。
     """
     valid_urls = {(p.get("url") or "").rstrip("/") for p in items if p.get("url")}
     valid_pmids = {p["pmid"] for p in items if p.get("pmid")}
-    link_urls = re.findall(r"\]\((https?://[^)\s]+)\)", full)
+    links = _LINK_RE.findall(full)  # [(url, title), ...]; title 为 '' 表示无支持句
     cited_urls: set[str] = set()
-    for u in link_urls:
+    titled: list[tuple[str, str]] = []
+    for u, title in links:
+        cu = u.rstrip("/")
         if "pubmed.ncbi.nlm.nih.gov" in u or "europepmc.org" in u:
-            cited_urls.add(u.rstrip("/"))
+            cited_urls.add(cu)
+        if title.strip():
+            titled.append((cu, title.strip()))
 
     def _pmid_ok(u: str) -> bool:
         # 按"末尾路径段 == PMID"精确匹配, 避免子串误判(如 PMID 456 命中 .../4567890/)
@@ -881,10 +926,38 @@ def _verify_citations(full: str, items: list[dict]) -> dict:
         return tail in valid_pmids
 
     unverified = sorted(u for u in cited_urls if u not in valid_urls and not _pmid_ok(u))
+
+    # —— 支持句逐字核验: 建 URL/PMID → 归一化摘要 的索引, 逐条查子串 ——
+    abs_by_url: dict[str, str] = {}
+    abs_by_pmid: dict[str, str] = {}
+    for p in items:
+        ab = _norm_txt(p.get("abstract") or "")
+        if not ab:
+            continue
+        u = (p.get("url") or "").rstrip("/")
+        if u:
+            abs_by_url[u] = ab
+        if p.get("pmid"):
+            abs_by_pmid[str(p["pmid"])] = ab
+
+    quotes_total = 0
+    quotes_ok = 0
+    for cu, title in titled:
+        ab = abs_by_url.get(cu) or abs_by_pmid.get(cu.rsplit("/", 1)[-1])
+        if ab is None:
+            continue  # 无摘要可比对(如追问场景), 不计入
+        quotes_total += 1
+        quote = re.sub(r"^支持句[:：]\s*", "", title).strip().strip('"“”')
+        frags = [f for f in re.split(r"\.{2,}|…", quote) if len(f.strip()) >= 6] or [quote]
+        if all(_norm_txt(f) in ab for f in frags):
+            quotes_ok += 1
+
     return {
         "total": len(cited_urls),
         "verified": len(cited_urls) - len(unverified),
         "unverified": unverified,
+        "quotes_total": quotes_total,
+        "quotes_ok": quotes_ok,
     }
 
 

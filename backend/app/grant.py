@@ -36,8 +36,8 @@ from typing import AsyncIterator
 from .config import settings
 from .literature import search_literature
 from .llm import stream_chat
-# 复用找选题的: 引用核验 / 主题→PubMed检索式 / 文献去重键
-from .research import _verify_citations, _gen_queries, _pkey
+# 复用找选题的: 引用核验(含支持句) / 支持句规则 / 主题→PubMed检索式 / 文献去重键
+from .research import _verify_citations, _gen_queries, _pkey, _QUOTE_RULE
 from .logutil import log_swallow
 
 # 重新调研重写时, 检索的默认论文源(与找选题默认一致)。
@@ -127,6 +127,8 @@ def _merge_refs(existing: list[dict], extra: list[dict], cap: int = _REFS_CAP) -
             "journal": p.get("journal", ""), "year": p.get("year", ""),
             "url": p.get("url", ""), "source": p.get("source", ""),
             "cited_by_count": p.get("cited_by_count", 0),
+            # 保留截断摘要: 撰写时据此逐字摘录『支持句』, 写完做支持句核验。
+            "abstract": (p.get("abstract") or "").strip()[:800],
         })
         added += 1
         if len(out) >= cap:
@@ -139,10 +141,15 @@ def _refs_context(refs: list[dict], cap: int = 30) -> str:
     lines = []
     for i, r in enumerate(refs[:cap], 1):
         url = r.get("url", "")
-        lines.append(
+        line = (
             f"[{i}] {r.get('first_author', '')} ({r.get('year', '')}). {r.get('title', '')} "
             f"{r.get('journal', '')}. URL: {url}"
         )
+        # 附摘要节选(原文): 供撰写立项依据时逐字摘录『支持句』, 不改写。
+        ab = (r.get("abstract") or "").strip()
+        if ab:
+            line += f"\n    摘要(节选): {ab[:400]}"
+        lines.append(line)
     return "\n".join(lines)
 
 
@@ -272,8 +279,8 @@ def _section_messages(
         f"本次撰写: 《{sec_title}》。写作要点: {guide}\n"
         f"篇幅: {budget}。资助类型侧重: {gt_hint}\n"
         "铁律:\n"
-        "1) 引用文献时只能引用下面【可引用的真实文献】中确有的文献, 用 Markdown 链接 [第一作者 et al., 年份](真实URL), "
-        "严禁编造任何文献、作者或链接;\n"
+        "1) 引用文献时只能引用下面【可引用的真实文献】中确有的文献, 严禁编造任何文献、作者或链接; "
+        + _QUOTE_RULE + "支持句必须逐字取自该文献下方的『摘要(节选)』;\n"
         "2) 申请人/团队/单位/经费/设备等无法从材料推断的具体事实, 一律用 [需申请人补充] 占位, 绝不杜撰;\n"
         "3) 基于现状的推断性论断(尚无文献直接支撑)标注 [待验证];\n"
         "4) 用规范、严谨的中文基金申请书语体; 只输出本章节正文(可含子标题), 不要重复大标题、不要写其它章节。"
@@ -296,7 +303,8 @@ def _revise_messages(
     system = (
         f"你是资深的{gt_name}标书写作专家。下面给出申请书某一章节《{sec_title}》的现有正文, 以及用户的修改意见。"
         f"请按修改意见产出【修改后的该章节完整正文】。写作要点: {guide}; 篇幅: {budget}; 侧重: {gt_hint}\n"
-        "铁律: 1) 引用只能用下面【可引用的真实文献】中确有的文献, 用 [第一作者 et al., 年份](真实URL) 链接, 严禁编造; "
+        "铁律: 1) 引用只能用下面【可引用的真实文献】中确有的文献, 严禁编造; " + _QUOTE_RULE +
+        "支持句必须逐字取自该文献下方的『摘要(节选)』; "
         "2) 申请人/经费/设备等不可推断的事实用 [需申请人补充] 占位; 推断性论断标 [待验证]; "
         "3) 只输出修改后的本章节正文(可含子标题), 不要重复大标题、不要写其它章节、不要附加说明。"
     )

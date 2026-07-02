@@ -180,6 +180,7 @@ export interface Reference {
   oa_url?: string; // Unpaywall 发现的合法 OA 全文链接(优先 PDF)
   journal_impact?: number | null; // 影响力指数(OpenAlex 近2年篇均被引); 未知为 null
   journal_quartile?: string | null; // Scimago 医学分区 Q1-Q4(仅医学刊有); 未知为 null
+  abstract?: string; // 截断摘要(≤800字): 供写标书阶段据实摘录『支持句』, 前端不直接展示
 }
 
 export interface EvidenceItem {
@@ -202,6 +203,8 @@ export interface Verification {
   total: number;
   verified: number;
   unverified: string[]; // URLs (PubMed / Europe PMC links)
+  quotes_total?: number; // 正文里附了『支持句』的引用数(可悬停查看)
+  quotes_ok?: number; // 其中经子串核验、确为摘要原文逐字摘录的数量
 }
 
 export interface Trial {

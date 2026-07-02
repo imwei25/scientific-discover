@@ -1,9 +1,10 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   streamGrant, planGrant, streamGrantRevise, streamGrantReview,
   Reference, Verification, GrantScheme, GrantOutlineItem,
   GrantReviewData, GrantReviewIssue,
 } from "../lib/sse";
+import { CiteInfo, normCiteUrl } from "../components/Markdown";
 import { reportLLMError } from "../lib/errorToast";
 import { addHistory } from "../lib/history";
 import EditableMarkdown from "../components/EditableMarkdown";
@@ -73,6 +74,15 @@ export default function GrantModule() {
   const rvctrl = useRef<AbortController | null>(null);
 
   const text = fullDoc(sections);
+
+  // 引用悬浮卡数据: 按 URL 索引文献题名, 悬停正文引用即可看 AI 标注的原文支持句。
+  const citeInfo = useMemo(() => {
+    const m: Record<string, CiteInfo> = {};
+    for (const r of refs) {
+      if (r.url) m[normCiteUrl(r.url)] = { label: `${r.first_author} (${r.year}). ${r.title}`.slice(0, 140) };
+    }
+    return m;
+  }, [refs]);
 
   // 去 AI 味采纳/撤回: 正文由 fullDoc(sections) 拼成, 去AI味不动 `## 标题`,
   // 故按 `## ` 切回、按序写回各节正文(解析失败的节保持原样, 不破坏文档)。
@@ -710,6 +720,7 @@ export default function GrantModule() {
             value={text}
             onSave={applyDeai}
             running={running}
+            refInfo={citeInfo}
             placeholder={running ? "正在撰写…" : "填好题名（或从「找选题」带入）后，点“生成大纲”确认，再撰写；申请书初稿会显示在这里。"}
             testId="grant-result"
           />
@@ -744,6 +755,14 @@ export default function GrantModule() {
         verify.unverified.length === 0 ? (
           <div className="verify-ok" data-testid="grant-verify">
             ✓ 引用核验：正文 {verify.total} 处文献引用均来自选题阶段检索到的真实文献。
+            {(verify.quotes_total ?? 0) > 0 && (
+              <span className="verify-quote-note">
+                　其中 {verify.quotes_total} 处附有原文支持句（悬停引用即可查看）
+                {(verify.quotes_ok ?? 0) < (verify.quotes_total ?? 0) &&
+                  `；有 ${(verify.quotes_total ?? 0) - (verify.quotes_ok ?? 0)} 处未能在摘要中逐字定位，请核对`}
+                。
+              </span>
+            )}
           </div>
         ) : (
           <div className="verify-bad" data-testid="grant-verify">

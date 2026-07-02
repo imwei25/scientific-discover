@@ -1,4 +1,5 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { CiteInfo, normCiteUrl } from "../components/Markdown";
 import { streamIdea, streamIdeaFollowup, runModule, clarifyTopic, refineTopic, Reference, Trial, EvidenceItem, Verification, RewritePayload, TopicCard, ClarifyQuestion, RefineOption } from "../lib/sse";
 import { reportLLMError } from "../lib/errorToast";
 import { addHistory } from "../lib/history";
@@ -92,7 +93,8 @@ function reportBackgroundOnly(full: string): string {
 function refsCitedIn(body: string, all: Reference[]): Reference[] {
   const strip = (u: string) => u.replace(/\/+$/, "");
   const urls = new Set<string>();
-  const re = /\]\((https?:\/\/[^)\s]+)\)/g;
+  // 链接可能带『支持句』title(](url "支持句：…"))，URL 后允许可选 title，避免把 title 吞进 URL。
+  const re = /\]\((https?:\/\/[^)\s]+)(?:\s+"[^"]*")?\)/g;
   let m: RegExpExecArray | null;
   while ((m = re.exec(body)) !== null) urls.add(strip(m[1]));
   if (urls.size === 0) return [];
@@ -443,6 +445,20 @@ export default function IdeaModule({ goto }: { goto: Goto }) {
 
   // 质量筛选已在检索时(高级检索设置)完成; 列表仅按所选规则排序展示。
   const shownRefs = sortRefs(refs, refSort);
+
+  // 引用悬浮卡数据: 按 URL 索引文献题名(悬浮卡标题) + 证据表要点(无支持句时兜底)。
+  const citeInfo = useMemo(() => {
+    const m: Record<string, CiteInfo> = {};
+    for (const r of refs) {
+      if (r.url) m[normCiteUrl(r.url)] = { label: `${r.first_author} (${r.year}). ${r.title}`.slice(0, 140) };
+    }
+    for (const e of evidence) {
+      if (!e.url) continue;
+      const k = normCiteUrl(e.url);
+      m[k] = { label: m[k]?.label || `${e.first_author} (${e.year}). ${e.title}`.slice(0, 140), finding: e.finding || undefined };
+    }
+    return m;
+  }, [refs, evidence]);
 
   const reset = () => {
     if (running) stop();
@@ -1067,6 +1083,7 @@ export default function IdeaModule({ goto }: { goto: Goto }) {
               value={text}
               onSave={setText}
               running={running}
+              refInfo={citeInfo}
               placeholder={running ? "正在分析…" : "填好左侧信息后点击“开始文献调研”，调研报告会显示在这里。"}
               testId="result-text"
             />
@@ -1078,6 +1095,14 @@ export default function IdeaModule({ goto }: { goto: Goto }) {
         verify.unverified.length === 0 ? (
           <div className="verify-ok" data-testid="verify">
             ✓ 引用核验：正文 {verify.total} 处文献引用均来自本次检索到的真实文献。
+            {(verify.quotes_total ?? 0) > 0 && (
+              <span className="verify-quote-note">
+                　其中 {verify.quotes_total} 处附有原文支持句（悬停引用即可查看）
+                {(verify.quotes_ok ?? 0) < (verify.quotes_total ?? 0) &&
+                  `；有 ${(verify.quotes_total ?? 0) - (verify.quotes_ok ?? 0)} 处未能在摘要中逐字定位，请核对`}
+                。
+              </span>
+            )}
           </div>
         ) : (
           <div className="verify-bad" data-testid="verify">
