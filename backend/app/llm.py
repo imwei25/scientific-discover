@@ -83,6 +83,7 @@ STAGES: dict[str, str] = {
     "grant_write": "写标书·分节撰写",
     "grant_review": "写标书·评审组模拟评审",
     "grant_revise": "写标书·逐节修订",
+    "grant_style": "写标书·文风提炼",
     "imrad": "论文撰写（IMRaD 装配）",
     "analysis": "数据分析（写代码/结论解读）",
     "deai": "去 AI 味改写",

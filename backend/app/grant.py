@@ -669,6 +669,35 @@ def _grant_type(inputs: dict) -> tuple[str, str]:
     return _GRANT_TYPES[_grant_key(inputs)]
 
 
+async def extract_style_profile(sample_text: str) -> str:
+    """从文风样例提炼一份简短中文『文风档案』(只描述语言风格, 不复述样例内容)。
+
+    失败/空样例返回 ""(降级=撰写时不模仿, 不阻断)。
+    """
+    text = (sample_text or "").strip()
+    if not text:
+        return ""
+    if settings.mock:
+        return "[MOCK] 文风档案: 句式长短交错; 用词平实、术语克制; 先总后分; 少用套话。"
+    system = (
+        "你是资深中文科研写作分析师。下面给你一段作者的写作样例。"
+        "请只【分析并总结它的语言风格】, 产出一份 150-250 字的中文『文风档案』, 用分点或短句描述:"
+        "句子长短与节奏、用词倾向(书面/平实/术语密度)、语气(克制/热情/主观)、"
+        "常用的连接与过渡方式、段落展开习惯(先总后分/先例后论等)、人称与时态偏好、"
+        "是否爱用排比/设问/比喻等。\n"
+        "铁律: 只描述『怎么写』, 严禁复述、引用或提及样例里的任何具体研究对象、数据、结论、"
+        "专有名词或原句; 不要评价好坏; 只输出文风档案本身, 不要前后缀。"
+    )
+    try:
+        profile = await _complete(
+            [{"role": "system", "content": system}, {"role": "user", "content": text[:6000]}],
+            max_tokens=500, task="grant_style",
+        )
+    except Exception:  # noqa: BLE001
+        return ""
+    return profile.strip()
+
+
 # ---------------------------------------------------------------------------
 # 阶段一: 方案凝练 + 大纲(非流式, 供两段式确认)
 # ---------------------------------------------------------------------------
