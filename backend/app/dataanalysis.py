@@ -202,9 +202,25 @@ def profile_data(df: pd.DataFrame) -> str:
     return "\n".join(lines)
 
 
+_FENCE_OPEN = re.compile(r"```(?:python|py)?[ \t]*\n?")
+
+
 def _extract_code(text: str) -> str:
-    m = re.search(r"```(?:python)?\s*(.*?)```", text, re.DOTALL)
-    return (m.group(1) if m else text).strip()
+    """从 LLM 输出中提取 Python 代码, 对两类真实故障保持健壮:
+
+    1. 修复类回复的散文说明里常有内联 ``` 小片段——取"最长"的完整代码块,
+       不能拿第一块就走(曾把 17 个字符的中文当代码去 exec)。
+    2. 输出被 max_tokens 截断时闭合围栏丢失——退而取最后一个开围栏之后的全部,
+       绝不能把带 ```python 围栏的原文整段交给 exec(必然 SyntaxError)。
+    """
+    blocks = [b.strip() for b in re.findall(r"```(?:python|py)?\s*(.*?)```", text, re.DOTALL)]
+    best = max(blocks, key=len) if blocks else ""
+    opens = list(_FENCE_OPEN.finditer(text))
+    if opens:
+        tail = text[opens[-1].end():]
+        if "```" not in tail and len(tail.strip()) > len(best):
+            best = tail.strip()
+    return best if best else text.strip()
 
 
 async def _complete(messages: list[dict], max_tokens: int = 1500) -> str:
@@ -608,7 +624,12 @@ async def analyze_data(
             routing = ""
 
         yield ("status", {"message": "正在理解数据并生成分析代码…"})
-        code = _extract_code(await _complete(_gen_code_messages(profile, question, explore=explore_out, routing=routing)))
+        # 4096: 提示词要求三大透明区块+前提检验+效应量/CI+出版级图, 认真写完轻松超 1500 token;
+        # 实测 1500 会系统性拦腰截断 -> 闭围栏丢失 -> SyntaxError 死循环。
+        code = _extract_code(await _complete(
+            _gen_code_messages(profile, question, explore=explore_out, routing=routing),
+            max_tokens=4096,
+        ))
 
         yield ("code", {"code": code})
         yield ("status", {"message": "正在本地执行分析…"})
@@ -628,7 +649,10 @@ async def analyze_data(
             hint = "（换一种思路重写）" if fresh else ""
             yield ("status", {"message": f"执行出错，正在自动修正代码（第 {attempt + 1} 次）{hint}…"})
             code = _extract_code(
-                await _complete(_fix_code_messages(profile, question, code, run.get("error", ""), fresh=fresh))
+                await _complete(
+                    _fix_code_messages(profile, question, code, run.get("error", ""), fresh=fresh),
+                    max_tokens=4096,
+                )
             )
             yield ("code", {"code": code})
             yield ("status", {"message": "正在重新执行…"})
