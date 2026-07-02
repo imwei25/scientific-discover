@@ -37,6 +37,10 @@ class DeaiRewriteRequest(BaseModel):
     style: str = ""          # 可选: 作者个人风格档案
 
 
+class GrantStyleRequest(BaseModel):
+    sample: str
+
+
 @router.post("/api/run")
 async def run(req: RunRequest) -> StreamingResponse:
     try:
@@ -169,6 +173,17 @@ async def grant_plan_ep(req: RunRequest) -> JSONResponse:
         from ..grant import _default_outline, _norm_scheme
         title = (req.inputs.get("title") or req.inputs.get("field") or "").strip()
         return JSONResponse({"scheme": _norm_scheme({}, title), "outline": _default_outline()})
+
+
+@router.post("/api/grant/style")
+async def grant_style_ep(req: GrantStyleRequest) -> JSONResponse:
+    """从上传的文风样例提炼一份『文风档案』(非流式)。失败/空样例返回空档案, 不阻断撰写。"""
+    try:
+        from ..grant import extract_style_profile
+        return JSONResponse({"profile": await extract_style_profile(req.sample)})
+    except Exception as e:  # noqa: BLE001
+        log_swallow("写标书/提炼文风: 失败, 返回空档案", e)
+        return JSONResponse({"profile": ""})
 
 
 @router.post("/api/grant/review")
