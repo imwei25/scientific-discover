@@ -19,6 +19,8 @@ function toRef(r: any): Reference {
     journal: r.journal || "",
     year: r.year ? String(r.year) : "",
     url: r.url || (r.doi ? `https://doi.org/${r.doi}` : ""),
+    doi: r.doi || "",
+    abstract: r.abstract || "",   // 带上摘要: "只用导入的文献"跳过检索时靠它生成综述+核验支持句
     source: r.source,
   };
 }

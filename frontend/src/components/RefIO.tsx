@@ -89,6 +89,8 @@ export default function RefIO({ currentRefs, onImport, exportFilename = "referen
         journal: r.journal || "",
         year: r.year ? String(r.year) : "",
         url: r.url || (r.doi ? `https://doi.org/${r.doi}` : ""),
+        doi: r.doi || "",
+        abstract: r.abstract || "",   // 带上摘要: "只用导入的文献"跳过检索时靠它生成综述+核验支持句
         source: r.source,
         cited_by_count: typeof r.cited_by_count === "number" ? r.cited_by_count : undefined,
       }));
