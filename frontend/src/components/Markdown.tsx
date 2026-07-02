@@ -1,4 +1,5 @@
-import ReactMarkdown from "react-markdown";
+import { useMemo } from "react";
+import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import Mermaid from "./Mermaid";
 
@@ -27,51 +28,56 @@ export default function Markdown({
   children: string;
   refInfo?: Record<string, CiteInfo>;
 }) {
+  // components 必须 memo 化: react-markdown 把这些函数当作组件"类型"使用,
+  // 若每次渲染都新建函数, 其 <Mermaid> 子树会在每个 token 被 remount, debounce 计时器
+  // 反复清零, 导致流式期间图表永远不渲染(要等流停下)。仅在 refInfo 变化时重建。
+  const components = useMemo<Components>(
+    () => ({
+      a: ({ href, title, children }) => {
+        const link = (
+          <a href={href} target="_blank" rel="noreferrer">
+            {children}
+          </a>
+        );
+        const info = href ? refInfo?.[normCiteUrl(href)] : undefined;
+        // title 里的『支持句：…』是 AI 标注的、支持此处论断的原文原句。
+        const quote = title ? title.replace(/^支持句[:：]\s*/, "").trim() : "";
+        const body = quote || info?.finding || "";
+        if (!body) return link;
+        return (
+          <span className="cite-wrap" tabIndex={0}>
+            {link}
+            <span className="cite-pop" role="tooltip">
+              {info?.label && <span className="cite-pop-head">{info.label}</span>}
+              <span className="cite-pop-tag">{quote ? "原文支持句" : "文献要点"}</span>
+              <span className="cite-pop-body">{body}</span>
+            </span>
+          </span>
+        );
+      },
+      // 表格外包一层容器, 窄屏可横向滚动而不撑破布局。
+      table: ({ children }) => (
+        <div className="md-table-wrap">
+          <table>{children}</table>
+        </div>
+      ),
+      code: ({ className, children, ...props }) => {
+        if (/language-mermaid/.test(className || "")) {
+          return <Mermaid code={String(children ?? "").replace(/\n$/, "")} />;
+        }
+        return (
+          <code className={className} {...props}>
+            {children}
+          </code>
+        );
+      },
+    }),
+    [refInfo],
+  );
+
   return (
     <div className="markdown">
-      <ReactMarkdown
-        remarkPlugins={[remarkGfm]}
-        components={{
-          a: ({ href, title, children }) => {
-            const link = (
-              <a href={href} target="_blank" rel="noreferrer">
-                {children}
-              </a>
-            );
-            const info = href ? refInfo?.[normCiteUrl(href)] : undefined;
-            // title 里的『支持句：…』是 AI 标注的、支持此处论断的原文原句。
-            const quote = title ? title.replace(/^支持句[:：]\s*/, "").trim() : "";
-            const body = quote || info?.finding || "";
-            if (!body) return link;
-            return (
-              <span className="cite-wrap" tabIndex={0}>
-                {link}
-                <span className="cite-pop" role="tooltip">
-                  {info?.label && <span className="cite-pop-head">{info.label}</span>}
-                  <span className="cite-pop-tag">{quote ? "原文支持句" : "文献要点"}</span>
-                  <span className="cite-pop-body">{body}</span>
-                </span>
-              </span>
-            );
-          },
-          // 表格外包一层容器, 窄屏可横向滚动而不撑破布局。
-          table: ({ children }) => (
-            <div className="md-table-wrap">
-              <table>{children}</table>
-            </div>
-          ),
-          code: ({ className, children, ...props }) => {
-            if (/language-mermaid/.test(className || "")) {
-              return <Mermaid code={String(children ?? "").replace(/\n$/, "")} />;
-            }
-            return (
-              <code className={className} {...props}>
-                {children}
-              </code>
-            );
-          },
-        }}
-      >
+      <ReactMarkdown remarkPlugins={[remarkGfm]} components={components}>
         {children}
       </ReactMarkdown>
     </div>
