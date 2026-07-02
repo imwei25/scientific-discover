@@ -1713,3 +1713,43 @@ test("统计顾问: 服务端 error 事件如实显示", async ({ page }) => {
   await page.getByTestId("advisor-ask-btn").click();
   await expect(page.getByTestId("advisor-error")).toContainText("AI 服务暂时不可用");
 });
+
+test("写标书: 上传文风样例→提炼→撰写请求带 style_profile", async ({ page }) => {
+  await mockBase(page);
+  // 文件解析端点: 返回样例文本(即 styleSample)
+  await page.route("**/api/extract", (r) =>
+    r.fulfill({ json: { ok: true, text: "这是一段作者样例文字，长短句交错，用词平实。" } }),
+  );
+  // 提炼端点: 返回一份固定文风档案
+  await page.route("**/api/grant/style", (r) =>
+    r.fulfill({ json: { profile: "句式长短交错; 用词平实; 先总后分; 少用套话" } }),
+  );
+  let grantBody: any = null;
+  await page.route("**/api/grant", (r) => {
+    grantBody = JSON.parse(r.request().postData() || "{}");
+    r.fulfill({ contentType: "text/event-stream", body: sse(
+      { event: "outline", data: { items: [{ key: "rationale", title: "立项依据", budget: "" }] } },
+      { event: "section", data: { key: "rationale", title: "立项依据" } },
+      { event: "delta", data: { text: "立项依据正文。" } },
+      { event: "done", data: {} },
+    ) });
+  });
+  await page.goto("/");
+  await page.getByTestId("nav-grant").click();
+  // 直接填题名即可开始(无需从选题带入)
+  await page.getByTestId("grant-title").fill("测试项目");
+  // 上传一份 txt 文风样例
+  await page.getByTestId("grant-style-upload").setInputFiles({
+    name: "sample.txt",
+    mimeType: "text/plain",
+    buffer: Buffer.from("这是一段作者样例文字，长短句交错，用词平实。", "utf-8"),
+  });
+  // 提炼 → 出现可编辑档案框
+  await page.getByTestId("grant-style-extract-btn").click();
+  await expect(page.getByTestId("grant-style-profile")).toHaveValue(/先总后分/);
+  // 一步到位撰写
+  await page.getByTestId("grant-oneshot-btn").click();
+  await expect(page.getByTestId("grant-result")).toContainText("立项依据正文");
+  // 请求体带上了 style_profile
+  expect(grantBody.inputs.style_profile).toContain("先总后分");
+});
