@@ -40,6 +40,7 @@ async def caption(inputs: dict) -> dict:
     try:
         async for piece in stream_chat(
             [{"role": "system", "content": system}, {"role": "user", "content": user}],
+            task="figcaptions",
             max_tokens=900,
         ):
             buf += piece

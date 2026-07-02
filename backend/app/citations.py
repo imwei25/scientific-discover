@@ -30,7 +30,7 @@ _DEFAULT_STYLE = "vancouver"
 
 async def _complete(messages: list[dict], max_tokens: int = 2000) -> str:
     buf = ""
-    async for piece in stream_chat(messages, max_tokens=max_tokens):
+    async for piece in stream_chat(messages, task="citations", max_tokens=max_tokens):
         buf += piece
     return buf
 

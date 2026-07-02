@@ -52,7 +52,8 @@ async def run(req: RunRequest) -> StreamingResponse:
 
     async def gen():
         try:
-            async for piece in stream_chat(messages):
+            # 环节标识 = 模块名(plan/ethics/abstract/…), 支持 LLM_STAGE_<模块> 按环节换模型。
+            async for piece in stream_chat(messages, task=req.module):
                 yield _sse("delta", {"text": piece})
         except LLMError as e:
             yield _sse("error", {"message": str(e)})
@@ -250,7 +251,7 @@ async def stats_advice(req: StatsAdviceRequest) -> StreamingResponse:
 
     async def gen():
         try:
-            async for piece in stream_chat(messages):
+            async for piece in stream_chat(messages, task="stats_advice"):
                 yield _sse("delta", {"text": piece})
         except LLMError as e:
             yield _sse("error", {"message": str(e)})

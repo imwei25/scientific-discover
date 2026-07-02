@@ -371,7 +371,7 @@ async def stream_rewrite(
             "block": b["index"], "start": b["start"], "end": b["end"], "original": b["text"],
         })
         rewritten = ""
-        async for piece in stream_chat(_rewrite_messages(b["text"], style)):
+        async for piece in stream_chat(_rewrite_messages(b["text"], style), task="deai"):
             rewritten += piece
             yield ("delta", {"block": b["index"], "text": piece})
         rewritten = rewritten.strip()

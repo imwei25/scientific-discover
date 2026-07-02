@@ -30,6 +30,7 @@ async def _extract(text: str) -> list[dict]:
     buf = ""
     async for piece in stream_chat(
         [{"role": "system", "content": system}, {"role": "user", "content": text[:6000]}],
+        task="statcheck",
         max_tokens=1500,
     ):
         buf += piece

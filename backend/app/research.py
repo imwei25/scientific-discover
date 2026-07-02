@@ -45,7 +45,7 @@ def _parse_sources(raw) -> list[str]:
 async def _complete(messages: list[dict], max_tokens: int = 300) -> str:
     """非流式: 累积一次完整回复。"""
     buf = ""
-    async for piece in stream_chat(messages, max_tokens=max_tokens):
+    async for piece in stream_chat(messages, task="research", max_tokens=max_tokens):
         buf += piece
     return buf
 
@@ -618,7 +618,7 @@ async def _deep_flow(
 
     yield ("status", {"message": f"正在汇总 {len(summaries)} 个子方向（现状/空白矩阵/候选选题）…"})
     full = ""
-    async for piece in stream_chat(_reduce_messages_deep(field, summaries, _trials_note(trial_items))):
+    async for piece in stream_chat(_reduce_messages_deep(field, summaries, _trials_note(trial_items)), task="research"):
         full += piece
         yield ("delta", {"text": piece})
     yield ("topic_card", _build_topic_card(
@@ -751,7 +751,7 @@ async def deep_research_idea(inputs: dict) -> AsyncIterator[tuple[str, dict]]:
             if trials is not None:
                 yield ("trials", trials)
             yield ("status", {"message": f"已找到 {len(papers)} 篇文献，正在分析研究现状与空白…"})
-            async for piece in stream_chat(_synthesis_messages(field, papers)):
+            async for piece in stream_chat(_synthesis_messages(field, papers), task="research"):
                 full += piece
                 yield ("delta", {"text": piece})
             yield ("topic_card", _build_topic_card(field, keywords, full, papers, [], queries))
@@ -950,7 +950,7 @@ async def idea_followup(inputs: dict) -> AsyncIterator[tuple[str, dict]]:
 
     try:
         full = ""
-        async for piece in stream_chat([{"role": "system", "content": system}, {"role": "user", "content": user}]):
+        async for piece in stream_chat([{"role": "system", "content": system}, {"role": "user", "content": user}], task="research"):
             full += piece
             yield ("delta", {"text": piece})
         yield ("verify", _verify_citations(full, items))

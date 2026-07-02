@@ -53,6 +53,7 @@ async def _parse_refs(text: str) -> list[dict]:
     buf = ""
     async for piece in stream_chat(
         [{"role": "system", "content": system}, {"role": "user", "content": text[:8000]}],
+        task="refcheck",
         max_tokens=2000,
     ):
         buf += piece

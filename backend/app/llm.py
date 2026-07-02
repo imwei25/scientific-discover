@@ -74,8 +74,45 @@ class ProviderConfig:
     model: str
 
 
+# 环节(stage)注册表: stream_chat(task=...) 用的键 → 展示用中文名。
+# 每个环节都可在 .env 用 LLM_STAGE_<键大写>_MODEL(_API_KEY/_BASE_URL/_PROVIDER) 单独指定模型;
+# 未配置的环节用主配置。/api/config/stages 会列出每个环节当前生效的模型。
+STAGES: dict[str, str] = {
+    "research": "找选题（调研/报告/追问/检索式）",
+    "grant_plan": "写标书·方案凝练与大纲",
+    "grant_write": "写标书·分节撰写",
+    "grant_review": "写标书·评审组模拟评审",
+    "grant_revise": "写标书·逐节修订",
+    "imrad": "论文撰写（IMRaD 装配）",
+    "analysis": "数据分析（写代码/结论解读）",
+    "deai": "去 AI 味改写",
+    "journal_match": "期刊匹配理由",
+    "rebuttal": "回复审稿意见",
+    "refcheck": "参考文献核查",
+    "statcheck": "统计一致性核查",
+    "figcaptions": "图注生成",
+    "citations": "引用整理",
+    "stats_advice": "统计顾问",
+    # /api/run 的通用文本模块: 环节键即模块名(plan/ethics/consent/checklist/abstract/
+    # keywords/pico/precheck/coverletter/write/format 等), 同样支持 LLM_STAGE_ 覆盖。
+}
+
+
 def _primary_cfg() -> ProviderConfig:
     return ProviderConfig(settings.provider, settings.api_key, settings.base_url, settings.model)
+
+
+def _stage_cfg(task: str | None) -> ProviderConfig | None:
+    """某环节的覆盖配置; 未覆盖的字段(key/地址/协议)沿用主配置。"""
+    ov = settings.stage_override(task)
+    if not ov:
+        return None
+    return ProviderConfig(
+        (ov.get("provider") or settings.provider).strip().lower(),
+        (ov.get("api_key") or settings.api_key).strip(),
+        (ov.get("base_url") or settings.base_url).strip().rstrip("/"),
+        ov["model"].strip(),
+    )
 
 
 def _fallback_cfg() -> ProviderConfig:
@@ -259,19 +296,28 @@ async def get_balance() -> dict:
         return {"available": False}
 
 
-async def stream_chat(messages: list[dict], **kwargs) -> AsyncIterator[str]:
-    """根据配置选择格式, 流式返回文本增量; 主供应商额度用尽时自动切到备用。"""
+async def stream_chat(messages: list[dict], *, task: str | None = None, **kwargs) -> AsyncIterator[str]:
+    """根据配置选择格式, 流式返回文本增量; 首选供应商额度用尽时自动降级。
+
+    task: 环节标识(见 STAGES)。配了 LLM_STAGE_<环节>_* 时该环节走覆盖的模型,
+    失败(未产出内容且属配额/网络类)时依次降级: 环节覆盖 → 主配置 → 备用供应商。
+    """
     if settings.mock:
         async for piece in _stream_mock(messages):
             yield piece
         return
 
-    # 主供应商: 对瞬时网络/超时错误做有限重试(仅在尚未产出内容时, 避免重复输出)。
+    stage = _stage_cfg(task)
+    first = stage or _primary_cfg()
+    first_name = (f"环节[{task}]覆盖({first.provider}/{first.model})" if stage
+                  else f"主供应商({first.provider}/{first.model})")
+
+    # 首选供应商: 对瞬时网络/超时错误做有限重试(仅在尚未产出内容时, 避免重复输出)。
     last_err: LLMError | None = None
     for attempt in range(_MAX_RETRIES + 1):
         yielded = False
         try:
-            async for piece in _stream_with(_primary_cfg(), messages, **kwargs):
+            async for piece in _stream_with(first, messages, **kwargs):
                 yielded = True
                 yield piece
             return
@@ -279,33 +325,45 @@ async def stream_chat(messages: list[dict], **kwargs) -> AsyncIterator[str]:
             last_err = e
             # 已产出内容则不能安全重试/降级(会重复), 直接抛出。
             if yielded:
-                _log(f"主供应商({settings.provider}/{settings.model})流式中途出错(已产出内容, 不重试): {e}")
+                _log(f"{first_name}流式中途出错(已产出内容, 不重试): {e}")
                 raise
             # 瞬时网络错误且仍有重试次数: 退避后重试同一供应商。
             if e.retryable and attempt < _MAX_RETRIES:
-                _log(f"主供应商({settings.provider})瞬时错误[{e.status or '-'}], "
+                _log(f"{first_name}瞬时错误[{e.status or '-'}], "
                      f"{_RETRY_BACKOFF * (attempt + 1):.1f}s 后重试({attempt + 1}/{_MAX_RETRIES}): {e}")
                 await asyncio.sleep(_RETRY_BACKOFF * (attempt + 1))
                 continue
             break
 
-    # 到此: 主供应商失败且未产出任何内容。
-    # 配额耗尽 → 切备用; 网络持续不可达 → 也尝试备用(可能是另一家服务/线路可用)。
-    e = last_err
-    if settings.has_fallback and e is not None and (is_quota_error(e) or e.retryable):
-        reason = "额度不足/配额超限" if is_quota_error(e) else "网络持续不可达"
-        _log(f"主供应商({settings.provider})失败({reason}: {e}); 切换到备用供应商"
-             f"({settings.fallback_provider}/{settings.fallback_model})重试…")
+    # 到此: 首选供应商失败且未产出任何内容。
+    # 配额耗尽 → 降级; 网络持续不可达 → 也降级(可能另一家服务/线路可用)。
+    # 降级链: 环节覆盖失败先回主配置, 再到备用供应商。
+    chain: list[tuple[str, ProviderConfig]] = []
+    if stage is not None:
+        p = _primary_cfg()
+        if p.api_key and (p.provider, p.base_url, p.model) != (stage.provider, stage.base_url, stage.model):
+            chain.append((f"主配置({p.provider}/{p.model})", p))
+    if settings.has_fallback:
+        chain.append((f"备用供应商({settings.fallback_provider}/{settings.fallback_model})", _fallback_cfg()))
+
+    err = last_err
+    for name, cfg in chain:
+        if err is None or not (is_quota_error(err) or err.retryable):
+            break
+        reason = "额度不足/配额超限" if is_quota_error(err) else "网络持续不可达"
+        _log(f"{first_name}失败({reason}: {err}); 切换到{name}重试…")
         try:
             got = False
-            async for piece in _stream_with(_fallback_cfg(), messages, **kwargs):
+            async for piece in _stream_with(cfg, messages, **kwargs):
                 got = True
                 yield piece
-            _log("备用供应商成功接管。" if got else "备用供应商无输出(空回复)。")
+            _log(f"{name}成功接管。" if got else f"{name}无输出(空回复)。")
+            return
         except LLMError as fe:
-            _log(f"备用供应商也失败: {fe}")
-            raise
-        return
-    if e is not None:
-        _log(f"主供应商({settings.provider})失败且无可用降级: {e}")
-        raise e
+            _log(f"{name}也失败: {fe}")
+            if got:  # 已产出内容, 不能再降级(会重复输出)
+                raise
+            err = fe
+    if err is not None:
+        _log(f"{first_name}失败且无可用降级: {err}")
+        raise err

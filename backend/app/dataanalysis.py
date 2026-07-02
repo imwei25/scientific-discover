@@ -225,7 +225,7 @@ def _extract_code(text: str) -> str:
 
 async def _complete(messages: list[dict], max_tokens: int = 1500) -> str:
     buf = ""
-    async for piece in stream_chat(messages, max_tokens=max_tokens):
+    async for piece in stream_chat(messages, task="analysis", max_tokens=max_tokens):
         buf += piece
     return buf
 
@@ -671,7 +671,7 @@ async def analyze_data(
         warnings = _sanity_checks(run.get("stdout", ""))
 
         yield ("status", {"message": "正在总结结论…"})
-        async for piece in stream_chat(_conclusion_messages(question, code, run.get("stdout", ""), warnings)):
+        async for piece in stream_chat(_conclusion_messages(question, code, run.get("stdout", ""), warnings), task="analysis"):
             yield ("delta", {"text": piece})
         yield ("done", {})
     except Exception as e:  # noqa: BLE001

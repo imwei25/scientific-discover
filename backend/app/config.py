@@ -17,6 +17,15 @@ LLM_MODEL=deepseek-chat
 # FALLBACK_BASE_URL=
 # FALLBACK_MODEL=
 
+# 可选: 按环节使用不同模型(不配则所有环节都用上面的默认模型)。
+# 环节键与当前生效配置可访问 http://127.0.0.1:8756/api/config/stages 查看。
+# 例: 让「标书评审」用推理模型, 其余环节不变:
+# LLM_STAGE_GRANT_REVIEW_MODEL=deepseek-reasoner
+# 该环节还可单独指定服务商(不填则沿用主配置的 key 与地址):
+# LLM_STAGE_GRANT_REVIEW_BASE_URL=
+# LLM_STAGE_GRANT_REVIEW_API_KEY=
+# LLM_STAGE_GRANT_REVIEW_PROVIDER=
+
 # 可选: 仅本机访问填 127.0.0.1; 想让局域网其它设备访问填 0.0.0.0。
 HOST=127.0.0.1
 # PORT=8756
@@ -80,6 +89,28 @@ def _bool(name: str, default: bool = False) -> bool:
     return val.strip().lower() in {"1", "true", "yes", "on"}
 
 
+# 每环节模型覆盖: LLM_STAGE_<环节大写>_MODEL / _API_KEY / _BASE_URL / _PROVIDER。
+# 环节键即 llm.stream_chat(task=...) 传入的标识(如 GRANT_REVIEW → grant_review)。
+_STAGE_PREFIX = "LLM_STAGE_"
+# 后缀按长度降序匹配, 避免 _API_KEY 被 _MODEL 之类误切。
+_STAGE_SUFFIXES = ("_API_KEY", "_BASE_URL", "_PROVIDER", "_MODEL")
+
+
+def _parse_stage_overrides() -> dict[str, dict[str, str]]:
+    """从环境变量收集每环节的模型覆盖; 只有配了 _MODEL 的环节才生效。"""
+    raw: dict[str, dict[str, str]] = {}
+    for key, val in os.environ.items():
+        if not key.startswith(_STAGE_PREFIX) or not val.strip():
+            continue
+        rest = key[len(_STAGE_PREFIX):]
+        for suf in _STAGE_SUFFIXES:
+            if rest.endswith(suf) and len(rest) > len(suf):
+                stage = rest[: -len(suf)].lower()
+                raw.setdefault(stage, {})[suf[1:].lower()] = val.strip()
+                break
+    return {s: v for s, v in raw.items() if v.get("model")}
+
+
 def _int(name: str, default: int, lo: int | None = None, hi: int | None = None) -> int:
     """健壮地读取整数环境变量: 空/非法/越界时回退默认值, 避免启动时崩溃。"""
     val = os.getenv(name)
@@ -119,6 +150,16 @@ class Settings:
         self.fallback_api_key = os.getenv("FALLBACK_API_KEY", "").strip()
         self.fallback_base_url = os.getenv("FALLBACK_BASE_URL", "").strip().rstrip("/")
         self.fallback_model = os.getenv("FALLBACK_MODEL", "").strip()
+
+        # 每环节模型覆盖(LLM_STAGE_*): stage → {model, api_key?, base_url?, provider?}。
+        # 缺省字段沿用主配置; 用于让"标书评审"等环节走另一个(如推理/异构)模型。
+        self.stage_overrides = _parse_stage_overrides()
+
+    def stage_override(self, task: str | None) -> dict[str, str] | None:
+        """取某环节的模型覆盖配置; 未配置返回 None。"""
+        if not task:
+            return None
+        return self.stage_overrides.get(task.strip().lower())
 
     @property
     def has_fallback(self) -> bool:

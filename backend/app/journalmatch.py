@@ -42,6 +42,7 @@ async def _annotate(abstract: str, journals: list[dict]) -> dict[str, str]:
     try:
         async for piece in stream_chat(
             [{"role": "system", "content": system}, {"role": "user", "content": user}],
+            task="journal_match",
             max_tokens=900,
         ):
             buf += piece

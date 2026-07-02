@@ -25,7 +25,7 @@ from .logutil import log_swallow
 
 async def _complete(messages: list[dict], max_tokens: int = 800) -> str:
     buf = ""
-    async for piece in stream_chat(messages, max_tokens=max_tokens):
+    async for piece in stream_chat(messages, task="rebuttal", max_tokens=max_tokens):
         buf += piece
     return buf
 
@@ -142,7 +142,7 @@ async def rebuttal(inputs: dict) -> AsyncIterator[tuple[str, dict]]:
         yield ("comments", {"items": comments})
         n = len(comments)
         yield ("status", {"message": (f"已识别 {n} 条意见，正在逐条撰写回复…" if n else "正在撰写逐条回复…")})
-        async for piece in stream_chat(_letter_messages(manuscript, reviews, tone, lang)):
+        async for piece in stream_chat(_letter_messages(manuscript, reviews, tone, lang), task="rebuttal"):
             yield ("delta", {"text": piece})
         yield ("done", {})
     except Exception as e:  # noqa: BLE001

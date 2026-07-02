@@ -63,7 +63,7 @@ async def assemble_imrad(inputs: dict) -> AsyncIterator[tuple[str, dict]]:
         for i, (key, title, guide) in enumerate(_SECTIONS):
             yield ("status", {"message": f"正在撰写{title.lstrip('# ').strip()}（{i + 1}/4）…"})
             yield ("delta", {"text": ("" if i == 0 else "\n\n") + title + "\n"})
-            async for piece in stream_chat(_section_messages(title, guide, mats[key], topic, refs)):
+            async for piece in stream_chat(_section_messages(title, guide, mats[key], topic, refs), task="imrad"):
                 yield ("delta", {"text": piece})
         yield ("done", {})
     except Exception as e:  # noqa: BLE001

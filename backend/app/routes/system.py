@@ -52,6 +52,27 @@ def _is_localhost(request: Request) -> bool:
     return host in {"127.0.0.1", "::1", "localhost"}
 
 
+@router.get("/api/config/stages")
+async def config_stages() -> dict:
+    """列出每个环节(stage)当前生效的模型, 便于核对 LLM_STAGE_* 配置。不回传 key。"""
+    from ..llm import STAGES
+
+    items = []
+    for key, label in STAGES.items():
+        ov = settings.stage_override(key) or {}
+        items.append({
+            "stage": key,
+            "label": label,
+            "provider": ov.get("provider") or settings.provider,
+            "model": ov.get("model") or settings.model,
+            "base_url": ov.get("base_url") or settings.base_url,
+            "overridden": bool(ov),
+        })
+    # 配置了覆盖但不在注册表里的环节键(多半是拼写错误或 /api/run 的模块名)也列出来。
+    unknown = sorted(s for s in settings.stage_overrides if s not in STAGES)
+    return {"items": items, "unknown_stages": unknown}
+
+
 @router.post("/api/config/test-key")
 async def config_test_key(req: TestKeyRequest) -> dict:
     """测试一个 LLM key 是否可用; 返回 {ok, msg}。"""

@@ -84,9 +84,9 @@ _SECTION_MAP = {
 _SECTION_ORDER = ["rationale", "objectives", "scheme", "innovation", "plan", "foundation"]
 
 
-async def _complete(messages: list[dict], max_tokens: int = 400) -> str:
+async def _complete(messages: list[dict], max_tokens: int = 400, task: str = "grant_plan") -> str:
     buf = ""
-    async for piece in stream_chat(messages, max_tokens=max_tokens):
+    async for piece in stream_chat(messages, task=task, max_tokens=max_tokens):
         buf += piece
     return buf
 
@@ -446,14 +446,14 @@ async def write_grant(inputs: dict) -> AsyncIterator[tuple[str, dict]]:
                 s["title"], s["guide"], s["budget"], gt_name, gt_hint,
                 final_title, scheme_brief, report, refs_ctx, background,
             )
-            async for piece in stream_chat(msgs):
+            async for piece in stream_chat(msgs, task="grant_write"):
                 full += piece
                 yield ("delta", {"text": piece})
 
         # 评审自查
         yield ("status", {"message": "初稿完成, 正在做评审视角自查…"})
         yield ("section", {"key": "review", "title": "评审自查"})
-        async for piece in stream_chat(_review_messages(final_title, scheme_brief, full)):
+        async for piece in stream_chat(_review_messages(final_title, scheme_brief, full), task="grant_review"):
             full += piece
             yield ("delta", {"text": piece})
 
@@ -527,7 +527,7 @@ async def revise_section(inputs: dict) -> AsyncIterator[tuple[str, dict]]:
             resolved["title"], resolved["guide"], resolved["budget"], gt_name, gt_hint,
             title, scheme_brief, report, refs_ctx, background, current, note,
         )
-        async for piece in stream_chat(msgs):
+        async for piece in stream_chat(msgs, task="grant_revise"):
             full += piece
             yield ("delta", {"text": piece})
         if refs:
