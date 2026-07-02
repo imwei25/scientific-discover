@@ -273,6 +273,7 @@ def _resolve_sections(raw) -> list[dict]:
 def _section_messages(
     sec_title: str, guide: str, budget: str, gt_name: str, gt_hint: str,
     title: str, scheme_brief: str, report: str, refs_ctx: str, background: str,
+    style_profile: str = "",
 ) -> list[dict]:
     system = (
         f"你是资深的{gt_name}标书写作专家, 正在撰写申请书的一个章节。"
@@ -285,6 +286,12 @@ def _section_messages(
         "3) 基于现状的推断性论断(尚无文献直接支撑)标注 [待验证];\n"
         "4) 用规范、严谨的中文基金申请书语体; 只输出本章节正文(可含子标题), 不要重复大标题、不要写其它章节。"
     )
+    if style_profile.strip():
+        system += (
+            "\n\n【文风指引：在不违反上述铁律与基金申请书规范的前提下，模仿以下语言风格来遣词造句与安排节奏。"
+            "它只影响“怎么写”，不提供任何事实、不改变研究内容、不新增或删改引用与数据。】\n"
+            + style_profile.strip()
+        )
     user = (
         f"【项目题名】{title}\n\n【研究方案骨架】\n{scheme_brief or '（见调研报告）'}\n\n"
         f"【选题调研报告(供综述现状/空白与提炼)】\n{report[:4000]}\n\n"
@@ -299,6 +306,7 @@ def _revise_messages(
     sec_title: str, guide: str, budget: str, gt_name: str, gt_hint: str,
     title: str, scheme_brief: str, report: str, refs_ctx: str, background: str,
     current: str, note: str,
+    style_profile: str = "",
 ) -> list[dict]:
     system = (
         f"你是资深的{gt_name}标书写作专家。下面给出申请书某一章节《{sec_title}》的现有正文, 以及用户的修改意见。"
@@ -308,6 +316,12 @@ def _revise_messages(
         "2) 申请人/经费/设备等不可推断的事实用 [需申请人补充] 占位; 推断性论断标 [待验证]; "
         "3) 只输出修改后的本章节正文(可含子标题), 不要重复大标题、不要写其它章节、不要附加说明。"
     )
+    if style_profile.strip():
+        system += (
+            "\n\n【文风指引：在不违反上述铁律与基金申请书规范的前提下，模仿以下语言风格来遣词造句与安排节奏。"
+            "它只影响“怎么写”，不提供任何事实、不改变研究内容、不新增或删改引用与数据。】\n"
+            + style_profile.strip()
+        )
     user = (
         f"【项目题名】{title}\n\n【研究方案骨架】\n{scheme_brief or '（见调研报告）'}\n\n"
         f"【可引用的真实文献】\n{refs_ctx or '（无可引用文献）'}\n\n"
@@ -784,6 +798,7 @@ async def write_grant(inputs: dict) -> AsyncIterator[tuple[str, dict]]:
     gt_name, gt_hint = _grant_type(inputs)
     pre_scheme = inputs.get("scheme") if isinstance(inputs.get("scheme"), dict) else None
     sections = _resolve_sections(inputs.get("sections"))
+    style_profile = (inputs.get("style_profile") or "").strip()
 
     if not title and not report:
         yield ("error", {"message": "请先填写项目题名/方向, 或从「找选题」结果一键带入。"})
@@ -845,6 +860,7 @@ async def write_grant(inputs: dict) -> AsyncIterator[tuple[str, dict]]:
             msgs = _section_messages(
                 s["title"], s["guide"], s["budget"], gt_name, gt_hint,
                 final_title, scheme_brief, report, refs_ctx, background,
+                style_profile,
             )
             sec_buf = ""
             async for piece in stream_chat(msgs, task="grant_write"):
@@ -884,6 +900,7 @@ async def revise_section(inputs: dict) -> AsyncIterator[tuple[str, dict]]:
     gt_name, gt_hint = _grant_type(inputs)
     scheme = inputs.get("scheme") if isinstance(inputs.get("scheme"), dict) else {}
     do_research = bool(inputs.get("research"))
+    style_profile = (inputs.get("style_profile") or "").strip()
 
     if not note:
         yield ("error", {"message": "请填写本节的修改意见。"})
@@ -929,6 +946,7 @@ async def revise_section(inputs: dict) -> AsyncIterator[tuple[str, dict]]:
         msgs = _revise_messages(
             resolved["title"], resolved["guide"], resolved["budget"], gt_name, gt_hint,
             title, scheme_brief, report, refs_ctx, background, current, note,
+            style_profile,
         )
         async for piece in stream_chat(msgs, task="grant_revise"):
             full += piece
