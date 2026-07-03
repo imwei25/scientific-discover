@@ -5,6 +5,7 @@
 
 import { useState } from "react";
 import { apiUrl } from "../lib/api";
+import VlmSettings from "./VlmSettings";
 
 export type WizardProvider =
   | "deepseek"
@@ -198,6 +199,7 @@ export default function OnboardingWizard({ onClose }: OnboardingWizardProps) {
               ))}
             </div>
             {saveErr && <div className="onboarding-error" data-testid="onboarding-save-err">{saveErr}</div>}
+            <VlmSettings />
           </div>
         )}
 

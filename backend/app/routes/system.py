@@ -25,6 +25,14 @@ class SaveConfigRequest(BaseModel):
     mock: bool = False  # 演示模式: 写 MOCK_LLM=1, 其它字段可空
 
 
+class SaveVlmConfigRequest(BaseModel):
+    """视觉模型(VLM)配置: 用于「学术海报」排版审阅。留空 key 视为清除(停用 VLM)。"""
+    provider: str = "openai"
+    key: str = ""
+    base_url: str | None = None
+    model: str | None = None
+
+
 @router.get("/api/health")
 async def health() -> dict:
     return {
@@ -33,6 +41,8 @@ async def health() -> dict:
         "model": settings.model,
         "mock": settings.mock,
         "configured": settings.mock or bool(settings.api_key),
+        "vlm_configured": settings.has_vlm,
+        "vlm_model": settings.vlm_model,
     }
 
 
@@ -118,5 +128,38 @@ async def config_save(req: SaveConfigRequest, request: Request) -> dict:
         # 热重载, 让运行时立即拿到新值
         settings.reload()
         return {"ok": True}
+    except Exception as e:  # noqa: BLE001
+        return {"ok": False, "error": f"保存失败: {e}"}
+
+
+@router.post("/api/config/save-vlm")
+async def config_save_vlm(req: SaveVlmConfigRequest, request: Request) -> dict:
+    """写入视觉模型(VLM)配置到 .env 并热重载。仅允许 127.0.0.1 调用。
+
+    key 留空 = 清除 VLM 配置(停用海报排版审阅)。
+    """
+    from fastapi.responses import JSONResponse
+
+    if not _is_localhost(request):
+        return JSONResponse(status_code=403, content={"ok": False, "error": "禁止: 仅允许本机访问该接口"})
+
+    from ..config_io import PROVIDER_PRESETS, write_env_file
+
+    try:
+        key = (req.key or "").strip()
+        if not key:
+            # 清除: 三个键置空(write_env_file 空值=删除该行)
+            write_env_file({"VLM_API_KEY": "", "VLM_BASE_URL": "", "VLM_MODEL": "", "VLM_PROVIDER": ""})
+            settings.reload()
+            return {"ok": True, "cleared": True}
+        preset = PROVIDER_PRESETS.get((req.provider or "").strip().lower(), {})
+        write_env_file({
+            "VLM_PROVIDER": (preset.get("provider") or "openai"),
+            "VLM_API_KEY": key,
+            "VLM_BASE_URL": (req.base_url or preset.get("base_url", "")).strip(),
+            "VLM_MODEL": (req.model or "").strip(),
+        })
+        settings.reload()
+        return {"ok": True, "vlm_configured": settings.has_vlm}
     except Exception as e:  # noqa: BLE001
         return {"ok": False, "error": f"保存失败: {e}"}

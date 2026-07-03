@@ -1,15 +1,23 @@
 import { useEffect, useRef, useState } from "react";
+import html2canvas from "html2canvas";
 import { streamPoster, type PosterContent } from "../lib/sse";
 import { reportLLMError } from "../lib/errorToast";
 import { usePersistentState, readPersisted } from "../lib/usePersistentState";
 import { addHistory } from "../lib/history";
 import Dropzone from "../components/Dropzone";
+import Markdown from "../components/Markdown";
+import { apiUrl } from "../lib/api";
 import { downloadText, tsName } from "../lib/download";
 
 // 数据分析模块持久化的图表形态(与 sse.ts ChartItem 一致)。
 type Chart = { png: string; data?: string; ext?: string };
 
-export default function PosterModule() {
+interface Props {
+  vlmConfigured: boolean;
+  onOpenSettings: () => void;
+}
+
+export default function PosterModule({ vlmConfigured, onOpenSettings }: Props) {
   const [title, setTitle] = usePersistentState("poster:title", "");
   const [authors, setAuthors] = usePersistentState("poster:authors", "");
   const [affiliation, setAffiliation] = usePersistentState("poster:affiliation", "");
@@ -18,6 +26,7 @@ export default function PosterModule() {
   const [includeFigs, setIncludeFigs] = usePersistentState("poster:includeFigs", true);
 
   const [html, setHtml] = usePersistentState("poster:html", "");
+  const [contentJson, setContentJson] = usePersistentState<PosterContent | null>("poster:contentJson", null);
   const [status, setStatus] = useState("");
   const [running, setRunning] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -25,6 +34,11 @@ export default function PosterModule() {
   const [importMsg, setImportMsg] = useState("");
   const ctrl = useRef<AbortController | null>(null);
   const iframeRef = useRef<HTMLIFrameElement>(null);
+
+  // VLM 排版审阅
+  const [reviewing, setReviewing] = useState(false);
+  const [reviewErr, setReviewErr] = useState<string | null>(null);
+  const [critique, setCritique] = usePersistentState("poster:critique", "");
 
   // 可复用的数据分析图表数量(用于提示是否能带图)
   const figCount = (readPersisted<Chart[]>("analyze:charts", []) || []).length;
@@ -81,7 +95,7 @@ export default function PosterModule() {
       {
         signal: ctrl.current.signal,
         onStatus: setStatus,
-        onPoster: (_c: PosterContent, h: string) => setHtml(h),
+        onPoster: (c: PosterContent, h: string) => { setHtml(h); setContentJson(c); setCritique(""); },
         onError: (m) => {
           setError(m);
           setStatus("");
@@ -111,10 +125,52 @@ export default function PosterModule() {
     setAffiliation("");
     setContent("");
     setHtml("");
+    setContentJson(null);
+    setCritique("");
     setError(null);
+    setReviewErr(null);
     setStatus("");
     setUploadInfo("");
     setImportMsg("");
+  };
+
+  // AI 审阅排版: 截图当前渲染出的海报 → 交视觉模型(VLM)找排版问题并给出修订 → 重渲染。
+  const reviewLayout = async () => {
+    if (reviewing || !html) return;
+    if (!vlmConfigured) { onOpenSettings(); return; }
+    const doc = iframeRef.current?.contentDocument;
+    const target = (doc?.querySelector(".poster") as HTMLElement) || doc?.body;
+    if (!doc || !target || !contentJson) {
+      setReviewErr("无法读取海报预览，请重新生成海报后再试。");
+      return;
+    }
+    setReviewing(true);
+    setReviewErr(null);
+    try {
+      const canvas = await html2canvas(target, { backgroundColor: "#ffffff", logging: false, useCORS: true });
+      const image = canvas.toDataURL("image/png").replace(/^data:image\/png;base64,/, "");
+      const resp = await fetch(apiUrl("/api/poster/review"), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          module: "poster",
+          inputs: { content: contentJson, image, title, authors, affiliation, figures: collectFigures() },
+        }),
+      });
+      const data = await resp.json();
+      if (!resp.ok) {
+        setReviewErr(data.error || `审阅失败（${resp.status}）`);
+        return;
+      }
+      setCritique(data.critique || "");
+      if (data.html) setHtml(data.html);
+      if (data.content) setContentJson(data.content as PosterContent);
+      window.dispatchEvent(new Event("usage-updated"));
+    } catch (e) {
+      setReviewErr(`审阅出错：${(e as Error).message}`);
+    } finally {
+      setReviewing(false);
+    }
   };
 
   const printPoster = () => {
@@ -208,6 +264,17 @@ export default function PosterModule() {
             <div className="result-actions">
               {running && <button className="btn-ghost" onClick={stop} data-testid="stop-btn">停止</button>}
               {html && !running && (
+                <button
+                  className="btn-ghost"
+                  data-testid="poster-review-btn"
+                  onClick={reviewLayout}
+                  disabled={reviewing}
+                  title={vlmConfigured ? "让视觉模型看渲染效果、找并修复排版问题" : "需先在设置里配置视觉模型(VLM)"}
+                >
+                  {reviewing ? "AI 审阅中…" : vlmConfigured ? "🔍 AI 审阅排版" : "🔍 审阅排版（需配置视觉模型）"}
+                </button>
+              )}
+              {html && !running && (
                 <button className="btn-ghost" data-testid="poster-print-btn" onClick={printPoster} title="打印或在打印对话框里另存为 PDF">
                   打印 / 存 PDF
                 </button>
@@ -219,6 +286,13 @@ export default function PosterModule() {
               )}
             </div>
           </div>
+          {reviewErr && <div className="result-error" data-testid="poster-review-error">{reviewErr}</div>}
+          {critique && (
+            <div className="poster-critique" data-testid="poster-critique">
+              <div className="poster-critique-head">🔍 视觉模型排版审阅意见（已按建议自动调整下方海报）</div>
+              <Markdown>{critique}</Markdown>
+            </div>
+          )}
           {html && (
             <iframe
               ref={iframeRef}

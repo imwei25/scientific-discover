@@ -15,7 +15,7 @@ from ..http_common import SSE_HEADERS, _sse
 from ..imrad import assemble_imrad
 from ..llm import LLMError, stream_chat
 from ..logutil import log_swallow
-from ..poster import generate_poster
+from ..poster import generate_poster, review_poster
 from ..prompts import build_messages
 from ..rebuttal import rebuttal
 from ..research import clarify_topic, deep_research_idea, idea_followup, refine_topic
@@ -159,6 +159,20 @@ async def poster_ep(req: RunRequest) -> StreamingResponse:
             yield _sse(event, data)
 
     return StreamingResponse(gen(), media_type="text/event-stream", headers=SSE_HEADERS)
+
+
+@router.post("/api/poster/review")
+async def poster_review_ep(req: RunRequest) -> JSONResponse:
+    """VLM 排版审阅: 看海报截图找排版问题, 返回评审意见 + 修订后的要点与重渲染 HTML(非流式)。"""
+    try:
+        return JSONResponse(await review_poster(req.inputs))
+    except ValueError as e:
+        return JSONResponse(status_code=400, content={"error": str(e)})
+    except LLMError as e:
+        return JSONResponse(status_code=502, content={"error": str(e)})
+    except Exception as e:  # noqa: BLE001
+        log_swallow("海报审阅: 失败", e)
+        return JSONResponse(status_code=500, content={"error": f"海报审阅出错：{type(e).__name__}: {e}"})
 
 
 @router.post("/api/grant")

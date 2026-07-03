@@ -125,6 +125,64 @@ def _fallback_cfg() -> ProviderConfig:
     )
 
 
+def _vlm_cfg() -> ProviderConfig:
+    return ProviderConfig(
+        settings.vlm_provider,
+        settings.vlm_api_key,
+        settings.vlm_base_url,
+        settings.vlm_model,
+    )
+
+
+async def vlm_complete(system: str, user_text: str, image_b64: str, *, max_tokens: int = 1800) -> str:
+    """视觉模型一次性(非流式)补全: 把一张图 + 文本发给多模态模型, 返回完整文本。
+
+    用于「学术海报」排版审阅。走 OpenAI 兼容的多模态消息格式(content 数组含 image_url)。
+    要求已配置 VLM_*(settings.has_vlm), 否则抛 LLMError。
+    """
+    cfg = _vlm_cfg()
+    if not cfg.api_key or not cfg.base_url or not cfg.model:
+        raise LLMError("未配置视觉模型(VLM)。请在设置里填写用于排版审阅的多模态模型。")
+    # data URI: 兼容已带前缀或纯 base64 两种输入
+    data_uri = image_b64 if image_b64.startswith("data:") else f"data:image/png;base64,{image_b64}"
+    messages = [
+        {"role": "system", "content": system},
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": user_text},
+                {"type": "image_url", "image_url": {"url": data_uri}},
+            ],
+        },
+    ]
+    url = f"{cfg.base_url}/chat/completions"
+    headers = {"Authorization": f"Bearer {cfg.api_key}", "Content-Type": "application/json"}
+    payload = {"model": cfg.model, "messages": messages, "stream": False, "max_tokens": max_tokens}
+    try:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(120.0)) as client:
+            resp = await client.post(url, headers=headers, json=payload)
+    except httpx.TimeoutException as e:
+        raise LLMError("视觉模型请求超时，请稍后重试。", retryable=True) from e
+    except httpx.RequestError as e:
+        raise LLMError(f"视觉模型网络请求出错（{type(e).__name__}）。", retryable=True) from e
+    if resp.status_code != 200:
+        raise LLMError(
+            f"视觉模型返回 {resp.status_code}: {resp.text[:300]}", status=resp.status_code
+        )
+    obj = resp.json()
+    _add_usage(obj.get("usage"))
+    choices = obj.get("choices") or []
+    if not choices:
+        return ""
+    content = (choices[0].get("message") or {}).get("content")
+    # 兼容个别多模态服务返回 content 数组的情况
+    if isinstance(content, list):
+        return "".join(
+            part.get("text", "") for part in content if isinstance(part, dict)
+        )
+    return content or ""
+
+
 # 余额/配额类错误的判定: 命中则触发自动降级。
 _QUOTA_HINTS = (
     "insufficient balance",

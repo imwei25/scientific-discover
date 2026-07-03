@@ -57,6 +57,7 @@ interface Health {
   model: string;
   mock: boolean;
   configured?: boolean;
+  vlm_configured?: boolean;
 }
 
 export default function App() {
@@ -371,7 +372,7 @@ export default function App() {
           {active === "journal" && <JournalMatchModule />}
           {active === "format" && <FormatModule />}
           {active === "checklist" && <ChecklistModule />}
-          {active === "poster" && <PosterModule />}
+          {active === "poster" && <PosterModule vlmConfigured={!!health?.vlm_configured} onOpenSettings={() => setOnboardingOpen(true)} />}
           {active === "rebuttal" && <RebuttalModule />}
           {active === "history" && <HistoryView goto={goto} />}
         </div>

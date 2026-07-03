@@ -17,6 +17,13 @@ LLM_MODEL=deepseek-chat
 # FALLBACK_BASE_URL=
 # FALLBACK_MODEL=
 
+# 可选: 视觉模型(VLM), 用于「学术海报」的排版审阅(看渲染出的海报图找排版问题)。
+# DeepSeek 无视觉能力, 需配一个多模态模型, 例如硅基流动的 GLM-4.5V / Qwen-VL。留空则不启用。
+# VLM_API_KEY=
+# VLM_BASE_URL=https://api.siliconflow.cn/v1
+# VLM_MODEL=THUDM/GLM-4.1V-9B-Thinking
+# VLM_PROVIDER=openai
+
 # 可选: 按环节使用不同模型(不配则所有环节都用上面的默认模型)。
 # 环节键与当前生效配置可访问 http://127.0.0.1:8756/api/config/stages 查看。
 # 例: 让「标书评审」用推理模型, 其余环节不变:
@@ -155,6 +162,13 @@ class Settings:
         # 缺省字段沿用主配置; 用于让"标书评审"等环节走另一个(如推理/异构)模型。
         self.stage_overrides = _parse_stage_overrides()
 
+        # 视觉模型(VLM): 用于「学术海报」排版审阅。纯文本主模型(如 DeepSeek)看不了图,
+        # 需单独配一个多模态模型(硅基流动 GLM-4.5V / Qwen-VL 等, OpenAI 兼容)。留空不启用。
+        self.vlm_provider = os.getenv("VLM_PROVIDER", "openai").strip().lower()
+        self.vlm_api_key = os.getenv("VLM_API_KEY", "").strip()
+        self.vlm_base_url = os.getenv("VLM_BASE_URL", "").strip().rstrip("/")
+        self.vlm_model = os.getenv("VLM_MODEL", "").strip()
+
     def stage_override(self, task: str | None) -> dict[str, str] | None:
         """取某环节的模型覆盖配置; 未配置返回 None。"""
         if not task:
@@ -164,6 +178,10 @@ class Settings:
     @property
     def has_fallback(self) -> bool:
         return bool(self.fallback_api_key and self.fallback_base_url and self.fallback_model)
+
+    @property
+    def has_vlm(self) -> bool:
+        return bool(self.vlm_api_key and self.vlm_base_url and self.vlm_model)
 
 
 settings = Settings()

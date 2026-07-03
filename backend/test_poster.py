@@ -53,8 +53,35 @@ def test_mock_stream() -> None:
     print("ok: mock 流事件序列 + 空内容拦截")
 
 
+def test_review_mock() -> None:
+    poster.settings.mock = True
+    content = {
+        "title": "T", "highlights": ["h"],
+        "sections": [
+            {"heading": "结果", "bullets": ["b1", "b2", "b3", "b4", "b5", "b6"]},
+            {"heading": "方法", "bullets": ["m1"]},
+        ],
+        "keywords": ["k"],
+    }
+    out = asyncio.run(poster.review_poster({"content": content, "image": "iVBORw0KGgo="}))
+    assert set(out.keys()) == {"critique", "content", "html"}, out.keys()
+    assert out["critique"]                                   # 有审阅意见
+    longest = max(out["content"]["sections"], key=lambda s: len(s["bullets"]))
+    assert len(longest["bullets"]) == 4                      # 最长分区被精简到 4 条
+    assert out["html"].startswith("<!doctype html>")        # 重渲染出 HTML
+    # 缺内容 / 缺截图 → ValueError
+    for bad in ({"content": {}, "image": "x"}, {"content": content, "image": ""}):
+        try:
+            asyncio.run(poster.review_poster(bad))
+            assert False, "应抛 ValueError"
+        except ValueError:
+            pass
+    print("ok: review_poster mock 审阅 + 精简 + 入参校验")
+
+
 if __name__ == "__main__":
     test_parse()
     test_render()
     test_mock_stream()
+    test_review_mock()
     print("\nALL POSTER TESTS PASSED")

@@ -22,7 +22,7 @@ import traceback
 from typing import AsyncIterator
 
 from .config import settings
-from .llm import stream_chat
+from .llm import stream_chat, vlm_complete
 
 # 主题配色(与前端「临床精确×学术期刊」一致): petrol 深青墨 / 仪器 teal / 临床纸白
 _PETROL = "#0E3A39"
@@ -264,3 +264,82 @@ async def generate_poster(inputs: dict) -> AsyncIterator[tuple[str, dict]]:
     except Exception as e:  # noqa: BLE001
         print("[poster] exception:\n" + traceback.format_exc(), flush=True)
         yield ("error", {"message": f"海报生成出错：{type(e).__name__}: {e}"})
+
+
+# ── VLM 排版审阅 ─────────────────────────────────────────────────────
+# 视觉模型看渲染出的海报截图, 指出排版问题; 但**只允许通过精简/拆分/删减/重排
+# 已有要点来修复**(不新增未提供的事实), 修订后的要点仍交确定性模板重渲染。
+
+_REVIEW_SYSTEM = (
+    "你是资深学术海报版面评审。用户会给你一张已渲染的会议海报截图, 以及它当前的要点数据(JSON)。"
+    "请先**看图**找出排版问题, 例如: 某一栏文字过多显得拥挤、大片留白不均衡、要点过长换行难读、"
+    "分区层级不清、内容溢出边界、标题过长、亮点条与正文比例失衡等。\n"
+    "然后在**不新增任何新事实/新数字/新文献**的前提下, 仅通过[精简措辞 / 拆分或合并要点 / 删除次要要点 / "
+    "调整各分区要点数量, 使三栏更均衡]来修复这些问题, 给出修订后的要点数据。\n"
+    "只输出一个 JSON 对象, 不要解释或代码围栏, 结构:\n"
+    '{"critique": "用中文分条说明发现的排版问题与你的调整(Markdown)", '
+    '"content": {"title": "...", "highlights": ["..."], '
+    '"sections": [{"heading": "...", "bullets": ["..."]}], "keywords": ["..."]}}'
+)
+
+
+def _mock_review(content: dict) -> dict:
+    revised = json.loads(json.dumps(content))  # 深拷贝
+    # 演示: 把最长分区的要点裁到不超过 4 条, 模拟"精简拥挤栏"
+    if revised.get("sections"):
+        longest = max(revised["sections"], key=lambda s: len(s.get("bullets", [])))
+        if len(longest.get("bullets", [])) > 4:
+            longest["bullets"] = longest["bullets"][:4]
+    return {
+        "critique": "[MOCK] 检测到「结果」栏要点偏多、右栏偏挤；已将最长分区精简至 4 条，使三栏更均衡。",
+        "content": revised,
+    }
+
+
+async def review_poster(inputs: dict) -> dict:
+    """看海报截图 → 视觉模型审阅排版 → 返回 {critique, content, html}。
+
+    inputs: {content: <要点JSON>, image: <base64 png>, title/authors/affiliation/figures?}
+    失败/未配置 VLM 时抛异常, 由端点转成友好错误。
+    """
+    content = inputs.get("content")
+    image = (inputs.get("image") or "").strip()
+    if not isinstance(content, dict) or not content.get("sections"):
+        raise ValueError("缺少有效的海报要点数据。请先生成海报再审阅。")
+    if not image:
+        raise ValueError("缺少海报截图。请在生成海报后再审阅排版。")
+    meta = {
+        "title": inputs.get("title") or content.get("title") or "",
+        "authors": inputs.get("authors") or "",
+        "affiliation": inputs.get("affiliation") or "",
+        "figures": inputs.get("figures") or [],
+    }
+
+    if settings.mock:
+        out = _mock_review(content)
+        revised = _parse_poster_json(json.dumps(out["content"])) or content
+        return {"critique": out["critique"], "content": revised, "html": render_poster_html(revised, meta)}
+
+    user_text = "这是海报当前的要点数据(JSON):\n" + json.dumps(content, ensure_ascii=False)
+    raw = await vlm_complete(_REVIEW_SYSTEM, user_text, image)
+    s, e = raw.find("{"), raw.rfind("}")
+    obj = None
+    if s != -1 and e != -1:
+        try:
+            obj = json.loads(raw[s : e + 1])
+        except Exception:  # noqa: BLE001
+            obj = None
+    critique = ""
+    revised = None
+    if isinstance(obj, dict):
+        critique = str(obj.get("critique") or "").strip()
+        revised = _parse_poster_json(json.dumps(obj.get("content"))) if obj.get("content") else None
+    if revised is None:
+        # 视觉模型没给出可用的修订: 至少把它的文字反馈回传, 海报保持原样。
+        revised = content
+        if not critique:
+            critique = raw.strip()[:2000] or "视觉模型未返回可解析的审阅结果，请重试。"
+    # 保留用户指定标题
+    if meta["title"] and isinstance(revised, dict):
+        revised["title"] = content.get("title") or meta["title"]
+    return {"critique": critique, "content": revised, "html": render_poster_html(revised, meta)}

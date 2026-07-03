@@ -1797,3 +1797,81 @@ test("学术海报: 生成并预览 HTML 海报, 可下载", async ({ page }) =>
   expect(posterBody.inputs.content).toContain("论文的摘要");
   expect(posterBody.inputs.title).toBe("测试海报标题");
 });
+
+test("学术海报: 未配置视觉模型时, 审阅按钮引导去设置", async ({ page }) => {
+  await mockBase(page); // health 无 vlm_configured
+  await page.route("**/api/poster", (r) =>
+    r.fulfill({
+      contentType: "text/event-stream",
+      body: sse(
+        {
+          event: "poster",
+          data: {
+            content: { title: "T", highlights: [], sections: [{ heading: "方法", bullets: ["随机对照"] }], keywords: [] },
+            html: '<!doctype html><html><head><meta charset="utf-8"></head><body><div class="poster"><h1>T</h1></div></body></html>',
+          },
+        },
+        { event: "done", data: {} },
+      ),
+    }),
+  );
+  await page.goto("/");
+  await page.getByTestId("nav-poster").click();
+  await page.getByTestId("poster-content").fill("论文内容");
+  await page.getByTestId("run-btn").click();
+  await expect(page.getByTestId("poster-preview")).toBeVisible();
+  // 未配置 VLM: 按钮文案提示需配置, 点击弹出设置向导
+  await expect(page.getByTestId("poster-review-btn")).toContainText("需配置视觉模型");
+  await page.getByTestId("poster-review-btn").click();
+  await expect(page.getByTestId("onboarding-wizard")).toBeVisible();
+  // 设置里存在视觉模型配置区
+  await expect(page.getByTestId("vlm-settings")).toBeVisible();
+});
+
+test("学术海报: 配置了视觉模型则可 AI 审阅排版并应用修订", async ({ page }) => {
+  await mockBase(page);
+  // 覆盖 health: 标记已配置 VLM
+  await page.route("**/api/health", (r) =>
+    r.fulfill({ json: { status: "ok", provider: "openai", model: "deepseek-chat", mock: true, configured: true, vlm_configured: true, vlm_model: "GLM-4.5V" } }),
+  );
+  await page.route("**/api/poster", (r) =>
+    r.fulfill({
+      contentType: "text/event-stream",
+      body: sse(
+        {
+          event: "poster",
+          data: {
+            content: { title: "海报", highlights: [], sections: [{ heading: "结果", bullets: ["a", "b", "c"] }], keywords: [] },
+            html: '<!doctype html><html><head><meta charset="utf-8"></head><body><div class="poster" style="width:400px"><h1>海报</h1></div></body></html>',
+          },
+        },
+        { event: "done", data: {} },
+      ),
+    }),
+  );
+  let reviewBody: any = null;
+  await page.route("**/api/poster/review", (r) => {
+    reviewBody = JSON.parse(r.request().postData() || "{}");
+    r.fulfill({
+      json: {
+        critique: "结果栏要点偏多，已精简为 2 条。",
+        content: { title: "海报", highlights: [], sections: [{ heading: "结果", bullets: ["a", "b"] }], keywords: [] },
+        html: '<!doctype html><html><head><meta charset="utf-8"></head><body><div class="poster"><h1>海报-已修订</h1></div></body></html>',
+      },
+    });
+  });
+  await page.goto("/");
+  await page.getByTestId("nav-poster").click();
+  await page.getByTestId("poster-content").fill("论文内容");
+  await page.getByTestId("run-btn").click();
+  await expect(page.getByTestId("poster-preview")).toBeVisible();
+  await expect(page.getByTestId("poster-review-btn")).toContainText("AI 审阅排版");
+  await page.getByTestId("poster-review-btn").click();
+  // 审阅意见出现, 海报被替换为修订版
+  await expect(page.getByTestId("poster-critique")).toContainText("精简为 2 条");
+  const frame = page.frameLocator('[data-testid="poster-preview"]');
+  await expect(frame.locator("h1")).toContainText("已修订");
+  // 请求体带上了截图与要点数据
+  expect(reviewBody.inputs.image.length).toBeGreaterThan(50);
+  expect(reviewBody.inputs.content.sections[0].heading).toBe("结果");
+});

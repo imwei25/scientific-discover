@@ -3340,6 +3340,26 @@ select {
 }
 .onboarding-advanced { font-size: 13px; color: var(--muted); }
 .onboarding-advanced summary { cursor: pointer; padding: 4px 0; }
+/* 视觉模型(VLM)设置区 */
+.vlm-settings { margin-top: 16px; border-top: 1px solid var(--line); padding-top: 12px; }
+.vlm-settings > summary { font-weight: 600; color: var(--ink); }
+.vlm-hint { font-size: 12.5px; color: var(--muted); line-height: 1.6; margin: 10px 0; }
+.vlm-current { color: var(--teal); font-weight: 600; }
+.vlm-field { margin-top: 10px; }
+.vlm-field > label { display: block; font-size: 12.5px; color: var(--muted); margin-bottom: 4px; }
+.vlm-field input {
+  font-family: var(--mono); font-size: 13px; padding: 8px 10px;
+  border: 1px solid var(--line); border-radius: 8px; background: var(--surface-2);
+  color: var(--ink); width: 100%; box-sizing: border-box; margin-top: 6px;
+}
+.vlm-save-msg { margin-top: 8px; font-size: 12.5px; color: var(--muted); }
+/* 海报排版审阅意见 */
+.poster-critique {
+  margin: 10px 0; padding: 12px 14px; border: 1px solid var(--line);
+  border-left: 3px solid var(--teal); border-radius: 8px; background: var(--surface-2);
+  font-size: 13.5px;
+}
+.poster-critique-head { font-weight: 600; color: var(--petrol, var(--ink)); margin-bottom: 6px; }
 .onboarding-actions {
   display: flex;
   gap: 10px;
