@@ -15,6 +15,7 @@ from ..http_common import SSE_HEADERS, _sse
 from ..imrad import assemble_imrad
 from ..llm import LLMError, stream_chat
 from ..logutil import log_swallow
+from ..poster import generate_poster
 from ..prompts import build_messages
 from ..rebuttal import rebuttal
 from ..research import clarify_topic, deep_research_idea, idea_followup, refine_topic
@@ -145,6 +146,16 @@ async def imrad_ep(req: RunRequest) -> StreamingResponse:
     """IMRaD 初稿装配: 把已有材料分段拼成 Intro/Methods/Results/Discussion(本地, 只据材料)。"""
     async def gen():
         async for event, data in assemble_imrad(req.inputs):
+            yield _sse(event, data)
+
+    return StreamingResponse(gen(), media_type="text/event-stream", headers=SSE_HEADERS)
+
+
+@router.post("/api/poster")
+async def poster_ep(req: RunRequest) -> StreamingResponse:
+    """学术海报: 把论文提炼成海报要点(纯文本 LLM) + 确定性渲染自包含 HTML(可打印 PDF)。"""
+    async def gen():
+        async for event, data in generate_poster(req.inputs):
             yield _sse(event, data)
 
     return StreamingResponse(gen(), media_type="text/event-stream", headers=SSE_HEADERS)

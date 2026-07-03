@@ -10,6 +10,7 @@ const NAMES: Record<string, string> = {
   journal: "智能选刊",
   format: "期刊排版",
   checklist: "报告规范核对",
+  poster: "学术海报",
   rebuttal: "回复审稿",
 };
 

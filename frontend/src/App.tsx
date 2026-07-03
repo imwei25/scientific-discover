@@ -1,7 +1,7 @@
 import { useEffect, useState, type ReactNode } from "react";
 import {
   Lightbulb, Map, ClipboardList, BarChart3, FileText,
-  Target, FileType, CheckSquare, MessageSquareReply, ScrollText, FileSignature,
+  Target, FileType, CheckSquare, MessageSquareReply, ScrollText, FileSignature, Presentation,
 } from "lucide-react";
 import { apiUrl } from "./lib/api";
 import { writePersisted, usePersistentState } from "./lib/usePersistentState";
@@ -15,6 +15,7 @@ import GrantModule from "./modules/GrantModule";
 import JournalMatchModule from "./modules/JournalMatchModule";
 import FormatModule from "./modules/FormatModule";
 import ChecklistModule from "./modules/ChecklistModule";
+import PosterModule from "./modules/PosterModule";
 import RebuttalModule from "./modules/RebuttalModule";
 import HistoryView from "./modules/HistoryView";
 import ThemeSwitcher from "./components/ThemeSwitcher";
@@ -27,7 +28,7 @@ import { CanvasProvider } from "./components/Canvas";
 import { showToast } from "./lib/toast";
 import { useProjects } from "./lib/projects";
 
-export type ModuleId = "home" | "idea" | "grant" | "plan" | "ethics" | "analyze" | "imrad" | "journal" | "format" | "checklist" | "rebuttal" | "history";
+export type ModuleId = "home" | "idea" | "grant" | "plan" | "ethics" | "analyze" | "imrad" | "journal" | "format" | "checklist" | "poster" | "rebuttal" | "history";
 // 产出文稿的阶段: 进入这些模块时, 屏幕一分为二, 右半屏固定为「画布」展示最终产出。
 const STAGE_CANVAS = new Set<ModuleId>(["idea", "grant", "plan", "ethics", "analyze", "imrad", "rebuttal"]);
 // 跨模块传递: 把数据写入目标模块的持久化字段, 再切换过去。
@@ -46,6 +47,7 @@ const NAV: { id: ModuleId; icon: ReactNode; title: string; desc: string; hidden?
   { id: "format",   icon: <FileType {...ICON_PROPS} />,            title: "期刊排版",     desc: "按期刊要求重排 + 参考文献格式化" },
   // 暂时隐藏「报告规范核对」，意义待明确，以后再说（hidden 过滤掉，模块代码保留）
   { id: "checklist", icon: <CheckSquare {...ICON_PROPS} />,        title: "报告规范核对", desc: "按医学研究报告规范逐条自查", hidden: true },
+  { id: "poster",   icon: <Presentation {...ICON_PROPS} />,        title: "学术海报",     desc: "把论文一键做成会议海报（可打印 PDF）" },
   { id: "rebuttal", icon: <MessageSquareReply {...ICON_PROPS} />,  title: "回复审稿",     desc: "AI 帮你逐条回应审稿人" },
 ];
 
@@ -369,6 +371,7 @@ export default function App() {
           {active === "journal" && <JournalMatchModule />}
           {active === "format" && <FormatModule />}
           {active === "checklist" && <ChecklistModule />}
+          {active === "poster" && <PosterModule />}
           {active === "rebuttal" && <RebuttalModule />}
           {active === "history" && <HistoryView goto={goto} />}
         </div>

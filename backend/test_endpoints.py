@@ -38,7 +38,10 @@ def main() -> None:
     _sse_ok(c.post("/api/imrad", json={"module": "imrad", "inputs": {"background": "x"}}))
     _sse_ok(c.post("/api/rebuttal", json={"module": "rebuttal", "inputs": {"reviews": "R1: small sample?"}}))
     _sse_ok(c.post("/api/idea-followup", json={"module": "idea", "inputs": {"mode": "ask", "question": "q", "references": [{"url": "u", "title": "t"}]}}))
-    print("ok: SSE run/idea/imrad/rebuttal/idea-followup")
+    pr = c.post("/api/poster", json={"module": "poster", "inputs": {"content": "一篇论文的摘要与内容", "title": "T"}})
+    _sse_ok(pr, must_have="poster")
+    assert "<!doctype html>" in pr.text, "海报 SSE 未含 HTML"
+    print("ok: SSE run/idea/imrad/rebuttal/idea-followup/poster")
 
     # JSON：检索/核验/计算类
     assert c.post("/api/check-refs", json={"references": "Smith 2023"}).json()["ok"] is True

@@ -1753,3 +1753,47 @@ test("写标书: 上传文风样例→提炼→撰写请求带 style_profile", a
   // 请求体带上了 style_profile
   expect(grantBody.inputs.style_profile).toContain("先总后分");
 });
+
+test("学术海报: 生成并预览 HTML 海报, 可下载", async ({ page }) => {
+  await mockBase(page);
+  const posterHtml =
+    '<!doctype html><html><head><meta charset="utf-8"><title>测试海报</title></head>' +
+    '<body><div class="poster"><h1>测试海报标题</h1></div></body></html>';
+  let posterBody: any = null;
+  await page.route("**/api/poster", (r) => {
+    posterBody = JSON.parse(r.request().postData() || "{}");
+    r.fulfill({
+      contentType: "text/event-stream",
+      body: sse(
+        { event: "status", data: { message: "正在渲染海报…" } },
+        {
+          event: "poster",
+          data: {
+            content: {
+              title: "测试海报标题",
+              highlights: ["核心发现"],
+              sections: [{ heading: "研究方法", bullets: ["随机对照"] }],
+              keywords: ["A"],
+            },
+            html: posterHtml,
+          },
+        },
+        { event: "done", data: {} },
+      ),
+    });
+  });
+  await page.goto("/");
+  await page.getByTestId("nav-poster").click();
+  await page.getByTestId("poster-title").fill("测试海报标题");
+  await page.getByTestId("poster-content").fill("一篇论文的摘要与主要内容。");
+  await page.getByTestId("run-btn").click();
+  // 预览 iframe 出现且内嵌了海报标题
+  await expect(page.getByTestId("poster-preview")).toBeVisible();
+  await expect(page.getByTestId("poster-print-btn")).toBeVisible();
+  await expect(page.getByTestId("poster-export-html-btn")).toBeVisible();
+  const frame = page.frameLocator('[data-testid="poster-preview"]');
+  await expect(frame.locator("h1")).toContainText("测试海报标题");
+  // 请求体带上了内容与标题
+  expect(posterBody.inputs.content).toContain("论文的摘要");
+  expect(posterBody.inputs.title).toBe("测试海报标题");
+});
