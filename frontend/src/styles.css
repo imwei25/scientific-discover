@@ -4356,3 +4356,40 @@ mark.ai-edit {
   .wiz-step-desc { display: none; }
   .wiz-step { min-width: 0; }
 }
+
+/* ── 写标书 · 就地 AI 精修条 + 评审区 ─────────────────────────── */
+.refine-inline {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  margin: 6px 0 10px;
+  padding: 6px 8px;
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  flex-wrap: wrap;
+}
+.refine-inline-icon { font-size: 12.5px; font-weight: 600; color: var(--petrol); white-space: nowrap; }
+.refine-inline-input {
+  flex: 1 1 240px;
+  min-width: 0;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 5px 10px;
+  font: inherit;
+  background: var(--surface);
+  color: var(--ink);
+}
+.refine-inline-input:focus { outline: none; border-color: var(--teal); }
+.refine-note { font-size: 12.5px; color: var(--muted); margin: 2px 0 8px; }
+
+.grant-review-zone { margin-top: var(--sp-4); }
+.grant-review-bar { display: flex; align-items: center; gap: var(--sp-3); flex-wrap: wrap; }
+.grant-review-body {
+  margin-top: var(--sp-3);
+  padding: var(--sp-3) var(--sp-4);
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--teal);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+}

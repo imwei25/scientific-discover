@@ -30,7 +30,7 @@ import { useProjects } from "./lib/projects";
 
 export type ModuleId = "home" | "idea" | "grant" | "plan" | "ethics" | "analyze" | "imrad" | "journal" | "format" | "checklist" | "poster" | "rebuttal" | "history";
 // 产出文稿的阶段: 进入这些模块时, 屏幕一分为二, 右半屏固定为「画布」展示最终产出。
-const STAGE_CANVAS = new Set<ModuleId>(["grant", "plan", "ethics", "analyze", "imrad", "rebuttal"]);
+const STAGE_CANVAS = new Set<ModuleId>(["plan", "ethics", "analyze", "imrad", "rebuttal"]);
 // 跨模块传递: 把数据写入目标模块的持久化字段, 再切换过去。
 export type Goto = (target: ModuleId, patch?: Record<string, unknown>) => void;
 

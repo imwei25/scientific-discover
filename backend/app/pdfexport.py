@@ -60,15 +60,21 @@ def _inline(text: str) -> str:
     return "".join(out)
 
 
+_HEAD_COLOR = colors.HexColor("#1A1A1A")
+
+
 def _styles() -> dict[str, ParagraphStyle]:
-    base = dict(fontName=_FONT, leading=18, spaceAfter=6)
+    base = dict(fontName=_FONT, leading=20, spaceAfter=7)
+    hbase = dict(fontName=_FONT, leading=20, spaceAfter=6, textColor=_HEAD_COLOR)
     return {
-        "title": ParagraphStyle("title", fontSize=18, alignment=1, spaceAfter=14, **{k: v for k, v in base.items() if k != "spaceAfter"}),
-        "h1": ParagraphStyle("h1", fontSize=15, spaceBefore=10, **base),
-        "h2": ParagraphStyle("h2", fontSize=13, spaceBefore=8, **base),
-        "h3": ParagraphStyle("h3", fontSize=12, spaceBefore=6, **base),
-        "body": ParagraphStyle("body", fontSize=10.5, **base),
-        "bullet": ParagraphStyle("bullet", fontSize=10.5, leftIndent=14, bulletIndent=2, **{k: v for k, v in base.items() if k != "leading"}, ),
+        # 标题: 深色、字号分级、段前留白, 让层级清楚(不再和正文一样平)。
+        "title": ParagraphStyle("title", fontSize=19, alignment=1, spaceAfter=16, fontName=_FONT, leading=24, textColor=_HEAD_COLOR),
+        "h1": ParagraphStyle("h1", fontSize=15.5, spaceBefore=12, **hbase),
+        "h2": ParagraphStyle("h2", fontSize=13.5, spaceBefore=9, **hbase),
+        "h3": ParagraphStyle("h3", fontSize=12, spaceBefore=6, **hbase),
+        # 正文: 首行缩进 2 字符(约 22pt), 行距略宽, 更像正式中文文稿。
+        "body": ParagraphStyle("body", fontSize=11, firstLineIndent=22, **base),
+        "bullet": ParagraphStyle("bullet", fontSize=11, leftIndent=16, bulletIndent=2, fontName=_FONT, spaceAfter=5),
         "cell": ParagraphStyle("cell", fontSize=9.5, leading=13, fontName=_FONT),
     }
 

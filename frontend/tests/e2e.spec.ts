@@ -246,12 +246,19 @@ test("找选题→写标书: 只带入该方向引用到的文献(而非整池)"
       ),
     }),
   );
+  // 捕获写标书请求体, 断言只带入该方向引用到的 1 篇(而非全池 2 篇)。
+  let grantRefsLen = -1;
+  await page.route("**/api/grant", (r) => {
+    const b = JSON.parse(r.request().postData() || "{}");
+    grantRefsLen = (b.inputs?.references || []).length;
+    r.fulfill({ contentType: "text/event-stream", body: sse({ event: "done", data: {} }) });
+  });
   await page.goto("/");
   await ideaRun(page);
   await expect(page.getByTestId("topic-card")).toBeVisible();
-  // 该方向正文只引用了第 1 篇 → 写标书只带入 1 篇(不是全部 2 篇)
+  // 该方向正文只引用了第 1 篇 → 写标书(自动开写)只带入 1 篇
   await page.getByTestId("candidate-to-grant-0").click();
-  await expect(page.getByTestId("grant-refs-info")).toContainText("共 1 篇");
+  await expect.poll(() => grantRefsLen).toBe(1);
 });
 
 test("找选题→写标书: 报告只带现状+空白, 砍掉候选选题各方向", async ({ page }) => {
@@ -335,52 +342,36 @@ test("写标书: 撰写前默认重检索文献, 且产出可编辑", async ({ p
   await ideaRun(page);
   await expect(page.getByTestId("topic-card")).toBeVisible();
   await page.getByTestId("candidate-to-grant-0").click();
-  // 撰写前重检索开关默认勾选
-  await expect(page.getByTestId("grant-preresearch-toggle")).toBeChecked();
-  await page.getByTestId("grant-oneshot-btn").click();
+  // 从选题带入即自动开写(默认重检索开启), 无需再点按钮确认大纲
   await expect(page.getByTestId("grant-result")).toContainText("立项依据正文");
   // 请求带了 research:true; 产出可编辑(出现"编辑"按钮)
   expect(grantBody.inputs.research).toBe(true);
   await expect(page.getByTestId("edit-btn")).toBeVisible();
 });
 
-test("写标书: 大纲无勾选框, 可按修改意见调整", async ({ page }) => {
+test("写标书: 直接进入也走两步向导(填题名→一键生成)", async ({ page }) => {
   await mockBase(page);
-  await page.route("**/api/idea", (r) =>
+  await page.route("**/api/grant", (r) =>
     r.fulfill({ contentType: "text/event-stream", body: sse(
-      { event: "references", data: { items: [{ pmid: "1", title: "P1", first_author: "A", journal: "J", year: "2024", url: "https://pubmed.ncbi.nlm.nih.gov/1/", source: "pubmed" }] } },
-      { event: "delta", data: { text: "### 候选选题1：方向A\n内容。" } },
-      { event: "topic_card", data: { field: "F", keywords: "", facets: [], keyword_seed: [], candidates: [{ n: 1, title: "方向A", feasibility: 4, innovation: 3, body: "内容。" }], ref_count: 0 } },
+      { event: "scheme", data: { title: "T", question: "Q", hypothesis: "H", goal: "G", contents: [], innovations: [], route: "" } },
+      { event: "outline", data: { items: [{ key: "rationale", title: "立项依据", budget: "" }] } },
+      { event: "section", data: { key: "rationale", title: "立项依据" } },
+      { event: "delta", data: { text: "立项依据正文内容。" } },
       { event: "done", data: {} },
     ) }),
   );
-  await page.route("**/api/grant/plan", (r) => {
-    const body = JSON.parse(r.request().postData() || "{}");
-    const note = body.inputs?.outline_note;
-    const outline = note
-      ? [{ key: "rationale", title: "立项依据", budget: "" }, { key: "prelim", title: "前期工作基础", budget: "约 300 字" }]
-      : [{ key: "rationale", title: "立项依据", budget: "" }, { key: "content", title: "研究内容", budget: "" }];
-    r.fulfill({ json: { scheme: { title: "T", question: "Q", hypothesis: "H", goal: "G", contents: [], innovations: [], route: "" }, outline } });
-  });
   await page.goto("/");
-  await ideaRun(page);
-  await page.getByTestId("candidate-to-grant-0").click();
-  // 生成大纲
-  await page.getByTestId("grant-plan-btn").click();
-  await expect(page.getByTestId("grant-confirm")).toBeVisible();
-  // 不再有每节勾选框
-  await expect(page.getByTestId("grant-outline-include-0")).toHaveCount(0);
-  // 大纲章节标题是可编辑输入框, 断言其值
-  const titleVals = () =>
-    page.getByTestId("grant-outline-edit").locator(".grant-outline-title").evaluateAll(
-      (els) => els.map((e) => (e as HTMLInputElement).value),
-    );
-  await expect.poll(titleVals).toContain("研究内容");
-  // 输入修改意见 → AI 调整大纲(新增“前期工作基础”, 且不再有“研究内容”)
-  await page.getByTestId("grant-outline-note").fill("加一节前期工作基础");
-  await page.getByTestId("grant-outline-adjust-btn").click();
-  await expect.poll(titleVals).toContain("前期工作基础");
-  expect(await titleVals()).not.toContain("研究内容");
+  await page.getByTestId("nav-grant").click();
+  // 第 1 步只有一个附加材料框 + 文风样例框, 不再有一堆分散输入框
+  await expect(page.getByTestId("grant-materials-field")).toBeVisible();
+  await expect(page.getByTestId("grant-style")).toBeVisible();
+  await page.getByTestId("grant-title").fill("测试直接进入");
+  await page.getByTestId("grant-start-btn").click();
+  await expect(page.getByTestId("grant-result")).toContainText("立项依据正文内容");
+  // 评审自查默认隐藏, 可唤起
+  await expect(page.getByTestId("grant-review-body")).toHaveCount(0);
+  await page.getByTestId("grant-review-toggle").click();
+  await expect(page.getByTestId("grant-review-body")).toBeVisible();
 });
 
 test("找选题: 显示在研临床试验(ClinicalTrials旁路)并渲染空白矩阵表格", async ({ page }) => {
@@ -1618,8 +1609,8 @@ test("写标书: 上传文风样例→提炼→撰写请求带 style_profile", a
   // 提炼 → 出现可编辑档案框
   await page.getByTestId("grant-style-extract-btn").click();
   await expect(page.getByTestId("grant-style-profile")).toHaveValue(/先总后分/);
-  // 一步到位撰写
-  await page.getByTestId("grant-oneshot-btn").click();
+  // 一键生成
+  await page.getByTestId("grant-start-btn").click();
   await expect(page.getByTestId("grant-result")).toContainText("立项依据正文");
   // 请求体带上了 style_profile
   expect(grantBody.inputs.style_profile).toContain("先总后分");

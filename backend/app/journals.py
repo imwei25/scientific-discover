@@ -136,7 +136,7 @@ _BY_ID = {j["id"]: j for j in JOURNALS}
 
 _DEFAULT_DOCX = {
     "page": "a4", "margin_cm": 2.54, "body_font": "Times New Roman",
-    "body_size": 12, "line_spacing": 1.0, "line_numbers": False,
+    "body_font_cjk": "宋体", "body_size": 12, "line_spacing": 1.5, "line_numbers": False,
 }
 _DEFAULT_LATEX = {"doc_class": "article", "class_options": ["12pt"], "bib_style": "unsrt"}
 

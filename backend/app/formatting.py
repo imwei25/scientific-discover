@@ -19,7 +19,7 @@ from docx.enum.text import WD_LINE_SPACING
 from docx.opc.constants import RELATIONSHIP_TYPE
 from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
-from docx.shared import Cm, Pt
+from docx.shared import Cm, Pt, RGBColor
 
 from .journals import get_docx_spec, get_journal
 
@@ -184,6 +184,33 @@ def _apply_page_and_style(doc: Document, spec: dict) -> None:
     if rule is not None:
         normal.paragraph_format.line_spacing_rule = rule
 
+    # 标题样式: 中文用黑体、字体黑色(默认 Word 标题是蓝色 Latin 字体, 中文文档很丑),
+    # 并给各级标题合理字号与段前后间距, 让导出的 Word 不再"和 Markdown 一样朴素"。
+    heading_cjk = spec.get("heading_font_cjk") or "黑体"
+    heading_latin = spec.get("heading_font") or spec["body_font"]
+    _HEADING_SIZE = {0: 18, 1: 16, 2: 14, 3: 13, 4: 12}
+    for lvl in range(0, 5):
+        name = "Title" if lvl == 0 else f"Heading {lvl}"
+        try:
+            st = doc.styles[name]
+        except KeyError:
+            continue
+        st.font.name = heading_latin
+        st.font.size = Pt(_HEADING_SIZE.get(lvl, 12))
+        st.font.bold = True
+        try:
+            st.font.color.rgb = RGBColor(0x1A, 0x1A, 0x1A)
+        except Exception:  # noqa: BLE001
+            pass
+        rpr = st.element.get_or_add_rPr()
+        rfonts = rpr.get_or_add_rFonts()
+        rfonts.set(qn("w:eastAsia"), heading_cjk)
+        rfonts.set(qn("w:ascii"), heading_latin)
+        rfonts.set(qn("w:hAnsi"), heading_latin)
+        pf = st.paragraph_format
+        pf.space_before = Pt(10 if lvl <= 1 else 8)
+        pf.space_after = Pt(6)
+
 
 def _add_line_numbers(doc: Document, count_by: int = 1, start: int = 1,
                       restart: str = "continuous") -> None:
@@ -258,6 +285,9 @@ def build_docx(text: str, journal_id: str = "", references: list[str] | None = N
         else:
             p = doc.add_paragraph()
             _add_inline(p, line)
+            # 通用中文文稿(找选题/标书等, 非期刊排版)正文首行缩进 2 字符, 更像正式文档。
+            if not journal_id:
+                p.paragraph_format.first_line_indent = Pt(24)
         i += 1
 
     # 追加按期刊样式格式化好的参考文献

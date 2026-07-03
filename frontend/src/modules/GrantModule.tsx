@@ -1,31 +1,27 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
-  streamGrant, planGrant, grantStyle, streamGrantRevise, streamGrantReview,
+  streamGrant, grantStyle, streamGrantReview,
   Reference, Verification, GrantScheme, GrantOutlineItem,
-  GrantReviewData, GrantReviewIssue,
+  GrantReviewData,
 } from "../lib/sse";
 import Markdown, { CiteInfo, normCiteUrl } from "../components/Markdown";
 import { reportLLMError } from "../lib/errorToast";
 import { addHistory } from "../lib/history";
 import EditableMarkdown from "../components/EditableMarkdown";
-import RefineEditor from "../components/RefineEditor";
-import { CanvasSlot } from "../components/Canvas";
-import Dropzone from "../components/Dropzone";
+import { extractFile } from "../lib/extract";
 import RefIO from "../components/RefIO";
 import ZoteroPanel from "../components/ZoteroPanel";
-import { HelpButton } from "../components/HelpButton";
 import { usePersistentState } from "../lib/usePersistentState";
 import { downloadText, downloadDocxFromText, downloadPdfFromText, tsName } from "../lib/download";
 import { prepareForExport } from "../lib/exportPrep";
+import { withNumberedReferences } from "../lib/citations";
 
 // 合并导入的 references 到现有列表, 按 DOI 优先去重, 缺 DOI 则按 (title|year) 兜底。
-// 返回 [合并后列表, 实际新增数, 跳过的重复数]
 function mergeRefs(existing: Reference[], incoming: Reference[]): { merged: Reference[]; added: number; dup: number } {
   const norm = (s: string) => (s || "").trim().toLowerCase();
   const keyOf = (r: Reference) => {
     const doi = norm(r.pmid && r.pmid.startsWith("10.") ? r.pmid : "");
     if (doi) return `doi:${doi}`;
-    // pmid 也作为强键
     if (r.pmid) return `pmid:${norm(r.pmid)}`;
     return `tit:${norm(r.title)}|${norm(r.year)}`;
   };
@@ -51,29 +47,18 @@ const GRANT_TYPES: { key: string; label: string }[] = [
   { key: "general_other", label: "通用申请书（省部级/校级/横向等）" },
 ];
 
-// 各资助类型对应的封面大标题(NSFC 三类共用同一标题, 仅"资助类别"不同; 通用类标题可变)。
 const COVER_TITLE: Record<string, string> = {
-  general: "国家自然科学基金申请书",
-  youth: "国家自然科学基金申请书",
-  regional: "国家自然科学基金申请书",
-  general_other: "科研项目申请书",
+  general: "国家自然科学基金申请书", youth: "国家自然科学基金申请书",
+  regional: "国家自然科学基金申请书", general_other: "科研项目申请书",
 };
-// 封面"资助类别"栏取值。
 const FUND_CATEGORY: Record<string, string> = {
-  general: "面上项目",
-  youth: "青年科学基金",
-  regional: "地区科学基金",
+  general: "面上项目", youth: "青年科学基金", regional: "地区科学基金",
   general_other: "通用申请书（省部级/校级/横向等）",
 };
+// 参考文献著录章节名(各类基金统一走 GB/T 7714 数字著录)。
+const refSectionTitle = (_gt: string) => "参考文献";
 
-// 生成申请书封面(大标题 + 基本信息表)。作为导出时的文档抬头, 不进入屏幕编辑区。
-// 无法由 AI 推断的字段(申请人/依托单位/未填的研究期限)统一留 [需申请人补充] 占位, 绝不杜撰。
-function buildCover(opts: {
-  grantType: string;
-  projectName: string;
-  periodStart: string;
-  periodEnd: string;
-}): string {
+function buildCover(opts: { grantType: string; projectName: string; periodStart: string; periodEnd: string }): string {
   const title = COVER_TITLE[opts.grantType] || "科研项目申请书";
   const category = FUND_CATEGORY[opts.grantType] || "通用申请书";
   const s = opts.periodStart.trim();
@@ -81,38 +66,20 @@ function buildCover(opts: {
   const period = s || e ? `${s || "____"} — ${e || "____"}` : "[需申请人补充]";
   const name = opts.projectName.trim() || "[需申请人补充]";
   return [
-    `# ${title}`,
-    "",
-    `| **资助类别** | ${category} |`,
-    "| --- | --- |",
-    `| **项目名称** | ${name} |`,
-    `| **研究期限** | ${period} |`,
-    "| **申请人** | [需申请人补充] |",
-    "| **依托单位** | [需申请人补充] |",
-    "",
+    `# ${title}`, "",
+    `| **资助类别** | ${category} |`, "| --- | --- |",
+    `| **项目名称** | ${name} |`, `| **研究期限** | ${period} |`,
+    "| **申请人** | [需申请人补充] |", "| **依托单位** | [需申请人补充] |", "",
   ].join("\n");
 }
 
-// 写作中的章节: 标题用于 ## 大标题, text 为正文。review 节也用同结构存。
 interface DocSection { key: string; title: string; text: string }
-// 大纲项额外带 include 开关(用户可在确认阶段勾掉某节)。
-type EditableOutline = GrantOutlineItem & { include: boolean };
 
-const emptyScheme: GrantScheme = {
-  title: "", question: "", hypothesis: "", goal: "", contents: [], innovations: [], route: "",
-};
+const emptyScheme: GrantScheme = { title: "", question: "", hypothesis: "", goal: "", contents: [], innovations: [], route: "" };
 
-// 章节标题的"核心": 去掉 #/加粗记号、空白、以及"一、"「（一）」这类编号, 用于判断正文
-// 开头是否又重复写了一遍大标题(fullDoc 前面已加 `## 标题`, AI 再写一遍就会重复)。
 function coreTitle(s: string): string {
-  return s
-    .replace(/[#*\s]/g, "")
-    .replace(/^[一二三四五六七八九十]+[、.．]/, "")
-    .replace(/^（[一二三四五六七八九十]+）/, "");
+  return s.replace(/[#*\s]/g, "").replace(/^[一二三四五六七八九十]+[、.．]/, "").replace(/^（[一二三四五六七八九十]+）/, "");
 }
-
-// 若正文开头一行就是与本节标题相同的标题(不管有没有 # 或加粗), 去掉它, 避免大标题重复。
-// 只在"核心完全相同"时删, 不做包含匹配, 以免误删「研究基础」这类真实子标题。
 function stripEchoedHeading(title: string, text: string): string {
   const lines = text.split("\n");
   let i = 0;
@@ -127,95 +94,89 @@ function stripEchoedHeading(title: string, text: string): string {
   }
   return text;
 }
-
 function fullDoc(sections: DocSection[]): string {
   return sections.map((s) => `## ${s.title}\n\n${stripEchoedHeading(s.title, s.text)}`).join("\n\n");
 }
 
+const STEPS = [
+  { n: 1, title: "准备材料", desc: "题名 · 资助类型 · 附加材料" },
+  { n: 2, title: "撰写与精修", desc: "生成 · 编辑 · 精修 · 评审" },
+];
+
 export default function GrantModule() {
-  // 这些字段可由「找选题」一键带入(写入对应持久化键后切换过来)。
+  // 可由「找选题」一键带入。
   const [title, setTitle] = usePersistentState("grant:title", "");
   const [idea, setIdea] = usePersistentState("grant:idea", "");
   const [report, setReport] = usePersistentState("grant:report", "");
   const [background, setBackground] = usePersistentState("grant:background", "");
   const [grantType, setGrantType] = usePersistentState("grant:type", "general");
-  // 研究期限(起止, 如 2026.01 / 2028.12); 仅用于导出封面, 留空则封面填 [需申请人补充]。
   const [periodStart, setPeriodStart] = usePersistentState("grant:periodStart", "");
   const [periodEnd, setPeriodEnd] = usePersistentState("grant:periodEnd", "");
   const [refs, setRefs] = usePersistentState<Reference[]>("grant:refs", []);
-  // 撰写前是否按方向重新检索文献并入池(默认开): 让立项依据据新鲜、针对本方向的文献来写。
   const [preResearch, setPreResearch] = usePersistentState<boolean>("grant:preResearch", true);
 
-  // 文风样例: 上传样例原文 → 提炼文风档案(可编辑) → 撰写/去AI味时按开关注入。
+  // 文风样例(单独的上传框)。
   const [styleSample, setStyleSample] = usePersistentState("grant:styleSample", "");
   const [styleProfile, setStyleProfile] = usePersistentState("grant:styleProfile", "");
   const [styleOn, setStyleOn] = usePersistentState<boolean>("grant:styleOn", true);
   const [styleBusy, setStyleBusy] = useState(false);
   const [styleErr, setStyleErr] = useState("");
 
-  // phase: idle(未开始) | planned(大纲待确认) | writing | done
+  // 阶段: idle | writing | done ; step: 1 准备 | 2 撰写
   const [phase, setPhase] = usePersistentState<string>("grant:phase", "idle");
+  const [step, setStep] = usePersistentState<number>("grant:step", 1);
   const [scheme, setScheme] = usePersistentState<GrantScheme | null>("grant:scheme", null);
-  const [outline, setOutline] = usePersistentState<EditableOutline[]>("grant:outline", []);
+  const [outline, setOutline] = usePersistentState<GrantOutlineItem[]>("grant:outline", []);
   const [sections, setSections] = usePersistentState<DocSection[]>("grant:sections", []);
   const [verify, setVerify] = usePersistentState<Verification | null>("grant:verify", null);
-  // 评审组结构化结果: 摘要卡 + 「按评审意见修订」联动
+  // 评审与正文脱离: 评审正文单独存, 默认隐藏, 可唤起/重评。
+  const [reviewText, setReviewText] = usePersistentState("grant:reviewText", "");
   const [review, setReview] = usePersistentState<GrantReviewData | null>("grant:review", null);
+  const [showReview, setShowReview] = useState(false);
 
   const [status, setStatus] = useState("");
-  const [planning, setPlanning] = useState(false);
-  const [outlineNote, setOutlineNote] = useState(""); // 大纲修改意见(交 AI 调整大纲)
   const [running, setRunning] = useState(false);
+  const [paused, setPaused] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [docxBusy, setDocxBusy] = useState(false);
   const [docxErr, setDocxErr] = useState("");
-  const ctrl = useRef<AbortController | null>(null);
-
-  // 逐节重写
-  const [reviseNote, setReviseNote] = useState<Record<string, string>>({});
-  const [revisingKey, setRevisingKey] = useState<string | null>(null);
-  const [reviseErr, setReviseErr] = useState<string | null>(null);
-  const [reviseStatus, setReviseStatus] = useState("");
-  const rctrl = useRef<AbortController | null>(null);
-  // 重新评审 / 一键修订薄弱章节
+  const [copied, setCopied] = useState(false);
   const [rereviewing, setRereviewing] = useState(false);
-  const [batchBusy, setBatchBusy] = useState(false);
+  const ctrl = useRef<AbortController | null>(null);
   const rvctrl = useRef<AbortController | null>(null);
-  // 评审"不通过"(资助建议 C)时自动补修订: 每次撰写至多 _MAX_AUTO_REVISE 轮(每轮=修订薄弱章节+重评),
-  // 若重评仍为 C 会自动再来一轮, 到上限即停, 防止反复循环。
-  const autoReviseCountRef = useRef(0);
-  const _MAX_AUTO_REVISE = 2;
+  const inReviewRef = useRef(false); // 流中是否已进入「评审」节(其 delta 路由到 reviewText)
+
+  // 第 1 步附加材料 / 文风样例 附件解析
+  const matFileRef = useRef<HTMLInputElement>(null);
+  const styleFileRef = useRef<HTMLInputElement>(null);
+  const [matDrag, setMatDrag] = useState(false);
+  const [matBusy, setMatBusy] = useState(false);
+  const [styleDrag, setStyleDrag] = useState(false);
 
   const text = fullDoc(sections);
+  const hasInput = !!(title.trim() || report.trim());
+  const effStyle = styleOn ? styleProfile : "";
 
-  // 封面(大标题 + 基本信息表): 屏幕 Canvas 顶部与导出抬头共用同一份, 不进入可编辑正文,
-  // 让画布上也能看到申请书标题/项目名等信息, 而不是直接从第一章节开始。
   const coverMd = useMemo(
     () => buildCover({ grantType, projectName: scheme?.title || title, periodStart, periodEnd }),
     [grantType, scheme?.title, title, periodStart, periodEnd],
   );
 
-  // 引用悬浮卡数据: 按 URL 索引文献题名, 悬停正文引用即可看 AI 标注的原文支持句。
   const citeInfo = useMemo(() => {
     const m: Record<string, CiteInfo> = {};
-    for (const r of refs) {
-      if (r.url) m[normCiteUrl(r.url)] = { label: `${r.first_author} (${r.year}). ${r.title}`.slice(0, 140) };
-    }
+    for (const r of refs) if (r.url) m[normCiteUrl(r.url)] = { label: `${r.first_author} (${r.year}). ${r.title}`.slice(0, 140) };
     return m;
   }, [refs]);
 
-  // 去 AI 味采纳/撤回: 正文由 fullDoc(sections) 拼成, 去AI味不动 `## 标题`,
-  // 故按 `## ` 切回、按序写回各节正文(解析失败的节保持原样, 不破坏文档)。
-  const applyDeai = (newDoc: string) => {
+  // 去 AI 味 / AI 精修采纳: 正文由 fullDoc(sections) 拼成, 按 `## ` 切回、按序写回各节。
+  const applyDoc = (newDoc: string) => {
     const parts = newDoc.split(/\n(?=## )/);
-    setSections((prev) =>
-      prev.map((s, i) => {
-        const p = parts[i];
-        if (p === undefined) return s;
-        const m = p.match(/^##\s+(.+?)\r?\n+([\s\S]*)$/);
-        return m ? { ...s, title: m[1].trim(), text: m[2].trim() } : s;
-      }),
-    );
+    setSections((prev) => prev.map((s, i) => {
+      const p = parts[i];
+      if (p === undefined) return s;
+      const m = p.match(/^##\s+(.+?)\r?\n+([\s\S]*)$/);
+      return m ? { ...s, title: m[1].trim(), text: m[2].trim() } : s;
+    }));
   };
 
   const savedRef = useRef("");
@@ -223,965 +184,412 @@ export default function GrantModule() {
     if (phase === "done" && !running && !error && text && savedRef.current !== text) {
       savedRef.current = text;
       addHistory({
-        module: "grant",
-        icon: "📜",
-        title: (scheme?.title || title || "标书初稿").slice(0, 40),
+        module: "grant", icon: "📜", title: (scheme?.title || title || "标书初稿").slice(0, 40),
         data: {
-          "grant:title": title, "grant:idea": idea, "grant:report": report,
-          "grant:background": background, "grant:type": grantType,
-          "grant:periodStart": periodStart, "grant:periodEnd": periodEnd, "grant:refs": refs,
+          "grant:title": title, "grant:idea": idea, "grant:report": report, "grant:background": background,
+          "grant:type": grantType, "grant:periodStart": periodStart, "grant:periodEnd": periodEnd, "grant:refs": refs,
           "grant:scheme": scheme, "grant:outline": outline, "grant:sections": sections,
-          "grant:phase": "done", "grant:verify": verify, "grant:review": review,
+          "grant:phase": "done", "grant:step": 2, "grant:verify": verify, "grant:review": review, "grant:reviewText": reviewText,
         },
       });
     }
   }, [phase, running, error, text, title, scheme]);
 
-  const hasInput = !!(title.trim() || report.trim());
-
-  const [copied, setCopied] = useState(false); // 复制全文的短暂反馈
-
-  // 生效的文风档案: 关掉开关或没档案时为空串(=不模仿, 维持现状)。
-  const effStyle = styleOn ? styleProfile : "";
-
+  // 文风提炼
   const extractStyle = async () => {
     if (!styleSample.trim() || styleBusy) return;
-    setStyleErr("");
-    setStyleBusy(true);
+    setStyleErr(""); setStyleBusy(true);
     try {
       const { profile } = await grantStyle(styleSample);
       if (profile) setStyleProfile(profile);
       else setStyleErr("未能提炼出文风档案，请换一份更完整的样例或重试。");
-    } catch {
-      setStyleErr("提炼文风失败（网络或服务错误），请重试。");
-    } finally {
-      setStyleBusy(false);
-    }
+    } catch { setStyleErr("提炼文风失败（网络或服务错误），请重试。"); }
+    finally { setStyleBusy(false); }
   };
 
-  // —— 第一步: 生成可编辑大纲(两段式); 传 note 时只按意见调整大纲, 不动已确认的方案骨架 ——
-  const genPlan = async (note?: string) => {
-    if (!hasInput || planning || running) return;
-    setError(null);
-    setPlanning(true);
-    setStatus(note ? "正在按修改意见调整大纲…" : "正在凝练研究方案与大纲…");
-    try {
-      const plan = await planGrant(
-        note
-          ? { title, idea, report, grant_type: grantType, outline_note: note, outline }
-          : { title, idea, report, grant_type: grantType },
-      );
-      // planGrant 失败会静默返回空大纲: 视为失败, 不清空已有大纲、不进空的确认面板。
-      if (!plan.outline || plan.outline.length === 0) {
-        setError("生成大纲失败（网络或服务波动），已保留你现有的内容，请重试。");
-        return;
-      }
-      if (note) {
-        // 只更新大纲, 保留用户已编辑的方案骨架与阶段。
-        setOutline(plan.outline.map((o) => ({ ...o, include: true })));
-        setOutlineNote("");
-      } else {
-        setScheme({ ...emptyScheme, ...plan.scheme });
-        setOutline(plan.outline.map((o) => ({ ...o, include: true })));
-        setSections([]);
-        setVerify(null);
-        setPhase("planned");
-      }
+  // 附件 → 追加到目标文本框
+  const ingest = async (files: FileList | File[] | null | undefined, sink: (chunk: string, name: string) => void, setBusy: (b: boolean) => void, inputEl?: HTMLInputElement | null) => {
+    const list = files ? Array.from(files) : [];
+    if (!list.length) return;
+    setBusy(true);
+    for (const f of list) {
+      const res = await extractFile(f);
+      if (res.ok && res.text) sink(res.text, f.name);
+    }
+    setBusy(false);
+    if (inputEl) inputEl.value = "";
+  };
+
+  // streamGrant 的公共处理器: 把 body 节写进 sections, 评审节路由到 reviewText。
+  const writeHandlers = (signal: AbortSignal) => ({
+    signal,
+    onStatus: setStatus,
+    onScheme: (s: GrantScheme) => setScheme(s),
+    onOutline: (items: GrantOutlineItem[]) => setOutline(items),
+    onReferences: (items: Reference[]) => setRefs(items),
+    onSection: (key: string, secTitle: string) => {
+      if (key === "review") { inReviewRef.current = true; setReviewText((p) => p + (p ? "\n\n" : "")); return; }
+      inReviewRef.current = false;
+      setSections((prev) => [...prev, { key, title: secTitle, text: "" }]);
+    },
+    onDelta: (t: string) => {
+      if (inReviewRef.current) { setReviewText((p) => p + t); return; }
+      setSections((prev) => {
+        if (!prev.length) return prev;
+        const next = [...prev];
+        const last = next[next.length - 1];
+        next[next.length - 1] = { ...last, text: last.text + t };
+        return next;
+      });
+    },
+    onReviewData: setReview,
+    onVerify: setVerify,
+    onError: (m: string) => {
+      setError(m); setStatus(""); setRunning(false); setPhase("done");
+      window.dispatchEvent(new Event("usage-updated")); reportLLMError(m);
+    },
+    onDone: () => {
+      setStatus(""); setRunning(false); setPhase("done"); inReviewRef.current = false;
       window.dispatchEvent(new Event("usage-updated"));
-    } catch {
-      setError("生成大纲失败（网络或服务错误），已保留你现有的内容，请重试。");
-    } finally {
-      setStatus("");
-      setPlanning(false);
-    }
-  };
+    },
+  });
 
-  // —— 第二步(或一步到位): 撰写 ——
-  // confirmed=true 时带上用户确认过的 scheme/sections; 否则让后端现凝练(跳过确认)。
-  const startWrite = async (confirmed: boolean) => {
+  // 从零开始撰写: 后端现凝练方案骨架 + 大纲(无需用户确认) + 逐节撰写 + 评审。
+  const startAll = async () => {
     if (!hasInput || running) return;
-    setError(null);
-    setSections([]);
-    setVerify(null);
-    setReview(null);
-    setReviseErr(null);
-    autoReviseCountRef.current = 0; // 新一轮撰写: 重置自动修订轮次计数
-    setPhase("writing");
-    setRunning(true);
+    setError(null); setSections([]); setReviewText(""); setReview(null); setVerify(null);
+    setShowReview(false); setPaused(false); inReviewRef.current = false;
+    setPhase("writing"); setRunning(true); setStep(2);
     ctrl.current = new AbortController();
-    const payload: Record<string, unknown> = {
-      title, idea, report, background, grant_type: grantType, references: refs,
-      research: preResearch, // 撰写前是否按方向重检索文献(默认开)
-      style_profile: effStyle,
-    };
-    if (confirmed) {
-      if (scheme) payload.scheme = scheme;
-      payload.sections = outline
-        .filter((o) => o.include)
-        .map((o) => ({ key: o.key, title: o.title, budget: o.budget }));
-    }
-    await streamGrant(payload, {
-      signal: ctrl.current.signal,
-      onStatus: setStatus,
-      onScheme: (s) => setScheme(s),
-      onOutline: (items) => setOutline(items.map((o) => ({ ...o, include: true }))),
-      onReferences: (items) => setRefs(items), // 撰写前重检索扩充的文献池写回
-
-      onSection: (key, secTitle) =>
-        setSections((prev) => [...prev, { key, title: secTitle, text: "" }]),
-      onDelta: (t) =>
-        setSections((prev) => {
-          if (!prev.length) return prev;
-          const next = [...prev];
-          const last = next[next.length - 1];
-          next[next.length - 1] = { ...last, text: last.text + t };
-          return next;
-        }),
-      onReviewData: setReview,
-      onVerify: setVerify,
-      onError: (m) => {
-        setError(m);
-        setStatus("");
-        setRunning(false);
-        setPhase("done");
-        window.dispatchEvent(new Event("usage-updated"));
-        reportLLMError(m);
-      },
-      onDone: () => {
-        setStatus("");
-        setRunning(false);
-        setPhase("done");
-        window.dispatchEvent(new Event("usage-updated"));
-      },
-    });
-    setRunning(false);
-  };
-
-  const stop = () => {
-    ctrl.current?.abort();
-    setRunning(false);
-    setPhase("done");
-  };
-
-  // —— 逐节重写 —— research=true 时先按新方向重新检索文献再写。返回是否成功(供批量修订串行)。
-  const reviseSectionWith = async (sec: DocSection, note: string, research: boolean): Promise<boolean> => {
-    if (!note.trim() || running) return false;
-    setReviseErr(null);
-    setRevisingKey(sec.key);
-    rctrl.current = new AbortController();
-    const budget = outline.find((o) => o.key === sec.key)?.budget || "";
-    let buf = "";
-    let ok = false;
-    await streamGrantRevise(
-      {
-        title, report, background, grant_type: grantType, references: refs, scheme,
-        section: { key: sec.key, title: sec.title, budget },
-        current: sec.text,
-        note: note.trim(),
-        research,
-        style_profile: effStyle,
-      },
-      {
-        signal: rctrl.current.signal,
-        onStatus: setReviseStatus,
-        onReferences: (items) => setRefs(items), // 重新调研: 把扩充后的文献池写回
-        onDelta: (t) => {
-          buf += t;
-          setSections((prev) => prev.map((s) => (s.key === sec.key ? { ...s, text: buf } : s)));
-        },
-        onVerify: setVerify,
-        onError: (m) => {
-          setReviseErr(`《${sec.title}》修改失败：${m}`);
-          setRevisingKey(null);
-          setReviseStatus("");
-          reportLLMError(m);
-        },
-        onDone: () => {
-          ok = true;
-          setReviseNote((prev) => ({ ...prev, [sec.key]: "" }));
-          setRevisingKey(null);
-          setReviseStatus("");
-          window.dispatchEvent(new Event("usage-updated"));
-        },
-      },
+    await streamGrant(
+      { title, idea, report, background, grant_type: grantType, references: refs, research: preResearch, style_profile: effStyle },
+      writeHandlers(ctrl.current.signal),
     );
-    setRevisingKey(null);
-    return ok;
+    setRunning(false);
   };
 
-  const reviseSection = (sec: DocSection, research: boolean) =>
-    reviseSectionWith(sec, (reviseNote[sec.key] || "").trim(), research);
-
-  // 评审组给某章节的问题清单(结构化 review_data 联动)。
-  const issuesFor = (key: string): GrantReviewIssue[] =>
-    review?.sections.find((s) => s.key === key)?.issues ?? [];
-
-  // 把评审问题拼成"修改意见", 喂给逐节重写。
-  const noteFromIssues = (issues: GrantReviewIssue[]) =>
-    issues
-      .map((i) => `${i.severity ? `【${i.severity}】` : ""}${i.problem}${i.advice ? `（建议：${i.advice}）` : ""}`)
-      .join("\n")
-      .slice(0, 1500);
-
-  const anyBusy = running || !!revisingKey || rereviewing || batchBusy;
-
-  // 评审认定的薄弱章节(均分 <8 且有问题), 供一键修订。
-  const weakTargets = () => {
-    if (!review) return [] as { sec: DocSection; note: string }[];
-    const out: { sec: DocSection; note: string }[] = [];
-    for (const rs of review.sections) {
-      if (!rs.issues.length) continue;
-      if (rs.score != null && rs.score >= 8) continue;
-      const sec = sections.find((s) => s.key === rs.key && s.key !== "review");
-      if (sec) out.push({ sec, note: noteFromIssues(rs.issues) });
-    }
-    return out;
+  // 继续生成: 就已知方案骨架 + 尚未写的大纲章节续写(不重检索、不重评已写部分)。
+  const continueWrite = async () => {
+    if (running) return;
+    const remaining = outline.filter((o) => !sections.some((s) => s.key === o.key));
+    if (!remaining.length) { setPaused(false); return; }
+    setError(null); setPaused(false); inReviewRef.current = false;
+    setReviewText(""); setReview(null); // 续写后会重新评审
+    setPhase("writing"); setRunning(true);
+    ctrl.current = new AbortController();
+    await streamGrant(
+      {
+        title, idea, report, background, grant_type: grantType, references: refs,
+        research: false, style_profile: effStyle,
+        scheme: scheme || undefined,
+        sections: remaining.map((o) => ({ key: o.key, title: o.title, budget: o.budget })),
+      },
+      writeHandlers(ctrl.current.signal),
+    );
+    setRunning(false);
   };
 
-  // 一键按评审意见依次修订薄弱章节(串行, 出错即停)。改完建议点「重新评审」看改进。
-  const batchRevise = async () => {
-    if (anyBusy) return;
-    const targets = weakTargets();
-    if (!targets.length) return;
-    setBatchBusy(true);
-    setReviseErr(null);
-    let done = 0;
-    for (const t of targets) {
-      setReviseStatus(`按评审意见修订薄弱章节（${done + 1}/${targets.length}）：《${t.sec.title}》…`);
-      const ok = await reviseSectionWith(t.sec, t.note, false);
-      if (!ok) break;
-      done += 1;
-    }
-    setReviseStatus(done ? `已修订 ${done}/${targets.length} 个薄弱章节，建议点「重新评审」看看分数变化。` : "");
-    setBatchBusy(false);
+  // 暂停: 中止流; 若还有没写的章节, 亮出「继续生成」。
+  const pause = () => {
+    ctrl.current?.abort();
+    setRunning(false); setStatus(""); setPhase("done"); inReviewRef.current = false;
+    const remaining = outline.filter((o) => !sections.some((s) => s.key === o.key));
+    setPaused(remaining.length > 0);
   };
 
-  // 重新评审: 把当前全文(不含旧评审节)交回评审组重打分。
+  // 一键全部重写: 用当前配置从头重跑(会覆盖现有初稿)。
+  const rewriteAll = () => {
+    if (running) return;
+    if (text && !confirm("将丢弃当前初稿并从头重新撰写全部章节。确定重写？")) return;
+    startAll();
+  };
+
+  // 重新评审: 把当前全文交回评审组重打分(评审与正文脱离, 结果进 reviewText)。
   const reReview = async () => {
-    if (anyBusy) return;
-    const body = sections
-      .filter((s) => s.key !== "review" && s.text.trim())
-      .map((s) => ({ key: s.key, title: s.title, text: s.text }));
+    if (running || rereviewing) return;
+    const body = sections.filter((s) => s.text.trim()).map((s) => ({ key: s.key, title: s.title, text: s.text }));
     if (!body.length) return;
-    setRereviewing(true);
-    setError(null);
-    setSections((prev) => prev.filter((s) => s.key !== "review")); // 移除旧评审, 新评审节会流式追加
+    setRereviewing(true); setError(null); setReviewText(""); setReview(null); setShowReview(true);
+    inReviewRef.current = true;
     rvctrl.current = new AbortController();
     await streamGrantReview(
       { title: scheme?.title || title, grant_type: grantType, scheme, references: refs, sections: body },
       {
         signal: rvctrl.current.signal,
         onStatus: setStatus,
-        onSection: (key, secTitle) =>
-          setSections((prev) => [...prev, { key, title: secTitle, text: "" }]),
-        onDelta: (t) =>
-          setSections((prev) => {
-            if (!prev.length) return prev;
-            const next = [...prev];
-            const last = next[next.length - 1];
-            next[next.length - 1] = { ...last, text: last.text + t };
-            return next;
-          }),
+        onSection: () => { inReviewRef.current = true; },
+        onDelta: (t) => setReviewText((p) => p + t),
         onReviewData: setReview,
-        onError: (m) => {
-          setError(`重新评审失败：${m}`);
-          setStatus("");
-          setRereviewing(false);
-          reportLLMError(m);
-        },
-        onDone: () => {
-          setStatus("");
-          setRereviewing(false);
-          window.dispatchEvent(new Event("usage-updated"));
-        },
+        onError: (m) => { setError(`重新评审失败：${m}`); setStatus(""); setRereviewing(false); reportLLMError(m); },
+        onDone: () => { setStatus(""); setRereviewing(false); inReviewRef.current = false; window.dispatchEvent(new Event("usage-updated")); },
       },
     );
     setRereviewing(false);
   };
 
-  // 评审"不通过"(资助建议 C)时自动补一轮: 按评审意见依次修订薄弱章节, 再自动重新评审一次。
-  // round 为当前是第几轮(1..MAX), 仅用于状态提示。
-  const autoReviseRound = async (round: number) => {
-    const targets = weakTargets();
-    if (!targets.length) return;
-    const roundTip = `（自动第 ${round}/${_MAX_AUTO_REVISE} 轮）`;
-    setStatus(`评审结论为 C（暂不建议资助）${roundTip}，正在按评审意见自动修订 ${targets.length} 个薄弱章节…`);
-    setBatchBusy(true);
-    let done = 0;
-    for (const t of targets) {
-      setReviseStatus(`自动修订${roundTip}（${done + 1}/${targets.length}）：《${t.sec.title}》…`);
-      const ok = await reviseSectionWith(t.sec, t.note, false);
-      if (!ok) break;
-      done += 1;
-    }
-    setBatchBusy(false);
-    if (done) {
-      setReviseStatus(`已自动修订 ${done} 个薄弱章节，正在重新评审…`);
-      await reReview();
-      setReviseStatus("");
-    } else {
-      setReviseStatus("");
-      setStatus("");
-    }
-  };
-
-  // 撰写/重评完成后, 若评审组给出 C(不通过), 自动补一轮修订+重评; 若重评仍为 C 会再触发,
-  // 至多 _MAX_AUTO_REVISE 轮(到上限即停, 需人工继续)。
+  // 从「找选题」带入时自动开写(不再让用户确认大纲, 直接进第 2 步预览)。
+  const [autostart, setAutostart] = usePersistentState<boolean>("grant:autostart", false);
   useEffect(() => {
-    if (phase !== "done" || running || revisingKey || rereviewing || batchBusy) return;
-    if (!review || review.grade !== "C" || autoReviseCountRef.current >= _MAX_AUTO_REVISE) return;
-    if (!weakTargets().length) return;
-    autoReviseCountRef.current += 1;
-    void autoReviseRound(autoReviseCountRef.current);
+    if (autostart && hasInput && phase !== "writing" && !running) {
+      setAutostart(false);
+      startAll();
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [phase, review, running, revisingKey, rereviewing, batchBusy]);
+  }, [autostart]);
 
   const reset = () => {
-    // 有输入或已生成内容时二次确认, 避免一键抹掉辛苦写的整份申请书
     const hasWork = title.trim() || report.trim() || idea.trim() || scheme || sections.length > 0;
-    if (hasWork && !confirm("将清空全部输入与已生成的方案/初稿，且不可撤销。确定清空？")) return;
-    if (running) stop();
-    rctrl.current?.abort();
+    if (hasWork && !confirm("将清空全部输入与已生成的初稿，且不可撤销。确定清空？")) return;
+    if (running) { ctrl.current?.abort(); setRunning(false); }
     rvctrl.current?.abort();
     setTitle(""); setIdea(""); setReport(""); setBackground(""); setRefs([]);
     setPeriodStart(""); setPeriodEnd("");
-    setScheme(null); setOutline([]); setSections([]); setVerify(null); setReview(null);
-    setReviseNote({}); setRevisingKey(null); setReviseErr(null);
-    setRereviewing(false); setBatchBusy(false); autoReviseCountRef.current = 0;
+    setScheme(null); setOutline([]); setSections([]); setVerify(null); setReview(null); setReviewText("");
     setStyleSample(""); setStyleProfile(""); setStyleOn(true); setStyleErr("");
-    setStatus(""); setError(null); setPhase("idle");
+    setStatus(""); setError(null); setPhase("idle"); setStep(1); setPaused(false);
   };
 
-  // 导出用全文 = 封面(大标题 + 基本信息表) + 正文各章节。屏幕编辑区仍只显示正文。
-  const exportBody = () => {
-    const cover = buildCover({
-      grantType,
-      projectName: scheme?.title || title,
-      periodStart,
-      periodEnd,
-    });
-    return cover + "\n" + text;
+  // 导出全文 = 封面 + 正文(引用编号化) + 参考文献。
+  const exportDoc = async () => {
+    const numbered = withNumberedReferences(text, refs, refSectionTitle(grantType));
+    const cover = buildCover({ grantType, projectName: scheme?.title || title, periodStart, periodEnd });
+    return prepareForExport(cover + "\n" + numbered, "技术路线图/计划图");
   };
 
-  const exportMd = async () => {
-    if (docxBusy) return;
-    setDocxBusy(true);
-    setDocxErr("");
+  const doExport = async (kind: "md" | "docx" | "pdf") => {
+    if (docxBusy || !text) return;
+    setDocxBusy(true); setDocxErr("");
     try {
-      const refMd = refs.length
-        ? "\n\n## 参考文献\n" + refs.map((r) => `- [${r.first_author} (${r.year}). ${r.title}](${r.url})`).join("\n")
-        : "";
-      // 导出前处理：去支持句 + 把技术路线图/甘特图渲染成图片，正文再拼参考文献。
-      const body = await prepareForExport(exportBody(), "技术路线图/计划图");
-      downloadText(tsName("标书初稿", "md"), body + refMd);
+      const body = await exportDoc();
+      if (kind === "md") downloadText(tsName("标书初稿", "md"), body);
+      else if (kind === "docx") await downloadDocxFromText(tsName("标书初稿", "docx"), body);
+      else await downloadPdfFromText(tsName("标书初稿", "pdf"), body, scheme?.title || title);
     } catch (e) {
-      setDocxErr(`导出 Markdown 失败：${(e as Error).message}`);
-    } finally {
-      setDocxBusy(false);
-    }
+      setDocxErr(`导出失败：${(e as Error).message}`);
+    } finally { setDocxBusy(false); }
   };
 
-  const exportDocx = async () => {
-    if (!text || docxBusy) return;
-    setDocxBusy(true);
-    setDocxErr("");
-    try {
-      const body = await prepareForExport(exportBody(), "技术路线图/计划图");
-      await downloadDocxFromText(tsName("标书初稿", "docx"), body);
-    } catch (e) {
-      setDocxErr(`导出 Word 失败：${(e as Error).message}`);
-    } finally {
-      setDocxBusy(false);
-    }
-  };
-
-  const exportPdf = async () => {
-    if (!text || docxBusy) return;
-    setDocxBusy(true);
-    setDocxErr("");
-    try {
-      const body = await prepareForExport(exportBody(), "技术路线图/计划图");
-      await downloadPdfFromText(tsName("标书初稿", "pdf"), body, scheme?.title || title);
-    } catch (e) {
-      setDocxErr(`导出 PDF 失败：${(e as Error).message}`);
-    } finally {
-      setDocxBusy(false);
-    }
-  };
-
-  const updateScheme = (patch: Partial<GrantScheme>) =>
-    setScheme((prev) => ({ ...(prev || emptyScheme), ...patch }));
+  const updateScheme = (patch: Partial<GrantScheme>) => setScheme((prev) => ({ ...(prev || emptyScheme), ...patch }));
+  void updateScheme; // 方案骨架此版仅只读展示
 
   return (
-    <div className="module">
+    <div className="module grant-wizard">
       <header className="module-head">
         <h1>📜 写标书 · 中文基金申请书</h1>
-        <p>
-          接着「找选题」往下走：先把选题<strong>凝练成方案骨架 + 大纲</strong>交你确认/修改，再按
-          <strong>立项依据 → 研究内容与目标 → 研究方案与可行性 → 特色创新 → 年度计划 → 研究基础</strong>分节撰写，
-          最后给一份<strong>评审视角自查</strong>；写完每节都可<strong>按意见单独重写</strong>。立项依据只引用选题阶段检索到的真实文献；
-          申请人/经费等无法推断的事实用 <code>[需申请人补充]</code> 占位，绝不杜撰。产出为<strong>初稿</strong>，请人工核对后使用。
-        </p>
+        <p>两步走：准备材料 → 一键生成并在预览里精修。生成会自动凝练方案与大纲、分节撰写并给出评审自查；全程可暂停/继续、返回上一步。产出为<strong>初稿</strong>，请人工核对；无法推断的事实以 <code>[需申请人补充]</code> 占位，绝不杜撰。</p>
       </header>
 
-      <div className="form">
-        <label className="field">
-          <span className="field-label">项目题名 / 研究方向</span>
-          <input
-            data-testid="grant-title"
-            value={title}
-            onChange={(e) => setTitle(e.target.value)}
-            placeholder="例如：肠道菌群代谢物 TMAO 通过 NLRP3 炎症小体促进动脉粥样硬化的机制研究"
-          />
-        </label>
-        <label className="field">
-          <span className="field-label">资助类型</span>
-          <select data-testid="grant-type" value={grantType} onChange={(e) => setGrantType(e.target.value)}>
-            {GRANT_TYPES.map((g) => (
-              <option key={g.key} value={g.key}>{g.label}</option>
-            ))}
-          </select>
-        </label>
-        <label className="field">
-          <span className="field-label">研究期限（可选，用于导出封面；留空则封面标 [需申请人补充]）</span>
-          <div className="grant-period-row">
-            <input
-              data-testid="grant-period-start"
-              value={periodStart}
-              onChange={(e) => setPeriodStart(e.target.value)}
-              placeholder="起，如 2026.01"
-            />
-            <span className="grant-period-sep">—</span>
-            <input
-              data-testid="grant-period-end"
-              value={periodEnd}
-              onChange={(e) => setPeriodEnd(e.target.value)}
-              placeholder="止，如 2028.12"
-            />
-          </div>
-        </label>
-        <label className="field">
-          <span className="field-label">研究想法 / 核心思路（可选，建议从「找选题」带入）</span>
-          <textarea
-            data-testid="grant-idea"
-            value={idea}
-            onChange={(e) => setIdea(e.target.value)}
-            placeholder="拟解决的科学问题、创新点、初步设想等"
-            rows={3}
-          />
-        </label>
-        <label className="field">
-          <span className="field-label">选题调研报告（可选，强烈建议带入——用于综述现状/空白并据实引用文献）</span>
-          <textarea
-            data-testid="grant-report"
-            value={report}
-            onChange={(e) => setReport(e.target.value)}
-            placeholder="从「找选题」点“用此结果写标书 →”会自动带入这里；也可手动粘贴你的调研综述。"
-            rows={4}
-          />
-        </label>
-        <label className="field">
-          <span className="field-label">研究基础 / 工作条件（可选）</span>
-          <textarea
-            data-testid="grant-background"
-            value={background}
-            onChange={(e) => setBackground(e.target.value)}
-            placeholder="例如：团队前期相关工作、已有平台/设备/样本来源、合作单位等（缺失处会标注 [需申请人补充]）"
-            rows={3}
-          />
-        </label>
-        <Dropzone
-          testId="grant-upload"
-          accept=".docx,.pdf,.txt,.md"
-          label="附加材料（可选：已有综述/前期工作/预实验）"
-          hint="支持 Word/PDF/txt；内容会作为研究基础补充"
-          mode="text"
-          onText={(t, name) =>
-            setBackground((prev) => (prev ? prev + "\n\n" : "") + `[附加材料：${name}]\n` + t)
-          }
-        />
-
-        <div className="field" data-testid="grant-style">
-          <span className="field-label">文风样例（可选）</span>
-          <p className="field-hint">
-            上传一份你满意的 Word / PDF / txt（如你以往的标书或论文），AI 会<strong>提炼它的语言风格</strong>并在撰写时模仿，
-            兼起去 AI 味的作用。<strong>只学“怎么写”，不会把样例里的内容或事实写进你的标书。</strong>
-          </p>
-          <Dropzone
-            testId="grant-style-upload"
-            accept=".docx,.pdf,.txt,.md"
-            label="拖入文风样例"
-            hint="支持 Word / PDF / txt；仅用于学习语言风格"
-            mode="text"
-            onText={(t) => setStyleSample(t)}
-          />
-          {styleSample && (
-            <div className="grant-style-body">
-              <div className="form-actions">
-                <button
-                  className="btn-secondary btn-sm"
-                  data-testid="grant-style-extract-btn"
-                  onClick={extractStyle}
-                  disabled={styleBusy}
-                >
-                  {styleBusy ? "提炼中…" : styleProfile ? "重新提炼文风" : "提炼文风"}
-                </button>
-                <label className="type-chip" title="撰写与去 AI 味时是否模仿此文风">
-                  <input
-                    type="checkbox"
-                    data-testid="grant-style-toggle"
-                    checked={styleOn}
-                    onChange={(e) => setStyleOn(e.target.checked)}
-                  />
-                  撰写时模仿此文风
-                </label>
-              </div>
-              {styleErr && <div className="result-error" data-testid="grant-style-error">{styleErr}</div>}
-              {styleProfile && (
-                <label className="field">
-                  <span className="field-label">文风档案（可编辑）</span>
-                  <textarea
-                    data-testid="grant-style-profile"
-                    value={styleProfile}
-                    rows={5}
-                    onChange={(e) => setStyleProfile(e.target.value)}
-                  />
-                </label>
-              )}
-            </div>
-          )}
-        </div>
-
-        <div className="field" data-testid="grant-refs-info">
-          <span className="field-label" style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
-            可引用文献 · Zotero
-            <HelpButton helpKey="zotero" />
-          </span>
-          <span className="field-hint">
-            共 {refs.length} 篇。可来自找选题带入，也可从 Zotero 或文件(.ris/.bib/.enw)导入。
-            立项依据会据实引用这些文献；若想在写作前按方向补充新文献，勾选下方“撰写前重新检索”。
-          </span>
-          <RefIO
-            currentRefs={refs}
-            exportFilename="标书-文献"
-            onImport={(imported) => {
-              const { merged } = mergeRefs(refs, imported);
-              setRefs(merged);
-            }}
-          />
-          <ZoteroPanel
-            currentRefs={refs}
-            onImport={(imported) => {
-              const { merged } = mergeRefs(refs, imported);
-              setRefs(merged);
-            }}
-          />
-        </div>
-
-        <label className="type-chip" data-testid="grant-preresearch" title="开启后, 撰写前会按本方向再检索一遍 PubMed 等, 把新文献并入后据此写立项依据(更贴合、稍慢)">
-          <input
-            type="checkbox"
-            data-testid="grant-preresearch-toggle"
-            checked={preResearch}
-            onChange={(e) => setPreResearch(e.target.checked)}
-          />
-          撰写前重新检索文献（推荐）
-        </label>
-
-        <div className="form-actions">
-          <button
-            className="btn-primary"
-            onClick={() => genPlan()}
-            disabled={!hasInput || planning || running}
-            data-testid="grant-plan-btn"
-          >
-            {planning ? "生成中…" : "① 生成大纲（推荐先确认）"}
-          </button>
-          <button
-            className="btn-secondary"
-            onClick={() => startWrite(false)}
-            disabled={!hasInput || running}
-            data-testid="grant-oneshot-btn"
-          >
-            一步到位直接写完
-          </button>
-          <button className="btn-ghost" onClick={reset} data-testid="grant-reset-btn">
-            清空
-          </button>
-        </div>
-        {!hasInput && (
-          <p className="field-hint" data-testid="grant-gate-hint" style={{ marginTop: 6 }}>
-            开始前，请至少填写<strong>项目题名</strong>，或在上方粘贴一份<strong>选题调研报告</strong>——两者填其一即可生成。
-          </p>
-        )}
-        {phase === "idle" && scheme && outline.length > 0 && (
-          <p className="field-hint" style={{ marginTop: 6 }}>
-            你有一份已生成的方案骨架与大纲还在。
-            <button
-              className="btn-ghost btn-sm"
-              style={{ marginLeft: 8 }}
-              onClick={() => setPhase("planned")}
-              data-testid="grant-resume-plan-btn"
-            >
-              继续上次生成的大纲 →
+      <div className="wiz-steps" data-testid="grant-steps">
+        {STEPS.map((s) => {
+          const state = step === s.n ? "current" : s.n < step ? "done" : "todo";
+          const clickable = (s.n === 1 || (s.n === 2 && (sections.length > 0 || running))) && !running;
+          return (
+            <button key={s.n} type="button" className={`wiz-step ${state}`} data-testid={`grant-step-${s.n}`} disabled={!clickable} onClick={() => clickable && setStep(s.n)}>
+              <span className="wiz-step-num">{s.n < step ? "✓" : s.n}</span>
+              <span className="wiz-step-text"><span className="wiz-step-title">{s.title}</span><span className="wiz-step-desc">{s.desc}</span></span>
             </button>
-          </p>
-        )}
+          );
+        })}
       </div>
-
-      {status && (
-        <div className="status-line" data-testid="grant-status">
-          <span className="spinner" /> {status}
-        </div>
-      )}
 
       {error && <div className="result-error" data-testid="grant-error">{error}</div>}
 
-      {/* —— 大纲确认面板(两段式第二步) —— */}
-      {phase === "planned" && scheme && (
-        <div className="topic-card" data-testid="grant-confirm">
-          <div className="topic-card-head">🧭 确认方案骨架与大纲（可直接编辑，确认后再撰写）</div>
-          <div className="form" style={{ marginTop: 8 }}>
+      {/* ── 第 1 步：准备材料 ── */}
+      {step === 1 && (
+        <div className="wiz-panel" data-testid="grant-panel-1">
+          <div className="form">
             <label className="field">
-              <span className="field-label">凝练后的项目题名</span>
-              <input
-                data-testid="grant-scheme-title"
-                value={scheme.title}
-                onChange={(e) => updateScheme({ title: e.target.value })}
-              />
-            </label>
-            <label className="field">
-              <span className="field-label">关键科学问题</span>
-              <textarea value={scheme.question} rows={2} onChange={(e) => updateScheme({ question: e.target.value })} />
+              <span className="field-label">项目题名 / 研究方向 <em>必填</em></span>
+              <input data-testid="grant-title" value={title} onChange={(e) => setTitle(e.target.value)} placeholder="例如：肠道菌群代谢物 TMAO 通过 NLRP3 炎症小体促进动脉粥样硬化的机制研究" />
             </label>
             <div className="ss-row">
               <label className="field">
-                <span className="field-label">科学假设</span>
-                <textarea value={scheme.hypothesis} rows={2} onChange={(e) => updateScheme({ hypothesis: e.target.value })} />
+                <span className="field-label">资助类型</span>
+                <select data-testid="grant-type" value={grantType} onChange={(e) => setGrantType(e.target.value)}>
+                  {GRANT_TYPES.map((g) => <option key={g.key} value={g.key}>{g.label}</option>)}
+                </select>
               </label>
               <label className="field">
-                <span className="field-label">总体目标</span>
-                <textarea value={scheme.goal} rows={2} onChange={(e) => updateScheme({ goal: e.target.value })} />
+                <span className="field-label">研究期限（可选，用于封面）</span>
+                <div className="grant-period-row">
+                  <input data-testid="grant-period-start" value={periodStart} onChange={(e) => setPeriodStart(e.target.value)} placeholder="起，如 2026.01" />
+                  <span className="grant-period-sep">—</span>
+                  <input data-testid="grant-period-end" value={periodEnd} onChange={(e) => setPeriodEnd(e.target.value)} placeholder="止，如 2028.12" />
+                </div>
               </label>
             </div>
-            <label className="field">
-              <span className="field-label">研究内容（每行一条）</span>
-              <textarea
-                value={scheme.contents.join("\n")}
-                rows={3}
-                onChange={(e) => updateScheme({ contents: e.target.value.split("\n").map((s) => s.trim()).filter(Boolean) })}
-              />
-            </label>
-            <label className="field">
-              <span className="field-label">创新点（每行一条）</span>
-              <textarea
-                value={scheme.innovations.join("\n")}
-                rows={2}
-                onChange={(e) => updateScheme({ innovations: e.target.value.split("\n").map((s) => s.trim()).filter(Boolean) })}
-              />
-            </label>
-            <label className="field">
-              <span className="field-label">技术路线主线</span>
-              <textarea value={scheme.route} rows={2} onChange={(e) => updateScheme({ route: e.target.value })} />
-            </label>
 
-            <div className="field">
-              <span className="field-label">大纲章节（可改标题与篇幅；如需增删/改结构，用下方“修改意见”交给 AI 调整）</span>
-              <ol className="grant-outline-edit" data-testid="grant-outline-edit">
-                {outline.map((o, i) => (
-                  <li key={o.key} className="grant-outline-row">
-                    <input
-                      className="grant-outline-title"
-                      value={o.title}
-                      onChange={(e) =>
-                        setOutline((prev) => prev.map((x, j) => (j === i ? { ...x, title: e.target.value } : x)))
-                      }
-                    />
-                    <input
-                      className="grant-outline-budget"
-                      value={o.budget}
-                      onChange={(e) =>
-                        setOutline((prev) => prev.map((x, j) => (j === i ? { ...x, budget: e.target.value } : x)))
-                      }
-                    />
-                  </li>
-                ))}
-              </ol>
-            </div>
-
-            <div className="field">
-              <span className="field-label">修改意见（可选，让 AI 调整大纲：增删章节 / 改结构 / 改篇幅）</span>
-              <div className="grant-outline-note-row">
-                <input
-                  data-testid="grant-outline-note"
-                  value={outlineNote}
-                  onChange={(e) => setOutlineNote(e.target.value)}
-                  placeholder="例如：加一节“前期工作基础”；把技术路线并入研究方案；每节再精简些"
-                  disabled={planning || running}
-                />
-                <button
-                  className="btn-secondary btn-sm"
-                  data-testid="grant-outline-adjust-btn"
-                  onClick={() => genPlan(outlineNote.trim())}
-                  disabled={planning || running || !outlineNote.trim()}
-                >
-                  {planning ? "调整中…" : "按意见调整大纲"}
-                </button>
+            {/* 唯一的「附加材料」框: 文字 + 多文件, 同一个框 */}
+            <div className="field" data-testid="grant-materials-field">
+              <span className="field-label">附加材料（可选，越充分越好）</span>
+              <p className="field-hint">可粘贴或上传：<strong>选题调研报告、前期工作/预实验、相关综述或论文、已有思路</strong>等。支持 Word / PDF / txt，<strong>可一次选多个</strong>；会作为撰写的现状与研究基础依据。</p>
+              <div className={`combo-input${matDrag ? " dragover" : ""}`}
+                onDragOver={(e) => { e.preventDefault(); setMatDrag(true); }}
+                onDragLeave={() => setMatDrag(false)}
+                onDrop={(e) => { e.preventDefault(); setMatDrag(false); ingest(e.dataTransfer.files, (t, name) => setReport((p) => (p ? p + "\n\n" : "") + `[附加材料：${name}]\n` + t), setMatBusy); }}>
+                <textarea data-testid="grant-report" value={report} onChange={(e) => setReport(e.target.value)} placeholder="把选题调研报告 / 前期工作 / 相关论文粘贴到这里，或把文件直接拖进本框（可多个）。" rows={5} />
+                <div className="combo-foot">
+                  <button type="button" className="combo-attach" data-testid="grant-materials-attach" onClick={() => matFileRef.current?.click()}>📎 添加附件（可多选）</button>
+                  <span className="combo-hint">{matBusy ? "正在解析附件…" : "支持 Word / PDF / txt，可直接拖入本框"}</span>
+                  <input ref={matFileRef} data-testid="grant-upload" type="file" accept=".docx,.pdf,.txt,.md" multiple style={{ display: "none" }} onChange={(e) => ingest(e.target.files, (t, name) => setReport((p) => (p ? p + "\n\n" : "") + `[附加材料：${name}]\n` + t), setMatBusy, matFileRef.current)} />
+                </div>
               </div>
             </div>
 
-            <div className="form-actions">
-              <button
-                className="btn-primary"
-                data-testid="grant-confirm-write-btn"
-                onClick={() => startWrite(true)}
-                disabled={running || planning || outline.length === 0}
-              >
-                ② 确认大纲并撰写 →
-              </button>
-              <button
-                className="btn-ghost"
-                onClick={() => setPhase("idle")}
-                disabled={running}
-                title="返回上方表单继续修改；已填内容与已生成的大纲都会保留"
-              >
-                ← 返回修改（内容不丢）
-              </button>
+            {/* 文风样例: 单独的附件框 */}
+            <div className="field" data-testid="grant-style">
+              <span className="field-label">文风样例（可选，单独上传）</span>
+              <p className="field-hint">上传一份你满意的标书/论文（Word/PDF/txt），AI 会<strong>提炼语言风格</strong>并在撰写时模仿，兼起去 AI 味作用。<strong>只学"怎么写"，不会把样例内容写进你的标书。</strong></p>
+              <div className={`combo-input${styleDrag ? " dragover" : ""}`}
+                onDragOver={(e) => { e.preventDefault(); setStyleDrag(true); }}
+                onDragLeave={() => setStyleDrag(false)}
+                onDrop={(e) => { e.preventDefault(); setStyleDrag(false); ingest(e.dataTransfer.files, (t) => setStyleSample((p) => (p ? p + "\n\n" : "") + t), setStyleBusy); }}>
+                <textarea data-testid="grant-style-sample" value={styleSample} onChange={(e) => setStyleSample(e.target.value)} placeholder="把文风样例粘贴到这里，或把文件拖进本框。" rows={3} />
+                <div className="combo-foot">
+                  <button type="button" className="combo-attach" data-testid="grant-style-attach" onClick={() => styleFileRef.current?.click()}>📎 上传文风样例</button>
+                  {styleSample && (
+                    <button className="btn-secondary btn-sm" data-testid="grant-style-extract-btn" onClick={extractStyle} disabled={styleBusy}>
+                      {styleBusy ? "提炼中…" : styleProfile ? "重新提炼文风" : "提炼文风"}
+                    </button>
+                  )}
+                  {styleProfile && (
+                    <label className="type-chip" title="撰写与去 AI 味时是否模仿此文风">
+                      <input type="checkbox" data-testid="grant-style-toggle" checked={styleOn} onChange={(e) => setStyleOn(e.target.checked)} />模仿此文风
+                    </label>
+                  )}
+                  <input ref={styleFileRef} data-testid="grant-style-upload" type="file" accept=".docx,.pdf,.txt,.md" multiple style={{ display: "none" }} onChange={(e) => ingest(e.target.files, (t) => setStyleSample((p) => (p ? p + "\n\n" : "") + t), setStyleBusy, styleFileRef.current)} />
+                </div>
+              </div>
+              {styleErr && <div className="result-error" data-testid="grant-style-error">{styleErr}</div>}
+              {styleProfile && (
+                <label className="field" style={{ marginTop: 8 }}>
+                  <span className="field-label">文风档案（可编辑）</span>
+                  <textarea data-testid="grant-style-profile" value={styleProfile} rows={4} onChange={(e) => setStyleProfile(e.target.value)} />
+                </label>
+              )}
             </div>
+
+            {/* 可引用文献(次要): 从找选题带入或导入 */}
+            <details className="adv-settings" data-testid="grant-refs-info">
+              <summary className="adv-summary"><span className="adv-summary-main">📚 可引用文献（{refs.length} 篇）</span><span className="adv-summary-sub">从「找选题」带入，或从 Zotero / 文件导入；立项依据会据实引用并在文末列「参考文献」</span></summary>
+              <div className="adv-body">
+                <RefIO currentRefs={refs} exportFilename="标书-文献" onImport={(imp) => setRefs(mergeRefs(refs, imp).merged)} />
+                <ZoteroPanel currentRefs={refs} onImport={(imp) => setRefs(mergeRefs(refs, imp).merged)} />
+                <label className="type-chip" data-testid="grant-preresearch" title="撰写前按本方向再检索一遍 PubMed 等, 把新文献并入后据此写立项依据(更贴合、稍慢)">
+                  <input type="checkbox" data-testid="grant-preresearch-toggle" checked={preResearch} onChange={(e) => setPreResearch(e.target.checked)} />撰写前重新检索文献（推荐）
+                </label>
+              </div>
+            </details>
           </div>
+
+          <div className="wiz-nav">
+            <button className="btn-ghost" onClick={reset} data-testid="grant-reset-btn">清空</button>
+            <button className="btn-primary" onClick={startAll} disabled={!hasInput || running} data-testid="grant-start-btn">
+              一键生成初稿 →
+            </button>
+          </div>
+          {!hasInput && <p className="field-hint" data-testid="grant-gate-hint" style={{ marginTop: 6 }}>开始前请至少填写<strong>项目题名</strong>，或在附加材料里粘贴一份<strong>选题调研报告</strong>。</p>}
         </div>
       )}
 
-      {/* —— 只读方案骨架(撰写中/已完成时折叠展示) —— */}
-      {scheme && phase !== "planned" && (text || running) && (
-        <details className="refs" data-testid="grant-scheme-view">
-          <summary>🧭 研究方案骨架</summary>
-          <div className="result-text">
-            {scheme.question && <p><strong>关键科学问题：</strong>{scheme.question}</p>}
-            {scheme.hypothesis && <p><strong>科学假设：</strong>{scheme.hypothesis}</p>}
-            {scheme.goal && <p><strong>总体目标：</strong>{scheme.goal}</p>}
-            {scheme.contents.length > 0 && (
-              <div><strong>研究内容：</strong><ol>{scheme.contents.map((c, i) => <li key={i}>{c}</li>)}</ol></div>
-            )}
-            {scheme.innovations.length > 0 && (
-              <div><strong>创新点：</strong><ul>{scheme.innovations.map((c, i) => <li key={i}>{c}</li>)}</ul></div>
-            )}
-            {scheme.route && <p><strong>技术路线主线：</strong>{scheme.route}</p>}
-          </div>
-        </details>
-      )}
+      {/* ── 第 2 步：撰写与精修 ── */}
+      {step === 2 && (
+        <div className="wiz-panel" data-testid="grant-panel-2">
+          {status && <div className="status-line" data-testid="grant-status"><span className="spinner" /> {status}</div>}
 
-      <CanvasSlot>
-        <div className="result-panel">
-          <div className="result-toolbar">
-            <span className="result-status">{running ? "撰写中…" : text ? "已完成" : "等待开始"}</span>
-            <div className="result-actions">
-              {running && (
-                <button className="btn-ghost" onClick={stop} data-testid="grant-stop-btn">停止</button>
-              )}
-              {text && !running && (
-                <button
-                  className="btn-ghost"
-                  data-testid="grant-copy-btn"
-                  title="复制申请书全文到剪贴板"
-                  onClick={async () => {
-                    try {
-                      await navigator.clipboard.writeText(text);
-                      setCopied(true);
-                      window.setTimeout(() => setCopied(false), 1800);
-                    } catch {
-                      /* 剪贴板未授权: 忽略 */
-                    }
-                  }}
-                >
-                  {copied ? "已复制 ✓" : "复制全文"}
+          {scheme && (scheme.question || scheme.hypothesis || scheme.goal) && (
+            <details className="refs" data-testid="grant-scheme-view">
+              <summary>🧭 研究方案骨架</summary>
+              <div className="result-text">
+                {scheme.question && <p><strong>关键科学问题：</strong>{scheme.question}</p>}
+                {scheme.hypothesis && <p><strong>科学假设：</strong>{scheme.hypothesis}</p>}
+                {scheme.goal && <p><strong>总体目标：</strong>{scheme.goal}</p>}
+                {scheme.contents.length > 0 && <div><strong>研究内容：</strong><ol>{scheme.contents.map((c, i) => <li key={i}>{c}</li>)}</ol></div>}
+                {scheme.innovations.length > 0 && <div><strong>创新点：</strong><ul>{scheme.innovations.map((c, i) => <li key={i}>{c}</li>)}</ul></div>}
+                {scheme.route && <p><strong>技术路线主线：</strong>{scheme.route}</p>}
+              </div>
+            </details>
+          )}
+
+          <div className="result-panel">
+            <div className="result-toolbar">
+              <span className="result-status">{running ? "撰写中…" : text ? "已完成" : "等待生成"}</span>
+              <div className="result-actions">
+                {running && <button className="btn-ghost" onClick={pause} data-testid="grant-pause-btn">⏸ 暂停</button>}
+                {!running && paused && <button className="btn-primary btn-sm" onClick={continueWrite} data-testid="grant-continue-btn">▶ 继续生成</button>}
+                {text && !running && <button className="btn-ghost" data-testid="grant-rewrite-all-btn" onClick={rewriteAll} title="丢弃当前初稿, 用当前配置从头重写全部章节">🔄 一键全部重写</button>}
+                {text && !running && (
+                  <button className="btn-ghost" data-testid="grant-copy-btn" title="复制申请书全文" onClick={async () => { try { await navigator.clipboard.writeText(text); setCopied(true); window.setTimeout(() => setCopied(false), 1800); } catch { /* ignore */ } }}>
+                    {copied ? "已复制 ✓" : "复制"}
+                  </button>
+                )}
+                {text && !running && <button className="btn-ghost" data-testid="grant-export-md" onClick={() => doExport("md")} disabled={docxBusy}>导出 Markdown</button>}
+                {text && !running && <button className="btn-ghost" data-testid="grant-export-docx" onClick={() => doExport("docx")} disabled={docxBusy}>{docxBusy ? "导出中…" : "导出 Word"}</button>}
+                {text && !running && <button className="btn-ghost" data-testid="grant-export-pdf" onClick={() => doExport("pdf")} disabled={docxBusy}>{docxBusy ? "导出中…" : "导出 PDF"}</button>}
+              </div>
+            </div>
+            {docxErr && <div className="result-error">{docxErr}</div>}
+            {phase === "done" && sections.length > 0 && <div className="grant-cover" data-testid="grant-cover"><Markdown>{coverMd}</Markdown></div>}
+            <EditableMarkdown
+              value={text}
+              onSave={applyDoc}
+              running={running}
+              refInfo={citeInfo}
+              deaiStyle={effStyle}
+              enableRefine={phase === "done" && sections.length > 0}
+              refs={refs}
+              refineTestId="grant-refine"
+              placeholder={running ? "正在撰写…" : "点“一键生成初稿”后，申请书会显示在这里；生成后可在本区就地编辑 / 去 AI 味 / AI 精修。"}
+              testId="grant-result"
+            />
+          </div>
+
+          {verify && !running && (
+            verify.unverified.length === 0 ? (
+              <div className="verify-ok" data-testid="grant-verify">
+                ✓ 引用核验：正文 {verify.total} 处文献引用均来自带入/检索到的真实文献。
+                {(verify.quotes_total ?? 0) > 0 && <span className="verify-quote-note">　其中 {verify.quotes_total} 处附有原文支持句（悬停引用即可查看）{(verify.quotes_ok ?? 0) < (verify.quotes_total ?? 0) && `；有 ${(verify.quotes_total ?? 0) - (verify.quotes_ok ?? 0)} 处未能逐字定位，请核对`}。</span>}
+              </div>
+            ) : (
+              <div className="verify-bad" data-testid="grant-verify">
+                ⚠ 引用核验：发现 {verify.unverified.length} 处引用未出现在带入的文献中，请核实：
+                {verify.unverified.map((u) => <a key={u} href={u} target="_blank" rel="noreferrer">{u}</a>)}
+              </div>
+            )
+          )}
+
+          {/* 评审自查: 与正文脱离, 默认隐藏, 可唤起/重评 */}
+          {phase === "done" && sections.length > 0 && !running && (
+            <div className="grant-review-zone" data-testid="grant-review-zone">
+              <div className="grant-review-bar">
+                <button className="btn-ghost btn-sm" data-testid="grant-review-toggle" onClick={() => setShowReview((v) => !v)}>
+                  {showReview ? "▾ 收起评审自查" : "▸ 查看评审自查（评审视角打分与问题）"}
                 </button>
-              )}
-              {text && !running && phase === "done" && (
-                <button
-                  className="btn-ghost"
-                  data-testid="grant-rereview-btn"
-                  onClick={reReview}
-                  disabled={anyBusy}
-                  title="把当前全文（含你手动编辑/逐节修订后的版本）交回评审组重新打分合议"
-                >
+                <button className="btn-secondary btn-sm" data-testid="grant-rereview-btn" onClick={reReview} disabled={rereviewing} title="把当前全文（含你编辑/精修后的版本）交回评审组重新打分">
                   {rereviewing ? "评审中…" : "🔁 重新评审"}
                 </button>
-              )}
-              {text && !running && (
-                <button className="btn-ghost" data-testid="grant-export-md" onClick={exportMd}>导出 Markdown</button>
-              )}
-              {text && !running && (
-                <button className="btn-ghost" data-testid="grant-export-docx" onClick={exportDocx} disabled={docxBusy}>
-                  {docxBusy ? "导出中…" : "导出 Word"}
-                </button>
-              )}
-              {text && !running && (
-                <button className="btn-ghost" data-testid="grant-export-pdf" onClick={exportPdf} disabled={docxBusy}>
-                  {docxBusy ? "导出中…" : "导出 PDF"}
-                </button>
-              )}
-            </div>
-          </div>
-          {docxErr && <div className="result-error">{docxErr}</div>}
-          {phase === "done" && sections.length > 0 && (
-            <div className="grant-cover" data-testid="grant-cover">
-              <Markdown>{coverMd}</Markdown>
-            </div>
-          )}
-          <EditableMarkdown
-            value={text}
-            onSave={applyDeai}
-            running={running}
-            refInfo={citeInfo}
-            deaiStyle={effStyle}
-            placeholder={running ? "正在撰写…" : "填好题名（或从「找选题」带入）后，点“生成大纲”确认，再撰写；申请书初稿会显示在这里。"}
-            testId="grant-result"
-          />
-          {phase === "done" && sections.length > 0 && !running && (
-            <RefineEditor
-              text={text}
-              onChange={applyDeai}
-              refs={refs}
-              refInfo={citeInfo}
-              testid="grant-refine"
-            />
-          )}
-        </div>
-      </CanvasSlot>
-
-      {/* —— 评审组摘要卡: 资助建议 + 均分 + 各节得分 + 覆盖度 —— */}
-      {review && !running && phase === "done" && (
-        <div className="grant-review-summary" data-testid="grant-review-summary">
-          <span className={`grant-grade-badge grant-grade-${review.grade}`}>
-            资助建议 {review.grade} · {review.grade_label}
-          </span>
-          {review.overall != null && (
-            <span>总体均分 <strong>{review.overall}</strong>/10（{review.personas.length} 位评审专家）</span>
-          )}
-          {review.sections.filter((s) => s.score != null).map((s) => (
-            <span key={s.key} className="grant-score-chip" title={s.title}>
-              {s.title.replace(/^[一二三四五六七八九十]+、/, "").slice(0, 8)} {s.score}
-            </span>
-          ))}
-          {review.coverage.length > 0 && (
-            <span className="grant-score-chip" title="申报要求覆盖度（详见评审节内表格）">
-              覆盖度 ✅{review.coverage.filter((c) => c.status === "covered").length}
-              {" ⚠️"}{review.coverage.filter((c) => c.status === "partial").length}
-              {" ❌"}{review.coverage.filter((c) => c.status === "missing").length}
-            </span>
-          )}
-        </div>
-      )}
-
-      {verify && !running && (
-        verify.unverified.length === 0 ? (
-          <div className="verify-ok" data-testid="grant-verify">
-            ✓ 引用核验：正文 {verify.total} 处文献引用均来自选题阶段检索到的真实文献。
-            {(verify.quotes_total ?? 0) > 0 && (
-              <span className="verify-quote-note">
-                　其中 {verify.quotes_total} 处附有原文支持句（悬停引用即可查看）
-                {(verify.quotes_ok ?? 0) < (verify.quotes_total ?? 0) &&
-                  `；有 ${(verify.quotes_total ?? 0) - (verify.quotes_ok ?? 0)} 处未能在摘要中逐字定位，请核对`}
-                。
-              </span>
-            )}
-          </div>
-        ) : (
-          <div className="verify-bad" data-testid="grant-verify">
-            ⚠ 引用核验：发现 {verify.unverified.length} 处引用未出现在带入的文献中，可能不准确，请核实：
-            {verify.unverified.map((u) => (
-              <a key={u} href={u} target="_blank" rel="noreferrer">{u}</a>
-            ))}
-          </div>
-        )
-      )}
-
-      {/* —— 逐节修改 —— */}
-      {phase === "done" && sections.length > 0 && !running && (
-        <div className="followup" data-testid="grant-revise">
-          <div className="followup-head">逐节修改</div>
-          <p className="followup-tip">
-            对某一章节不满意？写下修改意见，让 AI 只重写这一节（不动其它章节）。普通重写只用现有文献；
-            <strong>立项依据</strong>可选「🔍 重新调研重写」——按你的新方向再检索 PubMed 等并把新文献并入后重写（更慢、更耗额度）。
-            评审组指出问题的章节还可直接「按评审意见修订」；改完点上方「🔁 重新评审」看分数变化。
-          </p>
-          {review && weakTargets().length > 0 && (
-            <div className="form-actions" style={{ marginBottom: 8 }}>
-              <button
-                className="btn-secondary btn-sm"
-                data-testid="grant-batch-revise-btn"
-                onClick={batchRevise}
-                disabled={anyBusy}
-                title="把评审组打分低于 8 分且有具体问题的章节，按评审意见依次自动重写"
-              >
-                {batchBusy ? "批量修订中…" : `⚡ 一键修订评审认定的薄弱章节（${weakTargets().length} 节）`}
-              </button>
-            </div>
-          )}
-          {reviseErr && <div className="result-error">{reviseErr}</div>}
-          {reviseStatus && (
-            <div className="status-line" data-testid="grant-revise-status">
-              <span className="spinner" /> {reviseStatus}
-            </div>
-          )}
-          <ol className="grant-revise-list">
-            {sections.map((s) => (
-              <li key={s.key} className="grant-revise-item" data-testid={`grant-revise-${s.key}`}>
-                <div className="grant-revise-title">{s.title}</div>
-                {s.key !== "review" && issuesFor(s.key).length > 0 && (
-                  <div className="grant-revise-issues" data-testid={`grant-review-issues-${s.key}`}>
-                    {issuesFor(s.key).map((it, i) => (
-                      <div key={i}>
-                        • 【{it.severity || "中"}】{it.problem}
-                        {it.advice ? `　建议：${it.advice}` : ""}
-                        {it.by ? `（${it.by}）` : ""}
-                      </div>
-                    ))}
-                  </div>
-                )}
-                <div className="grant-revise-controls">
-                  <input
-                    data-testid={`grant-revise-note-${s.key}`}
-                    value={reviseNote[s.key] || ""}
-                    onChange={(e) => setReviseNote((prev) => ({ ...prev, [s.key]: e.target.value }))}
-                    placeholder="例如：补一段技术路线图说明 / 创新点更聚焦机制 / 这节再精简些"
-                    disabled={anyBusy}
-                  />
-                  <button
-                    className="btn-ghost btn-sm"
-                    data-testid={`grant-revise-btn-${s.key}`}
-                    onClick={() => reviseSection(s, false)}
-                    disabled={anyBusy || !(reviseNote[s.key] || "").trim()}
-                  >
-                    {revisingKey === s.key ? "重写中…" : "重写本节"}
-                  </button>
-                  {s.key !== "review" && issuesFor(s.key).length > 0 && (
-                    <button
-                      className="btn-secondary btn-sm"
-                      data-testid={`grant-revise-by-review-btn-${s.key}`}
-                      onClick={() => reviseSectionWith(s, noteFromIssues(issuesFor(s.key)), false)}
-                      disabled={anyBusy}
-                      title="把评审组对本节的问题与建议作为修改意见，重写本节"
-                    >
-                      按评审意见修订
-                    </button>
+              </div>
+              {showReview && (
+                <div className="grant-review-body" data-testid="grant-review-body">
+                  {review && (
+                    <div className="grant-review-summary" data-testid="grant-review-summary">
+                      <span className={`grant-grade-badge grant-grade-${review.grade}`}>资助建议 {review.grade} · {review.grade_label}</span>
+                      {review.overall != null && <span>总体均分 <strong>{review.overall}</strong>/10（{review.personas.length} 位评审专家）</span>}
+                      {review.sections.filter((s) => s.score != null).map((s) => (
+                        <span key={s.key} className="grant-score-chip" title={s.title}>{s.title.replace(/^[一二三四五六七八九十]+、/, "").slice(0, 8)} {s.score}</span>
+                      ))}
+                    </div>
                   )}
-                  {s.key === "rationale" && (
-                    <button
-                      className="btn-secondary btn-sm"
-                      data-testid={`grant-research-btn-${s.key}`}
-                      onClick={() => reviseSection(s, true)}
-                      disabled={anyBusy || !(reviseNote[s.key] || "").trim()}
-                      title="按你的修改意见作为新方向，重新检索文献后再写"
-                    >
-                      🔍 重新调研重写
-                    </button>
-                  )}
+                  {reviewText ? <div className="result-text"><Markdown>{reviewText}</Markdown></div> : <p className="field-hint">尚无评审内容，点「重新评审」生成。</p>}
                 </div>
-              </li>
-            ))}
-          </ol>
+              )}
+            </div>
+          )}
+
+          <div className="wiz-nav">
+            <button className="btn-ghost" onClick={() => setStep(1)} disabled={running} data-testid="grant-back-btn">← 返回准备</button>
+            <button className="btn-ghost" onClick={reset} disabled={running} data-testid="grant-reset-btn">重新开始</button>
+          </div>
         </div>
       )}
     </div>

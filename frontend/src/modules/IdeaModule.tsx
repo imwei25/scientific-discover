@@ -889,7 +889,10 @@ export default function IdeaModule({ goto }: { goto: Goto }) {
                             "grant:report": reportBackgroundOnly(text),
                             "grant:background": background,
                             "grant:refs": cited.length ? cited : refs,
-                            "grant:phase": "idle", "grant:scheme": null, "grant:outline": [], "grant:sections": [], "grant:verify": null,
+                            // 直接开写: 用默认配置自动生成大纲并撰写, 跳到第 2 步预览, 不再让用户确认大纲。
+                            "grant:phase": "idle", "grant:step": 1, "grant:autostart": true,
+                            "grant:scheme": null, "grant:outline": [], "grant:sections": [],
+                            "grant:reviewText": "", "grant:verify": null, "grant:review": null,
                           });
                         }}
                       >

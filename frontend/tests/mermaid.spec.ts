@@ -35,9 +35,9 @@ test("甘特图渲染成图, 不落到代码兜底", async ({ page }) => {
   await page.goto("/");
   await page.getByTestId("nav-grant").click();
   await page.getByTestId("grant-title").fill("测试项目");
-  await page.getByTestId("grant-oneshot-btn").click();
+  await page.getByTestId("grant-start-btn").click();
   await expect(page.getByTestId("grant-result")).toContainText("预期成果正文");
-  await expect(page.locator(".mermaid-figure svg")).toBeVisible({ timeout: 5000 });
+  await expect(page.locator(".mermaid-figure svg").first()).toBeVisible({ timeout: 5000 });
   await expect(page.locator(".mermaid-fallback")).toHaveCount(0);
 });
 
@@ -78,11 +78,11 @@ test("流式撰写过程中 mermaid 即时渲染(不必等到 done)", async ({ p
   await page.goto("/");
   await page.getByTestId("nav-grant").click();
   await page.getByTestId("grant-title").fill("测试项目");
-  await page.getByTestId("grant-oneshot-btn").click();
+  await page.getByTestId("grant-start-btn").click();
   await expect(page.getByTestId("grant-result")).toContainText("技术路线如下");
 
   // 图应在流仍进行时渲染
-  await expect(page.locator(".mermaid-figure svg")).toBeVisible({ timeout: 3000 });
-  // 此刻流尚未结束(停止按钮仍在), 证明是流式过程中渲染, 而非等到 done
-  await expect(page.getByTestId("grant-stop-btn")).toBeVisible();
+  await expect(page.locator(".mermaid-figure svg").first()).toBeVisible({ timeout: 3000 });
+  // 此刻流尚未结束(暂停按钮仍在), 证明是流式过程中渲染, 而非等到 done
+  await expect(page.getByTestId("grant-pause-btn")).toBeVisible();
 });
