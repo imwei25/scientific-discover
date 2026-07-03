@@ -19,7 +19,7 @@ from reportlab.pdfbase.cidfonts import UnicodeCIDFont
 from reportlab.platypus import Image as RLImage
 from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
 
-from .formatting import _IMG_DATA, _is_table_sep, _png_size, _split_row
+from .formatting import _HEADING, _IMG_DATA, _is_table_sep, _png_size, _split_row
 
 _FONT = "STSong-Light"  # reportlab 内置简体中文 CID 字体
 _registered = False
@@ -158,12 +158,10 @@ def build_pdf(text: str, title: str = "") -> bytes:
                 story.append(tbl)
                 story.append(Spacer(1, 6))
             continue
-        if line.startswith("### "):
-            story.append(Paragraph(_inline(line[4:].strip()), st["h3"]))
-        elif line.startswith("## "):
-            story.append(Paragraph(_inline(line[3:].strip()), st["h2"]))
-        elif line.startswith("# "):
-            story.append(Paragraph(_inline(line[2:].strip()), st["h1"]))
+        mh = _HEADING.match(line)
+        if mh:
+            lvl = len(mh.group(1))
+            story.append(Paragraph(_inline(mh.group(2).strip()), st["h1" if lvl <= 1 else "h2" if lvl == 2 else "h3"]))
         elif re.match(r"^[-*]\s+", line):
             story.append(Paragraph(_inline(re.sub(r"^[-*]\s+", "", line)), st["bullet"], bulletText="•"))
         else:

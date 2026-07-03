@@ -26,6 +26,9 @@ from .journals import get_docx_spec, get_journal
 _BOLD = re.compile(r"\*\*(.+?)\*\*")
 _SECTION_BRACKET = re.compile(r"^【.+】$")
 _BULLET = re.compile(r"^[-*]\s+")
+# Markdown 标题: 1-6 个 # + 可选空格(AI 写中文常漏空格, 如 ###立项依据) + 标题文字。
+# 容忍漏空格与 #### 以上层级, 避免把 ### 这类记号原样导出到成稿里。
+_HEADING = re.compile(r"^(#{1,6})\s*(\S.*?)\s*$")
 # 行内标记(供导出成稿): **加粗** 或 [链接文本](url)。链接可能残留 title(支持句), 一并吞掉丢弃。
 _INLINE = re.compile(
     r"\*\*(.+?)\*\*"
@@ -244,12 +247,9 @@ def build_docx(text: str, journal_id: str = "", references: list[str] | None = N
                 i += 1
             _add_table(doc, rows)
             continue
-        if line.startswith("### "):
-            doc.add_heading(line[4:].strip(), level=3)
-        elif line.startswith("## "):
-            doc.add_heading(line[3:].strip(), level=2)
-        elif line.startswith("# "):
-            doc.add_heading(line[2:].strip(), level=1)
+        mh = _HEADING.match(line)
+        if mh:
+            doc.add_heading(mh.group(2).strip(), level=min(len(mh.group(1)), 4))
         elif _SECTION_BRACKET.match(line.strip()):
             doc.add_heading(line.strip().strip("【】"), level=2)
         elif _BULLET.match(line):

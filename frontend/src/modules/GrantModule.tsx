@@ -102,8 +102,34 @@ const emptyScheme: GrantScheme = {
   title: "", question: "", hypothesis: "", goal: "", contents: [], innovations: [], route: "",
 };
 
+// 章节标题的"核心": 去掉 #/加粗记号、空白、以及"一、"「（一）」这类编号, 用于判断正文
+// 开头是否又重复写了一遍大标题(fullDoc 前面已加 `## 标题`, AI 再写一遍就会重复)。
+function coreTitle(s: string): string {
+  return s
+    .replace(/[#*\s]/g, "")
+    .replace(/^[一二三四五六七八九十]+[、.．]/, "")
+    .replace(/^（[一二三四五六七八九十]+）/, "");
+}
+
+// 若正文开头一行就是与本节标题相同的标题(不管有没有 # 或加粗), 去掉它, 避免大标题重复。
+// 只在"核心完全相同"时删, 不做包含匹配, 以免误删「研究基础」这类真实子标题。
+function stripEchoedHeading(title: string, text: string): string {
+  const lines = text.split("\n");
+  let i = 0;
+  while (i < lines.length && !lines[i].trim()) i++;
+  if (i >= lines.length) return text;
+  const first = lines[i].trim();
+  const isHeadingish = /^#{1,6}\s*\S/.test(first) || /^\*\*.+\*\*$/.test(first) || coreTitle(first) === coreTitle(title);
+  if (isHeadingish && coreTitle(first) && coreTitle(first) === coreTitle(title)) {
+    lines.splice(0, i + 1);
+    while (lines.length && !lines[0].trim()) lines.shift();
+    return lines.join("\n");
+  }
+  return text;
+}
+
 function fullDoc(sections: DocSection[]): string {
-  return sections.map((s) => `## ${s.title}\n\n${s.text}`).join("\n\n");
+  return sections.map((s) => `## ${s.title}\n\n${stripEchoedHeading(s.title, s.text)}`).join("\n\n");
 }
 
 export default function GrantModule() {
@@ -155,6 +181,8 @@ export default function GrantModule() {
   const [rereviewing, setRereviewing] = useState(false);
   const [batchBusy, setBatchBusy] = useState(false);
   const rvctrl = useRef<AbortController | null>(null);
+  // 评审"不通过"(资助建议 C)时自动补一轮修订: 每次撰写至多触发一次, 防止反复循环。
+  const autoRevisedRef = useRef(false);
 
   const text = fullDoc(sections);
 
@@ -275,6 +303,7 @@ export default function GrantModule() {
     setVerify(null);
     setReview(null);
     setReviseErr(null);
+    autoRevisedRef.current = false; // 新一轮撰写: 允许"评审不通过时自动修订"再触发一次
     setPhase("writing");
     setRunning(true);
     ctrl.current = new AbortController();
@@ -468,6 +497,40 @@ export default function GrantModule() {
     setRereviewing(false);
   };
 
+  // 评审"不通过"(资助建议 C)时自动补一轮: 按评审意见依次修订薄弱章节, 再自动重新评审一次。
+  const autoReviseRound = async () => {
+    const targets = weakTargets();
+    if (!targets.length) return;
+    setStatus(`评审结论为 C（暂不建议资助），正在按评审意见自动修订 ${targets.length} 个薄弱章节…`);
+    setBatchBusy(true);
+    let done = 0;
+    for (const t of targets) {
+      setReviseStatus(`自动修订（${done + 1}/${targets.length}）：《${t.sec.title}》…`);
+      const ok = await reviseSectionWith(t.sec, t.note, false);
+      if (!ok) break;
+      done += 1;
+    }
+    setBatchBusy(false);
+    if (done) {
+      setReviseStatus(`已自动修订 ${done} 个薄弱章节，正在重新评审…`);
+      await reReview();
+      setReviseStatus("");
+    } else {
+      setReviseStatus("");
+      setStatus("");
+    }
+  };
+
+  // 首轮撰写完成后, 若评审组给出 C(不通过), 自动补一轮修订+重评(每次撰写至多一次)。
+  useEffect(() => {
+    if (phase !== "done" || running || revisingKey || rereviewing || batchBusy) return;
+    if (!review || review.grade !== "C" || autoRevisedRef.current) return;
+    if (!weakTargets().length) return;
+    autoRevisedRef.current = true;
+    void autoReviseRound();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [phase, review, running, revisingKey, rereviewing, batchBusy]);
+
   const reset = () => {
     // 有输入或已生成内容时二次确认, 避免一键抹掉辛苦写的整份申请书
     const hasWork = title.trim() || report.trim() || idea.trim() || scheme || sections.length > 0;
@@ -479,7 +542,7 @@ export default function GrantModule() {
     setPeriodStart(""); setPeriodEnd("");
     setScheme(null); setOutline([]); setSections([]); setVerify(null); setReview(null);
     setReviseNote({}); setRevisingKey(null); setReviseErr(null);
-    setRereviewing(false); setBatchBusy(false);
+    setRereviewing(false); setBatchBusy(false); autoRevisedRef.current = false;
     setStyleSample(""); setStyleProfile(""); setStyleOn(true); setStyleErr("");
     setStatus(""); setError(null); setPhase("idle");
   };
