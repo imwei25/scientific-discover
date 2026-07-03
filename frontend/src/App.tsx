@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import {
   Lightbulb, Map, ClipboardList, BarChart3, FileText,
   Target, FileType, CheckSquare, MessageSquareReply, ScrollText, FileSignature, Presentation,
@@ -30,7 +30,7 @@ import { useProjects } from "./lib/projects";
 
 export type ModuleId = "home" | "idea" | "grant" | "plan" | "ethics" | "analyze" | "imrad" | "journal" | "format" | "checklist" | "poster" | "rebuttal" | "history";
 // 产出文稿的阶段: 进入这些模块时, 屏幕一分为二, 右半屏固定为「画布」展示最终产出。
-const STAGE_CANVAS = new Set<ModuleId>(["idea", "grant", "plan", "ethics", "analyze", "imrad", "rebuttal"]);
+const STAGE_CANVAS = new Set<ModuleId>(["grant", "plan", "ethics", "analyze", "imrad", "rebuttal"]);
 // 跨模块传递: 把数据写入目标模块的持久化字段, 再切换过去。
 export type Goto = (target: ModuleId, patch?: Record<string, unknown>) => void;
 
@@ -213,7 +213,7 @@ export default function App() {
       >
         <div className="brand-row">
           <div className="brand" onClick={() => setActive("home")} data-testid="brand">
-            <span className="brand-logo">🔬</span>
+            <span className="brand-logo brand-logo-niuma"><NiumaGlyph size={22} /></span>
             <span className="brand-name brand-name-niuma">niuma-research</span>
           </div>
           <button
@@ -471,93 +471,148 @@ function Home({ onPick }: { onPick: (m: ModuleId) => void }) {
   );
 }
 
-// ── niuma-research · 手绘 3D「牛马」装饰 ──────────────────────────
-// 一只手绘的低多边形（low-poly / 纸艺感）牛马：牛头双角 + 马鬃马尾,
-// 背上驮着一叠稿纸——「科研牛马」的自嘲。纯 inline SVG, 分面着色出
-// 立体感（顶面亮 / 正面中 / 侧面暗）, 配色全走主题 token, 轻微漂浮。
+// ── niuma-research · 手绘「牛马」装饰 ──────────────────────────
+// 一只圆润手绘的牛马：牛头双角 + 马鬃马尾, 背上驮着一叠稿纸与锥形瓶——
+// 「科研牛马」的自嘲。纯 inline SVG, 分面着色出立体感（顶面亮/正面中/侧暗）,
+// 轻微漂浮; 可用鼠标拖拽把它「拿起来转一转」(松手回正), 太偏的角度会被夹住不变丑。
 function Niuma3D() {
+  const [rot, setRot] = useState({ x: 0, y: 0 });
+  const [dragging, setDragging] = useState(false);
+  const start = useRef<{ x: number; y: number } | null>(null);
+  const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v));
+
+  const onDown = (e: React.PointerEvent) => {
+    start.current = { x: e.clientX, y: e.clientY };
+    setDragging(true);
+    (e.currentTarget as HTMLElement).setPointerCapture?.(e.pointerId);
+  };
+  const onMove = (e: React.PointerEvent) => {
+    if (!start.current) return;
+    const dx = e.clientX - start.current.x;
+    const dy = e.clientY - start.current.y;
+    setRot({ y: clamp(dx * 0.4, -30, 30), x: clamp(-dy * 0.32, -18, 18) });
+  };
+  const onUp = () => {
+    start.current = null;
+    setDragging(false);
+    setRot({ x: 0, y: 0 }); // 松手弹回正面
+  };
+
   return (
-    <div className="niuma3d" data-testid="hero-art" aria-hidden="true">
-      <svg viewBox="0 0 340 300" className="niuma3d-svg" role="img" aria-hidden="true">
+    <div
+      className="niuma3d grabbable"
+      data-testid="hero-art"
+      onPointerDown={onDown}
+      onPointerMove={onMove}
+      onPointerUp={onUp}
+      onPointerLeave={onUp}
+    >
+      <svg
+        viewBox="0 0 340 300"
+        className={`niuma3d-svg niuma3d-tilt${dragging ? " dragging" : ""}`}
+        style={{ transform: `perspective(760px) rotateX(${rot.x}deg) rotateY(${rot.y}deg)` }}
+        role="img"
+        aria-hidden="true"
+      >
         <g className="n3">
           {/* 地面虚线 + 柔和投影（不随身体漂浮）*/}
-          <line className="n3-ground" x1="42" y1="248" x2="300" y2="248" />
-          <ellipse className="n3-shadow" cx="180" cy="250" rx="116" ry="15" />
+          <line className="n3-ground" x1="42" y1="250" x2="300" y2="250" />
+          <ellipse className="n3-shadow" cx="176" cy="252" rx="120" ry="15" />
 
           {/* 会漂浮的牛马本体 */}
           <g className="n3-creature">
-            {/* 马尾（从后臀垂到身体左侧, 上端掖在身后）*/}
-            <path
-              className="n3-side"
-              d="M120 92 C96 96 78 116 74 146 C70 172 80 190 92 198 C82 182 82 156 96 134 C106 118 116 104 128 96 Z"
-            />
-            <line className="n3-text" x1="88" y1="190" x2="80" y2="166" />
-            <line className="n3-text" x1="95" y1="180" x2="87" y2="156" />
+            {/* 马尾（圆润垂到身体左侧）*/}
+            <path className="n3-side" d="M96 128 C72 132 58 158 60 188 C61 204 71 216 84 218 C75 202 76 178 90 156 C99 142 106 134 112 130 Z" />
+            <line className="n3-text" x1="76" y1="204" x2="70" y2="178" />
+            <line className="n3-text" x1="84" y1="210" x2="78" y2="184" />
 
-            {/* 远侧两腿（暗面）*/}
-            <rect className="n3-side" x="222" y="176" width="16" height="64" rx="7" />
-            <rect className="n3-dark" x="222" y="232" width="16" height="10" rx="4" />
-            <rect className="n3-side" x="126" y="178" width="16" height="62" rx="7" />
-            <rect className="n3-dark" x="126" y="232" width="16" height="10" rx="4" />
+            {/* 远侧两腿（暗面, 圆脚）*/}
+            <rect className="n3-side" x="196" y="180" width="18" height="66" rx="9" />
+            <rect className="n3-dark" x="195" y="238" width="20" height="10" rx="5" />
+            <rect className="n3-side" x="118" y="182" width="18" height="64" rx="9" />
+            <rect className="n3-dark" x="117" y="238" width="20" height="10" rx="5" />
 
-            {/* 躯干：侧面（暗）/ 顶面（亮）/ 正面（中）分面出 3D */}
-            <polygon className="n3-side" points="210,190 210,104 245,82 245,168" />
-            <polygon className="n3-top" points="90,104 210,104 245,82 125,82" />
-            <polygon className="n3-front" points="90,104 210,104 210,190 90,190" />
-            <polygon className="n3-dark" points="90,190 210,190 210,183 90,183" />
+            {/* 圆润躯干：正面主体（中）+ 顶面高光（亮）+ 腹部暗面 */}
+            <ellipse className="n3-front" cx="164" cy="158" rx="88" ry="52" />
+            <ellipse className="n3-top" cx="150" cy="132" rx="74" ry="30" />
+            <ellipse className="n3-dark" cx="168" cy="198" rx="66" ry="13" />
 
-            {/* 背上驮的一叠稿纸 */}
-            <polygon className="n3-paper" points="152,101 198,101 216,90 170,90" />
-            <polygon className="n3-paper" points="148,105 194,105 212,94 166,94" />
-            <line className="n3-text" x1="168" y1="100" x2="200" y2="94" />
-            <line className="n3-text" x1="164" y1="103" x2="196" y2="97" />
-            <line className="n3-text" x1="160" y1="106" x2="184" y2="101" />
+            {/* 背上驮的一叠稿纸（微微倾斜）*/}
+            <g transform="rotate(-7 168 106)">
+              <rect className="n3-paper" x="140" y="94" width="62" height="17" rx="3" />
+              <rect className="n3-paper" x="135" y="99" width="62" height="17" rx="3" />
+              <line className="n3-text" x1="145" y1="104" x2="188" y2="104" />
+              <line className="n3-text" x1="145" y1="110" x2="178" y2="110" />
+            </g>
 
             {/* 稿纸上立着一只锥形瓶（科研信号）*/}
-            <path className="n3-paper" d="M196 72 L200 72 L200 80 L206 93 L190 93 L196 80 Z" />
-            <polygon className="n3-front" points="193,89 203,89 206,93 190,93" />
-            <line className="n3-text" x1="197" y1="72" x2="199" y2="72" />
+            <path className="n3-paper" d="M150 70 L158 70 L158 82 L167 98 L141 98 L150 82 Z" />
+            <polygon className="n3-front" points="144,92 164,92 167,98 141,98" />
+            <line className="n3-text" x1="153" y1="70" x2="155" y2="70" />
 
-            {/* 近侧两腿（亮面, 压在身前）*/}
-            <rect className="n3-front" x="190" y="182" width="19" height="64" rx="8" />
-            <rect className="n3-dark" x="190" y="238" width="19" height="10" rx="5" />
-            <rect className="n3-front" x="96" y="184" width="19" height="62" rx="8" />
-            <rect className="n3-dark" x="96" y="238" width="19" height="10" rx="5" />
+            {/* 近侧两腿（亮面, 压在身前, 圆脚）*/}
+            <rect className="n3-front" x="182" y="184" width="21" height="64" rx="10" />
+            <rect className="n3-dark" x="181" y="240" width="23" height="9" rx="5" />
+            <rect className="n3-front" x="102" y="186" width="21" height="62" rx="10" />
+            <rect className="n3-dark" x="101" y="240" width="23" height="9" rx="5" />
 
-            {/* 颈 */}
-            <polygon className="n3-front" points="200,148 208,112 234,86 254,104 240,132 214,150" />
+            {/* 颈（圆润）*/}
+            <path className="n3-front" d="M224 152 C219 122 230 100 250 92 C267 85 286 92 292 106 C286 120 269 124 255 132 C243 140 235 148 231 158 Z" />
 
-            {/* 马鬃：沿颈背的一排鬃毛 */}
-            <polygon className="n3-mane" points="236,84 246,92 232,96" />
-            <polygon className="n3-mane" points="230,96 240,104 226,108" />
-            <polygon className="n3-mane" points="224,108 234,116 220,120" />
-            <polygon className="n3-mane" points="218,120 228,128 214,132" />
-            <polygon className="n3-mane" points="213,132 223,140 209,144" />
+            {/* 马鬃：沿颈背几缕鬃毛 */}
+            <path className="n3-mane" d="M251 90 C245 80 247 70 255 66 C253 76 255 84 261 90 Z" />
+            <path className="n3-mane" d="M242 99 C236 89 238 79 246 75 C244 85 246 93 252 99 Z" />
+            <path className="n3-mane" d="M234 110 C228 100 230 90 238 86 C236 96 238 104 244 110 Z" />
 
-            {/* 牛头（朝右）*/}
-            <path
-              className="n3-front"
-              d="M234 92 C232 74 246 64 264 64 C282 64 296 72 298 88 C300 100 292 110 276 112 C260 114 244 110 238 104 C234 100 234 96 234 92 Z"
-            />
-            {/* 耳 */}
-            <polygon className="n3-front" points="244,74 236,60 250,66" />
-            {/* 双角（骨白）*/}
-            <path className="n3-horn" d="M250 66 C244 52 246 40 256 34 C254 44 254 56 260 66 Z" />
-            <path className="n3-horn" d="M276 64 C286 52 300 48 308 52 C300 54 290 60 284 68 Z" />
-            {/* 口鼻 + 鼻孔 + 眼 */}
-            <ellipse className="n3-top" cx="286" cy="97" rx="11" ry="9" />
-            <circle className="n3-nostril" cx="290" cy="99" r="1.8" />
-            <circle className="n3-eye" cx="266" cy="84" r="3" />
-            <circle className="n3-spark" cx="267" cy="83" r="1" />
-            {/* 学究圆框眼镜（科研信号）*/}
-            <circle className="n3-specs" cx="264" cy="85" r="8" />
-            <circle className="n3-specs" cx="283" cy="86" r="7" />
-            <line className="n3-specs" x1="272" y1="85" x2="276" y2="85" />
-            <line className="n3-specs" x1="257" y1="83" x2="248" y2="79" />
+            {/* 耳（在头后）*/}
+            <path className="n3-side" d="M250 84 C242 74 240 65 247 61 C253 66 257 75 259 85 Z" />
+            {/* 双角（骨白, 在头后）*/}
+            <path className="n3-horn" d="M258 74 C252 58 254 45 264 39 C262 51 262 63 268 74 Z" />
+            <path className="n3-horn" d="M286 72 C296 58 311 55 319 59 C311 61 300 67 294 77 Z" />
+
+            {/* 牛头（朝右, 圆）*/}
+            <ellipse className="n3-front" cx="272" cy="99" rx="32" ry="27" />
+            {/* 口鼻 + 鼻孔 */}
+            <ellipse className="n3-top" cx="293" cy="106" rx="13" ry="10" />
+            <circle className="n3-nostril" cx="297" cy="108" r="1.9" />
+            {/* 眼 + 学究圆框眼镜（科研信号）*/}
+            <circle className="n3-eye" cx="270" cy="95" r="3" />
+            <circle className="n3-spark" cx="271" cy="94" r="1" />
+            <circle className="n3-specs" cx="268" cy="96" r="9" />
+            <circle className="n3-specs" cx="288" cy="97" r="8" />
+            <line className="n3-specs" x1="277" y1="96" x2="280" y2="96" />
+            <line className="n3-specs" x1="259" y1="94" x2="250" y2="90" />
           </g>
         </g>
       </svg>
+      <span className="niuma3d-hint" aria-hidden="true">🖐 可拖动旋转</span>
     </div>
+  );
+}
+
+// 侧栏品牌用的静态「牛马」小图（单色剪影, 不动）。
+function NiumaGlyph({ size = 22 }: { size?: number }) {
+  return (
+    <svg viewBox="0 0 48 36" width={size} height={(size * 36) / 48} className="niuma-glyph" role="img" aria-hidden="true">
+      <g fill="currentColor">
+        {/* 四腿 */}
+        <rect x="11" y="20" width="3.6" height="13" rx="1.6" />
+        <rect x="17" y="21" width="3.4" height="12" rx="1.6" />
+        <rect x="29" y="21" width="3.4" height="12" rx="1.6" />
+        <rect x="35" y="20" width="3.6" height="13" rx="1.6" />
+        {/* 圆身 */}
+        <ellipse cx="23" cy="18" rx="15" ry="8.5" />
+        {/* 尾 */}
+        <path d="M9 12 C5.5 16 7 24 6.5 30 L9 30 C10 24 9 16 12 13 Z" />
+        {/* 头(右) */}
+        <ellipse cx="37" cy="15" rx="7" ry="6" />
+        {/* 双角 */}
+        <path d="M34 9 C32 3.5 33 0.6 36 0 C35 3 35 6 37 9 Z" />
+        <path d="M40 9 C43 4 47.4 3.4 48 4.6 C45 5.4 42 7 41 10 Z" />
+        {/* 口鼻 */}
+        <ellipse cx="43" cy="17" rx="3.4" ry="2.6" />
+      </g>
+    </svg>
   );
 }
 

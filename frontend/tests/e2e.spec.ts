@@ -30,6 +30,23 @@ async function mockBase(page: Page) {
   await page.route("**/api/idea/refine", (r) => r.fulfill({ json: { options: [] } }));
 }
 
+// 驱动「找选题」分步向导: 第 1 步填方向 → 第 2 步 → 触发检索(进入第 3 步文献复核)。
+async function ideaSearch(page: Page, field = "x") {
+  await page.getByTestId("nav-idea").click();
+  await page.getByTestId("input-field").fill(field);
+  await page.getByTestId("wiz-next-1").click();
+  await page.getByTestId("wiz-next-2").click();
+}
+// 继续: 勾选文献(默认全选)后生成调研报告(进入第 4 步产出)。
+async function ideaGenerate(page: Page) {
+  await page.getByTestId("wiz-next-3").click();
+}
+// 一步到底: 检索 → 生成。
+async function ideaRun(page: Page, field = "x") {
+  await ideaSearch(page, field);
+  await ideaGenerate(page);
+}
+
 test("AI免责声明可显示并关闭", async ({ page }) => {
   await mockBase(page);
   await page.goto("/");
@@ -111,88 +128,16 @@ test("找选题: 检索PubMed并返回带链接的结果", async ({ page }) => {
     }),
   );
   await page.goto("/");
-  await page.getByTestId("nav-idea").click();
-  await page.getByTestId("input-field").fill("PD-1 抑制剂 三阴性乳腺癌");
-  await page.getByTestId("run-btn").click();
-  // 文献列表出现且链接指向 PubMed
+  await ideaSearch(page, "PD-1 抑制剂 三阴性乳腺癌");
+  // 第 3 步: 文献列表出现且链接指向 PubMed
   await expect(page.getByTestId("refs")).toContainText("Smith J");
   const refLink = page.getByTestId("refs").getByRole("link").first();
   await expect(refLink).toHaveAttribute("href", "https://pubmed.ncbi.nlm.nih.gov/12345/");
-  // 正文里的引用渲染成可点击链接
+  // 第 4 步: 生成报告, 正文里的引用渲染成可点击链接
+  await ideaGenerate(page);
   const inlineLink = page.getByTestId("result-text").getByRole("link", { name: /Smith et al., 2023/ });
   await expect(inlineLink).toHaveAttribute("href", "https://pubmed.ncbi.nlm.nih.gov/12345/");
-  // 引用核验通过提示
   await expect(page.getByTestId("verify")).toContainText("引用核验");
-});
-
-test("找选题: 检索前澄清问题卡, 带着回答检索", async ({ page }) => {
-  await mockBase(page);
-  // 覆盖默认放行: 让澄清返回一个问题
-  await page.route("**/api/idea/clarify", (r) =>
-    r.fulfill({ json: { ready: false, questions: [{ q: "目标人群?", options: ["新辅助", "转移性"] }] } }),
-  );
-  let ideaBody = "";
-  await page.route("**/api/idea", async (r) => {
-    ideaBody = r.request().postData() ?? "";
-    await r.fulfill({
-      contentType: "text/event-stream",
-      body: sse(
-        { event: "delta", data: { text: "## 一、研究现状\n略。" } },
-        { event: "done", data: {} },
-      ),
-    });
-  });
-  await page.goto("/");
-  await page.getByTestId("nav-idea").click();
-  await page.getByTestId("input-field").fill("PD-1 三阴性乳腺癌");
-  await page.getByTestId("run-btn").click();
-  // 澄清卡出现, 选一个选项后带着回答检索
-  await expect(page.getByTestId("clarify-card")).toContainText("目标人群");
-  await page.getByTestId("clarify-q-0").getByText("新辅助").click();
-  await page.getByTestId("clarify-go-btn").click();
-  await expect(page.getByTestId("result-text")).toContainText("研究现状");
-  // 澄清回答已并入 background 传给后端
-  expect(ideaBody).toContain("检索前澄清");
-  expect(ideaBody).toContain("新辅助");
-});
-
-test("找选题: 澄清后 AI 给方向优化候选, 采纳后检索", async ({ page }) => {
-  await mockBase(page);
-  await page.route("**/api/idea/clarify", (r) =>
-    r.fulfill({ json: { ready: false, questions: [{ q: "人群?", options: ["新辅助"] }] } }),
-  );
-  await page.route("**/api/idea/refine", (r) =>
-    r.fulfill({
-      json: {
-        options: [
-          { field: "PD-1 抑制剂在 TNBC 新辅助治疗中的疗效", keywords: "neoadjuvant, pCR", reason: "补了人群与结局" },
-          { field: "PD-1 抑制剂在 TNBC 中的耐药机制", keywords: "resistance", reason: "换一个机制角度" },
-        ],
-      },
-    }),
-  );
-  let ideaBody = "";
-  await page.route("**/api/idea", async (r) => {
-    ideaBody = r.request().postData() ?? "";
-    await r.fulfill({
-      contentType: "text/event-stream",
-      body: sse({ event: "delta", data: { text: "## 一、研究现状\n略。" } }, { event: "done", data: {} }),
-    });
-  });
-  await page.goto("/");
-  await page.getByTestId("nav-idea").click();
-  await page.getByTestId("input-field").fill("PD-1 三阴性乳腺癌");
-  await page.getByTestId("run-btn").click();
-  // 答澄清 → 下一步 → 出现优化候选卡
-  await page.getByTestId("clarify-q-0").getByText("新辅助").click();
-  await page.getByTestId("clarify-go-btn").click();
-  await expect(page.getByTestId("refine-card")).toContainText("方向优化");
-  await expect(page.getByTestId("refine-opt-0")).toContainText("新辅助治疗中的疗效");
-  // 采纳第一个候选 → 方向被替换并检索
-  await page.getByTestId("refine-pick-0").click();
-  await expect(page.getByTestId("result-text")).toContainText("研究现状");
-  await expect(page.getByTestId("input-field")).toHaveValue("PD-1 抑制剂在 TNBC 新辅助治疗中的疗效");
-  expect(ideaBody).toContain("neoadjuvant");
 });
 
 test("找选题: 结构化选题卡 → 按候选选题做实验规划", async ({ page }) => {
@@ -201,6 +146,7 @@ test("找选题: 结构化选题卡 → 按候选选题做实验规划", async (
     r.fulfill({
       contentType: "text/event-stream",
       body: sse(
+        { event: "references", data: { items: [{ pmid: "1", title: "P1", first_author: "A", journal: "J", year: "2024", url: "https://pubmed.ncbi.nlm.nih.gov/1/", source: "pubmed" }] } },
         { event: "delta", data: { text: "## 三、候选选题\n### 候选选题1：PD-1 标志物\n详述。" } },
         {
           event: "topic_card",
@@ -218,19 +164,14 @@ test("找选题: 结构化选题卡 → 按候选选题做实验规划", async (
     }),
   );
   await page.goto("/");
-  await page.getByTestId("nav-idea").click();
-  await page.getByTestId("input-field").fill("PD-1 TNBC");
-  await page.getByTestId("run-btn").click();
+  await ideaRun(page, "PD-1 TNBC");
   // 选题卡出现, 含子方向与逐个候选方向
   await expect(page.getByTestId("topic-card")).toBeVisible();
   await expect(page.getByTestId("topic-facets")).toContainText("机制");
   await expect(page.getByTestId("candidate-0")).toContainText("PD-1 标志物");
-  // 有候选方向时, 顶层"整篇报告"兜底按钮(规划/标书)都应隐藏, 改由每个方向的按钮承担
+  // 有候选方向时, 顶层"整篇报告"兜底按钮应隐藏, 改由每个方向的按钮承担
   await expect(page.getByTestId("send-to-plan-btn")).toHaveCount(0);
-  await expect(page.getByTestId("send-to-grant-btn")).toHaveCount(0);
   await expect(page.getByTestId("candidate-to-grant-0")).toBeVisible();
-  // 选题卡应渲染在右画布内(报告正下方), 而不是被甩到左工作区
-  await expect(page.getByTestId("canvas-pane").getByTestId("topic-card")).toBeVisible();
   // 点该方向后面的按钮交接到实验规划
   await page.getByTestId("candidate-to-plan-0").click();
   await expect(page.getByTestId("input-idea")).toHaveValue(/PD-1 标志物/);
@@ -239,8 +180,8 @@ test("找选题: 结构化选题卡 → 按候选选题做实验规划", async (
 test("产出画布: 可收起与展开", async ({ page }) => {
   await mockBase(page);
   await page.goto("/");
-  await page.getByTestId("nav-idea").click();
-  // 找选题走分屏, 画布默认展开, 带「收起」按钮
+  await page.getByTestId("nav-plan").click();
+  // 实验规划走分屏, 画布默认展开, 带「收起」按钮
   await expect(page.getByTestId("canvas-pane")).toBeVisible();
   await expect(page.getByTestId("canvas-collapse")).toBeVisible();
   // 收起 → 画布缩成窄条, 出现竖排「展开」按钮, 「收起」消失
@@ -259,15 +200,14 @@ test("找选题: 可折叠调研报告以突出选题卡", async ({ page }) => {
     r.fulfill({
       contentType: "text/event-stream",
       body: sse(
+        { event: "references", data: { items: [{ pmid: "1", title: "P1", first_author: "A", journal: "J", year: "2024", url: "https://pubmed.ncbi.nlm.nih.gov/1/", source: "pubmed" }] } },
         { event: "delta", data: { text: "## 报告正文\n一些调研内容。" } },
         { event: "done", data: {} },
       ),
     }),
   );
   await page.goto("/");
-  await page.getByTestId("nav-idea").click();
-  await page.getByTestId("input-field").fill("x");
-  await page.getByTestId("run-btn").click();
+  await ideaRun(page);
   await expect(page.getByTestId("result-text")).toContainText("报告正文");
   // 折叠 → 报告正文隐藏, 出现折叠条
   await page.getByTestId("toggle-report-btn").click();
@@ -307,9 +247,7 @@ test("找选题→写标书: 只带入该方向引用到的文献(而非整池)"
     }),
   );
   await page.goto("/");
-  await page.getByTestId("nav-idea").click();
-  await page.getByTestId("input-field").fill("x");
-  await page.getByTestId("run-btn").click();
+  await ideaRun(page);
   await expect(page.getByTestId("topic-card")).toBeVisible();
   // 该方向正文只引用了第 1 篇 → 写标书只带入 1 篇(不是全部 2 篇)
   await page.getByTestId("candidate-to-grant-0").click();
@@ -339,9 +277,7 @@ test("找选题→写标书: 报告只带现状+空白, 砍掉候选选题各方
     }),
   );
   await page.goto("/");
-  await page.getByTestId("nav-idea").click();
-  await page.getByTestId("input-field").fill("x");
-  await page.getByTestId("run-btn").click();
+  await ideaRun(page);
   await expect(page.getByTestId("topic-card")).toBeVisible();
   await page.getByTestId("candidate-to-grant-0").click();
   // 带过去的 report 只含研究现状+空白, 不含"候选选题"段与竞争方向
@@ -356,6 +292,7 @@ test("找选题: 导出 Word 调用 /api/docx", async ({ page }) => {
   await mockBase(page);
   await page.route("**/api/idea", (r) =>
     r.fulfill({ contentType: "text/event-stream", body: sse(
+      { event: "references", data: { items: [{ pmid: "1", title: "P1", first_author: "A", journal: "J", year: "2024", url: "https://pubmed.ncbi.nlm.nih.gov/1/", source: "pubmed" }] } },
       { event: "delta", data: { text: "## 报告\n内容。" } },
       { event: "done", data: {} },
     ) }),
@@ -366,9 +303,7 @@ test("找选题: 导出 Word 调用 /api/docx", async ({ page }) => {
     r.fulfill({ status: 200, contentType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document", body: "PK" });
   });
   await page.goto("/");
-  await page.getByTestId("nav-idea").click();
-  await page.getByTestId("input-field").fill("x");
-  await page.getByTestId("run-btn").click();
+  await ideaRun(page);
   await expect(page.getByTestId("result-text")).toContainText("报告");
   await page.getByTestId("export-docx-btn").click();
   await expect.poll(() => docxCalled).toBe(true);
@@ -378,6 +313,7 @@ test("写标书: 撰写前默认重检索文献, 且产出可编辑", async ({ p
   await mockBase(page);
   await page.route("**/api/idea", (r) =>
     r.fulfill({ contentType: "text/event-stream", body: sse(
+      { event: "references", data: { items: [{ pmid: "1", title: "P1", first_author: "A", journal: "J", year: "2024", url: "https://pubmed.ncbi.nlm.nih.gov/1/", source: "pubmed" }] } },
       { event: "delta", data: { text: "### 候选选题1：方向A\n见 [A, 2024](https://pubmed.ncbi.nlm.nih.gov/1/)。" } },
       { event: "topic_card", data: { field: "F", keywords: "", facets: [], keyword_seed: [], candidates: [{ n: 1, title: "方向A", feasibility: 4, innovation: 3, body: "见 [A, 2024](https://pubmed.ncbi.nlm.nih.gov/1/)。" }], ref_count: 1 } },
       { event: "done", data: {} },
@@ -396,9 +332,7 @@ test("写标书: 撰写前默认重检索文献, 且产出可编辑", async ({ p
     ) });
   });
   await page.goto("/");
-  await page.getByTestId("nav-idea").click();
-  await page.getByTestId("input-field").fill("x");
-  await page.getByTestId("run-btn").click();
+  await ideaRun(page);
   await expect(page.getByTestId("topic-card")).toBeVisible();
   await page.getByTestId("candidate-to-grant-0").click();
   // 撰写前重检索开关默认勾选
@@ -414,6 +348,7 @@ test("写标书: 大纲无勾选框, 可按修改意见调整", async ({ page })
   await mockBase(page);
   await page.route("**/api/idea", (r) =>
     r.fulfill({ contentType: "text/event-stream", body: sse(
+      { event: "references", data: { items: [{ pmid: "1", title: "P1", first_author: "A", journal: "J", year: "2024", url: "https://pubmed.ncbi.nlm.nih.gov/1/", source: "pubmed" }] } },
       { event: "delta", data: { text: "### 候选选题1：方向A\n内容。" } },
       { event: "topic_card", data: { field: "F", keywords: "", facets: [], keyword_seed: [], candidates: [{ n: 1, title: "方向A", feasibility: 4, innovation: 3, body: "内容。" }], ref_count: 0 } },
       { event: "done", data: {} },
@@ -428,9 +363,7 @@ test("写标书: 大纲无勾选框, 可按修改意见调整", async ({ page })
     r.fulfill({ json: { scheme: { title: "T", question: "Q", hypothesis: "H", goal: "G", contents: [], innovations: [], route: "" }, outline } });
   });
   await page.goto("/");
-  await page.getByTestId("nav-idea").click();
-  await page.getByTestId("input-field").fill("x");
-  await page.getByTestId("run-btn").click();
+  await ideaRun(page);
   await page.getByTestId("candidate-to-grant-0").click();
   // 生成大纲
   await page.getByTestId("grant-plan-btn").click();
@@ -475,19 +408,19 @@ test("找选题: 显示在研临床试验(ClinicalTrials旁路)并渲染空白�
     }),
   );
   await page.goto("/");
-  await page.getByTestId("nav-idea").click();
-  await page.getByTestId("input-field").fill("PD-1 三阴性乳腺癌");
-  await page.getByTestId("run-btn").click();
-  // OpenAlex 徽标
+  await ideaSearch(page, "PD-1 三阴性乳腺癌");
+  // 第 3 步: OpenAlex 徽标
   await expect(page.getByTestId("refs")).toContainText("OpenAlex");
-  // 在研试验旁路面板
+  // 在研试验旁路面板(展开后校验链接)
+  await page.getByTestId("trials").locator("summary").click();
   await expect(page.getByTestId("trials")).toContainText("NCT01234567");
   await expect(page.getByTestId("trials")).toContainText("RECRUITING");
   await expect(page.getByTestId("trials").getByRole("link").first()).toHaveAttribute(
     "href",
     "https://clinicaltrials.gov/study/NCT01234567",
   );
-  // 空白矩阵渲染为真正的表格(而非原始 | 文本)
+  // 第 4 步: 空白矩阵渲染为真正的表格(而非原始 | 文本)
+  await ideaGenerate(page);
   await expect(page.getByTestId("result-text").locator("table")).toBeVisible();
   await expect(page.getByTestId("result-text").locator("th").first()).toHaveText("角度");
   await expect(page.getByTestId("result-text").locator("td")).toContainText(["机制", "充分", "耐药", "空白"]);
@@ -523,27 +456,25 @@ test("找选题: 被引徽标/排序 + 证据表展示与导出 + 过滤器UI", 
   );
   await page.goto("/");
   await page.getByTestId("nav-idea").click();
-  // 过滤器在「高级检索设置」折叠里, 先展开
-  await page.getByTestId("adv-settings-summary").click();
-  // 过滤器 UI 存在(年份/证据等级 + 质量预筛分区)
-  await expect(page.getByTestId("filter-year")).toBeVisible();
+  await page.getByTestId("input-field").fill("某方向");
+  await page.getByTestId("wiz-next-1").click();
+  // 第 2 步过滤器 UI 存在(时间/证据等级/质量预筛分区)
+  await expect(page.getByTestId("years-3")).toBeVisible();
   await expect(page.getByTestId("type-rct")).toBeVisible();
   await expect(page.getByTestId("filter-quartile")).toBeVisible();
-  await page.getByTestId("input-field").fill("某方向");
-  await page.getByTestId("run-btn").click();
-  // 被引徽标
+  await page.getByTestId("wiz-next-2").click();
+  // 第 3 步: 被引徽标
   await expect(page.getByTestId("refs")).toContainText("被引 999");
   // 默认相关性排序: 第一篇是 "Low cited recent"
-  const firstRel = page.getByTestId("refs").locator("li").first();
-  await expect(firstRel).toContainText("Low cited recent");
+  await expect(page.getByTestId("lit-list").locator("li").first()).toContainText("Low cited recent");
   // 切换"被引最多": 第一篇变为高被引
   await page.getByTestId("ref-sort").selectOption("cited");
-  await expect(page.getByTestId("refs").locator("li").first()).toContainText("High cited old");
-  // 证据表(默认折叠)展开后展示
-  await page.getByTestId("evidence").locator("summary").click();
-  await expect(page.getByTestId("evidence")).toContainText("RCT");
-  await expect(page.getByTestId("evidence").locator("table")).toBeVisible();
-  // 导出 CSV 触发下载
+  await expect(page.getByTestId("lit-list").locator("li").first()).toContainText("High cited old");
+  // 核心发现内联标红 + 对象/设计
+  await expect(page.getByTestId("refs")).toContainText("核心发现");
+  await expect(page.getByTestId("refs")).toContainText("有效");
+  await expect(page.getByTestId("refs")).toContainText("RCT");
+  // 导出证据表 CSV 触发下载
   const dl = page.waitForEvent("download");
   await page.getByTestId("export-evidence-btn").click();
   const d = await dl;
@@ -578,9 +509,7 @@ test("找选题: 追问追加问答 + 按意见修改报告", async ({ page }) =
     });
   });
   await page.goto("/");
-  await page.getByTestId("nav-idea").click();
-  await page.getByTestId("input-field").fill("某方向");
-  await page.getByTestId("run-btn").click();
+  await ideaRun(page, "某方向");
   await expect(page.getByTestId("result-text")).toContainText("原始报告");
   // 追问: 追加问答, 不改报告
   await page.getByTestId("followup-input").fill("第1篇的结论是什么？");
@@ -736,42 +665,6 @@ test("数据分析: 生成图注", async ({ page }) => {
   await expect(page.getByTestId("chart-0")).toBeVisible();
   await page.getByTestId("gen-captions-btn").click();
   await expect(page.getByTestId("chart-caption-0")).toContainText("箱线图");
-});
-
-test("找选题: PICO 出错时显示错误而非卡住", async ({ page }) => {
-  await mockBase(page);
-  await page.route("**/api/run", (r) =>
-    r.fulfill({
-      contentType: "text/event-stream",
-      body: sse({ event: "error", data: { message: "PICO 提取失败：上游错误" } }),
-    }),
-  );
-  await page.goto("/");
-  await page.getByTestId("nav-idea").click();
-  await page.getByTestId("input-field").fill("某方向");
-  await page.getByTestId("pico-btn").click();
-  await expect(page.getByTestId("pico-error")).toContainText("PICO 提取失败");
-  // 按钮恢复可用(未卡在"提取中…")
-  await expect(page.getByTestId("pico-btn")).toBeEnabled();
-});
-
-test("找选题: 提取 PICO / 纳排标准", async ({ page }) => {
-  await mockBase(page);
-  await page.route("**/api/run", (r) =>
-    r.fulfill({
-      contentType: "text/event-stream",
-      body: sse(
-        { event: "delta", data: { text: "## PICO\n| 要素 | 内容 |\n| --- | --- |\n| P | 患者 |\n## 建议纳入标准\n- 成人\n## 建议排除标准\n- 妊娠" } },
-        { event: "done", data: {} },
-      ),
-    }),
-  );
-  await page.goto("/");
-  await page.getByTestId("nav-idea").click();
-  await page.getByTestId("input-field").fill("二甲双胍治疗NAFLD");
-  await page.getByTestId("pico-btn").click();
-  await expect(page.getByTestId("pico-panel")).toContainText("PICO");
-  await expect(page.getByTestId("pico-panel")).toContainText("纳入标准");
 });
 
 test("实验规划: 生成 DMP 与知情同意书草案", async ({ page }) => {
@@ -1065,27 +958,6 @@ test("侧栏显示本次 token 用量", async ({ page }) => {
   await expect(page.getByTestId("token-usage")).toContainText("4 次调用");
 });
 
-test("找选题: 取消所有论文源时禁用调研并提示", async ({ page }) => {
-  await mockBase(page);
-  await page.goto("/");
-  await page.getByTestId("nav-idea").click();
-  await page.getByTestId("input-field").fill("某方向");
-  // 默认全开, 按钮可用
-  await expect(page.getByTestId("run-btn")).toBeEnabled();
-  // 来源/深度已折叠进高级设置, 先展开
-  await page.getByTestId("adv-settings-summary").click();
-  // 取消全部论文源(PubMed/Europe PMC/OpenAlex/Crossref)
-  await page.getByTestId("source-pubmed").uncheck();
-  await page.getByTestId("source-europepmc").uncheck();
-  await page.getByTestId("source-openalex").uncheck();
-  await page.getByTestId("source-crossref").uncheck();
-  await expect(page.getByTestId("source-warn")).toBeVisible();
-  await expect(page.getByTestId("run-btn")).toBeDisabled();
-  // 勾回一个论文源后恢复可用
-  await page.getByTestId("source-pubmed").check();
-  await expect(page.getByTestId("run-btn")).toBeEnabled();
-});
-
 test("找选题: 检测到幻觉引用时给出警告", async ({ page }) => {
   await mockBase(page);
   await page.route("**/api/idea", (r) =>
@@ -1100,10 +972,8 @@ test("找选题: 检测到幻觉引用时给出警告", async ({ page }) => {
     }),
   );
   await page.goto("/");
-  await page.getByTestId("nav-idea").click();
-  await page.getByTestId("input-field").fill("x");
-  await page.getByTestId("run-btn").click();
-  await expect(page.getByTestId("verify")).toContainText("可能不准确");
+  await ideaRun(page);
+  await expect(page.getByTestId("verify")).toContainText("未出现在检索结果");
   await expect(page.getByTestId("verify").getByRole("link", { name: /999999/ })).toBeVisible();
 });
 
@@ -1113,15 +983,14 @@ test("串联: 找选题结果可一键送到实验规划", async ({ page }) => {
     r.fulfill({
       contentType: "text/event-stream",
       body: sse(
+        { event: "references", data: { items: [{ pmid: "1", title: "P1", first_author: "A", journal: "J", year: "2024", url: "https://pubmed.ncbi.nlm.nih.gov/1/", source: "pubmed" }] } },
         { event: "delta", data: { text: "候选选题：PD-1 在 TNBC 的疗效。" } },
         { event: "done", data: {} },
       ),
     }),
   );
   await page.goto("/");
-  await page.getByTestId("nav-idea").click();
-  await page.getByTestId("input-field").fill("三阴性乳腺癌 免疫治疗");
-  await page.getByTestId("run-btn").click();
+  await ideaRun(page, "三阴性乳腺癌 免疫治疗");
   await expect(page.getByTestId("result-text")).toContainText("候选选题");
   await page.getByTestId("send-to-plan-btn").click();
   // 已切到实验规划, 且选题被预填
@@ -1190,9 +1059,9 @@ test("找选题: 必填项为空时按钮禁用", async ({ page }) => {
   await mockBase(page);
   await page.goto("/");
   await page.getByTestId("nav-idea").click();
-  await expect(page.getByTestId("run-btn")).toBeDisabled();
+  await expect(page.getByTestId("wiz-next-1")).toBeDisabled();
   await page.getByTestId("input-field").fill("x");
-  await expect(page.getByTestId("run-btn")).toBeEnabled();
+  await expect(page.getByTestId("wiz-next-1")).toBeEnabled();
 });
 
 test("实验规划: 样本量计算器", async ({ page }) => {
@@ -1560,13 +1429,15 @@ async function runIdea(page: Page, text: string) {
   await page.route("**/api/idea", (r) =>
     r.fulfill({
       contentType: "text/event-stream",
-      body: sse({ event: "delta", data: { text } }, { event: "done", data: {} }),
+      body: sse(
+        { event: "references", data: { items: [{ pmid: "1", title: "P1", first_author: "A", journal: "J", year: "2024", url: "https://pubmed.ncbi.nlm.nih.gov/1/", source: "pubmed" }] } },
+        { event: "delta", data: { text } },
+        { event: "done", data: {} },
+      ),
     }),
   );
   await page.goto("/");
-  await page.getByTestId("nav-idea").click();
-  await page.getByTestId("input-field").fill("某研究方向");
-  await page.getByTestId("run-btn").click();
+  await ideaRun(page, "某研究方向");
   // 生成完成且非流式时才出现「编辑」入口, 以此作为就绪信号
   await expect(page.getByTestId("edit-btn")).toBeVisible();
 }

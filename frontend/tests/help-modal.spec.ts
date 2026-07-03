@@ -42,8 +42,6 @@ test.skip("帮助模态: 流程图 ? 按钮打开/三段内容齐全/关闭三�
 test("帮助按钮: 各模块可见的 ? 按钮存在", async ({ page }) => {
   await mockBase(page);
   await page.goto("/");
-  await page.getByTestId("nav-idea").click();
-  await expect(page.getByTestId("help-btn-pico")).toBeVisible();
   await page.getByTestId("nav-plan").click();
   await expect(page.getByTestId("help-btn-randomize")).toHaveCount(1);
   await page.getByTestId("nav-imrad").click();

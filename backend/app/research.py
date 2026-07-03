@@ -681,7 +681,8 @@ async def _facet_grouped_search(
 
 
 async def _deep_flow(
-    field: str, keywords: str, background: str, sources: list[str], filters: dict
+    field: str, keywords: str, background: str, sources: list[str], filters: dict,
+    do_synth: bool = True,
 ) -> AsyncIterator[tuple[str, dict]]:
     flt_label = searchfilters.label(filters)
     flt_tip = f"（过滤：{flt_label}）" if flt_label else ""
@@ -750,6 +751,11 @@ async def _deep_flow(
     if dropped > 0:
         note = f"已按相关性筛掉 {dropped} 篇离题文献" + ("（相关性不足，已放宽保留弱相关文献）" if rel_th <= 1 else "")
         yield ("status", {"message": note + f"，保留 {len(papers)} 篇进入综述…"})
+
+    # 分阶段检索(wizard 第 3 步): 只检索+抽取要点, 不做综述; 交由用户复核/增删后再生成。
+    if not do_synth:
+        yield ("status", {"message": f"检索完成，共 {len(papers)} 篇文献，请复核后进入下一步。"})
+        return
 
     # Map-Reduce(按子方向分组): 每个子方向先各自归纳现状小结, 再汇总成结构化报告。
     yield ("status", {"message": f"已抽取 {len(evidence)}/{len(papers)} 篇要点，正在按子方向归纳现状…"})
@@ -842,6 +848,56 @@ async def deep_research_idea(inputs: dict) -> AsyncIterator[tuple[str, dict]]:
     _imported = inputs.get("references") if isinstance(inputs.get("references"), list) else []
     imported_papers = [_ref_to_paper(r) for r in _imported]
 
+    # 分阶段(wizard): ""/"full"=一次性(旧); "search"=只检索+抽要点; "generate"=据选中文献生成报告。
+    phase = (inputs.get("phase") or "full").strip()
+
+    # 第 4 步：据用户在第 3 步复核/勾选后的文献(含已抽取的证据要点)直接生成报告, 跳过检索。
+    if phase == "generate":
+        papers = imported_papers[:60]
+        if not papers:
+            yield ("error", {"message": "没有可用于生成的文献，请返回上一步至少保留一篇。"})
+            return
+        # 把前端回传的证据要点(pop/design/finding/gap)按 url/题名对齐到当前文献顺序。
+        ev_in = inputs.get("evidence") if isinstance(inputs.get("evidence"), list) else []
+        def _match_ev(p: dict) -> dict | None:
+            u = (p.get("url") or "").rstrip("/")
+            t = (p.get("title") or "").strip().lower()
+            for row in ev_in:
+                if u and (row.get("url") or "").rstrip("/") == u:
+                    return row
+            for row in ev_in:
+                if t and (row.get("title") or "").strip().lower() == t:
+                    return row
+            return None
+        evidence: dict[int, dict] = {}
+        for i, p in enumerate(papers, 1):
+            row = _match_ev(p)
+            if row:
+                evidence[i] = row
+        if settings.mock:
+            full = ""
+            for ch in "## 一、研究现状（示例）\n据选中的文献生成的示例报告。\n\n## 三、候选选题\n### 候选选题1：[MOCK] 示例选题\n> 可行性 ★4/5（示例）｜创新性 ★3/5（示例）\n":
+                full += ch
+                yield ("delta", {"text": ch})
+            yield ("topic_card", _build_topic_card(field, keywords, full, papers, [], []))
+            yield ("verify", {"total": 1, "verified": 1, "unverified": []})
+            yield ("done", {})
+            return
+        try:
+            yield ("status", {"message": f"正在据选中的 {len(papers)} 篇文献生成调研报告…"})
+            context = _build_context_table(papers, evidence)
+            full = ""
+            async for piece in stream_chat(_synthesis_messages_deep(field, papers, context), task="research"):
+                full += piece
+                yield ("delta", {"text": piece})
+            yield ("topic_card", _build_topic_card(field, keywords, full, papers, [], []))
+            yield ("verify", _verify_citations(full, papers))
+            yield ("done", {})
+        except Exception as e:  # noqa: BLE001
+            print("[idea:generate] exception:\n" + traceback.format_exc(), flush=True)
+            yield ("error", {"message": f"生成报告出错：{type(e).__name__}: {e}"})
+        return
+
     if source_mode == "import_only":
         if not imported_papers:
             yield ("error", {"message": "未提供可用文献。请先从 Zotero 或文件导入文献,或改用自动检索。"})
@@ -862,8 +918,21 @@ async def deep_research_idea(inputs: dict) -> AsyncIterator[tuple[str, dict]]:
         full = ""
         async for ev in _mock_flow(field):
             if ev[0] == "delta":
+                if phase == "search":
+                    continue  # 检索阶段不产出综述正文
                 full += ev[1].get("text", "")
             yield ev
+        if phase == "search":
+            yield ("evidence", {"items": [
+                {"index": 1, "first_author": "Smith J", "year": "2023",
+                 "title": f"[MOCK] A study related to {field}", "journal": "Mock Journal",
+                 "url": "https://pubmed.ncbi.nlm.nih.gov/00000001/", "source": "pubmed",
+                 "cited_by_count": 12, "pop": "示例人群", "design": "RCT",
+                 "finding": "示例主要发现：干预组显著优于对照组。", "gap": "样本量偏小。",
+                 "rel": 3, "rel_why": "主题一致"},
+            ]})
+            yield ("done", {})
+            return
         yield ("topic_card", _build_topic_card(
             field, keywords, full, [{}], ["机制", "疗效"], ["mock query"],
         ))
@@ -876,13 +945,18 @@ async def deep_research_idea(inputs: dict) -> AsyncIterator[tuple[str, dict]]:
         full = ""
 
         if depth == "deep":
-            async for event, data in _deep_flow(field, keywords, background, sources, filters):
+            async for event, data in _deep_flow(
+                field, keywords, background, sources, filters, do_synth=(phase != "search")
+            ):
                 if event == "__verify__":
                     papers, full = data["papers"], data["full"]
                 else:
                     yield (event, data)
                     if event == "error":
                         return
+            if phase == "search":
+                yield ("done", {})
+                return
         else:
             flt_label = searchfilters.label(filters)
             flt_tip = f"（过滤：{flt_label}）" if flt_label else ""
@@ -909,6 +983,14 @@ async def deep_research_idea(inputs: dict) -> AsyncIterator[tuple[str, dict]]:
             trials = await _emit_trials(queries, sources)
             if trials is not None:
                 yield ("trials", trials)
+            if phase == "search":
+                yield ("status", {"message": f"已找到 {len(papers)} 篇文献，正在逐篇抽取要点…"})
+                ev = await _extract_evidence(field, papers)
+                yield ("references", {"items": [_ref_item(p) for p in papers]})  # 附上 rel 判分
+                yield ("evidence", {"items": _evidence_items(papers, ev)})
+                yield ("status", {"message": f"检索完成，共 {len(papers)} 篇文献，请复核后进入下一步。"})
+                yield ("done", {})
+                return
             yield ("status", {"message": f"已找到 {len(papers)} 篇文献，正在分析研究现状与空白…"})
             async for piece in stream_chat(_synthesis_messages(field, papers), task="research"):
                 full += piece
