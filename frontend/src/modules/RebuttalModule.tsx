@@ -288,7 +288,9 @@ export default function RebuttalModule() {
               value={letter}
               onSave={setLetter}
               running={running}
-              placeholder={running ? "正在撰写…" : "填好左侧审稿意见与原稿后点击生成，回复信会显示在这里。"}
+              enableRefine={!running && !!letter}
+              refineTestId="rebuttal-refine"
+              placeholder={running ? "正在撰写…" : "填好上方审稿意见与原稿后点击生成，回复信会显示在这里；生成后可就地编辑 / 去 AI 味 / AI 精修。"}
               testId="result-text"
             />
             {dlErr && <div className="result-error" data-testid="dl-error">{dlErr}</div>}

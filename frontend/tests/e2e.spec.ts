@@ -177,21 +177,12 @@ test("找选题: 结构化选题卡 → 按候选选题做实验规划", async (
   await expect(page.getByTestId("input-idea")).toHaveValue(/PD-1 标志物/);
 });
 
-test("产出画布: 可收起与展开", async ({ page }) => {
+test("布局: 各模块单栏(不再左右分屏)", async ({ page }) => {
   await mockBase(page);
   await page.goto("/");
   await page.getByTestId("nav-plan").click();
-  // 实验规划走分屏, 画布默认展开, 带「收起」按钮
-  await expect(page.getByTestId("canvas-pane")).toBeVisible();
-  await expect(page.getByTestId("canvas-collapse")).toBeVisible();
-  // 收起 → 画布缩成窄条, 出现竖排「展开」按钮, 「收起」消失
-  await page.getByTestId("canvas-collapse").click();
-  await expect(page.getByTestId("canvas-expand")).toBeVisible();
-  await expect(page.getByTestId("canvas-collapse")).toHaveCount(0);
-  // 展开 → 恢复
-  await page.getByTestId("canvas-expand").click();
-  await expect(page.getByTestId("canvas-collapse")).toBeVisible();
-  await expect(page.getByTestId("canvas-expand")).toHaveCount(0);
+  // 全模块统一单栏递进式, 不再有右侧画布
+  await expect(page.getByTestId("canvas-pane")).toHaveCount(0);
 });
 
 test("找选题: 可折叠调研报告以突出选题卡", async ({ page }) => {

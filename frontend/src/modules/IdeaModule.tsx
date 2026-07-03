@@ -6,7 +6,6 @@ import { addHistory } from "../lib/history";
 import { extractFile } from "../lib/extract";
 import Markdown from "../components/Markdown";
 import EditableMarkdown from "../components/EditableMarkdown";
-import RefineEditor from "../components/RefineEditor";
 import RefIO from "../components/RefIO";
 import ZoteroPanel from "../components/ZoteroPanel";
 import { downloadText, downloadCsv, downloadDocxFromText, downloadPdfFromText, tsName } from "../lib/download";
@@ -262,7 +261,12 @@ export default function IdeaModule({ goto }: { goto: Goto }) {
         onVerify: setVerify,
         onTopicCard: setCard,
         onError: (m) => { setError(m); setStatus(""); setRunning(false); window.dispatchEvent(new Event("usage-updated")); reportLLMError(m); },
-        onDone: () => { setStatus(""); setRunning(false); window.dispatchEvent(new Event("usage-updated")); },
+        onDone: () => {
+          setStatus(""); setRunning(false); window.dispatchEvent(new Event("usage-updated"));
+          // 候选方向已由「选题卡」单独承载, 从报告正文里去掉「候选选题」段, 避免读两遍;
+          // 同时让预览=可编辑正文一致, 就地 AI 精修才不会误改。
+          setText((t) => reportBackgroundOnly(t));
+        },
       },
     );
     setRunning(false);
@@ -818,17 +822,17 @@ export default function IdeaModule({ goto }: { goto: Goto }) {
             )}
             <div className={reportCollapsed && text && !running ? "report-body is-collapsed" : "report-body"}>
               <EditableMarkdown
-                value={/* 报告里去掉「候选选题」段, 避免与下方选题卡重复 */ running ? text : reportBackgroundOnly(text)}
+                value={text}
                 onSave={setText}
                 running={running}
                 refInfo={citeInfo}
+                enableRefine={!running && !!text}
+                refs={refs}
+                refineTestId="idea-refine"
                 placeholder={running ? "正在分析…" : "点击「开始文献调研」后，调研报告会显示在这里。"}
                 testId="result-text"
               />
             </div>
-            {text && !running && (
-              <RefineEditor text={text} onChange={setText} refs={refs} refInfo={citeInfo} testid="idea-refine" />
-            )}
           </div>
 
           {verify && !running && (

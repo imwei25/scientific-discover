@@ -29,8 +29,9 @@ import { showToast } from "./lib/toast";
 import { useProjects } from "./lib/projects";
 
 export type ModuleId = "home" | "idea" | "grant" | "plan" | "ethics" | "analyze" | "imrad" | "journal" | "format" | "checklist" | "poster" | "rebuttal" | "history";
-// 产出文稿的阶段: 进入这些模块时, 屏幕一分为二, 右半屏固定为「画布」展示最终产出。
-const STAGE_CANVAS = new Set<ModuleId>(["plan", "ethics", "analyze", "imrad", "rebuttal"]);
+// 全模块统一为单栏「递进式」布局(不再左右分屏): 产出直接排在输入下方。
+// 保留集合(置空)以便个别模块将来需要时再开分屏; 目前一律走单栏。
+const STAGE_CANVAS = new Set<ModuleId>([]);
 // 跨模块传递: 把数据写入目标模块的持久化字段, 再切换过去。
 export type Goto = (target: ModuleId, patch?: Record<string, unknown>) => void;
 

@@ -495,7 +495,9 @@ export default function ImradModule({ goto }: { goto: Goto }) {
             value={draft}
             onSave={setDraft}
             running={running}
-            placeholder={running ? "正在撰写…" : "填好左侧材料后点击生成，论文初稿会显示在这里。"}
+            enableRefine={!running && !!draft}
+            refineTestId="imrad-refine"
+            placeholder={running ? "正在撰写…" : "填好上方材料后点击生成，论文初稿会显示在这里；生成后可就地编辑 / 去 AI 味 / AI 精修。"}
             testId="result-text"
           />
         </div>

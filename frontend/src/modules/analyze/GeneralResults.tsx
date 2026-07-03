@@ -207,6 +207,8 @@ export default function GeneralResults({
               value={conclusion}
               onSave={setConclusion}
               running={running}
+              enableRefine={!running && !!conclusion}
+              refineTestId="analyze-refine"
               placeholder="正在分析…"
               testId="result-text"
             />
