@@ -49,6 +49,48 @@ const GRANT_TYPES: { key: string; label: string }[] = [
   { key: "general_other", label: "通用申请书（省部级/校级/横向等）" },
 ];
 
+// 各资助类型对应的封面大标题(NSFC 三类共用同一标题, 仅"资助类别"不同; 通用类标题可变)。
+const COVER_TITLE: Record<string, string> = {
+  general: "国家自然科学基金申请书",
+  youth: "国家自然科学基金申请书",
+  regional: "国家自然科学基金申请书",
+  general_other: "科研项目申请书",
+};
+// 封面"资助类别"栏取值。
+const FUND_CATEGORY: Record<string, string> = {
+  general: "面上项目",
+  youth: "青年科学基金",
+  regional: "地区科学基金",
+  general_other: "通用申请书（省部级/校级/横向等）",
+};
+
+// 生成申请书封面(大标题 + 基本信息表)。作为导出时的文档抬头, 不进入屏幕编辑区。
+// 无法由 AI 推断的字段(申请人/依托单位/未填的研究期限)统一留 [需申请人补充] 占位, 绝不杜撰。
+function buildCover(opts: {
+  grantType: string;
+  projectName: string;
+  periodStart: string;
+  periodEnd: string;
+}): string {
+  const title = COVER_TITLE[opts.grantType] || "科研项目申请书";
+  const category = FUND_CATEGORY[opts.grantType] || "通用申请书";
+  const s = opts.periodStart.trim();
+  const e = opts.periodEnd.trim();
+  const period = s || e ? `${s || "____"} — ${e || "____"}` : "[需申请人补充]";
+  const name = opts.projectName.trim() || "[需申请人补充]";
+  return [
+    `# ${title}`,
+    "",
+    `| **资助类别** | ${category} |`,
+    "| --- | --- |",
+    `| **项目名称** | ${name} |`,
+    `| **研究期限** | ${period} |`,
+    "| **申请人** | [需申请人补充] |",
+    "| **依托单位** | [需申请人补充] |",
+    "",
+  ].join("\n");
+}
+
 // 写作中的章节: 标题用于 ## 大标题, text 为正文。review 节也用同结构存。
 interface DocSection { key: string; title: string; text: string }
 // 大纲项额外带 include 开关(用户可在确认阶段勾掉某节)。
@@ -69,6 +111,9 @@ export default function GrantModule() {
   const [report, setReport] = usePersistentState("grant:report", "");
   const [background, setBackground] = usePersistentState("grant:background", "");
   const [grantType, setGrantType] = usePersistentState("grant:type", "general");
+  // 研究期限(起止, 如 2026.01 / 2028.12); 仅用于导出封面, 留空则封面填 [需申请人补充]。
+  const [periodStart, setPeriodStart] = usePersistentState("grant:periodStart", "");
+  const [periodEnd, setPeriodEnd] = usePersistentState("grant:periodEnd", "");
   const [refs, setRefs] = usePersistentState<Reference[]>("grant:refs", []);
   // 撰写前是否按方向重新检索文献并入池(默认开): 让立项依据据新鲜、针对本方向的文献来写。
   const [preResearch, setPreResearch] = usePersistentState<boolean>("grant:preResearch", true);
@@ -144,7 +189,8 @@ export default function GrantModule() {
         title: (scheme?.title || title || "标书初稿").slice(0, 40),
         data: {
           "grant:title": title, "grant:idea": idea, "grant:report": report,
-          "grant:background": background, "grant:type": grantType, "grant:refs": refs,
+          "grant:background": background, "grant:type": grantType,
+          "grant:periodStart": periodStart, "grant:periodEnd": periodEnd, "grant:refs": refs,
           "grant:scheme": scheme, "grant:outline": outline, "grant:sections": sections,
           "grant:phase": "done", "grant:verify": verify, "grant:review": review,
         },
@@ -421,6 +467,7 @@ export default function GrantModule() {
     rctrl.current?.abort();
     rvctrl.current?.abort();
     setTitle(""); setIdea(""); setReport(""); setBackground(""); setRefs([]);
+    setPeriodStart(""); setPeriodEnd("");
     setScheme(null); setOutline([]); setSections([]); setVerify(null); setReview(null);
     setReviseNote({}); setRevisingKey(null); setReviseErr(null);
     setRereviewing(false); setBatchBusy(false);
@@ -428,11 +475,22 @@ export default function GrantModule() {
     setStatus(""); setError(null); setPhase("idle");
   };
 
+  // 导出用全文 = 封面(大标题 + 基本信息表) + 正文各章节。屏幕编辑区仍只显示正文。
+  const exportBody = () => {
+    const cover = buildCover({
+      grantType,
+      projectName: scheme?.title || title,
+      periodStart,
+      periodEnd,
+    });
+    return cover + "\n" + text;
+  };
+
   const exportMd = () => {
     const refMd = refs.length
       ? "\n\n## 参考文献\n" + refs.map((r) => `- [${r.first_author} (${r.year}). ${r.title}](${r.url})`).join("\n")
       : "";
-    downloadText(tsName("标书初稿", "md"), text + refMd);
+    downloadText(tsName("标书初稿", "md"), exportBody() + refMd);
   };
 
   const exportDocx = async () => {
@@ -440,7 +498,7 @@ export default function GrantModule() {
     setDocxBusy(true);
     setDocxErr("");
     try {
-      await downloadDocxFromText(tsName("标书初稿", "docx"), text);
+      await downloadDocxFromText(tsName("标书初稿", "docx"), exportBody());
     } catch (e) {
       setDocxErr(`导出 Word 失败：${(e as Error).message}`);
     } finally {
@@ -480,6 +538,24 @@ export default function GrantModule() {
               <option key={g.key} value={g.key}>{g.label}</option>
             ))}
           </select>
+        </label>
+        <label className="field">
+          <span className="field-label">研究期限（可选，用于导出封面；留空则封面标 [需申请人补充]）</span>
+          <div className="grant-period-row">
+            <input
+              data-testid="grant-period-start"
+              value={periodStart}
+              onChange={(e) => setPeriodStart(e.target.value)}
+              placeholder="起，如 2026.01"
+            />
+            <span className="grant-period-sep">—</span>
+            <input
+              data-testid="grant-period-end"
+              value={periodEnd}
+              onChange={(e) => setPeriodEnd(e.target.value)}
+              placeholder="止，如 2028.12"
+            />
+          </div>
         </label>
         <label className="field">
           <span className="field-label">研究想法 / 核心思路（可选，建议从「找选题」带入）</span>

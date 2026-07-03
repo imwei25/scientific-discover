@@ -1,7 +1,7 @@
-import { apiUrl } from "./api";
+import { apiUrl, isTauri } from "./api";
 
-// 触发浏览器下载一个 Blob(安全模式: 锚点入 DOM + 延迟 revoke, 兼容 Firefox/大文件)。
-export function downloadBlob(filename: string, blob: Blob): void {
+// 浏览器环境: 用锚点触发下载(安全模式: 入 DOM + 延迟 revoke, 兼容 Firefox/大文件)。
+function anchorDownload(filename: string, blob: Blob): void {
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
   a.href = url;
@@ -13,6 +13,33 @@ export function downloadBlob(filename: string, blob: Blob): void {
     URL.revokeObjectURL(url);
     a.remove();
   }, 1000);
+}
+
+// Tauri 桌面壳: WebView2 不会响应 <a download> 的 blob 下载, 必须走原生
+// 「保存对话框 + 写文件」。用户取消返回 true(视为已处理); 出错返回 false 由调用方回退到锚点。
+async function tauriSave(filename: string, blob: Blob): Promise<boolean> {
+  try {
+    const { save } = await import("@tauri-apps/plugin-dialog");
+    const { invoke } = await import("@tauri-apps/api/core");
+    const path = await save({ defaultPath: filename });
+    if (!path) return true; // 用户取消
+    const bytes = Array.from(new Uint8Array(await blob.arrayBuffer()));
+    await invoke("save_file", { path, contents: bytes });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+// 保存一个 Blob。桌面端优先走原生保存对话框, 失败再回退到浏览器锚点下载。
+export function downloadBlob(filename: string, blob: Blob): void {
+  if (isTauri) {
+    tauriSave(filename, blob).then((ok) => {
+      if (!ok) anchorDownload(filename, blob);
+    });
+    return;
+  }
+  anchorDownload(filename, blob);
 }
 
 // 把文本(Markdown/纯文本)发到 /api/docx 转 Word 并下载。失败抛错(由调用方提示)。

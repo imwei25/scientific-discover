@@ -6,7 +6,7 @@
 //   所以不能只看 location.protocol(那样会误判为同源相对路径, 请求打到 webview 自身而非 sidecar)。
 //   用 Tauri 注入的全局 + 主机名兜底来识别桌面环境。
 const w = window as unknown as { __TAURI_INTERNALS__?: unknown; __TAURI__?: unknown };
-const isTauri =
+export const isTauri =
   typeof w.__TAURI_INTERNALS__ !== "undefined" ||
   typeof w.__TAURI__ !== "undefined" ||
   location.protocol === "tauri:" ||

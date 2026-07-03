@@ -51,6 +51,43 @@ def _add_runs_with_bold(paragraph, text: str) -> None:
         paragraph.add_run(text[pos:])
 
 
+def _split_row(line: str) -> list[str]:
+    """把一行 GFM 表格 `| a | b |` 拆成单元格; 去掉首尾竖线与两侧空白。"""
+    s = line.strip()
+    if s.startswith("|"):
+        s = s[1:]
+    if s.endswith("|"):
+        s = s[:-1]
+    return [c.strip() for c in s.split("|")]
+
+
+def _is_table_sep(line: str) -> bool:
+    """判断是否为 GFM 表格分隔行(如 `| --- | :--: |`)。"""
+    s = line.strip()
+    if "|" not in s or "-" not in s:
+        return False
+    cells = _split_row(s)
+    return bool(cells) and all(re.fullmatch(r":?-+:?", c) for c in cells)
+
+
+def _add_table(doc: Document, rows: list[list[str]]) -> None:
+    """把解析出的 GFM 表格渲染成带边框的 Word 表格(单元格内保留 **加粗**)。"""
+    ncol = max((len(r) for r in rows), default=0)
+    if ncol == 0:
+        return
+    table = doc.add_table(rows=0, cols=ncol)
+    try:
+        table.style = "Table Grid"  # 内置样式, 提供网格边框
+    except KeyError:
+        pass
+    for r in rows:
+        cells = table.add_row().cells
+        for ci in range(ncol):
+            para = cells[ci].paragraphs[0]
+            para.text = ""
+            _add_runs_with_bold(para, r[ci] if ci < len(r) else "")
+
+
 def _apply_page_and_style(doc: Document, spec: dict) -> None:
     """按期刊规格设定页面、页边距、正文中英文字体/字号、行距。"""
     w, h = _PAGE.get(spec["page"], _PAGE["a4"])
@@ -102,9 +139,30 @@ def build_docx(text: str, journal_id: str = "", references: list[str] | None = N
         title = doc.add_heading(journal["name"] + " · 排版稿", level=0)
         title.alignment = 1  # center
 
-    for raw in text.split("\n"):
-        line = raw.rstrip()
+    lines = text.split("\n")
+    n = len(lines)
+    i = 0
+    # 文档最前面的一级标题(如申请书封面标题「国家自然科学基金申请书」)作居中大标题。
+    while i < n and not lines[i].strip():
+        i += 1
+    if i < n and lines[i].rstrip().startswith("# "):
+        t = doc.add_heading(lines[i].rstrip()[2:].strip(), level=0)
+        t.alignment = 1  # center
+        i += 1
+
+    while i < n:
+        line = lines[i].rstrip()
         if not line.strip():
+            i += 1
+            continue
+        # GFM 表格: 当前行含竖线且下一行是分隔行时, 整块解析为 Word 表格。
+        if "|" in line and i + 1 < n and _is_table_sep(lines[i + 1]):
+            rows = [_split_row(lines[i])]
+            i += 2  # 跳过表头行与分隔行
+            while i < n and "|" in lines[i] and lines[i].strip():
+                rows.append(_split_row(lines[i]))
+                i += 1
+            _add_table(doc, rows)
             continue
         if line.startswith("### "):
             doc.add_heading(line[4:].strip(), level=3)
@@ -120,6 +178,7 @@ def build_docx(text: str, journal_id: str = "", references: list[str] | None = N
         else:
             p = doc.add_paragraph()
             _add_runs_with_bold(p, line)
+        i += 1
 
     # 追加按期刊样式格式化好的参考文献
     if references:

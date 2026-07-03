@@ -10,6 +10,8 @@
     "test": "playwright test"
   },
   "dependencies": {
+    "@tauri-apps/api": "^2.11.1",
+    "@tauri-apps/plugin-dialog": "^2.7.1",
     "@tiptap/extension-link": "^3.27.1",
     "@tiptap/extension-table": "^3.27.1",
     "@tiptap/extension-table-cell": "^3.27.1",

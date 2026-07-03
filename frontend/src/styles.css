@@ -1528,6 +1528,13 @@ select {
   padding: 8px 10px;
 }
 .grant-outline-note-row button { flex-shrink: 0; }
+.grant-period-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+.grant-period-row input { flex: 1; min-width: 0; }
+.grant-period-sep { flex-shrink: 0; color: var(--muted, #5b6675); }
 .grant-revise-list {
   margin: 8px 0 0;
   padding-left: 0;
