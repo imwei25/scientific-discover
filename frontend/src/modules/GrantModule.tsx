@@ -181,8 +181,10 @@ export default function GrantModule() {
   const [rereviewing, setRereviewing] = useState(false);
   const [batchBusy, setBatchBusy] = useState(false);
   const rvctrl = useRef<AbortController | null>(null);
-  // 评审"不通过"(资助建议 C)时自动补一轮修订: 每次撰写至多触发一次, 防止反复循环。
-  const autoRevisedRef = useRef(false);
+  // 评审"不通过"(资助建议 C)时自动补修订: 每次撰写至多 _MAX_AUTO_REVISE 轮(每轮=修订薄弱章节+重评),
+  // 若重评仍为 C 会自动再来一轮, 到上限即停, 防止反复循环。
+  const autoReviseCountRef = useRef(0);
+  const _MAX_AUTO_REVISE = 2;
 
   const text = fullDoc(sections);
 
@@ -303,7 +305,7 @@ export default function GrantModule() {
     setVerify(null);
     setReview(null);
     setReviseErr(null);
-    autoRevisedRef.current = false; // 新一轮撰写: 允许"评审不通过时自动修订"再触发一次
+    autoReviseCountRef.current = 0; // 新一轮撰写: 重置自动修订轮次计数
     setPhase("writing");
     setRunning(true);
     ctrl.current = new AbortController();
@@ -498,14 +500,16 @@ export default function GrantModule() {
   };
 
   // 评审"不通过"(资助建议 C)时自动补一轮: 按评审意见依次修订薄弱章节, 再自动重新评审一次。
-  const autoReviseRound = async () => {
+  // round 为当前是第几轮(1..MAX), 仅用于状态提示。
+  const autoReviseRound = async (round: number) => {
     const targets = weakTargets();
     if (!targets.length) return;
-    setStatus(`评审结论为 C（暂不建议资助），正在按评审意见自动修订 ${targets.length} 个薄弱章节…`);
+    const roundTip = `（自动第 ${round}/${_MAX_AUTO_REVISE} 轮）`;
+    setStatus(`评审结论为 C（暂不建议资助）${roundTip}，正在按评审意见自动修订 ${targets.length} 个薄弱章节…`);
     setBatchBusy(true);
     let done = 0;
     for (const t of targets) {
-      setReviseStatus(`自动修订（${done + 1}/${targets.length}）：《${t.sec.title}》…`);
+      setReviseStatus(`自动修订${roundTip}（${done + 1}/${targets.length}）：《${t.sec.title}》…`);
       const ok = await reviseSectionWith(t.sec, t.note, false);
       if (!ok) break;
       done += 1;
@@ -521,13 +525,14 @@ export default function GrantModule() {
     }
   };
 
-  // 首轮撰写完成后, 若评审组给出 C(不通过), 自动补一轮修订+重评(每次撰写至多一次)。
+  // 撰写/重评完成后, 若评审组给出 C(不通过), 自动补一轮修订+重评; 若重评仍为 C 会再触发,
+  // 至多 _MAX_AUTO_REVISE 轮(到上限即停, 需人工继续)。
   useEffect(() => {
     if (phase !== "done" || running || revisingKey || rereviewing || batchBusy) return;
-    if (!review || review.grade !== "C" || autoRevisedRef.current) return;
+    if (!review || review.grade !== "C" || autoReviseCountRef.current >= _MAX_AUTO_REVISE) return;
     if (!weakTargets().length) return;
-    autoRevisedRef.current = true;
-    void autoReviseRound();
+    autoReviseCountRef.current += 1;
+    void autoReviseRound(autoReviseCountRef.current);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [phase, review, running, revisingKey, rereviewing, batchBusy]);
 
@@ -542,7 +547,7 @@ export default function GrantModule() {
     setPeriodStart(""); setPeriodEnd("");
     setScheme(null); setOutline([]); setSections([]); setVerify(null); setReview(null);
     setReviseNote({}); setRevisingKey(null); setReviseErr(null);
-    setRereviewing(false); setBatchBusy(false); autoRevisedRef.current = false;
+    setRereviewing(false); setBatchBusy(false); autoReviseCountRef.current = 0;
     setStyleSample(""); setStyleProfile(""); setStyleOn(true); setStyleErr("");
     setStatus(""); setError(null); setPhase("idle");
   };
