@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from "react";
 let seq = 0;
 let initialized = false;
 
-async function loadMermaid() {
+export async function loadMermaid() {
   const mermaid = (await import("mermaid")).default;
   if (!initialized) {
     mermaid.initialize({
@@ -12,6 +12,10 @@ async function loadMermaid() {
       securityLevel: "strict",
       theme: "neutral",
       fontFamily: "inherit",
+      // 用 SVG <text> 标签而非 HTML(foreignObject): 否则导出时把 SVG 光栅化成 PNG
+      // (技术路线图/甘特图内嵌进 Word)会因 foreignObject 无法在 canvas 渲染而变空白。
+      htmlLabels: false,
+      flowchart: { htmlLabels: false },
     });
     initialized = true;
   }

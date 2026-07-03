@@ -10,7 +10,7 @@ _ENV_TEMPLATE = """# 科研助手配置 —— 填好下面的密钥后保存, �
 LLM_API_KEY=
 LLM_PROVIDER=openai
 LLM_BASE_URL=https://api.deepseek.com
-LLM_MODEL=deepseek-chat
+LLM_MODEL=deepseek-v4-flash
 
 # 可选: 备用供应商(主供应商额度用尽时自动切换), 不用可留空。
 # FALLBACK_API_KEY=
@@ -151,7 +151,7 @@ class Settings:
         self.provider = os.getenv("LLM_PROVIDER", "openai").strip().lower()
         self.api_key = os.getenv("LLM_API_KEY", "").strip()
         self.base_url = os.getenv("LLM_BASE_URL", "https://api.deepseek.com").strip().rstrip("/")
-        self.model = os.getenv("LLM_MODEL", "deepseek-chat").strip()
+        self.model = os.getenv("LLM_MODEL", "deepseek-v4-flash").strip()
         self.mock = _bool("MOCK_LLM", False)
 
         # 出厂默认: 客户没在设置里填自己的 LLM_API_KEY 时, 套用打包内置的硅基流动 key,

@@ -25,7 +25,7 @@ PROVIDER_PRESETS: dict[str, dict[str, str]] = {
     "deepseek": {
         "provider": "openai",  # 兼容 OpenAI /chat/completions 协议
         "base_url": "https://api.deepseek.com",
-        "model": "deepseek-chat",
+        "model": "deepseek-v4-flash",
     },
     "siliconflow": {
         "provider": "openai",
@@ -169,7 +169,7 @@ async def test_provider_key(
             "Content-Type": "application/json",
         }
         payload = {
-            "model": model or "deepseek-chat",
+            "model": model or "deepseek-v4-flash",
             "messages": [{"role": "user", "content": "ping"}],
             "max_tokens": 8,
         }

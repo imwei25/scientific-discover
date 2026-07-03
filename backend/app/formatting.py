@@ -11,8 +11,12 @@ from __future__ import annotations
 import io
 import re
 
+import base64
+import struct
+
 from docx import Document
 from docx.enum.text import WD_LINE_SPACING
+from docx.opc.constants import RELATIONSHIP_TYPE
 from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
 from docx.shared import Cm, Pt
@@ -22,6 +26,60 @@ from .journals import get_docx_spec, get_journal
 _BOLD = re.compile(r"\*\*(.+?)\*\*")
 _SECTION_BRACKET = re.compile(r"^【.+】$")
 _BULLET = re.compile(r"^[-*]\s+")
+# 行内标记(供导出成稿): **加粗** 或 [链接文本](url)。链接可能残留 title(支持句), 一并吞掉丢弃。
+_INLINE = re.compile(
+    r"\*\*(.+?)\*\*"
+    r"|\[([^\]]+)\]\((https?://[^)\s]+)(?:\s+\"[^\"]*\")?\)"
+)
+# 独占一行的内嵌图片(mermaid 渲染成的 PNG data URL): ![alt](data:image/png;base64,XXXX)。
+_IMG_DATA = re.compile(r'^!\[[^\]]*\]\(data:image/(png|jpe?g);base64,([A-Za-z0-9+/=]+)\)\s*$')
+
+
+def _png_size(data: bytes) -> tuple[int, int] | None:
+    """从 PNG 字节里读出像素宽高(IHDR 在文件头固定偏移)。非 PNG 返回 None。"""
+    if len(data) >= 24 and data[:8] == b"\x89PNG\r\n\x1a\n" and data[12:16] == b"IHDR":
+        w, h = struct.unpack(">II", data[16:24])
+        return int(w), int(h)
+    return None
+
+
+def _add_hyperlink(paragraph, url: str, text: str) -> None:
+    """给段落追加一个真正的 Word 超链接(蓝色下划线), 只显示链接文本, 不显示裸 URL。"""
+    part = paragraph.part
+    r_id = part.relate_to(url, RELATIONSHIP_TYPE.HYPERLINK, is_external=True)
+    hyperlink = OxmlElement("w:hyperlink")
+    hyperlink.set(qn("r:id"), r_id)
+    run = OxmlElement("w:r")
+    rpr = OxmlElement("w:rPr")
+    color = OxmlElement("w:color")
+    color.set(qn("w:val"), "0563C1")
+    rpr.append(color)
+    underline = OxmlElement("w:u")
+    underline.set(qn("w:val"), "single")
+    rpr.append(underline)
+    run.append(rpr)
+    t = OxmlElement("w:t")
+    t.set(qn("xml:space"), "preserve")
+    t.text = text
+    run.append(t)
+    hyperlink.append(run)
+    paragraph._p.append(hyperlink)
+
+
+def _add_inline(paragraph, text: str) -> None:
+    """处理一行内的 **加粗** 与 [文本](url) 链接; 链接渲染为可点击超链接(丢弃支持句 title)。"""
+    pos = 0
+    for m in _INLINE.finditer(text):
+        if m.start() > pos:
+            paragraph.add_run(text[pos:m.start()])
+        if m.group(1) is not None:  # 加粗
+            run = paragraph.add_run(m.group(1))
+            run.bold = True
+        else:  # 链接: group(2)=文本, group(3)=url
+            _add_hyperlink(paragraph, m.group(3), m.group(2))
+        pos = m.end()
+    if pos < len(text):
+        paragraph.add_run(text[pos:])
 
 # 纸张尺寸(宽 x 高, cm)
 _PAGE = {"a4": (21.0, 29.7), "letter": (21.59, 27.94)}
@@ -38,17 +96,27 @@ _SECTPR_AFTER_LNNUM = (
 )
 
 
-def _add_runs_with_bold(paragraph, text: str) -> None:
-    """处理一行内的 **加粗** 标记。"""
-    pos = 0
-    for m in _BOLD.finditer(text):
-        if m.start() > pos:
-            paragraph.add_run(text[pos:m.start()])
-        run = paragraph.add_run(m.group(1))
-        run.bold = True
-        pos = m.end()
-    if pos < len(text):
-        paragraph.add_run(text[pos:])
+def _add_image(doc: Document, b64: str, max_w_cm: float, max_h_cm: float) -> None:
+    """把 base64 PNG 内嵌成居中图片, 按可用宽度铺满; 过高则改按最大高度约束。"""
+    try:
+        data = base64.b64decode(b64)
+    except Exception:  # noqa: BLE001
+        return
+    p = doc.add_paragraph()
+    p.alignment = 1  # center
+    run = p.add_run()
+    size = _png_size(data)
+    try:
+        if size and size[0] > 0:
+            w, h = size
+            if max_w_cm * (h / w) > max_h_cm:
+                run.add_picture(io.BytesIO(data), height=Cm(max_h_cm))
+            else:
+                run.add_picture(io.BytesIO(data), width=Cm(max_w_cm))
+        else:
+            run.add_picture(io.BytesIO(data), width=Cm(max_w_cm))
+    except Exception:  # noqa: BLE001
+        pass  # 图片损坏不阻断整篇导出
 
 
 def _split_row(line: str) -> list[str]:
@@ -85,7 +153,7 @@ def _add_table(doc: Document, rows: list[list[str]]) -> None:
         for ci in range(ncol):
             para = cells[ci].paragraphs[0]
             para.text = ""
-            _add_runs_with_bold(para, r[ci] if ci < len(r) else "")
+            _add_inline(para, r[ci] if ci < len(r) else "")
 
 
 def _apply_page_and_style(doc: Document, spec: dict) -> None:
@@ -139,6 +207,12 @@ def build_docx(text: str, journal_id: str = "", references: list[str] | None = N
         title = doc.add_heading(journal["name"] + " · 排版稿", level=0)
         title.alignment = 1  # center
 
+    # 内嵌图片(mermaid 渲染成的 PNG)可用的最大宽/高(cm): 页面尺寸去掉页边距。
+    pw, ph = _PAGE.get(spec["page"], _PAGE["a4"])
+    _m = float(spec["margin_cm"])
+    max_w_cm = max(4.0, pw - 2 * _m)
+    max_h_cm = max(4.0, ph - 2 * _m - 2.0)
+
     lines = text.split("\n")
     n = len(lines)
     i = 0
@@ -153,6 +227,12 @@ def build_docx(text: str, journal_id: str = "", references: list[str] | None = N
     while i < n:
         line = lines[i].rstrip()
         if not line.strip():
+            i += 1
+            continue
+        # 内嵌图片(独占一行的 data:image PNG, 由 mermaid 渲染而来)。
+        mimg = _IMG_DATA.match(line)
+        if mimg:
+            _add_image(doc, mimg.group(2), max_w_cm, max_h_cm)
             i += 1
             continue
         # GFM 表格: 当前行含竖线且下一行是分隔行时, 整块解析为 Word 表格。
@@ -174,10 +254,10 @@ def build_docx(text: str, journal_id: str = "", references: list[str] | None = N
             doc.add_heading(line.strip().strip("【】"), level=2)
         elif _BULLET.match(line):
             p = doc.add_paragraph(style="List Bullet")
-            _add_runs_with_bold(p, _BULLET.sub("", line))
+            _add_inline(p, _BULLET.sub("", line))
         else:
             p = doc.add_paragraph()
-            _add_runs_with_bold(p, line)
+            _add_inline(p, line)
         i += 1
 
     # 追加按期刊样式格式化好的参考文献

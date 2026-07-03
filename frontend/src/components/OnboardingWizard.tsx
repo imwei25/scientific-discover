@@ -374,7 +374,7 @@ function defaultBaseUrl(p: WizardProvider): string {
 // 各 provider 的常用模型建议(第一个即默认); 与后端 PROVIDER_PRESETS 默认保持一致。
 // 留空传给后端时后端仍会用预设默认, 这里只是给用户快捷选项。
 const MODEL_SUGGESTIONS: Record<WizardProvider, string[]> = {
-  deepseek: ["deepseek-chat", "deepseek-reasoner"],
+  deepseek: ["deepseek-v4-flash", "deepseek-chat", "deepseek-reasoner"],
   siliconflow: [
     "deepseek-ai/DeepSeek-V3",
     "deepseek-ai/DeepSeek-R1",

@@ -12,6 +12,7 @@ import { HelpButton } from "../components/HelpButton";
 import RefIO from "../components/RefIO";
 import ZoteroPanel from "../components/ZoteroPanel";
 import { downloadText, downloadCsv, downloadDocxFromText, tsName } from "../lib/download";
+import { stripSupportQuotes } from "../lib/exportPrep";
 import { usePersistentState } from "../lib/usePersistentState";
 import type { Goto } from "../App";
 
@@ -1097,7 +1098,7 @@ export default function IdeaModule({ goto }: { goto: Goto }) {
                         refs.map((r) => `- [${r.first_author} (${r.year}). ${r.title}](${r.url})`).join("\n")
                       : "";
                     try {
-                      await navigator.clipboard.writeText(text + refMd);
+                      await navigator.clipboard.writeText(stripSupportQuotes(text) + refMd);
                       setCopied(true);
                       window.setTimeout(() => setCopied(false), 1800);
                     } catch {
@@ -1119,7 +1120,7 @@ export default function IdeaModule({ goto }: { goto: Goto }) {
                       ? "\n\n## 参考文献\n" +
                         refs.map((r) => `- [${r.first_author} (${r.year}). ${r.title}](${r.url})`).join("\n")
                       : "";
-                    downloadText(tsName("选题调研", "md"), text + refMd);
+                    downloadText(tsName("选题调研", "md"), stripSupportQuotes(text) + refMd);
                   }}
                 >
                   导出 Markdown
@@ -1137,7 +1138,7 @@ export default function IdeaModule({ goto }: { goto: Goto }) {
                         ? "\n\n## 参考文献\n" +
                           refs.map((r) => `- [${r.first_author} (${r.year}). ${r.title}](${r.url})`).join("\n")
                         : "";
-                      await downloadDocxFromText(tsName("选题调研", "docx"), text + refMd);
+                      await downloadDocxFromText(tsName("选题调研", "docx"), stripSupportQuotes(text) + refMd);
                     } catch (e) {
                       setStatus(`导出 Word 失败：${(e as Error).message}`);
                       window.setTimeout(() => setStatus((s) => (s.startsWith("导出 Word 失败") ? "" : s)), 5000);

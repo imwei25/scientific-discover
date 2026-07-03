@@ -4,7 +4,7 @@ import {
   Reference, Verification, GrantScheme, GrantOutlineItem,
   GrantReviewData, GrantReviewIssue,
 } from "../lib/sse";
-import { CiteInfo, normCiteUrl } from "../components/Markdown";
+import Markdown, { CiteInfo, normCiteUrl } from "../components/Markdown";
 import { reportLLMError } from "../lib/errorToast";
 import { addHistory } from "../lib/history";
 import EditableMarkdown from "../components/EditableMarkdown";
@@ -16,6 +16,7 @@ import ZoteroPanel from "../components/ZoteroPanel";
 import { HelpButton } from "../components/HelpButton";
 import { usePersistentState } from "../lib/usePersistentState";
 import { downloadText, downloadDocxFromText, tsName } from "../lib/download";
+import { prepareForExport } from "../lib/exportPrep";
 
 // 合并导入的 references 到现有列表, 按 DOI 优先去重, 缺 DOI 则按 (title|year) 兜底。
 // 返回 [合并后列表, 实际新增数, 跳过的重复数]
@@ -156,6 +157,13 @@ export default function GrantModule() {
   const rvctrl = useRef<AbortController | null>(null);
 
   const text = fullDoc(sections);
+
+  // 封面(大标题 + 基本信息表): 屏幕 Canvas 顶部与导出抬头共用同一份, 不进入可编辑正文,
+  // 让画布上也能看到申请书标题/项目名等信息, 而不是直接从第一章节开始。
+  const coverMd = useMemo(
+    () => buildCover({ grantType, projectName: scheme?.title || title, periodStart, periodEnd }),
+    [grantType, scheme?.title, title, periodStart, periodEnd],
+  );
 
   // 引用悬浮卡数据: 按 URL 索引文献题名, 悬停正文引用即可看 AI 标注的原文支持句。
   const citeInfo = useMemo(() => {
@@ -487,11 +495,22 @@ export default function GrantModule() {
     return cover + "\n" + text;
   };
 
-  const exportMd = () => {
-    const refMd = refs.length
-      ? "\n\n## 参考文献\n" + refs.map((r) => `- [${r.first_author} (${r.year}). ${r.title}](${r.url})`).join("\n")
-      : "";
-    downloadText(tsName("标书初稿", "md"), exportBody() + refMd);
+  const exportMd = async () => {
+    if (docxBusy) return;
+    setDocxBusy(true);
+    setDocxErr("");
+    try {
+      const refMd = refs.length
+        ? "\n\n## 参考文献\n" + refs.map((r) => `- [${r.first_author} (${r.year}). ${r.title}](${r.url})`).join("\n")
+        : "";
+      // 导出前处理：去支持句 + 把技术路线图/甘特图渲染成图片，正文再拼参考文献。
+      const body = await prepareForExport(exportBody(), "技术路线图/计划图");
+      downloadText(tsName("标书初稿", "md"), body + refMd);
+    } catch (e) {
+      setDocxErr(`导出 Markdown 失败：${(e as Error).message}`);
+    } finally {
+      setDocxBusy(false);
+    }
   };
 
   const exportDocx = async () => {
@@ -499,7 +518,8 @@ export default function GrantModule() {
     setDocxBusy(true);
     setDocxErr("");
     try {
-      await downloadDocxFromText(tsName("标书初稿", "docx"), exportBody());
+      const body = await prepareForExport(exportBody(), "技术路线图/计划图");
+      await downloadDocxFromText(tsName("标书初稿", "docx"), body);
     } catch (e) {
       setDocxErr(`导出 Word 失败：${(e as Error).message}`);
     } finally {
@@ -917,6 +937,11 @@ export default function GrantModule() {
             </div>
           </div>
           {docxErr && <div className="result-error">{docxErr}</div>}
+          {phase === "done" && sections.length > 0 && (
+            <div className="grant-cover" data-testid="grant-cover">
+              <Markdown>{coverMd}</Markdown>
+            </div>
+          )}
           <EditableMarkdown
             value={text}
             onSave={applyDeai}
