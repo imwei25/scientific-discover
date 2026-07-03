@@ -15,7 +15,7 @@ import RefIO from "../components/RefIO";
 import ZoteroPanel from "../components/ZoteroPanel";
 import { HelpButton } from "../components/HelpButton";
 import { usePersistentState } from "../lib/usePersistentState";
-import { downloadText, downloadDocxFromText, tsName } from "../lib/download";
+import { downloadText, downloadDocxFromText, downloadPdfFromText, tsName } from "../lib/download";
 import { prepareForExport } from "../lib/exportPrep";
 
 // 合并导入的 references 到现有列表, 按 DOI 优先去重, 缺 DOI 则按 (title|year) 兜底。
@@ -527,6 +527,20 @@ export default function GrantModule() {
     }
   };
 
+  const exportPdf = async () => {
+    if (!text || docxBusy) return;
+    setDocxBusy(true);
+    setDocxErr("");
+    try {
+      const body = await prepareForExport(exportBody(), "技术路线图/计划图");
+      await downloadPdfFromText(tsName("标书初稿", "pdf"), body, scheme?.title || title);
+    } catch (e) {
+      setDocxErr(`导出 PDF 失败：${(e as Error).message}`);
+    } finally {
+      setDocxBusy(false);
+    }
+  };
+
   const updateScheme = (patch: Partial<GrantScheme>) =>
     setScheme((prev) => ({ ...(prev || emptyScheme), ...patch }));
 
@@ -932,6 +946,11 @@ export default function GrantModule() {
               {text && !running && (
                 <button className="btn-ghost" data-testid="grant-export-docx" onClick={exportDocx} disabled={docxBusy}>
                   {docxBusy ? "导出中…" : "导出 Word"}
+                </button>
+              )}
+              {text && !running && (
+                <button className="btn-ghost" data-testid="grant-export-pdf" onClick={exportPdf} disabled={docxBusy}>
+                  {docxBusy ? "导出中…" : "导出 PDF"}
                 </button>
               )}
             </div>

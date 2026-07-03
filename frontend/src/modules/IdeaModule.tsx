@@ -11,7 +11,7 @@ import Dropzone from "../components/Dropzone";
 import { HelpButton } from "../components/HelpButton";
 import RefIO from "../components/RefIO";
 import ZoteroPanel from "../components/ZoteroPanel";
-import { downloadText, downloadCsv, downloadDocxFromText, tsName } from "../lib/download";
+import { downloadText, downloadCsv, downloadDocxFromText, downloadPdfFromText, tsName } from "../lib/download";
 import { stripSupportQuotes } from "../lib/exportPrep";
 import { usePersistentState } from "../lib/usePersistentState";
 import type { Goto } from "../App";
@@ -1148,6 +1148,30 @@ export default function IdeaModule({ goto }: { goto: Goto }) {
                   }}
                 >
                   {wordBusy ? "导出中…" : "导出 Word"}
+                </button>
+              )}
+              {text && !running && (
+                <button
+                  className="btn-ghost"
+                  data-testid="export-pdf-btn"
+                  disabled={wordBusy}
+                  onClick={async () => {
+                    setWordBusy(true);
+                    try {
+                      const refMd = refs.length
+                        ? "\n\n## 参考文献\n" +
+                          refs.map((r) => `- [${r.first_author} (${r.year}). ${r.title}](${r.url})`).join("\n")
+                        : "";
+                      await downloadPdfFromText(tsName("选题调研", "pdf"), stripSupportQuotes(text) + refMd, field || "选题调研");
+                    } catch (e) {
+                      setStatus(`导出 PDF 失败：${(e as Error).message}`);
+                      window.setTimeout(() => setStatus((s) => (s.startsWith("导出 PDF 失败") ? "" : s)), 5000);
+                    } finally {
+                      setWordBusy(false);
+                    }
+                  }}
+                >
+                  {wordBusy ? "导出中…" : "导出 PDF"}
                 </button>
               )}
             </div>

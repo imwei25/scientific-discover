@@ -18,6 +18,8 @@ Write-Host "==> Bundling backend (scipy/matplotlib need --collect-all)" -Foregro
 #   without it the exe silently loses scimago quartile annotation (scimago.py degrades to {}).
 # --collect-all citeproc/citeproc_styles: both read CSL locale/style files from package
 #   data at runtime; missing them breaks reference checking/formatting in the exe.
+# --collect-all reportlab: PDF 导出用 reportlab, 其内置 CID 中文字体(STSong-Light)的
+#   CMap 资源与 .pfb 字体是包内数据文件, 不 collect-all 会导致 exe 里中文 PDF 生成失败。
 & ".\.venv\Scripts\pyinstaller.exe" `
     --onefile `
     --name sidecar `
@@ -29,6 +31,7 @@ Write-Host "==> Bundling backend (scipy/matplotlib need --collect-all)" -Foregro
     --collect-all lifelines `
     --collect-all citeproc `
     --collect-all citeproc_styles `
+    --collect-all reportlab `
     --collect-submodules app `
     --add-data "app\data;app\data" `
     --hidden-import app.main `

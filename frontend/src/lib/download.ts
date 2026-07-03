@@ -57,6 +57,21 @@ export async function downloadDocxFromText(
   downloadBlob(filename, await resp.blob());
 }
 
+// 把 Markdown/纯文本发到 /api/pdf 转 PDF(中文可选中)并下载。失败抛错(由调用方提示)。
+export async function downloadPdfFromText(
+  filename: string,
+  text: string,
+  title = "",
+): Promise<void> {
+  const resp = await fetch(apiUrl("/api/pdf"), {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ text, title }),
+  });
+  if (!resp.ok) throw new Error(`服务返回错误 ${resp.status}`);
+  downloadBlob(filename, await resp.blob());
+}
+
 // 把文本保存为本地文件(纯前端, 不经服务器)。
 export function downloadText(filename: string, text: string, mime = "text/markdown"): void {
   downloadBlob(filename, new Blob([text], { type: `${mime};charset=utf-8` }));

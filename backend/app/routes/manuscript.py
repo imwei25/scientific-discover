@@ -154,6 +154,24 @@ async def docx(req: DocxRequest) -> Response:
     )
 
 
+class PdfRequest(BaseModel):
+    text: str
+    title: str = ""
+
+
+@router.post("/api/pdf")
+async def pdf(req: PdfRequest) -> Response:
+    """把 Markdown 正文导出为 PDF(中文可选中); 内嵌 mermaid 图片、链接、表格。"""
+    from ..pdfexport import build_pdf
+
+    data = build_pdf(req.text, req.title)
+    return Response(
+        content=data,
+        media_type="application/pdf",
+        headers={"Content-Disposition": "attachment; filename=document.pdf"},
+    )
+
+
 # ----- 病例数据脱敏 -----
 
 @router.post("/api/deidentify/scan")

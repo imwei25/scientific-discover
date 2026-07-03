@@ -37,3 +37,6 @@ backend/data/projects/
 
 # Brainstorming companion
 .superpowers/
+
+scripts/_sidecar_build.log
+scripts/_tauri_build.log
