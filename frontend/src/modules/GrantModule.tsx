@@ -8,6 +8,7 @@ import { CiteInfo, normCiteUrl } from "../components/Markdown";
 import { reportLLMError } from "../lib/errorToast";
 import { addHistory } from "../lib/history";
 import EditableMarkdown from "../components/EditableMarkdown";
+import RefineEditor from "../components/RefineEditor";
 import { CanvasSlot } from "../components/Canvas";
 import Dropzone from "../components/Dropzone";
 import RefIO from "../components/RefIO";
@@ -925,6 +926,15 @@ export default function GrantModule() {
             placeholder={running ? "正在撰写…" : "填好题名（或从「找选题」带入）后，点“生成大纲”确认，再撰写；申请书初稿会显示在这里。"}
             testId="grant-result"
           />
+          {phase === "done" && sections.length > 0 && !running && (
+            <RefineEditor
+              text={text}
+              onChange={applyDeai}
+              refs={refs}
+              refInfo={citeInfo}
+              testid="grant-refine"
+            />
+          )}
         </div>
       </CanvasSlot>
 

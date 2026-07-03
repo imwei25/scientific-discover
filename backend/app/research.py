@@ -46,10 +46,28 @@ _REF_FIELDS = (
     "cited_by_count", "oa_url", "journal_impact", "journal_quartile",
 )
 
+# 相关性判分(T1): 综述前用 LLM 对每篇文献相对"用户研究方向"打 0-3 分, 主导排序与筛选,
+# 弥补纯词面/被引排序会把"高被引但离题"文献顶上来的短板。默认阈值≥2(相关)才进综述;
+# 命中太少自动放宽到≥1, 再不够则全保留, 避免把综述文献筛空。抽取失败(rel 缺失)按中性保留。
+_REL_KEEP = 2          # 进入立意综述/标书文献池的最低相关分(3=直接相关 2=相关 1=弱相关 0=不相关)
+_REL_FLOOR = 6         # 保留数不足此值时放宽阈值, 保证综述有足够文献可依
+_REL_NEUTRAL = 2       # 抽取缺失 rel 时按中性分处理(不因抽取失败误杀文献)
+
+
+def _rel_of(p: dict) -> int:
+    """取一篇文献的相关分(来自 _extract_* 附加的 _ev.rel); 缺失按中性分。"""
+    r = (p.get("_ev") or {}).get("rel")
+    return r if isinstance(r, int) else _REL_NEUTRAL
+
 
 def _ref_item(p: dict) -> dict:
     """构造一条 references 载荷; 附带截断摘要(供标书阶段摘录支持句, 控制体积上限 800 字)。"""
     item = {k: p.get(k, "") for k in _REF_FIELDS}
+    ev = p.get("_ev")
+    if isinstance(ev, dict) and isinstance(ev.get("rel"), int):
+        item["rel"] = ev["rel"]
+        if ev.get("rel_why"):
+            item["rel_why"] = str(ev["rel_why"])[:120]
     ab = (p.get("abstract") or "").strip()
     if ab:
         item["abstract"] = ab[:800]
@@ -263,14 +281,25 @@ async def refine_topic(inputs: dict) -> dict:
 
 
 async def _gap_queries(field: str, papers: list[dict]) -> list[str]:
-    """基于首轮文献标题, 找出值得补充检索的 2-3 个角度。"""
-    titles = "\n".join(f"- {p['title']}" for p in papers[:20])
+    """基于首轮文献(标题 + 已抽取的主要发现要点), 找出值得补充检索的 2-3 个角度。
+
+    喂"标题 + 发现"而非只喂标题: 让"哪里是空白"的判断有据可依, 补检索更贴合方向。
+    """
+    lines = []
+    for p in papers[:20]:
+        row = p.get("_ev") or {}
+        finding = str(row.get("finding") or "").strip()
+        line = f"- {p['title']}"
+        if finding:
+            line += f"（主要发现：{finding}）"
+        lines.append(line)
+    titles = "\n".join(lines)
     system = (
-        "你是医学科研选题专家。下面是某研究方向已检索到的文献标题。"
-        "请找出该方向下【尚未被充分覆盖、值得补充检索】的 2-3 个具体角度，"
+        "你是医学科研选题专家。下面是某研究方向已检索到的文献(标题 + 主要发现)。"
+        "请对照这些已有发现，找出该方向下【尚未被充分覆盖、值得补充检索】的 2-3 个具体角度，"
         "每个角度给一个适合 PubMed 的英文检索式。只输出 JSON 字符串数组，不要解释。"
     )
-    user = f"研究方向：{field}\n\n已有文献标题：\n{titles}"
+    user = f"研究方向：{field}\n\n已有文献(标题 + 主要发现)：\n{titles}"
     arr = _parse_json(
         await _complete([{"role": "system", "content": system}, {"role": "user", "content": user}], max_tokens=400),
         "[", "]",
@@ -332,29 +361,36 @@ def _build_context(papers: list[dict]) -> str:
     return "\n\n".join(lines)
 
 
-async def _extract_batch(items: list[tuple[int, dict]]) -> dict[int, dict]:
-    """把一批文献(摘要)抽成结构化要点行, 返回 {全局编号: row}。
+async def _extract_batch(field: str, items: list[tuple[int, dict]]) -> dict[int, dict]:
+    """把一批文献(摘要)抽成结构化要点行 + 相关性判分, 返回 {全局编号: row}。
 
-    每行字段: pop(对象/人群) / design(研究类型/方法) / finding(主要发现含关键数据) / gap(局限或未解决)。
+    每行字段: pop(对象/人群) / design(研究类型/方法) / finding(主要发现含关键数据) / gap(局限或未解决)
+    / rel(相对用户研究方向的相关性 0-3) / rel_why(判分一句话理由)。
     这是 deep-research 常见的"结构化证据表"降本范式: 把 1200 字摘要压成 ~150 字要点,
     既能把上下文成本降 5-8 倍(可安全纳入更多文献), 结构化输入也更抗"中段被忽略"、更难编造。
+    相关性判分借抽取的同一次调用顺带产出(近零额外成本), 用于主导排序/筛掉离题文献。
     """
     parts = []
     for idx, p in items:
         ab = (p.get("abstract") or "")[:1000]
         parts.append(f"[{idx}] {p.get('title', '')}\n摘要: {ab or '（无摘要）'}")
     system = (
-        "你是医学文献信息抽取助手。下面给出若干篇文献的编号、标题与摘要。"
-        "请为每篇抽取结构化要点，字段用简洁中文（每字段不超过 40 字，信息缺失填空字符串，严禁编造）。"
+        "你是医学文献信息抽取助手。下面给出用户的【研究方向】以及若干篇文献的编号、标题与摘要。"
+        "请为每篇抽取结构化要点，并判断它与该研究方向的相关性。"
+        "字段用简洁中文（每字段不超过 40 字，信息缺失填空字符串，严禁编造）。\n"
+        "相关性 rel 按整数打分：3=直接相关(核心主题一致，可直接支撑立意)；"
+        "2=相关(同一疾病/机制/方法领域，可作背景或旁证)；1=弱相关(仅沾边，主题实质不同)；"
+        "0=不相关(检索误命中，如同名词、无关学科)。判分只看主题贴合度，不看被引或年份。\n"
         "只输出 JSON 数组，每项形如 "
         "{\"i\":编号,\"pop\":\"研究对象/人群\",\"design\":\"研究类型/方法\","
-        "\"finding\":\"主要发现(含关键数据/效应量)\",\"gap\":\"局限或未解决的问题\"}，不要任何解释。"
+        "\"finding\":\"主要发现(含关键数据/效应量)\",\"gap\":\"局限或未解决的问题\","
+        "\"rel\":0到3的整数,\"rel_why\":\"判分理由(一句话，≤30字)\"}，不要任何解释。"
     )
-    user = "\n\n".join(parts)
+    user = f"研究方向：{field}\n\n【文献】\n" + "\n\n".join(parts)
     arr = _parse_json(
         await _complete(
             [{"role": "system", "content": system}, {"role": "user", "content": user}],
-            max_tokens=1400,
+            max_tokens=1700,
         ),
         "[", "]",
     )
@@ -363,23 +399,36 @@ async def _extract_batch(items: list[tuple[int, dict]]) -> dict[int, dict]:
         for it in arr:
             if isinstance(it, dict) and it.get("i") is not None:
                 try:
-                    out[int(it["i"])] = it
+                    gi = int(it["i"])
                 except (ValueError, TypeError):
                     continue
+                # rel 规整为 0-3 整数; 解析不出则不带(下游按中性分处理)。
+                try:
+                    it["rel"] = max(0, min(3, int(it.get("rel"))))
+                except (ValueError, TypeError):
+                    it.pop("rel", None)
+                out[gi] = it
     return out
 
 
-async def _extract_evidence(papers: list[dict], batch: int = 12) -> dict[int, dict]:
-    """对全部纳入文献并发抽取结构化证据行, 返回 {全局编号(1-based): row}。"""
+async def _extract_evidence(field: str, papers: list[dict], batch: int = 12) -> dict[int, dict]:
+    """对全部纳入文献并发抽取结构化证据行(含相关性判分), 返回 {全局编号(1-based): row}。
+
+    同时把抽取结果(含 rel)挂到各 paper 的 `_ev` 键上, 供排序/筛选/gap 检索复用。
+    """
     indexed = list(enumerate(papers, 1))
     batches = [indexed[i : i + batch] for i in range(0, len(indexed), batch)]
     results = await asyncio.gather(
-        *[_extract_batch(b) for b in batches], return_exceptions=True
+        *[_extract_batch(field, b) for b in batches], return_exceptions=True
     )
     evidence: dict[int, dict] = {}
     for res in results:
         if isinstance(res, dict):
             evidence.update(res)
+    for gi, p in indexed:
+        row = evidence.get(gi)
+        if row is not None:
+            p["_ev"] = row
     return evidence
 
 
@@ -427,8 +476,27 @@ def _evidence_items(papers: list[dict], evidence: dict[int, dict]) -> list[dict]
             "design": row.get("design", ""),
             "finding": row.get("finding", ""),
             "gap": row.get("gap", ""),
+            "rel": row.get("rel") if isinstance(row.get("rel"), int) else None,
+            "rel_why": row.get("rel_why", ""),
         })
     return out
+
+
+def _filter_by_relevance(
+    groups: list[tuple[str, list[dict]]]
+) -> tuple[list[tuple[str, list[dict]]], int]:
+    """按相关分筛掉离题文献: 优先只留 rel≥_REL_KEEP; 保留数不足则放宽阈值, 保证不筛空。
+
+    返回 (筛后 groups, 生效阈值)。阈值=0 表示未筛(全保留)。抽取缺失的按中性分(≥阈值)保留。
+    """
+    def kept(th: int) -> list[tuple[str, list[dict]]]:
+        return [(name, [p for p in g if _rel_of(p) >= th]) for name, g in groups]
+
+    for th in (_REL_KEEP, 1):
+        filtered = kept(th)
+        if sum(len(g) for _, g in filtered) >= _REL_FLOOR:
+            return filtered, th
+    return groups, 0
 
 
 def _trials_note(trials: list[dict]) -> str:
@@ -650,21 +718,38 @@ async def _deep_flow(
         yield ("trials", trials)
     trial_items = (trials or {}).get("items", [])
 
-    yield ("status", {"message": f"首轮找到 {total} 篇（{len(groups)} 个子方向），正在识别空白并补充检索…"})
+    # 结构化证据表(首轮): 综述前把每篇压成要点行 + 相关性判分(并发抽取)。
+    # 先抽首轮, 既给空白补充检索喂"发现"、又拿到相关分用于后续筛选。
+    yield ("status", {"message": f"首轮找到 {total} 篇（{len(groups)} 个子方向），正在逐篇抽取要点并判分相关性…"})
+    await _extract_evidence(field, papers)
+
+    yield ("status", {"message": "正在对照已有发现识别研究空白并补充检索…"})
     gapq = await _gap_queries(field, papers)
     if gapq:
         extra = await search_literature(gapq, per_query=6, cap=24, sources=sources, filters=filters)
         gap_grp = [p for p in extra["papers"] if _pkey(p) and _pkey(p) not in seen_keys]
         if gap_grp:
+            await _extract_evidence(field, gap_grp)  # 补检索文献同样抽取要点 + 判分
             groups.append(("空白补充角度", gap_grp))
             papers = _flatten()
-            yield ("references", {"items": [_ref_item(p) for p in papers]})
 
-    # 结构化证据表: 综述前把每篇压成要点行(并发抽取), 既能纳入更多文献又抗"中段被忽略"。
-    yield ("status", {"message": f"共 {len(papers)} 篇文献，正在逐篇抽取结构化要点…"})
-    evidence = await _extract_evidence(papers)
-    index_of = {id(p): i for i, p in enumerate(papers, 1)}
+    # 相关性筛选(T1): 筛掉离题(rel≤1)文献, 让立意/综述只基于真正切题的文献; 不足自动放宽。
+    groups, rel_th = _filter_by_relevance(groups)
+    dropped = len(papers) - sum(len(g) for _, g in groups)
+    papers = _flatten()
+    # 综述前把每篇按相关分从高到低重排, 高相关文献优先进入(受截断影响时也先纳入切题的)。
+    papers.sort(key=_rel_of, reverse=True)
+    evidence: dict[int, dict] = {}
+    index_of: dict[int, int] = {}
+    for i, p in enumerate(papers, 1):
+        index_of[id(p)] = i
+        if isinstance(p.get("_ev"), dict):
+            evidence[i] = p["_ev"]
+    yield ("references", {"items": [_ref_item(p) for p in papers]})
     yield ("evidence", {"items": _evidence_items(papers, evidence)})
+    if dropped > 0:
+        note = f"已按相关性筛掉 {dropped} 篇离题文献" + ("（相关性不足，已放宽保留弱相关文献）" if rel_th <= 1 else "")
+        yield ("status", {"message": note + f"，保留 {len(papers)} 篇进入综述…"})
 
     # Map-Reduce(按子方向分组): 每个子方向先各自归纳现状小结, 再汇总成结构化报告。
     yield ("status", {"message": f"已抽取 {len(evidence)}/{len(papers)} 篇要点，正在按子方向归纳现状…"})

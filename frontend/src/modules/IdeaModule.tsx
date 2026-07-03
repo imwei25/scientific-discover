@@ -5,6 +5,7 @@ import { reportLLMError } from "../lib/errorToast";
 import { addHistory } from "../lib/history";
 import Markdown from "../components/Markdown";
 import EditableMarkdown from "../components/EditableMarkdown";
+import RefineEditor from "../components/RefineEditor";
 import { CanvasSlot } from "../components/Canvas";
 import Dropzone from "../components/Dropzone";
 import { HelpButton } from "../components/HelpButton";
@@ -67,7 +68,16 @@ function quartileRank(r: Reference): number {
   return r.journal_quartile ? Q_RANK[r.journal_quartile] ?? 99 : 99;
 }
 // 文献列表排序: 相关性(原序) / 被引 / 年份 / 影响力 / 分区
+// AI 相关性判分(0-3)的中文标签, 用于文献列表徽标与悬停说明。
+const REL_LABEL: Record<number, string> = { 3: "高相关", 2: "相关", 1: "弱相关", 0: "离题" };
+
 function sortRefs(refs: Reference[], by: string): Reference[] {
+  // 相关性: 优先用 AI 判分(rel 0-3, 高→低), 无判分的排后面并保持后端原序(词面+被引+新近)。
+  if (by === "relevance") {
+    const hasRel = refs.some((r) => typeof r.rel === "number");
+    if (hasRel) return [...refs].sort((a, b) => (b.rel ?? -1) - (a.rel ?? -1));
+    return refs;
+  }
   if (by === "cited") return [...refs].sort((a, b) => (b.cited_by_count ?? 0) - (a.cited_by_count ?? 0));
   if (by === "year") return [...refs].sort((a, b) => (parseInt(b.year) || 0) - (parseInt(a.year) || 0));
   if (by === "impact") return [...refs].sort((a, b) => impactOf(b) - impactOf(a));
@@ -916,6 +926,14 @@ export default function IdeaModule({ goto }: { goto: Goto }) {
                   title="勾选后可只把选中的文献推送到 Zotero"
                   style={{ marginRight: 6 }}
                 />
+                {typeof r.rel === "number" && r.rel >= 0 && (
+                  <span
+                    className={`ref-badge ref-badge-rel ref-badge-rel${r.rel}`}
+                    title={`AI 相关性判分（相对研究方向）：${REL_LABEL[r.rel] ?? r.rel}${r.rel_why ? " · " + r.rel_why : ""}`}
+                  >
+                    {REL_LABEL[r.rel] ?? `相关性 ${r.rel}`}
+                  </span>
+                )}
                 {r.source === "preprint" && <span className="ref-badge ref-badge-preprint">预印本</span>}
                 {r.source === "europepmc" && <span className="ref-badge ref-badge-epmc">Europe PMC</span>}
                 {r.source === "openalex" && <span className="ref-badge ref-badge-openalex">OpenAlex</span>}
@@ -1153,6 +1171,15 @@ export default function IdeaModule({ goto }: { goto: Goto }) {
               testId="result-text"
             />
           </div>
+          {text && !running && (
+            <RefineEditor
+              text={text}
+              onChange={setText}
+              refs={refs}
+              refInfo={citeInfo}
+              testid="idea-refine"
+            />
+          )}
         </div>
       </CanvasSlot>
 

@@ -251,6 +251,19 @@ async def idea_followup_ep(req: RunRequest) -> StreamingResponse:
     return StreamingResponse(gen(), media_type="text/event-stream", headers=SSE_HEADERS)
 
 
+@router.post("/api/edit")
+async def edit_ep(req: RunRequest) -> JSONResponse:
+    """AI 精修: 对已生成文档做精准局部改写, 返回 find/replace 补丁(前端执行替换 + 标黄 + 撤回)。"""
+    from ..edit import surgical_edit
+    try:
+        return JSONResponse(await surgical_edit(req.inputs))
+    except LLMError as e:
+        return JSONResponse({"edits": [], "mode": "none", "note": str(e)}, status_code=200)
+    except Exception as e:  # noqa: BLE001
+        log_swallow("AI 精修端点异常", e)
+        return JSONResponse({"edits": [], "mode": "none", "note": f"精修出错: {type(e).__name__}"}, status_code=200)
+
+
 # ----- 统计顾问(SSE 流式) -----
 
 class StatsAdviceRequest(BaseModel):

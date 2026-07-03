@@ -181,6 +181,8 @@ export interface Reference {
   journal_impact?: number | null; // 影响力指数(OpenAlex 近2年篇均被引); 未知为 null
   journal_quartile?: string | null; // Scimago 医学分区 Q1-Q4(仅医学刊有); 未知为 null
   abstract?: string; // 截断摘要(≤800字): 供写标书阶段据实摘录『支持句』, 前端不直接展示
+  rel?: number; // AI 相关性判分 0-3(相对研究方向): 3=直接相关 2=相关 1=弱相关 0=离题
+  rel_why?: string; // 相关性判分的一句话理由(悬停展示)
 }
 
 export interface EvidenceItem {
@@ -309,6 +311,45 @@ export async function refineTopic(
     return { options: Array.isArray(data.options) ? data.options : [] };
   } catch {
     return { options: [] };
+  }
+}
+
+// AI 精修: 一处 find/replace 补丁。find 逐字取自原文(后端已校验能定位), replace 为改后文本。
+export interface EditPatch {
+  find: string;
+  replace: string;
+  note?: string;
+}
+
+export interface EditResult {
+  edits: EditPatch[];
+  mode: string; // "selection" | "global" | "none"
+  note?: string;
+}
+
+// 调 AI 精修接口(非流式): 传全文 + 修改意见(可带选中段 selection + 文献池 references),
+// 返回一组 find/replace 补丁, 由前端执行替换并标黄。失败返回空补丁 + 说明, 不抛出。
+export async function surgicalEdit(
+  inputs: { text: string; instruction: string; selection?: string; references?: Reference[] },
+  signal?: AbortSignal,
+): Promise<EditResult> {
+  try {
+    const resp = await fetch(apiUrl("/api/edit"), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ module: "edit", inputs }),
+      signal,
+    });
+    if (!resp.ok) return { edits: [], mode: "none", note: `服务返回 ${resp.status}` };
+    const data = await resp.json();
+    return {
+      edits: Array.isArray(data.edits) ? data.edits : [],
+      mode: typeof data.mode === "string" ? data.mode : "none",
+      note: typeof data.note === "string" ? data.note : "",
+    };
+  } catch (e) {
+    if ((e as Error).name === "AbortError") throw e;
+    return { edits: [], mode: "none", note: "网络请求失败" };
   }
 }
 

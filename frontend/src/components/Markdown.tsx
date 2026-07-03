@@ -3,6 +3,63 @@ import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import Mermaid from "./Mermaid";
 
+// AI 精修高亮: 用私有区哨兵字符包住"改动过的文本片段", 由 remarkHighlight 插件渲染成
+// <mark class="ai-edit">(背景标黄)。选私有区码位(U+E000/U+E001), 避免与正文任何字符冲突。
+export const HL_OPEN = String.fromCharCode(0xe000);
+export const HL_CLOSE = String.fromCharCode(0xe001);
+
+// 把若干 [start,end) 原文偏移区间用哨兵包起来(从后往前插, 保证前面的偏移不失效)。
+export function wrapHighlights(text: string, ranges: { start: number; end: number }[]): string {
+  if (!ranges.length) return text;
+  const sorted = [...ranges].filter((r) => r.end > r.start).sort((a, b) => b.start - a.start);
+  let out = text;
+  for (const r of sorted) {
+    out = out.slice(0, r.start) + HL_OPEN + out.slice(r.start, r.end) + HL_CLOSE + out.slice(r.end);
+  }
+  return out;
+}
+
+// remark 插件: 按文档顺序遍历, 遇到 HL_OPEN 开始高亮、HL_CLOSE 结束; 高亮区间内的文本节点
+// 包成 mark 节点(通过 data.hName 让 mdast→hast 渲染为 <mark>)。可跨加粗/链接等行内格式。
+function remarkHighlight() {
+  return (tree: unknown) => {
+    let on = false;
+    const walk = (node: { children?: unknown[] }) => {
+      if (!Array.isArray(node.children)) return;
+      const out: unknown[] = [];
+      for (const child of node.children as { type?: string; value?: string; children?: unknown[] }[]) {
+        if (child.type === "text" && typeof child.value === "string" && (on || child.value.includes(HL_OPEN) || child.value.includes(HL_CLOSE))) {
+          let buf = "";
+          const flush = () => {
+            if (!buf) return;
+            if (on) {
+              out.push({
+                type: "emphasis",
+                data: { hName: "mark", hProperties: { className: ["ai-edit"] } },
+                children: [{ type: "text", value: buf }],
+              });
+            } else {
+              out.push({ type: "text", value: buf });
+            }
+            buf = "";
+          };
+          for (const ch of child.value) {
+            if (ch === HL_OPEN) { flush(); on = true; }
+            else if (ch === HL_CLOSE) { flush(); on = false; }
+            else buf += ch;
+          }
+          flush();
+        } else {
+          if (Array.isArray(child.children)) walk(child);
+          out.push(child);
+        }
+      }
+      node.children = out;
+    };
+    walk(tree as { children?: unknown[] });
+  };
+}
+
 // 引用悬浮卡数据: 按归一化 URL 索引。
 //   label   —— 文献题名(第一作者+年份+标题), 作悬浮卡标题;
 //   finding —— 该文献要点(选题阶段的证据表 finding), 作『无支持句』时的兜底。
@@ -21,12 +78,15 @@ export function normCiteUrl(u: string): string {
 // ```mermaid 代码块(标书技术路线图/甘特图等)渲染成图。
 // refInfo: 传入时, 引用链接悬停会浮出"支持此观点的原文句子"(取自链接 title 的『支持句』),
 //   无支持句则回退显示该文献要点(finding); 二者皆无则为普通链接。
+// highlight: 传入 true 时启用 AI 精修高亮插件(children 里的哨兵区间渲染成标黄)。
 export default function Markdown({
   children,
   refInfo,
+  highlight,
 }: {
   children: string;
   refInfo?: Record<string, CiteInfo>;
+  highlight?: boolean;
 }) {
   // components 必须 memo 化: react-markdown 把这些函数当作组件"类型"使用,
   // 若每次渲染都新建函数, 其 <Mermaid> 子树会在每个 token 被 remount, debounce 计时器
@@ -75,9 +135,14 @@ export default function Markdown({
     [refInfo],
   );
 
+  const plugins = useMemo(
+    () => (highlight ? [remarkGfm, remarkHighlight] : [remarkGfm]),
+    [highlight],
+  );
+
   return (
     <div className="markdown">
-      <ReactMarkdown remarkPlugins={[remarkGfm]} components={components}>
+      <ReactMarkdown remarkPlugins={plugins} components={components}>
         {children}
       </ReactMarkdown>
     </div>

@@ -87,6 +87,7 @@ STAGES: dict[str, str] = {
     "imrad": "论文撰写（IMRaD 装配）",
     "analysis": "数据分析（写代码/结论解读）",
     "deai": "去 AI 味改写",
+    "edit": "AI 精修（局部改写/补丁）",
     "journal_match": "期刊匹配理由",
     "rebuttal": "回复审稿意见",
     "refcheck": "参考文献核查",
