@@ -99,6 +99,19 @@ function refsCitedIn(body: string, all: Reference[]): Reference[] {
 
 const refKey = (r: Reference) => r.pmid || r.url || r.title;
 
+// 把选题卡的候选方向拼回 Markdown「候选选题」章节, 供导出/复制时补回报告(报告正文已剥离候选段)。
+function candidatesMd(card: TopicCard | null): string {
+  if (!card || !card.candidates.length) return "";
+  const lines: string[] = ["", "## 候选选题", ""];
+  for (const c of card.candidates) {
+    lines.push(`### 候选选题${c.n}：${c.title}`);
+    if (c.body) lines.push(c.body);
+    if (c.feasibility != null) lines.push(`> 可行性 ★${c.feasibility}/5｜创新性 ★${c.innovation ?? "-"}/5`);
+    lines.push("");
+  }
+  return lines.join("\n");
+}
+
 // 向导步骤定义
 const STEPS = [
   { n: 1, title: "研究方向", desc: "领域 · 关键词 · 相关资料" },
@@ -397,7 +410,8 @@ export default function IdeaModule({ goto }: { goto: Goto }) {
       <div className="wiz-steps" data-testid="wiz-steps">
         {STEPS.map((s) => {
           const state = step === s.n ? "current" : s.n < step ? "done" : "todo";
-          const clickable = s.n <= maxStep && !running;
+          // 生成过程中也允许回看已到达的步骤(检索/生成的流写入的是持久化状态, 不受当前显示步骤影响, 返回不打断)。
+          const clickable = s.n <= maxStep;
           return (
             <button
               key={s.n}
@@ -497,7 +511,7 @@ export default function IdeaModule({ goto }: { goto: Goto }) {
             </label>
             <div className="field" data-testid="filters">
               <span className="field-label">时间范围</span>
-              <div className="filter-row">
+              <div className="filter-row filter-chips">
                 {([["1", "近 1 年"], ["2", "近 2 年"], ["3", "近 3 年"], ["4", "近 4 年"], ["5", "近 5 年"], ["", "不限"]] as const).map(
                   ([val, label]) => (
                     <label key={val || "all"} className={`type-chip${yearsBack === val ? " on" : ""}`}>
@@ -532,7 +546,7 @@ export default function IdeaModule({ goto }: { goto: Goto }) {
             </div>
             <div className="field" data-testid="quality-filters">
               <span className="field-label">文献质量（检索时预筛，默认不限）</span>
-              <div className="filter-row">
+              <div className="filter-row filter-quality">
                 <label className="filter-quartile-label" title="按 Scimago(SJR) 分区过滤; 仅医学期刊有分区数据">
                   分区≥
                   <select data-testid="filter-quartile" value={minQuartile} onChange={(e) => setMinQuartile(e.target.value)}>
@@ -725,7 +739,7 @@ export default function IdeaModule({ goto }: { goto: Goto }) {
           )}
 
           <div className="wiz-nav">
-            <button className="btn-ghost" onClick={() => setStep(2)} disabled={running} data-testid="wiz-back-3">← 上一步</button>
+            <button className="btn-ghost" onClick={() => setStep(2)} data-testid="wiz-back-3">← 上一步</button>
             {running ? (
               <button className="btn-ghost" onClick={stop} data-testid="stop-btn">停止检索</button>
             ) : (
@@ -763,7 +777,7 @@ export default function IdeaModule({ goto }: { goto: Goto }) {
                     data-testid="copy-report-btn"
                     onClick={async () => {
                       const refMd = refs.length ? "\n\n## 参考文献\n" + refs.map((r) => `- [${r.first_author} (${r.year}). ${r.title}](${r.url})`).join("\n") : "";
-                      try { await navigator.clipboard.writeText(stripSupportQuotes(text) + refMd); setCopied(true); window.setTimeout(() => setCopied(false), 1800); }
+                      try { await navigator.clipboard.writeText(stripSupportQuotes(text) + candidatesMd(card) + refMd); setCopied(true); window.setTimeout(() => setCopied(false), 1800); }
                       catch { setStatus("复制失败：浏览器未授权剪贴板，请手动选择复制"); window.setTimeout(() => setStatus((s) => (s.startsWith("复制失败") ? "" : s)), 4000); }
                     }}
                     title="把调研报告（含参考文献）复制到剪贴板"
@@ -777,7 +791,7 @@ export default function IdeaModule({ goto }: { goto: Goto }) {
                     data-testid="export-md-btn"
                     onClick={() => {
                       const refMd = refs.length ? "\n\n## 参考文献\n" + refs.map((r) => `- [${r.first_author} (${r.year}). ${r.title}](${r.url})`).join("\n") : "";
-                      downloadText(tsName("选题调研", "md"), stripSupportQuotes(text) + refMd);
+                      downloadText(tsName("选题调研", "md"), stripSupportQuotes(text) + candidatesMd(card) + refMd);
                     }}
                   >
                     导出 Markdown
@@ -790,7 +804,7 @@ export default function IdeaModule({ goto }: { goto: Goto }) {
                       setWordBusy(true);
                       try {
                         const refMd = refs.length ? "\n\n## 参考文献\n" + refs.map((r) => `- [${r.first_author} (${r.year}). ${r.title}](${r.url})`).join("\n") : "";
-                        await downloadDocxFromText(tsName("选题调研", "docx"), stripSupportQuotes(text) + refMd);
+                        await downloadDocxFromText(tsName("选题调研", "docx"), stripSupportQuotes(text) + candidatesMd(card) + refMd);
                       } catch (e) { setStatus(`导出 Word 失败：${(e as Error).message}`); window.setTimeout(() => setStatus((s) => (s.startsWith("导出 Word 失败") ? "" : s)), 5000); }
                       finally { setWordBusy(false); }
                     }}
@@ -805,7 +819,7 @@ export default function IdeaModule({ goto }: { goto: Goto }) {
                       setWordBusy(true);
                       try {
                         const refMd = refs.length ? "\n\n## 参考文献\n" + refs.map((r) => `- [${r.first_author} (${r.year}). ${r.title}](${r.url})`).join("\n") : "";
-                        await downloadPdfFromText(tsName("选题调研", "pdf"), stripSupportQuotes(text) + refMd, field || "选题调研");
+                        await downloadPdfFromText(tsName("选题调研", "pdf"), stripSupportQuotes(text) + candidatesMd(card) + refMd, field || "选题调研");
                       } catch (e) { setStatus(`导出 PDF 失败：${(e as Error).message}`); window.setTimeout(() => setStatus((s) => (s.startsWith("导出 PDF 失败") ? "" : s)), 5000); }
                       finally { setWordBusy(false); }
                     }}
@@ -945,7 +959,7 @@ export default function IdeaModule({ goto }: { goto: Goto }) {
           )}
 
           <div className="wiz-nav">
-            <button className="btn-ghost" onClick={() => setStep(3)} disabled={running} data-testid="wiz-back-4">← 返回文献</button>
+            <button className="btn-ghost" onClick={() => setStep(3)} data-testid="wiz-back-4">← 返回文献</button>
             <button className="btn-ghost" onClick={reset} disabled={running} data-testid="reset-btn">重新开始</button>
           </div>
         </div>

@@ -617,9 +617,13 @@ test("数据分析: 切换模块后图表/代码/结论仍保留", async ({ page
   await page.getByTestId("nav-idea").click();
   await page.getByTestId("nav-analyze").click();
   await expect(page.getByTestId("chart-0")).toBeVisible();
-  await expect(page.getByTestId("code-block")).toContainText("t检验");
-  await expect(page.getByTestId("output-block")).toContainText("p=0.04");
   await expect(page.getByTestId("result-text")).toContainText("A组显著高于B组");
+  // 代码/原始输出改为弹出式: 点开查看
+  await page.getByTestId("show-code-btn").click();
+  await expect(page.getByTestId("code-block")).toContainText("t检验");
+  await page.getByTestId("analyze-popup-close").click();
+  await page.getByTestId("show-output-btn").click();
+  await expect(page.getByTestId("output-block")).toContainText("p=0.04");
 });
 
 test("数据分析: 生成图注", async ({ page }) => {
@@ -1164,14 +1168,22 @@ test("数据分析: AI写代码执行并输出结论", async ({ page }) => {
   await expect(page.getByTestId("input-file-info")).toContainText("data.csv");
   await page.getByTestId("input-question").fill("A组和B组是否有差异");
   await page.getByTestId("run-btn").click();
-  await expect(page.getByTestId("code-block")).toContainText("t检验");
+  // 第二阶段: 结论(左) + 图表(右)
   await expect(page.getByTestId("chart-0")).toBeVisible();
-  await expect(page.getByTestId("output-block")).toContainText("p=0.01");
   await expect(page.getByTestId("result-text")).toContainText("A组显著高于B组");
-  // 逐图下载按钮(按所选格式)
-  const dl = page.waitForEvent("download");
-  await page.getByTestId("chart-download-0").click();
-  expect((await dl).suggestedFilename()).toMatch(/\.svg$/);
+  // 逐图下载按钮(按所选格式) —— 支持单独下载图片
+  const [dl] = await Promise.all([
+    page.waitForEvent("download"),
+    page.getByTestId("chart-download-0").dispatchEvent("click"),
+  ]);
+  expect(dl.suggestedFilename()).toMatch(/\.svg$/);
+  // 代码/原始输出为弹出式
+  await page.getByTestId("show-code-btn").click();
+  await expect(page.getByTestId("code-block")).toContainText("t检验");
+  await page.getByTestId("analyze-popup-close").click();
+  await page.getByTestId("show-output-btn").click();
+  await expect(page.getByTestId("output-block")).toContainText("p=0.01");
+  await page.getByTestId("analyze-popup-close").click();
   // 完成后可导出完整报告
   await expect(page.getByTestId("export-report-btn")).toBeVisible();
 });

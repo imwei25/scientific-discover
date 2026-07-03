@@ -104,7 +104,47 @@ def _image_flowable(b64: str, avail_w: float, avail_h: float):
         return None
 
 
+def _build_plain_pdf(text: str, title: str = "") -> bytes:
+    """兜底: 富排版失败时, 退回最朴素的逐段纯文本 PDF, 保证导出永不 500。"""
+    _ensure_font()
+    buf = io.BytesIO()
+    doc = SimpleDocTemplate(buf, pagesize=A4, leftMargin=_MARGIN, rightMargin=_MARGIN,
+                            topMargin=_MARGIN, bottomMargin=_MARGIN, title=title or "文档")
+    body = ParagraphStyle("plain", fontName=_FONT, fontSize=11, leading=18, spaceAfter=6)
+    story = []
+    for line in (text or "（无内容）").split("\n"):
+        s = line.strip()
+        if not s:
+            continue
+        # 去掉 markdown 记号, 只保留可读文本; 长 URL 允许换行避免超宽。
+        s = re.sub(r"[#>*`|]", " ", s)
+        s = re.sub(r"\[([^\]]*)\]\((https?://[^)\s]+)\)", r"\1", s)
+        try:
+            story.append(Paragraph(_esc(s), body))
+        except Exception:  # noqa: BLE001
+            continue
+    if not story:
+        story.append(Paragraph("（无内容）", body))
+    doc.build(story)
+    return buf.getvalue()
+
+
 def build_pdf(text: str, title: str = "") -> bytes:
+    """富排版 PDF; 任何异常都退回纯文本兜底, 保证不 500。"""
+    try:
+        return _build_pdf_rich(text, title)
+    except Exception:  # noqa: BLE001
+        import traceback
+        print("[pdf] rich build failed, fallback to plain:\n" + traceback.format_exc(), flush=True)
+        try:
+            return _build_plain_pdf(text, title)
+        except Exception:  # noqa: BLE001
+            print("[pdf] plain build also failed:\n" + traceback.format_exc(), flush=True)
+            # 最后兜底: 一页只写一句提示, 绝不抛错。
+            return _build_plain_pdf("导出内容渲染失败，请改用「导出 Word / Markdown」。", title)
+
+
+def _build_pdf_rich(text: str, title: str = "") -> bytes:
     _ensure_font()
     buf = io.BytesIO()
     doc = SimpleDocTemplate(

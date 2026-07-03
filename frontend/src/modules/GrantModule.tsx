@@ -382,7 +382,8 @@ export default function GrantModule() {
       <div className="wiz-steps" data-testid="grant-steps">
         {STEPS.map((s) => {
           const state = step === s.n ? "current" : s.n < step ? "done" : "todo";
-          const clickable = (s.n === 1 || (s.n === 2 && (sections.length > 0 || running))) && !running;
+          // 撰写过程中也可返回准备步骤查看/微调(流写入持久化状态, 返回不打断生成)。
+          const clickable = s.n === 1 || (s.n === 2 && (sections.length > 0 || running));
           return (
             <button key={s.n} type="button" className={`wiz-step ${state}`} data-testid={`grant-step-${s.n}`} disabled={!clickable} onClick={() => clickable && setStep(s.n)}>
               <span className="wiz-step-num">{s.n < step ? "✓" : s.n}</span>
@@ -587,7 +588,7 @@ export default function GrantModule() {
           )}
 
           <div className="wiz-nav">
-            <button className="btn-ghost" onClick={() => setStep(1)} disabled={running} data-testid="grant-back-btn">← 返回准备</button>
+            <button className="btn-ghost" onClick={() => setStep(1)} data-testid="grant-back-btn">← 返回准备</button>
             <button className="btn-ghost" onClick={reset} disabled={running} data-testid="grant-reset-btn">重新开始</button>
           </div>
         </div>

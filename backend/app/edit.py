@@ -94,22 +94,30 @@ async def _selection_edit(
     }
 
 
-async def _global_edit(text: str, instruction: str, refs_ctx: str) -> dict:
-    """整体意见精修: 让 LLM 给出若干处最小化 find/replace 补丁, find 逐字取自原文。"""
+async def _global_edit(text: str, instruction: str, refs_ctx: str, focus: str = "") -> dict:
+    """整体意见精修: 让 LLM 给出若干处最小化 find/replace 补丁, find 逐字取自原文。
+
+    focus: 用户在预览里圈定的重点(可能是渲染后的文本, 与原 Markdown 记号略有出入);
+    给出时让模型在原文里定位对应位置优先改动, 但 find 仍须逐字取自【原文】。
+    """
     system = (
         "你是资深中文科研写作编辑, 正在对一份文档做【精准局部修改】, 不重写全文。"
+        "你能看到【完整原文】作为上下文——即使用户意见里提到前文的概念/术语, 也请结合全文理解后再改。"
         "根据用户的修改意见, 找出文档里【需要改动的具体位置】, 给出最小化的替换补丁。\n"
         "只输出一个 JSON 对象: {\"edits\":[{\"find\":\"...\",\"replace\":\"...\",\"note\":\"一句话说明改了什么\"}]}，"
         "不要任何解释。规则:\n"
-        "1) find 必须是从【原文】里【逐字复制】的一段连续文本(含标点/换行), 要足够长且唯一, 能在原文精确定位;"
-        " 严禁改写 find, 否则无法替换;\n"
+        "1) find 必须是从【原文】里【逐字复制】的一段连续文本(含标点/换行/Markdown 记号如 ** 或 [](url)),"
+        " 要足够长且唯一, 能在原文精确定位; 严禁改写 find, 否则无法替换;\n"
         "2) replace 是该处改后的文本; 只改真正需要动的地方, 不要把没提到的内容也改了;\n"
         f"3) 补丁数控制在 {_MAX_EDITS} 处以内, 优先改动最关键的位置;\n"
         "4) 若涉及文献引用, 只能用下面【可引用的真实文献】中确有的文献, 严禁编造链接; " + _QUOTE_RULE + "\n"
-        "5) 若用户意见无需改动或无法定位, 返回 {\"edits\":[]}。"
+        "5) 用户若圈定了【重点段落】, 优先在其对应的原文位置改动(该重点可能是渲染后文本, 请在原文里找到对应处);\n"
+        "6) 尽量给出至少一处可应用的改动; 只有当意见确实与本文无关时才返回 {\"edits\":[]}。"
     )
+    focus_block = f"【用户圈定的重点段落(渲染文本, 请在原文定位对应处优先改)】\n{focus}\n\n" if focus else ""
     user = (
-        f"【原文】\n{text[:9000]}\n\n"
+        f"【原文(完整上下文)】\n{text[:12000]}\n\n"
+        f"{focus_block}"
         f"【用户的修改意见】\n{instruction}\n\n"
         f"【可引用的真实文献】\n{refs_ctx or '（无, 如需引用请勿编造链接）'}"
     )
@@ -158,9 +166,11 @@ async def surgical_edit(inputs: dict) -> dict:
         return {"edits": [], "mode": "none", "note": "请填写修改意见。"}
 
     refs_ctx = _refs_block(refs)
-    # 选段模式: selection 非空且确实在原文里, 才走局部重写; 否则退回整体意见。
+    # 选段模式: selection 非空且确实是原文的逐字子串(如从源码选), 才走精确局部重写;
+    # 否则(如在渲染预览里选中, 与 Markdown 记号有出入)退回整体意见, 但把选中文本作为「重点」传入,
+    # 让模型据完整原文 + 重点提示定位后给补丁——既有完整上下文, 又不丢用户圈定的目标。
     if selection.strip() and selection in text:
         out = await _selection_edit(text, selection, instruction, refs_ctx)
     else:
-        out = await _global_edit(text, instruction, refs_ctx)
+        out = await _global_edit(text, instruction, refs_ctx, focus=selection.strip())
     return _validate(text, out)

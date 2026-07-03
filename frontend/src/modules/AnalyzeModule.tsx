@@ -127,6 +127,46 @@ export default function AnalyzeModule({ goto }: { goto: Goto }) {
           padding: 8px 12px; margin: 6px 0 12px; border-radius: 8px;
           background: #fff7ed; border: 1px solid #fed7aa; color: #9a3412; font-size: 12.5px; line-height: 1.6;
         }
+        /* 第二阶段: 结论左 / 图片右 两栏 */
+        .analyze-cols {
+          display: grid; grid-template-columns: minmax(0, 1.05fr) minmax(0, 0.95fr);
+          gap: 16px; align-items: start;
+        }
+        @media (max-width: 900px) { .analyze-cols { grid-template-columns: 1fr; } }
+        .analyze-col-right .analysis-block { margin-top: 0; }
+        .analyze-col-right .charts { display: flex; flex-direction: column; gap: 12px; }
+        .analyze-noimg {
+          padding: 24px; text-align: center; color: var(--faint, #5b6675);
+          border: 1px dashed var(--line, #e3e8ef); border-radius: 10px; background: var(--surface, #f7f9fc);
+        }
+        /* 弹出式入口条 */
+        .analyze-popbar { display: flex; flex-wrap: wrap; gap: 8px; margin: 4px 0 10px; }
+        /* 弹出层 */
+        .analyze-popup-overlay {
+          position: fixed; inset: 0; z-index: 60; background: rgba(15,23,32,.42);
+          display: flex; align-items: center; justify-content: center; padding: 24px;
+          animation: analyze-pop-in 140ms ease;
+        }
+        @keyframes analyze-pop-in { from { opacity: 0 } to { opacity: 1 } }
+        .analyze-popup {
+          background: var(--surface-1, #fff); color: var(--ink, #1f2733);
+          border: 1px solid var(--line, #e3e8ef); border-radius: 12px;
+          max-width: min(920px, 94vw); max-height: 86vh; width: 100%;
+          display: flex; flex-direction: column; box-shadow: 0 18px 50px rgba(0,0,0,.28);
+        }
+        .analyze-popup-head {
+          display: flex; align-items: center; justify-content: space-between; gap: 12px;
+          padding: 12px 16px; border-bottom: 1px solid var(--line, #e3e8ef); font-weight: 600;
+        }
+        .analyze-popup-close {
+          border: none; background: transparent; cursor: pointer; font-size: 16px;
+          color: var(--faint, #5b6675); border-radius: 6px; width: 28px; height: 28px;
+        }
+        .analyze-popup-close:hover { background: var(--surface, #f3f5f8); color: var(--ink, #1f2733); }
+        .analyze-popup-body { padding: 16px; overflow: auto; }
+        .analyze-popup-body .stats-pre {
+          margin: 0; white-space: pre-wrap; word-break: break-word; font-size: 13px; line-height: 1.6;
+        }
       `}</style>
     </div>
   );

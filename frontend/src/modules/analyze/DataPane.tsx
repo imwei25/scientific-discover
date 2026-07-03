@@ -3,7 +3,6 @@ import { streamAnalyze, streamAnalyzeRefine, ChartItem, PlanCard } from "../../l
 import { reportLLMError } from "../../lib/errorToast";
 import { usePersistentState } from "../../lib/usePersistentState";
 import { addHistory } from "../../lib/history";
-import { CanvasSlot } from "../../components/Canvas";
 import DeidentifyDialog, { DeidScanResult } from "../../components/DeidentifyDialog";
 import { apiUrl } from "../../lib/api";
 import type { Goto } from "../../App";
@@ -39,6 +38,9 @@ export default function DataPane({ goto }: { goto: Goto }) {
   const [scanFile, setScanFile] = useState<File | null>(null);
   const [deidOpen, setDeidOpen] = useState(false);
 
+  // 两阶段: 1 数据与方案(上传+设置) → 2 分析结果。点「开始方案」进入第二阶段。
+  const [step, setStep] = usePersistentState<number>("analyze:step", 1);
+  const goStage2 = () => setStep(2);
   const [status, setStatus] = useState("");
   const [plan, setPlan] = usePersistentState<PlanCard[]>("analyze:plan", []);
   const [code, setCode] = usePersistentState("analyze:code", "");
@@ -171,6 +173,7 @@ export default function DataPane({ goto }: { goto: Goto }) {
   const run = async () => {
     if (!file || running) return;
     abortedRef.current = false;
+    goStage2();
     setStatus("");
     setPlan([]);
     setCode("");
@@ -279,6 +282,7 @@ export default function DataPane({ goto }: { goto: Goto }) {
     setFileErr("");
     setQuestion("");
     clearResults();
+    setStep(1);
   };
 
   // ─── 森林图: 调 /api/analyze/forest ───────────────────────────
@@ -309,6 +313,7 @@ export default function DataPane({ goto }: { goto: Goto }) {
       if (!resp.ok) throw new Error(`服务返回错误 ${resp.status}`);
       const data: ForestResult = await resp.json();
       setForestResult(data);
+      goStage2();
     } catch (e) {
       setForestErr(`生成失败: ${(e as Error).message}`);
     } finally {
@@ -337,6 +342,7 @@ export default function DataPane({ goto }: { goto: Goto }) {
       if (!resp.ok) throw new Error(`服务返回错误 ${resp.status}`);
       const data: KMResult = await resp.json();
       setKmResult(data);
+      goStage2();
     } catch (e) {
       setKmErr(`生成失败: ${(e as Error).message}`);
     } finally {
@@ -364,6 +370,7 @@ export default function DataPane({ goto }: { goto: Goto }) {
       if (!resp.ok) throw new Error(`服务返回错误 ${resp.status}`);
       const data: ROCResult = await resp.json();
       setRocResult(data);
+      goStage2();
     } catch (e) {
       setRocErr(`生成失败: ${(e as Error).message}`);
     } finally {
@@ -380,8 +387,26 @@ export default function DataPane({ goto }: { goto: Goto }) {
   const removeForestRow = (i: number) =>
     setForestRows((prev) => (prev.length > 1 ? prev.filter((_, idx) => idx !== i) : prev));
 
+  const canStage2 = !!(conclusion || charts.length > 0 || output || forestResult || kmResult || rocResult || running);
+
   return (
     <>
+      {/* 两阶段步骤条 */}
+      <div className="wiz-steps" data-testid="analyze-steps">
+        {[{ n: 1, title: "数据与方案", desc: "上传数据 · 说明目的" }, { n: 2, title: "分析结果", desc: "结论 · 图表 · 代码" }].map((s) => {
+          const state = step === s.n ? "current" : s.n < step ? "done" : "todo";
+          const clickable = s.n === 1 || canStage2;
+          return (
+            <button key={s.n} type="button" className={`wiz-step ${state}`} data-testid={`analyze-step-${s.n}`} disabled={!clickable} onClick={() => clickable && setStep(s.n)}>
+              <span className="wiz-step-num">{s.n < step ? "✓" : s.n}</span>
+              <span className="wiz-step-text"><span className="wiz-step-title">{s.title}</span><span className="wiz-step-desc">{s.desc}</span></span>
+            </button>
+          );
+        })}
+      </div>
+
+      {/* ── 第 1 阶段：数据与方案 ── */}
+      <div style={{ display: step === 1 ? "block" : "none" }} data-testid="analyze-stage-1">
       {/* 文件上传区(所有图表类型共用) */}
       <div className="form">
         <UploadArea
@@ -421,7 +446,7 @@ export default function DataPane({ goto }: { goto: Goto }) {
 
             <div className="form-actions">
               <button className="btn-primary" onClick={run} disabled={!file || running} data-testid="run-btn">
-                {running ? "分析中…" : "开始分析"}
+                {running ? "分析中…" : "开始方案 →"}
               </button>
               {running && (
                 <button className="btn-ghost" onClick={stop} data-testid="stop-btn">停止</button>
@@ -485,42 +510,39 @@ export default function DataPane({ goto }: { goto: Goto }) {
           />
         )}
       </div>
+      {/* 校验/生成错误留在第一阶段 */}
+      {chartType === "forest" && forestErr && <div className="result-error" data-testid="forest-error">{forestErr}</div>}
+      {chartType === "km" && kmErr && <div className="result-error" data-testid="km-error">{kmErr}</div>}
+      {chartType === "roc" && rocErr && <div className="result-error" data-testid="roc-error">{rocErr}</div>}
+      </div>
 
-      {/* ─── 各类结果 ───────────────────────────────────────────── */}
-      {chartType === "forest" && forestErr && (
-        <div className="result-error" data-testid="forest-error">{forestErr}</div>
-      )}
-      {chartType === "forest" && forestResult && (
-        <CanvasSlot><ForestResultPanel result={forestResult} effect={forestEffect} /></CanvasSlot>
-      )}
+      {/* ── 第 2 阶段：分析结果 ── */}
+      <div style={{ display: step === 2 ? "block" : "none" }} data-testid="analyze-stage-2">
+        <div className="wiz-nav" style={{ marginBottom: 12, borderTop: "none", paddingTop: 0 }}>
+          <button className="btn-ghost" onClick={() => setStep(1)} data-testid="analyze-back-btn">← 返回数据与方案</button>
+        </div>
 
-      {chartType === "km" && kmErr && (
-        <div className="result-error" data-testid="km-error">{kmErr}</div>
-      )}
-      {chartType === "km" && kmResult && <CanvasSlot><KMResultPanel result={kmResult} /></CanvasSlot>}
+        {chartType === "forest" && forestResult && <ForestResultPanel result={forestResult} effect={forestEffect} />}
+        {chartType === "km" && kmResult && <KMResultPanel result={kmResult} />}
+        {chartType === "roc" && rocResult && <ROCResultPanel result={rocResult} />}
 
-      {chartType === "roc" && rocErr && (
-        <div className="result-error" data-testid="roc-error">{rocErr}</div>
-      )}
-      {chartType === "roc" && rocResult && <CanvasSlot><ROCResultPanel result={rocResult} /></CanvasSlot>}
-
-      {/* ─── 通用模式: 原有结果区 ───────────────────────────────── */}
-      <GeneralResults
-        chartType={chartType}
-        goto={goto}
-        status={status}
-        error={error}
-        plan={plan}
-        code={code}
-        charts={charts}
-        captions={captions}
-        setCaptions={setCaptions}
-        output={output}
-        conclusion={conclusion}
-        setConclusion={setConclusion}
-        running={running}
-        question={question}
-      />
+        {/* ─── 通用模式: 结论左/图片右, 方案&代码&输出弹出式 ─── */}
+        <GeneralResults
+          chartType={chartType}
+          goto={goto}
+          status={status}
+          error={error}
+          plan={plan}
+          code={code}
+          charts={charts}
+          captions={captions}
+          setCaptions={setCaptions}
+          output={output}
+          conclusion={conclusion}
+          setConclusion={setConclusion}
+          running={running}
+          question={question}
+        />
 
       {/* 继续对话: 首轮分析出结果后, 可反复提新需求让 AI 在现有代码上改 */}
       {chartType === "general" && code && (
@@ -556,6 +578,7 @@ export default function DataPane({ goto }: { goto: Goto }) {
           )}
         </div>
       )}
+      </div>
 
       {/* 脱敏对话框 */}
       <DeidentifyDialog
