@@ -3,6 +3,8 @@ backend/.venv/
 __pycache__/
 *.pyc
 backend/.env
+# 出厂内置的硅基流动默认 key(打包进 exe, 但绝不能进公开仓库, 否则被密钥扫描封禁)
+backend/app/default_provider.py
 
 # Node
 frontend/node_modules/

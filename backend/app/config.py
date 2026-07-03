@@ -89,6 +89,14 @@ def _load_env() -> Path:
 _ENV_PATH = _load_env()
 
 
+# 出厂内置默认供应商(硅基流动): 打包版随 exe 附带一把 key, 让客户不配任何 key 也能开箱即用。
+# 该模块被 .gitignore 忽略、只存在于打包机器上(公开仓库里没有它), 缺失时降级为"无内置默认"。
+try:
+    from .default_provider import DEFAULT_LLM as _BUNDLED_LLM  # type: ignore
+except Exception:  # noqa: BLE001  源码仓库/CI 上没有该文件 → 无内置默认
+    _BUNDLED_LLM = None
+
+
 def _bool(name: str, default: bool = False) -> bool:
     val = os.getenv(name)
     if val is None:
@@ -145,6 +153,18 @@ class Settings:
         self.base_url = os.getenv("LLM_BASE_URL", "https://api.deepseek.com").strip().rstrip("/")
         self.model = os.getenv("LLM_MODEL", "deepseek-chat").strip()
         self.mock = _bool("MOCK_LLM", False)
+
+        # 出厂默认: 客户没在设置里填自己的 LLM_API_KEY 时, 套用打包内置的硅基流动 key,
+        # 让应用开箱即用(作主供应商)。客户一旦填了自己的 key(env 非空), 就走客户自己的,
+        # 这里不覆盖。provider/base_url/model 一并取内置默认(否则会拿 DeepSeek 的默认地址,
+        # 把硅基流动 key 打到 DeepSeek 端点 → 401)。
+        self.using_bundled_key = False
+        if not self.api_key and not self.mock and _BUNDLED_LLM and _BUNDLED_LLM.get("api_key"):
+            self.provider = (_BUNDLED_LLM.get("provider") or "openai").strip().lower()
+            self.api_key = _BUNDLED_LLM["api_key"].strip()
+            self.base_url = (_BUNDLED_LLM.get("base_url") or "").strip().rstrip("/")
+            self.model = (_BUNDLED_LLM.get("model") or "").strip()
+            self.using_bundled_key = True
         self.port = _int("PORT", 8756, lo=1, hi=65535)
         # 监听地址：127.0.0.1=仅本机；0.0.0.0=同时允许局域网访问
         self.host = os.getenv("HOST", "127.0.0.1").strip()

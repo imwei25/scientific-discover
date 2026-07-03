@@ -298,6 +298,13 @@ def _gen_code_messages(profile: str, question: str, explore: str = "", routing: 
         "⑧ 只使用已加载的 df，列名务必使用上面【数据画像】中真实存在的列名，不要臆造列名。\n"
         "pingouin 注意：当前版本结果列名为下划线（如 p_val、cohen_d、CI95），没有连字符或百分号；"
         "获取数值建议先 print(整个结果表)，再用 res['p_val'].iloc[0] 这类按位置取值，切勿硬编码 'p-val' 等不存在的列名。\n"
+        "⑨ 【严禁臆测“中间对象”的列名/索引标签】——这是最高频的 KeyError 来源，务必遵守：\n"
+        "  · pd.get_dummies() 生成的哑变量列名随数据取值而定、且 drop_first 会丢掉基准列，"
+        "**绝不要硬编码**诸如 '治疗方案_B' 的哑变量列名；需要时先 print(dummies.columns.tolist()) 或用 df.filter(like=...) 选取；\n"
+        "  · 对 Kaplan-Meier 生存函数、或任何带浮点/时间索引的对象，取某时刻的值要用接口/按位置"
+        "（如 kmf.survival_function_at_times(t)、.iloc[...]），**禁止用 .loc[标量标签]** 硬取（该标签往往不在索引里 → KeyError）；\n"
+        "  · 送入 statsmodels 的 endog/exog（如 sm.Logit(y, X)）必须先把分类自变量全部数值化、并对 y 与 X 一起 dropna 对齐，"
+        "X 不得含 object/字符串列（否则 statsmodels 抛 TypeError）；必要时用 sm.add_constant(X)。\n"
         "只输出一个 Python 代码块，不要额外解释。"
     )
     parts = [f"【数据画像】\n{profile}", f"【研究用途】\n{question or '（用户未填写，请你根据数据自行判断最有价值的分析方向）'}"]
@@ -524,7 +531,12 @@ result = {"ok": True, "error": None}
 g = {"df": df, "pd": pd, "np": np, "plt": plt, "stats": stats, "sm": sm, "pg": pg, "lifelines": lifelines}
 try:
     exec(compile(code, "analysis.py", "exec"), g)
-except Exception:
+except KeyboardInterrupt:
+    raise
+except BaseException:
+    # 用 BaseException(排除 KeyboardInterrupt): AI 代码里误用的 exit()/sys.exit()
+    # 会抛 SystemExit(不是 Exception), 过去它会穿透到进程退出、不写 out.json ->
+    # 用户只看到无信息的"未产生结果"; 现在一并捕获, 把真实 traceback 写进结果。
     result["ok"] = False
     tb = traceback.format_exc()
     # 附上真实数据诊断(列与 dtype、形状): 研究表明喂"运行时变量状态"比只喂 traceback
@@ -542,37 +554,73 @@ except Exception:
 finally:
     sys.stdout = _old
 
+# stdout 先落进 result: 即便后续出图/序列化崩溃, 也不至于丢掉已经算好的文本结果。
+result["stdout"] = buf.getvalue()
+
 # 即便代码用了需要 LaTeX 的样式, 也强制关闭 usetex, 避免本机无 LaTeX 时出图失败
 plt.rcParams["text.usetex"] = False
 # 每张图: 始终产出用于网页内联展示的 png(120dpi); 另产出用户所选格式的可下载资产
 # (高清 png 300dpi / svg 矢量 / pdf 矢量), 满足投稿需求。
+# 整段出图再包一层 try: 出图崩溃不应连累已算好的 stdout(否则"算完了却因存图失败而全丢")。
 charts = []
-for num in plt.get_fignums():
-    fig = plt.figure(num)
-    bd = io.BytesIO()
-    try:
-        fig.savefig(bd, format="png", dpi=120, bbox_inches="tight")
-        disp = base64.b64encode(bd.getvalue()).decode()
-    except Exception:
-        continue
-    data, ext = disp, "png"
-    try:
-        be = io.BytesIO()
-        if _FMT in ("svg", "pdf"):
-            fig.savefig(be, format=_FMT, bbox_inches="tight")
-            ext = _FMT
-        else:
-            fig.savefig(be, format="png", dpi=300, bbox_inches="tight")
-            ext = "png"
-        data = base64.b64encode(be.getvalue()).decode()
-    except Exception:
+try:
+    for num in plt.get_fignums():
+        fig = plt.figure(num)
+        bd = io.BytesIO()
+        try:
+            fig.savefig(bd, format="png", dpi=120, bbox_inches="tight")
+            disp = base64.b64encode(bd.getvalue()).decode()
+        except Exception:
+            continue
         data, ext = disp, "png"
-    charts.append({"png": disp, "data": data, "ext": ext})
-result["stdout"] = buf.getvalue()
+        try:
+            be = io.BytesIO()
+            if _FMT in ("svg", "pdf"):
+                fig.savefig(be, format=_FMT, bbox_inches="tight")
+                ext = _FMT
+            else:
+                fig.savefig(be, format="png", dpi=300, bbox_inches="tight")
+                ext = "png"
+            data = base64.b64encode(be.getvalue()).decode()
+        except Exception:
+            data, ext = disp, "png"
+        charts.append({"png": disp, "data": data, "ext": ext})
+except Exception:
+    pass
 result["charts"] = charts
-with open(sys.argv[3], "w", encoding="utf-8") as f:
-    json.dump(result, f, ensure_ascii=False)
+# 始终写出 out.json; 万一 result 里混入不可序列化对象导致 dump 失败, 退回只写核心字段,
+# 保证主进程一定能读到 stdout 与 error(而不是拿到"未产生结果")。
+try:
+    with open(sys.argv[3], "w", encoding="utf-8") as f:
+        json.dump(result, f, ensure_ascii=False)
+except Exception:
+    with open(sys.argv[3], "w", encoding="utf-8") as f:
+        json.dump({"ok": result.get("ok", False), "error": result.get("error"),
+                   "stdout": result.get("stdout", ""), "charts": []}, f, ensure_ascii=False)
 '''
+
+
+def _returncode_hint(rc: int | None) -> str:
+    """把子进程退出码翻译成人话, 帮非技术用户看懂"崩在哪儿"。
+
+    常见值: Windows 上 0xC00000FD(3221225725)=栈溢出(多为无限递归);
+    139=段错误(SIGSEGV); 137=被 SIGKILL(常见于内存不足 OOM); 134=abort。
+    """
+    if rc is None:
+        return "子进程未正常返回"
+    known = {
+        3221225725: "子进程栈溢出，可能是无限递归",
+        3221225477: "子进程访问非法内存而崩溃",
+        139: "子进程段错误(SIGSEGV)",
+        134: "子进程被 abort(SIGABRT)",
+        137: "子进程被强制结束(SIGKILL，常见于内存不足)",
+        143: "子进程被终止(SIGTERM)",
+    }
+    if rc in known:
+        return f"{known[rc]}，退出码 {rc}"
+    if rc < 0:
+        return f"子进程被信号 {-rc} 结束(可能内存不足或崩溃)"
+    return f"子进程退出码 {rc}"
 
 
 def _execute(code: str, df: pd.DataFrame, chart_format: str = "png", palette: str = "default") -> dict:
@@ -596,7 +644,7 @@ def _execute(code: str, df: pd.DataFrame, chart_format: str = "png", palette: st
         import subprocess
 
         try:
-            subprocess.run(
+            proc = subprocess.run(
                 [sys.executable, runner_path, data_path, code_path, out_path,
                  (chart_format or "png"), (palette or "default")],
                 cwd=d,
@@ -604,9 +652,25 @@ def _execute(code: str, df: pd.DataFrame, chart_format: str = "png", palette: st
                 capture_output=True,
             )
         except subprocess.TimeoutExpired:
-            return {"ok": False, "error": f"分析执行超时（>{EXEC_TIMEOUT}s）。", "stdout": "", "charts": []}
+            return {"ok": False, "error": f"分析执行超时（>{EXEC_TIMEOUT}s）。可能是数据量过大或代码存在死循环/超大计算，请缩小数据或简化分析。", "stdout": "", "charts": []}
         if not os.path.exists(out_path):
-            return {"ok": False, "error": "执行未产生结果（代码可能崩溃）。", "stdout": "", "charts": []}
+            # 子进程在写出结果前就崩了: 顶层 import 失败 / pickle 反序列化失败 / matplotlib 字体崩溃 /
+            # 段错误 / 栈溢出 / 被 OOM kill 等。真正的原因只在子进程 stderr 或退出码里——过去被
+            # 丢弃, 用户只看到"执行未产生结果", 毫无线索。这里把退出码 + stderr(traceback)回灌:
+            # 既让用户/日志看到真实原因, 也让上层自动纠错轮拿到可据以修复的错误文本。
+            stderr = (proc.stderr or b"").decode("utf-8", "ignore").strip()
+            stdout = (proc.stdout or b"").decode("utf-8", "ignore").strip()
+            detail = stderr or stdout or "(子进程无任何输出)"
+            # traceback 可能很长, 真正的异常行在末尾, 过长时保留尾部。
+            if len(detail) > 4000:
+                detail = "…（前略）…\n" + detail[-4000:]
+            return {
+                "ok": False,
+                "error": (f"执行未产生结果（{_returncode_hint(proc.returncode)}，代码在生成结果前崩溃）：\n"
+                          + detail),
+                "stdout": "",
+                "charts": [],
+            }
         with open(out_path, "r", encoding="utf-8") as f:
             return json.load(f)
 
@@ -650,11 +714,23 @@ async def analyze_data(
         explore_out = ""
         try:
             yield ("status", {"message": "正在探索数据结构（确认列名与分组，避免臆测）…"})
-            explore_code = _extract_code(await _complete(_gen_explore_messages(profile, question), max_tokens=900))
+            # 2500(原 900): 探索提示词要求逐列 print dtype/样例/缺失 + 每步 try/except, 列一多
+            # 900 token 会被拦腰截断 -> 闭合围栏/语句丢失 -> SyntaxError, 而失败又被静默吞掉,
+            # 探索轮的价值(确认列名/分组/分布)白白损失, 正式代码退回盲写。放宽到 2500 留足余量。
+            explore_code = _extract_code(await _complete(_gen_explore_messages(profile, question), max_tokens=2500))
+            # 先编译校验: 万一仍被截断/有语法错, 直接跳过探索, 不白白起一次子进程去撞 SyntaxError。
+            compile(explore_code, "explore.py", "exec")
             explore_run = await asyncio.to_thread(_execute, explore_code, df, chart_format, palette)
             if explore_run.get("ok"):
                 explore_out = _clip_output(explore_run.get("stdout", ""), head=4000, tail=1000)
-        except Exception:  # noqa: BLE001
+            else:
+                log_swallow("数据分析: 探索轮执行未成功(非致命, 退回让正式代码自行判断)",
+                            RuntimeError(explore_run.get("error", "") or "unknown"))
+        except SyntaxError as e:
+            log_swallow("数据分析: 探索轮代码编译失败(可能被截断), 跳过探索", e)
+            explore_out = ""
+        except Exception as e:  # noqa: BLE001
+            log_swallow("数据分析: 探索轮出错(非致命), 跳过探索", e)
             explore_out = ""
 
         # T3 方法路由: LLM 只做结构化抽取(分析规格), 由确定性规则在真实数据上跑前提检验并选方法,
