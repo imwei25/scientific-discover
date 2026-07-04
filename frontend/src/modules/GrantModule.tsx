@@ -8,7 +8,8 @@ import Markdown, { CiteInfo, normCiteUrl } from "../components/Markdown";
 import { reportLLMError } from "../lib/errorToast";
 import { addHistory } from "../lib/history";
 import EditableMarkdown from "../components/EditableMarkdown";
-import { extractFile } from "../lib/extract";
+import { parseAttachments, appendAttachmentsToField } from "../lib/attachments";
+import AttachmentChips from "../components/AttachmentChips";
 import RefIO from "../components/RefIO";
 import ZoteroPanel from "../components/ZoteroPanel";
 import { usePersistentState } from "../lib/usePersistentState";
@@ -146,15 +147,17 @@ export default function GrantModule() {
   const rvctrl = useRef<AbortController | null>(null);
   const inReviewRef = useRef(false); // 流中是否已进入「评审」节(其 delta 路由到 reviewText)
 
-  // 第 1 步附加材料 / 文风样例 附件解析
+  // 第 1 步附件: 附加材料在"一键生成"时解析并拼进 report;
+  // 文风样例在"提炼文风"时解析并拼进 styleSample(它是独立的提前操作)。
   const matFileRef = useRef<HTMLInputElement>(null);
   const styleFileRef = useRef<HTMLInputElement>(null);
   const [matDrag, setMatDrag] = useState(false);
-  const [matBusy, setMatBusy] = useState(false);
   const [styleDrag, setStyleDrag] = useState(false);
+  const [pendingMaterials, setPendingMaterials] = useState<File[]>([]);
+  const [pendingStyle, setPendingStyle] = useState<File[]>([]);
 
   const text = fullDoc(sections);
-  const hasInput = !!(title.trim() || report.trim());
+  const hasInput = !!(title.trim() || report.trim() || pendingMaterials.length > 0);
   const effStyle = styleOn ? styleProfile : "";
 
   const coverMd = useMemo(
@@ -197,28 +200,52 @@ export default function GrantModule() {
 
   // 文风提炼
   const extractStyle = async () => {
-    if (!styleSample.trim() || styleBusy) return;
+    if (styleBusy) return;
     setStyleErr(""); setStyleBusy(true);
+
+    let effectiveSample = styleSample;
+    if (pendingStyle.length > 0) {
+      const parseCtrl = new AbortController();
+      try {
+        const parsed = await parseAttachments(pendingStyle, {
+          signal: parseCtrl.signal,
+        });
+        effectiveSample = appendAttachmentsToField(styleSample, parsed);
+      } catch (e) {
+        setStyleErr((e as Error).message);
+        setStyleBusy(false);
+        return;
+      }
+    }
+    if (!effectiveSample.trim()) {
+      setStyleErr("请粘贴文风样例或上传附件。");
+      setStyleBusy(false);
+      return;
+    }
+
     try {
-      const { profile } = await grantStyle(styleSample);
+      const { profile } = await grantStyle(effectiveSample);
       if (profile) setStyleProfile(profile);
       else setStyleErr("未能提炼出文风档案，请换一份更完整的样例或重试。");
     } catch { setStyleErr("提炼文风失败（网络或服务错误），请重试。"); }
     finally { setStyleBusy(false); }
   };
 
-  // 附件 → 追加到目标文本框
-  const ingest = async (files: FileList | File[] | null | undefined, sink: (chunk: string, name: string) => void, setBusy: (b: boolean) => void, inputEl?: HTMLInputElement | null) => {
+  // 只把附件加入 pending 列表,不做任何解析。
+  const addMaterials = (files: FileList | File[] | null | undefined) => {
     const list = files ? Array.from(files) : [];
-    if (!list.length) return;
-    setBusy(true);
-    for (const f of list) {
-      const res = await extractFile(f);
-      if (res.ok && res.text) sink(res.text, f.name);
-    }
-    setBusy(false);
-    if (inputEl) inputEl.value = "";
+    if (list.length === 0) return;
+    setPendingMaterials((prev) => [...prev, ...list]);
+    if (matFileRef.current) matFileRef.current.value = "";
   };
+  const removeMaterial = (i: number) => setPendingMaterials((prev) => prev.filter((_, idx) => idx !== i));
+  const addStyleFiles = (files: FileList | File[] | null | undefined) => {
+    const list = files ? Array.from(files) : [];
+    if (list.length === 0) return;
+    setPendingStyle((prev) => [...prev, ...list]);
+    if (styleFileRef.current) styleFileRef.current.value = "";
+  };
+  const removeStyle = (i: number) => setPendingStyle((prev) => prev.filter((_, idx) => idx !== i));
 
   // streamGrant 的公共处理器: 把 body 节写进 sections, 评审节路由到 reviewText。
   const writeHandlers = (signal: AbortSignal) => ({
@@ -260,9 +287,27 @@ export default function GrantModule() {
     setError(null); setSections([]); setReviewText(""); setReview(null); setVerify(null);
     setShowReview(false); setPaused(false); inReviewRef.current = false;
     setPhase("writing"); setRunning(true); setStep(2);
+
+    let mergedReport = report;
+    if (pendingMaterials.length > 0) {
+      const parseCtrl = new AbortController();
+      ctrl.current = parseCtrl;
+      try {
+        const parsed = await parseAttachments(pendingMaterials, {
+          signal: parseCtrl.signal,
+          onProgress: (p) => setStatus(`正在解析附加材料 ${p.index}/${p.total}：${p.name} …`),
+        });
+        mergedReport = appendAttachmentsToField(report, parsed, "附加材料");
+      } catch (e) {
+        setError((e as Error).message);
+        setStatus(""); setRunning(false); setPhase("idle");
+        return;
+      }
+    }
+
     ctrl.current = new AbortController();
     await streamGrant(
-      { title, idea, report, background, grant_type: grantType, references: refs, research: preResearch, style_profile: effStyle },
+      { title, idea, report: mergedReport, background, grant_type: grantType, references: refs, research: preResearch, style_profile: effStyle },
       writeHandlers(ctrl.current.signal),
     );
     setRunning(false);
@@ -346,6 +391,8 @@ export default function GrantModule() {
     setPeriodStart(""); setPeriodEnd("");
     setScheme(null); setOutline([]); setSections([]); setVerify(null); setReview(null); setReviewText("");
     setStyleSample(""); setStyleProfile(""); setStyleOn(true); setStyleErr("");
+    setPendingMaterials([]);
+    setPendingStyle([]);
     setStatus(""); setError(null); setPhase("idle"); setStep(1); setPaused(false);
   };
 
@@ -427,13 +474,19 @@ export default function GrantModule() {
               <div className={`combo-input${matDrag ? " dragover" : ""}`}
                 onDragOver={(e) => { e.preventDefault(); setMatDrag(true); }}
                 onDragLeave={() => setMatDrag(false)}
-                onDrop={(e) => { e.preventDefault(); setMatDrag(false); ingest(e.dataTransfer.files, (t, name) => setReport((p) => (p ? p + "\n\n" : "") + `[附加材料：${name}]\n` + t), setMatBusy); }}>
+                onDrop={(e) => { e.preventDefault(); setMatDrag(false); addMaterials(e.dataTransfer.files); }}>
                 <textarea data-testid="grant-report" value={report} onChange={(e) => setReport(e.target.value)} placeholder="把选题调研报告 / 前期工作 / 相关论文粘贴到这里，或把文件直接拖进本框（可多个）。" rows={5} />
                 <div className="combo-foot">
                   <button type="button" className="combo-attach" data-testid="grant-materials-attach" onClick={() => matFileRef.current?.click()}>📎 添加附件（可多选）</button>
-                  <span className="combo-hint">{matBusy ? "正在解析附件…" : "支持 Word / PDF / txt，可直接拖入本框"}</span>
-                  <input ref={matFileRef} data-testid="grant-upload" type="file" accept=".docx,.pdf,.txt,.md" multiple style={{ display: "none" }} onChange={(e) => ingest(e.target.files, (t, name) => setReport((p) => (p ? p + "\n\n" : "") + `[附加材料：${name}]\n` + t), setMatBusy, matFileRef.current)} />
+                  <span className="combo-hint">支持 Word / PDF / txt，将在开始生成时解析</span>
+                  <input ref={matFileRef} data-testid="grant-upload" type="file" accept=".docx,.pdf,.txt,.md" multiple style={{ display: "none" }} onChange={(e) => addMaterials(e.target.files)} />
                 </div>
+                <AttachmentChips
+                  files={pendingMaterials}
+                  onRemove={removeMaterial}
+                  disabled={running}
+                  testId="grant-mat-chips"
+                />
               </div>
             </div>
 
@@ -444,11 +497,11 @@ export default function GrantModule() {
               <div className={`combo-input${styleDrag ? " dragover" : ""}`}
                 onDragOver={(e) => { e.preventDefault(); setStyleDrag(true); }}
                 onDragLeave={() => setStyleDrag(false)}
-                onDrop={(e) => { e.preventDefault(); setStyleDrag(false); ingest(e.dataTransfer.files, (t) => setStyleSample((p) => (p ? p + "\n\n" : "") + t), setStyleBusy); }}>
+                onDrop={(e) => { e.preventDefault(); setStyleDrag(false); addStyleFiles(e.dataTransfer.files); }}>
                 <textarea data-testid="grant-style-sample" value={styleSample} onChange={(e) => setStyleSample(e.target.value)} placeholder="把文风样例粘贴到这里，或把文件拖进本框。" rows={3} />
                 <div className="combo-foot">
                   <button type="button" className="combo-attach" data-testid="grant-style-attach" onClick={() => styleFileRef.current?.click()}>📎 上传文风样例</button>
-                  {styleSample && (
+                  {(styleSample || pendingStyle.length > 0) && (
                     <button className="btn-secondary btn-sm" data-testid="grant-style-extract-btn" onClick={extractStyle} disabled={styleBusy}>
                       {styleBusy ? "提炼中…" : styleProfile ? "重新提炼文风" : "提炼文风"}
                     </button>
@@ -458,8 +511,14 @@ export default function GrantModule() {
                       <input type="checkbox" data-testid="grant-style-toggle" checked={styleOn} onChange={(e) => setStyleOn(e.target.checked)} />模仿此文风
                     </label>
                   )}
-                  <input ref={styleFileRef} data-testid="grant-style-upload" type="file" accept=".docx,.pdf,.txt,.md" multiple style={{ display: "none" }} onChange={(e) => ingest(e.target.files, (t) => setStyleSample((p) => (p ? p + "\n\n" : "") + t), setStyleBusy, styleFileRef.current)} />
+                  <input ref={styleFileRef} data-testid="grant-style-upload" type="file" accept=".docx,.pdf,.txt,.md" multiple style={{ display: "none" }} onChange={(e) => addStyleFiles(e.target.files)} />
                 </div>
+                <AttachmentChips
+                  files={pendingStyle}
+                  onRemove={removeStyle}
+                  disabled={styleBusy}
+                  testId="grant-style-chips"
+                />
               </div>
               {styleErr && <div className="result-error" data-testid="grant-style-error">{styleErr}</div>}
               {styleProfile && (
