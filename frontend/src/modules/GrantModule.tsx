@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import {
   streamGrant, grantStyle, streamGrantReview,
   Reference, Verification, GrantScheme, GrantOutlineItem,
-  GrantReviewData,
+  GrantReviewData, EvidenceItem,
 } from "../lib/sse";
 import Markdown, { CiteInfo, normCiteUrl } from "../components/Markdown";
 import { reportLLMError } from "../lib/errorToast";
@@ -16,6 +16,9 @@ import { usePersistentState } from "../lib/usePersistentState";
 import { downloadText, downloadDocxFromText, downloadPdfFromText, tsName } from "../lib/download";
 import { prepareForExport } from "../lib/exportPrep";
 import { withNumberedReferences } from "../lib/citations";
+import { LiteraturePicker, pickerKey } from "../components/LiteraturePicker";
+import { extractEvidenceForRefs } from "../lib/evidenceExtract";
+import { stash as stashHandoff } from "../lib/refHandoff";
 
 // 合并导入的 references 到现有列表, 按 DOI 优先去重, 缺 DOI 则按 (title|year) 兜底。
 function mergeRefs(existing: Reference[], incoming: Reference[]): { merged: Reference[]; added: number; dup: number } {
@@ -126,6 +129,23 @@ export default function GrantModule() {
   // 阶段: idle | writing | done ; step: 1 准备 | 2 撰写
   const [phase, setPhase] = usePersistentState<string>("grant:phase", "idle");
   const [step, setStep] = usePersistentState<number>("grant:step", 1);
+
+  // picker stage (session-only, not persisted); initialised from persisted phase so page reloads land correctly.
+  type GrantStage = "prepare" | "picker" | "writing" | "done";
+  const [stage, setStage] = useState<GrantStage>(() => {
+    // phase is already read from localStorage by usePersistentState; we peek it here for init.
+    try {
+      const p = localStorage.getItem("grant:phase") ?? "idle";
+      if (p === "done") return "done";
+      if (p === "writing") return "writing";
+    } catch { /* SSR / no-op */ }
+    return "prepare";
+  });
+  const [searchRefs, setSearchRefs] = useState<Reference[]>([]);
+  const [searchEvidence, setSearchEvidence] = useState<Record<string, EvidenceItem & { _ev_status?: string }>>({});
+  const [searchSelectedKeys, setSearchSelectedKeys] = useState<string[]>([]);
+  const [searchBusy, setSearchBusy] = useState(false);
+  const [pickerExtractProgress, setPickerExtractProgress] = useState<{ done: number; total: number } | null>(null);
   const [scheme, setScheme] = usePersistentState<GrantScheme | null>("grant:scheme", null);
   const [outline, setOutline] = usePersistentState<GrantOutlineItem[]>("grant:outline", []);
   const [sections, setSections] = usePersistentState<DocSection[]>("grant:sections", []);
@@ -276,17 +296,65 @@ export default function GrantModule() {
       window.dispatchEvent(new Event("usage-updated")); reportLLMError(m);
     },
     onDone: () => {
-      setStatus(""); setRunning(false); setPhase("done"); inReviewRef.current = false;
+      setStatus(""); setRunning(false); setPhase("done"); setStage("done"); inReviewRef.current = false;
       window.dispatchEvent(new Event("usage-updated"));
     },
   });
 
-  // 从零开始撰写: 后端现凝练方案骨架 + 大纲(无需用户确认) + 逐节撰写 + 评审。
-  const startAll = async () => {
+  // 检索文献并进入 picker stage（仅在 preResearch=true 时调用）。
+  const launchGrantSearch = async () => {
+    setSearchBusy(true);
+    setSearchRefs([]);
+    setSearchEvidence({});
+    setSearchSelectedKeys([]);
+    setStage("picker");
+    setStep(2);
+    try {
+      const res = await fetch("/api/grant/search", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ inputs: { title, idea, background } }),
+      });
+      if (!res.body) throw new Error("no body");
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buf = "";
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buf += decoder.decode(value, { stream: true });
+        let idx: number;
+        while ((idx = buf.indexOf("\n\n")) >= 0) {
+          const chunk = buf.slice(0, idx);
+          buf = buf.slice(idx + 2);
+          const lines = chunk.split("\n");
+          const evLine = lines.find((l) => l.startsWith("event:"));
+          const dataLine = lines.find((l) => l.startsWith("data:"));
+          if (!evLine || !dataLine) continue;
+          const evName = evLine.slice(6).trim();
+          let data: any = {};
+          try { data = JSON.parse(dataLine.slice(5).trim()); } catch { /* ignore */ }
+          if (evName === "references") setSearchRefs(data.items || []);
+          else if (evName === "evidence") {
+            const map: Record<string, EvidenceItem & { _ev_status?: string }> = {};
+            for (const row of data.items || []) map[row.key] = row;
+            setSearchEvidence(map);
+          }
+        }
+      }
+    } catch (e) {
+      console.error("grant search failed", e);
+    } finally {
+      setSearchBusy(false);
+    }
+  };
+
+  // 核心写作流程: 接受已选文献（picker 提供，或空数组走原逻辑）。
+  const beginWriting = async (provided: Reference[]) => {
     if (!hasInput || running) return;
     setError(null); setSections([]); setReviewText(""); setReview(null); setVerify(null);
     setShowReview(false); setPaused(false); inReviewRef.current = false;
-    setPhase("writing"); setRunning(true); setStep(2);
+    setPhase("writing"); setRunning(true); setStep(2); setStage("writing");
 
     let mergedReport = report;
     if (pendingMaterials.length > 0) {
@@ -307,10 +375,26 @@ export default function GrantModule() {
 
     ctrl.current = new AbortController();
     await streamGrant(
-      { title, idea, report: mergedReport, background, grant_type: grantType, references: refs, research: preResearch, style_profile: effStyle },
+      {
+        title, idea, report: mergedReport, background,
+        grant_type: grantType, references: refs,
+        research: preResearch,
+        provided_refs: provided.length ? provided : undefined,
+        style_profile: effStyle,
+      },
       writeHandlers(ctrl.current.signal),
     );
     setRunning(false);
+  };
+
+  // 从零开始撰写: 若 preResearch=true 进 picker, 否则直接写作。
+  const startAll = async () => {
+    if (!hasInput || running) return;
+    if (preResearch) {
+      await launchGrantSearch();
+    } else {
+      await beginWriting([]);
+    }
   };
 
   // 继续生成: 就已知方案骨架 + 尚未写的大纲章节续写(不重检索、不重评已写部分)。
@@ -394,6 +478,7 @@ export default function GrantModule() {
     setPendingMaterials([]);
     setPendingStyle([]);
     setStatus(""); setError(null); setPhase("idle"); setStep(1); setPaused(false);
+    setStage("prepare"); setSearchRefs([]); setSearchEvidence({}); setSearchSelectedKeys([]);
   };
 
   // 导出全文 = 封面 + 正文(引用编号化) + 参考文献。
@@ -552,8 +637,70 @@ export default function GrantModule() {
         </div>
       )}
 
+      {/* ── 第 2 步：picker stage（preResearch=true 时的文献挑选） ── */}
+      {step === 2 && stage === "picker" && (
+        <div className="wiz-panel" data-testid="grant-panel-picker">
+          <section className="grant-picker-stage">
+            <h3>检索到的文献 — 请勾选要写进标书的文献</h3>
+            <LiteraturePicker
+              refs={searchRefs}
+              evidenceByKey={searchEvidence}
+              selectedKeys={searchSelectedKeys}
+              onSelectionChange={setSearchSelectedKeys}
+              onImport={async (imported) => {
+                const keyMap = new Map(searchRefs.map((r) => [pickerKey(r), r]));
+                for (const imp of imported) {
+                  const k = pickerKey(imp);
+                  const existing = keyMap.get(k);
+                  if (!existing) keyMap.set(k, imp);
+                  else if (!existing.abstract && imp.abstract) keyMap.set(k, { ...existing, ...imp, abstract: imp.abstract });
+                }
+                const merged = Array.from(keyMap.values());
+                setSearchRefs(merged);
+                const newOnes = imported.filter((imp) => !searchRefs.some((r) => pickerKey(r) === pickerKey(imp)));
+                if (!newOnes.length) return;
+                setPickerExtractProgress({ done: 0, total: newOnes.length });
+                const evMap = await extractEvidenceForRefs(newOnes, (d, t) => setPickerExtractProgress({ done: d, total: t }));
+                setSearchEvidence((prev) => ({ ...prev, ...evMap }));
+                setPickerExtractProgress(null);
+              }}
+              primaryAction={{
+                label: searchBusy ? "检索中…" : "开始写作",
+                onClick: (checked) => beginWriting(checked),
+                disabled: searchBusy,
+              }}
+              secondaryAction={{
+                label: "→ 期刊排版",
+                onClick: (checked) => {
+                  const subset: Record<string, EvidenceItem & { _ev_status?: string }> = {};
+                  for (const r of checked) {
+                    const k = pickerKey(r);
+                    if (searchEvidence[k]) subset[k] = searchEvidence[k];
+                  }
+                  stashHandoff({ refs: checked, evidence: subset, from: "grant" });
+                },
+              }}
+              extractionStatus={pickerExtractProgress}
+              exportFilename="grant-refs"
+            />
+            {searchBusy && <div className="grant-picker-status">正在检索并提取核心发现…</div>}
+            {!searchBusy && searchRefs.length === 0 && (
+              <div className="grant-picker-empty">
+                未检索到文献。
+                <button type="button" onClick={() => beginWriting([])}>跳过，直接开始写作</button>
+                <button type="button" onClick={launchGrantSearch}>重新检索</button>
+              </div>
+            )}
+          </section>
+          <div className="wiz-nav">
+            <button className="btn-ghost" onClick={() => { setStep(1); setStage("prepare"); }} data-testid="grant-back-btn">← 返回准备</button>
+            <button className="btn-ghost" onClick={reset} data-testid="grant-reset-btn">重新开始</button>
+          </div>
+        </div>
+      )}
+
       {/* ── 第 2 步：撰写与精修 ── */}
-      {step === 2 && (
+      {step === 2 && (stage === "writing" || stage === "done") && (
         <div className="wiz-panel" data-testid="grant-panel-2">
           {status && <div className="status-line" data-testid="grant-status"><span className="spinner" /> {status}</div>}
 
