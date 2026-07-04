@@ -19,6 +19,7 @@ import { withNumberedReferences } from "../lib/citations";
 import { LiteraturePicker, pickerKey } from "../components/LiteraturePicker";
 import { extractEvidenceForRefs } from "../lib/evidenceExtract";
 import { stash as stashHandoff } from "../lib/refHandoff";
+import type { Goto } from "../App";
 
 // 合并导入的 references 到现有列表, 按 DOI 优先去重, 缺 DOI 则按 (title|year) 兜底。
 function mergeRefs(existing: Reference[], incoming: Reference[]): { merged: Reference[]; added: number; dup: number } {
@@ -107,7 +108,7 @@ const STEPS = [
   { n: 2, title: "撰写与精修", desc: "生成 · 编辑 · 精修 · 评审" },
 ];
 
-export default function GrantModule() {
+export default function GrantModule({ goto }: { goto: Goto }) {
   // 可由「找选题」一键带入。
   const [title, setTitle] = usePersistentState("grant:title", "");
   const [idea, setIdea] = usePersistentState("grant:idea", "");
@@ -660,9 +661,12 @@ export default function GrantModule() {
                 const newOnes = imported.filter((imp) => !searchRefs.some((r) => pickerKey(r) === pickerKey(imp)));
                 if (!newOnes.length) return;
                 setPickerExtractProgress({ done: 0, total: newOnes.length });
-                const evMap = await extractEvidenceForRefs(newOnes, (d, t) => setPickerExtractProgress({ done: d, total: t }));
-                setSearchEvidence((prev) => ({ ...prev, ...evMap }));
-                setPickerExtractProgress(null);
+                try {
+                  const evMap = await extractEvidenceForRefs(newOnes, (d, t) => setPickerExtractProgress({ done: d, total: t }));
+                  setSearchEvidence((prev) => ({ ...prev, ...evMap }));
+                } finally {
+                  setPickerExtractProgress(null);
+                }
               }}
               primaryAction={{
                 label: searchBusy ? "检索中…" : "开始写作",
@@ -678,6 +682,7 @@ export default function GrantModule() {
                     if (searchEvidence[k]) subset[k] = searchEvidence[k];
                   }
                   stashHandoff({ refs: checked, evidence: subset, from: "grant" });
+                  goto("format", {});
                 },
               }}
               extractionStatus={pickerExtractProgress}

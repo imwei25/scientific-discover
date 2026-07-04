@@ -365,7 +365,7 @@ export default function App() {
         <div className="page" key={`${currentProject?.id ?? "boot"}::${active}`}>
           {active === "home" && <Home onPick={setActive} />}
           {active === "idea" && <IdeaModule goto={goto} />}
-          {active === "grant" && <GrantModule />}
+          {active === "grant" && <GrantModule goto={goto} />}
           {active === "plan" && <PlanModule />}
           {active === "ethics" && <EthicsModule />}
           {active === "analyze" && <AnalyzeModule goto={goto} />}

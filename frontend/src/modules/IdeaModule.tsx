@@ -665,16 +665,19 @@ export default function IdeaModule({ goto }: { goto: Goto }) {
               const newOnes = imported.filter((imp) => !refs.some((r) => refKey(r) === refKey(imp)));
               if (!newOnes.length) return;
               setEvidenceExtractProgress({ done: 0, total: newOnes.length });
-              const evMap = await extractEvidenceForRefs(newOnes, (d, t) => setEvidenceExtractProgress({ done: d, total: t }));
-              setEvidence((prev) => {
-                const next = [...prev];
-                for (const row of Object.values(evMap)) {
-                  if (prev.some((p) => p.url === row.url)) continue;
-                  next.push(row);
-                }
-                return next;
-              });
-              setEvidenceExtractProgress(null);
+              try {
+                const evMap = await extractEvidenceForRefs(newOnes, (d, t) => setEvidenceExtractProgress({ done: d, total: t }));
+                setEvidence((prev) => {
+                  const next = [...prev];
+                  for (const row of Object.values(evMap)) {
+                    if (prev.some((p) => p.url === row.url)) continue;
+                    next.push(row);
+                  }
+                  return next;
+                });
+              } finally {
+                setEvidenceExtractProgress(null);
+              }
             }}
             header={
               <div className="lit-head">
