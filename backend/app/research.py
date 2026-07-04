@@ -23,7 +23,7 @@ from typing import AsyncIterator
 from . import searchfilters
 from .clinicaltrials import search_trials
 from .config import settings
-from .literature import search_literature
+from .literature import search_literature, fetch_abstract_by_id
 from .llm import stream_chat
 from .logutil import log_swallow
 
@@ -437,6 +437,86 @@ async def _extract_evidence(field: str, papers: list[dict], batch: int = 8) -> d
     return evidence
 
 
+def _ref_key(p: dict) -> str:
+    """Stable key for a ref: pmid > doi > url. Matches frontend evidenceByKey."""
+    if p.get("pmid"):
+        return f"pmid:{p['pmid']}"
+    if p.get("doi"):
+        return f"doi:{p['doi']}"
+    if p.get("url"):
+        return f"url:{p['url']}"
+    return f"title:{(p.get('title') or '').strip()[:60]}"
+
+
+async def extract_evidence_for_refs(
+    refs: list[dict],
+    field: str = "",
+    fetch_missing: bool = True,
+) -> list[dict]:
+    """Public wrapper: given a list of refs (possibly imported without abstracts),
+    optionally backfill abstracts by id, batch-extract structured evidence via
+    the existing _extract_batch pipeline, and return one row per input ref
+    preserving order.
+
+    Each output row: {key, pop, design, finding, gap, rel?, rel_why?, _ev_status}.
+    _ev_status: "ok" | "no_abstract" | "extract_error".
+    """
+    n = len(refs)
+    out: list[dict] = [{} for _ in range(n)]
+    to_extract: list[tuple[int, dict]] = []
+
+    # Phase 1: backfill missing abstracts (if requested), determine what to extract.
+    for i, p in enumerate(refs):
+        ab = (p.get("abstract") or "").strip()
+        if not ab and fetch_missing:
+            try:
+                fetched = await fetch_abstract_by_id(p.get("doi"), p.get("pmid"))
+            except Exception:  # noqa: BLE001
+                fetched = None
+            if fetched:
+                p = dict(p)  # do not mutate caller's dict
+                p["abstract"] = fetched
+                ab = fetched
+        if ab:
+            to_extract.append((i, p))
+        else:
+            out[i] = {
+                "key": _ref_key(p),
+                "pop": "", "design": "", "finding": "", "gap": "",
+                "_ev_status": "no_abstract",
+            }
+
+    # Phase 2: LLM batches of 8, per-batch error isolation.
+    batches = [to_extract[k : k + 8] for k in range(0, len(to_extract), 8)]
+    results = await asyncio.gather(
+        *[_extract_batch(field or "", batch) for batch in batches],
+        return_exceptions=True,
+    )
+    for batch, res in zip(batches, results):
+        if isinstance(res, Exception):
+            for gi, p in batch:
+                out[gi] = {
+                    "key": _ref_key(p),
+                    "pop": "", "design": "", "finding": "", "gap": "",
+                    "_ev_status": "extract_error",
+                }
+            continue
+        assert isinstance(res, dict)
+        for gi, p in batch:
+            row = res.get(gi) or {}
+            out[gi] = {
+                "key": _ref_key(p),
+                "pop": row.get("pop") or "",
+                "design": row.get("design") or "",
+                "finding": row.get("finding") or "",
+                "gap": row.get("gap") or "",
+                "rel": row.get("rel"),
+                "rel_why": row.get("rel_why") or "",
+                "_ev_status": "ok",
+            }
+    return out
+
+
 def _evidence_line(gi: int, p: dict, row: dict | None) -> str:
     head = (
         f"[{gi}] {p['first_author']} ({p['year']}). {p['title']} "
@@ -588,7 +668,7 @@ def _reduce_messages_deep(field: str, summaries: list[tuple[str, str]], trials_n
     return [{"role": "system", "content": system}, {"role": "user", "content": user}]
 
 
-def _synthesis_messages(field: str, papers: list[dict]) -> list[dict]:
+def _synthesis_messages(field: str, papers: list[dict], english: bool = False) -> list[dict]:
     system = (
         "你是资深的医学/药学/生物医学科研选题顾问。下面提供的是从 PubMed 检索到的【真实文献】。"
         "请严格基于这些文献完成分析，分三部分：\n"
@@ -602,12 +682,26 @@ def _synthesis_messages(field: str, papers: list[dict]) -> list[dict]:
         "铁律：只能引用下面列出的文献及其真实 URL，严禁编造任何文献、作者或链接；"
         "若现有文献不足以支撑某结论，请明确指出‘现有检索结果有限’。"
     )
+    if english:
+        system += _ENGLISH_REPORT_RULE
     context = _build_context(papers)
     user = f"研究方向：{field}\n\n【检索到的真实文献】\n{context}"
     return [{"role": "system", "content": system}, {"role": "user", "content": user}]
 
 
-def _synthesis_messages_deep(field: str, papers: list[dict], context: str | None = None) -> list[dict]:
+_ENGLISH_REPORT_RULE = (
+    "\n\n【OUTPUT LANGUAGE — MANDATORY】"
+    "You MUST write the entire final report in ENGLISH. "
+    "All section headings, body prose, tables, bullet points, star-rating rationales, "
+    "candidate topic titles and descriptions must be in fluent academic English, "
+    "regardless of the language of the source papers or the input field/keywords. "
+    "You may keep original proper nouns (drug names, gene symbols, Chinese medical terms) as-is "
+    "with an English gloss when helpful. Citation link text stays as [First-author et al., YEAR](URL). "
+    "Do NOT output any Chinese in the final report."
+)
+
+
+def _synthesis_messages_deep(field: str, papers: list[dict], context: str | None = None, english: bool = False) -> list[dict]:
     system = (
         "你是资深的医学/药学/生物医学科研选题顾问。下面是经【多角度+空白补充】两轮检索得到的真实文献。"
         "请做一份有深度的调研报告，分三部分：\n"
@@ -625,6 +719,8 @@ def _synthesis_messages_deep(field: str, papers: list[dict], context: str | None
         "注意：下面每篇文献已抽取为『对象/设计/发现/局限』要点行，请据此综合；"
         "引用编号与 URL 必须与所给文献一致。"
     )
+    if english:
+        system += _ENGLISH_REPORT_RULE
     ctx = context if context is not None else _build_context(papers)
     user = f"研究方向：{field}\n\n【两轮检索到的真实文献（结构化要点）】\n{ctx}"
     return [{"role": "system", "content": system}, {"role": "user", "content": user}]
@@ -854,6 +950,7 @@ async def deep_research_idea(inputs: dict) -> AsyncIterator[tuple[str, dict]]:
 
     # 分阶段(wizard): ""/"full"=一次性(旧); "search"=只检索+抽要点; "generate"=据选中文献生成报告。
     phase = (inputs.get("phase") or "full").strip()
+    english_report = bool(inputs.get("english_report"))
 
     # 第 4 步：据用户在第 3 步复核/勾选后的文献(含已抽取的证据要点)直接生成报告, 跳过检索。
     if phase == "generate":
@@ -891,7 +988,7 @@ async def deep_research_idea(inputs: dict) -> AsyncIterator[tuple[str, dict]]:
             yield ("status", {"message": f"正在据选中的 {len(papers)} 篇文献生成调研报告…"})
             context = _build_context_table(papers, evidence)
             full = ""
-            async for piece in stream_chat(_synthesis_messages_deep(field, papers, context), task="research"):
+            async for piece in stream_chat(_synthesis_messages_deep(field, papers, context, english=english_report), task="research"):
                 full += piece
                 yield ("delta", {"text": piece})
             yield ("topic_card", _build_topic_card(field, keywords, full, papers, [], []))
@@ -910,7 +1007,7 @@ async def deep_research_idea(inputs: dict) -> AsyncIterator[tuple[str, dict]]:
         yield ("references", {"items": [_ref_item(p) for p in papers]})
         yield ("status", {"message": f"已带入 {len(papers)} 篇文献,正在分析研究现状与空白…"})
         full = ""
-        async for piece in stream_chat(_synthesis_messages(field, papers), task="research"):
+        async for piece in stream_chat(_synthesis_messages(field, papers, english=english_report), task="research"):
             full += piece
             yield ("delta", {"text": piece})
         yield ("topic_card", _build_topic_card(field, keywords, full, papers, [], []))
@@ -996,7 +1093,7 @@ async def deep_research_idea(inputs: dict) -> AsyncIterator[tuple[str, dict]]:
                 yield ("done", {})
                 return
             yield ("status", {"message": f"已找到 {len(papers)} 篇文献，正在分析研究现状与空白…"})
-            async for piece in stream_chat(_synthesis_messages(field, papers), task="research"):
+            async for piece in stream_chat(_synthesis_messages(field, papers, english=english_report), task="research"):
                 full += piece
                 yield ("delta", {"text": piece})
             yield ("topic_card", _build_topic_card(field, keywords, full, papers, [], queries))
@@ -1226,6 +1323,7 @@ async def idea_followup(inputs: dict) -> AsyncIterator[tuple[str, dict]]:
         return
 
     ctx = _followup_context(items)
+    english_report = bool(inputs.get("english_report"))
     if mode == "revise":
         system = (
             "你是资深医学/药学/生物医学科研顾问。下面给出一次文献调研的【真实文献】、【已生成的调研报告】，"
@@ -1233,6 +1331,8 @@ async def idea_followup(inputs: dict) -> AsyncIterator[tuple[str, dict]]:
             "保持原有 Markdown 结构与分部分组织；引用用 [第一作者 et al., 年份](真实URL) 链接，"
             "且只能引用下面列出的文献链接，严禁编造任何文献或链接；直接输出修改后的报告全文，不要附加说明。"
         )
+        if english_report:
+            system += _ENGLISH_REPORT_RULE
         user = f"【真实文献】\n{ctx}\n\n【已生成的调研报告】\n{report}\n\n【用户的修改意见】\n{question}"
     else:
         system = (
@@ -1241,6 +1341,11 @@ async def idea_followup(inputs: dict) -> AsyncIterator[tuple[str, dict]]:
             "引用文献时用 [第一作者 et al., 年份](真实URL) 链接，且只能引用下面列出的文献链接，严禁编造。"
             "若问题超出现有文献覆盖范围，请明确说明‘现有检索结果未覆盖，建议补充检索’，不要臆造。"
         )
+        if english_report:
+            system += (
+                "\n\n【OUTPUT LANGUAGE — MANDATORY】"
+                "Answer entirely in ENGLISH to match the English report. Use fluent academic English throughout."
+            )
         user = f"【真实文献】\n{ctx}\n\n【已生成的调研报告】\n{report}\n\n【用户追问】\n{question}"
 
     try:
