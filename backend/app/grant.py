@@ -37,13 +37,40 @@ from .config import settings
 from .literature import search_literature
 from .llm import stream_chat
 # 复用找选题的: 引用核验(含支持句) / 支持句规则 / 主题→PubMed检索式 / 文献去重键
-from .research import _verify_citations, _gen_queries, _pkey, _QUOTE_RULE
+from .research import _verify_citations, _gen_queries, _pkey, _QUOTE_RULE, extract_evidence_for_refs
 from .logutil import log_swallow
 
 # 重新调研重写时, 检索的默认论文源(与找选题默认一致)。
 _RERESEARCH_SOURCES = ["pubmed", "europepmc", "openalex"]
 # 合并后参考文献池上限, 防止越改越大。
 _REFS_CAP = 40
+
+
+async def search_grant(inputs: dict) -> AsyncIterator[tuple[str, dict]]:
+    """Standalone search for GrantModule Step 1.5: PubMed/EPMC/OpenAlex/etc.
+    plus structured-evidence extraction. Streams:
+      ("status", ...) ("references", {"items": [...]}) ("evidence", {"items": [...]}) ("done", {})
+    """
+    title = (inputs.get("title") or "").strip()
+    idea = (inputs.get("idea") or inputs.get("field") or "").strip()
+    direction = idea or title
+    if not direction:
+        yield ("error", {"message": "缺少研究方向。"})
+        return
+    try:
+        yield ("status", {"message": "正在把研究方向转成检索式…"})
+        queries = await _gen_queries(direction, "", title)
+        yield ("status", {"message": "正在检索 PubMed / Europe PMC / OpenAlex…"})
+        res = await search_literature(queries, per_query=8, cap=16, sources=_RERESEARCH_SOURCES)
+        papers = res.get("papers") or []
+        yield ("references", {"items": papers})
+        if papers:
+            yield ("status", {"message": f"正在提取 {len(papers)} 篇文献的核心发现…"})
+            evidence = await extract_evidence_for_refs(papers, field=direction, fetch_missing=False)
+            yield ("evidence", {"items": evidence})
+        yield ("done", {})
+    except Exception as e:  # noqa: BLE001
+        yield ("error", {"message": f"检索失败：{type(e).__name__}: {e}"})
 
 # 资助类型 → (中文名, 写作侧重提示)。影响篇幅与语气, 不强约束结构。
 _GRANT_TYPES = {

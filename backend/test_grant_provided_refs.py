@@ -95,8 +95,43 @@ def test_no_provided_refs_uses_research_flag():
     assert called["n"] >= 1
 
 
+def test_grant_search_endpoint_yields_refs_and_evidence():
+    """search_grant streams references and evidence; skips writing."""
+    from app.grant import search_grant
+
+    fake_papers = [
+        {"pmid": "P1", "title": "Fake", "first_author": "A", "year": "2024",
+         "journal": "J", "url": "https://x/1", "abstract": "ab"},
+    ]
+
+    async def fake_search(*a, **kw):
+        return {"papers": fake_papers}
+
+    async def fake_gen_queries(*a, **kw):
+        return ["q"]
+
+    async def fake_evidence(refs, field="", fetch_missing=True):
+        return [{"key": "pmid:P1", "pop": "p", "design": "d", "finding": "f",
+                 "gap": "g", "rel": 3, "rel_why": "", "_ev_status": "ok"}]
+
+    with patch("app.grant.settings", type("S", (), {"mock": False})()), \
+         patch("app.grant.search_literature", new=fake_search), \
+         patch("app.grant._gen_queries", new=fake_gen_queries), \
+         patch("app.grant.extract_evidence_for_refs", new=fake_evidence):
+        events = _run_gen(search_grant({"title": "T", "idea": "diabetic nephropathy"}))
+
+    names = [n for n, _ in events]
+    assert "references" in names
+    assert "evidence" in names
+    assert "done" in names
+    ref_event = next(d for n, d in events if n == "references")
+    assert ref_event["items"] == fake_papers
+
+
 if __name__ == "__main__":
     test_provided_refs_skips_search()
     print("OK  test_provided_refs_skips_search")
     test_no_provided_refs_uses_research_flag()
     print("OK  test_no_provided_refs_uses_research_flag")
+    test_grant_search_endpoint_yields_refs_and_evidence()
+    print("OK  test_grant_search_endpoint_yields_refs_and_evidence")

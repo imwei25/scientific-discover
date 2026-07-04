@@ -197,6 +197,16 @@ async def grant_ep(req: RunRequest) -> StreamingResponse:
     return StreamingResponse(gen(), media_type="text/event-stream", headers=SSE_HEADERS)
 
 
+@router.post("/api/grant/search")
+async def grant_search_ep(req: RunRequest) -> StreamingResponse:
+    """写标书 Step 1.5: 单独跑一次文献检索 + 核心发现抽取 (供 picker 使用)。"""
+    async def gen():
+        from ..grant import search_grant
+        async for event, data in search_grant(req.inputs):
+            yield _sse(event, data)
+    return StreamingResponse(gen(), media_type="text/event-stream", headers=SSE_HEADERS)
+
+
 @router.post("/api/grant/plan")
 async def grant_plan_ep(req: RunRequest) -> JSONResponse:
     """两段式第一步: 产出可编辑的【方案骨架 + 大纲】交用户确认(非流式)。失败也回退不阻断。"""
