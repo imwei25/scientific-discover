@@ -667,6 +667,8 @@ test("实验规划: 生成 DMP 与知情同意书草案", async ({ page }) => {
   await page.goto("/");
   await page.getByTestId("nav-plan").click();
   await page.getByTestId("input-idea").fill("二甲双胍治疗NAFLD的随机对照试验");
+  await page.getByTestId("run-btn").click();
+  await expect(page.getByTestId("gen-dmp-btn")).toBeVisible();
   await page.getByTestId("gen-dmp-btn").click();
   await expect(page.getByTestId("dmp-panel")).toContainText("数据管理计划");
   await page.getByTestId("gen-consent-btn").click();
@@ -682,6 +684,9 @@ test("实验规划: 随机化分组表生成并导出", async ({ page }) => {
   );
   await page.goto("/");
   await page.getByTestId("nav-plan").click();
+  await page.getByTestId("input-idea").fill("测试想法");
+  await page.getByTestId("run-btn").click();
+  await expect(page.getByTestId("rz-calc")).toBeVisible();
   await page.getByTestId("rz-calc").locator("summary").click();
   await page.getByTestId("rz-n").fill("2");
   await page.getByTestId("rz-btn").click();
@@ -892,6 +897,8 @@ test("实验规划: 生成统计分析计划(SAP)并提供 Word 导出", async (
   await page.goto("/");
   await page.getByTestId("nav-plan").click();
   await page.getByTestId("input-idea").fill("二甲双胍对NAFLD肝纤维化的随机对照试验");
+  await page.getByTestId("run-btn").click();
+  await expect(page.getByTestId("gen-sap-btn")).toBeVisible();
   await page.getByTestId("gen-sap-btn").click();
   await expect(page.getByTestId("sap-title")).toBeVisible();
   await expect(page.getByTestId("sap-panel")).toContainText("ITT 分析集");

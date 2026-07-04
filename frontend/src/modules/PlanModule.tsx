@@ -91,6 +91,7 @@ export default function PlanModule() {
   const submit = () => {
     if (!idea.trim() || running) return;
     goStep(2);
+    if (text) setFollowups([]);
     start("plan", { idea, resources: withSampleSize(materials) });
   };
   const genSap = () => {
@@ -108,6 +109,7 @@ export default function PlanModule() {
 
   const reset = () => {
     if (running) stop();
+    if (fRunning) fctrl.current?.abort();
     if (sap.running) sap.stop();
     if (dmp.running) dmp.stop();
     if (consent.running) consent.stop();
@@ -134,6 +136,8 @@ export default function PlanModule() {
   const [fRunning, setFRunning] = useState(false);
   const [fError, setFError] = useState<string | null>(null);
   const fctrl = useRef<AbortController | null>(null);
+  const followupBaseDraftRef = useRef("");
+  const followupModeRef = useRef<"ask" | "revise">("ask");
 
   const runFollowup = async (mode: "ask" | "revise") => {
     const q = followupInput.trim();
@@ -142,6 +146,8 @@ export default function PlanModule() {
     setFRunning(true);
     fctrl.current = new AbortController();
     const baseDraft = text;
+    followupBaseDraftRef.current = baseDraft;
+    followupModeRef.current = mode;
     let buf = "";
     if (mode === "ask") setCurrentAnswer("…");
     else setText("");
@@ -396,7 +402,7 @@ export default function PlanModule() {
 
           <div className="wiz-nav">
             <button className="btn-ghost" onClick={reset} data-testid="reset-btn">清空</button>
-            <button className="btn-primary" onClick={submit} disabled={!idea.trim() || running} data-testid="wiz-next-1">
+            <button className="btn-primary" onClick={submit} disabled={!idea.trim() || running} data-testid="run-btn">
               {running ? "生成中…" : "下一步:生成方案 →"}
             </button>
           </div>
@@ -412,7 +418,7 @@ export default function PlanModule() {
       {step === 2 && (
         <div className="wiz-panel" data-testid="plan-panel-2">
           <div className="form-actions">
-            <button className="btn-primary" onClick={submit} disabled={!idea.trim() || running} data-testid="run-btn">
+            <button className="btn-primary" onClick={submit} disabled={!idea.trim() || running} data-testid="plan-regen-btn">
               {running ? "生成中…" : text ? "🔄 重新生成方案" : "生成实验计划"}
             </button>
             <button className="btn-secondary" onClick={genSap} disabled={!idea.trim() || sap.running} data-testid="gen-sap-btn">
@@ -491,7 +497,11 @@ export default function PlanModule() {
               <div className="form-actions">
                 <button className="btn-primary" data-testid="plan-ask-btn" onClick={() => runFollowup("ask")} disabled={!followupInput.trim() || fRunning}>追问</button>
                 <button className="btn-ghost" data-testid="plan-revise-btn" onClick={() => runFollowup("revise")} disabled={!followupInput.trim() || fRunning}>按此修改主方案</button>
-                {fRunning && <button className="btn-ghost" onClick={() => { fctrl.current?.abort(); setFRunning(false); }} data-testid="plan-followup-stop">停止</button>}
+                {fRunning && <button className="btn-ghost" onClick={() => {
+                  fctrl.current?.abort();
+                  if (followupModeRef.current === "revise") setText(followupBaseDraftRef.current);
+                  setFRunning(false);
+                }} data-testid="plan-followup-stop">停止</button>}
                 {fRunning && <span className="status-line"><span className="spinner" /> 处理中…</span>}
               </div>
             </div>
