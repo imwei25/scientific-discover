@@ -679,7 +679,7 @@ export default function FormatModule() {
       <div className="format-preview-toolbar">
         {/* 附上参考文献: 默认折叠, summary 只显示数目 */}
         {fmtRefs.length > 0 ? (
-          <details className="format-attach-refs" data-testid="format-attach-refs">
+          <details className="format-attach-refs adv-settings" data-testid="format-attach-refs">
             <summary className="adv-summary">
               <span className="adv-summary-main">📎 附上已排版的参考文献（已勾选 {selectedFmtIdxs.length} / {fmtRefs.length} 篇）</span>
             </summary>
@@ -823,7 +823,7 @@ export default function FormatModule() {
         <div className="format-handoff-toast">{handoffToast}</div>
       )}
       {importedRefs.length > 0 && (
-        <details className="format-structured-refs" data-testid="format-structured-refs">
+        <details className="format-structured-refs adv-settings" data-testid="format-structured-refs">
           <summary className="adv-summary">
             <span className="adv-summary-main">📚 带入的参考文献（{importedRefs.length} 篇；已勾选 {structuredCheckedRefs().length} 条）</span>
             <span className="adv-summary-sub">从「找选题 / 写标书」带入或从 Zotero / 文件导入；勾选后直接作为格式化/核验/推送的输入</span>
@@ -967,20 +967,67 @@ export default function FormatModule() {
       {fmtRefs.length > 0 && (
         <div className="result-panel">
           <div className="result-toolbar">
-            <span className="result-status">已格式化 {fmtRefs.length} 条</span>
-            <button
-              className="btn-ghost"
-              data-testid="copy-refs-btn"
-              onClick={() => copyToClipboard(fmtRefs.join("\n"))}
-            >
-              复制全部
-            </button>
+            <span className="result-status">已格式化 {fmtRefs.length} 条 · 已勾选 {selectedFmtIdxs.length} 条</span>
+            <div className="format-refs-manage-toolbar" style={{ margin: 0 }}>
+              <button
+                type="button"
+                className="btn-ghost btn-sm"
+                onClick={() => setSelectedFmtIdxs(fmtRefs.map((_, i) => i))}
+                disabled={selectedFmtIdxs.length === fmtRefs.length}
+              >
+                全选（{fmtRefs.length}）
+              </button>
+              <button
+                type="button"
+                className="btn-ghost btn-sm"
+                onClick={() => setSelectedFmtIdxs([])}
+                disabled={!selectedFmtIdxs.length}
+              >
+                全不选
+              </button>
+              <button
+                type="button"
+                className="btn-danger btn-sm"
+                onClick={() => {
+                  const n = selectedFmtIdxs.length;
+                  if (!n) return;
+                  if (!confirm(`确定删除已勾选的 ${n} 条已格式化的参考文献？此操作不可撤销。`)) return;
+                  const drop = new Set(selectedFmtIdxs);
+                  setFmtRefs(fmtRefs.filter((_, i) => !drop.has(i)));
+                  setFmtSourceRefs(fmtSourceRefs.filter((_, i) => !drop.has(i)));
+                  setSelectedFmtIdxs([]);
+                }}
+                disabled={!selectedFmtIdxs.length}
+                data-testid="delete-fmtrefs-btn"
+              >
+                🗑 删除已勾选（{selectedFmtIdxs.length}）
+              </button>
+              <button
+                className="btn-ghost btn-sm"
+                data-testid="copy-refs-btn"
+                onClick={() => copyToClipboard(fmtRefs.join("\n"))}
+              >
+                📋 复制全部
+              </button>
+            </div>
           </div>
-          <div className="fmt-refs" data-testid="fmt-refs">
-            {fmtRefs.map((r, i) => (
-              <p key={i}>{r}</p>
-            ))}
-          </div>
+          <ol className="fmt-refs" data-testid="fmt-refs">
+            {fmtRefs.map((r, i) => {
+              const checked = selectedFmtIdxs.includes(i);
+              return (
+                <li key={i} className={checked ? "fmt-refs-item selected" : "fmt-refs-item"}>
+                  <label>
+                    <input
+                      type="checkbox"
+                      checked={checked}
+                      onChange={() => setSelectedFmtIdxs((prev) => checked ? prev.filter((x) => x !== i) : [...prev, i].sort((a, b) => a - b))}
+                    />
+                    <span>{r}</span>
+                  </label>
+                </li>
+              );
+            })}
+          </ol>
         </div>
       )}
       </>
