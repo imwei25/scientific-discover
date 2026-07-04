@@ -47,6 +47,10 @@ async def analyze(
     from ..dataanalysis import analyze_data, draw_chart
 
     content = await _read_capped(file)
+    if content is None:
+        async def too_big():
+            yield _sse("error", {"message": "文件过大（超过 30MB），请上传更小的数据文件。"})
+        return StreamingResponse(too_big(), media_type="text/event-stream")
     filename = file.filename or "data.csv"
     gen_fn = draw_chart if mode == "draw" else analyze_data
 
@@ -73,6 +77,10 @@ async def analyze_refine(
     from ..dataanalysis import refine_analysis, refine_draw
 
     content = await _read_capped(file)
+    if content is None:
+        async def too_big():
+            yield _sse("error", {"message": "文件过大（超过 30MB），请上传更小的数据文件。"})
+        return StreamingResponse(too_big(), media_type="text/event-stream")
     filename = file.filename or "data.csv"
 
     async def gen():
