@@ -7,37 +7,14 @@ import { parseAttachments, appendAttachmentsToField } from "../lib/attachments";
 import AttachmentChips from "../components/AttachmentChips";
 import Markdown from "../components/Markdown";
 import EditableMarkdown from "../components/EditableMarkdown";
-import RefIO from "../components/RefIO";
-import ZoteroPanel from "../components/ZoteroPanel";
 import { downloadText, downloadCsv, downloadDocxFromText, downloadPdfFromText, tsName } from "../lib/download";
 import { stripSupportQuotes } from "../lib/exportPrep";
 import { usePersistentState } from "../lib/usePersistentState";
 import type { Goto } from "../App";
+import { LiteraturePicker } from "../components/LiteraturePicker";
+import { extractEvidenceForRefs } from "../lib/evidenceExtract";
+import { stash as stashHandoff } from "../lib/refHandoff";
 
-// 合并导入的 references 到现有列表, 按 DOI 优先去重, 缺 DOI 则按 (title|year) 兜底。
-// 返回 [合并后列表, 实际新增数, 跳过的重复数]
-function mergeRefs(existing: Reference[], incoming: Reference[]): { merged: Reference[]; added: number; dup: number } {
-  const norm = (s: string) => (s || "").trim().toLowerCase();
-  const keyOf = (r: Reference) => {
-    const doi = norm(r.pmid && r.pmid.startsWith("10.") ? r.pmid : "");
-    if (doi) return `doi:${doi}`;
-    if (r.pmid) return `pmid:${norm(r.pmid)}`;
-    return `tit:${norm(r.title)}|${norm(r.year)}`;
-  };
-  const seen = new Set(existing.map(keyOf));
-  const merged = [...existing];
-  let added = 0;
-  let dup = 0;
-  for (const r of incoming) {
-    if (!r || (!r.title && !r.pmid)) { dup += 1; continue; }
-    const k = keyOf(r);
-    if (seen.has(k)) { dup += 1; continue; }
-    seen.add(k);
-    merged.push(r);
-    added += 1;
-  }
-  return { merged, added, dup };
-}
 
 const STUDY_TYPES: { key: string; label: string }[] = [
   { key: "rct", label: "随机对照试验" },
@@ -56,8 +33,6 @@ function impactOf(r: Reference): number {
 function quartileRank(r: Reference): number {
   return r.journal_quartile ? Q_RANK[r.journal_quartile] ?? 99 : 99;
 }
-const REL_LABEL: Record<number, string> = { 3: "高相关", 2: "相关", 1: "弱相关", 0: "离题" };
-
 function sortRefs(refs: Reference[], by: string): Reference[] {
   if (by === "relevance") {
     const hasRel = refs.some((r) => typeof r.rel === "number");
@@ -132,6 +107,7 @@ export default function IdeaModule({ goto }: { goto: Goto }) {
   const [impactMin, setImpactMin] = usePersistentState("idea:impactMin", "");
   const [minQuartile, setMinQuartile] = usePersistentState("idea:minQuartile", "");
   const [keepUnknownImpact, setKeepUnknownImpact] = usePersistentState("idea:keepUnknownImpact", true);
+  const [englishReport, setEnglishReport] = usePersistentState("idea:englishReport", false);
 
   // 向导步骤 + 到达过的最大步骤(允许回看而不丢数据)
   const [step, setStep] = usePersistentState<number>("idea:step", 1);
@@ -152,6 +128,7 @@ export default function IdeaModule({ goto }: { goto: Goto }) {
   const [wordBusy, setWordBusy] = useState(false);
   const [running, setRunning] = useState(false); // 检索或生成进行中
   const [error, setError] = useState<string | null>(null);
+  const [evidenceExtractProgress, setEvidenceExtractProgress] = useState<{ done: number; total: number } | null>(null);
   const [rewrite, setRewrite] = useState<RewritePayload | null>(null);
   const ctrl = useRef<AbortController | null>(null);
 
@@ -305,6 +282,7 @@ export default function IdeaModule({ goto }: { goto: Goto }) {
         references: sel,
         evidence: selEvidence,
         phase: "generate",
+        english_report: englishReport,
       },
       {
         signal: ctrl.current.signal,
@@ -352,7 +330,7 @@ export default function IdeaModule({ goto }: { goto: Goto }) {
     if (mode === "ask") setCurrentAnswer("…");
     else setText("");
     await streamIdeaFollowup(
-      { mode, question: q, report: baseReport, references: refs, evidence },
+      { mode, question: q, report: baseReport, references: refs, evidence, english_report: englishReport },
       {
         signal: fctrl.current.signal,
         onDelta: (t) => { buf += t; if (mode === "ask") setCurrentAnswer(buf); else setText((p) => p + t); },
@@ -370,13 +348,7 @@ export default function IdeaModule({ goto }: { goto: Goto }) {
   const toggleStudyType = (key: string) => {
     setStudyTypes((prev) => (prev.includes(key) ? prev.filter((s) => s !== key) : [...prev, key]));
   };
-  const toggleSelect = (r: Reference) => {
-    const k = refKey(r);
-    setSelectedKeys((prev) => (prev.includes(k) ? prev.filter((x) => x !== k) : [...prev, k]));
-  };
-
   const shownRefs = sortRefs(refs, refSort);
-  const allSelected = refs.length > 0 && refs.every((r) => selectedSet.has(refKey(r)));
 
   // 文献 → 证据要点(核心发现) 的映射: 先按 URL, 再按题名。
   const evByRef = useMemo(() => {
@@ -389,6 +361,16 @@ export default function IdeaModule({ goto }: { goto: Goto }) {
     return (r: Reference): EvidenceItem | undefined =>
       byUrl[(r.url || "").replace(/\/+$/, "")] || byTitle[(r.title || "").trim().toLowerCase()];
   }, [evidence]);
+
+  // LiteraturePicker: evidenceByKey 按 refKey 索引(与 selectedKeys 格式一致)
+  const evidenceByKey = useMemo(() => {
+    const m: Record<string, EvidenceItem & { _ev_status?: string }> = {};
+    for (const r of refs) {
+      const ev = evByRef(r);
+      if (ev) m[refKey(r)] = ev as EvidenceItem & { _ev_status?: string };
+    }
+    return m;
+  }, [refs, evByRef]);
 
   const citeInfo = useMemo(() => {
     const m: Record<string, CiteInfo> = {};
@@ -424,15 +406,6 @@ export default function IdeaModule({ goto }: { goto: Goto }) {
   };
   const removeAttachment = (index: number) => {
     setPendingAttachments((prev) => prev.filter((_, i) => i !== index));
-  };
-
-  const importRefs = (imported: Reference[], srcLabel: string) => {
-    const { merged, added, dup } = mergeRefs(refs, imported);
-    setRefs(merged);
-    setSelectedKeys((prev) => [...new Set([...prev, ...imported.map(refKey)])]);
-    setError(null);
-    setStatus(`${srcLabel}导入 ${added} 篇，去重 ${dup} 篇`);
-    window.setTimeout(() => setStatus((s) => (s.startsWith(srcLabel) ? "" : s)), 4000);
   };
 
   return (
@@ -619,6 +592,18 @@ export default function IdeaModule({ goto }: { goto: Goto }) {
                 </label>
               </div>
             </div>
+            <div className="field">
+              <span className="field-label">报告语言</span>
+              <label className="type-chip" title="勾选后，最终调研报告与追问回答一律用英文输出（文献本身可为任意语言）">
+                <input
+                  type="checkbox"
+                  data-testid="english-report"
+                  checked={englishReport}
+                  onChange={(e) => setEnglishReport(e.target.checked)}
+                />
+                用英语输出最终报告
+              </label>
+            </div>
           </div>
           <div className="wiz-nav">
             <button className="btn-ghost" onClick={() => setStep(1)} data-testid="wiz-back-2">← 上一步</button>
@@ -657,34 +642,48 @@ export default function IdeaModule({ goto }: { goto: Goto }) {
             </div>
           )}
 
-          {/* 导入 / 导出 */}
-          <div className="lit-io" data-testid="lit-io">
-            <RefIO currentRefs={refs} exportFilename="找选题-文献" onImport={(imp) => importRefs(imp, "导入")} />
-            <ZoteroPanel
-              currentRefs={refs}
-              onImport={(imp) => importRefs(imp, "从 Zotero ")}
-              selectedForPush={refs.filter((r) => selectedSet.has(refKey(r)))}
-            />
-          </div>
-
-          {refs.length > 0 ? (
-            <div className="refs lit-review" data-testid="refs">
+          <LiteraturePicker
+            refs={shownRefs}
+            evidenceByKey={evidenceByKey}
+            selectedKeys={selectedKeys}
+            onSelectionChange={setSelectedKeys}
+            keyFn={refKey}
+            exportFilename="找选题-文献"
+            extractionStatus={evidenceExtractProgress}
+            onImport={async (imported) => {
+              // Merge new refs (dedup by existing refKey)
+              const keyMap = new Map(refs.map((r) => [refKey(r), r]));
+              for (const imp of imported) {
+                const k = refKey(imp);
+                const existing = keyMap.get(k);
+                if (!existing) keyMap.set(k, imp);
+                else if (!existing.abstract && imp.abstract) keyMap.set(k, { ...existing, ...imp, abstract: imp.abstract });
+              }
+              const merged = Array.from(keyMap.values());
+              setRefs(merged);
+              setSelectedKeys((prev) => [...new Set([...prev, ...imported.map(refKey)])]);
+              const newOnes = imported.filter((imp) => !refs.some((r) => refKey(r) === refKey(imp)));
+              if (!newOnes.length) return;
+              setEvidenceExtractProgress({ done: 0, total: newOnes.length });
+              const evMap = await extractEvidenceForRefs(newOnes, (d, t) => setEvidenceExtractProgress({ done: d, total: t }));
+              setEvidence((prev) => {
+                const next = [...prev];
+                for (const row of Object.values(evMap)) {
+                  if (prev.some((p) => p.url === row.url)) continue;
+                  next.push(row);
+                }
+                return next;
+              });
+              setEvidenceExtractProgress(null);
+            }}
+            header={
               <div className="lit-head">
                 <div className="lit-head-title">
                   文献与核心发现（已勾选 <strong>{selectedKeys.length}</strong> / 共 {refs.length} 篇）
                 </div>
                 <div className="ref-toolbar">
-                  <label className="lit-selectall">
-                    <input
-                      type="checkbox"
-                      data-testid="lit-select-all"
-                      checked={allSelected}
-                      onChange={(e) => setSelectedKeys(e.target.checked ? refs.map(refKey) : [])}
-                    />
-                    全选
-                  </label>
-                  <label>
-                    排序
+                  <label className="lit-sort">
+                    <span className="lit-sort-label">排序</span>
                     <select data-testid="ref-sort" value={refSort} onChange={(e) => setRefSort(e.target.value)}>
                       <option value="relevance">相关性</option>
                       <option value="cited">被引最多</option>
@@ -694,7 +693,7 @@ export default function IdeaModule({ goto }: { goto: Goto }) {
                     </select>
                   </label>
                   <button
-                    className="btn-ghost"
+                    className="btn-ghost lit-export-btn"
                     data-testid="export-evidence-btn"
                     onClick={() => {
                       const headers = ["序号", "第一作者", "年份", "标题", "期刊", "来源", "被引", "研究对象", "设计/方法", "主要发现", "局限/空白", "链接", "免费全文"];
@@ -705,79 +704,56 @@ export default function IdeaModule({ goto }: { goto: Goto }) {
                   >
                     导出证据表 CSV
                   </button>
+                  {running ? (
+                    <button className="btn-ghost" onClick={stop} data-testid="stop-btn-top">停止检索</button>
+                  ) : (
+                    <button
+                      className="btn-primary lit-start-btn"
+                      onClick={runGenerate}
+                      disabled={selectedKeys.length === 0}
+                      data-testid="wiz-next-3-top"
+                      title="据勾选的文献生成调研报告"
+                    >
+                      开始文献调研（{selectedKeys.length}）→
+                    </button>
+                  )}
                 </div>
               </div>
-              <ol className="lit-list" data-testid="lit-list">
-                {shownRefs.map((r, i) => {
-                  const ev = evByRef(r);
-                  const on = selectedSet.has(refKey(r));
-                  return (
-                    <li key={r.pmid || r.url || i} className={`lit-item${on ? " on" : ""}`} data-testid={`lit-item-${i}`}>
-                      <input
-                        type="checkbox"
-                        className="lit-check"
-                        data-testid={`lit-check-${i}`}
-                        checked={on}
-                        onChange={() => toggleSelect(r)}
-                        title="勾选后纳入调研生成"
-                      />
-                      <div className="lit-body">
-                        <div className="lit-badges">
-                          {typeof r.rel === "number" && r.rel >= 0 && (
-                            <span className={`ref-badge ref-badge-rel ref-badge-rel${r.rel}`} title={`AI 相关性判分：${REL_LABEL[r.rel] ?? r.rel}${r.rel_why ? " · " + r.rel_why : ""}`}>
-                              {REL_LABEL[r.rel] ?? `相关性 ${r.rel}`}
-                            </span>
-                          )}
-                          {r.source === "preprint" && <span className="ref-badge ref-badge-preprint">预印本</span>}
-                          {r.source === "europepmc" && <span className="ref-badge ref-badge-epmc">Europe PMC</span>}
-                          {r.source === "openalex" && <span className="ref-badge ref-badge-openalex">OpenAlex</span>}
-                          {r.source === "crossref" && <span className="ref-badge ref-badge-crossref">Crossref</span>}
-                          {r.journal_quartile && <span className={`ref-badge ref-badge-q ref-badge-${r.journal_quartile.toLowerCase()}`} title="Scimago 医学分区">{r.journal_quartile}</span>}
-                          {typeof r.journal_impact === "number" && <span className="ref-badge ref-badge-impact" title="影响力指数">影响力 {r.journal_impact.toFixed(1)}</span>}
-                          {(r.cited_by_count ?? 0) > 0 && <span className="ref-badge ref-badge-cited">被引 {r.cited_by_count}</span>}
-                        </div>
-                        <a className="lit-title" href={r.url} target="_blank" rel="noreferrer">
-                          {r.first_author} ({r.year}). {r.title}
-                        </a>
-                        {r.journal && <span className="ref-journal"> — {r.journal}</span>}
-                        {r.oa_url && <a className="ref-oa" href={r.oa_url} target="_blank" rel="noreferrer">🔓 免费全文</a>}
-                        {ev && (ev.finding || ev.pop || ev.design) && (
-                          <div className="lit-evidence">
-                            {ev.finding && <div className="lit-finding"><span className="lit-finding-tag">核心发现</span>{ev.finding}</div>}
-                            {(ev.pop || ev.design || ev.gap) && (
-                              <div className="lit-evmeta">
-                                {ev.pop && <span>对象：{ev.pop}</span>}
-                                {ev.design && <span>设计：{ev.design}</span>}
-                                {ev.gap && <span>局限：{ev.gap}</span>}
-                              </div>
-                            )}
-                          </div>
-                        )}
-                      </div>
-                    </li>
-                  );
-                })}
-              </ol>
+            }
+            secondaryAction={{
+              label: "→ 期刊排版",
+              onClick: (checked) => {
+                const subset: Record<string, EvidenceItem & { _ev_status?: string }> = {};
+                for (const r of checked) {
+                  const k = refKey(r);
+                  if (evidenceByKey[k]) subset[k] = evidenceByKey[k];
+                }
+                stashHandoff({ refs: checked, evidence: subset, from: "idea" });
+                // Format tab switch — hooked separately via refhandoff:pending event
+                goto("format", {});
+              },
+            }}
+          />
 
-              {trials.length > 0 && (
-                <details className="refs trials" data-testid="trials">
-                  <summary>🧪 相关在研临床试验（{trials.length} 项 · ClinicalTrials.gov）</summary>
-                  <ol className="ref-list">
-                    {trials.map((t, i) => (
-                      <li key={t.nct_id || i}>
-                        {t.status && <span className="ref-badge ref-badge-trial">{t.status}</span>}
-                        {t.phase && <span className="ref-badge ref-badge-phase">{t.phase}</span>}
-                        <a href={t.url} target="_blank" rel="noreferrer">{t.title}</a>
-                        {t.conditions && <span className="ref-journal"> — {t.conditions}</span>}
-                        <span className="trial-nct"> （{t.nct_id}{t.year ? `, ${t.year}` : ""}）</span>
-                      </li>
-                    ))}
-                  </ol>
-                </details>
-              )}
-            </div>
-          ) : (
-            !running && !rewrite && <p className="lit-empty">尚无文献。可返回上一步检索，或用上方「导入文献」带入。</p>
+          {refs.length === 0 && !running && !rewrite && (
+            <p className="lit-empty">尚无文献。可返回上一步检索，或用上方「导入文献」带入。</p>
+          )}
+
+          {trials.length > 0 && (
+            <details className="refs trials" data-testid="trials">
+              <summary>🧪 相关在研临床试验（{trials.length} 项 · ClinicalTrials.gov）</summary>
+              <ol className="ref-list">
+                {trials.map((t, i) => (
+                  <li key={t.nct_id || i}>
+                    {t.status && <span className="ref-badge ref-badge-trial">{t.status}</span>}
+                    {t.phase && <span className="ref-badge ref-badge-phase">{t.phase}</span>}
+                    <a href={t.url} target="_blank" rel="noreferrer">{t.title}</a>
+                    {t.conditions && <span className="ref-journal"> — {t.conditions}</span>}
+                    <span className="trial-nct"> （{t.nct_id}{t.year ? `, ${t.year}` : ""}）</span>
+                  </li>
+                ))}
+              </ol>
+            </details>
           )}
 
           <div className="wiz-nav">
@@ -921,10 +897,10 @@ export default function IdeaModule({ goto }: { goto: Goto }) {
             )
           )}
 
-          {/* 选题卡：候选方向 + 每个方向的「做实验规划/写标书」按钮 */}
+          {/* 选题卡：候选方向 + 每个方向的「写标书/做实验规划」按钮 */}
           {card && card.candidates.length > 0 && !running && (
             <div className="topic-card" data-testid="topic-card">
-              <div className="topic-card-head">🧭 选题卡 · 挑一个方向直接做实验规划或写标书</div>
+              <div className="topic-card-head">🧭 选题卡 · 挑一个方向直接写标书或做实验规划</div>
               {card.facets.length > 0 && (
                 <div className="topic-facets" data-testid="topic-facets">
                   <span className="topic-facets-label">子方向：</span>
@@ -943,26 +919,7 @@ export default function IdeaModule({ goto }: { goto: Goto }) {
                     </div>
                     <div className="candidate-actions">
                       <button
-                        className="btn-primary candidate-to-plan"
-                        data-testid={`candidate-to-plan-${i}`}
-                        onClick={() => {
-                          const parts: string[] = [];
-                          if (card.field) parts.push(`[学科领域]\n${card.field}`);
-                          if (background) parts.push(`[相关资料 · 来自找选题]\n${background}`);
-                          if (c.body) parts.push(`[候选方向补充]\n${c.body}`);
-                          goto("plan", {
-                            "plan:idea": `${c.title}\n\n${c.body}`,
-                            "plan:materials": parts.join("\n\n"),
-                            "plan:materials:migrated": true,
-                            "plan:step": 1,
-                            "plan:maxStep": 1,
-                          });
-                        }}
-                      >
-                        用此方向做实验规划 →
-                      </button>
-                      <button
-                        className="btn-ghost candidate-to-grant"
+                        className="btn-primary candidate-to-grant"
                         data-testid={`candidate-to-grant-${i}`}
                         onClick={() => {
                           const cited = refsCitedIn(c.body, refs);
@@ -980,6 +937,25 @@ export default function IdeaModule({ goto }: { goto: Goto }) {
                         }}
                       >
                         用此方向写标书 →
+                      </button>
+                      <button
+                        className="btn-ghost candidate-to-plan"
+                        data-testid={`candidate-to-plan-${i}`}
+                        onClick={() => {
+                          const parts: string[] = [];
+                          if (card.field) parts.push(`[学科领域]\n${card.field}`);
+                          if (background) parts.push(`[相关资料 · 来自找选题]\n${background}`);
+                          if (c.body) parts.push(`[候选方向补充]\n${c.body}`);
+                          goto("plan", {
+                            "plan:idea": `${c.title}\n\n${c.body}`,
+                            "plan:materials": parts.join("\n\n"),
+                            "plan:materials:migrated": true,
+                            "plan:step": 1,
+                            "plan:maxStep": 1,
+                          });
+                        }}
+                      >
+                        用此方向做实验规划 →
                       </button>
                     </div>
                   </li>

@@ -2203,12 +2203,22 @@ select {
   gap: 12px;
   align-items: center;
   margin: 8px 0;
-  font-size: 12px;
+  font-size: 13px;
   color: var(--muted);
 }
-.ref-toolbar select {
-  margin-left: 4px;
+.ref-toolbar > * {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  line-height: 1.6;
+  margin: 0;
 }
+.ref-toolbar select {
+  margin-left: 0;
+}
+.lit-sort { font-size: 13px; }
+.lit-sort-label { color: var(--muted); }
+.lit-export-btn { margin-left: auto; }
 .evidence-table {
   border-collapse: collapse;
   width: 100%;
@@ -4519,3 +4529,24 @@ mark.ai-edit {
   padding: 0 2px;
 }
 .attach-chip-remove:hover { color: #c00; }
+
+/* LiteraturePicker (extracted from IdeaModule Step 3) */
+.lit-picker { display: flex; flex-direction: column; gap: 12px; }
+.lit-picker-toolbar { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.lit-picker-count { color: var(--text-muted, #666); font-size: 0.9em; }
+.lit-picker-progress { color: var(--accent, #0a7); font-size: 0.85em; }
+.lit-picker-io { margin-left: auto; display: flex; gap: 8px; }
+.lit-picker-list { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 8px; }
+.lit-picker-row { display: flex; gap: 10px; padding: 10px 12px; border: 1px solid var(--border, #ddd); border-radius: 6px; }
+.lit-picker-row.selected { border-color: var(--accent, #0a7); background: var(--accent-bg, rgba(0,170,119,0.05)); }
+.lit-picker-check { display: flex; align-items: flex-start; padding-top: 2px; }
+.lit-picker-body { flex: 1; display: flex; flex-direction: column; gap: 4px; }
+.lit-picker-title a { font-weight: 600; }
+.lit-picker-meta { font-size: 0.85em; color: var(--text-muted, #666); }
+.lit-picker-evidence { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 4px; }
+.ev-chip { font-size: 0.8em; padding: 2px 8px; border-radius: 10px; background: var(--chip-bg, #eef); }
+.ev-chip.ev-finding { background: var(--chip-finding-bg, #efe); }
+.ev-chip.ev-empty, .ev-chip.ev-pending { background: transparent; color: var(--text-muted, #888); }
+.ev-chip.ev-error { background: var(--chip-error-bg, #fee); color: var(--error, #a00); }
+.lit-picker-actions { display: flex; justify-content: flex-end; gap: 8px; }
+.lit-picker-actions .primary { background: var(--accent, #0a7); color: white; }
