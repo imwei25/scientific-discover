@@ -709,6 +709,9 @@ test("论文初稿: 关键词/MeSH 推荐", async ({ page }) => {
   );
   await page.goto("/");
   await page.getByTestId("nav-imrad").click();
+  // Step 1 → Step 2: 需要先填 materials 并点 run-btn 才能看到 abs/kw 面板
+  await page.getByTestId("imrad-materials").fill("背景/方法/结果/讨论素材");
+  await page.getByTestId("run-btn").click();
   await page.getByTestId("abs-points").fill("二甲双胍治疗糖尿病合并脂肪肝");
   await page.getByTestId("kw-btn").click();
   await expect(page.getByTestId("kw-panel")).toContainText("关键词");
@@ -763,6 +766,9 @@ test("投稿包: 一键打包 ZIP", async ({ page }) => {
     localStorage.setItem("ra:idea:result", JSON.stringify("选题综述"));
   });
   await page.getByTestId("nav-imrad").click();
+  // Step 1 → Step 2: bundle-btn 在向导 Step 2 才渲染
+  await page.getByTestId("imrad-materials").fill("背景/方法/结果/讨论素材");
+  await page.getByTestId("run-btn").click();
   const dl = page.waitForEvent("download");
   await page.getByTestId("bundle-btn").click();
   expect((await dl).suggestedFilename()).toBe("research-package.zip");
@@ -798,8 +804,8 @@ test("论文初稿: IMRaD 装配 + 导入 + 结构式摘要字数", async ({ pag
   await page.evaluate(() => localStorage.setItem("ra:idea:result", JSON.stringify("我的综述与研究空白")));
   await page.getByTestId("nav-imrad").click();
   await page.getByTestId("imrad-import-btn").click();
-  await expect(page.getByTestId("imrad-background")).toHaveValue(/综述与研究空白/);
-  // 装配初稿
+  await expect(page.getByTestId("imrad-materials")).toHaveValue(/综述与研究空白/);
+  // 装配初稿(向导 Step 1 → Step 2)
   await page.getByTestId("run-btn").click();
   await expect(page.getByTestId("result-text")).toContainText("引言");
   await expect(page.getByTestId("export-docx-btn")).toBeVisible();
