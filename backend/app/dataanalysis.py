@@ -943,6 +943,66 @@ async def analyze_data(
         yield ("error", {"message": f"分析过程出错：{e}"})
 
 
+async def draw_chart(
+    filename: str, content: bytes, question: str, chart_format: str = "png", palette: str = "default",
+) -> AsyncIterator[tuple[str, dict]]:
+    """只画图模式:profile → 单发画图代码 → 执行 → 出图。
+    不做探索、不做统计规格抽取、不写结论。绝不发 delta/transparency_*/output/plan 事件。"""
+    if settings.mock:
+        yield ("status", {"message": "[MOCK] 生成图…"})
+        yield ("code", {"code": "# mock draw\nimport matplotlib.pyplot as plt\nplt.bar([1,2],[3,4])"})
+        yield ("charts", {"items": [{"png": "", "data": "", "ext": "png"}]})
+        yield ("done", {})
+        return
+
+    try:
+        yield ("status", {"message": "正在读取数据…"})
+        try:
+            df = _load(filename, content)
+        except Exception as e:  # noqa: BLE001
+            yield ("error", {"message": f"无法读取数据文件:{e}"})
+            return
+        if df.empty:
+            yield ("error", {"message": "数据为空。"})
+            return
+        profile = profile_data(df)
+
+        yield ("status", {"message": "正在生成画图代码…"})
+        code = _extract_code(await _complete(
+            _gen_draw_messages(profile, question), max_tokens=4096,
+        ))
+        yield ("code", {"code": code})
+        yield ("status", {"message": "正在本地执行画图…"})
+        run = await asyncio.to_thread(_execute, code, df, chart_format, palette)
+
+        seen_sigs: list[str] = []
+        for attempt in range(3):
+            if run.get("ok"):
+                break
+            sig = _err_sig(run.get("error", ""))
+            fresh = bool(sig) and sig in seen_sigs
+            seen_sigs.append(sig)
+            hint = "(换一种思路重写)" if fresh else ""
+            yield ("status", {"message": f"执行出错,正在自动修正代码(第 {attempt + 1} 次){hint}…"})
+            code = _extract_code(await _complete(
+                _fix_code_messages(profile, question, code, run.get("error", ""), fresh=fresh),
+                max_tokens=4096,
+            ))
+            yield ("code", {"code": code})
+            yield ("status", {"message": "正在重新执行…"})
+            run = await asyncio.to_thread(_execute, code, df, chart_format, palette)
+
+        if run.get("charts"):
+            yield ("charts", {"items": run["charts"]})
+        # 注意:draw 模式不发 output 事件——用户明确只想看图, 系统日志级别的 print 不入前端
+        if not run.get("ok"):
+            yield ("error", {"message": "画图代码执行失败:\n" + (run.get("error") or "未知错误")})
+            return
+        yield ("done", {})
+    except Exception as e:  # noqa: BLE001
+        yield ("error", {"message": f"画图过程出错:{e}"})
+
+
 async def _refine_mock(requirement: str) -> AsyncIterator[tuple[str, dict]]:
     yield ("status", {"message": "正在按新需求修改分析代码…"})
     yield ("code", {"code": f"# [MOCK] 按新需求修改: {requirement}\nprint('已按新需求重跑，p=0.008')"})
