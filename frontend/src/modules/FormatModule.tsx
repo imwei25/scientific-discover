@@ -5,46 +5,14 @@ import { addHistory } from "../lib/history";
 import { apiUrl } from "../lib/api";
 import ResultPanel from "../components/ResultPanel";
 import Dropzone from "../components/Dropzone";
-import RefIO from "../components/RefIO";
-import type { Reference } from "../lib/sse";
+import type { Reference, EvidenceItem } from "../lib/sse";
 import { downloadDocxFromText, downloadBase64, openInOverleaf } from "../lib/download";
 import { copyToClipboard } from "../lib/clipboard";
 import DiffView from "../components/DiffView";
+import { LiteraturePicker, pickerKey } from "../components/LiteraturePicker";
+import { extractEvidenceForRefs } from "../lib/evidenceExtract";
+import { consume as consumeHandoff, REFHANDOFF_EVENT } from "../lib/refHandoff";
 
-// 与 IdeaModule 同一套合并逻辑: DOI 优先, 兜底 title+year. 这里独立一份避免跨模块耦合.
-function mergeRefs(existing: Reference[], incoming: Reference[]): { merged: Reference[]; added: number; dup: number } {
-  const norm = (s: string) => (s || "").trim().toLowerCase();
-  const keyOf = (r: Reference) => {
-    const doi = norm(r.pmid && r.pmid.startsWith("10.") ? r.pmid : "");
-    if (doi) return `doi:${doi}`;
-    if (r.pmid) return `pmid:${norm(r.pmid)}`;
-    return `tit:${norm(r.title)}|${norm(r.year)}`;
-  };
-  const seen = new Set(existing.map(keyOf));
-  const merged = [...existing];
-  let added = 0;
-  let dup = 0;
-  for (const r of incoming) {
-    if (!r || (!r.title && !r.pmid)) { dup += 1; continue; }
-    const k = keyOf(r);
-    if (seen.has(k)) { dup += 1; continue; }
-    seen.add(k);
-    merged.push(r);
-    added += 1;
-  }
-  return { merged, added, dup };
-}
-
-// 把一条 Reference 渲染回纯文本, 用于追加到参考文献输入框 (粗略 Vancouver 形态).
-function refToLine(r: Reference): string {
-  const parts: string[] = [];
-  if (r.first_author) parts.push(r.first_author);
-  if (r.year) parts.push(`(${r.year})`);
-  if (r.title) parts.push(r.title + (r.title.endsWith(".") ? "" : "."));
-  if (r.journal) parts.push(r.journal + ".");
-  if (r.url) parts.push(r.url);
-  return parts.join(" ").trim();
-}
 
 interface Journal {
   id: string;
@@ -101,6 +69,7 @@ export default function FormatModule() {
   const [latexErr, setLatexErr] = useState<string | null>(null);
   const [latexZip, setLatexZip] = useState("");
   const [latexNote, setLatexNote] = useState("");
+  const [latexCompiler, setLatexCompiler] = useState("");
   const { text, running, error, start, stop, setText } = useStream("format:result");
   // 投稿包: 投稿就绪检查(确定性) + 投稿信(LLM 流)
   const [readiness, setReadiness] = usePersistentState<ReadinessResult | null>("format:readiness", null);
@@ -122,24 +91,34 @@ export default function FormatModule() {
 
   // 引用文件双向导入导出: 用户从 EndNote/Zotero 导入的结构化引用 + 用于导出.
   const [importedRefs, setImportedRefs] = usePersistentState<Reference[]>("format:importedRefs", []);
-  const [importNote, setImportNote] = useState("");
-  // 导出来源: 已导入的引用 + 核验结果(真实条目, 已带 doi/pmid/title), 取并集.
-  const exportableRefs: Reference[] = (() => {
-    const fromCheck: Reference[] = (checkResult || [])
-      .filter((it) => !it.duplicate_of && (it.title || it.doi || it.pmid))
-      .map((it) => ({
-        pmid: it.doi || it.pmid || "",
-        title: it.title || it.raw || "",
-        first_author: "",
-        journal: "",
-        year: "",
-        url: it.doi ? `https://doi.org/${it.doi}` : (it.pmid ? `https://pubmed.ncbi.nlm.nih.gov/${it.pmid}/` : ""),
-      }));
-    return mergeRefs(importedRefs, fromCheck).merged;
-  })();
+
+  // 结构化参考文献面板: evidence、勾选 keys、提取进度、handoff 通知
+  const [structuredEvidence, setStructuredEvidence] = usePersistentState<Record<string, EvidenceItem & { _ev_status?: string }>>("format:evidence", {});
+  const [structuredSelectedKeys, setStructuredSelectedKeys] = usePersistentState<string[]>("format:selectedKeys", []);
+  const [formatExtractProgress, setFormatExtractProgress] = useState<{ done: number; total: number } | null>(null);
+  const [handoffToast, setHandoffToast] = useState<string | null>(null);
+
+  // 结构化参考文献优先: 若有勾选条目则序列化为文本传给后端, 否则退回 textarea
+  const structuredCheckedRefs = (): Reference[] => {
+    if (!structuredSelectedKeys.length) return [];
+    const s = new Set(structuredSelectedKeys);
+    return importedRefs.filter((r) => s.has(pickerKey(r)));
+  };
+
+  const refsBodyForApi = (): string => {
+    const struct = structuredCheckedRefs();
+    if (!struct.length) return refsInput;
+    return struct
+      .map(
+        (r, i) =>
+          `${i + 1}. ${r.first_author || ""} et al. ${r.title || ""}. ${r.journal || ""}. ${r.year || ""}. ${r.doi ? "DOI:" + r.doi : r.url || ""}`,
+      )
+      .join("\n");
+  };
 
   const checkRefs = async () => {
-    if (!refsInput.trim() || checkBusy) return;
+    if (!refsInput.trim() && !structuredCheckedRefs().length) return;
+    if (checkBusy) return;
     setCheckBusy(true);
     setCheckErr(null);
     setCheckResult([]);
@@ -147,7 +126,7 @@ export default function FormatModule() {
       const resp = await fetch(apiUrl("/api/check-refs"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ references: refsInput }),
+        body: JSON.stringify({ references: refsBodyForApi() }),
       });
       const d = await resp.json();
       if (d.ok) setCheckResult(d.items || []);
@@ -173,8 +152,35 @@ export default function FormatModule() {
     }
   }, [running, error, text, manuscript, journalId]);
 
+  // 消费来自 IdeaModule / GrantModule 的参考文献 handoff
+  useEffect(() => {
+    const drain = () => {
+      const stash = consumeHandoff();
+      if (!stash) return;
+      setImportedRefs((prev) => {
+        const keyMap = new Map(prev.map((r) => [pickerKey(r), r]));
+        for (const r of stash.refs) keyMap.set(pickerKey(r), r);
+        return Array.from(keyMap.values());
+      });
+      setStructuredEvidence((prev) => ({ ...prev, ...stash.evidence }));
+      setStructuredSelectedKeys((prev) => {
+        const s = new Set(prev);
+        for (const r of stash.refs) s.add(pickerKey(r));
+        return Array.from(s);
+      });
+      const src = stash.from === "idea" ? "找选题" : "写标书";
+      setHandoffToast(`已从 ${src} 带入 ${stash.refs.length} 篇文献`);
+      setTimeout(() => setHandoffToast(null), 4000);
+    };
+    drain(); // consume stash that arrived before mount
+    window.addEventListener(REFHANDOFF_EVENT, drain);
+    return () => window.removeEventListener(REFHANDOFF_EVENT, drain);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   const formatRefs = async () => {
-    if (!refsInput.trim() || refsBusy) return;
+    if (!refsInput.trim() && !structuredCheckedRefs().length) return;
+    if (refsBusy) return;
     setRefsBusy(true);
     setRefsErr(null);
     setFmtRefs([]);
@@ -182,7 +188,7 @@ export default function FormatModule() {
       const resp = await fetch(apiUrl("/api/format-refs"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ references: refsInput, journal_id: journalId }),
+        body: JSON.stringify({ references: refsBodyForApi(), journal_id: journalId }),
       });
       const d = await resp.json();
       if (d.ok) setFmtRefs(d.formatted || []);
@@ -277,10 +283,13 @@ export default function FormatModule() {
     setCheckResult([]);
     setCheckErr(null);
     setImportedRefs([]);
-    setImportNote("");
+    setStructuredEvidence({});
+    setStructuredSelectedKeys([]);
+    setHandoffToast(null);
     setLatexZip("");
     setLatexErr(null);
     setLatexNote("");
+    setLatexCompiler("");
   };
 
   const [dlErr, setDlErr] = useState<string | null>(null);
@@ -304,21 +313,31 @@ export default function FormatModule() {
     setLatexErr(null);
     setLatexZip("");
     setLatexNote("");
+    setLatexCompiler("");
     try {
       const resp = await fetch(apiUrl("/api/latex"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text, journal_id: journalId, references: refsInput }),
+        body: JSON.stringify({ text, journal_id: journalId, references: refsBodyForApi() }),
       });
+      // 若后端未启动/崩溃, resp.ok 会为 false 或 resp.json() 抛异常, 需明确提示
+      if (!resp.ok) {
+        const rawText = await resp.text().catch(() => "");
+        throw new Error(`后端返回 ${resp.status}: ${rawText.slice(0, 200) || "无响应体"}`);
+      }
       const d = await resp.json();
       if (d.ok) {
         setLatexZip(d.b64zip || "");
         setLatexNote(d.note || "");
+        setLatexCompiler(d.compiler || "");
       } else {
         setLatexErr(d.error || "生成失败");
       }
     } catch (e) {
-      setLatexErr(`生成失败：${(e as Error).message}`);
+      setLatexErr(
+        `生成失败：${(e as Error).message}。` +
+        `请确认后端正在运行(端口 8756);若刚更新过代码,需要重启后端并强制刷新浏览器(Ctrl+Shift+R)。`
+      );
     } finally {
       setLatexBusy(false);
       window.dispatchEvent(new Event("usage-updated"));
@@ -326,6 +345,29 @@ export default function FormatModule() {
   };
 
   const selected = journals.find((j) => j.id === journalId);
+
+  // LaTeX 预检: 检测稿件里的"LaTeX 不友好"内容, 在导出前给用户提示。
+  const latexWarnings = (() => {
+    if (!text || running) return [] as string[];
+    const w: string[] = [];
+    const hasEmoji = /[\u{1F000}-\u{1FFFF}\u2600-\u27BF]/u.test(text);
+    if (hasEmoji) w.push("检测到 emoji/装饰符号 — 导出时会自动剥离");
+    const tableCount = (text.match(/^\s*\|.+\|\s*$/gm) || []).length;
+    if (tableCount >= 2) w.push(`检测到约 ${Math.floor(tableCount / 2)} 处 markdown 表格 — 会转成 LaTeX tabular, 可能需要手工微调列宽`);
+    const codeFences = (text.match(/^```/gm) || []).length;
+    if (codeFences >= 2) w.push(`检测到 ${Math.floor(codeFences / 2)} 处代码块 — 会转成 verbatim 环境`);
+    const hasCjk = /[\u4e00-\u9fff]/.test(text);
+    if (hasCjk && journalId === "ieee") {
+      w.push("稿件含中文, 但 IEEEtran 官方类不支持中文 — 会自动降级到 article+ctex, 需在 Overleaf 选 XeLaTeX");
+    } else if (hasCjk && (journalId === "general_cn" || journalId === "")) {
+      w.push("稿件含中文 — 在 Overleaf 请选 XeLaTeX 编译器");
+    } else if (hasCjk) {
+      w.push(`稿件含中文 — 在 Overleaf 请选 XeLaTeX 编译器`);
+    } else {
+      w.push("纯英文稿件 — 在 Overleaf 用默认 pdfLaTeX 即可");
+    }
+    return w;
+  })();
 
   return (
     <div className="module">
@@ -418,6 +460,7 @@ export default function FormatModule() {
         onStop={stop}
         exportName="排版稿"
         placeholder="重排后的稿件会显示在这里，并附上格式变更说明。"
+        hideMdActions
       />
 
       {text && !running && (
@@ -460,6 +503,56 @@ export default function FormatModule() {
               </button>
             </>
           )}
+        </div>
+      )}
+      {latexCompiler && latexZip && (
+        <div
+          data-testid="latex-compiler-hint"
+          style={{
+            marginTop: 10,
+            padding: "12px 16px",
+            borderLeft: "5px solid #f59e0b",
+            background: "#fffbeb",
+            borderRadius: 6,
+            fontSize: "1.05rem",
+            lineHeight: 1.55,
+          }}
+        >
+          <div style={{ fontWeight: 700, fontSize: "1.15rem", color: "#92400e" }}>
+            ⚠️ Overleaf 编译器请选：
+            <code
+              style={{
+                padding: "3px 10px",
+                background: "#fde68a",
+                borderRadius: 4,
+                marginLeft: 8,
+                fontSize: "1.2rem",
+                fontWeight: 800,
+                color: "#7c2d12",
+                border: "1px solid #f59e0b",
+              }}
+            >
+              {latexCompiler === "xelatex" ? "XeLaTeX" : latexCompiler === "lualatex" ? "LuaLaTeX" : "pdfLaTeX"}
+            </code>
+          </div>
+          <div style={{ marginTop: 6, fontWeight: 600, color: "#78350f" }}>
+            切换路径：Overleaf 项目左上「Menu」→「Compiler」下拉。
+          </div>
+          {latexCompiler === "xelatex" && (
+            <div style={{ marginTop: 4, fontWeight: 700, color: "#b91c1c" }}>
+              ‼️ 稿件含中文或需要 fontspec，<u>必须</u>用 XeLaTeX，否则会中文乱码或字体报错。
+            </div>
+          )}
+        </div>
+      )}
+      {latexWarnings.length > 0 && !latexZip && (
+        <div className="field-hint" data-testid="latex-precheck" style={{ marginTop: 6 }}>
+          <strong>LaTeX 预检提示：</strong>
+          <ul style={{ margin: "4px 0 0 20px", padding: 0 }}>
+            {latexWarnings.map((w, i) => (
+              <li key={i}>{w}</li>
+            ))}
+          </ul>
         </div>
       )}
       {latexErr && <div className="result-error" data-testid="latex-error">{latexErr}</div>}
@@ -539,48 +632,54 @@ export default function FormatModule() {
         粘贴你的参考文献，按所选期刊的引用规范（如 Vancouver、GB/T 7714、IEEE 等）自动排好。
         采用标准 CSL 引用引擎渲染，格式准确。
       </p>
-      <RefIO
-        currentRefs={exportableRefs}
-        exportFilename="期刊排版-参考文献"
-        onImport={(imported) => {
-          const { merged, added, dup } = mergeRefs(importedRefs, imported);
-          setImportedRefs(merged);
-          // 同时把导入条目以文本形式追加到 refsInput, 直接可用于格式化/核验.
-          if (added > 0) {
-            const lines = imported
-              .filter((r) => r && (r.title || r.pmid))
-              .map(refToLine)
-              .filter(Boolean)
-              .join("\n");
-            if (lines) {
-              setRefsInput((prev) => (prev && prev.trim() ? prev.trimEnd() + "\n" + lines : lines));
-            }
-          }
-          setImportNote(`导入 ${added} 篇，去重 ${dup} 篇`);
-          window.setTimeout(() => setImportNote(""), 4000);
-        }}
-      />
-      {importNote && (
-        <div className="status-line" data-testid="refio-import-note">{importNote}</div>
+      {handoffToast && (
+        <div className="format-handoff-toast">{handoffToast}</div>
       )}
       {importedRefs.length > 0 && (
-        <details className="refs" data-testid="imported-refs">
-          <summary>已导入的引用（{importedRefs.length} 篇，可在下方文本中编辑或直接导出）</summary>
-          <ol className="ref-list">
-            {importedRefs.map((r, i) => (
-              <li key={(r.pmid || r.url || "") + i}>
-                {r.first_author && <>{r.first_author} </>}
-                {r.year && <>({r.year}) </>}
-                {r.url ? <a href={r.url} target="_blank" rel="noreferrer">{r.title || r.url}</a> : (r.title || r.pmid)}
-                {r.journal && <span className="ref-journal"> — {r.journal}</span>}
-              </li>
-            ))}
-          </ol>
-        </details>
+        <section className="format-structured-refs">
+          <h3>结构化参考文献（勾选后作为格式化/核验/推送的输入）</h3>
+          <LiteraturePicker
+            refs={importedRefs}
+            evidenceByKey={structuredEvidence}
+            selectedKeys={structuredSelectedKeys}
+            onSelectionChange={setStructuredSelectedKeys}
+            mode="list"
+            onImport={async (imported) => {
+              // 合并到 importedRefs (按 pickerKey 去重; 有摘要时升级)
+              const keyMap = new Map(importedRefs.map((r) => [pickerKey(r), r]));
+              for (const imp of imported) {
+                const k = pickerKey(imp);
+                const existing = keyMap.get(k);
+                if (!existing) keyMap.set(k, imp);
+                else if (!existing.abstract && imp.abstract) keyMap.set(k, { ...existing, ...imp, abstract: imp.abstract });
+              }
+              setImportedRefs(Array.from(keyMap.values()));
+
+              // 保留旧的文本追加行为: 同时写入 refsInput 作为降级后备
+              const asText = imported
+                .map((r) => `${r.first_author || ""} et al. (${r.year || ""}). ${r.title || ""}. ${r.journal || ""}. ${r.url || ""}`)
+                .join("\n");
+              setRefsInput((prev) => prev + (prev.endsWith("\n") || !prev ? "" : "\n") + asText);
+
+              const newOnes = imported.filter((imp) => !importedRefs.some((r) => pickerKey(r) === pickerKey(imp)));
+              if (!newOnes.length) return;
+              setFormatExtractProgress({ done: 0, total: newOnes.length });
+              try {
+                const evMap = await extractEvidenceForRefs(newOnes, (d, t) => setFormatExtractProgress({ done: d, total: t }));
+                setStructuredEvidence((prev) => ({ ...prev, ...evMap }));
+              } finally {
+                setFormatExtractProgress(null);
+              }
+            }}
+            extractionStatus={formatExtractProgress}
+            exportFilename="format-refs"
+            showZotero={true}
+          />
+        </section>
       )}
       <div className="form">
         <label className="field">
-          <span className="field-label">参考文献（每条一行，或整段粘贴）</span>
+          <span className="field-label">参考文献（每条一行，或整段粘贴；无结构化文献时直接用此输入）</span>
           <textarea
             data-testid="input-refs"
             value={refsInput}
@@ -593,7 +692,7 @@ export default function FormatModule() {
           <button
             className="btn-primary"
             onClick={formatRefs}
-            disabled={!refsInput.trim() || refsBusy}
+            disabled={(!refsInput.trim() && !structuredCheckedRefs().length) || refsBusy}
             data-testid="format-refs-btn"
           >
             {refsBusy ? "格式化中…" : "按该期刊格式化参考文献"}
@@ -601,7 +700,7 @@ export default function FormatModule() {
           <button
             className="btn-secondary"
             onClick={checkRefs}
-            disabled={!refsInput.trim() || checkBusy}
+            disabled={(!refsInput.trim() && !structuredCheckedRefs().length) || checkBusy}
             data-testid="check-refs-btn"
           >
             {checkBusy ? "核验中…" : "核验真实性 / 撤稿 / 去重"}
