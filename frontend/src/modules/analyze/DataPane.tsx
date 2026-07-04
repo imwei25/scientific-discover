@@ -423,11 +423,17 @@ export default function DataPane({ goto }: { goto: Goto }) {
               name="analyze-mode"
               data-testid="mode-analyze"
               checked={mode === "analyze"}
+              disabled={running}
               onChange={() => {
+                if (running) return;
                 setMode("analyze");
                 setConclusion("");
                 setOutput("");
                 setTransparency({ method: "", assumption: "", quality: "" });
+                setCharts([]);
+                setPlan([]);
+                setCode("");
+                setCaptions([]);
               }}
             />
             <span>📊 数据分析</span>
@@ -439,11 +445,17 @@ export default function DataPane({ goto }: { goto: Goto }) {
               name="analyze-mode"
               data-testid="mode-draw"
               checked={mode === "draw"}
+              disabled={running}
               onChange={() => {
+                if (running) return;
                 setMode("draw");
                 setConclusion("");
                 setOutput("");
                 setTransparency({ method: "", assumption: "", quality: "" });
+                setCharts([]);
+                setPlan([]);
+                setCode("");
+                setCaptions([]);
               }}
             />
             <span>🎨 只画图</span>
