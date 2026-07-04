@@ -4454,3 +4454,37 @@ mark.ai-edit {
   border-radius: var(--radius-sm);
   background: var(--surface-2);
 }
+
+/* 附件 chip: 与 combo-foot 内其他控件同排, 横向可换行 */
+.attach-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 6px;
+}
+.attach-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  background: var(--chip-bg, #eef2ff);
+  border: 1px solid var(--chip-border, #c7d2fe);
+  border-radius: 999px;
+  font-size: 12px;
+  max-width: 240px;
+}
+.attach-chip-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.attach-chip-remove {
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  color: #666;
+  font-size: 14px;
+  line-height: 1;
+  padding: 0 2px;
+}
+.attach-chip-remove:hover { color: #c00; }
