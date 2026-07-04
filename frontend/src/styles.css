@@ -854,6 +854,54 @@ body {
 .grant-refs-list li { margin-bottom: 4px; }
 .grant-refs-list .grant-refs-meta { color: var(--muted); font-size: 12px; }
 
+/* 期刊排版分页 */
+.format-tabs {
+  display: flex;
+  gap: 4px;
+  border-bottom: 2px solid var(--line);
+  margin: 16px 0 12px;
+}
+.format-tab {
+  background: transparent;
+  border: none;
+  padding: 10px 20px;
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--muted);
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -2px;
+  transition: color 0.15s, border-color 0.15s;
+}
+.format-tab:hover { color: var(--text); }
+.format-tab.active {
+  color: var(--accent, #0a7);
+  border-bottom-color: var(--accent, #0a7);
+}
+.format-tab-badge {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 1px 8px;
+  border-radius: 10px;
+  background: var(--teal-soft, #e6f4ee);
+  color: var(--accent, #0a7);
+  font-size: 12px;
+  font-weight: 600;
+}
+/* 正文排版页: 已排版参考文献勾选表 */
+.format-attach-refs { margin: 12px 0; }
+.format-attach-toolbar { display: flex; gap: 8px; margin-bottom: 8px; }
+.format-attach-list {
+  margin: 0;
+  padding-left: 0;
+  list-style: none;
+  max-height: 320px;
+  overflow-y: auto;
+}
+.format-attach-list li { padding: 4px 0; border-bottom: 1px dashed var(--line); }
+.format-attach-list label { display: flex; gap: 8px; align-items: flex-start; cursor: pointer; font-size: 13px; line-height: 1.5; }
+.format-attach-list input[type="checkbox"] { margin-top: 3px; }
+
 /* 3D 球棍模型：原子球加细描边 + 浅高光感 */
 .atoms-group circle {
   stroke: rgba(0, 0, 0, 0.18);

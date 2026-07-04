@@ -98,6 +98,26 @@ export default function FormatModule() {
   // handoff 到达后, 若期刊模板已选好, 自动跑一次「按该期刊格式化参考文献」。
   const [pendingAutoFormat, setPendingAutoFormat] = useState(false);
 
+  // 两个分页: refs 参考文献 | manuscript 正文排版
+  type FormatTab = "refs" | "manuscript";
+  const [activeTab, setActiveTab] = usePersistentState<FormatTab>("format:tab", "manuscript");
+
+  // 正文排版分页上, 用户可勾选参考文献分页已排版好的条目, 附到 Word 下载末尾。
+  const [selectedFmtIdxs, setSelectedFmtIdxs] = usePersistentState<number[]>("format:selectedFmtIdxs", []);
+  // fmtRefs 变化时, 默认全选新的条目 (只有当当前选择为空 或 长度和 fmtRefs 不匹配时才重置, 避免覆盖手动微调)。
+  useEffect(() => {
+    if (!fmtRefs.length) {
+      if (selectedFmtIdxs.length) setSelectedFmtIdxs([]);
+      return;
+    }
+    // 上次和这次都非空但条目变了 (通常是重新格式化), 或本来就没选过 → 全选。
+    const allValid = selectedFmtIdxs.every((i) => i >= 0 && i < fmtRefs.length);
+    if (!allValid || selectedFmtIdxs.length === 0) {
+      setSelectedFmtIdxs(fmtRefs.map((_, i) => i));
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [fmtRefs.length]);
+
   // 结构化参考文献优先: 若有勾选条目则以 CSL-JSON 送后端(跳过 LLM 解析), 否则退回 textarea
   const structuredCheckedRefs = (): Reference[] => {
     if (!structuredSelectedKeys.length) return [];
@@ -213,6 +233,8 @@ export default function FormatModule() {
       const src = stash.from === "idea" ? "找选题" : "写标书";
       setHandoffToast(`已从 ${src} 带入 ${stash.refs.length} 篇文献`);
       setTimeout(() => setHandoffToast(null), 4000);
+      // 带入的文献落在「参考文献」分页; 自动切过去让用户看到发生了什么。
+      setActiveTab("refs");
       // 一键格式化: 若期刊模板已选好, 立刻跑; 否则挂待办, 等 journals 加载完再触发。
       setPendingAutoFormat(true);
     };
@@ -339,6 +361,7 @@ export default function FormatModule() {
     setCheckErr(null);
     setImportedRefs([]);
     setStructuredSelectedKeys([]);
+    setSelectedFmtIdxs([]);
     // 顺手清掉遗留的 format:evidence（老版本可能留下的 localStorage 键）
     try { localStorage.removeItem("format:evidence"); } catch { /* no-op */ }
     setHandoffToast(null);
@@ -349,12 +372,17 @@ export default function FormatModule() {
   };
 
   const [dlErr, setDlErr] = useState<string | null>(null);
+  /** 已勾选的 fmtRefs 子集 (若 selectedFmtIdxs 为空则视为空)。 */
+  const checkedFmtRefs = (): string[] => {
+    const s = new Set(selectedFmtIdxs);
+    return fmtRefs.filter((_, i) => s.has(i));
+  };
   const downloadDocx = async () => {
     if (!text || downloading) return;
     setDownloading(true);
     setDlErr(null);
     try {
-      await downloadDocxFromText("manuscript.docx", text, { journal_id: journalId, references: fmtRefs });
+      await downloadDocxFromText("manuscript.docx", text, { journal_id: journalId, references: checkedFmtRefs() });
     } catch (e) {
       setDlErr(`导出 Word 失败：${(e as Error).message}`);
     } finally {
@@ -451,6 +479,7 @@ export default function FormatModule() {
         </p>
       </header>
 
+      {/* 共享: 目标期刊 (两个 tab 都用) */}
       <div className="form">
         <label className="field">
           <span className="field-label">目标期刊</span>
@@ -471,6 +500,35 @@ export default function FormatModule() {
             「中文核心 GB/T 7714」作为基础，投稿前再对照目标刊官网 Author Guidelines 微调即可。
           </span>
         </label>
+      </div>
+
+      {/* 分页栏: 参考文献 | 正文排版 */}
+      <div className="format-tabs" role="tablist" data-testid="format-tabs">
+        <button
+          type="button"
+          role="tab"
+          aria-selected={activeTab === "refs"}
+          className={`format-tab${activeTab === "refs" ? " active" : ""}`}
+          onClick={() => setActiveTab("refs")}
+          data-testid="format-tab-refs"
+        >
+          📚 参考文献{importedRefs.length > 0 && <span className="format-tab-badge">{importedRefs.length}</span>}
+        </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={activeTab === "manuscript"}
+          className={`format-tab${activeTab === "manuscript" ? " active" : ""}`}
+          onClick={() => setActiveTab("manuscript")}
+          data-testid="format-tab-manuscript"
+        >
+          📝 正文排版
+        </button>
+      </div>
+
+      {activeTab === "manuscript" && (
+      <>
+      <div className="form">
         <Dropzone
           testId="upload-manuscript"
           accept=".docx,.pdf,.txt,.md"
@@ -519,14 +577,53 @@ export default function FormatModule() {
         hideMdActions
       />
 
+      {/* 已排版参考文献 (可选): 勾选后附到下载的 Word 末尾 */}
+      {text && !running && fmtRefs.length > 0 && (
+        <details className="format-attach-refs" data-testid="format-attach-refs" open>
+          <summary className="adv-summary">
+            <span className="adv-summary-main">📎 附上已排版的参考文献（{selectedFmtIdxs.length} / {fmtRefs.length} 条已勾选）</span>
+            <span className="adv-summary-sub">从「参考文献」页格式化好的条目里挑；勾上的会附在下载稿件末尾</span>
+          </summary>
+          <div className="adv-body">
+            <div className="format-attach-toolbar">
+              <button type="button" className="btn-ghost btn-sm" onClick={() => setSelectedFmtIdxs(fmtRefs.map((_, i) => i))} disabled={selectedFmtIdxs.length === fmtRefs.length}>
+                全选
+              </button>
+              <button type="button" className="btn-ghost btn-sm" onClick={() => setSelectedFmtIdxs([])} disabled={!selectedFmtIdxs.length}>
+                全不选
+              </button>
+              <button type="button" className="btn-ghost btn-sm" onClick={() => setActiveTab("refs")}>
+                去「参考文献」页编辑
+              </button>
+            </div>
+            <ol className="format-attach-list">
+              {fmtRefs.map((r, i) => {
+                const checked = selectedFmtIdxs.includes(i);
+                return (
+                  <li key={i}>
+                    <label>
+                      <input
+                        type="checkbox"
+                        checked={checked}
+                        onChange={() => setSelectedFmtIdxs((prev) => checked ? prev.filter((x) => x !== i) : [...prev, i].sort((a, b) => a - b))}
+                      />
+                      <span>{r}</span>
+                    </label>
+                  </li>
+                );
+              })}
+            </ol>
+          </div>
+        </details>
+      )}
       {text && !running && (
         <button className="btn-secondary" onClick={downloadDocx} disabled={downloading} data-testid="download-btn">
-          {downloading ? "正在生成…" : fmtRefs.length ? "⬇ 下载 Word 文件（含格式化参考文献）" : "⬇ 下载 Word 文件"}
+          {downloading ? "正在生成…" : selectedFmtIdxs.length ? `⬇ 下载 Word 文件（附 ${selectedFmtIdxs.length} 条参考文献）` : "⬇ 下载 Word 文件（不附参考文献）"}
         </button>
       )}
       {text && !running && fmtRefs.length === 0 && (
         <p className="field-hint" data-testid="format-refs-note" style={{ marginTop: 4 }}>
-          提示：下载的 Word <strong>暂不含参考文献</strong>。如需带上，请到下方「参考文献」区点「按该期刊格式化参考文献」后再下载。
+          提示：下载的 Word <strong>暂不含参考文献</strong>。如需带上，请到「参考文献」页点「按该期刊格式化参考文献」后再回来下载。
         </p>
       )}
       {dlErr && <div className="result-error" data-testid="dl-error">{dlErr}</div>}
@@ -682,7 +779,11 @@ export default function FormatModule() {
           />
         </>
       )}
+      </>
+      )}
 
+      {activeTab === "refs" && (
+      <>
       <h2 className="section-title">参考文献格式化</h2>
       <p className="section-hint">
         粘贴你的参考文献，按所选期刊的引用规范（如 Vancouver、GB/T 7714、IEEE 等）自动排好。
@@ -816,6 +917,8 @@ export default function FormatModule() {
             ))}
           </div>
         </div>
+      )}
+      </>
       )}
     </div>
   );
