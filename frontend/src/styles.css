@@ -888,6 +888,21 @@ body {
   font-size: 12px;
   font-weight: 600;
 }
+/* 参考文献分页: 管理工具条 (全选 / 全不选 / 删除) */
+.format-refs-manage-toolbar {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 8px;
+}
+.btn-danger {
+  background: #fee2e2;
+  color: #b91c1c;
+  border: 1px solid #fca5a5;
+}
+.btn-danger:hover:not(:disabled) { background: #fecaca; }
+.btn-danger:disabled { opacity: 0.5; cursor: not-allowed; }
+
 /* 正文预览页 */
 .format-preview-toolbar {
   display: flex;

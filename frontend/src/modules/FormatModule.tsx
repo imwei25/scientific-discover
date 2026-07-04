@@ -829,6 +829,41 @@ export default function FormatModule() {
             <span className="adv-summary-sub">从「找选题 / 写标书」带入或从 Zotero / 文件导入；勾选后直接作为格式化/核验/推送的输入</span>
           </summary>
           <div className="adv-body">
+            <div className="format-refs-manage-toolbar">
+              <button
+                type="button"
+                className="btn-ghost btn-sm"
+                onClick={() => setStructuredSelectedKeys(importedRefs.map(pickerKey))}
+                disabled={structuredSelectedKeys.length === importedRefs.length}
+                data-testid="refs-select-all-btn"
+              >
+                全选（{importedRefs.length}）
+              </button>
+              <button
+                type="button"
+                className="btn-ghost btn-sm"
+                onClick={() => setStructuredSelectedKeys([])}
+                disabled={!structuredSelectedKeys.length}
+              >
+                全不选
+              </button>
+              <button
+                type="button"
+                className="btn-danger btn-sm"
+                onClick={() => {
+                  const n = structuredCheckedRefs().length;
+                  if (!n) return;
+                  if (!confirm(`确定删除已勾选的 ${n} 篇文献？此操作不可撤销。`)) return;
+                  const keep = new Set(importedRefs.map(pickerKey).filter((k) => !structuredSelectedKeys.includes(k)));
+                  setImportedRefs(importedRefs.filter((r) => keep.has(pickerKey(r))));
+                  setStructuredSelectedKeys([]);
+                }}
+                disabled={!structuredCheckedRefs().length}
+                data-testid="refs-delete-selected-btn"
+              >
+                🗑 删除已勾选（{structuredCheckedRefs().length}）
+              </button>
+            </div>
             <LiteraturePicker
               refs={importedRefs}
               evidenceByKey={{}}
