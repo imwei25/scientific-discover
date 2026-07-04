@@ -72,6 +72,28 @@ def test_imrad_followup_missing_draft():
     assert "error" in kinds
 
 
+from app.ethics_followup import ethics_followup  # noqa: E402
+
+
+def test_ethics_followup_ask_mock():
+    events = _drain(ethics_followup({
+        "mode": "ask",
+        "question": "隐私保护那段是否够?",
+        "draft": "# 知情同意书\n...",
+        "template": "informed_consent",
+        "materials": "研究流程: ...",
+    }))
+    kinds = [e for e, _ in events]
+    assert "delta" in kinds
+    assert kinds[-1] == "done"
+
+
+def test_ethics_followup_missing_draft():
+    events = _drain(ethics_followup({"mode": "ask", "question": "q", "draft": ""}))
+    kinds = [e for e, _ in events]
+    assert "error" in kinds
+
+
 if __name__ == "__main__":
     test_plan_followup_ask_mock()
     test_plan_followup_revise_mock()
@@ -80,3 +102,6 @@ if __name__ == "__main__":
     test_imrad_followup_ask_mock()
     test_imrad_followup_missing_draft()
     print("ok: imrad_followup mock tests")
+    test_ethics_followup_ask_mock()
+    test_ethics_followup_missing_draft()
+    print("ok: ethics_followup mock tests")
