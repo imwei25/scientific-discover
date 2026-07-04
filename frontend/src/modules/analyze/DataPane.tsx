@@ -595,8 +595,8 @@ export default function DataPane({ goto }: { goto: Goto }) {
           setConclusion={setConclusion}
           running={running}
           question={question}
-          // @ts-expect-error P14 adds mode + transparency to GeneralResultsProps
-          mode={mode} transparency={transparency}
+          mode={mode}
+          transparency={transparency}
         />
 
       {/* 继续对话: 首轮分析出结果后, 可反复提新需求让 AI 在现有代码上改 */}

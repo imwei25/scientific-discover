@@ -39,14 +39,18 @@ interface GeneralResultsProps {
   setConclusion: (v: string) => void;
   running: boolean;
   question: string;
+  mode?: "analyze" | "draw";
+  transparency?: { method: string; assumption: string; quality: string };
 }
 export default function GeneralResults({
   chartType, goto, status, error, plan, code, charts, captions, setCaptions,
   output, conclusion, setConclusion, running, question,
+  mode = "analyze",
+  transparency = { method: "", assumption: "", quality: "" },
 }: GeneralResultsProps) {
   const [copyState, setCopyState] = useState<"idle" | "ok" | "err">("idle");
   const [capBusy, setCapBusy] = useState(false);
-  const [popup, setPopup] = useState<null | "plan" | "code" | "output">(null);
+  const [popup, setPopup] = useState<null | "plan" | "code" | "output" | "method" | "assumption" | "quality">(null);
 
   const genCaptions = async () => {
     if (!charts.length || capBusy) return;
@@ -74,6 +78,45 @@ export default function GeneralResults({
 
   if (chartType !== "general") return null;
 
+  if (mode === "draw" && chartType === "general") {
+    return (
+      <>
+        {status && (
+          <div className="status-line" data-testid="status-line"><span className="spinner" /> {status}</div>
+        )}
+        {error && <div className="result-error" data-testid="analyze-error">{error}</div>}
+        {charts.length > 0 && (
+          <div className="analysis-block" data-testid="analysis-block-draw">
+            {!running && (
+              <div className="charts-toolbar">
+                <button className="btn-ghost btn-sm" onClick={downloadAllCharts} data-testid="download-all-charts-btn">⬇ 下载全部图片</button>
+              </div>
+            )}
+            <div className="charts">
+              {charts.map((c, i) => (
+                <figure key={i} className="chart">
+                  <img src={`data:image/png;base64,${c.png}`} alt={`图 ${i + 1}`} data-testid={`chart-${i}`} />
+                  <figcaption>
+                    <button
+                      className="btn-ghost btn-sm"
+                      data-testid={`chart-download-${i}`}
+                      onClick={() => downloadBase64(tsName(`图${i + 1}`, c.ext), c.data, chartMime(c.ext))}
+                    >
+                      下载 {c.ext.toUpperCase()}
+                    </button>
+                  </figcaption>
+                </figure>
+              ))}
+            </div>
+          </div>
+        )}
+        {!charts.length && !running && !error && (
+          <div className="analyze-noimg" data-testid="analyze-noimg-draw">尚未生成图表</div>
+        )}
+      </>
+    );
+  }
+
   const hasResult = conclusion || charts.length > 0 || (running && !error);
 
   return (
@@ -86,8 +129,17 @@ export default function GeneralResults({
       {hasResult && (
         <>
           {/* 弹出式入口: 分析方案 / 代码 / 原始输出(默认隐藏) */}
-          {(plan.length > 0 || code || output) && (
+          {(plan.length > 0 || code || output || transparency.method || transparency.assumption || transparency.quality) && (
             <div className="analyze-popbar" data-testid="analyze-popbar">
+              {transparency.method && (
+                <button className="btn-ghost btn-sm" data-testid="show-method-btn" onClick={() => setPopup("method")}>📊 方法选择</button>
+              )}
+              {transparency.assumption && (
+                <button className="btn-ghost btn-sm" data-testid="show-assumption-btn" onClick={() => setPopup("assumption")}>✅ 假设检查</button>
+              )}
+              {transparency.quality && (
+                <button className="btn-ghost btn-sm" data-testid="show-quality-btn" onClick={() => setPopup("quality")}>🧪 数据质量</button>
+              )}
               {plan.length > 0 && (
                 <button className="btn-ghost btn-sm" data-testid="show-plan-btn" onClick={() => setPopup("plan")}>📐 分析方案</button>
               )}
@@ -210,6 +262,21 @@ export default function GeneralResults({
       {popup === "output" && output && (
         <Popup title="📄 代码运行的原始输出（真实计算结果）" onClose={() => setPopup(null)}>
           <pre className="stats-pre" data-testid="output-block">{output}</pre>
+        </Popup>
+      )}
+      {popup === "method" && transparency.method && (
+        <Popup title="📊 方法选择(AI 为什么选这套统计方法)" onClose={() => setPopup(null)}>
+          <pre className="stats-pre" data-testid="method-block">{transparency.method}</pre>
+        </Popup>
+      )}
+      {popup === "assumption" && transparency.assumption && (
+        <Popup title="✅ 假设检查(正态性/方差齐性等前提是否满足)" onClose={() => setPopup(null)}>
+          <pre className="stats-pre" data-testid="assumption-block">{transparency.assumption}</pre>
+        </Popup>
+      )}
+      {popup === "quality" && transparency.quality && (
+        <Popup title="🧪 数据质量(缺失/异常处理策略)" onClose={() => setPopup(null)}>
+          <pre className="stats-pre" data-testid="quality-block">{transparency.quality}</pre>
         </Popup>
       )}
     </>
