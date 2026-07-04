@@ -1085,18 +1085,29 @@ async def refine_analysis(
 
         if run.get("charts"):
             yield ("charts", {"items": run["charts"]})
-        if run.get("stdout"):
-            yield ("output", {"text": run["stdout"]})
+        stdout_full = run.get("stdout", "") or ""
+        if stdout_full:
+            parts = _split_transparency(stdout_full)
+            if parts["method"]:
+                yield ("transparency_method", {"text": parts["method"]})
+            if parts["assumption"]:
+                yield ("transparency_assumption", {"text": parts["assumption"]})
+            if parts["quality"]:
+                yield ("transparency_quality", {"text": parts["quality"]})
+            if parts["main"]:
+                yield ("output", {"text": parts["main"]})
 
         if not run.get("ok"):
             yield ("error", {"message": "分析代码执行失败：\n" + (run.get("error") or "未知错误")})
             return
 
-        warnings = _sanity_checks(run.get("stdout", ""))
+        warnings = _sanity_checks(stdout_full)
         yield ("status", {"message": "正在总结结论…"})
         # 结论以"新需求"为研究用途, 让更新后的结论紧扣本轮改动。
         conc_q = (question + "\n【本轮新需求】" + requirement) if question else requirement
-        async for piece in stream_chat(_conclusion_messages(conc_q, code, run.get("stdout", ""), warnings), task="analysis"):
+        async for piece in _strip_conclusion_preamble_stream(
+            stream_chat(_conclusion_messages(conc_q, code, stdout_full, warnings), task="analysis")
+        ):
             yield ("delta", {"text": piece})
         yield ("done", {})
     except Exception as e:  # noqa: BLE001
