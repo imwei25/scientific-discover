@@ -3,23 +3,44 @@ import { useStream } from "../lib/useStream";
 import { usePersistentState } from "../lib/usePersistentState";
 import { addHistory } from "../lib/history";
 import { apiUrl } from "../lib/api";
+import { streamPlanFollowup } from "../lib/sse";
+import { reportLLMError } from "../lib/errorToast";
+import { mergeLegacyIntoMaterials } from "../lib/legacyMerge";
 import ResultPanel from "../components/ResultPanel";
 import { CanvasSlot } from "../components/Canvas";
-import Dropzone from "../components/Dropzone";
 import { HelpButton } from "../components/HelpButton";
+import Markdown from "../components/Markdown";
+import { extractFile } from "../lib/extract";
 import { downloadCsv, downloadDocxFromText, tsName } from "../lib/download";
+
+const STEPS = [
+  { n: 1, title: "准备材料", desc: "研究想法 · 附加材料" },
+  { n: 2, title: "预览 & 精修", desc: "生成 · 追问 · 修改" },
+];
 
 export default function PlanModule() {
   const [idea, setIdea] = usePersistentState("plan:idea", "");
-  const [field, setField] = usePersistentState("plan:field", "");
-  const [resources, setResources] = usePersistentState("plan:resources", "");
-  const { text, running, error, start, stop, setText } = useStream("plan:result");
-  const sap = useStream("plan:sap"); // 统计分析计划(SAP) 独立流
-  const dmp = useStream("plan:dmp"); // 数据管理计划
-  const consent = useStream("plan:consent"); // 知情同意书
-  const [docxBusy, setDocxBusy] = useState(""); // "" | "plan" | "sap" | "dmp" | "consent"
+  const [materials, setMaterials] = usePersistentState("plan:materials", "");
+  const [step, setStep] = usePersistentState<number>("plan:step", 1);
+  const [maxStep, setMaxStep] = usePersistentState<number>("plan:maxStep", 1);
+  const goStep = (n: number) => { setStep(n); if (n > maxStep) setMaxStep(n); };
 
+  // 一次性把老的 plan:field / plan:resources 合并进 plan:materials
+  useEffect(() => {
+    mergeLegacyIntoMaterials("plan:materials", [
+      { key: "plan:field", label: "学科领域" },
+      { key: "plan:resources", label: "可用资源/条件" },
+    ]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const { text, running, error, start, stop, setText } = useStream("plan:result");
+  const sap = useStream("plan:sap");
+  const dmp = useStream("plan:dmp");
+  const consent = useStream("plan:consent");
+  const [docxBusy, setDocxBusy] = useState("");
   const [docxErr, setDocxErr] = useState("");
+
   const downloadDocx = async (txt: string, name: string, which: string) => {
     if (!txt || docxBusy) return;
     setDocxBusy(which);
@@ -27,10 +48,29 @@ export default function PlanModule() {
     try {
       await downloadDocxFromText(`${name}.docx`, txt);
     } catch (e) {
-      setDocxErr(`导出 Word 失败：${(e as Error).message}`);
+      setDocxErr(`导出 Word 失败: ${(e as Error).message}`);
     } finally {
       setDocxBusy("");
     }
+  };
+
+  // 附加材料 combo 框: 拖拽 + 附件按钮
+  const matFileRef = useRef<HTMLInputElement>(null);
+  const [matDrag, setMatDrag] = useState(false);
+  const [matBusy, setMatBusy] = useState(false);
+
+  const ingestMaterials = async (files: FileList | File[] | null | undefined) => {
+    const list = files ? Array.from(files) : [];
+    if (!list.length) return;
+    setMatBusy(true);
+    for (const f of list) {
+      const res = await extractFile(f);
+      if (res.ok && res.text) {
+        setMaterials((p) => (p ? p + "\n\n" : "") + `[附加材料: ${f.name}]\n` + res.text);
+      }
+    }
+    setMatBusy(false);
+    if (matFileRef.current) matFileRef.current.value = "";
   };
 
   const savedRef = useRef("");
@@ -41,27 +81,29 @@ export default function PlanModule() {
         module: "plan",
         icon: "🗺️",
         title: idea.slice(0, 40) || "实验规划",
-        data: { "plan:idea": idea, "plan:field": field, "plan:resources": resources, "plan:result": text },
+        data: { "plan:idea": idea, "plan:materials": materials, "plan:result": text },
       });
     }
-  }, [running, error, text, idea, field, resources]);
+  }, [running, error, text, idea, materials]);
 
+  // 4 个生成入口:方案主体 / SAP / DMP / 知情同意书
+  // 把 materials 作为 resources 字段传给后端(prompts.py 里 4 个 builder 都接受 resources)。
   const submit = () => {
     if (!idea.trim() || running) return;
-    start("plan", { idea, field, resources: withSampleSize(resources) });
+    goStep(2);
+    start("plan", { idea, resources: withSampleSize(materials) });
   };
-
   const genSap = () => {
     if (!idea.trim() || sap.running) return;
-    sap.start("sap", { idea, field, resources: withSampleSize(resources) });
+    sap.start("sap", { idea, resources: withSampleSize(materials) });
   };
   const genDmp = () => {
     if (!idea.trim() || dmp.running) return;
-    dmp.start("dmp", { idea, field, resources });
+    dmp.start("dmp", { idea, resources: materials });
   };
   const genConsent = () => {
     if (!idea.trim() || consent.running) return;
-    consent.start("consent", { idea, field, resources });
+    consent.start("consent", { idea, resources: materials });
   };
 
   const reset = () => {
@@ -70,35 +112,66 @@ export default function PlanModule() {
     if (dmp.running) dmp.stop();
     if (consent.running) consent.stop();
     setIdea("");
-    setField("");
-    setResources("");
+    setMaterials("");
     setText("");
     sap.setText("");
     dmp.setText("");
     consent.setText("");
-    // 一并清掉已确定的样本量, 否则换新课题会把上一课题的旧 N 悄悄注入下一份方案
     setSsChosen(0);
     setSsChosenMeta(null);
     setSsVerifyMsg("");
+    setFollowups([]);
+    setFollowupInput("");
+    setCurrentAnswer("");
+    setStep(1);
+    setMaxStep(1);
   };
 
-  // —— 样本量交互式探索：场景 + 滑块 + 实时曲线（纯前端计算）——
-  // 场景：proportion = 双比例（两组率），ttest = 双均值（Cohen's d）
+  // ── 追问 / 按此修改 ──────────────────────────────────────────
+  const [followups, setFollowups] = usePersistentState<{ q: string; a: string }[]>("plan:followups", []);
+  const [followupInput, setFollowupInput] = useState("");
+  const [currentAnswer, setCurrentAnswer] = useState("");
+  const [fRunning, setFRunning] = useState(false);
+  const [fError, setFError] = useState<string | null>(null);
+  const fctrl = useRef<AbortController | null>(null);
+
+  const runFollowup = async (mode: "ask" | "revise") => {
+    const q = followupInput.trim();
+    if (!q || fRunning || running) return;
+    setFError(null);
+    setFRunning(true);
+    fctrl.current = new AbortController();
+    const baseDraft = text;
+    let buf = "";
+    if (mode === "ask") setCurrentAnswer("…");
+    else setText("");
+    await streamPlanFollowup(
+      { mode, question: q, draft: baseDraft, idea, materials },
+      {
+        signal: fctrl.current.signal,
+        onDelta: (t) => { buf += t; if (mode === "ask") setCurrentAnswer(buf); else setText((p) => p + t); },
+        onError: (m) => { setFError(m); setFRunning(false); if (mode === "revise") setText(baseDraft); reportLLMError(m); },
+        onDone: () => {
+          if (mode === "ask") { setFollowups((prev) => [...prev, { q, a: buf }]); setCurrentAnswer(""); }
+          setFollowupInput(""); setFRunning(false); window.dispatchEvent(new Event("usage-updated"));
+        },
+      },
+    );
+    setFRunning(false);
+  };
+
+  // ── 样本量 / 随机化(逻辑保持不变,只是搬到 Step 2 底部)──────
   const [ssScene, setSsScene] = usePersistentState<string>("plan:samplesize:scene", "proportion");
   const [ssEffect, setSsEffect] = usePersistentState<number>("plan:samplesize:effect", 0.3);
   const [ssAlpha, setSsAlpha] = usePersistentState<number>("plan:samplesize:alpha", 0.05);
   const [ssPower, setSsPower] = usePersistentState<number>("plan:samplesize:power", 0.8);
   const [ssSweep, setSsSweep] = usePersistentState<string>("plan:samplesize:sweep", "effect");
   const [ssChosen, setSsChosen] = usePersistentState<number>("plan:sampleSize", 0);
-  // 与 ssChosen 一起快照的参数(点「使用此参数」那一刻的 α/power/效应量/场景/来源)——
-  // 避免注入方案的 N 与实时滑块值对不上(拖了滑块却没重新确认)。
   type SsMeta = { alpha: number; power: number; effect: number; scene: string; source: string };
   const [ssChosenMeta, setSsChosenMeta] = usePersistentState<SsMeta | null>("plan:sampleSizeMeta", null);
   const [ssVerifyMsg, setSsVerifyMsg] = useState<string>("");
   const [ssVerifyBusy, setSsVerifyBusy] = useState(false);
 
-  // 把用户在样本量计算器里确定的 N 作为事实并入生成载荷——避免"算了却没进方案"。
-  // 只在已通过"使用此参数"确定 N 时追加(ssChosen>0)。用固化的快照参数, 不用实时滑块值。
   const withSampleSize = (base: string): string => {
     if (!(ssChosen > 0)) return base;
     const m = ssChosenMeta;
@@ -115,28 +188,15 @@ export default function PlanModule() {
     return base ? base + "\n\n" + note : note;
   };
 
-  // 标准正态分位数表（常用 α/β 对应）
   const zTable: Record<string, number> = {
-    "0.005": 2.576,
-    "0.010": 2.326,
-    "0.025": 1.96,
-    "0.050": 1.645,
-    "0.100": 1.282,
-    "0.200": 0.842,
+    "0.005": 2.576, "0.010": 2.326, "0.025": 1.96, "0.050": 1.645, "0.100": 1.282, "0.200": 0.842,
   };
-
-  // 简单近似 z 分位：用最接近的查表值（够用）；对 1-power 取右尾分位
   const approxZ = (tail: number): number => {
-    // tail 是右尾概率 (0,1)，返回 z 使 P(Z>z)=tail
-    const keys = Object.keys(zTable)
-      .map((k) => ({ k, v: parseFloat(k) }))
-      .sort((a, b) => a.v - b.v);
-    // 线性插值
+    const keys = Object.keys(zTable).map((k) => ({ k, v: parseFloat(k) })).sort((a, b) => a.v - b.v);
     if (tail <= keys[0].v) return zTable[keys[0].k];
     if (tail >= keys[keys.length - 1].v) return zTable[keys[keys.length - 1].k];
     for (let i = 0; i < keys.length - 1; i++) {
-      const a = keys[i];
-      const b = keys[i + 1];
+      const a = keys[i]; const b = keys[i + 1];
       if (tail >= a.v && tail <= b.v) {
         const t = (tail - a.v) / (b.v - a.v);
         return zTable[a.k] + t * (zTable[b.k] - zTable[a.k]);
@@ -144,17 +204,14 @@ export default function PlanModule() {
     }
     return 1.96;
   };
-
-  // 公式：返回每组 N（向上取整，下限 2）
   const calcN = (scene: string, effect: number, alpha: number, power: number): number => {
     if (!isFinite(effect) || effect <= 0) return Infinity;
     if (alpha <= 0 || alpha >= 1 || power <= 0 || power >= 1) return NaN;
-    const zA = approxZ(alpha / 2); // 双侧
+    const zA = approxZ(alpha / 2);
     const zB = approxZ(1 - power);
     const c = (zA + zB) * (zA + zB);
     let n: number;
     if (scene === "proportion") {
-      // 双比例 Lehr 近似：假设 p1=0.3, p2=p1+effect（如超界则取对称）
       const p1 = 0.3;
       let p2 = p1 + effect;
       if (p2 >= 1) p2 = 0.99;
@@ -162,15 +219,11 @@ export default function PlanModule() {
       const diff = p2 - p1;
       n = (2 * c * pbar * (1 - pbar)) / (diff * diff);
     } else {
-      // 双均值：n = 2 c / d^2
       n = (2 * c) / (effect * effect);
     }
     return Math.max(2, Math.ceil(n));
   };
-
   const ssN = calcN(ssScene, ssEffect, ssAlpha, ssPower);
-
-  // 扫描曲线：固定其他两个参数，沿 sweep 变量扫描
   const sweepCurve = (): { x: number; y: number }[] => {
     const pts: { x: number; y: number }[] = [];
     let minX = 0, maxX = 1, steps = 40;
@@ -187,11 +240,8 @@ export default function PlanModule() {
     }
     return pts;
   };
-
   const curvePts = sweepCurve();
   const currentX = ssSweep === "effect" ? ssEffect : ssSweep === "alpha" ? ssAlpha : ssPower;
-
-  // SVG 视口
   const chartW = 420, chartH = 220, padL = 46, padR = 12, padT = 14, padB = 30;
   const innerW = chartW - padL - padR;
   const innerH = chartH - padT - padB;
@@ -208,14 +258,9 @@ export default function PlanModule() {
   const useThisN = async () => {
     setSsVerifyMsg("");
     setSsVerifyBusy(true);
-    // 固化当下的参数快照, 无论采用精确值还是回退估算, 注入方案的 N 与 α/power/效应量都一致。
     const snap = { alpha: ssAlpha, power: ssPower, effect: ssEffect, scene: ssScene };
     try {
-      // 调后端精确验证（沿用现有 /api/sample-size）
-      const params: Record<string, string> = {
-        alpha: String(ssAlpha),
-        power: String(ssPower),
-      };
+      const params: Record<string, string> = { alpha: String(ssAlpha), power: String(ssPower) };
       let design = "ttest";
       if (ssScene === "proportion") {
         design = "proportion";
@@ -234,32 +279,26 @@ export default function PlanModule() {
       });
       const j = await resp.json();
       if (j.ok && j.per_group) {
-        // 采用后端精确值(权威), 而不是可能相差一倍的前端 Lehr 近似——这才是注入方案的数。
         setSsChosen(j.per_group);
         setSsChosenMeta({ ...snap, source: "backend" });
         const diff = Math.abs(j.per_group - ssN);
-        if (diff <= Math.max(2, ssN * 0.1)) {
-          setSsVerifyMsg(`已采用后端精确值：每组 ${j.per_group} 例（与前端快速近似 ${ssN} 基本一致）。`);
-        } else {
-          setSsVerifyMsg(`已采用后端精确值：每组 ${j.per_group} 例。前端快速近似为 ${ssN}，两者差异较大——以精确值为准。`);
-        }
+        if (diff <= Math.max(2, ssN * 0.1)) setSsVerifyMsg(`已采用后端精确值:每组 ${j.per_group} 例(与前端快速近似 ${ssN} 基本一致)。`);
+        else setSsVerifyMsg(`已采用后端精确值:每组 ${j.per_group} 例。前端快速近似为 ${ssN},两者差异较大——以精确值为准。`);
       } else {
-        // 后端不可用: 回退到前端估算, 并标注来源
         setSsChosen(ssN);
         setSsChosenMeta({ ...snap, source: "frontend" });
-        setSsVerifyMsg(`已采用前端快速估算：每组 ${ssN} 例（后端精确验证未成功：${j.error || "未知错误"}；建议联网后重新「使用此参数」以精确值为准）。`);
+        setSsVerifyMsg(`已采用前端快速估算:每组 ${ssN} 例(后端精确验证未成功: ${j.error || "未知错误"};建议联网后重新「使用此参数」以精确值为准)。`);
       }
     } catch (e) {
       setSsChosen(ssN);
       setSsChosenMeta({ ...snap, source: "frontend" });
-      setSsVerifyMsg(`已采用前端快速估算：每组 ${ssN} 例（后端验证失败：${(e as Error).message}）。`);
+      setSsVerifyMsg(`已采用前端快速估算:每组 ${ssN} 例(后端验证失败: ${(e as Error).message})。`);
     } finally {
       setSsVerifyBusy(false);
     }
   };
 
-
-  // —— 随机化分组表（确定性，零额度）——
+  // 随机化
   const [rzN, setRzN] = useState("60");
   const [rzGroups, setRzGroups] = useState("试验组,对照组");
   const [rzRatio, setRzRatio] = useState("1,1");
@@ -283,374 +322,316 @@ export default function PlanModule() {
       });
       setRzResult(await resp.json());
     } catch (e) {
-      setRzResult({ ok: false, error: `生成失败：${(e as Error).message}` });
+      setRzResult({ ok: false, error: `生成失败: ${(e as Error).message}` });
     } finally {
       setRzBusy(false);
     }
   };
-
   const exportRandomize = () => {
     if (!rzResult?.rows) return;
     downloadCsv(tsName("随机化分组表", "csv"), ["序号", "分组"], rzResult.rows.map((r) => [r.seq, r.group]));
   };
 
   return (
-    <div className="module">
+    <div className="module plan-wizard">
       <header className="module-head">
         <h1>🗺️ 实验规划 · 医学/药学/生物</h1>
-        <p>把研究想法变成符合生物医学规范的方案：研究设计、入排标准、样本量与检验效能、统计计划、伦理合规、时间表。</p>
+        <p>两步走:填写研究想法与附加材料 → 生成并在预览里追问/修改。方案主体、SAP、DMP、知情同意书四类产出都在第 2 步。</p>
       </header>
 
-      <div className="form">
-        <label className="field">
-          <span className="field-label">你的研究想法 / 课题 <em>必填</em></span>
-          <textarea
-            data-testid="input-idea"
-            value={idea}
-            onChange={(e) => setIdea(e.target.value)}
-            placeholder="例如：评估二甲双胍辅助治疗对2型糖尿病合并NAFLD患者肝纤维化的改善作用"
-            rows={4}
-          />
-        </label>
-        <label className="field">
-          <span className="field-label">学科领域（可选）</span>
-          <input
-            data-testid="input-field"
-            value={field}
-            onChange={(e) => setField(e.target.value)}
-            placeholder="例如：材料化学、临床医学、社会学"
-          />
-        </label>
-        <label className="field">
-          <span className="field-label">可用资源 / 条件（可选）</span>
-          <textarea
-            data-testid="input-resources"
-            value={resources}
-            onChange={(e) => setResources(e.target.value)}
-            placeholder="例如：经费、设备、样本量、时间、团队规模等限制"
-            rows={3}
-          />
-        </label>
-        <Dropzone
-          testId="upload-doc"
-          accept=".docx,.pdf,.txt,.md,.csv,.xlsx,.xls"
-          label="附加文档（可选：已有草案/方案/预实验数据）"
-          hint="支持 Word/PDF/Excel/CSV/txt；内容会作为补充资料"
-          mode="text"
-          onText={(t, name) =>
-            setResources((prev) => (prev ? prev + "\n\n" : "") + `[附加文档：${name}]\n` + t)
-          }
-        />
-        <div className="form-actions">
-          <button className="btn-primary" onClick={submit} disabled={!idea.trim() || running} data-testid="run-btn">
-            {running ? "生成中…" : "生成实验计划"}
-          </button>
-          <button className="btn-secondary" onClick={genSap} disabled={!idea.trim() || sap.running} data-testid="gen-sap-btn">
-            {sap.running ? "生成中…" : "生成统计分析计划(SAP)"}
-          </button>
-          <button className="btn-secondary" onClick={genDmp} disabled={!idea.trim() || dmp.running} data-testid="gen-dmp-btn">
-            {dmp.running ? "生成中…" : "数据管理计划(DMP)"}
-          </button>
-          <button className="btn-secondary" onClick={genConsent} disabled={!idea.trim() || consent.running} data-testid="gen-consent-btn">
-            {consent.running ? "生成中…" : "知情同意书草案"}
-          </button>
-          <button className="btn-ghost" onClick={reset} data-testid="reset-btn">
-            清空
-          </button>
-        </div>
-        {!idea.trim() && (
-          <p className="field-hint" data-testid="plan-gate-hint" style={{ marginTop: 6 }}>
-            开始前请先填写<strong>你的研究想法 / 课题</strong>，才能生成实验计划、SAP、DMP 或知情同意书。
-          </p>
-        )}
+      <div className="wiz-steps" data-testid="plan-steps">
+        {STEPS.map((s) => {
+          const state = step === s.n ? "current" : s.n < step ? "done" : "todo";
+          const clickable = s.n <= maxStep;
+          return (
+            <button key={s.n} type="button" className={`wiz-step ${state}`} data-testid={`plan-step-${s.n}`} disabled={!clickable} onClick={() => clickable && setStep(s.n)}>
+              <span className="wiz-step-num">{s.n < step ? "✓" : s.n}</span>
+              <span className="wiz-step-text"><span className="wiz-step-title">{s.title}</span><span className="wiz-step-desc">{s.desc}</span></span>
+            </button>
+          );
+        })}
       </div>
 
-      {docxErr && <div className="result-error" data-testid="docx-error">{docxErr}</div>}
+      {error && <div className="result-error" data-testid="plan-error">{error}</div>}
 
-      <CanvasSlot>
-      <ResultPanel
-        text={text}
-        running={running}
-        error={error}
-        onStop={stop}
-        exportName="实验计划"
-        placeholder="研究路线、实验设计、里程碑和风险点会显示在这里。"
-        onExportDocx={() => downloadDocx(text, "实验计划", "plan")}
-        exportingDocx={docxBusy === "plan"}
-        onSave={setText}
-      />
+      {/* ── Step 1 ── */}
+      {step === 1 && (
+        <div className="wiz-panel" data-testid="plan-panel-1">
+          <div className="form">
+            <label className="field">
+              <span className="field-label">你的研究想法 / 课题 <em>必填</em></span>
+              <textarea
+                data-testid="input-idea"
+                value={idea}
+                onChange={(e) => setIdea(e.target.value)}
+                placeholder="例如:评估二甲双胍辅助治疗对2型糖尿病合并NAFLD患者肝纤维化的改善作用"
+                rows={4}
+              />
+            </label>
 
-      {(sap.text || sap.running || sap.error) && (
-        <>
-          <h2 className="section-title" data-testid="sap-title">📐 统计分析计划（SAP · 基于 ICH E9 规范）</h2>
-          <ResultPanel
-            text={sap.text}
-            running={sap.running}
-            error={sap.error}
-            onStop={sap.stop}
-            exportName="统计分析计划"
-            placeholder="ITT/PP 分析集、主要终点分析、缺失数据与多重比较校正、敏感性分析等会显示在这里。"
-            onExportDocx={() => downloadDocx(sap.text, "统计分析计划", "sap")}
-            exportingDocx={docxBusy === "sap"}
-            panelTestId="sap-panel"
-            onSave={sap.setText}
-          />
-        </>
-      )}
-
-      {(dmp.text || dmp.running || dmp.error) && (
-        <>
-          <h2 className="section-title" data-testid="dmp-title">🗄️ 数据管理计划（DMP）<HelpButton helpKey="dmp" /></h2>
-          <ResultPanel
-            text={dmp.text}
-            running={dmp.running}
-            error={dmp.error}
-            onStop={dmp.stop}
-            exportName="数据管理计划"
-            placeholder="数据类型/存储备份/安全隐私/共享归档等会显示在这里。"
-            onExportDocx={() => downloadDocx(dmp.text, "数据管理计划", "dmp")}
-            exportingDocx={docxBusy === "dmp"}
-            panelTestId="dmp-panel"
-            onSave={dmp.setText}
-          />
-        </>
-      )}
-
-      {(consent.text || consent.running || consent.error) && (
-        <>
-          <h2 className="section-title" data-testid="consent-title">📝 知情同意书（草案 · 需伦理委员会审核）<HelpButton helpKey="consent" /></h2>
-          <ResultPanel
-            text={consent.text}
-            running={consent.running}
-            error={consent.error}
-            onStop={consent.stop}
-            exportName="知情同意书"
-            placeholder="研究目的/流程/风险获益/隐私/自愿退出/签字栏等会显示在这里。"
-            onExportDocx={() => downloadDocx(consent.text, "知情同意书", "consent")}
-            exportingDocx={docxBusy === "consent"}
-            panelTestId="consent-panel"
-            onSave={consent.setText}
-          />
-        </>
-      )}
-      </CanvasSlot>
-
-      <details className="ss-calc" data-testid="ss-calc" open>
-        <summary>🧮 样本量交互式探索（滑块 + 实时曲线，免费不消耗额度）</summary>
-        <div className="form" style={{ marginTop: 12 }}>
-          <label className="field">
-            <span className="field-label">研究场景</span>
-            <select data-testid="ss-scene" value={ssScene} onChange={(e) => setSsScene(e.target.value)}>
-              <option value="proportion">双比例（两组率比较）</option>
-              <option value="ttest">双均值（两组均值比较，Cohen's d）</option>
-            </select>
-          </label>
-
-          <div className="ss-explore">
-            <div className="ss-controls">
-              <label className="field">
-                <span className="field-label">
-                  效应量 <strong>{ssEffect.toFixed(2)}</strong>
-                  <span className="field-hint">
-                    {ssScene === "proportion" ? "（两组率差，参考 p₁=0.3）" : "（Cohen's d：小0.2 / 中0.5 / 大0.8）"}
-                  </span>
-                </span>
-                <input
-                  type="range" min={0.05} max={1.0} step={0.01}
-                  data-testid="ss-effect"
-                  value={ssEffect}
-                  onChange={(e) => setSsEffect(parseFloat(e.target.value))}
+            <div className="field" data-testid="plan-materials-field">
+              <span className="field-label">附加材料(可选,越充分越好)</span>
+              <p className="field-hint">
+                可粘贴或上传:<strong>学科领域、可用资源(经费/设备/样本量/时间/团队)、已有草案/预实验数据、既往文献</strong>等。支持 Word / PDF / txt,<strong>可一次选多个</strong>;会作为方案撰写与 SAP/DMP/知情同意书的补充资料。
+              </p>
+              <div className={`combo-input${matDrag ? " dragover" : ""}`}
+                onDragOver={(e) => { e.preventDefault(); setMatDrag(true); }}
+                onDragLeave={() => setMatDrag(false)}
+                onDrop={(e) => { e.preventDefault(); setMatDrag(false); ingestMaterials(e.dataTransfer.files); }}>
+                <textarea
+                  data-testid="input-materials"
+                  value={materials}
+                  onChange={(e) => setMaterials(e.target.value)}
+                  placeholder="把学科领域、资源限制、已有草案/预实验/文献粘贴到这里,或把文件直接拖进本框(可多个)。"
+                  rows={5}
                 />
-              </label>
-              <label className="field">
-                <span className="field-label">
-                  显著性水平 α <strong>{ssAlpha.toFixed(3)}</strong>
-                  <span className="field-hint">（双侧，常用 0.05）</span>
-                </span>
-                <input
-                  type="range" min={0.01} max={0.1} step={0.005}
-                  data-testid="ss-alpha"
-                  value={ssAlpha}
-                  onChange={(e) => setSsAlpha(parseFloat(e.target.value))}
-                />
-              </label>
-              <label className="field">
-                <span className="field-label">
-                  检验效能 power <strong>{ssPower.toFixed(2)}</strong>
-                  <span className="field-hint">（常用 0.8 / 0.9）</span>
-                </span>
-                <input
-                  type="range" min={0.6} max={0.99} step={0.01}
-                  data-testid="ss-power"
-                  value={ssPower}
-                  onChange={(e) => setSsPower(parseFloat(e.target.value))}
-                />
-              </label>
-
-              <div className="ss-sweep-row">
-                <span className="field-label" style={{ marginBottom: 0 }}>扫描变量：</span>
-                {[
-                  { k: "effect", label: "效应量" },
-                  { k: "alpha", label: "α" },
-                  { k: "power", label: "power" },
-                ].map((opt) => (
-                  <button
-                    key={opt.k}
-                    type="button"
-                    className={ssSweep === opt.k ? "btn-primary btn-sm" : "btn-ghost btn-sm"}
-                    onClick={() => setSsSweep(opt.k)}
-                    data-testid={`ss-sweep-${opt.k}`}
-                  >
-                    {opt.label}
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            <div className="ss-chart">
-              <svg viewBox={`0 0 ${chartW} ${chartH}`} width="100%" role="img" aria-label="样本量曲线" data-testid="ss-chart">
-                {/* 坐标轴 */}
-                <line x1={padL} y1={padT} x2={padL} y2={padT + innerH} stroke="#bcd0cb" strokeWidth={1} />
-                <line x1={padL} y1={padT + innerH} x2={padL + innerW} y2={padT + innerH} stroke="#bcd0cb" strokeWidth={1} />
-                {/* Y 轴刻度 */}
-                {[0, 0.25, 0.5, 0.75, 1].map((t, i) => {
-                  const v = yMin + (yMax - yMin) * (1 - t);
-                  const y = padT + innerH * t;
-                  return (
-                    <g key={`y${i}`}>
-                      <line x1={padL - 4} y1={y} x2={padL} y2={y} stroke="#bcd0cb" />
-                      <text x={padL - 6} y={y + 3} fontSize={10} textAnchor="end" fill="#5f6f6c">{Math.round(v)}</text>
-                    </g>
-                  );
-                })}
-                {/* X 轴刻度 */}
-                {[0, 0.5, 1].map((t, i) => {
-                  const x = padL + innerW * t;
-                  const v = xMin + (xMax - xMin) * t;
-                  return (
-                    <g key={`x${i}`}>
-                      <line x1={x} y1={padT + innerH} x2={x} y2={padT + innerH + 4} stroke="#bcd0cb" />
-                      <text x={x} y={padT + innerH + 16} fontSize={10} textAnchor="middle" fill="#5f6f6c">{v.toFixed(2)}</text>
-                    </g>
-                  );
-                })}
-                {/* 曲线 */}
-                {path && <path d={path} fill="none" stroke="#2f8074" strokeWidth={2} />}
-                {/* 当前点 */}
-                {isFinite(ssN) && currentX >= xMin && currentX <= xMax && (
-                  <g>
-                    <line x1={sx(currentX)} y1={padT} x2={sx(currentX)} y2={padT + innerH} stroke="#2f8074" strokeWidth={1} strokeDasharray="3 3" opacity={0.5} />
-                    <circle cx={sx(currentX)} cy={sy(Math.min(ssN, yMax))} r={5} fill="#fff" stroke="#2f8074" strokeWidth={2} />
-                  </g>
-                )}
-                {/* 轴标签 */}
-                <text x={padL + innerW / 2} y={chartH - 4} fontSize={11} textAnchor="middle" fill="#5f6f6c">
-                  {ssSweep === "effect" ? "效应量" : ssSweep === "alpha" ? "α" : "power"}
-                </text>
-                <text x={12} y={padT + innerH / 2} fontSize={11} textAnchor="middle" fill="#5f6f6c" transform={`rotate(-90 12 ${padT + innerH / 2})`}>每组 N</text>
-              </svg>
-            </div>
-          </div>
-
-          <div className="ss-result" data-testid="ss-result">
-            <strong style={{ fontSize: 20 }}>
-              约需 N ≈ {isFinite(ssN) ? ssN * 2 : "—"} 例（每组 {isFinite(ssN) ? ssN : "—"}）
-            </strong>
-            <span className="field-hint">
-              这是<strong>快速近似</strong>（前端估算，可能与精确值有差异）；点「使用此参数」会用本地精确计算得到并采用的 N。
-              公式：{ssScene === "proportion"
-                ? "Lehr 近似 n ≈ 2(z_{α/2}+z_β)² p̄(1-p̄) / (p₁-p₂)²（默认 p₁=0.3）"
-                : "n ≈ 2(z_{α/2}+z_β)² / d²"}
-            </span>
-          </div>
-
-          <div className="form-actions" style={{ marginTop: 8 }}>
-            <button className="btn-primary" onClick={useThisN} disabled={ssVerifyBusy || !isFinite(ssN)} data-testid="ss-use-btn">
-              {ssVerifyBusy ? "验证中…" : "使用此参数"}
-            </button>
-            {ssChosen > 0 && (
-              <span className="field-hint" data-testid="ss-chosen">
-                ✓ 已采用 N = {ssChosen}（每组）——生成「实验计划」/「SAP」时会带入此样本量
-              </span>
-            )}
-          </div>
-          {ssVerifyMsg && (
-            <div className="field-hint" data-testid="ss-verify-msg" style={{ marginTop: 6 }}>{ssVerifyMsg}</div>
-          )}
-        </div>
-      </details>
-
-      <details className="ss-calc" data-testid="rz-calc">
-        <summary>🎲 随机化分组表（确定性，固定种子可复现，免费）<HelpButton helpKey="randomize" /></summary>
-        <div className="form" style={{ marginTop: 12 }}>
-          <div className="ss-row">
-            <label className="field">
-              <span className="field-label">样本量 n</span>
-              <input data-testid="rz-n" value={rzN} onChange={(e) => setRzN(e.target.value)} />
-            </label>
-            <label className="field">
-              <span className="field-label">随机方法</span>
-              <select data-testid="rz-method" value={rzMethod} onChange={(e) => setRzMethod(e.target.value)}>
-                <option value="block">置换区组随机（推荐，均衡）</option>
-                <option value="simple">简单随机</option>
-              </select>
-            </label>
-          </div>
-          <div className="ss-row">
-            <label className="field">
-              <span className="field-label">分组（逗号分隔）</span>
-              <input data-testid="rz-groups" value={rzGroups} onChange={(e) => setRzGroups(e.target.value)} />
-            </label>
-            <label className="field">
-              <span className="field-label">分配比例（如 1,1 / 2,1）</span>
-              <input data-testid="rz-ratio" value={rzRatio} onChange={(e) => setRzRatio(e.target.value)} />
-            </label>
-          </div>
-          <div className="ss-row">
-            {rzMethod === "block" && (
-              <label className="field">
-                <span className="field-label">区组大小（比例和的整数倍）</span>
-                <input data-testid="rz-block" value={rzBlock} onChange={(e) => setRzBlock(e.target.value)} />
-              </label>
-            )}
-            <label className="field">
-              <span className="field-label">随机种子（同种子→同序列）</span>
-              <input data-testid="rz-seed" value={rzSeed} onChange={(e) => setRzSeed(e.target.value)} />
-            </label>
-          </div>
-          <button className="btn-primary" onClick={genRandomize} disabled={rzBusy} data-testid="rz-btn">
-            {rzBusy ? "生成中…" : "生成随机化分组表"}
-          </button>
-
-          {rzResult && (
-            rzResult.ok && rzResult.rows ? (
-              <div className="ss-result" data-testid="rz-result">
-                <strong>
-                  共 {rzResult.rows.length} 例：
-                  {Object.entries(rzResult.counts || {}).map(([g, c]) => `${g} ${c}`).join("，")}
-                </strong>
-                <span className="field-hint">
-                  方法：{rzResult.method === "block" ? `置换区组（区组大小 ${rzResult.block_size}）` : "简单随机"}，种子 {rzSeed}（可复现）
-                </span>
-                <div className="md-table-wrap" style={{ maxHeight: 220, overflow: "auto" }}>
-                  <table className="evidence-table">
-                    <thead><tr><th>序号</th><th>分组</th></tr></thead>
-                    <tbody>
-                      {rzResult.rows.slice(0, 20).map((r) => (
-                        <tr key={r.seq}><td>{r.seq}</td><td>{r.group}</td></tr>
-                      ))}
-                    </tbody>
-                  </table>
+                <div className="combo-foot">
+                  <button type="button" className="combo-attach" data-testid="plan-materials-attach" onClick={() => matFileRef.current?.click()}>📎 添加附件(可多选)</button>
+                  <span className="combo-hint">{matBusy ? "正在解析附件…" : "支持 Word / PDF / txt,可直接拖入本框"}</span>
+                  <input ref={matFileRef} data-testid="plan-upload" type="file" accept=".docx,.pdf,.txt,.md,.csv,.xlsx,.xls" multiple style={{ display: "none" }} onChange={(e) => ingestMaterials(e.target.files)} />
                 </div>
-                {rzResult.rows.length > 20 && <span className="field-hint">（仅预览前 20 行，导出 CSV 查看全部）</span>}
-                <button className="btn-ghost btn-sm" onClick={exportRandomize} data-testid="rz-export-btn">导出 CSV</button>
               </div>
-            ) : (
-              <div className="result-error" data-testid="rz-error">{rzResult.error}</div>
-            )
+            </div>
+          </div>
+
+          <div className="wiz-nav">
+            <button className="btn-ghost" onClick={reset} data-testid="reset-btn">清空</button>
+            <button className="btn-primary" onClick={submit} disabled={!idea.trim() || running} data-testid="wiz-next-1">
+              {running ? "生成中…" : "下一步:生成方案 →"}
+            </button>
+          </div>
+          {!idea.trim() && (
+            <p className="field-hint" data-testid="plan-gate-hint" style={{ marginTop: 6 }}>
+              开始前请先填写<strong>你的研究想法 / 课题</strong>。
+            </p>
           )}
         </div>
-      </details>
+      )}
+
+      {/* ── Step 2 ── */}
+      {step === 2 && (
+        <div className="wiz-panel" data-testid="plan-panel-2">
+          <div className="form-actions">
+            <button className="btn-primary" onClick={submit} disabled={!idea.trim() || running} data-testid="run-btn">
+              {running ? "生成中…" : text ? "🔄 重新生成方案" : "生成实验计划"}
+            </button>
+            <button className="btn-secondary" onClick={genSap} disabled={!idea.trim() || sap.running} data-testid="gen-sap-btn">
+              {sap.running ? "生成中…" : "生成 SAP"}
+            </button>
+            <button className="btn-secondary" onClick={genDmp} disabled={!idea.trim() || dmp.running} data-testid="gen-dmp-btn">
+              {dmp.running ? "生成中…" : "生成 DMP"}
+            </button>
+            <button className="btn-secondary" onClick={genConsent} disabled={!idea.trim() || consent.running} data-testid="gen-consent-btn">
+              {consent.running ? "生成中…" : "知情同意书"}
+            </button>
+          </div>
+
+          {docxErr && <div className="result-error" data-testid="docx-error">{docxErr}</div>}
+
+          <CanvasSlot>
+            <ResultPanel text={text} running={running} error={error} onStop={stop} exportName="实验计划"
+              placeholder="研究路线、实验设计、里程碑和风险点会显示在这里。"
+              onExportDocx={() => downloadDocx(text, "实验计划", "plan")} exportingDocx={docxBusy === "plan"} onSave={setText} />
+
+            {(sap.text || sap.running || sap.error) && (
+              <>
+                <h2 className="section-title" data-testid="sap-title">📐 统计分析计划(SAP · 基于 ICH E9 规范)</h2>
+                <ResultPanel text={sap.text} running={sap.running} error={sap.error} onStop={sap.stop} exportName="统计分析计划"
+                  placeholder="ITT/PP 分析集、主要终点分析、缺失数据与多重比较校正等会显示在这里。"
+                  onExportDocx={() => downloadDocx(sap.text, "统计分析计划", "sap")} exportingDocx={docxBusy === "sap"} panelTestId="sap-panel" onSave={sap.setText} />
+              </>
+            )}
+
+            {(dmp.text || dmp.running || dmp.error) && (
+              <>
+                <h2 className="section-title" data-testid="dmp-title">🗄️ 数据管理计划(DMP)<HelpButton helpKey="dmp" /></h2>
+                <ResultPanel text={dmp.text} running={dmp.running} error={dmp.error} onStop={dmp.stop} exportName="数据管理计划"
+                  placeholder="数据类型/存储备份/安全隐私/共享归档等会显示在这里。"
+                  onExportDocx={() => downloadDocx(dmp.text, "数据管理计划", "dmp")} exportingDocx={docxBusy === "dmp"} panelTestId="dmp-panel" onSave={dmp.setText} />
+              </>
+            )}
+
+            {(consent.text || consent.running || consent.error) && (
+              <>
+                <h2 className="section-title" data-testid="consent-title">📝 知情同意书(草案 · 需伦理委员会审核)<HelpButton helpKey="consent" /></h2>
+                <ResultPanel text={consent.text} running={consent.running} error={consent.error} onStop={consent.stop} exportName="知情同意书"
+                  placeholder="研究目的/流程/风险获益/隐私/自愿退出/签字栏等会显示在这里。"
+                  onExportDocx={() => downloadDocx(consent.text, "知情同意书", "consent")} exportingDocx={docxBusy === "consent"} panelTestId="consent-panel" onSave={consent.setText} />
+              </>
+            )}
+          </CanvasSlot>
+
+          {/* 追问 / 修改 */}
+          {text && !running && (
+            <div className="followup" data-testid="plan-followup">
+              <div className="followup-head">追问 / 修改主方案</div>
+              <p className="followup-tip">可就主方案某段追问,或按意见让 AI 重写完整方案。追问基于当前主稿与附加材料,不会引入未提供的数据。</p>
+              {followups.length > 0 && (
+                <div className="qa-list" data-testid="plan-qa-list">
+                  {followups.map((qa, i) => (
+                    <div key={i} className="qa-item">
+                      <div className="qa-q">❓ {qa.q}</div>
+                      <div className="qa-a"><Markdown>{qa.a}</Markdown></div>
+                    </div>
+                  ))}
+                </div>
+              )}
+              {fRunning && currentAnswer && (
+                <div className="qa-item"><div className="qa-a"><Markdown>{currentAnswer}</Markdown><span className="cursor-blink">▍</span></div></div>
+              )}
+              <textarea
+                data-testid="plan-followup-input"
+                value={followupInput}
+                onChange={(e) => setFollowupInput(e.target.value)}
+                placeholder="例如:入排标准能否再严格些?/ 把样本量加到 200 例/组 / 主要终点改成 6 个月 HbA1c"
+                rows={2}
+                disabled={fRunning}
+              />
+              {fError && <div className="result-error">{fError}</div>}
+              <div className="form-actions">
+                <button className="btn-primary" data-testid="plan-ask-btn" onClick={() => runFollowup("ask")} disabled={!followupInput.trim() || fRunning}>追问</button>
+                <button className="btn-ghost" data-testid="plan-revise-btn" onClick={() => runFollowup("revise")} disabled={!followupInput.trim() || fRunning}>按此修改主方案</button>
+                {fRunning && <button className="btn-ghost" onClick={() => { fctrl.current?.abort(); setFRunning(false); }} data-testid="plan-followup-stop">停止</button>}
+                {fRunning && <span className="status-line"><span className="spinner" /> 处理中…</span>}
+              </div>
+            </div>
+          )}
+
+          {/* 样本量计算器 */}
+          <details className="ss-calc" data-testid="ss-calc" open>
+            <summary>🧮 样本量交互式探索(滑块 + 实时曲线,免费不消耗额度)</summary>
+            <div className="form" style={{ marginTop: 12 }}>
+              <label className="field">
+                <span className="field-label">研究场景</span>
+                <select data-testid="ss-scene" value={ssScene} onChange={(e) => setSsScene(e.target.value)}>
+                  <option value="proportion">双比例(两组率比较)</option>
+                  <option value="ttest">双均值(两组均值比较,Cohen's d)</option>
+                </select>
+              </label>
+
+              <div className="ss-explore">
+                <div className="ss-controls">
+                  <label className="field">
+                    <span className="field-label">效应量 <strong>{ssEffect.toFixed(2)}</strong>
+                      <span className="field-hint">{ssScene === "proportion" ? "(两组率差,参考 p₁=0.3)" : "(Cohen's d:小0.2 / 中0.5 / 大0.8)"}</span>
+                    </span>
+                    <input type="range" min={0.05} max={1.0} step={0.01} data-testid="ss-effect" value={ssEffect} onChange={(e) => setSsEffect(parseFloat(e.target.value))} />
+                  </label>
+                  <label className="field">
+                    <span className="field-label">显著性水平 α <strong>{ssAlpha.toFixed(3)}</strong>
+                      <span className="field-hint">(双侧,常用 0.05)</span>
+                    </span>
+                    <input type="range" min={0.01} max={0.1} step={0.005} data-testid="ss-alpha" value={ssAlpha} onChange={(e) => setSsAlpha(parseFloat(e.target.value))} />
+                  </label>
+                  <label className="field">
+                    <span className="field-label">检验效能 power <strong>{ssPower.toFixed(2)}</strong>
+                      <span className="field-hint">(常用 0.8 / 0.9)</span>
+                    </span>
+                    <input type="range" min={0.6} max={0.99} step={0.01} data-testid="ss-power" value={ssPower} onChange={(e) => setSsPower(parseFloat(e.target.value))} />
+                  </label>
+                  <div className="ss-sweep-row">
+                    <span className="field-label" style={{ marginBottom: 0 }}>扫描变量:</span>
+                    {[{ k: "effect", label: "效应量" }, { k: "alpha", label: "α" }, { k: "power", label: "power" }].map((opt) => (
+                      <button key={opt.k} type="button" className={ssSweep === opt.k ? "btn-primary btn-sm" : "btn-ghost btn-sm"} onClick={() => setSsSweep(opt.k)} data-testid={`ss-sweep-${opt.k}`}>{opt.label}</button>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="ss-chart">
+                  <svg viewBox={`0 0 ${chartW} ${chartH}`} width="100%" role="img" aria-label="样本量曲线" data-testid="ss-chart">
+                    <line x1={padL} y1={padT} x2={padL} y2={padT + innerH} stroke="#bcd0cb" strokeWidth={1} />
+                    <line x1={padL} y1={padT + innerH} x2={padL + innerW} y2={padT + innerH} stroke="#bcd0cb" strokeWidth={1} />
+                    {[0, 0.25, 0.5, 0.75, 1].map((t, i) => {
+                      const v = yMin + (yMax - yMin) * (1 - t);
+                      const y = padT + innerH * t;
+                      return (<g key={`y${i}`}><line x1={padL - 4} y1={y} x2={padL} y2={y} stroke="#bcd0cb" /><text x={padL - 6} y={y + 3} fontSize={10} textAnchor="end" fill="#5f6f6c">{Math.round(v)}</text></g>);
+                    })}
+                    {[0, 0.5, 1].map((t, i) => {
+                      const x = padL + innerW * t;
+                      const v = xMin + (xMax - xMin) * t;
+                      return (<g key={`x${i}`}><line x1={x} y1={padT + innerH} x2={x} y2={padT + innerH + 4} stroke="#bcd0cb" /><text x={x} y={padT + innerH + 16} fontSize={10} textAnchor="middle" fill="#5f6f6c">{v.toFixed(2)}</text></g>);
+                    })}
+                    {path && <path d={path} fill="none" stroke="#2f8074" strokeWidth={2} />}
+                    {isFinite(ssN) && currentX >= xMin && currentX <= xMax && (
+                      <g>
+                        <line x1={sx(currentX)} y1={padT} x2={sx(currentX)} y2={padT + innerH} stroke="#2f8074" strokeWidth={1} strokeDasharray="3 3" opacity={0.5} />
+                        <circle cx={sx(currentX)} cy={sy(Math.min(ssN, yMax))} r={5} fill="#fff" stroke="#2f8074" strokeWidth={2} />
+                      </g>
+                    )}
+                    <text x={padL + innerW / 2} y={chartH - 4} fontSize={11} textAnchor="middle" fill="#5f6f6c">{ssSweep === "effect" ? "效应量" : ssSweep === "alpha" ? "α" : "power"}</text>
+                    <text x={12} y={padT + innerH / 2} fontSize={11} textAnchor="middle" fill="#5f6f6c" transform={`rotate(-90 12 ${padT + innerH / 2})`}>每组 N</text>
+                  </svg>
+                </div>
+              </div>
+
+              <div className="ss-result" data-testid="ss-result">
+                <strong style={{ fontSize: 20 }}>约需 N ≈ {isFinite(ssN) ? ssN * 2 : "—"} 例(每组 {isFinite(ssN) ? ssN : "—"})</strong>
+                <span className="field-hint">
+                  这是<strong>快速近似</strong>(前端估算);点「使用此参数」会用本地精确计算得到并采用的 N。
+                  公式:{ssScene === "proportion" ? "Lehr 近似 n ≈ 2(z_{α/2}+z_β)² p̄(1-p̄) / (p₁-p₂)²(默认 p₁=0.3)" : "n ≈ 2(z_{α/2}+z_β)² / d²"}
+                </span>
+              </div>
+
+              <div className="form-actions" style={{ marginTop: 8 }}>
+                <button className="btn-primary" onClick={useThisN} disabled={ssVerifyBusy || !isFinite(ssN)} data-testid="ss-use-btn">
+                  {ssVerifyBusy ? "验证中…" : "使用此参数"}
+                </button>
+                {ssChosen > 0 && (
+                  <span className="field-hint" data-testid="ss-chosen">✓ 已采用 N = {ssChosen}(每组)——生成「实验计划」/「SAP」时会带入此样本量</span>
+                )}
+              </div>
+              {ssVerifyMsg && <div className="field-hint" data-testid="ss-verify-msg" style={{ marginTop: 6 }}>{ssVerifyMsg}</div>}
+            </div>
+          </details>
+
+          {/* 随机化分组 */}
+          <details className="ss-calc" data-testid="rz-calc">
+            <summary>🎲 随机化分组表(确定性,固定种子可复现,免费)<HelpButton helpKey="randomize" /></summary>
+            <div className="form" style={{ marginTop: 12 }}>
+              <div className="ss-row">
+                <label className="field"><span className="field-label">样本量 n</span><input data-testid="rz-n" value={rzN} onChange={(e) => setRzN(e.target.value)} /></label>
+                <label className="field"><span className="field-label">随机方法</span>
+                  <select data-testid="rz-method" value={rzMethod} onChange={(e) => setRzMethod(e.target.value)}>
+                    <option value="block">置换区组随机(推荐,均衡)</option>
+                    <option value="simple">简单随机</option>
+                  </select>
+                </label>
+              </div>
+              <div className="ss-row">
+                <label className="field"><span className="field-label">分组(逗号分隔)</span><input data-testid="rz-groups" value={rzGroups} onChange={(e) => setRzGroups(e.target.value)} /></label>
+                <label className="field"><span className="field-label">分配比例(如 1,1 / 2,1)</span><input data-testid="rz-ratio" value={rzRatio} onChange={(e) => setRzRatio(e.target.value)} /></label>
+              </div>
+              <div className="ss-row">
+                {rzMethod === "block" && (<label className="field"><span className="field-label">区组大小(比例和的整数倍)</span><input data-testid="rz-block" value={rzBlock} onChange={(e) => setRzBlock(e.target.value)} /></label>)}
+                <label className="field"><span className="field-label">随机种子(同种子→同序列)</span><input data-testid="rz-seed" value={rzSeed} onChange={(e) => setRzSeed(e.target.value)} /></label>
+              </div>
+              <button className="btn-primary" onClick={genRandomize} disabled={rzBusy} data-testid="rz-btn">{rzBusy ? "生成中…" : "生成随机化分组表"}</button>
+
+              {rzResult && (rzResult.ok && rzResult.rows ? (
+                <div className="ss-result" data-testid="rz-result">
+                  <strong>共 {rzResult.rows.length} 例:{Object.entries(rzResult.counts || {}).map(([g, c]) => `${g} ${c}`).join(",")}</strong>
+                  <span className="field-hint">方法:{rzResult.method === "block" ? `置换区组(区组大小 ${rzResult.block_size})` : "简单随机"},种子 {rzSeed}(可复现)</span>
+                  <div className="md-table-wrap" style={{ maxHeight: 220, overflow: "auto" }}>
+                    <table className="evidence-table">
+                      <thead><tr><th>序号</th><th>分组</th></tr></thead>
+                      <tbody>{rzResult.rows.slice(0, 20).map((r) => (<tr key={r.seq}><td>{r.seq}</td><td>{r.group}</td></tr>))}</tbody>
+                    </table>
+                  </div>
+                  {rzResult.rows.length > 20 && <span className="field-hint">(仅预览前 20 行,导出 CSV 查看全部)</span>}
+                  <button className="btn-ghost btn-sm" onClick={exportRandomize} data-testid="rz-export-btn">导出 CSV</button>
+                </div>
+              ) : (
+                <div className="result-error" data-testid="rz-error">{rzResult.error}</div>
+              ))}
+            </div>
+          </details>
+
+          <div className="wiz-nav">
+            <button className="btn-ghost" onClick={() => setStep(1)} data-testid="plan-back-btn">← 返回准备</button>
+            <button className="btn-ghost" onClick={reset} disabled={running} data-testid="plan-reset-btn">重新开始</button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
