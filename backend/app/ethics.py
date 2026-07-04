@@ -57,10 +57,25 @@ def _add_para(doc: Document, *parts: str | tuple[str, str]) -> None:
 
 
 def _fill(value: str | None, key: str) -> str | tuple[str, str]:
-    """如果 value 非空返回值, 否则返回 ('placeholder', key) 让 _add_para 高亮。"""
+    """如果 value 非空返回值, 否则返回空串(前端已将必填改为可选, 未填项在 Word 中留空)。"""
     if value is None or str(value).strip() == "":
-        return ("placeholder", key)
+        return ""
     return str(value)
+
+
+def _add_materials_section(doc: Document, materials: str | None) -> None:
+    """将「附加材料」文本附加到文末, 供用户自行整理未填项对应内容。"""
+    text = (materials or "").strip()
+    if not text:
+        return
+    _add_section(doc, "附加材料")
+    for para in text.split("\n\n"):
+        para = para.strip("\n")
+        if not para:
+            continue
+        for line in para.split("\n"):
+            doc.add_paragraph(line)
+        doc.add_paragraph()
 
 
 # ---------- 4 个模板 ----------
@@ -255,11 +270,12 @@ def list_templates() -> list[str]:
     return list(_TEMPLATES.keys())
 
 
-def render(template: str, fields: dict | None = None) -> bytes:
+def render(template: str, fields: dict | None = None, materials: str | None = None) -> bytes:
     """根据模板与字段渲染 .docx 字节流。
 
     template ∈ {'informed_consent','protocol','crf','data_use_commitment'}
-    fields 缺失项以高亮 [占位] 形式保留。
+    fields 缺失项在正文中留空,建议由用户在 Word 中人工补写。
+    materials(可选)会作为「附加材料」段附在文末,供审查时参考。
     """
     builder = _TEMPLATES.get(template)
     if not builder:
@@ -271,6 +287,7 @@ def render(template: str, fields: dict | None = None) -> bytes:
     style.font.size = Pt(11)
 
     builder(doc, fields or {})
+    _add_materials_section(doc, materials)
 
     buf = io.BytesIO()
     doc.save(buf)

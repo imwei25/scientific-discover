@@ -92,24 +92,8 @@ const FILE_PREFIX: Record<TemplateId, string> = {
   informed_consent: "知情同意书", protocol: "研究方案", crf: "CRF病例报告表", data_use_commitment: "数据使用承诺",
 };
 
-// 每个模板的必填字段
-const REQUIRED: Record<TemplateId, string[]> = {
-  informed_consent: ["研究名称", "研究目的", "风险", "隐私保护", "研究者", "联系方式", "机构", "日期"],
-  protocol: ["研究名称", "研究目的", "研究设计", "研究者", "机构", "日期"],
-  crf: ["研究名称", "研究者", "机构", "日期"],
-  data_use_commitment: ["研究名称", "保密措施", "研究者", "机构", "日期"],
-};
-
-// 每个模板"附加材料"要合并进哪个可选占位符(交给后端 render 填充,让 Word 不留大段空白)
-const MATERIALS_TARGET: Record<TemplateId, string> = {
-  informed_consent: "研究流程",
-  protocol: "研究背景",
-  crf: "基线数据",
-  data_use_commitment: "数据来源",
-};
-
 const STEPS = [
-  { n: 1, title: "准备材料", desc: "模板 · 必填 · 附加材料" },
+  { n: 1, title: "准备材料", desc: "附加材料 · 可选内容清单" },
   { n: 2, title: "预览 & 下载", desc: "预览 · Word · 追问/修改" },
 ];
 
@@ -124,7 +108,7 @@ export default function EthicsModule() {
     <div className="module ethics-module ethics-wizard">
       <header className="module-head">
         <h1>📋 伦理材料 · 知情同意 / 方案 / CRF / 数据承诺</h1>
-        <p>两步走:选模板 → 填写必填项与附加材料 → 预览与下载 Word,并可追问/修改。</p>
+        <p>两步走:选模板 → 把材料粘贴/上传到附加材料 → 预览与下载 Word,并可追问/修改。未填内容会在最终 Word 中留空。</p>
       </header>
 
       <nav className="ethics-tabs" data-testid="ethics-nav" role="tablist" aria-label="伦理材料类型">
@@ -172,7 +156,6 @@ function EthicsEditor({ template, step, goStep }: { template: TemplateDef; step:
   const draftKey = `ethics:${template.id}:draft`;
   const followupsKey = `ethics:${template.id}:followups`;
 
-  const [fields, setFields] = usePersistentState<Record<string, string>>(storageKey, {});
   const [materials, setMaterials] = usePersistentState<string>(materialsKey, "");
   const [draft, setDraft] = usePersistentState<string>(draftKey, "");
   const [busy, setBusy] = useState(false);
@@ -181,32 +164,24 @@ function EthicsEditor({ template, step, goStep }: { template: TemplateDef; step:
   const [copied, setCopied] = useState(false);
   const lastSavedRef = useRef("");
 
-  // 一次性把老的可选字段值合并进 materials
+  // 一次性把旧版本存的字段值合并进 materials,让升级后不丢历史内容
   useEffect(() => {
-    const optionalKeys = template.fields.filter((f) => !REQUIRED[template.id].includes(f.key)).map((f) => f.key);
-    const sentinel = `${materialsKey}:migrated`;
+    const sentinel = `${materialsKey}:migrated-v2`;
     if (readPersisted<boolean>(sentinel, false)) return;
     const stored = readPersisted<Record<string, string>>(storageKey, {}) || {};
-    const parts: string[] = [];
-    const existing = (readPersisted<string>(materialsKey, "") || "").trim();
-    if (existing) parts.push(existing);
-    for (const k of optionalKeys) {
-      const v = (stored[k] || "").trim();
-      if (v) parts.push(`[${k}]\n${v}`);
+    const keys = Object.keys(stored).filter((k) => (stored[k] || "").trim());
+    if (keys.length > 0) {
+      const parts: string[] = [];
+      const existing = (readPersisted<string>(materialsKey, "") || "").trim();
+      if (existing) parts.push(existing);
+      for (const k of keys) parts.push(`[${k}]\n${stored[k].trim()}`);
+      writePersisted(materialsKey, parts.join("\n\n"));
     }
-    writePersisted(materialsKey, parts.join("\n\n"));
     writePersisted(sentinel, true);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [template.id]);
 
-  const requiredKeys = REQUIRED[template.id];
-  const requiredFields = template.fields.filter((f) => requiredKeys.includes(f.key));
-  const optionalHints = template.fields.filter((f) => !requiredKeys.includes(f.key)).map((f) => f.label);
-  const missingRequired = requiredFields.filter((f) => !(fields[f.key] || "").trim());
-
-  const setField = (key: string, value: string) => {
-    setFields((prev) => ({ ...prev, [key]: value }));
-  };
+  const hintLabels = template.fields.map((f) => f.label);
 
   const doImport = () => {
     const idea = readPersisted<string>("plan:idea", "");
@@ -215,14 +190,9 @@ function EthicsEditor({ template, step, goStep }: { template: TemplateDef; step:
     if (materials.trim()) parts.push(materials);
     if (idea) parts.push(`[从实验规划导入 · 研究想法]\n${idea}`);
     if (planResult) parts.push(`[从实验规划导入 · 方案主体]\n${planResult.slice(0, 4000)}`);
-    // 必填项里的"研究名称"若为空且实验规划里有想法,用第一行填一下
-    if (idea && !(fields["研究名称"] || "").trim()) {
-      const firstLine = idea.split("\n")[0].slice(0, 100);
-      setField("研究名称", firstLine);
-    }
     if (parts.length > (materials.trim() ? 1 : 0)) {
       setMaterials(parts.join("\n\n"));
-      setMsg("已从「实验规划」把可用内容追加到附加材料");
+      setMsg("已把「实验规划」里的想法与方案追加到附加材料");
     } else {
       setMsg("未找到可导入内容——请先在「实验规划」里填写或生成方案");
     }
@@ -232,10 +202,7 @@ function EthicsEditor({ template, step, goStep }: { template: TemplateDef; step:
   const clearAll = () => {
     if (busy) return;
     if (fRunning) fctrl.current?.abort();
-    if (!confirm(`确定清空"${template.title}"的全部字段?`)) return;
-    const empty: Record<string, string> = {};
-    for (const f of template.fields) empty[f.key] = "";
-    setFields(empty);
+    if (!confirm(`确定清空"${template.title}"的全部内容?`)) return;
     setMaterials("");
     setDraft("");
   };
@@ -258,23 +225,17 @@ function EthicsEditor({ template, step, goStep }: { template: TemplateDef; step:
     if (matFileRef.current) matFileRef.current.value = "";
   };
 
-  // 预览 = draft 优先(经追问/修订过);否则由 fields + materials 拼出
-  const previewText = draft || renderPreview(template, fields, materials);
+  // 预览 = draft 优先(经追问/修订过);否则由 materials 拼出
+  const previewText = draft || renderPreview(template, materials);
 
-  // 下载 Word:把 materials 合并到 MATERIALS_TARGET[template.id] 对应字段
+  // 下载 Word:把 materials 作为独立参数,由后端渲染到"附加材料"段
   const download = async () => {
     if (busy) return;
     setBusy(true); setErr("");
     try {
-      const merged: Record<string, string> = { ...fields };
-      const target = MATERIALS_TARGET[template.id];
-      if (materials.trim()) {
-        const cur = (merged[target] || "").trim();
-        merged[target] = cur ? `${cur}\n\n[附加材料]\n${materials}` : materials;
-      }
       const resp = await fetch(apiUrl("/api/ethics/render"), {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ template: template.id, fields: merged }),
+        body: JSON.stringify({ template: template.id, fields: {}, materials }),
       });
       if (!resp.ok) {
         let detail = "";
@@ -288,9 +249,9 @@ function EthicsEditor({ template, step, goStep }: { template: TemplateDef; step:
         lastSavedRef.current = key;
         addHistory({
           module: "ethics", icon: template.icon,
-          title: `${template.title} · ${fields["研究名称"]?.slice(0, 30) || "未命名"}`,
+          title: `${template.title} · ${(materials.trim().split("\n")[0] || "未命名").slice(0, 30)}`,
           data: {
-            [storageKey]: fields, [materialsKey]: materials, [draftKey]: draft,
+            [materialsKey]: materials, [draftKey]: draft,
             "ethics:active": template.id,
           },
         });
@@ -298,9 +259,6 @@ function EthicsEditor({ template, step, goStep }: { template: TemplateDef; step:
     } catch (e) { setErr(`下载 Word 失败: ${(e as Error).message}`); }
     finally { setBusy(false); }
   };
-
-  const filled = requiredFields.filter((f) => (fields[f.key] || "").trim()).length;
-  const total = requiredFields.length;
 
   // 追问 / 修改
   const [followups, setFollowups] = usePersistentState<{ q: string; a: string }[]>(followupsKey, []);
@@ -342,31 +300,23 @@ function EthicsEditor({ template, step, goStep }: { template: TemplateDef; step:
       {step === 1 && (
         <div className="wiz-panel" data-testid={`ethics-panel-1-${template.id}`}>
           <div className="ethics-toolbar">
-            <button className="btn-secondary" onClick={doImport} data-testid="ethics-import-btn">⬇ 从实验规划导入</button>
-            <span className="ethics-progress" data-testid="ethics-progress">
-              必填已填 {filled} / {total} 项
-            </span>
-            <button className="btn-ghost btn-sm" onClick={clearAll} data-testid="ethics-clear-btn">清空字段</button>
+            <button className="btn-secondary" onClick={doImport} data-testid="ethics-import-btn">⬇ 从实验规划导入到附加材料</button>
+            <button className="btn-ghost btn-sm" onClick={clearAll} data-testid="ethics-clear-btn">清空</button>
           </div>
           {msg && <div className="field-hint" data-testid="ethics-import-msg" style={{ marginBottom: 8 }}>{msg}</div>}
 
           <div className="ethics-form form">
-            {requiredFields.map((f) => (
-              <label className="field" key={f.key}>
-                <span className="field-label">{f.label}<em>必填</em></span>
-                {f.rows && f.rows > 1 ? (
-                  <textarea data-testid={`ethics-field-${f.key}`} value={fields[f.key] || ""} onChange={(e) => setField(f.key, e.target.value)} placeholder={f.placeholder} rows={f.rows} />
-                ) : (
-                  <input data-testid={`ethics-field-${f.key}`} value={fields[f.key] || ""} onChange={(e) => setField(f.key, e.target.value)} placeholder={f.placeholder} />
-                )}
-              </label>
-            ))}
+            <div className="field" data-testid="ethics-hint-field">
+              <span className="field-label">本模板建议包含以下内容(全部改为可选)</span>
+              <p className="field-hint" data-testid="ethics-hint-list">
+                {hintLabels.join("、")}。请在下方「附加材料」中粘贴或上传相关内容;
+                <strong>未填的项在最终 Word 中会留空</strong>,可事后人工补写或交伦理委员会前再完善。
+              </p>
+            </div>
 
             <div className="field" data-testid="ethics-materials-field">
-              <span className="field-label">附加材料(可选,越充分越好)</span>
-              <p className="field-hint">
-                可粘贴或上传:<strong>{optionalHints.join("、")}</strong>等。支持 Word / PDF / txt,<strong>可一次选多个</strong>;下载 Word 时会合并到「{MATERIALS_TARGET[template.id]}」段。
-              </p>
+              <span className="field-label">附加材料(粘贴文字或上传附件,越充分越好)</span>
+              <p className="field-hint">支持 Word / PDF / txt,<strong>可一次选多个</strong>;下载 Word 时会作为「附加材料」段附在文末。</p>
               <div className={`combo-input${matDrag ? " dragover" : ""}`}
                 onDragOver={(e) => { e.preventDefault(); setMatDrag(true); }}
                 onDragLeave={() => setMatDrag(false)}
@@ -375,8 +325,8 @@ function EthicsEditor({ template, step, goStep }: { template: TemplateDef; step:
                   data-testid="ethics-materials"
                   value={materials}
                   onChange={(e) => setMaterials(e.target.value)}
-                  placeholder="把上述可选内容粘贴到这里,或把文件拖入本框(可多个)。"
-                  rows={5}
+                  placeholder="把上面建议包含的内容粘贴到这里,或把文件拖入本框(可多个)。"
+                  rows={12}
                 />
                 <div className="combo-foot">
                   <button type="button" className="combo-attach" data-testid="ethics-materials-attach" onClick={() => matFileRef.current?.click()}>📎 添加附件(可多选)</button>
@@ -389,15 +339,10 @@ function EthicsEditor({ template, step, goStep }: { template: TemplateDef; step:
 
           <div className="wiz-nav">
             <button className="btn-ghost" onClick={clearAll} data-testid="ethics-reset-btn">清空</button>
-            <button className="btn-primary" onClick={() => goStep(2)} disabled={missingRequired.length > 0} data-testid="ethics-next-1">
+            <button className="btn-primary" onClick={() => goStep(2)} data-testid="ethics-next-1">
               下一步:预览 & 下载 →
             </button>
           </div>
-          {missingRequired.length > 0 && (
-            <p className="field-hint" data-testid="ethics-required-hint" style={{ marginTop: 6, color: "var(--danger, #c0392b)" }}>
-              还有 {missingRequired.length} 个必填项未填:{missingRequired.map((f) => f.label).join("、")}
-            </p>
-          )}
         </div>
       )}
 
@@ -406,7 +351,7 @@ function EthicsEditor({ template, step, goStep }: { template: TemplateDef; step:
           <CanvasSlot>
             <div className="ethics-preview" data-testid="ethics-preview">
               <div className="ethics-preview-head" style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
-                <span>以下为填写内容速览,正式排版以下载的 Word 为准</span>
+                <span>以下为附加材料速览,正式排版以下载的 Word 为准(未填字段会留空)</span>
                 {previewText && (
                   <button className="btn-ghost btn-sm" data-testid="ethics-copy-btn" title="复制预览全文到剪贴板"
                     onClick={async () => {
@@ -420,7 +365,7 @@ function EthicsEditor({ template, step, goStep }: { template: TemplateDef; step:
               {draft ? (
                 <div className="ethics-preview-body"><Markdown>{draft}</Markdown></div>
               ) : (
-                <pre className="ethics-preview-body">{previewText || "(填写左侧字段后这里会显示预览)"}</pre>
+                <pre className="ethics-preview-body">{previewText || "(在上一步填入附加材料后,这里会显示预览)"}</pre>
               )}
             </div>
           </CanvasSlot>
@@ -428,7 +373,7 @@ function EthicsEditor({ template, step, goStep }: { template: TemplateDef; step:
           {err && <div className="result-error" data-testid="ethics-error">{err}</div>}
 
           <div className="form-actions">
-            <button className="btn-primary" onClick={download} disabled={busy || missingRequired.length > 0} data-testid="ethics-download-btn">
+            <button className="btn-primary" onClick={download} disabled={busy} data-testid="ethics-download-btn">
               {busy ? "生成中…" : "⬇ 下载 Word"}
             </button>
             <span className="field-hint">下载后请人工核对每一项;最终版本须经伦理委员会审核通过方可使用。</span>
@@ -481,17 +426,10 @@ function EthicsEditor({ template, step, goStep }: { template: TemplateDef; step:
   );
 }
 
-function renderPreview(tpl: TemplateDef, fields: Record<string, string>, materials: string): string {
+function renderPreview(tpl: TemplateDef, materials: string): string {
   const lines: string[] = [];
-  const title = fields["研究名称"] || tpl.title;
   lines.push(`# ${tpl.title}`);
-  if (fields["研究名称"]) lines.push(`\n研究: ${title}\n`);
-  for (const f of tpl.fields) {
-    if (f.key === "研究名称") continue;
-    const val = (fields[f.key] || "").trim();
-    if (!val) continue;
-    lines.push(`\n## ${f.label}\n${val}`);
-  }
+  lines.push(`\n(未填字段将在最终 Word 中留空)\n`);
   if (materials.trim()) {
     lines.push(`\n## 附加材料\n${materials.trim()}`);
   }

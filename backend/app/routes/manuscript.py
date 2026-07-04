@@ -66,6 +66,7 @@ class ZoteroPushRequest(BaseModel):
 class EthicsRenderRequest(BaseModel):
     template: str
     fields: dict = {}
+    materials: str = ""
 
 
 @router.get("/api/journals")
@@ -299,7 +300,7 @@ async def ethics_render(req: EthicsRenderRequest) -> Response:
     from ..ethics import render as do_render
 
     try:
-        data = do_render(req.template, req.fields or {})
+        data = do_render(req.template, req.fields or {}, req.materials or "")
     except ValueError as e:
         return Response(content=str(e).encode("utf-8"), status_code=400, media_type="text/plain")
     except Exception as e:  # noqa: BLE001
