@@ -1090,3 +1090,66 @@ async def refine_analysis(
         yield ("done", {})
     except Exception as e:  # noqa: BLE001
         yield ("error", {"message": f"续跑过程出错：{e}"})
+
+
+async def refine_draw(
+    filename: str, content: bytes, current_code: str, requirement: str,
+    question: str = "", chart_format: str = "png", palette: str = "default",
+) -> AsyncIterator[tuple[str, dict]]:
+    """只画图模式的续跑:在现有画图代码上按新需求做最小改动重跑。
+    与 refine_analysis 同款事件契约,但绝不发 delta/transparency_*/output/plan。"""
+    if settings.mock:
+        yield ("status", {"message": "[MOCK] 按新需求改图…"})
+        yield ("code", {"code": f"# mock refine draw: {requirement}"})
+        yield ("charts", {"items": [{"png": "", "data": "", "ext": "png"}]})
+        yield ("done", {})
+        return
+
+    try:
+        yield ("status", {"message": "正在读取数据…"})
+        try:
+            df = _load(filename, content)
+        except Exception as e:  # noqa: BLE001
+            yield ("error", {"message": f"无法读取数据文件:{e}"})
+            return
+        if df.empty:
+            yield ("error", {"message": "数据为空。"})
+            return
+        if not (current_code or "").strip():
+            yield ("error", {"message": "缺少可修改的现有画图代码,请先完成一次画图。"})
+            return
+        profile = profile_data(df)
+
+        yield ("status", {"message": "正在按新需求修改画图代码…"})
+        code = _extract_code(await _complete(
+            _refine_draw_messages(profile, question, current_code, requirement), max_tokens=4096,
+        ))
+        yield ("code", {"code": code})
+        yield ("status", {"message": "正在本地执行画图…"})
+        run = await asyncio.to_thread(_execute, code, df, chart_format, palette)
+
+        seen_sigs: list[str] = []
+        for attempt in range(3):
+            if run.get("ok"):
+                break
+            sig = _err_sig(run.get("error", ""))
+            fresh = bool(sig) and sig in seen_sigs
+            seen_sigs.append(sig)
+            hint = "(换一种思路重写)" if fresh else ""
+            yield ("status", {"message": f"执行出错,正在自动修正代码(第 {attempt + 1} 次){hint}…"})
+            code = _extract_code(await _complete(
+                _fix_code_messages(profile, requirement, code, run.get("error", ""), fresh=fresh),
+                max_tokens=4096,
+            ))
+            yield ("code", {"code": code})
+            yield ("status", {"message": "正在重新执行…"})
+            run = await asyncio.to_thread(_execute, code, df, chart_format, palette)
+
+        if run.get("charts"):
+            yield ("charts", {"items": run["charts"]})
+        if not run.get("ok"):
+            yield ("error", {"message": "画图代码执行失败:\n" + (run.get("error") or "未知错误")})
+            return
+        yield ("done", {})
+    except Exception as e:  # noqa: BLE001
+        yield ("error", {"message": f"续跑过程出错:{e}"})
