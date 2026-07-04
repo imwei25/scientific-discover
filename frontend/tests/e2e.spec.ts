@@ -764,11 +764,11 @@ test("投稿包: 一键打包 ZIP", async ({ page }) => {
   await page.evaluate(() => {
     localStorage.setItem("ra:imrad:draft", JSON.stringify("## 一、引言\n初稿正文"));
     localStorage.setItem("ra:idea:result", JSON.stringify("选题综述"));
+    // 直接跳到 Step 2:bundle-btn 只在 Step 2 渲染;不能走 submit() 否则会 setDraft("") 冲掉预置初稿
+    localStorage.setItem("ra:imrad:step", JSON.stringify(2));
+    localStorage.setItem("ra:imrad:maxStep", JSON.stringify(2));
   });
   await page.getByTestId("nav-imrad").click();
-  // Step 1 → Step 2: bundle-btn 在向导 Step 2 才渲染
-  await page.getByTestId("imrad-materials").fill("背景/方法/结果/讨论素材");
-  await page.getByTestId("run-btn").click();
   const dl = page.waitForEvent("download");
   await page.getByTestId("bundle-btn").click();
   expect((await dl).suggestedFilename()).toBe("research-package.zip");
