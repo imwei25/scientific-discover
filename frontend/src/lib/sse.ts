@@ -1255,3 +1255,80 @@ export async function streamDeai(
     }
   }
 }
+
+// ── 实验规划 / 伦理材料 / 论文初稿: 追问 & 修改 ────────────────────
+
+export interface DraftFollowupHandlers {
+  onDelta: (text: string) => void;
+  onDone?: () => void;
+  onError?: (message: string) => void;
+  signal?: AbortSignal;
+}
+
+async function _streamDraftFollowup(
+  url: string,
+  module: string,
+  inputs: Record<string, unknown>,
+  h: DraftFollowupHandlers,
+): Promise<void> {
+  let resp: Response;
+  try {
+    resp = await fetch(apiUrl(url), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ module, inputs }),
+      signal: h.signal,
+    });
+  } catch (e) {
+    h.onError?.(`无法连接本地服务: ${(e as Error).message}`);
+    return;
+  }
+  if (!resp.ok || !resp.body) {
+    h.onError?.(`服务返回错误: ${resp.status}`);
+    return;
+  }
+  const reader = resp.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const { events, rest } = parseChunk(buffer);
+      buffer = rest;
+      for (const ev of events) {
+        let data: any = {};
+        try { data = JSON.parse(ev.data); } catch { /* ignore */ }
+        if (ev.event === "delta") h.onDelta(data.text ?? "");
+        else if (ev.event === "error") h.onError?.(data.message ?? ev.data);
+        else if (ev.event === "done") h.onDone?.();
+      }
+    }
+  } catch (e) {
+    if ((e as Error).name !== "AbortError") {
+      h.onError?.(`读取流出错: ${(e as Error).message}`);
+    }
+  }
+}
+
+export function streamPlanFollowup(
+  inputs: Record<string, unknown>,
+  h: DraftFollowupHandlers,
+): Promise<void> {
+  return _streamDraftFollowup("/api/plan-followup", "plan", inputs, h);
+}
+
+export function streamImradFollowup(
+  inputs: Record<string, unknown>,
+  h: DraftFollowupHandlers,
+): Promise<void> {
+  return _streamDraftFollowup("/api/imrad-followup", "imrad", inputs, h);
+}
+
+export function streamEthicsFollowup(
+  inputs: Record<string, unknown>,
+  h: DraftFollowupHandlers,
+): Promise<void> {
+  return _streamDraftFollowup("/api/ethics-followup", "ethics", inputs, h);
+}
