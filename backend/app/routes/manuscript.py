@@ -23,6 +23,10 @@ class DocxRequest(BaseModel):
 class RefsRequest(BaseModel):
     references: str
     journal_id: str = ""
+    # Optional: when frontend already has structured refs (from picker/handoff),
+    # send CSL-JSON directly to bypass the LLM parsing step. Field names follow CSL:
+    # type, title, author[], issued, container-title, volume, issue, page, DOI, ...
+    csl_json: list[dict] | None = None
 
 
 class LatexRequest(BaseModel):
@@ -92,10 +96,11 @@ async def journal_match(req: MatchRequest) -> dict:
 
 @router.post("/api/format-refs")
 async def format_refs(req: RefsRequest) -> dict:
-    """按目标期刊的 CSL 样式格式化参考文献(LLM 解析 + citeproc 渲染)。"""
+    """按目标期刊的 CSL 样式格式化参考文献(LLM 解析 + citeproc 渲染)。
+    若前端已有结构化 refs (csl_json), 直接跳过 LLM 解析这一步。"""
     from ..citations import format_references
 
-    return await format_references(req.references, req.journal_id)
+    return await format_references(req.references, req.journal_id, csl_json=req.csl_json)
 
 
 @router.post("/api/latex")

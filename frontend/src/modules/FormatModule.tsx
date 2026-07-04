@@ -5,12 +5,11 @@ import { addHistory } from "../lib/history";
 import { apiUrl } from "../lib/api";
 import ResultPanel from "../components/ResultPanel";
 import Dropzone from "../components/Dropzone";
-import type { Reference, EvidenceItem } from "../lib/sse";
+import type { Reference } from "../lib/sse";
 import { downloadDocxFromText, downloadBase64, openInOverleaf } from "../lib/download";
 import { copyToClipboard } from "../lib/clipboard";
 import DiffView from "../components/DiffView";
 import { LiteraturePicker, pickerKey } from "../components/LiteraturePicker";
-import { extractEvidenceForRefs } from "../lib/evidenceExtract";
 import { consume as consumeHandoff, REFHANDOFF_EVENT } from "../lib/refHandoff";
 
 
@@ -92,28 +91,72 @@ export default function FormatModule() {
   // 引用文件双向导入导出: 用户从 EndNote/Zotero 导入的结构化引用 + 用于导出.
   const [importedRefs, setImportedRefs] = usePersistentState<Reference[]>("format:importedRefs", []);
 
-  // 结构化参考文献面板: evidence、勾选 keys、提取进度、handoff 通知
-  const [structuredEvidence, setStructuredEvidence] = usePersistentState<Record<string, EvidenceItem & { _ev_status?: string }>>("format:evidence", {});
+  // 结构化参考文献面板: 勾选 keys、handoff 通知
+  // NOTE: 期刊排版只关心引用条目, 不显示核心发现, 也不做 evidence extraction.
   const [structuredSelectedKeys, setStructuredSelectedKeys] = usePersistentState<string[]>("format:selectedKeys", []);
-  const [formatExtractProgress, setFormatExtractProgress] = useState<{ done: number; total: number } | null>(null);
   const [handoffToast, setHandoffToast] = useState<string | null>(null);
+  // handoff 到达后, 若期刊模板已选好, 自动跑一次「按该期刊格式化参考文献」。
+  const [pendingAutoFormat, setPendingAutoFormat] = useState(false);
 
-  // 结构化参考文献优先: 若有勾选条目则序列化为文本传给后端, 否则退回 textarea
+  // 结构化参考文献优先: 若有勾选条目则以 CSL-JSON 送后端(跳过 LLM 解析), 否则退回 textarea
   const structuredCheckedRefs = (): Reference[] => {
     if (!structuredSelectedKeys.length) return [];
     const s = new Set(structuredSelectedKeys);
     return importedRefs.filter((r) => s.has(pickerKey(r)));
   };
 
-  const refsBodyForApi = (): string => {
+  /** 从 Reference 构造 CSL-JSON 条目, 缺失字段自动省略, 不产生空占位。 */
+  const refToCsl = (r: Reference, i: number): Record<string, unknown> => {
+    const it: Record<string, unknown> = { id: `ref${i + 1}`, type: "article-journal" };
+    if (r.title) it.title = r.title;
+    if (r.first_author) {
+      // 后端 CSL 期望 [{family, given}]; 只有一个"first_author"字符串时按整字符串放 family, given 留空。
+      // 前端拿不到多作者列表, 这里作为可接受的近似; 如需精确, 让用户后续在 textarea 中粘贴完整作者。
+      const name = r.first_author.trim();
+      const parts = name.split(/\s+/);
+      const family = parts.length > 1 ? parts.slice(-1)[0] : name;
+      const given = parts.length > 1 ? parts.slice(0, -1).join(" ") : "";
+      it.author = [given ? { family, given } : { family }];
+    }
+    if (r.journal) it["container-title"] = r.journal;
+    if (r.year) {
+      const yr = parseInt(String(r.year), 10);
+      if (!Number.isNaN(yr)) it.issued = { "date-parts": [[yr]] };
+    }
+    if (r.doi) it.DOI = r.doi;
+    if (r.url && !r.doi) it.URL = r.url;
+    return it;
+  };
+
+  /** 从 Reference 序列化成可读文本, 缺失字段整段丢弃, 不出现 ". . ." 空占位。 */
+  const refToLine = (r: Reference, i: number): string => {
+    const parts: string[] = [];
+    if (r.first_author) parts.push(r.first_author);
+    if (r.title) parts.push(r.title);
+    if (r.journal) parts.push(r.journal);
+    if (r.year) parts.push(String(r.year));
+    if (r.doi) parts.push(`DOI:${r.doi}`);
+    else if (r.url) parts.push(r.url);
+    return `${i + 1}. ${parts.join(". ")}${parts.length ? "." : ""}`;
+  };
+
+  /** 供 /api/format-refs: 结构化勾选时同时送 csl_json (跳过 LLM) 和文本兜底。 */
+  const refsBodyForFormat = (): { references: string; csl_json?: Record<string, unknown>[] } => {
     const struct = structuredCheckedRefs();
-    if (!struct.length) return refsInput;
-    return struct
-      .map(
-        (r, i) =>
-          `${i + 1}. ${r.first_author || ""} et al. ${r.title || ""}. ${r.journal || ""}. ${r.year || ""}. ${r.doi ? "DOI:" + r.doi : r.url || ""}`,
-      )
-      .join("\n");
+    if (struct.length) {
+      return {
+        references: struct.map((r, i) => refToLine(r, i)).join("\n"),
+        csl_json: struct.map((r, i) => refToCsl(r, i)),
+      };
+    }
+    return { references: refsInput };
+  };
+
+  /** 供 /api/check-refs 和 /api/latex: 只送文本 (后端目前不接受 csl_json)。 */
+  const refsTextForApi = (): string => {
+    const struct = structuredCheckedRefs();
+    if (struct.length) return struct.map((r, i) => refToLine(r, i)).join("\n");
+    return refsInput;
   };
 
   const checkRefs = async () => {
@@ -126,7 +169,7 @@ export default function FormatModule() {
       const resp = await fetch(apiUrl("/api/check-refs"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ references: refsBodyForApi() }),
+        body: JSON.stringify({ references: refsTextForApi() }),
       });
       const d = await resp.json();
       if (d.ok) setCheckResult(d.items || []);
@@ -162,7 +205,6 @@ export default function FormatModule() {
         for (const r of stash.refs) keyMap.set(pickerKey(r), r);
         return Array.from(keyMap.values());
       });
-      setStructuredEvidence((prev) => ({ ...prev, ...stash.evidence }));
       setStructuredSelectedKeys((prev) => {
         const s = new Set(prev);
         for (const r of stash.refs) s.add(pickerKey(r));
@@ -171,6 +213,8 @@ export default function FormatModule() {
       const src = stash.from === "idea" ? "找选题" : "写标书";
       setHandoffToast(`已从 ${src} 带入 ${stash.refs.length} 篇文献`);
       setTimeout(() => setHandoffToast(null), 4000);
+      // 一键格式化: 若期刊模板已选好, 立刻跑; 否则挂待办, 等 journals 加载完再触发。
+      setPendingAutoFormat(true);
     };
     drain(); // consume stash that arrived before mount
     window.addEventListener(REFHANDOFF_EVENT, drain);
@@ -188,7 +232,7 @@ export default function FormatModule() {
       const resp = await fetch(apiUrl("/api/format-refs"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ references: refsBodyForApi(), journal_id: journalId }),
+        body: JSON.stringify({ ...refsBodyForFormat(), journal_id: journalId }),
       });
       const d = await resp.json();
       if (d.ok) setFmtRefs(d.formatted || []);
@@ -199,6 +243,17 @@ export default function FormatModule() {
       setRefsBusy(false);
     }
   };
+
+  // handoff 到达 + 期刊模板已选 → 自动跑一次「按该期刊格式化参考文献」。
+  // 若 handoff 时 journalId 还没加载完, 等 journals 到位后触发。
+  useEffect(() => {
+    if (!pendingAutoFormat) return;
+    if (!journalId) return;
+    if (!structuredCheckedRefs().length) return;
+    setPendingAutoFormat(false);
+    formatRefs();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pendingAutoFormat, journalId, structuredSelectedKeys.length, importedRefs.length]);
 
   useEffect(() => {
     fetch(apiUrl("/api/journals"))
@@ -283,8 +338,9 @@ export default function FormatModule() {
     setCheckResult([]);
     setCheckErr(null);
     setImportedRefs([]);
-    setStructuredEvidence({});
     setStructuredSelectedKeys([]);
+    // 顺手清掉遗留的 format:evidence（老版本可能留下的 localStorage 键）
+    try { localStorage.removeItem("format:evidence"); } catch { /* no-op */ }
     setHandoffToast(null);
     setLatexZip("");
     setLatexErr(null);
@@ -318,7 +374,7 @@ export default function FormatModule() {
       const resp = await fetch(apiUrl("/api/latex"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text, journal_id: journalId, references: refsBodyForApi() }),
+        body: JSON.stringify({ text, journal_id: journalId, references: refsTextForApi() }),
       });
       // 若后端未启动/崩溃, resp.ok 会为 false 或 resp.json() 抛异常, 需明确提示
       if (!resp.ok) {
@@ -636,46 +692,41 @@ export default function FormatModule() {
         <div className="format-handoff-toast">{handoffToast}</div>
       )}
       {importedRefs.length > 0 && (
-        <section className="format-structured-refs">
-          <h3>结构化参考文献（勾选后作为格式化/核验/推送的输入）</h3>
-          <LiteraturePicker
-            refs={importedRefs}
-            evidenceByKey={structuredEvidence}
-            selectedKeys={structuredSelectedKeys}
-            onSelectionChange={setStructuredSelectedKeys}
-            mode="list"
-            onImport={async (imported) => {
-              // 合并到 importedRefs (按 pickerKey 去重; 有摘要时升级)
-              const keyMap = new Map(importedRefs.map((r) => [pickerKey(r), r]));
-              for (const imp of imported) {
-                const k = pickerKey(imp);
-                const existing = keyMap.get(k);
-                if (!existing) keyMap.set(k, imp);
-                else if (!existing.abstract && imp.abstract) keyMap.set(k, { ...existing, ...imp, abstract: imp.abstract });
-              }
-              setImportedRefs(Array.from(keyMap.values()));
-
-              // 保留旧的文本追加行为: 同时写入 refsInput 作为降级后备
-              const asText = imported
-                .map((r) => `${r.first_author || ""} et al. (${r.year || ""}). ${r.title || ""}. ${r.journal || ""}. ${r.url || ""}`)
-                .join("\n");
-              setRefsInput((prev) => prev + (prev.endsWith("\n") || !prev ? "" : "\n") + asText);
-
-              const newOnes = imported.filter((imp) => !importedRefs.some((r) => pickerKey(r) === pickerKey(imp)));
-              if (!newOnes.length) return;
-              setFormatExtractProgress({ done: 0, total: newOnes.length });
-              try {
-                const evMap = await extractEvidenceForRefs(newOnes, (d, t) => setFormatExtractProgress({ done: d, total: t }));
-                setStructuredEvidence((prev) => ({ ...prev, ...evMap }));
-              } finally {
-                setFormatExtractProgress(null);
-              }
-            }}
-            extractionStatus={formatExtractProgress}
-            exportFilename="format-refs"
-            showZotero={true}
-          />
-        </section>
+        <details className="format-structured-refs" data-testid="format-structured-refs">
+          <summary className="adv-summary">
+            <span className="adv-summary-main">📚 带入的参考文献（{importedRefs.length} 篇；已勾选 {structuredCheckedRefs().length} 条）</span>
+            <span className="adv-summary-sub">从「找选题 / 写标书」带入或从 Zotero / 文件导入；勾选后直接作为格式化/核验/推送的输入</span>
+          </summary>
+          <div className="adv-body">
+            <LiteraturePicker
+              refs={importedRefs}
+              evidenceByKey={{}}
+              selectedKeys={structuredSelectedKeys}
+              onSelectionChange={setStructuredSelectedKeys}
+              mode="list"
+              showEvidence={false}
+              onImport={(imported) => {
+                // 合并到 importedRefs (按 pickerKey 去重; 有摘要时升级)。期刊排版不做 evidence 抽取。
+                const keyMap = new Map(importedRefs.map((r) => [pickerKey(r), r]));
+                for (const imp of imported) {
+                  const k = pickerKey(imp);
+                  const existing = keyMap.get(k);
+                  if (!existing) keyMap.set(k, imp);
+                  else if (!existing.abstract && imp.abstract) keyMap.set(k, { ...existing, ...imp, abstract: imp.abstract });
+                }
+                setImportedRefs(Array.from(keyMap.values()));
+                // 新导入的条目默认勾上, 与 handoff 行为一致。
+                setStructuredSelectedKeys((prev) => {
+                  const s = new Set(prev);
+                  for (const r of imported) s.add(pickerKey(r));
+                  return Array.from(s);
+                });
+              }}
+              exportFilename="format-refs"
+              showZotero={true}
+            />
+          </div>
+        </details>
       )}
       <div className="form">
         <label className="field">

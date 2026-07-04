@@ -726,13 +726,8 @@ export default function IdeaModule({ goto }: { goto: Goto }) {
             secondaryAction={{
               label: "→ 期刊排版",
               onClick: (checked) => {
-                const subset: Record<string, EvidenceItem & { _ev_status?: string }> = {};
-                for (const r of checked) {
-                  const k = refKey(r);
-                  if (evidenceByKey[k]) subset[k] = evidenceByKey[k];
-                }
-                stashHandoff({ refs: checked, evidence: subset, from: "idea" });
-                // Format tab switch — hooked separately via refhandoff:pending event
+                // 期刊排版只关心引用条目 (作者/年份/期刊/DOI), 不需要核心发现. 传空 evidence.
+                stashHandoff({ refs: checked, evidence: {}, from: "idea" });
                 goto("format", {});
               },
             }}

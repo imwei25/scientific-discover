@@ -26,6 +26,8 @@ export interface LiteraturePickerProps {
   secondaryAction?: { label: string; onClick: (checked: Reference[]) => void; disabled?: boolean };
   exportFilename?: string;
   showZotero?: boolean;
+  /** When false, hide the core-findings chips (pop/design/finding/gap) row. Default true. */
+  showEvidence?: boolean;
   header?: ReactNode;
   extractionStatus?: { done: number; total: number } | null;
 }
@@ -34,7 +36,7 @@ export function LiteraturePicker(props: LiteraturePickerProps) {
   const {
     refs, evidenceByKey, selectedKeys, onSelectionChange,
     onImport, keyFn = pickerKey, mode = "picker", primaryAction, secondaryAction,
-    exportFilename = "references", showZotero = true, header, extractionStatus,
+    exportFilename = "references", showZotero = true, showEvidence = true, header, extractionStatus,
   } = props;
 
   const selectedSet = useMemo(() => new Set(selectedKeys), [selectedKeys]);
@@ -137,22 +139,24 @@ export function LiteraturePicker(props: LiteraturePickerProps) {
                     <a className="ref-oa" href={r.oa_url} target="_blank" rel="noreferrer">🔓 免费全文</a>
                   )}
                 </div>
-                <div className="lit-picker-evidence">
-                  {ev?._ev_status === "no_abstract" ? (
-                    <span className="ev-chip ev-empty">无摘要，未提取</span>
-                  ) : ev?._ev_status === "extract_error" ? (
-                    <span className="ev-chip ev-error">核心发现提取失败</span>
-                  ) : ev ? (
-                    <>
-                      <span className="ev-chip">对象: {ev.pop || "—"}</span>
-                      <span className="ev-chip">设计: {ev.design || "—"}</span>
-                      <span className="ev-chip ev-finding">发现: {ev.finding || "—"}</span>
-                      <span className="ev-chip">局限: {ev.gap || "—"}</span>
-                    </>
-                  ) : (
-                    <span className="ev-chip ev-pending">待提取…</span>
-                  )}
-                </div>
+                {showEvidence && (
+                  <div className="lit-picker-evidence">
+                    {ev?._ev_status === "no_abstract" ? (
+                      <span className="ev-chip ev-empty">无摘要，未提取</span>
+                    ) : ev?._ev_status === "extract_error" ? (
+                      <span className="ev-chip ev-error">核心发现提取失败</span>
+                    ) : ev ? (
+                      <>
+                        <span className="ev-chip">对象: {ev.pop || "—"}</span>
+                        <span className="ev-chip">设计: {ev.design || "—"}</span>
+                        <span className="ev-chip ev-finding">发现: {ev.finding || "—"}</span>
+                        <span className="ev-chip">局限: {ev.gap || "—"}</span>
+                      </>
+                    ) : (
+                      <span className="ev-chip ev-pending">待提取…</span>
+                    )}
+                  </div>
+                )}
               </div>
             </li>
           );

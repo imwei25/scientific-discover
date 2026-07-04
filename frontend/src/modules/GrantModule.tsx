@@ -717,12 +717,8 @@ export default function GrantModule({ goto }: { goto: Goto }) {
               secondaryAction={{
                 label: "→ 期刊排版",
                 onClick: (checked) => {
-                  const subset: Record<string, EvidenceItem & { _ev_status?: string }> = {};
-                  for (const r of checked) {
-                    const k = pickerKey(r);
-                    if (searchEvidence[k]) subset[k] = searchEvidence[k];
-                  }
-                  stashHandoff({ refs: checked, evidence: subset, from: "grant" });
+                  // 期刊排版只关心引用条目 (作者/年份/期刊/DOI), 不需要核心发现. 传空 evidence.
+                  stashHandoff({ refs: checked, evidence: {}, from: "grant" });
                   goto("format", {});
                 },
               }}

@@ -200,10 +200,14 @@ def render_bibliography(csl_json: list[dict], style_name: str) -> list[str]:
     return [_postprocess_line(line, by_id.get(k, {})) for k, line in zip(keys, rendered)]
 
 
-async def format_references(refs_text: str, journal_id: str) -> dict:
+async def format_references(refs_text: str, journal_id: str, csl_json: list[dict] | None = None) -> dict:
+    """按 CSL 样式渲染参考文献。
+    - 若 csl_json 已给出(前端 handoff/结构化输入): 直接归一化 + 渲染, 跳过 LLM。
+    - 否则用 LLM 从 refs_text 中抽取 CSL-JSON。
+    """
     journal = get_journal(journal_id)
     style_name = (journal or {}).get("csl") or _DEFAULT_STYLE
-    if not refs_text.strip():
+    if not csl_json and not (refs_text or "").strip():
         return {"ok": False, "error": "请粘贴参考文献内容。"}
 
     if settings.mock:
@@ -214,15 +218,28 @@ async def format_references(refs_text: str, journal_id: str) -> dict:
         }
 
     try:
-        csl_json = _parse_json_array(await _complete(_extract_messages(refs_text)))
-        if not csl_json:
-            return {"ok": False, "error": "未能解析出参考文献，请检查粘贴的内容格式。"}
-        raw_count = len(csl_json)
-        csl_json = _normalize_and_dedup(csl_json)
-        formatted = render_bibliography(csl_json, style_name)
+        if csl_json:
+            # 前端已给结构化输入, 补全 id/type 便于 citeproc 使用。
+            items: list[dict] = []
+            for i, it in enumerate(csl_json, 1):
+                if not isinstance(it, dict):
+                    continue
+                it.setdefault("id", f"ref{i}")
+                it.setdefault("type", "article-journal")
+                items.append(it)
+            if not items:
+                return {"ok": False, "error": "结构化参考文献为空。"}
+            csl_items = items
+        else:
+            csl_items = _parse_json_array(await _complete(_extract_messages(refs_text)))
+            if not csl_items:
+                return {"ok": False, "error": "未能解析出参考文献，请检查粘贴的内容格式。"}
+        raw_count = len(csl_items)
+        csl_items = _normalize_and_dedup(csl_items)
+        formatted = render_bibliography(csl_items, style_name)
         result = {"ok": True, "style": style_name, "formatted": formatted}
-        if len(csl_json) < raw_count:
-            result["note"] = f"已自动去除 {raw_count - len(csl_json)} 条重复参考文献。"
+        if len(csl_items) < raw_count:
+            result["note"] = f"已自动去除 {raw_count - len(csl_items)} 条重复参考文献。"
         return result
     except Exception as e:  # noqa: BLE001
         return {"ok": False, "error": f"格式化失败：{e}"}
