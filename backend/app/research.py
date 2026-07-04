@@ -377,20 +377,25 @@ async def _extract_batch(field: str, items: list[tuple[int, dict]]) -> dict[int,
     system = (
         "你是医学文献信息抽取助手。下面给出用户的【研究方向】以及若干篇文献的编号、标题与摘要。"
         "请为每篇抽取结构化要点，并判断它与该研究方向的相关性。"
-        "字段用简洁中文（每字段不超过 40 字，信息缺失填空字符串，严禁编造）。\n"
+        "字段用简洁中文，信息缺失填空字符串，严禁编造。字数限制：\n"
+        "- pop / design / gap / rel_why：每字段 ≤40 字；\n"
+        "- finding：≤120 字，写成一句完整的话，必须包含关键数据/效应量(如 HR、OR、p 值、样本量)"
+        "以及作者得出的主要结论方向；若摘要信息不足以得出量化结论，只写定性结论并明确"
+        "标注『摘要未报告具体数值』，不得凭空补数。\n"
         "相关性 rel 按整数打分：3=直接相关(核心主题一致，可直接支撑立意)；"
         "2=相关(同一疾病/机制/方法领域，可作背景或旁证)；1=弱相关(仅沾边，主题实质不同)；"
         "0=不相关(检索误命中，如同名词、无关学科)。判分只看主题贴合度，不看被引或年份。\n"
         "只输出 JSON 数组，每项形如 "
         "{\"i\":编号,\"pop\":\"研究对象/人群\",\"design\":\"研究类型/方法\","
-        "\"finding\":\"主要发现(含关键数据/效应量)\",\"gap\":\"局限或未解决的问题\","
+        "\"finding\":\"主要发现(含关键数据/效应量与结论方向，一句完整话)\","
+        "\"gap\":\"局限或未解决的问题\","
         "\"rel\":0到3的整数,\"rel_why\":\"判分理由(一句话，≤30字)\"}，不要任何解释。"
     )
     user = f"研究方向：{field}\n\n【文献】\n" + "\n\n".join(parts)
     arr = _parse_json(
         await _complete(
             [{"role": "system", "content": system}, {"role": "user", "content": user}],
-            max_tokens=1700,
+            max_tokens=2600,
         ),
         "[", "]",
     )
@@ -411,7 +416,7 @@ async def _extract_batch(field: str, items: list[tuple[int, dict]]) -> dict[int,
     return out
 
 
-async def _extract_evidence(field: str, papers: list[dict], batch: int = 12) -> dict[int, dict]:
+async def _extract_evidence(field: str, papers: list[dict], batch: int = 8) -> dict[int, dict]:
     """对全部纳入文献并发抽取结构化证据行(含相关性判分), 返回 {全局编号(1-based): row}。
 
     同时把抽取结果(含 rel)挂到各 paper 的 `_ev` 键上, 供排序/筛选/gap 检索复用。
