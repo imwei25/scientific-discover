@@ -439,15 +439,15 @@ def _clip_output(text: str, head: int = 9000, tail: int = 3000) -> str:
 
 # 三个透明化标题的鲁棒匹配。允许:全/半角括号缺失、markdown 标题前缀、行首序号、
 # 中英文冒号、前后 --- 或 === 装饰。每个 marker 单独匹配,按出现位置切分,允许乱序。
-_TRANSPARENCY_MARKERS: dict[str, "re.Pattern[str]"] = {
+_TRANSPARENCY_MARKERS: dict[str, re.Pattern[str]] = {
     "method": re.compile(
-        r"(?:^|\n)[\s>#\-=]*(?:[\d①-⑨][.、\s]+)?[『「]?\s*[【\[]?\s*方法选择\s*[】\]]?\s*[』」]?[\s::]*",
+        r"(?:^|\n)[\s>#\-=]*(?:[\d①-⑨][.、\s]+)?[『「]?\s*[【\[]?\s*方法选择(?![^\s\]】』」:：])\s*[】\]]?\s*[』」]?[\s::]*",
     ),
     "assumption": re.compile(
-        r"(?:^|\n)[\s>#\-=]*(?:[\d①-⑨][.、\s]+)?[『「]?\s*[【\[]?\s*假设检查\s*[】\]]?\s*[』」]?[\s::]*",
+        r"(?:^|\n)[\s>#\-=]*(?:[\d①-⑨][.、\s]+)?[『「]?\s*[【\[]?\s*假设检查(?![^\s\]】』」:：])\s*[】\]]?\s*[』」]?[\s::]*",
     ),
     "quality": re.compile(
-        r"(?:^|\n)[\s>#\-=]*(?:[\d①-⑨][.、\s]+)?[『「]?\s*[【\[]?\s*数据质量\s*[】\]]?\s*[』」]?[\s::]*",
+        r"(?:^|\n)[\s>#\-=]*(?:[\d①-⑨][.、\s]+)?[『「]?\s*[【\[]?\s*数据质量(?![^\s\]】』」:：])\s*[】\]]?\s*[』」]?[\s::]*",
     ),
 }
 
@@ -459,6 +459,7 @@ def _split_transparency(stdout: str) -> dict[str, str]:
       最后一个 marker 后按空行切"最后区块内容 / main"。
     - 一个 marker 都没匹配到 → 全部落 main。
     - 优雅退化:LLM 输出格式漂移(缺括号 / md 标题 / 序号 / 乱序) 都尽量兜住。
+    - 文本在首个 marker 之前的部分会被丢弃(视为噪声)。
     """
     if not stdout:
         return {"method": "", "assumption": "", "quality": "", "main": ""}

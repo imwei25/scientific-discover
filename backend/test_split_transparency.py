@@ -49,6 +49,8 @@ def main():
     r = da._split_transparency(stdout)
     if _check("序号/method", r["method"].strip(), "aa"): passed += 1
     else: failed += 1
+    if _check("序号/main", r["main"].strip(), "主 dd"): passed += 1
+    else: failed += 1
 
     # 5. 顺序颠倒
     stdout = "『【数据质量】』\nQ1\n\n『【方法选择】』\nM1\n\n『【假设检查】』\nA1\n\nMAIN"
@@ -81,6 +83,22 @@ def main():
     # 8. 空串
     r = da._split_transparency("")
     if _check("空串/main 空", r["main"], ""): passed += 1
+    else: failed += 1
+
+    # 9. 圆圈序号 + 超串防误判
+    stdout = "① 方法选择:aa\n\n② 假设检查:bb\n\n③ 数据质量:cc\n\nmain content"
+    r = da._split_transparency(stdout)
+    if _check("圆圈/method", r["method"].strip(), "aa"): passed += 1
+    else: failed += 1
+    if _check("圆圈/quality", r["quality"].strip(), "cc"): passed += 1
+    else: failed += 1
+
+    # 10. 超串防误判(假设检查通过 ≠ 假设检查 marker)
+    stdout = "假设检查通过，继续分析\nmain content"
+    r = da._split_transparency(stdout)
+    if _check("超串/assumption 不匹配", r["assumption"], ""): passed += 1
+    else: failed += 1
+    if _check("超串/main 全部", r["main"].strip(), "假设检查通过，继续分析\nmain content"): passed += 1
     else: failed += 1
 
     print(f"\nRESULT: {passed} passed, {failed} failed")
