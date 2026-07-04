@@ -926,12 +926,20 @@ export default function IdeaModule({ goto }: { goto: Goto }) {
                         data-testid={`candidate-to-grant-${i}`}
                         onClick={() => {
                           const cited = refsCitedIn(c.body, refs);
+                          const carried = cited.length ? cited : refs;
+                          // 同步带走已经抽好的核心发现, 标书那边就不用再跑一次 /api/refs/extract-evidence。
+                          const carriedEvidence: Record<string, EvidenceItem & { _ev_status?: string }> = {};
+                          for (const r of carried) {
+                            const ev = evidenceByKey[refKey(r)];
+                            if (ev) carriedEvidence[refKey(r)] = ev;
+                          }
                           goto("grant", {
                             "grant:title": c.title,
                             "grant:idea": `${c.title}\n\n${c.body}`,
                             "grant:report": reportBackgroundOnly(text),
                             "grant:background": background,
-                            "grant:refs": cited.length ? cited : refs,
+                            "grant:refs": carried,
+                            "grant:evidence": carriedEvidence,
                             // 直接开写: 用默认配置自动生成大纲并撰写, 跳到第 2 步预览, 不再让用户确认大纲。
                             "grant:phase": "idle", "grant:step": 1, "grant:autostart": true,
                             "grant:scheme": null, "grant:outline": [], "grant:sections": [],

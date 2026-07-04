@@ -843,6 +843,16 @@ body {
   gap: var(--sp-4);
   padding: var(--sp-4) 16px;
 }
+.grant-refs-list {
+  margin: 0;
+  padding-left: 20px;
+  max-height: 260px;
+  overflow-y: auto;
+  font-size: 13px;
+  line-height: 1.55;
+}
+.grant-refs-list li { margin-bottom: 4px; }
+.grant-refs-list .grant-refs-meta { color: var(--muted); font-size: 12px; }
 
 /* 3D 球棍模型：原子球加细描边 + 浅高光感 */
 .atoms-group circle {

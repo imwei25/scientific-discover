@@ -118,6 +118,8 @@ export default function GrantModule({ goto }: { goto: Goto }) {
   const [periodStart, setPeriodStart] = usePersistentState("grant:periodStart", "");
   const [periodEnd, setPeriodEnd] = usePersistentState("grant:periodEnd", "");
   const [refs, setRefs] = usePersistentState<Reference[]>("grant:refs", []);
+  // 已抽取的核心发现（按 pickerKey 索引），来自找选题带入 / 之前跑过的抽取；picker 里复用避免重复调用。
+  const [refsEvidence, setRefsEvidence] = usePersistentState<Record<string, EvidenceItem & { _ev_status?: string }>>("grant:evidence", {});
   const [preResearch, setPreResearch] = usePersistentState<boolean>("grant:preResearch", true);
 
   // 文风样例(单独的上传框)。
@@ -309,17 +311,20 @@ export default function GrantModule({ goto }: { goto: Goto }) {
     setSearchBusy(true);
     const seed = refs || [];
     setSearchRefs(seed);
-    setSearchEvidence({});
+    // 播种已知的核心发现（找选题带入 / 上次抽过的）：picker 打开就有徽章，不用再等抽取。
+    setSearchEvidence({ ...(refsEvidence || {}) });
     setSearchSelectedKeys(seed.map(pickerKey));
     setStage("picker");
     setStep(2);
-    // 后台为已带入的种子文献抽取核心发现（fire-and-forget；失败不阻断检索）。
-    if (seed.length) {
+    // 只为缺 evidence 的种子文献补抽（fire-and-forget；失败不阻断检索）。
+    const needExtract = seed.filter((r) => !(refsEvidence && refsEvidence[pickerKey(r)]));
+    if (needExtract.length) {
       (async () => {
-        setPickerExtractProgress({ done: 0, total: seed.length });
+        setPickerExtractProgress({ done: 0, total: needExtract.length });
         try {
-          const evMap = await extractEvidenceForRefs(seed, (d, t) => setPickerExtractProgress({ done: d, total: t }));
+          const evMap = await extractEvidenceForRefs(needExtract, (d, t) => setPickerExtractProgress({ done: d, total: t }));
           setSearchEvidence((prev) => ({ ...prev, ...evMap }));
+          setRefsEvidence((prev) => ({ ...(prev || {}), ...evMap }));  // 落库，下次跳过
         } catch { /* ignore */ } finally {
           setPickerExtractProgress(null);
         }
@@ -365,6 +370,7 @@ export default function GrantModule({ goto }: { goto: Goto }) {
             const map: Record<string, EvidenceItem & { _ev_status?: string }> = {};
             for (const row of data.items || []) map[row.key] = row;
             setSearchEvidence((prev) => ({ ...prev, ...map }));
+            setRefsEvidence((prev) => ({ ...(prev || {}), ...map }));  // 落库供后续跳过
           }
         }
       }
@@ -497,7 +503,7 @@ export default function GrantModule({ goto }: { goto: Goto }) {
     if (hasWork && !confirm("将清空全部输入与已生成的初稿，且不可撤销。确定清空？")) return;
     if (running) { ctrl.current?.abort(); setRunning(false); }
     rvctrl.current?.abort();
-    setTitle(""); setIdea(""); setReport(""); setBackground(""); setRefs([]);
+    setTitle(""); setIdea(""); setReport(""); setBackground(""); setRefs([]); setRefsEvidence({});
     setPeriodStart(""); setPeriodEnd("");
     setScheme(null); setOutline([]); setSections([]); setVerify(null); setReview(null); setReviewText("");
     setStyleSample(""); setStyleProfile(""); setStyleOn(true); setStyleErr("");
@@ -644,6 +650,16 @@ export default function GrantModule({ goto }: { goto: Goto }) {
             <details className="adv-settings" data-testid="grant-refs-info">
               <summary className="adv-summary"><span className="adv-summary-main">📚 可引用文献（{refs.length} 篇）</span><span className="adv-summary-sub">从「找选题」带入，或从 Zotero / 文件导入；立项依据会据实引用并在文末列「参考文献」</span></summary>
               <div className="adv-body">
+                {refs.length > 0 && (
+                  <ol className="grant-refs-list" data-testid="grant-refs-list">
+                    {refs.map((r, i) => (
+                      <li key={`${r.pmid || r.doi || r.url || r.title}-${i}`}>
+                        <a href={r.url} target="_blank" rel="noreferrer">{r.title || "(无标题)"}</a>
+                        <span className="grant-refs-meta"> — {r.first_author || "?"}, {r.year || "?"}, {r.journal || "?"}</span>
+                      </li>
+                    ))}
+                  </ol>
+                )}
                 <RefIO currentRefs={refs} exportFilename="标书-文献" onImport={(imp) => setRefs(mergeRefs(refs, imp).merged)} />
                 <ZoteroPanel currentRefs={refs} onImport={(imp) => setRefs(mergeRefs(refs, imp).merged)} />
                 <label className="type-chip" data-testid="grant-preresearch" title="撰写前按本方向再检索一遍 PubMed 等, 把新文献并入后据此写立项依据(更贴合、稍慢)">
