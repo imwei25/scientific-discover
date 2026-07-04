@@ -795,6 +795,12 @@ async def write_grant(inputs: dict) -> AsyncIterator[tuple[str, dict]]:
     refs = inputs.get("references") or inputs.get("refs") or []
     if not isinstance(refs, list):
         refs = []
+    # Frontend picker (Step 1.5) may pass a chosen set that bypasses the
+    # pre-writing re-search entirely. When provided_refs is set, refs pool
+    # becomes exactly that list.
+    provided = inputs.get("provided_refs")
+    if isinstance(provided, list) and provided:
+        refs = list(provided)
     gt_name, gt_hint = _grant_type(inputs)
     pre_scheme = inputs.get("scheme") if isinstance(inputs.get("scheme"), dict) else None
     sections = _resolve_sections(inputs.get("sections"))
@@ -831,7 +837,9 @@ async def write_grant(inputs: dict) -> AsyncIterator[tuple[str, dict]]:
 
         # 撰写前默认按该方向重新检索一遍文献并入池(research 默认 True, 前端可关)。
         # 让立项依据据"针对本方向、新鲜检索到"的文献来写, 而非只吃选题阶段带来的少量文献。
-        if inputs.get("research", True):
+        # provided_refs short-circuits the re-search: picker already chose.
+        if not (isinstance(inputs.get("provided_refs"), list) and inputs.get("provided_refs")) \
+                and inputs.get("research", True):
             yield ("status", {"message": "撰写前正在按该方向重新检索文献…"})
             direction = idea or final_title or title
             try:
