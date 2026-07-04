@@ -2,6 +2,7 @@ import { useState } from "react";
 import type { ChartItem, PlanCard } from "../../lib/sse";
 import { reportLLMError } from "../../lib/errorToast";
 import EditableMarkdown from "../../components/EditableMarkdown";
+import ImageViewer from "../../components/ImageViewer";
 import { HelpButton } from "../../components/HelpButton";
 import { downloadText, downloadBase64, chartMime, tsName, downloadAnalysisReport } from "../../lib/download";
 import { apiUrl } from "../../lib/api";
@@ -51,6 +52,7 @@ export default function GeneralResults({
   const [copyState, setCopyState] = useState<"idle" | "ok" | "err">("idle");
   const [capBusy, setCapBusy] = useState(false);
   const [popup, setPopup] = useState<null | "plan" | "code" | "output" | "method" | "assumption" | "quality">(null);
+  const [viewer, setViewer] = useState<{ index: number } | null>(null);
 
   const genCaptions = async () => {
     if (!charts.length || capBusy) return;
@@ -94,13 +96,20 @@ export default function GeneralResults({
             )}
             <div className="charts">
               {charts.map((c, i) => (
-                <figure key={i} className="chart">
+                <figure
+                  key={i}
+                  className="chart"
+                  onClick={() => setViewer({ index: i })}
+                  role="button"
+                  tabIndex={0}
+                  onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setViewer({ index: i }); } }}
+                >
                   <img src={`data:image/png;base64,${c.png}`} alt={`图 ${i + 1}`} data-testid={`chart-${i}`} />
                   <figcaption>
                     <button
                       className="btn-ghost btn-sm"
                       data-testid={`chart-download-${i}`}
-                      onClick={() => downloadBase64(tsName(`图${i + 1}`, c.ext), c.data, chartMime(c.ext))}
+                      onClick={(e) => { e.stopPropagation(); downloadBase64(tsName(`图${i + 1}`, c.ext), c.data, chartMime(c.ext)); }}
                     >
                       下载 {c.ext.toUpperCase()}
                     </button>
@@ -112,6 +121,14 @@ export default function GeneralResults({
         )}
         {!charts.length && !running && !error && (
           <div className="analyze-noimg" data-testid="analyze-noimg-draw">尚未生成图表</div>
+        )}
+        {viewer && charts.length > 0 && (
+          <ImageViewer
+            charts={charts}
+            index={viewer.index}
+            onClose={() => setViewer(null)}
+            onNav={(i) => setViewer({ index: i })}
+          />
         )}
       </>
     );
@@ -127,7 +144,7 @@ export default function GeneralResults({
       {error && <div className="result-error" data-testid="analyze-error">{error}</div>}
 
       {hasResult && (
-        <>
+        <div className="analyze-results-wide">
           {/* 弹出式入口: 分析方案 / 代码 / 原始输出(默认隐藏) */}
           {(plan.length > 0 || code || output || transparency.method || transparency.assumption || transparency.quality) && (
             <div className="analyze-popbar" data-testid="analyze-popbar">
@@ -212,14 +229,21 @@ export default function GeneralResults({
                   )}
                   <div className="charts">
                     {charts.map((c, i) => (
-                      <figure key={i} className="chart">
+                      <figure
+                        key={i}
+                        className="chart"
+                        onClick={() => setViewer({ index: i })}
+                        role="button"
+                        tabIndex={0}
+                        onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setViewer({ index: i }); } }}
+                      >
                         <img src={`data:image/png;base64,${c.png}`} alt={`图 ${i + 1}`} data-testid={`chart-${i}`} />
                         <figcaption>
                           {captions[i] && <p className="chart-caption" data-testid={`chart-caption-${i}`}>{captions[i]}</p>}
                           <button
                             className="btn-ghost btn-sm"
                             data-testid={`chart-download-${i}`}
-                            onClick={() => downloadBase64(tsName(`图${i + 1}`, c.ext), c.data, chartMime(c.ext))}
+                            onClick={(e) => { e.stopPropagation(); downloadBase64(tsName(`图${i + 1}`, c.ext), c.data, chartMime(c.ext)); }}
                           >
                             下载 {c.ext.toUpperCase()}
                           </button>
@@ -233,7 +257,7 @@ export default function GeneralResults({
               )}
             </div>
           </div>
-        </>
+        </div>
       )}
 
       {popup === "plan" && plan.length > 0 && (
@@ -278,6 +302,15 @@ export default function GeneralResults({
         <Popup title="🧪 数据质量(缺失/异常处理策略)" onClose={() => setPopup(null)}>
           <pre className="stats-pre" data-testid="quality-block">{transparency.quality}</pre>
         </Popup>
+      )}
+      {viewer && charts.length > 0 && (
+        <ImageViewer
+          charts={charts}
+          index={viewer.index}
+          captions={captions}
+          onClose={() => setViewer(null)}
+          onNav={(i) => setViewer({ index: i })}
+        />
       )}
     </>
   );
