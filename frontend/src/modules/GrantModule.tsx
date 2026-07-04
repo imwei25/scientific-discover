@@ -303,13 +303,28 @@ export default function GrantModule({ goto }: { goto: Goto }) {
   });
 
   // 检索文献并进入 picker stage（仅在 preResearch=true 时调用）。
+  // 已在阶段一带入的 refs（来自找选题 / 手动导入）会先播种到 picker 并默认全选，
+  // 新检索到的文献按 pickerKey 去重后追加。
   const launchGrantSearch = async () => {
     setSearchBusy(true);
-    setSearchRefs([]);
+    const seed = refs || [];
+    setSearchRefs(seed);
     setSearchEvidence({});
-    setSearchSelectedKeys([]);
+    setSearchSelectedKeys(seed.map(pickerKey));
     setStage("picker");
     setStep(2);
+    // 后台为已带入的种子文献抽取核心发现（fire-and-forget；失败不阻断检索）。
+    if (seed.length) {
+      (async () => {
+        setPickerExtractProgress({ done: 0, total: seed.length });
+        try {
+          const evMap = await extractEvidenceForRefs(seed, (d, t) => setPickerExtractProgress({ done: d, total: t }));
+          setSearchEvidence((prev) => ({ ...prev, ...evMap }));
+        } catch { /* ignore */ } finally {
+          setPickerExtractProgress(null);
+        }
+      })();
+    }
     try {
       const res = await fetch("/api/grant/search", {
         method: "POST",
@@ -335,11 +350,21 @@ export default function GrantModule({ goto }: { goto: Goto }) {
           const evName = evLine.slice(6).trim();
           let data: any = {};
           try { data = JSON.parse(dataLine.slice(5).trim()); } catch { /* ignore */ }
-          if (evName === "references") setSearchRefs(data.items || []);
-          else if (evName === "evidence") {
+          if (evName === "references") {
+            // 合并检索结果与已带入的 refs（按 pickerKey 去重；已有条目保留，避免抹掉 evidence）。
+            const incoming: Reference[] = data.items || [];
+            setSearchRefs((prev) => {
+              const keyMap = new Map(prev.map((r) => [pickerKey(r), r]));
+              for (const r of incoming) {
+                const k = pickerKey(r);
+                if (!keyMap.has(k)) keyMap.set(k, r);
+              }
+              return Array.from(keyMap.values());
+            });
+          } else if (evName === "evidence") {
             const map: Record<string, EvidenceItem & { _ev_status?: string }> = {};
             for (const row of data.items || []) map[row.key] = row;
-            setSearchEvidence(map);
+            setSearchEvidence((prev) => ({ ...prev, ...map }));
           }
         }
       }
