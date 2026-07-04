@@ -495,6 +495,29 @@ def _split_transparency(stdout: str) -> dict[str, str]:
     return result
 
 
+async def _strip_conclusion_preamble_stream(pieces: AsyncIterator[str]) -> AsyncIterator[str]:
+    """吃掉结论 LLM 首个 `##` 之前的所有寒暄/开场白 chunk。
+
+    - 见到 `##` 从其位置起原样转发;
+    - 全程未见 `##` 时,收尾把缓冲整体送出兜底(总比空白好)。
+    - 支持 `##` 跨 chunk 拆开(比如上一 chunk 只有 `#`,下一 chunk 是 `#`)——
+      靠累计缓冲天然处理。
+    """
+    buf = ""
+    seen = False
+    async for piece in pieces:
+        if seen:
+            yield piece
+            continue
+        buf += piece
+        idx = buf.find("##")
+        if idx >= 0:
+            yield buf[idx:]
+            seen = True
+    if not seen and buf.strip():
+        yield buf
+
+
 def _conclusion_messages(question: str, code: str, output: str, warnings: list[str] | None = None) -> list[dict]:
     system = (
         "你是医学/药学/生物医学论文写作助手。下面是针对用户数据实际执行分析代码后得到的【真实输出】。"
