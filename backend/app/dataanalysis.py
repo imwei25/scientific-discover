@@ -321,6 +321,29 @@ def _gen_code_messages(profile: str, question: str, explore: str = "", routing: 
     return [{"role": "system", "content": system}, {"role": "user", "content": "\n\n".join(parts)}]
 
 
+def _gen_draw_messages(profile: str, question: str) -> list[dict]:
+    """只画图路径的代码生成 prompt。故意省掉所有统计推断/三大透明化区块要求,
+    让 LLM 只输出画图代码——用户明确选了"只画图"模式,不该塞任何统计话术进来。"""
+    system = (
+        "你是数据可视化专家。用户明确只想**看图**,不做任何统计检验、不写文字结论。"
+        "请根据【数据画像】和【绘图请求】写一段 Python 代码,只画图。\n"
+        + _LIBS_NOTE + "\n"
+        "严格要求:\n"
+        "① 只使用已加载的 df,列名务必来自【数据画像】中真实存在的列,严禁臆造;\n"
+        "② **只画图**——不做 t 检验/方差分析/相关/回归/生存分析等任何统计推断;\n"
+        "③ **绝对不要** print 『【方法选择】』/『【假设检查】』/『【数据质量】』等透明化区块;\n"
+        "④ 不要 print 结论性文字;必要时可 print 一两句极简说明(如 \"已生成条形图\")便于日志;\n"
+        "⑤ 图要出版级质量:信息明确的标题、带单位的轴标签、必要时图例;matplotlib 默认样式,"
+        "不用需要 LaTeX 的样式,不调用 plt.show();\n"
+        "⑥ 若数据涉及分组,直接呈现即可,无需组间显著性标注(除非用户在【绘图请求】中显式要求);\n"
+        "⑦ 柱状图/条形图的数值轴必须从 0 开始;折线/散点/箱线可按需收紧范围;\n"
+        "⑧ 配色已由运行环境统一设置,无需手动指定颜色(除非用户特别要求)。\n"
+        "只输出一个 Python 代码块,不要额外解释。"
+    )
+    user = f"【数据画像】\n{profile}\n\n【绘图请求】\n{question or '(用户未填写,请你根据数据挑一张最能揭示分布/关系的图)'}"
+    return [{"role": "system", "content": system}, {"role": "user", "content": user}]
+
+
 def _extract_spec_messages(profile: str, question: str, explore: str = "") -> list[dict]:
     """T3: 让 LLM 只做它擅长的"语义抽取"——把研究问题拆成结构化【分析规格】,
     交给 statroute 用确定性规则选方法(把 LLM 最弱的"适用性判断"从它手里拿走)。"""
