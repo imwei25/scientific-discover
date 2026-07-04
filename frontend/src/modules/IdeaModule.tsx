@@ -934,7 +934,19 @@ export default function IdeaModule({ goto }: { goto: Goto }) {
                       <button
                         className="btn-primary candidate-to-plan"
                         data-testid={`candidate-to-plan-${i}`}
-                        onClick={() => goto("plan", { "plan:idea": `${c.title}\n\n${c.body}`, "plan:field": card.field, "plan:resources": background })}
+                        onClick={() => {
+                          const parts: string[] = [];
+                          if (card.field) parts.push(`[学科领域]\n${card.field}`);
+                          if (background) parts.push(`[相关资料 · 来自找选题]\n${background}`);
+                          if (c.body) parts.push(`[候选方向补充]\n${c.body}`);
+                          goto("plan", {
+                            "plan:idea": `${c.title}\n\n${c.body}`,
+                            "plan:materials": parts.join("\n\n"),
+                            "plan:materials:migrated": true,
+                            "plan:step": 1,
+                            "plan:maxStep": 1,
+                          });
+                        }}
                       >
                         用此方向做实验规划 →
                       </button>
