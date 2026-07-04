@@ -3,7 +3,8 @@ import { CiteInfo, normCiteUrl } from "../components/Markdown";
 import { streamIdea, streamIdeaFollowup, Reference, Trial, EvidenceItem, Verification, RewritePayload, TopicCard } from "../lib/sse";
 import { reportLLMError } from "../lib/errorToast";
 import { addHistory } from "../lib/history";
-import { extractFile } from "../lib/extract";
+import { parseAttachments, appendAttachmentsToField } from "../lib/attachments";
+import AttachmentChips from "../components/AttachmentChips";
 import Markdown from "../components/Markdown";
 import EditableMarkdown from "../components/EditableMarkdown";
 import RefIO from "../components/RefIO";
@@ -162,10 +163,10 @@ export default function IdeaModule({ goto }: { goto: Goto }) {
   const [fError, setFError] = useState<string | null>(null);
   const fctrl = useRef<AbortController | null>(null);
 
-  // 第 1 步「相关资料」合并输入框的附件解析
+  // 第 1 步「相关资料」附件: 添加时不解析,提交任务时才解析并注入 payload。
   const fileRef = useRef<HTMLInputElement>(null);
   const [comboDrag, setComboDrag] = useState(false);
-  const [comboBusy, setComboBusy] = useState(false);
+  const [pendingAttachments, setPendingAttachments] = useState<File[]>([]);
 
   const selectedSet = useMemo(() => new Set(selectedKeys), [selectedKeys]);
 
@@ -200,6 +201,26 @@ export default function IdeaModule({ goto }: { goto: Goto }) {
   // ── 第 2→3 步：只检索(含抽取要点), 不生成报告 ────────────────────
   const runSearch = async () => {
     if (!field.trim() || running) return;
+    setError(null);
+    // 先解析附件（如有）,失败中止不进入 LLM
+    let mergedBackground = background;
+    if (pendingAttachments.length > 0) {
+      const parseCtrl = new AbortController();
+      ctrl.current = parseCtrl;
+      setRunning(true);
+      try {
+        const parsed = await parseAttachments(pendingAttachments, {
+          signal: parseCtrl.signal,
+          onProgress: (p) => setStatus(`正在解析附件 ${p.index}/${p.total}：${p.name} …`),
+        });
+        mergedBackground = appendAttachmentsToField(background, parsed);
+      } catch (e) {
+        setError((e as Error).message);
+        setStatus("");
+        setRunning(false);
+        return;
+      }
+    }
     fctrl.current?.abort();
     setFRunning(false);
     setStatus("");
@@ -218,7 +239,7 @@ export default function IdeaModule({ goto }: { goto: Goto }) {
     ctrl.current = new AbortController();
     await streamIdea(
       {
-        field, keywords, background, depth,
+        field, keywords, background: mergedBackground, depth,
         sources: DEFAULT_SOURCES,
         filters: filtersPayload(),
         phase: "search",
@@ -248,6 +269,24 @@ export default function IdeaModule({ goto }: { goto: Goto }) {
     const selEvidence = evidence.filter(
       (e) => selUrls.has((e.url || "").replace(/\/+$/, "")) || selTitles.has((e.title || "").trim().toLowerCase()),
     );
+    let mergedBackground = background;
+    if (pendingAttachments.length > 0) {
+      const parseCtrl = new AbortController();
+      ctrl.current = parseCtrl;
+      setRunning(true);
+      try {
+        const parsed = await parseAttachments(pendingAttachments, {
+          signal: parseCtrl.signal,
+          onProgress: (p) => setStatus(`正在解析附件 ${p.index}/${p.total}：${p.name} …`),
+        });
+        mergedBackground = appendAttachmentsToField(background, parsed);
+      } catch (e) {
+        setError((e as Error).message);
+        setStatus("");
+        setRunning(false);
+        return;
+      }
+    }
     fctrl.current?.abort();
     setFRunning(false);
     setError(null);
@@ -262,7 +301,7 @@ export default function IdeaModule({ goto }: { goto: Goto }) {
     ctrl.current = new AbortController();
     await streamIdea(
       {
-        field, keywords, background, depth,
+        field, keywords, background: mergedBackground, depth,
         references: sel,
         evidence: selEvidence,
         phase: "generate",
@@ -372,22 +411,19 @@ export default function IdeaModule({ goto }: { goto: Goto }) {
     setRefs([]); setSelectedKeys([]); setTrials([]); setEvidence([]);
     setText(""); setVerify(null); setCard(null);
     setStatus(""); setError(null); setRewrite(null);
+    setPendingAttachments([]);
     setStep(1); setMaxStep(1);
   };
 
-  // 第 1 步：把附件解析文本追加到「相关资料」框
-  const ingestFiles = async (files: FileList | File[] | null | undefined) => {
+  // 第 1 步：只把附件加入 pending 列表,不做任何解析。
+  const ingestFiles = (files: FileList | File[] | null | undefined) => {
     const list = files ? Array.from(files) : [];
     if (list.length === 0) return;
-    setComboBusy(true);
-    for (const f of list) {
-      const res = await extractFile(f);
-      if (res.ok && res.text) {
-        setBackground((prev) => (prev ? prev + "\n\n" : "") + `[附加文档：${f.name}]\n` + res.text);
-      }
-    }
-    setComboBusy(false);
+    setPendingAttachments((prev) => [...prev, ...list]);
     if (fileRef.current) fileRef.current.value = "";
+  };
+  const removeAttachment = (index: number) => {
+    setPendingAttachments((prev) => prev.filter((_, i) => i !== index));
   };
 
   const importRefs = (imported: Reference[], srcLabel: string) => {
@@ -475,7 +511,7 @@ export default function IdeaModule({ goto }: { goto: Goto }) {
                   <button type="button" className="combo-attach" data-testid="combo-attach" onClick={() => fileRef.current?.click()}>
                     📎 添加附件（可多选）
                   </button>
-                  <span className="combo-hint">{comboBusy ? "正在解析附件…" : "支持 Word / PDF / txt，可直接拖入本框"}</span>
+                  <span className="combo-hint">支持 Word / PDF / txt，将在开始检索时解析</span>
                   <input
                     ref={fileRef}
                     data-testid="upload-doc"
@@ -486,6 +522,12 @@ export default function IdeaModule({ goto }: { goto: Goto }) {
                     onChange={(e) => ingestFiles(e.target.files)}
                   />
                 </div>
+                <AttachmentChips
+                  files={pendingAttachments}
+                  onRemove={removeAttachment}
+                  disabled={running}
+                  testId="idea-attach-chips"
+                />
               </div>
             </div>
           </div>
