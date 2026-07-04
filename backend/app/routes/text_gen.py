@@ -18,7 +18,7 @@ from ..logutil import log_swallow
 from ..poster import generate_poster, review_poster
 from ..prompts import build_messages
 from ..rebuttal import rebuttal
-from ..research import clarify_topic, deep_research_idea, idea_followup, refine_topic
+from ..research import clarify_topic, deep_research_idea, extract_evidence_for_refs, idea_followup, refine_topic
 from ..plan_followup import plan_followup
 from ..imrad_followup import imrad_followup
 from ..ethics_followup import ethics_followup
@@ -43,6 +43,12 @@ class DeaiRewriteRequest(BaseModel):
 
 class GrantStyleRequest(BaseModel):
     sample: str
+
+
+class ExtractEvidenceRequest(BaseModel):
+    refs: list[dict] = []
+    fetch_missing_abstracts: bool = True
+    field: str = ""
 
 
 @router.post("/api/run")
@@ -295,6 +301,24 @@ async def edit_ep(req: RunRequest) -> JSONResponse:
     except Exception as e:  # noqa: BLE001
         log_swallow("AI 精修端点异常", e)
         return JSONResponse({"edits": [], "mode": "none", "note": f"精修出错: {type(e).__name__}"}, status_code=200)
+
+
+@router.post("/api/refs/extract-evidence")
+async def refs_extract_evidence_ep(req: ExtractEvidenceRequest) -> JSONResponse:
+    """Extract structured evidence (pop/design/finding/gap) for a list of refs.
+    Auto-fetches missing abstracts by DOI/PMID unless fetch_missing_abstracts=False.
+    Used by RefIO/Zotero import path so imported refs get 核心发现 badges.
+    """
+    try:
+        evidence = await extract_evidence_for_refs(
+            req.refs,
+            field=req.field,
+            fetch_missing=req.fetch_missing_abstracts,
+        )
+        return JSONResponse({"ok": True, "evidence": evidence})
+    except Exception as e:  # noqa: BLE001
+        log_swallow("提取核心发现: 失败", e)
+        return JSONResponse(status_code=500, content={"error": f"提取失败：{type(e).__name__}: {e}"})
 
 
 # ----- 统计顾问(SSE 流式) -----

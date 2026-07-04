@@ -97,6 +97,52 @@ def test_result_carries_key() -> None:
     assert got[0]["key"] == "pmid:42"  # key precedence pmid > doi > url
 
 
+# ---- endpoint tests ------------------------------------------------------
+from fastapi.testclient import TestClient
+
+
+def _get_client():
+    from app.main import app
+    return TestClient(app)
+
+
+def test_endpoint_returns_evidence_list() -> None:
+    async def fake_wrapper(refs, field="", fetch_missing=True):
+        return [{"key": f"pmid:P{i}", "pop": "p", "design": "d", "finding": "f",
+                 "gap": "g", "rel": 2, "rel_why": "", "_ev_status": "ok"}
+                for i, _ in enumerate(refs)]
+
+    with patch("app.routes.text_gen.extract_evidence_for_refs", new=fake_wrapper):
+        c = _get_client()
+        payload = {"refs": [_ref(0), _ref(1)], "fetch_missing_abstracts": True}
+        r = c.post("/api/refs/extract-evidence", json=payload)
+    assert r.status_code == 200
+    body = r.json()
+    assert body["ok"] is True
+    assert len(body["evidence"]) == 2
+    assert body["evidence"][0]["key"].startswith("pmid:")
+
+
+def test_endpoint_empty_refs_returns_empty() -> None:
+    c = _get_client()
+    r = c.post("/api/refs/extract-evidence", json={"refs": []})
+    assert r.status_code == 200
+    assert r.json() == {"ok": True, "evidence": []}
+
+
+def test_endpoint_defaults_fetch_missing_true() -> None:
+    seen = {"flag": None}
+
+    async def fake_wrapper(refs, field="", fetch_missing=True):
+        seen["flag"] = fetch_missing
+        return []
+
+    with patch("app.routes.text_gen.extract_evidence_for_refs", new=fake_wrapper):
+        c = _get_client()
+        c.post("/api/refs/extract-evidence", json={"refs": [_ref(0)]})  # omit flag
+    assert seen["flag"] is True
+
+
 if __name__ == "__main__":
     for name, fn in list(globals().items()):
         if name.startswith("test_") and callable(fn):
