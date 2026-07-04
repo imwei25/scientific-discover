@@ -49,6 +49,11 @@ def main():
         else:
             print("PASS 未发禁事件", forbid)
 
+    if n_exec != 1:
+        print("FAIL 成功时不应重试, n_exec =", n_exec); fail += 1
+    else:
+        print("PASS 无多余重试 n_exec=1")
+
     print(f"\nRESULT: {'PASS' if fail == 0 else 'FAIL'}")
     sys.exit(0 if fail == 0 else 1)
 
