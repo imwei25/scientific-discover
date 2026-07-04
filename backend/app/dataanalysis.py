@@ -453,6 +453,32 @@ def _refine_code_messages(
     return [{"role": "system", "content": system}, {"role": "user", "content": "\n\n".join(parts)}]
 
 
+def _refine_draw_messages(
+    profile: str, question: str, current_code: str, requirement: str,
+) -> list[dict]:
+    """只画图路径的 refine prompt。基于 _refine_code_messages 精简:
+    去掉三大透明化区块保留要求、统计规范要求;只强调"在现有画图代码上按新需求最小改动"。"""
+    system = (
+        "你是数据可视化专家。用户已有一份**能正常运行**的画图代码,现在提出新的修改需求。"
+        "请在原逻辑基础上做**最小必要修改**——新需求可能是换图型、改配色、加标注、"
+        "换要画的变量或分组等。不要推倒重来,除非新需求确实要求全新的图。\n"
+        + _LIBS_NOTE + "\n"
+        "作图规范:每张图有信息明确的标题、带单位的轴标签、必要时图例;"
+        "matplotlib 默认样式;柱状图/条形图的数值轴从 0 开始;"
+        "只使用已加载的 df,列名用【数据画像】中真实存在的列名,不要臆造。\n"
+        "**只画图**,不做任何统计检验;**绝对不要** print 『【方法选择】』等透明化区块。\n"
+        "**必须输出一个完整、可独立运行的 Python 代码块**(把改动整合进完整脚本,"
+        "不要只给 diff 片段、不要额外解释)。"
+    )
+    parts = [
+        f"【数据画像】\n{profile}",
+        f"【原始绘图请求】\n{question or '(未填写)'}",
+        f"【当前画图代码(已跑通,请在此基础上改)】\n```python\n{current_code}\n```",
+        f"【本轮新需求】\n{requirement}",
+    ]
+    return [{"role": "system", "content": system}, {"role": "user", "content": "\n\n".join(parts)}]
+
+
 def _clip_output(text: str, head: int = 9000, tail: int = 3000) -> str:
     """结论只喂真实输出; 过长时保留头尾(尾部常含主分析结果/p值), 避免整段截断丢数字。"""
     if len(text) <= head + tail:
