@@ -811,7 +811,18 @@ export default function IdeaModule({ goto }: { goto: Goto }) {
                   </button>
                 )}
                 {text && !running && (!card || card.candidates.length === 0) && (
-                  <button className="btn-ghost" data-testid="send-to-plan-btn" onClick={() => goto("plan", { "plan:idea": text })}>用此结果做实验规划 →</button>
+                  <button className="btn-ghost" data-testid="send-to-plan-btn" onClick={() => {
+                    const parts: string[] = [];
+                    if (field) parts.push(`[学科领域]\n${field}`);
+                    if (background) parts.push(`[相关资料 · 来自找选题]\n${background}`);
+                    goto("plan", {
+                      "plan:idea": text,
+                      "plan:materials": parts.join("\n\n"),
+                      "plan:materials:migrated": true,
+                      "plan:step": 1,
+                      "plan:maxStep": 1,
+                    });
+                  }}>用此结果做实验规划 →</button>
                 )}
                 {text && !running && (
                   <button
