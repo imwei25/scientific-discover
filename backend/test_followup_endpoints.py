@@ -50,8 +50,33 @@ def test_plan_followup_missing_question():
     assert "error" in kinds
 
 
+from app.imrad_followup import imrad_followup  # noqa: E402
+
+
+def test_imrad_followup_ask_mock():
+    events = _drain(imrad_followup({
+        "mode": "ask",
+        "question": "结果段能否精简?",
+        "draft": "## 结果\n...",
+        "topic": "TNBC + PD-1",
+        "materials": "预实验数据 ...",
+    }))
+    kinds = [e for e, _ in events]
+    assert "delta" in kinds
+    assert kinds[-1] == "done"
+
+
+def test_imrad_followup_missing_draft():
+    events = _drain(imrad_followup({"mode": "ask", "question": "q", "draft": ""}))
+    kinds = [e for e, _ in events]
+    assert "error" in kinds
+
+
 if __name__ == "__main__":
     test_plan_followup_ask_mock()
     test_plan_followup_revise_mock()
     test_plan_followup_missing_question()
     print("ok: plan_followup mock tests")
+    test_imrad_followup_ask_mock()
+    test_imrad_followup_missing_draft()
+    print("ok: imrad_followup mock tests")
