@@ -1,0 +1,55 @@
+%% 由科研助手自动生成的 LaTeX 投稿稿骨架。
+%% 目标期刊: {{ journal_name }}
+%% 可用 {{ compiler_hint }} + bibtex 编译, 或直接在 Overleaf 打开。
+%%   ↳ 提示: 在 Overleaf 里点 Menu → Compiler 切换到 {{ compiler_hint }} (含中文/含fontspec 时必需)。
+\documentclass[{{ class_options }}]{ {{- doc_class -}} }
+{% block extra_preamble %}{% endblock %}
+{# ---- 编码/字体: xelatex/lualatex 与 fontspec/ctex 冲突, 必须只在 pdflatex 分支加载 inputenc/fontenc ---- #}
+{% if needs_cjk %}{% block cjk_pkg %}\usepackage[UTF8,scheme=chinese,fontset=ubuntu]{ctex}
+{% endblock %}{% else %}\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+{% endif %}
+{# ---- 引用包: 默认 cite; Nature 用 natbib[super]; GB/T 7714 用 gbt7714(自带 natbib) ---- #}
+{% block cite_pkg %}\usepackage{cite}
+{% endblock %}
+\usepackage{amsmath,amssymb,amsfonts}
+\usepackage{graphicx}
+\usepackage{array}
+\usepackage{booktabs}
+\usepackage{url}
+{% block after_preamble %}{% endblock %}
+{# ---- hyperref 必须最后加载; IEEE 明确要求关闭彩色链接 (colorlinks=false), 否则可能被拒稿 ---- #}
+{% block hyperref_pkg %}\usepackage[colorlinks=false,pdfborder={0 0 0},hypertexnames=false]{hyperref}
+{% endblock %}
+
+\begin{document}
+
+\title{ {{- title -}} }
+{% block author_block %}\author{[作者姓名，请补充]}
+\date{}
+{% endblock %}
+{% block markboth %}{% endblock %}
+\maketitle
+{% block after_title %}{% endblock %}
+
+{% if abstract %}\begin{abstract}
+{{ abstract }}
+\end{abstract}
+
+{% endif %}
+{% block english_abstract_block %}{% endblock %}
+{% if keywords %}{% block keywords_block %}\noindent\textbf{Keywords:} {{ keywords }}\par\bigskip
+{% endblock %}
+{% endif %}
+{% block before_body %}{% endblock %}
+{% for sec in sections %}\section{ {{- sec.title -}} }
+{{ sec.body }}
+
+{% endfor %}
+{% block back_matter %}{% endblock %}
+{% if has_bib %}{% if bib_ids %}\nocite{ {{- bib_ids | join(",") -}} }  %% 显式列出 refs.bib 里的每条 ID, 比 \nocite{*} 更可靠 (部分 .bst 如 naturemag/plos2015 对通配符支持不稳)
+{% elif include_all_refs %}\nocite{*}  %% fallback: 未拿到 ref_ids 时, 用通配符
+{% endif %}\bibliographystyle{ {{- bib_style -}} }
+\bibliography{refs}
+
+{% endif %}\end{document}

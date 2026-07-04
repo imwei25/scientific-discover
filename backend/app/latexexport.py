@@ -404,6 +404,7 @@ def _render_tex(
     has_bib: bool,
     journal_name: str,
     include_all_refs: bool = False,
+    bib_ids: list[str] | None = None,
 ) -> str:
     template_name = spec.get("template", "general_en.tex.j2")
     tpl = _env.get_template(template_name)
@@ -421,6 +422,7 @@ def _render_tex(
         needs_cjk=needs_cjk,
         has_bib=has_bib,
         include_all_refs=include_all_refs,
+        bib_ids=bib_ids or [],
         journal_name=journal_name,
         compiler_hint=spec.get("compiler", "pdflatex"),
     )
@@ -539,6 +541,8 @@ async def export_latex(text: str, journal_id: str, references: str = "", csl_jso
         notes.append("稿件含中文, 已启用 ctex 支持, 建议使用 xelatex 编译。")
 
     needs_cjk = bool(spec.get("cjk")) or contains_cjk
+    # bib IDs 必须与 _render_bib 里的键一致 (enumerate 从 1 开始)
+    bib_ids = [f"ref{i}" for i, _ in enumerate(csl_items, 1)] if csl_items else []
     tex = _render_tex(
         ir, spec,
         needs_cjk=needs_cjk,
@@ -547,6 +551,7 @@ async def export_latex(text: str, journal_id: str, references: str = "", csl_jso
         # 结构化输入时用户已明确选了要附上哪些参考文献 → 全部列出;
         # 只有走 LLM 解析路径时才只列文中引用到的, 避免噪音条目污染文末。
         include_all_refs=bool(csl_json),
+        bib_ids=bib_ids,
     )
 
     files = {"main.tex": tex.encode("utf-8")}
