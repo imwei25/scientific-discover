@@ -40,20 +40,18 @@ async def analyze(
     question: str = Form(""),
     chart_format: str = Form("png"),
     palette: str = Form("default"),
+    mode: str = Form("analyze"),
 ) -> StreamingResponse:
-    """AI 看懂数据 → 写分析代码 → 本地执行 → 流式输出结论(SSE)。"""
-    from ..dataanalysis import analyze_data
+    """AI 看懂数据 → 写分析代码 → 本地执行 → 流式输出结论(SSE)。
+    mode='draw' 时走精简画图流水线,不产生结论/透明化事件。"""
+    from ..dataanalysis import analyze_data, draw_chart
 
     content = await _read_capped(file)
     filename = file.filename or "data.csv"
-
-    if content is None:
-        async def too_big():
-            yield _sse("error", {"message": "文件过大（超过 30MB），请上传更小的数据文件。"})
-        return StreamingResponse(too_big(), media_type="text/event-stream")
+    gen_fn = draw_chart if mode == "draw" else analyze_data
 
     async def gen():
-        async for event, data in analyze_data(filename, content, question, chart_format, palette):
+        async for event, data in gen_fn(filename, content, question, chart_format, palette):
             yield _sse(event, data)
 
     return StreamingResponse(gen(), media_type="text/event-stream", headers=SSE_HEADERS)
@@ -68,28 +66,27 @@ async def analyze_refine(
     question: str = Form(""),
     chart_format: str = Form("png"),
     palette: str = Form("default"),
+    mode: str = Form("analyze"),
 ) -> StreamingResponse:
-    """对话式续跑: 在已有分析代码上按用户新需求改一版并重新执行(SSE)。
-
-    只带 当前代码 + 上轮结论摘要 + 新需求 进上下文, 不缓存完整对话历史;
-    数据仍由本次上传的文件提供(执行代码所需)。事件与 /api/analyze 完全一致。
-    """
-    from ..dataanalysis import refine_analysis
+    """对话式续跑。mode 由前端传入,与首轮一致(前端保证)。
+    数据仍由本次上传的文件提供(执行代码所需)。事件与 /api/analyze 完全一致。"""
+    from ..dataanalysis import refine_analysis, refine_draw
 
     content = await _read_capped(file)
     filename = file.filename or "data.csv"
 
-    if content is None:
-        async def too_big():
-            yield _sse("error", {"message": "文件过大（超过 30MB），请上传更小的数据文件。"})
-        return StreamingResponse(too_big(), media_type="text/event-stream")
-
     async def gen():
-        async for event, data in refine_analysis(
-            filename, content, current_code, prev_summary, requirement,
-            question, chart_format, palette,
-        ):
-            yield _sse(event, data)
+        if mode == "draw":
+            async for event, data in refine_draw(
+                filename, content, current_code, requirement, question, chart_format, palette,
+            ):
+                yield _sse(event, data)
+        else:
+            async for event, data in refine_analysis(
+                filename, content, current_code, requirement, prev_summary,
+                question, chart_format, palette,
+            ):
+                yield _sse(event, data)
 
     return StreamingResponse(gen(), media_type="text/event-stream", headers=SSE_HEADERS)
 
