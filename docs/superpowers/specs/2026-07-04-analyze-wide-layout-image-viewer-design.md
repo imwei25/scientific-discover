@@ -182,7 +182,7 @@ function onWheel(e: WheelEvent) {
 
 ### 4.6 样式
 
-追加到 `AnalyzeModule.tsx` 内联 `<style>`(或新增 `ImageViewer.tsx` 内部的 `<style>` 段——选一处,不要重复)。约:
+**样式归位**:`.img-viewer-*` 全部随 `ImageViewer.tsx` 一起走(该组件内部一段 `<style>` 或 styled 段),co-locate 便于维护。`.analyze-results-wide` / `.analyze-cols` / `.analyze-col-right` 的宽版覆盖放在 `AnalyzeModule.tsx` 内联 `<style>` 里(挨着现有 analyze 样式)。约:
 
 ```css
 .img-viewer-overlay {
@@ -300,7 +300,7 @@ analyze 模式的 `hasResult` 分支渲染时,把 popbar + disclaimer + analyze-
 
 **修改**:
 - `frontend/src/modules/analyze/GeneralResults.tsx`(加 viewer state + wide wrapper + onClick)
-- `frontend/src/modules/AnalyzeModule.tsx`(内联样式加 `.analyze-results-wide` + 缩略图 rail + ImageViewer 样式;或把样式随 `ImageViewer.tsx` 一起走)
+- `frontend/src/modules/AnalyzeModule.tsx`(内联样式加 `.analyze-results-wide` + 缩略图 rail 覆盖)
 
 **部署**:
 - `npm run build` + commit dist(遵循 MEMORY.md)
