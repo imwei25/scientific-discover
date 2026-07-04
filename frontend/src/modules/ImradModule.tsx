@@ -233,6 +233,7 @@ export default function ImradModule({ goto }: { goto: Goto }) {
       setError("请在附加材料里粘贴或上传引言/方法/结果/讨论素材,再装配初稿。");
       return;
     }
+    if (draft) setFollowups([]);
     goStep(2);
     setStatus(""); setPrevDraftSnapshot(draft); setDraft(""); setError(null); setRunning(true);
     ctrl.current = new AbortController();
@@ -255,6 +256,7 @@ export default function ImradModule({ goto }: { goto: Goto }) {
   const reset = () => {
     if (running) stop();
     absCtrl.current?.abort(); kwCtrl.current?.abort();
+    if (fRunning) fctrl.current?.abort();
     setAbsRunning(false); setKwRunning(false);
     setTopic(""); setMaterials("");
     setDraft(""); setAbstract(""); setAbsPoints(""); setKeywords("");
@@ -299,6 +301,8 @@ export default function ImradModule({ goto }: { goto: Goto }) {
   const [fRunning, setFRunning] = useState(false);
   const [fError, setFError] = useState<string | null>(null);
   const fctrl = useRef<AbortController | null>(null);
+  const followupBaseDraftRef = useRef("");
+  const followupModeRef = useRef<"ask" | "revise">("ask");
 
   const runFollowup = async (mode: "ask" | "revise") => {
     const q = followupInput.trim();
@@ -306,6 +310,8 @@ export default function ImradModule({ goto }: { goto: Goto }) {
     setFError(null); setFRunning(true);
     fctrl.current = new AbortController();
     const baseDraft = draft;
+    followupBaseDraftRef.current = baseDraft;
+    followupModeRef.current = mode;
     let buf = "";
     if (mode === "ask") setCurrentAnswer("…"); else setDraft("");
     await streamImradFollowup(
@@ -485,7 +491,11 @@ export default function ImradModule({ goto }: { goto: Goto }) {
               <div className="form-actions">
                 <button className="btn-primary" data-testid="imrad-ask-btn" onClick={() => runFollowup("ask")} disabled={!followupInput.trim() || fRunning}>追问</button>
                 <button className="btn-ghost" data-testid="imrad-revise-btn" onClick={() => runFollowup("revise")} disabled={!followupInput.trim() || fRunning}>按此修改主稿</button>
-                {fRunning && <button className="btn-ghost" onClick={() => { fctrl.current?.abort(); setFRunning(false); }} data-testid="imrad-followup-stop">停止</button>}
+                {fRunning && <button className="btn-ghost" onClick={() => {
+                  fctrl.current?.abort();
+                  if (followupModeRef.current === "revise") setDraft(followupBaseDraftRef.current);
+                  setFRunning(false);
+                }} data-testid="imrad-followup-stop">停止</button>}
                 {fRunning && <span className="status-line"><span className="spinner" /> 处理中…</span>}
               </div>
             </div>
