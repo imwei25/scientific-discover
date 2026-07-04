@@ -33,6 +33,8 @@ class LatexRequest(BaseModel):
     text: str
     journal_id: str = ""
     references: str = ""
+    # Optional structured refs (CSL-JSON) — when present, skip LLM parse.
+    csl_json: list[dict] | None = None
 
 
 class ReadinessRequest(BaseModel):
@@ -105,10 +107,11 @@ async def format_refs(req: RefsRequest) -> dict:
 
 @router.post("/api/latex")
 async def latex(req: LatexRequest) -> dict:
-    """导出 LaTeX 工程(.tex+.bib)为 base64 zip; 前端用于下载或在 Overleaf 打开。"""
+    """导出 LaTeX 工程(.tex+.bib)为 base64 zip; 前端用于下载或在 Overleaf 打开。
+    若前端给了 csl_json (结构化参考文献), 后端跳过 LLM 解析, 直接建 .bib。"""
     from ..latexexport import export_latex
 
-    return await export_latex(req.text, req.journal_id, req.references)
+    return await export_latex(req.text, req.journal_id, req.references, csl_json=req.csl_json)
 
 
 @router.post("/api/readiness")

@@ -94,6 +94,9 @@ export default function FormatModule() {
   // 结构化参考文献面板: 勾选 keys、handoff 通知
   // NOTE: 期刊排版只关心引用条目, 不显示核心发现, 也不做 evidence extraction.
   const [structuredSelectedKeys, setStructuredSelectedKeys] = usePersistentState<string[]>("format:selectedKeys", []);
+  // 生成 fmtRefs 时用到的结构化源, 与 fmtRefs[i] 一一对应。
+  // 走文本路径 (无结构化输入) 时为空数组; 下载 Word/LaTeX 时用它反查真正的结构化数据。
+  const [fmtSourceRefs, setFmtSourceRefs] = usePersistentState<Reference[]>("format:fmtSourceRefs", []);
   const [handoffToast, setHandoffToast] = useState<string | null>(null);
   // handoff 到达后, 若期刊模板已选好, 自动跑一次「按该期刊格式化参考文献」。
   const [pendingAutoFormat, setPendingAutoFormat] = useState(false);
@@ -250,6 +253,10 @@ export default function FormatModule() {
     setRefsBusy(true);
     setRefsErr(null);
     setFmtRefs([]);
+    // 快照本次格式化用到的结构化源, 供 LaTeX / Word 下载时反查真正的 CSL-JSON。
+    // 走 textarea 路径 (无结构化输入) 时快照为空数组。
+    const snap = structuredCheckedRefs();
+    setFmtSourceRefs(snap);
     try {
       const resp = await fetch(apiUrl("/api/format-refs"), {
         method: "POST",
@@ -362,6 +369,7 @@ export default function FormatModule() {
     setImportedRefs([]);
     setStructuredSelectedKeys([]);
     setSelectedFmtIdxs([]);
+    setFmtSourceRefs([]);
     // 顺手清掉遗留的 format:evidence（老版本可能留下的 localStorage 键）
     try { localStorage.removeItem("format:evidence"); } catch { /* no-op */ }
     setHandoffToast(null);
@@ -390,6 +398,13 @@ export default function FormatModule() {
     }
   };
 
+  /** 已勾选的结构化 refs (基于 fmtRefs 对应的 fmtSourceRefs 快照)。 */
+  const checkedSourceRefs = (): Reference[] => {
+    if (!fmtSourceRefs.length || !selectedFmtIdxs.length) return [];
+    const s = new Set(selectedFmtIdxs);
+    return fmtSourceRefs.filter((_, i) => s.has(i));
+  };
+
   // 生成 LaTeX 工程(.tex+.bib),拿到 base64 zip 供下载 / 在 Overleaf 打开。
   const exportLatex = async () => {
     if (!text.trim() || latexBusy) return;
@@ -399,10 +414,20 @@ export default function FormatModule() {
     setLatexNote("");
     setLatexCompiler("");
     try {
+      // 优先用「正文排版」页勾选的已排版条目 (fmtSourceRefs + selectedFmtIdxs);
+      // 没有就退回结构化面板 / textarea 文本。
+      const picked = checkedSourceRefs();
+      const body: Record<string, unknown> = { text, journal_id: journalId };
+      if (picked.length) {
+        body.csl_json = picked.map((r, i) => refToCsl(r, i));
+        body.references = picked.map((r, i) => refToLine(r, i)).join("\n");  // 兜底
+      } else {
+        body.references = refsTextForApi();
+      }
       const resp = await fetch(apiUrl("/api/latex"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text, journal_id: journalId, references: refsTextForApi() }),
+        body: JSON.stringify(body),
       });
       // 若后端未启动/崩溃, resp.ok 会为 false 或 resp.json() 抛异常, 需明确提示
       if (!resp.ok) {
