@@ -370,4 +370,90 @@ async def search_literature(
     }
     if not all_fail:  # 不缓存"全失败"(可能只是一次偶发网络故障)
         searchcache.put(cache_key, out)
+
+
+# ---------------------------------------------------------------------------
+# Abstract-by-id fallback: for imported refs lacking abstract (Zotero/RefIO).
+# Order: PubMed -> Europe PMC -> OpenAlex. Any client raising -> next.
+# ---------------------------------------------------------------------------
+async def _fetch_abstract_pubmed(pmid: str | None) -> str | None:
+    """Fetch a single abstract from PubMed efetch given a PMID."""
+    if not pmid:
+        return None
+    await _throttle()
+    params = _common_params() | {"db": "pubmed", "id": str(pmid), "rettype": "abstract", "retmode": "xml"}
+    async with httpx.AsyncClient(timeout=20) as cli:
+        r = await cli.get(f"{_BASE}/efetch.fcgi", params=params)
+        r.raise_for_status()
+    try:
+        root = ET.fromstring(r.text)
+    except ET.ParseError:
+        return None
+    parts: list[str] = []
+    for node in root.iter("AbstractText"):
+        txt = "".join(node.itertext()).strip()
+        if txt:
+            parts.append(txt)
+    return " ".join(parts) if parts else None
+
+
+async def _fetch_abstract_epmc(doi: str | None, pmid: str | None) -> str | None:
+    """Fetch abstract from Europe PMC search API by DOI or PMID."""
+    query = None
+    if doi:
+        query = f'DOI:"{doi}"'
+    elif pmid:
+        query = f"EXT_ID:{pmid} AND SRC:MED"
+    if not query:
+        return None
+    url = "https://www.ebi.ac.uk/europepmc/webservices/rest/search"
+    params = {"query": query, "format": "json", "resultType": "core", "pageSize": 1}
+    async with httpx.AsyncClient(timeout=20) as cli:
+        r = await cli.get(url, params=params)
+        r.raise_for_status()
+    data = r.json()
+    results = ((data or {}).get("resultList") or {}).get("result") or []
+    if not results:
+        return None
+    abstract = (results[0].get("abstractText") or "").strip()
+    return abstract or None
+
+
+async def _fetch_abstract_openalex(doi: str | None) -> str | None:
+    """Fetch abstract from OpenAlex works API by DOI. Reconstruct from inverted index."""
+    if not doi:
+        return None
+    url = f"https://api.openalex.org/works/https://doi.org/{doi}"
+    async with httpx.AsyncClient(timeout=20) as cli:
+        r = await cli.get(url)
+        r.raise_for_status()
+    data = r.json() or {}
+    idx = data.get("abstract_inverted_index") or {}
+    if not idx:
+        return None
+    positions: list[tuple[int, str]] = []
+    for word, poss in idx.items():
+        for p in poss or []:
+            positions.append((int(p), word))
+    positions.sort(key=lambda x: x[0])
+    text = " ".join(w for _, w in positions).strip()
+    return text or None
+
+
+async def fetch_abstract_by_id(doi: str | None, pmid: str | None) -> str | None:
+    """Try PubMed -> Europe PMC -> OpenAlex in order. Return abstract or None."""
+    if not doi and not pmid:
+        return None
+    for fetcher in (
+        lambda: _fetch_abstract_pubmed(pmid),
+        lambda: _fetch_abstract_epmc(doi, pmid),
+        lambda: _fetch_abstract_openalex(doi),
+    ):
+        try:
+            got = await fetcher()
+        except Exception:  # noqa: BLE001
+            continue
+        if got:
+            return got.strip()
+    return None
     return out
