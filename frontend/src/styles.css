@@ -888,6 +888,31 @@ body {
   font-size: 12px;
   font-weight: 600;
 }
+/* 正文排版页: 左右分栏 —— 稿件输入/投稿包在左, LLM 排版结果 + 下载/LaTeX 在右 */
+.format-manuscript-cols {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 24px;
+  width: min(1400px, calc(100vw - 32px));
+  align-items: start;
+  margin-left: 0;
+}
+.format-col-left,
+.format-col-right {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.format-col-right { position: sticky; top: 16px; }
+@media (max-width: 1100px) {
+  .format-manuscript-cols {
+    grid-template-columns: 1fr;
+    width: 100%;
+  }
+  .format-col-right { position: static; }
+}
+
 /* 正文排版页: 已排版参考文献勾选表 */
 .format-attach-refs { margin: 12px 0; }
 .format-attach-toolbar { display: flex; gap: 8px; margin-bottom: 8px; }

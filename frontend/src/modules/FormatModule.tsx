@@ -552,7 +552,8 @@ export default function FormatModule() {
       </div>
 
       {activeTab === "manuscript" && (
-      <>
+      <div className="format-manuscript-cols">
+      <div className="format-col-left">
       <div className="form">
         <Dropzone
           testId="upload-manuscript"
@@ -591,7 +592,76 @@ export default function FormatModule() {
           </p>
         )}
       </div>
+      {/* 投稿包放在左列, 与稿件输入相关的所有控制在一处 */}
+      <h2 className="section-title">🚀 投稿包（投稿就绪检查 + 投稿信）</h2>
+      <p className="section-hint">
+        基于上面的稿件与目标期刊：一键做<strong>投稿就绪检查</strong>（必需章节/字数/参考文献/必备声明/图表，
+        本地规则即时判断、不消耗 AI 额度），并自动生成<strong>投稿信（Cover Letter）</strong>。
+      </p>
+      <div className="form-actions">
+        <button
+          className="btn-primary"
+          onClick={runReadiness}
+          disabled={!manuscript.trim() || !journalId || readinessBusy}
+          data-testid="precheck-btn"
+        >
+          {readinessBusy ? "检查中…" : "投稿就绪检查"}
+        </button>
+        <button
+          className="btn-secondary"
+          onClick={runCover}
+          disabled={!manuscript.trim() || !journalId || cover.running}
+          data-testid="cover-btn"
+        >
+          {cover.running ? "生成中…" : "生成投稿信"}
+        </button>
+      </div>
+      {readinessErr && <div className="result-error" data-testid="readiness-error">{readinessErr}</div>}
+      {readiness?.items && (
+        <div className="result-panel" data-testid="readiness">
+          <h3 className="section-title" data-testid="precheck-title">✅ 投稿就绪检查</h3>
+          <div className="result-toolbar">
+            <span className="result-status">
+              ✅ 通过 {readiness.summary?.pass ?? 0}
+              {" "}· ⚠️ 注意 {readiness.summary?.warn ?? 0}
+              {" "}· ❌ 缺失 {readiness.summary?.fail ?? 0}
+            </span>
+          </div>
+          <ol className="ref-list" data-testid="readiness-list">
+            {readiness.items.map((it) => {
+              const b = READINESS_BADGE[it.status] || READINESS_BADGE.info;
+              return (
+                <li key={it.key}>
+                  <span className={`ref-badge ${b.cls}`}>{b.label}</span>
+                  {it.label}
+                  {it.detail && <span className="ref-journal"> — {it.detail}</span>}
+                  {it.suggestion && <span className="refcheck-note">{it.suggestion}</span>}
+                </li>
+              );
+            })}
+          </ol>
+        </div>
+      )}
+      {(cover.text || cover.running || cover.error) && (
+        <>
+          <h3 className="section-title" data-testid="cover-title">✉️ 投稿信</h3>
+          <ResultPanel
+            text={cover.text}
+            running={cover.running}
+            error={cover.error}
+            onStop={cover.stop}
+            exportName="投稿信"
+            placeholder="投稿信草稿会显示在这里。"
+            onExportDocx={downloadCover}
+            exportingDocx={coverDocxBusy}
+            panelTestId="cover-panel"
+          />
+        </>
+      )}
+      </div>
+      {/* /format-col-left */}
 
+      <div className="format-col-right">
       <ResultPanel
         text={text}
         running={running}
@@ -735,76 +805,9 @@ export default function FormatModule() {
       )}
       {latexErr && <div className="result-error" data-testid="latex-error">{latexErr}</div>}
       {latexNote && <div className="field-hint" data-testid="latex-note">{latexNote}</div>}
-
-      <h2 className="section-title">🚀 投稿包（投稿就绪检查 + 投稿信）</h2>
-      <p className="section-hint">
-        基于上面的稿件与目标期刊：一键做<strong>投稿就绪检查</strong>（必需章节/字数/参考文献/必备声明/图表，
-        本地规则即时判断、不消耗 AI 额度），并自动生成<strong>投稿信（Cover Letter）</strong>。
-      </p>
-      <div className="form-actions">
-        <button
-          className="btn-primary"
-          onClick={runReadiness}
-          disabled={!manuscript.trim() || !journalId || readinessBusy}
-          data-testid="precheck-btn"
-        >
-          {readinessBusy ? "检查中…" : "投稿就绪检查"}
-        </button>
-        <button
-          className="btn-secondary"
-          onClick={runCover}
-          disabled={!manuscript.trim() || !journalId || cover.running}
-          data-testid="cover-btn"
-        >
-          {cover.running ? "生成中…" : "生成投稿信"}
-        </button>
       </div>
-
-      {readinessErr && <div className="result-error" data-testid="readiness-error">{readinessErr}</div>}
-
-      {readiness?.items && (
-        <div className="result-panel" data-testid="readiness">
-          <h3 className="section-title" data-testid="precheck-title">✅ 投稿就绪检查</h3>
-          <div className="result-toolbar">
-            <span className="result-status">
-              ✅ 通过 {readiness.summary?.pass ?? 0}
-              {" "}· ⚠️ 注意 {readiness.summary?.warn ?? 0}
-              {" "}· ❌ 缺失 {readiness.summary?.fail ?? 0}
-            </span>
-          </div>
-          <ol className="ref-list" data-testid="readiness-list">
-            {readiness.items.map((it) => {
-              const b = READINESS_BADGE[it.status] || READINESS_BADGE.info;
-              return (
-                <li key={it.key}>
-                  <span className={`ref-badge ${b.cls}`}>{b.label}</span>
-                  {it.label}
-                  {it.detail && <span className="ref-journal"> — {it.detail}</span>}
-                  {it.suggestion && <span className="refcheck-note">{it.suggestion}</span>}
-                </li>
-              );
-            })}
-          </ol>
-        </div>
-      )}
-
-      {(cover.text || cover.running || cover.error) && (
-        <>
-          <h3 className="section-title" data-testid="cover-title">✉️ 投稿信</h3>
-          <ResultPanel
-            text={cover.text}
-            running={cover.running}
-            error={cover.error}
-            onStop={cover.stop}
-            exportName="投稿信"
-            placeholder="投稿信草稿会显示在这里。"
-            onExportDocx={downloadCover}
-            exportingDocx={coverDocxBusy}
-            panelTestId="cover-panel"
-          />
-        </>
-      )}
-      </>
+      {/* /format-col-right */}
+      </div>
       )}
 
       {activeTab === "refs" && (
