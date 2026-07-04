@@ -925,18 +925,29 @@ async def analyze_data(
 
         if run.get("charts"):
             yield ("charts", {"items": run["charts"]})
-        if run.get("stdout"):
-            yield ("output", {"text": run["stdout"]})
+        stdout_full = run.get("stdout", "") or ""
+        if stdout_full:
+            parts = _split_transparency(stdout_full)
+            if parts["method"]:
+                yield ("transparency_method", {"text": parts["method"]})
+            if parts["assumption"]:
+                yield ("transparency_assumption", {"text": parts["assumption"]})
+            if parts["quality"]:
+                yield ("transparency_quality", {"text": parts["quality"]})
+            if parts["main"]:
+                yield ("output", {"text": parts["main"]})
 
         if not run.get("ok"):
             yield ("error", {"message": "分析代码执行失败：\n" + (run.get("error") or "未知错误")})
             return
 
         # 确定性体检(不调用 LLM): 把可疑处作为提示喂给结论环节, 让 AI 据实修正/说明。
-        warnings = _sanity_checks(run.get("stdout", ""))
+        warnings = _sanity_checks(stdout_full)
 
         yield ("status", {"message": "正在总结结论…"})
-        async for piece in stream_chat(_conclusion_messages(question, code, run.get("stdout", ""), warnings), task="analysis"):
+        async for piece in _strip_conclusion_preamble_stream(
+            stream_chat(_conclusion_messages(question, code, stdout_full, warnings), task="analysis")
+        ):
             yield ("delta", {"text": piece})
         yield ("done", {})
     except Exception as e:  # noqa: BLE001
