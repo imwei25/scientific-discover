@@ -3,6 +3,8 @@ import type { Reference, EvidenceItem } from "../lib/sse";
 import RefIO from "./RefIO";
 import ZoteroPanel from "./ZoteroPanel";
 
+const REL_LABEL: Record<number, string> = { 3: "高相关", 2: "相关", 1: "弱相关", 0: "离题" };
+
 /** Key precedence must match backend _ref_key and frontend refKey (evidenceExtract.ts). */
 export function pickerKey(r: Reference): string {
   if (r.pmid) return `pmid:${r.pmid}`;
@@ -101,9 +103,39 @@ export function LiteraturePicker(props: LiteraturePickerProps) {
                 </div>
                 <div className="lit-picker-meta">
                   {r.first_author} · {r.year} · {r.journal}
-                  {r.journal_impact != null && <> · IF {r.journal_impact}</>}
-                  {r.journal_quartile && <> · {r.journal_quartile}</>}
-                  {r.source && <> · {r.source}</>}
+                </div>
+                <div className="lit-picker-badges">
+                  {typeof r.rel === "number" && r.rel >= 0 && (
+                    <span
+                      className={`ref-badge ref-badge-rel ref-badge-rel${r.rel}`}
+                      title={`AI 相关性判分：${REL_LABEL[r.rel] ?? r.rel}${r.rel_why ? " · " + r.rel_why : ""}`}
+                    >
+                      {REL_LABEL[r.rel] ?? `相关性 ${r.rel}`}
+                    </span>
+                  )}
+                  {r.source === "preprint" && <span className="ref-badge ref-badge-preprint">预印本</span>}
+                  {r.source === "europepmc" && <span className="ref-badge ref-badge-epmc">Europe PMC</span>}
+                  {r.source === "openalex" && <span className="ref-badge ref-badge-openalex">OpenAlex</span>}
+                  {r.source === "crossref" && <span className="ref-badge ref-badge-crossref">Crossref</span>}
+                  {r.journal_quartile && (
+                    <span
+                      className={`ref-badge ref-badge-q ref-badge-${r.journal_quartile.toLowerCase()}`}
+                      title="Scimago 医学分区"
+                    >
+                      {r.journal_quartile}
+                    </span>
+                  )}
+                  {typeof r.journal_impact === "number" && (
+                    <span className="ref-badge ref-badge-impact" title="影响力指数">
+                      影响力 {r.journal_impact.toFixed(1)}
+                    </span>
+                  )}
+                  {(r.cited_by_count ?? 0) > 0 && (
+                    <span className="ref-badge ref-badge-cited">被引 {r.cited_by_count}</span>
+                  )}
+                  {r.oa_url && (
+                    <a className="ref-oa" href={r.oa_url} target="_blank" rel="noreferrer">🔓 免费全文</a>
+                  )}
                 </div>
                 <div className="lit-picker-evidence">
                   {ev?._ev_status === "no_abstract" ? (
@@ -131,7 +163,7 @@ export function LiteraturePicker(props: LiteraturePickerProps) {
         <div className="lit-picker-actions">
           {secondaryAction && (
             <button type="button" onClick={() => secondaryAction.onClick(checkedRefs)}
-              disabled={secondaryAction.disabled || checkedRefs.length === 0}>
+              disabled={(secondaryAction.disabled ?? false) || checkedRefs.length === 0}>
               {secondaryAction.label}
             </button>
           )}
