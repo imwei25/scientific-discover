@@ -437,6 +437,63 @@ def _clip_output(text: str, head: int = 9000, tail: int = 3000) -> str:
     return text[:head] + "\n…（中间省略以控制长度）…\n" + text[-tail:]
 
 
+# 三个透明化标题的鲁棒匹配。允许:全/半角括号缺失、markdown 标题前缀、行首序号、
+# 中英文冒号、前后 --- 或 === 装饰。每个 marker 单独匹配,按出现位置切分,允许乱序。
+_TRANSPARENCY_MARKERS: dict[str, "re.Pattern[str]"] = {
+    "method": re.compile(
+        r"(?:^|\n)[\s>#\-=]*(?:[\d①-⑨][.、\s]+)?[『「]?\s*[【\[]?\s*方法选择\s*[】\]]?\s*[』」]?[\s::]*",
+    ),
+    "assumption": re.compile(
+        r"(?:^|\n)[\s>#\-=]*(?:[\d①-⑨][.、\s]+)?[『「]?\s*[【\[]?\s*假设检查\s*[】\]]?\s*[』」]?[\s::]*",
+    ),
+    "quality": re.compile(
+        r"(?:^|\n)[\s>#\-=]*(?:[\d①-⑨][.、\s]+)?[『「]?\s*[【\[]?\s*数据质量\s*[】\]]?\s*[』」]?[\s::]*",
+    ),
+}
+
+
+def _split_transparency(stdout: str) -> dict[str, str]:
+    """把三大透明化区块从 stdout 里剥出来。返回 {method, assumption, quality, main}。
+
+    - 每个 marker 取首次匹配位置;按位置排序;相邻两 marker 之间是前者内容;
+      最后一个 marker 后按空行切"最后区块内容 / main"。
+    - 一个 marker 都没匹配到 → 全部落 main。
+    - 优雅退化:LLM 输出格式漂移(缺括号 / md 标题 / 序号 / 乱序) 都尽量兜住。
+    """
+    if not stdout:
+        return {"method": "", "assumption": "", "quality": "", "main": ""}
+
+    hits: list[tuple[int, int, str]] = []
+    for name, pat in _TRANSPARENCY_MARKERS.items():
+        m = pat.search(stdout)
+        if m:
+            hits.append((m.start(), m.end(), name))
+    if not hits:
+        return {"method": "", "assumption": "", "quality": "", "main": stdout}
+
+    hits.sort(key=lambda x: x[0])
+    result = {"method": "", "assumption": "", "quality": "", "main": ""}
+
+    # 相邻两个 marker 之间是前者内容
+    for i in range(len(hits) - 1):
+        _, end, name = hits[i]
+        next_start = hits[i + 1][0]
+        result[name] = stdout[end:next_start].strip("\n")
+
+    # 最后一个 marker 之后:按空行切"最后区块内容 / main"
+    _, last_end, last_name = hits[-1]
+    tail = stdout[last_end:].strip("\n")
+    parts = re.split(r"\n\s*\n", tail, maxsplit=1)
+    if len(parts) == 2:
+        result[last_name] = parts[0].strip("\n")
+        result["main"] = parts[1].strip("\n")
+    else:
+        result[last_name] = tail
+        result["main"] = ""
+
+    return result
+
+
 def _conclusion_messages(question: str, code: str, output: str, warnings: list[str] | None = None) -> list[dict]:
     system = (
         "你是医学/药学/生物医学论文写作助手。下面是针对用户数据实际执行分析代码后得到的【真实输出】。"
