@@ -9,7 +9,8 @@ import EditableMarkdown from "../components/EditableMarkdown";
 import { CanvasSlot } from "../components/Canvas";
 import { HelpButton } from "../components/HelpButton";
 import Dropzone from "../components/Dropzone";
-import { extractFile } from "../lib/extract";
+import { parseAttachments, appendAttachmentsToField } from "../lib/attachments";
+import AttachmentChips from "../components/AttachmentChips";
 import { downloadText, downloadDocxFromText, downloadBlob, tsName } from "../lib/download";
 import DeidentifyDialog from "../components/DeidentifyDialog";
 import type { Goto } from "../App";
@@ -48,6 +49,7 @@ export default function ImradModule({ goto }: { goto: Goto }) {
   const [uploadBusy, setUploadBusy] = useState(false);
   const [uploadInfo, setUploadInfo] = useState<string>("");
   const [uploadErr, setUploadErr] = useState<string>("");
+  const [pendingDocs, setPendingDocs] = useState<File[]>([]);
 
   const savedRef = useRef("");
   useEffect(() => {
@@ -165,21 +167,13 @@ export default function ImradModule({ goto }: { goto: Goto }) {
     setKwRunning(false);
   };
 
-  // 把上传文件抽取为文本，追加到“方法素材”里（与 PlanModule 行为一致）。
-  const ingestFileAsText = async (file: File) => {
-    setUploadBusy(true);
-    setUploadInfo(`正在解析 ${file.name} …`);
+  // 文档附件: 只加入 pending 列表,不解析。
+  const stageDoc = (file: File) => {
     setUploadErr("");
-    const res = await extractFile(file);
-    setUploadBusy(false);
-    if (!res.ok || !res.text) {
-      setUploadInfo("");
-      setUploadErr(res.error || "解析失败");
-      return;
-    }
-    setUploadInfo(`已导入：${file.name}${res.truncated ? "（内容较长已截断）" : ""}`);
-    setMethods((prev) => (prev ? prev + "\n\n" : "") + `[附加资料：${file.name}]\n` + res.text);
+    setUploadInfo(`已加入待解析: ${file.name}`);
+    setPendingDocs((prev) => [...prev, file]);
   };
+  const removeDoc = (i: number) => setPendingDocs((prev) => prev.filter((_, idx) => idx !== i));
 
   // Dropzone 收到文件：csv/xlsx 且开关开启时先做 PHI 扫描，命中则弹脱敏对话框；其余情况走原文件提取。
   const handleUpload = async (file: File) => {
@@ -208,16 +202,16 @@ export default function ImradModule({ goto }: { goto: Goto }) {
         setUploadInfo(`PHI 扫描失败（${(e as Error).message}），将按原文件继续。`);
       }
     }
-    await ingestFileAsText(file);
+    stageDoc(file);
   };
 
-  // 用户在脱敏对话框点“应用”：拿到脱敏后的文件，替换原文件继续走提取流程。
+  // 用户在脱敏对话框点"应用"：拿到脱敏后的文件，替换原文件继续走提取流程。
   const handleDeidAccept = async (redactedFile: File, _mapping: Record<string, string>) => {
     setDeidOpen(false);
     setDeidScan(null);
     setDeidFile(null);
     setUploadInfo(`已脱敏并导入：${redactedFile.name}`);
-    await ingestFileAsText(redactedFile);
+    stageDoc(redactedFile);
   };
 
   // 用户取消：关闭对话框，用原文件继续。
@@ -228,7 +222,7 @@ export default function ImradModule({ goto }: { goto: Goto }) {
     setDeidFile(null);
     if (original) {
       setUploadInfo(`已跳过脱敏，按原文件导入：${original.name}`);
-      await ingestFileAsText(original);
+      stageDoc(original);
     }
   };
 
@@ -255,18 +249,37 @@ export default function ImradModule({ goto }: { goto: Goto }) {
 
   const submit = async () => {
     if (running) return;
-    if (![background, methods, results, discussion].some((x) => x.trim())) {
-      setError("请至少填写一部分材料（引言/方法/结果/讨论），或点“从各模块导入”。");
+    if (![background, methods, results, discussion].some((x) => x.trim()) && pendingDocs.length === 0) {
+      setError("请至少填写一部分材料（引言/方法/结果/讨论），或点“从各模块导入”，或上传方法素材附件。");
       return;
     }
     setStatus("");
-    setPrevDraftSnapshot(draft);  // 记录旧 draft, 用于 diff
+    setPrevDraftSnapshot(draft);
     setDraft("");
     setError(null);
     setRunning(true);
+
+    let mergedMethods = methods;
+    if (pendingDocs.length > 0) {
+      const parseCtrl = new AbortController();
+      ctrl.current = parseCtrl;
+      try {
+        const parsed = await parseAttachments(pendingDocs, {
+          signal: parseCtrl.signal,
+          onProgress: (p) => setStatus(`正在解析附件 ${p.index}/${p.total}：${p.name} …`),
+        });
+        mergedMethods = appendAttachmentsToField(methods, parsed, "附加资料");
+      } catch (e) {
+        setError((e as Error).message);
+        setStatus("");
+        setRunning(false);
+        return;
+      }
+    }
+
     ctrl.current = new AbortController();
     await streamImrad(
-      { topic, background, methods, results, discussion, references: refs },
+      { topic, background, methods: mergedMethods, results, discussion, references: refs },
       {
         signal: ctrl.current.signal,
         onStatus: setStatus,
@@ -299,6 +312,9 @@ export default function ImradModule({ goto }: { goto: Goto }) {
     kwCtrl.current?.abort();
     setAbsRunning(false);
     setKwRunning(false);
+    setPendingDocs([]);
+    setUploadInfo("");
+    setUploadErr("");
     setTopic("");
     setBackground("");
     setMethods("");
@@ -405,6 +421,12 @@ export default function ImradModule({ goto }: { goto: Goto }) {
           hint="支持 Word/PDF/Excel/CSV/txt；csv/xlsx 在上传时会先做患者信息检测"
           mode="file"
           onFile={handleUpload}
+        />
+        <AttachmentChips
+          files={pendingDocs}
+          onRemove={removeDoc}
+          disabled={running || uploadBusy}
+          testId="imrad-attach-chips"
         />
         {uploadInfo && <span className="file-name" data-testid="imrad-upload-info">{uploadInfo}</span>}
         {uploadErr && <span className="result-error" data-testid="imrad-upload-error">{uploadErr}</span>}
