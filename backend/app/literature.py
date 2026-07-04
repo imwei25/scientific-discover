@@ -385,16 +385,16 @@ async def _fetch_abstract_pubmed(pmid: str | None) -> str | None:
     async with httpx.AsyncClient(timeout=20) as cli:
         r = await cli.get(f"{_BASE}/efetch.fcgi", params=params)
         r.raise_for_status()
-    try:
-        root = ET.fromstring(r.text)
-    except ET.ParseError:
-        return None
-    parts: list[str] = []
-    for node in root.iter("AbstractText"):
-        txt = "".join(node.itertext()).strip()
-        if txt:
-            parts.append(txt)
-    return " ".join(parts) if parts else None
+        try:
+            root = ET.fromstring(r.text)
+        except ET.ParseError:
+            return None
+        parts: list[str] = []
+        for node in root.iter("AbstractText"):
+            txt = "".join(node.itertext()).strip()
+            if txt:
+                parts.append(txt)
+        return " ".join(parts) if parts else None
 
 
 async def _fetch_abstract_epmc(doi: str | None, pmid: str | None) -> str | None:
@@ -411,7 +411,7 @@ async def _fetch_abstract_epmc(doi: str | None, pmid: str | None) -> str | None:
     async with httpx.AsyncClient(timeout=20) as cli:
         r = await cli.get(url, params=params)
         r.raise_for_status()
-    data = r.json()
+        data = r.json()
     results = ((data or {}).get("resultList") or {}).get("result") or []
     if not results:
         return None
@@ -427,7 +427,7 @@ async def _fetch_abstract_openalex(doi: str | None) -> str | None:
     async with httpx.AsyncClient(timeout=20) as cli:
         r = await cli.get(url)
         r.raise_for_status()
-    data = r.json() or {}
+        data = r.json() or {}
     idx = data.get("abstract_inverted_index") or {}
     if not idx:
         return None
@@ -456,4 +456,3 @@ async def fetch_abstract_by_id(doi: str | None, pmid: str | None) -> str | None:
         if got:
             return got.strip()
     return None
-    return out
