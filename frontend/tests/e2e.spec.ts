@@ -1061,6 +1061,10 @@ test("实验规划: 样本量计算器", async ({ page }) => {
   await mockBase(page);
   await page.goto("/");
   await page.getByTestId("nav-plan").click();
+  // ss-calc 在向导 Step 2, 先经 Step 1(填写想法+点 run-btn)推进到 Step 2
+  await page.getByTestId("input-idea").fill("测试样本量");
+  await page.getByTestId("run-btn").click();
+  await expect(page.getByTestId("ss-calc")).toBeVisible();
   // 新版样本量为客户端滑块实时计算(无后端调用, ss-calc 默认展开)。
   await page.getByTestId("ss-scene").selectOption("ttest");
   await page.getByTestId("ss-effect").fill("0.5");
