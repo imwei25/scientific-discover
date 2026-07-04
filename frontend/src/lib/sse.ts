@@ -994,12 +994,16 @@ export interface PlanCard {
   note?: string;
 }
 
+export type AnalyzeMode = "analyze" | "draw";
+export type TransparencyKind = "method" | "assumption" | "quality";
+
 export interface AnalyzeHandlers {
   onStatus?: (message: string) => void;
   onPlan?: (cards: PlanCard[]) => void;
   onCode?: (code: string) => void;
   onCharts?: (items: ChartItem[]) => void;
   onOutput?: (text: string) => void;
+  onTransparency?: (kind: TransparencyKind, text: string) => void;
   onDelta: (text: string) => void;
   onDone?: () => void;
   onError?: (message: string) => void;
@@ -1019,6 +1023,7 @@ export async function streamAnalyze(
   question: string,
   chartFormat: string,
   palette: string,
+  mode: AnalyzeMode,
   h: AnalyzeHandlers,
 ): Promise<void> {
   const fd = new FormData();
@@ -1026,6 +1031,7 @@ export async function streamAnalyze(
   fd.append("question", question);
   fd.append("chart_format", chartFormat);
   fd.append("palette", palette);
+  fd.append("mode", mode);
   let resp: Response;
   try {
     resp = await fetch(apiUrl("/api/analyze"), { method: "POST", body: fd, signal: h.signal });
@@ -1059,6 +1065,9 @@ export async function streamAnalyze(
         else if (ev.event === "code") h.onCode?.(data.code ?? "");
         else if (ev.event === "charts") h.onCharts?.(normalizeCharts(data.items));
         else if (ev.event === "output") h.onOutput?.(data.text ?? "");
+        else if (ev.event === "transparency_method")     h.onTransparency?.("method",     data.text ?? "");
+        else if (ev.event === "transparency_assumption") h.onTransparency?.("assumption", data.text ?? "");
+        else if (ev.event === "transparency_quality")    h.onTransparency?.("quality",    data.text ?? "");
         else if (ev.event === "delta") h.onDelta(data.text ?? "");
         else if (ev.event === "error") h.onError?.(data.message ?? ev.data);
         else if (ev.event === "done") h.onDone?.();
@@ -1081,6 +1090,7 @@ export async function streamAnalyzeRefine(
   question: string,
   chartFormat: string,
   palette: string,
+  mode: AnalyzeMode,
   h: AnalyzeHandlers,
 ): Promise<void> {
   const fd = new FormData();
@@ -1091,6 +1101,7 @@ export async function streamAnalyzeRefine(
   fd.append("question", question);
   fd.append("chart_format", chartFormat);
   fd.append("palette", palette);
+  fd.append("mode", mode);
   let resp: Response;
   try {
     resp = await fetch(apiUrl("/api/analyze/refine"), { method: "POST", body: fd, signal: h.signal });
@@ -1124,6 +1135,9 @@ export async function streamAnalyzeRefine(
         else if (ev.event === "code") h.onCode?.(data.code ?? "");
         else if (ev.event === "charts") h.onCharts?.(normalizeCharts(data.items));
         else if (ev.event === "output") h.onOutput?.(data.text ?? "");
+        else if (ev.event === "transparency_method")     h.onTransparency?.("method",     data.text ?? "");
+        else if (ev.event === "transparency_assumption") h.onTransparency?.("assumption", data.text ?? "");
+        else if (ev.event === "transparency_quality")    h.onTransparency?.("quality",    data.text ?? "");
         else if (ev.event === "delta") h.onDelta(data.text ?? "");
         else if (ev.event === "error") h.onError?.(data.message ?? ev.data);
         else if (ev.event === "done") h.onDone?.();
