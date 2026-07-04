@@ -38,6 +38,9 @@ def main() -> None:
     _sse_ok(c.post("/api/imrad", json={"module": "imrad", "inputs": {"background": "x"}}))
     _sse_ok(c.post("/api/rebuttal", json={"module": "rebuttal", "inputs": {"reviews": "R1: small sample?"}}))
     _sse_ok(c.post("/api/idea-followup", json={"module": "idea", "inputs": {"mode": "ask", "question": "q", "references": [{"url": "u", "title": "t"}]}}))
+    _sse_ok(c.post("/api/plan-followup", json={"module": "plan", "inputs": {"mode": "ask", "question": "q", "draft": "d"}}))
+    _sse_ok(c.post("/api/imrad-followup", json={"module": "imrad", "inputs": {"mode": "ask", "question": "q", "draft": "d"}}))
+    _sse_ok(c.post("/api/ethics-followup", json={"module": "ethics", "inputs": {"mode": "ask", "question": "q", "draft": "d", "template": "informed_consent"}}))
     pr = c.post("/api/poster", json={"module": "poster", "inputs": {"content": "一篇论文的摘要与内容", "title": "T"}})
     _sse_ok(pr, must_have="poster")
     assert "<!doctype html>" in pr.text, "海报 SSE 未含 HTML"

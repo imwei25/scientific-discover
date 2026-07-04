@@ -19,6 +19,9 @@ from ..poster import generate_poster, review_poster
 from ..prompts import build_messages
 from ..rebuttal import rebuttal
 from ..research import clarify_topic, deep_research_idea, idea_followup, refine_topic
+from ..plan_followup import plan_followup
+from ..imrad_followup import imrad_followup
+from ..ethics_followup import ethics_followup
 
 router = APIRouter()
 
@@ -246,6 +249,36 @@ async def idea_followup_ep(req: RunRequest) -> StreamingResponse:
     """对已生成的找选题报告追问 / 按意见修改(基于回传的真实文献, 不重新检索)。"""
     async def gen():
         async for event, data in idea_followup(req.inputs):
+            yield _sse(event, data)
+
+    return StreamingResponse(gen(), media_type="text/event-stream", headers=SSE_HEADERS)
+
+
+@router.post("/api/plan-followup")
+async def plan_followup_ep(req: RunRequest) -> StreamingResponse:
+    """对实验规划主稿追问 / 按意见修改。"""
+    async def gen():
+        async for event, data in plan_followup(req.inputs):
+            yield _sse(event, data)
+
+    return StreamingResponse(gen(), media_type="text/event-stream", headers=SSE_HEADERS)
+
+
+@router.post("/api/imrad-followup")
+async def imrad_followup_ep(req: RunRequest) -> StreamingResponse:
+    """对 IMRaD 初稿追问 / 按意见修改。"""
+    async def gen():
+        async for event, data in imrad_followup(req.inputs):
+            yield _sse(event, data)
+
+    return StreamingResponse(gen(), media_type="text/event-stream", headers=SSE_HEADERS)
+
+
+@router.post("/api/ethics-followup")
+async def ethics_followup_ep(req: RunRequest) -> StreamingResponse:
+    """对伦理材料草案追问 / 按意见修改。"""
+    async def gen():
+        async for event, data in ethics_followup(req.inputs):
             yield _sse(event, data)
 
     return StreamingResponse(gen(), media_type="text/event-stream", headers=SSE_HEADERS)
