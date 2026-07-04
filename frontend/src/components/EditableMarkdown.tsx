@@ -59,24 +59,48 @@ export default function EditableMarkdown({ value, onSave, running, placeholder, 
   const [err, setErr] = useState("");
   const baseRef = useRef(value); // 我们上次提交出的正文; 用于识别"外部改动"以清空标黄
   const previewRef = useRef<HTMLDivElement | null>(null);
+  // 缓存"上一次在预览里划出的选区文本"。点击 input 后 window.getSelection() 会被清掉,
+  // 所以用 selectionchange 事件把预览内的选区文本存起来, 供后续 runRefine 使用。
+  const [savedSelection, setSavedSelection] = useState("");
 
   // 外部把 value 改成了不是我们产出的版本(新生成/编辑/去AI味) → 清掉标黄与撤回栈。
   useEffect(() => {
     if (value !== baseRef.current) {
       baseRef.current = value;
       if (ranges.length || undo.length) { setRanges([]); setUndo([]); }
+      if (savedSelection) setSavedSelection("");
     }
   }, [value]);
+
+  // 只关心 preview 内的 selection 变化: 有文字 → 存下来; 在 preview 内点空/收起 → 清掉;
+  // 焦点跑到 input 等外部节点导致的 selection 变化则忽略, 保住上一次的缓存。
+  useEffect(() => {
+    if (!enableRefine) return;
+    const onSelChange = () => {
+      const sel = window.getSelection();
+      if (!sel || !previewRef.current) return;
+      const anchor = sel.anchorNode;
+      if (!anchor || !previewRef.current.contains(anchor)) return;
+      const txt = sel.toString();
+      setSavedSelection(txt);
+    };
+    document.addEventListener("selectionchange", onSelChange);
+    return () => document.removeEventListener("selectionchange", onSelChange);
+  }, [enableRefine]);
 
   const runRefine = async () => {
     const ins = instruction.trim();
     if (!ins || busy || !onSave) return;
     setBusy(true); setErr(""); setNote("");
     // 选中的正文文本(从预览里直接选)作为局部修改范围; 没选中则全局给若干处最小改动。
-    let selection = "";
-    const sel = window.getSelection();
-    if (sel && sel.toString() && previewRef.current && sel.anchorNode && previewRef.current.contains(sel.anchorNode)) {
-      selection = sel.toString();
+    // 优先使用 savedSelection: 用户点 input 输入意见会让 window.getSelection() 清空,
+    // 但 selectionchange 里我们已经把预览内的选区缓存下来了。
+    let selection = savedSelection;
+    if (!selection) {
+      const sel = window.getSelection();
+      if (sel && sel.toString() && previewRef.current && sel.anchorNode && previewRef.current.contains(sel.anchorNode)) {
+        selection = sel.toString();
+      }
     }
     try {
       const res = await surgicalEdit({ text: value, instruction: ins, selection, references: refs });
@@ -88,6 +112,7 @@ export default function EditableMarkdown({ value, onSave, running, placeholder, 
       setRanges(applied.ranges);
       onSave(applied.text);
       setInstruction("");
+      setSavedSelection("");
       const parts = [`已应用 ${applied.applied} 处改动`];
       if (applied.skipped) parts.push(`${applied.skipped} 处未定位跳过`);
       if (res.note) parts.push(res.note);
@@ -146,17 +171,35 @@ export default function EditableMarkdown({ value, onSave, running, placeholder, 
       {enableRefine && canEdit && (
         <div className="refine-inline" data-testid={`${refineTestId}-bar`}>
           <span className="refine-inline-icon" title="在下方正文里选中一段再点，就只改这段；不选中则按意见给出若干处最小改动，改动就地标黄可撤回">✏️ AI 精修</span>
+          {savedSelection && (
+            <span
+              className="refine-sel-badge"
+              data-testid={`${refineTestId}-sel-badge`}
+              title={savedSelection.length > 80 ? savedSelection.slice(0, 80) + "…" : savedSelection}
+            >
+              已选中 {savedSelection.length} 字
+              <button
+                type="button"
+                className="refine-sel-clear"
+                onClick={() => setSavedSelection("")}
+                title="取消这次选区"
+                aria-label="清除选区"
+              >
+                ×
+              </button>
+            </span>
+          )}
           <input
             className="refine-inline-input"
             data-testid={`${refineTestId}-instruction`}
             value={instruction}
             onChange={(e) => setInstruction(e.target.value)}
-            placeholder="选中正文一段或直接写意见，例如：删掉空话套话 / 这段更学术 / 补上机制细节"
+            placeholder={savedSelection ? "对选中段落的修改意见，例如：更学术、补机制细节" : "选中正文一段或直接写意见，例如：删掉空话套话 / 这段更学术 / 补上机制细节"}
             disabled={busy}
             onKeyDown={(e) => { if (e.key === "Enter") runRefine(); }}
           />
           <button className="btn-primary btn-sm" data-testid={`${refineTestId}-run`} onClick={runRefine} disabled={busy || !instruction.trim()}>
-            {busy ? "精修中…" : "精修"}
+            {busy ? "精修中…" : savedSelection ? "AI 修改选中" : "精修"}
           </button>
         </div>
       )}

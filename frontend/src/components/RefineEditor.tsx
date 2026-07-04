@@ -70,6 +70,7 @@ export default function RefineEditor({
   const [err, setErr] = useState("");
   const taRef = useRef<HTMLTextAreaElement | null>(null);
   const [hasSel, setHasSel] = useState(false);
+  const [selLen, setSelLen] = useState(0);
 
   // 只在编辑器「干净」(无待处理标黄、无可撤回步骤)时, 才从父组件正文同步进来。
   // 这样: 新生成文档 / 外部手动改动会被采纳; 而我们自己刚 AI 改动(有标黄)后,
@@ -90,7 +91,9 @@ export default function RefineEditor({
 
   const syncSel = () => {
     const ta = taRef.current;
-    setHasSel(!!ta && ta.selectionEnd > ta.selectionStart);
+    const len = ta ? ta.selectionEnd - ta.selectionStart : 0;
+    setHasSel(len > 0);
+    setSelLen(len);
   };
 
   const run = async () => {
@@ -164,6 +167,11 @@ export default function RefineEditor({
           disabled={busy}
         />
         <div className="refine-actions">
+          {hasSel && (
+            <span className="refine-sel-badge" data-testid={`${testid}-sel-badge`} title="即使输入框拿到焦点,源码里的选中依然有效">
+              已选中 {selLen} 字
+            </span>
+          )}
           <button
             className="btn-primary btn-sm"
             data-testid={`${testid}-run`}

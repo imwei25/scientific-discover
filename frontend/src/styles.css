@@ -4201,6 +4201,10 @@ select {
   white-space: pre-wrap;
   word-break: break-word;
 }
+/* 让失焦后的选中依然醒目——textarea 的 selectionStart/End 其实一直保留,
+   只是浏览器默认把失焦选区渲染成灰色, 用户以为丢了。这里强制成暖色。 */
+.refine-src::selection { background: #ffe066; color: inherit; }
+.refine-src::-moz-selection { background: #ffe066; color: inherit; }
 .refine-preview {
   min-height: 320px;
   max-height: 620px;
@@ -4443,6 +4447,33 @@ mark.ai-edit {
 }
 .refine-inline-input:focus { outline: none; border-color: var(--teal); }
 .refine-note { font-size: 12.5px; color: var(--muted); margin: 2px 0 8px; }
+
+/* "已选中 N 字"徽标: 让用户看到跨焦点保留下来的选区仍然生效。 */
+.refine-sel-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 6px 2px 8px;
+  border-radius: 999px;
+  background: #fff3bf;
+  border: 1px solid #ffe066;
+  color: #664d03;
+  font-size: 11.5px;
+  font-weight: 600;
+  white-space: nowrap;
+  line-height: 1.4;
+}
+.refine-sel-clear {
+  border: none;
+  background: transparent;
+  color: #664d03;
+  cursor: pointer;
+  padding: 0 2px;
+  font-size: 13px;
+  line-height: 1;
+  border-radius: 999px;
+}
+.refine-sel-clear:hover { background: #ffe066; }
 
 .grant-review-zone { margin-top: var(--sp-4); }
 .grant-review-bar { display: flex; align-items: center; gap: var(--sp-3); flex-wrap: wrap; }
