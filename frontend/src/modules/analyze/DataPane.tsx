@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { streamAnalyze, streamAnalyzeRefine, ChartItem, PlanCard } from "../../lib/sse";
+import { streamAnalyze, streamAnalyzeRefine, ChartItem, PlanCard, AnalyzeMode, TransparencyKind } from "../../lib/sse";
 import { reportLLMError } from "../../lib/errorToast";
 import { usePersistentState } from "../../lib/usePersistentState";
 import { addHistory } from "../../lib/history";
@@ -47,6 +47,11 @@ export default function DataPane({ goto }: { goto: Goto }) {
   const [charts, setCharts] = usePersistentState<ChartItem[]>("analyze:charts", []);
   const [output, setOutput] = usePersistentState("analyze:output", "");
   const [conclusion, setConclusion] = usePersistentState("analyze:conclusion", "");
+  const [mode, setMode] = usePersistentState<AnalyzeMode>("analyze:mode", "analyze");
+  const [transparency, setTransparency] = usePersistentState<{ method: string; assumption: string; quality: string }>(
+    "analyze:transparency",
+    { method: "", assumption: "", quality: "" },
+  );
   const [captions, setCaptions] = usePersistentState<string[]>("analyze:captions", []);
   const [running, setRunning] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -184,13 +189,14 @@ export default function DataPane({ goto }: { goto: Goto }) {
     setError(null);
     setRunning(true);
     ctrl.current = new AbortController();
-    await streamAnalyze(file, question, chartFormat, palette, {
+    await streamAnalyze(file, question, chartFormat, palette, mode, {
       signal: ctrl.current.signal,
       onStatus: setStatus,
       onPlan: setPlan,
       onCode: setCode,
       onCharts: setCharts,
       onOutput: setOutput,
+      onTransparency: (kind: TransparencyKind, text: string) => setTransparency((p) => ({ ...p, [kind]: text })),
       onDelta: (t) => setConclusion((p) => p + t),
       onError: (m) => {
         setError(m);
@@ -225,13 +231,14 @@ export default function DataPane({ goto }: { goto: Goto }) {
     setError(null);
     setRunning(true);
     ctrl.current = new AbortController();
-    await streamAnalyzeRefine(file, baseCode, req, baseSummary, question, chartFormat, palette, {
+    await streamAnalyzeRefine(file, baseCode, req, baseSummary, question, chartFormat, palette, mode, {
       signal: ctrl.current.signal,
       onStatus: setStatus,
       onPlan: setPlan,
       onCode: setCode,
       onCharts: setCharts,
       onOutput: setOutput,
+      onTransparency: (kind: TransparencyKind, text: string) => setTransparency((p) => ({ ...p, [kind]: text })),
       onDelta: (t) => setConclusion((p) => p + t),
       onError: (m) => {
         setError(m);
@@ -409,6 +416,40 @@ export default function DataPane({ goto }: { goto: Goto }) {
       <div style={{ display: step === 1 ? "block" : "none" }} data-testid="analyze-stage-1">
       {/* 文件上传区(所有图表类型共用) */}
       <div className="form">
+        <div className="mode-radio" data-testid="mode-radio" style={{ display: "flex", gap: 16, marginBottom: 12, alignItems: "center" }}>
+          <label style={{ cursor: "pointer", display: "flex", alignItems: "center", gap: 4 }}>
+            <input
+              type="radio"
+              name="analyze-mode"
+              data-testid="mode-analyze"
+              checked={mode === "analyze"}
+              onChange={() => {
+                setMode("analyze");
+                setConclusion("");
+                setOutput("");
+                setTransparency({ method: "", assumption: "", quality: "" });
+              }}
+            />
+            <span>📊 数据分析</span>
+            <span style={{ color: "#888", fontSize: 12, marginLeft: 4 }}>跑统计+透明化+结论</span>
+          </label>
+          <label style={{ cursor: "pointer", display: "flex", alignItems: "center", gap: 4 }}>
+            <input
+              type="radio"
+              name="analyze-mode"
+              data-testid="mode-draw"
+              checked={mode === "draw"}
+              onChange={() => {
+                setMode("draw");
+                setConclusion("");
+                setOutput("");
+                setTransparency({ method: "", assumption: "", quality: "" });
+              }}
+            />
+            <span>🎨 只画图</span>
+            <span style={{ color: "#888", fontSize: 12, marginLeft: 4 }}>只画图,不做统计不写结论</span>
+          </label>
+        </div>
         <UploadArea
           file={file}
           fileErr={fileErr}
@@ -542,6 +583,8 @@ export default function DataPane({ goto }: { goto: Goto }) {
           setConclusion={setConclusion}
           running={running}
           question={question}
+          // @ts-expect-error P14 adds mode + transparency to GeneralResultsProps
+          mode={mode} transparency={transparency}
         />
 
       {/* 继续对话: 首轮分析出结果后, 可反复提新需求让 AI 在现有代码上改 */}
@@ -553,7 +596,7 @@ export default function DataPane({ goto }: { goto: Goto }) {
               data-testid="refine-input"
               value={refineInput}
               onChange={(e) => setRefineInput(e.target.value)}
-              placeholder="例如：把柱状图改成箱线图并标注显著性 / 增加按性别的亚组分析 / 配色换成柳叶刀风格 / 对数变换后重跑"
+              placeholder={mode === "draw" ? "换成箱线图 / 加标题 / 换配色…" : "换图型 / 加显著性 / 换分析…"}
               rows={2}
               disabled={running || !file}
             />
