@@ -53,6 +53,12 @@ _META_SECTION_RE = re.compile(
     r"format\s*changes?|change\s*notes?|editorial\s*notes?)\b",
     re.IGNORECASE,
 )
+# AI 在正文末尾生成的"参考文献"章节: 通常是 `【参考文献：原稿缺失，需作者补充】`
+# 占位; 当我们有真实 refs.bib 要 append 时, 这一段是重复的, 应剥离。
+_REFS_SECTION_RE = re.compile(
+    r"^\s*(参考文献|参考书目|文献|references?|bibliography|works\s*cited)\b",
+    re.IGNORECASE,
+)
 # AI 常在响应开头/章节开头加的"引导语", 例如:
 #   "以下是按照 XX 期刊格式要求重新排版的稿件："
 #   "Here is the reformatted manuscript:"
@@ -278,13 +284,15 @@ def _extract_keywords(lines: list[str]) -> tuple[str, list[str]]:
     return text, []
 
 
-def parse_markdown(text: str) -> dict:
+def parse_markdown(text: str, skip_refs_section: bool = False) -> dict:
     """把排版稿 Markdown 粗解析为 IR: title / abstract / keywords / sections[]。
 
     预处理:
       1. 剥离 emoji
       2. 丢弃 AI 前置引导语("以下是按照 XX 期刊..." / "Here is the reformatted...")
       3. 丢弃 AI 加在末尾的元章节(格式变更说明等)
+      4. 若 skip_refs_section=True (下游要 append 真实 refs.bib), 丢弃 AI 生成
+         的"参考文献 / References"占位章节 (通常是 `【参考文献：原稿缺失，需作者补充】`)
     """
     text = _strip_emoji(text)
 
@@ -309,6 +317,11 @@ def parse_markdown(text: str) -> dict:
                     continue
             # 检测元章节 -> 后续行全部丢弃
             if _META_SECTION_RE.match(raw_head):
+                mode = "skip"
+                cur = None
+                continue
+            # 参考文献占位章节: 下游会 append 真实 refs.bib, 此处剥离避免重复。
+            if skip_refs_section and _REFS_SECTION_RE.match(raw_head):
                 mode = "skip"
                 cur = None
                 continue
@@ -472,25 +485,7 @@ async def export_latex(text: str, journal_id: str, references: str = "", csl_jso
     journal = get_journal(journal_id)
     journal_name = journal["name"] if journal else "目标期刊"
     notes: list[str] = []
-
-    # 稿件预处理: 剥离 emoji, 检测中文
-    stripped = _strip_emoji(text)
-    contains_cjk = has_cjk(stripped)
     original_class = spec["doc_class"]
-
-    # IEEEtran 不支持中文 -> 自动降级
-    if contains_cjk and original_class == "IEEEtran":
-        spec = _degrade_to_cjk_article(spec)
-        notes.append(
-            "稿件含中文, 而 IEEEtran 官方类不支持中文, 已自动切换到 article + ctex 模板, "
-            "并建议使用 xelatex 编译。若为纯英文稿, 请把中文段落删除后重新导出。"
-        )
-    elif contains_cjk and not spec.get("cjk"):
-        spec = dict(spec)
-        spec["compiler"] = "xelatex"
-        notes.append("稿件含中文, 已启用 ctex 支持, 建议使用 xelatex 编译。")
-
-    needs_cjk = bool(spec.get("cjk")) or contains_cjk
 
     # 参考文献 -> BibTeX. 优先用结构化输入; 否则退回 LLM 解析文本。
     from .citations import _normalize_and_dedup
@@ -513,8 +508,37 @@ async def export_latex(text: str, journal_id: str, references: str = "", csl_jso
             except Exception as e:  # noqa: BLE001
                 notes.append(f"参考文献解析失败，已跳过 .bib：{e}")
                 csl_items = []
+    has_bib = bool(csl_items)
 
-    ir = parse_markdown(text)
+    # 先解析 markdown, 剥离 emoji 与元/参考文献占位章节, 再基于"干净"的正文判断
+    # 是否需要 CJK 支持。原来的做法是对整段 text 直接 has_cjk, 但 LLM 输出常带
+    # 中文占位符 (【摘要：原稿缺失，需作者补充】) 或中文格式变更说明, 即使正文
+    # 是纯英文也会误判成中文 → 触发 IEEEtran 降级到单栏 article, 用户看不到
+    # 两栏排版. 用 parse_markdown 得到干净的 title/abstract/正文再检测.
+    stripped = _strip_emoji(text)
+    ir = parse_markdown(stripped, skip_refs_section=has_bib)
+    ir_content_for_cjk = " ".join([
+        ir.get("title", ""),
+        ir.get("abstract", ""),
+        ir.get("keywords", ""),
+        *[(s.get("title") or "") + " " + (s.get("body") or "") for s in ir.get("sections", [])],
+    ])
+    contains_cjk = has_cjk(ir_content_for_cjk)
+
+    # IEEEtran 不支持中文 -> 自动降级
+    if contains_cjk and original_class == "IEEEtran":
+        spec = _degrade_to_cjk_article(spec)
+        notes.append(
+            "稿件含中文, 而 IEEEtran 官方类不支持中文, 已自动切换到 article + ctex 模板, "
+            "并建议使用 xelatex 编译。若为纯英文稿, 请把中文段落删除后重新导出。"
+        )
+        # 换了模板 -> IR 里的参考文献策略也可能需要重解析; 但正文本身不变, IR 复用即可.
+    elif contains_cjk and not spec.get("cjk"):
+        spec = dict(spec)
+        spec["compiler"] = "xelatex"
+        notes.append("稿件含中文, 已启用 ctex 支持, 建议使用 xelatex 编译。")
+
+    needs_cjk = bool(spec.get("cjk")) or contains_cjk
     tex = _render_tex(
         ir, spec,
         needs_cjk=needs_cjk,
