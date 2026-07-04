@@ -101,8 +101,8 @@ export default function FormatModule() {
   // handoff 到达后, 若期刊模板已选好, 自动跑一次「按该期刊格式化参考文献」。
   const [pendingAutoFormat, setPendingAutoFormat] = useState(false);
 
-  // 两个分页: refs 参考文献 | manuscript 正文排版
-  type FormatTab = "refs" | "manuscript";
+  // 三个分页: refs 参考文献 | manuscript 正文排版(上传+触发) | preview 正文预览(输出+下载)
+  type FormatTab = "refs" | "manuscript" | "preview";
   const [activeTab, setActiveTab] = usePersistentState<FormatTab>("format:tab", "manuscript");
 
   // 正文排版分页上, 用户可勾选参考文献分页已排版好的条目, 附到 Word 下载末尾。
@@ -313,6 +313,7 @@ export default function FormatModule() {
     if (!manuscript.trim() || !journalId || running) return;
     setOriginalSnapshot(manuscript);  // 记录原文, 用于稍后 diff
     start("format", { manuscript, journal_id: journalId });
+    setActiveTab("preview");  // 触发后立刻跳到预览页, 输出边流边显示
   };
 
   // 投稿就绪检查: 确定性(后端纯规则), 即时、零额度、不调 LLM。
@@ -549,11 +550,22 @@ export default function FormatModule() {
         >
           📝 正文排版
         </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={activeTab === "preview"}
+          className={`format-tab${activeTab === "preview" ? " active" : ""}`}
+          onClick={() => setActiveTab("preview")}
+          disabled={!text && !running}
+          title={!text && !running ? "先在「正文排版」页跑一次重排" : ""}
+          data-testid="format-tab-preview"
+        >
+          👀 正文预览{text && !running && <span className="format-tab-badge">已就绪</span>}
+        </button>
       </div>
 
       {activeTab === "manuscript" && (
-      <div className="format-manuscript-cols">
-      <div className="format-col-left">
+      <>
       <div className="form">
         <Dropzone
           testId="upload-manuscript"
@@ -658,101 +670,93 @@ export default function FormatModule() {
           />
         </>
       )}
-      </div>
-      {/* /format-col-left */}
+      </>
+      )}
 
-      <div className="format-col-right">
-      <ResultPanel
-        text={text}
-        running={running}
-        error={error}
-        onStop={stop}
-        exportName="排版稿"
-        placeholder="重排后的稿件会显示在这里，并附上格式变更说明。"
-        hideMdActions
-      />
-
-      {/* 已排版参考文献 (可选): 勾选后附到下载的 Word 末尾 */}
-      {text && !running && fmtRefs.length > 0 && (
-        <details className="format-attach-refs" data-testid="format-attach-refs" open>
-          <summary className="adv-summary">
-            <span className="adv-summary-main">📎 附上已排版的参考文献（{selectedFmtIdxs.length} / {fmtRefs.length} 条已勾选）</span>
-            <span className="adv-summary-sub">从「参考文献」页格式化好的条目里挑；勾上的会附在下载稿件末尾</span>
-          </summary>
-          <div className="adv-body">
-            <div className="format-attach-toolbar">
-              <button type="button" className="btn-ghost btn-sm" onClick={() => setSelectedFmtIdxs(fmtRefs.map((_, i) => i))} disabled={selectedFmtIdxs.length === fmtRefs.length}>
-                全选
-              </button>
-              <button type="button" className="btn-ghost btn-sm" onClick={() => setSelectedFmtIdxs([])} disabled={!selectedFmtIdxs.length}>
-                全不选
-              </button>
-              <button type="button" className="btn-ghost btn-sm" onClick={() => setActiveTab("refs")}>
-                去「参考文献」页编辑
-              </button>
+      {activeTab === "preview" && (
+      <>
+      {/* 预览顶部工具区: 折叠的参考文献勾选表 + 下载 / LaTeX / Overleaf */}
+      <div className="format-preview-toolbar">
+        {/* 附上参考文献: 默认折叠, summary 只显示数目 */}
+        {fmtRefs.length > 0 ? (
+          <details className="format-attach-refs" data-testid="format-attach-refs">
+            <summary className="adv-summary">
+              <span className="adv-summary-main">📎 附上已排版的参考文献（已勾选 {selectedFmtIdxs.length} / {fmtRefs.length} 篇）</span>
+            </summary>
+            <div className="adv-body">
+              <div className="format-attach-toolbar">
+                <button type="button" className="btn-ghost btn-sm" onClick={() => setSelectedFmtIdxs(fmtRefs.map((_, i) => i))} disabled={selectedFmtIdxs.length === fmtRefs.length}>
+                  全选
+                </button>
+                <button type="button" className="btn-ghost btn-sm" onClick={() => setSelectedFmtIdxs([])} disabled={!selectedFmtIdxs.length}>
+                  全不选
+                </button>
+                <button type="button" className="btn-ghost btn-sm" onClick={() => setActiveTab("refs")}>
+                  去「参考文献」页编辑
+                </button>
+              </div>
+              <ol className="format-attach-list">
+                {fmtRefs.map((r, i) => {
+                  const checked = selectedFmtIdxs.includes(i);
+                  return (
+                    <li key={i}>
+                      <label>
+                        <input
+                          type="checkbox"
+                          checked={checked}
+                          onChange={() => setSelectedFmtIdxs((prev) => checked ? prev.filter((x) => x !== i) : [...prev, i].sort((a, b) => a - b))}
+                        />
+                        <span>{r}</span>
+                      </label>
+                    </li>
+                  );
+                })}
+              </ol>
             </div>
-            <ol className="format-attach-list">
-              {fmtRefs.map((r, i) => {
-                const checked = selectedFmtIdxs.includes(i);
-                return (
-                  <li key={i}>
-                    <label>
-                      <input
-                        type="checkbox"
-                        checked={checked}
-                        onChange={() => setSelectedFmtIdxs((prev) => checked ? prev.filter((x) => x !== i) : [...prev, i].sort((a, b) => a - b))}
-                      />
-                      <span>{r}</span>
-                    </label>
-                  </li>
-                );
-              })}
-            </ol>
+          </details>
+        ) : (
+          <div className="field-hint" data-testid="format-refs-note">
+            📎 下载的 Word / LaTeX <strong>暂不含参考文献</strong>——请到「参考文献」页点「按该期刊格式化参考文献」后再回来。
           </div>
-        </details>
-      )}
-      {text && !running && (
-        <button className="btn-secondary" onClick={downloadDocx} disabled={downloading} data-testid="download-btn">
-          {downloading ? "正在生成…" : selectedFmtIdxs.length ? `⬇ 下载 Word 文件（附 ${selectedFmtIdxs.length} 条参考文献）` : "⬇ 下载 Word 文件（不附参考文献）"}
-        </button>
-      )}
-      {text && !running && fmtRefs.length === 0 && (
-        <p className="field-hint" data-testid="format-refs-note" style={{ marginTop: 4 }}>
-          提示：下载的 Word <strong>暂不含参考文献</strong>。如需带上，请到「参考文献」页点「按该期刊格式化参考文献」后再回来下载。
-        </p>
-      )}
-      {dlErr && <div className="result-error" data-testid="dl-error">{dlErr}</div>}
+        )}
 
-      {text && !running && (
-        <div className="form-actions" style={{ marginTop: 8 }}>
-          <button
-            className="btn-secondary"
-            onClick={exportLatex}
-            disabled={latexBusy}
-            data-testid="latex-btn"
-          >
-            {latexBusy ? "生成中…" : "📐 生成 LaTeX 工程（.tex + .bib）"}
+        <div className="format-preview-actions">
+          <button className="btn-secondary" onClick={downloadDocx} disabled={!text || running || downloading} data-testid="download-btn">
+            {downloading ? "正在生成…" : selectedFmtIdxs.length ? `⬇ 下载 Word（附 ${selectedFmtIdxs.length} 条参考文献）` : "⬇ 下载 Word"}
+          </button>
+          <button className="btn-secondary" onClick={exportLatex} disabled={!text || running || latexBusy} data-testid="latex-btn">
+            {latexBusy ? "生成中…" : "📐 生成 LaTeX 工程"}
           </button>
           {latexZip && (
             <>
-              <button
-                className="btn-secondary"
-                onClick={() => downloadBase64("manuscript-latex.zip", latexZip, "application/zip")}
-                data-testid="latex-download-btn"
-              >
-                ⬇ 下载 LaTeX 工程（zip）
+              <button className="btn-secondary" onClick={() => downloadBase64("manuscript-latex.zip", latexZip, "application/zip")} data-testid="latex-download-btn">
+                ⬇ 下载 LaTeX (zip)
               </button>
-              <button
-                className="btn-primary"
-                onClick={() => openInOverleaf(latexZip)}
-                data-testid="overleaf-btn"
-              >
+              <button className="btn-primary" onClick={() => openInOverleaf(latexZip)} data-testid="overleaf-btn">
                 ↗ 在 Overleaf 打开
               </button>
             </>
           )}
+          <button className="btn-ghost" onClick={() => setActiveTab("manuscript")} data-testid="back-to-input-btn">
+            ← 返回编辑
+          </button>
         </div>
-      )}
+        {dlErr && <div className="result-error" data-testid="dl-error">{dlErr}</div>}
+      </div>
+
+      {/* 排版稿预览: 独立的可滚动容器 */}
+      <div className="format-preview-scroll" data-testid="format-preview-scroll">
+        <ResultPanel
+          text={text}
+          running={running}
+          error={error}
+          onStop={stop}
+          exportName="排版稿"
+          placeholder="点「按该期刊排版」后重排后的稿件会显示在这里，并附上格式变更说明。"
+          hideMdActions
+        />
+      </div>
+
       {latexCompiler && latexZip && (
         <div
           data-testid="latex-compiler-hint"
@@ -805,9 +809,7 @@ export default function FormatModule() {
       )}
       {latexErr && <div className="result-error" data-testid="latex-error">{latexErr}</div>}
       {latexNote && <div className="field-hint" data-testid="latex-note">{latexNote}</div>}
-      </div>
-      {/* /format-col-right */}
-      </div>
+      </>
       )}
 
       {activeTab === "refs" && (

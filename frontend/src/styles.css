@@ -888,28 +888,36 @@ body {
   font-size: 12px;
   font-weight: 600;
 }
-/* 正文排版页: 左右分栏. 不突破 .module 880px, 与上方目标期刊选择器对齐. */
-.format-manuscript-cols {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-  gap: 16px;
-  align-items: start;
-  width: 100%;  /* 继承 .module 的 max-width, 不做额外扩宽 */
-}
-.format-col-left,
-.format-col-right {
-  min-width: 0;
+/* 正文预览页 */
+.format-preview-toolbar {
   display: flex;
   flex-direction: column;
   gap: 12px;
+  margin-bottom: 16px;
 }
-/* 屏幕不宽时降级为单列, 单列宽度自动填满 .module (与目标期刊选项对齐) */
-@media (max-width: 900px) {
-  .format-manuscript-cols { grid-template-columns: 1fr; }
+.format-preview-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+/* 排版稿预览: 独立滚动容器, 长稿件不再撑爆页面 */
+.format-preview-scroll {
+  max-height: calc(100vh - 240px);
+  min-height: 320px;
+  overflow-y: auto;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 12px 16px;
+  background: var(--panel-bg, #fff);
+}
+.format-preview-scroll .result-panel {
+  border: none;
+  padding: 0;
+  background: transparent;
 }
 
 /* 正文排版页: 已排版参考文献勾选表 */
-.format-attach-refs { margin: 12px 0; }
+.format-attach-refs { margin: 0; }
 .format-attach-toolbar { display: flex; gap: 8px; margin-bottom: 8px; }
 .format-attach-list {
   margin: 0;
