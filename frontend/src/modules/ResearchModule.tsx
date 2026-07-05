@@ -90,17 +90,24 @@ export default function ResearchModule({ goto }: { goto: Goto }) {
     setUploadParsing({ done: 0, total: files.length });
     const needTitle: { file: File; err?: string }[] = [];
     const good: UploadedRef[] = [];
-    for (let i = 0; i < files.length; i++) {
-      const f = files[i];
-      setUploadParsing({ done: i, total: files.length });
-      const res = await parseUpload(f, projectId);
-      if ("error" in res) needTitle.push({ file: f, err: res.error });
-      else if (res.parse_confidence === "low" && !res.title) needTitle.push({ file: f });
-      else good.push(res);
+    try {
+      for (let i = 0; i < files.length; i++) {
+        const f = files[i];
+        setUploadParsing({ done: i, total: files.length });
+        try {
+          const res = await parseUpload(f, projectId);
+          if ("error" in res) needTitle.push({ file: f, err: res.error });
+          else if (res.parse_confidence === "low" && !res.title) needTitle.push({ file: f });
+          else good.push(res);
+        } catch (e) {
+          needTitle.push({ file: f, err: (e as Error).message });
+        }
+      }
+      setUploadedRefs((prev) => [...prev, ...good]);
+      if (needTitle.length) setUploadNeedingTitle((prev) => [...prev, ...needTitle]);
+    } finally {
+      setUploadParsing(null);
     }
-    setUploadedRefs((prev) => [...prev, ...good]);
-    if (needTitle.length) setUploadNeedingTitle((prev) => [...prev, ...needTitle]);
-    setUploadParsing(null);
   };
 
   const filtersPayload = () => ({
@@ -111,8 +118,83 @@ export default function ResearchModule({ goto }: { goto: Goto }) {
     keep_unknown: keepUnknown,
   });
 
-  // 后续 Step 3/4 实现见后续 Task
-  const runSearch = async () => { /* Task 15 */ };
+  const runSearch = async () => {
+    if (!question.trim() || running) return;
+    setError(null);
+    let mergedBackground = background;
+    if (pendingBackgroundFiles.length > 0) {
+      const parseCtrl = new AbortController();
+      ctrl.current = parseCtrl;
+      setRunning(true);
+      try {
+        const parsed = await parseAttachments(pendingBackgroundFiles, {
+          signal: parseCtrl.signal,
+          onProgress: (p) => setStatus(`正在解析相关资料 ${p.index}/${p.total}: ${p.name}`),
+        });
+        mergedBackground = appendAttachmentsToField(background, parsed);
+        setPendingBackgroundFiles([]);
+      } catch (e) {
+        setError((e as Error).message); setRunning(false); return;
+      }
+    }
+    setRefs([]); setSelectedKeys([]); setDeepReadKeys([]); setEvidence([]);
+    setText(""); setContribution([]); setVerify(null); setFollowups([]); setRecommend({});
+    setStatus(""); setError(null); setWarnings([]); setRunning(true);
+    goStep(3);
+    ctrl.current = new AbortController();
+    const uploadedAsRefs = uploadedRefs.map(uploadedToReference);
+    await streamDeepResearch(
+      {
+        question, field, background: mergedBackground, depth,
+        sources: DEFAULT_SOURCES,
+        filters: filtersPayload(),
+        phase: "search",
+        project_id: projectId,
+      },
+      {
+        signal: ctrl.current.signal,
+        onStatus: setStatus,
+        onReferences: (items) => {
+          const norm = (s: string) => (s || "").trim().toLowerCase().replace(/\s+/g, " ");
+          const seen = new Set(uploadedAsRefs.map((r) => norm(r.title)));
+          const merged: Reference[] = [...uploadedAsRefs];
+          for (const r of items) {
+            if (!seen.has(norm(r.title))) { merged.push(r); seen.add(norm(r.title)); }
+          }
+          setRefs(merged);
+          setSelectedKeys(merged.map((r) => refKeyOf(r as Reference & { upload_id?: string })));
+        },
+        onEvidence: setEvidence,
+        onDelta: () => {},
+        onWarning: (m) => setWarnings((prev) => [...prev, m]),
+        onError: (m) => { setError(m); setStatus(""); setRunning(false); reportLLMError(m); },
+        onDone: async () => {
+          setStatus(""); setRunning(false); window.dispatchEvent(new Event("usage-updated"));
+          // Recommend using CURRENT refs from state — read via readPersisted since setRefs is async
+          try {
+            const cur = readPersisted<Reference[]>("research:refs", []);
+            const forRec = cur.map((r) => ({
+              ref_key: refKeyOf(r as Reference & { upload_id?: string }),
+              title: r.title || "",
+              abstract: r.abstract || "",
+            }));
+            const res = await fetchDeepResearchRecommend({ question, refs: forRec });
+            if (res.ok && res.items) {
+              const map: Record<string, RecommendItem> = {};
+              const autoDeep: string[] = [];
+              for (const it of res.items) {
+                map[it.ref_key] = it;
+                if (it.score === "high") autoDeep.push(it.ref_key);
+              }
+              setRecommend(map);
+              setDeepReadKeys(autoDeep);
+            }
+          } catch { /* recommend failure non-blocking */ }
+        },
+      },
+    );
+    setRunning(false);
+  };
   const runGenerate = async () => { /* Task 16 */ };
   const stop = () => { ctrl.current?.abort(); setRunning(false); setStatus(""); };
 
@@ -120,23 +202,19 @@ export default function ResearchModule({ goto }: { goto: Goto }) {
     setStudyTypes((prev) => (prev.includes(key) ? prev.filter((s) => s !== key) : [...prev, key]));
   };
 
-  // Suppress "declared but unused" TS warnings for Step 3/4 state until Tasks 15/16 land
-  void refs; void selectedKeys; void deepReadKeys; void refSort; void evidence;
-  void recommend; void text; void contribution; void verify; void followups;
-  void reportCollapsed; void deepReadProgress; void goStep; void runSearch; void runGenerate;
-  void stop; void goto; void setStep; void maxStep;
-  void streamDeepResearch; void fetchDeepResearchRecommend; void streamDeepResearchFollowup;
-  void reportLLMError; void addHistory;
-  void LiteraturePicker; void EditableMarkdown; void FollowupPanel; void ReportExportBar;
-  void downloadCsv; void tsName; void readPersisted; void useMemo; void useEffect;
-  void estimateDeepReadTokens; void refKeyOf;
-  void setRefs; void setSelectedKeys; void setDeepReadKeys; void setRefSort; void setEvidence;
-  void setRecommend; void setText; void setContribution; void setVerify; void setFollowups;
-  void setReportCollapsed; void setDeepReadProgress; void setStatus; void setRunning;
-  void status; void running; void filtersPayload; void englishReport; void depth;
-  void setError;
-  void uploadedToReference; void parseAttachments; void appendAttachmentsToField;
-  void DEFAULT_SOURCES;
+  // Suppress "declared but unused" TS warnings for Step 4 state until Task 16 lands
+  void refSort;
+  void text; void contribution; void verify; void followups;
+  void reportCollapsed; void deepReadProgress;
+  void goto; void setStep; void maxStep;
+  void streamDeepResearchFollowup;
+  void addHistory;
+  void EditableMarkdown; void FollowupPanel; void ReportExportBar;
+  void downloadCsv; void tsName; void useMemo; void useEffect;
+  void setRefSort;
+  void setText; void setContribution; void setVerify; void setFollowups;
+  void setReportCollapsed; void setDeepReadProgress;
+  void englishReport;
 
   return (
     <div className="module idea-wizard">
@@ -145,7 +223,7 @@ export default function ResearchModule({ goto }: { goto: Goto }) {
         <p>四步:研究问题 → 检索设置 → 文献复核 (含深读推荐) → 调研产出。</p>
       </header>
 
-      <div className="wiz-steps" data-testid="wiz-steps">
+      <div className="wiz-steps" data-testid="research-wiz-steps">
         {STEPS.map((s) => {
           const state = step === s.n ? "current" : s.n < step ? "done" : "todo";
           const clickable = s.n <= maxStep;
@@ -328,12 +406,98 @@ export default function ResearchModule({ goto }: { goto: Goto }) {
         </div>
       )}
 
-      {/* Step 3 & 4 待后续 Task 补;当 step 落在这里给个占位 */}
-      {step >= 3 && (
-        <div className="wiz-panel" data-testid={`research-wiz-panel-${step}`}>
-          <p>Step {step} 由后续 Task 实现,暂无内容。</p>
+      {/* Step 3 */}
+      {step === 3 && (
+        <div className="wiz-panel" data-testid="research-wiz-panel-3">
+          {status && <div className="status-line"><span className="spinner" /> {status}</div>}
+
+          <div className="deep-read-bar" data-testid="research-deep-read-bar">
+            <span>
+              AI 推荐深读 <strong>{Object.values(recommend).filter((r) => r.score === "high").length}</strong> 篇(⭐);
+              你已勾 <strong>{deepReadKeys.length}</strong> 篇,预计 ~
+              <strong>{estimateDeepReadTokens(uploadedRefs.filter((u) => deepReadKeys.includes(u.upload_id))).toLocaleString()}</strong> tokens
+            </span>
+            <button className="btn-ghost" onClick={() => {
+              const highs = Object.values(recommend).filter((r) => r.score === "high").map((r) => r.ref_key);
+              setDeepReadKeys([...new Set([...deepReadKeys, ...highs])]);
+            }}>全选推荐</button>
+            <button className="btn-ghost" onClick={() => setDeepReadKeys([])}>清空深读</button>
+          </div>
+
+          <LiteraturePicker
+            refs={refs}
+            evidenceByKey={(() => {
+              const m: Record<string, EvidenceItem & { _ev_status?: string }> = {};
+              const byUrl: Record<string, EvidenceItem> = {};
+              const byTitle: Record<string, EvidenceItem> = {};
+              for (const e of evidence) {
+                if (e.url) byUrl[e.url.replace(/\/+$/, "")] = e;
+                if (e.title) byTitle[e.title.trim().toLowerCase()] = e;
+              }
+              for (const r of refs) {
+                const ev = byUrl[(r.url || "").replace(/\/+$/, "")] || byTitle[(r.title || "").trim().toLowerCase()];
+                if (ev) m[refKeyOf(r as Reference & { upload_id?: string })] = ev as EvidenceItem & { _ev_status?: string };
+              }
+              return m;
+            })()}
+            selectedKeys={selectedKeys}
+            onSelectionChange={setSelectedKeys}
+            keyFn={(r) => refKeyOf(r as Reference & { upload_id?: string })}
+            exportFilename="深度调研-文献"
+          />
+
+          {/* Fallback deep-read grid: LiteraturePicker doesn't support extraColumns yet */}
+          <div className="deep-read-list" data-testid="research-deep-read-list">
+            <h4>深读候选 (勾选 = 将读全文)</h4>
+            <table className="deep-read-table">
+              <thead><tr><th>⭐</th><th>题名</th><th>深读</th></tr></thead>
+              <tbody>
+              {refs.map((r) => {
+                const key = refKeyOf(r as Reference & { upload_id?: string });
+                const rec = recommend[key];
+                return (
+                  <tr key={key}>
+                    <td title={rec?.reason || ""}>
+                      {rec?.score === "high" ? "⭐" : rec?.score === "medium" ? "○" : "—"}
+                    </td>
+                    <td>{r.title}</td>
+                    <td>
+                      <input
+                        type="checkbox"
+                        data-testid={`research-deep-${key}`}
+                        checked={deepReadKeys.includes(key)}
+                        onChange={(e) => {
+                          if (e.target.checked) setDeepReadKeys((prev) => [...new Set([...prev, key])]);
+                          else setDeepReadKeys((prev) => prev.filter((x) => x !== key));
+                        }}
+                      />
+                    </td>
+                  </tr>
+                );
+              })}
+              </tbody>
+            </table>
+          </div>
+
           <div className="wiz-nav">
-            <button className="btn-ghost" onClick={() => setStep(Math.max(1, step - 1))}>← 上一步</button>
+            <button className="btn-ghost" onClick={() => setStep(2)} data-testid="research-wiz-back-3">← 上一步</button>
+            {running ? (
+              <button className="btn-ghost" onClick={stop} data-testid="research-stop-btn">停止</button>
+            ) : (
+              <button className="btn-primary" onClick={runGenerate} disabled={selectedKeys.length === 0} data-testid="research-wiz-next-3">
+                开始文献调研 (勾选 {selectedKeys.length} 篇, 深读 {deepReadKeys.length} 篇) →
+              </button>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Step 4 (由 Task 16 实现) */}
+      {step === 4 && (
+        <div className="wiz-panel" data-testid="research-wiz-panel-4">
+          <p>Step 4 (调研产出) 由 Task 16 实现,暂无内容。</p>
+          <div className="wiz-nav">
+            <button className="btn-ghost" onClick={() => setStep(3)}>← 返回文献</button>
           </div>
         </div>
       )}
@@ -349,7 +513,8 @@ function NeedTitleList({ items, onResolved }: {
   return (
     <div className="need-title-list" data-testid="research-need-title-list">
       {items.map((it, idx) => (
-        <NeedTitleRow key={idx} file={it.file} err={it.err}
+        <NeedTitleRow key={`${it.file.name}-${it.file.size}-${it.file.lastModified}`}
+          file={it.file} err={it.err}
           onSkip={() => onResolved(idx, null)}
           onSubmitTitle={async (title) => {
             const info = await lookupTitle(title);

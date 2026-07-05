@@ -4804,3 +4804,18 @@ mark.ai-edit {
 }
 .settings-item:hover { background: var(--hover-bg, rgba(0,0,0,.05)); }
 .settings-toggle { justify-content: space-between; }
+
+.deep-read-bar {
+  display: flex; gap: 12px; align-items: center;
+  padding: 8px 12px; background: var(--panel-alt, #f5f5f5);
+  border-radius: 6px; margin-bottom: 8px; font-size: 13px;
+}
+.deep-read-list { margin-top: 16px; }
+.deep-read-list h4 { margin-bottom: 8px; font-size: 14px; color: var(--muted, #666); }
+.deep-read-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.deep-read-table th, .deep-read-table td {
+  border: 1px solid var(--border, #ddd);
+  padding: 6px 8px; text-align: left;
+}
+.deep-read-table th:first-child, .deep-read-table td:first-child { text-align: center; width: 40px; }
+.deep-read-table th:last-child, .deep-read-table td:last-child { text-align: center; width: 60px; }
