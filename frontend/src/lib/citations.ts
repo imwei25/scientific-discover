@@ -8,20 +8,25 @@ import type { Reference } from "./sse";
 const stripSlash = (u: string) => (u || "").replace(/\/+$/, "").trim();
 
 // 从 Reference 生成一条 GB/T 7714 风格著录（信息缺失则跳过对应片段，绝不编造）。
-function formatRef(n: number, r: Reference | { first_author?: string; year?: string; title?: string; journal?: string; url?: string }): string {
+function formatRef(n: number, r: Reference | { first_author?: string; year?: string; title?: string; journal?: string; url?: string; doi?: string }): string {
   const author = (r.first_author || "").trim();
   const title = (r.title || "").trim();
   const journal = (r.journal || "").trim();
   const year = (r.year || "").toString().trim();
+  const doi = (r as Reference).doi || "";
   const parts: string[] = [];
   if (author) parts.push(author.endsWith(".") ? author : author + ".");
-  if (title) parts.push(title.endsWith(".") ? `${title}[J].` : `${title}[J].`);
+  if (title) {
+    const t = title.endsWith(".") ? title.slice(0, -1) : title;
+    parts.push(`${t}[J].`);
+  }
   const tail: string[] = [];
   if (journal) tail.push(journal);
   if (year) tail.push(year);
   let line = `[${n}] ` + parts.join(" ");
   if (tail.length) line += " " + tail.join(", ") + ".";
-  if (r.url) line += ` ${r.url}`;
+  const link = doi ? `https://doi.org/${doi}` : r.url;
+  if (link) line += ` ${link}`;
   return line.replace(/\s+/g, " ").trim();
 }
 
@@ -30,7 +35,14 @@ function indexRefs(refs: Reference[]): { byUrl: Map<string, Reference>; byPmidTa
   const byUrl = new Map<string, Reference>();
   const byPmidTail = new Map<string, Reference>();
   for (const r of refs) {
-    if (r.url) byUrl.set(stripSlash(r.url), r);
+    if (r.url) {
+      byUrl.set(stripSlash(r.url), r);
+      // 对存储为非 PubMed URL 但有 PMID 信息的文献，从 URL 末尾尝试提取 PMID
+      if (!r.pmid) {
+        const m = stripSlash(r.url).match(/\/(\d{5,10})$/);
+        if (m) byPmidTail.set(m[1], r);
+      }
+    }
     if (r.pmid) byPmidTail.set(r.pmid, r);
   }
   return { byUrl, byPmidTail };
@@ -54,11 +66,20 @@ export function numberCitations(markdown: string, refs: Reference[], sectionTitl
     if (!ref) {
       for (const [pmid, r] of byPmidTail) if (u.endsWith("/" + pmid)) { ref = r; break; }
     }
+    // 额外尝试：从 LLM 引用的 PubMed URL 中提取 PMID，匹配存储为其他 URL 的文献
+    if (!ref) {
+      const pmidFromUrl = u.match(/pubmed\.ncbi\.nlm\.nih\.gov\/(\d+)$/)?.[1];
+      if (pmidFromUrl) ref = byPmidTail.get(pmidFromUrl);
+    }
     const key = ref ? stripSlash(ref.url || u) : u;
     if (!numByKey.has(key)) {
       numByKey.set(key, order.length + 1);
-      // 解析不到 Reference 时用链接文本兜底一条最小著录（作者/年从 label 猜）。
-      order.push({ key, ref: ref || { title: label, url } });
+      // 解析不到 Reference 时，从 label "Author et al., 2024" 提取作者/年兜底著录。
+      const fallback = (() => {
+        const m = label.match(/^(.+?),\s*(\d{4})$/);
+        return m ? { first_author: m[1].trim(), year: m[2], url } : { title: label, url };
+      })();
+      order.push({ key, ref: ref || fallback });
     }
     return numByKey.get(key)!;
   };

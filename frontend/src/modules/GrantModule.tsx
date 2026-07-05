@@ -64,18 +64,20 @@ const FUND_CATEGORY: Record<string, string> = {
 // 参考文献著录章节名(各类基金统一走 GB/T 7714 数字著录)。
 const refSectionTitle = (_gt: string) => "参考文献";
 
-function buildCover(opts: { grantType: string; projectName: string; periodStart: string; periodEnd: string }): string {
+function buildCover(opts: { grantType: string; projectName: string; periodStart: string; periodEnd: string; applicant: string; unit: string }): string {
   const title = COVER_TITLE[opts.grantType] || "科研项目申请书";
   const category = FUND_CATEGORY[opts.grantType] || "通用申请书";
   const s = opts.periodStart.trim();
   const e = opts.periodEnd.trim();
   const period = s || e ? `${s || "____"} — ${e || "____"}` : "[需申请人补充]";
   const name = opts.projectName.trim() || "[需申请人补充]";
+  const app = opts.applicant.trim() || "[需申请人补充]";
+  const ut = opts.unit.trim() || "[需申请人补充]";
   return [
     `# ${title}`, "",
     `| **资助类别** | ${category} |`, "| --- | --- |",
     `| **项目名称** | ${name} |`, `| **研究期限** | ${period} |`,
-    "| **申请人** | [需申请人补充] |", "| **依托单位** | [需申请人补充] |", "",
+    `| **申请人** | ${app} |`, `| **依托单位** | ${ut} |`, "",
   ].join("\n");
 }
 
@@ -121,6 +123,8 @@ export default function GrantModule({ goto }: { goto: Goto }) {
   const [grantType, setGrantType] = usePersistentState("grant:type", "general");
   const [periodStart, setPeriodStart] = usePersistentState("grant:periodStart", "");
   const [periodEnd, setPeriodEnd] = usePersistentState("grant:periodEnd", "");
+  const [applicant, setApplicant] = usePersistentState("grant:applicant", "");
+  const [unit, setUnit] = usePersistentState("grant:unit", "");
   const [refs, setRefs] = usePersistentState<Reference[]>("grant:refs", []);
   // 已抽取的核心发现（按 pickerKey 索引），来自找选题带入 / 之前跑过的抽取；picker 里复用避免重复调用。
   const [refsEvidence, setRefsEvidence] = usePersistentState<Record<string, EvidenceItem & { _ev_status?: string }>>("grant:evidence", {});
@@ -186,11 +190,6 @@ export default function GrantModule({ goto }: { goto: Goto }) {
   const text = fullDoc(sections);
   const hasInput = !!(title.trim() || report.trim() || pendingMaterials.length > 0);
   const effStyle = styleOn ? styleProfile : "";
-
-  const coverMd = useMemo(
-    () => buildCover({ grantType, projectName: scheme?.title || title, periodStart, periodEnd }),
-    [grantType, scheme?.title, title, periodStart, periodEnd],
-  );
 
   const citeInfo = useMemo(() => {
     const m: Record<string, CiteInfo> = {};
@@ -546,7 +545,7 @@ export default function GrantModule({ goto }: { goto: Goto }) {
   // 导出全文 = 封面 + 正文(引用编号化) + 参考文献。
   const exportDoc = async () => {
     const numbered = withNumberedReferences(text, refs, refSectionTitle(grantType));
-    const cover = buildCover({ grantType, projectName: scheme?.title || title, periodStart, periodEnd });
+    const cover = buildCover({ grantType, projectName: scheme?.title || title, periodStart, periodEnd, applicant, unit });
     return prepareForExport(cover + "\n" + numbered, "技术路线图/计划图");
   };
 
@@ -812,7 +811,19 @@ export default function GrantModule({ goto }: { goto: Goto }) {
               </div>
             </div>
             {docxErr && <div className="result-error">{docxErr}</div>}
-            {phase === "done" && sections.length > 0 && <div className="grant-cover" data-testid="grant-cover"><Markdown>{coverMd}</Markdown></div>}
+            {phase === "done" && sections.length > 0 && (
+              <div className="grant-cover" data-testid="grant-cover">
+                <table className="grant-cover-table">
+                  <tbody>
+                    <tr><td className="grant-cover-label">资助类别</td><td>{FUND_CATEGORY[grantType] || grantType}</td></tr>
+                    <tr><td className="grant-cover-label">项目名称</td><td><input className="grant-cover-input" value={scheme?.title || title} onChange={(e) => setTitle(e.target.value)} placeholder="[需申请人补充]" /></td></tr>
+                    <tr><td className="grant-cover-label">研究期限</td><td><input className="grant-cover-input grant-cover-period" value={periodStart} onChange={(e) => setPeriodStart(e.target.value)} placeholder="起，如 2026.01" /><span className="grant-period-sep"> — </span><input className="grant-cover-input grant-cover-period" value={periodEnd} onChange={(e) => setPeriodEnd(e.target.value)} placeholder="止，如 2028.12" /></td></tr>
+                    <tr><td className="grant-cover-label">申请人</td><td><input className="grant-cover-input" value={applicant} onChange={(e) => setApplicant(e.target.value)} placeholder="[需申请人补充]" /></td></tr>
+                    <tr><td className="grant-cover-label">依托单位</td><td><input className="grant-cover-input" value={unit} onChange={(e) => setUnit(e.target.value)} placeholder="[需申请人补充]" /></td></tr>
+                  </tbody>
+                </table>
+              </div>
+            )}
             <EditableMarkdown
               value={text}
               onSave={applyDoc}

@@ -4454,6 +4454,36 @@ mark.ai-edit {
   white-space: nowrap;
   background: var(--bg-soft, #fafafa);
 }
+.grant-cover-table {
+  width: 100%;
+  max-width: 520px;
+  margin: 8px auto 12px;
+  border-collapse: collapse;
+  font-size: 14px;
+}
+.grant-cover-table tr { border-bottom: 1px solid var(--line); }
+.grant-cover-label {
+  width: 30%;
+  white-space: nowrap;
+  padding: 6px 10px;
+  font-weight: 600;
+  background: var(--bg-soft, #fafafa);
+  color: var(--muted, #5b6675);
+}
+.grant-cover-table td:last-child { padding: 4px 6px; }
+.grant-cover-input {
+  width: 100%;
+  border: none;
+  background: transparent;
+  font-size: 14px;
+  color: var(--text);
+  padding: 2px 4px;
+  outline: none;
+  box-sizing: border-box;
+}
+.grant-cover-input:focus { background: var(--bg-soft, #f5f5f5); border-radius: 3px; }
+.grant-cover-input::placeholder { color: var(--muted); }
+.grant-cover-period { width: auto; min-width: 0; flex: 1; }
 
 /* ══════════════════════════════════════════════════════════════════
    找选题 · 分步向导（wizard）
