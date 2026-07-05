@@ -24,12 +24,17 @@ export async function loadMermaid() {
 
 // 渲染 ```mermaid 代码块(技术路线图/甘特图)。
 // 流式生成中代码不完整是常态: 渲染失败时保留上一次成功的图; 从未成功过则显示代码原文。
+// 100KB 上限: 超出直接不渲染, 避免恶意/异常长图 mermaid.parse 阻塞主线程数秒 (R10 DoS)
+const _MAX_MERMAID_CHARS = 100_000;
+
 export default function Mermaid({ code }: { code: string }) {
   const [svg, setSvg] = useState("");
   const [failed, setFailed] = useState(false);
   const lastGood = useRef("");
+  const tooLarge = code.length > _MAX_MERMAID_CHARS;
 
   useEffect(() => {
+    if (tooLarge) return;
     let alive = true;
     // 防抖 300ms: 避免流式期间每个 token 都触发一次渲染。
     const t = window.setTimeout(async () => {
@@ -50,7 +55,15 @@ export default function Mermaid({ code }: { code: string }) {
       alive = false;
       window.clearTimeout(t);
     };
-  }, [code]);
+  }, [code, tooLarge]);
+
+  if (tooLarge) {
+    return (
+      <div className="mermaid-note">
+        图表代码超过 {Math.round(_MAX_MERMAID_CHARS / 1000)}KB, 已跳过渲染以防主线程阻塞。请精简代码后重试。
+      </div>
+    );
+  }
 
   if (lastGood.current) {
     return (

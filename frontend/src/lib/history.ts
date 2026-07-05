@@ -21,7 +21,27 @@ export function getHistory(): HistoryEntry[] {
   }
 }
 
+// 并发写保护: 多个模块 useEffect 同帧调 addHistory 时, 各自读到旧 list 再 unshift
+// 会导致覆盖. 用一个模块级 flag 让后来者等前一次写完 (最多 5 帧, 极少数场景).
+let _writing = false;
+const _pending: (Omit<HistoryEntry, "id" | "time">)[] = [];
+
 export function addHistory(e: Omit<HistoryEntry, "id" | "time">): void {
+  if (_writing) {
+    _pending.push(e);
+    // 用 rAF 等前一次写完后再排队处理; 若浏览器无 rAF (SSR) 直接同步 fallback
+    if (typeof requestAnimationFrame === "function") {
+      requestAnimationFrame(() => {
+        while (_pending.length > 0) {
+          const next = _pending.shift()!;
+          addHistory(next);
+        }
+      });
+      return;
+    }
+  }
+  _writing = true;
+  try {
   const list = getHistory();
   const entry: HistoryEntry = {
     ...e,
@@ -49,6 +69,9 @@ export function addHistory(e: Omit<HistoryEntry, "id" | "time">): void {
       }
       trimmed = trimmed.slice(0, Math.ceil(trimmed.length / 2)); // 保留较新的一半(含最新)
     }
+  }
+  } finally {
+    _writing = false;
   }
 }
 

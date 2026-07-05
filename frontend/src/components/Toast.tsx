@@ -15,6 +15,13 @@ export default function ToastContainer() {
     // 记录每条 (message+kind) 的最近显示时刻; 只在 1 秒内视为重复, 之外照常再触发
     const lastShown = new Map<string, number>();
     const DEDUP_WINDOW_MS = 1000;
+    // 30 秒清理一次超过 30s 的 dedup 条目, 避免长会话下 map 只增不减 (R18 内存泄漏)
+    const gcInterval = setInterval(() => {
+      const now = Date.now();
+      for (const [k, ts] of lastShown) {
+        if (now - ts > 30_000) lastShown.delete(k);
+      }
+    }, 30_000);
 
     const onShow = (ev: Event) => {
       const detail = (ev as CustomEvent<ToastEntry>).detail;
@@ -76,6 +83,7 @@ export default function ToastContainer() {
       window.removeEventListener(_TOAST_EVENT, onShow);
       window.removeEventListener(_TOAST_DISMISS_EVENT, onDismiss);
       for (const tm of timers.values()) clearTimeout(tm);
+      clearInterval(gcInterval);
     };
   }, []);
 

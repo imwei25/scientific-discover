@@ -371,13 +371,24 @@ def _mask_phone(s: str) -> str:
 
 def _substr_mask(s: str) -> str:
     """对文本内所有 PHI 子串就地打码; 用于兜底混写单元格/自由文本。
-    只处理"确定性子类型"(身份证/手机/邮箱), 避免误伤姓名(需人工确认)。"""
+    确定性类型 (身份证/手机/邮箱/MRN/银行卡) 直接 mask; 姓名走 blocklist 后剩余
+    的高置信命中也 mask (避免"最后一道防线"漏姓名到 LLM)。"""
     def _id_sub(m):
         v = m.group(0)
         return _mask_id_card(v) if _id_card_valid(v) else v
     s = _RE_ID_CARD.sub(_id_sub, s)
     s = _RE_PHONE.sub(lambda m: _mask_phone(m.group(0)), s)
     s = _RE_EMAIL.sub("[已脱敏邮箱]", s)
+    # MRN / 银行卡 / 姓名: R14 已在 scan_text 里加了识别, 这里同步 mask
+    s = _RE_MRN_SUBSTR.sub(lambda m: m.group(0).split(m.group(1))[0] + "[已脱敏MRN]", s)
+    s = _RE_BANK.sub("[已脱敏银行卡]", s)
+    # 姓名: 命中 blocklist 的日常词跳过 (由 scan_text 相同逻辑保持一致)
+    def _name_sub(m):
+        v = m.group(0)
+        if v in _NAME_BLOCKLIST:
+            return v
+        return "[已脱敏姓名]"
+    s = _RE_NAME_SUBSTR.sub(_name_sub, s)
     return s
 
 

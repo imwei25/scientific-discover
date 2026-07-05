@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { streamRebuttal, ReviewComment } from "../lib/sse";
 import { reportLLMError } from "../lib/errorToast";
 import DiffView from "../components/DiffView";
-import { usePersistentState } from "../lib/usePersistentState";
+import { usePersistentState, readPersisted } from "../lib/usePersistentState";
 import { addHistory } from "../lib/history";
 import EditableMarkdown from "../components/EditableMarkdown";
 import { CanvasSlot } from "../components/Canvas";
@@ -158,12 +158,33 @@ export default function RebuttalModule() {
           onText={(t, name) => setReviews((prev) => (prev ? prev + "\n\n" : "") + `[${name}]\n` + t)}
         />
         <label className="field">
-          <span className="field-label">稿件全文（可选，强烈建议：便于精准定位修改处、避免泛泛而谈）</span>
+          <span className="field-label">
+            稿件全文（可选，强烈建议：便于精准定位修改处、避免泛泛而谈）
+            <button
+              type="button"
+              className="btn-ghost btn-sm"
+              data-testid="import-imrad-btn"
+              title="从「论文初稿」模块导入 imrad:draft"
+              style={{ marginLeft: 8 }}
+              onClick={() => {
+                const draft = (readPersisted<string>("imrad:draft", "") || "").trim();
+                if (!draft) {
+                  setStatus("未在「论文初稿」里检测到已生成的初稿。先去 Imrad 生成一版再回来。");
+                  window.setTimeout(() => setStatus((s) => s.startsWith("未在") ? "" : s), 5000);
+                  return;
+                }
+                if (manuscript.trim() && manuscript.trim() !== draft) {
+                  if (!window.confirm(`当前稿件框已有内容 (约 ${manuscript.trim().length} 字), 是否用 Imrad 里的初稿 (约 ${draft.length} 字) 覆盖?`)) return;
+                }
+                setManuscript(draft);
+              }}
+            >↩ 从论文初稿导入</button>
+          </span>
           <textarea
             data-testid="input-manuscript"
             value={manuscript}
             onChange={(e) => setManuscript(e.target.value)}
-            placeholder="可粘贴稿件正文，或用下方上传"
+            placeholder="可粘贴稿件正文，或用下方上传，也可点上方按钮从 Imrad 导入"
             rows={3}
           />
         </label>

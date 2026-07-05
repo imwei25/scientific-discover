@@ -34,6 +34,8 @@ export interface CommandPaletteProps {
 // 简单模糊评分: 优先全词包含, 然后子序列匹配。返回得分或 -1 (不匹配)。
 function fuzzyScore(q: string, text: string): number {
   if (!q) return 0;
+  // 极长 query 会让子序列匹配 O(|q|+|t|) 逐 keystroke 阻塞主线程; 直接拒绝
+  if (q.length > 64) return -1;
   const ql = q.toLowerCase();
   const tl = text.toLowerCase();
   if (tl === ql) return 1000;

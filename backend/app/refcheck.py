@@ -205,8 +205,13 @@ async def check_references(text: str) -> dict:
         parsed = await _parse_refs(text)
         if not parsed:
             return {"ok": False, "error": "未能从文本中识别出参考文献，请检查格式。"}
+        # 并发上限 4 (与 refsenrich 一致): 数十条 refs 时避免一次性打给 CrossRef 触发 429
+        sem = asyncio.Semaphore(4)
+        async def _throttled(it: dict) -> dict:
+            async with sem:
+                return await _verify_one(client, it)
         async with httpx.AsyncClient(timeout=httpx.Timeout(30.0)) as client:
-            items = await asyncio.gather(*[_verify_one(client, it) for it in parsed])
+            items = await asyncio.gather(*[_throttled(it) for it in parsed])
         items = list(items)
         _mark_duplicates(items)
         return {"ok": True, "items": items}

@@ -381,3 +381,16 @@ Round 18 (2026-07-05 T~21:00, cron 第十六次触发)
  · 附赠 UI 需求: 左上角两处手绘 SVG (侧栏 brand + 顶栏 mark) → <img src=/tellgen.png>;
                  首页动图下 "🖐 可拖动旋转" hint 删除
  · 验证: 15/15 PASS + pytest 202/202 保持
+
+Backlog batch (R18 与 R19 之间, 用户要求先清): 9 项
+ · B8 Rebuttal 加 "从论文初稿导入" 按钮 (readPersisted imrad:draft + confirm)
+ · B9 addHistory 加 _writing 互斥 + _pending rAF 队列 (原 30 条并发丢)
+ · C6 Toast lastShown map 30s GC 定时器 (原只增不减内存泄漏)
+ · C7 ImradModule → Journal 加 confirm + 摘要为空时截取前 600 字 (原可能整篇灌 abstract)
+ · C9 CommandPalette fuzzyScore q.length > 64 直接 -1 (原 O(n·m) 阻塞)
+ · C10 Dropzone handleMany 加 100MB 累计上限 (原多文件累加可 OOM)
+ · C12 Mermaid.tsx code.length > 100KB 直接不渲染, 显示提示 (原 mermaid.parse 阻塞)
+ · C13 refcheck check_references Semaphore(4) 节流 (原并发打 CrossRef 429)
+ · C14 redact_text 扩展: 在原 id/phone/email 之外补 MRN/银行卡/姓名 mask
+ · 跳过: C8 Grant reReview race (running guards + reset 已覆盖, 理论 race 无复现),
+        C11 RefIO menu Esc (需 spec 太大, 单独轮做), CanvasEditor undo (Tiptap 内部序列化)

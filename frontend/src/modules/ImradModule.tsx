@@ -469,7 +469,20 @@ export default function ImradModule({ goto }: { goto: Goto }) {
                   {draft && !running && <button className="btn-ghost" data-testid="export-md-btn" onClick={() => downloadText(tsName("论文初稿", "md"), draft)}>导出 Markdown</button>}
                   {draft && !running && <button className="btn-ghost" data-testid="export-docx-btn" onClick={downloadDocx} disabled={docxBusy}>{docxBusy ? "导出中…" : "导出 Word"}</button>}
                   {draft && !running && (
-                    <button className="btn-ghost" data-testid="imrad-to-journal-btn" title="带着这篇初稿去『智能选刊』匹配期刊" onClick={() => goto("journal", { "journal:abstract": abstract || draft })}>用此初稿去选刊 →</button>
+                    <button className="btn-ghost" data-testid="imrad-to-journal-btn" title="带着这篇初稿去『智能选刊』匹配期刊" onClick={() => {
+                      // 优先摘要, 摘要空则截取初稿前段避免整篇灌进期刊摘要框
+                      const payload = (abstract && abstract.trim())
+                        ? abstract
+                        : draft.slice(0, 600);
+                      const existing = (readPersisted<string>("journal:abstract", "") || "").trim();
+                      if (existing && existing !== payload.trim()) {
+                        const ok = window.confirm(
+                          `智能选刊页已有摘要 (约 ${existing.length} 字), 是否用当前${abstract && abstract.trim() ? "论文摘要" : "初稿前段"}覆盖?`,
+                        );
+                        if (!ok) return;
+                      }
+                      goto("journal", { "journal:abstract": payload });
+                    }}>用此初稿去选刊 →</button>
                   )}
                   {draft && !running && (
                     <button className="btn-ghost" data-testid="imrad-to-format-btn" title="带着这篇初稿去『期刊排版』重排导出" onClick={() => {

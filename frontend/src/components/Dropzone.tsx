@@ -77,6 +77,13 @@ export default function Dropzone({ testId, accept, label, hint, mode, compact, m
     const list = files ? Array.from(files) : [];
     if (list.length === 0) return;
     if (list.length === 1) return handle(list[0]);
+    // 总量上限 100MB, 防止用户拖 20 个 25MB PDF 累计打爆内存 (R6 P2)
+    const TOTAL_CAP = 100 * 1024 * 1024;
+    const totalBytes = list.reduce((s, f) => s + f.size, 0);
+    if (totalBytes > TOTAL_CAP) {
+      setErr(`所选文件总大小 ${(totalBytes / 1024 / 1024).toFixed(1)}MB 超过 100MB 上限, 请分批导入。`);
+      return;
+    }
     let ok = 0;
     for (const f of list) {
       await handle(f);
