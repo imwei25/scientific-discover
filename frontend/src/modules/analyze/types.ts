@@ -29,6 +29,46 @@ export interface ForestRow {
 }
 export const emptyForestRow = (): ForestRow => ({ study: "", n_treat: "", event_treat: "", n_ctrl: "", event_ctrl: "" });
 
+export type ForestFieldKey = "study" | "n_treat" | "event_treat" | "n_ctrl" | "event_ctrl";
+export interface ForestRowIssue {
+  field: ForestFieldKey;
+  message: string;
+}
+
+// 判空: 一行所有字段都空视为占位行, 不校验也不提交
+export function isForestRowBlank(r: ForestRow): boolean {
+  return !r.study.trim() && !r.n_treat && !r.event_treat && !r.n_ctrl && !r.event_ctrl;
+}
+
+/**
+ * 前端预校验一行数据. 覆盖后端 forest_plot 已知会崩的输入 (event > n, 样本量 <= 0 等),
+ * 让用户在提交前就能看到具体哪一格错了, 而不是等后端抛 ValueError 再兜底显示"生成失败"。
+ */
+export function validateForestRow(r: ForestRow): ForestRowIssue[] {
+  const issues: ForestRowIssue[] = [];
+  if (isForestRowBlank(r)) return issues;
+  if (!r.study.trim()) issues.push({ field: "study", message: "研究名不能为空" });
+
+  const nT = Number(r.n_treat);
+  const eT = Number(r.event_treat);
+  const nC = Number(r.n_ctrl);
+  const eC = Number(r.event_ctrl);
+
+  if (r.n_treat === "" || !Number.isFinite(nT) || nT <= 0)
+    issues.push({ field: "n_treat", message: "治疗 N 必须 > 0" });
+  if (r.n_ctrl === "" || !Number.isFinite(nC) || nC <= 0)
+    issues.push({ field: "n_ctrl", message: "对照 N 必须 > 0" });
+  if (r.event_treat === "" || !Number.isFinite(eT) || eT < 0)
+    issues.push({ field: "event_treat", message: "治疗事件必须 ≥ 0" });
+  if (r.event_ctrl === "" || !Number.isFinite(eC) || eC < 0)
+    issues.push({ field: "event_ctrl", message: "对照事件必须 ≥ 0" });
+  if (Number.isFinite(nT) && nT > 0 && Number.isFinite(eT) && eT > nT)
+    issues.push({ field: "event_treat", message: `治疗事件(${eT}) 不能大于 治疗 N(${nT})` });
+  if (Number.isFinite(nC) && nC > 0 && Number.isFinite(eC) && eC > nC)
+    issues.push({ field: "event_ctrl", message: `对照事件(${eC}) 不能大于 对照 N(${nC})` });
+  return issues;
+}
+
 // 森林图结果
 export interface ForestSummary {
   pooled: number;

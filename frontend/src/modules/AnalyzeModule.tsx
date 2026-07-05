@@ -72,6 +72,16 @@ export default function AnalyzeModule({ goto }: { goto: Goto }) {
           padding: 6px 8px; border: 1px solid var(--line, #e3e8ef); border-radius: 6px;
           font-size: 13px; min-width: 0;
         }
+        .forest-row input.is-invalid {
+          border-color: var(--bad, #c84030);
+          background: #fff5f4;
+        }
+        .forest-row-wrap { display: flex; flex-direction: column; gap: 2px; }
+        .forest-row-issues {
+          display: flex; flex-wrap: wrap; gap: 8px;
+          font-size: 11.5px; color: var(--bad, #c84030);
+          padding: 0 4px 2px 4px;
+        }
         .forest-row .row-x {
           width: 28px; height: 28px; border: none; background: transparent; cursor: pointer;
           color: var(--faint, #5b6675); border-radius: 4px;

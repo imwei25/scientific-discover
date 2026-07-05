@@ -143,7 +143,7 @@ export default function RefIO({ currentRefs, onImport, exportFilename = "referen
         >
           {busy === "import" ? "导入中…" : "📥 导入文献"}
         </button>
-        <div className="refio-export-wrap" style={{ position: "relative", display: "inline-block" }}>
+        <div className="refio-export-wrap" style={{ position: "relative" }}>
           <button
             className="btn-secondary"
             onClick={() => setMenuOpen((v) => !v)}

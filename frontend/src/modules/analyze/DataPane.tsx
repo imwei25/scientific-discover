@@ -16,6 +16,8 @@ import {
   ForestResult,
   KMResult,
   ROCResult,
+  isForestRowBlank,
+  validateForestRow,
 } from "./types";
 import UploadArea from "./UploadArea";
 import ForestEditor from "./ForestEditor";
@@ -306,17 +308,26 @@ export default function DataPane({ goto }: { goto: Goto }) {
   // ─── 森林图: 调 /api/analyze/forest ───────────────────────────
   const runForest = async () => {
     if (forestBusy) return;
-    const studies = forestRows
-      .filter((r) => r.study.trim())
-      .map((r) => ({
-        study: r.study.trim(),
-        n_treat: Number(r.n_treat) || 0,
-        event_treat: Number(r.event_treat) || 0,
-        n_ctrl: Number(r.n_ctrl) || 0,
-        event_ctrl: Number(r.event_ctrl) || 0,
-      }));
+    // 只对非全空行做校验; 全空行视为占位, 直接跳过
+    const nonBlank = forestRows.map((r, i) => ({ r, i })).filter(({ r }) => !isForestRowBlank(r));
+    const rowIssues = nonBlank.map(({ r, i }) => ({ i, issues: validateForestRow(r) }));
+    const badRows = rowIssues.filter(({ issues }) => issues.length > 0);
+    if (badRows.length > 0) {
+      const lines = badRows.map(({ i, issues }) =>
+        `第 ${i + 1} 行: ${issues.map((x) => x.message).join("; ")}`,
+      );
+      setForestErr(`请修正后再生成:\n${lines.join("\n")}`);
+      return;
+    }
+    const studies = nonBlank.map(({ r }) => ({
+      study: r.study.trim(),
+      n_treat: Number(r.n_treat) || 0,
+      event_treat: Number(r.event_treat) || 0,
+      n_ctrl: Number(r.n_ctrl) || 0,
+      event_ctrl: Number(r.event_ctrl) || 0,
+    }));
     if (studies.length < 2) {
-      setForestErr("至少需要 2 项研究才能合并");
+      setForestErr("至少需要 2 项研究才能合并 (每行需填写研究名 + 4 个数值)");
       return;
     }
     setForestBusy(true);
@@ -329,8 +340,12 @@ export default function DataPane({ goto }: { goto: Goto }) {
         body: JSON.stringify({ studies, effect: forestEffect, format: chartFormat }),
       });
       if (!resp.ok) throw new Error(`服务返回错误 ${resp.status}`);
-      const data: ForestResult = await resp.json();
-      setForestResult(data);
+      const data = await resp.json();
+      if (!data.ok || !data.summary) {
+        const parts = [data.error, data.detail].filter(Boolean);
+        throw new Error(parts.length ? parts.join(" — ") : "森林图生成失败");
+      }
+      setForestResult(data as ForestResult);
       goStage2();
     } catch (e) {
       setForestErr(`生成失败: ${(e as Error).message}`);
@@ -358,8 +373,11 @@ export default function DataPane({ goto }: { goto: Goto }) {
       if (kmGroupCol) fd.append("group_col", kmGroupCol);
       const resp = await fetch(apiUrl("/api/analyze/km"), { method: "POST", body: fd });
       if (!resp.ok) throw new Error(`服务返回错误 ${resp.status}`);
-      const data: KMResult = await resp.json();
-      setKmResult(data);
+      const data = await resp.json();
+      if (!data.ok || typeof data.logrank_p !== "number") {
+        throw new Error(data.error || data.detail || "KM 曲线生成失败");
+      }
+      setKmResult(data as KMResult);
       goStage2();
     } catch (e) {
       setKmErr(`生成失败: ${(e as Error).message}`);
@@ -386,8 +404,11 @@ export default function DataPane({ goto }: { goto: Goto }) {
       fd.append("y_score_col", rocYScoreCol);
       const resp = await fetch(apiUrl("/api/analyze/roc"), { method: "POST", body: fd });
       if (!resp.ok) throw new Error(`服务返回错误 ${resp.status}`);
-      const data: ROCResult = await resp.json();
-      setRocResult(data);
+      const data = await resp.json();
+      if (!data.ok || typeof data.auc !== "number") {
+        throw new Error(data.error || data.detail || "ROC 曲线生成失败");
+      }
+      setRocResult(data as ROCResult);
       goStage2();
     } catch (e) {
       setRocErr(`生成失败: ${(e as Error).message}`);
@@ -575,7 +596,9 @@ export default function DataPane({ goto }: { goto: Goto }) {
         )}
       </div>
       {/* 校验/生成错误留在第一阶段 */}
-      {chartType === "forest" && forestErr && <div className="result-error" data-testid="forest-error">{forestErr}</div>}
+      {chartType === "forest" && forestErr && (
+        <div className="result-error" data-testid="forest-error" style={{ whiteSpace: "pre-wrap" }}>{forestErr}</div>
+      )}
       {chartType === "km" && kmErr && <div className="result-error" data-testid="km-error">{kmErr}</div>}
       {chartType === "roc" && rocErr && <div className="result-error" data-testid="roc-error">{rocErr}</div>}
       </div>
