@@ -495,13 +495,13 @@ test("找选题: 追问追加问答 + 按意见修改报告", async ({ page }) =
   await expect(page.getByTestId("result-text")).toContainText("原始报告");
   // 追问: 追加问答, 不改报告
   await page.getByTestId("followup-input").fill("第1篇的结论是什么？");
-  await page.getByTestId("ask-btn").click();
-  await expect(page.getByTestId("qa-list")).toContainText("第1篇的结论是什么？");
-  await expect(page.getByTestId("qa-list")).toContainText("这是针对追问的回答");
+  await page.getByTestId("followup-ask").click();
+  await expect(page.getByTestId("followup-list")).toContainText("第1篇的结论是什么？");
+  await expect(page.getByTestId("followup-list")).toContainText("这是针对追问的回答");
   await expect(page.getByTestId("result-text")).toContainText("原始报告"); // 报告未被改
   // 修改: 替换报告
   await page.getByTestId("followup-input").fill("精简为3个选题");
-  await page.getByTestId("revise-btn").click();
+  await page.getByTestId("followup-revise").click();
   await expect(page.getByTestId("result-text")).toContainText("修改后的报告");
 });
 

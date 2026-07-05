@@ -968,6 +968,7 @@ export default function IdeaModule({ goto }: { goto: Goto }) {
           {text && !running && (
             <FollowupPanel
               testId="followup"
+              placeholder="例如：第 3 篇的样本量是多少？/ 请把候选选题三改成偏机制研究 / 研究空白这部分再具体些"
               followups={followups}
               onAddFollowup={(item) => setFollowups((prev) => [...prev, item])}
               onReviseReport={setText}

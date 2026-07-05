@@ -27,6 +27,7 @@ interface Props {
   englishReport: boolean;
   disabled?: boolean;
   testId?: string;
+  placeholder?: string;
 }
 
 export default function FollowupPanel(props: Props) {
@@ -34,6 +35,7 @@ export default function FollowupPanel(props: Props) {
     followups, onAddFollowup, onReviseReport, onVerifyUpdate,
     streamFn, currentReport, references, evidence, englishReport,
     disabled, testId = "followup",
+    placeholder = "例如: 第 3 篇的样本量是多少? / 请把结论段扩写一些",
   } = props;
 
   const [input, setInput] = useState("");
@@ -77,7 +79,7 @@ export default function FollowupPanel(props: Props) {
     <div className="followup" data-testid={testId}>
       <div className="followup-head">追问 / 修改意见</div>
       <p className="followup-tip">
-        可针对某篇文献或某条结论追问, 或提出意见让 AI 修订报告。回答仍只基于本次检索到的真实文献。
+        可针对某篇文献或某条结论追问，或提出意见让 AI 修订报告。回答仍只基于本次检索到的真实文献。
       </p>
       {followups.length > 0 && (
         <div className="qa-list" data-testid={`${testId}-list`}>
@@ -98,7 +100,7 @@ export default function FollowupPanel(props: Props) {
         data-testid={`${testId}-input`}
         value={input}
         onChange={(e) => setInput(e.target.value)}
-        placeholder="例如: 第 3 篇的样本量是多少? / 请把结论段扩写一些"
+        placeholder={placeholder}
         rows={2}
         disabled={running}
       />
