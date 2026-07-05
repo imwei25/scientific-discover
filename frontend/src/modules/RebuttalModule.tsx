@@ -190,11 +190,12 @@ export default function RebuttalModule() {
           </select>
         </label>
         <label className="field">
-          <span className="field-label">回复轮次（会在信件抬头标注 R1/R2/R3）</span>
+          <span className="field-label">回复轮次（会在信件抬头标注 R1/R2/R3/R4）</span>
           <select data-testid="input-round" value={round} onChange={(e) => setRound(e.target.value)}>
             <option value="R1">R1（首轮返修）</option>
             <option value="R2">R2（第二轮返修）</option>
             <option value="R3">R3（第三轮返修）</option>
+            <option value="R4">R4（第四轮返修）</option>
           </select>
         </label>
         <div className="form-actions">

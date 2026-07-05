@@ -312,16 +312,16 @@ async def rebuttal(inputs: dict) -> AsyncIterator[tuple[str, dict]]:
         truncated = len(manuscript) > _MANUSCRIPT_TRUNC
 
         if not n:
-            # 没识别到任何条目: 直接给一段提示, 而不是让 LLM 自由发挥编造 #1..#N
+            # 没识别到任何条目: 走 error 事件而非 delta 流.
+            # 原来当作正常输出 delta 到前端 → 用户"复制/导出 Word"会把这段提示当回复信落盘;
+            # 改成 error 让前端明确失败, 不会把提示误存进 letter.
             hint = (
                 "未能从审稿意见中拆解出可编号的条目, 请检查原文格式后重试, 或人工拆条后再生成。"
                 if lang != "en"
                 else "No numbered comments could be parsed from the reviewer letter. "
                      "Please check the format and retry, or split the comments manually."
             )
-            for ch in hint:
-                yield ("delta", {"text": ch})
-            yield ("done", {})
+            yield ("error", {"message": hint})
             return
 
         status_msg = f"已识别 {n} 条意见"

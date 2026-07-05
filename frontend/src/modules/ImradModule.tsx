@@ -217,8 +217,21 @@ export default function ImradModule({ goto }: { goto: Goto }) {
     if (plan) parts.push(`[实验方案]\n${plan}`);
     if (sap) parts.push(`[SAP]\n${sap}`);
     if (concl) parts.push(`[数据分析结论]\n${concl}`);
-    if (!parts.length) return;
+    if (!parts.length) {
+      // 静默 no-op 会让用户以为按钮坏了; 显式告知未检测到成果
+      setStatus("未在「找选题 / 实验规划 / SAP / 数据分析」里检测到已保存的成果, 可先去这些模块生成产出再回来导入。");
+      window.setTimeout(() => setStatus((s) => (s.startsWith("未在") ? "" : s)), 6000);
+      return;
+    }
     setMaterials((p) => (p ? p + "\n\n" : "") + parts.join("\n\n"));
+    const names = [
+      idea && "选题调研",
+      plan && "实验方案",
+      sap && "SAP",
+      concl && "数据分析结论",
+    ].filter(Boolean).join(" / ");
+    setStatus(`已导入: ${names}`);
+    window.setTimeout(() => setStatus((s) => (s.startsWith("已导入") ? "" : s)), 4000);
   };
 
   // Diff for re-generate

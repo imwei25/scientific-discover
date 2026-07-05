@@ -299,7 +299,23 @@ export function ProjectProvider({ children }: { children: ReactNode }) {
         if (cancelled) return;
         if (list.length > 0) {
           setProjects(list);
-          await switchTo(list[0].id);
+          // switchTo 遇 404 (幽灵项目) 会抛; 依次尝试候选, 避免 current=null 死角.
+          let switched = false;
+          for (const candidate of list) {
+            try {
+              await switchTo(candidate.id);
+              switched = true;
+              break;
+            } catch {
+              // 该候选无法拉起, 继续下一个 (常见于旧幽灵条目)
+            }
+          }
+          if (!switched) {
+            // 全部候选都拉不起, 走"没有项目"分支创建一个新的, 避免留在 offline 死角
+            const created = await api.create(newId(), "未命名项目");
+            await refreshList();
+            setCurrent({ id: created.id, name: created.name, updated_at: created.updated_at });
+          }
         } else {
           // 检测老 localStorage 数据
           const legacyState = dumpStateFromLocalStorage();
@@ -321,6 +337,8 @@ export function ProjectProvider({ children }: { children: ReactNode }) {
           setCurrent({ id: created.id, name: created.name, updated_at: created.updated_at });
         }
         setOffline(false);
+        // 幽灵回收: 若 list_projects 里有幽灵条目, 后端已清; 前端也再 refresh 一次列表让 UI 同步.
+        await refreshList().catch(() => {});
       } catch {
         setOffline(true);
       } finally {

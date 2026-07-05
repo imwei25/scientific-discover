@@ -223,8 +223,24 @@ def get_project(pid: str) -> Optional[dict[str, Any]]:
 
 def list_projects() -> list[dict[str, Any]]:
     idx = list(_load_index())
-    idx.sort(key=lambda x: x["updated_at"], reverse=True)
-    return idx
+    # 过滤幽灵条目: 索引里有但磁盘上项目文件已丢失 (旧版并发写留下的孤儿).
+    # 顺手把幽灵从缓存里踢掉并回写 index.json, 避免下次重启前一直挂着.
+    alive: list[dict[str, Any]] = []
+    dropped: list[str] = []
+    for m in idx:
+        if _project_path(m["id"]).exists():
+            alive.append(m)
+        else:
+            dropped.append(m["id"])
+    if dropped:
+        globals()["_index_cache"] = list(alive)
+        try:
+            _save_index()
+        except Exception:  # noqa: BLE001
+            pass
+        print(f"[projects] 清理 {len(dropped)} 条幽灵索引: {dropped}", flush=True)
+    alive.sort(key=lambda x: x["updated_at"], reverse=True)
+    return alive
 
 
 def update_state(pid: str, state: dict[str, Any], history: list[dict[str, Any]]) -> dict[str, Any]:

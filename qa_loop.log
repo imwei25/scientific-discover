@@ -341,3 +341,21 @@ Round 16 hotfix (2026-07-05 T~20:30): 用户报"实验规划模块进入时 Reac
    - projects.py get_project: JSONDecodeError 时尝试截到第一个平衡 } 恢复;
      仍失败视为 None (route 走 404); 服务端日志留痕
  · 已 build 前端 + 手动清理 index.json 里指向已删项目的孤儿条目
+
+Round 17 (2026-07-05 T~20:30, cron 第十五次触发)
+ · 测过: React #130 全项目 latent hunt (Markdown 是唯一), 后端 orphan/index 一致性,
+         Rebuttal 深度 (parse 边界), Imrad importFromModules 静默
+ · 发现 P1:
+   1. list_projects 返幽灵条目 (idx cache 不校验磁盘文件存在)
+   2. 前端 boot switchTo 失败陷 current=null 死角 → 静默丢用户数据
+   3. Imrad importFromModules 空 sources 静默 no-op (按钮像坏)
+   4. rebuttal 0 comments 用 delta yield 提示 → 用户导出成假回复信
+   5. RebuttalModule round 缺 R4 选项
+ · 修复(5 项):
+   - projects.py list_projects: 过滤磁盘缺失的孤儿索引条目 + 持久化清理
+   - projects.tsx boot: switchTo 依次尝试候选, 全失败创建新项目, 避免 offline+null
+   - ImradModule.tsx importFromModules: 空 sources 用 setStatus 明确告知 + 成功列出源
+   - rebuttal.py: 0 comments 改 error 事件, 不再流式假 delta 让用户误存
+   - RebuttalModule.tsx round <select>: 加 R4 选项 (与后端 _VALID_ROUNDS 对齐)
+ · 验证: 10/10 PASS + pytest test_projects 17/17 保持零回归
+ · 亮点: 全项目 React #130 hunt 结果 - Markdown 之外无同型潜藏点
