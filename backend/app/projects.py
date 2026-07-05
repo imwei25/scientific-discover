@@ -72,9 +72,26 @@ def _project_path(pid: str) -> Path:
 
 
 def project_data_dir(project_id: Optional[str]) -> Path:
-    """返回单项目专属数据目录 (深度调研缓存等落盘用). project_id 为空时用 'default' 目录."""
-    pid = project_id or "default"
-    d = _data_dir() / "project_data" / pid
+    """返回单项目专属数据目录 (深度调研缓存等落盘用).
+
+    安全性: project_id 必须是合法 UUID (与 _validate_uuid 一致), 否则拒绝, 防止
+    ``../../../../Windows/Temp/pwn`` 之类的路径穿透导致目录/文件写入 data_dir 之外。
+    project_id 为 None 时使用固定字面量 "default" (非用户输入)。
+    """
+    if project_id is None:
+        pid = "default"
+    else:
+        # 非法 id 直接拒, 不静默 sanitize (那样只是隐藏攻击痕迹)
+        _validate_uuid(project_id)
+        pid = project_id
+    base = _data_dir().resolve()
+    d = (base / "project_data" / pid).resolve()
+    # belt-and-suspenders: 即便 _validate_uuid 通过, 也确认解析后的路径没跳出 base
+    # (例如未来有 symlink/junction 或 _data_dir 自身被恶意 mount 到别处)
+    try:
+        d.relative_to(base)
+    except ValueError as e:
+        raise ValueError(f"invalid project id (path escapes data_dir): {project_id!r}") from e
     d.mkdir(parents=True, exist_ok=True)
     return d
 

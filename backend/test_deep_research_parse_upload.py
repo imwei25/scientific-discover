@@ -64,3 +64,27 @@ def test_parse_upload_low_confidence_when_no_title(tmp_path, monkeypatch):
     assert resp.status_code == 200, resp.text
     data = resp.json()
     assert data["parse_confidence"] == "low"
+
+
+def test_parse_upload_rejects_traversal(tmp_path, monkeypatch):
+    """恶意 project_id (含 .. / 绝对路径) 必须被拒, 不得穿透到 data_dir 之外。"""
+    resp = client.post(
+        "/api/deep_research/parse_upload",
+        files={"file": ("study.pdf", b"stub", "application/pdf")},
+        data={"project_id": "../../../../evil"},
+    )
+    assert resp.status_code == 400
+    body = resp.json()
+    assert body["ok"] is False
+
+
+def test_parse_upload_rejects_non_uuid_project_id(tmp_path, monkeypatch):
+    """非 UUID 格式的 project_id 应被 _validate_uuid 拒掉 (与其他端点一致)."""
+    resp = client.post(
+        "/api/deep_research/parse_upload",
+        files={"file": ("study.pdf", b"stub", "application/pdf")},
+        data={"project_id": "not-a-uuid"},
+    )
+    assert resp.status_code == 400
+    body = resp.json()
+    assert body["ok"] is False

@@ -22,7 +22,11 @@ async def parse_upload_ep(
             status_code=413,
             detail=f"文件超过 {MAX_UPLOAD_BYTES // (1024 * 1024)}MB 上限",
         )
-    result = await dr.parse_upload(file.filename or "upload", content, project_id)
+    try:
+        result = await dr.parse_upload(file.filename or "upload", content, project_id)
+    except ValueError as e:
+        # project_data_dir 对非法 project_id (如 ../../.. 路径穿透) 抛 ValueError
+        return JSONResponse(status_code=400, content={"ok": False, "error": str(e)})
     if not result.get("ok"):
         return JSONResponse(status_code=400, content=result)
     return JSONResponse(result)
