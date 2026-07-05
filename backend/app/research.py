@@ -438,13 +438,22 @@ async def _extract_evidence(field: str, papers: list[dict], batch: int = 8) -> d
 
 
 def _ref_key(p: dict) -> str:
-    """Stable key for a ref: pmid > doi > url. Matches frontend evidenceByKey."""
+    """Stable key for a ref: pmid > doi > url. Matches frontend evidenceByKey.
+    DOI/URL 归一化: 消除大小写和尾斜杠差异, 让 RefIO/Zotero 导入的文献能与
+    检索池的 evidence 匹配上 (原来 raw doi/url 大小写不一致 badge 全空)."""
     if p.get("pmid"):
-        return f"pmid:{p['pmid']}"
+        return f"pmid:{str(p['pmid']).strip()}"
     if p.get("doi"):
-        return f"doi:{p['doi']}"
+        # 去掉 https://doi.org/ 前缀 + 全 lowercase (DOI 官方声明大小写无关)
+        d = str(p["doi"]).strip().lower()
+        for prefix in ("https://doi.org/", "http://doi.org/", "doi.org/", "doi:"):
+            if d.startswith(prefix):
+                d = d[len(prefix):]
+                break
+        return f"doi:{d}"
     if p.get("url"):
-        return f"url:{p['url']}"
+        u = str(p["url"]).strip().rstrip("/").lower()
+        return f"url:{u}"
     return f"title:{(p.get('title') or '').strip()[:60]}"
 
 

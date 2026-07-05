@@ -779,6 +779,7 @@ try:
         except Exception:
             continue
         data, ext = disp, "png"
+        downgraded = False
         try:
             be = io.BytesIO()
             if _FMT in ("svg", "pdf"):
@@ -789,8 +790,14 @@ try:
                 ext = "png"
             data = base64.b64encode(be.getvalue()).decode()
         except Exception:
+            # SVG/PDF 保存失败 → 只有 120dpi 展示 PNG. 显式告知前端, 别静默让用户以为拿到了矢量.
             data, ext = disp, "png"
-        charts.append({"png": disp, "data": data, "ext": ext})
+            downgraded = (_FMT in ("svg", "pdf"))
+        item = {"png": disp, "data": data, "ext": ext}
+        if downgraded:
+            item["downgraded_from"] = _FMT
+            item["note"] = f"高清 {_FMT.upper()} 生成失败, 已回退为 120dpi PNG (仅适合展示, 不适合投稿)。"
+        charts.append(item)
 except Exception:
     pass
 result["charts"] = charts

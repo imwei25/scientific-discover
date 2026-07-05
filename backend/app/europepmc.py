@@ -82,7 +82,11 @@ async def search_epmc(queries: list[str], per_query: int = 6, cap: int = 18, fil
     collected: list[dict] = []
     network_errors = 0
     queries_tried = list(queries)
-    async with httpx.AsyncClient(timeout=httpx.Timeout(30.0)) as client:
+    # 用 User-Agent 标识本工具 (Europe PMC 无 mailto 但 UA 帮助追踪流量, 避免被误当匿名爬虫)
+    from .config import settings as _settings
+    email = getattr(_settings, "ncbi_email", "") or ""
+    ua = f"research-assistant/1.0 (mailto:{email})" if email else "research-assistant/1.0 (https://github.com/imwei25/scientific-discover)"
+    async with httpx.AsyncClient(timeout=httpx.Timeout(30.0), headers={"User-Agent": ua}) as client:
         for q in queries:
             try:
                 results = await _search_one(client, q + suffix, per_query)

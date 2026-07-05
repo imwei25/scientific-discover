@@ -106,11 +106,21 @@ export function openInOverleaf(
 }
 
 // 下载 base64 编码的二进制(图表 png/svg/pdf 等)。
+// atob 对超长字符串在部分浏览器会抛 InvalidCharacterError, 加 try/catch 弹 toast 而非黑屏.
 export function downloadBase64(filename: string, b64: string, mime: string): void {
-  const bin = atob(b64);
-  const bytes = new Uint8Array(bin.length);
-  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
-  downloadBlob(filename, new Blob([bytes], { type: mime }));
+  try {
+    // 用 Uint8Array.from + charCodeAt 少一次分配, 减小峰值内存
+    const bytes = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
+    downloadBlob(filename, new Blob([bytes], { type: mime }));
+  } catch (e) {
+    // 动态 import 避免循环依赖; toast lib 独立于 download
+    import("./toast").then(({ showToast }) => {
+      showToast({
+        kind: "error",
+        message: `下载失败: 图片过大或数据损坏 (${(e as Error).message.slice(0, 60)}). 请尝试导出较小尺寸或分次下载.`,
+      });
+    }).catch(() => { /* ignore */ });
+  }
 }
 
 const EXT_MIME: Record<string, string> = {

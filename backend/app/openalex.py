@@ -128,7 +128,10 @@ async def search_openalex(queries: list[str], per_query: int = 6, cap: int = 18,
     collected: list[dict] = []
     network_errors = 0
     queries_tried = list(queries)
-    async with httpx.AsyncClient(timeout=httpx.Timeout(30.0)) as client:
+    # User-Agent 标识本工具, 即使无 mailto 也让服务方能追踪流量来源, 避免误当匿名爬虫
+    email = getattr(settings, "ncbi_email", "") or ""
+    ua = f"research-assistant/1.0 (mailto:{email})" if email else "research-assistant/1.0 (https://github.com/imwei25/scientific-discover)"
+    async with httpx.AsyncClient(timeout=httpx.Timeout(30.0), headers={"User-Agent": ua}) as client:
         for q in queries:
             try:
                 results = await _search_one(client, q, per_query, filter_extra)

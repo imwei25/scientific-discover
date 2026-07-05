@@ -312,34 +312,61 @@ def _merge_all(source_lists: list[list[dict]], cap: int, terms: set[str] | None 
     terms 给定时参与词面相关性排序; 更正/勘误/撤稿声明/评论等非研究条目在此剔除。
     """
     merged: dict[str, dict] = {}
+    # 反向索引: pmid / doi / title_key → primary key. 三层保证同篇文献不会因不同源提供
+    # 不同 id 组合 (PubMed 只 pmid + OpenAlex 只 doi + 两者都掉 id 只剩标题) 而重复入池.
+    by_pmid: dict[str, str] = {}
+    by_doi: dict[str, str] = {}
+    by_title: dict[str, str] = {}
     for papers in source_lists:
         for pos, p in enumerate(papers):
-            if _is_noise(p):  # 去噪: 丢弃更正/勘误/评论等非研究型条目
+            if _is_noise(p):
                 continue
-            key = p.get("doi") or p.get("pmid") or _title_key(p.get("title", ""))
-            if not key:
-                continue
-            if key not in merged:
-                q = dict(p)
-                q["_pos"] = pos
-                q.setdefault("cited_by_count", 0)
-                merged[key] = q
-            else:
-                cur = merged[key]
-                cur["_pos"] = min(cur["_pos"], pos)
-                cur["cited_by_count"] = max(
-                    cur.get("cited_by_count", 0) or 0, p.get("cited_by_count", 0) or 0
-                )
-                if not cur.get("abstract") and p.get("abstract"):
-                    cur["abstract"] = p["abstract"]
-                if not cur.get("pmid") and p.get("pmid"):
-                    cur["pmid"] = p["pmid"]
-                    cur["url"] = p["url"]
-                    cur["source"] = p["source"]
-                if not cur.get("doi") and p.get("doi"):
-                    cur["doi"] = p["doi"]
-                if not cur.get("issn") and p.get("issn"):
-                    cur["issn"] = p["issn"]
+            pmid = str(p.get("pmid") or "").strip() or None
+            doi = str(p.get("doi") or "").strip().lower() or None
+            title_key = _title_key(p.get("title", ""))
+            # 查询是否已存在 (按 pmid → doi → title_key 依次找)
+            existing_key = None
+            if pmid and pmid in by_pmid:
+                existing_key = by_pmid[pmid]
+            elif doi and doi in by_doi:
+                existing_key = by_doi[doi]
+            elif title_key and title_key in by_title:
+                existing_key = by_title[title_key]
+            if existing_key is None:
+                # 新条目; primary key 优先 doi > pmid > title
+                key = doi or pmid or title_key
+                if not key:
+                    continue
+                if key in merged:
+                    existing_key = key
+                else:
+                    q = dict(p)
+                    q["_pos"] = pos
+                    q.setdefault("cited_by_count", 0)
+                    merged[key] = q
+                    if pmid: by_pmid[pmid] = key
+                    if doi: by_doi[doi] = key
+                    if title_key: by_title[title_key] = key
+                    continue
+            cur = merged[existing_key]
+            cur["_pos"] = min(cur["_pos"], pos)
+            cur["cited_by_count"] = max(
+                cur.get("cited_by_count", 0) or 0, p.get("cited_by_count", 0) or 0
+            )
+            if not cur.get("abstract") and p.get("abstract"):
+                cur["abstract"] = p["abstract"]
+            if not cur.get("pmid") and pmid:
+                cur["pmid"] = pmid
+                cur["url"] = p["url"]
+                cur["source"] = p["source"]  # PubMed 后到时纠正 preprint 标签
+                by_pmid[pmid] = existing_key
+            if not cur.get("doi") and doi:
+                cur["doi"] = doi
+                by_doi[doi] = existing_key
+            if title_key and title_key not in by_title:
+                by_title[title_key] = existing_key
+            if not cur.get("issn") and p.get("issn"):
+                cur["issn"] = p["issn"]
     ranked = _rank_papers(list(merged.values()), terms)
     for p in ranked:
         p.pop("_pos", None)

@@ -291,3 +291,21 @@ Round 14 (2026-07-05 T~19:00, cron 第十二次触发 + D6/D7/D8 + 5 类C + T2A/
    - T1 (CanvasEditor 跨路由 undo): Tiptap history plugin 序列化 = 30+ 行内部字段, 超出小改, 留专题
    - T2 B (undo push): 依赖 T1 落地
  · 验证: 27/27 PASS (首轮 22/27, manuscript.py 少 import JSONResponse, 补后全绿)
+
+Round 15 (2026-07-05 T~19:30, cron 第十三次触发 + R15 discover)
+ · 测过: 文献检索聚合 (literature._merge_all, research._ref_key), 4 源 polite pool,
+         图片生命周期 (dataanalysis SVG/PDF 降级, downloadBase64 大图, mermaid, PosterModule)
+ · 发现 P1:
+   1. _ref_key raw doi/url → 前后端 key 漂移, evidence badge 全空
+   2. _merge_all 键漂移 → 同篇文献 PubMed+OpenAlex 双入池
+   3. dataanalysis SVG/PDF 静默降级 PNG, 用户以为拿到矢量投稿资产
+   4. downloadBase64 大图 OOM/InvalidCharacterError 会黑屏, 无 try/catch
+   5. OpenAlex/EuropePMC 无 User-Agent, 大流量下限流风险
+ · 修复(5 项):
+   - research.py _ref_key: doi lowercase + 去 https://doi.org/ 前缀; url lowercase + 去尾斜杠
+   - literature.py _merge_all: 三层反向索引 by_pmid/by_doi/by_title, 消除键漂移
+   - dataanalysis.py: SVG/PDF 保存失败时 chart item 加 downgraded_from + note 提示用户
+   - download.ts downloadBase64: 用 Uint8Array.from + charCodeAt 减一次分配,
+     try/catch 内动态 import toast 弹中文错误
+   - openalex.py + europepmc.py: User-Agent 带 mailto(有邮箱时) 或 GitHub URL 兜底
+ · 验证: 14/15 → Fix 2 runtime fail (title-only 未合并) → 加 by_title 兜底索引 → 15/15 全绿
