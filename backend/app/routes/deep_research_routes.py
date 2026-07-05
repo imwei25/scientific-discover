@@ -41,3 +41,13 @@ class LookupTitleReq(BaseModel):
 async def lookup_title_ep(req: LookupTitleReq):
     """用户手输题名 → crossref/openalex 反查, 返回 {found, abstract, first_author, year, url, doi}."""
     return JSONResponse(await dr.lookup_title(req.title))
+
+
+class RecommendReq(BaseModel):
+    question: str
+    refs: list[dict]
+
+
+@router.post("/api/deep_research/recommend")
+async def recommend_ep(req: RecommendReq):
+    return JSONResponse(await dr.recommend(req.question, req.refs))

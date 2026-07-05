@@ -252,3 +252,78 @@ async def lookup_title(title: str) -> dict:
     返回 {found, abstract, first_author, year, url, doi}。found=False 时其它字段可缺省。
     """
     return await _search_title_multi(title)
+
+
+# ── 深读推荐分 ───────────────────────────────────────────────
+from .llm import stream_chat  # noqa: E402
+
+
+def _recommend_messages(question: str, refs: list[dict]) -> list[dict]:
+    refs_block = "\n".join(
+        f"[{r['ref_key']}] {r.get('title', '')}\n摘要: {r.get('abstract', '') or '(无摘要)'}"
+        for r in refs
+    )
+    system = (
+        "你是循证综述助手。用户会给出研究问题和一组文献摘要。"
+        "评估每篇文献是否值得深读全文以回答该问题。"
+        "评分只允许 high / medium / none 三档,给出简短理由 (≤ 20 字)。"
+        "high 上限 8 篇, medium 上限 5 篇, 超出的按 none 处理。"
+        "仅返回 JSON 数组,不要 markdown, 不要额外文字。"
+        "格式: [{\"ref_key\":\"...\",\"score\":\"high|medium|none\",\"reason\":\"...\"}]"
+    )
+    user = f"研究问题:{question}\n\n文献列表:\n{refs_block}\n\n请返回 JSON。"
+    return [{"role": "system", "content": system}, {"role": "user", "content": user}]
+
+
+def _cap_scores(items: list[dict]) -> list[dict]:
+    """按 high ≤ RECOMMEND_HIGH_CAP, medium ≤ RECOMMEND_MEDIUM_CAP; 超额降级为 none。"""
+    highs = [it for it in items if it.get("score") == "high"]
+    meds = [it for it in items if it.get("score") == "medium"]
+    nones = [it for it in items if it.get("score") == "none"]
+    kept_high = highs[:RECOMMEND_HIGH_CAP]
+    dropped_high = [{**it, "score": "none", "reason": (it.get("reason") or "") + " (超推荐上限)"}
+                    for it in highs[RECOMMEND_HIGH_CAP:]]
+    kept_med = meds[:RECOMMEND_MEDIUM_CAP]
+    dropped_med = [{**it, "score": "none", "reason": (it.get("reason") or "") + " (超推荐上限)"}
+                   for it in meds[RECOMMEND_MEDIUM_CAP:]]
+    return kept_high + kept_med + nones + dropped_high + dropped_med
+
+
+async def recommend(question: str, refs: list[dict]) -> dict:
+    """摘要 + 研究问题 → 深读推荐分。单次 LLM 调用。"""
+    if not question.strip():
+        return {"ok": False, "error": "缺少研究问题"}
+    if not refs:
+        return {"ok": True, "items": []}
+    if settings.mock:
+        return {"ok": True, "items": [
+            {"ref_key": r["ref_key"], "score": ("high" if i < 2 else "none"), "reason": "[MOCK]"}
+            for i, r in enumerate(refs)
+        ]}
+    buf = ""
+    async for piece in stream_chat(_recommend_messages(question, refs[:40]), task="research"):
+        buf += piece
+    try:
+        raw = json.loads(buf)
+        if not isinstance(raw, list):
+            raise ValueError("LLM 未返回数组")
+    except Exception as e:  # noqa: BLE001
+        return {"ok": False, "error": f"解析推荐分失败: {e}", "raw": buf[:200]}
+    # 归一化 + 校验
+    valid_keys = {r["ref_key"] for r in refs}
+    items = [
+        {
+            "ref_key": it.get("ref_key"),
+            "score": it.get("score") if it.get("score") in ("high", "medium", "none") else "none",
+            "reason": (it.get("reason") or "")[:60],
+        }
+        for it in raw
+        if it.get("ref_key") in valid_keys
+    ]
+    # 补全未返回的条目为 none
+    returned_keys = {it["ref_key"] for it in items}
+    for r in refs:
+        if r["ref_key"] not in returned_keys:
+            items.append({"ref_key": r["ref_key"], "score": "none", "reason": ""})
+    items = _cap_scores(items)
+    return {"ok": True, "items": items}
