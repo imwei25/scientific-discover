@@ -155,6 +155,14 @@ async def bundle(req: BundleRequest) -> Response:
     import io
     import zipfile
 
+    # 全空(所有 files/docx 内容都空) → 明确 400, 避免下发 22 字节空 ZIP 误导用户
+    all_files = list(req.files or []) + list(req.docx or [])
+    if not any((f.content or "").strip() for f in all_files):
+        return Response(
+            content="请至少选择一项要打包的产物（正文、参考文献或 docx 章节均可）。".encode("utf-8"),
+            status_code=400,
+            media_type="text/plain; charset=utf-8",
+        )
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
         for f in req.files:
@@ -192,9 +200,27 @@ class PdfRequest(BaseModel):
 @router.post("/api/pdf")
 async def pdf(req: PdfRequest) -> Response:
     """把 Markdown 正文导出为 PDF(中文可选中); 内嵌 mermaid 图片、链接、表格。"""
-    from ..pdfexport import build_pdf
-
-    data = build_pdf(req.text, req.title)
+    try:
+        from ..pdfexport import build_pdf
+    except ImportError as e:
+        # 常见于本机 Python 解释器未装 reportlab (例如启动脚本用了 anaconda 而非 backend/.venv)
+        return Response(
+            content=(
+                "PDF 导出组件未安装(reportlab)，无法生成 PDF。\n"
+                "请改用「导出 Word 」或「导出 Markdown 」；\n"
+                f"或让管理员在当前 Python 环境安装: pip install reportlab\n\n(详细: {e})"
+            ).encode("utf-8"),
+            status_code=503,
+            media_type="text/plain; charset=utf-8",
+        )
+    try:
+        data = build_pdf(req.text, req.title)
+    except Exception as e:  # noqa: BLE001
+        return Response(
+            content=f"PDF 生成失败，请改用 Word 或 Markdown 导出。(详细: {e})".encode("utf-8"),
+            status_code=500,
+            media_type="text/plain; charset=utf-8",
+        )
     return Response(
         content=data,
         media_type="application/pdf",
@@ -233,7 +259,10 @@ async def deidentify_apply(
     if content is None:
         return {"ok": False, "error": "文件过大（超过 30MB），请上传更小的文件。"}
     try:
-        cols = json.loads(columns) if columns else []
+        try:
+            cols = json.loads(columns) if columns else []
+        except json.JSONDecodeError:
+            return {"ok": False, "error": "columns 参数格式错误：必须是 JSON 数组字符串（形如 [\"姓名\",\"电话\"]）。"}
         if not isinstance(cols, list):
             return {"ok": False, "error": "columns 必须是 JSON 数组。"}
         out_bytes, mapping = do_apply(content, file.filename or "data.csv", cols)
@@ -277,6 +306,13 @@ async def refs_export(req: RefsExportRequest) -> Response:
     from ..refio import serialize
     from ..refsenrich import enrich_refs
 
+    # 空列表: 明确 400, 避免下发 0 字节 .ris/.bib 让 EndNote/Zotero 报"文件损坏"
+    if not (req.refs or []):
+        return Response(
+            content="请先勾选参考文献再导出（当前没有可导出的条目）。".encode("utf-8"),
+            status_code=400,
+            media_type="text/plain; charset=utf-8",
+        )
     try:
         refs = await enrich_refs(list(req.refs or []))
         data = serialize(refs, req.format)

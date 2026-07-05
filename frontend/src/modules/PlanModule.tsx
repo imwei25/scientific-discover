@@ -81,10 +81,13 @@ export default function PlanModule() {
         module: "plan",
         icon: "🗺️",
         title: idea.slice(0, 40) || "实验规划",
-        data: { "plan:idea": idea, "plan:materials": materials, "plan:result": text },
+        data: {
+          "plan:idea": idea, "plan:materials": materials, "plan:result": text,
+          "plan:step": step, "plan:maxStep": Math.max(maxStep, step),
+        },
       });
     }
-  }, [running, error, text, idea, materials]);
+  }, [running, error, text, idea, materials, step, maxStep]);
 
   // 4 个生成入口:方案主体 / SAP / DMP / 知情同意书
   // 把 materials 作为 resources 字段传给后端(prompts.py 里 4 个 builder 都接受 resources)。

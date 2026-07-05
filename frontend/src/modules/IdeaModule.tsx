@@ -163,6 +163,8 @@ export default function IdeaModule({ goto }: { goto: Goto }) {
           "idea:field": field, "idea:keywords": keywords, "idea:background": background,
           "idea:result": text, "idea:refs": refs, "idea:trials": trials, "idea:evidence": evidence,
           "idea:qa": followups, "idea:verify": verify, "idea:card": card,
+          // 含步骤位置, 恢复时直接落在报告页而非空表单
+          "idea:step": step, "idea:maxStep": Math.max(maxStep, step), "idea:selectedKeys": selectedKeys,
         },
       });
     }

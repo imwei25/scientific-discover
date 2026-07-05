@@ -104,10 +104,12 @@ export default function DataPane({ goto }: { goto: Goto }) {
           "analyze:charts": charts,
           "analyze:output": output,
           "analyze:captions": captions,
+          // 恢复时直接停在结果页(step=2), 而不是空的上传页
+          "analyze:step": step,
         },
       });
     }
-  }, [running, error, conclusion, question]);
+  }, [running, error, conclusion, question, step]);
 
   // 解析 CSV 表头(只读第一行, 同时处理 BOM)。
   const readCsvHeaders = async (f: File) => {

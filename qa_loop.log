@@ -23,3 +23,23 @@ Round 2 (2026-07-05 T~13:40)
    - ProjectPicker.tsx: 删除项目需输入完整项目名才能启用删除按钮
  · 验证: 10/10 PASS (含 4 个新修复 + 4 个 R1 修复的回归)
  · 已 build + 重启, git 未提交 (等 Round 3 一并处理)
+
+Round 3 (2026-07-05 T~14:00, cron 首次触发)
+ · 测过: 跨模块 handoff (idea→plan→analyze→imrad, format 反向), History 恢复,
+         文件 I/O (extract/refs export/bundle/pdf/latex), 脱敏 (/api/deidentify/*)
+ · 发现 P1:
+   1. /api/refs/export 空 refs → 200 + 0 字节 .ris (EndNote 打不开)
+   2. /api/bundle 空 body → 200 + 22 字节空 zip
+   3. /api/pdf 100% 500 (reportlab 未装) - 只在启动脚本用错 python 时暴露
+   4. /api/deidentify/apply columns 非 JSON → 泄漏 Python JSONDecodeError 原文
+   5. 历史"恢复"后模块停留在 step=1 空表单 (Idea/Plan/Imrad/Analyze 都没存 step)
+   6. HistoryView NAMES 表缺 grant/ethics, 恢复卡显示原始英文 id
+ · 修复(6 项):
+   - manuscript.py: /api/refs/export 空列表 → 400 中文
+   - manuscript.py: /api/bundle 全空 → 400 中文
+   - manuscript.py: /api/pdf ImportError → 503 中文提示改用 Word/MD
+   - manuscript.py: /api/deidentify/apply JSONDecodeError → 中文提示
+   - IdeaModule/PlanModule/ImradModule/DataPane addHistory 加 step/maxStep
+   - HistoryView.tsx: NAMES 加 grant + ethics
+ · 验证: 14/14 PASS (含 3 项 R1+R2 回归)
+ · 已 build + 重启

@@ -4,7 +4,9 @@ import type { Goto, ModuleId } from "../App";
 
 const NAMES: Record<string, string> = {
   idea: "找选题",
+  grant: "写标书",
   plan: "实验规划",
+  ethics: "伦理材料",
   analyze: "数据分析",
   imrad: "论文初稿",
   journal: "智能选刊",

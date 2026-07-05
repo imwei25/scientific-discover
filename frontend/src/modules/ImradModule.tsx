@@ -74,10 +74,13 @@ export default function ImradModule({ goto }: { goto: Goto }) {
         module: "imrad",
         icon: "📝",
         title: topic.slice(0, 40) || "论文初稿",
-        data: { "imrad:topic": topic, "imrad:materials": materials, "imrad:draft": draft },
+        data: {
+          "imrad:topic": topic, "imrad:materials": materials, "imrad:draft": draft,
+          "imrad:step": step, "imrad:maxStep": Math.max(maxStep, step),
+        },
       });
     }
-  }, [running, error, draft, topic, materials]);
+  }, [running, error, draft, topic, materials, step, maxStep]);
 
   // 投稿包
   const [bundleBusy, setBundleBusy] = useState(false);
