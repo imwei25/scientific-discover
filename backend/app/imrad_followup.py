@@ -173,4 +173,5 @@ async def imrad_followup(inputs: dict) -> AsyncIterator[tuple[str, dict]]:
         yield ("done", {})
     except Exception as e:  # noqa: BLE001
         print("[imrad-followup] exception:\n" + traceback.format_exc(), flush=True)
-        yield ("error", {"message": f"追问处理出错: {type(e).__name__}: {e}"})
+        # 类型/堆栈进服务端日志; 前端只显示中文人话, 不暴露 Python 类名
+        yield ("error", {"message": "追问处理失败：服务临时出错，请稍后重试。", "detail": f"{type(e).__name__}: {e}"})

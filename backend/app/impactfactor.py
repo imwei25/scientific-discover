@@ -57,7 +57,14 @@ async def enrich_impact(papers: list[dict], concurrency: int = 4) -> int:
     无 issn 或查不到的文献, journal_impact 置为 None(未知)。任何失败静默。
     """
     email = (getattr(settings, "ncbi_email", "") or "").strip()
-    # 收集尚未缓存的 ISSN。
+    # ISSN 归一化 (去空白、大写连字符保留): 避免 "  0028-0836  " 与 "0028-0836" 各占一个
+    # cache slot 导致缓存击穿 (每篇论文都重新触发一次网络查).
+    def _norm_issn(s):
+        return (s or "").strip().upper()
+    for p in papers:
+        if p.get("issn"):
+            p["issn"] = _norm_issn(p["issn"])
+    # 收集尚未缓存的 ISSN.
     need = sorted({p["issn"] for p in papers if p.get("issn") and p["issn"] not in _CACHE})
     if need:
         chunks = [need[i:i + _CHUNK] for i in range(0, len(need), _CHUNK)]

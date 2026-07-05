@@ -52,7 +52,11 @@ def normalize(raw) -> dict:
         year_from = int(yf) if yf not in (None, "", "0") else None
     except (ValueError, TypeError):
         year_from = None
-    if year_from is not None and not (1800 <= year_from <= 2100):
+    # 上限用"当年+1", 而非 2100. 原来 2100 会通过校验但查询结果 0 篇,
+    # 用户以为文献源坏了; 现在明显越界 (如 2050) 会被拒, 前端可提示合理年份.
+    import datetime as _dt
+    _CUR_Y = _dt.date.today().year
+    if year_from is not None and not (1800 <= year_from <= _CUR_Y + 1):
         year_from = None
     st = raw.get("study_types") or []
     if isinstance(st, str):

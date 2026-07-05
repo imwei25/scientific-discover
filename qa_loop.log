@@ -116,3 +116,21 @@ Round 7 (2026-07-05 T~16:00, cron 第五次触发)
    - AttachmentChips.tsx: × 前 window.confirm 二次确认
    - history.ts: 配额耗尽 (单条也放不下) 时 showToast warn 提示用户
  · 验证: 9/9 PASS (含 4 项 R1-R6 回归)
+
+Round 8 (2026-07-05 T~16:15, cron 第六次触发)
+ · 测过: 文献检索 (openalex/europepmc/clinicaltrials/literature/searchcache/searchfilters),
+         期刊富集 (impactfactor/scimago/unpaywall), Grant 深度流 (search/style/plan/write/review/revise),
+         Followup 错误路径 (imrad/plan/ethics/research idea_followup)
+ · 发现 P1:
+   1. 4 处 followup 仍暴露 Python type(e).__name__ (R4 只修了 rebuttal)
+   2. impactfactor.py ISSN 带空白缓存击穿, 每篇论文都触发一次 OpenAlex
+   3. searchfilters.py year_from 上限 2100, 用户填 2050 通过校验但 0 结果
+   4. GrantModule onError 只置 phase="done" 不置 stage/paused/inReviewRef, 面板卡"撰写中"
+   · 其他 P1 (已知未修): searchcache 无 eviction, apply_quality_filter 静默放宽 → 留待后续轮
+ · 修复(4 项):
+   - imrad_followup / plan_followup / ethics_followup / research (idea_followup):
+     统一改为通用中文 message + 单独 detail 字段
+   - impactfactor.py: enrich_impact 前置 _norm_issn(strip+upper), 归一 ISSN 消除缓存击穿
+   - searchfilters.py: year_from 上限改为 datetime.date.today().year + 1
+   - GrantModule.tsx onError: 兼置 setStage/setPaused/inReviewRef.current 重置
+ · 验证: 13/13 PASS (含 5 项 R1-R7 回归)

@@ -70,4 +70,4 @@ async def ethics_followup(inputs: dict) -> AsyncIterator[tuple[str, dict]]:
         yield ("done", {})
     except Exception as e:  # noqa: BLE001
         print("[ethics-followup] exception:\n" + traceback.format_exc(), flush=True)
-        yield ("error", {"message": f"追问处理出错: {type(e).__name__}: {e}"})
+        yield ("error", {"message": "追问处理失败：服务临时出错，请稍后重试。", "detail": f"{type(e).__name__}: {e}"})

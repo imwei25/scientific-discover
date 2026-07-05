@@ -295,7 +295,10 @@ export default function GrantModule({ goto }: { goto: Goto }) {
     onReviewData: setReview,
     onVerify: setVerify,
     onError: (m: string) => {
-      setError(m); setStatus(""); setRunning(false); setPhase("done");
+      // 同时置 stage/paused/inReviewRef, 避免 write 阶段中途 SSE 出错时
+      // 面板仍卡在"撰写中"骨架, 用户看到 error banner 却点不动"重写/继续"
+      setError(m); setStatus(""); setRunning(false); setPhase("done"); setStage("done");
+      setPaused(false); inReviewRef.current = false;
       window.dispatchEvent(new Event("usage-updated")); reportLLMError(m);
     },
     onDone: () => {
