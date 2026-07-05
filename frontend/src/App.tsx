@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import {
   Lightbulb, Map, ClipboardList, BarChart3, FileText,
-  Target, FileType, CheckSquare, MessageSquareReply, ScrollText, FileSignature, Presentation,
+  Target, FileType, CheckSquare, MessageSquareReply, ScrollText, FileSignature, Presentation, Microscope,
 } from "lucide-react";
 import { apiUrl } from "./lib/api";
 import { writePersisted, usePersistentState } from "./lib/usePersistentState";
@@ -29,7 +29,12 @@ import ErrorBoundary from "./components/ErrorBoundary";
 import { showToast } from "./lib/toast";
 import { useProjects } from "./lib/projects";
 
-export type ModuleId = "home" | "idea" | "grant" | "plan" | "ethics" | "analyze" | "imrad" | "journal" | "format" | "checklist" | "poster" | "rebuttal" | "history";
+export type ModuleId = "home" | "idea" | "research" | "grant" | "plan" | "ethics" | "analyze" | "imrad" | "journal" | "format" | "checklist" | "poster" | "rebuttal" | "history";
+
+// 开发者模式开关: 控制标注 `dev: true` 的 NAV 条目是否可见; 默认关闭。
+function useDevMode(): [boolean, (v: boolean) => void] {
+  return usePersistentState<boolean>("dev:mode", false);
+}
 // 全模块统一为单栏「递进式」布局(不再左右分屏): 产出直接排在输入下方。
 // 保留集合(置空)以便个别模块将来需要时再开分屏; 目前一律走单栏。
 const STAGE_CANVAS = new Set<ModuleId>([]);
@@ -38,8 +43,9 @@ export type Goto = (target: ModuleId, patch?: Record<string, unknown>) => void;
 
 // W2-4-c: 用 Lucide 图标替代 emoji; W2-4-h: 导航 desc 白话化
 const ICON_PROPS = { size: 18, strokeWidth: 1.75 } as const;
-const NAV: { id: ModuleId; icon: ReactNode; title: string; desc: string; hidden?: boolean }[] = [
+const NAV: { id: ModuleId; icon: ReactNode; title: string; desc: string; hidden?: boolean; dev?: boolean }[] = [
   { id: "idea",     icon: <Lightbulb {...ICON_PROPS} />,           title: "找选题",       desc: "发现研究方向与创新点" },
+  { id: "research", icon: <Microscope {...ICON_PROPS} />,          title: "深度调研",     desc: "针对研究问题的循证综合", dev: true },
   { id: "grant",    icon: <FileSignature {...ICON_PROPS} />,       title: "写标书",       desc: "把选题写成中文基金申请书初稿" },
   { id: "plan",     icon: <Map {...ICON_PROPS} />,                 title: "实验规划",     desc: "把研究想法变成可执行方案 + 样本量" },
   { id: "ethics",   icon: <ClipboardList {...ICON_PROPS} />,       title: "伦理材料",     desc: "知情同意/方案/CRF" },
@@ -63,6 +69,8 @@ interface Health {
 
 export default function App() {
   const [active, setActive] = useState<ModuleId>("home");
+  const [devMode, setDevMode] = useDevMode();
+  const visibleNav = NAV.filter((m) => !m.hidden && (devMode || !m.dev));
   // 右画布的 Portal 目标节点; 用 ref 回调 setState 拿到, 拿到后触发一次 re-render 让 CanvasSlot 归位。
   const [canvasEl, setCanvasEl] = useState<HTMLElement | null>(null);
   // 右画布是否收起(记忆用户偏好); 收起时缩成右侧窄条, 左工作区占满, 只留一个展开按钮。
@@ -204,7 +212,7 @@ export default function App() {
       <CommandPalette
         open={cmdkOpen}
         onClose={() => setCmdkOpen(false)}
-        modules={NAV.map((m) => ({ id: m.id, title: m.title, desc: m.desc, icon: m.icon }))}
+        modules={visibleNav.map((m) => ({ id: m.id, title: m.title, desc: m.desc, icon: m.icon }))}
         onPickModule={(id) => setActive(id as ModuleId)}
         onPickHistory={(entry) => restoreHistoryEntry(entry, (m) => setActive(m as ModuleId))}
       />
@@ -252,7 +260,7 @@ export default function App() {
         </div>
         <nav className="nav">
           <div className="pipeline">
-            {NAV.filter((m) => !m.hidden).map((m) => (
+            {visibleNav.map((m) => (
               <button
                 key={m.id}
                 className={`nav-item ${active === m.id ? "active" : ""}`}
@@ -330,7 +338,7 @@ export default function App() {
         </div>
         {/* 折叠态指示条：24px 内显示各模块小图标（一眼可识别），hover 即临时展开交互 */}
         <div className="rail-ticks" aria-hidden="true">
-          {NAV.filter((m) => !m.hidden).map((m) => (
+          {visibleNav.map((m) => (
             <span key={m.id} className={`rail-tick ${active === m.id ? "active" : ""}`} title={m.title}>
               {m.icon}
             </span>
@@ -344,15 +352,37 @@ export default function App() {
           <NiumaMark onClick={() => setActive("home")} />
           <ProjectPicker />
           <FontSizeSwitcher />
-          <button
-            className="settings-btn"
-            data-testid="open-settings"
-            onClick={() => setOnboardingOpen(true)}
-            title="设置 API key / 模型"
-            aria-label="设置 API key / 模型"
-          >
-            ⚙ 设置
-          </button>
+          <div className="settings-menu" data-testid="settings-menu">
+            <button
+              className="settings-btn"
+              data-testid="open-settings-menu"
+              onClick={(e) => {
+                const menu = (e.currentTarget.nextSibling as HTMLElement | null);
+                if (menu) menu.classList.toggle("open");
+              }}
+              aria-label="设置"
+              title="设置"
+            >
+              ⚙ 设置
+            </button>
+            <div className="settings-dropdown" onClick={(e) => (e.currentTarget as HTMLElement).classList.remove("open")}>
+              <button
+                className="settings-item"
+                data-testid="settings-api"
+                onClick={() => setOnboardingOpen(true)}
+              >
+                API / 模型设置
+              </button>
+              <label className="settings-item settings-toggle" data-testid="settings-dev-mode">
+                <input
+                  type="checkbox"
+                  checked={devMode}
+                  onChange={(e) => setDevMode(e.target.checked)}
+                />
+                开发者模式
+              </label>
+            </div>
+          </div>
         </div>
         <CanvasProvider target={hasCanvas ? canvasEl : null}>
         <div className={`content-body ${hasCanvas ? "has-canvas" : ""}`}>
@@ -393,8 +423,9 @@ export default function App() {
         )}
         <div className="page" key={`${currentProject?.id ?? "boot"}::${active}`}>
           <ErrorBoundary key={active}>
-            {active === "home" && <Home onPick={setActive} />}
+            {active === "home" && <Home onPick={setActive} visibleNav={visibleNav} />}
             {active === "idea" && <IdeaModule goto={goto} />}
+            {active === "research" && <div style={{ padding: 24 }}>深度调研模块开发中...</div>}
             {active === "grant" && <GrantModule goto={goto} />}
             {active === "plan" && <PlanModule />}
             {active === "ethics" && <EthicsModule />}
@@ -451,7 +482,7 @@ export default function App() {
   );
 }
 
-function Home({ onPick }: { onPick: (m: ModuleId) => void }) {
+function Home({ onPick, visibleNav }: { onPick: (m: ModuleId) => void; visibleNav: typeof NAV }) {
   return (
     <div className="home">
       <div className="home-stage">
@@ -481,7 +512,7 @@ function Home({ onPick }: { onPick: (m: ModuleId) => void }) {
       <div className="home-overview">
         <p className="eyebrow">覆盖选题到投稿 · 每个工具都能单独用</p>
         <div className="home-cards">
-          {NAV.filter((m) => !m.hidden).map((m, i) => (
+          {visibleNav.map((m, i) => (
             <button
               key={m.id}
               className="home-card"

@@ -4740,6 +4740,22 @@ mark.ai-edit {
 .lit-picker-count { color: var(--text-muted, #666); font-size: 0.9em; }
 .lit-picker-progress { color: var(--accent, #0a7); font-size: 0.85em; }
 .lit-picker-io { margin-left: auto; display: flex; gap: 8px; }
+/* 导入/导出双按钮尺寸对齐: 统一高度、内边距、最小宽度, 避免"一大一小"错位。 */
+.refio-actions { align-items: center; gap: 8px; margin-top: 0; }
+.refio-export-wrap { display: inline-flex; align-items: stretch; }
+.refio-actions .btn-secondary {
+  margin-top: 0;
+  padding: 8px 16px;
+  min-width: 132px;
+  height: 38px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  font-size: 14px;
+  line-height: 1;
+  white-space: nowrap;
+}
 .lit-picker-list { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 8px; }
 .lit-picker-row { display: flex; gap: 10px; padding: 10px 12px; border: 1px solid var(--border, #ddd); border-radius: 6px; }
 .lit-picker-row.selected { border-color: var(--accent, #0a7); background: var(--accent-bg, rgba(0,170,119,0.05)); }
@@ -4771,3 +4787,20 @@ mark.ai-edit {
   font-weight: 600;
   font-style: normal;
 }
+
+/* Task 13: 设置下拉菜单 (⚙ 设置 → API/模型 + 开发者模式) */
+.settings-menu { position: relative; display: inline-block; }
+.settings-dropdown {
+  position: absolute; right: 0; top: calc(100% + 6px);
+  background: var(--panel, #fff); border: 1px solid var(--border, #ddd);
+  border-radius: 6px; box-shadow: 0 4px 16px rgba(0,0,0,.08);
+  min-width: 200px; padding: 6px 0; display: none; z-index: 100;
+}
+.settings-dropdown.open { display: block; }
+.settings-item {
+  display: flex; align-items: center; gap: 8px;
+  width: 100%; padding: 8px 12px; background: transparent; border: none;
+  text-align: left; cursor: pointer; font-size: 14px;
+}
+.settings-item:hover { background: var(--hover-bg, rgba(0,0,0,.05)); }
+.settings-toggle { justify-content: space-between; }

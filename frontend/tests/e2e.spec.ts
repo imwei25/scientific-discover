@@ -1088,14 +1088,17 @@ test("设置入口: 矮窗口下「设置」按钮(右上角工具栏)可见", a
   await page.setViewportSize({ width: 1000, height: 560 });
   await page.goto("/");
   // 设置/字号已移到主区右上角工具栏, 与项目选择器并排
-  await expect(page.getByTestId("open-settings")).toBeVisible();
+  // Task 13: 设置按钮改为下拉菜单, 外层按钮 testid = open-settings-menu
+  await expect(page.getByTestId("open-settings-menu")).toBeVisible();
   await expect(page.getByTestId("font-size-select")).toBeVisible();
 });
 
 test("设置向导: 可用右上角 × 关闭", async ({ page }) => {
   await mockBase(page);
   await page.goto("/");
-  await page.getByTestId("open-settings").click();
+  // Task 13: 先打开下拉菜单, 再点 API / 模型设置 项
+  await page.getByTestId("open-settings-menu").click();
+  await page.getByTestId("settings-api").click();
   await expect(page.getByTestId("onboarding-wizard")).toBeVisible();
   await page.getByTestId("onboarding-close").click();
   await expect(page.getByTestId("onboarding-wizard")).toHaveCount(0);
@@ -1115,7 +1118,9 @@ test("设置向导: 硅基流动可换模型, 且模型随测试/保存一起发
   });
 
   await page.goto("/");
-  await page.getByTestId("open-settings").click();
+  // Task 13: 先打开下拉菜单, 再点 API / 模型设置 项
+  await page.getByTestId("open-settings-menu").click();
+  await page.getByTestId("settings-api").click();
   await page.getByTestId("onboarding-provider-siliconflow").click();
   // 选 provider 后默认 model 预填
   await expect(page.getByTestId("onboarding-model-input")).toHaveValue("deepseek-ai/DeepSeek-V3");
