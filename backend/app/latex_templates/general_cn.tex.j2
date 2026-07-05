@@ -32,7 +32,7 @@
 {% if keywords_en %}\noindent\textbf{Key words:} {{ keywords_en }}\par\bigskip
 
 {% endif %}
-{# 若稿件缺英文摘要/关键词, 请作者补充 —— 中文核心几乎都要求双语 #}
-{% if not abstract_en and not keywords_en %}%% [提示] 中文核心期刊通常要求"中/英双语摘要+关键词", 请补充英文版本。
+{# 若稿件缺英文摘要或关键词任一, 请作者补充 —— 中文核心几乎都要求双语 #}
+{% if not abstract_en or not keywords_en %}%% [提示] 中文核心期刊通常要求"中/英双语摘要+关键词", 请补充英文版本 (原代码是 `and`, 只在两者都缺时才提示, 缺任一都应告知)。
 {% endif %}
 {% endblock %}

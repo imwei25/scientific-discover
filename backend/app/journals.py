@@ -20,7 +20,7 @@ JOURNALS: list[dict] = [
             "page": "a4", "margin_cm": 2.54, "body_font": "Times New Roman",
             "body_size": 12, "line_spacing": 2.0, "line_numbers": True,
         },
-        "latex": {"doc_class": "article", "class_options": ["12pt"], "bib_style": "ieeetran", "template": "general_en.tex.j2", "compiler": "pdflatex"},
+        "latex": {"doc_class": "article", "class_options": ["12pt"], "bib_style": "unsrt", "template": "general_en.tex.j2", "compiler": "pdflatex"},
         "check": {
             "lang": "en", "abstract_unit": "words", "abstract_min": 150, "abstract_max": 250,
             "required_sections": ["abstract", "keywords", "introduction", "methods", "results", "discussion", "references"],
@@ -95,7 +95,7 @@ JOURNALS: list[dict] = [
         "latex": {"doc_class": "IEEEtran", "class_options": ["journal"], "bib_style": "IEEEtran", "template": "ieee.tex.j2", "compiler": "pdflatex"},
         "check": {
             "lang": "en", "abstract_unit": "words", "abstract_min": 150, "abstract_max": 250,
-            "required_sections": ["abstract", "keywords", "introduction", "conclusion", "references"],
+            "required_sections": ["abstract", "keywords", "introduction", "methods", "results", "discussion", "conclusion", "references"],
         },
         "rules": (
             "- 章节顺序：Title, Abstract, Index Terms, I. Introduction, "
@@ -117,7 +117,7 @@ JOURNALS: list[dict] = [
         },
         "latex": {"doc_class": "article", "class_options": ["10pt", "letterpaper"], "bib_style": "plos2015", "template": "plos_one.tex.j2", "compiler": "pdflatex"},
         "check": {
-            "lang": "en", "abstract_unit": "words", "abstract_max": 300,
+            "lang": "en", "abstract_unit": "words", "abstract_min": 150, "abstract_max": 300,
             "title_max_chars": 250,
             "required_sections": ["abstract", "introduction", "methods", "results", "discussion", "references"],
         },
