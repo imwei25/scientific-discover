@@ -10,7 +10,7 @@ import EditableMarkdown from "../components/EditableMarkdown";
 import WarningPanel from "../components/WarningPanel";
 import FollowupPanel from "../components/FollowupPanel";
 import ReportExportBar from "../components/ReportExportBar";
-import { usePersistentState, readPersisted } from "../lib/usePersistentState";
+import { usePersistentState } from "../lib/usePersistentState";
 import { useProjects } from "../lib/projects";
 import { downloadCsv, tsName } from "../lib/download";
 import type { Goto } from "../App";
@@ -143,6 +143,7 @@ export default function ResearchModule({ goto }: { goto: Goto }) {
     goStep(3);
     ctrl.current = new AbortController();
     const uploadedAsRefs = uploadedRefs.map(uploadedToReference);
+    let latestRefs: Reference[] = [];
     await streamDeepResearch(
       {
         question, field, background: mergedBackground, depth,
@@ -163,6 +164,7 @@ export default function ResearchModule({ goto }: { goto: Goto }) {
           }
           setRefs(merged);
           setSelectedKeys(merged.map((r) => refKeyOf(r as Reference & { upload_id?: string })));
+          latestRefs = merged;
         },
         onEvidence: setEvidence,
         onDelta: () => {},
@@ -170,15 +172,17 @@ export default function ResearchModule({ goto }: { goto: Goto }) {
         onError: (m) => { setError(m); setStatus(""); setRunning(false); reportLLMError(m); },
         onDone: async () => {
           setStatus(""); setRunning(false); window.dispatchEvent(new Event("usage-updated"));
-          // Recommend using CURRENT refs from state — read via readPersisted since setRefs is async
+          // Recommend using CURRENT refs captured in closure (setRefs is async, storage lags one tick)
           try {
-            const cur = readPersisted<Reference[]>("research:refs", []);
-            const forRec = cur.map((r) => ({
+            const forRec = latestRefs.map((r) => ({
               ref_key: refKeyOf(r as Reference & { upload_id?: string }),
               title: r.title || "",
               abstract: r.abstract || "",
             }));
-            const res = await fetchDeepResearchRecommend({ question, refs: forRec });
+            const res = await fetchDeepResearchRecommend(
+              { question, refs: forRec },
+              ctrl.current?.signal,
+            );
             if (res.ok && res.items) {
               const map: Record<string, RecommendItem> = {};
               const autoDeep: string[] = [];
@@ -415,7 +419,11 @@ export default function ResearchModule({ goto }: { goto: Goto }) {
             <span>
               AI 推荐深读 <strong>{Object.values(recommend).filter((r) => r.score === "high").length}</strong> 篇(⭐);
               你已勾 <strong>{deepReadKeys.length}</strong> 篇,预计 ~
-              <strong>{estimateDeepReadTokens(uploadedRefs.filter((u) => deepReadKeys.includes(u.upload_id))).toLocaleString()}</strong> tokens
+              <strong>{estimateDeepReadTokens(
+                refs
+                  .filter((r) => deepReadKeys.includes(refKeyOf(r as Reference & { upload_id?: string })))
+                  .map((r) => ({ page_count: (r as Reference & { page_count?: number }).page_count }))
+              ).toLocaleString()}</strong> tokens
             </span>
             <button className="btn-ghost" onClick={() => {
               const highs = Object.values(recommend).filter((r) => r.score === "high").map((r) => r.ref_key);
@@ -423,28 +431,6 @@ export default function ResearchModule({ goto }: { goto: Goto }) {
             }}>全选推荐</button>
             <button className="btn-ghost" onClick={() => setDeepReadKeys([])}>清空深读</button>
           </div>
-
-          <LiteraturePicker
-            refs={refs}
-            evidenceByKey={(() => {
-              const m: Record<string, EvidenceItem & { _ev_status?: string }> = {};
-              const byUrl: Record<string, EvidenceItem> = {};
-              const byTitle: Record<string, EvidenceItem> = {};
-              for (const e of evidence) {
-                if (e.url) byUrl[e.url.replace(/\/+$/, "")] = e;
-                if (e.title) byTitle[e.title.trim().toLowerCase()] = e;
-              }
-              for (const r of refs) {
-                const ev = byUrl[(r.url || "").replace(/\/+$/, "")] || byTitle[(r.title || "").trim().toLowerCase()];
-                if (ev) m[refKeyOf(r as Reference & { upload_id?: string })] = ev as EvidenceItem & { _ev_status?: string };
-              }
-              return m;
-            })()}
-            selectedKeys={selectedKeys}
-            onSelectionChange={setSelectedKeys}
-            keyFn={(r) => refKeyOf(r as Reference & { upload_id?: string })}
-            exportFilename="深度调研-文献"
-          />
 
           {/* Fallback deep-read grid: LiteraturePicker doesn't support extraColumns yet */}
           <div className="deep-read-list" data-testid="research-deep-read-list">
@@ -478,6 +464,31 @@ export default function ResearchModule({ goto }: { goto: Goto }) {
               </tbody>
             </table>
           </div>
+
+          <h4 style={{marginTop: 24, marginBottom: 8, fontSize: 14, color: 'var(--muted)'}}>
+            文献列表 (勾选 = 参与合成, 详情/证据/删除在此)
+          </h4>
+          <LiteraturePicker
+            refs={refs}
+            evidenceByKey={(() => {
+              const m: Record<string, EvidenceItem & { _ev_status?: string }> = {};
+              const byUrl: Record<string, EvidenceItem> = {};
+              const byTitle: Record<string, EvidenceItem> = {};
+              for (const e of evidence) {
+                if (e.url) byUrl[e.url.replace(/\/+$/, "")] = e;
+                if (e.title) byTitle[e.title.trim().toLowerCase()] = e;
+              }
+              for (const r of refs) {
+                const ev = byUrl[(r.url || "").replace(/\/+$/, "")] || byTitle[(r.title || "").trim().toLowerCase()];
+                if (ev) m[refKeyOf(r as Reference & { upload_id?: string })] = ev as EvidenceItem & { _ev_status?: string };
+              }
+              return m;
+            })()}
+            selectedKeys={selectedKeys}
+            onSelectionChange={setSelectedKeys}
+            keyFn={(r) => refKeyOf(r as Reference & { upload_id?: string })}
+            exportFilename="深度调研-文献"
+          />
 
           <div className="wiz-nav">
             <button className="btn-ghost" onClick={() => setStep(2)} data-testid="research-wiz-back-3">← 上一步</button>

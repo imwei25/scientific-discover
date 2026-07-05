@@ -1487,9 +1487,11 @@ export async function streamDeepResearch(payload: DeepResearchPayload, cb: DeepR
 
 export async function fetchDeepResearchRecommend(
   payload: { question: string; refs: { ref_key: string; title: string; abstract: string }[] },
+  signal?: AbortSignal,
 ): Promise<{ ok: boolean; items?: RecommendItem[]; error?: string }> {
   const r = await fetch(apiUrl("/api/deep_research/recommend"), {
-    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload),
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload), signal,
   });
   return r.json();
 }
