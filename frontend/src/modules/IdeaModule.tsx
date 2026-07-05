@@ -11,7 +11,7 @@ import WarningPanel from "../components/WarningPanel";
 import { downloadText, downloadCsv, downloadDocxFromText, downloadPdfFromText, tsName } from "../lib/download";
 import { copyToClipboard } from "../lib/clipboard";
 import { stripSupportQuotes } from "../lib/exportPrep";
-import { usePersistentState } from "../lib/usePersistentState";
+import { usePersistentState, readPersisted } from "../lib/usePersistentState";
 import type { Goto } from "../App";
 import { LiteraturePicker } from "../components/LiteraturePicker";
 import { extractEvidenceForRefs } from "../lib/evidenceExtract";
@@ -829,11 +829,17 @@ export default function IdeaModule({ goto }: { goto: Goto }) {
                 )}
                 {text && !running && (!card || card.candidates.length === 0) && (
                   <button className="btn-ghost" data-testid="send-to-plan-btn" onClick={() => {
+                    // Plan 里已有非空 idea 时二次确认, 避免用户 20 分钟手写的 plan:idea 被覆盖
+                    const existing = (readPersisted<string>("plan:idea", "") || "").trim();
+                    if (existing && existing !== text.trim()) {
+                      const ok = window.confirm(
+                        `实验规划页已有研究想法 (约 ${existing.length} 字), 是否用当前调研结果覆盖?`,
+                      );
+                      if (!ok) return;
+                    }
                     const parts: string[] = [];
                     if (field) parts.push(`[学科领域]\n${field}`);
                     if (background) parts.push(`[相关资料 · 来自找选题]\n${background}`);
-                    // 不写 plan:step / plan:maxStep, 保留用户在 plan 里已推进的进度;
-                    // 只更新 idea/materials 字段, 用户可自行决定要不要回 step 1
                     goto("plan", {
                       "plan:idea": text,
                       "plan:materials": parts.join("\n\n"),
@@ -992,13 +998,20 @@ export default function IdeaModule({ goto }: { goto: Goto }) {
                         className="btn-ghost candidate-to-plan"
                         data-testid={`candidate-to-plan-${i}`}
                         onClick={() => {
+                          const newIdea = `${c.title}\n\n${c.body}`;
+                          const existing = (readPersisted<string>("plan:idea", "") || "").trim();
+                          if (existing && existing !== newIdea.trim()) {
+                            const ok = window.confirm(
+                              `实验规划页已有研究想法 (约 ${existing.length} 字), 是否用候选方向「${c.title}」覆盖?`,
+                            );
+                            if (!ok) return;
+                          }
                           const parts: string[] = [];
                           if (card.field) parts.push(`[学科领域]\n${card.field}`);
                           if (background) parts.push(`[相关资料 · 来自找选题]\n${background}`);
                           if (c.body) parts.push(`[候选方向补充]\n${c.body}`);
-                          // 不覆盖 plan:step / plan:maxStep, 保留 plan 里已推进的进度
                           goto("plan", {
-                            "plan:idea": `${c.title}\n\n${c.body}`,
+                            "plan:idea": newIdea,
                             "plan:materials": parts.join("\n\n"),
                             "plan:materials:migrated": true,
                           });

@@ -198,9 +198,26 @@ export default function CommandPalette({
   );
 }
 
+// 已注册的模块 id, 用于校验 restore 目标是否仍存在.
+// 与 App.tsx 的 ModuleId 保持一致; 老历史项若引用了下线的模块 (如 "grant2"), 拒绝切过去.
+const _KNOWN_MODULES = new Set<string>([
+  "home", "idea", "grant", "plan", "ethics", "analyze",
+  "imrad", "journal", "format", "checklist", "poster", "rebuttal", "history",
+]);
+
 /** 帮 App.tsx 完成"恢复历史并跳转"的逻辑 (与 HistoryView 一致) */
 export function restoreHistoryEntry(entry: HistoryEntry, setActive: (m: string) => void): void {
   if (!entry.data) return;
+  // 校验目标模块; 未知 module id 会让 App 的 switch 无 case → 主区白屏, 面包屑消失.
+  if (entry.module && !_KNOWN_MODULES.has(entry.module)) {
+    import("../lib/toast").then(({ showToast }) => {
+      showToast({
+        kind: "warn",
+        message: `这条历史指向的模块「${entry.module}」已下线, 无法恢复。`,
+      });
+    }).catch(() => { /* toast 库不可用则默默忽略 */ });
+    return;
+  }
   for (const [k, v] of Object.entries(entry.data)) writePersisted(k, v);
   if (entry.module) setActive(entry.module);
 }

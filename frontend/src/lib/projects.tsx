@@ -106,6 +106,14 @@ function dumpHistoryFromLocalStorage(): unknown[] {
 function replaceLocalStorage(state: Record<string, string>, history: unknown[]): void {
   for (const k of collectStateKeys()) localStorage.removeItem(k);
   localStorage.removeItem(HISTORY_KEY);
+  // 清 sessionStorage 里的临时 handoff: 项目 A 里 stash 的文献在切到 B 后
+  // 若被 FormatModule.consume 会导致"陈旧文献回魂"到 B 的排版页 (R10 sessionStorage
+  // 只防 F5 不跨项目).
+  try {
+    sessionStorage.removeItem("ra:refhandoff:stash");
+  } catch {
+    /* 忽略 */
+  }
   for (const [k, v] of Object.entries(state)) {
     localStorage.setItem(`ra:${k}`, v);
   }

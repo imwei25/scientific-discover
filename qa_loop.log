@@ -359,3 +359,25 @@ Round 17 (2026-07-05 T~20:30, cron 第十五次触发)
    - RebuttalModule.tsx round <select>: 加 R4 选项 (与后端 _VALID_ROUNDS 对齐)
  · 验证: 10/10 PASS + pytest test_projects 17/17 保持零回归
  · 亮点: 全项目 React #130 hunt 结果 - Markdown 之外无同型潜藏点
+
+Round 18 (2026-07-05 T~21:00, cron 第十六次触发)
+ · 测过: History 30 条并发写 race, CommandPalette restore 边界, Toast 队列压力,
+         全项目跨模块 handoff 完整链 (idea→plan/format/journal, plan→analyze,
+         analyze→imrad/format, imrad→journal/format, sessionStorage refHandoff 跨项目)
+ · 发现 P1:
+   1. CommandPalette restoreHistoryEntry 无 ModuleId 白名单 → 老 history 引用已删模块 → 白屏
+   2. projects.tsx replaceLocalStorage 只清 localStorage 不清 sessionStorage refHandoff
+      → 项目 A stash 的文献回魂到项目 B 的排版页
+   3. Idea→Plan 两处按钮 (整篇/候选卡) 无 confirm, 静默覆盖用户已在 plan 里手写的 idea
+   · 其他 P2/P3 (未修): addHistory 无互斥 30 条并发丢, Toast lastShown map 只增不减,
+     无 Plan→Analyze handoff, Imrad→Journal 无 confirm
+ · 修复(3 项):
+   - CommandPalette.tsx: _KNOWN_MODULES Set + restoreHistoryEntry 校验;
+     未知 module 弹 warn toast 并 return, 不再 setActive 引发白屏
+   - projects.tsx replaceLocalStorage: 加 sessionStorage.removeItem 清 refhandoff stash,
+     切项目不再泄漏文献
+   - IdeaModule.tsx: send-to-plan 与 candidate-to-plan 两处 goto("plan") 前
+     readPersisted 检查 plan:idea 非空 → window.confirm 二次确认
+ · 附赠 UI 需求: 左上角两处手绘 SVG (侧栏 brand + 顶栏 mark) → <img src=/tellgen.png>;
+                 首页动图下 "🖐 可拖动旋转" hint 删除
+ · 验证: 15/15 PASS + pytest 202/202 保持
