@@ -101,3 +101,95 @@ def select_deep_read_chunk(full_text: str, budget_tokens: int = DEEP_READ_MAX_TO
         if remaining <= 0:
             break
     return "\n\n".join(picked) if picked else _truncate_to_budget(full_text, budget_tokens)
+
+
+# ── 上传解析 ─────────────────────────────────────────────────
+
+def _extract_title_and_author(text: str) -> tuple[str, str, str, str]:
+    """尽力抽取 (title, first_author, year, confidence).
+
+    v1 规则:
+      title  = 第一段非空行 (剔除页码/期刊页眉); 长度 6-200 字符; 字母/汉字 >=3;
+               排除以 page/vol/doi/http/www 开头的行; 排除含连续 3+ 噪声符号
+               (*#@$%^&) 的行 (通常是 markdown 分隔或乱字符).
+      author = 匹配 'Firstname Lastname[, ...]' 的第一处
+      year   = 首页文本里第一处 4 位数字 (19xx/20xx)
+    抽不到 title 或 title 过短 → confidence='low'
+    """
+    lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
+    title = ""
+    for ln in lines[:20]:
+        if not (6 <= len(ln) <= 200):
+            continue
+        if not re.search(r"[A-Za-z\u4e00-\u9fff]{3,}", ln):
+            continue
+        if re.match(r"^(page|vol\.?|doi|http|www\.)", ln, re.I):
+            continue
+        # 明显噪声/装饰行: 连续 3+ 符号 (***bad***, ###hdr###) — 不当作标题
+        if re.search(r"[*#@$%^&~]{3,}", ln):
+            continue
+        title = ln
+        break
+    year_match = re.search(r"\b(19|20)\d{2}\b", text[:2000])
+    year = year_match.group(0) if year_match else ""
+    author_match = re.search(
+        r"\b([A-Z][a-z]+(?:\s+[A-Z]\.)?\s+[A-Z][a-z]+)\b", text[:2000]
+    )
+    first_author = author_match.group(1) if author_match else ""
+    confidence = "high" if title and len(title) >= 8 else "low"
+    return title, first_author, year, confidence
+
+
+async def parse_upload(
+    filename: str,
+    content: bytes,
+    project_id: str | None,
+) -> dict:
+    """解析上传文献 → title/摘要 + 全文缓存到 project 目录."""
+    from .extract import extract_text  # 重库延迟导入
+
+    try:
+        ex = extract_text(filename, content)
+    except Exception as e:  # noqa: BLE001
+        return {"ok": False, "error": f"解析失败: {type(e).__name__}: {e}"}
+
+    if not ex.get("ok"):
+        # extract_text 已给出中文可读错误提示, 原样透出
+        return {"ok": False, "error": ex.get("error") or "解析失败"}
+
+    full_text = (ex.get("text") or "").strip()
+    if not full_text:
+        return {"ok": False, "error": "文件无可读文本"}
+
+    title, first_author, year, confidence = _extract_title_and_author(full_text)
+    if not title:
+        # 回退: 用文件名去后缀 (常见: study_2024.pdf → "study 2024")
+        title = re.sub(r"\.(pdf|docx|txt|md)$", "", filename, flags=re.I)
+        title = title.replace("_", " ").strip()
+        confidence = "low"
+
+    abstract = full_text[:500].replace("\n", " ").strip()
+
+    upload_id = _new_upload_id()
+    cache_dir = _upload_cache_dir(project_id)
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    (cache_dir / f"{upload_id}.txt").write_text(full_text, encoding="utf-8")
+
+    # extract_text 目前不返回页数; 用文本长度粗估 (PDF 平均 ~3000 char/页)
+    kind = ex.get("kind", "")
+    if kind == "pdf":
+        page_count = max(1, len(full_text) // 3000)
+    else:
+        page_count = 0
+
+    return {
+        "ok": True,
+        "upload_id": upload_id,
+        "title": title,
+        "first_author": first_author,
+        "year": year,
+        "abstract": abstract,
+        "full_text_available": True,
+        "page_count": page_count,
+        "parse_confidence": confidence,
+    }

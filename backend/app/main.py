@@ -29,6 +29,7 @@ from .config import settings
 from .http_common import MAX_UPLOAD_BYTES, _read_capped, _sse  # noqa: F401 — 测试与旧代码从 main 导入
 from .projects import router as projects_router
 from .routes.analysis_routes import router as analysis_router
+from .routes.deep_research_routes import router as deep_research_router
 from .routes.manuscript import router as manuscript_router
 from .routes.system import router as system_router
 from .routes.text_gen import router as text_gen_router
@@ -51,6 +52,7 @@ app.include_router(text_gen_router)
 app.include_router(analysis_router)
 app.include_router(manuscript_router)
 app.include_router(projects_router)
+app.include_router(deep_research_router)
 
 
 # ── 全局错误 handler: 把 FastAPI 默认的英文 detail 翻译成项目主流的中文 JSON ──

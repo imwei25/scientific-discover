@@ -71,6 +71,14 @@ def _project_path(pid: str) -> Path:
     return _projects_dir() / f"{pid}.json"
 
 
+def project_data_dir(project_id: Optional[str]) -> Path:
+    """返回单项目专属数据目录 (深度调研缓存等落盘用). project_id 为空时用 'default' 目录."""
+    pid = project_id or "default"
+    d = _data_dir() / "project_data" / pid
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
 # ── index 缓存 ───────────────────────────────────────────────
 _index_cache: Optional[list[dict[str, Any]]] = None
 
