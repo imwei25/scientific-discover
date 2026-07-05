@@ -104,7 +104,7 @@ export default function ResearchModule({ goto }: { goto: Goto }) {
         },
       });
     }
-  }, [running, error, text]);
+  }, [running, error, text, contribution, verify]);
 
   // ── 上传解析 (拖入即解析) ─────────────────────────────────
   const ingestLit = async (files: File[]) => {
@@ -637,7 +637,7 @@ export default function ResearchModule({ goto }: { goto: Goto }) {
               </div>
             ) : (
               <div className="verify-bad" data-testid="research-verify">
-                ⚠ 引用核验: {verify.unverified.length} 处引用未命中 (可能为 LLM 编造): {verify.unverified.join(", ")}
+                ⚠ 引用核验: {verify.unverified.length} 处引用未命中 (可能为 LLM 编造): {verify.unverified.slice(0, 8).join(", ")}{verify.unverified.length > 8 ? ` …还有 ${verify.unverified.length - 8} 处` : ""}
               </div>
             )
           )}
@@ -687,7 +687,7 @@ export default function ResearchModule({ goto }: { goto: Goto }) {
           )}
 
           <div className="wiz-nav">
-            <button className="btn-ghost" onClick={() => setStep(3)} data-testid="research-wiz-back-4">← 返回文献</button>
+            <button className="btn-ghost" onClick={() => { if (running) stop(); setStep(3); }} data-testid="research-wiz-back-4">← 返回文献</button>
           </div>
         </div>
       )}

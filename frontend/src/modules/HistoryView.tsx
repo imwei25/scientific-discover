@@ -14,6 +14,7 @@ const NAMES: Record<string, string> = {
   checklist: "报告规范核对",
   poster: "学术海报",
   rebuttal: "回复审稿",
+  research: "深度调研",
 };
 
 export default function HistoryView({ goto }: { goto: Goto }) {
