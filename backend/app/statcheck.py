@@ -46,20 +46,29 @@ async def _extract(text: str) -> list[dict]:
 
 
 def _parse_p(p_text: str):
-    """从 p 值原文解析 (op, value, decimals)。op ∈ =/</>。"""
+    """从 p 值原文解析 (op, value, decimals)。op ∈ =/</>。
+
+    p 值必须落在 (0, 1) 之间; 负号或超出该范围的输入返回 None,
+    避免 '=-0.03' 被静默当作 0.03 参与判定.
+    """
     if not p_text:
         return None
     t = str(p_text).strip()
     op = "<" if "<" in t else (">" if ">" in t else "=")
-    m = re.search(r"(\d*\.\d+|\d+)", t)
+    # 匹配可选的负号 + 数字, 以便识别非法的负 p 值(拒绝而非静默丢负号)
+    m = re.search(r"(-?\d*\.\d+|-?\d+)", t)
     if not m:
         return None
     num = m.group(1)
     decimals = len(num.split(".")[1]) if "." in num else 0
     try:
-        return op, float(num), decimals
+        val = float(num)
     except ValueError:
         return None
+    # p 应在 (0, 1); 允许 =0 / =1 也判为非法, 因为无法与 <0.05 / >0.05 做比较
+    if val <= 0 or val >= 1:
+        return None
+    return op, val, decimals
 
 
 def _recompute(it: dict):

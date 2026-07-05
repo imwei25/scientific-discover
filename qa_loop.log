@@ -98,3 +98,21 @@ Round 6 (2026-07-05 T~15:30, cron 第四次触发)
    - deai.py: 过渡词同句最高只加一次分, 命中词列出但不叠加
    - deai.py: rewrite 前预校验 block_indices, 全部未匹配 → 发 warning 事件后 done
  · 验证: 9/9 PASS (含 4 项 R1-R5 回归)
+
+Round 7 (2026-07-05 T~16:00, cron 第五次触发)
+ · 测过: PHI deidentify (真实路径), statcheck 真实计算 (_parse_p/_recompute),
+         citations 中文样式识别, AttachmentChips 生命周期, history.ts 配额丢失,
+         CanvasEditor/EditableMarkdown/RefineEditor 状态一致性
+ · 发现 P1:
+   1. citations._CHINESE_STYLE_TOKENS 漏 "gb-t-7714" 官方文件名, 中文样式误按英文渲染
+   2. render_bibliography 遇空 date-parts (缺年份) 抛 TypeError 整批渲染断
+   3. statcheck._parse_p("=-0.03") 静默丢负号 → 0.03; =0/=1 也被接受, 判定无意义
+   4. AttachmentChips × 删附件无二次确认, 一点即丢 (且附件多为未持久化 File 对象)
+   5. history.ts 单条超配额静默 return, 无 Toast, 用户以为已保存
+ · 修复(5 项):
+   - citations.py: _CHINESE_STYLE_TOKENS 加 "gb-t-7714"
+   - citations.py _normalize_and_dedup: 过滤空 date-parts 段, 全空则弹 issued 字段
+   - statcheck.py _parse_p: 允许识别负数但拒绝 (返回 None); 拒绝 p<=0 或 p>=1
+   - AttachmentChips.tsx: × 前 window.confirm 二次确认
+   - history.ts: 配额耗尽 (单条也放不下) 时 showToast warn 提示用户
+ · 验证: 9/9 PASS (含 4 项 R1-R6 回归)

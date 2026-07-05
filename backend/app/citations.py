@@ -113,6 +113,19 @@ def _normalize_and_dedup(items: list[dict], preserve_ids: bool = False) -> list[
     for it in items:
         if it.get("DOI"):
             it["DOI"] = _normalize_doi(it["DOI"])
+        # 防御: 空 date-parts (如 [[]] 或 [[None]]) 会让 citeproc-py 抛
+        # "required arguments are missing: year", 整批渲染中断. 缺年份就删除该字段
+        # 让 CSL 样式按"无日期"渲染 (例如 Vancouver 会输出 "n.d.").
+        issued = it.get("issued")
+        if isinstance(issued, dict):
+            dp = issued.get("date-parts")
+            if isinstance(dp, list):
+                # 过滤空子数组, 且要求每个子数组第一位是 int-like
+                cleaned = [seg for seg in dp if isinstance(seg, list) and seg and str(seg[0]).strip()]
+                if cleaned:
+                    issued["date-parts"] = cleaned
+                else:
+                    it.pop("issued", None)
         key = _dedup_key(it)
         if key is not None and key in seen:
             continue
@@ -221,7 +234,8 @@ _CN_SURNAME_PINYIN: frozenset[str] = frozenset({
 })
 
 # CSL style 名字里包含以下关键词, 即视为中文样式.
-_CHINESE_STYLE_TOKENS = ("gb-t7714", "gb/t7714", "gbt7714", "gb7714",
+# 官方 CSL 文件名如 gb-t-7714-2015-numeric / gb-t-7714-2015-author-date 需完整 token 匹配
+_CHINESE_STYLE_TOKENS = ("gb-t-7714", "gb-t7714", "gb/t7714", "gbt7714", "gb7714",
                          "chinese", "zh-cn", "zh-tw", "china")
 
 

@@ -1,4 +1,6 @@
 // 本地历史记录: 保存每次生成的结果, 供回看/恢复到对应模块。
+import { showToast } from "./toast";
+
 export interface HistoryEntry {
   id: string;
   module: string; // idea | plan | analyze | imrad | journal | format | checklist | rebuttal
@@ -35,7 +37,16 @@ export function addHistory(e: Omit<HistoryEntry, "id" | "time">): void {
       localStorage.setItem(KEY, JSON.stringify(trimmed));
       return;
     } catch {
-      if (trimmed.length === 1) return; // 连最新一条都放不下: 放弃, 不影响使用
+      if (trimmed.length === 1) {
+        // 连最新一条都放不下: 通常是分析结果 base64 图太大, 提示用户以免以为已存.
+        try {
+          showToast({
+            kind: "warn",
+            message: "本地存储已满, 最新一次结果未存入历史。可清空一些历史或改导出保存。",
+          });
+        } catch { /* toast 不可用则忽略 */ }
+        return;
+      }
       trimmed = trimmed.slice(0, Math.ceil(trimmed.length / 2)); // 保留较新的一半(含最新)
     }
   }

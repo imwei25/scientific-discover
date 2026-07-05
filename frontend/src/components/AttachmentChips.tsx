@@ -20,8 +20,15 @@ export default function AttachmentChips({ files, onRemove, disabled, testId }: P
               type="button"
               className="attach-chip-remove"
               aria-label={`移除 ${f.name}`}
+              title={`移除 ${f.name} (点击后需确认)`}
               data-testid={testId ? `${testId}-remove-${i}` : undefined}
-              onClick={() => onRemove(i)}
+              onClick={() => {
+                // 附件通常是用户刚上传/拖入的 File 对象, 未持久化 — 误删无法恢复,
+                // 需二次确认避免一点即丢
+                if (window.confirm(`确认移除附件「${f.name}」? 移除后需重新上传。`)) {
+                  onRemove(i);
+                }
+              }}
             >
               ×
             </button>
