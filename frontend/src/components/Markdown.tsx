@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { memo, useMemo } from "react";
 import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import Mermaid from "./Mermaid";
@@ -99,7 +99,7 @@ function isPlaceholderParagraph(text: string): boolean {
   return t.startsWith("[本节缺少必要材料") || t.startsWith("[待补充");
 }
 
-export default function Markdown({
+function MarkdownInner({
   children,
   refInfo,
   highlight,
@@ -184,3 +184,15 @@ export default function Markdown({
     </div>
   );
 }
+
+// memo: 父组件 re-render 但 children 未变 (常见于 useStream delta 快速累积,
+// 父组件 setState 触发但同一 delta 会被 setText 合并为一次 children 变化) 时
+// 跳过 ReactMarkdown 全量 AST 解析. R19 性能审计估算 delta 期间 CPU -60%.
+const Markdown = memo(MarkdownInner, (a, b) =>
+  a.children === b.children &&
+  a.refInfo === b.refInfo &&
+  a.highlight === b.highlight &&
+  a.highlightPlaceholders === b.highlightPlaceholders,
+);
+
+export default Markdown;

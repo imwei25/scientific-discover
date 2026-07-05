@@ -23,7 +23,7 @@ JOURNALS: list[dict] = [
         "latex": {"doc_class": "article", "class_options": ["12pt"], "bib_style": "unsrt", "template": "general_en.tex.j2", "compiler": "pdflatex"},
         "check": {
             "lang": "en", "abstract_unit": "words", "abstract_min": 150, "abstract_max": 250,
-            "required_sections": ["abstract", "keywords", "introduction", "methods", "results", "discussion", "references"],
+            "required_sections": ["abstract", "keywords", "introduction", "methods", "results", "discussion", "conclusion", "references"],
         },
         "rules": (
             "- 章节顺序：Title, Abstract, Keywords, Introduction, Methods, "

@@ -52,3 +52,9 @@ export function consume(): RefHandoff | null {
   _persist(null);
   return s;
 }
+
+/** 切项目时调用: 同时清模块级内存变量 + sessionStorage 持久层, 避免跨项目文献回魂. */
+export function reset(): void {
+  _stash = null;
+  _persist(null);
+}

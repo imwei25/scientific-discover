@@ -197,10 +197,13 @@ async def analyze_forest(req: ForestRequest) -> dict:
         }
     from base64 import b64encode
 
+    import asyncio
     from ..analysis import forest_plot
 
     try:
-        out = forest_plot(req.studies, effect=req.effect or "OR")
+        # matplotlib 是同步阻塞的; 在 async 端点里直调会卡住整个 event loop
+        # (所有 SSE delta 暂停 300-800ms). 用线程池执行, 让其他连接继续 (R19 性能 P1).
+        out = await asyncio.to_thread(forest_plot, req.studies, effect=req.effect or "OR")
         fmt = (req.format or "png").lower()
         if fmt == "svg":
             image_b64 = b64encode(out["svg"].encode("utf-8")).decode("ascii")
@@ -240,6 +243,7 @@ async def analyze_km(
         }
     from base64 import b64encode
 
+    import asyncio
     from ..analysis import km_curve
 
     content = await _read_capped(file)
@@ -247,7 +251,8 @@ async def analyze_km(
         return {"ok": False, "error": "文件过大（超过 30MB），请上传更小的文件。"}
     try:
         gc = group_col.strip() or None
-        out = km_curve(content, file.filename or "data.csv", time_col, event_col, gc)
+        # KM 曲线绘制走线程池, 避免 matplotlib 阻塞 event loop (R19 性能 P1)
+        out = await asyncio.to_thread(km_curve, content, file.filename or "data.csv", time_col, event_col, gc)
         fmt = (format or "png").lower()
         if fmt == "svg":
             image_b64 = b64encode(out["svg"].encode("utf-8")).decode("ascii")
@@ -281,13 +286,15 @@ async def analyze_roc(
         }
     from base64 import b64encode
 
+    import asyncio
     from ..analysis import roc_curve_plot
 
     content = await _read_capped(file)
     if content is None:
         return {"ok": False, "error": "文件过大（超过 30MB），请上传更小的文件。"}
     try:
-        out = roc_curve_plot(content, file.filename or "data.csv", y_true_col, y_score_col)
+        # ROC 曲线走线程池, 避免 matplotlib 阻塞 event loop (R19 性能 P1)
+        out = await asyncio.to_thread(roc_curve_plot, content, file.filename or "data.csv", y_true_col, y_score_col)
         fmt = (format or "png").lower()
         if fmt == "svg":
             image_b64 = b64encode(out["svg"].encode("utf-8")).decode("ascii")

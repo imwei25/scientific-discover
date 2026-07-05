@@ -970,9 +970,17 @@ export default function IdeaModule({ goto }: { goto: Goto }) {
                         className="btn-primary candidate-to-grant"
                         data-testid={`candidate-to-grant-${i}`}
                         onClick={() => {
+                          // Grant 里已有非空 idea 或已生成的 sections 时二次确认, 避免用户 30 分钟的标书草稿被静默覆盖
+                          const existingIdea = (readPersisted<string>("grant:idea", "") || "").trim();
+                          const existingSections = readPersisted<unknown[]>("grant:sections", []);
+                          if ((existingIdea && existingIdea !== c.title) || (Array.isArray(existingSections) && existingSections.length > 0)) {
+                            const ok = window.confirm(
+                              `写标书页已有内容 (草稿 idea 约 ${existingIdea.length} 字, 已生成 ${Array.isArray(existingSections) ? existingSections.length : 0} 章节), 是否用候选方向「${c.title}」覆盖? 覆盖不可撤销。`,
+                            );
+                            if (!ok) return;
+                          }
                           const cited = refsCitedIn(c.body, refs);
                           const carried = cited.length ? cited : refs;
-                          // 同步带走已经抽好的核心发现, 标书那边就不用再跑一次 /api/refs/extract-evidence。
                           const carriedEvidence: Record<string, EvidenceItem & { _ev_status?: string }> = {};
                           for (const r of carried) {
                             const ev = evidenceByKey[refKey(r)];

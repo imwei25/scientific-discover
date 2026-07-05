@@ -66,7 +66,10 @@ export default function HistoryView({ goto }: { goto: Goto }) {
                     {NAMES[it.module] ?? it.module} · {formatTime(it.time)}
                   </span>
                 </span>
-                <button className="btn-ghost" data-testid="restore-btn" onClick={() => goto(it.module as ModuleId, it.data)}>
+                <button className="btn-ghost" data-testid="restore-btn" onClick={() => {
+                  if (!window.confirm(`恢复历史「${it.title || NAMES[it.module] || it.module}」? 会覆盖当前模块里的活跃编辑内容, 此操作不可撤销。`)) return;
+                  goto(it.module as ModuleId, it.data);
+                }}>
                   恢复 →
                 </button>
               </li>

@@ -299,6 +299,9 @@ export default function PosterModule({ vlmConfigured, onOpenSettings }: Props) {
               data-testid="poster-preview"
               title="海报预览"
               srcDoc={html}
+              // 沙箱化: 只允许 same-origin (给 html2canvas 读 DOM), 禁掉 scripts/forms/top-navigation.
+              // 防 LLM prompt injection 产生的恶意 HTML 通过 iframe 反打父页 (R19 安全审计 P0).
+              sandbox="allow-same-origin"
               style={{ width: "100%", height: 620, border: "1px solid #dbe4e2", borderRadius: 8, background: "#d8dedd" }}
             />
           )}

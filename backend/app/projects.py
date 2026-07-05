@@ -23,7 +23,7 @@ import uuid as uuid_mod
 from pathlib import Path
 from typing import Any, Optional
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 
 MAX_NAME_LEN = 80
@@ -287,6 +287,16 @@ def delete_project(pid: str) -> bool:
 router = APIRouter(prefix="/api/projects", tags=["projects"])
 
 
+def _require_localhost(request: "Request") -> None:
+    """所有修改类接口只允许 127.0.0.1 调用. 局域网模式 (HOST=0.0.0.0) 下,
+    任何同网段用户都能删项目/覆写 state, 加此闸门堵住 CSRF + LAN 侧攻击面.
+    (R19 P0 安全审计). "testclient" 是 fastapi TestClient 的默认 host, 放行以便测试."""
+    client = request.client
+    host = (client.host if client else "") or ""
+    if host not in {"127.0.0.1", "::1", "localhost", "testclient"}:
+        raise HTTPException(status_code=403, detail="该接口仅允许本机访问")
+
+
 class CreateBody(BaseModel):
     id: str
     name: str
@@ -307,7 +317,8 @@ def route_list() -> list[dict[str, Any]]:
 
 
 @router.post("")
-def route_create(body: CreateBody) -> dict[str, Any]:
+def route_create(body: CreateBody, request: Request) -> dict[str, Any]:
+    _require_localhost(request)
     try:
         return create_project(id=body.id, name=body.name)
     except ValueError as e:
@@ -328,7 +339,8 @@ def route_get(pid: str) -> dict[str, Any]:
 
 
 @router.put("/{pid}/state")
-def route_update_state(pid: str, body: UpdateStateBody) -> dict[str, Any]:
+def route_update_state(pid: str, body: UpdateStateBody, request: Request) -> dict[str, Any]:
+    _require_localhost(request)
     try:
         _validate_uuid(pid)
     except ValueError:
@@ -342,7 +354,8 @@ def route_update_state(pid: str, body: UpdateStateBody) -> dict[str, Any]:
 
 
 @router.patch("/{pid}")
-def route_rename(pid: str, body: RenameBody) -> dict[str, Any]:
+def route_rename(pid: str, body: RenameBody, request: Request) -> dict[str, Any]:
+    _require_localhost(request)
     try:
         _validate_uuid(pid)
     except ValueError:
@@ -357,7 +370,8 @@ def route_rename(pid: str, body: RenameBody) -> dict[str, Any]:
 
 
 @router.delete("/{pid}", status_code=204, response_model=None)
-def route_delete(pid: str) -> None:
+def route_delete(pid: str, request: Request) -> None:
+    _require_localhost(request)
     try:
         _validate_uuid(pid)
     except ValueError:

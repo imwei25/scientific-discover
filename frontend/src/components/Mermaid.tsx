@@ -66,8 +66,11 @@ export default function Mermaid({ code }: { code: string }) {
   }
 
   if (lastGood.current) {
+    // 从代码首行猜标题给屏幕阅读器: "flowchart TD" / "gantt" / "sequenceDiagram" 等
+    const firstLine = code.split("\n").find((l) => l.trim()) || "";
+    const diagramLabel = `图表 (${firstLine.trim().slice(0, 40)})`;
     return (
-      <div className="mermaid-figure">
+      <div className="mermaid-figure" role="img" aria-label={diagramLabel}>
         {/* mermaid strict 模式已对内容消毒, svg 可信 */}
         <div dangerouslySetInnerHTML={{ __html: svg || lastGood.current }} />
         {failed && <div className="mermaid-note">（图表代码有改动但暂未通过校验，显示的是上一版）</div>}

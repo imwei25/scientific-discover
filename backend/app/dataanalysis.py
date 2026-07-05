@@ -211,7 +211,17 @@ def _dedup_columns(df: pd.DataFrame) -> pd.DataFrame:
 def _load(filename: str, content: bytes) -> pd.DataFrame:
     # CSV 用共享的健壮解码(兼容中文用户常见的 GBK/带BOM 编码), 见 textio.read_csv_bytes。
     if filename.lower().endswith((".xlsx", ".xls")):
-        return _dedup_columns(pd.read_excel(io.BytesIO(content)))
+        # 多 sheet 场景静默读第一张会漏数据 (R19 UX 审计 P1). 检出后抛 ValueError,
+        # 上层能把提示转发给用户: 让用户合并到一张表, 或明确指定要用哪张 sheet.
+        xls = pd.ExcelFile(io.BytesIO(content))
+        if len(xls.sheet_names) > 1:
+            names = ", ".join(f"「{n}」" for n in xls.sheet_names[:5])
+            more = "" if len(xls.sheet_names) <= 5 else f" 等 {len(xls.sheet_names)} 张"
+            raise ValueError(
+                f"Excel 含多张工作表 ({names}{more}), 默认只会分析第一张易漏数据。"
+                f"请合并到一张表, 或另存为 CSV 后重试。"
+            )
+        return _dedup_columns(pd.read_excel(xls, sheet_name=xls.sheet_names[0]))
     return _dedup_columns(read_csv_bytes(content))
 
 

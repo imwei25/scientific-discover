@@ -88,7 +88,7 @@ export default function ToastContainer() {
   }, []);
 
   return (
-    <div className="toast-container" data-testid="toast-container" aria-live="polite">
+    <div className="toast-container" data-testid="toast-container" role="log" aria-live="polite" aria-relevant="additions">
       {stack.map((t) => (
         <ToastItem key={t.id} entry={t} onClose={() => {
           setStack((prev) => prev.filter((p) => p.id !== t.id));

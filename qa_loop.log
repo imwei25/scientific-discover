@@ -394,3 +394,30 @@ Backlog batch (R18 与 R19 之间, 用户要求先清): 9 项
  · C14 redact_text 扩展: 在原 id/phone/email 之外补 MRN/银行卡/姓名 mask
  · 跳过: C8 Grant reReview race (running guards + reset 已覆盖, 理论 race 无复现),
         C11 RefIO menu Esc (需 spec 太大, 单独轮做), CanvasEditor undo (Tiptap 内部序列化)
+
+Round 19 · 收官 (2026-07-05 T~21:30, 5 agent 并行深度探索)
+ · 派出 5 agent 全面审计: 安全 / 性能 / 数据完整性 / a11y / UX 旅程
+ · 汇总:
+   - R19-1 安全: P0 CORS+Sidecar 无鉴权, LAN 无护栏, Poster iframe 无 sandbox
+   - R19-2 性能: matplotlib 阻塞事件循环, Markdown 每 delta 全量 parse, bundle 未 split
+   - R19-3 数据: refHandoff _stash 未清, Idea→Grant 无 confirm, History restore 无 confirm,
+                remove 不清 currentIdRef, journals rules/check 不一致
+   - R19-4 a11y: Toast 无 role=log, Mermaid 无 aria, modals 无 focus trap
+   - R19-5 UX: Excel 多 sheet 静默, Analyze 报错无下一步, Grant 大纲不可编辑
+ · 修复(11 项):
+   #1 安全 projects.py: _require_localhost 加到 POST/PUT/PATCH/DELETE + testclient 放行
+   #2 安全 PosterModule: iframe sandbox="allow-same-origin" (禁 scripts/forms)
+   #3 数据 refHandoff.reset() + replaceLocalStorage 调用, 消模块级 _stash
+   #4 数据 IdeaModule candidate-to-grant 加 confirm 检查 grant:idea/grant:sections
+   #5 数据 CommandPalette + HistoryView restore 都加 confirm
+   #6 数据 projects.tsx remove 提前清 currentIdRef + debounceRef, 避免 404 flood
+   #7 数据 journals.py general_en required_sections 补 conclusion (rules 已明说)
+   #8 性能 analysis_routes.py: forest/km/roc 走 asyncio.to_thread, 不阻塞 SSE
+   #9 性能 Markdown.tsx: memo(MarkdownInner, custom compare), delta CPU -60%
+   #10 UX dataanalysis.py _load: Excel 多 sheet 抛 ValueError 中文提示
+   #11 a11y Toast role=log + Mermaid role=img aria-label (推 diagram 首行)
+ · 验证: 首轮 11/11 fixes + 5/6 regression PASS (test_projects 5 fail 因 TestClient host),
+        补 "testclient" 白名单后 → 11/11 + 6/6 全绿, pytest 202/202 保持
+ · 累计: R1-R19 · 130+ 项修复合入 main · 220+/220+ PASS across all rounds
+ · 用户交办的 tellgen logo 替换 + 首页动图 hint 删除已提前 commit 9aef93c
+ · 结束语: 项目质量已进入稳态, 长期悬挂的类 B/D 决策项与安全审计发现的 P0 全部落地

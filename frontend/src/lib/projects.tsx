@@ -106,10 +106,11 @@ function dumpHistoryFromLocalStorage(): unknown[] {
 function replaceLocalStorage(state: Record<string, string>, history: unknown[]): void {
   for (const k of collectStateKeys()) localStorage.removeItem(k);
   localStorage.removeItem(HISTORY_KEY);
-  // 清 sessionStorage 里的临时 handoff: 项目 A 里 stash 的文献在切到 B 后
-  // 若被 FormatModule.consume 会导致"陈旧文献回魂"到 B 的排版页 (R10 sessionStorage
-  // 只防 F5 不跨项目).
+  // 清跨项目会污染的 handoff (内存 + sessionStorage 两层). 直接调 refHandoff.reset
+  // 保证不遗漏 (R19 数据审计发现 sessionStorage 清了但模块级 _stash 变量还留着).
   try {
+    // 动态 import 避免循环依赖
+    import("./refHandoff").then((m) => m.reset()).catch(() => {});
     sessionStorage.removeItem("ra:refhandoff:stash");
   } catch {
     /* 忽略 */
@@ -266,9 +267,18 @@ export function ProjectProvider({ children }: { children: ReactNode }) {
   }, [refreshList]);
 
   const remove = useCallback(async (id: string) => {
+    // 若被删的就是当前项目, 提前清 debounce 计时器 + currentIdRef, 避免后续 delta 触发
+    // 的 flushNow 用旧 id 调 PUT 得 404 → 4 次重试 → error 态 (R19 数据审计 P1).
+    if (currentIdRef.current === id) {
+      if (debounceRef.current) {
+        clearTimeout(debounceRef.current);
+        debounceRef.current = null;
+      }
+      currentIdRef.current = null;
+    }
     await api.remove(id);
     let list = await refreshList();
-    if (currentIdRef.current === id) {
+    if (!current || current.id === id) {
       if (list.length === 0) {
         await create("未命名项目");
         return;

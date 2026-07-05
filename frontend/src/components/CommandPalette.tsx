@@ -220,6 +220,12 @@ export function restoreHistoryEntry(entry: HistoryEntry, setActive: (m: string) 
     }).catch(() => { /* toast 库不可用则默默忽略 */ });
     return;
   }
+  // 二次确认: 恢复会覆盖当前 {imrad:draft, analyze:conclusion, format:manuscript, ...} 里
+  // 的活跃内容, R19 数据审计标 P1. 让用户明确操作.
+  const ok = window.confirm(
+    `恢复历史「${entry.title || entry.module}」? 会覆盖当前模块里的活跃编辑内容, 此操作不可撤销。`,
+  );
+  if (!ok) return;
   for (const [k, v] of Object.entries(entry.data)) writePersisted(k, v);
   if (entry.module) setActive(entry.module);
 }
