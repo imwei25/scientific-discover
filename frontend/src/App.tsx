@@ -17,6 +17,7 @@ import FormatModule from "./modules/FormatModule";
 import ChecklistModule from "./modules/ChecklistModule";
 import PosterModule from "./modules/PosterModule";
 import RebuttalModule from "./modules/RebuttalModule";
+import ResearchModule from "./modules/ResearchModule";
 import HistoryView from "./modules/HistoryView";
 import ThemeSwitcher from "./components/ThemeSwitcher";
 import FontSizeSwitcher, { useFontSize } from "./components/FontSizeSwitcher";
@@ -469,7 +470,7 @@ export default function App() {
           <ErrorBoundary key={active}>
             {active === "home" && <Home onPick={setActive} visibleNav={visibleNav} />}
             {active === "idea" && <IdeaModule goto={goto} />}
-            {active === "research" && <div style={{ padding: 24 }}>深度调研模块开发中...</div>}
+            {active === "research" && <ResearchModule goto={goto} />}
             {active === "grant" && <GrantModule goto={goto} />}
             {active === "plan" && <PlanModule />}
             {active === "ethics" && <EthicsModule />}
