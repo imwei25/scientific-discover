@@ -4819,3 +4819,18 @@ mark.ai-edit {
 }
 .deep-read-table th:first-child, .deep-read-table td:first-child { text-align: center; width: 40px; }
 .deep-read-table th:last-child, .deep-read-table td:last-child { text-align: center; width: 60px; }
+
+/* Step 4: 逐文献贡献表 + 深读进度 */
+.contribution-table { margin-top: 16px; }
+.contribution-table table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.contribution-table th, .contribution-table td {
+  border: 1px solid var(--border, #ddd); padding: 6px 8px; text-align: left;
+}
+.contribution-head {
+  display: flex; justify-content: space-between; align-items: center;
+  margin-bottom: 8px; font-size: 14px; font-weight: 600;
+}
+.deep-read-progress {
+  padding: 6px 10px; background: var(--panel-alt, #f5f5f5);
+  border-radius: 4px; margin: 8px 0; font-size: 13px;
+}

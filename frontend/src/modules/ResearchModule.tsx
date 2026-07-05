@@ -10,7 +10,7 @@ import EditableMarkdown from "../components/EditableMarkdown";
 import WarningPanel from "../components/WarningPanel";
 import FollowupPanel from "../components/FollowupPanel";
 import ReportExportBar from "../components/ReportExportBar";
-import { usePersistentState } from "../lib/usePersistentState";
+import { usePersistentState, readPersisted } from "../lib/usePersistentState";
 import { useProjects } from "../lib/projects";
 import { downloadCsv, tsName } from "../lib/download";
 import type { Goto } from "../App";
@@ -81,8 +81,30 @@ export default function ResearchModule({ goto }: { goto: Goto }) {
   const [running, setRunning] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [warnings, setWarnings] = useState<string[]>([]);
-  const [deepReadProgress, setDeepReadProgress] = useState<{ done: number; total: number } | null>(null);
+  const [deepReadProgress, setDeepReadProgress] = useState<{ done: number; total: number; current_ref_key?: string } | null>(null);
   const ctrl = useRef<AbortController | null>(null);
+
+  // ── history 集成: 报告完成后写一次 ─────────────────────────
+  const savedRef = useRef("");
+  useEffect(() => {
+    if (!running && !error && text && savedRef.current !== text) {
+      savedRef.current = text;
+      addHistory({
+        module: "research", icon: "🔬",
+        title: question.slice(0, 40) || "深度调研",
+        data: {
+          "research:question": question, "research:field": field,
+          "research:background": background, "research:result": text,
+          "research:refs": refs, "research:evidence": evidence,
+          "research:contribution": contribution, "research:verify": verify,
+          "research:qa": followups,
+          "research:step": step, "research:maxStep": Math.max(maxStep, step),
+          "research:selectedKeys": selectedKeys, "research:deepReadKeys": deepReadKeys,
+          "research:uploadedRefs": uploadedRefs,
+        },
+      });
+    }
+  }, [running, error, text]);
 
   // ── 上传解析 (拖入即解析) ─────────────────────────────────
   const ingestLit = async (files: File[]) => {
@@ -199,26 +221,68 @@ export default function ResearchModule({ goto }: { goto: Goto }) {
     );
     setRunning(false);
   };
-  const runGenerate = async () => { /* Task 16 */ };
+  const runGenerate = async () => {
+    if (running) return;
+    const sel = refs.filter((r) => selectedKeys.includes(refKeyOf(r as Reference & { upload_id?: string })));
+    if (sel.length === 0) { setError("请至少勾选一篇文献"); return; }
+    const selEvidence = evidence.filter((e) => sel.some((r) =>
+      (r.url && r.url.replace(/\/+$/, "") === (e.url || "").replace(/\/+$/, ""))
+      || (r.title && r.title.trim().toLowerCase() === (e.title || "").trim().toLowerCase())
+    ));
+    const deep_read_targets = sel
+      .filter((r) => deepReadKeys.includes(refKeyOf(r as Reference & { upload_id?: string })))
+      .map((r) => {
+        const cast = r as Reference & { upload_id?: string; oa_url?: string };
+        return {
+          ref_key: refKeyOf(cast),
+          source: (cast.upload_id ? "upload" : cast.oa_url ? "oa" : "crossref") as "upload" | "oa" | "crossref",
+          upload_id: cast.upload_id,
+          oa_url: cast.oa_url,
+        };
+      });
+    setError(null); setStatus(""); setText(""); setContribution([]); setVerify(null);
+    setReportCollapsed(false); setFollowups([]); setWarnings([]);
+    setRunning(true); goStep(4);
+    ctrl.current = new AbortController();
+    await streamDeepResearch(
+      {
+        question, field, background, phase: "generate",
+        references: sel,
+        evidence: selEvidence,
+        deep_read_targets,
+        english_report: englishReport,
+        project_id: projectId,
+      },
+      {
+        signal: ctrl.current.signal,
+        onStatus: setStatus,
+        onDeepReadProgress: (p) => setDeepReadProgress(p),
+        onDelta: (t) => setText((prev) => prev + t),
+        onContributionTable: (rows) => { setContribution(rows); setDeepReadProgress(null); },
+        onVerify: setVerify,
+        onWarning: (m) => setWarnings((prev) => [...prev, m]),
+        onError: (m) => {
+          setError(m); setStatus(""); setRunning(false);
+          setText((t) => (t && !t.endsWith("…(生成中断)") ? t + "\n\n…(生成中断)" : t));
+          reportLLMError(m);
+        },
+        onDone: () => {
+          setStatus(""); setRunning(false); setDeepReadProgress(null);
+          window.dispatchEvent(new Event("usage-updated"));
+        },
+      },
+    );
+    setRunning(false);
+  };
   const stop = () => { ctrl.current?.abort(); setRunning(false); setStatus(""); };
 
   const toggleStudyType = (key: string) => {
     setStudyTypes((prev) => (prev.includes(key) ? prev.filter((s) => s !== key) : [...prev, key]));
   };
 
-  // Suppress "declared but unused" TS warnings for Step 4 state until Task 16 lands
-  void refSort;
-  void text; void contribution; void verify; void followups;
-  void reportCollapsed; void deepReadProgress;
-  void goto; void setStep; void maxStep;
-  void streamDeepResearchFollowup;
-  void addHistory;
-  void EditableMarkdown; void FollowupPanel; void ReportExportBar;
-  void downloadCsv; void tsName; void useMemo; void useEffect;
-  void setRefSort;
-  void setText; void setContribution; void setVerify; void setFollowups;
-  void setReportCollapsed; void setDeepReadProgress;
-  void englishReport;
+  // refSort/setRefSort: 预留给 Step 3 排序增强 (尚未接入 LiteraturePicker), 暂保留
+  void refSort; void setRefSort;
+  void useMemo;
 
   return (
     <div className="module idea-wizard">
@@ -503,12 +567,127 @@ export default function ResearchModule({ goto }: { goto: Goto }) {
         </div>
       )}
 
-      {/* Step 4 (由 Task 16 实现) */}
+      {/* Step 4 (调研产出) */}
       {step === 4 && (
         <div className="wiz-panel" data-testid="research-wiz-panel-4">
-          <p>Step 4 (调研产出) 由 Task 16 实现,暂无内容。</p>
+          {status && <div className="status-line"><span className="spinner" /> {status}</div>}
+          {deepReadProgress && (
+            <div className="deep-read-progress" data-testid="research-deep-read-progress">
+              深读 {deepReadProgress.done}/{deepReadProgress.total} …
+            </div>
+          )}
+
+          <div className="result-panel">
+            <div className="result-toolbar">
+              <span className="result-status">
+                {running ? "生成中…" : text ? (text.endsWith("…(生成中断)") ? "⚠ 已中断" : "已完成") : "等待生成"}
+              </span>
+              <ReportExportBar
+                text={text}
+                refs={refs}
+                title="深度调研"
+                running={running}
+                reportCollapsed={reportCollapsed}
+                onToggleCollapsed={() => setReportCollapsed((v) => !v)}
+                onStatus={setStatus}
+                testIdPrefix="research-"
+                extraLeadingActions={
+                  <>
+                    {running && <button className="btn-ghost" onClick={stop} data-testid="research-stop-btn">停止</button>}
+                    {text && !running && (
+                      <button className="btn-ghost" data-testid="research-send-to-plan-btn" onClick={() => {
+                        const existing = (readPersisted<string>("plan:idea", "") || "").trim();
+                        if (existing && existing !== text.trim()) {
+                          if (!window.confirm(`实验规划页已有研究想法 (~${existing.length} 字), 覆盖?`)) return;
+                        }
+                        const parts = [`[研究问题]\n${question}`, background && `[背景]\n${background}`].filter(Boolean).join("\n\n");
+                        goto("plan", {
+                          "plan:idea": text,
+                          "plan:materials": parts,
+                          "plan:materials:migrated": true,
+                        });
+                      }}>→ 送到实验规划</button>
+                    )}
+                  </>
+                }
+              />
+            </div>
+            {reportCollapsed && text && !running && (
+              <button className="report-collapsed-bar" onClick={() => setReportCollapsed(false)}>
+                📄 调研报告已折叠 —— 点此展开
+              </button>
+            )}
+            <div className={reportCollapsed && text && !running ? "report-body is-collapsed" : "report-body"}>
+              <EditableMarkdown
+                value={text}
+                onSave={setText}
+                running={running}
+                enableRefine={!running && !!text}
+                refs={refs}
+                placeholder={running ? "正在合成…" : "点击 Step 3 的开始按钮后, 报告会显示在这里。"}
+                testId="research-result-text"
+              />
+            </div>
+          </div>
+
+          {verify && !running && (
+            verify.unverified.length === 0 ? (
+              <div className="verify-ok" data-testid="research-verify">
+                ✓ 引用核验: {verify.total} 处引用均命中已勾选文献
+              </div>
+            ) : (
+              <div className="verify-bad" data-testid="research-verify">
+                ⚠ 引用核验: {verify.unverified.length} 处引用未命中 (可能为 LLM 编造): {verify.unverified.join(", ")}
+              </div>
+            )
+          )}
+
+          {contribution.length > 0 && !running && (
+            <div className="contribution-table" data-testid="research-contribution-table">
+              <div className="contribution-head">
+                <span>逐文献贡献表</span>
+                <button className="btn-ghost" onClick={() => {
+                  const headers = ["#", "作者/年份", "期刊", "设计", "样本", "主要发现", "相关性", "深读"];
+                  const rows = contribution.map((c) => [c.n, c.author_year, c.journal, c.design, c.sample, c.finding, c.relevance, c.deep_read ? "是" : "否"]);
+                  downloadCsv(tsName("深度调研-贡献表", "csv"), headers, rows);
+                }}>导出 CSV</button>
+              </div>
+              <table>
+                <thead><tr>{["#", "作者/年份", "期刊", "设计", "样本", "主要发现", "相关性", "深读"].map((h) => <th key={h}>{h}</th>)}</tr></thead>
+                <tbody>
+                  {contribution.map((c) => (
+                    <tr key={c.n}>
+                      <td>{c.n}</td><td>{c.author_year}</td><td>{c.journal}</td>
+                      <td>{c.design}</td><td>{c.sample}</td><td>{c.finding}</td>
+                      <td>{c.relevance === "direct" ? "直接" : c.relevance === "indirect" ? "间接" : "支持"}</td>
+                      <td>{c.deep_read ? "✓" : "—"}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+
+          {text && !running && (
+            <FollowupPanel
+              testId="research-followup"
+              followups={followups}
+              onAddFollowup={(item) => setFollowups((prev) => [...prev, item])}
+              onReviseReport={setText}
+              onVerifyUpdate={setVerify as (v: unknown) => void}
+              streamFn={(payload, cb) => streamDeepResearchFollowup(
+                payload as Parameters<typeof streamDeepResearchFollowup>[0],
+                cb as Parameters<typeof streamDeepResearchFollowup>[1],
+              )}
+              currentReport={text}
+              references={refs}
+              evidence={evidence}
+              englishReport={englishReport}
+            />
+          )}
+
           <div className="wiz-nav">
-            <button className="btn-ghost" onClick={() => setStep(3)}>← 返回文献</button>
+            <button className="btn-ghost" onClick={() => setStep(3)} data-testid="research-wiz-back-4">← 返回文献</button>
           </div>
         </div>
       )}
