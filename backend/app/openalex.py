@@ -106,14 +106,19 @@ def _params(query: str, per_query: int, filter_extra: str = "") -> dict:
 
 
 async def _search_one(client: httpx.AsyncClient, query: str, per_query: int, filter_extra: str = "") -> list[dict]:
-    r = await client.get(_ENDPOINT, params=_params(query, per_query, filter_extra))
-    r.raise_for_status()
-    out: list[dict] = []
-    for raw in r.json().get("results", []) or []:
-        norm = _normalize(raw)
-        if norm:
-            out.append(norm)
-    return out
+    from .http_common import with_backoff
+
+    async def _do() -> list[dict]:
+        r = await client.get(_ENDPOINT, params=_params(query, per_query, filter_extra))
+        r.raise_for_status()
+        out: list[dict] = []
+        for raw in r.json().get("results", []) or []:
+            norm = _normalize(raw)
+            if norm:
+                out.append(norm)
+        return out
+
+    return await with_backoff(_do)
 
 
 async def search_openalex(queries: list[str], per_query: int = 6, cap: int = 18, filters: dict | None = None) -> dict:

@@ -7,6 +7,7 @@ import { HelpButton } from "../../components/HelpButton";
 import { downloadText, downloadBase64, chartMime, tsName, downloadAnalysisReport } from "../../lib/download";
 import { apiUrl } from "../../lib/api";
 import { readPersisted } from "../../lib/usePersistentState";
+import { copyToClipboard } from "../../lib/clipboard";
 import type { Goto } from "../../App";
 import type { ChartType } from "./types";
 
@@ -186,8 +187,8 @@ export default function GeneralResults({
                       <button
                         className="btn-ghost" data-testid="copy-conclusion-btn" title="把分析结论复制到剪贴板"
                         onClick={async () => {
-                          try { await navigator.clipboard.writeText(conclusion); setCopyState("ok"); }
-                          catch { setCopyState("err"); }
+                          const ok = await copyToClipboard(conclusion);
+                          setCopyState(ok ? "ok" : "err");
                           window.setTimeout(() => setCopyState("idle"), 2000);
                         }}
                       >

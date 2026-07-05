@@ -1,9 +1,40 @@
-"""路由共享的 HTTP 工具: SSE 编码、上传大小限制。"""
+"""路由共享的 HTTP 工具: SSE 编码、上传大小限制、上游 API 指数退避重试。"""
 from __future__ import annotations
 
+import asyncio
 import json
+from typing import Awaitable, Callable, TypeVar
 
+import httpx
 from fastapi import UploadFile
+
+_T = TypeVar("_T")
+
+
+async def with_backoff(
+    fn: Callable[[], Awaitable[_T]],
+    *,
+    attempts: int = 3,
+    base_delay: float = 1.0,
+    retry_on_status: tuple[int, ...] = (429, 500, 502, 503, 504),
+) -> _T:
+    """在 fn 抛 httpx.HTTPStatusError (状态码在 retry_on_status) 或超时/连接错误时,
+    指数退避重试. delay = base_delay * 3**i (i=0,1,2 → 1s, 3s, 9s).
+    抛出的最后一次异常向上传播."""
+    last_exc: Exception | None = None
+    for i in range(attempts):
+        try:
+            return await fn()
+        except httpx.HTTPStatusError as e:
+            if e.response.status_code not in retry_on_status:
+                raise
+            last_exc = e
+        except (httpx.TimeoutException, httpx.NetworkError) as e:
+            last_exc = e
+        if i < attempts - 1:
+            await asyncio.sleep(base_delay * (3 ** i))
+    assert last_exc is not None
+    raise last_exc
 
 SSE_HEADERS = {"Cache-Control": "no-cache", "X-Accel-Buffering": "no"}
 

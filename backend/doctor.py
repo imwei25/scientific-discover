@@ -14,6 +14,16 @@ import socket
 import sys
 from pathlib import Path
 
+# Windows 中文控制台默认 cp936, print 中文会乱码 → 用户看到 �������.
+# 显式把 stdout/stderr 切成 UTF-8, 让非 IT 用户能读到修复建议.
+try:
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    if hasattr(sys.stderr, "reconfigure"):
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+except Exception:  # noqa: BLE001
+    pass
+
 OK = "[OK]"
 BAD = "[X ]"
 WARN = "[! ]"

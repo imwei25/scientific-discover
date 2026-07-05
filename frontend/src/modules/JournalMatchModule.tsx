@@ -4,6 +4,7 @@ import { addHistory } from "../lib/history";
 import { apiUrl } from "../lib/api";
 import Dropzone from "../components/Dropzone";
 import { downloadText, tsName } from "../lib/download";
+import { copyToClipboard } from "../lib/clipboard";
 
 interface JournalHit {
   journal: string;
@@ -159,13 +160,9 @@ export default function JournalMatchModule() {
                 data-testid="journal-copy-btn"
                 title="复制候选期刊清单到剪贴板"
                 onClick={async () => {
-                  try {
-                    await navigator.clipboard.writeText(hitsMarkdown());
-                    setCopied(true);
-                    window.setTimeout(() => setCopied(false), 1800);
-                  } catch {
-                    /* 剪贴板未授权：忽略 */
-                  }
+                  const ok = await copyToClipboard(hitsMarkdown());
+                  if (ok) { setCopied(true); window.setTimeout(() => setCopied(false), 1800); }
+                  else { setError("复制失败：浏览器未授权剪贴板 (可能在 http 局域网下), 请手动选中复制。"); }
                 }}
               >
                 {copied ? "已复制 ✓" : "复制清单"}

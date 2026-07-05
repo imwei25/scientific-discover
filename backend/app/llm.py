@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import threading
 from dataclasses import dataclass
 from typing import AsyncIterator
 
@@ -47,11 +48,14 @@ _MAX_RETRIES = 2
 _RETRY_BACKOFF = 0.8  # 秒, 线性递增
 
 # 本进程累计 token 用量(C8): 每次模型调用回报的 usage 累加, 供侧栏展示"本次会话已用"。
+# 并发 SSE 流末同时上报 usage 时, 4 行 += 之间可能读到中间态; 加锁保证原子.
 _session_usage = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0, "requests": 0}
+_usage_lock = threading.Lock()
 
 
 def get_session_usage() -> dict:
-    return dict(_session_usage)
+    with _usage_lock:
+        return dict(_session_usage)
 
 
 def _add_usage(u: dict | None) -> None:
@@ -60,10 +64,11 @@ def _add_usage(u: dict | None) -> None:
     pt = int(u.get("prompt_tokens") or u.get("input_tokens") or 0)
     ct = int(u.get("completion_tokens") or u.get("output_tokens") or 0)
     tt = int(u.get("total_tokens") or (pt + ct))
-    _session_usage["prompt_tokens"] += pt
-    _session_usage["completion_tokens"] += ct
-    _session_usage["total_tokens"] += tt
-    _session_usage["requests"] += 1
+    with _usage_lock:
+        _session_usage["prompt_tokens"] += pt
+        _session_usage["completion_tokens"] += ct
+        _session_usage["total_tokens"] += tt
+        _session_usage["requests"] += 1
 
 
 @dataclass

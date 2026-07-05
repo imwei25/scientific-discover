@@ -181,3 +181,33 @@ Round 10 (2026-07-05 T~17:00, cron 第八次触发 + A/B/R10 三合一批处理)
  · 验证: 12/12 PASS (含 4 项 R1-R9 回归)
  · 注: R9 flag 的 B2 (goto 跨项目污染) 复审代码后发现 switchTo 已正确处理 (clearTimeout + suppressEventsRef),
         不需要修
+
+Round 11 (2026-07-05 T~17:30, cron 第九次触发 + R11 + D1-D5 大批处理)
+ · 测过: 后端并发压力 (projects/atomic_write/index_cache), config.py .env 解析,
+         doctor.py/selftest.py, llm.py usage 计数, 响应式布局, print CSS,
+         浏览器 back/forward, 模块卸载, tab visibility
+ · R11 发现 P1:
+   1. projects.py _atomic_write 并发 500 (tmp 文件名固定 → Windows PermissionError)
+   2. config.py .env UTF-8 BOM 破坏配置 (Notepad 默认加 BOM)
+   3. llm.py _add_usage 非原子, 并发流 usage 计数错位
+   4. doctor.py Windows 中文控制台乱码 → 非 IT 用户看不懂
+   5. 无 beforeunload 警告, 生成中关标签页数据丢失
+ · D1-D5 已定型决策 (上一轮讨论), 本轮一并实施
+ · 修复(11 项 batch):
+   R11 (5):
+   - config.py: 检测 UTF-8 BOM 并剥离后 load_dotenv
+   - llm.py: threading.Lock 保护 _session_usage
+   - doctor.py: sys.stdout.reconfigure(utf-8) 首行
+   - projects.py _atomic_write: tmp 加 pid + uuid 后缀
+   - App.tsx: syncStatus=saving 时挂 beforeunload 警告
+   D 类 (5):
+   - D1 deidentify.py: 姓名 lookahead 加职务/关系/动词词表 (55 词),
+     非贪婪 {1,3}? 产出干净边界, 黑名单剔除高血压/石头/于是等假阳性
+   - D2 http_common.py: with_backoff helper (指数退避 1s→3s→9s, 429/5xx);
+     openalex/europepmc 两处 _search_one 接入
+   - D3 searchcache.py: OrderedDict + LRU + _MAX_SIZE=512, 淘汰最久未用
+   - D4 modules: 7 处 navigator.clipboard.writeText 全部改走 lib/clipboard.ts,
+     失败给用户中文提示 (Ethics/Grant/Idea/Imrad/Rebuttal/JournalMatch/GeneralResults)
+   - D5 useModal hook (Esc + focus 陷阱 + focus 还原), 应用到 DeidentifyDialog
+ · 验证: 14/15 → D1 王五漏检 → 补充动词词表 + 非贪婪 → 全绿
+ · 注: R9 flag 的 B2 (goto 跨项目污染) 已在 R10 复审确认无需修

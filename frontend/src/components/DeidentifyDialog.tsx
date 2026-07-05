@@ -1,5 +1,6 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { apiUrl } from "../lib/api";
+import { useModal } from "../lib/useModal";
 
 // 检测到的 PHI 列
 export interface DeidColumn {
@@ -102,8 +103,11 @@ export default function DeidentifyDialog({ open, scanResult, originalFile, onAcc
   const allChecked = cols.length > 0 && cols.every((c) => selected[c.name]);
   const noneChecked = checkedNames.length === 0;
 
+  const rootRef = useRef<HTMLDivElement>(null);
+  useModal(open, onCancel, rootRef);
+
   return (
-    <div className="deid-overlay" data-testid="deid-overlay" role="dialog" aria-modal="true" aria-labelledby="deid-title">
+    <div ref={rootRef} className="deid-overlay" data-testid="deid-overlay" role="dialog" aria-modal="true" aria-labelledby="deid-title">
       <div className="deid-dialog">
         <header className="deid-head">
           <h3 id="deid-title">🔒 检测到可能的患者隐私信息</h3>

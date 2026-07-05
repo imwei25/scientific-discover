@@ -9,6 +9,7 @@ import Markdown from "../components/Markdown";
 import EditableMarkdown from "../components/EditableMarkdown";
 import WarningPanel from "../components/WarningPanel";
 import { downloadText, downloadCsv, downloadDocxFromText, downloadPdfFromText, tsName } from "../lib/download";
+import { copyToClipboard } from "../lib/clipboard";
 import { stripSupportQuotes } from "../lib/exportPrep";
 import { usePersistentState } from "../lib/usePersistentState";
 import type { Goto } from "../App";
@@ -846,8 +847,9 @@ export default function IdeaModule({ goto }: { goto: Goto }) {
                     data-testid="copy-report-btn"
                     onClick={async () => {
                       const refMd = refs.length ? "\n\n## 参考文献\n" + refs.map((r) => `- [${r.first_author} (${r.year}). ${r.title}](${r.url})`).join("\n") : "";
-                      try { await navigator.clipboard.writeText(stripSupportQuotes(text) + candidatesMd(card) + refMd); setCopied(true); window.setTimeout(() => setCopied(false), 1800); }
-                      catch { setStatus("复制失败：浏览器未授权剪贴板，请手动选择复制"); window.setTimeout(() => setStatus((s) => (s.startsWith("复制失败") ? "" : s)), 4000); }
+                      const ok = await copyToClipboard(stripSupportQuotes(text) + candidatesMd(card) + refMd);
+                      if (ok) { setCopied(true); window.setTimeout(() => setCopied(false), 1800); }
+                      else { setStatus("复制失败：浏览器未授权剪贴板，请手动选择复制"); window.setTimeout(() => setStatus((s) => (s.startsWith("复制失败") ? "" : s)), 4000); }
                     }}
                     title="把调研报告（含参考文献）复制到剪贴板"
                   >

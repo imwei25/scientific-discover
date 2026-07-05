@@ -8,6 +8,7 @@ import EditableMarkdown from "../components/EditableMarkdown";
 import { CanvasSlot } from "../components/Canvas";
 import Dropzone from "../components/Dropzone";
 import { downloadText, downloadDocxFromText, tsName } from "../lib/download";
+import { copyToClipboard } from "../lib/clipboard";
 
 export default function RebuttalModule() {
   const [reviews, setReviews] = usePersistentState("rebuttal:reviews", "");
@@ -265,13 +266,9 @@ export default function RebuttalModule() {
                     data-testid="copy-letter-btn"
                     title="复制整封回复信到剪贴板"
                     onClick={async () => {
-                      try {
-                        await navigator.clipboard.writeText(letter);
-                        setCopied(true);
-                        window.setTimeout(() => setCopied(false), 1800);
-                      } catch {
-                        /* 剪贴板未授权：忽略 */
-                      }
+                      const ok = await copyToClipboard(letter);
+                      if (ok) { setCopied(true); window.setTimeout(() => setCopied(false), 1800); }
+                      else { setStatus("复制失败：浏览器未授权剪贴板 (可能在 http 局域网下), 请手动选中复制。"); window.setTimeout(() => setStatus((s) => s.startsWith("复制失败") ? "" : s), 4000); }
                     }}
                   >
                     {copied ? "已复制 ✓" : "复制整封信"}

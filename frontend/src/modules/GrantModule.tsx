@@ -14,6 +14,7 @@ import RefIO from "../components/RefIO";
 import ZoteroPanel from "../components/ZoteroPanel";
 import { usePersistentState } from "../lib/usePersistentState";
 import { downloadText, downloadDocxFromText, downloadPdfFromText, tsName } from "../lib/download";
+import { copyToClipboard } from "../lib/clipboard";
 import { prepareForExport } from "../lib/exportPrep";
 import { withNumberedReferences } from "../lib/citations";
 import { LiteraturePicker, pickerKey } from "../components/LiteraturePicker";
@@ -781,7 +782,11 @@ export default function GrantModule({ goto }: { goto: Goto }) {
                 {!running && paused && <button className="btn-primary btn-sm" onClick={continueWrite} data-testid="grant-continue-btn">▶ 继续生成</button>}
                 {text && !running && <button className="btn-ghost" data-testid="grant-rewrite-all-btn" onClick={rewriteAll} title="丢弃当前初稿, 用当前配置从头重写全部章节">🔄 一键全部重写</button>}
                 {text && !running && (
-                  <button className="btn-ghost" data-testid="grant-copy-btn" title="复制申请书全文" onClick={async () => { try { await navigator.clipboard.writeText(text); setCopied(true); window.setTimeout(() => setCopied(false), 1800); } catch { /* ignore */ } }}>
+                  <button className="btn-ghost" data-testid="grant-copy-btn" title="复制申请书全文" onClick={async () => {
+                    const ok = await copyToClipboard(text);
+                    if (ok) { setCopied(true); window.setTimeout(() => setCopied(false), 1800); }
+                    else { setError("复制失败：浏览器未授权剪贴板 (可能在 http 局域网下), 请手动选中复制。"); }
+                  }}>
                     {copied ? "已复制 ✓" : "复制"}
                   </button>
                 )}

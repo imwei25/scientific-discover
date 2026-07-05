@@ -133,7 +133,9 @@ def _remove_from_index(pid: str) -> None:
 
 # ── 原子写 ───────────────────────────────────────────────────
 def _atomic_write(path: Path, data: Any) -> None:
-    tmp = path.with_suffix(path.suffix + ".tmp")
+    # tmp 加进程 pid + 随机后缀, 避免两个并发写同一 pid 时抢同一个 .tmp 文件 (Windows 上会
+    # PermissionError / FileExistsError, 之前 20 并发 PUT /api/projects/{pid}/state 稳定 500).
+    tmp = path.with_suffix(f"{path.suffix}.{os.getpid()}.{uuid_mod.uuid4().hex[:8]}.tmp")
     try:
         tmp.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
         os.replace(tmp, path)

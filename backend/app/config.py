@@ -68,6 +68,15 @@ def _load_env() -> Path:
 
     for p in candidates:
         if p.is_file():
+            # Notepad 保存的 .env 常含 UTF-8 BOM (\ufeff), 导致 dotenv 解析出的第一个 key
+            # 变成 "\ufeffLLM_MODEL" 而非 "LLM_MODEL", 沉默回退到默认 model, 用户"填了 key
+            # 却报 401"排查困难. 检测到 BOM 时先剥离并写回, 再加载.
+            try:
+                raw = p.read_bytes()
+                if raw.startswith(b"\xef\xbb\xbf"):
+                    p.write_bytes(raw[3:])
+            except Exception:  # noqa: BLE001
+                pass
             load_dotenv(p)
             return p
 

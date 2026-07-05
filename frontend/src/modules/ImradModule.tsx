@@ -6,6 +6,7 @@ import { usePersistentState, readPersisted } from "../lib/usePersistentState";
 import { mergeLegacyIntoMaterials } from "../lib/legacyMerge";
 import { addHistory } from "../lib/history";
 import { apiUrl } from "../lib/api";
+import { copyToClipboard as copyLib } from "../lib/clipboard";
 import EditableMarkdown from "../components/EditableMarkdown";
 import Markdown from "../components/Markdown";
 import { CanvasSlot } from "../components/Canvas";
@@ -133,8 +134,9 @@ export default function ImradModule({ goto }: { goto: Goto }) {
   const [keywords, setKeywords] = usePersistentState("imrad:keywords", "");
   const [copiedKey, setCopiedKey] = useState("");
   const copyToClipboard = async (key: string, text: string) => {
-    try { await navigator.clipboard.writeText(text); setCopiedKey(key); window.setTimeout(() => setCopiedKey(""), 1800); }
-    catch { /* ignore */ }
+    const ok = await copyLib(text);
+    if (ok) { setCopiedKey(key); window.setTimeout(() => setCopiedKey(""), 1800); }
+    else { setCopiedKey("__ERR__"); window.setTimeout(() => setCopiedKey(""), 4000); }
   };
   const [kwRunning, setKwRunning] = useState(false);
   const [kwErr, setKwErr] = useState<string | null>(null);

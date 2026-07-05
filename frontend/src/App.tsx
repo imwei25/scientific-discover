@@ -156,6 +156,20 @@ export default function App() {
     return () => window.removeEventListener("onboarding:reopen", onReopen);
   }, []);
 
+  // 生成过程中关标签页 / 刷新会丢失未持久化的中间结果 → beforeunload 警告.
+  // 用 syncStatus === "saving" 作为"正在写盘"的信号 (只要用户在编辑, 每次 setState 都会
+  // 触发 flush 排队, syncStatus 会短暂进 saving); 无 pending 时不弹, 避免打扰.
+  useEffect(() => {
+    if (syncStatus !== "saving") return;
+    const onBeforeUnload = (e: BeforeUnloadEvent) => {
+      e.preventDefault();
+      e.returnValue = "内容正在保存中, 现在离开可能丢失最近的编辑。";
+      return e.returnValue;
+    };
+    window.addEventListener("beforeunload", onBeforeUnload);
+    return () => window.removeEventListener("beforeunload", onBeforeUnload);
+  }, [syncStatus]);
+
   // W2-4-g: Cmd/Ctrl+K 唤出命令面板
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {

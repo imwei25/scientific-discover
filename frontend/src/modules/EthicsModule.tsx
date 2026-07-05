@@ -2,6 +2,7 @@ import { useState, useRef, useEffect } from "react";
 import { apiUrl } from "../lib/api";
 import { usePersistentState, readPersisted, writePersisted } from "../lib/usePersistentState";
 import { downloadBlob, tsName } from "../lib/download";
+import { copyToClipboard } from "../lib/clipboard";
 import { addHistory } from "../lib/history";
 import { CanvasSlot } from "../components/Canvas";
 import { streamEthicsFollowup } from "../lib/sse";
@@ -356,8 +357,9 @@ function EthicsEditor({ template, step, goStep }: { template: TemplateDef; step:
                 {previewText && (
                   <button className="btn-ghost btn-sm" data-testid="ethics-copy-btn" title="复制预览全文到剪贴板"
                     onClick={async () => {
-                      try { await navigator.clipboard.writeText(previewText); setCopied(true); window.setTimeout(() => setCopied(false), 1800); }
-                      catch { /* ignore */ }
+                      const ok = await copyToClipboard(previewText);
+                      if (ok) { setCopied(true); window.setTimeout(() => setCopied(false), 1800); }
+                      else { setErr("复制失败：浏览器未授权剪贴板 (可能在 http 局域网下), 请手动选中复制。"); window.setTimeout(() => setErr(""), 4000); }
                     }}>
                     {copied ? "已复制 ✓" : "复制全文"}
                   </button>

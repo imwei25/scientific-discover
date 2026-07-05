@@ -53,14 +53,19 @@ def _normalize(raw: dict) -> dict | None:
 
 
 async def _search_one(client: httpx.AsyncClient, query: str, per_query: int) -> list[dict]:
+    from .http_common import with_backoff
     params = {
         "query": query,
         "format": "json",
         "resultType": "core",
         "pageSize": str(per_query),
     }
-    r = await client.get(_ENDPOINT, params=params)
-    r.raise_for_status()
+
+    async def _do() -> httpx.Response:
+        r = await client.get(_ENDPOINT, params=params)
+        r.raise_for_status()
+        return r
+    r = await with_backoff(_do)
     data = r.json()
     out: list[dict] = []
     for raw in data.get("resultList", {}).get("result", []) or []:
