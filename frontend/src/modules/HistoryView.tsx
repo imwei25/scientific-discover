@@ -24,6 +24,9 @@ export default function HistoryView({ goto }: { goto: Goto }) {
   }, []);
 
   const handleClear = () => {
+    // 二次确认: 清空后不可恢复, 避免误点丢失全部历史。
+    const ok = window.confirm(`确定清空所有历史记录吗？共 ${items.length} 条，此操作不可撤销。`);
+    if (!ok) return;
     setExiting(true);
     timerRef.current = setTimeout(() => {
       clearHistory();

@@ -162,12 +162,13 @@ export default function OnboardingWizard({ onClose }: OnboardingWizardProps) {
         <button
           className="onboarding-close"
           onClick={() => {
-            // 标记已处理, 否则未配置时父组件刷新 health 会立刻把向导又弹回来。
-            try { localStorage.setItem("onboarding:done", "1"); } catch { /* 配额溢出忽略 */ }
+            // 只标记本会话内已关闭, 不写永久 done —— 下次启动如仍未配置将再次弹出提醒。
+            // 之前"关一次就永远静音"会让忘记配置的新手一直看不到向导。
+            try { sessionStorage.setItem("onboarding:dismissed", "1"); } catch { /* 忽略 */ }
             onClose();
           }}
           aria-label="关闭"
-          title="关闭"
+          title="关闭（本次会话不再提示；下次启动仍会提醒未配置密钥）"
           data-testid="onboarding-close"
         >
           ×

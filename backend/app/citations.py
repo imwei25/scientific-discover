@@ -385,6 +385,8 @@ async def format_references(refs_text: str, journal_id: str, csl_json: list[dict
             "ok": True,
             "style": style_name,
             "formatted": ["1. [MOCK] Author A, Author B. Title. Journal. 2023;1(1):1-10."],
+            "mock": True,
+            "notice": "演示模式：以上仅为示例条目，未真正解析您输入的参考文献。请配置真实 LLM 后重试。",
         }
 
     try:

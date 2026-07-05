@@ -74,10 +74,16 @@ async def match_journals(abstract: str, max_journals: int = 10) -> dict:
         return {"ok": False, "error": "请粘贴稿件摘要或标题。"}
     if settings.mock:
         return {"ok": True, "journals": [
-            {"journal": "Mock Journal of Oncology", "count": 7, "is_oa": True, "in_doaj": True,
+            {"journal": "[MOCK] Journal of Oncology", "count": 7, "is_oa": True, "in_doaj": True,
              "issn": "0000-0000", "journal_impact": 8.2, "journal_quartile": "Q1",
              "samples": ["[MOCK] A related study"], "reason": "[MOCK] 主题高度契合"},
-        ]}
+            {"journal": "[MOCK] Clinical Research Reports", "count": 4, "is_oa": False, "in_doaj": False,
+             "issn": "0000-0001", "journal_impact": 3.5, "journal_quartile": "Q2",
+             "samples": ["[MOCK] Related clinical trial"], "reason": "[MOCK] 与研究方法相近"},
+            {"journal": "[MOCK] BMC Medicine (Open Access)", "count": 2, "is_oa": True, "in_doaj": True,
+             "issn": "0000-0002", "journal_impact": 5.9, "journal_quartile": "Q1",
+             "samples": ["[MOCK] Open access counterpart"], "reason": "[MOCK] 主题相关且 OA"},
+        ], "mock": True, "notice": "演示模式：以上为示例期刊，非真实匹配结果。请配置真实 LLM 与网络后重试。"}
     cur_year = datetime.date.today().year
     # select 显式列 source 内字段(含 is_in_doaj/is_oa/is_ceased/is_moved), 便于过滤已停刊/迁移期刊。
     params = {

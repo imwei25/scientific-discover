@@ -22,6 +22,10 @@ export const UI_PREF_KEYS: ReadonlySet<string> = new Set([
   "ra:theme",
   "ra:sidebar",
   "ra:ui:disclaimerDismissed",
+  // App.tsx 里 usePersistentState("disclaimer:lastDismissed", ...) 实际落库为 ra:disclaimer:lastDismissed;
+  // 保留旧键 ra:ui:disclaimerDismissed 兼容历史用户, 新键也需白名单避免切项目时被清空重弹。
+  "ra:disclaimer:lastDismissed",
+  "ra:canvas:collapsed",
 ]);
 const HISTORY_KEY = "ra:history";
 

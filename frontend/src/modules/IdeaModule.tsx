@@ -402,6 +402,12 @@ export default function IdeaModule({ goto }: { goto: Goto }) {
   }, [refs, evidence]);
 
   const reset = () => {
+    // 若已产出内容或正在生成, 二次确认以防误点丢失
+    const hasContent = !!(text || refs.length || evidence.length || background || field || keywords);
+    if (hasContent || running) {
+      const ok = window.confirm("确定清空当前所有输入与已生成内容吗？此操作不可撤销。");
+      if (!ok) return;
+    }
     if (running) stop();
     fctrl.current?.abort();
     setFollowups([]); setCurrentAnswer(""); setFollowupInput(""); setFError(null);
@@ -802,7 +808,15 @@ export default function IdeaModule({ goto }: { goto: Goto }) {
 
           <div className="result-panel">
             <div className="result-toolbar">
-              <span className="result-status">{running ? "生成中…" : text ? "已完成" : "等待生成"}</span>
+              <span className="result-status">
+                {running
+                  ? "生成中…"
+                  : text
+                    ? (text.trimEnd().endsWith("…(生成中断)")
+                        ? "⚠ 已中断（内容可能不完整，导出前请核对）"
+                        : "已完成")
+                    : "等待生成"}
+              </span>
               <div className="result-actions">
                 {running && <button className="btn-ghost" onClick={stop} data-testid="stop-btn">停止</button>}
                 {text && !running && (

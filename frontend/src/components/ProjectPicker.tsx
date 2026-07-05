@@ -22,10 +22,11 @@ export default function ProjectPicker() {
     return () => document.removeEventListener("mousedown", onDoc);
   }, [open]);
 
-  // 切到 rename 时预填当前名字
+  // 切到 rename 时预填当前名字; delete 时清空(强确认要求手动输入)
   useEffect(() => {
     if (mode === "rename") setDraft(current?.name ?? "");
     if (mode === "create") setDraft("");
+    if (mode === "delete") setDraft("");
   }, [mode, current]);
 
   const close = () => { setOpen(false); setMode("list"); };
@@ -55,6 +56,8 @@ export default function ProjectPicker() {
 
   const onDelete = async () => {
     if (busy || !current) return;
+    // 强确认: 只有输入的名字与当前项目一致才允许删除
+    if (draft.trim() !== current.name) return;
     setBusy(true);
     try { await remove(current.id); close(); } finally { setBusy(false); }
   };
@@ -155,9 +158,28 @@ export default function ProjectPicker() {
               <div className="pp-confirm-text">
                 将永久删除项目 <strong>「{current.name}」</strong> 及其所有数据，无法恢复。
               </div>
+              <label htmlFor="pp-delete-input" style={{ fontSize: 12, color: "#a33", marginTop: 6 }}>
+                请输入项目名 <code>{current.name}</code> 确认删除:
+              </label>
+              <input
+                id="pp-delete-input"
+                data-testid="project-delete-input"
+                value={draft}
+                onChange={(e) => setDraft(e.target.value)}
+                onKeyDown={(e) => { if (e.key === "Escape") close(); if (e.key === "Enter" && draft.trim() === current.name) onDelete(); }}
+                placeholder={current.name}
+                autoFocus
+                maxLength={80}
+              />
               <div className="pp-form-actions">
                 <button onClick={close}>取消</button>
-                <button className="danger" onClick={onDelete} disabled={busy} data-testid="project-delete-confirm">
+                <button
+                  className="danger"
+                  onClick={onDelete}
+                  disabled={busy || draft.trim() !== current.name}
+                  title={draft.trim() !== current.name ? "请先输入完整项目名确认" : ""}
+                  data-testid="project-delete-confirm"
+                >
                   删除
                 </button>
               </div>

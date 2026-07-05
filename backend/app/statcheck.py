@@ -111,10 +111,16 @@ async def check_stats(text: str) -> dict:
         return {"ok": False, "error": "请粘贴含统计量的结果文字。"}
     if settings.mock:
         items = [
-            {"raw": "t(38)=2.10, p=0.04", "type": "t", "df1": 38, "value": 2.10, "p_reported": "0.04", "p_computed": 0.0423, "status": "consistent"},
-            {"raw": "t(28)=1.20, p=0.01", "type": "t", "df1": 28, "value": 1.20, "p_reported": "0.01", "p_computed": 0.24, "status": "decision_error"},
+            {"raw": "[MOCK] t(38)=2.10, p=0.04", "type": "t", "df1": 38, "value": 2.10, "p_reported": "0.04", "p_computed": 0.0423, "status": "consistent"},
+            {"raw": "[MOCK] t(28)=1.20, p=0.01", "type": "t", "df1": 28, "value": 1.20, "p_reported": "0.01", "p_computed": 0.24, "status": "decision_error"},
         ]
-        return {"ok": True, "items": items, "summary": {"total": 2, "inconsistent": 0, "decision_error": 1}}
+        return {
+            "ok": True,
+            "items": items,
+            "summary": {"total": 2, "inconsistent": 0, "decision_error": 1},
+            "mock": True,
+            "notice": "演示模式：以下条目为示例数据，与您输入的正文无关。请配置真实 LLM 后重试。",
+        }
     try:
         extracted = await _extract(text)
         if not extracted:

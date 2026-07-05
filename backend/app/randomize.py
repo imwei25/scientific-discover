@@ -18,7 +18,11 @@ def generate(params: dict) -> dict:
     if not (1 <= n <= 100000):
         return {"ok": False, "error": "样本量 n 需在 1–100000 之间。"}
 
-    groups = [g.strip() for g in str(params.get("groups") or "试验组,对照组").split(",") if g.strip()]
+    raw_groups = params.get("groups") or "试验组,对照组"
+    if isinstance(raw_groups, (list, tuple)):
+        groups = [str(g).strip() for g in raw_groups if str(g).strip()]
+    else:
+        groups = [g.strip() for g in str(raw_groups).split(",") if g.strip()]
     if len(groups) < 2:
         return {"ok": False, "error": "至少需要两个分组（用逗号分隔）。"}
     if len(set(groups)) != len(groups):

@@ -200,7 +200,7 @@ async def check_references(text: str) -> dict:
         return {"ok": True, "items": [
             {"raw": "[MOCK] Smith J. A real paper. 2023.", "doi": "10.1000/real", "pmid": "1", "title": "A real paper", "status": "real", "note": "", "completed": ""},
             {"raw": "[MOCK] Fake X. Hallucinated. 2024.", "doi": "10.0000/fake", "pmid": "", "title": "Hallucinated", "status": "not_found", "note": "CrossRef 查无此 DOI。", "completed": ""},
-        ]}
+        ], "mock": True, "notice": "演示模式：以上为示例条目，未真正核验您输入的参考文献。请配置真实 LLM 后重试。"}
     try:
         parsed = await _parse_refs(text)
         if not parsed:

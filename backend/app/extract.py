@@ -135,4 +135,17 @@ def extract_text(filename: str, content: bytes) -> dict:
 
         return {"ok": False, "error": "暂不支持这种文件类型（支持 Word/PDF/Excel/CSV/txt）。"}
     except Exception as e:  # noqa: BLE001
-        return {"ok": False, "error": f"解析文件失败：{e}"}
+        raw = str(e)
+        low = raw.lower()
+        # 把常见 pandas/openpyxl 英文异常翻译成新手可读的中文提示
+        if "no columns to parse" in low or "empty" in low:
+            hint = "解析文件失败：文件为空或没有可读取的列，请确认文件不是空白。"
+        elif "excel file format cannot be determined" in low or "unsupported format" in low or "not a zip file" in low:
+            hint = "解析文件失败：Excel 文件已损坏或格式不正确，请用 Excel 打开另存为 .xlsx 后重试。"
+        elif "codec" in low or "decode" in low:
+            hint = "解析文件失败：文件编码无法识别，请用 UTF-8 或 GBK 编码另存为 CSV。"
+        elif "pdf" in low:
+            hint = "解析文件失败：PDF 文件可能是扫描件或被加密，请提供可复制文字的 PDF。"
+        else:
+            hint = "解析文件失败：文件可能已损坏或格式异常，请检查后重新上传。"
+        return {"ok": False, "error": hint, "detail": raw}

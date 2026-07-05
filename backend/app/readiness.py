@@ -142,6 +142,16 @@ def check_readiness(manuscript: str, journal_id: str) -> dict:
     title, sections = _split_sections(manuscript)
     items: list[dict] = []
 
+    # 目标期刊 id 未匹配到内置期刊库时, 显式提示用户当前按通用规则校验, 避免误以为按目标期刊校验
+    if journal_id and not journal:
+        items.append({
+            "key": "journal_unknown",
+            "label": "目标期刊",
+            "status": "warn",
+            "detail": f"未识别的期刊 id「{journal_id}」，当前按通用规则校验",
+            "suggestion": "请在期刊排版页选择内置期刊模板；或忽略此项按通用 IMRaD 规则处理。",
+        })
+
     # 1) 必需章节
     for key in spec["required_sections"]:
         present = key in sections and bool(sections[key].strip() or key in ("references", "keywords"))

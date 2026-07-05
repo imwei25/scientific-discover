@@ -25,6 +25,7 @@ import OnboardingWizard from "./components/OnboardingWizard";
 import ToastContainer from "./components/Toast";
 import CommandPalette, { restoreHistoryEntry } from "./components/CommandPalette";
 import { CanvasProvider } from "./components/Canvas";
+import ErrorBoundary from "./components/ErrorBoundary";
 import { showToast } from "./lib/toast";
 import { useProjects } from "./lib/projects";
 
@@ -46,8 +47,7 @@ const NAV: { id: ModuleId; icon: ReactNode; title: string; desc: string; hidden?
   { id: "imrad",    icon: <FileText {...ICON_PROPS} />,            title: "论文初稿",     desc: "把材料拼成医学论文（IMRaD 结构）" },
   { id: "journal",  icon: <Target {...ICON_PROPS} />,              title: "智能选刊",     desc: "AI 推荐适合你研究的期刊" },
   { id: "format",   icon: <FileType {...ICON_PROPS} />,            title: "期刊排版",     desc: "按期刊要求重排 + 参考文献格式化" },
-  // 暂时隐藏「报告规范核对」，意义待明确，以后再说（hidden 过滤掉，模块代码保留）
-  { id: "checklist", icon: <CheckSquare {...ICON_PROPS} />,        title: "报告规范核对", desc: "按医学研究报告规范逐条自查", hidden: true },
+  { id: "checklist", icon: <CheckSquare {...ICON_PROPS} />,        title: "报告规范核对", desc: "按医学研究报告规范逐条自查" },
   { id: "poster",   icon: <Presentation {...ICON_PROPS} />,        title: "学术海报",     desc: "把论文一键做成会议海报（可打印 PDF）" },
   { id: "rebuttal", icon: <MessageSquareReply {...ICON_PROPS} />,  title: "回复审稿",     desc: "AI 帮你逐条回应审稿人" },
 ];
@@ -121,14 +121,15 @@ export default function App() {
         if (cancelled) return;
         setHealth(data);
         setHealthErr(false);
-        // 触发首次配置向导: configured=false 且尚未完成 onboarding
+        // 触发首次配置向导: configured=false 且尚未完成 onboarding, 且本会话未主动关闭
         try {
           const done = localStorage.getItem("onboarding:done") === "1";
-          if (!done && data && data.configured === false && !data.mock) {
+          const dismissed = sessionStorage.getItem("onboarding:dismissed") === "1";
+          if (!done && !dismissed && data && data.configured === false && !data.mock) {
             setOnboardingOpen(true);
           }
         } catch {
-          /* localStorage 可能被禁用; 忽略 */
+          /* storage 可能被禁用; 忽略 */
         }
       } catch {
         if (cancelled) return;
@@ -363,19 +364,21 @@ export default function App() {
           </div>
         )}
         <div className="page" key={`${currentProject?.id ?? "boot"}::${active}`}>
-          {active === "home" && <Home onPick={setActive} />}
-          {active === "idea" && <IdeaModule goto={goto} />}
-          {active === "grant" && <GrantModule goto={goto} />}
-          {active === "plan" && <PlanModule />}
-          {active === "ethics" && <EthicsModule />}
-          {active === "analyze" && <AnalyzeModule goto={goto} />}
-          {active === "imrad" && <ImradModule goto={goto} />}
-          {active === "journal" && <JournalMatchModule />}
-          {active === "format" && <FormatModule />}
-          {active === "checklist" && <ChecklistModule />}
-          {active === "poster" && <PosterModule vlmConfigured={!!health?.vlm_configured} onOpenSettings={() => setOnboardingOpen(true)} />}
-          {active === "rebuttal" && <RebuttalModule />}
-          {active === "history" && <HistoryView goto={goto} />}
+          <ErrorBoundary key={active}>
+            {active === "home" && <Home onPick={setActive} />}
+            {active === "idea" && <IdeaModule goto={goto} />}
+            {active === "grant" && <GrantModule goto={goto} />}
+            {active === "plan" && <PlanModule />}
+            {active === "ethics" && <EthicsModule />}
+            {active === "analyze" && <AnalyzeModule goto={goto} />}
+            {active === "imrad" && <ImradModule goto={goto} />}
+            {active === "journal" && <JournalMatchModule />}
+            {active === "format" && <FormatModule />}
+            {active === "checklist" && <ChecklistModule />}
+            {active === "poster" && <PosterModule vlmConfigured={!!health?.vlm_configured} onOpenSettings={() => setOnboardingOpen(true)} />}
+            {active === "rebuttal" && <RebuttalModule />}
+            {active === "history" && <HistoryView goto={goto} />}
+          </ErrorBoundary>
         </div>
         </div>
         {hasCanvas && (

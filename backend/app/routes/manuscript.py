@@ -6,7 +6,7 @@ import json
 
 from fastapi import APIRouter, File, Form, UploadFile
 from fastapi.responses import Response
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, model_validator
 
 from ..http_common import _read_capped
 from ..journals import list_journals
@@ -24,12 +24,30 @@ class DocxRequest(BaseModel):
 
 
 class RefsRequest(BaseModel):
-    references: str
+    """兼容多种字段命名: references / refs (str 或 list[str]); journal_id / style。"""
+    references: str = ""
     journal_id: str = ""
-    # Optional: when frontend already has structured refs (from picker/handoff),
-    # send CSL-JSON directly to bypass the LLM parsing step. Field names follow CSL:
-    # type, title, author[], issued, container-title, volume, issue, page, DOI, ...
     csl_json: list[dict] | None = None
+
+    model_config = {"populate_by_name": True, "extra": "allow"}
+
+    @model_validator(mode="before")
+    @classmethod
+    def _accept_aliases(cls, data):
+        if not isinstance(data, dict):
+            return data
+        d = dict(data)
+        # 别名: refs -> references (支持 str 或 list[str])
+        if "references" not in d or not d.get("references"):
+            refs = d.get("refs")
+            if isinstance(refs, list):
+                d["references"] = "\n".join(str(x) for x in refs if str(x).strip())
+            elif isinstance(refs, str):
+                d["references"] = refs
+        # 别名: style -> journal_id
+        if not d.get("journal_id") and d.get("style"):
+            d["journal_id"] = str(d["style"])
+        return d
 
 
 class LatexRequest(BaseModel):
@@ -319,9 +337,15 @@ async def ethics_render(req: EthicsRenderRequest) -> Response:
       - 有 red_flags: 返回 400 + 中文说明, 不生成 docx;
       - 只有 warnings: 生成 docx, 通过 header X-Ethics-Warnings (JSON) 回传给前端。
     """
+    import base64 as _b64
     import json as _json
 
     from ..ethics import check_ethics_readiness, render as do_render
+
+    def _ascii_hdr(obj) -> str:
+        # HTTP header 只允许 latin-1; 中文需先 UTF-8 → base64 编码为 ASCII, 前端 atob + decodeURIComponent 还原
+        raw = _json.dumps(obj, ensure_ascii=False).encode("utf-8")
+        return _b64.b64encode(raw).decode("ascii")
 
     readiness = check_ethics_readiness({
         "template": req.template,
@@ -345,8 +369,8 @@ async def ethics_render(req: EthicsRenderRequest) -> Response:
             media_type="text/plain; charset=utf-8",
             headers={
                 "X-Ethics-Readiness": "red-flag",
-                "X-Ethics-Red-Flags": _json.dumps(readiness["red_flags"], ensure_ascii=False),
-                "X-Ethics-Warnings": _json.dumps(readiness.get("warnings", []), ensure_ascii=False),
+                "X-Ethics-Red-Flags-B64": _ascii_hdr(readiness["red_flags"]),
+                "X-Ethics-Warnings-B64": _ascii_hdr(readiness.get("warnings", [])),
             },
         )
 
@@ -360,7 +384,7 @@ async def ethics_render(req: EthicsRenderRequest) -> Response:
     safe = (req.template or "ethics").replace("/", "_")
     headers = {"Content-Disposition": f"attachment; filename={safe}.docx"}
     if readiness.get("warnings"):
-        headers["X-Ethics-Warnings"] = _json.dumps(readiness["warnings"], ensure_ascii=False)
+        headers["X-Ethics-Warnings-B64"] = _ascii_hdr(readiness["warnings"])
     return Response(
         content=data,
         media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",

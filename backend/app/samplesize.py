@@ -78,8 +78,17 @@ def compute(design: str, params: dict) -> dict:
             }
 
         return {"ok": False, "error": f"未知设计类型：{design}"}
+    except (ValueError, TypeError) as e:  # 参数类型/取值不合法 -> 友好提示
+        msg = str(e)
+        if "could not convert" in msg.lower() or "invalid literal" in msg.lower():
+            hint = "计算失败：输入的数值格式不合法（比如把百分比写成了 %），请填数字（如 0.05 或 5）。"
+        elif "log" in msg.lower() or "domain" in msg.lower():
+            hint = "计算失败：某个参数超出取值范围（例如比例需在 0–1 之间；HR、比率不能为 0 或负数）。"
+        else:
+            hint = "计算失败：请核对每一项输入的取值范围是否合理（α 常见 0.05；power 常见 0.8；比例 0–1）。"
+        return {"ok": False, "error": hint, "detail": msg}
     except Exception as e:  # noqa: BLE001
-        return {"ok": False, "error": f"计算失败：{e}"}
+        return {"ok": False, "error": "计算失败：内部错误，请检查输入并重试。", "detail": str(e)}
 
 
 # ---------- 生存分析（log-rank / Cox, Schoenfeld 公式） ----------

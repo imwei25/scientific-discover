@@ -334,8 +334,16 @@ export default function GrantModule({ goto }: { goto: Goto }) {
       const res = await fetch("/api/grant/search", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ inputs: { title, idea, background } }),
+        body: JSON.stringify({ module: "grant", inputs: { title, idea, background } }),
       });
+      if (!res.ok) {
+        let msg = `文献检索失败（HTTP ${res.status}）`;
+        try {
+          const errBody = await res.text();
+          if (errBody) msg += `：${errBody.slice(0, 200)}`;
+        } catch { /* ignore */ }
+        throw new Error(msg);
+      }
       if (!res.body) throw new Error("no body");
       const reader = res.body.getReader();
       const decoder = new TextDecoder();
@@ -376,6 +384,8 @@ export default function GrantModule({ goto }: { goto: Goto }) {
       }
     } catch (e) {
       console.error("grant search failed", e);
+      const msg = e instanceof Error ? e.message : String(e);
+      setError(`文献检索失败：${msg}`);
     } finally {
       setSearchBusy(false);
     }

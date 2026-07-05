@@ -1,0 +1,25 @@
+=== QA Loop 启动 ===
+Round 1 (人工首轮, 2026-07-05)
+ · 测过: 找选题, 写标书, 数据分析, 论文初稿, 智能选刊, 期刊排版, 报告规范核对, 回复审稿, 实验规划, App Shell
+ · 修复: 12 项 (ChecklistModule 揭示 / ErrorBoundary / grant search module 字段 / randomize list groups /
+                format-refs refs+style 别名 / readiness 未知期刊警告 / mock notice x4 / 中文友好错误 x2 /
+                confirm() x2 / disclaimer key / 生成中断状态)
+ · 验证: 前端 8/8, 后端 7/7, 已 build + 重启
+Round 2 (自动首轮, 待覆盖模块: 伦理材料 EthicsModule, 学术海报 PosterModule,
+                        OnboardingWizard, Toast 全局错误, ProjectPicker 项目切换)
+
+Round 2 (2026-07-05 T~13:40)
+ · 测过: 伦理材料 (EthicsModule + /api/ethics/render), 学术海报 (PosterModule), OnboardingWizard,
+         ProjectPicker + /api/projects, Toast + CommandPalette
+ · 发现 P1:
+   1. /api/ethics/render 100% 500 (Chinese in latin-1 header UnicodeEncodeError)
+   2. OnboardingWizard × 永久置 localStorage onboarding:done, 未配置也不再弹
+   3. DELETE /api/projects/{uuid} 无强确认, 一键静默销毁数据
+   4. POST /api/projects 中文 name 400 (curl/CLI 场景)
+ · 修复(4 项): 
+   - manuscript.py: ethics headers 改用 base64 (X-Ethics-Red-Flags-B64, X-Ethics-Warnings-B64)
+   - OnboardingWizard.tsx: × 只写 sessionStorage.onboarding:dismissed, 不再永久 done
+   - App.tsx: 触发向导时兼看 sessionStorage.onboarding:dismissed
+   - ProjectPicker.tsx: 删除项目需输入完整项目名才能启用删除按钮
+ · 验证: 10/10 PASS (含 4 个新修复 + 4 个 R1 修复的回归)
+ · 已 build + 重启, git 未提交 (等 Round 3 一并处理)
