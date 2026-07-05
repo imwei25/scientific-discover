@@ -1364,3 +1364,155 @@ export function streamEthicsFollowup(
 ): Promise<void> {
   return _streamDraftFollowup("/api/ethics-followup", "ethics", inputs, h);
 }
+
+// ── 深度调研 ─────────────────────────────────────────────────
+
+export interface RecommendItem { ref_key: string; score: "high" | "medium" | "none"; reason: string; }
+
+export interface ContributionRow {
+  n: number;
+  author_year: string;
+  journal: string;
+  design: string;
+  sample: string;
+  finding: string;
+  relevance: "direct" | "indirect" | "supporting";
+  deep_read: boolean;
+}
+
+export interface DeepReadTarget {
+  ref_key: string;
+  source: "upload" | "oa" | "europepmc" | "crossref";
+  upload_id?: string;
+  oa_url?: string;
+}
+
+export interface DeepResearchPayload {
+  question: string;
+  field?: string;
+  background?: string;
+  depth?: string;
+  sources?: string[];
+  filters?: unknown;
+  phase: "search" | "generate";
+  references?: Reference[];
+  evidence?: EvidenceItem[];
+  deep_read_targets?: DeepReadTarget[];
+  english_report?: boolean;
+  project_id?: string | null;
+}
+
+export interface DeepResearchCallbacks {
+  signal: AbortSignal;
+  onStatus?: (msg: string) => void;
+  onReferences?: (items: Reference[]) => void;
+  onEvidence?: (items: EvidenceItem[]) => void;
+  onDeepReadProgress?: (p: { done: number; total: number; current_ref_key: string }) => void;
+  onDelta: (text: string) => void;
+  onContributionTable?: (rows: ContributionRow[]) => void;
+  onVerify?: (v: Verification) => void;
+  onWarning?: (msg: string) => void;
+  onError: (msg: string) => void;
+  onDone: () => void;
+}
+
+// 内部: 复用 streamIdea 的内联 SSE 读取模式(fetch + ReadableStream + parseChunk),
+// 但把事件分发交给调用方回调, 用于深度调研两个流式端点。
+async function _runDeepResearchSSE(
+  url: string,
+  body: unknown,
+  signal: AbortSignal,
+  dispatch: (event: string, data: any) => void,
+  onError: (msg: string) => void,
+): Promise<void> {
+  let resp: Response;
+  try {
+    resp = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+      signal,
+    });
+  } catch (e) {
+    onError(`无法连接本地服务: ${(e as Error).message}`);
+    return;
+  }
+  if (!resp.ok || !resp.body) {
+    onError(`服务返回错误: ${resp.status}`);
+    return;
+  }
+  const reader = resp.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const { events, rest } = parseChunk(buffer);
+      buffer = rest;
+      for (const ev of events) {
+        let data: any = {};
+        try {
+          data = JSON.parse(ev.data);
+        } catch {
+          /* ignore malformed */
+        }
+        dispatch(ev.event, data);
+      }
+    }
+  } catch (e) {
+    if ((e as Error).name !== "AbortError") {
+      onError(`读取流出错: ${(e as Error).message}`);
+    }
+  }
+}
+
+export async function streamDeepResearch(payload: DeepResearchPayload, cb: DeepResearchCallbacks): Promise<void> {
+  await _runDeepResearchSSE(apiUrl("/api/deep_research/stream"), payload, cb.signal, (event: string, data: any) => {
+    switch (event) {
+      case "status": cb.onStatus?.(data.message); break;
+      case "references": cb.onReferences?.(data.items); break;
+      case "evidence": cb.onEvidence?.(data.items); break;
+      case "deep_read_progress": cb.onDeepReadProgress?.(data); break;
+      case "delta": cb.onDelta(data.text); break;
+      case "contribution_table": cb.onContributionTable?.(data.rows); break;
+      case "verify": cb.onVerify?.(data); break;
+      case "warning": cb.onWarning?.(data.message); break;
+      case "error": cb.onError(data.message); break;
+      case "done": cb.onDone(); break;
+    }
+  }, cb.onError);
+}
+
+export async function streamDeepResearchRecommend(
+  payload: { question: string; refs: { ref_key: string; title: string; abstract: string }[] },
+): Promise<{ ok: boolean; items?: RecommendItem[]; error?: string }> {
+  const r = await fetch(apiUrl("/api/deep_research/recommend"), {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload),
+  });
+  return r.json();
+}
+
+export async function streamDeepResearchFollowup(
+  payload: {
+    mode: "ask" | "revise"; question: string; report: string;
+    references: Reference[]; evidence: EvidenceItem[]; english_report?: boolean;
+  },
+  cb: {
+    signal: AbortSignal;
+    onDelta: (t: string) => void;
+    onVerify?: (v: Verification) => void;
+    onError: (m: string) => void;
+    onDone: () => void;
+  },
+): Promise<void> {
+  await _runDeepResearchSSE(apiUrl("/api/deep_research/followup/stream"), payload, cb.signal, (event: string, data: any) => {
+    switch (event) {
+      case "delta": cb.onDelta(data.text); break;
+      case "verify": cb.onVerify?.(data); break;
+      case "error": cb.onError(data.message); break;
+      case "done": cb.onDone(); break;
+    }
+  }, cb.onError);
+}
