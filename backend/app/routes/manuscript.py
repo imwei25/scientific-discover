@@ -18,6 +18,9 @@ class DocxRequest(BaseModel):
     text: str
     journal_id: str = ""
     references: list[str] = []
+    # 结构化参考文献 (CSL-JSON); 给出时后端按目标期刊的 CSL 样式重新渲染,
+    # 覆盖 references. 与 /api/latex 保持一致的输入约定。
+    csl_json: list[dict] | None = None
 
 
 class RefsRequest(BaseModel):
@@ -155,7 +158,7 @@ async def bundle(req: BundleRequest) -> Response:
 async def docx(req: DocxRequest) -> Response:
     from ..formatting import build_docx
 
-    data = build_docx(req.text, req.journal_id, req.references)
+    data = build_docx(req.text, req.journal_id, req.references, csl_json=req.csl_json)
     return Response(
         content=data,
         media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
@@ -248,11 +251,17 @@ async def refs_import(
 
 @router.post("/api/refs/export")
 async def refs_export(req: RefsExportRequest) -> Response:
-    """把 Reference 列表导出为 .ris/.bib/.enw 字节流(下载)。"""
+    """把 Reference 列表导出为 .ris/.bib/.enw 字节流(下载)。
+
+    导出前调用 refsenrich 基于 PubMed URL 反查补齐缺失的 title/authors/journal/doi，
+    避免选题模块只落 url+year 导致下游 LLM 猜测出错的问题。
+    """
     from ..refio import serialize
+    from ..refsenrich import enrich_refs
 
     try:
-        data = serialize(req.refs, req.format)
+        refs = await enrich_refs(list(req.refs or []))
+        data = serialize(refs, req.format)
     except ValueError as e:
         return Response(content=str(e).encode("utf-8"), status_code=400, media_type="text/plain")
     ext = (req.format or "ris").lower()
@@ -304,8 +313,42 @@ async def zotero_push(req: ZoteroPushRequest) -> dict:
 
 @router.post("/api/ethics/render")
 async def ethics_render(req: EthicsRenderRequest) -> Response:
-    """生成伦理材料 .docx 文件(下载)。template ∈ {informed_consent, protocol, crf, data_use_commitment}。"""
-    from ..ethics import render as do_render
+    """生成伦理材料 .docx 文件(下载)。template ∈ {informed_consent, protocol, crf, data_use_commitment}。
+
+    出稿前先做硬校验 (check_ethics_readiness):
+      - 有 red_flags: 返回 400 + 中文说明, 不生成 docx;
+      - 只有 warnings: 生成 docx, 通过 header X-Ethics-Warnings (JSON) 回传给前端。
+    """
+    import json as _json
+
+    from ..ethics import check_ethics_readiness, render as do_render
+
+    readiness = check_ethics_readiness({
+        "template": req.template,
+        "fields": req.fields or {},
+        "materials": req.materials or "",
+    })
+    if not readiness["ok"]:
+        # 拒绝出稿, 列出全部 red flags 供前端展示
+        msg_lines = ["伦理材料未通过出稿前校验, 请修正以下问题后重试:"]
+        for i, flag in enumerate(readiness["red_flags"], 1):
+            msg_lines.append(f"{i}. {flag}")
+        if readiness.get("warnings"):
+            msg_lines.append("")
+            msg_lines.append("另有以下建议改进项 (不阻断, 但建议一并补充):")
+            for w in readiness["warnings"]:
+                msg_lines.append(f"- {w}")
+        body = "\n".join(msg_lines).encode("utf-8")
+        return Response(
+            content=body,
+            status_code=400,
+            media_type="text/plain; charset=utf-8",
+            headers={
+                "X-Ethics-Readiness": "red-flag",
+                "X-Ethics-Red-Flags": _json.dumps(readiness["red_flags"], ensure_ascii=False),
+                "X-Ethics-Warnings": _json.dumps(readiness.get("warnings", []), ensure_ascii=False),
+            },
+        )
 
     try:
         data = do_render(req.template, req.fields or {}, req.materials or "")
@@ -315,8 +358,11 @@ async def ethics_render(req: EthicsRenderRequest) -> Response:
         return Response(content=f"生成失败: {e}".encode("utf-8"), status_code=500, media_type="text/plain")
 
     safe = (req.template or "ethics").replace("/", "_")
+    headers = {"Content-Disposition": f"attachment; filename={safe}.docx"}
+    if readiness.get("warnings"):
+        headers["X-Ethics-Warnings"] = _json.dumps(readiness["warnings"], ensure_ascii=False)
     return Response(
         content=data,
         media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-        headers={"Content-Disposition": f"attachment; filename={safe}.docx"},
+        headers=headers,
     )

@@ -92,7 +92,18 @@ export default function Dropzone({ testId, accept, label, hint, mode, compact, m
       <div
         className={`dropzone${compact ? " compact" : ""} ${drag ? "dragover" : ""} ${success ? "success" : ""}`}
         data-testid={`${testId}-zone`}
+        // 无障碍: 让屏幕阅读器识别为可点击的"上传区", 键盘 Enter/空格 也能触发选择
+        role="button"
+        tabIndex={0}
+        aria-label={`${label} · 上传文件区, 可拖拽或点击选择; 支持${multiple ? "多文件" : "单文件"}, 单文件不超过 30MB`}
+        aria-busy={busy}
         onClick={() => inputRef.current?.click()}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            inputRef.current?.click();
+          }
+        }}
         onDragOver={(e) => {
           e.preventDefault();
           setDrag(true);
@@ -108,7 +119,9 @@ export default function Dropzone({ testId, accept, label, hint, mode, compact, m
         <span className="dropzone-text">
           {busy ? "正在解析…" : multiple ? "把文件拖到这里，或点击选择（可多选）" : "把文件拖到这里，或点击选择"}
         </span>
-        {hint && <span className="dropzone-hint">{hint}</span>}
+        {/* 30MB 上限的预告 —— 之前用户上传 40MB 才看到"文件过大"报错, 现在提前告知 */}
+        {hint ? <span className="dropzone-hint">{hint} · 单文件 ≤ 30MB</span>
+              : <span className="dropzone-hint">单文件 ≤ 30MB</span>}
         <input
           ref={inputRef}
           data-testid={testId}

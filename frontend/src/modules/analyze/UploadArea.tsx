@@ -45,7 +45,7 @@ export default function UploadArea({
             </span>
           ) : (
             <span className="file-placeholder">
-              📎 把数据文件（.csv / .xlsx）拖到此处，或{" "}
+              📎 把数据文件（.csv / .xlsx，≤ 30MB）拖到此处，或{" "}
               <button type="button" className="link-btn" onClick={() => fileInput.current?.click()}>
                 点击选择
               </button>

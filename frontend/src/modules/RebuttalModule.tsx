@@ -14,6 +14,7 @@ export default function RebuttalModule() {
   const [manuscript, setManuscript] = usePersistentState("rebuttal:manuscript", "");
   const [tone, setTone] = usePersistentState("rebuttal:tone", "balanced");
   const [lang, setLang] = usePersistentState("rebuttal:lang", "en"); // 回复信语言: zh/en（默认英文，多数期刊要求）
+  const [round, setRound] = usePersistentState("rebuttal:round", "R1"); // 回复轮次: R1/R2/R3（仅显示标注，不改变历史管理）
 
   const [status, setStatus] = useState("");
   const [copied, setCopied] = useState(false); // 复制回复信的短暂反馈
@@ -63,7 +64,7 @@ export default function RebuttalModule() {
     setRunning(true);
     ctrl.current = new AbortController();
     await streamRebuttal(
-      { reviews, manuscript, tone, lang },
+      { reviews, manuscript, tone, lang, round },
       {
         signal: ctrl.current.signal,
         onStatus: setStatus,
@@ -185,6 +186,14 @@ export default function RebuttalModule() {
           <select data-testid="input-lang" value={lang} onChange={(e) => setLang(e.target.value)}>
             <option value="en">English（多数期刊要求英文回复信）</option>
             <option value="zh">中文</option>
+          </select>
+        </label>
+        <label className="field">
+          <span className="field-label">回复轮次（会在信件抬头标注 R1/R2/R3）</span>
+          <select data-testid="input-round" value={round} onChange={(e) => setRound(e.target.value)}>
+            <option value="R1">R1（首轮返修）</option>
+            <option value="R2">R2（第二轮返修）</option>
+            <option value="R3">R3（第三轮返修）</option>
           </select>
         </label>
         <div className="form-actions">

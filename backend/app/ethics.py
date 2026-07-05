@@ -13,10 +13,12 @@
 
 接口:
   render(template: str, fields: dict) -> bytes  # 返回 .docx 字节流
+  check_ethics_readiness(inputs: dict) -> dict  # 出稿前伦理硬校验
 """
 from __future__ import annotations
 
 import io
+import re
 from typing import Callable
 
 from docx import Document
@@ -268,6 +270,169 @@ _TEMPLATES: dict[str, Callable[[Document, dict], None]] = {
 
 def list_templates() -> list[str]:
     return list(_TEMPLATES.keys())
+
+
+# ---------- 出稿前伦理硬校验 ----------
+
+# 未成年人 / 弱势群体 / 精神障碍 等关键词, 命中即触发"须提交对应保护措施"检查
+_VULNERABLE_KEYWORDS = (
+    "未成年", "未成年人", "儿童", "小儿", "婴儿", "青少年",
+    "精神障碍", "认知障碍", "痴呆", "阿尔茨海默",
+    "孕妇", "妊娠", "哺乳期",
+    "囚犯", "在押人员",
+    "老年痴呆", "植物人", "昏迷",
+)
+
+# 弱势群体保护措施相关关键词, 只要材料/字段中出现任意一个即视为已考虑
+_VULNERABLE_SAFEGUARD_KEYWORDS = (
+    "法定代理人", "监护人", "监护", "代签", "代理签署",
+    "特殊人群保护", "弱势群体保护", "额外保护措施",
+    "简易语言", "分级同意", "assent",
+)
+
+# 知情同意勾选字段的候选键名, 兼容前端可能的多种命名
+_CONSENT_KEYS = (
+    "已获知情同意", "知情同意", "informed_consent_obtained",
+    "informed_consent", "consent_obtained", "consent",
+)
+
+# 伦理审批编号字段候选
+_IRB_KEYS = (
+    "伦理编号", "伦理审批编号", "伦理批号", "IRB编号", "IRB_number",
+    "irb_number", "ethics_number", "ethics_approval_no",
+)
+
+# 样本量字段候选
+_SAMPLE_SIZE_KEYS = (
+    "样本量", "样本量估算", "sample_size", "n_total",
+)
+
+
+def _flatten_text(inputs: dict) -> str:
+    """把 fields + materials 拼成一段大文本, 用关键词粗筛。"""
+    parts: list[str] = []
+    fields = inputs.get("fields") or {}
+    if isinstance(fields, dict):
+        for v in fields.values():
+            if v is None:
+                continue
+            parts.append(str(v))
+    materials = inputs.get("materials") or ""
+    if materials:
+        parts.append(str(materials))
+    return "\n".join(parts)
+
+
+def _get_field(fields: dict, keys: tuple[str, ...]) -> str | None:
+    for k in keys:
+        if k in fields and fields[k] not in (None, ""):
+            return str(fields[k]).strip()
+    return None
+
+
+def _parse_int(s: str | None) -> int | None:
+    if not s:
+        return None
+    m = re.search(r"-?\d+", s)
+    if not m:
+        return None
+    try:
+        return int(m.group(0))
+    except ValueError:
+        return None
+
+
+def check_ethics_readiness(inputs: dict) -> dict:
+    """出稿前的伦理硬校验层。
+
+    inputs 结构 (与 /api/ethics/render 请求体一致):
+      {
+        "template": "informed_consent" | ... ,
+        "fields": {...},
+        "materials": "..."
+      }
+
+    返回:
+      {
+        "ok": bool,                 # False 表示存在 red_flags
+        "red_flags": [str, ...],    # 严重问题, 必须解决否则不给出稿
+        "warnings": [str, ...],     # 建议改进但不阻断
+      }
+    """
+    fields = inputs.get("fields") if isinstance(inputs.get("fields"), dict) else {}
+    materials = str(inputs.get("materials") or "")
+    text_all = _flatten_text(inputs)
+
+    red_flags: list[str] = []
+    warnings: list[str] = []
+
+    # 1. 样本量: <=0 或缺失 -> red flag
+    sample_raw = _get_field(fields, _SAMPLE_SIZE_KEYS)
+    # materials 中也可能写 "样本量: 120"
+    if not sample_raw:
+        m = re.search(r"样本量[::\s]*([0-9]+)", materials)
+        if m:
+            sample_raw = m.group(1)
+    sample_n = _parse_int(sample_raw)
+    if sample_raw is None:
+        red_flags.append("样本量缺失: 请在字段或附加材料中给出明确的样本量估算 (含 α、power、效应量依据)。")
+    elif sample_n is not None and sample_n <= 0:
+        red_flags.append(f"样本量非法 (={sample_n}): 必须为正整数, 请重新估算。")
+
+    # 2. 伦理审批编号缺失 -> red flag
+    irb_raw = _get_field(fields, _IRB_KEYS)
+    if not irb_raw:
+        # 允许在 materials 里以自然语句形式出现
+        if not re.search(r"(伦理\s*(审批)?\s*(编号|批号|号)|IRB\s*[No\.#:]?|批件号)", text_all, re.IGNORECASE):
+            red_flags.append("伦理审批编号缺失: 请填写机构伦理委员会 (IRB/EC) 批件号, 未获批不得启动研究。")
+
+    # 3. 未勾选"已获知情同意" -> red flag
+    consent_raw = _get_field(fields, _CONSENT_KEYS)
+    consent_ok = False
+    if consent_raw is not None:
+        cs = consent_raw.strip().lower()
+        if cs in ("true", "1", "yes", "y", "是", "已获", "已获得", "已勾选", "✓", "√", "on"):
+            consent_ok = True
+        elif cs in ("false", "0", "no", "n", "否", "未获", "未勾选", "off"):
+            consent_ok = False
+        else:
+            # 视作已填写的自由文本描述, 但仍要含正向表述
+            consent_ok = bool(re.search(r"(已\s*(获|签署|取得)|签署.*同意|获得知情同意)", consent_raw))
+    else:
+        # 从 materials/其它字段扫描是否描述了知情同意流程
+        if re.search(r"(已\s*(获|签署|取得).*(知情)?同意|签署.*知情同意书|获得.*知情同意)", text_all):
+            consent_ok = True
+    if not consent_ok:
+        red_flags.append("未确认'已获知情同意': 请勾选或在附加材料中明确说明知情同意的获取流程与证据。")
+
+    # 4. 涉及特殊人群但未提交对应保护措施 -> red flag
+    hit_vuln = [kw for kw in _VULNERABLE_KEYWORDS if kw in text_all]
+    if hit_vuln:
+        has_safeguard = any(kw in text_all for kw in _VULNERABLE_SAFEGUARD_KEYWORDS)
+        if not has_safeguard:
+            red_flags.append(
+                "涉及特殊人群 (" + "、".join(sorted(set(hit_vuln))[:4]) +
+                ") 但未见针对性的保护措施: 需补充法定代理人/监护人同意流程、"
+                "分级/简化同意 (assent) 或额外保护措施, 才能提交伦理。"
+            )
+
+    # 5. warnings: 数据保存期限 / DMP 未附 / 联系方式 / 主要研究者
+    if not re.search(r"(保存期限|保留期限|存档期|retention)", text_all, re.IGNORECASE):
+        warnings.append("未见明确的数据保存期限, 建议在数据管理段补充 (依据法规与机构要求)。")
+    if not re.search(r"(数据管理计划|DMP|Data\s+Management\s+Plan)", text_all, re.IGNORECASE):
+        warnings.append("未附数据管理计划 (DMP), 建议单独提交或在方案中并入。")
+    if not _get_field(fields, ("联系方式", "contact", "phone", "email")) \
+            and not re.search(r"(联系方式|联系电话|电话|邮箱|@)", text_all):
+        warnings.append("未见受试者咨询/投诉联系方式, 建议补充电话或邮箱。")
+    if not _get_field(fields, ("研究者", "主要研究者", "PI", "pi")):
+        if not re.search(r"(主要研究者|PI\b)", text_all):
+            warnings.append("未填写主要研究者 (PI), 建议补齐姓名与职称以便伦理归档。")
+
+    return {
+        "ok": len(red_flags) == 0,
+        "red_flags": red_flags,
+        "warnings": warnings,
+    }
 
 
 def render(template: str, fields: dict | None = None, materials: str | None = None) -> bytes:

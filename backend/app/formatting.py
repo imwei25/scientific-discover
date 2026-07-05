@@ -227,10 +227,49 @@ def _add_line_numbers(doc: Document, count_by: int = 1, start: int = 1,
     sectPr.insert_element_before(ln, *_SECTPR_AFTER_LNNUM)
 
 
-def build_docx(text: str, journal_id: str = "", references: list[str] | None = None) -> bytes:
+def build_docx(
+    text: str,
+    journal_id: str = "",
+    references: list[str] | None = None,
+    csl_json: list[dict] | None = None,
+) -> bytes:
+    """构建 docx.
+
+    参数说明:
+      - references: 已格式化的字符串列表 (旧路径, 保持向后兼容)。
+      - csl_json:   结构化参考文献 (CSL-JSON)。给出时优先按目标期刊的 CSL 样式
+                    渲染成字符串列表, 而不是原样贴入 references 里的字符串,
+                    确保 Word 版与 LaTeX 版走同一个 CSL 管线, 不再"我上传成 Vancouver
+                    但选了 Nature 期刊, Word 输出还是 Vancouver"。
+    """
     doc = Document()
     spec = get_docx_spec(journal_id)
     _apply_page_and_style(doc, spec)
+
+    # 若给出结构化 csl_json, 优先用 citeproc 按期刊样式渲染出字符串列表, 覆盖 references.
+    # 失败时降级为原来的 references, 保证不因参考文献格式化异常而丢掉整个 docx 导出。
+    if csl_json:
+        try:
+            from .citations import _normalize_and_dedup, render_bibliography
+            from .journals import get_journal as _get_journal
+
+            _journal = _get_journal(journal_id)
+            _style_name = (_journal or {}).get("csl") or "vancouver"
+            _items: list[dict] = []
+            for i, it in enumerate(csl_json, 1):
+                if not isinstance(it, dict):
+                    continue
+                it.setdefault("id", f"ref{i}")
+                it.setdefault("type", "article-journal")
+                _items.append(it)
+            if _items:
+                _items = _normalize_and_dedup(_items)
+                rendered = render_bibliography(_items, _style_name)
+                if rendered:
+                    references = rendered
+        except Exception:  # noqa: BLE001
+            # 渲染失败保留调用方传入的 references (可能是空), 不阻断 docx 导出。
+            pass
 
     journal = get_journal(journal_id)
     if journal:

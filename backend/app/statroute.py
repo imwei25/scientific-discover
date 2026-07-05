@@ -32,10 +32,28 @@ def _fmt_p(p: float | None) -> str:
 
 
 def _normal(x: np.ndarray) -> tuple[bool | None, float | None]:
-    """Shapiro-Wilk 正态性; 返回(是否近似正态, p)。样本量不合适时返回(None, None)。"""
+    """正态性检验; 返回(是否近似正态, p)。样本量不合适时返回(None, None)。
+
+    n>5000 时 shapiro 数值稳定性下降(scipy 官方建议上限 5000, 大样本会给出
+    过分敏感的 p 甚至警告), 此时改用 KS 检验(对标准化后的 sample vs N(0,1))
+    兜底; 返回结构与 shapiro 一致(statistic, pvalue), 上层无感切换,
+    避免"静默返回 None → AI 盲写 t 检验"这种最隐蔽的错误。
+    """
     x = x[~np.isnan(x)]
-    if len(x) < _SHAPIRO_MIN or len(x) > _SHAPIRO_MAX:
+    if len(x) < _SHAPIRO_MIN:
         return None, None
+    if len(x) > _SHAPIRO_MAX:
+        # 大样本: KS 检验兜底。需先标准化, 否则 kstest 对 N(0,1) 几乎必拒。
+        try:
+            mu = float(np.mean(x))
+            sd = float(np.std(x, ddof=1))
+            if not np.isfinite(sd) or sd == 0:
+                return None, None
+            z = (x - mu) / sd
+            _, p = stats.kstest(z, "norm")
+            return bool(p > _ALPHA), float(p)
+        except Exception:  # noqa: BLE001
+            return None, None
     try:
         _, p = stats.shapiro(x)
         return bool(p > _ALPHA), float(p)

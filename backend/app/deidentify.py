@@ -47,11 +47,39 @@ _MRN_COLUMN_RE = re.compile(r"(住院号|病案号|mrn|patient\s*id|医保号)",
 _BIRTH_COLUMN_HINTS = ("出生", "生日", "dob", "birth")
 
 _RE_NAME_HAN = re.compile(r"^[\u4e00-\u9fa5]{2,4}$")
-_RE_ID_CARD = re.compile(r"\b\d{17}[\dXx]\b")
-_RE_PHONE = re.compile(r"\b1[3-9]\d{9}\b")
+# 单元格中间嵌入的身份证/手机 —— 用于"混写单元格"("患者张三 13800138000 身份证 11...")
+# 之前只匹配"整格纯数字", 混写完全漏检。这里改用 finditer + 边界检查, 只要串里含就命中。
+_RE_ID_CARD = re.compile(r"(?<![\dXx])\d{17}[\dXx](?![\dXx])")
+_RE_PHONE = re.compile(r"(?<!\d)1[3-9]\d{9}(?!\d)")
 # 仅匹配纯 18 位身份证(单元格本身就是身份证)
 _RE_ID_FULL = re.compile(r"^\d{17}[\dXx]$")
 _RE_PHONE_FULL = re.compile(r"^1[3-9]\d{9}$")
+
+# 中文姓名"子串检测": 常见姓氏 + 1-3 汉字, 用于混写单元格。
+# 精度取舍: 只识别常见 100 姓, 减少误伤(如"研究"两字被误当姓名)。
+_COMMON_SURNAMES = (
+    "王李张刘陈杨黄赵吴周徐孙马朱胡郭何高林罗郑梁谢宋唐许韩冯邓曹彭曾"
+    "萧田董袁潘于蒋蔡余杜叶程苏魏吕丁任沈姚卢姜崔钟谭陆汪范金石廖贾夏"
+    "韦付方白邹孟熊秦邱江尹薛闫段雷侯龙史陶黎贺顾毛郝龚邵万钱严覃武戴"
+)
+# 姓氏子串: 只做 lookahead(名后必须是非中文分隔), 不做 lookbehind, 否则"患者张三"这类
+# 医学场景常见前缀会挡住检出。医疗上下文里"患者/受试者/病人 + 姓名"是典型模式,
+# 我们宁可多提示(用户看得到样例, 可判断)也不漏检真姓名。
+_RE_NAME_SUBSTR = re.compile(rf"[{_COMMON_SURNAMES}][\u4e00-\u9fa5]{{1,3}}(?![\u4e00-\u9fa5])")
+# MRN/住院号子串: 明显医院号前缀 + 数字
+_RE_MRN_SUBSTR = re.compile(
+    r"(?:住院号|病案号|门诊号|MRN|Patient\s*ID|医保号)[\s:：=]*([A-Z0-9\-]{4,20})",
+    re.I,
+)
+# 邮箱、简版银行卡(13-19 位数字连号)、简版中文地址前缀
+_RE_EMAIL = re.compile(r"[\w\.\-]+@[\w\.\-]+\.[A-Za-z]{2,}")
+_RE_BANK = re.compile(r"(?<!\d)\d{13,19}(?!\d)")
+# 地址: 必须含"省/市/区/县/镇/街道/路/弄"这类真正的行政/道路锚点; "号"单独出现太模糊
+# (会误伤"住院号/病案号")故不作独立锚点, 必须接在道路名后(如"XX 路 3 号")
+_RE_ADDRESS = re.compile(
+    r"[\u4e00-\u9fa5]{2,10}(?:省|市|区|县|镇|街道|大道)[\u4e00-\u9fa5\d]{0,30}"
+    r"|[\u4e00-\u9fa5]{2,10}路\s*\d+\s*号?"
+)
 
 # 身份证校验位权重
 _ID_WEIGHTS = (7, 9, 10, 5, 8, 4, 2, 1, 6, 3, 7, 9, 10, 5, 8, 4, 2)
@@ -144,6 +172,8 @@ def _detect_cell_phi(cell: Any, col_name_kind: str | None) -> list[str]:
     """对单个单元格判定可能的 PHI 类型, 返回类型列表(可多种)。
 
     col_name_kind: 列名暗示的"主类型"(name / mrn / birth / None), 用于辅助判定。
+    改造: 支持"子串检测"——混写单元格("患者张三 MRN12345678")也能命中,
+    不再只识别"整格恰好是姓名/身份证"的规则。
     """
     if cell is None:
         return []
@@ -154,26 +184,79 @@ def _detect_cell_phi(cell: Any, col_name_kind: str | None) -> list[str]:
         return []
 
     out: list[str] = []
-    # 身份证: 优先单独格(纯 18 位)
-    if _RE_ID_FULL.match(s) and _id_card_valid(s):
-        out.append("id_card")
-    # 手机号: 纯 11 位
-    if _RE_PHONE_FULL.match(s):
+    # 身份证: 整格或子串, 必须通过校验
+    for m in _RE_ID_CARD.finditer(s):
+        if _id_card_valid(m.group(0)):
+            out.append("id_card")
+            break
+    # 手机号: 整格或子串
+    if _RE_PHONE_FULL.match(s) or _RE_PHONE.search(s):
         out.append("phone")
 
-    # 名字: 必须列名暗示
+    # 名字: ①列名暗示且整格 2-4 汉字, 或 ②子串命中常见姓氏组合
     if col_name_kind == "name" and _RE_NAME_HAN.match(s):
         out.append("name")
+    elif _RE_NAME_SUBSTR.search(s):
+        out.append("name")
 
-    # MRN: 列名暗示, 接受任意非空字符串
+    # MRN: ①列名暗示接受任意非空; ②子串命中"住院号: xxx"这类模式
     if col_name_kind == "mrn":
         out.append("mrn")
+    elif _RE_MRN_SUBSTR.search(s):
+        out.append("mrn")
+
+    # 邮箱/银行卡/地址子串
+    if _RE_EMAIL.search(s):
+        out.append("email")
+    if _RE_BANK.search(s) and "id_card" not in out:  # 18 位身份证会先命中银行卡, 排除
+        out.append("bank")
+    if _RE_ADDRESS.search(s):
+        out.append("address")
 
     # 出生日期: 列名暗示 + 可解析
     if col_name_kind == "birth" and _try_parse_date(s) is not None:
         out.append("birth")
 
-    return out
+    # 去重, 保留出现顺序
+    seen = set()
+    result = []
+    for t in out:
+        if t not in seen:
+            seen.add(t)
+            result.append(t)
+    return result
+
+
+def scan_text(text: str) -> dict:
+    """对自由文本(稿件/审稿意见/回信)扫描 PHI, 返回命中类型与样例。
+
+    用于 rebuttal/checklist/grant 等"上传稿件到 LLM"的入口前置检查:
+    发现命中时前端可弹"稿件疑似含 X 条个人信息, 是否继续?"
+    """
+    if not text:
+        return {"hits": {}, "total": 0}
+    hits: dict[str, list[str]] = {}
+    checks = [
+        ("id_card", _RE_ID_CARD, _id_card_valid),
+        ("phone", _RE_PHONE, None),
+        ("email", _RE_EMAIL, None),
+        ("name", _RE_NAME_SUBSTR, None),
+        ("mrn", _RE_MRN_SUBSTR, None),
+        ("address", _RE_ADDRESS, None),
+    ]
+    for kind, rx, validator in checks:
+        found = []
+        for m in rx.finditer(text):
+            val = m.group(0)
+            if validator and not validator(val):
+                continue
+            found.append(val)
+            if len(found) >= 5:
+                break
+        if found:
+            hits[kind] = found
+    total = sum(len(v) for v in hits.values())
+    return {"hits": hits, "total": total}
 
 
 def scan(data: bytes, filename: str) -> dict:
@@ -259,6 +342,26 @@ def _mask_phone(s: str) -> str:
     if not _RE_PHONE_FULL.match(s):
         return s
     return s[:3] + ("*" * 4) + s[-4:]
+
+
+def _substr_mask(s: str) -> str:
+    """对文本内所有 PHI 子串就地打码; 用于兜底混写单元格/自由文本。
+    只处理"确定性子类型"(身份证/手机/邮箱), 避免误伤姓名(需人工确认)。"""
+    def _id_sub(m):
+        v = m.group(0)
+        return _mask_id_card(v) if _id_card_valid(v) else v
+    s = _RE_ID_CARD.sub(_id_sub, s)
+    s = _RE_PHONE.sub(lambda m: _mask_phone(m.group(0)), s)
+    s = _RE_EMAIL.sub("[已脱敏邮箱]", s)
+    return s
+
+
+def redact_text(text: str) -> str:
+    """对自由文本做兜底脱敏: 打码身份证/手机/邮箱, 保留原文其他内容。
+    用于 rebuttal/checklist/grant 等出站前的最后一道防线。"""
+    if not text:
+        return text
+    return _substr_mask(text)
 
 
 def _mask_birth(v: Any) -> str:
@@ -357,6 +460,21 @@ def apply(
                     new_vals.append(new)
                     col_map[s] = new
                     continue
+                # 兜底: 混写单元格("患者张三 45 岁") 用子串脱敏
+                masked = _RE_NAME_SUBSTR.sub(lambda m: counter.get(m.group(0)), s)
+                if masked != s:
+                    new_vals.append(masked)
+                    col_map[s] = masked
+                    continue
+
+            # 无论主类型是什么, 只要该单元格包含身份证/手机/邮箱这类"确定性子串",
+            # 都做兜底打码——避免"混写单元格中的次要 PHI"整格泄漏。
+            masked = _substr_mask(s)
+            if masked != s:
+                new_vals.append(masked)
+                col_map[s] = masked
+                continue
+
             new_vals.append(v)
 
         df[col] = new_vals

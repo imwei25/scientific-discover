@@ -79,6 +79,8 @@ export interface StreamHandlers {
   onError?: (message: string) => void;
   /** W2-2: 后端可能发送 event: progress, data: {stage, detail?} 给 UI 显示进度文案 */
   onProgress?: (stage: string, detail?: unknown) => void;
+  /** 后端非致命告警: event: warning, data: {message}. 如 PHI 出站扫描、checklist 回引校验。 */
+  onWarning?: (message: string) => void;
   signal?: AbortSignal;
 }
 
@@ -155,6 +157,14 @@ export async function streamPost(
             /* keep raw */
           }
           onError?.(msg);
+        } else if (ev.event === "warning") {
+          let msg = ev.data;
+          try {
+            msg = JSON.parse(ev.data).message ?? ev.data;
+          } catch {
+            /* keep raw */
+          }
+          handlers.onWarning?.(msg);
         } else if (ev.event === "done") {
           onDone?.();
         }
@@ -176,6 +186,8 @@ export interface Reference {
   year: string;
   url: string;
   source?: string; // "pubmed" | "preprint" | "europepmc" | "openalex" | "crossref"
+  type?: string; // CSL type: "article-journal" | "posted-content" | "proceedings-article" | ...
+                 // 供期刊排版格式化时识别非学术来源（infographic / preprint / 会议摘要等）
   cited_by_count?: number;
   oa_url?: string; // Unpaywall 发现的合法 OA 全文链接(优先 PDF)
   journal_impact?: number | null; // 影响力指数(OpenAlex 近2年篇均被引); 未知为 null
@@ -362,6 +374,7 @@ export interface IdeaHandlers {
   onVerify?: (v: Verification) => void;
   onRewriteSuggestion?: (p: RewritePayload) => void;
   onTopicCard?: (card: TopicCard) => void;
+  onWarning?: (message: string) => void;
   onDone?: () => void;
   onError?: (message: string) => void;
   signal?: AbortSignal;
@@ -417,6 +430,7 @@ export async function streamIdea(
             suggestion: data.suggestion ?? null,
           });
         else if (ev.event === "topic_card") h.onTopicCard?.(data as TopicCard);
+        else if (ev.event === "warning") h.onWarning?.(data.message ?? ev.data);
         else if (ev.event === "error") h.onError?.(data.message ?? ev.data);
         else if (ev.event === "done") h.onDone?.();
       }
@@ -1005,6 +1019,8 @@ export interface AnalyzeHandlers {
   onOutput?: (text: string) => void;
   onTransparency?: (kind: TransparencyKind, text: string) => void;
   onDelta: (text: string) => void;
+  /** wave2 检查(如 p 值一致性)在流中产的告警, 即时追加显示。 */
+  onWarning?: (message: string) => void;
   onDone?: () => void;
   onError?: (message: string) => void;
   signal?: AbortSignal;
@@ -1069,6 +1085,7 @@ export async function streamAnalyze(
         else if (ev.event === "transparency_assumption") h.onTransparency?.("assumption", data.text ?? "");
         else if (ev.event === "transparency_quality")    h.onTransparency?.("quality",    data.text ?? "");
         else if (ev.event === "delta") h.onDelta(data.text ?? "");
+        else if (ev.event === "warning") h.onWarning?.(data.message ?? ev.data);
         else if (ev.event === "error") h.onError?.(data.message ?? ev.data);
         else if (ev.event === "done") h.onDone?.();
       }
@@ -1139,6 +1156,7 @@ export async function streamAnalyzeRefine(
         else if (ev.event === "transparency_assumption") h.onTransparency?.("assumption", data.text ?? "");
         else if (ev.event === "transparency_quality")    h.onTransparency?.("quality",    data.text ?? "");
         else if (ev.event === "delta") h.onDelta(data.text ?? "");
+        else if (ev.event === "warning") h.onWarning?.(data.message ?? ev.data);
         else if (ev.event === "error") h.onError?.(data.message ?? ev.data);
         else if (ev.event === "done") h.onDone?.();
       }

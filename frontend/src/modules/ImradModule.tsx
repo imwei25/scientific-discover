@@ -432,7 +432,16 @@ export default function ImradModule({ goto }: { goto: Goto }) {
                 <div className="result-actions">
                   {running && <button className="btn-ghost" onClick={stop} data-testid="stop-btn">停止</button>}
                   {!running && (
-                    <button className="btn-primary btn-sm" onClick={submit} disabled={!materials.trim()} data-testid="imrad-regen-btn">{draft ? "🔄 重新装配" : "装配初稿"}</button>
+                    <button
+                      className="btn-primary btn-sm"
+                      onClick={() => {
+                        // 首次装配无 draft 时直接触发; 已有 draft(可能含手动修改) 时二次确认避免误清
+                        if (draft && !window.confirm("重新装配将覆盖当前初稿(包含你的手动修改),是否继续?")) return;
+                        submit();
+                      }}
+                      disabled={!materials.trim()}
+                      data-testid="imrad-regen-btn"
+                    >{draft ? "🔄 重新装配" : "装配初稿"}</button>
                   )}
                   {draft && !running && (
                     <button className="btn-ghost" data-testid="copy-draft-btn" title="复制论文初稿到剪贴板" onClick={() => copyToClipboard("draft", draft)}>
@@ -457,6 +466,7 @@ export default function ImradModule({ goto }: { goto: Goto }) {
                 refineTestId="imrad-refine"
                 placeholder={running ? "正在撰写…" : "填好上方材料后点击装配,论文初稿会显示在这里;生成后可就地编辑 / 去 AI 味 / AI 精修。"}
                 testId="result-text"
+                highlightPlaceholders
               />
             </div>
           </CanvasSlot>

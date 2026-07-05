@@ -75,6 +75,60 @@ def _text(el) -> str:
     return "".join(el.itertext()).strip() if el is not None else ""
 
 
+def _parse_efetch_xml(xml_text: str) -> list[dict]:
+    """把 PubMed EFetch 返回的 XML 解析为结构化 dict 列表。
+    比 efetch() 富：additionally 返回 authors: list[{family, given}]，
+    供 refsenrich 等下游用于稳定的 CSL 作者渲染（不丢失复姓）。"""
+    root = ET.fromstring(xml_text)
+    papers: list[dict] = []
+    for art in root.findall(".//PubmedArticle"):
+        pmid = _text(art.find(".//PMID"))
+        title = _text(art.find(".//Article/ArticleTitle"))
+        journal = _text(art.find(".//Journal/Title"))
+        year = _text(art.find(".//JournalIssue/PubDate/Year")) or _text(
+            art.find(".//JournalIssue/PubDate/MedlineDate")
+        )
+        doi = ""
+        for aid in art.findall(".//ArticleIdList/ArticleId"):
+            if (aid.get("IdType") or "").lower() == "doi":
+                doi = _text(aid).lower()
+                break
+        authors: list[dict] = []
+        for a in art.findall(".//AuthorList/Author"):
+            family = _text(a.find("LastName")) or _text(a.find("CollectiveName"))
+            given = _text(a.find("ForeName")) or _text(a.find("Initials"))
+            if family or given:
+                authors.append({"family": family, "given": given})
+        if not pmid:
+            continue
+        papers.append({
+            "pmid": pmid,
+            "title": title,
+            "authors": authors,
+            "journal": journal,
+            "doi": doi,
+            "year": year,
+        })
+    return papers
+
+
+async def efetch_full(client: httpx.AsyncClient, pmids: list[str]) -> list[dict]:
+    """完整版 efetch：返回结构化 authors 列表，用于 refsenrich 元数据补齐。"""
+    if not pmids:
+        return []
+    params = {
+        "db": "pubmed",
+        "id": ",".join(pmids),
+        "retmode": "xml",
+        "rettype": "abstract",
+        **_common_params(),
+    }
+    await _throttle()
+    r = await client.get(f"{_BASE}/efetch.fcgi", params=params)
+    r.raise_for_status()
+    return _parse_efetch_xml(r.text)
+
+
 async def efetch(client: httpx.AsyncClient, pmids: list[str]) -> list[dict]:
     if not pmids:
         return []
@@ -370,6 +424,7 @@ async def search_literature(
     }
     if not all_fail:  # 不缓存"全失败"(可能只是一次偶发网络故障)
         searchcache.put(cache_key, out)
+    return out
 
 
 # ---------------------------------------------------------------------------

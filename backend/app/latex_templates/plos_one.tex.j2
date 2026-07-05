@@ -1,0 +1,24 @@
+{% extends "_base.tex.j2" %}
+{# PLOS ONE 官方 LaTeX 模板
+
+   审计要点:
+   - PLOS 官方"没有" plos2015.cls, 只发布 plos2015.bst; article + plos2015.bst 就是正确用法。
+   - 必需 lineno + \linenumbers (审稿人期望带行号的 PDF)。
+   - Geometry 用 letterpaper + PLOS 官方边距。
+   - 10pt (不是 12pt)。
+   - Vancouver 编号引用: cite 包已在 _base 里, 只列被引用文献 -> 不用 \nocite{*}。
+#}
+{% block extra_preamble %}
+%% PLOS ONE 官方模板: https://journals.plos.org/plosone/s/latex
+%% PLOS 只发布 plos2015.bst (BibTeX 样式), 没有 .cls 文件; article 类是官方推荐。
+%% 提交前请从上面链接下载 plos2015.bst 放到工程根目录; 或用 unsrt 作为回退。
+\usepackage[top=0.85in,left=2.75in,footskip=0.75in]{geometry}
+\usepackage[right]{lineno}
+{% endblock %}
+{% block before_body %}\linenumbers
+{% endblock %}
+{% block author_block %}\author{[Author Name]\textsuperscript{1,*} \\
+\textbf{1} [Affiliation, City, Country] \\
+\textsuperscript{*} Corresponding author: \href{mailto:[email]}{[email]}}
+\date{}
+{% endblock %}

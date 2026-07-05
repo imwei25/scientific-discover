@@ -10,6 +10,7 @@ from pydantic import BaseModel
 
 from ..config import settings
 from ..deai import scan_ai_flavor, stream_rewrite
+from ..deidentify import scan_text as phi_scan_text
 from ..grant import write_grant, plan_grant, review_grant, revise_section
 from ..http_common import SSE_HEADERS, _sse
 from ..imrad import assemble_imrad
@@ -22,6 +23,24 @@ from ..research import clarify_topic, deep_research_idea, extract_evidence_for_r
 from ..plan_followup import plan_followup
 from ..imrad_followup import imrad_followup
 from ..ethics_followup import ethics_followup
+from ..verify import verify_references
+
+# 上传稿件类模块: 出站前对 manuscript/text 字段做 PHI 扫描, 有命中就先发 warning 事件
+# (不阻断, 因用户可能已刻意去标识; 也不静默改稿, 因作者需要看到原文)
+_PHI_SCAN_MODULES = {"checklist", "precheck", "coverletter", "format"}
+_MANUSCRIPT_KEYS = ("manuscript", "text", "points", "facts")
+
+
+def _scan_inputs_for_phi(inputs: dict) -> dict | None:
+    """扫描输入里可能含 PHI 的字段; 返回 hits 摘要或 None。"""
+    parts = []
+    for k in _MANUSCRIPT_KEYS:
+        v = inputs.get(k)
+        if isinstance(v, str) and v.strip():
+            parts.append(v)
+    if not parts:
+        return None
+    return phi_scan_text("\n".join(parts))
 
 router = APIRouter()
 
@@ -64,16 +83,49 @@ async def run(req: RunRequest) -> StreamingResponse:
             yield _sse("error", {"message": err_msg})
         return StreamingResponse(err_gen(), media_type="text/event-stream")
 
+    # 高风险模块: 出站前 PHI 前置扫描, 有命中就先发 warning 事件
+    phi_warn: str | None = None
+    if req.module in _PHI_SCAN_MODULES:
+        try:
+            phi = _scan_inputs_for_phi(req.inputs)
+            if phi and phi.get("total", 0) > 0:
+                kinds_desc = ", ".join(f"{k}×{len(v)}" for k, v in phi["hits"].items())
+                phi_warn = (
+                    f"⚠️ 稿件中检测到疑似个人信息({kinds_desc}), 内容将上传到 LLM。"
+                    "请核对是否已充分去标识化。"
+                )
+        except Exception as exc:  # noqa: BLE001
+            log_swallow("run: PHI 前置扫描失败(非致命)", exc)
+
+    # checklist 后置回引校验: 抓取 LLM 输出里的章节/图表引用, 反查稿件是否真存在
+    do_verify = req.module == "checklist"
+    manuscript_for_verify = str(req.inputs.get("manuscript") or "") if do_verify else ""
+
     async def gen():
+        if phi_warn:
+            yield _sse("warning", {"message": phi_warn})
+        buf = [] if do_verify else None
         try:
             # 环节标识 = 模块名(plan/ethics/abstract/…), 支持 LLM_STAGE_<模块> 按环节换模型。
             async for piece in stream_chat(messages, task=req.module):
+                if buf is not None:
+                    buf.append(piece)
                 yield _sse("delta", {"text": piece})
         except LLMError as e:
             yield _sse("error", {"message": str(e)})
         except Exception as e:  # noqa: BLE001
             yield _sse("error", {"message": f"内部错误: {e}"})
         else:
+            # 回引校验(checklist): 输出里的章节/图表引用如果原稿没有, 提示疑似幻觉
+            if do_verify and buf and manuscript_for_verify:
+                try:
+                    warns = verify_references(
+                        "".join(buf), manuscript_for_verify, kinds={"section", "number"}
+                    )
+                    for w in warns[:5]:
+                        yield _sse("warning", {"message": w})
+                except Exception as exc:  # noqa: BLE001
+                    log_swallow("run: 回引校验失败(非致命)", exc)
             yield _sse("done", {})
 
     return StreamingResponse(gen(), media_type="text/event-stream", headers=SSE_HEADERS)

@@ -19,6 +19,7 @@ from . import searchfilters
 from .config import settings
 
 _ENDPOINT = "https://api.crossref.org/works"
+_WORK_SELECT = "DOI,title,author,container-title,issued,published-print,published-online"
 # 只取需要的字段, 省带宽。
 _SELECT = (
     "DOI,title,author,container-title,ISSN,issued,published-print,published-online,"
@@ -90,6 +91,8 @@ def _normalize(item: dict) -> dict | None:
         "url": url,
         "source": "crossref",
         "cited_by_count": int(item.get("is-referenced-by-count") or 0),
+        # CSL type：供下游 _detect_non_academic 识别 proceedings-article / posted-content 等
+        "type": str(item.get("type") or "").strip().lower(),
     }
 
 
@@ -105,6 +108,63 @@ def _params(query: str, rows: int, filter_str: str, email: str) -> dict:
     if email:
         p["mailto"] = email  # 进 polite pool, 响应更稳定
     return p
+
+
+def _parse_work_message(msg: dict) -> dict | None:
+    """把 CrossRef /works/{doi} 返回的 message 解析为 refsenrich 消费的结构：
+      {doi, title, authors: [{family, given}], journal, year}
+    保留 authors 结构，避免下游 CSL 渲染时姓/名颠倒（这是 [70]-[74] 的根因）。"""
+    if not isinstance(msg, dict):
+        return None
+    titles = msg.get("title") or []
+    title = (titles[0] if titles else "").strip()
+    if not title:
+        return None
+    doi = (msg.get("DOI") or "").strip().lower()
+    containers = msg.get("container-title") or []
+    journal = (containers[0] if containers else "").strip()
+    authors_raw = msg.get("author") or []
+    authors: list[dict] = []
+    for a in authors_raw:
+        family = str(a.get("family") or "").strip()
+        given = str(a.get("given") or "").strip()
+        if not family and not given:
+            # 兼容 organization-style author
+            name = str(a.get("name") or "").strip()
+            if name:
+                authors.append({"family": name, "given": ""})
+            continue
+        authors.append({"family": family, "given": given})
+    return {
+        "doi": doi,
+        "title": title,
+        "authors": authors,
+        "journal": journal,
+        "year": _year(msg),
+        "type": str(msg.get("type") or "").strip().lower(),
+    }
+
+
+async def fetch_by_doi(client: httpx.AsyncClient, doi: str) -> dict | None:
+    """GET /works/{doi}，返回结构化 dict 或 None（网络/404 时静默）。"""
+    if not doi:
+        return None
+    email = getattr(settings, "ncbi_email", "") or ""
+    ua = f"research-assistant/1.0 (mailto:{email})" if email else "research-assistant/1.0"
+    params = {"select": _WORK_SELECT}
+    if email:
+        params["mailto"] = email
+    try:
+        r = await client.get(
+            f"{_ENDPOINT}/{doi}",
+            params=params,
+            headers={"User-Agent": ua},
+        )
+        r.raise_for_status()
+        msg = (r.json() or {}).get("message") or {}
+    except Exception:  # noqa: BLE001
+        return None
+    return _parse_work_message(msg)
 
 
 async def search_crossref(queries: list[str], per_query: int = 6, cap: int = 18, filters: dict | None = None) -> dict:

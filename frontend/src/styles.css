@@ -1399,6 +1399,51 @@ select {
   border-radius: var(--radius-sm);
 }
 
+/* 通用后端 warning 面板: 后端 SSE `warning` 事件的用户可见提示。
+   与 .result-error 并存, 不合并 —— error 是致命失败, warning 是可继续但需关注(如
+   PHI 出站扫描、checklist 回引校验、analyze 统计一致性提醒等)。 */
+.warning-panel {
+  background: #fef3c7;
+  border-left: 3px solid #f59e0b;
+  padding: 8px 12px;
+  margin: 8px 0;
+  border-radius: 4px;
+}
+.warning-panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.warning-panel-title {
+  font-weight: 600;
+  color: #78350f;
+  margin-bottom: 4px;
+  font-size: 0.95em;
+}
+.warning-panel-close {
+  border: none;
+  background: transparent;
+  color: #78350f;
+  font-size: 18px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0 4px;
+  border-radius: 3px;
+}
+.warning-panel-close:hover { background: rgba(120, 53, 15, 0.1); }
+.warning-panel-list {
+  list-style: disc;
+  margin: 4px 0 2px;
+  padding-left: 20px;
+}
+.warning-panel-item {
+  color: #78350f;
+  font-size: 0.9em;
+  margin: 2px 0;
+  line-height: 1.5;
+}
+
 .rewrite-suggest {
   margin-top: var(--sp-4);
   padding: 14px 18px;
@@ -2715,6 +2760,13 @@ select {
 .dropzone.compact .dropzone-icon { font-size: 16px; }
 .dropzone.compact .dropzone-text { font-size: 12.5px; font-weight: 500; }
 .dropzone:hover {
+  border-color: var(--teal);
+  background: var(--teal-soft);
+}
+/* 键盘可见焦点: 屏幕阅读器/Tab 到本区时明显发光, 与鼠标 hover 一致体验 */
+.dropzone:focus-visible {
+  outline: 2px solid var(--teal, #2ba39a);
+  outline-offset: 2px;
   border-color: var(--teal);
   background: var(--teal-soft);
 }
@@ -4577,6 +4629,12 @@ mark.ai-edit {
   .wiz-step-desc { display: none; }
   .wiz-step { min-width: 0; }
 }
+/* 极窄屏(<480px): 4 步骤竖排, 避免每步只剩 60px 挤成一坨。 */
+@media (max-width: 480px) {
+  .wiz-steps { flex-direction: column; gap: 6px; }
+  .wiz-step { flex: 0 0 auto; }
+  .wiz-step-num { min-width: 24px; }
+}
 
 /* ── 写标书 · 就地 AI 精修条 + 评审区 ─────────────────────────── */
 .refine-inline {
@@ -4696,3 +4754,20 @@ mark.ai-edit {
 .ev-chip.ev-error { background: var(--chip-error-bg, #fee); color: var(--error, #a00); }
 .lit-picker-actions { display: flex; justify-content: flex-end; gap: 8px; }
 .lit-picker-actions .primary { background: var(--accent, #0a7); color: white; }
+
+/* IMRaD 占位段: 后端在 material 缺失时输出 "[本节缺少必要材料 …]" / "[待补充 …]",
+   前端把段落 <p> 替换成本容器以强视觉提醒作者补料, 避免与 AI 正文样式混同后被漏看。 */
+.imrad-placeholder {
+  background: #fef3c7;
+  border-left: 3px solid #f59e0b;
+  padding: 8px 12px;
+  margin: 8px 0;
+  border-radius: 4px;
+  font-style: italic;
+  color: #78350f;
+}
+.imrad-placeholder::before {
+  content: "⚠️ 占位段: ";
+  font-weight: 600;
+  font-style: normal;
+}

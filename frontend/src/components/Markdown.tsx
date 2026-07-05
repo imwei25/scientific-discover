@@ -79,14 +79,36 @@ export function normCiteUrl(u: string): string {
 // refInfo: 传入时, 引用链接悬停会浮出"支持此观点的原文句子"(取自链接 title 的『支持句』),
 //   无支持句则回退显示该文献要点(finding); 二者皆无则为普通链接。
 // highlight: 传入 true 时启用 AI 精修高亮插件(children 里的哨兵区间渲染成标黄)。
+// 提取段落第一段可读文本, 用于识别后端返回的"占位段"警告(例如
+// "[本节缺少必要材料, 请补充: …]" / "[待补充: …]")。这些是给作者看的提醒,
+// 若与正文样式混同, 用户可能漏看直接投稿, 因此渲染时需要视觉突出。
+function paragraphLeadingText(node: unknown): string {
+  if (!node || typeof node !== "object") return "";
+  const n = node as { value?: string; children?: unknown[] };
+  if (typeof n.value === "string") return n.value;
+  if (Array.isArray(n.children)) {
+    for (const c of n.children) {
+      const s = paragraphLeadingText(c);
+      if (s) return s;
+    }
+  }
+  return "";
+}
+function isPlaceholderParagraph(text: string): boolean {
+  const t = (text || "").trimStart();
+  return t.startsWith("[本节缺少必要材料") || t.startsWith("[待补充");
+}
+
 export default function Markdown({
   children,
   refInfo,
   highlight,
+  highlightPlaceholders,
 }: {
   children: string;
   refInfo?: Record<string, CiteInfo>;
   highlight?: boolean;
+  highlightPlaceholders?: boolean;
 }) {
   // components 必须 memo 化: react-markdown 把这些函数当作组件"类型"使用,
   // 若每次渲染都新建函数, 其 <Mermaid> 子树会在每个 token 被 remount, debounce 计时器
@@ -131,8 +153,19 @@ export default function Markdown({
           </code>
         );
       },
+      // 占位段视觉标注: 后端在 material 缺失时返回"[本节缺少必要材料 …]" / "[待补充 …]",
+      // 若与正文一致渲染极易被漏看, 用不同 wrapper (浅黄底 + 橙色左边框) 强提醒作者补料。
+      p: highlightPlaceholders
+        ? ({ node, children }) => {
+            const text = paragraphLeadingText(node);
+            if (isPlaceholderParagraph(text)) {
+              return <div className="imrad-placeholder">{children}</div>;
+            }
+            return <p>{children}</p>;
+          }
+        : undefined,
     }),
-    [refInfo],
+    [refInfo, highlightPlaceholders],
   );
 
   const plugins = useMemo(

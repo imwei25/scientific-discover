@@ -4,6 +4,7 @@
   - ttest      两独立样本 t 检验（输入效应量 Cohen's d）
   - proportion 两组率比较（输入两组率 p1、p2）
   - anova      单因素方差分析（输入效应量 Cohen's f 与组数 k）
+  - survival   生存分析 log-rank / Cox（Schoenfeld 公式）
 返回每组样本量与总样本量。
 
 另暴露 sweep(scenario, fixed_params, vary, range_values) 函数, 用于
@@ -55,9 +56,116 @@ def compute(design: str, params: dict) -> dict:
             return {"ok": True, "per_group": per, "total": per * k,
                     "note": f"单因素方差分析，f={f}，{k} 组，α={alpha}，power={power}"}
 
+        if design == "survival":
+            hr = float(params.get("hr", 0))
+            event_rate = float(params.get("event_rate", 0))
+            alloc_ratio = float(params.get("alloc_ratio", 1.0))
+            res = calc_survival_n(hr=hr, event_rate=event_rate,
+                                  alloc_ratio=alloc_ratio, alpha=alpha, power=power)
+            if not res.get("ok"):
+                return res
+            # 归一到旧接口字段, 同时保留 events / n_per_group 供前端展示
+            per_group = res["n_per_group"]
+            total = res["n_total"]
+            per = per_group[0] if per_group else math.ceil(total / 2)
+            return {
+                "ok": True,
+                "per_group": per,
+                "total": total,
+                "events": res["events"],
+                "n_per_group": per_group,
+                "note": f"生存分析(log-rank/Cox, Schoenfeld)，HR={hr}，事件率={event_rate}，α={alpha}，power={power}，分配比={alloc_ratio}",
+            }
+
         return {"ok": False, "error": f"未知设计类型：{design}"}
     except Exception as e:  # noqa: BLE001
         return {"ok": False, "error": f"计算失败：{e}"}
+
+
+# ---------- 生存分析（log-rank / Cox, Schoenfeld 公式） ----------
+
+def calc_survival_n(
+    hr: float,
+    event_rate: float,
+    alloc_ratio: float = 1.0,
+    alpha: float = 0.05,
+    power: float = 0.80,
+) -> dict:
+    """基于 Schoenfeld 公式估算 log-rank / Cox 所需总事件数与总样本量。
+
+    公式:  E = ((z_{α/2} + z_β)^2 * (1 + k)^2) / (k * (ln HR)^2),  k = alloc_ratio
+    再由随访期事件发生率反推总样本:  N = E / event_rate
+
+    参数:
+      hr           风险比 (Hazard Ratio); 需 > 0 且 ≠ 1
+      event_rate   随访期总事件发生率 (0, 1]
+      alloc_ratio  试验组:对照组 分配比 k (默认 1)
+      alpha        双侧显著性水平 (0, 1)
+      power        检验效能 (0, 1)
+
+    返回: {ok, events, n_total, n_per_group:[n_ctrl, n_trt], notes:[...]}
+    失败时返回 {ok: False, error: <中文说明>}
+    """
+    from math import ceil, log
+
+    from scipy.stats import norm
+
+    try:
+        hr = float(hr)
+        event_rate = float(event_rate)
+        alloc_ratio = float(alloc_ratio)
+        alpha = float(alpha)
+        power = float(power)
+    except (TypeError, ValueError):
+        return {"ok": False, "error": "参数格式错误，请填写数字。"}
+
+    if hr <= 0:
+        return {"ok": False, "error": "风险比 HR 必须为正数（>0）。"}
+    if hr == 1:
+        return {"ok": False, "error": "HR=1 表示无效应，无法估算样本量；请填写 ≠1 的 HR。"}
+    if not (0 < event_rate <= 1):
+        return {"ok": False, "error": "事件发生率必须在 (0, 1] 之间。"}
+    if event_rate == 0:
+        return {"ok": False, "error": "事件发生率为 0，无法反推样本量。"}
+    if alloc_ratio <= 0:
+        return {"ok": False, "error": "分配比必须为正数（>0）。"}
+    if not (0 < alpha < 1) or not (0 < power < 1):
+        return {"ok": False, "error": "α 与 power 需在 0~1 之间。"}
+
+    z_a = norm.ppf(1 - alpha / 2)
+    z_b = norm.ppf(power)
+    k = alloc_ratio
+    ln_hr = log(hr)
+
+    # Schoenfeld: 总事件数
+    events_f = ((z_a + z_b) ** 2) * ((1 + k) ** 2) / (k * (ln_hr ** 2))
+    events = int(ceil(events_f))
+
+    # 反推总样本量
+    n_total_f = events_f / event_rate
+    n_total = int(ceil(n_total_f))
+
+    # 按分配比拆分: 对照 : 试验 = 1 : k
+    n_ctrl = int(ceil(n_total / (1 + k)))
+    n_trt = int(ceil(n_ctrl * k))
+    # 修正: 保证 sum >= n_total
+    if n_ctrl + n_trt < n_total:
+        n_trt = n_total - n_ctrl
+
+    notes = [
+        f"Schoenfeld 公式: E = (z_{{α/2}}+z_β)²·(1+k)² / (k·(ln HR)²)",
+        f"z_{{α/2}}={z_a:.3f}, z_β={z_b:.3f}, ln HR={ln_hr:.4f}, k={k}",
+        f"需 {events} 次事件；按随访期事件率 {event_rate:.2%} 反推总样本 {n_total}。",
+        "若考虑失访/删失，建议再上浮 10%–20%。",
+    ]
+
+    return {
+        "ok": True,
+        "events": events,
+        "n_total": n_total,
+        "n_per_group": [n_ctrl, n_trt],
+        "notes": notes,
+    }
 
 
 # ---------- 扫描: 单参数 vs 样本量 曲线 ----------
@@ -68,6 +176,7 @@ _SCENARIO_MAP = {
     "two_means": "ttest",
     "one_proportion": "one_proportion",
     "one_mean": "one_mean",
+    "survival": "survival",
 }
 
 
@@ -78,7 +187,7 @@ def _solve_one(scenario: str, params: dict) -> int | None:
         raise ValueError(f"未知 scenario: {scenario}")
 
     # 复用已有的两组场景
-    if design in ("ttest", "proportion"):
+    if design in ("ttest", "proportion", "survival"):
         res = compute(design, params)
         if not res.get("ok"):
             return None

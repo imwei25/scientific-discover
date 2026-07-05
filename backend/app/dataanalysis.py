@@ -34,9 +34,20 @@ EXEC_TIMEOUT = 60  # 秒
 # 轻量安全护栏: 命中这些明显危险的调用则拒绝执行(本地用户环境, 主要防误伤)。
 # eval/exec/open 仅拦截“内置函数”形式(前面不是 . 或字母): 这样既挡住注入/读文件,
 # 又不会误伤合法的 pandas 方法 df.eval()/df.query() 等(它们前面有 . )。
+#
+# 扩展拦截理由(防 LLM 生成的分析代码绕过读文件/加载恶意对象/动态导入):
+#   - pickle.load/loads: 反序列化任意对象 = 任意代码执行, 绝不允许在沙箱里跑。
+#   - ctypes: 直接调 C 库、系统调用、内存操作, 完全绕过 Python 层护栏。
+#   - importlib: __import__ 已拦, 但 importlib.import_module / __import__ 变种仍能加载 os/subprocess。
+#   - runpy: run_path/run_module 等价于 exec 一个模块。
+#   - pathlib 的读写方法(read_bytes/read_text/write_bytes/write_text): 等价于 open, 会被拿来读 /etc/passwd
+#     或写入宿主机文件。注意只拦读写方法, 不拦 Path()/Path.exists() 等纯路径操作;
+#     pandas 的 pd.read_csv/read_excel 不涉及 pathlib 方法, 不会被误伤。
 _DANGER = re.compile(
     r"\b(?:subprocess|os\.system|os\.popen|os\.remove|os\.rmdir|os\.unlink|shutil\.(?:rmtree|move|copy)|"
-    r"socket|requests|urllib|httpx|Popen|__import__)\b"
+    r"socket|requests|urllib|httpx|Popen|__import__|ctypes|importlib|runpy)\b"
+    r"|\bpickle\s*\.\s*loads?\b"
+    r"|\.(?:read_bytes|read_text|write_bytes|write_text)\s*\("
     r"|(?<![\w.])(?:eval|exec|open)\s*\(",
 )
 
@@ -144,6 +155,44 @@ def _sanity_checks(stdout: str) -> list[str]:
     return warns
 
 
+# 抓 p 值的正则: 兼容 p=、p＝、p:、p val=、p-value=、P value =… 等常见写法。
+_P_VALUE_RE = re.compile(r"(?i)\bp\s*(?:[-_]?val(?:ue)?)?\s*[=＝:]\s*(\d+\.\d+)")
+
+
+def _extract_p_values(text: str) -> set[float]:
+    """抓出 text 中所有形如 p=0.03 的 p 值 (归一化为 float)。"""
+    out: set[float] = set()
+    if not text:
+        return out
+    for m in _P_VALUE_RE.finditer(text):
+        try:
+            v = float(m.group(1))
+        except ValueError:
+            continue
+        # 只保留合法 p 值 (0 <= p <= 1); 超范围的由 _sanity_checks 单独告警。
+        if 0.0 <= v <= 1.0:
+            out.add(v)
+    return out
+
+
+def check_p_value_consistency(stdout: str, conclusion: str) -> list[str]:
+    """核对结论里的 p 值是否都能在真实 stdout 中找到 (容差 0.001)。
+
+    结论里出现、但 stdout 里没有近似值的 p 值, 视为 LLM 幻觉, 记录告警。
+    stdout 里有、结论里没引用的 p 值不告警 (作者有权省略非关键结果)。
+    """
+    warns: list[str] = []
+    stdout_ps = _extract_p_values(stdout)
+    concl_ps = _extract_p_values(conclusion)
+    if not concl_ps:
+        return warns
+    for p in sorted(concl_ps):
+        if not any(abs(p - q) <= 0.001 for q in stdout_ps):
+            # 格式化时避免 0.03 变 0.030000000000000002 之类
+            warns.append(f"结论里 p={p:g} 未在真实输出中出现，疑似模型幻觉，请核对。")
+    return warns
+
+
 def _dedup_columns(df: pd.DataFrame) -> pd.DataFrame:
     """重命名重复列名(脏临床表常见), 避免 df[col] 返回 DataFrame 触发 .dtype 等崩溃。"""
     seen: dict = {}
@@ -167,14 +216,36 @@ def _load(filename: str, content: bytes) -> pd.DataFrame:
 
 
 def profile_data(df: pd.DataFrame) -> str:
-    """生成给 AI 看的数据画像(简洁)。"""
-    lines = [f"数据规模：{df.shape[0]} 行 × {df.shape[1]} 列。", "列信息："]
+    """生成给 AI 看的数据画像(隐私安全版)。
+
+    原实现把 df.head(5) 整行原始记录塞进 LLM 提示词, 500 行病例前 5 行含
+    姓名/年龄/血压/结局等直接可识别信息, 违反项目"本地不出网"承诺。
+    改造后:
+      - 分类列: 只披露"取值+计数"(<=20 个不同取值时), 高基数列判定为疑似 PII, 不外发原始值
+      - 数值列: describe() 汇总统计(mean/std/quantile)——已是行业标准脱敏
+      - 逐列样例: 仅当列被判定为低基数分类且样本量>=5 时才展示; 其余列仅回传 dtype/唯一值数/缺失
+      - **删除**"前 5 行"整行披露
+    """
+    n_rows = int(df.shape[0])
+    lines = [f"数据规模：{n_rows} 行 × {df.shape[1]} 列。", "列信息："]
     for col in df.columns:
         dtype = str(df[col].dtype)
-        nuniq = df[col].nunique(dropna=True)
+        nuniq = int(df[col].nunique(dropna=True))
         miss = int(df[col].isna().sum())
-        sample = ", ".join(map(str, df[col].dropna().unique()[:5]))
-        line = f"  - {col}（{dtype}，唯一值{nuniq}，缺失{miss}）样例: {sample}"
+        line = f"  - {col}（{dtype}，唯一值{nuniq}，缺失{miss}）"
+        # 只对"低基数且样本量足够"的分类列外发取值样例(视作元数据), 否则一律不外发原始值。
+        # 阈值: 唯一值 <= 20 且总样本 >= 10 (避免小样本单值被反推出个体身份)
+        is_low_cardinality = nuniq > 0 and nuniq <= 20 and n_rows >= 10
+        looks_id_like = n_rows > 0 and (nuniq / n_rows) >= 0.9  # 近乎唯一, 疑似 ID/姓名
+        if is_low_cardinality and not looks_id_like:
+            vc = df[col].value_counts(dropna=True).head(6)
+            pairs = ", ".join(f"{k}({int(v)})" for k, v in vc.items())
+            if pairs:
+                line += f" 主要取值: {pairs}"
+        elif looks_id_like:
+            line += " [疑似ID/姓名列, 不展示样例]"
+        else:
+            line += " [高基数列, 不展示原始值]"
         flags = _column_flags(df[col])
         if flags:
             line += "  【" + "；".join(flags) + "】"
@@ -183,22 +254,17 @@ def profile_data(df: pd.DataFrame) -> str:
     categorical = [c for c in df.columns if c not in numeric]
     lines.append(f"\n数值型列：{', '.join(map(str, numeric)) or '无'}")
     lines.append(f"分类型列：{', '.join(map(str, categorical)) or '无'}")
-    # 数值列描述统计: 让 AI 一眼看到量纲/分布/离群迹象, 减少臆测。
-    if numeric:
+    # 数值列描述统计: 汇总量(count/mean/std/min/quartile/max), 不是行级数据, 保留
+    if numeric and n_rows >= 5:
         try:
-            lines.append("\n数值列描述统计：")
+            lines.append("\n数值列描述统计(汇总, 非行级)：")
             lines.append(df[numeric].describe().round(3).to_string())
         except Exception as e:  # noqa: BLE001
             log_swallow("数据画像: 数值列描述统计生成失败(AI 将缺少分布信息)", e)
-    # 分类列主要取值: 关键是让 AI 看清"分组列到底几组、各组多少例", 避免把多组当两组。
-    if categorical:
-        lines.append("\n分类列主要取值(取值(计数))：")
-        for c in categorical[:12]:
-            vc = df[c].value_counts(dropna=True).head(6)
-            pairs = ", ".join(f"{k}({int(v)})" for k, v in vc.items())
-            lines.append(f"  - {c}: {pairs}")
-    lines.append("\n前 5 行：")
-    lines.append(df.head(5).to_string())
+    # 分类列已在上方逐列展示前 6 个取值+计数, 此处不再重复。
+    lines.append(
+        "\n注: 出于隐私保护, 未提供行级样本; AI 若需查看真实取值分布, 请在探索代码中用 df.describe()/value_counts() 打印聚合信息。"
+    )
     return "\n".join(lines)
 
 
@@ -945,10 +1011,16 @@ async def analyze_data(
         warnings = _sanity_checks(stdout_full)
 
         yield ("status", {"message": "正在总结结论…"})
+        conclusion_buf: list[str] = []
         async for piece in _strip_conclusion_preamble_stream(
             stream_chat(_conclusion_messages(question, code, stdout_full, warnings), task="analysis")
         ):
+            conclusion_buf.append(piece)
             yield ("delta", {"text": piece})
+        # p 值一致性核对: 结论里的 p 值必须能在真实 stdout 中找到 (容差 0.001)。
+        # 只告警, 不拒稿 —— 避免过度干扰用户。
+        for w in check_p_value_consistency(stdout_full, "".join(conclusion_buf)):
+            yield ("warning", {"message": w})
         yield ("done", {})
     except Exception as e:  # noqa: BLE001
         yield ("error", {"message": f"分析过程出错：{e}"})
@@ -1105,10 +1177,15 @@ async def refine_analysis(
         yield ("status", {"message": "正在总结结论…"})
         # 结论以"新需求"为研究用途, 让更新后的结论紧扣本轮改动。
         conc_q = (question + "\n【本轮新需求】" + requirement) if question else requirement
+        conclusion_buf: list[str] = []
         async for piece in _strip_conclusion_preamble_stream(
             stream_chat(_conclusion_messages(conc_q, code, stdout_full, warnings), task="analysis")
         ):
+            conclusion_buf.append(piece)
             yield ("delta", {"text": piece})
+        # p 值一致性核对: 只告警, 不拒稿。
+        for w in check_p_value_consistency(stdout_full, "".join(conclusion_buf)):
+            yield ("warning", {"message": w})
         yield ("done", {})
     except Exception as e:  # noqa: BLE001
         yield ("error", {"message": f"续跑过程出错：{e}"})

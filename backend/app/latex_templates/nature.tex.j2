@@ -1,0 +1,51 @@
+{% extends "_base.tex.j2" %}
+{# Nature Portfolio 系列 (Nature / Nature Communications / Nature Methods 等)
+
+   审计要点:
+   - Nature 引用是"上标数字", 用 natbib[super,sort&compress,comma], 不是 cite。
+   - Nature Portfolio 要求文件末尾有下列强制章节: Data availability, Code availability,
+     Author contributions, Competing interests, Acknowledgements —— 缺任何一个都会被 desk-reject。
+   - 单位信息必须实际渲染, 不能只写在注释里 (审稿人看不到 .tex, 只看 PDF)。
+   - Submission 建议开 line numbers。
+   - 官方模板现在是 sn-jnl.cls (Springer Nature v3.1, Dec 2024), 但 article + naturemag 也接受。
+#}
+{% block extra_preamble %}
+%% Nature 官方模板: Springer Nature sn-jnl.cls v3.1 + option sn-nature (2024+)。
+%% 本骨架用通用 article + naturemag.bst 作为通用回退, 提交前可选择切到 sn-jnl。
+%% 摘要 ≤ 150 词, 无引用无公式; 引用为上标数字 (natbib [super])。
+\usepackage[margin=2.54cm]{geometry}
+\usepackage{setspace}
+\doublespacing
+\usepackage{lineno}\linenumbers
+{% endblock %}
+{% block cite_pkg %}%% Nature 要求上标数字引用 (^{1,2-4}); natbib[super,sort&compress] 一次性搞定
+\usepackage[super,sort&compress,comma]{natbib}
+{% endblock %}
+{% block author_block %}\author{[作者姓名 1]$^{1}$, [作者姓名 2]$^{2,*}$}
+\date{}
+{% endblock %}
+{% block after_title %}\vspace{-1em}
+\noindent$^{1}$[单位 1，城市，国家] \\
+$^{2}$[单位 2，城市，国家] \\
+$^{*}$通讯作者: \href{mailto:[email]}{[email]}
+\bigskip
+{% endblock %}
+{% block keywords_block %}%% Nature 用 Subject terms; 部分子刊可能不需要, 提交前请对照 Author Guide
+\noindent\textbf{Subject terms:} {{ keywords }}\par\bigskip
+{% endblock %}
+{% block back_matter %}
+\section*{Data availability}
+[请描述: 本研究产生/分析的数据在哪里可获得? 例如: The datasets generated during the current study are available in the [NAME] repository, [PERSISTENT WEB LINK]. 或 Data are available from the corresponding author on reasonable request.]
+
+\section*{Code availability}
+[请描述: 自定义代码是否公开? 建议 Zenodo/GitHub + DOI。例如: All custom code used in this study is available at https://github.com/... (DOI: 10.5281/...).]
+
+\section*{Author contributions}
+[请用 CRediT 风格声明。例如: A.B. conceived the study and wrote the manuscript; C.D. performed experiments; E.F. analysed data. All authors reviewed the manuscript.]
+
+\section*{Competing interests}
+The authors declare no competing interests.
+
+\section*{Acknowledgements}
+[请列出资助来源、基金编号, 以及非作者贡献者的致谢。]
+{% endblock %}

@@ -14,10 +14,11 @@ interface Props {
   exportingDocx?: boolean;
   panelTestId?: string;
   onSave?: (md: string) => void;   // 传入则正文可编辑保存
+  hideMdActions?: boolean;         // 隐藏"复制"和"导出 Markdown"按钮(期刊排版用)
 }
 
 // 统一的结果展示区: 流式文本 + 复制 + 导出(MD/Word) + 停止 + 状态。
-export default function ResultPanel({ text, running, error, onStop, placeholder, exportName, onExportDocx, exportingDocx, panelTestId, onSave }: Props) {
+export default function ResultPanel({ text, running, error, onStop, placeholder, exportName, onExportDocx, exportingDocx, panelTestId, onSave, hideMdActions }: Props) {
   const [copied, setCopied] = useState<"ok" | "fail" | null>(null);
 
   const copy = async () => {
@@ -41,12 +42,12 @@ export default function ResultPanel({ text, running, error, onStop, placeholder,
               停止
             </button>
           )}
-          {text && !running && (
+          {text && !running && !hideMdActions && (
             <button className="btn-ghost" onClick={copy} data-testid="copy-btn">
               {copied === "ok" ? "已复制" : copied === "fail" ? "复制失败" : "复制"}
             </button>
           )}
-          {text && !running && (
+          {text && !running && !hideMdActions && (
             <button className="btn-ghost" onClick={exportMd} data-testid="export-md-btn">
               导出 Markdown
             </button>

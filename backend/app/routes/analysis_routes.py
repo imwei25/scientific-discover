@@ -142,6 +142,28 @@ async def sample_size(req: SampleSizeRequest) -> dict:
     return compute(req.design, req.params)
 
 
+class SurvivalSampleSizeRequest(BaseModel):
+    hr: float
+    event_rate: float
+    alloc_ratio: float = 1.0
+    alpha: float = 0.05
+    power: float = 0.80
+
+
+@router.post("/api/samplesize/survival")
+async def sample_size_survival(req: SurvivalSampleSizeRequest) -> dict:
+    """log-rank / Cox 生存分析样本量 (Schoenfeld 公式, 不经 LLM, 零额度)。"""
+    from ..samplesize import calc_survival_n
+
+    return calc_survival_n(
+        hr=req.hr,
+        event_rate=req.event_rate,
+        alloc_ratio=req.alloc_ratio,
+        alpha=req.alpha,
+        power=req.power,
+    )
+
+
 @router.post("/api/randomize")
 async def randomize_ep(req: SampleSizeRequest) -> dict:
     """确定性生成随机化分组表(简单/置换区组, 固定种子可复现, 零额度)。"""
@@ -191,6 +213,8 @@ async def analyze_forest(req: ForestRequest) -> dict:
             "image_base64": image_b64,
             "format": fmt,
             "summary": out["summary"],
+            "studies": out.get("studies", []),
+            "haldane_corrected_count": out.get("haldane_corrected_count", 0),
         }
     except Exception as e:  # noqa: BLE001
         return {"ok": False, "error": f"森林图生成失败: {e}"}

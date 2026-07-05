@@ -90,8 +90,16 @@ export default function PlanModule() {
   // 把 materials 作为 resources 字段传给后端(prompts.py 里 4 个 builder 都接受 resources)。
   const submit = () => {
     if (!idea.trim() || running) return;
+    // 重新生成方案:保留历史追问,插入一条分隔标记以指示上下文断点,
+    // 避免用户 20 分钟的追问成果被"一键归零"。
+    if (text) {
+      setFollowups((prev) => (
+        prev.length && prev[prev.length - 1]?.q === "[方案已重新生成]"
+          ? prev
+          : [...prev, { q: "[方案已重新生成]", a: "" }]
+      ));
+    }
     goStep(2);
-    if (text) setFollowups([]);
     start("plan", { idea, resources: withSampleSize(materials) });
   };
   const genSap = () => {
@@ -122,6 +130,7 @@ export default function PlanModule() {
     setSsChosen(0);
     setSsChosenMeta(null);
     setSsVerifyMsg("");
+    setSvResult(null);
     setFollowups([]);
     setFollowupInput("");
     setCurrentAnswer("");
@@ -173,10 +182,24 @@ export default function PlanModule() {
   const [ssPower, setSsPower] = usePersistentState<number>("plan:samplesize:power", 0.8);
   const [ssSweep, setSsSweep] = usePersistentState<string>("plan:samplesize:sweep", "effect");
   const [ssChosen, setSsChosen] = usePersistentState<number>("plan:sampleSize", 0);
-  type SsMeta = { alpha: number; power: number; effect: number; scene: string; source: string };
+  type SsMeta = {
+    alpha: number; power: number; effect: number; scene: string; source: string;
+    // 生存分析扩展字段(可选, 兼容老快照)
+    hr?: number; event_rate?: number; alloc_ratio?: number;
+    events?: number; n_total?: number; n_per_group?: number[];
+  };
   const [ssChosenMeta, setSsChosenMeta] = usePersistentState<SsMeta | null>("plan:sampleSizeMeta", null);
   const [ssVerifyMsg, setSsVerifyMsg] = useState<string>("");
   const [ssVerifyBusy, setSsVerifyBusy] = useState(false);
+
+  // 生存分析专用参数
+  const [svHR, setSvHR] = usePersistentState<number>("plan:samplesize:sv:hr", 0.7);
+  const [svEventRate, setSvEventRate] = usePersistentState<number>("plan:samplesize:sv:eventRate", 0.3);
+  const [svAllocRatio, setSvAllocRatio] = usePersistentState<number>("plan:samplesize:sv:alloc", 1.0);
+  const [svResult, setSvResult] = useState<{
+    ok?: boolean; error?: string; events?: number; n_total?: number; n_per_group?: number[]; notes?: string[];
+  } | null>(null);
+  const [svBusy, setSvBusy] = useState(false);
 
   const withSampleSize = (base: string): string => {
     if (!(ssChosen > 0)) return base;
@@ -184,14 +207,62 @@ export default function PlanModule() {
     const scene = m?.scene ?? ssScene;
     const alpha = m?.alpha ?? ssAlpha;
     const power = m?.power ?? ssPower;
-    const effect = m?.effect ?? ssEffect;
-    const sceneLabel = scene === "proportion" ? "两组率比较(双比例)" : "两组均值比较(双均值, Cohen's d)";
     const src = m?.source === "backend" ? "（本地精确计算）" : "";
-    const note =
-      `【已确定样本量】用户已用样本量计算器确定：每组约 ${ssChosen} 例${src}（合计约 ${ssChosen * 2} 例）；` +
-      `设计场景=${sceneLabel}，α=${alpha}，检验效能(power)=${power}，效应量=${effect}。` +
-      `请在方案/统计部分直接采用该样本量并据此论证可行性；若为临床试验，请提醒按预期失访率（如 10–20%）适当上浮。`;
+    let note: string;
+    if (scene === "survival") {
+      const hr = m?.hr ?? svHR;
+      const er = m?.event_rate ?? svEventRate;
+      const k = m?.alloc_ratio ?? svAllocRatio;
+      const events = m?.events;
+      const nTotal = m?.n_total ?? ssChosen;
+      const per = m?.n_per_group;
+      const perStr = per && per.length === 2 ? `（对照 ${per[0]} / 试验 ${per[1]}）` : "";
+      note =
+        `【已确定样本量】用户已用样本量计算器（生存分析 · log-rank / Cox, Schoenfeld 公式${src}）确定：` +
+        `总 N=${nTotal}${perStr}${events ? `（对应总事件数 E=${events}）` : ""}；` +
+        `HR=${hr}，随访期事件率=${er}，α=${alpha}，power=${power}，分配比=${k}。` +
+        `请在方案/统计部分直接采用该样本量并据此论证可行性；生存研究请额外说明随访时长与预期删失/失访率（建议再上浮 10–20%）。`;
+    } else {
+      const effect = m?.effect ?? ssEffect;
+      const sceneLabel = scene === "proportion" ? "两组率比较(双比例)" : "两组均值比较(双均值, Cohen's d)";
+      note =
+        `【已确定样本量】用户已用样本量计算器确定：每组约 ${ssChosen} 例${src}（合计约 ${ssChosen * 2} 例）；` +
+        `设计场景=${sceneLabel}，α=${alpha}，检验效能(power)=${power}，效应量=${effect}。` +
+        `请在方案/统计部分直接采用该样本量并据此论证可行性；若为临床试验，请提醒按预期失访率（如 10–20%）适当上浮。`;
+    }
     return base ? base + "\n\n" + note : note;
+  };
+
+  const useSurvivalN = async () => {
+    setSsVerifyMsg("");
+    setSvBusy(true);
+    try {
+      const resp = await fetch(apiUrl("/api/samplesize/survival"), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          hr: svHR, event_rate: svEventRate, alloc_ratio: svAllocRatio,
+          alpha: ssAlpha, power: ssPower,
+        }),
+      });
+      const j = await resp.json();
+      setSvResult(j);
+      if (j.ok && j.n_total) {
+        setSsChosen(j.n_total);
+        setSsChosenMeta({
+          alpha: ssAlpha, power: ssPower, effect: svHR, scene: "survival", source: "backend",
+          hr: svHR, event_rate: svEventRate, alloc_ratio: svAllocRatio,
+          events: j.events, n_total: j.n_total, n_per_group: j.n_per_group,
+        });
+        setSsVerifyMsg(`已采用后端精确值：总 N=${j.n_total}（事件数 E=${j.events}）。`);
+      } else {
+        setSsVerifyMsg(`生存分析样本量计算失败：${j.error || "未知错误"}`);
+      }
+    } catch (e) {
+      setSsVerifyMsg(`请求失败：${(e as Error).message}`);
+    } finally {
+      setSvBusy(false);
+    }
   };
 
   const zTable: Record<string, number> = {
@@ -516,9 +587,48 @@ export default function PlanModule() {
                 <select data-testid="ss-scene" value={ssScene} onChange={(e) => setSsScene(e.target.value)}>
                   <option value="proportion">双比例(两组率比较)</option>
                   <option value="ttest">双均值(两组均值比较,Cohen's d)</option>
+                  <option value="survival">生存分析(log-rank / Cox, Schoenfeld)</option>
                 </select>
               </label>
 
+              {ssScene === "survival" && (
+                <div className="ss-explore">
+                  <div className="ss-controls">
+                    <label className="field">
+                      <span className="field-label">风险比 HR <strong>{svHR.toFixed(2)}</strong>
+                        <span className="field-hint">(试验组 vs 对照组; ≠1; 例 0.7 = 事件风险降低 30%)</span>
+                      </span>
+                      <input type="range" min={0.3} max={2.0} step={0.05} data-testid="sv-hr" value={svHR} onChange={(e) => setSvHR(parseFloat(e.target.value))} />
+                    </label>
+                    <label className="field">
+                      <span className="field-label">随访期事件发生率 <strong>{(svEventRate * 100).toFixed(0)}%</strong>
+                        <span className="field-hint">(全人群随访结束时的累积事件发生比例)</span>
+                      </span>
+                      <input type="range" min={0.05} max={0.95} step={0.01} data-testid="sv-event-rate" value={svEventRate} onChange={(e) => setSvEventRate(parseFloat(e.target.value))} />
+                    </label>
+                    <label className="field">
+                      <span className="field-label">分配比 (试验:对照) <strong>{svAllocRatio.toFixed(2)}</strong>
+                        <span className="field-hint">(1 = 1:1 均衡; 2 = 试验组人数为对照组的 2 倍)</span>
+                      </span>
+                      <input type="range" min={0.5} max={4.0} step={0.1} data-testid="sv-alloc" value={svAllocRatio} onChange={(e) => setSvAllocRatio(parseFloat(e.target.value))} />
+                    </label>
+                    <label className="field">
+                      <span className="field-label">显著性水平 α <strong>{ssAlpha.toFixed(3)}</strong>
+                        <span className="field-hint">(双侧,常用 0.05)</span>
+                      </span>
+                      <input type="range" min={0.01} max={0.1} step={0.005} data-testid="sv-alpha" value={ssAlpha} onChange={(e) => setSsAlpha(parseFloat(e.target.value))} />
+                    </label>
+                    <label className="field">
+                      <span className="field-label">检验效能 power <strong>{ssPower.toFixed(2)}</strong>
+                        <span className="field-hint">(常用 0.8 / 0.9)</span>
+                      </span>
+                      <input type="range" min={0.6} max={0.99} step={0.01} data-testid="sv-power" value={ssPower} onChange={(e) => setSsPower(parseFloat(e.target.value))} />
+                    </label>
+                  </div>
+                </div>
+              )}
+
+              {ssScene !== "survival" && (
               <div className="ss-explore">
                 <div className="ss-controls">
                   <label className="field">
@@ -573,21 +683,56 @@ export default function PlanModule() {
                   </svg>
                 </div>
               </div>
+              )}
 
-              <div className="ss-result" data-testid="ss-result">
-                <strong style={{ fontSize: 20 }}>约需 N ≈ {isFinite(ssN) ? ssN * 2 : "—"} 例(每组 {isFinite(ssN) ? ssN : "—"})</strong>
-                <span className="field-hint">
-                  这是<strong>快速近似</strong>(前端估算);点「使用此参数」会用本地精确计算得到并采用的 N。
-                  公式:{ssScene === "proportion" ? "Lehr 近似 n ≈ 2(z_{α/2}+z_β)² p̄(1-p̄) / (p₁-p₂)²(默认 p₁=0.3)" : "n ≈ 2(z_{α/2}+z_β)² / d²"}
-                </span>
-              </div>
+              {ssScene !== "survival" && (
+                <div className="ss-result" data-testid="ss-result">
+                  <strong style={{ fontSize: 20 }}>约需 N ≈ {isFinite(ssN) ? ssN * 2 : "—"} 例(每组 {isFinite(ssN) ? ssN : "—"})</strong>
+                  <span className="field-hint">
+                    这是<strong>快速近似</strong>(前端估算);点「使用此参数」会用本地精确计算得到并采用的 N。
+                    公式:{ssScene === "proportion" ? "Lehr 近似 n ≈ 2(z_{α/2}+z_β)² p̄(1-p̄) / (p₁-p₂)²(默认 p₁=0.3)" : "n ≈ 2(z_{α/2}+z_β)² / d²"}
+                  </span>
+                </div>
+              )}
+
+              {ssScene === "survival" && (
+                <div className="ss-result" data-testid="ss-sv-result">
+                  {svResult?.ok ? (
+                    <>
+                      <strong style={{ fontSize: 20 }} data-testid="sv-n-total">
+                        总 N ≈ {svResult.n_total} 例（对照 {svResult.n_per_group?.[0]} / 试验 {svResult.n_per_group?.[1]}）
+                      </strong>
+                      <span className="field-hint" data-testid="sv-events">对应总事件数 E ≈ {svResult.events} 次</span>
+                      <span className="field-hint">
+                        公式:E = (z<sub>α/2</sub>+z<sub>β</sub>)²·(1+k)² / (k·(ln HR)²)，N = E / 事件率
+                      </span>
+                    </>
+                  ) : (
+                    <span className="field-hint">
+                      点「使用此参数」调用后端 Schoenfeld 精确计算总事件数与总样本；公式：
+                      E = (z<sub>α/2</sub>+z<sub>β</sub>)²·(1+k)² / (k·(ln HR)²)，N = E / 事件率。
+                    </span>
+                  )}
+                </div>
+              )}
 
               <div className="form-actions" style={{ marginTop: 8 }}>
-                <button className="btn-primary" onClick={useThisN} disabled={ssVerifyBusy || !isFinite(ssN)} data-testid="ss-use-btn">
-                  {ssVerifyBusy ? "验证中…" : "使用此参数"}
-                </button>
+                {ssScene === "survival" ? (
+                  <button className="btn-primary" onClick={useSurvivalN} disabled={svBusy} data-testid="sv-use-btn">
+                    {svBusy ? "计算中…" : "使用此参数"}
+                  </button>
+                ) : (
+                  <button className="btn-primary" onClick={useThisN} disabled={ssVerifyBusy || !isFinite(ssN)} data-testid="ss-use-btn">
+                    {ssVerifyBusy ? "验证中…" : "使用此参数"}
+                  </button>
+                )}
                 {ssChosen > 0 && (
-                  <span className="field-hint" data-testid="ss-chosen">✓ 已采用 N = {ssChosen}(每组)——生成「实验计划」/「SAP」时会带入此样本量</span>
+                  <span className="field-hint" data-testid="ss-chosen">
+                    ✓ 已采用 {ssChosenMeta?.scene === "survival"
+                      ? `总 N = ${ssChosen}${ssChosenMeta?.events ? `（E = ${ssChosenMeta.events} 事件）` : ""}`
+                      : `N = ${ssChosen}(每组)`}
+                    ——生成「实验计划」/「SAP」时会带入此样本量
+                  </span>
                 )}
               </div>
               {ssVerifyMsg && <div className="field-hint" data-testid="ss-verify-msg" style={{ marginTop: 6 }}>{ssVerifyMsg}</div>}
@@ -617,7 +762,7 @@ export default function PlanModule() {
               </div>
               <button className="btn-primary" onClick={genRandomize} disabled={rzBusy} data-testid="rz-btn">{rzBusy ? "生成中…" : "生成随机化分组表"}</button>
 
-              {rzResult && (rzResult.ok && rzResult.rows ? (
+              {rzResult && (rzResult.ok && rzResult.rows?.length ? (
                 <div className="ss-result" data-testid="rz-result">
                   <strong>共 {rzResult.rows.length} 例:{Object.entries(rzResult.counts || {}).map(([g, c]) => `${g} ${c}`).join(",")}</strong>
                   <span className="field-hint">方法:{rzResult.method === "block" ? `置换区组(区组大小 ${rzResult.block_size})` : "简单随机"},种子 {rzSeed}(可复现)</span>
@@ -631,7 +776,9 @@ export default function PlanModule() {
                   <button className="btn-ghost btn-sm" onClick={exportRandomize} data-testid="rz-export-btn">导出 CSV</button>
                 </div>
               ) : (
-                <div className="result-error" data-testid="rz-error">{rzResult.error}</div>
+                <div className="result-error" data-testid="rz-error">
+                  {rzResult?.error || (rzResult?.ok ? "生成失败:返回结果缺少分组数据,请重试。" : "生成失败,请重试。")}
+                </div>
               ))}
             </div>
           </details>

@@ -80,6 +80,8 @@ def _normalize(raw: dict) -> dict | None:
         "url": url,
         "source": "openalex",
         "cited_by_count": int(raw.get("cited_by_count") or 0),
+        # CSL type：让下游 _detect_non_academic 能识别 posted-content / proceedings-article 等
+        "type": str(raw.get("type") or "").strip().lower(),
     }
 
 

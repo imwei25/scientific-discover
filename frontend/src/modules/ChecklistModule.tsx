@@ -5,6 +5,7 @@ import { addHistory } from "../lib/history";
 import { apiUrl } from "../lib/api";
 import ResultPanel from "../components/ResultPanel";
 import Dropzone from "../components/Dropzone";
+import WarningPanel from "../components/WarningPanel";
 import { HelpButton } from "../components/HelpButton";
 import { downloadBase64, chartMime, tsName, downloadDocxFromText } from "../lib/download";
 
@@ -71,7 +72,7 @@ const GUIDELINES = [
 export default function ChecklistModule() {
   const [manuscript, setManuscript] = usePersistentState("checklist:manuscript", "");
   const [guideline, setGuideline] = usePersistentState("checklist:guideline", "strobe");
-  const { text, running, error, start, stop, setText } = useStream("checklist:result");
+  const { text, running, error, warnings, start, stop, setText, clearWarnings } = useStream("checklist:result");
   const [docxBusy, setDocxBusy] = useState(false);
 
   // statcheck 统计一致性自查
@@ -217,6 +218,11 @@ export default function ChecklistModule() {
         </div>
       </div>
 
+      <WarningPanel
+        warnings={warnings}
+        onClear={clearWarnings}
+        testId="checklist-warnings"
+      />
       <ResultPanel
         text={text}
         running={running}

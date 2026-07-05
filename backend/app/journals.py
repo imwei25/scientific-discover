@@ -20,7 +20,7 @@ JOURNALS: list[dict] = [
             "page": "a4", "margin_cm": 2.54, "body_font": "Times New Roman",
             "body_size": 12, "line_spacing": 2.0, "line_numbers": True,
         },
-        "latex": {"doc_class": "article", "class_options": ["12pt"], "bib_style": "ieeetran"},
+        "latex": {"doc_class": "article", "class_options": ["12pt"], "bib_style": "ieeetran", "template": "general_en.tex.j2", "compiler": "pdflatex"},
         "check": {
             "lang": "en", "abstract_unit": "words", "abstract_min": 150, "abstract_max": 250,
             "required_sections": ["abstract", "keywords", "introduction", "methods", "results", "discussion", "references"],
@@ -44,7 +44,7 @@ JOURNALS: list[dict] = [
             "body_font_cjk": "宋体", "body_size": 12, "line_spacing": 1.5,
             "line_numbers": False,
         },
-        "latex": {"doc_class": "article", "class_options": ["12pt"], "bib_style": "unsrt"},
+        "latex": {"doc_class": "article", "class_options": ["UTF8", "12pt"], "bib_style": "gbt7714-numerical", "template": "general_cn.tex.j2", "compiler": "xelatex", "cjk": True},
         "check": {
             "lang": "zh", "abstract_unit": "chars", "abstract_min": 200, "abstract_max": 300,
             "required_sections": ["abstract", "keywords", "introduction", "methods", "results", "discussion", "conclusion", "references"],
@@ -68,7 +68,7 @@ JOURNALS: list[dict] = [
             "page": "a4", "margin_cm": 2.54, "body_font": "Times New Roman",
             "body_size": 12, "line_spacing": 2.0, "line_numbers": True,
         },
-        "latex": {"doc_class": "article", "class_options": ["12pt"], "bib_style": "naturemag"},
+        "latex": {"doc_class": "article", "class_options": ["12pt"], "bib_style": "naturemag", "template": "nature.tex.j2", "compiler": "pdflatex"},
         "check": {
             "lang": "en", "abstract_unit": "words", "abstract_min": 100, "abstract_max": 200,
             "title_max_chars": 75, "body_words_max": 3500, "ref_max": 50,
@@ -92,7 +92,7 @@ JOURNALS: list[dict] = [
             "page": "letter", "margin_cm": 1.9, "body_font": "Times New Roman",
             "body_size": 10, "line_spacing": 1.0, "line_numbers": False,
         },
-        "latex": {"doc_class": "IEEEtran", "class_options": ["journal"], "bib_style": "IEEEtran"},
+        "latex": {"doc_class": "IEEEtran", "class_options": ["journal"], "bib_style": "IEEEtran", "template": "ieee.tex.j2", "compiler": "pdflatex"},
         "check": {
             "lang": "en", "abstract_unit": "words", "abstract_min": 150, "abstract_max": 250,
             "required_sections": ["abstract", "keywords", "introduction", "conclusion", "references"],
@@ -115,7 +115,7 @@ JOURNALS: list[dict] = [
             "page": "letter", "margin_cm": 2.54, "body_font": "Times New Roman",
             "body_size": 12, "line_spacing": 2.0, "line_numbers": True,
         },
-        "latex": {"doc_class": "article", "class_options": ["12pt"], "bib_style": "plos2015"},
+        "latex": {"doc_class": "article", "class_options": ["10pt", "letterpaper"], "bib_style": "plos2015", "template": "plos_one.tex.j2", "compiler": "pdflatex"},
         "check": {
             "lang": "en", "abstract_unit": "words", "abstract_max": 300,
             "title_max_chars": 250,
@@ -138,7 +138,7 @@ _DEFAULT_DOCX = {
     "page": "a4", "margin_cm": 2.54, "body_font": "Times New Roman",
     "body_font_cjk": "宋体", "body_size": 12, "line_spacing": 1.5, "line_numbers": False,
 }
-_DEFAULT_LATEX = {"doc_class": "article", "class_options": ["12pt"], "bib_style": "unsrt"}
+_DEFAULT_LATEX = {"doc_class": "article", "class_options": ["12pt"], "bib_style": "unsrt", "template": "general_en.tex.j2", "compiler": "pdflatex", "cjk": False}
 
 
 def get_journal(journal_id: str) -> dict | None:

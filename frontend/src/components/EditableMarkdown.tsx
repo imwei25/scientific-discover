@@ -43,10 +43,11 @@ interface Props {
   enableRefine?: boolean;
   refs?: Reference[];
   refineTestId?: string;
+  highlightPlaceholders?: boolean;      // 把"[本节缺少必要材料 …]"/"[待补充 …]"渲染成醒目占位段
 }
 
 // 读模式沿用 <Markdown> 渲染; 点「编辑」切到所见即所得编辑器, 保存写回 onSave。
-export default function EditableMarkdown({ value, onSave, running, placeholder, testId, refInfo, deaiStyle, enableRefine, refs = [], refineTestId = "refine" }: Props) {
+export default function EditableMarkdown({ value, onSave, running, placeholder, testId, refInfo, deaiStyle, enableRefine, refs = [], refineTestId = "refine", highlightPlaceholders }: Props) {
   const [editing, setEditing] = useState(false);
   const canEdit = !!onSave && !!value && !running;
 
@@ -207,7 +208,7 @@ export default function EditableMarkdown({ value, onSave, running, placeholder, 
       {enableRefine && note && <div className="refine-note">{note}</div>}
       {value ? (
         <div ref={previewRef}>
-          <Markdown refInfo={refInfo} highlight={enableRefine && ranges.length > 0 ? true : undefined}>{shown}</Markdown>
+          <Markdown refInfo={refInfo} highlight={enableRefine && ranges.length > 0 ? true : undefined} highlightPlaceholders={highlightPlaceholders}>{shown}</Markdown>
         </div>
       ) : (
         <span className="result-placeholder">{placeholder}</span>

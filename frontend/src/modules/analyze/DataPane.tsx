@@ -22,6 +22,7 @@ import ForestEditor from "./ForestEditor";
 import ColMapper from "./ColMapper";
 import { ForestResultPanel, KMResultPanel, ROCResultPanel } from "./ResultPanels";
 import GeneralResults from "./GeneralResults";
+import WarningPanel from "../../components/WarningPanel";
 
 // ─── 数据分析子面板 ─────────────────────────────────────────────
 export default function DataPane({ goto }: { goto: Goto }) {
@@ -55,6 +56,9 @@ export default function DataPane({ goto }: { goto: Goto }) {
   const [captions, setCaptions] = usePersistentState<string[]>("analyze:captions", []);
   const [running, setRunning] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // 后端流式 warning 事件(如 wave2 check_p_value_consistency 的统计不一致提醒、
+  // dataanalysis 中间检查等)。即时追加, 与 error 面板并存, 显示在结论下方。
+  const [warnings, setWarnings] = useState<string[]>([]);
   const [refineInput, setRefineInput] = useState(""); // 「继续对话」的新需求输入(临时, 不持久化)
   const ctrl = useRef<AbortController | null>(null);
 
@@ -187,6 +191,7 @@ export default function DataPane({ goto }: { goto: Goto }) {
     setOutput("");
     setConclusion("");
     setError(null);
+    setWarnings([]);
     setRunning(true);
     ctrl.current = new AbortController();
     await streamAnalyze(file, question, chartFormat, palette, mode, {
@@ -198,6 +203,7 @@ export default function DataPane({ goto }: { goto: Goto }) {
       onOutput: setOutput,
       onTransparency: (kind: TransparencyKind, text: string) => setTransparency((p) => ({ ...p, [kind]: text })),
       onDelta: (t) => setConclusion((p) => p + t),
+      onWarning: (m) => setWarnings((prev) => [...prev, m]),
       onError: (m) => {
         setError(m);
         setStatus("");
@@ -229,6 +235,7 @@ export default function DataPane({ goto }: { goto: Goto }) {
     setOutput("");
     setConclusion("");
     setError(null);
+    setWarnings([]);
     setRunning(true);
     ctrl.current = new AbortController();
     await streamAnalyzeRefine(file, baseCode, req, baseSummary, question, chartFormat, palette, mode, {
@@ -240,6 +247,7 @@ export default function DataPane({ goto }: { goto: Goto }) {
       onOutput: setOutput,
       onTransparency: (kind: TransparencyKind, text: string) => setTransparency((p) => ({ ...p, [kind]: text })),
       onDelta: (t) => setConclusion((p) => p + t),
+      onWarning: (m) => setWarnings((prev) => [...prev, m]),
       onError: (m) => {
         setError(m);
         setStatus("");
@@ -280,6 +288,7 @@ export default function DataPane({ goto }: { goto: Goto }) {
     setForestErr(null);
     setKmErr(null);
     setRocErr(null);
+    setWarnings([]);
     savedRef.current = ""; // 允许新一轮结果重新入历史
   };
 
@@ -597,6 +606,13 @@ export default function DataPane({ goto }: { goto: Goto }) {
           question={question}
           mode={mode}
           transparency={transparency}
+        />
+
+        {/* 后端流式 warning 事件(如统计一致性检查): 显示在结论下方, 与 error 面板并存。 */}
+        <WarningPanel
+          warnings={warnings}
+          onClear={() => setWarnings([])}
+          testId="analyze-warnings"
         />
 
       {/* 继续对话: 首轮分析出结果后, 可反复提新需求让 AI 在现有代码上改 */}

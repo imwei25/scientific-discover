@@ -7,6 +7,7 @@ import { parseAttachments, appendAttachmentsToField } from "../lib/attachments";
 import AttachmentChips from "../components/AttachmentChips";
 import Markdown from "../components/Markdown";
 import EditableMarkdown from "../components/EditableMarkdown";
+import WarningPanel from "../components/WarningPanel";
 import { downloadText, downloadCsv, downloadDocxFromText, downloadPdfFromText, tsName } from "../lib/download";
 import { stripSupportQuotes } from "../lib/exportPrep";
 import { usePersistentState } from "../lib/usePersistentState";
@@ -128,6 +129,9 @@ export default function IdeaModule({ goto }: { goto: Goto }) {
   const [wordBusy, setWordBusy] = useState(false);
   const [running, setRunning] = useState(false); // 检索或生成进行中
   const [error, setError] = useState<string | null>(null);
+  // 后端 SSE `warning` 事件累积(如检索/生成过程中的 verify_references 幻觉提示、PHI 提示)。
+  // 与 error 面板并存: error 是失败, warning 是可继续但需关注。
+  const [warnings, setWarnings] = useState<string[]>([]);
   const [evidenceExtractProgress, setEvidenceExtractProgress] = useState<{ done: number; total: number } | null>(null);
   const [rewrite, setRewrite] = useState<RewritePayload | null>(null);
   const ctrl = useRef<AbortController | null>(null);
@@ -211,6 +215,7 @@ export default function IdeaModule({ goto }: { goto: Goto }) {
     setVerify(null);
     setCard(null);
     setFollowups([]);
+    setWarnings([]);
     setRunning(true);
     goStep(3);
     ctrl.current = new AbortController();
@@ -229,7 +234,8 @@ export default function IdeaModule({ goto }: { goto: Goto }) {
         onEvidence: setEvidence,
         onDelta: () => {},
         onRewriteSuggestion: setRewrite,
-        onError: (m) => { setError(m); setStatus(""); setRunning(false); window.dispatchEvent(new Event("usage-updated")); reportLLMError(m); },
+        onWarning: (m) => setWarnings((prev) => [...prev, m]),
+        onError: (m) => { setError(m); setStatus("已中断,请重试"); setRunning(false); window.dispatchEvent(new Event("usage-updated")); reportLLMError(m); },
         onDone: () => { setStatus(""); setRunning(false); window.dispatchEvent(new Event("usage-updated")); },
       },
     );
@@ -273,6 +279,7 @@ export default function IdeaModule({ goto }: { goto: Goto }) {
     setCard(null);
     setReportCollapsed(false);
     setFollowups([]);
+    setWarnings([]);
     setRunning(true);
     goStep(4);
     ctrl.current = new AbortController();
@@ -290,7 +297,16 @@ export default function IdeaModule({ goto }: { goto: Goto }) {
         onDelta: (t) => setText((p) => p + t),
         onVerify: setVerify,
         onTopicCard: setCard,
-        onError: (m) => { setError(m); setStatus(""); setRunning(false); window.dispatchEvent(new Event("usage-updated")); reportLLMError(m); },
+        onWarning: (m) => setWarnings((prev) => [...prev, m]),
+        onError: (m) => {
+          setError(m);
+          setStatus("已中断,请重试");
+          setRunning(false);
+          // 已流出的正文加"…(生成中断)"后缀,避免看似"完成"实则半截。
+          setText((t) => (t && !t.endsWith("…(生成中断)") ? t + "\n\n…(生成中断)" : t));
+          window.dispatchEvent(new Event("usage-updated"));
+          reportLLMError(m);
+        },
         onDone: () => {
           setStatus(""); setRunning(false); window.dispatchEvent(new Event("usage-updated"));
           // 候选方向已由「选题卡」单独承载, 从报告正文里去掉「候选选题」段, 避免读两遍;
@@ -441,6 +457,11 @@ export default function IdeaModule({ goto }: { goto: Goto }) {
       </div>
 
       {error && <div className="result-error" data-testid="result-error">{error}</div>}
+      <WarningPanel
+        warnings={warnings}
+        onClear={() => setWarnings([])}
+        testId="idea-warnings"
+      />
 
       {/* ── 第 1 步：研究方向 ─────────────────────────────── */}
       {step === 1 && (
@@ -461,8 +482,13 @@ export default function IdeaModule({ goto }: { goto: Goto }) {
                 data-testid="input-keywords"
                 value={keywords}
                 onChange={(e) => setKeywords(e.target.value)}
-                placeholder="逗号分隔，例如：immunotherapy, biomarker, resistance"
+                placeholder="逗号分隔，例如：cardiovascular disease, COVID-19, immunotherapy, biomarker"
               />
+              {/[\u4e00-\u9fff]/.test(keywords) && (
+                <span className="field-hint" data-testid="keywords-cjk-hint">
+                  文献库以英文为主,建议使用英文关键词(系统将尝试翻译,但可能召回不足)。
+                </span>
+              )}
             </label>
             <div className="field" data-testid="background-field">
               <span className="field-label">相关资料（可选）</span>

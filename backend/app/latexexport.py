@@ -78,13 +78,20 @@ _PREAMBLE_LINE_RE = re.compile(
     r").*[:：]?\s*$",
     re.IGNORECASE,
 )
-# emoji / 装饰符号(pdflatex 不支持, 直接剥离)
+# emoji / 装饰符号 / 箭头 / 几何 (pdflatex 不支持, 直接剥离)
+# 之前漏了箭头(0x2190-0x21FF)与几何/框绘字符, 稿件里"→ ← ↑ ↓"和"■ ● ▲"会让 pdflatex 报 missing font。
+# 补充符号已含在 U+1F000-1FFFF 大区间里 (含 supplemental symbols/pictographs / chess 等)。
 _EMOJI_RE = re.compile(
     "["
-    "\U0001F000-\U0001FFFF"   # 主要 emoji 平面
-    "\u2600-\u27BF"            # Misc symbols + Dingbats
+    "\U0001F000-\U0001FFFF"   # 主要 emoji 平面 (含 F900/FA00 段补充符号+手势+chess)
+    "\u2190-\u21FF"            # 箭头 (Arrows)
     "\u2300-\u23FF"            # Misc technical
-    "\u2B00-\u2BFF"            # Additional arrows
+    "\u2500-\u257F"            # Box drawing
+    "\u2580-\u259F"            # Block elements
+    "\u25A0-\u25FF"            # Geometric shapes
+    "\u2600-\u27BF"            # Misc symbols + Dingbats
+    "\u2B00-\u2BFF"            # Additional arrows / stars
+    "\u200D"                   # 零宽连接符 (emoji sequences)
     "\uFE0F"                   # Variation selector
     "]+"
 )
@@ -428,6 +435,33 @@ def _render_tex(
     )
 
 
+# ---- BibTeX 字段转义 ------------------------------------------------------
+# BibTeX 条目里的字符串字段(title/author/journal/booktitle/note 等)会被 LaTeX
+# 编译, 特殊字符必须转义, 否则 pdflatex/xelatex/bibtex 会报错甚至崩掉整个工程。
+#   - Smith & Jones  → Smith \& Jones
+#   - 50%            → 50\%
+#   - foo_bar        → foo\_bar
+#   - a~b            → a\textasciitilde{}b
+# 反斜杠先替换为占位符, 避免后续把 \& 里的 \ 再次转义成 \textbackslash{}&。
+# URL/DOI 是 verbatim 字段, 走 `{...}` 保护, 不进入本函数。
+_BIB_ESC_MAP = [
+    ("\\", "\x00BS\x00"),  # 先占位
+    ("&", r"\&"), ("%", r"\%"), ("$", r"\$"), ("#", r"\#"),
+    ("_", r"\_"), ("{", r"\{"), ("}", r"\}"),
+    ("~", r"\textasciitilde{}"), ("^", r"\textasciicircum{}"),
+]
+
+
+def _bib_escape(s) -> str:
+    """转义 BibTeX 字符串字段中的 LaTeX 特殊字符。仅用于 title/author/journal 等文本字段, 不要用于 URL/DOI。"""
+    if s is None:
+        return ""
+    out = str(s)
+    for src, dst in _BIB_ESC_MAP:
+        out = out.replace(src, dst)
+    return out.replace("\x00BS\x00", r"\textbackslash{}")
+
+
 def _csl_to_bib_entry(csl: dict, key: str) -> dict:
     type_map = {"article-journal": "article", "book": "book",
                 "paper-conference": "inproceedings", "chapter": "incollection"}
@@ -437,19 +471,31 @@ def _csl_to_bib_entry(csl: dict, key: str) -> dict:
         if not isinstance(a, dict):
             continue
         fam, given = a.get("family", ""), a.get("given", "")
-        auth.append((fam + ", " + given).strip(", ").strip())
+        # 姓名各自转义后再拼, 以防 & _ % 等特殊字符出现在人名里(极少见但存在)。
+        fam_e = _bib_escape(fam)
+        given_e = _bib_escape(given)
+        auth.append((fam_e + ", " + given_e).strip(", ").strip())
     if auth:
         e["author"] = " and ".join(auth)
     if csl.get("title"):
-        e["title"] = str(csl["title"])
+        e["title"] = _bib_escape(csl["title"])
     if csl.get("container-title"):
-        e["journal"] = str(csl["container-title"])
+        e["journal"] = _bib_escape(csl["container-title"])
     dp = (csl.get("issued") or {}).get("date-parts") or [[None]]
     if dp and dp[0] and dp[0][0]:
         e["year"] = str(dp[0][0])
-    for k, bk in (("volume", "volume"), ("issue", "number"), ("page", "pages"), ("DOI", "doi")):
-        if csl.get(k):
-            e[bk] = str(csl[k])
+    if csl.get("volume"):
+        e["volume"] = _bib_escape(csl["volume"])
+    if csl.get("issue"):
+        e["number"] = _bib_escape(csl["issue"])
+    if csl.get("page"):
+        e["pages"] = _bib_escape(csl["page"])
+    # DOI/URL 是 verbatim: 用 {} 保护, 避免 _ 被 LaTeX 当下标处理。
+    # 花括号在 BibTeX 里表示"不要动这段", 是官方推荐的 URL/DOI 写法。
+    if csl.get("DOI"):
+        e["doi"] = "{" + str(csl["DOI"]) + "}"
+    if csl.get("URL"):
+        e["url"] = "{" + str(csl["URL"]) + "}"
     return e
 
 
@@ -459,7 +505,9 @@ def _render_bib(csl_json: list[dict]) -> str:
     from bibtexparser.bwriter import BibTexWriter
 
     db = BibDatabase()
-    db.entries = [_csl_to_bib_entry(it, f"ref{i}") for i, it in enumerate(csl_json, 1)]
+    # key 优先取 csl_item 已归一化的 id (由 _normalize_and_dedup 保证唯一);
+    # 缺失时才退回 f"ref{i}". 与 bib_ids 生成规则一致。
+    db.entries = [_csl_to_bib_entry(it, str(it.get("id") or f"ref{i}")) for i, it in enumerate(csl_json, 1)]
     writer = BibTexWriter()
     writer.indent = "  "
     writer.order_entries_by = None
@@ -500,13 +548,18 @@ async def export_latex(text: str, journal_id: str, references: str = "", csl_jso
             it.setdefault("id", f"ref{i}")
             it.setdefault("type", "article-journal")
             items.append(it)
-        csl_items = _normalize_and_dedup(items)
+        # preserve_ids=True: 若前端已指定 id (如 "smith2020"), 保留之; 缺失才补 refN.
+        # 这样正文 \cite{X} 与 refs.bib 里的 key 严格一致, 不会因 dedup 缩表而错位。
+        csl_items = _normalize_and_dedup(items, preserve_ids=True)
     elif references.strip():
         from .citations import _complete, _extract_messages, _parse_json_array
         from .config import settings
         if not settings.mock:
             try:
-                csl_items = _normalize_and_dedup(_parse_json_array(await _complete(_extract_messages(references))))
+                csl_items = _normalize_and_dedup(
+                    _parse_json_array(await _complete(_extract_messages(references))),
+                    preserve_ids=True,
+                )
             except Exception as e:  # noqa: BLE001
                 notes.append(f"参考文献解析失败，已跳过 .bib：{e}")
                 csl_items = []
@@ -541,8 +594,9 @@ async def export_latex(text: str, journal_id: str, references: str = "", csl_jso
         notes.append("稿件含中文, 已启用 ctex 支持, 建议使用 xelatex 编译。")
 
     needs_cjk = bool(spec.get("cjk")) or contains_cjk
-    # bib IDs 必须与 _render_bib 里的键一致 (enumerate 从 1 开始)
-    bib_ids = [f"ref{i}" for i, _ in enumerate(csl_items, 1)] if csl_items else []
+    # bib IDs 必须与 _render_bib 里的键一致; 直接取 csl_items 里 dedup 后保留的 id,
+    # 避免因 enumerate 与实际 key 不匹配导致 \cite{refN} 指向不存在的条目。
+    bib_ids = [str(it.get("id") or f"ref{i}") for i, it in enumerate(csl_items, 1)] if csl_items else []
     tex = _render_tex(
         ir, spec,
         needs_cjk=needs_cjk,

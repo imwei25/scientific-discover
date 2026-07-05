@@ -63,24 +63,29 @@ def _export(plt, fig) -> dict:
 # 1. 森林图 + Meta 汇总
 # =====================================================================
 
-def _study_effect(s: dict, effect: str) -> tuple[float, float, float, float]:
-    """单研究的 effect, SE(log scale), CI_low, CI_high(原 scale)。
+def _study_effect(s: dict, effect: str) -> tuple[float, float, float, float, bool]:
+    """单研究的 effect, SE(log scale), CI_low, CI_high(原 scale), haldane_corrected。
 
     s: {n_treat, event_treat, n_ctrl, event_ctrl}
     effect ∈ {OR, RR}; 用 Haldane-Anscombe 0.5 校正避免除零。
+
+    返回元组末位 haldane_corrected: bool -- 只有实际发生 +0.5 校正时才为 True。
+    历史调用方若只解包前 4 个值会得到 tuple 长度不一致错误; 内部所有已知调用
+    (本文件 forest_plot) 已同步更新。
     """
     a = float(s.get("event_treat", 0))
     b = float(s.get("n_treat", 0)) - a
     c = float(s.get("event_ctrl", 0))
     d = float(s.get("n_ctrl", 0)) - c
-    # 0.5 校正
-    if a == 0 or b == 0 or c == 0 or d == 0:
+    # 0.5 校正: 记录是否触发, 用于后续 forest_plot 打 † 标
+    haldane_corrected = a == 0 or b == 0 or c == 0 or d == 0
+    if haldane_corrected:
         a, b, c, d = a + 0.5, b + 0.5, c + 0.5, d + 0.5
     if effect.upper() == "RR":
         p1 = a / (a + b)
         p2 = c / (c + d)
         if p1 <= 0 or p2 <= 0:
-            return float("nan"), float("nan"), float("nan"), float("nan")
+            return float("nan"), float("nan"), float("nan"), float("nan"), haldane_corrected
         es = p1 / p2
         log_es = math.log(es)
         se = math.sqrt(1.0 / a - 1.0 / (a + b) + 1.0 / c - 1.0 / (c + d))
@@ -90,7 +95,7 @@ def _study_effect(s: dict, effect: str) -> tuple[float, float, float, float]:
         se = math.sqrt(1.0 / a + 1.0 / b + 1.0 / c + 1.0 / d)
     ci_low = math.exp(log_es - 1.96 * se)
     ci_high = math.exp(log_es + 1.96 * se)
-    return es, se, ci_low, ci_high
+    return es, se, ci_low, ci_high, haldane_corrected
 
 
 def _meta_random_effects(log_es: np.ndarray, se: np.ndarray) -> dict:
@@ -137,7 +142,7 @@ def forest_plot(studies: list[dict], effect: str = "OR") -> dict:
 
     rows = []
     for s in studies:
-        es, se, lo, hi = _study_effect(s, eff_label)
+        es, se, lo, hi, hc = _study_effect(s, eff_label)
         rows.append({
             "label": str(s.get("study") or "Study"),
             "es": es,
@@ -145,10 +150,15 @@ def forest_plot(studies: list[dict], effect: str = "OR") -> dict:
             "ci_low": lo,
             "ci_high": hi,
             "n": float(s.get("n_treat", 0)) + float(s.get("n_ctrl", 0)),
+            "haldane_corrected": bool(hc),
         })
     log_es = np.array([math.log(r["es"]) for r in rows])
     se_arr = np.array([r["se"] for r in rows])
     summary = _meta_random_effects(log_es, se_arr)
+    corrected_n = sum(1 for r in rows if r["haldane_corrected"])
+    if corrected_n > 0:
+        # stdout 提示, 方便运维/调试时快速看到有零格研究做了校正
+        print(f"[forest_plot] 检测到 {corrected_n} 项零格研究已行 Haldane 0.5 校正")
 
     # 绘图
     plt, fig, ax = _new_fig(figsize=(9, max(3.5, 0.55 * len(rows) + 2.0)))
@@ -173,18 +183,37 @@ def forest_plot(studies: list[dict], effect: str = "OR") -> dict:
     ax.set_xscale("log")
     ax.set_yticks(ys + [y0 + 0.3])
     ax.set_yticklabels(
-        [f"{r['label']}  {r['es']:.2f} [{r['ci_low']:.2f}, {r['ci_high']:.2f}]" for r in rows]
+        [
+            f"{r['label']}{' †' if r['haldane_corrected'] else ''}  "
+            f"{r['es']:.2f} [{r['ci_low']:.2f}, {r['ci_high']:.2f}]"
+            for r in rows
+        ]
         + [f"Pooled ({eff_label})  {summary['pooled']:.2f} "
            f"[{summary['ci_low']:.2f}, {summary['ci_high']:.2f}]"],
         fontsize=10,
     )
-    ax.set_xlabel(f"{eff_label} (95% CI)  — I²={summary['i2']:.1f}%, Q p={summary['q_pvalue']:.3f}")
+    xlabel = f"{eff_label} (95% CI)  — I²={summary['i2']:.1f}%, Q p={summary['q_pvalue']:.3f}"
+    if corrected_n > 0:
+        xlabel += "\n† 该研究含零格, 已行 Haldane 0.5 校正"
+    ax.set_xlabel(xlabel)
     ax.set_title("Forest plot (random-effects)")
     ax.set_ylim(-0.5, len(rows) + 1)
     ax.grid(axis="y", alpha=0.0)
 
     out = _export(plt, fig)
     out["summary"] = summary
+    # 透传每个研究的校正标志和一个方便前端展示的汇总数
+    out["studies"] = [
+        {
+            "label": r["label"],
+            "es": r["es"],
+            "ci_low": r["ci_low"],
+            "ci_high": r["ci_high"],
+            "haldane_corrected": r["haldane_corrected"],
+        }
+        for r in rows
+    ]
+    out["haldane_corrected_count"] = int(corrected_n)
     return out
 
 
@@ -227,10 +256,24 @@ def km_curve(
         raise ValueError(f"分组列不存在: {group_col}")
 
     # 清洗: 去掉 time/event 缺失的行
+    n_before_dropna = int(len(df))
     keep = df[[time_col, event_col]].dropna().index
     df = df.loc[keep].copy()
     df[time_col] = df[time_col].astype(float)
     df[event_col] = df[event_col].astype(int)
+
+    # 校验 time_col > 0：lifelines KaplanMeierFitter 遇 time<=0 会直接抛异常，
+    # 显式过滤后可继续绘图，并在返回值中透传被排除的行数供上层提示用户。
+    n_before_time = int(len(df))
+    df = df[df[time_col] > 0].copy()
+    excluded_rows = n_before_time - int(len(df))
+    exclusion_reason = "时间≤0 被排除" if excluded_rows > 0 else ""
+    # 附带 dropna 阶段的删除数（如 time/event 缺失）合并计数：
+    excluded_rows += n_before_dropna - n_before_time
+    if excluded_rows > 0 and not exclusion_reason:
+        exclusion_reason = "time/event 缺失被排除"
+    elif excluded_rows > 0 and n_before_dropna != n_before_time:
+        exclusion_reason = "time/event 缺失或 时间≤0 被排除"
 
     plt, fig, ax = _new_fig(figsize=(8, 6))
     palette = ["#0F9B94", "#D97706", "#3C5488", "#E64B35", "#00A087", "#925E9F"]
@@ -285,6 +328,8 @@ def km_curve(
     out = _export(plt, fig)
     out["logrank_p"] = logrank_p
     out["groups"] = groups_out
+    out["excluded_rows"] = int(excluded_rows)
+    out["exclusion_reason"] = exclusion_reason
     return out
 
 

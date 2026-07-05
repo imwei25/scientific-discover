@@ -1,0 +1,38 @@
+{% extends "_base.tex.j2" %}
+{# 中文核心期刊 GB/T 7714-2015
+
+   审计要点:
+   - 必须用 gbt7714 包 + gbt7714-numerical 样式 (unsrt 完全不符合国标)。
+   - xelatex 下不能加 inputenc/fontenc (base 已 gate 掉)。
+   - cite 与 gbt7714/natbib 冲突, base 里的 cite 被本模板 override 掉。
+   - ctex 用 scheme=chinese 自动 heiti 章节标题 + fontset=ubuntu 保证 Overleaf 上有字体。
+   - GB/T 6447 要求中文核心稿件同时提供中/英摘要 + 关键词。
+#}
+{% block extra_preamble %}
+%% GB/T 7714-2015 顺序编码制; 若要著者-出版年制, 把下面 numerical 改成 authoryear
+\usepackage[margin=2.54cm]{geometry}
+\usepackage{setspace}
+\onehalfspacing
+\usepackage{gbt7714}
+{% endblock %}
+{% block cjk_pkg %}\usepackage[UTF8,scheme=chinese,fontset=ubuntu]{ctex}
+%% Overleaf 上 fontset=ubuntu 保证有 Fandol/Noto CJK 字体; 严格要求宋体时改 fontset=windows
+%% 或手动: \setCJKmainfont{SimSun}[BoldFont=SimHei,ItalicFont=KaiTi]
+{% endblock %}
+{% block cite_pkg %}%% gbt7714 已带 natbib, 不再加载 cite
+{% endblock %}
+{% block keywords_block %}\noindent\textbf{关键词:} {{ keywords }}\par\bigskip
+{% endblock %}
+{% block english_abstract_block %}
+{% if abstract_en %}\begin{abstract}
+\noindent\textbf{Abstract:} {{ abstract_en }}
+\end{abstract}
+
+{% endif %}
+{% if keywords_en %}\noindent\textbf{Key words:} {{ keywords_en }}\par\bigskip
+
+{% endif %}
+{# 若稿件缺英文摘要/关键词, 请作者补充 —— 中文核心几乎都要求双语 #}
+{% if not abstract_en and not keywords_en %}%% [提示] 中文核心期刊通常要求"中/英双语摘要+关键词", 请补充英文版本。
+{% endif %}
+{% endblock %}

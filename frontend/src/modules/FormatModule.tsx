@@ -80,6 +80,7 @@ export default function FormatModule() {
   // 参考文献格式化(CSL)
   const [refsInput, setRefsInput] = usePersistentState("format:refs", "");
   const [fmtRefs, setFmtRefs] = usePersistentState<string[]>("format:fmtRefs", []);
+  const [fmtWarnings, setFmtWarnings] = useState<Array<{ index: number; kind: string; title?: string; message: string }>>([]);
   const [refsBusy, setRefsBusy] = useState(false);
   const [refsErr, setRefsErr] = useState<string | null>(null);
 
@@ -97,6 +98,9 @@ export default function FormatModule() {
   // 生成 fmtRefs 时用到的结构化源, 与 fmtRefs[i] 一一对应。
   // 走文本路径 (无结构化输入) 时为空数组; 下载 Word/LaTeX 时用它反查真正的结构化数据。
   const [fmtSourceRefs, setFmtSourceRefs] = usePersistentState<Reference[]>("format:fmtSourceRefs", []);
+  // 生成 fmtRefs 时用到的期刊 id + 文本源 (供切换期刊后一键重排/展示"样式过期"提示)。
+  const [fmtSourceJournalId, setFmtSourceJournalId] = usePersistentState<string>("format:fmtSourceJournalId", "");
+  const [fmtSourceText, setFmtSourceText] = usePersistentState<string>("format:fmtSourceText", "");
   const [handoffToast, setHandoffToast] = useState<string | null>(null);
   // handoff 到达后, 若期刊模板已选好, 自动跑一次「按该期刊格式化参考文献」。
   const [pendingAutoFormat, setPendingAutoFormat] = useState(false);
@@ -130,7 +134,10 @@ export default function FormatModule() {
 
   /** 从 Reference 构造 CSL-JSON 条目, 缺失字段自动省略, 不产生空占位。 */
   const refToCsl = (r: Reference, i: number): Record<string, unknown> => {
-    const it: Record<string, unknown> = { id: `ref${i + 1}`, type: "article-journal" };
+    // 优先用来自选题源的真实 type（如 posted-content / proceedings-article），
+    // 缺失才退回 article-journal —— 让格式化侧的非学术资源检测能拿到准确判据。
+    const cslType = (r.type && r.type.trim()) || "article-journal";
+    const it: Record<string, unknown> = { id: `ref${i + 1}`, type: cslType };
     if (r.title) it.title = r.title;
     if (r.first_author) {
       // 后端 CSL 期望 [{family, given}]; 只有一个"first_author"字符串时按整字符串放 family, given 留空。
@@ -147,7 +154,8 @@ export default function FormatModule() {
       if (!Number.isNaN(yr)) it.issued = { "date-parts": [[yr]] };
     }
     if (r.doi) it.DOI = r.doi;
-    if (r.url && !r.doi) it.URL = r.url;
+    // 保留 URL 即便有 DOI —— 后端非学术资源检测靠 URL 关键词识别 infographic/blog 等。
+    if (r.url) it.URL = r.url;
     return it;
   };
 
@@ -163,7 +171,8 @@ export default function FormatModule() {
     return `${i + 1}. ${parts.join(". ")}${parts.length ? "." : ""}`;
   };
 
-  /** 供 /api/format-refs: 结构化勾选时同时送 csl_json (跳过 LLM) 和文本兜底。 */
+  /** 供 /api/format-refs: 结构化勾选时同时送 csl_json (跳过 LLM) 和文本兜底。
+   *  切换期刊后一键重排: 当前 textarea/勾选都为空但已有 fmtSourceRefs 快照时, 回退用快照 —— 让"按该期刊重排"能对已格式化的文献作用。 */
   const refsBodyForFormat = (): { references: string; csl_json?: Record<string, unknown>[] } => {
     const struct = structuredCheckedRefs();
     if (struct.length) {
@@ -172,10 +181,34 @@ export default function FormatModule() {
         csl_json: struct.map((r, i) => refToCsl(r, i)),
       };
     }
-    return { references: refsInput };
+    if (refsInput.trim()) {
+      return { references: refsInput };
+    }
+    // 回退: 用上次格式化时的快照 (若有)
+    if (fmtSourceRefs.length) {
+      return {
+        references: fmtSourceRefs.map((r, i) => refToLine(r, i)).join("\n"),
+        csl_json: fmtSourceRefs.map((r, i) => refToCsl(r, i)),
+      };
+    }
+    if (fmtSourceText.trim()) {
+      return { references: fmtSourceText };
+    }
+    return { references: "" };
   };
 
-  /** 供 /api/check-refs 和 /api/latex: 只送文本 (后端目前不接受 csl_json)。 */
+  /** 是否有可用于格式化的源 (含快照回退)。控制按钮禁用状态。 */
+  const hasFormatSource = (): boolean =>
+    !!refsInput.trim() ||
+    structuredCheckedRefs().length > 0 ||
+    fmtSourceRefs.length > 0 ||
+    !!fmtSourceText.trim();
+
+  /** 已有 fmtRefs 且期刊已变 → 样式过期, 提示用户点按钮重排。 */
+  const isFmtStyleStale = (): boolean =>
+    fmtRefs.length > 0 && !!fmtSourceJournalId && fmtSourceJournalId !== journalId;
+
+  /** 供 /api/check-refs: 只送文本 (该端点是文本兼容路径)。/api/latex 和 /api/docx 都单独构造 body 并附带 csl_json。 */
   const refsTextForApi = (): string => {
     const struct = structuredCheckedRefs();
     if (struct.length) return struct.map((r, i) => refToLine(r, i)).join("\n");
@@ -248,15 +281,22 @@ export default function FormatModule() {
   }, []);
 
   const formatRefs = async () => {
-    if (!refsInput.trim() && !structuredCheckedRefs().length) return;
+    if (!hasFormatSource()) return;
     if (refsBusy) return;
     setRefsBusy(true);
     setRefsErr(null);
     setFmtRefs([]);
-    // 快照本次格式化用到的结构化源, 供 LaTeX / Word 下载时反查真正的 CSL-JSON。
-    // 走 textarea 路径 (无结构化输入) 时快照为空数组。
+    setFmtWarnings([]);
+    // 快照本次格式化用到的结构化源与文本源 + 期刊 id, 支持:
+    //   ① 下载 Word/LaTeX 时反查真正的 CSL-JSON
+    //   ② 切换期刊后即使 textarea/勾选为空, 也能用快照重排
+    //   ③ 展示"样式已过期"提示 (fmtSourceJournalId != journalId)
     const snap = structuredCheckedRefs();
-    setFmtSourceRefs(snap);
+    const snapText = snap.length ? "" : (refsInput.trim() || fmtSourceText);
+    // 若既无当前结构化选择又无 textarea, 用上一次的快照继续
+    const effectiveSnap = snap.length ? snap : fmtSourceRefs;
+    setFmtSourceRefs(effectiveSnap);
+    setFmtSourceText(snapText);
     try {
       const resp = await fetch(apiUrl("/api/format-refs"), {
         method: "POST",
@@ -264,8 +304,11 @@ export default function FormatModule() {
         body: JSON.stringify({ ...refsBodyForFormat(), journal_id: journalId }),
       });
       const d = await resp.json();
-      if (d.ok) setFmtRefs(d.formatted || []);
-      else setRefsErr(d.error || "格式化失败");
+      if (d.ok) {
+        setFmtRefs(d.formatted || []);
+        setFmtWarnings(Array.isArray(d.warnings) ? d.warnings : []);
+        setFmtSourceJournalId(journalId);
+      } else setRefsErr(d.error || "格式化失败");
     } catch (e) {
       setRefsErr(`格式化失败：${(e as Error).message}`);
     } finally {
@@ -364,6 +407,7 @@ export default function FormatModule() {
     cover.setText("");
     setRefsInput("");
     setFmtRefs([]);
+    setFmtWarnings([]);
     setRefsErr(null);
     setCheckResult([]);
     setCheckErr(null);
@@ -371,6 +415,8 @@ export default function FormatModule() {
     setStructuredSelectedKeys([]);
     setSelectedFmtIdxs([]);
     setFmtSourceRefs([]);
+    setFmtSourceJournalId("");
+    setFmtSourceText("");
     // 顺手清掉遗留的 format:evidence（老版本可能留下的 localStorage 键）
     try { localStorage.removeItem("format:evidence"); } catch { /* no-op */ }
     setHandoffToast(null);
@@ -391,7 +437,17 @@ export default function FormatModule() {
     setDownloading(true);
     setDlErr(null);
     try {
-      await downloadDocxFromText("manuscript.docx", text, { journal_id: journalId, references: checkedFmtRefs() });
+      // 优先送 csl_json (结构化), Word 端会按选中期刊的 CSL 样式重新排参考文献,
+      // 与 LaTeX 保持一致; 送不出结构化条目时 (老稿件/手输文本) 兜底送 references 文本。
+      const picked = checkedSourceRefs();
+      const body: Record<string, unknown> = {
+        journal_id: journalId,
+        references: checkedFmtRefs(),
+      };
+      if (picked.length) {
+        body.csl_json = picked.map((r, i) => refToCsl(r, i));
+      }
+      await downloadDocxFromText("manuscript.docx", text, body);
     } catch (e) {
       setDlErr(`导出 Word 失败：${(e as Error).message}`);
     } finally {
@@ -909,10 +965,10 @@ export default function FormatModule() {
           <button
             className="btn-primary"
             onClick={formatRefs}
-            disabled={(!refsInput.trim() && !structuredCheckedRefs().length) || refsBusy}
+            disabled={!hasFormatSource() || refsBusy}
             data-testid="format-refs-btn"
           >
-            {refsBusy ? "格式化中…" : "按该期刊格式化参考文献"}
+            {refsBusy ? "格式化中…" : (isFmtStyleStale() ? "按该期刊重排参考文献" : "按该期刊格式化参考文献")}
           </button>
           <button
             className="btn-secondary"
@@ -923,6 +979,12 @@ export default function FormatModule() {
             {checkBusy ? "核验中…" : "核验真实性 / 撤稿 / 去重"}
           </button>
         </div>
+        {isFmtStyleStale() && (
+          <div className="field-hint" data-testid="format-style-stale" style={{ color: "var(--warn, #b45309)" }}>
+            ⚠️ 目标期刊已切换, 上方"已格式化 {fmtRefs.length} 条"仍按上一次期刊样式渲染。
+            点击「按该期刊重排参考文献」用新期刊 CSL 样式重排 (无需重新粘贴/勾选)。
+          </div>
+        )}
       </div>
 
       {checkErr && (
@@ -961,6 +1023,39 @@ export default function FormatModule() {
       {refsErr && (
         <div className="result-error" data-testid="refs-error">
           {refsErr}
+        </div>
+      )}
+
+      {fmtWarnings.length > 0 && (
+        <div
+          data-testid="fmt-warnings"
+          style={{
+            marginTop: 12,
+            padding: "13px 18px",
+            background: "var(--warn-bg)",
+            border: "1px solid var(--warn-line)",
+            borderLeft: "3px solid var(--warn)",
+            borderRadius: "var(--radius-sm)",
+            color: "var(--warn-fg)",
+            fontSize: 13,
+            lineHeight: 1.6,
+          }}
+        >
+          <div style={{ fontWeight: 600, marginBottom: 6 }}>
+            ⚠ 发现 {fmtWarnings.length} 条可能非同行评审 / 非学术来源的参考文献
+          </div>
+          <ul style={{ margin: 0, paddingLeft: 20 }}>
+            {fmtWarnings.map((w) => (
+              <li key={w.index} style={{ marginBottom: 4 }}>
+                <b>第 {w.index} 条</b>
+                {w.title ? <>「{w.title.length > 60 ? w.title.slice(0, 60) + "…" : w.title}」</> : null}
+                ：{w.message}
+              </li>
+            ))}
+          </ul>
+          <div style={{ marginTop: 6, opacity: 0.75, fontSize: "0.9em" }}>
+            如目标期刊不接受此类来源，请回到「找选题」替换或手动删除对应条目。
+          </div>
         </div>
       )}
 
