@@ -134,3 +134,22 @@ Round 8 (2026-07-05 T~16:15, cron 第六次触发)
    - searchfilters.py: year_from 上限改为 datetime.date.today().year + 1
    - GrantModule.tsx onError: 兼置 setStage/setPaused/inReviewRef.current 重置
  · 验证: 13/13 PASS (含 5 项 R1-R7 回归)
+
+Round 9 (2026-07-05 T~16:30, cron 第七次触发)
+ · 测过: /api/docx + /api/latex 特殊字符/空 body/未知期刊 边界,
+         formatting.py (Word 生成), latexexport.py 模板参数,
+         跨模块 handoff 数据完整性 (R3 遗留 unfixed 项)
+ · 发现 P1:
+   1. /api/docx 空 text 静默产 36KB 空 docx (与 /api/latex 400 不一致)
+   2. /api/latex 未知 journal_id 静默降级通用模板, note 不告知
+   3. Analyze→Format 用短短结论覆盖用户已有的完整 manuscript (R3 未修)
+   4. Imrad→Format 显式 "format:refs":"" 覆盖 format 页已格式化的参考文献 (R3 未修)
+   5. Idea→Plan 强制 plan:step=1 覆盖用户已推进进度 (R3 未修, 2 处)
+   · 其他 P1 (未修): LaTeX parse_markdown 无 ## 时正文丢弃; data:image 未处理 → 留后续轮
+ · 修复(5 项):
+   - routes/manuscript.py /api/docx: 空 text 返 400 中文, 与 /api/latex 对齐
+   - latexexport.py export_latex: 未识别 journal_id 时 notes 追加中文警告
+   - GeneralResults.tsx "用此结论去排版": 检测 format:manuscript 已有内容时 window.confirm
+   - ImradModule.tsx "用此初稿去排版": 移除 "format:refs":"" 清空, 加 confirm
+   - IdeaModule.tsx 两处 "用此结果做实验规划": 移除强制 plan:step/plan:maxStep=1
+ · 验证: 10/10 PASS (含 5 项 R1-R8 回归)

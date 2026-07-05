@@ -6,6 +6,7 @@ import ImageViewer from "../../components/ImageViewer";
 import { HelpButton } from "../../components/HelpButton";
 import { downloadText, downloadBase64, chartMime, tsName, downloadAnalysisReport } from "../../lib/download";
 import { apiUrl } from "../../lib/api";
+import { readPersisted } from "../../lib/usePersistentState";
 import type { Goto } from "../../App";
 import type { ChartType } from "./types";
 
@@ -192,7 +193,17 @@ export default function GeneralResults({
                       >
                         {copyState === "ok" ? "已复制 ✓" : copyState === "err" ? "复制失败·请手动选择" : "复制结论"}
                       </button>
-                      <button className="btn-ghost" data-testid="send-to-format-btn" onClick={() => goto("format", { "format:manuscript": conclusion })}>用此结论去排版 →</button>
+                      <button className="btn-ghost" data-testid="send-to-format-btn" onClick={() => {
+                        // 若 Format 里已有正文, 用短短结论直接覆盖多半是灾难; 加二次确认
+                        const existing = (readPersisted<string>("format:manuscript", "") || "").trim();
+                        if (existing && existing !== conclusion.trim()) {
+                          const ok = window.confirm(
+                            `期刊排版页已有稿件 (约 ${existing.length} 字), 是否用当前分析结论 (约 ${conclusion.trim().length} 字) 覆盖它?\n\n覆盖不可撤销。`,
+                          );
+                          if (!ok) return;
+                        }
+                        goto("format", { "format:manuscript": conclusion });
+                      }}>用此结论去排版 →</button>
                       <button
                         className="btn-ghost" data-testid="export-report-btn"
                         onClick={() => downloadAnalysisReport({ title: "数据分析报告", question, code, charts: charts.map((c) => c.png), output, conclusion })}

@@ -831,12 +831,12 @@ export default function IdeaModule({ goto }: { goto: Goto }) {
                     const parts: string[] = [];
                     if (field) parts.push(`[学科领域]\n${field}`);
                     if (background) parts.push(`[相关资料 · 来自找选题]\n${background}`);
+                    // 不写 plan:step / plan:maxStep, 保留用户在 plan 里已推进的进度;
+                    // 只更新 idea/materials 字段, 用户可自行决定要不要回 step 1
                     goto("plan", {
                       "plan:idea": text,
                       "plan:materials": parts.join("\n\n"),
                       "plan:materials:migrated": true,
-                      "plan:step": 1,
-                      "plan:maxStep": 1,
                     });
                   }}>用此结果做实验规划 →</button>
                 )}
@@ -994,12 +994,11 @@ export default function IdeaModule({ goto }: { goto: Goto }) {
                           if (card.field) parts.push(`[学科领域]\n${card.field}`);
                           if (background) parts.push(`[相关资料 · 来自找选题]\n${background}`);
                           if (c.body) parts.push(`[候选方向补充]\n${c.body}`);
+                          // 不覆盖 plan:step / plan:maxStep, 保留 plan 里已推进的进度
                           goto("plan", {
                             "plan:idea": `${c.title}\n\n${c.body}`,
                             "plan:materials": parts.join("\n\n"),
                             "plan:materials:migrated": true,
-                            "plan:step": 1,
-                            "plan:maxStep": 1,
                           });
                         }}
                       >

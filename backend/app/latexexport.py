@@ -535,6 +535,9 @@ async def export_latex(text: str, journal_id: str, references: str = "", csl_jso
     journal = get_journal(journal_id)
     journal_name = journal["name"] if journal else "目标期刊"
     notes: list[str] = []
+    # 未识别的 journal_id: 显式提示已用通用模板, 避免用户以为按目标期刊生成实际却降级
+    if journal_id and not journal:
+        notes.append(f"未识别的期刊 id「{journal_id}」，已使用通用 LaTeX 模板，请确认目标期刊选择正确。")
     original_class = spec["doc_class"]
 
     # 参考文献 -> BibTeX. 优先用结构化输入; 否则退回 LLM 解析文本。

@@ -457,7 +457,17 @@ export default function ImradModule({ goto }: { goto: Goto }) {
                     <button className="btn-ghost" data-testid="imrad-to-journal-btn" title="带着这篇初稿去『智能选刊』匹配期刊" onClick={() => goto("journal", { "journal:abstract": abstract || draft })}>用此初稿去选刊 →</button>
                   )}
                   {draft && !running && (
-                    <button className="btn-ghost" data-testid="imrad-to-format-btn" title="带着这篇初稿去『期刊排版』重排导出" onClick={() => goto("format", { "format:manuscript": draft, "format:refs": "" })}>用此初稿去排版 →</button>
+                    <button className="btn-ghost" data-testid="imrad-to-format-btn" title="带着这篇初稿去『期刊排版』重排导出" onClick={() => {
+                      // 只覆盖 manuscript, 不清空 refs (原来 "format:refs":"" 会把用户在 format 里已格式化好的参考文献清掉)
+                      const existing = (readPersisted<string>("format:manuscript", "") || "").trim();
+                      if (existing && existing !== draft.trim()) {
+                        const ok = window.confirm(
+                          `期刊排版页已有稿件 (约 ${existing.length} 字), 是否用当前论文初稿 (约 ${draft.trim().length} 字) 覆盖?`,
+                        );
+                        if (!ok) return;
+                      }
+                      goto("format", { "format:manuscript": draft });
+                    }}>用此初稿去排版 →</button>
                   )}
                 </div>
               </div>

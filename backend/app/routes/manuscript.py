@@ -182,6 +182,13 @@ async def bundle(req: BundleRequest) -> Response:
 
 @router.post("/api/docx")
 async def docx(req: DocxRequest) -> Response:
+    # 空正文: 与 /api/latex 保持一致返回 400 中文, 而非静默产出 36KB 空 docx 让用户误以为已导出
+    if not (req.text or "").strip():
+        return Response(
+            content="请先提供稿件内容再导出 Word。".encode("utf-8"),
+            status_code=400,
+            media_type="text/plain; charset=utf-8",
+        )
     from ..formatting import build_docx
 
     data = build_docx(req.text, req.journal_id, req.references, csl_json=req.csl_json)
