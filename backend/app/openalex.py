@@ -121,6 +121,42 @@ async def _search_one(client: httpx.AsyncClient, query: str, per_query: int, fil
     return await with_backoff(_do)
 
 
+async def search_title(title: str, limit: int = 1) -> list[dict]:
+    """按题名精确检索 OpenAlex, 返回 [{title, abstract, first_author, year, url, doi}, ...]。
+
+    用 title.search filter (更聚焦题名字段) 而非 title_and_abstract.search。
+    网络失败/超时 → 返回 []。
+    """
+    if not title or not title.strip():
+        return []
+    safe_q = title.replace(",", " ").replace(":", " ").strip()
+    email = getattr(settings, "ncbi_email", "") or ""
+    ua = f"research-assistant/1.0 (mailto:{email})" if email else "research-assistant/1.0 (https://github.com/imwei25/scientific-discover)"
+    params = {
+        "filter": f"title.search:{safe_q}",
+        "per_page": str(max(1, min(limit, 5))),
+        "select": _SELECT,
+        "sort": "relevance_score:desc",
+    }
+    if email:
+        params["mailto"] = email
+    out: list[dict] = []
+    try:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(15.0), headers={"User-Agent": ua}) as client:
+            r = await client.get(_ENDPOINT, params=params)
+            r.raise_for_status()
+            results = r.json().get("results") or []
+    except Exception:  # noqa: BLE001
+        return []
+    for raw in results:
+        norm = _normalize(raw)
+        if norm:
+            out.append(norm)
+        if len(out) >= limit:
+            break
+    return out
+
+
 async def search_openalex(queries: list[str], per_query: int = 6, cap: int = 18, filters: dict | None = None) -> dict:
     """对多个检索式跑 OpenAlex, 返回 {papers, network_errors, queries_tried}。"""
     filter_extra = searchfilters.openalex_params(filters or {}).get("filter_extra", "")

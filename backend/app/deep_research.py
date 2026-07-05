@@ -193,3 +193,62 @@ async def parse_upload(
         "page_count": page_count,
         "parse_confidence": confidence,
     }
+
+
+# ── 题名反查 ─────────────────────────────────────────────────
+
+async def _search_title_multi(title: str) -> dict:
+    """依次尝试 crossref → openalex。一命中即返回。
+
+    返回结构: {found: bool, abstract, first_author, year, url, doi}。
+    任一源网络失败静默降级到下一源; 全部失败或均无命中 → {found: False}。
+    """
+    from . import crossref, openalex
+
+    title = title.strip()
+    if len(title) < 6:
+        return {"found": False}
+
+    # crossref: 题名精确反查
+    try:
+        if hasattr(crossref, "search_title"):
+            cr = await crossref.search_title(title, limit=1)
+            if cr:
+                it = cr[0]
+                return {
+                    "found": True,
+                    "abstract": it.get("abstract") or "",
+                    "first_author": it.get("first_author") or "",
+                    "year": it.get("year") or "",
+                    "url": it.get("url") or "",
+                    "doi": it.get("doi") or "",
+                }
+    except Exception:  # noqa: BLE001
+        pass
+
+    # openalex fallback
+    try:
+        if hasattr(openalex, "search_title"):
+            oa = await openalex.search_title(title, limit=1)
+            if oa:
+                it = oa[0]
+                return {
+                    "found": True,
+                    "abstract": it.get("abstract") or "",
+                    "first_author": it.get("first_author") or "",
+                    "year": it.get("year") or "",
+                    "url": it.get("url") or "",
+                    "doi": it.get("doi") or "",
+                }
+    except Exception:  # noqa: BLE001
+        pass
+
+    return {"found": False}
+
+
+async def lookup_title(title: str) -> dict:
+    """入口: 用户手输题名 → 反查文献元数据。
+
+    返回 {found, abstract, first_author, year, url, doi}。found=False 时其它字段可缺省。
+    """
+    return await _search_title_multi(title)

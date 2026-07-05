@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 from fastapi.responses import JSONResponse
+from pydantic import BaseModel
 
 from .. import deep_research as dr
 from ..http_common import MAX_UPLOAD_BYTES, _read_capped
@@ -30,3 +31,13 @@ async def parse_upload_ep(
     if not result.get("ok"):
         return JSONResponse(status_code=400, content=result)
     return JSONResponse(result)
+
+
+class LookupTitleReq(BaseModel):
+    title: str
+
+
+@router.post("/api/deep_research/lookup_title")
+async def lookup_title_ep(req: LookupTitleReq):
+    """用户手输题名 → crossref/openalex 反查, 返回 {found, abstract, first_author, year, url, doi}."""
+    return JSONResponse(await dr.lookup_title(req.title))

@@ -167,6 +167,41 @@ async def fetch_by_doi(client: httpx.AsyncClient, doi: str) -> dict | None:
     return _parse_work_message(msg)
 
 
+async def search_title(title: str, limit: int = 1) -> list[dict]:
+    """按题名精确检索 Crossref, 返回 [{title, abstract, first_author, year, url, doi}, ...]。
+
+    与 search_crossref 不同, 这里用 query.title 字段, 追求"题名反查"的精准度而非广度。
+    网络失败/超时 → 返回 []。
+    """
+    if not title or not title.strip():
+        return []
+    email = getattr(settings, "ncbi_email", "") or ""
+    ua = f"research-assistant/1.0 (mailto:{email})" if email else "research-assistant/1.0"
+    params = {
+        "query.title": _clean_query(title),
+        "rows": str(max(1, min(limit, 5))),
+        "select": _SELECT,
+        "sort": "relevance",
+    }
+    if email:
+        params["mailto"] = email
+    out: list[dict] = []
+    try:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(15.0), headers={"User-Agent": ua}) as client:
+            r = await client.get(_ENDPOINT, params=params)
+            r.raise_for_status()
+            items = (r.json().get("message") or {}).get("items") or []
+    except Exception:  # noqa: BLE001
+        return []
+    for raw in items:
+        norm = _normalize(raw)
+        if norm:
+            out.append(norm)
+        if len(out) >= limit:
+            break
+    return out
+
+
 async def search_crossref(queries: list[str], per_query: int = 6, cap: int = 18, filters: dict | None = None) -> dict:
     """对多个检索式跑 Crossref, 返回 {papers, network_errors, queries_tried}。"""
     filt = searchfilters.crossref_filter(searchfilters.normalize(filters))
