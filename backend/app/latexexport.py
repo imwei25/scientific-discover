@@ -96,6 +96,11 @@ _EMOJI_RE = re.compile(
     "]+"
 )
 _CJK_RE = re.compile(r"[\u4e00-\u9fff\u3400-\u4dbf]")
+# 内嵌图片(独占一行的 data:image PNG, 由 mermaid 渲染而来); 与 formatting.py 保持一致。
+# 允许行首前导空白与行末空白, 也兼容 base64 里的换行符(某些 mermaid 输出会 wrap)。
+_IMG_DATA_RE = re.compile(
+    r"!\[[^\]]*\]\(data:image/([a-zA-Z0-9+.-]+);base64,([A-Za-z0-9+/=\s]+?)\)"
+)
 # markdown 围栏代码块
 _FENCE_RE = re.compile(r"^```")
 # markdown 表格分隔行(如 |---|---|)
@@ -291,6 +296,33 @@ def _extract_keywords(lines: list[str]) -> tuple[str, list[str]]:
     return text, []
 
 
+def _extract_data_images(text: str) -> tuple[str, list[bytes]]:
+    """把 ![alt](data:image/png;base64,...) 从 markdown 抽出成 PNG 字节流列表,
+    并把原位置替换成一个安全的 ASCII 哨兵 token 「XXFIGUREnXX」。
+    该 token 只含 ASCII 字母数字, 不会被 _inline / _esc 改动, 后续在 tex
+    输出上一次性 sub 回 \\includegraphics{figureN}。非 png 或 base64 解不出的会
+    静默丢弃(替换成空串), 避免污染正文与 zip。返回 (新 text, PNG bytes 列表)。
+    """
+    images: list[bytes] = []
+
+    def _sub(m: re.Match) -> str:
+        kind = m.group(1).lower()
+        payload = re.sub(r"\s+", "", m.group(2))
+        if kind != "png":
+            return ""
+        try:
+            data = base64.b64decode(payload, validate=False)
+        except Exception:  # noqa: BLE001
+            return ""
+        if not data:
+            return ""
+        images.append(data)
+        return f"XXFIGURE{len(images)}XX"
+
+    new_text = _IMG_DATA_RE.sub(_sub, text)
+    return new_text, images
+
+
 def parse_markdown(text: str, skip_refs_section: bool = False) -> dict:
     """把排版稿 Markdown 粗解析为 IR: title / abstract / keywords / sections[]。
 
@@ -358,6 +390,13 @@ def parse_markdown(text: str, skip_refs_section: bool = False) -> dict:
         elif not title and raw.strip():
             # 文首没有标题时, 第一行非空当题目
             title = raw.strip()
+        elif title and mode is None and raw.strip():
+            # Bug A 修复: 有标题, 但从未出现 ## 章节, 而正文里已经出现实体内容.
+            # 原先直接掉进"其余情况忽略", 结果 \begin{document} 里只剩 \maketitle.
+            # 建一个隐式无标题 section, 之后所有正文行都归到它下面.
+            cur = {"title": "", "lines": [raw]}
+            sections.append(cur)
+            mode = "section"
         # 其余(题目前的散行)忽略
 
     if not title:
@@ -574,6 +613,10 @@ async def export_latex(text: str, journal_id: str, references: str = "", csl_jso
     # 是纯英文也会误判成中文 → 触发 IEEEtran 降级到单栏 article, 用户看不到
     # 两栏排版. 用 parse_markdown 得到干净的 title/abstract/正文再检测.
     stripped = _strip_emoji(text)
+    # Bug B: 抽出 data:image/png;base64 图片, 避免几百 KB 的 base64 内联进 main.tex.
+    # 抽出后原位置留下 ASCII 哨兵 token「XXFIGUREnXX」, 走完 _inline 转义链后仍是纯 ASCII,
+    # 最后在 tex 输出上一次性 sub 为 \includegraphics{figureN}.
+    stripped, data_images = _extract_data_images(stripped)
     ir = parse_markdown(stripped, skip_refs_section=has_bib)
     ir_content_for_cjk = " ".join([
         ir.get("title", ""),
@@ -611,7 +654,16 @@ async def export_latex(text: str, journal_id: str, references: str = "", csl_jso
         bib_ids=bib_ids,
     )
 
+    # Bug B: 把哨兵 token 换回 \includegraphics, 并把 PNG 一起塞进 zip.
+    if data_images:
+        def _swap(m: re.Match) -> str:
+            idx = int(m.group(1))
+            return r"\includegraphics[width=\linewidth]{figure%d}" % idx
+        tex = re.sub(r"XXFIGURE(\d+)XX", _swap, tex)
+
     files = {"main.tex": tex.encode("utf-8")}
+    for i, png in enumerate(data_images, 1):
+        files[f"figure{i}.png"] = png
     if csl_items:
         files["refs.bib"] = _render_bib(csl_items).encode("utf-8")
 

@@ -3,7 +3,7 @@
 // 步骤: 选供应商 → 粘 key + 测试 → 保存 → 标记完成 + 刷新页面。
 // 演示模式跳过测试与 key 输入, 直接 save(mock=true)。
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { apiUrl } from "../lib/api";
 import VlmSettings from "./VlmSettings";
 
@@ -47,6 +47,18 @@ export default function OnboardingWizard({ onClose }: OnboardingWizardProps) {
   const [testStatus, setTestStatus] = useState<TestStatus>("idle");
   const [testMsg, setTestMsg] = useState("");
   const [saveErr, setSaveErr] = useState("");
+
+  // Esc 关闭 (与 HelpModal 一致的 a11y 行为); 关闭走同一 sessionStorage 语义
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      // 与右上角 × 一致: 本会话内不再自动弹, 下次启动仍会提醒未配置密钥
+      try { sessionStorage.setItem("onboarding:dismissed", "1"); } catch { /* 忽略 */ }
+      onClose();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
 
   const pick = (p: WizardProvider) => {
     setProvider(p);

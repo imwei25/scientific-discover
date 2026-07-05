@@ -42,8 +42,8 @@
 {% endblock %}
 {% endif %}
 {% block before_body %}{% endblock %}
-{% for sec in sections %}\section{ {{- sec.title -}} }
-{{ sec.body }}
+{% for sec in sections %}{% if sec.title %}\section{ {{- sec.title -}} }
+{% endif %}{{ sec.body }}
 
 {% endfor %}
 {% block back_matter %}{% endblock %}

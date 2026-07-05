@@ -267,17 +267,19 @@ def parse(data: bytes, format: str) -> list[dict]:
     fmt = (format or "").lower().strip()
     text = decode_text(data)
     if fmt == "ris":
+        # 解析异常向上抛, 让路由能返回 ok:false 告诉用户"文件损坏".
+        # 原来吞成 [] 让用户以为文件是空的, 无法区分"真的空"与"格式损坏".
         try:
             items = rispy.loads(text)
-        except Exception:  # noqa: BLE001
-            items = []
+        except Exception as e:  # noqa: BLE001
+            raise ValueError(f"RIS 解析失败, 文件可能损坏或格式不正确: {e}") from e
         return [_ris_to_ref(it) for it in items]
     if fmt == "bib":
         try:
             bib = bibtexparser.loads(text)
             entries = bib.entries
-        except Exception:  # noqa: BLE001
-            entries = []
+        except Exception as e:  # noqa: BLE001
+            raise ValueError(f"BibTeX 解析失败, 文件可能损坏或格式不正确: {e}") from e
         return [_bib_to_ref(e) for e in entries]
     if fmt == "enw":
         # EndNote 块用空行分隔; 兼容 \r\n

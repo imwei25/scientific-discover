@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sys
 import time
 import uuid as uuid_mod
@@ -146,8 +147,14 @@ def _atomic_write(path: Path, data: Any) -> None:
 
 
 # ── 名字清洗 / id 校验 ───────────────────────────────────────
+_CTRL_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")  # 控制字符, 保留 \t\n\r
+
+
 def _clean_name(name: str) -> str:
-    s = (name or "").strip()
+    s = (name or "")
+    # 剥离控制字符 (NUL / SOH / 等), 折叠内嵌换行为空格; 否则会污染 index.json 与前端渲染
+    s = _CTRL_RE.sub("", s)
+    s = re.sub(r"\s+", " ", s).strip()
     if len(s) > MAX_NAME_LEN:
         s = s[:MAX_NAME_LEN]
     return s
@@ -164,11 +171,15 @@ def _validate_uuid(pid: str) -> None:
 def create_project(id: str, name: str) -> dict[str, Any]:
     _validate_uuid(id)
     if _project_path(id).exists():
-        raise ValueError(f"project {id} already exists")
+        raise ValueError(f"该项目 id 已存在: {id}")
+    cleaned = _clean_name(name)
+    # 空 name 现在明确拒绝, 而不是静默变成 "未命名项目" (用户不知道自己起的名没生效)
+    if not cleaned:
+        raise ValueError("项目名不能为空。")
     now = int(time.time() * 1000)
     project = {
         "id": id,
-        "name": _clean_name(name) or "未命名项目",
+        "name": cleaned,
         "created_at": now,
         "updated_at": now,
         "state": {},
@@ -212,7 +223,11 @@ def rename_project(pid: str, name: str) -> dict[str, Any]:
     project = get_project(pid)
     if project is None:
         raise KeyError(pid)
-    project["name"] = _clean_name(name) or project["name"]
+    cleaned = _clean_name(name)
+    # 空/纯空白 rename 拒绝, 避免"改名成功"提示但名字未变的迷惑 UX
+    if not cleaned:
+        raise ValueError("项目名不能为空。")
+    project["name"] = cleaned
     project["updated_at"] = int(time.time() * 1000)
     _atomic_write(_project_path(pid), project)
     _upsert_index({"id": pid, "name": project["name"], "updated_at": project["updated_at"]})

@@ -153,3 +153,31 @@ Round 9 (2026-07-05 T~16:30, cron 第七次触发)
    - ImradModule.tsx "用此初稿去排版": 移除 "format:refs":"" 清空, 加 confirm
    - IdeaModule.tsx 两处 "用此结果做实验规划": 移除强制 plan:step/plan:maxStep=1
  · 验证: 10/10 PASS (含 5 项 R1-R8 回归)
+
+Round 10 (2026-07-05 T~17:00, cron 第八次触发 + A/B/R10 三合一批处理)
+ · 测过: LaTeX parse_markdown + data:image (A 类先修), /api/projects CRUD 边界,
+         refio.py BibTeX/RIS 解析, refsenrich, Mermaid 渲染, 全局 clipboard 使用,
+         模态框 a11y (Onboarding/Deidentify)
+ · 发现 P1:
+   1. LaTeX parse_markdown 无 ## 时正文丢弃 (A 类, 早前 R9 flag)
+   2. LaTeX 不处理 data:image, base64 URL 原样注入 .tex (A 类, R9 flag)
+   3. refHandoff 内存 _stash F5 后丢失 (B1, R3+R9 flag)
+   4. searchfilters.apply_quality_filter 剩 1-7 篇时静默放宽 (B3, R8 flag)
+   5. refio 解析异常静默返 [] (R10 P1)
+   6. projects.py _clean_name 不过滤控制字符, 空 name 静默变"未命名项目" (R10 P1)
+   7. OnboardingWizard 无 Esc 关闭 (R10 P1, R5 已发现)
+ · 修复(7 项):
+   A 类 (由派 Agent 完成, ~52 行):
+   - latexexport.py: parse_markdown 无章节时创建 title="" 的隐式 section 兜住正文
+   - latexexport.py: _extract_data_images 抽 PNG 落地为 figureN.png, 正文换 \includegraphics
+   - _base.tex.j2: sections 循环 {% if sec.title %} 保护, 隐式 section 不输出空 \section{}
+   B 类:
+   - refHandoff.ts: 内存 stash + sessionStorage 持久化, F5 生存
+   - searchfilters.py: _QUALITY_FLOOR 8→1 (只在完全无结果时放宽, 大部分场景严格过滤)
+   R10:
+   - refio.py: parse 抛 ValueError 而非静默返 []; routes/manuscript.py refs/import 空/损坏返 ok:false
+   - projects.py: _CTRL_RE 剥离控制字符, _clean_name 折叠空白; create/rename 拒绝空 name; Chinese 错误
+   - OnboardingWizard.tsx: 加 keydown Esc 监听, 写 sessionStorage.dismissed 后 onClose
+ · 验证: 12/12 PASS (含 4 项 R1-R9 回归)
+ · 注: R9 flag 的 B2 (goto 跨项目污染) 复审代码后发现 switchTo 已正确处理 (clearTimeout + suppressEventsRef),
+        不需要修

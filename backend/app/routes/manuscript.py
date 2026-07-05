@@ -298,9 +298,14 @@ async def refs_import(
         return {"ok": False, "error": "文件过大（超过 30MB），请上传更小的文件。"}
     try:
         refs = parse(content, format)
-        return {"ok": True, "refs": refs}
+    except ValueError as e:
+        # refio.parse 抛出 ValueError 表示文件格式损坏, 明确 400 提示用户
+        return {"ok": False, "error": str(e)}
     except Exception as e:  # noqa: BLE001
         return {"ok": False, "error": f"解析失败: {e}"}
+    if not refs:
+        return {"ok": False, "error": "未从文件中解析出任何参考文献。请确认格式选择是否正确 (RIS/BibTeX/EndNote)。"}
+    return {"ok": True, "refs": refs}
 
 
 @router.post("/api/refs/export")
