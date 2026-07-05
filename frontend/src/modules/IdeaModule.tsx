@@ -4,7 +4,7 @@ import { streamIdea, streamIdeaFollowup, Reference, Trial, EvidenceItem, Verific
 import { reportLLMError } from "../lib/errorToast";
 import { addHistory } from "../lib/history";
 import { parseAttachments, appendAttachmentsToField } from "../lib/attachments";
-import AttachmentChips from "../components/AttachmentChips";
+import AttachmentUploadBox from "../components/AttachmentUploadBox";
 import Markdown from "../components/Markdown";
 import EditableMarkdown from "../components/EditableMarkdown";
 import WarningPanel from "../components/WarningPanel";
@@ -146,8 +146,6 @@ export default function IdeaModule({ goto }: { goto: Goto }) {
   const fctrl = useRef<AbortController | null>(null);
 
   // 第 1 步「相关资料」附件: 添加时不解析,提交任务时才解析并注入 payload。
-  const fileRef = useRef<HTMLInputElement>(null);
-  const [comboDrag, setComboDrag] = useState(false);
   const [pendingAttachments, setPendingAttachments] = useState<File[]>([]);
 
   const selectedSet = useMemo(() => new Set(selectedKeys), [selectedKeys]);
@@ -423,12 +421,6 @@ export default function IdeaModule({ goto }: { goto: Goto }) {
   };
 
   // 第 1 步：只把附件加入 pending 列表,不做任何解析。
-  const ingestFiles = (files: FileList | File[] | null | undefined) => {
-    const list = files ? Array.from(files) : [];
-    if (list.length === 0) return;
-    setPendingAttachments((prev) => [...prev, ...list]);
-    if (fileRef.current) fileRef.current.value = "";
-  };
   const removeAttachment = (index: number) => {
     setPendingAttachments((prev) => prev.filter((_, i) => i !== index));
   };
@@ -499,45 +491,19 @@ export default function IdeaModule({ goto }: { goto: Goto }) {
                 </span>
               )}
             </label>
-            <div className="field" data-testid="background-field">
-              <span className="field-label">相关资料（可选）</span>
-              {/* 文字输入与拖入文件合为同一个框 */}
-              <div
-                className={`combo-input${comboDrag ? " dragover" : ""}`}
-                onDragOver={(e) => { e.preventDefault(); setComboDrag(true); }}
-                onDragLeave={() => setComboDrag(false)}
-                onDrop={(e) => { e.preventDefault(); setComboDrag(false); ingestFiles(e.dataTransfer.files); }}
-              >
-                <textarea
-                  data-testid="input-background"
-                  value={background}
-                  onChange={(e) => setBackground(e.target.value)}
-                  placeholder="粘贴你之前的研究/综述/草案，或把 Word/PDF/txt 文件直接拖进这个框（可多个）作为背景。"
-                  rows={4}
-                />
-                <div className="combo-foot">
-                  <button type="button" className="combo-attach" data-testid="combo-attach" onClick={() => fileRef.current?.click()}>
-                    📎 添加附件（可多选）
-                  </button>
-                  <span className="combo-hint">支持 Word / PDF / txt，将在开始检索时解析</span>
-                  <input
-                    ref={fileRef}
-                    data-testid="upload-doc"
-                    type="file"
-                    accept=".docx,.pdf,.txt,.md"
-                    multiple
-                    style={{ display: "none" }}
-                    onChange={(e) => ingestFiles(e.target.files)}
-                  />
-                </div>
-                <AttachmentChips
-                  files={pendingAttachments}
-                  onRemove={removeAttachment}
-                  disabled={running}
-                  testId="idea-attach-chips"
-                />
-              </div>
-            </div>
+            <AttachmentUploadBox
+              label="相关资料 (可选)"
+              hint="支持 Word / PDF / txt, 将在开始检索时解析"
+              textValue={background}
+              onTextChange={setBackground}
+              pendingFiles={pendingAttachments}
+              onFilesAdd={(files) => setPendingAttachments((prev) => [...prev, ...files])}
+              onFileRemove={removeAttachment}
+              disabled={running}
+              testId="background-field"
+              placeholder="粘贴你之前的研究/综述/草案,或把 Word/PDF/txt 文件直接拖进这个框 (可多个) 作为背景。"
+              rows={4}
+            />
           </div>
           <div className="wiz-nav">
             <button className="btn-ghost" onClick={reset} data-testid="reset-btn">清空</button>
@@ -579,7 +545,7 @@ export default function IdeaModule({ goto }: { goto: Goto }) {
               </div>
             </div>
             <div className="field">
-              <span className="field-label">证据等级（勾选 = 仅保留所勾类型；全勾/全不勾 = 不限）</span>
+              <span className="field-label">证据等级（勾选 = 保留）</span>
               <div className="filter-types">
                 {STUDY_TYPES.map((s) => (
                   <label key={s.key} className={`type-chip${studyTypes.includes(s.key) ? " on" : ""}`}>
