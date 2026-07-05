@@ -30,8 +30,9 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 import traceback
-from typing import AsyncIterator
+from typing import AsyncGenerator, AsyncIterator
 
 from .config import settings
 from .literature import search_literature
@@ -118,6 +119,36 @@ _SECTION_MAP = {
         "约 300-500 字"),
 }
 _SECTION_ORDER = ["rationale", "objectives", "scheme", "innovation", "plan", "foundation"]
+
+
+# LLM 有时在正文前加说明句，如"以下是根据您提供的材料撰写的《...》章节内容：（总字数：798字）"。
+# 缓冲流头部 200 字，检测并丢掉这类 preamble，用户永远看不到它。
+_PREAMBLE_RE = re.compile(
+    r'^(?:以下是|下面是|根据您提供|这是)[^\n]*\n\s*',
+    re.DOTALL,
+)
+_WORDCOUNT_RE = re.compile(r'\s*[（(]总字数[：:]\d+字[）)]\s*$')
+
+
+async def _clean_section_stream(stream: AsyncGenerator[str, None]) -> AsyncGenerator[str, None]:
+    """Strip LLM preamble commentary from section output before forwarding to client."""
+    buf = ""
+    probing = True
+    async for piece in stream:
+        if probing:
+            buf += piece
+            if len(buf) >= 200:
+                probing = False
+                buf = _PREAMBLE_RE.sub("", buf).lstrip("\n")
+                if buf:
+                    yield buf
+        else:
+            yield piece
+    if probing and buf:
+        buf = _PREAMBLE_RE.sub("", buf).lstrip("\n")
+        buf = _WORDCOUNT_RE.sub("", buf)
+        if buf:
+            yield buf
 
 
 async def _complete(messages: list[dict], max_tokens: int = 400, task: str = "grant_plan") -> str:
@@ -311,7 +342,8 @@ def _section_messages(
         + _QUOTE_RULE + "支持句必须逐字取自该文献下方的『摘要(节选)』;\n"
         "2) 申请人/团队/单位/经费/设备等无法从材料推断的具体事实, 一律用 [需申请人补充] 占位, 绝不杜撰;\n"
         "3) 基于现状的推断性论断(尚无文献直接支撑)标注 [待验证];\n"
-        "4) 用规范、严谨的中文基金申请书语体; 只输出本章节正文(可含子标题), 不要重复大标题、不要写其它章节。"
+        "4) 用规范、严谨的中文基金申请书语体; 只输出本章节正文(可含子标题), 不要重复大标题、不要写其它章节; "
+        "禁止以「以下是…」「下面是…」「根据您提供…」等说明句开头; 禁止在末尾标注字数。"
     )
     if style_profile.strip():
         system += (
@@ -341,7 +373,8 @@ def _revise_messages(
         "铁律: 1) 引用只能用下面【可引用的真实文献】中确有的文献, 严禁编造; " + _QUOTE_RULE +
         "支持句必须逐字取自该文献下方的『摘要(节选)』; "
         "2) 申请人/经费/设备等不可推断的事实用 [需申请人补充] 占位; 推断性论断标 [待验证]; "
-        "3) 只输出修改后的本章节正文(可含子标题), 不要重复大标题、不要写其它章节、不要附加说明。"
+        "3) 只输出修改后的本章节正文(可含子标题), 不要重复大标题、不要写其它章节、不要附加说明; "
+        "禁止以「以下是…」「下面是…」「根据您提供…」等说明句开头; 禁止在末尾标注字数。"
     )
     if style_profile.strip():
         system += (
@@ -898,7 +931,7 @@ async def write_grant(inputs: dict) -> AsyncIterator[tuple[str, dict]]:
                 style_profile,
             )
             sec_buf = ""
-            async for piece in stream_chat(msgs, task="grant_write"):
+            async for piece in _clean_section_stream(stream_chat(msgs, task="grant_write")):
                 sec_buf += piece
                 full += piece
                 yield ("delta", {"text": piece})
@@ -983,7 +1016,7 @@ async def revise_section(inputs: dict) -> AsyncIterator[tuple[str, dict]]:
             title, scheme_brief, report, refs_ctx, background, current, note,
             style_profile,
         )
-        async for piece in stream_chat(msgs, task="grant_revise"):
+        async for piece in _clean_section_stream(stream_chat(msgs, task="grant_revise")):
             full += piece
             yield ("delta", {"text": piece})
         if refs:

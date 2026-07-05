@@ -83,6 +83,9 @@ interface DocSection { key: string; title: string; text: string }
 
 const emptyScheme: GrantScheme = { title: "", question: "", hypothesis: "", goal: "", contents: [], innovations: [], route: "" };
 
+function cleanSectionText(text: string): string {
+  return text.replace(/\s*[（(]总字数[：:]\d+字[）)]\s*$/, "").trimEnd();
+}
 function coreTitle(s: string): string {
   return s.replace(/[#*\s]/g, "").replace(/^[一二三四五六七八九十]+[、.．]/, "").replace(/^（[一二三四五六七八九十]+）/, "");
 }
@@ -281,7 +284,13 @@ export default function GrantModule({ goto }: { goto: Goto }) {
     onSection: (key: string, secTitle: string) => {
       if (key === "review") { inReviewRef.current = true; setReviewText((p) => p + (p ? "\n\n" : "")); return; }
       inReviewRef.current = false;
-      setSections((prev) => [...prev, { key, title: secTitle, text: "" }]);
+      setSections((prev) => {
+        if (!prev.length) return [...prev, { key, title: secTitle, text: "" }];
+        const next = [...prev];
+        const last = next[next.length - 1];
+        next[next.length - 1] = { ...last, text: cleanSectionText(last.text) };
+        return [...next, { key, title: secTitle, text: "" }];
+      });
     },
     onDelta: (t: string) => {
       if (inReviewRef.current) { setReviewText((p) => p + t); return; }
@@ -304,6 +313,13 @@ export default function GrantModule({ goto }: { goto: Goto }) {
     },
     onDone: () => {
       setStatus(""); setRunning(false); setPhase("done"); setStage("done"); inReviewRef.current = false;
+      setSections((prev) => {
+        if (!prev.length) return prev;
+        const next = [...prev];
+        const last = next[next.length - 1];
+        next[next.length - 1] = { ...last, text: cleanSectionText(last.text) };
+        return next;
+      });
       window.dispatchEvent(new Event("usage-updated"));
     },
   });
