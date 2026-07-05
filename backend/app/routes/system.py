@@ -122,9 +122,23 @@ async def config_save(req: SaveConfigRequest, request: Request) -> dict:
         else:
             preset_key = (req.provider or "").strip().lower()
             preset = PROVIDER_PRESETS.get(preset_key, {})
+            new_key = (req.key or "").strip()
+            # 防护: 空 key 会把用户已配的真实 key 静默清除, 拒绝该操作.
+            # 若用户想切换到"演示模式", 应显式发 mock:true.
+            if not new_key:
+                return {
+                    "ok": False,
+                    "error": "API key 不能为空。若想暂时不配 key, 请选择「演示模式」(mock:true)。",
+                }
+            # 防护: preset 未识别的 provider 会把 base_url/model 写成空串, 破坏配置.
+            if not preset:
+                return {
+                    "ok": False,
+                    "error": f"未知的供应商「{req.provider}」。请从下拉选一个已支持的供应商(deepseek/siliconflow/openai/anthropic 等)。",
+                }
             updates["MOCK_LLM"] = "0"
             updates["LLM_PROVIDER"] = (preset.get("provider") or "openai")
-            updates["LLM_API_KEY"] = (req.key or "").strip()
+            updates["LLM_API_KEY"] = new_key
             updates["LLM_BASE_URL"] = (req.base_url or preset.get("base_url", "")).strip()
             updates["LLM_MODEL"] = (req.model or preset.get("model", "")).strip()
 
@@ -157,6 +171,12 @@ async def config_save_vlm(req: SaveVlmConfigRequest, request: Request) -> dict:
             settings.reload()
             return {"ok": True, "cleared": True}
         preset = PROVIDER_PRESETS.get((req.provider or "").strip().lower(), {})
+        # 防护: 未知 provider 会把 VLM_BASE_URL/MODEL 写成空串, 后续调用必 401
+        if not preset:
+            return {
+                "ok": False,
+                "error": f"未知的视觉模型供应商「{req.provider}」。请从预设列表中选择。",
+            }
         write_env_file({
             "VLM_PROVIDER": (preset.get("provider") or "openai"),
             "VLM_API_KEY": key,

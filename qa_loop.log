@@ -62,3 +62,22 @@ Round 4 (2026-07-05 T~14:30, cron 第二次触发)
    - system.py: /api/usage mock 加 mock:true + notice
    - EthicsModule.tsx: runFollowup + 两个追问按钮加 || busy 保护
  · 验证: 15/15 PASS (含 4 项 R1+R2+R3 回归)
+
+Round 5 (2026-07-05 T~15:00, cron 第三次触发)
+ · 测过: /api/config/save + save-vlm + test-key, Home 卡, CommandPalette, 键盘快捷键,
+         balance/usage 展示, /api/poster + poster/review, figcaptions, flow-diagram,
+         Zotero /status/collections/import/push, refcheck 深度
+ · 发现 P1:
+   1. /api/config/save 允许空 key + 未知 provider → 静默把真实 .env 洗掉 (Agent 复现时甚至真的把 MOCK_LLM 关了)
+   2. /api/config/save-vlm 同缺 provider 白名单
+   3. Ctrl+K 拦截 Windows 浏览器地址栏搜索 + 在 textarea 里也触发 (键盘冲突)
+   4. balance/notice 前端根本不消费 (usage 已返回 mock:true+notice 但不展示)
+   5. flowdiagram 未知 kind 静默降级 prisma 无告知
+ · 修复(5 项):
+   - system.py /api/config/save: 空 key → 400 中文; 未知 provider → 400 中文
+   - system.py /api/config/save-vlm: 未知 provider → 400 中文 (空 key 仍作为 clear)
+   - App.tsx Ctrl+K: 焦点在 TEXTAREA/INPUT/contentEditable 时不拦截
+   - App.tsx: balance.mock+notice 存在时显示 💤 提示条
+   - flowdiagram.py: 未知 kind 返回 warning 字段, 详细异常归 detail
+ · 验证: 15/15 PASS (含 6 项 R1-R4 回归)
+ · 注: R5 discovery Agent 意外把 MOCK_LLM 洗回 0, 已手动恢复 MOCK_LLM=1 (backend/.env)

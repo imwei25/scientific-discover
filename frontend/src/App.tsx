@@ -81,6 +81,8 @@ export default function App() {
     currency?: string;
     balance?: string;
     tokens?: { total_tokens: number; requests: number };
+    mock?: boolean;
+    notice?: string;
   } | null>(null);
   const sidebar = useSidebar();
   const { current: currentProject, syncStatus } = useProjects();
@@ -157,10 +159,14 @@ export default function App() {
   // W2-4-g: Cmd/Ctrl+K 唤出命令面板
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if ((e.ctrlKey || e.metaKey) && (e.key === "k" || e.key === "K")) {
-        e.preventDefault();
-        setCmdkOpen((v) => !v);
-      }
+      if (!((e.ctrlKey || e.metaKey) && (e.key === "k" || e.key === "K"))) return;
+      // 当焦点在输入区(textarea/input/contenteditable) 时不拦截,
+      // 让用户在正文里编辑不被打断; 同时避免 Windows Chrome/Edge 地址栏搜索快捷键冲突
+      // (面板仍可用: 输入区外任何位置都能触发)
+      const t = e.target as HTMLElement | null;
+      if (t && (t.tagName === "TEXTAREA" || t.tagName === "INPUT" || t.isContentEditable)) return;
+      e.preventDefault();
+      setCmdkOpen((v) => !v);
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
@@ -282,6 +288,11 @@ export default function App() {
           {balance?.available && (
             <span className="status-balance" data-testid="balance">
               💰 {balance.provider} 余额 ¥{balance.balance}
+            </span>
+          )}
+          {balance?.mock && balance?.notice && (
+            <span className="status-balance" data-testid="balance-notice" title={balance.notice} style={{ opacity: 0.75 }}>
+              💤 {balance.notice.length > 30 ? balance.notice.slice(0, 30) + "…" : balance.notice}
             </span>
           )}
           {balance?.tokens && balance.tokens.total_tokens > 0 && (

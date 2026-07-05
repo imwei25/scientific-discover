@@ -134,12 +134,22 @@ def _draw_consort(counts: dict) -> dict:
 
 
 def render_flow(kind: str, counts: dict) -> dict:
-    kind = (kind or "prisma").strip().lower()
+    raw_kind = (kind or "").strip().lower()
     counts = counts or {}
+    # 只支持 prisma / consort; 其他值应显式告知, 而非静默降级到 prisma 让用户以为选对了.
+    _KNOWN = {"prisma", "consort"}
+    warning = None
+    if raw_kind and raw_kind not in _KNOWN:
+        warning = f"未识别的流程图类型「{kind}」，已按 PRISMA 绘制。可选: {', '.join(sorted(_KNOWN))}。"
+    kind = raw_kind if raw_kind in _KNOWN else "prisma"
     try:
         data = _draw_consort(counts) if kind == "consort" else _draw_prisma(counts)
-        return {"ok": True, **data}
+        result = {"ok": True, **data, "kind": kind}
+        if warning:
+            result["warning"] = warning
+        return result
     except Exception as e:  # noqa: BLE001
         import traceback
         print("[flowdiagram] exception:\n" + traceback.format_exc(), flush=True)
-        return {"ok": False, "error": f"绘制失败：{type(e).__name__}: {e}"}
+        # 详细类型/堆栈进日志; 前端只显示中文人话
+        return {"ok": False, "error": "绘制失败：请检查各阶段计数是否为非负整数并重试。", "detail": f"{type(e).__name__}: {e}"}
