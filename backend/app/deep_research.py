@@ -22,6 +22,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import AsyncIterator, Literal
 
+import httpx
+
 from .config import settings
 
 # ── 常量 ──────────────────────────────────────────────────────
@@ -327,3 +329,82 @@ async def recommend(question: str, refs: list[dict]) -> dict:
             items.append({"ref_key": r["ref_key"], "score": "none", "reason": ""})
     items = _cap_scores(items)
     return {"ok": True, "items": items}
+
+
+# ── 深读全文获取 ─────────────────────────────────────────────
+
+
+async def _fetch_pdf_bytes(url: str) -> bytes:
+    """独立函数,测试易于 mock。"""
+    async with httpx.AsyncClient(timeout=DEEP_READ_PER_PAPER_TIMEOUT_SEC, follow_redirects=True) as c:
+        r = await c.get(url)
+        r.raise_for_status()
+        return r.content
+
+
+async def _load_upload_full_text(upload_id: str, project_id: str | None) -> str:
+    p = _upload_cache_dir(project_id) / f"{upload_id}.txt"
+    if not p.exists():
+        raise FileNotFoundError(f"上传缓存丢失: {upload_id}")
+    return p.read_text(encoding="utf-8")
+
+
+async def fetch_one_deep_read(target: dict, project_id: str | None) -> dict:
+    """按 target.source 拿全文并截断。失败返回 ok=False + error。"""
+    ref_key = target.get("ref_key", "")
+    src = target.get("source", "")
+    try:
+        async def _do() -> str:
+            if src == "upload":
+                return await _load_upload_full_text(target["upload_id"], project_id)
+            if src in ("oa", "europepmc", "crossref") and target.get("oa_url"):
+                from .extract import extract_text
+                content = await _fetch_pdf_bytes(target["oa_url"])
+                ex = extract_text("paper.pdf", content)
+                return ex.get("text") or ""
+            raise ValueError(f"无可读全文来源: {src}")
+
+        full = await asyncio.wait_for(_do(), timeout=DEEP_READ_PER_PAPER_TIMEOUT_SEC)
+        if not full.strip():
+            return {"ok": False, "ref_key": ref_key, "error": "全文为空"}
+        chunk = select_deep_read_chunk(full)
+        return {"ok": True, "ref_key": ref_key, "chunk": chunk, "chunk_chars": len(chunk)}
+    except asyncio.TimeoutError:
+        return {"ok": False, "ref_key": ref_key, "error": f"深读超时 (>{DEEP_READ_PER_PAPER_TIMEOUT_SEC}s)"}
+    except Exception as e:  # noqa: BLE001
+        return {"ok": False, "ref_key": ref_key, "error": f"{type(e).__name__}: {e}"}
+
+
+async def fetch_deep_reads_stream(
+    targets: list[dict],
+    project_id: str | None,
+) -> AsyncIterator[tuple[str, dict]]:
+    """并发拉深读全文,边完成边 yield (deep_read_progress, deep_read_result)。全局超时 90s。"""
+    total = len(targets)
+    if total == 0:
+        return
+    sem = asyncio.Semaphore(DEEP_READ_CONCURRENCY)
+    done_count = 0
+
+    async def one(t: dict) -> dict:
+        async with sem:
+            return await fetch_one_deep_read(t, project_id)
+
+    tasks = [asyncio.create_task(one(t)) for t in targets]
+    try:
+        for coro in asyncio.as_completed(tasks, timeout=DEEP_READ_TOTAL_TIMEOUT_SEC):
+            result = await coro
+            done_count += 1
+            yield ("deep_read_progress", {
+                "done": done_count, "total": total, "current_ref_key": result.get("ref_key", ""),
+            })
+            yield ("deep_read_result", result)
+    except asyncio.TimeoutError:
+        # 未完成的任务标为超时降级
+        for t, task in zip(targets, tasks):
+            if not task.done():
+                task.cancel()
+                yield ("deep_read_result", {
+                    "ok": False, "ref_key": t.get("ref_key", ""),
+                    "error": f"全局超时 (>{DEEP_READ_TOTAL_TIMEOUT_SEC}s)",
+                })
