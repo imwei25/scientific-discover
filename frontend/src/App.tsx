@@ -71,6 +71,10 @@ export default function App() {
   const [active, setActive] = useState<ModuleId>("home");
   const [devMode, setDevMode] = useDevMode();
   const visibleNav = NAV.filter((m) => !m.hidden && (devMode || !m.dev));
+  // Task 13 code review 修复: 设置下拉改用 React state 管理, 支持外点/Esc 关闭 + a11y
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const settingsWrapRef = useRef<HTMLDivElement | null>(null);
+  const settingsBtnRef = useRef<HTMLButtonElement | null>(null);
   // 右画布的 Portal 目标节点; 用 ref 回调 setState 拿到, 拿到后触发一次 re-render 让 CanvasSlot 归位。
   const [canvasEl, setCanvasEl] = useState<HTMLElement | null>(null);
   // 右画布是否收起(记忆用户偏好); 收起时缩成右侧窄条, 左工作区占满, 只留一个展开按钮。
@@ -193,6 +197,25 @@ export default function App() {
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, []);
+
+  // Task 13 code review 修复: 设置下拉外点关闭 (mousedown 阶段捕获, 避免与内部 click 冲突)
+  useEffect(() => {
+    if (!settingsOpen) return;
+    const onDocMouseDown = (e: MouseEvent) => {
+      const wrap = settingsWrapRef.current;
+      if (wrap && !wrap.contains(e.target as Node)) {
+        setSettingsOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", onDocMouseDown);
+    return () => document.removeEventListener("mousedown", onDocMouseDown);
+  }, [settingsOpen]);
+
+  // Task 13 code review 修复: devMode 关闭时若当前停留在 dev 页, 自动回首页, 避免困死
+  useEffect(() => {
+    const cur = NAV.find((m) => m.id === active);
+    if (cur?.dev && !devMode) setActive("home");
+  }, [devMode, active]);
 
   // W2-2: syncStatus 持续 error 超 5 秒, 弹 Toast 提示
   useEffect(() => {
@@ -352,36 +375,57 @@ export default function App() {
           <NiumaMark onClick={() => setActive("home")} />
           <ProjectPicker />
           <FontSizeSwitcher />
-          <div className="settings-menu" data-testid="settings-menu">
+          <div
+            className="settings-menu"
+            data-testid="settings-menu"
+            ref={settingsWrapRef}
+            onKeyDown={(e) => {
+              if (e.key === "Escape" && settingsOpen) {
+                setSettingsOpen(false);
+                settingsBtnRef.current?.focus();
+              }
+            }}
+          >
             <button
+              ref={settingsBtnRef}
               className="settings-btn"
               data-testid="open-settings-menu"
-              onClick={(e) => {
-                const menu = (e.currentTarget.nextSibling as HTMLElement | null);
-                if (menu) menu.classList.toggle("open");
-              }}
+              onClick={() => setSettingsOpen((v) => !v)}
               aria-label="设置"
+              aria-haspopup="menu"
+              aria-expanded={settingsOpen}
               title="设置"
             >
               ⚙ 设置
             </button>
-            <div className="settings-dropdown" onClick={(e) => (e.currentTarget as HTMLElement).classList.remove("open")}>
-              <button
-                className="settings-item"
-                data-testid="settings-api"
-                onClick={() => setOnboardingOpen(true)}
-              >
-                API / 模型设置
-              </button>
-              <label className="settings-item settings-toggle" data-testid="settings-dev-mode">
-                <input
-                  type="checkbox"
-                  checked={devMode}
-                  onChange={(e) => setDevMode(e.target.checked)}
-                />
-                开发者模式
-              </label>
-            </div>
+            {settingsOpen && (
+              <div className="settings-dropdown open" role="menu">
+                <button
+                  className="settings-item"
+                  data-testid="settings-api"
+                  role="menuitem"
+                  onClick={() => {
+                    setSettingsOpen(false);
+                    setOnboardingOpen(true);
+                  }}
+                >
+                  API / 模型设置
+                </button>
+                <label
+                  className="settings-item settings-toggle"
+                  data-testid="settings-dev-mode"
+                  role="menuitemcheckbox"
+                  aria-checked={devMode}
+                >
+                  <input
+                    type="checkbox"
+                    checked={devMode}
+                    onChange={(e) => setDevMode(e.target.checked)}
+                  />
+                  开发者模式
+                </label>
+              </div>
+            )}
           </div>
         </div>
         <CanvasProvider target={hasCanvas ? canvasEl : null}>
