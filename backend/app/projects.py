@@ -196,7 +196,29 @@ def get_project(pid: str) -> Optional[dict[str, Any]]:
     path = _project_path(pid)
     if not path.exists():
         return None
-    return json.loads(path.read_text(encoding="utf-8"))
+    raw = path.read_text(encoding="utf-8")
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError:
+        # 项目文件已损坏 (常见于旧版并发写入产生的 tmp 合并事故). 尝试截到最后一个平衡的 }
+        # 若截取后仍无法解析则视为不存在, 让 route 返回 404 而不是 500.
+        stack = 0
+        last_close = -1
+        for i, ch in enumerate(raw):
+            if ch == "{":
+                stack += 1
+            elif ch == "}":
+                stack -= 1
+                if stack == 0:
+                    last_close = i
+                    break
+        if last_close >= 0:
+            try:
+                return json.loads(raw[: last_close + 1])
+            except json.JSONDecodeError:
+                pass
+        print(f"[projects] 项目文件损坏, 视为不存在: {path.name}", flush=True)
+        return None
 
 
 def list_projects() -> list[dict[str, Any]]:

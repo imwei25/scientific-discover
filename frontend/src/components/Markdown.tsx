@@ -114,57 +114,60 @@ export default function Markdown({
   // 若每次渲染都新建函数, 其 <Mermaid> 子树会在每个 token 被 remount, debounce 计时器
   // 反复清零, 导致流式期间图表永远不渲染(要等流停下)。仅在 refInfo 变化时重建。
   const components = useMemo<Components>(
-    () => ({
-      a: ({ href, title, children }) => {
-        const link = (
-          <a href={href} target="_blank" rel="noreferrer">
-            {children}
-          </a>
-        );
-        const info = href ? refInfo?.[normCiteUrl(href)] : undefined;
-        // title 里的『支持句：…』是 AI 标注的、支持此处论断的原文原句。
-        const quote = title ? title.replace(/^支持句[:：]\s*/, "").trim() : "";
-        const body = quote || info?.finding || "";
-        if (!body) return link;
-        return (
-          <span className="cite-wrap" tabIndex={0}>
-            {link}
-            <span className="cite-pop" role="tooltip">
-              {info?.label && <span className="cite-pop-head">{info.label}</span>}
-              <span className="cite-pop-tag">{quote ? "原文支持句" : "文献要点"}</span>
-              <span className="cite-pop-body">{body}</span>
+    () => {
+      const base: Components = {
+        a: ({ href, title, children }) => {
+          const link = (
+            <a href={href} target="_blank" rel="noreferrer">
+              {children}
+            </a>
+          );
+          const info = href ? refInfo?.[normCiteUrl(href)] : undefined;
+          // title 里的『支持句：…』是 AI 标注的、支持此处论断的原文原句。
+          const quote = title ? title.replace(/^支持句[:：]\s*/, "").trim() : "";
+          const body = quote || info?.finding || "";
+          if (!body) return link;
+          return (
+            <span className="cite-wrap" tabIndex={0}>
+              {link}
+              <span className="cite-pop" role="tooltip">
+                {info?.label && <span className="cite-pop-head">{info.label}</span>}
+                <span className="cite-pop-tag">{quote ? "原文支持句" : "文献要点"}</span>
+                <span className="cite-pop-body">{body}</span>
+              </span>
             </span>
-          </span>
-        );
-      },
-      // 表格外包一层容器, 窄屏可横向滚动而不撑破布局。
-      table: ({ children }) => (
-        <div className="md-table-wrap">
-          <table>{children}</table>
-        </div>
-      ),
-      code: ({ className, children, ...props }) => {
-        if (/language-mermaid/.test(className || "")) {
-          return <Mermaid code={String(children ?? "").replace(/\n$/, "")} />;
-        }
-        return (
-          <code className={className} {...props}>
-            {children}
-          </code>
-        );
-      },
-      // 占位段视觉标注: 后端在 material 缺失时返回"[本节缺少必要材料 …]" / "[待补充 …]",
-      // 若与正文一致渲染极易被漏看, 用不同 wrapper (浅黄底 + 橙色左边框) 强提醒作者补料。
-      p: highlightPlaceholders
-        ? ({ node, children }) => {
-            const text = paragraphLeadingText(node);
-            if (isPlaceholderParagraph(text)) {
-              return <div className="imrad-placeholder">{children}</div>;
-            }
-            return <p>{children}</p>;
+          );
+        },
+        // 表格外包一层容器, 窄屏可横向滚动而不撑破布局。
+        table: ({ children }) => (
+          <div className="md-table-wrap">
+            <table>{children}</table>
+          </div>
+        ),
+        code: ({ className, children, ...props }) => {
+          if (/language-mermaid/.test(className || "")) {
+            return <Mermaid code={String(children ?? "").replace(/\n$/, "")} />;
           }
-        : undefined,
-    }),
+          return (
+            <code className={className} {...props}>
+              {children}
+            </code>
+          );
+        },
+      };
+      // 占位段视觉标注: 只在需要时才注册 p override —— 注意 react-markdown 会把
+      // components.p 当组件类型 createElement, 若为 undefined 会触发 React #130 崩溃.
+      if (highlightPlaceholders) {
+        base.p = ({ node, children }) => {
+          const text = paragraphLeadingText(node);
+          if (isPlaceholderParagraph(text)) {
+            return <div className="imrad-placeholder">{children}</div>;
+          }
+          return <p>{children}</p>;
+        };
+      }
+      return base;
+    },
     [refInfo, highlightPlaceholders],
   );
 

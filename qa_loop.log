@@ -326,3 +326,18 @@ Round 16 (2026-07-05 T~20:00, cron 第十四次触发)
    - general_cn.tex.j2: not abstract_en and not keywords_en → or (漏检修复)
  · 验证: 13/13 PASS + pytest 202/202 保持全绿, 无回归
  · R14/R15 无回归确认: R16 Agent A 独立 pytest 全量跑 202/0/0 通过
+
+Round 16 hotfix (2026-07-05 T~20:30): 用户报"实验规划模块进入时 React #130"
+ · 根因: Markdown.tsx components 里 `p: highlightPlaceholders ? fn : undefined`,
+        false 分支设了 undefined; react-markdown 拿 undefined 当组件类型
+        createElement, 触发 "Element type is invalid: got undefined" (React #130).
+        Plan 用 EditableMarkdown → Markdown 渲染 result 文本, 一定命中.
+ · 副发现: backend/app/projects.py get_project 遇 JSONDecodeError 抛 500,
+        而非 404. 旧版并发写留下的损坏 project 文件让 boot 崩. 加解析回退 +
+        清索引里的孤儿项目.
+ · 修复(2 项):
+   - Markdown.tsx: 改为条件构建 base 对象, 只在 highlightPlaceholders 为真时
+     才注册 p override, 消除 undefined 组件
+   - projects.py get_project: JSONDecodeError 时尝试截到第一个平衡 } 恢复;
+     仍失败视为 None (route 走 404); 服务端日志留痕
+ · 已 build 前端 + 手动清理 index.json 里指向已删项目的孤儿条目
