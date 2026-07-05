@@ -6,11 +6,10 @@ import { addHistory } from "../lib/history";
 import { parseAttachments, appendAttachmentsToField } from "../lib/attachments";
 import AttachmentUploadBox from "../components/AttachmentUploadBox";
 import FollowupPanel from "../components/FollowupPanel";
+import ReportExportBar from "../components/ReportExportBar";
 import EditableMarkdown from "../components/EditableMarkdown";
 import WarningPanel from "../components/WarningPanel";
-import { downloadText, downloadCsv, downloadDocxFromText, downloadPdfFromText, tsName } from "../lib/download";
-import { copyToClipboard } from "../lib/clipboard";
-import { stripSupportQuotes } from "../lib/exportPrep";
+import { downloadCsv, tsName } from "../lib/download";
 import { usePersistentState, readPersisted } from "../lib/usePersistentState";
 import type { Goto } from "../App";
 import { LiteraturePicker } from "../components/LiteraturePicker";
@@ -118,7 +117,6 @@ export default function IdeaModule({ goto }: { goto: Goto }) {
   const goStep = (n: number) => { setStep(n); if (n > maxStep) setMaxStep(n); };
 
   const [status, setStatus] = useState("");
-  const [copied, setCopied] = useState(false);
   const [refs, setRefs] = usePersistentState<Reference[]>("idea:refs", []);
   const [selectedKeys, setSelectedKeys] = usePersistentState<string[]>("idea:selected", []);
   const [refSort, setRefSort] = usePersistentState("idea:refSort", "relevance");
@@ -128,7 +126,6 @@ export default function IdeaModule({ goto }: { goto: Goto }) {
   const [verify, setVerify] = usePersistentState<Verification | null>("idea:verify", null);
   const [card, setCard] = usePersistentState<TopicCard | null>("idea:card", null);
   const [reportCollapsed, setReportCollapsed] = useState(false);
-  const [wordBusy, setWordBusy] = useState(false);
   const [running, setRunning] = useState(false); // 检索或生成进行中
   const [error, setError] = useState<string | null>(null);
   // 后端 SSE `warning` 事件累积(如检索/生成过程中的 verify_references 幻觉提示、PHI 提示)。
@@ -751,91 +748,43 @@ export default function IdeaModule({ goto }: { goto: Goto }) {
                         : "已完成")
                     : "等待生成"}
               </span>
-              <div className="result-actions">
-                {running && <button className="btn-ghost" onClick={stop} data-testid="stop-btn">停止</button>}
-                {text && !running && (
-                  <button className="btn-ghost" data-testid="toggle-report-btn" onClick={() => setReportCollapsed((v) => !v)} title={reportCollapsed ? "展开调研报告" : "折叠调研报告，突出下方选题卡"}>
-                    {reportCollapsed ? "展开报告 ▾" : "折叠报告 ▴"}
-                  </button>
-                )}
-                {text && !running && (!card || card.candidates.length === 0) && (
-                  <button className="btn-ghost" data-testid="send-to-plan-btn" onClick={() => {
-                    // Plan 里已有非空 idea 时二次确认, 避免用户 20 分钟手写的 plan:idea 被覆盖
-                    const existing = (readPersisted<string>("plan:idea", "") || "").trim();
-                    if (existing && existing !== text.trim()) {
-                      const ok = window.confirm(
-                        `实验规划页已有研究想法 (约 ${existing.length} 字), 是否用当前调研结果覆盖?`,
-                      );
-                      if (!ok) return;
-                    }
-                    const parts: string[] = [];
-                    if (field) parts.push(`[学科领域]\n${field}`);
-                    if (background) parts.push(`[相关资料 · 来自找选题]\n${background}`);
-                    goto("plan", {
-                      "plan:idea": text,
-                      "plan:materials": parts.join("\n\n"),
-                      "plan:materials:migrated": true,
-                    });
-                  }}>用此结果做实验规划 →</button>
-                )}
-                {text && !running && (
-                  <button
-                    className="btn-ghost"
-                    data-testid="copy-report-btn"
-                    onClick={async () => {
-                      const refMd = refs.length ? "\n\n## 参考文献\n" + refs.map((r) => `- [${r.first_author} (${r.year}). ${r.title}](${r.url})`).join("\n") : "";
-                      const ok = await copyToClipboard(stripSupportQuotes(text) + candidatesMd(card) + refMd);
-                      if (ok) { setCopied(true); window.setTimeout(() => setCopied(false), 1800); }
-                      else { setStatus("复制失败：浏览器未授权剪贴板，请手动选择复制"); window.setTimeout(() => setStatus((s) => (s.startsWith("复制失败") ? "" : s)), 4000); }
-                    }}
-                    title="把调研报告（含参考文献）复制到剪贴板"
-                  >
-                    {copied ? "已复制 ✓" : "复制"}
-                  </button>
-                )}
-                {text && !running && (
-                  <button
-                    className="btn-ghost"
-                    data-testid="export-md-btn"
-                    onClick={() => {
-                      const refMd = refs.length ? "\n\n## 参考文献\n" + refs.map((r) => `- [${r.first_author} (${r.year}). ${r.title}](${r.url})`).join("\n") : "";
-                      downloadText(tsName("选题调研", "md"), stripSupportQuotes(text) + candidatesMd(card) + refMd);
-                    }}
-                  >
-                    导出 Markdown
-                  </button>
-                )}
-                {text && !running && (
-                  <button
-                    className="btn-ghost" data-testid="export-docx-btn" disabled={wordBusy}
-                    onClick={async () => {
-                      setWordBusy(true);
-                      try {
-                        const refMd = refs.length ? "\n\n## 参考文献\n" + refs.map((r) => `- [${r.first_author} (${r.year}). ${r.title}](${r.url})`).join("\n") : "";
-                        await downloadDocxFromText(tsName("选题调研", "docx"), stripSupportQuotes(text) + candidatesMd(card) + refMd);
-                      } catch (e) { setStatus(`导出 Word 失败：${(e as Error).message}`); window.setTimeout(() => setStatus((s) => (s.startsWith("导出 Word 失败") ? "" : s)), 5000); }
-                      finally { setWordBusy(false); }
-                    }}
-                  >
-                    {wordBusy ? "导出中…" : "导出 Word"}
-                  </button>
-                )}
-                {text && !running && (
-                  <button
-                    className="btn-ghost" data-testid="export-pdf-btn" disabled={wordBusy}
-                    onClick={async () => {
-                      setWordBusy(true);
-                      try {
-                        const refMd = refs.length ? "\n\n## 参考文献\n" + refs.map((r) => `- [${r.first_author} (${r.year}). ${r.title}](${r.url})`).join("\n") : "";
-                        await downloadPdfFromText(tsName("选题调研", "pdf"), stripSupportQuotes(text) + candidatesMd(card) + refMd, field || "选题调研");
-                      } catch (e) { setStatus(`导出 PDF 失败：${(e as Error).message}`); window.setTimeout(() => setStatus((s) => (s.startsWith("导出 PDF 失败") ? "" : s)), 5000); }
-                      finally { setWordBusy(false); }
-                    }}
-                  >
-                    {wordBusy ? "导出中…" : "导出 PDF"}
-                  </button>
-                )}
-              </div>
+              {running && (
+                <div className="result-actions">
+                  <button className="btn-ghost" onClick={stop} data-testid="stop-btn">停止</button>
+                </div>
+              )}
+              <ReportExportBar
+                text={text}
+                refs={refs}
+                title="选题调研"
+                extraMarkdown={candidatesMd(card)}
+                running={running}
+                reportCollapsed={reportCollapsed}
+                onToggleCollapsed={() => setReportCollapsed((v) => !v)}
+                onStatus={setStatus}
+                extraLeadingActions={
+                  text && !running && (!card || card.candidates.length === 0) ? (
+                    <button className="btn-ghost" data-testid="send-to-plan-btn" onClick={() => {
+                      // Plan 里已有非空 idea 时二次确认, 避免用户 20 分钟手写的 plan:idea 被覆盖
+                      const existing = (readPersisted<string>("plan:idea", "") || "").trim();
+                      if (existing && existing !== text.trim()) {
+                        const ok = window.confirm(
+                          `实验规划页已有研究想法 (约 ${existing.length} 字), 是否用当前调研结果覆盖?`,
+                        );
+                        if (!ok) return;
+                      }
+                      const parts: string[] = [];
+                      if (field) parts.push(`[学科领域]\n${field}`);
+                      if (background) parts.push(`[相关资料 · 来自找选题]\n${background}`);
+                      goto("plan", {
+                        "plan:idea": text,
+                        "plan:materials": parts.join("\n\n"),
+                        "plan:materials:migrated": true,
+                      });
+                    }}>用此结果做实验规划 →</button>
+                  ) : null
+                }
+              />
             </div>
             {reportCollapsed && text && !running && (
               <button className="report-collapsed-bar" data-testid="report-collapsed" onClick={() => setReportCollapsed(false)} title="点击展开调研报告">
