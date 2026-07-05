@@ -1485,7 +1485,7 @@ export async function streamDeepResearch(payload: DeepResearchPayload, cb: DeepR
   }, cb.onError);
 }
 
-export async function streamDeepResearchRecommend(
+export async function fetchDeepResearchRecommend(
   payload: { question: string; refs: { ref_key: string; title: string; abstract: string }[] },
 ): Promise<{ ok: boolean; items?: RecommendItem[]; error?: string }> {
   const r = await fetch(apiUrl("/api/deep_research/recommend"), {

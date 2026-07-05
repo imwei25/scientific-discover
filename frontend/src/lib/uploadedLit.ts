@@ -48,5 +48,8 @@ export function uploadedToReference(u: UploadedRef): Reference & { upload_id: st
 
 /** 前端估算深读 token 成本 (~4 char/token; 章节截断预算 8k/篇)。*/
 export function estimateDeepReadTokens(refs: { page_count?: number }[]): number {
-  return refs.reduce((sum, r) => sum + Math.min(8000, (r.page_count ?? 8) * 500), 0);
+  return refs.reduce((sum, r) => {
+    const pages = r.page_count && r.page_count > 0 ? r.page_count : 8;
+    return sum + Math.min(8000, pages * 500);
+  }, 0);
 }
