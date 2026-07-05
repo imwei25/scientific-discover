@@ -364,10 +364,22 @@ async def edit_ep(req: RunRequest) -> JSONResponse:
     try:
         return JSONResponse(await surgical_edit(req.inputs))
     except LLMError as e:
-        return JSONResponse({"edits": [], "mode": "none", "note": str(e)}, status_code=200)
+        # LLM 层错误 (401/429/上游 500) → 502 让前端能明确区分 vs 成功空补丁
+        return JSONResponse(
+            status_code=502,
+            content={"ok": False, "error": f"AI 精修调用失败: {str(e)[:200]}"},
+        )
     except Exception as e:  # noqa: BLE001
         log_swallow("AI 精修端点异常", e)
-        return JSONResponse({"edits": [], "mode": "none", "note": f"精修出错: {type(e).__name__}"}, status_code=200)
+        # 原返 200 假成功 + type(e).__name__ 泄漏; 改 500 + 中文人话, 类型入 detail
+        return JSONResponse(
+            status_code=500,
+            content={
+                "ok": False,
+                "error": "AI 精修暂时不可用, 请稍后重试。",
+                "detail": f"{type(e).__name__}: {e}",
+            },
+        )
 
 
 @router.post("/api/refs/extract-evidence")

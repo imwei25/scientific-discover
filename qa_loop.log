@@ -231,3 +231,23 @@ Round 12 (2026-07-05 T~18:00, cron 第十次触发)
    - doctor.py _check_env: 实际 httpx.get {base_url}/models 探测 (5s timeout),
      401/403 → bad + 具体中文建议, 网络故障 → warn (离线不算全红)
  · 验证: 9/9 PASS (含 4 项 R1-R11 回归)
+
+Round 13 (2026-07-05 T~18:30, cron 第十一次触发)
+ · 测过: 后端 pytest 全套 (202 tests, 4 fail), 前端 e2e testid cross-check,
+         R12 未修的契约违规回访, 全局异常处理
+ · 发现 P1:
+   1. 无全局 RequestValidationError handler → 10+ 端点返英文 pydantic 422
+   2. FastAPI 默认 404 返 "Not Found" (英文) 与项目 {ok:false,error} 约定不一致
+   3. projects.py 4 处 HTTPException detail 是英文 (invalid uuid / not found 等)
+   4. /api/edit 异常返 200 假成功 + 泄漏 type(e).__name__ 到 UI
+   5. test_followup_endpoints.py 4 处 fail: 其他 test 文件模块级 settings.mock=False
+      污染, mock 用例走真实 LLM 401 (测试隔离缺陷)
+   6. e2e.spec.ts 11 处 testid 引用不存在的元素 (12 轮重构累计遗留, 未修属大改)
+ · 修复(4 项一次收敛大批):
+   - main.py: 全局 @exception_handler(RequestValidationError) + StarletteHTTPException,
+     一处改动收敛 10+ 端点 422 中文 + 404/405 中文 + shape 统一 {ok:false,error}
+   - conftest.py 新增: autouse fixture 每 test 复位 settings.mock=True, 消除隔离污染
+   - text_gen.py /api/edit: LLMError → 502, 其他 → 500, type(e) 归 detail 字段, 不再假 200
+   - projects.py 4 处 HTTPException detail 中文化 (invalid uuid → 项目 id 格式不正确)
+ · 验证: 14/14 PASS (含 4 项 R1-R12 回归 + 7/7 followup pytest 从 4 fail 转全绿)
+ · 注: e2e.spec.ts 11 处 testid 悬挂留待后续单独轮次批量修 (11 处 diff 分散风险高)

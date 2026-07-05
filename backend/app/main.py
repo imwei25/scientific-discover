@@ -18,9 +18,12 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from .config import settings
 from .http_common import MAX_UPLOAD_BYTES, _read_capped, _sse  # noqa: F401 — 测试与旧代码从 main 导入
@@ -48,6 +51,64 @@ app.include_router(text_gen_router)
 app.include_router(analysis_router)
 app.include_router(manuscript_router)
 app.include_router(projects_router)
+
+
+# ── 全局错误 handler: 把 FastAPI 默认的英文 detail 翻译成项目主流的中文 JSON ──
+# 之前 20+ 端点 pydantic 422 直接透出英文 detail 数组; 404 直接透 "Not Found";
+# 前端不好统一展示. 现在挂两个 handler 一次收敛.
+
+def _validation_message(errs: list[dict]) -> str:
+    """把 pydantic errors 数组压成一行中文人话."""
+    if not errs:
+        return "参数校验失败"
+    parts: list[str] = []
+    for err in errs[:3]:  # 最多列 3 条, 避免过长
+        loc = ".".join(str(x) for x in err.get("loc", []) if x != "body")
+        etype = err.get("type", "")
+        if etype == "missing":
+            parts.append(f"缺少必填字段 {loc}" if loc else "缺少必填字段")
+        elif "type_error" in etype or "value_error" in etype or etype.startswith("type_"):
+            parts.append(f"字段 {loc} 类型错误" if loc else "字段类型错误")
+        else:
+            msg = err.get("msg") or "校验失败"
+            parts.append(f"{loc}: {msg}" if loc else msg)
+    if len(errs) > 3:
+        parts.append(f"(还有 {len(errs) - 3} 处)")
+    return "; ".join(parts)
+
+
+@app.exception_handler(RequestValidationError)
+async def _handle_validation_error(request: Request, exc: RequestValidationError):
+    return JSONResponse(
+        status_code=422,
+        content={
+            "ok": False,
+            "error": f"请求参数错误: {_validation_message(exc.errors())}",
+            "detail": exc.errors(),
+        },
+    )
+
+
+@app.exception_handler(StarletteHTTPException)
+async def _handle_http_exception(request: Request, exc: StarletteHTTPException):
+    # 400/404/405 等 FastAPI 默认 detail 是英文 (如 "Not Found"); 与项目 {ok,error} 约定不一致.
+    # 二进制/文件响应仍走各 route 的自定义 Response, 这里只处理 JSON.
+    detail_str = str(exc.detail) if exc.detail else ""
+    # 若 detail 是 FastAPI 默认英文占位, 用中文覆盖; 若 route 显式 raise 带 detail, 保留 (可能已中文).
+    _DEFAULTS = {"Not Found", "Method Not Allowed", "Internal Server Error"}
+    if detail_str in _DEFAULTS or not detail_str:
+        if exc.status_code == 404:
+            msg = "接口不存在或路径拼写错误"
+        elif exc.status_code == 405:
+            msg = "该接口不支持此请求方法"
+        else:
+            msg = "服务出错"
+    else:
+        msg = detail_str
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={"ok": False, "error": msg},
+    )
 
 
 # 若前端已构建(frontend/dist 存在), 由本服务直接托管, 实现“单进程”部署:

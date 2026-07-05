@@ -273,6 +273,7 @@ def route_create(body: CreateBody) -> dict[str, Any]:
     try:
         return create_project(id=body.id, name=body.name)
     except ValueError as e:
+        # create_project 抛的 ValueError 已经是中文 (R10 修复)
         raise HTTPException(status_code=400, detail=str(e))
 
 
@@ -281,10 +282,10 @@ def route_get(pid: str) -> dict[str, Any]:
     try:
         _validate_uuid(pid)
     except ValueError:
-        raise HTTPException(status_code=400, detail=f"invalid project id: {pid!r}")
+        raise HTTPException(status_code=400, detail=f"项目 id 格式不正确: {pid}")
     p = get_project(pid)
     if p is None:
-        raise HTTPException(status_code=404, detail=f"project {pid} not found")
+        raise HTTPException(status_code=404, detail=f"项目 {pid} 不存在或已删除")
     return p
 
 
@@ -293,13 +294,13 @@ def route_update_state(pid: str, body: UpdateStateBody) -> dict[str, Any]:
     try:
         _validate_uuid(pid)
     except ValueError:
-        raise HTTPException(status_code=400, detail=f"invalid project id: {pid!r}")
+        raise HTTPException(status_code=400, detail=f"项目 id 格式不正确: {pid}")
     try:
         return update_state(pid, state=body.state, history=body.history)
     except KeyError:
-        raise HTTPException(status_code=404, detail=f"project {pid} not found")
+        raise HTTPException(status_code=404, detail=f"项目 {pid} 不存在或已删除")
     except PayloadTooLarge as e:
-        raise HTTPException(status_code=413, detail=str(e))
+        raise HTTPException(status_code=413, detail=f"项目数据过大: {e}")
 
 
 @router.patch("/{pid}")
@@ -307,11 +308,14 @@ def route_rename(pid: str, body: RenameBody) -> dict[str, Any]:
     try:
         _validate_uuid(pid)
     except ValueError:
-        raise HTTPException(status_code=400, detail=f"invalid project id: {pid!r}")
+        raise HTTPException(status_code=400, detail=f"项目 id 格式不正确: {pid}")
     try:
         return rename_project(pid, body.name)
+    except ValueError as e:
+        # rename_project 抛的 ValueError 已中文 (R10)
+        raise HTTPException(status_code=400, detail=str(e))
     except KeyError:
-        raise HTTPException(status_code=404, detail=f"project {pid} not found")
+        raise HTTPException(status_code=404, detail=f"项目 {pid} 不存在或已删除")
 
 
 @router.delete("/{pid}", status_code=204, response_model=None)
@@ -319,6 +323,6 @@ def route_delete(pid: str) -> None:
     try:
         _validate_uuid(pid)
     except ValueError:
-        raise HTTPException(status_code=400, detail=f"invalid project id: {pid!r}")
+        raise HTTPException(status_code=400, detail=f"项目 id 格式不正确: {pid}")
     if not delete_project(pid):
-        raise HTTPException(status_code=404, detail=f"project {pid} not found")
+        raise HTTPException(status_code=404, detail=f"项目 {pid} 不存在或已删除")
