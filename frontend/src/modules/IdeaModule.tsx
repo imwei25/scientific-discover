@@ -5,7 +5,7 @@ import { reportLLMError } from "../lib/errorToast";
 import { addHistory } from "../lib/history";
 import { parseAttachments, appendAttachmentsToField } from "../lib/attachments";
 import AttachmentUploadBox from "../components/AttachmentUploadBox";
-import Markdown from "../components/Markdown";
+import FollowupPanel from "../components/FollowupPanel";
 import EditableMarkdown from "../components/EditableMarkdown";
 import WarningPanel from "../components/WarningPanel";
 import { downloadText, downloadCsv, downloadDocxFromText, downloadPdfFromText, tsName } from "../lib/download";
@@ -105,7 +105,8 @@ export default function IdeaModule({ goto }: { goto: Goto }) {
   const [depth, setDepth] = usePersistentState("idea:depth", "deep");
   // 时间筛选改为「最近 N 年」: ""=不限, "1".."5"=近 N 年; 默认近 3 年。
   const [yearsBack, setYearsBack] = usePersistentState("idea:yearsBack", "3");
-  const [studyTypes, setStudyTypes] = usePersistentState<string[]>("idea:studyTypes", STUDY_TYPES.map((s) => s.key));
+  // key 带 v2: 语义从"全不勾=不限"改为"勾选=保留"后, 让旧的空数组失效, 回落到全勾默认。
+  const [studyTypes, setStudyTypes] = usePersistentState<string[]>("idea:studyTypes:v2", STUDY_TYPES.map((s) => s.key));
   const [impactMin, setImpactMin] = usePersistentState("idea:impactMin", "");
   const [minQuartile, setMinQuartile] = usePersistentState("idea:minQuartile", "");
   const [keepUnknownImpact, setKeepUnknownImpact] = usePersistentState("idea:keepUnknownImpact", true);
@@ -139,11 +140,6 @@ export default function IdeaModule({ goto }: { goto: Goto }) {
 
   // 追问 / 修改报告
   const [followups, setFollowups] = usePersistentState<{ q: string; a: string }[]>("idea:qa", []);
-  const [followupInput, setFollowupInput] = useState("");
-  const [currentAnswer, setCurrentAnswer] = useState("");
-  const [fRunning, setFRunning] = useState(false);
-  const [fError, setFError] = useState<string | null>(null);
-  const fctrl = useRef<AbortController | null>(null);
 
   // 第 1 步「相关资料」附件: 添加时不解析,提交任务时才解析并注入 payload。
   const [pendingAttachments, setPendingAttachments] = useState<File[]>([]);
@@ -203,8 +199,6 @@ export default function IdeaModule({ goto }: { goto: Goto }) {
         return;
       }
     }
-    fctrl.current?.abort();
-    setFRunning(false);
     setStatus("");
     setError(null);
     setRewrite(null);
@@ -271,8 +265,6 @@ export default function IdeaModule({ goto }: { goto: Goto }) {
         return;
       }
     }
-    fctrl.current?.abort();
-    setFRunning(false);
     setError(null);
     setStatus("");
     setText("");
@@ -336,32 +328,6 @@ export default function IdeaModule({ goto }: { goto: Goto }) {
     setStatus("");
   };
 
-  const runFollowup = async (mode: "ask" | "revise") => {
-    const q = followupInput.trim();
-    if (!q || fRunning || running) return;
-    setFError(null);
-    setFRunning(true);
-    fctrl.current = new AbortController();
-    const baseReport = text;
-    let buf = "";
-    if (mode === "ask") setCurrentAnswer("…");
-    else setText("");
-    await streamIdeaFollowup(
-      { mode, question: q, report: baseReport, references: refs, evidence, english_report: englishReport },
-      {
-        signal: fctrl.current.signal,
-        onDelta: (t) => { buf += t; if (mode === "ask") setCurrentAnswer(buf); else setText((p) => p + t); },
-        onVerify: (v) => { if (mode === "revise") setVerify(v); },
-        onError: (m) => { setFError(m); setFRunning(false); if (mode === "revise") setText(baseReport); reportLLMError(m); },
-        onDone: () => {
-          if (mode === "ask") { setFollowups((prev) => [...prev, { q, a: buf }]); setCurrentAnswer(""); }
-          setFollowupInput(""); setFRunning(false); window.dispatchEvent(new Event("usage-updated"));
-        },
-      },
-    );
-    setFRunning(false);
-  };
-
   const toggleStudyType = (key: string) => {
     setStudyTypes((prev) => (prev.includes(key) ? prev.filter((s) => s !== key) : [...prev, key]));
   };
@@ -410,8 +376,7 @@ export default function IdeaModule({ goto }: { goto: Goto }) {
       if (!ok) return;
     }
     if (running) stop();
-    fctrl.current?.abort();
-    setFollowups([]); setCurrentAnswer(""); setFollowupInput(""); setFError(null);
+    setFollowups([]);
     setField(""); setKeywords(""); setBackground("");
     setRefs([]); setSelectedKeys([]); setTrials([]); setEvidence([]);
     setText(""); setVerify(null); setCard(null);
@@ -1001,38 +966,44 @@ export default function IdeaModule({ goto }: { goto: Goto }) {
           )}
 
           {text && !running && (
-            <div className="followup" data-testid="followup">
-              <div className="followup-head">追问 / 修改意见</div>
-              <p className="followup-tip">可针对某篇文献或某条结论追问，或提出意见让 AI 修订报告。回答仍只基于本次检索到的真实文献。</p>
-              {followups.length > 0 && (
-                <div className="qa-list" data-testid="qa-list">
-                  {followups.map((qa, i) => (
-                    <div key={i} className="qa-item">
-                      <div className="qa-q">❓ {qa.q}</div>
-                      <div className="qa-a"><Markdown>{qa.a}</Markdown></div>
-                    </div>
-                  ))}
-                </div>
-              )}
-              {fRunning && currentAnswer && (
-                <div className="qa-item"><div className="qa-a"><Markdown>{currentAnswer}</Markdown><span className="cursor-blink">▍</span></div></div>
-              )}
-              <textarea
-                data-testid="followup-input"
-                value={followupInput}
-                onChange={(e) => setFollowupInput(e.target.value)}
-                placeholder="例如：第 3 篇的样本量是多少？/ 请把候选选题三改成偏机制研究 / 研究空白这部分再具体些"
-                rows={2}
-                disabled={fRunning}
-              />
-              {fError && <div className="result-error">{fError}</div>}
-              <div className="form-actions">
-                <button className="btn-primary" data-testid="ask-btn" onClick={() => runFollowup("ask")} disabled={!followupInput.trim() || fRunning}>追问</button>
-                <button className="btn-ghost" data-testid="revise-btn" onClick={() => runFollowup("revise")} disabled={!followupInput.trim() || fRunning}>按此修改报告</button>
-                {fRunning && <button className="btn-ghost" data-testid="followup-stop-btn" onClick={() => { fctrl.current?.abort(); setFRunning(false); }}>停止</button>}
-                {fRunning && <span className="status-line"><span className="spinner" /> 处理中…</span>}
-              </div>
-            </div>
+            <FollowupPanel
+              testId="followup"
+              followups={followups}
+              onAddFollowup={(item) => setFollowups((prev) => [...prev, item])}
+              onReviseReport={setText}
+              onVerifyUpdate={(v) => setVerify(v as Verification)}
+              streamFn={(payload, cb) => {
+                const baseReport = text;
+                return streamIdeaFollowup(
+                  {
+                    mode: payload.mode,
+                    question: payload.question,
+                    report: payload.report,
+                    references: payload.references,
+                    evidence: payload.evidence,
+                    english_report: payload.english_report,
+                  },
+                  {
+                    signal: cb.signal,
+                    onDelta: cb.onDelta,
+                    onVerify: (v) => cb.onVerify?.(v),
+                    onError: (m) => {
+                      cb.onError(m);
+                      if (payload.mode === "revise") setText(baseReport);
+                      reportLLMError(m);
+                    },
+                    onDone: () => {
+                      cb.onDone();
+                      window.dispatchEvent(new Event("usage-updated"));
+                    },
+                  },
+                );
+              }}
+              currentReport={text}
+              references={refs}
+              evidence={evidence}
+              englishReport={englishReport}
+            />
           )}
 
           <div className="wiz-nav">
