@@ -29,10 +29,12 @@ _BULLET = re.compile(r"^[-*]\s+")
 # Markdown 标题: 1-6 个 # + 可选空格(AI 写中文常漏空格, 如 ###立项依据) + 标题文字。
 # 容忍漏空格与 #### 以上层级, 避免把 ### 这类记号原样导出到成稿里。
 _HEADING = re.compile(r"^(#{1,6})\s*(\S.*?)\s*$")
-# 行内标记(供导出成稿): **加粗** 或 [链接文本](url)。链接可能残留 title(支持句), 一并吞掉丢弃。
+# 行内标记(供导出成稿): **加粗** 或 [链接文本](url) 或 $行内数学$ (降级为斜体)。
+# 链接可能残留 title(支持句), 一并吞掉丢弃。Word 无 OMML 复杂公式支持时至少保留 italic 视觉.
 _INLINE = re.compile(
     r"\*\*(.+?)\*\*"
     r"|\[([^\]]+)\]\((https?://[^)\s]+)(?:\s+\"[^\"]*\")?\)"
+    r"|\$([^\$\n]+)\$"
 )
 # 独占一行的内嵌图片(mermaid 渲染成的 PNG data URL): ![alt](data:image/png;base64,XXXX)。
 _IMG_DATA = re.compile(r'^!\[[^\]]*\]\(data:image/(png|jpe?g);base64,([A-Za-z0-9+/=]+)\)\s*$')
@@ -78,8 +80,11 @@ def _add_inline(paragraph, text: str) -> None:
         if m.group(1) is not None:  # 加粗
             run = paragraph.add_run(m.group(1))
             run.bold = True
-        else:  # 链接: group(2)=文本, group(3)=url
+        elif m.group(2) is not None:  # 链接: group(2)=文本, group(3)=url
             _add_hyperlink(paragraph, m.group(3), m.group(2))
+        else:  # $行内数学$ 降级为斜体, Word 无原生 markdown math 支持
+            run = paragraph.add_run(m.group(4))
+            run.italic = True
         pos = m.end()
     if pos < len(text):
         paragraph.add_run(text[pos:])

@@ -293,9 +293,14 @@ def _preprocess_cjk_names(csl_json: list[dict], style_name: str | None = None) -
 
 
 def _postprocess_line(line: str, item: dict) -> str:
-    """英文条目把中文 et-al 词「等」修正为「et al」。中文条目保持不动。"""
+    """英文条目把中文 et-al 词「等」修正为「et al」。中文条目保持不动。
+    另清理 Vancouver 缺 volume/issue/page 时残留的 ";." 尾巴。"""
     if not _entry_is_chinese(item):
-        return line.replace("等", "et al")
+        line = line.replace("等", "et al")
+    # 缺字段导致 CSL 输出 "2020;." "2020;." "2024Mar;." 等尾巴, 清理成 "2020." 等
+    import re as _re
+    line = _re.sub(r";\s*\.", ".", line)
+    line = _re.sub(r"\.\s*\.", ".", line)  # 顺带清理双点
     return line
 
 

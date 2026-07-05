@@ -112,6 +112,10 @@ def _classify(parsed, p_comp) -> str:
         consistent = p_comp > p_rep
     if consistent:
         return "consistent"
+    # 边界情况: 报 p<0.05 但计算 0.045-0.055 → 显著性判定"擦边过", 不算真正决策错误.
+    # 用户看到 borderline 不至一片红, 但仍提示需人工核对.
+    if 0.045 <= p_comp <= 0.055 and rep_sig != comp_sig:
+        return "borderline"
     return "decision_error" if rep_sig != comp_sig else "inconsistent"
 
 

@@ -251,3 +251,43 @@ Round 13 (2026-07-05 T~18:30, cron 第十一次触发)
    - projects.py 4 处 HTTPException detail 中文化 (invalid uuid → 项目 id 格式不正确)
  · 验证: 14/14 PASS (含 4 项 R1-R12 回归 + 7/7 followup pytest 从 4 fail 转全绿)
  · 注: e2e.spec.ts 11 处 testid 悬挂留待后续单独轮次批量修 (11 处 diff 分散风险高)
+
+Round 14 (2026-07-05 T~19:00, cron 第十二次触发 + D6/D7/D8 + 5 类C + T2A/T3 大批处理)
+ · 测过: 全项目 str(e) 消毒扫描, manuscript.py text/plain, class-C 长期悬挂项,
+         DiffView 二次确认, CommandPalette a11y
+ · 发现 P1 (来自 R13):
+   1. 15+ 处 `f"...: {e}"` 用户可见, 泄漏英文异常/文件路径
+   2. manuscript.py 5 处 400/500/503 用 Response(text/plain) 而非 JSON
+   3. Vancouver 缺字段 ";." 尾巴 (R7 长期)
+   4. statcheck 边界 p=0.05 过严 (R7 长期)
+   5. formatting.py $E=mc^2$ 不渲染 (R9 长期)
+   6. deidentify scan_text 缺银行卡 (R7 长期)
+   7. LaTeX Nature 只标题输出全部 back_matter (R9 长期)
+   8. DiffView 无二次确认 (R6 长期)
+   9. CommandPalette 结果无 listbox 语义, 屏幕阅读器听不到 (R10 长期)
+ · 修复(15+ 项 batch, 3 个类别):
+   D8 (backend str(e) 消毒, 15 处):
+   - analysis_routes.py: forest/km/roc/sweep 4 处 error 改中文 + type(e) 归 detail
+   - manuscript.py: deid_scan/deid_apply/refs_import/zotero×3/ethics render 500 改
+   - system.py: config_save + save-vlm 改
+   - text_gen.py: SSE `内部错误: {e}` 3 处改 + /api/edit 已在 R13 改
+   D7 (manuscript.py 5 处 text/plain → JSONResponse):
+   - /api/bundle empty / /api/docx empty / /api/refs/export empty
+   - /api/pdf ImportError (503) 与 Exception (500)
+   - /api/ethics/render ValueError (400)
+   - 补 import JSONResponse (verify 首轮漏, 补后全绿)
+   类 C 五项:
+   - citations.py _postprocess_line: 正则清 ";." 尾巴 + 双点
+   - statcheck.py _classify: p_comp 0.045-0.055 且 rep_sig 反转 → borderline
+   - formatting.py _INLINE + _add_inline: $行内数学$ 降级为斜体 run
+   - deidentify.py scan_text: checks 加 ("bank", _RE_BANK, None)
+   - nature.tex.j2 back_matter: {% if abstract or sections %} 保护
+   T 系(a11y):
+   - DiffView.tsx 接受全部前 window.confirm "此操作不可撤销"
+   - CommandPalette.tsx: input role=combobox + aria-controls/expanded/activedescendant;
+     results role=listbox + id; items role=option + aria-selected + tabIndex=-1
+ · 决策注:
+   - D6 (11 处 e2e testid 悬挂): 需要跑 Playwright 对照, 单独轮次
+   - T1 (CanvasEditor 跨路由 undo): Tiptap history plugin 序列化 = 30+ 行内部字段, 超出小改, 留专题
+   - T2 B (undo push): 依赖 T1 落地
+ · 验证: 27/27 PASS (首轮 22/27, manuscript.py 少 import JSONResponse, 补后全绿)

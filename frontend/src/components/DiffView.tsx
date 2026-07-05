@@ -108,7 +108,13 @@ export default function DiffView({
             </button>
             <button
               className="diff-btn-primary"
-              onClick={onAccept}
+              onClick={() => {
+                // 二次确认: 接受后原文即被覆盖, 且当前 undo 栈可能因 SSE delta 已被清空 (R6 P1),
+                // 用户误点无法回滚. 先给一个明确的 confirm.
+                if (window.confirm("确认接受全部改动? 原文将被替换, 此操作不可撤销。")) {
+                  onAccept();
+                }
+              }}
               data-testid="diff-accept"
             >
               接受全部

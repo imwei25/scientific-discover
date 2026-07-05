@@ -217,7 +217,7 @@ async def analyze_forest(req: ForestRequest) -> dict:
             "haldane_corrected_count": out.get("haldane_corrected_count", 0),
         }
     except Exception as e:  # noqa: BLE001
-        return {"ok": False, "error": f"森林图生成失败: {e}"}
+        return {"ok": False, "error": "森林图生成失败, 请检查各研究的事件/样本量列。", "detail": f"{type(e).__name__}: {e}"}
 
 
 @router.post("/api/analyze/km")
@@ -263,7 +263,7 @@ async def analyze_km(
             "groups": out["groups"],
         }
     except Exception as e:  # noqa: BLE001
-        return {"ok": False, "error": f"KM 曲线生成失败: {e}"}
+        return {"ok": False, "error": "KM 曲线生成失败, 请检查时间/事件/分组列是否正确。", "detail": f"{type(e).__name__}: {e}"}
 
 
 @router.post("/api/analyze/roc")
@@ -304,7 +304,7 @@ async def analyze_roc(
             "threshold": out["optimal_threshold"],
         }
     except Exception as e:  # noqa: BLE001
-        return {"ok": False, "error": f"ROC 曲线生成失败: {e}"}
+        return {"ok": False, "error": "ROC 曲线生成失败, 请检查真实值/预测值列是否为数值。", "detail": f"{type(e).__name__}: {e}"}
 
 
 # ----- 样本量扫描 -----
@@ -325,4 +325,4 @@ async def samplesize_sweep(req: SampleSizeSweepRequest) -> dict:
         pts = sweep(req.scenario, req.fixed_params, req.vary, req.range_values)
         return {"ok": True, "points": [{"value": v, "n": n} for v, n in pts]}
     except Exception as e:  # noqa: BLE001
-        return {"ok": False, "error": f"sweep 失败: {e}"}
+        return {"ok": False, "error": "样本量曲线生成失败, 请核对固定参数和扫描范围。", "detail": f"{type(e).__name__}: {e}"}

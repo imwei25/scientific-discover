@@ -263,6 +263,8 @@ def scan_text(text: str) -> dict:
         ("name", _RE_NAME_SUBSTR, None),
         ("mrn", _RE_MRN_SUBSTR, None),
         ("address", _RE_ADDRESS, None),
+        # 银行卡: 13-19 位连号数字 (原来只有 apply() 单元格模式查, 自由文本一致对齐)
+        ("bank", _RE_BANK, None),
     ]
     for kind, rx, validator in checks:
         found = []

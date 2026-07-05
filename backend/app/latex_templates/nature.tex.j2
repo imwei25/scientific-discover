@@ -33,7 +33,8 @@ $^{*}$通讯作者: \href{mailto:[email]}{[email]}
 {% block keywords_block %}%% Nature 用 Subject terms; 部分子刊可能不需要, 提交前请对照 Author Guide
 \noindent\textbf{Subject terms:} {{ keywords }}\par\bigskip
 {% endblock %}
-{% block back_matter %}
+{% block back_matter %}{# 仅当稿件至少有 abstract 或章节时才输出强制章节, 避免"只标题"导出一堆空 back_matter #}
+{% if abstract or sections %}
 \section*{Data availability}
 [请描述: 本研究产生/分析的数据在哪里可获得? 例如: The datasets generated during the current study are available in the [NAME] repository, [PERSISTENT WEB LINK]. 或 Data are available from the corresponding author on reasonable request.]
 
@@ -48,4 +49,5 @@ The authors declare no competing interests.
 
 \section*{Acknowledgements}
 [请列出资助来源、基金编号, 以及非作者贡献者的致谢。]
+{% endif %}
 {% endblock %}

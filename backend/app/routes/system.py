@@ -147,7 +147,7 @@ async def config_save(req: SaveConfigRequest, request: Request) -> dict:
         settings.reload()
         return {"ok": True}
     except Exception as e:  # noqa: BLE001
-        return {"ok": False, "error": f"保存失败: {e}"}
+        return {"ok": False, "error": "保存失败, 请确认 backend/.env 可写入。", "detail": f"{type(e).__name__}: {e}"}
 
 
 @router.post("/api/config/save-vlm")
@@ -186,4 +186,4 @@ async def config_save_vlm(req: SaveVlmConfigRequest, request: Request) -> dict:
         settings.reload()
         return {"ok": True, "vlm_configured": settings.has_vlm}
     except Exception as e:  # noqa: BLE001
-        return {"ok": False, "error": f"保存失败: {e}"}
+        return {"ok": False, "error": "保存失败, 请确认 backend/.env 可写入。", "detail": f"{type(e).__name__}: {e}"}

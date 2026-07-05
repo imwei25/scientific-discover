@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 
 from fastapi import APIRouter, File, Form, UploadFile
-from fastapi.responses import Response
+from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel, Field, model_validator
 
 from ..http_common import _read_capped
@@ -158,10 +158,9 @@ async def bundle(req: BundleRequest) -> Response:
     # 全空(所有 files/docx 内容都空) → 明确 400, 避免下发 22 字节空 ZIP 误导用户
     all_files = list(req.files or []) + list(req.docx or [])
     if not any((f.content or "").strip() for f in all_files):
-        return Response(
-            content="请至少选择一项要打包的产物（正文、参考文献或 docx 章节均可）。".encode("utf-8"),
+        return JSONResponse(
             status_code=400,
-            media_type="text/plain; charset=utf-8",
+            content={"ok": False, "error": "请至少选择一项要打包的产物（正文、参考文献或 docx 章节均可）。"},
         )
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
@@ -184,10 +183,9 @@ async def bundle(req: BundleRequest) -> Response:
 async def docx(req: DocxRequest) -> Response:
     # 空正文: 与 /api/latex 保持一致返回 400 中文, 而非静默产出 36KB 空 docx 让用户误以为已导出
     if not (req.text or "").strip():
-        return Response(
-            content="请先提供稿件内容再导出 Word。".encode("utf-8"),
+        return JSONResponse(
             status_code=400,
-            media_type="text/plain; charset=utf-8",
+            content={"ok": False, "error": "请先提供稿件内容再导出 Word。"},
         )
     from ..formatting import build_docx
 
@@ -210,24 +208,19 @@ async def pdf(req: PdfRequest) -> Response:
     try:
         from ..pdfexport import build_pdf
     except ImportError as e:
-        # 常见于本机 Python 解释器未装 reportlab (例如启动脚本用了 anaconda 而非 backend/.venv)
-        return Response(
-            content=(
-                "PDF 导出组件未安装(reportlab)，无法生成 PDF。\n"
-                "请改用「导出 Word 」或「导出 Markdown 」；\n"
-                f"或让管理员在当前 Python 环境安装: pip install reportlab\n\n(详细: {e})"
-            ).encode("utf-8"),
-            status_code=503,
-            media_type="text/plain; charset=utf-8",
-        )
+        return JSONResponse(status_code=503, content={
+            "ok": False,
+            "error": "PDF 导出组件未安装(reportlab), 无法生成 PDF。请改用「导出 Word」或「导出 Markdown」; 或让管理员在当前 Python 环境安装: pip install reportlab",
+            "detail": f"{type(e).__name__}: {e}",
+        })
     try:
         data = build_pdf(req.text, req.title)
     except Exception as e:  # noqa: BLE001
-        return Response(
-            content=f"PDF 生成失败，请改用 Word 或 Markdown 导出。(详细: {e})".encode("utf-8"),
-            status_code=500,
-            media_type="text/plain; charset=utf-8",
-        )
+        return JSONResponse(status_code=500, content={
+            "ok": False,
+            "error": "PDF 生成失败, 请改用 Word 或 Markdown 导出。",
+            "detail": f"{type(e).__name__}: {e}",
+        })
     return Response(
         content=data,
         media_type="application/pdf",
@@ -249,7 +242,7 @@ async def deidentify_scan(file: UploadFile = File(...)) -> dict:
         report = scan(content, file.filename or "data.csv")
         return {"ok": True, **report}
     except Exception as e:  # noqa: BLE001
-        return {"ok": False, "error": f"扫描失败: {e}"}
+        return {"ok": False, "error": "PHI 扫描失败, 请确认文件格式正确(CSV/XLSX)。", "detail": f"{type(e).__name__}: {e}"}
 
 
 @router.post("/api/deidentify/apply")
@@ -280,7 +273,7 @@ async def deidentify_apply(
             "mapping": mapping,
         }
     except Exception as e:  # noqa: BLE001
-        return {"ok": False, "error": f"脱敏失败: {e}"}
+        return {"ok": False, "error": "脱敏处理失败, 请确认所选列在文件中存在。", "detail": f"{type(e).__name__}: {e}"}
 
 
 # ----- 引用导入导出 -----
@@ -302,7 +295,7 @@ async def refs_import(
         # refio.parse 抛出 ValueError 表示文件格式损坏, 明确 400 提示用户
         return {"ok": False, "error": str(e)}
     except Exception as e:  # noqa: BLE001
-        return {"ok": False, "error": f"解析失败: {e}"}
+        return {"ok": False, "error": "解析文献失败, 请确认文件格式与所选类型匹配 (RIS/BibTeX/EndNote)。", "detail": f"{type(e).__name__}: {e}"}
     if not refs:
         return {"ok": False, "error": "未从文件中解析出任何参考文献。请确认格式选择是否正确 (RIS/BibTeX/EndNote)。"}
     return {"ok": True, "refs": refs}
@@ -320,16 +313,15 @@ async def refs_export(req: RefsExportRequest) -> Response:
 
     # 空列表: 明确 400, 避免下发 0 字节 .ris/.bib 让 EndNote/Zotero 报"文件损坏"
     if not (req.refs or []):
-        return Response(
-            content="请先勾选参考文献再导出（当前没有可导出的条目）。".encode("utf-8"),
+        return JSONResponse(
             status_code=400,
-            media_type="text/plain; charset=utf-8",
+            content={"ok": False, "error": "请先勾选参考文献再导出（当前没有可导出的条目）。"},
         )
     try:
         refs = await enrich_refs(list(req.refs or []))
         data = serialize(refs, req.format)
     except ValueError as e:
-        return Response(content=str(e).encode("utf-8"), status_code=400, media_type="text/plain")
+        return JSONResponse(status_code=400, content={"ok": False, "error": str(e)})
     ext = (req.format or "ris").lower()
     return Response(
         content=data,
@@ -354,7 +346,7 @@ async def zotero_collections() -> dict:
     try:
         return {"ok": True, "collections": await zotero.list_collections()}
     except Exception as e:  # noqa: BLE001
-        return {"ok": False, "error": f"读取 Zotero 分类失败(请确认 Zotero 已运行并允许本机通信): {e}"}
+        return {"ok": False, "error": "读取 Zotero 分类失败, 请确认 Zotero 已运行并允许本机通信。", "detail": f"{type(e).__name__}: {e}"}
 
 
 @router.post("/api/zotero/import")
@@ -364,7 +356,7 @@ async def zotero_import(req: ZoteroImportRequest) -> dict:
         refs = await zotero.import_collection(req.collection_key)
         return {"ok": True, "refs": refs}
     except Exception as e:  # noqa: BLE001
-        return {"ok": False, "error": f"从 Zotero 导入失败(请确认 Zotero 已运行并允许本机通信): {e}"}
+        return {"ok": False, "error": "从 Zotero 导入失败, 请确认 Zotero 已运行并允许本机通信。", "detail": f"{type(e).__name__}: {e}"}
 
 
 @router.post("/api/zotero/push")
@@ -374,7 +366,7 @@ async def zotero_push(req: ZoteroPushRequest) -> dict:
         saved = await zotero.push(req.refs)
         return {"ok": True, "saved": saved}
     except Exception as e:  # noqa: BLE001
-        return {"ok": False, "error": f"推送到 Zotero 失败(请确认 Zotero 已运行并允许本机通信): {e}"}
+        return {"ok": False, "error": "推送到 Zotero 失败, 请确认 Zotero 已运行并允许本机通信。", "detail": f"{type(e).__name__}: {e}"}
 
 
 @router.post("/api/ethics/render")
@@ -425,9 +417,13 @@ async def ethics_render(req: EthicsRenderRequest) -> Response:
     try:
         data = do_render(req.template, req.fields or {}, req.materials or "")
     except ValueError as e:
-        return Response(content=str(e).encode("utf-8"), status_code=400, media_type="text/plain")
+        return JSONResponse(status_code=400, content={"ok": False, "error": str(e)})
     except Exception as e:  # noqa: BLE001
-        return Response(content=f"生成失败: {e}".encode("utf-8"), status_code=500, media_type="text/plain")
+        return JSONResponse(status_code=500, content={
+            "ok": False,
+            "error": "伦理材料生成失败, 请稍后重试。",
+            "detail": f"{type(e).__name__}: {e}",
+        })
 
     safe = (req.template or "ethics").replace("/", "_")
     headers = {"Content-Disposition": f"attachment; filename={safe}.docx"}

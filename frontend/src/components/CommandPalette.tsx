@@ -150,7 +150,7 @@ export default function CommandPalette({
 
   return (
     <div className="cmdk-overlay" data-testid="command-palette" onClick={onClose}>
-      <div className="cmdk-modal" role="dialog" aria-modal="true" onClick={(e) => e.stopPropagation()}>
+      <div className="cmdk-modal" role="dialog" aria-modal="true" aria-label="命令面板" onClick={(e) => e.stopPropagation()}>
         <input
           ref={inputRef}
           className="cmdk-input"
@@ -158,8 +158,12 @@ export default function CommandPalette({
           placeholder="搜索模块 或 历史记录…"
           value={query}
           onChange={(e) => setQuery(e.target.value)}
+          role="combobox"
+          aria-expanded={items.length > 0}
+          aria-controls="cmdk-listbox"
+          aria-activedescendant={items.length > 0 ? `cmdk-opt-${items[activeIdx]?.id}` : undefined}
         />
-        <div className="cmdk-results" ref={listRef}>
+        <div className="cmdk-results" ref={listRef} role="listbox" id="cmdk-listbox" aria-label="搜索结果">
           {items.length === 0 ? (
             <div className="cmdk-empty">没有匹配项</div>
           ) : (
@@ -167,6 +171,10 @@ export default function CommandPalette({
               {items.map((it, idx) => (
                 <div
                   key={it.id}
+                  id={`cmdk-opt-${it.id}`}
+                  role="option"
+                  aria-selected={idx === activeIdx}
+                  tabIndex={-1}
                   className={`cmdk-item ${idx === activeIdx ? "active" : ""}`}
                   data-testid={`cmdk-item-${it.id}`}
                   onMouseEnter={() => setActiveIdx(idx)}

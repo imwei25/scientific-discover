@@ -114,7 +114,8 @@ async def run(req: RunRequest) -> StreamingResponse:
         except LLMError as e:
             yield _sse("error", {"message": str(e)})
         except Exception as e:  # noqa: BLE001
-            yield _sse("error", {"message": f"内部错误: {e}"})
+            # 类型/堆栈进服务端日志, 前端只显示中文人话, 不透 raw exception str
+            yield _sse("error", {"message": "内部错误, 请稍后重试, 或查看服务端日志。", "detail": f"{type(e).__name__}: {e}"})
         else:
             # 回引校验(checklist): 输出里的章节/图表引用如果原稿没有, 提示疑似幻觉
             if do_verify and buf and manuscript_for_verify:
@@ -157,7 +158,8 @@ async def deai_rewrite_ep(req: DeaiRewriteRequest) -> StreamingResponse:
         except LLMError as e:
             yield _sse("error", {"message": str(e)})
         except Exception as e:  # noqa: BLE001
-            yield _sse("error", {"message": f"内部错误: {e}"})
+            # 类型/堆栈进服务端日志, 前端只显示中文人话, 不透 raw exception str
+            yield _sse("error", {"message": "内部错误, 请稍后重试, 或查看服务端日志。", "detail": f"{type(e).__name__}: {e}"})
 
     return StreamingResponse(gen(), media_type="text/event-stream", headers=SSE_HEADERS)
 
@@ -459,7 +461,8 @@ async def stats_advice(req: StatsAdviceRequest) -> StreamingResponse:
         except LLMError as e:
             yield _sse("error", {"message": str(e)})
         except Exception as e:  # noqa: BLE001
-            yield _sse("error", {"message": f"内部错误: {e}"})
+            # 类型/堆栈进服务端日志, 前端只显示中文人话, 不透 raw exception str
+            yield _sse("error", {"message": "内部错误, 请稍后重试, 或查看服务端日志。", "detail": f"{type(e).__name__}: {e}"})
         else:
             yield _sse("done", {})
 
