@@ -43,3 +43,22 @@ Round 3 (2026-07-05 T~14:00, cron 首次触发)
    - HistoryView.tsx: NAMES 加 grant + ethics
  · 验证: 14/14 PASS (含 3 项 R1+R2 回归)
  · 已 build + 重启
+
+Round 4 (2026-07-05 T~14:30, cron 第二次触发)
+ · 测过: 追问/修改流 (imrad/plan/ethics/idea followups, rebuttal, edit, deai),
+         真实数据端到端 (survival_data.csv + sample-size 边界 + sweep + usage + config/stages)
+ · 发现 P1:
+   1. samplesize proportion p1≈p2 时返回 1e14 量级样本量 (无阈值)
+   2. samplesize /api/sample-size 不认 twogroup_mean/two_means (前端 UI 用词 vs 后端 design 命名不一致)
+   3. samplesize sweep 未知 scenario 静默返回 n=0 曲线 (用户以为无解)
+   4. rebuttal 错误消息暴露 type(e).__name__ 到用户面前
+   5. EthicsModule 追问缺 || busy 保护, 主生成中可并发触发 corrupt draft
+   6. /api/usage mock 模式返回 available:false + 0 tokens 无解释, 易误判"余额耗尽"
+ · 修复(5 项):
+   - samplesize.py: proportion |p1-p2|<0.005 → ok:false 中文
+   - samplesize.py: 加 design alias (twogroup_mean/two_means/twogroup_prop/two_props)
+   - samplesize.py: sweep 未知 scenario 直接 raise ValueError 让路由 400
+   - rebuttal.py: error 消息用中文人话, type(e) 归入 detail
+   - system.py: /api/usage mock 加 mock:true + notice
+   - EthicsModule.tsx: runFollowup + 两个追问按钮加 || busy 保护
+ · 验证: 15/15 PASS (含 4 项 R1+R2+R3 回归)

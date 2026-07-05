@@ -19,11 +19,17 @@ from statsmodels.stats.proportion import proportion_effectsize
 
 
 def compute(design: str, params: dict) -> dict:
+    # 前端与文档常混用的别名 → 归一到内部 design 名, 避免"未知设计类型"
+    _DESIGN_ALIAS = {
+        "twogroup_mean": "ttest", "two_means": "ttest", "t_test": "ttest",
+        "twogroup_prop": "proportion", "two_props": "proportion",
+    }
+    design = _DESIGN_ALIAS.get(design, design)
     try:
         alpha = float(params.get("alpha", 0.05))
         power = float(params.get("power", 0.8))
         if not (0 < alpha < 1) or not (0 < power < 1):
-            return {"ok": False, "error": "α 与 power 需在 0~1 之间。"}
+            return {"ok": False, "error": "α 与 power 需在 0~1 之间（取值不能为 0 或 1）。"}
 
         if design == "ttest":
             d = float(params.get("effect_size", 0))
@@ -38,7 +44,14 @@ def compute(design: str, params: dict) -> dict:
             p1 = float(params.get("p1", -1))
             p2 = float(params.get("p2", -1))
             if not (0 < p1 < 1) or not (0 < p2 < 1) or p1 == p2:
-                return {"ok": False, "error": "请填写两组不同的率 p1、p2（0~1）。"}
+                return {"ok": False, "error": "请填写两组不同的率 p1、p2（0~1 之间）。"}
+            # p1 与 p2 差异过小 (< 0.005) 时 solve_power 会给出 1e14 量级样本量,
+            # 对用户没有意义 (临床上无可分辨差异). 拒绝并给出人话解释, 避免天文数字吓崩用户.
+            if abs(p1 - p2) < 0.005:
+                return {"ok": False, "error": (
+                    f"两组率过于接近 (|p1 − p2| = {abs(p1 - p2):.4f} < 0.005),"
+                    " 所需样本量趋近无穷。请根据临床可分辨的最小差异重新设定 p1、p2。"
+                )}
             es = abs(proportion_effectsize(p1, p2))
             n = NormalIndPower().solve_power(effect_size=es, alpha=alpha, power=power, ratio=1, alternative="two-sided")
             per = math.ceil(n)
@@ -249,13 +262,18 @@ def sweep(
 
     返回 [(value, N_total), ...]; 某个点求解失败时 N=0(由前端过滤或显示空缺)。
     """
+    # 未知 scenario 直接 raise: 让上层路由捕获返回 400, 避免"扫出全 0 曲线"误导用户以为无解.
+    if scenario not in _SCENARIO_MAP:
+        raise ValueError(
+            f"未知 scenario: {scenario}. 可选: {', '.join(sorted(_SCENARIO_MAP.keys()))}"
+        )
     out: list[tuple[float, int]] = []
     for v in range_values:
         params = dict(fixed_params)
         params[vary] = v
         try:
             n = _solve_one(scenario, params)
-        except Exception:  # noqa: BLE001
+        except Exception:  # noqa: BLE001  # 单点求解失败 (如某点参数取值越界) 允许曲线上有空缺
             n = None
         out.append((float(v), int(n) if n is not None else 0))
     return out

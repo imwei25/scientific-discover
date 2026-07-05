@@ -50,6 +50,10 @@ async def health() -> dict:
 async def usage() -> dict:
     data = await get_balance()
     data["tokens"] = get_session_usage()
+    # mock 模式下不打真实 API, balance 恒为 0 / available=false; 显式标注避免用户误判"额度耗尽"
+    if settings.mock:
+        data["mock"] = True
+        data["notice"] = "演示模式：未调用真实 LLM，无额度/用量数据。请配置真实密钥后才有真实统计。"
     return data
 
 

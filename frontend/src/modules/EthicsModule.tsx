@@ -272,7 +272,8 @@ function EthicsEditor({ template, step, goStep }: { template: TemplateDef; step:
 
   const runFollowup = async (mode: "ask" | "revise") => {
     const q = followupInput.trim();
-    if (!q || fRunning) return;
+    // 主生成 (下载 Word) 进行时禁止追问, 避免两个流并发写入 draft 造成穿插错乱
+    if (!q || fRunning || busy) return;
     setFError(null); setFRunning(true);
     fctrl.current = new AbortController();
     const baseDraft = previewText;
@@ -405,8 +406,8 @@ function EthicsEditor({ template, step, goStep }: { template: TemplateDef; step:
             />
             {fError && <div className="result-error">{fError}</div>}
             <div className="form-actions">
-              <button className="btn-primary" data-testid="ethics-ask-btn" onClick={() => runFollowup("ask")} disabled={!followupInput.trim() || fRunning}>追问</button>
-              <button className="btn-ghost" data-testid="ethics-revise-btn" onClick={() => runFollowup("revise")} disabled={!followupInput.trim() || fRunning}>按此修改草案</button>
+              <button className="btn-primary" data-testid="ethics-ask-btn" onClick={() => runFollowup("ask")} disabled={!followupInput.trim() || fRunning || busy}>追问</button>
+              <button className="btn-ghost" data-testid="ethics-revise-btn" onClick={() => runFollowup("revise")} disabled={!followupInput.trim() || fRunning || busy}>按此修改草案</button>
               {fRunning && <button className="btn-ghost" onClick={() => {
                 fctrl.current?.abort();
                 if (followupModeRef.current === "revise") setDraft(followupBaseDraftRef.current);

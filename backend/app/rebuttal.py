@@ -358,4 +358,5 @@ async def rebuttal(inputs: dict) -> AsyncIterator[tuple[str, dict]]:
         yield ("done", {})
     except Exception as e:  # noqa: BLE001
         print("[rebuttal] exception:\n" + traceback.format_exc(), flush=True)
-        yield ("error", {"message": f"生成回复出错：{type(e).__name__}: {e}"})
+        # 详细异常类型/堆栈已进服务端日志; 前端只显示人话, 不暴露 Python 类名给普通用户
+        yield ("error", {"message": "生成回复失败：服务临时出错，请稍后重试；若持续失败请查看服务端日志。", "detail": f"{type(e).__name__}: {e}"})
