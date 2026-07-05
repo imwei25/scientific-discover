@@ -408,3 +408,179 @@ async def fetch_deep_reads_stream(
                     "ok": False, "ref_key": t.get("ref_key", ""),
                     "error": f"全局超时 (>{DEEP_READ_TOTAL_TIMEOUT_SEC}s)",
                 })
+
+
+# ── 合成报告 ─────────────────────────────────────────────────
+
+_REF_KEY_RE = re.compile(r"\[([^\[\]]{1,120})\](?!\()")  # [ref_key] 不跟 ( 的引用
+
+
+def _dr_refs_block(refs: list[dict], deep_reads_map: dict[str, str]) -> str:
+    """把 refs + 深读 chunk 格式化成 LLM 可读的上下文块。"""
+    lines = []
+    for r in refs:
+        rk = r.get("ref_key", "")
+        title = r.get("title", "")
+        abstract = (r.get("abstract") or "")[:400]
+        author = r.get("first_author", "")
+        year = r.get("year", "")
+        journal = r.get("journal", "")
+        meta = " | ".join(x for x in [author, year, journal] if x)
+        chunk = deep_reads_map.get(rk, "")
+        lines.append(f"[{rk}] {title}")
+        if meta:
+            lines.append(f"  {meta}")
+        if abstract:
+            lines.append(f"  摘要: {abstract}")
+        if chunk:
+            lines.append(f"  全文节选:\n{chunk[:1200]}")
+        lines.append("")
+    return "\n".join(lines)
+
+
+def _dr_synthesis_messages(
+    question: str,
+    refs: list[dict],
+    deep_reads_map: dict[str, str],
+    english: bool = False,
+) -> list[dict]:
+    refs_block = _dr_refs_block(refs, deep_reads_map)
+    lang_note = "Write the entire report in English." if english else "请用中文输出报告。"
+    system = (
+        "你是循证综述助手。用户会给出一个研究问题和一批文献（含摘要，部分含全文节选）。"
+        "请撰写一份结构化的深度调研报告，直接回答该研究问题，分四节：\n\n"
+        "## 一、学界共识\n梳理各文献在该问题上的一致性发现，明确给出共识结论。\n\n"
+        "## 二、矛盾与争议\n列出现有文献中相互冲突的发现或方法论争议，分析可能原因。\n\n"
+        "## 三、研究空白\n指出该问题尚未被充分回答的方面，包括人群局限、随访不足、机制未明等。\n\n"
+        "## 四、综合结论\n综合以上，对研究问题给出有据可查的综合判断。\n\n"
+        "铁律：\n"
+        "- 引用文献时仅使用给定的 ref_key，格式 [ref_key]（如 [pmid:12345678]）\n"
+        "- 不得编造文献；不确定时明说『现有证据有限』\n"
+        "- 每个有实质性说法的句子至少引用一篇文献\n"
+        f"- {lang_note}"
+    )
+    user = f"研究问题：{question}\n\n文献资料：\n{refs_block}"
+    return [{"role": "system", "content": system}, {"role": "user", "content": user}]
+
+
+def _verify_report_citations(text: str, refs: list[dict]) -> dict:
+    """核验报告中 [ref_key] 引用是否全部来自给定 refs。"""
+    valid_keys = {r.get("ref_key", "") for r in refs if r.get("ref_key")}
+    cited = [m.group(1) for m in _REF_KEY_RE.finditer(text)]
+    cited_set = set(cited)
+    unverified = sorted(k for k in cited_set if k not in valid_keys)
+    return {
+        "total": len(cited_set),
+        "verified": len(cited_set) - len(unverified),
+        "unverified": unverified,
+        "quotes_total": 0,
+        "quotes_ok": 0,
+    }
+
+
+async def synthesize_stream(
+    question: str,
+    refs: list[dict],
+    deep_reads_map: dict[str, str],
+    english: bool = False,
+) -> AsyncIterator[tuple[str, dict]]:
+    """流式生成深度调研报告; 结束后 yield verify 事件。"""
+    if not refs:
+        yield ("error", {"message": "没有可用文献, 请返回上一步至少保留一篇。"})
+        return
+    if settings.mock:
+        mock_text = (
+            "## 一、学界共识\n[MOCK] 示例共识。\n\n"
+            "## 二、矛盾与争议\n[MOCK] 示例争议。\n\n"
+            "## 三、研究空白\n[MOCK] 示例空白。\n\n"
+            "## 四、综合结论\n[MOCK] 示例结论。\n"
+        )
+        for ch in mock_text:
+            await asyncio.sleep(0)
+            yield ("delta", {"text": ch})
+        yield ("verify", {"total": 0, "verified": 0, "unverified": [], "quotes_total": 0, "quotes_ok": 0})
+        return
+    full = ""
+    try:
+        async for piece in stream_chat(
+            _dr_synthesis_messages(question, refs, deep_reads_map, english), task="research"
+        ):
+            full += piece
+            yield ("delta", {"text": piece})
+    except Exception as e:  # noqa: BLE001
+        yield ("error", {"message": f"合成报告出错: {type(e).__name__}: {e}"})
+        return
+    yield ("verify", _verify_report_citations(full, refs))
+
+
+def _contribution_messages(
+    question: str,
+    refs: list[dict],
+    deep_reads_map: dict[str, str],
+) -> list[dict]:
+    refs_block = _dr_refs_block(refs, deep_reads_map)
+    system = (
+        "你是文献综述助手。根据给定的研究问题和文献列表，输出一个 JSON 数组，"
+        "每篇文献对应一个对象，字段如下：\n"
+        '{"n":1,"author_year":"Smith et al., 2023","journal":"Nature Medicine",'
+        '"design":"RCT","sample":"500 patients",'
+        '"finding":"主要发现一句话","relevance":"direct","deep_read":false}\n\n'
+        "relevance 只允许 direct / indirect / supporting 三档。\n"
+        "deep_read 为 true 当且仅当该文献提供了全文节选（见下方资料）。\n"
+        "仅返回 JSON 数组，不要 markdown，不要额外文字。"
+    )
+    user = f"研究问题：{question}\n\n文献资料：\n{refs_block}"
+    return [{"role": "system", "content": system}, {"role": "user", "content": user}]
+
+
+async def build_contribution_table(
+    question: str,
+    refs: list[dict],
+    deep_reads_map: dict[str, str],
+) -> list[dict]:
+    """非流式调用 LLM, 返回贡献表行列表。失败返回空列表。"""
+    if not refs:
+        return []
+    if settings.mock:
+        return [
+            {
+                "n": i + 1,
+                "author_year": f"{r.get('first_author', 'Unknown')} et al., {r.get('year', '')}",
+                "journal": r.get("journal", ""),
+                "design": "RCT",
+                "sample": "N/A",
+                "finding": "[MOCK] 示例发现",
+                "relevance": "direct" if i == 0 else "indirect",
+                "deep_read": r.get("ref_key", "") in deep_reads_map,
+            }
+            for i, r in enumerate(refs[:20])
+        ]
+    buf = ""
+    try:
+        async for piece in stream_chat(
+            _contribution_messages(question, refs, deep_reads_map), task="research"
+        ):
+            buf += piece
+        raw = json.loads(buf)
+        if not isinstance(raw, list):
+            return []
+        out = []
+        for i, row in enumerate(raw):
+            if not isinstance(row, dict):
+                continue
+            rel = row.get("relevance", "")
+            if rel not in ("direct", "indirect", "supporting"):
+                rel = "indirect"
+            out.append({
+                "n": int(row.get("n") or i + 1),
+                "author_year": str(row.get("author_year") or "")[:80],
+                "journal": str(row.get("journal") or "")[:80],
+                "design": str(row.get("design") or "")[:60],
+                "sample": str(row.get("sample") or "")[:80],
+                "finding": str(row.get("finding") or "")[:200],
+                "relevance": rel,
+                "deep_read": bool(row.get("deep_read")),
+            })
+        return out
+    except Exception:  # noqa: BLE001
+        return []
