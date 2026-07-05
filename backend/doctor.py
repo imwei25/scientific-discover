@@ -113,13 +113,30 @@ def _check_env(r: Report) -> None:
     elif settings.api_key:
         masked = settings.api_key[:4] + "***" if len(settings.api_key) > 4 else "***"
         r.ok(f"已配置 LLM key（{settings.provider} / {settings.model}，{masked}）")
+        # 实际 ping 一次上游 /models, 让 doctor 能查出"key 拼错 / 过期 / base_url 错"这类假 pass.
+        # 5 秒 timeout, 失败给具体建议; 网络故障算 warn 不算 bad, 避免离线时全线红.
+        try:
+            import httpx
+            headers = {"Authorization": f"Bearer {settings.api_key}"}
+            resp = httpx.get(f"{settings.base_url.rstrip('/')}/models", headers=headers, timeout=5.0)
+            if resp.status_code == 200:
+                r.ok("上游 /models 可达, key 有效")
+            elif resp.status_code == 401:
+                r.bad(f"上游 401: API key 无效或已过期", "检查 backend/.env 中 LLM_API_KEY 是否正确, 未加多余空格/换行")
+            elif resp.status_code == 403:
+                r.bad(f"上游 403: 账号权限不足或未开通", "检查 LLM_PROVIDER/LLM_BASE_URL 是否匹配你的账号所在服务商")
+            elif resp.status_code == 404:
+                r.warn(f"上游 /models 返 404", "可能 LLM_BASE_URL 拼错或该服务商不提供 /models 列表")
+            else:
+                r.warn(f"上游 /models 返 {resp.status_code}", "服务商可能临时故障, 稍后再试")
+        except Exception as e:  # noqa: BLE001
+            r.warn(f"上游 /models 无法连接: {type(e).__name__}", "网络不通或 base_url 错; 若离线可忽略此项")
     else:
         r.bad("未配置 LLM_API_KEY 且未开启 MOCK_LLM", "在 backend/.env 填写 LLM_API_KEY（DeepSeek/硅基流动/OpenAI 等）")
     if settings.has_fallback:
         r.ok("已配置备用供应商（主供应商额度用尽可自动降级）")
     else:
         r.warn("未配置备用供应商", "可选：在 .env 配置 FALLBACK_* 以便额度用尽时自动切换")
-    return settings
 
 
 def _check_port(r: Report) -> None:

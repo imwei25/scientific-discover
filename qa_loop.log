@@ -211,3 +211,23 @@ Round 11 (2026-07-05 T~17:30, cron 第九次触发 + R11 + D1-D5 大批处理)
    - D5 useModal hook (Esc + focus 陷阱 + focus 还原), 应用到 DeidentifyDialog
  · 验证: 14/15 → D1 王五漏检 → 补充动词词表 + 非贪婪 → 全绿
  · 注: R9 flag 的 B2 (goto 跨项目污染) 已在 R10 复审确认无需修
+
+Round 12 (2026-07-05 T~18:00, cron 第十次触发)
+ · 测过: 50 个后端 endpoint 契约审计, Playwright e2e (78 用例), backend pytest (202),
+         doctor.py + selftest.py 首次启动体验, README/使用说明.md 步骤
+ · 发现 P1:
+   1. test_searchfilters.py:47 稳定 FAIL (R11 D3 我改 _QUALITY_FLOOR 8→1 后忘同步测试)
+   2. e2e.spec.ts:530 input-refs 找不到 (FormatModule 拆三分页后测试没切 refs tab)
+   3. /api/poster/review + /api/refs/extract-evidence 错误 shape 缺 ok:false,
+      泄漏 type(e).__name__ 到 error 字段
+   4. doctor.py 假 pass: key 拼错也说"已配置 LLM key" (从不 ping 上游)
+   5. 另 8 处 endpoint 用 Response(text/plain) 而非 JSON 错误 shape (未修, 属重构范畴)
+ · Deadcode: /api/config/stages, /api/samplesize/sweep 前端零调用 (未清理)
+ · 修复(4 项):
+   - test_searchfilters.py: 更新 quality_filter 断言, 加"完全无通过才放宽"用例
+   - e2e.spec.ts: refs 核验测试前先 click format-tab-refs
+   - text_gen.py poster_review_ep + refs/extract-evidence: 3 处 error 加 ok:false,
+     用户消息改中文人话, type(e) 归 detail 字段
+   - doctor.py _check_env: 实际 httpx.get {base_url}/models 探测 (5s timeout),
+     401/403 → bad + 具体中文建议, 网络故障 → warn (离线不算全红)
+ · 验证: 9/9 PASS (含 4 项 R1-R11 回归)

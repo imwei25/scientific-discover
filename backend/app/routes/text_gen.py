@@ -228,12 +228,17 @@ async def poster_review_ep(req: RunRequest) -> JSONResponse:
     try:
         return JSONResponse(await review_poster(req.inputs))
     except ValueError as e:
-        return JSONResponse(status_code=400, content={"error": str(e)})
+        return JSONResponse(status_code=400, content={"ok": False, "error": str(e)})
     except LLMError as e:
-        return JSONResponse(status_code=502, content={"error": str(e)})
+        return JSONResponse(status_code=502, content={"ok": False, "error": str(e)})
     except Exception as e:  # noqa: BLE001
         log_swallow("海报审阅: 失败", e)
-        return JSONResponse(status_code=500, content={"error": f"海报审阅出错：{type(e).__name__}: {e}"})
+        # 类型/堆栈进日志, 前端只显示中文人话
+        return JSONResponse(status_code=500, content={
+            "ok": False,
+            "error": "海报审阅失败：服务临时出错，请稍后重试。",
+            "detail": f"{type(e).__name__}: {e}",
+        })
 
 
 @router.post("/api/grant")
@@ -380,7 +385,11 @@ async def refs_extract_evidence_ep(req: ExtractEvidenceRequest) -> JSONResponse:
         return JSONResponse({"ok": True, "evidence": evidence})
     except Exception as e:  # noqa: BLE001
         log_swallow("提取核心发现: 失败", e)
-        return JSONResponse(status_code=500, content={"error": f"提取失败：{type(e).__name__}: {e}"})
+        return JSONResponse(status_code=500, content={
+            "ok": False,
+            "error": "核心发现提取失败：服务临时出错，请稍后重试。",
+            "detail": f"{type(e).__name__}: {e}",
+        })
 
 
 # ----- 统计顾问(SSE 流式) -----

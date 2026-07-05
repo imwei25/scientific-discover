@@ -544,6 +544,8 @@ test("参考文献核验: 标出真实/杜撰/撤稿/重复", async ({ page }) =
   );
   await page.goto("/");
   await page.getByTestId("nav-format").click();
+  // 期刊排版拆分为「参考文献 / 正文排版 / 正文预览」三分页, 默认在 manuscript, 先切到 refs
+  await page.getByTestId("format-tab-refs").click();
   await page.getByTestId("input-refs").fill("一些参考文献……");
   await page.getByTestId("check-refs-btn").click();
   await expect(page.getByTestId("refcheck-list")).toContainText("✓ 真实");

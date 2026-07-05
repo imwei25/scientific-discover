@@ -41,10 +41,15 @@ def test_quality_filter():
     # Q1–Q2 去未知 → 留 10 篇 Q1
     kept, dropped, relaxed = sf.apply_quality_filter(pool, sf.normalize({"min_quartile": 2, "keep_unknown": False}))
     assert len(kept) == 10 and dropped == 10
-    # 通过的太少(<8) → 放宽保留全部
+    # R11 D3: _QUALITY_FLOOR 从 8 降到 1 → 只在完全无结果时才放宽.
+    # 通过的仍有 3 篇 → 严格保留过滤后的结果, 不放宽.
     few = [{"journal_quartile": "Q1", "journal_impact": 9.0}] * 3 + [{"journal_quartile": "Q4", "journal_impact": 1.0}] * 10
     kept, dropped, relaxed = sf.apply_quality_filter(few, sf.normalize({"min_quartile": 1, "keep_unknown": False}))
-    assert relaxed is True and len(kept) == 13 and dropped == 0
+    assert relaxed is False and len(kept) == 3 and dropped == 10
+    # 完全无通过 → 放宽保留全部
+    all_bad = [{"journal_quartile": "Q4", "journal_impact": 1.0}] * 5
+    kept, dropped, relaxed = sf.apply_quality_filter(all_bad, sf.normalize({"min_quartile": 1, "keep_unknown": False}))
+    assert relaxed is True and len(kept) == 5 and dropped == 0
     print("ok: quality_filter")
 
 
