@@ -234,9 +234,12 @@ export default function App() {
         }}
       >
         <div className="brand-row">
-          <div className="brand" onClick={() => setActive("home")} data-testid="brand">
-            <span className="brand-logo brand-logo-niuma"><NiumaGlyph size={22} /></span>
-            <span className="brand-name brand-name-niuma">niuma-research</span>
+          <div className="brand" onClick={() => setActive("home")} data-testid="brand" style={{ cursor: "pointer" }}>
+            <img
+              src="/tellgen.png"
+              alt="Tellgen"
+              style={{ height: 28, width: "auto", display: "block" }}
+            />
           </div>
           <button
             className="sidebar-toggle"
@@ -614,38 +617,11 @@ function Niuma3D() {
           </g>
         </g>
       </svg>
-      <span className="niuma3d-hint" aria-hidden="true">🖐 可拖动旋转</span>
     </div>
   );
 }
 
-// 侧栏品牌用的静态「牛马」小图（单色剪影, 不动）。
-function NiumaGlyph({ size = 22 }: { size?: number }) {
-  return (
-    <svg viewBox="0 0 48 36" width={size} height={(size * 36) / 48} className="niuma-glyph" role="img" aria-hidden="true">
-      <g fill="currentColor">
-        {/* 四腿 */}
-        <rect x="11" y="20" width="3.6" height="13" rx="1.6" />
-        <rect x="17" y="21" width="3.4" height="12" rx="1.6" />
-        <rect x="29" y="21" width="3.4" height="12" rx="1.6" />
-        <rect x="35" y="20" width="3.6" height="13" rx="1.6" />
-        {/* 圆身 */}
-        <ellipse cx="23" cy="18" rx="15" ry="8.5" />
-        {/* 尾 */}
-        <path d="M9 12 C5.5 16 7 24 6.5 30 L9 30 C10 24 9 16 12 13 Z" />
-        {/* 头(右) */}
-        <ellipse cx="37" cy="15" rx="7" ry="6" />
-        {/* 双角 */}
-        <path d="M34 9 C32 3.5 33 0.6 36 0 C35 3 35 6 37 9 Z" />
-        <path d="M40 9 C43 4 47.4 3.4 48 4.6 C45 5.4 42 7 41 10 Z" />
-        {/* 口鼻 */}
-        <ellipse cx="43" cy="17" rx="3.4" ry="2.6" />
-      </g>
-    </svg>
-  );
-}
-
-// 顶栏「牛马」手绘 mark：窄长横幅, 一匹马 + 一头牛的侧影剪影, 点击回首页。
+// 顶栏 Tellgen 品牌 mark, 点击回首页。
 function NiumaMark({ onClick }: { onClick?: () => void }) {
   return (
     <button
@@ -653,39 +629,15 @@ function NiumaMark({ onClick }: { onClick?: () => void }) {
       className="niuma-mark"
       onClick={onClick}
       data-testid="niuma-mark"
-      aria-label="niuma-research · 返回首页"
-      title="niuma-research"
+      aria-label="Tellgen · 返回首页"
+      title="Tellgen"
+      style={{ background: "transparent", border: "none", padding: 0, cursor: "pointer" }}
     >
-      <svg viewBox="0 0 150 40" className="niuma-mark-svg" role="img" aria-hidden="true">
-        {/* 地面虚线 */}
-        <line className="nm-ground" x1="6" y1="34.5" x2="144" y2="34.5" />
-        {/* 马（左, 朝右）：圆身 + 四腿 + 上扬颈头 + 飘尾 */}
-        <g className="nm-fig">
-          <rect x="16" y="18" width="4" height="16" rx="1.6" />
-          <rect x="22" y="19" width="3.6" height="15" rx="1.6" />
-          <rect x="36" y="19" width="3.6" height="15" rx="1.6" />
-          <rect x="41" y="18" width="4" height="16" rx="1.6" />
-          <ellipse cx="30" cy="17" rx="15" ry="7.5" />
-          <path d="M16 12 C9 14 7 22 9 31 C12 23 13 19 19 16 Z" />
-          <polygon points="40,15 49,3 55,5 46,17" />
-          <polygon points="51,2 64,2 67,7 63,12 55,13 49,11" />
-          <polygon points="54,3 56,0 59,4.5" />
-        </g>
-        {/* 牛（右, 朝右）：圆身 + 四腿 + 低头 + 双角 + 尾穗 */}
-        <g className="nm-fig" transform="translate(80,0)">
-          <rect x="10" y="19" width="4" height="15" rx="1.6" />
-          <rect x="16" y="20" width="3.6" height="14" rx="1.6" />
-          <rect x="32" y="20" width="3.6" height="14" rx="1.6" />
-          <rect x="38" y="19" width="4" height="15" rx="1.6" />
-          <ellipse cx="24" cy="18" rx="16" ry="8" />
-          <polygon points="40,16 46,16 47,10 53,10 54,16 61,17 63,22 57,27 44,26 40,21" />
-          <polygon points="46,12 43,4 44.8,4 48,12" />
-          <polygon points="54,12 57,4 58.8,4 56,12" />
-          <polygon points="41,16 37,12.5 42,12.5" />
-          <path d="M9 13 C6 19 8 27 7 33 L9.5 33 C10.5 27 9.5 20 12 15 Z" />
-          <circle cx="8" cy="33" r="2" />
-        </g>
-      </svg>
+      <img
+        src="/tellgen.png"
+        alt="Tellgen"
+        style={{ height: 32, width: "auto", display: "block" }}
+      />
     </button>
   );
 }
