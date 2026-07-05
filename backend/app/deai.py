@@ -222,12 +222,16 @@ def score_sentence(sentence: str) -> tuple[int, list[str]]:
         if term in sentence:
             score += w
             reasons.append(f"空洞措辞「{term}」")
-    # 中文过渡词(句首更重)
-    for term in _TRANSITION_CN:
-        if term in sentence:
-            at_head = head.startswith(term) or head.startswith(term + "，") or head.startswith(term + ",")
-            score += 2 if at_head else 1
-            reasons.append(f"套式过渡词「{term}」")
+    # 中文过渡词(句首更重): 同句多个过渡词只按最高一次计分, 避免"首先/其次/最后"
+    # 这类正常科研叙述被叠加成高分误判 AI 味.
+    trans_hit = [(term, head.startswith(term) or head.startswith(term + "，") or head.startswith(term + ","))
+                 for term in _TRANSITION_CN if term in sentence]
+    if trans_hit:
+        top_at_head = any(at_head for _, at_head in trans_hit)
+        score += 2 if top_at_head else 1
+        # 原因里列出所有命中词, 便于用户理解
+        terms = "、".join(t for t, _ in trans_hit)
+        reasons.append(f"套式过渡词「{terms}」({'句首' if top_at_head else '句中'})")
     # 中文万能开头等模式
     for pat, w, tag in _PATTERNS_CN:
         if pat.search(sentence):
@@ -364,7 +368,22 @@ async def stream_rewrite(
     异常向上抛(由端点统一转成 error 事件), 与其它流式端点一致。
     """
     targets = set(block_indices or [])
-    for b in segment_blocks(md):
+    all_blocks = list(segment_blocks(md))
+    # 校验: 用户传的 block_indices 是否都能对上原文散文块; 未匹配的先告警,
+    # 避免完全无块可改写却静默 done, 用户误以为改写完成.
+    prose_idx = {b["index"] for b in all_blocks if b["kind"] == "prose"}
+    missing = sorted(i for i in targets if i not in prose_idx)
+    if targets and not (targets & prose_idx):
+        yield ("warning", {
+            "message": f"未找到指定的散文段落 (index={missing[:5]}), 无内容可改写。请确认段落编号来自最新的 /api/deai/scan 输出。"
+        })
+        yield ("done", {})
+        return
+    if missing:
+        yield ("warning", {
+            "message": f"部分段落编号未在原文中找到, 已跳过: index={missing[:5]}。"
+        })
+    for b in all_blocks:
         if b["index"] not in targets or b["kind"] != "prose":
             continue
         yield ("segment", {

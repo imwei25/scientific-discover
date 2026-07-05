@@ -12,15 +12,34 @@ export default function ToastContainer() {
   useEffect(() => {
     const timers = new Map<string, ReturnType<typeof setTimeout>>();
 
+    // 记录每条 (message+kind) 的最近显示时刻; 只在 1 秒内视为重复, 之外照常再触发
+    const lastShown = new Map<string, number>();
+    const DEDUP_WINDOW_MS = 1000;
+
     const onShow = (ev: Event) => {
       const detail = (ev as CustomEvent<ToastEntry>).detail;
       if (!detail) return;
+      const key = `${detail.kind}::${detail.message}`;
+      const prevTs = lastShown.get(key) ?? 0;
+      const now = Date.now();
+      if (now - prevTs < DEDUP_WINDOW_MS) {
+        // 1 秒内的连点/连发, 忽略以防 toast 洪水
+        return;
+      }
+      lastShown.set(key, now);
       setStack((prev) => {
-        // 同一条 message + kind 在 1 秒内的重复, 跳过
-        const dedupe = prev.find(
+        // 栈里若已有可见的同文案 toast (例如上一次 error 还没被 × 掉), 用新 id 替换,
+        // 让用户看到"确实又发生了一次", 而不是完全静默.
+        const existingIdx = prev.findIndex(
           (p) => p.message === detail.message && p.kind === detail.kind,
         );
-        if (dedupe) return prev;
+        if (existingIdx >= 0) {
+          const next = prev.slice();
+          const oldTm = timers.get(prev[existingIdx].id);
+          if (oldTm) { clearTimeout(oldTm); timers.delete(prev[existingIdx].id); }
+          next[existingIdx] = detail;
+          return next;
+        }
         const next = [...prev, detail].slice(-MAX_STACK);
         return next;
       });

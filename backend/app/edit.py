@@ -85,6 +85,10 @@ async def _selection_edit(
         if nl != -1:
             replace = replace[nl + 1 :]
         replace = replace.strip()
+    # 防御: MOCK LLM 会原样回吐 system+user prompt, 用户"接受改动"会把内部提示词写进正文.
+    # 若返回明显包含 [MOCK] 标记或整段 user prompt 里的固定字样, 视为无有效改动.
+    if replace.startswith("[MOCK]") or "【选中的待修改段落" in replace or "【可引用的真实文献】" in replace:
+        return {"edits": [], "mode": "selection", "note": "演示模式：未产生有效改动（配置真实 LLM 后重试）。"}
     if not replace or replace == selection:
         return {"edits": [], "mode": "selection", "note": "未产生有效改动。"}
     return {

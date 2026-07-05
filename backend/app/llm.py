@@ -184,6 +184,36 @@ async def vlm_complete(system: str, user_text: str, image_b64: str, *, max_token
     return content or ""
 
 
+def _sanitize_upstream_body(body: str) -> str:
+    """把上游 raw body 中疑似 API key / Bearer token / 长 base64 片段脱敏,
+    以免 401/500 body 里的 key 片段、内部堆栈、代理登录页原样回给前端."""
+    import re
+    # sk-xxxxx / Bearer xxxx / Authorization: xxxx / 32+ 位十六进制/base64
+    body = re.sub(r"sk-[A-Za-z0-9_\-]{6,}", "sk-***REDACTED***", body)
+    body = re.sub(r"(?i)bearer\s+[A-Za-z0-9_\-\.]{6,}", "Bearer ***REDACTED***", body)
+    body = re.sub(r"(?i)(authorization[:=]\s*)[A-Za-z0-9_\-\.]{6,}", r"\1***REDACTED***", body)
+    body = re.sub(r"\b[A-Fa-f0-9]{32,}\b", "***REDACTED***", body)
+    return body
+
+
+def _friendly_upstream(status: int, raw_body: str) -> str:
+    """把上游 HTTP 状态翻译成用户级的中文消息 (详情进日志, 不透给前端)."""
+    if status == 401:
+        return "上游鉴权失败 (401)：API key 无效或已失效, 请检查配置。"
+    if status == 402:
+        return "上游余额不足 (402)：请充值或切换到备用供应商。"
+    if status == 403:
+        return "上游拒绝访问 (403)：账号可能被限流或未开通该模型的访问权限。"
+    if status == 404:
+        return "上游未找到模型 (404)：请确认 LLM_MODEL 名称与该供应商匹配。"
+    if status == 429:
+        return "上游限流 (429)：请求过于频繁或已超配额, 请稍后重试。"
+    if 500 <= status < 600:
+        return f"上游服务异常 ({status})：请稍后重试, 若持续可切到备用供应商。"
+    # 其他状态: 只透出脱敏后的前 120 字符
+    return f"上游返回 {status}: {_sanitize_upstream_body(raw_body)[:120]}"
+
+
 # 余额/配额类错误的判定: 命中则触发自动降级。
 _QUOTA_HINTS = (
     "insufficient balance",
@@ -234,7 +264,7 @@ async def _stream_openai(cfg: ProviderConfig, messages: list[dict], **kwargs) ->
             if resp.status_code != 200:
                 body = await resp.aread()
                 raise LLMError(
-                    f"上游返回 {resp.status_code}: {body.decode('utf-8', 'ignore')[:300]}",
+                    _friendly_upstream(resp.status_code, body.decode('utf-8', 'ignore')),
                     status=resp.status_code,
                 )
             async for line in resp.aiter_lines():
@@ -284,7 +314,7 @@ async def _stream_anthropic(cfg: ProviderConfig, messages: list[dict], **kwargs)
             if resp.status_code != 200:
                 body = await resp.aread()
                 raise LLMError(
-                    f"上游返回 {resp.status_code}: {body.decode('utf-8', 'ignore')[:300]}",
+                    _friendly_upstream(resp.status_code, body.decode('utf-8', 'ignore')),
                     status=resp.status_code,
                 )
             u_in = u_out = 0

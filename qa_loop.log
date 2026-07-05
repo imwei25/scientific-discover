@@ -81,3 +81,20 @@ Round 5 (2026-07-05 T~15:00, cron 第三次触发)
    - flowdiagram.py: 未知 kind 返回 warning 字段, 详细异常归 detail
  · 验证: 15/15 PASS (含 6 项 R1-R4 回归)
  · 注: R5 discovery Agent 意外把 MOCK_LLM 洗回 0, 已手动恢复 MOCK_LLM=1 (backend/.env)
+
+Round 6 (2026-07-05 T~15:30, cron 第四次触发)
+ · 测过: /api/deai/scan+rewrite, /api/edit, LLM adapter (llm.py) 错误路径,
+         Toast queue, sidebar UX, SSE 恢复, JSON parse 脆弱性
+ · 发现 P1:
+   1. Toast dedupe 永久生效 → 相同 error 后续再触发被静默吞 (Toast.tsx:20-23)
+   2. LLM adapter 泄漏上游 raw body 前 300 字符, 可能包含 key 片段/base_url/HTML 登录页 (llm.py:236)
+   3. /api/edit MOCK 把 system+user prompt 原样塞进 replace, 用户接受改动会把内部提示词写进正文 (edit.py:80)
+   4. DeAI 过渡词同句多次加分 → "首先/其次/最后" 一句叠出高分 (deai.py:226-230)
+   5. /api/deai/rewrite 无效 block index 静默 done, 用户以为改写完成 (deai.py:370)
+ · 修复(5 项):
+   - Toast.tsx: dedupe 加 1 秒时间窗; 窗口外用新 detail 替换旧 entry, 让用户看到"又发生了一次"
+   - llm.py: _sanitize_upstream_body 脱敏 sk-*/Bearer/hex; _friendly_upstream 把 401/402/429/5xx 翻译中文
+   - edit.py: 检测 replace 起始 [MOCK] 或含内部 prompt 标记 → 返回 edits:[] + 演示模式说明
+   - deai.py: 过渡词同句最高只加一次分, 命中词列出但不叠加
+   - deai.py: rewrite 前预校验 block_indices, 全部未匹配 → 发 warning 事件后 done
+ · 验证: 9/9 PASS (含 4 项 R1-R5 回归)
