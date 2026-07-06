@@ -24,7 +24,10 @@
 - **GitHub CLI 登录**：`winget install GitHub.cli` 后 **`gh auth login`（需人工交互，一次即可）**。
   > ⚠️ 这一步 AI 无法代做，必须你本人在终端跑一次 `gh auth login`（选 HTTPS、用浏览器授权）。
 - **Python 依赖**：`backend/.venv` 已装齐 `requirements.txt` + `pyinstaller`。
-- **更新器签名密钥**：`%USERPROFILE%\.tauri\research-assistant.key`（空密码）。
+- **更新器签名密钥**：`%USERPROFILE%\.tauri\research-assistant.key`，密码存在同目录的
+  `research-assistant.key.pw`（不入库；`release.ps1` 自动读取）。
+  > 密码**必须非空**：Windows 无法把空字符串环境变量传给子进程（PowerShell `$env:X=""` 等于未设置），
+  > 空密码会让 `cargo tauri build` 退回交互式密码提示并在后台挂死。
 
 ## ⚠️ 重要：本机的签名密钥是「新」的
 
@@ -38,7 +41,8 @@
 
 建议在本次 Release 说明里写一句：「老用户请手动下载本安装包覆盖安装，之后即可正常自动更新。」
 
-**务必备份** `%USERPROFILE%\.tauri\research-assistant.key`（异地留一份），再丢一次又要重演上面的中断。
+**务必备份** `%USERPROFILE%\.tauri\research-assistant.key` **和** `research-assistant.key.pw`（异地各留一份）——
+私钥或密码任丢一个都签不了更新包，又要重演上面的中断。
 
 ## 产物位置
 

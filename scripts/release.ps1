@@ -58,9 +58,20 @@ if ($conf.version -ne $cargoVer) {
 Write-Host "    version: v$($conf.version)   installer target: nsis   updater: on" -ForegroundColor DarkGray
 
 # --- Signing env for the updater artifacts (createUpdaterArtifacts=true).
-#     Value may be a path or the key contents; our key has an empty password.
+#     The key is password-protected. The password lives next to the key in a
+#     gitignored .pw file (NOT in the repo). It MUST be non-empty: Windows cannot
+#     pass an empty-string env var to a child process (PowerShell $env:X="" makes
+#     it *unset*), so an empty password would make `cargo tauri build` fall back
+#     to an interactive prompt and hang. TAURI_SIGNING_PRIVATE_KEY may be a path
+#     or the key contents.
+$pwFile = "$key.pw"
+if (-not (Test-Path $pwFile)) {
+    Die "Signing-key password file not found at $pwFile. It is required (empty passwords can't be passed to the build on Windows)."
+}
+$pw = (Get-Content $pwFile -Raw).Trim()
+if (-not $pw) { Die "Signing-key password file $pwFile is empty. A non-empty password is required on Windows." }
 $env:TAURI_SIGNING_PRIVATE_KEY = $key
-$env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD = ""
+$env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD = $pw
 
 # --- 1. Sidecar (Python backend -> single exe) -----------------------------
 if (-not $SkipSidecar) {

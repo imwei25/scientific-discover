@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "科研助手",
-  "version": "5.0.1",
+  "version": "5.0.2",
   "identifier": "com.research.assistant",
   "build": {
     "frontendDist": "../frontend/dist",
@@ -37,7 +37,7 @@
   },
   "plugins": {
     "updater": {
-      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDVDMjhBMzY5QzdGQTBDNApSV1RFb0grY05vckNCZkUydXA5STdaeFh1UXNQb0h1akxia1RJcTFrNTZjN1VES0c4ajYrVFJzbwo=",
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDY4ODFGQzEzRjYwNEQ1NDIKUldSQzFRVDJFL3lCYUFwYlB6RUthMkpvRkI1dWoxY3I1V1puN2dST0Y1eGpoUHRuaUREYmdXNm0K",
       "endpoints": [
         "https://github.com/imwei25/scientific-discover/releases/latest/download/latest.json"
       ]
