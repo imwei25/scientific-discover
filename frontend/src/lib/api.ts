@@ -11,8 +11,27 @@ export const isTauri =
   typeof w.__TAURI__ !== "undefined" ||
   location.protocol === "tauri:" ||
   location.hostname === "tauri.localhost";
-export const API_BASE = isTauri ? "http://127.0.0.1:8756" : "";
+// 桌面版初始默认端口; 启动时会被 initApiBase() 用外壳分配的真实端口覆盖。
+// 非 Tauri(浏览器开发经 vite proxy / 单进程同源)用相对路径即可。
+let apiBase = isTauri ? "http://127.0.0.1:8756" : "";
 
 export function apiUrl(path: string): string {
-  return API_BASE + path;
+  return apiBase + path;
+}
+
+// 启动时(首个请求发出前)从 Tauri 外壳读取 sidecar 实际监听的端口, 覆盖默认 8756。
+// 外壳每次启动为后端分配一个空闲端口(见 src-tauri/src/main.rs), 前端必须读回同一端口 ——
+// 否则用户在 .env 改了端口、或 8756 被占用换了端口时, 写死 8756 会全线连不上。
+// 非 Tauri 无外壳, 直接返回(保持相对路径)。读取失败(旧外壳未注册命令)则保留默认 8756。
+export async function initApiBase(): Promise<void> {
+  if (!isTauri) return;
+  try {
+    const { invoke } = await import("@tauri-apps/api/core");
+    const port = await invoke<number>("get_backend_port");
+    if (typeof port === "number" && port > 0) {
+      apiBase = `http://127.0.0.1:${port}`;
+    }
+  } catch {
+    /* 保留默认 8756 */
+  }
 }

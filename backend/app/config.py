@@ -34,8 +34,9 @@ LLM_MODEL=deepseek-v4-flash
 # LLM_STAGE_GRANT_REVIEW_PROVIDER=
 
 # 可选: 仅本机访问填 127.0.0.1; 想让局域网其它设备访问填 0.0.0.0。
+# 注意: 仅"单进程模式"生效。桌面版端口由程序自动分配、前后端自动对齐,
+# 此处 HOST/PORT 不起作用, 无需也不要在这里改端口。
 HOST=127.0.0.1
-# PORT=8756
 """
 
 
@@ -177,6 +178,12 @@ class Settings:
         self.port = _int("PORT", 8756, lo=1, hi=65535)
         # 监听地址：127.0.0.1=仅本机；0.0.0.0=同时允许局域网访问
         self.host = os.getenv("HOST", "127.0.0.1").strip()
+        # 桌面版(Tauri sidecar): 端口由外壳分配并经 SIDECAR_PORT 注入, 覆盖 .env 里的
+        # PORT/HOST, 保证前端(webview)与后端监听同一端口; sidecar 只对本机回环开放。
+        # 用专用变量名(非 PORT)才不会被上面 load_dotenv(override=True) 的 .env 值盖掉。
+        if os.getenv("SIDECAR_PORT"):
+            self.port = _int("SIDECAR_PORT", self.port, lo=1, hi=65535)
+            self.host = "127.0.0.1"
         # 可选: 提供给 NCBI E-utilities 的联系邮箱(礼貌且可提高限速容忍度)
         self.ncbi_email = os.getenv("NCBI_EMAIL", "").strip()
 
