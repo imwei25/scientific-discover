@@ -121,34 +121,69 @@ _SECTION_MAP = {
 _SECTION_ORDER = ["rationale", "objectives", "scheme", "innovation", "plan", "foundation"]
 
 
-# LLM 有时在正文前加说明句，如"以下是根据您提供的材料撰写的《...》章节内容：（总字数：798字）"。
-# 缓冲流头部 200 字，检测并丢掉这类 preamble，用户永远看不到它。
-_PREAMBLE_RE = re.compile(
-    r'^(?:以下是|下面是|根据您提供|这是)[^\n]*\n\s*',
-    re.DOTALL,
+# 提示词铁律里复用的“只出正文”约束: 禁前置说明句、禁章节标注、禁字数统计。
+_NO_META_RULE = (
+    "直接从正文第一句写起, 不要任何前置说明或后置总结: "
+    "禁止出现「以下是…」「下面是…」「这是…」「根据您提供…」「为您撰写…」「现将…如下」之类的开场白; "
+    "禁止复述章节名或写「第一章…」「本章…」等标注; "
+    "禁止在开头或结尾标注字数(如「共798字」「总字数：798字」「全文约800字」「（字数：N）」)。"
 )
-_WORDCOUNT_RE = re.compile(r'\s*[（(]总字数[：:]\d+字[）)]\s*$')
+
+# LLM 有时在正文前加说明句(如“以下是第一章……：”)或在末尾附字数统计(如“共798字”)。
+# 提示词已禁止, 这里再做正则兜底: 缓冲头部检测并丢掉 preamble, 缓冲尾部裁掉字数标注,
+# 用户永远看不到它们。
+_PREAMBLE_RE = re.compile(
+    r'^\s*(?:好的[，,、]?\s*)?'
+    r'(?:以下(?:是|为)|下面(?:是|为)|这(?:是|就是)|这部分是|现(?:将|为您|在为您)|'
+    r'为您(?:撰写|生成|提供)|根据(?:您|所|上述)|按照您|遵照您|应您)'
+    r'[^\n]{0,80}?'
+    r'(?:[:：]|如下|内容|正文|章节|部分)'
+    r'[^\n]*\n+',
+)
+# 尾部字数标注: “共798字” “全文约800字” “总字数：798字” “（字数：N）” 等, 允许包裹括号/前后空白/句末标点。
+_WORDCOUNT_RE = re.compile(
+    r'\s*[（(【]?\s*'
+    r'(?:全文|本章|本节|以上|全篇|正文)?\s*'
+    r'(?:共计|共|总字数|字数|字数统计|合计|约|计)\s*[:：]?\s*'
+    r'\d[\d,，]*\s*字?\s*'
+    r'[）)】]?\s*[。．.]?\s*$'
+)
+# 尾部保留窗口: 足以覆盖任何字数标注句, 收尾时再统一裁剪。
+_TAIL_KEEP = 120
+
+
+def _strip_preamble(text: str) -> str:
+    return _PREAMBLE_RE.sub("", text).lstrip("\n")
 
 
 async def _clean_section_stream(stream: AsyncGenerator[str, None]) -> AsyncGenerator[str, None]:
-    """Strip LLM preamble commentary from section output before forwarding to client."""
-    buf = ""
+    """Strip LLM preamble commentary and trailing word-count from section output before forwarding.
+
+    头部: 缓冲前 200 字, 一次性剥掉 preamble。
+    尾部: 始终保留末尾 _TAIL_KEEP 字不立即下发, 收尾时裁掉字数标注后再送出,
+    这样无论章节多长, 结尾的“共798字”都能被拦住。
+    """
+    head = ""
     probing = True
+    tail = ""
     async for piece in stream:
         if probing:
-            buf += piece
-            if len(buf) >= 200:
-                probing = False
-                buf = _PREAMBLE_RE.sub("", buf).lstrip("\n")
-                if buf:
-                    yield buf
+            head += piece
+            if len(head) < 200:
+                continue
+            probing = False
+            tail = _strip_preamble(head)
+            head = ""
         else:
-            yield piece
-    if probing and buf:
-        buf = _PREAMBLE_RE.sub("", buf).lstrip("\n")
-        buf = _WORDCOUNT_RE.sub("", buf)
-        if buf:
-            yield buf
+            tail += piece
+        if len(tail) > _TAIL_KEEP:
+            yield tail[:-_TAIL_KEEP]
+            tail = tail[-_TAIL_KEEP:]
+    if probing:  # 整段不足 200 字, 从未剥过 preamble
+        tail = _strip_preamble(head)
+    tail = _WORDCOUNT_RE.sub("", tail).rstrip()
+    if tail:
+        yield tail
 
 
 async def _complete(messages: list[dict], max_tokens: int = 400, task: str = "grant_plan") -> str:
@@ -343,7 +378,7 @@ def _section_messages(
         "2) 申请人/团队/单位/经费/设备等无法从材料推断的具体事实, 一律用 [需申请人补充] 占位, 绝不杜撰;\n"
         "3) 基于现状的推断性论断(尚无文献直接支撑)标注 [待验证];\n"
         "4) 用规范、严谨的中文基金申请书语体; 只输出本章节正文(可含子标题), 不要重复大标题、不要写其它章节; "
-        "禁止以「以下是…」「下面是…」「根据您提供…」等说明句开头; 禁止在末尾标注字数。"
+        + _NO_META_RULE
     )
     if style_profile.strip():
         system += (
@@ -374,7 +409,7 @@ def _revise_messages(
         "支持句必须逐字取自该文献下方的『摘要(节选)』; "
         "2) 申请人/经费/设备等不可推断的事实用 [需申请人补充] 占位; 推断性论断标 [待验证]; "
         "3) 只输出修改后的本章节正文(可含子标题), 不要重复大标题、不要写其它章节、不要附加说明; "
-        "禁止以「以下是…」「下面是…」「根据您提供…」等说明句开头; 禁止在末尾标注字数。"
+        + _NO_META_RULE
     )
     if style_profile.strip():
         system += (
