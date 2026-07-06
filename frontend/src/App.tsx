@@ -533,7 +533,7 @@ function Home({ onPick, visibleNav }: { onPick: (m: ModuleId) => void; visibleNa
       <div className="home-stage">
         <div className="home-text">
           <p className="eyebrow">A Quiet Workbench · 专注的工作台</p>
-          <h1 className="home-title-niuma">niuma-research</h1>
+          <h1 className="home-title-niuma">Niuma-Research</h1>
           <p className="home-sub">
             从一个粗糙的想法，到经得起评议的论文。<br />
             一个安静的工作台，给一项需要专注的工作。

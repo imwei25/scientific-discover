@@ -30,6 +30,10 @@ export interface LiteraturePickerProps {
   showEvidence?: boolean;
   header?: ReactNode;
   extractionStatus?: { done: number; total: number } | null;
+  /** Where to place the 导入/导出/Zotero controls. "toolbar" = above list (default), "footer" = below list. */
+  ioPlacement?: "toolbar" | "footer";
+  /** Optional explanatory text rendered alongside the io controls (e.g. what imported refs are used for). */
+  importHint?: ReactNode;
 }
 
 export function LiteraturePicker(props: LiteraturePickerProps) {
@@ -37,6 +41,7 @@ export function LiteraturePicker(props: LiteraturePickerProps) {
     refs, evidenceByKey, selectedKeys, onSelectionChange,
     onImport, keyFn = pickerKey, mode = "picker", primaryAction, secondaryAction,
     exportFilename = "references", showZotero = true, showEvidence = true, header, extractionStatus,
+    ioPlacement = "toolbar", importHint,
   } = props;
 
   const selectedSet = useMemo(() => new Set(selectedKeys), [selectedKeys]);
@@ -58,6 +63,23 @@ export function LiteraturePicker(props: LiteraturePickerProps) {
     else onSelectionChange(refs.map(keyFn));
   };
 
+  const ioControls = (
+    <div className="lit-picker-io">
+      <RefIO
+        currentRefs={refs}
+        onImport={(imported) => onImport?.(imported)}
+        exportFilename={exportFilename}
+      />
+      {showZotero && (
+        <ZoteroPanel
+          currentRefs={refs}
+          onImport={(imported) => onImport?.(imported)}
+          selectedForPush={checkedRefs}
+        />
+      )}
+    </div>
+  );
+
   return (
     <div className="lit-picker">
       {header}
@@ -73,20 +95,7 @@ export function LiteraturePicker(props: LiteraturePickerProps) {
             正在提取核心发现 {extractionStatus.done}/{extractionStatus.total}…
           </span>
         )}
-        <div className="lit-picker-io">
-          <RefIO
-            currentRefs={refs}
-            onImport={(imported) => onImport?.(imported)}
-            exportFilename={exportFilename}
-          />
-          {showZotero && (
-            <ZoteroPanel
-              currentRefs={refs}
-              onImport={(imported) => onImport?.(imported)}
-              selectedForPush={checkedRefs}
-            />
-          )}
-        </div>
+        {ioPlacement === "toolbar" && ioControls}
       </div>
 
       <ul className="lit-picker-list">
@@ -162,6 +171,13 @@ export function LiteraturePicker(props: LiteraturePickerProps) {
           );
         })}
       </ul>
+
+      {ioPlacement === "footer" && (
+        <div className="lit-picker-io-footer">
+          {importHint && <div className="lit-picker-io-hint">{importHint}</div>}
+          {ioControls}
+        </div>
+      )}
 
       {mode === "picker" && (primaryAction || secondaryAction) && (
         <div className="lit-picker-actions">

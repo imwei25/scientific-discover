@@ -1049,7 +1049,8 @@ body {
   color: var(--muted);
   margin: 0;
   font-size: 14.5px;
-  max-width: 640px;
+  /* 与下方正文(.module 宽 880px)同宽, 避免说明文字过早换行 */
+  max-width: none;
   line-height: 1.75;
 }
 
@@ -4770,6 +4771,30 @@ mark.ai-edit {
 .lit-picker-count { color: var(--text-muted, #666); font-size: 0.9em; }
 .lit-picker-progress { color: var(--accent, #0a7); font-size: 0.85em; }
 .lit-picker-io { margin-left: auto; display: flex; gap: 8px; }
+/* 导入/导出/Zotero 放到文献列表下方时的容器: 虚线框 + 说明文字, 明确"导入的文献是后续调研的输入"。 */
+.lit-picker-io-footer {
+  margin-top: 14px;
+  padding: 14px 16px;
+  border: 1px dashed var(--border, #ddd);
+  border-radius: 8px;
+  background: var(--panel-bg, rgba(0,0,0,0.015));
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.lit-picker-io-footer .lit-picker-io { margin-left: 0; flex-wrap: wrap; }
+.lit-picker-io-hint {
+  flex: 1 1 260px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  font-size: 0.85em;
+  line-height: 1.5;
+  color: var(--text-muted, #666);
+}
+.lit-picker-io-hint strong { color: var(--text, #222); font-size: 0.95em; }
 /* 导入/导出双按钮尺寸对齐: 统一高度、内边距、最小宽度, 避免"一大一小"错位。 */
 .refio-actions { align-items: center; gap: 8px; margin-top: 0; }
 .refio-export-wrap { display: inline-flex; align-items: stretch; }

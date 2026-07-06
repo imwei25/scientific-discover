@@ -12,6 +12,7 @@ import { parseAttachments, appendAttachmentsToField } from "../lib/attachments";
 import AttachmentChips from "../components/AttachmentChips";
 import RefIO from "../components/RefIO";
 import ZoteroPanel from "../components/ZoteroPanel";
+import WarningPanel from "../components/WarningPanel";
 import { usePersistentState } from "../lib/usePersistentState";
 import { downloadText, downloadDocxFromText, downloadPdfFromText, tsName } from "../lib/download";
 import { copyToClipboard } from "../lib/clipboard";
@@ -170,6 +171,8 @@ export default function GrantModule({ goto }: { goto: Goto }) {
   const [running, setRunning] = useState(false);
   const [paused, setPaused] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // 后端非致命告警(如某外网文献源连不上): 可继续但需用户关注。
+  const [warnings, setWarnings] = useState<string[]>([]);
   const [docxBusy, setDocxBusy] = useState(false);
   const [docxErr, setDocxErr] = useState("");
   const [copied, setCopied] = useState(false);
@@ -277,6 +280,7 @@ export default function GrantModule({ goto }: { goto: Goto }) {
   const writeHandlers = (signal: AbortSignal) => ({
     signal,
     onStatus: setStatus,
+    onWarning: (m: string) => setWarnings((prev) => (prev.includes(m) ? prev : [...prev, m])),
     onScheme: (s: GrantScheme) => setScheme(s),
     onOutline: (items: GrantOutlineItem[]) => setOutline(items),
     onReferences: (items: Reference[]) => setRefs(items),
@@ -328,6 +332,7 @@ export default function GrantModule({ goto }: { goto: Goto }) {
   // 新检索到的文献按 pickerKey 去重后追加。
   const launchGrantSearch = async () => {
     setSearchBusy(true);
+    setWarnings([]);
     const seed = refs || [];
     setSearchRefs(seed);
     // 播种已知的核心发现（找选题带入 / 上次抽过的）：picker 打开就有徽章，不用再等抽取。
@@ -398,6 +403,9 @@ export default function GrantModule({ goto }: { goto: Goto }) {
             for (const row of data.items || []) map[row.key] = row;
             setSearchEvidence((prev) => ({ ...prev, ...map }));
             setRefsEvidence((prev) => ({ ...(prev || {}), ...map }));  // 落库供后续跳过
+          } else if (evName === "warning") {
+            // 某外网文献源连不上等非致命告警: 展示但不中断检索。
+            if (data.message) setWarnings((prev) => (prev.includes(data.message) ? prev : [...prev, data.message]));
           }
         }
       }
@@ -538,7 +546,7 @@ export default function GrantModule({ goto }: { goto: Goto }) {
     setStyleSample(""); setStyleProfile(""); setStyleOn(true); setStyleErr("");
     setPendingMaterials([]);
     setPendingStyle([]);
-    setStatus(""); setError(null); setPhase("idle"); setStep(1); setPaused(false);
+    setStatus(""); setError(null); setWarnings([]); setPhase("idle"); setStep(1); setPaused(false);
     setStage("prepare"); setSearchRefs([]); setSearchEvidence({}); setSearchSelectedKeys([]);
   };
 
@@ -587,6 +595,7 @@ export default function GrantModule({ goto }: { goto: Goto }) {
       </div>
 
       {error && <div className="result-error" data-testid="grant-error">{error}</div>}
+      <WarningPanel warnings={warnings} onClear={() => setWarnings([])} testId="grant-warnings" />
 
       {/* ── 第 1 步：准备材料 ── */}
       {step === 1 && (

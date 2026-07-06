@@ -23,7 +23,7 @@ from typing import AsyncIterator
 from . import searchfilters
 from .clinicaltrials import search_trials
 from .config import settings
-from .literature import search_literature, fetch_abstract_by_id
+from .literature import search_literature, fetch_abstract_by_id, failed_sources_warning
 from .llm import stream_chat
 from .logutil import log_swallow
 
@@ -758,7 +758,8 @@ async def _facet_grouped_search(
 ) -> tuple[list[tuple[str, list[dict]]], bool]:
     """并发逐子方向检索, 跨子方向去重(先到先得), 保留子方向归属。
 
-    返回 (groups=[(子方向名, [papers])], any_source_ok)。
+    返回 (groups=[(子方向名, [papers])], any_source_ok, relaxed_any, down_sources)。
+    down_sources: 在"每一个"子方向检索里都连不上的源(取交集), 避免个别子方向偶发失败误报。
     """
     results = await asyncio.gather(
         *[
@@ -771,9 +772,11 @@ async def _facet_grouped_search(
     groups: list[tuple[str, list[dict]]] = []
     any_ok = False
     relaxed_any = False
+    failed_per_call: list[set[str]] = []  # 每个成功返回的子方向检索各自的失败源集合
     for f, res in zip(facets, results):
         if isinstance(res, Exception):
             continue
+        failed_per_call.append(set(res.get("failed_sources") or []))
         if res.get("network_errors", 0) == 0:
             any_ok = True
         if res.get("quality", {}).get("relaxed"):
@@ -786,7 +789,9 @@ async def _facet_grouped_search(
             seen.add(k)
             grp.append(p)
         groups.append((f["name"], grp))
-    return groups, any_ok, relaxed_any
+    # 只有在所有子方向检索里都失败的源才算"不可达"(交集), 抑制偶发抖动误报。
+    down_sources = sorted(set.intersection(*failed_per_call)) if failed_per_call else []
+    return groups, any_ok, relaxed_any, down_sources
 
 
 async def _deep_flow(
@@ -800,7 +805,7 @@ async def _deep_flow(
     names = "、".join(f["name"] for f in facets)
     yield ("status", {"message": f"正在按子方向检索 {_src_label(sources)}{flt_tip}（{len(facets)} 个子方向：{names}）…"})
 
-    groups, any_ok, relaxed_any = await _facet_grouped_search(facets, sources, filters)
+    groups, any_ok, relaxed_any, down_sources = await _facet_grouped_search(facets, sources, filters)
     total = sum(len(g) for _, g in groups)
     if total == 0:
         if not any_ok:
@@ -819,6 +824,9 @@ async def _deep_flow(
 
     papers = _flatten()
     yield ("references", {"items": [_ref_item(p) for p in papers]})
+    warn = failed_sources_warning(down_sources)
+    if warn:
+        yield ("warning", {"message": warn})
     if relaxed_any:
         yield ("status", {"message": "高质量文献不足，已自动纳入全部检索结果（可在高级检索设置调整质量门槛）。"})
 
@@ -1090,6 +1098,9 @@ async def deep_research_idea(inputs: dict) -> AsyncIterator[tuple[str, dict]]:
                 yield ("error", {"message": "未能从所选文献源检索到相关文献。可采纳上面的 AI 改写建议后重试。"})
                 return
             yield ("references", {"items": [_ref_item(p) for p in papers]})
+            warn = failed_sources_warning(result.get("failed_sources"))
+            if warn:
+                yield ("warning", {"message": warn})
             trials = await _emit_trials(queries, sources)
             if trials is not None:
                 yield ("trials", trials)

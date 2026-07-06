@@ -375,6 +375,20 @@ def _merge_all(source_lists: list[list[dict]], cap: int, terms: set[str] | None 
 
 _PAPER_SOURCES = ("pubmed", "europepmc", "openalex", "crossref")
 
+# 论文源 → 展示名(前端"连不上某外网源"告警用)。
+SOURCE_LABELS = {"pubmed": "PubMed", "europepmc": "Europe PMC", "openalex": "OpenAlex", "crossref": "Crossref"}
+
+
+def failed_sources_warning(failed: list[str] | None) -> str | None:
+    """把 search_literature 的 failed_sources 列表转成一句用户可见告警; 空则 None。
+
+    failed 可直接传 res.get("failed_sources"), 也可传上层聚合(如多子方向取交集)后的源清单。
+    """
+    if not failed:
+        return None
+    names = "、".join(SOURCE_LABELS.get(s, s) for s in failed)
+    return f"以下文献源连接失败：{names}，检索结果可能不完整（请检查网络或代理设置）。"
+
 
 async def search_literature(
     queries: list[str],
@@ -439,10 +453,15 @@ async def search_literature(
     if not all_fail:
         merged, q_dropped, q_relaxed = searchfilters.apply_quality_filter(merged, f)
     net_errs = sum(r["network_errors"] for r in ordered)
+    # 逐源"连不上"清单: 某源的全部检索式都失败(或整源抛错)时算不可达。
+    # 与 network_errors(仅全网皆败时非零)不同, 单个源挂掉也会出现在这里, 供前端逐源提示。
+    threshold = max(1, len(queries))
+    failed_sources = [s for s in _PAPER_SOURCES if s in by_source and by_source[s]["network_errors"] >= threshold]
     out = {
         "papers": merged,
         # 上游用 network_errors >= len(queries) 判断网络故障; 只要任一源能通就不算网络全败。
         "network_errors": net_errs if all_fail else 0,
+        "failed_sources": failed_sources,
         "queries_tried": list(queries),
         "quality": {
             "active": searchfilters.quality_active(f),

@@ -35,7 +35,7 @@ import traceback
 from typing import AsyncGenerator, AsyncIterator
 
 from .config import settings
-from .literature import search_literature
+from .literature import search_literature, failed_sources_warning
 from .llm import stream_chat
 # 复用找选题的: 引用核验(含支持句) / 支持句规则 / 主题→PubMed检索式 / 文献去重键
 from .research import _verify_citations, _gen_queries, _pkey, _QUOTE_RULE, extract_evidence_for_refs
@@ -64,6 +64,9 @@ async def search_grant(inputs: dict) -> AsyncIterator[tuple[str, dict]]:
         yield ("status", {"message": "正在检索 PubMed / Europe PMC / OpenAlex…"})
         res = await search_literature(queries, per_query=8, cap=16, sources=_RERESEARCH_SOURCES)
         papers = res.get("papers") or []
+        warn = failed_sources_warning(res.get("failed_sources"))
+        if warn:
+            yield ("warning", {"message": warn})
         yield ("references", {"items": papers})
         if papers:
             yield ("status", {"message": f"正在提取 {len(papers)} 篇文献的核心发现…"})
@@ -940,6 +943,9 @@ async def write_grant(inputs: dict) -> AsyncIterator[tuple[str, dict]]:
             try:
                 queries = await _gen_queries(direction, "", final_title)
                 res = await search_literature(queries, per_query=8, cap=16, sources=_RERESEARCH_SOURCES)
+                warn = failed_sources_warning(res.get("failed_sources"))
+                if warn:
+                    yield ("warning", {"message": warn})
                 refs, added = _merge_refs(refs, res.get("papers", []))
                 if added:
                     yield ("status", {"message": f"新增 {added} 篇相关文献，将据此撰写立项依据…"})
@@ -1036,6 +1042,9 @@ async def revise_section(inputs: dict) -> AsyncIterator[tuple[str, dict]]:
             queries = await _gen_queries(direction, "", title)
             yield ("status", {"message": "正在检索 PubMed / Europe PMC / OpenAlex…"})
             res = await search_literature(queries, per_query=8, cap=12, sources=_RERESEARCH_SOURCES)
+            warn = failed_sources_warning(res.get("failed_sources"))
+            if warn:
+                yield ("warning", {"message": warn})
             refs, added = _merge_refs(refs, res.get("papers", []))
             if added:
                 yield ("status", {"message": f"新增 {added} 篇文献，正在据新文献重写本节…"})

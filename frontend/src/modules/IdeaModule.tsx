@@ -613,6 +613,16 @@ export default function IdeaModule({ goto }: { goto: Goto }) {
             keyFn={refKey}
             exportFilename="找选题-文献"
             extractionStatus={evidenceExtractProgress}
+            ioPlacement="footer"
+            importHint={
+              <>
+                <strong>📥 导入 / 导出文献</strong>
+                <span>
+                  在这里导入的文献（RIS / BibTeX / Zotero）会与上方检索到的文献合并，
+                  作为后续「文献调研」的输入 —— 勾选哪些，就用哪些生成调研报告与选题卡。
+                </span>
+              </>
+            }
             onImport={async (imported) => {
               // Merge new refs (dedup by existing refKey)
               const keyMap = new Map(refs.map((r) => [refKey(r), r]));
@@ -697,7 +707,7 @@ export default function IdeaModule({ goto }: { goto: Goto }) {
           />
 
           {refs.length === 0 && !running && !rewrite && (
-            <p className="lit-empty">尚无文献。可返回上一步检索，或用上方「导入文献」带入。</p>
+            <p className="lit-empty">尚无文献。可返回上一步检索，或用下方「导入文献」带入。</p>
           )}
 
           {trials.length > 0 && (
