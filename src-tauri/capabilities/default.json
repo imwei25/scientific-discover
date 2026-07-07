@@ -1,9 +1,0 @@
-{
-  "$schema": "../gen/schemas/desktop-schema.json",
-  "identifier": "default",
-  "description": "默认权限(最小化)。sidecar 由 main.rs 用 std::process 直接拉起, 不经 shell 插件; 保存对话框与写盘由 save_file_dialog 命令在 Rust 侧完成, 前端无 dialog/fs 权限。",
-  "windows": ["main"],
-  "permissions": [
-    "core:default"
-  ]
-}

@@ -1,43 +1,14 @@
-# Python
-backend/.venv/
-__pycache__/
-*.pyc
+# 密钥与虚拟环境（保留在磁盘上，但不进 git）
 backend/.env
-# 出厂内置的硅基流动默认 key(打包进 exe, 但绝不能进公开仓库, 否则被密钥扫描封禁)
-backend/app/default_provider.py
+backend/.venv/
 
-# Node
-frontend/node_modules/
-frontend/tsconfig.tsbuildinfo
-# 注: frontend/dist 纳入版本管理(选项B)，pull 即最新界面，无需 build。
-# 改前端后需 npm run build 再提交 dist。
+# 旧产品的遗留目录（未跟踪的构建产物，不进 git）
+backend/
+frontend/
+src-tauri/
 
-# Playwright
-frontend/test-results/
-frontend/playwright-report/
-
-# Tauri
-src-tauri/target/
-src-tauri/binaries/
-src-tauri/resources/sidecar/
-src-tauri/gen/
-
-# PyInstaller 打包中间产物(sidecar 由 scripts/build-sidecar.ps1 现打, 不入库)
-backend/build/
-backend/dist/
-backend/*.spec
-
-# OS
-.DS_Store
-Thumbs.db
-
-# runtime
-backend/server.log
-backend/data/projects/
-.claude/scheduled_tasks.lock
-
-# Brainstorming companion
-.superpowers/
-
-scripts/_sidecar_build.log
-scripts/_tauri_build.log
+# 运行时产物
+outputs/
+uploads/
+node_modules/
+*.log
