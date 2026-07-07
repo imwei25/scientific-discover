@@ -1,0 +1,9 @@
+# 科研 Python 技能所需的包（与本地 backend/.venv 对齐）
+pandas==2.2.3
+numpy==2.2.1
+scipy==1.15.0
+matplotlib==3.10.0
+scikit-learn==1.7.2
+seaborn==0.13.2
+statsmodels==0.14.4
+openpyxl==3.1.5

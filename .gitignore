@@ -12,3 +12,10 @@ outputs/
 uploads/
 node_modules/
 *.log
+
+# 部署密钥与密码文件（绝不入库）
+deploy/.env
+deploy/htpasswd
+.env
+serve.out
+serve.err

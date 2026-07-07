@@ -1,0 +1,11 @@
+.git
+backend
+frontend
+src-tauri
+uploads
+outputs
+web/node_modules
+**/node_modules
+*.log
+serve.out
+serve.err
