@@ -132,6 +132,26 @@ class _NoCacheHtmlStatic(StaticFiles):
         return resp
 
 
+def _check_dist_integrity() -> list[str]:
+    """校验 dist/index.html 引用的 hash 资产都存在, 返回缺失文件名列表。
+
+    dist 是"入库即用"策略(选项B): 每次 build 换 hash 文件名, 若提交时忘了
+    git add 新资产, pull 下来的 index.html 会引用不存在的 js/css → 白屏且无报错。
+    启动时自检一次, 缺了就在日志里点名, 把"白屏"变成可诊断问题。
+    """
+    index = _DIST / "index.html"
+    if not index.is_file():
+        return []
+    import re as _re
+
+    try:
+        html = index.read_text(encoding="utf-8", errors="ignore")
+    except OSError:
+        return []
+    refs = _re.findall(r'(?:src|href)="(/assets/[^"]+)"', html)
+    return [r for r in refs if not (_DIST / r.lstrip("/")).is_file()]
+
+
 if _DIST.is_dir():
     app.mount("/", _NoCacheHtmlStatic(directory=str(_DIST), html=True), name="static")
 
@@ -169,6 +189,11 @@ def run_server():
              f"provider={settings.provider} model={settings.model} "
              f"api_key={'已配置' if settings.api_key else '未配置'}")
         _log(f"前端已构建(dist 存在): {_DIST.is_dir()} -> {_DIST}")
+        missing_assets = _check_dist_integrity()
+        if missing_assets:
+            _log("警告: 前端 dist 不完整, index.html 引用了不存在的资产(提交时漏了 git add?): "
+                 + ", ".join(missing_assets)
+                 + " —— 界面将白屏, 请重新 npm run build 或补齐提交。")
         if not settings.api_key and not settings.mock:
             _log("警告: 未配置 LLM_API_KEY 且未开启 MOCK_LLM, AI 功能将不可用(但服务仍会启动)。")
 

@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import {
   streamGrant, grantStyle, streamGrantReview,
   Reference, Verification, GrantScheme, GrantOutlineItem,
-  GrantReviewData, EvidenceItem,
+  GrantReviewData, EvidenceItem, WarningPayload,
 } from "../lib/sse";
 import Markdown, { CiteInfo, normCiteUrl } from "../components/Markdown";
 import { reportLLMError } from "../lib/errorToast";
@@ -12,7 +12,8 @@ import { parseAttachments, appendAttachmentsToField } from "../lib/attachments";
 import AttachmentChips from "../components/AttachmentChips";
 import RefIO from "../components/RefIO";
 import ZoteroPanel from "../components/ZoteroPanel";
-import WarningPanel from "../components/WarningPanel";
+import WarningPanel, { type WarningEntry } from "../components/WarningPanel";
+import { retryLiteratureSources, sourceLabels } from "../lib/literatureRetry";
 import { usePersistentState } from "../lib/usePersistentState";
 import { downloadText, downloadDocxFromText, downloadPdfFromText, tsName } from "../lib/download";
 import { copyToClipboard } from "../lib/clipboard";
@@ -173,6 +174,9 @@ export default function GrantModule({ goto }: { goto: Goto }) {
   const [error, setError] = useState<string | null>(null);
   // 后端非致命告警(如某外网文献源连不上): 可继续但需用户关注。
   const [warnings, setWarnings] = useState<string[]>([]);
+  // 文献源连接失败(可重试)专用, 携带 retry 上下文以渲染"重试失败源"按钮。
+  const [sourceFail, setSourceFail] = useState<WarningPayload | null>(null);
+  const [retrying, setRetrying] = useState(false);
   const [docxBusy, setDocxBusy] = useState(false);
   const [docxErr, setDocxErr] = useState("");
   const [copied, setCopied] = useState(false);
@@ -277,10 +281,60 @@ export default function GrantModule({ goto }: { goto: Goto }) {
   const removeStyle = (i: number) => setPendingStyle((prev) => prev.filter((_, idx) => idx !== i));
 
   // streamGrant 的公共处理器: 把 body 节写进 sections, 评审节路由到 reviewText。
+  // 后端 warning 事件分流: 文献源连接失败(可重试)单独入 sourceFail, 其余入普通 warnings。
+  const handleWarning = (m: string, data?: WarningPayload) => {
+    if (data?.kind === "source_failure" && data.retry) setSourceFail(data);
+    else setWarnings((prev) => (prev.includes(m) ? prev : [...prev, m]));
+  };
+
+  // 只对连不上的文献源重跑检索, 新结果并入 picker 列表并补抽核心发现。
+  const retryFailedSources = async () => {
+    if (!sourceFail?.retry || retrying) return;
+    setRetrying(true);
+    try {
+      const { references, failed_sources } = await retryLiteratureSources(
+        sourceFail.retry, sourceFail.failed_sources || [],
+      );
+      const keyMap = new Map(searchRefs.map((r) => [pickerKey(r), r]));
+      const newOnes: Reference[] = [];
+      for (const r of references) {
+        const k = pickerKey(r);
+        if (!keyMap.has(k)) { keyMap.set(k, r); newOnes.push(r); }
+      }
+      setSearchRefs(Array.from(keyMap.values()));
+      setSearchSelectedKeys((prev) => [...new Set([...prev, ...newOnes.map(pickerKey)])]);
+      if (newOnes.length) {
+        setPickerExtractProgress({ done: 0, total: newOnes.length });
+        try {
+          const evMap = await extractEvidenceForRefs(newOnes, (d, t) => setPickerExtractProgress({ done: d, total: t }));
+          setSearchEvidence((prev) => ({ ...prev, ...evMap }));
+          setRefsEvidence((prev) => ({ ...(prev || {}), ...evMap }));  // 落库供后续跳过
+        } finally {
+          setPickerExtractProgress(null);
+        }
+      }
+      if (failed_sources.length) {
+        setSourceFail((prev) => prev ? {
+          ...prev, failed_sources,
+          message: `以下文献源仍连接失败：${sourceLabels(failed_sources)}，可再次重试或检查网络/代理设置。`,
+        } : prev);
+      } else {
+        setSourceFail(null);
+        setWarnings((prev) => [...prev, newOnes.length
+          ? `重试成功，新增 ${newOnes.length} 篇文献。`
+          : "重试成功：失败的文献源已恢复（未发现新文献）。"]);
+      }
+    } catch {
+      setWarnings((prev) => [...prev, "重试失败源时出错，请稍后再试或检查网络。"]);
+    } finally {
+      setRetrying(false);
+    }
+  };
+
   const writeHandlers = (signal: AbortSignal) => ({
     signal,
     onStatus: setStatus,
-    onWarning: (m: string) => setWarnings((prev) => (prev.includes(m) ? prev : [...prev, m])),
+    onWarning: handleWarning,
     onScheme: (s: GrantScheme) => setScheme(s),
     onOutline: (items: GrantOutlineItem[]) => setOutline(items),
     onReferences: (items: Reference[]) => setRefs(items),
@@ -333,6 +387,7 @@ export default function GrantModule({ goto }: { goto: Goto }) {
   const launchGrantSearch = async () => {
     setSearchBusy(true);
     setWarnings([]);
+    setSourceFail(null);
     const seed = refs || [];
     setSearchRefs(seed);
     // 播种已知的核心发现（找选题带入 / 上次抽过的）：picker 打开就有徽章，不用再等抽取。
@@ -404,8 +459,8 @@ export default function GrantModule({ goto }: { goto: Goto }) {
             setSearchEvidence((prev) => ({ ...prev, ...map }));
             setRefsEvidence((prev) => ({ ...(prev || {}), ...map }));  // 落库供后续跳过
           } else if (evName === "warning") {
-            // 某外网文献源连不上等非致命告警: 展示但不中断检索。
-            if (data.message) setWarnings((prev) => (prev.includes(data.message) ? prev : [...prev, data.message]));
+            // 某外网文献源连不上等非致命告警: 展示但不中断检索; source_failure 走可重试通道。
+            if (data.message) handleWarning(data.message, data as WarningPayload);
           }
         }
       }
@@ -546,7 +601,7 @@ export default function GrantModule({ goto }: { goto: Goto }) {
     setStyleSample(""); setStyleProfile(""); setStyleOn(true); setStyleErr("");
     setPendingMaterials([]);
     setPendingStyle([]);
-    setStatus(""); setError(null); setWarnings([]); setPhase("idle"); setStep(1); setPaused(false);
+    setStatus(""); setError(null); setWarnings([]); setSourceFail(null); setPhase("idle"); setStep(1); setPaused(false);
     setStage("prepare"); setSearchRefs([]); setSearchEvidence({}); setSearchSelectedKeys([]);
   };
 
@@ -595,7 +650,17 @@ export default function GrantModule({ goto }: { goto: Goto }) {
       </div>
 
       {error && <div className="result-error" data-testid="grant-error">{error}</div>}
-      <WarningPanel warnings={warnings} onClear={() => setWarnings([])} testId="grant-warnings" />
+      <WarningPanel
+        warnings={[
+          ...warnings,
+          ...(sourceFail ? [{
+            message: sourceFail.message,
+            action: { label: "重试失败源", onClick: retryFailedSources, busy: retrying, busyLabel: "重试中…" },
+          } as WarningEntry] : []),
+        ]}
+        onClear={() => { setWarnings([]); setSourceFail(null); }}
+        testId="grant-warnings"
+      />
 
       {/* ── 第 1 步：准备材料 ── */}
       {step === 1 && (

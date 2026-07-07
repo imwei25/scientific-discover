@@ -7,11 +7,15 @@ REST 接口免费、无需 key、查询语法与 PubMed 兼容（支持 MeSH）�
 """
 from __future__ import annotations
 
+import re
+from html import unescape
+
 import httpx
 
 from . import searchfilters
 
 _ENDPOINT = "https://www.ebi.ac.uk/europepmc/webservices/rest/search"
+_REST_BASE = "https://www.ebi.ac.uk/europepmc/webservices/rest"
 
 
 def _normalize(raw: dict) -> dict | None:
@@ -104,3 +108,31 @@ async def search_epmc(queries: list[str], per_query: int = 6, cap: int = 18, fil
             if len(collected) >= cap:
                 break
     return {"papers": collected, "network_errors": network_errors, "queries_tried": queries_tried}
+
+
+async def fetch_fulltext(pmid: str = "", doi: str = "", timeout: float = 15.0) -> str:
+    """按 pmid/doi 反查 Europe PMC, 有开放全文 (fullTextXML) 时返回纯文本, 否则 ""。
+
+    供深度调研深读兜底: 无 OA PDF 链接的文献仍可能在 PMC 有免费全文。
+    XML 只做粗提纯 (去标签+合并空行), 供 LLM 摄入足够。
+    """
+    if not pmid and not doi:
+        return ""
+    query = f"EXT_ID:{pmid} AND SRC:MED" if pmid else f'DOI:"{doi}"'
+    async with httpx.AsyncClient(timeout=httpx.Timeout(timeout)) as client:
+        r = await client.get(_ENDPOINT, params={
+            "query": query, "format": "json", "resultType": "lite", "pageSize": "1",
+        })
+        r.raise_for_status()
+        results = (r.json().get("resultList") or {}).get("result") or []
+        if not results:
+            return ""
+        pmcid = str(results[0].get("pmcid") or "").strip()
+        if not pmcid:
+            return ""
+        r2 = await client.get(f"{_REST_BASE}/{pmcid}/fullTextXML")
+        if r2.status_code != 200 or not r2.text.strip():
+            return ""
+        xml = r2.text
+    text = unescape(re.sub(r"<[^>]+>", "\n", xml))
+    return re.sub(r"\n{3,}", "\n\n", text).strip()

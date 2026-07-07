@@ -82,6 +82,10 @@ export default function App() {
   const [canvasCollapsed, setCanvasCollapsed] = usePersistentState<boolean>("canvas:collapsed", false);
   const [health, setHealth] = useState<Health | null>(null);
   const [healthErr, setHealthErr] = useState(false);
+  // 冷启动计时: 打包版首次启动 sidecar 需解压+初始化, 用它让启动遮罩文案随等待时长升级。
+  const [bootSecs, setBootSecs] = useState(0);
+  // 极端情况(后端始终起不来)下的逃生阀: 等待过久允许用户强行进入界面, 避免被永久挡在遮罩外。
+  const [splashDismissed, setSplashDismissed] = useState(false);
   const [cmdkOpen, setCmdkOpen] = useState(false);
   // W2-4-f 免责声明: 用时间戳代替布尔, 7 天后自动重现
   const [disclaimerDismissedAt, setDisclaimerDismissedAt] = usePersistentState<number>("disclaimer:lastDismissed", 0);
@@ -149,7 +153,7 @@ export default function App() {
       } catch {
         if (cancelled) return;
         setHealthErr(true);
-        timer = setTimeout(probe, 2000); // 未连接则 2 秒后重试
+        timer = setTimeout(probe, 1000); // 未连接则 1 秒后重试(后端一就绪即尽快进入)
       }
     };
     probe();
@@ -161,6 +165,16 @@ export default function App() {
       delete (window as unknown as { __refreshHealth?: () => void }).__refreshHealth;
     };
   }, []);
+
+  // 启动遮罩计时: 本地服务未就绪时每秒 +1(驱动文案升级 / 逃生阀); 就绪后停止并清零。
+  useEffect(() => {
+    if (health) {
+      setBootSecs(0);
+      return;
+    }
+    const t = setInterval(() => setBootSecs((s) => s + 1), 1000);
+    return () => clearInterval(t);
+  }, [health]);
 
   // 允许其他组件(Toast 的"重新配置"按钮)调起 wizard
   useEffect(() => {
@@ -233,6 +247,30 @@ export default function App() {
   return (
     <div className="app">
       <ToastContainer />
+      {/* 启动遮罩: 本地服务(sidecar)就绪前全屏遮住界面, 让用户知道"正在启动"而非卡死/有bug。
+          打包版首次启动需解压运行组件, 常耗十几秒; 文案随等待时长升级, 过久给逃生阀。 */}
+      {!health && !splashDismissed && (
+        <div className="app-splash" role="status" aria-live="polite" data-testid="app-splash">
+          <div className="app-splash-card">
+            <img src="/tellgen.png" alt="Tellgen" className="app-splash-logo" />
+            <div className="app-splash-spinner" aria-hidden="true" />
+            <div className="app-splash-title">正在启动本地服务</div>
+            <div className="app-splash-sub">
+              {bootSecs < 6
+                ? "正在连接本地引擎，请稍候…"
+                : bootSecs < 25
+                  ? "首次启动需要解压运行组件，通常十几秒，请耐心等待"
+                  : "启动较慢可能是安全软件正在扫描组件，请再稍候片刻"}
+            </div>
+            {bootSecs >= 6 && <div className="app-splash-elapsed">已等待 {bootSecs}s</div>}
+            {bootSecs >= 40 && (
+              <button className="app-splash-skip" onClick={() => setSplashDismissed(true)}>
+                仍未连接？点此进入界面
+              </button>
+            )}
+          </div>
+        </div>
+      )}
       <CommandPalette
         open={cmdkOpen}
         onClose={() => setCmdkOpen(false)}

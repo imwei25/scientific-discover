@@ -29,7 +29,11 @@ from .llm import stream_chat
 from .logutil import log_swallow
 from .textio import read_csv_bytes
 
-EXEC_TIMEOUT = 60  # 秒
+# 沙箱执行超时(秒)。默认 60s; 大数据集/重计算可用环境变量 DA_EXEC_TIMEOUT 放宽(上限 10 分钟)。
+try:
+    EXEC_TIMEOUT = min(600, max(5, int(os.getenv("DA_EXEC_TIMEOUT", "60"))))
+except ValueError:
+    EXEC_TIMEOUT = 60
 
 # 轻量安全护栏: 命中这些明显危险的调用则拒绝执行(本地用户环境, 主要防误伤)。
 # eval/exec/open 仅拦截“内置函数”形式(前面不是 . 或字母): 这样既挡住注入/读文件,
@@ -208,20 +212,45 @@ def _dedup_columns(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
+def _excel_error(e: Exception) -> Exception:
+    """把读取 xlsx 的底层异常翻译成可读中文; 仅识别的才翻译, 其余原样返回。"""
+    msg = str(e)
+    if "expat" in msg or "SimpleXMLTreeBuilder" in msg:
+        # 打包版漏收 pyexpat/openpyxl 的 XML 后端时, 读 xlsx 会报此错(与数据本身无关)。
+        return RuntimeError(
+            "读取 Excel 所需的组件未随本程序正确打包。请更新到修复后的版本; "
+            "临时办法: 用 Excel/WPS 把该表另存为 .csv 再上传。"
+        )
+    if "Missing optional dependency" in msg:
+        # pandas 的 Excel 引擎(openpyxl/xlrd)缺失: 同样是打包/环境问题, 与数据无关。
+        return RuntimeError(
+            "读取该 Excel 格式所需的组件缺失(程序打包或环境问题)。请更新到修复后的版本; "
+            "临时办法: 用 Excel/WPS 把该表另存为 .xlsx 或 .csv 再上传。"
+        )
+    return e
+
+
 def _load(filename: str, content: bytes) -> pd.DataFrame:
     # CSV 用共享的健壮解码(兼容中文用户常见的 GBK/带BOM 编码), 见 textio.read_csv_bytes。
     if filename.lower().endswith((".xlsx", ".xls")):
         # 多 sheet 场景静默读第一张会漏数据 (R19 UX 审计 P1). 检出后抛 ValueError,
         # 上层能把提示转发给用户: 让用户合并到一张表, 或明确指定要用哪张 sheet.
-        xls = pd.ExcelFile(io.BytesIO(content))
-        if len(xls.sheet_names) > 1:
-            names = ", ".join(f"「{n}」" for n in xls.sheet_names[:5])
-            more = "" if len(xls.sheet_names) <= 5 else f" 等 {len(xls.sheet_names)} 张"
+        try:
+            xls = pd.ExcelFile(io.BytesIO(content))
+            sheet_names = xls.sheet_names
+        except Exception as e:  # noqa: BLE001
+            raise _excel_error(e) from e
+        if len(sheet_names) > 1:
+            names = ", ".join(f"「{n}」" for n in sheet_names[:5])
+            more = "" if len(sheet_names) <= 5 else f" 等 {len(sheet_names)} 张"
             raise ValueError(
                 f"Excel 含多张工作表 ({names}{more}), 默认只会分析第一张易漏数据。"
                 f"请合并到一张表, 或另存为 CSV 后重试。"
             )
-        return _dedup_columns(pd.read_excel(xls, sheet_name=xls.sheet_names[0]))
+        try:
+            return _dedup_columns(pd.read_excel(xls, sheet_name=sheet_names[0]))
+        except Exception as e:  # noqa: BLE001
+            raise _excel_error(e) from e
     return _dedup_columns(read_csv_bytes(content))
 
 
@@ -691,9 +720,39 @@ try:
     import lifelines
 except Exception:
     lifelines = None
+# 中文字体: 打包态(PyInstaller)下 matplotlib 用的是打进包里的字体缓存, 里面没有系统中文
+# 字体名, 于是按名指定的 "Microsoft YaHei" 查不到 -> 退回 DejaVu Sans(无汉字字形) -> 中文
+# 全渲染成方块(□□□)。修法: 按文件路径显式把系统自带中文字体注册进 matplotlib 的字体管理器
+# (不依赖字体名缓存), 再用注册后拿到的真实字体名作首选, 从根上消除方块。
+import os as _os
+import matplotlib.font_manager as _fm
+_CJK_FONT_FILES = [
+    r"C:\Windows\Fonts\msyh.ttc",     # 微软雅黑(Win, 几乎必然存在)
+    r"C:\Windows\Fonts\msyh.ttf",
+    r"C:\Windows\Fonts\msyhbd.ttc",
+    r"C:\Windows\Fonts\simhei.ttf",   # 黑体
+    r"C:\Windows\Fonts\simsun.ttc",   # 宋体
+    r"C:\Windows\Fonts\Deng.ttf",     # 等线
+    "/System/Library/Fonts/PingFang.ttc",                       # macOS
+    "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",   # Linux(Noto)
+    "/usr/share/fonts/truetype/wqy/wqy-microhei.ttc",           # Linux(文泉驿)
+]
+_cjk_names = []
+for _p in _CJK_FONT_FILES:
+    if _os.path.exists(_p):
+        try:
+            _fm.fontManager.addfont(_p)
+            _n = _fm.FontProperties(fname=_p).get_name()
+            if _n and _n not in _cjk_names:
+                _cjk_names.append(_n)
+        except Exception:
+            pass
+# 首选实际注册到的中文字体; 其后再列常见字体名兜底(开发态缓存里可能已有); DejaVu 兜英文数字。
+_SANS = _cjk_names + ["Microsoft YaHei", "SimHei", "PingFang SC", "Noto Sans CJK SC", "DejaVu Sans"]
+
 # 出版级清晰度的默认样式(本机无 LaTeX, 不使用任何需要 LaTeX 的样式)
 plt.rcParams.update({
-    "font.sans-serif": ["Microsoft YaHei", "SimHei", "DejaVu Sans"],
+    "font.sans-serif": _SANS,
     "axes.unicode_minus": False,
     "savefig.dpi": 150,
     "font.size": 11,
@@ -775,6 +834,22 @@ result["stdout"] = buf.getvalue()
 
 # 即便代码用了需要 LaTeX 的样式, 也强制关闭 usetex, 避免本机无 LaTeX 时出图失败
 plt.rcParams["text.usetex"] = False
+# 关键: 用户(AI)代码常调用 seaborn / plt.style.use(...) / sns.set_theme(), 它们会把
+# font.sans-serif 覆盖回 DejaVu(无中文字形) -> 中文渲染成方块(□□□), 即使系统装了中文字体、
+# 即使是开发版也会中招。这里在出图前再断言一次中文字体; 并逐个把已生成文本对象的字体族强制
+# 设回含中文的 sans-serif(保留原字号/粗细), 双保险彻底消除方块。
+plt.rcParams["font.sans-serif"] = _SANS
+plt.rcParams["font.family"] = "sans-serif"
+plt.rcParams["axes.unicode_minus"] = False
+from matplotlib.text import Text as _Text
+def _force_cjk_font(_fig):
+    for _t in _fig.findobj(_Text):
+        try:
+            _fp = _t.get_fontproperties().copy()
+            _fp.set_family(_SANS)   # 只改字体族, 字号/粗细保持用户设定
+            _t.set_fontproperties(_fp)
+        except Exception:
+            pass
 # 每张图: 始终产出用于网页内联展示的 png(120dpi); 另产出用户所选格式的可下载资产
 # (高清 png 300dpi / svg 矢量 / pdf 矢量), 满足投稿需求。
 # 整段出图再包一层 try: 出图崩溃不应连累已算好的 stdout(否则"算完了却因存图失败而全丢")。
@@ -782,6 +857,7 @@ charts = []
 try:
     for num in plt.get_fignums():
         fig = plt.figure(num)
+        _force_cjk_font(fig)
         bd = io.BytesIO()
         try:
             fig.savefig(bd, format="png", dpi=120, bbox_inches="tight")
@@ -866,10 +942,20 @@ def _execute(code: str, df: pd.DataFrame, chart_format: str = "png", palette: st
             f.write(_RUNNER)
         import subprocess
 
+        fmt, pal = (chart_format or "png"), (palette or "default")
+        if getattr(sys, "frozen", False):
+            # 打包态(PyInstaller): sys.executable 是 kyzs-sidecar.exe, 不是 python 解释器。
+            # 直接 `kyzs-sidecar.exe runner.py ...` 会被引导器忽略脚本参数、再次拉起整个后端,
+            # 于是第二个实例抢不到已被占用的 8756 端口 → [Errno 10048], runner 从未执行,
+            # 用户只看到"执行未产生结果"(其实与 AI 代码、端口本身都无关)。改用哨兵参数
+            # 让 exe 进入"运行器模式"执行 runner(见 sidecar_entry.py)。
+            argv = [sys.executable, "--da-runner", runner_path, data_path, code_path, out_path, fmt, pal]
+        else:
+            # 开发态: sys.executable 就是 python, 直接把 runner 当脚本跑。
+            argv = [sys.executable, runner_path, data_path, code_path, out_path, fmt, pal]
         try:
             proc = subprocess.run(
-                [sys.executable, runner_path, data_path, code_path, out_path,
-                 (chart_format or "png"), (palette or "default")],
+                argv,
                 cwd=d,
                 timeout=EXEC_TIMEOUT,
                 capture_output=True,

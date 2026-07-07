@@ -96,10 +96,14 @@ async def stream_ep(req: StreamReq) -> StreamingResponse:
                     yield _sse(event, data)
 
             elif req.phase == "generate":
-                refs = req.references
+                # 前端传来的 Reference 无 ref_key 字段, 在此统一补齐 (作者+年份键);
+                # deep_read_targets 的 ref_key 是前端本地键 (upload_id/pmid/url/title),
+                # 用 identity_key 建映射对齐到补齐后的键。
+                refs = dr.assign_ref_keys(req.references)
                 if not refs:
                     yield _sse("error", {"message": "没有可用文献，请返回上一步至少保留一篇。"})
                     return
+                id2key = {dr.identity_key(r): r["ref_key"] for r in refs}
 
                 # 1. 深读全文 (并发, 流式进度)
                 deep_reads_map: dict[str, str] = {}
@@ -108,13 +112,17 @@ async def stream_ep(req: StreamReq) -> StreamingResponse:
                     yield _sse("status", {"message": f"正在深读 {len(targets)} 篇文献全文…"})
                     async for event, data in dr.fetch_deep_reads_stream(targets, req.project_id):
                         if event == "deep_read_result" and data.get("ok"):
-                            deep_reads_map[data["ref_key"]] = data.get("chunk", "")
+                            ik = data.get("ref_key", "")
+                            deep_reads_map[id2key.get(ik, ik)] = data.get("chunk", "")
                         yield _sse(event, data)
+                    if not deep_reads_map:
+                        yield _sse("warning", {"message": "所选深读文献全部获取失败，本次仅按摘要合成。"})
 
                 # 2. 合成报告 (流式 delta)
                 yield _sse("status", {"message": f"正在据 {len(refs)} 篇文献合成报告…"})
                 async for event, data in dr.synthesize_stream(
-                    req.question, refs, deep_reads_map, req.english_report
+                    req.question, refs, deep_reads_map, req.english_report,
+                    background=req.background, evidence=req.evidence,
                 ):
                     yield _sse(event, data)
                     if event == "error":
@@ -125,6 +133,8 @@ async def stream_ep(req: StreamReq) -> StreamingResponse:
                 rows = await dr.build_contribution_table(req.question, refs, deep_reads_map)
                 if rows:
                     yield _sse("contribution_table", {"rows": rows})
+                else:
+                    yield _sse("warning", {"message": "文献贡献表生成失败（已跳过），报告正文不受影响。"})
 
                 yield _sse("done", {})
             else:
@@ -153,6 +163,9 @@ async def followup_ep(req: FollowupReq) -> StreamingResponse:
     async def gen():
         try:
             from ..llm import stream_chat
+            # 与 generate 阶段同一套 ref_key 生成规则 (作者+年份, 内容派生),
+            # 保证追问引用与报告引用可互相核验。
+            references = dr.assign_ref_keys(req.references)
             lang = "English" if req.english_report else "中文"
             if req.mode == "revise":
                 system = (
@@ -165,7 +178,7 @@ async def followup_ep(req: FollowupReq) -> StreamingResponse:
             else:
                 refs_summary = "\n".join(
                     f"[{r.get('ref_key','')}] {r.get('title','')} ({r.get('year','')})"
-                    for r in req.references[:40]
+                    for r in references[:40]
                 )
                 system = (
                     f"你是深度调研助手。用户已有一份调研报告，现在提出追加问题。"
@@ -174,7 +187,7 @@ async def followup_ep(req: FollowupReq) -> StreamingResponse:
                 )
                 user = (
                     f"追问：{req.question}\n\n"
-                    f"已有报告摘要（前1500字）：\n{req.report[:1500]}\n\n"
+                    f"已有报告（前6000字）：\n{req.report[:6000]}\n\n"
                     f"文献列表：\n{refs_summary}"
                 )
             msgs = [{"role": "system", "content": system}, {"role": "user", "content": user}]
@@ -182,7 +195,7 @@ async def followup_ep(req: FollowupReq) -> StreamingResponse:
             async for piece in stream_chat(msgs, task="research"):
                 full += piece
                 yield _sse("delta", {"text": piece})
-            verify = dr._verify_report_citations(full, req.references)
+            verify = dr._verify_report_citations(full, references)
             yield _sse("verify", verify)
             yield _sse("done", {})
         except Exception as e:  # noqa: BLE001

@@ -390,6 +390,40 @@ def failed_sources_warning(failed: list[str] | None) -> str | None:
     return f"以下文献源连接失败：{names}，检索结果可能不完整（请检查网络或代理设置）。"
 
 
+def source_failure_event(
+    failed: list[str] | None,
+    *,
+    queries: list[str],
+    filters: dict | None = None,
+    per_query: int = 6,
+    cap: int = 18,
+    field: str = "",
+) -> dict | None:
+    """构造 source-failure 的 warning 事件 data: 人话 message + 结构化 retry 上下文。
+
+    前端据 retry 上下文渲染"重试失败源"按钮(POST /api/literature/retry): 只对失败的源
+    单独重跑检索(源集合不同→绕过缓存→真正走网络), 再把结果并入现有文献列表。
+    空失败清单 → None。
+    """
+    msg = failed_sources_warning(failed)
+    if not msg:
+        return None
+    # 只保留论文源(ClinicalTrials 走旁路, 不参与逐源重试)。
+    retry_sources = [s for s in (failed or []) if s in _PAPER_SOURCES]
+    return {
+        "message": msg,
+        "kind": "source_failure",
+        "failed_sources": retry_sources,
+        "retry": {
+            "queries": list(queries or []),
+            "filters": filters or {},
+            "per_query": per_query,
+            "cap": cap,
+            "field": field or "",
+        },
+    }
+
+
 async def search_literature(
     queries: list[str],
     per_query: int = 6,

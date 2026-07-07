@@ -1444,6 +1444,27 @@ select {
   margin: 2px 0;
   line-height: 1.5;
 }
+/* 带操作按钮(如"重试失败源")的告警条: message 与按钮同排, 按钮不换行。 */
+.warning-panel-item:has(.warning-panel-action) {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+}
+.warning-panel-msg { flex: 1 1 auto; }
+.warning-panel-action {
+  flex: 0 0 auto;
+  align-self: center;
+  cursor: pointer;
+  font-size: 0.9em;
+  padding: 3px 12px;
+  border: 1px solid #b45309;
+  border-radius: 6px;
+  background: #fff7ed;
+  color: #7c2d12;
+  white-space: nowrap;
+}
+.warning-panel-action:hover:not(:disabled) { background: #ffedd5; }
+.warning-panel-action:disabled { opacity: 0.6; cursor: default; }
 
 .rewrite-suggest {
   margin-top: var(--sp-4);
@@ -4888,4 +4909,76 @@ mark.ai-edit {
 .deep-read-progress {
   padding: 6px 10px; background: var(--panel-alt, #f5f5f5);
   border-radius: 4px; margin: 8px 0; font-size: 13px;
+}
+
+/* ── 启动遮罩(app splash) ──────────────────────────────────────────
+   本地服务(sidecar)就绪前全屏遮住界面。打包版首次启动需解压运行组件, 常耗十几秒,
+   没有这层用户会看到完整界面却点什么都报"无法连接", 误以为坏了。 */
+.app-splash {
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--paper, #eef2f1);
+}
+.app-splash-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 14px;
+  padding: 32px 40px;
+  text-align: center;
+  max-width: 380px;
+}
+.app-splash-logo {
+  height: 36px;
+  width: auto;
+  opacity: 0.9;
+  margin-bottom: 4px;
+}
+.app-splash-spinner {
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  border: 3px solid var(--line, #dce5e3);
+  border-top-color: var(--teal, #0f9b94);
+  animation: app-splash-spin 0.8s linear infinite;
+}
+@keyframes app-splash-spin {
+  to { transform: rotate(360deg); }
+}
+.app-splash-title {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--petrol, #0e3a39);
+}
+.app-splash-sub {
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--muted, #5c6b69);
+  min-height: 2.6em;
+}
+.app-splash-elapsed {
+  font-size: 12px;
+  color: var(--faint, #93a09d);
+  font-variant-numeric: tabular-nums;
+}
+.app-splash-skip {
+  margin-top: 6px;
+  padding: 7px 16px;
+  font-size: 13px;
+  color: var(--petrol, #0e3a39);
+  background: var(--surface, #fff);
+  border: 1px solid var(--line, #dce5e3);
+  border-radius: 8px;
+  cursor: pointer;
+}
+.app-splash-skip:hover {
+  background: var(--surface-2, #f7faf9);
+  border-color: var(--teal, #0f9b94);
+}
+@media (prefers-reduced-motion: reduce) {
+  .app-splash-spinner { animation-duration: 2s; }
 }

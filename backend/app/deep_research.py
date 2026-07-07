@@ -28,6 +28,7 @@ from .config import settings
 
 # ── 常量 ──────────────────────────────────────────────────────
 DEEP_READ_MAX_TOKENS_PER_PAPER = 8000
+DEEP_READ_TOTAL_PROMPT_TOKENS = 60000  # 全部深读节选注入合成 prompt 的合计上限
 DEEP_READ_CONCURRENCY = 3
 DEEP_READ_PER_PAPER_TIMEOUT_SEC = 20
 DEEP_READ_TOTAL_TIMEOUT_SEC = 90
@@ -55,27 +56,85 @@ def _new_upload_id() -> str:
 RecommendScore = Literal["high", "medium", "none"]
 
 
+def _parse_json_array(raw: str) -> list | None:
+    """从 LLM 输出提取 JSON 数组, 容忍 ```json 围栏/前后杂文。失败返回 None。"""
+    s, e = raw.find("["), raw.rfind("]")
+    if s == -1 or e <= s:
+        return None
+    try:
+        v = json.loads(raw[s : e + 1])
+    except Exception:  # noqa: BLE001
+        return None
+    return v if isinstance(v, list) else None
+
+
+def identity_key(r: dict) -> str:
+    """与前端 refKeyOf 同构: upload_id || pmid || url || title。用于对齐前端传来的 deep_read_targets。"""
+    return str(r.get("upload_id") or r.get("pmid") or r.get("url") or r.get("title") or "")
+
+
+def assign_ref_keys(refs: list[dict]) -> list[dict]:
+    """给缺 ref_key 的文献生成稳定可读的引用键 (作者+年份, 冲突加序号; 兜底 ref-N)。
+
+    前端 generate/followup 传来的 Reference 没有 ref_key 字段; 合成 prompt、
+    引用核验、深读节选注入都依赖它, 必须在入口统一补齐。
+    """
+    used: set[str] = {str(r.get("ref_key")) for r in refs if r.get("ref_key")}
+    out: list[dict] = []
+    for i, r in enumerate(refs):
+        rk = str(r.get("ref_key") or "").strip()
+        if not rk:
+            author = str(r.get("first_author") or "").strip()
+            year = str(r.get("year") or "").strip()
+            base = " ".join(x for x in (author, year) if x) or f"ref-{i + 1}"
+            rk, n = base, 2
+            while rk in used:
+                rk = f"{base}-{n}"
+                n += 1
+            used.add(rk)
+        out.append({**r, "ref_key": rk})
+    return out
+
+
 # ── 深读全文的简单章节截断 (v1: 优先 Results + Discussion) ─────
 # task #7 记录了 v2 改进方向 (章节切分 + 关键词相关性 + 向量检索评估)
 
 _SECTION_PAT = re.compile(
-    r"^\s*(introduction|background|methods?|materials?|results?|findings?|discussion|conclusions?)\s*$",
+    r"^\s*(?:\d+[.)]?\s+)?"
+    r"(introduction|background|methods?|materials?(?:\s+and\s+methods?)?"
+    r"|results?(?:\s+and\s+discussion)?|findings?|discussion|conclusions?)"
+    r"\s*:?\s*$",
     re.IGNORECASE | re.MULTILINE,
 )
 
 
+def _canon_section(raw: str) -> str:
+    """章节标题归一到 priority 里用的规范名。"""
+    raw = raw.lower()
+    if "material" in raw or "method" in raw:
+        return "method"
+    if "result" in raw or "finding" in raw:
+        return "result"
+    for name in ("discussion", "conclusion", "background"):
+        if name in raw:
+            return name
+    return "introduction"
+
+
 def _split_sections(text: str) -> dict[str, str]:
-    """粗切:按常见章节标题分段。找不到章节返回 {'body': text}。"""
+    """粗切:按常见章节标题分段(容忍编号前缀/复合标题)。找不到章节返回 {'body': text}。"""
     matches = list(_SECTION_PAT.finditer(text))
     if not matches:
         return {"body": text}
     out: dict[str, str] = {}
     for i, m in enumerate(matches):
-        name = m.group(1).lower().rstrip("s").rstrip("es")  # normalize
+        name = _canon_section(m.group(1))
         start = m.end()
         end = matches[i + 1].start() if i + 1 < len(matches) else len(text)
-        out[name] = text[start:end].strip()
-    return out
+        seg = text[start:end].strip()
+        if seg:  # 同名章节(如正文与目录各出现一次)拼接而非覆盖
+            out[name] = (out[name] + "\n\n" + seg) if name in out else seg
+    return out or {"body": text}
 
 
 def _truncate_to_budget(text: str, budget_tokens: int) -> str:
@@ -89,7 +148,7 @@ def select_deep_read_chunk(full_text: str, budget_tokens: int = DEEP_READ_MAX_TO
     sections = _split_sections(full_text)
     if "body" in sections:
         return _truncate_to_budget(full_text, budget_tokens)
-    priority = ["result", "finding", "discussion", "conclusion", "method", "introduction", "background"]
+    priority = ["result", "discussion", "conclusion", "method", "introduction", "background"]
     picked: list[str] = []
     remaining = budget_tokens * 4
     for name in priority:
@@ -305,12 +364,9 @@ async def recommend(question: str, refs: list[dict]) -> dict:
     buf = ""
     async for piece in stream_chat(_recommend_messages(question, refs[:40]), task="research"):
         buf += piece
-    try:
-        raw = json.loads(buf)
-        if not isinstance(raw, list):
-            raise ValueError("LLM 未返回数组")
-    except Exception as e:  # noqa: BLE001
-        return {"ok": False, "error": f"解析推荐分失败: {e}", "raw": buf[:200]}
+    raw = _parse_json_array(buf)
+    if raw is None:
+        return {"ok": False, "error": "解析推荐分失败: LLM 未返回 JSON 数组", "raw": buf[:200]}
     # 归一化 + 校验
     valid_keys = {r["ref_key"] for r in refs}
     items = [
@@ -320,7 +376,7 @@ async def recommend(question: str, refs: list[dict]) -> dict:
             "reason": (it.get("reason") or "")[:60],
         }
         for it in raw
-        if it.get("ref_key") in valid_keys
+        if isinstance(it, dict) and it.get("ref_key") in valid_keys
     ]
     # 补全未返回的条目为 none
     returned_keys = {it["ref_key"] for it in items}
@@ -350,19 +406,38 @@ async def _load_upload_full_text(upload_id: str, project_id: str | None) -> str:
 
 
 async def fetch_one_deep_read(target: dict, project_id: str | None) -> dict:
-    """按 target.source 拿全文并截断。失败返回 ok=False + error。"""
+    """拿全文并截断。失败返回 ok=False + error。
+
+    获取链: upload 缓存 → oa_url PDF → Europe PMC 开放全文 (按 pmid/doi)。
+    前一环失败时自动尝试下一环。
+    """
     ref_key = target.get("ref_key", "")
     src = target.get("source", "")
     try:
         async def _do() -> str:
             if src == "upload":
                 return await _load_upload_full_text(target["upload_id"], project_id)
-            if src in ("oa", "europepmc", "crossref") and target.get("oa_url"):
+            errors: list[str] = []
+            if target.get("oa_url"):
                 from .extract import extract_text
-                content = await _fetch_pdf_bytes(target["oa_url"])
-                ex = extract_text("paper.pdf", content)
-                return ex.get("text") or ""
-            raise ValueError(f"无可读全文来源: {src}")
+                try:
+                    content = await _fetch_pdf_bytes(target["oa_url"])
+                    ex = extract_text("paper.pdf", content)
+                    text = (ex.get("text") or "").strip()
+                    if text:
+                        return text
+                    errors.append("OA PDF 无可读文本")
+                except Exception as e:  # noqa: BLE001
+                    errors.append(f"OA PDF: {type(e).__name__}")
+            if target.get("pmid") or target.get("doi"):
+                from .europepmc import fetch_fulltext
+                text = (await fetch_fulltext(
+                    pmid=str(target.get("pmid") or ""), doi=str(target.get("doi") or "")
+                )).strip()
+                if text:
+                    return text
+                errors.append("Europe PMC 无开放全文")
+            raise ValueError("; ".join(errors) or f"无可读全文来源: {src or '未知'}")
 
         full = await asyncio.wait_for(_do(), timeout=DEEP_READ_PER_PAPER_TIMEOUT_SEC)
         if not full.strip():
@@ -415,8 +490,36 @@ async def fetch_deep_reads_stream(
 _REF_KEY_RE = re.compile(r"\[([^\[\]]{1,120})\](?!\()")  # [ref_key] 不跟 ( 的引用
 
 
-def _dr_refs_block(refs: list[dict], deep_reads_map: dict[str, str]) -> str:
-    """把 refs + 深读 chunk 格式化成 LLM 可读的上下文块。"""
+def _evidence_by_ref(refs: list[dict], evidence: list[dict]) -> dict[str, dict]:
+    """按 url/题名把检索阶段抽取的证据要点(pop/design/finding/gap)对齐到 ref_key。"""
+    out: dict[str, dict] = {}
+    by_url = {(e.get("url") or "").rstrip("/"): e for e in evidence if e.get("url")}
+    by_title = {(e.get("title") or "").strip().lower(): e for e in evidence if e.get("title")}
+    for r in refs:
+        ev = by_url.get((r.get("url") or "").rstrip("/")) or by_title.get(
+            (r.get("title") or "").strip().lower()
+        )
+        if ev and r.get("ref_key"):
+            out[r["ref_key"]] = ev
+    return out
+
+
+def _dr_refs_block(
+    refs: list[dict],
+    deep_reads_map: dict[str, str],
+    evidence_by_key: dict[str, dict] | None = None,
+    chunk_cap: int | None = None,
+) -> str:
+    """把 refs + 证据要点 + 深读 chunk 格式化成 LLM 可读的上下文块。
+
+    深读节选默认注入完整 chunk (单篇 8k tokens 预算), 篇数多时按
+    DEEP_READ_TOTAL_PROMPT_TOKENS 平摊; chunk_cap 可显式压低 (供贡献表等轻量调用)。
+    """
+    per_chunk_chars = chunk_cap if chunk_cap else DEEP_READ_MAX_TOKENS_PER_PAPER * 4
+    if chunk_cap is None:
+        n_chunks = sum(1 for r in refs if deep_reads_map.get(r.get("ref_key", "")))
+        if n_chunks:
+            per_chunk_chars = min(per_chunk_chars, DEEP_READ_TOTAL_PROMPT_TOKENS * 4 // n_chunks)
     lines = []
     for r in refs:
         rk = r.get("ref_key", "")
@@ -432,8 +535,17 @@ def _dr_refs_block(refs: list[dict], deep_reads_map: dict[str, str]) -> str:
             lines.append(f"  {meta}")
         if abstract:
             lines.append(f"  摘要: {abstract}")
+        ev = (evidence_by_key or {}).get(rk)
+        if ev:
+            bits = [
+                f"{lab}: {ev.get(k)}"
+                for k, lab in (("pop", "人群"), ("design", "设计"), ("finding", "发现"), ("gap", "局限"))
+                if ev.get(k)
+            ]
+            if bits:
+                lines.append("  证据要点: " + "; ".join(bits))
         if chunk:
-            lines.append(f"  全文节选:\n{chunk[:1200]}")
+            lines.append(f"  全文节选:\n{chunk[:per_chunk_chars]}")
         lines.append("")
     return "\n".join(lines)
 
@@ -443,8 +555,10 @@ def _dr_synthesis_messages(
     refs: list[dict],
     deep_reads_map: dict[str, str],
     english: bool = False,
+    background: str = "",
+    evidence: list[dict] | None = None,
 ) -> list[dict]:
-    refs_block = _dr_refs_block(refs, deep_reads_map)
+    refs_block = _dr_refs_block(refs, deep_reads_map, _evidence_by_ref(refs, evidence or []))
     lang_note = "Write the entire report in English." if english else "请用中文输出报告。"
     system = (
         "你是循证综述助手。用户会给出一个研究问题和一批文献（含摘要，部分含全文节选）。"
@@ -454,12 +568,17 @@ def _dr_synthesis_messages(
         "## 三、研究空白\n指出该问题尚未被充分回答的方面，包括人群局限、随访不足、机制未明等。\n\n"
         "## 四、综合结论\n综合以上，对研究问题给出有据可查的综合判断。\n\n"
         "铁律：\n"
-        "- 引用文献时仅使用给定的 ref_key，格式 [ref_key]（如 [pmid:12345678]）\n"
+        "- 引用文献时仅使用文献列表中方括号内给定的 ref_key，逐字照抄，格式 [ref_key]（如 [Smith J 2023]）\n"
         "- 不得编造文献；不确定时明说『现有证据有限』\n"
         "- 每个有实质性说法的句子至少引用一篇文献\n"
+        "- 若某一节确无相应内容（如未发现明显矛盾），直接写『未发现』并简述判断依据，不要为凑数而编造\n"
         f"- {lang_note}"
     )
-    user = f"研究问题：{question}\n\n文献资料：\n{refs_block}"
+    bg_block = (
+        f"\n\n背景资料（用户提供，仅供理解上下文，不可作为文献引用）：\n{background[:4000]}"
+        if background.strip() else ""
+    )
+    user = f"研究问题：{question}{bg_block}\n\n文献资料：\n{refs_block}"
     return [{"role": "system", "content": system}, {"role": "user", "content": user}]
 
 
@@ -483,6 +602,8 @@ async def synthesize_stream(
     refs: list[dict],
     deep_reads_map: dict[str, str],
     english: bool = False,
+    background: str = "",
+    evidence: list[dict] | None = None,
 ) -> AsyncIterator[tuple[str, dict]]:
     """流式生成深度调研报告; 结束后 yield verify 事件。"""
     if not refs:
@@ -503,7 +624,8 @@ async def synthesize_stream(
     full = ""
     try:
         async for piece in stream_chat(
-            _dr_synthesis_messages(question, refs, deep_reads_map, english), task="research"
+            _dr_synthesis_messages(question, refs, deep_reads_map, english, background, evidence),
+            task="research",
         ):
             full += piece
             yield ("delta", {"text": piece})
@@ -518,7 +640,8 @@ def _contribution_messages(
     refs: list[dict],
     deep_reads_map: dict[str, str],
 ) -> list[dict]:
-    refs_block = _dr_refs_block(refs, deep_reads_map)
+    # 贡献表只需知道每篇是否有全文节选 + 大意, 压低 chunk 注入省 token
+    refs_block = _dr_refs_block(refs, deep_reads_map, chunk_cap=1200)
     system = (
         "你是文献综述助手。根据给定的研究问题和文献列表，输出一个 JSON 数组，"
         "每篇文献对应一个对象，字段如下：\n"
@@ -561,8 +684,8 @@ async def build_contribution_table(
             _contribution_messages(question, refs, deep_reads_map), task="research"
         ):
             buf += piece
-        raw = json.loads(buf)
-        if not isinstance(raw, list):
+        raw = _parse_json_array(buf)
+        if raw is None:
             return []
         out = []
         for i, row in enumerate(raw):

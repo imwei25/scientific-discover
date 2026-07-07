@@ -19,7 +19,7 @@ from ..logutil import log_swallow
 from ..poster import generate_poster, review_poster
 from ..prompts import build_messages
 from ..rebuttal import rebuttal
-from ..research import clarify_topic, deep_research_idea, extract_evidence_for_refs, idea_followup, refine_topic
+from ..research import clarify_topic, deep_research_idea, extract_evidence_for_refs, idea_followup, refine_topic, retry_failed_sources
 from ..plan_followup import plan_followup
 from ..imrad_followup import imrad_followup
 from ..ethics_followup import ethics_followup
@@ -68,6 +68,15 @@ class ExtractEvidenceRequest(BaseModel):
     refs: list[dict] = []
     fetch_missing_abstracts: bool = True
     field: str = ""
+
+
+class RetryLiteratureRequest(BaseModel):
+    """"重试失败源"按钮的入参: 只对 sources(失败的那几个源)重跑 queries 检索。"""
+    queries: list[str] = []
+    sources: list[str] = []
+    per_query: int = 8
+    cap: int = 18
+    filters: dict = {}
 
 
 @router.post("/api/run")
@@ -402,6 +411,26 @@ async def refs_extract_evidence_ep(req: ExtractEvidenceRequest) -> JSONResponse:
         return JSONResponse(status_code=500, content={
             "ok": False,
             "error": "核心发现提取失败：服务临时出错，请稍后重试。",
+            "detail": f"{type(e).__name__}: {e}",
+        })
+
+
+@router.post("/api/literature/retry")
+async def literature_retry_ep(req: RetryLiteratureRequest) -> JSONResponse:
+    """只对失败的文献源重跑检索(见 research.retry_failed_sources), 供前端"重试失败源"按钮。
+    返回 {references, failed_sources}: references 供前端并入现有文献列表; failed_sources
+    为仍连不上的源(空=全部恢复, 前端可撤下重试提示)。"""
+    try:
+        out = await retry_failed_sources(
+            req.queries, req.sources,
+            per_query=req.per_query, cap=req.cap, filters=req.filters or None,
+        )
+        return JSONResponse({"ok": True, **out})
+    except Exception as e:  # noqa: BLE001
+        log_swallow("重试文献源: 失败", e)
+        return JSONResponse(status_code=500, content={
+            "ok": False,
+            "error": "重试文献源失败：服务临时出错，请稍后重试。",
             "detail": f"{type(e).__name__}: {e}",
         })
 

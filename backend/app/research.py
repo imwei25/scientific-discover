@@ -23,7 +23,10 @@ from typing import AsyncIterator
 from . import searchfilters
 from .clinicaltrials import search_trials
 from .config import settings
-from .literature import search_literature, fetch_abstract_by_id, failed_sources_warning
+from .literature import (
+    search_literature, fetch_abstract_by_id,
+    source_failure_event, _PAPER_SOURCES,
+)
 from .llm import stream_chat
 from .logutil import log_swallow
 
@@ -72,6 +75,33 @@ def _ref_item(p: dict) -> dict:
     if ab:
         item["abstract"] = ab[:800]
     return item
+
+
+async def retry_failed_sources(
+    queries: list[str],
+    sources: list[str],
+    per_query: int = 8,
+    cap: int = 18,
+    filters: dict | None = None,
+) -> dict:
+    """只对失败的论文源重跑检索, 供前端"重试失败源"按钮。
+
+    关键: 只把 sources 限定到失败的那几个源 → search_literature 的 cache_key(含源集合)
+    与原次不同 → 绕过缓存、真正走网络重试(否则重跑同一次检索会命中上次的部分失败缓存)。
+    返回 {references, failed_sources}: references 已按 search_literature 富集(影响力/分区/OA)
+    并排序; 相关性判分与核心发现由前端另调 /api/refs/extract-evidence 补齐(与导入路径一致)。
+    """
+    valid = [s for s in (sources or []) if s in _PAPER_SOURCES]
+    if not valid or not queries:
+        return {"references": [], "failed_sources": []}
+    res = await search_literature(
+        queries, per_query=per_query, cap=cap, sources=valid, filters=filters or None
+    )
+    return {
+        "references": [_ref_item(p) for p in res.get("papers", [])],
+        # 仍连不上的源(供前端判断按钮是否保留/更新失败清单)。
+        "failed_sources": [s for s in res.get("failed_sources", []) if s in valid],
+    }
 
 
 def _parse_sources(raw) -> list[str]:
@@ -824,9 +854,13 @@ async def _deep_flow(
 
     papers = _flatten()
     yield ("references", {"items": [_ref_item(p) for p in papers]})
-    warn = failed_sources_warning(down_sources)
-    if warn:
-        yield ("warning", {"message": warn})
+    evt = source_failure_event(
+        down_sources,
+        queries=[f["query"] for f in facets],
+        filters=filters, per_query=10, cap=16, field=field,
+    )
+    if evt:
+        yield ("warning", evt)
     if relaxed_any:
         yield ("status", {"message": "高质量文献不足，已自动纳入全部检索结果（可在高级检索设置调整质量门槛）。"})
 
@@ -1098,9 +1132,12 @@ async def deep_research_idea(inputs: dict) -> AsyncIterator[tuple[str, dict]]:
                 yield ("error", {"message": "未能从所选文献源检索到相关文献。可采纳上面的 AI 改写建议后重试。"})
                 return
             yield ("references", {"items": [_ref_item(p) for p in papers]})
-            warn = failed_sources_warning(result.get("failed_sources"))
-            if warn:
-                yield ("warning", {"message": warn})
+            evt = source_failure_event(
+                result.get("failed_sources"),
+                queries=queries, filters=filters, per_query=10, cap=28, field=field,
+            )
+            if evt:
+                yield ("warning", evt)
             trials = await _emit_trials(queries, sources)
             if trials is not None:
                 yield ("trials", trials)

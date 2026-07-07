@@ -996,6 +996,43 @@
         }
       }
     },
+    "/api/literature/retry": {
+      "post": {
+        "summary": "Literature Retry Ep",
+        "description": "只对失败的文献源重跑检索(见 research.retry_failed_sources), 供前端\"重试失败源\"按钮。\n返回 {references, failed_sources}: references 供前端并入现有文献列表; failed_sources\n为仍连不上的源(空=全部恢复, 前端可撤下重试提示)。",
+        "operationId": "literature_retry_ep_api_literature_retry_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RetryLiteratureRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/stats/advice": {
       "post": {
         "summary": "Stats Advice",
@@ -3366,6 +3403,44 @@
           "name"
         ],
         "title": "RenameBody"
+      },
+      "RetryLiteratureRequest": {
+        "properties": {
+          "queries": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Queries",
+            "default": []
+          },
+          "sources": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Sources",
+            "default": []
+          },
+          "per_query": {
+            "type": "integer",
+            "title": "Per Query",
+            "default": 8
+          },
+          "cap": {
+            "type": "integer",
+            "title": "Cap",
+            "default": 18
+          },
+          "filters": {
+            "type": "object",
+            "title": "Filters",
+            "default": {}
+          }
+        },
+        "type": "object",
+        "title": "RetryLiteratureRequest",
+        "description": "\"重试失败源\"按钮的入参: 只对 sources(失败的那几个源)重跑 queries 检索。"
       },
       "RunRequest": {
         "properties": {

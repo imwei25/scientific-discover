@@ -147,6 +147,37 @@ mock 模式(无 `LLM_API_KEY` 或 `MOCK_LLM=1`)下, 涉及画图/调用 LLM 的�
 
 ---
 
+### `POST /api/literature/retry`
+
+某个文献源(PubMed / Europe PMC / OpenAlex / Crossref)连接失败时, 只对失败的那几个源
+单独重跑检索。源集合与原次不同 → 绕过 `search_literature` 的部分失败缓存 → 真正走网络重试。
+前端拿到 `warning` 事件里 `kind="source_failure"` 的 `retry` 上下文后调用本接口, 新结果并入现有列表。
+
+**请求**: JSON
+```json
+{
+  "queries": ["diabetes AND ..."],   // 原次检索用的检索式(来自 warning.retry.queries)
+  "sources": ["pubmed", "openalex"],  // 只重试这些失败源(仅论文源生效)
+  "per_query": 8,
+  "cap": 18,
+  "filters": {}
+}
+```
+
+**响应**:
+```json
+{
+  "ok": true,
+  "references": [ /* Reference[] (已富集影响力/分区/OA) */ ],
+  "failed_sources": ["pubmed"]        // 仍连不上的源; 空数组=全部恢复
+}
+```
+
+相关性判分与核心发现不在此返回, 前端另调 `/api/refs/extract-evidence` 补齐(与导入路径一致)。
+服务异常返回 `500 {ok:false, error, detail}`。
+
+---
+
 ## 3. 医学图表三件套
 
 ### `POST /api/analyze/forest`

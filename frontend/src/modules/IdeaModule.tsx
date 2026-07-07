@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { CiteInfo, normCiteUrl } from "../components/Markdown";
-import { streamIdea, streamIdeaFollowup, Reference, Trial, EvidenceItem, Verification, RewritePayload, TopicCard } from "../lib/sse";
+import { streamIdea, streamIdeaFollowup, Reference, Trial, EvidenceItem, Verification, RewritePayload, TopicCard, WarningPayload } from "../lib/sse";
 import { reportLLMError } from "../lib/errorToast";
 import { addHistory } from "../lib/history";
 import { parseAttachments, appendAttachmentsToField } from "../lib/attachments";
@@ -8,7 +8,8 @@ import AttachmentUploadBox from "../components/AttachmentUploadBox";
 import FollowupPanel from "../components/FollowupPanel";
 import ReportExportBar from "../components/ReportExportBar";
 import EditableMarkdown from "../components/EditableMarkdown";
-import WarningPanel from "../components/WarningPanel";
+import WarningPanel, { type WarningEntry } from "../components/WarningPanel";
+import { retryLiteratureSources, sourceLabels } from "../lib/literatureRetry";
 import { downloadCsv, tsName } from "../lib/download";
 import { usePersistentState, readPersisted } from "../lib/usePersistentState";
 import type { Goto } from "../App";
@@ -131,6 +132,9 @@ export default function IdeaModule({ goto }: { goto: Goto }) {
   // 后端 SSE `warning` 事件累积(如检索/生成过程中的 verify_references 幻觉提示、PHI 提示)。
   // 与 error 面板并存: error 是失败, warning 是可继续但需关注。
   const [warnings, setWarnings] = useState<string[]>([]);
+  // 文献源连接失败(可重试)专用: 携带 retry 上下文, 与普通 warnings 分开, 以便渲染"重试失败源"按钮。
+  const [sourceFail, setSourceFail] = useState<WarningPayload | null>(null);
+  const [retrying, setRetrying] = useState(false);
   const [evidenceExtractProgress, setEvidenceExtractProgress] = useState<{ done: number; total: number } | null>(null);
   const [rewrite, setRewrite] = useState<RewritePayload | null>(null);
   const ctrl = useRef<AbortController | null>(null);
@@ -208,6 +212,7 @@ export default function IdeaModule({ goto }: { goto: Goto }) {
     setCard(null);
     setFollowups([]);
     setWarnings([]);
+    setSourceFail(null);
     setRunning(true);
     goStep(3);
     ctrl.current = new AbortController();
@@ -226,7 +231,7 @@ export default function IdeaModule({ goto }: { goto: Goto }) {
         onEvidence: setEvidence,
         onDelta: () => {},
         onRewriteSuggestion: setRewrite,
-        onWarning: (m) => setWarnings((prev) => [...prev, m]),
+        onWarning: handleWarning,
         onError: (m) => { setError(m); setStatus("已中断,请重试"); setRunning(false); window.dispatchEvent(new Event("usage-updated")); reportLLMError(m); },
         onDone: () => { setStatus(""); setRunning(false); window.dispatchEvent(new Event("usage-updated")); },
       },
@@ -270,6 +275,7 @@ export default function IdeaModule({ goto }: { goto: Goto }) {
     setReportCollapsed(false);
     setFollowups([]);
     setWarnings([]);
+    setSourceFail(null);
     setRunning(true);
     goStep(4);
     ctrl.current = new AbortController();
@@ -287,7 +293,7 @@ export default function IdeaModule({ goto }: { goto: Goto }) {
         onDelta: (t) => setText((p) => p + t),
         onVerify: setVerify,
         onTopicCard: setCard,
-        onWarning: (m) => setWarnings((prev) => [...prev, m]),
+        onWarning: handleWarning,
         onError: (m) => {
           setError(m);
           setStatus("已中断,请重试");
@@ -365,6 +371,63 @@ export default function IdeaModule({ goto }: { goto: Goto }) {
     return m;
   }, [refs, evidence]);
 
+  // 后端 warning 事件分流: 文献源连接失败(可重试)单独入 sourceFail, 其余入普通 warnings。
+  const handleWarning = (m: string, data?: WarningPayload) => {
+    if (data?.kind === "source_failure" && data.retry) setSourceFail(data);
+    else setWarnings((prev) => (prev.includes(m) ? prev : [...prev, m]));
+  };
+
+  // 只对连不上的文献源重跑检索, 新结果并入现有列表并补抽核心发现。
+  const retryFailedSources = async () => {
+    if (!sourceFail?.retry || retrying) return;
+    setRetrying(true);
+    try {
+      const { references, failed_sources } = await retryLiteratureSources(
+        sourceFail.retry, sourceFail.failed_sources || [],
+      );
+      const keyMap = new Map(refs.map((r) => [refKey(r), r]));
+      const newOnes: Reference[] = [];
+      for (const r of references) {
+        const k = refKey(r);
+        if (!keyMap.has(k)) { keyMap.set(k, r); newOnes.push(r); }
+      }
+      setRefs(Array.from(keyMap.values()));
+      setSelectedKeys((prev) => [...new Set([...prev, ...newOnes.map(refKey)])]);
+      if (newOnes.length) {
+        setEvidenceExtractProgress({ done: 0, total: newOnes.length });
+        try {
+          const evMap = await extractEvidenceForRefs(newOnes, (d, t) => setEvidenceExtractProgress({ done: d, total: t }));
+          setEvidence((prev) => {
+            const next = [...prev];
+            for (const row of Object.values(evMap)) {
+              if (prev.some((p) => p.url === row.url)) continue;
+              next.push(row);
+            }
+            return next;
+          });
+        } finally {
+          setEvidenceExtractProgress(null);
+        }
+      }
+      if (failed_sources.length) {
+        // 仍有源连不上: 更新失败清单, 保留重试按钮。
+        setSourceFail((prev) => prev ? {
+          ...prev, failed_sources,
+          message: `以下文献源仍连接失败：${sourceLabels(failed_sources)}，可再次重试或检查网络/代理设置。`,
+        } : prev);
+      } else {
+        setSourceFail(null);
+        setWarnings((prev) => [...prev, newOnes.length
+          ? `重试成功，新增 ${newOnes.length} 篇文献。`
+          : "重试成功：失败的文献源已恢复（未发现新文献）。"]);
+      }
+    } catch {
+      setWarnings((prev) => [...prev, "重试失败源时出错，请稍后再试或检查网络。"]);
+    } finally {
+      setRetrying(false);
+    }
+  };
+
   const reset = () => {
     // 若已产出内容或正在生成, 二次确认以防误点丢失
     const hasContent = !!(text || refs.length || evidence.length || background || field || keywords);
@@ -378,6 +441,7 @@ export default function IdeaModule({ goto }: { goto: Goto }) {
     setRefs([]); setSelectedKeys([]); setTrials([]); setEvidence([]);
     setText(""); setVerify(null); setCard(null);
     setStatus(""); setError(null); setRewrite(null);
+    setWarnings([]); setSourceFail(null);
     setPendingAttachments([]);
     setStep(1); setMaxStep(1);
   };
@@ -421,8 +485,14 @@ export default function IdeaModule({ goto }: { goto: Goto }) {
 
       {error && <div className="result-error" data-testid="result-error">{error}</div>}
       <WarningPanel
-        warnings={warnings}
-        onClear={() => setWarnings([])}
+        warnings={[
+          ...warnings,
+          ...(sourceFail ? [{
+            message: sourceFail.message,
+            action: { label: "重试失败源", onClick: retryFailedSources, busy: retrying, busyLabel: "重试中…" },
+          } as WarningEntry] : []),
+        ]}
+        onClear={() => { setWarnings([]); setSourceFail(null); }}
         testId="idea-warnings"
       />
 

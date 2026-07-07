@@ -80,7 +80,7 @@ export interface StreamHandlers {
   /** W2-2: 后端可能发送 event: progress, data: {stage, detail?} 给 UI 显示进度文案 */
   onProgress?: (stage: string, detail?: unknown) => void;
   /** 后端非致命告警: event: warning, data: {message}. 如 PHI 出站扫描、checklist 回引校验。 */
-  onWarning?: (message: string) => void;
+  onWarning?: (message: string, data?: WarningPayload) => void;
   signal?: AbortSignal;
 }
 
@@ -195,6 +195,24 @@ export interface Reference {
   abstract?: string; // 截断摘要(≤800字): 供写标书阶段据实摘录『支持句』, 前端不直接展示
   rel?: number; // AI 相关性判分 0-3(相对研究方向): 3=直接相关 2=相关 1=弱相关 0=离题
   rel_why?: string; // 相关性判分的一句话理由(悬停展示)
+}
+
+/** 逐源检索重试上下文: 后端 source_failure_event.retry, 供前端重跑失败的那几个源。 */
+export interface RetryContext {
+  queries: string[];
+  filters?: Record<string, unknown>;
+  per_query?: number;
+  cap?: number;
+  field?: string;
+}
+
+/** warning 事件的结构化 data。普通告警只有 message; 文献源连接失败额外带
+ *  kind="source_failure" + failed_sources + retry, 让 UI 渲染"重试失败源"按钮。 */
+export interface WarningPayload {
+  message: string;
+  kind?: string;
+  failed_sources?: string[];
+  retry?: RetryContext;
 }
 
 export interface EvidenceItem {
@@ -374,7 +392,7 @@ export interface IdeaHandlers {
   onVerify?: (v: Verification) => void;
   onRewriteSuggestion?: (p: RewritePayload) => void;
   onTopicCard?: (card: TopicCard) => void;
-  onWarning?: (message: string) => void;
+  onWarning?: (message: string, data?: WarningPayload) => void;
   onDone?: () => void;
   onError?: (message: string) => void;
   signal?: AbortSignal;
@@ -430,7 +448,7 @@ export async function streamIdea(
             suggestion: data.suggestion ?? null,
           });
         else if (ev.event === "topic_card") h.onTopicCard?.(data as TopicCard);
-        else if (ev.event === "warning") h.onWarning?.(data.message ?? ev.data);
+        else if (ev.event === "warning") h.onWarning?.(data.message ?? ev.data, data as WarningPayload);
         else if (ev.event === "error") h.onError?.(data.message ?? ev.data);
         else if (ev.event === "done") h.onDone?.();
       }
@@ -1020,7 +1038,7 @@ export interface AnalyzeHandlers {
   onTransparency?: (kind: TransparencyKind, text: string) => void;
   onDelta: (text: string) => void;
   /** wave2 检查(如 p 值一致性)在流中产的告警, 即时追加显示。 */
-  onWarning?: (message: string) => void;
+  onWarning?: (message: string, data?: WarningPayload) => void;
   onDone?: () => void;
   onError?: (message: string) => void;
   signal?: AbortSignal;
@@ -1085,7 +1103,7 @@ export async function streamAnalyze(
         else if (ev.event === "transparency_assumption") h.onTransparency?.("assumption", data.text ?? "");
         else if (ev.event === "transparency_quality")    h.onTransparency?.("quality",    data.text ?? "");
         else if (ev.event === "delta") h.onDelta(data.text ?? "");
-        else if (ev.event === "warning") h.onWarning?.(data.message ?? ev.data);
+        else if (ev.event === "warning") h.onWarning?.(data.message ?? ev.data, data as WarningPayload);
         else if (ev.event === "error") h.onError?.(data.message ?? ev.data);
         else if (ev.event === "done") h.onDone?.();
       }
@@ -1156,7 +1174,7 @@ export async function streamAnalyzeRefine(
         else if (ev.event === "transparency_assumption") h.onTransparency?.("assumption", data.text ?? "");
         else if (ev.event === "transparency_quality")    h.onTransparency?.("quality",    data.text ?? "");
         else if (ev.event === "delta") h.onDelta(data.text ?? "");
-        else if (ev.event === "warning") h.onWarning?.(data.message ?? ev.data);
+        else if (ev.event === "warning") h.onWarning?.(data.message ?? ev.data, data as WarningPayload);
         else if (ev.event === "error") h.onError?.(data.message ?? ev.data);
         else if (ev.event === "done") h.onDone?.();
       }
@@ -1385,6 +1403,8 @@ export interface DeepReadTarget {
   source: "upload" | "oa" | "europepmc" | "crossref";
   upload_id?: string;
   oa_url?: string;
+  pmid?: string;
+  doi?: string;
 }
 
 export interface DeepResearchPayload {
@@ -1407,11 +1427,12 @@ export interface DeepResearchCallbacks {
   onStatus?: (msg: string) => void;
   onReferences?: (items: Reference[]) => void;
   onEvidence?: (items: EvidenceItem[]) => void;
+  onRewriteSuggestion?: (p: RewritePayload) => void;
   onDeepReadProgress?: (p: { done: number; total: number; current_ref_key: string }) => void;
   onDelta: (text: string) => void;
   onContributionTable?: (rows: ContributionRow[]) => void;
   onVerify?: (v: Verification) => void;
-  onWarning?: (msg: string) => void;
+  onWarning?: (msg: string, data?: WarningPayload) => void;
   onError: (msg: string) => void;
   onDone: () => void;
 }
@@ -1474,11 +1495,20 @@ export async function streamDeepResearch(payload: DeepResearchPayload, cb: DeepR
       case "status": cb.onStatus?.(data.message); break;
       case "references": cb.onReferences?.(data.items); break;
       case "evidence": cb.onEvidence?.(data.items); break;
+      case "rewrite_suggestion":
+        cb.onRewriteSuggestion?.({ tried_queries: data.tried_queries ?? [], suggestion: data.suggestion ?? null });
+        break;
       case "deep_read_progress": cb.onDeepReadProgress?.(data); break;
+      case "deep_read_result":
+        // 单篇深读失败对用户可见: 降级为仅摘要, 以 warning 呈现
+        if (data && data.ok === false) {
+          cb.onWarning?.(`深读失败 [${data.ref_key || "?"}]: ${data.error || "未知原因"} — 该篇降级为仅摘要`);
+        }
+        break;
       case "delta": cb.onDelta(data.text); break;
       case "contribution_table": cb.onContributionTable?.(data.rows); break;
       case "verify": cb.onVerify?.(data); break;
-      case "warning": cb.onWarning?.(data.message); break;
+      case "warning": cb.onWarning?.(data.message, data as WarningPayload); break;
       case "error": cb.onError(data.message); break;
       case "done": cb.onDone(); break;
     }

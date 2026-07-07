@@ -16,16 +16,15 @@ function anchorDownload(filename: string, blob: Blob): void {
 }
 
 // Tauri 桌面壳: WebView2 不会响应 <a download> 的 blob 下载, 必须走原生
-// 「保存对话框 + 写文件」。用户取消返回 true(视为已处理); 出错返回 false 由调用方回退到锚点。
+// 「保存对话框 + 写文件」。对话框与写盘都在 Rust 侧的 save_file_dialog 命令里完成
+// (前端不接触文件路径, 收敛任意路径写入面)。用户取消返回 true(视为已处理);
+// 出错返回 false 由调用方回退到锚点。
 async function tauriSave(filename: string, blob: Blob): Promise<boolean> {
   try {
-    const { save } = await import("@tauri-apps/plugin-dialog");
     const { invoke } = await import("@tauri-apps/api/core");
-    const path = await save({ defaultPath: filename });
-    if (!path) return true; // 用户取消
     const bytes = Array.from(new Uint8Array(await blob.arrayBuffer()));
-    await invoke("save_file", { path, contents: bytes });
-    return true;
+    await invoke<boolean>("save_file_dialog", { filename, contents: bytes });
+    return true; // 已保存或用户取消, 均视为已处理
   } catch {
     return false;
   }

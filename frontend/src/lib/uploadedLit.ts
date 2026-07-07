@@ -46,10 +46,11 @@ export function uploadedToReference(u: UploadedRef): Reference & { upload_id: st
   } as Reference & { upload_id: string; full_text_available: boolean; parse_confidence: "high" | "low" };
 }
 
-/** 前端估算深读 token 成本 (~4 char/token; 章节截断预算 8k/篇)。*/
+/** 前端估算深读 token 成本 (~4 char/token; 章节截断预算 8k/篇)。
+ * 检索来的文献无 page_count, 按预算上限 8k 估 (16 页), 宁高勿低。*/
 export function estimateDeepReadTokens(refs: { page_count?: number }[]): number {
   return refs.reduce((sum, r) => {
-    const pages = r.page_count && r.page_count > 0 ? r.page_count : 8;
+    const pages = r.page_count && r.page_count > 0 ? r.page_count : 16;
     return sum + Math.min(8000, pages * 500);
   }, 0);
 }

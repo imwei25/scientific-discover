@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { streamDeepResearch, fetchDeepResearchRecommend, streamDeepResearchFollowup, Reference, EvidenceItem, RecommendItem, ContributionRow, Verification } from "../lib/sse";
+import { streamDeepResearch, fetchDeepResearchRecommend, streamDeepResearchFollowup, Reference, EvidenceItem, RecommendItem, ContributionRow, Verification, RewritePayload, WarningPayload } from "../lib/sse";
 import { reportLLMError } from "../lib/errorToast";
 import { addHistory } from "../lib/history";
 import { parseAttachments, appendAttachmentsToField } from "../lib/attachments";
@@ -7,7 +7,9 @@ import { parseUpload, lookupTitle, uploadedToReference, estimateDeepReadTokens, 
 import AttachmentUploadBox from "../components/AttachmentUploadBox";
 import { LiteraturePicker } from "../components/LiteraturePicker";
 import EditableMarkdown from "../components/EditableMarkdown";
-import WarningPanel from "../components/WarningPanel";
+import WarningPanel, { type WarningEntry } from "../components/WarningPanel";
+import { extractEvidenceForRefs } from "../lib/evidenceExtract";
+import { retryLiteratureSources, sourceLabels } from "../lib/literatureRetry";
 import FollowupPanel from "../components/FollowupPanel";
 import ReportExportBar from "../components/ReportExportBar";
 import { usePersistentState, readPersisted } from "../lib/usePersistentState";
@@ -32,6 +34,18 @@ const STEPS = [
 ];
 
 const refKeyOf = (r: Reference & { upload_id?: string }) => r.upload_id || r.pmid || r.url || r.title;
+
+type RefEx = Reference & {
+  upload_id?: string;
+  full_text_available?: boolean;
+  oa_url?: string;
+  doi?: string;
+  page_count?: number;
+};
+
+// 是否有可行的全文来源: 上传缓存 / OA PDF / Europe PMC (pmid 或 doi 反查)
+const canDeepRead = (r: RefEx) =>
+  r.upload_id ? r.full_text_available !== false : !!(r.oa_url || r.pmid || r.doi);
 
 export default function ResearchModule({ goto }: { goto: Goto }) {
   const { current: project } = useProjects();
@@ -81,8 +95,69 @@ export default function ResearchModule({ goto }: { goto: Goto }) {
   const [running, setRunning] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [warnings, setWarnings] = useState<string[]>([]);
+  // 文献源连接失败(可重试)专用, 携带 retry 上下文以渲染"重试失败源"按钮。
+  const [sourceFail, setSourceFail] = useState<WarningPayload | null>(null);
+  const [retrying, setRetrying] = useState(false);
+  const [retryProgress, setRetryProgress] = useState<{ done: number; total: number } | null>(null);
+  const [rewrite, setRewrite] = useState<RewritePayload | null>(null);
   const [deepReadProgress, setDeepReadProgress] = useState<{ done: number; total: number; current_ref_key?: string } | null>(null);
   const ctrl = useRef<AbortController | null>(null);
+
+  // 后端 warning 事件分流: 文献源连接失败(可重试)单独入 sourceFail, 其余入普通 warnings。
+  const handleWarning = (m: string, data?: WarningPayload) => {
+    if (data?.kind === "source_failure" && data.retry) setSourceFail(data);
+    else setWarnings((prev) => (prev.includes(m) ? prev : [...prev, m]));
+  };
+
+  // 只对连不上的文献源重跑检索, 新结果并入现有列表并补抽核心发现。
+  const retryFailedSources = async () => {
+    if (!sourceFail?.retry || retrying) return;
+    setRetrying(true);
+    try {
+      const { references, failed_sources } = await retryLiteratureSources(
+        sourceFail.retry, sourceFail.failed_sources || [],
+      );
+      const keyMap = new Map(refs.map((r) => [refKeyOf(r as Reference & { upload_id?: string }), r]));
+      const newOnes: Reference[] = [];
+      for (const r of references) {
+        const k = refKeyOf(r as Reference & { upload_id?: string });
+        if (!keyMap.has(k)) { keyMap.set(k, r); newOnes.push(r); }
+      }
+      setRefs(Array.from(keyMap.values()));
+      setSelectedKeys((prev) => [...new Set([...prev, ...newOnes.map((r) => refKeyOf(r as Reference & { upload_id?: string }))])]);
+      if (newOnes.length) {
+        setRetryProgress({ done: 0, total: newOnes.length });
+        try {
+          const evMap = await extractEvidenceForRefs(newOnes, (d, t) => setRetryProgress({ done: d, total: t }));
+          setEvidence((prev) => {
+            const next = [...prev];
+            for (const row of Object.values(evMap)) {
+              if (prev.some((p) => p.url === row.url)) continue;
+              next.push(row);
+            }
+            return next;
+          });
+        } finally {
+          setRetryProgress(null);
+        }
+      }
+      if (failed_sources.length) {
+        setSourceFail((prev) => prev ? {
+          ...prev, failed_sources,
+          message: `以下文献源仍连接失败：${sourceLabels(failed_sources)}，可再次重试或检查网络/代理设置。`,
+        } : prev);
+      } else {
+        setSourceFail(null);
+        setWarnings((prev) => [...prev, newOnes.length
+          ? `重试成功，新增 ${newOnes.length} 篇文献。`
+          : "重试成功：失败的文献源已恢复（未发现新文献）。"]);
+      }
+    } catch {
+      setWarnings((prev) => [...prev, "重试失败源时出错，请稍后再试或检查网络。"]);
+    } finally {
+      setRetrying(false);
+    }
+  };
 
   // ── history 集成: 报告完成后写一次 ─────────────────────────
   const savedRef = useRef("");
@@ -140,8 +215,9 @@ export default function ResearchModule({ goto }: { goto: Goto }) {
     keep_unknown: keepUnknown,
   });
 
-  const runSearch = async () => {
+  const runSearch = async (fieldOverride?: string) => {
     if (!question.trim() || running) return;
+    const effField = fieldOverride ?? field;
     setError(null);
     let mergedBackground = background;
     if (pendingBackgroundFiles.length > 0) {
@@ -155,20 +231,24 @@ export default function ResearchModule({ goto }: { goto: Goto }) {
         });
         mergedBackground = appendAttachmentsToField(background, parsed);
         setPendingBackgroundFiles([]);
+        setBackground(mergedBackground); // 持久化解析结果, 供 generate 阶段与重跑复用
       } catch (e) {
         setError((e as Error).message); setRunning(false); return;
       }
     }
-    setRefs([]); setSelectedKeys([]); setDeepReadKeys([]); setEvidence([]);
+    // 上传文献先播种进列表: 即使检索零命中/失败, 它们也留在 Step 3 可用
+    const uploadedAsRefs = uploadedRefs.map(uploadedToReference);
+    setRefs(uploadedAsRefs);
+    setSelectedKeys(uploadedAsRefs.map((r) => refKeyOf(r)));
+    setDeepReadKeys([]); setEvidence([]);
     setText(""); setContribution([]); setVerify(null); setFollowups([]); setRecommend({});
-    setStatus(""); setError(null); setWarnings([]); setRunning(true);
+    setStatus(""); setError(null); setWarnings([]); setSourceFail(null); setRewrite(null); setRunning(true);
     goStep(3);
     ctrl.current = new AbortController();
-    const uploadedAsRefs = uploadedRefs.map(uploadedToReference);
-    let latestRefs: Reference[] = [];
+    let latestRefs: Reference[] = uploadedAsRefs;
     await streamDeepResearch(
       {
-        question, field, background: mergedBackground, depth,
+        question, field: effField, background: mergedBackground, depth,
         sources: DEFAULT_SOURCES,
         filters: filtersPayload(),
         phase: "search",
@@ -180,24 +260,35 @@ export default function ResearchModule({ goto }: { goto: Goto }) {
         onReferences: (items) => {
           const norm = (s: string) => (s || "").trim().toLowerCase().replace(/\s+/g, " ");
           const seen = new Set(uploadedAsRefs.map((r) => norm(r.title)));
+          const seenDoi = new Set<string>();
           const merged: Reference[] = [...uploadedAsRefs];
           for (const r of items) {
-            if (!seen.has(norm(r.title))) { merged.push(r); seen.add(norm(r.title)); }
+            const doi = ((r as RefEx).doi || "").toLowerCase();
+            if (seen.has(norm(r.title)) || (doi && seenDoi.has(doi))) continue;
+            merged.push(r); seen.add(norm(r.title)); if (doi) seenDoi.add(doi);
           }
           setRefs(merged);
-          setSelectedKeys(merged.map((r) => refKeyOf(r as Reference & { upload_id?: string })));
+          // 新到的文献默认勾选; 用户已手动取消的保持取消 (references 事件可能多次到达)
+          const knownKeys = new Set(latestRefs.map((r) => refKeyOf(r as RefEx)));
+          const allKeys = merged.map((r) => refKeyOf(r as RefEx));
+          setSelectedKeys((prev) => {
+            const kept = new Set(prev);
+            for (const k of allKeys) if (!knownKeys.has(k)) kept.add(k);
+            return allKeys.filter((k) => kept.has(k));
+          });
           latestRefs = merged;
         },
         onEvidence: setEvidence,
+        onRewriteSuggestion: setRewrite,
         onDelta: () => {},
-        onWarning: (m) => setWarnings((prev) => [...prev, m]),
+        onWarning: handleWarning,
         onError: (m) => { setError(m); setStatus(""); setRunning(false); reportLLMError(m); },
         onDone: async () => {
           setStatus(""); setRunning(false); window.dispatchEvent(new Event("usage-updated"));
           // Recommend using CURRENT refs captured in closure (setRefs is async, storage lags one tick)
           try {
             const forRec = latestRefs.map((r) => ({
-              ref_key: refKeyOf(r as Reference & { upload_id?: string }),
+              ref_key: refKeyOf(r as RefEx),
               title: r.title || "",
               abstract: r.abstract || "",
             }));
@@ -208,12 +299,16 @@ export default function ResearchModule({ goto }: { goto: Goto }) {
             if (res.ok && res.items) {
               const map: Record<string, RecommendItem> = {};
               const autoDeep: string[] = [];
+              const deepReadable = new Set(
+                latestRefs.filter((r) => canDeepRead(r as RefEx)).map((r) => refKeyOf(r as RefEx)),
+              );
               for (const it of res.items) {
                 map[it.ref_key] = it;
-                if (it.score === "high") autoDeep.push(it.ref_key);
+                if (it.score === "high" && deepReadable.has(it.ref_key)) autoDeep.push(it.ref_key);
               }
               setRecommend(map);
-              setDeepReadKeys(autoDeep);
+              // 合并而非覆盖: 不抹掉用户在推荐返回前手动勾的深读
+              setDeepReadKeys((prev) => [...new Set([...prev, ...autoDeep])]);
             }
           } catch { /* recommend failure non-blocking */ }
         },
@@ -230,18 +325,23 @@ export default function ResearchModule({ goto }: { goto: Goto }) {
       || (r.title && r.title.trim().toLowerCase() === (e.title || "").trim().toLowerCase())
     ));
     const deep_read_targets = sel
-      .filter((r) => deepReadKeys.includes(refKeyOf(r as Reference & { upload_id?: string })))
+      .filter((r) => {
+        const cast = r as RefEx;
+        return deepReadKeys.includes(refKeyOf(cast)) && canDeepRead(cast);
+      })
       .map((r) => {
-        const cast = r as Reference & { upload_id?: string; oa_url?: string };
+        const cast = r as RefEx;
         return {
           ref_key: refKeyOf(cast),
-          source: (cast.upload_id ? "upload" : cast.oa_url ? "oa" : "crossref") as "upload" | "oa" | "crossref",
+          source: (cast.upload_id ? "upload" : cast.oa_url ? "oa" : "europepmc") as "upload" | "oa" | "europepmc",
           upload_id: cast.upload_id,
           oa_url: cast.oa_url,
+          pmid: cast.pmid || undefined,
+          doi: cast.doi || undefined,
         };
       });
     setError(null); setStatus(""); setText(""); setContribution([]); setVerify(null);
-    setReportCollapsed(false); setFollowups([]); setWarnings([]);
+    setReportCollapsed(false); setFollowups([]); setWarnings([]); setSourceFail(null);
     setRunning(true); goStep(4);
     ctrl.current = new AbortController();
     await streamDeepResearch(
@@ -260,7 +360,7 @@ export default function ResearchModule({ goto }: { goto: Goto }) {
         onDelta: (t) => setText((prev) => prev + t),
         onContributionTable: (rows) => { setContribution(rows); setDeepReadProgress(null); },
         onVerify: setVerify,
-        onWarning: (m) => setWarnings((prev) => [...prev, m]),
+        onWarning: handleWarning,
         onError: (m) => {
           setError(m); setStatus(""); setRunning(false);
           setText((t) => (t && !t.endsWith("…(生成中断)") ? t + "\n\n…(生成中断)" : t));
@@ -282,7 +382,12 @@ export default function ResearchModule({ goto }: { goto: Goto }) {
 
   // refSort/setRefSort: 预留给 Step 3 排序增强 (尚未接入 LiteraturePicker), 暂保留
   void refSort; void setRefSort;
-  void useMemo;
+
+  // 报告只引用勾选的文献: 导出参考文献表 / 追问上下文与之对齐
+  const selRefs = useMemo(
+    () => refs.filter((r) => selectedKeys.includes(refKeyOf(r as RefEx))),
+    [refs, selectedKeys],
+  );
 
   return (
     <div className="module idea-wizard">
@@ -312,7 +417,22 @@ export default function ResearchModule({ goto }: { goto: Goto }) {
       </div>
 
       {error && <div className="result-error">{error}</div>}
-      <WarningPanel warnings={warnings} onClear={() => setWarnings([])} testId="research-warnings" />
+      <WarningPanel
+        warnings={[
+          ...warnings,
+          ...(sourceFail ? [{
+            message: sourceFail.message,
+            action: {
+              label: "重试失败源",
+              onClick: retryFailedSources,
+              busy: retrying,
+              busyLabel: retryProgress ? `重试中 ${retryProgress.done}/${retryProgress.total}…` : "重试中…",
+            },
+          } as WarningEntry] : []),
+        ]}
+        onClear={() => { setWarnings([]); setSourceFail(null); }}
+        testId="research-warnings"
+      />
 
       {/* Step 1 */}
       {step === 1 && (
@@ -467,7 +587,7 @@ export default function ResearchModule({ goto }: { goto: Goto }) {
           </div>
           <div className="wiz-nav">
             <button className="btn-ghost" onClick={() => setStep(1)} data-testid="research-wiz-back-2">← 上一步</button>
-            <button className="btn-primary" onClick={runSearch} disabled={running || !question.trim()} data-testid="research-wiz-next-2">
+            <button className="btn-primary" onClick={() => runSearch()} disabled={running || !question.trim()} data-testid="research-wiz-next-2">
               下一步:检索文献 →
             </button>
           </div>
@@ -478,6 +598,33 @@ export default function ResearchModule({ goto }: { goto: Goto }) {
       {step === 3 && (
         <div className="wiz-panel" data-testid="research-wiz-panel-3">
           {status && <div className="status-line"><span className="spinner" /> {status}</div>}
+
+          {rewrite && !running && (
+            <div className="rewrite-suggest" data-testid="research-rewrite-suggest">
+              <div className="rewrite-title">文献源零命中 · AI 改写建议</div>
+              {rewrite.suggestion ? (
+                <>
+                  <div className="rewrite-row"><span className="rewrite-label">建议方向</span><span className="rewrite-value" data-testid="research-rewrite-field">{rewrite.suggestion.field}</span></div>
+                  {rewrite.suggestion.reason && <div className="rewrite-row"><span className="rewrite-label">为什么这样改</span><span className="rewrite-value">{rewrite.suggestion.reason}</span></div>}
+                  {rewrite.tried_queries.length > 0 && (
+                    <div className="rewrite-tried">已尝试的检索式:
+                      <ul>{rewrite.tried_queries.slice(0, 5).map((q) => <li key={q}><code>{q}</code></li>)}</ul>
+                    </div>
+                  )}
+                  <div className="rewrite-actions">
+                    <button className="btn-primary" data-testid="research-rewrite-accept" onClick={() => {
+                      const next = rewrite.suggestion!.field;
+                      setField(next); setRewrite(null); setError(null);
+                      void runSearch(next);
+                    }}>采纳并重试</button>
+                    <button className="btn-ghost" onClick={() => { setRewrite(null); setStep(1); }}>返回修改</button>
+                  </div>
+                </>
+              ) : (
+                <div className="rewrite-row">未能生成有效建议，请返回第一步调整研究问题后重试。</div>
+              )}
+            </div>
+          )}
 
           <div className="deep-read-bar" data-testid="research-deep-read-bar">
             <span>
@@ -490,7 +637,8 @@ export default function ResearchModule({ goto }: { goto: Goto }) {
               ).toLocaleString()}</strong> tokens
             </span>
             <button className="btn-ghost" onClick={() => {
-              const highs = Object.values(recommend).filter((r) => r.score === "high").map((r) => r.ref_key);
+              const readable = new Set(refs.filter((r) => canDeepRead(r as RefEx)).map((r) => refKeyOf(r as RefEx)));
+              const highs = Object.values(recommend).filter((r) => r.score === "high" && readable.has(r.ref_key)).map((r) => r.ref_key);
               setDeepReadKeys([...new Set([...deepReadKeys, ...highs])]);
             }}>全选推荐</button>
             <button className="btn-ghost" onClick={() => setDeepReadKeys([])}>清空深读</button>
@@ -503,19 +651,22 @@ export default function ResearchModule({ goto }: { goto: Goto }) {
               <thead><tr><th>⭐</th><th>题名</th><th>深读</th></tr></thead>
               <tbody>
               {refs.map((r) => {
-                const key = refKeyOf(r as Reference & { upload_id?: string });
+                const cast = r as RefEx;
+                const key = refKeyOf(cast);
                 const rec = recommend[key];
+                const readable = canDeepRead(cast);
                 return (
                   <tr key={key}>
                     <td title={rec?.reason || ""}>
                       {rec?.score === "high" ? "⭐" : rec?.score === "medium" ? "○" : "—"}
                     </td>
                     <td>{r.title}</td>
-                    <td>
+                    <td title={readable ? "" : "无全文来源 (无上传全文 / OA 链接 / PMID / DOI), 无法深读"}>
                       <input
                         type="checkbox"
                         data-testid={`research-deep-${key}`}
-                        checked={deepReadKeys.includes(key)}
+                        disabled={!readable}
+                        checked={readable && deepReadKeys.includes(key)}
                         onChange={(e) => {
                           if (e.target.checked) setDeepReadKeys((prev) => [...new Set([...prev, key])]);
                           else setDeepReadKeys((prev) => prev.filter((x) => x !== key));
@@ -584,7 +735,7 @@ export default function ResearchModule({ goto }: { goto: Goto }) {
               </span>
               <ReportExportBar
                 text={text}
-                refs={refs}
+                refs={selRefs}
                 title="深度调研"
                 running={running}
                 reportCollapsed={reportCollapsed}
@@ -680,7 +831,7 @@ export default function ResearchModule({ goto }: { goto: Goto }) {
                 cb as Parameters<typeof streamDeepResearchFollowup>[1],
               )}
               currentReport={text}
-              references={refs}
+              references={selRefs}
               evidence={evidence}
               englishReport={englishReport}
             />

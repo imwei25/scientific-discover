@@ -9,11 +9,12 @@ tauri-build = { version = "2", features = [] }
 
 [dependencies]
 tauri = { version = "2", features = [] }
-tauri-plugin-shell = "2"
 tauri-plugin-updater = "2"
 tauri-plugin-dialog = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+# Job Object(KILL_ON_JOB_CLOSE): 外壳退出时由系统连带回收 sidecar, 防孤儿进程。
+windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_Security", "Win32_System_JobObjects", "Win32_System_Threading"] }
 
 [features]
 custom-protocol = ["tauri/custom-protocol"]

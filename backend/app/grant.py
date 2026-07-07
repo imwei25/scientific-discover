@@ -35,7 +35,7 @@ import traceback
 from typing import AsyncGenerator, AsyncIterator
 
 from .config import settings
-from .literature import search_literature, failed_sources_warning
+from .literature import search_literature, failed_sources_warning, source_failure_event
 from .llm import stream_chat
 # 复用找选题的: 引用核验(含支持句) / 支持句规则 / 主题→PubMed检索式 / 文献去重键
 from .research import _verify_citations, _gen_queries, _pkey, _QUOTE_RULE, extract_evidence_for_refs
@@ -64,9 +64,12 @@ async def search_grant(inputs: dict) -> AsyncIterator[tuple[str, dict]]:
         yield ("status", {"message": "正在检索 PubMed / Europe PMC / OpenAlex…"})
         res = await search_literature(queries, per_query=8, cap=16, sources=_RERESEARCH_SOURCES)
         papers = res.get("papers") or []
-        warn = failed_sources_warning(res.get("failed_sources"))
-        if warn:
-            yield ("warning", {"message": warn})
+        evt = source_failure_event(
+            res.get("failed_sources"),
+            queries=queries, per_query=8, cap=16, field=direction,
+        )
+        if evt:
+            yield ("warning", evt)
         yield ("references", {"items": papers})
         if papers:
             yield ("status", {"message": f"正在提取 {len(papers)} 篇文献的核心发现…"})
