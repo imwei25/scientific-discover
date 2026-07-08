@@ -17,7 +17,7 @@
 | 环境自举 | `env-setup` | 查 Python→建项目根 `.venv`→装依赖+pandoc；换机器/框架先跑它 |
 | 调研 | `research-scan` | 领域现状/趋势/空白 → 调研简报 |
 | 选题 | `topic-selection` | 找空白、提假设、多棱镜打分（可选对抗式研究） |
-| 研究设计 | `research-design` | 新颖性裁定（真新/增量/已回答）+ 预注册锁（anti-HARKing） |
+| 研究设计 | `novelty-check` | 新颖性裁定（真新/增量/已回答）+ 预注册锁（anti-HARKing） |
 | 写标书 | `grant-proposal` | 国自然 / NIH 结构 + 经费预算 + 时效合规，起草与润色 |
 | 叙述性综述 | `literature-review` | 多路检索建证据表 → 有引用的叙述性综述 |
 | 系统综述/Meta | `systematic-review` | PROSPERO 预注册 → 双人筛选+κ → RoB → GRADE → PRISMA 计数 |

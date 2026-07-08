@@ -10,6 +10,8 @@ model: inherit
 
 # Fulltext Retrieval Skill
 
+> **决策规约（照 AGENTS.md §六）**：本技能任何要用户拍板的抉择——方向 / 方案 / 目标刊 / 作图后端 / 纳排标准 / 下一步等——一律**在正文里列 2–4 个编号候选**（推荐项放第 1 个并写明“推荐 X，因为……”），让用户**回一个数字即推进**；**别用开放式提问逼用户打字，也别弹交互选项卡（如 AskUserQuestion）**。只有无法枚举的纯事实（手上的数据文件、伦理批号、代表作清单等）才开放式问。
+
 Batch download open-access full-text PDFs from a DOI list using legitimate OA APIs only.
 
 ## Pipeline

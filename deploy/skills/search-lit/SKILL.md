@@ -35,6 +35,29 @@ never generate citations from memory alone.
 
 判定：无 MCP 工具 → 先试 Europe PMC（`epmc_search`）；确认在境外或已配代理再用 NCBI。全自动模式下，若某源连续失败就自动换下一条，不要卡住等用户。
 
+4. **多源增强检索**（`references/enhanced_search.py`）——需要**更全的召回**时（交叉学科、
+   预印本、按被引/机构补充）用它。一次打通 **Europe PMC + Semantic Scholar + arXiv +
+   OpenAlex** 四源，**跨源按 DOI→标题去重**后汇成统一证据表。以 Europe PMC 为国内可达
+   骨干：**任一增强源失败（限流/被墙）只跳过并在末尾报告，不中断整体**，境外/代理下四源
+   齐发效果最佳。产出对齐 `literature-review/search.py`（`outputs/evidence_table.csv` +
+   `evidence.md`，多一列 `sources` 标每篇命中的源）。
+
+   ```bash
+   PY=.venv/Scripts/python.exe   # Linux/macOS: .venv/bin/python
+   S=.opencode/skills/search-lit/references/enhanced_search.py
+   # 默认四源全开，跨源去重
+   "$PY" "$S" "graph neural network drug discovery" --limit 25 --since 2021 --email you@example.com
+   # 只要预印本+跨学科（跳过 PubMed 系）
+   "$PY" "$S" "protein language model" --sources semantic_scholar,arxiv,openalex --limit 20
+   ```
+
+   - **OpenAlex 鉴权**：默认走 polite pool，只需 `--email`（或环境变量 `OPENALEX_MAILTO`）
+     一个联系邮箱即可**匿名调通，不需要 API key**（与 openscience 同法）；设了环境变量
+     `OPENALEX_API_KEY` 会自动带上进 premium pool。**Semantic Scholar** 同理：共享池会
+     429 限流（脚本已指数退避），设 `S2_API_KEY` 提限额。
+   - 用途边界：`enhanced_search.py` 是**广召回 + 跨源去重**的证据池生成器，产出的 `doi/pmid`
+     仍须经 Phase 4 反幻觉协议 / `reference-check` 技能逐条核实后才能进正文引用。
+
 ## Search Tools: MCP (Primary) + E-utilities / Europe PMC (Fallback)
 
 ### Primary: MCP Tools (Claude.ai Remote)

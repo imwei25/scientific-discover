@@ -5,6 +5,8 @@ description: 领域调研 / 背景摸底。快速摸清一个科研或临床方�
 
 # 领域调研技能
 
+> **决策规约（照 AGENTS.md §六）**：本技能任何要用户拍板的抉择——方向 / 方案 / 目标刊 / 作图后端 / 纳排标准 / 下一步等——一律**在正文里列 2–4 个编号候选**（推荐项放第 1 个并写明“推荐 X，因为……”），让用户**回一个数字即推进**；**别用开放式提问逼用户打字，也别弹交互选项卡（如 AskUserQuestion）**。只有无法枚举的纯事实（手上的数据文件、伦理批号、代表作清单等）才开放式问。
+
 给一个方向，产出一份能让人 15 分钟看懂现状的**调研简报**。参考 K-Dense scientific-skills 的领域扫描思路。
 
 ## 定位（本技能在套件中的位置）
@@ -18,11 +20,11 @@ description: 领域调研 / 背景摸底。快速摸清一个科研或临床方�
 ```
 
 ## 方法
-1. **先界定范围**：跟用户确认方向、时间窗（默认近 5 年）、偏基础还是偏临床、简报篇幅（默认 ≤3000 字、证据池 30–50 篇）。
+1. **先界定范围**：跟用户确认方向、时间窗（默认近 5 年）、偏基础还是偏临床、简报篇幅（默认 ≤3000 字、证据池 30–50 篇）。能列成选项的（偏基础 / 偏临床、篇幅档位等）照 AGENTS.md §六 给编号候选、用户回一个数字即定。
 2. **抓真实证据**（强烈建议，别凭记忆）：
    - 检索文献默认用 `literature-review` 的 `search.py`（Europe PMC，国内可达）；`search-lit` 作为有 MCP/境外网络时的增强路径；需要全文再用 `fulltext-retrieval`。
    - **高被引排序**（无需任何 key、国内可达）：`literature-review` 的 `search.py` 已从 Europe PMC 取回 `citedByCount` 列，直接按它排序即可挑高被引/代表文献——这是零折腾的默认做法。
-   - **"关键团队/机构"聚合**（可选增强）：想按机构/作者聚合发文量与趋势，用 **OpenAlex**（已装 `pyalex`）：`from pyalex import Works, config; config.email="你的邮箱"; Works().search("主题").sort(cited_by_count="desc").get()`，机构聚合 `group_by("authorships.institutions.id")`。⚠️ **OpenAlex 现要求 API key**（2026-02 起）：有 key 就 `config.api_key="..."`；**没有 key 时不要硬撑**——退回用上面 Europe PMC 的结果人工归纳团队，并把该节标"未核实，仅供线索"。**绝不凭记忆编团队名。**
+   - **"关键团队/机构"聚合**（可选增强）：想按机构/作者聚合发文量与趋势，用 **OpenAlex**（已装 `pyalex`）：`from pyalex import Works, config; config.email="你的邮箱"; Works().search("主题").sort(cited_by_count="desc").get()`，机构聚合 `group_by("authorships.institutions.id")`。✅ **OpenAlex 只需邮箱（polite pool），不需要 API key**（2026-07 实测：`config.email` 即可匿名调通；`config.api_key="..."` 只是可选提限额，与 openscience 同法）。真连不通（限流/被墙）再退回用上面 Europe PMC 的结果人工归纳团队，并把该节标"未核实，仅供线索"。**绝不凭记忆编团队名。**
    - 有联网时也可用 web 搜索补充综述、指南、会议动态。
 3. **综合成简报**，写到 `outputs/research_scan.md`。
 

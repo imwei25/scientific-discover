@@ -5,6 +5,8 @@ description: 系统综述 / Meta 分析的**方法学全流程**（区别于叙�
 
 # 系统综述 / Meta 分析（方法学流程）
 
+> **决策规约（照 AGENTS.md §六）**：本技能任何要用户拍板的抉择——方向 / 方案 / 目标刊 / 作图后端 / 纳排标准 / 下一步等——一律**在正文里列 2–4 个编号候选**（推荐项放第 1 个并写明“推荐 X，因为……”），让用户**回一个数字即推进**；**别用开放式提问逼用户打字，也别弹交互选项卡（如 AskUserQuestion）**。只有无法枚举的纯事实（手上的数据文件、伦理批号、代表作清单等）才开放式问。
+
 系统综述与叙述性综述的**分水岭**：有预注册、双人独立裁决、量化偏倚与证据质控、可复现的检索与计数。本技能以**确定性脚本为骨、方法学规则为肉**——脚本负责去重/计数/κ（零 LLM、可审计），规则负责筛选/RoB/GRADE/提取的人类裁决标准。
 
 > **绝不用一次 LLM pass 当最终筛选决定**。筛选必须双人独立 + 冲突人工消解；协议必须在筛文献前注册；PRISMA 流程图是硬性产出。缺的真实信息（纳排、注册号、评审者）向用户要，不替编。
@@ -21,11 +23,11 @@ description: 系统综述 / Meta 分析的**方法学全流程**（区别于叙�
 
 ## 全流程（八步）
 
-### 0. 先对齐（停下问用户）
+### 0. 先对齐（停下问用户；能选的照 AGENTS.md §六 给编号选项、回一个数字即定，如综述类型 1) 干预 2) 诊断 3) 预后 4) 患病率）
 研究问题（PICO/PECO）、综述类型（干预/诊断/预后/患病率）、是否已有 PROSPERO 注册、有几位评审者、目标数据库、语言范围、时间窗。写清纳入/排除标准（这决定后面每一步）。
 
 ### 1. 预注册协议（筛文献前，必做）
-按 PROSPERO 字段清单备好协议、去 PROSPERO 注册、回填真实注册号。字段清单见 [references/protocol-extraction.md](references/protocol-extraction.md)。⚠️ **注册在筛选之前**，否则丧失系统综述的核心信誉；与 `research-design` 的预注册锁同源（防事后改纳排）。
+按 PROSPERO 字段清单备好协议、去 PROSPERO 注册、回填真实注册号。字段清单见 [references/protocol-extraction.md](references/protocol-extraction.md)。⚠️ **注册在筛选之前**，否则丧失系统综述的核心信誉；与 `novelty-check` 的预注册锁同源（防事后改纳排）。
 
 ### 2. 系统检索（可复现是硬指标）
 按 **PICO 概念表**建检索式（每概念 MeSH + 自由词，概念内 OR、概念间 AND）、按综述类型定敏感度目标、过 **PRESS 6 项**同行评议自查、用 **PRISMA-S** 记录检索。详见 [references/search-and-screen.md](references/search-and-screen.md)。检索执行走 `literature-review` 的 `search.py`（Europe PMC 国内可达）/`search-lit`（PubMed 系）；各库导出（.nbib/.ris/.bib/.csv）放进一个 `imported/` 文件夹。
