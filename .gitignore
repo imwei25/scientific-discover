@@ -1,6 +1,7 @@
 # 密钥与虚拟环境（保留在磁盘上，但不进 git）
 backend/.env
 backend/.venv/
+.venv/
 
 # 旧产品的遗留目录（未跟踪的构建产物，不进 git）
 backend/
@@ -12,6 +13,10 @@ outputs/
 uploads/
 node_modules/
 *.log
+
+# Python 缓存
+__pycache__/
+*.pyc
 
 # 部署密钥与密码文件（绝不入库）
 deploy/.env

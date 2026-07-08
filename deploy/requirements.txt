@@ -7,3 +7,23 @@ scikit-learn==1.7.2
 seaborn==0.13.2
 statsmodels==0.14.4
 openpyxl==3.1.5
+
+# ---- Skill 套件新增（文献/文档/作图）----
+requests==2.34.2
+httpx==0.28.1
+metapub==0.7.4
+pymed==0.8.9
+biopython==1.87
+habanero==2.9.2
+pyalex==0.21
+bibtexparser==1.4.4
+rispy==0.10.0
+python-docx==1.1.2
+reportlab==5.0.0
+lxml==6.1.1
+beautifulsoup4==4.15.0
+tqdm==4.68.3
+lifelines==0.30.0
+adjustText==1.4.0
+pymupdf==1.28.0
+pymupdf4llm==1.28.0

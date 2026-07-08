@@ -1,0 +1,41 @@
+# 科研医学 Skill 套件 —— 统一装进项目根虚拟环境 .venv
+# 由 scripts/setup.ps1 (Windows) / scripts/setup.sh (服务器) 安装。
+# 分两组：核心科学计算（data-analysis 已用）+ skill 套件新增。
+
+# ---- 核心科学计算 ----
+pandas
+numpy
+scipy
+matplotlib
+scikit-learn
+seaborn
+statsmodels
+openpyxl
+
+# ---- 文献检索 / 下载（literature-download, literature-review, research-scan）----
+requests
+httpx
+metapub            # NCBI/PubMed 元数据 + FindIt 找可下载 PDF
+pymed              # PubMed 简洁封装
+biopython          # import 名为 Bio；Entrez eutils
+habanero           # Crossref REST 客户端
+pyalex             # OpenAlex 客户端
+bibtexparser       # 读写 .bib
+rispy              # 读写 RIS（EndNote/Zotero 通用格式）
+
+# ---- 文档排版（journal-formatting, grant-proposal）----
+python-docx        # 生成 .docx
+reportlab          # 生成 .pdf
+lxml               # docx/xml 处理
+
+# ---- 抓取解析（deep-research, research-scan）----
+beautifulsoup4
+tqdm
+
+# ---- 医学作图（nature-figure 用 matplotlib/seaborn；以下为通用增强）----
+lifelines          # Kaplan-Meier 生存曲线 / Cox（data-analysis 也用）
+adjustText         # 标签自动避让
+
+# ---- 全文下载 / PDF 转换（fulltext-retrieval）----
+pymupdf            # 读/校验 PDF
+pymupdf4llm        # PDF → Markdown（喂给 LLM 分析）
