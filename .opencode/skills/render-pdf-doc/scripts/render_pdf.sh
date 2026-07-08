@@ -36,7 +36,7 @@ PYBIN="$(resolve_py)"
 
 INPUT=""
 OUTPUT=""
-INFER_COLWIDTHS=0
+INFER_COLWIDTHS=1   # 默认开启：CJK 科研文档几乎都含表格，不推断列宽会让标签列被压成逐字折行
 MAINFONT=""
 CJKFONT=""
 CLI_MAINFONT_SET=0
@@ -50,7 +50,8 @@ Usage: $(basename "$0") -i <input.md> [-o <output.pdf>] [options] [-- <pandoc ar
 Options:
   -i  Input markdown
   -o  Output PDF (default: <input>.pdf)
-  --infer-colwidths     Run scripts/infer_colwidths.py on a temp copy first
+  --infer-colwidths     Run scripts/infer_colwidths.py first (DEFAULT: on)
+  --no-infer-colwidths  Disable column-width inference (raw pandoc widths)
   --font NAME           mainfont (default: OS-detected)
   --cjk-font NAME       CJKmainfont (default: OS-detected)
   -h | --help           Help
@@ -65,6 +66,7 @@ while [[ $# -gt 0 ]]; do
     -i) INPUT="$2"; shift 2 ;;
     -o) OUTPUT="$2"; shift 2 ;;
     --infer-colwidths) INFER_COLWIDTHS=1; shift ;;
+    --no-infer-colwidths) INFER_COLWIDTHS=0; shift ;;
     --font) MAINFONT="$2"; CLI_MAINFONT_SET=1; shift 2 ;;
     --cjk-font) CJKFONT="$2"; CLI_CJKFONT_SET=1; shift 2 ;;
     -h|--help) usage ;;
