@@ -4,6 +4,9 @@
 #   bash install.sh --with-pdf      # also install pandoc + xelatex (for render-pdf-doc)
 #   bash install.sh --link-claude   # also copy skills/* into ~/.claude/skills (Claude Code)
 # Flags can be combined. Falls back to the Tsinghua PyPI mirror when pypi.org is slow.
+# Always writes the router at the PROJECT ROOT: AGENTS.md (OpenCode) is mirrored into a
+# project-root CLAUDE.md (Claude Code) as a managed block -- project-scoped on purpose,
+# never the machine-global ~/.claude/CLAUDE.md.
 set -uo pipefail
 ROOT="$(cd "$(dirname "$0")" && pwd)"
 VENV="$ROOT/.venv"
@@ -100,6 +103,19 @@ if [ "$LINK_CLAUDE" = 1 ]; then
   step 0 "Claude Code skills" "$n skills copied to $target"
 fi
 
+# 4b) router: put AGENTS.md at the PROJECT ROOT under both framework names. OpenCode reads
+#     AGENTS.md; the helper mirrors it into a project-root CLAUDE.md (managed block) for
+#     Claude Code. Project-scoped on purpose -- never the machine-global ~/.claude/CLAUDE.md.
+if [ -f "$ROOT/AGENTS.md" ]; then
+  if "$PY" "$ROOT/scripts/install_router.py" "$ROOT/AGENTS.md" "$ROOT/CLAUDE.md"; then
+    step 0 "Router" "project-root CLAUDE.md written (managed block) for Claude Code; AGENTS.md serves OpenCode"
+  else
+    step 1 "Router" "install_router.py failed"
+  fi
+else
+  step 1 "Router" "AGENTS.md not found at project root ($ROOT)"
+fi
+
 # 5) validate skills + environment
 if "$PY" "$ROOT/scripts/validate_skills.py" --env; then
   step 0 "Self-check" "skills + environment validated"
@@ -118,7 +134,8 @@ fi
 echo "Interpreter: $PY"
 echo "Skills dir : $ROOT/skills"
 echo "Load them: point your agent framework at the skills/ folder (see README)."
+echo "Router = project-root AGENTS.md (OpenCode) / CLAUDE.md (Claude Code) -- both written here, project-scoped, not machine-global."
 echo "Tip: 'source .venv/bin/activate' so vendored skills' bare 'python3' resolves to this venv."
 [ "$WITH_PDF" = 0 ] && echo "PDF (render-pdf-doc)? re-run: bash install.sh --with-pdf"
-[ "$LINK_CLAUDE" = 0 ] && echo "Using Claude Code? re-run with --link-claude to copy skills into ~/.claude/skills."
+[ "$LINK_CLAUDE" = 0 ] && echo "Using Claude Code? re-run with --link-claude to also copy skills into ~/.claude/skills."
 [ "${#FAILED[@]}" = 0 ] || exit 1

@@ -5,6 +5,9 @@
   - Auto-installs Python 3.12 via winget when no usable Python is found.
   - Optional: -WithPdf also installs pandoc + MiKTeX (needed only by render-pdf-doc)
     and enables MiKTeX auto package install so first render does not hang.
+  - Always writes the router at the PROJECT ROOT: AGENTS.md (OpenCode) is mirrored into
+    a project-root CLAUDE.md (Claude Code) as a managed block. Project-scoped on purpose --
+    it never touches the machine-global ~/.claude/CLAUDE.md.
   - Optional: -LinkClaude copies skills\* into %USERPROFILE%\.claude\skills so
     Claude Code picks them up without manual copying.
   ASCII-only on purpose: PowerShell 5.1 reads BOM-less UTF-8 scripts as ANSI and would garble non-ASCII.
@@ -176,6 +179,19 @@ if ($LinkClaude) {
   }
 }
 
+# 4b) router: put AGENTS.md at the PROJECT ROOT under both framework names, so whichever
+#     agent runs in THIS project finds the supervisor. The helper writes a managed block into
+#     the project-root CLAUDE.md (preserving existing content) and NEVER touches the
+#     machine-global ~/.claude/CLAUDE.md -- that would fire routing in every unrelated project.
+$router = Join-Path $Root "AGENTS.md"
+if (Test-Path $router) {
+  & $Py (Join-Path $Root "scripts\install_router.py") $router (Join-Path $Root "CLAUDE.md")
+  if ($LASTEXITCODE -eq 0) { Step "Router" $true  "project-root CLAUDE.md written (managed block) for Claude Code; AGENTS.md serves OpenCode" }
+  else                     { Step "Router" $false "install_router.py failed (exit $LASTEXITCODE)" }
+} else {
+  Step "Router" $false "AGENTS.md not found at project root ($Root)"
+}
+
 # 5) validate skills + environment
 try {
   & $Py (Join-Path $Root "scripts\validate_skills.py") --env
@@ -197,6 +213,7 @@ if ($failed.Count -eq 0) {
 Write-Host "Interpreter: $Py"
 Write-Host "Skills dir : $(Join-Path $Root 'skills')"
 Write-Host "Load them: point your agent framework at the skills\ folder (see README)."
+Write-Host "Router = project-root AGENTS.md (OpenCode) / CLAUDE.md (Claude Code) -- both written here, project-scoped, not machine-global."
 if (-not $WithPdf) { Write-Host "PDF (render-pdf-doc)? re-run with -WithPdf." -ForegroundColor DarkGray }
-if (-not $LinkClaude) { Write-Host "Using Claude Code? re-run with -LinkClaude to copy skills into ~/.claude/skills." -ForegroundColor DarkGray }
+if (-not $LinkClaude) { Write-Host "Using Claude Code? re-run with -LinkClaude to also copy skills into ~/.claude/skills." -ForegroundColor DarkGray }
 if ($failed.Count -gt 0) { exit 1 }

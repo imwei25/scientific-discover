@@ -67,5 +67,16 @@ Write-Host "`n校验技能 ..." -ForegroundColor Cyan
 & $Py (Join-Path $Root "scripts\validate_skills.py")
 if (-not $?) { throw "技能校验未通过" }
 
+# 5) 项目根路由：把 AGENTS.md 镜像成同目录 CLAUDE.md（Claude Code 读项目 ./CLAUDE.md；OpenCode 读 AGENTS.md）。
+#    只落项目根、绝不写全局 ~/.claude，避免在无关项目触发本套件的路由铁律。
+$Router = Join-Path $Root "AGENTS.md"
+if (Test-Path $Router) {
+    Write-Host "`n写入项目根路由 CLAUDE.md（供 Claude Code）..." -ForegroundColor Cyan
+    & $Py (Join-Path $Root "scripts\install_router.py") $Router (Join-Path $Root "CLAUDE.md")
+    if (-not $?) { throw "写入项目根 CLAUDE.md 失败" }
+} else {
+    Write-Host "  ! 未在项目根找到 AGENTS.md，跳过 CLAUDE.md 路由" -ForegroundColor Yellow
+}
+
 Write-Host "`n全部完成 ✔  解释器: $Py" -ForegroundColor Green
 Write-Host "可选自检: & `"$Py`" .opencode\skills\reference-check\verify_refs.py `"10.1038/s41586-020-2649-2`""

@@ -59,6 +59,15 @@ PY
 echo "校验技能 ..."
 "$PY" "$ROOT/scripts/validate_skills.py"
 
+# 5) 项目根路由：把 AGENTS.md 镜像成同目录 CLAUDE.md（Claude Code 读项目 ./CLAUDE.md；OpenCode 读 AGENTS.md）。
+#    只落项目根、绝不写全局 ~/.claude，避免在无关项目触发本套件的路由铁律。
+if [ -f "$ROOT/AGENTS.md" ]; then
+  echo "写入项目根路由 CLAUDE.md（供 Claude Code）..."
+  "$PY" "$ROOT/scripts/install_router.py" "$ROOT/AGENTS.md" "$ROOT/CLAUDE.md"
+else
+  echo "  ! 未在项目根找到 AGENTS.md，跳过 CLAUDE.md 路由"
+fi
+
 echo ""
 echo "全部完成 ✔  解释器: $PY"
 echo "技能统一用项目根 .venv：Linux/mac 是 .venv/bin/python，Windows 是 .venv\\Scripts\\python.exe。"
