@@ -16,14 +16,14 @@ check() {
   fi
 }
 
-# Windows/Git Bash: MiKTeX's bin directory is frequently absent from the Git Bash
-# PATH, so xelatex reads as [MISS] even after `winget install MiKTeX.MiKTeX`.
-# Best-effort: prepend the known MiKTeX bin locations when xelatex is not resolvable.
+# Windows/Git Bash: winget-installed binaries frequently land off the Git Bash PATH,
+# so xelatex (MiKTeX) and pandoc read as [MISS] even after a successful install.
+# Best-effort: prepend their known install locations when not already resolvable.
 case "$(uname -s)" in
   MINGW*|MSYS*|CYGWIN*)
+    _la="$(cygpath -u "${LOCALAPPDATA:-}" 2>/dev/null || printf '%s' "${LOCALAPPDATA:-}")"
+    _pf="$(cygpath -u "${PROGRAMFILES:-}" 2>/dev/null || printf '%s' "${PROGRAMFILES:-}")"
     if ! command -v xelatex >/dev/null 2>&1; then
-      _la="$(cygpath -u "${LOCALAPPDATA:-}" 2>/dev/null || printf '%s' "${LOCALAPPDATA:-}")"
-      _pf="$(cygpath -u "${PROGRAMFILES:-}" 2>/dev/null || printf '%s' "${PROGRAMFILES:-}")"
       for _d in \
         "$_la/Programs/MiKTeX/miktex/bin/x64" \
         "$_la/Programs/MiKTeX/miktex/bin" \
@@ -31,11 +31,30 @@ case "$(uname -s)" in
         if [[ -x "$_d/xelatex.exe" ]]; then PATH="$_d:$PATH"; break; fi
       done
     fi
+    if ! command -v pandoc >/dev/null 2>&1; then
+      for _p in \
+        "$_la"/Microsoft/WinGet/Packages/JohnMacFarlane.Pandoc*/pandoc-*/pandoc.exe \
+        "$_la"/Microsoft/WinGet/Links/pandoc.exe \
+        "$_pf"/Pandoc/pandoc.exe; do
+        if [[ -x "$_p" ]]; then PATH="$(dirname "$_p"):$PATH"; break; fi
+      done
+    fi
     ;;
 esac
 
 check "pandoc" command -v pandoc
 check "xelatex" command -v xelatex
+
+# ctex document class (ctexart) — render_pdf.sh switches to it for Chinese docs.
+if command -v kpsewhich >/dev/null 2>&1 && kpsewhich ctexart.cls >/dev/null 2>&1; then
+  echo "[OK] ctex class (ctexart)"
+  ok=$((ok + 1))
+elif [[ "$(uname -s)" == MINGW* || "$(uname -s)" == MSYS* || "$(uname -s)" == CYGWIN* ]]; then
+  echo "[INFO] ctexart.cls not present yet — MiKTeX auto-installs it on first render (needs AutoInstall=1)"
+else
+  echo "[MISS] ctex class (ctexart) — apt install texlive-lang-chinese (NOT in texlive-lang-cjk)"
+  fail=$((fail + 1))
+fi
 
 case "$(uname -s)" in
   Darwin)
@@ -50,13 +69,13 @@ case "$(uname -s)" in
   MINGW*|MSYS*|CYGWIN*)
     _win="$(cygpath -u "${WINDIR:-}" 2>/dev/null || printf '%s' "${WINDIR:-}")"
     [[ -z "$_win" ]] && _win="/c/Windows"
-    # Chinese is the primary target here: Microsoft YaHei (msyh.ttc) is the default
-    # for Han text. Malgun Gothic is only needed for Korean documents.
-    if [[ -f "$_win/Fonts/msyh.ttc" || -f "$_win/Fonts/msyh.ttf" ]]; then
-      echo "[OK] Microsoft YaHei (Windows, Chinese)"
+    # Chinese is the primary target: the ctex fontset=windows uses 宋体 SimSun (simsun.ttc)
+    # for the body — that's the font that must be present. Malgun Gothic is Korean-only.
+    if [[ -f "$_win/Fonts/simsun.ttc" || -f "$_win/Fonts/simsun.ttf" ]]; then
+      echo "[OK] SimSun 宋体 (Windows, Chinese ctex body)"
       ok=$((ok + 1))
     else
-      echo "[WARN] Microsoft YaHei (msyh.ttc) not detected — it ships with Windows; see C:\\Windows\\Fonts"
+      echo "[WARN] SimSun (simsun.ttc) not detected — it ships with Windows; see C:\\Windows\\Fonts"
     fi
     if [[ -f "$_win/Fonts/malgun.ttf" ]]; then
       echo "[OK] Malgun Gothic (Windows, Korean)"

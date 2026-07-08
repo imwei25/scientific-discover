@@ -9,10 +9,8 @@ description: 系统综述 / Meta 分析的**方法学全流程**（区别于叙�
 
 > **绝不用一次 LLM pass 当最终筛选决定**。筛选必须双人独立 + 冲突人工消解；协议必须在筛文献前注册；PRISMA 流程图是硬性产出。缺的真实信息（纳排、注册号、评审者）向用户要，不替编。
 
-## 范围自检（开工第一件事）
-本套件**主控优先：默认所有请求先经 `sci-pilot` 统一调度**。
-- **先看有没有被派发**：上文若出现派发标记 `[sci-pilot派发·…·直接执行]`、或已有 workspace 上下文、或你是被 sci-pilot/其它技能作为其流程的一步调用 → **直接做，别往回绕**（防兜圈）。
-- **否则**（用户冷启动直接触发、上文无任何派发痕迹）→ **先交回 `sci-pilot`** 判意图与范围：它判为**单步**（如"只对这批文献双人筛选/去重""只做一次 RoB2/GRADE"）会带派发标记立刻派回来、你再就地做那一步；判为**完整目标**（做完整个系统综述并写成投稿稿）会走 review 流水线（本技能方法学八步 → `write-paper` 成文、维护 workspace、可续跑）。
+## 定位（本技能在套件中的位置）
+顶层主控（AGENTS.md 常驻指令）判意图、定范围、派发；派到本技能就**直接做，别回绕**。本技能是 systematic 流水线的方法学环节（**本技能八步** → write-paper 成文 → reference-check → render-docx）；单独直呼（只对这批文献双人筛选/去重、只做一次 RoB2/GRADE）也直接做那一步。产物写仓库根 `outputs/`。
 
 ## Python 环境（脚本用，纯标准库，无需额外依赖）
 > 没有项目根 `.venv`？先运行 `env-setup` 技能。
@@ -63,7 +61,7 @@ $PY $SR/sr_prisma_count.py --identification outputs/counts/identification.json \
 ## 交付与衔接
 - 产物写工作区 `outputs/`（去重 CSV、筛选 CSV、PRISMA 计数、RoB 表、提取表、GRADE SoF 表）。
 - **写成投稿稿**交 `write-paper`（走其报告规范自检的 PRISMA 2020，含流程图硬性产出）；参考文献查 `reference-check`；出 PDF/Word 走 `render-pdf-doc`/`render-docx`。
-- 在 `sci-pilot` 的 review 流水线里，涉及"系统综述/Meta"时先走本技能，再交 write-paper 成文。
+- 完整目标时按 AGENTS.md 的 `systematic` 流水线顺序走：本技能方法学八步 → write-paper 成文 → reference-check → render-docx。
 - 中文报告出图/排版记得指定中文字体。
 
 ## 硬约束

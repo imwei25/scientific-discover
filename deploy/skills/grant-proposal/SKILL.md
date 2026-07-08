@@ -1,16 +1,14 @@
 ---
 name: grant-proposal
-description: 写基金标书 / 研究计划书。按国自然(NSFC)或 NIH 等模板起草或润色标书：立项依据、研究目标、研究内容、研究方案与技术路线、创新点、可行性分析、研究基础、预期成果与进度。当用户说"写标书""基金申请""国自然""NIH grant""研究计划书""立项依据""标书润色"时使用。本技能聚焦**标书起草/润色这一步**；若是从零做整个标书（还要调研、选题、前期梳理），完整流程用 `sci-pilot` 编排。
+description: 写基金标书 / 研究计划书。按国自然(NSFC)或 NIH 等模板起草或润色标书：立项依据、研究目标、研究内容、研究方案与技术路线、创新点、可行性分析、研究基础、预期成果与进度。当用户说"写标书""基金申请""国自然""NIH grant""研究计划书""立项依据""标书润色"时使用。本技能聚焦**标书起草/润色这一步**；若是从零做整个标书（还要调研、选题、前期梳理），按 AGENTS.md 的 grant 流水线顺序走（research-scan→topic-selection→research-design→本技能→peer-review→render-pdf-doc）。
 ---
 
 # 基金标书技能
 
 帮用户把课题写成有说服力、结构完整的标书。参考 franklee16 / K-Dense 的 grants 技能；预算部分参考 qinyan-academic-skills 的 `research-grants`（MIT）。**内容基于用户提供的真实课题与前期工作，不编造数据、成果或报价。**
 
-## 范围自检（开工第一件事）
-本套件**主控优先：默认所有请求先经 `sci-pilot` 统一调度**。
-- **先看有没有被派发**：上文若出现派发标记 `[sci-pilot派发·…·直接执行]`、或已有 workspace 上下文、或你是被 sci-pilot/其它技能作为其流程的一步调用 → **直接做你这一步，别往回绕**（防兜圈）。
-- **否则**（用户冷启动直接触发、上文无任何派发痕迹）→ **先交回 `sci-pilot`** 判意图与范围：它判为**单步**（已有明确课题+前期工作、只要起草/润色标书正文）会带派发标记把这一步立刻派回来、你再就地做；判为**完整目标**（从零做整份标书）会走 grant 流水线（research-scan→topic-selection→research-design→本技能→peer-review→render-pdf-doc）、建 workspace。
+## 定位（本技能在套件中的位置）
+顶层主控（AGENTS.md 常驻指令）判意图、定范围、派发；派到本技能就**直接做，别回绕**。本技能是 grant 流水线的正文起草环节（research-scan→topic-selection→research-design→**本技能**→peer-review→render-pdf-doc）；单独直呼（已有明确课题+前期工作、只要起草/润色标书正文）也直接做。产物写仓库根 `outputs/`。
 
 ## ⚠️ 时效与合规（必读，先于一切）
 

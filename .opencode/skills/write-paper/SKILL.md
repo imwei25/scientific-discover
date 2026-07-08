@@ -1,6 +1,6 @@
 ---
 name: write-paper
-description: 写原创研究论文（IMRaD 全流程）。把用户的真实数据与结果写成一篇结构完整的研究型论文：标题、摘要、引言、方法、结果、讨论、参考文献，并可生成投稿信(cover letter)与审稿意见回复(response to reviewers)。串起本套件的检索、分析、作图、查引用、去 AI 味、排版技能。也支持**病例报告(CARE)**写作分支（结构非 IMRaD）。当用户说"写论文""写一篇原创研究""把我的数据/结果写成论文""IMRaD""写病例报告""case report""写投稿信""回复审稿意见""改投另一个期刊"时使用。叙述性综述用 literature-review、**系统综述/Meta 的方法学流程用 systematic-review**、标书用 grant-proposal、只评审用 peer-review。本技能聚焦**写稿这一步**；从数据到成稿的完整流程用 `sci-pilot` 编排。
+description: 写原创研究论文（IMRaD 全流程）。把用户的真实数据与结果写成一篇结构完整的研究型论文：标题、摘要、引言、方法、结果、讨论、参考文献，并可生成投稿信(cover letter)与审稿意见回复(response to reviewers)。串起本套件的检索、分析、作图、查引用、去 AI 味、排版技能。也支持**病例报告(CARE)**写作分支（结构非 IMRaD）。当用户说"写论文""写一篇原创研究""把我的数据/结果写成论文""IMRaD""写病例报告""case report""写投稿信""回复审稿意见""改投另一个期刊"时使用。叙述性综述用 literature-review、**系统综述/Meta 的方法学流程用 systematic-review**、标书用 grant-proposal、只评审用 peer-review。本技能聚焦**写稿这一步**；从数据到成稿的完整流程按 AGENTS.md 的 paper 流水线顺序走。
 ---
 
 # 原创研究论文写作技能（IMRaD）
@@ -14,10 +14,8 @@ description: 写原创研究论文（IMRaD 全流程）。把用户的真实数�
 .venv/bin/python           # Linux / macOS
 ```
 
-## 范围自检（开工第一件事）
-本套件**主控优先：默认所有请求先经 `sci-pilot` 统一调度**。
-- **先看有没有被派发**：上文若出现派发标记 `[sci-pilot派发·…·直接执行]`、或已有 workspace 上下文、或你是被 sci-pilot/其它技能作为其流程的一步调用 → **直接做你这一步，别往回绕**（防兜圈）。
-- **否则**（用户冷启动直接触发、上文无任何派发痕迹）→ **先交回 `sci-pilot`** 判意图与范围：它判为**单步**（统计与图已就绪、只要组织成稿；或只写投稿信/回复审稿）会带派发标记立刻派回来、你再就地做；判为**完整目标**（从数据到成稿：还没做统计/图、目标刊未定，或"续上次那个课题"）会走 paper 流水线（deidentify→clinical-stats+data-analysis→nature-figure→本技能→reference-check→humanize-academic→peer-review→render-docx）、维护 workspace。
+## 定位（本技能在套件中的位置）
+顶层主控（AGENTS.md 常驻指令）判意图、定范围、派发；派到本技能就**直接做，别回绕**。本技能是 paper 流水线的成稿环节（deidentify→clinical-stats+data-analysis→nature-figure→**本技能**→reference-check→humanize-academic→peer-review→render-docx）；单独直呼（统计与图已就绪、只要组织成稿，或只写投稿信/回复审稿）也直接做。产物写仓库根 `outputs/`。
 
 ## 先问清楚（写之前必须对齐）
 - **研究类型**：RCT / 队列 / 病例对照 / 横断面 / 诊断试验 / 动物实验 / 病例报告 / 系统综述+Meta……（决定该套哪个报告规范，见下）。
@@ -113,7 +111,7 @@ RCT→CONSORT（现行版）；系统综述/Meta→PRISMA 2020；观察性→STR
 2. **引言最后写、且核心是"为何值得报告(why reportable)"**——写完病例才知道亮点在哪；引言简短点出"罕见/新表现/新疗法/诊断挑战/临床教训"四选一，**不写研究文章式的"知识缺口"，也别提前泄露结局**。
 3. **CARE 式摘要**：无 Methods/Results 结构，三段——背景（为何报告）/ 病例简述 / 结论与启示；**须写明最终诊断**；150–250 词。
 - **患者视角(patient perspective)**：CARE 要求，尽量纳入患者对诊疗经历的感受。
-- **合规门禁（病例报告特有，与脱敏正交、不可互替）**：① **发表知情同意书**（患者/家属签署、同意其病例与影像发表）；② **临床照片/影像的发表授权**；③ 去标识（走 `deidentify`，但去标识 ≠ 授权发表，两者都要）。缺任一项，**投稿前门禁阻断**（在 `sci-pilot` 病例报告流水线的 manifest 里记这三个状态位）。
+- **合规门禁（病例报告特有，与脱敏正交、不可互替）**：① **发表知情同意书**（患者/家属签署、同意其病例与影像发表）；② **临床照片/影像的发表授权**；③ 去标识（走 `deidentify`，但去标识 ≠ 授权发表，两者都要）。缺任一项，**投稿前门禁阻断**（这三个状态位在投稿前逐一核实）。
 - 其余环节（参考文献查 `reference-check`、去 AI 味、排版、报告规范用 §7 的 CARE）复用本技能主线。报告规范自检对照 **CARE** 清单。
 
 ## 附属产出（按需）
@@ -141,10 +139,10 @@ AI 写论文最危险的是**悄悄编一个 p 值/样本数/效应量**。成�
 5. **报告规范清单未附**——该刊要求随投的 CONSORT/PRISMA/STROBE 等 checklist 没交。
 6. **格式硬伤**——摘要用错标题体系、running head 超字符限、双盲审没交去标识稿。
 7. **相似度/自我抄袭**——投前自查文字重复率，避免与既往发表雷同段落。
-> 任一项不过，先补齐再投。可让 `sci-pilot` 在各流水线**投稿前作为最后一关**跑这份清单。
+> 任一项不过，先补齐再投。**投稿前作为最后一关**跑这份清单。
 
 ## 产出与交付
-- 稿件写 `outputs/manuscript.md`（或工作区约定路径）；cover letter 写 `outputs/cover_letter.md`；回复写 `outputs/response_to_reviewers.md`。
+- 稿件写 `outputs/manuscript.md`；cover letter 写 `outputs/cover_letter.md`；回复写 `outputs/response_to_reviewers.md`。
 - **出投稿版**：Word 稿交 `render-docx` 技能（医学期刊多要 .docx；该技能用 pandoc）。**若 pandoc 未安装或 render-docx 不可用**，退回用 `render-pdf-doc` 出 PDF，并如实告知用户"可用 Word/WPS 打开 Markdown 自行另存为 .docx"，**不要静默失败或臆造转换步骤**。
 - **去 AI 味**：定稿前把正文交 `humanize-academic`（中英文都支持），并跑其不变量校验确保数字/引用未被改动。
 
