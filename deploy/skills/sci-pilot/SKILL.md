@@ -17,9 +17,9 @@ metadata:
 ## 一、意图 → 流水线
 | 用户意图 | pipeline | 步骤（依次） | 细节 |
 |---|---|---|---|
-| 写文献综述 | `review` | search-lit/literature-review → reference-check → humanize-academic(可选) → render-pdf-doc | [references/pipeline-review.md](references/pipeline-review.md) |
-| 写基金标书 | `grant` | research-scan → topic-selection → grant-proposal → peer-review(自查) → render-pdf-doc | [references/pipeline-grant.md](references/pipeline-grant.md) |
-| 写原创研究论文 | `paper` | deidentify(如含患者数据) → clinical-stats + data-analysis → nature-figure → write-paper → reference-check → humanize-academic → peer-review(自查) → render-docx | [references/pipeline-paper.md](references/pipeline-paper.md) |
+| 写文献综述 | `review` | search-lit/literature-review → reference-check → humanize-academic(可选) → render-pdf-doc；**系统综述/Meta 改走 systematic-review 八步方法学流程 → write-paper** | [references/pipeline-review.md](references/pipeline-review.md) |
+| 写基金标书 | `grant` | research-scan → topic-selection → **research-design**(新颖性裁定+预注册) → grant-proposal → peer-review(自查) → render-pdf-doc | [references/pipeline-grant.md](references/pipeline-grant.md) |
+| 写原创研究论文 | `paper` | **research-design**(前瞻性研究：新颖性+预注册，采数前) → deidentify(如含患者数据) → clinical-stats + data-analysis → nature-figure → write-paper → reference-check → humanize-academic → peer-review(自查/对抗红队) → render-docx | [references/pipeline-paper.md](references/pipeline-paper.md) |
 | 深度研究一个问题 | `research` | deep-research → render-pdf-doc | [references/pipeline-research.md](references/pipeline-research.md) |
 
 拿不准归哪条时，问用户一句"你的目标更接近：综述 / 原创论文 / 标书 / 查透一个问题？"。

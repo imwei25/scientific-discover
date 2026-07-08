@@ -5,7 +5,11 @@
 按变量类型自动选择呈现与检验方式：
   - 连续变量：正态(Shapiro) → 均数±标准差 + t/ANOVA；非正态 → 中位数[IQR] + Mann-Whitney/Kruskal
   - 分类变量：n (%) + 卡方；期望频数 <5 或样本小 → Fisher 精确检验（2x2）
-分组列可选（--group）；给了就出组间比较 p 值列。
+两组比较时**额外报效应量 + 95%CI**（专业期刊要求，别只给 p）：
+  - 连续正态 → 均值差 (95%CI, Welch)
+  - 连续非正态 → 中位数差 (95%CI, 百分位 bootstrap)
+  - 二分类(2 水平) → OR (95%CI, 必要时 Haldane-Anscombe 0.5 校正)
+分组列可选（--group）；给了就出组间比较 p 值列（两组再加效应量列）。
 
 只用已安装的 pandas/numpy/scipy，无需额外依赖。
 
@@ -51,7 +55,58 @@ def fmt_p(p):
     return "<0.001" if p < 0.001 else f"{p:.3f}"
 
 
-def summarize_continuous(df, var, group, groups):
+def mean_diff_ci(a, b):
+    """两组均值差 (a-b) 及 95%CI（Welch，不假设方差齐）。"""
+    a, b = np.asarray(a, float), np.asarray(b, float)
+    n1, n2 = len(a), len(b)
+    if n1 < 2 or n2 < 2:
+        return None
+    v1, v2 = a.var(ddof=1), b.var(ddof=1)
+    se = np.sqrt(v1 / n1 + v2 / n2)
+    if se == 0:
+        return None
+    diff = a.mean() - b.mean()
+    df = se ** 4 / ((v1 / n1) ** 2 / (n1 - 1) + (v2 / n2) ** 2 / (n2 - 1))
+    t = stats.t.ppf(0.975, df)
+    return diff, diff - t * se, diff + t * se
+
+
+def median_diff_ci(a, b, n_boot=2000):
+    """两组中位数差 (a-b) 及 95%CI（百分位 bootstrap，种子固定→可复现）。"""
+    a, b = np.asarray(a, float), np.asarray(b, float)
+    if len(a) < 5 or len(b) < 5:
+        return None  # 样本太小，bootstrap 不稳，不给 CI
+    rng = np.random.default_rng(0)
+    diffs = [
+        np.median(rng.choice(a, len(a), replace=True))
+        - np.median(rng.choice(b, len(b), replace=True))
+        for _ in range(n_boot)
+    ]
+    diff = np.median(a) - np.median(b)
+    lo, hi = np.percentile(diffs, [2.5, 97.5])
+    return diff, lo, hi
+
+
+def odds_ratio_ci(a, b, c, d):
+    """2x2 的 OR 及 95%CI。表格为 [[a,b],[c,d]]，OR=(a*d)/(b*c)。
+    任一格为 0 时用 Haldane-Anscombe 加 0.5 校正。"""
+    if min(a, b, c, d) == 0:
+        a, b, c, d = a + 0.5, b + 0.5, c + 0.5, d + 0.5
+    orr = (a * d) / (b * c)
+    se = np.sqrt(1 / a + 1 / b + 1 / c + 1 / d)
+    lo = np.exp(np.log(orr) - 1.96 * se)
+    hi = np.exp(np.log(orr) + 1.96 * se)
+    return orr, lo, hi
+
+
+def fmt_effect(val):
+    if val is None:
+        return "—"
+    est, lo, hi = val
+    return f"{est:.2f} ({lo:.2f}, {hi:.2f})"
+
+
+def summarize_continuous(df, var, group, groups, two):
     x_all = pd.to_numeric(df[var], errors="coerce")
     if x_all.notna().sum() == 0:
         print(f"⚠️ 变量 {var!r} 指定为连续但无有效数值（可能类型指定反了）——已跳过。")
@@ -91,14 +146,24 @@ def summarize_continuous(df, var, group, groups):
                    ("t/Welch" if normal and len(groups) == 2 else
                     "ANOVA" if normal else
                     "Mann-Whitney" if len(groups) == 2 else "Kruskal-Wallis"))
+    # 效应量 + 95%CI（仅两组）：均值差(正态) / 中位数差(非正态)，方向 = 首组 − 次组
+    if two:
+        a = pd.to_numeric(df.loc[df[group] == groups[0], var], errors="coerce").dropna().values
+        b = pd.to_numeric(df.loc[df[group] == groups[1], var], errors="coerce").dropna().values
+        try:
+            eff = mean_diff_ci(a, b) if normal else median_diff_ci(a, b)
+        except Exception:
+            eff = None
+        row["效应量(95%CI)"] = ("均值差 " if normal else "中位数差 ") + fmt_effect(eff)
     return row
 
 
-def summarize_categorical(df, var, group, groups):
+def summarize_categorical(df, var, group, groups, two):
     rows = []
-    cats = df[var].dropna().unique()
+    cats = sorted(df[var].dropna().unique().tolist(), key=str)
     # 列联表用于检验
     p, test = None, ""
+    ct = None
     if group and len(groups) >= 2:
         ct = pd.crosstab(df[var], df[group])
         try:
@@ -119,6 +184,21 @@ def summarize_categorical(df, var, group, groups):
         header[str(g)] = ""
     header["P"] = fmt_p(p)
     header["检验"] = test
+    # 效应量 OR(95%CI)：仅当两组 + 恰好 2 水平（2x2）。方向：以次水平为“阳性”，首组 vs 次组。
+    if two:
+        eff_txt = "—"
+        if len(cats) == 2:
+            pos, ref = cats[1], cats[0]  # “阳性”结局取排序后第二个水平，首水平为参照
+            g0 = df[df[group] == groups[0]][var]
+            g1 = df[df[group] == groups[1]][var]
+            a = int((g0 == pos).sum()); b = int((g0 == ref).sum())
+            c = int((g1 == pos).sum()); d = int((g1 == ref).sum())
+            try:
+                orr = odds_ratio_ci(a, b, c, d)
+                eff_txt = f"OR[{pos}] " + fmt_effect(orr)
+            except Exception:
+                eff_txt = "—"
+        header["效应量(95%CI)"] = eff_txt
     rows.append(header)
     for c in cats:
         r = {"变量": f"　{c}"}
@@ -129,6 +209,8 @@ def summarize_categorical(df, var, group, groups):
             r[str(g)] = f"{n} ({100*n/denom:.1f})" if denom else "0 (0.0)"
         r["P"] = ""
         r["检验"] = ""
+        if two:
+            r["效应量(95%CI)"] = ""
         rows.append(r)
     return rows
 
@@ -154,6 +236,7 @@ def main():
     groups = sorted(df[group].dropna().unique().tolist()) if group else ["总体"]
     if group and len(groups) < 2:
         print(f"⚠️ 分组列 {group!r} 只有 1 个取值，不会做组间检验（只出各变量描述）。")
+    two = bool(group) and len(groups) == 2  # 恰好两组才报效应量+95%CI
 
     cont = [c.strip() for c in args.continuous.split(",") if c.strip()]
     cat = [c.strip() for c in args.categorical.split(",") if c.strip()]
@@ -181,18 +264,20 @@ def main():
         nrow[str(g)] = str((df[group] == g).sum() if group else len(df))
     nrow["P"] = ""
     nrow["检验"] = ""
+    if two:
+        nrow["效应量(95%CI)"] = ""
     out_rows.append(nrow)
 
     for v in cont:
         if v in df.columns:
-            r = summarize_continuous(df, v, group, groups)
+            r = summarize_continuous(df, v, group, groups, two)
             if r is not None:
                 out_rows.append(r)
     for v in cat:
         if v in df.columns:
-            out_rows.extend(summarize_categorical(df, v, group, groups))
+            out_rows.extend(summarize_categorical(df, v, group, groups, two))
 
-    cols = ["变量"] + [str(g) for g in groups] + (["P", "检验"] if group else [])
+    cols = ["变量"] + [str(g) for g in groups] + (["效应量(95%CI)", "P", "检验"] if two else (["P", "检验"] if group else []))
     result = pd.DataFrame(out_rows)
     for c in cols:
         if c not in result.columns:
@@ -202,6 +287,8 @@ def main():
     result.to_csv(args.out, index=False, encoding="utf-8-sig")
 
     print(f"Table 1 已生成：{args.out}（{len(cont)} 连续 + {len(cat)} 分类变量，分组={group or '无'}）")
+    if two:
+        print(f"效应量方向：均值差/中位数差 = {groups[0]} − {groups[1]}；OR 以“次水平”为阳性、{groups[0]} 对 {groups[1]}。")
     print("⚠️ 自动选择检验只是起点：请人工核对每个变量的检验是否合适（如配对/重复测量、协变量调整需另做）。")
     print(result.to_string(index=False))
 
