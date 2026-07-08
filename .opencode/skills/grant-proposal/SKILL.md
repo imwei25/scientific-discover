@@ -83,6 +83,7 @@ description: 写基金标书 / 研究计划书。按国自然(NSFC)或 NIH 等�
 
 ## 产出
 - 草稿写 `outputs/proposal.md`。
+- **图 / 技术路线图要"真嵌入"，不能只在文字里提**：若配了技术路线图或示意图（用 `nature-figure` 生成到仓库根 `outputs/`），必须在正文对应处用 `![图1. 技术路线图……](outputs/xxx.png)` **真正插入图片**——路径指向图的真实位置 `outputs/`（渲染脚本从仓库根跑）；只写"见技术路线图"而不嵌入、或路径写错，渲染出来就**没有图**。
 - **出 PDF**：定稿后交给 `render-pdf-doc` 技能排成 `outputs/proposal.pdf`。中文字体现已自动处理（含汉字自动用 Microsoft YaHei / Noto Sans CJK SC），无需手动指定。
 
 ## 定稿自查清单（写完逐条核对，勾给用户看）

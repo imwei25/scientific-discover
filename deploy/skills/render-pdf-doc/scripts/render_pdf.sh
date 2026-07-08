@@ -226,6 +226,7 @@ fi
 
 ARGS=(
   --pdf-engine=xelatex
+  --resource-path ".:$(dirname "$INPUT")"
   -V "geometry:margin=1in"
   -V "fontsize=12pt"
   -V "linestretch=1.4"

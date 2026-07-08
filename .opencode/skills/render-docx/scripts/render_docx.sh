@@ -55,7 +55,7 @@ if ! command -v pandoc >/dev/null 2>&1; then
   exit 3
 fi
 
-ARGS=(-o "$OUTPUT")
+ARGS=(-o "$OUTPUT" --resource-path ".:$(dirname "$INPUT")")
 [[ -n "$REF" ]] && { [[ -f "$REF" ]] || { echo "ERROR: --ref not found: $REF" >&2; exit 2; }; ARGS+=(--reference-doc "$REF"); }
 if [[ -n "$CSL" || -n "$BIB" ]]; then
   ARGS+=(--citeproc)
