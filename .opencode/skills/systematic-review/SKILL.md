@@ -50,7 +50,7 @@ $PY $SR/sr_prisma_count.py --identification outputs/counts/identification.json \
 按研究设计选工具（RCT→RoB2、非随机干预→ROBINS-I、观察性→NOS、诊断→QUADAS-2、患病率→JBI），逐 domain 回答 signaling questions（Y/PY/PN/N/NI）→ 按决策算法给 domain 判定 → 汇总总体偏倚。完整规则见 [references/rob-grade.md](references/rob-grade.md)。偏倚图（traffic-light / summary）交 `nature-figure`。
 
 ### 7. 数据提取 + Meta 合并（如做定量合并）
-按预定义 schema 提取；缺数据联系作者；需要时用 [references/protocol-extraction.md](references/protocol-extraction.md) 的**效应量换算公式**（如 中位数[IQR]→均值±SD、SE↔SD、OR↔RR）统一口径。**Meta 统计合并（森林图、I²/τ²、随机效应、亚组/敏感性/发表偏倚 Egger）走 `data-analysis`**（已装 statsmodels；复杂模型如网络 Meta/多水平建议 R `metafor` 复核，如实告知）。
+按预定义 schema 提取；缺数据联系作者；需要时用 [references/protocol-extraction.md](references/protocol-extraction.md) 的**效应量换算公式**（如 中位数[IQR]→均值±SD、SE↔SD、OR↔RR）统一口径。**Meta 统计合并走 `data-analysis`**——用 `statsmodels.stats.meta_analysis`（`combine_effects`：DerSimonian-Laird 随机效应、I²/τ²/Q 异质性、森林图）+ 亚组/敏感性分析。⚠️ **发表偏倚 Egger 检验/漏斗图不对称、REML、网络 Meta/多水平/剂量-反应 statsmodels 均无内置**——研究数够(≥10)时手写加权回归或用 R `metafor`/`netmeta`，**如实告知用户哪些走 Python、哪些需 R，别声称能做其实做不了的**。
 
 ### 8. GRADE 证据分级
 对每个主要结局，从五个降级域（偏倚风险/不一致性/间接性/不精确性/发表偏倚）起评，观察性研究可用三个升级因素（大效应/剂量反应/混杂方向）→ 得 high/moderate/low/very low。规则与打分表见 [references/rob-grade.md](references/rob-grade.md)。产出证据概要表（Summary of Findings）。

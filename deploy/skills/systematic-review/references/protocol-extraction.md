@@ -47,4 +47,4 @@
 - **p 值 → SE / z**（无 CI 时的下策）：由精确 p 反推 z，再 SE = 效应量 / z；仅在拿不到 CI 时用，标注局限。
 - **多臂研究共享对照**：合并时按 Cochrane Handbook 处理（拆分共享对照组样本，避免重复计数）。
 
-> 换算都是近似，**优先向作者要原始数据**；换算过程记进提取表备注，可复核。定量合并（森林图、I²/τ²、随机效应 DerSimonian-Laird 或 REML、亚组、敏感性、Egger 发表偏倚）交 `data-analysis`；网络 Meta / 多水平 / 剂量-反应等复杂模型建议用 R `metafor`/`netmeta` 复核并如实告知。
+> 换算都是近似，**优先向作者要原始数据**；换算过程记进提取表备注，可复核。定量合并（森林图、I²/τ²、随机效应 DerSimonian-Laird、亚组、敏感性）交 `data-analysis`（`statsmodels.stats.meta_analysis`）。⚠️ **statsmodels 不含**：Egger 发表偏倚检验/漏斗图不对称、REML、网络 Meta/多水平/剂量-反应——这些用 R `metafor`/`netmeta`，别声称 Python 能做；如实告知用户。

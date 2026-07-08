@@ -154,24 +154,28 @@ def main():
                    ta_excluded + reports_sought == records_screened))
 
     if ft is not None:
-        ft_consensus = [norm_decision(r.get("consensus_decision")) for r in ft]
         retrieved_col = any((r.get("pdf_retrieved") or "").strip() for r in ft)
         if retrieved_col:
-            reports_assessed = sum(1 for r in ft
-                                   if (r.get("pdf_retrieved") or "").strip().upper() == "Y")
+            # 只有“已获取全文(pdf_retrieved=Y)”的报告才进入全文合格性评定；
+            # 未获取(N)的报告单列在“未获取”里，不计入全文纳入/排除——否则计数口径
+            # 不一致（reports_assessed 过滤了 N，而纳入/排除若不过滤就会对不上，误报 FAIL）。
+            assessed = [r for r in ft if (r.get("pdf_retrieved") or "").strip().upper() == "Y"]
+            reports_assessed = len(assessed)
             reports_not_retrieved = sum(1 for r in ft
                                         if (r.get("pdf_retrieved") or "").strip().upper() == "N")
         else:
+            assessed = ft
             reports_assessed = len(ft)
             reports_not_retrieved = max(0, reports_sought - reports_assessed)
-        ft_excluded = sum(1 for d in ft_consensus if d == "exclude")
-        studies_included = sum(1 for d in ft_consensus if d == "include")
+        assessed_consensus = [norm_decision(r.get("consensus_decision")) for r in assessed]
+        ft_excluded = sum(1 for d in assessed_consensus if d == "exclude")
+        studies_included = sum(1 for d in assessed_consensus if d == "include")
         reasons = Counter((r.get("exclusion_reason_category") or "Unspecified").strip()
-                          for r, d in zip(ft, ft_consensus) if d == "exclude")
+                          for r, d in zip(assessed, assessed_consensus) if d == "exclude")
         ft_kappa, ft_n = cohens_kappa(
             [(norm_decision(r.get("reviewer1_decision")),
-              norm_decision(r.get("reviewer2_decision"))) for r in ft])
-        ft_conflicts = sum(1 for r in ft
+              norm_decision(r.get("reviewer2_decision"))) for r in assessed])
+        ft_conflicts = sum(1 for r in assessed
                            if (r.get("conflict") or "").strip().upper() == "Y")
 
         lines.append("## Screening — Full Text\n")

@@ -31,6 +31,7 @@ description: 用于任何数据分析、统计计算、画图、读写 CSV/Excel
 - **相关/回归**：连续 → Pearson（正态）/ Spearman（非正态或有序）；结局二分类 → logistic 回归报 OR+95%CI；计数 → 泊松/负二项。
 - **生存数据**：Kaplan–Meier 画曲线 + log-rank 比较；多因素 → Cox 比例风险，**并检验 PH 假设**（Schoenfeld 残差）。用 `lifelines`（已装）。
 - **诊断试验**：报敏感度/特异度/PPV/NPV/LR + ROC-AUC（含 95%CI），别只报准确率。
+- **Meta 分析（系统综述定量合并）**：用 `statsmodels.stats.meta_analysis`（`combine_effects`：DerSimonian-Laird 随机效应、I²/τ²/Q 异质性）+ 自绘森林图；亚组/敏感性分析。⚠️ **Egger 发表偏倚检验/漏斗图不对称、REML、网络 Meta/多水平 statsmodels 无内置**——需手写加权回归或用 R `metafor`；**别声称能做其实做不了的**。系统综述全流程(筛选/RoB/GRADE/PRISMA)走 `systematic-review` 技能。
 
 ## 报告规范（写进结论）
 > **交付统计结论 / 写 Methods/Results 前，逐条过 [references/stat-reporting-checklist.md](references/stat-reporting-checklist.md)（顶刊统计报告清单，强制）。** 下面是要点，细则与格式看清单。
