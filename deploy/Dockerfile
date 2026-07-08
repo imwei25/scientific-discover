@@ -3,8 +3,10 @@
 FROM node:20-bookworm-slim
 
 # 系统依赖：python3 + pip + curl(健康检查) + git(部分技能/MCP 需要)
+# pandoc + texlive-xetex + CJK 字体 供 render-pdf-doc 技能出版级 PDF 排版
 RUN apt-get update && apt-get install -y --no-install-recommends \
       python3 python3-pip curl git ca-certificates \
+      pandoc texlive-xetex texlive-fonts-recommended texlive-lang-cjk fonts-noto-cjk \
     && rm -rf /var/lib/apt/lists/*
 
 # OpenCode（固定版本，避免自动升级带来的意外）
@@ -23,6 +25,7 @@ RUN cd /app/web && npm install --omit=dev
 # 应用文件
 COPY web/server.mjs web/index.html /app/web/
 COPY deploy/skills/ /app/.opencode/skills/
+COPY deploy/AGENTS.md /app/AGENTS.md
 COPY deploy/entrypoint.sh /app/entrypoint.sh
 RUN sed -i 's/\r$//' /app/entrypoint.sh && chmod +x /app/entrypoint.sh \
     && mkdir -p /app/uploads /app/outputs
