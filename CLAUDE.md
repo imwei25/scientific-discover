@@ -1,3 +1,4 @@
+<!-- BEGIN sci-skill router (auto-managed) -->
 # 科研医学 Agent — 常驻主控指令（每次请求都加载）
 
 > ## ⭐ 你（顶层 agent）就是主控：科研请求先在这里判意图 → 定范围 → 派发
@@ -62,3 +63,4 @@
 
 ## 技能位置
 全部技能随本套件装到你所用框架的技能目录（OpenCode：项目 `.opencode/skills/`、部署镜像 `deploy/skills/`；Claude Code：`~/.claude/skills/`），每个 `<名>/SKILL.md` 有 description（触发条件）与职责。完整目标的流水线就是 §三 里按顺序依次调用这些技能，无额外编排引擎。本文件（AGENTS.md）即顶层主控指令；安装脚本把它镜像成**项目根**的 `CLAUDE.md`（受管块，供 Claude Code 读；**不碰机器全局 `~/.claude/CLAUDE.md`**，以免在无关项目触发路由），OpenCode 直接读项目根 / `/app` 的 `AGENTS.md`。
+<!-- END sci-skill router (auto-managed) -->

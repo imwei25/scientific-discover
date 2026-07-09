@@ -15,6 +15,7 @@
 3. **回退机制**：**开工前就把"哪个闸不合格 → 回退到哪一步返工 → 返工后从哪继续"写清楚**，别等出错才临时决定。常见回退：
    - `reference-check` 查出假引用 / DOI 错 → 回**写作步**（write-paper / literature-review）改引用 → 重跑 reference-check。
    - `peer-review` 发现设计 / 统计 / 结果硬伤 → 回对应上游步（novelty-check / clinical-stats / data-analysis / write-paper）返工 → 再评审。
+   - `write-paper` 引言/讨论的综述单薄、文献覆盖不足或引用撑不住主张 → 回 `literature-review` 补做综述与证据表 → 基于新综述重跑 write-paper。
    - systematic 的 PRISMA / RoB 暴露纳入不足或筛选漏项 → 回**检索 / 筛选步**补检索去重 → 重出图。
    - `humanize-academic` 改动动了引用文字 → 重跑 reference-check 兜底。
 4. **决策点**：标出 §五 里需停下问用户的方向性 / 不可逆节点。
@@ -25,30 +26,30 @@
 |---|---|---|
 | 叙述性综述 | `review` | search-lit / literature-review → reference-check → humanize-academic(可选) → render-pdf-doc |
 | 系统综述 / Meta | `systematic` | systematic-review(方法学八步，含 PRISMA/RoB 出图) → write-paper → reference-check → render-docx |
-| 研究设计（从零设计新研究、尚无数据） | `design` | research-scan → topic-selection → **novelty-check**(新颖性裁定+预注册锁)　——产出锁定的研究方案；采数由用户线下完成，拿到数据后转 `paper` |
 | 基金标书 | `grant` | research-scan → topic-selection → **novelty-check**(新颖性裁定+预注册) → grant-proposal → peer-review(自查) → render-pdf-doc |
-| 原创研究论文（已有数据/结果） | `paper` | deidentify(如含患者数据) → clinical-stats + data-analysis → literature-review(相关方向文献综述/背景) → nature-figure → write-paper → reference-check → humanize-academic → peer-review → render-docx |
+| 原创研究论文 | `paper` | deidentify(如含患者数据) → clinical-stats + data-analysis → **novelty-check**(可选，见表下注) → nature-figure → **literature-review**(成文综述) → write-paper(基于综述) → reference-check → humanize-academic → peer-review → render-docx |
 | 深度研究一个问题 | `research` | deep-research → render-pdf-doc |
 
-- 拿不准归哪条 → 用编号选项问（见 §六）："**1)** 叙述性综述　**2)** 系统综述 / Meta　**3)** 原创研究论文（已有数据写成稿）　**4)** 从零设计新研究（还没数据）　**5)** 基金标书　**6)** 深挖一个问题"，用户回一个数字即定 pipeline。
+- 拿不准归哪条 → 用编号选项问（见 §六）："**1)** 叙述性综述　**2)** 系统综述 / Meta　**3)** 原创研究论文　**4)** 基金标书　**5)** 深挖一个问题"，用户回一个数字即定 pipeline。
 - **综述体裁判别（信号词优先）**：出现 **双人筛选 / PRISMA / RoB / 偏倚风险 / GRADE / Meta / 森林图合并** 任一 → `systematic`；只说"写篇综述 / 讲讲某方向进展"、**未提**这些方法学词 → 默认 `review`，但开工前用编号选项确认（见 §六）："**1)** 叙述性综述就够（推荐，按你所述）　**2)** 做到系统综述强度（双人筛选/PRISMA/RoB）"。
 - 表内 `/` `+` 为并列展示：review 首步 search-lit 与 literature-review 按需二选一或并用；paper 的 `clinical-stats + data-analysis` 为两个并列步，先后皆可。
-- **`design` vs `paper` 的分界 = 有没有数据**：还没采数、要先把课题设计锁死 → `design`（走到 novelty-check 为止，采数是用户线下做的）；已有数据/结果要写成论文 → `paper`（从脱敏/分析起，**novelty-check 不在其中**——采数后预注册锁已不适用，新颖性/贡献定位由 write-paper 引言处理，相关方向背景由 literature-review 供稿）。`novelty-check` 是**采数前的把关闸**（新颖性裁定 + 预注册锁），不是选题也不是写作起点。
+- **paper 里 `novelty-check` 的位置随数据来源变**：前瞻性研究 / 尚未采数（假设待冻结）→ 放**最前**先做预注册锁（把假设与主分析计划冻结在采数前）；用户**已提供数据**（回顾性）→ 这步**可选**，置 `data-analysis` 之后做新颖性裁定即可（已有数据无法再"采数前预注册"）。**无论哪种，`write-paper` 前先跑 `literature-review` 成文综述**，`write-paper` 据此综述撰写引言与讨论的文献部分；综述不足属回退触发点（见 §二）。
 
 ## 四、单步直派：请求 → 技能
 - **画图 / 看数 / 统计**：`data-analysis`（探索性看数、150dpi 预览）、`nature-figure`（投稿级出版图：森林图/KM/火山图，300dpi+矢量）、`clinical-stats`（基线表/Table 1、样本量）
+- **临床推断统计的归属（避免误派）**：方法比对（Bland-Altman / Passing-Bablok / 一致性 LoA）、生存分析（KM / Cox）、ROC / 诊断效能、组间检验 / 相关 / 回归等**分析**一律走 `data-analysis`，要投稿级图再叠 `nature-figure`；`clinical-stats` **只**管 Table 1 基线表与样本量 / 把握度，别拿它做上述分析。**且诊断准确性 / 方法比对 / 纯实验室验证类研究常无人口学基线协变量（年龄 / 性别 / 分期等）→ 此时 Table 1 无对应数据，`clinical-stats` 可整步跳过、全走 `data-analysis`，别把检测值 / 生存时间硬塞成"基线表"制造误导。**
 - **检索 / 全文**：`search-lit`（PubMed 系）、`literature-review`（Europe PMC / 叙述性综述成文）、`fulltext-retrieval`（下 PDF/OA、PDF 转 md）
 - **文稿处理**：`humanize-academic`（去 AI 味）、`reference-check`（查假引用 / 核 DOI）、`render-docx` / `render-pdf-doc`（排版出件）
 - **数据合规**：`deidentify`（患者数据脱敏）
 - **评审**：`peer-review`（投稿前自查 / 对抗红队）
 - **基础设施**：`env-setup`（缺 `.venv` 时先跑）
-- 其余按各技能 `SKILL.md` 的 description 触发。产物统一写仓库根 `outputs/`。
+- 其余按各技能 `SKILL.md` 的 description 触发。产物写 `outputs/`；**Web 网关注入了会话专属目录（`outputs/<会话id>/`）时以它为准，连临时脚本也别写仓库根**（多用户共享，会串数据）。
 
 ## 五、硬规矩（单步、完整目标都适用）
 - **不虚构**数据 / 结果 / 统计量 / 参考文献 / 伦理批号 / 注册号；缺的标"待补充"向用户要。
 - **数据含患者信息且未脱敏 → 先 `deidentify`**，再做任何统计 / 建库 / 分析。
 - 写完综述 / 论文**自动跑 `reference-check`** 查假引用，全绿再排版。
-- Python 统一走项目根 `.venv`（缺则先跑 `env-setup`）；产物统一写仓库根 `outputs/`。
+- Python 统一走项目根 `.venv`（缺则先跑 `env-setup`）；产物写 `outputs/`（有会话专属目录时以其为准，勿写仓库根）。
 - **方向性 / 不可逆决策**（主题·PICO 收敛、目标期刊 / 资助渠道、选题拍板、大批量全文下载、终稿定稿·对外交付）**停下问用户**——**且照 §六 给编号选项、让用户回一个数字就推进**；确定性步骤（检索去重、建证据/结果表、检索源失败按降级路径换道）自动往下、只汇报进度。
 
 ## 六、问用户的方式：给编号选项，回一个数字就推进（所有停下问用户的地方都照此）

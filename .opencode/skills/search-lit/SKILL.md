@@ -6,7 +6,7 @@ tools: Read, Write, Edit, Bash, Grep, Glob
 model: inherit
 ---
 
-> **本仓库运行环境（先读）**：Python 用 `.venv/Scripts/python.exe`（Windows）/ `.venv/bin/python`（Linux/macOS）（项目根 `.venv`；没有先跑 `env-setup` 技能）；本技能脚本在 `.opencode/skills/search-lit/` 下，运行时先 `cd` 到该目录或用全路径；产出写仓库根 `outputs/`。每条引用须经 API 核实（勿凭记忆造引用）。**注意：PubMed 走 NCBI E-utilities，从中国大陆网络常被阻断（curl/requests 都会 SSL 失败）；服务器在境外或配代理才稳。国内拿不到时改用 `fulltext-retrieval`/`reference-check`（走 Europe PMC/Crossref，国内可达）。** 以下为上游技能原文（vendored，未改方法论）。
+> **本仓库运行环境（先读）**：Python 用 `.venv/Scripts/python.exe`（Windows）/ `.venv/bin/python`（Linux/macOS）（项目根 `.venv`；没有先跑 `env-setup` 技能）；本技能脚本在 `.opencode/skills/search-lit/` 下，运行时先 `cd` 到该目录或用全路径；产出写 `outputs/`（有会话专属目录时以它为准、勿写仓库根固定名）。每条引用须经 API 核实（勿凭记忆造引用）。**注意：PubMed 走 NCBI E-utilities，从中国大陆网络常被阻断（curl/requests 都会 SSL 失败）；服务器在境外或配代理才稳。国内拿不到时改用 `fulltext-retrieval`/`reference-check`（走 Europe PMC/Crossref，国内可达）。** 以下为上游技能原文（vendored，未改方法论）。
 
 # Literature Search Skill
 

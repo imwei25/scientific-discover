@@ -19,6 +19,14 @@ import re
 import sys
 import time
 
+# Windows 控制台默认 GBK；强制 UTF-8，避免中文进度输出变 mojibake（agent 靠 stdout 判成败）。
+if hasattr(sys.stdout, "reconfigure"):
+    try:
+        sys.stdout.reconfigure(encoding="utf-8")
+        sys.stderr.reconfigure(encoding="utf-8")
+    except Exception:
+        pass
+
 try:
     import requests
 except ImportError:
@@ -131,7 +139,7 @@ def main():
     rows.sort(key=lambda x: (_int(x["year"]), _int(x["cites"])), reverse=True)
 
     csv_path = os.path.join(args.outdir, "evidence_table.csv")
-    with open(csv_path, "w", encoding="utf-8-sig", newline="") as f:
+    with open(csv_path, "w", encoding="utf-8", newline="") as f:
         w = csv.DictWriter(f, fieldnames=["title", "year", "journal", "design",
                                           "cites", "doi", "pmid", "abstract"])
         w.writeheader()

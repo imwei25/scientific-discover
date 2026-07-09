@@ -12,7 +12,7 @@ description: 系统综述 / Meta 分析的**方法学全流程**（区别于叙�
 > **绝不用一次 LLM pass 当最终筛选决定**。筛选必须双人独立 + 冲突人工消解；协议必须在筛文献前注册；PRISMA 流程图是硬性产出。缺的真实信息（纳排、注册号、评审者）向用户要，不替编。
 
 ## 定位（本技能在套件中的位置）
-顶层主控（AGENTS.md 常驻指令）判意图、定范围、派发；派到本技能就**直接做，别回绕**。本技能是 systematic 流水线的方法学环节（**本技能八步** → write-paper 成文 → reference-check → render-docx）；单独直呼（只对这批文献双人筛选/去重、只做一次 RoB2/GRADE）也直接做那一步。产物写仓库根 `outputs/`。
+顶层主控（AGENTS.md 常驻指令）判意图、定范围、派发；派到本技能就**直接做，别回绕**。本技能是 systematic 流水线的方法学环节（**本技能八步** → write-paper 成文 → reference-check → render-docx）；单独直呼（只对这批文献双人筛选/去重、只做一次 RoB2/GRADE）也直接做那一步。产物写 `outputs/`（主控注入了会话专属目录 `outputs/<会话id>/` 时以它为准、勿写仓库根固定名——多用户共享会 clobber）。
 
 ## Python 环境（脚本用，纯标准库，无需额外依赖）
 > 没有项目根 `.venv`？先运行 `env-setup` 技能。

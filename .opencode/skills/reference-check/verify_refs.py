@@ -23,6 +23,14 @@ import os
 import re
 import sys
 import time
+
+# Windows 控制台默认 GBK；强制 UTF-8，避免中文进度输出变 mojibake（agent 靠 stdout 判成败）。
+if hasattr(sys.stdout, "reconfigure"):
+    try:
+        sys.stdout.reconfigure(encoding="utf-8")
+        sys.stderr.reconfigure(encoding="utf-8")
+    except Exception:
+        pass
 from difflib import SequenceMatcher
 
 try:
@@ -304,7 +312,7 @@ def main():
     # CSV
     cols = ["verdict", "sim", "claimed_title", "found_title", "id", "note", "raw"]
     with open(os.path.join(args.outdir, "reference_check.csv"), "w",
-              encoding="utf-8-sig", newline="") as f:
+              encoding="utf-8", newline="") as f:
         w = csv.DictWriter(f, fieldnames=cols, extrasaction="ignore")
         w.writeheader()
         w.writerows(results)

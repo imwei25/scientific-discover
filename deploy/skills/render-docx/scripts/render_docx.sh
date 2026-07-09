@@ -49,6 +49,25 @@ if [[ -n "$CSL" && -z "$BIB" ]] || [[ -z "$CSL" && -n "$BIB" ]]; then
   exit 1
 fi
 
+# Windows/Git Bash: winget-installed pandoc frequently lands off the Git Bash PATH,
+# so it reads as "not installed" even after a successful install. Best-effort: prepend
+# its known install locations when not already resolvable. Mirrors
+# render-pdf-doc/scripts/check_deps.sh so the two renderers agree on pandoc presence.
+case "$(uname -s)" in
+  MINGW*|MSYS*|CYGWIN*)
+    if ! command -v pandoc >/dev/null 2>&1; then
+      _la="$(cygpath -u "${LOCALAPPDATA:-}" 2>/dev/null || printf '%s' "${LOCALAPPDATA:-}")"
+      _pf="$(cygpath -u "${PROGRAMFILES:-}" 2>/dev/null || printf '%s' "${PROGRAMFILES:-}")"
+      for _p in \
+        "$_la"/Microsoft/WinGet/Packages/JohnMacFarlane.Pandoc*/pandoc-*/pandoc.exe \
+        "$_la"/Microsoft/WinGet/Links/pandoc.exe \
+        "$_pf"/Pandoc/pandoc.exe; do
+        if [[ -x "$_p" ]]; then PATH="$(dirname "$_p"):$PATH"; break; fi
+      done
+    fi
+    ;;
+esac
+
 if ! command -v pandoc >/dev/null 2>&1; then
   echo "ERROR: pandoc not installed. Install it: install.ps1 -WithPdf / install.sh --with-pdf" >&2
   echo "       (or winget install JohnMacFarlane.Pandoc / apt-get install pandoc / brew install pandoc)" >&2

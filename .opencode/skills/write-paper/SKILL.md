@@ -17,7 +17,7 @@ description: 写原创研究论文（IMRaD 全流程）。把用户的真实数�
 ```
 
 ## 定位（本技能在套件中的位置）
-顶层主控（AGENTS.md 常驻指令）判意图、定范围、派发；派到本技能就**直接做，别回绕**。本技能是 paper 流水线的成稿环节（deidentify→clinical-stats+data-analysis→nature-figure→**本技能**→reference-check→humanize-academic→peer-review→render-docx）；单独直呼（统计与图已就绪、只要组织成稿，或只写投稿信/回复审稿）也直接做。产物写仓库根 `outputs/`。
+顶层主控（AGENTS.md 常驻指令）判意图、定范围、派发；派到本技能就**直接做，别回绕**。本技能是 paper 流水线的成稿环节（deidentify→clinical-stats+data-analysis→novelty-check(可选,数据已备时的新颖性裁定)→nature-figure→literature-review(成文综述)→**本技能**→reference-check→humanize-academic→peer-review→render-docx）；**本技能应基于上一步 `literature-review` 产出的成文综述**来写引言背景与讨论的文献对比（综述不足就回退补做，见 AGENTS.md §二）。单独直呼（统计与图已就绪、只要组织成稿，或只写投稿信/回复审稿）也直接做。产物写 `outputs/`（主控注入了会话专属目录 `outputs/<会话id>/` 时以它为准、勿写仓库根固定名——多用户共享会 clobber）。
 
 ## 先问清楚（写之前必须对齐）
 - **研究类型**：RCT / 队列 / 病例对照 / 横断面 / 诊断试验 / 动物实验 / 病例报告 / 系统综述+Meta……（决定该套哪个报告规范，见下）。
@@ -57,7 +57,7 @@ description: 写原创研究论文（IMRaD 全流程）。把用户的真实数�
 - 对象：纳入/排除标准、抽样、分组。
 - 变量与测量、干预/暴露与对照、结局定义（主要/次要）。
 - **样本量/把握度依据**：优先给**研究开展前的先验**估算依据（缺就让用户补，或用 `clinical-stats` 技能算）。⚠️ 研究已完成时**不要用观察到的效应量倒推做"事后功效分析(post-hoc power)"**——方法学上被认为无意义甚至误导；无先验依据就如实说明本研究为探索性/受条件限制。
-- **基线特征表 Table 1**：用 `clinical-stats` 技能生成（按变量类型自动选检验）。
+- **基线特征表 Table 1**：用 `clinical-stats` 技能生成（按变量类型自动选检验）。⚠️ **诊断准确性 / 方法比对 / 纯实验室验证类研究常无人口学基线协变量——此时省略 Table 1，别把检测值 / 生存时间硬塞成"基线表"制造误导（这类研究的样本描述放正文即可）。**
 - **统计方法**：逐一说明每个分析用什么检验、软件及版本、显著性水平、缺失值处理、多重比较校正——**方法与"结果"里出现的每个分析一一对应**（统计选择见 `data-analysis` 的护栏）。
 
 ### 4. 结果（Results）——只陈述、不解释
