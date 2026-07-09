@@ -28,13 +28,14 @@
 | 叙述性综述 | `review` | search-lit / literature-review → reference-check → humanize-academic(可选) → render-pdf-doc |
 | 系统综述 / Meta | `systematic` | systematic-review(方法学八步，含 PRISMA/RoB 出图) → write-paper → reference-check → render-docx |
 | 基金标书 | `grant` | research-scan → topic-selection → **novelty-check**(新颖性裁定+预注册) → grant-proposal → peer-review(自查) → render-pdf-doc |
-| 原创研究论文 | `paper` | deidentify(如含患者数据) → clinical-stats + data-analysis → **novelty-check**(可选，见表下注) → nature-figure → **literature-review**(成文综述) → write-paper(基于综述) → reference-check → humanize-academic → peer-review → render-docx |
+| 原创研究论文 | `paper` | deidentify(如含患者数据) → clinical-stats + data-analysis → data-integrity(可选，源数据自查，见表下注) → **novelty-check**(可选，见表下注) → nature-figure → **literature-review**(成文综述) → write-paper(基于综述) → reference-check → humanize-academic → peer-review → render-docx |
 | 深度研究一个问题 | `research` | deep-research → render-pdf-doc |
 
 - 拿不准归哪条 → 用编号选项问（见 §六）："**1)** 叙述性综述　**2)** 系统综述 / Meta　**3)** 原创研究论文　**4)** 基金标书　**5)** 深挖一个问题"，用户回一个数字即定 pipeline。
 - **综述体裁判别（信号词优先）**：出现 **双人筛选 / PRISMA / RoB / 偏倚风险 / GRADE / Meta / 森林图合并** 任一 → `systematic`；只说"写篇综述 / 讲讲某方向进展"、**未提**这些方法学词 → 默认 `review`，但开工前用编号选项确认（见 §六）："**1)** 叙述性综述就够（推荐，按你所述）　**2)** 做到系统综述强度（双人筛选/PRISMA/RoB）"。
 - 表内 `/` `+` 为并列展示：review 首步 search-lit 与 literature-review 按需二选一或并用；paper 的 `clinical-stats + data-analysis` 为两个并列步，先后皆可。
 - **paper 里 `novelty-check` 的位置随数据来源变**：前瞻性研究 / 尚未采数（假设待冻结）→ 放**最前**先做预注册锁（把假设与主分析计划冻结在采数前）；用户**已提供数据**（回顾性）→ 这步**可选**，置 `data-analysis` 之后做新颖性裁定即可（已有数据无法再"采数前预注册"）。**无论哪种，`write-paper` 前先跑 `literature-review` 成文综述**，`write-paper` 据此综述撰写引言与讨论的文献部分；综述不足属回退触发点（见 §二）。
+- **paper 里 `data-integrity`（可选自查闸）**：用户**提供了原始数值表**（xlsx/csv）时，可在 `data-analysis` 后对源数据跑一遍数值完整性自查，抓复制粘贴错误 / 常数偏移 / 跨表复用 / GRIM 不自洽等——**目的是投稿前主动核对补说明，非指控**（signal not verdict，见技能内铁律）。默认 `review` 档假阳性低；纯理论/无数值原始表的稿件跳过。发现需核对的项属回退触发点：回 `data-analysis`／让用户核原始记录后再往下。
 
 ## 四、单步直派：请求 → 技能
 - **画图 / 看数 / 统计**：`data-analysis`（探索性看数、150dpi 预览）、`nature-figure`（投稿级出版图：森林图/KM/火山图，300dpi+矢量）、`clinical-stats`（基线表/Table 1、样本量）
@@ -42,6 +43,7 @@
 - **检索 / 全文**：`search-lit`（PubMed 系）、`literature-review`（Europe PMC / 叙述性综述成文）、`fulltext-retrieval`（下 PDF/OA、PDF 转 md）
 - **文稿处理**：`humanize-academic`（去 AI 味）、`reference-check`（查假引用 / 核 DOI）、`render-docx` / `render-pdf-doc`（排版出件）
 - **数据合规**：`deidentify`（患者数据脱敏）
+- **数据自查**：`data-integrity`（源数据数值完整性 sanity check：查复制粘贴错误 / 常数偏移 / 跨表复用 / GRIM 不自洽等；投稿前自查或审他人数据，**只出待核信号、不下造假结论**；只看结构化数值表，不看图像篡改）
 - **评审**：`peer-review`（投稿前自查 / 对抗红队）
 - **基础设施**：`env-setup`（缺 `.venv` 时先跑）
 - 其余按各技能 `SKILL.md` 的 description 触发。产物写 `outputs/`；**Web 网关注入了会话专属目录（`outputs/<会话id>/`）时以它为准，连临时脚本也别写仓库根**（多用户共享，会串数据）。

@@ -15,6 +15,18 @@
 2. `nature-figure`：删除了 `assets/`（约 30MB 的示例图库 chart-atlas/figures4papers/gallery），仅保留 `SKILL.md / manifest.yaml / static / references / scripts / evals`。因此 `references/demos.md` 里指向 figures4papers 的示例图链接会失效——对无界面文本 Agent 无影响。
 3. `search-lit` / `fulltext-retrieval`：删除了 `*_challenge/` 与 `tests/` 测试夹具，保留 SKILL.md 与运行脚本。
 
+## 封装第三方 CLI（非 vendored 源码，pip 运行时依赖 + 自写薄封装）
+`data-integrity` 技能与上面几个不同：**没有拷贝上游源码**，而是把上游发布的 `paperconan` CLI 作为 **pip 运行时依赖**装进项目 `.venv`，并**自写了一份中文 SKILL.md 薄封装**（把它重新定位成"投稿前自查 QC / 非指控"，加了良性解释护栏与环境注意）。方法学（各数值检测器）保持上游原样。
+
+| 本仓库技能目录 | 上游仓库 | 引入形态 | 许可 | 锁定版本 |
+|---|---|---|---|---|
+| `data-integrity` | [zixixr/paperconan](https://github.com/zixixr/paperconan) | pip 依赖 `paperconan[all]` + 自写 SKILL.md 封装 | MIT | `0.8.2`（PyPI，2026-07-09 引入） |
+
+- 依赖已加进 `scripts/requirements-skills.txt`：`paperconan[all]==0.8.2`（**锁版本**，含 `python-calamine` 读旧版 `.xls` 的 Rust 引擎、`pdfplumber` 抽 PDF 表）。升级前先在真实数据上回归假阳性再改锁定号。
+- 定位改造：上游本是"审他人论文找不端"的取证工具；本仓库 SKILL.md 显式改成**自查口径**（signal not verdict，禁指控措辞，良性解释优先），并作 `paper` 流水线里 `data-analysis` 后的**可选质量闸**。
+- 实测环境注意：**中文 Windows 必须 `-X utf8`（或 `PYTHONUTF8=1`）**运行，否则写 `REPORT.md` 报 `UnicodeEncodeError`（gbk 编不了 `²`/`±`）。默认 `review` 档在本仓库真实临床定量数据上 0 误报。
+- 许可：MIT，见 https://github.com/zixixr/paperconan/blob/main/LICENSE 。作为 pip 依赖分发，其许可随包附带；本节即对引入方式与改造的说明。
+
 ## 借鉴（非 vendored，仅参考方法/结构，未原样引入代码）
 - 自研技能 `grant-proposal` 的**经费预算**部分，参考了 [leonchaox/qinyan-academic-skills](https://github.com/leonchaox/qinyan-academic-skills) 的 `research-grants`（`assets/budget_justification_template.md`，MIT）的预算科目与 justification 组织方式。我们按本仓库风格重写为精简中文，未拷贝其模板原文。
 

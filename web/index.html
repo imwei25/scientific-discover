@@ -3,91 +3,835 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>科研 Agent（自托管 · DeepSeek）</title>
+<title>Niuma Science（透景生命）</title>
 <style>
+  :root {
+    --panel: #ffffff; --panel-soft: #f5f8fc; --card: #ffffff;
+    --line: #e6eaf1; --line-hi: #d4dce8;
+    --text: #1f2a3b; --muted: #5b6b82; --faint: #8a98ad;
+    --cyan: #1e9fe6; --accent: #1e9fe6; --accent-deep: #2563eb;
+    --indigo: #6366f1; --green: #16a34a; --rose: #ef4444;
+    --r-lg: 16px; --r-md: 12px; --r-sm: 8px;
+    --shadow-lg: 0 8px 24px rgba(30,50,90,.08);
+    --shadow-sm: 0 2px 8px rgba(30,50,90,.06);
+  }
   * { box-sizing: border-box; }
-  body { margin: 0; font-family: system-ui, "Segoe UI", sans-serif; background: #0f172a; color: #e2e8f0; }
-  header { padding: 14px 20px; background: #1e293b; font-weight: 600; border-bottom: 1px solid #334155; }
-  header small { color: #94a3b8; font-weight: 400; }
-  main { display: grid; grid-template-columns: 1fr 300px; gap: 16px; padding: 16px; height: calc(100vh - 52px); }
-  #chat { display: flex; flex-direction: column; min-height: 0; }
-  #log { flex: 1; overflow-y: auto; padding: 8px; background: #111827; border: 1px solid #334155; border-radius: 10px; }
-  .msg { margin: 8px 0; padding: 10px 12px; border-radius: 10px; white-space: pre-wrap; line-height: 1.5; }
-  .user { background: #2563eb; color: #fff; align-self: flex-end; max-width: 85%; margin-left: auto; }
-  .bot { background: #1f2937; border: 1px solid #374151; max-width: 95%; }
-  .tools { color: #38bdf8; font-size: 12px; margin: 4px 2px; font-family: ui-monospace, monospace; }
-  form { display: flex; gap: 8px; margin-top: 12px; }
-  #q { flex: 1; padding: 11px; border-radius: 8px; border: 1px solid #475569; background: #0b1220; color: #e2e8f0; }
-  button { padding: 11px 16px; border: 0; border-radius: 8px; background: #22c55e; color: #052e16; font-weight: 700; cursor: pointer; }
+  html, body { height: 100%; }
+  body {
+    margin: 0; color: var(--text);
+    font-family: system-ui, -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif;
+    background:
+      radial-gradient(1000px 560px at 82% -10%, #ffffff 0%, transparent 55%),
+      linear-gradient(180deg, #eef2f8, #e7edf5);
+  }
+  .ic { width: 1em; height: 1em; vertical-align: -.14em; flex: none; stroke: currentColor; }
+  ::selection { background: rgba(56,189,248,.28); }
+  :where(button, a, .sess, summary):focus-visible { outline: 2px solid var(--cyan); outline-offset: 2px; }
+  ::-webkit-scrollbar { width: 10px; height: 10px; }
+  ::-webkit-scrollbar-thumb { background: #c6d0df; border-radius: 20px; border: 2px solid transparent; background-clip: padding-box; }
+  ::-webkit-scrollbar-thumb:hover { background: #a9b7cc; background-clip: padding-box; }
+
+  /* Header */
+  header {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 12px 22px; border-bottom: 1px solid var(--line);
+    background: linear-gradient(180deg, #ffffff, #f7fafd);
+  }
+  .brand { display: flex; align-items: center; gap: 12px; }
+  .logo {
+    width: 38px; height: 38px; display: grid; place-items: center;
+    border-radius: var(--r-md); background: #eaecef; overflow: hidden;
+    box-shadow: inset 0 0 0 1px rgba(0,0,0,.06), 0 2px 8px rgba(0,0,0,.28);
+  }
+  .logo img { width: 100%; height: 100%; object-fit: contain; padding: 6px; }
+  .brand .title { font-weight: 700; font-size: 16px; letter-spacing: .3px; }
+  .brand .sub { color: var(--muted); font-size: 12px; margin-top: 1px; }
+  .status { display: flex; align-items: center; gap: 7px; color: var(--muted); font-size: 12px; }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--green); box-shadow: 0 0 0 0 rgba(52,211,153,.5); animation: pulse 3.5s infinite; }
+  @keyframes pulse { 0% { box-shadow: 0 0 0 0 rgba(52,211,153,.5); } 70% { box-shadow: 0 0 0 7px rgba(52,211,153,0); } 100% { box-shadow: 0 0 0 0 rgba(52,211,153,0); } }
+
+  /* Layout */
+  main { display: grid; grid-template-columns: 48px 1fr 330px; gap: 18px; padding: 18px; height: calc(100vh - 64px); transition: width .2s ease; }
+  body.sessbar-open main { grid-template-columns: 264px 1fr 330px; }
+  body.preview-open main { width: 50vw; }
+  #chat { display: flex; flex-direction: column; min-height: 0; width: 100%; max-width: 900px; margin: 0 auto; }
+  /* 左侧「最近会话」（默认折叠） */
+  #sessbar { grid-column: 1; overflow: hidden; display: flex; flex-direction: column; gap: 10px; background: rgba(255,255,255,.75); border: 1px solid var(--line); border-radius: var(--r-md); padding: 10px 8px; box-shadow: var(--shadow-lg); }
+  .sb-top { display: flex; align-items: center; gap: 8px; }
+  .sb-toggle { width: 30px; height: 30px; flex: none; display: grid; place-items: center; color: var(--muted); background: transparent; border: 1px solid var(--line-hi); border-radius: var(--r-sm); cursor: pointer; }
+  .sb-toggle:hover { color: var(--cyan); border-color: var(--cyan); }
+  .sb-toggle .ic { width: 16px; height: 16px; }
+  .sb-title { flex: 1; font-size: 13px; font-weight: 600; color: #334153; white-space: nowrap; overflow: hidden; }
+  body:not(.sessbar-open) .sb-title, body:not(.sessbar-open) #refreshSess, body:not(.sessbar-open) #sessions { display: none; }
+  .sess-del { position: absolute; right: 6px; top: 50%; transform: translateY(-50%); width: 22px; height: 22px; display: grid; place-items: center; color: var(--faint); border-radius: 5px; opacity: 0; transition: opacity .12s, color .12s, background .12s; }
+  .sess:hover .sess-del { opacity: 1; }
+  .sess-del:hover { color: var(--rose); background: rgba(251,113,133,.12); }
+  .sess-del .ic { width: 14px; height: 14px; }
+  #log {
+    flex: 1; display: flex; flex-direction: column; gap: 12px; overflow-y: auto;
+    padding: 18px; background: #ffffff; border: 1px solid var(--line); border-radius: var(--r-lg); box-shadow: var(--shadow-lg);
+  }
+  /* welcome / empty state */
+  .welcome { margin: auto; max-width: 460px; text-align: center; padding: 24px 16px; }
+  .welcome .wic { width: 56px; height: 56px; color: #aec4de; margin: 0 auto 14px; display: block; stroke-width: 1.4; }
+  .welcome .wtitle { color: var(--text); font-size: 16px; font-weight: 600; }
+  .welcome .wsub { color: var(--faint); font-size: 13px; margin-top: 6px; line-height: 1.7; }
+  .welcome .chips { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; margin-top: 16px; }
+  .chip { background: var(--card); border: 1px solid var(--line-hi); color: #334153; border-radius: 999px; padding: 6px 13px; font-size: 12.5px; cursor: pointer; transition: border-color .15s, color .15s; }
+  .chip:hover { border-color: var(--cyan); color: var(--cyan); }
+  /* typing indicator */
+  .typing { display: inline-flex; gap: 5px; padding: 5px 0; }
+  .typing i { width: 6px; height: 6px; border-radius: 50%; background: var(--muted); animation: tp 1.2s ease-in-out infinite; }
+  .typing i:nth-child(2) { animation-delay: .15s; } .typing i:nth-child(3) { animation-delay: .3s; }
+  @keyframes tp { 0%, 60%, 100% { opacity: .25; transform: translateY(0); } 30% { opacity: 1; transform: translateY(-3px); } }
+
+  /* Messages */
+  .msg { padding: 13px 16px; border-radius: var(--r-md); white-space: pre-wrap; line-height: 1.75; font-size: 15px; animation: rise .18s ease; }
+  @keyframes rise { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+  .user {
+    align-self: flex-end; max-width: min(82%, 620px); color: #eef4ff; margin-top: 6px;
+    background: linear-gradient(135deg, #2b62d9, #2450b8);
+    border-radius: var(--r-md) var(--r-md) 4px var(--r-md); box-shadow: 0 2px 8px rgba(30,64,175,.25);
+  }
+  .bot {
+    align-self: flex-start; max-width: 100%;
+    background: #ffffff; border: 1px solid var(--line-hi);
+    border-radius: var(--r-md) var(--r-md) var(--r-md) 4px;
+  }
+  .answer { white-space: pre-wrap; line-height: 1.75; }
+  .answer.md, .pv-body { white-space: normal; }
+
+  /* edit a previous user message */
+  .user { position: relative; }
+  .user .editbtn { position: absolute; left: -32px; top: 5px; width: 26px; height: 26px; display: inline-flex; align-items: center; justify-content: center; padding: 0; border-radius: var(--r-sm); background: transparent; border: 1px solid transparent; color: var(--muted); cursor: pointer; opacity: 0; transition: opacity .15s, color .15s, border-color .15s, background .15s; }
+  .user:hover .editbtn { opacity: 1; }
+  .user .editbtn:hover { color: var(--cyan); border-color: var(--line-hi); background: rgba(56,189,248,.1); }
+  .user .editbtn .ic { width: 14px; height: 14px; }
+  body.streaming .user .editbtn { display: none; }   /* 流进行中不允许编辑 */
+  .user.editing { max-width: min(94%, 720px); background: #eef3fb; border: 1px solid var(--line-hi); box-shadow: none; }
+  .user.editing .utext, .user.editing .editbtn { display: none; }
+  .editbox { display: flex; flex-direction: column; gap: 9px; }
+  .editta { width: 100%; box-sizing: border-box; background: #ffffff; color: #eef4ff; border: 1px solid var(--line-hi); border-radius: var(--r-sm); padding: 10px 12px; font: inherit; font-size: 14px; line-height: 1.6; resize: vertical; min-height: 62px; outline: none; }
+  .editta:focus { border-color: var(--cyan); }
+  .editbar { display: flex; gap: 8px; justify-content: flex-end; align-items: center; }
+  .editbar .ehint { margin-right: auto; font-size: 11px; color: var(--faint); }
+  .editbar button { display: inline-flex; align-items: center; gap: 5px; font-size: 12.5px; padding: 7px 13px; border-radius: var(--r-sm); cursor: pointer; border: 1px solid var(--line-hi); }
+  .editsave { color: #06263b; background: var(--cyan); border-color: var(--cyan); font-weight: 600; }
+  .editsave:hover { filter: brightness(1.06); }
+  .editsave .ic { width: 14px; height: 14px; }
+  .editcancel { color: var(--muted); background: transparent; }
+  .editcancel:hover { color: var(--text); border-color: var(--muted); }
+  .answer.md > :first-child, .pv-body > :first-child { margin-top: 0; }
+  .answer.md > :last-child, .pv-body > :last-child { margin-bottom: 0; }
+  .answer.md h1, .answer.md h2, .answer.md h3, .answer.md h4, .answer.md h5, .answer.md h6,
+  .pv-body h1, .pv-body h2, .pv-body h3, .pv-body h4 { margin: .8em 0 .4em; line-height: 1.3; font-weight: 700; }
+  .answer.md h1, .pv-body h1 { font-size: 1.4em; }
+  .answer.md h2, .pv-body h2 { font-size: 1.25em; padding-bottom: .25em; border-bottom: 1px solid var(--line); }
+  .answer.md h3, .pv-body h3 { font-size: 1.1em; color: #1276b8; }
+  .answer.md h4, .pv-body h4 { font-size: 1em; }
+  .answer.md p, .pv-body p { margin: .55em 0; }
+  .answer.md ul, .answer.md ol, .pv-body ul, .pv-body ol { margin: .4em 0; padding-left: 1.4em; }
+  .answer.md li, .pv-body li { margin: .25em 0; }
+  .answer.md code, .pv-body code { background: #f3f6fb; border: 1px solid var(--line); border-radius: 5px; padding: 1px 5px; font-family: ui-monospace, "Cascadia Code", monospace; font-size: .88em; }
+  .answer.md pre, .pv-body pre { position: relative; background: #f3f6fb; border: 1px solid var(--line); border-radius: var(--r-sm); padding: 12px 14px; overflow-x: auto; margin: .6em 0; }
+  .answer.md pre code, .pv-body pre code { background: none; border: 0; padding: 0; font-size: .86em; color: #334153; }
+  .copy { position: absolute; top: 6px; right: 6px; opacity: 0; display: inline-flex; align-items: center; gap: 4px; background: #eef2f8; border: 1px solid var(--line-hi); color: var(--muted); border-radius: 6px; padding: 3px 7px; font-size: 11px; cursor: pointer; transition: opacity .15s, color .15s; }
+  pre:hover .copy { opacity: 1; }
+  .copy:hover { color: var(--cyan); border-color: var(--cyan); }
+  .copy .ic { width: 12px; height: 12px; }
+  .answer.md blockquote, .pv-body blockquote { margin: .5em 0; padding: .3em .9em; border-left: 3px solid var(--indigo); color: var(--muted); }
+  .answer.md a, .pv-body a { color: var(--cyan); text-decoration: none; } .answer.md a:hover, .pv-body a:hover { text-decoration: underline; }
+  .answer.md hr, .pv-body hr { border: 0; border-top: 1px solid var(--line); margin: .8em 0; }
+  .answer.md table, .pv-body table { border-collapse: collapse; margin: .6em 0; font-size: .9em; display: block; overflow-x: auto; }
+  .answer.md th, .answer.md td, .pv-body th, .pv-body td { border: 1px solid var(--line-hi); padding: 6px 10px; text-align: left; }
+  .answer.md th, .pv-body th { background: #eef2f8; font-weight: 600; }
+  .answer.md strong, .pv-body strong { color: #0f1a2b; font-weight: 700; }
+  .note { color: var(--faint); font-size: 12px; margin-top: 8px; }
+
+  /* Composer */
+  form.composer {
+    display: flex; align-items: center; gap: 8px; margin-top: 14px; padding: 8px 8px 8px 6px;
+    background: #ffffff; border: 1px solid var(--line-hi); border-radius: var(--r-md); transition: border-color .15s, box-shadow .15s;
+  }
+  form.composer:focus-within { border-color: var(--cyan); box-shadow: 0 0 0 3px rgba(56,189,248,.15); }
+  #q { flex: 1; padding: 10px 12px; border: 0; background: transparent; color: var(--text); font-size: 14px; outline: none; }
+  #q::placeholder { color: var(--faint); }
+  button { border: 0; border-radius: var(--r-sm); cursor: pointer; font-size: 14px; font-weight: 600; transition: filter .15s, background .15s, transform .05s; }
+  button:active { transform: translateY(1px); }
   button:disabled { opacity: .5; cursor: default; }
-  aside { background: #111827; border: 1px solid #334155; border-radius: 10px; padding: 14px; overflow-y: auto; }
-  aside h3 { margin: 0 0 8px; font-size: 14px; color: #cbd5e1; }
-  .panel { margin-bottom: 20px; }
-  #files a { display: block; color: #7dd3fc; margin: 6px 0; text-decoration: none; word-break: break-all; }
-  #up { width: 100%; font-size: 13px; color: #cbd5e1; }
-  .hint { color: #64748b; font-size: 12px; margin-top: 6px; }
+  #send { display: inline-flex; align-items: center; gap: 6px; padding: 10px 16px; color: #06263b; background: linear-gradient(180deg, rgba(122,212,246,.8), rgba(69,182,230,.8)); box-shadow: 0 4px 12px rgba(34,184,240,.28); }
+  #send:hover:not(:disabled) { filter: brightness(1.06); }
+  #new { padding: 10px 14px; color: var(--muted); background: transparent; border: 1px solid var(--line-hi); font-weight: 500; }
+  #new:hover { color: var(--text); border-color: var(--cyan); }
+  #stop { display: inline-flex; align-items: center; gap: 6px; padding: 10px 15px; color: #fff; background: linear-gradient(180deg, rgba(251,124,143,.8), rgba(224,80,112,.8)); box-shadow: 0 4px 12px rgba(224,80,112,.28); }
+  #stop:hover { filter: brightness(1.08); }
+  #send .ic, #stop .ic { width: 15px; height: 15px; }
+
+  /* Aside */
+  aside { display: flex; flex-direction: column; gap: 14px; overflow-y: auto; padding-right: 2px; }
+  .panel { background: #ffffff; border: 1px solid var(--line); border-radius: var(--r-md); padding: 14px; box-shadow: var(--shadow-lg); }
+  .panel h3 { margin: 0 0 10px; font-size: 13px; font-weight: 600; color: #334153; display: flex; align-items: center; justify-content: space-between; letter-spacing: .2px; }
+  .h3l { display: inline-flex; align-items: center; gap: 7px; }
+  .h3l .ic { width: 15px; height: 15px; color: var(--muted); }
+  .hint { color: var(--faint); font-size: 12px; line-height: 1.6; }
+  .mini { display: inline-flex; padding: 3px 8px; color: var(--muted); background: #eef2f8; border: 1px solid var(--line-hi); border-radius: 7px; }
+  .mini .ic { width: 14px; height: 14px; }
+  .mini:hover { color: var(--cyan); border-color: var(--cyan); }
+
+  /* recent sessions */
+  #sessions { display: flex; flex-direction: column; gap: 6px; flex: 1; min-height: 0; overflow-y: auto; }
+  #sessions .sess {
+    position: relative; width: 100%; text-align: left; cursor: pointer; font-size: 12px;
+    background: var(--card); border: 1px solid var(--line); border-radius: var(--r-sm); padding: 8px 28px 8px 12px; transition: border-color .15s, transform .1s, background .15s;
+  }
+  #sessions .sess:hover { border-color: var(--cyan); transform: translateY(-1px); }
+  #sessions .sess.active { border-color: var(--cyan); background: rgba(56,189,248,.07); }
+  #sessions .sess.active::before { content: ""; position: absolute; left: 0; top: 8px; bottom: 8px; width: 3px; border-radius: 3px; background: var(--cyan); }
+  #sessions .sess .t { display: block; color: var(--text); font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  #sessions .sess .d { color: var(--faint); font-size: 12px; margin-top: 2px; font-variant-numeric: tabular-nums; }
+
+  /* upload dropzone */
+  #up { display: none; }
+  .dropzone {
+    display: flex; flex-direction: column; align-items: center; gap: 6px; text-align: center;
+    padding: 16px 12px; border: 1.5px dashed var(--line-hi); border-radius: var(--r-md); cursor: pointer;
+    color: var(--muted); font-size: 12px; transition: border-color .15s, background .15s, color .15s;
+  }
+  .dropzone:hover, .dropzone.drag { border-color: var(--cyan); color: var(--cyan); background: rgba(56,189,248,.06); }
+  .dropzone .dzicon .ic { width: 22px; height: 22px; stroke-width: 1.7; }
+  .dropzone b { color: var(--text); font-weight: 600; }
+  .dropzone .dzsub { color: var(--faint); font-size: 11px; }
+  .dropzone.busy { pointer-events: none; opacity: .7; }
+  #upmsg { margin-top: 8px; }
+  #upmsg.err { color: #fca5a5; }
+
+  /* count badge in panel headers */
+  .count { font-size: 11px; font-weight: 600; color: var(--muted); background: var(--card); border: 1px solid var(--line); border-radius: 999px; padding: 1px 8px; font-variant-numeric: tabular-nums; }
+  .count:empty { display: none; }
+
+  /* uploaded-files list (uploads/) */
+  #uplist { display: flex; flex-direction: column; gap: 6px; margin-top: 10px; }
+  #uplist:empty { display: none; }
+  .uprow { display: flex; align-items: center; gap: 9px; padding: 7px 9px; border-radius: var(--r-sm); background: var(--card); border: 1px solid var(--line); }
+  .uprow .ic { width: 15px; height: 15px; flex: none; color: var(--muted); }
+  .uprow .um { flex: 1; min-width: 0; }
+  .uprow .un { font-size: 12px; color: #334153; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .uprow .us { font-size: 10.5px; color: var(--faint); font-variant-numeric: tabular-nums; margin-top: 1px; }
+  .uprow a, .uprow button { flex: none; display: inline-flex; align-items: center; justify-content: center; width: 24px; height: 24px; padding: 0; border-radius: var(--r-sm); background: transparent; border: 1px solid transparent; color: var(--muted); cursor: pointer; transition: color .15s, border-color .15s, background .15s; }
+  .uprow a:hover { color: var(--cyan); border-color: var(--line-hi); background: rgba(56,189,248,.08); }
+  .uprow button:hover { color: #fca5a5; border-color: rgba(248,113,113,.4); background: rgba(248,113,113,.08); }
+  .uprow a .ic, .uprow button .ic { width: 14px; height: 14px; color: currentColor; }
+
+  /* products in chat */
+  .products { display: flex; flex-wrap: wrap; gap: 10px; align-self: flex-start; max-width: 100%; }
+  .pcard { background: var(--card); border: 1px solid var(--line-hi); border-radius: var(--r-md); padding: 8px; max-width: 240px; box-shadow: var(--shadow-sm); }
+  .pcard img { max-width: 224px; max-height: 220px; border-radius: var(--r-sm); display: block; cursor: zoom-in; }
+  .pbar { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 8px; }
+  .pcard.file { display: flex; align-items: center; gap: 11px; max-width: none; }
+  .picon { position: relative; width: 30px; height: 30px; flex: none; color: var(--muted); }
+  .picon .ic { width: 30px; height: 30px; stroke-width: 1.6; }
+  .fbadge { position: absolute; left: 50%; bottom: 2px; transform: translateX(-50%); font-size: 8px; font-weight: 700; letter-spacing: .2px; color: #06263b; background: var(--cyan); border-radius: 3px; padding: 0 3px; text-transform: uppercase; line-height: 1.45; }
+  .pname { font-size: 12px; color: #334153; word-break: break-all; }
+  .pcard.file .pname { flex: 1; }
+  .pacts { display: flex; gap: 6px; align-items: center; flex: none; }
+  .pbtn { font-size: 12px; color: var(--cyan); text-decoration: none; white-space: nowrap; background: #f3f6fb; border: 1px solid var(--line-hi); padding: 5px 9px; border-radius: var(--r-sm); cursor: pointer; display: inline-flex; align-items: center; gap: 4px; transition: border-color .15s, background .15s; }
+  .pbtn:hover { border-color: var(--cyan); background: rgba(56,189,248,.08); }
+  .pbtn .ic { width: 13px; height: 13px; }
+  /* downloads list (aside) */
+  #files a { display: flex; align-items: center; gap: 8px; padding: 7px 9px; margin: 4px 0; border-radius: var(--r-sm); background: var(--card); border: 1px solid var(--line); color: #334153; font-size: 12px; text-decoration: none; word-break: break-all; transition: border-color .15s, color .15s; }
+  #files a:hover { border-color: var(--cyan); color: var(--cyan); }
+  #files a .ic { width: 15px; height: 15px; flex: none; color: var(--muted); }
+  #files a:hover .ic { color: var(--cyan); }
+
+  /* skill badges + tool/think panels */
+  .turn .skills { display: flex; flex-wrap: wrap; gap: 6px; margin: 0 0 8px; }
+  .turn .skills:empty { display: none; }
+  .skill-pill { display: inline-flex; align-items: center; gap: 5px; background: rgba(129,140,248,.1); border: 1px solid rgba(129,140,248,.4); color: #4f46e5; font-size: 12px; padding: 3px 11px; border-radius: 999px; font-weight: 600; }
+  .skill-pill .ic { width: 13px; height: 13px; }
+  details.act { background: #f7f9fc; border: 1px solid var(--line); border-radius: var(--r-sm); margin: 5px 0; overflow: hidden; }
+  details.act > summary { cursor: pointer; padding: 7px 11px; font-size: 12px; color: var(--muted); user-select: none; list-style: none; transition: background .12s; display: flex; align-items: center; gap: 6px; }
+  details.act > summary:hover { background: rgba(56,189,248,.05); }
+  details.act > summary::-webkit-details-marker { display: none; }
+  details.act > summary::before { content: "▸"; color: var(--faint); transition: transform .15s; }
+  details.act[open] > summary::before { transform: rotate(90deg); }
+  details.act summary .ic { width: 14px; height: 14px; }
+  details.act .tbody, details.act .rbody { padding: 3px 12px 9px 24px; }
+  .trow { font-size: 12px; color: #334153; font-family: ui-monospace, "Cascadia Code", monospace; padding: 3px 0; display: flex; gap: 8px; align-items: baseline; }
+  .trow .st { width: 14px; flex: none; text-align: center; color: #16a34a; }
+  .trow.live { color: var(--cyan); }
+  .trow.live .st { color: transparent; position: relative; }
+  .trow.live .st::before { content: ""; position: absolute; left: 1px; top: 2px; width: 10px; height: 10px; border-radius: 50%; border: 1.5px solid rgba(56,189,248,.25); border-top-color: var(--cyan); animation: spin .7s linear infinite; }
+  .rbody { font-size: 12px; color: #5b6b82; white-space: pre-wrap; line-height: 1.6; border-left: 2px solid var(--line-hi); }
+  .live { color: var(--cyan); }
+  /* 思考块：折叠时显示一个只见“最新一两句”的贴底滚动窗口（rpeek），展开才看全文（rbody）。
+     用 details.think-d 提高特异性，压过通用的 details.act > summary（否则 summary 仍是 flex 横排，
+     标签被挤成竖排、且原来的 ▸ 不被移除 → 出现两个箭头）。 */
+  details.think-d > summary { display: block; padding: 0; }
+  details.think-d > summary::before { content: none; }
+  details.think-d > summary:hover { background: transparent; }
+  .think-d .rhead { display: flex; align-items: center; gap: 6px; padding: 7px 11px; font-size: 12px; color: var(--muted); }
+  .think-d .rhead:hover { background: rgba(56,189,248,.05); }
+  .think-d .rhead::before { content: "▸"; flex: none; color: var(--faint); transition: transform .15s; }
+  details.think-d[open] .rhead::before { transform: rotate(90deg); }
+  .rpeek { position: relative; margin: 0 11px 8px 25px; max-height: 2.9em; overflow: hidden; display: flex; flex-direction: column; justify-content: flex-end; }
+  .rpeek-in { flex: none; padding-left: 10px; border-left: 2px solid var(--line-hi); font-size: 12px; color: #5b6b82; line-height: 1.45; white-space: pre-wrap; word-break: break-word; }
+  .rpeek::after { content: ""; position: absolute; left: 0; right: 0; top: 0; height: 1.1em; background: linear-gradient(rgba(255,255,255,.98), rgba(255,255,255,0)); pointer-events: none; }
+  details.think-d[open] .rpeek { display: none; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  /* ask form (option cards) */
+  .askform { margin: 10px 0 2px; padding: 14px; background: linear-gradient(180deg, #f2f7fe, #eef4fc); border: 1px solid #cfe0f2; border-radius: var(--r-md); }
+  .askintro { color: var(--text); font-size: 13px; font-weight: 600; margin-bottom: 12px; display: flex; align-items: center; gap: 7px; }
+  .askintro .ic { width: 15px; height: 15px; color: var(--cyan); }
+  .askq { margin: 11px 0; }
+  .askqlabel { color: #334153; font-size: 13px; margin-bottom: 7px; font-weight: 500; }
+  .askopt { background: #eef2f8; color: #334153; border: 1px solid var(--line-hi); border-radius: 999px; padding: 6px 13px; margin: 4px 7px 4px 0; font-size: 12px; font-weight: 500; }
+  .askopt:hover { border-color: var(--cyan); color: #0f6cae; }
+  .askopt.sel { background: rgba(56,189,248,.1); border-color: var(--cyan); color: #1276b8; box-shadow: 0 0 0 2px rgba(56,189,248,.15); }
+  .askinput { display: block; margin-top: 8px; width: 100%; max-width: 420px; padding: 8px 10px; border-radius: var(--r-sm); border: 1px solid var(--line-hi); background: #f3f6fb; color: var(--text); font-size: 13px; outline: none; }
+  .askinput:focus { border-color: var(--cyan); box-shadow: 0 0 0 3px rgba(56,189,248,.14); }
+  .asksubmit { display: inline-flex; align-items: center; gap: 5px; margin-top: 14px; color: #06263b; background: linear-gradient(180deg, rgba(122,212,246,.8), rgba(69,182,230,.8)); padding: 9px 16px; border-radius: var(--r-sm); font-weight: 700; box-shadow: 0 4px 12px rgba(34,184,240,.28); }
+  .asksubmit:hover { filter: brightness(1.06); }
+  .asksubmit .ic { width: 14px; height: 14px; }
+
+  /* image lightbox */
+  .lightbox { position: fixed; inset: 0; z-index: 60; display: none; align-items: center; justify-content: center; background: rgba(4,8,16,.82); backdrop-filter: blur(8px); cursor: zoom-out; padding: 32px; }
+  .lightbox.on { display: flex; }
+  .lightbox img { max-width: 92vw; max-height: 92vh; border-radius: 10px; box-shadow: 0 20px 60px rgba(0,0,0,.6); }
+
+  /* markdown preview (half screen) */
+  #preview { position: fixed; top: 64px; right: 0; width: 50vw; height: calc(100vh - 64px); z-index: 40; display: none; flex-direction: column; background: #ffffff; border-left: 1px solid var(--line-hi); box-shadow: -14px 0 44px rgba(0,0,0,.45); }
+  #preview.on { display: flex; }
+  .pv-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 12px 16px; border-bottom: 1px solid var(--line); }
+  .pv-title { display: flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 600; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .pv-title .ic { width: 15px; height: 15px; flex: none; }
+  .pv-close { flex: none; display: inline-flex; align-items: center; gap: 5px; padding: 6px 12px; font-size: 12px; color: var(--muted); background: transparent; border: 1px solid var(--line-hi); border-radius: var(--r-sm); }
+  .pv-close:hover { color: var(--rose); border-color: var(--rose); }
+  .pv-close .ic { width: 13px; height: 13px; }
+  .pv-body { flex: 1; overflow-y: auto; padding: 22px 26px; font-size: 14.5px; line-height: 1.8; color: var(--text); }
+
+  /* responsive */
+  @media (max-width: 860px) {
+    main { grid-template-columns: 1fr; height: auto; min-height: calc(100vh - 64px); }
+    body.sessbar-open main { grid-template-columns: 1fr; }
+    body.preview-open main { width: 100vw; }
+    #log { min-height: 55vh; }
+    aside { order: -1; }
+    #preview { width: 100vw; }
+  }
 </style>
 </head>
 <body>
-<header>科研 Agent <small>· 自托管 OpenCode + DeepSeek + 本地科学计算环境</small></header>
+<header>
+  <div class="brand">
+    <span class="logo" id="logoIc"><img src="data:image/png;base64,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" alt="Niuma logo" /></span>
+    <div class="brandtext">
+      <div class="title">Niuma Science</div>
+    </div>
+  </div>
+  <div class="status"><span class="dot"></span>在线</div>
+</header>
 <main>
+  <div id="sessbar">
+    <div class="sb-top">
+      <button id="sessToggle" class="sb-toggle" type="button" title="最近会话"></button>
+      <span class="sb-title">最近会话</span>
+      <button id="refreshSess" class="mini" type="button" title="刷新列表"></button>
+    </div>
+    <div id="sessions"><span class="hint">加载中…</span></div>
+  </div>
   <section id="chat">
     <div id="log"></div>
-    <form id="f">
-      <input id="q" placeholder="例如：分析 uploads/sample.csv，做线性回归并画图" autocomplete="off" />
+    <form id="f" class="composer">
+      <input id="q" placeholder="给 Niuma Science 发消息…" autocomplete="off" />
       <button id="send" type="submit">发送</button>
+      <button id="stop" type="button" title="终止本次输出" hidden>终止</button>
+      <button id="new" type="button" title="清空上下文，开始新会话">新对话</button>
     </form>
   </section>
   <aside>
     <div class="panel">
-      <h3>① 上传数据文件</h3>
-      <input id="up" type="file" />
-      <div id="upmsg" class="hint">上传后会放进 uploads/，可在对话里让 agent 分析。</div>
+      <h3><span class="h3l"><span id="icUp"></span>上传数据</span><span id="upcount" class="count"></span></h3>
+      <input id="up" type="file" multiple />
+      <label class="dropzone" id="dropzone" for="up">
+        <span class="dzicon" id="dzIc"></span>
+        <span><b>点击选择</b> 或拖拽文件到此</span>
+        <span class="dzsub">支持一次选择 / 拖拽多个文件</span>
+      </label>
+      <div id="upmsg" class="hint">文件会放进 uploads/，可在对话里让 agent 分析。</div>
+      <div id="uplist"></div>
     </div>
     <div class="panel">
-      <h3>② 产出文件（可下载）</h3>
-      <div id="files"><span class="hint">还没有产出</span></div>
+      <h3><span class="h3l"><span id="icOut"></span>本轮产出</span></h3>
+      <div id="files"><span class="hint">对话生成的文件会显示在这里</span></div>
     </div>
   </aside>
 </main>
+<div id="preview">
+  <div class="pv-head">
+    <span class="pv-title" id="pvTitle"></span>
+    <button class="pv-close" id="pvClose" type="button">关闭</button>
+  </div>
+  <div class="pv-body" id="pvBody"></div>
+</div>
 <script>
 const log = document.getElementById("log")
 const f = document.getElementById("f")
 const q = document.getElementById("q")
 const sendBtn = document.getElementById("send")
+const stopBtn = document.getElementById("stop")
 const filesEl = document.getElementById("files")
+let activeStop = null   // 当前进行中流的终止函数（无则 null）
+stopBtn.addEventListener("click", () => { if (activeStop) activeStop() })
 
-function add(cls, text) { const d = document.createElement("div"); d.className = "msg " + cls; d.textContent = text; log.appendChild(d); log.scrollTop = log.scrollHeight; return d }
+// ---- 内联单色描边图标（自包含，无外部依赖）----
+const ICONS = {
+  flask: '<path d="M9 3v6l-5 8.5A1.7 1.7 0 0 0 5.5 20h13a1.7 1.7 0 0 0 1.5-2.5L15 9V3"/><path d="M8 3h8"/><path d="M8.5 14h7"/>',
+  history: '<path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 4v4h4"/><path d="M12 8v4l3 2"/>',
+  upload: '<path d="M12 15V4"/><path d="m7 9 5-5 5 5"/><path d="M5 16v2a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-2"/>',
+  box: '<path d="M21 8 12 3 3 8v8l9 5 9-5V8Z"/><path d="m3.3 7.2 8.7 5 8.7-5"/><path d="M12 12.2V22"/>',
+  refresh: '<path d="M21 12a9 9 0 1 1-2.6-6.4"/><path d="M21 4v5h-5"/>',
+  stop: '<rect x="6" y="6" width="12" height="12" rx="2"/>',
+  check: '<path d="M20 6 9 17l-5-5"/>',
+  x: '<path d="M18 6 6 18"/><path d="M6 6l12 12"/>',
+  download: '<path d="M12 4v11"/><path d="m7 11 5 4 5-4"/><path d="M5 20h14"/>',
+  eye: '<path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/>',
+  wrench: '<path d="M15 7a4 4 0 0 1-5.2 3.8L5 15.5V19h3.5l4.7-4.8A4 4 0 0 0 17 9l-2.3 2.3-1.9-.5-.5-1.9Z"/>',
+  brain: '<path d="M9.5 4A2.5 2.5 0 0 0 7 6.5 2.5 2.5 0 0 0 5.5 11 2.5 2.5 0 0 0 7 15.5 2.5 2.5 0 0 0 12 16V5.5A2.5 2.5 0 0 0 9.5 4Z"/><path d="M14.5 4A2.5 2.5 0 0 1 17 6.5 2.5 2.5 0 0 1 18.5 11 2.5 2.5 0 0 1 17 15.5 2.5 2.5 0 0 1 12 16"/>',
+  puzzle: '<path d="M15.5 8.5V6.5A1.5 1.5 0 0 0 14 5h-1.7a1.4 1.4 0 1 0-2.6 0H8A1.5 1.5 0 0 0 6.5 6.5v1.7a1.4 1.4 0 1 1 0 2.6v2.7A1.5 1.5 0 0 0 8 15h2.6a1.4 1.4 0 1 0 2.8 0H15a1.5 1.5 0 0 0 1.5-1.5v-2a1.4 1.4 0 1 0 0-2.8Z"/>',
+  file: '<path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8Z"/><path d="M14 3v5h5"/>',
+  copy: '<rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h8"/>',
+  edit: '<path d="M12 20h8"/><path d="M15.5 4.5a2.1 2.1 0 0 1 3 3L8 18l-4 1 1-4Z"/>',
+  send: '<path d="M22 2 11 13"/><path d="M22 2 15 22l-4-9-9-4Z"/>',
+  chevronL: '<path d="m15 18-6-6 6-6"/>',
+  trash: '<path d="M4 7h16"/><path d="M9 7V5a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/><path d="M6 7l1 12a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-12"/>'
+}
+function ic(name, cls) { return '<svg class="ic' + (cls ? " " + cls : "") + '" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">' + (ICONS[name] || "") + "</svg>" }
+const setIc = (id, name) => { const el = document.getElementById(id); if (el) el.innerHTML = ic(name) }
+setIc("icUp", "upload"); setIc("icOut", "box"); setIc("dzIc", "upload")
+document.getElementById("refreshSess").innerHTML = ic("refresh")
+sendBtn.innerHTML = ic("send") + "发送"
+stopBtn.innerHTML = ic("stop") + "终止"
+
+// ---- 轻量 Markdown 渲染（自包含、无外部依赖；先 HTML 转义再解析，链接白名单，防 XSS）----
+function mdEscape(s) { return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;") }
+function mdLink(url, txt) { if (!/^(https?:|mailto:|\/|api\/)/i.test(url)) return txt; return '<a href="' + url.replace(/"/g, "%22") + '" target="_blank" rel="noopener">' + txt + "</a>" }
+function mdInline(s) {
+  const codes = []; s = s.replace(/`([^`]+)`/g, (m, c) => { codes.push(c); return "%%%C" + (codes.length - 1) + "%%%" })
+  s = s.replace(/!\[([^\]]*)\]\(([^)\s]+)[^)]*\)/g, (m, a, u) => mdLink(u, "🖼 " + (a || u)))
+  s = s.replace(/\[([^\]]+)\]\(([^)\s]+)[^)]*\)/g, (m, t, u) => mdLink(u, t))
+  s = s.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>").replace(/__([^_]+)__/g, "<strong>$1</strong>")
+  s = s.replace(/(^|[^*\w])\*([^*\n]+)\*/g, "$1<em>$2</em>").replace(/(^|[^_\w])_([^_\n]+)_/g, "$1<em>$2</em>")
+  s = s.replace(/~~([^~]+)~~/g, "<del>$1</del>")
+  s = s.replace(/%%%C(\d+)%%%/g, (m, i) => "<code>" + codes[+i] + "</code>")
+  return s
+}
+function splitRow(l) { return l.trim().replace(/^\|/, "").replace(/\|$/, "").split("|").map((c) => c.trim()) }
+function renderMarkdown(src) {
+  src = (src || "").replace(/\r\n/g, "\n")
+  const blocks = []
+  src = src.replace(/```([\w-]*)\n?([\s\S]*?)```/g, (m, lang, code) => { blocks.push("<pre><code>" + mdEscape(code.replace(/\n$/, "")) + "</code></pre>"); return "%%%B" + (blocks.length - 1) + "%%%" })
+  const lines = mdEscape(src).split("\n"); const out = []; let i = 0
+  const blank = (l) => /^\s*$/.test(l)
+  while (i < lines.length) {
+    const l = lines[i]
+    const pm = l.match(/^%%%B(\d+)%%%\s*$/); if (pm) { out.push(blocks[+pm[1]]); i++; continue }
+    if (blank(l)) { i++; continue }
+    if (/^\s*([-*_])(\s*\1){2,}\s*$/.test(l)) { out.push("<hr>"); i++; continue }
+    const h = l.match(/^(#{1,6})\s+(.*)$/); if (h) { const n = h[1].length; out.push("<h" + n + ">" + mdInline(h[2].trim()) + "</h" + n + ">"); i++; continue }
+    if (/^\s*&gt;\s?/.test(l)) { const b = []; while (i < lines.length && /^\s*&gt;\s?/.test(lines[i])) { b.push(lines[i].replace(/^\s*&gt;\s?/, "")); i++ } out.push("<blockquote>" + mdInline(b.join("<br>")) + "</blockquote>"); continue }
+    if (/\|/.test(l) && i + 1 < lines.length && /-/.test(lines[i + 1]) && /^\s*\|?[\s:|-]*$/.test(lines[i + 1])) {
+      const head = splitRow(l); i += 2; const rows = []
+      while (i < lines.length && /\|/.test(lines[i]) && !blank(lines[i])) { rows.push(splitRow(lines[i])); i++ }
+      out.push("<table><thead><tr>" + head.map((c) => "<th>" + mdInline(c) + "</th>").join("") + "</tr></thead><tbody>" + rows.map((r) => "<tr>" + r.map((c) => "<td>" + mdInline(c) + "</td>").join("") + "</tr>").join("") + "</tbody></table>"); continue
+    }
+    if (/^\s*([-*+]|\d+[.)])\s+/.test(l)) {
+      const ordered = /^\s*\d+[.)]\s+/.test(l); const items = []
+      while (i < lines.length && /^\s*([-*+]|\d+[.)])\s+/.test(lines[i])) { items.push(lines[i].replace(/^\s*([-*+]|\d+[.)])\s+/, "")); i++ }
+      out.push((ordered ? "<ol>" : "<ul>") + items.map((it) => "<li>" + mdInline(it) + "</li>").join("") + (ordered ? "</ol>" : "</ul>")); continue
+    }
+    const buf = [l]; i++
+    while (i < lines.length && !blank(lines[i]) && !/^\s*(#{1,6}\s|&gt;|([-*+]|\d+[.)])\s|%%%B\d+%%%)/.test(lines[i]) && !/^\s*([-*_])(\s*\1){2,}\s*$/.test(lines[i])) { buf.push(lines[i]); i++ }
+    out.push("<p>" + mdInline(buf.join("<br>")) + "</p>")
+  }
+  return out.join("\n").replace(/%%%B(\d+)%%%/g, (m, i) => blocks[+i] || "")
+}
+// 给代码块加“复制”按钮
+function enhanceCode(container) {
+  container.querySelectorAll("pre").forEach((pre) => {
+    if (pre.querySelector(".copy")) return
+    const btn = document.createElement("button"); btn.type = "button"; btn.className = "copy"; btn.innerHTML = ic("copy") + "复制"
+    btn.addEventListener("click", (e) => {
+      e.stopPropagation()
+      const code = pre.querySelector("code"); const txt = code ? code.textContent : pre.textContent
+      if (navigator.clipboard) navigator.clipboard.writeText(txt)
+      btn.innerHTML = ic("check") + "已复制"; setTimeout(() => { btn.innerHTML = ic("copy") + "复制" }, 1500)
+    })
+    pre.appendChild(btn)
+  })
+}
+
+function add(cls, text) {
+  const d = document.createElement("div"); d.className = "msg " + cls
+  if (cls === "bot") { d.classList.add("answer", "md"); d.innerHTML = renderMarkdown(text); enhanceCode(d) }
+  else {                                   // 用户消息：正文放进 .utext，并挂一个悬停出现的“编辑”按钮
+    d.dataset.text = text
+    const span = document.createElement("span"); span.className = "utext"; span.textContent = text
+    const eb = document.createElement("button"); eb.type = "button"; eb.className = "editbtn"; eb.title = "编辑这条消息"; eb.innerHTML = ic("edit")
+    eb.addEventListener("click", () => startEdit(d))
+    d.append(span, eb)
+  }
+  log.appendChild(d); log.scrollTop = log.scrollHeight; return d
+}
+// 编辑历史消息：改文本 → 从这条起清空后续对话记录（文件不动）→ 以编辑后的内容重新生成
+function startEdit(userDiv) {
+  if (activeStop) return                   // 有流进行中，先不允许编辑
+  if (userDiv.querySelector(".editbox")) return
+  const cur = userDiv.dataset.text || ""
+  userDiv.classList.add("editing")
+  const box = document.createElement("div"); box.className = "editbox"
+  const ta = document.createElement("textarea"); ta.className = "editta"; ta.value = cur
+  const bar = document.createElement("div"); bar.className = "editbar"
+  const hint = document.createElement("span"); hint.className = "ehint"; hint.textContent = "此条之后的对话会被清空 · 文件保留"
+  const save = document.createElement("button"); save.type = "button"; save.className = "editsave"; save.innerHTML = ic("check") + "保存并重新生成"
+  const cancel = document.createElement("button"); cancel.type = "button"; cancel.className = "editcancel"; cancel.textContent = "取消"
+  bar.append(hint, save, cancel); box.append(ta, bar); userDiv.appendChild(box)
+  const grow = () => { ta.style.height = "auto"; ta.style.height = Math.min(ta.scrollHeight, 260) + "px" }
+  ta.addEventListener("input", grow); grow(); ta.focus(); ta.setSelectionRange(cur.length, cur.length)
+  const close = () => { userDiv.classList.remove("editing"); box.remove() }
+  cancel.addEventListener("click", close)
+  save.addEventListener("click", () => submitEdit(userDiv, ta.value.trim()))
+  ta.addEventListener("keydown", (e) => {
+    if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) { e.preventDefault(); save.click() }
+    else if (e.key === "Escape") { e.preventDefault(); close() }
+  })
+}
+async function submitEdit(userDiv, newText) {
+  if (!newText) return
+  const idx = [...log.querySelectorAll(".msg.user")].indexOf(userDiv)   // 第几个用户消息（与后端一致）
+  if (idx < 0) return
+  if (sessionId) {                         // 后端回退：丢弃这条及其后的所有消息
+    let ok = false
+    try { ok = (await fetch("api/revert?uindex=" + idx + sidQ(), { method: "POST" }).then(r => r.json())).ok } catch {}
+    if (!ok) { alert("回退失败，无法编辑，请重试"); return }
+  }
+  for (let n = userDiv; n; ) { const next = n.nextSibling; n.remove(); n = next }   // 清空这条及之后的 DOM
+  sendMessage(newText)                     // 以编辑后的内容重新发起本轮
+}
 function renderFiles(list) {
-  if (!list || !list.length) { filesEl.innerHTML = '<span class="hint">还没有产出</span>'; return }
+  if (!list || !list.length) { filesEl.innerHTML = '<span class="hint">对话生成的文件会显示在这里</span>'; return }
   filesEl.innerHTML = ""
-  for (const name of list) { const a = document.createElement("a"); a.href = "api/download?name=" + encodeURIComponent(name); a.textContent = "⬇ " + name; a.download = name; filesEl.appendChild(a) }
+  for (const name of list) {
+    const a = document.createElement("a"); a.href = "api/download?name=" + encodeURIComponent(name) + sidQ(); a.download = name
+    a.innerHTML = ic("download"); const s = document.createElement("span"); s.textContent = name; a.appendChild(s)
+    filesEl.appendChild(a)
+  }
+}
+const IMG = /\.(png|jpe?g|gif|webp|svg|bmp)$/i
+const MDX = /\.(md|markdown)$/i
+// 把本轮产物以卡片形式插进聊天流：图片给缩略图（点击放大），markdown 给预览，其它给下载
+function addProducts(list) {
+  const wrap = document.createElement("div"); wrap.className = "products"
+  for (const name of list) {
+    const dlUrl = "api/download?name=" + encodeURIComponent(name) + sidQ()
+    const raw = "api/raw?name=" + encodeURIComponent(name) + sidQ()
+    const dlBtn = () => { const a = document.createElement("a"); a.href = dlUrl; a.download = name; a.className = "pbtn"; a.innerHTML = ic("download") + "下载"; return a }
+    const card = document.createElement("div"); card.className = "pcard"
+    if (IMG.test(name)) {
+      const img = document.createElement("img"); img.src = raw; img.alt = name; img.title = "点击放大"; img.addEventListener("click", () => openLightbox(raw))
+      card.appendChild(img)
+      const bar = document.createElement("div"); bar.className = "pbar"
+      const nm = document.createElement("span"); nm.className = "pname"; nm.textContent = name
+      bar.appendChild(nm); bar.appendChild(dlBtn()); card.appendChild(bar)
+    } else {
+      card.className = "pcard file"
+      const icon = document.createElement("div"); icon.className = "picon"; icon.innerHTML = ic("file")
+      const badge = document.createElement("span"); badge.className = "fbadge"; badge.textContent = (name.split(".").pop() || "").slice(0, 4); icon.appendChild(badge)
+      const nm = document.createElement("span"); nm.className = "pname"; nm.textContent = name
+      const acts = document.createElement("div"); acts.className = "pacts"
+      if (MDX.test(name)) { const pv = document.createElement("button"); pv.type = "button"; pv.className = "pbtn"; pv.innerHTML = ic("eye") + "预览"; pv.addEventListener("click", () => openPreview(name)); acts.appendChild(pv) }
+      acts.appendChild(dlBtn())
+      card.appendChild(icon); card.appendChild(nm); card.appendChild(acts)
+    }
+    wrap.appendChild(card)
+  }
+  log.appendChild(wrap); log.scrollTop = log.scrollHeight
 }
 fetch("api/files").then(r => r.json()).then(renderFiles).catch(() => {})
 
-f.addEventListener("submit", (e) => {
-  e.preventDefault()
-  const text = q.value.trim(); if (!text) return
-  q.value = ""; sendBtn.disabled = true
-  add("user", text)
-  const tools = document.createElement("div"); tools.className = "tools"; log.appendChild(tools)
-  const bot = add("bot", "…")
-  const es = new EventSource("api/chat?q=" + encodeURIComponent(text))
-  es.addEventListener("tool", (ev) => { const d = JSON.parse(ev.data); tools.textContent = `⚙ ${d.tool}: ${d.status}`; log.scrollTop = log.scrollHeight })
-  es.addEventListener("text", (ev) => { bot.textContent = JSON.parse(ev.data); log.scrollTop = log.scrollHeight })
-  es.addEventListener("final", (ev) => { const t = JSON.parse(ev.data).text; if (t) bot.textContent = t })
-  es.addEventListener("files", (ev) => renderFiles(JSON.parse(ev.data)))
-  es.addEventListener("done", () => { es.close(); sendBtn.disabled = false; tools.textContent = "" })
-  es.onerror = () => { es.close(); sendBtn.disabled = false; if (bot.textContent === "…") bot.textContent = "(连接中断)" }
+// ---- 图片灯箱 ----
+const lb = document.createElement("div"); lb.className = "lightbox"; lb.innerHTML = '<img alt="">'; document.body.appendChild(lb)
+lb.addEventListener("click", () => lb.classList.remove("on"))
+function openLightbox(src) { lb.querySelector("img").src = src; lb.classList.add("on") }
+
+// ---- Markdown 半屏预览 ----
+const preview = document.getElementById("preview")
+const pvBody = document.getElementById("pvBody")
+const pvTitle = document.getElementById("pvTitle")
+function closePreview() { preview.classList.remove("on"); document.body.classList.remove("preview-open") }
+async function openPreview(name) {
+  pvTitle.innerHTML = ic("file"); const s = document.createElement("span"); s.textContent = name; pvTitle.appendChild(s)
+  pvBody.innerHTML = '<div class="hint">加载中…</div>'
+  preview.classList.add("on"); document.body.classList.add("preview-open")
+  try {
+    const txt = await fetch("api/raw?name=" + encodeURIComponent(name) + sidQ()).then(r => r.text())
+    pvBody.innerHTML = renderMarkdown(txt); enhanceCode(pvBody)
+  } catch { pvBody.innerHTML = '<div class="hint">加载失败</div>' }
+}
+document.getElementById("pvClose").addEventListener("click", closePreview)
+document.addEventListener("keydown", (e) => { if (e.key === "Escape") { if (lb.classList.contains("on")) lb.classList.remove("on"); else if (preview.classList.contains("on")) closePreview() } })
+
+// ---- 会话管理：最近 10 个 + 断点续问 ----
+const sessionsEl = document.getElementById("sessions")
+const fmtTime = (ms) => { const d = new Date(ms), p = (n) => String(n).padStart(2, "0"); return `${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}` }
+function renderSessions(list) {
+  if (!list || !list.length) { sessionsEl.innerHTML = '<span class="hint">还没有会话</span>'; return }
+  sessionsEl.innerHTML = ""
+  for (const s of list) {
+    const b = document.createElement("button"); b.className = "sess" + (s.id === sessionId ? " active" : ""); b.type = "button"
+    b.innerHTML = '<span class="t"></span><span class="d">' + fmtTime(s.updated) + '</span>'
+    b.querySelector(".t").textContent = s.title
+    b.addEventListener("click", () => resumeSession(s.id))
+    const del = document.createElement("span"); del.className = "sess-del"; del.title = "删除会话"; del.innerHTML = ic("trash")
+    del.addEventListener("click", (e) => { e.stopPropagation(); deleteSession(s.id, s.title) })
+    b.appendChild(del)
+    sessionsEl.appendChild(b)
+  }
+}
+const loadSessions = () => fetch("api/sessions").then(r => r.json()).then(renderSessions).catch(() => {})
+async function resumeSession(id) {                 // 断点续问：载入历史 → 设为当前会话 → 接着问
+  if (activeStop) activeStop()
+  const hist = await fetch("api/history?id=" + encodeURIComponent(id)).then(r => r.json()).catch(() => [])
+  log.innerHTML = ""; renderFiles([])
+  for (const m of hist) add(m.role === "user" ? "user" : "bot", m.text)
+  sessionId = id
+  loadSessions()                                   // 重渲染以高亮当前会话
+  loadUploads()                                    // 回显该会话已上传的文件
+  q.focus(); log.scrollTop = log.scrollHeight
+}
+async function deleteSession(id, title) {           // 删除会话（不可撤销，先确认）
+  if (!confirm("删除会话「" + (title || id) + "」？此操作不可撤销。")) return
+  await fetch("api/session/delete?id=" + encodeURIComponent(id), { method: "POST" }).catch(() => {})
+  if (id === sessionId) { sessionId = null; log.innerHTML = ""; renderFiles([]); renderUploads([]); renderWelcome() }   // 删的是当前会话 → 回到空态
+  loadSessions()
+}
+// 左侧会话栏折叠/展开（默认折叠）
+const sessToggle = document.getElementById("sessToggle")
+function setSessbar(open) {
+  document.body.classList.toggle("sessbar-open", open)
+  sessToggle.innerHTML = ic(open ? "chevronL" : "history")
+  sessToggle.title = open ? "收起会话" : "最近会话"
+}
+sessToggle.addEventListener("click", () => setSessbar(!document.body.classList.contains("sessbar-open")))
+setSessbar(false)
+document.getElementById("refreshSess").addEventListener("click", loadSessions)
+loadSessions()
+
+// ---- 空态欢迎 + 示例 chip ----
+const CHIPS = ["分析 uploads 里的 CSV 数据", "帮我查一个 DOI 是否真实", "写一份研究计划书", "把这段数据脱敏"]
+function renderWelcome() {
+  const w = document.createElement("div"); w.className = "welcome"
+  w.innerHTML = '<div class="wtitle">Niuma Science</div><div class="wsub">一站式科研平台，文献综述、选题立项、基金申报、论文撰写全链路，<br>科研需求一键直达！</div>'
+  const chips = document.createElement("div"); chips.className = "chips"
+  CHIPS.forEach((c) => { const b = document.createElement("button"); b.type = "button"; b.className = "chip"; b.textContent = c; b.addEventListener("click", () => sendMessage(c)); chips.appendChild(b) })
+  w.appendChild(chips); log.appendChild(w)
+}
+renderWelcome()
+
+let sessionId = null   // reused across messages so the agent keeps context
+function sidQ() { return sessionId ? "&sid=" + encodeURIComponent(sessionId) : "" }   // 上传/下载/预览都带上会话 id，隔离各会话目录
+document.getElementById("new").addEventListener("click", () => {
+  if (activeStop) activeStop()   // 有进行中的流先终止
+  sessionId = null; log.innerHTML = ""; renderFiles([]); loadUploads(); loadSessions(); renderWelcome(); q.focus()
 })
 
-document.getElementById("up").addEventListener("change", async (e) => {
-  const file = e.target.files[0]; if (!file) return
-  const msg = document.getElementById("upmsg"); msg.textContent = "上传中…"
-  const r = await fetch("api/upload?name=" + encodeURIComponent(file.name), { method: "POST", body: file })
-  const j = await r.json()
-  msg.textContent = `✅ 已上传 ${j.path}（${j.size} 字节）`
-})
+// 约定式选项卡：助手文本里若含 ```ask {json}``` 块，渲染成可点选表单，提交后拼成文本回发
+function renderAsk(answerEl, turnEl) {
+  if (turnEl.querySelector(".askform")) return                 // 已渲染，防重复
+  const m = answerEl.textContent.match(/```ask\s*([\s\S]*?)```/)
+  if (!m) return
+  let spec; try { spec = JSON.parse(m[1].trim()) } catch { return }
+  if (!spec || !Array.isArray(spec.questions) || !spec.questions.length) return
+  answerEl.textContent = answerEl.textContent.replace(m[0], "").trim()   // 从正文里抠掉原始块
+  const form = document.createElement("div"); form.className = "askform"
+  if (spec.intro) { const i = document.createElement("div"); i.className = "askintro"; i.innerHTML = ic("edit"); const s = document.createElement("span"); s.textContent = spec.intro; i.appendChild(s); form.appendChild(i) }
+  const state = {}
+  spec.questions.forEach((qq, idx) => {
+    const qid = qq.id || ("q" + idx)
+    const box = document.createElement("div"); box.className = "askq"
+    const label = document.createElement("div"); label.className = "askqlabel"; label.textContent = (idx + 1) + ". " + (qq.q || "") + (qq.multi ? "（可多选）" : "")
+    box.appendChild(label)
+    if (Array.isArray(qq.options) && qq.options.length) {
+      qq.options.forEach((opt) => {
+        const b = document.createElement("button"); b.type = "button"; b.className = "askopt"; b.textContent = opt
+        b.addEventListener("click", () => {
+          if (qq.multi) { b.classList.toggle("sel"); state[qid] = [...box.querySelectorAll(".askopt.sel")].map((x) => x.textContent) }
+          else { box.querySelectorAll(".askopt").forEach((x) => x.classList.remove("sel")); b.classList.add("sel"); state[qid] = opt }
+        })
+        box.appendChild(b)
+      })
+      if (qq.allowText) { const inp = document.createElement("input"); inp.type = "text"; inp.className = "askinput"; inp.placeholder = "或补充其它…"; inp.addEventListener("input", () => { if (inp.value) state[qid] = inp.value }); box.appendChild(inp) }
+    } else {
+      const inp = document.createElement("input"); inp.type = "text"; inp.className = "askinput"; inp.placeholder = qq.placeholder || "填写…"; inp.addEventListener("input", () => state[qid] = inp.value); box.appendChild(inp)
+    }
+    form.appendChild(box)
+  })
+  const submit = document.createElement("button"); submit.type = "button"; submit.className = "asksubmit"; submit.innerHTML = ic("check") + "提交确认"
+  submit.addEventListener("click", () => {
+    const lines = spec.questions.map((qq, idx) => {
+      let v = state[qq.id || ("q" + idx)]; if (Array.isArray(v)) v = v.join("、")
+      return (idx + 1) + ". " + (qq.q || "") + "：" + (v || "(未填)")
+    })
+    form.remove()
+    sendMessage("我的确认如下：\n" + lines.join("\n"))
+  })
+  form.appendChild(submit)
+  turnEl.appendChild(form)
+}
+
+const STI = { pending: "○", running: "○", completed: "✓", error: "✕" }
+function sendMessage(text) {
+  if (!text) return
+  const w = log.querySelector(".welcome"); if (w) w.remove()
+  sendBtn.disabled = true; document.body.classList.add("streaming")
+  add("user", text)
+
+  // 本轮助手块：技能徽章(常显) + 工具(默认折叠) + 思考(默认折叠) + 回答
+  const turn = document.createElement("div"); turn.className = "msg bot turn"
+  const skillsEl = document.createElement("div"); skillsEl.className = "skills"
+  const toolsD = document.createElement("details"); toolsD.className = "act tools-d"; toolsD.hidden = true
+  toolsD.innerHTML = "<summary>" + ic("wrench") + ' 工具调用 <span class="cnt"></span></summary><div class="tbody"></div>'
+  const thinkD = document.createElement("details"); thinkD.className = "act think-d"; thinkD.hidden = true
+  thinkD.innerHTML = '<summary><span class="rhead">' + ic("brain") + '<span class="rlbl">思考过程</span></span><div class="rpeek"><div class="rpeek-in"></div></div></summary><div class="rbody"></div>'
+  const answer = document.createElement("div"); answer.className = "answer"; answer.innerHTML = '<span class="typing"><i></i><i></i><i></i></span>'
+  turn.append(skillsEl, toolsD, thinkD, answer)
+  log.appendChild(turn); log.scrollTop = log.scrollHeight
+
+  const toolRows = new Map()   // callID -> row
+  const seenSkills = new Set()
+  const reason = new Map()     // reasoning id -> text
+  const atBottom = () => log.scrollHeight - log.scrollTop - log.clientHeight < 60
+  const follow = () => { if (atBottom()) log.scrollTop = log.scrollHeight }
+
+  const url = "api/chat?q=" + encodeURIComponent(text) + (sessionId ? "&sid=" + encodeURIComponent(sessionId) : "")
+  const es = new EventSource(url)
+  stopBtn.hidden = false; sendBtn.hidden = true   // 进行中：显示“终止”、藏起“发送”
+  let finished = false, painted = false, gotText = false
+  const paintAnswer = () => {                     // 先在原始文本上抠掉 ask 块，再把剩余文本渲染成 markdown
+    renderAsk(answer, turn)
+    if (painted || !gotText) return
+    answer.innerHTML = renderMarkdown(answer.textContent); answer.classList.add("md"); enhanceCode(answer); painted = true
+  }
+  const finalize = (note) => {                    // 收尾：关流、复原按钮、清 live 态；note 作为附注追加
+    if (finished) return; finished = true
+    es.close(); sendBtn.disabled = false; sendBtn.hidden = false; stopBtn.hidden = true; activeStop = null; document.body.classList.remove("streaming")
+    if (!thinkD.hidden) thinkD.querySelector(".rlbl").textContent = "思考过程"   // 收尾去掉“思考中…”的 live 态，peek 保留最后思考
+    toolRows.forEach(r => r.classList.remove("live"))
+    if (note) { if (!gotText && !painted) answer.textContent = ""; const n = document.createElement("div"); n.className = "note"; n.textContent = note; answer.appendChild(n) }
+    else if (!gotText) answer.textContent = "(无文本输出)"
+    loadSessions()   // 刷新会话列表（新会话入列 / 更新时间与高亮）
+  }
+  activeStop = () => finalize("⏹ 已终止")          // 关掉 ES → 服务器检测到断开 → abort opencode（真正掐断，不白烧 token）
+  es.addEventListener("session", (ev) => { sessionId = JSON.parse(ev.data).id; loadUploads() })
+
+  es.addEventListener("tool", (ev) => {
+    const d = JSON.parse(ev.data)
+    if (d.tool === "skill") {   // 技能：常显徽章，不进折叠列表（名字在 running/completed 才出现）
+      if (d.skill && !seenSkills.has(d.skill)) { seenSkills.add(d.skill); const pill = document.createElement("span"); pill.className = "skill-pill"; pill.innerHTML = ic("puzzle"); const s = document.createElement("span"); s.textContent = d.skill; pill.appendChild(s); skillsEl.appendChild(pill); follow() }
+      return
+    }
+    toolsD.hidden = false                       // 其它工具：折叠列表，按 callID 原地更新
+    let row = toolRows.get(d.callID)
+    if (!row) { row = document.createElement("div"); row.className = "trow"; row.innerHTML = '<span class="st"></span><span class="lbl"></span>'; toolsD.querySelector(".tbody").appendChild(row); toolRows.set(d.callID, row) }
+    row.querySelector(".st").textContent = STI[d.status] || "•"
+    row.classList.toggle("live", d.status === "running" || d.status === "pending")
+    row.querySelector(".lbl").textContent = d.title ? `${d.tool} · ${d.title}` : d.tool
+    toolsD.querySelector(".cnt").textContent = `(${toolRows.size})`
+    follow()
+  })
+
+  es.addEventListener("reasoning", (ev) => {
+    const d = JSON.parse(ev.data); reason.set(d.id, d.text)
+    thinkD.hidden = false
+    const full = [...reason.values()].filter(Boolean).join("\n\n")
+    thinkD.querySelector(".rbody").textContent = full
+    thinkD.querySelector(".rpeek-in").textContent = full   // 折叠态的贴底窗口跟着更新，始终露出最新思考
+    thinkD.querySelector(".rlbl").innerHTML = '思考中<span class="live">…</span>'
+    follow()
+  })
+
+  es.addEventListener("text", (ev) => { if (!painted) { gotText = true; answer.textContent = JSON.parse(ev.data); follow() } })   // 流式期间纯文本，final 时才渲染 markdown
+  es.addEventListener("final", (ev) => { const t = JSON.parse(ev.data).text; if (t && !painted) { gotText = true; answer.textContent = t } paintAnswer(); follow() })
+  es.addEventListener("files", (ev) => { const list = JSON.parse(ev.data); if (list.length) { renderFiles(list); addProducts(list) } })   // 本轮没产物就保留上一轮，不清空
+  es.addEventListener("done", () => { paintAnswer(); finalize() })
+  es.addEventListener("failed", (ev) => { let m = "本轮出错"; try { m = JSON.parse(ev.data).message } catch {} finalize("⚠ " + m) })   // 服务端出错：如实提示，不丢会话
+  es.onerror = () => finalize(finished ? null : "(连接中断)")
+}
+f.addEventListener("submit", (e) => { e.preventDefault(); const t = q.value.trim(); q.value = ""; sendMessage(t) })
+
+// ---- 上传空间：点击/拖拽多选上传 + 常驻文件列表 ----
+const upmsgEl = document.getElementById("upmsg")
+const uplistEl = document.getElementById("uplist")
+const upcountEl = document.getElementById("upcount")
+const dz = document.getElementById("dropzone")
+function fmtSize(n) {
+  if (n < 1024) return n + " B"
+  if (n < 1048576) return (n / 1024).toFixed(1) + " KB"
+  if (n < 1073741824) return (n / 1048576).toFixed(1) + " MB"
+  return (n / 1073741824).toFixed(2) + " GB"
+}
+function setUpMsg(text, isErr) { upmsgEl.textContent = text; upmsgEl.classList.toggle("err", !!isErr) }
+// 渲染 uploads/ 里的文件（名字 + 大小 + 下载/删除）
+function renderUploads(list) {
+  uplistEl.innerHTML = ""
+  upcountEl.textContent = list && list.length ? list.length + " 个文件" : ""
+  if (!list || !list.length) return
+  for (const it of list) {
+    const url = "api/download?dir=up&name=" + encodeURIComponent(it.name) + sidQ()
+    const row = document.createElement("div"); row.className = "uprow"
+    const icon = document.createElement("span"); icon.innerHTML = ic("file")
+    const meta = document.createElement("div"); meta.className = "um"
+    const nm = document.createElement("div"); nm.className = "un"; nm.textContent = it.name; nm.title = it.name
+    const sz = document.createElement("div"); sz.className = "us"; sz.textContent = fmtSize(it.size)
+    meta.appendChild(nm); meta.appendChild(sz)
+    const dl = document.createElement("a"); dl.href = url; dl.download = it.name; dl.title = "下载"; dl.innerHTML = ic("download")
+    const del = document.createElement("button"); del.type = "button"; del.title = "删除"; del.innerHTML = ic("trash")
+    del.addEventListener("click", () => deleteUpload(it.name))
+    row.appendChild(icon); row.appendChild(meta); row.appendChild(dl); row.appendChild(del)
+    uplistEl.appendChild(row)
+  }
+}
+async function loadUploads() {
+  if (!sessionId) { renderUploads([]); return }
+  try { renderUploads(await fetch("api/uploads?x=1" + sidQ()).then(r => r.json())) } catch { renderUploads([]) }
+}
+async function deleteUpload(name) {
+  try { await fetch("api/upload/delete?name=" + encodeURIComponent(name) + sidQ(), { method: "POST" }) } catch {}
+  loadUploads()
+}
+// 多文件上传：逐个 POST（并实时更新进度），全部完成后刷新列表
+async function uploadFiles(files) {
+  const arr = Array.from(files || []).filter(Boolean)
+  if (!arr.length) return
+  dz.classList.add("busy")
+  let done = 0, failed = 0
+  for (const file of arr) {
+    setUpMsg(`上传中… ${done + 1}/${arr.length}：${file.name}`)
+    try {
+      const r = await fetch("api/upload?name=" + encodeURIComponent(file.name) + sidQ(), { method: "POST", body: file })
+      const j = await r.json()
+      if (j.sid) sessionId = j.sid   // 上传先于对话时，用网关现建的会话 id，之后对话/产物都归这个会话
+      done++
+    } catch { failed++ }
+  }
+  dz.classList.remove("busy")
+  setUpMsg(failed ? `✅ ${done} 个已上传，${failed} 个失败` : `✅ 已上传 ${done} 个文件`, failed > 0)
+  loadUploads(); loadSessions()
+}
+document.getElementById("up").addEventListener("change", (e) => { uploadFiles(e.target.files); e.target.value = "" })
+;["dragover", "dragenter"].forEach((ev) => dz.addEventListener(ev, (e) => { e.preventDefault(); dz.classList.add("drag") }))
+;["dragleave", "drop"].forEach((ev) => dz.addEventListener(ev, (e) => { e.preventDefault(); dz.classList.remove("drag") }))
+dz.addEventListener("drop", (e) => uploadFiles(e.dataTransfer.files))
 </script>
 </body>
 </html>

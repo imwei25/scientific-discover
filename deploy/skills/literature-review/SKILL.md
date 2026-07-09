@@ -25,7 +25,7 @@ description: 写**叙述性**文献综述。围绕一个主题多路检索文献
 1. **拆概念**：把主题拆成 2-4 个检索式（如 PICO 的 P/I/O）。
 2. **检索建证据表**：
    ```
-   .venv/bin/python .opencode/skills/literature-review/search.py "概念1" "概念2" --limit 25 --since 2018
+   .venv/Scripts/python.exe .opencode/skills/literature-review/search.py "概念1" "概念2" --limit 25 --since 2018
    ```
    产出 `outputs/evidence_table.csv`（含 design 研究类型列）和 `outputs/evidence.md`。
 3. **读证据写综述**：读 `outputs/evidence.md`，据此撰写：
@@ -35,6 +35,19 @@ description: 写**叙述性**文献综述。围绕一个主题多路检索文献
    - 结论与展望
    - 参考文献（编号，与正文 [n] 对应）
 4. **出 PDF（正式报告默认交付版）**：综述写完后，把 `outputs/review.md` 交给 `render-pdf-doc` 技能渲染成 `outputs/review.pdf`。中文报告务必指定中文字体（`--cjk-font`：本地 `Microsoft YaHei`，服务器 `Noto Sans CJK SC`），否则会漏字。需要更多文献用 `search-lit`（检索）/`fulltext-retrieval`（下全文）。
+
+## 引用溯源到原句（`ground_claim.py`，写完自查转述是否忠于原文）
+证据表把论断追溯到**论文级** `[n]`；`ground_claim.py` 再往下追一层到**句子级**——给一句论断 + 它引的 DOI/PMID，取回该文献摘要、拆句、捞出**最能支撑这句的原文句子**并打分。补 `reference-check` 的盲区：那个只验"文献真实存在"，这个验"你的转述对不对得上原文那句话"（转述失真是综述/讨论里最隐蔽的幻觉）。
+
+```
+# 单条：论断 + 它引的一个或多个 DOI/PMID
+.venv/Scripts/python.exe .opencode/skills/literature-review/ground_claim.py "他汀降低卒中复发风险" 10.1056/NEJMoa1615664 PMID:27295427
+# 批量：CSV 两列 claim,ref，把综述里每个"论断→引用"对逐条核
+.venv/Scripts/python.exe .opencode/skills/literature-review/ground_claim.py --input outputs/<会话>/claims.csv
+```
+- 产出 `claim_grounding.md` / `.csv`。分档：**GROUNDED**（≥0.45，措辞高度相关）、**CHECK**（0.25–0.45，请人工确认）、**WEAK**（<0.25，⚠️ 摘要里找不到支撑句——可能转述失真，或支撑点在全文正文）、**NOTFOUND/NOABSTRACT**（取不到文献/无摘要）。
+- **关键在"捞出的原句"，分数只用来排优先级**：TF-IDF 对短转述天然保守，忠实的转述常落 CHECK 档但会把**正确的原句**摆到你面前——照着确认措辞即可。WEAK 且无相关句才是真信号。
+- 摘要没有的支撑点 → 用 `fulltext-retrieval` 下全文再核（本脚本只看摘要）。
 
 ## 约定
 - 所有产出写 `outputs/`。综述正文可存 `outputs/review.md`。

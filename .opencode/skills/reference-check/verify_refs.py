@@ -54,6 +54,9 @@ def epmc_escape(s):
 DOI_RE = re.compile(r"10\.\d{4,9}/[-._;()/:A-Za-z0-9]+", re.I)
 PMID_RE = re.compile(r"\bPMID:?\s*(\d{5,9})\b", re.I)
 
+# 撤稿检测开关（--no-retraction 关掉；离线/赶时间时用）。默认开。
+RETRACTION_CHECK = True
+
 
 def _get(url, **kw):
     """带退避重试的 GET：碰到 429/503 就等一会再试（api.crossref 限速常见）。"""
@@ -144,6 +147,68 @@ def title_search(title):
     return best
 
 
+def check_retraction(doi, pmid):
+    """查一篇（已确认存在的）文献是否被撤稿 / 有勘误·编辑关注。
+    去 Europe PMC 取 core 记录，看 pubTypeList 里有没有 'Retracted Publication'
+    （= 这篇本身被撤稿，医学投稿引到就是硬伤），并从 commentCorrectionList
+    捞出撤稿/勘误通知的出处。
+
+    返回 (status, notice)：
+      status ∈ {'retracted', 'concern', ''}；notice 是通知文献的引用串（可能为空）。
+      任何异常都吞掉返回 ('', '')——撤稿检测失败绝不能拖垮整体核查。
+    """
+    if not RETRACTION_CHECK or not (doi or pmid):
+        return "", ""
+    query = f"EXT_ID:{pmid}" if pmid else f"DOI:{epmc_escape(doi)}"
+    try:
+        r = _get(EPMC, params={"query": query, "format": "json",
+                               "resultType": "core", "pageSize": 1})
+        r.raise_for_status()
+        res = r.json().get("resultList", {}).get("result", [])
+        if not res:
+            return "", ""
+        rec = res[0]
+        pubtypes = [str(x).lower() for x in
+                    (rec.get("pubTypeList", {}) or {}).get("pubType", []) or []]
+        ccl = ((rec.get("commentCorrectionList", {}) or {})
+               .get("commentCorrection", []) or [])
+        # 找撤稿/勘误/表达关注通知的出处（type 如 'Retraction in' / 'Expression of concern in'）。
+        def _notice(kw):
+            for c in ccl:
+                t = str(c.get("type", "")).lower()
+                if kw in t and "in" in t:  # 'retraction in' 指向撤稿它的那篇通知
+                    return c.get("reference", "") or ""
+            return ""
+        if "retracted publication" in pubtypes:
+            return "retracted", _notice("retraction")
+        # 表达关注（Expression of Concern）——未撤稿但被编辑标注，值得提示
+        eoc = _notice("expression of concern") or _notice("concern")
+        if eoc or any("concern" in p for p in pubtypes):
+            return "concern", eoc
+        return "", ""
+    except Exception:
+        return "", ""
+
+
+def _apply_retraction(result):
+    """对一条已判"存在"的核查结果补跑撤稿检测；命中就把 verdict 抬成 RETRACTED
+    （撤稿是"文献真但绝不能引"的独立风险，凌驾于标题吻合与否）。就地改 result。"""
+    if result.get("verdict") not in ("OK", "CHECK", "MISMATCH"):
+        return result
+    doi = result.get("doi") or result.get("_match_doi")
+    pmid = result.get("pmid") or result.get("_match_pmid")
+    status, notice = check_retraction(doi, pmid)
+    if status == "retracted":
+        tail = f"；撤稿通知：{notice}" if notice else ""
+        result["verdict"] = "RETRACTED"
+        result["note"] = "⚠️ 该文献已被撤稿（Retracted Publication）——请勿引用，替换为未撤稿的来源" + tail \
+                         + "。（原核查：" + result.get("note", "") + "）"
+    elif status == "concern":
+        tail = f"（{notice}）" if notice else ""
+        result["note"] = result.get("note", "") + f"；⚠️ 该文献被标注'表达关注'(Expression of Concern){tail}，引用前请核实"
+    return result
+
+
 def _author_year_flags(entry, meta):
     """Cross-check claimed first-author surname + year against the resolved record.
     Catches 'DOI is real but points to a different paper'. Returns a note fragment or ''."""
@@ -228,7 +293,9 @@ def verify_one(entry):
             if ft and sim >= 0.85:
                 extra = f" (匹配 DOI:{meta.get('doi') or 'NA'})" if meta else ""
                 return dict(verdict="OK", id="title", found_title=ft, sim=round(sim, 2),
-                            note="按标题查到真实文献" + extra, **entry)
+                            note="按标题查到真实文献" + extra,
+                            _match_doi=(meta or {}).get("doi") or None,
+                            _match_pmid=(meta or {}).get("pmid") or None, **entry)
             return dict(verdict="NOT_FOUND", id="title", found_title=ft or "",
                         sim=round(sim, 2), note="按标题查不到匹配——疑似虚构，请人工确认", **entry)
         return dict(verdict="ERROR", id="", found_title="", sim=0.0,
@@ -294,7 +361,12 @@ def main():
     ap.add_argument("ids", nargs="*", help="直接给 DOI/PMID/标题（可多个）")
     ap.add_argument("--input", help="refs.bib / refs.ris / refs.txt")
     ap.add_argument("--outdir", default="outputs")
+    ap.add_argument("--no-retraction", action="store_true",
+                    help="跳过撤稿检测（离线/赶时间；默认开启）")
     args = ap.parse_args()
+
+    global RETRACTION_CHECK
+    RETRACTION_CHECK = not args.no_retraction
 
     entries = parse_input(args.input, args.ids)
     if not entries:
@@ -305,6 +377,7 @@ def main():
     results = []
     for i, e in enumerate(entries, 1):
         r = verify_one(e)
+        _apply_retraction(r)
         results.append(r)
         print(f"  [{i}/{len(entries)}] {r['verdict']:10} {(r['claimed_title'] or r['id'])[:60]}")
         time.sleep(0.2)
@@ -318,8 +391,8 @@ def main():
         w.writerows(results)
 
     # Markdown 报告（按风险排序）
-    order = {"FABRICATED": 0, "ID_FAKE": 1, "NOT_FOUND": 2, "MISMATCH": 3,
-             "CHECK": 4, "ERROR": 5, "OK": 6}
+    order = {"RETRACTED": 0, "FABRICATED": 1, "ID_FAKE": 2, "NOT_FOUND": 3,
+             "MISMATCH": 4, "CHECK": 5, "ERROR": 6, "OK": 7}
     results.sort(key=lambda r: order.get(r["verdict"], 9))
     from collections import Counter
     dist = Counter(r["verdict"] for r in results)
@@ -332,7 +405,7 @@ def main():
             if r["found_title"] and r["found_title"] != r["claimed_title"]:
                 f.write(f"  - 实际匹配到：{r['found_title']}\n")
 
-    bad = sum(dist.get(k, 0) for k in ("FABRICATED", "ID_FAKE", "NOT_FOUND", "MISMATCH"))
+    bad = sum(dist.get(k, 0) for k in ("RETRACTED", "FABRICATED", "ID_FAKE", "NOT_FOUND", "MISMATCH"))
     print("-" * 50)
     print(f"结果：{dict(dist)}")
     print(f"可疑/存疑 {bad} 条。报告见 {args.outdir}/reference_check.md / .csv")
