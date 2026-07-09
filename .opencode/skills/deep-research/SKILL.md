@@ -9,6 +9,8 @@ description: 深度研究。对一个具体问题做多源检索→抓取→交�
 
 对一个**足够具体**的问题，产出一份多来源、可核查、带引用的报告。**跨框架通用**（OpenCode / OpenClaw / WorkBuddy / Claude Code 等，不绑定任何具体框架或模型）。**由本技能自行判断该并行调研还是串行调研**（见「编排决策」）。
 
+> **共享引擎**：本技能的编排决策、回合制检索、停止判据、覆盖批判、反向核查与 `literature-review` **同源**，抽在 [../literature-review/references/iterative-retrieval.md](../literature-review/references/iterative-retrieval.md)。下面的流程是它在"单问题深挖 + 置信度"契约下的落法；改循环逻辑时改那份共享 doc、两边一起受益。
+
 ## 定位（本技能在套件中的位置）
 顶层主控（AGENTS.md 常驻指令）负责判意图、定范围、派发；派到本技能就**直接做，别回绕**。产物写 `outputs/`（主控注入了会话专属目录 `outputs/<会话id>/` 时以它为准、勿写仓库根固定名——多用户共享会 clobber）。
 
