@@ -23,8 +23,43 @@ const OC_URL = process.env.OC_URL || "http://127.0.0.1:4098"
 const client = createOpencodeClient({ baseUrl: OC_URL })
 const un = (r) => (r && r.data !== undefined ? r.data : r)
 const [PID, MID] = (process.env.OC_MODEL || "deepseek/deepseek-v4-pro").split("/")
-const MODEL = { providerID: PID, modelID: MID }
+let MODEL = { providerID: PID, modelID: MID }
 const PORT = Number(process.env.PORT || 3000)
+
+// ---- 自定义大模型（OpenAI 兼容）：前端可切换后台 opencode 用的模型 ----
+const MODEL_CFG_PATH = path.join(__dirname, "model-config.json")   // 持久化所选自定义模型（含 key，已 gitignore）
+const OC_CONFIG_PATH = path.join(ROOT, "opencode.json")            // opencode 项目配置：注册自定义 provider
+const CUSTOM_PROVIDER_ID = "custom"
+const loadModelCfg = () => { try { return JSON.parse(fs.readFileSync(MODEL_CFG_PATH, "utf8")) } catch { return null } }
+const saveModelCfg = (c) => { try { fs.writeFileSync(MODEL_CFG_PATH, JSON.stringify(c, null, 2)) } catch {} }
+const customProviderCfg = ({ baseURL, apiKey, modelID }) => ({
+  npm: "@ai-sdk/openai-compatible", name: "Custom (OpenAI 兼容)",
+  options: { baseURL, apiKey },
+  models: { [modelID]: { name: modelID, tool_call: true, attachment: true } },   // 开工具调用，技能才能跑
+})
+// 把自定义 provider 合并进 ROOT/opencode.json（保留其它配置），opencode 启动时读取它
+const writeOcProvider = (cfg) => {
+  let oc = {}
+  try { oc = JSON.parse(fs.readFileSync(OC_CONFIG_PATH, "utf8")) } catch {}
+  oc.provider = oc.provider || {}
+  oc.provider[CUSTOM_PROVIDER_ID] = customProviderCfg(cfg)
+  fs.writeFileSync(OC_CONFIG_PATH, JSON.stringify(oc, null, 2))
+}
+const removeOcProvider = () => {
+  try {
+    const oc = JSON.parse(fs.readFileSync(OC_CONFIG_PATH, "utf8"))
+    if (oc.provider) { delete oc.provider[CUSTOM_PROVIDER_ID]; if (!Object.keys(oc.provider).length) delete oc.provider }
+    fs.writeFileSync(OC_CONFIG_PATH, JSON.stringify(oc, null, 2))
+  } catch {}
+}
+// 启动时恢复上次所选的自定义模型（写好 opencode.json，随后 ensureOpencode 启动的 opencode 会读到）
+{
+  const saved = loadModelCfg()
+  if (saved?.baseURL && saved?.apiKey && saved?.modelID) {
+    writeOcProvider(saved)
+    MODEL = { providerID: CUSTOM_PROVIDER_ID, modelID: saved.modelID }
+  }
+}
 // ---- 每个会话独占 uploads/<sid>/ 和 outputs/<sid>/（多用户隔离）----
 const safeSid = (s) => (s || "").replace(/[^a-zA-Z0-9_-]/g, "")   // 防目录穿越
 const wsUp = (sid) => path.join(UPLOADS, safeSid(sid))
@@ -283,6 +318,68 @@ const server = http.createServer(async (req, res) => {
       return
     }
 
+    // 当前后台模型配置（apiKey 不回传，只报是否已设）
+    if (req.method === "GET" && u.pathname === "/api/model") {
+      const c = loadModelCfg()
+      return send(res, 200, "application/json", JSON.stringify({
+        providerID: MODEL.providerID, modelID: MODEL.modelID,
+        isCustom: MODEL.providerID === CUSTOM_PROVIDER_ID,
+        baseURL: c?.baseURL || "", hasKey: !!(c && c.apiKey),
+        default: `${PID}/${MID}`, managed: OC_MANAGED,
+      }))
+    }
+    // 测试一个 OpenAI 格式的 API（URL + key + 模型）是否可用
+    if (req.method === "POST" && u.pathname === "/api/model/test") {
+      const chunks = []; for await (const c of req) chunks.push(c)
+      let baseURL = "", apiKey = "", modelID = ""
+      try { const b = JSON.parse(Buffer.concat(chunks).toString() || "{}"); baseURL = (b.baseURL || "").trim(); apiKey = (b.apiKey || "").trim(); modelID = (b.modelID || "").trim() } catch {}
+      if (!baseURL || !apiKey || !modelID) return send(res, 400, "application/json", JSON.stringify({ ok: false, err: "请填写 API URL、API Key、模型 ID" }))
+      const url = baseURL.replace(/\/+$/, "") + "/chat/completions"
+      const t0 = Date.now()
+      const ac = new AbortController(); const timer = setTimeout(() => ac.abort(), 20000)
+      try {
+        const r = await fetch(url, {
+          method: "POST", signal: ac.signal,
+          headers: { "Content-Type": "application/json", Authorization: "Bearer " + apiKey },
+          body: JSON.stringify({ model: modelID, messages: [{ role: "user", content: "ping" }], max_tokens: 1, stream: false }),
+        })
+        clearTimeout(timer)
+        const ms = Date.now() - t0
+        const body = await r.text()
+        if (!r.ok) {
+          let em = body.slice(0, 300); try { const j = JSON.parse(body); em = j.error?.message || j.message || em } catch {}
+          return send(res, 200, "application/json", JSON.stringify({ ok: false, status: r.status, ms, err: em }))
+        }
+        let reply = ""; try { const j = JSON.parse(body); reply = j.choices?.[0]?.message?.content || "" } catch {}
+        return send(res, 200, "application/json", JSON.stringify({ ok: true, status: r.status, ms, reply: String(reply).slice(0, 80) }))
+      } catch (e) {
+        clearTimeout(timer)
+        return send(res, 200, "application/json", JSON.stringify({ ok: false, err: e?.name === "AbortError" ? "请求超时（20s 内无响应）" : String(e?.message || e) }))
+      }
+    }
+    // 切换后台模型：注册自定义 provider → 重启 opencode → 更新当前模型
+    if (req.method === "POST" && u.pathname === "/api/model") {
+      const chunks = []; for await (const c of req) chunks.push(c)
+      let baseURL = "", apiKey = "", modelID = ""
+      try { const b = JSON.parse(Buffer.concat(chunks).toString() || "{}"); baseURL = (b.baseURL || "").trim(); apiKey = (b.apiKey || "").trim(); modelID = (b.modelID || "").trim() } catch {}
+      if (!baseURL || !apiKey || !modelID) return send(res, 400, "application/json", JSON.stringify({ ok: false, err: "请填写 API URL、API Key、模型 ID" }))
+      writeOcProvider({ baseURL, apiKey, modelID })
+      saveModelCfg({ baseURL, apiKey, modelID })
+      MODEL = { providerID: CUSTOM_PROVIDER_ID, modelID }
+      let restarted = false
+      try { restarted = await restartOpencode() } catch {}
+      if (!restarted) { try { await client.config.update({ body: { provider: { [CUSTOM_PROVIDER_ID]: customProviderCfg({ baseURL, apiKey, modelID }) } } }) } catch {} }
+      return send(res, 200, "application/json", JSON.stringify({ ok: true, restarted, providerID: CUSTOM_PROVIDER_ID, modelID }))
+    }
+    // 恢复默认模型（清掉自定义 provider）
+    if (req.method === "POST" && u.pathname === "/api/model/reset") {
+      try { fs.unlinkSync(MODEL_CFG_PATH) } catch {}
+      removeOcProvider()
+      MODEL = { providerID: PID, modelID: MID }
+      let restarted = false; try { restarted = await restartOpencode() } catch {}
+      return send(res, 200, "application/json", JSON.stringify({ ok: true, restarted, providerID: PID, modelID: MID }))
+    }
+
     send(res, 404, "text/plain", "not found")
   } catch (err) {
     try { send(res, 500, "text/plain", String(err?.stack || err)) } catch {}
@@ -306,35 +403,51 @@ const killPort = (port) => {
   } catch { /* 端口本就空闲 */ }
 }
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
-async function ensureOpencode() {
-  const u = new URL(OC_URL)
-  const ocLocal = ["127.0.0.1", "localhost", "::1"].includes(u.hostname)
-  if (process.env.MANAGE_OC === "0" || (!ocLocal && process.env.MANAGE_OC !== "1")) {
-    console.log(`[oc] 不接管 opencode（OC=${OC_URL}），直接连它`)
-    return
-  }
-  const port = Number(u.port || 80)
-  console.log(`[oc] 重启本机 opencode :${port}（让它重扫 .opencode/skills/）...`)
-  killPort(port)
-  await sleep(800)
+const OC_U = new URL(OC_URL)
+const OC_LOCAL = ["127.0.0.1", "localhost", "::1"].includes(OC_U.hostname)
+const OC_MANAGED = process.env.MANAGE_OC === "1" || (OC_LOCAL && process.env.MANAGE_OC !== "0")
+const OC_PORT = Number(OC_U.port || 80)
+function spawnOc() {
   const out = fs.openSync(path.join(ROOT, "serve.out"), "a")
   const err = fs.openSync(path.join(ROOT, "serve.err"), "a")
-  const child = spawn("opencode", ["serve", "--port", String(port)], {
+  const child = spawn("opencode", ["serve", "--port", String(OC_PORT)], {
     cwd: ROOT, detached: true, stdio: ["ignore", out, err], shell: process.platform === "win32",
   })
   child.on("error", (e) => console.warn(`[oc] 启动 opencode 失败：${e.message}（PATH 里有 opencode 吗？）`))
   child.unref()
-  for (let i = 0; i < 60; i++) {
-    if (await ocHealthy()) { console.log(`[oc] 就绪：${OC_URL}（工作目录=${ROOT}）`); return }
-    await sleep(500)
+}
+async function waitOcHealthy(tries = 60) {
+  for (let i = 0; i < tries; i++) { if (await ocHealthy()) return true; await sleep(500) }
+  return false
+}
+// 切换模型后重启 opencode，让它重新读取 opencode.json 里的自定义 provider（仅接管本机 OC 时可用）
+async function restartOpencode() {
+  if (!OC_MANAGED) return false
+  killPort(OC_PORT); await sleep(800); spawnOc()
+  return waitOcHealthy()
+}
+async function ensureOpencode() {
+  if (!OC_MANAGED) {
+    console.log(`[oc] 不接管 opencode（OC=${OC_URL}），直接连它`)
+    return
   }
-  console.warn(`[oc] 30s 内未就绪，仍继续启动网关（排查见 serve.err）`)
+  console.log(`[oc] 重启本机 opencode :${OC_PORT}（让它重扫 .opencode/skills/）...`)
+  if (await restartOpencode()) console.log(`[oc] 就绪：${OC_URL}（工作目录=${ROOT}）`)
+  else console.warn(`[oc] 30s 内未就绪，仍继续启动网关（排查见 serve.err）`)
 }
 
 const lanIPs = () => Object.values(os.networkInterfaces()).flat()
   .filter((i) => i && i.family === "IPv4" && !i.internal).map((i) => i.address)
 
 await ensureOpencode()
+// 若上一次的网关还占着本端口，先杀掉它再起，避免 EADDRINUSE（重启即用，不必手动清端口）
+killPort(PORT)
+await sleep(500)
+// 兜底：端口仍被别的进程占用时给一句人话提示，而不是抛未捕获的 'error' 事件
+server.on("error", (e) => {
+  if (e.code === "EADDRINUSE") { console.error(`[gateway] 端口 ${PORT} 仍被占用，无法启动。请手动结束占用进程后重试。`); process.exit(1) }
+  else { console.error(`[gateway] 监听出错：${e.message}`); process.exit(1) }
+})
 // 绑 0.0.0.0：本机与局域网都能访问
 server.listen(PORT, "0.0.0.0", () => {
   console.log(`gateway on http://localhost:${PORT}  (opencode=${OC_URL}, model=${MODEL.providerID}/${MODEL.modelID})`)

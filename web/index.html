@@ -310,6 +310,41 @@
   .pv-close .ic { width: 13px; height: 13px; }
   .pv-body { flex: 1; overflow-y: auto; padding: 22px 26px; font-size: 14.5px; line-height: 1.8; color: var(--text); }
 
+  /* header actions + model settings modal */
+  .hright { display: flex; align-items: center; gap: 14px; }
+  .hbtn { width: 34px; height: 34px; display: grid; place-items: center; border-radius: var(--r-sm); background: #fff; border: 1px solid var(--line-hi); color: var(--muted); cursor: pointer; transition: color .15s, border-color .15s; }
+  .hbtn:hover { color: var(--accent); border-color: var(--cyan); }
+  .hbtn .ic { width: 17px; height: 17px; }
+  .modal { position: fixed; inset: 0; z-index: 70; display: none; align-items: center; justify-content: center; background: rgba(20,32,54,.35); backdrop-filter: blur(4px); padding: 24px; }
+  .modal.on { display: flex; }
+  .modal-card { width: 100%; max-width: 470px; background: #fff; border: 1px solid var(--line); border-radius: var(--r-lg); box-shadow: 0 20px 60px rgba(30,50,90,.25); overflow: hidden; animation: rise .18s ease; }
+  .modal-head { display: flex; align-items: center; justify-content: space-between; padding: 14px 18px; border-bottom: 1px solid var(--line); }
+  .modal-title { display: inline-flex; align-items: center; gap: 8px; font-size: 14px; font-weight: 700; color: var(--text); }
+  .modal-title .ic { width: 16px; height: 16px; color: var(--accent); }
+  .modal-x { width: 28px; height: 28px; display: grid; place-items: center; border-radius: var(--r-sm); background: transparent; color: var(--muted); border: 1px solid transparent; cursor: pointer; }
+  .modal-x .ic { width: 15px; height: 15px; }
+  .modal-x:hover { color: var(--rose); border-color: var(--line-hi); }
+  .modal-body { padding: 16px 18px; }
+  .mm-cur { font-size: 12px; color: var(--muted); background: #f3f6fb; border: 1px solid var(--line); border-radius: var(--r-sm); padding: 8px 11px; margin-bottom: 14px; }
+  .mm-cur b { color: var(--accent-deep); font-weight: 600; word-break: break-all; }
+  .mm-field { display: block; margin: 10px 0; }
+  .mm-field > span { display: block; font-size: 12px; color: var(--muted); margin-bottom: 5px; font-weight: 500; }
+  .mm-input { width: 100%; box-sizing: border-box; padding: 9px 11px; border: 1px solid var(--line-hi); border-radius: var(--r-sm); background: #fff; color: var(--text); font-size: 13px; outline: none; transition: border-color .15s, box-shadow .15s; }
+  .mm-input:focus { border-color: var(--cyan); box-shadow: 0 0 0 3px rgba(30,159,230,.14); }
+  .mm-select { cursor: pointer; appearance: none; background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%235b6b82' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='m6 9 6 6 6-6'/></svg>"); background-repeat: no-repeat; background-position: right 10px center; padding-right: 32px; }
+  .mm-msg { font-size: 12.5px; line-height: 1.6; margin: 12px 0 2px; min-height: 18px; white-space: pre-wrap; word-break: break-word; }
+  .mm-msg.ok { color: #15803d; } .mm-msg.err { color: #dc2626; } .mm-msg.info { color: var(--muted); }
+  .mm-actions { display: flex; gap: 8px; margin-top: 12px; }
+  .mm-btn { padding: 9px 15px; border-radius: var(--r-sm); font-size: 13px; font-weight: 600; border: 1px solid var(--line-hi); cursor: pointer; transition: filter .15s, color .15s, border-color .15s; }
+  .mm-btn.primary { color: #06263b; background: linear-gradient(180deg, rgba(122,212,246,.92), rgba(69,182,230,.92)); border-color: transparent; }
+  .mm-btn.primary:hover:not(:disabled) { filter: brightness(1.05); }
+  .mm-btn.ghost { color: var(--muted); background: #fff; }
+  .mm-btn.ghost:hover:not(:disabled) { color: var(--accent-deep); border-color: var(--cyan); }
+  .mm-btn.reset { margin-left: auto; }
+  .mm-btn:disabled { opacity: .55; cursor: default; }
+  .mm-hint { font-size: 11.5px; color: var(--faint); line-height: 1.65; margin-top: 12px; }
+  .mm-hint code { background: #f3f6fb; border: 1px solid var(--line); border-radius: 4px; padding: 0 4px; font-size: .92em; }
+
   /* responsive */
   @media (max-width: 860px) {
     main { grid-template-columns: 1fr; height: auto; min-height: calc(100vh - 64px); }
@@ -329,7 +364,10 @@
       <div class="title">Niuma Science</div>
     </div>
   </div>
-  <div class="status"><span class="dot"></span>在线</div>
+  <div class="hright">
+    <button id="modelBtn" class="hbtn" type="button" title="模型设置（切换后台大模型）"></button>
+    <div class="status"><span class="dot"></span>在线</div>
+  </div>
 </header>
 <main>
   <div id="sessbar">
@@ -374,6 +412,37 @@
   </div>
   <div class="pv-body" id="pvBody"></div>
 </div>
+<div id="modelModal" class="modal">
+  <div class="modal-card">
+    <div class="modal-head">
+      <span class="modal-title" id="mmTitle">模型设置</span>
+      <button class="modal-x" id="mmClose" type="button" title="关闭"></button>
+    </div>
+    <div class="modal-body">
+      <div class="mm-cur" id="mmCur">读取当前模型…</div>
+      <label class="mm-field"><span>常用预设（选后自动填 URL 与模型，Key 仍需自填）</span>
+        <select id="mmPreset" class="mm-input mm-select">
+          <option value="">— 选择预设 —</option>
+          <option value="deepseek">DeepSeek（api.deepseek.com）</option>
+          <option value="siliconflow">硅基流动（api.siliconflow.cn/v1）</option>
+          <option value="openai">OpenAI（api.openai.com/v1）</option>
+        </select></label>
+      <label class="mm-field"><span>API URL（OpenAI 兼容接口地址）</span>
+        <input id="mmUrl" class="mm-input" placeholder="https://api.openai.com/v1" autocomplete="off" spellcheck="false" /></label>
+      <label class="mm-field"><span>API Key</span>
+        <input id="mmKey" class="mm-input" type="password" placeholder="sk-..." autocomplete="off" spellcheck="false" /></label>
+      <label class="mm-field"><span>模型 ID</span>
+        <input id="mmModel" class="mm-input" placeholder="gpt-4o-mini" autocomplete="off" spellcheck="false" /></label>
+      <div class="mm-msg info" id="mmMsg"></div>
+      <div class="mm-actions">
+        <button id="mmTest" class="mm-btn ghost" type="button">测试可用性</button>
+        <button id="mmSave" class="mm-btn primary" type="button">保存并切换</button>
+        <button id="mmReset" class="mm-btn ghost reset" type="button">恢复默认</button>
+      </div>
+      <div class="mm-hint">仅支持 <b>OpenAI 格式</b>（<code>POST /chat/completions</code>）。API URL 填到 <code>/v1</code> 级别，例如 DeepSeek <code>https://api.deepseek.com</code>、硅基流动 <code>https://api.siliconflow.cn/v1</code>。<br>切换会重启后台 opencode（约数秒），进行中的对话会中断。</div>
+    </div>
+  </div>
+</div>
 <script>
 const log = document.getElementById("log")
 const f = document.getElementById("f")
@@ -404,7 +473,8 @@ const ICONS = {
   edit: '<path d="M12 20h8"/><path d="M15.5 4.5a2.1 2.1 0 0 1 3 3L8 18l-4 1 1-4Z"/>',
   send: '<path d="M22 2 11 13"/><path d="M22 2 15 22l-4-9-9-4Z"/>',
   chevronL: '<path d="m15 18-6-6 6-6"/>',
-  trash: '<path d="M4 7h16"/><path d="M9 7V5a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/><path d="M6 7l1 12a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-12"/>'
+  trash: '<path d="M4 7h16"/><path d="M9 7V5a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/><path d="M6 7l1 12a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-12"/>',
+  cog: '<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1Z"/>'
 }
 function ic(name, cls) { return '<svg class="ic' + (cls ? " " + cls : "") + '" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">' + (ICONS[name] || "") + "</svg>" }
 const setIc = (id, name) => { const el = document.getElementById(id); if (el) el.innerHTML = ic(name) }
@@ -412,6 +482,79 @@ setIc("icUp", "upload"); setIc("icOut", "box"); setIc("dzIc", "upload")
 document.getElementById("refreshSess").innerHTML = ic("refresh")
 sendBtn.innerHTML = ic("send") + "发送"
 stopBtn.innerHTML = ic("stop") + "终止"
+
+// ---- 模型设置：切换后台 opencode 的大模型（自定义 OpenAI 兼容 API）----
+document.getElementById("modelBtn").innerHTML = ic("cog")
+document.getElementById("mmTitle").innerHTML = ic("cog") + "模型设置（OpenAI 兼容）"
+document.getElementById("mmClose").innerHTML = ic("x")
+const modelModal = document.getElementById("modelModal")
+const mmUrl = document.getElementById("mmUrl"), mmKey = document.getElementById("mmKey"), mmModel = document.getElementById("mmModel")
+const mmMsg = document.getElementById("mmMsg"), mmCur = document.getElementById("mmCur")
+const mmTest = document.getElementById("mmTest"), mmSave = document.getElementById("mmSave"), mmReset = document.getElementById("mmReset")
+const mmPreset = document.getElementById("mmPreset")
+const MM_PRESETS = {
+  deepseek: { name: "DeepSeek", baseURL: "https://api.deepseek.com", modelID: "deepseek-v4-flash" },
+  siliconflow: { name: "硅基流动", baseURL: "https://api.siliconflow.cn/v1", modelID: "deepseek-ai/DeepSeek-V3" },
+  openai: { name: "OpenAI", baseURL: "https://api.openai.com/v1", modelID: "gpt-4o-mini" },
+}
+mmPreset.addEventListener("change", () => {
+  const p = MM_PRESETS[mmPreset.value]; if (!p) return
+  mmUrl.value = p.baseURL; mmModel.value = p.modelID
+  mmSetMsg("info", "已填入 " + p.name + " 的地址与模型，填好 API Key 后点「测试可用性」。"); mmKey.focus()
+})
+const mmSetMsg = (cls, txt) => { mmMsg.className = "mm-msg " + cls; mmMsg.textContent = txt }
+const mmBusy = (b) => { mmTest.disabled = b; mmSave.disabled = b; mmReset.disabled = b }
+const mmPayload = () => ({ baseURL: mmUrl.value.trim(), apiKey: mmKey.value.trim(), modelID: mmModel.value.trim() })
+const mmValid = (p) => { if (!p.baseURL || !p.apiKey || !p.modelID) { mmSetMsg("err", "请填写 API URL、API Key、模型 ID"); return false } return true }
+async function mmJSON(url, opts) {   // 稳妥解析：接口缺失时后端回纯文本 404，别当 JSON 解析
+  const r = await fetch(url, opts)
+  const t = await r.text()
+  try { return JSON.parse(t) }
+  catch { throw new Error(r.status === 404 ? "后端缺少该接口，请重启 server.mjs 让新版生效" : ("HTTP " + r.status + "：" + t.slice(0, 80))) }
+}
+async function mmLoad() {
+  try {
+    const d = await mmJSON("api/model")
+    mmCur.innerHTML = "当前模型：<b>" + d.providerID + "/" + d.modelID + "</b>" + (d.isCustom ? "（自定义）" : "（默认）")
+      + (d.managed ? "" : "<br><span style='color:var(--rose)'>注意：本网关未托管 opencode，切换后可能需手动重启 opencode 才生效。</span>")
+    if (d.isCustom) { if (d.baseURL) mmUrl.value = d.baseURL; mmModel.value = d.modelID }
+  } catch { mmCur.textContent = "无法读取当前模型" }
+}
+function openModel() { modelModal.classList.add("on"); mmSetMsg("info", ""); mmLoad() }
+function closeModel() { modelModal.classList.remove("on") }
+document.getElementById("modelBtn").addEventListener("click", openModel)
+document.getElementById("mmClose").addEventListener("click", closeModel)
+modelModal.addEventListener("click", (e) => { if (e.target === modelModal) closeModel() })
+document.addEventListener("keydown", (e) => { if (e.key === "Escape" && modelModal.classList.contains("on")) closeModel() })
+mmTest.addEventListener("click", async () => {
+  const p = mmPayload(); if (!mmValid(p)) return
+  mmBusy(true); mmSetMsg("info", "测试中…（最多等 20 秒）")
+  try {
+    const d = await mmJSON("api/model/test", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(p) })
+    if (d.ok) mmSetMsg("ok", "✓ 可用（" + d.ms + "ms" + (d.reply ? "，返回：“" + d.reply + "”" : "") + "）")
+    else mmSetMsg("err", "✗ 不可用：" + (d.err || ("HTTP " + d.status)))
+  } catch (e) { mmSetMsg("err", "✗ 请求失败：" + e) }
+  finally { mmBusy(false) }
+})
+mmSave.addEventListener("click", async () => {
+  const p = mmPayload(); if (!mmValid(p)) return
+  mmBusy(true); mmSetMsg("info", "保存并重启后台 opencode 中，请稍候…")
+  try {
+    const d = await mmJSON("api/model", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(p) })
+    if (d.ok) { mmSetMsg("ok", "✓ 已切换到 " + d.providerID + "/" + d.modelID + (d.restarted ? "（opencode 已重启）" : "（未托管 opencode，如未生效请手动重启）")); mmLoad() }
+    else mmSetMsg("err", "✗ 切换失败：" + (d.err || "未知错误"))
+  } catch (e) { mmSetMsg("err", "✗ 请求失败：" + e) }
+  finally { mmBusy(false) }
+})
+mmReset.addEventListener("click", async () => {
+  mmBusy(true); mmSetMsg("info", "恢复默认并重启中…")
+  try {
+    const d = await mmJSON("api/model/reset", { method: "POST" })
+    if (d.ok) { mmSetMsg("ok", "✓ 已恢复默认 " + d.providerID + "/" + d.modelID); mmUrl.value = ""; mmKey.value = ""; mmModel.value = ""; mmLoad() }
+    else mmSetMsg("err", "✗ 失败")
+  } catch (e) { mmSetMsg("err", "✗ 请求失败：" + e) }
+  finally { mmBusy(false) }
+})
 
 // ---- 轻量 Markdown 渲染（自包含、无外部依赖；先 HTML 转义再解析，链接白名单，防 XSS）----
 function mdEscape(s) { return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;") }
