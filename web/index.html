@@ -16,6 +16,7 @@
     --shadow-sm: 0 2px 8px rgba(30,50,90,.06);
   }
   * { box-sizing: border-box; }
+  [hidden] { display: none !important; }   /* 别让 #send/#stop 等元素自己的 display 规则盖过 hidden 属性 */
   html, body { height: 100%; }
   body {
     margin: 0; color: var(--text);
@@ -111,7 +112,7 @@
   .user.editing { max-width: min(94%, 720px); background: #eef3fb; border: 1px solid var(--line-hi); box-shadow: none; }
   .user.editing .utext, .user.editing .editbtn { display: none; }
   .editbox { display: flex; flex-direction: column; gap: 9px; }
-  .editta { width: 100%; box-sizing: border-box; background: #ffffff; color: #eef4ff; border: 1px solid var(--line-hi); border-radius: var(--r-sm); padding: 10px 12px; font: inherit; font-size: 14px; line-height: 1.6; resize: vertical; min-height: 62px; outline: none; }
+  .editta { width: 100%; box-sizing: border-box; background: #ffffff; color: var(--text); border: 1px solid var(--line-hi); border-radius: var(--r-sm); padding: 10px 12px; font: inherit; font-size: 14px; line-height: 1.6; resize: vertical; min-height: 62px; outline: none; }
   .editta:focus { border-color: var(--cyan); }
   .editbar { display: flex; gap: 8px; justify-content: flex-end; align-items: center; }
   .editbar .ehint { margin-right: auto; font-size: 11px; color: var(--faint); }
@@ -189,6 +190,7 @@
   #sessions .sess.active::before { content: ""; position: absolute; left: 0; top: 8px; bottom: 8px; width: 3px; border-radius: 3px; background: var(--cyan); }
   #sessions .sess .t { display: block; color: var(--text); font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   #sessions .sess .d { color: var(--faint); font-size: 12px; margin-top: 2px; font-variant-numeric: tabular-nums; }
+  #sessions .sess .run { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--green); margin-right: 6px; vertical-align: 1px; animation: pulse 2.4s infinite; }
 
   /* upload dropzone */
   #up { display: none; }
@@ -238,10 +240,14 @@
   .pbtn:hover { border-color: var(--cyan); background: rgba(56,189,248,.08); }
   .pbtn .ic { width: 13px; height: 13px; }
   /* downloads list (aside) */
-  #files a { display: flex; align-items: center; gap: 8px; padding: 7px 9px; margin: 4px 0; border-radius: var(--r-sm); background: var(--card); border: 1px solid var(--line); color: #334153; font-size: 12px; text-decoration: none; word-break: break-all; transition: border-color .15s, color .15s; }
-  #files a:hover { border-color: var(--cyan); color: var(--cyan); }
-  #files a .ic { width: 15px; height: 15px; flex: none; color: var(--muted); }
-  #files a:hover .ic { color: var(--cyan); }
+  #files .frow { display: flex; align-items: center; gap: 6px; padding: 7px 9px; margin: 4px 0; border-radius: var(--r-sm); background: var(--card); border: 1px solid var(--line); color: #334153; font-size: 12px; transition: border-color .15s; }
+  #files .frow:hover { border-color: var(--cyan); }
+  #files .frow .fname { flex: 1; word-break: break-all; }
+  #files .frow .fname.pv { cursor: pointer; }
+  #files .frow .fname.pv:hover { color: var(--cyan); }
+  #files .frow .fbtn { flex: none; display: flex; align-items: center; padding: 2px; border: 0; background: none; cursor: pointer; color: var(--muted); transition: color .15s; }
+  #files .frow .fbtn:hover { color: var(--cyan); }
+  #files .frow .fbtn .ic { width: 15px; height: 15px; }
 
   /* skill badges + tool/think panels */
   .turn .skills { display: flex; flex-wrap: wrap; gap: 6px; margin: 0 0 8px; }
@@ -309,6 +315,9 @@
   .pv-close:hover { color: var(--rose); border-color: var(--rose); }
   .pv-close .ic { width: 13px; height: 13px; }
   .pv-body { flex: 1; overflow-y: auto; padding: 22px 26px; font-size: 14.5px; line-height: 1.8; color: var(--text); }
+  .pv-body.frame { padding: 0; overflow: hidden; }                          /* pdf/pptx 内嵌 iframe 时铺满、不留白 */
+  .pv-body.frame iframe { width: 100%; height: 100%; border: 0; display: block; }
+  .pv-body img { max-width: 100%; height: auto; }                            /* docx 里的内联图片自适应 */
 
   /* header actions + model settings modal */
   .hright { display: flex; align-items: center; gap: 14px; }
@@ -450,8 +459,20 @@ const q = document.getElementById("q")
 const sendBtn = document.getElementById("send")
 const stopBtn = document.getElementById("stop")
 const filesEl = document.getElementById("files")
-let activeStop = null   // 当前进行中流的终止函数（无则 null）
-stopBtn.addEventListener("click", () => { if (activeStop) activeStop() })
+let activeES = null   // 当前订阅中的 SSE 连接——只是"订阅"，断开/切走都不会打断后台生成
+function setStreamingUI(on) {
+  sendBtn.disabled = on; sendBtn.hidden = on; stopBtn.hidden = !on
+  document.body.classList.toggle("streaming", on)
+}
+function detachStream() {   // 退订当前流但不终止生成（切会话/新对话时用）
+  if (activeES) { activeES.close(); activeES = null }
+  setStreamingUI(false)
+}
+// "终止"按钮：显式让后端 abort（断开连接已不再意味着终止）
+stopBtn.addEventListener("click", () => {
+  if (!sessionId) return detachStream()
+  fetch("api/chat/abort?sid=" + encodeURIComponent(sessionId), { method: "POST" }).catch(() => detachStream())
+})
 
 // ---- 内联单色描边图标（自包含，无外部依赖）----
 const ICONS = {
@@ -628,7 +649,7 @@ function add(cls, text) {
 }
 // 编辑历史消息：改文本 → 从这条起清空后续对话记录（文件不动）→ 以编辑后的内容重新生成
 function startEdit(userDiv) {
-  if (activeStop) return                   // 有流进行中，先不允许编辑
+  if (activeES) return                     // 有流进行中，先不允许编辑
   if (userDiv.querySelector(".editbox")) return
   const cur = userDiv.dataset.text || ""
   userDiv.classList.add("editing")
@@ -665,14 +686,28 @@ function renderFiles(list) {
   if (!list || !list.length) { filesEl.innerHTML = '<span class="hint">对话生成的文件会显示在这里</span>'; return }
   filesEl.innerHTML = ""
   for (const name of list) {
-    const a = document.createElement("a"); a.href = "api/download?name=" + encodeURIComponent(name) + sidQ(); a.download = name
-    a.innerHTML = ic("download"); const s = document.createElement("span"); s.textContent = name; a.appendChild(s)
-    filesEl.appendChild(a)
+    const row = document.createElement("div"); row.className = "frow"
+    const s = document.createElement("span"); s.className = "fname"; s.textContent = name   // 文件名在左、撑满宽度
+    const raw = "api/raw?name=" + encodeURIComponent(name) + sidQ()
+    const doPv = IMG.test(name) ? () => openLightbox(raw) : CANPV(name) ? () => openPreview(name) : null   // 图片开灯箱，其余走半屏预览
+    if (doPv) { s.classList.add("pv"); s.title = "点击预览"; s.addEventListener("click", doPv) }
+    row.appendChild(s)
+    if (doPv) { const pv = document.createElement("button"); pv.type = "button"; pv.className = "fbtn"; pv.title = "预览"; pv.innerHTML = ic("eye"); pv.addEventListener("click", doPv); row.appendChild(pv) }
+    const a = document.createElement("a"); a.href = "api/download?name=" + encodeURIComponent(name) + sidQ(); a.download = name; a.title = "下载 " + name; a.className = "fbtn"; a.innerHTML = ic("download")
+    row.appendChild(a)
+    filesEl.appendChild(row)
   }
 }
 const IMG = /\.(png|jpe?g|gif|webp|svg|bmp)$/i
 const MDX = /\.(md|markdown)$/i
-// 把本轮产物以卡片形式插进聊天流：图片给缩略图（点击放大），markdown 给预览，其它给下载
+const PDFX = /\.pdf$/i
+const DOCX = /\.docx?$/i            // doc / docx
+const PPTX = /\.(pptx?|odp|odt)$/i  // ppt / pptx / odp / odt（经 LibreOffice 转 PDF）
+const HTMX = /\.html?$/i            // html：沙箱 iframe 内嵌
+const CSVX = /\.[ct]sv$/i           // csv / tsv：前端解析成表格
+const TXTX = /\.(txt|log)$/i
+const CANPV = (n) => MDX.test(n) || PDFX.test(n) || DOCX.test(n) || PPTX.test(n) || HTMX.test(n) || CSVX.test(n) || TXTX.test(n)
+// 把本轮产物以卡片形式插进聊天流：图片给缩略图（点击放大），md/pdf/office/html/csv/txt 给预览，其余给下载
 function addProducts(list) {
   const wrap = document.createElement("div"); wrap.className = "products"
   for (const name of list) {
@@ -692,7 +727,7 @@ function addProducts(list) {
       const badge = document.createElement("span"); badge.className = "fbadge"; badge.textContent = (name.split(".").pop() || "").slice(0, 4); icon.appendChild(badge)
       const nm = document.createElement("span"); nm.className = "pname"; nm.textContent = name
       const acts = document.createElement("div"); acts.className = "pacts"
-      if (MDX.test(name)) { const pv = document.createElement("button"); pv.type = "button"; pv.className = "pbtn"; pv.innerHTML = ic("eye") + "预览"; pv.addEventListener("click", () => openPreview(name)); acts.appendChild(pv) }
+      if (CANPV(name)) { const pv = document.createElement("button"); pv.type = "button"; pv.className = "pbtn"; pv.innerHTML = ic("eye") + "预览"; pv.addEventListener("click", () => openPreview(name)); acts.appendChild(pv) }
       acts.appendChild(dlBtn())
       card.appendChild(icon); card.appendChild(nm); card.appendChild(acts)
     }
@@ -700,26 +735,74 @@ function addProducts(list) {
   }
   log.appendChild(wrap); log.scrollTop = log.scrollHeight
 }
-fetch("api/files").then(r => r.json()).then(renderFiles).catch(() => {})
-
 // ---- 图片灯箱 ----
 const lb = document.createElement("div"); lb.className = "lightbox"; lb.innerHTML = '<img alt="">'; document.body.appendChild(lb)
 lb.addEventListener("click", () => lb.classList.remove("on"))
 function openLightbox(src) { lb.querySelector("img").src = src; lb.classList.add("on") }
 
+// ---- CSV/TSV 解析渲染（带引号转义处理；预览截断到 300 行）----
+function parseCsv(text, delim) {
+  const rows = []; let row = [], cell = "", inQ = false
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i]
+    if (inQ) { if (ch === '"') { if (text[i + 1] === '"') { cell += '"'; i++ } else inQ = false } else cell += ch }
+    else if (ch === '"') inQ = true
+    else if (ch === delim) { row.push(cell); cell = "" }
+    else if (ch === "\n") { row.push(cell); rows.push(row); row = []; cell = "" }
+    else if (ch !== "\r") cell += ch
+  }
+  if (cell !== "" || row.length) { row.push(cell); rows.push(row) }
+  return rows
+}
+function csvTable(text, delim) {
+  const all = parseCsv(text, delim).filter((r) => r.length > 1 || (r[0] || "").trim() !== "")   // 丢掉纯空行
+  if (!all.length) return '<div class="hint">（空表）</div>'
+  const MAX = 300
+  const [head, ...body] = all.slice(0, MAX + 1)
+  const tr = (cells, tag) => "<tr>" + cells.map((c) => "<" + tag + ">" + mdEscape(c) + "</" + tag + ">").join("") + "</tr>"
+  return "<table><thead>" + tr(head, "th") + "</thead><tbody>" + body.map((r) => tr(r, "td")).join("") + "</tbody></table>"
+    + (all.length > MAX + 1 ? '<div class="hint">共 ' + all.length + ' 行，仅预览前 ' + MAX + ' 行，完整内容请下载</div>' : "")
+}
+
 // ---- Markdown 半屏预览 ----
 const preview = document.getElementById("preview")
 const pvBody = document.getElementById("pvBody")
 const pvTitle = document.getElementById("pvTitle")
-function closePreview() { preview.classList.remove("on"); document.body.classList.remove("preview-open") }
+function closePreview() { preview.classList.remove("on"); document.body.classList.remove("preview-open"); if (pvObjUrl) { URL.revokeObjectURL(pvObjUrl); pvObjUrl = null } }
+let pvObjUrl = null   // 上一次 pptx/docx 预览的 blob URL，切换/关闭时回收
 async function openPreview(name) {
   pvTitle.innerHTML = ic("file"); const s = document.createElement("span"); s.textContent = name; pvTitle.appendChild(s)
-  pvBody.innerHTML = '<div class="hint">加载中…</div>'
+  pvBody.classList.remove("frame"); pvBody.innerHTML = '<div class="hint">加载中…</div>'
   preview.classList.add("on"); document.body.classList.add("preview-open")
+  if (pvObjUrl) { URL.revokeObjectURL(pvObjUrl); pvObjUrl = null }
+  const ext = (name.split(".").pop() || "").toLowerCase()
+  const raw = "api/raw?name=" + encodeURIComponent(name) + sidQ()
+  const prev = "api/preview?name=" + encodeURIComponent(name) + sidQ()
   try {
-    const txt = await fetch("api/raw?name=" + encodeURIComponent(name) + sidQ()).then(r => r.text())
-    pvBody.innerHTML = renderMarkdown(txt); enhanceCode(pvBody)
-  } catch { pvBody.innerHTML = '<div class="hint">加载失败</div>' }
+    if (ext === "md" || ext === "markdown") {                 // markdown：前端渲染
+      const txt = await fetch(raw).then(r => r.text())
+      pvBody.innerHTML = renderMarkdown(txt); enhanceCode(pvBody)
+    } else if (ext === "docx") {                              // docx：服务端 mammoth 转 HTML 后注入
+      const r = await fetch(prev); if (!r.ok) throw new Error(await r.text())
+      pvBody.innerHTML = await r.text()
+    } else if (ext === "pdf") {                               // pdf：浏览器原生内嵌
+      pvBody.classList.add("frame"); pvBody.innerHTML = '<iframe title="预览" src="' + raw + '"></iframe>'
+    } else if (ext === "html" || ext === "htm") {             // html：沙箱 iframe（脚本可跑，隔离站点源）
+      pvBody.classList.add("frame"); pvBody.innerHTML = '<iframe title="预览" sandbox="allow-scripts" src="' + raw + '"></iframe>'
+    } else if (ext === "csv" || ext === "tsv") {              // csv/tsv：前端解析成表格
+      const txt = await fetch(raw).then(r => r.text())
+      pvBody.innerHTML = csvTable(txt, ext === "tsv" ? "\t" : ",")
+    } else if (ext === "txt" || ext === "log") {              // txt/log：纯文本
+      let txt = await fetch(raw).then(r => r.text())
+      const cut = txt.length > 200_000; if (cut) txt = txt.slice(0, 200_000)
+      pvBody.innerHTML = "<pre>" + mdEscape(txt) + "</pre>" + (cut ? '<div class="hint">内容过长，仅显示前 200KB，完整内容请下载</div>' : "")
+    } else {                                                  // ppt/pptx/odp/odt：服务端 LibreOffice 转 PDF 再内嵌
+      pvBody.innerHTML = '<div class="hint">转换中，请稍候…（首次较慢）</div>'
+      const r = await fetch(prev); if (!r.ok) throw new Error(await r.text())
+      pvObjUrl = URL.createObjectURL(await r.blob())
+      pvBody.classList.add("frame"); pvBody.innerHTML = '<iframe title="预览" src="' + pvObjUrl + '"></iframe>'
+    }
+  } catch (e) { pvBody.classList.remove("frame"); pvBody.innerHTML = '<div class="hint">预览失败：' + String(e.message || e).slice(0, 160) + '</div>' }
 }
 document.getElementById("pvClose").addEventListener("click", closePreview)
 document.addEventListener("keydown", (e) => { if (e.key === "Escape") { if (lb.classList.contains("on")) lb.classList.remove("on"); else if (preview.classList.contains("on")) closePreview() } })
@@ -732,7 +815,7 @@ function renderSessions(list) {
   sessionsEl.innerHTML = ""
   for (const s of list) {
     const b = document.createElement("button"); b.className = "sess" + (s.id === sessionId ? " active" : ""); b.type = "button"
-    b.innerHTML = '<span class="t"></span><span class="d">' + fmtTime(s.updated) + '</span>'
+    b.innerHTML = '<span class="t"></span><span class="d">' + (s.running ? '<span class="run" title="正在生成"></span>' : "") + fmtTime(s.updated) + '</span>'
     b.querySelector(".t").textContent = s.title
     b.addEventListener("click", () => resumeSession(s.id))
     const del = document.createElement("span"); del.className = "sess-del"; del.title = "删除会话"; del.innerHTML = ic("trash")
@@ -742,20 +825,28 @@ function renderSessions(list) {
   }
 }
 const loadSessions = () => fetch("api/sessions").then(r => r.json()).then(renderSessions).catch(() => {})
-async function resumeSession(id) {                 // 断点续问：载入历史 → 设为当前会话 → 接着问
-  if (activeStop) activeStop()
-  const hist = await fetch("api/history?id=" + encodeURIComponent(id)).then(r => r.json()).catch(() => [])
-  log.innerHTML = ""; renderFiles([])
+async function resumeSession(id) {                 // 载入历史 → 设为当前会话 →（后台还在生成则续流）
+  detachStream()                                   // 只退订原会话的流，后台生成不受影响
+  sessionId = id; localStorage.setItem("nm_sid", id)
+  const [hist, outs, job] = await Promise.all([
+    fetch("api/history?id=" + encodeURIComponent(id)).then(r => r.json()).catch(() => []),
+    fetch("api/outputs?sid=" + encodeURIComponent(id)).then(r => r.json()).catch(() => []),
+    fetch("api/job?sid=" + encodeURIComponent(id)).then(r => r.json()).catch(() => ({ running: false })),
+  ])
+  if (sessionId !== id) return                     // 等待期间用户又切走了 → 放弃本次渲染
+  log.innerHTML = ""
   for (const m of hist) add(m.role === "user" ? "user" : "bot", m.text)
-  sessionId = id
+  renderFiles((outs || []).map(o => o.name))       // 产物随会话持久回显
+  if (!hist.length && !job.running) renderWelcome()
   loadSessions()                                   // 重渲染以高亮当前会话
   loadUploads()                                    // 回显该会话已上传的文件
+  if (job.running) attachStream(id)                // 这轮还在后台生成 → 重放快照并续流
   q.focus(); log.scrollTop = log.scrollHeight
 }
-async function deleteSession(id, title) {           // 删除会话（不可撤销，先确认）
+async function deleteSession(id, title) {           // 删除会话（不可撤销，先确认；进行中的生成由后端一并终止）
   if (!confirm("删除会话「" + (title || id) + "」？此操作不可撤销。")) return
   await fetch("api/session/delete?id=" + encodeURIComponent(id), { method: "POST" }).catch(() => {})
-  if (id === sessionId) { sessionId = null; log.innerHTML = ""; renderFiles([]); renderUploads([]); renderWelcome() }   // 删的是当前会话 → 回到空态
+  if (id === sessionId) { detachStream(); sessionId = null; localStorage.removeItem("nm_sid"); log.innerHTML = ""; renderFiles([]); renderUploads([]); renderWelcome() }   // 删的是当前会话 → 回到空态
   loadSessions()
 }
 // 左侧会话栏折叠/展开（默认折叠）
@@ -779,13 +870,12 @@ function renderWelcome() {
   CHIPS.forEach((c) => { const b = document.createElement("button"); b.type = "button"; b.className = "chip"; b.textContent = c; b.addEventListener("click", () => sendMessage(c)); chips.appendChild(b) })
   w.appendChild(chips); log.appendChild(w)
 }
-renderWelcome()
 
 let sessionId = null   // reused across messages so the agent keeps context
 function sidQ() { return sessionId ? "&sid=" + encodeURIComponent(sessionId) : "" }   // 上传/下载/预览都带上会话 id，隔离各会话目录
 document.getElementById("new").addEventListener("click", () => {
-  if (activeStop) activeStop()   // 有进行中的流先终止
-  sessionId = null; log.innerHTML = ""; renderFiles([]); loadUploads(); loadSessions(); renderWelcome(); q.focus()
+  detachStream()   // 只退订不终止：原会话若在生成会继续跑，从左侧列表随时切回来看
+  sessionId = null; localStorage.removeItem("nm_sid"); log.innerHTML = ""; renderFiles([]); loadUploads(); loadSessions(); renderWelcome(); q.focus()
 })
 
 // 约定式选项卡：助手文本里若含 ```ask {json}``` 块，渲染成可点选表单，提交后拼成文本回发
@@ -835,9 +925,16 @@ function renderAsk(answerEl, turnEl) {
 const STI = { pending: "○", running: "○", completed: "✓", error: "✕" }
 function sendMessage(text) {
   if (!text) return
+  if (activeES) return   // 当前视图已有进行中的流（按钮本就禁用，双保险）
   const w = log.querySelector(".welcome"); if (w) w.remove()
-  sendBtn.disabled = true; document.body.classList.add("streaming")
   add("user", text)
+  openStream("api/chat?q=" + encodeURIComponent(text) + (sessionId ? "&sid=" + encodeURIComponent(sessionId) : ""))
+}
+function attachStream(sid) { openStream("api/chat/attach?sid=" + encodeURIComponent(sid)) }   // 续流：先重放快照再直播
+
+// 打开一条 SSE 流并渲染成一个助手回合。流只是"订阅"：断开不打断后台生成，断线后自动用 attach 续流
+function openStream(url) {
+  setStreamingUI(true)
 
   // 本轮助手块：技能徽章(常显) + 工具(默认折叠) + 思考(默认折叠) + 回答
   const turn = document.createElement("div"); turn.className = "msg bot turn"
@@ -856,9 +953,8 @@ function sendMessage(text) {
   const atBottom = () => log.scrollHeight - log.scrollTop - log.clientHeight < 60
   const follow = () => { if (atBottom()) log.scrollTop = log.scrollHeight }
 
-  const url = "api/chat?q=" + encodeURIComponent(text) + (sessionId ? "&sid=" + encodeURIComponent(sessionId) : "")
   const es = new EventSource(url)
-  stopBtn.hidden = false; sendBtn.hidden = true   // 进行中：显示“终止”、藏起“发送”
+  activeES = es
   let finished = false, painted = false, gotText = false
   const paintAnswer = () => {                     // 先在原始文本上抠掉 ask 块，再把剩余文本渲染成 markdown
     renderAsk(answer, turn)
@@ -867,15 +963,14 @@ function sendMessage(text) {
   }
   const finalize = (note) => {                    // 收尾：关流、复原按钮、清 live 态；note 作为附注追加
     if (finished) return; finished = true
-    es.close(); sendBtn.disabled = false; sendBtn.hidden = false; stopBtn.hidden = true; activeStop = null; document.body.classList.remove("streaming")
+    es.close(); if (activeES === es) { activeES = null; setStreamingUI(false) }
     if (!thinkD.hidden) thinkD.querySelector(".rlbl").textContent = "思考过程"   // 收尾去掉“思考中…”的 live 态，peek 保留最后思考
     toolRows.forEach(r => r.classList.remove("live"))
     if (note) { if (!gotText && !painted) answer.textContent = ""; const n = document.createElement("div"); n.className = "note"; n.textContent = note; answer.appendChild(n) }
     else if (!gotText) answer.textContent = "(无文本输出)"
     loadSessions()   // 刷新会话列表（新会话入列 / 更新时间与高亮）
   }
-  activeStop = () => finalize("⏹ 已终止")          // 关掉 ES → 服务器检测到断开 → abort opencode（真正掐断，不白烧 token）
-  es.addEventListener("session", (ev) => { sessionId = JSON.parse(ev.data).id; loadUploads() })
+  es.addEventListener("session", (ev) => { sessionId = JSON.parse(ev.data).id; localStorage.setItem("nm_sid", sessionId); loadUploads() })
 
   es.addEventListener("tool", (ev) => {
     const d = JSON.parse(ev.data)
@@ -908,7 +1003,22 @@ function sendMessage(text) {
   es.addEventListener("files", (ev) => { const list = JSON.parse(ev.data); if (list.length) { renderFiles(list); addProducts(list) } })   // 本轮没产物就保留上一轮，不清空
   es.addEventListener("done", () => { paintAnswer(); finalize() })
   es.addEventListener("failed", (ev) => { let m = "本轮出错"; try { m = JSON.parse(ev.data).message } catch {} finalize("⚠ " + m) })   // 服务端出错：如实提示，不丢会话
-  es.onerror = () => finalize(finished ? null : "(连接中断)")
+  es.addEventListener("aborted", () => finalize("⏹ 已终止"))   // 后端确认已终止（本页或别的页点了"终止"）
+  es.addEventListener("notice", (ev) => { try { const n = document.createElement("div"); n.className = "note"; n.textContent = "⚠ " + JSON.parse(ev.data).message; answer.appendChild(n) } catch {} })
+  es.addEventListener("idle", () => {   // attach 时后台已无进行中的一轮 → 改走历史回显（把刚完成的最终答案也带出来）
+    finished = true; es.close(); if (activeES === es) { activeES = null; setStreamingUI(false) }
+    turn.remove()
+    if (sessionId) resumeSession(sessionId)
+  })
+  es.onerror = () => {   // 连接断开（网络抖动/网关重启）：后台生成还在跑，稍后重放快照续流
+    if (finished) return
+    if (!sessionId) return finalize("(连接中断)")   // 还没拿到会话 id，无从续流
+    finished = true
+    es.close(); if (activeES === es) activeES = null
+    const sid = sessionId
+    turn.remove()   // 丢弃本回合 DOM，续流会重放快照完整重建
+    setTimeout(() => { if (sid === sessionId && !activeES) attachStream(sid) }, 2500)
+  }
 }
 f.addEventListener("submit", (e) => { e.preventDefault(); const t = q.value.trim(); q.value = ""; sendMessage(t) })
 
@@ -963,7 +1073,7 @@ async function uploadFiles(files) {
     try {
       const r = await fetch("api/upload?name=" + encodeURIComponent(file.name) + sidQ(), { method: "POST", body: file })
       const j = await r.json()
-      if (j.sid) sessionId = j.sid   // 上传先于对话时，用网关现建的会话 id，之后对话/产物都归这个会话
+      if (j.sid) { sessionId = j.sid; localStorage.setItem("nm_sid", j.sid) }   // 上传先于对话时，用网关现建的会话 id，之后对话/产物都归这个会话
       done++
     } catch { failed++ }
   }
@@ -975,6 +1085,11 @@ document.getElementById("up").addEventListener("change", (e) => { uploadFiles(e.
 ;["dragover", "dragenter"].forEach((ev) => dz.addEventListener(ev, (e) => { e.preventDefault(); dz.classList.add("drag") }))
 ;["dragleave", "drop"].forEach((ev) => dz.addEventListener(ev, (e) => { e.preventDefault(); dz.classList.remove("drag") }))
 dz.addEventListener("drop", (e) => uploadFiles(e.dataTransfer.files))
+
+// ---- 启动恢复：记住上次会话，重开页面自动回显历史与产物；后台若还在生成则续流 ----
+const savedSid = localStorage.getItem("nm_sid")
+if (savedSid) resumeSession(savedSid)
+else renderWelcome()
 </script>
 </body>
 </html>

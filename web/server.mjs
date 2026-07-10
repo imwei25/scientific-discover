@@ -4,7 +4,8 @@ import path from "node:path"
 import os from "node:os"
 import crypto from "node:crypto"
 import { fileURLToPath } from "node:url"
-import { spawn, execSync } from "node:child_process"
+import { spawn, execSync, execFile } from "node:child_process"
+import { promisify } from "node:util"
 import { setGlobalDispatcher, Agent } from "undici"
 import { createOpencodeClient } from "@opencode-ai/sdk"
 
@@ -105,6 +106,163 @@ const cookieOf = (req, key) => {
 }
 const authed = (req) => !AUTH_ENABLED || isLocal(req) || tokens.has(cookieOf(req, "lan_auth") || "")
 
+// ---- 后台生成任务：一轮生成 = 一个挂在 sid 上的 job，SSE 连接只是"订阅者" ----
+// 切会话/关页面 → 只是退订，生成继续跑；回来用 /api/chat/attach 先重放快照再续直播。
+// 真正终止走 POST /api/chat/abort（前端"终止"按钮）。job 完成即从表里删除，历史由 opencode 持久化。
+// ---- 文档预览转换：docx→HTML（.venv 的 mammoth）、pptx/ppt/odp/doc/odt→PDF（LibreOffice）----
+const PYEXE = process.platform === "win32" ? path.join(ROOT, ".venv/Scripts/python.exe") : path.join(ROOT, ".venv/bin/python")
+const MAMMOTH_PY = "import sys,mammoth\nsrc,out=sys.argv[1],sys.argv[2]\nf=open(src,'rb');h=mammoth.convert_to_html(f).value;f.close()\nopen(out,'w',encoding='utf-8').write(h)"
+let _soffice   // 惰性探测并缓存（LibreOffice 可能在网关启动后才装好）
+const soffice = () => {
+  if (_soffice !== undefined) return _soffice
+  const cands = process.env.SOFFICE ? [process.env.SOFFICE] : (process.platform === "win32"
+    ? ["C:/Program Files/LibreOffice/program/soffice.com", "C:/Program Files/LibreOffice/program/soffice.exe", "C:/Program Files (x86)/LibreOffice/program/soffice.com"]
+    : ["/usr/bin/soffice", "/usr/bin/libreoffice", "/opt/libreoffice/program/soffice"])
+  _soffice = cands.find((c) => { try { return fs.existsSync(c) } catch { return false } }) || null
+  if (!_soffice) { try { _soffice = execSync(process.platform === "win32" ? "where soffice" : "command -v soffice", { stdio: ["ignore", "pipe", "ignore"] }).toString().trim().split(/\r?\n/)[0] || null } catch { _soffice = null } }
+  return _soffice
+}
+const execFileAsync = promisify(execFile)
+const sofficeArgs = (src, outDir) => {   // 每次用独立 UserInstallation profile，避免多用户并发时 profile 锁冲突
+  const prof = "file:///" + path.join(os.tmpdir(), "lo-" + crypto.randomBytes(6).toString("hex")).replace(/\\/g, "/")
+  return ["--headless", "--norestore", "--convert-to", "pdf", "--outdir", outDir, src, "-env:UserInstallation=" + prof]
+}
+
+// 生成/复用文档预览缓存到 <dir>/.preview/；docx→HTML、pptx/ppt/odp/doc/odt→PDF。
+// 异步（不阻塞网关主线程），按源文件 mtime 缓存。命中缓存直接返回，未命中才转换。
+// 返回 { out, ctype } 供内联响应；不支持的类型返回 null；转换失败 throw 带 .code 的错误。
+// /api/preview（点开即看）与产物落地后的后台预热共用本函数，确保两边缓存路径/新鲜度判定完全一致。
+async function ensurePreviewCache(dir, name) {
+  const src = path.join(dir, name)
+  if (!fs.existsSync(src) || !fs.statSync(src).isFile()) { const e = new Error("not found"); e.code = "no-src"; throw e }
+  const ext = path.extname(name).toLowerCase()
+  const cacheDir = path.join(dir, ".preview"); fs.mkdirSync(cacheDir, { recursive: true })
+  const srcMtime = fs.statSync(src).mtimeMs
+  const fresh = (out) => fs.existsSync(out) && fs.statSync(out).mtimeMs >= srcMtime
+
+  if (ext === ".docx") {
+    const out = path.join(cacheDir, name + ".html")
+    if (!fresh(out)) {
+      try { await execFileAsync(PYEXE, ["-X", "utf8", "-c", MAMMOTH_PY, src, out], { timeout: 60_000 }) }
+      catch (err) { const e = new Error(String(err).slice(0, 200)); e.code = "docx-fail"; throw e }
+    }
+    return { out, ctype: "text/html; charset=utf-8" }
+  }
+  if ([".pptx", ".ppt", ".odp", ".doc", ".odt"].includes(ext)) {
+    const out = path.join(cacheDir, name.replace(/\.[^.]+$/, "") + ".pdf")
+    if (!fresh(out)) {
+      if (!soffice()) { const e = new Error("no LibreOffice"); e.code = "no-soffice"; throw e }
+      try { await execFileAsync(soffice(), sofficeArgs(src, cacheDir), { timeout: 90_000 }) }
+      catch (err) { const e = new Error(String(err).slice(0, 200)); e.code = "office-fail"; throw e }
+      if (!fs.existsSync(out)) { const e = new Error("no pdf produced"); e.code = "no-pdf"; throw e }
+    }
+    return { out, ctype: "application/pdf" }
+  }
+  return null   // 该类型不支持文档转换预览（md/pdf/csv/txt/html 等在前端直接渲染，不走这里）
+}
+
+// 产物落地后台预热：把本轮新产出的 office/docx 文档提前转好缓存，用户点预览即秒开。
+// 串行执行（一次只跑一个 LibreOffice），best-effort，失败静默——点开时 /api/preview 会照常再试并如实报错。
+let _warmQueue = Promise.resolve()
+function warmPreviews(dir, names) {
+  const CONV = /\.(pptx?|odp|odt|doc|docx)$/i
+  for (const name of (names || [])) {
+    if (!CONV.test(name)) continue
+    _warmQueue = _warmQueue.then(() => ensurePreviewCache(dir, path.basename(name)).catch(() => {}))
+  }
+}
+
+const jobs = new Map()   // sid -> 进行中的 job
+const titledSessions = new Set()   // 已确认过标题的会话（每会话只查/改一次），见 /api/chat 的自动补名
+// 会话标题统一取"首条提问"：上传先于对话建的会话是占位标题 "web"，收到首条消息时改名。
+// 只对占位标题改名，避免"断点续问"旧会话时把原标题冲掉。
+async function ensureSessionTitle(sid, q) {
+  if (!q || titledSessions.has(sid)) return
+  titledSessions.add(sid)   // 无论成败都只尝试一次，别每条消息都打 API
+  try {
+    const s = un(await client.session.get({ path: { id: sid } }))
+    const t = (s?.title || "").trim()
+    if (t === "" || t === "web") await client.session.update({ path: { id: sid }, body: { title: q.slice(0, 40) } })
+  } catch { /* 改名失败不影响对话 */ }
+}
+const sseWrite = (res, ev, data) => { try { res.write(`event: ${ev}\ndata: ${JSON.stringify(data)}\n\n`) } catch {} }
+function startJob(sid, sentText) {
+  const job = {
+    sid, running: true, finished: false, subs: new Set(),
+    // 增量快照：text 是累积全文、reasoning 按 id、tool 按 callID 各存最新一条，attach 时按序重放即可还原界面
+    text: "", reasoning: new Map(), tools: new Map(), skills: new Map(),
+  }
+  jobs.set(sid, job)
+  const broadcast = (ev, data) => {
+    if (ev === "text") job.text = data
+    else if (ev === "reasoning") job.reasoning.set(data.id, data)
+    else if (ev === "tool") { if (data.tool === "skill") { if (data.skill) job.skills.set(data.skill, data) } else if (data.callID) job.tools.set(data.callID, data) }
+    for (const r of job.subs) sseWrite(r, ev, data)
+  }
+  const finish = () => {
+    if (job.finished) return
+    job.finished = true; job.running = false; jobs.delete(sid)
+    for (const r of job.subs) { try { r.end() } catch {} }
+    job.subs.clear()
+  }
+  job.abort = async () => {
+    if (job.finished) return
+    job.aborting = true          // 让 prompt 的报错分支知道这是用户终止，别再广播 failed
+    broadcast("aborted", {})     // 先告知订阅者（保证前端能收到"已终止"），再实际掐断
+    try { await client.session.abort({ path: { id: sid } }) } catch {}
+    finish()
+  }
+  ;(async () => {
+    const events = await client.event.subscribe()
+    ;(async () => {
+      for await (const e of events.stream) {
+        if (job.finished) break
+        const p = e?.properties?.part; if (!p) continue
+        if (p.sessionID && p.sessionID !== sid) continue
+        if (p.type === "text" && typeof p.text === "string" && p.text !== sentText) broadcast("text", p.text)   // cumulative — browser replaces（滤掉回显的用户输入，含注入的目录前言）
+        else if (p.type === "reasoning" && typeof p.text === "string") broadcast("reasoning", { id: p.id, text: p.text })
+        else if (p.type === "tool" && p.state?.status) broadcast("tool", {
+          callID: p.callID, tool: p.tool, status: p.state.status,
+          title: p.state.title || "",
+          skill: p.tool === "skill" ? (p.state.input?.name || null) : null,   // 技能名（running/completed 才有）
+        })
+      }
+    })().catch(() => {})
+    const before = dirState(wsOut(sid))   // 记录本轮开始前本会话产物状态，用于算增量
+    let result
+    try {
+      result = un(await client.session.prompt({ path: { id: sid }, body: { model: MODEL, parts: [{ type: "text", text: sentText }] } }))
+    } catch (err) {
+      if (job.finished || job.aborting) return finish()   // 已被显式终止：prompt 的报错是 abort 的余波，不再广播
+      // 出错时【绝不】新建空会话重放消息——会丢光多轮上下文；如实报错，真失效时用户点「新对话」。
+      const msg = String(err?.message || err)
+      const gone = /not found|no such session|does not exist|404/i.test(msg)
+      broadcast("failed", { message: gone ? "该会话已失效，请点「新对话」重新开始。" : ("本轮出错：" + msg.slice(0, 200)) })
+      return finish()
+    }
+    if (job.finished || job.aborting) return finish()
+    const finalText = (result?.parts ?? []).filter(x => x.type === "text").map(x => x.text).join("\n")
+    broadcast("final", { text: finalText })
+    const changed = changedSince(wsOut(sid), before)
+    broadcast("files", changed)   // 只推本会话本轮新建/改动的产物
+    warmPreviews(wsOut(sid), changed)   // 后台把新产出的 office/docx 预转缓存，用户点预览即秒开
+    broadcast("done", {})
+    finish()
+  })().catch(() => { try { broadcast("failed", { message: "本轮出错（网关内部异常）" }) } catch {} finish() })
+  return job
+}
+// 给一个 SSE 连接订阅 job：先重放快照（技能/工具/思考/已生成文本），再接后续直播；断开只退订
+function attachJob(job, req, res) {
+  res.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-cache", Connection: "keep-alive" })
+  sseWrite(res, "session", { id: job.sid })
+  for (const d of job.skills.values()) sseWrite(res, "tool", d)
+  for (const d of job.tools.values()) sseWrite(res, "tool", d)
+  for (const d of job.reasoning.values()) sseWrite(res, "reasoning", d)
+  if (job.text) sseWrite(res, "text", job.text)
+  job.subs.add(res)
+  req.on("close", () => job.subs.delete(res))
+}
+
 const server = http.createServer(async (req, res) => {
   const u = new URL(req.url, "http://localhost")
   try {
@@ -185,7 +343,7 @@ const server = http.createServer(async (req, res) => {
         .filter((s) => !s.parentID)
         .sort((a, b) => (b.time?.updated || 0) - (a.time?.updated || 0))
         .slice(0, 10)
-        .map((s) => ({ id: s.id, title: s.title || "(未命名)", updated: s.time?.updated || 0 }))
+        .map((s) => ({ id: s.id, title: s.title || "(未命名)", updated: s.time?.updated || 0, running: !!jobs.get(s.id)?.running }))
       return send(res, 200, "application/json", JSON.stringify(list))
     }
 
@@ -202,6 +360,12 @@ const server = http.createServer(async (req, res) => {
         text = text.replace(/^【本会话专属目录[\s\S]*?】[\s\S]*?\n\n/, "")   // 剥掉注入的目录前言，只回显真正对话
         if (text) out.push({ role, text })
       }
+      // 这一轮还在生成中：末尾未完成的助手输出交给续流（/api/chat/attach）直播，从历史里剔除避免重复
+      if (jobs.get(id)?.running) {
+        let lastUser = -1
+        out.forEach((m, i) => { if (m.role === "user") lastUser = i })
+        return send(res, 200, "application/json", JSON.stringify(out.filter((m, i) => i <= lastUser || m.role === "user")))
+      }
       return send(res, 200, "application/json", JSON.stringify(out))
     }
 
@@ -209,6 +373,7 @@ const server = http.createServer(async (req, res) => {
     if (req.method === "POST" && u.pathname === "/api/session/delete") {
       const id = u.searchParams.get("id") || ""
       if (!id) return send(res, 400, "application/json", JSON.stringify({ ok: false }))
+      try { await jobs.get(id)?.abort() } catch {}   // 会话还在生成中 → 先终止再删
       try { await client.session.delete({ path: { id } }) } catch (e) { return send(res, 500, "application/json", JSON.stringify({ ok: false, err: String(e) })) }
       return send(res, 200, "application/json", JSON.stringify({ ok: true }))
     }
@@ -246,76 +411,91 @@ const server = http.createServer(async (req, res) => {
       const f = path.join(sid ? (up ? wsUp(sid) : wsOut(sid)) : (up ? UPLOADS : OUTPUTS), name)
       if (!name || !fs.existsSync(f) || !fs.statSync(f).isFile()) return send(res, 404, "text/plain", "not found")
       const MIME = { ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".gif": "image/gif",
-        ".webp": "image/webp", ".svg": "image/svg+xml", ".bmp": "image/bmp", ".pdf": "application/pdf" }
-      res.writeHead(200, { "Content-Type": MIME[path.extname(name).toLowerCase()] || "application/octet-stream" })
+        ".webp": "image/webp", ".svg": "image/svg+xml", ".bmp": "image/bmp", ".pdf": "application/pdf",
+        ".html": "text/html; charset=utf-8", ".htm": "text/html; charset=utf-8", ".md": "text/markdown; charset=utf-8",
+        ".txt": "text/plain; charset=utf-8", ".log": "text/plain; charset=utf-8",
+        ".csv": "text/csv; charset=utf-8", ".tsv": "text/tab-separated-values; charset=utf-8" }
+      const ext = path.extname(name).toLowerCase()
+      const head = { "Content-Type": MIME[ext] || "application/octet-stream" }
+      // 产物 HTML/SVG 可能含脚本：无论 iframe 内嵌还是直开新标签，都沙箱化、不接触本站源（cookie/localStorage）
+      if (ext === ".html" || ext === ".htm" || ext === ".svg") head["Content-Security-Policy"] = "sandbox allow-scripts"
+      res.writeHead(200, head)
       return fs.createReadStream(f).pipe(res)
+    }
+
+    // 文档预览转换：docx→HTML、pptx/ppt/odp/doc/odt→PDF；缓存到 <产物目录>/.preview/（与后台预热共用 ensurePreviewCache）
+    if (req.method === "GET" && u.pathname === "/api/preview") {
+      const sid = u.searchParams.get("sid") || ""
+      const name = path.basename(u.searchParams.get("name") || "")
+      const dir = sid ? wsOut(sid) : OUTPUTS
+      let r
+      try { r = await ensurePreviewCache(dir, name) }
+      catch (e) {
+        if (e.code === "no-src") return send(res, 404, "text/plain", "not found")
+        if (e.code === "docx-fail") return send(res, 500, "text/html; charset=utf-8", `<p style="color:#b91c1c">DOCX 预览转换失败：${e.message}</p>`)
+        if (e.code === "no-soffice") return send(res, 501, "text/plain", "服务器未安装 LibreOffice，无法预览此类型（装好后即可）")
+        if (e.code === "no-pdf") return send(res, 500, "text/plain", "转换未产出 PDF")
+        return send(res, 500, "text/plain", "转换失败：" + e.message)
+      }
+      if (!r) return send(res, 415, "text/plain", "该类型不支持预览")
+      res.writeHead(200, { "Content-Type": r.ctype })
+      return fs.createReadStream(r.out).pipe(res)
     }
 
     if (req.method === "GET" && u.pathname === "/api/chat") {
       const q = u.searchParams.get("q") || ""
-      res.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-cache", Connection: "keep-alive" })
-      const sse = (ev, data) => res.write(`event: ${ev}\ndata: ${JSON.stringify(data)}\n\n`)
-
       // Reuse the session the browser passes back so the conversation is multi-turn;
       // create one only on the first message (or if the old id is gone after a restart).
       let sid = u.searchParams.get("sid") || null
-      if (!sid) sid = un(await client.session.create({ body: { title: (q || "web").slice(0, 40) } })).id   // 用首条提问当标题，便于会话列表识别
+      if (!sid) { sid = un(await client.session.create({ body: { title: (q || "web").slice(0, 40) } })).id; if (q) titledSessions.add(sid) }   // 先打字建的会话：首条提问即标题
       ensureWs(sid)
-      sse("session", { id: sid })
-      // 给 agent 注入本会话专属目录，覆盖技能默认的 outputs/，实现多用户/多会话隔离
-      const preamble = `【本会话专属目录，务必遵守】\n- 用户上传的数据文件在 \`${relUp(sid)}/\`（读数据从这里找）。\n- 所有产物（图表 PNG/PDF、CSV/Excel、md/docx 文档等）一律写到 \`${relOut(sid)}/\`。\n- 连临时脚本、中间文件也一律写在 \`${relOut(sid)}/\`（需要放一起可用 \`${relOut(sid)}/.scratch/\`）。\n- **严禁在仓库根写任何文件**（.py / .csv / .png / .md 等都不行）：仓库根是所有用户共享的，同名文件会互相覆盖、把不同会话的数据串在一起。运行脚本时也把工作目录/输出指到 \`${relOut(sid)}/\`。\n- 正文里嵌入图片用 \`![图注](${relOut(sid)}/xxx.png)\` 这个路径。\n\n`
-      const sentText = preamble + q
-
-      let done = false
-      let aborted = false
-      // 浏览器关掉 EventSource（点“终止”或离开）→ 真正掐断 opencode 生成，别继续烧 token
-      req.on("close", () => {
-        if (done) return
-        aborted = true; done = true
-        client.session.abort({ path: { id: sid } }).catch(() => {})
-      })
-      const events = await client.event.subscribe()
-      ;(async () => {
-        for await (const e of events.stream) {
-          if (done) break
-          const p = e?.properties?.part; if (!p) continue
-          if (p.sessionID && p.sessionID !== sid) continue
-          if (p.type === "text" && typeof p.text === "string" && p.text !== sentText) sse("text", p.text)   // cumulative — browser replaces（滤掉回显的用户输入，含注入的目录前言）
-          else if (p.type === "reasoning" && typeof p.text === "string") sse("reasoning", { id: p.id, text: p.text })
-          else if (p.type === "tool" && p.state?.status) sse("tool", {
-            callID: p.callID, tool: p.tool, status: p.state.status,
-            title: p.state.title || "",
-            skill: p.tool === "skill" ? (p.state.input?.name || null) : null,   // 技能名（running/completed 才有）
-          })
-        }
-      })().catch(() => {})
-
-      const before = dirState(wsOut(sid))   // 记录本轮开始前本会话产物状态，用于算增量
-      const ask = (id) => client.session.prompt({
-        path: { id },
-        body: { model: MODEL, parts: [{ type: "text", text: sentText }] },   // 带注入的目录前言
-      })
-      let result
-      try {
-        result = un(await ask(sid))
-      } catch (err) {
-        if (aborted) return   // 已被用户终止 / 连接断开：别再往已关闭的连接写
-        // 关键修复：出错时【绝不】新建空会话并重放本条消息——那会丢光多轮上下文
-        // （opencode 会话持久化在 db、重启也不丢，sid 一般仍有效；旧的"重试"是这次上下文丢失的元凶）。
-        // 只如实报错，让前端提示用户；真正失效时用户点「新对话」重开。
-        const msg = String(err?.message || err)
-        const gone = /not found|no such session|does not exist|404/i.test(msg)
-        try { sse("failed", { message: gone ? "该会话已失效，请点「新对话」重新开始。" : ("本轮出错：" + msg.slice(0, 200)) }) } catch {}
-        done = true; try { res.end() } catch {}
+      const running = jobs.get(sid)
+      if (running?.running) {   // 该会话已有进行中的一轮（断线重连/双开页面）→ 直接续流，绝不重复发起
+        attachJob(running, req, res)
+        if (q) sseWrite(res, "notice", { message: "上一轮仍在进行中，本条消息未发送；请等本轮结束后重发。" })
         return
       }
-      if (aborted) return
-      const finalText = (result?.parts ?? []).filter(x => x.type === "text").map(x => x.text).join("\n")
-      sse("final", { text: finalText })
-      sse("files", changedSince(wsOut(sid), before))   // 只推本会话本轮新建/改动的产物
-      sse("done", {})
-      done = true; res.end()
-      return
+      await ensureSessionTitle(sid, q)   // 上传先于对话建的占位标题 "web" → 首条提问改名（只对占位标题生效，不动续问的旧会话）
+      // 给 agent 注入本会话专属目录，覆盖技能默认的 outputs/，实现多用户/多会话隔离
+      const preamble = `【本会话专属目录，务必遵守】\n- 用户上传的数据文件在 \`${relUp(sid)}/\`（读数据从这里找）。\n- 所有产物（图表 PNG/PDF、CSV/Excel、md/docx 文档等）一律写到 \`${relOut(sid)}/\`。\n- 连临时脚本、中间文件也一律写在 \`${relOut(sid)}/\`（需要放一起可用 \`${relOut(sid)}/.scratch/\`）。\n- **严禁在仓库根写任何文件**（.py / .csv / .png / .md 等都不行）：仓库根是所有用户共享的，同名文件会互相覆盖、把不同会话的数据串在一起。运行脚本时也把工作目录/输出指到 \`${relOut(sid)}/\`。\n- 正文里嵌入图片用 \`![图注](${relOut(sid)}/xxx.png)\` 这个路径。\n\n`
+      return attachJob(startJob(sid, preamble + q), req, res)
+    }
+
+    // 重新订阅某会话进行中的一轮（切回会话/重开页面时续流）；没有进行中的轮次则回 idle
+    if (req.method === "GET" && u.pathname === "/api/chat/attach") {
+      const sid = u.searchParams.get("sid") || ""
+      const job = jobs.get(sid)
+      if (!job || !job.running) {
+        res.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-cache", Connection: "keep-alive" })
+        sseWrite(res, "idle", {})   // 前端收到后改走历史回显（含刚完成的最终答案）
+        return res.end()
+      }
+      return attachJob(job, req, res)
+    }
+
+    // 显式终止某会话进行中的一轮（前端"终止"按钮；断开连接不再意味着终止）
+    if (req.method === "POST" && u.pathname === "/api/chat/abort") {
+      const job = jobs.get(u.searchParams.get("sid") || "")
+      if (job) await job.abort()
+      return send(res, 200, "application/json", JSON.stringify({ ok: true, aborted: !!job }))
+    }
+
+    // 某会话是否有进行中的一轮（切会话/重开页面时决定要不要续流）
+    if (req.method === "GET" && u.pathname === "/api/job") {
+      return send(res, 200, "application/json", JSON.stringify({ running: !!jobs.get(u.searchParams.get("sid") || "")?.running }))
+    }
+
+    // 列出本会话 outputs/ 里的产物文件（重开页面/切会话时回显"产出"侧栏，产物随会话持久）
+    if (req.method === "GET" && u.pathname === "/api/outputs") {
+      const sid = u.searchParams.get("sid") || ""
+      const dir = sid ? wsOut(sid) : OUTPUTS
+      if (!fs.existsSync(dir)) return send(res, 200, "application/json", "[]")
+      const list = fs.readdirSync(dir)
+        .filter((f) => !f.startsWith("."))
+        .map((f) => { const st = fs.statSync(path.join(dir, f)); return st.isFile() ? { name: f, size: st.size, mtime: st.mtimeMs } : null })
+        .filter(Boolean)
+        .sort((a, b) => b.mtime - a.mtime)
+      return send(res, 200, "application/json", JSON.stringify(list))
     }
 
     // 当前后台模型配置（apiKey 不回传，只报是否已设）
