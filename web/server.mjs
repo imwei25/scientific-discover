@@ -38,21 +38,34 @@ const customProviderCfg = ({ baseURL, apiKey, modelID }) => ({
   options: { baseURL, apiKey },
   models: { [modelID]: { name: modelID, tool_call: true, attachment: true } },   // 开工具调用，技能才能跑
 })
+// opencode 的 `question` 工具会弹交互式提问卡片；本部署（web 网关）没有应答它的 UI，
+// 模型一旦调用就整轮 error/卡死（实测卡在“确认方向选择”那步）。各技能与 AGENTS.md §六 已要求
+// “一律用编号文本让用户回数字选、别弹卡片”，但模型会无视提示词照调——故在配置层全局禁用，从根上杜绝。
+const enforceOcTools = (oc) => { oc.tools = { ...(oc.tools || {}), question: false }; return oc }
 // 把自定义 provider 合并进 ROOT/opencode.json（保留其它配置），opencode 启动时读取它
 const writeOcProvider = (cfg) => {
   let oc = {}
   try { oc = JSON.parse(fs.readFileSync(OC_CONFIG_PATH, "utf8")) } catch {}
   oc.provider = oc.provider || {}
   oc.provider[CUSTOM_PROVIDER_ID] = customProviderCfg(cfg)
+  enforceOcTools(oc)
   fs.writeFileSync(OC_CONFIG_PATH, JSON.stringify(oc, null, 2))
 }
 const removeOcProvider = () => {
   try {
     const oc = JSON.parse(fs.readFileSync(OC_CONFIG_PATH, "utf8"))
     if (oc.provider) { delete oc.provider[CUSTOM_PROVIDER_ID]; if (!Object.keys(oc.provider).length) delete oc.provider }
+    enforceOcTools(oc)
     fs.writeFileSync(OC_CONFIG_PATH, JSON.stringify(oc, null, 2))
   } catch {}
 }
+// 启动时无条件确保 opencode.json 已禁用 question 工具（无论用不用自定义模型；opencode.json 已 gitignore）
+try {
+  let oc = {}
+  try { oc = JSON.parse(fs.readFileSync(OC_CONFIG_PATH, "utf8")) } catch {}
+  enforceOcTools(oc)
+  fs.writeFileSync(OC_CONFIG_PATH, JSON.stringify(oc, null, 2))
+} catch {}
 // 启动时恢复上次所选的自定义模型（写好 opencode.json，随后 ensureOpencode 启动的 opencode 会读到）
 {
   const saved = loadModelCfg()
@@ -184,6 +197,19 @@ async function ensureSessionTitle(sid, q) {
     const t = (s?.title || "").trim()
     if (t === "" || t === "web") await client.session.update({ path: { id: sid }, body: { title: q.slice(0, 40) } })
   } catch { /* 改名失败不影响对话 */ }
+}
+// 自愈残留的“半回退”：编辑历史消息是两段式（/api/revert 暂存回退点 → 下一条 prompt 提交）。
+// 若那次重发没走完（僵尸轮/报错/被吞），暂存的回退就永远提交不了，会话被钉在带 revert 标记的
+// 半回退态：opencode 之后只返回不一致的回退视图，导致再次编辑必然失败（悬空 messageID）。
+// 判据：有 revert 标记 且 该会话没有正在跑的 job → 一定是残留（成功的一次编辑会把标记清成 null），
+// 用 unrevert 清掉。只在“打开会话 / 开始新一次编辑”时调用，绝不碰正在提交的正常编辑流程。
+async function clearStaleRevert(sid) {
+  if (!sid || jobs.get(sid)?.running) return   // 正在生成 → 可能是合法的进行中状态，别动
+  try {
+    const s = un(await client.session.get({ path: { id: sid } }))
+    if (s?.revert) { await client.session.unrevert({ path: { id: sid } }); return true }
+  } catch { /* 自愈失败不阻断主流程 */ }
+  return false
 }
 const sseWrite = (res, ev, data) => { try { res.write(`event: ${ev}\ndata: ${JSON.stringify(data)}\n\n`) } catch {} }
 function startJob(sid, sentText) {
@@ -351,6 +377,7 @@ const server = http.createServer(async (req, res) => {
     if (req.method === "GET" && u.pathname === "/api/history") {
       const id = u.searchParams.get("id") || ""
       if (!id) return send(res, 400, "application/json", "[]")
+      await clearStaleRevert(id)   // 打开会话即自愈：清掉上次编辑遗留的半回退标记，让历史与后续编辑基于完整消息列表
       const msgs = un(await client.session.messages({ path: { id } })) || []
       const out = []
       for (const m of msgs) {
@@ -385,6 +412,7 @@ const server = http.createServer(async (req, res) => {
       const sid = u.searchParams.get("sid") || ""
       const uindex = Number(u.searchParams.get("uindex"))
       if (!sid || !Number.isInteger(uindex) || uindex < 0) return send(res, 400, "application/json", JSON.stringify({ ok: false }))
+      await clearStaleRevert(sid)   // 先清掉上一次没提交的残留回退，确保 uindex→messageID 对着完整消息列表算，而非回退视图
       const msgs = un(await client.session.messages({ path: { id: sid } })) || []
       const target = msgs.filter((m) => m.info?.role === "user")[uindex]   // 按顺序取第 uindex 个用户消息
       if (!target?.info?.id) return send(res, 404, "application/json", JSON.stringify({ ok: false, err: "message not found" }))

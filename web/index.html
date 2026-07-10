@@ -284,6 +284,9 @@
   .rpeek::after { content: ""; position: absolute; left: 0; right: 0; top: 0; height: 1.1em; background: linear-gradient(rgba(255,255,255,.98), rgba(255,255,255,0)); pointer-events: none; }
   details.think-d[open] .rpeek { display: none; }
   @keyframes spin { to { transform: rotate(360deg); } }
+  /* 回合级"进行中"转圈：等模型输出 / 工具运行期间常驻在回合底部，收尾（轮到用户输入）即移除 */
+  .genrow { display: flex; align-items: center; gap: 8px; padding: 7px 11px 4px; font-size: 12px; color: var(--cyan); }
+  .genrow .spin { flex: none; width: 12px; height: 12px; border-radius: 50%; border: 2px solid rgba(56,189,248,.25); border-top-color: var(--cyan); animation: spin .7s linear infinite; }
 
   /* ask form (option cards) */
   .askform { margin: 10px 0 2px; padding: 14px; background: linear-gradient(180deg, #f2f7fe, #eef4fc); border: 1px solid #cfe0f2; border-radius: var(--r-md); }
@@ -467,11 +470,24 @@ function setStreamingUI(on) {
 function detachStream() {   // 退订当前流但不终止生成（切会话/新对话时用）
   if (activeES) { activeES.close(); activeES = null }
   setStreamingUI(false)
+  // 手动解开僵尸流时，finalize 不会跑 → 顺手停掉还在转的“回合级转圈”与定格的“打字点”，别永久冻在那。
+  // （切会话/新对话等调用方随后会清空 log，这里的收尾对它们无副作用。）
+  log.querySelectorAll(".genrow").forEach((g) => g.remove())
+  log.querySelectorAll(".turn .answer .typing").forEach((t) => {
+    const a = t.closest(".answer"); if (!a) return
+    a.textContent = ""; const n = document.createElement("div"); n.className = "note"; n.textContent = "⏹ 已停止（后台若在运行可从左侧切回查看）"; a.appendChild(n)
+  })
 }
-// "终止"按钮：显式让后端 abort（断开连接已不再意味着终止）
-stopBtn.addEventListener("click", () => {
+// "终止"按钮：显式让后端 abort（断开连接已不再意味着终止）。
+// 关键：无论后端是否真有 job 在跑，都要保证本地能解开转圈——否则 job 已是僵尸/已结束时，
+// abort 返回 {aborted:false} 且无 SSE 事件回来，界面会永久卡死（“一直加载、没反应”）。
+stopBtn.addEventListener("click", async () => {
   if (!sessionId) return detachStream()
-  fetch("api/chat/abort?sid=" + encodeURIComponent(sessionId), { method: "POST" }).catch(() => detachStream())
+  let aborted = false
+  try { aborted = (await fetch("api/chat/abort?sid=" + encodeURIComponent(sessionId), { method: "POST" }).then((r) => r.json())).aborted } catch {}
+  // 真有 job 被终止 → 后端广播 aborted，交给 SSE 收尾并显示“已终止”；
+  // 没 job（僵尸/已结束）或请求失败 → 本地兜底退订、复原按钮，绝不把用户永久卡住。
+  if (!aborted) detachStream()
 })
 
 // ---- 内联单色描边图标（自包含，无外部依赖）----
@@ -672,15 +688,18 @@ function startEdit(userDiv) {
 }
 async function submitEdit(userDiv, newText) {
   if (!newText) return
+  // 有流在跑就别编辑：此时暂存了回退却无法立刻重发提交（sendMessage 会被 activeES 拦下），
+  // 会把会话钉在“半回退”态、污染后续编辑。等本轮结束再编辑。
+  if (activeES) { alert("正在生成中，请等本轮结束后再编辑"); return }
   const idx = [...log.querySelectorAll(".msg.user")].indexOf(userDiv)   // 第几个用户消息（与后端一致）
   if (idx < 0) return
-  if (sessionId) {                         // 后端回退：丢弃这条及其后的所有消息
+  if (sessionId) {                         // 后端回退：丢弃这条及其后的所有消息（提交发生在紧接着的重发）
     let ok = false
     try { ok = (await fetch("api/revert?uindex=" + idx + sidQ(), { method: "POST" }).then(r => r.json())).ok } catch {}
     if (!ok) { alert("回退失败，无法编辑，请重试"); return }
   }
   for (let n = userDiv; n; ) { const next = n.nextSibling; n.remove(); n = next }   // 清空这条及之后的 DOM
-  sendMessage(newText)                     // 以编辑后的内容重新发起本轮
+  sendMessage(newText)                     // 立刻以编辑后的内容重新发起本轮 → opencode 据此提交回退
 }
 function renderFiles(list) {
   if (!list || !list.length) { filesEl.innerHTML = '<span class="hint">对话生成的文件会显示在这里</span>'; return }
@@ -944,7 +963,12 @@ function openStream(url) {
   const thinkD = document.createElement("details"); thinkD.className = "act think-d"; thinkD.hidden = true
   thinkD.innerHTML = '<summary><span class="rhead">' + ic("brain") + '<span class="rlbl">思考过程</span></span><div class="rpeek"><div class="rpeek-in"></div></div></summary><div class="rbody"></div>'
   const answer = document.createElement("div"); answer.className = "answer"; answer.innerHTML = '<span class="typing"><i></i><i></i><i></i></span>'
-  turn.append(skillsEl, toolsD, thinkD, answer)
+  // 回合级转圈：整轮生成期间常驻（等模型输出/工具运行都转），收尾移除 → 轮到用户输入时不转
+  const genEl = document.createElement("div"); genEl.className = "genrow"
+  genEl.innerHTML = '<span class="spin"></span><span class="genlbl"></span>'
+  const setGen = (t) => { genEl.querySelector(".genlbl").textContent = t }
+  setGen("等待模型输出…")
+  turn.append(skillsEl, toolsD, thinkD, answer, genEl)
   log.appendChild(turn); log.scrollTop = log.scrollHeight
 
   const toolRows = new Map()   // callID -> row
@@ -964,6 +988,7 @@ function openStream(url) {
   const finalize = (note) => {                    // 收尾：关流、复原按钮、清 live 态；note 作为附注追加
     if (finished) return; finished = true
     es.close(); if (activeES === es) { activeES = null; setStreamingUI(false) }
+    genEl.remove()   // 本轮结束、轮到用户输入 → 转圈消失
     if (!thinkD.hidden) thinkD.querySelector(".rlbl").textContent = "思考过程"   // 收尾去掉“思考中…”的 live 态，peek 保留最后思考
     toolRows.forEach(r => r.classList.remove("live"))
     if (note) { if (!gotText && !painted) answer.textContent = ""; const n = document.createElement("div"); n.className = "note"; n.textContent = note; answer.appendChild(n) }
@@ -985,6 +1010,8 @@ function openStream(url) {
     row.classList.toggle("live", d.status === "running" || d.status === "pending")
     row.querySelector(".lbl").textContent = d.title ? `${d.tool} · ${d.title}` : d.tool
     toolsD.querySelector(".cnt").textContent = `(${toolRows.size})`
+    const liveTools = [...toolRows.values()].filter(r => r.classList.contains("live")).length
+    setGen(liveTools ? `工具运行中（${liveTools}）…` : "等待模型输出…")   // 工具收尾后回到等模型
     follow()
   })
 
@@ -995,10 +1022,11 @@ function openStream(url) {
     thinkD.querySelector(".rbody").textContent = full
     thinkD.querySelector(".rpeek-in").textContent = full   // 折叠态的贴底窗口跟着更新，始终露出最新思考
     thinkD.querySelector(".rlbl").innerHTML = '思考中<span class="live">…</span>'
+    setGen("思考中…")
     follow()
   })
 
-  es.addEventListener("text", (ev) => { if (!painted) { gotText = true; answer.textContent = JSON.parse(ev.data); follow() } })   // 流式期间纯文本，final 时才渲染 markdown
+  es.addEventListener("text", (ev) => { if (!painted) { gotText = true; answer.textContent = JSON.parse(ev.data); setGen("正在输出…"); follow() } })   // 流式期间纯文本，final 时才渲染 markdown
   es.addEventListener("final", (ev) => { const t = JSON.parse(ev.data).text; if (t && !painted) { gotText = true; answer.textContent = t } paintAnswer(); follow() })
   es.addEventListener("files", (ev) => { const list = JSON.parse(ev.data); if (list.length) { renderFiles(list); addProducts(list) } })   // 本轮没产物就保留上一轮，不清空
   es.addEventListener("done", () => { paintAnswer(); finalize() })
