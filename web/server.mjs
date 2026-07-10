@@ -238,6 +238,63 @@ async function createSession(title) {
   dirCache.set(safeSid(s.id), outDir)
   return s.id
 }
+
+// ---- 会话/项目元数据（网关级，opencode 不管这些）----
+// 三档生命周期：① 普通会话——7 天无活动自动删；② 持久化(钉)——同样 7 天但可「续期」重置；③ 项目会话——永久。
+// opencode 只存会话本体；项目分组 / 钉标记 / 续期时间存这里，随磁盘持久（已 gitignore）。
+const META_PATH = path.join(__dirname, "sessions-meta.json")
+const TTL_MS = 7 * 24 * 60 * 60 * 1000                 // 非项目会话的存活期：7 天
+const EXPIRE_SOON_MS = 2 * 24 * 60 * 60 * 1000          // 剩余 ≤2 天视为「临近删除」，前端据此提醒
+let META = { version: 1, projects: [], sessions: {} }
+try { const m = JSON.parse(fs.readFileSync(META_PATH, "utf8")); META = { version: 1, projects: m.projects || [], sessions: m.sessions || {} } } catch {}
+let _metaSaveTimer = null
+const saveMeta = () => { try { clearTimeout(_metaSaveTimer) } catch {}; _metaSaveTimer = setTimeout(() => { try { fs.writeFileSync(META_PATH, JSON.stringify(META, null, 2)) } catch {} }, 50) }
+const sessMeta = (sid) => (META.sessions[sid] ||= {})   // 取（不存在则建空）某会话的元数据
+const projectOf = (sid) => { const p = META.sessions[sid]?.projectId; return p && META.projects.some((x) => x.id === p) ? p : null }
+// 某会话的到期时间戳（ms）；在项目里 → null（永久）。非项目 = max(最后活动+7天, 续期时间)
+const expiryOf = (sess) => {
+  const sid = sess.id, m = META.sessions[sid] || {}
+  if (projectOf(sid)) return null
+  const base = (sess.time?.updated || 0) + TTL_MS
+  return Math.max(base, m.keepUntil || 0)
+}
+const newId = (p) => p + crypto.randomBytes(6).toString("hex")
+// 彻底删除一个会话：终止在跑的轮 → 删 opencode 会话 → 删产物/上传目录 → 清元数据
+async function hardDeleteSession(id) {
+  try { await jobs.get(id)?.abort() } catch {}   // 会话还在生成中 → 先终止再删
+  // 【顺序要紧】必须在 session.delete 之【前】把目录解析出来：sessionOut/sessionUp 在 dirCache 未命中时
+  // 要回头问 opencode 要 session.directory，而会话一旦删掉，session.get 必然 404 → 静默回落到
+  // outputs/<sid>，而真实目录是 outputs/ws_xxx → rmSync 对着一个不存在的路径 force 空转，
+  // 返回 ok:true 但一个字节都没删。容器按需停起是本架构常态，网关重启后 dirCache 就是空的，
+  // 即"删会话释放空间"这唯一的回收手段在最常见的情形下完全失效，最终把用户卡在存储上限上。
+  // （TTL 自动清理也走这里，所以这条次序对定时清理同样要紧。）
+  const delOut = await sessionOut(id), delUp = await sessionUp(id)
+  try { await client.session.delete({ path: { id } }) } catch {}
+  try { fs.rmSync(delUp, { recursive: true, force: true }); fs.rmSync(delOut, { recursive: true, force: true }); dirCache.delete(safeSid(id)) } catch {}
+  pendingReverts.delete(id)   // 已删会话的待提交登记没人再消费，别驻留到进程重启
+  unbindSessionModule(id)     // 模块绑定同样随会话删除，别在持久表里越积越多
+  if (META.sessions[id]) { delete META.sessions[id]; saveMeta() }
+}
+// 清理过期会话：删「非项目、已过期、且当前没有正在生成」的会话（含目录）。启动跑一次 + 每小时一次。
+async function cleanupExpiredSessions() {
+  try {
+    const all = un(await client.session.list()) || []
+    const now = Date.now()
+    for (const s of all) {
+      if (s.parentID) continue
+      const ex = expiryOf(s)
+      if (ex !== null && ex < now && !jobs.get(s.id)?.running) {
+        await hardDeleteSession(s.id)
+        console.log("[cleanup] 删除过期会话", s.id, s.title || "")
+      }
+    }
+    // 顺带清掉元数据里已不存在的会话残留
+    const live = new Set(all.map((s) => s.id))
+    let dirty = false
+    for (const id of Object.keys(META.sessions)) if (!live.has(id)) { delete META.sessions[id]; dirty = true }
+    if (dirty) saveMeta()
+  } catch (e) { console.warn("[cleanup] 失败:", String(e).slice(0, 200)) }
+}
 // 某目录里顶层文件的 name -> mtime 快照（跳过隐藏项和子目录）
 // 递归【一层】：键是相对 dir 的路径，顶层文件仍是裸文件名（"a.png"），子目录里的是 "pdfs/a.pdf"。
 // 为什么要递归：好几个技能天然产出子目录（fulltext-retrieval 的 pdfs/、data-integrity 的 audit/、
@@ -655,7 +712,7 @@ const soffice = () => {
     ? ["C:/Program Files/LibreOffice/program/soffice.com", "C:/Program Files/LibreOffice/program/soffice.exe", "C:/Program Files (x86)/LibreOffice/program/soffice.com"]
     : ["/usr/bin/soffice", "/usr/bin/libreoffice", "/opt/libreoffice/program/soffice"])
   _soffice = cands.find((c) => { try { return fs.existsSync(c) } catch { return false } }) || null
-  if (!_soffice) { try { _soffice = execSync(process.platform === "win32" ? "where soffice" : "command -v soffice", { stdio: ["ignore", "pipe", "ignore"] }).toString().trim().split(/\r?\n/)[0] || null } catch { _soffice = null } }
+  if (!_soffice) { try { _soffice = execSync(process.platform === "win32" ? "where soffice" : "command -v soffice", { stdio: ["ignore", "pipe", "ignore"], windowsHide: true }).toString().trim().split(/\r?\n/)[0] || null } catch { _soffice = null } }
   return _soffice
 }
 const execFileAsync = promisify(execFile)
@@ -750,7 +807,7 @@ async function ensurePreviewCache(dir, name) {
   if (ext === ".docx") {
     const out = path.join(cacheDir, flat + ".html")
     if (!fresh(out)) {
-      try { await execFileAsync(PYEXE(), ["-X", "utf8", "-c", MAMMOTH_PY, src, out], { timeout: 60_000 }) }
+      try { await execFileAsync(PYEXE(), ["-X", "utf8", "-c", MAMMOTH_PY, src, out], { timeout: 60_000, windowsHide: true }) }
       catch (err) { const e = new Error(String(err).slice(0, 200)); e.code = "docx-fail"; throw e }
     }
     prunePreviewCache(cacheDir, out)
@@ -767,7 +824,7 @@ async function ensurePreviewCache(dir, name) {
       // 正是这道闸要防的整容器 OOM-kill。SIGKILL 保证 settle 时进程真的没了。
       // 240s：profile 固定后一般是热启（秒级），但【第一次】仍要走一遍 LibreOffice 首次运行初始化，
       // 实测冷启 153 秒——原来的 90 秒必然把首跑掐死，而首跑正是用户装好后点的第一次预览。
-      try { await withSoffice(() => execFileAsync(soffice(), job.args, { timeout: 240_000, killSignal: "SIGKILL" })) }   // 排队，绝不并发起两个 LO
+      try { await withSoffice(() => execFileAsync(soffice(), job.args, { timeout: 240_000, killSignal: "SIGKILL", windowsHide: true })) }   // 排队，绝不并发起两个 LO
       catch (err) {
         // 完整命令行与 stderr 只进服务端日志：原先直接把 String(err) 当错误文案回给前端，界面上就是
         // "预览失败：转换失败：Error: Command failed: C:/Program Files/LibreOffice/program/soffice.com --headless …"
@@ -1438,15 +1495,24 @@ export const server = http.createServer(async (req, res) => {
       return send(res, 200, "application/json", JSON.stringify({ ok: true }))
     }
 
-    // 最近会话列表（排除子 agent 会话，按更新时间倒序取前 10）——支持“断点续问”
+    // 会话列表 + 项目分组（排除子 agent 会话，按更新时间倒序）。前端据此分组渲染、算临期提醒。
     if (req.method === "GET" && u.pathname === "/api/sessions") {
       const all = un(await client.session.list()) || []
-      const list = all
+      const sessions = all
         .filter((s) => !s.parentID)
         .sort((a, b) => (b.time?.updated || 0) - (a.time?.updated || 0))
-        .slice(0, 10)
-        .map((s) => { const mod = sessionModule(s.id); return { id: s.id, title: s.title || "(未命名)", updated: s.time?.updated || 0, running: !!jobs.get(s.id)?.running, module: mod, moduleName: MODULE_DEFS[mod]?.name || mod } })
-      return send(res, 200, "application/json", JSON.stringify(list))
+        .map((s) => {
+          const mod = sessionModule(s.id)
+          const m = META.sessions[s.id] || {}
+          const projectId = projectOf(s.id)
+          const expiresAt = expiryOf(s)
+          // 模块徽标（HEAD 原有）与 项目/钉/到期（会话管理）两组信息都要，前端各用各的
+          return { id: s.id, title: s.title || "(未命名)", updated: s.time?.updated || 0, running: !!jobs.get(s.id)?.running,
+            module: mod, moduleName: MODULE_DEFS[mod]?.name || mod,
+            projectId, pinned: !!m.pinned, permanent: expiresAt === null, expiresAt }
+        })
+      const projects = [...META.projects].sort((a, b) => (a.order ?? 0) - (b.order ?? 0)).map((p) => ({ id: p.id, name: p.name, order: p.order ?? 0 }))
+      return send(res, 200, "application/json", JSON.stringify({ projects, sessions }))
     }
 
     // 某会话的历史消息（user/assistant 正文），用于断点续问时回显上下文
@@ -1476,21 +1542,11 @@ export const server = http.createServer(async (req, res) => {
       return send(res, 200, "application/json", JSON.stringify(out))
     }
 
-    // 删除一个会话
+    // 删除一个会话（连同 outputs/uploads 目录与元数据一并清；进行中的生成先终止）
     if (req.method === "POST" && u.pathname === "/api/session/delete") {
       const id = u.searchParams.get("id") || ""
       if (!id) return send(res, 400, "application/json", JSON.stringify({ ok: false }))
-      try { await jobs.get(id)?.abort() } catch {}   // 会话还在生成中 → 先终止再删
-      // 【顺序要紧】必须在 session.delete 之【前】把目录解析出来：sessionOut/sessionUp 在 dirCache 未命中时
-      // 要回头问 opencode 要 session.directory，而会话一旦删掉，session.get 必然 404 → 静默回落到
-      // outputs/<sid>，而真实目录是 outputs/ws_xxx → rmSync 对着一个不存在的路径 force 空转，
-      // 返回 ok:true 但一个字节都没删。容器按需停起是本架构常态，网关重启后 dirCache 就是空的，
-      // 即"删会话释放空间"这唯一的回收手段在最常见的情形下完全失效，最终把用户卡在存储上限上。
-      const delOut = await sessionOut(id), delUp = await sessionUp(id)
-      try { await client.session.delete({ path: { id } }) } catch (e) { return send(res, 500, "application/json", JSON.stringify({ ok: false, err: String(e) })) }
-      try { fs.rmSync(delUp, { recursive: true, force: true }); fs.rmSync(delOut, { recursive: true, force: true }); dirCache.delete(safeSid(id)) } catch {}   // 删会话即释放其 uploads/outputs 占用的空间
-      pendingReverts.delete(id)   // 已删会话的待提交登记没人再消费，别驻留到进程重启
-      unbindSessionModule(id)     // 模块绑定同样随会话删除，别在持久表里越积越多
+      await hardDeleteSession(id)   // 目录解析次序等要紧逻辑已并入该函数，TTL 清理走同一条路
       return send(res, 200, "application/json", JSON.stringify({ ok: true }))
     }
 
@@ -1894,7 +1950,7 @@ const ocHealthy = () => new Promise((resolve) => {
 const killPort = (port) => {
   try {
     if (process.platform === "win32")
-      execSync(`powershell -NoProfile -Command "Get-NetTCPConnection -LocalPort ${port} -State Listen -ErrorAction SilentlyContinue | Select-Object -ExpandProperty OwningProcess -Unique | ForEach-Object { Stop-Process -Id $_ -Force -ErrorAction SilentlyContinue }"`, { stdio: "ignore" })
+      execSync(`powershell -NoProfile -Command "Get-NetTCPConnection -LocalPort ${port} -State Listen -ErrorAction SilentlyContinue | Select-Object -ExpandProperty OwningProcess -Unique | ForEach-Object { Stop-Process -Id $_ -Force -ErrorAction SilentlyContinue }"`, { stdio: "ignore", windowsHide: true })
     else
       execSync(`lsof -ti tcp:${port} | xargs -r kill -9`, { stdio: "ignore" })
   } catch { /* 端口本就空闲 */ }
@@ -1909,6 +1965,10 @@ function spawnOc() {
   const err = fs.openSync(path.join(ROOT, "serve.err"), "a")
   const child = spawn("opencode", ["serve", "--port", String(OC_PORT)], {
     cwd: ROOT, detached: true, stdio: ["ignore", out, err], shell: process.platform === "win32",
+    // 【Windows 必须给】detached + shell 会让 cmd.exe 另开一个控制台窗口，
+    // opencode 的启动横幅就直接糊在用户脸上（桌面版尤其突兀：主窗口旁边跳出个黑框）。
+    // windowsHide 对应 CREATE_NO_WINDOW，Tauri 壳起 node 时也是这么做的，这里补齐最后一段。
+    windowsHide: true,
   })
   child.on("error", (e) => console.warn(`[oc] 启动 opencode 失败：${e.message}（PATH 里有 opencode 吗？）`))
   child.unref()
@@ -1956,6 +2016,9 @@ server.listen(PORT, "0.0.0.0", () => {
     // 只打掩码：位数信息足够运维确认"密码确实注入了"，又不泄露内容。
     ? `  局域网登录：账号 ${LAN_USER} / 密码 ${LAN_PASSWORD ? "*".repeat(Math.min(LAN_PASSWORD.length, 12)) + `（${LAN_PASSWORD.length} 位，见 users/<用户>.env）` : "(未设置)"}（本机 localhost 免登录；改账号密码用环境变量 LAN_USER/LAN_PASSWORD，关登录用 LAN_AUTH=0）`
     : `  登录已关闭（LAN_AUTH=0）`)
+  // 过期会话清理：启动后延迟跑一次（等 opencode 就绪），之后每小时一次
+  setTimeout(cleanupExpiredSessions, 15_000)
+  setInterval(cleanupExpiredSessions, 60 * 60 * 1000)
 })
 
 // ---- 优雅退出 ----

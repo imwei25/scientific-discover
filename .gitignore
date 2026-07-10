@@ -57,3 +57,6 @@ sci-agent-backup-*.tar.gz
 # 桌面版云端账号登录态（含 refresh token），绝不能进库
 web/cloud-state.json
 cloud.json
+
+# 会话/项目元数据（项目分组、持久化标记、到期时间；运行时生成）
+web/sessions-meta.json

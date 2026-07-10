@@ -207,6 +207,59 @@
   #sessions .sess .t { display: block; color: var(--text); font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   #sessions .sess .d { color: var(--faint); font-size: 12px; margin-top: 2px; font-variant-numeric: tabular-nums; }
   #sessions .sess .run { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--green); margin-right: 6px; vertical-align: 1px; animation: pulse 2.4s infinite; }
+  #sessions .sess { padding-right: 46px; }                 /* 给右侧多个操作图标留位 */
+  #sessions .sess.dragging { opacity: .4; }
+  /* 会话行右侧操作区（改名/钉/删）：默认隐藏，hover 显示 */
+  .sess-acts { position: absolute; right: 4px; top: 50%; transform: translateY(-50%); display: flex; gap: 1px; opacity: 0; transition: opacity .12s; }
+  .sess:hover .sess-acts, .sess-acts.keep { opacity: 1; }
+  .sess-act { width: 20px; height: 20px; display: grid; place-items: center; color: var(--faint); border-radius: 5px; cursor: pointer; }
+  .sess-act .ic { width: 13px; height: 13px; }
+  .sess-act:hover { color: var(--cyan); background: rgba(30,159,230,.1); }
+  .sess-act.del:hover { color: var(--rose); background: rgba(239,68,68,.12); }
+  .sess-act.on { color: var(--cyan); opacity: 1; }         /* 已钉 */
+  /* 到期徽标 */
+  .sess .exp { display: inline-block; margin-left: 6px; font-size: 11px; padding: 0 5px; border-radius: 5px; background: #eef2f8; color: var(--muted); }
+  .sess .exp.soon { background: rgba(217,119,6,.14); color: #b45309; }
+  .sess .exp.perm { background: rgba(22,163,74,.12); color: #15803d; }
+  /* 项目分组 */
+  .pgroup { margin-bottom: 4px; }
+  .pghead { display: flex; align-items: center; gap: 5px; padding: 5px 6px; border-radius: var(--r-sm); cursor: pointer; color: #334153; font-size: 12px; font-weight: 600; }
+  .pghead:hover { background: #eef2f8; }
+  .pghead .ic { width: 14px; height: 14px; color: var(--muted); flex: none; }
+  .pghead .caret { width: 13px; height: 13px; transition: transform .15s; color: var(--faint); }
+  .pgroup.collapsed .caret { transform: rotate(-90deg); }
+  .pgroup.collapsed .pgbody { display: none; }
+  .pghead .pgname { flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .pghead .pgcount { color: var(--faint); font-weight: 500; font-variant-numeric: tabular-nums; }
+  .pghead .pg-act { width: 20px; height: 20px; display: grid; place-items: center; color: var(--faint); border-radius: 5px; opacity: 0; }
+  .pghead:hover .pg-act { opacity: 1; }
+  .pghead .pg-act .ic { width: 13px; height: 13px; }
+  .pghead .pg-act:hover { color: var(--cyan); background: rgba(30,159,230,.12); }
+  .pghead .pg-act.del:hover { color: var(--rose); background: rgba(239,68,68,.12); }
+  .pgbody { display: flex; flex-direction: column; gap: 6px; padding: 4px 0 4px 8px; }
+  .pgroup.drop-hint > .pghead, .droparea.drop-hint { outline: 2px dashed var(--cyan); outline-offset: -2px; background: rgba(30,159,230,.08); border-radius: var(--r-sm); }
+  .sect-label { display: flex; align-items: center; gap: 6px; margin: 8px 2px 2px; font-size: 11px; font-weight: 600; color: var(--faint); text-transform: none; }
+  .sect-label .ic { width: 12px; height: 12px; }
+  /* 内联改名输入 */
+  .rename-inp { width: 100%; font: inherit; font-size: 12px; padding: 4px 8px; border: 1px solid var(--cyan); border-radius: var(--r-sm); background: #fff; color: var(--text); outline: none; }
+  /* 新建项目按钮 */
+  #newProject { display: none; align-items: center; justify-content: center; gap: 5px; font-size: 12px; color: var(--muted); background: transparent; border: 1px dashed var(--line-hi); border-radius: var(--r-sm); padding: 6px; cursor: pointer; }
+  body.sessbar-open #newProject { display: flex; }
+  #newProject:hover { color: var(--cyan); border-color: var(--cyan); }
+  #newProject .ic { width: 14px; height: 14px; }
+  /* 临期提醒条 */
+  #expireReminder { display: none; font-size: 12px; background: rgba(217,119,6,.1); border: 1px solid rgba(217,119,6,.35); color: #92400e; border-radius: var(--r-sm); padding: 8px 10px; }
+  body:not(.sessbar-open) #expireReminder { display: none !important; }
+  #expireReminder.show { display: block; }
+  #expireReminder .er-top { display: flex; align-items: center; gap: 6px; font-weight: 600; }
+  #expireReminder .er-top .ic { width: 14px; height: 14px; flex: none; }
+  #expireReminder .er-x { margin-left: auto; cursor: pointer; opacity: .6; }
+  #expireReminder .er-x:hover { opacity: 1; }
+  #expireReminder .er-list { margin-top: 6px; display: flex; flex-direction: column; gap: 4px; }
+  #expireReminder .er-item { display: flex; align-items: center; gap: 6px; }
+  #expireReminder .er-item .er-t { flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  #expireReminder .er-keep { flex: none; font-size: 11px; color: var(--cyan); cursor: pointer; border: 1px solid rgba(30,159,230,.4); border-radius: 4px; padding: 1px 6px; background: #fff; }
+  #expireReminder .er-keep:hover { background: rgba(30,159,230,.1); }
 
   /* upload dropzone */
   #up { display: none; }
@@ -440,9 +493,12 @@
   <div id="sessbar">
     <div class="sb-top">
       <button id="sessToggle" class="sb-toggle" type="button" title="最近会话"></button>
-      <span class="sb-title">最近会话</span>
+      <span class="sb-title">会话与项目</span>
+      <button id="newProjBtn" class="mini" type="button" title="新建项目"></button>
       <button id="refreshSess" class="mini" type="button" title="刷新列表"></button>
     </div>
+    <div id="expireReminder"></div>
+    <button id="newProject" type="button"></button>
     <div id="sessions"><span class="hint">加载中…</span></div>
   </div>
   <section id="chat">
@@ -602,7 +658,12 @@ const ICONS = {
   edit: '<path d="M12 20h8"/><path d="M15.5 4.5a2.1 2.1 0 0 1 3 3L8 18l-4 1 1-4Z"/>',
   send: '<path d="M22 2 11 13"/><path d="M22 2 15 22l-4-9-9-4Z"/>',
   chevronL: '<path d="m15 18-6-6 6-6"/>',
+  chevronD: '<path d="m6 9 6 6 6-6"/>',
   trash: '<path d="M4 7h16"/><path d="M9 7V5a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/><path d="M6 7l1 12a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-12"/>',
+  pin: '<path d="M12 17v5"/><path d="M9 3h6l-1 7 3 3H7l3-3-1-7Z"/>',
+  folder: '<path d="M4 7a2 2 0 0 1 2-2h3l2 2h7a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2Z"/>',
+  folderPlus: '<path d="M4 7a2 2 0 0 1 2-2h3l2 2h7a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2Z"/><path d="M12 11v4"/><path d="M10 13h4"/>',
+  clock: '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>',
   cog: '<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1Z"/>',
   logout: '<path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/>',
   key: '<circle cx="7.5" cy="15.5" r="4.5"/><path d="m21 2-9.6 9.6"/><path d="m15.5 7.5 3 3L22 7l-3-3"/>'
@@ -980,23 +1041,193 @@ async function openPreview(name) {
 document.getElementById("pvClose").addEventListener("click", closePreview)
 document.addEventListener("keydown", (e) => { if (e.key === "Escape") { if (lb.classList.contains("on")) lb.classList.remove("on"); else if (preview.classList.contains("on")) closePreview() } })
 
-// ---- 会话管理：最近 10 个 + 断点续问 ----
+// ---- 会话管理：项目分组 + 持久化(钉) + 7 天 TTL + 断点续问 ----
 const sessionsEl = document.getElementById("sessions")
 const fmtTime = (ms) => { const d = new Date(ms), p = (n) => String(n).padStart(2, "0"); return `${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}` }
-function renderSessions(list) {
-  if (!list || !list.length) { sessionsEl.innerHTML = '<span class="hint">还没有会话</span>'; return }
-  sessionsEl.innerHTML = ""
-  for (const s of list) {
-    const b = document.createElement("button"); b.className = "sess" + (s.id === sessionId ? " active" : ""); b.type = "button"
-    b.innerHTML = '<span class="t"></span><span class="d">' + (s.running ? '<span class="run" title="正在生成"></span>' : "") + (s.module && s.module !== "chat" ? '<span class="mtag"></span>' : "") + fmtTime(s.updated) + '</span>'
-    b.querySelector(".t").textContent = s.title
-    const mt = b.querySelector(".mtag"); if (mt) mt.textContent = s.moduleName || s.module
-    b.addEventListener("click", () => resumeSession(s.id))
-    const del = document.createElement("span"); del.className = "sess-del"; del.title = "删除会话"; del.innerHTML = ic("trash")
-    del.addEventListener("click", (e) => { e.stopPropagation(); deleteSession(s.id, s.title) })
-    b.appendChild(del)
-    sessionsEl.appendChild(b)
+const DAY_MS = 86400000
+let META_STATE = { projects: [], sessions: [] }          // 最近一次 /api/sessions 结果
+const collapsedProjects = new Set(JSON.parse(localStorage.getItem("nm_collapsed") || "[]"))
+const saveCollapsed = () => localStorage.setItem("nm_collapsed", JSON.stringify([...collapsedProjects]))
+
+// 到期徽标：项目内=永久；否则按剩余时间显示，≤2 天标红（soon）
+function expBadge(s) {
+  const sp = document.createElement("span"); sp.className = "exp"
+  if (s.permanent) { sp.classList.add("perm"); sp.textContent = "永久"; sp.title = "在项目中，永久保留"; return sp }
+  const left = (s.expiresAt || 0) - Date.now()
+  if (left <= 0) { sp.classList.add("soon"); sp.textContent = "即将删除"; return sp }
+  const days = Math.ceil(left / DAY_MS)
+  sp.textContent = "剩 " + days + " 天"
+  sp.title = "无活动将于 " + fmtTime(s.expiresAt) + " 自动删除"
+  if (left <= 2 * DAY_MS) sp.classList.add("soon")
+  return sp
+}
+
+// 单个会话行
+function sessRow(s) {
+  const b = document.createElement("div"); b.className = "sess" + (s.id === sessionId ? " active" : ""); b.setAttribute("role", "button"); b.draggable = true
+  const t = document.createElement("span"); t.className = "t"; t.textContent = s.title
+  const d = document.createElement("span"); d.className = "d"
+  if (s.running) d.innerHTML = '<span class="run" title="正在生成"></span>'
+  // 模块徽标（非"自由对话"才显示）—— 分组视图同样需要一眼看出会话属于哪个模块
+  if (s.module && s.module !== "chat") {
+    const mt = document.createElement("span"); mt.className = "mtag"; mt.textContent = s.moduleName || s.module
+    d.appendChild(mt)
   }
+  d.appendChild(document.createTextNode(fmtTime(s.updated)))
+  d.appendChild(expBadge(s))
+  b.appendChild(t); b.appendChild(d)
+  b.addEventListener("click", () => resumeSession(s.id))
+  // 拖拽：记录被拖会话 id
+  b.addEventListener("dragstart", (e) => { e.dataTransfer.setData("text/plain", s.id); e.dataTransfer.effectAllowed = "move"; b.classList.add("dragging") })
+  b.addEventListener("dragend", () => b.classList.remove("dragging"))
+  // 操作区：改名 / 钉 / 删
+  const acts = document.createElement("span"); acts.className = "sess-acts" + (s.pinned ? " keep" : "")
+  const mk = (icon, cls, title, fn) => { const a = document.createElement("span"); a.className = "sess-act" + (cls ? " " + cls : ""); a.title = title; a.innerHTML = ic(icon); a.addEventListener("click", (e) => { e.stopPropagation(); fn() }); return a }
+  acts.appendChild(mk("edit", "", "重命名", () => renameSession(s.id, s.title, t)))
+  acts.appendChild(mk("pin", s.pinned ? "on" : "", s.pinned ? "取消持久化" : "持久化保留（钉住，续 7 天）", () => togglePin(s.id, !s.pinned)))
+  acts.appendChild(mk("trash", "del", "删除会话", () => deleteSession(s.id, s.title)))
+  b.appendChild(acts)
+  return b
+}
+
+// 项目分组头（可折叠、可作拖放目标、可改名/删除）
+function projectHead(p, count) {
+  const h = document.createElement("div"); h.className = "pghead"
+  const caret = document.createElement("span"); caret.className = "caret"; caret.innerHTML = ic("chevronD")
+  const fico = document.createElement("span"); fico.innerHTML = ic("folder")
+  const name = document.createElement("span"); name.className = "pgname"; name.textContent = p.name
+  const cnt = document.createElement("span"); cnt.className = "pgcount"; cnt.textContent = count
+  const ren = document.createElement("span"); ren.className = "pg-act"; ren.title = "重命名项目"; ren.innerHTML = ic("edit")
+  const del = document.createElement("span"); del.className = "pg-act del"; del.title = "删除项目（会话不删，变回普通会话）"; del.innerHTML = ic("trash")
+  h.append(caret, fico, name, cnt, ren, del)
+  ren.addEventListener("click", (e) => { e.stopPropagation(); renameProject(p.id, p.name, name) })
+  del.addEventListener("click", (e) => { e.stopPropagation(); deleteProject(p.id, p.name) })
+  return { h, caret, fico }
+}
+
+function renderSessions(data) {
+  META_STATE = data && data.sessions ? data : { projects: [], sessions: [] }
+  const { projects, sessions } = META_STATE
+  sessionsEl.innerHTML = ""
+  if (!sessions.length && !projects.length) { sessionsEl.innerHTML = '<span class="hint">还没有会话</span>'; renderReminder(); return }
+  const byProject = new Map(projects.map((p) => [p.id, []]))
+  const pinned = [], loose = []
+  for (const s of sessions) {
+    if (s.projectId && byProject.has(s.projectId)) byProject.get(s.projectId).push(s)
+    else if (s.pinned) pinned.push(s)
+    else loose.push(s)
+  }
+  // 1) 项目分组
+  for (const p of projects) {
+    const list = byProject.get(p.id) || []
+    const group = document.createElement("div"); group.className = "pgroup" + (collapsedProjects.has(p.id) ? " collapsed" : "")
+    const { h } = projectHead(p, list.length)
+    const body = document.createElement("div"); body.className = "pgbody"
+    if (!list.length) { const e = document.createElement("span"); e.className = "hint"; e.textContent = "拖会话到此归入项目"; body.appendChild(e) }
+    else for (const s of list) body.appendChild(sessRow(s))
+    h.addEventListener("click", () => { group.classList.toggle("collapsed"); collapsedProjects.has(p.id) ? collapsedProjects.delete(p.id) : collapsedProjects.add(p.id); saveCollapsed() })
+    makeDropTarget(group, p.id)                       // 拖到本项目（整组都可接收）
+    group.append(h, body); sessionsEl.appendChild(group)
+  }
+  // 2) 已持久化（钉住、无项目）—— 拖会话到此即钉住（持久化保留）
+  {
+    const lbl = document.createElement("div"); lbl.className = "sect-label"; lbl.innerHTML = ic("pin"); lbl.appendChild(document.createTextNode("已持久化")); sessionsEl.appendChild(lbl)
+    const area = document.createElement("div"); area.className = "droparea"; area.style.minHeight = "20px"; makeDropTarget(area, "pin")
+    if (!pinned.length) { const e = document.createElement("span"); e.className = "hint"; e.textContent = "拖会话到此钉住，持久化保留"; area.appendChild(e) }
+    else for (const s of pinned) area.appendChild(sessRow(s))
+    sessionsEl.appendChild(area)
+  }
+  // 3) 最近会话（普通、7 天 TTL）—— 也是「移出项目」的拖放目标
+  const lbl = document.createElement("div"); lbl.className = "sect-label"; lbl.innerHTML = ic("history"); lbl.appendChild(document.createTextNode("最近会话")); sessionsEl.appendChild(lbl)
+  const area = document.createElement("div"); area.className = "droparea"; area.style.minHeight = "20px"; makeDropTarget(area, "none")
+  if (!loose.length) { const e = document.createElement("span"); e.className = "hint"; e.textContent = "拖项目里的会话到此可移出"; area.appendChild(e) }
+  else for (const s of loose) area.appendChild(sessRow(s))
+  sessionsEl.appendChild(area)
+  renderReminder()
+}
+
+// 让某元素成为拖放目标：target = 项目 id（归入项目）/ "none"（移出项目）/ "pin"（钉住持久化）
+function makeDropTarget(el, target) {
+  el.addEventListener("dragover", (e) => { e.preventDefault(); e.dataTransfer.dropEffect = "move"; el.classList.add("drop-hint") })
+  el.addEventListener("dragleave", (e) => { if (!el.contains(e.relatedTarget)) el.classList.remove("drop-hint") })
+  el.addEventListener("drop", async (e) => {
+    e.preventDefault(); el.classList.remove("drop-hint")
+    const sid = e.dataTransfer.getData("text/plain"); if (!sid) return
+    const cur = META_STATE.sessions.find((s) => s.id === sid)
+    if (target === "pin") {
+      if (cur && cur.pinned && !cur.projectId) return             // 已在「已持久化」里
+      if (cur && cur.projectId) await fetch("api/session/project?id=" + encodeURIComponent(sid) + "&projectId=none", { method: "POST" }).catch(() => {})
+      await fetch("api/session/pin?id=" + encodeURIComponent(sid) + "&pinned=1", { method: "POST" }).catch(() => {})
+    } else {
+      if (cur && (cur.projectId || "none") === target && !(target === "none" && cur.pinned)) return   // 没变化
+      if (target === "none" && cur && cur.pinned) await fetch("api/session/pin?id=" + encodeURIComponent(sid) + "&pinned=0", { method: "POST" }).catch(() => {})
+      await fetch("api/session/project?id=" + encodeURIComponent(sid) + "&projectId=" + encodeURIComponent(target), { method: "POST" }).catch(() => {})
+    }
+    loadSessions()
+  })
+}
+
+// 内联改名（会话）：把标题元素替换成输入框，回车/失焦提交
+function inlineRename(anchorEl, cur, onSave) {
+  const inp = document.createElement("input"); inp.className = "rename-inp"; inp.value = cur
+  const parent = anchorEl.parentNode, next = anchorEl.nextSibling
+  anchorEl.style.display = "none"; parent.insertBefore(inp, next)
+  let done = false
+  const finish = async (commit) => {
+    if (done) return; done = true
+    const v = inp.value.trim(); inp.remove(); anchorEl.style.display = ""
+    if (commit && v && v !== cur) await onSave(v)
+  }
+  inp.addEventListener("click", (e) => e.stopPropagation())
+  inp.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); finish(true) } else if (e.key === "Escape") finish(false) })
+  inp.addEventListener("blur", () => finish(true))
+  inp.focus(); inp.select()
+}
+async function renameSession(id, cur, titleEl) {
+  inlineRename(titleEl, cur, async (v) => { await fetch("api/session/rename?id=" + encodeURIComponent(id) + "&title=" + encodeURIComponent(v), { method: "POST" }).catch(() => {}); loadSessions() })
+}
+async function renameProject(id, cur, nameEl) {
+  inlineRename(nameEl, cur, async (v) => { await fetch("api/project/rename?id=" + encodeURIComponent(id) + "&name=" + encodeURIComponent(v), { method: "POST" }).catch(() => {}); loadSessions() })
+}
+async function togglePin(id, pinned) {
+  await fetch("api/session/pin?id=" + encodeURIComponent(id) + "&pinned=" + (pinned ? "1" : "0"), { method: "POST" }).catch(() => {})
+  loadSessions()
+}
+async function createProject() {
+  const name = prompt("项目名称：", "新项目"); if (name === null) return
+  await fetch("api/project/create?name=" + encodeURIComponent(name.trim() || "新项目"), { method: "POST" }).catch(() => {})
+  loadSessions()
+}
+async function deleteProject(id, name) {
+  if (!confirm("删除项目「" + name + "」？项目内会话不会被删，会变回普通会话（从现在起 7 天后过期）。")) return
+  await fetch("api/project/delete?id=" + encodeURIComponent(id), { method: "POST" }).catch(() => {})
+  loadSessions()
+}
+
+// 临期提醒：列出 2 天内将自动删除的非项目会话，给「续期」一键保留
+const reminderEl = document.getElementById("expireReminder")
+const dismissedReminders = new Set()
+function renderReminder() {
+  const soon = (META_STATE.sessions || []).filter((s) => !s.permanent && s.expiresAt && (s.expiresAt - Date.now()) <= 2 * DAY_MS && !dismissedReminders.has(s.id))
+  if (!soon.length) { reminderEl.classList.remove("show"); reminderEl.innerHTML = ""; return }
+  reminderEl.innerHTML = ""
+  const top = document.createElement("div"); top.className = "er-top"; top.innerHTML = ic("clock")
+  top.appendChild(document.createTextNode(soon.length + " 个会话临近删除"))
+  const x = document.createElement("span"); x.className = "er-x"; x.innerHTML = ic("x"); x.title = "本次不再提醒"
+  x.addEventListener("click", () => { soon.forEach((s) => dismissedReminders.add(s.id)); renderReminder() })
+  top.appendChild(x); reminderEl.appendChild(top)
+  const list = document.createElement("div"); list.className = "er-list"
+  for (const s of soon.slice(0, 6)) {
+    const it = document.createElement("div"); it.className = "er-item"
+    const t = document.createElement("span"); t.className = "er-t"; t.textContent = s.title
+    const days = Math.max(0, Math.ceil((s.expiresAt - Date.now()) / DAY_MS))
+    const tip = document.createElement("span"); tip.style.cssText = "font-size:11px;opacity:.75;flex:none"; tip.textContent = days <= 0 ? "即将删除" : "剩 " + days + " 天"
+    const keep = document.createElement("span"); keep.className = "er-keep"; keep.textContent = "续 7 天"
+    keep.title = "重置存活期为 7 天（或拖入项目永久保留）"
+    keep.addEventListener("click", async () => { await fetch("api/session/renew?id=" + encodeURIComponent(s.id), { method: "POST" }).catch(() => {}); dismissedReminders.add(s.id); loadSessions() })
+    it.append(t, tip, keep); list.appendChild(it)
+  }
+  reminderEl.appendChild(list); reminderEl.classList.add("show")
 }
 const loadSessions = () => fetch("api/sessions").then(r => r.json()).then((l) => { sessList = l || []; renderSessions(sessList); if (sessionId) setModBadge(sessList.find((s) => s.id === sessionId)?.module || "chat") }).catch(() => {})
 async function resumeSession(id) {                 // 载入历史 → 设为当前会话 →（后台还在生成则续流）
@@ -1039,6 +1270,9 @@ function setSessbar(open) {
 sessToggle.addEventListener("click", () => setSessbar(!document.body.classList.contains("sessbar-open")))
 setSessbar(false)
 document.getElementById("refreshSess").addEventListener("click", loadSessions)
+document.getElementById("newProjBtn").innerHTML = ic("folderPlus")
+document.getElementById("newProjBtn").addEventListener("click", createProject)
+{ const np = document.getElementById("newProject"); np.innerHTML = ic("folderPlus"); np.appendChild(document.createTextNode("新建项目")); np.addEventListener("click", createProject) }
 loadSessions()
 loadModules()
 
