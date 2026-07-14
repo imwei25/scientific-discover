@@ -25,11 +25,11 @@ description: 临床研究常用统计——基线特征表(Table 1) 与 样本�
 
 ```bash
 # 自动推断变量类型（数值且取值多→连续，其余→分类）
-.venv/Scripts/python.exe .opencode/skills/clinical-stats/scripts/table1.py \
+.venv/bin/python .opencode/skills/clinical-stats/scripts/table1.py \
   --input uploads/data.csv --group arm --out outputs/table1.csv
 
 # 显式指定变量类型（更稳）
-.venv/Scripts/python.exe .opencode/skills/clinical-stats/scripts/table1.py \
+.venv/bin/python .opencode/skills/clinical-stats/scripts/table1.py \
   --input uploads/data.csv --group arm \
   --continuous age,bmi,sbp --categorical sex,smoker --out outputs/table1.csv
 ```
@@ -43,13 +43,13 @@ description: 临床研究常用统计——基线特征表(Table 1) 与 样本�
 ```bash
 S=".opencode/skills/clinical-stats/scripts/samplesize.py"
 # 两组均数（连续结局）：预期差 6，SD 10
-.venv/Scripts/python.exe $S two-means --diff 6 --sd 10 --power 0.8 --dropout 0.1
+.venv/bin/python $S two-means --diff 6 --sd 10 --power 0.8 --dropout 0.1
 # 两组率（二分类结局）：30% vs 15%
-.venv/Scripts/python.exe $S two-props --p1 0.30 --p2 0.15 --power 0.8
+.venv/bin/python $S two-props --p1 0.30 --p2 0.15 --power 0.8
 # 生存（log-rank，Freedman 近似）：HR 0.7，总体事件比例 0.5
-.venv/Scripts/python.exe $S survival --hr 0.7 --p-event 0.5 --power 0.8
+.venv/bin/python $S survival --hr 0.7 --p-event 0.5 --power 0.8
 # 单组对比已知值
-.venv/Scripts/python.exe $S one-mean --diff 5 --sd 12
+.venv/bin/python $S one-mean --diff 5 --sd 12
 ```
 `--dropout` 按预计脱落率上调样本量；`--ratio` 设非 1:1 分配。
 

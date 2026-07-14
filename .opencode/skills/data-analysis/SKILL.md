@@ -22,7 +22,7 @@ description: 用于任何数据分析、统计计算、画图、读写 CSV/Excel
 ## 运行方式
 把代码写到一个 `.py` 文件，再用 bash 执行：
 ```
-.venv/Scripts/python.exe analysis.py
+.venv/bin/python analysis.py
 ```
 
 ## 医学统计方法选择（护栏，动手前先对号入座）

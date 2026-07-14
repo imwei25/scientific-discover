@@ -29,18 +29,18 @@ description: 临床数据脱敏 / 去标识化。上传含患者信息的数据�
 脚本在 `.opencode/skills/deidentify/scripts/`，从仓库根运行或用全路径：
 ```bash
 # 先扫描看看有哪些 PII、不改数据
-.venv/Scripts/python.exe .opencode/skills/deidentify/scripts/deidentify.py --input uploads/patients.csv --scan-only
+.venv/bin/python .opencode/skills/deidentify/scripts/deidentify.py --input uploads/patients.csv --scan-only
 
 # CSV 脱敏：自动扫每个单元格；姓名列、标识号列显式指定按列假名化
-.venv/Scripts/python.exe .opencode/skills/deidentify/scripts/deidentify.py \
+.venv/bin/python .opencode/skills/deidentify/scripts/deidentify.py \
   --input uploads/patients.csv --out outputs/patients_deid.csv \
   --name-cols 姓名,患者姓名 --id-cols 住院号,身份证号
 
 # 病历/自由文本
-.venv/Scripts/python.exe .opencode/skills/deidentify/scripts/deidentify.py --input uploads/notes.txt --out outputs/notes_deid.txt
+.venv/bin/python .opencode/skills/deidentify/scripts/deidentify.py --input uploads/notes.txt --out outputs/notes_deid.txt
 
 # 同时脱敏具体日期（默认不脱，因日期常是分析变量）
-.venv/Scripts/python.exe .opencode/skills/deidentify/scripts/deidentify.py --input uploads/notes.txt --out outputs/notes_deid.txt --dates
+.venv/bin/python .opencode/skills/deidentify/scripts/deidentify.py --input uploads/notes.txt --out outputs/notes_deid.txt --dates
 ```
 > Excel(.xlsx)：先用 `data-analysis` 把工作表另存成 CSV 再脱敏，或在脚本里用 pandas 读入后按列处理。
 
