@@ -23,7 +23,7 @@ COPY web/package.json /app/web/package.json
 RUN cd /app/web && npm install --omit=dev
 
 # 应用文件
-COPY web/server.mjs web/index.html /app/web/
+COPY web/server.mjs web/index.html web/login.html /app/web/
 COPY deploy/skills/ /app/.opencode/skills/
 COPY deploy/AGENTS.md /app/AGENTS.md
 COPY deploy/entrypoint.sh /app/entrypoint.sh
