@@ -1,0 +1,6 @@
+[sshd]
+enabled  = true
+backend  = systemd
+maxretry = 4
+findtime = 600
+bantime  = 3600

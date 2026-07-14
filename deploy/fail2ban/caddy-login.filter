@@ -1,0 +1,3 @@
+[Definition]
+# 匹配 Caddy JSON 访问日志里登录失败(401)的行。路径路由后 uri 是 /<用户名>/api/login，[^"]* 兼容有/无前缀。
+failregex = "remote_ip":"<HOST>".*"uri":"[^"]*/api/login".*"status":401
