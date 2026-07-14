@@ -5,7 +5,7 @@ FROM node:20-bookworm-slim
 # 系统依赖：python3 + pip + curl(健康检查) + git(部分技能/MCP 需要)
 # pandoc + texlive-xetex + CJK 字体 供 render-pdf-doc 技能出版级 PDF 排版
 RUN apt-get update && apt-get install -y --no-install-recommends \
-      python3 python3-pip curl git ca-certificates \
+      python3 python3-pip curl git ca-certificates procps lsof \
       pandoc texlive-xetex texlive-fonts-recommended texlive-lang-cjk fonts-noto-cjk \
     && rm -rf /var/lib/apt/lists/*
 
