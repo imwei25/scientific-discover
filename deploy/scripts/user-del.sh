@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 删除用户：停并删容器 → 重渲染 compose → 同步 Caddy → 热加载 manager。
+# 删除用户：停并删容器 → 重渲染 compose → 热加载 manager。
 # 默认保留数据卷（安全）；加 --purge 才在备份后删除卷。
 # 用法：scripts/user-del.sh <用户名> [--purge]
 set -euo pipefail
@@ -23,6 +23,5 @@ else
   echo "已保留数据卷 ${name}-{uploads,outputs,ocdata}（彻底删除请加 --purge）"
 fi
 
-scripts/caddy-sync.sh || true
 systemctl reload sci-manager 2>/dev/null || pkill -HUP -f 'manager.mjs' 2>/dev/null || true
-echo "✅ 用户 $name 已移除（若不再使用，记得去 DuckDNS 面板删除其子域）"
+echo "✅ 用户 $name 已移除"

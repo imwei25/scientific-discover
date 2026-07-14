@@ -1,24 +1,21 @@
-# 服务器 /etc/caddy/Caddyfile 的多用户目标形态。
+# 服务器 /etc/caddy/Caddyfile 的多用户目标形态（单域名 + 路径路由）。
 #
-#   Internet ─HTTPS─> Caddy ──(每个用户域名)──> 127.0.0.1:8090 (manager) ──按 Host──> 各用户容器
+#   Internet ─HTTPS─> Caddy(单域名) ──> 127.0.0.1:8090 (manager) ──按路径首段 /用户名/ 分发并剥前缀──> 各用户容器
 #
-# 各用户域名的站点块由 scripts/caddy-sync.sh 生成到 /etc/caddy/multiuser.caddy，这里 import 进来；
-# 加/减用户时脚本会重写该文件并 reload Caddy，主 Caddyfile 无需改动。
+# 一个站点块搞定所有用户：Caddy 只管 TLS + 转发，路由/唤醒/停机全在 manager。
+# 加/减用户不需要动 Caddy（manager 热加载即可）。
 
 {
 	# 用于 Let's Encrypt 证书通知；改成你的邮箱
 	email you@example.com
 }
 
-# 由 caddy-sync.sh 维护：形如
-#   weigu-alice.duckdns.org, weigu-bob.duckdns.org {
-#       reverse_proxy 127.0.0.1:8090 { flush_interval -1 }
-#       request_body { max_size 100MB }
-#       encode zstd gzip
-#   }
-import /etc/caddy/multiuser.caddy
-
-# 可选：裸基础域名给个提示（不再直连旧的单用户 3000 容器）
-# weigu.duckdns.org {
-# 	respond "多用户科研 Agent —— 请用你的专属子域访问" 200
-# }
+weigu.duckdns.org {
+	reverse_proxy 127.0.0.1:8090 {
+		flush_interval -1        # SSE / 流式输出不缓冲
+	}
+	request_body {
+		max_size 100MB           # 允许上传较大数据文件
+	}
+	encode zstd gzip
+}

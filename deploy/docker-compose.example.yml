@@ -13,6 +13,7 @@ services:
       LAN_AUTH: "1"
       LAN_USER: "alice"
       LAN_PASSWORD: "示例-真实值来自-users-alice-env"
+      BASE_PATH: "/alice"
     volumes:
       - alice-uploads:/app/uploads
       - alice-outputs:/app/outputs
@@ -31,6 +32,7 @@ services:
       LAN_AUTH: "1"
       LAN_USER: "bob"
       LAN_PASSWORD: "示例-真实值来自-users-bob-env"
+      BASE_PATH: "/bob"
     volumes:
       - bob-uploads:/app/uploads
       - bob-outputs:/app/outputs

@@ -166,13 +166,13 @@
     if (!password) return fail('请输入密码');
     go.disabled = true; go.textContent = 'Signing in…'; err.classList.remove('show');
     try {
-      const r = await fetch('/api/login', {
+      const r = await fetch('api/login', {   // 相对路径：单域名路径路由(/alice/login)下会解析成 /alice/api/login
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ username, password })
       });
       if (r.ok) {
         go.textContent = 'Welcome ✓';
-        const next = new URLSearchParams(location.search).get('next') || '/';
+        const next = new URLSearchParams(location.search).get('next') || './';   // 相对：/alice/login → ./  → /alice/
         location.href = next;
         return;
       }

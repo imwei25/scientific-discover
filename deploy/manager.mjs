@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // 多用户按需生命周期管理器（宿主 systemd 服务，不是容器 —— 避免把 docker.sock 交给任何容器）。
 //
-//   Internet ─HTTPS─> Caddy(每个用户一个域名) ──> 127.0.0.1:8090(本进程) ──按 Host 分发──> 127.0.0.1:<port>(用户容器)
+//   Internet ─HTTPS─> Caddy(单域名) ──> 127.0.0.1:8090(本进程) ──按路径首段(/用户名/)分发并剥前缀──> 127.0.0.1:<port>(用户容器)
 //
 // 职责：
 //   1) 唤醒：请求到来时若对应容器已停 → docker start，轮询就绪后再反代（single-flight，避免并发首请求重复启动）。
@@ -9,7 +9,7 @@
 //   3) 空闲停机：60s 巡检，停掉「无在途连接且空闲超 IDLE_MS」的容器（开着的流 = 活跃，绝不打断十几分钟的流水线）。
 //   4) 并发上限：最多 WARM_CAP 个容器同时在跑；要再起新的先按 LRU 停掉一个空闲容器（这是小内存机扛住多用户的关键闸）。
 //
-// 用户表来自 deploy/users/*.env（每个含 NAME/PORT/DOMAIN）。改动后 systemctl reload sci-manager（SIGHUP）即热加载。
+// 用户表来自 deploy/users/*.env（每个含 NAME/PORT）。改动后 systemctl reload sci-manager（SIGHUP）即热加载。
 
 import http from "node:http"
 import fs from "node:fs"
@@ -31,7 +31,7 @@ const READY_PROBE_MS = 500                                        // 就绪轮�
 const log = (...a) => console.log(new Date().toISOString(), ...a)
 
 // ---- 用户表 ----
-/** domain(小写) -> { name, port, domain, container, lastActive, conns, starting } */
+/** name -> { name, port, base, container, lastActive, conns, starting } */
 let users = new Map()
 
 function parseEnvFile(file) {
@@ -49,13 +49,13 @@ function loadUsers() {
   try { files = fs.readdirSync(USERS_DIR).filter((f) => f.endsWith(".env")) } catch { /* 目录还没建 */ }
   for (const f of files) {
     const e = parseEnvFile(path.join(USERS_DIR, f))
-    if (!e.NAME || !e.PORT || !e.DOMAIN) { log(`[users] 跳过 ${f}（缺 NAME/PORT/DOMAIN）`); continue }
-    const domain = e.DOMAIN.toLowerCase()
+    if (!e.NAME || !e.PORT) { log(`[users] 跳过 ${f}（缺 NAME/PORT）`); continue }
+    const name = e.NAME
     // 保留已在跑用户的运行时状态（热加载不该清空计数/时间戳）
-    const prev = users.get(domain)
-    next.set(domain, prev && prev.name === e.NAME
-      ? Object.assign(prev, { port: Number(e.PORT), domain })
-      : { name: e.NAME, port: Number(e.PORT), domain, container: `agent-${e.NAME}`, lastActive: 0, conns: 0, starting: null })
+    const prev = users.get(name)
+    next.set(name, prev
+      ? Object.assign(prev, { port: Number(e.PORT) })
+      : { name, port: Number(e.PORT), base: `/${name}`, container: `agent-${name}`, lastActive: 0, conns: 0, starting: null })
   }
   users = next
   log(`[users] 已加载 ${users.size} 个用户：${[...users.values()].map((u) => `${u.name}→:${u.port}`).join(", ") || "(空)"}`)
@@ -87,10 +87,10 @@ async function waitReady(port, deadline) {
 }
 
 // ---- 并发上限：起新容器前，若已达 WARM_CAP，按 LRU 停一个空闲(conns==0)容器 ----
-async function enforceWarmCap(exceptDomain) {
+async function enforceWarmCap(exceptName) {
   const running = []
   for (const u of users.values()) {
-    if (u.domain === exceptDomain) continue
+    if (u.name === exceptName) continue
     if (await isRunning(u.container)) running.push(u)
   }
   // 含即将启动的自己在内，超过上限则驱逐
@@ -112,7 +112,7 @@ function ensureUp(u) {
     if (running === null) throw new Error(`容器 ${u.container} 不存在（先跑 user-add 或 docker compose up --no-start）`)
     if (running && await probeReady(u.port)) return
     if (!running) {
-      await enforceWarmCap(u.domain)
+      await enforceWarmCap(u.name)
       log(`[wake] 启动 ${u.container} …`)
       const r = await dockerStart(u.container)
       if (r.code !== 0) throw new Error(`docker start ${u.container} 失败：${r.stderr}`)
@@ -124,8 +124,8 @@ function ensureUp(u) {
   return u.starting
 }
 
-// ---- 反向代理（流式，不缓冲）----
-function proxy(u, req, res) {
+// ---- 反向代理（流式，不缓冲）。fwdPath 已剥掉 /用户名 前缀，容器按根路径处理 ----
+function proxy(u, fwdPath, req, res) {
   u.conns++; u.lastActive = Date.now()
   const done = () => { u.conns = Math.max(0, u.conns - 1); u.lastActive = Date.now() }
   res.on("close", done)
@@ -133,7 +133,8 @@ function proxy(u, req, res) {
   const headers = { ...req.headers }
   headers["x-forwarded-for"] = req.socket.remoteAddress || ""
   headers["x-forwarded-proto"] = "https"
-  const up = http.request({ host: "127.0.0.1", port: u.port, method: req.method, path: req.url, headers }, (upRes) => {
+  headers["x-forwarded-prefix"] = u.base
+  const up = http.request({ host: "127.0.0.1", port: u.port, method: req.method, path: fwdPath, headers }, (upRes) => {
     res.writeHead(upRes.statusCode || 502, upRes.headers)
     upRes.pipe(res)   // 逐块透传：SSE / 长流式输出不攒包
   })
@@ -146,14 +147,17 @@ function proxy(u, req, res) {
   req.on("aborted", () => up.destroy())
 }
 
-// ---- HTTP 入口 ----
+// ---- HTTP 入口：路径首段 = 用户名 ----
 const server = http.createServer(async (req, res) => {
-  const host = String(req.headers.host || "").split(":")[0].toLowerCase()
-  const u = users.get(host)
-  if (!u) { res.writeHead(404, { "content-type": "text/plain; charset=utf-8" }); return res.end(`未知域名：${host}`) }
+  const seg = (/^\/([^/?#]+)/.exec(req.url) || [])[1] || ""
+  const u = users.get(seg)
+  if (!u) { res.writeHead(404, { "content-type": "text/plain; charset=utf-8" }); return res.end(`未知用户路径：/${seg}`) }
+  // 裸 /alice（无尾斜杠）→ 301 到 /alice/，否则页面里的相对 URL 会解析到根而错位
+  if (req.url === "/" + seg) { res.writeHead(301, { Location: "/" + seg + "/" }); return res.end() }
+  const fwdPath = req.url.slice(seg.length + 1) || "/"   // 剥掉 "/用户名"，容器收到根路径
   try {
     await ensureUp(u)
-    proxy(u, req, res)
+    proxy(u, fwdPath, req, res)
   } catch (e) {
     log(`[wake] ${u.name} 失败：${e.message}`)
     res.writeHead(503, { "content-type": "text/plain; charset=utf-8", "retry-after": "5" })

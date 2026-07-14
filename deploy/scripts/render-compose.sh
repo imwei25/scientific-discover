@@ -36,6 +36,7 @@ field() { sed -n "s/^$1=//p" "$2" | head -1; }
       LAN_AUTH: "${lauth}"
       LAN_USER: "${luser}"
       LAN_PASSWORD: "${lpass}"
+      BASE_PATH: "/${name}"
     volumes:
       - ${name}-uploads:/app/uploads
       - ${name}-outputs:/app/outputs

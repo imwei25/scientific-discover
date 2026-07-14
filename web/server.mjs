@@ -106,6 +106,10 @@ const send = (res, code, type, body) => { res.writeHead(code, { "Content-Type": 
 const LAN_USER = process.env.LAN_USER || "tellgen"             // 单用户账号，可用环境变量覆盖
 const LAN_PASSWORD = process.env.LAN_PASSWORD || "123"         // 单用户密码，可用环境变量覆盖
 const AUTH_ENABLED = process.env.LAN_AUTH !== "0"             // LAN_AUTH=0 可整体关闭登录
+// 路径路由前缀：多用户单域名部署时每容器设 BASE_PATH=/用户名（如 /alice）。前面的 manager 会剥掉该前缀再转进来，
+// 所以容器内部仍按根路径处理；这里只在"发给浏览器"的东西上补回前缀——跳转 Location 与 Cookie 的 Path。
+// 尤其 Cookie 的 Path=/用户名/ 是隔离关键：保证 alice 的登录 token 只发往 /alice/，不会泄露给别的用户容器。
+const BASE_PATH = (process.env.BASE_PATH || "").replace(/\/+$/, "")   // 归一化，去掉结尾斜杠；根部署留空
 const tokens = new Set()                                      // 内存里的有效 token（重启即失效，demo 足够）
 const PUBLIC_PATHS = new Set(["/login", "/api/login"])        // 不需登录即可访问的路径
 const isLocal = (req) => {
@@ -294,7 +298,7 @@ const server = http.createServer(async (req, res) => {
   try {
     // 登录页：未登录的局域网访客看到它；已登录/本机则直接跳回主页
     if (req.method === "GET" && u.pathname === "/login") {
-      if (authed(req)) { res.writeHead(302, { Location: "/" }); return res.end() }
+      if (authed(req)) { res.writeHead(302, { Location: BASE_PATH + "/" }); return res.end() }
       res.writeHead(200, { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" })
       return res.end(fs.readFileSync(path.join(__dirname, "login.html")))
     }
@@ -305,19 +309,19 @@ const server = http.createServer(async (req, res) => {
       try { const b = JSON.parse(Buffer.concat(chunks).toString() || "{}"); user = (b.username || "").trim(); pw = (b.password || "").trim() } catch {}
       if (user !== LAN_USER || pw !== LAN_PASSWORD) return send(res, 401, "application/json", JSON.stringify({ ok: false, err: "账号或密码错误" }))
       const tok = crypto.randomBytes(24).toString("hex"); tokens.add(tok)
-      res.writeHead(200, { "Content-Type": "application/json", "Set-Cookie": `lan_auth=${tok}; Path=/; HttpOnly; SameSite=Lax; Max-Age=604800` })
+      res.writeHead(200, { "Content-Type": "application/json", "Set-Cookie": `lan_auth=${tok}; Path=${BASE_PATH}/; HttpOnly; SameSite=Lax; Max-Age=604800` })
       return res.end(JSON.stringify({ ok: true }))
     }
     // 退出登录
     if (req.method === "POST" && u.pathname === "/api/logout") {
       tokens.delete(cookieOf(req, "lan_auth") || "")
-      res.writeHead(200, { "Content-Type": "application/json", "Set-Cookie": "lan_auth=; Path=/; HttpOnly; Max-Age=0" })
+      res.writeHead(200, { "Content-Type": "application/json", "Set-Cookie": `lan_auth=; Path=${BASE_PATH}/; HttpOnly; Max-Age=0` })
       return res.end(JSON.stringify({ ok: true }))
     }
     // 门禁：其余路径若未登录 → 页面跳登录页、接口回 401
     if (!PUBLIC_PATHS.has(u.pathname) && !authed(req)) {
       if (req.method === "GET" && (req.headers.accept || "").includes("text/html")) {
-        res.writeHead(302, { Location: "/login" }); return res.end()
+        res.writeHead(302, { Location: BASE_PATH + "/login" }); return res.end()
       }
       return send(res, 401, "application/json", JSON.stringify({ ok: false, err: "unauthorized" }))
     }
