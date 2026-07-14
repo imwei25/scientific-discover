@@ -1118,6 +1118,47 @@ dz.addEventListener("drop", (e) => uploadFiles(e.dataTransfer.files))
 const savedSid = localStorage.getItem("nm_sid")
 if (savedSid) resumeSession(savedSid)
 else renderWelcome()
+
+/* ---- 闲置倒计时：闲置 7 分钟弹 3 分钟倒计时，满 10 分钟自动退出、需重新登录 ---- */
+;(function () {
+  var WARN_MS = 7 * 60 * 1000, LOGOUT_MS = 10 * 60 * 1000
+  var last = Date.now(), out = false
+  function bump() { last = Date.now() }
+  // SSE 生成期间也算活跃：包一层 EventSource，任何事件都刷新闲置计时，避免长流水线跑一半被登出
+  var OES = window.EventSource
+  if (OES) {
+    function WES(u, c) {
+      var es = new OES(u, c), add = es.addEventListener.bind(es)
+      es.addEventListener = function (t, f, o) { return add(t, function (e) { bump(); return f && f(e) }, o) }
+      es.addEventListener("message", function () { bump() })
+      return es
+    }
+    WES.prototype = OES.prototype
+    try { WES.CONNECTING = OES.CONNECTING; WES.OPEN = OES.OPEN; WES.CLOSED = OES.CLOSED } catch (e) {}
+    window.EventSource = WES
+  }
+  ;["mousemove", "mousedown", "keydown", "touchstart", "scroll", "wheel"].forEach(function (ev) {
+    window.addEventListener(ev, bump, { passive: true })
+  })
+  var ov = document.createElement("div")
+  ov.style.cssText = "position:fixed;inset:0;z-index:9999;display:none;align-items:center;justify-content:center;background:#0009"
+  ov.innerHTML = '<div style="width:min(90vw,340px);background:#111827;border:1px solid #ffffff22;border-radius:14px;padding:24px;color:#e2e8f0;font:14px/1.6 system-ui,sans-serif;box-shadow:0 20px 60px #0008">'
+    + '<div style="font-size:17px;font-weight:600;margin-bottom:10px">闲置超时提醒</div>'
+    + '<div id="idleTxt" style="color:#cbd5e1"></div>'
+    + '<button id="idleStay" style="margin-top:18px;width:100%;padding:10px;border:0;border-radius:9px;background:#3b82f6;color:#fff;font-size:15px;font-weight:600;cursor:pointer">继续使用</button></div>'
+  document.body.appendChild(ov)
+  var txt = ov.querySelector("#idleTxt")
+  ov.querySelector("#idleStay").addEventListener("click", bump)
+  function fmt(ms) { var s = Math.max(0, Math.ceil(ms / 1000)); return Math.floor(s / 60) + ":" + ("0" + (s % 60)).slice(-2) }
+  async function logout() { if (out) return; out = true; try { await fetch("api/logout", { method: "POST" }) } catch (e) {} location.href = "/" }
+  setInterval(function () {
+    if (out) return
+    var idle = Date.now() - last
+    if (idle >= LOGOUT_MS) { ov.style.display = "none"; logout(); return }
+    if (idle >= WARN_MS) { txt.textContent = "你已闲置较久，将在 " + fmt(LOGOUT_MS - idle) + " 后自动退出，届时需重新登录。移动鼠标或点“继续使用”即可保持登录。"; ov.style.display = "flex" }
+    else if (ov.style.display !== "none") ov.style.display = "none"
+  }, 1000)
+})()
 </script>
 </body>
 </html>

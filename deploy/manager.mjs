@@ -27,6 +27,8 @@ const IDLE_MS     = Number(process.env.IDLE_MS     || 25 * 60 * 1000)   // 空�
 const START_TIMEOUT_MS = Number(process.env.START_TIMEOUT_MS || 60 * 1000) // 冷启动就绪等待上限（含 opencode 预热）
 const SWEEP_MS    = Number(process.env.SWEEP_MS    || 60 * 1000)  // 空闲巡检周期
 const READY_PROBE_MS = 500                                        // 就绪轮询间隔
+const CAP_WAIT_MS = Number(process.env.CAP_WAIT_MS || 120 * 1000) // 满载排队等待上限（超时回繁忙）
+const CAP_POLL_MS = 2000                                          // 满载时的排队轮询间隔
 
 const log = (...a) => console.log(new Date().toISOString(), ...a)
 
@@ -86,21 +88,27 @@ async function waitReady(port, deadline) {
   return false
 }
 
-// ---- 并发上限：起新容器前，若已达 WARM_CAP，按 LRU 停一个空闲(conns==0)容器 ----
-async function enforceWarmCap(exceptName) {
-  const running = []
-  for (const u of users.values()) {
-    if (u.name === exceptName) continue
-    if (await isRunning(u.container)) running.push(u)
-  }
-  // 含即将启动的自己在内，超过上限则驱逐
-  while (running.length + 1 > WARM_CAP) {
+// ---- 并发上限：起新容器前确保有槽位。有空闲(conns==0)容器就 LRU 停一个腾位；
+//      全忙则排队等待（轮询）直到有槽位，超 CAP_WAIT_MS 抛错 → 前端提示繁忙。绝不超配，内存是硬顶。----
+async function makeRoom(exceptName) {
+  const deadline = Date.now() + CAP_WAIT_MS
+  let waited = false
+  for (;;) {
+    const running = []
+    for (const u of users.values()) {
+      if (u.name === exceptName) continue
+      if (await isRunning(u.container)) running.push(u)
+    }
+    if (running.length + 1 <= WARM_CAP) return                       // 有空位 → 放行
     const idle = running.filter((u) => u.conns === 0).sort((a, b) => a.lastActive - b.lastActive)
-    if (!idle.length) { log(`[cap] 已达上限但无空闲容器可停，暂时超配`); break }
-    const victim = idle[0]
-    log(`[cap] 达到 WARM_CAP=${WARM_CAP}，停掉最久空闲的 ${victim.container}`)
-    await dockerStop(victim.container)
-    running.splice(running.indexOf(victim), 1)
+    if (idle.length) {                                               // 有空闲容器 → 停最久空闲的腾位
+      log(`[cap] 达到 WARM_CAP=${WARM_CAP}，停掉最久空闲的 ${idle[0].container}`)
+      await dockerStop(idle[0].container)
+      continue
+    }
+    if (Date.now() >= deadline) throw new Error(`并发已满（${WARM_CAP} 路全忙），排队超时，请稍后重试`)
+    if (!waited) { log(`[cap] ${WARM_CAP} 路全忙且无空闲，${exceptName} 排队等待空闲槽位…`); waited = true }
+    await sleep(CAP_POLL_MS)                                         // 全忙 → 等待，不超配
   }
 }
 
@@ -112,7 +120,7 @@ function ensureUp(u) {
     if (running === null) throw new Error(`容器 ${u.container} 不存在（先跑 user-add 或 docker compose up --no-start）`)
     if (running && await probeReady(u.port)) return
     if (!running) {
-      await enforceWarmCap(u.name)
+      await makeRoom(u.name)
       log(`[wake] 启动 ${u.container} …`)
       const r = await dockerStart(u.container)
       if (r.code !== 0) throw new Error(`docker start ${u.container} 失败：${r.stderr}`)

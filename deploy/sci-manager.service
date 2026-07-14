@@ -15,8 +15,9 @@ ExecStart=/usr/bin/node /opt/scientific-discover/deploy/manager.mjs
 ExecReload=/bin/kill -HUP $MAINPID
 Environment=LISTEN=127.0.0.1:8090
 Environment=WARM_CAP=2
-Environment=IDLE_MS=1500000
+Environment=IDLE_MS=600000
 Environment=START_TIMEOUT_MS=60000
+Environment=CAP_WAIT_MS=120000
 Restart=on-failure
 RestartSec=3
 # 需要能调用 docker CLI。服务器自用场景用 root 最省事；或改成 docker 组内用户。

@@ -111,6 +111,18 @@ const AUTH_ENABLED = process.env.LAN_AUTH !== "0"             // LAN_AUTH=0 可�
 // 尤其 Cookie 的 Path=/用户名/ 是隔离关键：保证 alice 的登录 token 只发往 /alice/，不会泄露给别的用户容器。
 const BASE_PATH = (process.env.BASE_PATH || "").replace(/\/+$/, "")   // 归一化，去掉结尾斜杠；根部署留空
 const tokens = new Set()                                      // 内存里的有效 token（重启即失效，demo 足够）
+
+// ---- 每日成本额度（USD）----
+// 用 opencode 的 session.cost（已含 DeepSeek 缓存折扣）累计每轮增量；跨日自动清零；持久化在 ocdata 卷（重启不丢）。
+// DAILY_COST_LIMIT=0 或空 = 不限额。达上限即拦截新对话（本轮已开始的照常跑完）。
+const DAILY_COST_LIMIT = Number(process.env.DAILY_COST_LIMIT || 0)
+const QUOTA_FILE = path.join(os.homedir(), ".local", "share", "opencode", "quota.json")
+const todayKey = () => new Date().toISOString().slice(0, 10)   // UTC 日期
+const loadQuota = () => { try { const q = JSON.parse(fs.readFileSync(QUOTA_FILE, "utf8")); if (q && q.day === todayKey()) return q } catch {} return { day: todayKey(), cost: 0 } }
+const saveQuota = (q) => { try { fs.mkdirSync(path.dirname(QUOTA_FILE), { recursive: true }); fs.writeFileSync(QUOTA_FILE, JSON.stringify(q)) } catch {} }
+const addCost = (delta) => { if (!(delta > 0)) return; const q = loadQuota(); q.cost += delta; saveQuota(q) }
+const quotaUsed = () => loadQuota().cost
+const quotaOver = () => DAILY_COST_LIMIT > 0 && quotaUsed() >= DAILY_COST_LIMIT
 const PUBLIC_PATHS = new Set(["/login", "/api/login"])        // 不需登录即可访问的路径
 const isLocal = (req) => {
   const a = req.socket.remoteAddress || ""
@@ -259,6 +271,7 @@ function startJob(sid, sentText) {
       }
     })().catch(() => {})
     const before = dirState(wsOut(sid))   // 记录本轮开始前本会话产物状态，用于算增量
+    let cost0 = 0; try { cost0 = un(await client.session.get({ path: { id: sid } }))?.cost || 0 } catch {}   // 本轮前累计成本，用于算增量
     let result
     try {
       result = un(await client.session.prompt({ path: { id: sid }, body: { model: MODEL, parts: [{ type: "text", text: sentText }] } }))
@@ -271,6 +284,7 @@ function startJob(sid, sentText) {
       return finish()
     }
     if (job.finished || job.aborting) return finish()
+    try { const c1 = un(await client.session.get({ path: { id: sid } }))?.cost || 0; addCost(c1 - cost0) } catch {}   // 记本轮成本增量到今日额度
     const finalText = (result?.parts ?? []).filter(x => x.type === "text").map(x => x.text).join("\n")
     broadcast("final", { text: finalText })
     const changed = changedSince(wsOut(sid), before)
@@ -474,6 +488,9 @@ const server = http.createServer(async (req, res) => {
       return fs.createReadStream(r.out).pipe(res)
     }
 
+    if (req.method === "GET" && u.pathname === "/api/quota") {   // 前端显示今日额度用量
+      return send(res, 200, "application/json", JSON.stringify({ used: quotaUsed(), limit: DAILY_COST_LIMIT }))
+    }
     if (req.method === "GET" && u.pathname === "/api/chat") {
       const q = u.searchParams.get("q") || ""
       // Reuse the session the browser passes back so the conversation is multi-turn;
@@ -490,6 +507,12 @@ const server = http.createServer(async (req, res) => {
       await ensureSessionTitle(sid, q)   // 上传先于对话建的占位标题 "web" → 首条提问改名（只对占位标题生效，不动续问的旧会话）
       // 给 agent 注入本会话专属目录，覆盖技能默认的 outputs/，实现多用户/多会话隔离
       const preamble = `【本会话专属目录，务必遵守】\n- 用户上传的数据文件在 \`${relUp(sid)}/\`（读数据从这里找）。\n- 所有产物（图表 PNG/PDF、CSV/Excel、md/docx 文档等）一律写到 \`${relOut(sid)}/\`。\n- 连临时脚本、中间文件也一律写在 \`${relOut(sid)}/\`（需要放一起可用 \`${relOut(sid)}/.scratch/\`）。\n- **严禁在仓库根写任何文件**（.py / .csv / .png / .md 等都不行）：仓库根是所有用户共享的，同名文件会互相覆盖、把不同会话的数据串在一起。运行脚本时也把工作目录/输出指到 \`${relOut(sid)}/\`。\n- 正文里嵌入图片用 \`![图注](${relOut(sid)}/xxx.png)\` 这个路径。\n\n`
+      if (quotaOver()) {   // 今日额度已用尽 → 不发起新对话，回一条 failed 让前端提示
+        res.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-cache", Connection: "keep-alive" })
+        sseWrite(res, "session", { id: sid })
+        sseWrite(res, "failed", { message: `今日额度已用尽（已用 $${quotaUsed().toFixed(3)} / 上限 $${DAILY_COST_LIMIT.toFixed(2)}），明天恢复。` })
+        return res.end()
+      }
       return attachJob(startJob(sid, preamble + q), req, res)
     }
 
