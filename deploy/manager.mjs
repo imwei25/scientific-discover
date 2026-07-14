@@ -155,34 +155,107 @@ function proxy(u, fwdPath, req, res) {
   req.on("aborted", () => up.destroy())
 }
 
-// ---- 通用登录页（服务于裸 /）：填 用户名+密码 → 按用户名分发到 /<用户名>/api/login，成功跳 /<用户名>/ ----
-// 不做中央认证：密码仍由各自容器校验，"该去哪个容器"= 用户名本身。所以一个网址所有人通用。
-const LOGIN_HTML = `<!doctype html><html lang="zh"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1"><link rel="icon" href="data:,">
-<title>科研 Agent · 登录</title><style>
-:root{color-scheme:light dark}*{box-sizing:border-box}
-body{margin:0;min-height:100vh;display:grid;place-items:center;font:15px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif;background:linear-gradient(135deg,#0f172a,#1e293b);color:#e2e8f0}
-.card{width:min(92vw,360px);background:#111827ee;border:1px solid #ffffff1a;border-radius:16px;padding:28px 26px;box-shadow:0 20px 60px #0006}
-h1{margin:0 0 4px;font-size:19px}p.sub{margin:0 0 18px;color:#94a3b8;font-size:13px}
-label{display:block;font-size:12px;color:#94a3b8;margin:14px 0 6px}
-input{width:100%;padding:11px 12px;border-radius:9px;border:1px solid #ffffff22;background:#0b1220;color:#e2e8f0;font-size:15px}
-input:focus{outline:none;border-color:#3b82f6}
-button{width:100%;margin-top:20px;padding:11px;border:0;border-radius:9px;background:#3b82f6;color:#fff;font-size:15px;font-weight:600;cursor:pointer}
-button:disabled{opacity:.6;cursor:default}.msg{margin-top:14px;font-size:13px;min-height:18px}.msg.err{color:#f87171}.msg.info{color:#94a3b8}
-</style></head><body><form class="card" id="f">
-<h1>科研医学 Agent</h1><p class="sub">输入你的账号进入专属工作区</p>
-<label>用户名</label><input id="u" autocomplete="username" autofocus>
-<label>密码</label><input id="p" type="password" autocomplete="current-password">
-<button id="b">登录</button><div class="msg" id="m"></div></form><script>
-var f=document.getElementById('f'),U=document.getElementById('u'),P=document.getElementById('p'),B=document.getElementById('b'),M=document.getElementById('m');
-function msg(t,c){M.textContent=t;M.className='msg '+(c||'')}
-f.onsubmit=async function(e){e.preventDefault();var u=U.value.trim(),p=P.value;
-if(!u){msg('请输入用户名','err');return}B.disabled=true;msg('登录中…（首次唤醒可能需 10–40 秒）','info');
-try{var r=await fetch('/'+encodeURIComponent(u)+'/api/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username:u,password:p})});
-if(r.ok){location.href='/'+encodeURIComponent(u)+'/';return}
-if(r.status===503){msg('服务器繁忙，请稍候重试','err')}else{msg('账号或密码错误','err')}}catch(_){msg('网络错误，请重试','err')}
-B.disabled=false};
-</script></body></html>`
+// ---- 通用登录页（服务于裸 /）：沿用原 web/login.html 的视觉（背景视频 + 玻璃登录框 + 主视觉文案），
+// 只把提交逻辑改成"按用户名分发"：POST /<用户名>/api/login，成功跳 /<用户名>/。
+// 不做中央认证：密码仍由各自容器校验，"该去哪个容器"= 用户名本身。★改设计时此处与 web/login.html 两份需同步。
+const LOGIN_HTML = `<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>登录 · Niuma Research</title><meta name="theme-color" content="#010101">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@300;400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://db.onlinewebfonts.com/c/2bf40ab72ea4897a3fd9b6e48b233a19?family=Garamond">
+<style>
+  :root { --sans: 'Geist', -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei", sans-serif; --serif: 'Garamond', 'Times New Roman', serif; }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body { background: #010101; color: #fff; overflow: hidden; font-family: var(--sans); -webkit-font-smoothing: antialiased; text-rendering: optimizeLegibility; }
+  .stage { position: fixed; inset: 0; overflow: hidden; background: #010101; }
+  .stage video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; object-position: center; z-index: 0; }
+  .stage .veil { position: absolute; inset: 0; z-index: 1; background: radial-gradient(ellipse 80% 80% at 50% 50%, rgba(1,1,1,.08) 0%, rgba(1,1,1,.5) 100%); }
+  .wrap { position: relative; z-index: 10; display: flex; flex-direction: column; min-height: 100vh; }
+  nav { display: flex; align-items: center; justify-content: space-between; padding: 28px 40px; z-index: 20; }
+  .brand { font-weight: 300; font-size: 12px; letter-spacing: .3em; text-transform: uppercase; color: #fff; white-space: nowrap; }
+  .nav-links { display: flex; gap: 36px; align-items: center; }
+  .nav-links a { font-weight: 300; font-size: 11px; letter-spacing: .2em; text-transform: uppercase; color: rgba(255,255,255,.68); text-decoration: none; transition: color .3s ease; }
+  .nav-links a:hover { color: #fff; }
+  .nav-right { display: flex; align-items: center; gap: 16px; }
+  .try-btn { background: transparent; border: 1px solid rgba(255,255,255,.28); border-radius: 999px; color: rgba(255,255,255,.8); font-family: var(--sans); font-weight: 300; font-size: 11px; letter-spacing: .18em; text-transform: uppercase; padding: 7px 20px; cursor: pointer; white-space: nowrap; transition: background .22s ease, border-color .22s ease, color .22s ease; }
+  .try-btn:hover { background: rgba(255,255,255,.08); border-color: rgba(255,255,255,.5); color: #fff; }
+  .hamburger { display: none; background: none; border: none; color: #fff; cursor: pointer; padding: 0; align-items: center; }
+  .hamburger svg { width: 24px; height: 24px; stroke: currentColor; stroke-width: 1.6; fill: none; }
+  .hero { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; padding: 20px 20px 80px; gap: 24px; margin-top: -120px; }
+  .hero h1 { font-family: var(--serif); font-size: clamp(36px, 7vw, 96px); font-weight: 400; color: #fff; line-height: 1.08; letter-spacing: -.01em; margin: 0 0 4px; }
+  .hero h1 div { opacity: 0; transform: translateY(20px); animation: rise .9s cubic-bezier(.2,.7,.2,1) forwards; }
+  .hero h1 div:nth-child(1) { animation-delay: .05s; }
+  .hero h1 div:nth-child(2) { animation-delay: .18s; }
+  .hero h1 div:nth-child(3) { animation-delay: .31s; }
+  .hero p { font-weight: 300; font-size: clamp(13px, 1.8vw, 17px); color: rgba(255,255,255,.58); line-height: 1.75; max-width: 400px; margin: 0; opacity: 0; transform: translateY(12px); animation: rise .9s cubic-bezier(.2,.7,.2,1) .5s forwards; }
+  @keyframes rise { to { opacity: 1; transform: none; } }
+  form.login { position: fixed; top: 72%; right: 14%; transform: translateY(-50%); z-index: 50; display: flex; flex-direction: column; gap: 10px; align-items: flex-end; opacity: 0; animation: rise .9s cubic-bezier(.2,.7,.2,1) .7s forwards; }
+  .pill { width: 220px; box-sizing: border-box; padding: 11px 20px; border-radius: 999px; background: rgba(4,7,10,.72); backdrop-filter: blur(16px) saturate(1.2); -webkit-backdrop-filter: blur(16px) saturate(1.2); border: 1px solid rgba(255,255,255,.1); box-shadow: 0 2px 16px rgba(0,0,0,.4); color: rgba(255,255,255,.88); font-family: var(--sans); font-size: 13px; font-weight: 300; letter-spacing: .03em; outline: none; display: block; transition: background .18s ease, border-color .18s ease; }
+  .pill::placeholder { color: rgba(255,255,255,.22); }
+  .pill:focus { background: rgba(4,7,10,.88); border-color: rgba(255,255,255,.22); }
+  .pill.error { border-color: rgba(200,70,50,.5); }
+  button.pill-btn { width: 220px; padding: 11px 20px; border-radius: 999px; background: rgba(4,7,10,.72); backdrop-filter: blur(16px) saturate(1.2); -webkit-backdrop-filter: blur(16px) saturate(1.2); border: 1px solid rgba(255,255,255,.14); box-shadow: 0 2px 16px rgba(0,0,0,.4); color: rgba(255,255,255,.82); font-family: var(--sans); font-size: 11px; font-weight: 400; letter-spacing: .22em; text-transform: uppercase; cursor: pointer; display: block; transition: background .2s ease, border-color .2s ease, color .2s ease; }
+  button.pill-btn:hover { background: rgba(4,7,10,.9); border-color: rgba(255,255,255,.26); color: rgba(255,255,255,.96); }
+  button.pill-btn:active { transform: scale(.97); }
+  button.pill-btn:disabled { opacity: .42; cursor: not-allowed; transform: none; }
+  .err { min-height: 15px; font-size: 11px; color: rgba(220,75,55,.88); text-align: right; padding-right: 6px; opacity: 0; transition: opacity .16s; }
+  .err.show { opacity: 1; }
+  @media (max-width: 767px) {
+    nav { padding: 22px 24px; }
+    .nav-links, .try-btn { display: none; }
+    .hamburger { display: flex; }
+    .hero { margin-top: -60px; }
+    form.login { position: fixed; top: auto; bottom: 40px; right: 0; left: 0; transform: none; align-items: center; }
+  }
+</style></head>
+<body>
+  <div class="stage">
+    <video autoplay muted loop playsinline src="https://oss-crm-test-tellgen.oss-cn-shanghai.aliyuncs.com/videos/hf_20260619_191346_9d19d66e-86a4-47f7-8dc6-712c1788c3b2_1783489695679.mp4"></video>
+    <div class="veil"></div>
+  </div>
+  <div class="wrap">
+    <nav>
+      <span class="brand">Niuma Research</span>
+      <div class="nav-links"><a href="#">Research</a><a href="#">Database</a><a href="#">Skills</a><a href="#">About</a></div>
+      <div class="nav-right">
+        <button type="button" class="try-btn" id="try">Try it now</button>
+        <button type="button" class="hamburger" aria-label="Toggle menu"><svg viewBox="0 0 24 24"><path d="M3 6h18M3 12h18M3 18h18"/></svg></button>
+      </div>
+    </nav>
+    <div class="hero">
+      <h1><div>AI-POWERED</div><div>MEDICAL RESEARCH</div><div>REIMAGINED</div></h1>
+      <p>250+ Research Skills · 50+ Medical Databases<br>Your all-in-one AI platform for medical science.</p>
+    </div>
+  </div>
+  <form class="login" id="card" autocomplete="off">
+    <input id="user" class="pill" type="text" placeholder="Username" autocomplete="username" autofocus>
+    <input id="pw" class="pill" type="password" placeholder="Password" autocomplete="current-password">
+    <button type="submit" class="pill-btn" id="go">Sign In</button>
+    <div class="err" id="err"></div>
+  </form>
+<script>
+  var card=document.getElementById('card'),user=document.getElementById('user'),pw=document.getElementById('pw'),err=document.getElementById('err'),go=document.getElementById('go');
+  document.getElementById('try').onclick=function(){user.focus()};
+  function fail(m){err.textContent=m;err.classList.add('show');user.classList.add('error');pw.classList.add('error');setTimeout(function(){user.classList.remove('error');pw.classList.remove('error')},1200);pw.select()}
+  card.addEventListener('submit',async function(e){
+    e.preventDefault();
+    var username=user.value.trim(),password=pw.value.trim();
+    if(!username)return fail('请输入账号');
+    if(!password)return fail('请输入密码');
+    go.disabled=true;go.textContent='Signing in…';err.classList.remove('show');
+    try{
+      var r=await fetch('/'+encodeURIComponent(username)+'/api/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username:username,password:password})});
+      if(r.ok){go.textContent='Welcome ✓';location.href='/'+encodeURIComponent(username)+'/';return}
+      if(r.status===503){fail('服务器繁忙，请稍候重试')}else{fail('账号或密码错误')}
+    }catch(_){fail('网络异常，请重试')}
+    go.disabled=false;go.textContent='Sign In';
+  });
+</script>
+</body></html>`
 
 // ---- HTTP 入口：路径首段 = 用户名 ----
 const server = http.createServer(async (req, res) => {
