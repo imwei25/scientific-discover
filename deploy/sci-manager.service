@@ -1,0 +1,26 @@
+# 多用户按需生命周期管理器的 systemd 单元。
+# 安装：把仓库放到服务器（示例 /opt/scientific-discover），按实际路径改下面两处，然后：
+#   sudo cp deploy/sci-manager.service /etc/systemd/system/
+#   sudo systemctl daemon-reload && sudo systemctl enable --now sci-manager
+#   sudo systemctl reload sci-manager   # 加/减用户后热加载用户表（脚本已自动调用）
+[Unit]
+Description=Sci 多用户按需生命周期管理器（Caddy → :8090 → 各用户容器）
+After=docker.service caddy.service
+Requires=docker.service
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/scientific-discover/deploy
+ExecStart=/usr/bin/node /opt/scientific-discover/deploy/manager.mjs
+ExecReload=/bin/kill -HUP $MAINPID
+Environment=LISTEN=127.0.0.1:8090
+Environment=WARM_CAP=2
+Environment=IDLE_MS=1500000
+Environment=START_TIMEOUT_MS=60000
+Restart=on-failure
+RestartSec=3
+# 需要能调用 docker CLI。服务器自用场景用 root 最省事；或改成 docker 组内用户。
+User=root
+
+[Install]
+WantedBy=multi-user.target
