@@ -147,11 +147,41 @@ function proxy(u, fwdPath, req, res) {
   req.on("aborted", () => up.destroy())
 }
 
+// ---- 通用登录页（服务于裸 /）：填 用户名+密码 → 按用户名分发到 /<用户名>/api/login，成功跳 /<用户名>/ ----
+// 不做中央认证：密码仍由各自容器校验，"该去哪个容器"= 用户名本身。所以一个网址所有人通用。
+const LOGIN_HTML = `<!doctype html><html lang="zh"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1"><link rel="icon" href="data:,">
+<title>科研 Agent · 登录</title><style>
+:root{color-scheme:light dark}*{box-sizing:border-box}
+body{margin:0;min-height:100vh;display:grid;place-items:center;font:15px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif;background:linear-gradient(135deg,#0f172a,#1e293b);color:#e2e8f0}
+.card{width:min(92vw,360px);background:#111827ee;border:1px solid #ffffff1a;border-radius:16px;padding:28px 26px;box-shadow:0 20px 60px #0006}
+h1{margin:0 0 4px;font-size:19px}p.sub{margin:0 0 18px;color:#94a3b8;font-size:13px}
+label{display:block;font-size:12px;color:#94a3b8;margin:14px 0 6px}
+input{width:100%;padding:11px 12px;border-radius:9px;border:1px solid #ffffff22;background:#0b1220;color:#e2e8f0;font-size:15px}
+input:focus{outline:none;border-color:#3b82f6}
+button{width:100%;margin-top:20px;padding:11px;border:0;border-radius:9px;background:#3b82f6;color:#fff;font-size:15px;font-weight:600;cursor:pointer}
+button:disabled{opacity:.6;cursor:default}.msg{margin-top:14px;font-size:13px;min-height:18px}.msg.err{color:#f87171}.msg.info{color:#94a3b8}
+</style></head><body><form class="card" id="f">
+<h1>科研医学 Agent</h1><p class="sub">输入你的账号进入专属工作区</p>
+<label>用户名</label><input id="u" autocomplete="username" autofocus>
+<label>密码</label><input id="p" type="password" autocomplete="current-password">
+<button id="b">登录</button><div class="msg" id="m"></div></form><script>
+var f=document.getElementById('f'),U=document.getElementById('u'),P=document.getElementById('p'),B=document.getElementById('b'),M=document.getElementById('m');
+function msg(t,c){M.textContent=t;M.className='msg '+(c||'')}
+f.onsubmit=async function(e){e.preventDefault();var u=U.value.trim(),p=P.value;
+if(!u){msg('请输入用户名','err');return}B.disabled=true;msg('登录中…（首次唤醒可能需 10–40 秒）','info');
+try{var r=await fetch('/'+encodeURIComponent(u)+'/api/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username:u,password:p})});
+if(r.ok){location.href='/'+encodeURIComponent(u)+'/';return}
+if(r.status===503){msg('服务器繁忙，请稍候重试','err')}else{msg('账号或密码错误','err')}}catch(_){msg('网络错误，请重试','err')}
+B.disabled=false};
+</script></body></html>`
+
 // ---- HTTP 入口：路径首段 = 用户名 ----
 const server = http.createServer(async (req, res) => {
   const seg = (/^\/([^/?#]+)/.exec(req.url) || [])[1] || ""
+  if (!seg) { res.writeHead(200, { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" }); return res.end(LOGIN_HTML) }
   const u = users.get(seg)
-  if (!u) { res.writeHead(404, { "content-type": "text/plain; charset=utf-8" }); return res.end(`未知用户路径：/${seg}`) }
+  if (!u) { res.writeHead(404, { "content-type": "text/plain; charset=utf-8" }); return res.end(`未知用户路径：/${seg}（请访问 / 登录）`) }
   // 裸 /alice（无尾斜杠）→ 301 到 /alice/，否则页面里的相对 URL 会解析到根而错位
   if (req.url === "/" + seg) { res.writeHead(301, { Location: "/" + seg + "/" }); return res.end() }
   const fwdPath = req.url.slice(seg.length + 1) || "/"   // 剥掉 "/用户名"，容器收到根路径
