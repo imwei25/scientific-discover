@@ -80,9 +80,33 @@ sudo deploy/scripts/user-add.sh bob
 | 看谁在跑 | `docker ps --filter name=agent-` |
 | 调并发/闲置 | 改 `/etc/systemd/system/sci-manager.service` 的 `WARM_CAP`/`IDLE_MS` → `systemctl daemon-reload && systemctl restart sci-manager` |
 
-**备份 cron 示例**（每天 3:30）：
+### 定时备份
+
+`backup.sh` 每次把 **每个用户的数据卷**（uploads/outputs/ocdata）+ **配置密钥**（`.env`/`users/*.env`/compose，不在 git 里、全量恢复必需）打包到 `/var/backups/sci/<日期>/`，保留最近 7 天。
+
+装每日 cron（每天 3:30）：
 ```bash
 echo '30 3 * * * root /root/sci-agent/deploy/scripts/backup.sh >/var/log/sci-backup.log 2>&1' | sudo tee /etc/cron.d/sci-backup
+sudo /root/sci-agent/deploy/scripts/backup.sh    # 先手动跑一次验证
+```
+
+**异地容灾**（同盘备份挡不住磁盘/整机损坏，可选）：再把目录同步到别处，例如
+```bash
+# 追加到上面的 cron 后面，或单独一条：把当天备份同步到另一台机
+rsync -az /var/backups/sci/ backup-host:/backups/sci/
+```
+
+**恢复**（新机上）：跑完 §1–§3 后，解开配置与数据卷即可：
+```bash
+cd /root/sci-agent/deploy
+tar xzf /path/to/config.tar.gz                                  # 还原 .env / users/*.env / compose
+scripts/render-compose.sh
+for v in /path/to/<用户>-{uploads,outputs,ocdata}.tar.gz; do    # 逐个还原数据卷
+  vol=$(basename "$v" .tar.gz)
+  docker volume create "$vol" >/dev/null
+  docker run --rm -v "$vol:/data" -v "$(dirname "$v"):/b" alpine tar xzf "/b/$(basename "$v")" -C /data
+done
+systemctl reload sci-manager
 ```
 
 调参口径见 [README-multiuser.md](README-multiuser.md)：`WARM_CAP≈可用内存/1.75G`；4G 机 2、16G 机 ~6。
