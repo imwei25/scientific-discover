@@ -23,7 +23,11 @@ fs.mkdirSync(OUTPUTS, { recursive: true })
 const OC_URL = process.env.OC_URL || "http://127.0.0.1:4098"
 const client = createOpencodeClient({ baseUrl: OC_URL })
 const un = (r) => (r && r.data !== undefined ? r.data : r)
-const [PID, MID] = (process.env.OC_MODEL || "deepseek/deepseek-v4-pro").split("/")
+// provider/model：只按【第一个】斜杠切——模型名本身可能含斜杠（如 deepseek-ai/DeepSeek-V4-Flash），不能整体 split
+const _OCM = process.env.OC_MODEL || "deepseek/deepseek-v4-pro"
+const _sl = _OCM.indexOf("/")
+const PID = _sl >= 0 ? _OCM.slice(0, _sl) : _OCM
+const MID = _sl >= 0 ? _OCM.slice(_sl + 1) : _OCM
 let MODEL = { providerID: PID, modelID: MID }
 const PORT = Number(process.env.PORT || 3000)
 
