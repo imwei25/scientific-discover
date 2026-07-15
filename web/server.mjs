@@ -123,6 +123,20 @@ const saveQuota = (q) => { try { fs.mkdirSync(path.dirname(QUOTA_FILE), { recurs
 const addCost = (delta) => { if (!(delta > 0)) return; const q = loadQuota(); q.cost += delta; saveQuota(q) }
 const quotaUsed = () => loadQuota().cost
 const quotaOver = () => DAILY_COST_LIMIT > 0 && quotaUsed() >= DAILY_COST_LIMIT
+
+// ---- 每用户存储上限（uploads + outputs 之和）----
+// STORAGE_LIMIT_MB=0 或空 = 不限。达上限拦截新上传；前端到 90% 提示。删除会话会清掉其目录（见 /api/session/delete）。
+const STORAGE_LIMIT_MB = Number(process.env.STORAGE_LIMIT_MB || 0)
+const dirSize = (dir) => {
+  let total = 0
+  const walk = (d) => {
+    let ents; try { ents = fs.readdirSync(d, { withFileTypes: true }) } catch { return }
+    for (const e of ents) { const p = path.join(d, e.name); if (e.isDirectory()) walk(p); else { try { total += fs.statSync(p).size } catch {} } }
+  }
+  walk(dir); return total
+}
+const storageUsed = () => dirSize(UPLOADS) + dirSize(OUTPUTS)      // 字节
+const storageLimitBytes = () => STORAGE_LIMIT_MB * 1024 * 1024
 const PUBLIC_PATHS = new Set(["/login", "/api/login"])        // 不需登录即可访问的路径
 const isLocal = (req) => {
   const a = req.socket.remoteAddress || ""
@@ -350,7 +364,11 @@ const server = http.createServer(async (req, res) => {
       ensureWs(sid)
       const name = path.basename(u.searchParams.get("name") || "upload.bin")
       const chunks = []; for await (const c of req) chunks.push(c)
-      const dest = path.join(wsUp(sid), name); fs.writeFileSync(dest, Buffer.concat(chunks))
+      const buf = Buffer.concat(chunks)
+      const lim = storageLimitBytes()
+      if (lim > 0 && storageUsed() + buf.length > lim)
+        return send(res, 413, "application/json", JSON.stringify({ ok: false, err: `存储空间不足：已用 ${(storageUsed() / 1048576).toFixed(0)}MB / 上限 ${STORAGE_LIMIT_MB}MB。请删除旧会话或文件后再传。` }))
+      const dest = path.join(wsUp(sid), name); fs.writeFileSync(dest, buf)
       return send(res, 200, "application/json", JSON.stringify({ ok: true, sid, path: `${relUp(sid)}/${name}`, size: fs.statSync(dest).size }))
     }
 
@@ -420,6 +438,7 @@ const server = http.createServer(async (req, res) => {
       if (!id) return send(res, 400, "application/json", JSON.stringify({ ok: false }))
       try { await jobs.get(id)?.abort() } catch {}   // 会话还在生成中 → 先终止再删
       try { await client.session.delete({ path: { id } }) } catch (e) { return send(res, 500, "application/json", JSON.stringify({ ok: false, err: String(e) })) }
+      try { fs.rmSync(wsUp(id), { recursive: true, force: true }); fs.rmSync(wsOut(id), { recursive: true, force: true }) } catch {}   // 删会话即释放其 uploads/outputs 占用的空间
       return send(res, 200, "application/json", JSON.stringify({ ok: true }))
     }
 
@@ -490,6 +509,9 @@ const server = http.createServer(async (req, res) => {
 
     if (req.method === "GET" && u.pathname === "/api/quota") {   // 前端显示今日额度用量
       return send(res, 200, "application/json", JSON.stringify({ used: quotaUsed(), limit: DAILY_COST_LIMIT }))
+    }
+    if (req.method === "GET" && u.pathname === "/api/storage") {   // 前端显示存储用量（uploads+outputs）
+      return send(res, 200, "application/json", JSON.stringify({ used: storageUsed(), limit: storageLimitBytes() }))
     }
     if (req.method === "GET" && u.pathname === "/api/chat") {
       const q = u.searchParams.get("q") || ""

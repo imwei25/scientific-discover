@@ -25,6 +25,7 @@ field() { sed -n "s/^$1=//p" "$2" | head -1; }
     luser=$(field LAN_USER "$f"); lpass=$(field LAN_PASSWORD "$f")
     lauth=$(field LAN_AUTH "$f"); lauth=${lauth:-1}
     dlimit=$(field DAILY_COST_LIMIT "$f")
+    slimit=$(field STORAGE_LIMIT_MB "$f")
     if [ -z "$name" ] || [ -z "$port" ]; then echo "!! $f 缺 NAME/PORT，跳过" >&2; continue; fi
     had=1
     cat <<YAML
@@ -39,6 +40,7 @@ field() { sed -n "s/^$1=//p" "$2" | head -1; }
       LAN_PASSWORD: "${lpass}"
       BASE_PATH: "/${name}"
       DAILY_COST_LIMIT: "${dlimit:-0}"
+      STORAGE_LIMIT_MB: "${slimit:-0}"
     volumes:
       - ${name}-uploads:/app/uploads
       - ${name}-outputs:/app/outputs

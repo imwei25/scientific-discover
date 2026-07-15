@@ -78,6 +78,12 @@ scripts/user-add.sh bob
 - 用 opencode 的 `session.cost`（含 DeepSeek 缓存折扣）累计每轮增量，**跨日 UTC 0 点自动清零**，持久化在 `ocdata` 卷（重启不丢）。
 - 达上限后**拦截新对话**（本轮已开始的照常跑完），前端提示"今日额度已用尽"。查用量：`GET /<user>/api/quota`。
 
+## 存储上限（MB）
+
+- 每用户 `users/<name>.env` 里 `STORAGE_LIMIT_MB=`（`0` 或空 = 不限），统计 `uploads + outputs` 之和。改后 `docker restart agent-<name>`。
+- 前端侧栏常驻显示"存储 已用/上限"，**到 90% 变红提示**；超上限**拦截新上传**（对话产物照常）。查用量：`GET /<user>/api/storage`。
+- **删除会话即释放其占用**（`uploads/<sid>/` 与 `outputs/<sid>/` 一并删掉）；另有应用内 7 天 TTL 兜底。
+
 ## 闲置退出（前端）
 
 - 无操作满 7 分钟弹 3 分钟倒计时，满 10 分钟自动登出跳登录页。移动鼠标/按键即保持登录。

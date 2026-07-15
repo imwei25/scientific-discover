@@ -29,6 +29,8 @@ LAN_USER=$name
 LAN_PASSWORD=$pass
 # 每日成本上限(USD)，0=不限；改这行即调整该用户额度，改后 docker restart agent-$name 生效
 DAILY_COST_LIMIT=${DEFAULT_DAILY_LIMIT:-0}
+# 存储上限(MB)，0=不限（uploads+outputs 之和）；改后 docker restart agent-$name 生效
+STORAGE_LIMIT_MB=${DEFAULT_STORAGE_MB:-0}
 EOF
 echo "写入 $env（端口 $port）"
 

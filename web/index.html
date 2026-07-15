@@ -409,6 +409,7 @@
         <span class="dzsub">支持一次选择 / 拖拽多个文件</span>
       </label>
       <div id="upmsg" class="hint">文件会放进 uploads/，可在对话里让 agent 分析。</div>
+      <div id="storebar" class="hint" style="display:none;margin-top:2px"></div>
       <div id="uplist"></div>
     </div>
     <div class="panel">
@@ -866,7 +867,7 @@ async function deleteSession(id, title) {           // 删除会话（不可撤�
   if (!confirm("删除会话「" + (title || id) + "」？此操作不可撤销。")) return
   await fetch("api/session/delete?id=" + encodeURIComponent(id), { method: "POST" }).catch(() => {})
   if (id === sessionId) { detachStream(); sessionId = null; localStorage.removeItem("nm_sid"); log.innerHTML = ""; renderFiles([]); renderUploads([]); renderWelcome() }   // 删的是当前会话 → 回到空态
-  loadSessions()
+  loadSessions(); refreshStorage()   // 删会话已释放其存储 → 刷新用量
 }
 // 左侧会话栏折叠/展开（默认折叠）
 const sessToggle = document.getElementById("sessToggle")
@@ -1029,7 +1030,7 @@ function openStream(url) {
   es.addEventListener("text", (ev) => { if (!painted) { gotText = true; answer.textContent = JSON.parse(ev.data); setGen("正在输出…"); follow() } })   // 流式期间纯文本，final 时才渲染 markdown
   es.addEventListener("final", (ev) => { const t = JSON.parse(ev.data).text; if (t && !painted) { gotText = true; answer.textContent = t } paintAnswer(); follow() })
   es.addEventListener("files", (ev) => { const list = JSON.parse(ev.data); if (list.length) { renderFiles(list); addProducts(list) } })   // 本轮没产物就保留上一轮，不清空
-  es.addEventListener("done", () => { paintAnswer(); finalize() })
+  es.addEventListener("done", () => { paintAnswer(); finalize(); refreshStorage() })   // 本轮产物落盘后刷新存储用量
   es.addEventListener("failed", (ev) => { let m = "本轮出错"; try { m = JSON.parse(ev.data).message } catch {} finalize("⚠ " + m) })   // 服务端出错：如实提示，不丢会话
   es.addEventListener("aborted", () => finalize("⏹ 已终止"))   // 后端确认已终止（本页或别的页点了"终止"）
   es.addEventListener("notice", (ev) => { try { const n = document.createElement("div"); n.className = "note"; n.textContent = "⚠ " + JSON.parse(ev.data).message; answer.appendChild(n) } catch {} })
@@ -1091,23 +1092,37 @@ async function deleteUpload(name) {
   loadUploads()
 }
 // 多文件上传：逐个 POST（并实时更新进度），全部完成后刷新列表
+// ---- 存储用量：显示 已用/上限，≥90% 变红提示。未设上限(limit=0)则不显示 ----
+async function refreshStorage() {
+  const bar = document.getElementById("storebar")
+  try {
+    const s = await fetch("api/storage").then(r => r.json())
+    if (!s || !s.limit) { bar.style.display = "none"; return }
+    const mb = (b) => (b / 1048576).toFixed(b >= 10485760 ? 0 : 1)
+    const pct = Math.min(100, Math.round(s.used / s.limit * 100))
+    bar.style.display = ""
+    bar.textContent = `存储 ${mb(s.used)} / ${mb(s.limit)} MB（${pct}%）` + (pct >= 90 ? "　⚠ 接近上限，请删除旧会话/文件" : "")
+    bar.style.color = pct >= 90 ? "#dc4b37" : ""
+  } catch { bar.style.display = "none" }
+}
 async function uploadFiles(files) {
   const arr = Array.from(files || []).filter(Boolean)
   if (!arr.length) return
   dz.classList.add("busy")
-  let done = 0, failed = 0
+  let done = 0, failed = 0, lastErr = ""
   for (const file of arr) {
     setUpMsg(`上传中… ${done + 1}/${arr.length}：${file.name}`)
     try {
       const r = await fetch("api/upload?name=" + encodeURIComponent(file.name) + sidQ(), { method: "POST", body: file })
       const j = await r.json()
-      if (j.sid) { sessionId = j.sid; localStorage.setItem("nm_sid", j.sid) }   // 上传先于对话时，用网关现建的会话 id，之后对话/产物都归这个会话
+      if (!r.ok || j.ok === false) { failed++; if (j.err) lastErr = j.err; continue }   // 存储超限(413)等
+      if (j.sid) { sessionId = j.sid; localStorage.setItem("nm_sid", j.sid) }   // 上传先于对话时，用网关现建的会话 id
       done++
     } catch { failed++ }
   }
   dz.classList.remove("busy")
-  setUpMsg(failed ? `✅ ${done} 个已上传，${failed} 个失败` : `✅ 已上传 ${done} 个文件`, failed > 0)
-  loadUploads(); loadSessions()
+  setUpMsg(lastErr ? `⚠ ${lastErr}` : (failed ? `✅ ${done} 个已上传，${failed} 个失败` : `✅ 已上传 ${done} 个文件`), failed > 0)
+  loadUploads(); loadSessions(); refreshStorage()
 }
 document.getElementById("up").addEventListener("change", (e) => { uploadFiles(e.target.files); e.target.value = "" })
 ;["dragover", "dragenter"].forEach((ev) => dz.addEventListener(ev, (e) => { e.preventDefault(); dz.classList.add("drag") }))
@@ -1118,6 +1133,7 @@ dz.addEventListener("drop", (e) => uploadFiles(e.dataTransfer.files))
 const savedSid = localStorage.getItem("nm_sid")
 if (savedSid) resumeSession(savedSid)
 else renderWelcome()
+refreshStorage()
 
 /* ---- 闲置倒计时：闲置 7 分钟弹 3 分钟倒计时，满 10 分钟自动退出、需重新登录 ---- */
 ;(function () {
