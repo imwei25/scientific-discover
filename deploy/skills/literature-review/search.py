@@ -33,7 +33,11 @@ except ImportError:
     sys.exit("缺少 requests：请先在仓库根运行 install.ps1（Windows）/ install.sh（Linux/macOS），或让 agent 运行 env-setup 技能")
 
 EPMC = "https://www.ebi.ac.uk/europepmc/webservices/rest/search"
-UA = {"User-Agent": "sci-agent-literature-review/1.1"}
+_EMAIL = (os.environ.get("SCI_CONTACT_EMAIL")
+          or os.environ.get("MEDSCI_CONTACT_EMAIL")
+          or os.environ.get("CONTACT_EMAIL")
+          or "sci-skill@users.noreply.github.com")
+UA = {"User-Agent": f"sci-agent-literature-review/1.1 (mailto:{_EMAIL})"}
 TIMEOUT = 30
 
 

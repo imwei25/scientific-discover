@@ -52,6 +52,13 @@ tier_field() { [ -f tiers.env ] || return 0; awk -v t="$1" -v c="$2" '!/^[[:spac
       OC_COST_INPUT: \${OC_COST_INPUT:-0.27}
       OC_COST_OUTPUT: \${OC_COST_OUTPUT:-1.10}
       OC_COST_CACHE_READ: \${OC_COST_CACHE_READ:-0.07}
+      # 文献检索源的联系邮箱 + API key（都从 deploy/.env 插值，空=免费匿名档，填了=更高限额/更稳）。
+      # 换服务器只需搬 deploy/.env 这一个文件，所有用户容器自动继承，无需逐个配置。
+      SCI_CONTACT_EMAIL: \${SCI_CONTACT_EMAIL:-}
+      NCBI_API_KEY: \${NCBI_API_KEY:-}
+      S2_API_KEY: \${S2_API_KEY:-}
+      OPENALEX_API_KEY: \${OPENALEX_API_KEY:-}
+      CROSSREF_PLUS_TOKEN: \${CROSSREF_PLUS_TOKEN:-}
       LAN_AUTH: "${lauth}"
       LAN_USER: "${luser}"
       LAN_PASSWORD: "${lpass}"

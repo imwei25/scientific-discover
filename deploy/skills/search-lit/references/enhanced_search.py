@@ -56,7 +56,14 @@ import urllib.parse
 import urllib.request
 import xml.etree.ElementTree as ET
 
-UA = "sci-agent-enhanced-search/1.0"
+# One unified contact var (older names incl. OPENALEX_MAILTO kept for back-compat).
+# The mailto in the UA enrolls Europe PMC / OpenAlex / Crossref polite pools for free.
+_EMAIL = (os.environ.get("SCI_CONTACT_EMAIL")
+          or os.environ.get("MEDSCI_CONTACT_EMAIL")
+          or os.environ.get("CONTACT_EMAIL")
+          or os.environ.get("OPENALEX_MAILTO")
+          or "sci-skill@users.noreply.github.com")
+UA = f"sci-agent-enhanced-search/1.1 (mailto:{_EMAIL})"
 TIMEOUT = 30
 
 EPMC = "https://www.ebi.ac.uk/europepmc/webservices/rest/search"
@@ -375,7 +382,7 @@ def main():
                     help=f"逗号分隔，默认全开：{','.join(ALL_SOURCES)}")
     ap.add_argument("--limit", type=int, default=25, help="每源每检索式取多少")
     ap.add_argument("--since", type=int, help="起始年份（含）")
-    ap.add_argument("--email", default=os.environ.get("OPENALEX_MAILTO", ""),
+    ap.add_argument("--email", default=_EMAIL,
                     help="OpenAlex polite pool 联系邮箱（也读 OPENALEX_MAILTO）")
     ap.add_argument("--outdir", default="outputs")
     args = ap.parse_args()

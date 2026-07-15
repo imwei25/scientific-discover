@@ -45,7 +45,11 @@ except ImportError:
     sys.exit("缺少 requests：先在仓库根跑 env-setup 技能。")
 
 EPMC = "https://www.ebi.ac.uk/europepmc/webservices/rest/search"
-UA = {"User-Agent": "sci-agent-claim-grounding/1.0"}
+_EMAIL = (os.environ.get("SCI_CONTACT_EMAIL")
+          or os.environ.get("MEDSCI_CONTACT_EMAIL")
+          or os.environ.get("CONTACT_EMAIL")
+          or "sci-skill@users.noreply.github.com")
+UA = {"User-Agent": f"sci-agent-claim-grounding/1.0 (mailto:{_EMAIL})"}
 TIMEOUT = 30
 DOI_RE = re.compile(r"10\.\d{4,9}/[-._;()/:A-Za-z0-9]+", re.I)
 PMID_RE = re.compile(r"\bPMID:?\s*(\d{5,9})\b", re.I)
