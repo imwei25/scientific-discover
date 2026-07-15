@@ -110,7 +110,6 @@ const AUTH_ENABLED = process.env.LAN_AUTH !== "0"             // LAN_AUTH=0 可�
 // 所以容器内部仍按根路径处理；这里只在"发给浏览器"的东西上补回前缀——跳转 Location 与 Cookie 的 Path。
 // 尤其 Cookie 的 Path=/用户名/ 是隔离关键：保证 alice 的登录 token 只发往 /alice/，不会泄露给别的用户容器。
 const BASE_PATH = (process.env.BASE_PATH || "").replace(/\/+$/, "")   // 归一化，去掉结尾斜杠；根部署留空
-const tokens = new Set()                                      // 内存里的有效 token（重启即失效，demo 足够）
 
 // ---- 每日成本额度（USD）----
 // 用 opencode 的 session.cost（已含 DeepSeek 缓存折扣）累计每轮增量；跨日自动清零；持久化在 ocdata 卷（重启不丢）。
@@ -147,7 +146,24 @@ const cookieOf = (req, key) => {
   for (const kv of raw.split(";")) { const [k, ...v] = kv.trim().split("="); if (k === key) return decodeURIComponent(v.join("=")) }
   return null
 }
-const authed = (req) => !AUTH_ENABLED || isLocal(req) || tokens.has(cookieOf(req, "lan_auth") || "")
+// ---- 无状态签名登录 cookie（不再靠内存 tokens Set）----
+// 容器按需停机/冷启动会清空内存，随机 token 一停就失效、无法"5 天免登录"。改用 HMAC 签名：
+// cookie = <过期时间ms>.<HMAC(LAN_PASSWORD, "lan|过期时间")>，容器只验签+验没过期，无需存储，重启后老 cookie 仍有效。
+// 用 LAN_PASSWORD 作签名密钥：每容器稳定、且改密码即让旧会话失效（合理）。
+const AUTH_TTL_MS = 5 * 24 * 60 * 60 * 1000                    // 5 天免登录
+const AUTH_KEY = "lan-auth|" + (LAN_PASSWORD || "")
+const b64u = (buf) => buf.toString("base64").replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "")
+const signAuth = (exp) => b64u(crypto.createHmac("sha256", AUTH_KEY).update("lan|" + exp).digest())
+const makeAuthCookie = () => { const exp = Date.now() + AUTH_TTL_MS; return exp + "." + signAuth(exp) }
+const validAuth = (val) => {
+  if (!val) return false
+  const i = val.indexOf("."); if (i < 0) return false
+  const exp = Number(val.slice(0, i)), sig = val.slice(i + 1)
+  if (!Number.isFinite(exp) || exp < Date.now()) return false
+  const good = signAuth(exp)
+  return good.length === sig.length && crypto.timingSafeEqual(Buffer.from(good), Buffer.from(sig))
+}
+const authed = (req) => !AUTH_ENABLED || isLocal(req) || validAuth(cookieOf(req, "lan_auth"))
 
 // ---- 后台生成任务：一轮生成 = 一个挂在 sid 上的 job，SSE 连接只是"订阅者" ----
 // 切会话/关页面 → 只是退订，生成继续跑；回来用 /api/chat/attach 先重放快照再续直播。
@@ -336,13 +352,11 @@ const server = http.createServer(async (req, res) => {
       let user = "", pw = ""
       try { const b = JSON.parse(Buffer.concat(chunks).toString() || "{}"); user = (b.username || "").trim(); pw = (b.password || "").trim() } catch {}
       if (user !== LAN_USER || pw !== LAN_PASSWORD) return send(res, 401, "application/json", JSON.stringify({ ok: false, err: "账号或密码错误" }))
-      const tok = crypto.randomBytes(24).toString("hex"); tokens.add(tok)
-      res.writeHead(200, { "Content-Type": "application/json", "Set-Cookie": `lan_auth=${tok}; Path=${BASE_PATH}/; HttpOnly; SameSite=Lax; Max-Age=604800` })
+      res.writeHead(200, { "Content-Type": "application/json", "Set-Cookie": `lan_auth=${makeAuthCookie()}; Path=${BASE_PATH}/; HttpOnly; SameSite=Lax; Max-Age=${AUTH_TTL_MS / 1000}` })
       return res.end(JSON.stringify({ ok: true }))
     }
-    // 退出登录
+    // 退出登录：签名 cookie 无服务端状态，清掉浏览器 cookie 即可（本人登出足够）
     if (req.method === "POST" && u.pathname === "/api/logout") {
-      tokens.delete(cookieOf(req, "lan_auth") || "")
       res.writeHead(200, { "Content-Type": "application/json", "Set-Cookie": `lan_auth=; Path=${BASE_PATH}/; HttpOnly; Max-Age=0` })
       return res.end(JSON.stringify({ ok: true }))
     }

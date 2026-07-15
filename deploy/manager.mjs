@@ -38,7 +38,53 @@ const ADMIN_ENABLED  = !!ADMIN_PASSWORD
 const DEPLOY_DIR  = __dirname
 const SCRIPTS_DIR = path.join(DEPLOY_DIR, "scripts")
 const TIERS_FILE  = path.join(DEPLOY_DIR, "tiers.env")
-const adminTokens = new Set()                                     // 内存里的有效管理台会话 token（重启即失效）
+
+// ---- 会话：无状态签名 cookie（HMAC，5天免登录；manager 重启也不掉线）----
+const AUTH_TTL_MS = 5 * 24 * 60 * 60 * 1000
+const b64u = (buf) => buf.toString("base64").replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "")
+const hmac = (key, msg) => b64u(crypto.createHmac("sha256", key).update(msg).digest())
+const signSession = (key, tag) => { const exp = Date.now() + AUTH_TTL_MS; return exp + "." + hmac(key, tag + "|" + exp) }
+const validSession = (key, tag, val) => {
+  if (!val) return false
+  const i = val.indexOf("."); if (i < 0) return false
+  const exp = Number(val.slice(0, i)), sig = val.slice(i + 1)
+  if (!Number.isFinite(exp) || exp < Date.now()) return false
+  const good = hmac(key, tag + "|" + exp)
+  return good.length === sig.length && crypto.timingSafeEqual(Buffer.from(good), Buffer.from(sig))
+}
+
+// ---- 图形验证码（自建 SVG，零依赖零外部请求；答案存内存，3 分钟过期、一次性）----
+const CAPTCHA_TTL_MS = 3 * 60 * 1000
+const captchas = new Map()   // id -> { code, exp }
+const CAP_CHARS = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"   // 去掉易混的 0O1IL
+function newCaptcha() {
+  const now = Date.now()
+  for (const [k, v] of captchas) if (v.exp < now) captchas.delete(k)   // 顺手清过期
+  let code = ""; for (let i = 0; i < 4; i++) code += CAP_CHARS[crypto.randomInt(CAP_CHARS.length)]
+  const id = crypto.randomBytes(12).toString("hex")
+  captchas.set(id, { code, exp: now + CAPTCHA_TTL_MS })
+  return { id, code }
+}
+function verifyCaptcha(id, answer) {
+  const c = captchas.get(id); if (!c) return false
+  captchas.delete(id)                                   // 一次性：无论对错都作废，防重放
+  return c.exp >= Date.now() && String(answer || "").toUpperCase() === c.code
+}
+// 手写 SVG：字符随机位置/旋转/颜色 + 噪点线，无需任何图形库
+function captchaSvg(code) {
+  const W = 130, H = 44, R = (a, b) => a + Math.floor(crypto.randomInt(Math.max(1, b - a + 1)))
+  const cols = ["#2b3a55", "#3a5a40", "#6a3d5b", "#7a4b1e", "#334155"]
+  let noise = ""
+  for (let i = 0; i < 5; i++) noise += `<line x1="${R(0, W)}" y1="${R(0, H)}" x2="${R(0, W)}" y2="${R(0, H)}" stroke="${cols[R(0, 4)]}" stroke-width="1" opacity="0.35"/>`
+  for (let i = 0; i < 18; i++) noise += `<circle cx="${R(0, W)}" cy="${R(0, H)}" r="1" fill="${cols[R(0, 4)]}" opacity="0.4"/>`
+  let chars = ""
+  for (let i = 0; i < code.length; i++) {
+    const x = 16 + i * 28 + R(-3, 3), y = 30 + R(-4, 4), rot = R(-24, 24), fs = R(24, 30)
+    chars += `<text x="${x}" y="${y}" font-family="Georgia,serif" font-size="${fs}" font-weight="700" fill="${cols[R(0, 4)]}" transform="rotate(${rot} ${x} ${y})">${code[i]}</text>`
+  }
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}"><rect width="${W}" height="${H}" rx="6" fill="#eef2f7"/>${noise}${chars}</svg>`
+}
+const parseCookies = (req) => Object.fromEntries((req.headers.cookie || "").split(";").map((c) => { const i = c.indexOf("="); return i < 0 ? ["", ""] : [c.slice(0, i).trim(), c.slice(i + 1).trim()] }).filter((x) => x[0]))
 
 const log = (...a) => console.log(new Date().toISOString(), ...a)
 
@@ -165,6 +211,40 @@ function proxy(u, fwdPath, req, res) {
   req.on("aborted", () => up.destroy())
 }
 
+// GET /captcha：发一张 SVG 图形验证码，挑战 id 放进 cap_id cookie（登录 POST 自动带回核对）
+function serveCaptcha(res) {
+  const { id, code } = newCaptcha()
+  res.writeHead(200, { "content-type": "image/svg+xml", "cache-control": "no-store",
+    "set-cookie": `cap_id=${id}; Path=/; Max-Age=180; HttpOnly; SameSite=Strict; Secure` })
+  res.end(captchaSvg(code))
+}
+// 转发一个已被读出的请求体（登录场景：manager 先读 body 验验证码，再把原样 body 转给容器核对密码）
+function proxyBuffered(u, fwdPath, req, res, body) {
+  u.conns++; u.lastActive = Date.now()
+  res.on("close", () => { u.conns = Math.max(0, u.conns - 1); u.lastActive = Date.now() })
+  const headers = { ...req.headers, "content-length": Buffer.byteLength(body) }
+  headers["x-forwarded-for"] = req.socket.remoteAddress || ""
+  headers["x-forwarded-proto"] = "https"
+  headers["x-forwarded-prefix"] = u.base
+  const up = http.request({ host: "127.0.0.1", port: u.port, method: req.method, path: fwdPath, headers }, (upRes) => {
+    res.writeHead(upRes.statusCode || 502, upRes.headers); upRes.pipe(res)
+  })
+  up.on("error", (e) => { log(`[proxy] ${u.name} 上游错误：${e.message}`); if (!res.headersSent) res.writeHead(502, { "content-type": "text/plain; charset=utf-8" }); res.end("上游容器暂不可用") })
+  up.end(body)
+}
+// 用户登录：先在 manager 校验图形验证码（错就不唤醒容器、直接回），过了再唤醒容器转发核对密码
+async function handleUserLogin(u, fwdPath, req, res) {
+  const chunks = []; for await (const c of req) chunks.push(c)
+  const body = Buffer.concat(chunks)
+  let captcha = ""; try { captcha = JSON.parse(body.toString() || "{}").captcha || "" } catch {}
+  if (!verifyCaptcha(parseCookies(req).cap_id, captcha)) {
+    res.writeHead(401, { "content-type": "application/json; charset=utf-8" })
+    return res.end(JSON.stringify({ ok: false, err: "验证码错误", captcha: true }))
+  }
+  await ensureUp(u)
+  proxyBuffered(u, fwdPath, req, res, body)
+}
+
 // ---- 通用登录页（服务于裸 /）：沿用原 web/login.html 的视觉（背景视频 + 玻璃登录框 + 主视觉文案），
 // 只把提交逻辑改成"按用户名分发"：POST /<用户名>/api/login，成功跳 /<用户名>/。
 // 不做中央认证：密码仍由各自容器校验，"该去哪个容器"= 用户名本身。★改设计时此处与 web/login.html 两份需同步。
@@ -244,24 +324,33 @@ const LOGIN_HTML = `<!doctype html>
   <form class="login" id="card" autocomplete="off">
     <input id="user" class="pill" type="text" placeholder="Username" autocomplete="username" autofocus>
     <input id="pw" class="pill" type="password" placeholder="Password" autocomplete="current-password">
+    <div style="display:flex;gap:8px;width:220px;align-items:center">
+      <input id="cap" class="pill" style="width:auto;flex:1;letter-spacing:.2em;text-transform:uppercase" type="text" placeholder="Code" autocomplete="off" maxlength="4">
+      <img id="capimg" src="/captcha" alt="captcha" title="点击刷新" style="height:44px;width:auto;border-radius:12px;cursor:pointer;border:1px solid rgba(255,255,255,.14);flex:none">
+    </div>
     <button type="submit" class="pill-btn" id="go">Sign In</button>
     <div class="err" id="err"></div>
   </form>
 <script>
-  var card=document.getElementById('card'),user=document.getElementById('user'),pw=document.getElementById('pw'),err=document.getElementById('err'),go=document.getElementById('go');
+  var card=document.getElementById('card'),user=document.getElementById('user'),pw=document.getElementById('pw'),err=document.getElementById('err'),go=document.getElementById('go'),cap=document.getElementById('cap'),capimg=document.getElementById('capimg');
   document.getElementById('try').onclick=function(){user.focus()};
+  function refreshCap(){capimg.src='/captcha?'+Date.now();cap.value=''}
+  capimg.onclick=refreshCap;
   function fail(m){err.textContent=m;err.classList.add('show');user.classList.add('error');pw.classList.add('error');setTimeout(function(){user.classList.remove('error');pw.classList.remove('error')},1200);pw.select()}
   card.addEventListener('submit',async function(e){
     e.preventDefault();
-    var username=user.value.trim(),password=pw.value.trim();
+    var username=user.value.trim(),password=pw.value.trim(),captcha=cap.value.trim();
     if(!username)return fail('请输入账号');
     if(!password)return fail('请输入密码');
+    if(!captcha)return fail('请输入验证码');
     go.disabled=true;go.textContent='Signing in…';err.classList.remove('show');
     try{
-      var r=await fetch('/'+encodeURIComponent(username)+'/api/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username:username,password:password})});
+      var r=await fetch('/'+encodeURIComponent(username)+'/api/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username:username,password:password,captcha:captcha})});
       if(r.ok){go.textContent='Welcome ✓';location.href='/'+encodeURIComponent(username)+'/';return}
-      if(r.status===503){fail('服务器繁忙，请稍候重试')}else{fail('账号或密码错误')}
-    }catch(_){fail('网络异常，请重试')}
+      var j={};try{j=await r.json()}catch(_){}
+      refreshCap();
+      if(j&&j.captcha){fail('验证码错误')}else if(r.status===503){fail('服务器繁忙，请稍候重试')}else{fail('账号或密码错误')}
+    }catch(_){refreshCap();fail('网络异常，请重试')}
     go.disabled=false;go.textContent='Sign In';
   });
 </script>
@@ -322,8 +411,7 @@ function runScript(script, args) {
   })
 }
 const readBody = async (req) => { const c = []; for await (const x of req) c.push(x); try { return JSON.parse(Buffer.concat(c).toString() || "{}") } catch { return {} } }
-const parseCookies = (req) => Object.fromEntries((req.headers.cookie || "").split(";").map((c) => { const i = c.indexOf("="); return i < 0 ? ["", ""] : [c.slice(0, i).trim(), c.slice(i + 1).trim()] }).filter((x) => x[0]))
-const adminAuthed = (req) => adminTokens.has(parseCookies(req).admin_auth || "")
+const adminAuthed = (req) => validSession(ADMIN_PASSWORD, "admin", parseCookies(req).admin_auth)   // 无状态签名会话
 const safeEq = (a, b) => { const ab = Buffer.from(String(a)), bb = Buffer.from(String(b)); return ab.length === bb.length && crypto.timingSafeEqual(ab, bb) }
 
 // 改档位定义：改写 tiers.env(增/改/删一个档) → 重渲染 → 重建「该档位下当前空闲」的容器（活跃的跳过并回报）
@@ -382,10 +470,11 @@ function tierOpts(sel){return TIERS.map(t=>'<option value="'+t.key+'"'+(t.key===
 function bar(used,limit){if(!limit)return '<span class="usage">'+money(used)+' <span class="mut">/ 不限</span></span>';const pct=Math.min(100,Math.round(used/limit*100));const c=pct>=100?'bad':pct>=80?'warn':'';return '<div class="usage">'+money(used)+' <span class="mut">/ '+money(limit)+' ('+pct+'%)</span></div><div class="bar '+c+'"><i style="width:'+pct+'%"></i></div>'}
 function sbar(usedMB,limitMB){if(!limitMB)return '<span class="usage">'+fmt(usedMB)+'MB <span class="mut">/ 不限</span></span>';const pct=Math.min(100,Math.round(usedMB/limitMB*100));const c=pct>=100?'bad':pct>=90?'warn':'';return '<div class="usage">'+fmt(usedMB)+' <span class="mut">/ '+fmt(limitMB)+'MB</span></div><div class="bar '+c+'"><i style="width:'+pct+'%"></i></div>'}
 
-function renderLogin(err){app.innerHTML='';const box=$('<section id="login"><h2>用户管理台</h2><div class="msg '+(err?'err':'')+'" style="'+(err?'display:block':'')+'">'+(err||'')+'</div><input id="pw" type="password" placeholder="管理员密码" autofocus><button class="btn primary" id="go" style="width:100%">登录</button></section>')
+function renderLogin(err){app.innerHTML='';const box=$('<section id="login"><h2>用户管理台</h2><div class="msg '+(err?'err':'')+'" style="'+(err?'display:block':'')+'">'+(err||'')+'</div><input id="pw" type="password" placeholder="管理员密码" autofocus><div style="display:flex;gap:8px;margin:12px 0;align-items:center"><input id="cap" placeholder="验证码" maxlength="4" autocomplete="off" style="flex:1;text-transform:uppercase;letter-spacing:.2em"><img id="capimg" src="/captcha?'+Date.now()+'" title="点击刷新" style="height:40px;border-radius:7px;cursor:pointer;border:1px solid var(--line)"></div><button class="btn primary" id="go" style="width:100%">登录</button></section>')
   app.appendChild(box)
-  const go=async()=>{try{const r=await fetch('/admin/api/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({password:document.getElementById('pw').value})});const j=await r.json();if(j.ok)load();else renderLogin(j.err||'登录失败')}catch(e){renderLogin('网络错误')}}
-  box.querySelector('#go').onclick=go;box.querySelector('#pw').addEventListener('keydown',e=>{if(e.key==='Enter')go()})}
+  box.querySelector('#capimg').onclick=(e)=>{e.target.src='/captcha?'+Date.now()}
+  const go=async()=>{try{const r=await fetch('/admin/api/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({password:document.getElementById('pw').value,captcha:document.getElementById('cap').value.trim()})});const j=await r.json();if(j.ok)load();else renderLogin(j.err||'登录失败')}catch(e){renderLogin('网络错误')}}
+  box.querySelector('#go').onclick=go;box.querySelector('#pw').addEventListener('keydown',e=>{if(e.key==='Enter')go()});box.querySelector('#cap').addEventListener('keydown',e=>{if(e.key==='Enter')go()})}
 
 async function load(){let d;try{d=await api('overview')}catch(e){return renderLogin('')}
   TIERS=d.tiers||[]
@@ -429,13 +518,12 @@ async function handleAdmin(req, res, pathname) {
   }
   if (req.method === "POST" && pathname === "/admin/api/login") {
     const b = await readBody(req)
-    if (!safeEq(b.password || "", ADMIN_PASSWORD)) { await sleep(600); return json(401, { ok: false, err: "密码错误" }) }
-    const tok = crypto.randomBytes(24).toString("hex"); adminTokens.add(tok)
-    res.writeHead(200, { "content-type": "application/json", "set-cookie": `admin_auth=${tok}; Path=/admin; HttpOnly; Secure; SameSite=Strict; Max-Age=43200` })
+    if (!verifyCaptcha(parseCookies(req).cap_id, b.captcha)) { await sleep(400); return json(401, { ok: false, err: "验证码错误", captcha: true }) }
+    if (!safeEq(b.password || "", ADMIN_PASSWORD)) { await sleep(600); return json(401, { ok: false, err: "密码错误", captcha: true }) }
+    res.writeHead(200, { "content-type": "application/json", "set-cookie": `admin_auth=${signSession(ADMIN_PASSWORD, "admin")}; Path=/admin; HttpOnly; Secure; SameSite=Strict; Max-Age=${AUTH_TTL_MS / 1000}` })
     return res.end(JSON.stringify({ ok: true }))
   }
   if (req.method === "POST" && pathname === "/admin/api/logout") {
-    adminTokens.delete(parseCookies(req).admin_auth || "")
     res.writeHead(200, { "content-type": "application/json", "set-cookie": "admin_auth=; Path=/admin; Max-Age=0" }); return res.end("{}")
   }
   if (!adminAuthed(req)) return json(401, { ok: false, err: "unauthorized" })   // 以下均需登录
@@ -481,6 +569,7 @@ async function handleAdmin(req, res, pathname) {
 const server = http.createServer(async (req, res) => {
   const pathname = req.url.split(/[?#]/)[0] || "/"
   if (pathname === "/admin" || pathname.startsWith("/admin/")) return handleAdmin(req, res, pathname)   // 管理台：不当用户名路由
+  if (pathname === "/captcha") return serveCaptcha(res)                                                 // 图形验证码：manager 直接发
   const seg = (/^\/([^/?#]+)/.exec(req.url) || [])[1] || ""
   if (!seg) { res.writeHead(200, { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" }); return res.end(LOGIN_HTML) }
   const u = users.get(seg)
@@ -489,6 +578,7 @@ const server = http.createServer(async (req, res) => {
   if (req.url === "/" + seg) { res.writeHead(301, { Location: "/" + seg + "/" }); return res.end() }
   const fwdPath = req.url.slice(seg.length + 1) || "/"   // 剥掉 "/用户名"，容器收到根路径
   try {
+    if (req.method === "POST" && fwdPath === "/api/login") return await handleUserLogin(u, fwdPath, req, res)   // 登录先过验证码
     await ensureUp(u)
     proxy(u, fwdPath, req, res)
   } catch (e) {
