@@ -99,7 +99,11 @@ def _http_get_json(url: str) -> dict:
     RuntimeError so the caller reports it as a rate-limit failure rather than
     silently counting 0 new candidates.
     """
-    headers = {"User-Agent": "medsci-skills/snowball"}
+    _email = (os.environ.get("SCI_CONTACT_EMAIL")
+              or os.environ.get("MEDSCI_CONTACT_EMAIL")
+              or os.environ.get("CONTACT_EMAIL")
+              or "sci-skill@users.noreply.github.com")
+    headers = {"User-Agent": f"medsci-skills/snowball (mailto:{_email})"}
     api_key = os.environ.get("S2_API_KEY")
     if api_key:
         headers["x-api-key"] = api_key

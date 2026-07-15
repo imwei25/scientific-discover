@@ -27,7 +27,9 @@ set -uo pipefail   # NOTE: no -e; _curl reports failures as JSON instead of abor
 BASE="https://eutils.ncbi.nlm.nih.gov/entrez/eutils"
 EPMC="https://www.ebi.ac.uk/europepmc/webservices/rest"
 TOOL="claude-code-search-lit"
-EMAIL="noreply@example.com"
+# One unified contact var (older names kept for back-compat). NCBI wants a real
+# email; set SCI_CONTACT_EMAIL once in deploy/.env and every skill picks it up.
+EMAIL="${SCI_CONTACT_EMAIL:-${MEDSCI_CONTACT_EMAIL:-${CONTACT_EMAIL:-noreply@example.com}}}"
 DB="pubmed"
 SLEEP=0.35
 

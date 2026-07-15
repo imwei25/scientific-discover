@@ -38,9 +38,18 @@ try:
 except ImportError:
     sys.exit("缺少 requests：请先在仓库根运行 install.ps1（Windows）/ install.sh（Linux/macOS），或让 agent 运行 env-setup 技能")
 
-# Contact email for Crossref/EPMC polite pools. Override with env CONTACT_EMAIL.
-_EMAIL = os.environ.get("CONTACT_EMAIL", "sci-skill@users.noreply.github.com")
+# Contact email for Crossref/EPMC polite pools (mailto in UA already enrolls us).
+# One unified var; older names kept so an already-configured server needs no change.
+_EMAIL = (os.environ.get("SCI_CONTACT_EMAIL")
+          or os.environ.get("MEDSCI_CONTACT_EMAIL")
+          or os.environ.get("CONTACT_EMAIL")
+          or "sci-skill@users.noreply.github.com")
 UA = {"User-Agent": f"sci-agent-reference-check/1.1 (mailto:{_EMAIL})"}
+# Crossref calls also carry the paid Metadata Plus token when CROSSREF_PLUS_TOKEN
+# is set (dedicated server pool / higher SLA); free polite pool otherwise.
+CROSSREF_HEADERS = dict(UA)
+if os.environ.get("CROSSREF_PLUS_TOKEN"):
+    CROSSREF_HEADERS["Crossref-Plus-API-Token"] = f"Bearer {os.environ['CROSSREF_PLUS_TOKEN']}"
 CROSSREF = "https://api.crossref.org/works/"
 EPMC = "https://www.ebi.ac.uk/europepmc/webservices/rest/search"
 TIMEOUT = 25
@@ -96,7 +105,7 @@ def resolve_doi(doi):
     """返回 (title, meta) 或 (None, None)；Crossref 失败时回退 Europe PMC。"""
     doi = doi.rstrip(".,;)")
     try:
-        r = _get(CROSSREF + doi)
+        r = _get(CROSSREF + doi, headers=CROSSREF_HEADERS)
         if r.status_code == 404:
             # Confirm the 404 via EPMC before trusting it — Crossref occasionally
             # 404s a DOI it is merely slow to index.
