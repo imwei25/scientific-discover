@@ -86,6 +86,25 @@ function captchaSvg(code) {
 }
 const parseCookies = (req) => Object.fromEntries((req.headers.cookie || "").split(";").map((c) => { const i = c.indexOf("="); return i < 0 ? ["", ""] : [c.slice(0, i).trim(), c.slice(i + 1).trim()] }).filter((x) => x[0]))
 
+// ---- 审计日志：登录成败 / 管理操作各写一行到 /var/log/sci-audit.log ----
+const AUDIT_LOG = process.env.AUDIT_LOG || "/var/log/sci-audit.log"
+const clientIp = (req) => ((req.headers["x-forwarded-for"] || "").split(",")[0].trim()) || req.socket.remoteAddress || "-"
+function audit(event, fields) {
+  const kv = Object.entries(fields || {}).map(([k, v]) => `${k}=${String(v).replace(/[\r\n|]/g, " ")}`).join(" ")
+  try { fs.appendFileSync(AUDIT_LOG, `${new Date().toISOString()} | ${event} | ${kv}\n`) } catch { /* 记不上不影响主流程 */ }
+}
+// 停用/恢复用户：改写 users/<name>.env 的 SUSPENDED 行
+function setSuspended(name, on) {
+  const f = path.join(USERS_DIR, name + ".env")
+  let lines; try { lines = fs.readFileSync(f, "utf8").split(/\r?\n/) } catch { return false }
+  lines = lines.filter((l) => !/^SUSPENDED=/.test(l))
+  while (lines.length && lines[lines.length - 1] === "") lines.pop()
+  if (on) lines.push("SUSPENDED=1")
+  fs.writeFileSync(f, lines.join("\n") + "\n")
+  return true
+}
+const SUSPENDED_HTML = '<!doctype html><meta charset="utf-8"><title>账号已停用</title><div style="max-width:420px;margin:18vh auto;font:15px/1.7 system-ui,\'Microsoft YaHei\',sans-serif;color:#334;text-align:center"><div style="font-size:44px">🚫</div><h2 style="margin:.4em 0">账号已停用</h2><p style="color:#889">你的账号已被管理员暂时停用，数据已保留。请联系管理员恢复。</p></div>'
+
 const log = (...a) => console.log(new Date().toISOString(), ...a)
 
 // ---- 用户表 ----
@@ -109,11 +128,12 @@ function loadUsers() {
     const e = parseEnvFile(path.join(USERS_DIR, f))
     if (!e.NAME || !e.PORT) { log(`[users] 跳过 ${f}（缺 NAME/PORT）`); continue }
     const name = e.NAME
+    const suspended = e.SUSPENDED === "1"
     // 保留已在跑用户的运行时状态（热加载不该清空计数/时间戳）
     const prev = users.get(name)
     next.set(name, prev
-      ? Object.assign(prev, { port: Number(e.PORT) })
-      : { name, port: Number(e.PORT), base: `/${name}`, container: `agent-${name}`, lastActive: 0, conns: 0, starting: null })
+      ? Object.assign(prev, { port: Number(e.PORT), suspended })
+      : { name, port: Number(e.PORT), base: `/${name}`, container: `agent-${name}`, lastActive: 0, conns: 0, starting: null, suspended })
   }
   users = next
   log(`[users] 已加载 ${users.size} 个用户：${[...users.values()].map((u) => `${u.name}→:${u.port}`).join(", ") || "(空)"}`)
@@ -219,14 +239,14 @@ function serveCaptcha(res) {
   res.end(captchaSvg(code))
 }
 // 转发一个已被读出的请求体（登录场景：manager 先读 body 验验证码，再把原样 body 转给容器核对密码）
-function proxyBuffered(u, fwdPath, req, res, body) {
+function proxyBuffered(u, fwdPath, req, res, body, onStatus) {
   u.conns++; u.lastActive = Date.now()
   res.on("close", () => { u.conns = Math.max(0, u.conns - 1); u.lastActive = Date.now() })
   const headers = { ...req.headers, "content-length": Buffer.byteLength(body) }
-  headers["x-forwarded-for"] = req.socket.remoteAddress || ""
   headers["x-forwarded-proto"] = "https"
   headers["x-forwarded-prefix"] = u.base
   const up = http.request({ host: "127.0.0.1", port: u.port, method: req.method, path: fwdPath, headers }, (upRes) => {
+    try { onStatus && onStatus(upRes.statusCode || 0) } catch {}
     res.writeHead(upRes.statusCode || 502, upRes.headers); upRes.pipe(res)
   })
   up.on("error", (e) => { log(`[proxy] ${u.name} 上游错误：${e.message}`); if (!res.headersSent) res.writeHead(502, { "content-type": "text/plain; charset=utf-8" }); res.end("上游容器暂不可用") })
@@ -238,11 +258,12 @@ async function handleUserLogin(u, fwdPath, req, res) {
   const body = Buffer.concat(chunks)
   let captcha = ""; try { captcha = JSON.parse(body.toString() || "{}").captcha || "" } catch {}
   if (!verifyCaptcha(parseCookies(req).cap_id, captcha)) {
+    audit("login.fail", { user: u.name, ip: clientIp(req), reason: "captcha" })
     res.writeHead(401, { "content-type": "application/json; charset=utf-8" })
     return res.end(JSON.stringify({ ok: false, err: "验证码错误", captcha: true }))
   }
   await ensureUp(u)
-  proxyBuffered(u, fwdPath, req, res, body)
+  proxyBuffered(u, fwdPath, req, res, body, (status) => audit(status === 200 ? "login.ok" : "login.fail", { user: u.name, ip: clientIp(req), reason: status === 200 ? "" : "password" }))
 }
 
 // ---- 通用登录页（服务于裸 /）：沿用原 web/login.html 的视觉（背景视频 + 玻璃登录框 + 主视觉文案），
@@ -485,8 +506,10 @@ async function load(){let d;try{d=await api('overview')}catch(e){return renderLo
   const us=$('<section><h2>用户<span class="hint">改档位即时重建容器生效；删除保留数据，勾选彻底删则先备份再删卷</span></h2><table><thead><tr><th>用户</th><th>档位</th><th>今日成本/额度</th><th>存储</th><th>状态</th><th></th></tr></thead><tbody id="ut"></tbody></table></section>')
   main.appendChild(us)
   const tb=us.querySelector('#ut')
-  d.users.forEach(u=>{const tr=$('<tr><td class="name">'+u.name+'</td><td><select class="ts">'+tierOpts(u.tier)+'</select></td><td>'+bar(u.todayCost,u.daily)+'</td><td>'+sbar(u.storageUsedMB,u.storage)+'</td><td>'+(u.active?'<span class="pill act">活跃</span>':u.running?'<span class="pill run">运行</span>':'<span class="pill">停</span>')+'</td><td style="white-space:nowrap"><button class="btn save">保存</button> <button class="btn bad del">删</button></td></tr>')
+  d.users.forEach(u=>{const stat=u.suspended?'<span class="pill" style="color:#ff9b9b;border-color:#a55">已停用</span>':(u.active?'<span class="pill act">活跃</span>':u.running?'<span class="pill run">运行</span>':'<span class="pill">停</span>');
+    const tr=$('<tr><td class="name">'+u.name+'</td><td><select class="ts">'+tierOpts(u.tier)+'</select></td><td>'+bar(u.todayCost,u.daily)+'</td><td>'+sbar(u.storageUsedMB,u.storage)+'</td><td>'+stat+'</td><td style="white-space:nowrap"><button class="btn save">保存</button> <button class="btn susp">'+(u.suspended?'恢复':'停用')+'</button> <button class="btn bad del">删</button></td></tr>')
     tr.querySelector('.save').onclick=async()=>{const tier=tr.querySelector('.ts').value;const j=await api('tier',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:u.name,tier})});toast(j.ok?(u.name+' → '+tier+'（已重建生效）'):(j.out||'失败'),j.ok);if(j.ok)load()}
+    tr.querySelector('.susp').onclick=async()=>{const on=!u.suspended;if(on&&!confirm('停用 '+u.name+'？将立即停其容器、踢下线，数据保留，恢复后照常。'))return;const j=await api('suspend',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:u.name,suspend:on})});toast(j.ok?(u.name+(on?' 已停用':' 已恢复')):(j.err||'失败'),j.ok);if(j.ok)load()}
     tr.querySelector('.del').onclick=async()=>{const purge=confirm('删除用户 '+u.name+'。\\n\\n确定=保留数据卷（可复原）\\n取消后可再选彻底删。\\n\\n点“确定”仅移除容器与配置，保留数据。');if(!purge&&!confirm('改为【彻底删除】'+u.name+' 连同其所有数据卷？此操作先自动备份再删，不可逆。'))return;const hard=!purge;const j=await api('user-del',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:u.name,purge:hard})});toast(j.ok?('已删除 '+u.name+(hard?'（含数据）':'（留数据）')):(j.out||'失败'),j.ok);if(j.ok)load()}
     tb.appendChild(tr)})
   // 加用户
@@ -502,6 +525,10 @@ async function load(){let d;try{d=await api('overview')}catch(e){return renderLo
     c.querySelector('.del').onclick=async()=>{if(!confirm('删除档位 '+t.key+'？该档位下的用户将回落到不限额，请先给他们改到别的档。'))return;const j=await api('tier-def',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({key:t.key,remove:true})});toast(j.ok?('已删档位 '+t.key):'失败',j.ok);if(j.ok)load()}
     tg.appendChild(c)})
   ts.querySelector('#taddbtn').onclick=async()=>{const key=ts.querySelector('#tk').value.trim();if(!key)return toast('填档位键',0);const j=await api('tier-def',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({key,dailyUSD:ts.querySelector('#td').value,storageMB:ts.querySelector('#ts2').value})});toast(j.ok?('档位 '+key+' 已保存'):(j.err||'失败'),j.ok);if(j.ok)load()}
+  // 审计日志
+  const au=$('<section><h2>审计日志<span class="hint">最近100条：登录成败 / 管理操作（新→旧）</span></h2><div id="aud" style="max-height:260px;overflow:auto;font:12px/1.7 ui-monospace,Consolas,monospace;color:var(--mut);white-space:pre-wrap">加载中…</div></section>')
+  main.appendChild(au)
+  api('audit').then(a=>{au.querySelector('#aud').textContent=(a.lines&&a.lines.length)?a.lines.join('\\n'):'（暂无记录）'}).catch(()=>{au.querySelector('#aud').textContent='加载失败'})
   app.appendChild(main)
   document.getElementById('reload').onclick=load
   document.getElementById('logout').onclick=async()=>{await fetch('/admin/api/logout',{method:'POST'});renderLogin('')}
@@ -518,8 +545,9 @@ async function handleAdmin(req, res, pathname) {
   }
   if (req.method === "POST" && pathname === "/admin/api/login") {
     const b = await readBody(req)
-    if (!verifyCaptcha(parseCookies(req).cap_id, b.captcha)) { await sleep(400); return json(401, { ok: false, err: "验证码错误", captcha: true }) }
-    if (!safeEq(b.password || "", ADMIN_PASSWORD)) { await sleep(600); return json(401, { ok: false, err: "密码错误", captcha: true }) }
+    if (!verifyCaptcha(parseCookies(req).cap_id, b.captcha)) { await sleep(400); audit("admin.login.fail", { ip: clientIp(req), reason: "captcha" }); return json(401, { ok: false, err: "验证码错误", captcha: true }) }
+    if (!safeEq(b.password || "", ADMIN_PASSWORD)) { await sleep(600); audit("admin.login.fail", { ip: clientIp(req), reason: "password" }); return json(401, { ok: false, err: "密码错误", captcha: true }) }
+    audit("admin.login.ok", { ip: clientIp(req) })
     res.writeHead(200, { "content-type": "application/json", "set-cookie": `admin_auth=${signSession(ADMIN_PASSWORD, "admin")}; Path=/admin; HttpOnly; Secure; SameSite=Strict; Max-Age=${AUTH_TTL_MS / 1000}` })
     return res.end(JSON.stringify({ ok: true }))
   }
@@ -534,20 +562,20 @@ async function handleAdmin(req, res, pathname) {
       const lim = resolveLimits(name)
       list.push({ name, tier: lim.tier, daily: lim.daily, storage: lim.storage,
         todayCost: await todayCost(name), storageUsedMB: await storageUsedMB(name),
-        running: (await isRunning(u.container)) === true, active: u.conns > 0 })
+        running: (await isRunning(u.container)) === true, active: u.conns > 0, suspended: !!u.suspended })
     }
     return json(200, { tiers: loadTiers(), users: list, warmCap: WARM_CAP })
   }
   if (req.method === "POST" && pathname === "/admin/api/tier") {
     const b = await readBody(req)
     const r = await runScript("user-tier.sh", [String(b.name || ""), String(b.tier || "")])
-    loadUsers()
+    loadUsers(); audit("admin.tier", { ip: clientIp(req), name: b.name, tier: b.tier, ok: r.code === 0 })
     return json(r.code === 0 ? 200 : 400, { ok: r.code === 0, out: (r.stdout + r.stderr).trim() })
   }
   if (req.method === "POST" && pathname === "/admin/api/user-add") {
     const b = await readBody(req)
     const r = await runScript("user-add.sh", [String(b.name || ""), String(b.tier || "free")])
-    loadUsers()
+    loadUsers(); audit("admin.user-add", { ip: clientIp(req), name: b.name, tier: b.tier || "free", ok: r.code === 0 })
     const pw = (r.stdout.match(/密码：(\S+)/) || [])[1] || ""
     return json(r.code === 0 ? 200 : 400, { ok: r.code === 0, password: pw, out: (r.stdout + r.stderr).trim() })
   }
@@ -555,11 +583,29 @@ async function handleAdmin(req, res, pathname) {
     const b = await readBody(req)
     const args = [String(b.name || "")]; if (b.purge) args.push("--purge")
     const r = await runScript("user-del.sh", args)
-    loadUsers()
+    loadUsers(); audit("admin.user-del", { ip: clientIp(req), name: b.name, purge: !!b.purge, ok: r.code === 0 })
     return json(r.code === 0 ? 200 : 400, { ok: r.code === 0, out: (r.stdout + r.stderr).trim() })
   }
+  // 停用 / 恢复用户
+  if (req.method === "POST" && pathname === "/admin/api/suspend") {
+    const b = await readBody(req)
+    const name = String(b.name || "").trim(), on = !!b.suspend
+    if (!users.has(name)) return json(400, { ok: false, err: "无此用户" })
+    const ok = setSuspended(name, on); loadUsers()
+    if (on) { try { await dockerStop(`agent-${name}`) } catch {} }   // 停用即停其容器、踢下线
+    audit("admin.suspend", { ip: clientIp(req), name, suspend: on })
+    return json(ok ? 200 : 400, { ok })
+  }
   if (req.method === "POST" && pathname === "/admin/api/tier-def") {
-    return json(200, await setTierDef(await readBody(req)))
+    const b = await readBody(req)
+    const r = await setTierDef(b); audit("admin.tier-def", { ip: clientIp(req), key: b.key, remove: !!b.remove, ok: r.ok })
+    return json(200, r)
+  }
+  // 审计日志：最近 100 条（新→旧）
+  if (req.method === "GET" && pathname === "/admin/api/audit") {
+    let lines = []
+    try { lines = fs.readFileSync(AUDIT_LOG, "utf8").trim().split("\n").filter(Boolean).slice(-100).reverse() } catch {}
+    return json(200, { lines })
   }
   return json(404, { ok: false, err: "not found" })
 }
@@ -574,6 +620,7 @@ const server = http.createServer(async (req, res) => {
   if (!seg) { res.writeHead(200, { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" }); return res.end(LOGIN_HTML) }
   const u = users.get(seg)
   if (!u) { res.writeHead(404, { "content-type": "text/plain; charset=utf-8" }); return res.end(`未知用户路径：/${seg}（请访问 / 登录）`) }
+  if (u.suspended) { res.writeHead(403, { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" }); return res.end(SUSPENDED_HTML) }   // 已停用：任何路径都挡在门外
   // 裸 /alice（无尾斜杠）→ 301 到 /alice/，否则页面里的相对 URL 会解析到根而错位
   if (req.url === "/" + seg) { res.writeHead(301, { Location: "/" + seg + "/" }); return res.end() }
   const fwdPath = req.url.slice(seg.length + 1) || "/"   // 剥掉 "/用户名"，容器收到根路径

@@ -378,6 +378,7 @@
   </div>
   <div class="hright">
     <button id="modelBtn" class="hbtn" type="button" title="模型设置（切换后台大模型）"></button>
+    <button id="pwBtn" class="hbtn" type="button" title="修改密码"></button>
     <button id="logoutBtn" class="hbtn" type="button" title="退出登录"></button>
     <div class="status"><span class="dot"></span>在线</div>
   </div>
@@ -457,6 +458,22 @@
     </div>
   </div>
 </div>
+<div id="pwModal" class="modal">
+  <div class="modal-card" style="max-width:380px">
+    <div class="modal-head">
+      <span class="modal-title" id="pwTitle">修改密码</span>
+      <button class="modal-x" id="pwClose" type="button" title="关闭"></button>
+    </div>
+    <div class="modal-body">
+      <label class="mm-field"><span>当前密码</span><input id="pwCur" class="mm-input" type="password" autocomplete="current-password" /></label>
+      <label class="mm-field"><span>新密码（至少 6 位）</span><input id="pwNew" class="mm-input" type="password" autocomplete="new-password" /></label>
+      <label class="mm-field"><span>确认新密码</span><input id="pwNew2" class="mm-input" type="password" autocomplete="new-password" /></label>
+      <div class="mm-msg info" id="pwMsg"></div>
+      <div class="mm-actions"><button id="pwSave" class="mm-btn primary" type="button">保存</button></div>
+      <div class="mm-hint">改完当前登录会失效，需用新密码重新登录。</div>
+    </div>
+  </div>
+</div>
 <script>
 const log = document.getElementById("log")
 const f = document.getElementById("f")
@@ -514,7 +531,8 @@ const ICONS = {
   chevronL: '<path d="m15 18-6-6 6-6"/>',
   trash: '<path d="M4 7h16"/><path d="M9 7V5a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/><path d="M6 7l1 12a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-12"/>',
   cog: '<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1Z"/>',
-  logout: '<path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/>'
+  logout: '<path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/>',
+  key: '<circle cx="7.5" cy="15.5" r="4.5"/><path d="m21 2-9.6 9.6"/><path d="m15.5 7.5 3 3L22 7l-3-3"/>'
 }
 function ic(name, cls) { return '<svg class="ic' + (cls ? " " + cls : "") + '" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">' + (ICONS[name] || "") + "</svg>" }
 const setIc = (id, name) => { const el = document.getElementById(id); if (el) el.innerHTML = ic(name) }
@@ -526,6 +544,30 @@ stopBtn.innerHTML = ic("stop") + "终止"
 // ---- 模型设置：切换后台 opencode 的大模型（自定义 OpenAI 兼容 API）----
 document.getElementById("modelBtn").innerHTML = ic("cog")
 document.getElementById("logoutBtn").innerHTML = ic("logout")
+// ---- 修改密码 ----
+document.getElementById("pwBtn").innerHTML = ic("key")
+const pwModal = document.getElementById("pwModal")
+const pwMsg = document.getElementById("pwMsg")
+const pwSetMsg = (t, m) => { pwMsg.className = "mm-msg " + t; pwMsg.textContent = m }
+function openPw() { ["pwCur", "pwNew", "pwNew2"].forEach(id => document.getElementById(id).value = ""); pwSetMsg("info", ""); pwModal.classList.add("on"); document.getElementById("pwCur").focus() }
+function closePw() { pwModal.classList.remove("on") }
+document.getElementById("pwBtn").addEventListener("click", openPw)
+document.getElementById("pwClose").addEventListener("click", closePw)
+pwModal.addEventListener("click", (e) => { if (e.target === pwModal) closePw() })
+document.addEventListener("keydown", (e) => { if (e.key === "Escape" && pwModal.classList.contains("on")) closePw() })
+document.getElementById("pwSave").addEventListener("click", async () => {
+  const cur = document.getElementById("pwCur").value, nw = document.getElementById("pwNew").value, nw2 = document.getElementById("pwNew2").value
+  if (nw.length < 6) return pwSetMsg("err", "新密码至少 6 位")
+  if (nw !== nw2) return pwSetMsg("err", "两次新密码不一致")
+  const btn = document.getElementById("pwSave"); btn.disabled = true; btn.textContent = "保存中…"
+  try {
+    const r = await fetch("api/password", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ current: cur, new: nw }) })
+    const j = await r.json()
+    if (j.ok) { pwSetMsg("ok", "已修改，正在跳转重新登录…"); setTimeout(() => { location.href = "/" }, 1300) }
+    else pwSetMsg("err", j.err || "修改失败")
+  } catch (_) { pwSetMsg("err", "网络异常，请重试") }
+  btn.disabled = false; btn.textContent = "保存"
+})
 document.getElementById("mmTitle").innerHTML = ic("cog") + "模型设置（OpenAI 兼容）"
 document.getElementById("mmClose").innerHTML = ic("x")
 const modelModal = document.getElementById("modelModal")

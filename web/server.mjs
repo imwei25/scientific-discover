@@ -151,9 +151,17 @@ const cookieOf = (req, key) => {
 // cookie = <过期时间ms>.<HMAC(LAN_PASSWORD, "lan|过期时间")>，容器只验签+验没过期，无需存储，重启后老 cookie 仍有效。
 // 用 LAN_PASSWORD 作签名密钥：每容器稳定、且改密码即让旧会话失效（合理）。
 const AUTH_TTL_MS = 5 * 24 * 60 * 60 * 1000                    // 5 天免登录
-const AUTH_KEY = "lan-auth|" + (LAN_PASSWORD || "")
+// 自助改密码：新密码存 ocdata 卷的 override 文件（随容器持久、随备份走）；用 base=旧env密码的hash 绑定——
+// 管理员在 env 改密并重建容器后 base 不再匹配，override 自动失效、以新 env 密码为准（管理员始终能覆盖）。
+const PW_OVERRIDE = path.join(os.homedir(), ".local", "share", "opencode", "auth-override.json")
+const sha = (s) => crypto.createHash("sha256").update(String(s)).digest("hex")
+const effectivePassword = () => {
+  try { const o = JSON.parse(fs.readFileSync(PW_OVERRIDE, "utf8")); if (o && o.base === sha(LAN_PASSWORD) && typeof o.password === "string" && o.password) return o.password } catch {}
+  return LAN_PASSWORD
+}
 const b64u = (buf) => buf.toString("base64").replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "")
-const signAuth = (exp) => b64u(crypto.createHmac("sha256", AUTH_KEY).update("lan|" + exp).digest())
+// 签名密钥用「当前有效密码」：改密码后旧 cookie 立即失效（合理）
+const signAuth = (exp) => b64u(crypto.createHmac("sha256", "lan-auth|" + effectivePassword()).update("lan|" + exp).digest())
 const makeAuthCookie = () => { const exp = Date.now() + AUTH_TTL_MS; return exp + "." + signAuth(exp) }
 const validAuth = (val) => {
   if (!val) return false
@@ -286,9 +294,21 @@ function startJob(sid, sentText) {
   }
   ;(async () => {
     const events = await client.event.subscribe()
+    const qStart = quotaUsed()            // 本轮开始时今日已用成本（跨日不变），用于中途封顶判断
+    const runCost = new Map()             // 本轮各 assistant 消息的 cost（按 messageID 取最新），实时累计
     ;(async () => {
       for await (const e of events.stream) {
         if (job.finished) break
+        // 中途额度封顶：一旦「今日已用 + 本轮实时成本」达上限，立即中止本轮，避免单轮跑到底大幅超支
+        if (DAILY_COST_LIMIT > 0 && !job.quotaHit && e?.type === "message.updated") {
+          const info = e.properties?.info
+          if (info?.sessionID === sid && info.role === "assistant") {
+            runCost.set(info.id, info.cost || 0)
+            let rc = 0; for (const v of runCost.values()) rc += v
+            if (qStart + rc >= DAILY_COST_LIMIT) { job.quotaHit = true; try { await client.session.abort({ path: { id: sid } }) } catch {} }
+          }
+          continue
+        }
         const p = e?.properties?.part; if (!p) continue
         if (p.sessionID && p.sessionID !== sid) continue
         if (p.type === "text" && typeof p.text === "string" && p.text !== sentText) broadcast("text", p.text)   // cumulative — browser replaces（滤掉回显的用户输入，含注入的目录前言）
@@ -302,19 +322,23 @@ function startJob(sid, sentText) {
     })().catch(() => {})
     const before = dirState(wsOut(sid))   // 记录本轮开始前本会话产物状态，用于算增量
     let cost0 = 0; try { cost0 = un(await client.session.get({ path: { id: sid } }))?.cost || 0 } catch {}   // 本轮前累计成本，用于算增量
-    let result
+    let result, promptErr = null
     try {
       result = un(await client.session.prompt({ path: { id: sid }, body: { model: MODEL, parts: [{ type: "text", text: sentText }] } }))
-    } catch (err) {
-      if (job.finished || job.aborting) return finish()   // 已被显式终止：prompt 的报错是 abort 的余波，不再广播
+    } catch (err) { promptErr = err }
+    // 无论正常结束 / 被额度中止 / 被用户终止，都先把本轮实际成本记进今日额度——否则中止的轮不计费，用户可无限重试绕过额度
+    try { const c1 = un(await client.session.get({ path: { id: sid } }))?.cost || 0; addCost(c1 - cost0) } catch {}
+    if (job.aborting) return finish()                       // 用户显式终止：job.abort 已广播 aborted
+    if (job.quotaHit) { broadcast("failed", { message: `本轮已达今日额度上限（$${DAILY_COST_LIMIT.toFixed(2)}），已自动中止；明日 0 点(UTC)恢复。` }); return finish() }
+    if (promptErr) {
+      if (job.finished) return finish()
       // 出错时【绝不】新建空会话重放消息——会丢光多轮上下文；如实报错，真失效时用户点「新对话」。
-      const msg = String(err?.message || err)
+      const msg = String(promptErr?.message || promptErr)
       const gone = /not found|no such session|does not exist|404/i.test(msg)
       broadcast("failed", { message: gone ? "该会话已失效，请点「新对话」重新开始。" : ("本轮出错：" + msg.slice(0, 200)) })
       return finish()
     }
-    if (job.finished || job.aborting) return finish()
-    try { const c1 = un(await client.session.get({ path: { id: sid } }))?.cost || 0; addCost(c1 - cost0) } catch {}   // 记本轮成本增量到今日额度
+    if (job.finished) return finish()
     const finalText = (result?.parts ?? []).filter(x => x.type === "text").map(x => x.text).join("\n")
     broadcast("final", { text: finalText })
     const changed = changedSince(wsOut(sid), before)
@@ -351,12 +375,24 @@ const server = http.createServer(async (req, res) => {
       const chunks = []; for await (const c of req) chunks.push(c)
       let user = "", pw = ""
       try { const b = JSON.parse(Buffer.concat(chunks).toString() || "{}"); user = (b.username || "").trim(); pw = (b.password || "").trim() } catch {}
-      if (user !== LAN_USER || pw !== LAN_PASSWORD) return send(res, 401, "application/json", JSON.stringify({ ok: false, err: "账号或密码错误" }))
+      if (user !== LAN_USER || pw !== effectivePassword()) return send(res, 401, "application/json", JSON.stringify({ ok: false, err: "账号或密码错误" }))
       res.writeHead(200, { "Content-Type": "application/json", "Set-Cookie": `lan_auth=${makeAuthCookie()}; Path=${BASE_PATH}/; HttpOnly; SameSite=Lax; Max-Age=${AUTH_TTL_MS / 1000}` })
       return res.end(JSON.stringify({ ok: true }))
     }
     // 退出登录：签名 cookie 无服务端状态，清掉浏览器 cookie 即可（本人登出足够）
     if (req.method === "POST" && u.pathname === "/api/logout") {
+      res.writeHead(200, { "Content-Type": "application/json", "Set-Cookie": `lan_auth=; Path=${BASE_PATH}/; HttpOnly; Max-Age=0` })
+      return res.end(JSON.stringify({ ok: true }))
+    }
+    // 自助改密码（须已登录）：校验当前密码 → 写 override → 清 cookie 逼重登（旧 cookie 已随密钥变更失效）
+    if (req.method === "POST" && u.pathname === "/api/password") {
+      const chunks = []; for await (const c of req) chunks.push(c)
+      let cur = "", nw = ""
+      try { const b = JSON.parse(Buffer.concat(chunks).toString() || "{}"); cur = String(b.current || ""); nw = String(b.new || "") } catch {}
+      if (cur !== effectivePassword()) return send(res, 401, "application/json", JSON.stringify({ ok: false, err: "当前密码不正确" }))
+      if (nw.length < 6) return send(res, 400, "application/json", JSON.stringify({ ok: false, err: "新密码至少 6 位" }))
+      try { fs.mkdirSync(path.dirname(PW_OVERRIDE), { recursive: true }); fs.writeFileSync(PW_OVERRIDE, JSON.stringify({ base: sha(LAN_PASSWORD), password: nw })) }
+      catch { return send(res, 500, "application/json", JSON.stringify({ ok: false, err: "保存失败" })) }
       res.writeHead(200, { "Content-Type": "application/json", "Set-Cookie": `lan_auth=; Path=${BASE_PATH}/; HttpOnly; Max-Age=0` })
       return res.end(JSON.stringify({ ok: true }))
     }
