@@ -389,7 +389,6 @@
   </div>
   <div class="hright">
     <div id="modelSel" class="msel" hidden></div>
-    <button id="modelBtn" class="hbtn" type="button" title="模型设置（切换后台大模型）"></button>
     <button id="pwBtn" class="hbtn" type="button" title="修改密码"></button>
     <button id="logoutBtn" class="hbtn" type="button" title="退出登录"></button>
     <div class="status"><span class="dot"></span>在线</div>
@@ -438,37 +437,6 @@
     <button class="pv-close" id="pvClose" type="button">关闭</button>
   </div>
   <div class="pv-body" id="pvBody"></div>
-</div>
-<div id="modelModal" class="modal">
-  <div class="modal-card">
-    <div class="modal-head">
-      <span class="modal-title" id="mmTitle">模型设置</span>
-      <button class="modal-x" id="mmClose" type="button" title="关闭"></button>
-    </div>
-    <div class="modal-body">
-      <div class="mm-cur" id="mmCur">读取当前模型…</div>
-      <label class="mm-field"><span>常用预设（选后自动填 URL 与模型，Key 仍需自填）</span>
-        <select id="mmPreset" class="mm-input mm-select">
-          <option value="">— 选择预设 —</option>
-          <option value="deepseek">DeepSeek（api.deepseek.com）</option>
-          <option value="siliconflow">硅基流动（api.siliconflow.cn/v1）</option>
-          <option value="openai">OpenAI（api.openai.com/v1）</option>
-        </select></label>
-      <label class="mm-field"><span>API URL（OpenAI 兼容接口地址）</span>
-        <input id="mmUrl" class="mm-input" placeholder="https://api.openai.com/v1" autocomplete="off" spellcheck="false" /></label>
-      <label class="mm-field"><span>API Key</span>
-        <input id="mmKey" class="mm-input" type="password" placeholder="sk-..." autocomplete="off" spellcheck="false" /></label>
-      <label class="mm-field"><span>模型 ID</span>
-        <input id="mmModel" class="mm-input" placeholder="gpt-4o-mini" autocomplete="off" spellcheck="false" /></label>
-      <div class="mm-msg info" id="mmMsg"></div>
-      <div class="mm-actions">
-        <button id="mmTest" class="mm-btn ghost" type="button">测试可用性</button>
-        <button id="mmSave" class="mm-btn primary" type="button">保存并切换</button>
-        <button id="mmReset" class="mm-btn ghost reset" type="button">恢复默认</button>
-      </div>
-      <div class="mm-hint">仅支持 <b>OpenAI 格式</b>（<code>POST /chat/completions</code>）。API URL 填到 <code>/v1</code> 级别，例如 DeepSeek <code>https://api.deepseek.com</code>、硅基流动 <code>https://api.siliconflow.cn/v1</code>。<br>切换会重启后台 opencode（约数秒），进行中的对话会中断。</div>
-    </div>
-  </div>
 </div>
 <div id="pwModal" class="modal">
   <div class="modal-card" style="max-width:380px">
@@ -553,8 +521,6 @@ document.getElementById("refreshSess").innerHTML = ic("refresh")
 sendBtn.innerHTML = ic("send") + "发送"
 stopBtn.innerHTML = ic("stop") + "终止"
 
-// ---- 模型设置：切换后台 opencode 的大模型（自定义 OpenAI 兼容 API）----
-document.getElementById("modelBtn").innerHTML = ic("cog")
 document.getElementById("logoutBtn").innerHTML = ic("logout")
 // ---- 模型切换器：显示 当前供应商·模型，可在同供应商下切换（仅接入网关时出现）----
 ;(function () {
@@ -607,77 +573,6 @@ document.getElementById("pwSave").addEventListener("click", async () => {
   } catch (_) { pwSetMsg("err", "网络异常，请重试") }
   btn.disabled = false; btn.textContent = "保存"
 })
-document.getElementById("mmTitle").innerHTML = ic("cog") + "模型设置（OpenAI 兼容）"
-document.getElementById("mmClose").innerHTML = ic("x")
-const modelModal = document.getElementById("modelModal")
-const mmUrl = document.getElementById("mmUrl"), mmKey = document.getElementById("mmKey"), mmModel = document.getElementById("mmModel")
-const mmMsg = document.getElementById("mmMsg"), mmCur = document.getElementById("mmCur")
-const mmTest = document.getElementById("mmTest"), mmSave = document.getElementById("mmSave"), mmReset = document.getElementById("mmReset")
-const mmPreset = document.getElementById("mmPreset")
-const MM_PRESETS = {
-  deepseek: { name: "DeepSeek", baseURL: "https://api.deepseek.com", modelID: "deepseek-v4-flash" },
-  siliconflow: { name: "硅基流动", baseURL: "https://api.siliconflow.cn/v1", modelID: "deepseek-ai/DeepSeek-V3" },
-  openai: { name: "OpenAI", baseURL: "https://api.openai.com/v1", modelID: "gpt-4o-mini" },
-}
-mmPreset.addEventListener("change", () => {
-  const p = MM_PRESETS[mmPreset.value]; if (!p) return
-  mmUrl.value = p.baseURL; mmModel.value = p.modelID
-  mmSetMsg("info", "已填入 " + p.name + " 的地址与模型，填好 API Key 后点「测试可用性」。"); mmKey.focus()
-})
-const mmSetMsg = (cls, txt) => { mmMsg.className = "mm-msg " + cls; mmMsg.textContent = txt }
-const mmBusy = (b) => { mmTest.disabled = b; mmSave.disabled = b; mmReset.disabled = b }
-const mmPayload = () => ({ baseURL: mmUrl.value.trim(), apiKey: mmKey.value.trim(), modelID: mmModel.value.trim() })
-const mmValid = (p) => { if (!p.baseURL || !p.apiKey || !p.modelID) { mmSetMsg("err", "请填写 API URL、API Key、模型 ID"); return false } return true }
-async function mmJSON(url, opts) {   // 稳妥解析：接口缺失时后端回纯文本 404，别当 JSON 解析
-  const r = await fetch(url, opts)
-  const t = await r.text()
-  try { return JSON.parse(t) }
-  catch { throw new Error(r.status === 404 ? "后端缺少该接口，请重启 server.mjs 让新版生效" : ("HTTP " + r.status + "：" + t.slice(0, 80))) }
-}
-async function mmLoad() {
-  try {
-    const d = await mmJSON("api/model")
-    mmCur.innerHTML = "当前模型：<b>" + d.providerID + "/" + d.modelID + "</b>" + (d.isCustom ? "（自定义）" : "（默认）")
-      + (d.managed ? "" : "<br><span style='color:var(--rose)'>注意：本网关未托管 opencode，切换后可能需手动重启 opencode 才生效。</span>")
-    if (d.isCustom) { if (d.baseURL) mmUrl.value = d.baseURL; mmModel.value = d.modelID }
-  } catch { mmCur.textContent = "无法读取当前模型" }
-}
-function openModel() { modelModal.classList.add("on"); mmSetMsg("info", ""); mmLoad() }
-function closeModel() { modelModal.classList.remove("on") }
-document.getElementById("modelBtn").addEventListener("click", openModel)
-document.getElementById("mmClose").addEventListener("click", closeModel)
-modelModal.addEventListener("click", (e) => { if (e.target === modelModal) closeModel() })
-document.addEventListener("keydown", (e) => { if (e.key === "Escape" && modelModal.classList.contains("on")) closeModel() })
-mmTest.addEventListener("click", async () => {
-  const p = mmPayload(); if (!mmValid(p)) return
-  mmBusy(true); mmSetMsg("info", "测试中…（最多等 20 秒）")
-  try {
-    const d = await mmJSON("api/model/test", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(p) })
-    if (d.ok) mmSetMsg("ok", "✓ 可用（" + d.ms + "ms" + (d.reply ? "，返回：“" + d.reply + "”" : "") + "）")
-    else mmSetMsg("err", "✗ 不可用：" + (d.err || ("HTTP " + d.status)))
-  } catch (e) { mmSetMsg("err", "✗ 请求失败：" + e) }
-  finally { mmBusy(false) }
-})
-mmSave.addEventListener("click", async () => {
-  const p = mmPayload(); if (!mmValid(p)) return
-  mmBusy(true); mmSetMsg("info", "保存并重启后台 opencode 中，请稍候…")
-  try {
-    const d = await mmJSON("api/model", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(p) })
-    if (d.ok) { mmSetMsg("ok", "✓ 已切换到 " + d.providerID + "/" + d.modelID + (d.restarted ? "（opencode 已重启）" : "（未托管 opencode，如未生效请手动重启）")); mmLoad() }
-    else mmSetMsg("err", "✗ 切换失败：" + (d.err || "未知错误"))
-  } catch (e) { mmSetMsg("err", "✗ 请求失败：" + e) }
-  finally { mmBusy(false) }
-})
-mmReset.addEventListener("click", async () => {
-  mmBusy(true); mmSetMsg("info", "恢复默认并重启中…")
-  try {
-    const d = await mmJSON("api/model/reset", { method: "POST" })
-    if (d.ok) { mmSetMsg("ok", "✓ 已恢复默认 " + d.providerID + "/" + d.modelID); mmUrl.value = ""; mmKey.value = ""; mmModel.value = ""; mmLoad() }
-    else mmSetMsg("err", "✗ 失败")
-  } catch (e) { mmSetMsg("err", "✗ 请求失败：" + e) }
-  finally { mmBusy(false) }
-})
-
 // ---- 轻量 Markdown 渲染（自包含、无外部依赖；先 HTML 转义再解析，链接白名单，防 XSS）----
 function mdEscape(s) { return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;") }
 function mdLink(url, txt) { if (!/^(https?:|mailto:|\/|api\/)/i.test(url)) return txt; return '<a href="' + url.replace(/"/g, "%22") + '" target="_blank" rel="noopener">' + txt + "</a>" }
