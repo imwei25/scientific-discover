@@ -564,7 +564,7 @@ async function load(){let d;try{d=await api('overview')}catch(e){return renderLo
   // 审计日志
   const au=$('<section><h2>审计日志<span class="hint">最近100条：登录成败 / 管理操作（新→旧）</span></h2><div id="aud" style="max-height:260px;overflow:auto;font:12px/1.7 ui-monospace,Consolas,monospace;color:var(--mut);white-space:pre-wrap">加载中…</div></section>')
   main.appendChild(au)
-  api('audit').then(a=>{au.querySelector('#aud').textContent=(a.lines&&a.lines.length)?a.lines.join('\\n'):'（暂无记录）'}).catch(()=>{au.querySelector('#aud').textContent='加载失败'})
+  api('audit').then(a=>{var bj=function(l){var i=l.indexOf(' | ');if(i<0)return l;var d=new Date(l.slice(0,i));if(isNaN(d))return l;return new Date(d.getTime()+288e5).toISOString().slice(0,19).replace('T',' ')+l.slice(i)};au.querySelector('#aud').textContent=(a.lines&&a.lines.length)?a.lines.map(bj).join('\\n'):'（暂无记录）'}).catch(()=>{au.querySelector('#aud').textContent='加载失败'})
   app.appendChild(main)
   document.getElementById('reload').onclick=load
   document.getElementById('logout').onclick=async()=>{await fetch('/admin/api/logout',{method:'POST'});renderLogin('')}
