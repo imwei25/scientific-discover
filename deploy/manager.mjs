@@ -371,7 +371,7 @@ select,input{background:var(--p2);border:1px solid var(--line);color:var(--fg);b
 </style></head><body>
 <div id="app"></div>
 <script>
-const $=(h)=>{const d=document.createElement('div');d.innerHTML=h;return d.firstElementChild}
+const $=(h)=>{const t=document.createElement('template');t.innerHTML=h.trim();return t.content.firstElementChild}
 const app=document.getElementById('app')
 const fmt=(n)=>Number(n||0).toLocaleString()
 const money=(n)=>'$'+Number(n||0).toFixed(n>=1?2:3)
