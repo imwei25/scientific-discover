@@ -77,8 +77,10 @@ sudo deploy/scripts/user-add.sh bob             # 省略档位=free（普通，$
 | 看全员档位/额度/今日用量 | `sudo deploy/scripts/user-list.sh` |
 | 删用户（留数据） | `sudo deploy/scripts/user-del.sh <名>` |
 | 删用户（连数据，先自动备份） | `sudo deploy/scripts/user-del.sh <名> --purge` |
-| 改档位额度（对整档生效） | 编辑 `deploy/tiers.env` → `sudo deploy/scripts/render-compose.sh` → 逐个 `docker restart agent-*` |
-| 给某用户单独设额度（覆盖档位） | 编辑 `deploy/users/<名>.env` 取消注释 `DAILY_COST_LIMIT=`（USD/天，0=不限）→ `render-compose.sh && docker restart agent-<名>` |
+| 改档位额度（对整档生效） | 编辑 `deploy/tiers.env` → `sudo deploy/scripts/render-compose.sh` → `docker compose up --no-start --force-recreate`（重建容器才会读到新额度，见下注） |
+| 给某用户单独设额度（覆盖档位） | 编辑 `deploy/users/<名>.env` 取消注释 `DAILY_COST_LIMIT=`（USD/天，0=不限）→ `render-compose.sh && docker rm -f agent-<名> && docker compose up --no-start agent-<名>` |
+
+> ⚠ 额度/存储上限是容器**环境变量**，在容器「创建」时固化；manager 唤醒用的是 `docker start`，**`docker restart` 不会重读 compose**。所以改额度后必须**重建**容器（如上；数据在命名卷里，重建不丢），或直接用 `user-tier.sh`（改档位时已自动重建）。
 | 改了代码后更新 | `git pull && sudo deploy/scripts/build-image.sh` 再逐个 `docker restart agent-*`（或等其自然冷启动） |
 | 每日备份（建 cron） | `sudo deploy/scripts/backup.sh`（7 天轮转，写 `/var/backups/sci/`） |
 | 看谁在跑 | `docker ps --filter name=agent-` |

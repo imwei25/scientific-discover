@@ -54,7 +54,7 @@ scripts/user-add.sh bob
 | 看谁在什么档/用了多少 | `scripts/user-list.sh`（各用户档位 / 每日额度 / 今日已用 / 存储；`--fast` 跳过存储统计） |
 | 删用户（留数据） | `scripts/user-del.sh <name>` |
 | 删用户（连数据） | `scripts/user-del.sh <name> --purge`（先自动备份再删卷） |
-| 改了 web/skills 代码 | `scripts/build-image.sh` 后逐个 `docker restart agent-<name>`（或等其自然冷启动） |
+| 改了 web/skills 代码 | `scripts/build-image.sh` 后 `docker compose up --no-start --force-recreate`（重建才会用上新镜像；`docker restart` 会沿用旧镜像/旧env） |
 | 备份 | `scripts/backup.sh`（建议 cron 每日；7 天轮转，写 `/var/backups/sci/<日期>/`） |
 | 看谁在跑 | `docker ps --filter name=agent-` |
 | 手动叫停某用户 | `docker stop agent-<name>`（下次访问会自动唤醒） |
@@ -85,13 +85,14 @@ scripts/user-add.sh bob
 | `admin` 管理员 | 不限 | 不限 | 内部/管理 |
 
 - 给用户指派档位：`users/<name>.env` 里写 `TIER=<档位>`（新增用户时 `user-add.sh <name> <档位>`，改档 `user-tier.sh <name> <档位>`）。
-- **档位 → 额度的解析在 `render-compose.sh` 完成**，注入容器的仍是原有的 `DAILY_COST_LIMIT`/`STORAGE_LIMIT_MB` 环境变量——网关 `server.mjs` 无改动。改 `tiers.env` 后重跑 `render-compose.sh` 并重启相关容器即生效。
+- **档位 → 额度的解析在 `render-compose.sh` 完成**，注入容器的仍是原有的 `DAILY_COST_LIMIT`/`STORAGE_LIMIT_MB` 环境变量——网关 `server.mjs` 无改动。改 `tiers.env` 后：`render-compose.sh` → `docker compose up --no-start --force-recreate`（**重建**容器；见下方 ⚠）。
+- ⚠ 额度是容器**环境变量**、创建时固化；manager 唤醒用 `docker start`，**`docker restart` 不重读 compose**。故改额度必须**重建**容器（数据在命名卷不丢），或用 `user-tier.sh`（改档已自动重建）。
 - **个别覆盖**：某用户 `.env` 里若填了非空的 `DAILY_COST_LIMIT=`/`STORAGE_LIMIT_MB=`，则以其为准（优先于档位），用于单独加码/收紧。
 - 额度按 **USD/天**：用 opencode 的 `session.cost`（含 DeepSeek 缓存折扣）累计每轮增量，**跨日 UTC 0 点自动清零**，持久化在 `ocdata` 卷（重启不丢）。达上限**拦截新对话**（本轮已开始的照常跑完），前端提示"今日额度已用尽"。查用量：`GET /<user>/api/quota`，或 `scripts/user-list.sh` 一览全员。
 
 ## 存储上限（MB）
 
-- 每用户 `users/<name>.env` 里 `STORAGE_LIMIT_MB=`（`0` 或空 = 不限），统计 `uploads + outputs` 之和。改后 `docker restart agent-<name>`。
+- 每用户 `users/<name>.env` 里 `STORAGE_LIMIT_MB=`（`0` 或空 = 不限），统计 `uploads + outputs` 之和。改后需**重建**容器（`render-compose.sh && docker rm -f agent-<name> && docker compose up --no-start agent-<name>`），非 `docker restart`。
 - 前端侧栏常驻显示"存储 已用/上限"，**到 90% 变红提示**；超上限**拦截新上传**（对话产物照常）。查用量：`GET /<user>/api/storage`。
 - **删除会话即释放其占用**（`uploads/<sid>/` 与 `outputs/<sid>/` 一并删掉）；另有应用内 7 天 TTL 兜底。
 

@@ -28,9 +28,14 @@ fi
 echo "$name：$cur → $tier"
 
 scripts/render-compose.sh
-# 重启容器让新额度生效（容器在跑才重启；没在跑的下次冷启动自然读到新值）
-if docker ps --format '{{.Names}}' | grep -qx "agent-${name}"; then
-  docker restart "agent-${name}" >/dev/null && echo "已重启 agent-${name}，新额度即时生效"
+# 让新额度生效：容器的环境变量在「创建」那一刻固化，manager 唤醒用的是 docker start —— 不会重读 compose。
+# 所以必须【重建】容器（不是 restart）。数据都在命名卷里(uploads/outputs/ocdata)，重建不丢。
+# 重建后置为停止态，交回 manager 按需冷启动（维持闲置退出模型）；原本在跑的则重新拉起。
+was_running=0; docker ps --format '{{.Names}}' 2>/dev/null | grep -qx "agent-${name}" && was_running=1
+docker rm -f "agent-${name}" >/dev/null 2>&1 || true
+docker compose up --no-start "agent-${name}"
+if [ "$was_running" = 1 ]; then
+  docker start "agent-${name}" >/dev/null && echo "已重建并启动 agent-${name}，新额度即时生效"
 else
-  echo "agent-${name} 当前未运行，下次访问冷启动即读到新档位"
+  echo "已重建 agent-${name}（停止态），下次访问冷启动即用新额度"
 fi
