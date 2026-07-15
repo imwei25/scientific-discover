@@ -39,6 +39,26 @@ const DEPLOY_DIR  = __dirname
 const SCRIPTS_DIR = path.join(DEPLOY_DIR, "scripts")
 const TIERS_FILE  = path.join(DEPLOY_DIR, "tiers.env")
 
+// ---- LLM 网关(one-api)：manager 在宿主上，直接访问 one-api 的回环地址，代 /admin 管渠道/模型 ----
+const ONEAPI_URL   = process.env.ONEAPI_URL || ""      // 如 http://127.0.0.1:3010
+const ONEAPI_TOKEN = process.env.ONEAPI_TOKEN || ""    // one-api 的系统访问令牌
+const GATEWAY_ENABLED = !!(ONEAPI_URL && ONEAPI_TOKEN)
+// 调 one-api 管理 API（Bearer 令牌）。ONEAPI_URL 是明文回环 http，用 http 模块即可，无需 fetch。
+function oaReq(method, apiPath, body) {
+  return new Promise((resolve) => {
+    let u; try { u = new URL(ONEAPI_URL + apiPath) } catch { return resolve({ status: 0, err: "bad url" }) }
+    const data = body !== undefined ? JSON.stringify(body) : null
+    const headers = { "Authorization": "Bearer " + ONEAPI_TOKEN, "New-Api-User": "1" }
+    if (data) { headers["Content-Type"] = "application/json"; headers["Content-Length"] = Buffer.byteLength(data) }
+    const req = http.request({ method, hostname: u.hostname, port: u.port, path: u.pathname + u.search, headers }, (r) => {
+      let b = ""; r.on("data", (c) => b += c); r.on("end", () => { try { resolve({ status: r.statusCode, json: JSON.parse(b || "{}") }) } catch { resolve({ status: r.statusCode, raw: b }) } })
+    })
+    req.on("error", (e) => resolve({ status: 0, err: e.message }))
+    req.setTimeout(15000, () => { req.destroy(); resolve({ status: 0, err: "timeout" }) })
+    if (data) req.write(data); req.end()
+  })
+}
+
 // ---- 会话：无状态签名 cookie（HMAC，5天免登录；manager 重启也不掉线）----
 const AUTH_TTL_MS = 5 * 24 * 60 * 60 * 1000
 const b64u = (buf) => buf.toString("base64").replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "")
@@ -385,7 +405,7 @@ function loadTiers() {
     for (const line of fs.readFileSync(TIERS_FILE, "utf8").split(/\r?\n/)) {
       if (/^\s*#/.test(line)) continue
       const p = line.trim().split(/\s+/)
-      if (p.length >= 3 && p[0]) out.push({ key: p[0], daily: Number(p[1]) || 0, storage: Number(p[2]) || 0 })
+      if (p.length >= 3 && p[0]) out.push({ key: p[0], daily: Number(p[1]) || 0, storage: Number(p[2]) || 0, model: p[3] || "" })
     }
   } catch { /* 无 tiers.env */ }
   return out
@@ -442,7 +462,10 @@ async function setTierDef(b) {
   let lines = []
   try { lines = fs.readFileSync(TIERS_FILE, "utf8").split(/\r?\n/) } catch {}
   const kept = lines.filter((l) => { if (/^\s*#/.test(l)) return true; const p = l.trim().split(/\s+/); return p[0] !== key })
-  if (!b.remove) kept.push(`${key}\t${Math.max(0, Number(b.dailyUSD) || 0)}\t${Math.max(0, Number(b.storageMB) || 0)}`)
+  if (!b.remove) {
+    const model = String(b.model || "").trim().replace(/\s+/g, "") || "deepseek-v4-pro"   // 分级路由的模型名（第4列）
+    kept.push(`${key}\t${Math.max(0, Number(b.dailyUSD) || 0)}\t${Math.max(0, Number(b.storageMB) || 0)}\t${model}`)
+  }
   fs.writeFileSync(TIERS_FILE, kept.filter((l, i) => !(l === "" && i === kept.length - 1)).join("\n") + "\n")
   await runScript("render-compose.sh", [])
   const affected = []
@@ -486,8 +509,16 @@ const fmt=(n)=>Number(n||0).toLocaleString()
 const money=(n)=>'$'+Number(n||0).toFixed(n>=1?2:3)
 async function api(p,opt){const r=await fetch('/admin/api/'+p,opt);if(r.status===401)throw {unauth:1};return r.json()}
 function toast(m,ok){const e=document.querySelector('#msg');if(!e)return;e.textContent=m;e.className='msg '+(ok?'ok':'err');setTimeout(()=>e.className='msg',4000)}
-let TIERS=[]
+let TIERS=[], MODELS=[]
 function tierOpts(sel){return TIERS.map(t=>'<option value="'+t.key+'"'+(t.key===sel?' selected':'')+'>'+t.key+(t.daily?' ($'+t.daily+'/天)':' (不限)')+'</option>').join('')}
+function modelOpts(sel){const o=MODELS.slice();if(sel&&o.indexOf(sel)<0)o.unshift(sel);return o.map(m=>'<option'+(m===sel?' selected':'')+'>'+m+'</option>').join('')}
+async function renderGateway(box){let d;try{d=await api('gateway/channels')}catch(e){box.textContent='加载失败';return}
+  if(!d.enabled){box.innerHTML='<div class="mut" style="font-size:13px">网关未接入（sci-manager 未配 ONEAPI_URL/ONEAPI_TOKEN）。配好后这里可直接加/看渠道。</div>';return}
+  const rows=(d.channels||[]).map(c=>'<tr><td class="name">'+c.name+'</td><td class="mut" style="word-break:break-all">'+(c.base_url||'')+'</td><td>'+(c.models||'')+'</td><td>'+(c.status===1?'<span class="pill run">启用</span>':'<span class="pill">停</span>')+'</td></tr>').join('');
+  box.innerHTML='<table><thead><tr><th>渠道</th><th>接口地址</th><th>模型名</th><th>状态</th></tr></thead><tbody>'+(rows||'<tr><td colspan="4" class="mut">暂无渠道</td></tr>')+'</tbody></table>'
+    +'<div class="row" style="margin-top:12px;flex-wrap:wrap"><input id="gcn" placeholder="名称(如 OpenAI)" style="width:140px"><input id="gcu" placeholder="接口地址 https://api.openai.com/v1" style="flex:1;min-width:200px"><input id="gck" placeholder="API Key" style="width:160px"><input id="gcm" placeholder="模型名(逗号分隔)" style="width:170px"><button class="btn primary" id="gcadd">加渠道</button></div>'
+    +'<div class="mut" style="font-size:12px;margin-top:6px">加完记得在某档位「模型」下拉里选它，才会有用户路由过去。</div>';
+  box.querySelector('#gcadd').onclick=async()=>{const body={name:box.querySelector('#gcn').value.trim(),base_url:box.querySelector('#gcu').value.trim(),key:box.querySelector('#gck').value.trim(),models:box.querySelector('#gcm').value.trim()};if(!body.name||!body.base_url||!body.key||!body.models)return toast('请填全 名称/地址/Key/模型',0);const j=await api('gateway/channel',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});toast(j.ok?('渠道 '+body.name+' 已添加'):(j.err||'失败'),j.ok);if(j.ok){MODELS=[];renderGateway(box)}}}
 function bar(used,limit){if(!limit)return '<span class="usage">'+money(used)+' <span class="mut">/ 不限</span></span>';const pct=Math.min(100,Math.round(used/limit*100));const c=pct>=100?'bad':pct>=80?'warn':'';return '<div class="usage">'+money(used)+' <span class="mut">/ '+money(limit)+' ('+pct+'%)</span></div><div class="bar '+c+'"><i style="width:'+pct+'%"></i></div>'}
 function sbar(usedMB,limitMB){if(!limitMB)return '<span class="usage">'+fmt(usedMB)+'MB <span class="mut">/ 不限</span></span>';const pct=Math.min(100,Math.round(usedMB/limitMB*100));const c=pct>=100?'bad':pct>=90?'warn':'';return '<div class="usage">'+fmt(usedMB)+' <span class="mut">/ '+fmt(limitMB)+'MB</span></div><div class="bar '+c+'"><i style="width:'+pct+'%"></i></div>'}
 
@@ -499,6 +530,7 @@ function renderLogin(err){app.innerHTML='';const box=$('<section id="login"><h2>
 
 async function load(){let d;try{d=await api('overview')}catch(e){return renderLogin('')}
   TIERS=d.tiers||[]
+  try{const gm=await api('gateway/models');MODELS=(gm&&gm.models)||[]}catch(e){MODELS=[]}
   app.innerHTML=''
   app.appendChild($('<header><h1>用户管理台</h1><span class="hint">额度=USD/天（含缓存折扣），UTC 0点重置；同时在跑上限 '+d.warmCap+'</span><span class="sp"></span><button class="btn" id="reload">刷新</button><button class="btn" id="logout">退出</button></header>'))
   const main=$('<main><div class="msg" id="msg"></div></main>')
@@ -520,11 +552,15 @@ async function load(){let d;try{d=await api('overview')}catch(e){return renderLo
   const ts=$('<section><h2>档位与额度<span class="hint">改额度对该档所有用户生效：重建其空闲容器，活跃会话下次冷启动生效</span></h2><div class="grid" id="tg"></div><div class="row" style="margin-top:14px"><input id="tk" placeholder="新档位键(如 vip)" style="width:150px"><input id="td" class="num" type="number" step="0.01" min="0" placeholder="每日USD 0=不限"><input id="ts2" class="num" type="number" min="0" placeholder="存储MB 0=不限"><button class="btn primary" id="taddbtn">新增/更新档位</button></div></section>')
   main.appendChild(ts)
   const tg=ts.querySelector('#tg')
-  TIERS.forEach(t=>{const c=$('<div class="card"><div style="font-weight:600">'+t.key+'</div><div class="row"><label class="lb">每日USD</label><input class="num td" type="number" step="0.01" min="0" value="'+t.daily+'"></div><div class="row"><label class="lb">存储MB</label><input class="num ts" type="number" min="0" value="'+t.storage+'"></div><div class="row"><span class="mut" style="flex:1;font-size:12px">0=不限</span><button class="btn save">保存</button> <button class="btn bad del">删</button></div></div>')
-    c.querySelector('.save').onclick=async()=>{const j=await api('tier-def',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({key:t.key,dailyUSD:c.querySelector('.td').value,storageMB:c.querySelector('.ts').value})});toast(j.ok?('档位 '+t.key+' 已更新'+(j.affected&&j.affected.some(a=>a.skipped)?'（部分活跃用户下次冷启动生效）':'')):'失败',j.ok);if(j.ok)load()}
+  TIERS.forEach(t=>{const mfield=MODELS.length?'<select class="tm" style="flex:1;width:auto">'+modelOpts(t.model)+'</select>':'<input class="tm" style="flex:1" value="'+(t.model||'')+'" placeholder="模型名">';
+    const c=$('<div class="card"><div style="font-weight:600">'+t.key+'</div><div class="row"><label class="lb">每日USD</label><input class="num td" type="number" step="0.01" min="0" value="'+t.daily+'"></div><div class="row"><label class="lb">存储MB</label><input class="num ts" type="number" min="0" value="'+t.storage+'"></div><div class="row"><label class="lb">模型</label>'+mfield+'</div><div class="row"><span class="mut" style="flex:1;font-size:12px">0=不限；改模型需重建容器</span><button class="btn save">保存</button> <button class="btn bad del">删</button></div></div>')
+    c.querySelector('.save').onclick=async()=>{const j=await api('tier-def',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({key:t.key,dailyUSD:c.querySelector('.td').value,storageMB:c.querySelector('.ts').value,model:c.querySelector('.tm').value})});toast(j.ok?('档位 '+t.key+' 已更新'+(j.affected&&j.affected.some(a=>a.skipped)?'（部分活跃用户下次冷启动生效）':'')):'失败',j.ok);if(j.ok)load()}
     c.querySelector('.del').onclick=async()=>{if(!confirm('删除档位 '+t.key+'？该档位下的用户将回落到不限额，请先给他们改到别的档。'))return;const j=await api('tier-def',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({key:t.key,remove:true})});toast(j.ok?('已删档位 '+t.key):'失败',j.ok);if(j.ok)load()}
     tg.appendChild(c)})
   ts.querySelector('#taddbtn').onclick=async()=>{const key=ts.querySelector('#tk').value.trim();if(!key)return toast('填档位键',0);const j=await api('tier-def',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({key,dailyUSD:ts.querySelector('#td').value,storageMB:ts.querySelector('#ts2').value})});toast(j.ok?('档位 '+key+' 已保存'):(j.err||'失败'),j.ok);if(j.ok)load()}
+  // LLM 网关渠道
+  const gw=$('<section><h2>LLM 网关渠道<span class="hint">加一家供应商即在此；权重·failover·用量日志等高级项去 one-api 台</span></h2><div id="gwbox">加载中…</div></section>')
+  main.appendChild(gw); renderGateway(gw.querySelector('#gwbox'))
   // 审计日志
   const au=$('<section><h2>审计日志<span class="hint">最近100条：登录成败 / 管理操作（新→旧）</span></h2><div id="aud" style="max-height:260px;overflow:auto;font:12px/1.7 ui-monospace,Consolas,monospace;color:var(--mut);white-space:pre-wrap">加载中…</div></section>')
   main.appendChild(au)
@@ -601,6 +637,31 @@ async function handleAdmin(req, res, pathname) {
     const r = await setTierDef(b); audit("admin.tier-def", { ip: clientIp(req), key: b.key, remove: !!b.remove, ok: r.ok })
     return json(200, r)
   }
+  // ---- LLM 网关(one-api)代理：让 /admin 直接管渠道与可用模型 ----
+  if (req.method === "GET" && pathname === "/admin/api/gateway/channels") {
+    if (!GATEWAY_ENABLED) return json(200, { enabled: false, channels: [] })
+    const r = await oaReq("GET", "/api/channel/?p=0&page_size=100")
+    const items = (r.json && r.json.data) || []
+    return json(200, { enabled: true, channels: items.map((c) => ({ id: c.id, name: c.name, type: c.type, status: c.status, base_url: c.base_url, models: c.models, used_quota: c.used_quota })) })
+  }
+  if (req.method === "GET" && pathname === "/admin/api/gateway/models") {
+    if (!GATEWAY_ENABLED) return json(200, { enabled: false, models: [] })
+    const r = await oaReq("GET", "/api/channel/?p=0&page_size=100")
+    const set = new Set()
+    for (const c of (r.json && r.json.data) || []) for (const m of String(c.models || "").split(",")) { const s = m.trim(); if (s) set.add(s) }
+    return json(200, { enabled: true, models: [...set].sort() })
+  }
+  if (req.method === "POST" && pathname === "/admin/api/gateway/channel") {
+    if (!GATEWAY_ENABLED) return json(400, { ok: false, err: "网关未接入（未配 ONEAPI_URL/ONEAPI_TOKEN）" })
+    const b = await readBody(req)
+    const name = String(b.name || "").trim(), base = String(b.base_url || "").trim(), key = String(b.key || "").trim(), models = String(b.models || "").trim()
+    if (!name || !base || !key || !models) return json(400, { ok: false, err: "请填 名称/接口地址/Key/模型名" })
+    const r = await oaReq("POST", "/api/channel/", { name, type: Number(b.type) || 1, key, base_url: base, models, group: "default", groups: ["default"], model_mapping: "" })
+    const ok = !!(r.json && r.json.success)
+    audit("admin.gateway.channel-add", { ip: clientIp(req), name, base, ok })
+    return json(ok ? 200 : 400, { ok, err: ok ? "" : ((r.json && r.json.message) || "添加失败") })
+  }
+
   // 审计日志：最近 100 条（新→旧）
   if (req.method === "GET" && pathname === "/admin/api/audit") {
     let lines = []
