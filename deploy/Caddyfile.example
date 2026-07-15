@@ -11,6 +11,14 @@
 }
 
 weigu.duckdns.org {
+	# 安全响应头（HSTS 强制 HTTPS、禁 MIME 嗅探、限制引用来源、只允许同源内嵌以防点击劫持）
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		X-Frame-Options "SAMEORIGIN"   # 产物预览用同源 iframe，故 SAMEORIGIN 而非 DENY
+		-Server
+	}
 	reverse_proxy 127.0.0.1:8090 {
 		flush_interval -1        # SSE / 流式输出不缓冲
 	}
