@@ -72,6 +72,11 @@ try {
   if (saved?.baseURL && saved?.apiKey && saved?.modelID) {
     writeOcProvider(saved)
     MODEL = { providerID: CUSTOM_PROVIDER_ID, modelID: saved.modelID }
+  } else if (process.env.OC_GATEWAY_URL && process.env.OC_GATEWAY_KEY) {
+    // 未自设模型但配了 LLM 网关(one-api) → 默认把请求走网关(OpenAI 兼容)：baseURL 指网关，模型用 OC_MODEL 的模型名。
+    // 网关内做多渠道调度/failover；分级路由靠各容器注入不同的 OC_MODEL（tiers.env 的 MODEL 列）。
+    writeOcProvider({ baseURL: process.env.OC_GATEWAY_URL, apiKey: process.env.OC_GATEWAY_KEY, modelID: MID })
+    MODEL = { providerID: CUSTOM_PROVIDER_ID, modelID: MID }
   }
 }
 // ---- 每个会话独占 uploads/<sid>/ 和 outputs/<sid>/（多用户隔离）----

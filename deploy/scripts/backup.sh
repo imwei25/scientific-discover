@@ -32,8 +32,14 @@ for name in "${names[@]}"; do
   done
 done
 
-# 配置与密钥（.env + users/*.env + 生成的 compose）：不在 git 里，丢了要重建用户/密码，一并快照
-cfg=(); [ -f .env ] && cfg+=(.env); [ -d users ] && cfg+=(users); [ -f docker-compose.yml ] && cfg+=(docker-compose.yml)
+# LLM 网关(one-api)的数据卷：渠道/令牌/用量，和用户无关但同样要备份（不然迁移后网关要重配）
+if docker volume inspect one-api-data >/dev/null 2>&1; then
+  docker run --rm -v one-api-data:/data:ro -v "${dest}:/backup" alpine tar czf /backup/gateway-one-api.tar.gz -C /data . \
+    && echo "备份 one-api-data → $dest/gateway-one-api.tar.gz"
+fi
+
+# 配置与密钥（.env + users/*.env + tiers.env + 生成的 compose）：不在 git 里，丢了要重建用户/密码，一并快照
+cfg=(); [ -f .env ] && cfg+=(.env); [ -d users ] && cfg+=(users); [ -f tiers.env ] && cfg+=(tiers.env); [ -f docker-compose.yml ] && cfg+=(docker-compose.yml)
 if [ ${#cfg[@]} -gt 0 ]; then tar czf "$dest/config.tar.gz" "${cfg[@]}" && echo "备份 配置(.env/users/compose) → $dest/config.tar.gz"; fi
 
 # 轮转：删除 7 天前的备份目录

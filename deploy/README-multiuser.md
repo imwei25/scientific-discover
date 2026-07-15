@@ -90,6 +90,17 @@ scripts/user-add.sh bob
 - **个别覆盖**：某用户 `.env` 里若填了非空的 `DAILY_COST_LIMIT=`/`STORAGE_LIMIT_MB=`，则以其为准（优先于档位），用于单独加码/收紧。
 - 额度按 **USD/天**：用 opencode 的 `session.cost`（含 DeepSeek 缓存折扣）累计每轮增量，**跨日 UTC 0 点自动清零**，持久化在 `ocdata` 卷（重启不丢）。达上限**拦截新对话**（本轮已开始的照常跑完），前端提示"今日额度已用尽"。查用量：`GET /<user>/api/quota`，或 `scripts/user-list.sh` 一览全员。
 
+## LLM 网关（one-api）：分级路由模型 + 多家 API 调度
+
+用户容器的 OpenCode 不直连各家大模型，而是指向一个 **one-api 网关**（OpenAI 兼容），由它做多渠道加权/failover 调度；不同档位可请求不同模型。
+
+- **起网关**：`scripts/gateway-up.sh`（跑 one-api 容器，接 `deploy_default` 网络，管理台在回环 `127.0.0.1:3010`）。数据（渠道/令牌/用量）存 `one-api-data` 卷，已纳入 `backup.sh`。
+- **配置**：SSH 隧道到 `127.0.0.1:3010`（`ssh -L 3010:127.0.0.1:3010 root@服务器`），浏览器登录 one-api → 改默认密码 → 「渠道」加各家 API（DeepSeek/OpenAI/…）→ 「令牌」建一个给 OpenCode 用。
+- **启用**：在 `deploy/.env` 设 `OC_GATEWAY_URL=http://one-api:3000/v1`、`OC_GATEWAY_KEY=sk-<令牌>` → `render-compose.sh` → 重建容器。容器启动即把默认模型走网关（用户没自设自定义模型时）。
+- **停用/回退**：清空这两个 `.env` 变量 → `render-compose.sh` → 重建容器，即回落到各容器直连各家 API。
+- **分级路由模型**：`tiers.env` 第 4 列 `<模型名>` = 该档位请求的模型名（需在 one-api 里有对应渠道）。想让 free 用便宜模型、pro 用最强模型，改这一列即可（改完 `render-compose.sh` + 重建）。
+- **多 API 灵活调度**：在 one-api 里给同一模型名挂多个渠道（不同 key/上游），设权重/优先级/重试，即自动负载均衡与失败切换——用户容器无感。
+
 ## 网页管理台 `/admin`
 
 除了 CLI（`user-list.sh`/`user-tier.sh`/`user-add.sh`），还有个网页管理台，建在 **manager**（宿主上唯一能看全体用户的组件）里：

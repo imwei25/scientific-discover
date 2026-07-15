@@ -36,6 +36,8 @@ tier_field() { [ -f tiers.env ] || return 0; awk -v t="$1" -v c="$2" '!/^[[:spac
     fi
     dlimit=$(field DAILY_COST_LIMIT "$f"); dlimit=${dlimit:-$(tier_field "$tier" 2)}
     slimit=$(field STORAGE_LIMIT_MB "$f"); slimit=${slimit:-$(tier_field "$tier" 3)}
+    # 分级模型：用户 .env 显式 OC_MODEL 覆盖 > 档位 tiers.env 第4列 > 缺省 deepseek-v4-pro（走网关时即请求这个模型名）
+    tmodel=$(field OC_MODEL "$f"); tmodel=${tmodel:-$(tier_field "$tier" 4)}; tmodel=${tmodel:-deepseek-v4-pro}
     if [ -z "$name" ] || [ -z "$port" ]; then echo "!! $f 缺 NAME/PORT，跳过" >&2; continue; fi
     had=1
     cat <<YAML
@@ -44,7 +46,9 @@ tier_field() { [ -f tiers.env ] || return 0; awk -v t="$1" -v c="$2" '!/^[[:spac
     container_name: agent-${name}
     environment:
       DEEPSEEK_API_KEY: \${DEEPSEEK_API_KEY:?请在 deploy/.env 设置 DEEPSEEK_API_KEY}
-      OC_MODEL: \${OC_MODEL:-deepseek/deepseek-v4-pro}
+      OC_MODEL: "deepseek/${tmodel}"
+      OC_GATEWAY_URL: \${OC_GATEWAY_URL:-}
+      OC_GATEWAY_KEY: \${OC_GATEWAY_KEY:-}
       LAN_AUTH: "${lauth}"
       LAN_USER: "${luser}"
       LAN_PASSWORD: "${lpass}"
