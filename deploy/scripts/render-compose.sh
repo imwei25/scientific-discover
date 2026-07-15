@@ -8,7 +8,9 @@ set -euo pipefail
 cd "$(dirname "$0")/.."   # -> deploy/
 
 OUT=docker-compose.yml
-MEM_LIMIT="${MEM_LIMIT:-1750m}"
+# 每容器内存上限。整机 3.4G + 2G swap、WARM_CAP=2：2×1400=2.8G 稳在 RAM 内，重任务冲高会溢出到 swap(变慢不崩)。
+# 想更宽/更紧：MEM_LIMIT=1600m scripts/render-compose.sh（或改此默认），随后重建容器生效。
+MEM_LIMIT="${MEM_LIMIT:-1400m}"
 CPUS="${CPUS:-1.5}"
 tmp="$(mktemp)"
 
