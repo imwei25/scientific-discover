@@ -251,6 +251,20 @@ function proxy(u, fwdPath, req, res) {
   req.on("aborted", () => up.destroy())
 }
 
+// GET /pub/gateway/siblings?model=X：返回「含该模型的启用渠道」= 同一供应商，及其全部模型名（供用户在同供应商下切换）。
+// 只回供应商名 + 模型名，不含 key/地址；未接入网关则 enabled:false。
+async function handleSiblings(req, res) {
+  const json = (obj) => { res.writeHead(200, { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" }); res.end(JSON.stringify(obj)) }
+  if (!GATEWAY_ENABLED) return json({ enabled: false, provider: "", models: [] })
+  let model = ""; try { model = (new URL(req.url, "http://x").searchParams.get("model") || "").trim() } catch {}
+  const r = await oaReq("GET", "/api/channel/?p=0&page_size=100")
+  const chans = (r.json && r.json.data) || []
+  const modelsOf = (c) => String(c.models || "").split(",").map((s) => s.trim()).filter(Boolean)
+  let ch = (model && chans.find((c) => c.status === 1 && modelsOf(c).includes(model))) || chans.find((c) => c.status === 1)
+  if (!ch) return json({ enabled: true, provider: "", models: model ? [model] : [] })
+  return json({ enabled: true, provider: ch.name, models: modelsOf(ch) })
+}
+
 // GET /captcha：发一张 SVG 图形验证码，挑战 id 放进 cap_id cookie（登录 POST 自动带回核对）
 function serveCaptcha(res) {
   const { id, code } = newCaptcha()
@@ -677,6 +691,7 @@ const server = http.createServer(async (req, res) => {
   const pathname = req.url.split(/[?#]/)[0] || "/"
   if (pathname === "/admin" || pathname.startsWith("/admin/")) return handleAdmin(req, res, pathname)   // 管理台：不当用户名路由
   if (pathname === "/captcha") return serveCaptcha(res)                                                 // 图形验证码：manager 直接发
+  if (pathname === "/pub/gateway/siblings") return handleSiblings(req, res)                              // 用户切模型：同供应商可选模型（只回名字，无 key）
   const seg = (/^\/([^/?#]+)/.exec(req.url) || [])[1] || ""
   if (!seg) { res.writeHead(200, { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" }); return res.end(LOGIN_HTML) }
   const u = users.get(seg)

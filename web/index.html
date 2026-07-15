@@ -327,6 +327,17 @@
   .hbtn { width: 34px; height: 34px; display: grid; place-items: center; border-radius: var(--r-sm); background: #fff; border: 1px solid var(--line-hi); color: var(--muted); cursor: pointer; transition: color .15s, border-color .15s; }
   .hbtn:hover { color: var(--accent); border-color: var(--cyan); }
   .hbtn .ic { width: 17px; height: 17px; }
+  /* 模型切换器（普通用户：看供应商+模型，同供应商下切换） */
+  .msel { position: relative; }
+  .msel .mpill { display: inline-flex; align-items: center; gap: 6px; height: 34px; padding: 0 11px; border-radius: var(--r-sm); background: #fff; border: 1px solid var(--line-hi); color: var(--muted); cursor: pointer; font-size: 12px; white-space: nowrap; max-width: 260px; }
+  .msel .mpill:hover { border-color: var(--cyan); color: var(--accent); }
+  .msel .mpill b { color: var(--accent-deep); font-weight: 600; overflow: hidden; text-overflow: ellipsis; }
+  .msel .mmenu { position: absolute; top: 40px; right: 0; z-index: 80; min-width: 210px; max-height: 60vh; overflow: auto; background: #fff; border: 1px solid var(--line); border-radius: var(--r-sm); box-shadow: 0 12px 40px rgba(30,50,90,.18); padding: 6px; display: none; }
+  .msel .mmenu.on { display: block; }
+  .msel .mprov { font-size: 11px; color: var(--faint); padding: 5px 8px 3px; }
+  .msel .mitem { display: flex; align-items: center; gap: 6px; padding: 7px 8px; border-radius: 6px; cursor: pointer; font-size: 13px; color: var(--text); }
+  .msel .mitem:hover { background: #f3f6fb; }
+  .msel .mitem.cur { color: var(--accent-deep); font-weight: 600; }
   .modal { position: fixed; inset: 0; z-index: 70; display: none; align-items: center; justify-content: center; background: rgba(20,32,54,.35); backdrop-filter: blur(4px); padding: 24px; }
   .modal.on { display: flex; }
   .modal-card { width: 100%; max-width: 470px; background: #fff; border: 1px solid var(--line); border-radius: var(--r-lg); box-shadow: 0 20px 60px rgba(30,50,90,.25); overflow: hidden; animation: rise .18s ease; }
@@ -377,6 +388,7 @@
     </div>
   </div>
   <div class="hright">
+    <div id="modelSel" class="msel" hidden></div>
     <button id="modelBtn" class="hbtn" type="button" title="模型设置（切换后台大模型）"></button>
     <button id="pwBtn" class="hbtn" type="button" title="修改密码"></button>
     <button id="logoutBtn" class="hbtn" type="button" title="退出登录"></button>
@@ -544,6 +556,33 @@ stopBtn.innerHTML = ic("stop") + "终止"
 // ---- 模型设置：切换后台 opencode 的大模型（自定义 OpenAI 兼容 API）----
 document.getElementById("modelBtn").innerHTML = ic("cog")
 document.getElementById("logoutBtn").innerHTML = ic("logout")
+// ---- 模型切换器：显示 当前供应商·模型，可在同供应商下切换（仅接入网关时出现）----
+;(function () {
+  const sel = document.getElementById("modelSel"); if (!sel) return
+  let cur = "", prov = "", models = []
+  async function refresh() {
+    let m; try { m = await (await fetch("api/model")).json() } catch (e) { return }
+    if (!m || !m.gateway) { sel.hidden = true; return }   // 没接网关就不显示切换器
+    cur = m.modelID || ""
+    try { const s = await (await fetch("/pub/gateway/siblings?model=" + encodeURIComponent(cur))).json(); prov = s.provider || ""; models = s.models || [] } catch (e) { prov = ""; models = cur ? [cur] : [] }
+    render()
+  }
+  function render() {
+    sel.hidden = false
+    sel.innerHTML = '<div class="mpill" id="mpill" title="点击切换模型（同供应商）">🧠 ' + (prov ? '<span style="opacity:.7">' + prov + '</span> · ' : '') + '<b>' + cur + '</b> ▾</div><div class="mmenu" id="mmenu"></div>'
+    const menu = sel.querySelector("#mmenu")
+    menu.innerHTML = (prov ? '<div class="mprov">' + prov + ' · 同供应商模型</div>' : '') + (models.length ? models.map(function (m) { return '<div class="mitem' + (m === cur ? ' cur' : '') + '" data-m="' + m + '">' + (m === cur ? '✓ ' : '') + m + '</div>' }).join("") : '<div class="mprov">无可选模型</div>')
+    sel.querySelector("#mpill").onclick = function (e) { e.stopPropagation(); menu.classList.toggle("on") }
+    menu.querySelectorAll(".mitem").forEach(function (it) { it.onclick = async function () { const m = it.dataset.m; menu.classList.remove("on"); if (m !== cur) await pick(m) } })
+  }
+  async function pick(m) {
+    const pill = sel.querySelector("#mpill"); if (pill) pill.innerHTML = "🧠 切换中…（重启模型约数秒）"
+    try { const r = await (await fetch("api/model/pick", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ model: m }) })).json(); if (!r.ok) alert("切换失败：" + (r.err || "")) } catch (e) { alert("切换失败，请重试") }
+    await refresh()
+  }
+  document.addEventListener("click", function () { const mm = sel.querySelector("#mmenu"); if (mm) mm.classList.remove("on") })
+  refresh()
+})()
 // ---- 修改密码 ----
 document.getElementById("pwBtn").innerHTML = ic("key")
 const pwModal = document.getElementById("pwModal")

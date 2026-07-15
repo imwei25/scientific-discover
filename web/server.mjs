@@ -638,6 +638,7 @@ const server = http.createServer(async (req, res) => {
         isCustom: MODEL.providerID === CUSTOM_PROVIDER_ID,
         baseURL: c?.baseURL || "", hasKey: !!(c && c.apiKey),
         default: `${PID}/${MID}`, managed: OC_MANAGED,
+        gateway: !!(process.env.OC_GATEWAY_URL && process.env.OC_GATEWAY_KEY),   // 是否接入网关（前端据此显示模型切换器）
       }))
     }
     // 测试一个 OpenAI 格式的 API（URL + key + 模型）是否可用
@@ -682,6 +683,20 @@ const server = http.createServer(async (req, res) => {
       try { restarted = await restartOpencode() } catch {}
       if (!restarted) { try { await client.config.update({ body: { provider: { [CUSTOM_PROVIDER_ID]: customProviderCfg({ baseURL, apiKey, modelID }) } } }) } catch {} }
       return send(res, 200, "application/json", JSON.stringify({ ok: true, restarted, providerID: CUSTOM_PROVIDER_ID, modelID }))
+    }
+    // 用户切换网关下的模型：沿用网关的 baseURL/key，只换模型名（持久化 + 重启 opencode 生效）
+    if (req.method === "POST" && u.pathname === "/api/model/pick") {
+      const baseURL = process.env.OC_GATEWAY_URL, apiKey = process.env.OC_GATEWAY_KEY
+      if (!baseURL || !apiKey) return send(res, 400, "application/json", JSON.stringify({ ok: false, err: "未接入网关，无法切换模型" }))
+      const chunks = []; for await (const c of req) chunks.push(c)
+      let modelID = ""; try { modelID = (JSON.parse(Buffer.concat(chunks).toString() || "{}").model || "").trim() } catch {}
+      if (!modelID) return send(res, 400, "application/json", JSON.stringify({ ok: false, err: "缺 model" }))
+      writeOcProvider({ baseURL, apiKey, modelID })
+      saveModelCfg({ baseURL, apiKey, modelID })
+      MODEL = { providerID: CUSTOM_PROVIDER_ID, modelID }
+      let restarted = false; try { restarted = await restartOpencode() } catch {}
+      if (!restarted) { try { await client.config.update({ body: { provider: { [CUSTOM_PROVIDER_ID]: customProviderCfg({ baseURL, apiKey, modelID }) } } }) } catch {} }
+      return send(res, 200, "application/json", JSON.stringify({ ok: true, restarted, modelID }))
     }
     // 恢复默认模型（清掉自定义 provider）
     if (req.method === "POST" && u.pathname === "/api/model/reset") {
