@@ -58,10 +58,11 @@ sudo bash deploy/setup.sh
 ## 4. 加用户（一行一个）
 
 ```bash
-sudo deploy/scripts/user-add.sh alice
-sudo deploy/scripts/user-add.sh bob
+sudo deploy/scripts/user-add.sh alice admin     # 管理员：不限额
+sudo deploy/scripts/user-add.sh bob             # 省略档位=free（普通，$0.30/天）
 ```
-每次会打印该用户的 **访问地址 / 账号 / 随机强密码**。把它发给对应的人即可。
+每次会打印该用户的 **访问地址 / 账号 / 随机强密码 / 档位**。把前三样发给对应的人即可。
+> 档位（分级）定义在 `deploy/tiers.env`：`free`/`plus`/`admin`，每档一个每日额度与存储上限；改档用 `user-tier.sh`。详见 `README-multiuser.md` 的"用户分级"节。
 - 访问：`https://你的域名/alice/`，或直接开 `https://你的域名/` 用通用登录页填账号密码。
 - 首次访问会冷启动容器（约 10–40s），空闲自动停机，下次访问再唤醒。
 
@@ -71,10 +72,13 @@ sudo deploy/scripts/user-add.sh bob
 
 | 操作 | 命令 |
 |---|---|
-| 加用户 | `sudo deploy/scripts/user-add.sh <名>` |
+| 加用户 | `sudo deploy/scripts/user-add.sh <名> [档位]`（省略档位=free） |
+| 改用户档位（分级） | `sudo deploy/scripts/user-tier.sh <名> <档位>`（即时重启生效） |
+| 看全员档位/额度/今日用量 | `sudo deploy/scripts/user-list.sh` |
 | 删用户（留数据） | `sudo deploy/scripts/user-del.sh <名>` |
 | 删用户（连数据，先自动备份） | `sudo deploy/scripts/user-del.sh <名> --purge` |
-| 设某用户每日额度 | 编辑 `deploy/users/<名>.env` 的 `DAILY_COST_LIMIT=`（USD/天，0=不限）→ `sudo deploy/scripts/render-compose.sh && docker restart agent-<名>` |
+| 改档位额度（对整档生效） | 编辑 `deploy/tiers.env` → `sudo deploy/scripts/render-compose.sh` → 逐个 `docker restart agent-*` |
+| 给某用户单独设额度（覆盖档位） | 编辑 `deploy/users/<名>.env` 取消注释 `DAILY_COST_LIMIT=`（USD/天，0=不限）→ `render-compose.sh && docker restart agent-<名>` |
 | 改了代码后更新 | `git pull && sudo deploy/scripts/build-image.sh` 再逐个 `docker restart agent-*`（或等其自然冷启动） |
 | 每日备份（建 cron） | `sudo deploy/scripts/backup.sh`（7 天轮转，写 `/var/backups/sci/`） |
 | 看谁在跑 | `docker ps --filter name=agent-` |

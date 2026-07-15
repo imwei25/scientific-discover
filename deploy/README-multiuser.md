@@ -49,7 +49,9 @@ scripts/user-add.sh bob
 
 | 操作 | 命令 |
 |---|---|
-| 加用户 | `scripts/user-add.sh <name>`（自动：分配端口 → 强密码 → 渲染 compose → 建容器 → 热加载 manager） |
+| 加用户 | `scripts/user-add.sh <name> [档位]`（自动：分配端口 → 强密码 → 渲染 compose → 建容器 → 热加载 manager；档位省略=free） |
+| 改用户档位 | `scripts/user-tier.sh <name> <档位>`（改 TIER → 渲染 → 重启容器即时生效） |
+| 看谁在什么档/用了多少 | `scripts/user-list.sh`（各用户档位 / 每日额度 / 今日已用 / 存储；`--fast` 跳过存储统计） |
 | 删用户（留数据） | `scripts/user-del.sh <name>` |
 | 删用户（连数据） | `scripts/user-del.sh <name> --purge`（先自动备份再删卷） |
 | 改了 web/skills 代码 | `scripts/build-image.sh` 后逐个 `docker restart agent-<name>`（或等其自然冷启动） |
@@ -72,11 +74,20 @@ scripts/user-add.sh bob
 1. **有空闲容器**（`conns==0`）→ 按 LRU 停最久空闲的那个腾位。被停用户下次访问要重登 + 冷启动，历史不丢（在 `ocdata` 卷）。
 2. **全忙、无可停** → **排队等待**（不超配），直到有空闲槽位；等超 `CAP_WAIT_MS` 回繁忙。这样内存永远 ≤ `WARM_CAP × mem_limit`。
 
-## 每日额度（USD）
+## 用户分级（档位）与每日额度（USD）
 
-- 每用户 `users/<name>.env` 里 `DAILY_COST_LIMIT=`（USD/天，`0` 或空 = 不限）。改后 `docker restart agent-<name>` 生效。
-- 用 opencode 的 `session.cost`（含 DeepSeek 缓存折扣）累计每轮增量，**跨日 UTC 0 点自动清零**，持久化在 `ocdata` 卷（重启不丢）。
-- 达上限后**拦截新对话**（本轮已开始的照常跑完），前端提示"今日额度已用尽"。查用量：`GET /<user>/api/quota`。
+**分级**：档位集中定义在 `deploy/tiers.env`，每档一行 `<档位名> <每日USD> <存储MB>`（0=不限）。缺省三档：
+
+| 档位 | 每日额度 | 存储上限 | 用途 |
+|---|---|---|---|
+| `free` 普通 | $0.30/天 | 1 GB | 轻度使用 |
+| `plus` 高级 | $1.50/天 | 4 GB | 重度写作 |
+| `admin` 管理员 | 不限 | 不限 | 内部/管理 |
+
+- 给用户指派档位：`users/<name>.env` 里写 `TIER=<档位>`（新增用户时 `user-add.sh <name> <档位>`，改档 `user-tier.sh <name> <档位>`）。
+- **档位 → 额度的解析在 `render-compose.sh` 完成**，注入容器的仍是原有的 `DAILY_COST_LIMIT`/`STORAGE_LIMIT_MB` 环境变量——网关 `server.mjs` 无改动。改 `tiers.env` 后重跑 `render-compose.sh` 并重启相关容器即生效。
+- **个别覆盖**：某用户 `.env` 里若填了非空的 `DAILY_COST_LIMIT=`/`STORAGE_LIMIT_MB=`，则以其为准（优先于档位），用于单独加码/收紧。
+- 额度按 **USD/天**：用 opencode 的 `session.cost`（含 DeepSeek 缓存折扣）累计每轮增量，**跨日 UTC 0 点自动清零**，持久化在 `ocdata` 卷（重启不丢）。达上限**拦截新对话**（本轮已开始的照常跑完），前端提示"今日额度已用尽"。查用量：`GET /<user>/api/quota`，或 `scripts/user-list.sh` 一览全员。
 
 ## 存储上限（MB）
 

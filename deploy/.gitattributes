@@ -5,3 +5,5 @@
 entrypoint.sh text eol=lf
 Caddyfile.example text eol=lf
 *.yml       text eol=lf
+*.env      text eol=lf
+tiers.env  text eol=lf
