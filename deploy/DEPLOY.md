@@ -74,7 +74,8 @@ sudo deploy/scripts/user-add.sh bob             # 省略档位=free（普通，$
 |---|---|
 | 加用户 | `sudo deploy/scripts/user-add.sh <名> [档位]`（省略档位=free） |
 | 改用户档位（分级） | `sudo deploy/scripts/user-tier.sh <名> <档位>`（即时重启生效） |
-| 看全员档位/额度/今日用量 | `sudo deploy/scripts/user-list.sh` |
+| 看全员档位/额度/今日用量 | `sudo deploy/scripts/user-list.sh`，或**网页管理台** `https://你的域名/admin`（见下） |
+| 开启网页管理台 | `sci-manager.service` 设 `Environment=ADMIN_PASSWORD=<强密码>` → `daemon-reload && systemctl restart sci-manager` → 访问 `https://你的域名/admin`（看用量/改档/加删用户/编辑档位，都在网页里） |
 | 删用户（留数据） | `sudo deploy/scripts/user-del.sh <名>` |
 | 删用户（连数据，先自动备份） | `sudo deploy/scripts/user-del.sh <名> --purge` |
 | 改档位额度（对整档生效） | 编辑 `deploy/tiers.env` → `sudo deploy/scripts/render-compose.sh` → `docker compose up --no-start --force-recreate`（重建容器才会读到新额度，见下注） |

@@ -10,6 +10,7 @@ tier="${2:-${DEFAULT_TIER:-free}}"
 if ! [[ "$name" =~ ^[a-z][a-z0-9-]{1,20}$ ]]; then
   echo "用法：user-add.sh <用户名> [档位]（用户名：小写字母开头，仅小写字母/数字/连字符，2–21 位）"; exit 1
 fi
+case " admin api login logout " in *" $name "*) echo "!! '$name' 是保留名（与管理台 /$name 路径冲突），换一个"; exit 1;; esac
 # 校验档位存在于 tiers.env
 if [ -f tiers.env ] && ! awk -v t="$tier" '!/^[[:space:]]*#/ && NF>=3 && $1==t {f=1} END{exit !f}' tiers.env; then
   echo "!! 档位 '$tier' 未在 deploy/tiers.env 定义。可用档位：" >&2

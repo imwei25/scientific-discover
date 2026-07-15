@@ -90,6 +90,15 @@ scripts/user-add.sh bob
 - **个别覆盖**：某用户 `.env` 里若填了非空的 `DAILY_COST_LIMIT=`/`STORAGE_LIMIT_MB=`，则以其为准（优先于档位），用于单独加码/收紧。
 - 额度按 **USD/天**：用 opencode 的 `session.cost`（含 DeepSeek 缓存折扣）累计每轮增量，**跨日 UTC 0 点自动清零**，持久化在 `ocdata` 卷（重启不丢）。达上限**拦截新对话**（本轮已开始的照常跑完），前端提示"今日额度已用尽"。查用量：`GET /<user>/api/quota`，或 `scripts/user-list.sh` 一览全员。
 
+## 网页管理台 `/admin`
+
+除了 CLI（`user-list.sh`/`user-tier.sh`/`user-add.sh`），还有个网页管理台，建在 **manager**（宿主上唯一能看全体用户的组件）里：
+
+- **开启**：在 `sci-manager.service` 里设 `Environment=ADMIN_PASSWORD=<强密码>` → `daemon-reload && restart sci-manager`。**留空则整个 `/admin` 关闭（404）**。
+- **访问**：`https://<你的域名>/admin`，输入管理员密码。走 Caddy HTTPS，会话 Cookie 带 `HttpOnly/Secure/SameSite=Strict`，仅 `/admin` 路径。
+- **能做**：看全员**档位 / 今日成本-额度 / 存储用量 / 运行状态**；下拉**改某人档位**（自动重建容器生效）；**新增用户**（返回随机密码）/**删除用户**（留数据或彻底删）；**编辑档位额度、增删档位**（改 `tiers.env`，重建该档空闲容器，活跃会话下次冷启动生效）。
+- **安全**：manager 以 root 跑、能操作 docker，故管理台是特权面——务必用强 `ADMIN_PASSWORD`、只经 HTTPS 访问；密码错误有 0.6s 延迟挡暴力。用户名 `admin`/`api`/`login`/`logout` 被保留，不能建同名用户。
+
 ## 存储上限（MB）
 
 - 每用户 `users/<name>.env` 里 `STORAGE_LIMIT_MB=`（`0` 或空 = 不限），统计 `uploads + outputs` 之和。改后需**重建**容器（`render-compose.sh && docker rm -f agent-<name> && docker compose up --no-start agent-<name>`），非 `docker restart`。

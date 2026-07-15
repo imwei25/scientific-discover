@@ -18,6 +18,9 @@ Environment=WARM_CAP=2
 Environment=IDLE_MS=600000
 Environment=START_TIMEOUT_MS=60000
 Environment=CAP_WAIT_MS=120000
+# 网页管理台 /admin：设一个强密码即开启（走 Caddy HTTPS，Cookie 带 Secure/HttpOnly）；留空/删掉则管理台关闭。
+# 改这行后：sudo systemctl daemon-reload && sudo systemctl restart sci-manager
+Environment=ADMIN_PASSWORD=change-me-a-strong-admin-password
 Restart=on-failure
 RestartSec=3
 # 需要能调用 docker CLI。服务器自用场景用 root 最省事；或改成 docker 组内用户。
