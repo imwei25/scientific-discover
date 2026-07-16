@@ -49,6 +49,9 @@ tier_field() { [ -f tiers.env ] || return 0; awk -v t="$1" -v c="$2" '!/^[[:spac
       OC_MODEL: "deepseek/${tmodel}"
       OC_GATEWAY_URL: \${OC_GATEWAY_URL:-}
       OC_GATEWAY_KEY: \${OC_GATEWAY_KEY:-}
+      OC_COST_INPUT: \${OC_COST_INPUT:-0.27}
+      OC_COST_OUTPUT: \${OC_COST_OUTPUT:-1.10}
+      OC_COST_CACHE_READ: \${OC_COST_CACHE_READ:-0.07}
       LAN_AUTH: "${lauth}"
       LAN_USER: "${luser}"
       LAN_PASSWORD: "${lpass}"

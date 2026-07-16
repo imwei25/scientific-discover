@@ -37,10 +37,16 @@ const OC_CONFIG_PATH = path.join(ROOT, "opencode.json")            // opencode �
 const CUSTOM_PROVIDER_ID = "custom"
 const loadModelCfg = () => { try { return JSON.parse(fs.readFileSync(MODEL_CFG_PATH, "utf8")) } catch { return null } }
 const saveModelCfg = (c) => { try { fs.writeFileSync(MODEL_CFG_PATH, JSON.stringify(c, null, 2)) } catch {} }
+// 给自定义/网关模型注入定价（USD / 每百万 token），否则 opencode 不知道价格 → session.cost 恒为 0 →
+// 每日成本额度与中途封顶全部失效。价格由 OC_COST_* 环境变量给（deploy/.env 集中配），缺省按 DeepSeek 常见价。
+const _modelCost = () => {
+  const n = (v, d) => { const x = Number(v); return Number.isFinite(x) ? x : d }
+  return { input: n(process.env.OC_COST_INPUT, 0.27), output: n(process.env.OC_COST_OUTPUT, 1.10), cache_read: n(process.env.OC_COST_CACHE_READ, 0.07), cache_write: n(process.env.OC_COST_CACHE_WRITE, 0) }
+}
 const customProviderCfg = ({ baseURL, apiKey, modelID }) => ({
   npm: "@ai-sdk/openai-compatible", name: "Custom (OpenAI 兼容)",
   options: { baseURL, apiKey },
-  models: { [modelID]: { name: modelID, tool_call: true, attachment: true } },   // 开工具调用，技能才能跑
+  models: { [modelID]: { name: modelID, tool_call: true, attachment: true, cost: _modelCost() } },   // 开工具调用 + 注入定价（用于算成本额度）
 })
 // opencode 的 `question` 工具会弹交互式提问卡片；本部署（web 网关）没有应答它的 UI，
 // 模型一旦调用就整轮 error/卡死（实测卡在“确认方向选择”那步）。各技能与 AGENTS.md §六 已要求
