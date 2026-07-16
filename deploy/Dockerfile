@@ -12,10 +12,14 @@ FROM node:20-bookworm-slim
 #   fontconfig —— xelatex/fontspec 是按【字体名】找字体的，靠 fontconfig 解析；缺了任何
 #              \setmonofont/\setmainfont 都会 "font cannot be found"。装完必须 fc-cache 预热。
 #   fonts-texgyre —— 提供 TeX Gyre Termes；中文稿的拉丁文正文字体用它，缺了中文稿必失败。
+#   fonts-dejavu-core —— 提供 DejaVu Sans Mono；技能拿它作代码框等宽字体（\setmonofont）。
+#              注意：它只是 fontconfig-config 的 Recommends，--no-install-recommends 下不会被带进来，
+#              必须显式装，否则中文稿报 "DejaVu Sans Mono cannot be found"。
+# 以上包缺任何一个，md→PDF 都会 rc=43 无产物（本清单为实测逐个补齐后的最小可用集）。
 RUN apt-get update && apt-get install -y --no-install-recommends \
       python3 python3-pip curl git ca-certificates procps lsof \
       pandoc texlive-xetex texlive-fonts-recommended texlive-lang-cjk \
-      texlive-lang-chinese lmodern fontconfig fonts-texgyre fonts-noto-cjk \
+      texlive-lang-chinese lmodern fontconfig fonts-texgyre fonts-dejavu-core fonts-noto-cjk \
     && fc-cache -f \
     && rm -rf /var/lib/apt/lists/*
 
