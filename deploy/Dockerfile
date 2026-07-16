@@ -9,10 +9,14 @@ FROM node:20-bookworm-slim
 #              Recommends，而这里用了 --no-install-recommends，故必须显式装，否则英文稿也报 lmodern.sty not found。
 #   texlive-lang-chinese —— 提供 ctex/ctexart；render-pdf-doc 对中文稿自动走 ctexart 文档类，
 #              缺了会报 ctexart.cls not found（texlive-lang-cjk 不含 ctex，二者不是一回事）。
+#   fontconfig —— xelatex/fontspec 是按【字体名】找字体的，靠 fontconfig 解析；缺了任何
+#              \setmonofont/\setmainfont 都会 "font cannot be found"。装完必须 fc-cache 预热。
+#   fonts-texgyre —— 提供 TeX Gyre Termes；中文稿的拉丁文正文字体用它，缺了中文稿必失败。
 RUN apt-get update && apt-get install -y --no-install-recommends \
       python3 python3-pip curl git ca-certificates procps lsof \
       pandoc texlive-xetex texlive-fonts-recommended texlive-lang-cjk \
-      texlive-lang-chinese lmodern fonts-noto-cjk \
+      texlive-lang-chinese lmodern fontconfig fonts-texgyre fonts-noto-cjk \
+    && fc-cache -f \
     && rm -rf /var/lib/apt/lists/*
 
 # OpenCode（固定版本，避免自动升级带来的意外）
