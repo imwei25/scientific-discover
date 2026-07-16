@@ -4,9 +4,15 @@ FROM node:20-bookworm-slim
 
 # 系统依赖：python3 + pip + curl(健康检查) + git(部分技能/MCP 需要)
 # pandoc + texlive-xetex + CJK 字体 供 render-pdf-doc 技能出版级 PDF 排版
+# 两个易漏的包（缺了 md→PDF 直接失败，实测过）：
+#   lmodern —— pandoc 默认 latex 模板 \usepackage{lmodern}；它只是 texlive-fonts-recommended 的
+#              Recommends，而这里用了 --no-install-recommends，故必须显式装，否则英文稿也报 lmodern.sty not found。
+#   texlive-lang-chinese —— 提供 ctex/ctexart；render-pdf-doc 对中文稿自动走 ctexart 文档类，
+#              缺了会报 ctexart.cls not found（texlive-lang-cjk 不含 ctex，二者不是一回事）。
 RUN apt-get update && apt-get install -y --no-install-recommends \
       python3 python3-pip curl git ca-certificates procps lsof \
-      pandoc texlive-xetex texlive-fonts-recommended texlive-lang-cjk fonts-noto-cjk \
+      pandoc texlive-xetex texlive-fonts-recommended texlive-lang-cjk \
+      texlive-lang-chinese lmodern fonts-noto-cjk \
     && rm -rf /var/lib/apt/lists/*
 
 # OpenCode（固定版本，避免自动升级带来的意外）
