@@ -20,6 +20,10 @@ COST_TOTAL="${COST_TOTAL_USD:-20}"         # 全站今日总成本阈值 USD
 CERT_DAYS="${CERT_DAYS:-10}"               # 证书剩余天数低于此报警
 BACKUP_DIR="${BACKUP_DIR:-/var/backups/sci}"
 REALERT="${REALERT_SEC:-21600}"            # 同一问题重发间隔（默认 6h）
+# ---- LLM 网关(one-api)健康检查 ----
+ONEAPI_URL="${ONEAPI_URL:-}"               # 如 http://127.0.0.1:3010；设了才查网关。①容器在跑 ②HTTP活着 每30分钟；③真实出模型 每小时
+GATEWAY_TOKEN="${GATEWAY_TOKEN:-}"         # 网关令牌(sk-...)，用于第③层真实探活；不设则只做①②
+GW_MODEL="${GW_MODEL:-deepseek-v4-pro}"    # 第③层探活用的模型名
 STATE_DIR=/var/lib/sci-monitor
 HOST=$(hostname)
 now=$(date +%s)
@@ -40,6 +44,24 @@ if [ "${1:-}" = "--test" ]; then
   wecom_send "🔔 [$HOST] sci-monitor 测试消息 —— 通道正常。收到即说明企业微信告警已打通。"
   echo "已尝试发送测试消息（没收到就检查 /etc/sci-monitor.conf 的 WECOM_WEBHOOK）"; exit 0
 fi
+
+# 独立告警状态机（供按自定义频率跑的检查用，与下方主 5 分钟去重解耦）：$1=key $2=异常(1/0) $3=告警文案
+# 异常且(首次或距上次告警≥REALERT)→告警并记时；正常且此前告过警→发「已恢复」并清状态；未评估的周期不动其状态。
+alert_check() {
+  local key="$1" isbad="$2" msg="$3" f="$STATE_DIR/chk-$key"
+  if [ "$isbad" = 1 ]; then
+    local last=0; [ -f "$f" ] && last=$(cat "$f" 2>/dev/null || echo 0)
+    if [ "$last" = 0 ] || [ $((now-last)) -ge "$REALERT" ]; then
+      if [ "$DRY" = 1 ]; then echo "[would-alert] $msg"; else wecom_send "⚠️ [$HOST] $msg"; fi
+      echo "$now" > "$f"
+    fi
+  else
+    if [ -f "$f" ]; then
+      if [ "$DRY" = 1 ]; then echo "[would-recover] $key"; else wecom_send "✅ [$HOST] 已恢复：$key"; fi
+      rm -f "$f"
+    fi
+  fi
+}
 
 declare -A bad   # key -> 人话描述
 
@@ -101,3 +123,30 @@ fi
 
 # 写回状态（只留当前仍异常的 key）
 : > "$STATE"; for k in "${!bad[@]}"; do echo "$k|${prevts[$k]}" >> "$STATE"; done
+
+# ---- LLM 网关健康：①容器 ②HTTP 每30分钟(整/半点)，③真实出模型 每小时(整点)；--dry 时全跑 ----
+if [ -n "$ONEAPI_URL" ]; then
+  min=$((10#$(date +%M)))
+  run12=0; run3=0
+  if [ "$DRY" = 1 ]; then run12=1; run3=1
+  else [ $((min % 30)) -eq 0 ] && run12=1; [ $((min % 60)) -eq 0 ] && run3=1; fi
+  gw_up="$(docker inspect -f '{{.State.Running}}' one-api 2>/dev/null)"
+  if [ "$run12" = 1 ]; then
+    if [ "$gw_up" = "true" ]; then
+      alert_check gw_container 0 ""
+      if curl -sf -m 10 -o /dev/null "$ONEAPI_URL/api/status" 2>/dev/null; then alert_check gw_http 0 ""
+      else alert_check gw_http 1 "网关(one-api) HTTP 不响应（$ONEAPI_URL/api/status）—— 容器在跑但可能卡死"; fi
+    else
+      alert_check gw_container 1 "网关(one-api) 容器未运行 —— 所有用户对话都会失败"
+      alert_check gw_http 0 ""
+    fi
+  fi
+  # ③真实探活：只在网关容器活着时做（容器都没跑，①已告警，别重复），max_tokens:1 花费可忽略
+  if [ "$run3" = 1 ] && [ -n "$GATEWAY_TOKEN" ] && [ "$gw_up" = "true" ]; then
+    code=$(curl -s -m 30 -o /dev/null -w '%{http_code}' "$ONEAPI_URL/v1/chat/completions" \
+      -H "Authorization: Bearer $GATEWAY_TOKEN" -H "Content-Type: application/json" \
+      -d "{\"model\":\"$GW_MODEL\",\"messages\":[{\"role\":\"user\",\"content\":\"ping\"}],\"max_tokens\":1}" 2>/dev/null)
+    if [ "$code" = "200" ]; then alert_check gw_upstream 0 ""
+    else alert_check gw_upstream 1 "网关→模型不通（真实请求 HTTP ${code:-超时}）—— 查 DeepSeek key/欠费/上游可用性"; fi
+  fi
+fi
