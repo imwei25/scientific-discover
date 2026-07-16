@@ -48,7 +48,8 @@ fi
 # 独立告警状态机（供按自定义频率跑的检查用，与下方主 5 分钟去重解耦）：$1=key $2=异常(1/0) $3=告警文案
 # 异常且(首次或距上次告警≥REALERT)→告警并记时；正常且此前告过警→发「已恢复」并清状态；未评估的周期不动其状态。
 alert_check() {
-  local key="$1" isbad="$2" msg="$3" f="$STATE_DIR/chk-$key"
+  local key="$1" isbad="$2" msg="$3"
+  local f="$STATE_DIR/chk-$key"
   if [ "$isbad" = 1 ]; then
     local last=0; [ -f "$f" ] && last=$(cat "$f" 2>/dev/null || echo 0)
     if [ "$last" = 0 ] || [ $((now-last)) -ge "$REALERT" ]; then
