@@ -125,6 +125,21 @@ const AUTH_ENABLED = process.env.LAN_AUTH !== "0"             // LAN_AUTH=0 可�
 // 所以容器内部仍按根路径处理；这里只在"发给浏览器"的东西上补回前缀——跳转 Location 与 Cookie 的 Path。
 // 尤其 Cookie 的 Path=/用户名/ 是隔离关键：保证 alice 的登录 token 只发往 /alice/，不会泄露给别的用户容器。
 const BASE_PATH = (process.env.BASE_PATH || "").replace(/\/+$/, "")   // 归一化，去掉结尾斜杠；根部署留空
+// 未登录时把浏览器送去哪个登录页：
+// - 多用户部署（设了 BASE_PATH，前面有 manager 按 /用户名/ 反代并剥前缀）→ 必须送到 manager 根 "/" 的
+//   验证码登录门户。容器自带的 login.html 没有验证码输入框，而 manager 对 POST /<用户名>/api/login
+//   强制校验图形验证码（verifyCaptcha 不过直接 401「验证码错误」，压根不转进容器）→ 在容器登录页永远登不进来。
+//   "/" 在 manager 那层（不带用户名前缀），故此处【不能】加 BASE_PATH。
+// - 单机/局域网部署（BASE_PATH 为空、前面没有 manager）→ 没有验证码这回事，照旧用容器自带的 /login。
+const LOGIN_URL = BASE_PATH ? "/" : "/login"
+
+// HTTP 响应头只能承载 latin1：中文文件名直接塞进 Content-Disposition 会 ERR_INVALID_CHAR → 下载必 500。
+// 按 RFC 5987 同时给两份：ASCII 兜底名（老客户端读它；剔掉引号、反斜杠、控制字符与非 ASCII 字节）
+// 与 filename*=UTF-8''<百分号编码>（现代浏览器优先读它，中文名原样还原）。
+const contentDisposition = (name) => {
+  const ascii = name.replace(/[^\x20-\x7e]/g, "_").replace(/["\\]/g, "_").trim() || "download"
+  return `attachment; filename="${ascii}"; filename*=UTF-8''${encodeURIComponent(name)}`
+}
 
 // ---- 每日成本额度（USD）----
 // 用 opencode 的 session.cost（已含 DeepSeek 缓存折扣）累计每轮增量；跨日自动清零；持久化在 ocdata 卷（重启不丢）。
@@ -192,7 +207,14 @@ const authed = (req) => !AUTH_ENABLED || isLocal(req) || validAuth(cookieOf(req,
 // 切会话/关页面 → 只是退订，生成继续跑；回来用 /api/chat/attach 先重放快照再续直播。
 // 真正终止走 POST /api/chat/abort（前端"终止"按钮）。job 完成即从表里删除，历史由 opencode 持久化。
 // ---- 文档预览转换：docx→HTML（.venv 的 mammoth）、pptx/ppt/odp/doc/odt→PDF（LibreOffice）----
-const PYEXE = process.platform === "win32" ? path.join(ROOT, ".venv/Scripts/python.exe") : path.join(ROOT, ".venv/bin/python")
+// 优先用项目根 .venv；镜像里没有 .venv（连 python 都没有，只有 python3），但依赖包在系统 python3 里是齐的 →
+// 回退到 PATH 上的解释器。启动时解析一次并缓存，别每次预览都去探文件系统。SCI_PYTHON 可显式覆盖。
+const PYEXE = (() => {
+  if (process.env.SCI_PYTHON) return process.env.SCI_PYTHON
+  const venv = process.platform === "win32" ? path.join(ROOT, ".venv/Scripts/python.exe") : path.join(ROOT, ".venv/bin/python")
+  try { if (fs.existsSync(venv)) return venv } catch {}
+  return process.platform === "win32" ? "python" : "python3"
+})()
 const MAMMOTH_PY = "import sys,mammoth\nsrc,out=sys.argv[1],sys.argv[2]\nf=open(src,'rb');h=mammoth.convert_to_html(f).value;f.close()\nopen(out,'w',encoding='utf-8').write(h)"
 let _soffice   // 惰性探测并缓存（LibreOffice 可能在网关启动后才装好）
 const soffice = () => {
@@ -382,6 +404,8 @@ const server = http.createServer(async (req, res) => {
     // 登录页：未登录的局域网访客看到它；已登录/本机则直接跳回主页
     if (req.method === "GET" && u.pathname === "/login") {
       if (authed(req)) { res.writeHead(302, { Location: BASE_PATH + "/" }); return res.end() }
+      // 多用户部署下容器自带的登录页是死路（无验证码字段，manager 必挡）→ 一并送去 manager 的验证码门户
+      if (BASE_PATH) { res.writeHead(302, { Location: LOGIN_URL, "Cache-Control": "no-store" }); return res.end() }
       res.writeHead(200, { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" })
       return res.end(fs.readFileSync(path.join(__dirname, "login.html")))
     }
@@ -399,7 +423,18 @@ const server = http.createServer(async (req, res) => {
       res.writeHead(200, { "Content-Type": "application/json", "Set-Cookie": `lan_auth=; Path=${BASE_PATH}/; HttpOnly; Max-Age=0` })
       return res.end(JSON.stringify({ ok: true }))
     }
-    // 自助改密码（须已登录）：校验当前密码 → 写 override → 清 cookie 逼重登（旧 cookie 已随密钥变更失效）
+    // 门禁：其余路径若未登录 → 页面跳登录页、接口回 401
+    if (!PUBLIC_PATHS.has(u.pathname) && !authed(req)) {
+      if (req.method === "GET" && (req.headers.accept || "").includes("text/html")) {
+        res.writeHead(302, { Location: LOGIN_URL, "Cache-Control": "no-store" }); return res.end()
+      }
+      return send(res, 401, "application/json", JSON.stringify({ ok: false, err: "unauthorized" }))
+    }
+    // ↓↓↓ 以下路由都已过门禁：未登录的请求走不到这里 ↓↓↓
+
+    // 自助改密码（须已登录 —— 必须留在门禁【之后】）：校验当前密码 → 写 override → 用新密码重签 cookie。
+    // 放门禁前等于开了个密码预言机：未登录者能凭「当前密码不正确 / 新密码至少 6 位」两种回包无限盲猜密码，
+    // 且绕开 manager 的图形验证码、限流与审计日志。
     if (req.method === "POST" && u.pathname === "/api/password") {
       const chunks = []; for await (const c of req) chunks.push(c)
       let cur = "", nw = ""
@@ -408,15 +443,10 @@ const server = http.createServer(async (req, res) => {
       if (nw.length < 6) return send(res, 400, "application/json", JSON.stringify({ ok: false, err: "新密码至少 6 位" }))
       try { fs.mkdirSync(path.dirname(PW_OVERRIDE), { recursive: true }); fs.writeFileSync(PW_OVERRIDE, JSON.stringify({ base: sha(LAN_PASSWORD), password: nw })) }
       catch { return send(res, 500, "application/json", JSON.stringify({ ok: false, err: "保存失败" })) }
-      res.writeHead(200, { "Content-Type": "application/json", "Set-Cookie": `lan_auth=; Path=${BASE_PATH}/; HttpOnly; Max-Age=0` })
+      // 签名密钥就是「当前有效密码」，改密后旧 cookie 立即失效 → 必须当场用新密码重签一张下发，
+      // 否则改密成功的用户下一次请求就被自己踢回登录页。override 已落盘，effectivePassword() 此刻返回新密码。
+      res.writeHead(200, { "Content-Type": "application/json", "Set-Cookie": `lan_auth=${makeAuthCookie()}; Path=${BASE_PATH}/; HttpOnly; SameSite=Lax; Max-Age=${AUTH_TTL_MS / 1000}` })
       return res.end(JSON.stringify({ ok: true }))
-    }
-    // 门禁：其余路径若未登录 → 页面跳登录页、接口回 401
-    if (!PUBLIC_PATHS.has(u.pathname) && !authed(req)) {
-      if (req.method === "GET" && (req.headers.accept || "").includes("text/html")) {
-        res.writeHead(302, { Location: BASE_PATH + "/login" }); return res.end()
-      }
-      return send(res, 401, "application/json", JSON.stringify({ ok: false, err: "unauthorized" }))
     }
     if (req.method === "GET" && u.pathname === "/") {
       res.writeHead(200, { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" })   // 每次取最新页面，避免浏览器缓存旧版
@@ -529,7 +559,7 @@ const server = http.createServer(async (req, res) => {
       const up = u.searchParams.get("dir") === "up"   // dir=up 时取上传目录，否则取产出目录
       const f = path.join(sid ? (up ? wsUp(sid) : wsOut(sid)) : (up ? UPLOADS : OUTPUTS), name)   // 无 sid 回退共享目录（兼容）
       if (!name || !fs.existsSync(f)) return send(res, 404, "text/plain", "not found")
-      res.writeHead(200, { "Content-Type": "application/octet-stream", "Content-Disposition": `attachment; filename="${name}"` })
+      res.writeHead(200, { "Content-Type": "application/octet-stream", "Content-Disposition": contentDisposition(name) })
       return fs.createReadStream(f).pipe(res)
     }
 

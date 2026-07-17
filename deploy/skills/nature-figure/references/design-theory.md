@@ -8,9 +8,22 @@ Derived from scripts in the [figures4papers](https://github.com/ChenLiu-1996/fig
 ## 1) Typography
 
 ### Font stack (priority order)
-- **Nature standard**: `font.family = 'sans-serif'`, `font.sans-serif = ['Arial']`
-- **Fallback stack**: `['Arial', 'Helvetica', 'DejaVu Sans', 'sans-serif']`
-- **Helvetica** (equivalent) also appears in many scripts as `font.family = 'helvetica'`
+- **Required stack** — a **multi-family `font.family` list**, Latin first, CJK appended:
+  `font.family = ['Liberation Sans', 'DejaVu Sans', 'WenQuanYi Zen Hei', 'Noto Sans CJK JP']`
+- This is the **only** form that falls back **per glyph** (Latin from Liberation Sans/DejaVu, CJK from
+  WenQuanYi Zen Hei). Do **not** write `font.family = 'sans-serif'` + `font.sans-serif = [...]`:
+  that path resolves the **first available family only** and never looks further, so CJK never reaches
+  WenQuanYi and every CJK glyph is tofu (measured: 28 missing-glyph warnings).
+- **Liberation Sans is metric-compatible with Arial** and is the standard Linux stand-in for it, so this
+  stack satisfies Nature's Arial/Helvetica requirement.
+- **`Arial` is deliberately absent from the chain**: it is not installed in the image, and including it
+  emits 41 lines/figure of `Font family 'Arial' not found` false errors while rendering **identically**.
+  Do not read that noise as a fault and "fix" it by adding Arial back. If a journal insists on literal
+  Arial, install `msttcorefonts` and prepend `'Arial'` — at the cost of restoring the 41 lines/figure.
+- Do **not** set `axes.unicode_minus = False` here: U+2212 is supplied by DejaVu via the chain above,
+  which is the typographically correct minus; forcing `False` downgrades it to a hyphen.
+- On the Linux image only Liberation Sans / DejaVu / WenQuanYi / Noto-JP actually resolve —
+  `Noto Sans CJK SC`, `SimHei` and `Microsoft YaHei` are **not installed** there, never request them.
 - SVG/PDF editable text: always set `svg.fonttype = 'none'`
 - LaTeX math labels: `text.usetex = True` only when LaTeX is installed
 
@@ -421,7 +434,7 @@ Label quadrants ("Immune-hot / low tumor", "Immune-desert / high tumor", …) wi
 
 To match Nature publication standards:
 
-- [ ] **MANDATORY first lines**: `font.family='sans-serif'`, `font.sans-serif=['Arial','DejaVu Sans','Liberation Sans']`, `svg.fonttype='none'`
+- [ ] **MANDATORY first lines**: `font.family=['Liberation Sans','DejaVu Sans','WenQuanYi Zen Hei','Noto Sans CJK JP']` (multi-family list — **not** `font.family='sans-serif'` + `font.sans-serif=[...]`; no `'Arial'` — not installed, 41 noise lines/figure), `svg.fonttype='none'`
 - [ ] **Save as SVG** (primary). PNG dpi=300 as optional raster preview.
 - [ ] Top and right spines off; frameless legend
 - [ ] Figure architecture chosen intentionally: grid, schematic-led composite, image plate, or asymmetric hero layout

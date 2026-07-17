@@ -1,0 +1,39 @@
+# 系统级 matplotlib 兜底配置 —— 镜像内 COPY 到 /root/.config/matplotlib/matplotlibrc
+# 目的：agent 临时生成的作图代码若一行字体都没设，也能出中文而不是豆腐块。
+# 这只是兜底：技能代码显式设置的 rcParams 优先级更高，会覆盖本文件。
+#
+# 【机制前提，改之前先看懂，否则必踩】
+# matplotlib 的「逐字形回退」只在 font.family 写成【多族列表】时才触发；
+# 写 font.sans-serif 列表【不触发】——它只取列表里第一个能解析的字体，之后不再往后找。
+# 实测（sci-agent:latest, matplotlib 3.10.0，画含中文+拉丁+负号的图）：
+#   font.family = Liberation Sans, DejaVu Sans, WenQuanYi Zen Hei -> 缺字 0（逐字形回退生效）
+#   font.sans-serif = DejaVu Sans, WenQuanYi Zen Hei（拉丁在前）-> 缺字 28（中文全豆腐，不回退）
+#   font.sans-serif = WenQuanYi Zen Hei, ... + unicode_minus True -> 缺字 = MINUS SIGN
+#                                                （WQY 无 U+2212 且不回退）
+
+# ---- 第一层（主力）：font.family 多族列表，逐字形回退 ----
+# 拉丁走 Liberation Sans（由 fonts-liberation 提供，与 Arial【度量兼容】，是 Linux 上替代 Arial
+# 的标准做法，外观等价且无版权问题，仅 2.1M），中文走 WenQuanYi，负号 U+2212 由 DejaVu 提供。
+# 链里【每个字体都必须真的装了】：没装的字体不影响渲染（会跳到下一个），但 matplotlib 会为每次
+# 查找往 stderr 刷 "findfont: Font family 'X' not found."——实测曾因链首写 Arial（镜像没装）
+# 而产生 41 行/图 的假错误噪音，agent 很可能误读成故障去"修"。改用 Liberation Sans 后噪音归 0。
+# 故往本链加字体前，先确认 Dockerfile 的 apt 层真的装了它；构建期自检会强制校验这一点。
+# 【若某期刊坚持字面 Arial】：需装 msttcorefonts（有版权协议，需接受 EULA）并把 Arial 插到链首，
+# 代价是恢复上述 41 行/图 的 findfont 噪音。这是权衡过的取舍，不是漏了。
+font.family: Liberation Sans, DejaVu Sans, WenQuanYi Zen Hei
+
+# ---- 第二层（防御）：font.sans-serif 列表 ----
+# 何时用得上：agent 临时代码若显式写 font.family='sans-serif'，第一层的多族链就被绕过，
+# 此时只剩本列表兜底。实测该场景下若无本层，缺字 7；有本层，缺字 0。
+# 中文【必须在前】：本层不做逐字形回退，DejaVu 在前会导致中文全豆腐（实测 28）。
+# 代价（这不是"最优"，是两害相权）：
+#   1. 中文在前 => 该场景下【拉丁字母也被 WenQuanYi 渲染】，西文字形不如 DejaVu 好看；
+#   2. 需配 axes.unicode_minus: False，否则 WQY 缺 U+2212 又不回退 => 负号变豆腐块。
+# 也就是说第二层是"保证不出豆腐块"的降级路径，不是理想排版。真正的正解是技能代码别写
+# font.family='sans-serif'、让第一层的多族回退接管。
+font.sans-serif: WenQuanYi Zen Hei, Noto Sans CJK JP, DejaVu Sans
+
+# 负号：设 False 用 ASCII 连字符「-」代替 U+2212。
+# 代价：第一层本可由 DejaVu 提供排版更正的 U+2212，这里被一并降级成 ASCII 连字符；
+# 但若设 True，第二层场景会直接崩成豆腐块。两层共用一份 rc，只能取安全的那个。
+axes.unicode_minus: False

@@ -108,12 +108,18 @@ should feel visually unified.
 
 ## MANDATORY font + SVG rules (always first, no exceptions)
 
-These three lines are **non-negotiable** and must appear at the top of every script,
+These two lines are **non-negotiable** and must appear at the top of every script,
 before any figure is created. They guarantee editable text in SVG output:
 
 ```python
-plt.rcParams['font.family'] = 'sans-serif'
-plt.rcParams['font.sans-serif'] = ['Arial', 'DejaVu Sans', 'Liberation Sans']
+# 多族列表 = matplotlib 唯一会逐字形回退的写法：拉丁取 Liberation Sans/DejaVu，中文取 WenQuanYi Zen Hei。
+# 别拆成 font.family='sans-serif' + font.sans-serif=[...]：那条路径只认第一个能解析的字体、不再往后找，
+# CJK 永远轮不到 WenQuanYi → 中文全豆腐块（实测 28 条缺字警告）。
+# Liberation Sans 与 Arial 度量兼容，故满足 Nature 的 Arial/Helvetica 要求；链里刻意不放 Arial —— 镜像未装它，
+# 放进去每图会刷 41 行 "Font family 'Arial' not found" 假错误而渲染结果完全相同，别误当故障去修。
+# 若某期刊坚持字面 Arial：装 msttcorefonts 后把 'Arial' 插到链首（代价：恢复 41 行/图 噪音）。
+# 也别设 axes.unicode_minus=False：负号 U+2212 由 DejaVu 提供、排版正确，设 False 会降级成连字符。
+plt.rcParams['font.family'] = ['Liberation Sans', 'DejaVu Sans', 'WenQuanYi Zen Hei', 'Noto Sans CJK JP']
 plt.rcParams['svg.fonttype'] = 'none'   # keeps text as <text> nodes, not paths
 ```
 
@@ -133,8 +139,14 @@ exports. Never use `.png` alone when the figure contains text that may need adju
 def apply_publication_style(font_size=16, axes_linewidth=2.5, use_tex=False):
     """Apply Nature-style rcParams. Call once before creating any figures."""
     # ── MANDATORY: editable SVG text ──────────────────────────────────────────
-    plt.rcParams['font.family'] = 'sans-serif'
-    plt.rcParams['font.sans-serif'] = ['Arial', 'DejaVu Sans', 'Liberation Sans']
+    # 多族列表 = matplotlib 唯一会逐字形回退的写法：拉丁取 Liberation Sans/DejaVu，中文取 WenQuanYi Zen Hei。
+    # 别拆成 font.family='sans-serif' + font.sans-serif=[...]：那条路径只认第一个能解析的字体、不再往后找，
+    # CJK 永远轮不到 WenQuanYi → 中文全豆腐块（实测 28 条缺字警告）。
+    # Liberation Sans 与 Arial 度量兼容，故满足 Nature 的 Arial/Helvetica 要求；链里刻意不放 Arial —— 镜像未装它，
+    # 放进去每图会刷 41 行 "Font family 'Arial' not found" 假错误而渲染结果完全相同，别误当故障去修。
+    # 若某期刊坚持字面 Arial：装 msttcorefonts 后把 'Arial' 插到链首（代价：恢复 41 行/图 噪音）。
+    # 也别设 axes.unicode_minus=False：负号 U+2212 由 DejaVu 提供、排版正确，设 False 会降级成连字符。
+    plt.rcParams['font.family'] = ['Liberation Sans', 'DejaVu Sans', 'WenQuanYi Zen Hei', 'Noto Sans CJK JP']
     plt.rcParams['svg.fonttype'] = 'none'
     # ── Layout & style ────────────────────────────────────────────────────────
     plt.rcParams['font.size'] = font_size

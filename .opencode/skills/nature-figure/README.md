@@ -124,17 +124,25 @@ nature-figure/
 
 ## Python 强制规则
 
-### 1. 三个必需 rcParams：保留 SVG 可编辑文本
+### 1. 两个必需 rcParams：CJK 安全字体链 + 保留 SVG 可编辑文本
 
 ```python
-plt.rcParams['font.family'] = 'sans-serif'
-plt.rcParams['font.sans-serif'] = ['Arial', 'DejaVu Sans', 'Liberation Sans']
+# 多族列表 = matplotlib 唯一会逐字形回退的写法：拉丁取 Liberation Sans/DejaVu，中文取 WenQuanYi Zen Hei。
+# 别拆成 font.family='sans-serif' + font.sans-serif=[...]：那条路径只认第一个能解析的字体、不再往后找，
+# CJK 永远轮不到 WenQuanYi → 中文全豆腐块（实测 28 条缺字警告）。
+# Liberation Sans 与 Arial 度量兼容，故满足 Nature 的 Arial/Helvetica 要求；链里刻意不放 Arial —— 镜像未装它，
+# 放进去每图会刷 41 行 "Font family 'Arial' not found" 假错误而渲染结果完全相同，别误当故障去修。
+# 若某期刊坚持字面 Arial：装 msttcorefonts 后把 'Arial' 插到链首（代价：恢复 41 行/图 噪音）。
+# 也别设 axes.unicode_minus=False：负号 U+2212 由 DejaVu 提供、排版正确，设 False 会降级成连字符。
+plt.rcParams['font.family'] = ['Liberation Sans', 'DejaVu Sans', 'WenQuanYi Zen Hei', 'Noto Sans CJK JP']
 plt.rcParams['svg.fonttype'] = 'none'
 ```
 
 `svg.fonttype = 'none'` 可以避免 matplotlib 默认把每个字形转为 bezier 曲线。这样导出的 SVG 中，文字仍是 `<text>` 节点，可选择、可搜索，也方便在 Illustrator 或 Inkscape 中重新对齐。
 
-字体栈中包含 `Arial`、`DejaVu Sans` 和 `Liberation Sans`：`Arial` 是 macOS/Windows 常见字体，`DejaVu Sans` 随 matplotlib 提供，`Liberation Sans` 在 RHEL/Ubuntu 上与 Arial 度量兼容。这个级联能提高跨平台字距一致性。
+字体链的取字顺序：`Liberation Sans`（与 Arial **度量兼容**，是 Linux 上替代 Arial 的标准做法，故满足 Nature 对 Arial/Helvetica 的字体要求）→ `DejaVu Sans`（随 matplotlib 提供，兜拉丁字符与负号 U+2212）→ `WenQuanYi Zen Hei` / `Noto Sans CJK JP`（兜中文）。
+
+**链里刻意不放 `Arial`**：镜像未安装 Arial，放进去每张图会刷 41 行 `Font family 'Arial' not found` 假错误，而渲染结果与不放**完全相同**——别把这些噪音误当故障去"修"。若某期刊坚持字面 Arial，需安装 `msttcorefonts` 并把 `Arial` 插到链首，代价是恢复那 41 行/图 的噪音。
 
 ### 2. 主输出格式是 SVG
 
@@ -163,8 +171,14 @@ import matplotlib.gridspec as gridspec
 import numpy as np
 
 # 必需设置
-plt.rcParams['font.family'] = 'sans-serif'
-plt.rcParams['font.sans-serif'] = ['Arial', 'DejaVu Sans', 'Liberation Sans']
+# 多族列表 = matplotlib 唯一会逐字形回退的写法：拉丁取 Liberation Sans/DejaVu，中文取 WenQuanYi Zen Hei。
+# 别拆成 font.family='sans-serif' + font.sans-serif=[...]：那条路径只认第一个能解析的字体、不再往后找，
+# CJK 永远轮不到 WenQuanYi → 中文全豆腐块（实测 28 条缺字警告）。
+# Liberation Sans 与 Arial 度量兼容，故满足 Nature 的 Arial/Helvetica 要求；链里刻意不放 Arial —— 镜像未装它，
+# 放进去每图会刷 41 行 "Font family 'Arial' not found" 假错误而渲染结果完全相同，别误当故障去修。
+# 若某期刊坚持字面 Arial：装 msttcorefonts 后把 'Arial' 插到链首（代价：恢复 41 行/图 噪音）。
+# 也别设 axes.unicode_minus=False：负号 U+2212 由 DejaVu 提供、排版正确，设 False 会降级成连字符。
+plt.rcParams['font.family'] = ['Liberation Sans', 'DejaVu Sans', 'WenQuanYi Zen Hei', 'Noto Sans CJK JP']
 plt.rcParams['svg.fonttype'] = 'none'
 
 # 基础样式
@@ -413,7 +427,7 @@ def luminance_text_color(hex_color):
 
 - [ ] 核心结论和 panel map 在美化前已经明确。
 - [ ] 后端已明确为 Python 或 R。
-- [ ] **前 3 个设置**包含 `font.family`、`font.sans-serif` 三字体栈、`svg.fonttype = 'none'`。
+- [ ] **必需设置**为 `font.family` **多族列表**（`Liberation Sans` 打头 + `WenQuanYi Zen Hei` / `Noto Sans CJK JP` 兜底中文）与 `svg.fonttype = 'none'`；**不得**出现 `font.family = 'sans-serif'` 或 `font.sans-serif = [...]`（那条路径不回退，中文必豆腐块），也**不得**把 `Arial` 加回链里（镜像未装，41 行/图 假错误）。
 - [ ] 主输出为 **SVG**，并使用 `bbox_inches='tight'`。
 - [ ] 右侧和顶部 spines 关闭，`legend.frameon = False`。
 - [ ] 字号符合最终用途：密集期刊图通常 5-7 pt，只有 slide-sized panel 才使用更大字号。
