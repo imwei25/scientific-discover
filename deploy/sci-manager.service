@@ -14,7 +14,11 @@ WorkingDirectory=/opt/scientific-discover/deploy
 ExecStart=/usr/bin/node /opt/scientific-discover/deploy/manager.mjs
 ExecReload=/bin/kill -HUP $MAINPID
 Environment=LISTEN=127.0.0.1:8090
-Environment=WARM_CAP=2
+# WARM_CAP：最多几个用户容器同时在跑（起第 N+1 个前先按 LRU 停掉一个真正空闲的）。内存是硬顶，绝不超配。
+# 5 是在 2 vCPU / 3.4 GB 的机器上实测定的：5 人同时跑 md→PDF 全部成功，内存峰值 2668/3495 MB，
+# swap 零使用、零 OOM（单人 3.9s → 5 人各 11s，慢 2.8 倍，瓶颈是 2 核 CPU 而非内存）。
+# 换机器请重新实测再改：容器空闲约 261 MB/个，重活时远不止。
+Environment=WARM_CAP=5
 Environment=IDLE_MS=600000
 Environment=START_TIMEOUT_MS=60000
 Environment=CAP_WAIT_MS=120000
