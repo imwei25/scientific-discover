@@ -153,7 +153,10 @@ function loadUsers() {
     const prev = users.get(name)
     next.set(name, prev
       ? Object.assign(prev, { port: Number(e.PORT), suspended })
-      : { name, port: Number(e.PORT), base: `/${name}`, container: `agent-${name}`, lastActive: 0, conns: 0, starting: null, suspended })
+      // lastActive 初值取「此刻」而非 0：取 0 意味着新加载的用户一上来就是「空闲了 56 年」，
+      // 若其容器当时正在跑（如运维手动 docker start、或 manager 重启而容器还活着），
+      // 下一轮 60s 巡检立刻判定超时把它停掉 —— 正在跑的活会被连锅端。
+      : { name, port: Number(e.PORT), base: `/${name}`, container: `agent-${name}`, lastActive: Date.now(), conns: 0, starting: null, suspended })
   }
   users = next
   log(`[users] 已加载 ${users.size} 个用户：${[...users.values()].map((u) => `${u.name}→:${u.port}`).join(", ") || "(空)"}`)
@@ -171,6 +174,24 @@ async function isRunning(container) {
 }
 const dockerStart = (c) => dockerExec(["start", c])
 const dockerStop  = (c) => dockerExec(["stop", c])
+
+// ---- 忙碌探测：容器里还有没有在跑的生成任务？----
+// 为什么必须问：容器网关的设计是「关页面 = 只退订，生成继续跑」，用户点了「写论文」再关掉页面，
+// 活是还在跑的。但 manager 只看得见 HTTP 连接，页面一关 SSE 就断、conns 归 0，光凭空闲时长会把
+// 正跑着十几分钟流水线的容器停掉 —— 用户回来发现活没了。停机/腾位前都得先问这一句。
+// 为什么走 docker exec 而不是直接 HTTP：容器网关对 127.0.0.1 的请求免鉴权，从容器【内部】打正好
+// 命中该豁免，无需给 manager 发登录票据、也不必把 /api/busy 变成公开接口（容器彼此在同一 docker
+// 网络里互通，而容器里跑的正是能执行任意代码的 agent，公开它等于让用户能互相探活动状态）。
+// 判不准时返回 true（宁可多留一会儿，也不误杀正在跑的活）——除非容器压根没跑。
+async function isBusy(u) {
+  const r = await dockerExec(["exec", u.container, "curl", "-sf", "--max-time", "5",
+    "http://127.0.0.1:3000/api/busy"])
+  if (r.code !== 0) {
+    // 容器没跑/curl 不在/网关没起 → 无所谓忙不忙，交由调用方按「不忙」处理（它自己会先判 isRunning）
+    return false
+  }
+  try { return !!JSON.parse(r.stdout).busy } catch { log(`[busy] ${u.container} 探针回包异常：${r.stdout.slice(0, 80)}`); return true }
+}
 
 // ---- 就绪探测：容器网关起来后能应答 HTTP 即视为就绪 ----
 const probeReady = (port) => new Promise((resolve) => {
@@ -196,12 +217,19 @@ async function makeRoom(exceptName) {
       if (await isRunning(u.container)) running.push(u)
     }
     if (running.length + 1 <= WARM_CAP) return                       // 有空位 → 放行
+    // 候选：无在途连接的容器，按空闲时长从久到近。但「没连接」不等于「没活干」——用户关了页面
+    // 而生成还在跑的容器也长这样，驱逐它 = 杀掉别人跑到一半的论文。逐个探针确认真的闲着才动手。
     const idle = running.filter((u) => u.conns === 0).sort((a, b) => a.lastActive - b.lastActive)
-    if (idle.length) {                                               // 有空闲容器 → 停最久空闲的腾位
-      log(`[cap] 达到 WARM_CAP=${WARM_CAP}，停掉最久空闲的 ${idle[0].container}`)
-      await dockerStop(idle[0].container)
-      continue
+    let evicted = false
+    for (const cand of idle) {
+      if (await isBusy(cand)) { cand.lastActive = Date.now(); continue }   // 有活在跑 → 换下一个候选
+      log(`[cap] 达到 WARM_CAP=${WARM_CAP}，停掉最久空闲的 ${cand.container}`)
+      await dockerStop(cand.container)
+      evicted = true
+      break
     }
+    if (evicted) continue
+    // 走到这儿 = 在跑的容器全都有活（连接着的，或关了页面但仍在生成的）→ 宁可排队，也不打断任何人
     if (Date.now() >= deadline) throw new Error(`并发已满（${WARM_CAP} 路全忙），排队超时，请稍后重试`)
     if (!waited) { log(`[cap] ${WARM_CAP} 路全忙且无空闲，${exceptName} 排队等待空闲槽位…`); waited = true }
     await sleep(CAP_POLL_MS)                                         // 全忙 → 等待，不超配
@@ -718,6 +746,12 @@ setInterval(async () => {
     if (u.conns > 0 || u.starting) continue            // 有开着的连接（含 SSE 长流）或正在启动 → 绝不停
     if (now - u.lastActive < IDLE_MS) continue
     if (await isRunning(u.container)) {
+      // 没连接 ≠ 没活干：用户关了页面但生成仍在跑（容器网关设计如此）。停机前必须问一句。
+      if (await isBusy(u)) {
+        u.lastActive = Date.now()                      // 有活在跑 → 视为活跃，重新计时
+        log(`[idle] ${u.container} 无连接但仍有生成任务在跑，暂不停机`)
+        continue
+      }
       log(`[idle] ${u.container} 空闲 ${Math.round((now - u.lastActive) / 1000)}s，停机`)
       await dockerStop(u.container)
     }

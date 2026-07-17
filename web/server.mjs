@@ -432,6 +432,17 @@ const server = http.createServer(async (req, res) => {
     }
     // ↓↓↓ 以下路由都已过门禁：未登录的请求走不到这里 ↓↓↓
 
+    // 忙碌探针：宿主的 manager 在「空闲停机 / 满员腾位」前问一句「这容器还有活在跑吗」。
+    // 本网关的设计是「关页面 = 只退订，生成继续跑」（见 /api/chat/attach），但 manager 只看得见
+    // HTTP 连接：页面一关 SSE 就断、conns 归 0，它便会把正在跑十几分钟的流水线连容器一起停掉。
+    // 故这里把「有无在跑的 job」暴露给它。manager 用 docker exec 从容器【内部】打 127.0.0.1 来问，
+    // 命中 isLocal 免鉴权 —— 不必把本接口放进 PUBLIC_PATHS：容器彼此在同一 docker 网络里互通，
+    // 而每个容器里跑的正是能执行任意代码的 agent，公开它等于让 alice 能探到 bob 在不在干活。
+    if (req.method === "GET" && u.pathname === "/api/busy") {
+      const running = [...jobs.values()].filter((j) => j.running).length
+      return send(res, 200, "application/json", JSON.stringify({ busy: running > 0, running }))
+    }
+
     // 自助改密码（须已登录 —— 必须留在门禁【之后】）：校验当前密码 → 写 override → 用新密码重签 cookie。
     // 放门禁前等于开了个密码预言机：未登录者能凭「当前密码不正确 / 新密码至少 6 位」两种回包无限盲猜密码，
     // 且绕开 manager 的图形验证码、限流与审计日志。
