@@ -572,7 +572,8 @@ document.getElementById("pwSave").addEventListener("click", async () => {
   try {
     const r = await fetch("api/password", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ current: cur, new: nw }) })
     const j = await r.json()
-    if (j.ok) { pwSetMsg("ok", "已修改，正在跳转重新登录…"); setTimeout(() => { location.href = "./" }, 1300) }   // 相对：多用户 /alice/ 部署下留在本容器前缀，别跳到域名根
+    // 服务端改密后会用新密码当场重签一张 cookie 下发，本会话仍然有效 → 不必踢去重登，留在原地即可
+    if (j.ok) { pwSetMsg("ok", "已修改，下次登录请用新密码"); setTimeout(closePw, 1300) }
     else pwSetMsg("err", j.err || "修改失败")
   } catch (_) { pwSetMsg("err", "网络异常，请重试") }
   btn.disabled = false; btn.textContent = "保存"

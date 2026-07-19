@@ -15,23 +15,25 @@ FROM node:20-bookworm-slim
 #   fonts-dejavu-core —— 提供 DejaVu Sans Mono；技能拿它作代码框等宽字体（\setmonofont）。
 #              注意：它只是 fontconfig-config 的 Recommends，--no-install-recommends 下不会被带进来，
 #              必须显式装，否则中文稿报 "DejaVu Sans Mono cannot be found"。
-# 以上包缺任何一个，md→PDF 都会 rc=43 无产物（本清单为实测逐个补齐后的最小可用集）。
-# matplotlib 中文图要的三个字体包（缺了图上中文是豆腐块，与上面 md→PDF 那组是两回事）：
-#   fonts-wqy-zenhei —— 提供 WenQuanYi Zen Hei，作 matplotlib 中文图的【中文】字体。
-#              别以为装了 fonts-noto-cjk 就够：Debian 的该包里 "Noto Sans CJK SC" 这个名字
-#              【解析不出来】，会静默回退 DejaVu Sans → 中文全豆腐（实测 28 条缺字警告）。
+#   fonts-wqy-zenhei —— 提供 WenQuanYi Zen Hei，matplotlib 中文图的主力字体。镜像原有的
+#              fonts-noto-cjk 只提供 "Noto Sans/Serif CJK JP"，【不提供 SC】；作图代码请求
+#              "Noto Sans CJK SC" 会解析失败并回退 DejaVu Sans → 中文全是豆腐块（实测 28 条缺字警告）。
 #              装上本包后 "WenQuanYi Zen Hei" 解析成功，中文图缺字警告 0（实测）。
 #   fonts-wqy-microhei —— 同族备用中文字体，一并装以防单一字体缺字。
-#   fonts-liberation —— 提供 Liberation Sans（与 Arial 度量兼容的自由字体，2.1M），作中文图里
-#              【拉丁字符】的字体。链首若写没装的字体（如 Arial）不影响渲染，但会刷
-#              "findfont: Font family 'Arial' not found." 41 行/图 的假错误噪音（实测），
-#              agent 易误读成故障去"修"。装上后噪音归 0。
+#   fonts-liberation —— 提供 Liberation Sans（与 Arial 度量兼容的自由字体，2.1M），作 matplotlib
+#              中文图里【拉丁字符】的字体。镜像原先 Arial 与 Liberation 【都没装】；链首写没装的
+#              字体不影响渲染，但会刷 "findfont: Font family 'Arial' not found." 41 行/图 的假错误
+#              噪音（实测），agent 易误读成故障。装上后噪音归 0、拉丁走 LiberationSans-Regular.ttf。
+# 以上包缺任何一个，md→PDF 都会 rc=43 无产物（本清单为实测逐个补齐后的最小可用集）。
+#   python3-venv —— 建 /app/.venv 用（技能约定「Python 统一走项目根 .venv」，23 个技能文件写死
+#              调 .venv/bin/python）。裸镜像 python3 -m venv 会报 "ensurepip is not available.
+#              You need to install the python3-venv package"（实测）。用【不带小版本号】的包名，
+#              bookworm 下它依赖到 python3.11-venv；将来基础镜像升 Python 小版本不会因包名写死而炸。
 # LibreOffice —— 别删：web/server.mjs 的 ensurePreviewCache 靠 soffice 把
 #   pptx/ppt/odp/doc/odt 转成 PDF 才能预览（探测 /usr/bin/soffice 等路径）；
 #   而 ppt-master 技能的唯一交付物就是 .pptx。此前【整个没装】→ 预览一律 501、
 #   warmPreviews 还会把失败静默吞掉，用户只在点开时才发现。
 #   只装 impress+writer（不要 --install-recommends，否则会带进 JRE 等一大坨）。
-# python3-venv —— 创建 /app/.venv 需要它（Debian 把 venv 拆成单独的包）。
 RUN apt-get update && apt-get install -y --no-install-recommends \
       python3 python3-pip python3-venv curl git ca-certificates procps lsof \
       libreoffice-impress libreoffice-writer \
@@ -47,29 +49,34 @@ RUN npm install -g opencode-ai@1.17.14
 WORKDIR /app
 
 # 科研 Python 环境（装进系统 python，容器本身就是隔离）
-#
-# ★ /app/.venv 必须存在：AGENTS.md 与 19 个 SKILL.md 都写死了「Python 走项目根 .venv」，
-#   web/server.mjs 的 PYEXE 也指向它。此前镜像里根本没有 → agent 按路由去跑 env-setup，
-#   在 1750m 内存上限的容器里现装 pandas/scipy/matplotlib 全家桶（数分钟、可能 OOM），
+# ★ 为什么下面还要单独建一个 /app/.venv：AGENTS.md 与 23 个技能文件都写死了「Python 走项目根 .venv」，
+#   web/server.mjs 的 PYEXE 也指向它。镜像里若没有 → agent 按路由去跑 env-setup，
+#   在内存受限的容器里现装 pandas/scipy/matplotlib 全家桶（数分钟、可能 OOM），
 #   而且装在容器可写层、下次重建容器又没了 → "上周还能用今天又不行"。
-#   用 --system-site-packages：venv 直接复用上面装好的系统包，不重复占空间，
-#   `python3` 与 `.venv/bin/python` 两条路都能跑。
-# 末尾的 import 自检是【故意】的：依赖装歪就在构建期炸，别留到用户点预览才发现。
 # 注：注释一律写在 RUN 之外——反斜杠续行中间夹注释虽然 Docker 解析器会剥掉，
 #     但那是个容易踩的坑，这里不赌它。
 COPY deploy/requirements.txt /app/requirements.txt
-RUN pip3 install --no-cache-dir --break-system-packages -r /app/requirements.txt \
-    && python3 -m venv --system-site-packages /app/.venv \
-    && /app/.venv/bin/python -c "import pandas, matplotlib, mammoth; print('venv ok')"
+RUN pip3 install --no-cache-dir --break-system-packages -r /app/requirements.txt
 
-# matplotlib 中文兜底：系统级 matplotlibrc + 清字体缓存（必须排在字体安装之后）。
-# 关键机制（踩出来的，见 docs/待修问题清单.md「已排除」表）：逐字形回退【只在 font.family 是多族列表时】
-# 才触发；只写 font.sans-serif 没用——它取到第一个能解析的字体就不再往后找。
+# 项目根 .venv：技能约定「Python 统一走项目根 .venv」，23 个技能文件写死调 .venv/bin/python，
+# 不存在则 agent 直接跑不起来。--system-site-packages 让它复用上面已装好的科学栈，
+# 不重复装（实测 .venv 仅 25M，且 .venv/bin/python 能 import pandas/matplotlib/numpy/scipy）。
+# 必须排在 pip 装依赖【之后】；后续 COPY 层均为具名文件（无 COPY . /app），不会覆盖 /app/.venv。
+# 自检里带上 mammoth：web/server.mjs 的 docx 预览就是调它，装歪了要在构建期炸，
+# 别留到用户点预览才发现（此前它压根没进 requirements，docx 预览 100% 失败）。
+RUN python3 -m venv --system-site-packages /app/.venv \
+    && /app/.venv/bin/python -c "import pandas, numpy, scipy, matplotlib, mammoth; \
+       print('/app/.venv 自检通过: pandas', pandas.__version__, '| matplotlib', matplotlib.__version__)"
+
+# matplotlib 中文兜底：系统级 matplotlibrc + 清字体缓存（必须排在字体安装之后）
+# 关键机制（踩出来的）：逐字形回退【只在 font.family 是多族列表时】才触发；
+# 只写 font.sans-serif 没用——它取到第一个能解析的字体就不再往后找。
 #   路径依据：容器以 root 跑，matplotlib.get_configdir() == /root/.config/matplotlib，
 #   其搜索顺序为 $MATPLOTLIBRC → $CWD/matplotlibrc → <configdir>/matplotlibrc → 安装目录 mpl-data。
 #   放 configdir 既能全局生效（与 agent 的 cwd 无关），又不剥夺 cwd/代码层面覆盖的能力。
 #   刻意【不设 ENV MATPLOTLIBRC】：它优先级最高，设了会盖掉 configdir 这条路，下面的自检也会失败。
-#   清缓存原因：matplotlib 缓存字体列表，装了新字体不清缓存则 WenQuanYi 不可见。
+#   实测：放此处后 matplotlib.matplotlib_fname() 即返回该文件，中文图缺字警告 0。
+#   清缓存原因：matplotlib 会缓存字体列表，装了新字体不清缓存则 WenQuanYi 不可见。
 #   两层防御的机制与代价见 deploy/matplotlibrc 内注释。
 COPY deploy/matplotlibrc /root/.config/matplotlib/matplotlibrc
 # 构建期自检：rc 真被读到 + 链里每个字体都真装了（防噪音回归）+ 两层防御各自都能出中文

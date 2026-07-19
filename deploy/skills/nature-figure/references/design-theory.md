@@ -18,7 +18,12 @@ Derived from scripts in the [figures4papers](https://github.com/ChenLiu-1996/fig
   stack satisfies Nature's Arial/Helvetica requirement.
 - **`Arial` is deliberately absent from the chain**: it is not installed in the image, and including it
   emits 41 lines/figure of `Font family 'Arial' not found` false errors while rendering **identically**.
-  If a journal insists on literal Arial, install msttcorefonts and prepend it (cost: that noise returns).
+  Do not read that noise as a fault and "fix" it by adding Arial back. If a journal insists on literal
+  Arial, install `msttcorefonts` and prepend `'Arial'` — at the cost of restoring the 41 lines/figure.
+- Do **not** set `axes.unicode_minus = False` here: U+2212 is supplied by DejaVu via the chain above,
+  which is the typographically correct minus; forcing `False` downgrades it to a hyphen.
+- On the Linux image only Liberation Sans / DejaVu / WenQuanYi / Noto-JP actually resolve —
+  `Noto Sans CJK SC`, `SimHei` and `Microsoft YaHei` are **not installed** there, never request them.
 - SVG/PDF editable text: always set `svg.fonttype = 'none'`
 - LaTeX math labels: `text.usetex = True` only when LaTeX is installed
 

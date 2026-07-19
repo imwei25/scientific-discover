@@ -54,4 +54,17 @@ description: 用于任何数据分析、统计计算、画图、读写 CSV/Excel
 - 输入数据文件在工作目录，或 `uploads/` 目录里。**若数据含患者姓名/身份证/住院号/手机号等可识别信息，先提醒用户脱敏再分析。**
 - **所有产出（图表 PNG、结果 CSV/Excel）写到 `outputs/` 目录**，方便前端用户下载。
 - 画图用无界面后端：脚本开头 `import matplotlib; matplotlib.use("Agg")`，再 `plt.savefig("outputs/xxx.png", dpi=150, bbox_inches="tight")`。
+- **中文图别自己乱设字体**：运行环境已配好系统级 matplotlibrc 兜底，默认就能出中文，通常**什么都不用设**。
+  确实要在代码里显式设字体时，**只能**用下面这一行（`font.family` 多族列表，逐字一致）：
+  ```python
+  plt.rcParams["font.family"] = ["Liberation Sans", "DejaVu Sans", "WenQuanYi Zen Hei", "Noto Sans CJK JP"]
+  ```
+  多族列表是 matplotlib **唯一**会逐字形回退的写法：拉丁取 Liberation Sans/DejaVu，中文取 WenQuanYi Zen Hei，两头都对。
+  （`Liberation Sans` 与 Arial 度量兼容；**别把 `Arial` 加回链里**——镜像未装它，每图会刷 41 行 `Font family 'Arial' not found`
+  假错误而渲染结果完全相同。期刊若坚持字面 Arial，须装 msttcorefonts 后插到链首。）
+  **禁止**写成 `font.family = "sans-serif"` + `font.sans-serif = [...]` —— 那条路径只取第一个能解析的字体、
+  不再往后找，中文必豆腐块（实测 28 条缺字警告）。
+  **禁止**设 `axes.unicode_minus = False` —— 上面这条链里负号 U+2212 由 DejaVu 提供、排版正确，设 False 反而降级成连字符。
+  **禁止**请求 `SimHei`、`Microsoft YaHei`、`微软雅黑`、`黑体`、`Noto Sans CJK SC` —— 这些在 Linux 服务器上
+  **均不存在**，matplotlib 会静默回退 DejaVu Sans，中文全变豆腐块（本地 Windows 能看到、服务器上必坏）。
 - 分析完，用一段话向用户总结关键结论（带效应量+CI+p+n）+ 列出生成的文件路径。
