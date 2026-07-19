@@ -55,6 +55,41 @@ DOI_RE = re.compile(r"10\.\d{4,9}/[-._;()/:A-Za-z0-9]+", re.I)
 PMID_RE = re.compile(r"\bPMID:?\s*(\d{5,9})\b", re.I)
 
 
+# ---- 产物目录解析（8 个技能脚本统一；见 AGENTS.md §五）----
+# 优先级：显式参数 > SCI_OUTPUT_DIR 环境变量 > 当前工作目录(若已在 outputs/<会话id>/ 内) > 报错中止。
+# 【绝不】再默认写共享的 outputs/ 根：那里不会出现在界面"产出"侧栏，
+# 且同一用户的多个会话共用一个 outputs 卷，写固定名会跨会话互相覆盖。
+# 为什么必须由外部传进来：opencode 是【一个进程服务所有会话】的，
+# 脚本自己读不到任何会话级上下文，只能靠主控（网关每轮注入的 preamble）用环境变量或参数告知。
+def _resolve_out_dir(explicit=None):
+    import os as _os, sys as _sys
+    from pathlib import Path as _Path
+    if explicit:
+        return _Path(explicit)
+    _env = (_os.environ.get("SCI_OUTPUT_DIR") or "").strip()
+    if _env:
+        return _Path(_env)
+    _cwd = _Path.cwd()
+    if _cwd.parent.name == "outputs":          # 已经 cd 进 outputs/<会话id>/
+        return _cwd
+    _msg = [
+        "!! 未指定产物目录，已中止（不再默认写共享的 outputs/ 根）。",
+        "   请用以下任一方式指定本会话的产物目录（<会话id> 由主控在每轮开头给出）：",
+        "     1) 环境变量： SCI_OUTPUT_DIR=outputs/<会话id> python3 <本脚本> ...",
+        "     2) 显式参数： --outdir outputs/<会话id>   （或 --out outputs/<会话id>/<文件名>）",
+        "     3) 先切目录： cd outputs/<会话id> && python3 ...",
+        "   原因：写到共享的 outputs/ 根会跨会话互相覆盖，且不出现在界面的“产出”侧栏里。",
+    ]
+    _sys.exit(chr(10).join(_msg))
+
+
+def _resolve_out_file(explicit=None, default_name="output"):
+    from pathlib import Path as _Path
+    if explicit:
+        return _Path(explicit)
+    return _resolve_out_dir() / default_name
+
+
 def _get(url, **kw):
     kw.setdefault("headers", UA)
     kw.setdefault("timeout", TIMEOUT)
@@ -191,8 +226,9 @@ def main():
     ap = argparse.ArgumentParser(description="引用溯源到原句（claim grounding）")
     ap.add_argument("args", nargs="*", help="论断 + 其引的 DOI/PMID（第一个是论断）")
     ap.add_argument("--input", help="CSV(claim,ref) 或 TSV(论断<TAB>ref) 批量核")
-    ap.add_argument("--outdir", default="outputs")
+    ap.add_argument("--outdir", default=None)
     args = ap.parse_args()
+    args.outdir = str(_resolve_out_dir(args.outdir))
 
     pairs = load_pairs(args.input, args.args)
     if not pairs:

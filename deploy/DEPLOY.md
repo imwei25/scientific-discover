@@ -25,7 +25,7 @@ git clone https://github.com/imwei25/scientific-discover.git ~/sci-agent
 cd ~/sci-agent
 git checkout feat/multiuser-deploy          # 部署代码所在分支
 
-sudo bash deploy/bootstrap-host.sh          # 装 docker/node20/caddy/git/fail2ban/2G swap（幂等）
+sudo bash deploy/bootstrap-host.sh          # 装 docker/node20/caddy/git/fail2ban/2G swap/zram（幂等）
 ```
 
 > 装的是标准依赖，脚本幂等、可重复跑。国内/香港机拉 docker/nodesource/caddy 源可能稍慢，耐心等。
@@ -38,11 +38,16 @@ sudo bash deploy/bootstrap-host.sh          # 装 docker/node20/caddy/git/fail2b
 cp deploy/.env.example deploy/.env
 vi deploy/.env
 ```
-填两项（其余默认即可）：
+填三项（其余默认即可）：
 ```ini
 DEEPSEEK_API_KEY=sk-你的真实密钥
 BASE_DOMAIN=你的域名            # 例：weigu.duckdns.org
+SCI_CONTACT_EMAIL=你@你的机构域名  # 必填！不能留占位值，见下
 ```
+
+> ⚠ `SCI_CONTACT_EMAIL` 是**必填**的（`.env.example` 里也标了）：全文检索链路要用它作礼貌联系邮箱。
+> 留着默认占位值 `you@your-org.com` 的话，**Unpaywall 会直接拒（HTTP 422）**、NCBI 也少一档礼貌池，
+> `fulltext-retrieval` 技能会必然失败。填你机构的真实邮箱即可，别用 example.com。
 
 ---
 
@@ -75,17 +80,17 @@ sudo deploy/scripts/user-add.sh bob             # 省略档位=free（普通，$
 | 加用户 | `sudo deploy/scripts/user-add.sh <名> [档位]`（省略档位=free） |
 | 改用户档位（分级） | `sudo deploy/scripts/user-tier.sh <名> <档位>`（即时重启生效） |
 | 看全员档位/额度/今日用量 | `sudo deploy/scripts/user-list.sh`，或**网页管理台** `https://你的域名/admin`（见下） |
-| 开启网页管理台 | `sci-manager.service` 设 `Environment=ADMIN_PASSWORD=<强密码>` → `daemon-reload && systemctl restart sci-manager` → 访问 `https://你的域名/admin`（看用量/改档/加删用户/编辑档位，都在网页里） |
+| 开启网页管理台 | 编辑 **`/etc/sci-manager.env`**（chmod 600）设 `ADMIN_PASSWORD=<强密码>` → `systemctl restart sci-manager` → 访问 `https://你的域名/admin`。**别再去改 sci-manager.service 里的 `Environment=`**：单元里的 `EnvironmentFile=-/etc/sci-manager.env` 在所有 `Environment=` 之后，会把它覆盖掉，改了不生效还不报错 |
 | 删用户（留数据） | `sudo deploy/scripts/user-del.sh <名>` |
 | 删用户（连数据，先自动备份） | `sudo deploy/scripts/user-del.sh <名> --purge` |
 | 改档位额度（对整档生效） | 编辑 `deploy/tiers.env` → `sudo deploy/scripts/render-compose.sh` → `docker compose up --no-start --force-recreate`（重建容器才会读到新额度，见下注） |
 | 给某用户单独设额度（覆盖档位） | 编辑 `deploy/users/<名>.env` 取消注释 `DAILY_COST_LIMIT=`（USD/天，0=不限）→ `render-compose.sh && docker rm -f agent-<名> && docker compose up --no-start agent-<名>` |
 
 > ⚠ 额度/存储上限是容器**环境变量**，在容器「创建」时固化；manager 唤醒用的是 `docker start`，**`docker restart` 不会重读 compose**。所以改额度后必须**重建**容器（如上；数据在命名卷里，重建不丢），或直接用 `user-tier.sh`（改档位时已自动重建）。
-| 改了代码后更新 | `git pull && sudo deploy/scripts/build-image.sh` 再逐个 `docker restart agent-*`（或等其自然冷启动） |
+| 改了代码后更新 | `sudo bash deploy/scripts/redeploy-skills.sh --pull`（拉代码 → 重建镜像 → **重建**容器）。<br>⚠ 别用 `docker restart`：它只重启既有容器、仍跑创建时那份旧镜像，**新代码看着更新了其实没生效**（同下方⚠注）。另 `docker restart agent-*` 里的 `agent-*` 不是文件名，shell 不会展开，命令本身也跑不通 |
 | 每日备份（建 cron） | `sudo deploy/scripts/backup.sh`（7 天轮转，写 `/var/backups/sci/`） |
 | 看谁在跑 | `docker ps --filter name=agent-` |
-| 调并发/闲置 | 改 `/etc/systemd/system/sci-manager.service` 的 `WARM_CAP`/`IDLE_MS` → `systemctl daemon-reload && systemctl restart sci-manager` |
+| 调并发/闲置 | 编辑 **`/etc/sci-manager.env`** 的 `WARM_CAP`/`IDLE_MS` → `systemctl restart sci-manager`（不必 daemon-reload）。同上：改单元里的 `Environment=` 会被这个文件覆盖，无效 |
 
 ### 定时备份
 

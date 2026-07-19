@@ -189,7 +189,7 @@ API; nothing generated from memory):
 ```bash
 # Expand seed DOIs/PMIDs in all directions, dedup against the existing pool,
 # append verified candidates to outputs/refs.bib
-python3 references/snowball.py \
+SCI_OUTPUT_DIR=outputs/<会话id> python3 references/snowball.py \
   --seed DOI:10.1148/radiol.2024123,PMID:38000001 \
   --direction all \
   --pool outputs/refs.bib \

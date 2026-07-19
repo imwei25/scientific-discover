@@ -32,7 +32,7 @@ description: 写**叙述性**文献综述。围绕一个主题多路检索文献
 ### 阶段 2 — 缺口驱动的迭代检索（把"检索一次"改成回合制）
 把 `search.py` 当**可反复调用的检索原语**，一回合一回合补：
 ```
-.venv/Scripts/python.exe .opencode/skills/literature-review/search.py "概念1" "概念2" --limit 25 --since 2018
+SCI_OUTPUT_DIR=outputs/<会话id> .venv/Scripts/python.exe .opencode/skills/literature-review/search.py "概念1" "概念2" --limit 25 --since 2018
 ```
 产出/追加 `outputs/evidence_table.csv`（含 design 列 + MeSH 词可作归一化信号）和 `outputs/evidence.md`。**每回合读完摘要后自评缺口**（照共享 doc）：哪个子面证据稀薄→补检；哪条论断只靠单一/弱证据→**沿证据等级爬升**（只有队列就去找 RCT/meta）；冒出的新药名/标志物→单独一轮。**停止判据**：每个子面在相关等级上取到 ≥3–5 篇、或连续两回合无新增、或到回合上限（默认 3–4 轮）。逐轮记 `outputs/search_log.md`。
 
@@ -83,9 +83,9 @@ description: 写**叙述性**文献综述。围绕一个主题多路检索文献
 
 ```
 # 单条：论断 + 它引的一个或多个 DOI/PMID
-.venv/Scripts/python.exe .opencode/skills/literature-review/ground_claim.py "他汀降低卒中复发风险" 10.1056/NEJMoa1615664 PMID:27295427
+SCI_OUTPUT_DIR=outputs/<会话id> .venv/Scripts/python.exe .opencode/skills/literature-review/ground_claim.py "他汀降低卒中复发风险" 10.1056/NEJMoa1615664 PMID:27295427
 # 批量：CSV 两列 claim,ref，把综述里每个"论断→引用"对逐条核
-.venv/Scripts/python.exe .opencode/skills/literature-review/ground_claim.py --input outputs/<会话>/claims.csv
+SCI_OUTPUT_DIR=outputs/<会话id> .venv/Scripts/python.exe .opencode/skills/literature-review/ground_claim.py --input outputs/<会话>/claims.csv
 ```
 - 产出 `claim_grounding.md` / `.csv`。分档：**GROUNDED**（≥0.45，措辞高度相关）、**CHECK**（0.25–0.45，请人工确认）、**WEAK**（<0.25，⚠️ 摘要里找不到支撑句——可能转述失真，或支撑点在全文正文）、**NOTFOUND/NOABSTRACT**（取不到文献/无摘要）。
 - **关键在"捞出的原句"，分数只用来排优先级**：TF-IDF 对短转述天然保守，忠实的转述常落 CHECK 档但会把**正确的原句**摆到你面前——照着确认措辞即可。WEAK 且无相关句才是真信号。

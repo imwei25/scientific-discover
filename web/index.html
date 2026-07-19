@@ -147,6 +147,7 @@
   .answer.md th, .answer.md td, .pv-body th, .pv-body td { border: 1px solid var(--line-hi); padding: 6px 10px; text-align: left; }
   .answer.md th, .pv-body th { background: #eef2f8; font-weight: 600; }
   .answer.md strong, .pv-body strong { color: #0f1a2b; font-weight: 700; }
+  .answer.md img { display: block; max-width: min(100%, 520px); height: auto; margin: .5em 0; border: 1px solid var(--line-hi); border-radius: var(--r-sm); background: #fff; cursor: zoom-in; }
   .note { color: var(--faint); font-size: 12px; margin-top: 8px; }
 
   /* Composer */
@@ -388,6 +389,7 @@
     </div>
   </div>
   <div class="hright">
+    <span id="quotabar" class="status" hidden title="今日模型额度：已用 / 上限（每日 0 点 UTC 重置）"></span>
     <div id="modelSel" class="msel" hidden></div>
     <button id="pwBtn" class="hbtn" type="button" title="修改密码"></button>
     <button id="logoutBtn" class="hbtn" type="button" title="退出登录"></button>
@@ -530,7 +532,9 @@ document.getElementById("logoutBtn").innerHTML = ic("logout")
     let m; try { m = await (await fetch("api/model")).json() } catch (e) { return }
     if (!m || !m.gateway) { sel.hidden = true; return }   // 没接网关就不显示切换器
     cur = m.modelID || ""
-    try { const s = await (await fetch("/pub/gateway/siblings?model=" + encodeURIComponent(cur))).json(); prov = s.provider || ""; models = s.models || [] } catch (e) { prov = ""; models = cur ? [cur] : [] }
+    // 相对路径：多用户部署下解析成 /<用户名>/pub/... 由 manager 在登录门禁之后应答（原先写死绝对路径 /pub/...，
+    // 那是个未鉴权接口、且 Cookie 也发不过去）；单机部署没有该接口 → 404，下面 catch 里降级只显示当前模型。
+    try { const s = await (await fetch("pub/gateway/siblings?model=" + encodeURIComponent(cur))).json(); prov = s.provider || ""; models = s.models || [] } catch (e) { prov = ""; models = cur ? [cur] : [] }
     render()
   }
   function render() {
@@ -568,7 +572,7 @@ document.getElementById("pwSave").addEventListener("click", async () => {
   try {
     const r = await fetch("api/password", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ current: cur, new: nw }) })
     const j = await r.json()
-    if (j.ok) { pwSetMsg("ok", "已修改，正在跳转重新登录…"); setTimeout(() => { location.href = "/" }, 1300) }
+    if (j.ok) { pwSetMsg("ok", "已修改，正在跳转重新登录…"); setTimeout(() => { location.href = "./" }, 1300) }   // 相对：多用户 /alice/ 部署下留在本容器前缀，别跳到域名根
     else pwSetMsg("err", j.err || "修改失败")
   } catch (_) { pwSetMsg("err", "网络异常，请重试") }
   btn.disabled = false; btn.textContent = "保存"
@@ -576,9 +580,25 @@ document.getElementById("pwSave").addEventListener("click", async () => {
 // ---- 轻量 Markdown 渲染（自包含、无外部依赖；先 HTML 转义再解析，链接白名单，防 XSS）----
 function mdEscape(s) { return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;") }
 function mdLink(url, txt) { if (!/^(https?:|mailto:|\/|api\/)/i.test(url)) return txt; return '<a href="' + url.replace(/"/g, "%22") + '" target="_blank" rel="noopener">' + txt + "</a>" }
+// markdown 图片要不要真渲染成 <img>：只放行【同源产物】——agent 按约定写的 outputs/<sid>/x.png、uploads/<sid>/x.png
+// （映射到本站 api/raw），或本就指向 api/raw / api/download 的相对路径；其余（任意外链等）返回 null，
+// 调用方降级为原来的「🖼 链接」。绝不给任意 URL 开 <img>：防外链探测/追踪，也把 XSS 面收在同源接口上。
+const MDIMG_EXT = /\.(png|jpe?g|gif|webp|svg|bmp)$/i
+function mdImgSrc(u) {
+  let m = u.match(/^(?:\.\/)?(outputs|uploads)\/([A-Za-z0-9_-]+)\/([^\/?#]+)$/)   // outputs/<sid>/x.png（会话专属目录）
+  if (m && MDIMG_EXT.test(m[3])) return "api/raw?name=" + encodeURIComponent(m[3]) + (m[1] === "uploads" ? "&dir=up" : "") + "&sid=" + encodeURIComponent(m[2])
+  m = u.match(/^(?:\.\/)?(outputs|uploads)\/([^\/?#]+)$/)                          // 无会话段的老路径 → 按当前会话取
+  if (m && MDIMG_EXT.test(m[2])) return "api/raw?name=" + encodeURIComponent(m[2]) + (m[1] === "uploads" ? "&dir=up" : "") + sidQ()
+  // 已是本站接口的相对路径（& 在转义文本里成对出现为 &amp;，作为 HTML 属性值恰好正确）
+  if (/^api\/(raw|download)\?/i.test(u) && /\.(png|jpe?g|gif|webp|svg|bmp)($|[&#])/i.test(u.replace(/&amp;/g, "&"))) return u.replace(/"/g, "%22")
+  return null
+}
 function mdInline(s) {
   const codes = []; s = s.replace(/`([^`]+)`/g, (m, c) => { codes.push(c); return "%%%C" + (codes.length - 1) + "%%%" })
-  s = s.replace(/!\[([^\]]*)\]\(([^)\s]+)[^)]*\)/g, (m, a, u) => mdLink(u, "🖼 " + (a || u)))
+  s = s.replace(/!\[([^\]]*)\]\(([^)\s]+)[^)]*\)/g, (m, a, u) => {
+    const src = mdImgSrc(u)   // 同源产物 → 真渲染 <img>（点击进灯箱）；其余降级为链接
+    return src ? '<img src="' + src + '" alt="' + a.replace(/"/g, "&quot;") + '">' : mdLink(u, "🖼 " + (a || u))
+  })
   s = s.replace(/\[([^\]]+)\]\(([^)\s]+)[^)]*\)/g, (m, t, u) => mdLink(u, t))
   s = s.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>").replace(/__([^_]+)__/g, "<strong>$1</strong>")
   s = s.replace(/(^|[^*\w])\*([^*\n]+)\*/g, "$1<em>$2</em>").replace(/(^|[^_\w])_([^_\n]+)_/g, "$1<em>$2</em>")
@@ -645,7 +665,8 @@ function add(cls, text) {
 }
 // 编辑历史消息：改文本 → 从这条起清空后续对话记录（文件不动）→ 以编辑后的内容重新生成
 function startEdit(userDiv) {
-  if (activeES) return                     // 有流进行中，先不允许编辑
+  if (activeES || sending) return          // 有流在跑、或起轮 POST 还在往返途中（此时 activeES 仍为 null）都不许编辑
+  if (userDiv.dataset.ghost) return        // 幽灵气泡（消息没真发出去）不可编辑：后端无此消息，回退会错位
   if (userDiv.querySelector(".editbox")) return
   const cur = userDiv.dataset.text || ""
   userDiv.classList.add("editing")
@@ -670,8 +691,13 @@ async function submitEdit(userDiv, newText) {
   if (!newText) return
   // 有流在跑就别编辑：此时暂存了回退却无法立刻重发提交（sendMessage 会被 activeES 拦下），
   // 会把会话钉在“半回退”态、污染后续编辑。等本轮结束再编辑。
-  if (activeES) { alert("正在生成中，请等本轮结束后再编辑"); return }
-  const idx = [...log.querySelectorAll(".msg.user")].indexOf(userDiv)   // 第几个用户消息（与后端一致）
+  // 必须连 sending 一起挡：起轮 POST 往返期间 activeES 还是 null，此时若点"保存并重新生成"，
+  // /api/revert 会照常执行（服务端那会儿还没 job，409 守卫也不触发）→ DOM 被清空，
+  // 而随后的 sendMessage 又因 sending 提前返回 → 编辑内容静默丢失、会话卡在半回退态。
+  if (activeES || sending) { alert("正在生成中，请等本轮结束后再编辑"); return }
+  // uindex 必须只数【后端真的收下的】用户消息。额度用尽/“上一轮进行中”产生的幽灵气泡（data-ghost）
+  // 后端根本没记，若把它算进序号，revert 会按错位的序号砍掉下一条真实消息 → 真实对话被错误覆盖。
+  const idx = [...log.querySelectorAll(".msg.user:not([data-ghost])")].indexOf(userDiv)   // 第几个真实用户消息（与后端一致）
   if (idx < 0) return
   if (sessionId) {                         // 后端回退：丢弃这条及其后的所有消息（提交发生在紧接着的重发）
     let ok = false
@@ -738,6 +764,11 @@ function addProducts(list) {
 const lb = document.createElement("div"); lb.className = "lightbox"; lb.innerHTML = '<img alt="">'; document.body.appendChild(lb)
 lb.addEventListener("click", () => lb.classList.remove("on"))
 function openLightbox(src) { lb.querySelector("img").src = src; lb.classList.add("on") }
+// 正文/预览里由 markdown 渲染出的 <img>（innerHTML 字符串挂不了监听）→ 事件委托进灯箱放大
+document.addEventListener("click", (e) => {
+  const t = e.target
+  if (t && t.tagName === "IMG" && (t.closest(".answer.md") || t.closest(".pv-body"))) openLightbox(t.src)
+})
 
 // ---- CSV/TSV 解析渲染（带引号转义处理；预览截断到 300 行）----
 function parseCsv(text, delim) {
@@ -871,6 +902,8 @@ function renderWelcome() {
 }
 
 let sessionId = null   // reused across messages so the agent keeps context
+let sseFailStreak = 0   // 连续 SSE 重连失败次数；收到任何事件即清零，累计过多则停手提示刷新（防非 401 的持续失败无限重连）
+let sending = false     // POST /api/chat/start 往返期间为 true：此时还没有 activeES，靠它挡住连点重复发送
 function sidQ() { return sessionId ? "&sid=" + encodeURIComponent(sessionId) : "" }   // 上传/下载/预览都带上会话 id，隔离各会话目录
 document.getElementById("new").addEventListener("click", () => {
   detachStream()   // 只退订不终止：原会话若在生成会继续跑，从左侧列表随时切回来看
@@ -922,16 +955,52 @@ function renderAsk(answerEl, turnEl) {
 }
 
 const STI = { pending: "○", running: "○", completed: "✓", error: "✕" }
-function sendMessage(text) {
+// 发消息＝两步：POST /api/chat/start 起轮（正文在 body），再 GET /api/chat/attach 订阅直播。
+// 为什么不再用 GET 直接起轮：① GET 带副作用 + SameSite=Lax → 跨站诱导点击可代发一轮烧额度；
+// ② 长正文塞 URL 会撞 16KB 请求头上限 → 431，且被 SSE 重连逻辑吞成"消息静默消失"。
+async function sendMessage(text) {
   if (!text) return
-  if (activeES) return   // 当前视图已有进行中的流（按钮本就禁用，双保险）
+  if (activeES || sending) return   // 已有流在跑，或上一次 start 还没返回（防连点重复发）
   const w = log.querySelector(".welcome"); if (w) w.remove()
-  add("user", text)
-  openStream("api/chat?q=" + encodeURIComponent(text) + (sessionId ? "&sid=" + encodeURIComponent(sessionId) : ""))
+  const bubble = add("user", text)
+  sending = true; setStreamingUI(true)   // 立刻进入"生成中"态：POST 往返期间也不许再发
+  let r = null, why = "网络异常"
+  try {
+    const resp = await fetch("api/chat/start", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ q: text, sid: sessionId }),
+    })
+    // 登录已过期 → 去登录页。先复位 sending/streaming 再跳：万一跳转被拦或很慢，
+    // 按钮不至于永久禁用（否则用户只能刷新页面才能再发消息）。
+    if (resp.status === 401) { sending = false; setStreamingUI(false); location.href = "./login"; return }
+    if (resp.status === 429) { why = "请求过于频繁，请稍后再试" }          // manager 的冷启动限流
+    try { r = await resp.json() } catch { if (resp.status !== 429) why = "服务端错误（HTTP " + resp.status + "）" }
+  } catch { /* 保持 why=网络异常 */ }
+  sending = false
+  if (!r) { bubble.dataset.ghost = "1"; setStreamingUI(false); addNote("⚠ 发送失败（" + why + "）"); return }
+  if (r.sid) { sessionId = r.sid; localStorage.setItem("nm_sid", sessionId); loadUploads() }
+  if (!r.sent) {
+    // 没真发出去 → 这个气泡是"幽灵"：后端没记这条消息，编辑历史时必须跳过它，否则 revert 会砍错真实消息
+    bubble.dataset.ghost = "1"
+    if (r.running) { addNote("⚠ " + (r.notice || "上一轮仍在进行中，本条未发送")); attachStream(sessionId) }   // 那一轮还在跑 → 接上去看
+    else { setStreamingUI(false); addNote("⚠ " + (r.err || "发送失败")) }
+    loadSessions(); return
+  }
+  attachStream(sessionId)   // 起轮成功 → 订阅直播（attachJob 会先重放快照，POST 与 attach 之间产生的输出不会丢）
+  loadSessions()
 }
 function attachStream(sid) { openStream("api/chat/attach?sid=" + encodeURIComponent(sid)) }   // 续流：先重放快照再直播
+// 往对话流里追加一条纯提示（不属于任何一轮生成，如"额度已用尽""上一轮仍在进行"）
+function addNote(msg) {
+  const d = document.createElement("div"); d.className = "msg bot"
+  const n = document.createElement("div"); n.className = "note"; n.textContent = msg
+  d.appendChild(n); log.appendChild(d); log.scrollTop = log.scrollHeight
+  return d
+}
 
-// 打开一条 SSE 流并渲染成一个助手回合。流只是"订阅"：断开不打断后台生成，断线后自动用 attach 续流
+// 打开一条 SSE 流并渲染成一个助手回合。流只是"订阅"：断开不打断后台生成，断线后自动用 attach 续流。
+// 注：气泡是否"幽灵"已由 POST /api/chat/start 的返回直接决定（见 sendMessage），
+// 不再靠 SSE 事件反推——那种推断在 attach 续流时会误判，现在的判据来自服务端权威答复。
 function openStream(url) {
   setStreamingUI(true)
 
@@ -974,8 +1043,9 @@ function openStream(url) {
     if (note) { if (!gotText && !painted) answer.textContent = ""; const n = document.createElement("div"); n.className = "note"; n.textContent = note; answer.appendChild(n) }
     else if (!gotText) answer.textContent = "(无文本输出)"
     loadSessions()   // 刷新会话列表（新会话入列 / 更新时间与高亮）
+    refreshQuota()   // 本轮成本已入账 → 刷新顶栏额度
   }
-  es.addEventListener("session", (ev) => { sessionId = JSON.parse(ev.data).id; localStorage.setItem("nm_sid", sessionId); loadUploads() })
+  es.addEventListener("session", (ev) => { sseFailStreak = 0; sessionId = JSON.parse(ev.data).id; localStorage.setItem("nm_sid", sessionId); loadUploads() })   // 连上了 → 清零重连计数
 
   es.addEventListener("tool", (ev) => {
     const d = JSON.parse(ev.data)
@@ -1012,18 +1082,24 @@ function openStream(url) {
   es.addEventListener("done", () => { paintAnswer(); finalize(); refreshStorage() })   // 本轮产物落盘后刷新存储用量
   es.addEventListener("failed", (ev) => { let m = "本轮出错"; try { m = JSON.parse(ev.data).message } catch {} finalize("⚠ " + m) })   // 服务端出错：如实提示，不丢会话
   es.addEventListener("aborted", () => finalize("⏹ 已终止"))   // 后端确认已终止（本页或别的页点了"终止"）
-  es.addEventListener("notice", (ev) => { try { const n = document.createElement("div"); n.className = "note"; n.textContent = "⚠ " + JSON.parse(ev.data).message; answer.appendChild(n) } catch {} })
+  es.addEventListener("notice", (ev) => { try { const n = document.createElement("div"); n.className = "note"; n.textContent = "⚠ " + JSON.parse(ev.data).message; answer.appendChild(n) } catch {} })   // 流内提示（气泡的幽灵标记已由 start 接口决定，不在这里推断）
   es.addEventListener("idle", () => {   // attach 时后台已无进行中的一轮 → 改走历史回显（把刚完成的最终答案也带出来）
     finished = true; es.close(); if (activeES === es) { activeES = null; setStreamingUI(false) }
     turn.remove()
     if (sessionId) resumeSession(sessionId)
   })
-  es.onerror = () => {   // 连接断开（网络抖动/网关重启）：后台生成还在跑，稍后重放快照续流
+  es.onerror = async () => {   // 连接断开（网络抖动/网关重启）：后台生成还在跑，稍后重放快照续流
     if (finished) return
     if (!sessionId) return finalize("(连接中断)")   // 还没拿到会话 id，无从续流
     finished = true
     es.close(); if (activeES === es) activeES = null
     const sid = sessionId
+    // 先探一下鉴权/会话：EventSource 的 error 不带状态码，若是 cookie 过期（5天）会一直 401、
+    // 无脑每 2.5s 重连成死循环、终止按钮也失效。用一次普通 fetch 拿到状态：401 → 跳登录，别再重连。
+    let status = 0
+    try { status = (await fetch("api/job?sid=" + encodeURIComponent(sid))).status } catch {}
+    if (status === 401) { location.href = "./login"; return }
+    if (++sseFailStreak >= 6) { turn.querySelector(".answer").innerHTML = ""; const n = document.createElement("div"); n.className = "note"; n.textContent = "⚠ 连接反复失败，请刷新页面重试"; turn.querySelector(".answer").appendChild(n); genEl.remove(); setStreamingUI(false); return }
     turn.remove()   // 丢弃本回合 DOM，续流会重放快照完整重建
     setTimeout(() => { if (sid === sessionId && !activeES) attachStream(sid) }, 2500)
   }
@@ -1084,6 +1160,19 @@ async function refreshStorage() {
     bar.style.color = pct >= 90 ? "#dc4b37" : ""
   } catch { bar.style.display = "none" }
 }
+// ---- 今日额度：顶栏常驻「已用/上限」，撞限前心里有数（清单 P2-2）。limit=0 不限额则不显示；≥90% 变红 ----
+async function refreshQuota() {
+  const el = document.getElementById("quotabar")
+  try {
+    const s = await fetch("api/quota").then(r => r.json())
+    if (!s || !(s.limit > 0)) { el.hidden = true; return }
+    const pct = Math.min(100, Math.round(s.used / s.limit * 100))
+    el.hidden = false
+    el.textContent = `今日额度 $${Number(s.used).toFixed(3)} / $${Number(s.limit).toFixed(2)}（${pct}%）`
+    el.style.color = pct >= 90 ? "#dc4b37" : ""
+  } catch { el.hidden = true }
+}
+setInterval(refreshQuota, 30_000)   // 生成中成本在涨（/api/quota 含在跑轮的实时成本），低频轮询保持大致新鲜
 async function uploadFiles(files) {
   const arr = Array.from(files || []).filter(Boolean)
   if (!arr.length) return
@@ -1112,7 +1201,7 @@ dz.addEventListener("drop", (e) => uploadFiles(e.dataTransfer.files))
 const savedSid = localStorage.getItem("nm_sid")
 if (savedSid) resumeSession(savedSid)
 else renderWelcome()
-refreshStorage()
+refreshStorage(); refreshQuota()
 
 /* ---- 闲置倒计时：闲置 7 分钟弹 3 分钟倒计时，满 10 分钟自动退出、需重新登录 ---- */
 ;(function () {
@@ -1145,7 +1234,7 @@ refreshStorage()
   var txt = ov.querySelector("#idleTxt")
   ov.querySelector("#idleStay").addEventListener("click", bump)
   function fmt(ms) { var s = Math.max(0, Math.ceil(ms / 1000)); return Math.floor(s / 60) + ":" + ("0" + (s % 60)).slice(-2) }
-  async function logout() { if (out) return; out = true; try { await fetch("api/logout", { method: "POST" }) } catch (e) {} location.href = "/" }
+  async function logout() { if (out) return; out = true; try { await fetch("api/logout", { method: "POST" }) } catch (e) {} location.href = "./" }   // 相对：多用户 /alice/ 部署下别跳出本容器前缀
   // 顶栏「退出登录」按钮：复用同一套登出逻辑（清 lan_auth cookie → 跳回登录页）
   var _lb = document.getElementById("logoutBtn"); if (_lb) _lb.addEventListener("click", function () { if (confirm("确定退出登录？")) logout() })
   setInterval(function () {

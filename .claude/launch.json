@@ -6,6 +6,12 @@
       "runtimeExecutable": "node",
       "runtimeArgs": ["web/server.mjs"],
       "port": 3000
+    },
+    {
+      "name": "web-smoke",
+      "runtimeExecutable": "node",
+      "runtimeArgs": ["web/dev-test.mjs"],
+      "port": 3299
     }
   ]
 }

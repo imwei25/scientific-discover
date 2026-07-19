@@ -8,7 +8,10 @@ set -euo pipefail
 cd "$(dirname "$0")/.."   # -> deploy/
 
 OUT=docker-compose.yml
-# 每容器内存上限。整机 3.4G + 2G swap、WARM_CAP=2：2×1400=2.8G 稳在 RAM 内，重任务冲高会溢出到 swap(变慢不崩)。
+# 每容器内存上限。整机 3.4G + 2G zram + 2G 磁盘 swap、WARM_CAP=5（见 sci-manager.service）：
+# 1400m 是"单容器不许超"的硬顶而非预算分配——空闲容器实测仅 ~300M，5 路名义上限 7G 靠
+# 实际用量小 + zram 压冷页扛住；重任务冲高先压进 zram(内存级速度)，再溢出磁盘 swap(变慢不崩)。
+# zram 由 bootstrap-host.sh 配置；容器内 Node/Bun 堆上限见下方 environment 注入。
 # 想更宽/更紧：MEM_LIMIT=1600m scripts/render-compose.sh（或改此默认），随后重建容器生效。
 MEM_LIMIT="${MEM_LIMIT:-1400m}"
 CPUS="${CPUS:-1.5}"
@@ -27,6 +30,11 @@ tier_field() { [ -f tiers.env ] || return 0; awk -v t="$1" -v c="$2" '!/^[[:spac
   for f in users/*.env; do
     name=$(field NAME "$f"); port=$(field PORT "$f")
     luser=$(field LAN_USER "$f"); lpass=$(field LAN_PASSWORD "$f")
+    # LAN_USER/LAN_PASSWORD 是自由文本（用户可手改 users/*.env）。它们写进 compose 的双引号 YAML，
+    # 且 docker compose 会对整个文件做变量插值：未转义的 " 破坏 YAML、$ 被当插值吃掉 → 实际密码与登记不符。
+    # 转义顺序：\ → \\（YAML 双引号转义）、" → \"、$ → $$（compose 里 $$ 表示字面 $）。纯 bash 替换，不依赖 sed。
+    yaml_esc() { local s=$1; s=${s//\\/\\\\}; s=${s//\"/\\\"}; s=${s//\$/\$\$}; printf '%s' "$s"; }
+    luser=$(yaml_esc "$luser"); lpass=$(yaml_esc "$lpass")
     lauth=$(field LAN_AUTH "$f"); lauth=${lauth:-1}
     # 额度按档位解析：用户 .env 里若有非空 DAILY_COST_LIMIT/STORAGE_LIMIT_MB 则以其为准（个别覆盖），
     # 否则按 TIER 从 tiers.env 取；都没有则回落到 0（不限）。
@@ -52,6 +60,12 @@ tier_field() { [ -f tiers.env ] || return 0; awk -v t="$1" -v c="$2" '!/^[[:spac
       OC_COST_INPUT: \${OC_COST_INPUT:-0.27}
       OC_COST_OUTPUT: \${OC_COST_OUTPUT:-1.10}
       OC_COST_CACHE_READ: \${OC_COST_CACHE_READ:-0.07}
+      # 堆上限（防单进程膨胀吃满 mem_limit 被 OOM kill -9，长会话宁可多 GC 也别猝死）：
+      #   NODE_OPTIONS 管容器里所有 Node 进程（网关 server.mjs 实测常驻仅 ~60M，512M 硬顶很宽裕）；
+      #   opencode 是 Bun 编译的原生二进制（JavaScriptCore 引擎，不认 NODE_OPTIONS），
+      #   用 BUN_JSC_forceRAMSize（字节，768MiB）让 JSC 按小内存假设提前 GC——软启发式，超了只是更勤快地收，不 abort。
+      NODE_OPTIONS: "--max-old-space-size=512"
+      BUN_JSC_forceRAMSize: "805306368"
       # 文献检索源的联系邮箱 + API key（都从 deploy/.env 插值，空=免费匿名档，填了=更高限额/更稳）。
       # 换服务器只需搬 deploy/.env 这一个文件，所有用户容器自动继承，无需逐个配置。
       SCI_CONTACT_EMAIL: \${SCI_CONTACT_EMAIL:-}

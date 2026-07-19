@@ -108,7 +108,18 @@ const parseCookies = (req) => Object.fromEntries((req.headers.cookie || "").spli
 
 // ---- 审计日志：登录成败 / 管理操作各写一行到 /var/log/sci-audit.log ----
 const AUDIT_LOG = process.env.AUDIT_LOG || "/var/log/sci-audit.log"
-const clientIp = (req) => ((req.headers["x-forwarded-for"] || "").split(",")[0].trim()) || req.socket.remoteAddress || "-"
+// 取真实客户端 IP。X-Forwarded-For 是【客户端可伪造】的：旧写法取第一段，攻击者只要每次换个
+// X-Forwarded-For 就能拿到全新的限流桶，冷启动限流与 fail2ban 统计一起形同虚设。
+// Caddy 的行为是把它看到的对端【追加】到 XFF 末尾，所以：
+//   ① 只有当对端是本机回环（= 确实是本机 Caddy 转进来的）才采信这个头；
+//   ② 采信时取【最后一段】（Caddy 追加的那个），伪造的前缀段一律忽略。
+const isLoopbackAddr = (a) => !a || a === "::1" || a === "::ffff:127.0.0.1" || a.startsWith("127.")
+const clientIp = (req) => {
+  const peer = req.socket.remoteAddress || "-"
+  if (!isLoopbackAddr(peer)) return peer   // 直连（非本机代理）→ 头不可信，直接用对端地址
+  const xff = String(req.headers["x-forwarded-for"] || "").split(",").map((s) => s.trim()).filter(Boolean)
+  return xff.length ? xff[xff.length - 1] : peer
+}
 function audit(event, fields) {
   const kv = Object.entries(fields || {}).map(([k, v]) => `${k}=${String(v).replace(/[\r\n|]/g, " ")}`).join(" ")
   try { fs.appendFileSync(AUDIT_LOG, `${new Date().toISOString()} | ${event} | ${kv}\n`) } catch { /* 记不上不影响主流程 */ }
@@ -153,7 +164,10 @@ function loadUsers() {
     const prev = users.get(name)
     next.set(name, prev
       ? Object.assign(prev, { port: Number(e.PORT), suspended })
-      : { name, port: Number(e.PORT), base: `/${name}`, container: `agent-${name}`, lastActive: 0, conns: 0, starting: null, suspended })
+      // lastActive 初值取「此刻」而非 0：取 0 意味着新加载的用户一上来就是「空闲了 56 年」，
+      // 若其容器当时正在跑（如运维手动 docker start、或 manager 重启而容器还活着），
+      // 下一轮 60s 巡检立刻判定超时把它停掉 —— 正在跑的活会被连锅端。
+      : { name, port: Number(e.PORT), base: `/${name}`, container: `agent-${name}`, lastActive: Date.now(), conns: 0, starting: null, suspended })
   }
   users = next
   log(`[users] 已加载 ${users.size} 个用户：${[...users.values()].map((u) => `${u.name}→:${u.port}`).join(", ") || "(空)"}`)
@@ -171,6 +185,24 @@ async function isRunning(container) {
 }
 const dockerStart = (c) => dockerExec(["start", c])
 const dockerStop  = (c) => dockerExec(["stop", c])
+
+// ---- 忙碌探测：容器里还有没有在跑的生成任务？----
+// 为什么必须问：容器网关的设计是「关页面 = 只退订，生成继续跑」，用户点了「写论文」再关掉页面，
+// 活是还在跑的。但 manager 只看得见 HTTP 连接，页面一关 SSE 就断、conns 归 0，光凭空闲时长会把
+// 正跑着十几分钟流水线的容器停掉 —— 用户回来发现活没了。停机/腾位前都得先问这一句。
+// 为什么走 docker exec 而不是直接 HTTP：容器网关对 127.0.0.1 的请求免鉴权，从容器【内部】打正好
+// 命中该豁免，无需给 manager 发登录票据、也不必把 /api/busy 变成公开接口（容器彼此在同一 docker
+// 网络里互通，而容器里跑的正是能执行任意代码的 agent，公开它等于让用户能互相探活动状态）。
+// 判不准时返回 true（宁可多留一会儿，也不误杀正在跑的活）——除非容器压根没跑。
+async function isBusy(u) {
+  const r = await dockerExec(["exec", u.container, "curl", "-sf", "--max-time", "5",
+    "http://127.0.0.1:3000/api/busy"])
+  if (r.code !== 0) {
+    // 容器没跑/curl 不在/网关没起 → 无所谓忙不忙，交由调用方按「不忙」处理（它自己会先判 isRunning）
+    return false
+  }
+  try { return !!JSON.parse(r.stdout).busy } catch { log(`[busy] ${u.container} 探针回包异常：${r.stdout.slice(0, 80)}`); return true }
+}
 
 // ---- 就绪探测：容器网关起来后能应答 HTTP 即视为就绪 ----
 const probeReady = (port) => new Promise((resolve) => {
@@ -196,12 +228,19 @@ async function makeRoom(exceptName) {
       if (await isRunning(u.container)) running.push(u)
     }
     if (running.length + 1 <= WARM_CAP) return                       // 有空位 → 放行
+    // 候选：无在途连接的容器，按空闲时长从久到近。但「没连接」不等于「没活干」——用户关了页面
+    // 而生成还在跑的容器也长这样，驱逐它 = 杀掉别人跑到一半的论文。逐个探针确认真的闲着才动手。
     const idle = running.filter((u) => u.conns === 0).sort((a, b) => a.lastActive - b.lastActive)
-    if (idle.length) {                                               // 有空闲容器 → 停最久空闲的腾位
-      log(`[cap] 达到 WARM_CAP=${WARM_CAP}，停掉最久空闲的 ${idle[0].container}`)
-      await dockerStop(idle[0].container)
-      continue
+    let evicted = false
+    for (const cand of idle) {
+      if (await isBusy(cand)) { cand.lastActive = Date.now(); continue }   // 有活在跑 → 换下一个候选
+      log(`[cap] 达到 WARM_CAP=${WARM_CAP}，停掉最久空闲的 ${cand.container}`)
+      await dockerStop(cand.container)
+      evicted = true
+      break
     }
+    if (evicted) continue
+    // 走到这儿 = 在跑的容器全都有活（连接着的，或关了页面但仍在生成的）→ 宁可排队，也不打断任何人
     if (Date.now() >= deadline) throw new Error(`并发已满（${WARM_CAP} 路全忙），排队超时，请稍后重试`)
     if (!waited) { log(`[cap] ${WARM_CAP} 路全忙且无空闲，${exceptName} 排队等待空闲槽位…`); waited = true }
     await sleep(CAP_POLL_MS)                                         // 全忙 → 等待，不超配
@@ -209,13 +248,46 @@ async function makeRoom(exceptName) {
 }
 
 // ---- 确保某用户容器在跑且就绪（single-flight）----
-function ensureUp(u) {
+// ---- 冷启动限流（按来源 IP 的滑动窗口）----
+// 冷启动要 10–40s，还会按 LRU 踢掉别的在线容器：这是全站最贵的操作，不限流就是个放大器。
+// 它是 D2 的真正兜底——下面那道 cookie 门禁只看 cookie「在不在」（manager 无法验签），
+// 伪造一个 cookie 就能过；能真正挡住反复冷启动的是这里。
+// 两级桶，缺一不可：
+//   · 每 (IP,用户) WAKE_MAX 次——挡住盯着一个用户反复冷启动；
+//   · 每 IP 合计 WAKE_MAX_IP 次——挡住轮着打 /alice /bob /carol… 绕开上一级。
+// 为什么不只按 IP 记：一个诊所/医院几十号人共用一个出口 IP，而 WARM_CAP=5 意味着
+// 超过 5 人时"回来就要重新冷启动"本就是常态，单一 IP 桶会把正常用户误伤成 429。
+const WAKE_MAX = Number(process.env.WAKE_MAX || 10)                     // 每 (IP,用户)/窗口
+const WAKE_MAX_IP = Number(process.env.WAKE_MAX_IP || 30)               // 每 IP 合计/窗口
+const WAKE_WINDOW_MS = Number(process.env.WAKE_WINDOW_MS || 5 * 60_000) // 窗口长度（默认 5 分钟）
+const wakeHits = new Map()   // key -> 冷启动时间戳数组
+function wakeAllowed(ip, user) {
+  const now = Date.now()
+  const fresh = (k) => (wakeHits.get(k) || []).filter((t) => now - t < WAKE_WINDOW_MS)
+  const kIp = "ip|" + ip, kPair = "u|" + ip + "|" + user
+  const aIp = fresh(kIp), aPair = fresh(kPair)
+  // 两个额度先都查、都不超才记账——否则某一级被拒时另一级已被计数，等于白扣
+  if (aIp.length >= WAKE_MAX_IP || aPair.length >= WAKE_MAX) {
+    wakeHits.set(kIp, aIp); wakeHits.set(kPair, aPair)   // 写回裁剪后的数组
+    return false
+  }
+  aIp.push(now); aPair.push(now)
+  wakeHits.set(kIp, aIp); wakeHits.set(kPair, aPair)
+  if (wakeHits.size > 5000) {   // 顺手清理过期条目，别让表无限长
+    for (const [k, v] of wakeHits) if (!v.some((t) => now - t < WAKE_WINDOW_MS)) wakeHits.delete(k)
+  }
+  return true
+}
+
+function ensureUp(u, ip = "-") {
   if (u.starting) return u.starting
   u.starting = (async () => {
     const running = await isRunning(u.container)
     if (running === null) throw new Error(`容器 ${u.container} 不存在（先跑 user-add 或 docker compose up --no-start）`)
     if (running && await probeReady(u.port)) return
     if (!running) {
+      // 只对【真正的冷启动】计数：已在跑的容器走代理不受限，正常使用完全无感。
+      if (!wakeAllowed(ip, u.name)) { const e = new Error("冷启动过于频繁"); e.code = "WAKE_LIMIT"; throw e }
       await makeRoom(u.name)
       log(`[wake] 启动 ${u.container} …`)
       const r = await dockerStart(u.container)
@@ -230,6 +302,9 @@ function ensureUp(u) {
 
 // ---- 反向代理（流式，不缓冲）。fwdPath 已剥掉 /用户名 前缀，容器按根路径处理 ----
 function proxy(u, fwdPath, req, res) {
+  // 客户端若在 ensureUp 冷启动等待期间就断开，res 的 close 事件此刻已经发完 —— 这时再
+  // conns++ 并挂 close 监听，减法永远等不来，计数永久 +1，巡检看到「有连接」就永不停机。断了不代理。
+  if (req.destroyed || res.destroyed) return
   u.conns++; u.lastActive = Date.now()
   const done = () => { u.conns = Math.max(0, u.conns - 1); u.lastActive = Date.now() }
   res.on("close", done)
@@ -247,6 +322,10 @@ function proxy(u, fwdPath, req, res) {
     if (!res.headersSent) res.writeHead(502, { "content-type": "text/plain; charset=utf-8" })
     res.end("上游容器暂不可用")
   })
+  // 客户端上传中途断连会让 req/res 发出 'error'；没有监听器 → 未捕获异常打崩【整个 manager】、
+  // 全站在途 SSE 一起断。挂上处理器：出错就掐掉上游连接、静默收尾，绝不外抛。
+  req.on("error", () => { try { up.destroy() } catch {} })
+  res.on("error", () => { try { up.destroy() } catch {} })
   req.pipe(up)
   req.on("aborted", () => up.destroy())
 }
@@ -274,6 +353,7 @@ function serveCaptcha(res) {
 }
 // 转发一个已被读出的请求体（登录场景：manager 先读 body 验验证码，再把原样 body 转给容器核对密码）
 function proxyBuffered(u, fwdPath, req, res, body, onStatus) {
+  if (req.destroyed || res.destroyed) return   // 同 proxy()：等唤醒期间客户端已断 → close 已发过，计数会永久泄漏
   u.conns++; u.lastActive = Date.now()
   res.on("close", () => { u.conns = Math.max(0, u.conns - 1); u.lastActive = Date.now() })
   const headers = { ...req.headers, "content-length": Buffer.byteLength(body) }
@@ -284,11 +364,21 @@ function proxyBuffered(u, fwdPath, req, res, body, onStatus) {
     res.writeHead(upRes.statusCode || 502, upRes.headers); upRes.pipe(res)
   })
   up.on("error", (e) => { log(`[proxy] ${u.name} 上游错误：${e.message}`); if (!res.headersSent) res.writeHead(502, { "content-type": "text/plain; charset=utf-8" }); res.end("上游容器暂不可用") })
+  res.on("error", () => { try { up.destroy() } catch {} })   // 下游断连别把未捕获异常抛崩 manager
   up.end(body)
 }
 // 用户登录：先在 manager 校验图形验证码（错就不唤醒容器、直接回），过了再唤醒容器转发核对密码
 async function handleUserLogin(u, fwdPath, req, res) {
-  const chunks = []; for await (const c of req) chunks.push(c)
+  // 登录是【未认证】路径：body 必须限量，否则并发若干个 100MB 假登录 POST（Caddy 放行 100MB）可把 manager 内存打满。
+  // 登录 JSON 就几十字节，64KB 绰绰有余；超限直接 413、不读完、不唤醒容器。
+  const chunks = []; let total = 0
+  for await (const c of req) {
+    total += c.length
+    // 超限：先把 413 写完（别先 req.destroy——那会拆掉 res 共用的 socket，413 可能发不出去还触发 res error）。
+    // Connection: close 让本连接结束、不复用（未读完的 body 不会污染 keep-alive 上的下一个请求）；从 for-await return 即停止读取。
+    if (total > 65536) { res.writeHead(413, { "content-type": "application/json; charset=utf-8", "connection": "close" }); return res.end(JSON.stringify({ ok: false, err: "请求体过大" })) }
+    chunks.push(c)
+  }
   const body = Buffer.concat(chunks)
   let captcha = ""; try { captcha = JSON.parse(body.toString() || "{}").captcha || "" } catch {}
   if (!verifyCaptcha(parseCookies(req).cap_id, captcha)) {
@@ -296,7 +386,7 @@ async function handleUserLogin(u, fwdPath, req, res) {
     res.writeHead(401, { "content-type": "application/json; charset=utf-8" })
     return res.end(JSON.stringify({ ok: false, err: "验证码错误", captcha: true }))
   }
-  await ensureUp(u)
+  await ensureUp(u, clientIp(req))   // 登录也走冷启动限流（本路径已先过图形验证码，正常用户不会撞到）
   proxyBuffered(u, fwdPath, req, res, body, (status) => audit(status === 200 ? "login.ok" : "login.fail", { user: u.name, ip: clientIp(req), reason: status === 200 ? "" : "password" }))
 }
 
@@ -691,7 +781,10 @@ const server = http.createServer(async (req, res) => {
   const pathname = req.url.split(/[?#]/)[0] || "/"
   if (pathname === "/admin" || pathname.startsWith("/admin/")) return handleAdmin(req, res, pathname)   // 管理台：不当用户名路由
   if (pathname === "/captcha") return serveCaptcha(res)                                                 // 图形验证码：manager 直接发
-  if (pathname === "/pub/gateway/siblings") return handleSiblings(req, res)                              // 用户切模型：同供应商可选模型（只回名字，无 key）
+  // 注：同供应商可选模型的接口已挪到 /<用户名>/pub/gateway/siblings（见下方用户路由），
+  // 这样它天然落在"登录门禁"之后。原来的顶层 /pub/... 是【未鉴权】的，公网谁都能拿到
+  // 网关供应商名与全部模型名；而且 lan_auth 的 Cookie Path 是 /<用户名>/，压根不会发到 /pub/ 上，
+  // 想在原路径上加鉴权也拿不到凭据 —— 所以是挪路径而不是加判断。
   const seg = (/^\/([^/?#]+)/.exec(req.url) || [])[1] || ""
   if (!seg) { res.writeHead(200, { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" }); return res.end(LOGIN_HTML) }
   const u = users.get(seg)
@@ -702,9 +795,32 @@ const server = http.createServer(async (req, res) => {
   const fwdPath = req.url.slice(seg.length + 1) || "/"   // 剥掉 "/用户名"，容器收到根路径
   try {
     if (req.method === "POST" && fwdPath === "/api/login") return await handleUserLogin(u, fwdPath, req, res)   // 登录先过验证码
-    await ensureUp(u)
+    // ---- 门禁：没登录过就别唤醒容器 ----
+    // 原先任何公网访客 GET /alice/任意路径 都会先 ensureUp（docker start，10–40s，还可能 LRU 踢掉在线用户），
+    // 容器【之后】才自己校验 401 —— 无需登录、无需验证码就能反复冷启动、驱逐用户、烧 CPU。
+    // 这里只看 lan_auth cookie【是否存在】：manager 没法验签（签名密钥是各容器的密码，用户还能自助改），
+    // 真正的密码校验仍归容器。挡掉的是「从没登录过的流量」；伪造 cookie 的对手由 wakeAllowed 冷启动限流兜底。
+    if (!parseCookies(req).lan_auth) {
+      if ((req.headers.accept || "").includes("text/html")) {   // 页面请求 → 去 manager 自己的登录页（不唤醒任何容器）
+        res.writeHead(302, { Location: "/", "cache-control": "no-store" }); return res.end()
+      }
+      res.writeHead(401, { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" })
+      return res.end(JSON.stringify({ ok: false, err: "请先登录" }))
+    }
+    // 同供应商模型列表：manager 自己答（数据在 one-api，不在容器），放在门禁之后 → 已登录才可见，
+    // 且不必为查个模型名去唤醒容器。
+    if (req.method === "GET" && fwdPath.startsWith("/pub/gateway/siblings")) return handleSiblings(req, res)
+    await ensureUp(u, clientIp(req))
     proxy(u, fwdPath, req, res)
   } catch (e) {
+    if (e.code === "WAKE_LIMIT") {
+      audit("wake.throttled", { user: u.name, ip: clientIp(req) })
+      // 按请求类型回不同格式：接口/登录是 fetch 调的，回 text/plain 会让前端 JSON.parse 失败、
+      // 退化成"账号或密码错误"这种误导提示；页面请求才回纯文本。
+      const wantsHtml = (req.headers.accept || "").includes("text/html")
+      res.writeHead(429, { "content-type": wantsHtml ? "text/plain; charset=utf-8" : "application/json; charset=utf-8", "retry-after": "60" })
+      return res.end(wantsHtml ? "唤醒过于频繁，请稍后再试。" : JSON.stringify({ ok: false, err: "唤醒过于频繁，请稍后再试（60 秒后重试）", throttled: true }))
+    }
     log(`[wake] ${u.name} 失败：${e.message}`)
     res.writeHead(503, { "content-type": "text/plain; charset=utf-8", "retry-after": "5" })
     res.end(`服务正在启动，请几秒后重试。\n(${e.message})`)
@@ -718,6 +834,12 @@ setInterval(async () => {
     if (u.conns > 0 || u.starting) continue            // 有开着的连接（含 SSE 长流）或正在启动 → 绝不停
     if (now - u.lastActive < IDLE_MS) continue
     if (await isRunning(u.container)) {
+      // 没连接 ≠ 没活干：用户关了页面但生成仍在跑（容器网关设计如此）。停机前必须问一句。
+      if (await isBusy(u)) {
+        u.lastActive = Date.now()                      // 有活在跑 → 视为活跃，重新计时
+        log(`[idle] ${u.container} 无连接但仍有生成任务在跑，暂不停机`)
+        continue
+      }
       log(`[idle] ${u.container} 空闲 ${Math.round((now - u.lastActive) / 1000)}s，停机`)
       await dockerStop(u.container)
     }

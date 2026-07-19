@@ -1,26 +1,74 @@
 #!/usr/bin/env bash
-# 删除用户：停并删容器 → 重渲染 compose → 热加载 manager。
-# 默认保留数据卷（安全）；加 --purge 才在备份后删除卷。
-# 用法：scripts/user-del.sh <用户名> [--purge]
+# 删除用户：（--purge 时先备份）→ 停并删容器 → 删登记 → 重渲染 compose → 热加载 manager。
+# 默认保留数据卷（安全）；加 --purge 才在备份成功后删除卷；备份失败要强删须再加 --force。
+# 用法：scripts/user-del.sh <用户名> [--purge] [--force]
 set -euo pipefail
 cd "$(dirname "$0")/.."   # -> deploy/
 
-name="${1:-}"; purge="${2:-}"
-[ -n "$name" ] || { echo "用法：user-del.sh <用户名> [--purge]"; exit 1; }
+name="${1:-}"; purge=""; force=0
+for a in "${@:2}"; do
+  case "$a" in
+    --purge) purge="--purge" ;;
+    --force) force=1 ;;
+    *) echo "未知参数：$a"; exit 1 ;;
+  esac
+done
+[ -n "$name" ] || { echo "用法：user-del.sh <用户名> [--purge] [--force]"; exit 1; }
+[ "$force" = 1 ] && [ -z "$purge" ] && { echo "!! --force 只在配合 --purge 时有意义；当前没有 --purge，不会删除任何数据卷。" >&2; exit 1; }
 env="users/${name}.env"
 [ -e "$env" ] || { echo "用户 $name 不存在（$env）"; exit 1; }
 
+# ★ 备份必须在【删除 users/<name>.env 之前】跑。
+#   backup.sh 打的 config.tar.gz 里就包含 users/ 目录（账号+密码+端口+档位），
+#   若先 rm 掉这个文件再备份，备份里就没有它 —— 备份"成功"了却无法完整还原该用户。
+#   同理，备份失败时也必须在【什么都还没删】的状态下中止，否则"数据卷原样保留"的提示是误导：
+#   卷是还在，但账号登记已经没了。
+if [ "$purge" = "--purge" ]; then
+  echo "先备份（含 users/${name}.env 与三个数据卷）…"
+  if ! scripts/backup.sh "$name"; then
+    if [ "$force" = 1 ]; then
+      echo "!! 备份失败，但指定了 --force → 仍继续删除" >&2
+    else
+      echo "!! 备份失败，已中止：用户与数据卷【均原样保留】，什么都没删。" >&2
+      echo "   确认无需保留数据、坚持删除请加 --force：scripts/user-del.sh $name --purge --force" >&2
+      exit 1
+    fi
+  fi
+fi
+
 docker rm -f "agent-${name}" 2>/dev/null || true
+# 无论走不走 --purge，users/<name>.env 都会被删掉，而它含 LAN_PASSWORD/PORT/TIER——
+# 默认路径（不带 --purge）此前【完全没有备份】就永久删掉它：卷虽然按名字还能重挂，
+# 但密码/端口/档位全丢了，而提示语"已保留数据卷"读起来却像是可回滚的安全操作。
+# 故先留一份带日期的副本（--purge 路径上面已整体备份过，这里再留一份也无妨、便宜）。
+keep_dir="${BACKUP_DIR:-/var/backups/sci}/deleted-users"
+if mkdir -p "$keep_dir" 2>/dev/null; then
+  chmod 700 "$keep_dir" 2>/dev/null || true          # 含明文密码，仅 root 可读
+  cp -a "$env" "$keep_dir/${name}-$(date +%F_%H%M%S).env" 2>/dev/null \
+    && echo "已留存账号登记副本：$keep_dir/${name}-*.env（含密码，仅 root 可读）"
+fi
 rm -f "$env"
 scripts/render-compose.sh
 
 if [ "$purge" = "--purge" ]; then
-  echo "备份后删除数据卷 …"
-  scripts/backup.sh "$name" || echo "!! 备份失败，继续删除（如需保数据请 Ctrl-C）"
-  for v in uploads outputs ocdata; do docker volume rm "${name}-${v}" 2>/dev/null || true; done
-  echo "已删除卷 ${name}-{uploads,outputs,ocdata}"
+  echo "删除数据卷 …"
+  # 逐个删卷并收集失败：原先 `|| true` 把失败吞掉后照打"已删除"，
+  # 运维会以为患者相关产物已清干净，实际卷还在（例如容器没删干净导致 volume in-use）。
+  failed=()
+  for v in uploads outputs ocdata; do
+    vol="${name}-${v}"
+    docker volume inspect "$vol" >/dev/null 2>&1 || continue   # 本就不存在，不算失败
+    if docker volume rm "$vol" >/dev/null 2>&1; then echo "  已删除卷 $vol"; else failed+=("$vol"); fi
+  done
+  if [ ${#failed[@]} -gt 0 ]; then
+    echo "!! 以下卷删除失败（可能仍被容器占用），数据【未】清除：${failed[*]}" >&2
+    echo "   排查：docker ps -a --filter volume=${failed[0]}" >&2
+    exit 1
+  fi
 else
   echo "已保留数据卷 ${name}-{uploads,outputs,ocdata}（彻底删除请加 --purge）"
+  echo "注意：账号登记 users/${name}.env 已删除（副本见上面的 deleted-users 目录）；要恢复该用户，"
+  echo "      用 user-add.sh 重建同名用户后卷会自动挂回，但密码/端口会变——需要原值请从副本里取。"
 fi
 
 systemctl reload sci-manager 2>/dev/null || pkill -HUP -f 'manager.mjs' 2>/dev/null || true

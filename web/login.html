@@ -172,7 +172,12 @@
       });
       if (r.ok) {
         go.textContent = 'Welcome ✓';
-        const next = new URLSearchParams(location.search).get('next') || './';   // 相对：/alice/login → ./  → /alice/
+        // next 只允许【同源】目标，否则回落 './'：防开放重定向——
+        // ?next=https://evil.com 或 //evil.com 会把刚在真站登录的用户带去外域仿冒页。
+        let next = new URLSearchParams(location.search).get('next') || './';
+        try { if (new URL(next, location.href).origin !== location.origin) next = './'; }
+        catch { next = './'; }
+        if (/^[a-z][a-z0-9+.-]*:/i.test(next)) next = './';   // 再挡 javascript:/data: 等伪协议
         location.href = next;
         return;
       }

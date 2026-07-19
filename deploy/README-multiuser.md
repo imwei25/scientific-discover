@@ -59,9 +59,17 @@ scripts/user-add.sh bob
 | 看谁在跑 | `docker ps --filter name=agent-` |
 | 手动叫停某用户 | `docker stop agent-<name>`（下次访问会自动唤醒） |
 
-加/减用户**不需要动 Caddy 或 DNS** —— 路径路由下这些都是静态的。数据清理沿用 app 内建的 **7 天 TTL**（自动清会话/产物）；`backup.sh` 是卷级快照，二者互补。
+加/减用户**不需要动 Caddy 或 DNS** —— 路径路由下这些都是静态的。`backup.sh` 做卷级快照。
+> ⚠ **注意：并没有"应用内 7 天 TTL 自动清理"这回事**（本文此前几处这么写过，是错的——代码里从来没实现过；
+> `server.mjs` 里唯一的 TTL 是 5 天免登录 cookie，与数据清理无关）。目前**唯一**的存储回收路径是
+> 用户在界面上手动删除会话。也就是说存储只增不减，free 档撞上限只是时间问题。
+> 要不要加自动清理见 `docs/bug审查-第四轮-2026-07-19.md`（待定，静默删用户产物本身也是风险）。
 
-## 调参（`sci-manager.service` 里的 Environment）
+## 调参（编辑 `/etc/sci-manager.env`，改完 `systemctl restart sci-manager`）
+
+> ⚠ 别改 `sci-manager.service` 里的 `Environment=` —— 单元里的 `EnvironmentFile=-/etc/sci-manager.env`
+> 排在其后会覆盖它，改了不生效还不报错。反过来，systemd drop-in（`sci-manager.service.d/*.conf`）
+> 又会盖住 env 文件；用 `systemctl show sci-manager -p Environment` 看最终生效值。
 
 - `WARM_CAP`：同时最多几个容器在跑。**4G 机设 2；换 8核16G 后设 ~6**。
 - `IDLE_MS`：空闲多久停机（默认 10 分钟 = 600000，与前端闲置登出对齐）。有开着的连接（含跑流水线的 SSE 长流）绝不停。
@@ -105,7 +113,11 @@ scripts/user-add.sh bob
 
 除了 CLI（`user-list.sh`/`user-tier.sh`/`user-add.sh`），还有个网页管理台，建在 **manager**（宿主上唯一能看全体用户的组件）里：
 
-- **开启**：在 `sci-manager.service` 里设 `Environment=ADMIN_PASSWORD=<强密码>` → `daemon-reload && restart sci-manager`。**留空则整个 `/admin` 关闭（404）**。
+- **开启**：编辑 **`/etc/sci-manager.env`**（chmod 600）设 `ADMIN_PASSWORD=<强密码>` → `systemctl restart sci-manager`。**留空则整个 `/admin` 关闭（404，这是默认）**。
+  > ⚠ 别再去改 `sci-manager.service` 里的 `Environment=`：单元里的 `EnvironmentFile=-/etc/sci-manager.env` 排在其后，会把它覆盖掉，改了不生效还不报错。
+  > ⚠ **但 systemd drop-in（`/etc/systemd/system/sci-manager.service.d/*.conf`）里的 `Environment=` 反过来会盖住 `/etc/sci-manager.env`**——drop-in 在主单元之后解析。
+  > 若你这台机器历史上用过 drop-in 存管理密码（见 `服务器架构.md`），那就**以 drop-in 为准**，改 env 文件不会有效果。
+  > 用 `systemctl show sci-manager -p Environment` 可以看最终生效值；想统一到 env 文件就把 drop-in 里对应的行删掉。
 - **访问**：`https://<你的域名>/admin`，输入管理员密码。走 Caddy HTTPS，会话 Cookie 带 `HttpOnly/Secure/SameSite=Strict`，仅 `/admin` 路径。
 - **能做**：看全员**档位 / 今日成本-额度 / 存储用量 / 运行状态**；下拉**改某人档位**（自动重建容器生效）；**新增用户**（返回随机密码）/**删除用户**（留数据或彻底删）；**编辑档位额度、增删档位**（改 `tiers.env`，重建该档空闲容器，活跃会话下次冷启动生效）。
 - **安全**：manager 以 root 跑、能操作 docker，故管理台是特权面——务必用强 `ADMIN_PASSWORD`、只经 HTTPS 访问；密码错误有 0.6s 延迟挡暴力。用户名 `admin`/`api`/`login`/`logout` 被保留，不能建同名用户。
@@ -114,7 +126,7 @@ scripts/user-add.sh bob
 
 - 每用户 `users/<name>.env` 里 `STORAGE_LIMIT_MB=`（`0` 或空 = 不限），统计 `uploads + outputs` 之和。改后需**重建**容器（`render-compose.sh && docker rm -f agent-<name> && docker compose up --no-start agent-<name>`），非 `docker restart`。
 - 前端侧栏常驻显示"存储 已用/上限"，**到 90% 变红提示**；超上限**拦截新上传**（对话产物照常）。查用量：`GET /<user>/api/storage`。
-- **删除会话即释放其占用**（`uploads/<sid>/` 与 `outputs/<sid>/` 一并删掉）；另有应用内 7 天 TTL 兜底。
+- **删除会话即释放其占用**（`uploads/<sid>/` 与 `outputs/<sid>/` 一并删掉）。**这是目前唯一的回收方式**——没有任何自动 TTL 兜底（此前文档写的"7 天 TTL"从未实现）。
 
 ## 闲置退出（前端）
 

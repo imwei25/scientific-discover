@@ -18,8 +18,9 @@ import matplotlib.pyplot as plt
 from matplotlib import gridspec
 
 # --- Style ---
-plt.rcParams['font.family'] = 'sans-serif'
-plt.rcParams['font.sans-serif'] = ['Arial']
+# 多族列表 = matplotlib 唯一会逐字形回退的写法；别拆成 font.family='sans-serif' + font.sans-serif=[...]，
+# 那条路径只认第一个能解析的字体、不再往后找 → 中文全豆腐块（实测 28 条缺字）。链里刻意不放 Arial（镜像未装）。
+plt.rcParams['font.family'] = ['Liberation Sans', 'DejaVu Sans', 'WenQuanYi Zen Hei', 'Noto Sans CJK JP']
 plt.rcParams['svg.fonttype'] = 'none'
 plt.rcParams['font.size'] = 24
 plt.rcParams['axes.spines.right'] = False
@@ -84,8 +85,9 @@ import os
 import numpy as np
 import matplotlib.pyplot as plt
 
-plt.rcParams['font.family'] = 'sans-serif'
-plt.rcParams['font.sans-serif'] = ['Arial']
+# 多族列表 = matplotlib 唯一会逐字形回退的写法；别拆成 font.family='sans-serif' + font.sans-serif=[...]，
+# 那条路径只认第一个能解析的字体、不再往后找 → 中文全豆腐块（实测 28 条缺字）。链里刻意不放 Arial（镜像未装）。
+plt.rcParams['font.family'] = ['Liberation Sans', 'DejaVu Sans', 'WenQuanYi Zen Hei', 'Noto Sans CJK JP']
 plt.rcParams['svg.fonttype'] = 'none'
 plt.rcParams['font.size'] = 24
 plt.rcParams['axes.spines.right'] = False
@@ -126,8 +128,9 @@ import os
 import numpy as np
 import matplotlib.pyplot as plt
 
-plt.rcParams['font.family'] = 'sans-serif'
-plt.rcParams['font.sans-serif'] = ['Arial']
+# 多族列表 = matplotlib 唯一会逐字形回退的写法；别拆成 font.family='sans-serif' + font.sans-serif=[...]，
+# 那条路径只认第一个能解析的字体、不再往后找 → 中文全豆腐块（实测 28 条缺字）。链里刻意不放 Arial（镜像未装）。
+plt.rcParams['font.family'] = ['Liberation Sans', 'DejaVu Sans', 'WenQuanYi Zen Hei', 'Noto Sans CJK JP']
 plt.rcParams['svg.fonttype'] = 'none'
 plt.rcParams['font.size'] = 15
 plt.rcParams['axes.spines.right'] = False
@@ -181,8 +184,9 @@ import numpy as np
 import matplotlib as mpl
 import matplotlib.pyplot as plt
 
-plt.rcParams['font.family'] = 'sans-serif'
-plt.rcParams['font.sans-serif'] = ['Arial']
+# 多族列表 = matplotlib 唯一会逐字形回退的写法；别拆成 font.family='sans-serif' + font.sans-serif=[...]，
+# 那条路径只认第一个能解析的字体、不再往后找 → 中文全豆腐块（实测 28 条缺字）。链里刻意不放 Arial（镜像未装）。
+plt.rcParams['font.family'] = ['Liberation Sans', 'DejaVu Sans', 'WenQuanYi Zen Hei', 'Noto Sans CJK JP']
 plt.rcParams['svg.fonttype'] = 'none'
 plt.rcParams['font.size'] = 16
 plt.rcParams['axes.spines.right'] = False

@@ -16,10 +16,28 @@ FROM node:20-bookworm-slim
 #              注意：它只是 fontconfig-config 的 Recommends，--no-install-recommends 下不会被带进来，
 #              必须显式装，否则中文稿报 "DejaVu Sans Mono cannot be found"。
 # 以上包缺任何一个，md→PDF 都会 rc=43 无产物（本清单为实测逐个补齐后的最小可用集）。
+# matplotlib 中文图要的三个字体包（缺了图上中文是豆腐块，与上面 md→PDF 那组是两回事）：
+#   fonts-wqy-zenhei —— 提供 WenQuanYi Zen Hei，作 matplotlib 中文图的【中文】字体。
+#              别以为装了 fonts-noto-cjk 就够：Debian 的该包里 "Noto Sans CJK SC" 这个名字
+#              【解析不出来】，会静默回退 DejaVu Sans → 中文全豆腐（实测 28 条缺字警告）。
+#              装上本包后 "WenQuanYi Zen Hei" 解析成功，中文图缺字警告 0（实测）。
+#   fonts-wqy-microhei —— 同族备用中文字体，一并装以防单一字体缺字。
+#   fonts-liberation —— 提供 Liberation Sans（与 Arial 度量兼容的自由字体，2.1M），作中文图里
+#              【拉丁字符】的字体。链首若写没装的字体（如 Arial）不影响渲染，但会刷
+#              "findfont: Font family 'Arial' not found." 41 行/图 的假错误噪音（实测），
+#              agent 易误读成故障去"修"。装上后噪音归 0。
+# LibreOffice —— 别删：web/server.mjs 的 ensurePreviewCache 靠 soffice 把
+#   pptx/ppt/odp/doc/odt 转成 PDF 才能预览（探测 /usr/bin/soffice 等路径）；
+#   而 ppt-master 技能的唯一交付物就是 .pptx。此前【整个没装】→ 预览一律 501、
+#   warmPreviews 还会把失败静默吞掉，用户只在点开时才发现。
+#   只装 impress+writer（不要 --install-recommends，否则会带进 JRE 等一大坨）。
+# python3-venv —— 创建 /app/.venv 需要它（Debian 把 venv 拆成单独的包）。
 RUN apt-get update && apt-get install -y --no-install-recommends \
-      python3 python3-pip curl git ca-certificates procps lsof \
+      python3 python3-pip python3-venv curl git ca-certificates procps lsof \
+      libreoffice-impress libreoffice-writer \
       pandoc texlive-xetex texlive-fonts-recommended texlive-lang-cjk \
       texlive-lang-chinese lmodern fontconfig fonts-texgyre fonts-dejavu-core fonts-noto-cjk \
+      fonts-wqy-zenhei fonts-wqy-microhei fonts-liberation \
     && fc-cache -f \
     && rm -rf /var/lib/apt/lists/*
 
@@ -29,12 +47,84 @@ RUN npm install -g opencode-ai@1.17.14
 WORKDIR /app
 
 # 科研 Python 环境（装进系统 python，容器本身就是隔离）
+#
+# ★ /app/.venv 必须存在：AGENTS.md 与 19 个 SKILL.md 都写死了「Python 走项目根 .venv」，
+#   web/server.mjs 的 PYEXE 也指向它。此前镜像里根本没有 → agent 按路由去跑 env-setup，
+#   在 1750m 内存上限的容器里现装 pandas/scipy/matplotlib 全家桶（数分钟、可能 OOM），
+#   而且装在容器可写层、下次重建容器又没了 → "上周还能用今天又不行"。
+#   用 --system-site-packages：venv 直接复用上面装好的系统包，不重复占空间，
+#   `python3` 与 `.venv/bin/python` 两条路都能跑。
+# 末尾的 import 自检是【故意】的：依赖装歪就在构建期炸，别留到用户点预览才发现。
+# 注：注释一律写在 RUN 之外——反斜杠续行中间夹注释虽然 Docker 解析器会剥掉，
+#     但那是个容易踩的坑，这里不赌它。
 COPY deploy/requirements.txt /app/requirements.txt
-RUN pip3 install --no-cache-dir --break-system-packages -r /app/requirements.txt
+RUN pip3 install --no-cache-dir --break-system-packages -r /app/requirements.txt \
+    && python3 -m venv --system-site-packages /app/.venv \
+    && /app/.venv/bin/python -c "import pandas, matplotlib, mammoth; print('venv ok')"
 
-# 网关依赖
-COPY web/package.json /app/web/package.json
-RUN cd /app/web && npm install --omit=dev
+# matplotlib 中文兜底：系统级 matplotlibrc + 清字体缓存（必须排在字体安装之后）。
+# 关键机制（踩出来的，见 docs/待修问题清单.md「已排除」表）：逐字形回退【只在 font.family 是多族列表时】
+# 才触发；只写 font.sans-serif 没用——它取到第一个能解析的字体就不再往后找。
+#   路径依据：容器以 root 跑，matplotlib.get_configdir() == /root/.config/matplotlib，
+#   其搜索顺序为 $MATPLOTLIBRC → $CWD/matplotlibrc → <configdir>/matplotlibrc → 安装目录 mpl-data。
+#   放 configdir 既能全局生效（与 agent 的 cwd 无关），又不剥夺 cwd/代码层面覆盖的能力。
+#   刻意【不设 ENV MATPLOTLIBRC】：它优先级最高，设了会盖掉 configdir 这条路，下面的自检也会失败。
+#   清缓存原因：matplotlib 缓存字体列表，装了新字体不清缓存则 WenQuanYi 不可见。
+#   两层防御的机制与代价见 deploy/matplotlibrc 内注释。
+COPY deploy/matplotlibrc /root/.config/matplotlib/matplotlibrc
+# 构建期自检：rc 真被读到 + 链里每个字体都真装了（防噪音回归）+ 两层防御各自都能出中文
+# （缺字与 findfont 噪音都必须为 0）。不过即 build 失败，免得再产出「中文全豆腐」却没人发现的镜像。
+# os.chdir('/tmp') 是为了验证与 cwd 无关（rc 走 configdir）。
+RUN rm -rf /root/.cache/matplotlib \
+    && printf '%s\n' \
+      "import os, logging, warnings, matplotlib" \
+      "matplotlib.use('Agg')" \
+      "os.chdir('/tmp')  # 非 cwd 目录：证明 rc 由 configdir 生效，与 agent 工作目录无关" \
+      "import matplotlib.pyplot as plt" \
+      "from matplotlib.font_manager import findfont, FontProperties" \
+      "RC = '/root/.config/matplotlib/matplotlibrc'" \
+      "CHAIN = ['Liberation Sans', 'DejaVu Sans', 'WenQuanYi Zen Hei']" \
+      "assert matplotlib.matplotlib_fname() == RC, matplotlib.matplotlib_fname()" \
+      "assert plt.rcParams['font.family'] == CHAIN, plt.rcParams['font.family']" \
+      "assert plt.rcParams['font.sans-serif'][0] == 'WenQuanYi Zen Hei', plt.rcParams['font.sans-serif']" \
+      "assert plt.rcParams['axes.unicode_minus'] is False" \
+      "# 链里每个字体都必须真的装了：没装也能渲染（跳到下一个），但会刷 findfont 噪音污染日志。" \
+      "# fallback_to_default=False 时找不到会抛 ValueError，正好当断言用。" \
+      "for name in dict.fromkeys(CHAIN + plt.rcParams['font.sans-serif'][:1]):" \
+      "    p = findfont(FontProperties(family=[name]), fallback_to_default=False)" \
+      "    print('  字体已装 %-18s -> %s' % (name, os.path.basename(p)))" \
+      "class Cap(logging.Handler):" \
+      "    def __init__(self): super().__init__(); self.msgs = []" \
+      "    def emit(self, r): self.msgs.append(r.getMessage())" \
+      "cap = Cap(); lg = logging.getLogger('matplotlib.font_manager')" \
+      "lg.addHandler(cap); lg.setLevel(logging.WARNING)" \
+      "def draw(tag, setup):" \
+      "    plt.rcdefaults(); matplotlib.rc_file(RC); setup(); cap.msgs.clear()" \
+      "    with warnings.catch_warnings(record=True) as w:" \
+      "        warnings.simplefilter('always')" \
+      "        fig, ax = plt.subplots()" \
+      "        ax.plot([-1, 0, 1], [-2.5, 0, 2.5], label='实测值 Latin ABC 123')" \
+      "        ax.set_title('中文标题：患者血糖质控趋势 (Glucose QC)')" \
+      "        ax.set_xlabel('时间（月）'); ax.set_ylabel('浓度 μmol/L'); ax.legend()" \
+      "        fig.savefig('/tmp/_selfcheck.png', dpi=100); plt.close(fig)" \
+      "    miss = [str(x.message) for x in w if 'missing from font' in str(x.message)]" \
+      "    noise = [m for m in cap.msgs if 'not found' in m]" \
+      "    assert not miss, ('缺字', tag, miss[:3])" \
+      "    assert not noise, ('findfont 噪音', tag, sorted(set(noise))[:3])" \
+      "    print('  [%s] 中文图缺字 0、findfont 噪音 0' % tag)" \
+      "draw('第一层 font.family 多族回退', lambda: None)" \
+      "draw('第二层 font.sans-serif 兜底', lambda: plt.rcParams.__setitem__('font.family', 'sans-serif'))" \
+      "print('matplotlib 中文字体自检通过:', matplotlib.matplotlib_fname())" \
+      > /tmp/_check.py \
+    && python3 /tmp/_check.py \
+    && rm -f /tmp/_check.py /tmp/_selfcheck.png
+
+# 网关依赖（用 npm ci + lockfile：package.json 里 SDK 是 ^1.17.14 这种浮动版本，
+# 而 opencode CLI 被钉死在 1.17.14；不锁 lockfile 的话每次重建都可能装到不同的 SDK 小版本，
+# 而网关重度依赖 SDK 的细节行为(event.subscribe 的 signal 透传 / session.revert / session.cost)，
+# 一次静默升级就可能让流式或成本计量失灵。）
+COPY web/package.json web/package-lock.json /app/web/
+RUN cd /app/web && npm ci --omit=dev
 
 # 应用文件
 COPY web/server.mjs web/index.html web/login.html /app/web/

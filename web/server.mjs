@@ -89,13 +89,53 @@ try {
     MODEL = { providerID: CUSTOM_PROVIDER_ID, modelID: MID }
   }
 }
-// ---- 每个会话独占 uploads/<sid>/ 和 outputs/<sid>/（多用户隔离）----
+// ---- 每个会话独占一套工作区目录（多用户 / 多会话隔离）----
+//
+// 关键机制：建会话时就把 opencode 的 session.directory 指到该会话的产物目录，
+// 于是 agent 的所有工具（bash / write / read）都以【会话产物目录】为工作目录，
+// 产物天然落在正确的地方，不再依赖 agent 记得传 --outdir 或环境变量。
+// （已在服务器实测：directory 会改变工具 cwd；projectID 仍是 global，技能与 AGENTS.md 照常加载。）
+//
+// 但 directory 【只能在 session.create 时指定、之后不可改】（PATCH 只允许 title/metadata/...），
+// 而目录名又想跟会话走 —— 鸡生蛋。解法：网关自己先生成一个工作区 id(ws_xxx) 当目录名，
+// 用它建会话；之后要用时直接问 opencode 要 session.directory（它已持久化在 ocdata 卷里），
+// 网关不必再维护一张自己的映射表。
 const safeSid = (s) => (s || "").replace(/[^a-zA-Z0-9_-]/g, "")   // 防目录穿越
-const wsUp = (sid) => path.join(UPLOADS, safeSid(sid))
-const wsOut = (sid) => path.join(OUTPUTS, safeSid(sid))
-const ensureWs = (sid) => { fs.mkdirSync(wsUp(sid), { recursive: true }); fs.mkdirSync(wsOut(sid), { recursive: true }) }
-const relUp = (sid) => `uploads/${safeSid(sid)}`     // 相对仓库根、正斜杠，喂给 agent
-const relOut = (sid) => `outputs/${safeSid(sid)}`
+const newWsId = () => "ws_" + Date.now().toString(36) + crypto.randomBytes(4).toString("hex")
+const dirCache = new Map()   // sid -> 绝对产物目录（进程内缓存，冷启动后按需回填）
+
+// 会话的绝对产物目录。老会话（本次改造之前建的）的 directory 是仓库根，
+// 回落到旧约定 outputs/<sid>，保证既有数据仍能被列出/下载。
+async function sessionOut(sid) {
+  const s = safeSid(sid)
+  if (!s) return OUTPUTS
+  if (dirCache.has(s)) return dirCache.get(s)
+  let dir = path.join(OUTPUTS, s)                       // 回落：老会话
+  try {
+    const info = un(await client.session.get({ path: { id: sid } }))
+    const d = info?.directory
+    if (d && path.resolve(d) !== path.resolve(ROOT)) dir = path.resolve(d)
+  } catch { /* opencode 不可用时用回落值，不阻断文件接口 */ }
+  dirCache.set(s, dir)
+  return dir
+}
+const relFromRoot = (abs) => path.relative(ROOT, abs).replace(/\\/g, "/")   // 仅用于回给前端展示，统一正斜杠
+// uploads 与 outputs 同名配对：outputs/<ws> ←→ uploads/<ws>（老会话则同为 <sid>）
+const sessionUp = async (sid) => path.join(UPLOADS, path.basename(await sessionOut(sid)))
+const ensureWsAt = (outDir, upDir) => { fs.mkdirSync(outDir, { recursive: true }); fs.mkdirSync(upDir, { recursive: true }) }
+async function ensureWs(sid) {
+  const o = await sessionOut(sid), u = await sessionUp(sid)
+  ensureWsAt(o, u); return { out: o, up: u }
+}
+// 新建会话：先定目录名，再用它建 opencode 会话（directory 只有这一次机会能设）
+async function createSession(title) {
+  const ws = newWsId()
+  const outDir = path.join(OUTPUTS, ws), upDir = path.join(UPLOADS, ws)
+  ensureWsAt(outDir, upDir)
+  const s = un(await client.session.create({ body: { title }, query: { directory: outDir } }))
+  dirCache.set(safeSid(s.id), outDir)
+  return s.id
+}
 // 某目录里顶层文件的 name -> mtime 快照（跳过隐藏项和子目录）
 const dirState = (dir) => {
   if (!fs.existsSync(dir)) return {}
@@ -115,6 +155,11 @@ const changedSince = (dir, before) => {
     .sort((a, b) => now[b] - now[a])
 }
 const send = (res, code, type, body) => { res.writeHead(code, { "Content-Type": type }); res.end(body) }
+// 在【请求体还没读完】就提前回包时必须用它：HTTP/1.1 默认 keep-alive，若不声明关闭连接，
+// 未读完的 body 会滞留在这条连接上，把它彻底堵死——同一条连接上的下一个请求永远不返回
+// （实测：同一 keepAlive Agent 上先发超限请求拿到 413，紧接着的请求 >15s 无响应）。
+// 典型场景：上传/发消息的体积超限，我们不想把几 MB 收完才拒绝。
+const sendClose = (res, code, type, body) => { res.writeHead(code, { "Content-Type": type, "Connection": "close" }); res.end(body) }
 
 // ---- 局域网访问的简易单用户登录（demo）----
 // 本机（localhost）访问免登录；从局域网 IP 访问才要求输入密码。登录成功发一个随机 token 到 Cookie。
@@ -136,7 +181,39 @@ const loadQuota = () => { try { const q = JSON.parse(fs.readFileSync(QUOTA_FILE,
 const saveQuota = (q) => { try { fs.mkdirSync(path.dirname(QUOTA_FILE), { recursive: true }); fs.writeFileSync(QUOTA_FILE, JSON.stringify(q)) } catch {} }
 const addCost = (delta) => { if (!(delta > 0)) return; const q = loadQuota(); q.cost += delta; saveQuota(q) }
 const quotaUsed = () => loadQuota().cost
-const quotaOver = () => DAILY_COST_LIMIT > 0 && quotaUsed() >= DAILY_COST_LIMIT
+// 正在跑的各轮实时成本（sid -> 本轮已花）。轮内成本要到收尾才 addCost 进持久额度，
+// 若判断额度时不算上它们，两轮并发会各自以为额度还够、最坏花到上限的约 2 倍；
+// 算上后合计一到顶各轮就中止，超支收敛到「一条消息」的粒度。
+const runningCost = new Map()
+const runningTotal = () => { let t = 0; for (const v of runningCost.values()) t += v; return t }
+const quotaUsedLive = () => quotaUsed() + runningTotal()   // 今日已入账 + 各在跑轮的实时成本
+const quotaOver = () => DAILY_COST_LIMIT > 0 && quotaUsedLive() >= DAILY_COST_LIMIT
+
+// ---- /api/model/test 的 SSRF 护栏 ----
+// 这个接口让【已登录用户】指定任意 URL、由容器去请求，等于一个内网探测原语（容器网络里能打到
+// one-api 网关、宿主服务、兄弟容器）。默认只放行公网地址；确有自建局域网/本机模型网关的部署，
+// 可设 ALLOW_PRIVATE_MODEL_URL=1 放开（那时请自行确保容器网络里没有不该被探测的东西）。
+const ALLOW_PRIVATE_MODEL_URL = process.env.ALLOW_PRIVATE_MODEL_URL === "1"
+const isPrivateHost = (host) => {
+  const h = String(host || "").toLowerCase().replace(/^\[|\]$/g, "")
+  if (h === "localhost" || h.endsWith(".localhost") || h.endsWith(".internal") || h.endsWith(".local")) return true
+  if (h === "0.0.0.0" || h === "metadata.google.internal") return true
+  // 任何以 :: 开头的 IPv6 一律拒：涵盖 ::1(回环)、::(未指定)、::ffff:x(IPv4-mapped，会真连到内嵌的 v4 地址)、
+  // ::<v4>(IPv4-compatible)。注意 new URL 会把 [::ffff:127.0.0.1] 归一成十六进制的 ::ffff:7f00:1，
+  // 只比对点分写法必然漏（实测确认过）。正经公网模型端点不会写成这种形式，整类拒掉最稳。
+  if (h.startsWith("::")) return true
+  const m4 = h.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/)
+  if (m4) {
+    const a = Number(m4[1]), b = Number(m4[2])
+    if (a === 127 || a === 10 || a === 0) return true                 // 回环 / 私网A / 本网
+    if (a === 192 && b === 168) return true                            // 私网C
+    if (a === 172 && b >= 16 && b <= 31) return true                   // 私网B（docker 网桥常在此段）
+    if (a === 169 && b === 254) return true                            // link-local（含 AWS/GCP 元数据 169.254.169.254）
+    if (a === 100 && b >= 64 && b <= 127) return true                  // CGNAT（阿里云元数据 100.100.100.200 在此段）
+  }
+  if (/^f[cd][0-9a-f]{2}:/.test(h) || /^fe80:/.test(h)) return true    // IPv6 ULA / link-local
+  return false
+}
 
 // ---- 每用户存储上限（uploads + outputs 之和）----
 // STORAGE_LIMIT_MB=0 或空 = 不限。达上限拦截新上传；前端到 90% 提示。删除会话会清掉其目录（见 /api/session/delete）。
@@ -145,13 +222,25 @@ const dirSize = (dir) => {
   let total = 0
   const walk = (d) => {
     let ents; try { ents = fs.readdirSync(d, { withFileTypes: true }) } catch { return }
-    for (const e of ents) { const p = path.join(d, e.name); if (e.isDirectory()) walk(p); else { try { total += fs.statSync(p).size } catch {} } }
+    for (const e of ents) {
+      const p = path.join(d, e.name)
+      // .preview 是服务端自己生成的预览缓存（docx→html、pptx→pdf），用户在界面上既看不见也删不掉，
+      // 却按目录递归被算进配额 —— 等于拿用户看不见的缓存去挤他的额度。它是派生数据，不计入。
+      if (e.isDirectory()) { if (e.name !== ".preview") walk(p) }
+      else if (!e.name.endsWith(".part")) { try { total += fs.statSync(p).size } catch {} }   // .part 是在传中的临时文件，另由 inflightUploadBytes 计
+    }   // .part 是上传中的临时文件，用 inflightUploadBytes 单独计，别在此重复计
   }
   walk(dir); return total
 }
-const storageUsed = () => dirSize(UPLOADS) + dirSize(OUTPUTS)      // 字节
+const storageUsed = () => dirSize(UPLOADS) + dirSize(OUTPUTS)      // 字节（不含在写的 .part）
 const storageLimitBytes = () => STORAGE_LIMIT_MB * 1024 * 1024
-const PUBLIC_PATHS = new Set(["/login", "/api/login"])        // 不需登录即可访问的路径
+// 所有正在写、尚未改名就位的上传字节合计。并发上传各自只盯自己的 size 会互相看不见 →
+// 剩 150MB 时两个 100MB 同传都以为够、双双落盘超限。用这个全局量让并发上传彼此可见（与 runningCost 同构）。
+let inflightUploadBytes = 0
+// 不需登录即可访问的路径。/api/health 必须在这里：它的用途就是给 manager / compose healthcheck /
+// monitor 这些【没有登录票据】的探针用；放在门禁后面只会拿到 302 到登录页，等于这个端点白做。
+// 它只回两个布尔（网关活着 / opencode 就绪），不含任何敏感信息。
+const PUBLIC_PATHS = new Set(["/login", "/api/login", "/api/health"])
 const isLocal = (req) => {
   const a = req.socket.remoteAddress || ""
   return a === "127.0.0.1" || a === "::1" || a === "::ffff:127.0.0.1" || a.startsWith("127.")
@@ -192,7 +281,19 @@ const authed = (req) => !AUTH_ENABLED || isLocal(req) || validAuth(cookieOf(req,
 // 切会话/关页面 → 只是退订，生成继续跑；回来用 /api/chat/attach 先重放快照再续直播。
 // 真正终止走 POST /api/chat/abort（前端"终止"按钮）。job 完成即从表里删除，历史由 opencode 持久化。
 // ---- 文档预览转换：docx→HTML（.venv 的 mammoth）、pptx/ppt/odp/doc/odt→PDF（LibreOffice）----
-const PYEXE = process.platform === "win32" ? path.join(ROOT, ".venv/Scripts/python.exe") : path.join(ROOT, ".venv/bin/python")
+// 优先用项目根 .venv（各技能与 AGENTS.md 的统一约定，镜像里由 Dockerfile 创建）；
+// 没有就回落到系统 python3 —— 否则 .venv 一缺，docx 预览会 100% 失败且只报一句含糊的转换错误。
+// 惰性探测 + 缓存（与下面的 soffice() 同构）：不能在模块加载时一次性求值——
+// .venv 可能是网关起来【之后】才建好的（env-setup 场景），那样进程整个生命周期都会用系统 python3、
+// 再也切不回去。改成首次真正要用时才探。
+let _pyexe
+const PYEXE = () => {
+  if (_pyexe !== undefined) return _pyexe
+  const inVenv = process.platform === "win32" ? path.join(ROOT, ".venv/Scripts/python.exe") : path.join(ROOT, ".venv/bin/python")
+  try { _pyexe = fs.existsSync(inVenv) ? inVenv : null } catch { _pyexe = null }
+  if (!_pyexe) _pyexe = process.platform === "win32" ? "python" : "python3"
+  return _pyexe
+}
 const MAMMOTH_PY = "import sys,mammoth\nsrc,out=sys.argv[1],sys.argv[2]\nf=open(src,'rb');h=mammoth.convert_to_html(f).value;f.close()\nopen(out,'w',encoding='utf-8').write(h)"
 let _soffice   // 惰性探测并缓存（LibreOffice 可能在网关启动后才装好）
 const soffice = () => {
@@ -205,9 +306,42 @@ const soffice = () => {
   return _soffice
 }
 const execFileAsync = promisify(execFile)
-const sofficeArgs = (src, outDir) => {   // 每次用独立 UserInstallation profile，避免多用户并发时 profile 锁冲突
-  const prof = "file:///" + path.join(os.tmpdir(), "lo-" + crypto.randomBytes(6).toString("hex")).replace(/\\/g, "/")
-  return ["--headless", "--norestore", "--convert-to", "pdf", "--outdir", outDir, src, "-env:UserInstallation=" + prof]
+// 每次用独立 UserInstallation profile，避免多用户并发时 profile 锁冲突。
+// 返回 profile 目录供调用方【用完删掉】：LibreOffice 每次会在里面铺一整套配置树（数 MB），
+// 不删就随每次预览/预热在容器可写层里越积越多（超时被 kill 的那次同样会留下）。
+const sofficeJob = (src, outDir) => {
+  const dir = path.join(os.tmpdir(), "lo-" + crypto.randomBytes(6).toString("hex"))
+  return { dir, args: ["--headless", "--norestore", "--convert-to", "pdf", "--outdir", outDir, src, "-env:UserInstallation=file:///" + dir.replace(/\\/g, "/")] }
+}
+// ★ 全局串行闸：同一时刻只允许【一个】LibreOffice 在跑。
+// 单个 soffice headless 转 pptx 峰值 300–600MB，而容器 mem_limit 只有 1400–1750m；
+// 一旦并发起两个就可能触发 OOM-kill —— 被杀的是【整个容器】（opencode + 网关一起没），
+// 而不只是这次预览失败。而后台预热虽有 _warmQueue 串行，/api/preview 却是直接调用、
+// 不进那个队列：用户点预览时预热正好在跑、或两个标签页同时点，就凑齐了两个进程。
+// 故把闸做在最底层，无论谁调用都得排队。
+let _sofficeGate = Promise.resolve()
+const withSoffice = (fn) => {
+  const run = _sofficeGate.then(fn, fn)   // 前一个无论成败都放行下一个
+  _sofficeGate = run.then(() => {}, () => {})
+  return run
+}
+
+// .preview 已不计入用户配额（它是派生缓存，用户看不见也删不掉），那就必须自己有上限，
+// 否则「配额没满、卷先写爆」：活跃会话里每个新文件名都会生成一份缓存 PDF（数 MB），只在删会话时才整目录清。
+// 每次写完缓存后按 mtime 做一次 LRU 裁剪，超出上限就从最旧的开始删。
+const PREVIEW_CACHE_MAX = Number(process.env.PREVIEW_CACHE_MAX_MB || 200) * 1024 * 1024
+function prunePreviewCache(cacheDir) {
+  try {
+    const items = fs.readdirSync(cacheDir, { withFileTypes: true })
+      .filter((e) => e.isFile())
+      .map((e) => { const p = path.join(cacheDir, e.name); const st = fs.statSync(p); return { p, size: st.size, mtime: st.mtimeMs } })
+    let total = items.reduce((s, x) => s + x.size, 0)
+    if (total <= PREVIEW_CACHE_MAX) return
+    for (const it of items.sort((a, b) => a.mtime - b.mtime)) {   // 最旧的先删
+      if (total <= PREVIEW_CACHE_MAX) break
+      try { fs.unlinkSync(it.p); total -= it.size } catch {}
+    }
+  } catch { /* 裁剪失败不影响预览本身 */ }
 }
 
 // 生成/复用文档预览缓存到 <dir>/.preview/；docx→HTML、pptx/ppt/odp/doc/odt→PDF。
@@ -225,19 +359,23 @@ async function ensurePreviewCache(dir, name) {
   if (ext === ".docx") {
     const out = path.join(cacheDir, name + ".html")
     if (!fresh(out)) {
-      try { await execFileAsync(PYEXE, ["-X", "utf8", "-c", MAMMOTH_PY, src, out], { timeout: 60_000 }) }
+      try { await execFileAsync(PYEXE(), ["-X", "utf8", "-c", MAMMOTH_PY, src, out], { timeout: 60_000 }) }
       catch (err) { const e = new Error(String(err).slice(0, 200)); e.code = "docx-fail"; throw e }
     }
+    prunePreviewCache(cacheDir)
     return { out, ctype: "text/html; charset=utf-8" }
   }
   if ([".pptx", ".ppt", ".odp", ".doc", ".odt"].includes(ext)) {
     const out = path.join(cacheDir, name.replace(/\.[^.]+$/, "") + ".pdf")
     if (!fresh(out)) {
       if (!soffice()) { const e = new Error("no LibreOffice"); e.code = "no-soffice"; throw e }
-      try { await execFileAsync(soffice(), sofficeArgs(src, cacheDir), { timeout: 90_000 }) }
+      const job = sofficeJob(src, cacheDir)
+      try { await withSoffice(() => execFileAsync(soffice(), job.args, { timeout: 90_000 })) }   // 排队，绝不并发起两个 LO
       catch (err) { const e = new Error(String(err).slice(0, 200)); e.code = "office-fail"; throw e }
+      finally { try { fs.rmSync(job.dir, { recursive: true, force: true }) } catch {} }   // 成功/失败/超时都要清掉临时 profile
       if (!fs.existsSync(out)) { const e = new Error("no pdf produced"); e.code = "no-pdf"; throw e }
     }
+    prunePreviewCache(cacheDir)
     return { out, ctype: "application/pdf" }
   }
   return null   // 该类型不支持文档转换预览（md/pdf/csv/txt/html 等在前端直接渲染，不走这里）
@@ -288,6 +426,11 @@ function startJob(sid, sentText) {
     text: "", reasoning: new Map(), tools: new Map(), skills: new Map(),
   }
   jobs.set(sid, job)
+  // 事件流的取消句柄：每轮都会 client.event.subscribe() 新开一条到 opencode 的长连接，
+  // 若不主动取消，for-await 只有等"下一个任意事件到达"才会看到 job.finished 而 break ——
+  // 末轮的订阅可能整夜不释放。SDK 的 subscribe(options) 会把 options.signal 一路透传到
+  // createSseClient → fetch(url,{signal})，abort 后重试循环顶部的 `if (signal.aborted) break` 会终止它。
+  const evAbort = new AbortController()
   const broadcast = (ev, data) => {
     if (ev === "text") job.text = data
     else if (ev === "reasoning") job.reasoning.set(data.id, data)
@@ -296,7 +439,8 @@ function startJob(sid, sentText) {
   }
   const finish = () => {
     if (job.finished) return
-    job.finished = true; job.running = false; jobs.delete(sid)
+    job.finished = true; job.running = false; jobs.delete(sid); runningCost.delete(sid)   // 本轮成本已由 addCost 入账，撤掉实时占位
+    try { evAbort.abort() } catch {}   // 立刻掐掉本轮的 opencode 事件流，别留着空转到下一个事件
     for (const r of job.subs) { try { r.end() } catch {} }
     job.subs.clear()
   }
@@ -308,19 +452,20 @@ function startJob(sid, sentText) {
     finish()
   }
   ;(async () => {
-    const events = await client.event.subscribe()
-    const qStart = quotaUsed()            // 本轮开始时今日已用成本（跨日不变），用于中途封顶判断
+    const events = await client.event.subscribe({ signal: evAbort.signal })   // finish() 里 abort，避免订阅泄漏
     const runCost = new Map()             // 本轮各 assistant 消息的 cost（按 messageID 取最新），实时累计
     ;(async () => {
       for await (const e of events.stream) {
         if (job.finished) break
-        // 中途额度封顶：一旦「今日已用 + 本轮实时成本」达上限，立即中止本轮，避免单轮跑到底大幅超支
+        // 中途额度封顶：一旦「今日已入账 + 所有在跑轮的实时成本」达上限，立即中止本轮，避免单轮跑到底大幅超支。
+        // 用全局 runningCost（而非本轮开始时的快照）：并发的几轮互相看得见对方已花的钱，合计到顶各轮都会中止。
         if (DAILY_COST_LIMIT > 0 && !job.quotaHit && e?.type === "message.updated") {
           const info = e.properties?.info
           if (info?.sessionID === sid && info.role === "assistant") {
             runCost.set(info.id, info.cost || 0)
             let rc = 0; for (const v of runCost.values()) rc += v
-            if (qStart + rc >= DAILY_COST_LIMIT) { job.quotaHit = true; try { await client.session.abort({ path: { id: sid } }) } catch {} }
+            runningCost.set(sid, rc)
+            if (quotaUsedLive() >= DAILY_COST_LIMIT) { job.quotaHit = true; try { await client.session.abort({ path: { id: sid } }) } catch {} }
           }
           continue
         }
@@ -335,7 +480,8 @@ function startJob(sid, sentText) {
         })
       }
     })().catch(() => {})
-    const before = dirState(wsOut(sid))   // 记录本轮开始前本会话产物状态，用于算增量
+    const outDir = await sessionOut(sid)                 // 本会话的绝对产物目录（= agent 的工作目录）
+    const before = dirState(outDir)   // 记录本轮开始前本会话产物状态，用于算增量
     let cost0 = 0; try { cost0 = un(await client.session.get({ path: { id: sid } }))?.cost || 0 } catch {}   // 本轮前累计成本，用于算增量
     let result, promptErr = null
     try {
@@ -356,9 +502,9 @@ function startJob(sid, sentText) {
     if (job.finished) return finish()
     const finalText = (result?.parts ?? []).filter(x => x.type === "text").map(x => x.text).join("\n")
     broadcast("final", { text: finalText })
-    const changed = changedSince(wsOut(sid), before)
+    const changed = changedSince(outDir, before)
     broadcast("files", changed)   // 只推本会话本轮新建/改动的产物
-    warmPreviews(wsOut(sid), changed)   // 后台把新产出的 office/docx 预转缓存，用户点预览即秒开
+    warmPreviews(outDir, changed)   // 后台把新产出的 office/docx 预转缓存，用户点预览即秒开
     broadcast("done", {})
     finish()
   })().catch(() => { try { broadcast("failed", { message: "本轮出错（网关内部异常）" }) } catch {} finish() })
@@ -382,6 +528,11 @@ const server = http.createServer(async (req, res) => {
     // 登录页：未登录的局域网访客看到它；已登录/本机则直接跳回主页
     if (req.method === "GET" && u.pathname === "/login") {
       if (authed(req)) { res.writeHead(302, { Location: BASE_PATH + "/" }); return res.end() }
+      // 多用户部署（BASE_PATH 非空 = 前面有 manager）：登录一律走站点根的统一登录页。
+      // 因为 manager 的 POST /<user>/api/login 强制校验图形验证码，而本容器的 login.html 根本不发验证码
+      // → 从这里提交必然「验证码错误」，是条死路。把用户直接送到 manager 的登录页（那里才有验证码）。
+      // 单机/局域网部署（BASE_PATH 为空、无 manager）仍用本地 login.html。
+      if (BASE_PATH) { res.writeHead(302, { Location: "/", "Cache-Control": "no-store" }); return res.end() }
       res.writeHead(200, { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" })
       return res.end(fs.readFileSync(path.join(__dirname, "login.html")))
     }
@@ -399,7 +550,28 @@ const server = http.createServer(async (req, res) => {
       res.writeHead(200, { "Content-Type": "application/json", "Set-Cookie": `lan_auth=; Path=${BASE_PATH}/; HttpOnly; Max-Age=0` })
       return res.end(JSON.stringify({ ok: true }))
     }
-    // 自助改密码（须已登录）：校验当前密码 → 写 override → 清 cookie 逼重登（旧 cookie 已随密钥变更失效）
+    // 门禁：其余路径若未登录 → 页面跳登录页、接口回 401
+    if (!PUBLIC_PATHS.has(u.pathname) && !authed(req)) {
+      if (req.method === "GET" && (req.headers.accept || "").includes("text/html")) {
+        // 多用户部署直接送到站点根的统一登录页（带验证码），少一跳、也避开容器 login.html 那条死路
+        res.writeHead(302, { Location: BASE_PATH ? "/" : "/login", "Cache-Control": "no-store" }); return res.end()
+      }
+      return send(res, 401, "application/json", JSON.stringify({ ok: false, err: "unauthorized" }))
+    }
+    // 忙碌探针：宿主的 manager 在「空闲停机 / 满员腾位」前问一句「这容器还有活在跑吗」。
+    // 本网关的设计是「关页面 = 只退订，生成继续跑」（见 /api/chat/attach），但 manager 只看得见
+    // HTTP 连接：页面一关 SSE 就断、conns 归 0，它便会把正在跑十几分钟的流水线连容器一起停掉。
+    // 故这里把「有无在跑的 job」暴露给它。manager 用 docker exec 从容器【内部】打 127.0.0.1 来问，
+    // 命中 isLocal 免鉴权 —— 不必把本接口放进 PUBLIC_PATHS：容器彼此在同一 docker 网络里互通，
+    // 而每个容器里跑的正是能执行任意代码的 agent，公开它等于让 alice 能探到 bob 在不在干活。
+    if (req.method === "GET" && u.pathname === "/api/busy") {
+      const running = [...jobs.values()].filter((j) => j.running).length
+      return send(res, 200, "application/json", JSON.stringify({ busy: running > 0, running }))
+    }
+
+    // 自助改密码（须已登录 —— 必须留在门禁【之后】）：校验当前密码 → 写 override → 清 cookie 逼重登。
+    // 放门禁前等于开了个密码预言机：未登录者能凭「当前密码不正确 / 新密码至少 6 位」两种回包无限盲猜密码，
+    // 且绕开 manager 的图形验证码、限流与审计日志。
     if (req.method === "POST" && u.pathname === "/api/password") {
       const chunks = []; for await (const c of req) chunks.push(c)
       let cur = "", nw = ""
@@ -411,13 +583,7 @@ const server = http.createServer(async (req, res) => {
       res.writeHead(200, { "Content-Type": "application/json", "Set-Cookie": `lan_auth=; Path=${BASE_PATH}/; HttpOnly; Max-Age=0` })
       return res.end(JSON.stringify({ ok: true }))
     }
-    // 门禁：其余路径若未登录 → 页面跳登录页、接口回 401
-    if (!PUBLIC_PATHS.has(u.pathname) && !authed(req)) {
-      if (req.method === "GET" && (req.headers.accept || "").includes("text/html")) {
-        res.writeHead(302, { Location: BASE_PATH + "/login" }); return res.end()
-      }
-      return send(res, 401, "application/json", JSON.stringify({ ok: false, err: "unauthorized" }))
-    }
+
     if (req.method === "GET" && u.pathname === "/") {
       res.writeHead(200, { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" })   // 每次取最新页面，避免浏览器缓存旧版
       return res.end(fs.readFileSync(path.join(__dirname, "index.html")))
@@ -425,16 +591,50 @@ const server = http.createServer(async (req, res) => {
 
     if (req.method === "POST" && u.pathname === "/api/upload") {
       let sid = u.searchParams.get("sid") || null
-      if (!sid) sid = un(await client.session.create({ body: { title: "web" } })).id   // 上传先于对话则现建会话
-      ensureWs(sid)
+      if (!sid) sid = await createSession("web")   // 上传先于对话则现建会话（createSession 会把 directory 定到会话产物目录）
+      const ws = await ensureWs(sid)
       const name = path.basename(u.searchParams.get("name") || "upload.bin")
-      const chunks = []; for await (const c of req) chunks.push(c)
-      const buf = Buffer.concat(chunks)
+      // 流式落盘（不整包缓冲进内存，大文件不再有 ~2×文件大小的内存尖峰）：
+      // ① 有 Content-Length 就先预检存储余量（浏览器上传都带），拦在收数据之前；
+      // ② 边写临时隐藏文件边累计大小（兜底 chunked 上传），超限即中止并删除；③ 成功才改名就位。
+      // 余量始终算上 inflightUploadBytes（其它在传的上传），并发上传彼此可见、不会合谋超限。
       const lim = storageLimitBytes()
-      if (lim > 0 && storageUsed() + buf.length > lim)
-        return send(res, 413, "application/json", JSON.stringify({ ok: false, err: `存储空间不足：已用 ${(storageUsed() / 1048576).toFixed(0)}MB / 上限 ${STORAGE_LIMIT_MB}MB。请删除旧会话或文件后再传。` }))
-      const dest = path.join(wsUp(sid), name); fs.writeFileSync(dest, buf)
-      return send(res, 200, "application/json", JSON.stringify({ ok: true, sid, path: `${relUp(sid)}/${name}`, size: fs.statSync(dest).size }))
+      const overMsg = () => JSON.stringify({ ok: false, err: `存储空间不足：已用 ${(storageUsed() / 1048576).toFixed(0)}MB / 上限 ${STORAGE_LIMIT_MB}MB。请删除旧会话或文件后再传。` })
+      const wouldExceed = (extra) => lim > 0 && storageUsed() + inflightUploadBytes + extra > lim
+      const declared = Number(req.headers["content-length"])
+      const hasLen = Number.isFinite(declared) && declared >= 0
+      // 有 Content-Length（浏览器上传都有）：读 body 前就判，超限直接回干净 413（不会在半程掐断连接让浏览器报“Failed to fetch”）；
+      // 通过则【预占】declared 到 inflightUploadBytes——并发的下一个上传立刻看得见这份占用，也在读 body 前被干净拦下。
+      if (hasLen && wouldExceed(declared)) return sendClose(res, 413, "application/json", overMsg())   // 不收正文就拒 → 必须关连接，否则残留 body 堵死这条 keep-alive
+      let reserved = 0
+      if (hasLen) { reserved = declared; inflightUploadBytes += reserved }
+      const release = () => { inflightUploadBytes -= (hasLen ? reserved : size) }   // 成功改名(计入真实 storageUsed)或失败删除后，把占用撤出
+      const dest = path.join(ws.up, name)
+      const tmp = path.join(ws.up, "." + crypto.randomBytes(6).toString("hex") + ".part")   // 隐藏 .part：文件列表/产物快照/存储计量都会跳过
+      let size = 0, stopped = false   // stopped：chunked 超限掐断后，别再让 data 监听器给 inflight 加字节（否则 release 后仍累加→永久泄漏）
+      try {
+        await new Promise((resolve, reject) => {
+          const ws = fs.createWriteStream(tmp)
+          // 无 Content-Length 的 chunked 上传：没法预占，只能边写边把字节计入全局并逐块判超限（超了半程掐断）。
+          req.on("data", (c) => {
+            if (stopped) return
+            size += c.length
+            if (!hasLen) { inflightUploadBytes += c.length; if (wouldExceed(0)) { stopped = true; const e = new Error("over"); e.code = "over"; req.unpipe(ws); ws.destroy(e) } }
+          })
+          req.on("close", () => { if (!req.complete) { const e = new Error("客户端中断上传"); e.code = "aborted"; reject(e) } })
+          req.on("error", reject)
+          ws.on("error", reject)
+          ws.on("finish", resolve)
+          req.pipe(ws)
+        })
+      } catch (e) {
+        release(); try { fs.unlinkSync(tmp) } catch {}
+        // 这两条都发生在【半程掐断】：客户端可能还在上传，body 必然没读完 → 一律关连接
+        if (e.code === "over") return sendClose(res, 413, "application/json", overMsg())
+        return sendClose(res, 500, "application/json", JSON.stringify({ ok: false, err: String(e?.message || e).slice(0, 200) }))
+      }
+      fs.renameSync(tmp, dest); release()
+      return send(res, 200, "application/json", JSON.stringify({ ok: true, sid, path: `${relFromRoot(dest)}`, size: fs.statSync(dest).size }))
     }
 
     if (req.method === "GET" && u.pathname === "/api/files")
@@ -443,7 +643,7 @@ const server = http.createServer(async (req, res) => {
     // 列出本会话 uploads/ 里已上传的文件（含大小），用于侧栏“上传空间”的常驻展示
     if (req.method === "GET" && u.pathname === "/api/uploads") {
       const sid = u.searchParams.get("sid") || ""
-      const dir = sid ? wsUp(sid) : UPLOADS
+      const dir = sid ? await sessionUp(sid) : UPLOADS
       if (!fs.existsSync(dir)) return send(res, 200, "application/json", "[]")
       const list = fs.readdirSync(dir)
         .filter((f) => !f.startsWith("."))
@@ -457,7 +657,7 @@ const server = http.createServer(async (req, res) => {
     if (req.method === "POST" && u.pathname === "/api/upload/delete") {
       const sid = u.searchParams.get("sid") || ""
       const name = path.basename(u.searchParams.get("name") || "")
-      const f = path.join(sid ? wsUp(sid) : UPLOADS, name)
+      const f = path.join(sid ? await sessionUp(sid) : UPLOADS, name)
       if (!name || !fs.existsSync(f) || !fs.statSync(f).isFile()) return send(res, 404, "application/json", JSON.stringify({ ok: false }))
       try { fs.unlinkSync(f) } catch (e) { return send(res, 500, "application/json", JSON.stringify({ ok: false, err: String(e) })) }
       return send(res, 200, "application/json", JSON.stringify({ ok: true }))
@@ -503,7 +703,7 @@ const server = http.createServer(async (req, res) => {
       if (!id) return send(res, 400, "application/json", JSON.stringify({ ok: false }))
       try { await jobs.get(id)?.abort() } catch {}   // 会话还在生成中 → 先终止再删
       try { await client.session.delete({ path: { id } }) } catch (e) { return send(res, 500, "application/json", JSON.stringify({ ok: false, err: String(e) })) }
-      try { fs.rmSync(wsUp(id), { recursive: true, force: true }); fs.rmSync(wsOut(id), { recursive: true, force: true }) } catch {}   // 删会话即释放其 uploads/outputs 占用的空间
+      try { fs.rmSync(await sessionUp(id), { recursive: true, force: true }); fs.rmSync(await sessionOut(id), { recursive: true, force: true }); dirCache.delete(safeSid(id)) } catch {}   // 删会话即释放其 uploads/outputs 占用的空间
       return send(res, 200, "application/json", JSON.stringify({ ok: true }))
     }
 
@@ -514,6 +714,9 @@ const server = http.createServer(async (req, res) => {
       const sid = u.searchParams.get("sid") || ""
       const uindex = Number(u.searchParams.get("uindex"))
       if (!sid || !Number.isInteger(uindex) || uindex < 0) return send(res, 400, "application/json", JSON.stringify({ ok: false }))
+      // 该会话正在生成 → 拒绝回退：此刻 opencode 正往消息列表写，revert 会把状态搅乱、本轮收尾行为未定义。
+      // （前端 activeES 一般已拦，但双开/attach 失败时前端拦不住，这里兜底。）
+      if (jobs.get(sid)?.running) return send(res, 409, "application/json", JSON.stringify({ ok: false, err: "本轮生成进行中，无法编辑，请等结束后再试" }))
       await clearStaleRevert(sid)   // 先清掉上一次没提交的残留回退，确保 uindex→messageID 对着完整消息列表算，而非回退视图
       const msgs = un(await client.session.messages({ path: { id: sid } })) || []
       const target = msgs.filter((m) => m.info?.role === "user")[uindex]   // 按顺序取第 uindex 个用户消息
@@ -527,9 +730,12 @@ const server = http.createServer(async (req, res) => {
       const sid = u.searchParams.get("sid") || ""
       const name = path.basename(u.searchParams.get("name") || "")
       const up = u.searchParams.get("dir") === "up"   // dir=up 时取上传目录，否则取产出目录
-      const f = path.join(sid ? (up ? wsUp(sid) : wsOut(sid)) : (up ? UPLOADS : OUTPUTS), name)   // 无 sid 回退共享目录（兼容）
+      const f = path.join(sid ? (up ? await sessionUp(sid) : await sessionOut(sid)) : (up ? UPLOADS : OUTPUTS), name)   // 无 sid 回退共享目录（兼容）
       if (!name || !fs.existsSync(f)) return send(res, 404, "text/plain", "not found")
-      res.writeHead(200, { "Content-Type": "application/octet-stream", "Content-Disposition": `attachment; filename="${name}"` })
+      // Content-Disposition 头是 latin1 通道：中文/任何非 ASCII 字符裸拼会让 Node 抛 ERR_INVALID_CHAR → 整个下载 500。
+      // 按 RFC 5987 双写：filename=（ASCII 兜底，去掉引号/反斜杠防头注入）+ filename*=UTF-8''<percent-encoded>（现代浏览器取它，保中文名）。
+      const asciiName = name.replace(/[^\x20-\x7e]/g, "_").replace(/["\\]/g, "_")
+      res.writeHead(200, { "Content-Type": "application/octet-stream", "Content-Disposition": `attachment; filename="${asciiName}"; filename*=UTF-8''${encodeURIComponent(name)}` })
       return fs.createReadStream(f).pipe(res)
     }
 
@@ -538,7 +744,7 @@ const server = http.createServer(async (req, res) => {
       const sid = u.searchParams.get("sid") || ""
       const name = path.basename(u.searchParams.get("name") || "")
       const up = u.searchParams.get("dir") === "up"
-      const f = path.join(sid ? (up ? wsUp(sid) : wsOut(sid)) : (up ? UPLOADS : OUTPUTS), name)
+      const f = path.join(sid ? (up ? await sessionUp(sid) : await sessionOut(sid)) : (up ? UPLOADS : OUTPUTS), name)
       if (!name || !fs.existsSync(f) || !fs.statSync(f).isFile()) return send(res, 404, "text/plain", "not found")
       const MIME = { ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".gif": "image/gif",
         ".webp": "image/webp", ".svg": "image/svg+xml", ".bmp": "image/bmp", ".pdf": "application/pdf",
@@ -557,50 +763,83 @@ const server = http.createServer(async (req, res) => {
     if (req.method === "GET" && u.pathname === "/api/preview") {
       const sid = u.searchParams.get("sid") || ""
       const name = path.basename(u.searchParams.get("name") || "")
-      const dir = sid ? wsOut(sid) : OUTPUTS
+      const dir = sid ? await sessionOut(sid) : OUTPUTS
       let r
       try { r = await ensurePreviewCache(dir, name) }
       catch (e) {
         if (e.code === "no-src") return send(res, 404, "text/plain", "not found")
-        if (e.code === "docx-fail") return send(res, 500, "text/html; charset=utf-8", `<p style="color:#b91c1c">DOCX 预览转换失败：${e.message}</p>`)
+        // 转义再插进 HTML：e.message 里含被转换文件的路径/文件名，而文件名是 agent 产出的、可含尖括号。
+        // 影响仅限用户自己（一人一容器），但顺手堵掉，别留个会往 HTML 里塞未转义内容的口子。
+        if (e.code === "docx-fail") return send(res, 500, "text/html; charset=utf-8", `<p style="color:#b91c1c">DOCX 预览转换失败：${String(e.message).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")}</p>`)
         if (e.code === "no-soffice") return send(res, 501, "text/plain", "服务器未安装 LibreOffice，无法预览此类型（装好后即可）")
         if (e.code === "no-pdf") return send(res, 500, "text/plain", "转换未产出 PDF")
         return send(res, 500, "text/plain", "转换失败：" + e.message)
       }
       if (!r) return send(res, 415, "text/plain", "该类型不支持预览")
-      res.writeHead(200, { "Content-Type": r.ctype })
+      // docx 转出来的 HTML 是 mammoth 直出的：它保留原文档里的超链接，且【不过滤 javascript: 协议】。
+      // 这条路径以前因为 mammoth 没装、docx 预览 100% 失败而从没真正跑过，装上后才第一次生效 → 补上沙箱。
+      // 与 /api/raw 对 html/svg 的处理保持一致：不允许脚本、不接触本站源。
+      const head = { "Content-Type": r.ctype }
+      if (String(r.ctype).startsWith("text/html")) head["Content-Security-Policy"] = "sandbox; default-src 'none'; img-src data: blob:; style-src 'unsafe-inline'"
+      res.writeHead(200, head)
       return fs.createReadStream(r.out).pipe(res)
     }
 
-    if (req.method === "GET" && u.pathname === "/api/quota") {   // 前端显示今日额度用量
-      return send(res, 200, "application/json", JSON.stringify({ used: quotaUsed(), limit: DAILY_COST_LIMIT }))
+    // 健康检查：网关活着不等于能用——opencode 起不来时网关照样监听端口、
+    // 前端也照常渲染，用户要等发出第一条消息才发现整站是坏的（manager 只探端口，也会误判为健康）。
+    // 暴露真实依赖状态，供 manager/monitor 与前端横幅使用。
+    if (req.method === "GET" && u.pathname === "/api/health") {
+      const ocOk = await ocHealthy()
+      // 只回布尔，不带模型名——这是个公开端点（见 PUBLIC_PATHS 的说明），没必要对外透露用的哪个模型
+      return send(res, ocOk ? 200 : 503, "application/json", JSON.stringify({ gateway: true, opencode: ocOk }))
+    }
+    if (req.method === "GET" && u.pathname === "/api/quota") {   // 前端显示今日额度用量（含在跑轮的实时成本）
+      return send(res, 200, "application/json", JSON.stringify({ used: quotaUsedLive(), limit: DAILY_COST_LIMIT }))
     }
     if (req.method === "GET" && u.pathname === "/api/storage") {   // 前端显示存储用量（uploads+outputs）
       return send(res, 200, "application/json", JSON.stringify({ used: storageUsed(), limit: storageLimitBytes() }))
     }
-    if (req.method === "GET" && u.pathname === "/api/chat") {
-      const q = u.searchParams.get("q") || ""
-      // Reuse the session the browser passes back so the conversation is multi-turn;
-      // create one only on the first message (or if the old id is gone after a restart).
-      let sid = u.searchParams.get("sid") || null
-      if (!sid) { sid = un(await client.session.create({ body: { title: (q || "web").slice(0, 40) } })).id; if (q) titledSessions.add(sid) }   // 先打字建的会话：首条提问即标题
-      ensureWs(sid)
-      const running = jobs.get(sid)
-      if (running?.running) {   // 该会话已有进行中的一轮（断线重连/双开页面）→ 直接续流，绝不重复发起
-        attachJob(running, req, res)
-        if (q) sseWrite(res, "notice", { message: "上一轮仍在进行中，本条消息未发送；请等本轮结束后重发。" })
-        return
+    // 发起一轮生成。【POST，正文在 body】——原先是 GET /api/chat?q=...，两个毛病：
+    //   ① GET 带副作用（发消息 + 扣额度），而 cookie 是 SameSite=Lax：跨站顶层 GET 导航会带上凭据，
+    //      诱导点一个链接就能替用户跑一轮长生成、烧掉当天额度（浏览器/代理的链接预取也可能误触发）。
+    //   ② 长正文塞进 URL 会撞 Node 默认 16KB 请求头上限 → 431/断连，而前端的 SSE onerror 会把它
+    //      当成网络抖动去重连，消息就【静默丢失】了（粘贴一段稿件即可复现）。
+    // 起轮成功后，前端再用 GET /api/chat/attach?sid= 订阅直播（EventSource 只能发 GET，故拆成两步）。
+    if (req.method === "POST" && u.pathname === "/api/chat/start") {
+      const chunks = []; let total = 0
+      for await (const c of req) {
+        total += c.length
+        if (total > 4_000_000) return sendClose(res, 413, "application/json", JSON.stringify({ ok: false, sent: false, err: "消息过长（超过 4MB）" }))   // 从 for-await 里提前 return → body 未读完，必须关连接
+        chunks.push(c)
       }
-      await ensureSessionTitle(sid, q)   // 上传先于对话建的占位标题 "web" → 首条提问改名（只对占位标题生效，不动续问的旧会话）
+      let q = "", sid = null
+      try { const b = JSON.parse(Buffer.concat(chunks).toString() || "{}"); q = String(b.q ?? ""); sid = b.sid ? String(b.sid) : null } catch {}
+      if (!q.trim()) return send(res, 400, "application/json", JSON.stringify({ ok: false, sent: false, err: "消息为空" }))
+      // 新会话要先向 opencode 建会话；它没起来时这里会抛，此前会被外层 catch 变成一个带堆栈的 500，
+      // 用户只看到"发送失败"，根本不知道是后台模型服务没起来。这里单独兜住并给人话。
+      if (!sid) {
+        try { sid = await createSession(q.slice(0, 40)); titledSessions.add(sid) }
+        catch {
+          const ocOk = await ocHealthy()
+          return send(res, 503, "application/json", JSON.stringify({ ok: false, sent: false,
+            err: ocOk ? "无法创建会话，请稍后重试" : "后台模型服务（opencode）尚未就绪，请稍等几十秒后重试；若持续如此请联系管理员" }))
+        }
+      }
+      const ws = await ensureWs(sid)
+      // ensureSessionTitle 里有 await（打 opencode 网络）——必须放在“检查 running → startJob”这段【全同步】区之前。
+      // 否则同 sid 的两个并发请求会在这个 await 处双双让出、都看到没有 running job、各自 startJob，
+      // 后者 jobs.set 覆盖前者 → 两轮 prompt 并发打同一会话、先收尾的把另一轮从表里删成无法 attach/abort 的孤儿。
+      await ensureSessionTitle(sid, q)
+      if (jobs.get(sid)?.running)   // 该会话已有进行中的一轮（双开页面/连点）→ 不重复发起，让前端去续流
+        return send(res, 200, "application/json", JSON.stringify({ ok: true, sid, sent: false, running: true, notice: "上一轮仍在进行中，本条消息未发送；请等本轮结束后重发。" }))
+      if (quotaOver())
+        return send(res, 200, "application/json", JSON.stringify({ ok: false, sid, sent: false, err: `今日额度已用尽（已用 $${quotaUsedLive().toFixed(3)} / 上限 $${DAILY_COST_LIMIT.toFixed(2)}），明天恢复。` }))
       // 给 agent 注入本会话专属目录，覆盖技能默认的 outputs/，实现多用户/多会话隔离
-      const preamble = `【本会话专属目录，务必遵守】\n- 用户上传的数据文件在 \`${relUp(sid)}/\`（读数据从这里找）。\n- 所有产物（图表 PNG/PDF、CSV/Excel、md/docx 文档等）一律写到 \`${relOut(sid)}/\`。\n- 连临时脚本、中间文件也一律写在 \`${relOut(sid)}/\`（需要放一起可用 \`${relOut(sid)}/.scratch/\`）。\n- **严禁在仓库根写任何文件**（.py / .csv / .png / .md 等都不行）：仓库根是所有用户共享的，同名文件会互相覆盖、把不同会话的数据串在一起。运行脚本时也把工作目录/输出指到 \`${relOut(sid)}/\`。\n- 正文里嵌入图片用 \`![图注](${relOut(sid)}/xxx.png)\` 这个路径。\n\n`
-      if (quotaOver()) {   // 今日额度已用尽 → 不发起新对话，回一条 failed 让前端提示
-        res.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-cache", Connection: "keep-alive" })
-        sseWrite(res, "session", { id: sid })
-        sseWrite(res, "failed", { message: `今日额度已用尽（已用 $${quotaUsed().toFixed(3)} / 上限 $${DAILY_COST_LIMIT.toFixed(2)}），明天恢复。` })
-        return res.end()
-      }
-      return attachJob(startJob(sid, preamble + q), req, res)
+      // 注意：本会话的工作目录（cwd）已在建会话时通过 opencode 的 session.directory 定在【会话产物目录】，
+      // 所以 agent 的所有工具默认就在正确的地方读写，preamble 只需说清"当前目录就是产物目录"与几个绝对路径。
+      const preamble = `【本会话工作区，务必遵守】\n- **你的当前工作目录就是本会话的产物目录**（\`${ws.out}\`）。所有产物（图表 PNG/PDF、CSV/Excel、md/docx 等）**直接写到当前目录即可**，用相对文件名如 \`fig1.png\`、\`manuscript.md\`，不要再自己拼 \`outputs/xxx\` 前缀。\n- 临时脚本、中间文件同样写当前目录（要归拢可用 \`./.scratch/\`）。\n- 用户上传的数据文件在 \`${ws.up}/\`（读数据从这里找，用这个绝对路径）。\n- 跑本套件的脚本用 \`\${REPO_ROOT:-/app}\` 前缀定位仓库，例如 \`\${REPO_ROOT:-/app}/.venv/bin/python \${REPO_ROOT:-/app}/.opencode/skills/<技能>/xxx.py\`——因为当前目录不是仓库根，写 \`.venv/...\` 这种相对路径会找不到。\n- 正文里嵌入图片直接用文件名：\`![图注](fig1.png)\`（图和稿件都在当前目录，渲染也从当前目录跑）。\n- **不要把产物写到仓库根或 \`\${REPO_ROOT:-/app}\` 下**：那是所有会话共享的，会互相覆盖，也不会出现在界面的"产出"侧栏。\n\n`
+      startJob(sid, preamble + q)   // 同步建 job（jobs.set 在函数首行）→ 返回后前端 attach 必能接上
+      return send(res, 200, "application/json", JSON.stringify({ ok: true, sid, sent: true }))
     }
 
     // 重新订阅某会话进行中的一轮（切回会话/重开页面时续流）；没有进行中的轮次则回 idle
@@ -630,7 +869,7 @@ const server = http.createServer(async (req, res) => {
     // 列出本会话 outputs/ 里的产物文件（重开页面/切会话时回显"产出"侧栏，产物随会话持久）
     if (req.method === "GET" && u.pathname === "/api/outputs") {
       const sid = u.searchParams.get("sid") || ""
-      const dir = sid ? wsOut(sid) : OUTPUTS
+      const dir = sid ? await sessionOut(sid) : OUTPUTS
       if (!fs.existsSync(dir)) return send(res, 200, "application/json", "[]")
       const list = fs.readdirSync(dir)
         .filter((f) => !f.startsWith("."))
@@ -657,27 +896,47 @@ const server = http.createServer(async (req, res) => {
       let baseURL = "", apiKey = "", modelID = ""
       try { const b = JSON.parse(Buffer.concat(chunks).toString() || "{}"); baseURL = (b.baseURL || "").trim(); apiKey = (b.apiKey || "").trim(); modelID = (b.modelID || "").trim() } catch {}
       if (!baseURL || !apiKey || !modelID) return send(res, 400, "application/json", JSON.stringify({ ok: false, err: "请填写 API URL、API Key、模型 ID" }))
+      // SSRF 护栏：只允许 http/https 的公网地址（见 isPrivateHost 上方注释）
+      try {
+        const pu = new URL(baseURL)
+        if (!/^https?:$/.test(pu.protocol)) return send(res, 400, "application/json", JSON.stringify({ ok: false, err: "只支持 http/https 地址" }))
+        if (!ALLOW_PRIVATE_MODEL_URL && isPrivateHost(pu.hostname))
+          return send(res, 400, "application/json", JSON.stringify({ ok: false, err: "出于安全考虑，不允许指向内网 / 本机 / 云元数据地址；请填公网可访问的 API 地址" }))
+      } catch { return send(res, 400, "application/json", JSON.stringify({ ok: false, err: "API URL 格式不正确" })) }
       const url = baseURL.replace(/\/+$/, "") + "/chat/completions"
       const t0 = Date.now()
       const ac = new AbortController(); const timer = setTimeout(() => ac.abort(), 20000)
       try {
         const r = await fetch(url, {
           method: "POST", signal: ac.signal,
+          // 不跟随跳转：上面的私网校验只作用于首跳，若自动跟随，攻击者用一个公网地址 302 到
+          // http://127.0.0.1:3010 就能绕过整道护栏（响应体虽已不回显，status/耗时仍是可达性信号）。
+          // 正经的 OpenAI 兼容端点不会把 POST /chat/completions 重定向走。
+          redirect: "manual",
           headers: { "Content-Type": "application/json", Authorization: "Bearer " + apiKey },
           body: JSON.stringify({ model: modelID, messages: [{ role: "user", content: "ping" }], max_tokens: 1, stream: false }),
         })
         clearTimeout(timer)
         const ms = Date.now() - t0
+        if (r.status >= 300 && r.status < 400)
+          return send(res, 200, "application/json", JSON.stringify({ ok: false, status: r.status, ms, err: "该地址发生了重定向，出于安全考虑不予跟随；请直接填最终的 API 地址" }))
         const body = await r.text()
         if (!r.ok) {
-          let em = body.slice(0, 300); try { const j = JSON.parse(body); em = j.error?.message || j.message || em } catch {}
-          return send(res, 200, "application/json", JSON.stringify({ ok: false, status: r.status, ms, err: em }))
+          // 【不回显上游响应体】：本接口可被指向任意 URL，原样回显 body 等于把探测结果送给调用方。
+          // 只给状态码 + 按状态类别的固定说明——够用户排查自己的配置，又不泄露上游内容。
+          const hint = (r.status === 401 || r.status === 403) ? "密钥无效或无权限"
+            : r.status === 404 ? "地址或模型不存在（检查 API URL 是否需以 /v1 结尾、模型 ID 是否正确）"
+            : r.status === 429 ? "上游限流，稍后再试"
+            : r.status >= 500 ? "上游服务异常" : "上游返回错误"
+          return send(res, 200, "application/json", JSON.stringify({ ok: false, status: r.status, ms, err: `${hint}（HTTP ${r.status}）` }))
         }
+        // 成功分支只回模型回复的前 80 字：需要上游返回标准 OpenAI 结构才有值，普通内网服务命不中。
         let reply = ""; try { const j = JSON.parse(body); reply = j.choices?.[0]?.message?.content || "" } catch {}
         return send(res, 200, "application/json", JSON.stringify({ ok: true, status: r.status, ms, reply: String(reply).slice(0, 80) }))
       } catch (e) {
         clearTimeout(timer)
-        return send(res, 200, "application/json", JSON.stringify({ ok: false, err: e?.name === "AbortError" ? "请求超时（20s 内无响应）" : String(e?.message || e) }))
+        // 同理不回显底层错误串：ECONNREFUSED / EHOSTUNREACH / ENOTFOUND 的区别本身就是端口扫描的信号，统一成一句话。
+        return send(res, 200, "application/json", JSON.stringify({ ok: false, err: e?.name === "AbortError" ? "请求超时（20s 内无响应）" : "无法连接到该地址（检查 API URL 是否正确、是否可公网访问）" }))
       }
     }
     // 切换后台模型：注册自定义 provider → 重启 opencode → 更新当前模型

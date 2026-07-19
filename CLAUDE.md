@@ -53,6 +53,10 @@
 - **数据含患者信息且未脱敏 → 先 `deidentify`**，再做任何统计 / 建库 / 分析。
 - 写完综述 / 论文**自动跑 `reference-check`** 查假引用，全绿再排版。
 - Python 统一走项目根 `.venv`（缺则先跑 `env-setup`）；产物写 `outputs/`（有会话专属目录时以其为准，勿写仓库根）。
+- **跑本套件的 Python 脚本必须把产物目录带上**（`table1.py` / `pcheck.py` / `verify_refs.py` / `search.py` / `ground_claim.py` / `enhanced_search.py` / `snowball.py` / `deidentify.py` 这 8 个已**不再默认写共享的 `outputs/` 根**，不带会直接报错中止——因为写共享根会跨会话互相覆盖、且不出现在界面"产出"侧栏）：
+  - Linux / 容器（生产就是这条）：`SCI_OUTPUT_DIR=outputs/<会话id> python3 <脚本> ...`
+  - Windows PowerShell：先 `$env:SCI_OUTPUT_DIR="outputs/<会话id>"` 再跑（`VAR=x cmd` 这种前缀写法 PowerShell 不认）
+  - 任何平台都可以改用显式参数：`--outdir outputs/<会话id>`（或 `--out outputs/<会话id>/<文件名>`）
 - **方向性 / 不可逆决策**（主题·PICO 收敛、目标期刊 / 资助渠道、选题拍板、大批量全文下载、终稿定稿·对外交付）**停下问用户**——**且照 §六 给编号选项、让用户回一个数字就推进**；确定性步骤（检索去重、建证据/结果表、检索源失败按降级路径换道）自动往下、只汇报进度。
 
 ## 六、问用户的方式：给编号选项，回一个数字就推进（所有停下问用户的地方都照此）

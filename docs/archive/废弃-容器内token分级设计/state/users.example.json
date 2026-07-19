@@ -1,0 +1,13 @@
+{
+  "_说明": "用户分级制度。首次启动若无 users.json，程序会用内置缺省自动生成一份；本文件仅作范例。改 users.json 即时生效，无需重启容器。",
+  "tiers": {
+    "free":  { "label": "普通",   "dailyTokens": 500000 },
+    "plus":  { "label": "高级",   "dailyTokens": 2000000 },
+    "admin": { "label": "管理员", "dailyTokens": 0 }
+  },
+  "defaultTier": "free",
+  "users": {
+    "alice": { "tier": "admin" },
+    "bob":   { "tier": "free" }
+  }
+}

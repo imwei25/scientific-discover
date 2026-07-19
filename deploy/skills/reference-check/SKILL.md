@@ -3,6 +3,11 @@ name: reference-check
 description: 文献真实性核查 / 查假引用。把稿件或参考文献列表里的每条引用去 Crossref 和 PubMed/Europe PMC 对一遍，揪出 AI 常编的假引用——不存在的 DOI/PMID、张冠李戴（DOI 真但标题对不上）、纯属虚构的标题。当用户说"核对参考文献""这些引用是真的吗""查假引用""验证 DOI""AI 会不会编文献""引用真实性""查重引用来源"时使用。
 ---
 
+> **产物位置**：所有产物一律写到主控注入的**会话专属目录** `outputs/<会话id>/`（每轮开头会给出确切前缀，照抄即可）。
+> 别写仓库根的固定名，也别写 `/app` 下的任意目录——`/app` 根不在任何数据卷上，容器一重建（改档位、重部署技能都会重建）产物就没了。
+
+> 注：`<会话id>` 是**占位符**，执行前替换成主控给出的实际会话 id（原样复制进 shell 会因 `<` `>` 是重定向符而报错）。
+
 # 文献真实性核查技能
 
 **AI 写作最大的坑就是编引用**。本技能用脚本把每条引用对到真实数据库，标出可疑的。参考 CiteMe / Scholar Sidekick / Citely 的核查思路。
@@ -18,10 +23,10 @@ description: 文献真实性核查 / 查假引用。把稿件或参考文献列�
 ## 用法
 ```
 # 核查参考文献文件（.bib / .ris / 每行一条的 .txt 都行）
-.venv/Scripts/python.exe .opencode/skills/reference-check/verify_refs.py --input outputs/refs.bib
+SCI_OUTPUT_DIR=outputs/<会话id> .venv/Scripts/python.exe .opencode/skills/reference-check/verify_refs.py --input outputs/<会话id>/refs.bib
 
 # 或直接给几个 DOI / PMID / 标题
-.venv/Scripts/python.exe .opencode/skills/reference-check/verify_refs.py "10.1038/xxx" "PMID:12345678" "某篇论文标题"
+SCI_OUTPUT_DIR=outputs/<会话id> .venv/Scripts/python.exe .opencode/skills/reference-check/verify_refs.py "10.1038/xxx" "PMID:12345678" "某篇论文标题"
 ```
 
 ## 判定结果（按风险从高到低）
@@ -39,7 +44,7 @@ description: 文献真实性核查 / 查假引用。把稿件或参考文献列�
 ## 产出（outputs/）
 - `reference_check.csv`：逐条结论 + 相似度 + 实际匹配到的标题。
 - `reference_check.md`：按风险分组的人读报告。
-- **出 PDF（需要留档/交付时）**：把 `outputs/reference_check.md` 交给 `render-pdf-doc` 技能渲染成 `outputs/reference_check.pdf`。中文报告务必指定中文字体（`--cjk-font`：本地 `Microsoft YaHei`，服务器 `Noto Sans CJK SC`），否则会漏字。
+- **出 PDF（需要留档/交付时）**：把 `outputs/<会话id>/reference_check.md` 交给 `render-pdf-doc` 技能渲染成 `outputs/<会话id>/reference_check.pdf`。中文报告务必指定中文字体（`--cjk-font`：本地 `Microsoft YaHei`，服务器 `Noto Sans CJK SC`），否则会漏字。
 
 ## 撤稿检测（默认开启）
 每条**确认存在**的文献会再去 Europe PMC 查撤稿状态：`pubTypeList` 含 `Retracted Publication` → 判 `RETRACTED`；被标 `Expression of Concern`（表达关注）→ 在 note 里提示、不改判。撤稿通知的出处会一并写进报告。**引到撤稿文献是 AI 辅助写作的高频隐患**（模型的知识截点常早于撤稿日期），故列为最高风险档。

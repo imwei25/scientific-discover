@@ -25,11 +25,11 @@ description: 临床研究常用统计——基线特征表(Table 1) 与 样本�
 
 ```bash
 # 自动推断变量类型（数值且取值多→连续，其余→分类）
-.venv/bin/python .opencode/skills/clinical-stats/scripts/table1.py \
+SCI_OUTPUT_DIR=outputs/<会话id> .venv/bin/python .opencode/skills/clinical-stats/scripts/table1.py \
   --input uploads/data.csv --group arm --out outputs/table1.csv
 
 # 显式指定变量类型（更稳）
-.venv/bin/python .opencode/skills/clinical-stats/scripts/table1.py \
+SCI_OUTPUT_DIR=outputs/<会话id> .venv/bin/python .opencode/skills/clinical-stats/scripts/table1.py \
   --input uploads/data.csv --group arm \
   --continuous age,bmi,sbp --categorical sex,smoker --out outputs/table1.csv
 ```

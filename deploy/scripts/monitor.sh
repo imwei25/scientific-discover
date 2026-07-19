@@ -93,7 +93,10 @@ done
 [ "$(awk -v c="$total" -v t="$COST_TOTAL" 'BEGIN{print (c>=t)?1:0}')" = 1 ] && bad[cost_total]="今日全站总成本 \$$total（阈值 \$$COST_TOTAL）"
 # 7) 昨夜备份是否成功（最新备份目录 26h 内）
 if [ -d "$BACKUP_DIR" ]; then
-  [ -z "$(find "$BACKUP_DIR" -maxdepth 1 -type d -name '20*' -mmin -1560 2>/dev/null | head -1)" ] && bad[backup]="最近 26 小时无成功备份（$BACKUP_DIR），检查 backup cron"
+  # 判据是 backup.sh 全部成功后才写的 OK 标记文件，【不是】目录新鲜度：
+  # backup.sh 一开头就无条件 mkdir 当天目录，失败时也会留下一个刚刚创建的空目录，
+  # 按目录判会把"备份失败"读成"备份成功"（磁盘满时最容易发生，也最需要告警）。
+  [ -z "$(find "$BACKUP_DIR" -maxdepth 2 -type f -name OK -mmin -1560 2>/dev/null | head -1)" ] && bad[backup]="最近 26 小时无成功备份（$BACKUP_DIR 下无新鲜 OK 标记）：检查 backup cron 与磁盘空间。注：刚升级过 backup.sh 的话，首次告警属正常——OK 标记要等下一次备份成功才会有，跑一次 scripts/backup.sh 即可消除"
 else
   bad[backup]="备份目录不存在：$BACKUP_DIR"
 fi

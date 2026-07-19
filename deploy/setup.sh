@@ -18,7 +18,81 @@ scripts/build-image.sh
 
 echo "== 2/4 安装并启动 manager（WorkingDir=$REPO/deploy）=="
 NODE="$(command -v node)"
-sed -e "s#/opt/scientific-discover#$REPO#g" -e "s#/usr/bin/node#$NODE#g" sci-manager.service > /etc/systemd/system/sci-manager.service
+UNIT=/etc/systemd/system/sci-manager.service
+ENVF=/etc/sci-manager.env
+
+rendered="$(sed -e "s#/opt/scientific-discover#$REPO#g" -e "s#/usr/bin/node#$NODE#g" sci-manager.service)"
+
+# 安全写入一个 KEY=VALUE 到 ENVF（值可能含 / | & 等，故不用 sed 替换，避免转义地狱）
+put_env() {
+  local k="$1" v="$2"
+  { grep -v "^${k}=" "$ENVF" 2>/dev/null || true; printf '%s=%s\n' "$k" "$v"; } > "$ENVF.tmp"
+  mv "$ENVF.tmp" "$ENVF"; chmod 600 "$ENVF"
+}
+
+# ① 可变配置（管理密码 / WARM_CAP / IDLE_MS…）放独立的 EnvironmentFile：只在【不存在时】创建，之后永不覆盖。
+envCreated=0
+if [ ! -f "$ENVF" ]; then
+  cp sci-manager.env.example "$ENVF"; chmod 600 "$ENVF"; envCreated=1
+  echo "   已创建 $ENVF（管理台默认【关闭】）"
+else
+  echo "   $ENVF 已存在 → 保留不动（可变配置以它为准）"
+fi
+
+# ② 判断已装单元是不是【旧版】：可变配置还写死在单元里（没有 EnvironmentFile=），或还带着占位密码。
+#    旧版必须升级——否则新加的 EnvironmentFile 永远不会被 systemd 读到，
+#    /etc/sci-manager.env 建了也是摆设，WARM_CAP/管理密码 全都还听旧单元的（改了个寂寞）。
+unitStale=0
+if [ ! -f "$UNIT" ]; then unitStale=1
+elif ! grep -q '^EnvironmentFile=' "$UNIT"; then unitStale=1
+elif grep -q 'change-me-a-strong-admin-password' "$UNIT"; then unitStale=1
+fi
+
+# ③ 升级旧单元前，先把运维在旧单元里改过的值【迁移】进 ENVF（仅当 ENVF 是本次新建的，别覆盖已有配置）。
+#    不迁移就等于把线上调过的 WARM_CAP / 管理密码悄悄清零——正是本次要根治的毛病，别在升级方向上再犯一次。
+if [ "$unitStale" = 1 ] && [ "$envCreated" = 1 ] && [ -f "$UNIT" ]; then
+  for k in ADMIN_PASSWORD WARM_CAP IDLE_MS START_TIMEOUT_MS CAP_WAIT_MS; do
+    v="$(sed -n "s/^Environment=$k=//p" "$UNIT" | head -1)"
+    [ -n "$v" ] || continue
+    [ "$v" = "change-me-a-strong-admin-password" ] && continue   # 占位值不迁移：迁过去等于继续裸奔
+    put_env "$k" "$v"; echo "   从旧单元迁移 $k → $ENVF"
+  done
+fi
+
+# ④ 占位密码只查 ENVF（运维被告知要改的就是它）。
+#    绝不查 $UNIT——旧单元里必然有这个占位串，那样每台老服务器都会在这里 exit 1，
+#    而提示又让人去改 ENVF，改完还是卡在同一处 → 死循环，谁都升不上去。
+if grep -qs 'change-me-a-strong-admin-password' "$ENVF"; then
+  echo "!! $ENVF 里的 ADMIN_PASSWORD 还是占位值 change-me-a-strong-admin-password" >&2
+  echo "   这会让任何知道本仓库的人过个验证码就进 /admin（可加删用户、改档位、塞网关渠道）。" >&2
+  echo "   请改成强密码（openssl rand -base64 24），或留空以关闭管理台，然后重跑。" >&2
+  exit 1
+fi
+
+# ⑤ 装单元：旧版 → 备份后升级；新版且被手改过 → 只提示差异不覆盖（保住运维的调整）。
+if [ "$unitStale" = 1 ]; then
+  if [ -f "$UNIT" ]; then cp -a "$UNIT" "$UNIT.bak.$(date +%s)"; echo "   旧单元已备份为 $UNIT.bak.*"; fi
+  printf '%s\n' "$rendered" > "$UNIT"
+  echo "   已安装/升级 systemd 单元（可变配置改由 $ENVF 提供）"
+elif ! printf '%s\n' "$rendered" | diff -q - "$UNIT" >/dev/null 2>&1; then
+  echo "   ⚠ $UNIT 与仓库模板不一致 → 保留现有文件、不覆盖。差异（左=现有，右=仓库）："
+  diff -u "$UNIT" <(printf '%s\n' "$rendered") | sed 's/^/     /' || true
+  echo "   如确认要改用仓库版本：先 sudo rm $UNIT 再重跑本脚本。"
+else
+  printf '%s\n' "$rendered" > "$UNIT"
+fi
+# ⑥ 提醒 drop-in 优先级：systemd 的 .d/*.conf 在主单元【之后】解析，其中的 Environment=
+#    会盖住主单元里的 EnvironmentFile=/etc/sci-manager.env。这台机器历史上若用 drop-in 存过
+#    ADMIN_PASSWORD 等，运维改 env 文件将毫无效果且没有任何报错——必须说清楚以谁为准。
+dropin_dir=/etc/systemd/system/sci-manager.service.d
+if [ -d "$dropin_dir" ] && grep -rqs '^Environment=' "$dropin_dir" 2>/dev/null; then
+  echo "   ⚠ 检测到 systemd drop-in：$dropin_dir/*.conf 里有 Environment= 设置"
+  grep -rhs '^Environment=' "$dropin_dir" 2>/dev/null | sed 's/\(ADMIN_PASSWORD=\).*/\1***/' | sed 's/^/       /'
+  echo "     drop-in 在主单元之后解析 → 这些值会【覆盖】 $ENVF 里的同名项。"
+  echo "     想统一到 $ENVF 管理，请删掉 drop-in 里对应的行；否则请继续在 drop-in 里改。"
+  echo "     查看最终生效值： systemctl show sci-manager -p Environment"
+fi
+
 systemctl daemon-reload
 systemctl enable --now sci-manager
 
@@ -30,6 +104,17 @@ $DOMAIN {
 	log {
 		output file /var/log/caddy/access.log
 		format json
+	}
+	# 安全响应头 —— 与 deploy/Caddyfile.example 保持一致。
+	# 此前这里【没有】这段，而 Caddyfile.example 有、服务器架构.md 也写着"打安全头"，
+	# 于是走一键部署的真实线上服务器其实一个安全头都没有，文档却宣称有。
+	# X-Frame-Options 用 SAMEORIGIN 而非 DENY：产物预览要用同源 iframe。
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		X-Frame-Options "SAMEORIGIN"
+		-Server
 	}
 	reverse_proxy 127.0.0.1:8090 {
 		flush_interval -1

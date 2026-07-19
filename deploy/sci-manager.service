@@ -14,13 +14,22 @@ WorkingDirectory=/opt/scientific-discover/deploy
 ExecStart=/usr/bin/node /opt/scientific-discover/deploy/manager.mjs
 ExecReload=/bin/kill -HUP $MAINPID
 Environment=LISTEN=127.0.0.1:8090
-Environment=WARM_CAP=2
+# 下面是【出厂默认值】。可变配置一律放 /etc/sci-manager.env（见最后的 EnvironmentFile），
+# 那份文件 setup.sh 只在缺失时创建、之后永不覆盖 —— 重装不会再把线上调过的值静默改回来。
+# WARM_CAP：最多几个用户容器同时在跑（起第 N+1 个前先按 LRU 停掉一个真正空闲的）。内存是硬顶，绝不超配。
+# 5 是在 2 vCPU / 3.4 GB 的机器上实测定的：5 人同时跑 md→PDF 全部成功，内存峰值 2668/3495 MB，
+# swap 零使用、零 OOM（单人 3.9s → 5 人各 11s，慢 2.8 倍，瓶颈是 2 核 CPU 而非内存）。
+# 换机器请重新实测再改：容器空闲约 261 MB/个，重活时远不止。
+Environment=WARM_CAP=5
 Environment=IDLE_MS=600000
 Environment=START_TIMEOUT_MS=60000
 Environment=CAP_WAIT_MS=120000
-# 网页管理台 /admin：设一个强密码即开启（走 Caddy HTTPS，Cookie 带 Secure/HttpOnly）；留空/删掉则管理台关闭。
-# 改这行后：sudo systemctl daemon-reload && sudo systemctl restart sci-manager
-Environment=ADMIN_PASSWORD=change-me-a-strong-admin-password
+# 网页管理台 /admin：【默认关闭】（空密码即关）。要开就在 /etc/sci-manager.env 里设强密码。
+# 绝不要在这里写默认/占位密码——那等于公网上任何知道本仓库的人过个验证码就能进管理台。
+Environment=ADMIN_PASSWORD=
+# 放在所有 Environment= 之后：同名变量以本文件为准，实现“默认值在仓库、实际值在机器上”。
+# 前缀 - 表示文件不存在也不报错（全用上面的默认值，管理台保持关闭）。
+EnvironmentFile=-/etc/sci-manager.env
 Restart=on-failure
 RestartSec=3
 # 需要能调用 docker CLI。服务器自用场景用 root 最省事；或改成 docker 组内用户。

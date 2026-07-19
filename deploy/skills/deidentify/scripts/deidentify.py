@@ -36,6 +36,41 @@ except Exception:
 
 # ---- 检测规则（按精确度从高到低）----
 
+# ---- 产物目录解析（8 个技能脚本统一；见 AGENTS.md §五）----
+# 优先级：显式参数 > SCI_OUTPUT_DIR 环境变量 > 当前工作目录(若已在 outputs/<会话id>/ 内) > 报错中止。
+# 【绝不】再默认写共享的 outputs/ 根：那里不会出现在界面"产出"侧栏，
+# 且同一用户的多个会话共用一个 outputs 卷，写固定名会跨会话互相覆盖。
+# 为什么必须由外部传进来：opencode 是【一个进程服务所有会话】的，
+# 脚本自己读不到任何会话级上下文，只能靠主控（网关每轮注入的 preamble）用环境变量或参数告知。
+def _resolve_out_dir(explicit=None):
+    import os as _os, sys as _sys
+    from pathlib import Path as _Path
+    if explicit:
+        return _Path(explicit)
+    _env = (_os.environ.get("SCI_OUTPUT_DIR") or "").strip()
+    if _env:
+        return _Path(_env)
+    _cwd = _Path.cwd()
+    if _cwd.parent.name == "outputs":          # 已经 cd 进 outputs/<会话id>/
+        return _cwd
+    _msg = [
+        "!! 未指定产物目录，已中止（不再默认写共享的 outputs/ 根）。",
+        "   请用以下任一方式指定本会话的产物目录（<会话id> 由主控在每轮开头给出）：",
+        "     1) 环境变量： SCI_OUTPUT_DIR=outputs/<会话id> python3 <本脚本> ...",
+        "     2) 显式参数： --outdir outputs/<会话id>   （或 --out outputs/<会话id>/<文件名>）",
+        "     3) 先切目录： cd outputs/<会话id> && python3 ...",
+        "   原因：写到共享的 outputs/ 根会跨会话互相覆盖，且不出现在界面的“产出”侧栏里。",
+    ]
+    _sys.exit(chr(10).join(_msg))
+
+
+def _resolve_out_file(explicit=None, default_name="output"):
+    from pathlib import Path as _Path
+    if explicit:
+        return _Path(explicit)
+    return _resolve_out_dir() / default_name
+
+
 def _id_card_ok(s):
     """18 位身份证校验位核验，降低误报（把随便一串 18 位数字当身份证）。
     15 位老身份证无校验位，只能按长度判定（误报率较高，报告里会提示）。"""
@@ -196,12 +231,13 @@ def process_csv(path, out, mask, name_cols, id_cols, do_dates, scan_only):
 def main():
     ap = argparse.ArgumentParser(description="临床数据脱敏（中国 PII/PHI）")
     ap.add_argument("--input", required=True)
-    ap.add_argument("--out", default="outputs/deidentified_output")
+    ap.add_argument("--out", default=None)
     ap.add_argument("--name-cols", default="", help="CSV 里的姓名列名，逗号分隔")
     ap.add_argument("--id-cols", default="", help="CSV 里的标识号列名（住院号等），逗号分隔")
     ap.add_argument("--dates", action="store_true", help="同时脱敏具体日期（默认不脱）")
     ap.add_argument("--scan-only", action="store_true", help="只报告 PII、不改数据")
     args = ap.parse_args()
+    args.out = str(_resolve_out_file(args.out, "deidentified_output"))
 
     _guard_binary(args.input)  # 拒绝 .xlsx/.doc 等二进制，避免静默乱码
     name_cols = {x.strip() for x in args.name_cols.split(",") if x.strip()}

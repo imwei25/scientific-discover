@@ -68,7 +68,7 @@ paperconan 查**源数据表**的数值模式；`pcheck.py` 查**稿件正文里
 # 扫一篇稿件（Methods/Results 里的检验报告）
 .venv/Scripts/python.exe .opencode/skills/data-integrity/pcheck.py outputs/<会话>/manuscript.md --outdir outputs/<会话>/audit
 # 或直接给一段文本
-.venv/Scripts/python.exe .opencode/skills/data-integrity/pcheck.py --text "t(28)=2.05, p=.02"
+SCI_OUTPUT_DIR=outputs/<会话id> .venv/Scripts/python.exe .opencode/skills/data-integrity/pcheck.py --text "t(28)=2.05, p=.02"
 ```
 - 只认**统计量+自由度+p 三者齐全**的句子（如 `t(28)=2.05, p=.048`、`F(2,57)=3.11, p=.05`、`χ²(1)=4.10, p=.04`）；缺自由度的裸统计量无法重算、自动跳过。
 - 产出 `pcheck.md` / `pcheck.csv`，三档：**🔴 DECISION_ERROR**（重算跨过 .05 而报告没跨，或反之——显著性判断相反，最需核对）、**🟡 INCONSISTENT**（数值不符但同侧于 .05，多为笔误/四舍五入）、**🔵 ONE_TAILED**（两尾对不上但≈重算/2，可能按单尾报告）。

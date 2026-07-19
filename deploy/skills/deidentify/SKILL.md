@@ -29,10 +29,10 @@ description: 临床数据脱敏 / 去标识化。上传含患者信息的数据�
 脚本在 `.opencode/skills/deidentify/scripts/`，从仓库根运行或用全路径：
 ```bash
 # 先扫描看看有哪些 PII、不改数据
-.venv/bin/python .opencode/skills/deidentify/scripts/deidentify.py --input uploads/patients.csv --scan-only
+SCI_OUTPUT_DIR=outputs/<会话id> .venv/bin/python .opencode/skills/deidentify/scripts/deidentify.py --input uploads/patients.csv --scan-only
 
 # CSV 脱敏：自动扫每个单元格；姓名列、标识号列显式指定按列假名化
-.venv/bin/python .opencode/skills/deidentify/scripts/deidentify.py \
+SCI_OUTPUT_DIR=outputs/<会话id> .venv/bin/python .opencode/skills/deidentify/scripts/deidentify.py \
   --input uploads/patients.csv --out outputs/patients_deid.csv \
   --name-cols 姓名,患者姓名 --id-cols 住院号,身份证号
 
