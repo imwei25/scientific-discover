@@ -38,6 +38,10 @@ if [ "$purge" = "--purge" ]; then
       echo "!! 备份失败，但指定了 --force → 仍继续删除" >&2
     else
       echo "!! 备份失败，已中止：用户与数据卷【均原样保留】，什么都没删。" >&2
+      # 但容器确实被上面停掉了 —— 不说明的话，这句"什么都没删"会让运维以为服务照常。
+      # 影响有限（下次访问时 manager 的 ensureUp 会自动拉起），但必须如实讲。
+      echo "   注意：为拿到一致快照，上面已停掉容器 agent-${name}；该用户下次访问时会自动重新拉起。" >&2
+      echo "   想立刻恢复服务：docker start agent-${name}" >&2
       echo "   确认无需保留数据、坚持删除请加 --force：scripts/user-del.sh $name --purge --force" >&2
       exit 1
     fi

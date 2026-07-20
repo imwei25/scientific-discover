@@ -53,7 +53,16 @@ if [ -d "$ROOT/volumes" ]; then
     if ! docker run --rm -v "$target":/data -v "$ROOT/volumes":/backup alpine \
          sh -c "set -e
                 tar tzf /backup/$b >/dev/null
-                rm -rf /data/.rollback && mkdir -p /data/.rollback
+                # 【绝不无条件 rm -rf .rollback】上一次导入若在"移开之后、解包完成之前"被打断
+                # （Ctrl-C / 宿主重启 / OOM / 守护进程重启），卷里数据的唯一副本就躺在 .rollback 里。
+                # 若这里照旧 rm -rf，重跑一次导入就把它彻底删掉了 —— 本意是防丢数据，结果是毁数据。
+                if [ -d /data/.rollback ]; then
+                  echo '!! 检测到上次导入留下的 .rollback（上次可能被中断）。' >&2
+                  echo '   卷里数据的唯一副本可能就在其中，本脚本不会动它。' >&2
+                  echo '   请人工检查 /data/.rollback 并自行决定恢复或删除后再重跑。' >&2
+                  exit 2
+                fi
+                mkdir -p /data/.rollback
                 for f in /data/* /data/..?* /data/.[!.]*; do
                   [ -e \"\$f\" ] || continue
                   case \"\$f\" in */.rollback) continue;; esac
@@ -63,11 +72,20 @@ if [ -d "$ROOT/volumes" ]; then
                   rm -rf /data/.rollback
                 else
                   echo '解包失败，正在回滚既有数据…' >&2
-                  for f in /data/* /data/..?*; do
+                  # 清理半截解包的产物：三种通配都要带上。只写 /data/* 会漏掉隐藏文件，
+                  # 让部分解包出来的点文件混进回滚后的树里。
+                  for f in /data/* /data/..?* /data/.[!.]*; do
+                    [ -e \"\$f\" ] || continue
                     case \"\$f\" in */.rollback) continue;; esac
                     rm -rf \"\$f\" 2>/dev/null || true
                   done
-                  mv /data/.rollback/* /data/ 2>/dev/null || true
+                  # 【隐藏文件也要搬回来】POSIX sh 的 * 不匹配点文件，只写 .rollback/* 的话，
+                  # 移进去的隐藏条目会被原样留下、然后被下一行 rm -rf 永久删除 ——
+                  # 而脚本却打印"已回滚"。ocdata 卷根目录恰恰可能有点文件。
+                  for f in /data/.rollback/* /data/.rollback/..?* /data/.rollback/.[!.]*; do
+                    [ -e \"\$f\" ] || continue
+                    mv \"\$f\" /data/ 2>/dev/null || true
+                  done
                   rm -rf /data/.rollback
                   exit 1
                 fi"; then

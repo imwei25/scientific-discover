@@ -66,7 +66,22 @@ def _resolve_out_dir(explicit=None):
         return _p
     _env = (_os.environ.get('SCI_OUTPUT_DIR') or '').strip()
     if _env:
-        return _Path(_env)
+        _e = _Path(_env)
+        # 与 explicit 分支同样的拦截。这条尤其要紧：项目文档教的就是
+        # `SCI_OUTPUT_DIR=outputs/<会话id>` 这个【相对】写法，而 cwd 已经是会话产物目录，
+        # 解析出来就是 outputs/<会话id>/outputs/<会话id>/ —— 产物在界面上永远看不见。
+        if _in_session and not _e.is_absolute() and _e.parts and _e.parts[0] == 'outputs':
+            _m = [
+                '!! 环境变量 SCI_OUTPUT_DIR 的写法有误，已中止。',
+                '   当前值： SCI_OUTPUT_DIR=' + _env,
+                '   当前工作目录已经【就是】本会话的产物目录： ' + str(_cwd),
+                '   再拼 outputs/ 前缀会写成 ' + str(_cwd / _e) + '，',
+                '   而界面的“产出”侧栏只列顶层文件，嵌套子目录里的产物用户永远看不到。',
+                '   正确做法：不要设这个环境变量（脚本会自动认出当前目录），',
+                '   或把它设成【绝对路径】。',
+            ]
+            _sys.exit(chr(10).join(_m))
+        return _e
     if _in_session:
         return _cwd
     _msg = [

@@ -554,6 +554,7 @@ function startJob(sid, sentText) {
     const outDir = await sessionOut(sid)                 // 本会话的绝对产物目录（= agent 的工作目录）
     const before = dirState(outDir)   // 记录本轮开始前本会话产物状态，用于算增量
     let cost0 = 0; try { cost0 = un(await client.session.get({ path: { id: sid } }))?.cost || 0 } catch {}   // 本轮前累计成本，用于算增量
+    job.cost0 = cost0   // 挂到 job 上：容器停机时 gracefulExit 要用它把本轮已花的钱结算掉（见文件末尾）
     let result, promptErr = null
     try {
       result = un(await client.session.prompt({ path: { id: sid }, body: { model: MODEL, parts: [{ type: "text", text: sentText }] } }))
@@ -1194,13 +1195,33 @@ async function gracefulExit(sig) {
   shuttingDown = true
   exitLog(`[exit] 收到 ${sig}，开始优雅退出（在跑的轮：${runningRounds()}）`)
   try { server.close() } catch {}   // 停止接受新连接；已建立的连接自然收尾
-  // 主动 abort 在跑的轮：job.abort() 会走 finish() → addCost 把本轮已花的钱记进 quota.json。
-  // 不 abort 只是干等的话，6 秒后直接 process.exit，本轮成本永远入不了账 —— 而 manager
-  // 按需停容器/腾位很频繁，等于每次停机时正在跑的那轮【全部免费】，且 runningCost 的实时占位
-  // 随进程消失，quota.json 里看不出任何痕迹，额度就不可信了。
-  for (const job of [...jobs.values()]) { if (job.running) { try { await job.abort() } catch {} } }
+  // 【顺序要紧：先结算、再 abort】
+  // 上一版这里写的是 `await job.abort()`，注释说"abort 会走 finish() → addCost"——那条链路
+  // 【代码里根本不存在】：finish() 只清状态（job.running=false; jobs.delete），addCost 唯一的
+  // 调用点在主 IIFE 里、必须等 session.prompt 返回之后才到得了。于是那版改动的实际效果是：
+  // abort → jobs 清空 → runningRounds() 归零 → 下面的排空循环【第一次判断就退出】、6 秒窗口
+  // 变成死代码 → process.exit 立刻执行 → 那个还停在 prompt 上的 IIFE 被杀 → 成本永远入不了账。
+  // 比不改还差：改之前，能在 6 秒内自然结束的轮次好歹会自己走到 addCost。
+  // 现在显式结算：查一次当前累计成本，减去开轮前的 job.cost0，直接 addCost。
+  const settleDeadline = Date.now() + 4000
+  for (const job of [...jobs.values()]) {
+    if (!job.running) continue
+    try {
+      // 给每次查询单独设超时：opencode 若已卡死，这里不能一直等 —— docker 的宽限期只有 10 秒，
+      // 拖过去就是 SIGKILL，下面的 killPort 也执行不到，反而留下孤儿 opencode 进程。
+      const left = Math.max(500, settleDeadline - Date.now())
+      const info = await Promise.race([
+        client.session.get({ path: { id: job.sid } }).then(un),
+        new Promise((_, rej) => setTimeout(() => rej(new Error("settle timeout")), left)),
+      ])
+      const c1 = info?.cost || 0
+      const delta = c1 - (job.cost0 || 0)
+      if (delta > 0) { addCost(delta); exitLog(`[exit] 已结算 ${job.sid} 本轮成本 $${delta.toFixed(4)}`) }
+    } catch (e) { exitLog(`[exit] 结算 ${job.sid} 失败（本轮可能不计费）：${e?.message || e}`) }
+    try { await Promise.race([job.abort(), sleep(1500)]) } catch {}   // abort 也别无限等
+  }
   // 给收尾留一点时间，但设硬上限——宽限期本身只有 10 秒，超时就没意义了
-  const deadline = Date.now() + 6000
+  const deadline = Date.now() + 3000
   while (runningRounds() > 0 && Date.now() < deadline) await sleep(200)
   if (runningRounds() > 0) exitLog(`[exit] 仍有 ${runningRounds()} 轮未收尾，不再等待`)
   // opencode 是 detached+unref 的子进程，不主动收会变成孤儿（容器销毁时才被清掉）。
