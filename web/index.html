@@ -928,16 +928,21 @@ const loadSessions = () => fetch("api/sessions").then(r => r.json()).then(render
 async function resumeSession(id) {                 // 载入历史 → 设为当前会话 →（后台还在生成则续流）
   detachStream()                                   // 只退订原会话的流，后台生成不受影响
   sessionId = id; localStorage.setItem("nm_sid", id)
+  // 【必须看 r.ok】历史接口失败时服务端回的是 400 + 空数组体，直接 .json() 会得到一个合法的 []，
+  // 于是"载入失败"被渲染成"这个会话本来就是空的" —— 用户以为几十轮对话没了，而实际只是没读到。
+  // 宁可显示一条明确的错误，也不要用空白冒充成功。
+  let histFailed = false
   const [hist, outs, job] = await Promise.all([
-    fetch("api/history?id=" + encodeURIComponent(id)).then(r => r.json()).catch(() => []),
-    fetch("api/outputs?sid=" + encodeURIComponent(id)).then(r => r.json()).catch(() => []),
-    fetch("api/job?sid=" + encodeURIComponent(id)).then(r => r.json()).catch(() => ({ running: false })),
+    fetch("api/history?id=" + encodeURIComponent(id)).then(r => { if (!r.ok) { histFailed = true; return [] } return r.json() }).catch(() => { histFailed = true; return [] }),
+    fetch("api/outputs?sid=" + encodeURIComponent(id)).then(r => r.ok ? r.json() : []).catch(() => []),
+    fetch("api/job?sid=" + encodeURIComponent(id)).then(r => r.ok ? r.json() : { running: false }).catch(() => ({ running: false })),
   ])
   if (sessionId !== id) return                     // 等待期间用户又切走了 → 放弃本次渲染
   log.innerHTML = ""
+  if (histFailed) addNote("⚠ 这个会话的历史没能载入（网络或服务异常）。请刷新重试——你的对话没有丢失，只是这次没读到。")
   for (const m of hist) add(m.role === "user" ? "user" : "bot", m.text)
   renderFiles((outs || []).map(o => o.name))       // 产物随会话持久回显
-  if (!hist.length && !job.running) renderWelcome()
+  if (!hist.length && !job.running && !histFailed) renderWelcome()   // 载入失败时别用欢迎页盖掉上面那条错误提示
   loadSessions()                                   // 重渲染以高亮当前会话
   loadUploads()                                    // 回显该会话已上传的文件
   if (job.running) attachStream(id)                // 这轮还在后台生成 → 重放快照并续流

@@ -521,6 +521,18 @@ function warmPreviews(dir, names) {
   }
 }
 
+// ---- 注入给 agent 的"工作区前言"：写入与剥离必须共用同一个标记 ----
+// 【为什么要共用常量】原来这两处各写各的字面量：注入端是 `【本会话工作区，务必遵守】`，
+// 而 /api/history 的剥离正则却还在找旧文案 `【本会话专属目录`（我改注入端时漏改了剥离端）。
+// 后果：实时流式输出正常（不走剥离），但用户【重开或切回会话】时，整段内部指令会被当成
+// 他自己发的话显示出来，还带着 /app/outputs/ws_xxx 这种容器绝对路径。因为只在"回看"时才犯，
+// 一直没被发现。改成从同一个常量派生，杜绝再次漂移。
+const PREAMBLE_MARK = "【本会话工作区，务必遵守】"
+const PREAMBLE_MARK_LEGACY = "【本会话专属目录"   // 老会话里存的是旧文案，回看时同样要剥掉
+const _reEsc = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
+const PREAMBLE_RE = new RegExp("^(?:" + _reEsc(PREAMBLE_MARK) + "|" + _reEsc(PREAMBLE_MARK_LEGACY) + ")[\\s\\S]*?\\n\\n")
+const stripPreamble = (t) => t.replace(PREAMBLE_RE, "")
+
 const jobs = new Map()   // sid -> 进行中的 job
 // 在跑的轮数。三处要用同一个判据：/api/busy（manager 停机/腾位前探它）、以及切模型的两条路径
 // （/api/model、/api/model/pick）——它们会 restartOpencode()，把所有在跑的轮连根拔掉。
@@ -860,8 +872,12 @@ const server = http.createServer(async (req, res) => {
 
     // 某会话的历史消息（user/assistant 正文），用于断点续问时回显上下文
     if (req.method === "GET" && u.pathname === "/api/history") {
-      const id = u.searchParams.get("id") || ""
-      if (!id) return send(res, 400, "application/json", "[]")
+      // 兼容 sid：本接口用 id=，而 /api/outputs、/api/job、/api/download 全用 sid= ——
+      // 这种不一致本身就是踩坑源，两个都收下，别让调用方因为传错参数名而拿到"空会话"。
+      const id = u.searchParams.get("id") || u.searchParams.get("sid") || ""
+      // 错误体【不能】是 []：那是一个能被 r.json() 正常解析的合法空结果，调用方不看状态码就会
+      // 把"读取失败"渲染成"这个会话是空的"，用户以为对话丢了。回一个明显不是结果的对象。
+      if (!id) return send(res, 400, "application/json", JSON.stringify({ err: "缺少会话 id" }))
       await clearStaleRevert(id)   // 打开会话即自愈：清掉上次编辑遗留的半回退标记，让历史与后续编辑基于完整消息列表
       const msgs = un(await client.session.messages({ path: { id } })) || []
       const out = []
@@ -869,7 +885,7 @@ const server = http.createServer(async (req, res) => {
         const role = m.info?.role
         if (role !== "user" && role !== "assistant") continue
         let text = (m.parts || []).filter((p) => p.type === "text").map((p) => p.text).join("\n").trim()
-        text = text.replace(/^【本会话专属目录[\s\S]*?】[\s\S]*?\n\n/, "")   // 剥掉注入的目录前言，只回显真正对话
+        text = stripPreamble(text)   // 剥掉注入的工作区前言，只回显真正对话
         if (text) out.push({ role, text })
       }
       // 这一轮还在生成中：末尾未完成的助手输出交给续流（/api/chat/attach）直播，从历史里剔除避免重复
@@ -1036,7 +1052,7 @@ const server = http.createServer(async (req, res) => {
       // 给 agent 注入本会话专属目录，覆盖技能默认的 outputs/，实现多用户/多会话隔离
       // 注意：本会话的工作目录（cwd）已在建会话时通过 opencode 的 session.directory 定在【会话产物目录】，
       // 所以 agent 的所有工具默认就在正确的地方读写，preamble 只需说清"当前目录就是产物目录"与几个绝对路径。
-      const preamble = `【本会话工作区，务必遵守】\n- **你的当前工作目录就是本会话的产物目录**（\`${ws.out}\`）。所有产物（图表 PNG/PDF、CSV/Excel、md/docx 等）**直接写到当前目录即可**，用相对文件名如 \`fig1.png\`、\`manuscript.md\`，不要再自己拼 \`outputs/xxx\` 前缀。\n- 临时脚本、中间文件同样写当前目录（要归拢可用 \`./.scratch/\`）。\n- 用户上传的数据文件在 \`${ws.up}/\`（读数据从这里找，用这个绝对路径）。\n- 跑本套件的脚本用 \`\${REPO_ROOT:-/app}\` 前缀定位仓库，例如 \`\${REPO_ROOT:-/app}/.venv/bin/python \${REPO_ROOT:-/app}/.opencode/skills/<技能>/xxx.py\`——因为当前目录不是仓库根，写 \`.venv/...\` 这种相对路径会找不到。\n- 正文里嵌入图片直接用文件名：\`![图注](fig1.png)\`（图和稿件都在当前目录，渲染也从当前目录跑）。\n- **不要把产物写到仓库根或 \`\${REPO_ROOT:-/app}\` 下**：那是所有会话共享的，会互相覆盖，也不会出现在界面的"产出"侧栏。\n\n`
+      const preamble = `${PREAMBLE_MARK}\n- **你的当前工作目录就是本会话的产物目录**（\`${ws.out}\`）。所有产物（图表 PNG/PDF、CSV/Excel、md/docx 等）**直接写到当前目录即可**，用相对文件名如 \`fig1.png\`、\`manuscript.md\`，不要再自己拼 \`outputs/xxx\` 前缀。\n- 临时脚本、中间文件同样写当前目录（要归拢可用 \`./.scratch/\`）。\n- 用户上传的数据文件在 \`${ws.up}/\`（读数据从这里找，用这个绝对路径）。\n- 跑本套件的脚本用 \`\${REPO_ROOT:-/app}\` 前缀定位仓库，例如 \`\${REPO_ROOT:-/app}/.venv/bin/python \${REPO_ROOT:-/app}/.opencode/skills/<技能>/xxx.py\`——因为当前目录不是仓库根，写 \`.venv/...\` 这种相对路径会找不到。\n- 正文里嵌入图片直接用文件名：\`![图注](fig1.png)\`（图和稿件都在当前目录，渲染也从当前目录跑）。\n- **不要把产物写到仓库根或 \`\${REPO_ROOT:-/app}\` 下**：那是所有会话共享的，会互相覆盖，也不会出现在界面的"产出"侧栏。\n\n`
       startJob(sid, preamble + q)   // 同步建 job（jobs.set 在函数首行）→ 返回后前端 attach 必能接上
       return send(res, 200, "application/json", JSON.stringify({ ok: true, sid, sent: true }))
     }
