@@ -383,7 +383,12 @@ async function handleUserLogin(u, fwdPath, req, res) {
   let captcha = ""; try { captcha = JSON.parse(body.toString() || "{}").captcha || "" } catch {}
   if (!verifyCaptcha(parseCookies(req).cap_id, captcha)) {
     audit("login.fail", { user: u.name, ip: clientIp(req), reason: "captcha" })
-    res.writeHead(401, { "content-type": "application/json; charset=utf-8" })
+    // 【400 而非 401】：fail2ban 的 caddy-login jail 认的是 "/api/login + status:401"，无法区分
+    // "验证码看错了" 和 "密码试错"。而验证码是人眼识别、看错很常见，maxretry=5 意味着连看错 5 次
+    // 就把【整个出口 IP】封 1 小时——一个诊所几十号人共用一个出口 IP，等于一人手滑全院被连坐。
+    // 验证码失败属于"请求格式/挑战未通过"，用 400 更准确，也自然不计入爆破统计；
+    // 真正该被限速的密码试错仍然回 401，jail 照常生效。
+    res.writeHead(400, { "content-type": "application/json; charset=utf-8" })
     return res.end(JSON.stringify({ ok: false, err: "验证码错误", captcha: true }))
   }
   await ensureUp(u, clientIp(req))   // 登录也走冷启动限流（本路径已先过图形验证码，正常用户不会撞到）
@@ -685,7 +690,8 @@ async function handleAdmin(req, res, pathname) {
   }
   if (req.method === "POST" && pathname === "/admin/api/login") {
     const b = await readBody(req)
-    if (!verifyCaptcha(parseCookies(req).cap_id, b.captcha)) { await sleep(400); audit("admin.login.fail", { ip: clientIp(req), reason: "captcha" }); return json(401, { ok: false, err: "验证码错误", captcha: true }) }
+    // 同上：验证码失败回 400，别让人眼看错验证码把整个出口 IP 送进 fail2ban 的黑名单
+    if (!verifyCaptcha(parseCookies(req).cap_id, b.captcha)) { await sleep(400); audit("admin.login.fail", { ip: clientIp(req), reason: "captcha" }); return json(400, { ok: false, err: "验证码错误", captcha: true }) }
     if (!safeEq(b.password || "", ADMIN_PASSWORD)) { await sleep(600); audit("admin.login.fail", { ip: clientIp(req), reason: "password" }); return json(401, { ok: false, err: "密码错误", captcha: true }) }
     audit("admin.login.ok", { ip: clientIp(req) })
     res.writeHead(200, { "content-type": "application/json", "set-cookie": `admin_auth=${signSession(ADMIN_PASSWORD, "admin")}; Path=/admin; HttpOnly; Secure; SameSite=Strict; Max-Age=${AUTH_TTL_MS / 1000}` })

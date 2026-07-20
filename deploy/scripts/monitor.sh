@@ -65,6 +65,7 @@ alert_check() {
 }
 
 declare -A bad   # key -> 人话描述
+declare -A oomc  # 容器名 -> 窗口内 OOM 次数（见下方 4)）
 
 # 1) 磁盘
 dp=$(df -P / 2>/dev/null | awk 'NR==2{gsub("%","",$5);print $5}')
@@ -75,9 +76,34 @@ if [ "${st:-0}" -gt 0 ] 2>/dev/null; then sp=$((su*100/st)); [ "$sp" -ge "$SWAP_
 # 3) 关键服务
 for s in sci-manager caddy docker; do systemctl is-active --quiet "$s" 2>/dev/null || bad[svc:$s]="服务 $s 未运行"; done
 # 4) 容器被 OOM 杀（和内存上限相关）
-for c in $(docker ps -a --filter name=agent- --format '{{.Names}}' 2>/dev/null); do
-  [ "$(docker inspect -f '{{.State.OOMKilled}}' "$c" 2>/dev/null)" = "true" ] && bad[oom:$c]="容器 $c 被 OOM 杀死（内存不足），考虑调 mem_limit 或降 WARM_CAP"
-done
+#
+# 【为什么不用 docker inspect .State.OOMKilled】它只反映容器【最近一次退出】的状态，而 manager
+# 是按需拉起 / 到点回收 / 腾位重建容器的——容器一旦重启，这个标志就被新状态覆盖。5 分钟一轮的
+# cron 撞上"OOM 之后、下次启动之前"那个窗口的概率极低，等于这条检查基本永远报不出来。
+# 改成从 docker 事件流取证：OOM 事件一旦发生就写进持久日志，容器怎么重建都抹不掉。
+OOM_WINDOW="${OOM_WINDOW_SEC:-21600}"        # 报警回看窗口（默认 6h，与 REALERT 对齐）
+oom_log="$STATE_DIR/oom.log"                 # 持久化：<epoch> <容器名>
+oom_last="$STATE_DIR/oom.last"               # 上次扫到哪一刻，避免重复计同一事件
+since=$(cat "$oom_last" 2>/dev/null); since=${since:-$((now - 300))}
+# --until 给定后 docker events 会立即返回（不是长驻跟随），可安全放在 cron 里
+docker events --since "$since" --until "$now" \
+    --filter type=container --filter event=oom \
+    --format '{{.Actor.Attributes.name}}' 2>/dev/null \
+  | while read -r c; do [ -n "$c" ] && echo "$now $c" >> "$oom_log"; done
+echo "$now" > "$oom_last"
+# 只报窗口内发生过的：事件是瞬时的，若只报"本轮新扫到的"，告警去重会在下一轮把它当作
+# 已恢复而补发一条"已恢复"，把一次真实 OOM 说成虚惊。按窗口回看则键会稳定保持 6h。
+if [ -f "$oom_log" ]; then
+  cut=$((now - OOM_WINDOW))
+  while read -r ts c; do
+    [ "${ts:-0}" -ge "$cut" ] 2>/dev/null && oomc[$c]=$(( ${oomc[$c]:-0} + 1 ))
+  done < "$oom_log"
+  for c in "${!oomc[@]}"; do
+    bad[oom:$c]="容器 $c 在过去 $((OOM_WINDOW/3600))h 内被 OOM 杀死 ${oomc[$c]} 次（内存不足），考虑调 mem_limit 或降 WARM_CAP"
+  done
+  # 日志只留最近 500 条，防止长期累积
+  [ "$(wc -l < "$oom_log")" -gt 500 ] 2>/dev/null && { tail -n 500 "$oom_log" > "$oom_log.tmp" && mv "$oom_log.tmp" "$oom_log"; }
+fi
 # 5) 站点从外部可达（探 manager 的登录页，不唤醒容器）
 curl -sf -m 15 -o /dev/null "https://$DOMAIN/" 2>/dev/null || bad[site]="站点 https://$DOMAIN/ 探活失败（外部可能打不开）"
 # 6) 今日成本（读各用户 ocdata 卷 quota.json）

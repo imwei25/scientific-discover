@@ -378,6 +378,15 @@
     aside { order: -1; }
     #preview { width: 100vw; }
   }
+  /* 存储告急横幅（见 body 里 #storebanner 处的注释） */
+  #storebanner { padding: 9px 16px; font-size: 13px; line-height: 1.5; display: flex; align-items: center;
+    gap: 10px; flex-wrap: wrap; border-bottom: 1px solid rgba(0,0,0,.08); }
+  #storebanner.warn { background: #fff4e5; color: #8a4b08; }   /* ≥90%：还写得进，先提醒 */
+  #storebanner.full { background: #fdecea; color: #a3261a; }   /* 已满：写入已经在被拒了 */
+  #storebanner b { font-weight: 600; }
+  #storebanner .sbx { margin-left: auto; background: none; border: 1px solid currentColor; color: inherit;
+    border-radius: 6px; padding: 3px 10px; font-size: 12px; cursor: pointer; opacity: .75; }
+  #storebanner .sbx:hover { opacity: 1; }
 </style>
 </head>
 <body>
@@ -396,6 +405,10 @@
     <div class="status"><span class="dot"></span>在线</div>
   </div>
 </header>
+<!-- 存储告急横幅：原先只有侧栏上传面板里一行小字变红，而侧栏在窄屏会收起 —— 等于用户在
+     撞上限（新上传被 413 拒收、产物写不进去）之前基本看不到预警。放在 header 之下、main
+     之外，与侧栏开合无关，任何屏宽都挡不住。仅 ≥90% 时出现，掉回去自动消失。 -->
+<div id="storebanner" hidden></div>
 <main>
   <div id="sessbar">
     <div class="sb-top">
@@ -1153,13 +1166,42 @@ async function refreshStorage() {
   const bar = document.getElementById("storebar")
   try {
     const s = await fetch("api/storage").then(r => r.json())
-    if (!s || !s.limit) { bar.style.display = "none"; return }
+    if (!s || !s.limit) { bar.style.display = "none"; hideStoreBanner(); return }
     const mb = (b) => (b / 1048576).toFixed(b >= 10485760 ? 0 : 1)
     const pct = Math.min(100, Math.round(s.used / s.limit * 100))
     bar.style.display = ""
     bar.textContent = `存储 ${mb(s.used)} / ${mb(s.limit)} MB（${pct}%）` + (pct >= 90 ? "　⚠ 接近上限，请删除旧会话/文件" : "")
     bar.style.color = pct >= 90 ? "#dc4b37" : ""
-  } catch { bar.style.display = "none" }
+    renderStoreBanner(pct, mb(s.used), mb(s.limit))
+  } catch { bar.style.display = "none"; hideStoreBanner() }
+}
+// 顶部横幅：≥90% 才出现，重点是说清【后果】而非只报个百分比 —— 用户看到 "93%" 未必知道
+// 那意味着下一次上传会被直接拒收。"知道了"只压住当前这一档（90/95/100），用量再涨一档会
+// 重新弹出，免得随手关掉之后就再也收不到任何预警。
+let storeDismissed = -1
+function hideStoreBanner() { const el = document.getElementById("storebanner"); if (el) el.hidden = true }
+function renderStoreBanner(pct, usedMb, limitMb) {
+  const el = document.getElementById("storebanner")
+  if (!el) return
+  const step = pct >= 100 ? 100 : Math.floor(pct / 5) * 5
+  // 掉回安全区就把"已知晓"清零：否则用户在 100% 时点过一次，事后清理降到 70%，
+  // 之后再涨回 93% 就因为 dismissed(100) >= 90 而被永久压住，再也不预警。
+  if (pct < 90) { storeDismissed = -1; el.hidden = true; return }
+  if (storeDismissed >= step) { el.hidden = true; return }
+  const full = pct >= 100
+  el.className = full ? "full" : "warn"
+  el.textContent = ""
+  const msg = document.createElement("span")
+  const b = document.createElement("b")
+  b.textContent = full ? "存储已满" : `存储已用 ${pct}%`
+  msg.append(b, document.createTextNode(full
+    ? `（${usedMb} / ${limitMb} MB）—— 新的上传会被拒收，agent 也可能写不出产物。请删除不再需要的会话或文件。`
+    : `（${usedMb} / ${limitMb} MB）—— 到达上限后新的上传会被拒收。建议现在就删掉不再需要的会话或文件。`))
+  const x = document.createElement("button")
+  x.className = "sbx"; x.type = "button"; x.textContent = "知道了"
+  x.onclick = () => { storeDismissed = step; el.hidden = true }
+  el.append(msg, x)
+  el.hidden = false
 }
 // ---- 今日额度：顶栏常驻「已用/上限」，撞限前心里有数（清单 P2-2）。limit=0 不限额则不显示；≥90% 变红 ----
 async function refreshQuota() {
