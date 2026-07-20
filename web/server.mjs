@@ -601,8 +601,21 @@ async function ensureSessionTitle(sid, q) {
 // 半回退态：opencode 之后只返回不一致的回退视图，导致再次编辑必然失败（悬空 messageID）。
 // 判据：有 revert 标记 且 该会话没有正在跑的 job → 一定是残留（成功的一次编辑会把标记清成 null），
 // 用 unrevert 清掉。只在“打开会话 / 开始新一次编辑”时调用，绝不碰正在提交的正常编辑流程。
+//
+// 但这个判据本身分不出「真残留」和「刚暂存、正等用户敲完编辑重发」——后者同样是有标记且无 job。
+// 修前实况：revert 之后、重发之前，任何一次 /api/history 读取都会把回退撤销（典型：双开标签页，
+// 另一页切回该会话触发 resumeSession 拉历史），编辑就静默退化成【追加】。所以用内存表登记
+// 「待提交回退」：网关是单进程、合法 revert 只出自 /api/revert 一处，登记内存态就够。
+// 新鲜期内（TTL 30 分钟，够用户改完一段长文）history 读取不自愈；提交（下一条 prompt 起轮，
+// opencode 收到新消息会自己清标记）或再次 /api/revert 都会摘掉登记；过期/网关重启 → 表空 →
+// 退回「一律按残留自愈」的旧行为，正好兜住点了编辑又弃走的会话。
+const pendingReverts = new Map()   // sid -> 暂存时刻 (ms)
+const REVERT_PENDING_TTL = 30 * 60_000
 async function clearStaleRevert(sid) {
   if (!sid || jobs.get(sid)?.running) return   // 正在生成 → 可能是合法的进行中状态，别动
+  const staged = pendingReverts.get(sid)
+  if (staged && Date.now() - staged < REVERT_PENDING_TTL) return   // 新鲜的待提交回退 ≠ 残留，别撤
+  pendingReverts.delete(sid)   // 过期条目顺手摘掉，走下面的残留自愈
   try {
     const s = un(await client.session.get({ path: { id: sid } }))
     if (s?.revert) { await client.session.unrevert({ path: { id: sid } }); return true }
@@ -611,6 +624,9 @@ async function clearStaleRevert(sid) {
 }
 const sseWrite = (res, ev, data) => { try { res.write(`event: ${ev}\ndata: ${JSON.stringify(data)}\n\n`) } catch {} }
 function startJob(sid, sentText) {
+  // 新一轮 prompt 就是回退的提交动作（opencode 收到新消息会把 revert 标记清成 null），
+  // 待提交登记到此结束；之后再出现的 revert 标记就真是残留了，交还给 clearStaleRevert 自愈。
+  pendingReverts.delete(sid)
   const job = {
     sid, running: true, finished: false, subs: new Set(),
     // 增量快照：text 是累积全文、reasoning 按 id、tool 按 callID 各存最新一条，attach 时按序重放即可还原界面
@@ -1073,12 +1089,14 @@ const server = http.createServer(async (req, res) => {
       // 该会话正在生成 → 拒绝回退：此刻 opencode 正往消息列表写，revert 会把状态搅乱、本轮收尾行为未定义。
       // （前端 activeES 一般已拦，但双开/attach 失败时前端拦不住，这里兜底。）
       if (jobs.get(sid)?.running) return send(res, 409, "application/json", JSON.stringify({ ok: false, err: "本轮生成进行中，无法编辑，请等结束后再试" }))
+      pendingReverts.delete(sid)   // 重新发起编辑 → 上一次未提交的暂存作废，让下面的自愈把它撤干净再重算
       await clearStaleRevert(sid)   // 先清掉上一次没提交的残留回退，确保 uindex→messageID 对着完整消息列表算，而非回退视图
       const msgs = un(await client.session.messages({ path: { id: sid } })) || []
       const target = msgs.filter((m) => m.info?.role === "user")[uindex]   // 按顺序取第 uindex 个用户消息
       if (!target?.info?.id) return send(res, 404, "application/json", JSON.stringify({ ok: false, err: "message not found" }))
       try { await client.session.revert({ path: { id: sid }, body: { messageID: target.info.id } }) }
       catch (e) { return send(res, 500, "application/json", JSON.stringify({ ok: false, err: String(e) })) }
+      pendingReverts.set(sid, Date.now())   // 暂存成功 → 登记为待提交，新鲜期内 history 读取不许把它当残留撤掉
       return send(res, 200, "application/json", JSON.stringify({ ok: true }))
     }
 
