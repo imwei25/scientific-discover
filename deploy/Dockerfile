@@ -43,21 +43,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && fc-cache -f \
     && rm -rf /var/lib/apt/lists/*
 
-# Windows 中文字体名 → 容器真实字体的 fontconfig 别名（为什么见 conf 文件头注释）。
-# 简述：ppt-master 产的 pptx 按设计写 Windows 字体名（Microsoft YaHei 等，面向用户本机 Office），
-# 容器里没有这些字体，LibreOffice 转预览时静默兜底到 Noto CJK 的【JP】变体 → 简体中文
-# 用日文字形渲染（实测）。别名把黑体系→Noto Sans CJK SC、宋体系→Noto Serif CJK SC、
-# 楷体→AR PL KaitiM GB，所有走 fontconfig 的渲染（pptx/docx 预览、xelatex）全链路受益。
-# fc-match 自检：别名失效（字体包变动 / conf 没被 fontconfig 读到）要在构建期炸，
-# 别产出一个"预览悄悄用日文字形"的镜像——这问题用户端只表现为个别汉字长得不对，极难发现。
-COPY deploy/fontconfig-cjk-aliases.conf /etc/fonts/conf.d/65-windows-cjk-aliases.conf
-RUN fc-cache -f \
-    && fc-match "Microsoft YaHei" | grep -F 'Noto Sans CJK SC' \
-    && fc-match "SimHei" | grep -F 'Noto Sans CJK SC' \
-    && fc-match "SimSun" | grep -F 'Noto Serif CJK SC' \
-    && fc-match "KaiTi" | grep -F 'AR PL KaitiM GB' \
-    && echo "CJK 字体别名自检通过"
-
 # OpenCode（固定版本，避免自动升级带来的意外）
 RUN npm install -g opencode-ai@1.17.14
 
@@ -140,6 +125,23 @@ RUN rm -rf /root/.cache/matplotlib \
       > /tmp/_check.py \
     && python3 /tmp/_check.py \
     && rm -f /tmp/_check.py /tmp/_selfcheck.png
+
+# Windows 中文字体名 → 容器真实字体的 fontconfig 别名（为什么见 conf 文件头注释）。
+# 简述：ppt-master 产的 pptx 按设计写 Windows 字体名（Microsoft YaHei 等，面向用户本机 Office），
+# 容器里没有这些字体，LibreOffice 转预览时静默兜底到 Noto CJK 的【JP】变体 → 简体中文
+# 用日文字形渲染（实测）。别名把黑体系→Noto Sans CJK SC、宋体系→Noto Serif CJK SC、
+# 楷体→AR PL KaitiM GB，所有走 fontconfig 的渲染（pptx/docx 预览、xelatex）全链路受益。
+# fc-match 自检：别名失效（字体包变动 / conf 没被 fontconfig 读到）要在构建期炸，
+# 别产出一个"预览悄悄用日文字形"的镜像——这问题用户端只表现为个别汉字长得不对，极难发现。
+# 位置刻意放在 pip/npm 大层【之后】：字体别名只影响 fontconfig 渲染，放前面会白白作废
+# opencode + 科学栈的构建缓存（实测那几层要重装十几分钟还赌网络）。
+COPY deploy/fontconfig-cjk-aliases.conf /etc/fonts/conf.d/65-windows-cjk-aliases.conf
+RUN fc-cache -f \
+    && fc-match "Microsoft YaHei" | grep -F 'Noto Sans CJK SC' \
+    && fc-match "SimHei" | grep -F 'Noto Sans CJK SC' \
+    && fc-match "SimSun" | grep -F 'Noto Serif CJK SC' \
+    && fc-match "KaiTi" | grep -F 'AR PL KaitiM GB' \
+    && echo "CJK 字体别名自检通过"
 
 # 网关依赖（用 npm ci + lockfile：package.json 里 SDK 是 ^1.17.14 这种浮动版本，
 # 而 opencode CLI 被钉死在 1.17.14；不锁 lockfile 的话每次重建都可能装到不同的 SDK 小版本，
