@@ -53,7 +53,7 @@ ${REPO_ROOT:-/app}/.venv/bin/python ${REPO_ROOT:-/app}/.opencode/skills/literatu
    - **`quote` 强制**：填摘要里支撑该方向的**原句**；抽不到原句就**不登记这条**（护栏：防幻觉矛盾。这一列同时就是句级溯源，见下 `ground_claim.py`）。⚠️ `evidence.md` 的摘要**截断到 400 字**、支撑句常在其后——取 quote 时回 `evidence_table.csv` 拿**完整摘要**，别只从 `evidence.md` 截取。
 2. **扫矛盾**：
    ```
-   ${REPO_ROOT:-/app}/.venv/bin/python ${REPO_ROOT:-/app}/.opencode/skills/literature-review/contradiction.py --input outputs/claims_ledger.csv
+   ${REPO_ROOT:-/app}/.venv/bin/python ${REPO_ROOT:-/app}/.opencode/skills/literature-review/contradiction.py --input claims_ledger.csv
    ```
    产出 `contradiction_candidates.md`（按 (canon_i→canon_o) 分组，方向冲突组在前、组内按证据等级排序）。**脚本会审计归一词表**：若报 `⚠️ 疑似归一碎片化`（列出看着同义却写成不同 canon 值的标签），说明上一步词表没收敛——回去统一这些标签、重跑，别拿碎片化的结果往下走。
 3. **逐个裁定**（脚本只标候选、不下判决；这步是主代理的活）：对每个 ⚠️ 冲突组判四选一，写 `outputs/contradiction_matrix.md`——

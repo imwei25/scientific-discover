@@ -25,12 +25,12 @@ ${REPO_ROOT:-/app}/.venv/bin/python
 ```bash
 # 自动推断变量类型（数值且取值多→连续，其余→分类）
 ${REPO_ROOT:-/app}/.venv/bin/python ${REPO_ROOT:-/app}/.opencode/skills/clinical-stats/scripts/table1.py \
-  --input uploads/data.csv --group arm --out outputs/table1.csv
+  --input uploads/data.csv --group arm --out table1.csv
 
 # 显式指定变量类型（更稳）
 ${REPO_ROOT:-/app}/.venv/bin/python ${REPO_ROOT:-/app}/.opencode/skills/clinical-stats/scripts/table1.py \
   --input uploads/data.csv --group arm \
-  --continuous age,bmi,sbp --categorical sex,smoker --out outputs/table1.csv
+  --continuous age,bmi,sbp --categorical sex,smoker --out table1.csv
 ```
 产出 `outputs/table1.csv`（含各组数值 + P 值 + 所用检验列），可直接贴进论文或交 `render-docx`/`render-pdf-doc` 排版。
 **恰好两组时额外输出 `效应量(95%CI)` 列**（顶刊要求，别只给 p）：连续正态→均值差(95%CI, Welch)；连续非正态→中位数差(95%CI, bootstrap)；二分类 2 水平→OR(95%CI, 必要时 Haldane 校正)。方向见脚本打印的说明（均值差/中位数差=首组−次组）。

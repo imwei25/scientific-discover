@@ -50,6 +50,38 @@ def _ua(email: str) -> str:
     return f"{USER_AGENT} (mailto:{email})"
 
 
+# --- Contact + optional API keys ---------------------------------------------
+# All optional; injected once via deploy/.env → container env (see
+# deploy/检索通道-API配置.md). Absent = anonymous free tier (still works, slower).
+# One contact var covers every source; the older names are kept for back-compat
+# so a server that already set them keeps working without reconfiguration.
+CONTACT_EMAIL = (os.environ.get("SCI_CONTACT_EMAIL")
+                 or os.environ.get("MEDSCI_CONTACT_EMAIL")
+                 or os.environ.get("CONTACT_EMAIL")
+                 or "sci-skill@users.noreply.github.com")
+
+
+def _ncbi_key_param() -> str:
+    """`&api_key=…` when NCBI_API_KEY is set (lifts NCBI 3→10 req/s), else ''."""
+    k = os.environ.get("NCBI_API_KEY")
+    return f"&api_key={urllib.parse.quote(k)}" if k else ""
+
+
+def _openalex_key_param() -> str:
+    """`&api_key=…` when OPENALEX_API_KEY is set (premium pool), else ''."""
+    k = os.environ.get("OPENALEX_API_KEY")
+    return f"&api_key={urllib.parse.quote(k)}" if k else ""
+
+
+def _crossref_headers(email: str) -> dict:
+    """Polite-pool UA + the paid Metadata Plus token header when configured."""
+    h = {"User-Agent": _ua(email)}
+    tok = os.environ.get("CROSSREF_PLUS_TOKEN")
+    if tok:
+        h["Crossref-Plus-API-Token"] = f"Bearer {tok}"
+    return h
+
+
 def safe_doi_name(doi: str) -> str:
     """Filesystem-safe filename stem for a DOI."""
     return re.sub(r"[^\w\-.]", "_", doi)
@@ -234,7 +266,8 @@ def _pmcid_via_ncbi(identifier: str, email: str) -> str | None:
     """Convert PMID or DOI to PMCID via NCBI ID converter (often blocked from mainland China)."""
     url = (f"https://www.ncbi.nlm.nih.gov/pmc/utils/idconv/v1.0/"
            f"?ids={urllib.parse.quote(identifier, safe='/')}&format=json"
-           f"&tool=sci-skill-fulltext&email={urllib.parse.quote(email)}")
+           f"&tool=sci-skill-fulltext&email={urllib.parse.quote(email)}"
+           f"{_ncbi_key_param()}")
     try:
         req = urllib.request.Request(url, headers={"User-Agent": _ua(email)})
         with urllib.request.urlopen(req, timeout=15) as resp:
@@ -272,7 +305,7 @@ def download_pmc_pdf(pmcid: str, outpath: Path, email: str) -> bool:
 
     # Method B: PMC OA FTP service (XML with direct PDF link)
     try:
-        url = f"https://www.ncbi.nlm.nih.gov/pmc/utils/oa/oa.fcgi?id={pmcid}"
+        url = f"https://www.ncbi.nlm.nih.gov/pmc/utils/oa/oa.fcgi?id={pmcid}{_ncbi_key_param()}"
         xml_data, _, _ = fetch_bytes(url, email, timeout=15)
         root = ET.fromstring(xml_data)
         # Check for error response (non-OA articles)
@@ -316,7 +349,8 @@ def download_pmc_pdf(pmcid: str, outpath: Path, email: str) -> bool:
 
 def openalex_lookup(doi: str, email: str) -> list[str]:
     url = (f"https://api.openalex.org/works/"
-           f"https://doi.org/{urllib.parse.quote(doi, safe='/')}")
+           f"https://doi.org/{urllib.parse.quote(doi, safe='/')}"
+           f"?mailto={urllib.parse.quote(email)}{_openalex_key_param()}")
     candidates = []
     try:
         req = urllib.request.Request(url, headers={"User-Agent": _ua(email)})
@@ -335,10 +369,11 @@ def openalex_lookup(doi: str, email: str) -> list[str]:
 
 
 def crossref_lookup(doi: str, email: str) -> list[str]:
-    url = f"https://api.crossref.org/works/{urllib.parse.quote(doi, safe='/')}"
+    url = (f"https://api.crossref.org/works/{urllib.parse.quote(doi, safe='/')}"
+           f"?mailto={urllib.parse.quote(email)}")
     candidates = []
     try:
-        req = urllib.request.Request(url, headers={"User-Agent": _ua(email)})
+        req = urllib.request.Request(url, headers=_crossref_headers(email))
         with urllib.request.urlopen(req, timeout=15) as resp:
             data = json.loads(resp.read())
         msg = data.get("message", {}) or {}
@@ -610,9 +645,9 @@ def main():
                              "with a DOI column (optional PMID, Title)")
     parser.add_argument("-o", "--output", type=Path, default=Path("pdfs"),
                         help="Output directory (default: pdfs/)")
-    parser.add_argument("-e", "--email", default=os.environ.get("MEDSCI_CONTACT_EMAIL"),
-                        help="Contact email (required by Unpaywall TOS). "
-                             "Falls back to the MEDSCI_CONTACT_EMAIL environment variable.")
+    parser.add_argument("-e", "--email", default=CONTACT_EMAIL,
+                        help="Contact email (required by Unpaywall TOS). Falls back to "
+                             "SCI_CONTACT_EMAIL / MEDSCI_CONTACT_EMAIL / CONTACT_EMAIL env vars.")
     parser.add_argument("--report", type=Path, default=None,
                         help="Path for the JSON retrieval report "
                              "(default: <output>/retrieval_report.json)")

@@ -52,7 +52,7 @@ ${REPO_ROOT:-/app}/.venv/bin/python ${REPO_ROOT:-/app}/.opencode/skills/nature-f
   --title "Paper title" \
   --abstract-file abstract.txt \
   --panel-map "left: problem; center: proposed mechanism; right: validated outcome" \
-  --outdir outputs/schematic \
+  --outdir schematic \
   --basename graphical_abstract \
   --aspect-ratio 16:9 \
   --resolution 2K \
@@ -75,7 +75,7 @@ Use a fully custom prompt:
 ${REPO_ROOT:-/app}/.venv/bin/python ${REPO_ROOT:-/app}/.opencode/skills/nature-figure/scripts/generate_openrouter_schematic.py \
   --prompt-file schematic_prompt.md \
   --raw \
-  --outdir outputs/schematic
+  --outdir schematic
 ```
 
 Use one or more reference images:

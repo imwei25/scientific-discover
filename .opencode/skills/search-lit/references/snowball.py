@@ -33,7 +33,7 @@ Usage
 -----
     # Live (network) — expand one DOI in all directions, dedup against pool
     python3 snowball.py --seed DOI:10.1148/radiol.2024123 \
-        --pool outputs/refs.bib --out outputs/refs.bib
+        --pool refs.bib --out refs.bib
 
     # Multiple seeds from a file (one id per line), backward only
     python3 snowball.py --seed @seeds.txt --direction backward
@@ -68,6 +68,76 @@ DIRECTIONS = ("backward", "forward", "similar")
 # --------------------------------------------------------------------------- #
 # Seed id normalization
 # --------------------------------------------------------------------------- #
+# ---- 产物目录解析（8 个技能脚本统一；见 AGENTS.md §五）----
+# 优先级：显式参数 > SCI_OUTPUT_DIR 环境变量 > 当前工作目录(若已在 outputs/<会话id>/ 内) > 报错中止。
+# 【绝不】再默认写共享的 outputs/ 根：那里不会出现在界面"产出"侧栏，
+# 且同一用户的多个会话共用一个 outputs 卷，写固定名会跨会话互相覆盖。
+# 为什么必须由外部传进来：opencode 是【一个进程服务所有会话】的，
+# 脚本自己读不到任何会话级上下文，只能靠主控（网关每轮注入的 preamble）用环境变量或参数告知。
+def _resolve_out_dir(explicit=None):
+    import os as _os, sys as _sys
+    from pathlib import Path as _Path
+    _cwd = _Path.cwd()
+    _in_session = _cwd.parent.name == 'outputs'   # cwd 已是 outputs/<会话id>/
+    if explicit:
+        _p = _Path(explicit)
+        # 【拦截已知的错误传法】cwd 已经是会话产物目录，却又传了以 outputs/ 开头的相对路径：
+        # 那会写成 outputs/<会话id>/outputs/xxx —— 网关的 dirState 只列顶层文件，
+        # 这份产物在界面“产出”侧栏里【永远看不见】，用户会以为跑成功了却什么都没拿到。
+        # 这是旧文档教出来的写法，宁可响亮报错也不要静默产出不可见的文件。
+        if _in_session and not _p.is_absolute() and _p.parts and _p.parts[0] == 'outputs':
+            _m = [
+                '!! 产物目录参数写法有误，已中止。',
+                '   你传的是： ' + str(explicit),
+                '   当前工作目录已经【就是】本会话的产物目录： ' + str(_cwd),
+                '   再拼 outputs/ 前缀会写成 ' + str(_cwd / _p) + '，',
+                '   而界面的“产出”侧栏只列顶层文件，嵌套子目录里的产物用户永远看不到。',
+                '   正确写法：直接用【裸文件名】（如 --out table1.csv），或干脆不传该参数。',
+            ]
+            _sys.exit(chr(10).join(_m))
+        return _p
+    _env = (_os.environ.get('SCI_OUTPUT_DIR') or '').strip()
+    if _env:
+        return _Path(_env)
+    if _in_session:
+        return _cwd
+    _msg = [
+        '!! 未指定产物目录，已中止（不再默认写共享的 outputs/ 根）。',
+        '   正常情况下不需要指定：每轮对话的当前工作目录就是本会话的产物目录，',
+        '   直接用裸文件名即可（如 --out table1.csv）。现在会走到这里，说明当前工作目录是',
+        '   ' + str(_cwd) + '，不在任何会话产物目录下。',
+        '   请任选一种方式指定：',
+        '     1) 先切回本会话的产物目录再跑（推荐）',
+        '     2) 环境变量： SCI_OUTPUT_DIR=<会话产物目录绝对路径>',
+        '     3) 显式参数： --outdir <会话产物目录绝对路径>',
+        '   注意路径要用【绝对路径】或相对当前目录的正确路径，不要再拼 outputs/<会话id>：',
+        '   那是旧架构的写法，现在会多套一层目录导致产物在界面上不可见。',
+        '   原因：写到共享的 outputs/ 根会跨会话互相覆盖，且不出现在界面的“产出”侧栏里。',
+    ]
+    _sys.exit(chr(10).join(_msg))
+
+def _resolve_out_file(explicit=None, default_name="output"):
+    import sys as _sys
+    from pathlib import Path as _Path
+    if explicit:
+        _p = _Path(explicit)
+        # 同 _resolve_out_dir：cwd 已是会话产物目录时再拼 outputs/ 前缀，产物会落到
+        # outputs/<会话id>/outputs/... —— 界面“产出”侧栏只列顶层文件，用户永远看不见。
+        if (_Path.cwd().parent.name == 'outputs' and not _p.is_absolute()
+                and _p.parts and _p.parts[0] == 'outputs'):
+            _m = [
+                '!! 产物路径写法有误，已中止。',
+                '   你传的是： ' + str(explicit),
+                '   当前工作目录已经【就是】本会话的产物目录： ' + str(_Path.cwd()),
+                '   再拼 outputs/ 前缀会写成 ' + str(_Path.cwd() / _p) + '，',
+                '   而界面的“产出”侧栏只列顶层文件，嵌套子目录里的产物用户永远看不到。',
+                '   正确写法：直接用【裸文件名】（如 --out ' + default_name + '）。',
+            ]
+            _sys.exit(chr(10).join(_m))
+        return _p
+    return _resolve_out_dir() / default_name
+
+
 def normalize_seed_id(raw: str) -> str:
     """Return an S2-acceptable paper id token (DOI:/PMID:/raw)."""
     s = raw.strip()
@@ -99,7 +169,11 @@ def _http_get_json(url: str) -> dict:
     RuntimeError so the caller reports it as a rate-limit failure rather than
     silently counting 0 new candidates.
     """
-    headers = {"User-Agent": "medsci-skills/snowball"}
+    _email = (os.environ.get("SCI_CONTACT_EMAIL")
+              or os.environ.get("MEDSCI_CONTACT_EMAIL")
+              or os.environ.get("CONTACT_EMAIL")
+              or "sci-skill@users.noreply.github.com")
+    headers = {"User-Agent": f"medsci-skills/snowball (mailto:{_email})"}
     api_key = os.environ.get("S2_API_KEY")
     if api_key:
         headers["x-api-key"] = api_key
@@ -264,7 +338,7 @@ def main(argv: list[str] | None = None) -> int:
                     choices=("all", *DIRECTIONS))
     ap.add_argument("--pool", default=None,
                     help="existing candidate .bib to dedup against")
-    ap.add_argument("--out", default="outputs/refs.bib",
+    ap.add_argument("--out", default=None,
                     help="BibTeX append target (candidate pool)")
     ap.add_argument("--limit", type=int, default=50, help="max per seed per direction")
     ap.add_argument("--offline-fixture", default=None,
@@ -274,8 +348,13 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--stdout", action="store_true",
                     help="print BibTeX to stdout instead of appending to --out")
     args = ap.parse_args(argv)
+    # --stdout 模式根本不写文件（见下方 args.stdout 分支），所以不能在这里强制解析产物目录：
+    # 否则从任何非会话目录跑 `--stdout`（含 --offline-fixture 干跑）都会被"未指定产物目录"直接中止，
+    # 而这条调用压根不碰磁盘。只有真要落盘时才解析。
+    if not args.stdout:
+        args.out = str(_resolve_out_file(args.out, "refs.bib"))
 
-    out_path = Path(args.out)
+    out_path = Path(args.out) if args.out else Path("refs.bib")
 
     fixture_dir = Path(args.offline_fixture) if args.offline_fixture else None
     pool_dois, pool_titles = parse_pool_keys(Path(args.pool) if args.pool else None)

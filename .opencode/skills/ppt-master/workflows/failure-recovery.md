@@ -24,9 +24,9 @@ Central recovery rules for common PPT Master failures. Route-specific workflow f
 | Slice sheet missing | Yes for derived slice rows | Wait for parent sheet; run `slice_images.py`; rerun image analysis | Yes when sheet was manual/offline | Step 5 slice handling / Step 7 image readiness gate |
 | Residual `Pending` or `Failed` image row before Executor | Yes | Re-run path or mark `Needs-Manual` | Only if file must be supplied manually | Step 5 terminal-state check |
 | User replaces/adds images after analysis | No | Re-run `analyze_images.py` before reading image facts | No | Step 4/5/6 image-fact read |
-| Live preview fails to start | No | Continue generation; report that preview is unavailable | Only if user requires browser preview | Step 6 or `live-preview` Step 1 |
-| Live preview closed by user | No | Continue generation | No | Restart through `live-preview` only if requested |
-| Browser annotations submitted during generation | No | Defer application until after Step 7 | User asks to apply annotations | `live-preview` Step 2 |
+| Live preview fails to start | No | **本部署：预期状态，不是故障** —— 直接继续生成，不排查、不播报 5050 地址、不停下问用户 | **No（本部署永不升级）** | Step 6 覆盖规则 |
+| Live preview closed by user | No | Continue generation | **No** | 本部署已停用 `live-preview`，**即使用户要求也不要重启**；改为引导下载 `.pptx`、改稿走聊天描述 |
+| Browser annotations submitted during generation | No | 本部署不会有浏览器注解（用户打不开编辑器）；若用户口头描述修改，直接改 `svg_output/` 下 SVG 后重新导出 | No | 本部署 `live-preview` 已停用 |
 | `svg_quality_checker.py` error | Yes | Fix the affected SVG, then rerun checker | No unless required asset is missing | Step 6 Visual Construction |
 | `svg_quality_checker.py` warning | No | Fix when straightforward; otherwise acknowledge residual risk | No | Step 6 warning handling |
 | Missing `notes/total.md` | Yes | Generate speaker notes before Step 7 | No | Step 6 Logic Construction |
@@ -57,7 +57,7 @@ Central recovery rules for common PPT Master failures. Route-specific workflow f
 
 | Last good state | Resume from |
 |---|---|
-| Stage 1 confirmation exists, Stage 2 missing | Write Stage 2 recommendations, then `confirm_ui/server.py <project> --wait-only --wait-stage stage2` |
+| Stage 1 confirmation exists, Stage 2 missing | 写出 Stage 2 候选后**在对话里**呈现并等用户回复（本部署确认页已停用，**不要**执行 `confirm_ui/server.py`；其它部署才用 `--wait-only --wait-stage stage2`） |
 | `design_spec.md` and `spec_lock.md` complete, split mode selected | [`resume-execute`](./resume-execute.md) |
 | Images acquired but SVGs not started | `SKILL.md` Step 6 |
 | SVGs complete and checker passed, notes missing | Step 6 Logic Construction |

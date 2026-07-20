@@ -21,11 +21,16 @@ description: 一键准备 / 自举运行环境。首次使用本套科研技能�
    - Windows：`winget install -e --id Python.Python.3.12`
    - Ubuntu/Debian：`sudo apt-get install -y python3 python3-venv python3-pip`
    - macOS：`brew install python@3.12`
-2. **建虚拟环境**（已存在 `.venv` 就跳过）：
-   `python -m venv .venv`（`python` 不存在就用 `python3` 或 `py -3`）
+2. **建虚拟环境**（已存在 `${REPO_ROOT:-/app}/.venv` 就跳过）：
+   `python -m venv ${REPO_ROOT:-/app}/.venv`（`python` 不存在就用 `python3` 或 `py -3`）
+   > ⚠️ **路径必须带 `${REPO_ROOT:-/app}/` 前缀**：会话的当前工作目录是**该会话的产物目录**
+   > （`outputs/<会话id>/`），写 `python -m venv .venv` 会把整个虚拟环境建到**用户的产物目录里**——
+   > 既计入该用户的存储配额、又会出现在界面"产出"侧栏，而第 3 步要用的
+   > `${REPO_ROOT:-/app}/.venv/bin/python` 依然不存在 → 整个引导流程死在这里。
 3. **用 venv 的解释器装依赖**（从这步起就写死用 `.venv`，不再碰系统 Python）：
-   - Windows：`.venv/Scripts/python.exe -m pip install -U pip -r scripts/requirements-skills.txt`
-   - Linux/macOS：`.venv/bin/python -m pip install -U pip -r scripts/requirements-skills.txt`
+   `${REPO_ROOT:-/app}/.venv/bin/python -m pip install -U pip -r ${REPO_ROOT:-/app}/scripts/requirements-skills.txt`
+   > `-r` 后面的路径同样要带前缀：requirements 文件在**仓库**的 `scripts/` 下，
+   > 相对当前工作目录（会话产物目录）找不到，会直接 FileNotFoundError。
    - 没有 requirements 文件时，至少装：
      `pandas numpy scipy matplotlib scikit-learn seaborn statsmodels openpyxl requests httpx metapub biopython habanero pyalex bibtexparser rispy python-docx reportlab lxml beautifulsoup4 tqdm lifelines adjustText pymupdf pymupdf4llm`
 4. **排版工具链**（`render-pdf-doc` 出 PDF 用；不排版可跳过）：
@@ -34,14 +39,14 @@ description: 一键准备 / 自举运行环境。首次使用本套科研技能�
 
 ## 之后所有技能怎么调 Python
 统一用项目根 `.venv` 的解释器：
-- **Windows**：`.venv/Scripts/python.exe 脚本.py`
-- **Linux / macOS**：`.venv/bin/python 脚本.py`
+- **Windows**：`${REPO_ROOT:-/app}/.venv/bin/python 脚本.py`
+- **Linux / macOS**：`${REPO_ROOT:-/app}/.venv/bin/python 脚本.py`
 
 各技能的「Python 环境」段都按这个来；不要用系统 `python` / `python3` 直接装包或跑。
 
 ## 验证
-- Windows：`.venv/Scripts/python.exe scripts/validate_skills.py`
-- Linux/macOS：`.venv/bin/python scripts/validate_skills.py`
+`${REPO_ROOT:-/app}/.venv/bin/python ${REPO_ROOT:-/app}/scripts/validate_skills.py`
+（脚本在**仓库**的 `scripts/` 下，不带前缀会因当前工作目录是会话产物目录而找不到）
 
 装完向用户汇报：Python 版本、`.venv` 路径、装了多少包、pandoc/xelatex 是否就绪。
 

@@ -10,13 +10,13 @@ description: 领域调研 / 背景摸底。快速摸清一个科研或临床方�
 给一个方向，产出一份能让人 15 分钟看懂现状的**调研简报**。参考 K-Dense scientific-skills 的领域扫描思路。
 
 ## 定位（本技能在套件中的位置）
-顶层主控（AGENTS.md 常驻指令）负责判意图、定范围、派发；派到本技能就**直接做，别回绕**。产物写 `outputs/`（主控注入了会话专属目录 `outputs/<会话id>/` 时以它为准、勿写仓库根固定名——多用户共享会 clobber）。
+顶层主控（AGENTS.md 常驻指令）负责判意图、定范围、派发；派到本技能就**直接做，别回绕**。产物直接写**当前工作目录**——网关已把本会话的 cwd 指到该会话的产物目录，用裸文件名即可（如 `table1.csv`），别再拼 `outputs/…` 前缀，也别写到仓库根。
 
 ## Python 环境（可选，用于取真实文献）
 > 没有项目根 `.venv`？先运行 `env-setup` 技能建好并装依赖。
 ```
-.venv/Scripts/python.exe   # Windows（正斜杠写法，bash 与 PowerShell 都能用）
-.venv/bin/python           # Linux / macOS
+${REPO_ROOT:-/app}/.venv/bin/python   # Windows（正斜杠写法，bash 与 PowerShell 都能用）
+${REPO_ROOT:-/app}/.venv/bin/python
 ```
 
 ## 方法

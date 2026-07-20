@@ -1,5 +1,13 @@
 # Confirm UI — Strategist Confirmation Stage Page
 
+> 🛑 **本部署（Web 容器）覆盖规则 —— 本页描述的服务整体停用，不要按本文档启动它。**
+> 本文档是 `confirm_ui/server.py` 的参考手册，下面所有 `--daemon` / `--wait` / `--port` / `--shutdown`
+> 用法在本部署里都**不要执行**：服务绑的是**容器内** `127.0.0.1:5050`，而容器只对外发布 3000 端口，
+> 用户浏览器里的 `localhost:5050` 指向的是用户自己的电脑，**没有人能打开它**；本部署也未安装 flask。
+> 本文档中关于 **schema（`recommendations.json` / `result.json` 的字段结构与三段划分）** 的部分**仍然有效**——
+> 走聊天确认时，呈现给用户的字段与顺序照本文档执行，只是把承载方式从网页换成对话。
+> 详见 `SKILL.md` Step 4 与 `workflows/beautify-pptx.md` 的覆盖规则。
+
 > The interactive, visual surface for SKILL.md Step 4 (the Strategist confirmation stage). Enumerable fields list **all** options from a catalog with the AI's recommendation badged; generative fields (color, typography, generated-image style) show **≥3** AI candidates (creative recommendations always offer real choice — same rule as the h.5 image strategy; fewer only on the honest-shortfall exception, with a stated reason). Fields whose universe is open (canvas, mode, visual style, icons) also get a **Custom** box; image usage is a multi-select source list plus a free-text `image_notes` box. Fully closed fields (AI source when applicable, formula policy, generation mode, refine spec) do not. The AI writes its recommendation to `recommendations.json`; the user's final choices are written back to `result.json` for the AI to read. On confirm the page saves the result and shuts the server down (auto-close). The chat path is always a valid fallback — if the browser cannot open (remote / headless / web host), the AI presents the same staged confirmation in chat.
 
 ## Authority and Scope

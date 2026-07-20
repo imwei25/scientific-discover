@@ -12,7 +12,7 @@ statcheck 式 p 值一致性自查：从稿件正文里抓统计检验报告
 用法：
   python pcheck.py manuscript.md                 # 扫一个文件
   python pcheck.py --text "t(28)=2.05, p=.02"    # 直接给文本
-  python pcheck.py results.txt --outdir outputs/<会话>/audit
+  python pcheck.py results.txt --outdir audit
 产出（--outdir，默认 outputs）：
   pcheck.md   人读报告（High=判断错 / Medium=数值不符 / 提示=可能单尾）
   pcheck.csv  逐条明细（类型/统计量/df/报告p/重算p/结论）
@@ -47,6 +47,76 @@ P_RE = re.compile(r"\bp\s*" + _PNUM, re.I)
 
 # 数值：允许 .048 或 0.048 或 2 或 3.11
 _NUM = r"[-+]?\d*\.?\d+"
+
+
+# ---- 产物目录解析（8 个技能脚本统一；见 AGENTS.md §五）----
+# 优先级：显式参数 > SCI_OUTPUT_DIR 环境变量 > 当前工作目录(若已在 outputs/<会话id>/ 内) > 报错中止。
+# 【绝不】再默认写共享的 outputs/ 根：那里不会出现在界面"产出"侧栏，
+# 且同一用户的多个会话共用一个 outputs 卷，写固定名会跨会话互相覆盖。
+# 为什么必须由外部传进来：opencode 是【一个进程服务所有会话】的，
+# 脚本自己读不到任何会话级上下文，只能靠主控（网关每轮注入的 preamble）用环境变量或参数告知。
+def _resolve_out_dir(explicit=None):
+    import os as _os, sys as _sys
+    from pathlib import Path as _Path
+    _cwd = _Path.cwd()
+    _in_session = _cwd.parent.name == 'outputs'   # cwd 已是 outputs/<会话id>/
+    if explicit:
+        _p = _Path(explicit)
+        # 【拦截已知的错误传法】cwd 已经是会话产物目录，却又传了以 outputs/ 开头的相对路径：
+        # 那会写成 outputs/<会话id>/outputs/xxx —— 网关的 dirState 只列顶层文件，
+        # 这份产物在界面“产出”侧栏里【永远看不见】，用户会以为跑成功了却什么都没拿到。
+        # 这是旧文档教出来的写法，宁可响亮报错也不要静默产出不可见的文件。
+        if _in_session and not _p.is_absolute() and _p.parts and _p.parts[0] == 'outputs':
+            _m = [
+                '!! 产物目录参数写法有误，已中止。',
+                '   你传的是： ' + str(explicit),
+                '   当前工作目录已经【就是】本会话的产物目录： ' + str(_cwd),
+                '   再拼 outputs/ 前缀会写成 ' + str(_cwd / _p) + '，',
+                '   而界面的“产出”侧栏只列顶层文件，嵌套子目录里的产物用户永远看不到。',
+                '   正确写法：直接用【裸文件名】（如 --out table1.csv），或干脆不传该参数。',
+            ]
+            _sys.exit(chr(10).join(_m))
+        return _p
+    _env = (_os.environ.get('SCI_OUTPUT_DIR') or '').strip()
+    if _env:
+        return _Path(_env)
+    if _in_session:
+        return _cwd
+    _msg = [
+        '!! 未指定产物目录，已中止（不再默认写共享的 outputs/ 根）。',
+        '   正常情况下不需要指定：每轮对话的当前工作目录就是本会话的产物目录，',
+        '   直接用裸文件名即可（如 --out table1.csv）。现在会走到这里，说明当前工作目录是',
+        '   ' + str(_cwd) + '，不在任何会话产物目录下。',
+        '   请任选一种方式指定：',
+        '     1) 先切回本会话的产物目录再跑（推荐）',
+        '     2) 环境变量： SCI_OUTPUT_DIR=<会话产物目录绝对路径>',
+        '     3) 显式参数： --outdir <会话产物目录绝对路径>',
+        '   注意路径要用【绝对路径】或相对当前目录的正确路径，不要再拼 outputs/<会话id>：',
+        '   那是旧架构的写法，现在会多套一层目录导致产物在界面上不可见。',
+        '   原因：写到共享的 outputs/ 根会跨会话互相覆盖，且不出现在界面的“产出”侧栏里。',
+    ]
+    _sys.exit(chr(10).join(_msg))
+
+def _resolve_out_file(explicit=None, default_name="output"):
+    import sys as _sys
+    from pathlib import Path as _Path
+    if explicit:
+        _p = _Path(explicit)
+        # 同 _resolve_out_dir：cwd 已是会话产物目录时再拼 outputs/ 前缀，产物会落到
+        # outputs/<会话id>/outputs/... —— 界面“产出”侧栏只列顶层文件，用户永远看不见。
+        if (_Path.cwd().parent.name == 'outputs' and not _p.is_absolute()
+                and _p.parts and _p.parts[0] == 'outputs'):
+            _m = [
+                '!! 产物路径写法有误，已中止。',
+                '   你传的是： ' + str(explicit),
+                '   当前工作目录已经【就是】本会话的产物目录： ' + str(_Path.cwd()),
+                '   再拼 outputs/ 前缀会写成 ' + str(_Path.cwd() / _p) + '，',
+                '   而界面的“产出”侧栏只列顶层文件，嵌套子目录里的产物用户永远看不到。',
+                '   正确写法：直接用【裸文件名】（如 --out ' + default_name + '）。',
+            ]
+            _sys.exit(chr(10).join(_m))
+        return _p
+    return _resolve_out_dir() / default_name
 
 
 def _fmt(v):
@@ -212,8 +282,9 @@ def main():
     ap = argparse.ArgumentParser(description="statcheck 式 p 值一致性自查")
     ap.add_argument("path", nargs="?", help="稿件文件（.md/.txt）")
     ap.add_argument("--text", help="直接给一段文本")
-    ap.add_argument("--outdir", default="outputs")
+    ap.add_argument("--outdir", default=None)
     args = ap.parse_args()
+    args.outdir = str(_resolve_out_dir(args.outdir))
 
     if args.text:
         text = args.text

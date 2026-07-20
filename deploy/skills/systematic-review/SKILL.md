@@ -35,7 +35,7 @@ ${REPO_ROOT:-/app}/.venv/bin/python
 ```bash
 PY=${REPO_ROOT:-/app}/.venv/bin/python   # Linux/mac: ${REPO_ROOT:-/app}/.venv/bin/python
 SR=${REPO_ROOT:-/app}/.opencode/skills/systematic-review/scripts
-$PY $SR/sr_dedup.py --input imported/ --output outputs/01_deduplicated.csv --counts outputs/counts/identification.json
+$PY $SR/sr_dedup.py --input imported/ --output 01_deduplicated.csv --counts counts/identification.json
 ```
 纯确定性三段去重（DOI 精确 → 标题精确 → 同年 difflib 模糊，阈值 `--fuzzy` 默认 0.92）。**保留每条记录可审计**：被删记录的 `dup_of` 指向合并到的 canonical 记录。产出去重 CSV + identification 计数。
 
@@ -46,7 +46,7 @@ $PY $SR/sr_dedup.py --input imported/ --output outputs/01_deduplicated.csv --cou
 ```bash
 $PY $SR/sr_prisma_count.py --identification outputs/counts/identification.json \
    --ta outputs/02_title_abstract_screen.csv --ft outputs/03_fulltext_screen.csv \
-   --output outputs/counts/prisma-summary.md
+   --output counts/prisma-summary.md
 ```
 自动算出流程图每个框的数字 + 每阶段 **Cohen's κ**（附一致性等级）+ **8 条内部自洽校验**（如 排除+纳入=评估数）。任一校验 FAIL 会退出码 1、提示回去核数。数字交 `nature-figure` 画 **PRISMA 2020 流程图**。
 

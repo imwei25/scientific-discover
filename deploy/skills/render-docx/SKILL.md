@@ -16,7 +16,7 @@ description: 把 Markdown 稿件渲染成 Word (.docx) 投稿版。医学期刊�
 需要 **pandoc**（仓库根 `install.ps1 -WithPdf` / `install.sh --with-pdf` 已装；单独装：`winget install JohnMacFarlane.Pandoc` / `apt-get install pandoc` / `brew install pandoc`）。**不需要 xelatex/MiKTeX**（那是 PDF 才要的）。
 
 ## 用法
-脚本在 `${REPO_ROOT:-/app}/.opencode/skills/render-docx/scripts/`，从仓库根运行或用全路径（Windows 经 Git Bash 跑 .sh）：
+脚本在 `/app/.opencode/skills/render-docx/scripts/`（容器内的实际路径；命令行里写 `${REPO_ROOT:-/app}/...` 由 shell 展开，但**散文里的路径要能直接拿去 Read/ls**，所以这里写实路径）（Windows 经 Git Bash 跑 .sh）：
 ```bash
 # 最简：Markdown → Word
 bash ${REPO_ROOT:-/app}/.opencode/skills/render-docx/scripts/render_docx.sh -i manuscript.md -o manuscript.docx

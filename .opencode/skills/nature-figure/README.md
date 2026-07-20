@@ -22,11 +22,11 @@ Python 路径主要使用 `matplotlib`、`seaborn`、`subplot_mosaic` 和 `stats
 
 ```bash
 export OPENROUTER_API_KEY="sk-or-..."
-python .opencode/skills/nature-figure/scripts/generate_openrouter_schematic.py \
+${REPO_ROOT:-/app}/.venv/bin/python ${REPO_ROOT:-/app}/.opencode/skills/nature-figure/scripts/generate_openrouter_schematic.py \
   --title "Paper title" \
   --abstract-file abstract.txt \
   --panel-map "left: problem; center: proposed mechanism; right: validated outcome" \
-  --outdir outputs/schematic \
+  --outdir schematic \
   --basename graphical_abstract
 ```
 

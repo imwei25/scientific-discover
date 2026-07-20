@@ -10,7 +10,7 @@ description: 写基金标书 / 研究计划书。按国自然(NSFC)或 NIH 等�
 帮用户把课题写成有说服力、结构完整的标书。参考 franklee16 / K-Dense 的 grants 技能；预算部分参考 qinyan-academic-skills 的 `research-grants`（MIT）。**内容基于用户提供的真实课题与前期工作，不编造数据、成果或报价。**
 
 ## 定位（本技能在套件中的位置）
-顶层主控（AGENTS.md 常驻指令）判意图、定范围、派发；派到本技能就**直接做，别回绕**。本技能是 grant 流水线的正文起草环节（research-scan→topic-selection→novelty-check→**本技能**→peer-review→render-pdf-doc）；单独直呼（已有明确课题+前期工作、只要起草/润色标书正文）也直接做。产物写 `outputs/`（主控注入了会话专属目录 `outputs/<会话id>/` 时以它为准、勿写仓库根固定名——多用户共享会 clobber）。
+顶层主控（AGENTS.md 常驻指令）判意图、定范围、派发；派到本技能就**直接做，别回绕**。本技能是 grant 流水线的正文起草环节（research-scan→topic-selection→novelty-check→**本技能**→peer-review→render-pdf-doc）；单独直呼（已有明确课题+前期工作、只要起草/润色标书正文）也直接做。产物直接写**当前工作目录**——网关已把本会话的 cwd 指到该会话的产物目录，用裸文件名即可（如 `table1.csv`），别再拼 `outputs/…` 前缀，也别写到仓库根。
 
 ## ⚠️ 时效与合规（必读，先于一切）
 
@@ -20,8 +20,8 @@ description: 写基金标书 / 研究计划书。按国自然(NSFC)或 NIH 等�
 ## Python 环境（可选，用于成品排版）
 > 没有项目根 `.venv`？先运行 `env-setup` 技能建好并装依赖。
 ```
-.venv/Scripts/python.exe   # Windows（正斜杠写法，bash 与 PowerShell 都能用）
-.venv/bin/python           # Linux / macOS
+${REPO_ROOT:-/app}/.venv/bin/python   # Windows（正斜杠写法，bash 与 PowerShell 都能用）
+${REPO_ROOT:-/app}/.venv/bin/python
 ```
 
 ## 先问清楚

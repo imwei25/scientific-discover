@@ -145,7 +145,16 @@ RUN sed -i 's/\r$//' /app/entrypoint.sh && chmod +x /app/entrypoint.sh \
 # 为什么需要它：每个会话的工作目录（cwd）已被网关指到该会话的产物目录（见 server.mjs 的 createSession），
 # 所以 `.venv/bin/python`、`.opencode/skills/...` 这类【相对仓库根】的写法在会话里一律找不到。
 # 用变量而非写死 /app：WORKDIR 若变、或本地开发想指到别处，只改这一处即可。
+#
+# SKILL_DIR：ppt-master 是 vendored 的上游技能，它的 7 个 md 用 ${SKILL_DIR} 拼每一条命令
+# （共 63 处，形如 `python3 ${SKILL_DIR}/scripts/project_manager.py ...`），而【全仓没有任何地方
+# 给它赋过值】—— 展开成空串后命令变成 `python3 /scripts/project_manager.py`，用户说"做个 PPT"
+# 第一步就 ENOENT，整个技能任何路径都跑不起来。其余 21 个技能用的都是 ${REPO_ROOT:-/app}，
+# 只有它是这个变量，正好被 REPO_ROOT 改造整体漏掉。
+# 这里用 ENV 补一个落点而不是把 63 处改写成 ${REPO_ROOT:-/app}/...：ppt-master 要跟上游同步，
+# 改动越少越好搬。注意它必须跟着 COPY 到 /app/.opencode/skills/ 的落点走（见上方 COPY deploy/skills/）。
 ENV REPO_ROOT=/app \
+    SKILL_DIR=/app/.opencode/skills/ppt-master \
     OC_URL=http://127.0.0.1:4098 \
     OC_MODEL=deepseek/deepseek-v4-pro \
     PORT=3000

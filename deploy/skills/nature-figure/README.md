@@ -26,7 +26,7 @@ ${REPO_ROOT:-/app}/.venv/bin/python ${REPO_ROOT:-/app}/.opencode/skills/nature-f
   --title "Paper title" \
   --abstract-file abstract.txt \
   --panel-map "left: problem; center: proposed mechanism; right: validated outcome" \
-  --outdir outputs/schematic \
+  --outdir schematic \
   --basename graphical_abstract
 ```
 

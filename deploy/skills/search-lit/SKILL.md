@@ -192,8 +192,8 @@ API; nothing generated from memory):
 python3 references/snowball.py \
   --seed DOI:10.1148/radiol.2024123,PMID:38000001 \
   --direction all \
-  --pool outputs/refs.bib \
-  --out outputs/refs.bib
+  --pool refs.bib \
+  --out refs.bib
 ```
 
 - **Directions**: `backward` (references the seeds cite), `forward` (papers

@@ -5,23 +5,28 @@ description: 把 Markdown 稿件渲染成 Word (.docx) 投稿版。医学期刊�
 
 # Markdown → Word (.docx) 投稿排版技能
 
+> **产物位置**：所有产物一律写到主控注入的**会话专属目录** 当前工作目录（每轮开头会给出确切前缀，照抄即可）。
+> 别写仓库根的固定名，也别写 `/app` 下的任意目录——`/app` 根不在任何数据卷上，容器一重建（改档位、重部署技能都会重建）产物就没了。
+
+> 注：`<会话id>` 是**占位符**，执行前替换成主控给出的实际会话 id（原样复制进 shell 会因 `<` `>` 是重定向符而报错）。
+
 医学期刊投稿系统绝大多数**只收 Word**，编辑修订、Turnitin 查重、作者返修也都基于 .docx。本技能把 Markdown 稿件转成 Word。相比 PDF（xelatex）路线，Word 有个好处：**中文更不容易漏字**——Word 存的是 UTF-8 文本、由系统字体自动候补，不像 xelatex 缺字就静默丢掉（但若 `--reference-doc` 模板把正文样式锁死成不含中文字形的西文字体，仍可能异常，一般 Word 会自动候补）。
 
 ## 依赖
 需要 **pandoc**（仓库根 `install.ps1 -WithPdf` / `install.sh --with-pdf` 已装；单独装：`winget install JohnMacFarlane.Pandoc` / `apt-get install pandoc` / `brew install pandoc`）。**不需要 xelatex/MiKTeX**（那是 PDF 才要的）。
 
 ## 用法
-脚本在 `.opencode/skills/render-docx/scripts/`，从仓库根运行或用全路径（Windows 经 Git Bash 跑 .sh）：
+脚本在 `/app/.opencode/skills/render-docx/scripts/`（容器内的实际路径；命令行里写 `${REPO_ROOT:-/app}/...` 由 shell 展开，但**散文里的路径要能直接拿去 Read/ls**，所以这里写实路径）（Windows 经 Git Bash 跑 .sh）：
 ```bash
 # 最简：Markdown → Word
-bash .opencode/skills/render-docx/scripts/render_docx.sh -i outputs/manuscript.md -o outputs/manuscript.docx
+bash ${REPO_ROOT:-/app}/.opencode/skills/render-docx/scripts/render_docx.sh -i manuscript.md -o manuscript.docx
 
 # 套用期刊/机构的 Word 模板（继承其样式与字体）——中文投稿几乎必须
-bash .opencode/skills/render-docx/scripts/render_docx.sh -i outputs/manuscript.md --ref templates/journal_template.docx
+bash ${REPO_ROOT:-/app}/.opencode/skills/render-docx/scripts/render_docx.sh -i manuscript.md --ref templates/journal_template.docx
 
 # 按 GB/T 7714 渲染参考文献（仅当稿件用 pandoc @citekey 引用、配 .bib 时；见下方限制）
-bash .opencode/skills/render-docx/scripts/render_docx.sh -i outputs/manuscript.md \
-  --csl /path/to/gb-t-7714-2015-numeric.csl --bib outputs/refs.bib
+bash ${REPO_ROOT:-/app}/.opencode/skills/render-docx/scripts/render_docx.sh -i manuscript.md \
+  --csl /path/to/gb-t-7714-2015-numeric.csl --bib refs.bib
 ```
 > **CSL 文件本仓库未内置**，需自行下载：GB/T 7714-2015 numeric CSL 见 `citation-style-language/styles` 仓库（文件名 `china-national-standard-gb-t-7714-2015-numeric.csl`），或中文社区 `zotero-chinese/styles`（含中华医学会样式）、Gitee 镜像 `redleafnew00/Chinese-STD-GB-T-7714-related-csl`。下好放任意路径，`--csl` 指过去即可。
 

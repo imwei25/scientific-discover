@@ -10,13 +10,13 @@ description: 科研选题 / 假设生成。从一个方向或一堆文献里找�
 把"想做研究"变成几个**具体、可评估、可执行**的候选课题。参考 K-Dense 的 hypothesis-generation 思路。
 
 ## 定位（本技能在套件中的位置）
-顶层主控（AGENTS.md 常驻指令）负责判意图、定范围、派发；派到本技能就**直接做，别回绕**。产物写 `outputs/`（主控注入了会话专属目录 `outputs/<会话id>/` 时以它为准、勿写仓库根固定名——多用户共享会 clobber）。
+顶层主控（AGENTS.md 常驻指令）负责判意图、定范围、派发；派到本技能就**直接做，别回绕**。产物直接写**当前工作目录**——网关已把本会话的 cwd 指到该会话的产物目录，用裸文件名即可（如 `table1.csv`），别再拼 `outputs/…` 前缀，也别写到仓库根。
 
 ## Python 环境（可选）
 > 没有项目根 `.venv`？先运行 `env-setup` 技能建好并装依赖。
 ```
-.venv/Scripts/python.exe   # Windows（正斜杠写法，bash 与 PowerShell 都能用）
-.venv/bin/python           # Linux / macOS
+${REPO_ROOT:-/app}/.venv/bin/python   # Windows（正斜杠写法，bash 与 PowerShell 都能用）
+${REPO_ROOT:-/app}/.venv/bin/python
 ```
 
 ## 流程

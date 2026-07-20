@@ -5,6 +5,11 @@ description: 去 AI 味 / 学术润色（科研、医学文本，中英文都支
 
 # 去 AI 味学术写作技能
 
+> **产物位置**：所有产物一律写到主控注入的**会话专属目录** 当前工作目录（每轮开头会给出确切前缀，照抄即可）。
+> 别写仓库根的固定名，也别写 `/app` 下的任意目录——`/app` 根不在任何数据卷上，容器一重建（改档位、重部署技能都会重建）产物就没了。
+
+> 注：`<会话id>` 是**占位符**，执行前替换成主控给出的实际会话 id（原样复制进 shell 会因 `<` `>` 是重定向符而报错）。
+
 对给定文本做两遍改写，去掉机器腔、保留学术严谨。参考 matsuikentaro1/humanizer_academic 与 blader/humanizer（二者均只覆盖英文），**本技能补齐了中文学术 AI 腔清单**，聚焦科研/医学稿件。
 
 ## 第一步：判定语言，加载对应清单
@@ -54,9 +59,9 @@ description: 去 AI 味 / 学术润色（科研、医学文本，中英文都支
 ## 机械校验（把硬约束从"声明"变成"检查"）
 长文改写后，跑不变量校验，确认数字/引用/术语没被动过：
 ```
-# Windows: .venv/Scripts/python.exe ; Linux/macOS: .venv/bin/python
-.venv/Scripts/python.exe .opencode/skills/humanize-academic/scripts/check_invariants.py \
-  --before outputs/original.md --after outputs/humanized.md \
+# Windows: ${REPO_ROOT:-/app}/.venv/bin/python ; Linux/macOS: ${REPO_ROOT:-/app}/.venv/bin/python
+${REPO_ROOT:-/app}/.venv/bin/python ${REPO_ROOT:-/app}/.opencode/skills/humanize-academic/scripts/check_invariants.py \
+  --before original.md --after humanized.md \
   --terms "HFpEF,SGLT2i,eGFR"     # 可选：逐个核对关键术语计数
 ```
 脚本抽取改写前后的数字、引用标记（[n]/(作者,年)/DOI/PMID）、指定术语，做集合 diff，报出任何丢失/新增。**凡涉及数据或引用编号的差异必须核对原文**（`5% → five percent` 这类等价改写属正常，人工确认即可）。
@@ -64,7 +69,7 @@ description: 去 AI 味 / 学术润色（科研、医学文本，中英文都支
 ## 用法
 1. 让用户给原文（或指向 `uploads/` 里的文件）。
 2. 改完给出：**改写稿** + **改动说明**（列出改掉了哪些 AI 腔、为什么），必要时并排 before/after 关键句。
-3. 长文写到 `outputs/humanized.md`，并跑上面的不变量校验。
+3. 长文写到 `humanized.md`，并跑上面的不变量校验。
 
 ## 提醒
 - "AI 检测器"分数仅供参考、不可靠；本技能目标是**读起来自然且学术严谨**，不是骗检测器。

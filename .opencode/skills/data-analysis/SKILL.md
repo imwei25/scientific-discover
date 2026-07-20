@@ -8,12 +8,12 @@ description: 用于任何数据分析、统计计算、画图、读写 CSV/Excel
 本项目自带一个已配置好的 Python 虚拟环境，装了科学计算包。**运行 Python 必须用这个解释器**，不要用系统 `python`（系统没装 Python）。
 
 ## 定位（本技能在套件中的位置）
-顶层主控（AGENTS.md 常驻指令）负责判意图、定范围、派发；派到本技能就**直接做，别回绕**。产物写 `outputs/`（主控注入了会话专属目录 `outputs/<会话id>/` 时以它为准、勿写仓库根固定名——多用户共享会 clobber）。
+顶层主控（AGENTS.md 常驻指令）负责判意图、定范围、派发；派到本技能就**直接做，别回绕**。产物直接写**当前工作目录**——网关已把本会话的 cwd 指到该会话的产物目录，用裸文件名即可（如 `table1.csv`），别再拼 `outputs/…` 前缀，也别写到仓库根。
 
 ## 解释器
 ```
-.venv/Scripts/python.exe   # Windows（正斜杠写法，bash 与 PowerShell 都能用）
-.venv/bin/python           # Linux / macOS
+${REPO_ROOT:-/app}/.venv/bin/python   # Windows（正斜杠写法，bash 与 PowerShell 都能用）
+${REPO_ROOT:-/app}/.venv/bin/python
 ```
 已安装：pandas、numpy、scipy、matplotlib、scikit-learn、seaborn、statsmodels、openpyxl，另有 lifelines（生存分析）等。
 
@@ -22,7 +22,7 @@ description: 用于任何数据分析、统计计算、画图、读写 CSV/Excel
 ## 运行方式
 把代码写到一个 `.py` 文件，再用 bash 执行：
 ```
-.venv/Scripts/python.exe analysis.py
+${REPO_ROOT:-/app}/.venv/bin/python analysis.py
 ```
 
 ## 医学统计方法选择（护栏，动手前先对号入座）

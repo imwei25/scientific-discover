@@ -12,13 +12,12 @@ description: 系统综述 / Meta 分析的**方法学全流程**（区别于叙�
 > **绝不用一次 LLM pass 当最终筛选决定**。筛选必须双人独立 + 冲突人工消解；协议必须在筛文献前注册；PRISMA 流程图是硬性产出。缺的真实信息（纳排、注册号、评审者）向用户要，不替编。
 
 ## 定位（本技能在套件中的位置）
-顶层主控（AGENTS.md 常驻指令）判意图、定范围、派发；派到本技能就**直接做，别回绕**。本技能是 systematic 流水线的方法学环节（**本技能八步** → write-paper 成文 → reference-check → render-docx）；单独直呼（只对这批文献双人筛选/去重、只做一次 RoB2/GRADE）也直接做那一步。产物写 `outputs/`（主控注入了会话专属目录 `outputs/<会话id>/` 时以它为准、勿写仓库根固定名——多用户共享会 clobber）。
+顶层主控（AGENTS.md 常驻指令）判意图、定范围、派发；派到本技能就**直接做，别回绕**。本技能是 systematic 流水线的方法学环节（**本技能八步** → write-paper 成文 → reference-check → render-docx）；单独直呼（只对这批文献双人筛选/去重、只做一次 RoB2/GRADE）也直接做那一步。产物直接写**当前工作目录**——网关已把本会话的 cwd 指到该会话的产物目录，用裸文件名即可（如 `table1.csv`），别再拼 `outputs/…` 前缀，也别写到仓库根。
 
 ## Python 环境（脚本用，纯标准库，无需额外依赖）
 > 没有项目根 `.venv`？先运行 `env-setup` 技能。
 ```
-.venv/Scripts/python.exe   # Windows
-.venv/bin/python           # Linux / macOS
+${REPO_ROOT:-/app}/.venv/bin/python
 ```
 
 ## 全流程（八步）
@@ -34,9 +33,9 @@ description: 系统综述 / Meta 分析的**方法学全流程**（区别于叙�
 
 ### 3. 去重（identification 阶段）
 ```bash
-PY=.venv/Scripts/python.exe   # Linux/mac: .venv/bin/python
-SR=.opencode/skills/systematic-review/scripts
-$PY $SR/sr_dedup.py --input imported/ --output outputs/01_deduplicated.csv --counts outputs/counts/identification.json
+PY=${REPO_ROOT:-/app}/.venv/bin/python   # Linux/mac: ${REPO_ROOT:-/app}/.venv/bin/python
+SR=${REPO_ROOT:-/app}/.opencode/skills/systematic-review/scripts
+$PY $SR/sr_dedup.py --input imported/ --output 01_deduplicated.csv --counts counts/identification.json
 ```
 纯确定性三段去重（DOI 精确 → 标题精确 → 同年 difflib 模糊，阈值 `--fuzzy` 默认 0.92）。**保留每条记录可审计**：被删记录的 `dup_of` 指向合并到的 canonical 记录。产出去重 CSV + identification 计数。
 
@@ -47,7 +46,7 @@ $PY $SR/sr_dedup.py --input imported/ --output outputs/01_deduplicated.csv --cou
 ```bash
 $PY $SR/sr_prisma_count.py --identification outputs/counts/identification.json \
    --ta outputs/02_title_abstract_screen.csv --ft outputs/03_fulltext_screen.csv \
-   --output outputs/counts/prisma-summary.md
+   --output counts/prisma-summary.md
 ```
 自动算出流程图每个框的数字 + 每阶段 **Cohen's κ**（附一致性等级）+ **8 条内部自洽校验**（如 排除+纳入=评估数）。任一校验 FAIL 会退出码 1、提示回去核数。数字交 `nature-figure` 画 **PRISMA 2020 流程图**。
 
