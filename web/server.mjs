@@ -408,6 +408,17 @@ function warmPreviews(dir, names) {
 }
 
 const jobs = new Map()   // sid -> 进行中的 job
+// 在跑的轮数。三处要用同一个判据：/api/busy（manager 停机/腾位前探它）、以及切模型的两条路径
+// （/api/model、/api/model/pick）——它们会 restartOpencode()，把所有在跑的轮连根拔掉。
+const runningRounds = () => [...jobs.values()].filter((j) => j.running).length
+
+// ---- /api/password 的失败限流（模块级：状态必须跨请求存活）----
+// 这是【已登录】才够得着的接口，攻击面是"cookie 被偷/会话被借用"下的密码盲猜：拿到 cookie 的人
+// 本就能读会话，但不知道当前密码就改不走账号——而该接口会如实回答"当前密码不正确"，
+// 等于一个不限速的密码预言机。manager 那层的图形验证码/限流/审计管不到这里（请求打的是容器自己的
+// 3000 端口，不经 manager）。容器是单用户的，所以全局一个计数器就够，无需按 IP 分桶。
+const PW_MAX_FAILS = 5, PW_LOCK_MS = 15 * 60 * 1000
+const pwGuard = { fails: 0, lockedUntil: 0 }
 const titledSessions = new Set()   // 已确认过标题的会话（每会话只查/改一次），见 /api/chat 的自动补名
 // 会话标题统一取"首条提问"：上传先于对话建的会话是占位标题 "web"，收到首条消息时改名。
 // 只对占位标题改名，避免"断点续问"旧会话时把原标题冲掉。
@@ -582,7 +593,7 @@ const server = http.createServer(async (req, res) => {
     // 命中 isLocal 免鉴权 —— 不必把本接口放进 PUBLIC_PATHS：容器彼此在同一 docker 网络里互通，
     // 而每个容器里跑的正是能执行任意代码的 agent，公开它等于让 alice 能探到 bob 在不在干活。
     if (req.method === "GET" && u.pathname === "/api/busy") {
-      const running = [...jobs.values()].filter((j) => j.running).length
+      const running = runningRounds()
       return send(res, 200, "application/json", JSON.stringify({ busy: running > 0, running }))
     }
 
@@ -593,7 +604,17 @@ const server = http.createServer(async (req, res) => {
       const chunks = []; for await (const c of req) chunks.push(c)
       let cur = "", nw = ""
       try { const b = JSON.parse(Buffer.concat(chunks).toString() || "{}"); cur = String(b.current || ""); nw = String(b.new || "") } catch {}
-      if (cur !== effectivePassword()) return send(res, 401, "application/json", JSON.stringify({ ok: false, err: "当前密码不正确" }))
+      if (Date.now() < pwGuard.lockedUntil) {
+        const mins = Math.ceil((pwGuard.lockedUntil - Date.now()) / 60000)
+        return send(res, 429, "application/json", JSON.stringify({ ok: false, err: `尝试次数过多，请 ${mins} 分钟后再试` }))
+      }
+      if (cur !== effectivePassword()) {
+        pwGuard.fails++
+        if (pwGuard.fails >= PW_MAX_FAILS) { pwGuard.lockedUntil = Date.now() + PW_LOCK_MS; pwGuard.fails = 0 }
+        await new Promise((r) => setTimeout(r, 600))   // 恒定延时：既压猜测速率，也不因"错得快/慢"泄露信息
+        return send(res, 401, "application/json", JSON.stringify({ ok: false, err: "当前密码不正确" }))
+      }
+      pwGuard.fails = 0   // 猜对即清零，避免正常用户偶尔手滑被累计到锁定
       if (nw.length < 6) return send(res, 400, "application/json", JSON.stringify({ ok: false, err: "新密码至少 6 位" }))
       try { fs.mkdirSync(path.dirname(PW_OVERRIDE), { recursive: true }); fs.writeFileSync(PW_OVERRIDE, JSON.stringify({ base: sha(LAN_PASSWORD), password: nw })) }
       catch { return send(res, 500, "application/json", JSON.stringify({ ok: false, err: "保存失败" })) }
@@ -957,9 +978,12 @@ const server = http.createServer(async (req, res) => {
     // 切换后台模型：注册自定义 provider → 重启 opencode → 更新当前模型
     if (req.method === "POST" && u.pathname === "/api/model") {
       const chunks = []; for await (const c of req) chunks.push(c)
-      let baseURL = "", apiKey = "", modelID = ""
-      try { const b = JSON.parse(Buffer.concat(chunks).toString() || "{}"); baseURL = (b.baseURL || "").trim(); apiKey = (b.apiKey || "").trim(); modelID = (b.modelID || "").trim() } catch {}
+      let baseURL = "", apiKey = "", modelID = "", force = false
+      try { const b = JSON.parse(Buffer.concat(chunks).toString() || "{}"); baseURL = (b.baseURL || "").trim(); apiKey = (b.apiKey || "").trim(); modelID = (b.modelID || "").trim(); force = !!b.force } catch {}
       if (!baseURL || !apiKey || !modelID) return send(res, 400, "application/json", JSON.stringify({ ok: false, err: "请填写 API URL、API Key、模型 ID" }))
+      // 切模型要 restartOpencode()，会把所有在跑的轮连根拔掉：用户跑了半小时的综述，切个模型就没了，
+      // 且此前没有任何提示。改为先挡住并如实说明，前端确认后带 force:true 重发才真切。
+      { const busy = runningRounds(); if (busy > 0 && !force) return send(res, 409, "application/json", JSON.stringify({ ok: false, busy, needForce: true, err: `有 ${busy} 轮正在生成中，切换模型需重启后台，会中断它们` })) }
       writeOcProvider({ baseURL, apiKey, modelID })
       saveModelCfg({ baseURL, apiKey, modelID })
       MODEL = { providerID: CUSTOM_PROVIDER_ID, modelID }
@@ -973,8 +997,11 @@ const server = http.createServer(async (req, res) => {
       const baseURL = process.env.OC_GATEWAY_URL, apiKey = process.env.OC_GATEWAY_KEY
       if (!baseURL || !apiKey) return send(res, 400, "application/json", JSON.stringify({ ok: false, err: "未接入网关，无法切换模型" }))
       const chunks = []; for await (const c of req) chunks.push(c)
-      let modelID = ""; try { modelID = (JSON.parse(Buffer.concat(chunks).toString() || "{}").model || "").trim() } catch {}
+      let modelID = "", force = false
+      try { const b = JSON.parse(Buffer.concat(chunks).toString() || "{}"); modelID = (b.model || "").trim(); force = !!b.force } catch {}
       if (!modelID) return send(res, 400, "application/json", JSON.stringify({ ok: false, err: "缺 model" }))
+      // 同 /api/model：这条路径也 restartOpencode()，同样会中断在跑的轮
+      { const busy = runningRounds(); if (busy > 0 && !force) return send(res, 409, "application/json", JSON.stringify({ ok: false, busy, needForce: true, err: `有 ${busy} 轮正在生成中，切换模型需重启后台，会中断它们` })) }
       writeOcProvider({ baseURL, apiKey, modelID })
       saveModelCfg({ baseURL, apiKey, modelID })
       MODEL = { providerID: CUSTOM_PROVIDER_ID, modelID }
@@ -1067,3 +1094,29 @@ server.listen(PORT, "0.0.0.0", () => {
     ? `  局域网登录：账号 ${LAN_USER} / 密码 ${LAN_PASSWORD}（本机 localhost 免登录；改账号密码用环境变量 LAN_USER/LAN_PASSWORD，关登录用 LAN_AUTH=0）`
     : `  登录已关闭（LAN_AUTH=0）`)
 })
+
+// ---- 优雅退出 ----
+// entrypoint.sh 是 `exec node server.mjs`，所以 node 就是容器的 PID 1。PID 1 在没有注册处理器时，
+// 内核【不】执行信号的默认动作 —— SIGTERM 被直接忽略，于是 `docker stop` 每次都白等满 10 秒宽限期
+// 再 SIGKILL（实测退出码 137 就是这么来的）。manager 按需停容器/腾位很频繁，每次都多花 10 秒。
+// 注册处理器后：立刻停止接受新连接 → 让在跑的轮自己收尾（有上限，不无限等）→ 主动收掉 opencode 子进程。
+let shuttingDown = false
+// console.log 在 stdout 是管道时（docker logs 正是管道）是【异步】写，紧跟 process.exit() 会把
+// 没冲刷完的行直接丢掉——那样这条路径将完全不可观测。退出路径的日志改用同步写。
+const exitLog = (s) => { try { fs.writeSync(1, s + "\n") } catch {} }
+async function gracefulExit(sig) {
+  if (shuttingDown) return
+  shuttingDown = true
+  exitLog(`[exit] 收到 ${sig}，开始优雅退出（在跑的轮：${runningRounds()}）`)
+  try { server.close() } catch {}   // 停止接受新连接；已建立的连接自然收尾
+  // 给在跑的轮一点收尾时间，但设硬上限——宽限期本身只有 10 秒，超时就没意义了
+  const deadline = Date.now() + 6000
+  while (runningRounds() > 0 && Date.now() < deadline) await sleep(200)
+  if (runningRounds() > 0) exitLog(`[exit] 仍有 ${runningRounds()} 轮未收尾，不再等待`)
+  // opencode 是 detached+unref 的子进程，不主动收会变成孤儿（容器销毁时才被清掉）。
+  // 复用 restartOpencode 用的同一把刀：killPort(OC_PORT)（本进程没有留着 child 句柄可用）
+  if (OC_MANAGED) { try { killPort(OC_PORT) } catch {} }
+  exitLog("[exit] 完成")
+  process.exit(0)
+}
+for (const s of ["SIGTERM", "SIGINT"]) process.on(s, () => { gracefulExit(s) })

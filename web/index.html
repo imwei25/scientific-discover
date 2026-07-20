@@ -558,9 +558,18 @@ document.getElementById("logoutBtn").innerHTML = ic("logout")
     sel.querySelector("#mpill").onclick = function (e) { e.stopPropagation(); menu.classList.toggle("on") }
     menu.querySelectorAll(".mitem").forEach(function (it) { it.onclick = async function () { const m = it.dataset.m; menu.classList.remove("on"); if (m !== cur) await pick(m) } })
   }
-  async function pick(m) {
+  async function pick(m, force) {
     const pill = sel.querySelector("#mpill"); if (pill) pill.innerHTML = "🧠 切换中…（重启模型约数秒）"
-    try { const r = await (await fetch("api/model/pick", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ model: m }) })).json(); if (!r.ok) alert("切换失败：" + (r.err || "")) } catch (e) { alert("切换失败，请重试") }
+    try {
+      const r = await (await fetch("api/model/pick", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ model: m, force: !!force }) })).json()
+      // 后端在有轮次正在生成时回 409 + needForce：切模型要重启 opencode，会把在跑的轮连根拔掉。
+      // 此前这一步是静默的——用户跑了半小时的综述，切个模型就没了且没有任何提示。
+      if (!r.ok && r.needForce) {
+        if (confirm("有 " + r.busy + " 轮正在生成中。\n切换模型需要重启后台，会中断它们且无法恢复。\n\n确定要切换吗？")) return pick(m, true)
+        await refresh(); return
+      }
+      if (!r.ok) alert("切换失败：" + (r.err || ""))
+    } catch (e) { alert("切换失败，请重试") }
     await refresh()
   }
   document.addEventListener("click", function () { const mm = sel.querySelector("#mmenu"); if (mm) mm.classList.remove("on") })
