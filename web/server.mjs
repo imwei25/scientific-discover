@@ -111,12 +111,17 @@ async function sessionOut(sid) {
   if (!s) return OUTPUTS
   if (dirCache.has(s)) return dirCache.get(s)
   let dir = path.join(OUTPUTS, s)                       // 回落：老会话
+  let resolved = false                                  // 是否真从 opencode 问到了 directory
   try {
     const info = un(await client.session.get({ path: { id: sid } }))
     const d = info?.directory
-    if (d && path.resolve(d) !== path.resolve(ROOT)) dir = path.resolve(d)
+    if (d && path.resolve(d) !== path.resolve(ROOT)) { dir = path.resolve(d); resolved = true }
   } catch { /* opencode 不可用时用回落值，不阻断文件接口 */ }
-  dirCache.set(s, dir)
+  // 【只缓存问到的结果】失败回落不能进缓存，否则一次失败就把错目录钉死【整个进程生命周期】：
+  // 容器冷启动时 opencode 要几十秒才就绪，这期间若前端先打到 /api/outputs，session.get 会抛 →
+  // 缓存 outputs/<sid>（错的）→ 此后产出侧栏永远空、下载预览全 404，而 agent 实际把文件写进
+  // outputs/ws_xxx → 用户看到"跑完了但一个产物都没有"，只有重启网关才能恢复。
+  if (resolved) dirCache.set(s, dir)
   return dir
 }
 const relFromRoot = (abs) => path.relative(ROOT, abs).replace(/\\/g, "/")   // 仅用于回给前端展示，统一正斜杠
@@ -233,6 +238,33 @@ const isPrivateHost = (host) => {
 // ---- 每用户存储上限（uploads + outputs 之和）----
 // STORAGE_LIMIT_MB=0 或空 = 不限。达上限拦截新上传；前端到 90% 提示。删除会话会清掉其目录（见 /api/session/delete）。
 const STORAGE_LIMIT_MB = Number(process.env.STORAGE_LIMIT_MB || 0)
+// 统一的文件下发：createReadStream 的 'error' 【必须】挂监听器。进程里没有 uncaughtException 兜底
+// （刻意不加：那会把真正的 bug 掩盖成"还能跑"），一个没人接的 'error' 就是整容器退出、opencode 一起没。
+// 触发它不需要攻击，日常就够：TOCTOU（existsSync 通过后文件被 prunePreviewCache / 删会话并发删掉 → ENOENT）、
+// 磁盘 IO 错误、以及曾经的 EISDIR。响应头此时多半已发出，只能断流，但至少不该拖垮整个容器。
+// 自定义模型 baseURL 的 SSRF 校验。返回 null=放行，否则返回要下发的 JSON 错误串。
+// 【必须两个入口都用】：此前护栏只装在 /api/model/test 上，而真正生效的是 POST /api/model ——
+// 用户完全可以跳过"测试"直接保存，baseURL 未经任何校验就写进 opencode 配置并重启，
+// 此后每轮对话都去打那个地址，上游报错还会经 promptErr 回显进聊天框（截 200 字），
+// 等于一个比 test 更好用的内网探测通道，而 test 那边刚特意把响应体和 errno 都隐掉了。
+const modelUrlReject = (baseURL) => {
+  try {
+    const pu = new URL(baseURL)
+    if (!/^https?:$/.test(pu.protocol)) return JSON.stringify({ ok: false, err: "只支持 http/https 地址" })
+    if (!ALLOW_PRIVATE_MODEL_URL && isPrivateHost(pu.hostname))
+      return JSON.stringify({ ok: false, err: "出于安全考虑，不允许指向内网 / 本机 / 云元数据地址；请填公网可访问的 API 地址" })
+    return null
+  } catch { return JSON.stringify({ ok: false, err: "API URL 格式不正确" }) }
+}
+const pipeFile = (f, res) => {
+  const rs = fs.createReadStream(f)
+  rs.on("error", (e) => {
+    console.warn(`[download] 读取失败 ${f}: ${e?.code || e?.message || e}`)
+    if (!res.headersSent) { try { return send(res, 404, "text/plain", "not found") } catch {} }
+    try { res.destroy() } catch {}
+  })
+  return rs.pipe(res)
+}
 const dirSize = (dir) => {
   let total = 0
   const walk = (d) => {
@@ -242,7 +274,10 @@ const dirSize = (dir) => {
       // .preview 是服务端自己生成的预览缓存（docx→html、pptx→pdf），用户在界面上既看不见也删不掉，
       // 却按目录递归被算进配额 —— 等于拿用户看不见的缓存去挤他的额度。它是派生数据，不计入。
       if (e.isDirectory()) { if (e.name !== ".preview") walk(p) }
-      else if (!e.name.endsWith(".part")) { try { total += fs.statSync(p).size } catch {} }   // .part 是在传中的临时文件，另由 inflightUploadBytes 计
+      // 只跳过【网关自己生成】的临时名（"." + 12位hex + ".part"，见 /api/upload 的 tmp）。
+      // 原来是无条件跳过一切 .part —— 而落盘名完全由 ?name= 决定，用户传 ?name=x.part 就能让文件
+      // 正常落盘、正常出现在列表里，却在存储计量里恒为 0 → STORAGE_LIMIT_MB 形同虚设，卷可被写满。
+      else if (!/^\.[0-9a-f]{12}\.part$/.test(e.name)) { try { total += fs.statSync(p).size } catch {} }   // 在传中的临时文件另由 inflightUploadBytes 计
     }   // .part 是上传中的临时文件，用 inflightUploadBytes 单独计，别在此重复计
   }
   walk(dir); return total
@@ -672,7 +707,16 @@ const server = http.createServer(async (req, res) => {
         if (e.code === "over") return sendClose(res, 413, "application/json", overMsg())
         return sendClose(res, 500, "application/json", JSON.stringify({ ok: false, err: String(e?.message || e).slice(0, 200) }))
       }
-      fs.renameSync(tmp, dest); release()
+      // renameSync 必须包起来：它抛了（dest 已存在同名【目录】→ EISDIR/EPERM、EACCES、跨设备等）
+      // 而 release() 在其后 → 本次预占的字节永久留在 inflightUploadBytes 里。累积几次后 wouldExceed()
+      // 恒真，该容器【此后所有上传】都回"存储空间不足"，而 /api/storage 显示的用量却完全正常
+      // （它读 storageUsed()，不含 inflight）→ 用户和运维都无从判断，只有重启进程能清。
+      try { fs.renameSync(tmp, dest) }
+      catch (e) {
+        release(); try { fs.unlinkSync(tmp) } catch {}
+        return send(res, 500, "application/json", JSON.stringify({ ok: false, err: `保存失败：${String(e?.message || e).slice(0, 200)}` }))
+      }
+      release()
       return send(res, 200, "application/json", JSON.stringify({ ok: true, sid, path: `${relFromRoot(dest)}`, size: fs.statSync(dest).size }))
     }
 
@@ -741,8 +785,14 @@ const server = http.createServer(async (req, res) => {
       const id = u.searchParams.get("id") || ""
       if (!id) return send(res, 400, "application/json", JSON.stringify({ ok: false }))
       try { await jobs.get(id)?.abort() } catch {}   // 会话还在生成中 → 先终止再删
+      // 【顺序要紧】必须在 session.delete 之【前】把目录解析出来：sessionOut/sessionUp 在 dirCache 未命中时
+      // 要回头问 opencode 要 session.directory，而会话一旦删掉，session.get 必然 404 → 静默回落到
+      // outputs/<sid>，而真实目录是 outputs/ws_xxx → rmSync 对着一个不存在的路径 force 空转，
+      // 返回 ok:true 但一个字节都没删。容器按需停起是本架构常态，网关重启后 dirCache 就是空的，
+      // 即"删会话释放空间"这唯一的回收手段在最常见的情形下完全失效，最终把用户卡在存储上限上。
+      const delOut = await sessionOut(id), delUp = await sessionUp(id)
       try { await client.session.delete({ path: { id } }) } catch (e) { return send(res, 500, "application/json", JSON.stringify({ ok: false, err: String(e) })) }
-      try { fs.rmSync(await sessionUp(id), { recursive: true, force: true }); fs.rmSync(await sessionOut(id), { recursive: true, force: true }); dirCache.delete(safeSid(id)) } catch {}   // 删会话即释放其 uploads/outputs 占用的空间
+      try { fs.rmSync(delUp, { recursive: true, force: true }); fs.rmSync(delOut, { recursive: true, force: true }); dirCache.delete(safeSid(id)) } catch {}   // 删会话即释放其 uploads/outputs 占用的空间
       return send(res, 200, "application/json", JSON.stringify({ ok: true }))
     }
 
@@ -770,9 +820,12 @@ const server = http.createServer(async (req, res) => {
       const name = path.basename(u.searchParams.get("name") || "")
       const up = u.searchParams.get("dir") === "up"   // dir=up 时取上传目录，否则取产出目录
       const f = path.join(sid ? (up ? await sessionUp(sid) : await sessionOut(sid)) : (up ? UPLOADS : OUTPUTS), name)   // 无 sid 回退共享目录（兼容）
-      if (!name || !fs.existsSync(f)) return send(res, 404, "text/plain", "not found")
+      // isFile 不能省：只判 existsSync 时，?name=.preview（服务端自己在每个产物目录里建的预览缓存目录，
+      // 必然存在）会让 createReadStream 异步抛 EISDIR，而进程没有 uncaughtException 兜底 → 整个容器崩、
+      // opencode 一起没。任意已登录用户一个 URL 即可打崩。/api/raw 本来就有这个判断，这里漏了。
+      if (!name || !fs.existsSync(f) || !fs.statSync(f).isFile()) return send(res, 404, "text/plain", "not found")
       res.writeHead(200, { "Content-Type": "application/octet-stream", "Content-Disposition": contentDisposition(name) })
-      return fs.createReadStream(f).pipe(res)
+      return pipeFile(f, res)
     }
 
     // 内联查看（供聊天框里 <img> 预览 / 在新标签打开），带正确 MIME、不强制下载
@@ -792,7 +845,7 @@ const server = http.createServer(async (req, res) => {
       // 产物 HTML/SVG 可能含脚本：无论 iframe 内嵌还是直开新标签，都沙箱化、不接触本站源（cookie/localStorage）
       if (ext === ".html" || ext === ".htm" || ext === ".svg") head["Content-Security-Policy"] = "sandbox allow-scripts"
       res.writeHead(200, head)
-      return fs.createReadStream(f).pipe(res)
+      return pipeFile(f, res)
     }
 
     // 文档预览转换：docx→HTML、pptx/ppt/odp/doc/odt→PDF；缓存到 <产物目录>/.preview/（与后台预热共用 ensurePreviewCache）
@@ -818,7 +871,7 @@ const server = http.createServer(async (req, res) => {
       const head = { "Content-Type": r.ctype }
       if (String(r.ctype).startsWith("text/html")) head["Content-Security-Policy"] = "sandbox; default-src 'none'; img-src data: blob:; style-src 'unsafe-inline'"
       res.writeHead(200, head)
-      return fs.createReadStream(r.out).pipe(res)
+      return pipeFile(r.out, res)
     }
 
     // 健康检查：网关活着不等于能用——opencode 起不来时网关照样监听端口、
@@ -932,13 +985,7 @@ const server = http.createServer(async (req, res) => {
       let baseURL = "", apiKey = "", modelID = ""
       try { const b = JSON.parse(Buffer.concat(chunks).toString() || "{}"); baseURL = (b.baseURL || "").trim(); apiKey = (b.apiKey || "").trim(); modelID = (b.modelID || "").trim() } catch {}
       if (!baseURL || !apiKey || !modelID) return send(res, 400, "application/json", JSON.stringify({ ok: false, err: "请填写 API URL、API Key、模型 ID" }))
-      // SSRF 护栏：只允许 http/https 的公网地址（见 isPrivateHost 上方注释）
-      try {
-        const pu = new URL(baseURL)
-        if (!/^https?:$/.test(pu.protocol)) return send(res, 400, "application/json", JSON.stringify({ ok: false, err: "只支持 http/https 地址" }))
-        if (!ALLOW_PRIVATE_MODEL_URL && isPrivateHost(pu.hostname))
-          return send(res, 400, "application/json", JSON.stringify({ ok: false, err: "出于安全考虑，不允许指向内网 / 本机 / 云元数据地址；请填公网可访问的 API 地址" }))
-      } catch { return send(res, 400, "application/json", JSON.stringify({ ok: false, err: "API URL 格式不正确" })) }
+      { const bad = modelUrlReject(baseURL); if (bad) return send(res, 400, "application/json", bad) }
       const url = baseURL.replace(/\/+$/, "") + "/chat/completions"
       const t0 = Date.now()
       const ac = new AbortController(); const timer = setTimeout(() => ac.abort(), 20000)
@@ -981,6 +1028,8 @@ const server = http.createServer(async (req, res) => {
       let baseURL = "", apiKey = "", modelID = "", force = false
       try { const b = JSON.parse(Buffer.concat(chunks).toString() || "{}"); baseURL = (b.baseURL || "").trim(); apiKey = (b.apiKey || "").trim(); modelID = (b.modelID || "").trim(); force = !!b.force } catch {}
       if (!baseURL || !apiKey || !modelID) return send(res, 400, "application/json", JSON.stringify({ ok: false, err: "请填写 API URL、API Key、模型 ID" }))
+      // SSRF 护栏：与 /api/model/test 用同一条判据。这条才是真正写配置并生效的路径。
+      { const bad = modelUrlReject(baseURL); if (bad) return send(res, 400, "application/json", bad) }
       // 切模型要 restartOpencode()，会把所有在跑的轮连根拔掉：用户跑了半小时的综述，切个模型就没了，
       // 且此前没有任何提示。改为先挡住并如实说明，前端确认后带 force:true 重发才真切。
       { const busy = runningRounds(); if (busy > 0 && !force) return send(res, 409, "application/json", JSON.stringify({ ok: false, busy, needForce: true, err: `有 ${busy} 轮正在生成中，切换模型需重启后台，会中断它们` })) }
@@ -1011,6 +1060,11 @@ const server = http.createServer(async (req, res) => {
     }
     // 恢复默认模型（清掉自定义 provider）
     if (req.method === "POST" && u.pathname === "/api/model/reset") {
+      // 这条同样 restartOpencode()，与 /api/model、/api/model/pick 是同一个危害：
+      // 在跑的轮被无声拔掉，且因为走不到 addCost 那步，本轮成本【完全不计费】。前两处加了拦截，这里漏了。
+      let rforce = false
+      try { const chunks = []; for await (const c of req) chunks.push(c); rforce = !!JSON.parse(Buffer.concat(chunks).toString() || "{}").force } catch {}
+      { const busy = runningRounds(); if (busy > 0 && !rforce) return send(res, 409, "application/json", JSON.stringify({ ok: false, busy, needForce: true, err: `有 ${busy} 轮正在生成中，恢复默认模型需重启后台，会中断它们` })) }
       try { fs.unlinkSync(MODEL_CFG_PATH) } catch {}
       removeOcProvider()
       MODEL = { providerID: PID, modelID: MID }

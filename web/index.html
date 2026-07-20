@@ -109,6 +109,11 @@
   .user .editbtn:hover { color: var(--cyan); border-color: var(--line-hi); background: rgba(56,189,248,.1); }
   .user .editbtn .ic { width: 14px; height: 14px; }
   body.streaming .user .editbtn { display: none; }   /* 流进行中不允许编辑 */
+  /* 幽灵气泡＝这条消息后端没收下（发送失败／上一轮仍在跑）。此前它和正常消息【长得一模一样】，
+     而编辑按钮点下去是静默 return（见 startEdit），用户完全无从判断发生了什么。给出视觉降级，
+     并直接藏掉编辑按钮——不可用的控件不该出现。 */
+  .user[data-ghost] .utext { opacity: .55; border: 1px dashed var(--muted); }
+  .user[data-ghost] .editbtn { display: none; }
   .user.editing { max-width: min(94%, 720px); background: #eef3fb; border: 1px solid var(--line-hi); box-shadow: none; }
   .user.editing .utext, .user.editing .editbtn { display: none; }
   .editbox { display: flex; flex-direction: column; gap: 9px; }
@@ -542,7 +547,16 @@ document.getElementById("logoutBtn").innerHTML = ic("logout")
   const sel = document.getElementById("modelSel"); if (!sel) return
   let cur = "", prov = "", models = []
   async function refresh() {
-    let m; try { m = await (await fetch("api/model")).json() } catch (e) { return }
+    // 拿不到就把 pill 恢复成上一次已知的模型名，【不能直接 return】：pick() 在发请求前把 pill
+    // 改成了"🧠 切换中…"，若这里早返回不重绘，容器正在被唤醒/重启时 pill 会永久定格在"切换中"，
+    // 直到用户刷新页面；而菜单仍可点开，用户会以为卡住了反复重试。
+    let m
+    try { m = await (await fetch("api/model", { signal: AbortSignal.timeout(8000) })).json() }
+    catch (e) {
+      const pill = sel.querySelector("#mpill")
+      if (pill) pill.innerHTML = "🧠 " + (cur || "模型") + "（状态未知，稍后自动恢复）"
+      return
+    }
     if (!m || !m.gateway) { sel.hidden = true; return }   // 没接网关就不显示切换器
     cur = m.modelID || ""
     // 相对路径：多用户部署下解析成 /<用户名>/pub/... 由 manager 在登录门禁之后应答（原先写死绝对路径 /pub/...，
@@ -558,18 +572,28 @@ document.getElementById("logoutBtn").innerHTML = ic("logout")
     sel.querySelector("#mpill").onclick = function (e) { e.stopPropagation(); menu.classList.toggle("on") }
     menu.querySelectorAll(".mitem").forEach(function (it) { it.onclick = async function () { const m = it.dataset.m; menu.classList.remove("on"); if (m !== cur) await pick(m) } })
   }
+  // picking：切模型没有并发守卫时，用户点错后立刻改点另一个 → 两个 POST 并发，服务端两次
+  // writeOcProvider + restartOpencode（无互斥），第二次重启可能踩在第一次的启动过程中间 →
+  // 最终生效的模型不确定甚至起不来，而 pill 显示的是另一个，直到下次发消息才发现。
+  // 又因为 cur 只在 refresh() 里更新，网速慢时用户重复点【同一个】模型也会因 m !== cur 成立而再发一次。
+  let picking = false
   async function pick(m, force) {
+    if (picking) return
+    picking = true
     const pill = sel.querySelector("#mpill"); if (pill) pill.innerHTML = "🧠 切换中…（重启模型约数秒）"
     try {
       const r = await (await fetch("api/model/pick", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ model: m, force: !!force }) })).json()
       // 后端在有轮次正在生成时回 409 + needForce：切模型要重启 opencode，会把在跑的轮连根拔掉。
       // 此前这一步是静默的——用户跑了半小时的综述，切个模型就没了且没有任何提示。
       if (!r.ok && r.needForce) {
-        if (confirm("有 " + r.busy + " 轮正在生成中。\n切换模型需要重启后台，会中断它们且无法恢复。\n\n确定要切换吗？")) return pick(m, true)
+        const yes = confirm("有 " + (r.busy || "若干") + " 轮正在生成中。\n切换模型需要重启后台，会中断它们且无法恢复。\n\n确定要切换吗？")
+        picking = false                       // 先放开守卫，否则递归那次会被自己挡住
+        if (yes) return pick(m, true)
         await refresh(); return
       }
       if (!r.ok) alert("切换失败：" + (r.err || ""))
     } catch (e) { alert("切换失败，请重试") }
+    finally { picking = false }
     await refresh()
   }
   document.addEventListener("click", function () { const mm = sel.querySelector("#mmenu"); if (mm) mm.classList.remove("on") })
@@ -612,6 +636,13 @@ function mdImgSrc(u) {
   if (m && MDIMG_EXT.test(m[3])) return "api/raw?name=" + encodeURIComponent(m[3]) + (m[1] === "uploads" ? "&dir=up" : "") + "&sid=" + encodeURIComponent(m[2])
   m = u.match(/^(?:\.\/)?(outputs|uploads)\/([^\/?#]+)$/)                          // 无会话段的老路径 → 按当前会话取
   if (m && MDIMG_EXT.test(m[2])) return "api/raw?name=" + encodeURIComponent(m[2]) + (m[1] === "uploads" ? "&dir=up" : "") + sidQ()
+  // 【裸文件名】——这才是主场景：网关每轮注入的 preamble 明确要求 agent「正文里嵌入图片直接用
+  // 文件名：![图注](fig1.png)」，因为会话的工作目录就是该会话的产物目录。此前三条分支都不匹配它，
+  // 于是降级走 mdLink，而 mdLink 的白名单同样不收裸文件名 → 最终渲染成一行纯文字，
+  // 图片一张都出不来。等于这个特性覆盖了被告知【不要】用的写法，漏了被告知【要】用的写法。
+  // 安全性与上面一致：不含 / 与 : 的纯文件名，只能映射到本会话的同源 api/raw，开不出外链。
+  m = u.match(/^(?:\.\/)?([^\/?#:]+)$/)
+  if (m && MDIMG_EXT.test(m[1])) return "api/raw?name=" + encodeURIComponent(m[1]) + sidQ()
   // 已是本站接口的相对路径（& 在转义文本里成对出现为 &amp;，作为 HTML 属性值恰好正确）
   if (/^api\/(raw|download)\?/i.test(u) && /\.(png|jpe?g|gif|webp|svg|bmp)($|[&#])/i.test(u.replace(/&amp;/g, "&"))) return u.replace(/"/g, "%22")
   return null
@@ -728,7 +759,14 @@ async function submitEdit(userDiv, newText) {
     if (!ok) { alert("回退失败，无法编辑，请重试"); return }
   }
   for (let n = userDiv; n; ) { const next = n.nextSibling; n.remove(); n = next }   // 清空这条及之后的 DOM
-  sendMessage(newText)                     // 立刻以编辑后的内容重新发起本轮 → opencode 据此提交回退
+  // 【这一步失败是不可逆的】revert 已经在后端把这条及其后的所有轮次丢掉了，无法撤销。
+  // 若紧接着的重发再失败（网络抖动/容器重启），结果就是：后续对话真的没了，而编辑后的内容
+  // 也从未提交 —— 用户刷新页面才发现丢了十几轮。所以必须如实告知，并保住编辑后的原文。
+  const sent = await sendMessage(newText)   // 立刻以编辑后的内容重新发起本轮 → opencode 据此提交回退
+  if (!sent) {
+    if (!q.value.trim()) { q.value = newText; q.dispatchEvent(new Event("input")) }
+    addNote("⚠ 这条之后的对话已被清空（编辑必须先回退，且无法撤销），但重新发送没成功。编辑后的内容已放回输入框，请直接重发。")
+  }
 }
 function renderFiles(list) {
   if (!list || !list.length) { filesEl.innerHTML = '<span class="hint">对话生成的文件会显示在这里</span>'; return }
@@ -987,6 +1025,11 @@ async function sendMessage(text) {
   const w = log.querySelector(".welcome"); if (w) w.remove()
   const bubble = add("user", text)
   sending = true; setStreamingUI(true)   // 立刻进入"生成中"态：POST 往返期间也不许再发
+  // 记下发起时的会话：POST 往返期间（冷启动容器时可达数秒）用户仍能点左侧会话列表或"新对话"
+  // （sending 只挡住了发消息与编辑，没挡切会话）。回包若无条件覆盖 sessionId，就会出现
+  // "界面显示会话 B 的历史、A 的生成内容一条条流进 B 的对话框"，且此后上传/下载/预览的 sid 全指向 A，
+  // 刷新页面又落回 A。老实现是同步 openStream，窗口只有一瞬；改成 POST 两步后这个窗口被显著拉长。
+  const mySid = sessionId
   let r = null, why = "网络异常"
   try {
     const resp = await fetch("api/chat/start", {
@@ -1000,17 +1043,36 @@ async function sendMessage(text) {
     try { r = await resp.json() } catch { if (resp.status !== 429) why = "服务端错误（HTTP " + resp.status + "）" }
   } catch { /* 保持 why=网络异常 */ }
   sending = false
-  if (!r) { bubble.dataset.ghost = "1"; setStreamingUI(false); addNote("⚠ 发送失败（" + why + "）"); return }
+  // 往返期间用户切走了会话 → 这一轮的回包不再属于当前界面：不改 sessionId、不接流、不动 UI，
+  // 否则就会把 A 的输出流进 B 的对话框。那一轮在服务端照常跑，用户切回 A 时会由 attachStream 接上。
+  if (sessionId !== mySid) { setStreamingUI(false); return }
+  // 发送失败：把原文还回输入框。提交时已 q.value=""，而这条消息后端根本没收下——
+  // 不还回去的话，用户粘贴的长稿只能靠手动框选气泡文字找回。仅在输入框还空着时回填，
+  // 免得盖掉用户在等待期间新输入的内容。
+  if (!r) {
+    bubble.dataset.ghost = "1"; setStreamingUI(false)
+    if (!q.value.trim()) { q.value = text; q.dispatchEvent(new Event("input")) }   // 触发已有的高度自适应（若有）
+    addNote("⚠ 发送失败（" + why + "）——原文已放回输入框，可直接重发")
+    return false
+  }
   if (r.sid) { sessionId = r.sid; localStorage.setItem("nm_sid", sessionId); loadUploads() }
   if (!r.sent) {
     // 没真发出去 → 这个气泡是"幽灵"：后端没记这条消息，编辑历史时必须跳过它，否则 revert 会砍错真实消息
     bubble.dataset.ghost = "1"
-    if (r.running) { addNote("⚠ " + (r.notice || "上一轮仍在进行中，本条未发送")); attachStream(sessionId) }   // 那一轮还在跑 → 接上去看
+    // 措辞要点明"下面流出来的是【上一轮】的内容"：DOM 追加顺序是 幽灵气泡 → 本提示 → 上一轮的重放输出，
+    // 只说"本条未发送"的话，用户看到紧接着就开始流式输出，会以为这条其实发出去了、agent 正在回答它，
+    // 等这轮结束就不再重发 —— 与提示本身直接矛盾。
+    if (r.running) {
+      addNote("⚠ " + (r.notice || "上一轮仍在进行中，本条未发送") + "。下面显示的是【上一轮】的输出；等它结束后，请重新发送你刚输入的内容。")
+      if (!q.value.trim()) { q.value = text; q.dispatchEvent(new Event("input")) }   // 原文放回输入框，省得用户手抄
+      attachStream(sessionId)
+    }   // 那一轮还在跑 → 接上去看
     else { setStreamingUI(false); addNote("⚠ " + (r.err || "发送失败")) }
-    loadSessions(); return
+    loadSessions(); return false
   }
   attachStream(sessionId)   // 起轮成功 → 订阅直播（attachJob 会先重放快照，POST 与 attach 之间产生的输出不会丢）
   loadSessions()
+  return true               // 供 submitEdit 判断：revert 已把后续对话砍掉，这一步失败必须如实告知
 }
 function attachStream(sid) { openStream("api/chat/attach?sid=" + encodeURIComponent(sid)) }   // 续流：先重放快照再直播
 // 往对话流里追加一条纯提示（不属于任何一轮生成，如"额度已用尽""上一轮仍在进行"）
@@ -1119,8 +1181,12 @@ function openStream(url) {
     const sid = sessionId
     // 先探一下鉴权/会话：EventSource 的 error 不带状态码，若是 cookie 过期（5天）会一直 401、
     // 无脑每 2.5s 重连成死循环、终止按钮也失效。用一次普通 fetch 拿到状态：401 → 跳登录，别再重连。
+    // 【必须带超时】容器被 manager 回收、或宿主网络黑洞（TCP 只丢包不 RST）时，这个 fetch 会挂起
+    // 到浏览器默认超时（可达数分钟）。此刻 activeES 已置 null 但 setStreamingUI(false) 还没调用 →
+    // 发送按钮仍隐藏、终止按钮仍显示，而终止按钮打的是同一个不可达后端、同样挂起 →
+    // 整个界面卡死，用户只能刷新页面。超时就按"非 401"处理，走下面的重连分支。
     let status = 0
-    try { status = (await fetch("api/job?sid=" + encodeURIComponent(sid))).status } catch {}
+    try { status = (await fetch("api/job?sid=" + encodeURIComponent(sid), { signal: AbortSignal.timeout(5000) })).status } catch {}
     if (status === 401) { location.href = "./login"; return }
     if (++sseFailStreak >= 6) { turn.querySelector(".answer").innerHTML = ""; const n = document.createElement("div"); n.className = "note"; n.textContent = "⚠ 连接反复失败，请刷新页面重试"; turn.querySelector(".answer").appendChild(n); genEl.remove(); setStreamingUI(false); return }
     turn.remove()   // 丢弃本回合 DOM，续流会重放快照完整重建
@@ -1181,23 +1247,30 @@ async function refreshStorage() {
     bar.style.display = ""
     bar.textContent = `存储 ${mb(s.used)} / ${mb(s.limit)} MB（${pct}%）` + (pct >= 90 ? "　⚠ 接近上限，请删除旧会话/文件" : "")
     bar.style.color = pct >= 90 ? "#dc4b37" : ""
-    renderStoreBanner(pct, mb(s.used), mb(s.limit))
+    // full 用【字节数】判，不能用四舍五入后的百分比：995/1000MB 会被 Math.round 变成 100%，
+    // 横幅就写"存储已满、新的上传会被拒收"，而实际还有 5MB 能写 —— 用户要么被吓去删数据，
+    // 要么在真撞限时不再相信这个提示。
+    renderStoreBanner(pct, mb(s.used), mb(s.limit), s.used >= s.limit)
   } catch { bar.style.display = "none"; hideStoreBanner() }
 }
 // 顶部横幅：≥90% 才出现，重点是说清【后果】而非只报个百分比 —— 用户看到 "93%" 未必知道
 // 那意味着下一次上传会被直接拒收。"知道了"只压住当前这一档（90/95/100），用量再涨一档会
 // 重新弹出，免得随手关掉之后就再也收不到任何预警。
-let storeDismissed = -1
+// "知道了"必须落 localStorage：本应用刷新是常规操作（会话靠 localStorage.nm_sid 恢复），
+// 存内存变量的话用户关掉横幅、一刷新又原样弹回来，多标签页也各算各的 —— 与"这一档我已知晓"
+// 的语义不符，反复骚扰反而让人对预警脱敏。
+const SD_KEY = "nm_store_dismissed"
+const getDismissed = () => { const v = parseInt(localStorage.getItem(SD_KEY) || "-1", 10); return Number.isFinite(v) ? v : -1 }
+const setDismissed = (v) => { try { v < 0 ? localStorage.removeItem(SD_KEY) : localStorage.setItem(SD_KEY, String(v)) } catch {} }
 function hideStoreBanner() { const el = document.getElementById("storebanner"); if (el) el.hidden = true }
-function renderStoreBanner(pct, usedMb, limitMb) {
+function renderStoreBanner(pct, usedMb, limitMb, full) {
   const el = document.getElementById("storebanner")
   if (!el) return
   const step = pct >= 100 ? 100 : Math.floor(pct / 5) * 5
   // 掉回安全区就把"已知晓"清零：否则用户在 100% 时点过一次，事后清理降到 70%，
   // 之后再涨回 93% 就因为 dismissed(100) >= 90 而被永久压住，再也不预警。
-  if (pct < 90) { storeDismissed = -1; el.hidden = true; return }
-  if (storeDismissed >= step) { el.hidden = true; return }
-  const full = pct >= 100
+  if (pct < 90) { setDismissed(-1); el.hidden = true; return }
+  if (getDismissed() >= step) { el.hidden = true; return }
   el.className = full ? "full" : "warn"
   el.textContent = ""
   const msg = document.createElement("span")
@@ -1208,7 +1281,7 @@ function renderStoreBanner(pct, usedMb, limitMb) {
     : `（${usedMb} / ${limitMb} MB）—— 到达上限后新的上传会被拒收。建议现在就删掉不再需要的会话或文件。`))
   const x = document.createElement("button")
   x.className = "sbx"; x.type = "button"; x.textContent = "知道了"
-  x.onclick = () => { storeDismissed = step; el.hidden = true }
+  x.onclick = () => { setDismissed(step); el.hidden = true }
   el.append(msg, x)
   el.hidden = false
 }
