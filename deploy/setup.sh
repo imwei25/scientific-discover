@@ -30,6 +30,15 @@ put_env() {
   mv "$ENVF.tmp" "$ENVF"; chmod 600 "$ENVF"
 }
 
+# ⓪ 档位定义 tiers.env：不入 git（管理台会在运行时重写它），首次部署从模板生成。
+#    缺了它 render-compose.sh 会静默把所有用户当"不限额"处理——那是个很贵的静默降级，必须补上。
+if [ ! -f tiers.env ]; then
+  if [ -f tiers.env.example ]; then cp tiers.env.example tiers.env; echo "   已从模板创建 deploy/tiers.env"
+  else echo "   ⚠ 缺 deploy/tiers.env 且无模板：所有用户将按【不限额】处理，请尽快补上" >&2; fi
+else
+  echo "   deploy/tiers.env 已存在 → 保留不动"
+fi
+
 # ① 可变配置（管理密码 / WARM_CAP / IDLE_MS…）放独立的 EnvironmentFile：只在【不存在时】创建，之后永不覆盖。
 envCreated=0
 if [ ! -f "$ENVF" ]; then

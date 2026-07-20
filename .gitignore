@@ -27,3 +27,9 @@ serve.err
 # 自定义大模型配置（含 API key，运行时由前端「模型设置」写入）
 web/model-config.json
 opencode.json
+
+# 档位定义：管理台(/admin 的 tier-def 接口)会在运行时重写它（见 deploy/manager.mjs），
+# 属于「机器上的实际配置」而非源码——与 deploy/.env、users/*.env、docker-compose.yml 同类。
+# 跟踪它会让服务器 git status 永远是脏的、每次 pull 都可能冲突。
+# 模板见 deploy/tiers.env.example；首次部署由 setup.sh/手工 cp 一份。
+deploy/tiers.env
