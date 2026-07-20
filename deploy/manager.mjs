@@ -90,6 +90,20 @@ function verifyCaptcha(id, answer) {
   captchas.delete(id)                                   // 一次性：无论对错都作废，防重放
   return c.exp >= Date.now() && String(answer || "").toUpperCase() === c.code
 }
+// ---- 测试旁路（自动化回归用）：仅跳过【验证码】这一步，密码校验/冷启动限流/审计一样不少 ----
+// 为什么需要：无人值守的 UI/E2E 测试识别不了图形验证码，又不能反复答错——那会撞 fail2ban
+// 把整个出口 IP 连坐封 1 小时。设计边界（改动前先读）：
+// - 不设 TEST_LOGIN_TOKEN（/etc/sci-manager.env，chmod 600）= 下面的判断恒 false，旁路不存在，线上默认关。
+// - 名单【硬编码】测试账号：真实用户（lifei 及未来新增）就算令牌泄露也走不了旁路；加测试号改这里。
+// - 令牌比对用 timingSafeEqual，杜绝逐字节试探；每次命中打 login.test_bypass 审计，滥用可追溯。
+const TEST_LOGIN_TOKEN = process.env.TEST_LOGIN_TOKEN || ""
+const TEST_BYPASS_USERS = new Set(["alice", "bob"])
+function testLoginBypass(u, req) {
+  if (!TEST_LOGIN_TOKEN || !TEST_BYPASS_USERS.has(u.name)) return false
+  const got = String(req.headers["x-test-login-token"] || "")
+  if (got.length !== TEST_LOGIN_TOKEN.length) return false
+  return crypto.timingSafeEqual(Buffer.from(got), Buffer.from(TEST_LOGIN_TOKEN))
+}
 // 手写 SVG：字符随机位置/旋转/颜色 + 噪点线，无需任何图形库
 function captchaSvg(code) {
   const W = 130, H = 44, R = (a, b) => a + Math.floor(crypto.randomInt(Math.max(1, b - a + 1)))
@@ -389,8 +403,12 @@ async function handleUserLogin(u, fwdPath, req, res) {
     chunks.push(c)
   }
   const body = Buffer.concat(chunks)
+  // 测试旁路命中 → 跳过验证码（仅此一步；密码仍由容器核对，冷启动限流照走）。放在 verifyCaptcha
+  // 之【前】且短路它：旁路请求不带 cap_id，走到 verifyCaptcha 必 false，会白白吃一次 400。
+  const bypass = testLoginBypass(u, req)
+  if (bypass) audit("login.test_bypass", { user: u.name, ip: clientIp(req) })
   let captcha = ""; try { captcha = JSON.parse(body.toString() || "{}").captcha || "" } catch {}
-  if (!verifyCaptcha(parseCookies(req).cap_id, captcha)) {
+  if (!bypass && !verifyCaptcha(parseCookies(req).cap_id, captcha)) {
     audit("login.fail", { user: u.name, ip: clientIp(req), reason: "captcha" })
     // 【400 而非 401】：fail2ban 的 caddy-login jail 认的是 "/api/login + status:401"，无法区分
     // "验证码看错了" 和 "密码试错"。而验证码是人眼识别、看错很常见，maxretry=5 意味着连看错 5 次
