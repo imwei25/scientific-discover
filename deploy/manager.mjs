@@ -376,7 +376,12 @@ function serveCaptcha(res) {
 }
 // 转发一个已被读出的请求体（登录场景：manager 先读 body 验验证码，再把原样 body 转给容器核对密码）
 function proxyBuffered(u, fwdPath, req, res, body, onStatus) {
-  if (req.destroyed || res.destroyed) return   // 同 proxy()：等唤醒期间客户端已断 → close 已发过，计数会永久泄漏
+  // 只判 res.destroyed，【不能】判 req.destroyed！这里的 body 是调用方（handleUserLogin）用
+  // `for await (const c of req)` 先整体读完的，而 Node 14+ 流 autoDestroy → 读到 end 后 req.destroyed
+  // 必为 true（实测 node v20：for-await 结束即 destroyed）。若沿用 proxy() 那句 `req.destroyed || …`，
+  // 守卫会在【每一次】登录都误触发 → 静默 return、不转发不回包 → 浏览器登录永久转圈（实测复现）。
+  // 「客户端是否还在」应看响应侧：客户端断开 → socket 关 → res.destroyed=true，这条仍挡得住 conns 泄漏。
+  if (res.destroyed) return
   u.conns++; u.lastActive = Date.now()
   res.on("close", () => { u.conns = Math.max(0, u.conns - 1); u.lastActive = Date.now() })
   const headers = { ...req.headers, "content-length": Buffer.byteLength(body) }
