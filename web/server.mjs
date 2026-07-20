@@ -244,7 +244,8 @@ const contentDisposition = (name) => {
 
 // ---- 每日成本额度（USD）----
 // 用 opencode 的 session.cost（已含 DeepSeek 缓存折扣）累计每轮增量；跨日自动清零；持久化在 ocdata 卷（重启不丢）。
-// DAILY_COST_LIMIT=0 或空 = 不限额。达上限即拦截新对话（本轮已开始的照常跑完）。
+// DAILY_COST_LIMIT=0 或空 = 不限额。达上限即拦截新对话；进行中的轮到限也会被中途掐断（见 startJob 的 updateRunning）。
+// 被 abort / 被掐断的那一步 opencode 记 cost=0，由估算兜底补账（见下方"轮内实时成本估算"），否则可无限重试绕过额度。
 const DAILY_COST_LIMIT = Number(process.env.DAILY_COST_LIMIT || 0)
 const QUOTA_FILE = path.join(os.homedir(), ".local", "share", "opencode", "quota.json")
 const todayKey = () => new Date().toISOString().slice(0, 10)   // UTC 日期
@@ -259,6 +260,27 @@ const runningCost = new Map()
 const runningTotal = () => { let t = 0; for (const v of runningCost.values()) t += v; return t }
 const quotaUsedLive = () => quotaUsed() + runningTotal()   // 今日已入账 + 各在跑轮的实时成本
 const quotaOver = () => DAILY_COST_LIMIT > 0 && quotaUsedLive() >= DAILY_COST_LIMIT
+
+// ---- 轮内实时成本估算（供中途封顶 + abort 结算兜底）----
+// 实测（2026-07-20，抓 /global/event 原始流 + one-api 账）：opencode 一条 assistant 消息 = 一个
+// LLM step，只在 step 完成时才记 cost/tokens；流式过程中恒 0，被 abort 的消息【永远】是 0——
+// 而上游连 abort 后都会把该请求跑完并全额扣费（实测 abort 后 51.6s、2063 completion tokens 照记）。
+// 故：完成的消息用真实 cost（session.cost 增量天然包含，含被 abort 轮里已完成的步），
+// cost=0 的消息按「流出内容估算的输出 + 上一步实测的输入侧成本」补账。估算取向：宁可高估。
+// token 估算按字符类别（DeepSeek 系：中文 ≈0.6 token/字、英文 ≈0.3 token/字符，这里各上浮些）。
+const EST_IN_TOKENS = Number(process.env.OC_EST_INPUT_TOKENS || 15000)   // 新会话首步的输入侧估计；实测本部署系统上下文首步 input+cache ≈ 14.9k tokens
+const estDeltaTokens = (s) => {
+  let t = 0
+  for (const ch of s) {
+    const c = ch.codePointAt(0)
+    t += (c >= 0x2e80 && c <= 0x9fff) || (c >= 0x3000 && c <= 0x30ff) || (c >= 0xf900 && c <= 0xfaff) || (c >= 0xff00 && c <= 0xffef) ? 0.7 : 0.35
+  }
+  return t
+}
+// sid -> 该会话最近一个完成 step 的真实输入侧成本（USD）。同会话下一步的输入 ≈ 上一步 + 少量增量，
+// 拿它当"被 abort 的那一步"的输入侧估计，比只算流出文本准一个数量级（实测输入占一步成本的 ~95%）。
+const sessInCost = new Map()
+const estInCost = (sid) => sessInCost.get(sid) ?? (EST_IN_TOKENS * _modelCost().input) / 1e6
 
 // ---- /api/model/test 的 SSRF 护栏 ----
 // 这个接口让【已登录用户】指定任意 URL、由容器去请求，等于一个内网探测原语（容器网络里能打到
@@ -621,34 +643,121 @@ function startJob(sid, sentText) {
     finish()
   }
   ;(async () => {
-    const events = await client.event.subscribe({ signal: evAbort.signal })   // finish() 里 abort，避免订阅泄漏
-    const runCost = new Map()             // 本轮各 assistant 消息的 cost（按 messageID 取最新），实时累计
+    // 【必须订阅 /global/event 而非 /event】实测（裸 curl 对照抓包）：本部署把每个会话建在
+    // outputs/<ws>/ 子目录，不带 directory 参数的 /event 只收得到 server.* 心跳，一条消息事件都没有
+    // ——原先这个循环从未收到过任何 message.*，中途封顶、流式转发全是死代码（前端只在轮末收到 final）。
+    // /global/event 才是全量总线；它的每条事件外面包一层 {directory, project, payload}，用时拆开。
+    const events = await client.global.event({ signal: evAbort.signal })   // finish() 里 abort，避免订阅泄漏
+    const jobT0 = Date.now()   // 开轮时刻（网关与 opencode 同容器同钟）：滤掉上一轮消息的迟到收尾事件
+    const PRICE = _modelCost()
+    // 本轮各 assistant 消息（= 各 LLM step）的计费状态：real 是 opencode 给的真实 cost（step 完成才有，
+    // 已含在 session.cost 里）；estTok 是按流式增量累计的输出 token 估算（real 缺位时的替身）。
+    const perMsg = new Map()
+    const partMeta = new Map()   // partID -> { type, messageID, text }：text/reasoning 的增量重组，供直播与估算
+    job.perMsg = perMsg          // 容器停机时 gracefulExit 的结算要用（见文件末尾）
+    const msgEst = (m) => (m.real > 0 ? m.real : m.estTok > 0 ? estInCost(sid) + (m.estTok * PRICE.output) / 1e6 : 0)
+    job.estExtra = () => { let x = 0; for (const m of perMsg.values()) if (!(m.real > 0) && m.estTok > 0) x += estInCost(sid) + (m.estTok * PRICE.output) / 1e6; return x }
+    // 中途额度封顶：一旦「今日已入账 + 所有在跑轮的实时成本」达上限，立即中止本轮，避免单轮跑到底大幅超支。
+    // 实时成本 = 已完成步的真实 cost + 进行中那一步的估算——后者让"单条长文本生成"也能被中途掐断
+    // （原实现只看 message.updated 的 info.cost，而它在 step 完成前恒为 0，长生成全程封不住）。
+    // 用全局 runningCost（而非本轮开始时的快照）：并发的几轮互相看得见对方已花的钱，合计到顶各轮都会中止。
+    let lastCapCheck = 0
+    const updateRunning = () => {
+      let rc = 0; for (const m of perMsg.values()) rc += msgEst(m)
+      runningCost.set(sid, rc)
+      // 封顶判断节流 250ms：quotaUsedLive 每次都同步读盘（loadQuota），不能跟着每条 delta 跑；
+      // 封顶精度本来就是"一条消息"粒度，250ms 不损失什么。runningCost 的内存更新不节流。
+      const now = Date.now()
+      if (DAILY_COST_LIMIT > 0 && !job.quotaHit && now - lastCapCheck > 250) {
+        lastCapCheck = now
+        if (quotaUsedLive() >= DAILY_COST_LIMIT) {
+          job.quotaHit = true
+          client.session.abort({ path: { id: sid } }).catch(() => {})
+        }
+      }
+    }
+    // 直播是"整段替换"语义：逐 delta 全量推送会 O(n²) 字节，节流到 ~4 次/秒；快照/收尾时强推。
+    const dirtyParts = new Set()
+    let lastEmit = 0
+    const emitLive = (force) => {
+      const now = Date.now()
+      if (!force && now - lastEmit < 250) return
+      lastEmit = now
+      let textChanged = false
+      for (const pid of dirtyParts) {
+        const meta = partMeta.get(pid)
+        if (!meta) continue
+        if (meta.type === "text") textChanged = true
+        else if (meta.type === "reasoning") broadcast("reasoning", { id: pid, text: meta.text })
+      }
+      dirtyParts.clear()
+      if (textChanged) broadcast("text", [...partMeta.values()].filter((x) => x.type === "text").map((x) => x.text).join("\n"))
+    }
     ;(async () => {
-      for await (const e of events.stream) {
+      for await (const w of events.stream) {
         if (job.finished) break
-        // 中途额度封顶：一旦「今日已入账 + 所有在跑轮的实时成本」达上限，立即中止本轮，避免单轮跑到底大幅超支。
-        // 用全局 runningCost（而非本轮开始时的快照）：并发的几轮互相看得见对方已花的钱，合计到顶各轮都会中止。
-        if (DAILY_COST_LIMIT > 0 && !job.quotaHit && e?.type === "message.updated") {
+        const e = w?.payload ?? w
+        if (e?.type === "message.updated") {
           const info = e.properties?.info
           if (info?.sessionID === sid && info.role === "assistant") {
-            runCost.set(info.id, info.cost || 0)
-            let rc = 0; for (const v of runCost.values()) rc += v
-            runningCost.set(sid, rc)
-            if (quotaUsedLive() >= DAILY_COST_LIMIT) { job.quotaHit = true; try { await client.session.abort({ path: { id: sid } }) } catch {} }
+            // 只收编【本轮】新建的消息：上一轮被 abort 的消息可能在本轮订阅建立后补发收尾事件
+            // （cost=0 + 全文快照），照单全收会让它在本轮再被估算补账一次（上一轮结算已补过）。
+            // 按创建时间过滤；缺 created 字段则放行（宁可失误于收编，也别把正常消息挡在外面——
+            // 挡错了 = 估算/封顶/直播对该消息全体失效，回到修复前的死状态）。
+            if (!perMsg.has(info.id) && info.time?.created && info.time.created < jobT0) continue
+            const m = perMsg.get(info.id) || { real: 0, estTok: 0 }
+            m.real = Math.max(m.real, info.cost || 0)   // 后到的无 cost 事件别把已知真实成本打回 0（那会让封顶退回估算值）
+            perMsg.set(info.id, m)
+            updateRunning()
           }
+          continue
+        }
+        if (e?.type === "message.part.delta") {   // 流式增量：{sessionID, messageID, partID, field:"text", delta:"块"}
+          const d = e.properties
+          if (d?.sessionID !== sid || d.field !== "text" || typeof d.delta !== "string") continue
+          const meta = partMeta.get(d.partID)
+          const m = meta && perMsg.get(meta.messageID)
+          if (!m) continue   // 只认本轮 assistant 消息的内容（其 message.updated 先于 parts 到达，实测）
+          meta.text += d.delta
+          m.estTok += estDeltaTokens(d.delta)
+          dirtyParts.add(d.partID)
+          emitLive(false)
+          updateRunning()
           continue
         }
         const p = e?.properties?.part; if (!p) continue
         if (p.sessionID && p.sessionID !== sid) continue
-        if (p.type === "text" && typeof p.text === "string" && p.text !== sentText) broadcast("text", p.text)   // cumulative — browser replaces（滤掉回显的用户输入，含注入的目录前言）
-        else if (p.type === "reasoning" && typeof p.text === "string") broadcast("reasoning", { id: p.id, text: p.text })
-        else if (p.type === "tool" && p.state?.status) broadcast("tool", {
+        if (p.type === "step-finish") {
+          // 本步完成，真实 tokens 已知 → 记下输入侧真实成本，作本会话后续步（含被 abort 步）的输入估计
+          const t = p.tokens
+          if (t && perMsg.has(p.messageID)) {
+            if (sessInCost.size > 500) sessInCost.clear()   // 有界：会话数远到不了这，纯防御
+            sessInCost.set(sid, ((t.input || 0) * PRICE.input + (t.cache?.read || 0) * PRICE.cache_read + (t.cache?.write || 0) * PRICE.cache_write) / 1e6)
+          }
+          emitLive(true)
+        } else if ((p.type === "text" || p.type === "reasoning") && perMsg.has(p.messageID)) {
+          // 快照事件（part 创建时 len=0、part 结束/abort 时全文）。用户消息的回显 part 进不来：
+          // 它的 messageID 是 user 消息，不在 perMsg 里 —— 这同时替代了旧的 `p.text !== sentText` 滤重。
+          const meta = partMeta.get(p.id) || { type: p.type, messageID: p.messageID, text: "" }
+          partMeta.set(p.id, meta)
+          if (typeof p.text === "string" && p.text.length > meta.text.length) {
+            perMsg.get(p.messageID).estTok += estDeltaTokens(p.text.slice(meta.text.length))   // 快照比累计长 = 漏了 delta，差额补进估算
+            meta.text = p.text
+            dirtyParts.add(p.id)
+          }
+          emitLive(true)
+          updateRunning()
+        } else if (p.type === "tool" && p.state?.status) broadcast("tool", {
           callID: p.callID, tool: p.tool, status: p.state.status,
           title: p.state.title || "",
           skill: p.tool === "skill" ? (p.state.input?.name || null) : null,   // 技能名（running/completed 才有）
         })
       }
-    })().catch(() => {})
+    })().catch((e) => {
+      // 事件流是估算/封顶/直播的共同前提，异常死亡绝不能静默——上次这条链路无声死掉（/event 订阅
+      // 收不到任何事件）就是零观测才拖了这么久。主动取消（finish 里 evAbort.abort）不算异常。
+      if (!job.finished) console.warn(`[events] 本轮事件流异常中断（sid=${sid}），封顶与直播退化、abort 估算只含已收到的部分：${e?.message || e}`)
+    })
     const outDir = await sessionOut(sid)                 // 本会话的绝对产物目录（= agent 的工作目录）
     const before = dirState(outDir)   // 记录本轮开始前本会话产物状态，用于算增量
     let cost0 = 0; try { cost0 = un(await client.session.get({ path: { id: sid } }))?.cost || 0 } catch {}   // 本轮前累计成本，用于算增量
@@ -657,8 +766,32 @@ function startJob(sid, sentText) {
     try {
       result = un(await client.session.prompt({ path: { id: sid }, body: { model: MODEL, parts: [{ type: "text", text: sentText }] } }))
     } catch (err) { promptErr = err }
-    // 无论正常结束 / 被额度中止 / 被用户终止，都先把本轮实际成本记进今日额度——否则中止的轮不计费，用户可无限重试绕过额度
-    try { const c1 = un(await client.session.get({ path: { id: sid } }))?.cost || 0; addCost(c1 - cost0) } catch {}
+    // 无论正常结束 / 被额度中止 / 被用户终止，都把本轮成本记进今日额度——否则中止的轮不计费，用户可无限重试绕过额度。
+    // 真实增量（session.cost 只含完成步）+ 估算兜底（cost=0 的消息 = 被 abort 的那一步，opencode 对它记
+    // cost=0/tokens=0，而上游实测已全额扣费）。估算前先问 opencode 该消息的权威状态：若它其实正常完成了
+    // （只是我们没赶上它的 cost 事件），成本已在真实增量里，绝不能再叠加估算——宁可漏这一条也不重复计费。
+    const settleEstimate = async () => {
+      let extra = 0
+      for (const [mid, m] of perMsg) {
+        if (m.real > 0 || !(m.estTok > 0)) continue
+        try {
+          const info = un(await client.session.message({ path: { id: sid, messageID: mid } }))?.info
+          if (info && ((info.cost || 0) > 0 || (!info.error && info.time?.completed))) continue
+        } catch { continue }   // 权威状态都查不到时放弃这条估算：宁可少算，不冒双重计费的险
+        extra += estInCost(sid) + (m.estTok * PRICE.output) / 1e6
+      }
+      return extra
+    }
+    if (!job.settled) {   // 容器停机时 gracefulExit 可能已替本轮结算过（它随后 abort 会让上面的 prompt 立刻返回、走到这里）——别结第二次
+      job.settled = true
+      try {
+        const c1 = un(await client.session.get({ path: { id: sid } }))?.cost || 0
+        addCost(c1 - cost0 + (await settleEstimate()))
+      } catch {
+        // session.get 都失败时真实增量拿不到了，至少把内存里的估算记上（比整轮漏账好；settled 已占坑，不会双记）
+        try { addCost(job.estExtra?.() || 0) } catch {}
+      }
+    }
     if (job.aborting) return finish()                       // 用户显式终止：job.abort 已广播 aborted
     if (job.quotaHit) { broadcast("failed", { message: `本轮已达今日额度上限（$${DAILY_COST_LIMIT.toFixed(2)}），已自动中止；明日 0 点(UTC)恢复。` }); return finish() }
     if (promptErr) {
@@ -1292,7 +1425,11 @@ server.listen(PORT, "0.0.0.0", () => {
   console.log(`gateway on http://localhost:${PORT}  (opencode=${OC_URL}, model=${MODEL.providerID}/${MODEL.modelID})`)
   for (const ip of lanIPs()) console.log(`  局域网访问：http://${ip}:${PORT}`)
   console.log(AUTH_ENABLED
-    ? `  局域网登录：账号 ${LAN_USER} / 密码 ${LAN_PASSWORD}（本机 localhost 免登录；改账号密码用环境变量 LAN_USER/LAN_PASSWORD，关登录用 LAN_AUTH=0）`
+    // 【不打印明文密码】这行会落进宿主的 docker JSON 日志文件，长期留存在磁盘上，
+    // 任何抓容器日志的东西（日志采集、排障时的 docker logs、备份）都会带上它。
+    // 多用户部署下每个容器的密码就是该用户的登录凭据，没必要为了启动提示把它写到盘上。
+    // 只打掩码：位数信息足够运维确认"密码确实注入了"，又不泄露内容。
+    ? `  局域网登录：账号 ${LAN_USER} / 密码 ${LAN_PASSWORD ? "*".repeat(Math.min(LAN_PASSWORD.length, 12)) + `（${LAN_PASSWORD.length} 位，见 users/<用户>.env）` : "(未设置)"}（本机 localhost 免登录；改账号密码用环境变量 LAN_USER/LAN_PASSWORD，关登录用 LAN_AUTH=0）`
     : `  登录已关闭（LAN_AUTH=0）`)
 })
 
@@ -1320,7 +1457,13 @@ async function gracefulExit(sig) {
   // 现在显式结算：查一次当前累计成本，减去开轮前的 job.cost0，直接 addCost。
   const settleDeadline = Date.now() + 4000
   for (const job of [...jobs.values()]) {
-    if (!job.running) continue
+    // 【settled 占坑必须在本 job 的一切 await 之前】与主循环的结算分支（同样是同步 check-and-set）互斥。
+    // 否则两个方向都能双记：①主循环结算后、finish() 前（中间隔着 changedSince 的目录遍历）收到 SIGTERM，
+    // 这里见 running=true 又结一遍；②这里在 await session.get 时轮子自然跑完，主循环见 settled 未设自己结，
+    // 随后这边 await 返回再结。cost0 还没来得及读到的轮（刚起步几毫秒）直接跳过：按 c1-0 结会把
+    // 该会话【历史全部成本】当成本轮重记一遍，宁可放过这几毫秒。
+    if (!job.running || job.settled || job.cost0 === undefined) continue
+    job.settled = true
     try {
       // 给每次查询单独设超时：opencode 若已卡死，这里不能一直等 —— docker 的宽限期只有 10 秒，
       // 拖过去就是 SIGKILL，下面的 killPort 也执行不到，反而留下孤儿 opencode 进程。
@@ -1330,9 +1473,15 @@ async function gracefulExit(sig) {
         new Promise((_, rej) => setTimeout(() => rej(new Error("settle timeout")), left)),
       ])
       const c1 = info?.cost || 0
-      const delta = c1 - (job.cost0 || 0)
-      if (delta > 0) { addCost(delta); exitLog(`[exit] 已结算 ${job.sid} 本轮成本 $${delta.toFixed(4)}`) }
-    } catch (e) { exitLog(`[exit] 结算 ${job.sid} 失败（本轮可能不计费）：${e?.message || e}`) }
+      // 真实增量之外，把"正在流式、还没被真实计费"的那一步按估算补上（job.estExtra 只算 real=0 的消息）。
+      // 停机路径没时间逐条问权威状态，竞态窗口里可能极小幅高估——比整步漏账好。
+      let est = 0; try { est = job.estExtra?.() || 0 } catch {}
+      const delta = c1 - (job.cost0 || 0) + est
+      if (delta > 0) { addCost(delta); exitLog(`[exit] 已结算 ${job.sid} 本轮成本 $${delta.toFixed(4)}（含估算 $${est.toFixed(4)}）`) }
+    } catch (e) {
+      job.settled = false   // 结算失败要还坑：主循环若还活着（比如只是 settle timeout），让它还有机会自己结，别把整轮变漏账
+      exitLog(`[exit] 结算 ${job.sid} 失败（本轮可能不计费）：${e?.message || e}`)
+    }
     try { await Promise.race([job.abort(), sleep(1500)]) } catch {}   // abort 也别无限等
   }
   // 给收尾留一点时间，但设硬上限——宽限期本身只有 10 秒，超时就没意义了
