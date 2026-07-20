@@ -86,11 +86,18 @@ oom_log="$STATE_DIR/oom.log"                 # 持久化：<epoch> <容器名>
 oom_last="$STATE_DIR/oom.last"               # 上次扫到哪一刻，避免重复计同一事件
 since=$(cat "$oom_last" 2>/dev/null); since=${since:-$((now - 300))}
 # --until 给定后 docker events 会立即返回（不是长驻跟随），可安全放在 cron 里
-docker events --since "$since" --until "$now" \
-    --filter type=container --filter event=oom \
-    --format '{{.Actor.Attributes.name}}' 2>/dev/null \
-  | while read -r c; do [ -n "$c" ] && echo "$now $c" >> "$oom_log"; done
-echo "$now" > "$oom_last"
+# 【只有真的读成功才推进 oom.last】否则：docker 守护进程在这 5 分钟窗口内重启（或 socket 不可用）
+# → 事件读不到，但游标照样推到 now → 这段时间发生的 OOM 此后【再也扫不到】。
+# 而守护进程重启前后恰恰是内存压力最大、最可能 OOM 的时刻，等于专挑最该抓的时候漏掉。
+# 注：脚本是 set -uo pipefail 无 -e，失败不会中止，必须显式判退出码。
+if oom_out=$(docker events --since "$since" --until "$now" \
+      --filter type=container --filter event=oom \
+      --format '{{.Actor.Attributes.name}}' 2>/dev/null); then
+  while read -r c; do [ -n "$c" ] && echo "$now $c" >> "$oom_log"; done <<< "$oom_out"
+  echo "$now" > "$oom_last"          # 只在成功读到之后推进游标
+else
+  echo "!! docker events 读取失败，本轮不推进 OOM 游标（下轮会重扫这段区间）" >&2
+fi
 # 只报窗口内发生过的：事件是瞬时的，若只报"本轮新扫到的"，告警去重会在下一轮把它当作
 # 已恢复而补发一条"已恢复"，把一次真实 OOM 说成虚惊。按窗口回看则键会稳定保持 6h。
 if [ -f "$oom_log" ]; then

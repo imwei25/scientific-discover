@@ -10,8 +10,15 @@
 #      —— 这些不在 git 里，是重建用户与路由的唯一来源。
 #
 # 用法（在 deploy/ 目录下）：
-#   ./export-all.sh                 # 导出到 ./backups/
+#   ./export-all.sh                 # 导出到 /var/backups/sci-export/（仓库【之外】，含明文密码故不放工作树）
 #   ./export-all.sh /path/to/dir    # 导出到指定目录
+#
+# ⚠ 产物含 .env 与 users/*.env（全部账号 + 明文密码）。别把它放进 git 工作树，也别用邮件/IM 传。
+# ⚠ 本包只覆盖 compose 内的东西（卷 + deploy/ 下的配置）。宿主侧还有几样【必须手工搬】：
+#     /etc/sci-manager.env（ADMIN_PASSWORD / ONEAPI_TOKEN / WAKE_* —— manager 是宿主 systemd 服务，不在 compose 里）
+#     /etc/caddy/Caddyfile（TLS 与路径路由）、/etc/sci-monitor.conf（告警 webhook）、fail2ban 配置
+#   只导入本包就 `docker compose up -d` 的话：没有 manager、没有 TLS/路由、没有 /admin 密码、
+#   没有监控告警 —— 站点整体不可达，且 admin 密码若未另存就永久丢失。
 #
 # 迁移到新服务器：把生成的 sci-agent-backup-*.tar.gz 拷过去，在新机 deploy/ 里跑 ./import-all.sh 它。
 # 容器无需停机即可导出（tar 直接读卷）；但 ocdata 是 SQLite(WAL)，为拿到一致快照建议先 `docker compose stop`。
@@ -20,8 +27,15 @@ set -euo pipefail
 cd "$(dirname "$0")"                                   # 切到 deploy/ 目录
 
 command -v docker >/dev/null || { echo "!! 未找到 docker"; exit 1; }
-OUTDIR="${1:-./backups}"
+# 【默认目录必须在仓库之外】产物里包含 config/.env 与 config/users/（全部账号 + 明文密码 + 端口）
+# 以及所有用户数据。原默认是 ./backups，也就是 deploy/backups —— 就在 git 工作树里，而且
+# .gitignore 没有任何规则命中它：运维在服务器上跑完导出、照惯例 git add -A && git push，
+# 全站明文密码和患者相关产物就进了 git 历史并推到远端，且历史里删不干净。
+OUTDIR="${1:-/var/backups/sci-export}"
 mkdir -p "$OUTDIR"
+# 同时收紧权限：backup.sh 有 chmod 700，这里原本没有，默认 umask 下产物是 0644，同机其他用户可读。
+chmod 700 "$OUTDIR" 2>/dev/null || true
+umask 077
 STAMP="$(date +%Y%m%d-%H%M%S)"
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT

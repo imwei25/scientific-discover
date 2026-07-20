@@ -39,14 +39,39 @@ if [ -d "$ROOT/volumes" ]; then
     b="$(basename "$tgz")"
     target="${b%.tgz}"                                # alice-uploads / one-api-data
     echo "  -> 卷 $target"
+    # 【拒绝对正在被挂载的卷动手】"先 docker compose up -d 再 import-all.sh" 是很自然的操作顺序，
+    # 而下面是 rm -rf /data/* —— 在运行中的 SQLite 底下清目录会直接把库搞坏。
+    if docker ps -q --filter "volume=$target" | grep -q .; then
+      echo "  !! 卷 $target 正被运行中的容器挂载，已跳过。请先 docker compose stop 再导入。" >&2
+      FAIL=$((FAIL+1)); continue
+    fi
     docker volume create "$target" >/dev/null
-    # set -e：tar tzf 校验失败 → 容器在 rm 之前退出，既有数据不受损（修“先清空后解包失败”）。
+    # tar tzf 前置校验只挡得住【包损坏】。清空之后的 tar xzf 若因【磁盘不足】中断，
+    # 目标卷已经空了且只灌进一部分 —— 原提示"已跳过、未破坏既有数据"与事实相反，
+    # 运维照此判断就不会去做补救。故：先把既有数据挪到 .rollback 而不是直接删，
+    # 解包成功才清掉它；失败则原样还回去，并如实报告。
     if ! docker run --rm -v "$target":/data -v "$ROOT/volumes":/backup alpine \
          sh -c "set -e
                 tar tzf /backup/$b >/dev/null
-                rm -rf /data/* /data/..?* /data/.[!.]* 2>/dev/null || true
-                tar xzf /backup/$b -C /data"; then
-      echo "  !! 卷 $target 恢复失败（tgz 损坏或磁盘不足），已跳过、未破坏既有数据" >&2; FAIL=$((FAIL+1))
+                rm -rf /data/.rollback && mkdir -p /data/.rollback
+                for f in /data/* /data/..?* /data/.[!.]*; do
+                  [ -e \"\$f\" ] || continue
+                  case \"\$f\" in */.rollback) continue;; esac
+                  mv \"\$f\" /data/.rollback/ 2>/dev/null || true
+                done
+                if tar xzf /backup/$b -C /data; then
+                  rm -rf /data/.rollback
+                else
+                  echo '解包失败，正在回滚既有数据…' >&2
+                  for f in /data/* /data/..?*; do
+                    case \"\$f\" in */.rollback) continue;; esac
+                    rm -rf \"\$f\" 2>/dev/null || true
+                  done
+                  mv /data/.rollback/* /data/ 2>/dev/null || true
+                  rm -rf /data/.rollback
+                  exit 1
+                fi"; then
+      echo "  !! 卷 $target 恢复失败（tgz 损坏或磁盘不足）；既有数据已回滚，请先清理磁盘再重试" >&2; FAIL=$((FAIL+1))
     fi
   done
 else

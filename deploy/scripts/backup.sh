@@ -25,18 +25,37 @@ fi
 
 # 单卷失败要“看得见”：set -e 对 `A && echo` 的左侧不生效，旧写法里 tar 失败会跳过 echo 但脚本照跑到底、
 # 结尾仍打“备份完成” → 坏备份长期无人知，恢复时才炸。改为显式 if，失败即计数，结尾非零退出让 cron/monitor 抓到。
+# 【先确认 docker 真的可用】否则下面每个 `docker volume inspect ... || continue` 都会静默跳过，
+# 一个卷都没备份却 fail=0 → 判为"成功"、落 OK、退出 0。user-del.sh --purge 正是拿这个退出码
+# 当"备份成功"的闸，于是会在【只备份到一个空壳】的情况下把用户三个卷全删掉，连 --force 都不用。
+docker info >/dev/null 2>&1 || { echo "!! docker 守护进程不可用，中止备份（不写 OK 标记）" >&2; exit 1; }
+
 fail=0
+archived=0
 for name in "${names[@]}"; do
+  got=0
   for v in uploads outputs ocdata; do
     vol="${name}-${v}"
-    docker volume inspect "$vol" >/dev/null 2>&1 || continue
+    # 卷不存在 → 记一笔，别静默跳过：正常用户一定有这三个卷（user-add 建的），
+    # 一个都没有说明要么 docker 抽风、要么用户名错了，两种都不该被判成"备份成功"。
+    if ! docker volume inspect "$vol" >/dev/null 2>&1; then
+      echo "!! 卷不存在，跳过：$vol" >&2
+      continue
+    fi
     if docker run --rm -v "${vol}:/data:ro" -v "${dest}:/backup" alpine \
          tar czf "/backup/${name}-${v}.tar.gz" -C /data . ; then
       echo "备份 $vol → $dest/${name}-${v}.tar.gz"
+      got=$((got+1)); archived=$((archived+1))
     else
       echo "!! 备份失败：$vol" >&2; fail=$((fail+1)); rm -f "$dest/${name}-${v}.tar.gz"
     fi
   done
+  # 该用户一个卷都没备到 → 明确算失败。这条是 --purge 那道闸的关键：
+  # 没有它，"什么都没备到"和"全备好了"的退出码完全一样。
+  if [ "$got" -eq 0 ]; then
+    echo "!! 用户 $name 一个数据卷都没备份到（期望 uploads/outputs/ocdata 三个）" >&2
+    fail=$((fail+1))
+  fi
 done
 
 # LLM 网关(one-api)的数据卷：渠道/令牌/用量，和用户无关但同样要备份（不然迁移后网关要重配）
@@ -61,7 +80,19 @@ find "$BACKUP_DIR" -mindepth 1 -maxdepth 1 -type d -mtime +7 -exec rm -rf {} + 2
 # 为什么不能让 monitor 只看目录新鲜度：本脚本一开头就无条件 mkdir 了 $dest，
 # 所以【备份失败时也会留下一个 mtime 是刚刚的空目录】——按目录判就永远命中、永远不告警。
 # 最典型的失败场景恰恰是磁盘满，那正是最需要被发现的时候。故：只有全部成功才落 OK。
-ok_marker="$dest/OK"
+# 【标记要分作用域】$dest 是按【日期】建的，与是否只备份单个用户无关，所以整站备份和
+# user-del --purge 触发的单用户备份会共用同一个目录、同一枚 OK。后果有两个方向：
+#   ① 凌晨整站备份因磁盘满失败（不落 OK，monitor 正确告警）→ 早上一次成功的单用户备份
+#      在同一目录写下新鲜 OK → monitor 找到新鲜 OK → 播报"✅ 已恢复"，而整站备份仍然是坏的。
+#      这正是本轮想消灭的假阴性，只是换了触发路径。
+#   ② 反向：整站备份成功后，当天任何一次失败的单用户备份都会 rm -f 掉那枚有效的 OK → 次日误报。
+# 故：只有【全量】备份写/删全局 OK；单用户备份写自己的 OK.user-<名>，互不干扰。
+# monitor.sh 用 `find -name OK` 精确匹配，不会匹到 OK.user-*。
+if [ ${#names[@]} -eq 1 ] && [ $# -ge 1 ]; then
+  ok_marker="$dest/OK.user-${names[0]}"
+else
+  ok_marker="$dest/OK"
+fi
 rm -f "$ok_marker"
 if [ "$fail" -eq 0 ]; then
   # 先写临时文件、成功后再 mv 成 OK：若中途某条（如 du）非零，pipefail+set -e 会在这里中止，

@@ -24,6 +24,14 @@ env="users/${name}.env"
 #   同理，备份失败时也必须在【什么都还没删】的状态下中止，否则"数据卷原样保留"的提示是误导：
 #   卷是还在，但账号登记已经没了。
 if [ "$purge" = "--purge" ]; then
+  # ★ 先把容器停掉再备份。backup.sh 是热态卷快照（不停容器直接 tar），而 ocdata 是 SQLite(WAL)：
+  #   容器正在跑任务时 tar 出来的 db 与 -wal 可能不匹配，是个撕裂快照。平时无所谓（下次还能再备），
+  #   但 --purge 紧接着就把【唯一的副本】删掉 —— 事后想恢复时才发现 ocdata 打不开、会话历史全丢。
+  #   容器反正马上就要删，这里停它没有额外代价。用 stop 而非 rm -f：留给下面统一删。
+  if docker ps -q -f "name=^agent-${name}$" | grep -q .; then
+    echo "先停容器 agent-${name}（让 SQLite 落盘，避免备份出撕裂快照）…"
+    docker stop "agent-${name}" >/dev/null 2>&1 || echo "!! 停容器失败，备份可能是撕裂快照" >&2
+  fi
   echo "先备份（含 users/${name}.env 与三个数据卷）…"
   if ! scripts/backup.sh "$name"; then
     if [ "$force" = 1 ]; then
@@ -60,10 +68,15 @@ if [ "$purge" = "--purge" ]; then
     docker volume inspect "$vol" >/dev/null 2>&1 || continue   # 本就不存在，不算失败
     if docker volume rm "$vol" >/dev/null 2>&1; then echo "  已删除卷 $vol"; else failed+=("$vol"); fi
   done
+  # 注意：卷删除失败【不能在这里 exit】。此刻 users/<name>.env 已删、compose 已重渲染，
+  # 唯独 manager 内存里还留着该用户条目（热加载在脚本末尾）。直接退出的话，manager 仍认为
+  # 该用户存在、却已 docker rm -f 掉其容器 → 访问 /<name>/ 走进 ensureUp 抛"容器不存在"，
+  # 持续回 503 而不是干净的 404，直到有人手工 reload。
+  # 改为：记下失败，末尾照常热加载，最后再以非零码退出让运维知道卷没清干净。
   if [ ${#failed[@]} -gt 0 ]; then
     echo "!! 以下卷删除失败（可能仍被容器占用），数据【未】清除：${failed[*]}" >&2
     echo "   排查：docker ps -a --filter volume=${failed[0]}" >&2
-    exit 1
+    VOL_RM_FAILED=1
   fi
 else
   echo "已保留数据卷 ${name}-{uploads,outputs,ocdata}（彻底删除请加 --purge）"
@@ -72,4 +85,8 @@ else
 fi
 
 systemctl reload sci-manager 2>/dev/null || pkill -HUP -f 'manager.mjs' 2>/dev/null || true
+if [ "${VOL_RM_FAILED:-0}" = 1 ]; then
+  echo "⚠ 用户 $name 已从登记与路由中移除（manager 已热加载），但部分数据卷未能删除，见上面的排查提示。" >&2
+  exit 1
+fi
 echo "✅ 用户 $name 已移除"

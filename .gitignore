@@ -33,3 +33,10 @@ opencode.json
 # 跟踪它会让服务器 git status 永远是脏的、每次 pull 都可能冲突。
 # 模板见 deploy/tiers.env.example；首次部署由 setup.sh/手工 cp 一份。
 deploy/tiers.env
+
+# 导出/备份产物：含 .env 与 users/*.env（全部账号 + 明文密码）与用户数据。
+# export-all.sh 的默认目录已改到仓库之外（/var/backups/sci-export），这几条是兜底——
+# 万一有人显式传了仓库内路径，也不能让它进 git 历史（历史里删不干净）。
+deploy/backups/
+backups/
+sci-agent-backup-*.tar.gz
