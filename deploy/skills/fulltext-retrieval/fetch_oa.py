@@ -643,12 +643,12 @@ def main():
     parser.add_argument("input", type=Path,
                         help="Worklist: DOIs (one per line) or TSV/CSV/Markdown "
                              "with a DOI column (optional PMID, Title)")
-    # 默认落【当前目录】而不是 pdfs/：会话的工作目录就是该会话的产物目录，而网关的 dirState
-    # 只列【顶层文件】（不递归），所以下到 pdfs/ 子目录里的 PDF 在界面"产出"侧栏里一个都看不见。
-    # 这不是假设：生产上真实会话的 outputs/ses_xxx/pdfs/*.pdf 正是这么落的，用户拿不到。
-    # 从仓库根跑时落到根目录同样不合适，但那条路径已由其它技能的 SCI_OUTPUT_DIR 约定覆盖。
-    parser.add_argument("-o", "--output", type=Path, default=Path("."),
-                        help="Output directory (default: 当前目录 —— 即本会话的产物目录)")
+    # pdfs/ 子目录是合适的组织方式：网关的 dirState 现在【递归一层】，侧栏会列出
+    # "pdfs/xxx.pdf" 并可直接下载/预览。（此前 dirState 只列顶层文件，这些 PDF 在界面上
+    # 一个都看不见——生产上真实会话就是这么丢的；现已在网关侧修好，故保留子目录组织。）
+    # 注意别再往更深一层放：侧栏只递归一层。
+    parser.add_argument("-o", "--output", type=Path, default=Path("pdfs"),
+                        help="Output directory (default: pdfs/ —— 相对本会话产物目录，侧栏可见)")
     parser.add_argument("-e", "--email", default=CONTACT_EMAIL,
                         help="Contact email (required by Unpaywall TOS). Falls back to "
                              "SCI_CONTACT_EMAIL / MEDSCI_CONTACT_EMAIL / CONTACT_EMAIL env vars.")

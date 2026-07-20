@@ -643,6 +643,12 @@ function mdImgSrc(u) {
   // 安全性与上面一致：不含 / 与 : 的纯文件名，只能映射到本会话的同源 api/raw，开不出外链。
   m = u.match(/^(?:\.\/)?([^\/?#:]+)$/)
   if (m && MDIMG_EXT.test(m[1])) return "api/raw?name=" + encodeURIComponent(m[1]) + sidQ()
+  // 会话产物目录下的【一层子目录】（如 figures/fig1.png）。dirState 现在递归一层、侧栏也会列出它们，
+  // 所以正文里引用子目录里的图同样要能渲染。上面的 outputs|uploads 分支先跑，不会被这条抢走；
+  // 两段都不含 / ? # :，所以拼不出协议、也拼不出上跳（../ 里的 . 允许但 ".." 段会被服务端的
+  // safeUnder 做包含性校验挡掉，前端这里只负责不把外链当成同源产物）。
+  m = u.match(/^(?:\.\/)?([^\/?#:]+)\/([^\/?#:]+)$/)
+  if (m && m[1] !== ".." && MDIMG_EXT.test(m[2])) return "api/raw?name=" + encodeURIComponent(m[1] + "/" + m[2]) + sidQ()
   // 已是本站接口的相对路径（& 在转义文本里成对出现为 &amp;，作为 HTML 属性值恰好正确）
   if (/^api\/(raw|download)\?/i.test(u) && /\.(png|jpe?g|gif|webp|svg|bmp)($|[&#])/i.test(u.replace(/&amp;/g, "&"))) return u.replace(/"/g, "%22")
   return null
@@ -779,7 +785,9 @@ function renderFiles(list) {
     if (doPv) { s.classList.add("pv"); s.title = "点击预览"; s.addEventListener("click", doPv) }
     row.appendChild(s)
     if (doPv) { const pv = document.createElement("button"); pv.type = "button"; pv.className = "fbtn"; pv.title = "预览"; pv.innerHTML = ic("eye"); pv.addEventListener("click", doPv); row.appendChild(pv) }
-    const a = document.createElement("a"); a.href = "api/download?name=" + encodeURIComponent(name) + sidQ(); a.download = name; a.title = "下载 " + name; a.className = "fbtn"; a.innerHTML = ic("download")
+    // name 现在可能带一层子目录（如 "pdfs/a.pdf"）：完整相对路径照常显示（用户能看出它在哪），
+    // 但 download 属性只给最后一段 —— 带斜杠的话浏览器会把它当路径分隔并清洗成怪名字。
+    const a = document.createElement("a"); a.href = "api/download?name=" + encodeURIComponent(name) + sidQ(); a.download = name.split("/").pop(); a.title = "下载 " + name; a.className = "fbtn"; a.innerHTML = ic("download")
     row.appendChild(a)
     filesEl.appendChild(row)
   }

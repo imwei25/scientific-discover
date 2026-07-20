@@ -142,13 +142,24 @@ async function createSession(title) {
   return s.id
 }
 // 某目录里顶层文件的 name -> mtime 快照（跳过隐藏项和子目录）
-const dirState = (dir) => {
+// 递归【一层】：键是相对 dir 的路径，顶层文件仍是裸文件名（"a.png"），子目录里的是 "pdfs/a.pdf"。
+// 为什么要递归：好几个技能天然产出子目录（fulltext-retrieval 的 pdfs/、data-integrity 的 audit/、
+// systematic-review 的 counts/）。此前只列顶层 → 这些产物在界面"产出"侧栏里【一个都看不到】，
+// agent 报告"已下载 4 篇文献"而用户什么也拿不到（生产上真实发生过）。
+// 为什么只一层：够覆盖已知的技能产出结构，同时把列表规模与前端展示复杂度控制住；
+// 更深的层级仍读得到（下载接口按包含性校验，不限深度），只是不主动列出来。
+const DIRSTATE_DEPTH = 1
+const dirState = (dir, depth = DIRSTATE_DEPTH, prefix = "") => {
   if (!fs.existsSync(dir)) return {}
   const m = {}
-  for (const f of fs.readdirSync(dir)) {
-    if (f.startsWith(".")) continue
-    const st = fs.statSync(path.join(dir, f))
-    if (st.isFile()) m[f] = st.mtimeMs
+  let ents; try { ents = fs.readdirSync(dir, { withFileTypes: true }) } catch { return m }
+  for (const e of ents) {
+    if (e.name.startsWith(".")) continue          // .preview 等派生缓存不进列表
+    const p = path.join(dir, e.name)
+    const rel = prefix ? prefix + "/" + e.name : e.name
+    let st; try { st = fs.statSync(p) } catch { continue }
+    if (st.isFile()) m[rel] = st.mtimeMs
+    else if (st.isDirectory() && depth > 0) Object.assign(m, dirState(p, depth - 1, rel))
   }
   return m
 }
@@ -158,6 +169,29 @@ const changedSince = (dir, before) => {
   return Object.keys(now)
     .filter(name => !(name in before) || now[name] > before[name])
     .sort((a, b) => now[b] - now[a])
+}
+// 把用户传来的 name 解析成 dir 内的绝对路径；越界一律返回 null（调用方回 404）。
+// ★ 为什么不能再用 path.basename：支持子目录后 name 必须允许带分隔符，而 basename 会把
+//   "pdfs/a.pdf" 砍成 "a.pdf"（功能直接坏掉）。basename 之所以安全，恰恰是因为它把分隔符全扔了；
+//   一旦要保留分隔符，这条一行防线就失效，必须换成"解析后检查是否仍在 dir 之内"。
+// 三重检查缺一不可：
+//   ① path.resolve 后做前缀包含 → 挡住 ../、绝对路径、以及 %2e%2e 解码后的形态；
+//   ② 前缀比较必须带 path.sep → 否则 /data/outputs-evil 会被 /data/outputs 的前缀误判为"在内"；
+//   ③ realpath 后再查一次 → 挡住 dir 内部指向外面的符号链接（agent 有 shell，能造软链）。
+// 注意：写入路径（/api/upload）【不使用】本函数，仍用 basename —— 那里的 name 完全由用户控制，
+// 允许分隔符等于把写入点从"会话目录内一个文件"放大成"任意相对路径"，不值得为它冒险。
+const safeUnder = (dir, name) => {
+  if (!name || typeof name !== "string") return null
+  if (name.includes("\0")) return null
+  const base = path.resolve(dir)
+  const p = path.resolve(base, name)
+  if (p !== base && !p.startsWith(base + path.sep)) return null
+  try {
+    const realBase = fs.realpathSync(base)
+    const real = fs.realpathSync(p)
+    if (real !== realBase && !real.startsWith(realBase + path.sep)) return null
+  } catch { /* 文件不存在时 realpath 会抛 —— 交给调用方的 existsSync 去 404 */ }
+  return p
 }
 const send = (res, code, type, body) => { res.writeHead(code, { "Content-Type": type }); res.end(body) }
 // 在【请求体还没读完】就提前回包时必须用它：HTTP/1.1 默认 keep-alive，若不声明关闭连接，
@@ -405,15 +439,19 @@ function prunePreviewCache(cacheDir, keep) {
 // 返回 { out, ctype } 供内联响应；不支持的类型返回 null；转换失败 throw 带 .code 的错误。
 // /api/preview（点开即看）与产物落地后的后台预热共用本函数，确保两边缓存路径/新鲜度判定完全一致。
 async function ensurePreviewCache(dir, name) {
-  const src = path.join(dir, name)
-  if (!fs.existsSync(src) || !fs.statSync(src).isFile()) { const e = new Error("not found"); e.code = "no-src"; throw e }
+  // 与下载/内联同一条防线：name 现在可含子目录（pdfs/a.docx），必须做包含性校验而非拼接了事。
+  const src = safeUnder(dir, name)
+  if (!src || !fs.existsSync(src) || !fs.statSync(src).isFile()) { const e = new Error("not found"); e.code = "no-src"; throw e }
   const ext = path.extname(name).toLowerCase()
   const cacheDir = path.join(dir, ".preview"); fs.mkdirSync(cacheDir, { recursive: true })
+  // 缓存文件名把分隔符压平：直接拼 name 的话，"pdfs/a.docx" 会变成 .preview/pdfs/a.docx.html，
+  // 而上面只 mkdir 了 .preview 本身 → 写入必然 ENOENT。压平后同名不同目录也不会互相覆盖。
+  const flat = name.replace(/[\\/]+/g, "__")
   const srcMtime = fs.statSync(src).mtimeMs
   const fresh = (out) => fs.existsSync(out) && fs.statSync(out).mtimeMs >= srcMtime
 
   if (ext === ".docx") {
-    const out = path.join(cacheDir, name + ".html")
+    const out = path.join(cacheDir, flat + ".html")
     if (!fresh(out)) {
       try { await execFileAsync(PYEXE(), ["-X", "utf8", "-c", MAMMOTH_PY, src, out], { timeout: 60_000 }) }
       catch (err) { const e = new Error(String(err).slice(0, 200)); e.code = "docx-fail"; throw e }
@@ -422,7 +460,7 @@ async function ensurePreviewCache(dir, name) {
     return { out, ctype: "text/html; charset=utf-8" }
   }
   if ([".pptx", ".ppt", ".odp", ".doc", ".odt"].includes(ext)) {
-    const out = path.join(cacheDir, name.replace(/\.[^.]+$/, "") + ".pdf")
+    const out = path.join(cacheDir, flat.replace(/\.[^.]+$/, "") + ".pdf")
     if (!fresh(out)) {
       if (!soffice()) { const e = new Error("no LibreOffice"); e.code = "no-soffice"; throw e }
       const job = sofficeJob(src, cacheDir)
@@ -433,6 +471,10 @@ async function ensurePreviewCache(dir, name) {
       try { await withSoffice(() => execFileAsync(soffice(), job.args, { timeout: 90_000, killSignal: "SIGKILL" })) }   // 排队，绝不并发起两个 LO
       catch (err) { const e = new Error(String(err).slice(0, 200)); e.code = "office-fail"; throw e }
       finally { try { fs.rmSync(job.dir, { recursive: true, force: true }) } catch {} }   // 成功/失败/超时都要清掉临时 profile
+      // soffice 按【源文件基名】决定输出名（a.pptx → a.pdf），与我们压平后的缓存名（pdfs__a.pdf）不同。
+      // 源文件在子目录里时两者必然对不上，不改名就会误报 "no pdf produced"。
+      const produced = path.join(cacheDir, path.basename(src).replace(/\.[^.]+$/, "") + ".pdf")
+      if (produced !== out && fs.existsSync(produced)) { try { fs.renameSync(produced, out) } catch {} }
       if (!fs.existsSync(out)) { const e = new Error("no pdf produced"); e.code = "no-pdf"; throw e }
     }
     prunePreviewCache(cacheDir, out)
@@ -849,24 +891,27 @@ const server = http.createServer(async (req, res) => {
 
     if (req.method === "GET" && u.pathname === "/api/download") {
       const sid = u.searchParams.get("sid") || ""
-      const name = path.basename(u.searchParams.get("name") || "")
+      const name = u.searchParams.get("name") || ""   // 可含一层子目录（如 pdfs/a.pdf），由 safeUnder 做包含性校验
       const up = u.searchParams.get("dir") === "up"   // dir=up 时取上传目录，否则取产出目录
-      const f = path.join(sid ? (up ? await sessionUp(sid) : await sessionOut(sid)) : (up ? UPLOADS : OUTPUTS), name)   // 无 sid 回退共享目录（兼容）
+      const root = sid ? (up ? await sessionUp(sid) : await sessionOut(sid)) : (up ? UPLOADS : OUTPUTS)   // 无 sid 回退共享目录（兼容）
+      const f = safeUnder(root, name)
       // isFile 不能省：只判 existsSync 时，?name=.preview（服务端自己在每个产物目录里建的预览缓存目录，
       // 必然存在）会让 createReadStream 异步抛 EISDIR，而进程没有 uncaughtException 兜底 → 整个容器崩、
       // opencode 一起没。任意已登录用户一个 URL 即可打崩。/api/raw 本来就有这个判断，这里漏了。
-      if (!name || !fs.existsSync(f) || !fs.statSync(f).isFile()) return send(res, 404, "text/plain", "not found")
-      res.writeHead(200, { "Content-Type": "application/octet-stream", "Content-Disposition": contentDisposition(name) })
+      if (!f || !fs.existsSync(f) || !fs.statSync(f).isFile()) return send(res, 404, "text/plain", "not found")
+      // 下载文件名只取最后一段：带上 "pdfs/" 前缀的话，浏览器保存时会把斜杠当非法字符或造出怪名字
+      res.writeHead(200, { "Content-Type": "application/octet-stream", "Content-Disposition": contentDisposition(path.basename(name)) })
       return pipeFile(f, res)
     }
 
     // 内联查看（供聊天框里 <img> 预览 / 在新标签打开），带正确 MIME、不强制下载
     if (req.method === "GET" && u.pathname === "/api/raw") {
       const sid = u.searchParams.get("sid") || ""
-      const name = path.basename(u.searchParams.get("name") || "")
+      const name = u.searchParams.get("name") || ""   // 可含一层子目录，交给 safeUnder 校验
       const up = u.searchParams.get("dir") === "up"
-      const f = path.join(sid ? (up ? await sessionUp(sid) : await sessionOut(sid)) : (up ? UPLOADS : OUTPUTS), name)
-      if (!name || !fs.existsSync(f) || !fs.statSync(f).isFile()) return send(res, 404, "text/plain", "not found")
+      const root = sid ? (up ? await sessionUp(sid) : await sessionOut(sid)) : (up ? UPLOADS : OUTPUTS)
+      const f = safeUnder(root, name)
+      if (!f || !fs.existsSync(f) || !fs.statSync(f).isFile()) return send(res, 404, "text/plain", "not found")
       const MIME = { ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".gif": "image/gif",
         ".webp": "image/webp", ".svg": "image/svg+xml", ".bmp": "image/bmp", ".pdf": "application/pdf",
         ".html": "text/html; charset=utf-8", ".htm": "text/html; charset=utf-8", ".md": "text/markdown; charset=utf-8",
