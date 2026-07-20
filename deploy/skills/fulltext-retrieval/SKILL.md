@@ -6,7 +6,7 @@ tools: Read, Write, Edit, Bash, Grep, Glob
 model: inherit
 ---
 
-> **本仓库运行环境（先读）**：Python 用 `.venv/Scripts/python.exe`（Windows）/ `.venv/bin/python`（Linux/macOS）（项目根 `.venv`；没有先跑 `env-setup` 技能）；本技能脚本在 `.opencode/skills/fulltext-retrieval/` 下，运行时先 `cd` 到该目录或用全路径；产出写 `outputs/`（有会话专属目录时以它为准、勿写仓库根固定名）。`--email` 必须填**真实邮箱**（Unpaywall 会拒掉 example.com，报 HTTP 422）；DOI 列表可来自 `search-lit` 或用户；已装 pymupdf/pymupdf4llm。以下为上游技能原文（vendored，未改方法论）。
+> **本仓库运行环境（先读）**：Python 用 `${REPO_ROOT:-/app}/.venv/bin/python`（项目根 `.venv`；没有先跑 `env-setup` 技能）；本技能脚本在 `${REPO_ROOT:-/app}/.opencode/skills/fulltext-retrieval/` 下，运行时先 `cd` 到该目录或用全路径；产出写 `outputs/`（有会话专属目录时以它为准、勿写仓库根固定名）。`--email` 必须填**真实邮箱**（Unpaywall 会拒掉 example.com，报 HTTP 422）；DOI 列表可来自 `search-lit` 或用户；已装 pymupdf/pymupdf4llm。以下为上游技能原文（vendored，未改方法论）。
 
 # Fulltext Retrieval Skill
 

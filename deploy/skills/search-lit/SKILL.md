@@ -6,7 +6,7 @@ tools: Read, Write, Edit, Bash, Grep, Glob
 model: inherit
 ---
 
-> **本仓库运行环境（先读）**：Python 用 `.venv/Scripts/python.exe`（Windows）/ `.venv/bin/python`（Linux/macOS）（项目根 `.venv`；没有先跑 `env-setup` 技能）；本技能脚本在 `.opencode/skills/search-lit/` 下，运行时先 `cd` 到该目录或用全路径；产出写 `outputs/`（有会话专属目录时以它为准、勿写仓库根固定名）。每条引用须经 API 核实（勿凭记忆造引用）。**注意：PubMed 走 NCBI E-utilities，从中国大陆网络常被阻断（curl/requests 都会 SSL 失败）；服务器在境外或配代理才稳。国内拿不到时改用 `fulltext-retrieval`/`reference-check`（走 Europe PMC/Crossref，国内可达）。** 以下为上游技能原文（vendored，未改方法论）。
+> **本仓库运行环境（先读）**：Python 用 `${REPO_ROOT:-/app}/.venv/bin/python`（项目根 `.venv`；没有先跑 `env-setup` 技能）；本技能脚本在 `${REPO_ROOT:-/app}/.opencode/skills/search-lit/` 下，运行时先 `cd` 到该目录或用全路径；产出写 `outputs/`（有会话专属目录时以它为准、勿写仓库根固定名）。每条引用须经 API 核实（勿凭记忆造引用）。**注意：PubMed 走 NCBI E-utilities，从中国大陆网络常被阻断（curl/requests 都会 SSL 失败）；服务器在境外或配代理才稳。国内拿不到时改用 `fulltext-retrieval`/`reference-check`（走 Europe PMC/Crossref，国内可达）。** 以下为上游技能原文（vendored，未改方法论）。
 
 # Literature Search Skill
 
@@ -43,8 +43,8 @@ never generate citations from memory alone.
    `evidence.md`，多一列 `sources` 标每篇命中的源）。
 
    ```bash
-   PY=.venv/Scripts/python.exe   # Linux/macOS: .venv/bin/python
-   S=.opencode/skills/search-lit/references/enhanced_search.py
+   PY=${REPO_ROOT:-/app}/.venv/bin/python   # Linux/macOS: ${REPO_ROOT:-/app}/.venv/bin/python
+   S=${REPO_ROOT:-/app}/.opencode/skills/search-lit/references/enhanced_search.py
    # 默认四源全开，跨源去重
    "$PY" "$S" "graph neural network drug discovery" --limit 25 --since 2021 --email you@example.com
    # 只要预印本+跨学科（跳过 PubMed 系）
@@ -84,13 +84,13 @@ or "No such tool available" error), fall back to NCBI E-utilities via bundled sc
 PubMed calls in this session to E-utilities. Do not retry MCP after a disconnect — it
 will not recover within the same conversation.
 
-**Scripts** (in `.opencode/skills/search-lit/references/` — run from repo root or use the full path):
+**Scripts** (in `${REPO_ROOT:-/app}/.opencode/skills/search-lit/references/` — run from repo root or use the full path):
 - `pubmed_eutils.sh` — Bash wrapper for NCBI E-utilities **and** Europe PMC (`epmc_*` commands)
 - `parse_pubmed.py` — Python parser for E-utilities responses
 
 **China-network fallback (reachable):**
 ```bash
-S=".opencode/skills/search-lit/references/pubmed_eutils.sh"
+S="${REPO_ROOT:-/app}/.opencode/skills/search-lit/references/pubmed_eutils.sh"
 bash "$S" epmc_search "sglt2 inhibitor AND heart failure" 20   # Europe PMC, JSON records
 bash "$S" epmc_cite_lookup "Bivariate analysis of sensitivity and specificity"
 bash "$S" epmc_fetch "16168343,38000001"                        # by PMIDs
@@ -99,8 +99,8 @@ bash "$S" epmc_fetch "16168343,38000001"                        # by PMIDs
 **Usage patterns:**
 
 ```bash
-EUTILS=".opencode/skills/search-lit/references/pubmed_eutils.sh"
-PARSER=".opencode/skills/search-lit/references/parse_pubmed.py"
+EUTILS="${REPO_ROOT:-/app}/.opencode/skills/search-lit/references/pubmed_eutils.sh"
+PARSER="${REPO_ROOT:-/app}/.opencode/skills/search-lit/references/parse_pubmed.py"
 
 # Search PubMed (returns PMIDs)
 bash "$EUTILS" search "diagnostic test accuracy meta-analysis radiology" 20 \
@@ -189,7 +189,7 @@ API; nothing generated from memory):
 ```bash
 # Expand seed DOIs/PMIDs in all directions, dedup against the existing pool,
 # append verified candidates to outputs/refs.bib
-SCI_OUTPUT_DIR=outputs/<会话id> python3 references/snowball.py \
+python3 references/snowball.py \
   --seed DOI:10.1148/radiol.2024123,PMID:38000001 \
   --direction all \
   --pool outputs/refs.bib \
@@ -322,7 +322,7 @@ fetching here.
 Pass the verified candidate DOIs from `outputs/refs.bib`:
 
 ```bash
-ENGINE=".opencode/skills/fulltext-retrieval/fetch_oa.py"
+ENGINE="${REPO_ROOT:-/app}/.opencode/skills/fulltext-retrieval/fetch_oa.py"
 # extract DOIs from outputs/refs.bib → dois.txt (one per line)
 python3 "$ENGINE" dois.txt -o pdfs/ -e <contact-email> --report pdfs/retrieval_report.json
 ```

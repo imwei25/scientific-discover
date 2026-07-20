@@ -14,13 +14,13 @@ description: 写**叙述性**文献综述。围绕一个主题多路检索文献
 ## 定位（本技能在套件中的位置）
 顶层主控（AGENTS.md 常驻指令）判意图、定范围、派发；派到本技能就**直接做，别回绕**（本技能已覆盖 检索→成文→参考文献）。
 - **体裁自检**：要**系统综述 / Meta**（双人独立筛选、偏倚风险 RoB、GRADE、PRISMA 流程）的 → 不是本技能，提醒改用 `systematic-review`；本技能只做**叙述性综述**。
-产物写 `outputs/`（主控注入了会话专属目录 `outputs/<会话id>/` 时以它为准、勿写仓库根固定名——多用户共享会 clobber）。
+产物直接写**当前工作目录**——网关已把本会话的 cwd 指到该会话的产物目录，用裸文件名即可（如 `table1.csv`），别再拼 `outputs/…` 前缀，也别写到仓库根。
 
 ## Python 环境
 > 没有项目根 `.venv`？先运行 `env-setup` 技能建好并装依赖。
 ```
-.venv/Scripts/python.exe   # Windows（正斜杠写法，bash 与 PowerShell 都能用）
-.venv/bin/python           # Linux / macOS
+${REPO_ROOT:-/app}/.venv/bin/python   # Windows（正斜杠写法，bash 与 PowerShell 都能用）
+${REPO_ROOT:-/app}/.venv/bin/python
 ```
 
 ## 多步流程（五阶段循环）
@@ -32,7 +32,7 @@ description: 写**叙述性**文献综述。围绕一个主题多路检索文献
 ### 阶段 2 — 缺口驱动的迭代检索（把"检索一次"改成回合制）
 把 `search.py` 当**可反复调用的检索原语**，一回合一回合补：
 ```
-SCI_OUTPUT_DIR=outputs/<会话id> .venv/Scripts/python.exe .opencode/skills/literature-review/search.py "概念1" "概念2" --limit 25 --since 2018
+${REPO_ROOT:-/app}/.venv/bin/python ${REPO_ROOT:-/app}/.opencode/skills/literature-review/search.py "概念1" "概念2" --limit 25 --since 2018
 ```
 产出/追加 `outputs/evidence_table.csv`（含 design 列 + MeSH 词可作归一化信号）和 `outputs/evidence.md`。**每回合读完摘要后自评缺口**（照共享 doc）：哪个子面证据稀薄→补检；哪条论断只靠单一/弱证据→**沿证据等级爬升**（只有队列就去找 RCT/meta）；冒出的新药名/标志物→单独一轮。**停止判据**：每个子面在相关等级上取到 ≥3–5 篇、或连续两回合无新增、或到回合上限（默认 3–4 轮）。逐轮记 `outputs/search_log.md`。
 
@@ -53,7 +53,7 @@ SCI_OUTPUT_DIR=outputs/<会话id> .venv/Scripts/python.exe .opencode/skills/lite
    - **`quote` 强制**：填摘要里支撑该方向的**原句**；抽不到原句就**不登记这条**（护栏：防幻觉矛盾。这一列同时就是句级溯源，见下 `ground_claim.py`）。⚠️ `evidence.md` 的摘要**截断到 400 字**、支撑句常在其后——取 quote 时回 `evidence_table.csv` 拿**完整摘要**，别只从 `evidence.md` 截取。
 2. **扫矛盾**：
    ```
-   .venv/Scripts/python.exe .opencode/skills/literature-review/contradiction.py --input outputs/claims_ledger.csv
+   ${REPO_ROOT:-/app}/.venv/bin/python ${REPO_ROOT:-/app}/.opencode/skills/literature-review/contradiction.py --input outputs/claims_ledger.csv
    ```
    产出 `contradiction_candidates.md`（按 (canon_i→canon_o) 分组，方向冲突组在前、组内按证据等级排序）。**脚本会审计归一词表**：若报 `⚠️ 疑似归一碎片化`（列出看着同义却写成不同 canon 值的标签），说明上一步词表没收敛——回去统一这些标签、重跑，别拿碎片化的结果往下走。
 3. **逐个裁定**（脚本只标候选、不下判决；这步是主代理的活）：对每个 ⚠️ 冲突组判四选一，写 `outputs/contradiction_matrix.md`——
@@ -83,9 +83,9 @@ SCI_OUTPUT_DIR=outputs/<会话id> .venv/Scripts/python.exe .opencode/skills/lite
 
 ```
 # 单条：论断 + 它引的一个或多个 DOI/PMID
-SCI_OUTPUT_DIR=outputs/<会话id> .venv/Scripts/python.exe .opencode/skills/literature-review/ground_claim.py "他汀降低卒中复发风险" 10.1056/NEJMoa1615664 PMID:27295427
+${REPO_ROOT:-/app}/.venv/bin/python ${REPO_ROOT:-/app}/.opencode/skills/literature-review/ground_claim.py "他汀降低卒中复发风险" 10.1056/NEJMoa1615664 PMID:27295427
 # 批量：CSV 两列 claim,ref，把综述里每个"论断→引用"对逐条核
-SCI_OUTPUT_DIR=outputs/<会话id> .venv/Scripts/python.exe .opencode/skills/literature-review/ground_claim.py --input outputs/<会话>/claims.csv
+${REPO_ROOT:-/app}/.venv/bin/python ${REPO_ROOT:-/app}/.opencode/skills/literature-review/ground_claim.py --input claims.csv
 ```
 - 产出 `claim_grounding.md` / `.csv`。分档：**GROUNDED**（≥0.45，措辞高度相关）、**CHECK**（0.25–0.45，请人工确认）、**WEAK**（<0.25，⚠️ 摘要里找不到支撑句——可能转述失真，或支撑点在全文正文）、**NOTFOUND/NOABSTRACT**（取不到文献/无摘要）。
 - **关键在"捞出的原句"，分数只用来排优先级**：TF-IDF 对短转述天然保守，忠实的转述常落 CHECK 档但会把**正确的原句**摆到你面前——照着确认措辞即可。WEAK 且无相关句才是真信号。

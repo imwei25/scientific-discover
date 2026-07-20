@@ -10,13 +10,12 @@ description: 临床数据脱敏 / 去标识化。上传含患者信息的数据�
 > ⚠️ **最大盲区（先读）**：本技能可靠处理的是**结构化标识**（身份证/手机/住院号等有固定形态的）。**自由文本病历里的中文姓名、住址、"某院长的女儿"这类隐性标识，正则抓不全**。因此：① 处理病历文本后**必须人工通读复核**；② CSV 里的姓名列、任何标识号列，用 `--name-cols`/`--id-cols` **显式指定**，别指望自动扫描兜底；③ 正式脱敏前先用 `--scan-only` 看一遍检出情况，尤其数据里有长数字型研究编号时（防误伤或漏判）。
 
 ## 定位（本技能在套件中的位置）
-顶层主控（AGENTS.md 常驻指令）负责判意图、定范围、派发；派到本技能就**直接做，别回绕**。产物写 `outputs/`（主控注入了会话专属目录 `outputs/<会话id>/` 时以它为准、勿写仓库根固定名——多用户共享会 clobber）。
+顶层主控（AGENTS.md 常驻指令）负责判意图、定范围、派发；派到本技能就**直接做，别回绕**。产物直接写**当前工作目录**——网关已把本会话的 cwd 指到该会话的产物目录，用裸文件名即可（如 `table1.csv`），别再拼 `outputs/…` 前缀，也别写到仓库根。
 
 ## Python 环境
 > 没有项目根 `.venv`？先运行 `env-setup` 技能。
 ```
-.venv/Scripts/python.exe   # Windows
-.venv/bin/python           # Linux / macOS
+${REPO_ROOT:-/app}/.venv/bin/python
 ```
 
 ## 覆盖的可识别信息
@@ -26,21 +25,21 @@ description: 临床数据脱敏 / 去标识化。上传含患者信息的数据�
 以下常见于中国病历，本技能**不自动处理**，务必人工核对：**住址/小区门牌**（最高频）、科室+床位的自然写法（"内科3床"）、医保卡号/社保号、护照号/军官证/港澳台通行证、IP 与设备序列号、生物特征描述、面部照片、**精确高龄（>89 岁，HIPAA 建议归并）**、以及自由文本里的**中文姓名**（CSV 用 `--name-cols`；自由文本靠人工）。
 
 ## 用法
-脚本在 `.opencode/skills/deidentify/scripts/`，从仓库根运行或用全路径：
+脚本在 `${REPO_ROOT:-/app}/.opencode/skills/deidentify/scripts/`，从仓库根运行或用全路径：
 ```bash
 # 先扫描看看有哪些 PII、不改数据
-SCI_OUTPUT_DIR=outputs/<会话id> .venv/bin/python .opencode/skills/deidentify/scripts/deidentify.py --input uploads/patients.csv --scan-only
+${REPO_ROOT:-/app}/.venv/bin/python ${REPO_ROOT:-/app}/.opencode/skills/deidentify/scripts/deidentify.py --input uploads/patients.csv --scan-only
 
 # CSV 脱敏：自动扫每个单元格；姓名列、标识号列显式指定按列假名化
-SCI_OUTPUT_DIR=outputs/<会话id> .venv/bin/python .opencode/skills/deidentify/scripts/deidentify.py \
+${REPO_ROOT:-/app}/.venv/bin/python ${REPO_ROOT:-/app}/.opencode/skills/deidentify/scripts/deidentify.py \
   --input uploads/patients.csv --out outputs/patients_deid.csv \
   --name-cols 姓名,患者姓名 --id-cols 住院号,身份证号
 
 # 病历/自由文本
-.venv/bin/python .opencode/skills/deidentify/scripts/deidentify.py --input uploads/notes.txt --out outputs/notes_deid.txt
+${REPO_ROOT:-/app}/.venv/bin/python ${REPO_ROOT:-/app}/.opencode/skills/deidentify/scripts/deidentify.py --input uploads/notes.txt --out outputs/notes_deid.txt
 
 # 同时脱敏具体日期（默认不脱，因日期常是分析变量）
-.venv/bin/python .opencode/skills/deidentify/scripts/deidentify.py --input uploads/notes.txt --out outputs/notes_deid.txt --dates
+${REPO_ROOT:-/app}/.venv/bin/python ${REPO_ROOT:-/app}/.opencode/skills/deidentify/scripts/deidentify.py --input uploads/notes.txt --out outputs/notes_deid.txt --dates
 ```
 > Excel(.xlsx)：先用 `data-analysis` 把工作表另存成 CSV 再脱敏，或在脚本里用 pandas 读入后按列处理。
 

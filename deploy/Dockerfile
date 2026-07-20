@@ -141,7 +141,12 @@ COPY deploy/entrypoint.sh /app/entrypoint.sh
 RUN sed -i 's/\r$//' /app/entrypoint.sh && chmod +x /app/entrypoint.sh \
     && mkdir -p /app/uploads /app/outputs
 
-ENV OC_URL=http://127.0.0.1:4098 \
+# REPO_ROOT：技能文档里所有"回仓库找东西"的路径都以 ${REPO_ROOT:-/app} 开头。
+# 为什么需要它：每个会话的工作目录（cwd）已被网关指到该会话的产物目录（见 server.mjs 的 createSession），
+# 所以 `.venv/bin/python`、`.opencode/skills/...` 这类【相对仓库根】的写法在会话里一律找不到。
+# 用变量而非写死 /app：WORKDIR 若变、或本地开发想指到别处，只改这一处即可。
+ENV REPO_ROOT=/app \
+    OC_URL=http://127.0.0.1:4098 \
     OC_MODEL=deepseek/deepseek-v4-pro \
     PORT=3000
 EXPOSE 3000

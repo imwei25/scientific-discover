@@ -8,13 +8,12 @@ description: 临床研究常用统计——基线特征表(Table 1) 与 样本�
 面向临床科研的两个高频、易错刚需：**基线特征表**（几乎每篇临床论文的表 1）和**样本量估算**（伦理审查、标书、投稿都要）。脚本只用已装的 pandas/scipy/statsmodels，无需额外依赖。
 
 ## 定位（本技能在套件中的位置）
-顶层主控（AGENTS.md 常驻指令）负责判意图、定范围、派发；派到本技能就**直接做，别回绕**。产物写 `outputs/`（主控注入了会话专属目录 `outputs/<会话id>/` 时以它为准、勿写仓库根固定名——多用户共享会 clobber）。
+顶层主控（AGENTS.md 常驻指令）负责判意图、定范围、派发；派到本技能就**直接做，别回绕**。产物直接写**当前工作目录**——网关已把本会话的 cwd 指到该会话的产物目录，用裸文件名即可（如 `table1.csv`），别再拼 `outputs/…` 前缀，也别写到仓库根。
 
 ## Python 环境
 > 没有项目根 `.venv`？先运行 `env-setup` 技能。
 ```
-.venv/Scripts/python.exe   # Windows
-.venv/bin/python           # Linux / macOS
+${REPO_ROOT:-/app}/.venv/bin/python
 ```
 
 ## 一、Table 1 基线特征表
@@ -25,11 +24,11 @@ description: 临床研究常用统计——基线特征表(Table 1) 与 样本�
 
 ```bash
 # 自动推断变量类型（数值且取值多→连续，其余→分类）
-SCI_OUTPUT_DIR=outputs/<会话id> .venv/bin/python .opencode/skills/clinical-stats/scripts/table1.py \
+${REPO_ROOT:-/app}/.venv/bin/python ${REPO_ROOT:-/app}/.opencode/skills/clinical-stats/scripts/table1.py \
   --input uploads/data.csv --group arm --out outputs/table1.csv
 
 # 显式指定变量类型（更稳）
-SCI_OUTPUT_DIR=outputs/<会话id> .venv/bin/python .opencode/skills/clinical-stats/scripts/table1.py \
+${REPO_ROOT:-/app}/.venv/bin/python ${REPO_ROOT:-/app}/.opencode/skills/clinical-stats/scripts/table1.py \
   --input uploads/data.csv --group arm \
   --continuous age,bmi,sbp --categorical sex,smoker --out outputs/table1.csv
 ```
@@ -41,15 +40,15 @@ SCI_OUTPUT_DIR=outputs/<会话id> .venv/bin/python .opencode/skills/clinical-sta
 ## 二、样本量 / 把握度
 **研究开展前的先验估算**（伦理/标书用）。参数（差值、SD、率、HR）应来自预实验或既往文献。
 ```bash
-S=".opencode/skills/clinical-stats/scripts/samplesize.py"
+S="${REPO_ROOT:-/app}/.opencode/skills/clinical-stats/scripts/samplesize.py"
 # 两组均数（连续结局）：预期差 6，SD 10
-.venv/bin/python $S two-means --diff 6 --sd 10 --power 0.8 --dropout 0.1
+${REPO_ROOT:-/app}/.venv/bin/python $S two-means --diff 6 --sd 10 --power 0.8 --dropout 0.1
 # 两组率（二分类结局）：30% vs 15%
-.venv/bin/python $S two-props --p1 0.30 --p2 0.15 --power 0.8
+${REPO_ROOT:-/app}/.venv/bin/python $S two-props --p1 0.30 --p2 0.15 --power 0.8
 # 生存（log-rank，Freedman 近似）：HR 0.7，总体事件比例 0.5
-.venv/bin/python $S survival --hr 0.7 --p-event 0.5 --power 0.8
+${REPO_ROOT:-/app}/.venv/bin/python $S survival --hr 0.7 --p-event 0.5 --power 0.8
 # 单组对比已知值
-.venv/bin/python $S one-mean --diff 5 --sd 12
+${REPO_ROOT:-/app}/.venv/bin/python $S one-mean --diff 5 --sd 12
 ```
 `--dropout` 按预计脱落率上调样本量；`--ratio` 设非 1:1 分配。
 

@@ -6,7 +6,7 @@ version: 2.1.0
 author: Community contribution (nature-skills); repo-adapted backend/default policy
 ---
 
-> **本仓库运行环境（先读）**：Python 用 `.venv/Scripts/python.exe`（Windows）/ `.venv/bin/python`（Linux/macOS）（项目根 `.venv`；没有先跑 `env-setup` 技能）；本技能脚本在 `.opencode/skills/nature-figure/` 下，运行时先 `cd` 到该目录或用全路径；产出写 `outputs/`（有会话专属目录时以它为准、勿写仓库根固定名）。
+> **本仓库运行环境（先读）**：Python 用 `${REPO_ROOT:-/app}/.venv/bin/python`（项目根 `.venv`；没有先跑 `env-setup` 技能）；本技能脚本在 `${REPO_ROOT:-/app}/.opencode/skills/nature-figure/` 下，运行时先 `cd` 到该目录或用全路径；产出写 `outputs/`（有会话专属目录时以它为准、勿写仓库根固定名）。
 >
 > **本仓库后端策略（覆盖下方 vendored 正文的"必须问一次 Python or R"）**：默认直接用 **Python 后端**（matplotlib/seaborn 已装，R 后端未装）。**不要**为了选后端而停下来问用户——除非用户在请求里明确说要 R。因此下方 "Resolve the backend — a blocking gate" 一节在本仓库简化为：无明确 R 要求 → 直接 Python，跳过提问。默认不使用 OpenRouter 图像路线（需自备 key）。以下为上游技能原文（vendored，方法论未改）。
 

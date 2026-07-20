@@ -12,7 +12,7 @@
 每条**必须带 quote（摘要原句）**，抽不到原句就不登记——从源头杜绝"幻觉出来的矛盾"。
 
 用法：
-  python contradiction.py --input outputs/<会话>/claims_ledger.csv
+  python contradiction.py --input claims_ledger.csv
 产出（--outdir，默认取 input 同目录）：
   contradiction_candidates.md   人读：按 (canon_i→canon_o) 分组，冲突组在前
   contradiction_candidates.csv  逐条明细（含 group_id / conflict 标记）

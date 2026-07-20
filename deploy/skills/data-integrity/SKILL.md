@@ -13,7 +13,7 @@ description: 论文源数据的数值完整性自查（sanity check）。投稿�
 - 只有用户明确是在**审阅他人数据 / 准备 PubPeer** 时，才转成"值得进一步核实的疑点"口径——即便如此也只提问题、不定性。
 
 ## 定位（在套件中的位置）
-顶层主控（AGENTS.md）判意图后派到这里就**直接做**。在 `paper` 流水线里是 `data-analysis` 之后、`write-paper` 之前的**可选质量闸**（对"用户上传的原始数据"跑一遍自查）；也可作单步直派（"帮我查下这份数据"）。产物写 `outputs/`（主控注入了会话专属目录 `outputs/<会话id>/` 时以它为准，**勿写仓库根**——多用户共享会 clobber）。
+顶层主控（AGENTS.md）判意图后派到这里就**直接做**。在 `paper` 流水线里是 `data-analysis` 之后、`write-paper` 之前的**可选质量闸**（对"用户上传的原始数据"跑一遍自查）；也可作单步直派（"帮我查下这份数据"）。产物直接写**当前工作目录**——网关已把本会话的 cwd 指到该会话的产物目录，用裸文件名即可，**勿写仓库根**。
 
 ## 前置合规
 - **数据含患者姓名 / 身份证 / 住院号 / 手机号等可识别信息 → 先走 `deidentify` 脱敏**，再扫描。本技能只碰数值，但扫描目录里别混入未脱敏的原始表。
@@ -23,9 +23,9 @@ Python 用项目根 `.venv`（系统没装 Python）。paperconan 已装在 `.ve
 
 ```
 # Windows
-.venv/Scripts/python.exe -X utf8 -m paperconan <数据目录> --md
+${REPO_ROOT:-/app}/.venv/bin/python -X utf8 -m paperconan <数据目录> --md
 # Linux / macOS
-.venv/bin/python        -X utf8 -m paperconan <数据目录> --md
+${REPO_ROOT:-/app}/.venv/bin/python        -X utf8 -m paperconan <数据目录> --md
 ```
 
 - **必须带 `-X utf8`**：否则中文 Windows 默认 gbk 编码，写 REPORT.md 遇到 `²`/`±` 等符号会 `UnicodeEncodeError` 崩掉（scan.json 能出、REPORT.md 会失败）。等价地可设环境变量 `PYTHONUTF8=1`。
@@ -33,14 +33,14 @@ Python 用项目根 `.venv`（系统没装 Python）。paperconan 已装在 `.ve
 
 ### 常用参数
 - `--md`：额外写人类可读的 `REPORT.md`（默认只出 `scan.json` + `report.html`）。**建议总是带上**，便于你读。
-- `--out <目录>`：产物输出目录（默认 `<数据目录>/audit/`）。指到 `outputs/<会话>/audit/`。
+- `--out <目录>`：产物输出目录（默认 `<数据目录>/audit/`）。指到 `audit/`。
 - `--profile review|forensic|triage`：假阳性处理档位。**默认 `review`**（平衡，实测本仓库真实临床定量数据下 0 误报）；`forensic` 更敏感（审别人时用，误报升高）；`triage` 最宽松只留强信号。
 - `--doi <DOI>` / `--title <标题>`：把出处记进 scan.json（做 provenance / PubPeer 时用）。
 
 ## 工作流程
-1. **确认 CLI**：`.venv/Scripts/python.exe -m paperconan --version`（应回 `paperconan 0.x`）。缺了就 `.venv/Scripts/python.exe -m pip install "paperconan[all]"`。
-2. **备数据目录**：把用户要查的表格文件集中到一个目录（如 `outputs/<会话>/pc-in/`）；含患者信息的先脱敏。
-3. **跑扫描**：`... -X utf8 -m paperconan outputs/<会话>/pc-in --md --out outputs/<会话>/audit`。**不许编造扫描结果**，一切以 CLI 产物为准。
+1. **确认 CLI**：`${REPO_ROOT:-/app}/.venv/bin/python -m paperconan --version`（应回 `paperconan 0.x`）。缺了就 `${REPO_ROOT:-/app}/.venv/bin/python -m pip install "paperconan[all]"`。
+2. **备数据目录**：把用户要查的表格文件集中到一个目录（如 `pc-in/`）；含患者信息的先脱敏。
+3. **跑扫描**：`... -X utf8 -m paperconan pc-in --md --out audit`。**不许编造扫描结果**，一切以 CLI 产物为准。
 4. **读产物**：先看 CLI 末尾摘要（files / blocks with findings / digit·decimal anomaly sheets），再读 `audit/REPORT.md`（High / Medium / 末位数 χ² / 两位小数过表征四段）与 `audit/scan.json`（结构化明细，定位到 文件·sheet·行·检测器·数值）。
 5. **复核并汇报**：对每条 High/Medium，**回原表看一眼**具体单元格，套"良性解释优先"给出判断，再按上面"铁律"的自查口径向用户汇报，并列出 `report.html` 路径供其自查细看。
 
@@ -66,9 +66,9 @@ paperconan 查**源数据表**的数值模式；`pcheck.py` 查**稿件正文里
 
 ```
 # 扫一篇稿件（Methods/Results 里的检验报告）
-.venv/Scripts/python.exe .opencode/skills/data-integrity/pcheck.py outputs/<会话>/manuscript.md --outdir outputs/<会话>/audit
+${REPO_ROOT:-/app}/.venv/bin/python ${REPO_ROOT:-/app}/.opencode/skills/data-integrity/pcheck.py manuscript.md --outdir audit
 # 或直接给一段文本
-SCI_OUTPUT_DIR=outputs/<会话id> .venv/Scripts/python.exe .opencode/skills/data-integrity/pcheck.py --text "t(28)=2.05, p=.02"
+${REPO_ROOT:-/app}/.venv/bin/python ${REPO_ROOT:-/app}/.opencode/skills/data-integrity/pcheck.py --text "t(28)=2.05, p=.02"
 ```
 - 只认**统计量+自由度+p 三者齐全**的句子（如 `t(28)=2.05, p=.048`、`F(2,57)=3.11, p=.05`、`χ²(1)=4.10, p=.04`）；缺自由度的裸统计量无法重算、自动跳过。
 - 产出 `pcheck.md` / `pcheck.csv`，三档：**🔴 DECISION_ERROR**（重算跨过 .05 而报告没跨，或反之——显著性判断相反，最需核对）、**🟡 INCONSISTENT**（数值不符但同侧于 .05，多为笔误/四舍五入）、**🔵 ONE_TAILED**（两尾对不上但≈重算/2，可能按单尾报告）。

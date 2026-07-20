@@ -20,7 +20,7 @@ bash scripts/setup.sh                                            # 或 install.s
 > **换机器 / 换框架（OpenCode·Claude Code·OpenClaw…）同理**：把技能拷到目标项目根后，在那儿跑一次脚本即可，无需改任何 SKILL.md。
 
 ## 双镜像
-- `.opencode/skills/`：本地（OpenCode，解释器走 `.venv\Scripts\python.exe`）
+- `${REPO_ROOT:-/app}/.opencode/skills/`：本地（OpenCode，解释器走 `.venv\Scripts\python.exe`）
 - `deploy/skills/`：服务器 / 容器（`python3`）；**线上更新要重建 Docker 镜像**才生效。
 
 改技能须两套镜像同步改——`validate_skills.py` 会抓出「正文漂移」和「镜像不一致」。

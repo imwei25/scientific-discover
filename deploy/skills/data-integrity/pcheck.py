@@ -12,7 +12,7 @@ statcheck 式 p 值一致性自查：从稿件正文里抓统计检验报告
 用法：
   python pcheck.py manuscript.md                 # 扫一个文件
   python pcheck.py --text "t(28)=2.05, p=.02"    # 直接给文本
-  python pcheck.py results.txt --outdir outputs/<会话>/audit
+  python pcheck.py results.txt --outdir audit
 产出（--outdir，默认 outputs）：
   pcheck.md   人读报告（High=判断错 / Medium=数值不符 / 提示=可能单尾）
   pcheck.csv  逐条明细（类型/统计量/df/报告p/重算p/结论）

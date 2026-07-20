@@ -13,7 +13,7 @@
   # 单条：第一个参数是论断，后面跟它引的一个或多个 DOI/PMID
   python ground_claim.py "他汀显著降低卒中复发风险" 10.1056/NEJMoa1615664 PMID:27295427
   # 批量：CSV，两列 claim,ref（ref 为 doi 或 pmid），逐对核
-  python ground_claim.py --input outputs/<会话>/claims.csv
+  python ground_claim.py --input claims.csv
 产出（--outdir，默认 outputs）：
   claim_grounding.md   人读报告（每条论断 → 最匹配原句 + 分数 + 提示）
   claim_grounding.csv  逐条明细

@@ -14,7 +14,7 @@ tools: Read, Write, Edit, Bash, Grep, Glob
 model: inherit
 ---
 
-> **本仓库运行环境（先读）**：Python 由 `render_pdf.sh` 自动解析（优先项目根 `.venv`，再回退 `python3/python/py`——不再写死 `python3`，否则 Windows 上中文检测会失灵）；本技能脚本在 `.opencode/skills/render-pdf-doc/` 下，运行时先 `cd` 到该目录或用全路径；产出写 `outputs/`（有会话专属目录时以它为准、勿写仓库根固定名）。需要 **pandoc + xelatex + ctex**（仓库根 install.ps1 -WithPdf / install.sh --with-pdf 已装；Linux 需 `texlive-lang-chinese`，Windows MiKTeX 首次渲染自动补装 ctex）；先跑 `bash scripts/check_deps.sh` 自检。
+> **本仓库运行环境（先读）**：Python 由 `render_pdf.sh` 自动解析（优先项目根 `.venv`，再回退 `python3/python/py`——不再写死 `python3`，否则 Windows 上中文检测会失灵）；本技能脚本在 `${REPO_ROOT:-/app}/.opencode/skills/render-pdf-doc/` 下，运行时先 `cd` 到该目录或用全路径；产出写 `outputs/`（有会话专属目录时以它为准、勿写仓库根固定名）。需要 **pandoc + xelatex + ctex**（仓库根 install.ps1 -WithPdf / install.sh --with-pdf 已装；Linux 需 `texlive-lang-chinese`，Windows MiKTeX 首次渲染自动补装 ctex）；先跑 `bash scripts/check_deps.sh` 自检。
 >
 > **中文全自动、零参数**：`render_pdf.sh` 扫描稿件，**含汉字时自动走 `ctexart` 文档类**——宋体正文 / 黑体标题、标点避头尾、首行缩进、页眉页码，英文数字用 Times，代码框等宽字体覆盖制表符 `├└│─`（Windows Consolas / macOS Menlo / Linux DejaVu Sans Mono）。含韩文时走原 article 路径（Malgun Gothic / Noto CJK KR / Apple SD Gothic Neo）。**中文稿不必再加 `--cjk-font`**。若 frontmatter 写了 `CJKmainfont` 或命令行传了 `--cjk-font`，脚本会尊重覆盖。
 >
@@ -142,7 +142,7 @@ math operators (− ≤ ≥ ± √ ∪ × ≈ ≠), stats Greek (κ μ σ β), b
 and CJK. Scan the source first so a silent drop is caught before it ships:
 
 ```bash
-# use the project venv python on Windows (python3 may not exist): .venv/Scripts/python.exe
+# use the project venv python on Windows (python3 may not exist): ${REPO_ROOT:-/app}/.venv/bin/python
 python scripts/scan_glyph_coverage.py input.md --strict
 # real cmap check when you have the font file + fonttools:
 python scripts/scan_glyph_coverage.py input.md --font "/path/to/body.otf" --strict
