@@ -92,8 +92,15 @@ since=$(cat "$oom_last" 2>/dev/null); since=${since:-$((now - 300))}
 # 注：脚本是 set -uo pipefail 无 -e，失败不会中止，必须显式判退出码。
 if oom_out=$(docker events --since "$since" --until "$now" \
       --filter type=container --filter event=oom \
-      --format '{{.Actor.Attributes.name}}' 2>/dev/null); then
-  while read -r c; do [ -n "$c" ] && echo "$now $c" >> "$oom_log"; done <<< "$oom_out"
+      --format '{{.Time}} {{.Actor.Attributes.name}}' 2>/dev/null); then
+  # 记【事件真实时间 {{.Time}}】而非扫描时刻 $now（原来最多差 5 分钟）。另外 --since/--until
+  # 在 docker 里都是闭区间，而下一轮的 since 恰是本轮的 now → 恰落在整秒边界上的事件会被
+  # 相邻两轮各读一次，靠「事件秒级时间戳+容器名」整行查重挡掉（同一容器同一秒 OOM 两次
+  # 物理上不会发生：进程组先被杀、容器重启远超 1 秒，去重不会吞掉真实的第二次）。
+  while read -r ts c; do
+    [ -n "$c" ] || continue
+    grep -qxF "$ts $c" "$oom_log" 2>/dev/null || echo "$ts $c" >> "$oom_log"
+  done <<< "$oom_out"
   echo "$now" > "$oom_last"          # 只在成功读到之后推进游标
 else
   echo "!! docker events 读取失败，本轮不推进 OOM 游标（下轮会重扫这段区间）" >&2
