@@ -611,13 +611,20 @@ async function ensureSessionTitle(sid, q) {
 // 退回「一律按残留自愈」的旧行为，正好兜住点了编辑又弃走的会话。
 const pendingReverts = new Map()   // sid -> 暂存时刻 (ms)
 const REVERT_PENDING_TTL = 30 * 60_000
+const revertPendingFresh = (sid) => {
+  const t = pendingReverts.get(sid)
+  return !!t && Date.now() - t < REVERT_PENDING_TTL
+}
 async function clearStaleRevert(sid) {
   if (!sid || jobs.get(sid)?.running) return   // 正在生成 → 可能是合法的进行中状态，别动
-  const staged = pendingReverts.get(sid)
-  if (staged && Date.now() - staged < REVERT_PENDING_TTL) return   // 新鲜的待提交回退 ≠ 残留，别撤
+  if (revertPendingFresh(sid)) return          // 新鲜的待提交回退 ≠ 残留，别撤
   pendingReverts.delete(sid)   // 过期条目顺手摘掉，走下面的残留自愈
   try {
     const s = un(await client.session.get({ path: { id: sid } }))
+    // await 之后必须【重查】登记表：session.get 让出期间，另一请求的 /api/revert 可能恰好
+    // 完成暂存并登记（双开标签页毫秒窗口）。只查入口那一次的话，这里拿着 revert 标记就 unrevert，
+    // 把刚暂存的回退撤了——本函数要防的 bug 从窄窗口原样漏回来（复审抓出的 TOCTOU）。
+    if (revertPendingFresh(sid)) return
     if (s?.revert) { await client.session.unrevert({ path: { id: sid } }); return true }
   } catch { /* 自愈失败不阻断主流程 */ }
   return false
@@ -1076,6 +1083,7 @@ const server = http.createServer(async (req, res) => {
       const delOut = await sessionOut(id), delUp = await sessionUp(id)
       try { await client.session.delete({ path: { id } }) } catch (e) { return send(res, 500, "application/json", JSON.stringify({ ok: false, err: String(e) })) }
       try { fs.rmSync(delUp, { recursive: true, force: true }); fs.rmSync(delOut, { recursive: true, force: true }); dirCache.delete(safeSid(id)) } catch {}   // 删会话即释放其 uploads/outputs 占用的空间
+      pendingReverts.delete(id)   // 已删会话的待提交登记没人再消费，别驻留到进程重启
       return send(res, 200, "application/json", JSON.stringify({ ok: true }))
     }
 
@@ -1094,9 +1102,12 @@ const server = http.createServer(async (req, res) => {
       const msgs = un(await client.session.messages({ path: { id: sid } })) || []
       const target = msgs.filter((m) => m.info?.role === "user")[uindex]   // 按顺序取第 uindex 个用户消息
       if (!target?.info?.id) return send(res, 404, "application/json", JSON.stringify({ ok: false, err: "message not found" }))
+      // 【先登记后 revert】：若反过来（revert 落地后才登记），并发 history 的 clearStaleRevert
+      // 在它自己的 session.get 返回后重查登记表时可能还查不到（revert 已在 opencode 落地、
+      // 这里的 set 还没执行），照样把新回退撤掉。先登记则重查必命中，窗口闭合；revert 失败再摘掉。
+      pendingReverts.set(sid, Date.now())
       try { await client.session.revert({ path: { id: sid }, body: { messageID: target.info.id } }) }
-      catch (e) { return send(res, 500, "application/json", JSON.stringify({ ok: false, err: String(e) })) }
-      pendingReverts.set(sid, Date.now())   // 暂存成功 → 登记为待提交，新鲜期内 history 读取不许把它当残留撤掉
+      catch (e) { pendingReverts.delete(sid); return send(res, 500, "application/json", JSON.stringify({ ok: false, err: String(e) })) }
       return send(res, 200, "application/json", JSON.stringify({ ok: true }))
     }
 

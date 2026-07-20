@@ -95,8 +95,9 @@ if oom_out=$(docker events --since "$since" --until "$now" \
       --format '{{.Time}} {{.Actor.Attributes.name}}' 2>/dev/null); then
   # 记【事件真实时间 {{.Time}}】而非扫描时刻 $now（原来最多差 5 分钟）。另外 --since/--until
   # 在 docker 里都是闭区间，而下一轮的 since 恰是本轮的 now → 恰落在整秒边界上的事件会被
-  # 相邻两轮各读一次，靠「事件秒级时间戳+容器名」整行查重挡掉（同一容器同一秒 OOM 两次
-  # 物理上不会发生：进程组先被杀、容器重启远超 1 秒，去重不会吞掉真实的第二次）。
+  # 相邻两轮各读一次，靠「事件秒级时间戳+容器名」整行查重挡掉。已知取舍：docker 的 oom 事件
+  # 是 cgroup 级通知、内核杀的是组内最大进程而非必然 pid1，同一容器同一秒理论上可收到第二次
+  # 通知并被本去重吞掉——后果只是告警文案里的计数偏低 1，告警本身照发，比边界重复计数便宜。
   while read -r ts c; do
     [ -n "$c" ] || continue
     grep -qxF "$ts $c" "$oom_log" 2>/dev/null || echo "$ts $c" >> "$oom_log"
