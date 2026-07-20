@@ -183,6 +183,15 @@ async function isRunning(container) {
   if (r.code !== 0) { log(`[docker] inspect ${container} 失败：${r.stderr}`); return null } // null=容器不存在
   return r.stdout === "true"
 }
+// 容器真实启动时刻（毫秒）；拿不到返回 0，调用方自行兜底。
+// 用途见空闲巡检：u.lastActive 只由经本代理的流量刷新，被代理之外拉起的容器需要用它兜底，
+// 否则会被误判为"空闲了 manager 的整个运行时长"而当即停掉。
+async function containerStartedAt(container) {
+  const r = await dockerExec(["inspect", "-f", "{{.State.StartedAt}}", container])
+  if (r.code !== 0) return 0
+  const t = Date.parse((r.stdout || "").trim())
+  return Number.isFinite(t) ? t : 0
+}
 const dockerStart = (c) => dockerExec(["start", c])
 const dockerStop  = (c) => dockerExec(["stop", c])
 
@@ -840,13 +849,22 @@ setInterval(async () => {
     if (u.conns > 0 || u.starting) continue            // 有开着的连接（含 SSE 长流）或正在启动 → 绝不停
     if (now - u.lastActive < IDLE_MS) continue
     if (await isRunning(u.container)) {
+      // 【容器自己的启动时间兜底】u.lastActive 只由「经本代理的流量」刷新（见 proxy 里的 conns++），
+      // 而它的初值是 manager 启动的时刻。于是被【本代理之外】拉起的容器——运维手工 docker start、
+      // 测试脚本直连、compose 起的——从一开始就带着一个陈旧时间戳：只要 manager 已运行超过
+      // IDLE_MS，下一次巡检（≤60s）就把它停掉，日志还写"空闲 660s"，而它可能刚活了 11 秒。
+      // 实测见过：14:07:58 启动 → 14:08:09 被停，日志称空闲 660s，正好等于 manager 的运行时长。
+      // 这个误报在排查故障时尤其有害（数字完全不可信）。用容器真实启动时间取较晚者兜底。
+      const startedAt = await containerStartedAt(u.container)
+      const activeAt = Math.max(u.lastActive, startedAt || 0)
+      if (now - activeAt < IDLE_MS) { u.lastActive = activeAt; continue }
       // 没连接 ≠ 没活干：用户关了页面但生成仍在跑（容器网关设计如此）。停机前必须问一句。
       if (await isBusy(u)) {
         u.lastActive = Date.now()                      // 有活在跑 → 视为活跃，重新计时
         log(`[idle] ${u.container} 无连接但仍有生成任务在跑，暂不停机`)
         continue
       }
-      log(`[idle] ${u.container} 空闲 ${Math.round((now - u.lastActive) / 1000)}s，停机`)
+      log(`[idle] ${u.container} 空闲 ${Math.round((now - activeAt) / 1000)}s，停机`)
       await dockerStop(u.container)
     }
   }

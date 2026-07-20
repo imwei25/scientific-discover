@@ -51,7 +51,24 @@ const customProviderCfg = ({ baseURL, apiKey, modelID }) => ({
 // opencode 的 `question` 工具会弹交互式提问卡片；本部署（web 网关）没有应答它的 UI，
 // 模型一旦调用就整轮 error/卡死（实测卡在“确认方向选择”那步）。各技能与 AGENTS.md §六 已要求
 // “一律用编号文本让用户回数字选、别弹卡片”，但模型会无视提示词照调——故在配置层全局禁用，从根上杜绝。
-const enforceOcTools = (oc) => { oc.tools = { ...(oc.tools || {}), question: false }; return oc }
+// 固化两条无论如何都要成立的 opencode 策略。所有写 opencode.json 的路径 + 启动时都会过这里。
+const enforceOcTools = (oc) => {
+  oc.tools = { ...(oc.tools || {}), question: false }
+  // ★ external_directory 必须 allow，否则「上传文件→让 agent 分析」这条最常用的路径 100% 卡死。
+  // 起因是会话工作目录改造：cwd 从 /app 变成了 /app/outputs/<会话id>/，于是用户上传所在的
+  // /app/uploads/<会话id>/ 对 opencode 而言成了【外部目录】，默认策略是 ask →
+  // 无头网关里没有任何人能应答这个授权询问 → read 工具永久停在 running。
+  // 实测后果（一次上传即触发，且不可自救）：
+  //   ① 该轮永不结束，前端一直转圈；② /api/chat/abort 返回 aborted:false，终止按钮救不回来；
+  //   ③ 该会话被永久锁死（再发消息只得到"上一轮仍在进行中"）；④ busy 恒真 → manager 永不回收该容器，
+  //   白占内存与 WARM_CAP 槽位，且 /api/model/pick 恒 409，用户连换模型自救都做不到。
+  //   只有 docker restart 能解，而普通用户没这个能力。
+  // 为什么给 allow 而不是按目录细分：容器是单用户的，agent 本来就有 shell、与网关同 uid，
+  // 它能 cat 的东西不因这个开关而增减 —— 这不是安全边界，只是交互式场景下的确认提示，
+  // 在无头服务里唯一的效果就是把请求挂死。跨用户隔离靠的是「一人一容器」，不是它。
+  oc.permission = { ...(oc.permission || {}), external_directory: "allow" }
+  return oc
+}
 // 把自定义 provider 合并进 ROOT/opencode.json（保留其它配置），opencode 启动时读取它
 const writeOcProvider = (cfg) => {
   let oc = {}
