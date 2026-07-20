@@ -393,9 +393,21 @@ const execFileAsync = promisify(execFile)
 // 每次用独立 UserInstallation profile，避免多用户并发时 profile 锁冲突。
 // 返回 profile 目录供调用方【用完删掉】：LibreOffice 每次会在里面铺一整套配置树（数 MB），
 // 不删就随每次预览/预热在容器可写层里越积越多（超时被 kill 的那次同样会留下）。
-const sofficeJob = (src, outDir) => {
-  const dir = path.join(os.tmpdir(), "lo-" + crypto.randomBytes(6).toString("hex"))
-  return { dir, args: ["--headless", "--norestore", "--convert-to", "pdf", "--outdir", outDir, src, "-env:UserInstallation=file:///" + dir.replace(/\\/g, "/")] }
+// outDir 用【每次唯一】的临时子目录，而不是共享的 cacheDir：
+// soffice 的输出名由【源文件基名】决定（a.pptx → a.pdf），直接写进 cacheDir 的话，
+// "report.pptx" 与 "audit/report.pptx" 会争同一个 .preview/report.pdf。
+// 而串行闸只包住 execFileAsync，改名发生在闸【释放之后】，且 /api/preview 是直接调用、
+// 不进 _warmQueue —— 于是存在这样的交错：A 转完退出→闸放行→B 启动并开始写同一个中间文件
+// →A 才执行改名，把 B 写了一半的 PDF 认领成自己的缓存（用户看到损坏文件），
+// 随后 B 找不到自己的产物 → 报 "no pdf produced"。
+// 把中间产物隔离到唯一目录后，这条竞态从根上消失，与闸的释放时机无关。
+// 放在 cacheDir 之下（而非 os.tmpdir()）是为了保证与 out 同一文件系统，rename 才是原子的、
+// 也不会踩 EXDEV。prunePreviewCache 只统计 isFile()，这个临时目录不会被它当成缓存。
+const sofficeJob = (src, cacheDir) => {
+  const profile = path.join(os.tmpdir(), "lo-" + crypto.randomBytes(6).toString("hex"))
+  const outDir = path.join(cacheDir, ".conv-" + crypto.randomBytes(6).toString("hex"))
+  fs.mkdirSync(outDir, { recursive: true })
+  return { dir: profile, outDir, args: ["--headless", "--norestore", "--convert-to", "pdf", "--outdir", outDir, src, "-env:UserInstallation=file:///" + profile.replace(/\\/g, "/")] }
 }
 // ★ 全局串行闸：同一时刻只允许【一个】LibreOffice 在跑。
 // 单个 soffice headless 转 pptx 峰值 300–600MB，而容器 mem_limit 只有 1400–1750m；
@@ -449,7 +461,10 @@ async function ensurePreviewCache(dir, name) {
   // 也不能简单把分隔符替换成 "__"：那是【不可逆映射】—— 顶层文件 "pdfs__a.docx" 与子目录文件
   // "pdfs/a.docx" 会压成同一个缓存名，而 fresh() 只比 mtime，于是先转好的那个会被判成后一个的
   // "新鲜缓存" → 预览 B 时看到的是 A 的内容，且没有任何提示。改为带路径哈希，保证一一对应。
-  const flat = crypto.createHash("sha1").update(name).digest("hex").slice(0, 12) + "__" + path.basename(name)
+  // 哈希取【规范化后的相对路径】而非原始 name：否则 "pdfs/a.docx"、"./pdfs/a.docx"、"pdfs//a.docx"
+  // 指向同一个文件却生成三份内容相同的缓存，白转三次、占三份空间。
+  const relKey = path.relative(path.resolve(dir), src).split(path.sep).join("/")
+  const flat = crypto.createHash("sha1").update(relKey).digest("hex").slice(0, 12) + "__" + path.basename(src)
   const srcMtime = fs.statSync(src).mtimeMs
   const fresh = (out) => fs.existsSync(out) && fs.statSync(out).mtimeMs >= srcMtime
 
@@ -474,10 +489,13 @@ async function ensurePreviewCache(dir, name) {
       try { await withSoffice(() => execFileAsync(soffice(), job.args, { timeout: 90_000, killSignal: "SIGKILL" })) }   // 排队，绝不并发起两个 LO
       catch (err) { const e = new Error(String(err).slice(0, 200)); e.code = "office-fail"; throw e }
       finally { try { fs.rmSync(job.dir, { recursive: true, force: true }) } catch {} }   // 成功/失败/超时都要清掉临时 profile
-      // soffice 按【源文件基名】决定输出名（a.pptx → a.pdf），与我们压平后的缓存名（pdfs__a.pdf）不同。
-      // 源文件在子目录里时两者必然对不上，不改名就会误报 "no pdf produced"。
-      const produced = path.join(cacheDir, path.basename(src).replace(/\.[^.]+$/, "") + ".pdf")
-      if (produced !== out && fs.existsSync(produced)) { try { fs.renameSync(produced, out) } catch {} }
+      // soffice 按【源文件基名】决定输出名（a.pptx → a.pdf），而我们的缓存名是带哈希的，
+      // 两者必然不同，所以要从这次专属的中间目录里把它搬到 out。
+      // 中间目录唯一 → 不同请求各写各的，与串行闸的释放时机无关（见 sofficeJob 的说明）。
+      try {
+        const produced = path.join(job.outDir, path.basename(src).replace(/\.[^.]+$/, "") + ".pdf")
+        if (fs.existsSync(produced)) fs.renameSync(produced, out)
+      } finally { try { fs.rmSync(job.outDir, { recursive: true, force: true }) } catch {} }
       if (!fs.existsSync(out)) { const e = new Error("no pdf produced"); e.code = "no-pdf"; throw e }
     }
     prunePreviewCache(cacheDir, out)

@@ -69,8 +69,8 @@ def _resolve_out_dir(explicit=None):
     if explicit:
         _p = _Path(explicit)
         # 【拦截已知的错误传法】cwd 已经是会话产物目录，却又传了以 outputs/ 开头的相对路径：
-        # 那会写成 outputs/<会话id>/outputs/xxx —— 网关的 dirState 只列顶层文件，
-        # 这份产物在界面“产出”侧栏里【永远看不见】，用户会以为跑成功了却什么都没拿到。
+        # 那会写成 outputs/<会话id>/outputs/xxx —— 侧栏只递归一层，这是两层，
+        # 这份产物在界面“产出”侧栏里【看不见】，用户会以为跑成功了却什么都没拿到。
         # 这是旧文档教出来的写法，宁可响亮报错也不要静默产出不可见的文件。
         if _in_session and not _p.is_absolute() and _p.parts and _p.parts[0] == 'outputs':
             _m = [
@@ -126,7 +126,7 @@ def _resolve_out_file(explicit=None, default_name="output"):
     if explicit:
         _p = _Path(explicit)
         # 同 _resolve_out_dir：cwd 已是会话产物目录时再拼 outputs/ 前缀，产物会落到
-        # outputs/<会话id>/outputs/... —— 界面“产出”侧栏只列顶层文件，用户永远看不见。
+        # outputs/<会话id>/outputs/... —— 侧栏只递归一层，这是两层，用户看不见。
         if (_Path.cwd().parent.name == 'outputs' and not _p.is_absolute()
                 and _p.parts and _p.parts[0] == 'outputs'):
             _m = [
