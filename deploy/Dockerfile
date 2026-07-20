@@ -126,22 +126,50 @@ RUN rm -rf /root/.cache/matplotlib \
     && python3 /tmp/_check.py \
     && rm -f /tmp/_check.py /tmp/_selfcheck.png
 
-# Windows 中文字体名 → 容器真实字体的 fontconfig 别名（为什么见 conf 文件头注释）。
+# Windows 中文字体名 → 容器真实字体的 fontconfig 别名（为什么、以及为什么目标不是
+# Noto CJK SC——本镜像 LibreOffice 对多 face TTC 有索引缺陷，见 conf 文件头注释，实测锚定）。
 # 简述：ppt-master 产的 pptx 按设计写 Windows 字体名（Microsoft YaHei 等，面向用户本机 Office），
-# 容器里没有这些字体，LibreOffice 转预览时静默兜底到 Noto CJK 的【JP】变体 → 简体中文
-# 用日文字形渲染（实测）。别名把黑体系→Noto Sans CJK SC、宋体系→Noto Serif CJK SC、
-# 楷体→AR PL KaitiM GB，所有走 fontconfig 的渲染（pptx/docx 预览、xelatex）全链路受益。
-# fc-match 自检：别名失效（字体包变动 / conf 没被 fontconfig 读到）要在构建期炸，
-# 别产出一个"预览悄悄用日文字形"的镜像——这问题用户端只表现为个别汉字长得不对，极难发现。
+# 容器里没有这些字体，LibreOffice 转预览时静默兜底到 Noto CJK TTC 的【JP】face → 简体中文
+# 用日文字形渲染（实测）。别名把黑体系→文泉驿微米黑、宋体系→AR PL 报宋、楷体→AR PL 中楷
+# （全部单文件字体，绕开 TTC 缺陷），pptx/docx 预览与 xelatex 全链路受益。
+# 双自检：fc-match 查别名解析；再跑一次【真实 soffice 渲染】断言 PDF 内嵌字体——
+# fc-match 全对但渲染仍出 JP 正是本坑的形态（fontconfig 层救不了 LibreOffice 的 face 选择），
+# 只有渲染闸能防它回归。失效即构建失败，别产出"预览悄悄用日文字形"的镜像。
 # 位置刻意放在 pip/npm 大层【之后】：字体别名只影响 fontconfig 渲染，放前面会白白作废
-# opencode + 科学栈的构建缓存（实测那几层要重装十几分钟还赌网络）。
+# opencode + 科学栈的构建缓存（实测那几层要重装十几分钟还赌网络）；且渲染自检要用到
+# pip 层装好的 python-pptx。
 COPY deploy/fontconfig-cjk-aliases.conf /etc/fonts/conf.d/65-windows-cjk-aliases.conf
 RUN fc-cache -f \
-    && fc-match "Microsoft YaHei" | grep -F 'Noto Sans CJK SC' \
-    && fc-match "SimHei" | grep -F 'Noto Sans CJK SC' \
-    && fc-match "SimSun" | grep -F 'Noto Serif CJK SC' \
+    && fc-match "Microsoft YaHei" | grep -F 'WenQuanYi Micro Hei' \
+    && fc-match "SimHei" | grep -F 'WenQuanYi Micro Hei' \
+    && fc-match "SimSun" | grep -F 'AR PL SungtiL GB' \
     && fc-match "KaiTi" | grep -F 'AR PL KaitiM GB' \
-    && echo "CJK 字体别名自检通过"
+    && printf '%s\n' \
+      "import re, zlib, subprocess, sys" \
+      "from pptx import Presentation" \
+      "from pptx.util import Inches, Pt" \
+      "from pptx.oxml.ns import qn" \
+      "p = Presentation(); s = p.slides.add_slide(p.slide_layouts[6])" \
+      "tb = s.shapes.add_textbox(Inches(1), Inches(1), Inches(8), Inches(2))" \
+      "r = tb.text_frame.paragraphs[0].add_run(); r.text = '骨直与关简体字形'" \
+      "r.font.name = 'Microsoft YaHei'; r.font.size = Pt(40)" \
+      "rPr = r._r.get_or_add_rPr()" \
+      "rPr.append(rPr.makeelement(qn('a:ea'), {'typeface': 'Microsoft YaHei'}))" \
+      "p.save('/tmp/_font_gate.pptx')" \
+      "subprocess.run(['soffice','--headless','--convert-to','pdf','--outdir','/tmp','/tmp/_font_gate.pptx'], check=True, capture_output=True)" \
+      "data = open('/tmp/_font_gate.pdf','rb').read()" \
+      "names = set(re.findall(rb'/BaseFont\\s*/([A-Za-z0-9+#_-]+)', data))" \
+      "for m in re.finditer(rb'stream\\r?\\n(.*?)endstream', data, re.S):" \
+      "    try: names |= set(re.findall(rb'/BaseFont\\s*/([A-Za-z0-9+#_-]+)', zlib.decompress(m.group(1))))" \
+      "    except Exception: pass" \
+      "names = sorted(n.decode() for n in names)" \
+      "print('渲染自检内嵌字体:', names)" \
+      "assert not any('CJKjp' in n or 'CJKkr' in n or 'CJKtc' in n for n in names), ('中文渲染落到了非 SC 字形', names)" \
+      "assert any('WenQuanYi' in n for n in names), ('雅黑别名未生效', names)" \
+      > /tmp/_font_gate.py \
+    && python3 /tmp/_font_gate.py \
+    && rm -f /tmp/_font_gate.py /tmp/_font_gate.pptx /tmp/_font_gate.pdf \
+    && echo "CJK 字体别名 + 真实渲染 双自检通过"
 
 # 网关依赖（用 npm ci + lockfile：package.json 里 SDK 是 ^1.17.14 这种浮动版本，
 # 而 opencode CLI 被钉死在 1.17.14；不锁 lockfile 的话每次重建都可能装到不同的 SDK 小版本，
