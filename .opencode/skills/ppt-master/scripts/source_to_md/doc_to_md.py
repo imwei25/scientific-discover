@@ -1261,7 +1261,24 @@ def _convert_ipynb(input_file: Path, out_file: Path) -> str:
         from nbconvert import MarkdownExporter
         from nbconvert.writers import FilesWriter
     except ImportError:
-        print("[ERROR] nbconvert not installed. Run: pip install nbconvert")
+        # 本部署【刻意不装】nbconvert（它会拖进整个 jupyter 生态、十几个不钉版本的传递依赖，
+        # 镜像还要涨几百 MB —— 见 deploy/requirements.txt 的说明）。那份说明写的替代方案是
+        # 「镜像里已有 pandoc，pandoc x.ipynb -o x.md 同样能转」，但代码里 .ipynb 在
+        # NATIVE_FORMATS 中，压根走不到下面的 pandoc 回退分支 —— 于是这条替代方案从未被接上，
+        # 用户上传 notebook 只会看到"请 pip install nbconvert"，agent 多半就真去装了。
+        # 这里直接接上 pandoc。
+        import shutil as _shutil
+        import subprocess as _subprocess
+        if _shutil.which("pandoc"):
+            print("[INFO] nbconvert 未安装，改用 pandoc 转换 .ipynb")
+            try:
+                _subprocess.run(["pandoc", str(input_file), "-o", str(out_file)],
+                                check=True, capture_output=True)
+                return out_file.read_text(encoding="utf-8", errors="replace")
+            except Exception as exc:                       # noqa: BLE001
+                print(f"[ERROR] pandoc 转换 .ipynb 失败：{exc}")
+                return ""
+        print("[ERROR] .ipynb 转换需要 nbconvert 或 pandoc，两者都不可用。")
         return ""
 
     # Pre-process cell-level markdown attachments: nbconvert leaves

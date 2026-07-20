@@ -380,11 +380,17 @@ const withSoffice = (fn) => {
 // 否则「配额没满、卷先写爆」：活跃会话里每个新文件名都会生成一份缓存 PDF（数 MB），只在删会话时才整目录清。
 // 每次写完缓存后按 mtime 做一次 LRU 裁剪，超出上限就从最旧的开始删。
 const PREVIEW_CACHE_MAX = Number(process.env.PREVIEW_CACHE_MAX_MB || 200) * 1024 * 1024
-function prunePreviewCache(cacheDir) {
+// keep：本次刚生成、马上就要读的那个文件，必须排除在裁剪之外。
+// 否则当单个产物本身就大于 PREVIEW_CACHE_MAX（一个大 pptx 转出的 PDF 达到这个量级并不罕见）时，
+// 循环会一路删到把刚写好的 out 也删掉，而 ensurePreviewCache 照常 return { out } →
+// 紧接着的 createReadStream 拿到 ENOENT。用户点预览，看到的是"刚生成就消失"的诡异失败。
+function prunePreviewCache(cacheDir, keep) {
   try {
+    const keepReal = keep ? path.resolve(keep) : null
     const items = fs.readdirSync(cacheDir, { withFileTypes: true })
       .filter((e) => e.isFile())
       .map((e) => { const p = path.join(cacheDir, e.name); const st = fs.statSync(p); return { p, size: st.size, mtime: st.mtimeMs } })
+      .filter((x) => !keepReal || path.resolve(x.p) !== keepReal)
     let total = items.reduce((s, x) => s + x.size, 0)
     if (total <= PREVIEW_CACHE_MAX) return
     for (const it of items.sort((a, b) => a.mtime - b.mtime)) {   // 最旧的先删
@@ -412,7 +418,7 @@ async function ensurePreviewCache(dir, name) {
       try { await execFileAsync(PYEXE(), ["-X", "utf8", "-c", MAMMOTH_PY, src, out], { timeout: 60_000 }) }
       catch (err) { const e = new Error(String(err).slice(0, 200)); e.code = "docx-fail"; throw e }
     }
-    prunePreviewCache(cacheDir)
+    prunePreviewCache(cacheDir, out)
     return { out, ctype: "text/html; charset=utf-8" }
   }
   if ([".pptx", ".ppt", ".odp", ".doc", ".odt"].includes(ext)) {
@@ -420,12 +426,16 @@ async function ensurePreviewCache(dir, name) {
     if (!fresh(out)) {
       if (!soffice()) { const e = new Error("no LibreOffice"); e.code = "no-soffice"; throw e }
       const job = sofficeJob(src, cacheDir)
-      try { await withSoffice(() => execFileAsync(soffice(), job.args, { timeout: 90_000 })) }   // 排队，绝不并发起两个 LO
+      // killSignal: SIGKILL —— 默认超时发的是 SIGTERM，而 soffice headless 在解析大 pptx 时
+      // 未必立刻响应。串行闸是在 promise settle 那一刻放行下一个的：若第一个只是"超时被 SIGTERM
+      // 但还没死"，第二个就会启动，两个 300–600MB 的进程同时存在于 1400m 的容器里 ——
+      // 正是这道闸要防的整容器 OOM-kill。SIGKILL 保证 settle 时进程真的没了。
+      try { await withSoffice(() => execFileAsync(soffice(), job.args, { timeout: 90_000, killSignal: "SIGKILL" })) }   // 排队，绝不并发起两个 LO
       catch (err) { const e = new Error(String(err).slice(0, 200)); e.code = "office-fail"; throw e }
       finally { try { fs.rmSync(job.dir, { recursive: true, force: true }) } catch {} }   // 成功/失败/超时都要清掉临时 profile
       if (!fs.existsSync(out)) { const e = new Error("no pdf produced"); e.code = "no-pdf"; throw e }
     }
-    prunePreviewCache(cacheDir)
+    prunePreviewCache(cacheDir, out)
     return { out, ctype: "application/pdf" }
   }
   return null   // 该类型不支持文档转换预览（md/pdf/csv/txt/html 等在前端直接渲染，不走这里）
@@ -602,7 +612,21 @@ const server = http.createServer(async (req, res) => {
       const chunks = []; for await (const c of req) chunks.push(c)
       let user = "", pw = ""
       try { const b = JSON.parse(Buffer.concat(chunks).toString() || "{}"); user = (b.username || "").trim(); pw = (b.password || "").trim() } catch {}
-      if (user !== LAN_USER || pw !== effectivePassword()) return send(res, 401, "application/json", JSON.stringify({ ok: false, err: "账号或密码错误" }))
+      // 与 /api/password 共用同一把锁。此前只给改密加了限流，而这里【完全没有】——
+      // 而 pwGuard 的理由是"能打到容器 3000 端口的人可以盲猜密码"，那个前提对本接口同样成立，
+      // 且这里猜中直接拿到合法 cookie，比改密更直接。只给改密限流等于锁了后门开着前门。
+      // 共用一把锁也让两条路径的失败次数合并计数，攻击者无法靠换接口重置计数。
+      if (Date.now() < pwGuard.lockedUntil) {
+        const mins = Math.ceil((pwGuard.lockedUntil - Date.now()) / 60000)
+        return send(res, 429, "application/json", JSON.stringify({ ok: false, err: `尝试次数过多，请 ${mins} 分钟后再试` }))
+      }
+      if (user !== LAN_USER || pw !== effectivePassword()) {
+        pwGuard.fails++
+        if (pwGuard.fails >= PW_MAX_FAILS) { pwGuard.lockedUntil = Date.now() + PW_LOCK_MS; pwGuard.fails = 0 }
+        await new Promise((r) => setTimeout(r, 600))
+        return send(res, 401, "application/json", JSON.stringify({ ok: false, err: "账号或密码错误" }))
+      }
+      pwGuard.fails = 0
       res.writeHead(200, { "Content-Type": "application/json", "Set-Cookie": `lan_auth=${makeAuthCookie()}; Path=${BASE_PATH}/; HttpOnly; SameSite=Lax; Max-Age=${AUTH_TTL_MS / 1000}` })
       return res.end(JSON.stringify({ ok: true }))
     }
@@ -674,7 +698,14 @@ const server = http.createServer(async (req, res) => {
       // 余量始终算上 inflightUploadBytes（其它在传的上传），并发上传彼此可见、不会合谋超限。
       const lim = storageLimitBytes()
       const overMsg = () => JSON.stringify({ ok: false, err: `存储空间不足：已用 ${(storageUsed() / 1048576).toFixed(0)}MB / 上限 ${STORAGE_LIMIT_MB}MB。请删除旧会话或文件后再传。` })
-      const wouldExceed = (extra) => lim > 0 && storageUsed() + inflightUploadBytes + extra > lim
+      // storageUsed() 是【同步递归遍历】uploads+outputs 两棵树。chunked 上传（无 Content-Length，
+      // fetch 带 ReadableStream body 就是这种）原本每收一个 chunk 就调一次 wouldExceed →
+      // 传 100MB 约 1500+ 次全盘遍历，一个有几千产物的卷单次就是几十毫秒 → 事件循环被反复钉死，
+      // 同容器的 SSE 直播卡顿、/api/busy 探测超时（manager 会据此误判该容器空闲而回收它）。
+      // 故给一个 1 秒 TTL 的缓存：判超限只需要"够不够准"，不需要每字节都精确。
+      let _suCache = 0, _suAt = 0
+      const storageUsedCached = () => { const t = Date.now(); if (t - _suAt > 1000) { _suCache = storageUsed(); _suAt = t } return _suCache }
+      const wouldExceed = (extra) => lim > 0 && storageUsedCached() + inflightUploadBytes + extra > lim
       const declared = Number(req.headers["content-length"])
       const hasLen = Number.isFinite(declared) && declared >= 0
       // 有 Content-Length（浏览器上传都有）：读 body 前就判，超限直接回干净 413（不会在半程掐断连接让浏览器报“Failed to fetch”）；
@@ -1163,7 +1194,12 @@ async function gracefulExit(sig) {
   shuttingDown = true
   exitLog(`[exit] 收到 ${sig}，开始优雅退出（在跑的轮：${runningRounds()}）`)
   try { server.close() } catch {}   // 停止接受新连接；已建立的连接自然收尾
-  // 给在跑的轮一点收尾时间，但设硬上限——宽限期本身只有 10 秒，超时就没意义了
+  // 主动 abort 在跑的轮：job.abort() 会走 finish() → addCost 把本轮已花的钱记进 quota.json。
+  // 不 abort 只是干等的话，6 秒后直接 process.exit，本轮成本永远入不了账 —— 而 manager
+  // 按需停容器/腾位很频繁，等于每次停机时正在跑的那轮【全部免费】，且 runningCost 的实时占位
+  // 随进程消失，quota.json 里看不出任何痕迹，额度就不可信了。
+  for (const job of [...jobs.values()]) { if (job.running) { try { await job.abort() } catch {} } }
+  // 给收尾留一点时间，但设硬上限——宽限期本身只有 10 秒，超时就没意义了
   const deadline = Date.now() + 6000
   while (runningRounds() > 0 && Date.now() < deadline) await sleep(200)
   if (runningRounds() > 0) exitLog(`[exit] 仍有 ${runningRounds()} 轮未收尾，不再等待`)
