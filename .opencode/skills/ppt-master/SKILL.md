@@ -21,6 +21,16 @@ description: >
 >
 > 注：本文档里 `<project_name>` 等尖括号写法都是**占位符**，实际执行前替换成真实值
 > （直接照抄进 shell 会因 `<` `>` 是重定向符而报错）。
+>
+> **中文字体（本容器的现实，读一遍免踩坑）**：容器里【没有】`Microsoft YaHei` / `SimHei` /
+> `SimSun` / `KaiTi` 等 Windows 字体文件，但**照常按下方 references（strategist §g 等）的
+> Windows 家族名选字体即可**——镜像内置 fontconfig 别名（`/etc/fonts/conf.d/65-windows-cjk-aliases.conf`）
+> 把这些名字解析到容器真实字体（黑体系→`Noto Sans CJK SC`、宋体/仿宋系→`Noto Serif CJK SC`、
+> 楷体→`AR PL KaitiM GB`），LibreOffice 预览渲染的是正确的简体字形；pptx 里记录的仍是
+> Windows 字体名，用户下载后在自己机器上打开效果最佳。因此：**①** 不要因为 `fc-list`
+> 查不到 YaHei 就换用别的字体名或停下报错；**②** **禁止在容器里现装字体**（`apt install` /
+> 下载 ttf 塞 `~/.fonts`）——装进容器可写层，重建容器即消失，还会挤占共享宿主磁盘；
+> 若确实缺某个字形，如实告知用户该字体不在预装清单、请平台管理员改镜像。
 
 # PPT Master Skill
 

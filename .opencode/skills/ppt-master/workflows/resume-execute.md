@@ -14,8 +14,8 @@ The user opens a new chat and gives a phrase that names a project path and signa
 
 | Pattern | Example |
 |---|---|
-| "继续生成 projects/<project_name>" | "继续生成 projects/ppt169_joe_hisaishi" |
-| "resume execution projects/<project_name>" | "resume execution projects/ppt169_joe_hisaishi" |
+| "继续生成 <project_name>" | "继续生成 ppt169_joe_hisaishi" |
+| "resume execution <project_name>" | "resume execution ppt169_joe_hisaishi" |
 | Project path + any "继续 / 恢复 / 继续做 / 接着做" semantic | "把 projects/ppt169_joe_hisaishi 继续做完" |
 
 **Prerequisite**: the planning session must have completed in the named project. Verified by file presence in Step 1; do NOT auto-trigger planning on missing state.

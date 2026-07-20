@@ -9,6 +9,8 @@ author: Community contribution (nature-skills); repo-adapted backend/default pol
 > **本仓库运行环境（先读）**：Python 用 `${REPO_ROOT:-/app}/.venv/bin/python`（项目根 `.venv`；没有先跑 `env-setup` 技能）；本技能脚本在 `${REPO_ROOT:-/app}/.opencode/skills/nature-figure/` 下，运行时先 `cd` 到该目录或用全路径；产出写 `outputs/`（有会话专属目录时以它为准、勿写仓库根固定名）。
 >
 > **本仓库后端策略（覆盖下方 vendored 正文的"必须问一次 Python or R"）**：默认直接用 **Python 后端**（matplotlib/seaborn 已装，R 后端未装）。**不要**为了选后端而停下来问用户——除非用户在请求里明确说要 R。因此下方 "Resolve the backend — a blocking gate" 一节在本仓库简化为：无明确 R 要求 → 直接 Python，跳过提问。默认不使用 OpenRouter 图像路线（需自备 key）。以下为上游技能原文（vendored，方法论未改）。
+>
+> **R 未装，且【禁止在容器里现装】**：不要执行 `install.packages()`、`apt install r-base`、conda 装 R 或任何等效操作——装进的是容器可写层，**每次上线重建容器就全部消失**，只会制造"上周还能跑、今天又不行"的幻觉，还会挤占共享宿主的内存与磁盘。用户明确要 R 时按优先级处理：**①** 用已装的 Python 栈复刻同等图形并说明等价性；**②** 把写好的 R 脚本作为产物交付（含 `install.packages()` 注释），由用户在自己机器上运行；**③** 如用户坚持容器内直接跑 R，如实告知本部署不含 R、需平台管理员改镜像。`r-workflow.md` 里"may provide install.packages() commands"在本仓库理解为【写进交付脚本的注释】，不是在容器里执行。
 
 # Nature Figure Making — Router
 

@@ -113,7 +113,7 @@ Output a checkpoint, then continue with the main pipeline. The artifacts feed di
 - [x] Images: `projects/<topic_slug>/` (N files)
 - [ ] **Next**: SKILL.md Step 2 →
   `project_manager.py init <project_name> --format <format>`
-  `project_manager.py import-sources projects/<project_name> projects/<topic_slug>.md projects/<topic_slug>/*.* --move`
+  `project_manager.py import-sources <project_path> <project_path>/../<topic_slug>.md <project_path>/../<topic_slug>/*.* --move`（`<project_path>` 见 SKILL.md 顶部约定，位于当前工作目录（本会话产物目录）下）
 ```
 
 `<project_name>` is the user's chosen project identifier (typically `<format>_<topic_slug>`, e.g. `ppt169_joe_hisaishi`); `--move` removes the research artifacts from `projects/<topic_slug>` after they are imported.

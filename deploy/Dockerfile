@@ -43,6 +43,21 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && fc-cache -f \
     && rm -rf /var/lib/apt/lists/*
 
+# Windows 中文字体名 → 容器真实字体的 fontconfig 别名（为什么见 conf 文件头注释）。
+# 简述：ppt-master 产的 pptx 按设计写 Windows 字体名（Microsoft YaHei 等，面向用户本机 Office），
+# 容器里没有这些字体，LibreOffice 转预览时静默兜底到 Noto CJK 的【JP】变体 → 简体中文
+# 用日文字形渲染（实测）。别名把黑体系→Noto Sans CJK SC、宋体系→Noto Serif CJK SC、
+# 楷体→AR PL KaitiM GB，所有走 fontconfig 的渲染（pptx/docx 预览、xelatex）全链路受益。
+# fc-match 自检：别名失效（字体包变动 / conf 没被 fontconfig 读到）要在构建期炸，
+# 别产出一个"预览悄悄用日文字形"的镜像——这问题用户端只表现为个别汉字长得不对，极难发现。
+COPY deploy/fontconfig-cjk-aliases.conf /etc/fonts/conf.d/65-windows-cjk-aliases.conf
+RUN fc-cache -f \
+    && fc-match "Microsoft YaHei" | grep -F 'Noto Sans CJK SC' \
+    && fc-match "SimHei" | grep -F 'Noto Sans CJK SC' \
+    && fc-match "SimSun" | grep -F 'Noto Serif CJK SC' \
+    && fc-match "KaiTi" | grep -F 'AR PL KaitiM GB' \
+    && echo "CJK 字体别名自检通过"
+
 # OpenCode（固定版本，避免自动升级带来的意外）
 RUN npm install -g opencode-ai@1.17.14
 
