@@ -4,6 +4,25 @@ description: Per-page rubric-based visual self-review via parallel subagents. Ru
 
 # Visual Review Workflow
 
+> 🛑 **本部署（Web 容器）覆盖规则 —— 本工作流不可用，不要执行。**
+> 它依赖 `visual_review.py` 把每页渲成 PNG，而该脚本需要两样本部署都没装的东西：
+> ① **playwright + chromium**（唯一可行的渲染后端 —— 轻量的 cairosvg 被本工作流下方
+> 「Why playwright, not cairosvg」一节明确否决，理由是 CJK 渲染成豆腐块；实测装上
+> 需 **+1.00 GB** 镜像体积）；② **flask**（`live-preview` 服务，本部署已整体停用，
+> 因其绑定容器内 5050 而容器只发布 3000 端口）。
+>
+> 因此，当用户要求"跑一下视觉自检 / 视觉回看 / visual review"时：
+> - **不要**尝试启动 live-preview 服务，**不要**执行 `visual_review.py`，**不要**排查依赖；
+> - **如实告知用户**：本环境未启用逐页视觉自检（需额外约 1 GB 的浏览器渲染组件），
+>   不要谎称已自检或含糊带过；
+> - **替代做法**：直接精读 `svg_output/` 下的 SVG 源码，按本工作流下方的 rubric
+>   做**基于源码**的检查（坐标越界、文本溢出容器、字号与 `spec_lock.md` 不符、
+>   元素重叠等在源码层面本就可判），并引导用户下载 `.pptx` 自行过目。
+>   这能覆盖 rubric 的大部分条目，只是无法捕捉真正需要"看见像素"才发现的问题
+>   （如字体缺字回退、渐变/滤镜渲染异常）——这类局限要向用户讲明。
+>
+> 若将来要启用：见 `deploy/requirements.txt` 中「刻意不装 flask / playwright / chromium」一节。
+
 > Standalone post-generation step. Goal: reduce human iteration by letting AI subagents visually self-check each rendered slide against a fixed rubric and apply atomic position/spacing fixes.
 >
 > Reads `<project>/svg_output/<page>.svg` and a pre-rendered PNG of each slide, then either applies a fix or flags `needs_human`. **Never touches** brand decisions, layout structure, or other files.

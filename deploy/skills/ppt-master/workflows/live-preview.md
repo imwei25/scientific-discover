@@ -4,6 +4,23 @@ description: Start the browser SVG editor when it is not running, and apply subm
 
 # Live Preview Workflow
 
+> 🛑 **本部署（Web 容器）覆盖规则 —— 本工作流整体停用，不要执行。**
+> 本工作流的全部价值在于"让用户在浏览器里点开编辑器改稿"，而这在本部署里做不到：
+> 编辑器绑定的是**容器内**的 `127.0.0.1:5050`，容器只对外发布 3000 端口，用户浏览器里的
+> `localhost:5050` 指向的是用户自己的电脑。因此：
+> - **不要**因为用户说"想看看效果 / 想改某处"就启动本工作流的 Step 1；
+> - **不要**向用户播报任何 `localhost:5050` 地址或"实时预览已就绪"之类的话——那是个永远打不开的链接；
+> - Step 2「应用注解」同样失效：用户无法在页面上产生注解。
+>
+> **替代做法**：用户想看效果 → 引导其在界面"产出"侧栏下载 `.pptx`；用户想改 → 让其在**对话里**
+> 直接描述（"第 3 页标题改成 X"），AI 直接编辑 `svg_output/` 下对应 SVG 后重新导出。
+> 二者覆盖了本工作流的实际用途，只是把交互从网页搬回聊天。
+>
+> （注：SKILL.md Step 6 的"Live Preview Auto-Startup"同样已停用 —— 那里也不再启动
+> `svg_editor/server.py`。唯一还能用到该服务的 `visual_review.py` 另需 playwright + chromium
+> （实测 +1.00 GB 镜像体积），本部署未安装，故整条链路一并停用。本部署也未装 flask，
+> 上面那条命令即使被执行也只会 ModuleNotFoundError —— 但那是兜底，不是依据。）
+
 > **Purpose**: (1) start/reopen the browser SVG editor when no preview service is currently running, and (2) apply user-submitted annotations after Step 7 export completes.
 >
 > **Not in scope**: Executor's mandatory auto-startup — that lives in [`SKILL.md`](../SKILL.md) Step 6. Do not re-launch a preview that is already running.

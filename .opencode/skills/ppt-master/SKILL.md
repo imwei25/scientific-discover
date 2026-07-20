@@ -7,6 +7,21 @@ description: >
   "生成PPT", "做PPT", "制作演示文稿", or mentions "ppt-master".
 ---
 
+> **`<project_path>` 取在哪里（本部署的硬约定）**：**当前工作目录就是本会话的产物目录**
+> （网关建会话时已把 opencode 的 session.directory 指到那里），所以本文档下面所有命令里的
+> `<project_path>`，一律取**当前目录下的 `<项目名>/`**——直接用相对路径，别再拼任何 `outputs/…` 前缀。
+> 于是工程目录、`sources/`、`images/`、`templates/`、导出的 .pptx 全都落在会话产物目录下，
+> 既能出现在界面的"产出"侧栏，也随数据卷持久保存。
+>
+> **绝不要**把工程建到 `${REPO_ROOT:-/app}`（仓库根）下：那里**不在任何数据卷上**，
+> 而改档位（`user-tier.sh`）和重部署技能（`redeploy-skills.sh`）都会 `docker rm -f` 重建容器，
+> **整个工程连同已导出的 PPT 会一起蒸发**，而且全程不出现在"产出"侧栏里。
+> **建工程时必须显式传 `--dir .`**：`project_manager.py init` 的 `base_dir` 默认是 `cwd/projects`（脚本 116 行），
+> 不传 `--dir` 就会多套一层 `projects/`，与上面的约定不一致。断点续做口令同理用相对项目名。
+>
+> 注：本文档里 `<project_name>` 等尖括号写法都是**占位符**，实际执行前替换成真实值
+> （直接照抄进 shell 会因 `<` `>` 是重定向符而报错）。
+
 # PPT Master Skill
 
 > AI-driven multi-format SVG content generation system. Converts source documents into high-quality SVG pages through multi-role collaboration and exports to PPTX.
@@ -171,7 +186,7 @@ inputs or directory inputs, `-o` is an output directory. Backend converter detai
 🚧 **GATE**: Step 1 complete; source content is ready (Markdown file, user-provided text, or requirements described in conversation are all valid).
 
 ```bash
-python3 ${SKILL_DIR}/scripts/project_manager.py init <project_name> --format <format>
+python3 ${SKILL_DIR}/scripts/project_manager.py init <project_name> --format <format> --dir .
 ```
 
 Format options must be named with concrete dimensions. Default: `ppt169` = `1280x720`, `viewBox="0 0 1280 720"`. Other examples: `ppt43` = `1024x768`, `story` = `1080x1920`, `banner` = `1920x1080`. For the full format list, see `references/canvas-formats.md`.
@@ -360,6 +375,19 @@ Read references/strategist.md
 
 > **Why three stages.** Design-system fields are anchored by the same few choices (`visual_style` anchors color / icon / typography; `delivery_purpose` sets the body size, page density, **and** the page-count recommendation). Image strategy depends on both the confirmed visual direction and the confirmed color system — its palette is color behavior only, while final HEX values follow Stage 2. Confirming direction first, then design system, then image / execution choices means each downstream stage fits the user's *real* choices instead of the AI's original assumptions. Page count is a **derived** field (content volume × `delivery_purpose`), which is why it lives in Stage 2, not up front.
 
+> 🛑 **本部署（Web 容器）覆盖规则 —— 确认页不可用，直接走聊天确认。**
+> 下面第 2/3/4 步描述的浏览器确认页（`confirm_ui/server.py`）在本部署里**用户打不开**：
+> 它绑定的是**容器内**的 `127.0.0.1:5050`，而容器只对外发布 3000 端口，用户浏览器里的
+> `localhost:5050` 指向的是用户自己的电脑。服务能正常启动，但没有任何人能点到那个"确认"按钮，
+> 每次 `--wait` 会空等约 590 秒才超时，三段确认累计最坏 **≈30 分钟纯等待**。
+> 因此在本部署里：**不要启动 `confirm_ui/server.py`，不要执行第 2/3/4 步里的那三条命令，
+> 也不要向用户播报任何 5050 地址**。改为直接使用下方原文已定义的 **chat-fallback 路径**：
+> 在对话里逐段呈现 Stage 1 / Stage 2 / Stage 3 的候选并等待用户回复。
+> 三段确认的**内容与顺序完全不变**，变的只是承载方式（网页 → 聊天）。
+> ⛔ BLOCKING 的语义同样保留：最终确认仍必须拿到用户明确答复才能进入 Step 5。
+> （本部署未安装 flask，该脚本即使被调用也会立刻 ModuleNotFoundError —— 这是兜底，不是依据：
+> 依据是上面这条规则，不要靠"反正它会失败"来省事。Step 6 的编辑器同样停用，见该步的覆盖规则。）
+
 Steps:
 
 > ⛔ **Steps 2 → 3 → 4 are ONE uninterrupted run — do NOT yield to the user mid-flow.** When an intermediate `--wait` returns, the AI **immediately and autonomously** re-derives and writes the next stage in the **same turn**: do **not** summarize, ask a question, report progress, or end the turn in between. The browser is sitting on a "deriving…" spinner polling for the next stage you must write — stopping here strands the page and the user must prod you in chat to finish (a bug, not the intended flow). **Stage-1 and Stage-2 confirmations are intermediate machine handoffs, not stopping points.** The single ⛔ BLOCKING wait is the **final** confirmation at the end of step 4. (Chat-fallback path — only when the page never opened — is the exception: there you do present each stage in chat and wait for a reply.)
@@ -423,8 +451,8 @@ The page is a **confirmation surface only** — Strategist still authors every r
 
 | Signal read | Line content |
 |---|---|
-| Heavy (long page count / bulky sources / heavy web-fetch accumulation) | State estimated page count and large source size; recommend switching to [split mode](workflows/resume-execute.md) after Step 5 — stop this chat, open a fresh window and input `继续生成 projects/<project_name>` to enter the execution session (SVG generation + export); no response or "continue" = default continuous mode. |
-| Normal (default) | State scale is moderate, default continuous mode generates in one go; if mid-way window switch is desired, input `继续生成 projects/<project_name>` after Step 5 to switch to [split mode](workflows/resume-execute.md). |
+| Heavy (long page count / bulky sources / heavy web-fetch accumulation) | State estimated page count and large source size; recommend switching to [split mode](workflows/resume-execute.md) after Step 5 — stop this chat, open a fresh window and input `继续生成 <project_name>` to enter the execution session (SVG generation + export); no response or "continue" = default continuous mode. |
+| Normal (default) | State scale is moderate, default continuous mode generates in one go; if mid-way window switch is desired, input `继续生成 <project_name>` after Step 5 to switch to [split mode](workflows/resume-execute.md). |
 
 This line is required output every run — the user must always see the mode choice exists. Whether to act on it is the user's call. When the Confirm UI is used, this choice also appears as the in-page generation-mode toggle and is captured in `result.json` (`generation_mode`); the chat-summary fallback still prints this line.
 
@@ -535,7 +563,7 @@ Workflow:
   ## ✅ Planning Session Complete
   - [x] Spec: `design_spec.md`, `spec_lock.md`
   - [x] Resources: `sources/`, `images/`, `templates/`
-  - [ ] **Next**: open a fresh chat window and input `继续生成 projects/<project_name>` to enter the execution session via the [`resume-execute`](workflows/resume-execute.md) workflow.
+  - [ ] **Next**: open a fresh chat window and input `继续生成 <project_name>` to enter the execution session via the [`resume-execute`](workflows/resume-execute.md) workflow.
   ```
 
 > On acquisition failure, do NOT halt — follow the Failure Handling rule in [image-base.md](references/image-base.md) §5: retry once, then mark the row `Needs-Manual`, report to user, and continue to the checkpoint above.
@@ -564,6 +592,21 @@ Read references/visual-styles/<locked-style>.md   # aesthetic (spec_lock.md `vis
 ```bash
 python3 ${SKILL_DIR}/scripts/svg_editor/server.py <project_path> --live --daemon
 ```
+> 🛑 **本部署（Web 容器）覆盖规则 —— 本小节整体停用：不要执行上面这条命令。**
+> 该编辑器绑定的是**容器内**的 `127.0.0.1:5050`，而容器只对外发布 3000 端口 ——
+> 用户浏览器里的 `localhost:5050` 指向的是用户自己的电脑，**没有任何人能打开它**。
+> 唯一还能用到这个服务的是 `visual_review.py`（AI 逐页看图自查），但它另需
+> playwright + chromium（实测 +1.00 GB 镜像体积），本部署也未安装，故整条链路停用。
+> 因此在本部署里：
+> - **不要**启动 `svg_editor/server.py`（本部署未装 flask，启动也只会 ModuleNotFoundError）；
+> - **不要**向用户播报任何 `localhost:5050` 地址或"实时预览已就绪 / 可以在浏览器里编辑"之类的话
+>   —— 那是个永远打不开的链接，只会让用户以为是自己网络有问题；
+> - **不要**因为预览缺失就停下来问用户或反复排查 —— 直接继续生成 SVG，这不是错误状态。
+>
+> **替代做法**：用户想看效果 → 引导其在界面"产出"侧栏下载 Step 7 导出的 `.pptx`；
+> 用户想改 → 让其在**对话里**直接描述（"第 3 页标题改成 X"），你直接编辑 `svg_output/`
+> 下对应的 SVG 后重新导出。下面关于"保持服务运行 / 应用注解"的条目在本部署里一并失效。
+
 - Start it immediately when Executor begins; `svg_output/` may be empty. Editor opens at `http://localhost:5050`; if another project already holds it, the launcher **auto-advances to the next free port** — read the actual URL from the launch log and report that.
 - Treat the launch URL as a checkpoint value: before writing the first SVG, either report the actual URL from the launcher or state the launch failure explicitly. Do not silently continue while claiming preview is available.
 - Run it as a long-running side process/session; do not wait for it to exit before generating SVG pages. Do not wait for user confirmation after startup.
