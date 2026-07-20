@@ -444,9 +444,12 @@ async function ensurePreviewCache(dir, name) {
   if (!src || !fs.existsSync(src) || !fs.statSync(src).isFile()) { const e = new Error("not found"); e.code = "no-src"; throw e }
   const ext = path.extname(name).toLowerCase()
   const cacheDir = path.join(dir, ".preview"); fs.mkdirSync(cacheDir, { recursive: true })
-  // 缓存文件名把分隔符压平：直接拼 name 的话，"pdfs/a.docx" 会变成 .preview/pdfs/a.docx.html，
-  // 而上面只 mkdir 了 .preview 本身 → 写入必然 ENOENT。压平后同名不同目录也不会互相覆盖。
-  const flat = name.replace(/[\\/]+/g, "__")
+  // 缓存文件名不能直接拼 name："pdfs/a.docx" 会变成 .preview/pdfs/a.docx.html，
+  // 而上面只 mkdir 了 .preview 本身 → 写入必然 ENOENT。
+  // 也不能简单把分隔符替换成 "__"：那是【不可逆映射】—— 顶层文件 "pdfs__a.docx" 与子目录文件
+  // "pdfs/a.docx" 会压成同一个缓存名，而 fresh() 只比 mtime，于是先转好的那个会被判成后一个的
+  // "新鲜缓存" → 预览 B 时看到的是 A 的内容，且没有任何提示。改为带路径哈希，保证一一对应。
+  const flat = crypto.createHash("sha1").update(name).digest("hex").slice(0, 12) + "__" + path.basename(name)
   const srcMtime = fs.statSync(src).mtimeMs
   const fresh = (out) => fs.existsSync(out) && fs.statSync(out).mtimeMs >= srcMtime
 
@@ -486,11 +489,17 @@ async function ensurePreviewCache(dir, name) {
 // 产物落地后台预热：把本轮新产出的 office/docx 文档提前转好缓存，用户点预览即秒开。
 // 串行执行（一次只跑一个 LibreOffice），best-effort，失败静默——点开时 /api/preview 会照常再试并如实报错。
 let _warmQueue = Promise.resolve()
+const WARM_MAX = 20   // 一轮最多预热多少个：一次产出几百个 doc 时别把 LibreOffice 队列堵死几十分钟
 function warmPreviews(dir, names) {
   const CONV = /\.(pptx?|odp|odt|doc|docx)$/i
+  let n = 0
   for (const name of (names || [])) {
     if (!CONV.test(name)) continue
-    _warmQueue = _warmQueue.then(() => ensurePreviewCache(dir, path.basename(name)).catch(() => {}))
+    // 不再 basename：changedSince 现在给的是 "audit/report.docx" 这种相对路径，
+    // 砍掉目录后会去顶层找 → no-src → 被 .catch 静默吞掉 → 子目录里的文档【永远不预热】
+    // （用户点开时才现转，首次要等几十秒）；顶层若有同名文件还会重复预热错的那个。
+    if (++n > WARM_MAX) break
+    _warmQueue = _warmQueue.then(() => ensurePreviewCache(dir, name).catch(() => {}))
   }
 }
 
@@ -928,7 +937,13 @@ const server = http.createServer(async (req, res) => {
     // 文档预览转换：docx→HTML、pptx/ppt/odp/doc/odt→PDF；缓存到 <产物目录>/.preview/（与后台预热共用 ensurePreviewCache）
     if (req.method === "GET" && u.pathname === "/api/preview") {
       const sid = u.searchParams.get("sid") || ""
-      const name = path.basename(u.searchParams.get("name") || "")
+      // 不能再 basename：侧栏现在会给出 "audit/report.docx" 这种名字，砍掉目录后
+      //  ① 子目录文档预览一律 404；
+      //  ② 更糟——顶层若也有同名的 report.docx，就会【静默预览另一份文件】，而预览面板标题
+      //     显示的仍是 audit/report.docx，用户完全看不出被掉包了。
+      // 包含性校验交给 ensurePreviewCache 内部的 safeUnder（此前因为这里先 basename 过，
+      // 那道 safeUnder 一直是空转的死代码）。
+      const name = u.searchParams.get("name") || ""
       const dir = sid ? await sessionOut(sid) : OUTPUTS
       let r
       try { r = await ensurePreviewCache(dir, name) }
@@ -1037,9 +1052,13 @@ const server = http.createServer(async (req, res) => {
       const sid = u.searchParams.get("sid") || ""
       const dir = sid ? await sessionOut(sid) : OUTPUTS
       if (!fs.existsSync(dir)) return send(res, 200, "application/json", "[]")
-      const list = fs.readdirSync(dir)
-        .filter((f) => !f.startsWith("."))
-        .map((f) => { const st = fs.statSync(path.join(dir, f)); return st.isFile() ? { name: f, size: st.size, mtime: st.mtimeMs } : null })
+      // 【必须与 dirState 同样递归一层】这条接口是 resumeSession 回显侧栏的唯一来源。
+      // 只改 dirState 而漏了这里的话：本轮 SSE 推的 files 事件能列出 pdfs/a.pdf，
+      // 但用户一刷新页面 / 切走再切回，子目录里的产物又全部消失 —— 症状与改动前一模一样，
+      // 等于这次改造只在"当前这一轮"有效。（上面的 /api/uploads 不需要改：写入接口只收
+      // basename，上传目录里天然不会出现子目录。）
+      const list = Object.entries(dirState(dir))
+        .map(([rel, mtime]) => { try { return { name: rel, size: fs.statSync(path.join(dir, rel)).size, mtime } } catch { return null } })
         .filter(Boolean)
         .sort((a, b) => b.mtime - a.mtime)
       return send(res, 200, "application/json", JSON.stringify(list))

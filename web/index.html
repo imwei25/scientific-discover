@@ -807,7 +807,8 @@ function addProducts(list) {
   for (const name of list) {
     const dlUrl = "api/download?name=" + encodeURIComponent(name) + sidQ()
     const raw = "api/raw?name=" + encodeURIComponent(name) + sidQ()
-    const dlBtn = () => { const a = document.createElement("a"); a.href = dlUrl; a.download = name; a.className = "pbtn"; a.innerHTML = ic("download") + "下载"; return a }
+    // 与侧栏同理：download 属性只给最后一段，带斜杠会被浏览器清洗成 "pdfs_a.pdf" 之类怪名
+    const dlBtn = () => { const a = document.createElement("a"); a.href = dlUrl; a.download = name.split("/").pop(); a.className = "pbtn"; a.innerHTML = ic("download") + "下载"; return a }
     const card = document.createElement("div"); card.className = "pcard"
     if (IMG.test(name)) {
       const img = document.createElement("img"); img.src = raw; img.alt = name; img.title = "点击放大"; img.addEventListener("click", () => openLightbox(raw))
