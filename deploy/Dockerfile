@@ -180,8 +180,10 @@ RUN cd /app/web && npm ci --omit=dev
 
 # 应用文件
 COPY web/server.mjs web/index.html web/login.html /app/web/
-COPY deploy/skills/ /app/.opencode/skills/
-COPY deploy/AGENTS.md /app/AGENTS.md
+# 技能与主控指令直接取仓库单一源头（.opencode/skills/ 与根 AGENTS.md），不再维护 deploy/ 副本。
+# zotero-library 是本地专用技能（依赖本机 Zotero + 本地嵌入模型），由 .dockerignore 排除在构建上下文外。
+COPY .opencode/skills/ /app/.opencode/skills/
+COPY AGENTS.md /app/AGENTS.md
 COPY deploy/entrypoint.sh /app/entrypoint.sh
 RUN sed -i 's/\r$//' /app/entrypoint.sh && chmod +x /app/entrypoint.sh \
     && mkdir -p /app/uploads /app/outputs
@@ -197,7 +199,7 @@ RUN sed -i 's/\r$//' /app/entrypoint.sh && chmod +x /app/entrypoint.sh \
 # 第一步就 ENOENT，整个技能任何路径都跑不起来。其余 21 个技能用的都是 ${REPO_ROOT:-/app}，
 # 只有它是这个变量，正好被 REPO_ROOT 改造整体漏掉。
 # 这里用 ENV 补一个落点而不是把 63 处改写成 ${REPO_ROOT:-/app}/...：ppt-master 要跟上游同步，
-# 改动越少越好搬。注意它必须跟着 COPY 到 /app/.opencode/skills/ 的落点走（见上方 COPY deploy/skills/）。
+# 改动越少越好搬。注意它必须跟着 COPY 到 /app/.opencode/skills/ 的落点走（见上方 COPY .opencode/skills/）。
 ENV REPO_ROOT=/app \
     SKILL_DIR=/app/.opencode/skills/ppt-master \
     OC_URL=http://127.0.0.1:4098 \

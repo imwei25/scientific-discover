@@ -72,8 +72,8 @@ cd ~/sci-agent
 # 1) 装科研 Python 包（装进系统 python3）
 pip3 install --break-system-packages -r deploy/requirements.txt
 
-# 2) 用"服务器版技能"（调用 python3，而不是 Windows 的 venv 路径）
-cp -r deploy/skills/* .opencode/skills/
+# 2) 技能只有一个源头 .opencode/skills/（deploy/skills 副本已删除），无需拷贝；
+#    解释器写法为 ${REPO_ROOT:-/app}/.venv/bin/python，跨平台通用
 
 # 3) 配 DeepSeek key（本次会话有效）
 export DEEPSEEK_API_KEY=sk-你的密钥
@@ -206,7 +206,7 @@ docker run --rm -v deploy_alice-outputs:/data -v $PWD:/bak alpine tar czf /bak/a
 | 现象 | 原因 / 解决 |
 |---|---|
 | `opencode serve` 报 `Unexpected error` 起不来 | **端口被占**。换端口，或 `lsof -i:4098` 找到占用进程杀掉。（本机上曾被另一个 opencode 占了 4096） |
-| AI 说"Python 没装"、退回别的方式 | **技能里的 Python 路径不对**。服务器/容器用 `python3`（`deploy/skills` 已是）；只有 Windows 本地才是 `backend/.venv/Scripts/python.exe`。 |
+| AI 说"Python 没装"、退回别的方式 | **技能里的 Python 路径不对**。统一走项目根 `.venv`（`${REPO_ROOT:-/app}/.venv/bin/python`）；缺 `.venv` 先跑 `env-setup`。 |
 | 技能加载让服务崩溃 | **SKILL.md 带了 BOM**。用 Windows 记事本存会加 BOM，要存成 **UTF-8 无 BOM**。 |
 | 模型报错 / 无响应 | **模型名不对或没鉴权**。`OC_MODEL` 必须是你 DeepSeek 账号可用的模型（我们用 `deepseek-v4-pro`，不是 `deepseek-chat`）；确认 `DEEPSEEK_API_KEY` 传进了容器（`docker exec -it 容器 env | grep DEEPSEEK`）。 |
 | 网页对话不是"流式"、要等很久才一次出 | **nginx 没关缓冲**。`nginx.conf` 里已设 `proxy_buffering off` + `proxy_read_timeout 3600s`，确认生效。 |

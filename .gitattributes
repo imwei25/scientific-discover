@@ -1,0 +1,4 @@
+# 全仓强制 LF 的文件类型：.opencode/skills/ 现在直接 COPY 进 Linux 容器（见 deploy/Dockerfile），
+# shell 脚本带 CRLF 会破坏 shebang / 让 bash 报 '\r' 语法错。deploy/ 目录另有更细的 deploy/.gitattributes。
+*.sh text eol=lf
+*.mjs text eol=lf

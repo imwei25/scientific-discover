@@ -3,10 +3,11 @@ backend/.env
 backend/.venv/
 .venv/
 
-# 旧产品的遗留目录（未跟踪的构建产物，不进 git）
-backend/
-frontend/
-src-tauri/
+# 旧产品的遗留目录（未跟踪的构建产物，不进 git）——锚定仓库根：
+# 不加 / 会匹配任意深度的同名目录，曾把 .opencode/skills/nature-figure/static/fragments/backend/ 吞掉
+/backend/
+/frontend/
+/src-tauri/
 
 # 运行时产物
 outputs/

@@ -3,14 +3,14 @@
 自托管科研 Agent 后端验证分支。基于 **OpenCode**（`opencode serve`）+ **DeepSeek**（OpenAI 格式），
 复用本目录 `backend/.venv` 里的科学计算环境（pandas/numpy/scipy/matplotlib/scikit-learn 等）作为“技能”。
 
-- Agent 技能：`.opencode/skills/`（本地，调用 `backend/.venv` 的 Python）与 `deploy/skills/`（服务器/容器，用 `python3`）
+- Agent 技能：`.opencode/skills/`（**唯一源头**，本地与部署镜像共用；Dockerfile 直接 COPY 它，`zotero-library` 由 `.dockerignore` 排除不进镜像）
 - 启动后端：`opencode serve --port 4098`
 - 前端：见 `web/`（流式对话 + 文件上传/下载）
 - 上传目录 `uploads/`，产出目录 `outputs/`
 
 ## 科研医学技能套件（20 个技能）
 
-覆盖「从调研到投稿、再到评审与打假」的完整链路。与独立仓库 [imwei25/sci-skill](https://github.com/imwei25/sci-skill) 同源（该仓库为跨电脑分发版），本目录为双镜像版（`.opencode/skills` 本地 + `deploy/skills` 服务器）。
+覆盖「从调研到投稿、再到评审与打假」的完整链路。与独立仓库 [imwei25/sci-skill](https://github.com/imwei25/sci-skill) 同源（该仓库为跨电脑分发版），本仓库以 `.opencode/skills/` 为唯一源头（本地与服务器镜像共用，deploy 副本已删除）。
 
 | 方向 | 技能 | 说明 |
 |---|---|---|
@@ -56,7 +56,7 @@ Docker 部署走 `deploy/requirements.txt` + `deploy/Dockerfile`（已含全部 
 
 > **换机器 / 换智能体框架（OpenCode·OpenClaw·WorkBuddy…）时**：技能不写死任何机器路径——解释器统一指向**项目根 `.venv`**（Windows `.venv\Scripts\python.exe`，Linux/mac `.venv/bin/python`）。把 `skills/` 拷到目标框架的技能根、让 agent 先跑 `env-setup` 技能（或 `scripts/setup.*`）建好 `.venv` 即可，无需改任何 SKILL.md。
 >
-> **顶层主控（AGENTS.md）跨框架**：路由铁律放**项目根**，OpenCode 直接读 `AGENTS.md`（Docker 里由 Dockerfile `COPY deploy/AGENTS.md /app/AGENTS.md`）；Claude Code 读项目根 `CLAUDE.md`——安装脚本用 `scripts/install_router.py` 把 `AGENTS.md` 镜像过去（**受管块、幂等、保留你原有 CLAUDE.md 内容**）。**故意只落项目根、不写全局 `~/.claude/CLAUDE.md`**，免得在无关项目也触发科研路由。
+> **顶层主控（AGENTS.md）跨框架**：路由铁律放**项目根**，OpenCode 直接读 `AGENTS.md`（Docker 里由 Dockerfile `COPY AGENTS.md /app/AGENTS.md`，直接取仓库根这份）；Claude Code 读项目根 `CLAUDE.md`——安装脚本用 `scripts/install_router.py` 把 `AGENTS.md` 镜像过去（**受管块、幂等、保留你原有 CLAUDE.md 内容**）。**故意只落项目根、不写全局 `~/.claude/CLAUDE.md`**，免得在无关项目也触发科研路由。
 
 > **实测注意（详见 [THIRD_PARTY_SKILLS.md](THIRD_PARTY_SKILLS.md)）**：
 > - `render-pdf-doc` 排**中文**稿件要传 `--cjk-font "Microsoft YaHei"`（服务器 `Noto Sans CJK SC`），否则汉字漏字；MiKTeX 首次渲染需先 `miktex packages update`。

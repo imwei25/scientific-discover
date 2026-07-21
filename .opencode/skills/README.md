@@ -15,12 +15,12 @@ powershell -ExecutionPolicy Bypass -File scripts\setup.ps1      # 或 install.ps
 bash scripts/setup.sh                                            # 或 install.sh
 ```
 
-脚本做的事：建/复用项目根 `.venv` → 装/更新依赖（`scripts/requirements-skills.txt`）→ 跑 `scripts/validate_skills.py` 校验（无 BOM、frontmatter 合法、两套镜像技能集合一致、正文无漂移）→ 把顶层 `AGENTS.md` 镜像成**项目根 `CLAUDE.md`**（供 Claude Code 读；OpenCode 直接读 `AGENTS.md`；**只落项目根，不写机器全局 `~/.claude`**）。
+脚本做的事：建/复用项目根 `.venv` → 装/更新依赖（`scripts/requirements-skills.txt`）→ 跑 `scripts/validate_skills.py` 校验（无 BOM、frontmatter 合法、引用脚本齐全、shell 脚本 LF）→ 把顶层 `AGENTS.md` 镜像成**项目根 `CLAUDE.md`**（供 Claude Code 读；OpenCode 直接读 `AGENTS.md`；**只落项目根，不写机器全局 `~/.claude`**）。
 
 > **换机器 / 换框架（OpenCode·Claude Code·OpenClaw…）同理**：把技能拷到目标项目根后，在那儿跑一次脚本即可，无需改任何 SKILL.md。
 
-## 双镜像
-- `${REPO_ROOT:-/app}/.opencode/skills/`：本地（OpenCode，解释器走 `.venv\Scripts\python.exe`）
-- `deploy/skills/`：服务器 / 容器（`python3`）；**线上更新要重建 Docker 镜像**才生效。
-
-改技能须两套镜像同步改——`validate_skills.py` 会抓出「正文漂移」和「镜像不一致」。
+## 唯一源头（deploy 副本已删除）
+本目录 `.opencode/skills/` 是技能的**唯一源头**：本地 OpenCode / Claude Code 直接读它，
+部署镜像也由 `deploy/Dockerfile` 直接 `COPY .opencode/skills/`（`zotero-library` 为本机专用技能，
+由 `.dockerignore` 排除，不进镜像）。改技能只改这里一处；**线上生效需重建 Docker 镜像**
+（服务器上跑 `deploy/scripts/redeploy-skills.sh`）。
