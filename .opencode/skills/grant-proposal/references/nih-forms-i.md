@@ -17,6 +17,15 @@
 - **Factor 3 – Expertise and Resources**（Investigator + Environment，不计分，仅评 Sufficient/Gaps）→ 团队与平台写"适配"，不堆声望。
 - 框架页：https://grants.nih.gov/policy-and-compliance/policy-topics/peer-review/simplifying-review/framework
 
+## 2.5 评审在乎什么（评价维 —— 起草/评审时按此分配笔墨）
+
+2025 简化评审框架（NOT-OD-24-010）就是官方评价维，直接照三因子分配笔墨——**前两因子计分（Overall Impact 由此决定），第三因子不计分只判充分性**：
+1. **Factor 1 – Importance of the Research（计分 1–9）= Significance + Innovation**——为什么这问题重要、为什么这思路创新。**权重最高的说服点，笔墨优先压在这里**：把领域缺口、若成功的科学/临床影响、相对现状的创新增量写足。
+2. **Factor 2 – Rigor and Feasibility（计分 1–9）= Approach**——方案能不能做成、结果可不可信。样本量与统计、预实验/前期数据、每个 Aim 的 pitfalls & alternatives、临床试验时间线要写透；rigor 不足直接拉低总分。
+3. **Factor 3 – Expertise and Resources（不计分，仅评 Sufficient / Gaps）= Investigator + Environment**——团队与平台写"适配这个 Aim"即可，够用就行，不必堆声望与篇幅。
+
+**淡化/别浪费笔墨**：Factor 3 的头衔与荣誉罗列、与 Aim 无关的背景铺陈、实验操作细节（Aims 页尤其不写）。**主动写 potential pitfalls & alternatives 是加分**（撑 Factor 2 的 feasibility），回避风险反而显天真。
+
 ## 3. 页数与格式硬限
 
 **Page Limits**（https://grants.nih.gov/grants-process/write-application/how-to-apply-application-guide/page-limits ；NOFO 可覆盖）：
