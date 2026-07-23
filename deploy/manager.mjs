@@ -12,6 +12,7 @@
 // 用户表来自 deploy/users/*.env（每个含 NAME/PORT）。改动后 systemctl reload sci-manager（SIGHUP）即热加载。
 
 import http from "node:http"
+import https from "node:https"
 import fs from "node:fs"
 import path from "node:path"
 import crypto from "node:crypto"
@@ -338,6 +339,9 @@ function proxy(u, fwdPath, req, res) {
   headers["x-forwarded-prefix"] = u.base
   const up = http.request({ host: "127.0.0.1", port: u.port, method: req.method, path: fwdPath, headers }, (upRes) => {
     res.writeHead(upRes.statusCode || 502, upRes.headers)
+    // upRes 'error'：容器被 OOM kill / 崩溃时 SSE 会 mid-stream 断，pipe 不转发可读侧错误 →
+    // 未捕获异常打崩【整个 manager】、全站在途流一起断。断流收尾即可，绝不外抛。
+    upRes.on("error", (e) => { log(`[proxy] ${u.name} 上游流中断：${e.message}`); try { res.destroy() } catch {} })
     upRes.pipe(res)   // 逐块透传：SSE / 长流式输出不攒包
   })
   up.on("error", (e) => {
@@ -389,7 +393,9 @@ function proxyBuffered(u, fwdPath, req, res, body, onStatus) {
   headers["x-forwarded-prefix"] = u.base
   const up = http.request({ host: "127.0.0.1", port: u.port, method: req.method, path: fwdPath, headers }, (upRes) => {
     try { onStatus && onStatus(upRes.statusCode || 0) } catch {}
-    res.writeHead(upRes.statusCode || 502, upRes.headers); upRes.pipe(res)
+    res.writeHead(upRes.statusCode || 502, upRes.headers)
+    upRes.on("error", (e) => { log(`[proxy] ${u.name} 上游流中断：${e.message}`); try { res.destroy() } catch {} })  // 同 proxy()：容器 mid-stream 崩不该打崩 manager
+    upRes.pipe(res)
   })
   up.on("error", (e) => { log(`[proxy] ${u.name} 上游错误：${e.message}`); if (!res.headersSent) res.writeHead(502, { "content-type": "text/plain; charset=utf-8" }); res.end("上游容器暂不可用") })
   res.on("error", () => { try { up.destroy() } catch {} })   // 下游断连别把未捕获异常抛崩 manager
@@ -567,12 +573,33 @@ async function mountpoint(vol) {
   if (r.code === 0 && r.stdout) _vmount[vol] = r.stdout
   return _vmount[vol] || null
 }
-// 某用户今日成本（读 ocdata 卷 quota.json；server.mjs 按 UTC 日切）
+// ==== 宿主侧额度账本（权威）=========================================
+// 为什么账本必须在宿主：容器里跑的 agent 与网关同容器同 uid，ocdata 卷里的 quota.json 对它就是
+// 一个可写文件——"把今天的数清零"一句话就能绕过每日额度。账本落在宿主（容器摸不到的路径），
+// 容器网关经下面的记账端点上报增量 / 查询读数；端点只收【正增量】，所以令牌就算泄露（容器 env
+// 对 agent 本就不设防）也只能给自己多记账，减不了。老容器（未注入 QUOTA_API_URL）仍写卷内
+// quota.json → todayCost 对它有回退，滚动升级期间两边都读得到数。
+const QUOTA_DIR = process.env.QUOTA_DIR || path.join(DEPLOY_DIR, "data", "quota")
+const qToday = () => new Date().toISOString().slice(0, 10)   // UTC 日切，与容器网关一致
+const ledgerFile = (name) => path.join(QUOTA_DIR, name + ".json")
+function ledgerRead(name) {
+  try { const q = JSON.parse(fs.readFileSync(ledgerFile(name), "utf8")); if (q && q.day === qToday()) return q } catch {}
+  return { day: qToday(), cost: 0 }
+}
+function ledgerAdd(name, delta) {
+  fs.mkdirSync(QUOTA_DIR, { recursive: true })
+  const q = ledgerRead(name); q.cost += delta
+  const f = ledgerFile(name)
+  fs.writeFileSync(f + ".tmp", JSON.stringify(q)); fs.renameSync(f + ".tmp", f)   // 原子替换：读方永远看到完整 JSON
+  return q
+}
+// 某用户今日成本：宿主账本优先；无账本文件（老容器还在本地记账）回退读 ocdata 卷 quota.json
 async function todayCost(name) {
+  if (fs.existsSync(ledgerFile(name))) return ledgerRead(name).cost
   const mp = await mountpoint(`${name}-ocdata`); if (!mp) return 0
   try {
     const q = JSON.parse(fs.readFileSync(path.join(mp, "quota.json"), "utf8"))
-    return q && q.day === new Date().toISOString().slice(0, 10) ? Number(q.cost) || 0 : 0
+    return q && q.day === qToday() ? Number(q.cost) || 0 : 0
   } catch { return 0 }
 }
 // 某用户存储用量 MB（uploads+outputs 卷），best-effort
@@ -848,6 +875,19 @@ const server = http.createServer(async (req, res) => {
     // 同供应商模型列表：manager 自己答（数据在 one-api，不在容器），放在门禁之后 → 已登录才可见，
     // 且不必为查个模型名去唤醒容器。
     if (req.method === "GET" && fwdPath.startsWith("/pub/gateway/siblings")) return handleSiblings(req, res)
+    // ---- 每日额度兜底闸（查宿主账本）----
+    // 容器网关自己也有同样的闸（还带轮内实时封顶），这里是防篡改的最后一道：容器内那道就算被
+    // agent 改掉，新一轮也起不了。账本不含在途轮的实时成本，轮内封顶仍归容器管。
+    if (req.method === "POST" && fwdPath === "/api/chat/start") {
+      const lim = resolveLimits(u.name)
+      if (lim.daily > 0 && ledgerRead(u.name).cost >= lim.daily) {
+        audit("quota.block", { user: u.name, ip: clientIp(req) })
+        // Connection: close —— 这里在读 body 之前就短路回包，未读完的请求体会污染 keep-alive 上的下一个
+        // 请求（与 handleUserLogin 的 413 同理）；关连接最省事，聊天 start 本就是一次性 POST。
+        res.writeHead(429, { "content-type": "application/json; charset=utf-8", "connection": "close" })
+        return res.end(JSON.stringify({ ok: false, sent: false, err: `今日额度已用尽（上限 $${lim.daily.toFixed(2)}），明日 0 点(UTC)恢复。` }))
+      }
+    }
     await ensureUp(u, clientIp(req))
     proxy(u, fwdPath, req, res)
   } catch (e) {
@@ -893,9 +933,125 @@ setInterval(async () => {
   }
 }, SWEEP_MS)
 
+// ---- 记账端点：各用户容器的网关向宿主账本上报增量 / 查询今日读数 ----
+// 监听默认 0.0.0.0:8091：容器经 extra_hosts 的 host-gateway 打进来，源地址是 172.x 私网段，
+// 而 manager 主端口只听回环、容器够不着——所以只能另开一个能被容器打到的口。防护三层：
+// ① 云安全组/防火墙不放行 8091（部署要求，见 DEPLOY.md）；② 源地址必须是私网/回环；
+// ③ 每用户令牌（users/<name>.env 的 QUOTA_TOKEN）恒时比对，且 /report 只收正增量。
+// QUOTA_LISTEN=（置空）可整体关闭——容器网关播种不到宿主读数会回落本地记账（可被 agent 篡改，不建议）。
+const QUOTA_LISTEN = process.env.QUOTA_LISTEN ?? "0.0.0.0:8091"
+
+// ---- LLM 转发通道（同一监听口的 /llm/* 路径）----
+// 为什么要它：原先 DEEPSEEK_API_KEY（全体用户共用的上游 key）直接注入每个容器的 env，
+// 容器里的 agent 一句 `env` 就能读走——任何一个用户（或一次提示注入）都能把全局 key 套出去。
+// 现在真实 key 只留在宿主：容器里 opencode 拿【每用户 QUOTA_TOKEN】打本端点的 /llm/*，
+// 这里验完令牌把 Authorization 换成真实上游 key 再转发（流式透传，SSE 不攒包）。
+// 令牌泄露的爆炸半径从「全局上游 key」缩到「该用户自己的转发通道」，且可单独换发、可停用。
+// 上游地址/key：LLM_UPSTREAM_URL 默认 DeepSeek 官方；key 优先 /etc/sci-manager.env 的
+// LLM_UPSTREAM_KEY，缺省回落解析 deploy/.env 的 DEEPSEEK_API_KEY（运维不必把 key 抄两处）。
+// 接了 one-api 想走网关调度：LLM_UPSTREAM_URL=http://127.0.0.1:3010/v1 + LLM_UPSTREAM_KEY=<one-api令牌>。
+const LLM_UPSTREAM_URL = (process.env.LLM_UPSTREAM_URL || "https://api.deepseek.com").replace(/\/+$/, "")
+function upstreamKey() {
+  if (process.env.LLM_UPSTREAM_KEY) return process.env.LLM_UPSTREAM_KEY
+  try { return parseEnvFile(path.join(DEPLOY_DIR, ".env")).DEEPSEEK_API_KEY || "" } catch { return "" }
+}
+// Bearer 令牌 → 用户（恒时逐一比对；用户量 ~10，逐个读 env 文件无压力且天然热更新）
+function userByLlmToken(req) {
+  const tok = String(req.headers["authorization"] || "").replace(/^Bearer\s+/i, "")
+  if (!tok) return null
+  for (const [name, u] of users) {
+    const want = userEnv(name).QUOTA_TOKEN || ""
+    if (want && safeEq(tok, want)) return u
+  }
+  return null
+}
+function llmForward(req, res, fwdPath) {
+  const deny = (code, msg) => { if (!res.headersSent) res.writeHead(code, { "content-type": "application/json" }); res.end(JSON.stringify({ error: { message: msg } })) }
+  const u = userByLlmToken(req)
+  if (!u) return deny(401, "无效的转发令牌")
+  if (u.suspended) return deny(403, "账号已停用")
+  // 账本闸（防篡改额度的最后一道，也适用于绕过容器直接打 /llm 的对抗流量）：今日成本到顶即拒。
+  // 注意这不是精确计量——账本靠容器网关自报，一个从不自报、只闷头打 /llm 的恶意 agent 在当天首次
+  // 触顶前仍能花钱（残余风险，见 DEPLOY.md）；真正的硬上限需在此做 usage 计量，属后续。至少让「正常
+  // 用量已把额度打满后」这条通道随即关闭，而不是留着一个无闸的花钱口。
+  const lim = resolveLimits(u.name)
+  if (lim.daily > 0 && ledgerRead(u.name).cost >= lim.daily) return deny(429, `今日额度已用尽（上限 $${lim.daily.toFixed(2)}），明日 0 点(UTC)恢复`)
+  const key = upstreamKey()
+  if (!key) return deny(503, "宿主未配置上游 LLM key（/etc/sci-manager.env 的 LLM_UPSTREAM_KEY 或 deploy/.env 的 DEEPSEEK_API_KEY）")
+  let tu; try { tu = new URL(LLM_UPSTREAM_URL + fwdPath) } catch { return deny(500, "LLM_UPSTREAM_URL 配置有误") }
+  // 头处理：透传内容协商与长度（body 原样管道，content-length 不变），换掉鉴权，去掉逐跳头。
+  const headers = { ...req.headers }
+  delete headers["host"]; delete headers["connection"]; delete headers["x-forwarded-for"]; delete headers["x-forwarded-proto"]; delete headers["x-forwarded-prefix"]
+  headers["authorization"] = "Bearer " + key
+  const mod = tu.protocol === "https:" ? https : http
+  const up = mod.request({ hostname: tu.hostname, port: tu.port || (tu.protocol === "https:" ? 443 : 80), method: req.method, path: tu.pathname + tu.search, headers }, (upRes) => {
+    // 与 proxy() 同款透传（生产已验证 SSE 不攒包）；只摘掉 connection，其余头原样
+    const h = { ...upRes.headers }; delete h["connection"]
+    res.writeHead(upRes.statusCode || 502, h)
+    // ★ upRes 必须挂 error：pipe 不转发可读侧错误，上游在分钟级长流中途 RST/TLS 断
+    // （首字节慢的推理流最常见）会让 upRes 抛未捕获异常 → manager 没有 uncaughtException 兜底
+    // → 整个进程退出 → 全站的反代/记账/转发一起没。响应头此时多半已发出，只能断流收尾。
+    upRes.on("error", (e) => { log(`[llm] ${u.name} 上游流中断：${e.message}`); try { res.destroy() } catch {} })
+    upRes.pipe(res)
+  })
+  // 刻意不设 idle 超时：推理模型首字节可以很慢，误杀比挂着更糟；客户端断开会触发下面的 destroy 收尾
+  up.on("error", (e) => { log(`[llm] ${u.name} 上游错误：${e.message}`); if (!res.headersSent) deny(502, "上游模型服务暂不可用"); else { try { res.destroy() } catch {} } })
+  req.on("error", () => { try { up.destroy() } catch {} })
+  res.on("error", () => { try { up.destroy() } catch {} })
+  res.on("close", () => { if (!res.writableEnded) { try { up.destroy() } catch {} } })
+  req.pipe(up)
+}
+const isPrivateIp = (a) => {
+  const h = String(a || "").replace(/^::ffff:/, "")
+  if (h === "::1" || h.startsWith("127.")) return true
+  const m = h.match(/^(\d+)\.(\d+)\./); if (!m) return false
+  const x = +m[1], y = +m[2]
+  return x === 10 || (x === 172 && y >= 16 && y <= 31) || (x === 192 && y === 168)
+}
+function startQuotaServer() {
+  if (!QUOTA_LISTEN) return log("[quota] 记账端点未启用（QUOTA_LISTEN 置空）——容器回落本地记账（额度可被容器内 agent 篡改），且 /llm 转发通道不可用：容器将调不到模型，除非在 deploy/.env 显式配 OC_GATEWAY_URL/OC_GATEWAY_KEY 直连网关")
+  const qs = http.createServer(async (req, res) => {
+    const json = (code, obj) => { if (!res.headersSent) res.writeHead(code, { "content-type": "application/json" }); res.end(JSON.stringify(obj)) }
+    req.on("error", () => {}); res.on("error", () => {})   // 对端断连别抛崩 manager
+    try {
+      if (!isPrivateIp(req.socket.remoteAddress)) return json(403, { ok: false })
+      const url = new URL(req.url, "http://x")
+      // LLM 转发：必须最先路由（body 要原样管道给上游，绝不能先被读掉）
+      if (url.pathname.startsWith("/llm/")) return llmForward(req, res, url.pathname.slice(4) + url.search)
+      // 鉴权：用户存在 + 请求头令牌与该用户 env 登记的 QUOTA_TOKEN 恒时比对（未登记令牌 = 一律拒）
+      const auth = (name) => {
+        if (!users.has(name)) return false
+        const want = userEnv(name).QUOTA_TOKEN || ""
+        return !!want && safeEq(String(req.headers["x-quota-token"] || ""), want)
+      }
+      if (req.method === "GET" && url.pathname === "/today") {
+        const name = String(url.searchParams.get("user") || "")
+        if (!auth(name)) return json(401, { ok: false })
+        return json(200, ledgerRead(name))
+      }
+      if (req.method === "POST" && url.pathname === "/report") {
+        const chunks = []; let total = 0   // body 限量：虽是自家网关在调，但它终究是个网络端点
+        for await (const c of req) { total += c.length; if (total > 4096) return json(413, { ok: false }); chunks.push(c) }
+        let b = {}; try { b = JSON.parse(Buffer.concat(chunks).toString() || "{}") } catch {}
+        const name = String(b.user || ""), add = Number(b.add)
+        if (!auth(name)) return json(401, { ok: false })
+        // 只收正增量，单笔上限 200 USD（远超任何真实积压；再大只可能是伪造）。
+        // 400 是"明确拒收"信号：网关收到会放弃该笔并记日志，而不是无限重试。
+        if (!Number.isFinite(add) || !(add > 0) || add > 200) return json(400, { ok: false, err: "非法增量" })
+        const q = ledgerAdd(name, add)
+        return json(200, { ok: true, day: q.day, cost: q.cost })
+      }
+      return json(404, { ok: false })
+    } catch { try { json(500, { ok: false }) } catch {} }
+  })
+  const [qh, qp] = QUOTA_LISTEN.includes(":") ? QUOTA_LISTEN.split(":") : ["0.0.0.0", QUOTA_LISTEN]
+  qs.listen(Number(qp), qh, () => log(`[quota] 记账端点就绪 http://${qh}:${qp}（仅私网来源 + 每用户令牌）`))
+}
+
 process.on("SIGHUP", () => { log("[reload] 收到 SIGHUP，热加载用户表"); loadUsers() })
 
 loadUsers()
+startQuotaServer()
 const [lhost, lport] = LISTEN.includes(":") ? LISTEN.split(":") : ["127.0.0.1", LISTEN]
 server.listen(Number(lport), lhost, () =>
   log(`manager 就绪 http://${lhost}:${lport}  WARM_CAP=${WARM_CAP} IDLE=${Math.round(IDLE_MS / 1000)}s`))

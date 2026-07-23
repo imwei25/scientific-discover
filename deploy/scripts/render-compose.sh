@@ -47,16 +47,31 @@ tier_field() { [ -f tiers.env ] || return 0; awk -v t="$1" -v c="$2" '!/^[[:spac
     # 分级模型：用户 .env 显式 OC_MODEL 覆盖 > 档位 tiers.env 第4列 > 缺省 deepseek-v4-pro（走网关时即请求这个模型名）
     tmodel=$(field OC_MODEL "$f"); tmodel=${tmodel:-$(tier_field "$tier" 4)}; tmodel=${tmodel:-deepseek-v4-pro}
     if [ -z "$name" ] || [ -z "$port" ]; then echo "!! $f 缺 NAME/PORT，跳过" >&2; continue; fi
+    # 宿主记账令牌：容器网关向 manager 记账端点（QUOTA_LISTEN）上报成本的每用户凭据。
+    # 端点只收正增量，令牌泄露（容器 env 对 agent 不设防）也只能给自己多记账。
+    # 老用户 env 没这行 → 在此幂等补发一次并落盘（user-add 对新用户已直接生成）。
+    qtok=$(field QUOTA_TOKEN "$f")
+    if [ -z "$qtok" ]; then
+      qtok=$(openssl rand -hex 24)
+      # 空令牌会让记账 /report 与 /llm 转发【双双静默失效】（manager 两处都要求令牌非空），
+      # 容器起来却调不到模型也记不了账，且很难排查 —— 宁可在这里响亮中止。
+      if [ -z "$qtok" ]; then echo "!! 生成 QUOTA_TOKEN 失败（openssl 不可用？），中止渲染以免写出哑令牌。请装 openssl 后重跑。" >&2; exit 1; fi
+      printf 'QUOTA_TOKEN=%s\n' "$qtok" >> "$f"
+      echo ">> $f 补发 QUOTA_TOKEN（宿主记账凭据）" >&2
+    fi
     had=1
     cat <<YAML
   agent-${name}:
     image: sci-agent:latest
     container_name: agent-${name}
     environment:
-      DEEPSEEK_API_KEY: \${DEEPSEEK_API_KEY:?请在 deploy/.env 设置 DEEPSEEK_API_KEY}
+      # ⚠ 刻意【不再】注入 DEEPSEEK_API_KEY：那是全体用户共用的上游 key，而容器里跑的 agent
+      # 一句 env 命令就能读走。真实 key 只留宿主（deploy/.env / sci-manager.env），容器统一走
+      # manager 的 /llm 转发通道，凭据是每用户的 QUOTA_TOKEN（泄露只废该用户自己的通道，可单独换发）。
+      # 在 deploy/.env 显式配 OC_GATEWAY_URL+OC_GATEWAY_KEY 可整体改走别的网关（恢复旧直连行为）。
       OC_MODEL: "deepseek/${tmodel}"
-      OC_GATEWAY_URL: \${OC_GATEWAY_URL:-}
-      OC_GATEWAY_KEY: \${OC_GATEWAY_KEY:-}
+      OC_GATEWAY_URL: \${OC_GATEWAY_URL-http://host.docker.internal:8091/llm}
+      OC_GATEWAY_KEY: \${OC_GATEWAY_KEY-${qtok}}
       OC_COST_INPUT: \${OC_COST_INPUT:-0.27}
       OC_COST_OUTPUT: \${OC_COST_OUTPUT:-1.10}
       OC_COST_CACHE_READ: \${OC_COST_CACHE_READ:-0.07}
@@ -80,10 +95,25 @@ tier_field() { [ -f tiers.env ] || return 0; awk -v t="$1" -v c="$2" '!/^[[:spac
       USER_TIER: "${tier:-}"
       DAILY_COST_LIMIT: "${dlimit:-0}"
       STORAGE_LIMIT_MB: "${slimit:-0}"
+      # 宿主账本：额度权威记在 manager 侧（deploy/data/quota/），容器内 quota.json 仅作回退缓存，
+      # agent 改不到账本。要禁用（回落容器本地记账）在 deploy/.env 写一行空的 QUOTA_API_URL=。
+      # 注意 \${VAR-默认} 是【无冒号】写法：显式置空才算关，没写这行才用默认。
+      QUOTA_API_URL: \${QUOTA_API_URL-http://host.docker.internal:8091}
+      QUOTA_TOKEN: "${qtok}"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     volumes:
       - ${name}-uploads:/app/uploads
       - ${name}-outputs:/app/outputs
       - ${name}-ocdata:/root/.local/share/opencode
+      # 内置技能 + 主控指令【只读】挂载（内核级写保护，连容器内 root+bash 都写不动，实测 EROFS）。
+      # 为什么不靠 opencode 的 permission 配置：实测 opencode 1.17 的 edit/read 路径规则只作用于会话
+      # 工作目录(cwd)以内，而 cwd=/app/outputs/<会话id>/，这些文件在 cwd 之外、归 external_directory(=allow)
+      # 管，配置层护不住（见 web/server.mjs enforceOcTools 注释）。只读挂载才是真边界。
+      # 源用相对路径（compose 相对 deploy/ 解析）：宿主仓库根即镜像构建源，零漂移；镜像里的同名内容被
+      # 原样覆盖成只读。产物/上传/会话数据仍是可写卷，不受影响。
+      - ../.opencode/skills:/app/.opencode/skills:ro
+      - ../AGENTS.md:/app/AGENTS.md:ro
     ports:
       - "127.0.0.1:${port}:3000"
     restart: "no"

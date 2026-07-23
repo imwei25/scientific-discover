@@ -52,6 +52,16 @@ const customProviderCfg = ({ baseURL, apiKey, modelID }) => ({
 // 模型一旦调用就整轮 error/卡死（实测卡在“确认方向选择”那步）。各技能与 AGENTS.md §六 已要求
 // “一律用编号文本让用户回数字选、别弹卡片”，但模型会无视提示词照调——故在配置层全局禁用，从根上杜绝。
 // 固化两条无论如何都要成立的 opencode 策略。所有写 opencode.json 的路径 + 启动时都会过这里。
+//
+// 【为什么这里【不】用 permission.edit/read 去保护 /app/.opencode、AGENTS.md、网关代码等】
+// 实测（2026-07-23，服务器隔离容器 + 钉死的 opencode 1.17.14，逐配置复跑）：opencode 的
+// permission.edit/read 的路径规则【只作用于会话工作目录(cwd)以内】的文件；cwd 之【外】的文件
+// 完全由 external_directory 一个开关决定，路径规则对它们一律不生效。而本部署把每个会话的 cwd
+// 指到 /app/outputs/<会话id>/，要保护的 /app/.opencode、/app/AGENTS.md、/app/web、/app/opencode.json
+// 全在 cwd 之外 → 归 external_directory 管；而它又【必须】是 allow（否则「上传文件→分析」100% 挂死，
+// 见下）。结论：靠 opencode 配置保护这些文件在本部署形态下【根本做不到】，写了也是惰性失效的安全
+// 表演。真正enforceable的写保护要靠容器层【只读绑定挂载】（内核级、连 root+bash 都写不动），见
+// deploy 侧（render-compose.sh 的 :ro 卷 / 或只读根文件系统）。故此处不再写任何 edit/read 规则。
 const enforceOcTools = (oc) => {
   oc.tools = { ...(oc.tools || {}), question: false }
   // ★ external_directory 必须 allow，否则「上传文件→让 agent 分析」这条最常用的路径 100% 卡死。
@@ -243,7 +253,9 @@ const contentDisposition = (name) => {
 }
 
 // ---- 每日成本额度（USD）----
-// 用 opencode 的 session.cost（已含 DeepSeek 缓存折扣）累计每轮增量；跨日自动清零；持久化在 ocdata 卷（重启不丢）。
+// 用 opencode 的 session.cost（已含 DeepSeek 缓存折扣）累计每轮增量；跨日自动清零。
+// 持久化分两种形态：多用户部署记到【宿主账本】（见下方 REMOTE_QUOTA，防容器内 agent 篡改），
+// 单机/本地部署记到 ocdata 卷的 quota.json（重启不丢，与旧行为一致）。
 // DAILY_COST_LIMIT=0 或空 = 不限额。达上限即拦截新对话；进行中的轮到限也会被中途掐断（见 startJob 的 updateRunning）。
 // 被 abort / 被掐断的那一步 opencode 记 cost=0，由估算兜底补账（见下方"轮内实时成本估算"），否则可无限重试绕过额度。
 const DAILY_COST_LIMIT = Number(process.env.DAILY_COST_LIMIT || 0)
@@ -251,8 +263,66 @@ const QUOTA_FILE = path.join(os.homedir(), ".local", "share", "opencode", "quota
 const todayKey = () => new Date().toISOString().slice(0, 10)   // UTC 日期
 const loadQuota = () => { try { const q = JSON.parse(fs.readFileSync(QUOTA_FILE, "utf8")); if (q && q.day === todayKey()) return q } catch {} return { day: todayKey(), cost: 0 } }
 const saveQuota = (q) => { try { fs.mkdirSync(path.dirname(QUOTA_FILE), { recursive: true }); fs.writeFileSync(QUOTA_FILE, JSON.stringify(q)) } catch {} }
-const addCost = (delta) => { if (!(delta > 0)) return; const q = loadQuota(); q.cost += delta; saveQuota(q) }
-const quotaUsed = () => loadQuota().cost
+// ---- 权威账本放宿主（防篡改）----
+// 容器里跑的是能执行任意命令的 agent（与网关同 uid、同容器），QUOTA_FILE 对它就是一个可写文件——
+// "把 quota.json 里今天的数清零"一句话就能绕过每日额度。配了 QUOTA_API_URL（多用户部署由
+// render-compose.sh 注入，指向宿主 manager 的记账端点）时：权威账本在宿主文件系统上，本进程
+// 只在内存记账 + 异步上报增量；QUOTA_FILE 降级为镜像缓存，仅在「启动后尚未从宿主播种到读数」
+// 的窗口期作回退。上报凭据 QUOTA_TOKEN 虽然 agent 同样读得到（env 对它不设防），但宿主端
+// 只接受【正增量】——拿它伪造只能给自己多记账，减不了、清不了。
+// 未配 QUOTA_API_URL（单机 / 本地 / 老容器）完全保持原来的本地文件行为。
+const QUOTA_API = (process.env.QUOTA_API_URL || "").replace(/\/+$/, "")
+const QUOTA_TOKEN = process.env.QUOTA_TOKEN || ""
+const QUOTA_USER = (process.env.BASE_PATH || "").replace(/^\//, "").split("/")[0]
+const REMOTE_QUOTA = !!(QUOTA_API && QUOTA_TOKEN && QUOTA_USER)
+const rq = { day: todayKey(), cost: 0, pending: 0, seeded: false, flushing: false }
+// 跨日：已入账部分清零；尚未上报出去的增量（pending）是真实花费，顺延计入新的一天
+const rqRoll = () => { if (rq.day !== todayKey()) { rq.day = todayKey(); rq.cost = rq.pending } }
+const rqFetch = (p, opt) => fetch(QUOTA_API + p, { ...opt, headers: { "x-quota-token": QUOTA_TOKEN, ...(opt?.headers || {}) }, signal: AbortSignal.timeout(5000) })
+// 把累计未上报的增量推给宿主账本。失败不丢：pending 保留，10s 定时器兜底重试；
+// 唯独 400（宿主明确拒收，如金额不合法）放弃该笔并响亮记日志，否则会无限重试卡死队列。
+async function rqFlush() {
+  if (rq.flushing || !(rq.pending > 0)) return
+  rq.flushing = true
+  const amt = rq.pending
+  try {
+    const r = await rqFetch("/report", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ user: QUOTA_USER, add: amt }) })
+    if (r.ok) rq.pending = Math.max(0, rq.pending - amt)
+    else if (r.status === 400) { rq.pending = Math.max(0, rq.pending - amt); console.warn(`[quota] 宿主拒收上报 $${amt.toFixed(4)}（HTTP 400），该笔放弃：${await r.text().catch(() => "")}`) }
+  } catch { /* 宿主暂不可达：pending 留待定时器重试 */ } finally { rq.flushing = false }
+}
+// 向宿主要权威读数：启动播种 + 周期校准（宿主端管理员手工调账也会被吸收进来）。
+// 叠加 pending 是因为宿主读数不含尚未上报的部分；flush 在途的短暂窗口可能小幅高估，方向安全（宁多算不少算）。
+async function rqSync() {
+  try {
+    const r = await rqFetch(`/today?user=${encodeURIComponent(QUOTA_USER)}`)
+    if (!r.ok) return
+    const j = await r.json()
+    rqRoll()
+    rq.cost = (j && j.day === todayKey() ? Number(j.cost) || 0 : 0) + rq.pending
+    rq.seeded = true
+    saveQuota({ day: rq.day, cost: rq.cost })   // 镜像到本地缓存：下次启动若宿主不可达，作回退读数
+  } catch { /* 播种定时器会再试；期间 quotaUsed 用本地缓存回退 */ }
+}
+if (REMOTE_QUOTA) {
+  rqSync()
+  setInterval(() => { if (!rq.seeded) rqSync() }, 15_000).unref()          // 没播种成功就一直试
+  setInterval(() => { rqSync() }, 5 * 60_000).unref()                      // 周期校准
+  setInterval(() => { if (rq.pending > 0) rqFlush() }, 10_000).unref()     // 上报兜底重试
+}
+const addCost = (delta) => {
+  if (!(delta > 0)) return
+  if (!REMOTE_QUOTA) { const q = loadQuota(); q.cost += delta; saveQuota(q); return }
+  rqRoll(); rq.cost += delta; rq.pending += delta
+  saveQuota({ day: rq.day, cost: rq.cost })   // 本地镜像仅作回退缓存，权威在宿主
+  rqFlush()
+}
+const quotaUsed = () => {
+  if (!REMOTE_QUOTA) return loadQuota().cost
+  rqRoll()
+  // 播种前用本地镜像回退，取较大者：镜像里可能有上次进程已入账、宿主也已收到的花费——宁多算不少算
+  return rq.seeded ? rq.cost : Math.max(rq.cost, loadQuota().cost)
+}
 // 正在跑的各轮实时成本（sid -> 本轮已花）。轮内成本要到收尾才 addCost 进持久额度，
 // 若判断额度时不算上它们，两轮并发会各自以为额度还够、最坏花到上限的约 2 倍；
 // 算上后合计一到顶各轮就中止，超支收敛到「一条消息」的粒度。
@@ -1517,6 +1587,15 @@ async function gracefulExit(sig) {
   const deadline = Date.now() + 3000
   while (runningRounds() > 0 && Date.now() < deadline) await sleep(200)
   if (runningRounds() > 0) exitLog(`[exit] 仍有 ${runningRounds()} 轮未收尾，不再等待`)
+  // 宿主账本模式：上面 addCost 只把增量放进 pending（上报是异步的），停机前必须冲刷一次，
+  // 否则「manager 空闲回收容器」这条最常见的停机路径每次都会丢掉最后一轮的上报。限时别拖过宽限期。
+  if (REMOTE_QUOTA && rq.pending > 0) {
+    // 用小循环而非单次调用：结算路径的 addCost 可能已触发一次在途 flush（rqFlush 对并发调用直接返回），
+    // 这里要等的是「pending 清零」这个结果，不是某一次调用返回。
+    const fDeadline = Date.now() + 2000
+    while (rq.pending > 0 && Date.now() < fDeadline) { try { await rqFlush() } catch {}; if (rq.pending > 0) await sleep(150) }
+    if (rq.pending > 0) exitLog(`[exit] 仍有 $${rq.pending.toFixed(4)} 未上报到宿主账本（宿主不可达？），该笔将丢失`)
+  }
   // opencode 是 detached+unref 的子进程，不主动收会变成孤儿（容器销毁时才被清掉）。
   // 复用 restartOpencode 用的同一把刀：killPort(OC_PORT)（本进程没有留着 child 句柄可用）
   if (OC_MANAGED) { try { killPort(OC_PORT) } catch {} }

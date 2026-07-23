@@ -13,7 +13,7 @@
    - `22` **只放行你自己的 IP**；
    - `80`、`443` 放行（Caddy 自动 HTTPS 用）；
    - **不要**对公网开 `3000`、`8090`（它们只监听回环）。
-4. **一个 DeepSeek API Key**（所有用户共用，账单/额度共享）。
+4. **一个 DeepSeek API Key**（所有用户共用，账单/额度共享；只存宿主，不进用户容器——见下"上游 LLM key 不再进容器"）。
 
 ---
 
@@ -91,6 +91,24 @@ sudo deploy/scripts/user-add.sh bob             # 省略档位=free（普通，$
 | 每日备份（建 cron） | `sudo deploy/scripts/backup.sh`（7 天轮转，写 `/var/backups/sci/`） |
 | 看谁在跑 | `docker ps --filter name=agent-` |
 | 调并发/闲置 | 编辑 **`/etc/sci-manager.env`** 的 `WARM_CAP`/`IDLE_MS` → `systemctl restart sci-manager`（不必 daemon-reload）。同上：改单元里的 `Environment=` 会被这个文件覆盖，无效 |
+
+### 宿主侧额度账本（防容器内篡改）
+
+每日成本的**权威账本在宿主**：manager 另开一个记账端点（默认 `0.0.0.0:8091`，`/etc/sci-manager.env` 的 `QUOTA_LISTEN` 可改/置空关闭），各用户容器的网关把成本增量上报到宿主 `deploy/data/quota/<用户>.json`，容器内 `quota.json` 只是回退缓存。这样容器里的 agent（root、能跑任意命令）改不到账本，"让 AI 清零 quota.json" 绕不过每日额度；manager 在代理 `/api/chat/start` 时还会按宿主账本再拦一道。
+
+- 上报凭据是 `users/<名>.env` 里的 `QUOTA_TOKEN`（`user-add.sh` 生成；老用户由 `render-compose.sh` 自动补发）。端点**只收正增量**，令牌即使被容器内 agent 读走，也只能给自己多记账。
+- ⚠ 云安全组 / 防火墙**不要**放行 8091：它只该被本机容器（172.x 私网）访问，端点自身也校验私网来源 + 令牌。
+- 升级到此机制需**重建**容器（`render-compose.sh` 后 `docker compose up --no-start --force-recreate`），让 `QUOTA_API_URL`/`QUOTA_TOKEN`/`extra_hosts` 生效；未重建的老容器仍走本地记账，admin 台读数对其自动回退。
+
+### 上游 LLM key 不再进容器
+
+`DEEPSEEK_API_KEY` 是全体用户共用的上游 key，原先注入每个容器 env——容器里的 agent 一句 `env` 就能读走。现在 `render-compose.sh` **不再注入它**：容器 opencode 统一以每用户 `QUOTA_TOKEN` 走 manager 记账端点的 **`/llm` 转发通道**，manager 验完令牌把 Authorization 换成真实 key 再流式转发（SSE 不攒包）。真实 key 只存在于宿主（`deploy/.env`，或 `/etc/sci-manager.env` 的 `LLM_UPSTREAM_KEY`，manager 优先读后者、自动回落前者）。
+
+- 令牌泄露的爆炸半径：从「全局上游 key」缩小到「该用户自己的转发通道」；换发只需改 `users/<名>.env` 的 `QUOTA_TOKEN` → `render-compose.sh` → 重建该容器。停用用户即断其通道。
+- 想让全部流量走 one-api 网关调度：在 `/etc/sci-manager.env` 设 `LLM_UPSTREAM_URL=http://127.0.0.1:3010/v1` + `LLM_UPSTREAM_KEY=<one-api令牌>`（容器无感）。
+- 恢复旧直连行为（不推荐）：在 `deploy/.env` 显式设 `OC_GATEWAY_URL`/`OC_GATEWAY_KEY`（它们对 compose 默认值有覆盖权）。
+- ⚠ 若把 `QUOTA_LISTEN` 置空关掉记账端点，`/llm` 通道也随之关闭，容器将**调不到模型**——除非按上一条显式配直连。
+- ⚠ **升级顺序**：新容器把模型流量与记账都指向宿主 `:8091`。务必**先** `systemctl restart sci-manager`（让新版 manager 起来监听 8091）、**再**重建容器（`render-compose.sh` → `docker compose up --no-start --force-recreate`）。顺序反了：容器起来时 `:8091` 还没人听 → 连模型都调不到（连接被拒）。反向中间态（新 manager + 尚未重建的老容器）是安全的：老容器仍带自己的 `DEEPSEEK_API_KEY` 直连、额度读卷内 `quota.json`。
 
 ### 定时备份
 

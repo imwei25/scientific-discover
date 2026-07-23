@@ -1,2 +1,4 @@
 # 生成物（含明文密码），由 scripts/render-compose.sh 生成，勿入库
 docker-compose.yml
+# 宿主侧额度账本（manager 记账端点写入，运行时数据）
+data/

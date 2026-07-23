@@ -58,6 +58,8 @@ LAN_USER=$name
 LAN_PASSWORD=$pass
 # 档位（见 deploy/tiers.env）：决定每日成本额度与存储上限。改档位用 scripts/user-tier.sh $name <档位>
 TIER=$tier
+# 宿主记账令牌：容器网关向 manager 记账端点上报成本的凭据（端点只收正增量，泄露也只能给自己多记账）
+QUOTA_TOKEN=$(openssl rand -hex 24)
 # 个别加码/收紧（覆盖档位）：取消注释并填值，USD/天、MB，0=不限；改后 render-compose.sh + docker restart agent-$name
 #DAILY_COST_LIMIT=
 #STORAGE_LIMIT_MB=
