@@ -5,12 +5,17 @@
 # 做两件事：
 #   ① 把每个卷的内容灌回本机【同名】Docker 卷（<user>-uploads/-outputs/-ocdata、one-api-data；
 #      卷不存在则自动创建）——无前缀，与 compose 的显式 name: 一致，恢复的数据才会被真正挂载。
-#   ② 恢复配置：.env、users/、tiers.env、docker-compose.yml（已存在的先备份成 *.bak-<时间>）。
+#   ② 恢复配置：.env、users/、tiers.env、docker-compose.yml、data/quota/（额度账本）
+#      （已存在的先备份成 *.bak-<时间>）。
 #
 # 用法（在新机的 deploy/ 目录下）：
 #   ./import-all.sh sci-agent-backup-YYYYmmdd-HHMMSS.tar.gz
 #
-# 恢复后：docker compose up -d 即可（compose 已在包里，一般无需重新 build）。
+# ⚠ 前提：新机已【完整 checkout 本仓库】（compose 会把仓库根 .opencode/skills 与 AGENTS.md 以只读
+#    挂进容器，仓库不完整容器起不来）；宿主 sci-manager 服务已装好（它开额度账本端点 :8091，
+#    容器起来前须先跑起来，否则容器调不到账本、也调不到 /llm 转发——见 DEPLOY.md 升级/迁移顺序）。
+# 恢复后：先 `scripts/render-compose.sh` 重渲染 compose（吸收本机路径/新脚本逻辑、幂等补齐令牌），
+#    再 `docker compose up -d`（或 --no-start 保持按需唤醒）。
 # 安全：每个卷【先校验 tgz 完整性（tar tzf）再动数据】，坏包在清空目标卷之前就中止，绝不“先毁后验”。
 # ============================================================================
 set -euo pipefail
@@ -105,12 +110,21 @@ if [ -d "$ROOT/config" ]; then
   done
   if [ -d "$ROOT/config/users" ]; then
     [ -e ./users ] && mv ./users "./users.bak-$STAMP" && echo "  原 ./users 备份为 ./users.bak-$STAMP"
-    cp -a "$ROOT/config/users" ./users; echo "  -> 已恢复 ./users（账号+密码+端口）"
+    cp -a "$ROOT/config/users" ./users; echo "  -> 已恢复 ./users（账号+密码+端口+QUOTA_TOKEN）"
+  fi
+  # 额度账本（宿主侧，容器摸不到）。老包可能没有 → 跳过，迁移后当天用量从 0 起（UTC 跨日本就会重置）。
+  if [ -d "$ROOT/config/quota" ]; then
+    [ -e ./data/quota ] && mv ./data/quota "./data/quota.bak-$STAMP" 2>/dev/null || true
+    mkdir -p ./data; cp -a "$ROOT/config/quota" ./data/quota; echo "  -> 已恢复 ./data/quota（额度账本）"
   fi
 fi
 
 echo
 echo "== 完成 =="
 [ "$FAIL" -eq 0 ] && echo "  全部卷恢复成功。" || echo "  ⚠ 有 $FAIL 个卷恢复失败（见上），请核对后重试。"
-echo "  下一步： docker compose up -d"
+echo "  下一步："
+echo "    1) 确认宿主 sci-manager 已装好并在跑（systemctl status sci-manager；它开额度账本端点 :8091）"
+echo "    2) scripts/render-compose.sh          # 重渲染 compose（吸收本机路径、幂等补齐令牌）"
+echo "    3) docker compose up -d               # 或 --no-start 保持按需唤醒"
+echo "    4) 确认防火墙/安全组【未】放行 8091"
 [ "$FAIL" -eq 0 ] || exit 1

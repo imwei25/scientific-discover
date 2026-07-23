@@ -6,8 +6,10 @@
 #   ① 每个用户的三个 Docker 卷：<user>-uploads / <user>-outputs / <user>-ocdata
 #      （ocdata 卷里含 OpenCode 会话历史 + 会话元数据 + 所选模型）——卷是【无前缀显式命名】。
 #   ② LLM 网关卷 one-api-data（渠道/令牌/用量），迁移后不用重配网关。
-#   ③ 配置与密钥：.env、users/*.env（账号+密码+端口）、tiers.env（分级）、docker-compose.yml。
-#      —— 这些不在 git 里，是重建用户与路由的唯一来源。
+#   ③ 配置与密钥：.env、users/*.env（账号+密码+端口+每用户 QUOTA_TOKEN）、tiers.env（分级）、
+#      docker-compose.yml。—— 这些不在 git 里，是重建用户与路由的唯一来源。
+#   ④ 宿主额度账本 data/quota/（每用户今日成本，权威记账落宿主、容器摸不到）——不带走则迁移后
+#      当天用量归零（UTC 跨日本就会重置，故非致命，但带上更连续）。
 #
 # 用法（在 deploy/ 目录下）：
 #   ./export-all.sh                 # 导出到 /var/backups/sci-export/（仓库【之外】，含明文密码故不放工作树）
@@ -16,9 +18,15 @@
 # ⚠ 产物含 .env 与 users/*.env（全部账号 + 明文密码）。别把它放进 git 工作树，也别用邮件/IM 传。
 # ⚠ 本包只覆盖 compose 内的东西（卷 + deploy/ 下的配置）。宿主侧还有几样【必须手工搬】：
 #     /etc/sci-manager.env（ADMIN_PASSWORD / ONEAPI_TOKEN / WAKE_* —— manager 是宿主 systemd 服务，不在 compose 里）
+#       · 额度账本端点 QUOTA_LISTEN 与上游转发 LLM_UPSTREAM_* 都有内置默认（:8091 / 回落读 .env 的
+#         DEEPSEEK_API_KEY），一般不用搬；只有你显式改过它们才需要一起搬。
 #     /etc/caddy/Caddyfile（TLS 与路径路由）、/etc/sci-monitor.conf（告警 webhook）、fail2ban 配置
 #   只导入本包就 `docker compose up -d` 的话：没有 manager、没有 TLS/路由、没有 /admin 密码、
 #   没有监控告警 —— 站点整体不可达，且 admin 密码若未另存就永久丢失。
+# ⚠ 新机必须【完整 checkout 本仓库】（不能只拷 deploy/ 目录）：compose 会把仓库根的
+#     .opencode/skills 与 AGENTS.md 以【只读】挂进每个容器（内核级写保护，防容器内 agent 改技能/主控指令）。
+#     这两条挂载源是相对 deploy/ 的 ../ 路径，仓库不完整则容器起不来。
+# ⚠ 新机防火墙/安全组【不要】放行 8091（额度账本端点）：它只该被本机容器访问，端点自身也校验私网来源+令牌。
 #
 # 迁移到新服务器：把生成的 sci-agent-backup-*.tar.gz 拷过去，在新机 deploy/ 里跑 ./import-all.sh 它。
 # 容器无需停机即可导出（tar 直接读卷）；但 ocdata 是 SQLite(WAL)，为拿到一致快照建议先 `docker compose stop`。
@@ -69,6 +77,9 @@ for f in .env tiers.env docker-compose.yml; do
   [ -f "./$f" ] && cp -a "./$f" "$STAGE/config/$f" || true
 done
 [ -d ./users ] && cp -a ./users "$STAGE/config/users" || echo "  (无 ./users 目录，跳过账号导出)"
+
+# ④ 宿主额度账本（每用户今日成本；容器摸不到，故不在任何卷里，须单独收）。best-effort：无则跳过。
+[ -d ./data/quota ] && { cp -a ./data/quota "$STAGE/config/quota"; echo "  -> 额度账本 data/quota/"; } || true
 
 # 清单：项目信息 + 卷列表，导入时核对
 {
