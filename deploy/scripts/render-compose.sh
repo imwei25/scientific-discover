@@ -88,6 +88,9 @@ tier_field() { [ -f tiers.env ] || return 0; awk -v t="$1" -v c="$2" '!/^[[:spac
       S2_API_KEY: \${S2_API_KEY:-}
       OPENALEX_API_KEY: \${OPENALEX_API_KEY:-}
       CROSSREF_PLUS_TOKEN: \${CROSSREF_PLUS_TOKEN:-}
+      # OCR.space 图片识字 key（ocr 技能用；免费可重置，风险同检索 key 一档，故与其一并注入。
+      # 全体用户共用这一个 key 的月度配额；空=ocr 技能报错提示未配置）。
+      OCR_SPACE_API_KEY: \${OCR_SPACE_API_KEY:-}
       LAN_AUTH: "${lauth}"
       LAN_USER: "${luser}"
       LAN_PASSWORD: "${lpass}"

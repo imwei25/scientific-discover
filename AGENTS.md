@@ -42,6 +42,7 @@
 - **检索 / 全文**：`search-lit`（PubMed 系）、`literature-review`（Europe PMC / 叙述性综述成文）、`fulltext-retrieval`（下 PDF/OA、PDF 转 md）
 - **文稿处理**：`humanize-academic`（去 AI 味）、`reference-check`（查假引用 / 核 DOI）、`render-docx` / `render-pdf-doc`（排版出件）
 - **数据合规**：`deidentify`（患者数据脱敏）
+- **图片识字**：`ocr`（把图片/扫描件/官方以图片发布的文件识别成文字；调云端 OCR.space、本地不装模型；**signal not verdict**，代码/金额/批号等关键字段须人工复核）
 - **数据自查**：`data-integrity`（源数据数值完整性 sanity check：查复制粘贴错误 / 常数偏移 / 跨表复用 / GRIM 不自洽等；投稿前自查或审他人数据，**只出待核信号、不下造假结论**；只看结构化数值表，不看图像篡改）
 - **评审**：`peer-review`（投稿前自查 / 对抗红队）
 - **基础设施**：`env-setup`（缺 `.venv` 时先跑）
