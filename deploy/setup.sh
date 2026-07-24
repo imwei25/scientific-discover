@@ -60,10 +60,15 @@ elif ! grep -q '^EnvironmentFile=' "$UNIT"; then unitStale=1
 elif grep -q 'change-me-a-strong-admin-password' "$UNIT"; then unitStale=1
 fi
 
-# ③ 升级旧单元前，先把运维在旧单元里改过的值【迁移】进 ENVF（仅当 ENVF 是本次新建的，别覆盖已有配置）。
-#    不迁移就等于把线上调过的 WARM_CAP / 管理密码悄悄清零——正是本次要根治的毛病，别在升级方向上再犯一次。
-if [ "$unitStale" = 1 ] && [ "$envCreated" = 1 ] && [ -f "$UNIT" ]; then
-  for k in ADMIN_PASSWORD WARM_CAP IDLE_MS START_TIMEOUT_MS CAP_WAIT_MS; do
+# ③ 升级旧单元前，先把运维在旧单元里 inline 写死的 Environment= 值【迁移】进 ENVF。
+#    不迁移就等于把线上调过的 WARM_CAP / 管理密码 / 网关凭据悄悄清零——正是本次要根治的毛病。
+#    【不再依赖 envCreated】：env 文件早已存在（比如先前只往里加过 TEST_LOGIN_TOKEN）也要迁，
+#    否则升级会跳过整块、把旧单元里的 inline 密钥全丢。逐 key 判断：ENVF 里【尚无】该项才迁，
+#    绝不覆盖运维已在 env 里设好的值。ONEAPI_URL/ONEAPI_TOKEN 必须在列——旧生产单元把它俩写成
+#    inline，漏搬会让升级后「同供应商切换 / /admin 网关管理」静默失效（实测踩过）。
+if [ "$unitStale" = 1 ] && [ -f "$UNIT" ]; then
+  for k in ADMIN_PASSWORD WARM_CAP IDLE_MS START_TIMEOUT_MS CAP_WAIT_MS ONEAPI_URL ONEAPI_TOKEN; do
+    grep -q "^$k=" "$ENVF" 2>/dev/null && continue            # ENVF 已有该项 → 保留，不迁不覆盖
     v="$(sed -n "s/^Environment=$k=//p" "$UNIT" | head -1)"
     [ -n "$v" ] || continue
     [ "$v" = "change-me-a-strong-admin-password" ] && continue   # 占位值不迁移：迁过去等于继续裸奔
