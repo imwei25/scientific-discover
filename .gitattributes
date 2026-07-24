@@ -2,3 +2,8 @@
 # shell 脚本带 CRLF 会破坏 shebang / 让 bash 报 '\r' 语法错。deploy/ 目录另有更细的 deploy/.gitattributes。
 *.sh text eol=lf
 *.mjs text eol=lf
+# 技能预设(.env 被容器内 bash `source`，带 \r 会污染变量值如 linestretch=2.0\r 破坏 LaTeX)
+# 与随技能进 Linux 容器的 .py/.csl 也强制 LF，防 Windows 检出重提交引入 CRLF。
+.opencode/skills/**/*.env text eol=lf
+.opencode/skills/**/*.py text eol=lf
+.opencode/skills/**/*.csl text eol=lf

@@ -1,6 +1,6 @@
 ---
 name: render-docx
-description: 把 Markdown 稿件渲染成 Word (.docx) 投稿版。医学期刊投稿绝大多数要 Word（不是 PDF），国自然正文、中文核心期刊也多用 .docx 模板。支持套用期刊 Word 模板（--reference-doc）；可选按 GB/T 7714 等 CSL 渲染参考文献（仅当稿件用 pandoc `[@key]` 引用+.bib 时生效，本套件默认的 `[n]` 文本引用不适用）。用 pandoc，中文比 xelatex PDF 路线更不容易漏字。当用户说"出 Word""转 docx""投稿要 Word 版""按期刊模板排版""生成 .docx"时使用。要出 PDF 用 render-pdf-doc；要查引用真实性用 reference-check。用户只说"排版"没指明格式时，先问要 PDF 还是投稿系统要的 Word。
+description: 把 Markdown 稿件渲染成 Word (.docx) 投稿版。医学期刊投稿绝大多数要 Word（不是 PDF），国自然正文、中文核心期刊也多用 .docx 模板。内置期刊格式预设（--journal nejm/lancet/jama/bmj/cmj/generic-submission：字体、字号、边距、双倍行距、连续行号、参考文献 CSL 一键落齐），也可单独指定 --font/--fontsize/--margin/--line-spacing/--line-numbers，或套用期刊 Word 模板（--reference-doc）；可按 GB/T 7714 等 CSL 渲染参考文献（仅当稿件用 pandoc `[@key]` 引用+.bib 时生效，本套件默认的 `[n]` 文本引用不适用）。用 pandoc，中文比 xelatex PDF 路线更不容易漏字。当用户说"出 Word""转 docx""投稿要 Word 版""按 XX 期刊格式排版""双倍行距加行号""生成 .docx"时使用。要出 PDF 用 render-pdf-doc；要查引用真实性用 reference-check。用户只说"排版"没指明格式时，先问要 PDF 还是投稿系统要的 Word。
 ---
 
 # Markdown → Word (.docx) 投稿排版技能
@@ -21,17 +21,36 @@ description: 把 Markdown 稿件渲染成 Word (.docx) 投稿版。医学期刊�
 # 最简：Markdown → Word
 bash ${REPO_ROOT:-/app}/.opencode/skills/render-docx/scripts/render_docx.sh -i manuscript.md -o manuscript.docx
 
-# 套用期刊/机构的 Word 模板（继承其样式与字体）——中文投稿几乎必须
+# ★ 按指定期刊格式排版（预设一键落：字体/字号/边距/行距/行号/参考文献样式）
+bash ${REPO_ROOT:-/app}/.opencode/skills/render-docx/scripts/render_docx.sh -i manuscript.md --journal nejm
+#   可用预设：nejm lancet jama bmj cmj(中华系列) generic-submission(通用送审)；--journal list 列出
+#   预设值可被单项覆盖，如：--journal lancet --line-spacing 1.5
+
+# 手动指定送审格式（不套预设）：双倍行距 + 连续行号 + Times 12pt + 1in 边距
+bash ${REPO_ROOT:-/app}/.opencode/skills/render-docx/scripts/render_docx.sh -i manuscript.md \
+  --font "Times New Roman" --fontsize 12 --margin 1in --line-spacing double --line-numbers
+
+# 图表置于正文末尾（NEJM/JAMA/Lancet 送审稿要求，原位留"见文末"占位）
+bash ${REPO_ROOT:-/app}/.opencode/skills/render-docx/scripts/render_docx.sh -i manuscript.md \
+  --journal nejm --figures-at-end
+
+# 中文稿指定中文字体（docx 的 eastAsia 字体，如宋体）
+bash ${REPO_ROOT:-/app}/.opencode/skills/render-docx/scripts/render_docx.sh -i manuscript.md --journal cmj
+#   （cmj 预设已含 宋体正文 + Times 西文 + 1.5 倍行距 + 2.5cm 边距 + GB/T 7714）
+
+# 套用期刊/机构的 Word 模板（继承其样式与字体）；可与格式参数叠加，模板先套、参数后覆盖
 bash ${REPO_ROOT:-/app}/.opencode/skills/render-docx/scripts/render_docx.sh -i manuscript.md --ref templates/journal_template.docx
 
 # 按 GB/T 7714 渲染参考文献（仅当稿件用 pandoc @citekey 引用、配 .bib 时；见下方限制）
 bash ${REPO_ROOT:-/app}/.opencode/skills/render-docx/scripts/render_docx.sh -i manuscript.md \
-  --csl /path/to/gb-t-7714-2015-numeric.csl --bib refs.bib
+  --csl china-national-standard-gb-t-7714-2015-numeric --bib refs.bib
 ```
-> **CSL 文件本仓库未内置**，需自行下载：GB/T 7714-2015 numeric CSL 见 `citation-style-language/styles` 仓库（文件名 `china-national-standard-gb-t-7714-2015-numeric.csl`），或中文社区 `zotero-chinese/styles`（含中华医学会样式）、Gitee 镜像 `redleafnew00/Chinese-STD-GB-T-7714-related-csl`。下好放任意路径，`--csl` 指过去即可。
+> **常用 CSL 已内置** 在 `presets/csl/`（vancouver / the-lancet / the-new-england-journal-of-medicine / american-medical-association / bmj / china-national-standard-gb-t-7714-2015-numeric），`--csl` 直接写名字即可（不必带路径和 .csl 后缀）；期刊预设配 `--bib` 时自动选用对应样式。要别的样式：本仓库 `backend/.venv/Lib/site-packages/citeproc_styles/styles/` 内置 5 万+ 官方 CSL 可拷进 `presets/csl/`，或从 `citation-style-language/styles` / `zotero-chinese/styles` 下载后 `--csl` 指绝对路径。
 
 ## 说明
-- **中文字体**：不给 `--reference-doc` 时 pandoc 用内置默认模板，中文能显示但字体是"等线"之类、并非期刊要求的宋体/黑体/仿宋。**中文投稿默认应配期刊 Word 模板（`--reference-doc`），不是可选优化项**——字体、参考文献悬挂缩进、表格线型、题注这些期刊在意的格式，裸转基本满足不了，裸转产物"能读"但通常不达投稿格式要求。
+- **期刊预设（`--journal`）**：预设文件在 `presets/*.env`（与 render-pdf-doc 共用），一个参数落齐页面格式 + 参考文献样式；渲染完会打印该预设的 `PRESET_NOTE` 提醒预设覆盖不到的期刊要求（字数、结构式摘要、图表数等）。预设值可被命令行单项覆盖。加新期刊见 `presets/README.md`。
+- **格式参数的实现**：pandoc 本身不管字体/边距/行距，脚本在 pandoc 之后用 python-docx（项目根 `.venv`）后处理落格式——改 Normal/Body Text/标题样式的字体（含 eastAsia 中文字体）、字号、行距，改节属性的边距与 `w:lnNumType` 连续行号。**格式参数后处理失败会报错退出（exit 5）**，不会静默给你一个没格式的产物。
+- **中文字体**：不给 `--journal`/`--cjk-font`/`--reference-doc` 时 pandoc 用内置默认模板，中文能显示但字体是"等线"之类、并非期刊要求的宋体/黑体/仿宋。**中文投稿至少用 `--journal cmj` 或 `--cjk-font 宋体`**；有期刊官方 Word 模板则 `--reference-doc` 更优——参考文献悬挂缩进、表格线型、题注这些更细的格式仍以模板为准。
 - **期刊模板**：多数中华系列/SCI 期刊提供 Word 模板。把模板作为 `--reference-doc` 传入，pandoc 套用其"Normal/标题/表格"等样式——比手动排版稳。用户有目标刊模板就优先用它。
 - **参考文献两种情形（重要，先分清）**：
   - **稿件里已是写好的 `[n]` 编号引用文本**（本套件 `search-lit`/`write-paper` 的默认产出形态）→ 直接转，`--csl` **用不上**、不要传。想改成 GB/T 7714 格式得手工调或让写作阶段就按国标写。
@@ -40,8 +59,11 @@ bash ${REPO_ROOT:-/app}/.opencode/skills/render-docx/scripts/render_docx.sh -i m
 
 ## 当前限制（如实告知用户，别假装能做）
 - **修订模式 (track changes)**：返修阶段期刊常要保留修订痕迹，本脚本裸转不产生 track changes；需要的话在 Word 里开启修订后再改。
-- **行号 / 双倍行距 / 双栏**：多数期刊送审稿要求行号 + 双倍行距，pandoc 不会自动加，只能靠 `--reference-doc` 模板预置这些样式。
-- **题注自动编号**：见上，嵌入图/表的编号非 Word 域。
+- **双栏**：送审稿几乎都是单栏（双栏是期刊出版排版，投稿不需要）；确需双栏靠 `--reference-doc` 模板。
+- **`[n]` 文本引用不能被 CSL 重排**：本套件 `write-paper` 默认产出 `[n]` 编号文本引用，`--csl` 对它无效（只认 `[@key]`+.bib）。要换参考文献样式得回写作层改，或手工调。
+- **题注自动编号**：嵌入图/表的编号非 Word 域，增删后要手工核对。
+- **图表置文末**：用 `--figures-at-end` 自动把独占行的图与 pipe 表格搬到正文末的"# 图表"下、原位留占位提示（只搬独占行图/标准 pipe 表，行内图与代码块内伪表不动）。表格上方的 `**表n**` 题注随表一并搬走，题注与表间自动补空行（否则 pandoc 不识别为表格、会渲染成裸竖线文本）。与 `--csl` 并用时自动插文献锚点，令参考文献表排在图表之前（正文→参考文献→图表）。
+- **`[n]` 引用传 CSL 会警告不改写**：稿件无 `[@key]` 却传 `--csl/--bib` 时脚本打印 WARN 并原样保留引用（不再静默 no-op）；要按期刊样式重排须用 `[@key]`+.bib。
 
 ## 衔接
 - 上游：`write-paper`（论文）、`grant-proposal`（标书）、`literature-review`（综述）等写完 `.md`，交本技能出 Word。

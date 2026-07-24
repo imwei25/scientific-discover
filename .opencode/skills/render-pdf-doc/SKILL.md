@@ -18,7 +18,9 @@ model: inherit
 >
 > **中文全自动、零参数**：`render_pdf.sh` 扫描稿件，**含汉字时自动走 `ctexart` 文档类**——宋体正文 / 黑体标题、标点避头尾、首行缩进、页眉页码，英文数字用 Times，代码框等宽字体覆盖制表符 `├└│─`（Windows Consolas / macOS Menlo / Linux DejaVu Sans Mono）。含韩文时走原 article 路径（Malgun Gothic / Noto CJK KR / Apple SD Gothic Neo）。**中文稿不必再加 `--cjk-font`**。若 frontmatter 写了 `CJKmainfont` 或命令行传了 `--cjk-font`，脚本会尊重覆盖。
 >
-> 以下为上游技能原文（vendored）；本仓库对 `render_pdf.sh` 做了实质增强：中文 ctex 版式、Python 解释器自动解析、pandoc/xelatex 的 winget/MiKTeX 路径自探测、`redact_internal` 落地。
+> **期刊送审格式（新）**：`render_pdf.sh` 支持 `--journal nejm|lancet|jama|bmj|cmj|generic-submission`（预设与 render-docx 共用，`--journal list` 列出）一键落齐边距/字号/行距/行号/参考文献 CSL；也可单项指定 `--margin 1in`、`--fontsize 12`（LaTeX 只认 10/11/12）、`--line-spacing double`（或数字倍数）、`--line-numbers`（lineno 连续行号）、`--figures-at-end`（图表搬到正文末，NEJM/JAMA/Lancet 要求）、`--csl vancouver --bib refs.bib`（稿件须用 `[@key]` 引用；无 `[@key]` 却传 CSL 会 WARN 提示不生效）。优先级：命令行 > 预设 > frontmatter > 默认；**只要用户在 `--` 后透传了同名 `-V geometry/fontsize/linestretch`，脚本一律不再注入同名值（透传最优先），彻底避免重复 `-V` 拼接（`\setstretch{1.42.0}`）导致的编译崩溃**——无论我方值来自默认、命令行还是预设。例：`bash scripts/render_pdf.sh -i ms.md --journal nejm --figures-at-end --bib refs.bib`。
+>
+> 以下为上游技能原文（vendored）；本仓库对 `render_pdf.sh` 做了实质增强：中文 ctex 版式、期刊预设与送审格式参数、Python 解释器自动解析、pandoc/xelatex 的 winget/MiKTeX 路径自探测、`redact_internal` 落地。
 
 # Render-PDF-Doc Skill
 
