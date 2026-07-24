@@ -44,8 +44,20 @@ tier_field() { [ -f tiers.env ] || return 0; awk -v t="$1" -v c="$2" '!/^[[:spac
     fi
     dlimit=$(field DAILY_COST_LIMIT "$f"); dlimit=${dlimit:-$(tier_field "$tier" 2)}
     slimit=$(field STORAGE_LIMIT_MB "$f"); slimit=${slimit:-$(tier_field "$tier" 3)}
+    # 额度 fail-closed（B3 治本入口）：额度值只允许【空】或【非负数字】。空=故意不限额（设计如此），
+    # 保留原行为；一旦是非空却非法的值（手改 users/*.env 或 tiers.env 填了 abc/负数/乱码），下游
+    # Number(x)=NaN → `x>0` 恒 false → 被静默当成"不限额"可无限烧钱。故在生成阶段就响亮中止，
+    # 一个畸形数值都别让它流进 compose/容器（仿上面 openssl 失败即 exit 1 的范式）。
+    if [ -n "$dlimit" ] && ! [[ "$dlimit" =~ ^[0-9]+(\.[0-9]+)?$ ]]; then
+      echo "!! $f 的 DAILY_COST_LIMIT 非法：'$dlimit'（须为非负数字，空=不限额）。请修正 users/*.env 或 tiers.env 后重跑。" >&2; exit 1; fi
+    if [ -n "$slimit" ] && ! [[ "$slimit" =~ ^[0-9]+(\.[0-9]+)?$ ]]; then
+      echo "!! $f 的 STORAGE_LIMIT_MB 非法：'$slimit'（须为非负数字，空=不限额）。请修正 users/*.env 或 tiers.env 后重跑。" >&2; exit 1; fi
     # 分级模型：用户 .env 显式 OC_MODEL 覆盖 > 档位 tiers.env 第4列 > 缺省 deepseek-v4-pro（走网关时即请求这个模型名）
     tmodel=$(field OC_MODEL "$f"); tmodel=${tmodel:-$(tier_field "$tier" 4)}; tmodel=${tmodel:-deepseek-v4-pro}
+    # B4：tmodel/tier 与 luser/lpass 同样是自由文本，写进双引号 YAML 且被 compose 变量插值；未转义的
+    # "/$ 会破坏 YAML 或被当插值吃掉。过一遍 yaml_esc（tmodel 转义后斜杠结构不变，仍是 deepseek/<名>）。
+    # 注意：tier 的【原值】上面已用于 tier_field 查表，这里只对写进 YAML 的副本转义，不动查表用的 $tier。
+    tmodel_esc=$(yaml_esc "$tmodel"); tier_esc=$(yaml_esc "$tier")
     if [ -z "$name" ] || [ -z "$port" ]; then echo "!! $f 缺 NAME/PORT，跳过" >&2; continue; fi
     # 宿主记账令牌：容器网关向 manager 记账端点（QUOTA_LISTEN）上报成本的每用户凭据。
     # 端点只收正增量，令牌泄露（容器 env 对 agent 不设防）也只能给自己多记账。
@@ -69,7 +81,7 @@ tier_field() { [ -f tiers.env ] || return 0; awk -v t="$1" -v c="$2" '!/^[[:spac
       # 一句 env 命令就能读走。真实 key 只留宿主（deploy/.env / sci-manager.env），容器统一走
       # manager 的 /llm 转发通道，凭据是每用户的 QUOTA_TOKEN（泄露只废该用户自己的通道，可单独换发）。
       # 在 deploy/.env 显式配 OC_GATEWAY_URL+OC_GATEWAY_KEY 可整体改走别的网关（恢复旧直连行为）。
-      OC_MODEL: "deepseek/${tmodel}"
+      OC_MODEL: "deepseek/${tmodel_esc}"
       OC_GATEWAY_URL: \${OC_GATEWAY_URL-http://host.docker.internal:8091/llm}
       OC_GATEWAY_KEY: \${OC_GATEWAY_KEY-${qtok}}
       OC_COST_INPUT: \${OC_COST_INPUT:-0.27}
@@ -95,7 +107,7 @@ tier_field() { [ -f tiers.env ] || return 0; awk -v t="$1" -v c="$2" '!/^[[:spac
       LAN_USER: "${luser}"
       LAN_PASSWORD: "${lpass}"
       BASE_PATH: "/${name}"
-      USER_TIER: "${tier:-}"
+      USER_TIER: "${tier_esc:-}"
       DAILY_COST_LIMIT: "${dlimit:-0}"
       STORAGE_LIMIT_MB: "${slimit:-0}"
       # 宿主账本：额度权威记在 manager 侧（deploy/data/quota/），容器内 quota.json 仅作回退缓存，
@@ -105,6 +117,12 @@ tier_field() { [ -f tiers.env ] || return 0; awk -v t="$1" -v c="$2" '!/^[[:spac
       QUOTA_TOKEN: "${qtok}"
     extra_hosts:
       - "host.docker.internal:host-gateway"
+    # 租户隔离：每个用户容器只挂在自己的专属 bridge 网络 net-${name}（顶层定义见文件末尾）。
+    # 不同 bridge 网络之间 docker 默认不路由容器间流量 → 用户容器彼此不可达（防探端口/盲试邻居登录）。
+    # 不影响访问宿主：host.docker.internal 经 host-gateway 解析到【本容器所在 bridge 的宿主网关 IP】，
+    # 每张 per-user bridge 各有自己的网关通向宿主 8091（/llm 转发 + 记账），与容器落在哪张网无关。
+    networks:
+      - net-${name}
     volumes:
       - ${name}-uploads:/app/uploads
       - ${name}-outputs:/app/outputs
@@ -131,6 +149,13 @@ YAML
       for v in uploads outputs ocdata; do
         printf '  %s-%s:\n    name: %s-%s\n' "$name" "$v" "$name" "$v"
       done
+    done
+    # 每用户一张独立 bridge 网络（租户隔离，见各 service 的 networks 段注释）。
+    # compose key = net-<name>（与 service 里引用一致）；实际 docker 网络名固定为 <name>-net（稳定、唯一）。
+    echo "networks:"
+    for f in users/*.env; do
+      name=$(field NAME "$f"); [ -n "$name" ] || continue
+      printf '  net-%s:\n    name: %s-net\n' "$name" "$name"
     done
   fi
 } > "$tmp"

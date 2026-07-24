@@ -258,7 +258,20 @@ const contentDisposition = (name) => {
 // 单机/本地部署记到 ocdata 卷的 quota.json（重启不丢，与旧行为一致）。
 // DAILY_COST_LIMIT=0 或空 = 不限额。达上限即拦截新对话；进行中的轮到限也会被中途掐断（见 startJob 的 updateRunning）。
 // 被 abort / 被掐断的那一步 opencode 记 cost=0，由估算兜底补账（见下方"轮内实时成本估算"），否则可无限重试绕过额度。
-const DAILY_COST_LIMIT = Number(process.env.DAILY_COST_LIMIT || 0)
+// 额度解析（fail-closed，与 manager.mjs parseLimit 同款策略）：空/未设/合法 0 → 0（=故意不限额，行为不变）；
+// 合法正数 → 该上限；非空但非有限 ≥0 数字（NaN/负数/Infinity，如乱码 env）→ 判为【配置错误】。
+// 此前 Number("abc")=NaN、`x>0` 恒 false → 门形同虚设可无限烧钱（要治的 fail-open）。兜底：返回极小正数哨兵
+// QUOTA_BAD + 响亮日志，所有既有 `>0 &&` 判断无需改动即近似 fail-closed；哨兵是有限正数 → toFixed 不崩、
+// 前端 `if(!limit)` 判真 → 显示 ~$0.00 而绝不回退成"不限"。代价：触底前首个请求可能漏过。
+const QUOTA_BAD = 1e-9
+const parseLimit = (raw) => {
+  if (raw === undefined || raw === null || raw === "") return 0
+  const n = Number(raw)
+  if (Number.isFinite(n) && n >= 0) return n
+  console.warn(`[quota] 额度配置非法 ${JSON.stringify(raw)} → fail-closed（按已超限处理），请修正容器 env`)
+  return QUOTA_BAD
+}
+const DAILY_COST_LIMIT = parseLimit(process.env.DAILY_COST_LIMIT)
 const QUOTA_FILE = path.join(os.homedir(), ".local", "share", "opencode", "quota.json")
 const todayKey = () => new Date().toISOString().slice(0, 10)   // UTC 日期
 const loadQuota = () => { try { const q = JSON.parse(fs.readFileSync(QUOTA_FILE, "utf8")); if (q && q.day === todayKey()) return q } catch {} return { day: todayKey(), cost: 0 } }
@@ -380,7 +393,7 @@ const isPrivateHost = (host) => {
 
 // ---- 每用户存储上限（uploads + outputs 之和）----
 // STORAGE_LIMIT_MB=0 或空 = 不限。达上限拦截新上传；前端到 90% 提示。删除会话会清掉其目录（见 /api/session/delete）。
-const STORAGE_LIMIT_MB = Number(process.env.STORAGE_LIMIT_MB || 0)
+const STORAGE_LIMIT_MB = parseLimit(process.env.STORAGE_LIMIT_MB)
 // 统一的文件下发：createReadStream 的 'error' 【必须】挂监听器。进程里没有 uncaughtException 兜底
 // （刻意不加：那会把真正的 bug 掩盖成"还能跑"），一个没人接的 'error' 就是整容器退出、opencode 一起没。
 // 触发它不需要攻击，日常就够：TOCTOU（existsSync 通过后文件被 prunePreviewCache / 删会话并发删掉 → ENOENT）、
@@ -952,12 +965,12 @@ const server = http.createServer(async (req, res) => {
         return send(res, 401, "application/json", JSON.stringify({ ok: false, err: "账号或密码错误" }))
       }
       pwGuard.fails = 0
-      res.writeHead(200, { "Content-Type": "application/json", "Set-Cookie": `lan_auth=${makeAuthCookie()}; Path=${BASE_PATH}/; HttpOnly; SameSite=Lax; Max-Age=${AUTH_TTL_MS / 1000}` })
+      res.writeHead(200, { "Content-Type": "application/json", "Set-Cookie": `lan_auth=${makeAuthCookie()}; Path=${BASE_PATH}/; HttpOnly; Secure; SameSite=Lax; Max-Age=${AUTH_TTL_MS / 1000}` })
       return res.end(JSON.stringify({ ok: true }))
     }
     // 退出登录：签名 cookie 无服务端状态，清掉浏览器 cookie 即可（本人登出足够）
     if (req.method === "POST" && u.pathname === "/api/logout") {
-      res.writeHead(200, { "Content-Type": "application/json", "Set-Cookie": `lan_auth=; Path=${BASE_PATH}/; HttpOnly; Max-Age=0` })
+      res.writeHead(200, { "Content-Type": "application/json", "Set-Cookie": `lan_auth=; Path=${BASE_PATH}/; HttpOnly; Secure; Max-Age=0` })
       return res.end(JSON.stringify({ ok: true }))
     }
     // 门禁：其余路径若未登录 → 页面跳登录页、接口回 401
@@ -1004,7 +1017,7 @@ const server = http.createServer(async (req, res) => {
       catch { return send(res, 500, "application/json", JSON.stringify({ ok: false, err: "保存失败" })) }
       // 签名密钥就是「当前有效密码」，改密后旧 cookie 立即失效 → 必须当场用新密码重签一张下发，
       // 否则改密成功的用户下一次请求就被自己踢回登录页。override 已落盘，effectivePassword() 此刻返回新密码。
-      res.writeHead(200, { "Content-Type": "application/json", "Set-Cookie": `lan_auth=${makeAuthCookie()}; Path=${BASE_PATH}/; HttpOnly; SameSite=Lax; Max-Age=${AUTH_TTL_MS / 1000}` })
+      res.writeHead(200, { "Content-Type": "application/json", "Set-Cookie": `lan_auth=${makeAuthCookie()}; Path=${BASE_PATH}/; HttpOnly; Secure; SameSite=Lax; Max-Age=${AUTH_TTL_MS / 1000}` })
       return res.end(JSON.stringify({ ok: true }))
     }
     if (req.method === "GET" && u.pathname === "/") {

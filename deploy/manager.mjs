@@ -240,6 +240,26 @@ async function waitReady(port, deadline) {
   return false
 }
 
+// ---- 全局冷启动临界区锁（promise-chain 互斥，跨【所有用户】串行）----
+// 为什么需要：makeRoom 的「数在跑容器 → 判容量 → 驱逐腾位」整段没有跨用户互斥，而 ensureUp 的
+// single-flight 用的是每用户键 u.starting，只挡得住【同一用户】并发首请求，挡不住【不同用户】同时
+// 冷启动。alice、bob 几乎同时冷启动 → 两个 ensureUp 的 u.starting 互不阻塞 → 两个 makeRoom 并发进
+// 循环、各自 await isRunning 交错执行 → 都数到「running+1 <= WARM_CAP」、都 return 放行 → 两个
+// dockerStart 都执行 → 实际在跑数超过 WARM_CAP，内存硬顶被击穿。把「容量判定 + 发起 start」这段短
+// 临界区用一条 promise 链串成全局串行，WARM_CAP 才是真正的硬上限。
+// 锁范围为何到 dockerStart 返回即止、不含 waitReady：docker start 是【同步】命令——它返回时容器
+// State.Running 已为 true（isRunning 读的正是 {{.State.Running}}），故下一个进锁者的 makeRoom 立刻
+// 能把这台数进在跑集合，不会因「还没 ready」而漏数、导致仍然超配。而 waitReady（网关预热 10–40s）
+// 只是等就绪、不再动用容量，放在锁外；若把它也锁进去，冷启动会完全串行、白白拉垮并发体验。
+let capChain = Promise.resolve()
+function withCapLock(fn) {
+  // 前一个不论成败都接着跑（capChain 恒为已 resolve），run 把 fn 的结果/异常原样抛给调用方；
+  // 链身只用来排队，吞掉错误，避免某次冷启动失败把整条链卡死。
+  const run = capChain.then(() => fn())
+  capChain = run.catch(() => {})
+  return run
+}
+
 // ---- 并发上限：起新容器前确保有槽位。有空闲(conns==0)容器就 LRU 停一个腾位；
 //      全忙则排队等待（轮询）直到有槽位，超 CAP_WAIT_MS 抛错 → 前端提示繁忙。绝不超配，内存是硬顶。----
 async function makeRoom(exceptName) {
@@ -312,10 +332,15 @@ function ensureUp(u, ip = "-") {
     if (!running) {
       // 只对【真正的冷启动】计数：已在跑的容器走代理不受限，正常使用完全无感。
       if (!wakeAllowed(ip, u.name)) { const e = new Error("冷启动过于频繁"); e.code = "WAKE_LIMIT"; throw e }
-      await makeRoom(u.name)
-      log(`[wake] 启动 ${u.container} …`)
-      const r = await dockerStart(u.container)
-      if (r.code !== 0) throw new Error(`docker start ${u.container} 失败：${r.stderr}`)
+      // 「容量判定 → 腾位驱逐 → 发起 start」整段进全局锁，跨用户串行，让 WARM_CAP 成为真正硬上限
+      // （只有需冷启动的 !running 分支才进锁；已在跑的容器不进锁。锁到 dockerStart 返回即释放，
+      // waitReady 留在锁外——理由见 withCapLock 上方注释）。
+      await withCapLock(async () => {
+        await makeRoom(u.name)
+        log(`[wake] 启动 ${u.container} …`)
+        const r = await dockerStart(u.container)
+        if (r.code !== 0) throw new Error(`docker start ${u.container} 失败：${r.stderr}`)
+      })
     }
     if (!await waitReady(u.port, Date.now() + START_TIMEOUT_MS))
       throw new Error(`${u.container} 在 ${START_TIMEOUT_MS}ms 内未就绪`)
@@ -545,6 +570,20 @@ const LOGIN_HTML = `<!doctype html>
 </body></html>`
 
 // ==== 管理台 /admin 的后端 ==========================================
+// 额度解析（fail-closed）：空/未设/合法 0 → 0（=故意不限额，设计如此，行为不变）；合法正数 → 该上限；
+// 非空但不是有限的 ≥0 数字（NaN/负数/Infinity，多半来自手改 users/*.env 或 tiers.env 填了乱码）→ 判为
+// 【配置错误】。此前 Number("abc")=NaN、`x>0` 恒 false → 被静默当"不限额"可无限烧钱，是本次要治的 fail-open。
+// 兜底策略：返回一个极小正数哨兵（QUOTA_BAD）+ 响亮日志。这样所有既有 `limit>0 && used>=limit` 判断
+// 无需改动即近似 fail-closed（新增消费几乎立即被拦），且哨兵是有限正数——toFixed 不崩、JSON 不变 null、
+// 前端 `if(!limit)`/`t.daily?` 判真 → 显示为 ~$0.00 而【绝不】回退成"不限"。代价：触底前首个请求可能漏过。
+const QUOTA_BAD = 1e-9
+function parseLimit(raw) {
+  if (raw === undefined || raw === null || raw === "") return 0   // 空=故意不限额（设计如此）
+  const n = Number(raw)
+  if (Number.isFinite(n) && n >= 0) return n
+  log(`[quota] 额度配置非法 ${JSON.stringify(raw)} → fail-closed（按已超限处理），请修正 users/*.env 或 tiers.env`)
+  return QUOTA_BAD
+}
 // 读 tiers.env → [{key, daily, storage}]（与 render-compose.sh 同源解析）
 function loadTiers() {
   const out = []
@@ -552,7 +591,7 @@ function loadTiers() {
     for (const line of fs.readFileSync(TIERS_FILE, "utf8").split(/\r?\n/)) {
       if (/^\s*#/.test(line)) continue
       const p = line.trim().split(/\s+/)
-      if (p.length >= 3 && p[0]) out.push({ key: p[0], daily: Number(p[1]) || 0, storage: Number(p[2]) || 0, model: p[3] || "" })
+      if (p.length >= 3 && p[0]) out.push({ key: p[0], daily: parseLimit(p[1]), storage: parseLimit(p[2]), model: p[3] || "" })
     }
   } catch { /* 无 tiers.env */ }
   return out
@@ -562,7 +601,7 @@ const userEnv = (name) => { try { return parseEnvFile(path.join(USERS_DIR, name 
 function resolveLimits(name) {
   const e = userEnv(name)
   const t = loadTiers().find((x) => x.key === e.TIER) || null
-  const pick = (explicit, tv) => (explicit !== undefined && explicit !== "" ? Number(explicit) : (t ? tv : 0))
+  const pick = (explicit, tv) => (explicit !== undefined && explicit !== "" ? parseLimit(explicit) : (t ? tv : 0))
   return { tier: e.TIER || "", daily: pick(e.DAILY_COST_LIMIT, t?.daily), storage: pick(e.STORAGE_LIMIT_MB, t?.storage) }
 }
 // docker 卷的宿主挂载点（缓存）；manager 以 root 跑，可直接读卷内文件，免去每次起 alpine
