@@ -9,6 +9,8 @@
 # never the machine-global ~/.claude/CLAUDE.md.
 set -uo pipefail
 ROOT="$(cd "$(dirname "$0")" && pwd)"
+# Skills live at .opencode/skills in the main repo, at skills/ in the distribution repo.
+if [ -d "$ROOT/.opencode/skills" ]; then SKILLS_DIR="$ROOT/.opencode/skills"; else SKILLS_DIR="$ROOT/skills"; fi
 VENV="$ROOT/.venv"
 PY="$VENV/bin/python"
 REQ="$ROOT/scripts/requirements-skills.txt"
@@ -94,7 +96,8 @@ if [ "$LINK_CLAUDE" = 1 ]; then
   target="$HOME/.claude/skills"
   mkdir -p "$target"
   n=0
-  for d in "$ROOT"/skills/*/; do
+  for d in "$SKILLS_DIR"/*/; do
+    [ -d "$d" ] || continue
     name="$(basename "$d")"
     rm -rf "${target:?}/$name"
     cp -R "$d" "$target/$name"
@@ -132,8 +135,8 @@ else
   for f in "${FAILED[@]}"; do echo "  - $f"; done
 fi
 echo "Interpreter: $PY"
-echo "Skills dir : $ROOT/skills"
-echo "Load them: point your agent framework at the skills/ folder (see README)."
+echo "Skills dir : $SKILLS_DIR"
+echo "Load them: point your agent framework at that skills folder (see README)."
 echo "Router = project-root AGENTS.md (OpenCode) / CLAUDE.md (Claude Code) -- both written here, project-scoped, not machine-global."
 echo "Tip: 'source .venv/bin/activate' so vendored skills' bare 'python3' resolves to this venv."
 [ "$WITH_PDF" = 0 ] && echo "PDF (render-pdf-doc)? re-run: bash install.sh --with-pdf"

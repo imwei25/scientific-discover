@@ -18,8 +18,12 @@
     powershell -ExecutionPolicy Bypass -File install.ps1 -WithPdf -LinkClaude
 #>
 param([switch] $WithPdf, [switch] $LinkClaude)
+
 $ErrorActionPreference = "Stop"
 $Root = $PSScriptRoot
+# Skills live at .opencode\skills in the main repo, at skills\ in the distribution repo.
+$SkillsDir = Join-Path $Root ".opencode\skills"
+if (-not (Test-Path $SkillsDir)) { $SkillsDir = Join-Path $Root "skills" }
 $Venv = Join-Path $Root ".venv"
 $Py = Join-Path $Venv "Scripts\python.exe"
 $Req = Join-Path $Root "scripts\requirements-skills.txt"
@@ -167,7 +171,7 @@ if ($LinkClaude) {
     $target = Join-Path $env:USERPROFILE ".claude\skills"
     New-Item -ItemType Directory -Force $target | Out-Null
     $n = 0
-    Get-ChildItem (Join-Path $Root "skills") -Directory | ForEach-Object {
+    Get-ChildItem $SkillsDir -Directory | ForEach-Object {
       $dst = Join-Path $target $_.Name
       if (Test-Path $dst) { Remove-Item -Recurse -Force $dst }
       Copy-Item -Recurse $_.FullName $dst
@@ -211,8 +215,8 @@ if ($failed.Count -eq 0) {
   $failed | ForEach-Object { Write-Host ("  - {0}: {1}" -f $_.Name, $_.Detail) -ForegroundColor Red }
 }
 Write-Host "Interpreter: $Py"
-Write-Host "Skills dir : $(Join-Path $Root 'skills')"
-Write-Host "Load them: point your agent framework at the skills\ folder (see README)."
+Write-Host "Skills dir : $SkillsDir"
+Write-Host "Load them: point your agent framework at that skills folder (see README)."
 Write-Host "Router = project-root AGENTS.md (OpenCode) / CLAUDE.md (Claude Code) -- both written here, project-scoped, not machine-global."
 if (-not $WithPdf) { Write-Host "PDF (render-pdf-doc)? re-run with -WithPdf." -ForegroundColor DarkGray }
 if (-not $LinkClaude) { Write-Host "Using Claude Code? re-run with -LinkClaude to also copy skills into ~/.claude/skills." -ForegroundColor DarkGray }

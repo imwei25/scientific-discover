@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # 一键重部署：把更新后的技能脚本 + 检索源 API key 生效到所有用户容器。
 #
-# 做三件事：① 重建镜像（技能脚本是 COPY 进镜像的，改了必须 rebuild）；
+# 做三件事：① 重建镜像（技能/主控靠 compose 的只读挂载即时生效——宿主 git pull 即可；
+#             rebuild 是为了 web/、依赖、以及镜像内兜底拷贝不漂移）；
 #          ② 重渲染 docker-compose.yml（注入 deploy/.env 里的检索 key）；
 #          ③ 重建容器（--no-start，保持按需唤醒模型；下次请求时以新镜像/新 env 启动）。
 #

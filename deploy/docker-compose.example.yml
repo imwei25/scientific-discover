@@ -2,7 +2,9 @@
 # 不要手改真实文件；改 users/*.env 后跑 scripts/render-compose.sh。
 # 要点：① 每用户独立容器 + 三卷（ocdata 持久化 opencode 会话历史，按需停机不丢对话）；
 #       ② 端口只发布到 127.0.0.1（回环）→ 公网无法直连、也避免触发 app 的 isLocal 免登录旁路；
-#       ③ restart: "no" —— 空闲停机是我们主动 docker stop（退出码 143），on-failure 会误判为崩溃反复重启，故禁用。
+#       ③ restart: "no" —— 空闲停机是我们主动 docker stop（退出码 143），on-failure 会误判为崩溃反复重启，故禁用；
+#       ④ 仓库根 .opencode/skills 与 AGENTS.md 以【只读】挂进容器（内核级写保护）——技能/主控的唯一源头，
+#          宿主 git pull 后即生效，覆盖镜像内的同名拷贝。
 services:
   agent-alice:
     image: sci-agent:latest
@@ -18,6 +20,8 @@ services:
       - alice-uploads:/app/uploads
       - alice-outputs:/app/outputs
       - alice-ocdata:/root/.local/share/opencode
+      - ../.opencode/skills:/app/.opencode/skills:ro
+      - ../AGENTS.md:/app/AGENTS.md:ro
     ports:
       - "127.0.0.1:3001:3000"
     restart: "no"
@@ -37,6 +41,8 @@ services:
       - bob-uploads:/app/uploads
       - bob-outputs:/app/outputs
       - bob-ocdata:/root/.local/share/opencode
+      - ../.opencode/skills:/app/.opencode/skills:ro
+      - ../AGENTS.md:/app/AGENTS.md:ro
     ports:
       - "127.0.0.1:3002:3000"
     restart: "no"
