@@ -1,6 +1,6 @@
 ---
 name: reference-check
-description: 文献真实性核查 / 查假引用。把稿件或参考文献列表里的每条引用去 Crossref 和 PubMed/Europe PMC 对一遍，揪出 AI 常编的假引用——不存在的 DOI/PMID、张冠李戴（DOI 真但标题对不上）、纯属虚构的标题。当用户说"核对参考文献""这些引用是真的吗""查假引用""验证 DOI""AI 会不会编文献""引用真实性""查重引用来源"时使用。
+description: 文献真实性核查 / 查假引用。把稿件或参考文献列表里的每条引用去 Crossref、doi.org、PubMed/Europe PMC 对一遍，揪出 AI 常编的假引用——不存在的 DOI/PMID、张冠李戴（DOI 真但标题对不上）、纯属虚构的标题、已撤稿文献。中英文标题都能比对。当用户说"核对参考文献""这些引用是真的吗""查假引用""验证 DOI""AI 会不会编文献""引用真实性""查重引用来源"时使用。
 ---
 
 > **产物位置**：所有产物一律写到主控注入的**会话专属目录** 当前工作目录（每轮开头会给出确切前缀，照抄即可）。
@@ -37,9 +37,12 @@ ${REPO_ROOT:-/app}/.venv/bin/python ${REPO_ROOT:-/app}/.opencode/skills/referenc
 | `ID_FAKE` | **DOI/PMID 查无，但按标题查到真实文献**（论文真、号是 AI 编的）| 用报告给出的**正确 DOI/PMID 替换**即可 |
 | `NOT_FOUND` | 只有标题、库里查不到匹配 | 疑似虚构，人工确认 |
 | `MISMATCH` | DOI/PMID 存在但指向的标题对不上 | 引错号或标题是编的，核对更正 |
-| `CHECK` | 标题部分吻合 | 人工看一眼 |
+| `CHECK` | 标题部分吻合，**或标题跨语种/缺失无法自动比对** | 人工看一眼——标识确实存在，只是标题机器比不了 |
 | `OK` | 存在且标题吻合 | 通过 |
 | `ERROR` | 查询失败（网络等） | 重试 |
+
+> **中文标题**：脚本保留汉字做字符级比对；当引用是中文、而库里只存英文标题（中文期刊在 Crossref 常见）时，不会误判 MISMATCH，而是降为 `CHECK` 让人工核对——既不误伤真文献、也不放行两个不同中文标题的张冠李戴。
+> **数据源**：DOI 依次查 Crossref → **doi.org 内容协商（CSL-JSON）** → Europe PMC。doi.org 兜底能覆盖 DataCite/mEDRA 的 DOI，并区分"号根本不存在"与"真 DOI 但库暂未索引"（刚见刊的真文献不会被误判 FABRICATED）。
 
 ## 产出（outputs/）
 - `reference_check.csv`：逐条结论 + 相似度 + 实际匹配到的标题。
@@ -48,6 +51,7 @@ ${REPO_ROOT:-/app}/.venv/bin/python ${REPO_ROOT:-/app}/.opencode/skills/referenc
 
 ## 撤稿检测（默认开启）
 每条**确认存在**的文献会再去 Europe PMC 查撤稿状态：`pubTypeList` 含 `Retracted Publication` → 判 `RETRACTED`；被标 `Expression of Concern`（表达关注）→ 在 note 里提示、不改判。撤稿通知的出处会一并写进报告。**引到撤稿文献是 AI 辅助写作的高频隐患**（模型的知识截点常早于撤稿日期），故列为最高风险档。
+- **兜底（防漏）**：EPMC 撤稿标注有滞后/漏收时，还会看 Crossref/doi.org 元数据信号——标题带 `RETRACTED:`/`WITHDRAWN` 前缀、或 `update-to` 含撤稿关系 → 仍判 `RETRACTED`。这层信号是解析 DOI 时顺带拿到的，零额外网络开销。
 - 离线或赶时间可加 `--no-retraction` 跳过（会少一次 EPMC 调用/条）。
 - 仅对"真实存在"的条目查（OK/CHECK/MISMATCH）；FABRICATED 之类本就不存在，不再查撤稿。
 

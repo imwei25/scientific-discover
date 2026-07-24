@@ -169,11 +169,51 @@ def _get(url, **kw):
 
 
 def norm_title(s):
-    return re.sub(r"[^a-z0-9]+", " ", (s or "").lower()).strip()
+    # 保留 CJK 汉字：旧版只留 [a-z0-9]，中文标题会被剥成空串，于是两个空串
+    # SequenceMatcher 判满分 1.0 —— 真·张冠李戴的两个不同中文标题会被误判 OK（漏报）。
+    return re.sub(r"[^a-z0-9一-鿿]+", " ", (s or "").lower()).strip()
 
 
 def title_sim(a, b):
-    return SequenceMatcher(None, norm_title(a), norm_title(b)).ratio()
+    na, nb = norm_title(a), norm_title(b)
+    # 任一归一化后为空 → 无法比对，返回 0（绝不返回 1.0）。堵死"空串=满分"的漏报，
+    # 也让 title_search 排序不会把无标题记录误当强匹配。
+    if not na or not nb:
+        return 0.0
+    return SequenceMatcher(None, na, nb).ratio()
+
+
+def compare_titles(claimed, found):
+    """比对引用标题与解析出的真实标题，返回 (sim, comparable)。
+    comparable=False 表示两者无法做有意义的字符串比对——① 任一为空；
+    ② 跨语种（一中一西）且相似度不高：中文期刊常在 Crossref 只存英文标题，
+    此时用户中文引用 vs 库内英文标题相似度≈0，若判 MISMATCH 会误伤真文献。
+    这类交给人工核（CHECK），既不误伤也不放行。"""
+    na, nb = norm_title(claimed), norm_title(found)
+    if not na or not nb:
+        return 0.0, False
+    sim = SequenceMatcher(None, na, nb).ratio()
+    cjk_a = bool(re.search(r"[一-鿿]", na))
+    cjk_b = bool(re.search(r"[一-鿿]", nb))
+    if cjk_a != cjk_b and sim < 0.85:
+        return sim, False
+    return sim, True
+
+
+def _decide_title(claimed, rt, id_kind):
+    """据(引用标题, 解析标题)给出 (verdict, sim, note)。claimed 为空=只有标识、无标题可比。"""
+    if not claimed:
+        return "OK", 1.0, "该标识真实存在（无引用标题可比对，仅核存在性）"
+    sim, comparable = compare_titles(claimed, rt)
+    if not comparable:
+        return "CHECK", round(sim, 2), \
+            f"{id_kind} 存在，但标题无法自动比对（跨语种或标题缺失）——请人工核对标识与标题是否一致"
+    if sim >= 0.85:
+        return "OK", round(sim, 2), "标题吻合"
+    if sim < 0.6:
+        return "MISMATCH", round(sim, 2), \
+            f"{id_kind} 存在但标题对不上(相似度{sim:.2f})——引错号或标题是编的"
+    return "CHECK", round(sim, 2), f"{id_kind} 标题部分吻合(相似度{sim:.2f})，请核对"
 
 
 def _epmc_by_doi(doi):
@@ -189,28 +229,69 @@ def _epmc_by_doi(doi):
                                   "authors": rec.get("authorString", "")}
 
 
+def _crossref_retracted(msg, title):
+    """Crossref 侧的撤稿信号（EPMC pubTypeList 之外的兜底）：
+    ① 标题以 RETRACTED/WITHDRAWN 开头（Crossref 对撤稿文常加此前缀）；
+    ② update-to 关系里含 retraction/withdrawal 类型。"""
+    t = (title or "").strip().lower()
+    if t.startswith("retracted") or t.startswith("withdrawn"):
+        return True
+    for u in (msg.get("update-to") or []):
+        if any(k in str(u.get("type", "")).lower() for k in ("retract", "withdraw")):
+            return True
+    return False
+
+
+def _doi_org(doi):
+    """doi.org 内容协商（CSL-JSON）。作用：① 覆盖 api.crossref.org 未收的 DataCite/mEDRA DOI；
+    ② 区分"DOI 号根本不存在"与"真 DOI 但库暂未索引"——后者能在此拿到真元数据，
+    避免把刚见刊的真文献误判 FABRICATED（缺口3）。查不到返回 (None, None)。"""
+    try:
+        r = _get("https://doi.org/" + doi,
+                 headers={**UA, "Accept": "application/vnd.citationstyles.csl+json"})
+        if r.status_code != 200:
+            return None, None
+        j = r.json()
+        title = j.get("title", "")
+        if isinstance(title, list):
+            title = title[0] if title else ""
+        issued = (j.get("issued", {}) or {}).get("date-parts", [[None]])
+        year = issued[0][0] if issued and issued[0] else None
+        authors = ", ".join(a.get("family", "") for a in (j.get("author") or [])[:3])
+        cont = j.get("container-title", "")
+        if isinstance(cont, list):
+            cont = cont[0] if cont else ""
+        meta = {"journal": cont, "year": year, "authors": authors,
+                "retracted_hint": _crossref_retracted(j, title)}
+        return (title or ""), meta
+    except (requests.RequestException, ValueError):
+        return None, None
+
+
 def resolve_doi(doi):
-    """返回 (title, meta) 或 (None, None)；Crossref 失败时回退 Europe PMC。"""
+    """返回 (title, meta) 或 (None, None)。数据源依次：Crossref → doi.org 内容协商 → Europe PMC。
+    meta 带 retracted_hint（Crossref/doi.org 侧撤稿信号，供撤稿兜底用）。"""
     doi = doi.rstrip(".,;)")
     try:
         r = _get(CROSSREF + doi, headers=CROSSREF_HEADERS)
-        if r.status_code == 404:
-            # Confirm the 404 via EPMC before trusting it — Crossref occasionally
-            # 404s a DOI it is merely slow to index.
-            t, m = _epmc_by_doi(doi)
-            return (t, m) if t else (None, None)
-        r.raise_for_status()
-        msg = r.json()["message"]
-        title = (msg.get("title") or [""])[0]
-        meta = {
-            "journal": (msg.get("container-title") or [""])[0],
-            "year": (msg.get("issued", {}).get("date-parts", [[None]])[0][0]),
-            "authors": ", ".join(a.get("family", "") for a in msg.get("author", [])[:3]),
-        }
-        return title, meta
+        if r.status_code != 404:
+            r.raise_for_status()
+            msg = r.json()["message"]
+            title = (msg.get("title") or [""])[0]
+            meta = {
+                "journal": (msg.get("container-title") or [""])[0],
+                "year": (msg.get("issued", {}).get("date-parts", [[None]])[0][0]),
+                "authors": ", ".join(a.get("family", "") for a in msg.get("author", [])[:3]),
+                "retracted_hint": _crossref_retracted(msg, title),
+            }
+            return title, meta
+        # Crossref 404：不轻信（它对慢索引的真 DOI 也会 404）。先 doi.org 确认号是否注册，再 EPMC。
     except requests.RequestException:
-        # Crossref rate-limited/unreachable — try EPMC rather than falsely reporting ERROR/FABRICATED
-        return _epmc_by_doi(doi)
+        pass  # Crossref 限速/不可达 —— 落到 doi.org / EPMC，而非误报 ERROR/FABRICATED
+    t, m = _doi_org(doi)
+    if t:
+        return t, m
+    return _epmc_by_doi(doi)
 
 
 def resolve_pmid(pmid):
@@ -290,11 +371,17 @@ def check_retraction(doi, pmid):
 def _apply_retraction(result):
     """对一条已判"存在"的核查结果补跑撤稿检测；命中就把 verdict 抬成 RETRACTED
     （撤稿是"文献真但绝不能引"的独立风险，凌驾于标题吻合与否）。就地改 result。"""
+    if not RETRACTION_CHECK:
+        return result
     if result.get("verdict") not in ("OK", "CHECK", "MISMATCH"):
         return result
     doi = result.get("doi") or result.get("_match_doi")
     pmid = result.get("pmid") or result.get("_match_pmid")
     status, notice = check_retraction(doi, pmid)
+    # 兜底：EPMC 没标撤稿（滞后/未收录），但 Crossref/doi.org 元数据已有撤稿信号 → 仍判撤稿。
+    if status != "retracted" and result.get("_retracted_hint"):
+        status = "retracted"
+        notice = notice or "Crossref/doi.org 元数据标注为 Retracted/Withdrawn"
     if status == "retracted":
         tail = f"；撤稿通知：{notice}" if notice else ""
         result["verdict"] = "RETRACTED"
@@ -365,25 +452,18 @@ def verify_one(entry):
             rt, meta = resolve_doi(doi)
             if rt is None:
                 return _id_failed("DOI", f"doi:{doi}", claimed, entry)
-            sim = title_sim(claimed, rt) if claimed else 1.0
-            v = "OK" if (not claimed or sim >= 0.85) else (
-                "MISMATCH" if sim < 0.6 else "CHECK")
-            note = ("标题吻合" if v == "OK" else
-                    f"DOI 存在但标题对不上(相似度{sim:.2f})——引错号或标题是编的")
+            v, sim, note = _decide_title(claimed, rt, "DOI")
             v, note = _verdict_with_meta(v, note, entry, meta)
-            return dict(verdict=v, id=f"doi:{doi}", found_title=rt, sim=round(sim, 2),
-                        note=note, **entry)
+            return dict(verdict=v, id=f"doi:{doi}", found_title=rt, sim=sim,
+                        note=note, _retracted_hint=(meta or {}).get("retracted_hint"), **entry)
         if pmid:
             rt, meta = resolve_pmid(pmid)
             if rt is None:
                 return _id_failed("PMID", f"pmid:{pmid}", claimed, entry)
-            sim = title_sim(claimed, rt) if claimed else 1.0
-            v = "OK" if (not claimed or sim >= 0.85) else (
-                "MISMATCH" if sim < 0.6 else "CHECK")
-            note = "标题吻合" if v == "OK" else f"PMID 存在但标题对不上({sim:.2f})"
+            v, sim, note = _decide_title(claimed, rt, "PMID")
             v, note = _verdict_with_meta(v, note, entry, meta)
-            return dict(verdict=v, id=f"pmid:{pmid}", found_title=rt, sim=round(sim, 2),
-                        note=note, **entry)
+            return dict(verdict=v, id=f"pmid:{pmid}", found_title=rt, sim=sim,
+                        note=note, _retracted_hint=(meta or {}).get("retracted_hint"), **entry)
         # 只有标题
         if claimed:
             ft, sim, meta = title_search(claimed)
