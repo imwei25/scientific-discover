@@ -56,7 +56,7 @@ SCI_CONTACT_EMAIL=你@你的机构域名  # 必填！不能留占位值，见下
 ```bash
 sudo bash deploy/setup.sh
 ```
-它会：① 构建镜像 → ② 装并启动 manager（systemd）→ ③ 把 Caddy 配成 `域名 → manager:8090`（自动签 HTTPS）→ ④ 装 fail2ban 规则（SSH + 登录爆破）。
+它会：① 构建镜像 → ② 装并启动 manager（systemd）→ ③ 把 Caddy 配成 `域名 → manager:8090`（自动签 HTTPS）→ ④ 装 fail2ban 规则（SSH + 登录爆破）→ ⑤ 收紧 `deploy/.env` 权限到 600、并加主机防火墙规则只让私网访问记账/转发端口 8091（`scripts/harden-quota-port.sh`，持久化依赖 `bootstrap-host.sh` 装的 `iptables-persistent`）。
 
 ---
 
@@ -146,7 +146,8 @@ systemctl reload sci-manager
 ## 6. 安全收尾（上线后务必做）
 
 - **SSH 换密钥登录**：把你的公钥加进 `~/.ssh/authorized_keys`，然后 `sed -i 's/^#\?PasswordAuthentication.*/PasswordAuthentication no/' /etc/ssh/sshd_config && systemctl restart ssh`。
-- 安全组：确认 `22` 只对你的 IP、`3000/8090` 不对公网。
+- 安全组：确认 `22` 只对你的 IP，`3000/8090/8091` 不对公网（8090/3000 只听回环；**8091 必须听 0.0.0.0**——per-user 多网络架构所需——已由 setup.sh ⑤ 的主机 iptables 规则 + 应用层私网校验双重兜底，但云安全组**仍须人工确认不放行 8091**，这是第一道闸）。
+- 主机防火墙（8091 记账/转发端口）：由 `setup.sh` ⑤ 自动装（`scripts/harden-quota-port.sh`，独立链 `SCI-QUOTA` 仅放行 `172.16/12`+回环）。规则持久化需 `iptables-persistent`（`bootstrap-host.sh` 已装）；验证 `iptables -S INPUT | grep 8091`。想单独重跑：`sudo bash deploy/scripts/harden-quota-port.sh`。
 - fail2ban 已装 `sshd` 与 `caddy-login` 两个 jail：`sudo fail2ban-client status caddy-login` 可查。
 - 别把真实患者数据放上来（本部署约定）。
 

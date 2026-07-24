@@ -9,14 +9,17 @@ REPO="$(pwd)"
 cd deploy
 
 [ -f .env ] || { echo "缺 deploy/.env：先 cp .env.example .env 并填 DEEPSEEK_API_KEY / BASE_DOMAIN"; exit 1; }
+# deploy/.env 含上游 DeepSeek key / LAN_PASSWORD 等：默认 umask 常留 644 全局可读。收紧到 600（目录 700），
+# 免得手动 cp 出来的 .env 被非 root 进程读走。幂等，每次部署都兜一遍。
+chmod 600 .env; chmod 700 . 2>/dev/null || true
 DOMAIN="${1:-$(sed -n 's/^BASE_DOMAIN=//p' .env | head -1)}"
 [ -n "$DOMAIN" ] || { echo "缺域名：传参 或 在 .env 设 BASE_DOMAIN"; exit 1; }
 grep -q '^DEEPSEEK_API_KEY=sk' .env || echo "⚠ 提示：deploy/.env 里 DEEPSEEK_API_KEY 看起来还没填真实值"
 
-echo "== 1/4 构建共享镜像 sci-agent:latest =="
+echo "== 1/5 构建共享镜像 sci-agent:latest =="
 scripts/build-image.sh
 
-echo "== 2/4 安装并启动 manager（WorkingDir=$REPO/deploy）=="
+echo "== 2/5 安装并启动 manager（WorkingDir=$REPO/deploy）=="
 NODE="$(command -v node)"
 UNIT=/etc/systemd/system/sci-manager.service
 ENVF=/etc/sci-manager.env
@@ -105,7 +108,7 @@ fi
 systemctl daemon-reload
 systemctl enable --now sci-manager
 
-echo "== 3/4 配置 Caddy（$DOMAIN → 127.0.0.1:8090）=="
+echo "== 3/5 配置 Caddy（$DOMAIN → 127.0.0.1:8090）=="
 mkdir -p /var/log/caddy
 [ -f /etc/caddy/Caddyfile ] && cp /etc/caddy/Caddyfile "/etc/caddy/Caddyfile.bak.$(date +%s)"
 cat > /etc/caddy/Caddyfile <<CADDY
@@ -137,12 +140,18 @@ CADDY
 caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile
 systemctl reload caddy
 
-echo "== 4/4 安装 fail2ban 规则（SSH 爆破 + 登录 401 爆破）=="
+echo "== 4/5 安装 fail2ban 规则（SSH 爆破 + 登录 401 爆破）=="
 cp fail2ban/caddy-login.filter /etc/fail2ban/filter.d/caddy-login.conf
 cp fail2ban/caddy-login.jail   /etc/fail2ban/jail.d/caddy-login.conf
 [ -f /etc/fail2ban/jail.local ] && cp /etc/fail2ban/jail.local "/etc/fail2ban/jail.local.bak.$(date +%s)"
 cp fail2ban/jail.local /etc/fail2ban/jail.local
 systemctl restart fail2ban || echo "⚠ fail2ban 重启失败，请手动检查"
+
+echo "== 5/5 收紧宿主记账/转发端点 8091（仅私网可达）=="
+# manager 的 8091 必须听 0.0.0.0（per-user 多网络架构所需）。应用层 isPrivateIp 已挡公网，
+# 这里加主机侧防御纵深：iptables 只放行 172.16/12 + 回环。持久化依赖 bootstrap 装的 iptables-persistent。
+# 失败不阻断整体部署（可能环境无 iptables 权限），但响亮告警——安全组仍需人工确认不放行 8091。
+scripts/harden-quota-port.sh || echo "⚠ 8091 防火墙收紧失败，请手动检查 iptables / 云安全组勿放行 8091"
 
 echo
 echo "✅ 部署完成。"

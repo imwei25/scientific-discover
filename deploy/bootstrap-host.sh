@@ -6,7 +6,9 @@ set -euo pipefail
 
 echo "== apt 基础包 =="
 apt-get update -qq
-apt-get install -y -qq ca-certificates curl gnupg git ufw fail2ban openssl
+# iptables-persistent：供 setup.sh 的 harden-quota-port.sh 把 8091 私网限制规则持久化（否则重启即丢）。
+# 它装时有 debconf 交互（是否保存当前规则），用 DEBIAN_FRONTEND=noninteractive 免提示挂起。
+DEBIAN_FRONTEND=noninteractive apt-get install -y -qq ca-certificates curl gnupg git ufw fail2ban openssl iptables-persistent
 
 echo "== Docker + compose 插件 =="
 if ! command -v docker >/dev/null 2>&1; then curl -fsSL https://get.docker.com | sh; fi
