@@ -18,6 +18,7 @@ title cross-check (via `pdftotext` if installed) that flags mislabeled PDFs.
 
 import argparse
 import csv
+import http.client
 import io
 import json
 import logging
@@ -34,9 +35,19 @@ from pathlib import Path
 
 MIN_PDF_BYTES = 10 * 1024
 USER_AGENT = "medsci-skills/1.0"
+# 某些金标 OA 出版商（Nature/Springer 等）对非浏览器 UA 返回 HTML 拦截页而非 PDF。
+# 拿到 text/html 时用它带 Referer 重试一次直链，取回真 PDF。
+BROWSER_UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+              "(KHTML, like Gecko) Chrome/124.0 Safari/537.36")
 REPORT_SCHEMA_VERSION = 1
 TITLE_MATCH_THRESHOLD = 0.6
 RETRIEVED_STATUSES = ("oa", "pmc", "arxiv", "skip")
+
+# 网络瞬时错误的统一集合。关键：http.client.IncompleteRead 是 HTTPException 的子类，
+# **不是** OSError——旧版各 download 函数只 catch (URLError, HTTPError, OSError)，
+# 传输被截断时 IncompleteRead 逃逸、拖垮整批下载且不出报告。这里统一纳入。
+TRANSIENT_ERRORS = (urllib.error.URLError, urllib.error.HTTPError,
+                    http.client.HTTPException, OSError)
 
 log = logging.getLogger("fetch_oa")
 
@@ -92,13 +103,36 @@ def is_valid_pdf(data: bytes) -> bool:
 
 
 def fetch_bytes(url: str, email: str, accept: str = "*/*",
-                timeout: int = 30) -> tuple[bytes, str, str]:
-    req = urllib.request.Request(url, headers={
-        "User-Agent": _ua(email),
-        "Accept": accept,
-    })
-    with urllib.request.urlopen(req, timeout=timeout) as resp:
-        return resp.read(), resp.geturl(), resp.headers.get("Content-Type", "")
+                timeout: int = 30, retries: int = 2,
+                browser_ua: bool = False, referer: str = "") -> tuple[bytes, str, str]:
+    """GET url → (body, final_url, content_type)，带瞬时错误退避重试。
+    browser_ua/referer 供 Nature/Springer 拦截页兜底用（伪装浏览器直取 PDF）。
+    IncompleteRead（传输截断）在此按瞬时错误重试；仍失败才抛出，由调用方兜住。"""
+    headers = {"User-Agent": BROWSER_UA if browser_ua else _ua(email), "Accept": accept}
+    if referer:
+        headers["Referer"] = referer
+    last = None
+    for attempt in range(retries + 1):
+        try:
+            req = urllib.request.Request(url, headers=headers)
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                return resp.read(), resp.geturl(), resp.headers.get("Content-Type", "")
+        except http.client.IncompleteRead as e:
+            # 截断但已拿到部分字节：若已是合法 PDF 就用它，否则退避重试。
+            if is_valid_pdf(e.partial):
+                return e.partial, url, "application/pdf"
+            last = e
+        except (urllib.error.URLError, http.client.HTTPException, OSError) as e:
+            # HTTPError（4xx/5xx）多为确定性失败，不重试（除 429/503）。
+            code = getattr(e, "code", None)
+            if isinstance(e, urllib.error.HTTPError) and code not in (429, 503):
+                raise
+            last = e
+        if attempt < retries:
+            time.sleep(1.5 * (attempt + 1))
+    if last:
+        raise last
+    raise urllib.error.URLError("unknown fetch failure")
 
 
 def save_pdf(data: bytes, path: Path) -> bool:
@@ -289,10 +323,79 @@ def id_to_pmcid(identifier: str, email: str, is_pmid: bool = False) -> str | Non
             or _pmcid_via_ncbi(identifier, email))
 
 
-def download_pmc_pdf(pmcid: str, outpath: Path, email: str) -> bool:
-    """Download PDF from PMC via Europe PMC → OA FTP → web fallback."""
+def pmid_to_doi(pmid: str, email: str) -> str | None:
+    """PMID → DOI via Europe PMC（大陆可达）。PMID-only 清单先解析出 DOI 再进主管线。"""
+    if not pmid:
+        return None
+    url = ("https://www.ebi.ac.uk/europepmc/webservices/rest/search"
+           f"?query=EXT_ID:{urllib.parse.quote(pmid)}%20AND%20SRC:MED"
+           "&format=json&pageSize=1&resultType=core")
+    try:
+        req = urllib.request.Request(url, headers={"User-Agent": _ua(email)})
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            data = json.loads(resp.read())
+        res = data.get("resultList", {}).get("result", [])
+        if res and res[0].get("doi"):
+            return res[0]["doi"].strip()
+    except (urllib.error.URLError, http.client.HTTPException,
+            json.JSONDecodeError, OSError) as e:
+        log.debug("PMID→DOI error for %s: %s", pmid, e)
+    return None
 
-    # Method A: Europe PMC REST API (most reliable, no JS)
+
+def title_to_doi(title: str, email: str) -> str | None:
+    """Title → DOI via Crossref 标题检索，取最高分且标题足够吻合的命中。
+    Title-only 清单据此定位文献；阈值卡 title_overlap ≥ 0.6，避免张冠李戴。"""
+    if not title or len(title.strip()) < 8:
+        return None
+    url = ("https://api.crossref.org/works"
+           f"?query.bibliographic={urllib.parse.quote(title)}"
+           f"&rows=3&select=DOI,title&mailto={urllib.parse.quote(email)}")
+    try:
+        req = urllib.request.Request(url, headers=_crossref_headers(email))
+        with urllib.request.urlopen(req, timeout=20) as resp:
+            data = json.loads(resp.read())
+        items = (data.get("message", {}) or {}).get("items", []) or []
+        best_doi, best_ov = None, 0.0
+        for it in items:
+            cand_title = " ".join(it.get("title") or [])
+            ov = title_overlap(title, cand_title)
+            if ov > best_ov and it.get("DOI"):
+                best_doi, best_ov = it["DOI"].strip(), ov
+        if best_doi and best_ov >= TITLE_MATCH_THRESHOLD:
+            return best_doi
+    except (urllib.error.URLError, http.client.HTTPException,
+            json.JSONDecodeError, OSError) as e:
+        log.debug("Title→DOI error for %s: %s", title[:40], e)
+    return None
+
+
+def resolve_identifier(rec: dict, email: str) -> str:
+    """给一条 record 落实一个 DOI：已有则用；否则 PMID→DOI，再 Title→DOI。返回 DOI 或 ''。"""
+    doi = (rec.get("doi") or "").strip()
+    if doi:
+        return doi
+    doi = pmid_to_doi(rec.get("pmid", ""), email) or ""
+    if doi:
+        return doi
+    return title_to_doi(rec.get("title", ""), email) or ""
+
+
+def download_pmc_pdf(pmcid: str, outpath: Path, email: str) -> bool:
+    """Download PDF from PMC via Europe PMC render → ptpmcrender → OA FTP → web fallback."""
+
+    # Method A0: Europe PMC article render (实测最稳；旧的 ptpmcrender.fcgi 端点近期持续
+    # "Remote end closed connection"，此端点直接回 application/pdf，polite/browser UA 均可)。
+    try:
+        url = f"https://europepmc.org/articles/{pmcid}?pdf=render"
+        data, _, _ = fetch_bytes(url, email, accept="application/pdf,*/*", timeout=30)
+        if save_pdf(data, outpath):
+            log.debug("PMC Method A0 (Europe PMC render) succeeded for %s", pmcid)
+            return True
+    except TRANSIENT_ERRORS as e:
+        log.debug("PMC Method A0 failed for %s: %s", pmcid, e)
+
+    # Method A: Europe PMC ptpmcrender (旧端点，作兜底保留)
     try:
         url = (f"https://europepmc.org/backend/ptpmcrender.fcgi"
                f"?accid={pmcid}&blobtype=pdf")
@@ -300,7 +403,7 @@ def download_pmc_pdf(pmcid: str, outpath: Path, email: str) -> bool:
         if save_pdf(data, outpath):
             log.debug("PMC Method A (Europe PMC) succeeded for %s", pmcid)
             return True
-    except (urllib.error.URLError, urllib.error.HTTPError, OSError) as e:
+    except TRANSIENT_ERRORS as e:
         log.debug("PMC Method A failed for %s: %s", pmcid, e)
 
     # Method B: PMC OA FTP service (XML with direct PDF link)
@@ -324,8 +427,7 @@ def download_pmc_pdf(pmcid: str, outpath: Path, email: str) -> bool:
                     if save_pdf(data, outpath):
                         log.debug("PMC Method B (OA FTP) succeeded for %s", pmcid)
                         return True
-    except (urllib.error.URLError, urllib.error.HTTPError,
-            ET.ParseError, OSError) as e:
+    except (ET.ParseError, *TRANSIENT_ERRORS) as e:
         log.debug("PMC Method B failed for %s: %s", pmcid, e)
 
     # Method C: Direct PMC web URL (may hit JS PoW challenge)
@@ -337,7 +439,7 @@ def download_pmc_pdf(pmcid: str, outpath: Path, email: str) -> bool:
             if save_pdf(data, outpath):
                 log.debug("PMC Method C (web) succeeded for %s", pmcid)
                 return True
-    except (urllib.error.URLError, urllib.error.HTTPError, OSError) as e:
+    except TRANSIENT_ERRORS as e:
         log.debug("PMC Method C failed for %s: %s", pmcid, e)
 
     return False
@@ -421,18 +523,31 @@ def download_from_landing(url: str, outpath: Path, email: str) -> bool:
                     absolute, email, accept="application/pdf,*/*")
                 if save_pdf(data, outpath):
                     return True
-            except (urllib.error.URLError, urllib.error.HTTPError, OSError):
+            except TRANSIENT_ERRORS:
                 continue
-    except (urllib.error.URLError, urllib.error.HTTPError, OSError) as e:
+    except TRANSIENT_ERRORS as e:
         log.debug("Landing page error for %s: %s", url, e)
     return False
 
 
 def download_pdf(url: str, outpath: Path, email: str) -> bool:
     try:
-        data, _, _ = fetch_bytes(url, email, accept="application/pdf,*/*")
-        return save_pdf(data, outpath)
-    except (urllib.error.URLError, urllib.error.HTTPError, OSError) as e:
+        data, _, ct = fetch_bytes(url, email, accept="application/pdf,*/*")
+        if save_pdf(data, outpath):
+            return True
+        # 拿到 HTML 拦截页（Nature/Springer 对非浏览器 UA 常见）→ 伪装浏览器带 Referer 再取一次。
+        if b"pdf" not in ct.lower().encode() and not data.startswith(b"%PDF-"):
+            parsed = urllib.parse.urlparse(url)
+            referer = f"{parsed.scheme}://{parsed.netloc}/"
+            try:
+                data2, _, _ = fetch_bytes(url, email, accept="application/pdf,*/*",
+                                          browser_ua=True, referer=referer)
+                if save_pdf(data2, outpath):
+                    log.debug("Direct download via browser-UA fallback for %s", url)
+                    return True
+            except TRANSIENT_ERRORS as e:
+                log.debug("Browser-UA fallback failed for %s: %s", url, e)
+    except TRANSIENT_ERRORS as e:
         log.debug("Direct download error for %s: %s", url, e)
     return False
 
@@ -519,10 +634,15 @@ def build_report(records: list[dict], results: dict[str, tuple[str, str]],
     extracted_text_by_doi = extracted_text_by_doi or {}
     items = []
     for rec in records:
-        doi = rec["doi"]
-        status, source = results.get(doi, ("fail", ""))
-        path = outdir / f"{safe_doi_name(doi)}.pdf"
-        have_file = status in RETRIEVED_STATUSES and path.exists()
+        doi = rec.get("doi", "")
+        # 优先用主循环写在 rec 上的实际状态（PMID/Title-only 记录可能无 doi 键）；
+        # 回退到 results 字典（保持 build_report 可被单测直接调用的旧签名）。
+        if "_status" in rec:
+            status, source = rec["_status"], rec.get("_source", "")
+        else:
+            status, source = results.get(doi, ("fail", ""))
+        path = outdir / f"{safe_doi_name(doi)}.pdf" if doi else outdir / "__none__.pdf"
+        have_file = bool(doi) and status in RETRIEVED_STATUSES and path.exists()
         size = path.stat().st_size if have_file else 0
         if have_file:
             title_match = classify_title_match(
@@ -573,7 +693,8 @@ def _records_from_dictrows(rows) -> list[dict]:
             nk = _norm_key(k)
             if nk in rec:
                 rec[nk] = (v or "").strip()
-        if rec["doi"]:
+        # 有 doi / pmid / title 任一即保留——PMID-only、Title-only 稿件也能定位（见 resolve_identifier）。
+        if rec["doi"] or rec["pmid"] or rec["title"]:
             records.append(rec)
     return records
 
@@ -595,12 +716,10 @@ def _records_from_markdown(lines: list[str]) -> list[dict]:
             continue
         row = dict(zip(header, c))
         doi = (row.get("doi") or "").strip()
-        if doi:
-            records.append({
-                "doi": doi,
-                "pmid": (row.get("pmid") or "").strip(),
-                "title": (row.get("title") or "").strip(),
-            })
+        pmid = (row.get("pmid") or "").strip()
+        title = (row.get("title") or "").strip()
+        if doi or pmid or title:
+            records.append({"doi": doi, "pmid": pmid, "title": title})
     return records
 
 
@@ -676,18 +795,31 @@ def main():
     stats = {"arxiv": 0, "oa": 0, "pmc": 0, "fail": 0, "skip": 0}
     results: dict[str, tuple[str, str]] = {}
 
+    labels = {"arxiv": "OK (arXiv)", "oa": "OK (OA)", "pmc": "OK (PMC)",
+              "fail": "FAIL", "skip": "SKIP"}
     for i, rec in enumerate(records, 1):
-        doi = rec["doi"]
         pmid = rec.get("pmid", "")
-        print(f"  [{i}/{len(records)}] {doi}", end=" … ", flush=True)
+        disp = rec.get("doi") or (f"PMID:{pmid}" if pmid else (rec.get("title") or "")[:50])
+        print(f"  [{i}/{len(records)}] {disp}", end=" … ", flush=True)
 
-        status, source = process_doi(doi, args.output, args.email, pmid)
-        results[doi] = (status, source)
+        # 每条独立 try/except：任一条（截断/超时/解析异常）都不得拖垮整批，记 FAIL 继续，报告照出。
+        try:
+            doi = resolve_identifier(rec, args.email)
+            if not doi:
+                status, source = ("fail", "unresolved")
+            else:
+                rec["doi"] = doi  # 供 build_report 定位产物文件名
+                status, source = process_doi(doi, args.output, args.email, pmid)
+        except Exception as e:  # noqa: BLE001 —— 兜底一切，绝不让单条异常中断整批
+            status, source = ("fail", "error")
+            log.debug("Unhandled error for %s: %s", disp, e)
+
+        rec["_status"], rec["_source"] = status, source
+        if rec.get("doi"):
+            results[rec["doi"]] = (status, source)
         stats[status] += 1
-
-        labels = {"arxiv": "OK (arXiv)", "oa": "OK (OA)", "pmc": "OK (PMC)",
-                  "fail": "FAIL", "skip": "SKIP"}
-        print(labels[status])
+        suffix = " (无法解析 DOI/PMID/标题)" if source == "unresolved" else ""
+        print(labels[status] + suffix)
         time.sleep(0.5)
 
     # Best-effort title cross-check on successful downloads. extract_pdf_text uses
@@ -742,10 +874,15 @@ def main():
             f.write("# DOIs needing manual retrieval\n")
             f.write("# Options: institutional access, ILL\n\n")
             for rec in records:
-                doi = rec["doi"]
-                pdf = args.output / f"{safe_doi_name(doi)}.pdf"
-                if not existing_pdf_ok(pdf):
-                    f.write(f"{doi}\n")
+                doi = rec.get("doi", "")
+                pdf = args.output / f"{safe_doi_name(doi)}.pdf" if doi else None
+                if pdf is not None and existing_pdf_ok(pdf):
+                    continue
+                # 无法解析出 DOI 的（PMID/Title-only 且检索无果）也列进来，标注来源标识。
+                ident = doi or (f"PMID:{rec['pmid']}" if rec.get("pmid")
+                                else (rec.get("title") or "").strip())
+                if ident:
+                    f.write(f"{ident}\n")
         print(f"  Manual list: {fail_path}")
 
 

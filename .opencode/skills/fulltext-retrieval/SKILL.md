@@ -1,6 +1,6 @@
 ---
 name: fulltext-retrieval
-description: Batch download open-access PDFs by DOI using legitimate OA APIs (Unpaywall, PMC, OpenAlex, Crossref). Optional PDF→Markdown conversion for token-efficient LLM analysis.
+description: Batch download open-access PDFs by DOI, PMID, or title using legitimate OA APIs (Unpaywall, PMC, OpenAlex, Crossref). PMID/Title inputs auto-resolve to a DOI first. Per-record crash isolation (one truncated download never sinks the batch). Optional PDF→Markdown conversion for token-efficient LLM analysis.
 triggers: PDF download, fulltext retrieval, open access PDF, batch download papers, meta-analysis PDF, PDF to markdown, convert PDF
 tools: Read, Write, Edit, Bash, Grep, Glob
 model: inherit
@@ -17,10 +17,14 @@ Batch download open-access full-text PDFs from a DOI list using legitimate OA AP
 ## Pipeline
 
 ```
-DOI → arXiv (10.48550/arXiv.* DOIs) → Unpaywall → PMC (Europe PMC / OA FTP / web) → OpenAlex → Crossref → landing page
+输入 DOI / PMID / 标题 →（PMID/标题先解析成 DOI）→ arXiv → Unpaywall → PMC (Europe PMC render / OA FTP / web) → OpenAlex → Crossref → landing page
 ```
 
 Each DOI goes through these sources in order until a valid PDF (≥10 KB, `%PDF-` header) is found. arXiv DOIs (`10.48550/arXiv.2401.01234`, version suffixes, old-style `hep-th/9901001`, or a bare `arXiv:` id) resolve directly to the arXiv PDF first.
+
+**输入不止 DOI**：worklist 的一行只有 PMID 或只有标题也能下——脚本先 PMID→DOI（Europe PMC）、标题→DOI（Crossref 书目检索，标题吻合度 ≥0.6 才采纳，防张冠李戴），解析出的 DOI 再进主管线。三者皆无则记 FAIL 并列入 `manual_needed.txt`。
+
+**健壮性**：① 每条独立隔离——任一条下载被截断（`IncompleteRead`）/超时/异常都只记该条 FAIL 并继续，绝不中断整批、报告照常生成（旧版遇截断会崩全批、连报告都没有）；② `fetch_bytes` 对瞬时网络错误退避重试 2 次；③ 拿到 HTML 拦截页（Nature/Springer 对非浏览器 UA 常见）时用浏览器 UA + Referer 兜底重取，并优先走 PMC render 端点（`europepmc.org/articles/PMCID?pdf=render`，比旧的 ptpmcrender 稳）。这些让金标 OA 的 Nature Communications 等也能稳定取到。
 
 ## Quick Start
 
