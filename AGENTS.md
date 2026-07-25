@@ -28,7 +28,7 @@
 | 系统综述 / Meta | `systematic` | systematic-review(方法学八步，含 PRISMA/RoB 出图) → write-paper → reference-check → render-docx |
 | 基金标书 | `grant` | research-scan → topic-selection → **novelty-check**(新颖性裁定+预注册) → grant-proposal → peer-review(自查) → render-pdf-doc |
 | 原创研究论文 | `paper` | deidentify(如含患者数据) → clinical-stats + data-analysis → data-integrity(可选，源数据自查，见表下注) → **novelty-check**(可选，见表下注) → nature-figure → **literature-review**(成文综述) → write-paper(基于综述) → reference-check → humanize-academic → peer-review → render-docx |
-| 深度研究一个问题 | `research` | deep-research → render-pdf-doc |
+| 深度研究一个问题 | `research` | deep-research → reference-check(查报告引用真伪) → render-pdf-doc |
 
 - 拿不准归哪条 → 用编号选项问（见 §六）："**1)** 叙述性综述　**2)** 系统综述 / Meta　**3)** 原创研究论文　**4)** 基金标书　**5)** 深挖一个问题"，用户回一个数字即定 pipeline。
 - **综述体裁判别（信号词优先）**：出现 **双人筛选 / PRISMA / RoB / 偏倚风险 / GRADE / Meta / 森林图合并** 任一 → `systematic`；只说"写篇综述 / 讲讲某方向进展"、**未提**这些方法学词 → 默认 `review`，但开工前用编号选项确认（见 §六）："**1)** 叙述性综述就够（推荐，按你所述）　**2)** 做到系统综述强度（双人筛选/PRISMA/RoB）"。

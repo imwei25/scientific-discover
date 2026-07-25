@@ -40,7 +40,7 @@ $PY ${REPO_ROOT:-/app}/.opencode/skills/literature-review/search.py "<P 概念>"
 筛 Recruiting / Active。若一个大 RCT 还有数年随访，把你的定位成 pilot/探索性，别当定论性研究。
 
 ## Step 4 — 广覆盖增强（非索引刊、预印本、引用图）
-- **OpenAlex**：`https://api.openalex.org/works?search=<query>&filter=publication_year:2016-&sort=cited_by_count:desc&per_page=20`（已装 `pyalex`）。⚠️ **2026-02 起需 API key**；有 key 才用，没 key 退回 Europe PMC 人工归纳并把该节标"仅线索、未核实"。
+- **OpenAlex**：`https://api.openalex.org/works?search=<query>&filter=publication_year:2016-&sort=cited_by_count:desc&per_page=20&mailto=<你的邮箱>`（已装 `pyalex`）。**只需邮箱进 polite pool、不需要 API key**（与 research-scan 口径一致，2026-07 实测匿名可调）；如遇限流：先加 `mailto`；仍不通再退回 Europe PMC 人工归纳并把该节标"仅线索、未核实"。
 - **Europe PMC** 本身含预印本（medRxiv/bioRxiv），Step 1 已覆盖。
 - **Semantic Scholar**：`https://api.semanticscholar.org/graph/v1/paper/search?query=<query>&fields=title,year,citationCount,influentialCitationCount&limit=20` —— `influentialCitationCount` 高且直接回答你问题的，是强"已被回答"信号。
 

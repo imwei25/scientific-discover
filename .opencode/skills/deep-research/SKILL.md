@@ -14,6 +14,8 @@ description: 深度研究。对一个具体问题做多源检索→抓取→交�
 ## 定位（本技能在套件中的位置）
 顶层主控（AGENTS.md 常驻指令）负责判意图、定范围、派发；派到本技能就**直接做，别回绕**。产物直接写**当前工作目录**——网关已把本会话的 cwd 指到该会话的产物目录，用裸文件名即可（如 `table1.csv`），别再拼 `outputs/…` 前缀，也别写到仓库根。
 
+> **与顶层同名 `deep-research` skill 的关系**：部分框架（如 Claude Code harness）另带一个顶层 `deep-research`，走 **web fan-out + 对抗式核验**、覆盖通用网络问题。**本项目技能走学术检索源**（Europe PMC 国内可达、search-lit/literature-review 引擎），二者**互补**：**医学 / 文献 / 需要 DOI 可核引用的问题优先本技能**；纯通用网络类问题可用顶层 skill，或两者叠用（web 找线索、本技能到学术库坐实 + reference-check 查真伪）。
+
 ## Python 环境（用于抓文献/网页）
 > 没有项目根 `.venv`？先运行 `env-setup` 技能建好并装依赖。
 ```
@@ -41,7 +43,9 @@ ${REPO_ROOT:-/app}/.venv/bin/python
    - **停止标准**：每个子问题取到 2–4 个独立来源、或连续两轮无新信息即停，避免无限查下去。
 5. **交叉核实**：对关键论断，看多个来源是否一致；有冲突就并列呈现并标注分歧，别只挑一个。
 6. **反向核查（成稿前一轮）**：挑 3–5 条最关键结论，**反过来找反证**（用否定式/竞争假说去检索），能扛住反驳的才写成结论，扛不住的降级到"不确定"并入局限。
-7. **综合成报告**，写到 `outputs/deep_research.md`；速览结论每条标**置信度（高/中/低 + 一句理由）**。
+   - 需读全文方法/结果才能核实的关键论断，交 `fulltext-retrieval` 取 OA PDF 转 md 再抓证据，**别只停在摘要层**。
+7. **综合成报告**，写到 `deep_research.md`；速览结论每条标**置信度（高/中/低 + 一句理由）**。置信度判据：**高**＝≥2 个高等级独立源（指南/SR/RCT）且无冲突；**中**＝多源但等级偏低或有可调和分歧；**低**＝单源/弱证据/存真矛盾。
+8. **查引用闸（成稿必跑）**：把参考清单交 `reference-check` 核每条 DOI/标题/年份**真实存在**；查出假引用/DOI 错 → 回第 5–7 步改引用、删无法坐实的论断 → 重跑 reference-check，全绿再出 PDF。这是项目铁律（CLAUDE.md §五"写完带引用产物自动跑 reference-check"）在 deep-research 上的落地——反向核查只查结论扛不扛得住反驳，**不查引用本身是否真实**，二者缺一不可。
 
 ## 报告结构
 - **问题与范围**
@@ -51,8 +55,8 @@ ${REPO_ROOT:-/app}/.venv/bin/python
 - **参考来源清单**（编号，正文用 [n] 对应）
 
 ## 约定
-- 产出写 `outputs/deep_research.md`。
-- **出 PDF（正式报告默认交付版）**：报告写完后，把 `outputs/deep_research.md` 交给 `render-pdf-doc` 技能渲染成 `outputs/deep_research.pdf`。中文报告务必指定中文字体（`--cjk-font`：本地 `Microsoft YaHei`，服务器 `Noto Sans CJK SC`），否则会漏字。
+- 产出写 `deep_research.md`。
+- **出 PDF（正式报告默认交付版）**：报告写完后，把 `deep_research.md` 交给 `render-pdf-doc` 技能渲染成 `deep_research.pdf`。中文报告务必指定中文字体（`--cjk-font`：本地 `Microsoft YaHei`，服务器 `Noto Sans CJK SC`），否则会漏字。
 - **每个关键论断都要有出处**；查不到就明说"未找到可靠来源"，不要脑补。
 - 区分事实、推断、观点；对相互矛盾的证据如实并列。
 - 联网受限时说明这限制了结论强度。
