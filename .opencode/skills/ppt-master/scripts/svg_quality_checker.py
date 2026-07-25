@@ -734,6 +734,55 @@ class SVGQualityChecker:
         except (TypeError, ValueError):
             return None
 
+    @staticmethod
+    def _parse_translate(transform: str):
+        """从 transform 属性取累计平移 (tx,ty)；含 rotate/scale/matrix/skew 时返回 complex=True。
+        返回 (tx, ty, complex)。这样溢出判定能把 <g transform=translate(...)> 内的局部坐标
+        换算到全局，不再把图表类组件(局部 x=0/负值)误判为越界。"""
+        tx = ty = 0.0
+        complex_tf = False
+        for name, args in re.findall(r'(\w+)\s*\(([^)]*)\)', transform or ''):
+            nums = re.findall(r'[-+]?\d*\.?\d+(?:[eE][-+]?\d+)?', args)
+            if name == 'translate':
+                if nums:
+                    tx += float(nums[0])
+                    ty += float(nums[1]) if len(nums) > 1 else 0.0
+            elif name in ('rotate', 'scale', 'matrix', 'skewX', 'skewY'):
+                complex_tf = True  # 非纯平移：AABB 难算，保守跳过该元素的越界判定
+        return tx, ty, complex_tf
+
+    def _text_overflow_lines(self, text_el, tx, vw, margin, overflow_err, overflow_warn):
+        """对单个 <text>（已确认无 rotate/scale）估各行宽并判越界；tx=累计平移。"""
+        base_fs = self._text_font_size(text_el) or 0
+        lines = []
+        if (text_el.text or '').strip():
+            lines.append((text_el.get('x'), base_fs, text_el.get('text-anchor'), text_el.text))
+        for sub in text_el:
+            if _local_name(sub) == 'tspan' and (sub.text or '').strip():
+                fs = self._text_font_size(sub) or base_fs
+                anchor = sub.get('text-anchor') or text_el.get('text-anchor')
+                lines.append((sub.get('x'), fs, anchor, sub.text))
+        for x_raw, fs, anchor, s in lines:
+            if not fs or x_raw is None:
+                continue
+            try:
+                x = float(x_raw) + tx      # 局部 x 换算到全局
+            except ValueError:
+                continue
+            width = self._estimate_text_width(s, fs)
+            a = (anchor or 'start').strip()
+            if a == 'middle':
+                left, right = x - width / 2, x + width / 2
+            elif a == 'end':
+                left, right = x - width, x
+            else:
+                left, right = x, x + width
+            over = max(right - vw, -left)  # 右越界或左越界的最大量
+            if over > width * 0.15 and over > margin * 3:
+                overflow_err.append(f"x={x:.0f} 估宽{width:.0f}px 越界{over:.0f}px：{s[:24]!r}")
+            elif over > margin:
+                overflow_warn.append(f"{s[:24]!r} 越界≈{over:.0f}px")
+
     def _check_text_overflow(self, root: ET.Element, result: Dict) -> None:
         vb = _parse_viewbox_values(root.get('viewBox') or '')
         if not vb:
@@ -741,37 +790,16 @@ class SVGQualityChecker:
         _, _, vw, vh = vb
         margin = 8.0  # 安全边距(px)：略超一点点算 warning，不到 error
         overflow_err, overflow_warn = [], []
-        for text_el in root.iter(f'{{{SVG_NS}}}text'):
-            base_fs = self._text_font_size(text_el) or 0
-            # 逐"行"估：text 自身直书文本 + 每个 tspan（各自可带 x/font-size）
-            lines = []
-            if (text_el.text or '').strip():
-                lines.append((text_el.get('x'), base_fs, text_el.get('text-anchor'), text_el.text))
-            for sub in text_el:
-                if _local_name(sub) == 'tspan' and (sub.text or '').strip():
-                    fs = self._text_font_size(sub) or base_fs
-                    anchor = sub.get('text-anchor') or text_el.get('text-anchor')
-                    lines.append((sub.get('x'), fs, anchor, sub.text))
-            for x_raw, fs, anchor, s in lines:
-                if not fs or x_raw is None:
-                    continue
-                try:
-                    x = float(x_raw)
-                except ValueError:
-                    continue
-                width = self._estimate_text_width(s, fs)
-                a = (anchor or 'start').strip()
-                if a == 'middle':
-                    left, right = x - width / 2, x + width / 2
-                elif a == 'end':
-                    left, right = x - width, x
-                else:
-                    left, right = x, x + width
-                over = max(right - vw, -left)  # 右越界或左越界的最大量
-                if over > width * 0.15 and over > margin * 3:
-                    overflow_err.append(f"x={x:.0f} 估宽{width:.0f}px 越界{over:.0f}px：{s[:24]!r}")
-                elif over > margin:
-                    overflow_warn.append(f"{s[:24]!r} 越界≈{over:.0f}px")
+
+        def visit(el, tx, ty, complex_tf):
+            etx, ety, ec = self._parse_translate(el.get('transform') or '')
+            tx, ty, complex_tf = tx + etx, ty + ety, complex_tf or ec
+            if _local_name(el) == 'text' and not complex_tf:
+                self._text_overflow_lines(el, tx, vw, margin, overflow_err, overflow_warn)
+            for child in el:
+                visit(child, tx, ty, complex_tf)
+
+        visit(root, 0.0, 0.0, False)
         if overflow_err:
             sample = '；'.join(overflow_err[:4])
             extra = '' if len(overflow_err) <= 4 else f"；+{len(overflow_err)-4} more"
