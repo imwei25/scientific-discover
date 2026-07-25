@@ -34,6 +34,10 @@ ${REPO_ROOT:-/app}/.venv/bin/python
 ```
 ${REPO_ROOT:-/app}/.venv/bin/python ${REPO_ROOT:-/app}/.opencode/skills/literature-review/search.py "概念1" "概念2" --limit 25 --since 2018
 ```
+> **多个概念默认 AND 合成一条聚焦检索（取交集）**——脚本会打印实际合成的检索式。这样聚焦主题、
+> 不掺入只命中单个概念的离题文献。要各自独立检索再并集（旧行为，会掺离题）显式加 `--union`。
+> 单概念一条式最可控：`"概念1 AND 概念2 AND (同义词1 OR 同义词2)"`。
+
 产出/追加 `outputs/evidence_table.csv`（含 design 列 + MeSH 词可作归一化信号）和 `outputs/evidence.md`。**每回合读完摘要后自评缺口**（照共享 doc）：哪个子面证据稀薄→补检；哪条论断只靠单一/弱证据→**沿证据等级爬升**（只有队列就去找 RCT/meta）；冒出的新药名/标志物→单独一轮。**停止判据**：每个子面在相关等级上取到 ≥3–5 篇、或连续两回合无新增、或到回合上限（默认 3–4 轮）。逐轮记 `outputs/search_log.md`。
 
 ### 阶段 3 — 论断台账 + 跨文献矛盾扫描

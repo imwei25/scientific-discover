@@ -39,6 +39,20 @@ if [ -n "${NCBI_API_KEY:-}" ]; then
   SLEEP=0.1
 fi
 
+# 解析可用 Python：优先项目根 .venv（本机 python3 可能是假解释器/不存在），供 cmd_related 用。
+_resolve_py() {
+  local d; d="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  for _ in 1 2 3 4 5 6; do
+    for p in "$d/.venv/Scripts/python.exe" "$d/.venv/bin/python"; do
+      [ -x "$p" ] && { printf '%s' "$p"; return; }
+    done
+    d="$(dirname "$d")"
+  done
+  for c in python3 python py; do command -v "$c" >/dev/null 2>&1 && { printf '%s' "$c"; return; }; done
+  printf 'python3'
+}
+PY="$(_resolve_py)"
+
 _sleep() { sleep "$SLEEP"; }
 
 # _curl <url> [extra curl args...]
@@ -93,8 +107,10 @@ cmd_related() {
   local retmax="${2:-10}"
   local result linked_ids
   result=$(_curl "${BASE}/elink.fcgi?dbfrom=${DB}&db=${DB}&id=${pmid}&cmd=neighbor_score&retmode=json&tool=${TOOL}&email=${EMAIL}${API_KEY_PARAM}") || { printf '%s\n' "$result"; return 1; }
-  # retmax passed as argv, not interpolated into the python source
-  linked_ids=$(printf '%s' "$result" | python3 -c "
+  # retmax passed as argv, not interpolated into the python source.
+  # 不再 2>/dev/null 静默吞错：python 提取失败(如假解释器)要能与"真·零相关"区分。
+  local py_err
+  linked_ids=$(printf '%s' "$result" | "$PY" -c "
 import sys, json
 retmax = int(sys.argv[1])
 data = json.load(sys.stdin)
@@ -104,7 +120,12 @@ for db in links:
         ids = [str(l['id']) for l in db.get('links', [])[:retmax]]
         print(','.join(ids))
         break
-" "$retmax" 2>/dev/null || echo "")
+" "$retmax") ; py_err=$?
+  if [ "$py_err" -ne 0 ]; then
+    echo "{\"error\": \"related-id extraction failed: Python 解释器不可用或出错 ($PY)。elink 已成功返回，仅解析 linked IDs 失败——请确认项目根 .venv 存在或 python 在 PATH。\"}" >&2
+    echo '{"error": "related-id extraction failed (see stderr)"}'
+    return 1
+  fi
   if [ -n "$linked_ids" ]; then
     _sleep
     cmd_fetch_json "$linked_ids"

@@ -163,6 +163,29 @@ def classify(text):
     return "other"
 
 
+def classify_design(title, abstract):
+    """研究体裁分类：**优先看标题的体裁声明**（标题里 "cohort study/randomized trial"
+    才是作者对本文体裁的声明）；标题无体裁词才回退摘要，且摘要里的 meta/RCT 需是**自指**
+    短语（"we performed a meta-analysis"）才算——否则 "a prior meta-analysis" 这种顺带提及
+    会把一篇 cohort 误抬成最高等级 meta（旧版 bug：证据分级失真）。"""
+    t = classify(title)
+    if t != "other":
+        return t
+    ab = (abstract or "").lower()
+    # 摘要自指的 meta/系统综述声明才算 meta
+    if re.search(r"\b(we|this study|here we|the present)\b[^.]{0,40}"
+                 r"(systematic review|meta-?analysis)", ab) or \
+       re.search(r"(systematic review and meta-?analysis|this (systematic review|meta-?analysis))", ab):
+        return "meta-analysis"
+    # 回退摘要分类，但**剔除** meta（裸提及不抬级）；RCT 需 randomized+trial 同现
+    a = classify(abstract)
+    if a == "meta-analysis":
+        return "other"
+    if a == "RCT" and not re.search(r"randomi[sz]ed[^.]{0,30}(trial|study)", ab):
+        return "other"
+    return a
+
+
 def one_query(q, limit, since):
     query = q
     if since:
@@ -189,16 +212,27 @@ def one_query(q, limit, since):
 
 def main():
     ap = argparse.ArgumentParser(description="综述检索 → 证据表")
-    ap.add_argument("queries", nargs="+", help="一个或多个检索式")
-    ap.add_argument("--limit", type=int, default=25, help="每个检索式取多少")
+    ap.add_argument("queries", nargs="+", help="一个或多个检索概念（默认 AND 合成一条聚焦检索）")
+    ap.add_argument("--limit", type=int, default=25, help="取多少（AND 模式=总数；--union 模式=每式）")
     ap.add_argument("--since", type=int)
+    ap.add_argument("--union", action="store_true",
+                    help="把多个参数各自独立检索再并集（旧行为；会掺入只命中单个概念的离题文献）")
     ap.add_argument("--outdir", default=None)
     args = ap.parse_args()
     args.outdir = str(_resolve_out_dir(args.outdir))
     os.makedirs(args.outdir, exist_ok=True)
 
+    # 默认：多个概念用 AND 合成一条聚焦检索（取交集）——否则各自并集会掺入大量只命中单个
+    # 概念的离题文献（实测 24 篇里 12 篇是纯 CKD 噪声）。要旧的并集行为显式加 --union。
+    if len(args.queries) > 1 and not args.union:
+        combined = " AND ".join(f"({q})" for q in args.queries)
+        print(f"多概念 AND 合成检索式：{combined!r}（如需并集加 --union）")
+        run_queries = [combined]
+    else:
+        run_queries = args.queries
+
     seen, rows = set(), []
-    for q in args.queries:
+    for q in run_queries:
         print(f"检索：{q!r}")
         try:
             recs = one_query(q, args.limit, args.since)
@@ -210,12 +244,16 @@ def main():
             if not key or key in seen:
                 continue
             seen.add(key)
-            abstract = (rec.get("abstractText") or "").replace("\n", " ").strip()
+            # 剥 HTML 标签（Europe PMC 摘要含 <h4>Background</h4>/<sup> 等，否则污染证据表、
+            # 破坏 ground_claim 断句）。先去标签再压空白。
+            abstract = re.sub(r"<[^>]+>", " ", rec.get("abstractText") or "")
+            abstract = re.sub(r"\s+", " ", abstract).strip()
+            title = (rec.get("title") or "").strip().rstrip(".")
             rows.append({
-                "title": (rec.get("title") or "").strip().rstrip("."),
+                "title": title,
                 "year": rec.get("pubYear", ""),
                 "journal": rec.get("journalInfo", {}).get("journal", {}).get("title", ""),
-                "design": classify(f"{rec.get('title','')} {abstract}"),
+                "design": classify_design(title, abstract),
                 "doi": rec.get("doi", ""),
                 "pmid": rec.get("pmid", ""),
                 "cites": rec.get("citedByCount", 0),

@@ -179,8 +179,12 @@ def fetch_abstract(ref):
         if not res:
             return None, None
         rec = res[0]
-        return (rec.get("title", ""),
-                (rec.get("abstractText") or "").replace("\n", " ").strip())
+        # 剥 HTML 标签：Europe PMC 摘要含 <h4>Methods</h4>/<sup> 等，否则断句会在
+        # "phenotype.<h4>Methods</h4>In this..." 处不断开，best_sentence 变成横跨
+        # Background+Methods 的 run-on 长句，grounding 精度下降、还会渲出原始标签。
+        abstract = re.sub(r"<[^>]+>", " ", rec.get("abstractText") or "")
+        abstract = re.sub(r"\s+", " ", abstract).strip()
+        return (rec.get("title", ""), abstract)
     except Exception:
         return None, None
 
@@ -242,6 +246,18 @@ def ground_one(claim, ref):
     best, score = ranked[0]
     second = ranked[1] if len(ranked) > 1 else None
     v, note = label(score)
+    # 绝对化/夸大用词：摘要级证据几乎不可能支撑"completely/eliminate/all/cure/100%/always"
+    # 这类断言——无论相似度多高都强制标 OVERCLAIM 让人回全文核，防"最匹配句看着挺支持"放行。
+    if re.search(r"\b(completely|entirely|eliminat\w+|abolish\w+|cure[sd]?|100%|always|never|"
+                 r"guarantee\w*|all-cause mortality to zero|全部消除|彻底|治愈|百分之百|完全消除)\b",
+                 claim, re.I):
+        v = "OVERCLAIM"
+        note = ("⚠️ 该说法含绝对化用词（completely/eliminate/all/cure 等），摘要级证据无法支撑绝对断言——"
+                "务必回全文核实效应量与人群/结局边界，别据'最匹配句'外观采信。" + note)
+    # WEAK/CHECK 但最匹配句含高权威词：提醒该句可能是不同人群/结局，勿据外观采信。
+    elif v in ("WEAK", "CHECK") and re.search(
+            r"\b(robust|significant|landmark|strong evidence|conclusive|definitive)\b", best or "", re.I):
+        note = note + "　（注：该'最匹配句'虽含 robust/significant 等强词，但相似度不高，可能属不同人群/结局，勿据此认定成立）"
     return dict(claim=claim, ref=ref, verdict=v, score=round(score, 3),
                 best_sentence=best, note=note, title=title,
                 second_sentence=(second[0] if second else ""),

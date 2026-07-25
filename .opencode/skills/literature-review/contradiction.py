@@ -72,10 +72,64 @@ def norm_dir(v):
     return "unknown"
 
 
+# 医学常见缩写↔全称映射（双向都归到右侧规范全称）。用于分组前把 aki 与
+# "acute kidney injury"、sglt2i 与 "sglt2 inhibitor" 折叠到同一 key——否则真矛盾
+# (一方登记缩写、一方登记全称)会被拆进两个"一致"组、静默漏标（旧版最大盲区）。
+_ABBREV = {
+    "aki": "acute kidney injury", "ckd": "chronic kidney disease",
+    "eskd": "end stage kidney disease", "esrd": "end stage kidney disease",
+    "eskf": "end stage kidney disease", "mace": "major adverse cardiovascular events",
+    "mi": "myocardial infarction", "hf": "heart failure",
+    "hfref": "heart failure with reduced ejection fraction",
+    "hfpef": "heart failure with preserved ejection fraction",
+    "cvd": "cardiovascular disease", "cv": "cardiovascular",
+    "t2dm": "type 2 diabetes", "t2d": "type 2 diabetes", "dm": "diabetes",
+    "egfr": "estimated glomerular filtration rate", "gfr": "glomerular filtration rate",
+    "uacr": "urine albumin to creatinine ratio", "acr": "albumin to creatinine ratio",
+    "sglt2i": "sglt2 inhibitor", "sglt2": "sglt2 inhibitor",
+    "sglt-2": "sglt2 inhibitor", "sglt2is": "sglt2 inhibitor",
+    "glp1ra": "glp-1 receptor agonist", "glp1": "glp-1 receptor agonist",
+    "glp-1ra": "glp-1 receptor agonist", "acei": "ace inhibitor",
+    "arb": "angiotensin receptor blocker", "raas": "renin angiotensin aldosterone system",
+    "bp": "blood pressure", "sbp": "systolic blood pressure",
+    "dbp": "diastolic blood pressure", "ldl": "ldl cholesterol",
+    "hba1c": "hemoglobin a1c", "os": "overall survival",
+    "pfs": "progression free survival", "ci": "confidence interval",
+    "hr": "hazard ratio", "or": "odds ratio", "rr": "relative risk",
+    "af": "atrial fibrillation", "copd": "chronic obstructive pulmonary disease",
+    "nafld": "non-alcoholic fatty liver disease", "hcc": "hepatocellular carcinoma",
+}
+# 复数→单数（关键实义词），去连字符后再比。
+_PLURAL = {"inhibitors": "inhibitor", "agonists": "agonist", "events": "event",
+           "outcomes": "outcome", "levels": "level", "blockers": "blocker",
+           "diseases": "disease", "injuries": "injury"}
+
+
+def canonicalize(v):
+    """把 canon_i/canon_o 归一到规范全称：小写→压空白→整体查缩写表→逐词展开缩写，
+    再统一做一遍复数→单数 + 去相邻重复词。让缩写、全称、单复数变体折叠到同一 key。"""
+    s = re.sub(r"\s+", " ", (v or "").strip().lower()).strip(" .;:")
+    if not s:
+        return ""
+    # 1) 整体命中缩写表（aki / mace / sglt2i …）
+    expanded = _ABBREV.get(s) or _ABBREV.get(s.replace("-", ""))
+    if expanded is None:
+        # 2) 逐词展开（某词可能展成短语，如 sglt2→"sglt2 inhibitor"）
+        expanded = " ".join(_ABBREV.get(t) or _ABBREV.get(t.replace("-", ""), t)
+                            for t in s.split(" "))
+    # 3) 统一收尾：每个词复数→单数（"events"/"inhibitors" 与 "event"/"inhibitor" 对齐），
+    #    并去掉相邻重复词（"sglt2 inhibitor" 展开时产生的 "inhibitor inhibitor"）。
+    words = [_PLURAL.get(w, w) for w in expanded.split(" ") if w]
+    out = []
+    for w in words:
+        if not out or out[-1] != w:
+            out.append(w)
+    return " ".join(out)
+
+
 def norm_key(v):
-    """canon_i / canon_o 归一：小写、压空白、去标点尾。仅粗归一，真正的语义
-    归一由主代理在填 canon_* 列时完成（可参考 evidence 里的 MeSH 词）。"""
-    return re.sub(r"\s+", " ", (v or "").strip().lower()).strip(" .;:")
+    """canon_i / canon_o 分组归一：现走 canonicalize（缩写/全称/单复数折叠）。"""
+    return canonicalize(v)
 
 
 def design_weight(design):

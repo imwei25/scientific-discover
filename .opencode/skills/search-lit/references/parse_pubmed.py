@@ -23,6 +23,13 @@ import xml.etree.ElementTree as ET
 from datetime import date
 from textwrap import shorten
 
+# 强制 UTF-8 输出：否则 GBK/非 UTF-8 locale 下遇非 ASCII 作者名(Ø/Å 等)会 UnicodeEncodeError
+# 崩在半途、写出截断的半条 BibTeX（静默数据损坏）。errors='replace' 兜底不丢整条。
+try:
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+except Exception:
+    pass
+
 
 # Heuristic for East Asian name reverse-encoding in PubMed XML.
 # Cases observed: <LastName>Qiaoling</LastName><ForeName>Fu</ForeName> where
@@ -122,7 +129,8 @@ def _extract_doi(article_el, art_el) -> str:
 
 
 def parse_esearch(data: str) -> None:
-    """Parse esearch JSON response, print PMIDs and count."""
+    """Parse esearch JSON response, print PMIDs, count, the actual executed query,
+    and any NCBI warnings/errors."""
     result = json.loads(data)
     esearch = result.get("esearchresult", {})
     count = esearch.get("count", "0")
@@ -130,6 +138,24 @@ def parse_esearch(data: str) -> None:
     print(f"Total results: {count}")
     print(f"Returned: {len(ids)}")
     print(f"PMIDs: {','.join(ids)}")
+    # PubMed 自动词映射后【实际执行】的检索式——系统综述可复现性的关键，必须记入检索日志。
+    qt = esearch.get("querytranslation", "")
+    if qt:
+        print(f"Query translation: {qt}")
+    # 告警/错误：NCBI 会静默改写查询（引号短语查无→丢弃、字段拼错→当全字段重解释导致海量结果）。
+    # 不读这两个字段=用户拿到被悄悄改写的结果却毫不知情，直接破坏"系统、可复现"。
+    warn = esearch.get("warninglist", {}) or {}
+    for key, label in (("phrasesignored", "短语被忽略"),
+                       ("quotedphrasesnotfound", "引号短语未找到"),
+                       ("outputmessages", "输出提示")):
+        vals = warn.get(key)
+        if vals:
+            print(f"⚠ {label}: {vals if isinstance(vals, str) else ', '.join(vals)}")
+    err = esearch.get("errorlist", {}) or {}
+    for key, label in (("phrasesnotfound", "短语未找到"), ("fieldsnotfound", "字段未找到")):
+        vals = err.get(key)
+        if vals:
+            print(f"⚠ 错误·{label}: {vals if isinstance(vals, str) else ', '.join(vals)}")
 
 
 def parse_esummary(data: str) -> None:

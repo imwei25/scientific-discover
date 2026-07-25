@@ -393,9 +393,14 @@ decide inclusion (the user does) and it does not insert references into any manu
 For systematic reviews or comprehensive literature sections:
 
 1. Document the full search strategy (PRISMA-compliant).
-2. Record: database, date of search, query string, number of results.
-3. Track inclusion/exclusion at each screening step.
-4. Output a PRISMA flow diagram data summary.
+2. Record: database, date of search, query string, number of results，**并记下 `esearch` 打印的
+   `Query translation:` 行**——那是 PubMed 自动词映射后【实际执行】的 MeSH 展开式，
+   与你输入的原始式往往不同；PRISMA 附录要的是这条可复现的实际检索式，不是你敲的那句。
+3. **留意 `⚠` 告警**：`esearch` 现在会打印 NCBI 的 warninglist/errorlist（引号短语被丢弃、
+   字段拼错被当全字段重解释导致海量结果等）。命中告警说明查询被悄悄改写，**别把结果当数**，
+   修正检索式重跑。
+4. Track inclusion/exclusion at each screening step.
+5. Output a PRISMA flow diagram data summary.
 
 ### Mode: Quick Cite
 
@@ -406,6 +411,11 @@ For quickly finding a single reference the user describes:
 3. Present top 3 candidates.
 4. User confirms which one.
 5. Generate BibTeX entry.
+
+> ⚠️ **`cite_lookup <title>` 只返回按相关度排序的候选，不保证第 1 条就是精确标题匹配**（实测过
+> 精确匹配排在第 4/5、第 1 条是无关论文）。**别默认取 top hit 当确认**——逐条比对标题是否逐字吻合
+> 再采用。要**权威判定某条引用真伪 / 标题是否对得上**，交 `reference-check` 技能（它做归一化标题
+> 相似度与 DOI/PMID 核验，正是为此设计），别用 cite_lookup 的排序结果下结论。
 
 ### Mode: Related Papers
 
