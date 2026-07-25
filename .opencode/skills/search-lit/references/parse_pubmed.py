@@ -27,6 +27,8 @@ from textwrap import shorten
 # 崩在半途、写出截断的半条 BibTeX（静默数据损坏）。errors='replace' 兜底不丢整条。
 try:
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    sys.stdin.reconfigure(encoding="utf-8", errors="replace")  # 输入侧同样强制 UTF-8，
+    # 否则 GBK locale 下按 GBK 解码 UTF-8 的 XML/JSON，Ø/Å 被误读成汉字（输入侧静默 mojibake）。
 except Exception:
     pass
 
