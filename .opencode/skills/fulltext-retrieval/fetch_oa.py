@@ -343,26 +343,49 @@ def pmid_to_doi(pmid: str, email: str) -> str | None:
     return None
 
 
+def title_jaccard(a: str, b: str) -> float:
+    """标题 token 的 Jaccard 相似度（对称）。用它而非单向 title_overlap 选最优候选：
+    单向 overlap 对"超集"标题恒为 1.0——"Faculty Opinions recommendation of <原题>"、
+    勘误、评论这类派生记录会把真文章挤掉。对称度量让精确标题胜出。"""
+    ta = {t for t in normalize_title(a).split() if len(t) > 2}
+    tb = {t for t in normalize_title(b).split() if len(t) > 2}
+    if not ta or not tb:
+        return 0.0
+    return len(ta & tb) / len(ta | tb)
+
+
+# 派生/非期刊记录的 DOI 前缀（Faculty Opinions/F1000 推荐等），Title 检索命中它们=下不到真文。
+_DERIVATIVE_DOI_PREFIXES = ("10.3410/",)
+
+
 def title_to_doi(title: str, email: str) -> str | None:
-    """Title → DOI via Crossref 标题检索，取最高分且标题足够吻合的命中。
-    Title-only 清单据此定位文献；阈值卡 title_overlap ≥ 0.6，避免张冠李戴。"""
+    """Title → DOI via Crossref 标题检索，取**对称相似度**最高且足够吻合的期刊文章。
+    过滤 Faculty Opinions 等派生记录；卡 Jaccard ≥ 0.5，避免张冠李戴或选到超集派生记录。"""
     if not title or len(title.strip()) < 8:
         return None
     url = ("https://api.crossref.org/works"
            f"?query.bibliographic={urllib.parse.quote(title)}"
-           f"&rows=3&select=DOI,title&mailto={urllib.parse.quote(email)}")
+           "&rows=5&filter=type:journal-article&select=DOI,title"
+           f"&mailto={urllib.parse.quote(email)}")
     try:
         req = urllib.request.Request(url, headers=_crossref_headers(email))
         with urllib.request.urlopen(req, timeout=20) as resp:
             data = json.loads(resp.read())
         items = (data.get("message", {}) or {}).get("items", []) or []
-        best_doi, best_ov = None, 0.0
+        best_doi, best_score = None, 0.0
         for it in items:
+            doi = (it.get("DOI") or "").strip()
+            if not doi or doi.lower().startswith(_DERIVATIVE_DOI_PREFIXES):
+                continue
             cand_title = " ".join(it.get("title") or [])
-            ov = title_overlap(title, cand_title)
-            if ov > best_ov and it.get("DOI"):
-                best_doi, best_ov = it["DOI"].strip(), ov
-        if best_doi and best_ov >= TITLE_MATCH_THRESHOLD:
+            # 派生记录的标题往往内嵌原题（"recommendation of …"），显式降权。
+            low = cand_title.lower()
+            if low.startswith(("faculty opinions", "f1000")) or "recommendation of" in low:
+                continue
+            score = title_jaccard(title, cand_title)
+            if score > best_score:
+                best_doi, best_score = doi, score
+        if best_doi and best_score >= 0.5:
             return best_doi
     except (urllib.error.URLError, http.client.HTTPException,
             json.JSONDecodeError, OSError) as e:
