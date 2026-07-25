@@ -34,7 +34,7 @@ ${REPO_ROOT:-/app}/.venv/bin/python analysis.py
 - **相关/回归**：连续 → Pearson（正态）/ Spearman（非正态或有序）；结局二分类 → logistic 回归报 OR+95%CI；计数 → 泊松/负二项。
 - **生存数据**：Kaplan–Meier 画曲线 + log-rank 比较；多因素 → Cox 比例风险，**并检验 PH 假设**（Schoenfeld 残差）。用 `lifelines`（已装）。
 - **诊断试验**：报敏感度/特异度/PPV/NPV/LR + ROC-AUC（含 95%CI），别只报准确率。**CI 怎么算**：AUC 用 **DeLong**（解析）或 bootstrap；敏感度/特异度/PPV/NPV 这类比例用 **Wilson**（小样本/极端比例比正态近似稳）——`sklearn.roc_auc_score` 不给 CI，别省略也别凭空编，直接用 `scripts/stat_extras.py` 的 `delong_auc_ci` / `bootstrap_auc_ci` / `wilson_ci`。
-- **方法比对 / 一致性（实验室方法学、新旧仪器）**：**判两方法一致性禁用相关系数 / 普通 OLS 回归**——高相关≠一致（Bland & Altman 的核心论点），且 x 有测量误差会使 OLS 斜率系统性衰减。正确做法：① **Bland-Altman**（偏倚 bias、95% 一致性界限 LoA=bias±1.96·SD、LoA 自身 CI、比例偏倚检验）；② **Passing-Bablok**（非参数稳健回归，斜率 CI 含 1 且截距 CI 含 0 → 无系统/比例偏差）或已知误差方差比时用 **Deming**。直接调 `scripts/stat_extras.py` 的 `bland_altman` / `passing_bablok` / `deming`（已对照已知构造核验，勿手写 PB 易错）。
+- **方法比对 / 一致性（实验室方法学、新旧仪器）**：**判两方法一致性禁用相关系数 / 普通 OLS 回归**——高相关≠一致（Bland & Altman 的核心论点），且 x 有测量误差会使 OLS 斜率系统性衰减。正确做法：① **Bland-Altman**（偏倚 bias、95% 一致性界限 LoA=bias±1.96·SD、LoA 自身 CI、比例偏倚检验）；② **Passing-Bablok**（非参数稳健回归，斜率 CI 含 1 且截距 CI 含 0 → 无系统/比例偏差）或已知测量误差方差比时用 **Deming**（`deming(x,y,lambda_ratio)` 的 `lambda_ratio=σ²_ε(y)/σ²_ε(x)`，即 y 误差方差÷x 误差方差；λ=1=两方法误差相当，最常用）。直接调 `scripts/stat_extras.py` 的 `bland_altman` / `passing_bablok` / `deming`（已对照已知构造核验，勿手写 PB 易错）。
 - **Meta 分析（系统综述定量合并）**：用 `statsmodels.stats.meta_analysis`（`combine_effects`：DerSimonian-Laird 随机效应、I²/τ²/Q 异质性）+ 自绘森林图；亚组/敏感性分析。⚠️ **Egger 发表偏倚检验/漏斗图不对称、REML、网络 Meta/多水平 statsmodels 无内置**——需手写加权回归或用 R `metafor`；**别声称能做其实做不了的**。系统综述全流程(筛选/RoB/GRADE/PRISMA)走 `systematic-review` 技能。
 
 ## 报告规范（写进结论）

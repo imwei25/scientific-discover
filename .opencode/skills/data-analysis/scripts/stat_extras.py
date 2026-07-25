@@ -89,8 +89,11 @@ def passing_bablok(x, y):
 
 
 def deming(x, y, lambda_ratio=1.0):
-    """Deming 回归：已知两方法误差方差比 lambda=σ²x/σ²y 时的正交回归。
-    lambda=1 即两方法测量误差相当。返回 (slope, intercept)。"""
+    """Deming 回归：已知两方法**测量误差方差比**时的正交回归。
+    **参数方向（重要）**：`lambda_ratio = σ²_ε(y) / σ²_ε(x)`，即 y 的测量误差方差 ÷ x 的测量误差方差
+    （与下式一致；解析上 λ→∞ 时 slope→OLS 的 sxy/sxx，对应 y 误差主导）。
+    λ=1（默认）= 两方法测量误差相当，最常用。已知变异系数时 λ=(CV_y·mean_y)²/(CV_x·mean_x)²。
+    返回 (slope, intercept)。"""
     x = np.asarray(x, float); y = np.asarray(y, float)
     mx, my = x.mean(), y.mean()
     sxx = np.sum((x - mx) ** 2)

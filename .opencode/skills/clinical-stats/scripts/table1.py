@@ -274,8 +274,10 @@ def summarize_continuous(df, var, group, groups, two):
         except Exception:
             p = None
     row["P"] = fmt_p(p)
-    # 检验标签：仅当真的算出了 p 才标（常数列/单组等 p 为空时留空，不误标 Mann-Whitney）
-    row["检验"] = ("" if p is None or not group or len(groups) < 2 else
+    # 检验标签：仅当真的算出了**有意义**的 p 才标。常数列的 mannwhitneyu/ttest 会返回 nan
+    # （不是 None），用 fmt_p(p)=="—" 与 P 列口径统一兜住所有"P 为 —"的行，不误标检验名。
+    p_missing = (p is None) or (isinstance(p, float) and np.isnan(p))
+    row["检验"] = ("" if p_missing or not group or len(groups) < 2 else
                    ("t/Welch" if normal and len(groups) == 2 else
                     "ANOVA" if normal else
                     "Mann-Whitney" if len(groups) == 2 else "Kruskal-Wallis"))
@@ -303,22 +305,27 @@ def summarize_categorical(df, var, group, groups, two):
     ct = None
     if group and len(groups) >= 2:
         ct = pd.crosstab(df[var], df[group])
-        try:
-            # 期望频数先用未校正卡方拿到（correction 只影响 2x2 的 p，不影响 expected）。
-            _, _, _, expected = stats.chi2_contingency(ct, correction=False)
-            if ct.shape == (2, 2) and (expected < 5).any():
-                p = stats.fisher_exact(ct.values)[1]
-                test = "Fisher 精确"
-            else:
-                # 临床惯例（R tableone / SAS 默认）报**未校正 Pearson 卡方**，不加 Yates——
-                # 旧版用 scipy 默认(2x2 自动 Yates)会与读者手算/主流软件对不上、且"检验"列不披露。
-                p = stats.chi2_contingency(ct, correction=False)[1]
-                test = "卡方"
-                # RxC 表期望频数偏低时卡方近似不可靠——scipy 无 Fisher-Freeman-Halton，如实标注。
-                if (expected < 5).any():
-                    test = "卡方⚠期望<5"
-        except Exception:
+        # 单水平变量（列联表某一维 <2，如全为同一类别）：无变异、dof=0，chi2_contingency
+        # 不报错却返回 p=1.0，会伪报"做过卡方 p=1.000"。此时不做检验，检验列留空。
+        if ct.shape[0] < 2 or ct.shape[1] < 2:
             p, test = None, ""
+        else:
+            try:
+                # 期望频数先用未校正卡方拿到（correction 只影响 2x2 的 p，不影响 expected）。
+                _, _, _, expected = stats.chi2_contingency(ct, correction=False)
+                if ct.shape == (2, 2) and (expected < 5).any():
+                    p = stats.fisher_exact(ct.values)[1]
+                    test = "Fisher 精确"
+                else:
+                    # 临床惯例（R tableone / SAS 默认）报**未校正 Pearson 卡方**，不加 Yates——
+                    # 旧版用 scipy 默认(2x2 自动 Yates)会与读者手算/主流软件对不上、且"检验"列不披露。
+                    p = stats.chi2_contingency(ct, correction=False)[1]
+                    test = "卡方"
+                    # RxC 表期望频数偏低时卡方近似不可靠——scipy 无 Fisher-Freeman-Halton，如实标注。
+                    if (expected < 5).any():
+                        test = "卡方⚠期望<5"
+            except Exception:
+                p, test = None, ""
     header = {"变量": f"{var}, n(%)"}
     for g in groups:
         header[str(g)] = ""
