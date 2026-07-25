@@ -261,26 +261,40 @@ _NAME_TAIL_STOP = set("电话联系诉病住门床身年性无现的为是在于
                       "查房既往述陪症说家")
 
 
+# 首字是百家姓、却是常见临床/普通词的 2 字串——即使前后有称谓/职称也不当人名，防误脱。
+# （查=查房/查体，房=房颤/病房，等。这些字在百家姓表里，会被姓名规则误命中。）
+_NAME_BLOCKLIST = {"查房", "查体", "房颤", "房间", "病房", "查验", "查看", "施行", "白细胞",
+                   "白蛋白", "石膏", "毛细", "钟点", "常规", "汤剂", "水肿", "水平"}
+
+
 def mask_names(text, mask, hits):
-    """脱自由文本里的中文人名。三条命中路径，都要求"百家姓/复姓开头"以免误伤术语：
+    """脱自由文本里的中文人名。两条命中路径，都要求"百家姓/复姓开头"以免误伤术语：
       ① 前置称谓 + 姓名（患者张伟 / 其父欧阳国 / 患者说自己叫李娜）
       ② 姓名 + 后置强职称（孙悦护士 / 李明医师，中文病历常见逆序）
-    对单姓 3 字名的贪婪多吃做尾字回退（'电话'的电还回去）。复姓名不回退（4 字名正常）。"""
+    对单姓 3 字名的贪婪多吃做尾字回退（'电话'的电还回去）；命中常见词黑名单则整体不脱。"""
     is_compound = re.compile(r"^(?:" + _COMPOUND + r")")
 
     def _clean(name):
-        # 单姓 2~3 字：末字若是明显的词首字（电话/主任…）则回退。复姓不动。
+        # 单姓 2~3 字：末字若是明显的词首字（电话/主任/查房…）则回退。复姓不动。
         if not is_compound.match(name) and len(name) == 3 and name[2] in _NAME_TAIL_STOP:
             return name[:2], name[2]
         return name, ""
 
+    def _blocked(name):
+        # 整名或其 2 字前缀命中黑名单（查房记→查房）即不当人名。
+        return name in _NAME_BLOCKLIST or name[:2] in _NAME_BLOCKLIST
+
     def _sub_pre(m):
         name, trailing = _clean(m.group("name"))
+        if _blocked(name):                # 查房/病房… 等常见词，不当人名
+            return m.group(0)
         hits.append(("姓名", name))
         return m.group("appel") + m.group("sep") + mask("姓名", name) + trailing
 
     def _sub_suf(m):
         name, trailing = _clean(m.group("name"))
+        if _blocked(name):
+            return m.group(0)
         hits.append(("姓名", name))
         return mask("姓名", name) + trailing
 
