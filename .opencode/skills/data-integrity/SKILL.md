@@ -21,18 +21,21 @@ description: 论文源数据的数值完整性自查（sanity check）。投稿�
 ## 运行环境
 Python 用项目根 `.venv`（系统没装 Python）。paperconan 已装在 `.venv` 里。
 
+**两步走：paperconan 出 scan.json → 本技能 `audit_report.py` 出人读报告（别用 paperconan 的 `--md`，见下）**：
 ```
-# Windows
-${REPO_ROOT:-/app}/.venv/bin/python -X utf8 -m paperconan <数据目录> --md
-# Linux / macOS
-${REPO_ROOT:-/app}/.venv/bin/python        -X utf8 -m paperconan <数据目录> --md
+# 1) 扫描（只出 scan.json + report.html，别加 --md）
+${REPO_ROOT:-/app}/.venv/bin/python -X utf8 -m paperconan <数据目录> --out audit
+# 2) 生成人读 REPORT.md（顺带做汇总一致性自查）
+${REPO_ROOT:-/app}/.venv/bin/python ${REPO_ROOT:-/app}/.opencode/skills/data-integrity/scripts/audit_report.py \
+    audit/scan.json --data-dir <数据目录> --out audit/REPORT.md
 ```
 
-- **必须带 `-X utf8`**：否则中文 Windows 默认 gbk 编码，写 REPORT.md 遇到 `²`/`±` 等符号会 `UnicodeEncodeError` 崩掉（scan.json 能出、REPORT.md 会失败）。等价地可设环境变量 `PYTHONUTF8=1`。
+- **⚠️ 别用 paperconan 自带的 `--md`**：它在命中 `cross_sheet_column_duplicate`（跨表列复用，恰是最该重点核对的头号信号）时会 `KeyError: 'row'` 崩溃、CLI 非零退出，让你误以为整次扫描失败。改用本技能的 `audit_report.py`——它只读已成功落盘的 `scan.json`、全程 `.get()` 容错、绝不因某类 finding 缺字段而崩，还**额外做 paperconan 不覆盖的汇总一致性自查**（含 TOTAL/合计 行核对明细加和、百分比列核对合计≈100%）。
+- **paperconan 步仍建议带 `-X utf8`**（`report.html` 写入遇 `²`/`±` 同理会 gbk 崩）；`audit_report.py` 自身强制 utf-8、无此问题。
 - paperconan 吃**一个目录**（不是单个文件）：把要查的 `*.xlsx/*.csv/*.tsv`（或含表格的 `*.pdf/*.docx`）放进一个目录再指过去。
 
 ### 常用参数
-- `--md`：额外写人类可读的 `REPORT.md`（默认只出 `scan.json` + `report.html`）。**建议总是带上**，便于你读。
+- `audit_report.py --data-dir <目录>`：启用汇总一致性自查（TOTAL 行加和、百分比合计）；不传则只渲染 paperconan 信号。
 - `--out <目录>`：产物输出目录（默认 `<数据目录>/audit/`）。指到 `audit/`。
 - `--profile review|forensic|triage`：假阳性处理档位。**默认 `review`**（平衡，实测本仓库真实临床定量数据下 0 误报）；`forensic` 更敏感（审别人时用，误报升高）；`triage` 最宽松只留强信号。
 - `--doi <DOI>` / `--title <标题>`：把出处记进 scan.json（做 provenance / PubPeer 时用）。
@@ -40,8 +43,8 @@ ${REPO_ROOT:-/app}/.venv/bin/python        -X utf8 -m paperconan <数据目录> 
 ## 工作流程
 1. **确认 CLI**：`${REPO_ROOT:-/app}/.venv/bin/python -m paperconan --version`（应回 `paperconan 0.x`）。缺了就 `${REPO_ROOT:-/app}/.venv/bin/python -m pip install "paperconan[all]"`。
 2. **备数据目录**：把用户要查的表格文件集中到一个目录（如 `pc-in/`）；含患者信息的先脱敏。
-3. **跑扫描**：`... -X utf8 -m paperconan pc-in --md --out audit`。**不许编造扫描结果**，一切以 CLI 产物为准。
-4. **读产物**：先看 CLI 末尾摘要（files / blocks with findings / digit·decimal anomaly sheets），再读 `audit/REPORT.md`（High / Medium / 末位数 χ² / 两位小数过表征四段）与 `audit/scan.json`（结构化明细，定位到 文件·sheet·行·检测器·数值）。
+3. **跑扫描 + 出报告**（两步，见上）：`paperconan pc-in --out audit`（不加 --md）→ `audit_report.py audit/scan.json --data-dir pc-in --out audit/REPORT.md`。**不许编造扫描结果**，一切以 CLI 产物为准。
+4. **读产物**：读 `audit/REPORT.md`（按 High/Medium/Low 分组的信号，含跨表复用、GRIM、汇总一致性等）与 `audit/scan.json`（结构化明细，定位到 文件·sheet·行·检测器·数值）。
 5. **复核并汇报**：对每条 High/Medium，**回原表看一眼**具体单元格，套"良性解释优先"给出判断，再按上面"铁律"的自查口径向用户汇报，并列出 `report.html` 路径供其自查细看。
 
 ## 良性解释优先（临床/检验数据尤其容易误报，先排除这些）
@@ -76,6 +79,6 @@ ${REPO_ROOT:-/app}/.venv/bin/python ${REPO_ROOT:-/app}/.opencode/skills/data-int
 - 用在 `write-paper` 的"数字来源核对"之后、或 `peer-review` 的机械可核对项里当一道自动闸；纯描述性、无 NHST 检验的稿件跳过。
 
 ## 环境注意（实测）
-- **必带 `-X utf8`**（见上），否则中文 Windows 写 REPORT.md 崩。
+- paperconan 步带 `-X utf8`（写 `report.html` 遇 `²`/`±` 否则 gbk 崩）；人读 REPORT.md 由 `audit_report.py` 出、自身强制 utf-8。**不要用 paperconan `--md`**（跨表复用信号会 KeyError 崩，见上）。
 - 真实临床定量数据实测 `review` 档 **0 误报**；换 `forensic` 会更敏感、误报上升，审别人数据再用。
 - 依赖已并入 `scripts/requirements-skills.txt`（`paperconan[all]`，含 `python-calamine` 读旧版 xls 的 Rust 引擎、`pdfplumber` 抽 pdf 表）。来源与许可见仓库根 `THIRD_PARTY_SKILLS.md`。

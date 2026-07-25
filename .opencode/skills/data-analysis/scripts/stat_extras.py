@@ -196,6 +196,60 @@ def pearson_r_ci(x, y, alpha=0.05):
     return (float(r), float(lo), float(hi), float(p))
 
 
+def meta_pool(effects, variances=None, ses=None):
+    """随机/固定效应 Meta 合并（逆方差 + DerSimonian-Laird），**带零异质性钳制**。
+    输入效应量 effects（如 log OR / log HR / MD）与其方差 variances 或标准误 ses（二选一）。
+    返回 dict，关键字段：
+      fixed_effect, fixed_se, fixed_ci
+      random_effect, random_se, random_ci
+      Q, df, Q_p, I2(%, 已钳到[0,100]), tau2(已钳到≥0), weights_fixed, k
+    **为什么要钳制**：statsmodels.combine_effects 在 Q≤df（低/零异质）时 .i2/.tau2 会给出
+    负值、且 .i2 是分数不是百分比；直接报会出现"随机效应 SE < 固定效应 SE"的非法结果。
+    这里 I²=max(0,·)×100、τ²=max(0,·)，且 Q≤df 时随机效应**塌回固定效应**。"""
+    effects = np.asarray(effects, float)
+    if ses is not None:
+        v = np.asarray(ses, float) ** 2
+    elif variances is not None:
+        v = np.asarray(variances, float)
+    else:
+        raise ValueError("需提供 variances 或 ses 之一")
+    k = len(effects)
+    if k < 2:
+        raise ValueError("Meta 合并至少需 2 项研究")
+    # 固定效应（逆方差加权）
+    w = 1.0 / v
+    theta_fe = float(np.sum(w * effects) / np.sum(w))
+    se_fe = float(np.sqrt(1.0 / np.sum(w)))
+    # Cochran Q 与自由度
+    Q = float(np.sum(w * (effects - theta_fe) ** 2))
+    df = k - 1
+    Q_p = float(stats.chi2.sf(Q, df)) if df > 0 else float("nan")
+    # DerSimonian-Laird τ²（钳到 ≥0）
+    C = np.sum(w) - np.sum(w ** 2) / np.sum(w)
+    tau2 = max(0.0, (Q - df) / C) if C > 0 else 0.0
+    # I²（钳到 [0,100]，百分比）
+    I2 = max(0.0, (Q - df) / Q) * 100 if Q > 0 else 0.0
+    z = stats.norm.ppf(0.975)
+    fixed_ci = (theta_fe - z * se_fe, theta_fe + z * se_fe)
+    if tau2 == 0.0 or Q <= df:
+        # 异质性不显著：随机效应塌回固定效应（避免非法的 SE_re<SE_fe）
+        theta_re, se_re, ci_re = theta_fe, se_fe, fixed_ci
+        collapsed = True
+    else:
+        w_re = 1.0 / (v + tau2)
+        theta_re = float(np.sum(w_re * effects) / np.sum(w_re))
+        se_re = float(np.sqrt(1.0 / np.sum(w_re)))
+        ci_re = (theta_re - z * se_re, theta_re + z * se_re)
+        collapsed = False
+    return {
+        "k": k, "fixed_effect": theta_fe, "fixed_se": se_fe, "fixed_ci": fixed_ci,
+        "random_effect": theta_re, "random_se": se_re, "random_ci": ci_re,
+        "Q": Q, "df": df, "Q_p": Q_p, "I2": I2, "tau2": tau2,
+        "weights_fixed": (w / np.sum(w)).tolist(),
+        "random_collapsed_to_fixed": collapsed,
+    }
+
+
 if __name__ == "__main__":
     # 自检：已知构造应还原
     rng = np.random.default_rng(0)
@@ -209,3 +263,9 @@ if __name__ == "__main__":
     print("DeLong AUC CI:", tuple(round(v, 3) for v in delong_auc_ci(yt, ys)))
     print("Bootstrap AUC CI:", tuple(round(v, 3) for v in bootstrap_auc_ci(yt, ys)))
     print("Wilson CI(85/100):", tuple(round(v, 3) for v in wilson_ci(85, 100)))
+    # Meta 合并自检：低异质应 I²=0/随机=固定；高异质应正常
+    lo = meta_pool([.30, .55, .10, .80, .45, .20], ses=[.20, .30, .25, .35, .22, .28])
+    print(f"Meta low-het: I2={lo['I2']:.1f}% tau2={lo['tau2']:.3f} "
+          f"collapsed={lo['random_collapsed_to_fixed']} re_se={lo['random_se']:.4f}>=fe_se={lo['fixed_se']:.4f}")
+    hi = meta_pool([.10, 1.20, -.40, 1.80, .05, 2.10], ses=[.15, .18, .20, .16, .19, .22])
+    print(f"Meta high-het: I2={hi['I2']:.1f}% tau2={hi['tau2']:.3f} random={hi['random_effect']:.3f}")

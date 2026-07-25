@@ -113,6 +113,46 @@ def make_volcano(log2fc, neglog10p, labels=None, fc_thresh=1.0, p_thresh=0.05,
     return fig, ax
 
 
+def make_forest(labels, effects, ci_low, ci_high, weights=None,
+                pooled=None, pooled_ci=None, ax=None, xlabel="Effect (95% CI)",
+                ref=1.0, logx=False, pooled_label="Overall"):
+    """Meta 分析森林图：每研究点估计+CI（点大小∝权重）、无效线、底部合并菱形。
+    effects/ci_low/ci_high 等长；pooled/pooled_ci 为合并效应及其 CI（来自 meta_pool）。
+    logx=True 时 x 取对数轴（OR/RR/HR 常用；此时传的应是原始比值不是 log 值）。"""
+    import numpy as np
+    import matplotlib.pyplot as plt
+    n = len(labels)
+    if ax is None:
+        fig, ax = plt.subplots(figsize=(3.6, 0.4 * n + 1.2))
+    else:
+        fig = ax.figure
+    y = np.arange(n)[::-1]
+    if weights is None:
+        sizes = np.full(n, 40.0)
+    else:
+        w = np.asarray(weights, float)
+        sizes = 20 + 180 * w / w.max()
+    for i in range(n):
+        ax.plot([ci_low[i], ci_high[i]], [y[i], y[i]], "-", color="0.4", lw=1.0, zorder=1)
+    ax.scatter(effects, y, s=sizes, marker="s", color="#3b5b92", zorder=2)
+    ax.axvline(ref, ls="--", lw=0.7, color="0.5")
+    yticks = list(y); ylabels = list(labels)
+    if pooled is not None:
+        yd = -1.2
+        lo, hi = (pooled_ci if pooled_ci else (pooled, pooled))
+        ax.add_patch(plt.Polygon([[lo, yd], [pooled, yd + 0.3], [hi, yd], [pooled, yd - 0.3]],
+                                 closed=True, color="#c0392b", zorder=3))
+        ax.axhline(yd, visible=False)
+        yticks.append(yd); ylabels.append(pooled_label)
+        ax.set_ylim(yd - 0.8, n - 0.3)
+    ax.set_yticks(yticks); ax.set_yticklabels(ylabels, fontsize=6)
+    if logx:
+        ax.set_xscale("log")
+    ax.set_xlabel(xlabel)
+    ax.spines["left"].set_visible(False)
+    return fig, ax
+
+
 def make_roc(y_true, y_score, ax=None, show_auc=True, label=None):
     """ROC 曲线（含对角参考线、AUC 标注、方形比例）。需要 scikit-learn。"""
     import matplotlib.pyplot as plt
