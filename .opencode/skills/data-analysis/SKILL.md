@@ -33,12 +33,14 @@ ${REPO_ROOT:-/app}/.venv/bin/python analysis.py
 - **多重比较必校正**：一次比多对/多终点 → Bonferroni（保守）或 Benjamini–Hochberg FDR（推荐用于多终点），别只报一堆未校正 p。
 - **相关/回归**：连续 → Pearson（正态）/ Spearman（非正态或有序）；结局二分类 → logistic 回归报 OR+95%CI；计数 → 泊松/负二项。
 - **生存数据**：Kaplan–Meier 画曲线 + log-rank 比较；多因素 → Cox 比例风险，**并检验 PH 假设**（Schoenfeld 残差）。用 `lifelines`（已装）。
-- **诊断试验**：报敏感度/特异度/PPV/NPV/LR + ROC-AUC（含 95%CI），别只报准确率。
+- **诊断试验**：报敏感度/特异度/PPV/NPV/LR + ROC-AUC（含 95%CI），别只报准确率。**CI 怎么算**：AUC 用 **DeLong**（解析）或 bootstrap；敏感度/特异度/PPV/NPV 这类比例用 **Wilson**（小样本/极端比例比正态近似稳）——`sklearn.roc_auc_score` 不给 CI，别省略也别凭空编，直接用 `scripts/stat_extras.py` 的 `delong_auc_ci` / `bootstrap_auc_ci` / `wilson_ci`。
+- **方法比对 / 一致性（实验室方法学、新旧仪器）**：**判两方法一致性禁用相关系数 / 普通 OLS 回归**——高相关≠一致（Bland & Altman 的核心论点），且 x 有测量误差会使 OLS 斜率系统性衰减。正确做法：① **Bland-Altman**（偏倚 bias、95% 一致性界限 LoA=bias±1.96·SD、LoA 自身 CI、比例偏倚检验）；② **Passing-Bablok**（非参数稳健回归，斜率 CI 含 1 且截距 CI 含 0 → 无系统/比例偏差）或已知误差方差比时用 **Deming**。直接调 `scripts/stat_extras.py` 的 `bland_altman` / `passing_bablok` / `deming`（已对照已知构造核验，勿手写 PB 易错）。
 - **Meta 分析（系统综述定量合并）**：用 `statsmodels.stats.meta_analysis`（`combine_effects`：DerSimonian-Laird 随机效应、I²/τ²/Q 异质性）+ 自绘森林图；亚组/敏感性分析。⚠️ **Egger 发表偏倚检验/漏斗图不对称、REML、网络 Meta/多水平 statsmodels 无内置**——需手写加权回归或用 R `metafor`；**别声称能做其实做不了的**。系统综述全流程(筛选/RoB/GRADE/PRISMA)走 `systematic-review` 技能。
 
 ## 报告规范（写进结论）
 > **交付统计结论 / 写 Methods/Results 前，逐条过 [references/stat-reporting-checklist.md](references/stat-reporting-checklist.md)（顶刊统计报告清单，强制）。** 下面是要点，细则与格式看清单。
-- 始终报**效应量 + 95% 置信区间 + 精确 p 值 + 样本量 n**，不要只写 `p<0.05`（95%CI 优先于单独 p）。
+- 始终报**效应量 + 95% 置信区间 + 精确 p 值 + 样本量 n**，不要只写 `p<0.05`（95%CI 优先于单独 p）。**效应量怎么算**：两组均值差用 **Cohen's d / Hedges' g**（小样本用 g）、相关用 **Pearson r 的 Fisher-z 95%CI**——scipy 不直接给，用 `scripts/stat_extras.py` 的 `cohens_d` / `hedges_g` / `pearson_r_ci`。
+> **固化实现 `scripts/stat_extras.py`**（只依赖 numpy/scipy/sklearn）：方法比对(Bland-Altman/Passing-Bablok/Deming)、诊断 CI(DeLong/bootstrap AUC、Wilson 比例)、效应量(Cohen's d/Hedges' g/Pearson r-CI)。这些库不直接给或手写易错，**优先 import 调用、别每次现写**。跑 `python scripts/stat_extras.py` 可看自检（已知构造能否还原）。
 - 数字格式统一：p 值 2–3 位有效数字、`<0.001` 不写 0.000；OR/RR/HR 保留 2 位小数 + 95%CI；百分比 1 位小数 + 分子/分母。
 - 连续变量按分布报 `均数±标准差` 或 `中位数[IQR]`；分类变量报 `n (%)`。
 - 说明缺失值如何处理、是否做了多重比较校正；软件及版本、显著性水平与单双侧写进 Methods。

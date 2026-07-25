@@ -1,6 +1,6 @@
 ---
 name: clinical-stats
-description: 临床研究常用统计——基线特征表(Table 1) 与 样本量/把握度计算。生成论文第一张表 Table 1（分组基线，按变量类型自动选 均数±SD/中位数[IQR]/n(%) 与组间检验），以及研究设计/伦理/标书要的样本量估算（两组均数、两组率、生存、单组）。当用户说"做个 Table 1""基线特征表""三线表基线""算样本量""把握度/power""要多少例""sample size""这个研究需要多少患者"时使用。通用统计分析用 data-analysis，出版级图用 nature-figure。
+description: 临床研究常用统计——基线特征表(Table 1) 与 样本量/把握度计算。生成论文第一张表 Table 1（分组基线，按变量类型自动选 均数±SD/中位数[IQR]/n(%) 与组间检验，两组时并出效应量95%CI 与 SMD 标准化差异），以及研究设计/伦理/标书要的样本量估算（两组均数、两组率、生存、单组）。当用户说"做个 Table 1""基线特征表""三线表基线""SMD/标准化差异""倾向评分匹配均衡性""算样本量""把握度/power""要多少例""sample size""这个研究需要多少患者"时使用。通用统计分析用 data-analysis，出版级图用 nature-figure。
 ---
 
 # 临床统计技能：Table 1 + 样本量
@@ -20,7 +20,7 @@ ${REPO_ROOT:-/app}/.venv/bin/python
 按变量类型**自动选择**呈现与检验（连续变量先做 Shapiro 正态性判断）：
 - 连续+正态 → `均数±标准差` + t 检验(两组)/ANOVA(多组)
 - 连续+非正态 → `中位数[IQR]` + Mann-Whitney(两组)/Kruskal-Wallis(多组)
-- 分类 → `n (%)` + 卡方；2×2 且期望频数 <5 → Fisher 精确检验
+- 分类 → `n (%)` + **未校正 Pearson 卡方**（与 R tableone/SAS 默认口径一致，便于读者复核；旧版 scipy 默认对 2×2 加 Yates 会对不上）；2×2 且期望频数 <5 → Fisher 精确检验
 
 ```bash
 # 自动推断变量类型（数值且取值多→连续，其余→分类）
@@ -33,7 +33,9 @@ ${REPO_ROOT:-/app}/.venv/bin/python ${REPO_ROOT:-/app}/.opencode/skills/clinical
   --continuous age,bmi,sbp --categorical sex,smoker --out table1.csv
 ```
 产出 `outputs/table1.csv`（含各组数值 + P 值 + 所用检验列），可直接贴进论文或交 `render-docx`/`render-pdf-doc` 排版。
-**恰好两组时额外输出 `效应量(95%CI)` 列**（顶刊要求，别只给 p）：连续正态→均值差(95%CI, Welch)；连续非正态→中位数差(95%CI, bootstrap)；二分类 2 水平→OR(95%CI, 必要时 Haldane 校正)。方向见脚本打印的说明（均值差/中位数差=首组−次组）。
+**恰好两组时额外输出 `效应量(95%CI)` 与 `SMD` 两列**（顶刊要求，别只给 p）：
+- 效应量：连续正态→均值差(95%CI, Welch)；连续非正态→中位数差(95%CI, bootstrap)；二分类 2 水平→OR(95%CI, 必要时 Haldane 校正)。方向=首组−次组。
+- **SMD（标准化差异）**：连续用 Cohen's d 式 `(m1−m2)/√((s1²+s2²)/2)`；分类（含多水平）用 Yang & Dalton 向量式（与 R `tableone` 口径一致）。**倾向评分匹配/观察性研究看组间均衡性**常要它：|SMD|>0.1 通常提示该协变量不均衡（不依赖样本量，比 p 值更适合看均衡）。
 > ⚠️ **RCT 基线表 Table 1 不放组间 p 值**（随机化后组间差异按定义即偶然，报 p 概念上错误）——RCT 场景生成时去掉 `--group` 或只保留描述列。观察性研究才需要组间比较。
 > 写进论文前统计报告格式过一遍 [../data-analysis/references/stat-reporting-checklist.md](../data-analysis/references/stat-reporting-checklist.md)。
 

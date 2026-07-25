@@ -108,17 +108,29 @@ should feel visually unified.
 
 ## MANDATORY font + SVG rules (always first, no exceptions)
 
-These two lines are **non-negotiable** and must appear at the top of every script,
-before any figure is created. They guarantee editable text in SVG output:
+**优先用字体护栏脚本 `scripts/figfont.py`**——它运行时探测**实际已装**的 CJK 字体（跨 Linux/Win/mac），
+并提供 `guard_cjk()` 在存图前拦截"含中文却无 CJK 字体→豆腐块"的静默失败（投稿图漏字是硬伤）：
 
 ```python
-# 多族列表 = matplotlib 唯一会逐字形回退的写法：拉丁取 Liberation Sans/DejaVu，中文取 WenQuanYi Zen Hei。
-# 别拆成 font.family='sans-serif' + font.sans-serif=[...]：那条路径只认第一个能解析的字体、不再往后找，
-# CJK 永远轮不到 WenQuanYi → 中文全豆腐块（实测 28 条缺字警告）。
-# Liberation Sans 与 Arial 度量兼容，故满足 Nature 的 Arial/Helvetica 要求；链里刻意不放 Arial —— 镜像未装它，
-# 放进去每图会刷 41 行 "Font family 'Arial' not found" 假错误而渲染结果完全相同，别误当故障去修。
-# 若某期刊坚持字面 Arial：装 msttcorefonts 后把 'Arial' 插到链首（代价：恢复 41 行/图 噪音）。
-# 也别设 axes.unicode_minus=False：负号 U+2212 由 DejaVu 提供、排版正确，设 False 会降级成连字符。
+import sys; sys.path.insert(0, "<本技能>/scripts")   # 换成 scripts 目录实际路径
+from figfont import setup_fonts, guard_cjk
+setup_fonts(font_size=7)          # 设好 font.family(拉丁+已装CJK)、svg/pdf 可编辑文字、负号ASCII
+# …画图…
+guard_cjk(title, xlabel, ylabel, legend_label, *any_cjk_labels)  # 存图前：含中文却无CJK字体则抛错
+fig.savefig("figure.svg")
+```
+
+**为什么必须用护栏**：旧版把 `font.family` 硬编码成 Linux 容器专属的
+`['Liberation Sans','DejaVu Sans','WenQuanYi Zen Hei','Noto Sans CJK JP']`——一旦宿主
+（开发机 / mac / 未装全字体的容器）缺这几个 CJK 字体，中文会**静默**渲染成 □ 而图仍"保存成功"，
+只在 stderr 刷 findfont 警告。`figfont.setup_fonts()` 改为从候选链选实际已装的字体，
+`guard_cjk()` 把静默豆腐块变成显式报错。
+
+若不便 import（如无法定位 scripts 目录），至少手动写等价的多族列表并**自行核对中文不是豆腐块**：
+
+```python
+# 多族列表 = matplotlib 唯一会逐字形回退的写法：拉丁在前、CJK 在后。
+# 别拆成 font.family='sans-serif' + font.sans-serif=[...]：那条只认第一个能解析的字体、CJK 轮不到。
 plt.rcParams['font.family'] = ['Liberation Sans', 'DejaVu Sans', 'WenQuanYi Zen Hei', 'Noto Sans CJK JP']
 plt.rcParams['svg.fonttype'] = 'none'   # keeps text as <text> nodes, not paths
 ```
@@ -311,6 +323,24 @@ def make_trend(ax, x, y_series, labels,
 ```
 
 ---
+
+## 临床图 turnkey helper：scripts/clinical_plots.py（KM / 火山 / ROC）
+
+森林图见下方 `make_forest_plot`；**KM 生存曲线、火山图、ROC 这三类别再手写**——
+`scripts/clinical_plots.py` 已固化了正确方法学（KM 含删失标记+置信带+numbers-at-risk 风险表；
+火山图三色+双阈值线+**防重叠**基因标注；ROC 含对角线+AUC+方形比例），直接调用降低逐次质量方差：
+
+```python
+import sys; sys.path.insert(0, "<本技能>/scripts")
+import figfont; figfont.setup_fonts(7)          # 字体护栏（见上）
+from clinical_plots import make_km, make_volcano, make_roc
+fig, ax = make_km(durations, events, groups)                    # 需 lifelines
+fig, ax = make_volcano(log2fc, neglog10p, labels=gene_names, top_n=15)
+fig, ax = make_roc(y_true, y_score)                             # 需 scikit-learn
+fig.savefig("figure.svg")   # 存图前若含中文标签先 figfont.guard_cjk(...)
+```
+
+密集散点标注防压字用 `figfont.label_points(ax, xs, ys, labels)`（优先 adjustText，无则退回 y 错位+引线）。
 
 ## make_forest_plot(ax, labels, estimates, ci_low, ci_high, ...)
 

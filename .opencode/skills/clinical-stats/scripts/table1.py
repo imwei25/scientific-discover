@@ -194,6 +194,50 @@ def fmt_effect(val):
     return f"{est:.2f} ({lo:.2f}, {hi:.2f})"
 
 
+def smd_continuous(a, b):
+    """连续变量的标准化差异（Cohen's d 式）：(m1−m2)/sqrt((s1²+s2²)/2)。
+    与 R tableone / stddiff 口径一致。方差为 0 时返回 None。"""
+    a, b = np.asarray(a, float), np.asarray(b, float)
+    if len(a) < 2 or len(b) < 2:
+        return None
+    s1, s2 = a.var(ddof=1), b.var(ddof=1)
+    pooled = np.sqrt((s1 + s2) / 2)
+    if pooled == 0 or np.isnan(pooled):
+        return None
+    return (a.mean() - b.mean()) / pooled
+
+
+def smd_categorical(props1, props2):
+    """分类变量（含多水平）的标准化差异——Yang & Dalton (2012) 向量式：
+    SMD = sqrt( (p1−p2)ᵀ · S⁻¹ · (p1−p2) )，S=(S1+S2)/2，用前 K−1 个水平的比例向量。
+    二分类退化为 |p1−p2|/sqrt((p1(1−p1)+p2(1−p2))/2)。奇异协方差用伪逆兜底。"""
+    p1 = np.asarray(props1, float)
+    p2 = np.asarray(props2, float)
+    if p1.size < 2 or p2.size < 2:
+        return None
+    # 取前 K-1 个水平（多项分布只有 K-1 个自由度，全取会奇异）
+    u = (p1[:-1] - p2[:-1]).reshape(-1, 1)
+
+    def cov(p):
+        pk = p[:-1]
+        return np.diag(pk) - np.outer(pk, pk)
+
+    S = (cov(p1) + cov(p2)) / 2
+    try:
+        Sinv = np.linalg.pinv(S)
+        val = (u.T @ Sinv @ u).item()   # 1x1 → 标量（float() 对 1x1 数组在新版 numpy 会报错）
+        return np.sqrt(val) if val >= 0 else None
+    except (np.linalg.LinAlgError, ValueError):
+        return None
+
+
+def fmt_smd(v):
+    if v is None or (isinstance(v, float) and np.isnan(v)):
+        return "—"
+    # >0.1 常被视作组间不均衡的阈值；这里只呈现数值，解释交用户。
+    return f"{abs(v):.3f}"
+
+
 def summarize_continuous(df, var, group, groups, two):
     x_all = pd.to_numeric(df[var], errors="coerce")
     if x_all.notna().sum() == 0:
@@ -230,7 +274,8 @@ def summarize_continuous(df, var, group, groups, two):
         except Exception:
             p = None
     row["P"] = fmt_p(p)
-    row["检验"] = ("" if not group or len(groups) < 2 else
+    # 检验标签：仅当真的算出了 p 才标（常数列/单组等 p 为空时留空，不误标 Mann-Whitney）
+    row["检验"] = ("" if p is None or not group or len(groups) < 2 else
                    ("t/Welch" if normal and len(groups) == 2 else
                     "ANOVA" if normal else
                     "Mann-Whitney" if len(groups) == 2 else "Kruskal-Wallis"))
@@ -243,6 +288,10 @@ def summarize_continuous(df, var, group, groups, two):
         except Exception:
             eff = None
         row["效应量(95%CI)"] = ("均值差 " if normal else "中位数差 ") + fmt_effect(eff)
+        try:
+            row["SMD"] = fmt_smd(smd_continuous(a, b))
+        except Exception:
+            row["SMD"] = "—"
     return row
 
 
@@ -255,12 +304,15 @@ def summarize_categorical(df, var, group, groups, two):
     if group and len(groups) >= 2:
         ct = pd.crosstab(df[var], df[group])
         try:
-            chi2, p_chi, dof, expected = stats.chi2_contingency(ct)
+            # 期望频数先用未校正卡方拿到（correction 只影响 2x2 的 p，不影响 expected）。
+            _, _, _, expected = stats.chi2_contingency(ct, correction=False)
             if ct.shape == (2, 2) and (expected < 5).any():
                 p = stats.fisher_exact(ct.values)[1]
                 test = "Fisher 精确"
             else:
-                p = p_chi
+                # 临床惯例（R tableone / SAS 默认）报**未校正 Pearson 卡方**，不加 Yates——
+                # 旧版用 scipy 默认(2x2 自动 Yates)会与读者手算/主流软件对不上、且"检验"列不披露。
+                p = stats.chi2_contingency(ct, correction=False)[1]
                 test = "卡方"
                 # RxC 表期望频数偏低时卡方近似不可靠——scipy 无 Fisher-Freeman-Halton，如实标注。
                 if (expected < 5).any():
@@ -287,6 +339,15 @@ def summarize_categorical(df, var, group, groups, two):
             except Exception:
                 eff_txt = "—"
         header["效应量(95%CI)"] = eff_txt
+        # SMD（多水平 Yang-Dalton）：两组各水平比例向量算标准化差异。
+        try:
+            g0 = df[df[group] == groups[0]][var].dropna()
+            g1 = df[df[group] == groups[1]][var].dropna()
+            props1 = [float((g0 == c).sum()) / len(g0) if len(g0) else 0.0 for c in cats]
+            props2 = [float((g1 == c).sum()) / len(g1) if len(g1) else 0.0 for c in cats]
+            header["SMD"] = fmt_smd(smd_categorical(props1, props2))
+        except Exception:
+            header["SMD"] = "—"
     rows.append(header)
     for c in cats:
         r = {"变量": f"　{c}"}
@@ -299,6 +360,7 @@ def summarize_categorical(df, var, group, groups, two):
         r["检验"] = ""
         if two:
             r["效应量(95%CI)"] = ""
+            r["SMD"] = ""
         rows.append(r)
     return rows
 
@@ -355,6 +417,7 @@ def main():
     nrow["检验"] = ""
     if two:
         nrow["效应量(95%CI)"] = ""
+        nrow["SMD"] = ""
     out_rows.append(nrow)
 
     for v in cont:
@@ -366,7 +429,7 @@ def main():
         if v in df.columns:
             out_rows.extend(summarize_categorical(df, v, group, groups, two))
 
-    cols = ["变量"] + [str(g) for g in groups] + (["效应量(95%CI)", "P", "检验"] if two else (["P", "检验"] if group else []))
+    cols = ["变量"] + [str(g) for g in groups] + (["效应量(95%CI)", "SMD", "P", "检验"] if two else (["P", "检验"] if group else []))
     result = pd.DataFrame(out_rows)
     for c in cols:
         if c not in result.columns:
