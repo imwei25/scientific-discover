@@ -698,7 +698,90 @@ class SVGQualityChecker:
                 f"Detected {len(text_matches)} potentially overly long single-line text(s) (consider using tspan for wrapping)"
             )
 
+        # 静态文字溢出检查（免渲染、免依赖）。本部署 visual-review(playwright) 已停用，
+        # 这是【唯一】的溢出闸：过长单行会静默跑出画布、丢内容却仍导出"成功"。
+        self._check_text_overflow(root, result)
+
         self._check_unmergeable_leading_text(root, result)
+
+    @staticmethod
+    def _estimate_text_width(s: str, font_size: float) -> float:
+        """启发式估算一行文本渲染宽度(px)。CJK/全角≈1.0em、拉丁字母≈0.55em、
+        数字与窄标点≈0.5em、空格≈0.3em。用于免渲染的溢出预判（宁可略宽估，抓真溢出）。"""
+        w = 0.0
+        for c in s:
+            o = ord(c)
+            if (0x4E00 <= o <= 0x9FFF or 0x3400 <= o <= 0x4DBF
+                    or 0x3000 <= o <= 0x303F or 0xFF00 <= o <= 0xFFEF):
+                w += 1.0            # 汉字/全角标点
+            elif c == ' ':
+                w += 0.3
+            elif c.isdigit() or c in ".,:;'|!ilI":
+                w += 0.5
+            else:
+                w += 0.58           # 拉丁字母/一般字符
+        return w * font_size
+
+    def _text_font_size(self, el: ET.Element) -> float | None:
+        """取 text/tspan 的 font-size（attr 或 style）；取不到返回 None（无法估宽则跳过，不误报）。"""
+        v = el.get('font-size')
+        if v is None:
+            style = el.get('style') or ''
+            m = re.search(r'font-size\s*:\s*([\d.]+)', style)
+            v = m.group(1) if m else None
+        try:
+            return float(re.sub(r'[a-zA-Z%]+$', '', v)) if v else None
+        except (TypeError, ValueError):
+            return None
+
+    def _check_text_overflow(self, root: ET.Element, result: Dict) -> None:
+        vb = _parse_viewbox_values(root.get('viewBox') or '')
+        if not vb:
+            return
+        _, _, vw, vh = vb
+        margin = 8.0  # 安全边距(px)：略超一点点算 warning，不到 error
+        overflow_err, overflow_warn = [], []
+        for text_el in root.iter(f'{{{SVG_NS}}}text'):
+            base_fs = self._text_font_size(text_el) or 0
+            # 逐"行"估：text 自身直书文本 + 每个 tspan（各自可带 x/font-size）
+            lines = []
+            if (text_el.text or '').strip():
+                lines.append((text_el.get('x'), base_fs, text_el.get('text-anchor'), text_el.text))
+            for sub in text_el:
+                if _local_name(sub) == 'tspan' and (sub.text or '').strip():
+                    fs = self._text_font_size(sub) or base_fs
+                    anchor = sub.get('text-anchor') or text_el.get('text-anchor')
+                    lines.append((sub.get('x'), fs, anchor, sub.text))
+            for x_raw, fs, anchor, s in lines:
+                if not fs or x_raw is None:
+                    continue
+                try:
+                    x = float(x_raw)
+                except ValueError:
+                    continue
+                width = self._estimate_text_width(s, fs)
+                a = (anchor or 'start').strip()
+                if a == 'middle':
+                    left, right = x - width / 2, x + width / 2
+                elif a == 'end':
+                    left, right = x - width, x
+                else:
+                    left, right = x, x + width
+                over = max(right - vw, -left)  # 右越界或左越界的最大量
+                if over > width * 0.15 and over > margin * 3:
+                    overflow_err.append(f"x={x:.0f} 估宽{width:.0f}px 越界{over:.0f}px：{s[:24]!r}")
+                elif over > margin:
+                    overflow_warn.append(f"{s[:24]!r} 越界≈{over:.0f}px")
+        if overflow_err:
+            sample = '；'.join(overflow_err[:4])
+            extra = '' if len(overflow_err) <= 4 else f"；+{len(overflow_err)-4} more"
+            result['errors'].append(
+                f"文字溢出画布(viewBox 宽{vw:.0f})：{len(overflow_err)} 处单行超界会丢内容——"
+                f"缩短文案 / 减字号 / 用 tspan 换行。{sample}{extra}")
+        if overflow_warn:
+            result['warnings'].append(
+                f"{len(overflow_warn)} 处文字接近边界(可能在 WPS/LibreOffice 下压行)："
+                + '；'.join(overflow_warn[:4]))
 
     def _check_unmergeable_leading_text(self, root: ET.Element, result: Dict) -> None:
         """Warn when leading text cannot be normalized for paragraph merging."""

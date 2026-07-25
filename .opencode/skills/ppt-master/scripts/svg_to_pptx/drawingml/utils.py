@@ -612,6 +612,10 @@ def estimate_text_width(text: str, font_size: float, font_weight: str = '400') -
             # '1' — classing it with 'il|' under-sizes the box and makes
             # renderers that ignore wrap="none" (LibreOffice) wrap the line
             width += font_size * 0.55
+        elif 'A' <= ch <= 'Z':
+            # 大写字母比小写宽（~0.66em）——医学缩写(CRKP/HAP/VAP/ICU)大写密集，
+            # 按 0.55 估会低估框宽、使 WPS/LibreOffice 相邻行压字。
+            width += font_size * 0.66
         else:
             width += font_size * 0.55
 

@@ -25,23 +25,37 @@ try:
 except Exception:
     pass
 
-# 数字：整数/小数/百分比/带千分位。
+# 常见科研/医学计量单位（用于把"数字+粘连单位"整体抽取，如 5mg / 1.73m2 / 12mL/min）。
+# 旧版 NUM_RE 尾部 (?![0-9A-Za-z]) 会把 5mg 的 5 挡掉——剂量 5mg→8mg 篡改竟报 OK（严重假阴性）。
+_UNIT = (r"(?:%|mg|kg|[µu]g|ng|pg|g|mL|dL|[µu]L|L|mmol|mol|[µu]mol|nmol|pmol|"
+         r"IU|U/L|U|mmHg|kPa|mm|cm|nm|[µu]m|m|kb|bp|min|ms|h|d|wk|mo|yr|Hz|kHz)")
+# 数字：整数/小数/百分比/千分位 + 可选科学计数法(1.2e3) + 可选粘连/带空格单位(含 m2、mL/min 复合)。
 # 边界用 ASCII 类而非 \w——Python 的 \w 把中文汉字也算词字符，会导致"共45名"这种
-# 中文无空格写法里的数字被 lookbehind 挡掉、漏抓（假阴性，比误报更危险）。
-NUM_RE = re.compile(r"(?<![0-9A-Za-z.])[-+]?\d[\d,]*(?:\.\d+)?%?(?![0-9A-Za-z])")
+# 中文无空格写法里的数字被 lookbehind 挡掉、漏抓。基因/化学式里的数字(SGLT2/TP53)因
+# 数字前是字母、被 lookbehind 正确排除，不误抓（改这类用 --terms/--auto-terms）。
+NUM_RE = re.compile(
+    r"(?<![0-9A-Za-z.])"
+    r"[-+]?\d[\d,]*(?:\.\d+)?(?:[eE][-+]?\d+)?"          # 数字主体（含科学计数法）
+    r"(?:\s?" + _UNIT + r"\d?(?:/" + _UNIT + r"\d?)*)?"  # 可选单位（m2 / mL/min/… 复合）
+    r"(?![0-9A-Za-z])"
+)
 # 引用标记：[n]、[1,2]、[1-3]
 BRACKET_CITE_RE = re.compile(r"\[\d+(?:\s*[-,]\s*\d+)*\]")
 # (Author, 2024) / (Author et al., 2024)
 PAREN_CITE_RE = re.compile(r"\([A-Z][A-Za-z\-]+(?:\s+et\s+al\.?)?,?\s*\d{4}[a-z]?\)")
+# 中文作者-年引用：（张三等, 2020）/（李四 2019）/（Wang 等，2021）——半/全角括号皆认。
+CJK_CITE_RE = re.compile(r"[（(][一-龥A-Za-z][^（()）]*?(?<![0-9])\d{4}[a-z]?[)）]")
 DOI_RE = re.compile(r"10\.\d{4,9}/[-._;()/:A-Za-z0-9]+", re.I)
 PMID_RE = re.compile(r"\bPMID:?\s*\d{5,9}\b", re.I)
+# 基因/化学式/缩写术语（TP53 / SGLT2 / BRCA1 / IL-6 / CD4）——含内嵌数字，--auto-terms 时自动纳入比对。
+AUTOTERM_RE = re.compile(r"\b[A-Z][A-Za-z]*\d+[A-Za-z0-9]*\b|\b[A-Z]{2,}-?\d+\b")
 
 
 def extract(text):
     return {
-        "数字": Counter(m.group(0) for m in NUM_RE.finditer(text)),
+        "数字": Counter(m.group(0).strip() for m in NUM_RE.finditer(text)),
         "引用[n]": Counter(BRACKET_CITE_RE.findall(text)),
-        "引用(作者,年)": Counter(PAREN_CITE_RE.findall(text)),
+        "引用(作者,年)": Counter(PAREN_CITE_RE.findall(text) + CJK_CITE_RE.findall(text)),
         "DOI": Counter(m.group(0) for m in DOI_RE.finditer(text)),
         "PMID": Counter(PMID_RE.findall(text)),
     }
@@ -58,14 +72,19 @@ def main():
     ap.add_argument("--before", required=True, help="原文")
     ap.add_argument("--after", required=True, help="改写稿")
     ap.add_argument("--terms", default="", help="逗号分隔的术语白名单，逐个精确计数比对")
+    ap.add_argument("--auto-terms", action="store_true",
+                    help="自动把基因名/化学式/缩写(TP53/SGLT2/BRCA1/IL-6)纳入术语比对，防 TP53→TP63 漏检")
     args = ap.parse_args()
 
     b = open(args.before, encoding="utf-8").read()
     a = open(args.after, encoding="utf-8").read()
     eb, ea = extract(b), extract(a)
 
-    if args.terms.strip():
-        for t in [x.strip() for x in args.terms.split(",") if x.strip()]:
+    terms = {x.strip() for x in args.terms.split(",") if x.strip()}
+    if args.auto_terms:
+        terms |= set(AUTOTERM_RE.findall(b)) | set(AUTOTERM_RE.findall(a))
+    if terms:
+        for t in terms:
             eb.setdefault("术语", Counter())[t] = b.count(t)
             ea.setdefault("术语", Counter())[t] = a.count(t)
 
