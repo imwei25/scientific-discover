@@ -292,17 +292,14 @@ const ALLOWED_SKILLS_SET = (() => {   // null = 不设限（全部技能）
   return new Set([...valid, "env-setup"])
 })()
 const skillAllowed = (name) => !ALLOWED_SKILLS_SET || ALLOWED_SKILLS_SET.has(name)
-// chat 会话的技能限制前言（受限模块会话不用它——那边本就锁死单技能）。挑短的一边列，控制前言长度；
+// chat 会话的技能限制前言（受限模块会话不用它——那边本就锁死单技能）。
+// 注意：受限容器的技能目录已被 deploy 侧过滤挂载（未开通技能物理不存在，见 render-compose.sh），
+// 所以这里【只能】列"已开通"的一边——SKILL_IDS 读自过滤后的目录，算不出被禁清单。
 // 单行无空行（stripPreamble 按第一个空行剥离，见 modulePreamble 同款约束）。
 const skillsPreamble = () => {
   if (!ALLOWED_SKILLS_SET) return ""
   const allowed = [...ALLOWED_SKILLS_SET].filter((s) => s !== "env-setup")
-  const banned = SKILL_IDS.filter((s) => s !== "env-setup" && !ALLOWED_SKILLS_SET.has(s))
-  if (!banned.length) return ""
-  const line = banned.length <= allowed.length
-    ? `以下技能对本账号【未开通】，禁止调用：${banned.join("、")}。`
-    : `本账号【只开通】了以下技能：${allowed.join("、")}（外加 env-setup），其余技能一律禁止调用。`
-  return `\n- **【技能授权，最高优先级】**${line}规划流水线时直接跳过未开通的技能并明确告知用户"某步骤因未开通某技能而省略"；不要试图调用（会被网关强制中止本轮），也不要徒手模仿该技能的产出。`
+  return `\n- **【技能授权，最高优先级】**本账号只开通了以下技能：${allowed.join("、")}（外加 env-setup），本环境也只安装了这些——AGENTS.md 流水线里提到的其它技能在这里【不存在】，不要尝试调用、查找或读取它们；涉及未开通技能的步骤直接跳过并明确告知用户"该步骤因未开通对应技能而省略"，也不要徒手模仿该技能的产出。`
 }
 
 // 会话 → 模块 绑定表（持久化在 ocdata 卷，容器重建不丢；与 quota.json 同目录）

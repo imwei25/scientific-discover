@@ -63,6 +63,35 @@ tier_field() { [ -f tiers.env ] || return 0; awk -v t="$1" -v c="$2" '!/^[[:spac
     skills=$(field SKILLS "$f")
     if [ -n "$skills" ] && ! [[ "$skills" =~ ^[a-z0-9,-]+$ ]]; then
       echo "!! $f 的 SKILLS 非法：'$skills'（仅小写字母/数字/逗号/连字符，空=全部技能）。请修正后重跑。" >&2; exit 1; fi
+    # 技能可见性挂载：SKILLS 受限 → 用 tmpfs 遮蔽镜像内的整个技能目录，再把白名单技能【逐个】只读
+    # bind 回挂——未开通的技能在容器里【物理不存在】，read/bash/glob/opencode 启动扫描都看不到，
+    # 这是比网关调用闸更硬的一层（连"徒手跑技能脚本"的 shell 逃逸面也一并堵掉）。
+    # docker 按目标路径深度排序挂载：tmpfs(父)先挂、逐技能 bind(子)后挂，嵌套天然成立。
+    # env-setup 恒许可（基础设施，网关侧同样恒放行）。列表里已从仓库删除的技能跳过挂载并告警——
+    # bind 源缺失时 docker 会以 root 在仓库里创建空目录，绝不能让它发生。
+    # 不设限 → 保持整目录 ro bind（现状），宿主 git pull 即时生效。
+    if [ -n "$skills" ]; then
+      skills_tmpfs="    tmpfs:
+      - /app/.opencode/skills"
+      skills_mounts=""
+      seen=""
+      IFS=',' read -ra _sk <<< "$skills,env-setup"
+      for s in "${_sk[@]}"; do
+        [ -n "$s" ] || continue
+        case ",$seen," in *",$s,"*) continue;; esac
+        seen="$seen,$s"
+        if [ -f "../.opencode/skills/$s/SKILL.md" ]; then
+          skills_mounts="$skills_mounts
+      - ../.opencode/skills/$s:/app/.opencode/skills/$s:ro"
+        else
+          echo "!! $f 的 SKILLS 含仓库中不存在的技能 '$s'，已跳过其挂载（请修正 SKILLS 或补回技能目录）" >&2
+        fi
+      done
+    else
+      skills_tmpfs=""
+      skills_mounts="
+      - ../.opencode/skills:/app/.opencode/skills:ro"
+    fi
     # 分级模型：用户 .env 显式 OC_MODEL 覆盖 > 档位 tiers.env 第4列 > 缺省 deepseek-v4-pro（走网关时即请求这个模型名）
     tmodel=$(field OC_MODEL "$f"); tmodel=${tmodel:-$(tier_field "$tier" 4)}; tmodel=${tmodel:-deepseek-v4-pro}
     # B4：tmodel/tier 与 luser/lpass 同样是自由文本，写进双引号 YAML 且被 compose 变量插值；未转义的
@@ -136,6 +165,7 @@ tier_field() { [ -f tiers.env ] || return 0; awk -v t="$1" -v c="$2" '!/^[[:spac
     # 每张 per-user bridge 各有自己的网关通向宿主 8091（/llm 转发 + 记账），与容器落在哪张网无关。
     networks:
       - net-${name}
+${skills_tmpfs}
     volumes:
       - ${name}-uploads:/app/uploads
       - ${name}-outputs:/app/outputs
@@ -146,7 +176,7 @@ tier_field() { [ -f tiers.env ] || return 0; awk -v t="$1" -v c="$2" '!/^[[:spac
       # 管，配置层护不住（见 web/server.mjs enforceOcTools 注释）。只读挂载才是真边界。
       # 源用相对路径（compose 相对 deploy/ 解析）：宿主仓库根即镜像构建源，零漂移；镜像里的同名内容被
       # 原样覆盖成只读。产物/上传/会话数据仍是可写卷，不受影响。
-      - ../.opencode/skills:/app/.opencode/skills:ro
+      # 技能挂载由上方 SKILLS 逻辑生成：不设限=整目录；受限=tmpfs 遮蔽+白名单逐技能回挂。${skills_mounts}
       - ../AGENTS.md:/app/AGENTS.md:ro
     ports:
       - "127.0.0.1:${port}:3000"
