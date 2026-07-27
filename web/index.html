@@ -82,12 +82,10 @@
   /* 功能模块选择卡（欢迎页）与输入框模块徽标 */
   .welcome .mods { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin-top: 18px; text-align: left; }
   .modcard { background: var(--card); border: 1px solid var(--line-hi); border-radius: var(--r-md); padding: 10px 12px; cursor: pointer; transition: border-color .15s, background .15s; font: inherit; text-align: left; }
-  .modcard:hover:not(:disabled) { border-color: var(--cyan); }
+  .modcard:hover { border-color: var(--cyan); }
   .modcard.sel { border-color: var(--cyan); background: rgba(56,189,248,.08); box-shadow: 0 0 0 2px rgba(56,189,248,.12); }
-  .modcard:disabled { opacity: .45; cursor: not-allowed; }
   .modcard .mn { display: block; color: var(--text); font-size: 13px; font-weight: 600; }
   .modcard .md { display: block; color: var(--faint); font-size: 11.5px; margin-top: 3px; line-height: 1.5; }
-  .modcard .mlock { float: right; color: var(--faint); font-size: 11px; font-weight: 400; }
   #modBadge { display: none; align-items: center; gap: 4px; margin-left: 6px; padding: 4px 10px; border-radius: 999px; font-size: 12px; white-space: nowrap; color: #0369a1; background: rgba(56,189,248,.12); border: 1px solid rgba(56,189,248,.4); }
   #modBadge.on { display: inline-flex; }
   #sessions .sess .mtag { display: inline-block; margin-right: 5px; padding: 0 5px; border-radius: 5px; font-size: 10.5px; color: #0369a1; background: rgba(56,189,248,.12); border: 1px solid rgba(56,189,248,.35); vertical-align: 1px; }
@@ -987,18 +985,16 @@ const CHIPS = ["分析 uploads 里的 CSV 数据", "帮我查一个 DOI 是否�
 function renderWelcome() {
   const w = document.createElement("div"); w.className = "welcome"
   w.innerHTML = '<div class="wtitle">Niuma Science</div><div class="wsub">一站式科研平台，文献综述、选题立项、基金申报、论文撰写全链路，<br>科研需求一键直达！</div>'
-  // 功能模块选择卡：新会话绑定所选模块；未开通的置灰。只有 chat 一个可选时不渲染（没得选）
-  if (MODULES.length && (MODULES.some((m) => m.allowed && m.id !== "chat") || !modById("chat")?.allowed)) {
+  // 功能模块选择卡：只列已开通的（未开通的不展示）。仅剩 chat 一个时不渲染（没得选）
+  const av = MODULES.filter((m) => m.allowed)
+  if (av.length && (av.length > 1 || av[0].id !== "chat")) {
     const grid = document.createElement("div"); grid.className = "mods"
-    for (const m of MODULES) {
+    for (const m of av) {
       const b = document.createElement("button"); b.type = "button"; b.className = "modcard" + (m.id === currentModule ? " sel" : "")
-      if (!m.allowed) b.disabled = true
       const mn = document.createElement("span"); mn.className = "mn"; mn.textContent = m.name
-      if (!m.allowed) { const lk = document.createElement("span"); lk.className = "mlock"; lk.textContent = "未开通"; mn.appendChild(lk) }
       const md = document.createElement("span"); md.className = "md"; md.textContent = m.desc
       b.appendChild(mn); b.appendChild(md)
       b.addEventListener("click", () => {
-        if (!m.allowed) return
         currentModule = m.id; setModBadge(m.id)
         grid.querySelectorAll(".modcard").forEach((x) => x.classList.remove("sel")); b.classList.add("sel")
         chips.style.display = m.id === "chat" ? "" : "none"   // 示例 chip 只对自由对话有意义
