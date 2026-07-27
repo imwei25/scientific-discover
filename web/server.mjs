@@ -266,6 +266,45 @@ const ALLOWED_MODULES = (() => {
   if (!ids.length) { console.warn(`[modules] ALLOWED_MODULES 配置非法：${JSON.stringify(raw)} → 回落到仅 chat，请修正 users/<名>.env 的 MODULES`); return ["chat"] }
   return ids
 })()
+// ---- 每用户技能白名单（比模块更细的授权粒度）----
+// ALLOWED_SKILLS=（逗号分隔，deploy 的 users/<名>.env 经 SKILLS= 注入）；空/未设 = 全部技能。
+// 生效范围：自由对话(chat)会话——注入"未开通技能"前言 + 事件流强制（调未开通技能即中止本轮，
+// 与模块闸同一机制）；受限模块的绑定技能被收权时，该模块整体不可用（/api/modules 置 false、start 拒绝）。
+// env-setup 恒许可（基础设施：各技能都依赖它建的 .venv，禁它只会让一切技能坏得莫名其妙）。
+// 已知逃逸面（与模块闸一致的取舍）：chat 会话不禁 task 子代理（禁了会破坏正常流水线），子会话里的
+// 技能调用不经本闸；且 agent 有 shell，理论上可绕过 skill 工具直接跑技能脚本——本闸是产品分权，不是对抗边界。
+const SKILL_IDS = (() => {   // 以技能目录为唯一事实来源（含 SKILL.md 的子目录才算技能）
+  try {
+    return fs.readdirSync(path.join(ROOT, ".opencode", "skills"), { withFileTypes: true })
+      .filter((e) => e.isDirectory() && fs.existsSync(path.join(ROOT, ".opencode", "skills", e.name, "SKILL.md")))
+      .map((e) => e.name)
+  } catch { return [] }
+})()
+const ALLOWED_SKILLS_SET = (() => {   // null = 不设限（全部技能）
+  const raw = String(process.env.ALLOWED_SKILLS || "").trim()
+  if (!raw) return null
+  const ids = raw.split(",").map((s) => s.trim()).filter(Boolean)
+  const valid = ids.filter((s) => SKILL_IDS.includes(s))
+  const dropped = ids.filter((s) => !SKILL_IDS.includes(s))
+  if (dropped.length) console.warn(`[skills] ALLOWED_SKILLS 含未知技能（已忽略）：${dropped.join(",")}`)
+  // 非空但全非法 = 配置错误：fail-closed 成"一个都不许"（响亮告警），而不是静默放开全部
+  if (!valid.length) console.warn(`[skills] ALLOWED_SKILLS 无一合法：${JSON.stringify(raw)} → 按全部禁用处理，请修正 users/<名>.env 的 SKILLS`)
+  return new Set([...valid, "env-setup"])
+})()
+const skillAllowed = (name) => !ALLOWED_SKILLS_SET || ALLOWED_SKILLS_SET.has(name)
+// chat 会话的技能限制前言（受限模块会话不用它——那边本就锁死单技能）。挑短的一边列，控制前言长度；
+// 单行无空行（stripPreamble 按第一个空行剥离，见 modulePreamble 同款约束）。
+const skillsPreamble = () => {
+  if (!ALLOWED_SKILLS_SET) return ""
+  const allowed = [...ALLOWED_SKILLS_SET].filter((s) => s !== "env-setup")
+  const banned = SKILL_IDS.filter((s) => s !== "env-setup" && !ALLOWED_SKILLS_SET.has(s))
+  if (!banned.length) return ""
+  const line = banned.length <= allowed.length
+    ? `以下技能对本账号【未开通】，禁止调用：${banned.join("、")}。`
+    : `本账号【只开通】了以下技能：${allowed.join("、")}（外加 env-setup），其余技能一律禁止调用。`
+  return `\n- **【技能授权，最高优先级】**${line}规划流水线时直接跳过未开通的技能并明确告知用户"某步骤因未开通某技能而省略"；不要试图调用（会被网关强制中止本轮），也不要徒手模仿该技能的产出。`
+}
+
 // 会话 → 模块 绑定表（持久化在 ocdata 卷，容器重建不丢；与 quota.json 同目录）
 const MODULE_MAP_FILE = path.join(os.homedir(), ".local", "share", "opencode", "module-map.json")
 let _modMap = null
@@ -758,8 +797,10 @@ function startJob(sid, sentText, modId) {
   // 新一轮 prompt 就是回退的提交动作（opencode 收到新消息会把 revert 标记清成 null），
   // 待提交登记到此结束；之后再出现的 revert 标记就真是残留了，交还给 clearStaleRevert 自愈。
   pendingReverts.delete(sid)
-  // 模块闸的判据：受限模块只允许这一个技能名；null = 不设限（chat / 未传 modId 的兼容路径）
+  // 模块闸的判据：受限模块只允许这一个技能名；null = 非受限模块（chat / 未传 modId 的兼容路径）
   const onlySkill = MODULE_DEFS[modId]?.skill || null
+  // 本轮实际生效的技能白名单：受限模块锁单技能（+env-setup 基础设施）；chat 用账号级白名单；null=不限
+  const skillGate = onlySkill ? new Set([onlySkill, "env-setup"]) : ALLOWED_SKILLS_SET
   const job = {
     sid, running: true, finished: false, subs: new Set(),
     // 增量快照：text 是累积全文、reasoning 按 id、tool 按 callID 各存最新一条，attach 时按序重放即可还原界面
@@ -897,14 +938,15 @@ function startJob(sid, sentText, modId) {
           emitLive(true)
           updateRunning()
         } else if (p.type === "tool" && p.state?.status) {
-          // ---- 模块闸（强制层，不靠提示词自觉）----
-          // 受限模块的会话里，技能调用只放行绑定的那一个：调了别的技能、或试图用 task 子代理绕道
-          // （子代理的技能调用发生在子会话里，本循环按 sessionID 过滤看不见，所以整个 task 工具都得禁），
-          // 立即 abort 本轮。prompt 返回后统一广播"模块限制"报错（见下方 moduleHit 分支）。
-          // tools:{task:false} 已在 prompt 参数里把子代理禁掉，这里的 task 分支是双保险。
-          if (onlySkill && !job.moduleHit) {
-            const bad = (p.tool === "skill" && p.state.input?.name && p.state.input.name !== onlySkill) ? p.state.input.name
-              : (p.tool === "task" ? "task(子代理)" : null)
+          // ---- 模块/技能闸（强制层，不靠提示词自觉）----
+          // 技能调用只放行白名单内的：受限模块 = 绑定的那一个技能；chat = 账号级技能白名单。
+          // 受限模块还禁 task 子代理绕道（子代理的技能调用发生在子会话里，本循环按 sessionID 过滤
+          // 看不见，所以整个 task 工具都得禁；tools:{task:false} 已在 prompt 参数里禁掉，这里是双保险。
+          // chat 不禁 task——禁了会破坏正常流水线，子会话逃逸是已接受的取舍，见 ALLOWED_SKILLS 注释）。
+          // 违规立即 abort 本轮，prompt 返回后统一广播报错（见下方 moduleHit 分支）。
+          if (skillGate && !job.moduleHit) {
+            const bad = (p.tool === "skill" && p.state.input?.name && !skillGate.has(p.state.input.name)) ? p.state.input.name
+              : (onlySkill && p.tool === "task" ? "task(子代理)" : null)
             if (bad) {
               job.moduleHit = bad
               console.warn(`[modules] 会话 ${sid}（模块 ${modId}）调用了越权技能/工具：${bad}，中止本轮`)
@@ -959,7 +1001,9 @@ function startJob(sid, sentText, modId) {
       }
     }
     if (job.aborting) return finish()                       // 用户显式终止：job.abort 已广播 aborted
-    if (job.moduleHit) { broadcast("failed", { message: `模块限制：本会话是「${MODULE_DEFS[modId]?.name || modId}」专用模块，只能使用「${onlySkill}」技能；检测到调用「${job.moduleHit}」，本轮已中止。此类需求请到「自由对话」模块新开会话。` }); return finish() }
+    if (job.moduleHit) { broadcast("failed", { message: onlySkill
+      ? `模块限制：本会话是「${MODULE_DEFS[modId]?.name || modId}」专用模块，只能使用「${onlySkill}」技能；检测到调用「${job.moduleHit}」，本轮已中止。此类需求请到「自由对话」模块新开会话。`
+      : `技能未开通：你的账号未开通「${job.moduleHit}」技能，本轮已中止。如需使用请联系管理员开通。` }); return finish() }
     if (job.quotaHit) { broadcast("failed", { message: `本轮已达今日额度上限（$${DAILY_COST_LIMIT.toFixed(2)}），已自动中止；明日 0 点(UTC)恢复。` }); return finish() }
     if (promptErr) {
       if (job.finished) return finish()
@@ -1334,7 +1378,8 @@ const server = http.createServer(async (req, res) => {
     }
     // 功能模块清单：全部模块 + 本账号是否开通（前端据此渲染模块选择卡；未开通的置灰）
     if (req.method === "GET" && u.pathname === "/api/modules") {
-      const list = Object.entries(MODULE_DEFS).map(([id, m]) => ({ id, name: m.name, desc: m.desc, skill: m.skill, allowed: ALLOWED_MODULES.includes(id) }))
+      // 模块可用 = 模块本身获授权 且 其绑定技能未被技能白名单收权（chat 无绑定技能，只看模块授权）
+      const list = Object.entries(MODULE_DEFS).map(([id, m]) => ({ id, name: m.name, desc: m.desc, skill: m.skill, allowed: ALLOWED_MODULES.includes(id) && (!m.skill || skillAllowed(m.skill)) }))
       return send(res, 200, "application/json", JSON.stringify({ modules: list }))
     }
     if (req.method === "GET" && u.pathname === "/api/quota") {   // 前端显示今日额度用量（含在跑轮的实时成本）
@@ -1366,7 +1411,7 @@ const server = http.createServer(async (req, res) => {
       // 老会话若绑着已收权的模块，续聊也要挡住。
       let modId = sid ? sessionModule(sid) : (reqMod || "chat")
       if (!MODULE_DEFS[modId]) return send(res, 400, "application/json", JSON.stringify({ ok: false, sent: false, err: `未知模块：${modId}` }))
-      if (!ALLOWED_MODULES.includes(modId))
+      if (!ALLOWED_MODULES.includes(modId) || (MODULE_DEFS[modId].skill && !skillAllowed(MODULE_DEFS[modId].skill)))
         return send(res, 403, "application/json", JSON.stringify({ ok: false, sent: false, err: `你的账号未开通「${MODULE_DEFS[modId].name}」模块${sid ? "（本会话绑定于该模块）" : ""}，请联系管理员开通。` }))
       // 新会话要先向 opencode 建会话；它没起来时这里会抛，此前会被外层 catch 变成一个带堆栈的 500，
       // 用户只看到"发送失败"，根本不知道是后台模型服务没起来。这里单独兜住并给人话。
@@ -1390,7 +1435,7 @@ const server = http.createServer(async (req, res) => {
       // 给 agent 注入本会话专属目录，覆盖技能默认的 outputs/，实现多用户/多会话隔离
       // 注意：本会话的工作目录（cwd）已在建会话时通过 opencode 的 session.directory 定在【会话产物目录】，
       // 所以 agent 的所有工具默认就在正确的地方读写，preamble 只需说清"当前目录就是产物目录"与几个绝对路径。
-      const preamble = `${PREAMBLE_MARK}\n- **你的当前工作目录就是本会话的产物目录**（\`${ws.out}\`）。所有产物（图表 PNG/PDF、CSV/Excel、md/docx 等）**直接写到当前目录即可**，用相对文件名如 \`fig1.png\`、\`manuscript.md\`，不要再自己拼 \`outputs/xxx\` 前缀。\n- 临时脚本、中间文件同样写当前目录（要归拢可用 \`./.scratch/\`）。\n- 用户上传的数据文件在 \`${ws.up}/\`（读数据从这里找，用这个绝对路径）。\n- 跑本套件的脚本用 \`\${REPO_ROOT:-/app}\` 前缀定位仓库，例如 \`\${REPO_ROOT:-/app}/.venv/bin/python \${REPO_ROOT:-/app}/.opencode/skills/<技能>/xxx.py\`——因为当前目录不是仓库根，写 \`.venv/...\` 这种相对路径会找不到。\n- 正文里嵌入图片直接用文件名：\`![图注](fig1.png)\`（图和稿件都在当前目录，渲染也从当前目录跑）。\n- **不要把产物写到仓库根或 \`\${REPO_ROOT:-/app}\` 下**：那是所有会话共享的，会互相覆盖，也不会出现在界面的"产出"侧栏。${modulePreamble(modId)}\n\n`
+      const preamble = `${PREAMBLE_MARK}\n- **你的当前工作目录就是本会话的产物目录**（\`${ws.out}\`）。所有产物（图表 PNG/PDF、CSV/Excel、md/docx 等）**直接写到当前目录即可**，用相对文件名如 \`fig1.png\`、\`manuscript.md\`，不要再自己拼 \`outputs/xxx\` 前缀。\n- 临时脚本、中间文件同样写当前目录（要归拢可用 \`./.scratch/\`）。\n- 用户上传的数据文件在 \`${ws.up}/\`（读数据从这里找，用这个绝对路径）。\n- 跑本套件的脚本用 \`\${REPO_ROOT:-/app}\` 前缀定位仓库，例如 \`\${REPO_ROOT:-/app}/.venv/bin/python \${REPO_ROOT:-/app}/.opencode/skills/<技能>/xxx.py\`——因为当前目录不是仓库根，写 \`.venv/...\` 这种相对路径会找不到。\n- 正文里嵌入图片直接用文件名：\`![图注](fig1.png)\`（图和稿件都在当前目录，渲染也从当前目录跑）。\n- **不要把产物写到仓库根或 \`\${REPO_ROOT:-/app}\` 下**：那是所有会话共享的，会互相覆盖，也不会出现在界面的"产出"侧栏。${modId === "chat" ? skillsPreamble() : modulePreamble(modId)}\n\n`
       startJob(sid, preamble + q, modId)   // 同步建 job（jobs.set 在函数首行）→ 返回后前端 attach 必能接上
       return send(res, 200, "application/json", JSON.stringify({ ok: true, sid, sent: true, module: modId }))
     }

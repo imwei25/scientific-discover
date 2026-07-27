@@ -58,6 +58,11 @@ tier_field() { [ -f tiers.env ] || return 0; awk -v t="$1" -v c="$2" '!/^[[:spac
     modules=$(field MODULES "$f")
     if [ -n "$modules" ] && ! [[ "$modules" =~ ^[a-z0-9,-]+$ ]]; then
       echo "!! $f 的 MODULES 非法：'$modules'（仅小写字母/数字/逗号/连字符，空=全部模块）。请修正后重跑。" >&2; exit 1; fi
+    # 技能白名单：users/<名>.env 的 SKILLS=（逗号分隔技能目录名；空/缺省=全部技能）。字符集校验同上；
+    # 技能 id 是否存在由 user-skills.sh 在写入时对照 ../.opencode/skills/ 校验，容器网关兜底（未知 id 忽略，全非法则全禁用）。
+    skills=$(field SKILLS "$f")
+    if [ -n "$skills" ] && ! [[ "$skills" =~ ^[a-z0-9,-]+$ ]]; then
+      echo "!! $f 的 SKILLS 非法：'$skills'（仅小写字母/数字/逗号/连字符，空=全部技能）。请修正后重跑。" >&2; exit 1; fi
     # 分级模型：用户 .env 显式 OC_MODEL 覆盖 > 档位 tiers.env 第4列 > 缺省 deepseek-v4-pro（走网关时即请求这个模型名）
     tmodel=$(field OC_MODEL "$f"); tmodel=${tmodel:-$(tier_field "$tier" 4)}; tmodel=${tmodel:-deepseek-v4-pro}
     # B4：tmodel/tier 与 luser/lpass 同样是自由文本，写进双引号 YAML 且被 compose 变量插值；未转义的
@@ -115,6 +120,7 @@ tier_field() { [ -f tiers.env ] || return 0; awk -v t="$1" -v c="$2" '!/^[[:spac
       BASE_PATH: "/${name}"
       USER_TIER: "${tier_esc:-}"
       ALLOWED_MODULES: "${modules:-}"
+      ALLOWED_SKILLS: "${skills:-}"
       DAILY_COST_LIMIT: "${dlimit:-0}"
       STORAGE_LIMIT_MB: "${slimit:-0}"
       # 宿主账本：额度权威记在 manager 侧（deploy/data/quota/），容器内 quota.json 仅作回退缓存，

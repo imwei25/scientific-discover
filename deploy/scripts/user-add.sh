@@ -66,6 +66,8 @@ QUOTA_TOKEN=$(openssl rand -hex 24)
 # 功能模块授权（逗号分隔；空/缺省=全部）：chat=自由对话 grant=标书撰写 refcheck=文献真实性检查 humanize=去AI味写作
 # 改授权用 scripts/user-modules.sh $name <列表|all>（会自动重建容器生效）
 #MODULES=
+# 技能白名单（逗号分隔技能目录名；空/缺省=全部）：改用 scripts/user-skills.sh $name <列表|all>；清单见 user-skills.sh --list
+#SKILLS=
 EOF
 echo "写入 $env（端口 $port，档位 $tier）"
 

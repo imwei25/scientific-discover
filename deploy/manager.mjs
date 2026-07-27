@@ -608,6 +608,29 @@ const MODULE_TABLE = [
 ]
 // 某用户已授权的模块 id 列表；空数组 = 未设 MODULES = 全部模块（与容器网关的默认一致）
 const userModules = (name) => (userEnv(name).MODULES || "").split(",").map((s) => s.trim()).filter((s) => MODULE_TABLE.some((m) => m.id === s))
+// ---- 每用户技能白名单（比模块更细：管的是自由对话里能调哪些技能）----
+// 技能清单以仓库技能目录为唯一事实来源；env-setup 是基础设施（容器网关恒许可），不列进可管清单。
+// 中文标签仅用于管理台展示，新技能没配标签时回落目录名，不影响功能。
+const SKILL_LABELS = {
+  "clinical-stats": "临床统计", "data-analysis": "数据分析", "data-integrity": "数据自查",
+  "deep-research": "深度研究", "deidentify": "数据脱敏", "fulltext-retrieval": "全文获取",
+  "grant-proposal": "标书撰写", "humanize-academic": "去AI味", "literature-review": "文献综述",
+  "nature-figure": "出版级图表", "novelty-check": "新颖性核查", "ocr": "OCR识字",
+  "peer-review": "同行评审", "ppt-master": "PPT制作", "reference-check": "查引用",
+  "render-docx": "Word排版", "render-pdf-doc": "PDF排版", "research-scan": "领域扫描",
+  "search-lit": "文献检索", "systematic-review": "系统综述", "topic-selection": "选题",
+  "write-paper": "论文撰写", "zotero-library": "Zotero文库",
+}
+const SKILLS_DIR = path.join(DEPLOY_DIR, "..", ".opencode", "skills")
+function skillTable() {   // 每次现读目录：加了新技能不用重启 manager
+  try {
+    return fs.readdirSync(SKILLS_DIR, { withFileTypes: true })
+      .filter((e) => e.isDirectory() && e.name !== "env-setup" && fs.existsSync(path.join(SKILLS_DIR, e.name, "SKILL.md")))
+      .map((e) => ({ id: e.name, label: SKILL_LABELS[e.name] || e.name }))
+  } catch { return [] }
+}
+// 某用户技能白名单；空数组 = 未设 SKILLS = 全部技能
+const userSkills = (name) => (userEnv(name).SKILLS || "").split(",").map((s) => s.trim()).filter(Boolean)
 // 解析某用户实际额度：显式覆盖 > 档位 > 0（与 render-compose.sh 一致）
 function resolveLimits(name) {
   const e = userEnv(name)
@@ -709,6 +732,10 @@ table{width:100%;border-collapse:collapse}th,td{text-align:left;padding:9px 8px;
 th{color:var(--mut);font-weight:500;font-size:12px}td.name{font-weight:600}
 select,input{background:var(--p2);border:1px solid var(--line);color:var(--fg);border-radius:7px;padding:5px 8px;font-size:13px}input.num{width:120px}
 label.mchk{display:inline-flex;align-items:center;gap:3px;margin-right:8px;font-size:12px;color:var(--mut);white-space:nowrap;cursor:pointer}label.mchk input{accent-color:var(--acc)}td.modcell{min-width:210px}
+#ovl{position:fixed;inset:0;background:rgba(0,0,0,.55);display:flex;align-items:center;justify-content:center;z-index:50}
+.dlg{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:18px 20px;max-width:600px;width:92%;max-height:80vh;overflow:auto}
+.dlg h3{margin:0 0 12px;font-size:14px}.skgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:6px}
+td.skcell{white-space:nowrap}.sksum{font-variant-numeric:tabular-nums;margin-right:6px}
 .btn{border:1px solid var(--line);background:var(--p2);color:var(--fg);border-radius:8px;padding:6px 12px;cursor:pointer;font-size:13px}
 .btn:hover{border-color:var(--acc)}.btn.primary{background:var(--acc);border-color:var(--acc);color:#fff}.btn.bad{border-color:var(--bad);color:#ff9b9b}
 .bar{position:relative;height:7px;border-radius:5px;background:var(--p2);overflow:hidden;min-width:110px;margin-top:4px}.bar>i{position:absolute;inset:0 auto 0 0;background:var(--ok)}.bar.warn>i{background:var(--warn)}.bar.bad>i{background:var(--bad)}
@@ -738,6 +765,24 @@ async function renderGateway(box){let d;try{d=await api('gateway/channels')}catc
     +'<div class="row" style="margin-top:12px;flex-wrap:wrap"><input id="gcn" placeholder="名称(如 OpenAI)" style="width:140px"><input id="gcu" placeholder="接口地址 https://api.openai.com/v1" style="flex:1;min-width:200px"><input id="gck" placeholder="API Key" style="width:160px"><input id="gcm" placeholder="模型名(逗号分隔)" style="width:170px"><button class="btn primary" id="gcadd">加渠道</button></div>'
     +'<div class="mut" style="font-size:12px;margin-top:6px">加完记得在某档位「模型」下拉里选它，才会有用户路由过去。</div>';
   box.querySelector('#gcadd').onclick=async()=>{const body={name:box.querySelector('#gcn').value.trim(),base_url:box.querySelector('#gcu').value.trim(),key:box.querySelector('#gck').value.trim(),models:box.querySelector('#gcm').value.trim()};if(!body.name||!body.base_url||!body.key||!body.models)return toast('请填全 名称/地址/Key/模型',0);const j=await api('gateway/channel',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});toast(j.ok?('渠道 '+body.name+' 已添加'):(j.err||'失败'),j.ok);if(j.ok){MODELS=[];renderGateway(box)}}}
+// 技能白名单弹窗编辑器：全选=不限（后端把全选写成清除限制）；保存即调 user-skills.sh 重建容器
+function skillEditor(u,SKT){
+  const cur=(!u.skills||!u.skills.length)?SKT.map(s=>s.id):u.skills
+  const boxes=SKT.map(s=>'<label class="mchk" style="margin:0" title="'+s.id+'"><input type="checkbox" data-s="'+s.id+'"'+(cur.indexOf(s.id)>=0?' checked':'')+'>'+s.label+'</label>').join('')
+  const ovl=document.createElement('div');ovl.id='ovl'
+  ovl.innerHTML='<div class="dlg"><h3>'+u.name+' 的技能白名单<span class="hint">全选=不限；保存即重建容器生效（自由对话里未勾选的技能会被拒；标书/查引用/去AI味模块的技能被取消则该模块不可用）</span></h3><div class="skgrid">'+boxes+'</div><div class="row" style="margin-top:14px"><button class="btn" id="skall">全选</button><button class="btn" id="sknone">清空</button><span style="flex:1"></span><button class="btn" id="skcancel">取消</button><button class="btn primary" id="sksave">保存</button></div></div>'
+  document.body.appendChild(ovl)
+  ovl.addEventListener('click',e=>{if(e.target===ovl)ovl.remove()})
+  ovl.querySelector('#skall').onclick=()=>ovl.querySelectorAll('.skgrid input').forEach(x=>x.checked=true)
+  ovl.querySelector('#sknone').onclick=()=>ovl.querySelectorAll('.skgrid input').forEach(x=>x.checked=false)
+  ovl.querySelector('#skcancel').onclick=()=>ovl.remove()
+  ovl.querySelector('#sksave').onclick=async()=>{
+    const sel=[].slice.call(ovl.querySelectorAll('.skgrid input')).filter(x=>x.checked).map(x=>x.dataset.s)
+    if(!sel.length)return toast('至少保留一个技能',0)
+    const j=await api('skills',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:u.name,skills:sel})})
+    toast(j.ok?(u.name+' 技能已保存（容器已重建生效）'):(j.out||j.err||'失败'),j.ok);if(j.ok){ovl.remove();load()}
+  }
+}
 function bar(used,limit){if(!limit)return '<span class="usage">'+money(used)+' <span class="mut">/ 不限</span></span>';const pct=Math.min(100,Math.round(used/limit*100));const c=pct>=100?'bad':pct>=80?'warn':'';return '<div class="usage">'+money(used)+' <span class="mut">/ '+money(limit)+' ('+pct+'%)</span></div><div class="bar '+c+'"><i style="width:'+pct+'%"></i></div>'}
 function sbar(usedMB,limitMB){if(!limitMB)return '<span class="usage">'+fmt(usedMB)+'MB <span class="mut">/ 不限</span></span>';const pct=Math.min(100,Math.round(usedMB/limitMB*100));const c=pct>=100?'bad':pct>=90?'warn':'';return '<div class="usage">'+fmt(usedMB)+' <span class="mut">/ '+fmt(limitMB)+'MB</span></div><div class="bar '+c+'"><i style="width:'+pct+'%"></i></div>'}
 
@@ -750,17 +795,20 @@ function renderLogin(err){app.innerHTML='';const box=$('<section id="login"><h2>
 async function load(){let d;try{d=await api('overview')}catch(e){return renderLogin('')}
   TIERS=d.tiers||[]
   const MODT=d.moduleTable||[]
+  const SKT=d.skillTable||[]
   try{const gm=await api('gateway/models');MODELS=(gm&&gm.models)||[]}catch(e){MODELS=[]}
   app.innerHTML=''
   app.appendChild($('<header><h1>用户管理台</h1><span class="hint">额度=USD/天（含缓存折扣），UTC 0点重置；同时在跑上限 '+d.warmCap+'</span><span class="sp"></span><button class="btn" id="reload">刷新</button><button class="btn" id="logout">退出</button></header>'))
   const main=$('<main><div class="msg" id="msg"></div></main>')
   // 用户表
-  const us=$('<section><h2>用户<span class="hint">改档位/模块即时重建容器生效；删除保留数据，勾选彻底删则先备份再删卷</span></h2><table><thead><tr><th>用户</th><th>档位</th><th>模块</th><th>今日成本/额度</th><th>存储</th><th>状态</th><th></th></tr></thead><tbody id="ut"></tbody></table></section>')
+  const us=$('<section><h2>用户<span class="hint">改档位/模块/技能即时重建容器生效；删除保留数据，勾选彻底删则先备份再删卷</span></h2><table><thead><tr><th>用户</th><th>档位</th><th>模块</th><th>技能</th><th>今日成本/额度</th><th>存储</th><th>状态</th><th></th></tr></thead><tbody id="ut"></tbody></table></section>')
   main.appendChild(us)
   const tb=us.querySelector('#ut')
   d.users.forEach(u=>{const stat=u.suspended?'<span class="pill" style="color:#ff9b9b;border-color:#a55">已停用</span>':(u.active?'<span class="pill act">活跃</span>':u.running?'<span class="pill run">运行</span>':'<span class="pill">停</span>');
     const modcell=MODT.map(m=>{const on=(!u.modules||!u.modules.length)||u.modules.indexOf(m.id)>=0;return '<label class="mchk" title="'+m.name+'"><input type="checkbox" data-m="'+m.id+'"'+(on?' checked':'')+'>'+m.short+'</label>'}).join('')
-    const tr=$('<tr><td class="name">'+u.name+'</td><td><select class="ts">'+tierOpts(u.tier)+'</select></td><td class="modcell">'+modcell+'</td><td>'+bar(u.todayCost,u.daily)+'</td><td>'+sbar(u.storageUsedMB,u.storage)+'</td><td>'+stat+'</td><td style="white-space:nowrap"><button class="btn save">保存</button> <button class="btn susp">'+(u.suspended?'恢复':'停用')+'</button> <button class="btn bad del">删</button></td></tr>')
+    const skSum=(!u.skills||!u.skills.length)?'全部':(u.skills.length+'/'+SKT.length)
+    const tr=$('<tr><td class="name">'+u.name+'</td><td><select class="ts">'+tierOpts(u.tier)+'</select></td><td class="modcell">'+modcell+'</td><td class="skcell"><span class="mut sksum">'+skSum+'</span><button class="btn sked">编辑</button></td><td>'+bar(u.todayCost,u.daily)+'</td><td>'+sbar(u.storageUsedMB,u.storage)+'</td><td>'+stat+'</td><td style="white-space:nowrap"><button class="btn save">保存</button> <button class="btn susp">'+(u.suspended?'恢复':'停用')+'</button> <button class="btn bad del">删</button></td></tr>')
+    tr.querySelector('.sked').onclick=()=>skillEditor(u,SKT)
     tr.querySelector('.save').onclick=async()=>{
       const tier=tr.querySelector('.ts').value
       const sel=[].slice.call(tr.querySelectorAll('.mchk input')).filter(x=>x.checked).map(x=>x.dataset.m)
@@ -830,10 +878,10 @@ async function handleAdmin(req, res, pathname) {
     for (const [name, u] of users) {
       const lim = resolveLimits(name)
       list.push({ name, tier: lim.tier, daily: lim.daily, storage: lim.storage,
-        todayCost: await todayCost(name), storageUsedMB: await storageUsedMB(name), modules: userModules(name),
+        todayCost: await todayCost(name), storageUsedMB: await storageUsedMB(name), modules: userModules(name), skills: userSkills(name),
         running: (await isRunning(u.container)) === true, active: u.conns > 0, suspended: !!u.suspended })
     }
-    return json(200, { tiers: loadTiers(), users: list, warmCap: WARM_CAP, moduleTable: MODULE_TABLE })
+    return json(200, { tiers: loadTiers(), users: list, warmCap: WARM_CAP, moduleTable: MODULE_TABLE, skillTable: skillTable() })
   }
   if (req.method === "POST" && pathname === "/admin/api/tier") {
     const b = await readBody(req)
@@ -851,6 +899,19 @@ async function handleAdmin(req, res, pathname) {
     const csv = ids.length === MODULE_TABLE.length ? "all" : ids.join(",")
     const r = await runScript("user-modules.sh", [name, csv])
     loadUsers(); audit("admin.modules", { ip: clientIp(req), name, modules: csv, ok: r.code === 0 })
+    return json(r.code === 0 ? 200 : 400, { ok: r.code === 0, out: (r.stdout + r.stderr).trim() })
+  }
+  // 改某用户的技能白名单（改写 users/<名>.env 的 SKILLS → 重渲染 → 重建容器即时生效）
+  if (req.method === "POST" && pathname === "/admin/api/skills") {
+    const b = await readBody(req)
+    const name = String(b.name || "").trim()
+    if (!users.has(name)) return json(400, { ok: false, err: "无此用户" })
+    const known = skillTable().map((s) => s.id)
+    const ids = Array.isArray(b.skills) ? b.skills.map(String).filter((s) => known.includes(s)) : []
+    if (!ids.length) return json(400, { ok: false, err: "至少保留一个技能" })
+    const csv = ids.length === known.length ? "all" : ids.join(",")   // 全选 = 清除限制（SKILLS 置空）
+    const r = await runScript("user-skills.sh", [name, csv])
+    loadUsers(); audit("admin.skills", { ip: clientIp(req), name, skills: csv, ok: r.code === 0 })
     return json(r.code === 0 ? 200 : 400, { ok: r.code === 0, out: (r.stdout + r.stderr).trim() })
   }
   if (req.method === "POST" && pathname === "/admin/api/user-add") {

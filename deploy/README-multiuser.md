@@ -114,6 +114,15 @@ scripts/user-add.sh bob
 - **改授权**：`scripts/user-modules.sh <name> <列表|all>`（校验模块 id → 改 env → 重渲染 → **重建**容器即时生效，同 `user-tier.sh` 范式）；或在 `/admin` 管理台用户表勾选模块后点保存。
 - **同步维护点**（加新模块要改齐三处）：`web/server.mjs` 的 `MODULE_DEFS`、`deploy/manager.mjs` 的 `MODULE_TABLE`、`scripts/user-modules.sh` 的 `ALL_MODULES`。
 
+### 技能白名单（比模块更细的授权粒度）
+
+管理员还能管**每个用户在自由对话里能用哪些技能**：`users/<name>.env` 的 `SKILLS=`（逗号分隔技能目录名；**空/缺省=全部技能**）→ `render-compose.sh` 注入容器 env `ALLOWED_SKILLS`。
+
+- **生效语义**（enforcement 同模块闸，在容器网关）：自由对话会话注入"未开通技能"前言（agent 规划流水线时直接跳过并告知用户），且事件流强制校验——调用白名单外技能**立即中止本轮**；`env-setup` 恒许可（基础设施）。受限模块（标书/查引用/去AI味）的绑定技能被收权时，**该模块整体不可用**（前端隐藏、后端 403）。
+- **技能清单以 `.opencode/skills/` 目录为唯一事实来源**（含 `SKILL.md` 的子目录），加新技能无需改任何清单代码；管理台的中文标签在 `manager.mjs` 的 `SKILL_LABELS`（没配标签回落目录名）。
+- **改白名单**：`scripts/user-skills.sh <name> <列表|all>`（`all`=清除限制；`--list` 列全部技能 id；校验→改 env→重建容器），或 `/admin` 用户表「技能」列点**编辑**弹窗勾选。
+- **已知边界**：chat 会话不禁 task 子代理（禁了会破坏正常流水线），子会话里的技能调用不经此闸；agent 有 shell，理论上可直接跑技能脚本——这是产品分权，不是对抗性安全边界。
+
 ## LLM 网关（one-api）：分级路由模型 + 多家 API 调度
 
 用户容器的 OpenCode 不直连各家大模型，而是指向一个 **one-api 网关**（OpenAI 兼容），由它做多渠道加权/failover 调度；不同档位可请求不同模型。
