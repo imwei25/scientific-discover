@@ -107,6 +107,14 @@ sudo deploy/scripts/user-add.sh bob             # 省略档位=free（普通，$
 - 令牌泄露的爆炸半径：从「全局上游 key」缩小到「该用户自己的转发通道」；换发只需改 `users/<名>.env` 的 `QUOTA_TOKEN` → `render-compose.sh` → 重建该容器。停用用户即断其通道。
 - 想让全部流量走 one-api 网关调度：在 `/etc/sci-manager.env` 设 `LLM_UPSTREAM_URL=http://127.0.0.1:3010/v1` + `LLM_UPSTREAM_KEY=<one-api令牌>`（容器无感）。
 - 恢复旧直连行为（不推荐）：在 `deploy/.env` 显式设 `OC_GATEWAY_URL`/`OC_GATEWAY_KEY`（它们对 compose 默认值有覆盖权）。
+
+### one-api 管理接口（网页"切换同供应商模型" + /admin 网关渠道面板）
+
+> **迁移到新机器时若要用这两个功能，必须在 `/etc/sci-manager.env` 设** `ONEAPI_URL` + `ONEAPI_TOKEN`（两者皆非空才启用）。这和上面的 `LLM_UPSTREAM_*` 是**两回事**：`LLM_UPSTREAM_*` 是"转发用哪把上游 key"，`ONEAPI_*` 是"manager 去 one-api 的**管理 API** 读渠道/模型列表"。不设的话前端"切换同供应商模型"与 `/admin` 网关面板显示"网关未接入"，其余功能不受影响。
+
+- `ONEAPI_URL`：one-api 地址，如 `http://127.0.0.1:3010`。
+- `ONEAPI_TOKEN`：one-api 的**系统访问令牌**（管理台"设置→系统访问令牌"，请求头 `New-Api-User: 1`），**不是**普通 `sk-` 渠道 key。
+- 完整注释见 `deploy/sci-manager.env.example`。历史坑：这两项一度被 inline 写死在 systemd 单元里（旧机器可能仍是），务必归位到 `/etc/sci-manager.env`——放单元 `Environment=` 会覆盖 env 文件、且 setup.sh 升级旧单元时可能漏迁（已修，见 setup.sh 的迁移清单）。
 - ⚠ 若把 `QUOTA_LISTEN` 置空关掉记账端点，`/llm` 通道也随之关闭，容器将**调不到模型**——除非按上一条显式配直连。
 - ⚠ **升级顺序**：新容器把模型流量与记账都指向宿主 `:8091`。务必**先** `systemctl restart sci-manager`（让新版 manager 起来监听 8091）、**再**重建容器（`render-compose.sh` → `docker compose up --no-start --force-recreate`）。顺序反了：容器起来时 `:8091` 还没人听 → 连模型都调不到（连接被拒）。反向中间态（新 manager + 尚未重建的老容器）是安全的：老容器仍带自己的 `DEEPSEEK_API_KEY` 直连、额度读卷内 `quota.json`。
 
