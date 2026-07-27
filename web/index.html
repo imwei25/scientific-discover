@@ -79,6 +79,18 @@
   .welcome .wsub { color: var(--faint); font-size: 13px; margin-top: 6px; line-height: 1.7; }
   .welcome .chips { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; margin-top: 16px; }
   .chip { background: var(--card); border: 1px solid var(--line-hi); color: #334153; border-radius: 999px; padding: 6px 13px; font-size: 12.5px; cursor: pointer; transition: border-color .15s, color .15s; }
+  /* 功能模块选择卡（欢迎页）与输入框模块徽标 */
+  .welcome .mods { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin-top: 18px; text-align: left; }
+  .modcard { background: var(--card); border: 1px solid var(--line-hi); border-radius: var(--r-md); padding: 10px 12px; cursor: pointer; transition: border-color .15s, background .15s; font: inherit; text-align: left; }
+  .modcard:hover:not(:disabled) { border-color: var(--cyan); }
+  .modcard.sel { border-color: var(--cyan); background: rgba(56,189,248,.08); box-shadow: 0 0 0 2px rgba(56,189,248,.12); }
+  .modcard:disabled { opacity: .45; cursor: not-allowed; }
+  .modcard .mn { display: block; color: var(--text); font-size: 13px; font-weight: 600; }
+  .modcard .md { display: block; color: var(--faint); font-size: 11.5px; margin-top: 3px; line-height: 1.5; }
+  .modcard .mlock { float: right; color: var(--faint); font-size: 11px; font-weight: 400; }
+  #modBadge { display: none; align-items: center; gap: 4px; margin-left: 6px; padding: 4px 10px; border-radius: 999px; font-size: 12px; white-space: nowrap; color: #0369a1; background: rgba(56,189,248,.12); border: 1px solid rgba(56,189,248,.4); }
+  #modBadge.on { display: inline-flex; }
+  #sessions .sess .mtag { display: inline-block; margin-right: 5px; padding: 0 5px; border-radius: 5px; font-size: 10.5px; color: #0369a1; background: rgba(56,189,248,.12); border: 1px solid rgba(56,189,248,.35); vertical-align: 1px; }
   .chip:hover { border-color: var(--cyan); color: var(--cyan); }
   /* typing indicator */
   .typing { display: inline-flex; gap: 5px; padding: 5px 0; }
@@ -426,6 +438,7 @@
   <section id="chat">
     <div id="log"></div>
     <form id="f" class="composer">
+      <span id="modBadge" title="本会话绑定的功能模块"></span>
       <input id="q" placeholder="给 Niuma Science 发消息…" autocomplete="off" />
       <button id="send" type="submit">发送</button>
       <button id="stop" type="button" title="终止本次输出" hidden>终止</button>
@@ -915,8 +928,9 @@ function renderSessions(list) {
   sessionsEl.innerHTML = ""
   for (const s of list) {
     const b = document.createElement("button"); b.className = "sess" + (s.id === sessionId ? " active" : ""); b.type = "button"
-    b.innerHTML = '<span class="t"></span><span class="d">' + (s.running ? '<span class="run" title="正在生成"></span>' : "") + fmtTime(s.updated) + '</span>'
+    b.innerHTML = '<span class="t"></span><span class="d">' + (s.running ? '<span class="run" title="正在生成"></span>' : "") + (s.module && s.module !== "chat" ? '<span class="mtag"></span>' : "") + fmtTime(s.updated) + '</span>'
     b.querySelector(".t").textContent = s.title
+    const mt = b.querySelector(".mtag"); if (mt) mt.textContent = s.moduleName || s.module
     b.addEventListener("click", () => resumeSession(s.id))
     const del = document.createElement("span"); del.className = "sess-del"; del.title = "删除会话"; del.innerHTML = ic("trash")
     del.addEventListener("click", (e) => { e.stopPropagation(); deleteSession(s.id, s.title) })
@@ -924,10 +938,11 @@ function renderSessions(list) {
     sessionsEl.appendChild(b)
   }
 }
-const loadSessions = () => fetch("api/sessions").then(r => r.json()).then(renderSessions).catch(() => {})
+const loadSessions = () => fetch("api/sessions").then(r => r.json()).then((l) => { sessList = l || []; renderSessions(sessList); if (sessionId) setModBadge(sessList.find((s) => s.id === sessionId)?.module || "chat") }).catch(() => {})
 async function resumeSession(id) {                 // 载入历史 → 设为当前会话 →（后台还在生成则续流）
   detachStream()                                   // 只退订原会话的流，后台生成不受影响
   sessionId = id; localStorage.setItem("nm_sid", id)
+  setModBadge(sessList.find((s) => s.id === id)?.module || "chat")   // 徽标随会话绑定走；列表未载入时 loadSessions 回来会再校正
   // 【必须看 r.ok】历史接口失败时服务端回的是 400 + 空数组体，直接 .json() 会得到一个合法的 []，
   // 于是"载入失败"被渲染成"这个会话本来就是空的" —— 用户以为几十轮对话没了，而实际只是没读到。
   // 宁可显示一条明确的错误，也不要用空白冒充成功。
@@ -965,24 +980,71 @@ sessToggle.addEventListener("click", () => setSessbar(!document.body.classList.c
 setSessbar(false)
 document.getElementById("refreshSess").addEventListener("click", loadSessions)
 loadSessions()
+loadModules()
 
 // ---- 空态欢迎 + 示例 chip ----
 const CHIPS = ["分析 uploads 里的 CSV 数据", "帮我查一个 DOI 是否真实", "写一份研究计划书", "把这段数据脱敏"]
 function renderWelcome() {
   const w = document.createElement("div"); w.className = "welcome"
   w.innerHTML = '<div class="wtitle">Niuma Science</div><div class="wsub">一站式科研平台，文献综述、选题立项、基金申报、论文撰写全链路，<br>科研需求一键直达！</div>'
+  // 功能模块选择卡：新会话绑定所选模块；未开通的置灰。只有 chat 一个可选时不渲染（没得选）
+  if (MODULES.length && (MODULES.some((m) => m.allowed && m.id !== "chat") || !modById("chat")?.allowed)) {
+    const grid = document.createElement("div"); grid.className = "mods"
+    for (const m of MODULES) {
+      const b = document.createElement("button"); b.type = "button"; b.className = "modcard" + (m.id === currentModule ? " sel" : "")
+      if (!m.allowed) b.disabled = true
+      const mn = document.createElement("span"); mn.className = "mn"; mn.textContent = m.name
+      if (!m.allowed) { const lk = document.createElement("span"); lk.className = "mlock"; lk.textContent = "未开通"; mn.appendChild(lk) }
+      const md = document.createElement("span"); md.className = "md"; md.textContent = m.desc
+      b.appendChild(mn); b.appendChild(md)
+      b.addEventListener("click", () => {
+        if (!m.allowed) return
+        currentModule = m.id; setModBadge(m.id)
+        grid.querySelectorAll(".modcard").forEach((x) => x.classList.remove("sel")); b.classList.add("sel")
+        chips.style.display = m.id === "chat" ? "" : "none"   // 示例 chip 只对自由对话有意义
+        q.focus()
+      })
+      grid.appendChild(b)
+    }
+    w.appendChild(grid)
+  }
   const chips = document.createElement("div"); chips.className = "chips"
   CHIPS.forEach((c) => { const b = document.createElement("button"); b.type = "button"; b.className = "chip"; b.textContent = c; b.addEventListener("click", () => sendMessage(c)); chips.appendChild(b) })
+  if (currentModule !== "chat") chips.style.display = "none"
   w.appendChild(chips); log.appendChild(w)
 }
 
 let sessionId = null   // reused across messages so the agent keeps context
+// ---- 功能模块：新会话在创建时绑定所选模块，受限模块只能用对应技能（服务端强制）----
+let MODULES = []              // /api/modules 清单：[{id,name,desc,skill,allowed}]
+let currentModule = "chat"    // 新会话将绑定的模块（欢迎页选择）
+let sessList = []             // 最近会话缓存（含各会话绑定的模块，切会话时用）
+const modById = (id) => MODULES.find((m) => m.id === id)
+const modBadge = document.getElementById("modBadge")
+function setModBadge(modId) {   // chat 不显示徽标；受限模块常显在输入框左侧
+  const m = modById(modId)
+  if (!m || m.id === "chat") { modBadge.classList.remove("on"); modBadge.textContent = ""; q.placeholder = "给 Niuma Science 发消息…"; return }
+  modBadge.textContent = m.name; modBadge.classList.add("on")
+  q.placeholder = "【" + m.name + "】" + (m.skill ? "描述你的需求…" : "发消息…")
+}
+async function loadModules() {
+  try { MODULES = (await fetch("api/modules").then(r => r.json())).modules || [] } catch { MODULES = [] }
+  const allowed = MODULES.filter((m) => m.allowed)
+  if (allowed.length && !allowed.some((m) => m.id === currentModule)) currentModule = allowed[0].id   // chat 被收权时落到首个可用模块
+  setModBadge(sessionId ? (sessList.find((s) => s.id === sessionId)?.module || "chat") : currentModule)
+  const w = log.querySelector(".welcome"); if (w) { w.remove(); renderWelcome() }   // 清单晚到 → 重画欢迎页补上模块卡
+}
 let sseFailStreak = 0   // 连续 SSE 重连失败次数；收到任何事件即清零，累计过多则停手提示刷新（防非 401 的持续失败无限重连）
 let sending = false     // POST /api/chat/start 往返期间为 true：此时还没有 activeES，靠它挡住连点重复发送
 function sidQ() { return sessionId ? "&sid=" + encodeURIComponent(sessionId) : "" }   // 上传/下载/预览都带上会话 id，隔离各会话目录
 document.getElementById("new").addEventListener("click", () => {
   detachStream()   // 只退订不终止：原会话若在生成会继续跑，从左侧列表随时切回来看
-  sessionId = null; localStorage.removeItem("nm_sid"); log.innerHTML = ""; renderFiles([]); loadUploads(); loadSessions(); renderWelcome(); q.focus()
+  sessionId = null; localStorage.removeItem("nm_sid"); log.innerHTML = ""; renderFiles([]); loadUploads(); loadSessions()
+  // 新对话回到默认模块（chat 可用则 chat，否则首个可用），在欢迎页重新选
+  const allowed = MODULES.filter((m) => m.allowed)
+  currentModule = allowed.some((m) => m.id === "chat") ? "chat" : (allowed[0]?.id || "chat")
+  setModBadge(currentModule)
+  renderWelcome(); q.focus()
 })
 
 // 约定式选项卡：助手文本里若含 ```ask {json}``` 块，渲染成可点选表单，提交后拼成文本回发
@@ -1048,7 +1110,7 @@ async function sendMessage(text) {
   try {
     const resp = await fetch("api/chat/start", {
       method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ q: text, sid: sessionId }),
+      body: JSON.stringify({ q: text, sid: sessionId, module: sessionId ? undefined : currentModule }),   // 模块只在建会话时绑定；续会话由服务端按绑定表裁定
     })
     // 登录已过期 → 去登录页。先复位 sending/streaming 再跳：万一跳转被拦或很慢，
     // 按钮不至于永久禁用（否则用户只能刷新页面才能再发消息）。

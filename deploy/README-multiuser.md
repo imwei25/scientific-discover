@@ -98,6 +98,22 @@ scripts/user-add.sh bob
 - **个别覆盖**：某用户 `.env` 里若填了非空的 `DAILY_COST_LIMIT=`/`STORAGE_LIMIT_MB=`，则以其为准（优先于档位），用于单独加码/收紧。
 - 额度按 **USD/天**：用 opencode 的 `session.cost`（含 DeepSeek 缓存折扣）累计每轮增量，**跨日 UTC 0 点自动清零**，持久化在 `ocdata` 卷（重启不丢）。达上限**拦截新对话**（本轮已开始的照常跑完），前端提示"今日额度已用尽"。查用量：`GET /<user>/api/quota`，或 `scripts/user-list.sh` 一览全员。
 
+## 功能模块（封装的技能入口）与每用户授权
+
+把三个高频技能封装成「模块」，加上不设限的自由对话，共四个模块；**用户在欢迎页选模块开会话，会话在创建时绑定模块、之后不可改**（换功能=新开会话）：
+
+| 模块 id | 名称 | 绑定技能 | 行为 |
+|---|---|---|---|
+| `chat` | 自由对话 | —（不限） | 现状：AGENTS.md 完整路由 / 全部技能 |
+| `grant` | 标书撰写 | `grant-proposal` | 只许调用该技能 |
+| `refcheck` | 文献真实性检查 | `reference-check` | 只许调用该技能 |
+| `humanize` | 去AI味写作 | `humanize-academic` | 只许调用该技能 |
+
+- **强制在网关而非提示词**：受限模块除了注入模块专用前言，容器网关（`web/server.mjs`）还在 opencode 事件流里校验技能调用——一旦调了绑定技能之外的技能，**立即 abort 本轮**并回「模块限制」报错；同时该轮的 `session.prompt` 传 `tools:{task:false}` 禁掉子代理（子会话里的技能调用逃逸出主会话事件过滤，索性不让开）。会话↔模块绑定持久化在 `ocdata` 卷的 `module-map.json`，容器重建不丢。
+- **每用户授权**：`users/<name>.env` 里 `MODULES=chat,grant,...`（逗号分隔；**空/缺省=全部模块**，兼容老用户）。`render-compose.sh` 把它注入容器 env `ALLOWED_MODULES`；未授权的模块在前端置灰、后端拒绝（含续聊绑定了已收权模块的老会话）。非空但全非法的值容器侧 fail-closed 到仅 `chat`。
+- **改授权**：`scripts/user-modules.sh <name> <列表|all>`（校验模块 id → 改 env → 重渲染 → **重建**容器即时生效，同 `user-tier.sh` 范式）；或在 `/admin` 管理台用户表勾选模块后点保存。
+- **同步维护点**（加新模块要改齐三处）：`web/server.mjs` 的 `MODULE_DEFS`、`deploy/manager.mjs` 的 `MODULE_TABLE`、`scripts/user-modules.sh` 的 `ALL_MODULES`。
+
 ## LLM 网关（one-api）：分级路由模型 + 多家 API 调度
 
 用户容器的 OpenCode 不直连各家大模型，而是指向一个 **one-api 网关**（OpenAI 兼容），由它做多渠道加权/failover 调度；不同档位可请求不同模型。
@@ -119,7 +135,7 @@ scripts/user-add.sh bob
   > 若你这台机器历史上用过 drop-in 存管理密码（见 `服务器架构.md`），那就**以 drop-in 为准**，改 env 文件不会有效果。
   > 用 `systemctl show sci-manager -p Environment` 可以看最终生效值；想统一到 env 文件就把 drop-in 里对应的行删掉。
 - **访问**：`https://<你的域名>/admin`，输入管理员密码。走 Caddy HTTPS，会话 Cookie 带 `HttpOnly/Secure/SameSite=Strict`，仅 `/admin` 路径。
-- **能做**：看全员**档位 / 今日成本-额度 / 存储用量 / 运行状态**；下拉**改某人档位**（自动重建容器生效）；**新增用户**（返回随机密码）/**删除用户**（留数据或彻底删）；**编辑档位额度、增删档位**（改 `tiers.env`，重建该档空闲容器，活跃会话下次冷启动生效）。
+- **能做**：看全员**档位 / 功能模块授权 / 今日成本-额度 / 存储用量 / 运行状态**；下拉**改某人档位**、勾选**改某人可用模块**（都自动重建容器生效）；**新增用户**（返回随机密码）/**删除用户**（留数据或彻底删）；**编辑档位额度、增删档位**（改 `tiers.env`，重建该档空闲容器，活跃会话下次冷启动生效）。
 - **安全**：manager 以 root 跑、能操作 docker，故管理台是特权面——务必用强 `ADMIN_PASSWORD`、只经 HTTPS 访问；密码错误有 0.6s 延迟挡暴力。用户名 `admin`/`api`/`login`/`logout` 被保留，不能建同名用户。
 
 ## 存储上限（MB）

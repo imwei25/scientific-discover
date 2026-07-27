@@ -52,6 +52,12 @@ tier_field() { [ -f tiers.env ] || return 0; awk -v t="$1" -v c="$2" '!/^[[:spac
       echo "!! $f 的 DAILY_COST_LIMIT 非法：'$dlimit'（须为非负数字，空=不限额）。请修正 users/*.env 或 tiers.env 后重跑。" >&2; exit 1; fi
     if [ -n "$slimit" ] && ! [[ "$slimit" =~ ^[0-9]+(\.[0-9]+)?$ ]]; then
       echo "!! $f 的 STORAGE_LIMIT_MB 非法：'$slimit'（须为非负数字，空=不限额）。请修正 users/*.env 或 tiers.env 后重跑。" >&2; exit 1; fi
+    # 功能模块授权：users/<名>.env 的 MODULES=chat,grant,...（逗号分隔；空/缺省=全部模块）。
+    # 只允许小写字母/数字/逗号/连字符——它要写进 YAML 又是自由文本，畸形值宁可在生成阶段响亮中止；
+    # 具体模块 id 是否存在由容器网关校验（非法 id 会被忽略，一个都不剩时 fail-closed 到仅 chat）。
+    modules=$(field MODULES "$f")
+    if [ -n "$modules" ] && ! [[ "$modules" =~ ^[a-z0-9,-]+$ ]]; then
+      echo "!! $f 的 MODULES 非法：'$modules'（仅小写字母/数字/逗号/连字符，空=全部模块）。请修正后重跑。" >&2; exit 1; fi
     # 分级模型：用户 .env 显式 OC_MODEL 覆盖 > 档位 tiers.env 第4列 > 缺省 deepseek-v4-pro（走网关时即请求这个模型名）
     tmodel=$(field OC_MODEL "$f"); tmodel=${tmodel:-$(tier_field "$tier" 4)}; tmodel=${tmodel:-deepseek-v4-pro}
     # B4：tmodel/tier 与 luser/lpass 同样是自由文本，写进双引号 YAML 且被 compose 变量插值；未转义的
@@ -108,6 +114,7 @@ tier_field() { [ -f tiers.env ] || return 0; awk -v t="$1" -v c="$2" '!/^[[:spac
       LAN_PASSWORD: "${lpass}"
       BASE_PATH: "/${name}"
       USER_TIER: "${tier_esc:-}"
+      ALLOWED_MODULES: "${modules:-}"
       DAILY_COST_LIMIT: "${dlimit:-0}"
       STORAGE_LIMIT_MB: "${slimit:-0}"
       # 宿主账本：额度权威记在 manager 侧（deploy/data/quota/），容器内 quota.json 仅作回退缓存，

@@ -244,6 +244,47 @@ const BASE_PATH = (process.env.BASE_PATH || "").replace(/\/+$/, "")   // 归一�
 // - 单机/局域网部署（BASE_PATH 为空、前面没有 manager）→ 没有验证码这回事，照旧用容器自带的 /login。
 const LOGIN_URL = BASE_PATH ? "/" : "/login"
 
+// ---- 功能模块（封装的技能入口 + 每用户授权）----
+// 每个"模块"= 一种会话形态：chat 是不设限的自由对话（走 AGENTS.md 的完整路由）；
+// 其余模块把会话锁定到【单个技能】——注入模块专用前言，且网关在事件流里强制校验：
+// agent 一旦调用模块外的技能（或试图用 task 子代理绕道），本轮立即中止（见 startJob 的模块闸）。
+// 会话在创建那一刻绑定模块，绑定持久化在 ocdata 卷（module-map.json），之后不可改——
+// 换功能 = 新开会话。老会话（本功能上线前建的）一律按 chat 处理。
+const MODULE_DEFS = {
+  chat:     { name: "自由对话",       skill: null,               desc: "不限功能的科研助手：综述、论文、统计、作图、检索……完整流水线都在这里" },
+  grant:    { name: "标书撰写",       skill: "grant-proposal",   desc: "基金标书专用：按资助渠道模板起草申请书正文" },
+  refcheck: { name: "文献真实性检查", skill: "reference-check",  desc: "查假引用：核对参考文献是否真实存在、DOI/题录是否一致" },
+  humanize: { name: "去AI味写作",     skill: "humanize-academic", desc: "学术文本去 AI 味改写：保留事实与引用，只改表达" },
+}
+// 每用户授权（ALLOWED_MODULES=chat,grant,...，由 deploy 的 users/<名>.env 注入）。
+// 空/未设 = 全部模块（单机部署与老容器的兼容默认）。非空但没有一个合法 id = 配置错误 →
+// fail-closed 回落到仅 chat 并响亮告警（别把乱码静默当"全开"）。
+const ALLOWED_MODULES = (() => {
+  const raw = String(process.env.ALLOWED_MODULES || "").trim()
+  if (!raw) return Object.keys(MODULE_DEFS)
+  const ids = raw.split(",").map((s) => s.trim()).filter((s) => MODULE_DEFS[s])
+  if (!ids.length) { console.warn(`[modules] ALLOWED_MODULES 配置非法：${JSON.stringify(raw)} → 回落到仅 chat，请修正 users/<名>.env 的 MODULES`); return ["chat"] }
+  return ids
+})()
+// 会话 → 模块 绑定表（持久化在 ocdata 卷，容器重建不丢；与 quota.json 同目录）
+const MODULE_MAP_FILE = path.join(os.homedir(), ".local", "share", "opencode", "module-map.json")
+let _modMap = null
+const moduleMap = () => {
+  if (_modMap) return _modMap
+  try { _modMap = JSON.parse(fs.readFileSync(MODULE_MAP_FILE, "utf8")) || {} } catch { _modMap = {} }
+  return _modMap
+}
+const saveModuleMap = () => { try { fs.mkdirSync(path.dirname(MODULE_MAP_FILE), { recursive: true }); fs.writeFileSync(MODULE_MAP_FILE, JSON.stringify(_modMap || {})) } catch (e) { console.warn(`[modules] 绑定表写入失败：${e.message}`) } }
+const sessionModule = (sid) => moduleMap()[safeSid(sid)] || "chat"   // 未登记的老会话一律按 chat
+const bindSessionModule = (sid, modId) => { moduleMap()[safeSid(sid)] = modId; saveModuleMap() }
+const unbindSessionModule = (sid) => { if (moduleMap()[safeSid(sid)]) { delete moduleMap()[safeSid(sid)]; saveModuleMap() } }
+// 受限模块的会话前言：与工作区前言同一个块注入（中间不能有空行——stripPreamble 按"第一个空行"剥离）
+const modulePreamble = (modId) => {
+  const m = MODULE_DEFS[modId]
+  if (!m || !m.skill) return ""
+  return `\n- **【模块限制，最高优先级，覆盖 AGENTS.md 的一切路由规则】本会话是「${m.name}」专用模块**：你【只允许】调用一个技能——\`${m.skill}\`，禁止调用任何其它技能，也禁止用 task/子代理间接调用其它技能。\n- 不做任何流水线编排（不选题、不检索、不统计、不排版……），缺信息就直接向用户要。\n- 用户的需求超出「${m.name}」范围时，明确告知“本模块只负责${m.name}，其它需求请到「自由对话」模块”，不要自己徒手代替其它技能去做。\n- 网关会强制校验技能调用：一旦调用 \`${m.skill}\` 之外的技能，本轮会被立即中止。`
+}
+
 // HTTP 响应头只能承载 latin1：中文文件名直接塞进 Content-Disposition 会 ERR_INVALID_CHAR → 下载必 500。
 // 按 RFC 5987 同时给两份：ASCII 兜底名（老客户端读它；剔掉引号、反斜杠、控制字符与非 ASCII 字节）
 // 与 filename*=UTF-8''<百分号编码>（现代浏览器优先读它，中文名原样还原）。
@@ -713,10 +754,12 @@ async function clearStaleRevert(sid) {
   return false
 }
 const sseWrite = (res, ev, data) => { try { res.write(`event: ${ev}\ndata: ${JSON.stringify(data)}\n\n`) } catch {} }
-function startJob(sid, sentText) {
+function startJob(sid, sentText, modId) {
   // 新一轮 prompt 就是回退的提交动作（opencode 收到新消息会把 revert 标记清成 null），
   // 待提交登记到此结束；之后再出现的 revert 标记就真是残留了，交还给 clearStaleRevert 自愈。
   pendingReverts.delete(sid)
+  // 模块闸的判据：受限模块只允许这一个技能名；null = 不设限（chat / 未传 modId 的兼容路径）
+  const onlySkill = MODULE_DEFS[modId]?.skill || null
   const job = {
     sid, running: true, finished: false, subs: new Set(),
     // 增量快照：text 是累积全文、reasoning 按 id、tool 按 callID 各存最新一条，attach 时按序重放即可还原界面
@@ -853,11 +896,27 @@ function startJob(sid, sentText) {
           }
           emitLive(true)
           updateRunning()
-        } else if (p.type === "tool" && p.state?.status) broadcast("tool", {
-          callID: p.callID, tool: p.tool, status: p.state.status,
-          title: p.state.title || "",
-          skill: p.tool === "skill" ? (p.state.input?.name || null) : null,   // 技能名（running/completed 才有）
-        })
+        } else if (p.type === "tool" && p.state?.status) {
+          // ---- 模块闸（强制层，不靠提示词自觉）----
+          // 受限模块的会话里，技能调用只放行绑定的那一个：调了别的技能、或试图用 task 子代理绕道
+          // （子代理的技能调用发生在子会话里，本循环按 sessionID 过滤看不见，所以整个 task 工具都得禁），
+          // 立即 abort 本轮。prompt 返回后统一广播"模块限制"报错（见下方 moduleHit 分支）。
+          // tools:{task:false} 已在 prompt 参数里把子代理禁掉，这里的 task 分支是双保险。
+          if (onlySkill && !job.moduleHit) {
+            const bad = (p.tool === "skill" && p.state.input?.name && p.state.input.name !== onlySkill) ? p.state.input.name
+              : (p.tool === "task" ? "task(子代理)" : null)
+            if (bad) {
+              job.moduleHit = bad
+              console.warn(`[modules] 会话 ${sid}（模块 ${modId}）调用了越权技能/工具：${bad}，中止本轮`)
+              client.session.abort({ path: { id: sid } }).catch(() => {})
+            }
+          }
+          broadcast("tool", {
+            callID: p.callID, tool: p.tool, status: p.state.status,
+            title: p.state.title || "",
+            skill: p.tool === "skill" ? (p.state.input?.name || null) : null,   // 技能名（running/completed 才有）
+          })
+        }
       }
     })().catch((e) => {
       // 事件流是估算/封顶/直播的共同前提，异常死亡绝不能静默——上次这条链路无声死掉（/event 订阅
@@ -870,7 +929,8 @@ function startJob(sid, sentText) {
     job.cost0 = cost0   // 挂到 job 上：容器停机时 gracefulExit 要用它把本轮已花的钱结算掉（见文件末尾）
     let result, promptErr = null
     try {
-      result = un(await client.session.prompt({ path: { id: sid }, body: { model: MODEL, parts: [{ type: "text", text: sentText }] } }))
+      // 受限模块：从工具层面禁掉 task 子代理（子会话里的技能调用逃逸出上面的模块闸，索性不让开子代理）
+      result = un(await client.session.prompt({ path: { id: sid }, body: { model: MODEL, parts: [{ type: "text", text: sentText }], ...(onlySkill ? { tools: { task: false } } : {}) } }))
     } catch (err) { promptErr = err }
     // 无论正常结束 / 被额度中止 / 被用户终止，都把本轮成本记进今日额度——否则中止的轮不计费，用户可无限重试绕过额度。
     // 真实增量（session.cost 只含完成步）+ 估算兜底（cost=0 的消息 = 被 abort 的那一步，opencode 对它记
@@ -899,6 +959,7 @@ function startJob(sid, sentText) {
       }
     }
     if (job.aborting) return finish()                       // 用户显式终止：job.abort 已广播 aborted
+    if (job.moduleHit) { broadcast("failed", { message: `模块限制：本会话是「${MODULE_DEFS[modId]?.name || modId}」专用模块，只能使用「${onlySkill}」技能；检测到调用「${job.moduleHit}」，本轮已中止。此类需求请到「自由对话」模块新开会话。` }); return finish() }
     if (job.quotaHit) { broadcast("failed", { message: `本轮已达今日额度上限（$${DAILY_COST_LIMIT.toFixed(2)}），已自动中止；明日 0 点(UTC)恢复。` }); return finish() }
     if (promptErr) {
       if (job.finished) return finish()
@@ -1122,7 +1183,7 @@ const server = http.createServer(async (req, res) => {
         .filter((s) => !s.parentID)
         .sort((a, b) => (b.time?.updated || 0) - (a.time?.updated || 0))
         .slice(0, 10)
-        .map((s) => ({ id: s.id, title: s.title || "(未命名)", updated: s.time?.updated || 0, running: !!jobs.get(s.id)?.running }))
+        .map((s) => { const mod = sessionModule(s.id); return { id: s.id, title: s.title || "(未命名)", updated: s.time?.updated || 0, running: !!jobs.get(s.id)?.running, module: mod, moduleName: MODULE_DEFS[mod]?.name || mod } })
       return send(res, 200, "application/json", JSON.stringify(list))
     }
 
@@ -1167,6 +1228,7 @@ const server = http.createServer(async (req, res) => {
       try { await client.session.delete({ path: { id } }) } catch (e) { return send(res, 500, "application/json", JSON.stringify({ ok: false, err: String(e) })) }
       try { fs.rmSync(delUp, { recursive: true, force: true }); fs.rmSync(delOut, { recursive: true, force: true }); dirCache.delete(safeSid(id)) } catch {}   // 删会话即释放其 uploads/outputs 占用的空间
       pendingReverts.delete(id)   // 已删会话的待提交登记没人再消费，别驻留到进程重启
+      unbindSessionModule(id)     // 模块绑定同样随会话删除，别在持久表里越积越多
       return send(res, 200, "application/json", JSON.stringify({ ok: true }))
     }
 
@@ -1270,6 +1332,11 @@ const server = http.createServer(async (req, res) => {
       // 只回布尔，不带模型名——这是个公开端点（见 PUBLIC_PATHS 的说明），没必要对外透露用的哪个模型
       return send(res, ocOk ? 200 : 503, "application/json", JSON.stringify({ gateway: true, opencode: ocOk }))
     }
+    // 功能模块清单：全部模块 + 本账号是否开通（前端据此渲染模块选择卡；未开通的置灰）
+    if (req.method === "GET" && u.pathname === "/api/modules") {
+      const list = Object.entries(MODULE_DEFS).map(([id, m]) => ({ id, name: m.name, desc: m.desc, skill: m.skill, allowed: ALLOWED_MODULES.includes(id) }))
+      return send(res, 200, "application/json", JSON.stringify({ modules: list }))
+    }
     if (req.method === "GET" && u.pathname === "/api/quota") {   // 前端显示今日额度用量（含在跑轮的实时成本）
       return send(res, 200, "application/json", JSON.stringify({ used: quotaUsedLive(), limit: DAILY_COST_LIMIT }))
     }
@@ -1289,13 +1356,22 @@ const server = http.createServer(async (req, res) => {
         if (total > 4_000_000) return sendClose(res, 413, "application/json", JSON.stringify({ ok: false, sent: false, err: "消息过长（超过 4MB）" }))   // 从 for-await 里提前 return → body 未读完，必须关连接
         chunks.push(c)
       }
-      let q = "", sid = null
-      try { const b = JSON.parse(Buffer.concat(chunks).toString() || "{}"); q = String(b.q ?? ""); sid = b.sid ? String(b.sid) : null } catch {}
+      let q = "", sid = null, reqMod = ""
+      try { const b = JSON.parse(Buffer.concat(chunks).toString() || "{}"); q = String(b.q ?? ""); sid = b.sid ? String(b.sid) : null; reqMod = String(b.module || "") } catch {}
       if (!q.trim()) return send(res, 400, "application/json", JSON.stringify({ ok: false, sent: false, err: "消息为空" }))
+      // ---- 模块裁定 ----
+      // 续会话：绑定在创建时已定死，忽略前端传值（防伪造请求把受限会话"升级"成 chat）。
+      // 新会话：用请求的模块（缺省 chat），必须是已知且授权的模块。
+      // 授权在这里查而不是只在创建时查：管理员收权后容器会被重建（env 变更即重建），
+      // 老会话若绑着已收权的模块，续聊也要挡住。
+      let modId = sid ? sessionModule(sid) : (reqMod || "chat")
+      if (!MODULE_DEFS[modId]) return send(res, 400, "application/json", JSON.stringify({ ok: false, sent: false, err: `未知模块：${modId}` }))
+      if (!ALLOWED_MODULES.includes(modId))
+        return send(res, 403, "application/json", JSON.stringify({ ok: false, sent: false, err: `你的账号未开通「${MODULE_DEFS[modId].name}」模块${sid ? "（本会话绑定于该模块）" : ""}，请联系管理员开通。` }))
       // 新会话要先向 opencode 建会话；它没起来时这里会抛，此前会被外层 catch 变成一个带堆栈的 500，
       // 用户只看到"发送失败"，根本不知道是后台模型服务没起来。这里单独兜住并给人话。
       if (!sid) {
-        try { sid = await createSession(q.slice(0, 40)); titledSessions.add(sid) }
+        try { sid = await createSession(q.slice(0, 40)); titledSessions.add(sid); if (modId !== "chat") bindSessionModule(sid, modId) }
         catch {
           const ocOk = await ocHealthy()
           return send(res, 503, "application/json", JSON.stringify({ ok: false, sent: false,
@@ -1314,9 +1390,9 @@ const server = http.createServer(async (req, res) => {
       // 给 agent 注入本会话专属目录，覆盖技能默认的 outputs/，实现多用户/多会话隔离
       // 注意：本会话的工作目录（cwd）已在建会话时通过 opencode 的 session.directory 定在【会话产物目录】，
       // 所以 agent 的所有工具默认就在正确的地方读写，preamble 只需说清"当前目录就是产物目录"与几个绝对路径。
-      const preamble = `${PREAMBLE_MARK}\n- **你的当前工作目录就是本会话的产物目录**（\`${ws.out}\`）。所有产物（图表 PNG/PDF、CSV/Excel、md/docx 等）**直接写到当前目录即可**，用相对文件名如 \`fig1.png\`、\`manuscript.md\`，不要再自己拼 \`outputs/xxx\` 前缀。\n- 临时脚本、中间文件同样写当前目录（要归拢可用 \`./.scratch/\`）。\n- 用户上传的数据文件在 \`${ws.up}/\`（读数据从这里找，用这个绝对路径）。\n- 跑本套件的脚本用 \`\${REPO_ROOT:-/app}\` 前缀定位仓库，例如 \`\${REPO_ROOT:-/app}/.venv/bin/python \${REPO_ROOT:-/app}/.opencode/skills/<技能>/xxx.py\`——因为当前目录不是仓库根，写 \`.venv/...\` 这种相对路径会找不到。\n- 正文里嵌入图片直接用文件名：\`![图注](fig1.png)\`（图和稿件都在当前目录，渲染也从当前目录跑）。\n- **不要把产物写到仓库根或 \`\${REPO_ROOT:-/app}\` 下**：那是所有会话共享的，会互相覆盖，也不会出现在界面的"产出"侧栏。\n\n`
-      startJob(sid, preamble + q)   // 同步建 job（jobs.set 在函数首行）→ 返回后前端 attach 必能接上
-      return send(res, 200, "application/json", JSON.stringify({ ok: true, sid, sent: true }))
+      const preamble = `${PREAMBLE_MARK}\n- **你的当前工作目录就是本会话的产物目录**（\`${ws.out}\`）。所有产物（图表 PNG/PDF、CSV/Excel、md/docx 等）**直接写到当前目录即可**，用相对文件名如 \`fig1.png\`、\`manuscript.md\`，不要再自己拼 \`outputs/xxx\` 前缀。\n- 临时脚本、中间文件同样写当前目录（要归拢可用 \`./.scratch/\`）。\n- 用户上传的数据文件在 \`${ws.up}/\`（读数据从这里找，用这个绝对路径）。\n- 跑本套件的脚本用 \`\${REPO_ROOT:-/app}\` 前缀定位仓库，例如 \`\${REPO_ROOT:-/app}/.venv/bin/python \${REPO_ROOT:-/app}/.opencode/skills/<技能>/xxx.py\`——因为当前目录不是仓库根，写 \`.venv/...\` 这种相对路径会找不到。\n- 正文里嵌入图片直接用文件名：\`![图注](fig1.png)\`（图和稿件都在当前目录，渲染也从当前目录跑）。\n- **不要把产物写到仓库根或 \`\${REPO_ROOT:-/app}\` 下**：那是所有会话共享的，会互相覆盖，也不会出现在界面的"产出"侧栏。${modulePreamble(modId)}\n\n`
+      startJob(sid, preamble + q, modId)   // 同步建 job（jobs.set 在函数首行）→ 返回后前端 attach 必能接上
+      return send(res, 200, "application/json", JSON.stringify({ ok: true, sid, sent: true, module: modId }))
     }
 
     // 重新订阅某会话进行中的一轮（切回会话/重开页面时续流）；没有进行中的轮次则回 idle

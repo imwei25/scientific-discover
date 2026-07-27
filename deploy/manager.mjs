@@ -597,6 +597,17 @@ function loadTiers() {
   return out
 }
 const userEnv = (name) => { try { return parseEnvFile(path.join(USERS_DIR, name + ".env")) } catch { return {} } }
+// 功能模块授权（与 web/server.mjs 的 MODULE_DEFS、scripts/user-modules.sh 的 ALL_MODULES 三处同步维护）。
+// manager 只负责展示与改写授权（users/<名>.env 的 MODULES 行）；真正的 enforcement 在容器网关：
+// 授权注入容器 env（ALLOWED_MODULES），受限模块的技能调用由网关事件流强制校验。
+const MODULE_TABLE = [
+  { id: "chat",     name: "自由对话",       short: "对话" },
+  { id: "grant",    name: "标书撰写",       short: "标书" },
+  { id: "refcheck", name: "文献真实性检查", short: "查引用" },
+  { id: "humanize", name: "去AI味写作",     short: "去AI味" },
+]
+// 某用户已授权的模块 id 列表；空数组 = 未设 MODULES = 全部模块（与容器网关的默认一致）
+const userModules = (name) => (userEnv(name).MODULES || "").split(",").map((s) => s.trim()).filter((s) => MODULE_TABLE.some((m) => m.id === s))
 // 解析某用户实际额度：显式覆盖 > 档位 > 0（与 render-compose.sh 一致）
 function resolveLimits(name) {
   const e = userEnv(name)
@@ -697,6 +708,7 @@ h2{font-size:14px;margin:0 0 14px}.hint{color:var(--mut);font-weight:400;font-si
 table{width:100%;border-collapse:collapse}th,td{text-align:left;padding:9px 8px;border-bottom:1px solid var(--line);vertical-align:middle}
 th{color:var(--mut);font-weight:500;font-size:12px}td.name{font-weight:600}
 select,input{background:var(--p2);border:1px solid var(--line);color:var(--fg);border-radius:7px;padding:5px 8px;font-size:13px}input.num{width:120px}
+label.mchk{display:inline-flex;align-items:center;gap:3px;margin-right:8px;font-size:12px;color:var(--mut);white-space:nowrap;cursor:pointer}label.mchk input{accent-color:var(--acc)}td.modcell{min-width:210px}
 .btn{border:1px solid var(--line);background:var(--p2);color:var(--fg);border-radius:8px;padding:6px 12px;cursor:pointer;font-size:13px}
 .btn:hover{border-color:var(--acc)}.btn.primary{background:var(--acc);border-color:var(--acc);color:#fff}.btn.bad{border-color:var(--bad);color:#ff9b9b}
 .bar{position:relative;height:7px;border-radius:5px;background:var(--p2);overflow:hidden;min-width:110px;margin-top:4px}.bar>i{position:absolute;inset:0 auto 0 0;background:var(--ok)}.bar.warn>i{background:var(--warn)}.bar.bad>i{background:var(--bad)}
@@ -737,17 +749,30 @@ function renderLogin(err){app.innerHTML='';const box=$('<section id="login"><h2>
 
 async function load(){let d;try{d=await api('overview')}catch(e){return renderLogin('')}
   TIERS=d.tiers||[]
+  const MODT=d.moduleTable||[]
   try{const gm=await api('gateway/models');MODELS=(gm&&gm.models)||[]}catch(e){MODELS=[]}
   app.innerHTML=''
   app.appendChild($('<header><h1>用户管理台</h1><span class="hint">额度=USD/天（含缓存折扣），UTC 0点重置；同时在跑上限 '+d.warmCap+'</span><span class="sp"></span><button class="btn" id="reload">刷新</button><button class="btn" id="logout">退出</button></header>'))
   const main=$('<main><div class="msg" id="msg"></div></main>')
   // 用户表
-  const us=$('<section><h2>用户<span class="hint">改档位即时重建容器生效；删除保留数据，勾选彻底删则先备份再删卷</span></h2><table><thead><tr><th>用户</th><th>档位</th><th>今日成本/额度</th><th>存储</th><th>状态</th><th></th></tr></thead><tbody id="ut"></tbody></table></section>')
+  const us=$('<section><h2>用户<span class="hint">改档位/模块即时重建容器生效；删除保留数据，勾选彻底删则先备份再删卷</span></h2><table><thead><tr><th>用户</th><th>档位</th><th>模块</th><th>今日成本/额度</th><th>存储</th><th>状态</th><th></th></tr></thead><tbody id="ut"></tbody></table></section>')
   main.appendChild(us)
   const tb=us.querySelector('#ut')
   d.users.forEach(u=>{const stat=u.suspended?'<span class="pill" style="color:#ff9b9b;border-color:#a55">已停用</span>':(u.active?'<span class="pill act">活跃</span>':u.running?'<span class="pill run">运行</span>':'<span class="pill">停</span>');
-    const tr=$('<tr><td class="name">'+u.name+'</td><td><select class="ts">'+tierOpts(u.tier)+'</select></td><td>'+bar(u.todayCost,u.daily)+'</td><td>'+sbar(u.storageUsedMB,u.storage)+'</td><td>'+stat+'</td><td style="white-space:nowrap"><button class="btn save">保存</button> <button class="btn susp">'+(u.suspended?'恢复':'停用')+'</button> <button class="btn bad del">删</button></td></tr>')
-    tr.querySelector('.save').onclick=async()=>{const tier=tr.querySelector('.ts').value;const j=await api('tier',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:u.name,tier})});toast(j.ok?(u.name+' → '+tier+'（已重建生效）'):(j.out||'失败'),j.ok);if(j.ok)load()}
+    const modcell=MODT.map(m=>{const on=(!u.modules||!u.modules.length)||u.modules.indexOf(m.id)>=0;return '<label class="mchk" title="'+m.name+'"><input type="checkbox" data-m="'+m.id+'"'+(on?' checked':'')+'>'+m.short+'</label>'}).join('')
+    const tr=$('<tr><td class="name">'+u.name+'</td><td><select class="ts">'+tierOpts(u.tier)+'</select></td><td class="modcell">'+modcell+'</td><td>'+bar(u.todayCost,u.daily)+'</td><td>'+sbar(u.storageUsedMB,u.storage)+'</td><td>'+stat+'</td><td style="white-space:nowrap"><button class="btn save">保存</button> <button class="btn susp">'+(u.suspended?'恢复':'停用')+'</button> <button class="btn bad del">删</button></td></tr>')
+    tr.querySelector('.save').onclick=async()=>{
+      const tier=tr.querySelector('.ts').value
+      const sel=[].slice.call(tr.querySelectorAll('.mchk input')).filter(x=>x.checked).map(x=>x.dataset.m)
+      if(!sel.length)return toast('至少保留一个模块',0)
+      const orig=(!u.modules||!u.modules.length)?MODT.map(m=>m.id):u.modules
+      const modsChanged=sel.length!==orig.length||sel.some(m=>orig.indexOf(m)<0)
+      const tierChanged=tier!==u.tier
+      if(!tierChanged&&!modsChanged)return toast('没有改动',0)
+      let ok=true,out=''
+      if(tierChanged){const j=await api('tier',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:u.name,tier})});ok=j.ok;out=j.out||''}
+      if(ok&&modsChanged){const j=await api('modules',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:u.name,modules:sel})});ok=j.ok;out=j.out||j.err||out}
+      toast(ok?(u.name+' 已保存（容器已重建生效）'):(out||'失败'),ok);if(ok)load()}
     tr.querySelector('.susp').onclick=async()=>{const on=!u.suspended;if(on&&!confirm('停用 '+u.name+'？将立即停其容器、踢下线，数据保留，恢复后照常。'))return;const j=await api('suspend',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:u.name,suspend:on})});toast(j.ok?(u.name+(on?' 已停用':' 已恢复')):(j.err||'失败'),j.ok);if(j.ok)load()}
     tr.querySelector('.del').onclick=async()=>{const purge=confirm('删除用户 '+u.name+'。\\n\\n确定=保留数据卷（可复原）\\n取消后可再选彻底删。\\n\\n点“确定”仅移除容器与配置，保留数据。');if(!purge&&!confirm('改为【彻底删除】'+u.name+' 连同其所有数据卷？此操作先自动备份再删，不可逆。'))return;const hard=!purge;const j=await api('user-del',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:u.name,purge:hard})});toast(j.ok?('已删除 '+u.name+(hard?'（含数据）':'（留数据）')):(j.out||'失败'),j.ok);if(j.ok)load()}
     tb.appendChild(tr)})
@@ -805,15 +830,27 @@ async function handleAdmin(req, res, pathname) {
     for (const [name, u] of users) {
       const lim = resolveLimits(name)
       list.push({ name, tier: lim.tier, daily: lim.daily, storage: lim.storage,
-        todayCost: await todayCost(name), storageUsedMB: await storageUsedMB(name),
+        todayCost: await todayCost(name), storageUsedMB: await storageUsedMB(name), modules: userModules(name),
         running: (await isRunning(u.container)) === true, active: u.conns > 0, suspended: !!u.suspended })
     }
-    return json(200, { tiers: loadTiers(), users: list, warmCap: WARM_CAP })
+    return json(200, { tiers: loadTiers(), users: list, warmCap: WARM_CAP, moduleTable: MODULE_TABLE })
   }
   if (req.method === "POST" && pathname === "/admin/api/tier") {
     const b = await readBody(req)
     const r = await runScript("user-tier.sh", [String(b.name || ""), String(b.tier || "")])
     loadUsers(); audit("admin.tier", { ip: clientIp(req), name: b.name, tier: b.tier, ok: r.code === 0 })
+    return json(r.code === 0 ? 200 : 400, { ok: r.code === 0, out: (r.stdout + r.stderr).trim() })
+  }
+  // 改某用户的功能模块授权（改写 users/<名>.env 的 MODULES → 重渲染 → 重建容器即时生效）
+  if (req.method === "POST" && pathname === "/admin/api/modules") {
+    const b = await readBody(req)
+    const name = String(b.name || "").trim()
+    const ids = Array.isArray(b.modules) ? b.modules.map(String).filter((m) => MODULE_TABLE.some((x) => x.id === m)) : []
+    if (!users.has(name)) return json(400, { ok: false, err: "无此用户" })
+    if (!ids.length) return json(400, { ok: false, err: "至少保留一个模块" })
+    const csv = ids.length === MODULE_TABLE.length ? "all" : ids.join(",")
+    const r = await runScript("user-modules.sh", [name, csv])
+    loadUsers(); audit("admin.modules", { ip: clientIp(req), name, modules: csv, ok: r.code === 0 })
     return json(r.code === 0 ? 200 : 400, { ok: r.code === 0, out: (r.stdout + r.stderr).trim() })
   }
   if (req.method === "POST" && pathname === "/admin/api/user-add") {

@@ -63,6 +63,9 @@ QUOTA_TOKEN=$(openssl rand -hex 24)
 # 个别加码/收紧（覆盖档位）：取消注释并填值，USD/天、MB，0=不限；改后 render-compose.sh + docker restart agent-$name
 #DAILY_COST_LIMIT=
 #STORAGE_LIMIT_MB=
+# 功能模块授权（逗号分隔；空/缺省=全部）：chat=自由对话 grant=标书撰写 refcheck=文献真实性检查 humanize=去AI味写作
+# 改授权用 scripts/user-modules.sh $name <列表|all>（会自动重建容器生效）
+#MODULES=
 EOF
 echo "写入 $env（端口 $port，档位 $tier）"
 
