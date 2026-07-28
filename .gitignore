@@ -41,3 +41,6 @@ deploy/tiers.env
 deploy/backups/
 backups/
 sci-agent-backup-*.tar.gz
+
+# Word/Excel 打开文件时生成的锁文件，别进库
+~$*
