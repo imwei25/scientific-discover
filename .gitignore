@@ -47,3 +47,6 @@ desktop/launcher/gen/
 deploy/backups/
 backups/
 sci-agent-backup-*.tar.gz
+
+# Office 锁文件（Word 打开 docx 期间的临时文件）
+~$*
