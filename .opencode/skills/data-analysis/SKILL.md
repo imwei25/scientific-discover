@@ -41,6 +41,7 @@ ${REPO_ROOT:-/app}/.venv/bin/python analysis.py
 > **交付统计结论 / 写 Methods/Results 前，逐条过 [references/stat-reporting-checklist.md](references/stat-reporting-checklist.md)（顶刊统计报告清单，强制）。** 下面是要点，细则与格式看清单。
 - 始终报**效应量 + 95% 置信区间 + 精确 p 值 + 样本量 n**，不要只写 `p<0.05`（95%CI 优先于单独 p）。**效应量怎么算**：两组均值差用 **Cohen's d / Hedges' g**（小样本用 g）、相关用 **Pearson r 的 Fisher-z 95%CI**——scipy 不直接给，用 `scripts/stat_extras.py` 的 `cohens_d` / `hedges_g` / `pearson_r_ci`。
 > **固化实现 `scripts/stat_extras.py`**（只依赖 numpy/scipy/sklearn）：方法比对(Bland-Altman/Passing-Bablok/Deming)、诊断 CI(DeLong/bootstrap AUC、Wilson 比例)、效应量(Cohen's d/Hedges' g/Pearson r-CI)。这些库不直接给或手写易错，**优先 import 调用、别每次现写**。跑 `python scripts/stat_extras.py` 可看自检（已知构造能否还原）。
+- **任何 n 都只能取自代码输出**：样本量、分组例数及结论里出现的每一个 n，一律来自脚本打印结果（`df.shape`、`df.groupby(组变量).size()`、`value_counts()`），**禁止目测 / 手数 / 按数据文件行数推断**（文件行数含表头，直接用会多算 1 例）。写进结论、报告或交给下游技能（write-paper / render-*）的 n 必须与脚本打印值逐一一致；发现不一致以脚本输出为准，重跑核对后再成文。
 - 数字格式统一：p 值 2–3 位有效数字、`<0.001` 不写 0.000；OR/RR/HR 保留 2 位小数 + 95%CI；百分比 1 位小数 + 分子/分母。
 - 连续变量按分布报 `均数±标准差` 或 `中位数[IQR]`；分类变量报 `n (%)`。
 - 说明缺失值如何处理、是否做了多重比较校正；软件及版本、显著性水平与单双侧写进 Methods。

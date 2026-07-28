@@ -485,6 +485,25 @@
     </div>
   </div>
 </div>
+<div id="apiModal" class="modal">
+  <div class="modal-card" style="max-width:420px">
+    <div class="modal-head">
+      <span class="modal-title">模型 API 设置</span>
+      <button class="modal-x" id="apiClose" type="button" title="关闭"></button>
+    </div>
+    <div class="modal-body">
+      <label class="mm-field"><span>API 地址（OpenAI 兼容 baseURL）</span><input id="apiUrl" class="mm-input" type="text" placeholder="如 https://api.deepseek.com" autocomplete="off" spellcheck="false" /></label>
+      <label class="mm-field"><span>API Key</span><input id="apiKey" class="mm-input" type="password" autocomplete="off" /></label>
+      <label class="mm-field"><span>模型 ID</span><input id="apiModel" class="mm-input" type="text" placeholder="如 deepseek-chat" autocomplete="off" spellcheck="false" /></label>
+      <div class="mm-msg info" id="apiMsg"></div>
+      <div class="mm-actions">
+        <button id="apiTest" class="mm-btn ghost" type="button">测试连通</button>
+        <button id="apiSave" class="mm-btn primary" type="button">保存并生效</button>
+      </div>
+      <div class="mm-hint">保存会重启后台模型进程（几秒）。以后在对话框输入 <b>api-config</b> 可随时打开本窗口。</div>
+    </div>
+  </div>
+</div>
 <script>
 const log = document.getElementById("log")
 const f = document.getElementById("f")
@@ -1265,7 +1284,81 @@ function openStream(url) {
     setTimeout(() => { if (sid === sessionId && !activeES) attachStream(sid) }, 2500)
   }
 }
-f.addEventListener("submit", (e) => { e.preventDefault(); const t = q.value.trim(); q.value = ""; sendMessage(t) })
+// ---- 模型 API 设置弹窗：聊天框输入 api-config 唤起（桌面版/单机版没有别的入口）----
+const apiModal = document.getElementById("apiModal")
+const apiMsgEl = document.getElementById("apiMsg")
+const apiSetMsg = (t, m) => { apiMsgEl.className = "mm-msg " + t; apiMsgEl.textContent = m }
+async function openApiCfg() {
+  apiSetMsg("info", "")
+  document.getElementById("apiKey").value = ""
+  apiModal.classList.add("on")
+  // 预填当前配置（key 出于安全不回显；hasKey 时用占位提示）
+  try {
+    const m = await (await fetch("api/model", { signal: AbortSignal.timeout(8000) })).json()
+    if (m && m.baseURL) document.getElementById("apiUrl").value = m.baseURL
+    if (m && m.isCustom && m.modelID) document.getElementById("apiModel").value = m.modelID
+    document.getElementById("apiKey").placeholder = (m && m.hasKey) ? "已保存（不回显；保存需重新粘贴）" : ""
+  } catch {}
+  document.getElementById("apiUrl").focus()
+}
+function closeApiCfg() { apiModal.classList.remove("on") }
+document.getElementById("apiClose").addEventListener("click", closeApiCfg)
+apiModal.addEventListener("click", (e) => { if (e.target === apiModal) closeApiCfg() })
+document.addEventListener("keydown", (e) => { if (e.key === "Escape" && apiModal.classList.contains("on")) closeApiCfg() })
+const apiFields = () => ({
+  baseURL: document.getElementById("apiUrl").value.trim(),
+  apiKey: document.getElementById("apiKey").value.trim(),
+  modelID: document.getElementById("apiModel").value.trim(),
+})
+document.getElementById("apiTest").addEventListener("click", async () => {
+  const b = apiFields()
+  if (!b.baseURL || !b.apiKey || !b.modelID) return apiSetMsg("err", "请填写 API 地址、API Key、模型 ID")
+  const btn = document.getElementById("apiTest"); btn.disabled = true; apiSetMsg("info", "测试中…")
+  try {
+    const r = await (await fetch("api/model/test", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(b) })).json()
+    if (r.ok) apiSetMsg("ok", "连通正常" + (r.ms ? "（" + r.ms + "ms）" : ""))
+    else apiSetMsg("err", "测试失败：" + (r.err || (r.status ? "HTTP " + r.status : "未知错误")))   // err 已含状态码，别重复拼
+  } catch { apiSetMsg("err", "测试失败：网络错误") }
+  finally { btn.disabled = false }
+})
+async function saveApiCfg(force) {
+  const b = apiFields()
+  if (!b.baseURL || !b.apiKey || !b.modelID) return apiSetMsg("err", "请填写 API 地址、API Key、模型 ID")
+  const btn = document.getElementById("apiSave"); btn.disabled = true; apiSetMsg("info", "保存并重启后台中…（约数秒）")
+  try {
+    const r = await (await fetch("api/model", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ...b, force: !!force }) })).json()
+    if (r.ok) {
+      apiSetMsg("ok", "已保存并生效：" + r.modelID + "。页面即将刷新…")
+      setTimeout(() => location.reload(), 1200)   // 刷新让顶部模型 pill 等状态同步
+      return
+    }
+    if (r.needForce) {
+      const yes = confirm("有 " + (r.busy || "若干") + " 轮正在生成中。\n保存要重启后台，会中断它们且无法恢复。\n\n确定继续吗？")
+      btn.disabled = false
+      if (yes) return saveApiCfg(true)
+      apiSetMsg("info", "已取消")
+      return
+    }
+    apiSetMsg("err", "保存失败：" + (r.err || "未知错误"))
+  } catch { apiSetMsg("err", "保存失败：网络错误") }
+  finally { btn.disabled = false }
+}
+document.getElementById("apiSave").addEventListener("click", () => saveApiCfg(false))
+// 首启引导：既没接入网关、也没配过自定义模型（桌面版装完第一次打开的状态）→ 自动弹设置窗。
+// 云端多用户部署恒有 gateway，不会触发。
+;(async () => {
+  try {
+    const m = await (await fetch("api/model", { signal: AbortSignal.timeout(8000) })).json()
+    if (m && !m.gateway && !m.isCustom) openApiCfg()
+  } catch {}
+})()
+f.addEventListener("submit", (e) => {
+  e.preventDefault()
+  const t = q.value.trim()
+  if (/^\/?api[-_ ]?config$/i.test(t)) { q.value = ""; openApiCfg(); return }   // 快捷指令：不发给模型，唤起设置窗
+  q.value = ""
+  sendMessage(t)
+})
 
 // ---- 上传空间：点击/拖拽多选上传 + 常驻文件列表 ----
 const upmsgEl = document.getElementById("upmsg")
