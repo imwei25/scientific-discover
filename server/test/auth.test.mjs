@@ -371,6 +371,36 @@ test("后台：额度覆盖校验；单用户用量明细接口", async (t) => {
   assert.deepEqual(d.json.detail, [])
 })
 
+test("后台页面：自包含、无外部资源、带上界面依赖的挂载点", async (t) => {
+  const { app } = await setup(); t.after(() => app.close())
+  const r = await app.req("/admin")
+  assert.equal(r.status, 200)
+  assert.match(r.headers["content-type"], /text\/html/)
+  // 页面必须完全自包含：CSP 严格环境与离线运维都指望这一点
+  assert.equal(/<script[^>]+src=/.test(r.text), false, "不许有外链脚本")
+  assert.equal(/<link[^>]+stylesheet/.test(r.text), false, "不许有外链样式")
+  assert.equal(/https?:\/\/(?!127\.0\.0\.1|localhost)/.test(r.text.replace(/xmlns="[^"]*"/g, "")), false, "不许有外部 URL")
+  // 界面靠这些 id/接口工作，改名要连着改，这里钉住
+  for (const hook of ["id=\"q\"", "id=\"add\"", "id=\"msg\"", "id=\"dlg\"", "data-a=\"edit\"", "data-a=\"usage\"", "data-a=\"susp\"", "data-a=\"more\""])
+    assert.ok(r.text.includes(hook), `缺少界面挂载点 ${hook}`)
+  for (const ep of ["overview?q=", "user-add", "user-update", "suspend", "reset-password", "reset-key", "user-del", "user-usage?id=", "tier", "audit", "login", "logout"])
+    assert.ok(r.text.includes(ep), `界面引用了不存在的接口路径 ${ep}`)
+  // 提示条必须在 #app 之外，否则一刷新列表就被冲掉、用户看不到"已保存"
+  const msgAt = r.text.indexOf('class="msg" id="msg"'), appAt = r.text.indexOf('<main id="app">')
+  assert.ok(msgAt >= 0 && appAt >= 0 && msgAt < appAt, "提示条要在 #app 之前、之外")
+})
+
+test("后台：默认列表按最近活跃倒序（中文码点序对运维没意义）", async (t) => {
+  const { app, admin } = await setup(); t.after(() => app.close())
+  for (const [un, dn] of [["ua", "张三"], ["ub", "李四"], ["uc", "王五"]])
+    await admin("/admin/api/user-add", { method: "POST", body: { username: un, displayName: dn } })
+  const ids = Object.fromEntries(app.db.prepare("SELECT username,id FROM users").all().map((r) => [r.username, r.id]))
+  app.db.prepare("UPDATE users SET last_seen_at=? WHERE id=?").run(Date.now() - 5000, ids.ua)
+  app.db.prepare("UPDATE users SET last_seen_at=? WHERE id=?").run(Date.now(), ids.uc)
+  const r = await admin("/admin/api/overview")
+  assert.deepEqual(r.json.users.map((u) => u.username), ["uc", "ua", "ub"])
+})
+
 test("后台：审计留痕", async (t) => {
   const { app, admin } = await setup(); t.after(() => app.close())
   const u = await makeReadyUser(app, admin)

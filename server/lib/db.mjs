@@ -227,8 +227,11 @@ export function deleteUser(db, id) {
 export function searchUsers(db, q, { limit = 200, offset = 0 } = {}) {
   const kw = String(q || "").trim()
   if (!kw) {
-    return db.prepare(`SELECT * FROM users ORDER BY surname, display_name, username LIMIT ? OFFSET ?`)
-      .all(limit, offset)
+    // 不带关键词时按【最近活跃】倒序：中文姓名按 UTF-8 码点排序等于随机顺序，对运维毫无意义；
+    // 而"谁最近在用"是管理员打开列表最常想先看到的。没活跃过的按创建时间兜底。
+    return db.prepare(`SELECT * FROM users
+      ORDER BY COALESCE(last_seen_at, last_login_at, 0) DESC, created_at DESC, id DESC
+      LIMIT ? OFFSET ?`).all(limit, offset)
   }
   const esc = kw.replace(/[\\%_]/g, (c) => "\\" + c)
   const like = `%${esc}%`, pre = `${esc}%`
