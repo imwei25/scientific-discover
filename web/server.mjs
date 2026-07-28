@@ -589,10 +589,17 @@ const soffice = () => {
   return _soffice
 }
 const execFileAsync = promisify(execFile)
-// 每次用独立 UserInstallation profile，避免多用户并发时 profile 锁冲突。
-// 返回 profile 目录供调用方【用完删掉】：LibreOffice 每次会在里面铺一整套配置树（数 MB），
-// 不删就随每次预览/预热在容器可写层里越积越多（超时被 kill 的那次同样会留下）。
-// outDir 用【每次唯一】的临时子目录，而不是共享的 cacheDir：
+// UserInstallation profile 用【固定持久目录】，不再每次新建又删掉。
+// 为什么改：空 profile 会让 LibreOffice 走一遍"首次运行"初始化，实测冷启一次 153 秒——比原先
+// 写死的 90 秒超时还长。而"每次新建 profile"等于每次都是冷启，于是 pptx 预览稳定超时
+// （实测 3 次里 2 次 500）。复用同一个 profile 后只有第一次慢，之后是热启（秒级）。
+// 容器同样受益：容器里每次预览也都是冷启。
+// 并发安全：本进程所有 soffice 调用都经下面的 withSoffice 串行闸，同一时刻只有一个 LibreOffice
+// 在用这个 profile，不存在 profile 锁争用（这也是敢复用的前提）。
+// 位置放 homedir/.local/share/opencode/ 下，与 quota.json / module-map.json 等状态文件同族
+// （容器里该目录是每用户独占的持久卷，桌面版是当前用户的家目录）。
+const LO_PROFILE = path.join(os.homedir(), ".local", "share", "opencode", "lo-profile")
+// outDir 仍用【每次唯一】的临时子目录，而不是共享的 cacheDir：
 // soffice 的输出名由【源文件基名】决定（a.pptx → a.pdf），直接写进 cacheDir 的话，
 // "report.pptx" 与 "audit/report.pptx" 会争同一个 .preview/report.pdf。
 // 而串行闸只包住 execFileAsync，改名发生在闸【释放之后】，且 /api/preview 是直接调用、
@@ -603,10 +610,13 @@ const execFileAsync = promisify(execFile)
 // 放在 cacheDir 之下（而非 os.tmpdir()）是为了保证与 out 同一文件系统，rename 才是原子的、
 // 也不会踩 EXDEV。prunePreviewCache 只统计 isFile()，这个临时目录不会被它当成缓存。
 const sofficeJob = (src, cacheDir) => {
-  const profile = path.join(os.tmpdir(), "lo-" + crypto.randomBytes(6).toString("hex"))
+  fs.mkdirSync(LO_PROFILE, { recursive: true })
+  // 上一次若是超时被 SIGKILL 掉的，profile 里会留下 .lock，LibreOffice 下次启动会把它当成
+  // "另一个实例正在跑"。串行闸保证此刻没有别的 soffice 在用它 → 看到的锁一定是残留，删掉。
+  try { fs.rmSync(path.join(LO_PROFILE, ".lock"), { force: true }) } catch {}
   const outDir = path.join(cacheDir, ".conv-" + crypto.randomBytes(6).toString("hex"))
   fs.mkdirSync(outDir, { recursive: true })
-  return { dir: profile, outDir, args: ["--headless", "--norestore", "--convert-to", "pdf", "--outdir", outDir, src, "-env:UserInstallation=file:///" + profile.replace(/\\/g, "/")] }
+  return { outDir, args: ["--headless", "--norestore", "--convert-to", "pdf", "--outdir", outDir, src, "-env:UserInstallation=file:///" + LO_PROFILE.replace(/\\/g, "/")] }
 }
 // ★ 全局串行闸：同一时刻只允许【一个】LibreOffice 在跑。
 // 单个 soffice headless 转 pptx 峰值 300–600MB，而容器 mem_limit 只有 1400–1750m；
@@ -685,9 +695,19 @@ async function ensurePreviewCache(dir, name) {
       // 未必立刻响应。串行闸是在 promise settle 那一刻放行下一个的：若第一个只是"超时被 SIGTERM
       // 但还没死"，第二个就会启动，两个 300–600MB 的进程同时存在于 1400m 的容器里 ——
       // 正是这道闸要防的整容器 OOM-kill。SIGKILL 保证 settle 时进程真的没了。
-      try { await withSoffice(() => execFileAsync(soffice(), job.args, { timeout: 90_000, killSignal: "SIGKILL" })) }   // 排队，绝不并发起两个 LO
-      catch (err) { const e = new Error(String(err).slice(0, 200)); e.code = "office-fail"; throw e }
-      finally { try { fs.rmSync(job.dir, { recursive: true, force: true }) } catch {} }   // 成功/失败/超时都要清掉临时 profile
+      // 240s：profile 固定后一般是热启（秒级），但【第一次】仍要走一遍 LibreOffice 首次运行初始化，
+      // 实测冷启 153 秒——原来的 90 秒必然把首跑掐死，而首跑正是用户装好后点的第一次预览。
+      try { await withSoffice(() => execFileAsync(soffice(), job.args, { timeout: 240_000, killSignal: "SIGKILL" })) }   // 排队，绝不并发起两个 LO
+      catch (err) {
+        // 完整命令行与 stderr 只进服务端日志：原先直接把 String(err) 当错误文案回给前端，界面上就是
+        // "预览失败：转换失败：Error: Command failed: C:/Program Files/LibreOffice/program/soffice.com --headless …"
+        // ——把内部路径和参数原样泄给用户，用户也看不懂。给前端的换成人话（见 /api/preview 的 office-fail 分支）。
+        console.error(`[preview] LibreOffice 转换失败（${src}）：${err?.message || err}${err?.stderr ? "\n[preview] stderr: " + String(err.stderr).slice(0, 2000) : ""}`)
+        const e = new Error("LibreOffice 转换失败")
+        e.code = "office-fail"
+        e.timedOut = err?.killed === true || err?.signal === "SIGKILL"   // 超时被 SIGKILL 与真失败，给用户的话术不同
+        throw e
+      }
       // soffice 按【源文件基名】决定输出名（a.pptx → a.pdf），而我们的缓存名是带哈希的，
       // 两者必然不同，所以要从这次专属的中间目录里把它搬到 out。
       // 中间目录唯一 → 不同请求各写各的，与串行闸的释放时机无关（见 sofficeJob 的说明）。
@@ -733,6 +753,23 @@ const PREAMBLE_RE = new RegExp("^(?:" + _reEsc(PREAMBLE_MARK) + "|" + _reEsc(PRE
 const stripPreamble = (t) => t.replace(PREAMBLE_RE, "")
 
 const jobs = new Map()   // sid -> 进行中的 job
+// ---- 首事件看门狗的超时（ms）----
+// 为什么要有：opencode 打不通上游模型时（API 地址填错 / DNS 解析不了 / 地址黑洞丢包 / 上游连上了
+// 但永不回应），它的 session.prompt 这个 await 可能【十几分钟都不返回】（实测 11 分钟仍 running），
+// 期间网关既不收场也不回显任何错误——前端只剩无限转圈，用户分不清是"模型慢"还是"配置错"，
+// 只有手动点「终止」才救得回来。这道闸把那种假死转成一条人话错误。
+// 【守的是"模型的第一个输出"，不是"本轮的第一个事件"】——这条是实测校准出来的（抓 /global/event 原始流）：
+//   +3.8s session.updated / message.updated(role=user)
+//   +6.1s message.updated(role=assistant, cost=0)   ← 消息壳子，此时【请求还没发给上游】
+//   +28s  session.status                            ← 这一刻请求才真正发出
+//   之后上游若挂着不回应，事件流【一条都不再来】
+// 所以拿 assistant 消息的创建当"活着"的证据是错的（上游黑洞时它照样出现，看门狗会被白白撤掉，
+// 假死原样漏回来——这正是第一版的实测失败）。只有真正的模型输出才算数：
+// 正文/思考增量、非空的 text/reasoning part、工具调用、step-finish、或带 cost/completed 的消息更新。
+// 首个输出一到就撤掉看门狗，之后无论跑多久（长工具执行、几分钟不出字）都不再干预。
+// 默认 180s：这段时间要盖住"opencode 组装提示词并发出请求"（本机负载重时实测 28–100s）+ 上游首 token
+// （大上下文实测可达 60–90s）。宁可慢报也别错杀；机器更慢的部署用 OC_FIRST_EVENT_TIMEOUT_MS 调大。
+const FIRST_EVENT_TIMEOUT_MS = Number(process.env.OC_FIRST_EVENT_TIMEOUT_MS || 180_000)
 // 在跑的轮数。三处要用同一个判据：/api/busy（manager 停机/腾位前探它）、以及切模型的两条路径
 // （/api/model、/api/model/pick）——它们会 restartOpencode()，把所有在跑的轮连根拔掉。
 const runningRounds = () => [...jobs.values()].filter((j) => j.running).length
@@ -815,9 +852,16 @@ function startJob(sid, sentText, modId) {
     else if (ev === "tool") { if (data.tool === "skill") { if (data.skill) job.skills.set(data.skill, data) } else if (data.callID) job.tools.set(data.callID, data) }
     for (const r of job.subs) sseWrite(r, ev, data)
   }
+  // 首输出看门狗的句柄（守的是"模型第一个输出"，不是"第一个事件"）：定义在 finish 之前，好让 finish 无条件把它清掉
+  // （正常完成 / 用户终止 / 出错收场都走 finish，一处清理覆盖全部路径，绝不留悬空定时器）。
+  // noteModelOutput() 只在【确认是模型真的产出了东西】时调用，别拿消息壳子当活证据（见 FIRST_EVENT_TIMEOUT_MS 注释）。
+  let sawOutput = false, watchdog = null
+  const clearWatchdog = () => { if (watchdog) { clearTimeout(watchdog); watchdog = null } }
+  const noteModelOutput = () => { if (sawOutput) return; sawOutput = true; clearWatchdog() }
   const finish = () => {
     if (job.finished) return
     job.finished = true; job.running = false; jobs.delete(sid); runningCost.delete(sid)   // 本轮成本已由 addCost 入账，撤掉实时占位
+    clearWatchdog()
     try { evAbort.abort() } catch {}   // 立刻掐掉本轮的 opencode 事件流，别留着空转到下一个事件
     for (const r of job.subs) { try { r.end() } catch {} }
     job.subs.clear()
@@ -829,6 +873,21 @@ function startJob(sid, sentText, modId) {
     try { await client.session.abort({ path: { id: sid } }) } catch {}
     finish()
   }
+  // ---- 首输出看门狗（缘由见 FIRST_EVENT_TIMEOUT_MS 的注释）----
+  // 终止路径与 /api/chat/abort 完全相同（client.session.abort + finish），差别只在广播的是
+  // failed（带原因）而不是 aborted：用户没点终止，得让他知道为什么停了、去哪儿改。
+  // failed 是前端已有的展示通道（同 402 余额不足等上游错误），会渲染成 "⚠ …" 并收尾本轮。
+  // 不 await session.abort：上游不可达时这条 HTTP 本身也可能慢，广播和收场不能被它拖住。
+  watchdog = setTimeout(() => {
+    watchdog = null
+    if (job.finished || sawOutput) return
+    job.timedOut = true   // 让 prompt 返回后的分支知道本轮已收过场，别再广播第二条错误
+    console.error(`[watchdog] 会话 ${sid}：${FIRST_EVENT_TIMEOUT_MS}ms 内未收到本轮任何模型事件，判定模型服务不可达，自动中止本轮`)
+    broadcast("failed", { message: `连接模型服务失败或超时（${Math.round(FIRST_EVENT_TIMEOUT_MS / 1000)} 秒内模型无任何响应），本轮已自动中止。请检查 API 设置（在对话框输入 api-config 打开）后重试。` })
+    client.session.abort({ path: { id: sid } }).catch(() => {})
+    finish()
+  }, FIRST_EVENT_TIMEOUT_MS)
+  if (typeof watchdog.unref === "function") watchdog.unref()   // 纯守护定时器，别让它拖住进程退出
   ;(async () => {
     // 【必须订阅 /global/event 而非 /event】实测（裸 curl 对照抓包）：本部署把每个会话建在
     // outputs/<ws>/ 子目录，不带 directory 参数的 /event 只收得到 server.* 心跳，一条消息事件都没有
@@ -895,6 +954,9 @@ function startJob(sid, sentText, modId) {
             const m = perMsg.get(info.id) || { real: 0, estTok: 0 }
             m.real = Math.max(m.real, info.cost || 0)   // 后到的无 cost 事件别把已知真实成本打回 0（那会让封顶退回估算值）
             perMsg.set(info.id, m)
+            // 只有【带成本或已完成】的消息更新才算模型真出了东西（非流式上游可能只在末尾报一次）；
+            // 光是消息被创建（cost=0、未完成）不算——那在请求发出前就有了，见 FIRST_EVENT_TIMEOUT_MS 注释。
+            if ((info.cost || 0) > 0 || info.time?.completed) noteModelOutput()
             updateRunning()
           }
           continue
@@ -905,6 +967,7 @@ function startJob(sid, sentText, modId) {
           const meta = partMeta.get(d.partID)
           const m = meta && perMsg.get(meta.messageID)
           if (!m) continue   // 只认本轮 assistant 消息的内容（其 message.updated 先于 parts 到达，实测）
+          noteModelOutput()   // 有正文增量流出 = 上游确实在回应 → 撤看门狗
           meta.text += d.delta
           m.estTok += estDeltaTokens(d.delta)
           dirtyParts.add(d.partID)
@@ -915,6 +978,7 @@ function startJob(sid, sentText, modId) {
         const p = e?.properties?.part; if (!p) continue
         if (p.sessionID && p.sessionID !== sid) continue
         if (p.type === "step-finish") {
+          noteModelOutput()   // 一步已经跑完 = 上游给过东西了
           // 本步完成，真实 tokens 已知 → 记下输入侧真实成本，作本会话后续步（含被 abort 步）的输入估计
           const t = p.tokens
           if (t && perMsg.has(p.messageID)) {
@@ -928,6 +992,7 @@ function startJob(sid, sentText, modId) {
           const meta = partMeta.get(p.id) || { type: p.type, messageID: p.messageID, text: "" }
           partMeta.set(p.id, meta)
           if (typeof p.text === "string" && p.text.length > meta.text.length) {
+            noteModelOutput()   // 快照里【真有文字】才算输出：part 刚创建时是空的（len=0），那不算
             perMsg.get(p.messageID).estTok += estDeltaTokens(p.text.slice(meta.text.length))   // 快照比累计长 = 漏了 delta，差额补进估算
             meta.text = p.text
             dirtyParts.add(p.id)
@@ -935,6 +1000,7 @@ function startJob(sid, sentText, modId) {
           emitLive(true)
           updateRunning()
         } else if (p.type === "tool" && p.state?.status) {
+          noteModelOutput()   // 模型已经发出工具调用 = 上游在回应（长工具执行期的静默由此不再被误杀）
           // ---- 模块/技能闸（强制层，不靠提示词自觉）----
           // 技能调用只放行白名单内的：受限模块 = 绑定的那一个技能；chat = 账号级技能白名单。
           // 受限模块还禁 task 子代理绕道（子代理的技能调用发生在子会话里，本循环按 sessionID 过滤
@@ -998,6 +1064,7 @@ function startJob(sid, sentText, modId) {
       }
     }
     if (job.aborting) return finish()                       // 用户显式终止：job.abort 已广播 aborted
+    if (job.timedOut) return finish()                       // 首事件看门狗已收场并广播过原因（prompt 此刻才姗姗返回/报错），别再报一遍
     if (job.moduleHit) { broadcast("failed", { message: onlySkill
       ? `模块限制：本会话是「${MODULE_DEFS[modId]?.name || modId}」专用模块，只能使用「${onlySkill}」技能；检测到调用「${job.moduleHit}」，本轮已中止。此类需求请到「自由对话」模块新开会话。`
       : `技能未开通：你的账号未开通「${job.moduleHit}」技能，本轮已中止。如需使用请联系管理员开通。` }); return finish() }
@@ -1352,6 +1419,10 @@ const server = http.createServer(async (req, res) => {
         // 影响仅限用户自己（一人一容器），但顺手堵掉，别留个会往 HTML 里塞未转义内容的口子。
         if (e.code === "docx-fail") return send(res, 500, "text/html; charset=utf-8", `<p style="color:#b91c1c">DOCX 预览转换失败：${String(e.message).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")}</p>`)
         if (e.code === "no-soffice") return send(res, 501, "text/plain", "服务器未安装 LibreOffice，无法预览此类型（装好后即可）")
+        // 人话 + 可行动的下一步；完整命令行/stderr 已在 ensurePreviewCache 里 console.error，不外泄。
+        if (e.code === "office-fail") return send(res, 500, "text/plain", e.timedOut
+          ? "文档转换超时（首次转换要启动办公组件，会慢一些）。可先下载文件在本地打开；稍后重试通常会快很多。"
+          : "文档转换失败，可下载文件后在本地打开。")
         if (e.code === "no-pdf") return send(res, 500, "text/plain", "转换未产出 PDF")
         return send(res, 500, "text/plain", "转换失败：" + e.message)
       }
