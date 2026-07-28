@@ -33,19 +33,39 @@ if (NODE_MAJOR < 22) {
 }
 
 // ==== 配置 ====================================================================
+// 数值配置一律走 envNum：非法值【启动即失败】，不许悄悄变成 NaN。
+//
+// 由来（2026-07-28 首次真机部署踩到）：systemd 的 EnvironmentFile **不剥行尾注释**，
+// `REFRESH_TTL_MS=2592000000  # 30 天` 会把整串（含 # 与中文）当成值 → Number() = NaN
+// → Date.now()+NaN = NaN → 写库时才炸成 "NOT NULL constraint failed"，报错离病因十万八千里。
+// 单价配错更阴：不会报错，只会让计费系统性地偏，而且偏得很安静。
+export function envNum(name, def, { min = 0, allowZero = true } = {}) {
+  const raw = process.env[name]
+  if (raw === undefined || raw === "") return def
+  const n = Number(String(raw).trim())
+  if (!Number.isFinite(n) || n < min || (!allowZero && n === 0)) {
+    console.error(`[fatal] 配置 ${name}=${JSON.stringify(raw)} 不是合法数值` +
+      `（要求：有限数字、≥${min}${allowZero ? "" : " 且非 0"}）。` +
+      `\n        常见原因：systemd 的 EnvironmentFile 不剥行尾注释，别写成 "${name}=123  # 说明"，` +
+      `\n        注释请单独占一行。`)
+    process.exit(1)
+  }
+  return n
+}
+
 export const CFG = {
   listen: process.env.LISTEN || "127.0.0.1:8090",
   dataDir: process.env.DATA_DIR || "/var/lib/sci-auth",
   adminPassword: process.env.ADMIN_PASSWORD || "",
-  accessTtlMs: Number(process.env.ACCESS_TTL_MS || 24 * 60 * 60 * 1000),        // 24h
-  refreshTtlMs: Number(process.env.REFRESH_TTL_MS || 30 * 24 * 60 * 60 * 1000), // 30d
+  accessTtlMs: envNum("ACCESS_TTL_MS", 24 * 60 * 60 * 1000, { min: 1000 }),             // 24h
+  refreshTtlMs: envNum("REFRESH_TTL_MS", 30 * 24 * 60 * 60 * 1000, { min: 1000 }),      // 30d
   // 上游：默认 DeepSeek 官方；接 one-api 就指到它的 /v1
   upstreamUrl: (process.env.LLM_UPSTREAM_URL || "https://api.deepseek.com").replace(/\/+$/, ""),
   upstreamKey: process.env.LLM_UPSTREAM_KEY || "",
   // 单价（USD / 百万 token），与旧架构 OC_COST_* 同口径
-  priceIn: Number(process.env.COST_INPUT ?? 0.27),
-  priceOut: Number(process.env.COST_OUTPUT ?? 1.10),
-  priceCached: Number(process.env.COST_CACHE_READ ?? 0.07),
+  priceIn: envNum("COST_INPUT", 0.27),
+  priceOut: envNum("COST_OUTPUT", 1.10),
+  priceCached: envNum("COST_CACHE_READ", 0.07),
   skillsDir: process.env.SKILLS_DIR || path.join(__dirname, "..", ".opencode", "skills"),
 }
 

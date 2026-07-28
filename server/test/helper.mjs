@@ -9,11 +9,12 @@ let seq = 0
 
 export async function startApp(env = {}) {
   const prev = { ...process.env }
+  const secret = "test-secret-" + (++seq)
   Object.assign(process.env, {
     DB_FILE: ":memory:",
     LISTEN: "127.0.0.1:0",
     ADMIN_PASSWORD: "adminpw",
-    KEY_SECRET: "test-secret-" + (++seq),
+    KEY_SECRET: secret,
     LLM_UPSTREAM_KEY: "upstream-key",
     DATA_DIR: "",
     TEST_BYPASS_TOKEN: "t-bypass",   // 只免图形验证码，口令仍要对（见 sci-auth.mjs 的说明）
@@ -26,7 +27,7 @@ export async function startApp(env = {}) {
   process.env = prev
 
   return {
-    mod, base, db: mod.db, port,
+    mod, base, db: mod.db, port, secret: env.KEY_SECRET || secret,
     async close() { await new Promise((r) => mod.server.close(r)) },
     /** 发请求，返回 {status, headers, json, text} */
     async req(pathname, { method = "GET", body, headers = {}, raw = false } = {}) {

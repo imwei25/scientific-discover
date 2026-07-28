@@ -9,7 +9,7 @@ const STRONG = "Aa1!aaaa9"
 async function setup(env) {
   const app = await startApp(env)
   const cookie = await adminLogin(app)
-  return { app, admin: asAdmin(app, cookie), cookie }
+  return { app, admin: asAdmin(app, cookie), cookie, secret: app.secret }
 }
 /** 建一个账号并完成首次强制改密，返回可直接用的 access key */
 async function makeReadyUser(app, admin, username = "zhangsan", displayName = "张三", extra = {}) {
@@ -202,11 +202,34 @@ test("key：伪造/篡改/过期 都认不出来", async (t) => {
 })
 
 test("key：过期票据报 KEY_EXPIRED（签名对、时间过）", async (t) => {
-  const { app, admin } = await setup({ ACCESS_TTL_MS: "-1000" }); t.after(() => app.close())
-  const add = await admin("/admin/api/user-add", { method: "POST", body: { username: "zhangsan", displayName: "张三" } })
-  const login = await app.req("/api/auth/login", { method: "POST", body: { username: "zhangsan", password: add.json.initialPassword } })
-  const r = await app.req("/api/me", { headers: { authorization: "Bearer " + login.json.access } })
+  const { app, admin, secret } = await setup(); t.after(() => app.close())
+  const u = await makeReadyUser(app, admin)
+  // 用同一把签名密钥手工签一个已过期的票据：签名是对的、只是时间过了 ——
+  // 这样才能把 KEY_EXPIRED 和 KEY_INVALID 两条路分开验。
+  const row = app.db.prepare("SELECT id,key_epoch FROM users WHERE username=?").get(u.username)
+  const expired = A.signAccessKey(secret, { u: u.username, uid: row.id, ep: row.key_epoch, sc: "full" }, -1000)
+  const r = await app.req("/api/me", { headers: { authorization: "Bearer " + expired } })
   assert.equal(r.json.error.code, "KEY_EXPIRED")
+})
+
+test("配置闸：数值项非法就【启动即失败】，不许悄悄变成 NaN", async () => {
+  // 真机踩过：systemd 的 EnvironmentFile 不剥行尾注释，
+  // `REFRESH_TTL_MS=2592000000  # 30 天` → NaN → 直到登录写库才炸成 NOT NULL 约束失败。
+  const { spawnSync } = await import("node:child_process")
+  const bad = spawnSync(process.execPath, ["--no-warnings", "server/sci-auth.mjs"], {
+    env: { ...process.env, DB_FILE: ":memory:", LISTEN: "127.0.0.1:0", REFRESH_TTL_MS: "2592000000  # 30 天" },
+    encoding: "utf8", timeout: 20000,
+  })
+  assert.equal(bad.status, 1)
+  assert.match(bad.stderr, /REFRESH_TTL_MS/)
+  assert.match(bad.stderr, /行尾注释/)
+
+  const ok = spawnSync(process.execPath, ["--no-warnings", "-e",
+    "import('./server/sci-auth.mjs').then(m=>{console.log(m.CFG.refreshTtlMs);process.exit(0)})"], {
+    env: { ...process.env, DB_FILE: ":memory:", LISTEN: "127.0.0.1:0", REFRESH_TTL_MS: " 123456 " },
+    encoding: "utf8", timeout: 20000,
+  })
+  assert.equal(ok.stdout.trim().split("\n").pop().trim(), "123456", "两边空白应被容忍")
 })
 
 test("refresh：可换新票据，且一把只能用一次（轮换）", async (t) => {
