@@ -560,7 +560,11 @@ export function start() {
   const [h, port] = CFG.listen.includes(":") ? CFG.listen.split(":") : ["127.0.0.1", CFG.listen]
   return new Promise((resolve) => {
     server.listen(Number(port), h, () => {
-      log(`sci-auth 就绪 http://${h}:${port}　库=${DB_FILE}　管理台=${ADMIN_ENABLED() ? "开" : "关（未设 ADMIN_PASSWORD）"}`)
+      // 报【实际】绑定的端口而不是配置值：LISTEN=...:0 时配置里是 0，迁移脚本的影子演练
+      // 正是靠这一行（或 PORT_FILE）知道该去打哪个口。
+      const real = server.address().port
+      log(`sci-auth 就绪 http://${h}:${real}　库=${DB_FILE}　管理台=${ADMIN_ENABLED() ? "开" : "关（未设 ADMIN_PASSWORD）"}`)
+      if (process.env.PORT_FILE) { try { fs.writeFileSync(process.env.PORT_FILE, String(real)) } catch (e) { log("[warn] 写 PORT_FILE 失败", e.message) } }
       if (!CFG.upstreamKey) log("[warn] 未配 LLM_UPSTREAM_KEY —— /llm 转发会返回 503")
       resolve(server)
     })

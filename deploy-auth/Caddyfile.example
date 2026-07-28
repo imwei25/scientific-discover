@@ -1,0 +1,44 @@
+# /etc/caddy/Caddyfile —— 唯一对公网开放的东西。
+# 把 example.duckdns.org 换成你的域名；Caddy 会自动签发/续期证书。
+
+example.duckdns.org {
+	encode zstd gzip
+
+	# 上传体积上限（桌面客户端不上传大文件到服务器，留小一点就够）
+	request_body {
+		max_size 2MB
+	}
+
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		X-Frame-Options "DENY"
+		-Server
+	}
+
+	# LLM 转发：推理首字节可以很慢、响应是长流 —— 必须关掉缓冲，否则流式输出会被攒住。
+	handle /llm/* {
+		reverse_proxy 127.0.0.1:8090 {
+			flush_interval -1
+			transport http {
+				# 别给长推理设读超时，误杀比挂着更糟
+				response_header_timeout 5m
+			}
+		}
+	}
+
+	handle {
+		reverse_proxy 127.0.0.1:8090 {
+			flush_interval -1
+		}
+	}
+
+	log {
+		output file /var/log/caddy/access.log
+		format json
+	}
+}
+
+# fail2ban 的 caddy-login jail 认的是 access.log 里 /admin/api/login 与
+# /api/auth/login 的 401。改路径要同步改 /etc/fail2ban/filter.d/caddy-login.conf。
