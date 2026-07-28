@@ -74,3 +74,4 @@ ${REPO_ROOT:-/app}/.venv/bin/python ${REPO_ROOT:-/app}/.opencode/skills/humanize
 ## 提醒
 - "AI 检测器"分数仅供参考、不可靠；本技能目标是**读起来自然且学术严谨**，不是骗检测器。
 - 若原文有事实/逻辑错误，指出但不擅自"编好"。
+- **润色对象是论文 / 投稿稿件时**（标书、科普、公文等不适用），交付改写稿时顺带附查重建议（完整表见 `write-paper` 的「查重工具推荐」节）：中文免费初查 PaperPass / PaperYY、定稿用知网（万方 / 维普约 3 元/千字可过渡）；英文免费初查 Scribbr 免费版 / Plagly、定稿用 iThenticate（SCI 期刊 Crossref Similarity Check 同款）。查重站均为网页端、需用户**自行上传**（无免费正规 API，本技能不代查），并提醒选**不入库**选项、免费初筛后定稿以权威系统为准。
