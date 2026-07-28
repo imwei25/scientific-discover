@@ -53,7 +53,18 @@ test("管理台：验证码错则拒；口令错则拒；旁路只免验证码�
 
   r = await app.req("/admin/api/login", { method: "POST", body: { password: "adminpw" }, headers: { "x-test-bypass": "t-bypass" } })
   assert.equal(r.status, 200)
-  assert.match(r.headers["set-cookie"] || "", /admin_auth=.*HttpOnly.*Secure/)
+  assert.match(r.headers["set-cookie"] || "", /admin_auth=.*HttpOnly.*SameSite=Lax/)
+})
+
+test("会话 cookie：经 Caddy(https) 必带 Secure；直连回环明文调试时不带（否则 curl 永远登不进去）", async (t) => {
+  const app = await startApp(); t.after(() => app.close())
+  const login = (headers) => app.req("/admin/api/login", {
+    method: "POST", body: { password: "adminpw" }, headers: { "x-test-bypass": "t-bypass", ...headers },
+  })
+  // 测试是从 127.0.0.1 直连的明文 HTTP —— 对应"运维在服务器上 curl 调试"那种场景
+  assert.equal(/Secure/.test((await login()).headers["set-cookie"]), false)
+  // Caddy 转进来时会带 X-Forwarded-Proto: https
+  assert.equal(/Secure/.test((await login({ "x-forwarded-proto": "https" })).headers["set-cookie"]), true)
 })
 
 test("管理台：没登录一律 401", async (t) => {

@@ -309,6 +309,21 @@ async function handleClientApi(req, res, pathname) {
 const adminAuthed = (req) => A.validSession(CFG.adminPassword, "admin", parseCookies(req).admin_auth)
 const ADMIN_ENABLED = () => !!CFG.adminPassword
 
+/**
+ * 会话 cookie 要不要带 Secure。
+ *
+ * 生产（浏览器 → Caddy TLS → 本进程）永远带：Caddy 会给出 X-Forwarded-Proto: https。
+ * 唯一不带的情形是【直连回环的明文 HTTP】—— 即运维在服务器上 curl 127.0.0.1:8090 调试、
+ * 或走 SSH 端口转发。浏览器对 localhost 本来就豁免 Secure，但 curl / python cookiejar
+ * 之类的客户端不豁免：带了 Secure 它们就不回传 cookie，表现是"登录返回 200 却始终未登录"，
+ * 排查起来毫无线索。按同一条 localhost 例外处理，既不降低生产安全，也不留这个坑。
+ */
+function secureFlag(req) {
+  const proto = String(req.headers["x-forwarded-proto"] || "").split(",")[0].trim()
+  if (proto === "https") return " Secure;"
+  return isLoopback(req.socket.remoteAddress) ? "" : " Secure;"
+}
+
 // ---- 测试旁路：只跳过【图形验证码】一步，口令校验/限流/审计一样不少 ----
 // 沿用 manager.mjs 时代的设计边界（改动前先读）：
 //   · 不设 TEST_BYPASS_TOKEN = 判断恒 false，旁路不存在，线上默认关（部署脚本不写这个变量）；
@@ -360,12 +375,12 @@ async function handleAdminApi(req, res, pathname) {
     }
     A.clearLoginFail(lockKey)
     audit("admin.login.ok", { actor: "admin", ip })
-    res.setHeader("set-cookie", `admin_auth=${A.signSession(CFG.adminPassword, "admin")}; Path=/; HttpOnly; SameSite=Lax; Secure; Max-Age=${Math.floor(A.AUTH_TTL_MS / 1000)}`)
+    res.setHeader("set-cookie", `admin_auth=${A.signSession(CFG.adminPassword, "admin")}; Path=/; HttpOnly; SameSite=Lax;${secureFlag(req)} Max-Age=${Math.floor(A.AUTH_TTL_MS / 1000)}`)
     return json(res, 200, { ok: true })
   }
 
   if (req.method === "POST" && pathname === "/admin/api/logout") {
-    res.setHeader("set-cookie", "admin_auth=; Path=/; HttpOnly; SameSite=Lax; Secure; Max-Age=0")
+    res.setHeader("set-cookie", `admin_auth=; Path=/; HttpOnly; SameSite=Lax;${secureFlag(req)} Max-Age=0`)
     return json(res, 200, { ok: true })
   }
 
