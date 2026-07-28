@@ -246,6 +246,21 @@ savefig.bbox: tight
 # 诊断脚本随包走：客户机上出问题时，用包内 bash 跑它即可定位（bash bundle\smoke.sh）
 Copy-Item "$PSScriptRoot\smoke.sh" $Staging -Force
 
+# ★ 运行时状态清理闸：staging 目录一旦被直接跑过（开发机冒烟测试），网关会把
+#   model-config.json(含 key!)、会话产物、日志写回来；Copy-Tree 的排除只是"不覆盖"，
+#   不会删掉这些脏文件——不清理它们就会原样进安装器发给客户（实测踩过：15:45 那版
+#   安装器带上了开发机的 DeepSeek key）。故每次打包收尾都强制清一遍。
+Step "清理运行时状态（防冒烟残留进包）"
+$dirty = @("$App\web\model-config.json", "$App\web\sessions-meta.json",
+           "$App\serve.out", "$App\serve.err", "$App\server.log")
+foreach ($f in $dirty) { if (Test-Path $f) { Remove-Item $f -Force; Write-Host "  删除 $f" -ForegroundColor Yellow } }
+foreach ($d in @("$App\outputs", "$App\uploads")) {
+  if (Test-Path $d) { Get-ChildItem $d -Force | Remove-Item -Recurse -Force -Confirm:$false }
+}
+# 收尾自检：整个 staging 里绝不能再有任何 apiKey 字样的 json（opencode.json 由上面写的干净基线覆盖）
+$leak = Get-ChildItem $App -Recurse -Include "model-config.json" -ErrorAction SilentlyContinue
+if ($leak) { throw "打包中止：仍存在 model-config.json —— $($leak.FullName -join '; ')" }
+
 # ================= 7. 汇总自检 =================
 Step "汇总自检"
 & "$nodeDir\node.exe" --version | ForEach-Object { Write-Host "  node $_" }
