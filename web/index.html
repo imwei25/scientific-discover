@@ -1193,9 +1193,19 @@ async function togglePin(id, pinned) {
   await fetch("api/session/pin?id=" + encodeURIComponent(id) + "&pinned=" + (pinned ? "1" : "0"), { method: "POST" }).catch(() => {})
   loadSessions()
 }
+// 新建项目后「立刻新建对话」→ 归入该项目：createProject 时装填，紧接着建的新会话消费掉；
+// 若中途去续问/打开已有会话（不是立刻新建对话），则解除，落回「最近会话」。
+let pendingProjectId = null
+function consumePendingProject(newSid) {
+  if (!pendingProjectId || !newSid) return
+  const pid = pendingProjectId; pendingProjectId = null
+  fetch("api/session/project?id=" + encodeURIComponent(newSid) + "&projectId=" + encodeURIComponent(pid), { method: "POST" })
+    .then(() => loadSessions()).catch(() => {})
+}
 async function createProject() {
   const name = prompt("项目名称：", "新项目"); if (name === null) return
-  await fetch("api/project/create?name=" + encodeURIComponent(name.trim() || "新项目"), { method: "POST" }).catch(() => {})
+  const r = await fetch("api/project/create?name=" + encodeURIComponent(name.trim() || "新项目"), { method: "POST" }).then((x) => x.json()).catch(() => null)
+  if (r?.project?.id) pendingProjectId = r.project.id     // 装填：紧接着「新建对话」的第一条新会话归入此项目
   loadSessions()
 }
 async function deleteProject(id, name) {
@@ -1231,6 +1241,7 @@ function renderReminder() {
 }
 const loadSessions = () => fetch("api/sessions").then(r => r.json()).then((l) => { sessList = l || []; renderSessions(sessList); if (sessionId) setModBadge(sessList.find((s) => s.id === sessionId)?.module || "chat") }).catch(() => {})
 async function resumeSession(id) {                 // 载入历史 → 设为当前会话 →（后台还在生成则续流）
+  pendingProjectId = null                          // 打开的是已有会话 → 不是「立刻新建对话」，解除项目归入
   detachStream()                                   // 只退订原会话的流，后台生成不受影响
   sessionId = id; localStorage.setItem("nm_sid", id)
   setModBadge(sessList.find((s) => s.id === id)?.module || "chat")   // 徽标随会话绑定走；列表未载入时 loadSessions 回来会再校正
@@ -1390,6 +1401,7 @@ const STI = { pending: "○", running: "○", completed: "✓", error: "✕" }
 async function sendMessage(text) {
   if (!text) return
   if (activeES || sending) return   // 已有流在跑，或上一次 start 还没返回（防连点重复发）
+  if (sessionId) pendingProjectId = null   // 往已有会话里继续发 → 不是「新建对话」，解除项目归入
   const w = log.querySelector(".welcome"); if (w) w.remove()
   const bubble = add("user", text)
   sending = true; setStreamingUI(true)   // 立刻进入"生成中"态：POST 往返期间也不许再发
@@ -1498,7 +1510,7 @@ function openStream(url) {
     loadSessions()   // 刷新会话列表（新会话入列 / 更新时间与高亮）
     refreshQuota()   // 本轮成本已入账 → 刷新顶栏额度
   }
-  es.addEventListener("session", (ev) => { sseFailStreak = 0; sessionId = JSON.parse(ev.data).id; localStorage.setItem("nm_sid", sessionId); loadUploads() })   // 连上了 → 清零重连计数
+  es.addEventListener("session", (ev) => { sseFailStreak = 0; const nid = JSON.parse(ev.data).id; sessionId = nid; localStorage.setItem("nm_sid", nid); consumePendingProject(nid); loadUploads() })   // 连上了 → 清零重连计数
 
   es.addEventListener("tool", (ev) => {
     const d = JSON.parse(ev.data)
@@ -1915,7 +1927,7 @@ async function uploadFiles(files) {
       const r = await fetch("api/upload?name=" + encodeURIComponent(file.name) + sidQ(), { method: "POST", body: file })
       const j = await r.json()
       if (!r.ok || j.ok === false) { failed++; if (j.err) lastErr = j.err; continue }   // 存储超限(413)等
-      if (j.sid) { sessionId = j.sid; localStorage.setItem("nm_sid", j.sid) }   // 上传先于对话时，用网关现建的会话 id
+      if (j.sid) { const isNew = !sessionId; sessionId = j.sid; localStorage.setItem("nm_sid", j.sid); if (isNew) consumePendingProject(j.sid) }   // 上传先于对话时，用网关现建的会话 id；若是刚建项目后的第一条新会话则归入该项目
       done++
     } catch { failed++ }
   }
