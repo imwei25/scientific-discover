@@ -233,15 +233,26 @@ savefig.dpi: 300
 savefig.bbox: tight
 "@ | Out-File "$App\matplotlibrc" -Encoding ascii
 
-# 云端接入模板：客户拿到自己的网关地址+key 后填成 cloud.json（或直接在界面「模型设置」里填）
+# 云端接入模板：只需填【站点地址】，不再往包里塞任何 key。
+# 用户在应用里输入 account 用管理员发的账号登录，key 由网关代持并自动续期。
 @"
 {
-  "//": "复制本文件为 cloud.json 并填入你的接入信息；也可以在应用界面的「模型设置」里填，效果相同",
-  "gatewayUrl": "https://你的云端网关/v1",
-  "apiKey": "sk-你的专属key",
-  "model": "deepseek-v4-pro"
+  "//": "复制本文件为 cloud.json 并把 gatewayUrl 改成你们的站点地址；应用启动后在对话框输入 account 登录",
+  "//key": "这里【不要】再填 apiKey —— 登录后由本机网关代持 access key 并自动续期，静态 key 会在一天后失效",
+  "gatewayUrl": "https://你的站点域名"
 }
 "@ | Out-File "$App\cloud.json.example" -Encoding utf8
+
+# 预置站点地址：打包时给 SCI_CLOUD_URL 就直接写好 cloud.json，客户装完开箱即到登录页。
+# 只写地址不写 key，所以这个文件可以随包发给任何人。
+if ($env:SCI_CLOUD_URL) {
+  @"
+{
+  "gatewayUrl": "$($env:SCI_CLOUD_URL)"
+}
+"@ | Out-File "$App\cloud.json" -Encoding utf8
+  Write-Host "  已预置 cloud.json → $($env:SCI_CLOUD_URL)" -ForegroundColor Green
+}
 
 # 诊断脚本随包走：客户机上出问题时，用包内 bash 跑它即可定位（bash bundle\smoke.sh）
 Copy-Item "$PSScriptRoot\smoke.sh" $Staging -Force

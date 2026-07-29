@@ -388,6 +388,12 @@
   .mm-route b { font-weight: 600; }
   .mm-route.gw { border-color: rgba(57,181,122,.45); }
   .mm-route.custom { border-color: rgba(230,162,60,.45); }
+  /* 云端账号窗里的信息行 */
+  .mm-kv { display: flex; justify-content: space-between; gap: 12px; padding: 7px 0; border-bottom: 1px solid var(--line); font-size: 13px; }
+  .mm-kv:last-of-type { border-bottom: none; }
+  .mm-kv > span { color: var(--faint); flex: none; }
+  .mm-kv > b { font-weight: 600; text-align: right; word-break: break-all; }
+  .mm-faint { color: var(--faint); font-weight: 400; }
   .mm-hint code { background: #f3f6fb; border: 1px solid var(--line); border-radius: 4px; padding: 0 4px; font-size: .92em; }
 
   /* responsive */
@@ -510,6 +516,34 @@
         <button id="apiSave" class="mm-btn primary" type="button">保存并生效</button>
       </div>
       <div class="mm-hint">保存会重启后台模型进程（几秒）。以后在对话框输入 <b>api-config</b> 可随时打开本窗口。</div>
+    </div>
+  </div>
+</div>
+<div id="cloudModal" class="modal">
+  <div class="modal-card" style="max-width:400px">
+    <div class="modal-head">
+      <span class="modal-title" id="cloudTitle">登录</span>
+      <button class="modal-x" id="cloudClose" type="button" title="关闭"></button>
+    </div>
+    <div class="modal-body">
+      <div id="cloudPaneLogin">
+        <div class="mm-hint" style="margin:0 0 14px">用管理员发给你的账号登录。登录后模型、额度与可用技能由平台统一分配。</div>
+        <label class="mm-field"><span>账号</span><input id="clUser" class="mm-input" type="text" autocomplete="username" spellcheck="false" /></label>
+        <label class="mm-field"><span>口令</span><input id="clPass" class="mm-input" type="password" autocomplete="current-password" /></label>
+      </div>
+      <div id="cloudPanePw" style="display:none">
+        <div class="mm-hint" style="margin:0 0 14px">首次登录必须修改口令后才能使用。新口令要求：至少 8 位，含大小写字母、数字、特殊字符。</div>
+        <label class="mm-field"><span>当前口令</span><input id="clOld" class="mm-input" type="password" autocomplete="current-password" /></label>
+        <label class="mm-field"><span>新口令</span><input id="clNew" class="mm-input" type="password" autocomplete="new-password" /></label>
+        <label class="mm-field"><span>确认新口令</span><input id="clNew2" class="mm-input" type="password" autocomplete="new-password" /></label>
+      </div>
+      <div id="cloudPaneInfo" style="display:none"></div>
+      <div class="mm-msg info" id="clMsg"></div>
+      <div class="mm-actions">
+        <button id="clLogout" class="mm-btn ghost" type="button" style="display:none">退出登录</button>
+        <span style="flex:1"></span>
+        <button id="clGo" class="mm-btn primary" type="button">登录</button>
+      </div>
     </div>
   </div>
 </div>
@@ -1304,24 +1338,30 @@ function renderApiRoute(m) {
   const box = document.getElementById("apiRoute")
   const resetBtn = document.getElementById("apiReset")
   const gwHost = (() => { try { return new URL(m.gatewayURL).host } catch { return m.gatewayURL || "" } })()
-  if (!m || !m.gateway) {
-    box.className = "mm-route custom"
-    box.innerHTML = m && m.isCustom
-      ? "当前：<b>自定义 API</b>（本机未接入云端网关，只能用自己的 API）"
-      : "当前：<b>尚未配置模型</b>，请填写下面三项后保存"
-    resetBtn.style.display = "none"
-    return
-  }
-  if (m.route === "gateway") {
+  const c = (m && m.cloud) || {}
+  const route = m && m.route
+  resetBtn.style.display = "none"
+
+  if (route === "cloud") {
     box.className = "mm-route gw"
-    box.innerHTML = "当前：<b>云端网关</b>（" + (gwHost || "one-api") + "）—— 默认路由，模型与额度由平台统一调度。<br>" +
+    box.innerHTML = "当前：<b>云端账号</b>（" + esc(c.username || "") + " @ " + esc(gwHost) + "）—— 模型、额度与可用技能由平台统一分配。<br>" +
       "下面填自己的 API 并保存，即可改走你自己的路由。"
-    resetBtn.style.display = "none"
+  } else if (route === "gateway") {
+    box.className = "mm-route gw"
+    box.innerHTML = "当前：<b>云端网关</b>（" + esc(gwHost || "one-api") + "）—— 默认路由，模型与额度由平台统一调度。<br>" +
+      "下面填自己的 API 并保存，即可改走你自己的路由。"
+  } else if (route === "custom") {
+    box.className = "mm-route custom"
+    const backTo = c.loggedIn ? "云端账号" : "云端网关"
+    box.innerHTML = "当前：<b>自定义 API</b>（" + esc(m.baseURL || "") + "）—— 走你自己的路由，<b>不计入平台额度</b>。<br>" +
+      (m.gateway ? "要回到平台统一调度，点右下的「切回" + backTo + "」。"
+                 : (c.configured ? "本机尚未登录云端账号；输入 <b>account</b> 可登录。" : "本机未接入云端。"))
+    if (m.gateway) { resetBtn.style.display = ""; resetBtn.textContent = "切回" + backTo }
   } else {
     box.className = "mm-route custom"
-    box.innerHTML = "当前：<b>自定义 API</b>（" + (m.baseURL || "") + "）—— 走你自己的路由，不计入平台额度。<br>" +
-      "要回到平台统一调度，点右下的「切回云端网关」。"
-    resetBtn.style.display = ""
+    box.innerHTML = c.configured
+      ? "当前：<b>未登录云端账号</b> —— 在对话框输入 <b>account</b> 登录后即可使用平台模型；<br>也可以在下面填自己的 API 直接用。"
+      : "当前：<b>尚未配置模型</b>，请填写下面三项后保存"
   }
 }
 async function openApiCfg() {
@@ -1409,11 +1449,111 @@ async function saveApiCfg(force) {
   finally { btn.disabled = false }
 }
 document.getElementById("apiSave").addEventListener("click", () => saveApiCfg(false))
-// 首启引导：既没接入网关、也没配过自定义模型（桌面版装完第一次打开的状态）→ 自动弹设置窗。
-// 云端多用户部署恒有 gateway，不会触发。
+// ---- 云端账号：登录 / 首次强制改密 / 查看账号 ----
+// 账号名、档位、技能名都来自服务端，拼进 innerHTML 前必须转义（技能名将来可能含中文/符号）
+const esc = (s) => String(s == null ? "" : s).replace(/[&<>"']/g, (c) =>
+  ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]))
+const cloudModal = document.getElementById("cloudModal")
+const clMsg = (t, m) => { const e = document.getElementById("clMsg"); e.className = "mm-msg " + t; e.textContent = m }
+let clMode = "login"   // login | pw | info
+function clShow(mode, st) {
+  clMode = mode
+  document.getElementById("cloudPaneLogin").style.display = mode === "login" ? "" : "none"
+  document.getElementById("cloudPanePw").style.display = mode === "pw" ? "" : "none"
+  document.getElementById("cloudPaneInfo").style.display = mode === "info" ? "" : "none"
+  document.getElementById("cloudTitle").textContent = mode === "login" ? "登录云端账号" : mode === "pw" ? "首次登录请修改口令" : "云端账号"
+  document.getElementById("clGo").textContent = mode === "login" ? "登录" : mode === "pw" ? "修改并继续" : "刷新"
+  document.getElementById("clLogout").style.display = mode === "info" ? "" : "none"
+  if (mode === "info" && st) {
+    const p = st.profile || {}
+    const lim = p.limits || {}, use = p.usage || {}
+    const money = (n) => "$" + (Number(n) || 0).toFixed(4).replace(/0+$/, "").replace(/\.$/, ".00")
+    const bar = (used, limit) => !limit ? money(used) + ' <span class="mm-faint">/ 不限</span>'
+      : money(used) + ' <span class="mm-faint">/ ' + money(limit) + "（" + Math.min(100, Math.round(used / limit * 100)) + "%）</span>"
+    document.getElementById("cloudPaneInfo").innerHTML =
+      '<div class="mm-kv"><span>账号</span><b>' + esc(st.username) + "</b></div>" +
+      '<div class="mm-kv"><span>档位</span><b>' + esc(p.tier || "—") + "</b></div>" +
+      '<div class="mm-kv"><span>模型</span><b>' + esc(p.model || "—") + "</b></div>" +
+      '<div class="mm-kv"><span>今日用量</span><b>' + bar(use.today, lim.daily) + "</b></div>" +
+      '<div class="mm-kv"><span>本月用量</span><b>' + bar(use.month, lim.monthly) + "</b></div>" +
+      '<div class="mm-kv"><span>可用技能</span><b>' + ((p.skills && p.skills.length) ? p.skills.map(esc).join("、") : "全部") + "</b></div>" +
+      '<div class="mm-hint" style="margin-top:12px">额度与可用技能由管理员在后台调整，调整后需重新登录生效。</div>'
+  }
+}
+async function openCloud(force) {
+  clMsg("info", "")
+  cloudModal.classList.add("on")
+  try {
+    const st = await (await fetch("api/cloud/status", { signal: AbortSignal.timeout(8000) })).json()
+    if (!st.loggedIn) clShow("login")
+    else if (st.mustChangePassword) clShow("pw")
+    else clShow("info", st)
+  } catch { clShow(force ? "login" : "login") }
+}
+function closeCloud() { cloudModal.classList.remove("on") }
+document.getElementById("cloudClose").addEventListener("click", closeCloud)
+cloudModal.addEventListener("click", (e) => { if (e.target === cloudModal) closeCloud() })
+async function cloudPost(path, body, retryForce) {
+  const r = await (await fetch("api/cloud/" + path, {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ ...(body || {}), force: !!retryForce }),
+  })).json()
+  if (!r.ok && r.needForce) {
+    const yes = confirm("有 " + (r.busy || "若干") + " 轮正在生成中。\n切换账号要重启后台，会中断它们且无法恢复。\n\n确定继续吗？")
+    if (!yes) { clMsg("info", "已取消"); return null }
+    return cloudPost(path, body, true)
+  }
+  return r
+}
+document.getElementById("clGo").addEventListener("click", async () => {
+  const btn = document.getElementById("clGo"); btn.disabled = true
+  try {
+    if (clMode === "login") {
+      const username = document.getElementById("clUser").value.trim()
+      const password = document.getElementById("clPass").value
+      if (!username || !password) return clMsg("err", "请填写账号与口令")
+      clMsg("info", "登录中…")
+      const r = await cloudPost("login", { username, password }); if (!r) return
+      if (!r.ok) return clMsg("err", r.err || "登录失败")
+      document.getElementById("clPass").value = ""
+      if (r.mustChangePassword) { clShow("pw"); return clMsg("info", "请先修改口令") }
+      clMsg("ok", "已登录，页面即将刷新…"); setTimeout(() => location.reload(), 1000)
+    } else if (clMode === "pw") {
+      const oldPassword = document.getElementById("clOld").value
+      const newPassword = document.getElementById("clNew").value
+      if (newPassword !== document.getElementById("clNew2").value) return clMsg("err", "两次输入的新口令不一致")
+      // 这一步会重配模型并重启后台（几十秒），先把话说在前面，别让用户以为卡死了
+      clMsg("info", "提交中…改完要重启后台模型进程，大约需要半分钟，请勿关闭窗口")
+      const r = await cloudPost("password", { oldPassword, newPassword }); if (!r) return
+      if (!r.ok) return clMsg("err", r.err || "修改失败")
+      clMsg("ok", "已修改，页面即将刷新…"); setTimeout(() => location.reload(), 1000)
+    } else {
+      clMsg("info", "刷新中…")
+      const r = await (await fetch("api/cloud/refresh", { method: "POST" })).json()
+      if (!r.ok) return clMsg("err", r.err || "刷新失败")
+      clShow("info", r); clMsg("ok", "已刷新")
+    }
+  } catch { clMsg("err", "网络错误") }
+  finally { btn.disabled = false }
+})
+document.getElementById("clLogout").addEventListener("click", async () => {
+  if (!confirm("退出后本机将无法调用平台模型，需重新登录。确定吗？")) return
+  clMsg("info", "退出中…")
+  const r = await cloudPost("logout", {}); if (!r) return
+  if (!r.ok) return clMsg("err", r.err || "退出失败")
+  clMsg("ok", "已退出，页面即将刷新…"); setTimeout(() => location.reload(), 1000)
+})
+
+// 首启引导：按当前形态决定弹哪个窗。
+//   接了云端但没登录 / 登录了但没改密 → 云端账号窗（桌面版的常态）
+//   既没平台也没自设模型 → 模型 API 设置窗（纯单机形态）
+//   云端多用户容器恒有 gateway，两个都不弹。
 ;(async () => {
   try {
     const m = await (await fetch("api/model", { signal: AbortSignal.timeout(8000) })).json()
+    const c = (m && m.cloud) || {}
+    if (c.configured && !c.loggedIn) return openCloud(true)
+    if (c.loggedIn && c.mustChangePassword) return openCloud(true)
     if (m && !m.gateway && !m.isCustom) openApiCfg()
   } catch {}
 })()
@@ -1421,6 +1561,8 @@ f.addEventListener("submit", (e) => {
   e.preventDefault()
   const t = q.value.trim()
   if (/^\/?api[-_ ]?config$/i.test(t)) { q.value = ""; openApiCfg(); return }   // 快捷指令：不发给模型，唤起设置窗
+  // 云端账号窗（桌面版没有别的入口）：account / 账号 / cloud-config 都能唤起
+  if (/^\/?(account|cloud[-_ ]?config|账号)$/i.test(t)) { q.value = ""; openCloud(); return }
   q.value = ""
   sendMessage(t)
 })

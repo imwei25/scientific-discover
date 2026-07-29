@@ -1727,8 +1727,14 @@ export const server = http.createServer(async (req, res) => {
         return send(res, r.status && r.status >= 400 ? r.status : 400, "application/json",
           JSON.stringify({ ok: false, code: e.code, err: e.message || "操作失败" }))
       }
-      // 登录成功后先把档案拉一次：模型名要写进 provider 配置
-      if (u.pathname !== "/api/cloud/logout" && !Cloud.status().mustChangePassword) { try { await Cloud.fetchProfile() } catch {} }
+      // 【还没改密就别动 provider、更别重启 opencode】这个状态下账号本来就调不了模型
+      // （云端只发 pwchange 票据），重启纯属让用户在首启时白等三十秒才看到改密框。
+      // 等改密成功那一步再配，一次到位。
+      if (Cloud.status().mustChangePassword) {
+        return send(res, 200, "application/json", JSON.stringify({ ok: true, restarted: false, ...Cloud.status(), route: currentRoute() }))
+      }
+      // 登录/改密成功后先把档案拉一次：模型名要写进 provider 配置
+      if (u.pathname !== "/api/cloud/logout") { try { await Cloud.fetchProfile() } catch {} }
       // 重配路由：登录/改密后走云端账号；登出后回落静态网关 key，都没有就清掉 provider
       if (platformAvailable()) useGatewayRoute()
       else { try { fs.unlinkSync(MODEL_CFG_PATH) } catch {}; removeOcProvider(); MODEL = { providerID: PID, modelID: MID } }
