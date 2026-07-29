@@ -51,6 +51,19 @@ function Get-Cached {
   }
   throw "所有下载源都失败：$Name"
 }
+# 写 UTF-8【不带 BOM】的文本文件。
+# Windows PowerShell 5.1 的 `Out-File -Encoding utf8` 写的是【带 BOM】的 UTF-8，
+# 而 JSON.parse 与 serde_json 见了 BOM 都直接报错 —— 症状是"配置文件明明在、内容也对，
+# 程序却当成没配"（cloud.json 就栽过：打包版把预置的站点地址整个读丢，首启弹错窗）。
+function Write-Utf8NoBom {
+  param([Parameter(ValueFromPipeline = $true)][string]$Text, [Parameter(Position = 0)][string]$Path)
+  end {
+    $dir = Split-Path -Parent $Path
+    if ($dir -and -not (Test-Path $dir)) { New-Item -ItemType Directory -Force $dir | Out-Null }
+    [System.IO.File]::WriteAllText($Path, $Text, (New-Object System.Text.UTF8Encoding($false)))
+  }
+}
+
 function Copy-Tree {
   param([string]$Src, [string]$Dst, [string[]]$ExcludeFiles = @(), [string[]]$ExcludeDirs = @())
   $args = @($Src, $Dst, "/E", "/NFL", "/NDL", "/NJH", "/NJS", "/NP")
@@ -245,7 +258,7 @@ savefig.bbox: tight
   "//key": "这里【不要】再填 apiKey —— 登录后由本机网关代持 access key 并自动续期，静态 key 会在一天后失效",
   "gatewayUrl": "https://你的站点域名"
 }
-"@ | Out-File "$App\cloud.json.example" -Encoding utf8
+"@ | Write-Utf8NoBom "$App\cloud.json.example"
 
 # 预置站点地址：打包时给 SCI_CLOUD_URL 就直接写好 cloud.json，客户装完开箱即到登录页。
 # 只写地址不写 key，所以这个文件可以随包发给任何人。
@@ -254,7 +267,7 @@ if ($env:SCI_CLOUD_URL) {
 {
   "gatewayUrl": "$($env:SCI_CLOUD_URL)"
 }
-"@ | Out-File "$App\cloud.json" -Encoding utf8
+"@ | Write-Utf8NoBom "$App\cloud.json"
   Write-Host "  已预置 cloud.json → $($env:SCI_CLOUD_URL)" -ForegroundColor Green
 }
 

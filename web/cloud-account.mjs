@@ -31,10 +31,15 @@ const API_TIMEOUT_MS = 20_000
 // ---- 云端地址：cloud.json 的 gatewayUrl（或 SCI_CLOUD_URL 覆盖）----
 // 兼容历史写法：以前这里填的是 OpenAI 兼容端点（.../llm 或 .../llm/v1），
 // 现在要的是站点根。两种都收，统一归一化成站点根。
+// 去掉 UTF-8 BOM 再解析。Windows 上 PowerShell 的 Out-File -Encoding utf8、以及记事本另存，
+// 默认都会写 BOM，而 JSON.parse 见了 BOM 直接抛 —— 表现是"配置文件明明在、内容也对，
+// 程序却当成没配"。打包脚本已改成不写 BOM，这里再兜一层：用户手改这个文件是常态。
+const stripBom = (s) => (s.charCodeAt(0) === 0xfeff ? s.slice(1) : s)
+
 export function cloudBase() {
   let raw = process.env.SCI_CLOUD_URL || ""
   if (!raw) {
-    try { raw = JSON.parse(fs.readFileSync(cfgPath(), "utf8")).gatewayUrl || "" } catch {}
+    try { raw = JSON.parse(stripBom(fs.readFileSync(cfgPath(), "utf8"))).gatewayUrl || "" } catch {}
   }
   raw = String(raw).trim().replace(/\/+$/, "")
   if (!raw) return ""

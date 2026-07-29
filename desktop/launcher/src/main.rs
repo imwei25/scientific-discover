@@ -193,7 +193,10 @@ fn main() {
 
             // 云端接入配置（可缺省；界面「模型设置」是等价入口）
             if let Ok(txt) = std::fs::read_to_string(appdir.join("cloud.json")) {
-                if let Ok(v) = serde_json::from_str::<serde_json::Value>(&txt) {
+                // 去 BOM：PowerShell 的 Out-File -Encoding utf8 与记事本另存都会写 BOM，
+                // serde_json 见了 BOM 直接报错 —— 表现是"配置在、内容对，程序却当没配"。
+                let txt = txt.trim_start_matches('\u{feff}');
+                if let Ok(v) = serde_json::from_str::<serde_json::Value>(txt) {
                     if let Some(u) = v["gatewayUrl"].as_str() {
                         cmd.env("OC_GATEWAY_URL", u);
                     }

@@ -263,3 +263,18 @@ test("状态文件是原子写：中途读不到半个 JSON", async (t) => {
   }
   assert.equal(fs.existsSync(process.env.CLOUD_STATE_PATH + ".tmp"), false, "临时文件不该残留")
 })
+
+test("cloud.json 带 BOM 也要能读（PowerShell/记事本默认就写 BOM）", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "cloudbom-"))
+  const cfg = path.join(dir, "cloud.json")
+  const m = await mod("")
+  process.env.SCI_CLOUD_URL = ""
+  process.env.CLOUD_CFG_PATH = cfg
+
+  // 无 BOM
+  fs.writeFileSync(cfg, JSON.stringify({ gatewayUrl: "https://a.com" }))
+  assert.equal(m.cloudBase(), "https://a.com")
+  // 带 BOM —— JSON.parse 见了 BOM 直接抛，不处理就等于"配置在、程序当没配"
+  fs.writeFileSync(cfg, "﻿" + JSON.stringify({ gatewayUrl: "https://b.com" }))
+  assert.equal(m.cloudBase(), "https://b.com", "带 BOM 的 cloud.json 必须也能读")
+})
