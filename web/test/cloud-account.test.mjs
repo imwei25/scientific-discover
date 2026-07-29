@@ -36,11 +36,15 @@ async function mod(base) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "cloudstate-"))
   const prev = { ...process.env }
   process.env.CLOUD_STATE_PATH = path.join(dir, "cloud-state.json")
+  // 钉死到一个不存在的 cloud.json：否则开发机上真实的仓库根 cloud.json 会被读进来，
+  // "没配云端地址"这类用例就会莫名其妙地失败
+  process.env.CLOUD_CFG_PATH = path.join(dir, "no-such-cloud.json")
   process.env.SCI_CLOUD_URL = base
   const m = await import(`../cloud-account.mjs?t=${++seq}`)
   process.env = prev
-  // 动态 import 后模块已捕获常量，这里把 env 再设回去供运行时读取
+  // 恢复 env 后再设回去供运行时读取（模块里的路径是每次调用现读的）
   process.env.CLOUD_STATE_PATH = path.join(dir, "cloud-state.json")
+  process.env.CLOUD_CFG_PATH = path.join(dir, "no-such-cloud.json")
   process.env.SCI_CLOUD_URL = base
   return m
 }

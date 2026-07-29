@@ -51,6 +51,7 @@ async function gateway(cloudUrl) {
     OC_URL: "http://127.0.0.1:1",                 // 不会去连
     SCI_CLOUD_URL: cloudUrl,
     CLOUD_STATE_PATH: path.join(dir, "cloud-state.json"),
+    CLOUD_CFG_PATH: path.join(dir, "no-such-cloud.json"),   // 别读到开发机真实的 cloud.json
     MODEL_CFG_PATH: path.join(dir, "model-config.json"),
     OC_CONFIG_PATH: path.join(dir, "opencode.json"),
   })
@@ -67,6 +68,7 @@ async function gateway(cloudUrl) {
   // 供运行时读取
   process.env.SCI_CLOUD_URL = cloudUrl
   process.env.CLOUD_STATE_PATH = path.join(dir, "cloud-state.json")
+  process.env.CLOUD_CFG_PATH = path.join(dir, "no-such-cloud.json")
   process.env.MODEL_CFG_PATH = path.join(dir, "model-config.json")
   process.env.OC_CONFIG_PATH = path.join(dir, "opencode.json")
   const base = `http://127.0.0.1:${port}`
