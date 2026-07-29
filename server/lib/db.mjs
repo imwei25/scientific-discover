@@ -335,8 +335,10 @@ export function monthCost(db, userId, ts = Date.now()) {
   const r = db.prepare("SELECT SUM(cost_usd) AS c FROM usage_daily WHERE user_id=? AND month=?").get(Number(userId), monthOf(ts))
   return r && r.c ? Number(r.c) : 0
 }
+// 【ts 必须带次级排序键】同一毫秒内的两条记录只按 ts 排是【未定序】的，SQLite 返回顺序不保证 ——
+// 表现为后台"最近调用"列表里同秒的几条顺序随机，测试里也会随机挂。id 单调递增，拿它兜底。
 export const usageDetail = (db, userId, limit = 100) =>
-  db.prepare("SELECT * FROM usage_log WHERE user_id=? ORDER BY ts DESC LIMIT ?").all(Number(userId), limit)
+  db.prepare("SELECT * FROM usage_log WHERE user_id=? ORDER BY ts DESC, id DESC LIMIT ?").all(Number(userId), limit)
 export const usageDailySeries = (db, userId, days = 30) =>
   db.prepare("SELECT day, cost_usd, calls FROM usage_daily WHERE user_id=? ORDER BY day DESC LIMIT ?").all(Number(userId), days)
 /** 全站近 N 天用量（后台看板） */
