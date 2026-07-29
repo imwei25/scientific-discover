@@ -35,6 +35,36 @@ const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
 struct Backend(Mutex<Option<u32>>); // node 网关的 pid
 
+/// 取日志末尾若干行，供启动失败时直接显示在启动页上。
+/// 现场诊断最缺的就是"到底为什么起不来"，把它摆到用户眼前比让他去翻文件强得多。
+fn tail_of(path: &std::path::Path, lines: usize) -> String {
+    match std::fs::read_to_string(path) {
+        Ok(s) => {
+            let v: Vec<&str> = s.lines().filter(|l| !l.trim().is_empty()).collect();
+            if v.is_empty() {
+                "（gateway.log 是空的：说明服务连一行输出都没来得及打，多半是 node 本身没起来——\
+                 常见于缺 Microsoft Visual C++ 运行库、或被杀软拦截）".into()
+            } else {
+                v[v.len().saturating_sub(lines)..].join("\n")
+            }
+        }
+        Err(_) => "（找不到 gateway.log：服务可能根本没被拉起来）".into(),
+    }
+}
+
+/// 往启动页写一句话。用 serde_json 序列化成 JS 字面量，避免日志里的引号/换行把脚本搞坏。
+fn splash_msg(handle: &tauri::AppHandle, msg: &str) {
+    if let Some(w) = handle.get_webview_window("splash") {
+        let js = format!(
+            "document.getElementById('msg').style.whiteSpace='pre-wrap';\
+             document.getElementById('msg').style.textAlign='left';\
+             document.getElementById('msg').textContent = {};",
+            serde_json::to_string(msg).unwrap_or_else(|_| "\"启动失败\"".into())
+        );
+        let _ = w.eval(&js);
+    }
+}
+
 fn health_ok() -> bool {
     let Ok(mut s) = TcpStream::connect(("127.0.0.1", PORT)) else { return false };
     let _ = s.set_read_timeout(Some(Duration::from_secs(3)));
@@ -209,14 +239,31 @@ fn main() {
                 }
             }
 
-            let child = cmd.spawn()?;
+            let mut child = cmd.spawn()?;
             *app.state::<Backend>().0.lock().unwrap() = Some(child.id());
 
             // 后台轮询：就绪 → 开主窗口、关 splash；超时 → splash 上报错
             let handle = app.handle().clone();
+            let logpath = appdir.join("gateway.log");
             std::thread::spawn(move || {
-                for _ in 0..240u32 {
+                for i in 0..240u32 {
                     // 最多 120s
+                    // 【后端已经死了就别再空等】原实现只轮询端口：node 若因缺 VC++ 运行时、
+                    // 被杀软拦下、端口被占等原因起不来，用户要对着转圈整整 120 秒，
+                    // 最后才拿到一句笼统的失败提示。这里一发现子进程退出就立刻报，
+                    // 并把 gateway.log 的尾巴直接贴到启动页上 —— 现场诊断全靠它。
+                    if let Ok(Some(status)) = child.try_wait() {
+                        let tail = tail_of(&logpath, 12);
+                        splash_msg(&handle, &format!(
+                            "启动失败：本地服务已退出（{status}）。\n\n{tail}\n\n\
+                             日志完整内容在安装目录 bundle\\app\\gateway.log"));
+                        return;
+                    }
+                    // 每 5 秒刷一次进度：不动的转圈无法区分"在装"和"卡死了"
+                    if i > 0 && i % 10 == 0 {
+                        splash_msg(&handle, &format!(
+                            "首次启动需要初始化本地引擎，约需 10–60 秒…（已用 {} 秒）", i / 2));
+                    }
                     if health_ok() {
                         let url: tauri::Url = format!("http://127.0.0.1:{PORT}/").parse().unwrap();
                         let win = WebviewWindowBuilder::new(&handle, "app", WebviewUrl::External(url))
@@ -282,12 +329,10 @@ fn main() {
                     }
                     std::thread::sleep(Duration::from_millis(500));
                 }
-                if let Some(w) = handle.get_webview_window("splash") {
-                    let _ = w.eval(
-                        "document.getElementById('msg').textContent = \
-                         '启动失败：本地服务 120 秒内未就绪。请重启应用；若反复出现，把安装目录 bundle/app 下的 gateway.log 与 serve.err 发给技术支持。'",
-                    );
-                }
+                let tail = tail_of(&logpath, 12);
+                splash_msg(&handle, &format!(
+                    "启动失败：本地服务 120 秒内未就绪。请重启应用；若反复出现，把安装目录 \
+                     bundle\\app 下的 gateway.log 与 serve.err 发给技术支持。\n\n{tail}"));
             });
             Ok(())
         })
