@@ -2016,9 +2016,11 @@ server.listen(PORT, "0.0.0.0", () => {
     // 只打掩码：位数信息足够运维确认"密码确实注入了"，又不泄露内容。
     ? `  局域网登录：账号 ${LAN_USER} / 密码 ${LAN_PASSWORD ? "*".repeat(Math.min(LAN_PASSWORD.length, 12)) + `（${LAN_PASSWORD.length} 位，见 users/<用户>.env）` : "(未设置)"}（本机 localhost 免登录；改账号密码用环境变量 LAN_USER/LAN_PASSWORD，关登录用 LAN_AUTH=0）`
     : `  登录已关闭（LAN_AUTH=0）`)
-  // 过期会话清理：启动后延迟跑一次（等 opencode 就绪），之后每小时一次
-  setTimeout(cleanupExpiredSessions, 15_000)
-  setInterval(cleanupExpiredSessions, 60 * 60 * 1000)
+  // 过期会话清理：启动后延迟跑一次（等 opencode 就绪），之后每小时一次。
+  // 两个定时器都 unref：它们不该成为"进程能不能退出"的理由 —— 否则自动化测试里
+  // 网关关掉后事件循环仍被这个每小时的 interval 挂住，测试进程永远退不出去。
+  setTimeout(cleanupExpiredSessions, 15_000).unref?.()
+  setInterval(cleanupExpiredSessions, 60 * 60 * 1000).unref?.()
 })
 
 // ---- 优雅退出 ----
