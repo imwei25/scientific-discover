@@ -242,7 +242,10 @@ async function createSession(title) {
 // ---- 会话/项目元数据（网关级，opencode 不管这些）----
 // 三档生命周期：① 普通会话——7 天无活动自动删；② 持久化(钉)——同样 7 天但可「续期」重置；③ 项目会话——永久。
 // opencode 只存会话本体；项目分组 / 钉标记 / 续期时间存这里，随磁盘持久（已 gitignore）。
-const META_PATH = path.join(__dirname, "sessions-meta.json")
+// 路径可用 SESSIONS_META_PATH 覆盖：测试/隔离实例必须能把它重定向到临时文件，
+// 否则任何在本仓库里起的第二个网关实例都会读写【开发机真实的】会话元数据并互相覆盖
+// （cloud-state/model-config/opencode.json 早就有同款覆盖开关，唯独这个漏了）。
+const META_PATH = process.env.SESSIONS_META_PATH || path.join(__dirname, "sessions-meta.json")
 const TTL_MS = 7 * 24 * 60 * 60 * 1000                 // 非项目会话的存活期：7 天
 const EXPIRE_SOON_MS = 2 * 24 * 60 * 60 * 1000          // 剩余 ≤2 天视为「临近删除」，前端据此提醒
 let META = { version: 1, projects: [], sessions: {} }
@@ -288,7 +291,12 @@ async function cleanupExpiredSessions() {
         console.log("[cleanup] 删除过期会话", s.id, s.title || "")
       }
     }
-    // 顺带清掉元数据里已不存在的会话残留
+    // 顺带清掉元数据里已不存在的会话残留。
+    // 【空列表不算数】opencode 返回空数组既可能是"真的一条会话都没有"，也可能是它刚起来还没
+    // 加载完 / 连到了另一个数据目录 / 降级返回空——后几种情况下按"全都不存在"去删，会把用户
+    // 全部的项目归属与钉标记一次性抹平（表现为 sessions 被清成 {}，projects 还在）。
+    // 代价不对等：留几条陈旧残留无害，误删要用户重新归类所有会话。故空列表直接跳过修剪。
+    if (!all.length) return
     const live = new Set(all.map((s) => s.id))
     let dirty = false
     for (const id of Object.keys(META.sessions)) if (!live.has(id)) { delete META.sessions[id]; dirty = true }
@@ -1792,8 +1800,16 @@ export const server = http.createServer(async (req, res) => {
     // 从 Zotero 导入到本会话小库：把选中文献的 PDF 复制进 <会话产物目录>/zotero_lib/
     if (req.method === "POST" && u.pathname === "/api/zotero/import") {
       let sid = u.searchParams.get("sid") || null
-      if (!sid) sid = await createSession("web")   // 导入先于对话则现建会话（directory 会定到会话产物目录）
-      const ws = await ensureWs(sid)
+      // 建会话/解析目录都要问 opencode，opencode 不可达时会抛，而这两句原先【在 try 之外】：
+      // 异常直落全局处理器 → 回 500 + 原始堆栈（含服务器绝对路径），前端 r.json() 当场炸成
+      // "SyntaxError: Unexpected token 'T'"，正好违背本段开头"一律回 200 + 结构化结果"的约定。
+      let ws
+      try {
+        if (!sid) sid = await createSession("web")   // 导入先于对话则现建会话（directory 会定到会话产物目录）
+        ws = await ensureWs(sid)
+      } catch (e) {
+        return send(res, 200, "application/json", JSON.stringify({ ok: false, error: "session_unavailable", hint: "无法建立/定位会话工作目录（opencode 未就绪），请稍后重试或先发一条消息建会话。", detail: String(e).slice(0, 200) }))
+      }
       const chunks = []; for await (const c of req) chunks.push(c)
       let body = {}; try { body = JSON.parse(Buffer.concat(chunks).toString() || "{}") } catch {}
       const to = path.join(ws.out, "zotero_lib")
@@ -1811,7 +1827,9 @@ export const server = http.createServer(async (req, res) => {
     if (req.method === "POST" && u.pathname === "/api/zotero/push") {
       const sid = u.searchParams.get("sid") || ""
       if (!sid) return send(res, 400, "application/json", JSON.stringify({ ok: false, error: "no_sid" }))
-      const ws = await ensureWs(sid)
+      let ws
+      try { ws = await ensureWs(sid) }   // 同上：opencode 不可达时别把原始堆栈甩给前端
+      catch (e) { return send(res, 200, "application/json", JSON.stringify({ ok: false, error: "session_unavailable", hint: "无法定位会话工作目录（opencode 未就绪），请稍后重试。", detail: String(e).slice(0, 200) })) }
       const chunks = []; for await (const c of req) chunks.push(c)
       let body = {}; try { body = JSON.parse(Buffer.concat(chunks).toString() || "{}") } catch {}
       const refs = body.refs
