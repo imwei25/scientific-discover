@@ -19,14 +19,17 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const DEV_DIR = process.env.DEV_DIR || path.join(os.tmpdir(), "sci-web-dev")
 fs.mkdirSync(DEV_DIR, { recursive: true })
 
+// 仓库根有 cloud.json（真实部署的形态）就用它，别用 SCI_CLOUD_URL 盖掉 ——
+// 想对着线上联调时，写一个 cloud.json 指过去即可，不必改代码或造第二份启动配置。
+const hasCloudJson = fs.existsSync(path.join(__dirname, "..", "cloud.json"))
 Object.assign(process.env, {
-  SCI_CLOUD_URL: process.env.SCI_CLOUD_URL || "http://127.0.0.1:8099",
+  ...(hasCloudJson && !process.env.SCI_CLOUD_URL ? {} : { SCI_CLOUD_URL: process.env.SCI_CLOUD_URL || "http://127.0.0.1:8099" }),
   // 登录态与模型配置都落临时目录，别污染仓库里的 web/cloud-state.json、web/model-config.json
   CLOUD_STATE_PATH: process.env.CLOUD_STATE_PATH || path.join(DEV_DIR, "cloud-state.json"),
   MODEL_CFG_PATH: process.env.MODEL_CFG_PATH || path.join(DEV_DIR, "model-config.json"),
   PORT: process.env.PORT || "3001",
 })
-console.log(`[dev] 桌面形态启动：云端=${process.env.SCI_CLOUD_URL}  端口=${process.env.PORT}`)
+console.log(`[dev] 桌面形态启动：云端=${process.env.SCI_CLOUD_URL || "(取自 cloud.json)"}  端口=${process.env.PORT}`)
 console.log(`[dev] 登录态落 ${process.env.CLOUD_STATE_PATH}（删掉它 = 回到未登录）`)
 console.log(`[dev] 在界面对话框输入 account 登录`)
 await import("./server.mjs")
