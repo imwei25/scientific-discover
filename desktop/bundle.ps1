@@ -227,7 +227,8 @@ Copy-Tree "$Root\web" "$App\web" `
   -ExcludeFiles @("model-config.json", "cloud-state.json", "sessions-meta.json", "dev-test.mjs", "dev-gateway.mjs") `
   -ExcludeDirs  @("test")
 # .opencode：技能 + opencode 插件依赖
-Copy-Tree "$Root\.opencode" "$App\.opencode"
+# 排除 __pycache__：开发机跑过技能脚本就会生成，进包纯属无谓体积（本次实测 18 个目录）
+Copy-Tree "$Root\.opencode" "$App\.opencode" -ExcludeDirs @("__pycache__")
 Copy-Item "$Root\AGENTS.md" $App -Force
 # opencode.json 干净基线（server.mjs 启动时会自己补 question:false 等；不带任何 key）
 @"
