@@ -103,6 +103,26 @@ try {
   enforceOcTools(oc)
   fs.writeFileSync(OC_CONFIG_PATH, JSON.stringify(oc, null, 2))
 } catch {}
+// ---- 路由归属：当前这套配置算「走云端网关」还是「走用户自己的 API」----
+//
+// 不能用 isCustom 判断：接了网关时启动也会写 CUSTOM_PROVIDER_ID（网关本身就是个 OpenAI 兼容端点），
+// 而 /api/model/pick 换网关下的模型时还会把网关地址存进 MODEL_CFG —— 两种情况都会让 isCustom 为真。
+// 真正的判据只有一条：**存下来的 baseURL 是不是网关那个地址**（没存过 = 默认就走网关）。
+const sameEndpoint = (a, b) => String(a || "").replace(/\/+$/, "") === String(b || "").replace(/\/+$/, "")
+function currentRoute() {
+  const gw = process.env.OC_GATEWAY_URL
+  if (!gw || !process.env.OC_GATEWAY_KEY) return "custom"   // 压根没网关可走
+  const saved = loadModelCfg()
+  if (!saved?.baseURL) return "gateway"
+  return sameEndpoint(saved.baseURL, gw) ? "gateway" : "custom"
+}
+// 回到网关路由（清掉用户自设，按网关重写 provider）。启动兜底与 /api/model/reset 共用同一段，
+// 避免"重启后回到网关、运行时重置却回到内置默认"这种两套行为。
+function useGatewayRoute() {
+  writeOcProvider({ baseURL: process.env.OC_GATEWAY_URL, apiKey: process.env.OC_GATEWAY_KEY, modelID: MID })
+  MODEL = { providerID: CUSTOM_PROVIDER_ID, modelID: MID }
+}
+
 // 启动时恢复上次所选的自定义模型（写好 opencode.json，随后 ensureOpencode 启动的 opencode 会读到）
 {
   const saved = loadModelCfg()
@@ -1558,6 +1578,8 @@ const server = http.createServer(async (req, res) => {
         baseURL: c?.baseURL || "", hasKey: !!(c && c.apiKey),
         default: `${PID}/${MID}`, managed: OC_MANAGED,
         gateway: !!(process.env.OC_GATEWAY_URL && process.env.OC_GATEWAY_KEY),   // 是否接入网关（前端据此显示模型切换器）
+        route: currentRoute(),          // "gateway" | "custom" —— 前端据此显示"当前走哪条路"与是否给出切回入口
+        gatewayURL: process.env.OC_GATEWAY_URL || "",   // 只回地址不回 key
       }))
     }
     // 测试一个 OpenAI 格式的 API（URL + key + 模型）是否可用
@@ -1647,10 +1669,16 @@ const server = http.createServer(async (req, res) => {
       try { const chunks = []; for await (const c of req) chunks.push(c); rforce = !!JSON.parse(Buffer.concat(chunks).toString() || "{}").force } catch {}
       { const busy = runningRounds(); if (busy > 0 && !rforce) return send(res, 409, "application/json", JSON.stringify({ ok: false, busy, needForce: true, err: `有 ${busy} 轮正在生成中，恢复默认模型需重启后台，会中断它们` })) }
       try { fs.unlinkSync(MODEL_CFG_PATH) } catch {}
-      removeOcProvider()
-      MODEL = { providerID: PID, modelID: MID }
+      // 【接了网关就回网关，而不是回内置默认】默认路由本来就是网关（见启动那段），
+      // 这里若照旧 removeOcProvider() 回落到内置 provider，就会出现"点了切回、其实哪也没回，
+      // 得把进程重启一次才真的回到网关"这种前后不一致。
+      if (process.env.OC_GATEWAY_URL && process.env.OC_GATEWAY_KEY) useGatewayRoute()
+      else { removeOcProvider(); MODEL = { providerID: PID, modelID: MID } }
       let restarted = false; try { restarted = await restartOpencode() } catch {}
-      return send(res, 200, "application/json", JSON.stringify({ ok: true, restarted, providerID: PID, modelID: MID }))
+      return send(res, 200, "application/json", JSON.stringify({
+        ok: true, restarted, route: currentRoute(),
+        providerID: MODEL.providerID, modelID: MODEL.modelID,
+      }))
     }
 
     send(res, 404, "text/plain", "not found")

@@ -50,3 +50,6 @@ sci-agent-backup-*.tar.gz
 
 # Office 锁文件（Word/Excel 打开文档期间生成的临时文件），别进库
 ~$*
+
+# 本地开发用的网关 access key（web/dev-gateway.mjs 读它），别进库
+.dev-gateway-key

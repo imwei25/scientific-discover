@@ -18,6 +18,12 @@
       "runtimeExecutable": "node",
       "runtimeArgs": ["--no-warnings", "server/dev-server.mjs"],
       "port": 8099
+    },
+    {
+      "name": "web-gateway",
+      "runtimeExecutable": "node",
+      "runtimeArgs": ["--no-warnings", "web/dev-gateway.mjs"],
+      "port": 3001
     }
   ]
 }

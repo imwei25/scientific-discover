@@ -382,6 +382,12 @@
   .mm-btn.reset { margin-left: auto; }
   .mm-btn:disabled { opacity: .55; cursor: default; }
   .mm-hint { font-size: 11.5px; color: var(--faint); line-height: 1.65; margin-top: 12px; }
+  /* 当前走哪条路：网关 vs 用户自设。放在弹窗最上面，打开就知道自己在哪。 */
+  .mm-route { font-size: 12.5px; line-height: 1.6; padding: 9px 11px; border-radius: 8px; margin-bottom: 14px;
+              border: 1px solid var(--line); background: rgba(127,127,127,.06); }
+  .mm-route b { font-weight: 600; }
+  .mm-route.gw { border-color: rgba(57,181,122,.45); }
+  .mm-route.custom { border-color: rgba(230,162,60,.45); }
   .mm-hint code { background: #f3f6fb; border: 1px solid var(--line); border-radius: 4px; padding: 0 4px; font-size: .92em; }
 
   /* responsive */
@@ -492,11 +498,14 @@
       <button class="modal-x" id="apiClose" type="button" title="关闭"></button>
     </div>
     <div class="modal-body">
+      <div class="mm-route" id="apiRoute"></div>
       <label class="mm-field"><span>API 地址（OpenAI 兼容 baseURL）</span><input id="apiUrl" class="mm-input" type="text" placeholder="如 https://api.deepseek.com" autocomplete="off" spellcheck="false" /></label>
       <label class="mm-field"><span>API Key</span><input id="apiKey" class="mm-input" type="password" autocomplete="off" /></label>
       <label class="mm-field"><span>模型 ID</span><input id="apiModel" class="mm-input" type="text" placeholder="如 deepseek-chat" autocomplete="off" spellcheck="false" /></label>
       <div class="mm-msg info" id="apiMsg"></div>
       <div class="mm-actions">
+        <button id="apiReset" class="mm-btn ghost" type="button" style="display:none">切回云端网关</button>
+        <span style="flex:1"></span>
         <button id="apiTest" class="mm-btn ghost" type="button">测试连通</button>
         <button id="apiSave" class="mm-btn primary" type="button">保存并生效</button>
       </div>
@@ -1288,6 +1297,33 @@ function openStream(url) {
 const apiModal = document.getElementById("apiModal")
 const apiMsgEl = document.getElementById("apiMsg")
 const apiSetMsg = (t, m) => { apiMsgEl.className = "mm-msg " + t; apiMsgEl.textContent = m }
+// 渲染"当前走哪条路"，并决定要不要给出「切回云端网关」入口。
+// 判据用后端给的 route（见 server.mjs 的 currentRoute）——前端自己拿 isCustom 判会错：
+// 接了网关时后台也是走 CUSTOM_PROVIDER_ID 的。
+function renderApiRoute(m) {
+  const box = document.getElementById("apiRoute")
+  const resetBtn = document.getElementById("apiReset")
+  const gwHost = (() => { try { return new URL(m.gatewayURL).host } catch { return m.gatewayURL || "" } })()
+  if (!m || !m.gateway) {
+    box.className = "mm-route custom"
+    box.innerHTML = m && m.isCustom
+      ? "当前：<b>自定义 API</b>（本机未接入云端网关，只能用自己的 API）"
+      : "当前：<b>尚未配置模型</b>，请填写下面三项后保存"
+    resetBtn.style.display = "none"
+    return
+  }
+  if (m.route === "gateway") {
+    box.className = "mm-route gw"
+    box.innerHTML = "当前：<b>云端网关</b>（" + (gwHost || "one-api") + "）—— 默认路由，模型与额度由平台统一调度。<br>" +
+      "下面填自己的 API 并保存，即可改走你自己的路由。"
+    resetBtn.style.display = "none"
+  } else {
+    box.className = "mm-route custom"
+    box.innerHTML = "当前：<b>自定义 API</b>（" + (m.baseURL || "") + "）—— 走你自己的路由，不计入平台额度。<br>" +
+      "要回到平台统一调度，点右下的「切回云端网关」。"
+    resetBtn.style.display = ""
+  }
+}
 async function openApiCfg() {
   apiSetMsg("info", "")
   document.getElementById("apiKey").value = ""
@@ -1295,12 +1331,41 @@ async function openApiCfg() {
   // 预填当前配置（key 出于安全不回显；hasKey 时用占位提示）
   try {
     const m = await (await fetch("api/model", { signal: AbortSignal.timeout(8000) })).json()
-    if (m && m.baseURL) document.getElementById("apiUrl").value = m.baseURL
-    if (m && m.isCustom && m.modelID) document.getElementById("apiModel").value = m.modelID
-    document.getElementById("apiKey").placeholder = (m && m.hasKey) ? "已保存（不回显；保存需重新粘贴）" : ""
+    renderApiRoute(m)
+    // 走网关时不要把网关地址/模型名回填进输入框：那会让用户以为"这就是我的配置"，
+    // 一按保存就把网关地址连同自己的 key 存成自定义路由，稀里糊涂就脱离了平台调度。
+    const onGateway = m && m.gateway && m.route === "gateway"
+    document.getElementById("apiUrl").value = onGateway ? "" : (m && m.baseURL ? m.baseURL : "")
+    document.getElementById("apiModel").value = (!onGateway && m && m.isCustom && m.modelID) ? m.modelID : ""
+    document.getElementById("apiKey").placeholder = (!onGateway && m && m.hasKey) ? "已保存（不回显；保存需重新粘贴）" : ""
   } catch {}
   document.getElementById("apiUrl").focus()
 }
+// 切回云端网关：清掉自设配置、按网关重写 provider（与重启后的默认行为一致）
+async function resetToGateway(force) {
+  const btn = document.getElementById("apiReset"); btn.disabled = true
+  apiSetMsg("info", "切回云端网关并重启后台中…（约数秒）")
+  try {
+    const r = await (await fetch("api/model/reset", {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ force: !!force }),
+    })).json()
+    if (r.ok) {
+      apiSetMsg("ok", "已切回云端网关。页面即将刷新…")
+      setTimeout(() => location.reload(), 1200)
+      return
+    }
+    if (r.needForce) {
+      const yes = confirm("有 " + (r.busy || "若干") + " 轮正在生成中。\n切回网关要重启后台，会中断它们且无法恢复。\n\n确定继续吗？")
+      btn.disabled = false
+      if (yes) return resetToGateway(true)
+      apiSetMsg("info", "已取消")
+      return
+    }
+    apiSetMsg("err", "切换失败：" + (r.err || "未知错误"))
+  } catch { apiSetMsg("err", "切换失败：网络错误") }
+  finally { btn.disabled = false }
+}
+document.getElementById("apiReset").addEventListener("click", () => resetToGateway(false))
 function closeApiCfg() { apiModal.classList.remove("on") }
 document.getElementById("apiClose").addEventListener("click", closeApiCfg)
 apiModal.addEventListener("click", (e) => { if (e.target === apiModal) closeApiCfg() })
