@@ -1515,6 +1515,78 @@ export const server = http.createServer(async (req, res) => {
       return send(res, 200, "application/json", JSON.stringify({ projects, sessions }))
     }
 
+    // 会话重命名：写回 opencode（title 非 ""/"web" 时自动补名逻辑不会再覆盖它）
+    if (req.method === "POST" && u.pathname === "/api/session/rename") {
+      const id = u.searchParams.get("id") || ""
+      const title = (u.searchParams.get("title") || "").slice(0, 80).trim()
+      if (!id || !title) return send(res, 400, "application/json", JSON.stringify({ ok: false }))
+      try { await client.session.update({ path: { id }, body: { title } }); titledSessions.add(id) }
+      catch (e) { return send(res, 500, "application/json", JSON.stringify({ ok: false, err: String(e) })) }
+      return send(res, 200, "application/json", JSON.stringify({ ok: true }))
+    }
+
+    // 钉/取消钉（持久化标记）。钉住时顺带续期（重置 7 天）；取消钉则回到普通 7 天 TTL。
+    if (req.method === "POST" && u.pathname === "/api/session/pin") {
+      const id = u.searchParams.get("id") || ""
+      const pinned = u.searchParams.get("pinned") !== "0"
+      if (!id) return send(res, 400, "application/json", JSON.stringify({ ok: false }))
+      const m = sessMeta(id); m.pinned = pinned
+      if (pinned) m.keepUntil = Date.now() + TTL_MS
+      saveMeta()
+      return send(res, 200, "application/json", JSON.stringify({ ok: true, pinned }))
+    }
+
+    // 续期：把非项目会话的存活期重置为「现在 +7 天」（临期提醒里的一键保留）
+    if (req.method === "POST" && u.pathname === "/api/session/renew") {
+      const id = u.searchParams.get("id") || ""
+      if (!id) return send(res, 400, "application/json", JSON.stringify({ ok: false }))
+      sessMeta(id).keepUntil = Date.now() + TTL_MS; saveMeta()
+      return send(res, 200, "application/json", JSON.stringify({ ok: true }))
+    }
+
+    // 会话归属项目（拖拽落点）：projectId 传空串/none = 移出项目。移出后给一次续期避免旧会话立即被清。
+    if (req.method === "POST" && u.pathname === "/api/session/project") {
+      const id = u.searchParams.get("id") || ""
+      let pid = u.searchParams.get("projectId") || ""
+      if (!id) return send(res, 400, "application/json", JSON.stringify({ ok: false }))
+      const m = sessMeta(id)
+      if (!pid || pid === "none") { delete m.projectId; m.keepUntil = Date.now() + TTL_MS }
+      else { if (!META.projects.some((p) => p.id === pid)) return send(res, 404, "application/json", JSON.stringify({ ok: false, err: "no such project" })); m.projectId = pid }
+      saveMeta()
+      return send(res, 200, "application/json", JSON.stringify({ ok: true }))
+    }
+
+    // 新建项目
+    if (req.method === "POST" && u.pathname === "/api/project/create") {
+      const name = (u.searchParams.get("name") || "新项目").slice(0, 60).trim() || "新项目"
+      const p = { id: newId("p_"), name, created: Date.now(), order: META.projects.length }
+      META.projects.push(p); saveMeta()
+      return send(res, 200, "application/json", JSON.stringify({ ok: true, project: { id: p.id, name: p.name, order: p.order } }))
+    }
+
+    // 项目重命名
+    if (req.method === "POST" && u.pathname === "/api/project/rename") {
+      const id = u.searchParams.get("id") || ""
+      const name = (u.searchParams.get("name") || "").slice(0, 60).trim()
+      const p = META.projects.find((x) => x.id === id)
+      if (!p || !name) return send(res, 400, "application/json", JSON.stringify({ ok: false }))
+      p.name = name; saveMeta()
+      return send(res, 200, "application/json", JSON.stringify({ ok: true }))
+    }
+
+    // 删除项目（只删分组，不删会话；组内会话变回普通会话并续期一次，从现在起算 7 天）
+    if (req.method === "POST" && u.pathname === "/api/project/delete") {
+      const id = u.searchParams.get("id") || ""
+      const idx = META.projects.findIndex((x) => x.id === id)
+      if (idx < 0) return send(res, 404, "application/json", JSON.stringify({ ok: false }))
+      META.projects.splice(idx, 1)
+      const now = Date.now()
+      for (const sid of Object.keys(META.sessions)) { const m = META.sessions[sid]; if (m.projectId === id) { delete m.projectId; m.keepUntil = now + TTL_MS } }
+      saveMeta()
+      return send(res, 200, "application/json", JSON.stringify({ ok: true }))
+    }
+
+
     // 某会话的历史消息（user/assistant 正文），用于断点续问时回显上下文
     if (req.method === "GET" && u.pathname === "/api/history") {
       // 兼容 sid：本接口用 id=，而 /api/outputs、/api/job、/api/download 全用 sid= ——
