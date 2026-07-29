@@ -428,6 +428,13 @@ const skillsPreamble = () => {
   const allowed = [...ALLOWED_SKILLS_SET].filter((s) => s !== "env-setup")
   return `\n- **【技能授权，最高优先级】**本账号只开通了以下技能：${allowed.join("、")}（外加 env-setup），本环境也只安装了这些——AGENTS.md 流水线里提到的其它技能在这里【不存在】，不要尝试调用、查找或读取它们；涉及未开通技能的步骤直接跳过并明确告知用户"该步骤因未开通对应技能而省略"，也不要徒手模仿该技能的产出。`
 }
+// 本会话若已从 Zotero 导入小文献库（前端「Zotero 文献库」面板的"导入"），告诉 agent 怎么按范围选 RAG scope。
+// 与 skillsPreamble / modulePreamble 同块注入，故同样【单行、不许有空行】（stripPreamble 按第一个空行剥离）。
+// 路径写相对：会话的 cwd 就是产物目录，zotero_lib 正在其下。
+const zoteroPreamble = (outDir) => {
+  try { if (!fs.existsSync(path.join(outDir, "zotero_lib", "zotero_refs.json"))) return "" } catch { return "" }
+  return `\n- 本会话已从 Zotero 导入一个小文献库到当前目录下的 \`zotero_lib/\`（含 PDF 与 zotero_refs.csv）。用 zotero-library 技能做全文 RAG 时按范围选：用户说"基于我导入的文献 / 这批文献 / 我的小库"→ 只检索该目录 \`\${REPO_ROOT:-/app}/.venv/bin/python \${REPO_ROOT:-/app}/.opencode/skills/zotero-library/references/zotero_rag.py --pdf-dir zotero_lib --backend embed\`（可加 \`--rerank\`）；用户明确说"整个 Zotero 库"→ 换成 \`--library\`。证据表写当前目录。`
+}
 
 // 会话 → 模块 绑定表（持久化在 ocdata 卷，容器重建不丢；与 quota.json 同目录）
 const MODULE_MAP_FILE = path.join(os.homedir(), ".local", "share", "opencode", "module-map.json")
@@ -716,6 +723,24 @@ const soffice = () => {
   return _soffice
 }
 const execFileAsync = promisify(execFile)
+
+// ---- Zotero 本地库（单机 / 桌面部署：网关与用户 Zotero 同机，脚本打 127.0.0.1:23119）----
+// 中心多用户服务器上探测必然失败（服务器摸不到每个用户机器上的 Zotero），接口照样可达，
+// 只是回 {ok:false,...} 的结构化错误，前端显示"未运行"，不影响其它功能。
+const ZOT_READ = path.join(ROOT, ".opencode/skills/zotero-library/references/zotero_read.py")
+// 跑一个 Python 脚本，返回 {code, stdout, stderr}；非零退出【不抛】——脚本用退出码 + JSON 表达失败。
+// PYEXE 是惰性函数（.venv 可能是网关起来之后才建的），故在调用点求值而非模块加载时。
+const runPy = async (args, timeout = 180_000) => {
+  try {
+    const { stdout, stderr } = await execFileAsync(PYEXE(), ["-X", "utf8", ...args], { timeout, maxBuffer: 16 * 1024 * 1024, windowsHide: true })
+    return { code: 0, stdout: stdout || "", stderr: stderr || "" }
+  } catch (e) {
+    return { code: e.code ?? 1, stdout: e.stdout || "", stderr: e.stderr || String(e) }
+  }
+}
+// 脚本没吐 stdout（没装 python / 脚本被删 / 超时被杀）也要回一个合法 JSON，别让前端 r.json() 炸掉
+const zotJson = (r) => (r.stdout || "").trim() || JSON.stringify({ ok: false, error: "no_output", detail: (r.stderr || "").slice(0, 300) })
+
 // UserInstallation profile 用【固定持久目录】，不再每次新建又删掉。
 // 为什么改：空 profile 会让 LibreOffice 走一遍"首次运行"初始化，实测冷启一次 153 秒——比原先
 // 写死的 90 秒超时还长。而"每次新建 profile"等于每次都是冷启，于是 pptx 预览稳定超时
@@ -877,7 +902,11 @@ const PREAMBLE_MARK = "【本会话工作区，务必遵守】"
 const PREAMBLE_MARK_LEGACY = "【本会话专属目录"   // 老会话里存的是旧文案，回看时同样要剥掉
 const _reEsc = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
 const PREAMBLE_RE = new RegExp("^(?:" + _reEsc(PREAMBLE_MARK) + "|" + _reEsc(PREAMBLE_MARK_LEGACY) + ")[\\s\\S]*?\\n\\n")
-const stripPreamble = (t) => t.replace(PREAMBLE_RE, "")
+// Zotero 面板注入的"检索范围"指示：拼在用户原话【最前面】（见前端 zScopePrefix），
+// 与工作区前言是两段独立注入，回看历史时也要一并剥掉，否则用户看见自己"说"了一句没说过的话。
+// 顺序：先剥工作区前言，再剥范围指示（注入时前言在前、范围指示紧跟其后、再是原话）。
+const ZSCOPE_RE = /^【检索范围：[^\n]*】\n/
+const stripPreamble = (t) => t.replace(PREAMBLE_RE, "").replace(ZSCOPE_RE, "")
 
 const jobs = new Map()   // sid -> 进行中的 job
 // ---- 首事件看门狗的超时（ms）----
@@ -1738,6 +1767,58 @@ export const server = http.createServer(async (req, res) => {
     if (req.method === "GET" && u.pathname === "/api/storage") {   // 前端显示存储用量（uploads+outputs）
       return send(res, 200, "application/json", JSON.stringify({ used: storageUsed(), limit: storageLimitBytes() }))
     }
+
+    // ---- Zotero 本地库：探测 / 列分类 / 会话小库导入 / 回列 / 回写（单机·桌面部署）----
+    // 全部走技能脚本 zotero_read.py（stdlib，打 127.0.0.1:23119）。脚本自己用 JSON 表达失败，
+    // 所以这里一律回 200 + 结构化结果：Zotero 没开也只是 {ok:false}，不该把前端整块面板打成红叉。
+    // 探测本机 Zotero 是否在跑
+    if (req.method === "GET" && u.pathname === "/api/zotero/status") {
+      return send(res, 200, "application/json", zotJson(await runPy([ZOT_READ, "probe"], 8_000)))
+    }
+    // 列出 Zotero 分类（供前端下拉选导入范围）
+    if (req.method === "GET" && u.pathname === "/api/zotero/collections") {
+      return send(res, 200, "application/json", zotJson(await runPy([ZOT_READ, "collections"], 12_000)))
+    }
+    // 列出本会话已导入的小库条目（读 <会话产物目录>/zotero_lib/zotero_refs.json）
+    if (req.method === "GET" && u.pathname === "/api/zotero/lib") {
+      const sid = u.searchParams.get("sid") || ""
+      if (!sid) return send(res, 200, "application/json", JSON.stringify({ ok: true, refs: [] }))
+      try {
+        const f = path.join(await sessionOut(sid), "zotero_lib", "zotero_refs.json")
+        if (!fs.existsSync(f)) return send(res, 200, "application/json", JSON.stringify({ ok: true, refs: [] }))
+        return send(res, 200, "application/json", JSON.stringify({ ok: true, refs: readJsonFile(f) }))
+      } catch { return send(res, 200, "application/json", JSON.stringify({ ok: true, refs: [] })) }
+    }
+    // 从 Zotero 导入到本会话小库：把选中文献的 PDF 复制进 <会话产物目录>/zotero_lib/
+    if (req.method === "POST" && u.pathname === "/api/zotero/import") {
+      let sid = u.searchParams.get("sid") || null
+      if (!sid) sid = await createSession("web")   // 导入先于对话则现建会话（directory 会定到会话产物目录）
+      const ws = await ensureWs(sid)
+      const chunks = []; for await (const c of req) chunks.push(c)
+      let body = {}; try { body = JSON.parse(Buffer.concat(chunks).toString() || "{}") } catch {}
+      const to = path.join(ws.out, "zotero_lib")
+      const args = [ZOT_READ, "materialize"]
+      if (body.items) args.push("--items", String(body.items))
+      else if (body.collection_key) args.push(String(body.collection_key))
+      else args.push("--top")
+      args.push("--to", to)
+      const r = await runPy(args, 300_000)
+      let out = {}; try { out = JSON.parse(zotJson(r)) } catch { out = { ok: false, error: "parse", detail: (r.stderr || "").slice(0, 300) } }
+      out.sid = sid
+      return send(res, 200, "application/json", JSON.stringify(out))
+    }
+    // 回写到 Zotero（本套接口里【唯一的写操作】）：把小库题录存进运行中的 Zotero 当前选中分类
+    if (req.method === "POST" && u.pathname === "/api/zotero/push") {
+      const sid = u.searchParams.get("sid") || ""
+      if (!sid) return send(res, 400, "application/json", JSON.stringify({ ok: false, error: "no_sid" }))
+      const ws = await ensureWs(sid)
+      const chunks = []; for await (const c of req) chunks.push(c)
+      let body = {}; try { body = JSON.parse(Buffer.concat(chunks).toString() || "{}") } catch {}
+      const refs = body.refs
+      if (!Array.isArray(refs) || !refs.length) return send(res, 400, "application/json", JSON.stringify({ ok: false, error: "empty_refs" }))
+      const tmp = path.join(ws.out, ".push_refs.json"); fs.writeFileSync(tmp, JSON.stringify(refs))
+      return send(res, 200, "application/json", zotJson(await runPy([ZOT_READ, "push", "--refs", tmp], 12_000)))
+    }
     // 发起一轮生成。【POST，正文在 body】——原先是 GET /api/chat?q=...，两个毛病：
     //   ① GET 带副作用（发消息 + 扣额度），而 cookie 是 SameSite=Lax：跨站顶层 GET 导航会带上凭据，
     //      诱导点一个链接就能替用户跑一轮长生成、烧掉当天额度（浏览器/代理的链接预取也可能误触发）。
@@ -1785,7 +1866,7 @@ export const server = http.createServer(async (req, res) => {
       // 给 agent 注入本会话专属目录，覆盖技能默认的 outputs/，实现多用户/多会话隔离
       // 注意：本会话的工作目录（cwd）已在建会话时通过 opencode 的 session.directory 定在【会话产物目录】，
       // 所以 agent 的所有工具默认就在正确的地方读写，preamble 只需说清"当前目录就是产物目录"与几个绝对路径。
-      const preamble = `${PREAMBLE_MARK}\n- **你的当前工作目录就是本会话的产物目录**（\`${ws.out}\`）。所有产物（图表 PNG/PDF、CSV/Excel、md/docx 等）**直接写到当前目录即可**，用相对文件名如 \`fig1.png\`、\`manuscript.md\`，不要再自己拼 \`outputs/xxx\` 前缀。\n- 临时脚本、中间文件同样写当前目录（要归拢可用 \`./.scratch/\`）。\n- 用户上传的数据文件在 \`${ws.up}/\`（读数据从这里找，用这个绝对路径）。\n- 跑本套件的脚本用 \`\${REPO_ROOT:-/app}\` 前缀定位仓库，例如 \`\${REPO_ROOT:-/app}/.venv/bin/python \${REPO_ROOT:-/app}/.opencode/skills/<技能>/xxx.py\`——因为当前目录不是仓库根，写 \`.venv/...\` 这种相对路径会找不到。\n- 正文里嵌入图片直接用文件名：\`![图注](fig1.png)\`（图和稿件都在当前目录，渲染也从当前目录跑）。\n- **不要把产物写到仓库根或 \`\${REPO_ROOT:-/app}\` 下**：那是所有会话共享的，会互相覆盖，也不会出现在界面的"产出"侧栏。${modId === "chat" ? skillsPreamble() : modulePreamble(modId)}\n\n`
+      const preamble = `${PREAMBLE_MARK}\n- **你的当前工作目录就是本会话的产物目录**（\`${ws.out}\`）。所有产物（图表 PNG/PDF、CSV/Excel、md/docx 等）**直接写到当前目录即可**，用相对文件名如 \`fig1.png\`、\`manuscript.md\`，不要再自己拼 \`outputs/xxx\` 前缀。\n- 临时脚本、中间文件同样写当前目录（要归拢可用 \`./.scratch/\`）。\n- 用户上传的数据文件在 \`${ws.up}/\`（读数据从这里找，用这个绝对路径）。\n- 跑本套件的脚本用 \`\${REPO_ROOT:-/app}\` 前缀定位仓库，例如 \`\${REPO_ROOT:-/app}/.venv/bin/python \${REPO_ROOT:-/app}/.opencode/skills/<技能>/xxx.py\`——因为当前目录不是仓库根，写 \`.venv/...\` 这种相对路径会找不到。\n- 正文里嵌入图片直接用文件名：\`![图注](fig1.png)\`（图和稿件都在当前目录，渲染也从当前目录跑）。\n- **不要把产物写到仓库根或 \`\${REPO_ROOT:-/app}\` 下**：那是所有会话共享的，会互相覆盖，也不会出现在界面的"产出"侧栏。${modId === "chat" ? skillsPreamble() : modulePreamble(modId)}${zoteroPreamble(ws.out)}\n\n`
       startJob(sid, preamble + q, modId)   // 同步建 job（jobs.set 在函数首行）→ 返回后前端 attach 必能接上
       return send(res, 200, "application/json", JSON.stringify({ ok: true, sid, sent: true, module: modId }))
     }

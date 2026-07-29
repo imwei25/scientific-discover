@@ -528,6 +528,22 @@
       <h3><span class="h3l"><span id="icOut"></span>本轮产出</span></h3>
       <div id="files"><span class="hint">对话生成的文件会显示在这里</span></div>
     </div>
+    <div class="panel" id="zpanel">
+      <h3><span class="h3l"><span id="icZot"></span>Zotero 文献库</span><span id="zstatus" class="count"></span></h3>
+      <div style="display:flex;gap:6px;margin-bottom:6px">
+        <select id="zcoll" class="mm-input mm-select" style="flex:1;min-width:0"><option value="">整库 (My Library)</option></select>
+        <button id="zimport" class="mm-btn ghost" type="button">导入</button>
+      </div>
+      <div class="hint" style="margin:2px 0">提问检索范围</div>
+      <select id="zscope" class="mm-input mm-select" style="margin-bottom:6px">
+        <option value="">默认（不特别指定）</option>
+        <option value="session">会话小库（本次导入的）</option>
+        <option value="library">整个 Zotero 库</option>
+      </select>
+      <div id="zmsg" class="hint">从本机 Zotero 导入一批文献做本会话小库；提问时按上面选范围。需 Zotero 运行且开本地 API。</div>
+      <div id="zlist"></div>
+      <button id="zpush" class="mm-btn ghost" type="button" hidden style="margin-top:6px">导出小库回 Zotero</button>
+    </div>
   </aside>
 </main>
 <div id="preview">
@@ -1262,13 +1278,14 @@ async function resumeSession(id) {                 // 载入历史 → 设为当
   if (!hist.length && !job.running && !histFailed) renderWelcome()   // 载入失败时别用欢迎页盖掉上面那条错误提示
   loadSessions()                                   // 重渲染以高亮当前会话
   loadUploads()                                    // 回显该会话已上传的文件
+  loadZotLib()                                     // 回显该会话的 Zotero 小库（有则显示条数与「导出」按钮）
   if (job.running) attachStream(id)                // 这轮还在后台生成 → 重放快照并续流
   q.focus(); log.scrollTop = log.scrollHeight
 }
 async function deleteSession(id, title) {           // 删除会话（不可撤销，先确认；进行中的生成由后端一并终止）
   if (!confirm("删除会话「" + (title || id) + "」？此操作不可撤销。")) return
   await fetch("api/session/delete?id=" + encodeURIComponent(id), { method: "POST" }).catch(() => {})
-  if (id === sessionId) { detachStream(); sessionId = null; localStorage.removeItem("nm_sid"); log.innerHTML = ""; renderFiles([]); renderUploads([]); renderWelcome() }   // 删的是当前会话 → 回到空态
+  if (id === sessionId) { detachStream(); sessionId = null; localStorage.removeItem("nm_sid"); log.innerHTML = ""; renderFiles([]); renderUploads([]); renderWelcome(); loadZotLib() }   // 删的是当前会话 → 回到空态
   loadSessions(); refreshStorage()   // 删会话已释放其存储 → 刷新用量
 }
 // 左侧会话栏折叠/展开（默认折叠）
@@ -1342,7 +1359,7 @@ let sending = false     // POST /api/chat/start 往返期间为 true：此时还
 function sidQ() { return sessionId ? "&sid=" + encodeURIComponent(sessionId) : "" }   // 上传/下载/预览都带上会话 id，隔离各会话目录
 document.getElementById("new").addEventListener("click", () => {
   detachStream()   // 只退订不终止：原会话若在生成会继续跑，从左侧列表随时切回来看
-  sessionId = null; localStorage.removeItem("nm_sid"); log.innerHTML = ""; renderFiles([]); loadUploads(); loadSessions()
+  sessionId = null; localStorage.removeItem("nm_sid"); log.innerHTML = ""; renderFiles([]); loadUploads(); loadSessions(); loadZotLib()
   // 新对话回到默认模块（chat 可用则 chat，否则首个可用），在欢迎页重新选
   const allowed = MODULES.filter((m) => m.allowed)
   currentModule = allowed.some((m) => m.id === "chat") ? "chat" : (allowed[0]?.id || "chat")
@@ -1414,7 +1431,8 @@ async function sendMessage(text) {
   try {
     const resp = await fetch("api/chat/start", {
       method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ q: text, sid: sessionId, module: sessionId ? undefined : currentModule }),   // 模块只在建会话时绑定；续会话由服务端按绑定表裁定
+      // q 前面可能带一行 Zotero「检索范围」指示（服务端回看历史时会剥掉）；气泡里显示的仍是用户原话
+      body: JSON.stringify({ q: zScopePrefix() + text, sid: sessionId, module: sessionId ? undefined : currentModule }),   // 模块只在建会话时绑定；续会话由服务端按绑定表裁定
     })
     // 登录已过期 → 去登录页。先复位 sending/streaming 再跳：万一跳转被拦或很慢，
     // 按钮不至于永久禁用（否则用户只能刷新页面才能再发消息）。
@@ -1510,7 +1528,7 @@ function openStream(url) {
     loadSessions()   // 刷新会话列表（新会话入列 / 更新时间与高亮）
     refreshQuota()   // 本轮成本已入账 → 刷新顶栏额度
   }
-  es.addEventListener("session", (ev) => { sseFailStreak = 0; const nid = JSON.parse(ev.data).id; sessionId = nid; localStorage.setItem("nm_sid", nid); consumePendingProject(nid); loadUploads() })   // 连上了 → 清零重连计数
+  es.addEventListener("session", (ev) => { sseFailStreak = 0; const nid = JSON.parse(ev.data).id; sessionId = nid; localStorage.setItem("nm_sid", nid); consumePendingProject(nid); loadUploads(); loadZotLib() })   // 连上了 → 清零重连计数
 
   es.addEventListener("tool", (ev) => {
     const d = JSON.parse(ev.data)
@@ -1939,6 +1957,80 @@ document.getElementById("up").addEventListener("change", (e) => { uploadFiles(e.
 ;["dragover", "dragenter"].forEach((ev) => dz.addEventListener(ev, (e) => { e.preventDefault(); dz.classList.add("drag") }))
 ;["dragleave", "drop"].forEach((ev) => dz.addEventListener(ev, (e) => { e.preventDefault(); dz.classList.remove("drag") }))
 dz.addEventListener("drop", (e) => uploadFiles(e.dataTransfer.files))
+
+// ---- Zotero 本地文献库：会话小库导入 / 导出 / 检索范围（单机·桌面部署：网关与 Zotero 同机）----
+// 中心多用户服务器上探测必然失败（服务器摸不到用户机器上的 Zotero），面板显示"未运行"即可，不报错。
+const zStatusEl = document.getElementById("zstatus")
+const zCollEl = document.getElementById("zcoll")
+const zScopeEl = document.getElementById("zscope")
+const zMsgEl = document.getElementById("zmsg")
+const zListEl = document.getElementById("zlist")
+const zPushBtn = document.getElementById("zpush")
+setIc("icZot", "puzzle")
+const zEsc = (s) => String(s == null ? "" : s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]))
+let zReady = false
+async function loadZoteroStatus() {
+  try {
+    const s = await fetch("api/zotero/status").then((r) => r.json())
+    zReady = !!s.running
+    zStatusEl.textContent = zReady ? "已连接" : "未运行"
+    if (zReady) loadCollections()
+  } catch { zReady = false; zStatusEl.textContent = "未运行" }
+  loadZotLib()
+}
+async function loadCollections() {
+  try {
+    const j = await fetch("api/zotero/collections").then((r) => r.json())
+    const cols = j.collections || []
+    zCollEl.innerHTML = '<option value="">整库 (My Library)</option>' +
+      cols.map((c) => `<option value="${zEsc(c.key)}">${zEsc(c.name)} (${c.count})</option>`).join("")
+  } catch { /* Zotero 未运行时保持默认整库项 */ }
+}
+async function loadZotLib() {
+  if (!sessionId) { zListEl.innerHTML = ""; zPushBtn.hidden = true; return }
+  try {
+    const refs = await fetch("api/zotero/lib?x=1" + sidQ()).then((r) => r.json()).then((j) => j.refs || [])
+    zPushBtn.hidden = !refs.length
+    const withPdf = refs.filter((r) => r.pdf).length
+    zListEl.innerHTML = refs.length ? `<div class="hint">本会话小库：${refs.length} 篇（${withPdf} 篇有 PDF 可检索）</div>` : ""
+  } catch { /* 忽略 */ }
+}
+// 发消息时按面板所选范围给 agent 加一行范围指示（服务端回看历史时会剥掉，见 ZSCOPE_RE）
+function zScopePrefix() {
+  const v = zScopeEl ? zScopeEl.value : ""
+  if (v === "session") return "【检索范围：本会话导入的 Zotero 小库；用 zotero-library 技能对当前目录下的 zotero_lib 做全文 RAG（--pdf-dir zotero_lib）】\n"
+  if (v === "library") return "【检索范围：整个本机 Zotero 库；用 zotero-library 技能 --library 做全文 RAG】\n"
+  return ""
+}
+document.getElementById("zimport").addEventListener("click", async () => {
+  if (!zReady) { zMsgEl.textContent = "未检测到运行中的 Zotero：请打开 Zotero，并在 设置→高级 勾选“允许本机其它应用与 Zotero 通信”，再点“导入”重试。"; loadZoteroStatus(); return }
+  zMsgEl.textContent = "导入中…（把 PDF 复制进本会话小库）"
+  try {
+    const body = zCollEl.value ? { collection_key: zCollEl.value } : {}
+    const j = await fetch("api/zotero/import" + (sessionId ? "?sid=" + encodeURIComponent(sessionId) : ""), {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
+    }).then((r) => r.json())
+    if (j.sid && !sessionId) { sessionId = j.sid; localStorage.setItem("nm_sid", j.sid); loadSessions() }
+    zMsgEl.textContent = j.ok
+      ? `✅ 导入 ${j.copied} 篇 PDF${j.no_pdf ? `（${j.no_pdf} 篇无 PDF 已跳过）` : ""}。提问时把“检索范围”选“会话小库”。`
+      : ("导入失败：" + (j.hint || j.error || "未知错误"))
+    loadZotLib(); refreshStorage()   // 小库 PDF 计入本用户存储配额，导入后刷新用量条
+  } catch (e) { zMsgEl.textContent = "导入失败：" + e }
+})
+zPushBtn.addEventListener("click", async () => {
+  if (!sessionId) return
+  const refs = await fetch("api/zotero/lib?x=1" + sidQ()).then((r) => r.json()).then((j) => j.refs || []).catch(() => [])
+  if (!refs.length) return
+  if (!confirm(`把本会话小库的 ${refs.length} 条题录写回 Zotero（存进你当前在 Zotero 里选中的分类）？这是写操作。`)) return
+  zMsgEl.textContent = "回写中…"
+  try {
+    const j = await fetch("api/zotero/push?sid=" + encodeURIComponent(sessionId), {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ refs }),
+    }).then((r) => r.json())
+    zMsgEl.textContent = j.ok ? `✅ 已回写 ${j.pushed} 条到 Zotero。` : ("回写失败：" + (j.hint || j.error || ""))
+  } catch (e) { zMsgEl.textContent = "回写失败：" + e }
+})
+loadZoteroStatus()
 
 // ---- 启动恢复：记住上次会话，重开页面自动回显历史与产物；后台若还在生成则续流 ----
 const savedSid = localStorage.getItem("nm_sid")
