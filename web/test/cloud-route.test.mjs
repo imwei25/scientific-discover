@@ -259,6 +259,100 @@ test("自设 API 优先于云端账号；切回后又回到 cloud", async (t) =>
   assert.match(r.gw.cfg().baseURL, /\/cloud\/v1$/)
 })
 
+// ---- 模型清单与切换（管理员在后台加了模型，打包版不用重装就能选到）----
+
+/** 给后端挂一家供应商 + 一个模型，并勾进 plus 档位的允许清单 */
+async function offerModel(be, { model = "fast", label = "快模型", provider = "sf", providerName = "硅基流动" } = {}) {
+  await be.admin("/admin/api/provider", { method: "POST", body: { key: provider, name: providerName, baseURL: "http://127.0.0.1:9/v1", apiKey: "sk-x" } })
+  await be.admin("/admin/api/model", { method: "POST", body: { items: [{ model, provider, label, priceIn: 0.5, priceOut: 1, priceCached: 0.1 }] } })
+  await be.admin("/admin/api/tier", { method: "POST", body: { key: "plus", dailyUSD: 5, model: "tier-model", models: model } })
+}
+
+test("模型清单来自服务器：后台加了模型 → 刷新档案就能选到（不用重装、也不用重新登录）", async (t) => {
+  const r = await rig(); t.after(() => r.close())
+  await loginReady(r)
+
+  let m = await r.gw.req("/api/models")
+  assert.equal(m.json.route, "cloud")
+  assert.deepEqual(m.json.models.map((x) => x.model), ["tier-model"], "一开始只有档位默认模型")
+
+  await offerModel(r.be)
+  // 客户端主动刷一次档案（界面上就是账号面板的「刷新」）
+  const rf = await r.gw.req("/api/cloud/refresh", { method: "POST", body: {} })
+  assert.equal(rf.json.ok, true, JSON.stringify(rf.json))
+
+  m = await r.gw.req("/api/models")
+  assert.deepEqual(m.json.models.map((x) => x.model), ["tier-model", "fast"])
+  assert.equal(m.json.models[1].label, "快模型")
+  assert.equal(m.json.models[1].provider, "硅基流动")
+})
+
+test("切模型：云端账号形态下能切，选中的模型跨重启保住", async (t) => {
+  const r = await rig(); t.after(() => r.close())
+  await loginReady(r)
+  await offerModel(r.be)
+  await r.gw.req("/api/cloud/refresh", { method: "POST", body: {} })
+
+  const x = await r.gw.req("/api/model/pick", { method: "POST", body: { model: "fast" } })
+  assert.equal(x.json.ok, true, JSON.stringify(x.json))
+  assert.equal(x.json.modelID, "fast")
+
+  const cfg = r.gw.cfg()
+  assert.equal(cfg.route, "cloud", "切模型不该把路由掰成 custom —— 那会变成不计平台额度")
+  assert.match(cfg.baseURL, /\/cloud\/v1$/, "仍然经本机代理走平台，key 还是本机占位令牌")
+  assert.equal(cfg.modelID, "fast")
+  assert.equal(cfg.picked, "fast", "选择要落盘，否则一重启就跳回默认模型")
+  assert.equal((await r.gw.req("/api/models")).json.current, "fast")
+})
+
+test("切模型：档位没开通的模型当场拒绝，并说清原因", async (t) => {
+  const r = await rig(); t.after(() => r.close())
+  await loginReady(r)
+  const x = await r.gw.req("/api/model/pick", { method: "POST", body: { model: "gpt-9" } })
+  assert.equal(x.status, 400)
+  assert.equal(x.json.ok, false)
+  assert.match(x.json.err, /没有开通|联系管理员/)
+})
+
+test("管理员撤掉某模型：刷新档案后本机自动落回默认模型，不会一直请求一个已被撤销的模型", async (t) => {
+  const r = await rig(); t.after(() => r.close())
+  await loginReady(r)
+  await offerModel(r.be)
+  await r.gw.req("/api/cloud/refresh", { method: "POST", body: {} })
+  await r.gw.req("/api/model/pick", { method: "POST", body: { model: "fast" } })
+  assert.equal(r.gw.cfg().modelID, "fast")
+
+  // 后台把它从档位允许清单里去掉
+  await r.be.admin("/admin/api/tier", { method: "POST", body: { key: "plus", dailyUSD: 5, model: "tier-model", models: "" } })
+  const rf = await r.gw.req("/api/cloud/refresh", { method: "POST", body: {} })
+  assert.equal(rf.json.ok, true)
+  assert.equal(r.gw.cfg().modelID, "tier-model", "应当自动落回默认模型")
+  assert.deepEqual((await r.gw.req("/api/models")).json.models.map((x) => x.model), ["tier-model"])
+})
+
+// ---- 上游报错要说人话（此前是"空气泡"）----
+
+test("上游错误翻成人话：余额不足/密钥失效/限流各给各的下一步动作", async (t) => {
+  const r = await rig(); t.after(() => r.close())
+  const D = r.gw.mod.describeModelError
+  // opencode 把 provider 错误挂在助手消息的 error 上（APIError.data.statusCode/message）
+  const balance = D({ name: "APIError", data: { statusCode: 402, message: "Insufficient Balance" } }, "cloud")
+  assert.match(balance, /余额不足|欠费/)
+  assert.match(balance, /联系管理员/, "走平台的用户改不了上游，只能找管理员")
+  assert.match(balance, /Insufficient Balance/, "上游原话要带上，便于排查")
+
+  // 有些家不给 statusCode，只在正文里说 —— 也要认出来
+  assert.match(D({ name: "UnknownError", data: { message: "account balance is not enough" } }, "cloud"), /余额不足|欠费/)
+
+  assert.match(D({ name: "ProviderAuthError", data: { message: "invalid api key" } }, "custom"), /密钥/)
+  assert.match(D({ name: "ProviderAuthError", data: { message: "invalid api key" } }, "custom"), /api-config/, "用自己 API 的用户该被指到自查入口")
+  assert.match(D({ name: "APIError", data: { statusCode: 429, message: "rate limit" } }, "cloud"), /限流|额度/)
+  assert.match(D({ name: "APIError", data: { statusCode: 503, message: "" } }, "cloud"), /异常|重试/)
+  assert.match(D({ name: "MessageOutputLengthError", data: {} }, "cloud"), /长度上限|截断/)
+  // 兜底也必须是一句完整的话，不能是空字符串（空 = 又回到"空气泡"）
+  assert.equal(D({ name: "UnknownError", data: {} }, "cloud").length > 10, true)
+})
+
 test("/api/model 的 cloud 摘要不含凭证", async (t) => {
   const r = await rig(); t.after(() => r.close())
   await loginReady(r)

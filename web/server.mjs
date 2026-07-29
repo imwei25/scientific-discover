@@ -1019,6 +1019,37 @@ async function clearStaleRevert(sid) {
   return false
 }
 const sseWrite = (res, ev, data) => { try { res.write(`event: ${ev}\ndata: ${JSON.stringify(data)}\n\n`) } catch {} }
+
+/**
+ * 把 opencode 挂在助手消息上的 error 翻成用户能照着做事的一句话。
+ *
+ * 【为什么值得单独写一个函数】上游故障里最常见的几种（余额不足、key 失效、限流）对用户的
+ * 后续动作完全不同：余额要找管理员充值/换供应商，key 失效要改配置，限流是等一会儿。
+ * 原样甩一句英文 provider 报错（甚至什么都不甩）等于让用户自己猜。
+ *
+ * route 决定"该找谁"：走平台（cloud/gateway）的用户改不了上游，只能找管理员；
+ * 用自己 API 的（custom）则要去 api-config 里自查。
+ */
+export function describeModelError(err, route) {
+  const d = (err && err.data) || {}
+  const raw = String(d.message || d.responseBody || "").replace(/\s+/g, " ").trim()
+  const code = Number(d.statusCode) || 0
+  const who = route === "custom"
+    ? "请在对话框输入 api-config 检查你自己的 API 配置。"
+    : "请联系管理员（可在后台「模型供应商」页换一家或充值）。"
+  const tail = raw ? `（上游原话：${raw.slice(0, 160)}）` : ""
+  const balance = code === 402 || /insufficient|balance|欠费|余额|arrears|payment|billing/i.test(raw)
+  if (balance) return `上游模型账户余额不足或已欠费，本轮未能生成。${who}${tail}`
+  if (code === 401 || code === 403 || err?.name === "ProviderAuthError")
+    return `上游模型服务拒绝了密钥（无效或无权限）。${who}${tail}`
+  if (code === 429 || /rate limit|too many requests|限流/i.test(raw))
+    return `上游模型服务限流或额度已满，稍等片刻再试。${who}${tail}`
+  if (code === 404 || /model not found|unknown model|无此模型/i.test(raw))
+    return `上游没有这个模型（模型名或地址不对）。${who}${tail}`
+  if (code >= 500) return `上游模型服务异常（HTTP ${code}）。稍后重试；持续如此请${who}${tail}`
+  if (err?.name === "MessageOutputLengthError") return "本轮输出超出模型的长度上限，已被截断中止。可以让它分几次写，或换一个上下文更长的模型。"
+  return `本轮模型调用出错${code ? `（HTTP ${code}）` : ""}。${who}${tail}`
+}
 function startJob(sid, sentText, modId) {
   // 新一轮 prompt 就是回退的提交动作（opencode 收到新消息会把 revert 标记清成 null），
   // 待提交登记到此结束；之后再出现的 revert 标记就真是残留了，交还给 clearStaleRevert 自愈。
@@ -1143,6 +1174,13 @@ function startJob(sid, sentText, modId) {
             // 按创建时间过滤；缺 created 字段则放行（宁可失误于收编，也别把正常消息挡在外面——
             // 挡错了 = 估算/封顶/直播对该消息全体失效，回到修复前的死状态）。
             if (!perMsg.has(info.id) && info.time?.created && info.time.created < jobT0) continue
+            // 【上游报的错就挂在这个字段上，必须收】opencode 遇到 provider 错误（余额不足 402、
+            // key 失效 401、限流 429…）不会让 session.prompt 抛异常：它把错误写进助手消息的
+            // error 字段，正文为空，然后正常收场。此前这里从没读过它 —— 于是真实故障的表现是
+            // 「前端一个空气泡、没有任何提示」，用户只能干等着以为模型在想。踩过一次：DeepSeek
+            // 余额耗尽，全站输出空白，前端与日志都没有一句话说明。
+            // MessageAbortedError 不算故障（用户点了终止 / 额度封顶自己 abort 的），照旧走 aborted 那条路。
+            if (info.error && info.error.name !== "MessageAbortedError") job.modelError = info.error
             const m = perMsg.get(info.id) || { real: 0, estTok: 0 }
             m.real = Math.max(m.real, info.cost || 0)   // 后到的无 cost 事件别把已知真实成本打回 0（那会让封顶退回估算值）
             perMsg.set(info.id, m)
@@ -1271,7 +1309,17 @@ function startJob(sid, sentText, modId) {
     }
     if (job.finished) return finish()
     const finalText = (result?.parts ?? []).filter(x => x.type === "text").map(x => x.text).join("\n")
+    // 上游把这一轮判错了：先把已经流出来的半截正文定稿，再如实报错收尾。
+    // 【不能只 final 一下就 done】那正是"空气泡"的来源：用户看不出是出错还是模型没话说。
+    if (job.modelError) {
+      if (finalText) broadcast("final", { text: finalText })
+      broadcast("failed", { message: describeModelError(job.modelError, currentRoute()) })
+      return finish()
+    }
     broadcast("final", { text: finalText })
+    // 没报错也没正文：不常见，但同样不能默默收场（多半是上游返回了空 choices）。
+    // 用 notice（气泡内提示）而不是 failed：本轮技术上确实正常结束了，产物/工具结果还在。
+    if (!finalText.trim()) broadcast("notice", { message: "模型这一轮没有返回任何文本。若反复如此，多半是上游模型服务异常，请换个模型或联系管理员。" })
     const changed = changedSince(outDir, before)
     broadcast("files", changed)   // 只推本会话本轮新建/改动的产物
     warmPreviews(outDir, changed)   // 后台把新产出的 office/docx 预转缓存，用户点预览即秒开

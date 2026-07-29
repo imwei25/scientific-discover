@@ -75,7 +75,7 @@ dialog::backdrop{background:rgba(0,0,0,.62)}
 <dialog id="dlg"><form method="dialog"><div class="dlg-h" id="dlg-h"></div>
 <div class="dlg-b" id="dlg-b"></div><div class="dlg-f" id="dlg-f"></div></form></dialog>
 <script>
-var S={users:[],tiers:[],skills:[],board:null,q:'',tab:'users'};
+var S={users:[],tiers:[],skills:[],catalog:[],board:null,q:'',tab:'users'};
 var $=function(s){return document.querySelector(s)};
 var esc=function(s){return String(s==null?'':s).replace(/[&<>"']/g,function(c){
   return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]})};
@@ -117,6 +117,7 @@ function load(){
   api('overview?q='+encodeURIComponent(S.q)).then(function(d){
     if(!d.ok)return renderLogin(d.err||'');
     S.users=d.users;S.tiers=d.tiers;S.skills=d.skills;S.board=d.board;S.total=d.total;S.matched=d.matched;
+    S.catalog=d.catalog||[];
     render()}).catch(function(e){renderLogin(e&&e.unauth?'':'加载失败')})
 }
 function render(){
@@ -124,14 +125,18 @@ function render(){
   $('#sub').textContent='共 '+S.total+' 个账号';
   $('#app').innerHTML=
     '<div class="tabs">'+
-      tabBtn('users','用户')+tabBtn('board','看板')+tabBtn('tiers','档位')+tabBtn('chan','上游通道')+tabBtn('audit','审计')+
+      tabBtn('users','用户')+tabBtn('board','看板')+tabBtn('tiers','档位')+tabBtn('prov','模型供应商')+tabBtn('chan','上游通道')+tabBtn('audit','审计')+
     '</div><div id="pane"></div>';
   Array.prototype.forEach.call(document.querySelectorAll('.tabs button'),function(b){
     b.onclick=function(){S.tab=b.dataset.k;
-      if(S.tab==='audit')loadAudit();else if(S.tab==='chan')loadChannels();else render()}});
+      if(S.tab==='audit')loadAudit();
+      else if(S.tab==='chan')loadChannels();
+      else if(S.tab==='prov')loadProviders();
+      else render()}});
   if(S.tab==='users')paneUsers();
   else if(S.tab==='board')paneBoard();
   else if(S.tab==='tiers')paneTiers();
+  else if(S.tab==='prov')paneProviders();
   else if(S.tab==='chan')paneChannels();
 }
 function tabBtn(k,label){return '<button data-k="'+k+'" class="'+(S.tab===k?'on':'')+'">'+label+'</button>'}
@@ -338,7 +343,9 @@ function paneTiers(){
     var n=S.users.filter(function(u){return u.tier===t.key}).length;
     return '<tr data-k="'+esc(t.key)+'"><td><b>'+esc(t.key)+'</b><div class="mut" style="font-size:12.5px">'+esc(t.note||'')+'</div></td>'+
       '<td>'+(t.daily_usd?money(t.daily_usd):'不限')+'</td><td>'+(t.monthly_usd?money(t.monthly_usd):'不限')+'</td>'+
-      '<td>'+esc(t.model||'—')+'</td><td class="mut" style="font-size:12.5px">'+(t.skills?esc(t.skills):'全部技能')+'</td>'+
+      '<td>'+esc(t.model||'—')+
+        (t.models?'<div class="mut" style="font-size:12.5px">可选：'+esc(t.models)+'</div>':'<div class="mut" style="font-size:12.5px">不可切换</div>')+'</td>'+
+      '<td class="mut" style="font-size:12.5px">'+(t.skills?esc(t.skills):'全部技能')+'</td>'+
       '<td>'+n+' 人</td><td><button class="btn sm" data-a="ed">编辑</button> '+
       '<button class="btn sm danger" data-a="rm">删除</button></td></tr>'}).join('');
   $('#pane').innerHTML='<section><div class="row"><h2 style="margin:0">档位</h2><span class="sp"></span>'+
@@ -355,28 +362,260 @@ function paneTiers(){
       post('tier',{key:k,remove:true}).then(function(j){
         toast(j.ok?'已删除档位 '+k:(j.err||'删除失败'),j.ok);if(j.ok)load()})}});
 }
+// 模型多选 chips：给档位挑「允许用户切换的模型」。数据来自模型目录（S.catalog）。
+function modelChips(selected){
+  var sel=selected||[];
+  if(!S.catalog.length)return '<div class="hint">模型目录还是空的——先到「模型供应商」页加一家供应商与它的模型，这里才有得选。</div>';
+  return '<div class="chips">'+S.catalog.map(function(m){
+    return '<span class="chip'+(sel.indexOf(m.model)>=0?' on':'')+'" data-m="'+esc(m.model)+'" title="'+esc(m.providerName||'')+'">'+
+      esc(m.label||m.model)+(m.providerName?' <span class="mut">·'+esc(m.providerName)+'</span>':'')+'</span>'}).join('')+'</div>'}
+
 function dlgTier(t){
-  t=t||{key:'',daily_usd:0,monthly_usd:0,model:'',skills:'',note:'',sort:5};
+  t=t||{key:'',daily_usd:0,monthly_usd:0,model:'',models:'',skills:'',note:'',sort:5};
+  // 默认模型给一个下拉（目录里的）+ 一个手填框：目录外的模型名（如只由 env 上游提供的那个）
+  // 必须还能填，否则升级上来的老档位一进这个框就被清空。
+  var catOpts='<option value="">（手填）</option>'+S.catalog.map(function(m){
+    return '<option value="'+esc(m.model)+'"'+(m.model===t.model?' selected':'')+'>'+esc(m.label||m.model)+
+      (m.providerName?' · '+esc(m.providerName):'')+'</option>'}).join('');
   dlg(t.key?('编辑档位 · '+t.key):'新增档位',
     '<div class="grid">'+
     '<label>档位键 *</label><input id="t-k" value="'+esc(t.key)+'"'+(t.key?' readonly':'')+' placeholder="小写字母开头，如 gold">'+
     '<label>日额度 USD</label><input id="t-d" value="'+t.daily_usd+'" placeholder="0 = 不限">'+
     '<label>月额度 USD</label><input id="t-m" value="'+t.monthly_usd+'" placeholder="0 = 不限">'+
-    '<label>模型</label><input id="t-mo" value="'+esc(t.model)+'" placeholder="该档位强制使用的模型名">'+
+    '<label>默认模型</label><select id="t-mosel">'+catOpts+'</select>'+
+    '<label></label><input id="t-mo" value="'+esc(t.model)+'" placeholder="模型名（上面选一个会自动填到这里）">'+
     '<label>说明</label><input id="t-n" value="'+esc(t.note)+'">'+
     '<label>排序</label><input id="t-s" value="'+t.sort+'"></div>'+
+    '<div style="margin-top:14px"><label class="mut">允许用户切换的模型</label>'+
+    '<div class="hint">默认模型<b>永远可用</b>，不用在这里重复勾。全不选 = 该档位<b>不能换模型</b>（升级上来的老档位就是这个状态）。'+
+    '客户端只能在这份清单里选，点了清单外的模型会被网关静默打回默认模型。</div>'+
+    modelChips(String(t.models||'').split(',').filter(Boolean))+'</div>'+
     '<div style="margin-top:14px"><label class="mut">可用技能（全不选 = 全部）</label>'+
     skillChips(String(t.skills||'').split(',').filter(Boolean),S.skills)+'</div>',
     '<button class="btn primary" id="ok" value="default">保存</button>');
-  var chips=$('#dlg-b').querySelectorAll('.chip');
-  Array.prototype.forEach.call(chips,function(c){c.onclick=function(){c.classList.toggle('on')}});
+  var mchips=$('#dlg-b').querySelectorAll('.chip[data-m]');
+  var schips=$('#dlg-b').querySelectorAll('.chip[data-s]');
+  Array.prototype.forEach.call(mchips,function(c){c.onclick=function(){c.classList.toggle('on')}});
+  Array.prototype.forEach.call(schips,function(c){c.onclick=function(){c.classList.toggle('on')}});
+  $('#t-mosel').onchange=function(){if(this.value)$('#t-mo').value=this.value};
   $('#ok').onclick=function(e){e.preventDefault();
-    var picked=[];Array.prototype.forEach.call(chips,function(c){if(c.classList.contains('on'))picked.push(c.dataset.s)});
+    var picked=[];Array.prototype.forEach.call(schips,function(c){if(c.classList.contains('on'))picked.push(c.dataset.s)});
+    var mpicked=[];Array.prototype.forEach.call(mchips,function(c){if(c.classList.contains('on'))mpicked.push(c.dataset.m)});
     post('tier',{key:$('#t-k').value.trim(),dailyUSD:Number($('#t-d').value)||0,
-      monthlyUSD:Number($('#t-m').value)||0,model:$('#t-mo').value.trim(),
+      monthlyUSD:Number($('#t-m').value)||0,model:$('#t-mo').value.trim(),models:mpicked.join(','),
       skills:picked.join(','),note:$('#t-n').value.trim(),sort:Number($('#t-s').value)||0}).then(function(j){
       if(!j.ok)return toast(j.err||'保存失败',false);
       $('#dlg').close();toast('已保存'+(j.affected?'（已吊销 '+j.affected+' 个用户的 key）':''),true);load()})}
+}
+
+// ---------- 模型供应商 ----------
+function loadProviders(){
+  render();
+  $('#pane').innerHTML='<section><h2>模型供应商</h2><p class="mut">加载中…</p></section>';
+  api('providers').then(function(d){
+    S.prov=d;
+    // 【顺手把档位对话框用的模型清单也刷了】它原本只在 overview 那一次取，而"加模型"恰恰
+    // 发生在这一页：不同步的话，刚接入的模型在档位对话框里一个都看不到，得刷新整页才出现，
+    // 而"加完模型去档位勾一下"正是紧接着的下一步动作。
+    var seen={},cat=[];
+    (d.models||[]).forEach(function(m){
+      if(m.status!=='active'||m.providerStatus!=='active'||seen[m.model])return;
+      seen[m.model]=1;cat.push({model:m.model,label:m.label||m.model,providerName:m.providerName||m.provider})});
+    S.catalog=cat;
+    paneProviders()})
+    .catch(function(){$('#pane').innerHTML='<section><p class="mut">加载失败</p></section>'})
+}
+function paneProviders(){
+  var d=S.prov;
+  // 与「上游通道」页同一条铁律：没数据只画占位，取数单向由 loadProviders 驱动，
+  // 否则 render() ↔ paneProviders() 会互相回调成死循环。
+  if(!d){$('#pane').innerHTML='<section><h2>模型供应商</h2><p class="mut">加载中…</p></section>';return}
+  var provs=d.providers||[],models=d.models||[],lg=d.legacy||{};
+
+  var prows=provs.map(function(p){
+    return '<tr data-k="'+esc(p.key)+'">'+
+      '<td><b>'+esc(p.name||p.key)+'</b><div class="mut" style="font-size:12.5px">'+esc(p.key)+
+        (p.note?' · '+esc(p.note):'')+'</div></td>'+
+      '<td class="mut" style="font-size:12.5px">'+esc(p.baseUrl)+'</td>'+
+      '<td>'+(p.status==='active'?'<span class="tag ok">启用</span>':'<span class="tag bad">已停用</span>')+
+        (p.hasKey?'':' <span class="tag warn">缺 Key</span>')+'</td>'+
+      '<td>'+p.models+' 个</td>'+
+      '<td class="row" style="gap:5px;flex-wrap:nowrap">'+
+        '<button class="btn sm" data-a="ed">编辑</button>'+
+        '<button class="btn sm" data-a="add-models">+ 模型</button>'+
+        '<button class="btn sm" data-a="toggle">'+(p.status==='active'?'停用':'启用')+'</button>'+
+        '<button class="btn sm danger" data-a="rm">删除</button></td></tr>'}).join('');
+
+  var mrows=models.map(function(m){
+    var dead=m.providerStatus!=='active';
+    return '<tr data-id="'+m.id+'">'+
+      '<td><b>'+esc(m.model)+'</b>'+(m.label&&m.label!==m.model?'<div class="mut" style="font-size:12.5px">'+esc(m.label)+'</div>':'')+'</td>'+
+      '<td>'+esc(m.providerName||m.provider)+(dead?' <span class="tag bad">供应商已停用</span>':'')+
+        (m.upstream?'<div class="mut" style="font-size:12.5px">上游名：'+esc(m.upstream)+'</div>':'')+'</td>'+
+      '<td class="mut" style="font-size:12.5px">入 '+m.priceIn+' / 出 '+m.priceOut+' / 缓存 '+m.priceCached+'</td>'+
+      '<td>'+(m.status==='active'?'<span class="tag ok">启用</span>':'<span class="tag bad">已停用</span>')+
+        ' <span class="mut" style="font-size:12.5px">优先级 '+m.sort+'</span></td>'+
+      '<td class="mut" style="font-size:12.5px">'+(m.tiers.length?m.tiers.map(esc).join('、'):'没有档位在用')+'</td>'+
+      '<td class="row" style="gap:5px;flex-wrap:nowrap">'+
+        '<button class="btn sm" data-a="ed">编辑</button>'+
+        '<button class="btn sm" data-a="test">测试</button>'+
+        '<button class="btn sm danger" data-a="rm">删除</button></td></tr>'}).join('');
+
+  $('#pane').innerHTML=
+    '<section><div class="row"><h2 style="margin:0">供应商</h2><span class="sp"></span>'+
+      '<button class="btn primary" id="p-add">+ 新增供应商</button></div>'+
+    '<div class="hint" style="margin:8px 0 12px">任何 <b>OpenAI 兼容</b>端点都能加（DeepSeek、硅基流动、自建 one-api……）。'+
+    'API Key 只存在服务器库里、转发时才贴，<b>绝不下发到客户端</b>；后台也只显示"有没有"，不回显。</div>'+
+    '<table><thead><tr><th>名称</th><th>地址</th><th>状态</th><th>模型</th><th></th></tr></thead><tbody>'+
+    (prows||'<tr><td colspan="5" class="mut" style="padding:18px">还没有供应商——所有流量都走下面那条 env 兜底上游。</td></tr>')+
+    '</tbody></table></section>'+
+
+    '<section><div class="row"><h2 style="margin:0">模型目录</h2><span class="sp"></span>'+
+      '<button class="btn primary" id="m-add">+ 新增模型</button></div>'+
+    '<div class="hint" style="margin:8px 0 12px">一行 = 「某个对外模型名由某家提供」。'+
+    '<b>同一个对外模型名可以有多行（多家）：优先级数字小的先用，它伺候不了时自动落到下一家</b>——这就是故障切换。'+
+    '「伺候不了」= 连不上、5xx，以及 401/402/403/408/429（密钥失效、<b>余额不足</b>、超时、限流）；'+
+    '400/404 这类请求本身的问题不切家，原样透传给客户端诊断。'+
+    '单价<b>按行独立</b>，换家不会再让账静默偏。<br>'+
+    '加完模型别忘了到「档位」页把它勾进对应档位的<b>允许清单</b>，客户端才选得到。</div>'+
+    '<table><thead><tr><th>对外模型名</th><th>供应商</th><th>单价 USD/百万 token</th><th>状态</th><th>哪些档位在用</th><th></th></tr></thead><tbody>'+
+    (mrows||'<tr><td colspan="6" class="mut" style="padding:18px">还没有模型</td></tr>')+
+    '</tbody></table></section>'+
+
+    '<section><h2>兜底上游 <span class="mut">来自 /etc/sci-auth.env</span></h2>'+
+    '<div class="hint">模型目录里查不到的模型名，仍走这条老路：<code>'+esc(lg.url||'(未配)')+'</code>'+
+    (lg.hasKey?' <span class="tag ok">已配 Key</span>':' <span class="tag bad">未配 Key</span>')+
+    '，单价 入 '+lg.priceIn+' / 出 '+lg.priceOut+' / 缓存 '+lg.priceCached+'。<br>'+
+    '这条路留着是为了让老部署一字不改也照常跑。要把它也纳入统一管理，就在上面把它加成一家供应商。</div></section>';
+
+  $('#p-add').onclick=function(){dlgProvider(null)};
+  $('#m-add').onclick=function(){dlgModel(null)};
+  Array.prototype.forEach.call(document.querySelectorAll('#pane tbody button'),function(b){
+    b.onclick=function(){
+      var tr=b.closest('tr'),a=b.dataset.a;
+      if(tr.dataset.k!==undefined&&tr.dataset.k!==''){
+        var p=provs.filter(function(x){return x.key===tr.dataset.k})[0];
+        if(a==='ed')return dlgProvider(p);
+        if(a==='add-models')return dlgFetchModels(p);
+        if(a==='toggle')return post('provider',{key:p.key,name:p.name,baseURL:p.baseUrl,
+          status:p.status==='active'?'disabled':'active',note:p.note,sort:p.sort}).then(function(j){
+          toast(j.ok?'已'+(p.status==='active'?'停用':'启用')+' '+(p.name||p.key):(j.err||'失败'),j.ok);loadProviders()});
+        if(a==='rm'){
+          if(!confirm('删除供应商「'+(p.name||p.key)+'」？\\n\\n它名下的 '+p.models+' 个模型条目会一并删除。\\n'+
+            '正在用这些模型的档位会退回各自的默认模型。'))return;
+          return post('provider',{key:p.key,remove:true}).then(function(j){
+            toast(j.ok?'已删除（连带 '+j.removedModels+' 个模型）':(j.err||'失败'),j.ok);loadProviders()})}
+        return}
+      var m=models.filter(function(x){return x.id===Number(tr.dataset.id)})[0];
+      if(a==='ed')return dlgModel(m);
+      if(a==='test'){
+        b.disabled=true;
+        return post('provider',{key:m.provider,action:'test',model:m.upstream||m.model}).then(function(j){
+          b.disabled=false;
+          toast(j.ok?('通了：'+j.ms+'ms'+(j.reply?'（回了「'+j.reply+'」）':'')):(j.err||'测试失败'),j.ok)})
+          .catch(function(){b.disabled=false;toast('网络错误',false)})}
+      if(a==='rm'){
+        if(!confirm('删除模型「'+m.model+'@'+(m.providerName||m.provider)+'」？'+
+          (m.tiers.length?'\\n\\n⚠ 这些档位正在用它：'+m.tiers.join('、'):'')))return;
+        return post('model',{id:m.id,remove:true}).then(function(j){
+          toast(j.ok?'已删除':(j.err||'失败'),j.ok);loadProviders()})}}});
+}
+
+function dlgProvider(p){
+  var isNew=!p;
+  p=p||{key:'',name:'',baseUrl:'',status:'active',note:'',sort:0,hasKey:false};
+  dlg(isNew?'新增供应商':('编辑供应商 · '+(p.name||p.key)),
+    '<div class="grid">'+
+    '<label>供应商键 *</label><input id="p-k" value="'+esc(p.key)+'"'+(isNew?'':' readonly')+' placeholder="小写字母开头，如 siliconflow">'+
+    '<label>显示名</label><input id="p-n" value="'+esc(p.name)+'" placeholder="硅基流动">'+
+    // 这里【不能写整条示例 URL】：后台页面有一条"不许出现外部 URL"的自包含闸（离线/CSP 运维
+    // 指望它），连 placeholder 与注释里的协议头都会把它踩响。所以示例只写域名部分。
+    '<label>API 地址 *</label><input id="p-u" value="'+esc(p.baseUrl)+'" placeholder="带 http(s) 前缀，例 api.siliconflow.cn/v1">'+
+    '<label>API Key '+(isNew?'*':'')+'</label><input id="p-key" type="password" autocomplete="off" placeholder="'+
+      (p.hasKey?'已配置（留空 = 不改）':'sk-...')+'">'+
+    '<label>状态</label><select id="p-st"><option value="active"'+(p.status==='active'?' selected':'')+'>启用</option>'+
+      '<option value="disabled"'+(p.status!=='active'?' selected':'')+'>停用</option></select>'+
+    '<label>排序</label><input id="p-s" value="'+p.sort+'">'+
+    '<label>备注</label><input id="p-note" value="'+esc(p.note)+'"></div>'+
+    '<div class="hint" style="margin-top:12px">地址填到 <code>/v1</code>（没写会自动补）。存好后用「+ 模型」从这家拉模型列表勾选接入。</div>'+
+    '<div class="msg" id="p-msg" style="position:static;max-width:none;margin-top:10px"></div>',
+    '<button class="btn" id="p-test" value="">测试连通</button><button class="btn primary" id="ok" value="default">保存</button>');
+  // 【display 要显式打开】.msg 默认 display:none，只有 .ok/.err 两个修饰类才显示；
+  // "正在连…"这种中间态没有修饰类，不强开就永远看不见（点了测试像没反应）。
+  var pmsg=function(cls,t){var e=$('#p-msg');e.className='msg '+cls;e.style.display='block';e.textContent=t};
+  var body=function(){return {key:$('#p-k').value.trim(),name:$('#p-n').value.trim(),baseURL:$('#p-u').value.trim(),
+    apiKey:$('#p-key').value,status:$('#p-st').value,sort:Number($('#p-s').value)||0,note:$('#p-note').value.trim()}};
+  $('#p-test').onclick=function(e){e.preventDefault();
+    var b=body();b.action='probe';pmsg('','正在连…');
+    post('provider',b).then(function(j){
+      if(!j.ok)return pmsg('err',j.err||'连不上');
+      pmsg('ok','通了，这家有 '+j.models.length+' 个模型：'+j.models.slice(0,6).join('、')+(j.models.length>6?' …':''))})};
+  $('#ok').onclick=function(e){e.preventDefault();
+    post('provider',body()).then(function(j){
+      if(!j.ok)return pmsg('err',j.err||'保存失败');
+      $('#dlg').close();toast('已保存供应商',true);loadProviders()})}
+}
+
+// 从某家拉模型列表 → 勾选 → 批量落库（这一步才让"加了供应商"变成"用户能选到的模型"）
+function dlgFetchModels(p){
+  dlg('从「'+(p.name||p.key)+'」接入模型','<p class="mut">正在拉取模型列表…</p>');
+  post('provider',{key:p.key,action:'probe',baseURL:p.baseUrl}).then(function(j){
+    if(!j.ok){
+      $('#dlg-b').innerHTML='<div class="msg err" style="position:static;max-width:none">'+esc(j.err||'拉取失败')+'</div>'+
+        '<div class="hint" style="margin-top:10px">有些兼容端点不实现 <code>/models</code>。用「+ 新增模型」手填模型名即可，功能一样。</div>';
+      return}
+    $('#dlg-b').innerHTML='<div class="hint">勾选要接入的模型。单价先按 env 的全局价填好，'+
+      '<b>各家价格不同，务必到模型目录里逐个改成这家的真实单价</b>——否则额度会算偏。</div>'+
+      '<div class="row" style="margin:10px 0"><input id="mf" placeholder="过滤" style="flex:1"></div>'+
+      '<div class="chips" id="mlist">'+j.models.map(function(m){
+        return '<span class="chip" data-m="'+esc(m)+'">'+esc(m)+'</span>'}).join('')+'</div>';
+    $('#dlg-f').innerHTML='<button class="btn primary" id="ok" value="default">接入所选</button>'+
+      '<button class="btn" value="cancel">关闭</button>';
+    var chips=$('#mlist').querySelectorAll('.chip');
+    Array.prototype.forEach.call(chips,function(c){c.onclick=function(){c.classList.toggle('on')}});
+    $('#mf').oninput=function(){var q=this.value.trim().toLowerCase();
+      Array.prototype.forEach.call(chips,function(c){
+        c.style.display=!q||c.dataset.m.toLowerCase().indexOf(q)>=0?'':'none'})};
+    $('#ok').onclick=function(e){e.preventDefault();
+      var items=[];Array.prototype.forEach.call(chips,function(c){
+        if(c.classList.contains('on'))items.push({model:c.dataset.m,provider:p.key})});
+      if(!items.length)return toast('先勾几个模型',false);
+      post('model',{items:items}).then(function(j2){
+        if(!j2.ok)return toast(j2.err||'保存失败',false);
+        $('#dlg').close();toast('已接入 '+j2.saved+' 个模型（记得到档位页勾进允许清单）',true);loadProviders()})}})
+}
+
+function dlgModel(m){
+  var provs=(S.prov&&S.prov.providers)||[];
+  if(!provs.length)return toast('先加一家供应商',false);
+  var isNew=!m;
+  var lg=(S.prov&&S.prov.legacy)||{priceIn:0,priceOut:0,priceCached:0};
+  m=m||{id:0,model:'',provider:provs[0].key,upstream:'',label:'',status:'active',sort:0,note:'',
+    priceIn:lg.priceIn,priceOut:lg.priceOut,priceCached:lg.priceCached};
+  dlg(isNew?'新增模型':('编辑模型 · '+m.model),
+    '<div class="grid">'+
+    '<label>对外模型名 *</label><input id="x-m" value="'+esc(m.model)+'" placeholder="客户端看到、请求里写的名字">'+
+    '<label>中文名</label><input id="x-l" value="'+esc(m.label)+'" placeholder="给用户看的名字，如 DeepSeek 深度思考">'+
+    '<label>供应商 *</label><select id="x-p">'+provs.map(function(p){
+      return '<option value="'+esc(p.key)+'"'+(p.key===m.provider?' selected':'')+'>'+esc(p.name||p.key)+'</option>'}).join('')+'</select>'+
+    '<label>上游真实名</label><input id="x-u" value="'+esc(m.upstream)+'" placeholder="留空 = 与对外名相同">'+
+    '<label>输入单价</label><input id="x-pi" value="'+m.priceIn+'">'+
+    '<label>输出单价</label><input id="x-po" value="'+m.priceOut+'">'+
+    '<label>缓存命中价</label><input id="x-pc" value="'+m.priceCached+'">'+
+    '<label>优先级</label><input id="x-s" value="'+m.sort+'" placeholder="数字小的先用；同名多家时靠它定主备">'+
+    '<label>状态</label><select id="x-st"><option value="active"'+(m.status==='active'?' selected':'')+'>启用</option>'+
+      '<option value="disabled"'+(m.status!=='active'?' selected':'')+'>停用</option></select>'+
+    '<label>备注</label><input id="x-n" value="'+esc(m.note)+'"></div>'+
+    '<div class="hint" style="margin-top:12px">单价单位是 <b>USD / 百万 token</b>，必须与这家的真实计费口径一致，否则额度会系统性偏。<br>'+
+    '想让两家互为备份：给它们建<b>同一个对外模型名</b>的两行，各填各的上游真实名与单价，用优先级定主备。</div>',
+    '<button class="btn primary" id="ok" value="default">保存</button>');
+  $('#ok').onclick=function(e){e.preventDefault();
+    post('model',{id:m.id||undefined,model:$('#x-m').value.trim(),provider:$('#x-p').value,
+      upstream:$('#x-u').value.trim(),label:$('#x-l').value.trim(),
+      priceIn:Number($('#x-pi').value)||0,priceOut:Number($('#x-po').value)||0,priceCached:Number($('#x-pc').value)||0,
+      sort:Number($('#x-s').value)||0,status:$('#x-st').value,note:$('#x-n').value.trim()}).then(function(j){
+      if(!j.ok)return toast(j.err||'保存失败',false);
+      $('#dlg').close();toast('已保存模型',true);loadProviders()})}
 }
 
 // ---------- 上游通道 ----------

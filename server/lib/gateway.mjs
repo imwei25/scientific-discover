@@ -1,6 +1,14 @@
 // LLM 网关：客户端拿 access key 打这里，服务端换成真实上游 key 再转发，并按响应里的
 // usage 计量入账。
 //
+// 【模型怎么定、流量打给谁】（2026-07-29 加供应商目录后）
+//   ① 客户端点名的模型在该档位的允许清单里 → 用它；不在 → 静默打回档位默认模型。
+//   ② 拿模型名去 models 目录查候选：一行一家供应商，各带自己的地址/key/真实模型名/单价；
+//      sort 小的先打，连不上或 5xx 且响应头还没发出去 → 自动落到下一家。
+//   ③ 目录里查不到（还没建目录，或该模型只由 env 上游提供）→ 回落 LLM_UPSTREAM_* + COST_*，
+//      与加目录之前的行为逐字节一致。老部署不改任何配置也照常跑。
+//   ④ 计价按【命中的那一行】的单价，不再是全局一张表 —— 这正是多供应商下账会静默偏的老病根。
+//
 // 【为什么计量必须在这一层】改造方案 §3.1：桌面客户端完全在用户手里，让它自报消费额
 // 等于没有额度。所以：上游 key 绝不下发到客户端，所有调用必走本通道，账按上游响应记。
 //
@@ -20,6 +28,13 @@ export const GATEWAY_PATH_PREFIX = "/llm/"
 const REQ_BODY_LIMIT = 32 * 1024 * 1024   // 32MB：长上下文也够，再大多半是异常
 const JSON_CAP = 4 * 1024 * 1024          // 非流式响应最多缓这么多用于解析 usage
 const SSE_BUF_CAP = 1 << 20               // 畸形流（一直不换行）时的保护上限
+
+/**
+ * 该不该换下一家：所有 5xx，外加这几个"这家伺候不了你"的 4xx。
+ * 400/404/413/422 不在内 —— 那是请求本身的问题（模型名错、体过大…），换谁都一样。
+ */
+const RETRY_4XX = new Set([401, 402, 403, 408, 409, 429])
+export const shouldRetryStatus = (code) => Number(code) >= 500 || RETRY_4XX.has(Number(code))
 
 /**
  * 从各家的 usage 结构里取统一口径。
@@ -74,7 +89,8 @@ async function readRawBody(req, limit = REQ_BODY_LIMIT) {
 
 /**
  * 重写请求体：
- *   ① 强制模型 —— 客户端传什么都覆盖成档位规定的模型（需求「换模型对客户端透明」）；
+ *   ① 覆盖模型名 —— 客户端选的模型要么在档位允许清单里（用它），要么被打回默认模型；
+ *      供应商自己的真实模型名不同时（models.upstream），这里换成它的名字；
  *   ② stream:true 时注入 stream_options.include_usage —— 不注入的话最后一个 chunk 没有
  *      usage，这一单就白记（计量直接失效）。
  * 非 JSON body（少见）原样透传，只是记不到账。
@@ -87,6 +103,51 @@ export function rewriteBody(raw, { model }) {
   const stream = obj.stream === true
   if (stream) obj.stream_options = { ...(obj.stream_options || {}), include_usage: true }
   return { buf: Buffer.from(JSON.stringify(obj), "utf8"), stream, model: String(obj.model || "") }
+}
+
+/** 请求体里客户端点名的模型（拿不到就空串——非 JSON / 非对话接口都属这种）。 */
+export function requestedModel(raw) {
+  try {
+    const o = JSON.parse(raw.toString("utf8"))
+    return o && typeof o === "object" ? String(o.model || "") : ""
+  } catch { return "" }
+}
+
+/**
+ * 定这一单用哪个模型：客户端点的名字在档位允许清单里就照办，否则一律打回档位默认模型。
+ *
+ * 【为什么不是"客户端传什么就用什么"】额度与计价都按模型算，放任客户端点名等于让它自选价格。
+ * 【为什么不是直接拒绝】老客户端（打包版）会照着自己的配置传模型名，直接 400 会把它们全打死；
+ * 静默打回默认模型正是改造前的行为，兼容性最好，且响应体里带的是真实模型名，前端看得见。
+ */
+export function pickModel(requested, ent) {
+  const req = String(requested || "").trim()
+  const allowed = Array.isArray(ent.models) && ent.models.length ? ent.models : (ent.model ? [ent.model] : [])
+  if (req && allowed.includes(req)) return { model: req, coerced: false }
+  return { model: ent.model || req, coerced: !!req && req !== ent.model }
+}
+
+/**
+ * 这一单可以打给谁，按顺序排好。
+ *
+ * ① 目录里有这个模型名 → 每一行就是一个候选（多家 = 故障切换，sort 小的先上），
+ *    各自带自己的地址、key、真实模型名与单价；
+ * ② 目录里没有（还没建目录 / 只由 env 上游提供）→ 回落到 env 的 LLM_UPSTREAM_*，
+ *    单价用全局 COST_*。这条是老部署一字不改也照常跑的保证。
+ */
+export function buildAttempts(model, routes, CFG) {
+  const list = (routes || []).filter((r) => r.base_url).map((r) => ({
+    provider: r.provider, providerName: r.provider_name || r.provider,
+    baseUrl: r.base_url, apiKey: r.api_key || "",
+    upstreamModel: r.upstream || r.model || model,
+    price: { priceIn: Number(r.price_in) || 0, priceOut: Number(r.price_out) || 0, priceCached: Number(r.price_cached) || 0 },
+  }))
+  if (list.length) return list
+  return [{
+    provider: "", providerName: "默认上游(env)",
+    baseUrl: CFG.upstreamUrl, apiKey: CFG.upstreamKey, upstreamModel: model,
+    price: { priceIn: CFG.priceIn, priceOut: CFG.priceOut, priceCached: CFG.priceCached },
+  }]
 }
 
 /**
@@ -176,78 +237,126 @@ export async function llmForward({ req, res, pathname, ctx }) {
     return fail(res, 403, "SKILL_NOT_ALLOWED", `当前档位未开通「${skill}」，请联系管理员升级`, { skill })
   }
 
-  // ---- ④ 上游 key ----
-  if (!CFG.upstreamKey)
-    return fail(res, 503, "UPSTREAM_UNCONFIGURED", "服务器未配置上游模型密钥，请联系管理员")
-
-  // ---- ⑤ 读并重写请求体 ----
+  // ---- ④ 读请求体 → 定模型 → 定这一单可以打给谁 ----
   let raw
   try { raw = await readRawBody(req) }
   catch (e) {
     if (e.tooLarge) return fail(res, 413, "BODY_TOO_LARGE", "请求体过大")
     return fail(res, 400, "BAD_REQUEST", "读取请求体失败")
   }
-  const { buf, stream, model } = rewriteBody(raw, { model: ent.model })
+  const picked = pickModel(requestedModel(raw), ent)
+  const model = picked.model
+  if (picked.coerced)
+    log(`[llm] ${user.username} 点名的模型不在档位允许清单内，已打回 ${model}（档位 ${ent.tier}）`)
+
+  const routes = ctx.modelRoutes ? ctx.modelRoutes(model) : []
+  const attempts = buildAttempts(model, routes, CFG)
+  // 没有任何可用凭证就别白跑一趟：目录里那家没填 key、或压根没建目录而 env 也是空的
+  if (!attempts.some((a) => a.apiKey && a.baseUrl))
+    return fail(res, 503, "UPSTREAM_UNCONFIGURED", "服务器未配置上游模型密钥，请联系管理员")
 
   const fwdPath = pathname.slice(GATEWAY_PATH_PREFIX.length - 1) // "/llm/v1/x" -> "/v1/x"
   const query = req.url.includes("?") ? req.url.slice(req.url.indexOf("?")) : ""
-  let tu
-  try { tu = new URL(joinUpstream(CFG.upstreamUrl, fwdPath) + query) }
-  catch { return fail(res, 500, "INTERNAL", "上游地址配置有误") }
-
-  const headers = { ...req.headers }
-  for (const h of ["host", "connection", "content-length", "transfer-encoding",
-    "x-forwarded-for", "x-forwarded-proto", "x-forwarded-prefix", "x-skill", "x-client-version"]) delete headers[h]
-  headers["authorization"] = "Bearer " + CFG.upstreamKey
-  headers["content-length"] = Buffer.byteLength(buf)
+  const baseHeaders = { ...req.headers }
+  for (const h of ["host", "connection", "content-length", "transfer-encoding", "authorization",
+    "x-forwarded-for", "x-forwarded-proto", "x-forwarded-prefix", "x-skill", "x-client-version"]) delete baseHeaders[h]
 
   const started = Date.now()
-  const mod = tu.protocol === "https:" ? https : http
-  const up = mod.request({
-    hostname: tu.hostname,
-    port: tu.port || (tu.protocol === "https:" ? 443 : 80),
-    method: req.method,
-    path: tu.pathname + tu.search,
-    headers,
-  }, (upRes) => {
-    const h = { ...upRes.headers }
-    delete h["connection"]
-    delete h["content-length"]   // 旁路不改内容，但去掉更稳（上游若分块，长度可能对不上）
-    res.writeHead(upRes.statusCode || 502, h)
+  let cur = null                       // 当前在飞的上游请求（客户端断开时要拆掉它）
+  let clientGone = false
+  res.on("close", () => {
+    if (!res.writableEnded) { clientGone = true; try { cur?.destroy() } catch {} }
+  })
 
-    const isSse = String(upRes.headers["content-type"] || "").includes("text/event-stream") || stream
-    const tap = makeUsageTap(isSse, (rawUsage, respModel) => {
-      const u = normalizeUsage(rawUsage)
-      if (!u) {
-        // 上游没给 usage：多半是错误响应（4xx/5xx，不该计费）；2xx 却没给就要看见
-        if ((upRes.statusCode || 0) < 400)
-          log(`[llm] ${user.username} 上游 ${upRes.statusCode} 未返回 usage —— 这一单没计到账（model=${model} stream=${stream}）`)
-        return
+  /**
+   * 打第 i 家。失败（连不上 / 5xx）且【响应头还没发出去】时自动落到下一家 —— 这就是
+   * 同一模型名挂多家供应商时的故障切换。头一旦发出去就只能断流收尾：已经吐给客户端的
+   * 字节收不回来，重发会得到两段拼在一起的答案。
+   */
+  const tryAttempt = (i) => {
+    if (clientGone) return
+    const at = attempts[i]
+    const last = i >= attempts.length - 1
+    // 【一次尝试只能了结一次】走了 5xx 换家那支之后，被弃用的那条连接稍后仍可能吐出一个
+    // error 事件；不挡住的话就会再切一次家（或对已经在回的响应二次 fail），表现是同一问
+    // 一次答两遍 / 502 覆盖掉已经开始流的正常响应。
+    let settled = false
+    const nextOr = (why, code, msg) => {
+      if (settled || clientGone) return
+      settled = true
+      if (!last && !res.headersSent) {
+        log(`[llm] ${user.username} ${at.providerName} ${why} —— 切下一家（${attempts[i + 1].providerName}）`)
+        return tryAttempt(i + 1)
       }
-      const cost = costOf(u, CFG)
-      try {
-        ctx.recordUsage(user.id, {
-          model: respModel || model, skill,
-          prompt_tokens: u.prompt, completion_tokens: u.completion,
-          cached_tokens: u.cached, cost_usd: cost,
-        })
-      } catch (e) { log(`[llm] ${user.username} 记账失败：${e.message}`) }
-      log(`[llm] ${user.username} ${respModel || model} in=${u.prompt}(cache ${u.cached}) out=${u.completion} $${cost.toFixed(6)} ${Date.now() - started}ms`)
-    })
+      log(`[llm] ${user.username} ${at.providerName} ${why}`)
+      if (!res.headersSent) fail(res, 502, code, msg)
+      else { try { res.destroy() } catch {} }
+    }
+    if (!at.apiKey || !at.baseUrl) return nextOr("未配置地址或密钥", "UPSTREAM_UNCONFIGURED", "服务器未配置上游模型密钥，请联系管理员")
 
-    // ★ 上游可读侧的 error 必须自己接：pipe 不转发它，抛出去就是进程级未捕获异常
-    upRes.on("error", (e) => {
-      log(`[llm] ${user.username} 上游流中断：${e.message}`)
-      try { res.destroy() } catch {}
-    })
-    upRes.pipe(tap).pipe(res)
-  })
+    // 每一家的真实模型名可能不同（models.upstream），所以 body 要按家重新生成
+    const { buf, stream } = rewriteBody(raw, { model: at.upstreamModel })
+    let tu
+    try { tu = new URL(joinUpstream(at.baseUrl, fwdPath) + query) }
+    catch { return nextOr("地址配置有误", "INTERNAL", "上游地址配置有误") }
 
-  up.on("error", (e) => {
-    log(`[llm] ${user.username} 上游错误：${e.message}`)
-    if (!res.headersSent) fail(res, 502, "UPSTREAM_UNAVAILABLE", "上游模型服务暂不可用，请稍后重试")
-    else { try { res.destroy() } catch {} }
-  })
-  res.on("close", () => { if (!res.writableEnded) { try { up.destroy() } catch {} } })
-  up.end(buf)
+    const headers = { ...baseHeaders, authorization: "Bearer " + at.apiKey, "content-length": Buffer.byteLength(buf) }
+    const mod = tu.protocol === "https:" ? https : http
+    const up = mod.request({
+      hostname: tu.hostname,
+      port: tu.port || (tu.protocol === "https:" ? 443 : 80),
+      method: req.method,
+      path: tu.pathname + tu.search,
+      headers,
+    }, (upRes) => {
+      // 还没开始回客户端、且这家明显"伺候不了"→ 换下一家再试。
+      // 【4xx 里也有该切家的】真实事故（2026-07-29）：主供应商余额耗尽，上游回 402，
+      // 而当时只对 5xx 切家 —— 备用供应商明明是好的，却一次都没被用上，全站输出空白。
+      // 402 余额/欠费、401/403 我们这把 key 在这家失效、408 超时、429 限流，都属于
+      // "换一家就能好"，必须切。400/404/413/422 是请求本身的问题（模型名不对、体过大…），
+      // 换谁都一样，原样透传给客户端才有诊断价值。
+      if (shouldRetryStatus(upRes.statusCode) && !last && !res.headersSent) {
+        upRes.resume()
+        return nextOr(`返回 ${upRes.statusCode}`, "UPSTREAM_UNAVAILABLE", "上游模型服务暂不可用，请稍后重试")
+      }
+      settled = true          // 已决定用这一家：之后这条连接再报错也不许再切家/再改响应
+      const h = { ...upRes.headers }
+      delete h["connection"]
+      delete h["content-length"]   // 旁路不改内容，但去掉更稳（上游若分块，长度可能对不上）
+      res.writeHead(upRes.statusCode || 502, h)
+
+      const isSse = String(upRes.headers["content-type"] || "").includes("text/event-stream") || stream
+      const tap = makeUsageTap(isSse, (rawUsage, respModel) => {
+        const u = normalizeUsage(rawUsage)
+        if (!u) {
+          // 上游没给 usage：多半是错误响应（4xx/5xx，不该计费）；2xx 却没给就要看见
+          if ((upRes.statusCode || 0) < 400)
+            log(`[llm] ${user.username} 上游 ${upRes.statusCode} 未返回 usage —— 这一单没计到账（model=${model} stream=${stream}）`)
+          return
+        }
+        const cost = costOf(u, at.price)
+        try {
+          // 【入账记的是对外模型名，不是上游改名后的那个】账单要按用户看得见的模型对得上，
+          // 而 respModel 是上游回的（改过名的那家会回它自己的名字）。
+          ctx.recordUsage(user.id, {
+            model, provider: at.provider, skill,
+            prompt_tokens: u.prompt, completion_tokens: u.completion,
+            cached_tokens: u.cached, cost_usd: cost,
+          })
+        } catch (e) { log(`[llm] ${user.username} 记账失败：${e.message}`) }
+        log(`[llm] ${user.username} ${model}@${at.providerName}${respModel && respModel !== model ? `(上游 ${respModel})` : ""} in=${u.prompt}(cache ${u.cached}) out=${u.completion} $${cost.toFixed(6)} ${Date.now() - started}ms`)
+      })
+
+      // ★ 上游可读侧的 error 必须自己接：pipe 不转发它，抛出去就是进程级未捕获异常
+      upRes.on("error", (e) => {
+        log(`[llm] ${user.username} 上游流中断：${e.message}`)
+        try { res.destroy() } catch {}
+      })
+      upRes.pipe(tap).pipe(res)
+    })
+    cur = up
+    up.on("error", (e) => nextOr("上游错误：" + e.message, "UPSTREAM_UNAVAILABLE", "上游模型服务暂不可用，请稍后重试"))
+    up.end(buf)
+  }
+  tryAttempt(0)
 }

@@ -10,7 +10,8 @@ const DEV_DIR = process.env.DEV_DIR || path.join(os.tmpdir(), "sci-auth-dev")
 fs.mkdirSync(DEV_DIR, { recursive: true })
 
 Object.assign(process.env, {
-  LISTEN: process.env.LISTEN || "127.0.0.1:8099",
+  // PORT 也认：预览面板/多实例并跑时端口由外部分配（8099 被别的实例占着是常事）
+  LISTEN: process.env.LISTEN || (process.env.PORT ? "127.0.0.1:" + process.env.PORT : "127.0.0.1:8099"),
   DB_FILE: process.env.DB_FILE || path.join(DEV_DIR, "sci.db"),
   DATA_DIR: DEV_DIR,
   ADMIN_PASSWORD: process.env.ADMIN_PASSWORD || "dev-admin-pw",

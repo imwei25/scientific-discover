@@ -21,6 +21,7 @@ import { fileURLToPath } from "node:url"
 import * as DB from "./lib/db.mjs"
 import * as A from "./lib/auth.mjs"
 import * as OneAPI from "./lib/oneapi.mjs"
+import * as Upstream from "./lib/upstream.mjs"
 import { llmForward, GATEWAY_PATH_PREFIX } from "./lib/gateway.mjs"
 import { ADMIN_HTML } from "./lib/admin-ui.mjs"
 
@@ -160,6 +161,9 @@ function issueTokens(user, { withRefresh = true } = {}) {
     u: user.username, uid: user.id, ep: user.key_epoch, sc: scope,
     tier: ent.tier, model: ent.model, skills: ent.skills,
   }, CFG.accessTtlMs)
+  // 【票据里【不】放允许模型清单】清单会随管理员加模型而变，放进票据就意味着"加了新模型
+  // 得等用户重新登录才看得到"。清单走 /api/me 现取现下发（网关放行时也是现查库），
+  // 于是后台加完模型，客户端刷新一次档案就有——打包版不用重装。
   const out = {
     access,
     expiresAt: Date.now() + CFG.accessTtlMs,
@@ -184,7 +188,8 @@ function profileOf(user, ent = DB.resolveEntitlement(db, user)) {
     hospital: user.hospital,
     position: user.position,
     tier: ent.tier,
-    model: ent.model,
+    model: ent.model,                      // 默认模型
+    models: DB.modelInfo(db, ent.models),  // 可选模型（含中文名/供应商/单价），客户端下拉就用它
     skills: ent.skills,                    // [] = 不限（全部技能）
     limits: { daily: ent.daily, monthly: ent.monthly },
     usage: { today: DB.todayCost(db, user.id), month: DB.monthCost(db, user.id) },
@@ -408,6 +413,8 @@ async function handleAdminApi(req, res, pathname) {
       matched: rows.length,
       tiers: DB.listTiers(db),
       skills: skillTable(),
+      // 档位对话框要用它填「默认模型 / 允许模型」两个选择器，省一次往返
+      catalog: DB.modelInfo(db, [...DB.catalogModels(db)]),
       board: {
         activeUsers: db.prepare("SELECT COUNT(*) AS n FROM users WHERE last_seen_at >= ?").get(dayAgo).n,
         series: DB.usageTotalSeries(db, 30),
@@ -532,15 +539,120 @@ async function handleAdminApi(req, res, pathname) {
       audit("tier.del", { actor: "admin", target: key, ip })
       return json(res, 200, { ok: true, tiers: DB.listTiers(db) })
     }
+    const before = DB.getTier(db, key)
     DB.upsertTier(db, {
       key, daily_usd: b.dailyUSD, monthly_usd: b.monthlyUSD,
-      model: b.model, skills: b.skills, note: b.note, sort: b.sort,
+      model: b.model, models: b.models, skills: b.skills, note: b.note, sort: b.sort,
     })
-    // 改档位定义影响该档全体用户的额度/模型/技能 → 全部吊销 key
-    const affected = db.prepare("SELECT id FROM users WHERE tier=?").all(key)
+    const after = DB.getTier(db, key)
+    // 改档位定义影响该档全体用户的额度/默认模型/技能 → 全部吊销 key，下次登录按新权限走。
+    //
+    // 【唯独"允许模型清单"不吊销】它不在 access key 的载荷里，网关每一单都现查库判放行，
+    // 改了立刻生效。为它踢人下线纯属白踢：管理员每加一个可选模型就把该档全体用户
+    // 强制登出（bumpEpoch 连 refresh 一起作废 = 要重新输口令），而"加个模型给大家用"
+    // 本该是无感的。客户端下次拉档案（重启 / 账号面板点刷新）就能看到新模型。
+    const revoking = !before || ["daily_usd", "monthly_usd", "model", "skills"].some((k) => before[k] !== after[k])
+    const affected = revoking ? db.prepare("SELECT id FROM users WHERE tier=?").all(key) : []
     for (const r of affected) DB.bumpEpoch(db, r.id)
-    audit("tier.set", { actor: "admin", target: key, ip, detail: `affected=${affected.length}` })
+    audit("tier.set", { actor: "admin", target: key, ip, detail: `affected=${affected.length}${revoking ? "" : " (仅改可选模型，未吊销)"}` })
     return json(res, 200, { ok: true, tiers: DB.listTiers(db), affected: affected.length })
+  }
+
+  // ---- 模型供应商与模型目录（本进程自己的表，与 one-api 无关）----
+  //
+  // 这一组接口就是「管理台能加模型供应商」的落点：加完供应商与模型，往档位的允许清单里一勾，
+  // 客户端（含打包版）刷新一次档案就能选到新模型 —— 不用重装、不用改客户端配置。
+  if (req.method === "GET" && pathname === "/admin/api/providers") {
+    const models = DB.listModels(db)
+    const tiers = DB.listTiers(db)
+    return json(res, 200, {
+      ok: true,
+      // api_key 只报"有没有"，绝不回显：后台页面被肩窥/截图不该泄露上游凭证
+      providers: DB.listProviders(db).map((p) => ({
+        key: p.key, name: p.name, baseUrl: p.base_url, hasKey: !!p.api_key,
+        status: p.status, note: p.note, sort: p.sort, createdAt: p.created_at,
+        models: models.filter((m) => m.provider === p.key).length,
+      })),
+      models: models.map((m) => ({
+        id: m.id, model: m.model, provider: m.provider, providerName: m.provider_name || m.provider,
+        providerStatus: m.provider_status || "missing", upstream: m.upstream, label: m.label,
+        priceIn: m.price_in, priceOut: m.price_out, priceCached: m.price_cached,
+        status: m.status, sort: m.sort, note: m.note,
+        // 哪些档位把它列进了允许清单（含把它当默认模型的）——删之前要能看见影响面
+        tiers: tiers.filter((t) => t.model === m.model ||
+          String(t.models || "").split(",").map((s) => s.trim()).includes(m.model)).map((t) => t.key),
+      })),
+      // env 里的兜底上游：目录里查不到的模型名仍走它，后台要让运维看见这条路还在
+      legacy: { url: CFG.upstreamUrl, hasKey: !!CFG.upstreamKey, priceIn: CFG.priceIn, priceOut: CFG.priceOut, priceCached: CFG.priceCached },
+      tiers: tiers.map((t) => ({ key: t.key, model: t.model, models: t.models })),
+    })
+  }
+
+  if (req.method === "POST" && pathname === "/admin/api/provider") {
+    const b = await readBody(req)
+    const key = String(b.key || "").trim()
+    if (!/^[a-z][a-z0-9_-]{0,31}$/.test(key))
+      return json(res, 400, { ok: false, err: "供应商键须小写字母开头，1-32 位（小写字母/数字/下划线/连字符）" })
+
+    if (b.action === "probe" || b.action === "test") {
+      // 探测用【表单里刚填的】地址/key；编辑时 key 留空则回退到库里存的那把（后台不回显 key）
+      const cur = DB.getProvider(db, key)
+      const baseUrl = String(b.baseURL || cur?.base_url || "")
+      const apiKey = String(b.apiKey || "") || cur?.api_key || ""
+      if (!apiKey) return json(res, 400, { ok: false, err: "请先填 API Key" })
+      const r = b.action === "probe"
+        ? await Upstream.listUpstreamModels(baseUrl, apiKey)
+        : await Upstream.pingModel(baseUrl, apiKey, String(b.model || ""))
+      return json(res, 200, r.ok ? { ok: true, ...r } : { ok: false, err: r.err })
+    }
+
+    if (b.remove) {
+      if (!DB.getProvider(db, key)) return json(res, 404, { ok: false, err: "供应商不存在" })
+      const r = DB.deleteProvider(db, key)
+      audit("provider.del", { actor: "admin", target: key, ip, detail: `models=${r.removedModels}` })
+      return json(res, 200, { ok: true, removedModels: r.removedModels })
+    }
+
+    const baseUrl = String(b.baseURL || "").trim()
+    if (!/^https?:\/\//i.test(baseUrl)) return json(res, 400, { ok: false, err: "API 地址要以 http:// 或 https:// 开头" })
+    const existed = !!DB.getProvider(db, key)
+    if (!existed && !String(b.apiKey || "").trim()) return json(res, 400, { ok: false, err: "请填 API Key" })
+    DB.upsertProvider(db, {
+      key, name: String(b.name || key), base_url: baseUrl, api_key: b.apiKey,
+      status: b.status === "disabled" ? "disabled" : "active", note: b.note, sort: b.sort,
+    })
+    audit(existed ? "provider.update" : "provider.add", { actor: "admin", target: key, ip, detail: baseUrl })
+    return json(res, 200, { ok: true })
+  }
+
+  if (req.method === "POST" && pathname === "/admin/api/model") {
+    const b = await readBody(req)
+    if (b.remove) {
+      const row = DB.getModelRow(db, b.id)
+      if (!row) return json(res, 404, { ok: false, err: "模型不存在" })
+      DB.deleteModel(db, b.id)
+      audit("model.del", { actor: "admin", target: `${row.model}@${row.provider}`, ip })
+      return json(res, 200, { ok: true })
+    }
+    // 批量：加供应商后从「拉取模型」里勾一批，一次落库
+    const items = Array.isArray(b.items) ? b.items : [b]
+    const saved = []
+    for (const it of items) {
+      const model = String(it.model || "").trim()
+      const provider = String(it.provider || b.provider || "").trim()
+      if (!model) return json(res, 400, { ok: false, err: "请填对外模型名" })
+      if (!DB.getProvider(db, provider)) return json(res, 400, { ok: false, err: `供应商 ${provider || "(空)"} 不存在` })
+      // 单价缺省用 env 的全局价：多数情况下第一家就是现在这家，填错了也不至于把账算成 0
+      const num = (v, d) => { const n = Number(v); return Number.isFinite(n) && n >= 0 ? n : d }
+      saved.push(DB.upsertModel(db, {
+        id: it.id, model, provider, upstream: it.upstream, label: it.label,
+        price_in: num(it.priceIn, CFG.priceIn), price_out: num(it.priceOut, CFG.priceOut),
+        price_cached: num(it.priceCached, CFG.priceCached),
+        status: it.status, sort: it.sort, note: it.note,
+      }))
+    }
+    audit("model.set", { actor: "admin", target: saved.map((m) => `${m.model}@${m.provider}`).join(",").slice(0, 200), ip })
+    return json(res, 200, { ok: true, saved: saved.length })
   }
 
   // ---- 上游通道（one-api）：看/切默认与备用 ----
@@ -618,6 +730,7 @@ const ctx = {
   db, CFG, log, audit, clientIp,
   authClient, json, fail,
   resolveEntitlement: (u) => DB.resolveEntitlement(db, u),
+  modelRoutes: (m) => DB.modelRoutes(db, m),
   recordUsage: (uid, rec) => DB.recordUsage(db, uid, rec),
   todayCost: (uid) => DB.todayCost(db, uid),
   monthCost: (uid) => DB.monthCost(db, uid),

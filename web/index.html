@@ -707,18 +707,32 @@ document.getElementById("logoutBtn").innerHTML = ic("logout")
       if (pill) pill.innerHTML = "🧠 " + (cur || "模型") + "（状态未知，稍后自动恢复）"
       return
     }
-    if (!m || !m.gateway) { sel.hidden = true; return }   // 没接网关就不显示切换器
+    if (!m || !m.gateway) { sel.hidden = true; return }   // 没接平台就不显示切换器
     cur = m.modelID || ""
-    // 相对路径：多用户部署下解析成 /<用户名>/pub/... 由 manager 在登录门禁之后应答（原先写死绝对路径 /pub/...，
-    // 那是个未鉴权接口、且 Cookie 也发不过去）；单机部署没有该接口 → 404，下面 catch 里降级只显示当前模型。
-    try { const s = await (await fetch("pub/gateway/siblings?model=" + encodeURIComponent(cur))).json(); prov = s.provider || ""; models = s.models || [] } catch (e) { prov = ""; models = cur ? [cur] : [] }
+    // 先问本机网关要清单：云端账号形态下它来自服务器下发的档案（管理员在后台加了模型、
+    // 勾进本档位，这里刷新一次就有 —— 打包版不用重装）。
+    models = []; prov = ""
+    try {
+      const s = await (await fetch("api/models")).json()
+      if (s && s.models && s.models.length) {
+        models = s.models.map(function (x) { return { id: x.model, label: x.label || x.model, prov: x.provider || "" } })
+        prov = models.length && models.every(function (x) { return x.prov === models[0].prov }) ? models[0].prov : ""
+      }
+    } catch (e) { /* 老服务端没有这条接口，落到下面的 siblings */ }
+    // 回落：云端多用户容器（老单体版 manager）用的是这条。相对路径 → 解析成 /<用户名>/pub/...，
+    // 由 manager 在登录门禁之后应答；单机部署没有该接口 → 404 → 降级成只显示当前模型。
+    if (!models.length) {
+      try { const s = await (await fetch("pub/gateway/siblings?model=" + encodeURIComponent(cur))).json(); prov = s.provider || ""; models = (s.models || []).map(function (x) { return { id: x, label: x, prov: prov } }) }
+      catch (e) { prov = ""; models = cur ? [{ id: cur, label: cur, prov: "" }] : [] }
+    }
     render()
   }
   function render() {
     sel.hidden = false
-    sel.innerHTML = '<div class="mpill" id="mpill" title="点击切换模型（同供应商）">🧠 ' + (prov ? '<span style="opacity:.7">' + prov + '</span> · ' : '') + '<b>' + cur + '</b> ▾</div><div class="mmenu" id="mmenu"></div>'
+    const curItem = models.filter(function (x) { return x.id === cur })[0]
+    sel.innerHTML = '<div class="mpill" id="mpill" title="点击切换模型">🧠 ' + (prov ? '<span style="opacity:.7">' + prov + '</span> · ' : '') + '<b>' + ((curItem && curItem.label) || cur) + '</b> ▾</div><div class="mmenu" id="mmenu"></div>'
     const menu = sel.querySelector("#mmenu")
-    menu.innerHTML = (prov ? '<div class="mprov">' + prov + ' · 同供应商模型</div>' : '') + (models.length ? models.map(function (m) { return '<div class="mitem' + (m === cur ? ' cur' : '') + '" data-m="' + m + '">' + (m === cur ? '✓ ' : '') + m + '</div>' }).join("") : '<div class="mprov">无可选模型</div>')
+    menu.innerHTML = (prov ? '<div class="mprov">' + prov + ' · 可选模型</div>' : '') + (models.length ? models.map(function (m) { return '<div class="mitem' + (m.id === cur ? ' cur' : '') + '" data-m="' + m.id + '">' + (m.id === cur ? '✓ ' : '') + m.label + (m.prov && !prov ? ' <span style="opacity:.6">· ' + m.prov + '</span>' : '') + '</div>' }).join("") : '<div class="mprov">无可选模型</div>')
     sel.querySelector("#mpill").onclick = function (e) { e.stopPropagation(); menu.classList.toggle("on") }
     menu.querySelectorAll(".mitem").forEach(function (it) { it.onclick = async function () { const m = it.dataset.m; menu.classList.remove("on"); if (m !== cur) await pick(m) } })
   }
@@ -747,6 +761,7 @@ document.getElementById("logoutBtn").innerHTML = ic("logout")
     await refresh()
   }
   document.addEventListener("click", function () { const mm = sel.querySelector("#mmenu"); if (mm) mm.classList.remove("on") })
+  window.addEventListener("sci-models-changed", function () { refresh() })   // 账号弹窗刷新档案后重新取清单
   refresh()
 })()
 // ---- 修改密码 ----
@@ -1740,11 +1755,17 @@ function clShow(mode, st) {
     document.getElementById("cloudPaneInfo").innerHTML =
       '<div class="mm-kv"><span>账号</span><b>' + esc(st.username) + "</b></div>" +
       '<div class="mm-kv"><span>档位</span><b>' + esc(p.tier || "—") + "</b></div>" +
-      '<div class="mm-kv"><span>模型</span><b>' + esc(p.model || "—") + "</b></div>" +
+      '<div class="mm-kv"><span>默认模型</span><b>' + esc(p.model || "—") + "</b></div>" +
+      // 可选模型随档案下发：管理员在后台加了新模型并勾进本档位，点一次"刷新"就出现在这里
+      // 和顶部的模型 pill 里——不用重装客户端。
+      ((p.models && p.models.length > 1)
+        ? '<div class="mm-kv"><span>可选模型</span><b>' + p.models.map(function (m) { return esc(m.label || m.model) + (m.providerName ? '<span class="mm-faint">（' + esc(m.providerName) + "）</span>" : "") }).join("、") + "</b></div>"
+        : '<div class="mm-kv"><span>可选模型</span><b class="mm-faint">仅默认模型（本档位未开放切换）</b></div>') +
       '<div class="mm-kv"><span>今日用量</span><b>' + bar(use.today, lim.daily) + "</b></div>" +
       '<div class="mm-kv"><span>本月用量</span><b>' + bar(use.month, lim.monthly) + "</b></div>" +
       '<div class="mm-kv"><span>可用技能</span><b>' + ((p.skills && p.skills.length) ? p.skills.map(esc).join("、") : "全部") + "</b></div>" +
-      '<div class="mm-hint" style="margin-top:12px">额度与可用技能由管理员在后台调整，调整后需重新登录生效。</div>'
+      '<div class="mm-hint" style="margin-top:12px">额度、可选模型与技能由管理员在后台调整；点上面的「刷新」即可拉到最新，'
+      + "换模型在顶部的 🧠 里选。</div>"
   }
 }
 async function openCloud(force) {
@@ -1814,7 +1835,10 @@ document.getElementById("clGo").addEventListener("click", async () => {
       clMsg("info", "刷新中…")
       const r = await (await fetch("api/cloud/refresh", { method: "POST" })).json()
       if (!r.ok) return clMsg("err", r.err || "刷新失败")
-      clShow("info", r); clMsg("ok", "已刷新")
+      clShow("info", r); clMsg("ok", "已刷新" + (r.restarted ? "（模型有变动，已重配后台）" : ""))
+      // 顶部模型 pill 的清单也来自这份档案：刷到新模型/新档位后要跟着更新，否则用户在
+      // 弹窗里看见了新模型，回到主界面的 🧠 里却还是旧的那几个。
+      window.dispatchEvent(new Event("sci-models-changed"))
     }
   } catch { clMsg("err", "网络错误") }
   finally { btn.disabled = false }

@@ -201,7 +201,11 @@ test("计量：非流式响应按 usage 入账，成本口径与单价一致", a
   assert.equal(row.prompt_tokens, 1000)
   assert.equal(row.completion_tokens, 500)
   assert.equal(row.cached_tokens, 400)
-  assert.equal(row.model, "m-real", "记上游实际返回的模型名")
+  // 【记的是对外模型名，不是上游回的那个】加了供应商目录之后，同一个对外名可能被改名转给
+  // 某家（models.upstream），上游回的是它自己的名字。账要按用户看得见的模型对得上，
+  // 所以 model 一律记对外名；实际服务的那家单独记在 provider 列（这里没建目录 → env 兜底 → ''）。
+  assert.equal(row.model, "m", "记对外模型名")
+  assert.equal(row.provider, "", "走 env 兜底上游时 provider 为空")
   assert.equal(row.skill, "write-paper")
 })
 
