@@ -1759,6 +1759,12 @@ export const server = http.createServer(async (req, res) => {
     // 前端也照常渲染，用户要等发出第一条消息才发现整站是坏的（manager 只探端口，也会误判为健康）。
     // 暴露真实依赖状态，供 manager/monitor 与前端横幅使用。
     if (req.method === "GET" && u.pathname === "/api/health") {
+      // quick=1：只回答"网关本身活着吗"，不去探 opencode。
+      // 桌面壳的启动页用它判就绪：不带 quick 时这里要先等 ocHealthy（最长 2.5s），
+      // 而 opencode 起得慢恰恰是现场最常见的故障——就成了"网关早已 listen，启动页却一直转"。
+      // 探活语义不该被下游的慢拖住；opencode 的死活由页面横幅单独去报。
+      if (u.searchParams.get("quick"))
+        return send(res, 200, "application/json", JSON.stringify({ gateway: true }))
       const ocOk = await ocHealthy()
       // 只回布尔，不带模型名——这是个公开端点（见 PUBLIC_PATHS 的说明），没必要对外透露用的哪个模型
       return send(res, ocOk ? 200 : 503, "application/json", JSON.stringify({ gateway: true, opencode: ocOk }))

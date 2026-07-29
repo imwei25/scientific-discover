@@ -67,18 +67,32 @@ fn splash_msg(handle: &tauri::AppHandle, msg: &str) {
 
 fn health_ok() -> bool {
     let Ok(mut s) = TcpStream::connect(("127.0.0.1", PORT)) else { return false };
-    let _ = s.set_read_timeout(Some(Duration::from_secs(3)));
+    let _ = s.set_read_timeout(Some(Duration::from_secs(8)));
+    // 【必须带 quick=1】不带的话网关会先去问 opencode 活没活（那头有 2.5s 超时）才应答。
+    // 而 opencode 起得慢正是现场最常见的故障，于是"壳判断网关就绪"反过来卡在"opencode 就绪"上——
+    // 真机上表现为：网关明明已经 listen，启动页还是转满 120 秒。
+    // 壳这一关只该判网关本身；opencode 的状态由页面自己的横幅去报。
     if s.write_all(
-        format!("GET /api/health HTTP/1.1\r\nHost: 127.0.0.1:{PORT}\r\nConnection: close\r\n\r\n")
+        format!("GET /api/health?quick=1 HTTP/1.1\r\nHost: 127.0.0.1:{PORT}\r\nConnection: close\r\n\r\n")
             .as_bytes(),
     )
     .is_err()
     {
         return false;
     }
-    let mut buf = String::new();
-    let _ = s.read_to_string(&mut buf);
-    buf.contains("\"gateway\":true")
+    // 【不能用 read_to_string】它在出错时会把 buf 截回调用前的长度——读超时属于出错，
+    // 于是"已经收到了完整应答、只是连接迟迟不 close"会被判成【什么都没读到】。
+    // 这里手工累加，超时也保留已读到的字节。
+    let mut buf = Vec::new();
+    let mut chunk = [0u8; 1024];
+    while buf.len() < 8192 {
+        match s.read(&mut chunk) {
+            Ok(0) => break,
+            Ok(n) => buf.extend_from_slice(&chunk[..n]),
+            Err(_) => break,
+        }
+    }
+    String::from_utf8_lossy(&buf).contains("\"gateway\":true")
 }
 
 // bash 的 ${REPO_ROOT} 展开会把反斜杠当转义吃掉，Git Bash 认 D:/xxx 正斜杠写法
