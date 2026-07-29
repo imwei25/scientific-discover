@@ -20,6 +20,7 @@ import { fileURLToPath } from "node:url"
 
 import * as DB from "./lib/db.mjs"
 import * as A from "./lib/auth.mjs"
+import * as OneAPI from "./lib/oneapi.mjs"
 import { llmForward, GATEWAY_PATH_PREFIX } from "./lib/gateway.mjs"
 import { ADMIN_HTML } from "./lib/admin-ui.mjs"
 
@@ -67,7 +68,13 @@ export const CFG = {
   priceOut: envNum("COST_OUTPUT", 1.10),
   priceCached: envNum("COST_CACHE_READ", 0.07),
   skillsDir: process.env.SKILLS_DIR || path.join(__dirname, "..", ".opencode", "skills"),
+  // one-api 的【管理】API（后台看/切上游通道用）。注意这跟 LLM_UPSTREAM_KEY 是两回事：
+  // 后者是调模型的令牌，这里是管理台令牌（one-api 的"系统访问令牌"）。两个都没配也不影响
+  // 转发，只是后台的「上游通道」页会显示未接入。
+  oneapiUrl: (process.env.ONEAPI_URL || "").replace(/\/+$/, ""),
+  oneapiToken: process.env.ONEAPI_TOKEN || "",
 }
+export const oneapiCfg = () => ({ url: CFG.oneapiUrl, token: CFG.oneapiToken })
 
 const log = (...a) => console.log(new Date().toISOString(), ...a)
 
@@ -534,6 +541,32 @@ async function handleAdminApi(req, res, pathname) {
     for (const r of affected) DB.bumpEpoch(db, r.id)
     audit("tier.set", { actor: "admin", target: key, ip, detail: `affected=${affected.length}` })
     return json(res, 200, { ok: true, tiers: DB.listTiers(db), affected: affected.length })
+  }
+
+  // ---- 上游通道（one-api）：看/切默认与备用 ----
+  if (req.method === "GET" && pathname === "/admin/api/channels") {
+    if (!OneAPI.enabled(oneapiCfg()))
+      return json(res, 200, { ok: true, enabled: false, err: "未接入 one-api 管理台（/etc/sci-auth.env 未配 ONEAPI_URL / ONEAPI_TOKEN）" })
+    const r = await OneAPI.listChannels(oneapiCfg())
+    if (!r.ok) return json(res, 200, { ok: true, enabled: true, err: r.err, channels: [], byModel: {} })
+    // 顺带告诉前端：各档位当前请求的是哪个模型名 —— 通道要能给某档兜底，
+    // 前提是它挂了这个模型名，否则它对这个档位根本不构成备用
+    return json(res, 200, {
+      ok: true, enabled: true, ...r,
+      tierModels: DB.listTiers(db).map((t) => ({ key: t.key, model: t.model })),
+      priceNote: { input: CFG.priceIn, output: CFG.priceOut, cached: CFG.priceCached },
+    })
+  }
+  if (req.method === "POST" && pathname === "/admin/api/channel") {
+    if (!OneAPI.enabled(oneapiCfg())) return json(res, 400, { ok: false, err: "未接入 one-api 管理台" })
+    const b = await readBody(req)
+    let r
+    if (b.action === "default") r = await OneAPI.makeDefault(oneapiCfg(), b.id, String(b.model || ""))
+    else if (b.action === "test") r = await OneAPI.testChannel(oneapiCfg(), b.id)
+    else r = await OneAPI.updateChannel(oneapiCfg(), { id: b.id, priority: b.priority, status: b.status, weight: b.weight })
+    if (!r.ok) return json(res, 400, { ok: false, err: r.err || "操作失败" })
+    audit("channel." + (b.action || "update"), { actor: "admin", target: String(b.id), ip, detail: JSON.stringify(b).slice(0, 200) })
+    return json(res, 200, { ok: true, ...r })
   }
 
   if (req.method === "GET" && pathname === "/admin/api/audit") {

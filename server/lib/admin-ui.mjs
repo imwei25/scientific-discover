@@ -124,13 +124,15 @@ function render(){
   $('#sub').textContent='共 '+S.total+' 个账号';
   $('#app').innerHTML=
     '<div class="tabs">'+
-      tabBtn('users','用户')+tabBtn('board','看板')+tabBtn('tiers','档位')+tabBtn('audit','审计')+
+      tabBtn('users','用户')+tabBtn('board','看板')+tabBtn('tiers','档位')+tabBtn('chan','上游通道')+tabBtn('audit','审计')+
     '</div><div id="pane"></div>';
   Array.prototype.forEach.call(document.querySelectorAll('.tabs button'),function(b){
-    b.onclick=function(){S.tab=b.dataset.k;if(S.tab==='audit')loadAudit();else render()}});
+    b.onclick=function(){S.tab=b.dataset.k;
+      if(S.tab==='audit')loadAudit();else if(S.tab==='chan')loadChannels();else render()}});
   if(S.tab==='users')paneUsers();
   else if(S.tab==='board')paneBoard();
   else if(S.tab==='tiers')paneTiers();
+  else if(S.tab==='chan')paneChannels();
 }
 function tabBtn(k,label){return '<button data-k="'+k+'" class="'+(S.tab===k?'on':'')+'">'+label+'</button>'}
 
@@ -375,6 +377,80 @@ function dlgTier(t){
       skills:picked.join(','),note:$('#t-n').value.trim(),sort:Number($('#t-s').value)||0}).then(function(j){
       if(!j.ok)return toast(j.err||'保存失败',false);
       $('#dlg').close();toast('已保存'+(j.affected?'（已吊销 '+j.affected+' 个用户的 key）':''),true);load()})}
+}
+
+// ---------- 上游通道 ----------
+function loadChannels(){
+  render();
+  $('#pane').innerHTML='<section><h2>上游通道</h2><p class="mut">加载中…</p></section>';
+  api('channels').then(function(d){S.chan=d;paneChannels()})
+    .catch(function(){$('#pane').innerHTML='<section><p class="mut">加载失败</p></section>'})
+}
+function paneChannels(){
+  var d=S.chan;
+  if(!d){return loadChannels()}
+  if(!d.enabled||d.err){
+    $('#pane').innerHTML='<section><h2>上游通道</h2><div class="msg err" style="display:block">'+
+      esc(d.err||'未接入 one-api')+'</div>'+
+      '<div class="hint">在 <code>/etc/sci-auth.env</code> 配 <code>ONEAPI_URL</code> 与 <code>ONEAPI_TOKEN</code>'+
+      '（后者是 one-api 管理台的「系统访问令牌」，不是调模型的 sk- 令牌），然后 <code>systemctl restart sci-auth</code>。</div></section>';
+    return
+  }
+  var chans=d.channels||[],byModel=d.byModel||{},tierModels=d.tierModels||[];
+  // 各档位在用的模型名 → 这些模型名才是真正要保证有通道兜底的
+  var usedModels={};tierModels.forEach(function(t){if(t.model)usedModels[t.model]=(usedModels[t.model]||[]).concat(t.key)});
+
+  var modelRows=Object.keys(byModel).sort().map(function(m){
+    var list=byModel[m],act=list.filter(function(x){return x.status===1});
+    var def=act[0],backups=act.slice(1);
+    var tiers=usedModels[m];
+    return '<tr><td><b>'+esc(m)+'</b>'+(tiers?'<div class="mut" style="font-size:12.5px">档位：'+tiers.map(esc).join('、')+'</div>':'<div class="mut" style="font-size:12.5px">没有档位在用</div>')+'</td>'+
+      '<td>'+(def?'<span class="tag ok">'+esc(def.name)+'</span> <span class="mut">优先级 '+def.priority+'</span>':'<span class="tag bad">无可用通道</span>')+'</td>'+
+      '<td>'+(backups.length?backups.map(function(b){return '<span class="tag">'+esc(b.name)+'（'+b.priority+'）</span>'}).join(' '):'<span class="mut">无备用</span>')+'</td></tr>'}).join('');
+
+  var rows=chans.map(function(c){
+    var on=c.status===1;
+    var modelOpts=c.models.map(function(m){return '<option value="'+esc(m)+'">'+esc(m)+'</option>'}).join('');
+    return '<tr data-id="'+c.id+'">'+
+      '<td><b>'+esc(c.name)+'</b><div class="mut" style="font-size:12.5px">#'+c.id+(c.baseUrl?' · '+esc(c.baseUrl):'')+'</div></td>'+
+      '<td>'+(on?'<span class="tag ok">启用</span>':'<span class="tag bad">'+esc(c.statusText)+'</span>')+'</td>'+
+      '<td class="mut" style="font-size:12.5px">'+(c.models.length?c.models.map(esc).join('<br>'):'—')+'</td>'+
+      '<td><input class="p-in" value="'+c.priority+'" style="width:64px" inputmode="numeric"></td>'+
+      '<td class="row" style="gap:5px;flex-wrap:nowrap">'+
+        '<button class="btn sm" data-a="save">保存优先级</button>'+
+        (c.models.length?'<select class="d-mod" style="max-width:150px">'+modelOpts+'</select><button class="btn sm" data-a="def">设为默认</button>':'')+
+        '<button class="btn sm" data-a="toggle">'+(on?'停用':'启用')+'</button>'+
+        '<button class="btn sm" data-a="test">测试</button></td></tr>'}).join('');
+
+  $('#pane').innerHTML='<section><h2>按模型看：谁是默认、谁兜底</h2>'+
+    '<div class="hint" style="margin-bottom:10px">one-api 按「同一模型名下优先级最高的启用通道」出流量，调用失败会自动重试同名的其它通道。'+
+    '<b>所以两个通道只有挂了同一个模型名，才互为备用。</b></div>'+
+    '<table><thead><tr><th>模型名</th><th>默认通道</th><th>备用</th></tr></thead><tbody>'+
+    (modelRows||'<tr><td colspan="3" class="mut">还没有通道</td></tr>')+'</tbody></table></section>'+
+    '<section><h2>通道</h2>'+
+    '<table><thead><tr><th>名称</th><th>状态</th><th>模型</th><th>优先级</th><th></th></tr></thead><tbody>'+
+    (rows||'<tr><td colspan="5" class="mut">还没有通道</td></tr>')+'</tbody></table>'+
+    '<div class="hint" style="margin-top:12px">⚠ 计量单价是<b>全局一张表</b>（当前 输入 $'+d.priceNote.input+' / 输出 $'+d.priceNote.output+
+    ' / 缓存 $'+d.priceNote.cached+' 每百万 token）。若在同一模型名下挂了<b>不同价</b>的供应商，流量切过去时账会静默偏——切之前先对价。<br>'+
+    '新增/删除通道、改 key 与地址请到 one-api 自己的管理台，这里只做「用哪个、谁兜底」。</div></section>';
+
+  Array.prototype.forEach.call(document.querySelectorAll('#pane tbody button'),function(b){
+    b.onclick=function(){
+      var tr=b.closest('tr'),id=Number(tr.dataset.id);
+      var c=chans.filter(function(x){return x.id===id})[0];
+      var body={id:id};
+      if(b.dataset.a==='save')body.priority=Number(tr.querySelector('.p-in').value)||0;
+      else if(b.dataset.a==='toggle')body.status=c.status===1?2:1;
+      else if(b.dataset.a==='def'){body.action='default';body.model=tr.querySelector('.d-mod').value}
+      else if(b.dataset.a==='test')body.action='test';
+      b.disabled=true;
+      post('channel',body).then(function(j){
+        b.disabled=false;
+        if(!j.ok)return toast(j.err||'操作失败',false);
+        if(b.dataset.a==='test')return toast('通道 '+c.name+' 测试通过',true);
+        toast(b.dataset.a==='def'?('已把 '+c.name+' 设为该模型的默认'):'已保存',true);
+        loadChannels()})
+        .catch(function(){b.disabled=false;toast('网络错误',false)})}});
 }
 
 // ---------- 审计 ----------

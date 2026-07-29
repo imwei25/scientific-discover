@@ -417,7 +417,7 @@ test("后台页面：自包含、无外部资源、带上界面依赖的挂载�
   // 界面靠这些 id/接口工作，改名要连着改，这里钉住
   for (const hook of ["id=\"q\"", "id=\"add\"", "id=\"msg\"", "id=\"dlg\"", "data-a=\"edit\"", "data-a=\"usage\"", "data-a=\"susp\"", "data-a=\"more\""])
     assert.ok(r.text.includes(hook), `缺少界面挂载点 ${hook}`)
-  for (const ep of ["overview?q=", "user-add", "user-update", "suspend", "reset-password", "reset-key", "user-del", "user-usage?id=", "tier", "audit", "login", "logout"])
+  for (const ep of ["overview?q=", "user-add", "user-update", "suspend", "reset-password", "reset-key", "user-del", "user-usage?id=", "tier", "channels", "channel", "audit", "login", "logout"])
     assert.ok(r.text.includes(ep), `界面引用了不存在的接口路径 ${ep}`)
   // 提示条必须在 #app 之外，否则一刷新列表就被冲掉、用户看不到"已保存"
   const msgAt = r.text.indexOf('class="msg" id="msg"'), appAt = r.text.indexOf('<main id="app">')
