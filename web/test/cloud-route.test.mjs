@@ -1,0 +1,270 @@
+// 桌面版云端账号在网关进程里的接线：/api/cloud/* 与 /cloud/* 转发。
+// 三层都是真的：假上游模型 ← sci-auth（内存库）← 本机网关（不接管 opencode）。
+import test from "node:test"
+import assert from "node:assert/strict"
+import fs from "node:fs"
+import os from "node:os"
+import path from "node:path"
+import http from "node:http"
+
+let seq = 0
+
+/** 假上游模型服务 */
+function fakeUpstream(handler) {
+  const srv = http.createServer(handler)
+  return new Promise((r) => srv.listen(0, "127.0.0.1", () => r({
+    srv, url: `http://127.0.0.1:${srv.address().port}`, close: () => new Promise((x) => srv.close(x)),
+  })))
+}
+
+/** 起 sci-auth + 建好一个改完密的账号 */
+async function cloudBackend(upstreamUrl) {
+  const prev = { ...process.env }
+  Object.assign(process.env, {
+    DB_FILE: ":memory:", LISTEN: "127.0.0.1:0", ADMIN_PASSWORD: "adminpw",
+    KEY_SECRET: "route-" + (++seq), LLM_UPSTREAM_KEY: "up-key", LLM_UPSTREAM_URL: upstreamUrl,
+    DATA_DIR: "", TEST_BYPASS_TOKEN: "t-bypass",
+  })
+  const mod = await import(`../../server/sci-auth.mjs?r=${seq}`)
+  await new Promise((r) => mod.server.listen(0, "127.0.0.1", r))
+  const base = `http://127.0.0.1:${mod.server.address().port}`
+  process.env = prev
+  const req = async (p, { method = "GET", body, headers = {} } = {}) => {
+    const h = { ...headers }; if (body !== undefined) h["content-type"] = "application/json"
+    const r = await fetch(base + p, { method, headers: h, body: body === undefined ? undefined : JSON.stringify(body) })
+    return { status: r.status, json: await r.json().catch(() => null), headers: Object.fromEntries(r.headers) }
+  }
+  const lo = await req("/admin/api/login", { method: "POST", body: { password: "adminpw" }, headers: { "x-test-bypass": "t-bypass" } })
+  const cookie = (lo.headers["set-cookie"] || "").split(";")[0]
+  const admin = (p, o = {}) => req(p, { ...o, headers: { ...(o.headers || {}), cookie } })
+  await admin("/admin/api/tier", { method: "POST", body: { key: "plus", dailyUSD: 5, model: "tier-model" } })
+  const add = await admin("/admin/api/user-add", { method: "POST", body: { username: "zhangsan", displayName: "张三", tier: "plus" } })
+  return { base, req, admin, db: mod.db, user: { id: add.json.user.id, username: "zhangsan", pw0: add.json.initialPassword, pw: "Route!test2026" }, close: () => new Promise((r) => mod.server.close(r)) }
+}
+
+/** 起本机网关进程（不接管 opencode，配置文件都落临时目录） */
+async function gateway(cloudUrl) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "webgw-"))
+  const prev = { ...process.env }
+  Object.assign(process.env, {
+    MANAGE_OC: "0", PORT: "0", AUTH_ENABLED: "",
+    OC_URL: "http://127.0.0.1:1",                 // 不会去连
+    SCI_CLOUD_URL: cloudUrl,
+    CLOUD_STATE_PATH: path.join(dir, "cloud-state.json"),
+    MODEL_CFG_PATH: path.join(dir, "model-config.json"),
+    OC_CONFIG_PATH: path.join(dir, "opencode.json"),
+  })
+  const mod = await import(`../server.mjs?g=${++seq}`)
+  // server.mjs 自己会 listen(PORT)，PORT=0 时端口由系统分配；等它真的绑上再往下走
+  let port
+  for (let i = 0; i < 200; i++) {
+    port = mod.server?.address()?.port
+    if (port) break
+    await new Promise((r) => setTimeout(r, 50))
+  }
+  if (!port) throw new Error("网关没起来（10 秒内没绑上端口）")
+  process.env = prev
+  // 供运行时读取
+  process.env.SCI_CLOUD_URL = cloudUrl
+  process.env.CLOUD_STATE_PATH = path.join(dir, "cloud-state.json")
+  process.env.MODEL_CFG_PATH = path.join(dir, "model-config.json")
+  process.env.OC_CONFIG_PATH = path.join(dir, "opencode.json")
+  const base = `http://127.0.0.1:${port}`
+  return {
+    base, dir, mod,
+    close: () => new Promise((r) => (mod.server ? mod.server.close(r) : r())),
+    cfg: () => { try { return JSON.parse(fs.readFileSync(path.join(dir, "model-config.json"), "utf8")) } catch { return null } },
+    async req(p, { method = "GET", body, headers = {} } = {}) {
+      const h = { ...headers }; if (body !== undefined) h["content-type"] = "application/json"
+      const r = await fetch(base + p, { method, headers: h, body: body === undefined ? undefined : JSON.stringify(body) })
+      const text = await r.text()
+      let js = null; try { js = JSON.parse(text) } catch {}
+      return { status: r.status, json: js, text }
+    },
+  }
+}
+
+async function rig(upstream) {
+  const up = await fakeUpstream(upstream || ((_q, res) => {
+    res.writeHead(200, { "content-type": "application/json" })
+    res.end(JSON.stringify({ model: "tier-model", choices: [], usage: { prompt_tokens: 5, completion_tokens: 7 } }))
+  }))
+  const be = await cloudBackend(up.url)
+  const gw = await gateway(be.base)
+  return { up, be, gw, close: async () => { await gw.close(); await be.close(); await up.close() } }
+}
+
+/** 登录 + 改密，让网关进入 cloud 路由 */
+async function loginReady(r) {
+  await r.gw.req("/api/cloud/login", { method: "POST", body: { username: r.be.user.username, password: r.be.user.pw0 } })
+  return r.gw.req("/api/cloud/password", { method: "POST", body: { oldPassword: r.be.user.pw0, newPassword: r.be.user.pw } })
+}
+
+test("未登录：status 报未登录，route=none", async (t) => {
+  const r = await rig(); t.after(() => r.close())
+  const s = await r.gw.req("/api/cloud/status")
+  assert.equal(s.json.loggedIn, false)
+  assert.equal(s.json.configured, true)
+  assert.equal(s.json.route, "none")
+})
+
+test("登录 → 强制改密 → 进入 cloud 路由，provider 指向本机代理", async (t) => {
+  const r = await rig(); t.after(() => r.close())
+  let x = await r.gw.req("/api/cloud/login", { method: "POST", body: { username: "zhangsan", password: r.be.user.pw0 } })
+  assert.equal(x.status, 200)
+  assert.equal(x.json.loggedIn, true)
+  assert.equal(x.json.mustChangePassword, true)
+
+  x = await loginReady(r)
+  assert.equal(x.json.mustChangePassword, false)
+  assert.equal(x.json.route, "cloud")
+
+  const cfg = r.gw.cfg()
+  assert.equal(cfg.route, "cloud")
+  assert.match(cfg.baseURL, /^http:\/\/127\.0\.0\.1:\d+\/cloud\/v1$/, "opencode 该指向本机代理")
+  assert.equal(cfg.modelID, "tier-model", "模型名取自云端档位")
+  assert.match(cfg.apiKey, /^local-/, "provider 里放的是本机占位令牌，不是真 access key")
+})
+
+test("登录失败：给结构化错误，不进 cloud 路由", async (t) => {
+  const r = await rig(); t.after(() => r.close())
+  const x = await r.gw.req("/api/cloud/login", { method: "POST", body: { username: "zhangsan", password: "wrong" } })
+  assert.equal(x.json.ok, false)
+  assert.equal(x.json.code, "BAD_CREDENTIALS")
+  assert.equal((await r.gw.req("/api/cloud/status")).json.route, "none")
+})
+
+test("/cloud 转发：本机占位令牌不对就拒；对了才转，并贴上真 access key", async (t) => {
+  let seen = null
+  const r = await rig((q, res) => {
+    seen = { auth: q.headers.authorization, url: q.url }
+    res.writeHead(200, { "content-type": "application/json" })
+    res.end(JSON.stringify({ model: "tier-model", choices: [], usage: { prompt_tokens: 3, completion_tokens: 4 } }))
+  })
+  t.after(() => r.close())
+  await loginReady(r)
+  const localTok = r.gw.cfg().apiKey
+
+  let x = await r.gw.req("/cloud/v1/chat/completions", { method: "POST", body: { model: "x" }, headers: { authorization: "Bearer wrong" } })
+  assert.equal(x.status, 401)
+  assert.equal(seen, null, "令牌不对时一个字节都不该发出去")
+
+  x = await r.gw.req("/cloud/v1/chat/completions", {
+    method: "POST", body: { model: "客户端乱传", messages: [] },
+    headers: { authorization: "Bearer " + localTok, "x-skill": "write-paper" },
+  })
+  assert.equal(x.status, 200)
+  assert.equal(seen.url, "/v1/chat/completions", "sci-auth 把 /llm 剥掉后转给上游")
+  assert.equal(seen.auth, "Bearer up-key", "上游拿到的是 sci-auth 的上游 key")
+
+  // 计量落到了云端账号头上
+  const usage = await r.be.admin("/admin/api/user-usage?id=" + r.be.user.id)
+  assert.equal(usage.json.detail.length, 1)
+  assert.equal(usage.json.detail[0].skill, "write-paper")
+})
+
+test("access key 过期：转发时自动续一次并重试，调用方无感", async (t) => {
+  let hits = 0
+  const r = await rig((_q, res) => {
+    hits++
+    res.writeHead(200, { "content-type": "application/json" })
+    res.end(JSON.stringify({ usage: { prompt_tokens: 1, completion_tokens: 1 } }))
+  })
+  t.after(() => r.close())
+  await loginReady(r)
+  const localTok = r.gw.cfg().apiKey
+
+  // 把本地缓存的 access 换成一把【已过期】的：转发会拿到 401 KEY_EXPIRED → 强制续期 → 重试
+  const statePath = process.env.CLOUD_STATE_PATH
+  const st = JSON.parse(fs.readFileSync(statePath, "utf8"))
+  const bad = { ...st, access: st.access.slice(0, -3) + "xxx", accessExp: Date.now() + 3600_000 }
+  fs.writeFileSync(statePath, JSON.stringify(bad))
+
+  const x = await r.gw.req("/cloud/v1/chat/completions", {
+    method: "POST", body: { model: "x" }, headers: { authorization: "Bearer " + localTok },
+  })
+  assert.equal(x.status, 200, "应当续期后重试成功：" + x.text)
+  assert.equal(hits, 1, "上游只该真正被调用一次")
+  const after = JSON.parse(fs.readFileSync(statePath, "utf8"))
+  assert.notEqual(after.access, bad.access, "access 已换新")
+})
+
+test("账号被停用：转发回 403，本地照实报错而不是装作没事", async (t) => {
+  const r = await rig(); t.after(() => r.close())
+  await loginReady(r)
+  const localTok = r.gw.cfg().apiKey
+  await r.be.admin("/admin/api/suspend", { method: "POST", body: { id: r.be.user.id, suspended: true } })
+
+  const x = await r.gw.req("/cloud/v1/chat/completions", {
+    method: "POST", body: { model: "x" }, headers: { authorization: "Bearer " + localTok },
+  })
+  assert.equal([401, 403].includes(x.status), true, "状态码=" + x.status + " 体=" + x.text)
+  assert.match(x.text, /停用|重新登录|失效/)
+})
+
+test("额度用尽：429 与结构化错误码原样透传给客户端", async (t) => {
+  const r = await rig((_q, res) => {
+    res.writeHead(200, { "content-type": "application/json" })
+    res.end(JSON.stringify({ usage: { prompt_tokens: 40_000_000, completion_tokens: 0 } }))
+  })
+  t.after(() => r.close())
+  await loginReady(r)
+  const localTok = r.gw.cfg().apiKey
+  const H = { authorization: "Bearer " + localTok }
+  assert.equal((await r.gw.req("/cloud/v1/chat/completions", { method: "POST", body: { model: "x" }, headers: H })).status, 200)
+  const x = await r.gw.req("/cloud/v1/chat/completions", { method: "POST", body: { model: "x" }, headers: H })
+  assert.equal(x.status, 429)
+  assert.equal(x.json.error.code, "QUOTA_EXCEEDED")
+  assert.equal(x.json.error.scope, "daily")
+})
+
+test("流式：SSE 原样透传", async (t) => {
+  const body = "data: {\"choices\":[{\"delta\":{\"content\":\"你好\"}}]}\n\n" +
+               "data: {\"usage\":{\"prompt_tokens\":2,\"completion_tokens\":2}}\n\ndata: [DONE]\n\n"
+  const r = await rig((_q, res) => { res.writeHead(200, { "content-type": "text/event-stream" }); res.end(body) })
+  t.after(() => r.close())
+  await loginReady(r)
+  const x = await r.gw.req("/cloud/v1/chat/completions", {
+    method: "POST", body: { model: "x", stream: true }, headers: { authorization: "Bearer " + r.gw.cfg().apiKey },
+  })
+  assert.equal(x.status, 200)
+  assert.equal(x.text, body, "逐字节一致")
+})
+
+test("登出：回到 none 路由，provider 被清掉", async (t) => {
+  const r = await rig(); t.after(() => r.close())
+  await loginReady(r)
+  assert.equal((await r.gw.req("/api/cloud/status")).json.route, "cloud")
+
+  const x = await r.gw.req("/api/cloud/logout", { method: "POST", body: {} })
+  assert.equal(x.json.ok, true)
+  assert.equal(x.json.loggedIn, false)
+  assert.equal(x.json.route, "none")
+  assert.equal(r.gw.cfg(), null, "自设配置应被清掉")
+})
+
+test("自设 API 优先于云端账号；切回后又回到 cloud", async (t) => {
+  const r = await rig(); t.after(() => r.close())
+  await loginReady(r)
+
+  let x = await r.gw.req("/api/model", { method: "POST", body: { baseURL: "https://my.api.com", apiKey: "sk-mine", modelID: "my-model" } })
+  assert.equal(x.json.ok, true)
+  assert.equal(r.gw.cfg().route, "custom")
+  assert.equal((await r.gw.req("/api/model")).json.route, "custom")
+
+  x = await r.gw.req("/api/model/reset", { method: "POST", body: {} })
+  assert.equal(x.json.route, "cloud", "切回应回到云端账号，而不是内置默认")
+  assert.match(r.gw.cfg().baseURL, /\/cloud\/v1$/)
+})
+
+test("/api/model 的 cloud 摘要不含凭证", async (t) => {
+  const r = await rig(); t.after(() => r.close())
+  await loginReady(r)
+  const m = await r.gw.req("/api/model")
+  assert.equal(m.json.cloud.loggedIn, true)
+  assert.equal(m.json.cloud.username, "zhangsan")
+  const st = JSON.parse(fs.readFileSync(process.env.CLOUD_STATE_PATH, "utf8"))
+  const dump = JSON.stringify(m.json)
+  assert.equal(dump.includes(st.access), false)
+  assert.equal(dump.includes(st.refresh), false)
+})

@@ -53,3 +53,7 @@ sci-agent-backup-*.tar.gz
 
 # 本地开发用的网关 access key（web/dev-gateway.mjs 读它），别进库
 .dev-gateway-key
+
+# 桌面版云端账号登录态（含 refresh token），绝不能进库
+web/cloud-state.json
+cloud.json

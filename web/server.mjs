@@ -8,6 +8,7 @@ import { spawn, execSync, execFile } from "node:child_process"
 import { promisify } from "node:util"
 import { setGlobalDispatcher, Agent } from "undici"
 import { createOpencodeClient } from "@opencode-ai/sdk"
+import * as Cloud from "./cloud-account.mjs"
 
 // opencode 的完整流水线（标书/论文/系统综述）单轮可跑十几分钟，而 session.prompt 是“等整轮结束才返回”的请求；
 // undici 默认 5 分钟 headers/body 超时会让这类长轮假性抛错。关掉这两个超时（0=不限），连接超时保留。
@@ -31,9 +32,19 @@ const MID = _sl >= 0 ? _OCM.slice(_sl + 1) : _OCM
 let MODEL = { providerID: PID, modelID: MID }
 const PORT = Number(process.env.PORT || 3000)
 
+// ---- 云端账号（桌面版）：登录 sci-auth 拿 access key，本进程代持并自动续期 ----
+// opencode 恒指向本机 /cloud/v1，key 由本进程在转发时贴上 —— 于是 key 轮换不必重写
+// opencode.json、更不必重启 opencode（重启会把正在跑十几分钟的轮连根拔掉）。
+const CLOUD_PROXY_PREFIX = "/cloud/"
+// 给 opencode provider 用的占位 key：SDK 不接受空 key，但它只在本机回环上出现，
+// 真正的凭证是本进程内存/状态文件里的 access key。同时用它挡住"局域网访客白嫖你的云端额度"。
+const CLOUD_LOCAL_TOKEN = "local-" + crypto.randomBytes(18).toString("hex")
+
 // ---- 自定义大模型（OpenAI 兼容）：前端可切换后台 opencode 用的模型 ----
-const MODEL_CFG_PATH = path.join(__dirname, "model-config.json")   // 持久化所选自定义模型（含 key，已 gitignore）
-const OC_CONFIG_PATH = path.join(ROOT, "opencode.json")            // opencode 项目配置：注册自定义 provider
+// 两个路径都可用环境变量覆盖：自动化测试要在临时目录里跑，绝不能写到开发机真正的
+// model-config.json / opencode.json 上（前者含 key，后者一改就影响本机 opencode）。
+const MODEL_CFG_PATH = process.env.MODEL_CFG_PATH || path.join(__dirname, "model-config.json")   // 持久化所选自定义模型（含 key，已 gitignore）
+const OC_CONFIG_PATH = process.env.OC_CONFIG_PATH || path.join(ROOT, "opencode.json")            // opencode 项目配置：注册自定义 provider
 const CUSTOM_PROVIDER_ID = "custom"
 const loadModelCfg = () => { try { return JSON.parse(fs.readFileSync(MODEL_CFG_PATH, "utf8")) } catch { return null } }
 const saveModelCfg = (c) => { try { fs.writeFileSync(MODEL_CFG_PATH, JSON.stringify(c, null, 2)) } catch {} }
@@ -109,31 +120,66 @@ try {
 // 而 /api/model/pick 换网关下的模型时还会把网关地址存进 MODEL_CFG —— 两种情况都会让 isCustom 为真。
 // 真正的判据只有一条：**存下来的 baseURL 是不是网关那个地址**（没存过 = 默认就走网关）。
 const sameEndpoint = (a, b) => String(a || "").replace(/\/+$/, "") === String(b || "").replace(/\/+$/, "")
-function currentRoute() {
-  const gw = process.env.OC_GATEWAY_URL
-  if (!gw || !process.env.OC_GATEWAY_KEY) return "custom"   // 压根没网关可走
-  const saved = loadModelCfg()
-  if (!saved?.baseURL) return "gateway"
-  return sameEndpoint(saved.baseURL, gw) ? "gateway" : "custom"
+// 云端账号形态下 opencode 要指的地址：本机自己，转发由本进程做（见 CLOUD_PROXY_PREFIX 的说明）
+const cloudProxyBase = () => `http://127.0.0.1:${PORT}${CLOUD_PROXY_PREFIX}v1`
+const cloudLoggedIn = () => !!Cloud.loadState()
+const gatewayEnvSet = () => !!(process.env.OC_GATEWAY_URL && process.env.OC_GATEWAY_KEY)
+/** 平台路由是否可用：登录了云端账号（桌面版），或注入了静态网关 key（云端多用户容器） */
+const platformAvailable = () => cloudLoggedIn() || gatewayEnvSet()
+
+/**
+ * 当前走哪条路：cloud（云端账号）| gateway（静态网关 key）| custom（用户自己的 API）| none。
+ *
+ * 不能用 isCustom 判断 —— 三种形态在 opencode 眼里都是 CUSTOM_PROVIDER_ID（平台入口本身
+ * 就是个 OpenAI 兼容端点）。所以在 model-config 里【显式记一个 route 字段】；
+ * 老配置文件没有这个字段，回落到按地址比对（本机代理地址 / 网关地址）。
+ */
+function inferLegacyRoute(saved) {
+  if (sameEndpoint(saved.baseURL, cloudProxyBase())) return "cloud"
+  if (gatewayEnvSet() && sameEndpoint(saved.baseURL, process.env.OC_GATEWAY_URL)) return "gateway"
+  return "custom"
 }
-// 回到网关路由（清掉用户自设，按网关重写 provider）。启动兜底与 /api/model/reset 共用同一段，
-// 避免"重启后回到网关、运行时重置却回到内置默认"这种两套行为。
+function currentRoute() {
+  const saved = loadModelCfg()
+  if (!saved?.baseURL) return cloudLoggedIn() ? "cloud" : (gatewayEnvSet() ? "gateway" : "none")
+  const r = saved.route || inferLegacyRoute(saved)
+  // 记着 cloud 但已经登出（或反过来）时，以【当前事实】为准，别报一个走不通的路由
+  if (r === "cloud" && !cloudLoggedIn()) return gatewayEnvSet() ? "gateway" : "none"
+  if (r === "gateway" && !gatewayEnvSet()) return cloudLoggedIn() ? "cloud" : "none"
+  return r
+}
+/** 该用平台的哪种形态：登录了就用云端账号，否则回落静态网关 key */
+function platformProvider() {
+  if (cloudLoggedIn()) {
+    const st = Cloud.loadState()
+    return { route: "cloud", baseURL: cloudProxyBase(), apiKey: CLOUD_LOCAL_TOKEN, modelID: st?.profile?.model || MID }
+  }
+  return { route: "gateway", baseURL: process.env.OC_GATEWAY_URL, apiKey: process.env.OC_GATEWAY_KEY, modelID: MID }
+}
+// 回到平台路由（清掉用户自设，按平台形态重写 provider）。启动兜底与 /api/model/reset 共用同一段，
+// 避免"重启后回到平台、运行时重置却回到内置默认"这种两套行为。
 function useGatewayRoute() {
-  writeOcProvider({ baseURL: process.env.OC_GATEWAY_URL, apiKey: process.env.OC_GATEWAY_KEY, modelID: MID })
-  MODEL = { providerID: CUSTOM_PROVIDER_ID, modelID: MID }
+  const p = platformProvider()
+  writeOcProvider(p)
+  saveModelCfg(p)
+  MODEL = { providerID: CUSTOM_PROVIDER_ID, modelID: p.modelID }
 }
 
-// 启动时恢复上次所选的自定义模型（写好 opencode.json，随后 ensureOpencode 启动的 opencode 会读到）
+// 启动时恢复路由：用户自设 > 平台（云端账号 / 静态网关 key）。
+// 注意云端账号那支【每次启动都要重写 provider】：本机端口可能变、CLOUD_LOCAL_TOKEN 每进程一新，
+// 沿用上次存的配置会让 opencode 拿着上一进程的占位 token 打进来，被下面的代理判为未授权。
 {
   const saved = loadModelCfg()
-  if (saved?.baseURL && saved?.apiKey && saved?.modelID) {
+  const savedRoute = saved?.baseURL ? (saved.route || inferLegacyRoute(saved)) : null
+  if (savedRoute === "custom" && saved.apiKey && saved.modelID) {
     writeOcProvider(saved)
     MODEL = { providerID: CUSTOM_PROVIDER_ID, modelID: saved.modelID }
-  } else if (process.env.OC_GATEWAY_URL && process.env.OC_GATEWAY_KEY) {
-    // 未自设模型但配了 LLM 网关(one-api) → 默认把请求走网关(OpenAI 兼容)：baseURL 指网关，模型用 OC_MODEL 的模型名。
-    // 网关内做多渠道调度/failover；分级路由靠各容器注入不同的 OC_MODEL（tiers.env 的 MODEL 列）。
-    writeOcProvider({ baseURL: process.env.OC_GATEWAY_URL, apiKey: process.env.OC_GATEWAY_KEY, modelID: MID })
-    MODEL = { providerID: CUSTOM_PROVIDER_ID, modelID: MID }
+  } else if (platformAvailable()) {
+    // 走平台：桌面版是登录后的云端账号（经本机 /cloud 转发），云端多用户容器是注入的
+    // 静态网关 key（one-api）。网关内做多渠道调度/failover。
+    // 【云端账号这支每次启动都要重写】本机端口可能变、CLOUD_LOCAL_TOKEN 每进程一新，
+    // 沿用上次存的配置会让 opencode 拿着上一进程的占位 token 打进来，被代理判为未授权。
+    useGatewayRoute()
   }
 }
 // ---- 每个会话独占一套工作区目录（多用户 / 多会话隔离）----
@@ -1120,7 +1166,80 @@ function attachJob(job, req, res) {
   req.on("close", () => job.subs.delete(res))
 }
 
-const server = http.createServer(async (req, res) => {
+// ==== 云端账号转发 =========================================================
+// 把 opencode 打到本机 /cloud/v1/* 的请求，贴上当前 access key 转给 sci-auth 的 /llm/*。
+// 计量、额度、模型强制、技能白名单全在服务端做，这里只做三件事：贴 key、透传、过期重试。
+const CLOUD_BODY_LIMIT = 32 * 1024 * 1024
+async function cloudForward(req, res, u) {
+  const base = Cloud.cloudBase()
+  if (!base) return send(res, 503, "application/json", JSON.stringify({ error: { message: "未配置云端地址" } }))
+
+  // body 要完整读进来：过期重试时得原样重发一次
+  let body
+  try {
+    const chunks = []; let n = 0
+    for await (const c of req) {
+      n += c.length
+      if (n > CLOUD_BODY_LIMIT) return send(res, 413, "application/json", JSON.stringify({ error: { message: "请求体过大" } }))
+      chunks.push(c)
+    }
+    body = Buffer.concat(chunks)
+  } catch { return send(res, 400, "application/json", JSON.stringify({ error: { message: "读取请求体失败" } })) }
+
+  const fwdPath = "/llm" + u.pathname.slice(CLOUD_PROXY_PREFIX.length - 1) + u.search
+
+  const once = async (force) => {
+    const a = await Cloud.currentAccess({ force })
+    if (!a.ok) return { authFail: a }
+    const headers = { "content-type": req.headers["content-type"] || "application/json", authorization: "Bearer " + a.token }
+    if (req.headers["x-skill"]) headers["x-skill"] = req.headers["x-skill"]
+    headers["x-client-version"] = process.env.APP_VERSION || "dev"
+    // 不设超时：推理首字节可以很慢，误杀比挂着更糟（与 sci-auth 侧同一口径）
+    return { r: await fetch(base + fwdPath, { method: req.method, headers, body: body.length ? body : undefined }) }
+  }
+
+  let out
+  try { out = await once(false) } catch (e) { return send(res, 502, "application/json", JSON.stringify({ error: { message: "连不上云端：" + (e?.message || "网络错误") } })) }
+  if (out.authFail) {
+    const err = out.authFail.error || {}
+    return send(res, 401, "application/json", JSON.stringify({ error: { code: err.code, message: err.message || "云端账号未就绪" } }))
+  }
+  let r = out.r
+  // 票据在途中过期/被吊销 → 强制续一次再重试。只重试一次，避免账号被停用时打成死循环。
+  if (r.status === 401) {
+    let code = ""
+    try { code = (await r.clone().json())?.error?.code || "" } catch {}
+    if (code === "KEY_EXPIRED" || code === "KEY_INVALID" || code === "KEY_MISSING") {
+      try {
+        const again = await once(true)
+        if (again.authFail) {
+          const err = again.authFail.error || {}
+          return send(res, 401, "application/json", JSON.stringify({ error: { code: err.code, message: err.message || "登录已失效，请重新登录" } }))
+        }
+        r = again.r
+      } catch { /* 续期本身失败就把原响应透传下去 */ }
+    }
+  }
+
+  const h = { "content-type": r.headers.get("content-type") || "application/json" }
+  const ce = r.headers.get("cache-control"); if (ce) h["cache-control"] = ce
+  res.writeHead(r.status, h)
+  if (!r.body) return res.end()
+  try {
+    // 流式透传：一块来一块走，别攒包（SSE 攒住就没有"边生成边显示"了）
+    for await (const chunk of r.body) {
+      if (res.writableEnded) break
+      res.write(Buffer.from(chunk))
+    }
+    res.end()
+  } catch (e) {
+    console.error("[cloud] 上游流中断：" + (e?.message || e))
+    try { res.destroy() } catch {}
+  }
+}
+
+// 导出供自动化测试拿端口/关闭；生产路径不受影响（下面照常 listen）
+export const server = http.createServer(async (req, res) => {
   const u = new URL(req.url, "http://localhost")
   try {
     // 登录页：未登录的局域网访客看到它；已登录/本机则直接跳回主页
@@ -1162,6 +1281,17 @@ const server = http.createServer(async (req, res) => {
       res.writeHead(200, { "Content-Type": "application/json", "Set-Cookie": `lan_auth=; Path=${BASE_PATH}/; HttpOnly; Secure; Max-Age=0` })
       return res.end(JSON.stringify({ ok: true }))
     }
+    // ---- 云端账号转发：opencode → 本机 /cloud/v1/* → sci-auth /llm/* ----
+    // 必须在门禁【之前】：调用方是本机 opencode，它没有 lan_auth cookie。
+    // 但绝不能因此变成公开代理 —— 两道闸：① 只收回环来源；② 必须带本进程本次启动生成的
+    // CLOUD_LOCAL_TOKEN。否则同一台机上的其他程序（或局域网访客经某种转发）就能白嫖你的云端额度。
+    if (u.pathname.startsWith(CLOUD_PROXY_PREFIX)) {
+      if (!isLocal(req)) return send(res, 403, "application/json", JSON.stringify({ error: { message: "仅限本机" } }))
+      const bearer = String(req.headers.authorization || "").replace(/^Bearer\s*/i, "").trim()
+      if (bearer !== CLOUD_LOCAL_TOKEN) return send(res, 401, "application/json", JSON.stringify({ error: { message: "本机转发令牌不正确" } }))
+      return cloudForward(req, res, u)
+    }
+
     // 门禁：其余路径若未登录 → 页面跳登录页、接口回 401
     if (!PUBLIC_PATHS.has(u.pathname) && !authed(req)) {
       if (req.method === "GET" && (req.headers.accept || "").includes("text/html")) {
@@ -1569,6 +1699,58 @@ const server = http.createServer(async (req, res) => {
       return send(res, 200, "application/json", JSON.stringify(list))
     }
 
+    // ==== 云端账号（桌面版）====================================================
+    if (req.method === "GET" && u.pathname === "/api/cloud/status") {
+      return send(res, 200, "application/json", JSON.stringify({ ok: true, ...Cloud.status(), route: currentRoute() }))
+    }
+    // 登录 / 改密 / 登出 都会改写 opencode 的 provider → 要重启 opencode，
+    // 与切模型同一个危害（拔掉正在跑的轮），故共用 busy → force 二次确认。
+    if (req.method === "POST" && (u.pathname === "/api/cloud/login" || u.pathname === "/api/cloud/password" || u.pathname === "/api/cloud/logout")) {
+      const chunks = []; for await (const c of req) chunks.push(c)
+      let b = {}; try { b = JSON.parse(Buffer.concat(chunks).toString() || "{}") } catch {}
+      const busy = runningRounds()
+      if (busy > 0 && !b.force) {
+        return send(res, 409, "application/json", JSON.stringify({ ok: false, busy, needForce: true, err: `有 ${busy} 轮正在生成中，切换账号需重启后台，会中断它们` }))
+      }
+      let r
+      if (u.pathname === "/api/cloud/login") {
+        const username = String(b.username || "").trim(), password = String(b.password || "")
+        if (!username || !password) return send(res, 400, "application/json", JSON.stringify({ ok: false, err: "请填写账号与口令" }))
+        r = await Cloud.login(username, password)
+      } else if (u.pathname === "/api/cloud/password") {
+        r = await Cloud.changePassword(String(b.oldPassword || ""), String(b.newPassword || ""))
+      } else {
+        r = await Cloud.logout()
+      }
+      if (!r.ok) {
+        const e = r.error || {}
+        return send(res, r.status && r.status >= 400 ? r.status : 400, "application/json",
+          JSON.stringify({ ok: false, code: e.code, err: e.message || "操作失败" }))
+      }
+      // 登录成功后先把档案拉一次：模型名要写进 provider 配置
+      if (u.pathname !== "/api/cloud/logout" && !Cloud.status().mustChangePassword) { try { await Cloud.fetchProfile() } catch {} }
+      // 重配路由：登录/改密后走云端账号；登出后回落静态网关 key，都没有就清掉 provider
+      if (platformAvailable()) useGatewayRoute()
+      else { try { fs.unlinkSync(MODEL_CFG_PATH) } catch {}; removeOcProvider(); MODEL = { providerID: PID, modelID: MID } }
+      let restarted = false; try { restarted = await restartOpencode() } catch {}
+      return send(res, 200, "application/json", JSON.stringify({ ok: true, restarted, ...Cloud.status(), route: currentRoute() }))
+    }
+    // 主动刷新档案（档位/额度/用量）；模型名变了就顺带重配 provider
+    if (req.method === "POST" && u.pathname === "/api/cloud/refresh") {
+      const before = Cloud.loadState()?.profile?.model || ""
+      const r = await Cloud.fetchProfile()
+      if (!r.ok) {
+        const e = r.error || {}
+        return send(res, 200, "application/json", JSON.stringify({ ok: false, code: e.code, err: e.message || "刷新失败" }))
+      }
+      let restarted = false
+      if (currentRoute() === "cloud" && r.profile.model && r.profile.model !== before) {
+        useGatewayRoute()
+        try { restarted = await restartOpencode() } catch {}
+      }
+      return send(res, 200, "application/json", JSON.stringify({ ok: true, restarted, ...Cloud.status(), route: currentRoute() }))
+    }
+
     // 当前后台模型配置（apiKey 不回传，只报是否已设）
     if (req.method === "GET" && u.pathname === "/api/model") {
       const c = loadModelCfg()
@@ -1577,9 +1759,10 @@ const server = http.createServer(async (req, res) => {
         isCustom: MODEL.providerID === CUSTOM_PROVIDER_ID,
         baseURL: c?.baseURL || "", hasKey: !!(c && c.apiKey),
         default: `${PID}/${MID}`, managed: OC_MANAGED,
-        gateway: !!(process.env.OC_GATEWAY_URL && process.env.OC_GATEWAY_KEY),   // 是否接入网关（前端据此显示模型切换器）
-        route: currentRoute(),          // "gateway" | "custom" —— 前端据此显示"当前走哪条路"与是否给出切回入口
-        gatewayURL: process.env.OC_GATEWAY_URL || "",   // 只回地址不回 key
+        gateway: platformAvailable(),   // 有没有平台可走（云端账号 或 静态网关 key）
+        route: currentRoute(),          // cloud | gateway | custom | none —— 前端据此显示"当前走哪条路"与切回入口
+        gatewayURL: cloudLoggedIn() ? Cloud.cloudBase() : (process.env.OC_GATEWAY_URL || ""),   // 只回地址不回 key
+        cloud: Cloud.status(),          // 云端账号摘要（不含任何凭证）
       }))
     }
     // 测试一个 OpenAI 格式的 API（URL + key + 模型）是否可用
@@ -1637,7 +1820,7 @@ const server = http.createServer(async (req, res) => {
       // 且此前没有任何提示。改为先挡住并如实说明，前端确认后带 force:true 重发才真切。
       { const busy = runningRounds(); if (busy > 0 && !force) return send(res, 409, "application/json", JSON.stringify({ ok: false, busy, needForce: true, err: `有 ${busy} 轮正在生成中，切换模型需重启后台，会中断它们` })) }
       writeOcProvider({ baseURL, apiKey, modelID })
-      saveModelCfg({ baseURL, apiKey, modelID })
+      saveModelCfg({ route: "custom", baseURL, apiKey, modelID })
       MODEL = { providerID: CUSTOM_PROVIDER_ID, modelID }
       let restarted = false
       try { restarted = await restartOpencode() } catch {}
@@ -1655,7 +1838,7 @@ const server = http.createServer(async (req, res) => {
       // 同 /api/model：这条路径也 restartOpencode()，同样会中断在跑的轮
       { const busy = runningRounds(); if (busy > 0 && !force) return send(res, 409, "application/json", JSON.stringify({ ok: false, busy, needForce: true, err: `有 ${busy} 轮正在生成中，切换模型需重启后台，会中断它们` })) }
       writeOcProvider({ baseURL, apiKey, modelID })
-      saveModelCfg({ baseURL, apiKey, modelID })
+      saveModelCfg({ route: "gateway", baseURL, apiKey, modelID })
       MODEL = { providerID: CUSTOM_PROVIDER_ID, modelID }
       let restarted = false; try { restarted = await restartOpencode() } catch {}
       if (!restarted) { try { await client.config.update({ body: { provider: { [CUSTOM_PROVIDER_ID]: customProviderCfg({ baseURL, apiKey, modelID }) } } }) } catch {} }
@@ -1672,7 +1855,10 @@ const server = http.createServer(async (req, res) => {
       // 【接了网关就回网关，而不是回内置默认】默认路由本来就是网关（见启动那段），
       // 这里若照旧 removeOcProvider() 回落到内置 provider，就会出现"点了切回、其实哪也没回，
       // 得把进程重启一次才真的回到网关"这种前后不一致。
-      if (process.env.OC_GATEWAY_URL && process.env.OC_GATEWAY_KEY) useGatewayRoute()
+      // 用 platformAvailable() 而不是只看环境变量：桌面版的平台入口是【登录后的云端账号】，
+      // 环境变量是空的。照旧只判 env 会走进"清掉 provider"那支 —— 路由报着 cloud，
+      // 而 opencode 其实什么 provider 都没有，下一次发消息才发现整条链是断的。
+      if (platformAvailable()) useGatewayRoute()
       else { removeOcProvider(); MODEL = { providerID: PID, modelID: MID } }
       let restarted = false; try { restarted = await restartOpencode() } catch {}
       return send(res, 200, "application/json", JSON.stringify({

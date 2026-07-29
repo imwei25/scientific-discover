@@ -252,13 +252,16 @@ Copy-Item "$PSScriptRoot\smoke.sh" $Staging -Force
 #   安装器带上了开发机的 DeepSeek key）。故每次打包收尾都强制清一遍。
 Step "清理运行时状态（防冒烟残留进包）"
 $dirty = @("$App\web\model-config.json", "$App\web\sessions-meta.json",
+           # cloud-state.json 是开发机登录云端账号后留下的 refresh token（等价于口令），
+           # 混进安装器 = 把你的账号发给客户。
+           "$App\web\cloud-state.json",
            "$App\serve.out", "$App\serve.err", "$App\server.log")
 foreach ($f in $dirty) { if (Test-Path $f) { Remove-Item $f -Force; Write-Host "  删除 $f" -ForegroundColor Yellow } }
 foreach ($d in @("$App\outputs", "$App\uploads")) {
   if (Test-Path $d) { Get-ChildItem $d -Force | Remove-Item -Recurse -Force -Confirm:$false }
 }
 # 收尾自检：整个 staging 里绝不能再有任何 apiKey 字样的 json（opencode.json 由上面写的干净基线覆盖）
-$leak = Get-ChildItem $App -Recurse -Include "model-config.json" -ErrorAction SilentlyContinue
+$leak = Get-ChildItem $App -Recurse -Include "model-config.json","cloud-state.json" -ErrorAction SilentlyContinue
 if ($leak) { throw "打包中止：仍存在 model-config.json —— $($leak.FullName -join '; ')" }
 
 # ================= 7. 汇总自检 =================
