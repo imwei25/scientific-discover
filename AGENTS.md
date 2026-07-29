@@ -40,6 +40,10 @@
 - **画图 / 看数 / 统计**：`data-analysis`（探索性看数、150dpi 预览）、`nature-figure`（投稿级出版图：森林图/KM/火山图，300dpi+矢量）、`clinical-stats`（基线表/Table 1、样本量）
 - **临床推断统计的归属（避免误派）**：方法比对（Bland-Altman / Passing-Bablok / 一致性 LoA）、生存分析（KM / Cox）、ROC / 诊断效能、组间检验 / 相关 / 回归等**分析**一律走 `data-analysis`，要投稿级图再叠 `nature-figure`；`clinical-stats` **只**管 Table 1 基线表与样本量 / 把握度，别拿它做上述分析。**且诊断准确性 / 方法比对 / 纯实验室验证类研究常无人口学基线协变量（年龄 / 性别 / 分期等）→ 此时 Table 1 无对应数据，`clinical-stats` 可整步跳过、全走 `data-analysis`，别把检测值 / 生存时间硬塞成"基线表"制造误导。**
 - **检索 / 全文**：`search-lit`（PubMed 系）、`literature-review`（Europe PMC / 叙述性综述成文）、`fulltext-retrieval`（下 PDF/OA、PDF 转 md）
+- **本地文献库**：`zotero-library`（读用户**本机 Zotero** 题录 + 对其中 PDF 做全文证据检索，“基于我自己的文献库回答”；默认只读，导出回写用 `push`（写操作）。**仅在 opencode 与 Zotero 同机运行时可用**，中心服务器多用户下探测失败会优雅回退，改用 `search-lit`/`fulltext-retrieval`）
+- **把综述检索到的文献导入 Zotero / 会话小库**（做完 `search-lit`/`literature-review` 后，用户说“把这批文献存进 Zotero / 存成小库问答”）：
+  - → **Zotero**：`zotero-library` 的 `push --csv evidence_table.csv`（或 `--bib refs.bib`）把题录写进 Zotero 当前选中分类（**只有题录、无 PDF 附件**）。
+  - → **会话小库做 RAG**：检索结果**多数没有全文**——**必须先用 `fulltext-retrieval` 按 DOI 试下 OA 全文**到当前目录的 `zotero_lib/`，**只把真正下到 PDF 的算入小库**，再用 `zotero-library` 对该目录 RAG。**务必诚实汇报**：哪些下到了全文（已入小库）、哪些没下到（**因此没入小库**、给出原因，如非 OA / 无 DOI），**绝不假装全部导入**。没全文的仍可 `push` 进 Zotero（只题录）。
 - **文稿处理**：`humanize-academic`（去 AI 味）、`reference-check`（查假引用 / 核 DOI）、`render-docx` / `render-pdf-doc`（排版出件）
 - **数据合规**：`deidentify`（患者数据脱敏）
 - **图片识字**：`ocr`（把图片/扫描件/官方以图片发布的文件识别成文字；调云端 OCR.space、本地不装模型；**signal not verdict**，代码/金额/批号等关键字段须人工复核）

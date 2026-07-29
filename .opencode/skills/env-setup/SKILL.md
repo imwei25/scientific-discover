@@ -12,6 +12,8 @@ description: 一键准备 / 自举运行环境。首次使用本套科研技能�
 - Windows：`powershell -ExecutionPolicy Bypass -File install.ps1`
 - Linux / macOS：`bash install.sh`
 
+可选开关（按需叠加）：`-WithPdf`/`--with-pdf`（排版 PDF 工具链）；**`-WithEmbed`/`--with-embed`（`zotero-library` 全文 RAG 的本地嵌入/精排：装 sentence-transformers + 从 ModelScope 下 BCE 嵌入与 reranker 模型，全程本地不触远程端点、不用生成模型；较重，含 torch + ~2.2GB 模型，默认跳过）**。
+
 跑完就好，跳到「验证」。
 
 ## 手动分步（脚本不在 / 移植到别处时）
