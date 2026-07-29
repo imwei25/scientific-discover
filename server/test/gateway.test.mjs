@@ -5,7 +5,7 @@
 import test from "node:test"
 import assert from "node:assert/strict"
 import { startApp, adminLogin, asAdmin, startFakeUpstream, sse } from "./helper.mjs"
-import { normalizeUsage, costOf } from "../lib/gateway.mjs"
+import { normalizeUsage, costOf, joinUpstream } from "../lib/gateway.mjs"
 
 const STRONG = "Aa1!aaaa9"
 const CHAT = "/llm/v1/chat/completions"
@@ -69,6 +69,18 @@ test("normalizeUsage：兼容 DeepSeek / OpenAI 两种字段名", () => {
 test("normalizeUsage：缓存数不合理时钳制，别让计费变成负的", () => {
   assert.deepEqual(normalizeUsage({ prompt_tokens: 10, completion_tokens: 0, prompt_cache_hit_tokens: 99 }), { prompt: 10, completion: 0, cached: 10 })
   assert.deepEqual(normalizeUsage({ prompt_tokens: 10, completion_tokens: 0, prompt_cache_hit_tokens: -5 }), { prompt: 10, completion: 0, cached: 0 })
+})
+
+test("joinUpstream：客户端 /llm 与 /llm/v1 两种写法都要能用，且不出现 /v1/v1", () => {
+  // 接 one-api（上游带 /v1）
+  assert.equal(joinUpstream("http://127.0.0.1:3010/v1", "/v1/chat/completions"), "http://127.0.0.1:3010/v1/chat/completions")
+  assert.equal(joinUpstream("http://127.0.0.1:3010/v1", "/chat/completions"), "http://127.0.0.1:3010/v1/chat/completions")
+  assert.equal(joinUpstream("http://127.0.0.1:3010/v1/", "/v1/models"), "http://127.0.0.1:3010/v1/models")
+  // 直连 DeepSeek（上游不带 /v1）
+  assert.equal(joinUpstream("https://api.deepseek.com", "/v1/chat/completions"), "https://api.deepseek.com/v1/chat/completions")
+  // 只吃掉【开头那一段】/v1，路径里别处的 v1 不能动
+  assert.equal(joinUpstream("http://x/v1", "/v1/foo/v1/bar"), "http://x/v1/foo/v1/bar")
+  assert.equal(joinUpstream("http://x/apiv1", "/v1/chat"), "http://x/apiv1/v1/chat", "只有真的以 /v1 结尾才算")
 })
 
 test("costOf：新鲜输入/缓存输入/输出 三段单价", () => {

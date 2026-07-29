@@ -44,6 +44,23 @@ export function costOf(usage, cfg) {
   return (fresh * cfg.priceIn + usage.cached * cfg.priceCached + usage.completion * cfg.priceOut) / 1e6
 }
 
+/**
+ * 拼上游 URL，并消掉重复的 /v1。
+ *
+ * 客户端的 baseURL 有两种写法，两种都得能用：
+ *   http://host/llm      → OpenAI SDK 拼成 /llm/chat/completions       → fwdPath=/chat/completions
+ *   http://host/llm/v1   → OpenAI SDK 拼成 /llm/v1/chat/completions    → fwdPath=/v1/chat/completions
+ * 而 LLM_UPSTREAM_URL 接 one-api 时必须带 /v1（它的 OpenAI 兼容端点就在 /v1 下）。
+ * 直接相加就会出现 http://127.0.0.1:3010/v1 + /v1/chat/completions = /v1/v1/... → 上游 404。
+ * 真机第一次接 one-api 就是栽在这里，而且报错只是个干巴巴的 404，看不出是拼错了。
+ */
+export function joinUpstream(baseUrl, fwdPath) {
+  const base = String(baseUrl || "").replace(/\/+$/, "")
+  let p = String(fwdPath || "")
+  if (/\/v1$/.test(base) && /^\/v1\//.test(p)) p = p.slice(3)
+  return base + p
+}
+
 /** 读完整请求体（网关必须重写 body：强制模型 + 注入 include_usage），带上限。 */
 async function readRawBody(req, limit = REQ_BODY_LIMIT) {
   const chunks = []; let n = 0
@@ -173,8 +190,9 @@ export async function llmForward({ req, res, pathname, ctx }) {
   const { buf, stream, model } = rewriteBody(raw, { model: ent.model })
 
   const fwdPath = pathname.slice(GATEWAY_PATH_PREFIX.length - 1) // "/llm/v1/x" -> "/v1/x"
+  const query = req.url.includes("?") ? req.url.slice(req.url.indexOf("?")) : ""
   let tu
-  try { tu = new URL(CFG.upstreamUrl + fwdPath + (req.url.includes("?") ? req.url.slice(req.url.indexOf("?")) : "")) }
+  try { tu = new URL(joinUpstream(CFG.upstreamUrl, fwdPath) + query) }
   catch { return fail(res, 500, "INTERNAL", "上游地址配置有误") }
 
   const headers = { ...req.headers }
