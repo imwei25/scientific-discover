@@ -405,6 +405,19 @@ test("后台：额度覆盖校验；单用户用量明细接口", async (t) => {
   assert.deepEqual(d.json.detail, [])
 })
 
+test("后台页面：内嵌脚本必须能被解析（模板串里的 \\n 会被吃掉，整页白屏且没有任何报错）", async (t) => {
+  const { app } = await setup(); t.after(() => app.close())
+  const html = (await app.req("/admin")).text
+  const js = [...html.matchAll(/<script>([\s\S]*?)<\/script>/g)].map((m) => m[1]).join("\n")
+  assert.ok(js.length > 1000, "没抽到内嵌脚本")
+  // admin-ui.mjs 整体是一个模板字符串：里面写 \n 会在服务端就展开成真换行，
+  // 于是浏览器收到一个跨行的字符串字面量 → SyntaxError → 整个页面的 JS 一行都不执行，
+  // 而且控制台里连报错都看不到（脚本压根没进入执行）。踩过一次，用这条钉死。
+  await assert.doesNotReject(
+    async () => new (await import("node:vm")).Script(js, { filename: "admin-ui" }),
+    "后台内嵌脚本有语法错误")
+})
+
 test("后台页面：自包含、无外部资源、带上界面依赖的挂载点", async (t) => {
   const { app } = await setup(); t.after(() => app.close())
   const r = await app.req("/admin")

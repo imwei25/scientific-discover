@@ -447,15 +447,18 @@ function paneChannels(){
       else if(b.dataset.a==='serve'){
         // 让这条通道也接管某个模型名 —— 这一步才让"主挂了走备用"真正成立
         var used=Object.keys(usedModels);
-        var m=prompt('让「'+c.name+'」兜底哪个模型名？\n\n'+
+        // 注意：本文件是个大模板字符串，这里的换行必须写成 \\n —— 写 \n 会被外层模板串
+        // 先展开成【真换行】，于是浏览器拿到的是一个跨行的字符串字面量，整段脚本直接语法错误
+        // （这条坑真踩过一次：后台整页白屏，页面 JS 一行都没执行）。
+        var m=prompt('让「'+c.name+'」兜底哪个模型名？\\n\\n'+
           (used.length?'档位在用的：'+used.join('、'):'（还没有档位配了模型名）'),used[0]||'');
         if(!m)return;
-        var mp=prompt('这家供应商自己的真实模型名是？\n\n'+
-          '留空 = 它也用同一个名字。\n填了会写进 one-api 的模型改名规则，请求转过去时自动换名。\n'+
+        var mp=prompt('这家供应商自己的真实模型名是？\\n\\n'+
+          '留空 = 它也用同一个名字。\\n填了会写进 one-api 的模型改名规则，请求转过去时自动换名。\\n'+
           '本通道现有模型：'+(c.models.join('、')||'无'), c.models[0]||'');
         if(mp===null)return;
-        if(!confirm('确认：把「'+m+'」挂到通道「'+c.name+'」上作为备用。\n\n'+
-          '⚠ 计量单价是全局一张表，若这家与现任默认价格不同，流量切过去时账会静默偏。\n继续吗？'))return;
+        if(!confirm('确认：把「'+m+'」挂到通道「'+c.name+'」上作为备用。\\n\\n'+
+          '⚠ 计量单价是全局一张表，若这家与现任默认价格不同，流量切过去时账会静默偏。\\n继续吗？'))return;
         body.action='serve';body.model=m.trim();body.mapTo=mp.trim()}
       b.disabled=true;
       post('channel',body).then(function(j){
