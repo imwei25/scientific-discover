@@ -208,7 +208,11 @@ if ($LASTEXITCODE -ne 0) { throw ".venv\bin 自检失败" }
 # ================= 6. 应用本体 =================
 Step "应用本体：web 网关 + 技能 + AGENTS.md"
 # web：排除运行时状态与密钥（model-config.json 含开发机的 key，绝不能进包）
-Copy-Tree "$Root\web" "$App\web" -ExcludeFiles @("model-config.json", "sessions-meta.json", "dev-test.mjs")
+# 排除三类：运行时状态与密钥、开发用启动器、自动化测试。
+# 测试目录里有 "sk-mine" 这种假 key，混进包既是无谓体积，也会让密钥扫描工具误报。
+Copy-Tree "$Root\web" "$App\web" `
+  -ExcludeFiles @("model-config.json", "cloud-state.json", "sessions-meta.json", "dev-test.mjs", "dev-gateway.mjs") `
+  -ExcludeDirs  @("test")
 # .opencode：技能 + opencode 插件依赖
 Copy-Tree "$Root\.opencode" "$App\.opencode"
 Copy-Item "$Root\AGENTS.md" $App -Force
