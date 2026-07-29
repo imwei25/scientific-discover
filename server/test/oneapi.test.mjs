@@ -200,3 +200,55 @@ test("后台：未登录不能碰通道", async (t) => {
   assert.equal((await app.req("/admin/api/channel", { method: "POST", body: { id: 1, priority: 9 } })).status, 401)
   assert.equal(f.seen.length, 0)
 })
+
+// ---- 让通道兜底某模型（"默认不通走备用"真正成立的那一步）----
+// 专供 serveModel：2 号【只】挂 Flash，即现网的真实形态（两条通道互不兜底）
+const CH2 = () => CH().map((c) => (c.id === 2 ? { ...c, models: "deepseek-ai/DeepSeek-V4-Flash" } : c))
+
+test("serveModel：给通道挂上目标模型名 + 改名规则，并挂成备用", async (t) => {
+  const f = await fakeOneApi(CH2()); t.after(() => f.close())
+  // 2 号（硅基流动）目前不挂 deepseek-v4-pro，所以它对该模型根本不构成备用
+  const r = await OneAPI.serveModel(f.cfg, { id: 2, model: "deepseek-v4-pro", mapTo: "deepseek-ai/DeepSeek-V4-Flash" })
+  assert.equal(r.ok, true)
+  assert.ok(r.models.includes("deepseek-v4-pro"))
+  assert.equal(r.mapping["deepseek-v4-pro"], "deepseek-ai/DeepSeek-V4-Flash")
+  const put = f.seen.filter((x) => x.method === "PUT").at(-1)
+  assert.equal(JSON.parse(put.body.model_mapping)["deepseek-v4-pro"], "deepseek-ai/DeepSeek-V4-Flash")
+  // 现有最高是 3 号的 5 → 备用取 4，严格低于默认
+  assert.equal(r.priority, 4)
+})
+
+test("serveModel：现任默认优先级为 0 时，先把它抬到 1，自己留 0（否则变成随机分流）", async (t) => {
+  const chans = CH2().filter((c) => c.id !== 3)   // 只剩 1 号(0) 与 2 号(0)，且 2 号不挂目标模型
+  const f = await fakeOneApi(chans); t.after(() => f.close())
+  const r = await OneAPI.serveModel(f.cfg, { id: 2, model: "deepseek-v4-pro" })
+  assert.equal(r.ok, true)
+  assert.equal(r.priority, 0, "自己当备用")
+  assert.equal(chans.find((c) => c.id === 1).priority, 1, "现任默认被抬到 1")
+})
+
+test("serveModel：已经挂了就明确拒绝；模型名为空也拒绝", async (t) => {
+  const f = await fakeOneApi(CH()); t.after(() => f.close())
+  let r = await OneAPI.serveModel(f.cfg, { id: 1, model: "deepseek-v4-pro" })
+  assert.equal(r.ok, false); assert.match(r.err, /已经挂了/)
+  r = await OneAPI.serveModel(f.cfg, { id: 1, model: "  " })
+  assert.equal(r.ok, false); assert.match(r.err, /模型名/)
+})
+
+test("serveModel：不传 mapTo 就不写改名规则（表示同名）", async (t) => {
+  const f = await fakeOneApi(CH()); t.after(() => f.close())
+  const r = await OneAPI.serveModel(f.cfg, { id: 2, model: "some-model" })
+  assert.equal(r.ok, true)
+  assert.deepEqual(r.mapping, {}, "原本没有 mapping，也不该凭空造一条")
+})
+
+test("后台：serve 动作打通并留审计", async (t) => {
+  const f = await fakeOneApi(CH2()); t.after(() => f.close())
+  const app = await startApp({ ONEAPI_URL: f.cfg.url, ONEAPI_TOKEN: "sys-token" })
+  t.after(() => app.close())
+  const admin = asAdmin(app, await adminLogin(app))
+  const r = await admin("/admin/api/channel", { method: "POST", body: { action: "serve", id: 2, model: "deepseek-v4-pro", mapTo: "deepseek-ai/DeepSeek-V4-Flash" } })
+  assert.equal(r.json.ok, true)
+  assert.ok(f.channels.find((c) => c.id === 2).models.includes("deepseek-v4-pro"))
+  assert.ok((await admin("/admin/api/audit")).json.rows.some((x) => x.event === "channel.serve"))
+})

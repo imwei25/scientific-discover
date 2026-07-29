@@ -64,6 +64,8 @@ export async function listChannels(cfg) {
     group: c.group || "default",
     baseUrl: c.base_url || "",
     models: String(c.models || "").split(",").map((s) => s.trim()).filter(Boolean),
+    // one-api 把模型改名规则存成 JSON 字符串：{"对外模型名":"该供应商真实模型名"}
+    modelMapping: (() => { try { return JSON.parse(c.model_mapping || "{}") || {} } catch { return {} } })(),
     // 统计信息（不同 one-api 版本字段不全一致，取到就给）
     usedQuota: c.used_quota, responseTime: c.response_time, testTime: c.test_time,
   }))
@@ -100,6 +102,53 @@ export async function testChannel(cfg, id) {
   const r = await request(cfg, "GET", `/api/channel/test/${Number(id)}`)
   if (!r.ok) return r
   return { ok: true, data: r.data }
+}
+
+/**
+ * 让某通道也接管某个模型名（默认当备用挂上去）。
+ *
+ * 这一步才让「默认不通走备用」真正成立：one-api 只在**挂了同一模型名**的通道之间兜底。
+ * 现网就是活例子——DeepSeek 挂 deepseek-v4-pro、硅基流动挂 deepseek-ai/DeepSeek-V4-Flash，
+ * 看着有两条通道，实际互不兜底，主通道一挂全站就停。
+ *
+ * mapTo：该供应商自己的真实模型名。填了就写进 model_mapping，请求转过去时自动改名；
+ *        不填就表示这家也用同一个名字。
+ * asBackup：挂成备用（优先级低于当前默认）。当前默认优先级是 0 时，先把它抬到 1，
+ *          否则两边同级会变成负载均衡，而不是"主挂了才走备用"。
+ */
+export async function serveModel(cfg, { id, model, mapTo, asBackup = true }) {
+  const name = String(model || "").trim()
+  if (!name) return { ok: false, err: "请填要接管的模型名" }
+  const cur = await listChannels(cfg)
+  if (!cur.ok) return cur
+  const me = cur.channels.find((x) => x.id === Number(id))
+  if (!me) return { ok: false, err: "通道不存在" }
+  if (me.models.includes(name)) return { ok: false, err: `该通道已经挂了 ${name}` }
+
+  const mapping = { ...me.modelMapping }
+  if (mapTo && String(mapTo).trim()) mapping[name] = String(mapTo).trim()
+
+  const body = {
+    id: me.id,
+    models: [...me.models, name].join(","),
+    model_mapping: JSON.stringify(mapping),
+  }
+  if (asBackup) {
+    const peers = (cur.byModel[name] || []).filter((x) => x.id !== me.id)
+    const top = peers.length ? Math.max(...peers.map((x) => x.priority)) : 0
+    if (peers.length && top <= 0) {
+      // 把现任默认抬到 1，自己留在 0 —— 否则同级会变成随机分流
+      const def = peers.find((x) => x.priority === top)
+      const up = await updateChannel(cfg, { id: def.id, priority: 1 })
+      if (!up.ok) return up
+      body.priority = 0
+    } else {
+      body.priority = Math.max(0, top - 1)
+    }
+  }
+  const r = await request(cfg, "PUT", "/api/channel/", body)
+  if (!r.ok) return r
+  return { ok: true, models: body.models.split(","), priority: body.priority, mapping }
 }
 
 /**

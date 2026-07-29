@@ -562,6 +562,7 @@ async function handleAdminApi(req, res, pathname) {
     const b = await readBody(req)
     let r
     if (b.action === "default") r = await OneAPI.makeDefault(oneapiCfg(), b.id, String(b.model || ""))
+    else if (b.action === "serve") r = await OneAPI.serveModel(oneapiCfg(), { id: b.id, model: b.model, mapTo: b.mapTo, asBackup: b.asBackup !== false })
     else if (b.action === "test") r = await OneAPI.testChannel(oneapiCfg(), b.id)
     else r = await OneAPI.updateChannel(oneapiCfg(), { id: b.id, priority: b.priority, status: b.status, weight: b.weight })
     if (!r.ok) return json(res, 400, { ok: false, err: r.err || "操作失败" })

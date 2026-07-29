@@ -419,6 +419,7 @@ function paneChannels(){
       '<td class="row" style="gap:5px;flex-wrap:nowrap">'+
         '<button class="btn sm" data-a="save">保存优先级</button>'+
         (c.models.length?'<select class="d-mod" style="max-width:150px">'+modelOpts+'</select><button class="btn sm" data-a="def">设为默认</button>':'')+
+        '<button class="btn sm" data-a="serve">兜底某模型</button>'+
         '<button class="btn sm" data-a="toggle">'+(on?'停用':'启用')+'</button>'+
         '<button class="btn sm" data-a="test">测试</button></td></tr>'}).join('');
 
@@ -443,12 +444,26 @@ function paneChannels(){
       else if(b.dataset.a==='toggle')body.status=c.status===1?2:1;
       else if(b.dataset.a==='def'){body.action='default';body.model=tr.querySelector('.d-mod').value}
       else if(b.dataset.a==='test')body.action='test';
+      else if(b.dataset.a==='serve'){
+        // 让这条通道也接管某个模型名 —— 这一步才让"主挂了走备用"真正成立
+        var used=Object.keys(usedModels);
+        var m=prompt('让「'+c.name+'」兜底哪个模型名？\n\n'+
+          (used.length?'档位在用的：'+used.join('、'):'（还没有档位配了模型名）'),used[0]||'');
+        if(!m)return;
+        var mp=prompt('这家供应商自己的真实模型名是？\n\n'+
+          '留空 = 它也用同一个名字。\n填了会写进 one-api 的模型改名规则，请求转过去时自动换名。\n'+
+          '本通道现有模型：'+(c.models.join('、')||'无'), c.models[0]||'');
+        if(mp===null)return;
+        if(!confirm('确认：把「'+m+'」挂到通道「'+c.name+'」上作为备用。\n\n'+
+          '⚠ 计量单价是全局一张表，若这家与现任默认价格不同，流量切过去时账会静默偏。\n继续吗？'))return;
+        body.action='serve';body.model=m.trim();body.mapTo=mp.trim()}
       b.disabled=true;
       post('channel',body).then(function(j){
         b.disabled=false;
         if(!j.ok)return toast(j.err||'操作失败',false);
         if(b.dataset.a==='test')return toast('通道 '+c.name+' 测试通过',true);
-        toast(b.dataset.a==='def'?('已把 '+c.name+' 设为该模型的默认'):'已保存',true);
+        if(b.dataset.a==='serve')toast('已把 '+body.model+' 挂到 '+c.name+'（优先级 '+j.priority+'，作备用）',true);
+        else toast(b.dataset.a==='def'?('已把 '+c.name+' 设为该模型的默认'):'已保存',true);
         loadChannels()})
         .catch(function(){b.disabled=false;toast('网络错误',false)})}});
 }
