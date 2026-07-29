@@ -410,15 +410,60 @@ def _push_creators(ref: dict) -> list[dict]:
     return out
 
 
+# 这些 source 说明该条目【本来就来自用户的 Zotero】，回写它等于把库里已有的东西再塞一遍。
+# 会话小库的 zotero_refs.json 全是这几类 —— 面板的「回写」按钮如果不挡，
+# 用户点两下就凭空多出一批标题是 "xxx.pdf"、作者与 DOI 全空的重复条目。
+# 而 Zotero 7 的本地 API 是**只读**的，没有删除接口：程序回滚不了，只能人工去回收站清。
+_ZOTERO_SOURCES = {"zotero", "zotero_attachment", "zotero_index"}
+
+
+def _push_key(r: dict) -> str:
+    """去重键：优先 DOI（规范化），否则用标题+年份。"""
+    doi = (r.get("doi") or "").strip().lower()
+    doi = re.sub(r"^https?://(dx\.)?doi\.org/", "", doi)
+    if doi:
+        return "doi:" + doi
+    title = re.sub(r"\s+", " ", (r.get("title") or "").strip().lower())
+    return "t:" + title + "|" + str(r.get("year") or "")
+
+
 def build_push_payload(refs: list[dict]) -> dict:
     items = [{
-        "itemType": "journalArticle", "title": r.get("title") or "",
+        # 保留原条目类型：硬写 journalArticle 会把会议论文/书章/预印本全变成期刊论文，
+        # 之后在 Zotero 里再也分不出来。缺失才回落 journalArticle。
+        "itemType": r.get("itemType") or r.get("item_type") or "journalArticle",
+        "title": r.get("title") or "",
         "creators": _push_creators(r), "date": str(r.get("year") or ""),
         "DOI": r.get("doi") or "", "url": r.get("url") or "",
         "publicationTitle": r.get("journal") or "", "abstractNote": r.get("abstract") or "",
     } for r in refs]
     return {"sessionID": "sci-skill-zotero", "items": items,
             "uri": "https://sci-skill.local"}
+
+
+def filter_pushable(refs: list[dict]) -> tuple[list[dict], dict]:
+    """挑出真正该回写的条目，并报告挡掉了什么。
+    返回 (可推送列表, 统计)。统计里的数字要如实回给用户 —— 这是个不可回滚的写操作，
+    用户有权在按下确认前知道"到底会往我的库里加几条、跳过了几条、为什么跳"。"""
+    out, seen = [], set()
+    skipped_zotero = skipped_dup = skipped_untitled = 0
+    for r in refs:
+        if not (r.get("title") or "").strip():
+            skipped_untitled += 1
+            continue
+        if (r.get("source") or "") in _ZOTERO_SOURCES:
+            skipped_zotero += 1
+            continue
+        k = _push_key(r)
+        if k in seen:
+            skipped_dup += 1
+            continue
+        seen.add(k)
+        out.append(r)
+    return out, {
+        "pushable": len(out), "skipped_from_zotero": skipped_zotero,
+        "skipped_duplicate": skipped_dup, "skipped_untitled": skipped_untitled,
+    }
 
 
 def _split_authors(s: str) -> list[str]:
@@ -498,13 +543,26 @@ def cmd_push(args) -> None:
     if not isinstance(refs, list) or not refs:
         print(json.dumps({"ok": False, "error": "empty_refs"}, ensure_ascii=False))
         sys.exit(2)
+    # 先筛：来自 Zotero 的不回写（否则是把库里的东西再塞一遍）、重复的合并、无标题的丢弃
+    pushable, stats = filter_pushable(refs)
+    if not pushable:
+        print(json.dumps({"ok": False, "error": "nothing_to_push",
+                          "hint": "这些条目本来就来自你的 Zotero（或重复/无标题），回写会产生重复条目，已全部跳过",
+                          **stats}, ensure_ascii=False))
+        sys.exit(0)
+    # --dry-run：只报会写什么，不真写。写操作不可回滚，给调用方一个先看后写的机会。
+    if getattr(args, "dry_run", False):
+        print(json.dumps({"ok": True, "dry_run": True,
+                          "would_push": [r.get("title") for r in pushable], **stats},
+                         ensure_ascii=False))
+        return
     try:
-        _post_json(f"{_CONNECTOR}/saveItems", build_push_payload(refs),
+        _post_json(f"{_CONNECTOR}/saveItems", build_push_payload(pushable),
                    timeout=_IO_TIMEOUT + 3,
                    headers={"X-Zotero-Connector-API-Version": "3.0"})
     except Exception as e:  # noqa: BLE001
         _zotero_down(str(e))
-    print(json.dumps({"ok": True, "pushed": len(refs)}, ensure_ascii=False))
+    print(json.dumps({"ok": True, "pushed": len(pushable), **stats}, ensure_ascii=False))
 
 
 # ---------------------------------------------------------------- 输出
@@ -559,6 +617,9 @@ def main() -> None:
     p.add_argument("--refs", default=None, help="统一 Reference 列表 JSON 文件")
     p.add_argument("--csv", default=None, help="综述产出的 evidence_table.csv")
     p.add_argument("--bib", default=None, help="refs.bib（BibTeX，best-effort 解析）")
+    # Zotero 本地 API 只读、没有删除接口 → 回写不可程序化回滚。先 dry-run 看清楚再真写。
+    p.add_argument("--dry-run", action="store_true",
+                   help="只报会写入哪些条目，不真写（写操作不可回滚，建议先跑一次）")
 
     args = ap.parse_args()
     {

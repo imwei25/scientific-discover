@@ -1969,11 +1969,18 @@ const zPushBtn = document.getElementById("zpush")
 setIc("icZot", "puzzle")
 const zEsc = (s) => String(s == null ? "" : s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]))
 let zReady = false
+let zRemote = false   // 多用户部署：网关在服务器上，永远够不到用户本机的 Zotero
+// Zotero 只能在【用户自己这台机器】上用。多用户部署时网关跑在服务器上，探的是服务器的
+// 127.0.0.1 —— 让用户去开本机 Zotero 是没有意义的指引，得换一套说法。
+const zNotRunningMsg = () => zRemote
+  ? "此部署形态下无法访问你本机的 Zotero：网关运行在服务器上，只能看到服务器自己的 Zotero。该功能仅在桌面版（应用与 Zotero 同机）可用。"
+  : "未检测到运行中的 Zotero：请打开 Zotero，并在 设置→高级 勾选“允许本机其它应用与 Zotero 通信”，再点“导入”重试。"
 async function loadZoteroStatus() {
   try {
     const s = await fetch("api/zotero/status").then((r) => r.json())
     zReady = !!s.running
-    zStatusEl.textContent = zReady ? "已连接" : "未运行"
+    zRemote = s.deployment === "multiuser"
+    zStatusEl.textContent = zReady ? "已连接" : (zRemote ? "不适用（服务器部署）" : "未运行")
     if (zReady) loadCollections()
   } catch { zReady = false; zStatusEl.textContent = "未运行" }
   loadZotLib()
@@ -2003,7 +2010,7 @@ function zScopePrefix() {
   return ""
 }
 document.getElementById("zimport").addEventListener("click", async () => {
-  if (!zReady) { zMsgEl.textContent = "未检测到运行中的 Zotero：请打开 Zotero，并在 设置→高级 勾选“允许本机其它应用与 Zotero 通信”，再点“导入”重试。"; loadZoteroStatus(); return }
+  if (!zReady) { zMsgEl.textContent = zNotRunningMsg(); loadZoteroStatus(); return }
   zMsgEl.textContent = "导入中…（把 PDF 复制进本会话小库）"
   try {
     const body = zCollEl.value ? { collection_key: zCollEl.value } : {}

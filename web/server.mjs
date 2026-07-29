@@ -1781,7 +1781,14 @@ export const server = http.createServer(async (req, res) => {
     // 所以这里一律回 200 + 结构化结果：Zotero 没开也只是 {ok:false}，不该把前端整块面板打成红叉。
     // 探测本机 Zotero 是否在跑
     if (req.method === "GET" && u.pathname === "/api/zotero/status") {
-      return send(res, 200, "application/json", zotJson(await runPy([ZOT_READ, "probe"], 8_000)))
+      // 带上部署形态：Zotero 只在【用户自己那台机器】上跑，而本进程探的是【自己的】127.0.0.1。
+      // 多用户部署时网关在服务器上，永远探不到用户笔记本上的 Zotero —— 此时前端必须换一套说法，
+      // 否则就是让用户反复去开一个根本不会被看见的 Zotero（这条提示原本一直是误导的）。
+      const raw = zotJson(await runPy([ZOT_READ, "probe"], 8_000))
+      let obj = {}
+      try { obj = JSON.parse(raw) } catch { obj = { ok: false, error: "probe_failed" } }
+      obj.deployment = BASE_PATH ? "multiuser" : "local"
+      return send(res, 200, "application/json", JSON.stringify(obj))
     }
     // 列出 Zotero 分类（供前端下拉选导入范围）
     if (req.method === "GET" && u.pathname === "/api/zotero/collections") {

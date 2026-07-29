@@ -166,26 +166,59 @@ def _cite_label(cite: dict, page) -> str:
     return f"{who} {yr}{pg} — {cite.get('title', '')}"
 
 
+# 分数低到这个程度，基本等于"没检索到"，只是排序把某一段推到了第一位。
+# tfidf 是词面重合度：中文问题打英文全文时词面零重合，所有段落同为 0.0，
+# 返回的第 1 名纯粹是遍历顺序的产物 —— 实测中文问阿司匹林，tfidf 把他汀的论文排到了第 1。
+_WEAK_SCORE = 0.02
+
+
+def _has_cjk(s: str) -> bool:
+    return any("一" <= c <= "鿿" for c in s or "")
+
+
 def _write_evidence(question: str, hits: list[dict], n_items: int, method: str,
                     md_path: Path, csv_path: Path) -> None:
+    weak = [h for h in hits if float(h.get("score") or 0) < _WEAK_SCORE]
+    warns = []
+    # 【零分/近零分必须说破】证据表顶上写着"不得脱离下列证据编造"，
+    # 读它的 agent 会当成可靠证据照单引用。分数接近 0 时这份表是有害的，必须当场警告。
+    if weak:
+        warns.append(
+            f"⚠ **{len(weak)}/{len(hits)} 条命中的相关度接近 0（<{_WEAK_SCORE}）**，"
+            "很可能【根本没检索到相关内容】，排序只是兜底产物。"
+            "**不要把这些片段当作证据引用**；请改用 `--backend embed --rerank` 重跑，"
+            "或换用与文献同语种的提问。")
+    # 中文问题 + tfidf：这个组合几乎必然是词面零重合，提前点破，别等用户看分数
+    if method.startswith("tfidf") and _has_cjk(question):
+        warns.append(
+            "⚠ **中文提问 + tfidf 后端**：tfidf 只比词面重合，中文问题打英文全文时"
+            "几乎必然零命中。请用 `--backend embed --rerank`（本地模型，支持跨中英）。")
+
     lines = [f"# Zotero 全文证据检索\n",
              f"**问题**：{question}\n",
              f"**检索方式**：{method}\n",
-             f"**证据来源**：本机 Zotero，{n_items} 篇文献，命中 {len(hits)} 段。\n",
-             "> 以下为按相关性排序的原文片段，供撰写带引用回答之用。"
-             "**每条主张须落到具体片段，不得脱离下列证据编造。**\n"]
+             f"**证据来源**：本机 Zotero，{n_items} 篇文献，命中 {len(hits)} 段。\n"]
+    for w in warns:
+        lines.append(w + "\n")
+    lines.append("> 以下为按相关性排序的原文片段，供撰写带引用回答之用。"
+                 "**每条主张须落到具体片段，不得脱离下列证据编造；"
+                 "标注了「相关度过低」的片段一律不得引用。**\n")
     for h in hits:
+        low = " ⚠ 相关度过低，勿引用" if float(h.get("score") or 0) < _WEAK_SCORE else ""
         lines.append(f"\n## [{h['rank']}] {_cite_label(h['cite'], h['page'])}  "
-                     f"(score={h['score']}, itemKey={h['cite'].get('key', '')})\n")
+                     f"(score={h['score']}, itemKey={h['cite'].get('key', '')}){low}\n")
         lines.append("> " + re.sub(r"\s+", " ", h["text"]).strip())
     md_path.write_text("\n".join(lines), encoding="utf-8")
 
     with open(csv_path, "w", newline="", encoding="utf-8-sig") as f:
         w = csv.writer(f)
-        w.writerow(["rank", "score", "author", "year", "page",
+        # weak 列供程序化消费：读 CSV 的一方同样要能一眼看出"这条不能引"
+        w.writerow(["rank", "score", "weak", "author", "year", "page",
                     "item_key", "title", "passage"])
         for h in hits:
-            w.writerow([h["rank"], h["score"], h["cite"].get("author", ""),
+            w.writerow([h["rank"], h["score"],
+                        1 if float(h.get("score") or 0) < _WEAK_SCORE else 0,
+                        h["cite"].get("author", ""),
                         h["cite"].get("year", ""), h["page"],
                         h["cite"].get("key", ""), h["cite"].get("title", ""),
                         re.sub(r"\s+", " ", h["text"]).strip()])
