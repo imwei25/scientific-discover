@@ -58,10 +58,12 @@ const _modelCost = () => {
   const n = (v, d) => { const x = Number(v); return Number.isFinite(x) ? x : d }
   return { input: n(process.env.OC_COST_INPUT, 0.27), output: n(process.env.OC_COST_OUTPUT, 1.10), cache_read: n(process.env.OC_COST_CACHE_READ, 0.07), cache_write: n(process.env.OC_COST_CACHE_WRITE, 0) }
 }
-const customProviderCfg = ({ baseURL, apiKey, modelID }) => ({
+// cost 传了就用传的（云端账号形态下，每个模型的单价由服务器随档案下发——各家价格不同，
+// 拿 env 里那套 DeepSeek 价去算别家的模型，本机显示的成本会系统性偏）。没传才回落 env。
+const customProviderCfg = ({ baseURL, apiKey, modelID, cost }) => ({
   npm: "@ai-sdk/openai-compatible", name: "Custom (OpenAI 兼容)",
   options: { baseURL, apiKey },
-  models: { [modelID]: { name: modelID, tool_call: true, attachment: true, cost: _modelCost() } },   // 开工具调用 + 注入定价（用于算成本额度）
+  models: { [modelID]: { name: modelID, tool_call: true, attachment: true, cost: cost || _modelCost() } },   // 开工具调用 + 注入定价（用于算成本额度）
 })
 // opencode 的 `question` 工具会弹交互式提问卡片；本部署（web 网关）没有应答它的 UI，
 // 模型一旦调用就整轮 error/卡死（实测卡在“确认方向选择”那步）。各技能与 AGENTS.md §六 已要求
@@ -152,20 +154,46 @@ function currentRoute() {
   if (r === "gateway" && !gatewayEnvSet()) return cloudLoggedIn() ? "cloud" : "none"
   return r
 }
-/** 该用平台的哪种形态：登录了就用云端账号，否则回落静态网关 key */
+/** 云端账号档案里这个用户能选的模型（服务器下发；[] = 服务器还没给，或没登录） */
+const cloudModels = () => {
+  const list = Cloud.loadState()?.profile?.models
+  return Array.isArray(list) ? list : []
+}
+/** 某个模型名在不在允许清单里。清单为空 = 服务器没下发（老服务端），此时不拦，交给网关判 */
+const modelAllowed = (m) => { const l = cloudModels(); return !l.length || l.some((x) => x.model === m) }
+/** 该模型的单价（USD/百万 token），转成 opencode 的 cost 结构；没有就返回 null 走 env 缺省 */
+const costOfModel = (m) => {
+  const e = cloudModels().find((x) => x.model === m)
+  if (!e || !e.price) return null
+  return { input: Number(e.price.input) || 0, output: Number(e.price.output) || 0, cache_read: Number(e.price.cached) || 0, cache_write: 0 }
+}
+
+/**
+ * 该用平台的哪种形态：登录了就用云端账号，否则回落静态网关 key。
+ *
+ * 【picked 是用户在顶部 pill 里选的模型】它要跨重启存活，所以记在 model-config 里而不是内存。
+ * 每次都要拿当前档案校验一遍：管理员把这个模型从档位里撤掉 / 供应商停用之后，
+ * 客户端必须自动落回默认模型 —— 否则本机一直请求一个服务器已经不认的模型名，
+ * 每一轮都被网关静默打回默认模型，而界面还显示着那个早就没有的名字。
+ */
 function platformProvider() {
+  const saved = loadModelCfg()
   if (cloudLoggedIn()) {
     const st = Cloud.loadState()
-    return { route: "cloud", baseURL: cloudProxyBase(), apiKey: CLOUD_LOCAL_TOKEN, modelID: st?.profile?.model || MID }
+    const picked = saved?.picked && modelAllowed(saved.picked) ? saved.picked : ""
+    const modelID = picked || st?.profile?.model || MID
+    return { route: "cloud", baseURL: cloudProxyBase(), apiKey: CLOUD_LOCAL_TOKEN, modelID, picked, cost: costOfModel(modelID) }
   }
-  return { route: "gateway", baseURL: process.env.OC_GATEWAY_URL, apiKey: process.env.OC_GATEWAY_KEY, modelID: MID }
+  const picked = saved?.route === "gateway" && saved?.picked ? saved.picked : ""
+  return { route: "gateway", baseURL: process.env.OC_GATEWAY_URL, apiKey: process.env.OC_GATEWAY_KEY, modelID: picked || MID, picked }
 }
 // 回到平台路由（清掉用户自设，按平台形态重写 provider）。启动兜底与 /api/model/reset 共用同一段，
 // 避免"重启后回到平台、运行时重置却回到内置默认"这种两套行为。
 function useGatewayRoute() {
   const p = platformProvider()
   writeOcProvider(p)
-  saveModelCfg(p)
+  // picked 要一起存下去（跨重启保住用户选的模型）；cost 是算出来的，不入盘免得放着过期数据
+  saveModelCfg({ route: p.route, baseURL: p.baseURL, apiKey: p.apiKey, modelID: p.modelID, picked: p.picked || "" })
   MODEL = { providerID: CUSTOM_PROVIDER_ID, modelID: p.modelID }
 }
 
@@ -1987,14 +2015,17 @@ export const server = http.createServer(async (req, res) => {
     }
     // 主动刷新档案（档位/额度/用量）；模型名变了就顺带重配 provider
     if (req.method === "POST" && u.pathname === "/api/cloud/refresh") {
-      const before = Cloud.loadState()?.profile?.model || ""
+      // 【比的是"最终生效的模型"，不是档案里的默认模型】用户可能自己选了一个模型（picked），
+      // 而这次刷新恰好发现管理员把它撤了 —— 只比默认模型的话，这种情况一次都不会重配，
+      // 本机会继续拿着一个服务器已经不认的模型名跑，每轮都被网关静默打回默认模型。
+      const before = MODEL.modelID
       const r = await Cloud.fetchProfile()
       if (!r.ok) {
         const e = r.error || {}
         return send(res, 200, "application/json", JSON.stringify({ ok: false, code: e.code, err: e.message || "刷新失败" }))
       }
       let restarted = false
-      if (currentRoute() === "cloud" && r.profile.model && r.profile.model !== before) {
+      if (currentRoute() === "cloud" && platformProvider().modelID !== before) {
         useGatewayRoute()
         try { restarted = await restartOpencode() } catch {}
       }
@@ -2077,21 +2108,42 @@ export const server = http.createServer(async (req, res) => {
       if (!restarted) { try { await client.config.update({ body: { provider: { [CUSTOM_PROVIDER_ID]: customProviderCfg({ baseURL, apiKey, modelID }) } } }) } catch {} }
       return send(res, 200, "application/json", JSON.stringify({ ok: true, restarted, providerID: CUSTOM_PROVIDER_ID, modelID }))
     }
-    // 用户切换网关下的模型：沿用网关的 baseURL/key，只换模型名（持久化 + 重启 opencode 生效）
+    // 平台下可选的模型清单（顶部模型 pill 用它画下拉）。
+    //
+    // 【为什么清单来自服务器而不是本地写死】管理员在运营后台加一家供应商 / 加一个模型、
+    // 把它勾进档位的允许清单之后，这里下一次取就有了 —— 打包版不用重装、不用改配置。
+    if (req.method === "GET" && u.pathname === "/api/models") {
+      const route = currentRoute()
+      const list = route === "cloud" ? cloudModels() : []
+      return send(res, 200, "application/json", JSON.stringify({
+        ok: true, route,
+        current: MODEL.modelID,
+        default: Cloud.loadState()?.profile?.model || "",
+        models: list.map((m) => ({ model: m.model, label: m.label || m.model, provider: m.providerName || m.provider || "" })),
+      }))
+    }
+    // 用户切换平台下的模型：沿用平台的 baseURL/key，只换模型名（持久化 + 重启 opencode 生效）
     if (req.method === "POST" && u.pathname === "/api/model/pick") {
-      const baseURL = process.env.OC_GATEWAY_URL, apiKey = process.env.OC_GATEWAY_KEY
-      if (!baseURL || !apiKey) return send(res, 400, "application/json", JSON.stringify({ ok: false, err: "未接入网关，无法切换模型" }))
+      // 【两种平台形态都要能切】桌面版走云端账号（本机 /cloud 代理 + 占位 token），
+      // 云端多用户容器走注入的静态网关 key。此前这里只认后者，桌面版点了永远是"未接入网关"。
+      if (!platformAvailable()) return send(res, 400, "application/json", JSON.stringify({ ok: false, err: "未接入平台，无法切换模型" }))
       const chunks = []; for await (const c of req) chunks.push(c)
       let modelID = "", force = false
       try { const b = JSON.parse(Buffer.concat(chunks).toString() || "{}"); modelID = (b.model || "").trim(); force = !!b.force } catch {}
       if (!modelID) return send(res, 400, "application/json", JSON.stringify({ ok: false, err: "缺 model" }))
+      // 不在档位允许清单里就当场说清楚。网关那边会静默打回默认模型，客户端要是也跟着静默，
+      // 用户只会看到"选了却没换"，还以为是 bug。
+      if (currentRoute() === "cloud" && !modelAllowed(modelID))
+        return send(res, 400, "application/json", JSON.stringify({ ok: false, err: `当前档位没有开通「${modelID}」，请联系管理员` }))
       // 同 /api/model：这条路径也 restartOpencode()，同样会中断在跑的轮
       { const busy = runningRounds(); if (busy > 0 && !force) return send(res, 409, "application/json", JSON.stringify({ ok: false, busy, needForce: true, err: `有 ${busy} 轮正在生成中，切换模型需重启后台，会中断它们` })) }
-      writeOcProvider({ baseURL, apiKey, modelID })
-      saveModelCfg({ route: "gateway", baseURL, apiKey, modelID })
+      const p = platformProvider()
+      const cfg = { baseURL: p.baseURL, apiKey: p.apiKey, modelID, cost: p.route === "cloud" ? costOfModel(modelID) : null }
+      writeOcProvider(cfg)
+      saveModelCfg({ route: p.route, baseURL: p.baseURL, apiKey: p.apiKey, modelID, picked: modelID })
       MODEL = { providerID: CUSTOM_PROVIDER_ID, modelID }
       let restarted = false; try { restarted = await restartOpencode() } catch {}
-      if (!restarted) { try { await client.config.update({ body: { provider: { [CUSTOM_PROVIDER_ID]: customProviderCfg({ baseURL, apiKey, modelID }) } } }) } catch {} }
+      if (!restarted) { try { await client.config.update({ body: { provider: { [CUSTOM_PROVIDER_ID]: customProviderCfg(cfg) } } }) } catch {} }
       return send(res, 200, "application/json", JSON.stringify({ ok: true, restarted, modelID }))
     }
     // 恢复默认模型（清掉自定义 provider）
@@ -2144,17 +2196,41 @@ const OC_U = new URL(OC_URL)
 const OC_LOCAL = ["127.0.0.1", "localhost", "::1"].includes(OC_U.hostname)
 const OC_MANAGED = process.env.MANAGE_OC === "1" || (OC_LOCAL && process.env.MANAGE_OC !== "0")
 const OC_PORT = Number(OC_U.port || 80)
+// opencode 二进制的定位。
+//
+// 【为什么不能只靠裸名字】桌面版把 opencode.exe 打进了包，位置完全已知，却按裸名字交给
+// cmd.exe 去 PATH 里找 —— 真机上就翻了车：serve.err 里只有一句
+// 「'opencode' 不是内部或外部命令」，网关照常起来，用户对着启动页干转。
+// 裸名字要同时依赖「PATH 前插生效」+「cmd.exe 能解析」+「文件真在盘上」三件事，
+// 而我们本来就知道那个绝对路径。壳通过 OC_BIN 告诉网关，直接按路径起，还省掉 cmd.exe 那一跳。
+// OC_BIN 缺省时（开发机、容器、服务器）退回裸名字 + PATH，行为不变。
+export function resolveOcBin(env = process.env) {
+  const bin = (env.OC_BIN || "").trim()
+  if (!bin) return { cmd: "opencode", shell: process.platform === "win32", missing: false }
+  // 壳指了路径却不在盘上 —— 多半是安装没解压全，或被杀软当可疑二进制隔离了。
+  // 这两种都必须说人话，不能让现场只看到"命令找不到"这种把人引向 PATH 的误导信息。
+  return { cmd: bin, shell: false, missing: !fs.existsSync(bin) }
+}
 function spawnOc() {
+  const oc = resolveOcBin()
+  if (oc.missing) {
+    console.error(`[oc] 找不到 opencode 可执行文件：${oc.cmd}\n` +
+      `    包里应当有这个文件。它不在，通常是两种情况：\n` +
+      `    1) 安装没有完整解压（装的时候报过错、或中途被打断）——重新安装一次；\n` +
+      `    2) 被杀毒软件当成可疑程序隔离了——去杀软的隔离区恢复它，并把安装目录加入信任。`)
+    return
+  }
   const out = fs.openSync(path.join(ROOT, "serve.out"), "a")
   const err = fs.openSync(path.join(ROOT, "serve.err"), "a")
-  const child = spawn("opencode", ["serve", "--port", String(OC_PORT)], {
-    cwd: ROOT, detached: true, stdio: ["ignore", out, err], shell: process.platform === "win32",
+  const child = spawn(oc.cmd, ["serve", "--port", String(OC_PORT)], {
+    cwd: ROOT, detached: true, stdio: ["ignore", out, err], shell: oc.shell,
     // 【Windows 必须给】detached + shell 会让 cmd.exe 另开一个控制台窗口，
     // opencode 的启动横幅就直接糊在用户脸上（桌面版尤其突兀：主窗口旁边跳出个黑框）。
     // windowsHide 对应 CREATE_NO_WINDOW，Tauri 壳起 node 时也是这么做的，这里补齐最后一段。
+    // 走 OC_BIN 时没有 cmd.exe 这一跳，黑窗风险直接消失，但保留此项无害且覆盖 shell 分支。
     windowsHide: true,
   })
-  child.on("error", (e) => console.warn(`[oc] 启动 opencode 失败：${e.message}（PATH 里有 opencode 吗？）`))
+  child.on("error", (e) => console.warn(`[oc] 启动 opencode 失败：${e.message}（命令：${oc.cmd}）`))
   child.unref()
 }
 async function waitOcHealthy(tries = 60) {

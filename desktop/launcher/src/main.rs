@@ -203,6 +203,12 @@ fn main() {
 
             let mut cmd = Command::new(rt.join("node").join("node.exe"));
             cmd.arg(appdir.join("web").join("server.mjs"))
+                // 【别让网关再去 PATH 里找 opencode】位置我们完全知道，直接给绝对路径。
+                // 真机上出过：PATH 前插在（见上），serve.err 里却是
+                // 「'opencode' 不是内部或外部命令」，于是 opencode 起不来、启动页干转。
+                // 裸名字要同时指望 PATH 前插生效、cmd.exe 解析成功、文件真在盘上；
+                // 给了 OC_BIN 就只剩最后一件，而那件网关会明确报出来（见 resolveOcBin）。
+                .env("OC_BIN", rt.join("opencode").join("opencode.exe"))
                 .current_dir(&appdir)
                 .env("PATH", &path)
                 .env("PORT", PORT.to_string())

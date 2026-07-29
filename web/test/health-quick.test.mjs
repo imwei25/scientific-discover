@@ -49,6 +49,7 @@ async function gateway(ocUrl) {
   if (!port) throw new Error("网关没起来（10 秒内没绑上端口）")
   const base = `http://127.0.0.1:${port}`
   return {
+    mod,
     close: () => new Promise((r) => (mod.server ? mod.server.close(r) : r())),
     async timed(p) {
       const t0 = Date.now()
@@ -75,4 +76,39 @@ test("opencode 卡住时 quick 探活立刻返回，普通探活才去等它", a
   const full = await gw.timed("/api/health")
   assert.equal(full.status, 503, "opencode 不可用时整体探活应报 503")
   assert.ok(full.ms >= 2000, `完整探活只花了 ${full.ms}ms，ocHealthy 的超时没生效，本测试失去意义`)
+})
+
+// opencode 二进制怎么定位。
+//
+// 【为什么有这个测试】另一台真机的 serve.err 里只有一句「'opencode' 不是内部或外部命令」。
+// 桌面版明明把 opencode.exe 打进了包、位置完全已知，却按裸名字丢给 cmd.exe 去 PATH 里找。
+// 现在壳用 OC_BIN 直接给绝对路径。这里钉住三件事：给了就用、没给退回原行为、指的文件不在要报得出来。
+test("opencode 按 OC_BIN 的绝对路径起，缺省才退回 PATH", async (t) => {
+  const oc = await blackHole()
+  const gw = await gateway(oc.url)
+  t.after(async () => { await gw.close(); await oc.close() })
+  const { resolveOcBin } = gw.mod
+
+  // 没给 OC_BIN：维持原样（裸名字 + Windows 上过 shell），容器/服务器/开发机不受影响
+  const bare = resolveOcBin({})
+  assert.equal(bare.cmd, "opencode")
+  assert.equal(bare.missing, false)
+  assert.equal(bare.shell, process.platform === "win32")
+
+  // 给了且文件在：按绝对路径起，且【不再经 cmd.exe】——少一跳就少一处能翻车的地方
+  const real = path.join(os.tmpdir(), `oc-real-${Date.now()}.exe`)
+  fs.writeFileSync(real, "")
+  t.after(() => { try { fs.unlinkSync(real) } catch {} })
+  const found = resolveOcBin({ OC_BIN: real })
+  assert.equal(found.cmd, real)
+  assert.equal(found.missing, false)
+  assert.equal(found.shell, false, "有绝对路径就不该再走 shell")
+
+  // 给了但文件不在：必须【明确报缺失】。这正是现场那台机器的形态（没解压全 / 被杀软隔离），
+  // 不标出来就又会退化成一句把人引向 PATH 的误导信息。
+  const gone = resolveOcBin({ OC_BIN: path.join(os.tmpdir(), "oc-does-not-exist-9c3f.exe") })
+  assert.equal(gone.missing, true)
+
+  // 空串/纯空白当没给——壳若因故传了个空值，不能把 cmd 设成 ""（那会 spawn 一个空命令）
+  assert.equal(resolveOcBin({ OC_BIN: "   " }).cmd, "opencode")
 })
