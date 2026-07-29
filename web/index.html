@@ -1722,6 +1722,9 @@ const clMsg = (t, m) => { const e = document.getElementById("clMsg"); e.classNam
 let clMode = "login"   // login | pw | info
 function clShow(mode, st) {
   clMode = mode
+  // login/pw 两态 = 还不能用应用 → 锁死；info 态是查看账号，可以随便关
+  cloudMandatory = (mode === "login" || mode === "pw")
+  document.getElementById("cloudClose").style.display = cloudMandatory ? "none" : ""
   document.getElementById("cloudPaneLogin").style.display = mode === "login" ? "" : "none"
   document.getElementById("cloudPanePw").style.display = mode === "pw" ? "" : "none"
   document.getElementById("cloudPaneInfo").style.display = mode === "info" ? "" : "none"
@@ -1754,9 +1757,25 @@ async function openCloud(force) {
     else clShow("info", st)
   } catch { clShow(force ? "login" : "login") }
 }
-function closeCloud() { cloudModal.classList.remove("on") }
-document.getElementById("cloudClose").addEventListener("click", closeCloud)
+// 【登录窗在"必须登录"时不可关闭】没登录（或没改密）时整个应用根本用不了：
+// 关掉它就等于把用户扔在一个空界面上，而且没有再次唤起的显眼入口（只能靠输 account）。
+// 用户实测遇到的正是这个：切到后台再切回来，登录框没了，人就卡住了。
+// 触发路径不止一条（点背景遮罩、Esc、窗口重新聚焦时那一下落在遮罩上的点击），
+// 与其逐条堵，不如在"必须登录"这个状态下【根本不允许关】，并在窗口重新获得焦点时补一次校正。
+let cloudMandatory = false
+function closeCloud(force) {
+  if (cloudMandatory && !force) return       // 必须登录时，一切关闭动作一律无视
+  cloudModal.classList.remove("on")
+}
+document.getElementById("cloudClose").addEventListener("click", () => closeCloud())
 cloudModal.addEventListener("click", (e) => { if (e.target === cloudModal) closeCloud() })
+// 兜底：窗口被切走再切回来（或页面重新可见）时，若仍处于必须登录状态却没显示登录窗，就补回来。
+// 不管是什么把它关掉的，这一步都能把用户从"空界面"里捞回来。
+function reassertCloudGate() {
+  if (cloudMandatory && !cloudModal.classList.contains("on")) openCloud(true)
+}
+window.addEventListener("focus", reassertCloudGate)
+document.addEventListener("visibilitychange", () => { if (!document.hidden) reassertCloudGate() })
 async function cloudPost(path, body, retryForce) {
   const r = await (await fetch("api/cloud/" + path, {
     method: "POST", headers: { "Content-Type": "application/json" },

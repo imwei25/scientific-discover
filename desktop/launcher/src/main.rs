@@ -222,6 +222,14 @@ fn main() {
                         let win = WebviewWindowBuilder::new(&handle, "app", WebviewUrl::External(url))
                             .title("科研医学 Agent")
                             .inner_size(1280.0, 860.0)
+                            // 【必须关掉】默认为 true 时，Tauri 会在 webview 层截走全部拖放事件去做
+                            // 原生文件拖入，于是页面自己的 HTML5 拖放【整个失效】：
+                            //   · 侧栏「拖会话进项目 / 拖到已持久化」拖不动；
+                            //   · 上传区「拖拽文件到此」也收不到 drop。
+                            // 而本应用的这两处用的都是标准 web 事件（dragstart/dragover/drop），
+                            // 关掉后交回 webview 自己处理，两者都正常。代价是拿不到 Tauri 的原生
+                            // 拖放事件——我们本来就没用它。
+                            .drag_drop_enabled(false)
                             // 不接这个钩子，WebView2 对 <a download href="api/download?..."> 就是静默丢弃：
                             // 没有保存框、没有落盘、控制台也没报错，用户只看到"点了没反应"。
                             .on_download(|_wv, event| {
