@@ -131,6 +131,28 @@ if (-not (Test-Path "$gitDir\bin\bash.exe")) {
   Start-Process -FilePath $sfx -ArgumentList "-y", "-o`"$gitDir`"" -Wait -NoNewWindow
   if (-not (Test-Path "$gitDir\bin\bash.exe")) { throw "PortableGit 解压失败" }
 }
+# ---- 裁掉 PortableGit 里本应用用不到的部分 ----
+# 由来：有用户报「抽取:无法写入文件 …\runtime\git\usr\bin\msys-svn_diff-1-0.dll」。
+# 那批 msys-svn_*.dll 是 `git svn` 用的，本应用从不碰 SVN —— 不该随包发。
+# 顺带清掉图形界面(git-gui/gitk/Tcl-Tk)、文档/man/info、翻译：省 ~27MB，
+# 也少给杀软留误报面（msys 系 DLL 是常见误报对象）。
+# ⚠ 只能删这些：bash / 核心工具 / git 本体必须留着 —— 技能的 .sh 与 opencode 的会话快照全靠它们。
+#   改这份清单后务必用包内 bash 跑一遍 smoke.sh，末行要是 ALL GREEN。
+Step "裁剪 PortableGit（去 svn/GUI/文档，省体积也少踩杀软）"
+$trim = @(
+  "$gitDir\usr\bin\msys-svn*", "$gitDir\mingw64\libexec\git-core\git-svn*",
+  "$gitDir\mingw64\share\perl5\Git\SVN*",
+  "$gitDir\mingw64\libexec\git-core\git-gui*", "$gitDir\mingw64\libexec\git-core\git-citool*",
+  "$gitDir\mingw64\share\git-gui", "$gitDir\mingw64\share\gitk",
+  "$gitDir\mingw64\lib\tcl*", "$gitDir\mingw64\lib\tk*",
+  "$gitDir\usr\bin\wish*", "$gitDir\mingw64\bin\wish*",
+  "$gitDir\mingw64\share\doc", "$gitDir\usr\share\doc",
+  "$gitDir\mingw64\share\man", "$gitDir\usr\share\man",
+  "$gitDir\usr\share\info", "$gitDir\mingw64\share\info",
+  "$gitDir\usr\share\locale", "$gitDir\mingw64\share\locale"
+)
+foreach ($t in $trim) { Remove-Item $t -Recurse -Force -ErrorAction SilentlyContinue }
+if (-not (Test-Path "$gitDir\bin\bash.exe")) { throw "裁剪把 bash 删没了 —— 清单写错了" }
 
 # ================= 4. pandoc =================
 Step "pandoc $PandocVer（render-docx 硬依赖）"

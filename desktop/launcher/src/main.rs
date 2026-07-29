@@ -229,7 +229,9 @@ fn main() {
                             // 而本应用的这两处用的都是标准 web 事件（dragstart/dragover/drop），
                             // 关掉后交回 webview 自己处理，两者都正常。代价是拿不到 Tauri 的原生
                             // 拖放事件——我们本来就没用它。
-                            .drag_drop_enabled(false)
+                            // （Tauri 自己的文档原话：This is required to use HTML5 drag and drop
+                            //   APIs on the frontend on Windows.）
+                            .disable_drag_drop_handler()
                             // 不接这个钩子，WebView2 对 <a download href="api/download?..."> 就是静默丢弃：
                             // 没有保存框、没有落盘、控制台也没报错，用户只看到"点了没反应"。
                             .on_download(|_wv, event| {
