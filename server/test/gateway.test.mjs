@@ -156,12 +156,36 @@ test("强制模型：客户端传什么都覆盖成档位规定的模型", async
   assert.deepEqual(rec.seen[0].body.messages, [{ role: "user", content: "hi" }], "其余字段原样带过去")
 })
 
-test("强制模型：档位没配模型时不动客户端的 model", async (t) => {
+// 【这是"老库里已经有"的形状，不是后台能建出来的形状】默认模型为空 = 该档用户可以在
+// 请求体里随便点模型名（网关会照用），绕过允许清单、按 env 全局价计费。所以 /admin/api/tier
+// 现在直接拒绝空默认模型（见下一条测试），这里只保证【已经长成这样的老库】仍然跑得通，
+// 于是绕过后台、直接往库里塞一个这样的档位。
+test("强制模型：档位没配模型时不动客户端的 model（老库兼容）", async (t) => {
   const rec = recorder((_q, res) => res.end(JSON.stringify({ usage: { prompt_tokens: 1, completion_tokens: 0 } })))
-  const r = await rig({ upstream: rec, tier: { key: "nomodel", dailyUSD: 10, model: "" } })
+  const r = await rig({ upstream: rec, tier: { key: "nomodel", dailyUSD: 10, model: "placeholder" } })
   t.after(() => r.close())
+  r.app.db.prepare("UPDATE tiers SET model='' WHERE key='nomodel'").run()
   await r.call({ model: "client-choice" })
   assert.equal(rec.seen[0].body.model, "client-choice")
+})
+
+test("档位：后台不许建「默认模型为空」的档位（那等于让该档用户自选任意模型名）", async (t) => {
+  const r = await rig({}); t.after(() => r.close())
+  const bad = await r.admin("/admin/api/tier", { method: "POST", body: { key: "hole", dailyUSD: 1, model: "" } })
+  assert.equal(bad.status, 400)
+  assert.match(bad.json.err, /默认模型/)
+  assert.equal(r.app.db.prepare("SELECT COUNT(*) AS n FROM tiers WHERE key='hole'").get().n, 0)
+})
+
+test("档位：额度必须是 ≥0 的数字（负数/非数字会被 Number()||0 静默变成 0 = 不限）", async (t) => {
+  const r = await rig({}); t.after(() => r.close())
+  for (const body of [{ dailyUSD: -5 }, { monthlyUSD: -1 }, { dailyUSD: "abc" }, { dailyUSD: "1,000" }]) {
+    const bad = await r.admin("/admin/api/tier", { method: "POST", body: { key: "t1", model: "m", ...body } })
+    assert.equal(bad.status, 400, JSON.stringify(body))
+    assert.match(bad.json.err, /额度/)
+  }
+  const ok = await r.admin("/admin/api/tier", { method: "POST", body: { key: "t1", model: "m", dailyUSD: 0, monthlyUSD: 2 } })
+  assert.equal(ok.status, 200, "0 是合法的（= 不限）")
 })
 
 test("流式：自动注入 stream_options.include_usage（不注入就收不到 usage、计量直接失效）", async (t) => {
@@ -321,20 +345,28 @@ test("额度：0 = 不限，不会被误判成已超额", async (t) => {
   assert.equal(r.rows().length, 3)
 })
 
-test("额度：管理员当场调额，下一次调用立刻按新额度判（改额会吊销 key，需重新登录）", async (t) => {
+// 【改额度【不】吊销 key】额度根本不在票据里：authClient 只看 uid/ep/sc，网关每一单都
+// 现查库拿 resolveEntitlement。为它 bumpEpoch 是白踢人 —— 给正在跑一小时综述的医生临时
+// 加额，会把他这一轮登录态打断、要求重输口令，而这次吊销没有任何执行层面的必要。
+test("额度：管理员当场调额，同一把 key 的下一次调用就按新额度判（不吊销、不踢人）", async (t) => {
   const r = await rig({
     upstream: (_q, res) => { res.writeHead(200, { "content-type": "application/json" }); res.end(JSON.stringify({ usage: { prompt_tokens: 1000000, completion_tokens: 0 } })) },
     tier: { key: "t", dailyUSD: 0, model: "m" },
   })
   t.after(() => r.close())
   assert.equal((await r.call({ model: "m" })).status, 200)     // 记了 $0.27
-  await r.admin("/admin/api/user-update", { method: "POST", body: { id: r.uid, dailyOverride: 0.1 } })
-  // 改额度吊销了 key —— 客户端须重新登录，这本身也是设计（下一次请求即生效）
-  const stale = await r.call({ model: "m" })
-  assert.equal(stale.json.error.code, "KEY_REVOKED")
-  const li = await r.app.req("/api/auth/login", { method: "POST", body: { username: "zhangsan", password: STRONG } })
-  const x = await r.app.req(CHAT, { method: "POST", body: { model: "m" }, headers: { authorization: "Bearer " + li.json.access } })
-  assert.equal(x.status, 429, "已用 $0.27 > 新上限 $0.1")
+  const up = await r.admin("/admin/api/user-update", { method: "POST", body: { id: r.uid, dailyOverride: 0.1 } })
+  assert.equal(up.json.keyRevoked, false, "调额不该吊销 key")
+  const x = await r.call({ model: "m" })
+  assert.equal(x.status, 429, "同一把 key，已用 $0.27 > 新上限 $0.1")
+  assert.equal(x.json.error.code, "QUOTA_EXCEEDED")
+  // 反过来：加额也立刻生效，且人不用重新登录
+  await r.admin("/admin/api/user-update", { method: "POST", body: { id: r.uid, dailyOverride: 99 } })
+  assert.equal((await r.call({ model: "m" })).status, 200)
+  // 而改【档位】仍然吊销 —— 它在票据里
+  const t2 = await r.admin("/admin/api/user-update", { method: "POST", body: { id: r.uid, tier: "free" } })
+  assert.equal(t2.json.keyRevoked, true)
+  assert.equal((await r.call({ model: "m" })).json.error.code, "KEY_REVOKED")
 })
 
 // ---- 技能闸 ----

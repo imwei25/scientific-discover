@@ -240,6 +240,10 @@ async function handleClientApi(req, res, pathname) {
     const username = String(b.username || "").trim()
     const password = String(b.password || "")
     if (!username || !password) return fail(res, 400, "BAD_REQUEST", "请填写账号与口令")
+    // 登录名有格式约束（≤32 位），比这长的一定是垃圾。挡在这里的意义是别让它流进
+    // 限流表的 key 与审计的 actor —— 那两处都是匿名可写的，见 auth.mjs 的 FAILS_MAX
+    // 与 db.mjs 的 addAudit 截断。
+    if (username.length > 64) return fail(res, 400, "BAD_REQUEST", "账号或口令不正确")
 
     const lockKey = `${ip}|${username}`
     const left = A.loginLocked(lockKey)
@@ -349,6 +353,38 @@ function captchaBypassed(req) {
   return got.length === TEST_BYPASS_TOKEN.length && A.safeEq(got, TEST_BYPASS_TOKEN)
 }
 
+/**
+ * 同源校验 —— CSRF 的第二道闸。
+ *
+ * 会话 cookie 已是 HttpOnly + SameSite=Lax，跨【站】的 POST 本来就带不上它。但"站"是按
+ * 可注册域算的：现在挂 duckdns.org（在公共后缀列表里）所以子域之间算跨站，一旦换成自有
+ * 域名部署，任意子域下的页面就都算同站，Lax 立刻失效 —— 那时这道闸才是唯一挡着的东西。
+ *
+ * 【为什么"两个头都没有"要放行】浏览器发写请求必带 Sec-Fetch-Site 或 Origin 之一；
+ * 都没有的只可能是 curl / ops 脚本 / 测试，那是运维自己。拒了它们等于把运维路径全砍掉，
+ * 却挡不住任何真实攻击（攻击面全在浏览器里）。
+ */
+function sameOrigin(req) {
+  const sfs = String(req.headers["sec-fetch-site"] || "").trim()
+  if (sfs) return sfs === "same-origin" || sfs === "none"
+  const origin = String(req.headers["origin"] || "").trim()
+  if (!origin) return true
+  try { return new URL(origin).host === String(req.headers["host"] || "") } catch { return false }
+}
+
+/**
+ * 用户列表的筛选器。全都在【全集】上算，不是只筛当前这页 —— "谁本月要触顶"正是管理员
+ * 打开后台最想先看到的一类问题，只筛当前 200 条会漏掉恰好排在后面的人。
+ */
+const USER_FILTERS = {
+  suspended: (u) => u.status !== "active",
+  pwchange: (u) => !!u.mustChangePw,
+  overday: (u) => u.limits.daily > 0 && u.usage.today >= u.limits.daily,
+  overmonth: (u) => u.limits.monthly > 0 && u.usage.month >= u.limits.monthly,
+  nearmonth: (u) => u.limits.monthly > 0 && u.usage.month >= u.limits.monthly * 0.8,
+  idle: (u) => !u.lastSeenAt || u.lastSeenAt < Date.now() - 30 * 86400 * 1000,
+}
+
 function userRow(u) {
   const ent = DB.resolveEntitlement(db, u)
   return {
@@ -367,6 +403,10 @@ function userRow(u) {
 async function handleAdminApi(req, res, pathname) {
   const ip = clientIp(req)
   if (!ADMIN_ENABLED()) return json(res, 404, { ok: false, err: "管理台未启用（未设 ADMIN_PASSWORD）" })
+  if (req.method === "POST" && !sameOrigin(req)) {
+    audit("admin.csrf_block", { actor: "admin", ip, detail: String(req.headers["origin"] || req.headers["sec-fetch-site"] || "").slice(0, 120) })
+    return json(res, 403, { ok: false, err: "请求来源不对（跨站请求已拒绝）" })
+  }
 
   if (req.method === "POST" && pathname === "/admin/api/login") {
     const b = await readBody(req)
@@ -404,14 +444,28 @@ async function handleAdminApi(req, res, pathname) {
     const q = url.searchParams.get("q") || ""
     const limit = Math.min(500, Math.max(1, Number(url.searchParams.get("limit")) || 200))
     const offset = Math.max(0, Number(url.searchParams.get("offset")) || 0)
-    const rows = DB.searchUsers(db, q, { limit, offset })
+    const filter = String(url.searchParams.get("filter") || "")
+    // 【matched 必须是真实命中数】以前直接取 rows.length，被 limit 截断过 ——
+    // 账号数超过一页时后台写着"命中 200 / 640"，而管理员正是靠这个数字判断要不要再缩关键词。
+    let rows, matched
+    if (USER_FILTERS[filter]) {
+      const all = DB.searchUsers(db, q, { limit: 100000, offset: 0 }).map(userRow).filter(USER_FILTERS[filter])
+      matched = all.length
+      rows = all.slice(offset, offset + limit)
+    } else {
+      rows = DB.searchUsers(db, q, { limit, offset }).map(userRow)
+      matched = DB.countSearchUsers(db, q)
+    }
     const dayAgo = Date.now() - 24 * 3600 * 1000
     return json(res, 200, {
       ok: true,
-      users: rows.map(userRow),
+      users: rows,
       total: DB.countUsers(db),
-      matched: rows.length,
+      matched, offset, limit, filter,
       tiers: DB.listTiers(db),
+      // 【档位人数要服务端 GROUP BY 出】前端拿"当前这页的用户"去数，一旦有搜索词或翻了页，
+      // 每档显示的人数就是错的 —— 管理员据此判断"这个档还有没有人、能不能删"。
+      tierCounts: DB.tierCounts(db),
       skills: skillTable(),
       // 档位对话框要用它填「默认模型 / 允许模型」两个选择器，省一次往返
       catalog: DB.modelInfo(db, [...DB.catalogModels(db)]),
@@ -452,8 +506,13 @@ async function handleAdminApi(req, res, pathname) {
       const camel = f.replace(/_(\w)/g, (_, c) => c.toUpperCase())
       if (b[camel] !== undefined) patch[f] = String(b[camel])
     }
-    // 姓名改了但没显式给姓 → 重新切一次，别留着旧姓影响检索排序
-    if (patch.display_name !== undefined && b.surname === undefined) patch.surname = DB.guessSurname(patch.display_name)
+    // 【姓留空 = 没提供，不是"清空姓"】后台那个框的 placeholder 明写着"留空则按姓名自动识别"，
+    // 而前端总是无条件发 surname:'' —— 照字面存进去就是空姓，此后 searchUsers 的 rank 0/1
+    // 对这个人永不命中（输他的姓搜不到他排前面），而管理员完全看不出发生了什么。
+    // 与 createUser 的口径对齐：空串一律当作未提供。
+    const surnameGiven = b.surname !== undefined && String(b.surname).trim() !== ""
+    if (!surnameGiven) delete patch.surname
+    if (patch.display_name !== undefined && !surnameGiven) patch.surname = DB.guessSurname(patch.display_name)
     if (b.tier !== undefined) {
       if (!DB.getTier(db, String(b.tier))) return json(res, 400, { ok: false, err: "档位不存在" })
       patch.tier = String(b.tier)
@@ -467,8 +526,13 @@ async function handleAdminApi(req, res, pathname) {
     if (b.skillsOverride !== undefined)
       patch.skills_override = b.skillsOverride === null ? null : String(b.skillsOverride)
     DB.updateUser(db, u.id, patch)
-    // 档位/额度/技能变了 → 立刻吊销已签发的 key，下一次请求就按新权限走（改造方案 §3.2）
-    const sensitive = ["tier", "daily_override", "monthly_override", "skills_override"].some((k) => k in patch)
+    // 档位/技能变了 → 立刻吊销已签发的 key，下一次请求就按新权限走（改造方案 §3.2）。
+    //
+    // 【额度覆盖【不】吊销】额度根本不在票据里：authClient 只用 payload 的 uid/ep/sc，
+    // 网关每一单都现查库拿 resolveEntitlement，改完下一次请求就生效。为它 bumpEpoch 纯属
+    // 白踢人 —— 给正在跑一小时综述的医生临时加 5 美元，会把他这一轮登录态打断、要求重输
+    // 口令，而这次吊销没有任何执行层面的必要（"档位的可选模型清单"早就按同一条理由豁免了）。
+    const sensitive = ["tier", "skills_override"].some((k) => k in patch)
     if (sensitive) DB.bumpEpoch(db, u.id)
     audit("user.update", { actor: "admin", target: u.username, ip, detail: JSON.stringify(patch).slice(0, 300) })
     return json(res, 200, { ok: true, user: userRow(DB.getUserById(db, u.id)), keyRevoked: sensitive })
@@ -539,6 +603,20 @@ async function handleAdminApi(req, res, pathname) {
       audit("tier.del", { actor: "admin", target: key, ip })
       return json(res, 200, { ok: true, tiers: DB.listTiers(db) })
     }
+    // 【额度必须校验】upsertTier 里是 `Number(x) || 0`，负数与「abc」「1,000」这类误输入
+    // 会静默变成 0，而 0 在额度闸里的含义是【不限】—— 一次手滑就让整档用户变成无限额度，
+    // 且后台看上去一切正常。用户级 override 早就校验了（见上），两条路径口径必须一致。
+    for (const [k, label] of [["dailyUSD", "日额度"], ["monthlyUSD", "月额度"]]) {
+      if (b[k] === undefined || b[k] === null || b[k] === "") continue
+      const n = Number(b[k])
+      if (!Number.isFinite(n) || n < 0)
+        return json(res, 400, { ok: false, err: `${label}须是 ≥0 的数字（0 = 不限）` })
+    }
+    // 【默认模型不能空】pickModel 在 ent.model 为空时会回落成"客户端点名的那个"，
+    // 于是该档用户可以在请求体里随便写模型名，绕过允许清单、按 env 全局价计费。
+    // 后台是唯一能建出这种档位的地方（新增对话框默认就是空），所以闸设在这里。
+    if (!String(b.model || "").trim())
+      return json(res, 400, { ok: false, err: "请填默认模型——留空会让该档用户可以自选任意模型名，绕过允许清单" })
     const before = DB.getTier(db, key)
     DB.upsertTier(db, {
       key, daily_usd: b.dailyUSD, monthly_usd: b.monthlyUSD,
@@ -609,8 +687,9 @@ async function handleAdminApi(req, res, pathname) {
     if (b.remove) {
       if (!DB.getProvider(db, key)) return json(res, 404, { ok: false, err: "供应商不存在" })
       const r = DB.deleteProvider(db, key)
-      audit("provider.del", { actor: "admin", target: key, ip, detail: `models=${r.removedModels}` })
-      return json(res, 200, { ok: true, removedModels: r.removedModels })
+      const dropped = Object.entries(r.droppedFromTiers || {}).map(([t, ms]) => `${t}:${ms.join("/")}`).join(" ")
+      audit("provider.del", { actor: "admin", target: key, ip, detail: `models=${r.removedModels}${dropped ? " 档位清单已摘 " + dropped : ""}` })
+      return json(res, 200, { ok: true, removedModels: r.removedModels, droppedFromTiers: r.droppedFromTiers })
     }
 
     const baseUrl = String(b.baseURL || "").trim()
@@ -630,13 +709,18 @@ async function handleAdminApi(req, res, pathname) {
     if (b.remove) {
       const row = DB.getModelRow(db, b.id)
       if (!row) return json(res, 404, { ok: false, err: "模型不存在" })
-      DB.deleteModel(db, b.id)
-      audit("model.del", { actor: "admin", target: `${row.model}@${row.provider}`, ip })
-      return json(res, 200, { ok: true })
+      const r = DB.deleteModel(db, b.id)
+      const dropped = Object.entries(r.droppedFromTiers || {}).map(([t, ms]) => `${t}:${ms.join("/")}`).join(" ")
+      audit("model.del", { actor: "admin", target: `${row.model}@${row.provider}`, ip, detail: dropped ? "档位清单已摘 " + dropped : "" })
+      return json(res, 200, { ok: true, droppedFromTiers: r.droppedFromTiers })
     }
-    // 批量：加供应商后从「拉取模型」里勾一批，一次落库
+    // 批量：加供应商后从「拉取模型」里勾一批，一次落库。
+    // 【批量必须是 insertOnly】批量项只带模型名，价格/中文名/上游真实名一律缺省；若走
+    // DO UPDATE，再点一次「+ 模型」勾中已接入的那个，就会把管理员手工填好的真实单价洗成
+    // env 全局价 —— 账静默偏，正是本架构要治的病根。
+    const bulk = b.bulk === true || Array.isArray(b.items)
     const items = Array.isArray(b.items) ? b.items : [b]
-    const saved = []
+    const saved = [], skipped = []
     for (const it of items) {
       const model = String(it.model || "").trim()
       const provider = String(it.provider || b.provider || "").trim()
@@ -644,15 +728,19 @@ async function handleAdminApi(req, res, pathname) {
       if (!DB.getProvider(db, provider)) return json(res, 400, { ok: false, err: `供应商 ${provider || "(空)"} 不存在` })
       // 单价缺省用 env 的全局价：多数情况下第一家就是现在这家，填错了也不至于把账算成 0
       const num = (v, d) => { const n = Number(v); return Number.isFinite(n) && n >= 0 ? n : d }
-      saved.push(DB.upsertModel(db, {
+      const r = DB.upsertModel(db, {
         id: it.id, model, provider, upstream: it.upstream, label: it.label,
         price_in: num(it.priceIn, CFG.priceIn), price_out: num(it.priceOut, CFG.priceOut),
         price_cached: num(it.priceCached, CFG.priceCached),
         status: it.status, sort: it.sort, note: it.note,
-      }))
+      }, { insertOnly: bulk && !it.id })
+      if (r && r.err) return json(res, 400, { ok: false, err: r.err })
+      if (r && r.skipped) skipped.push(`${model}@${provider}`)
+      else saved.push(r)
     }
-    audit("model.set", { actor: "admin", target: saved.map((m) => `${m.model}@${m.provider}`).join(",").slice(0, 200), ip })
-    return json(res, 200, { ok: true, saved: saved.length })
+    audit("model.set", { actor: "admin", target: saved.map((m) => `${m.model}@${m.provider}`).join(",").slice(0, 200), ip,
+      detail: skipped.length ? `已接入过、保持原样：${skipped.join(",").slice(0, 200)}` : "" })
+    return json(res, 200, { ok: true, saved: saved.length, skipped: skipped.length, skippedNames: skipped })
   }
 
   // ---- 上游通道（one-api）：看/切默认与备用 ----
@@ -682,8 +770,80 @@ async function handleAdminApi(req, res, pathname) {
     return json(res, 200, { ok: true, ...r })
   }
 
+  // ---- 对账：按模型 / 供应商 / 用户 / 技能聚合，外加 CSV 导出 ----
+  //
+  // 为什么必须有：usage_log 一直记着 model 与 provider 两列，却没有任何一处按它们聚合，
+  // 要回答"这个月这家该收我多少""哪个模型最烧钱"只能 SSH 进去手写 SQL。而单价配错造成的
+  // 计费偏差【不会报错、只会静默偏】，逐项对账是唯一能发现它的手段。
+  if (req.method === "GET" && (pathname === "/admin/api/usage-summary" || pathname === "/admin/api/usage-export")) {
+    const url = new URL(req.url, "http://x")
+    const to = (url.searchParams.get("to") || DB.dayOf()).slice(0, 10)
+    const from = (url.searchParams.get("from") || DB.dayOf(Date.now() - 29 * 86400 * 1000)).slice(0, 10)
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(from) || !/^\d{4}-\d{2}-\d{2}$/.test(to))
+      return json(res, 400, { ok: false, err: "日期要写成 YYYY-MM-DD" })
+
+    if (pathname === "/admin/api/usage-summary") {
+      return json(res, 200, {
+        ok: true, from, to,
+        byModel: DB.usageByModel(db, from, to),
+        byProvider: DB.usageByProvider(db, from, to),
+        byUser: DB.usageByUser(db, from, to),
+        bySkill: DB.usageBySkill(db, from, to),
+        series: DB.usageTotalSeries(db, 90).filter((r) => r.day >= from && r.day <= to),
+        // 对账要能核单价：把目录里每个模型每家的现价一并给出
+        prices: DB.listModels(db).map((m) => ({ model: m.model, provider: m.provider,
+          priceIn: m.price_in, priceOut: m.price_out, priceCached: m.price_cached })),
+        legacyPrice: { priceIn: CFG.priceIn, priceOut: CFG.priceOut, priceCached: CFG.priceCached },
+      })
+    }
+
+    const by = String(url.searchParams.get("by") || "detail")
+    const cell = (v) => {
+      const s = String(v == null ? "" : v)
+      return /[",\n\r]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s
+    }
+    const sheet = (head, rows) => head.join(",") + "\r\n" + rows.map((r) => r.map(cell).join(",")).join("\r\n") + "\r\n"
+    let csv, name
+    if (by === "model") {
+      csv = sheet(["模型", "调用数", "花费USD", "输入tokens", "输出tokens", "缓存tokens"],
+        DB.usageByModel(db, from, to).map((r) => [r.model || "(空)", r.calls, r.cost, r.tin, r.tout, r.tcached]))
+      name = "usage-by-model"
+    } else if (by === "provider") {
+      csv = sheet(["供应商", "调用数", "花费USD", "输入tokens", "输出tokens", "缓存tokens"],
+        DB.usageByProvider(db, from, to).map((r) => [r.provider || "env兜底上游", r.calls, r.cost, r.tin, r.tout, r.tcached]))
+      name = "usage-by-provider"
+    } else if (by === "user") {
+      csv = sheet(["登录名", "姓名", "档位", "调用数", "花费USD", "输入tokens", "输出tokens", "缓存tokens"],
+        DB.usageByUser(db, from, to).map((r) => [r.username || "(已删除)", r.display_name || "", r.tier || "", r.calls, r.cost, r.tin, r.tout, r.tcached]))
+      name = "usage-by-user"
+    } else {
+      csv = sheet(["时间(北京)", "日期(UTC)", "登录名", "姓名", "模型", "供应商", "技能", "输入tokens", "输出tokens", "缓存tokens", "花费USD"],
+        DB.usageRange(db, from, to).map((r) => [
+          new Date(r.ts).toLocaleString("zh-CN", { timeZone: "Asia/Shanghai", hour12: false }),
+          r.day, r.username || "(已删除)", r.display_name || "", r.model, r.provider || "env", r.skill,
+          r.prompt_tokens, r.completion_tokens, r.cached_tokens, r.cost_usd]))
+      name = "usage-detail"
+    }
+    audit("usage.export", { actor: "admin", ip, detail: `${by} ${from}~${to}` })
+    res.writeHead(200, {
+      "content-type": "text/csv; charset=utf-8",
+      "content-disposition": `attachment; filename="${name}-${from}_${to}.csv"`,
+      "cache-control": "no-store",
+    })
+    // 【必须带 BOM】不带的话 Excel 按本地代码页解，中文列名与姓名全是乱码 —— 而这份表
+    // 十有八九就是拿去 Excel 里对账的。
+    return res.end("﻿" + csv)
+  }
+
   if (req.method === "GET" && pathname === "/admin/api/audit") {
-    return json(res, 200, { ok: true, rows: DB.listAudit(db, 300) })
+    const url = new URL(req.url, "http://x")
+    const r = DB.listAudit(db, {
+      limit: Math.min(1000, Math.max(1, Number(url.searchParams.get("limit")) || 200)),
+      offset: Math.max(0, Number(url.searchParams.get("offset")) || 0),
+      event: url.searchParams.get("event") || "",
+      actor: url.searchParams.get("actor") || "",
+    })
+    return json(res, 200, { ok: true, rows: r.rows, total: r.total, events: DB.auditEvents(db) })
   }
 
   return json(res, 404, { ok: false, err: "没有这个接口" })
@@ -748,13 +908,23 @@ export function start() {
       log(`sci-auth 就绪 http://${h}:${real}　库=${DB_FILE}　管理台=${ADMIN_ENABLED() ? "开" : "关（未设 ADMIN_PASSWORD）"}`)
       if (process.env.PORT_FILE) { try { fs.writeFileSync(process.env.PORT_FILE, String(real)) } catch (e) { log("[warn] 写 PORT_FILE 失败", e.message) } }
       if (!CFG.upstreamKey) log("[warn] 未配 LLM_UPSTREAM_KEY —— /llm 转发会返回 503")
+      // 默认模型为空的档位 = 该档用户可以在请求体里随便点模型名（网关会照用），
+      // 绕过允许清单、按 env 全局价计费。后台已经拦住了新建这种档位，老库里的要看得见。
+      const blank = DB.listTiers(db).filter((t) => !String(t.model || "").trim()).map((t) => t.key)
+      if (blank.length) log(`[warn] 这些档位没有默认模型：${blank.join(", ")} —— 该档用户可自选任意模型名并按 env 全局价计费，请到后台补上`)
       resolve(server)
     })
   })
 }
 
-// 定期清理过期 refresh（一天一次足够）
-const sweep = setInterval(() => { try { DB.purgeExpiredRefresh(db) } catch {} }, 24 * 3600 * 1000)
+// 定期清理过期 refresh 与太老的审计（一天一次足够）。
+// 审计表只写不删，login.ok / llm.quota_block 这类高频事件会让它无限涨；半年前的行对运维
+// 已无价值，留着只会把库撑大、把审计页拖慢。
+const AUDIT_KEEP_DAYS = envNum("AUDIT_KEEP_DAYS", 180, { min: 7 })
+const sweep = setInterval(() => {
+  try { DB.purgeExpiredRefresh(db) } catch {}
+  try { const n = DB.purgeAudit(db, AUDIT_KEEP_DAYS); if (n) log(`[sweep] 清理 ${n} 条超过 ${AUDIT_KEEP_DAYS} 天的审计`) } catch {}
+}, 24 * 3600 * 1000)
 sweep.unref?.()
 
 // 直接执行才起服务；被 import（测试）时只导出

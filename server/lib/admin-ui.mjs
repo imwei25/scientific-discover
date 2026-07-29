@@ -75,7 +75,8 @@ dialog::backdrop{background:rgba(0,0,0,.62)}
 <dialog id="dlg"><form method="dialog"><div class="dlg-h" id="dlg-h"></div>
 <div class="dlg-b" id="dlg-b"></div><div class="dlg-f" id="dlg-f"></div></form></dialog>
 <script>
-var S={users:[],tiers:[],skills:[],catalog:[],board:null,q:'',tab:'users'};
+var S={users:[],tiers:[],skills:[],catalog:[],tierCounts:{},board:null,q:'',filter:'',
+       offset:0,pageSize:100,tab:'users'};
 var $=function(s){return document.querySelector(s)};
 var esc=function(s){return String(s==null?'':s).replace(/[&<>"']/g,function(c){
   return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]})};
@@ -83,10 +84,24 @@ var money=function(n){return '$'+(Number(n)||0).toFixed(4).replace(/0+$/,'').rep
 var dt=function(ms){if(!ms)return '—';var d=new Date(Number(ms));
   return d.toLocaleString('zh-CN',{timeZone:'Asia/Shanghai',hour12:false})};
 
+// 【api 永不 reject】以前它对 401 抛异常、对非 JSON 响应让 r.json() 自己抛，而全文件
+// 19 处 post(...) 里只有 2 处挂了 .catch —— 于是管理台会话一过期（或 Caddy 回了个 502
+// 的 HTML 错误页），点"停用/保存/删除/重置口令"就是【没有 toast、不跳登录、按钮像坏了】。
+// 统一在这里兜住：401 直接把人送回登录页，其余一律翻成 {ok:false,err}，调用方原有的
+// "不 ok 就 toast(j.err)" 那一行就自然把话说出来了。
 function api(p,opt){return fetch('/admin/api/'+p,opt).then(function(r){
-  if(r.status===401&&p!=='login')throw{unauth:1};return r.json()})}
+  if(r.status===401&&p!=='login'){var e=new Error('unauth');e.unauth=1;throw e}
+  return r.text().then(function(t){
+    try{return JSON.parse(t)}catch(_){throw new Error('服务器返回了非 JSON（HTTP '+r.status+'，多半是网关错误页）')}})})
+  .catch(function(e){
+    if(e&&e.unauth){renderLogin('登录已过期，请重新登录');return {ok:false,unauth:1,err:'登录已过期'}}
+    return {ok:false,err:(e&&e.message)||'网络错误'}})}
 function post(p,body){return api(p,{method:'POST',headers:{'Content-Type':'application/json'},
   body:JSON.stringify(body||{})})}
+// 数字输入：空 = 用 dflt；非法 = 返回 null（调用方据此报错，别再用 Number(x)||0 把
+// 「-5」「abc」「1,000」全吞成 0 —— 额度那边 0 的含义是【不限】，一次手滑就放开全档。
+function numIn(sel,dflt){var v=$(sel).value.trim();if(v==='')return dflt;
+  var n=Number(v);return Number.isFinite(n)&&n>=0?n:null}
 function toast(m,ok){var e=$('#msg');if(!e)return;e.textContent=m;e.className='msg '+(ok?'ok':'err');
   clearTimeout(toast.t);toast.t=setTimeout(function(){e.className='msg'},5000)}
 
@@ -114,43 +129,53 @@ function renderLogin(err){
 
 // ---------- 主界面 ----------
 function load(){
-  api('overview?q='+encodeURIComponent(S.q)).then(function(d){
-    if(!d.ok)return renderLogin(d.err||'');
+  api('overview?q='+encodeURIComponent(S.q)+'&filter='+encodeURIComponent(S.filter||'')+
+      '&limit='+S.pageSize+'&offset='+(S.offset||0)).then(function(d){
+    if(!d.ok){if(!d.unauth)renderLogin(d.err||'加载失败');return}
     S.users=d.users;S.tiers=d.tiers;S.skills=d.skills;S.board=d.board;S.total=d.total;S.matched=d.matched;
-    S.catalog=d.catalog||[];
-    render()}).catch(function(e){renderLogin(e&&e.unauth?'':'加载失败')})
+    S.catalog=d.catalog||[];S.tierCounts=d.tierCounts||{};
+    render()})
 }
 function render(){
   $('#logout').style.display='';
   $('#sub').textContent='共 '+S.total+' 个账号';
   $('#app').innerHTML=
     '<div class="tabs">'+
-      tabBtn('users','用户')+tabBtn('board','看板')+tabBtn('tiers','档位')+tabBtn('prov','模型供应商')+tabBtn('chan','上游通道')+tabBtn('audit','审计')+
+      tabBtn('users','用户')+tabBtn('board','看板')+tabBtn('bill','对账')+tabBtn('tiers','档位')+tabBtn('prov','模型供应商')+tabBtn('chan','上游通道')+tabBtn('audit','审计')+
     '</div><div id="pane"></div>';
   Array.prototype.forEach.call(document.querySelectorAll('.tabs button'),function(b){
     b.onclick=function(){S.tab=b.dataset.k;
       if(S.tab==='audit')loadAudit();
       else if(S.tab==='chan')loadChannels();
       else if(S.tab==='prov')loadProviders();
+      else if(S.tab==='bill')loadBill();
       else render()}});
   if(S.tab==='users')paneUsers();
   else if(S.tab==='board')paneBoard();
   else if(S.tab==='tiers')paneTiers();
   else if(S.tab==='prov')paneProviders();
   else if(S.tab==='chan')paneChannels();
+  else if(S.tab==='bill')paneBill();
 }
 function tabBtn(k,label){return '<button data-k="'+k+'" class="'+(S.tab===k?'on':'')+'">'+label+'</button>'}
 
 // ---------- 用户 ----------
+// 一格「已用 / 上限」＋进度条。日、月两列共用。
+function usageCell(used,lim){
+  if(!(lim>0))return '<span class="usage">'+money(used)+' <span class="mut">/ 不限</span></span>';
+  var pct=Math.min(100,Math.round(used/lim*100));
+  return '<div class="usage">'+money(used)+' <span class="mut">/ '+money(lim)+' ('+pct+'%)</span></div>'+
+    '<div class="bar '+(pct>=100?'bad':pct>=80?'warn':'')+'"><i style="width:'+pct+'%"></i></div>'}
+
+var USER_FILTERS=[['','全部'],['overmonth','本月已触顶'],['nearmonth','本月≥80%'],
+  ['overday','今日已触顶'],['suspended','已停用'],['pwchange','待改密'],['idle','30天未活跃']];
+
 function paneUsers(){
   var rows=S.users.map(function(u){
-    var lim=u.limits.daily,used=u.usage.today;
-    var pct=lim>0?Math.min(100,Math.round(used/lim*100)):0;
-    var cls=pct>=100?'bad':pct>=80?'warn':'';
-    var usage=lim>0
-      ? '<div class="usage">'+money(used)+' <span class="mut">/ '+money(lim)+' ('+pct+'%)</span></div>'+
-        '<div class="bar '+cls+'"><i style="width:'+pct+'%"></i></div>'
-      : '<span class="usage">'+money(used)+' <span class="mut">/ 不限</span></span>';
+    // 【月用量必须画出来】月额度才是主闸，而列表以前只画今日 —— 谁快到月上限只能逐个
+    // 点开用量弹窗看。数据（usage.month / limits.monthly）后端一直就在返回，纯粹没画。
+    var usage=usageCell(u.usage.today,u.limits.daily);
+    var musage=usageCell(u.usage.month,u.limits.monthly);
     return '<tr data-id="'+u.id+'">'+
       '<td><b>'+esc(u.displayName)+'</b>'+(u.surname?' <span class="rank">姓:'+esc(u.surname)+'</span>':'')+
         '<div class="mut" style="font-size:12.5px">'+esc(u.username)+(u.hospital?' · '+esc(u.hospital):'')+'</div></td>'+
@@ -158,29 +183,43 @@ function paneUsers(){
       '<td>'+(u.status==='active'?'<span class="tag ok">正常</span>':'<span class="tag bad">已停用</span>')+
         (u.mustChangePw?' <span class="tag warn">待改密</span>':'')+'</td>'+
       '<td>'+usage+'</td>'+
+      '<td>'+musage+'</td>'+
       '<td class="mut" style="font-size:12.5px">'+dt(u.lastSeenAt)+(u.clientVersion?'<br>v'+esc(u.clientVersion):'')+'</td>'+
       '<td class="row" style="gap:5px;flex-wrap:nowrap">'+
         '<button class="btn sm" data-a="edit">编辑</button>'+
         '<button class="btn sm" data-a="usage">用量</button>'+
         '<button class="btn sm" data-a="susp">'+(u.status==='active'?'停用':'恢复')+'</button>'+
         '<button class="btn sm" data-a="more">…</button></td></tr>'}).join('');
+  // 分页：账号数超过一页时以前【没有任何翻页控件】，第 101 个人在后台根本找不到。
+  var from=S.offset+1,to=S.offset+S.users.length;
+  var pager=(S.matched>S.users.length||S.offset>0)
+    ? '<div class="row" style="margin-top:12px"><span class="mut">第 '+from+'–'+to+' 条，共 '+S.matched+'</span>'+
+      '<span class="sp"></span><button class="btn sm" id="prev"'+(S.offset<=0?' disabled':'')+'>上一页</button>'+
+      '<button class="btn sm" id="next"'+(to>=S.matched?' disabled':'')+'>下一页</button></div>'
+    : '';
   $('#pane').innerHTML='<section>'+
     '<div class="row" style="margin-bottom:12px">'+
       '<input id="q" placeholder="按姓名筛选：输一个字或两个字（姓氏优先）" value="'+esc(S.q)+'" style="flex:1;min-width:260px">'+
       '<button class="btn" id="clear">清空</button>'+
       '<span class="sp"></span><button class="btn primary" id="add">+ 新建账号</button></div>'+
+    '<div class="chips" style="margin-bottom:10px">'+USER_FILTERS.map(function(f){
+      return '<span class="chip'+((S.filter||'')===f[0]?' on':'')+'" data-f="'+f[0]+'">'+f[1]+'</span>'}).join('')+'</div>'+
     '<div class="hint">例：输「张」→ 姓张的排最前，名字里带张的排后面；输「欧阳」「小明」同样可用。也可用登录名/手机号/医院找人。</div>'+
-    (S.q?'<div class="hint">命中 '+S.matched+' / '+S.total+'</div>':'')+
+    ((S.q||S.filter)?'<div class="hint">命中 '+S.matched+' / '+S.total+'</div>':'')+
     '<table style="margin-top:12px"><thead><tr><th>姓名 / 账号</th><th>档位</th><th>状态</th>'+
-    '<th>今日用量</th><th>最近活跃</th><th></th></tr></thead><tbody>'+
-    (rows||'<tr><td colspan="6" class="mut" style="padding:22px;text-align:center">没有匹配的账号</td></tr>')+
-    '</tbody></table></section>';
+    '<th>今日用量</th><th>本月用量</th><th>最近活跃</th><th></th></tr></thead><tbody>'+
+    (rows||'<tr><td colspan="7" class="mut" style="padding:22px;text-align:center">没有匹配的账号</td></tr>')+
+    '</tbody></table>'+pager+'</section>';
 
   var q=$('#q');
-  q.oninput=function(){clearTimeout(q.t);q.t=setTimeout(function(){S.q=q.value;load()},220)};
+  q.oninput=function(){clearTimeout(q.t);q.t=setTimeout(function(){S.q=q.value;S.offset=0;load()},220)};
   q.focus();q.setSelectionRange(q.value.length,q.value.length);
-  $('#clear').onclick=function(){S.q='';load()};
+  $('#clear').onclick=function(){S.q='';S.filter='';S.offset=0;load()};
   $('#add').onclick=dlgAdd;
+  if($('#prev'))$('#prev').onclick=function(){S.offset=Math.max(0,S.offset-S.pageSize);load()};
+  if($('#next'))$('#next').onclick=function(){S.offset=S.offset+S.pageSize;load()};
+  Array.prototype.forEach.call(document.querySelectorAll('#pane .chip[data-f]'),function(c){
+    c.onclick=function(){S.filter=c.dataset.f;S.offset=0;load()}});
   Array.prototype.forEach.call(document.querySelectorAll('#pane tbody button'),function(b){
     b.onclick=function(){
       var id=Number(b.closest('tr').dataset.id);
@@ -227,10 +266,18 @@ function dlgAdd(){
       S.q='';load()})}
 }
 
+// 【已选但列表里没有的项也要画出来】保存时只收集"当前渲染出来的 chip"，所以任何渲染不
+// 出来的已选项都会被静默丢掉：技能目录读不到（SKILLS_DIR 配错时 skillTable 静默返回 []）
+// 就能把白名单整个清空，管理员只是进来改了个备注。画成灰 chip 并标「已失效」，既保住
+// 数据、又让人看得见问题。
 function skillChips(selected,all){
   var sel=selected||[];
-  return '<div class="chips">'+all.map(function(s){
-    return '<span class="chip'+(sel.indexOf(s.id)>=0?' on':'')+'" data-s="'+esc(s.id)+'">'+esc(s.label)+'</span>'}).join('')+'</div>'}
+  var known={};all.forEach(function(s){known[s.id]=1});
+  var extra=sel.filter(function(id){return !known[id]}).map(function(id){return {id:id,label:id,stale:1}});
+  return '<div class="chips">'+all.concat(extra).map(function(s){
+    return '<span class="chip'+(sel.indexOf(s.id)>=0?' on':'')+'" data-s="'+esc(s.id)+'"'+
+      (s.stale?' title="技能目录里已经没有它了（SKILLS_DIR 配错？）——保留原样，别静默丢掉"':'')+'>'+
+      esc(s.label)+(s.stale?' <span class="mut">·已失效</span>':'')+'</span>'}).join('')+'</div>'}
 
 function dlgEdit(u){
   var ov=u.overrides;
@@ -246,26 +293,42 @@ function dlgEdit(u){
     '<label>月额度</label><input id="e-mon" value="'+(ov.monthly==null?'':ov.monthly)+'" placeholder="留空=随档位（当前 '+(u.limits.monthly||'不限')+'），0=不限">'+
     '<label>备注</label><input id="e-note" value="'+esc(u.note)+'"></div>'+
     '<div style="margin-top:14px"><label class="mut">技能白名单</label>'+
-    '<div class="hint">全不选 = 随档位；选中即只允许这些。注意这是<b>软管控</b>：技能在客户端执行，'+
-    '真正硬的闸是额度与模型档次。</div>'+skillChips(ov.skills==null?null:String(ov.skills).split(',').filter(Boolean),S.skills)+
+    // 【三态必须写明】以前只有"跟随档位/全选"两个按钮，而把 chips 一个个点灭产生的
+    // skillsOverride='' 在系统里的含义是【不限 = 全部放行】，与管理员"收回全部技能"的
+    // 意图恰好相反，界面上还完全看不出区别。现在三态各有按钮、当前态实时显示在下面。
+    '<div class="hint">这是<b>软管控</b>：技能在客户端执行，真正硬的闸是额度与模型档次。</div>'+
+    skillChips(ov.skills==null?null:String(ov.skills).split(',').filter(Boolean),S.skills)+
     '<div class="row" style="margin-top:8px"><button class="btn sm" id="e-none">跟随档位</button>'+
-    '<button class="btn sm" id="e-all">全选</button></div></div>'+
-    '<div class="hint" style="margin-top:12px">改档位或额度会立刻吊销该用户已签发的 key，客户端需重新登录。</div>',
+    '<button class="btn sm" id="e-any">全部允许</button>'+
+    '<button class="btn sm" id="e-all">全选为白名单</button></div>'+
+    '<div class="hint" id="e-state"></div></div>'+
+    '<div class="hint" style="margin-top:12px">改档位或技能会吊销该用户已签发的 key（需重新登录）；'+
+    '<b>只改额度不会</b>——额度不在票据里，网关每一单都现查库，改完下一次请求就生效。</div>',
     '<button class="btn primary" id="ok" value="default">保存</button>');
-  var follow=(ov.skills==null);
   var chips=$('#dlg-b').querySelectorAll('.chip');
-  Array.prototype.forEach.call(chips,function(c){c.onclick=function(){follow=false;c.classList.toggle('on')}});
-  $('#e-none').onclick=function(e){e.preventDefault();follow=true;
-    Array.prototype.forEach.call(chips,function(c){c.classList.remove('on')});toast('已设为跟随档位',true)};
-  $('#e-all').onclick=function(e){e.preventDefault();follow=false;
-    Array.prototype.forEach.call(chips,function(c){c.classList.add('on')})};
+  var mode=ov.skills==null?'follow':(String(ov.skills)?'pick':'any');
+  var showState=function(){
+    var n=0;Array.prototype.forEach.call(chips,function(c){if(c.classList.contains('on'))n++});
+    $('#e-state').innerHTML=mode==='follow'?'当前：<b>跟随档位</b>（该用户不做单独限制）'
+      :mode==='any'?'当前：<b>全部允许</b>（覆盖档位，放行所有技能）'
+      :'当前：<b>白名单</b>，只允许选中的 '+n+' 个'+(n?'':' —— 一个都没选等于「全部允许」，要收紧请改额度或档位')};
+  Array.prototype.forEach.call(chips,function(c){c.onclick=function(){mode='pick';c.classList.toggle('on');showState()}});
+  $('#e-none').onclick=function(e){e.preventDefault();mode='follow';
+    Array.prototype.forEach.call(chips,function(c){c.classList.remove('on')});showState()};
+  $('#e-any').onclick=function(e){e.preventDefault();mode='any';
+    Array.prototype.forEach.call(chips,function(c){c.classList.remove('on')});showState()};
+  $('#e-all').onclick=function(e){e.preventDefault();mode='pick';
+    Array.prototype.forEach.call(chips,function(c){c.classList.add('on')});showState()};
+  showState();
   $('#ok').onclick=function(e){e.preventDefault();
+    var d=numIn('#e-day',''),m=numIn('#e-mon','');
+    if(d===null||m===null)return toast('额度须是 ≥0 的数字（0=不限，留空=随档位）',false);
     var picked=[];Array.prototype.forEach.call(chips,function(c){if(c.classList.contains('on'))picked.push(c.dataset.s)});
     post('user-update',{id:u.id,displayName:$('#e-dn').value.trim(),surname:$('#e-sn').value.trim(),
       hospital:$('#e-hos').value.trim(),position:$('#e-pos').value.trim(),phone:$('#e-ph').value.trim(),
       tier:$('#e-tier').value,note:$('#e-note').value.trim(),
-      dailyOverride:$('#e-day').value.trim(),monthlyOverride:$('#e-mon').value.trim(),
-      skillsOverride:follow?null:picked.join(',')}).then(function(j){
+      dailyOverride:d,monthlyOverride:m,
+      skillsOverride:mode==='follow'?null:picked.join(',')}).then(function(j){
       if(!j.ok)return toast(j.err||'保存失败',false);
       $('#dlg').close();toast('已保存'+(j.keyRevoked?'（已吊销该用户 key，需重新登录）':''),true);load()})}
 }
@@ -273,12 +336,27 @@ function dlgEdit(u){
 function dlgMore(u){
   dlg('更多操作 · '+u.displayName,
     '<div class="row" style="gap:10px;flex-direction:column;align-items:stretch">'+
+    // 临时加额是最高频的运维动作（"医生正跑着一篇综述，额度不够了"），以前要进编辑弹窗
+    // 手算新数字。现在一格填增量、一键落。改额度不再吊销 key，所以人不会被踢下线。
+    '<div class="row"><input id="m-amt" value="1" style="width:90px" inputmode="decimal">'+
+    '<button class="btn" id="m-add" style="flex:1">日额度 +$，立即生效</button></div>'+
+    '<div class="hint">当前日上限 '+(u.limits.daily?money(u.limits.daily):'不限')+
+    '。这会把该用户的<b>日额度覆盖</b>设成「当前上限 + 增量」，一直有效到你把它清空（编辑弹窗里留空 = 随档位）。'+
+    '<b>不会</b>吊销 key，用户手上正在跑的活不受影响。</div>'+
     '<button class="btn" id="m-pw">重置口令</button>'+
     '<div class="hint">生成新的强随机口令，旧口令与已签发 key 立即失效，用户下次登录须再次改密。</div>'+
     '<button class="btn" id="m-key">重置 key</button>'+
     '<div class="hint">只吊销已签发的 key（口令不变）。怀疑 key 外借/泄露时用。</div>'+
     '<button class="btn danger" id="m-del">删除账号</button>'+
     '<div class="hint">连同用量记录一并删除，不可恢复。</div></div>');
+  $('#m-add').onclick=function(e){e.preventDefault();
+    var inc=Number($('#m-amt').value.trim());
+    if(!Number.isFinite(inc)||inc<=0)return toast('增量要是大于 0 的数字',false);
+    if(!(u.limits.daily>0))return toast('该用户日额度本来就是「不限」，不需要加额',false);
+    var nv=Math.round((u.limits.daily+inc)*10000)/10000;
+    post('user-update',{id:u.id,dailyOverride:nv}).then(function(j){
+      if(!j.ok)return toast(j.err||'失败',false);
+      $('#dlg').close();toast('已把 '+u.displayName+' 的日上限提到 '+money(nv)+'（未吊销 key）',true);load()})};
   $('#m-pw').onclick=function(e){e.preventDefault();post('reset-password',{id:u.id}).then(function(j){
     if(!j.ok)return toast(j.err||'失败',false);
     dlg('新口令 · '+u.displayName,'<p>请转交给用户，<b>只显示这一次</b>：</p>'+
@@ -305,7 +383,10 @@ function dlgUsage(u){
       return '<i style="height:'+Math.max(2,Math.round(x.cost_usd/max*52))+'px" title="'+x.day+' '+money(x.cost_usd)+'"></i>'}).join('')+'</div>'+
       '<div class="hint">近 '+s.length+' 天，峰值 '+money(max)+'/天</div>':'<p class="mut">还没有用量记录</p>';
     var det=j.detail.map(function(d){
+      // 【供应商这一列不能省】故障切换发生后，这一单到底是主供应商还是备用出的、该按谁的
+      // 单价对账，只有这里看得出来。库里一直记着 provider，以前只是没画。
       return '<tr><td class="mut" style="font-size:12.5px">'+dt(d.ts)+'</td><td>'+esc(d.model||'—')+'</td>'+
+        '<td class="mut" style="font-size:12.5px">'+esc(d.provider||'env兜底')+'</td>'+
         '<td>'+esc(d.skill||'—')+'</td><td class="mut">'+d.prompt_tokens+'/'+d.completion_tokens+
         (d.cached_tokens?' <span class="tag">缓存'+d.cached_tokens+'</span>':'')+'</td>'+
         '<td>'+money(d.cost_usd)+'</td></tr>'}).join('');
@@ -315,7 +396,7 @@ function dlgUsage(u){
       '<div><span class="mut">日上限</span><b>'+(j.user.limits.daily?money(j.user.limits.daily):'不限')+'</b></div>'+
       '<div><span class="mut">月上限</span><b>'+(j.user.limits.monthly?money(j.user.limits.monthly):'不限')+'</b></div></div>'+
       spark+'<h2 style="margin:16px 0 8px">最近调用</h2>'+
-      (det?'<table><thead><tr><th>时间</th><th>模型</th><th>技能</th><th>tokens 入/出</th><th>成本</th></tr></thead><tbody>'+det+'</tbody></table>'
+      (det?'<table><thead><tr><th>时间</th><th>模型</th><th>供应商</th><th>技能</th><th>tokens 入/出</th><th>成本</th></tr></thead><tbody>'+det+'</tbody></table>'
           :'<p class="mut">还没有调用记录</p>')})
 }
 
@@ -337,14 +418,85 @@ function paneBoard(){
     '</section>';
 }
 
+// ---------- 对账 ----------
+// 为什么要有这一页：usage_log 一直记着 model 与 provider 两列，却没有任何一处按它们聚合，
+// 要回答"这个月这家该收我多少""哪个模型最烧钱"只能 SSH 进去手写 SQL。而单价配错造成的
+// 计费偏差不会报错、只会静默偏 —— 逐项对账是唯一能发现它的手段。
+function dayStr(ms){var d=new Date(ms);return d.toISOString().slice(0,10)}
+function loadBill(){
+  render();
+  if(!S.billTo){S.billTo=dayStr(Date.now());S.billFrom=dayStr(Date.now()-29*86400000)}
+  $('#pane').innerHTML='<section><h2>对账</h2><p class="mut">加载中…</p></section>';
+  api('usage-summary?from='+S.billFrom+'&to='+S.billTo).then(function(d){
+    S.bill=d;paneBill()})
+}
+function paneBill(){
+  var d=S.bill;
+  if(!d){$('#pane').innerHTML='<section><h2>对账</h2><p class="mut">加载中…</p></section>';return}
+  if(!d.ok){$('#pane').innerHTML='<section><h2>对账</h2><div class="msg err" style="display:block">'+esc(d.err||'加载失败')+'</div></section>';return}
+  // 单价索引：同一个对外模型名挂了不同价的多家时要看得出来（那正是账会静默偏的形状）
+  var byModelPrice={};(d.prices||[]).forEach(function(p){
+    (byModelPrice[p.model]=byModelPrice[p.model]||[]).push(p)});
+  var tbl=function(head,rows){return '<table><thead><tr>'+head.map(function(h){return '<th>'+h+'</th>'}).join('')+
+    '</tr></thead><tbody>'+(rows||'<tr><td colspan="'+head.length+'" class="mut">这段时间没有用量</td></tr>')+'</tbody></table>'};
+  var tot=(d.byModel||[]).reduce(function(a,b){return a+(b.cost||0)},0);
+  var calls=(d.byModel||[]).reduce(function(a,b){return a+(b.calls||0)},0);
+
+  var mrows=(d.byModel||[]).map(function(r){
+    var ps=byModelPrice[r.model]||[];
+    var mixed=ps.length>1&&ps.some(function(p){return p.priceIn!==ps[0].priceIn||p.priceOut!==ps[0].priceOut});
+    return '<tr><td><b>'+esc(r.model||'(空)')+'</b>'+
+      (mixed?' <span class="tag warn" title="同一模型名下各家单价不同：流量切到别家时账会跟着变，核对时注意">多家异价</span>':'')+
+      (ps.length?'<div class="mut" style="font-size:12.5px">现价 入 '+ps[0].priceIn+' / 出 '+ps[0].priceOut+'</div>':'')+'</td>'+
+      '<td>'+r.calls+'</td><td>'+money(r.cost)+'</td>'+
+      '<td class="mut" style="font-size:12.5px">'+r.tin+' / '+r.tout+(r.tcached?'（缓存 '+r.tcached+'）':'')+'</td></tr>'}).join('');
+  var prows=(d.byProvider||[]).map(function(r){
+    return '<tr><td><b>'+esc(r.provider||'env 兜底上游')+'</b></td><td>'+r.calls+'</td><td>'+money(r.cost)+'</td>'+
+      '<td class="mut" style="font-size:12.5px">'+r.tin+' / '+r.tout+'</td></tr>'}).join('');
+  var urows=(d.byUser||[]).map(function(r){
+    return '<tr><td><b>'+esc(r.display_name||'')+'</b> <span class="mut">'+esc(r.username||'(已删除)')+'</span></td>'+
+      '<td><span class="tag">'+esc(r.tier||'—')+'</span></td><td>'+r.calls+'</td><td>'+money(r.cost)+'</td></tr>'}).join('');
+  var krows=(d.bySkill||[]).map(function(r){
+    return '<tr><td>'+esc(r.skill||'（自由对话）')+'</td><td>'+r.calls+'</td><td>'+money(r.cost)+'</td></tr>'}).join('');
+
+  var q='from='+d.from+'&to='+d.to;
+  $('#pane').innerHTML='<section><div class="row"><h2 style="margin:0">对账</h2>'+
+    '<span class="sp"></span><input id="b-f" type="date" value="'+esc(d.from)+'">'+
+    '<span class="mut">至</span><input id="b-t" type="date" value="'+esc(d.to)+'">'+
+    '<button class="btn" id="b-go">查询</button></div>'+
+    '<div class="kpi" style="margin:14px 0">'+
+    '<div><span class="mut">区间花费</span><b>'+money(tot)+'</b></div>'+
+    '<div><span class="mut">调用数</span><b>'+calls+'</b></div>'+
+    '<div><span class="mut">天数</span><b>'+((new Date(d.to)-new Date(d.from))/86400000+1)+'</b></div></div>'+
+    '<div class="row"><span class="mut">导出 CSV：</span>'+
+    ['detail 明细','model 按模型','provider 按供应商','user 按用户'].map(function(x){
+      var k=x.split(' ')[0];
+      return '<a class="btn sm" style="text-decoration:none" href="/admin/api/usage-export?'+q+'&by='+k+'">'+x.split(' ')[1]+'</a>'}).join('')+
+    '</div><div class="hint" style="margin-top:8px">CSV 带 BOM，Excel 直接打开不乱码。日期口径是 UTC 日切，与额度闸一致。</div></section>'+
+    '<section><h2>按模型</h2>'+tbl(['模型','调用数','花费','tokens 入/出'],mrows)+
+    '<div class="hint" style="margin-top:10px">核对方法：花费 ÷ tokens 应当等于该模型的现价。对不上就是某段时间用的是别家的价 —— 到「按供应商」看流量去了谁那儿。</div></section>'+
+    '<section><h2>按供应商</h2>'+tbl(['供应商','调用数','花费','tokens 入/出'],prows)+'</section>'+
+    '<section><h2>按用户</h2>'+tbl(['用户','档位','调用数','花费'],urows)+'</section>'+
+    '<section><h2>按技能</h2>'+tbl(['技能','调用数','花费'],krows)+'</section>';
+  $('#b-go').onclick=function(){S.billFrom=$('#b-f').value||S.billFrom;S.billTo=$('#b-t').value||S.billTo;loadBill()};
+}
+
 // ---------- 档位 ----------
 function paneTiers(){
+  var live={};S.catalog.forEach(function(m){live[m.model]=1});
   var rows=S.tiers.map(function(t){
-    var n=S.users.filter(function(u){return u.tier===t.key}).length;
+    // 【人数取服务端 GROUP BY 的结果】以前是数"当前这页的用户"，一旦有搜索词或翻了页，
+    // 每档显示的人数就是错的，而管理员正据此判断"这个档还有没有人、能不能删"。
+    var n=(S.tierCounts||{})[t.key]||0;
+    // 允许清单里可能有【目录里已经没有、或供应商停用了】的名字：运行时会被过滤掉，
+    // 用户根本选不到，但后台直出库里的字符串就显得它还有效 —— 标红才分辨得出来。
+    var ms=String(t.models||'').split(',').filter(Boolean);
+    var msHtml=ms.length?ms.map(function(m){
+      return live[m]?esc(m):'<span class="tag bad" title="目录里没有它、或它的供应商已停用——用户实际选不到">'+esc(m)+'</span>'}).join('、'):'';
     return '<tr data-k="'+esc(t.key)+'"><td><b>'+esc(t.key)+'</b><div class="mut" style="font-size:12.5px">'+esc(t.note||'')+'</div></td>'+
       '<td>'+(t.daily_usd?money(t.daily_usd):'不限')+'</td><td>'+(t.monthly_usd?money(t.monthly_usd):'不限')+'</td>'+
-      '<td>'+esc(t.model||'—')+
-        (t.models?'<div class="mut" style="font-size:12.5px">可选：'+esc(t.models)+'</div>':'<div class="mut" style="font-size:12.5px">不可切换</div>')+'</td>'+
+      '<td>'+(t.model?esc(t.model):'<span class="tag bad" title="默认模型为空：该档用户可自选任意模型名，绕过允许清单">未设默认模型</span>')+
+        (msHtml?'<div class="mut" style="font-size:12.5px">可选：'+msHtml+'</div>':'<div class="mut" style="font-size:12.5px">不可切换</div>')+'</td>'+
       '<td class="mut" style="font-size:12.5px">'+(t.skills?esc(t.skills):'全部技能')+'</td>'+
       '<td>'+n+' 人</td><td><button class="btn sm" data-a="ed">编辑</button> '+
       '<button class="btn sm danger" data-a="rm">删除</button></td></tr>'}).join('');
@@ -365,10 +517,17 @@ function paneTiers(){
 // 模型多选 chips：给档位挑「允许用户切换的模型」。数据来自模型目录（S.catalog）。
 function modelChips(selected){
   var sel=selected||[];
-  if(!S.catalog.length)return '<div class="hint">模型目录还是空的——先到「模型供应商」页加一家供应商与它的模型，这里才有得选。</div>';
-  return '<div class="chips">'+S.catalog.map(function(m){
-    return '<span class="chip'+(sel.indexOf(m.model)>=0?' on':'')+'" data-m="'+esc(m.model)+'" title="'+esc(m.providerName||'')+'">'+
-      esc(m.label||m.model)+(m.providerName?' <span class="mut">·'+esc(m.providerName)+'</span>':'')+'</span>'}).join('')+'</div>'}
+  var known={};S.catalog.forEach(function(m){known[m.model]=1});
+  // 【已选但目录里渲染不出来的也要画】保存时只收集渲染出来的 chip，所以停用一家供应商后
+  // 再进来改个备注保存，那家的模型就被静默从允许清单里抹掉了，重新启用也回不来。
+  var extra=sel.filter(function(x){return !known[x]}).map(function(x){return {model:x,label:x,stale:1}});
+  var list=S.catalog.concat(extra);
+  if(!list.length)return '<div class="hint">模型目录还是空的——先到「模型供应商」页加一家供应商与它的模型，这里才有得选。</div>';
+  return '<div class="chips">'+list.map(function(m){
+    return '<span class="chip'+(sel.indexOf(m.model)>=0?' on':'')+'" data-m="'+esc(m.model)+'" title="'+
+      (m.stale?'目录里已经没有它、或它的供应商已停用——保留原样，取消勾选才会真的移除':esc(m.providerName||''))+'">'+
+      esc(m.label||m.model)+(m.stale?' <span class="tag bad">已失效</span>':
+        (m.providerName?' <span class="mut">·'+esc(m.providerName)+'</span>':''))+'</span>'}).join('')+'</div>'}
 
 function dlgTier(t){
   t=t||{key:'',daily_usd:0,monthly_usd:0,model:'',models:'',skills:'',note:'',sort:5};
@@ -399,10 +558,15 @@ function dlgTier(t){
   Array.prototype.forEach.call(schips,function(c){c.onclick=function(){c.classList.toggle('on')}});
   $('#t-mosel').onchange=function(){if(this.value)$('#t-mo').value=this.value};
   $('#ok').onclick=function(e){e.preventDefault();
+    // 【别再用 Number(x)||0】负数与「abc」都会被它吞成 0，而 0 在额度闸里是【不限】——
+    // 一次手滑就把整档放开，后台还显示得一切正常。
+    var d=numIn('#t-d',0),m=numIn('#t-m',0);
+    if(d===null||m===null)return toast('额度须是 ≥0 的数字（0 = 不限）',false);
+    if(!$('#t-mo').value.trim())return toast('请填默认模型——留空会让该档用户可以自选任意模型名，绕过允许清单',false);
     var picked=[];Array.prototype.forEach.call(schips,function(c){if(c.classList.contains('on'))picked.push(c.dataset.s)});
     var mpicked=[];Array.prototype.forEach.call(mchips,function(c){if(c.classList.contains('on'))mpicked.push(c.dataset.m)});
-    post('tier',{key:$('#t-k').value.trim(),dailyUSD:Number($('#t-d').value)||0,
-      monthlyUSD:Number($('#t-m').value)||0,model:$('#t-mo').value.trim(),models:mpicked.join(','),
+    post('tier',{key:$('#t-k').value.trim(),dailyUSD:d,
+      monthlyUSD:m,model:$('#t-mo').value.trim(),models:mpicked.join(','),
       skills:picked.join(','),note:$('#t-n').value.trim(),sort:Number($('#t-s').value)||0}).then(function(j){
       if(!j.ok)return toast(j.err||'保存失败',false);
       $('#dlg').close();toast('已保存'+(j.affected?'（已吊销 '+j.affected+' 个用户的 key）':''),true);load()})}
@@ -413,6 +577,7 @@ function loadProviders(){
   render();
   $('#pane').innerHTML='<section><h2>模型供应商</h2><p class="mut">加载中…</p></section>';
   api('providers').then(function(d){
+    if(!d.ok){if(!d.unauth)$('#pane').innerHTML='<section><div class="msg err" style="display:block">'+esc(d.err||'加载失败')+'</div></section>';return}
     S.prov=d;
     // 【顺手把档位对话框用的模型清单也刷了】它原本只在 overview 那一次取，而"加模型"恰恰
     // 发生在这一页：不同步的话，刚接入的模型在档位对话框里一个都看不到，得刷新整页才出现，
@@ -501,10 +666,13 @@ function paneProviders(){
           status:p.status==='active'?'disabled':'active',note:p.note,sort:p.sort}).then(function(j){
           toast(j.ok?'已'+(p.status==='active'?'停用':'启用')+' '+(p.name||p.key):(j.err||'失败'),j.ok);loadProviders()});
         if(a==='rm'){
-          if(!confirm('删除供应商「'+(p.name||p.key)+'」？\\n\\n它名下的 '+p.models+' 个模型条目会一并删除。\\n'+
-            '正在用这些模型的档位会退回各自的默认模型。'))return;
+          if(!confirm('删除供应商「'+(p.name||p.key)+'」？\\n\\n它名下的 '+p.models+' 个模型条目会一并删除，\\n'+
+            '各档位的允许清单里也会把这些模型名摘掉（否则以后有人重建同名模型，授权会自动复活）。\\n'+
+            '正在用这些模型的用户会退回各自档位的默认模型。'))return;
           return post('provider',{key:p.key,remove:true}).then(function(j){
-            toast(j.ok?'已删除（连带 '+j.removedModels+' 个模型）':(j.err||'失败'),j.ok);loadProviders()})}
+            var dp=Object.keys(j.droppedFromTiers||{});
+            toast(j.ok?('已删除（连带 '+j.removedModels+' 个模型'+(dp.length?'；已从档位 '+dp.join('、')+' 的清单里摘掉':'')+'）'):(j.err||'失败'),j.ok);
+            loadProviders()})}
         return}
       var m=models.filter(function(x){return x.id===Number(tr.dataset.id)})[0];
       if(a==='ed')return dlgModel(m);
@@ -518,7 +686,9 @@ function paneProviders(){
         if(!confirm('删除模型「'+m.model+'@'+(m.providerName||m.provider)+'」？'+
           (m.tiers.length?'\\n\\n⚠ 这些档位正在用它：'+m.tiers.join('、'):'')))return;
         return post('model',{id:m.id,remove:true}).then(function(j){
-          toast(j.ok?'已删除':(j.err||'失败'),j.ok);loadProviders()})}}});
+          var dp=Object.keys(j.droppedFromTiers||{});
+          toast(j.ok?('已删除'+(dp.length?'（已从档位 '+dp.join('、')+' 的清单里摘掉）':'')):(j.err||'失败'),j.ok);
+          loadProviders()})}}});
 }
 
 function dlgProvider(p){
@@ -564,25 +734,37 @@ function dlgFetchModels(p){
       $('#dlg-b').innerHTML='<div class="msg err" style="position:static;max-width:none">'+esc(j.err||'拉取失败')+'</div>'+
         '<div class="hint" style="margin-top:10px">有些兼容端点不实现 <code>/models</code>。用「+ 新增模型」手填模型名即可，功能一样。</div>';
       return}
+    // 【已接入的要标出来】列表原来全是未勾状态，看不出哪些已经在目录里了；再勾一次会把
+    // 管理员手工填好的真实单价/中文名/上游真实名洗回默认值。现在标灰不可选，后端也按
+    // insertOnly 落库（双保险）。
+    var had={};((S.prov&&S.prov.models)||[]).forEach(function(x){if(x.provider===p.key)had[x.model]=1});
     $('#dlg-b').innerHTML='<div class="hint">勾选要接入的模型。单价先按 env 的全局价填好，'+
-      '<b>各家价格不同，务必到模型目录里逐个改成这家的真实单价</b>——否则额度会算偏。</div>'+
+      '<b>各家价格不同，务必到模型目录里逐个改成这家的真实单价</b>——否则额度会算偏。<br>'+
+      '标「已接入」的不会被改动（再勾也不会覆盖你填好的单价），要改它请到模型目录里编辑。</div>'+
       '<div class="row" style="margin:10px 0"><input id="mf" placeholder="过滤" style="flex:1"></div>'+
       '<div class="chips" id="mlist">'+j.models.map(function(m){
-        return '<span class="chip" data-m="'+esc(m)+'">'+esc(m)+'</span>'}).join('')+'</div>';
+        return had[m]
+          ? '<span class="chip" data-m="'+esc(m)+'" data-had="1" style="opacity:.5;cursor:not-allowed" title="已经在模型目录里了">'+
+            esc(m)+' <span class="mut">·已接入</span></span>'
+          : '<span class="chip" data-m="'+esc(m)+'">'+esc(m)+'</span>'}).join('')+'</div>';
     $('#dlg-f').innerHTML='<button class="btn primary" id="ok" value="default">接入所选</button>'+
       '<button class="btn" value="cancel">关闭</button>';
     var chips=$('#mlist').querySelectorAll('.chip');
-    Array.prototype.forEach.call(chips,function(c){c.onclick=function(){c.classList.toggle('on')}});
+    Array.prototype.forEach.call(chips,function(c){c.onclick=function(){
+      if(c.dataset.had)return toast('「'+c.dataset.m+'」已经在模型目录里了，改单价请到模型目录编辑',false);
+      c.classList.toggle('on')}});
     $('#mf').oninput=function(){var q=this.value.trim().toLowerCase();
       Array.prototype.forEach.call(chips,function(c){
         c.style.display=!q||c.dataset.m.toLowerCase().indexOf(q)>=0?'':'none'})};
     $('#ok').onclick=function(e){e.preventDefault();
       var items=[];Array.prototype.forEach.call(chips,function(c){
-        if(c.classList.contains('on'))items.push({model:c.dataset.m,provider:p.key})});
+        if(c.classList.contains('on')&&!c.dataset.had)items.push({model:c.dataset.m,provider:p.key})});
       if(!items.length)return toast('先勾几个模型',false);
-      post('model',{items:items}).then(function(j2){
+      post('model',{items:items,bulk:true}).then(function(j2){
         if(!j2.ok)return toast(j2.err||'保存失败',false);
-        $('#dlg').close();toast('已接入 '+j2.saved+' 个模型（记得到档位页勾进允许清单）',true);loadProviders()})}})
+        $('#dlg').close();
+        toast('已接入 '+j2.saved+' 个模型'+(j2.skipped?'（'+j2.skipped+' 个早已接入、保持原样）':'')+
+          '（记得到档位页勾进允许清单）',true);loadProviders()})}})
 }
 
 function dlgModel(m){
@@ -610,9 +792,15 @@ function dlgModel(m){
     '想让两家互为备份：给它们建<b>同一个对外模型名</b>的两行，各填各的上游真实名与单价，用优先级定主备。</div>',
     '<button class="btn primary" id="ok" value="default">保存</button>');
   $('#ok').onclick=function(e){e.preventDefault();
+    // 【单价不能用 Number(x)||0】清空输入框会变成 0 = 该模型永久免费，调用再多也不扣额度，
+    // 而服务端"字段缺省则回落 env 全局价"的分支从界面上根本走不到（前端永远发 0）。
+    // 留空 → 不发这个字段 → 服务端用 env 默认价；填了非法值 → 报错，别静默。
+    var pi=numIn('#x-pi',undefined),po=numIn('#x-po',undefined),pc=numIn('#x-pc',undefined);
+    if(pi===null||po===null||pc===null)return toast('单价须是 ≥0 的数字（留空 = 用 env 兜底价）',false);
+    if(!$('#x-m').value.trim())return toast('请填对外模型名',false);
     post('model',{id:m.id||undefined,model:$('#x-m').value.trim(),provider:$('#x-p').value,
       upstream:$('#x-u').value.trim(),label:$('#x-l').value.trim(),
-      priceIn:Number($('#x-pi').value)||0,priceOut:Number($('#x-po').value)||0,priceCached:Number($('#x-pc').value)||0,
+      priceIn:pi,priceOut:po,priceCached:pc,
       sort:Number($('#x-s').value)||0,status:$('#x-st').value,note:$('#x-n').value.trim()}).then(function(j){
       if(!j.ok)return toast(j.err||'保存失败',false);
       $('#dlg').close();toast('已保存模型',true);loadProviders()})}
@@ -622,8 +810,9 @@ function dlgModel(m){
 function loadChannels(){
   render();
   $('#pane').innerHTML='<section><h2>上游通道</h2><p class="mut">加载中…</p></section>';
-  api('channels').then(function(d){S.chan=d;paneChannels()})
-    .catch(function(){$('#pane').innerHTML='<section><p class="mut">加载失败</p></section>'})
+  api('channels').then(function(d){
+    if(!d.ok){if(!d.unauth)$('#pane').innerHTML='<section><div class="msg err" style="display:block">'+esc(d.err||'加载失败')+'</div></section>';return}
+    S.chan=d;paneChannels()})
 }
 function paneChannels(){
   var d=S.chan;
@@ -714,18 +903,44 @@ function paneChannels(){
 }
 
 // ---------- 审计 ----------
+// 【必须能筛】login.ok / llm.quota_block 是高频事件，固定取最近 300 条时，"上周我把谁改成
+// 了 plus 档"这类真正要查的管理动作早被冲出窗口了。按事件前缀 + 操作人筛，并翻页。
 function loadAudit(){
   render();
-  $('#pane').innerHTML='<section><h2>审计日志 <span class="mut">最近 300 条</span></h2><p class="mut">加载中…</p></section>';
-  api('audit').then(function(j){
+  S.auOffset=S.auOffset||0;
+  $('#pane').innerHTML='<section><h2>审计日志</h2><p class="mut">加载中…</p></section>';
+  api('audit?limit=200&offset='+S.auOffset+'&event='+encodeURIComponent(S.auEvent||'')+
+      '&actor='+encodeURIComponent(S.auActor||'')).then(function(j){
+    if(!j.ok){if(!j.unauth)$('#pane').innerHTML='<section><div class="msg err" style="display:block">'+esc(j.err||'加载失败')+'</div></section>';return}
     var rows=(j.rows||[]).map(function(a){
       return '<tr><td class="mut" style="font-size:12.5px;white-space:nowrap">'+dt(a.ts)+'</td>'+
         '<td><span class="tag">'+esc(a.event)+'</span></td><td>'+esc(a.actor||'—')+'</td>'+
         '<td>'+esc(a.target||'—')+'</td><td class="mut" style="font-size:12.5px">'+esc(a.detail||'')+'</td>'+
         '<td class="mut" style="font-size:12.5px">'+esc(a.ip||'')+'</td></tr>'}).join('');
-    $('#pane').innerHTML='<section><h2>审计日志 <span class="mut">最近 300 条 · 北京时间</span></h2>'+
+    // 事件下拉按前缀分组（user. / provider. / llm. …），前缀本身也能选：查"这段时间我动过
+    // 哪些用户"就选 user.，不用一个个事件名去点。
+    var pres={};(j.events||[]).forEach(function(e){var p=String(e.event).split('.')[0]+'.';pres[p]=(pres[p]||0)+e.n});
+    var opts='<option value="">全部事件</option>'+
+      Object.keys(pres).sort().map(function(p){
+        return '<option value="'+esc(p)+'"'+(S.auEvent===p?' selected':'')+'>'+esc(p)+'*（'+pres[p]+'）</option>'}).join('')+
+      (j.events||[]).map(function(e){
+        return '<option value="'+esc(e.event)+'"'+(S.auEvent===e.event?' selected':'')+'>　'+esc(e.event)+'（'+e.n+'）</option>'}).join('');
+    var from=S.auOffset+1,to=S.auOffset+(j.rows||[]).length;
+    $('#pane').innerHTML='<section><div class="row"><h2 style="margin:0">审计日志</h2>'+
+      '<span class="sp"></span><select id="a-ev" style="max-width:220px">'+opts+'</select>'+
+      '<input id="a-ac" placeholder="操作人/登录名" value="'+esc(S.auActor||'')+'" style="width:150px">'+
+      '<button class="btn" id="a-go">筛选</button></div>'+
+      '<div class="hint" style="margin:8px 0 12px">第 '+from+'–'+to+' 条，共 '+j.total+' 条 · 北京时间。'+
+      '超过 180 天的记录会被自动清理（AUDIT_KEEP_DAYS 可调）。</div>'+
       '<table><thead><tr><th>时间</th><th>事件</th><th>操作人</th><th>对象</th><th>详情</th><th>IP</th></tr></thead>'+
-      '<tbody>'+(rows||'<tr><td colspan="6" class="mut">暂无记录</td></tr>')+'</tbody></table></section>'})
+      '<tbody>'+(rows||'<tr><td colspan="6" class="mut">暂无记录</td></tr>')+'</tbody></table>'+
+      '<div class="row" style="margin-top:12px"><span class="sp"></span>'+
+      '<button class="btn sm" id="a-prev"'+(S.auOffset<=0?' disabled':'')+'>上一页</button>'+
+      '<button class="btn sm" id="a-next"'+(to>=j.total?' disabled':'')+'>下一页</button></div></section>';
+    $('#a-go').onclick=function(){S.auEvent=$('#a-ev').value;S.auActor=$('#a-ac').value.trim();S.auOffset=0;loadAudit()};
+    $('#a-prev').onclick=function(){S.auOffset=Math.max(0,S.auOffset-200);loadAudit()};
+    $('#a-next').onclick=function(){S.auOffset=S.auOffset+200;loadAudit()};
+  })
 }
 
 $('#logout').onclick=function(){post('logout').then(function(){renderLogin('')})};

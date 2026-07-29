@@ -151,11 +151,21 @@ export function loginLocked(key, now = Date.now()) {
   if (f.until && f.until <= now) fails.delete(key)
   return 0
 }
+// 【上限必须有】key 是 (IP,登录名)，登录名来自匿名请求体 —— 每次换一个新名字就是一个
+// 新桶，而没到阈值的桶（until=0）在 loginLocked 里【永远不会被删】。不设上限，攻击者
+// 换名灌流量就能让这个 Map 随请求数线性增长，最后把进程内存吃穿。
+// Map 保插入序，超限就丢最早的那批（它们要么已过期、要么正在被爆破，丢了也只是重新计数）。
+const FAILS_MAX = 5000
 export function noteLoginFail(key, now = Date.now()) {
   const f = fails.get(key) || { n: 0, until: 0 }
   f.n++
   if (f.n >= LOGIN_MAX_FAILS) { f.until = now + LOGIN_LOCK_MS; f.n = 0 }
   fails.set(key, f)
+  if (fails.size > FAILS_MAX) {
+    // 先清掉已经过期的；还超就按插入序丢最早的，保证"正在锁着"的桶尽量留住
+    for (const [k, v] of fails) { if (!v.until || v.until <= now) fails.delete(k); if (fails.size <= FAILS_MAX) break }
+    for (const k of fails.keys()) { if (fails.size <= FAILS_MAX) break; fails.delete(k) }
+  }
   return f
 }
 export const clearLoginFail = (key) => fails.delete(key)

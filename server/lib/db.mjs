@@ -56,7 +56,11 @@ CREATE TABLE IF NOT EXISTS users (
   key_epoch      INTEGER NOT NULL DEFAULT 1,       -- ++ 即吊销该用户全部已签发 key
   daily_override   REAL,                           -- NULL = 随档位
   monthly_override REAL,
-  skills_override  TEXT,                           -- NULL = 随档位；'' = 一个技能都不给
+  -- NULL = 随档位；'' = 不限（全部技能）。
+  -- 【别把 '' 读成"一个都不给"】网关的判据是"白名单非空且不含该技能才拦"，空数组直接
+  -- 放行。这里的注释一度写反，后台"把 chips 全点灭"于是变成全部放行 —— 与管理员的意图
+  -- 恰好相反。语义以本行与后台 UI 的三态按钮为准。
+  skills_override  TEXT,
   client_version TEXT    NOT NULL DEFAULT '',
   note           TEXT    NOT NULL DEFAULT '',
   created_at     INTEGER NOT NULL,
@@ -181,13 +185,23 @@ const SEED_TIERS = [
  * 老库升上来后 models 列全是 ''，语义正是"只允许该档的默认模型"，与升级前行为一致：
  * 管理员不去后台勾选，谁都不会突然多出模型可选。
  */
+/**
+ * 补齐后加的列。**无条件跑**，不看 schema_version。
+ *
+ * 为什么不放在 migrate() 里按版本号跑：版本号本身可能不可信。老库若 meta 表在、却没有
+ * schema_version 那一行（迁移脚本只搬了部分行、或人手动改过 meta），openDb 会走"新库"
+ * 分支直接写下 v2 并跳过 migrate —— tiers 永远缺 models 列，此后每次 SELECT 都炸在
+ * "no such column"，而报错离病因十万八千里。每步都先 PRAGMA 查列，跑一百遍也没有副作用，
+ * 那就没有理由拿版本号当前置条件。
+ */
+function ensureColumns(db) {
+  const has = (t, c) => db.prepare(`PRAGMA table_info(${t})`).all().some((x) => x.name === c)
+  if (!has("tiers", "models")) db.exec("ALTER TABLE tiers ADD COLUMN models TEXT NOT NULL DEFAULT ''")
+  if (!has("usage_log", "provider")) db.exec("ALTER TABLE usage_log ADD COLUMN provider TEXT NOT NULL DEFAULT ''")
+}
+
 function migrate(db, from) {
-  if (from < 2) {
-    const tierCols = db.prepare("PRAGMA table_info(tiers)").all().map((c) => c.name)
-    if (!tierCols.includes("models")) db.exec("ALTER TABLE tiers ADD COLUMN models TEXT NOT NULL DEFAULT ''")
-    const useCols = db.prepare("PRAGMA table_info(usage_log)").all().map((c) => c.name)
-    if (!useCols.includes("provider")) db.exec("ALTER TABLE usage_log ADD COLUMN provider TEXT NOT NULL DEFAULT ''")
-  }
+  if (from < 2) ensureColumns(db)
   db.prepare("UPDATE meta SET v=? WHERE k='schema_version'").run(String(SCHEMA_VERSION))
 }
 
@@ -198,6 +212,7 @@ export function openDb(file) {
   db.exec("PRAGMA foreign_keys = ON")
   db.exec("PRAGMA busy_timeout = 5000")
   db.exec(SCHEMA)
+  ensureColumns(db)
   const cur = db.prepare("SELECT v FROM meta WHERE k='schema_version'").get()
   if (!cur) {
     db.prepare("INSERT INTO meta(k,v) VALUES('schema_version',?)").run(String(SCHEMA_VERSION))
@@ -283,6 +298,37 @@ export function deleteUser(db, id) {
  *
  * 空关键词 = 列全部。LIKE 的 % _ 会被转义，避免管理员输入 "%" 一次捞出全表。
  */
+/** 检索用的 LIKE 参数（searchUsers 与 countSearchUsers 必须用同一份，否则"命中 N"会对不上）。 */
+function searchArgs(kw) {
+  const esc = kw.replace(/[\\%_]/g, (c) => "\\" + c)
+  return { like: `%${esc}%`, pre: `${esc}%` }
+}
+const SEARCH_WHERE = `display_name LIKE ? ESCAPE '\\'
+       OR surname      LIKE ? ESCAPE '\\'
+       OR username     LIKE ? ESCAPE '\\'
+       OR phone        LIKE ? ESCAPE '\\'
+       OR hospital     LIKE ? ESCAPE '\\'`
+
+/**
+ * 命中总数（不受分页 limit 影响）。
+ * 【为什么不能拿 rows.length 当命中数】它被 limit 截断过，后台"命中 200 / 640"是假的，
+ * 而管理员正是靠这个数字判断"要不要再缩关键词"。
+ */
+export function countSearchUsers(db, q) {
+  const kw = String(q || "").trim()
+  if (!kw) return countUsers(db)
+  const { like } = searchArgs(kw)
+  return db.prepare(`SELECT COUNT(*) AS n FROM users WHERE ${SEARCH_WHERE}`)
+    .get(like, like, like, like, like).n
+}
+
+/** 每个档位下的用户数（服务端算，不能拿"当前这页搜索结果"去数，见 countSearchUsers 的理由）。 */
+export function tierCounts(db) {
+  const out = {}
+  for (const r of db.prepare("SELECT tier, COUNT(*) AS n FROM users GROUP BY tier").all()) out[r.tier] = r.n
+  return out
+}
+
 export function searchUsers(db, q, { limit = 200, offset = 0 } = {}) {
   const kw = String(q || "").trim()
   if (!kw) {
@@ -292,8 +338,7 @@ export function searchUsers(db, q, { limit = 200, offset = 0 } = {}) {
       ORDER BY COALESCE(last_seen_at, last_login_at, 0) DESC, created_at DESC, id DESC
       LIMIT ? OFFSET ?`).all(limit, offset)
   }
-  const esc = kw.replace(/[\\%_]/g, (c) => "\\" + c)
-  const like = `%${esc}%`, pre = `${esc}%`
+  const { like, pre } = searchArgs(kw)
   return db.prepare(`
     SELECT *, (
       CASE
@@ -304,11 +349,7 @@ export function searchUsers(db, q, { limit = 200, offset = 0 } = {}) {
         ELSE 4
       END) AS rank
     FROM users
-    WHERE display_name LIKE ? ESCAPE '\\'
-       OR surname      LIKE ? ESCAPE '\\'
-       OR username     LIKE ? ESCAPE '\\'
-       OR phone        LIKE ? ESCAPE '\\'
-       OR hospital     LIKE ? ESCAPE '\\'
+    WHERE ${SEARCH_WHERE}
     ORDER BY rank, surname, display_name, username
     LIMIT ? OFFSET ?`)
     .all(kw, like, pre, like, like, like, like, like, like, limit, offset)
@@ -366,13 +407,37 @@ export function upsertProvider(db, p) {
   return getProvider(db, p.key)
 }
 
+/**
+ * 把各档位允许清单里【目录中已经不存在的模型名】摘掉，返回被摘掉的 {档位: [模型名]}。
+ *
+ * 不摘会怎样：档位页照旧显示"可选：mm"（后台从库里直出这个字符串），而运行时
+ * resolveEntitlement 会把它过滤掉 —— 管理员看得见、用户选不到，无从分辨。更实际的坑是
+ * 之后任何人以任何供应商重新接入一个【同名】模型，这些档位会**自动重新获得授权**，
+ * 授权凭空复活。
+ *
+ * 只摘允许清单，不动 tiers.model（默认模型可能就是 env 兜底上游那个，本来就不在目录里）。
+ */
+export function pruneTierModels(db) {
+  const alive = new Set(db.prepare("SELECT DISTINCT model FROM models").all().map((r) => r.model))
+  const dropped = {}
+  const upd = db.prepare("UPDATE tiers SET models=? WHERE key=?")
+  for (const t of db.prepare("SELECT key, models FROM tiers").all()) {
+    const cur = csv(t.models)
+    const kept = cur.filter((m) => alive.has(m))
+    if (kept.length === cur.length) continue
+    upd.run(kept.join(","), t.key)
+    dropped[t.key] = cur.filter((m) => !alive.has(m))
+  }
+  return dropped
+}
+
 /** 删供应商连同它名下的模型条目（模型没了供应商就是死条目，留着只会让路由静默落空）。 */
 export function deleteProvider(db, key) {
   const k = String(key)
   const models = db.prepare("SELECT COUNT(*) AS n FROM models WHERE provider=?").get(k).n
   db.prepare("DELETE FROM models WHERE provider=?").run(k)
   db.prepare("DELETE FROM providers WHERE key=?").run(k)
-  return { ok: true, removedModels: models }
+  return { ok: true, removedModels: models, droppedFromTiers: pruneTierModels(db) }
 }
 
 /** 模型目录（带供应商显示名，便于后台/客户端展示） */
@@ -382,7 +447,15 @@ export const listModels = (db) => db.prepare(`
   ORDER BY m.model, m.sort, m.id`).all()
 export const getModelRow = (db, id) => db.prepare("SELECT * FROM models WHERE id=?").get(Number(id)) || null
 
-export function upsertModel(db, m) {
+/**
+ * 落一行模型。
+ *
+ * opts.insertOnly：撞上已有的 (model, provider) 就【原样不动】，返回既有行。
+ * 「从供应商拉列表 → 勾选批量接入」那条路必须用它：批量项只带模型名，价格/中文名/上游
+ * 真实名一律缺省，若走 DO UPDATE，就会把管理员之前手工填好的真实单价洗成 env 全局价 ——
+ * 计费静默偏，正是本架构要治的病根。
+ */
+export function upsertModel(db, m, { insertOnly = false } = {}) {
   const row = {
     model: String(m.model || "").trim(),
     provider: String(m.provider || "").trim(),
@@ -396,11 +469,20 @@ export function upsertModel(db, m) {
     note: String(m.note || ""),
   }
   if (m.id) {
+    // 改名/换供应商可能撞上 UNIQUE(model,provider)。裸 UPDATE 撞了会抛未捕获异常 → 500，
+    // 前端只看到"保存失败"，管理员完全不知道原因是重名。先查一次，给得出人话。
+    const clash = db.prepare("SELECT id FROM models WHERE model=? AND provider=? AND id<>?")
+      .get(row.model, row.provider, Number(m.id))
+    if (clash) return { err: `目录里已经有「${row.model} @ ${row.provider}」了，同一供应商下模型名不能重复` }
     db.prepare(`UPDATE models SET model=?,provider=?,upstream=?,label=?,price_in=?,price_out=?,
                 price_cached=?,status=?,sort=?,note=? WHERE id=?`).run(
       row.model, row.provider, row.upstream, row.label, row.price_in, row.price_out,
       row.price_cached, row.status, row.sort, row.note, Number(m.id))
     return getModelRow(db, m.id)
+  }
+  if (insertOnly) {
+    const cur = db.prepare("SELECT * FROM models WHERE model=? AND provider=?").get(row.model, row.provider)
+    if (cur) return { ...cur, skipped: true }
   }
   db.prepare(`INSERT INTO models(model,provider,upstream,label,price_in,price_out,price_cached,status,sort,note)
               VALUES(?,?,?,?,?,?,?,?,?,?)
@@ -412,7 +494,10 @@ export function upsertModel(db, m) {
     row.price_cached, row.status, row.sort, row.note)
   return db.prepare("SELECT * FROM models WHERE model=? AND provider=?").get(row.model, row.provider) || null
 }
-export const deleteModel = (db, id) => { db.prepare("DELETE FROM models WHERE id=?").run(Number(id)); return { ok: true } }
+export function deleteModel(db, id) {
+  db.prepare("DELETE FROM models WHERE id=?").run(Number(id))
+  return { ok: true, droppedFromTiers: pruneTierModels(db) }
+}
 
 /**
  * 某个对外模型名的候选路由，按 sort、id 排序。
@@ -531,6 +616,43 @@ export const usageTotalSeries = (db, days = 30) =>
   db.prepare(`SELECT day, SUM(cost_usd) AS cost, SUM(calls) AS calls
               FROM usage_daily GROUP BY day ORDER BY day DESC LIMIT ?`).all(days)
 
+// ---- 对账聚合 ----------------------------------------------------------------
+// usage_log 早就记了 model 与 provider 两列，但一直没有任何一处按它们聚合 ——
+// 要回答"这个月硅基流动该收我多少""哪个模型最烧钱"只能 SSH 进去手写 SQL。
+// 单价配错会让计费系统性地偏、而且偏得很安静，对账是唯一能发现它的手段。
+// 全部按 day 字符串过滤（UTC 日切，与额度口径一致），闭区间 [from, to]。
+
+const RANGE = "WHERE day >= ? AND day <= ?"
+
+export const usageByModel = (db, from, to) => db.prepare(`
+  SELECT model, COUNT(*) AS calls, SUM(cost_usd) AS cost,
+         SUM(prompt_tokens) AS tin, SUM(completion_tokens) AS tout, SUM(cached_tokens) AS tcached
+  FROM usage_log ${RANGE} GROUP BY model ORDER BY cost DESC`).all(String(from), String(to))
+
+export const usageByProvider = (db, from, to) => db.prepare(`
+  SELECT provider, COUNT(*) AS calls, SUM(cost_usd) AS cost,
+         SUM(prompt_tokens) AS tin, SUM(completion_tokens) AS tout, SUM(cached_tokens) AS tcached
+  FROM usage_log ${RANGE} GROUP BY provider ORDER BY cost DESC`).all(String(from), String(to))
+
+export const usageByUser = (db, from, to) => db.prepare(`
+  SELECT u.username, u.display_name, u.tier, COUNT(*) AS calls, SUM(l.cost_usd) AS cost,
+         SUM(l.prompt_tokens) AS tin, SUM(l.completion_tokens) AS tout, SUM(l.cached_tokens) AS tcached
+  FROM usage_log l LEFT JOIN users u ON u.id = l.user_id
+  WHERE l.day >= ? AND l.day <= ?
+  GROUP BY l.user_id ORDER BY cost DESC`).all(String(from), String(to))
+
+export const usageBySkill = (db, from, to) => db.prepare(`
+  SELECT skill, COUNT(*) AS calls, SUM(cost_usd) AS cost
+  FROM usage_log ${RANGE} GROUP BY skill ORDER BY cost DESC`).all(String(from), String(to))
+
+/** 明细行（CSV 导出用）。上限兜底，别让一次导出把内存吃穿。 */
+export const usageRange = (db, from, to, limit = 50000) => db.prepare(`
+  SELECT l.ts, l.day, u.username, u.display_name, l.model, l.provider, l.skill,
+         l.prompt_tokens, l.completion_tokens, l.cached_tokens, l.cost_usd
+  FROM usage_log l LEFT JOIN users u ON u.id = l.user_id
+  WHERE l.day >= ? AND l.day <= ?
+  ORDER BY l.ts DESC, l.id DESC LIMIT ?`).all(String(from), String(to), Number(limit) || 50000)
+
 // ==== refresh token ===========================================================
 
 export function saveRefresh(db, userId, tokenHash, epoch, exp) {
@@ -546,9 +668,44 @@ export const purgeExpiredRefresh = (db, now = Date.now()) =>
 
 // ==== 审计 ====================================================================
 
+/**
+ * 写一条审计。**每个字段都截断**。
+ *
+ * 为什么：`login.fail` 的 actor 是【匿名请求体里的登录名】，长度不设限就等于给了未鉴权的
+ * 人一个往库里写任意长文本的口子 —— 灌几百条 5000 字的行，管理员一打开审计页就卡死，
+ * 库也白白涨。截断不影响可读性（真实登录名 ≤32 位），却把这个口子彻底焊上。
+ */
+const cut = (s, n) => { const t = String(s == null ? "" : s); return t.length > n ? t.slice(0, n) + "…" : t }
 export function addAudit(db, { actor = "", event, target = "", detail = "", ip = "" }) {
   db.prepare("INSERT INTO audit(ts,actor,event,target,detail,ip) VALUES(?,?,?,?,?,?)")
-    .run(Date.now(), String(actor), String(event), String(target), String(detail), String(ip))
+    .run(Date.now(), cut(actor, 64), cut(event, 64), cut(target, 128), cut(detail, 512), cut(ip, 64))
 }
-export const listAudit = (db, limit = 200) =>
-  db.prepare("SELECT * FROM audit ORDER BY ts DESC LIMIT ?").all(limit)
+
+/**
+ * 审计查询。`login.ok` / `llm.quota_block` 这类高频事件会把"上周我把谁改成了 plus 档"
+ * 冲出窗口，所以必须能按事件前缀 / 操作人 / 时间范围筛，并翻页。
+ * 兼容老写法 listAudit(db, 300)。
+ */
+export function listAudit(db, opts = 200) {
+  const o = typeof opts === "number" ? { limit: opts } : (opts || {})
+  const limit = Math.min(2000, Math.max(1, Number(o.limit) || 200))
+  const offset = Math.max(0, Number(o.offset) || 0)
+  const where = [], args = []
+  if (o.event) { where.push("event LIKE ? ESCAPE '\\'"); args.push(String(o.event).replace(/[\\%_]/g, (c) => "\\" + c) + "%") }
+  if (o.actor) { where.push("actor LIKE ? ESCAPE '\\'"); args.push("%" + String(o.actor).replace(/[\\%_]/g, (c) => "\\" + c) + "%") }
+  if (o.since) { where.push("ts >= ?"); args.push(Number(o.since)) }
+  if (o.until) { where.push("ts <= ?"); args.push(Number(o.until)) }
+  const w = where.length ? "WHERE " + where.join(" AND ") : ""
+  const total = db.prepare(`SELECT COUNT(*) AS n FROM audit ${w}`).get(...args).n
+  const rows = db.prepare(`SELECT * FROM audit ${w} ORDER BY ts DESC, id DESC LIMIT ? OFFSET ?`)
+    .all(...args, limit, offset)
+  return typeof opts === "number" ? rows : { rows, total }
+}
+
+/** 审计保留策略：只写不删的表迟早会把库撑大，且老行对运维毫无价值。 */
+export const purgeAudit = (db, keepDays = 180) =>
+  db.prepare("DELETE FROM audit WHERE ts < ?").run(Date.now() - Number(keepDays) * 86400_000).changes
+
+/** 事件类型清单（后台筛选下拉用） */
+export const auditEvents = (db) =>
+  db.prepare("SELECT event, COUNT(*) AS n FROM audit GROUP BY event ORDER BY event").all()
