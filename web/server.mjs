@@ -46,7 +46,11 @@ const CLOUD_LOCAL_TOKEN = "local-" + crypto.randomBytes(18).toString("hex")
 const MODEL_CFG_PATH = process.env.MODEL_CFG_PATH || path.join(__dirname, "model-config.json")   // 持久化所选自定义模型（含 key，已 gitignore）
 const OC_CONFIG_PATH = process.env.OC_CONFIG_PATH || path.join(ROOT, "opencode.json")            // opencode 项目配置：注册自定义 provider
 const CUSTOM_PROVIDER_ID = "custom"
-const loadModelCfg = () => { try { return JSON.parse(fs.readFileSync(MODEL_CFG_PATH, "utf8")) } catch { return null } }
+// 读 JSON 时统一剥 UTF-8 BOM：PowerShell 的 Out-File -Encoding utf8 与记事本另存都会写 BOM，
+// 而 JSON.parse 见了 BOM 直接抛 —— 症状是"配置文件在、内容也对，程序却当成没配"。
+const stripBom = (s) => (s.charCodeAt(0) === 0xfeff ? s.slice(1) : s)
+const readJsonFile = (p) => JSON.parse(stripBom(fs.readFileSync(p, "utf8")))
+const loadModelCfg = () => { try { return readJsonFile(MODEL_CFG_PATH) } catch { return null } }
 const saveModelCfg = (c) => { try { fs.writeFileSync(MODEL_CFG_PATH, JSON.stringify(c, null, 2)) } catch {} }
 // 给自定义/网关模型注入定价（USD / 每百万 token），否则 opencode 不知道价格 → session.cost 恒为 0 →
 // 每日成本额度与中途封顶全部失效。价格由 OC_COST_* 环境变量给（deploy/.env 集中配），缺省按 DeepSeek 常见价。
@@ -93,7 +97,7 @@ const enforceOcTools = (oc) => {
 // 把自定义 provider 合并进 ROOT/opencode.json（保留其它配置），opencode 启动时读取它
 const writeOcProvider = (cfg) => {
   let oc = {}
-  try { oc = JSON.parse(fs.readFileSync(OC_CONFIG_PATH, "utf8")) } catch {}
+  try { oc = readJsonFile(OC_CONFIG_PATH) } catch {}
   oc.provider = oc.provider || {}
   oc.provider[CUSTOM_PROVIDER_ID] = customProviderCfg(cfg)
   enforceOcTools(oc)
@@ -101,7 +105,7 @@ const writeOcProvider = (cfg) => {
 }
 const removeOcProvider = () => {
   try {
-    const oc = JSON.parse(fs.readFileSync(OC_CONFIG_PATH, "utf8"))
+    const oc = readJsonFile(OC_CONFIG_PATH)
     if (oc.provider) { delete oc.provider[CUSTOM_PROVIDER_ID]; if (!Object.keys(oc.provider).length) delete oc.provider }
     enforceOcTools(oc)
     fs.writeFileSync(OC_CONFIG_PATH, JSON.stringify(oc, null, 2))
@@ -110,7 +114,7 @@ const removeOcProvider = () => {
 // 启动时无条件确保 opencode.json 已禁用 question 工具（无论用不用自定义模型；opencode.json 已 gitignore）
 try {
   let oc = {}
-  try { oc = JSON.parse(fs.readFileSync(OC_CONFIG_PATH, "utf8")) } catch {}
+  try { oc = readJsonFile(OC_CONFIG_PATH) } catch {}
   enforceOcTools(oc)
   fs.writeFileSync(OC_CONFIG_PATH, JSON.stringify(oc, null, 2))
 } catch {}

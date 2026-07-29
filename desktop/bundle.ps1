@@ -236,7 +236,7 @@ Copy-Item "$Root\AGENTS.md" $App -Force
   "tools": { "question": false },
   "permission": { "external_directory": "allow" }
 }
-"@ | Out-File "$App\opencode.json" -Encoding utf8
+"@ | Write-Utf8NoBom "$App\opencode.json"
 New-Item -ItemType Directory -Force "$App\outputs", "$App\uploads" | Out-Null
 
 # matplotlibrc（Windows 字体版；机制同 deploy\matplotlibrc，见彼处长注释——
