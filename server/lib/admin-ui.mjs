@@ -388,7 +388,10 @@ function loadChannels(){
 }
 function paneChannels(){
   var d=S.chan;
-  if(!d){return loadChannels()}
+  // 【这里绝不能回调 loadChannels】loadChannels 会先 render()，而 render() 在 chan 页
+  // 又会调回本函数 —— 数据还没到时就形成 loadChannels → render → paneChannels → loadChannels
+  // 的死循环，页面直接爆栈。没数据就只画个占位，取数由 loadChannels 单向驱动。
+  if(!d){$('#pane').innerHTML='<section><h2>上游通道</h2><p class="mut">加载中…</p></section>';return}
   if(!d.enabled||d.err){
     $('#pane').innerHTML='<section><h2>上游通道</h2><div class="msg err" style="display:block">'+
       esc(d.err||'未接入 one-api')+'</div>'+
