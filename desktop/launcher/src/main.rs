@@ -145,6 +145,66 @@ fn unique_path(dir: &Path, name: &str) -> PathBuf {
     dir.join(format!("{stem} ({}){ext}", std::process::id()))
 }
 
+/// 建主窗口。抽成函数是为了能【建两次】：后台轮询线程里建失败时回主线程再试一次
+/// （见调用处注释）。两次走的是完全同一套配置，所以重试不会丢下载钩子或拖放设置。
+fn open_app_window(handle: &tauri::AppHandle) -> tauri::Result<tauri::WebviewWindow> {
+    let url: tauri::Url = format!("http://127.0.0.1:{PORT}/").parse().unwrap();
+    WebviewWindowBuilder::new(handle, "app", WebviewUrl::External(url))
+        .title("科研医学 Agent")
+        .inner_size(1280.0, 860.0)
+        // 【必须关掉】默认为 true 时，Tauri 会在 webview 层截走全部拖放事件去做
+        // 原生文件拖入，于是页面自己的 HTML5 拖放【整个失效】：
+        //   · 侧栏「拖会话进项目 / 拖到已持久化」拖不动；
+        //   · 上传区「拖拽文件到此」也收不到 drop。
+        // 而本应用的这两处用的都是标准 web 事件（dragstart/dragover/drop），
+        // 关掉后交回 webview 自己处理，两者都正常。代价是拿不到 Tauri 的原生
+        // 拖放事件——我们本来就没用它。
+        // （Tauri 自己的文档原话：This is required to use HTML5 drag and drop
+        //   APIs on the frontend on Windows.）
+        .disable_drag_drop_handler()
+        // 不接这个钩子，WebView2 对 <a download href="api/download?..."> 就是静默丢弃：
+        // 没有保存框、没有落盘、控制台也没报错，用户只看到"点了没反应"。
+        .on_download(|_wv, event| {
+            match event {
+                DownloadEvent::Requested { url, destination } => {
+                    // 壳里没有"另存为"对话框可用，直接定死到系统「下载」文件夹，
+                    // 完成后再用资源管理器指给用户看（见 Finished 分支）。
+                    let dir = downloads_dir();
+                    let _ = std::fs::create_dir_all(&dir);
+                    // 文件名来源：网关下载接口的 name 参数（query_pairs 已做 percent 解码）
+                    // → WebView2 依 Content-Disposition 预填在 destination 上的缺省名 → 兜底常量。
+                    let name = url
+                        .query_pairs()
+                        .find(|(k, _)| k == "name")
+                        .and_then(|(_, v)| safe_name(&v))
+                        .or_else(|| {
+                            destination
+                                .file_name()
+                                .and_then(|s| s.to_str())
+                                .and_then(safe_name)
+                        })
+                        .unwrap_or_else(|| "download".to_string());
+                    *destination = unique_path(&dir, &name);
+                }
+                DownloadEvent::Finished { path, success, .. } => {
+                    // 壳内没有可靠的前端提示通道（页面是网关发的，注入 JS 得挑时机），
+                    // 用资源管理器选中该文件是最省事又不会误报的"告诉用户存哪了"。
+                    if success {
+                        if let Some(p) = path {
+                            // explorer 的 /select 参数必须整段带引号，交给 Rust 自动加引号会解析失败
+                            let _ = Command::new("explorer")
+                                .raw_arg(format!("/select,\"{}\"", p.display()))
+                                .spawn();
+                        }
+                    }
+                }
+                _ => {}
+            }
+            true // 放行下载；返回 false 就是那个"点了没反应"
+        })
+        .build()
+}
+
 fn kill_port(port: u16) {
     let ps = format!(
         "Get-NetTCPConnection -LocalPort {port} -State Listen -ErrorAction SilentlyContinue | \
@@ -292,62 +352,48 @@ fn main() {
                             "首次启动需要初始化本地引擎，约需 10–60 秒…（已用 {} 秒）", i / 2));
                     }
                     if health_ok() {
-                        let url: tauri::Url = format!("http://127.0.0.1:{PORT}/").parse().unwrap();
-                        let win = WebviewWindowBuilder::new(&handle, "app", WebviewUrl::External(url))
-                            .title("科研医学 Agent")
-                            .inner_size(1280.0, 860.0)
-                            // 【必须关掉】默认为 true 时，Tauri 会在 webview 层截走全部拖放事件去做
-                            // 原生文件拖入，于是页面自己的 HTML5 拖放【整个失效】：
-                            //   · 侧栏「拖会话进项目 / 拖到已持久化」拖不动；
-                            //   · 上传区「拖拽文件到此」也收不到 drop。
-                            // 而本应用的这两处用的都是标准 web 事件（dragstart/dragover/drop），
-                            // 关掉后交回 webview 自己处理，两者都正常。代价是拿不到 Tauri 的原生
-                            // 拖放事件——我们本来就没用它。
-                            // （Tauri 自己的文档原话：This is required to use HTML5 drag and drop
-                            //   APIs on the frontend on Windows.）
-                            .disable_drag_drop_handler()
-                            // 不接这个钩子，WebView2 对 <a download href="api/download?..."> 就是静默丢弃：
-                            // 没有保存框、没有落盘、控制台也没报错，用户只看到"点了没反应"。
-                            .on_download(|_wv, event| {
-                                match event {
-                                    DownloadEvent::Requested { url, destination } => {
-                                        // 壳里没有"另存为"对话框可用，直接定死到系统「下载」文件夹，
-                                        // 完成后再用资源管理器指给用户看（见 Finished 分支）。
-                                        let dir = downloads_dir();
-                                        let _ = std::fs::create_dir_all(&dir);
-                                        // 文件名来源：网关下载接口的 name 参数（query_pairs 已做 percent 解码）
-                                        // → WebView2 依 Content-Disposition 预填在 destination 上的缺省名 → 兜底常量。
-                                        let name = url
-                                            .query_pairs()
-                                            .find(|(k, _)| k == "name")
-                                            .and_then(|(_, v)| safe_name(&v))
-                                            .or_else(|| {
-                                                destination
-                                                    .file_name()
-                                                    .and_then(|s| s.to_str())
-                                                    .and_then(safe_name)
-                                            })
-                                            .unwrap_or_else(|| "download".to_string());
-                                        *destination = unique_path(&dir, &name);
+                        // 【建窗失败不能静默】原来是 `if win.is_ok() { 关 splash }` 然后无条件 return：
+                        // 窗口没建出来就直接退出轮询线程，splash 永远转下去、一个字提示都没有。
+                        // 真机上正好撞到这一格：日志里 opencode 就绪、网关 listen、浏览器打开 27821
+                        // 一切正常，于是 health_ok 必然通过 —— 真正卡住的是【这之后】建窗口这一步。
+                        // 症状与"后端没起来"一模一样，却把人往后端排查上引，方向全错。
+                        let ok = match open_app_window(&handle) {
+                            Ok(_) => true,
+                            Err(e1) => {
+                                // 【回主线程再建一次】splash 自己就是个 WebView2 窗口且渲染正常，
+                                // 说明这台机器的 WebView2 是好的 —— 那更可能是"在后台线程里建窗"这条
+                                // 路本身脆（Windows 上窗口创建对线程敏感）。换主线程重试一次，
+                                // 而不是退化成"让用户自己开浏览器"：这样下载钩子与拖放设置全都保住。
+                                let (tx, rx) = std::sync::mpsc::channel::<Result<(), String>>();
+                                let h2 = handle.clone();
+                                let posted = handle.run_on_main_thread(move || {
+                                    let _ = tx.send(
+                                        open_app_window(&h2).map(|_| ()).map_err(|e| e.to_string()),
+                                    );
+                                });
+                                // 主线程若已卡死，recv 会一直挂着；给个上限，别把这里也变成无声等待
+                                let second = match (posted, rx.recv_timeout(Duration::from_secs(20))) {
+                                    (Ok(()), Ok(r)) => r,
+                                    (Ok(()), Err(_)) => Err("主线程 20 秒内没有响应".into()),
+                                    (Err(e), _) => Err(e.to_string()),
+                                };
+                                match second {
+                                    Ok(()) => true,
+                                    Err(e2) => {
+                                        splash_msg(&handle, &format!(
+                                            "本地服务已就绪，但主窗口没能创建。\n\
+                                             后台线程：{e1}\n主线程重试：{e2}\n\n\
+                                             后端是好的（网关已在 http://127.0.0.1:{PORT} 上），\
+                                             卡住的只是本程序的窗口这一层。\n\n\
+                                             现在就能用的办法：用浏览器打开 http://127.0.0.1:{PORT}\n\
+                                             功能与本窗口完全一致（本机免登录），只要本程序开着就一直可用。\n\n\
+                                             请把这段文字和安装目录 bundle\\app 下的 gateway.log 发给技术支持。"));
+                                        false
                                     }
-                                    DownloadEvent::Finished { path, success, .. } => {
-                                        // 壳内没有可靠的前端提示通道（页面是网关发的，注入 JS 得挑时机），
-                                        // 用资源管理器选中该文件是最省事又不会误报的"告诉用户存哪了"。
-                                        if success {
-                                            if let Some(p) = path {
-                                                // explorer 的 /select 参数必须整段带引号，交给 Rust 自动加引号会解析失败
-                                                let _ = Command::new("explorer")
-                                                    .raw_arg(format!("/select,\"{}\"", p.display()))
-                                                    .spawn();
-                                            }
-                                        }
-                                    }
-                                    _ => {}
                                 }
-                                true // 放行下载；返回 false 就是眼下要修的那个"静默无反应"
-                            })
-                            .build();
-                        if win.is_ok() {
+                            }
+                        };
+                        if ok {
                             if let Some(w) = handle.get_webview_window("splash") {
                                 let _ = w.close();
                             }
