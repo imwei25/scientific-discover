@@ -78,7 +78,8 @@ CREATE TABLE IF NOT EXISTS tiers (
   models     TEXT NOT NULL DEFAULT '',  -- 允许清单，逗号分隔；'' = 只允许上面那个默认模型
   skills     TEXT NOT NULL DEFAULT '',  -- 逗号分隔；'' = 全部技能
   note       TEXT NOT NULL DEFAULT '',
-  sort       INTEGER NOT NULL DEFAULT 0
+  sort       INTEGER NOT NULL DEFAULT 0,
+  max_conc   INTEGER NOT NULL DEFAULT 0 -- 该档单用户并发上限；0 = 跟随全局（见 queue.mjs）
 );
 
 -- ==== 模型供应商与模型目录 ====================================================
@@ -198,6 +199,8 @@ function ensureColumns(db) {
   const has = (t, c) => db.prepare(`PRAGMA table_info(${t})`).all().some((x) => x.name === c)
   if (!has("tiers", "models")) db.exec("ALTER TABLE tiers ADD COLUMN models TEXT NOT NULL DEFAULT ''")
   if (!has("usage_log", "provider")) db.exec("ALTER TABLE usage_log ADD COLUMN provider TEXT NOT NULL DEFAULT ''")
+  // 0 = 跟随全局并发限额；老库升上来全是 0，与加这一列之前的行为逐字节一致
+  if (!has("tiers", "max_conc")) db.exec("ALTER TABLE tiers ADD COLUMN max_conc INTEGER NOT NULL DEFAULT 0")
 }
 
 function migrate(db, from) {
@@ -365,15 +368,15 @@ export const listTiers = (db) => db.prepare("SELECT * FROM tiers ORDER BY sort, 
 export const getTier = (db, key) => db.prepare("SELECT * FROM tiers WHERE key=?").get(String(key)) || null
 
 export function upsertTier(db, t) {
-  db.prepare(`INSERT INTO tiers(key,daily_usd,monthly_usd,model,models,skills,note,sort)
-              VALUES(?,?,?,?,?,?,?,?)
+  db.prepare(`INSERT INTO tiers(key,daily_usd,monthly_usd,model,models,skills,note,sort,max_conc)
+              VALUES(?,?,?,?,?,?,?,?,?)
               ON CONFLICT(key) DO UPDATE SET
                 daily_usd=excluded.daily_usd, monthly_usd=excluded.monthly_usd,
                 model=excluded.model, models=excluded.models, skills=excluded.skills,
-                note=excluded.note, sort=excluded.sort`).run(
+                note=excluded.note, sort=excluded.sort, max_conc=excluded.max_conc`).run(
     String(t.key), Number(t.daily_usd) || 0, Number(t.monthly_usd) || 0,
     String(t.model || ""), String(t.models || ""), String(t.skills || ""),
-    String(t.note || ""), Number(t.sort) || 0)
+    String(t.note || ""), Number(t.sort) || 0, Math.max(0, Math.floor(Number(t.max_conc) || 0)))
   return getTier(db, t.key)
 }
 export function deleteTier(db, key) {
@@ -568,6 +571,8 @@ export function resolveEntitlement(db, user) {
     models: allowed,
     // '' = 不限（全部技能）；否则是白名单数组
     skills: csv(skillsRaw),
+    // 单用户并发上限：0 = 跟随全局（网关的并发闸现查现用，不进 access key，改完立刻生效）
+    maxConc: Math.max(0, Math.floor(Number(t?.max_conc) || 0)),
   }
 }
 
@@ -716,6 +721,25 @@ export function publicNotice(db) {
     id: n.id, text: n.text, level: n.level,
     minClientVersion: n.minClientVersion, downloadUrl: n.downloadUrl, updatedAt: n.updatedAt,
   }
+}
+
+// ==== 并发限额 ================================================================
+//
+// 【为什么存库而不是只读 env】管理员要能在后台把"同时最多打几个上游请求"调大调小并**立刻
+// 生效**（上游换套餐、白天人多晚上人少都会要改）。写在 env 里就得改文件 + 重启进程，而重启
+// 会把所有在飞的长任务连根拔掉。所以：库是权威，env 只作为**首次启动的初值**。
+//
+// 与公告同理，一行 meta 就够，不值得为它建表。
+export function getLimits(db, defaults = {}) {
+  const row = db.prepare("SELECT v FROM meta WHERE k='llm_limits'").get()
+  let saved = null
+  if (row) { try { saved = JSON.parse(row.v) } catch { saved = null } }
+  return { ...defaults, ...(saved || {}) }
+}
+export function setLimits(db, limits) {
+  db.prepare("INSERT INTO meta(k,v) VALUES('llm_limits',?) ON CONFLICT(k) DO UPDATE SET v=excluded.v")
+    .run(JSON.stringify(limits))
+  return limits
 }
 
 // ==== 审计 ====================================================================

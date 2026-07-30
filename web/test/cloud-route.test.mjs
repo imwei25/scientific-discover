@@ -333,6 +333,62 @@ test("管理员撤掉某模型：刷新档案后本机自动落回默认模型�
   assert.deepEqual((await r.gw.req("/api/models")).json.models.map((x) => x.model), ["tier-model"])
 })
 
+// ---- 云端排队（并发满时前端要能显示"等一下、你排第几"）----
+
+test("云端并发满：排队期间能问到自己的位次；等超时回结构化 503", async (t) => {
+  const gate = []                       // 每个元素 = 放这一单过去的函数
+  const r = await rig((req, res) => {
+    req.resume()
+    req.on("end", () => gate.push(() => {
+      if (res.writableEnded) return
+      res.writeHead(200, { "content-type": "application/json" })
+      res.end(JSON.stringify({ usage: { prompt_tokens: 1, completion_tokens: 1 } }))
+    }))
+  })
+  t.after(async () => { gate.forEach((f) => f()); await r.close() })
+  await loginReady(r)
+  // 后台把全站并发压到 1、最长等待 4 秒
+  const lim = await r.be.admin("/admin/api/limits", { method: "POST", body: { maxConcurrent: 1, maxWaitMs: 4000 } })
+  assert.equal(lim.status, 200)
+
+  const CHAT = "/cloud/v1/chat/completions"
+  const H = { authorization: "Bearer " + r.gw.cfg().apiKey }
+  const until = async (fn, ms = 4000) => {
+    const t0 = Date.now()
+    while (Date.now() - t0 < ms) { if (await fn()) return true; await new Promise((x) => setTimeout(x, 25)) }
+    return false
+  }
+  const p1 = r.gw.req(CHAT, { method: "POST", body: { model: "x" }, headers: H })
+  assert.ok(await until(() => gate.length === 1), "第一单该直接到上游")
+
+  const p2 = r.gw.req(CHAT, { method: "POST", body: { model: "x" }, headers: H })
+  // 这就是前端"正在排队，前面还有 N 个"的数据来源（本机网关每两秒问一次同一个口）
+  const Cloud = await import("../cloud-account.mjs")
+  assert.ok(await until(async () => {
+    const q = await Cloud.fetchQueue()
+    return q.ok && q.queue && q.queue.waitingMine === 1
+  }), "排队中应当问得到自己在队里")
+  const snap = (await Cloud.fetchQueue()).queue
+  assert.equal(snap.position, 1)
+  assert.equal(snap.running, 1)
+  assert.equal(snap.limit, 1)
+  assert.equal(gate.length, 1, "排队期间一个字节都不该到上游")
+
+  // 本机网关自己的探测器也该已经认出"在排队"：它据此给前端推 queue 事件、给首输出看门狗续命
+  // （不续命的话排队超过 180 秒会被误判成"模型服务不可达"而中止本轮）
+  assert.ok(await until(() => {
+    const st = r.gw.mod.cloudQueueState()
+    return st.blocking && st.last && st.last.queued
+  }), "本机探测器应当探到排队状态：" + JSON.stringify(r.gw.mod.cloudQueueState()))
+  assert.equal(r.gw.mod.cloudQueueState().last.position, 1)
+
+  const x2 = await p2                    // 等不到位子 → 明确失败，而不是无声地悬着
+  assert.equal(x2.status, 503)
+  assert.equal(x2.json.error.code, "QUEUE_TIMEOUT")
+  gate[0]()
+  assert.equal((await p1).status, 200)
+})
+
 // ---- 上游报错要说人话（此前是"空气泡"）----
 
 test("上游错误翻成人话：余额不足/密钥失效/限流各给各的下一步动作", async (t) => {
@@ -350,6 +406,12 @@ test("上游错误翻成人话：余额不足/密钥失效/限流各给各的下
   assert.match(D({ name: "ProviderAuthError", data: { message: "invalid api key" } }, "custom"), /密钥/)
   assert.match(D({ name: "ProviderAuthError", data: { message: "invalid api key" } }, "custom"), /api-config/, "用自己 API 的用户该被指到自查入口")
   assert.match(D({ name: "APIError", data: { statusCode: 429, message: "rate limit" } }, "cloud"), /限流|额度/)
+  // 云端排队排不上、上游限速：既不是配置问题也不是故障，别把人指去 api-config 白折腾
+  const qt = D({ name: "APIError", data: { statusCode: 503, message: '{"error":{"code":"QUEUE_TIMEOUT"}}' } }, "custom")
+  assert.match(qt, /排队/)
+  assert.doesNotMatch(qt, /api-config/)
+  assert.match(D({ name: "APIError", data: { statusCode: 503, message: '{"error":{"code":"QUEUE_FULL"}}' } }, "cloud"), /排队|人太多/)
+  assert.match(D({ name: "APIError", data: { statusCode: 429, message: '{"error":{"code":"UPSTREAM_RATE_LIMITED"}}' } }, "cloud"), /限速/)
   assert.match(D({ name: "APIError", data: { statusCode: 503, message: "" } }, "cloud"), /异常|重试/)
   assert.match(D({ name: "MessageOutputLengthError", data: {} }, "cloud"), /长度上限|截断/)
   // 兜底也必须是一句完整的话，不能是空字符串（空 = 又回到"空气泡"）

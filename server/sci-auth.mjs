@@ -23,6 +23,7 @@ import * as A from "./lib/auth.mjs"
 import * as OneAPI from "./lib/oneapi.mjs"
 import * as Upstream from "./lib/upstream.mjs"
 import { llmForward, GATEWAY_PATH_PREFIX } from "./lib/gateway.mjs"
+import { createQueue, sanitizeLimits, LIMIT_DEFAULTS } from "./lib/queue.mjs"
 import { ADMIN_HTML } from "./lib/admin-ui.mjs"
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
@@ -95,6 +96,18 @@ function keySecret() {
   return s
 }
 const KEY_SECRET = keySecret()
+
+// ==== 并发闸 ==================================================================
+// 【库是权威，env 只给初值】上限要能在后台改并**立刻生效**（上游换套餐、白天人多晚上人少
+// 都会要改），改 env 得重启进程，而重启会把所有在飞的长任务连根拔掉。所以启动时：库里有
+// 记录就用库里的，没有就拿 env（再没有就用 queue.mjs 的默认值：全站不限，与老部署一致）。
+const ENV_LIMITS = {
+  maxConcurrent: envNum("LLM_MAX_CONCURRENCY", LIMIT_DEFAULTS.maxConcurrent),
+  perUser: envNum("LLM_MAX_CONCURRENCY_PER_USER", LIMIT_DEFAULTS.perUser),
+  maxQueue: envNum("LLM_QUEUE_MAX", LIMIT_DEFAULTS.maxQueue),
+  maxWaitMs: envNum("LLM_QUEUE_WAIT_MS", LIMIT_DEFAULTS.maxWaitMs),
+}
+export const queue = createQueue({ limits: sanitizeLimits(DB.getLimits(db, ENV_LIMITS)), log })
 
 // ==== HTTP 小工具 =============================================================
 const json = (res, code, obj) => {
@@ -357,6 +370,28 @@ async function handleClientApi(req, res, pathname) {
     const notice = DB.publicNotice(db)
     const cv = String(req.headers["x-client-version"] || "")
     return json(res, 200, { ok: true, notice, needUpgrade: needsUpgrade(notice, cv), clientVersion: cv })
+  }
+
+  /**
+   * 排队状态。客户端在"请求已发出、响应头还没回来"的那段时间里问这里，好把
+   * 「正在排队，前面还有 N 个」告诉用户，而不是干转圈几分钟。
+   *
+   * 【为什么不做成"排队时先回一个通知"】/llm 那条是标准 OpenAI 协议，先塞一段自定义内容
+   * 就把协议弄脏了（opencode / 各家 SDK 都会当成畸形响应）。分开一个只读内存的小口最干净：
+   * 不碰库、不碰上游，可以放心每两秒问一次。
+   *
+   * requireFullScope:false —— 还没改初始口令的人不会发起模型调用，但让它能通对齐 /api/notice
+   * 的口径，少一处"为什么这个口 403 了"的排查。
+   */
+  if (req.method === "GET" && pathname === "/api/queue") {
+    const au = authClient(req, { requireFullScope: false })
+    if (!au.ok) return fail(res, au.status, au.code, au.message)
+    const q = queue.snapshot(au.user.id)
+    // perUser 报【对这个人实际生效的那个】：档位设了就是档位的值。客户端拿它做提示文案，
+    // 报全局默认值会让"我这档明明能开 3 路"的用户看到 1，纯属误导。
+    const ent = DB.resolveEntitlement(db, au.user)
+    if (ent.maxConc > 0) q.perUser = ent.maxConc
+    return json(res, 200, { ok: true, queue: q })
   }
 
   if (req.method === "GET" && pathname === "/api/me") {
@@ -755,10 +790,16 @@ async function handleAdminApi(req, res, pathname) {
     // 后台是唯一能建出这种档位的地方（新增对话框默认就是空），所以闸设在这里。
     if (!String(b.model || "").trim())
       return json(res, 400, { ok: false, err: "请填默认模型——留空会让该档用户可以自选任意模型名，绕过允许清单" })
+    if (b.maxConc !== undefined && b.maxConc !== null && b.maxConc !== "") {
+      const n = Number(b.maxConc)
+      if (!Number.isFinite(n) || n < 0 || Math.floor(n) !== n)
+        return json(res, 400, { ok: false, err: "单用户并发须是 ≥0 的整数（0 = 跟随全局）" })
+    }
     const before = DB.getTier(db, key)
     DB.upsertTier(db, {
       key, daily_usd: b.dailyUSD, monthly_usd: b.monthlyUSD,
       model: b.model, models: b.models, skills: b.skills, note: b.note, sort: b.sort,
+      max_conc: b.maxConc,
     })
     const after = DB.getTier(db, key)
     // 改档位定义影响该档全体用户的额度/默认模型/技能 → 全部吊销 key，下次登录按新权限走。
@@ -767,6 +808,7 @@ async function handleAdminApi(req, res, pathname) {
     // 改了立刻生效。为它踢人下线纯属白踢：管理员每加一个可选模型就把该档全体用户
     // 强制登出（bumpEpoch 连 refresh 一起作废 = 要重新输口令），而"加个模型给大家用"
     // 本该是无感的。客户端下次拉档案（重启 / 账号面板点刷新）就能看到新模型。
+    // 【并发上限同理不吊销】它也不在票据里，网关每一单现查现用，改完下一个请求就按新值排队。
     const revoking = !before || ["daily_usd", "monthly_usd", "model", "skills"].some((k) => before[k] !== after[k])
     const affected = revoking ? db.prepare("SELECT id FROM users WHERE tier=?").all(key) : []
     for (const r of affected) DB.bumpEpoch(db, r.id)
@@ -931,6 +973,34 @@ async function handleAdminApi(req, res, pathname) {
     return json(res, 200, { ok: true, notice: n })
   }
 
+  // ---- 并发与排队 ----
+  // 上游按并发/RPM 限速，人一多就是一片 429（客户端只表现为"这轮没输出"）。这里配的是
+  // 「同时最多放几个请求打上游」，超出的在网关排队等位，客户端会显示"前面还有几个"。
+  if (req.method === "GET" && pathname === "/admin/api/limits") {
+    const st = queue.stats()
+    // 队里在跑的是谁：只回名字，够运营判断"是不是某个人把位子占满了"
+    const names = st.byUser.map((r) => {
+      const u = DB.getUserById(db, r.userId)
+      return { userId: r.userId, running: r.running, username: u?.username || "(已删除)", displayName: u?.display_name || "" }
+    })
+    return json(res, 200, { ok: true, limits: st.limits, defaults: LIMIT_DEFAULTS, stats: { ...st, byUser: names }, tiers: DB.listTiers(db) })
+  }
+  if (req.method === "POST" && pathname === "/admin/api/limits") {
+    const b = await readBody(req)
+    for (const [k, label] of [["maxConcurrent", "全站并发"], ["perUser", "单用户并发"],
+      ["maxQueue", "排队上限"], ["maxWaitMs", "最长等待(ms)"]]) {
+      if (b[k] === undefined || b[k] === null || b[k] === "") continue
+      const n = Number(b[k])
+      // 【必须自己校验】sanitizeLimits 对非法值是"忽略、保留原值"，静默得让管理员以为改成功了
+      if (!Number.isFinite(n) || n < 0 || Math.floor(n) !== n)
+        return json(res, 400, { ok: false, err: `${label}须是 ≥0 的整数（0 = 不限）` })
+    }
+    const next = queue.setLimits(b)
+    DB.setLimits(db, next)   // 库是权威：重启后仍按这个值跑
+    audit("limits.set", { actor: "admin", ip, detail: JSON.stringify(next) })
+    return json(res, 200, { ok: true, limits: next })
+  }
+
   // ---- 对账：按模型 / 供应商 / 用户 / 技能聚合，外加 CSV 导出 ----
   //
   // 为什么必须有：usage_log 一直记着 model 与 provider 两列，却没有任何一处按它们聚合，
@@ -1050,6 +1120,7 @@ export const server = http.createServer(async (req, res) => {
 const ctx = {
   db, CFG, log, audit, clientIp,
   authClient, json, fail,
+  queue,
   resolveEntitlement: (u) => DB.resolveEntitlement(db, u),
   modelRoutes: (m) => DB.modelRoutes(db, m),
   recordUsage: (uid, rec) => DB.recordUsage(db, uid, rec),

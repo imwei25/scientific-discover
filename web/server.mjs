@@ -1117,6 +1117,11 @@ export function describeModelError(err, route) {
     ? "请在对话框输入 api-config 检查你自己的 API 配置。"
     : "请联系管理员（可在后台「模型供应商」页换一家或充值）。"
   const tail = raw ? `（上游原话：${raw.slice(0, 160)}）` : ""
+  // 云端网关自己的两个"排队排不上"错误码：它们既不是配置问题也不是上游故障，用户该做的
+  // 只有"稍后再试"，别把人指去 api-config 白折腾一遍。
+  if (/QUEUE_TIMEOUT/.test(raw)) return "云端排队超时：此刻同时使用的人太多，本轮未能开始。请稍后重试（管理员可在后台「并发与排队」调大上限）。"
+  if (/QUEUE_FULL/.test(raw)) return "云端排队已满：此刻同时使用的人太多，本轮未能开始。请稍等几分钟再试。"
+  if (/UPSTREAM_RATE_LIMITED/.test(raw)) return "上游模型服务正在限速，本轮未能生成。稍等片刻再试即可（这不是你的额度问题）。"
   const balance = code === 402 || /insufficient|balance|欠费|余额|arrears|payment|billing/i.test(raw)
   if (balance) return `上游模型账户余额不足或已欠费，本轮未能生成。${who}${tail}`
   if (code === 401 || code === 403 || err?.name === "ProviderAuthError")
@@ -1181,15 +1186,22 @@ function startJob(sid, sentText, modId) {
   // failed（带原因）而不是 aborted：用户没点终止，得让他知道为什么停了、去哪儿改。
   // failed 是前端已有的展示通道（同 402 余额不足等上游错误），会渲染成 "⚠ …" 并收尾本轮。
   // 不 await session.abort：上游不可达时这条 HTTP 本身也可能慢，广播和收场不能被它拖住。
-  watchdog = setTimeout(() => {
+  // 云端排队时把这条提示推给前端（"正在排队，前面还有 N 个"）。定义在这里是因为要用 broadcast；
+  // 触发方是 probeCloudQueue（见「云端排队感知」一节），它按用户维度推给所有在跑的轮。
+  job.onQueue = (info) => { if (!job.finished) broadcast("queue", info) }
+  const fire = () => {
     watchdog = null
     if (job.finished || sawOutput) return
+    // 【正在云端排队/被上游限速 → 续命，别当成"模型不可达"】排队几分钟是正常的（就是它挤在
+    // 别人后面），这时掐掉本轮既浪费了排到的位子，报的原因还是错的（会把人指去改 API 配置）。
+    if (cloudQueueBlocking()) { watchdog = setTimeout(fire, 30_000); watchdog.unref?.(); return }
     job.timedOut = true   // 让 prompt 返回后的分支知道本轮已收过场，别再广播第二条错误
     console.error(`[watchdog] 会话 ${sid}：${FIRST_EVENT_TIMEOUT_MS}ms 内未收到本轮任何模型事件，判定模型服务不可达，自动中止本轮`)
     broadcast("failed", { message: `连接模型服务失败或超时（${Math.round(FIRST_EVENT_TIMEOUT_MS / 1000)} 秒内模型无任何响应），本轮已自动中止。请检查 API 设置（在对话框输入 api-config 打开）后重试。` })
     client.session.abort({ path: { id: sid } }).catch(() => {})
     finish()
-  }, FIRST_EVENT_TIMEOUT_MS)
+  }
+  watchdog = setTimeout(fire, FIRST_EVENT_TIMEOUT_MS)
   if (typeof watchdog.unref === "function") watchdog.unref()   // 纯守护定时器，别让它拖住进程退出
   ;(async () => {
     // 【必须订阅 /global/event 而非 /event】实测（裸 curl 对照抓包）：本部署把每个会话建在
@@ -1420,6 +1432,87 @@ function attachJob(job, req, res) {
   req.on("close", () => job.subs.delete(res))
 }
 
+// ==== 云端排队感知 ===========================================================
+//
+// 云端的并发闸（sci-auth 的 queue.mjs）满了以后，请求会在服务端排队等位。这段时间 HTTP 上
+// 什么都看不到——响应头还没回——用户面对的就是一个不动的转圈，既不知道在等什么也不知道要
+// 等多久，而这一等可能好几分钟。
+//
+// 所以：只要有请求"已发出、还没回响应头"超过 1.2 秒，就每两秒问一次云端的 /api/queue，
+// 把「正在排队，前面还有 N 个」推给前端（chat 流的 queue 事件），同时给首输出看门狗续命 ——
+// 否则排队超过 OC_FIRST_EVENT_TIMEOUT_MS 会被误判成"模型服务不可达"而中止本轮。
+//
+// 【为什么不让云端在排队时先回一段通知】/llm 那条是标准 OpenAI 协议，先塞自定义内容就把协议
+// 弄脏了（opencode 与各家 SDK 都会当成畸形响应）。分开一个只读内存的小口最干净。
+//
+// 【为什么推给"所有在跑的轮"】云端的闸是按用户/全站算的：这台机器上任何一轮撞上排队，同一
+// 用户其它在跑的轮也一样在争同一批位子，所以这条提示对它们都成立。桌面版通常也只有一轮在跑。
+const CLOUD_Q_PROBE_DELAY_MS = 1200      // 发出多久还没回响应头才开始问队况（正常调用远快于此）
+const CLOUD_Q_PROBE_EVERY_MS = 2000
+const CLOUD_Q_STALE_MS = 15_000          // 探到的"正在排队"多久算过期（看门狗据它续命）
+let cloudInflight = 0                    // 已发往云端、还没拿到响应头的请求数
+let cloudQTimer = null
+let cloudQBlockedUntil = 0               // 在这个时刻之前，认为"慢是因为在排队/被限速"
+let cloudQLast = null                    // 最近一次探到的队况（仅用于日志去重）
+
+/** 此刻是不是"在云端排队/被上游限速"——看门狗用它判断该不该续命而不是掐掉本轮 */
+const cloudQueueBlocking = () => Date.now() < cloudQBlockedUntil
+
+/** 仅供测试与排障：当前探到的队况。前端不读这里（它收 chat 流的 queue 事件）。 */
+export const cloudQueueState = () => ({ inflight: cloudInflight, blocking: cloudQueueBlocking(), last: cloudQLast })
+
+function broadcastQueue(info) {
+  for (const j of jobs.values()) { if (j.running && j.onQueue) { try { j.onQueue(info) } catch {} } }
+}
+
+async function probeCloudQueue() {
+  if (cloudInflight <= 0) return
+  let q = null
+  try { const r = await Cloud.fetchQueue(); if (r.ok) q = r.queue } catch { /* 纯附加信息，问不到就算了 */ }
+  if (!q || cloudInflight <= 0) return
+  const queued = (q.waitingMine || 0) > 0
+  const limited = !!q.rateLimited
+  if (!queued && !limited) {
+    // 刚才在排、现在轮到了 → 明确告诉前端一声，好把"排队中"的提示换回"等待模型输出"
+    if (cloudQLast) { cloudQLast = null; broadcastQueue({ queued: false }) }
+    return
+  }
+  cloudQBlockedUntil = Date.now() + CLOUD_Q_STALE_MS
+  const info = {
+    queued: true, position: q.position || 0, waiting: q.waiting || 0, running: q.running || 0,
+    limit: q.limit || 0, etaMs: q.etaMs || 0, waitedMs: q.waitedMs || 0,
+    rateLimited: q.rateLimited || null,
+  }
+  if (!cloudQLast) console.log(`[cloud] 云端正忙：${limited ? "上游限速中" : `排队第 ${info.position} 位（共 ${info.waiting} 个在等，${info.running} 个在跑）`}`)
+  cloudQLast = info
+  broadcastQueue(info)
+}
+
+/** 包住一次云端调用：在途期间开着探测器，回来就关 */
+async function withQueueWatch(fn) {
+  cloudInflight++
+  if (!cloudQTimer) {
+    // 【用 setTimeout 自我续期而不是 setInterval】探测本身是异步的，setInterval 在网络慢时会
+    // 把请求叠起来；而且 inflight 归零后要能干净停掉。
+    const tickQ = async () => {
+      cloudQTimer = null
+      if (cloudInflight <= 0) return
+      await probeCloudQueue()
+      if (cloudInflight > 0) { cloudQTimer = setTimeout(tickQ, CLOUD_Q_PROBE_EVERY_MS); cloudQTimer.unref?.() }
+    }
+    cloudQTimer = setTimeout(tickQ, CLOUD_Q_PROBE_DELAY_MS)
+    cloudQTimer.unref?.()
+  }
+  try { return await fn() }
+  finally {
+    cloudInflight--
+    if (cloudInflight <= 0) {
+      if (cloudQTimer) { clearTimeout(cloudQTimer); cloudQTimer = null }
+      if (cloudQLast) { cloudQLast = null; broadcastQueue({ queued: false }) }
+    }
+  }
+}
+
 // ==== 云端账号转发 =========================================================
 // 把 opencode 打到本机 /cloud/v1/* 的请求，贴上当前 access key 转给 sci-auth 的 /llm/*。
 // 计量、额度、模型强制、技能白名单全在服务端做，这里只做三件事：贴 key、透传、过期重试。
@@ -1453,7 +1546,7 @@ async function cloudForward(req, res, u) {
   }
 
   let out
-  try { out = await once(false) } catch (e) { return send(res, 502, "application/json", JSON.stringify({ error: { message: "连不上云端：" + (e?.message || "网络错误") } })) }
+  try { out = await withQueueWatch(() => once(false)) } catch (e) { return send(res, 502, "application/json", JSON.stringify({ error: { message: "连不上云端：" + (e?.message || "网络错误") } })) }
   if (out.authFail) {
     const err = out.authFail.error || {}
     return send(res, 401, "application/json", JSON.stringify({ error: { code: err.code, message: err.message || "云端账号未就绪" } }))
@@ -1465,7 +1558,7 @@ async function cloudForward(req, res, u) {
     try { code = (await r.clone().json())?.error?.code || "" } catch {}
     if (code === "KEY_EXPIRED" || code === "KEY_INVALID" || code === "KEY_MISSING") {
       try {
-        const again = await once(true)
+        const again = await withQueueWatch(() => once(true))
         if (again.authFail) {
           const err = again.authFail.error || {}
           return send(res, 401, "application/json", JSON.stringify({ error: { code: err.code, message: err.message || "登录已失效，请重新登录" } }))

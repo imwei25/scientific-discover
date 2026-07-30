@@ -186,6 +186,23 @@ export async function fetchNotice() {
   return { ok: true, notice: r.data.notice || null, needUpgrade: !!r.data.needUpgrade, clientVersion: r.data.clientVersion || "" }
 }
 
+/**
+ * 问一次"我在云端排第几"。
+ *
+ * 【为什么需要它】云端的并发闸满了以后，请求会在服务端排队等位 —— HTTP 上什么都看不到
+ * （响应头还没回），本地网关只能干等，用户看到的就是一个不动的转圈。这个口只读服务端内存里
+ * 的一个计数，可以放心每两秒问一次，好把"正在排队，前面还有 N 个"如实告诉用户。
+ *
+ * 【刻意不重试、不抛错】它是纯附加信息：问不到就当"不知道"，绝不能影响正在飞的那一单。
+ */
+export async function fetchQueue() {
+  const a = await currentAccess()
+  if (!a.ok) return a
+  const r = await api("/api/queue", { token: a.token })
+  if (!r.ok) return r
+  return { ok: true, queue: r.data.queue || null }
+}
+
 /** 给界面用的状态摘要（不含任何凭证） */
 export function status() {
   const s = loadState()

@@ -275,12 +275,12 @@ test("计量：多字节汉字被切在两个 chunk 之间也不影响解析（S
 
 test("计量：上游报错（4xx/5xx）不计费，状态码与错误体透传", async (t) => {
   const r = await rig({
-    upstream: (_q, res) => { res.writeHead(429, { "content-type": "application/json" }); res.end('{"error":{"message":"upstream busy"}}') },
+    upstream: (_q, res) => { res.writeHead(400, { "content-type": "application/json" }); res.end('{"error":{"message":"bad request"}}') },
   })
   t.after(() => r.close())
   const x = await r.call({ model: "m" })
-  assert.equal(x.status, 429)
-  assert.equal(x.json.error.message, "upstream busy")
+  assert.equal(x.status, 400)
+  assert.equal(x.json.error.message, "bad request", "请求本身的问题原样透传才有诊断价值")
   assert.equal(r.rows().length, 0, "上游失败不该记账")
 })
 
@@ -390,6 +390,220 @@ test("技能：档位未设白名单 = 全部放行", async (t) => {
   const r = await rig({ tier: { key: "all", dailyUSD: 0, model: "m", skills: "" } })
   t.after(() => r.close())
   assert.equal((await r.call({ model: "m" }, { "x-skill": "any-skill-id" })).status, 200)
+})
+
+// ---- 并发闸 / 排队 ----
+//
+// 用一个"可控上游"：请求到达后【挂住不回】，直到测试自己放闸。这样才能稳定构造出
+// "第一单还在飞、第二单撞上并发上限"的时刻 —— 靠 sleep 去凑是必然会偶发的。
+function gatedUpstream() {
+  const arrived = []                 // 每个元素是 release()：调用它这一单才回 200
+  const h = (req, res) => {
+    const chunks = []
+    req.on("data", (c) => chunks.push(c))
+    req.on("end", () => {
+      let done = false
+      // 【放闸必须幂等】用例结尾统一"把还没放的都放掉"，而其中一部分在用例里已经放过了；
+      // 不幂等的话收尾时就会对同一个响应第二次 writeHead，整条用例挂在清理钩子上。
+      arrived.push(() => {
+        if (done || res.writableEnded) return
+        done = true
+        res.writeHead(200, { "content-type": "application/json" })
+        res.end(JSON.stringify({ model: "m", usage: { prompt_tokens: 10, completion_tokens: 5 } }))
+      })
+    })
+  }
+  h.arrived = arrived
+  return h
+}
+/** 等条件成立（最多 waitMs），比 sleep 稳 */
+async function until(fn, waitMs = 3000) {
+  const t0 = Date.now()
+  while (Date.now() - t0 < waitMs) {
+    if (fn()) return true
+    await new Promise((r) => setTimeout(r, 10))
+  }
+  return false
+}
+
+test("并发闸：超出上限的请求排队，不打上游；前一单结束后自动放行", async (t) => {
+  const up = gatedUpstream()
+  const r = await rig({ upstream: up, env: { LLM_MAX_CONCURRENCY: "1" } })
+  t.after(async () => { up.arrived.forEach((f) => f()); await r.close() })
+
+  const p1 = r.call({ model: "m" })
+  assert.ok(await until(() => up.arrived.length === 1), "第一单应当直接到上游")
+
+  const p2 = r.call({ model: "m" })
+  // 队列状态是唯一可靠的"它已经进队了"的证据（HTTP 层此刻什么都看不到）
+  let snap = null
+  assert.ok(await until(() => {
+    snap = r.app.mod.queue.snapshot(r.uid)
+    return snap.waiting === 1
+  }), "第二单应当在队里等，而不是打上游")
+  assert.equal(up.arrived.length, 1, "排队期间一个字节都不该发给上游")
+  assert.equal(snap.position, 1)
+  assert.equal(snap.running, 1)
+
+  // 客户端问到的那份（前端就靠它显示"前面还有几个"）
+  const qs = await r.app.req("/api/queue", { headers: { authorization: "Bearer " + r.access } })
+  assert.equal(qs.status, 200)
+  assert.equal(qs.json.queue.waitingMine, 1)
+  assert.equal(qs.json.queue.position, 1)
+  assert.equal(qs.json.queue.limit, 1)
+
+  up.arrived[0]()                     // 第一单收尾 → 位子还回来
+  const x1 = await p1
+  assert.equal(x1.status, 200)
+  assert.ok(await until(() => up.arrived.length === 2), "第二单这时才该到上游")
+  up.arrived[1]()
+  const x2 = await p2
+  assert.equal(x2.status, 200)
+  assert.ok(Number(x2.headers["x-queue-waited-ms"]) > 0, "排过队要如实报等了多久")
+  assert.equal(r.rows().length, 2, "排队的那一单照样要计量入账")
+  assert.equal(r.app.mod.queue.stats().running, 0, "位子必须全还回来，漏一个闸就越来越紧")
+})
+
+test("并发闸：排队等超时 → 503 QUEUE_TIMEOUT（不无声地悬着）", async (t) => {
+  const up = gatedUpstream()
+  const r = await rig({ upstream: up, env: { LLM_MAX_CONCURRENCY: "1", LLM_QUEUE_WAIT_MS: "1000" } })
+  t.after(async () => { up.arrived.forEach((f) => f()); await r.close() })
+
+  const p1 = r.call({ model: "m" })
+  assert.ok(await until(() => up.arrived.length === 1))
+  const x2 = await r.call({ model: "m" })
+  assert.equal(x2.status, 503)
+  assert.equal(x2.json.error.code, "QUEUE_TIMEOUT")
+  assert.ok(x2.json.error.retryAfterMs > 0)
+  up.arrived[0]()
+  assert.equal((await p1).status, 200)
+})
+
+test("并发闸：队排满 → 503 QUEUE_FULL，当场回绝不再往里塞", async (t) => {
+  const up = gatedUpstream()
+  const r = await rig({ upstream: up, env: { LLM_MAX_CONCURRENCY: "1", LLM_QUEUE_MAX: "1", LLM_QUEUE_WAIT_MS: "3000" } })
+  t.after(async () => { up.arrived.forEach((f) => f()); await r.close() })
+
+  const p1 = r.call({ model: "m" })
+  assert.ok(await until(() => up.arrived.length === 1))
+  const p2 = r.call({ model: "m" })                     // 占满唯一的排队位
+  assert.ok(await until(() => r.app.mod.queue.stats().waiting === 1))
+  const x3 = await r.call({ model: "m" })
+  assert.equal(x3.status, 503)
+  assert.equal(x3.json.error.code, "QUEUE_FULL")
+  assert.equal(x3.json.error.running, 1)
+  up.arrived[0]()
+  assert.equal((await p1).status, 200)
+  await until(() => up.arrived.length === 2)
+  up.arrived[1]?.()
+  await p2
+})
+
+test("并发闸：排队中客户端断开 → 位子不漏，后面的人照样进得来", async (t) => {
+  const up = gatedUpstream()
+  const r = await rig({ upstream: up, env: { LLM_MAX_CONCURRENCY: "1" } })
+  t.after(async () => { up.arrived.forEach((f) => f()); await r.close() })
+
+  const p1 = r.call({ model: "m" })
+  assert.ok(await until(() => up.arrived.length === 1))
+
+  const ac = new AbortController()
+  const p2 = fetch(r.app.base + CHAT, {
+    method: "POST", signal: ac.signal,
+    headers: { authorization: "Bearer " + r.access, "content-type": "application/json" },
+    body: JSON.stringify({ model: "m" }),
+  }).catch(() => "aborted")
+  assert.ok(await until(() => r.app.mod.queue.stats().waiting === 1))
+  ac.abort()                                            // 用户点了终止 / 客户端退出
+  assert.equal(await p2, "aborted")
+  assert.ok(await until(() => r.app.mod.queue.stats().waiting === 0), "断开的请求要从队里摘掉")
+
+  up.arrived[0]()
+  assert.equal((await p1).status, 200)
+  assert.equal(r.app.mod.queue.stats().running, 0)
+  // 位子确实还回来了：再来一单能【当场】打到上游（不是又在队里等）
+  const p3 = r.call({ model: "m" })
+  assert.ok(await until(() => up.arrived.length === 2), "位子没还回来的话这一单会一直排队")
+  up.arrived[1]()
+  assert.equal((await p3).status, 200)
+})
+
+test("并发闸：不限（默认）时行为与加这层之前一致", async (t) => {
+  const up = gatedUpstream()
+  const r = await rig({ upstream: up })
+  t.after(async () => { up.arrived.forEach((f) => f()); await r.close() })
+  const ps = [r.call({ model: "m" }), r.call({ model: "m" }), r.call({ model: "m" })]
+  assert.ok(await until(() => up.arrived.length === 3), "不限并发时三单应当一起打出去")
+  up.arrived.forEach((f) => f())
+  for (const p of ps) assert.equal((await p).status, 200)
+})
+
+test("档位可以单独给并发（超出就排队），改档位不吊销 key", async (t) => {
+  const up = gatedUpstream()
+  const r = await rig({
+    upstream: up,
+    env: { LLM_MAX_CONCURRENCY: "10" },
+    tier: { key: "one", dailyUSD: 0, model: "m", maxConc: 1 },
+  })
+  t.after(async () => { up.arrived.forEach((f) => f()); await r.close() })
+
+  const p1 = r.call({ model: "m" })
+  assert.ok(await until(() => up.arrived.length === 1))
+  const p2 = r.call({ model: "m" })
+  assert.ok(await until(() => r.app.mod.queue.stats().waiting === 1), "该档只给 1 路，第二单要等")
+
+  // 后台把该档并发放宽 → 队里的人立刻被放出去，而且没人被踢下线
+  const set = await r.admin("/admin/api/tier", { method: "POST", body: { key: "one", dailyUSD: 0, model: "m", maxConc: 3 } })
+  assert.equal(set.status, 200)
+  assert.equal(set.json.affected, 0, "只改并发不该吊销 key")
+  // 放宽只影响【新来的】请求：已经在队里的那位仍等前一单结束（队列不重算旧等待者的 cap）
+  up.arrived[0]()
+  assert.equal((await p1).status, 200)
+  assert.ok(await until(() => up.arrived.length === 2))
+  up.arrived[1]()
+  assert.equal((await p2).status, 200)
+})
+
+test("上游限速（429）→ 429 UPSTREAM_RATE_LIMITED，且 /api/queue 报「上游限速中」", async (t) => {
+  const r = await rig({
+    upstream: (_q, res) => {
+      res.writeHead(429, { "content-type": "application/json", "retry-after": "7" })
+      res.end('{"error":{"message":"rate limit reached"}}')
+    },
+  })
+  t.after(() => r.close())
+  const x = await r.call({ model: "m" })
+  assert.equal(x.status, 429)
+  assert.equal(x.json.error.code, "UPSTREAM_RATE_LIMITED")
+  assert.equal(x.json.error.retryAfterMs, 7000, "上游给的 Retry-After 要透出来")
+  assert.equal(r.rows().length, 0, "限速不计费")
+
+  const q = await r.app.req("/api/queue", { headers: { authorization: "Bearer " + r.access } })
+  assert.ok(q.json.queue.rateLimited, "前端要能据此显示「上游限速，正在等待」而不是「服务器坏了」")
+  assert.ok(q.json.queue.rateLimited.retryAfterMs > 0)
+})
+
+test("后台能改并发上限并立刻生效，且重启后仍是新值（落库）", async (t) => {
+  const r = await rig(); t.after(() => r.close())
+  let g = await r.admin("/admin/api/limits")
+  assert.equal(g.status, 200)
+  assert.equal(g.json.limits.maxConcurrent, 0, "默认不限")
+
+  assert.equal((await r.admin("/admin/api/limits", { method: "POST", body: { maxConcurrent: -3 } })).status, 400)
+  assert.equal((await r.admin("/admin/api/limits", { method: "POST", body: { maxConcurrent: "abc" } })).status, 400)
+  assert.equal(r.app.mod.queue.limits().maxConcurrent, 0, "非法值不许悄悄改成 0/NaN")
+
+  const p = await r.admin("/admin/api/limits", { method: "POST", body: { maxConcurrent: 4, perUser: 2, maxQueue: 50, maxWaitMs: 60000 } })
+  assert.equal(p.status, 200)
+  assert.equal(r.app.mod.queue.limits().maxConcurrent, 4, "内存里的闸当场就变（不用重启）")
+  g = await r.admin("/admin/api/limits")
+  assert.equal(g.json.limits.perUser, 2)
+  assert.deepEqual(
+    JSON.parse(r.app.db.prepare("SELECT v FROM meta WHERE k='llm_limits'").get().v),
+    { maxConcurrent: 4, perUser: 2, maxQueue: 50, maxWaitMs: 60000 },
+    "库是权威：重启后要还按这个值跑")
+  // 未登录的人不该看得见这些
+  assert.equal((await r.app.req("/admin/api/limits")).status, 401)
 })
 
 // ---- 其它 ----

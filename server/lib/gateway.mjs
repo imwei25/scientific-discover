@@ -9,6 +9,9 @@
 //      与加目录之前的行为逐字节一致。老部署不改任何配置也照常跑。
 //   ④ 计价按【命中的那一行】的单价，不再是全局一张表 —— 这正是多供应商下账会静默偏的老病根。
 //
+// 【并发闸】超出并发上限的请求不打上游，先进 queue.mjs 的 FIFO 队列等着；客户端问
+//   /api/queue 就能拿到"你排第几、大概还要多久"并显示等待提示。上限在后台可改、即时生效。
+//
 // 【为什么计量必须在这一层】改造方案 §3.1：桌面客户端完全在用户手里，让它自报消费额
 // 等于没有额度。所以：上游 key 绝不下发到客户端，所有调用必走本通道，账按上游响应记。
 //
@@ -204,6 +207,15 @@ function makeUsageTap(isSse, onUsage) {
   return t
 }
 
+/** 上游 429 带的 Retry-After（秒，或 HTTP-date）→ 毫秒。读不出来就 0，由 queue 用自己的默认值。 */
+export function retryAfterMs(v) {
+  const s = String(v || "").trim()
+  if (!s) return 0
+  if (/^\d+$/.test(s)) return Math.min(Number(s), 600) * 1000
+  const t = Date.parse(s)
+  return Number.isFinite(t) ? Math.max(0, Math.min(t - Date.now(), 600_000)) : 0
+}
+
 export async function llmForward({ req, res, pathname, ctx }) {
   const { CFG, log, audit, clientIp, authClient, fail, noteClient } = ctx
   const ip = clientIp(req)
@@ -261,6 +273,49 @@ export async function llmForward({ req, res, pathname, ctx }) {
   for (const h of ["host", "connection", "content-length", "transfer-encoding", "authorization",
     "x-forwarded-for", "x-forwarded-proto", "x-forwarded-prefix", "x-skill", "x-client-version"]) delete baseHeaders[h]
 
+  // ---- ⑤ 并发闸：满了就排队，别把 429 甩给用户 ----------------------------------
+  //
+  // 上游按并发/RPM 限速，十几个人同时跑长任务打过去就是一片 429，而 429 到客户端上只表现为
+  // "这一轮没输出"。所以超出上限的请求**在这里等**，客户端可以问 /api/queue 拿到"前面还有
+  // 几个"并显示等待提示（见 web/server.mjs 的 cloudForward 与前端的 queue 事件）。
+  //
+  // 【放行位必须还回去】拿到位之后每一条出口（正常收尾、上游断流、客户端跑了、我们自己回
+  // 错误）都得 release，漏一次就永久占掉一个并发位。所以只挂在 res 的 'close' 上 ——
+  // 它是这条响应【唯一】的终点，不管走哪条路都会到。
+  //
+  // 【只闸写请求】GET（如 /v1/models 的清单查询）不排队：它便宜、几乎不占上游配额，而客户端
+  // 启动时就会问一次 —— 让它挤在一堆生成请求后面等五分钟，只会让"刚打开就转圈"。
+  let waitedMs = 0
+  if (ctx.queue && req.method !== "GET") {
+    const t = ctx.queue.enqueue({ userId: user.id, perUser: ent.maxConc })
+    if (t.rejected) {
+      audit("llm.queue_full", { actor: user.username, ip, detail: `waiting=${t.rejected.waiting} running=${t.rejected.running}` })
+      log(`[llm] ${user.username} 队列已满（在等 ${t.rejected.waiting}）—— 直接回绝`)
+      return fail(res, 503, t.rejected.code, t.rejected.message,
+        { waiting: t.rejected.waiting, running: t.rejected.running, limit: t.rejected.limit, retryAfterMs: 15_000 })
+    }
+    if (t.queued) {
+      const snap = ctx.queue.snapshot(user.id)
+      log(`[llm] ${user.username} 并发已满（在跑 ${snap.running}/${snap.limit || "不限"}）—— 排队第 ${t.position} 位`)
+      // 排队期间客户端断开（用户点了终止、进程退出）→ 让位，否则轮到它时白放一个位子
+      res.on("close", () => { if (!res.writableEnded) t.cancel() })
+    }
+    const adm = await t.promise
+    if (!adm.ok) {
+      if (adm.code === "CANCELED") { try { res.destroy() } catch {} ; return }
+      audit("llm.queue_timeout", { actor: user.username, ip, detail: `waited=${adm.waitedMs}ms` })
+      return fail(res, 503, "QUEUE_TIMEOUT",
+        `排队等待超过 ${Math.round(adm.waitedMs / 1000)} 秒仍未轮到，服务器繁忙，请稍后重试`,
+        { waitedMs: adm.waitedMs, retryAfterMs: 20_000 })
+    }
+    waitedMs = adm.waitedMs
+    // 【等的过程中客户端可能已经走了】那时 'close' 早就发过，再挂监听器永远不会触发 →
+    // 这个并发位就永久漏掉了。所以先自己查一遍状态。
+    if (res.writableEnded || res.destroyed || res.closed) { adm.release(); return }
+    res.on("close", () => adm.release())
+    if (waitedMs > 0) log(`[llm] ${user.username} 排队 ${waitedMs}ms 后放行`)
+  }
+
   const started = Date.now()
   let cur = null                       // 当前在飞的上游请求（客户端断开时要拆掉它）
   let clientGone = false
@@ -315,6 +370,22 @@ export async function llmForward({ req, res, pathname, ctx }) {
       // 402 余额/欠费、401/403 我们这把 key 在这家失效、408 超时、429 限流，都属于
       // "换一家就能好"，必须切。400/404/413/422 是请求本身的问题（模型名不对、体过大…），
       // 换谁都一样，原样透传给客户端才有诊断价值。
+      // 【429 要单独认出来】它不是"服务器坏了"而是"被限速了"，两者给用户的话完全不同，
+      // 而客户端只看得见状态码。记一段"正在限速"（/api/queue 会把它下发给前端显示），
+      // 并在无处可切时回结构化错误码 + Retry-After，而不是把上游那个裸 429 页甩过去。
+      if (Number(upRes.statusCode) === 429) {
+        const ra = retryAfterMs(upRes.headers["retry-after"])
+        try { ctx.queue?.noteRateLimit({ model, provider: at.provider, retryAfterMs: ra }) } catch {}
+        audit("llm.upstream_rate_limited", { actor: user.username, ip, detail: `${at.providerName} ${model}${ra ? ` retry-after ${ra}ms` : ""}` })
+        if (last && !res.headersSent) {
+          upRes.resume()
+          settled = true
+          log(`[llm] ${user.username} ${at.providerName} 限速（429），无备用可切`)
+          return fail(res, 429, "UPSTREAM_RATE_LIMITED",
+            `上游模型服务正在限速，请稍等片刻再试${ra ? `（建议 ${Math.ceil(ra / 1000)} 秒后）` : ""}`,
+            { provider: at.provider, model, retryAfterMs: ra || 20_000 })
+        }
+      }
       if (shouldRetryStatus(upRes.statusCode) && !last && !res.headersSent) {
         upRes.resume()
         return nextOr(`返回 ${upRes.statusCode}`, "UPSTREAM_UNAVAILABLE", "上游模型服务暂不可用，请稍后重试")
@@ -323,6 +394,8 @@ export async function llmForward({ req, res, pathname, ctx }) {
       const h = { ...upRes.headers }
       delete h["connection"]
       delete h["content-length"]   // 旁路不改内容，但去掉更稳（上游若分块，长度可能对不上）
+      // 排过队就如实告诉客户端等了多久（诊断"这轮为什么慢"时，日志与客户端能对上）
+      if (waitedMs > 0) h["x-queue-waited-ms"] = String(waitedMs)
       res.writeHead(upRes.statusCode || 502, h)
 
       const isSse = String(upRes.headers["content-type"] || "").includes("text/event-stream") || stream

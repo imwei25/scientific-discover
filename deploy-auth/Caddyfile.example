@@ -22,8 +22,13 @@ example.duckdns.org {
 		reverse_proxy 127.0.0.1:8090 {
 			flush_interval -1
 			transport http {
-				# 别给长推理设读超时，误杀比挂着更糟
-				response_header_timeout 5m
+				# 别给长推理设读超时，误杀比挂着更糟。
+				#
+				# ⚠ 这个值必须【明显大于】后台「并发与排队」里的「最长等待」（默认 5 分钟）：
+				#   并发满时请求会先在 sci-auth 里排队，那段时间响应头还没发出 —— 两者相加都算在
+				#   这个超时里。配小了就会出现"排队快轮到了，却被 Caddy 以 504 掐掉"，
+				#   而日志里只有一个看不出原因的 504。
+				response_header_timeout 15m
 			}
 		}
 	}

@@ -356,6 +356,11 @@
   /* 回合级"进行中"转圈：等模型输出 / 工具运行期间常驻在回合底部，收尾（轮到用户输入）即移除 */
   .genrow { display: flex; align-items: center; gap: 8px; padding: 7px 11px 4px; font-size: 12px; color: var(--cyan); }
   .genrow .spin { flex: none; width: 12px; height: 12px; border-radius: 50%; border: 2px solid rgba(56,189,248,.25); border-top-color: var(--cyan); animation: spin .7s linear infinite; }
+  /* 排队中：整行转成"等待"色，好让人一眼看出"不是卡住了，是在等位子" */
+  .genrow.queued { color: #b45309; }
+  .genrow.queued .spin { border-color: rgba(180,83,9,.22); border-top-color: #b45309; }
+  .qtip { margin: 6px 11px 0; padding: 8px 11px; background: #fffbeb; border: 1px solid #fde68a; border-radius: var(--r-sm); color: #92400e; font-size: 12px; line-height: 1.5; }
+
 
   /* ask form (option cards) */
   .askform { margin: 10px 0 2px; padding: 14px; background: linear-gradient(180deg, #f2f7fe, #eef4fc); border: 1px solid #cfe0f2; border-radius: var(--r-md); }
@@ -1606,6 +1611,7 @@ function openStream(url) {
   const askedText = (() => { const us = log.querySelectorAll(".msg.user:not([data-ghost])"); const last = us[us.length - 1]; return last ? (last.dataset.text || "") : "" })()
 
   const toolRows = new Map()   // callID -> row
+  let qTip = null               // 云端排队提示条（见下面的 queue 事件）
   const seenSkills = new Set()
   const reason = new Map()     // reasoning id -> text
   const atBottom = () => log.scrollHeight - log.scrollTop - log.clientHeight < 60
@@ -1623,6 +1629,7 @@ function openStream(url) {
     if (finished) return; finished = true
     es.close(); if (activeES === es) { activeES = null; setStreamingUI(false) }
     genEl.remove()   // 本轮结束、轮到用户输入 → 转圈消失
+    if (qTip) { qTip.remove(); qTip = null }   // 排队提示条是 genEl 的兄弟节点，得自己收
     if (!thinkD.hidden) thinkD.querySelector(".rlbl").textContent = "思考过程"   // 收尾去掉“思考中…”的 live 态，peek 保留最后思考
     toolRows.forEach(r => r.classList.remove("live"))
     if (note) { if (!gotText && !painted) answer.textContent = ""; const n = document.createElement("div"); n.className = "note"; n.textContent = note; answer.appendChild(n) }
@@ -1671,6 +1678,32 @@ function openStream(url) {
   es.addEventListener("failed", (ev) => { let m = "本轮出错"; try { m = JSON.parse(ev.data).message } catch {} finalize("⚠ " + m) })   // 服务端出错：如实提示，不丢会话
   es.addEventListener("aborted", () => finalize("⏹ 已终止"))   // 后端确认已终止（本页或别的页点了"终止"）
   es.addEventListener("notice", (ev) => { try { const n = document.createElement("div"); n.className = "note"; n.textContent = "⚠ " + JSON.parse(ev.data).message; answer.appendChild(n) } catch {} })   // 流内提示（气泡的幽灵标记已由 start 接口决定，不在这里推断）
+  // ---- 云端排队 ----
+  // 平台的并发闸满了（或上游正在限速）时，这一轮的请求在云端排队等位。不说清楚的话，用户看到
+  // 的只是一个不动的转圈，几分钟后往往就去点刷新/重发，反而把队排得更长。所以：转圈那行改成
+  // "正在排队（第 N 位）"，并在下面给一条固定的解释；轮到了自动恢复原样。
+  // 服务端每两秒推一次（见 server.mjs 的 probeCloudQueue），所以这里只管画当前这一份。
+  es.addEventListener("queue", (ev) => {
+    let d = null; try { d = JSON.parse(ev.data) } catch { return }
+    if (!d || !d.queued) {   // 轮到了 / 限速解除 → 收掉提示，回到普通等待态
+      genEl.classList.remove("queued")
+      if (qTip) { qTip.remove(); qTip = null }
+      if (!gotText) setGen("等待模型输出…")
+      return
+    }
+    const secs = (ms) => (ms >= 60000 ? Math.round(ms / 60000) + " 分钟" : Math.max(1, Math.round(ms / 1000)) + " 秒")
+    genEl.classList.add("queued")
+    if (d.rateLimited) setGen("上游限速中，正在等待重试…")
+    else setGen("正在云端排队（第 " + (d.position || 1) + " 位" + (d.waiting > 1 ? "，共 " + d.waiting + " 个在等" : "") + "）…")
+    if (!qTip) { qTip = document.createElement("div"); qTip.className = "qtip"; genEl.parentNode.insertBefore(qTip, genEl.nextSibling) }
+    qTip.textContent = d.rateLimited
+      ? "上游模型服务正在限速，本轮会在限速解除后自动继续，请不要重发（重发只会排得更后面）。"
+      : "同时使用的人较多，本轮正在排队等一个空位" +
+        (d.limit ? "（平台同时最多跑 " + d.limit + " 个请求，当前 " + (d.running || 0) + " 个在跑）" : "") +
+        (d.etaMs ? "，预计还要 " + secs(d.etaMs) : "") +
+        "。轮到后会自动开始，无需重发；已等 " + secs(d.waitedMs || 0) + "。"
+    follow()
+  })
   es.addEventListener("idle", () => {   // attach 时后台已无进行中的一轮 → 改走历史回显（把刚完成的最终答案也带出来）
     finished = true; es.close(); if (activeES === es) { activeES = null; setStreamingUI(false) }
     turn.remove()

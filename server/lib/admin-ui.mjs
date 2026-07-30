@@ -639,11 +639,73 @@ function paneBoard(){
       return '<i style="height:'+Math.max(2,Math.round(x.cost/max*52))+'px" title="'+x.day+' '+money(x.cost)+'"></i>'}).join('')+
       '</div><div class="hint">峰值 '+money(max)+'/天</div>':'<p class="mut">还没有用量数据</p>')+
     '</section>'+
+    '<section id="lm-box"><h2>并发与排队</h2><p class="mut">加载中…</p></section>'+
     '<section id="nt-box"><h2>公告</h2><p class="mut">加载中…</p></section>';
   // 【异步只填这一个盒子，不回调 render】render() 在 board 页会再调回本函数，
   // 走 load→render→pane→load 就是死循环（本文件另外两处已经踩过）。
   api('notice').then(function(d){if(d.ok)renderNotice(d)});
+  loadLimits();
 }
+
+// ---------- 并发与排队 ----------
+// 上游按并发/RPM 限速：人一多就是一片 429，而 429 到客户端上只表现为"这一轮没输出"，
+// 用户既不知道发生了什么也不知道要等多久。配上并发上限后，超出的请求在网关排队，
+// 客户端能显示"正在排队，前面还有 N 个"。这一页就是那个上限的开关 + 当下的实时队况。
+function loadLimits(){
+  api('limits').then(function(d){if(d.ok)renderLimits(d)});
+  // 队况是实时的，看板开着就自动刷。
+  // 【必须先看盒子在不在，再决定发不发请求】会话过期时 api() 会把人送回登录页 —— 那时 #lm-box
+  // 已经不存在，若照旧每 10 秒打一次，就会不停地重画登录页（本文件另一处死循环的同类错法）。
+  if(!window._lmTimer)window._lmTimer=setInterval(function(){
+    if($('#lm-box')&&S.tab==='board')api('limits').then(function(d){if(d.ok)renderLimits(d)})},10000);
+}
+function renderLimits(d){
+  var box=$('#lm-box');if(!box)return;                 // 用户可能已经切走了
+  var L=d.limits||{},st=d.stats||{},cnt=st.counters||{};
+  var secs=function(ms){return ms>=1000?(ms/1000).toFixed(ms>=10000?0:1)+' 秒':(ms||0)+' ms'};
+  var tierConc=(d.tiers||[]).filter(function(t){return t.max_conc>0});
+  box.innerHTML='<div class="row"><h2 style="margin:0">并发与排队</h2>'+
+    (L.maxConcurrent>0?'<span class="tag ok">已限流 '+L.maxConcurrent+' 路</span>':'<span class="tag">未限流</span>')+
+    (st.rateLimited?'<span class="tag bad" title="上游刚刚回过 429">上游限速中（约 '+secs(st.rateLimited.retryAfterMs)+'后恢复）</span>':'')+
+    '<span class="sp"></span><button class="btn sm" id="lm-rf">刷新</button></div>'+
+    '<div class="kpi" style="margin:12px 0">'+
+    '<div><span class="mut">正在调用上游</span><b>'+(st.running||0)+(L.maxConcurrent>0?' / '+L.maxConcurrent:'')+'</b></div>'+
+    '<div><span class="mut">正在排队</span><b>'+(st.waiting||0)+'</b></div>'+
+    '<div><span class="mut">队首已等</span><b>'+secs(st.oldestWaitMs||0)+'</b></div>'+
+    '<div><span class="mut">平均单次耗时</span><b>'+(st.avgMs?secs(st.avgMs):'—')+'</b></div></div>'+
+    '<div class="grid" style="grid-template-columns:150px 1fr;max-width:660px">'+
+    '<label>全站并发上限</label><input id="lm-c" value="'+(L.maxConcurrent||0)+'" placeholder="0 = 不限">'+
+    '<label>单用户并发上限</label><input id="lm-u" value="'+(L.perUser||0)+'" placeholder="0 = 不限；档位可单独覆盖">'+
+    '<label>最多排多少个</label><input id="lm-q" value="'+(L.maxQueue||0)+'" placeholder="0 = 不限；排满后新请求直接被拒">'+
+    '<label>最长等待（秒）</label><input id="lm-w" value="'+Math.round((L.maxWaitMs||0)/1000)+'" placeholder="0 = 一直等">'+
+    '</div>'+
+    '<div class="hint" style="margin-top:10px">怎么定「全站并发上限」：看你上游套餐允许的并发数（DeepSeek 等按 RPM/并发限速），'+
+    '<b>略小于</b>它。设 0 = 不限 = 全部请求直接打上游，撞上限就是 429（客户端只看到"这轮没输出"）。'+
+    '改动<b>立刻生效</b>，不用重启，也不会踢任何人下线；放宽上限时队里的人当场被放出去。</div>'+
+    '<div class="hint" style="margin-top:6px">「最长等待」到了还没轮到，客户端会收到一个明确的"服务器繁忙"而不是一直转圈。'+
+    '排队期间客户端每两秒问一次自己的位次并显示给用户。<b>设到 3 分钟以上前</b>先确认 Caddy 的 '+
+    '<code>response_header_timeout</code> 够大（排队时间和推理时间一起算在它里面，配小了会被 504 掐掉）。</div>'+
+    (tierConc.length?'<div class="hint" style="margin-top:6px">档位单独设了并发的：'+
+      tierConc.map(function(t){return '<span class="tag">'+esc(t.key)+' '+t.max_conc+' 路</span>'}).join(' ')+
+      '（这些档位不看上面的「单用户并发上限」）</div>':'')+
+    '<div class="row" style="margin-top:14px"><button class="btn primary" id="lm-save">保存</button>'+
+    '<span class="mut" style="font-size:12.5px">累计：放行 '+(cnt.admitted||0)+' · 排过队 '+(cnt.queued||0)+
+      ' · 等超时 '+(cnt.timeout||0)+' · 队满被拒 '+(cnt.rejected||0)+'</span></div>'+
+    ((st.byUser||[]).length?'<div style="margin-top:14px"><label class="mut">此刻谁在占位</label>'+
+      '<table><thead><tr><th>用户</th><th>在飞请求</th></tr></thead><tbody>'+
+      st.byUser.map(function(r){return '<tr><td><b>'+esc(r.displayName||'')+'</b> <span class="mut">'+esc(r.username)+'</span></td>'+
+        '<td>'+r.running+'</td></tr>'}).join('')+'</tbody></table></div>':'');
+  $('#lm-rf').onclick=function(e){e.preventDefault();loadLimits()};
+  $('#lm-save').onclick=function(e){e.preventDefault();
+    var c=numIn('#lm-c',0),u=numIn('#lm-u',0),q=numIn('#lm-q',0),w=numIn('#lm-w',0);
+    if(c===null||u===null||q===null||w===null)return toast('并发/排队参数须是 ≥0 的整数（0 = 不限）',false);
+    if([c,u,q,w].some(function(x){return Math.floor(x)!==x}))return toast('并发/排队参数须是整数',false);
+    if(u>0&&c>0&&u>c)return toast('单用户并发（'+u+'）比全站上限（'+c+'）还大，等于没设——请调小',false);
+    post('limits',{maxConcurrent:c,perUser:u,maxQueue:q,maxWaitMs:w*1000}).then(function(j){
+      if(!j.ok)return toast(j.err||'保存失败',false);
+      toast('已保存并立刻生效',true);loadLimits()})}
+}
+
 
 // ---------- 公告 ----------
 // 通知全员（今晚维护 / 某模型下线 / 新版客户端已发）此前只能一个个发微信。
@@ -772,12 +834,13 @@ function paneTiers(){
       '<td>'+(t.model?esc(t.model):'<span class="tag bad" title="默认模型为空：该档用户可自选任意模型名，绕过允许清单">未设默认模型</span>')+
         (msHtml?'<div class="mut" style="font-size:12.5px">可选：'+msHtml+'</div>':'<div class="mut" style="font-size:12.5px">不可切换</div>')+'</td>'+
       '<td class="mut" style="font-size:12.5px">'+(t.skills?esc(t.skills):'全部技能')+'</td>'+
+      '<td>'+(t.max_conc?t.max_conc+' 路':'<span class="mut">跟随全局</span>')+'</td>'+
       '<td>'+n+' 人</td><td><button class="btn sm" data-a="ed">编辑</button> '+
       '<button class="btn sm danger" data-a="rm">删除</button></td></tr>'}).join('');
   $('#pane').innerHTML='<section><div class="row"><h2 style="margin:0">档位</h2><span class="sp"></span>'+
     '<button class="btn primary" id="t-add">+ 新增档位</button></div>'+
     '<div class="hint" style="margin:8px 0 12px">改动档位会立刻吊销该档位下所有用户的 key，他们需重新登录后按新权限生效。</div>'+
-    '<table><thead><tr><th>档位</th><th>日额度</th><th>月额度</th><th>模型</th><th>技能</th><th>用户</th><th></th></tr></thead>'+
+    '<table><thead><tr><th>档位</th><th>日额度</th><th>月额度</th><th>模型</th><th>技能</th><th>并发</th><th>用户</th><th></th></tr></thead>'+
     '<tbody>'+rows+'</tbody></table></section>';
   $('#t-add').onclick=function(){dlgTier(null)};
   Array.prototype.forEach.call(document.querySelectorAll('#pane tbody button'),function(b){
@@ -815,6 +878,7 @@ function dlgTier(t){
     '<label>档位键 *</label><input id="t-k" value="'+esc(t.key)+'"'+(t.key?' readonly':'')+' placeholder="小写字母开头，如 gold">'+
     '<label>日额度 USD</label><input id="t-d" value="'+t.daily_usd+'" placeholder="0 = 不限">'+
     '<label>月额度 USD</label><input id="t-m" value="'+t.monthly_usd+'" placeholder="0 = 不限">'+
+    '<label>单用户并发</label><input id="t-c" value="'+(t.max_conc||0)+'" placeholder="0 = 跟随全局设置">'+
     '<label>默认模型</label><select id="t-mosel">'+catOpts+'</select>'+
     '<label></label><input id="t-mo" value="'+esc(t.model)+'" placeholder="模型名（上面选一个会自动填到这里）">'+
     '<label>说明</label><input id="t-n" value="'+esc(t.note)+'">'+
@@ -834,14 +898,16 @@ function dlgTier(t){
   $('#ok').onclick=function(e){e.preventDefault();
     // 【别再用 Number(x)||0】负数与「abc」都会被它吞成 0，而 0 在额度闸里是【不限】——
     // 一次手滑就把整档放开，后台还显示得一切正常。
-    var d=numIn('#t-d',0),m=numIn('#t-m',0);
+    var d=numIn('#t-d',0),m=numIn('#t-m',0),c=numIn('#t-c',0);
     if(d===null||m===null)return toast('额度须是 ≥0 的数字（0 = 不限）',false);
+    if(c===null||Math.floor(c)!==c)return toast('单用户并发须是 ≥0 的整数（0 = 跟随全局）',false);
     if(!$('#t-mo').value.trim())return toast('请填默认模型——留空会让该档用户可以自选任意模型名，绕过允许清单',false);
     var picked=[];Array.prototype.forEach.call(schips,function(c){if(c.classList.contains('on'))picked.push(c.dataset.s)});
     var mpicked=[];Array.prototype.forEach.call(mchips,function(c){if(c.classList.contains('on'))mpicked.push(c.dataset.m)});
     post('tier',{key:$('#t-k').value.trim(),dailyUSD:d,
       monthlyUSD:m,model:$('#t-mo').value.trim(),models:mpicked.join(','),
-      skills:picked.join(','),note:$('#t-n').value.trim(),sort:Number($('#t-s').value)||0}).then(function(j){
+      skills:picked.join(','),note:$('#t-n').value.trim(),sort:Number($('#t-s').value)||0,
+      maxConc:c}).then(function(j){
       if(!j.ok)return toast(j.err||'保存失败',false);
       $('#dlg').close();toast('已保存'+(j.affected?'（已吊销 '+j.affected+' 个用户的 key）':''),true);load()})}
 }
