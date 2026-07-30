@@ -25,6 +25,12 @@ import * as Upstream from "./lib/upstream.mjs"
 import { llmForward, GATEWAY_PATH_PREFIX } from "./lib/gateway.mjs"
 import { createQueue, sanitizeLimits, LIMIT_DEFAULTS } from "./lib/queue.mjs"
 import { ADMIN_HTML } from "./lib/admin-ui.mjs"
+import * as SkillPacks from "./lib/skillpacks.mjs"
+import * as SkillSrc from "./lib/skillsrc.mjs"
+// 版本比较的实现挪进了 lib/skillpacks.mjs（skillsrc 也要用，从这里 import 会循环）；
+// 这里 re-export 保持既有引用（测试拿的是 app.mod.cmpVersion）不变。
+import { cmpVersion } from "./lib/skillpacks.mjs"
+export { cmpVersion }
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 
@@ -70,6 +76,11 @@ export const CFG = {
   priceOut: envNum("COST_OUTPUT", 1.10),
   priceCached: envNum("COST_CACHE_READ", 0.07),
   skillsDir: process.env.SKILLS_DIR || path.join(__dirname, "..", ".opencode", "skills"),
+  // "从仓库发布"的同步源（见 lib/skillsrc.mjs）；不配 = 只有"本地检出"通道
+  skillRepoUrl: process.env.SKILL_REPO_URL || "",
+  skillRepoRef: process.env.SKILL_REPO_REF || "main",
+  // 不随技能包分发的技能（preserved，客户端自留平移）；默认 85MB 的 vendored ppt-master
+  packExclude: String(process.env.SKILL_PACK_EXCLUDE ?? "ppt-master"),
   // one-api 的【管理】API（后台看/切上游通道用）。注意这跟 LLM_UPSTREAM_KEY 是两回事：
   // 后者是调模型的令牌，这里是管理台令牌（one-api 的"系统访问令牌"）。两个都没配也不影响
   // 转发，只是后台的「上游通道」页会显示未接入。
@@ -127,6 +138,16 @@ const readBody = async (req, limit = 1 << 20) => {
   }
   if (!chunks.length) return {}
   try { return JSON.parse(Buffer.concat(chunks).toString("utf8") || "{}") } catch { return {} }
+}
+/** 二进制上传（技能包 zip）。与 readBody 分开：那边是 JSON 语义，这边原样收字节。 */
+const readRawBody = async (req, limit = 128 * 1024 * 1024) => {
+  const chunks = []; let n = 0
+  for await (const c of req) {
+    n += c.length
+    if (n > limit) { const e = new Error("body too large"); e.tooLarge = true; throw e }
+    chunks.push(c)
+  }
+  return Buffer.concat(chunks)
 }
 const parseCookies = (req) => Object.fromEntries(
   (req.headers.cookie || "").split(";").map((c) => {
@@ -194,28 +215,6 @@ function issueTokens(user, { withRefresh = true } = {}) {
   return out
 }
 
-/**
- * 比较点分数字版本。返回 -1 / 0 / 1，任一边不是纯点分数字（如打包脚本没注入版本时的
- * "dev"）就返回 null —— 调用方据此【不催升级】。
- *
- * 【为什么"认不出来就不催"】开发机与自建构建报的就是 dev/git-sha 这类字符串，把它们当成
- * "比谁都旧"会让每个开发者每次打开都被弹一次升级提示，而那条提示对他们毫无意义。
- */
-export function cmpVersion(a, b) {
-  const parse = (s) => {
-    const t = String(s || "").trim()
-    if (!/^\d+(\.\d+)*$/.test(t)) return null
-    return t.split(".").map(Number)
-  }
-  const x = parse(a), y = parse(b)
-  if (!x || !y) return null
-  for (let i = 0; i < Math.max(x.length, y.length); i++) {
-    const d = (x[i] || 0) - (y[i] || 0)
-    if (d) return d > 0 ? 1 : -1
-  }
-  return 0
-}
-
 /** 这个客户端版本是否低于公告里要求的最低版本（认不出版本号就不催）。 */
 function needsUpgrade(notice, clientVersion) {
   if (!notice || !notice.minClientVersion) return false
@@ -267,12 +266,62 @@ export function authClient(req, { requireFullScope = true } = {}) {
   return { ok: true, user, payload: v.payload }
 }
 
-/** 客户端每次带 X-Client-Version 上来就顺手记一下（需求 §3.5 版本可追溯）。 */
+/** 客户端每次带 X-Client-Version / X-Skills-Version 上来就顺手记一下（需求 §3.5 版本可追溯）。 */
 function noteClient(user, req) {
   const v = String(req.headers["x-client-version"] || "").slice(0, 40)
+  const sv = String(req.headers["x-skills-version"] || "").slice(0, 40)
   const patch = { last_seen_at: Date.now() }
   if (v && v !== user.client_version) patch.client_version = v
+  if (sv && sv !== user.skills_version) patch.skills_version = sv
   try { DB.updateUser(db, user.id, patch) } catch {}
+}
+
+// ==== 技能包（在线分发整套技能，见 lib/skillpacks.mjs 头注）======================
+const PACKS_DIR = () => path.join(CFG.dataDir, "skill-packs")
+const packFile = (version) => path.join(PACKS_DIR(), `${version}.zip`)   // version 已过 VERSION_RE，拼不出路径逃逸
+
+/** 当前对客户端生效的最新版（active 里版本号最大的；文本排序对版本号不可靠，用 cmpVersion） */
+function latestSkillPack() {
+  let best = null
+  for (const p of DB.listSkillPacks(db)) {
+    if (p.status !== "active") continue
+    if (!best || cmpVersion(p.version, best.version) > 0) best = p
+  }
+  return best
+}
+
+/** 这次更新与该用户有没有关系：技能白名单与 changedSkills 无交集就不打扰 */
+function packRelevant(pack, ent) {
+  const changed = String(pack.changed_skills || "").split(",").map((s) => s.trim()).filter(Boolean)
+  if (!changed.length || !ent.skills.length) return true
+  return changed.some((s) => ent.skills.includes(s))
+}
+
+/** 不随包分发的技能（写进 preserved，客户端自留平移） */
+const packExcludeSet = () =>
+  new Set(CFG.packExclude.split(",").map((s) => s.trim()).filter(Boolean))
+
+/**
+ * 落盘 + 入库 + 留存依赖清单。手动上传与"从仓库发布"共用（校验都在 parsePack，这里只管发）。
+ * 先落盘再写库：反过来会留下"客户端能看到、却永远下不到"的版本。
+ */
+function publishParsedPack(buf, parsed, { commitSha = "", ip, via, forced = false }) {
+  fs.mkdirSync(PACKS_DIR(), { recursive: true })
+  const sha = crypto.createHash("sha256").update(buf).digest("hex")
+  const tmp = packFile(parsed.pack.version) + ".tmp"
+  fs.writeFileSync(tmp, buf)
+  fs.renameSync(tmp, packFile(parsed.pack.version))
+  const ins = DB.addSkillPack(db, {
+    version: parsed.pack.version, sha256: sha, size: buf.length,
+    changelog: parsed.pack.changelog, changed_skills: parsed.pack.changedSkills.join(","),
+    skills: parsed.skills.join(","), commit_sha: commitSha,
+  })
+  if (!ins.ok) { try { fs.unlinkSync(packFile(parsed.pack.version)) } catch {}; return ins }
+  // 依赖清单留存："从仓库发布"没有打包机 .venv 可查，lint 靠最近一次整包里嵌的清单
+  if (parsed.pack.venvPackages.length) DB.setMeta(db, "venv_packages", parsed.pack.venvPackages)
+  audit("skillpack.publish", { actor: "admin", ip, target: parsed.pack.version,
+    detail: `via=${via} size=${buf.length} skills=${parsed.skills.length}${commitSha ? ` commit=${commitSha.slice(0, 10)}` : ""}${forced ? " (强制发布，lint 有告警)" : ""}` })
+  return { ok: true, sha }
 }
 
 // ==== 客户端 API ==============================================================
@@ -401,6 +450,56 @@ async function handleClientApi(req, res, pathname) {
     return json(res, 200, { ok: true, profile: profileOf(au.user) })
   }
 
+  /**
+   * 技能包：最新版元数据。客户端低频轮询（本机自己限流），比对本机已装版本后决定要不要
+   * 提示 —— 更新【不强制】，提不提示由 relevant 与客户端的"忽略此版"共同决定。
+   */
+  if (req.method === "GET" && pathname === "/api/skills/latest") {
+    const au = authClient(req)
+    if (!au.ok) return fail(res, au.status, au.code, au.message)
+    noteClient(au.user, req)   // 顺手记 X-Skills-Version：后台要看"谁还停在旧版技能"
+    const p = latestSkillPack()
+    if (!p) return json(res, 200, { ok: true, latest: null })
+    const ent = DB.resolveEntitlement(db, au.user)
+    return json(res, 200, {
+      ok: true,
+      latest: {
+        version: p.version, sha256: p.sha256, size: p.size,
+        changelog: p.changelog,
+        changedSkills: String(p.changed_skills || "").split(",").map((s) => s.trim()).filter(Boolean),
+        skills: String(p.skills || "").split(",").map((s) => s.trim()).filter(Boolean),
+        publishedAt: p.created_at,
+        relevant: packRelevant(p, ent),
+      },
+    })
+  }
+
+  /** 技能包：下载指定版本的 zip（只发 active 的——disabled 即"已撤下"）。 */
+  if (req.method === "GET" && pathname === "/api/skills/pack") {
+    const au = authClient(req)
+    if (!au.ok) return fail(res, au.status, au.code, au.message)
+    const url = new URL(req.url, "http://x")
+    const version = String(url.searchParams.get("version") || "").trim()
+    if (!SkillPacks.VERSION_RE.test(version)) return fail(res, 400, "BAD_REQUEST", "版本号格式不对")
+    const p = DB.getSkillPack(db, version)
+    if (!p || p.status !== "active") return fail(res, 404, "NOT_FOUND", "没有这个技能包版本（可能已被撤下）")
+    let stat
+    try { stat = fs.statSync(packFile(version)) } catch {
+      log(`[skillpack] 元数据在库里、文件却不在盘上：${packFile(version)} —— 迁移/备份漏了 DATA_DIR/skill-packs？`)
+      return fail(res, 500, "INTERNAL", "服务器上的包文件缺失，请联系管理员")
+    }
+    audit("skillpack.download", { actor: au.user.username, ip, target: version })
+    res.writeHead(200, {
+      "content-type": "application/zip",
+      "content-length": stat.size,
+      "x-pack-sha256": p.sha256,
+      "cache-control": "no-store",
+    })
+    const stream = fs.createReadStream(packFile(version))
+    stream.on("error", () => { try { res.destroy() } catch {} })
+    return stream.pipe(res)
+  }
+
   return fail(res, 404, "NOT_FOUND", "没有这个接口")
 }
 
@@ -516,7 +615,7 @@ function userRow(u) {
     id: u.id, username: u.username, displayName: u.display_name, surname: u.surname,
     hospital: u.hospital, position: u.position, phone: u.phone,
     tier: u.tier, status: u.status, mustChangePw: !!u.must_change_pw,
-    clientVersion: u.client_version, note: u.note,
+    clientVersion: u.client_version, skillsVersion: u.skills_version, note: u.note,
     createdAt: u.created_at, lastLoginAt: u.last_login_at, lastSeenAt: u.last_seen_at,
     limits: { daily: ent.daily, monthly: ent.monthly },
     overrides: { daily: u.daily_override, monthly: u.monthly_override, skills: u.skills_override },
@@ -948,6 +1047,149 @@ async function handleAdminApi(req, res, pathname) {
     if (!r.ok) return json(res, 400, { ok: false, err: r.err || "操作失败" })
     audit("channel." + (b.action || "update"), { actor: "admin", target: String(b.id), ip, detail: JSON.stringify(b).slice(0, 200) })
     return json(res, 200, { ok: true, ...r })
+  }
+
+  // ---- 技能包 ----
+  // 管理员上传 make-skill-pack.mjs 出的整套技能 zip → 校验（布局/BOM/依赖 lint）→ 发布。
+  // 客户端轮询 /api/skills/latest 看到新版本后提示更新（不强制）；服务端回退 = 把新版置 disabled。
+  if (req.method === "GET" && pathname === "/admin/api/skill-packs") {
+    const latest = latestSkillPack()
+    // 版本分布：判断"催不催大家更新"得先知道现在都停在哪版（'' = 客户端还没汇报过/老客户端）
+    const versions = db.prepare(`SELECT skills_version AS v, COUNT(*) AS n FROM users
+                                 GROUP BY skills_version ORDER BY n DESC`).all()
+    return json(res, 200, {
+      ok: true,
+      packs: DB.listSkillPacks(db).map((p) => ({
+        version: p.version, sha256: p.sha256, size: p.size, changelog: p.changelog,
+        changedSkills: String(p.changed_skills || "").split(",").filter(Boolean),
+        skills: String(p.skills || "").split(",").filter(Boolean),
+        status: p.status, createdAt: p.created_at,
+        fileOk: fs.existsSync(packFile(p.version)),
+      })),
+      current: latest ? latest.version : "",
+      versions,
+    })
+  }
+
+  if (req.method === "POST" && pathname === "/admin/api/skill-pack-upload") {
+    const url = new URL(req.url, "http://x")
+    const force = url.searchParams.get("force") === "1"
+    const buf = await readRawBody(req)
+    if (!buf.length) return json(res, 400, { ok: false, err: "请求体是空的——请选择要上传的技能包 zip" })
+    const r = SkillPacks.parsePack(buf)
+    if (!r.ok) return json(res, 400, { ok: false, err: r.err })
+    if (DB.getSkillPack(db, r.pack.version))
+      return json(res, 400, { ok: false, err: `版本 ${r.pack.version} 已发布过——同一版本号不许重发，请升版本号重新出包` })
+    // 依赖 lint 拦发布：技能 import 了客户端 .venv 里没有的库 → 在线更新发出去客户端必炸。
+    // 这是信号不是判决（识别不了动态 import / 冷门别名），管理员核实后可 force。
+    if (r.lint.issues.length && !force) {
+      return json(res, 400, {
+        ok: false, needForce: true, lint: r.lint.issues, warnings: r.warnings,
+        err: `依赖检查未通过：${r.lint.issues.length} 处 import 了客户端可能没有的库。` +
+          `若确认这些库客户端已有（或属误报），可强制发布；若确实是新依赖，此更新走不了在线分发，需要重新打包客户端。`,
+      })
+    }
+    const pub = publishParsedPack(buf, r, { ip, via: "upload", forced: force })
+    if (!pub.ok) return json(res, 400, { ok: false, err: pub.err })
+    return json(res, 200, { ok: true, version: r.pack.version, sha256: pub.sha, size: buf.length,
+      skills: r.skills, warnings: r.warnings, lint: r.lint.issues, forced: force })
+  }
+
+  // ---- 从仓库发布（推荐通道；见 lib/skillsrc.mjs 头注）----
+  // check：同步专用检出（或读本地检出）→ 预览"待发布的 commit / 变更技能 / 下个版本号"；
+  // publish：带着 check 看到的 sha 来出包发布，源被人推动过就 409 打回重看。
+  if (req.method === "GET" && pathname === "/admin/api/skill-src") {
+    const cfg = SkillSrc.srcConfig(CFG)
+    const latest = latestSkillPack()
+    return json(res, 200, {
+      ok: true,
+      remote: { configured: !!cfg.url, url: SkillSrc.maskUrl(cfg.url), ref: cfg.ref,
+        cloneReady: fs.existsSync(path.join(cfg.cloneDir, ".git")) },
+      localRoot: cfg.localRoot,
+      exclude: [...packExcludeSet()],
+      lastPublished: latest ? { version: latest.version, commitSha: latest.commit_sha || "" } : null,
+      venvLint: (DB.getMeta(db, "venv_packages", []) || []).length > 0,
+    })
+  }
+  if (req.method === "POST" && pathname === "/admin/api/skill-src") {
+    const b = await readBody(req)
+    const source = b.source === "local" ? "local" : "remote"
+    const latest = latestSkillPack()
+    const lastSha = (latest && latest.commit_sha) || ""
+    let src
+    try { src = await SkillSrc.resolveSource(CFG, source) } catch (e) { return json(res, 400, { ok: false, err: e.message }) }
+    const skillsDir = path.join(src.root, ".opencode", "skills")
+    let diff = { changedSkills: [], agentsChanged: false, commits: [], known: false }
+    if (src.sha) { try { diff = await SkillSrc.diffSince(src.root, lastSha) } catch (e) { log("[skill-src] diff 失败", e.message) } }
+    const diffWarnings = []
+    if (!src.sha) diffWarnings.push("该检出不是 git 仓库：算不出与上次发布的差异，将提示所有用户")
+    else if (lastSha && !diff.known) diffWarnings.push("上次发布的 commit 在此仓查不到（首次从仓库发布或换过仓）：无法算差异，将提示所有用户")
+    const version = SkillSrc.nextVersion(latest && latest.version, (v) => !!DB.getSkillPack(db, v))
+
+    if (b.action === "check") {
+      let c
+      try { c = SkillPacks.collectSkillEntries(skillsDir, { exclude: packExcludeSet() }) }
+      catch (e) { return json(res, 400, { ok: false, err: `源树读不了：${e.message}` }) }
+      return json(res, 200, {
+        ok: true, source, sha: src.sha, shortSha: src.sha.slice(0, 10),
+        upToDate: !!(src.sha && lastSha && src.sha === lastSha),
+        changedSkills: diff.changedSkills, agentsChanged: diff.agentsChanged, commits: diff.commits,
+        nextVersion: version, skills: c.packed.length, preserved: c.preserved,
+        sizeBytes: c.totalBytes, warnings: [...c.warnings, ...diffWarnings],
+        venvLint: (DB.getMeta(db, "venv_packages", []) || []).length > 0,
+      })
+    }
+    if (b.action !== "publish") return json(res, 400, { ok: false, err: "action 要是 check / publish" })
+
+    if (src.sha && String(b.sha || "") !== src.sha)
+      return json(res, 409, { ok: false, staleSha: true,
+        err: `源已更新（现在是 ${src.sha.slice(0, 10)}，你预览的是 ${String(b.sha || "").slice(0, 10) || "?"}）——请重新「检查更新」看过差异再发布` })
+    // changelog：管理员在预览时可改；默认拿 commit 说明拼一条
+    const changelog = String(b.changelog || "").trim().slice(0, 2000) ||
+      (diff.commits.length ? diff.commits.map((s) => s.replace(/^\S+\s/, "")).slice(0, 10).join("；").slice(0, 500)
+        : `同步自${source === "remote" ? "仓库" : "本地检出"} ${src.sha ? src.sha.slice(0, 10) : "（非 git 检出）"}`)
+    let built
+    try {
+      built = SkillPacks.buildPack({
+        skillsDir, rootDir: src.root, version, changelog,
+        changedSkills: diff.changedSkills, exclude: packExcludeSet(),
+        venvPackages: DB.getMeta(db, "venv_packages", []) || [],
+      })
+    } catch (e) { return json(res, 500, { ok: false, err: `出包失败：${e.message}` }) }
+    const parsed = SkillPacks.parsePack(built.buf)
+    if (!parsed.ok) return json(res, 500, { ok: false, err: `出的包没过发布校验（属于 bug，请报告）：${parsed.err}` })
+    if (parsed.lint.issues.length && !b.force) {
+      return json(res, 400, {
+        ok: false, needForce: true, lint: parsed.lint.issues, warnings: [...built.warnings, ...parsed.warnings],
+        err: `依赖检查未通过：${parsed.lint.issues.length} 处 import 了客户端可能没有的库。` +
+          `若确认这些库客户端已有（或属误报），可强制发布；若确实是新依赖，此更新走不了在线分发，需要重新打包客户端。`,
+      })
+    }
+    const pub = publishParsedPack(built.buf, parsed, { commitSha: src.sha, ip, via: `sync:${source}`, forced: !!b.force })
+    if (!pub.ok) return json(res, 400, { ok: false, err: pub.err })
+    return json(res, 200, {
+      ok: true, version, sha256: pub.sha, size: built.buf.length, commitSha: src.sha,
+      skills: parsed.skills, changedSkills: diff.changedSkills,
+      warnings: [...built.warnings, ...parsed.warnings], forced: !!b.force,
+    })
+  }
+
+  if (req.method === "POST" && pathname === "/admin/api/skill-pack") {
+    const b = await readBody(req)
+    const version = String(b.version || "").trim()
+    const p = DB.getSkillPack(db, version)
+    if (!p) return json(res, 404, { ok: false, err: "没有这个版本" })
+    if (b.action === "delete") {
+      DB.deleteSkillPack(db, version)
+      try { fs.unlinkSync(packFile(version)) } catch {}
+      audit("skillpack.delete", { actor: "admin", ip, target: version })
+      return json(res, 200, { ok: true })
+    }
+    const st = b.action === "enable" ? "active" : b.action === "disable" ? "disabled" : null
+    if (!st) return json(res, 400, { ok: false, err: "action 要是 enable / disable / delete 之一" })
+    DB.setSkillPackStatus(db, version, st)
+    audit("skillpack." + b.action, { actor: "admin", ip, target: version })
+    return json(res, 200, { ok: true, current: (latestSkillPack() || {}).version || "" })
   }
 
   // ---- 公告 ----

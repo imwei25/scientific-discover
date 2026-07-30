@@ -9,6 +9,7 @@ import { promisify } from "node:util"
 import { setGlobalDispatcher, Agent } from "undici"
 import { createOpencodeClient } from "@opencode-ai/sdk"
 import * as Cloud from "./cloud-account.mjs"
+import * as SkillUp from "./skill-update.mjs"
 
 // opencode 的完整流水线（标书/论文/系统综述）单轮可跑十几分钟，而 session.prompt 是“等整轮结束才返回”的请求；
 // undici 默认 5 分钟 headers/body 超时会让这类长轮假性抛错。关掉这两个超时（0=不限），连接超时保留。
@@ -137,6 +138,27 @@ const cloudLoggedIn = () => !!Cloud.loadState()
 let noticeCache = null
 const expireNoticeCache = () => { if (noticeCache) noticeCache.at = 0 }
 const clearNoticeCache = () => { noticeCache = null }
+// ---- 技能包更新检查（桌面版）----
+// 挂在公告轮询顺风车上，但自己限流半小时：技能包发布是低频事件，公告那条 60 秒的节奏
+// 对它纯属浪费。检查失败 5 分钟后重试（第一次打开就赶上断网时，别把"有更新"憋到半小时后）。
+let skillLatestCache = null   // { at, latest }
+const SKILL_CHECK_MS = 30 * 60 * 1000
+const clearSkillLatestCache = () => { skillLatestCache = null }
+async function skillLatestSoon(force) {
+  if (!cloudLoggedIn()) return null
+  const now = Date.now()
+  if (!force && skillLatestCache && now - skillLatestCache.at < SKILL_CHECK_MS) return skillLatestCache.latest
+  const r = await Cloud.fetchSkillLatest(SkillUp.currentVersion()).catch(() => null)
+  if (r && r.ok) skillLatestCache = { at: now, latest: r.latest }
+  else skillLatestCache = { at: now - SKILL_CHECK_MS + 5 * 60_000, latest: skillLatestCache?.latest ?? null }
+  return skillLatestCache.latest
+}
+/** 要不要在界面上提示更新：有新版、且这次变更与本账号的技能授权有交集（服务端算好 relevant） */
+function skillUpdateInfo(latest) {
+  if (!latest || !latest.relevant) return null
+  if (latest.version === SkillUp.currentVersion()) return null
+  return { version: latest.version, changedSkills: latest.changedSkills || [], changelog: latest.changelog || "", size: latest.size || 0 }
+}
 const gatewayEnvSet = () => !!(process.env.OC_GATEWAY_URL && process.env.OC_GATEWAY_KEY)
 /** 平台路由是否可用：登录了云端账号（桌面版），或注入了静态网关 key（云端多用户容器） */
 const platformAvailable = () => cloudLoggedIn() || gatewayEnvSet()
@@ -2344,6 +2366,7 @@ export const server = http.createServer(async (req, res) => {
       }
       let r
       clearNoticeCache()
+      clearSkillLatestCache()   // 换账号后"最新技能包/relevant"要按新账号重新算
       if (u.pathname === "/api/cloud/login") {
         const username = String(b.username || "").trim(), password = String(b.password || "")
         if (!username || !password) return send(res, 400, "application/json", JSON.stringify({ ok: false, err: "请填写账号与口令" }))
@@ -2416,9 +2439,62 @@ export const server = http.createServer(async (req, res) => {
         if (r.ok) noticeCache = { at: now, data: { notice: r.notice, needUpgrade: r.needUpgrade, clientVersion: r.clientVersion } }
         else noticeCache = { at: now - 45_000, data: (noticeCache && noticeCache.data) || { notice: null } }
       }
+      // 技能包更新检查搭这趟顺风车（自身限流半小时）。失败回 null = 这次不提示，无害。
+      let skillUpdate = null
+      try { skillUpdate = skillUpdateInfo(await skillLatestSoon()) } catch {}
       // entRev = 当前生效授权的摘要（档位/模型清单/技能白名单/可用模块）。前端拿它跟上次比，
       // 一变就重取模块清单与模型清单并提示一句——这是"管理员改完，客户端自己就变了"的那条线。
-      return send(res, 200, "application/json", JSON.stringify({ ok: true, ...noticeCache.data, entRev: entRev() }))
+      return send(res, 200, "application/json", JSON.stringify({ ok: true, ...noticeCache.data, entRev: entRev(), skillUpdate }))
+    }
+
+    // ==== 技能包：本机状态 / 在线更新 / 回退（桌面版；详见 skill-update.mjs 头注）=====
+    if (req.method === "GET" && u.pathname === "/api/skillpacks/status") {
+      if (!cloudLoggedIn())
+        return send(res, 200, "application/json", JSON.stringify({ ok: true, available: false }))
+      const latest = await skillLatestSoon(u.searchParams.get("fresh") === "1").catch(() => null) || null
+      return send(res, 200, "application/json", JSON.stringify({
+        ok: true, available: true,
+        current: SkillUp.currentVersion(),       // '' = 出厂版
+        local: SkillUp.listLocal(),              // 可回退的本机留存版本
+        latest, update: skillUpdateInfo(latest), // update 非空 = 有可提示的更新
+      }))
+    }
+    if (req.method === "POST" && (u.pathname === "/api/skillpacks/update" || u.pathname === "/api/skillpacks/rollback")) {
+      if (!cloudLoggedIn() && u.pathname === "/api/skillpacks/update")
+        return send(res, 400, "application/json", JSON.stringify({ ok: false, err: "未登录云端账号，无法在线更新技能" }))
+      const chunks = []; for await (const c of req) chunks.push(c)
+      let b = {}; try { b = JSON.parse(Buffer.concat(chunks).toString() || "{}") } catch {}
+      // 与切模型同一道闸：换技能要重启 opencode，正在跑的轮会被连根拔掉
+      const busy = runningRounds()
+      if (busy > 0 && !b.force)
+        return send(res, 409, "application/json", JSON.stringify({ ok: false, busy, needForce: true, err: `有 ${busy} 轮正在生成中，更新/回退技能需重启后台，会中断它们` }))
+      let restarted = false
+      try {
+        if (u.pathname === "/api/skillpacks/update") {
+          const latest = await skillLatestSoon(true)
+          if (!latest) return send(res, 400, "application/json", JSON.stringify({ ok: false, err: "云端当前没有可用的技能包" }))
+          // 只允许装"云端现在的最新版"：旧版一律走本机回退（云端撤下的版本本来就不该再装）
+          const dl = await Cloud.downloadSkillPack(latest.version)
+          if (!dl.ok) return send(res, 502, "application/json", JSON.stringify({ ok: false, err: (dl.error && dl.error.message) || "下载失败" }))
+          // 【先停 opencode 再动技能目录】Windows 上正被占用的文件 rename 不动；
+          // opencode 反正要重启才会重扫技能，先停后换名最稳
+          if (OC_MANAGED) killPort(OC_PORT)
+          SkillUp.installBuffer(dl.buf, { version: latest.version, sha256: latest.sha256 })
+        } else {
+          const version = String(b.version || "").trim()
+          if (!version) return send(res, 400, "application/json", JSON.stringify({ ok: false, err: "缺 version" }))
+          if (OC_MANAGED) killPort(OC_PORT)
+          SkillUp.rollback(version)
+        }
+      } catch (e) {
+        try { restarted = await restartOpencode() } catch {}   // 失败也要把 opencode 拉回来
+        return send(res, 500, "application/json", JSON.stringify({ ok: false, err: String(e.message || e), restarted }))
+      }
+      try { restarted = await restartOpencode() } catch {}
+      clearSkillLatestCache()   // 立刻重查：装完/退完横幅状态要马上正确，别等半小时
+      return send(res, 200, "application/json", JSON.stringify({
+        ok: true, restarted, current: SkillUp.currentVersion(), local: SkillUp.listLocal(),
+      }))
     }
 
     // 当前后台模型配置（apiKey 不回传，只报是否已设）

@@ -157,6 +157,22 @@ CREATE TABLE IF NOT EXISTS refresh_tokens (
 );
 CREATE INDEX IF NOT EXISTS ix_rt_user ON refresh_tokens(user_id);
 
+-- ==== 技能包 ==================================================================
+-- 管理员发布的整套技能版本包（zip 落在 DATA_DIR/skill-packs/<version>.zip，这里只存元数据）。
+-- 一行一个版本，行不可改（重发同版本号会拒绝——客户端按版本号判断"要不要提示更新"，
+-- 同号不同内容会让 sha256 校验与缓存全部失去意义）。回退 = 把新版本置 disabled。
+CREATE TABLE IF NOT EXISTS skill_packs (
+  version        TEXT PRIMARY KEY,               -- 点分数字（与客户端版本同一比较规则）
+  sha256         TEXT NOT NULL,
+  size           INTEGER NOT NULL,
+  changelog      TEXT NOT NULL DEFAULT '',
+  changed_skills TEXT NOT NULL DEFAULT '',       -- 逗号分隔；'' = 未标注（对所有人都提示）
+  skills         TEXT NOT NULL DEFAULT '',       -- 包内技能清单（展示用）
+  commit_sha     TEXT NOT NULL DEFAULT '',       -- "从仓库发布"时的源 commit（算下次 diff 用）
+  status         TEXT NOT NULL DEFAULT 'active', -- active | disabled（禁用即对客户端不可见）
+  created_at     INTEGER NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS audit (
   id     INTEGER PRIMARY KEY AUTOINCREMENT,
   ts     INTEGER NOT NULL,
@@ -201,6 +217,10 @@ function ensureColumns(db) {
   if (!has("usage_log", "provider")) db.exec("ALTER TABLE usage_log ADD COLUMN provider TEXT NOT NULL DEFAULT ''")
   // 0 = 跟随全局并发限额；老库升上来全是 0，与加这一列之前的行为逐字节一致
   if (!has("tiers", "max_conc")) db.exec("ALTER TABLE tiers ADD COLUMN max_conc INTEGER NOT NULL DEFAULT 0")
+  // 客户端汇报的本机技能包版本（与 client_version 同机制：请求头顺手记下，供后台看升级面）
+  if (!has("users", "skills_version")) db.exec("ALTER TABLE users ADD COLUMN skills_version TEXT NOT NULL DEFAULT ''")
+  // "从仓库发布"的包记下出包时的 commit：下次发布 diff 这两个 sha 就能精确算出变更技能
+  if (!has("skill_packs", "commit_sha")) db.exec("ALTER TABLE skill_packs ADD COLUMN commit_sha TEXT NOT NULL DEFAULT ''")
 }
 
 function migrate(db, from) {
@@ -267,7 +287,7 @@ export function bumpEpoch(db, userId) {
 const USER_PATCH_FIELDS = new Set([
   "display_name", "surname", "hospital", "position", "phone", "tier", "status",
   "daily_override", "monthly_override", "skills_override", "note",
-  "pass_hash", "pass_salt", "must_change_pw", "client_version", "last_login_at", "last_seen_at",
+  "pass_hash", "pass_salt", "must_change_pw", "client_version", "skills_version", "last_login_at", "last_seen_at",
 ])
 export function updateUser(db, id, patch) {
   const cols = [], vals = []
@@ -722,6 +742,46 @@ export function publicNotice(db) {
     minClientVersion: n.minClientVersion, downloadUrl: n.downloadUrl, updatedAt: n.updatedAt,
   }
 }
+
+// ==== 技能包 ==================================================================
+// 元数据 CRUD。zip 文件本体由 sci-auth 落在 DATA_DIR/skill-packs/ 下，这里不碰文件系统。
+
+export function addSkillPack(db, p) {
+  if (db.prepare("SELECT 1 FROM skill_packs WHERE version=?").get(String(p.version)))
+    return { ok: false, err: `版本 ${p.version} 已发布过 —— 同一版本号不许重发（客户端按版本号判断更新），请升版本号重新出包` }
+  db.prepare(`INSERT INTO skill_packs(version,sha256,size,changelog,changed_skills,skills,commit_sha,status,created_at)
+              VALUES(?,?,?,?,?,?,?,'active',?)`).run(
+    String(p.version), String(p.sha256), Number(p.size),
+    String(p.changelog || ""), String(p.changed_skills || ""), String(p.skills || ""),
+    String(p.commit_sha || ""), Date.now())
+  return { ok: true, pack: getSkillPack(db, p.version) }
+}
+
+// meta 便签（一行 JSON 值；公告/并发限额已各自手写同款，这俩给后来的键共用）
+export function getMeta(db, key, fallback = null) {
+  const row = db.prepare("SELECT v FROM meta WHERE k=?").get(String(key))
+  if (!row) return fallback
+  try { return JSON.parse(row.v) } catch { return fallback }
+}
+export function setMeta(db, key, value) {
+  db.prepare("INSERT INTO meta(k,v) VALUES(?,?) ON CONFLICT(k) DO UPDATE SET v=excluded.v")
+    .run(String(key), JSON.stringify(value))
+}
+
+export const getSkillPack = (db, version) =>
+  db.prepare("SELECT * FROM skill_packs WHERE version=?").get(String(version)) || null
+
+export const listSkillPacks = (db) =>
+  db.prepare("SELECT * FROM skill_packs ORDER BY created_at DESC").all()
+
+export function setSkillPackStatus(db, version, status) {
+  const st = status === "disabled" ? "disabled" : "active"
+  const r = db.prepare("UPDATE skill_packs SET status=? WHERE version=?").run(st, String(version))
+  return r.changes > 0
+}
+
+export const deleteSkillPack = (db, version) =>
+  db.prepare("DELETE FROM skill_packs WHERE version=?").run(String(version)).changes > 0
 
 // ==== 并发限额 ================================================================
 //

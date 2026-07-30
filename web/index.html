@@ -361,7 +361,6 @@
   .genrow.queued .spin { border-color: rgba(180,83,9,.22); border-top-color: #b45309; }
   .qtip { margin: 6px 11px 0; padding: 8px 11px; background: #fffbeb; border: 1px solid #fde68a; border-radius: var(--r-sm); color: #92400e; font-size: 12px; line-height: 1.5; }
 
-
   /* ask form (option cards) */
   .askform { margin: 10px 0 2px; padding: 14px; background: linear-gradient(180deg, #f2f7fe, #eef4fc); border: 1px solid #cfe0f2; border-radius: var(--r-md); }
   .askintro { color: var(--text); font-size: 13px; font-weight: 600; margin-bottom: 12px; display: flex; align-items: center; gap: 7px; }
@@ -481,17 +480,23 @@
   #storebanner .sbx { margin-left: auto; background: none; border: 1px solid currentColor; color: inherit;
     border-radius: 6px; padding: 3px 10px; font-size: 12px; cursor: pointer; opacity: .75; }
   #storebanner .sbx:hover { opacity: 1; }
-  /* 平台公告横幅（见 body 里 #noticebanner 处的注释）。三档配色与后台的级别一一对应。 */
-  #noticebanner { padding: 9px 16px; font-size: 13px; line-height: 1.5; display: flex; align-items: center;
+  /* 平台公告横幅（见 body 里 #noticebanner 处的注释）。三档配色与后台的级别一一对应。
+     #skillbanner（技能更新提示）复用同一套样式：同为"顶部一条、可关掉"的平台消息。 */
+  #noticebanner, #skillbanner { padding: 9px 16px; font-size: 13px; line-height: 1.5; display: flex; align-items: center;
     gap: 10px; flex-wrap: wrap; border-bottom: 1px solid rgba(0,0,0,.08); }
-  #noticebanner.info { background: #e8f1fd; color: #14508f; }
+  #noticebanner.info, #skillbanner.info { background: #e8f1fd; color: #14508f; }
   #noticebanner.warn { background: #fff4e5; color: #8a4b08; }
   #noticebanner.urgent { background: #fdecea; color: #a3261a; }
-  #noticebanner b { font-weight: 600; }
+  #noticebanner b, #skillbanner b { font-weight: 600; }
   #noticebanner a { color: inherit; text-decoration: underline; }
-  #noticebanner .nbx { margin-left: auto; background: none; border: 1px solid currentColor; color: inherit;
+  #noticebanner .nbx, #skillbanner .nbx { background: none; border: 1px solid currentColor; color: inherit;
     border-radius: 6px; padding: 3px 10px; font-size: 12px; cursor: pointer; opacity: .75; }
-  #noticebanner .nbx:hover { opacity: 1; }
+  #noticebanner .nbx { margin-left: auto; }
+  #noticebanner .nbx:hover, #skillbanner .nbx:hover { opacity: 1; }
+  /* 技能横幅有两个按钮：第一个（立即更新）顶到右侧，实心强调（横幅恒为 info 蓝底） */
+  #skillbanner .nba { margin-left: auto; background: #14508f; color: #fff; border: none; border-radius: 6px;
+    padding: 4px 12px; font-size: 12px; cursor: pointer; }
+  #skillbanner .nba:disabled { opacity: .6; cursor: default; }
 </style>
 </head>
 <body>
@@ -518,6 +523,7 @@
      发微信）。位置同存储告急横幅 —— header 之下、main 之外，与侧栏开合无关，任何屏宽都挡不住。
      用户点「知道了」后按公告 id 记进 localStorage 不再弹；站长改了内容 id 会 ++，于是重新弹一次。 -->
 <div id="noticebanner" hidden></div>
+<div id="skillbanner" hidden></div>
 <main>
   <div id="sessbar">
     <div class="sb-top">
@@ -563,13 +569,14 @@
         <select id="zcoll" class="mm-input mm-select" style="flex:1;min-width:0"><option value="">整库 (My Library)</option></select>
         <button id="zimport" class="mm-btn ghost" type="button">导入</button>
       </div>
+      <!-- 仅当本会话有非空知识小库时才显示（JS 控制 display，别用 hidden 属性：会被内联 display 顶掉） -->
+      <label id="zaskrow" style="display:none;align-items:center;gap:6px;margin:2px 0 6px;cursor:pointer"><input type="checkbox" id="zask" checked style="margin:0">向知识小库提问（文献相关问题基于本会话导入的文献回答）</label>
       <div class="hint" style="margin:2px 0">提问检索范围</div>
       <select id="zscope" class="mm-input mm-select" style="margin-bottom:6px">
         <option value="">默认（不特别指定）</option>
-        <option value="session">会话小库（本次导入的）</option>
         <option value="library">整个 Zotero 库</option>
       </select>
-      <div id="zmsg" class="hint">从本机 Zotero 导入一批文献做本会话小库；提问时按上面选范围。需 Zotero 运行且开本地 API。</div>
+      <div id="zmsg" class="hint">从本机 Zotero 导入一批文献做本会话小库；导入后会自动勾选「向知识小库提问」。需 Zotero 运行且开本地 API。</div>
       <div id="zlist"></div>
       <button id="zpush" class="mm-btn ghost" type="button" hidden style="margin-top:6px">导出小库回 Zotero</button>
     </div>
@@ -1306,6 +1313,7 @@ async function resumeSession(id) {                 // 载入历史 → 设为当
   pendingProjectId = null                          // 打开的是已有会话 → 不是「立刻新建对话」，解除项目归入
   detachStream()                                   // 只退订原会话的流，后台生成不受影响
   sessionId = id; localStorage.setItem("nm_sid", id)
+  zScopeReset()                                    // 检索范围是页面级状态，切会话必须重置，别把 A 会话选的范围带进 B
   setModBadge(sessList.find((s) => s.id === id)?.module || "chat")   // 徽标随会话绑定走；列表未载入时 loadSessions 回来会再校正
   // 【必须看 r.ok】历史接口失败时服务端回的是 400 + 空数组体，直接 .json() 会得到一个合法的 []，
   // 于是"载入失败"被渲染成"这个会话本来就是空的" —— 用户以为几十轮对话没了，而实际只是没读到。
@@ -1331,7 +1339,7 @@ async function resumeSession(id) {                 // 载入历史 → 设为当
 async function deleteSession(id, title) {           // 删除会话（不可撤销，先确认；进行中的生成由后端一并终止）
   if (!confirm("删除会话「" + (title || id) + "」？此操作不可撤销。")) return
   await fetch("api/session/delete?id=" + encodeURIComponent(id), { method: "POST" }).catch(() => {})
-  if (id === sessionId) { detachStream(); sessionId = null; localStorage.removeItem("nm_sid"); log.innerHTML = ""; renderFiles([]); renderUploads([]); renderWelcome(); loadZotLib() }   // 删的是当前会话 → 回到空态
+  if (id === sessionId) { detachStream(); sessionId = null; localStorage.removeItem("nm_sid"); log.innerHTML = ""; renderFiles([]); renderUploads([]); renderWelcome(); zScopeReset(); loadZotLib() }   // 删的是当前会话 → 回到空态
   loadSessions(); refreshStorage()   // 删会话已释放其存储 → 刷新用量
 }
 // 左侧会话栏折叠/展开（默认折叠）
@@ -1418,7 +1426,7 @@ let sending = false     // POST /api/chat/start 往返期间为 true：此时还
 function sidQ() { return sessionId ? "&sid=" + encodeURIComponent(sessionId) : "" }   // 上传/下载/预览都带上会话 id，隔离各会话目录
 document.getElementById("new").addEventListener("click", () => {
   detachStream()   // 只退订不终止：原会话若在生成会继续跑，从左侧列表随时切回来看
-  sessionId = null; localStorage.removeItem("nm_sid"); log.innerHTML = ""; renderFiles([]); loadUploads(); loadSessions(); loadZotLib()
+  sessionId = null; localStorage.removeItem("nm_sid"); log.innerHTML = ""; renderFiles([]); loadUploads(); loadSessions(); zScopeReset(); loadZotLib()
   // 新对话回到默认模块（chat 可用则 chat，否则首个可用），在欢迎页重新选
   const allowed = MODULES.filter((m) => m.allowed)
   currentModule = allowed.some((m) => m.id === "chat") ? "chat" : (allowed[0]?.id || "chat")
@@ -1678,6 +1686,7 @@ function openStream(url) {
   es.addEventListener("failed", (ev) => { let m = "本轮出错"; try { m = JSON.parse(ev.data).message } catch {} finalize("⚠ " + m) })   // 服务端出错：如实提示，不丢会话
   es.addEventListener("aborted", () => finalize("⏹ 已终止"))   // 后端确认已终止（本页或别的页点了"终止"）
   es.addEventListener("notice", (ev) => { try { const n = document.createElement("div"); n.className = "note"; n.textContent = "⚠ " + JSON.parse(ev.data).message; answer.appendChild(n) } catch {} })   // 流内提示（气泡的幽灵标记已由 start 接口决定，不在这里推断）
+
   // ---- 云端排队 ----
   // 平台的并发闸满了（或上游正在限速）时，这一轮的请求在云端排队等位。不说清楚的话，用户看到
   // 的只是一个不动的转圈，几分钟后往往就去点刷新/重发，反而把队排得更长。所以：转圈那行改成
@@ -1887,9 +1896,51 @@ function clShow(mode, st) {
       '<div class="mm-kv"><span>今日用量</span><b>' + bar(use.today, lim.daily) + "</b></div>" +
       '<div class="mm-kv"><span>本月用量</span><b>' + bar(use.month, lim.monthly) + "</b></div>" +
       '<div class="mm-kv"><span>可用技能</span><b>' + ((p.skills && p.skills.length) ? p.skills.map(esc).join("、") : "全部") + "</b></div>" +
+      '<div id="clSkills"></div>' +
       '<div class="mm-hint" style="margin-top:12px">额度、可选模型与技能由管理员在后台调整；点上面的「刷新」即可拉到最新，'
       + "换模型在顶部的 🧠 里选。</div>"
+    loadClSkills()
   }
+}
+// 账号面板里的技能版本区：当前版本 / 有更新就给按钮 / 本机留存版本可回退。
+// 横幅点了「本版忽略」的用户从这里也能更新——忽略只是不弹，不是拒绝。
+async function loadClSkills() {
+  const box = document.getElementById("clSkills")
+  if (!box) return
+  try {
+    const s = await (await fetch("api/skillpacks/status", { signal: AbortSignal.timeout(10000) })).json()
+    if (!s.ok || !s.available) { box.innerHTML = ""; return }
+    const curName = s.current ? "v" + esc(s.current) : "出厂版"
+    const upd = s.update
+    const locals = (s.local || [])
+    box.innerHTML =
+      '<div class="mm-kv"><span>技能版本</span><b>' + curName +
+        (upd ? ' <button class="mm-btn ghost" id="clSkUp" style="padding:3px 10px;font-size:12px">更新到 v' + esc(upd.version) + "</button>"
+             : ' <span class="mm-faint">' + (s.latest ? "（已是最新）" : "") + "</span>") + "</b></div>" +
+      (locals.length
+        ? '<div class="mm-kv"><span>回退技能</span><b><select id="clSkVer" class="mm-input" style="width:auto;padding:3px 8px;font-size:12px">' +
+          locals.map(function (v) { return '<option value="' + esc(v.version) + '">' + (v.factory ? "出厂版" : "v" + esc(v.version)) + "</option>" }).join("") +
+          '</select> <button class="mm-btn ghost" id="clSkBack" style="padding:3px 10px;font-size:12px">回退</button></b></div>'
+        : "")
+    const busyRun = async (btn, path, body, doing) => {
+      const old = btn.textContent; btn.disabled = true; btn.textContent = doing
+      try {
+        const r = await skillPost(path, body)
+        if (!r) { btn.disabled = false; btn.textContent = old; return }
+        if (!r.ok) { clMsg("err", r.err || "操作失败"); btn.disabled = false; btn.textContent = old; return }
+        clMsg("ok", "技能已切到 " + (r.current ? "v" + r.current : "出厂版") + (r.restarted ? "（后台已重启）" : "（后台重启中…）"))
+        loadClSkills()
+      } catch { clMsg("err", "网络错误"); btn.disabled = false; btn.textContent = old }
+    }
+    const up = document.getElementById("clSkUp")
+    if (up) up.onclick = () => busyRun(up, "update", {}, "更新中…")
+    const back = document.getElementById("clSkBack")
+    if (back) back.onclick = () => {
+      const v = document.getElementById("clSkVer").value
+      if (!confirm("回退到 " + (v === "factory" ? "出厂版" : "v" + v) + "？\n技能目录会整体换回该版本并重启后台。")) return
+      busyRun(back, "rollback", { version: v }, "回退中…")
+    }
+  } catch { box.innerHTML = "" }
 }
 async function openCloud(force) {
   clMsg("info", "")
@@ -2122,6 +2173,54 @@ function renderNoticeBanner(n, needUpgrade) {
   el.append(msg, x)
   el.hidden = false
 }
+// ---- 技能包更新：横幅提示（不强制，可按版本忽略）+ 更新/回退动作 ----
+// 与升级客户端不同，技能更新是"换掉 .opencode/skills 目录 + 重启后台 opencode"，
+// 本机就能完成；有权限的账号（服务端按技能授权算 relevant）才会收到提示。
+const SK_KEY = "nm_skillpack_dismissed"
+async function skillPost(path, body, force) {
+  const r = await (await fetch("api/skillpacks/" + path, {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ ...(body || {}), force: !!force }),
+  })).json()
+  if (!r.ok && r.needForce) {
+    const yes = confirm("有 " + (r.busy || "若干") + " 轮正在生成中。\n更新/回退技能要重启后台，会中断它们且无法恢复。\n\n确定继续吗？")
+    if (!yes) return null
+    return skillPost(path, body, true)
+  }
+  return r
+}
+function renderSkillBanner(su) {
+  const el = document.getElementById("skillbanner")
+  if (!el) return
+  if (!su || !su.version) { el.hidden = true; return }
+  if (localStorage.getItem(SK_KEY) === su.version) { el.hidden = true; return }
+  el.className = "info"
+  el.textContent = ""
+  const msg = document.createElement("span")
+  const tag = document.createElement("b"); tag.textContent = "技能更新："
+  const changed = su.changedSkills || []
+  const names = changed.slice(0, 6).join("、") + (changed.length > 6 ? " 等" : "")
+  msg.append(tag, document.createTextNode("v" + su.version + (names ? "（更新了 " + names + "）" : "") +
+    (su.changelog ? " — " + String(su.changelog).slice(0, 100) : "")))
+  const go = document.createElement("button")
+  go.className = "nba"; go.type = "button"; go.textContent = "立即更新"
+  go.onclick = async () => {
+    go.disabled = true; go.textContent = "更新中…（会重启后台，约半分钟）"
+    try {
+      const r = await skillPost("update", {})
+      if (!r) { go.disabled = false; go.textContent = "立即更新"; return }
+      if (!r.ok) { alert("技能更新失败：" + (r.err || "未知错误")); go.disabled = false; go.textContent = "立即更新"; return }
+      el.textContent = "✅ 技能已更新到 v" + r.current + (r.restarted ? "" : "（后台仍在重启中，稍候片刻）")
+      setTimeout(() => { el.hidden = true }, 8000)
+    } catch { alert("网络错误"); go.disabled = false; go.textContent = "立即更新" }
+  }
+  const x = document.createElement("button")
+  x.className = "nbx"; x.type = "button"; x.textContent = "本版忽略"
+  x.title = "这一版不再提示；之后在「云端账号」面板里随时可以手动更新或回退"
+  x.onclick = () => { try { localStorage.setItem(SK_KEY, su.version) } catch {}; el.hidden = true }
+  el.append(msg, go, x)
+  el.hidden = false
+}
 let noticeLastFetch = 0
 async function refreshNotice(force) {
   // 窗口每次聚焦都会调这里，节流到 60 秒；本机网关另有一层 60 秒缓存，云端不会被打穿
@@ -2130,6 +2229,7 @@ async function refreshNotice(force) {
   try {
     const j = await (await fetch("api/cloud/notice", { signal: AbortSignal.timeout(8000) })).json()
     renderNoticeBanner(j && j.notice, j && j.needUpgrade)
+    renderSkillBanner(j && j.skillUpdate)
     // 登录态在后台被作废（管理员改了档位/技能会连 refresh 一起吊销）→ 当场弹登录窗。
     // 不这么做的话，用户会对着一个权限已经变了的旧界面继续操作，直到发消息那一刻才被打断。
     if (j && j.loggedOut) return openCloud(true)
@@ -2211,22 +2311,46 @@ async function loadCollections() {
       cols.map((c) => `<option value="${zEsc(c.key)}">${zEsc(c.name)} (${c.count})</option>`).join("")
   } catch { /* Zotero 未运行时保持默认整库项 */ }
 }
+let zLibCount = 0   // 本会话小库条数（zScopePrefix 的注入条件之一）
+const zAskRow = document.getElementById("zaskrow")
+const zAskEl = document.getElementById("zask")
+// 「向知识小库提问」勾选框：仅当本会话小库非空时可见，出现时默认勾选。
+// zAskSid 记录"上次为哪个会话应用过默认值"——同一会话内用户手动取消勾选后，loadZotLib 再跑
+// （如导出回写后刷新列表）不能把它又勾回去；切到别的会话则重新应用默认。
+let zAskSid = null
+function zAskSync() {
+  const show = zLibCount > 0
+  zAskRow.style.display = show ? "flex" : "none"
+  if (show && zAskSid !== sessionId) { zAskEl.checked = true; zAskSid = sessionId }
+  if (!show) zAskSid = null   // 小库空了/没会话 → 下次出现时重新默认勾选
+}
 async function loadZotLib() {
-  if (!sessionId) { zListEl.innerHTML = ""; zPushBtn.hidden = true; return }
+  if (!sessionId) { zLibCount = 0; zListEl.innerHTML = ""; zPushBtn.hidden = true; zAskSync(); return }
   try {
     const refs = await fetch("api/zotero/lib?x=1" + sidQ()).then((r) => r.json()).then((j) => j.refs || [])
+    zLibCount = refs.length
     zPushBtn.hidden = !refs.length
     const withPdf = refs.filter((r) => r.pdf).length
     zListEl.innerHTML = refs.length ? `<div class="hint">本会话小库：${refs.length} 篇（${withPdf} 篇有 PDF 可检索）</div>` : ""
-  } catch { /* 忽略 */ }
+  } catch { /* 忽略（拉不到时沿用上次的 zLibCount，别把用户明确选的范围悄悄丢掉） */ }
+  zAskSync()
 }
-// 发消息时按面板所选范围给 agent 加一行范围指示（服务端回看历史时会剥掉，见 ZSCOPE_RE）
+// 发消息时按面板状态给 agent 加一行范围指示（服务端回看历史时会剥掉，见 ZSCOPE_RE；
+// 所以必须保持「【检索范围：」开头 + 单行」的格式，改文案别破坏这两点）。
+// 【条件注入】只在"真有东西可检索"时才拼：下拉选"整个库"但 Zotero 没连上 → 不注入；
+// 勾选框只在小库非空时可见。否则一句无关的 "hi" 也会带着 Zotero 指示发过去，
+// 模型就去探测 Zotero 再回来汇报"没连"——用户根本没提 Zotero，只会觉得莫名其妙。
+// 【优先级】下拉"整个库"（范围更大、用户显式选的）> 勾选框"向知识小库提问"（导入后的默认）。
+// 勾选框默认开着、会话内每条消息都带 → 指示写成条件式：文献相关才用小库，无关请求忽略，
+// 免得模型对"帮我排版"这类请求也硬去跑一遍 RAG。
 function zScopePrefix() {
   const v = zScopeEl ? zScopeEl.value : ""
-  if (v === "session") return "【检索范围：本会话导入的 Zotero 小库；用 zotero-library 技能对当前目录下的 zotero_lib 做全文 RAG（--pdf-dir zotero_lib）】\n"
-  if (v === "library") return "【检索范围：整个本机 Zotero 库；用 zotero-library 技能 --library 做全文 RAG】\n"
+  if (v === "library" && zReady) return "【检索范围：整个本机 Zotero 库；用 zotero-library 技能 --library 做全文 RAG】\n"
+  if (zAskEl && zAskEl.checked && zLibCount > 0) return "【检索范围：本会话已导入 Zotero 知识小库（当前目录 zotero_lib/）。若本条请求涉及文献内容（问答/综述/引用等），用 zotero-library 技能对该目录做全文 RAG（--pdf-dir zotero_lib）、基于检索证据作答并给出处；若与文献内容无关，忽略本指示、不必提及】\n"
   return ""
 }
+// 切会话 / 新建会话时把范围重置回"默认"：这个下拉是页面级状态，不重置就会从 A 会话漏到 B 会话。
+function zScopeReset() { if (zScopeEl) zScopeEl.value = "" }
 document.getElementById("zimport").addEventListener("click", async () => {
   if (!zReady) { zMsgEl.textContent = zNotRunningMsg(); loadZoteroStatus(); return }
   zMsgEl.textContent = "导入中…（把 PDF 复制进本会话小库）"
@@ -2237,8 +2361,10 @@ document.getElementById("zimport").addEventListener("click", async () => {
     }).then((r) => r.json())
     if (j.sid && !sessionId) { sessionId = j.sid; localStorage.setItem("nm_sid", j.sid); loadSessions() }
     zMsgEl.textContent = j.ok
-      ? `✅ 导入 ${j.copied} 篇 PDF${j.no_pdf ? `（${j.no_pdf} 篇无 PDF 已跳过）` : ""}。提问时把“检索范围”选“会话小库”。`
+      ? `✅ 导入 ${j.copied} 篇 PDF${j.no_pdf ? `（${j.no_pdf} 篇无 PDF 已跳过）` : ""}。已自动勾选「向知识小库提问」，文献相关问题会基于这批文献回答。`
       : ("导入失败：" + (j.hint || j.error || "未知错误"))
+    // 导入成功=明确要用这批文献：即使本会话此前手动取消过勾选，也重新勾上（与上面的提示文案一致）
+    if (j.ok) { zAskEl.checked = true; zAskSid = sessionId }
     loadZotLib(); refreshStorage()   // 小库 PDF 计入本用户存储配额，导入后刷新用量条
   } catch (e) { zMsgEl.textContent = "导入失败：" + e }
 })

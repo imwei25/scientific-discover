@@ -63,10 +63,10 @@ export function saveState(s) {
 export function clearState() { try { fs.unlinkSync(statePath()) } catch {} }
 
 // ---- 调 sci-auth ----
-async function api(pathname, { method = "GET", body, token } = {}) {
+async function api(pathname, { method = "GET", body, token, headers: extraHeaders } = {}) {
   const base = cloudBase()
   if (!base) return { ok: false, status: 0, error: { code: "NO_CLOUD_URL", message: "未配置云端地址（cloud.json 的 gatewayUrl）" } }
-  const headers = { "x-client-version": process.env.APP_VERSION || "dev" }
+  const headers = { "x-client-version": process.env.APP_VERSION || "dev", ...(extraHeaders || {}) }
   if (body !== undefined) headers["content-type"] = "application/json"
   if (token) headers["authorization"] = "Bearer " + token
   let r
@@ -201,6 +201,41 @@ export async function fetchQueue() {
   const r = await api("/api/queue", { token: a.token })
   if (!r.ok) return r
   return { ok: true, queue: r.data.queue || null }
+}
+
+/**
+ * 技能包：问一次"服务器上最新发布的是哪版"。低频（server.mjs 侧半小时一次），
+ * 顺便把本机已装版本用 X-Skills-Version 报上去 —— 后台的"技能版本分布"就是靠它。
+ */
+export async function fetchSkillLatest(installedVersion) {
+  const a = await currentAccess()
+  if (!a.ok) return a
+  const r = await api("/api/skills/latest", { token: a.token, headers: { "x-skills-version": installedVersion || "" } })
+  if (!r.ok) return r
+  return { ok: true, latest: r.data.latest || null }
+}
+
+/** 技能包：下载指定版本的 zip。二进制走不了 api()（那边固定 r.json()），单独写。 */
+export async function downloadSkillPack(version) {
+  const a = await currentAccess()
+  if (!a.ok) return a
+  const base = cloudBase()
+  if (!base) return { ok: false, error: { code: "NO_CLOUD_URL", message: "未配置云端地址" } }
+  try {
+    const r = await fetch(base + "/api/skills/pack?version=" + encodeURIComponent(version), {
+      headers: { authorization: "Bearer " + a.token, "x-client-version": process.env.APP_VERSION || "dev" },
+      // 包是几 MB～几十 MB 的 zip，弱网下 20s 不够；给到 5 分钟，再慢就该报错让用户重试了
+      signal: AbortSignal.timeout(5 * 60_000),
+    })
+    if (!r.ok) {
+      let j = null; try { j = await r.json() } catch {}
+      return { ok: false, status: r.status, error: (j && j.error) || { code: "HTTP_" + r.status, message: "下载失败（HTTP " + r.status + "）" } }
+    }
+    const buf = Buffer.from(await r.arrayBuffer())
+    return { ok: true, buf, sha256: String(r.headers.get("x-pack-sha256") || "") }
+  } catch (e) {
+    return { ok: false, status: 0, error: { code: "NETWORK", message: e?.name === "TimeoutError" ? "下载超时" : "连不上云端服务" } }
+  }
 }
 
 /** 给界面用的状态摘要（不含任何凭证） */

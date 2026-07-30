@@ -169,7 +169,7 @@ function render(){
   $('#sub').textContent='共 '+S.total+' 个账号';
   $('#app').innerHTML=
     '<div class="tabs">'+
-      tabBtn('users','用户')+tabBtn('board','看板')+tabBtn('bill','对账')+tabBtn('tiers','档位')+tabBtn('prov','模型供应商')+tabBtn('chan','上游通道')+tabBtn('audit','审计')+
+      tabBtn('users','用户')+tabBtn('board','看板')+tabBtn('bill','对账')+tabBtn('tiers','档位')+tabBtn('prov','模型供应商')+tabBtn('chan','上游通道')+tabBtn('packs','技能包')+tabBtn('audit','审计')+
     '</div><div id="pane"></div>';
   Array.prototype.forEach.call(document.querySelectorAll('.tabs button'),function(b){
     b.onclick=function(){S.tab=b.dataset.k;
@@ -177,6 +177,7 @@ function render(){
       else if(S.tab==='chan')loadChannels();
       else if(S.tab==='prov')loadProviders();
       else if(S.tab==='bill')loadBill();
+      else if(S.tab==='packs')loadPacks();
       else render()}});
   if(S.tab==='users')paneUsers();
   else if(S.tab==='board')paneBoard();
@@ -705,7 +706,6 @@ function renderLimits(d){
       if(!j.ok)return toast(j.err||'保存失败',false);
       toast('已保存并立刻生效',true);loadLimits()})}
 }
-
 
 // ---------- 公告 ----------
 // 通知全员（今晚维护 / 某模型下线 / 新版客户端已发）此前只能一个个发微信。
@@ -1240,6 +1240,124 @@ function paneChannels(){
         else toast(b.dataset.a==='def'?('已把 '+c.name+' 设为该模型的默认'):'已保存',true);
         loadChannels()})
         .catch(function(){b.disabled=false;toast('网络错误',false)})}});
+}
+
+// ---------- 技能包 ----------
+// 管理员把 scripts/make-skill-pack.mjs 出的整套技能 zip 传上来发布；客户端（桌面版）
+// 轮询到新版本后自行提示更新——不强制、可回退。服务端侧回退 = 把出问题的版本「撤下」，
+// 客户端此后看到的最新版就退回上一个 active 的版本。
+function fmtSize(n){n=Number(n)||0;return n>=1048576?(n/1048576).toFixed(1)+' MB':Math.round(n/1024)+' KB'}
+function loadPacks(){
+  render();
+  $('#pane').innerHTML='<section><h2>技能包</h2><p class="mut">加载中…</p></section>';
+  Promise.all([api('skill-packs'),api('skill-src')]).then(function(rs){
+    var j=rs[0],src=rs[1];
+    if(!j.ok){if(!j.unauth)$('#pane').innerHTML='<section><div class="msg err" style="display:block">'+esc(j.err||'加载失败')+'</div></section>';return}
+    if(!src||!src.ok)src={remote:{configured:false},localRoot:'',lastPublished:null,venvLint:false};
+    var rows=(j.packs||[]).map(function(p){
+      var tag=p.version===j.current?'<span class="tag" style="background:var(--acc);color:#fff">当前最新</span>'
+        :p.status!=='active'?'<span class="tag">已撤下</span>':'';
+      return '<tr'+(p.status!=='active'?' style="opacity:.55"':'')+'>'+
+        '<td><b>'+esc(p.version)+'</b> '+tag+(p.fileOk?'':' <span class="tag" style="color:var(--bad)">文件缺失</span>')+'</td>'+
+        '<td class="mut" style="white-space:nowrap">'+dt(p.createdAt)+'</td>'+
+        '<td>'+fmtSize(p.size)+'</td>'+
+        '<td class="mut" style="font-size:12.5px;max-width:300px">'+
+          (p.changedSkills.length?'变更：'+esc(p.changedSkills.join('、'))+'<br>':'')+esc(p.changelog||'')+'</td>'+
+        '<td style="white-space:nowrap">'+
+          (p.status==='active'
+            ?'<button class="btn sm" data-act="disable" data-v="'+esc(p.version)+'">撤下</button>'
+            :'<button class="btn sm" data-act="enable" data-v="'+esc(p.version)+'">恢复</button>')+
+          ' <button class="btn sm danger" data-act="delete" data-v="'+esc(p.version)+'">删除</button></td></tr>'}).join('');
+    var vers=(j.versions||[]).map(function(v){
+      return '<span class="tag">'+esc(v.v||'（未汇报）')+' × '+v.n+'</span>'}).join(' ');
+    var srcLine=src.remote.configured
+      ?'远程：<code>'+esc(src.remote.url)+'</code> @ <code>'+esc(src.remote.ref)+'</code>'
+      :'<b>未配置 SKILL_REPO_URL</b>（/etc/sci-auth.env）——只能从服务器本地检出发布';
+    $('#pane').innerHTML='<section><h2>从仓库发布（推荐）</h2>'+
+      '<div class="hint" style="margin:0 0 10px">git 仓库是唯一源头，这里只当扳机：先「检查更新」看预览（待发布的提交、变更了哪些技能），确认无误再发布。'+
+      '发布后客户端收到更新提示（不强制、可回退、本地留最近 5 版）。<br>'+srcLine+
+      (src.lastPublished?'　·　上次发布：<code>'+esc(src.lastPublished.version)+'</code>'+(src.lastPublished.commitSha?' @ <code>'+esc(src.lastPublished.commitSha.slice(0,10))+'</code>':''):'')+
+      (src.venvLint?'':'　·　<b>依赖 lint 未启用</b>（还没有嵌过 .venv 清单的整包，先手动上传一次脚本出的整包即可启用）')+'</div>'+
+      '<div class="row"><select id="sr-src" style="max-width:180px">'+
+        (src.remote.configured?'<option value="remote">远程同步（git fetch）</option>':'')+
+        '<option value="local">服务器本地检出</option></select>'+
+      '<button class="btn primary" id="sr-check">检查更新</button></div>'+
+      '<div id="sr-preview"></div></section>'+
+      '<section><h2>手动上传整包（兜底）</h2>'+
+      '<div class="hint" style="margin:0 0 10px">用仓库里的 <code>node scripts/make-skill-pack.mjs</code> 出包后在这里上传即发布。'+
+      '整包里嵌的 .venv 依赖清单会被留存，供上面「从仓库发布」做依赖 lint。'+
+      '<b>技能若引入新 pip 依赖，走不了在线更新</b>——上传时会自动检查并拦下，那种更新要重新打包客户端分发。</div>'+
+      '<div class="row"><input type="file" id="pk-file" accept=".zip">'+
+      '<button class="btn" id="pk-up">上传并发布</button></div>'+
+      '<div id="pk-lint"></div></section>'+
+      '<section><h2>已发布版本'+(j.current?'（当前最新：'+esc(j.current)+'）':'（还没发布过）')+'</h2>'+
+      '<div class="hint" style="margin:0 0 10px">客户端技能版本分布：'+(vers||'<span class="mut">暂无数据（客户端升级后才会汇报）</span>')+'</div>'+
+      '<table><thead><tr><th>版本</th><th>发布时间</th><th>大小</th><th>说明</th><th></th></tr></thead>'+
+      '<tbody>'+(rows||'<tr><td colspan="5" class="mut">暂无版本</td></tr>')+'</tbody></table></section>';
+    function upload(force){
+      var f=$('#pk-file').files[0];
+      if(!f)return toast('先选择技能包 zip',false);
+      $('#pk-up').disabled=true;toast('上传中…（'+fmtSize(f.size)+'）',true);
+      api('skill-pack-upload'+(force?'?force=1':''),{method:'POST',body:f}).then(function(r){
+        $('#pk-up').disabled=false;
+        if(r.ok){
+          toast('已发布 '+r.version+'（'+r.skills.length+' 个技能'+(r.forced?'，强制发布':'')+'）',true);
+          if((r.warnings||[]).length)$('#pk-lint').innerHTML='<div class="msg" style="display:block">'+r.warnings.map(esc).join('<br>')+'</div>';
+          loadPacks();return}
+        // 依赖 lint 拦下：列出可疑 import，让管理员核实后决定强制与否
+        if(r.needForce){
+          $('#pk-lint').innerHTML='<div class="msg err" style="display:block">'+esc(r.err)+'<br><br>'+
+            (r.lint||[]).map(function(i){return esc(i.file)+' → import <b>'+esc(i.module)+'</b>'}).join('<br>')+
+            '<br><br><button class="btn danger sm" id="pk-force">我已核实，强制发布</button></div>';
+          $('#pk-force').onclick=function(){upload(true)};
+          return}
+        toast(r.err||'上传失败',false)})}
+    $('#pk-up').onclick=function(){upload(false)};
+    // ---- 从仓库发布：检查更新 → 预览 → 发布 ----
+    function srPublish(pv,force){
+      var btn=$('#sr-go');if(btn){btn.disabled=true;btn.textContent='发布中…'}
+      post('skill-src',{action:'publish',source:pv.source,sha:pv.sha,
+        changelog:($('#sr-log')?$('#sr-log').value.trim():''),force:!!force}).then(function(r){
+        if(r.ok){toast('已发布 '+r.version+'（'+r.skills.length+' 个技能'+(r.forced?'，强制发布':'')+'）',true);loadPacks();return}
+        if(r.staleSha){toast(r.err,false);srCheck();return}
+        if(r.needForce){
+          $('#sr-preview').insertAdjacentHTML('beforeend','<div class="msg err" style="display:block">'+esc(r.err)+'<br><br>'+
+            (r.lint||[]).map(function(i){return esc(i.file)+' → import <b>'+esc(i.module)+'</b>'}).join('<br>')+
+            '<br><br><button class="btn danger sm" id="sr-force">我已核实，强制发布</button></div>');
+          $('#sr-force').onclick=function(){srPublish(pv,true)};
+          if(btn){btn.disabled=false;btn.textContent='发布 '+pv.nextVersion}
+          return}
+        toast(r.err||'发布失败',false);if(btn){btn.disabled=false;btn.textContent='发布 '+pv.nextVersion}})}
+    function srCheck(){
+      var srcSel=$('#sr-src').value;
+      $('#sr-check').disabled=true;$('#sr-preview').innerHTML='<p class="mut">同步并比对中…（首次要克隆仓库，可能要一会儿）</p>';
+      post('skill-src',{action:'check',source:srcSel}).then(function(pv){
+        $('#sr-check').disabled=false;
+        if(!pv.ok){$('#sr-preview').innerHTML='<div class="msg err" style="display:block">'+esc(pv.err||'检查失败')+'</div>';return}
+        var logDflt=(pv.commits||[]).map(function(c){var i=c.indexOf(' ');return i>0?c.slice(i+1):c}).slice(0,10).join('；');
+        $('#sr-preview').innerHTML=
+          '<div class="hint" style="margin:10px 0 8px">源 <code>'+esc(pv.shortSha||'（非 git 检出）')+'</code> · '+
+            pv.skills+' 个技能，'+fmtSize(pv.sizeBytes)+(pv.preserved&&pv.preserved.length?' · 包外保留：'+esc(pv.preserved.join('、')):'')+
+            ' · 将发布为 <b>'+esc(pv.nextVersion)+'</b></div>'+
+          (pv.upToDate?'<div class="msg ok" style="display:block">已是最新：源与上次发布的 commit 相同，没有要发的东西。</div>':
+            ((pv.warnings||[]).length?'<div class="msg" style="display:block">'+pv.warnings.map(esc).join('<br>')+'</div>':'')+
+            '<div style="margin:8px 0">变更技能：'+((pv.changedSkills||[]).length?pv.changedSkills.map(function(s){return '<span class="tag">'+esc(s)+'</span>'}).join(' '):'<span class="mut">（未知——将提示所有用户）</span>')+
+              (pv.agentsChanged?' <span class="tag">AGENTS.md 路由表有更新</span>':'')+'</div>'+
+            ((pv.commits||[]).length?'<div class="mut" style="font-size:12.5px;max-height:140px;overflow:auto;margin:8px 0">'+pv.commits.map(esc).join('<br>')+'</div>':'')+
+            '<div class="row" style="margin-top:8px"><input id="sr-log" placeholder="更新说明（留空 = 用提交说明拼）" value="'+esc(logDflt).slice(0,300)+'" style="flex:1">'+
+            '<button class="btn primary" id="sr-go">发布 '+esc(pv.nextVersion)+'</button></div>');
+        var go=$('#sr-go');if(go)go.onclick=function(){srPublish(pv,false)};
+      })}
+    $('#sr-check').onclick=srCheck;
+    Array.prototype.forEach.call(document.querySelectorAll('#pane [data-act]'),function(b){
+      b.onclick=function(){
+        var v=b.dataset.v,act=b.dataset.act;
+        if(act==='delete'&&!confirm('删除版本 '+v+'？包文件一并删除，已装该版的客户端不受影响，但无法再从服务器重新下到它。'))return;
+        if(act==='disable'&&!confirm('撤下版本 '+v+'？客户端将不再提示更新到它；已更新的客户端可自行回退本地留存的旧版。'))return;
+        post('skill-pack',{version:v,action:act}).then(function(r){
+          if(r.ok){toast('已'+(act==='delete'?'删除':act==='disable'?'撤下':'恢复')+' '+v,true);loadPacks()}
+          else toast(r.err||'操作失败',false)})}});
+  })
 }
 
 // ---------- 审计 ----------
