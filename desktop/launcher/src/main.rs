@@ -229,6 +229,13 @@ fn main() {
                 // （那儿没有 rc 文件、configdir 也没铺过），故这条 env 是包内 matplotlibrc 唯一的生效通道；
                 // node 把整份 env 传给 opencode 再传给技能 python，一处注入全链路生效。
                 .env("MATPLOTLIBRC", appdir.join("matplotlibrc"))
+                // 客户端版本。网关把它作为 X-Client-Version 发给云端，后台的「客户端版本」
+                // 列与公告的「最低版本」校验都靠它。
+                // 【此前全仓没有一处给 APP_VERSION 赋值】于是 cloud-account.mjs 里那个
+                // `process.env.APP_VERSION || "dev"` 恒取 "dev" —— 后台看到的是一片 dev，
+                // 想催升级也无从下手。用 Cargo 包版本（= tauri.conf.json 里那个）钉住，
+                // 发版时改一处即可。
+                .env("APP_VERSION", env!("CARGO_PKG_VERSION"))
                 .creation_flags(CREATE_NO_WINDOW);
 
             // 网关日志：node 的 stdout/stderr 原先直接丢弃，客户现场出问题什么都拿不到

@@ -415,7 +415,58 @@ function paneBoard(){
     (s.length?'<div class="spark">'+s.map(function(x){
       return '<i style="height:'+Math.max(2,Math.round(x.cost/max*52))+'px" title="'+x.day+' '+money(x.cost)+'"></i>'}).join('')+
       '</div><div class="hint">峰值 '+money(max)+'/天</div>':'<p class="mut">还没有用量数据</p>')+
-    '</section>';
+    '</section>'+
+    '<section id="nt-box"><h2>公告</h2><p class="mut">加载中…</p></section>';
+  // 【异步只填这一个盒子，不回调 render】render() 在 board 页会再调回本函数，
+  // 走 load→render→pane→load 就是死循环（本文件另外两处已经踩过）。
+  api('notice').then(function(d){if(d.ok)renderNotice(d)});
+}
+
+// ---------- 公告 ----------
+// 通知全员（今晚维护 / 某模型下线 / 新版客户端已发）此前只能一个个发微信。
+// 公告随 /api/me 下发，客户端另有 /api/notice 轻量轮询（档案 24h 才续一次，维护通知等不了）。
+function renderNotice(d){
+  var box=$('#nt-box');if(!box)return;              // 用户可能已经切走了
+  var n=d.notice||{},vs=d.versions||[];
+  var lv=function(v,label,hint){return '<option value="'+v+'"'+(n.level===v?' selected':'')+'>'+label+' —— '+hint+'</option>'};
+  box.innerHTML='<div class="row"><h2 style="margin:0">公告</h2>'+
+    (n.enabled?'<span class="tag ok">发布中</span>':'<span class="tag">未发布</span>')+
+    '<span class="sp"></span><span class="mut" style="font-size:12.5px">'+
+      (n.updatedAt?'上次改动 '+dt(n.updatedAt)+' · 第 '+n.id+' 版':'还没发过公告')+'</span></div>'+
+    '<div class="hint" style="margin:8px 0 12px">发布后：已登录的客户端几分钟内在顶部看到一条横幅，'+
+    '用户点掉就不再弹 —— 但你<b>改了内容</b>会重新弹给所有人（只改开关不动内容不会重复打扰）。</div>'+
+    '<div class="grid" style="grid-template-columns:104px 1fr">'+
+    '<label>内容</label><textarea id="nt-t" rows="3" style="width:100%" placeholder="今晚 22:00–22:30 维护，期间可能无法生成。">'+esc(n.text||'')+'</textarea>'+
+    '<label>级别</label><select id="nt-l">'+
+      lv('info','提示','蓝色，日常通知')+lv('warn','警告','黄色，会影响使用')+lv('urgent','紧急','红色，需要立刻知道')+'</select>'+
+    '<label>最低版本</label><input id="nt-v" value="'+esc(n.minClientVersion||'')+'" placeholder="如 1.2.0；留空 = 不检查">'+
+    '<label>下载地址</label><input id="nt-u" value="'+esc(n.downloadUrl||'')+'" placeholder="带 http(s) 前缀，留空 = 只提示不给链接">'+
+    '</div>'+
+    '<div class="hint" style="margin-top:10px">填了「最低版本」后，比它旧的客户端会被额外提示升级'+
+    '（认不出版本号的构建 —— 如开发机的 dev —— 一律不催，免得每次打开都被弹）。</div>'+
+    '<div class="hint" style="margin-top:6px">当前在用的客户端版本：'+
+      (vs.length?vs.map(function(v){return '<span class="tag">'+esc(v.v)+' × '+v.n+'</span>'}).join(' ')
+                :'<span class="mut">还没有客户端报过版本</span>')+'</div>'+
+    '<div class="row" style="margin-top:14px"><button class="btn primary" id="nt-save">发布</button>'+
+    '<button class="btn" id="nt-off"'+(n.enabled?'':' disabled')+'>停止发布</button>'+
+    '<span class="sp"></span><button class="btn sm" id="nt-prev">预览</button></div>'+
+    '<div id="nt-pv" style="margin-top:12px"></div>';
+
+  var body=function(en){return {enabled:en,text:$('#nt-t').value,level:$('#nt-l').value,
+    minClientVersion:$('#nt-v').value.trim(),downloadUrl:$('#nt-u').value.trim()}};
+  var save=function(en){
+    post('notice',body(en)).then(function(j){
+      if(!j.ok)return toast(j.err||'保存失败',false);
+      toast(en?'公告已发布（客户端几分钟内看到）':'已停止发布',true);
+      api('notice').then(function(d2){if(d2.ok)renderNotice(d2)})})};
+  $('#nt-save').onclick=function(e){e.preventDefault();save(true)};
+  $('#nt-off').onclick=function(e){e.preventDefault();save(false)};
+  $('#nt-prev').onclick=function(e){e.preventDefault();
+    var b=body(true),cls=b.level==='urgent'?'err':b.level==='warn'?'err':'ok';
+    $('#nt-pv').innerHTML='<div class="msg '+cls+'" style="position:static;max-width:none;display:block">'+
+      (b.level==='urgent'?'🔴 ':b.level==='warn'?'🟡 ':'🔵 ')+esc(b.text||'（没有正文）')+
+      (b.minClientVersion?'<br><b>请升级到 '+esc(b.minClientVersion)+' 或更高版本</b>'+
+        (b.downloadUrl?'（公告里会带一个下载链接）':''):'')+'</div>'};
 }
 
 // ---------- 对账 ----------

@@ -167,6 +167,25 @@ export async function fetchProfile() {
   return { ok: true, profile: r.data.profile }
 }
 
+/**
+ * 拉一次平台公告（站长在后台发布的横幅 / 最低客户端版本）。
+ *
+ * 【为什么不复用 fetchProfile】档案只在登录、access key 续期（TTL 24h、提前 10 分钟续）
+ * 或用户手点"刷新"时才重取 —— 一条"今晚 10 点维护"的公告要等到明天才到用户眼前。
+ * 这个口只读服务端一行 meta，可以放心几分钟问一次。
+ *
+ * 也【刻意不写进 cloud-state.json】：公告是纯展示信息，落盘只会带来"本地缓存与服务端
+ * 不一致"的一类新问题（比如站长撤了公告、本地还留着）。要不要记"用户点掉过"由前端的
+ * localStorage 按公告 id 记，那才是真正需要持久的东西。
+ */
+export async function fetchNotice() {
+  const a = await currentAccess()
+  if (!a.ok) return a
+  const r = await api("/api/notice", { token: a.token })
+  if (!r.ok) return r
+  return { ok: true, notice: r.data.notice || null, needUpgrade: !!r.data.needUpgrade, clientVersion: r.data.clientVersion || "" }
+}
+
 /** 给界面用的状态摘要（不含任何凭证） */
 export function status() {
   const s = loadState()

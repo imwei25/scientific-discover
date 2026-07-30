@@ -666,6 +666,58 @@ export const revokeRefresh = (db, tokenHash) =>
 export const purgeExpiredRefresh = (db, now = Date.now()) =>
   db.prepare("DELETE FROM refresh_tokens WHERE exp < ? OR revoked=1").run(now)
 
+// ==== 公告 ====================================================================
+//
+// 站长要通知全员（今晚维护、某模型下线、新版客户端已发）此前只能一个个发微信。
+//
+// 【为什么存在 meta 里而不是新建一张表】全站同一时刻只有一条公告，一行就够；建表要连
+// 带迁移，收益是零。id 单调递增，客户端"不再提示"记的是它 —— 于是改一次内容就会重新
+// 弹给所有人，而用户点掉之后不会因为某次轮询又冒出来。
+export const NOTICE_LEVELS = ["info", "warn", "urgent"]
+
+const NOTICE_EMPTY = { enabled: false, text: "", level: "info", minClientVersion: "", downloadUrl: "", id: 0, updatedAt: 0 }
+
+export function getNotice(db) {
+  const row = db.prepare("SELECT v FROM meta WHERE k='notice'").get()
+  if (!row) return { ...NOTICE_EMPTY }
+  try { return { ...NOTICE_EMPTY, ...JSON.parse(row.v) } } catch { return { ...NOTICE_EMPTY } }
+}
+
+export function setNotice(db, n) {
+  const cur = getNotice(db)
+  const text = String(n.text == null ? cur.text : n.text).slice(0, 2000)
+  const level = NOTICE_LEVELS.includes(n.level) ? n.level : cur.level
+  const next = {
+    enabled: n.enabled === undefined ? cur.enabled : !!n.enabled,
+    text, level,
+    minClientVersion: String(n.minClientVersion == null ? cur.minClientVersion : n.minClientVersion).trim().slice(0, 32),
+    downloadUrl: String(n.downloadUrl == null ? cur.downloadUrl : n.downloadUrl).trim().slice(0, 500),
+    // 【只有"用户会看到的东西变了"才 ++id】否则每点一次保存（哪怕只是改了个错别字之外
+    // 什么都没动）都会把已经点掉公告的人重新弹一遍，公告条就变成了噪音。
+    id: cur.id,
+    updatedAt: Date.now(),
+  }
+  const visibleChanged = next.enabled !== cur.enabled || next.text !== cur.text ||
+    next.level !== cur.level || next.minClientVersion !== cur.minClientVersion || next.downloadUrl !== cur.downloadUrl
+  if (visibleChanged) next.id = cur.id + 1
+  db.prepare("INSERT INTO meta(k,v) VALUES('notice',?) ON CONFLICT(k) DO UPDATE SET v=excluded.v")
+    .run(JSON.stringify(next))
+  return next
+}
+
+/**
+ * 客户端要看到的那份（关掉了就什么都不下发）。
+ * 【不下发 updatedAt 之外的内部字段】客户端只需要"显示什么、要不要催升级、记哪个 id"。
+ */
+export function publicNotice(db) {
+  const n = getNotice(db)
+  if (!n.enabled || (!n.text && !n.minClientVersion)) return null
+  return {
+    id: n.id, text: n.text, level: n.level,
+    minClientVersion: n.minClientVersion, downloadUrl: n.downloadUrl, updatedAt: n.updatedAt,
+  }
+}
+
 // ==== 审计 ====================================================================
 
 /**

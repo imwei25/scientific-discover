@@ -353,6 +353,65 @@ test("上游错误翻成人话：余额不足/密钥失效/限流各给各的下
   assert.equal(D({ name: "UnknownError", data: {} }, "cloud").length > 10, true)
 })
 
+// ---- 平台公告 ----------------------------------------------------------------
+
+test("公告：未登录不打云端、直接回空", async (t) => {
+  const r = await rig(); t.after(() => r.close())
+  // 把云端整个关掉，证明这条路径压根没往外发请求
+  await r.be.close()
+  const n = await r.gw.req("/api/cloud/notice")
+  assert.equal(n.status, 200)
+  assert.equal(n.json.ok, true)
+  assert.equal(n.json.notice, null)
+})
+
+test("公告：登录后拿到站长发布的那条，含最低版本判定", async (t) => {
+  const r = await rig(); t.after(() => r.close())
+  await r.be.admin("/admin/api/notice", { method: "POST", body: {
+    enabled: true, text: "今晚 22:00 维护", level: "warn", minClientVersion: "99.0.0" } })
+  await loginReady(r)
+  const n = await r.gw.req("/api/cloud/notice")
+  assert.equal(n.json.notice.text, "今晚 22:00 维护")
+  assert.equal(n.json.notice.level, "warn")
+  // 本机 APP_VERSION 没注入时上报的是 "dev" —— 认不出版本就不催升级
+  assert.equal(n.json.needUpgrade, false)
+  assert.equal(n.json.clientVersion, "dev")
+})
+
+test("公告：本机 60 秒缓存，手点「刷新」立刻穿透", async (t) => {
+  const r = await rig(); t.after(() => r.close())
+  await r.be.admin("/admin/api/notice", { method: "POST", body: { enabled: true, text: "第一版" } })
+  await loginReady(r)
+  assert.equal((await r.gw.req("/api/cloud/notice")).json.notice.text, "第一版")
+
+  await r.be.admin("/admin/api/notice", { method: "POST", body: { enabled: true, text: "第二版" } })
+  assert.equal((await r.gw.req("/api/cloud/notice")).json.notice.text, "第一版", "缓存内不该每次都打云端")
+
+  await r.gw.req("/api/cloud/refresh", { method: "POST" })
+  assert.equal((await r.gw.req("/api/cloud/notice")).json.notice.text, "第二版")
+})
+
+test("公告：云端拉不到时保留上一份（把已显示的维护通知抹掉比留着旧的更糟）", async (t) => {
+  const r = await rig(); t.after(() => r.close())
+  await r.be.admin("/admin/api/notice", { method: "POST", body: { enabled: true, text: "维护中" } })
+  await loginReady(r)
+  assert.equal((await r.gw.req("/api/cloud/notice")).json.notice.text, "维护中")
+  await r.gw.req("/api/cloud/refresh", { method: "POST" })      // 清掉缓存
+  await r.be.close()                                            // 云端没了
+  const n = await r.gw.req("/api/cloud/notice")
+  assert.equal(n.status, 200, "云端挂了也不该把本机接口带崩")
+  assert.equal(n.json.notice.text, "维护中")
+})
+
+test("公告：登出后不再下发（缓存要跟着账号切换失效）", async (t) => {
+  const r = await rig(); t.after(() => r.close())
+  await r.be.admin("/admin/api/notice", { method: "POST", body: { enabled: true, text: "维护中" } })
+  await loginReady(r)
+  assert.equal((await r.gw.req("/api/cloud/notice")).json.notice.text, "维护中")
+  await r.gw.req("/api/cloud/logout", { method: "POST" })
+  assert.equal((await r.gw.req("/api/cloud/notice")).json.notice, null)
+})
+
 test("/api/model 的 cloud 摘要不含凭证", async (t) => {
   const r = await rig(); t.after(() => r.close())
   await loginReady(r)

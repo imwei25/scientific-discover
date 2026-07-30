@@ -255,6 +255,115 @@ test("审计：保留策略会清掉过老的行", async () => {
   assert.deepEqual(DB.listAudit(db).map((r) => r.event), ["new"])
 })
 
+// ---- 公告 --------------------------------------------------------------------
+
+test("公告：发布 → 随 /api/me 与 /api/notice 下发；停发后什么都不下发", async (t) => {
+  const { app, admin } = await setup(); t.after(() => app.close())
+  const empty = await admin("/admin/api/notice")
+  assert.equal(empty.json.notice.enabled, false)
+  assert.equal(empty.json.notice.id, 0)
+
+  const set = await admin("/admin/api/notice", { method: "POST", body: {
+    enabled: true, text: "今晚 22:00 维护", level: "warn" } })
+  assert.equal(set.status, 200)
+  assert.equal(set.json.notice.id, 1)
+
+  // 客户端侧：/api/notice 与 /api/me 都要带上
+  const add = await admin("/admin/api/user-add", { method: "POST", body: { username: "u1", displayName: "张三" } })
+  const li = await app.req("/api/auth/login", { method: "POST", body: { username: "u1", password: add.json.initialPassword } })
+  const chg = await app.req("/api/auth/password", { method: "POST", headers: { authorization: "Bearer " + li.json.access },
+    body: { oldPassword: add.json.initialPassword, newPassword: "Aa1!aaaa9" } })
+  const tok = { authorization: "Bearer " + chg.json.access }
+
+  const n = await app.req("/api/notice", { headers: tok })
+  assert.equal(n.json.notice.text, "今晚 22:00 维护")
+  assert.equal(n.json.notice.level, "warn")
+  assert.equal(n.json.needUpgrade, false, "没设最低版本就不该催升级")
+  assert.equal(chg.json.profile.notice.text, "今晚 22:00 维护")
+
+  const off = await admin("/admin/api/notice", { method: "POST", body: { enabled: false } })
+  assert.equal(off.json.notice.enabled, false)
+  assert.equal((await app.req("/api/notice", { headers: tok })).json.notice, null)
+})
+
+test("公告：只有用户看得见的东西变了才 ++id（否则每次保存都把所有人重新打扰一遍）", async (t) => {
+  const { app, admin } = await setup(); t.after(() => app.close())
+  const a = await admin("/admin/api/notice", { method: "POST", body: { enabled: true, text: "hi", level: "info" } })
+  assert.equal(a.json.notice.id, 1)
+  // 一字未改地再存一次
+  const b = await admin("/admin/api/notice", { method: "POST", body: { enabled: true, text: "hi", level: "info" } })
+  assert.equal(b.json.notice.id, 1, "内容没变就不该 ++")
+  assert.ok(b.json.notice.updatedAt >= a.json.notice.updatedAt)
+  // 改了正文
+  const c = await admin("/admin/api/notice", { method: "POST", body: { enabled: true, text: "hi2", level: "info" } })
+  assert.equal(c.json.notice.id, 2)
+  // 只改级别也算变
+  const d = await admin("/admin/api/notice", { method: "POST", body: { enabled: true, text: "hi2", level: "urgent" } })
+  assert.equal(d.json.notice.id, 3)
+})
+
+test("公告：最低客户端版本按 X-Client-Version 判，认不出版本的构建一律不催", async (t) => {
+  const { app, admin } = await setup(); t.after(() => app.close())
+  await admin("/admin/api/notice", { method: "POST", body: {
+    enabled: true, text: "有新版了", minClientVersion: "1.2.0", downloadUrl: "https://example.invalid/dl" } })
+  const add = await admin("/admin/api/user-add", { method: "POST", body: { username: "u1", displayName: "张三" } })
+  const li = await app.req("/api/auth/login", { method: "POST", body: { username: "u1", password: add.json.initialPassword } })
+  const chg = await app.req("/api/auth/password", { method: "POST", headers: { authorization: "Bearer " + li.json.access },
+    body: { oldPassword: add.json.initialPassword, newPassword: "Aa1!aaaa9" } })
+  const ask = (v) => app.req("/api/notice", { headers: { authorization: "Bearer " + chg.json.access, ...(v ? { "x-client-version": v } : {}) } })
+
+  assert.equal((await ask("1.1.9")).json.needUpgrade, true)
+  assert.equal((await ask("1.2.0")).json.needUpgrade, false)
+  assert.equal((await ask("1.10.0")).json.needUpgrade, false, "1.10 > 1.2，别按字符串比")
+  assert.equal((await ask("2")).json.needUpgrade, false)
+  assert.equal((await ask("dev")).json.needUpgrade, false, "开发机每次打开都被弹升级提示毫无意义")
+  assert.equal((await ask(null)).json.needUpgrade, false, "老客户端不发这个头，也不该被催")
+})
+
+test("公告：非法的最低版本与下载地址被拒（下载地址会被渲染成链接）", async (t) => {
+  const { app, admin } = await setup(); t.after(() => app.close())
+  for (const body of [{ minClientVersion: "v1.2" }, { minClientVersion: "1.2.0-beta" }]) {
+    const r = await admin("/admin/api/notice", { method: "POST", body: { enabled: true, text: "x", ...body } })
+    assert.equal(r.status, 400, JSON.stringify(body))
+    assert.match(r.json.err, /点分数字/)
+  }
+  for (const url of ["javascript:alert(1)", "ftp://x/y", "example.com/dl"]) {
+    const r = await admin("/admin/api/notice", { method: "POST", body: { enabled: true, text: "x", downloadUrl: url } })
+    assert.equal(r.status, 400, url)
+    assert.match(r.json.err, /http/)
+  }
+  // 内容与最低版本都空 = 发出去用户什么也看不到
+  const blank = await admin("/admin/api/notice", { method: "POST", body: { enabled: true, text: "   " } })
+  assert.equal(blank.status, 400)
+  assert.equal(DB.getNotice(app.db).enabled, false, "被拒的请求不该留下任何痕迹")
+})
+
+test("公告：/api/notice 要凭 access key，且还没改初始口令的人也看得到（维护通知对他们同样有效）", async (t) => {
+  const { app, admin } = await setup(); t.after(() => app.close())
+  await admin("/admin/api/notice", { method: "POST", body: { enabled: true, text: "维护中" } })
+  assert.equal((await app.req("/api/notice")).status, 401)
+  assert.equal((await app.req("/api/notice", { headers: { authorization: "Bearer bogus" } })).status, 401)
+
+  const add = await admin("/admin/api/user-add", { method: "POST", body: { username: "u1", displayName: "张三" } })
+  const li = await app.req("/api/auth/login", { method: "POST", body: { username: "u1", password: add.json.initialPassword } })
+  assert.equal(li.json.scope, "pwchange")
+  const r = await app.req("/api/notice", { headers: { authorization: "Bearer " + li.json.access } })
+  assert.equal(r.status, 200)
+  assert.equal(r.json.notice.text, "维护中")
+})
+
+test("cmpVersion：点分数字按段比，认不出来的返回 null", async (t) => {
+  const { app } = await setup(); t.after(() => app.close())
+  const { cmpVersion } = app.mod
+  assert.equal(cmpVersion("1.2.0", "1.2.0"), 0)
+  assert.equal(cmpVersion("1.10.0", "1.9.9"), 1)
+  assert.equal(cmpVersion("1.2", "1.2.0"), 0, "缺的段补 0")
+  assert.equal(cmpVersion("1.2", "1.2.1"), -1)
+  assert.equal(cmpVersion("dev", "1.0.0"), null)
+  assert.equal(cmpVersion("1.0.0", ""), null)
+  assert.equal(cmpVersion("1.0.0-rc1", "1.0.0"), null)
+})
+
 // ---- CSRF --------------------------------------------------------------------
 
 test("后台写接口：跨站来源一律拒绝（换成自有域名部署后 SameSite=Lax 就挡不住子域）", async (t) => {

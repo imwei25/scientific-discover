@@ -181,6 +181,35 @@ function issueTokens(user, { withRefresh = true } = {}) {
   return out
 }
 
+/**
+ * 比较点分数字版本。返回 -1 / 0 / 1，任一边不是纯点分数字（如打包脚本没注入版本时的
+ * "dev"）就返回 null —— 调用方据此【不催升级】。
+ *
+ * 【为什么"认不出来就不催"】开发机与自建构建报的就是 dev/git-sha 这类字符串，把它们当成
+ * "比谁都旧"会让每个开发者每次打开都被弹一次升级提示，而那条提示对他们毫无意义。
+ */
+export function cmpVersion(a, b) {
+  const parse = (s) => {
+    const t = String(s || "").trim()
+    if (!/^\d+(\.\d+)*$/.test(t)) return null
+    return t.split(".").map(Number)
+  }
+  const x = parse(a), y = parse(b)
+  if (!x || !y) return null
+  for (let i = 0; i < Math.max(x.length, y.length); i++) {
+    const d = (x[i] || 0) - (y[i] || 0)
+    if (d) return d > 0 ? 1 : -1
+  }
+  return 0
+}
+
+/** 这个客户端版本是否低于公告里要求的最低版本（认不出版本号就不催）。 */
+function needsUpgrade(notice, clientVersion) {
+  if (!notice || !notice.minClientVersion) return false
+  const c = cmpVersion(clientVersion, notice.minClientVersion)
+  return c !== null && c < 0
+}
+
 function profileOf(user, ent = DB.resolveEntitlement(db, user)) {
   return {
     username: user.username,
@@ -193,6 +222,8 @@ function profileOf(user, ent = DB.resolveEntitlement(db, user)) {
     skills: ent.skills,                    // [] = 不限（全部技能）
     limits: { daily: ent.daily, monthly: ent.monthly },
     usage: { today: DB.todayCost(db, user.id), month: DB.monthCost(db, user.id) },
+    // 公告随档案一并下发：登录后第一屏就能看到，不用等客户端另外去问一次
+    notice: DB.publicNotice(db),
   }
 }
 
@@ -309,6 +340,23 @@ async function handleClientApi(req, res, pathname) {
     DB.bumpEpoch(db, au.user.id)
     audit("password.change", { actor: au.user.username, ip })
     return json(res, 200, { ok: true, ...issueTokens(DB.getUserById(db, au.user.id)) })
+  }
+
+  /**
+   * 公告。客户端每几分钟问一次这里，而不是靠刷新整份档案。
+   *
+   * 【为什么要单独一个口】档案（/api/me）只在登录、access key 续期（TTL 24h、提前 10 分钟续）
+   * 或用户手点"刷新"时才会重取 —— 一条"今晚 10 点维护"的公告要等到明天才到用户眼前，
+   * 那这功能就白做了。这个口只读一行 meta，可以放心高频轮询。
+   *
+   * requireFullScope:false —— 还没改初始口令的人也该看到维护通知，他们同样会受影响。
+   */
+  if (req.method === "GET" && pathname === "/api/notice") {
+    const au = authClient(req, { requireFullScope: false })
+    if (!au.ok) return fail(res, au.status, au.code, au.message)
+    const notice = DB.publicNotice(db)
+    const cv = String(req.headers["x-client-version"] || "")
+    return json(res, 200, { ok: true, notice, needUpgrade: needsUpgrade(notice, cv), clientVersion: cv })
   }
 
   if (req.method === "GET" && pathname === "/api/me") {
@@ -768,6 +816,29 @@ async function handleAdminApi(req, res, pathname) {
     if (!r.ok) return json(res, 400, { ok: false, err: r.err || "操作失败" })
     audit("channel." + (b.action || "update"), { actor: "admin", target: String(b.id), ip, detail: JSON.stringify(b).slice(0, 200) })
     return json(res, 200, { ok: true, ...r })
+  }
+
+  // ---- 公告 ----
+  // 站长通知全员此前只能一个个发微信。这里维护的一条公告随 /api/me 与 /api/notice 下发。
+  if (req.method === "GET" && pathname === "/admin/api/notice") {
+    // 版本分布顺带给出来：要不要卡最低版本，得先知道现在大家都在用什么版本
+    const versions = db.prepare(`SELECT client_version AS v, COUNT(*) AS n FROM users
+                                 WHERE client_version <> '' GROUP BY client_version ORDER BY n DESC`).all()
+    return json(res, 200, { ok: true, notice: DB.getNotice(db), versions, levels: DB.NOTICE_LEVELS })
+  }
+  if (req.method === "POST" && pathname === "/admin/api/notice") {
+    const b = await readBody(req)
+    if (b.minClientVersion && !/^\d+(\.\d+)*$/.test(String(b.minClientVersion).trim()))
+      return json(res, 400, { ok: false, err: "最低客户端版本要写成点分数字，如 1.2.0（留空 = 不检查）" })
+    // 下载地址只允许 http(s)：这串会被客户端渲染成一个链接，别让它变成 javascript: 之类的东西
+    if (b.downloadUrl && !/^https?:\/\//i.test(String(b.downloadUrl).trim()))
+      return json(res, 400, { ok: false, err: "下载地址要以 http:// 或 https:// 开头（留空 = 不给链接）" })
+    if (b.enabled && !String(b.text || "").trim() && !String(b.minClientVersion || "").trim())
+      return json(res, 400, { ok: false, err: "公告内容与最低版本至少填一个，否则发出去用户什么也看不到" })
+    const n = DB.setNotice(db, b)
+    audit("notice.set", { actor: "admin", ip, target: n.enabled ? "on" : "off",
+      detail: `id=${n.id} level=${n.level} min=${n.minClientVersion || "-"} ${n.text.slice(0, 120)}` })
+    return json(res, 200, { ok: true, notice: n })
   }
 
   // ---- 对账：按模型 / 供应商 / 用户 / 技能聚合，外加 CSV 导出 ----

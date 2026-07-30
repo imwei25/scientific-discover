@@ -129,6 +129,14 @@ const sameEndpoint = (a, b) => String(a || "").replace(/\/+$/, "") === String(b 
 // 云端账号形态下 opencode 要指的地址：本机自己，转发由本进程做（见 CLOUD_PROXY_PREFIX 的说明）
 const cloudProxyBase = () => `http://127.0.0.1:${PORT}${CLOUD_PROXY_PREFIX}v1`
 const cloudLoggedIn = () => !!Cloud.loadState()
+// 平台公告的本机短缓存（见 /api/cloud/notice）。两种失效方式，别混用：
+//   · expire：只把它标成过期，【留着上一份数据】。用户手点「刷新」走这条 —— 万一这次
+//     正好连不上云端，还能继续显示上一份，而不是把维护通知凭空抹掉。
+//   · clear：连数据一起丢。只有切换账号（登录/登出）才用 —— 换了人还拿着上一个账号那次
+//     的结果，表现是登出后公告还挂着、或换号后短时间看到不属于自己的通知。
+let noticeCache = null
+const expireNoticeCache = () => { if (noticeCache) noticeCache.at = 0 }
+const clearNoticeCache = () => { noticeCache = null }
 const gatewayEnvSet = () => !!(process.env.OC_GATEWAY_URL && process.env.OC_GATEWAY_KEY)
 /** 平台路由是否可用：登录了云端账号（桌面版），或注入了静态网关 key（云端多用户容器） */
 const platformAvailable = () => cloudLoggedIn() || gatewayEnvSet()
@@ -2033,6 +2041,7 @@ export const server = http.createServer(async (req, res) => {
         return send(res, 409, "application/json", JSON.stringify({ ok: false, busy, needForce: true, err: `有 ${busy} 轮正在生成中，切换账号需重启后台，会中断它们` }))
       }
       let r
+      clearNoticeCache()
       if (u.pathname === "/api/cloud/login") {
         const username = String(b.username || "").trim(), password = String(b.password || "")
         if (!username || !password) return send(res, 400, "application/json", JSON.stringify({ ok: false, err: "请填写账号与口令" }))
@@ -2067,6 +2076,7 @@ export const server = http.createServer(async (req, res) => {
       // 而这次刷新恰好发现管理员把它撤了 —— 只比默认模型的话，这种情况一次都不会重配，
       // 本机会继续拿着一个服务器已经不认的模型名跑，每轮都被网关静默打回默认模型。
       const before = MODEL.modelID
+      expireNoticeCache()        // 用户手点「刷新」时，公告也该立刻是最新的，别等缓存到期
       const r = await Cloud.fetchProfile()
       if (!r.ok) {
         const e = r.error || {}
@@ -2078,6 +2088,25 @@ export const server = http.createServer(async (req, res) => {
         try { restarted = await restartOpencode() } catch {}
       }
       return send(res, 200, "application/json", JSON.stringify({ ok: true, restarted, ...Cloud.status(), route: currentRoute() }))
+    }
+
+    // 平台公告（站长在云端后台发布）。前端每几分钟问一次这里。
+    //
+    // 【本机加一层短缓存】前端轮询 + 多标签页 + 窗口重新聚焦时补拉，叠起来可以很密；
+    // 而公告是一条全站共享的信息，没必要每次都打云端。60 秒足够让"刚发布"感觉是即时的，
+    // 又把上游请求量压到每分钟一次。未登录/未接入云端时直接回空，不产生任何外网请求。
+    if (req.method === "GET" && u.pathname === "/api/cloud/notice") {
+      if (!cloudLoggedIn()) return send(res, 200, "application/json", JSON.stringify({ ok: true, notice: null }))
+      const now = Date.now()
+      if (!noticeCache || now - noticeCache.at > 60_000) {
+        const r = await Cloud.fetchNotice().catch(() => ({ ok: false }))
+        // 【拉失败保留上一份】断网/云端抖动时把已经显示着的公告抹掉，比继续显示旧的更糟：
+        // 用户会以为维护通知撤销了。所以失败时只把重试时间往前挪 15 秒，数据原样留着；
+        // 也别每次请求都去戳一个已经挂了的云端（前端多标签页轮询能戳得很密）。
+        if (r.ok) noticeCache = { at: now, data: { notice: r.notice, needUpgrade: r.needUpgrade, clientVersion: r.clientVersion } }
+        else noticeCache = { at: now - 45_000, data: (noticeCache && noticeCache.data) || { notice: null } }
+      }
+      return send(res, 200, "application/json", JSON.stringify({ ok: true, ...noticeCache.data }))
     }
 
     // 当前后台模型配置（apiKey 不回传，只报是否已设）

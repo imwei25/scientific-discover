@@ -467,6 +467,17 @@
   #storebanner .sbx { margin-left: auto; background: none; border: 1px solid currentColor; color: inherit;
     border-radius: 6px; padding: 3px 10px; font-size: 12px; cursor: pointer; opacity: .75; }
   #storebanner .sbx:hover { opacity: 1; }
+  /* 平台公告横幅（见 body 里 #noticebanner 处的注释）。三档配色与后台的级别一一对应。 */
+  #noticebanner { padding: 9px 16px; font-size: 13px; line-height: 1.5; display: flex; align-items: center;
+    gap: 10px; flex-wrap: wrap; border-bottom: 1px solid rgba(0,0,0,.08); }
+  #noticebanner.info { background: #e8f1fd; color: #14508f; }
+  #noticebanner.warn { background: #fff4e5; color: #8a4b08; }
+  #noticebanner.urgent { background: #fdecea; color: #a3261a; }
+  #noticebanner b { font-weight: 600; }
+  #noticebanner a { color: inherit; text-decoration: underline; }
+  #noticebanner .nbx { margin-left: auto; background: none; border: 1px solid currentColor; color: inherit;
+    border-radius: 6px; padding: 3px 10px; font-size: 12px; cursor: pointer; opacity: .75; }
+  #noticebanner .nbx:hover { opacity: 1; }
 </style>
 </head>
 <body>
@@ -489,6 +500,10 @@
      撞上限（新上传被 413 拒收、产物写不进去）之前基本看不到预警。放在 header 之下、main
      之外，与侧栏开合无关，任何屏宽都挡不住。仅 ≥90% 时出现，掉回去自动消失。 -->
 <div id="storebanner" hidden></div>
+<!-- 平台公告横幅：站长在云端后台发一条，所有已登录客户端几分钟内在这里看到（此前只能一个个
+     发微信）。位置同存储告急横幅 —— header 之下、main 之外，与侧栏开合无关，任何屏宽都挡不住。
+     用户点「知道了」后按公告 id 记进 localStorage 不再弹；站长改了内容 id 会 ++，于是重新弹一次。 -->
+<div id="noticebanner" hidden></div>
 <main>
   <div id="sessbar">
     <div class="sb-top">
@@ -1964,6 +1979,52 @@ function renderStoreBanner(pct, usedMb, limitMb, full) {
   el.append(msg, x)
   el.hidden = false
 }
+// ---- 平台公告：站长在云端后台发一条，这里显示 ----
+// 「知道了」按公告 id 记进 localStorage：本应用刷新是常规操作（会话靠 localStorage.nm_sid
+// 恢复），存内存变量的话点掉了一刷新又弹回来。站长改了公告内容，服务端会把 id ++，于是
+// 重新弹一次 —— 只改开关、不动内容不会重复打扰（那是服务端 setNotice 保证的）。
+const NT_KEY = "nm_notice_dismissed"
+const noticeDismissed = () => { const v = parseInt(localStorage.getItem(NT_KEY) || "-1", 10); return Number.isFinite(v) ? v : -1 }
+function renderNoticeBanner(n, needUpgrade) {
+  const el = document.getElementById("noticebanner")
+  if (!el) return
+  if (!n || (!n.text && !n.minClientVersion)) { el.hidden = true; return }
+  if (noticeDismissed() >= n.id) { el.hidden = true; return }
+  el.className = n.level === "urgent" ? "urgent" : n.level === "warn" ? "warn" : "info"
+  el.textContent = ""
+  const msg = document.createElement("span")
+  const tag = document.createElement("b")
+  tag.textContent = n.level === "urgent" ? "紧急通知：" : n.level === "warn" ? "注意：" : "公告："
+  msg.append(tag, document.createTextNode(n.text || ""))
+  // 【只有真的偏旧才提升级】服务端比过版本号（认不出版本的构建一律不催），前端不再自己判断
+  if (needUpgrade) {
+    const up = document.createElement("b")
+    up.textContent = `　请升级到 ${n.minClientVersion} 或更高版本。`
+    msg.append(up)
+    // 链接只在服务端校验过是 http(s) 时才会下发，这里再显式限定一次协议，别让它变成脚本
+    if (/^https?:\/\//i.test(n.downloadUrl || "")) {
+      const a = document.createElement("a")
+      a.href = n.downloadUrl; a.target = "_blank"; a.rel = "noopener noreferrer"; a.textContent = "下载新版"
+      msg.append(document.createTextNode(" "), a)
+    }
+  }
+  const x = document.createElement("button")
+  x.className = "nbx"; x.type = "button"; x.textContent = "知道了"
+  x.onclick = () => { try { localStorage.setItem(NT_KEY, String(n.id)) } catch {}; el.hidden = true }
+  el.append(msg, x)
+  el.hidden = false
+}
+let noticeLastFetch = 0
+async function refreshNotice(force) {
+  // 窗口每次聚焦都会调这里，节流到 60 秒；本机网关另有一层 60 秒缓存，云端不会被打穿
+  if (!force && Date.now() - noticeLastFetch < 60_000) return
+  noticeLastFetch = Date.now()
+  try {
+    const j = await (await fetch("api/cloud/notice", { signal: AbortSignal.timeout(8000) })).json()
+    renderNoticeBanner(j && j.notice, j && j.needUpgrade)
+  } catch { /* 拉不到就保持现状：把已经显示的维护通知抹掉比留着旧的更糟 */ }
+}
+
 // ---- 今日额度：顶栏常驻「已用/上限」，撞限前心里有数（清单 P2-2）。limit=0 不限额则不显示；≥90% 变红 ----
 async function refreshQuota() {
   const el = document.getElementById("quotabar")
@@ -2087,6 +2148,12 @@ const savedSid = localStorage.getItem("nm_sid")
 if (savedSid) resumeSession(savedSid)
 else renderWelcome()
 refreshStorage(); refreshQuota()
+// 公告：进来先拉一次，之后 5 分钟一次；窗口重新聚焦时补一次（节流 60s）。
+// 一条"今晚 22:00 维护"要在用户眼前出现，靠的就是这个轮询 —— 档案（/api/me）24h 才续一次。
+refreshNotice(true)
+setInterval(() => refreshNotice(true), 5 * 60 * 1000)
+window.addEventListener("focus", () => refreshNotice())
+document.addEventListener("visibilitychange", () => { if (!document.hidden) refreshNotice() })
 
 /* ---- 闲置倒计时：闲置 7 分钟弹 3 分钟倒计时，满 10 分钟自动退出、需重新登录 ---- */
 ;(function () {
