@@ -67,16 +67,42 @@ dialog::backdrop{background:rgba(0,0,0,.62)}
 #login{max-width:390px;margin:12vh auto}
 .hint{font-size:12.5px;color:var(--mut);margin-top:4px}
 .rank{font-size:11px;color:var(--mut)}
+/* 列头筛选（Excel 那种 ▾）：按钮常显，命中条件时高亮并带个数 */
+.fbtn{display:inline-flex;align-items:center;gap:3px;margin-left:4px;padding:0 5px;border-radius:5px;
+      border:1px solid var(--line);background:var(--p2);color:var(--mut);cursor:pointer;font-size:11px;line-height:18px}
+.fbtn:hover{border-color:var(--acc);color:var(--fg)}
+.fbtn.on{border-color:var(--acc);background:#1b2a45;color:#cfe0ff}
+/* 筛选浮层放在 body 下（不在 #app 里），列表重绘不会把它冲掉 */
+#pop{display:none;position:absolute;z-index:30;min-width:200px;max-width:290px;padding:10px;
+     background:var(--panel);border:1px solid var(--acc);border-radius:10px;box-shadow:0 10px 30px rgba(0,0,0,.5)}
+#pop.on{display:block}
+#pop .grp{font-size:11.5px;color:var(--mut);margin:6px 0 4px}
+#pop label{display:flex;align-items:center;gap:7px;padding:3px 2px;font-size:13px;cursor:pointer}
+#pop label input{margin:0}
+#pop .pf{display:flex;gap:6px;margin-top:9px;padding-top:9px;border-top:1px solid var(--line)}
+/* 批量操作条：勾了人才出现，贴在表格上方 */
+.bulkbar{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:10px 0;padding:9px 12px;
+         border:1px solid var(--acc);background:#16233a;border-radius:9px}
+td.ck,th.ck{width:30px;padding-right:0}
 </style></head><body>
 <header><h1>运营后台</h1><span class="mut" id="sub"></span><span class="sp"></span>
 <button class="btn sm" id="logout" style="display:none">退出</button></header>
 <div class="msg" id="msg"></div>
+<div id="pop"></div>
 <main id="app"></main>
 <dialog id="dlg"><form method="dialog"><div class="dlg-h" id="dlg-h"></div>
 <div class="dlg-b" id="dlg-b"></div><div class="dlg-f" id="dlg-f"></div></form></dialog>
 <script>
 var S={users:[],tiers:[],skills:[],catalog:[],tierCounts:{},board:null,q:'',filter:'',
-       offset:0,pageSize:100,tab:'users'};
+       offset:0,pageSize:100,tab:'users',
+       // 列头筛选条件（列之间 AND、同列多选 OR，与服务端 buildUserPredicate 一一对应）
+       f:{tiers:[],status:[],skillMode:[],usage:[],hasSkill:[],hospital:'',idle:false},
+       sel:{},                 // 勾选的账号 id（翻页/改筛选都不丢，批量操作按它点名）
+       matchedIds:[],maxBulk:500};
+// 有没有设过任何列筛选（决定要不要把 f 发给服务端、以及"清空"按钮要不要亮）
+function hasF(){var f=S.f;return !!(f.tiers.length||f.status.length||f.skillMode.length||
+  f.usage.length||f.hasSkill.length||f.hospital||f.idle)}
+function selIds(){return Object.keys(S.sel).filter(function(k){return S.sel[k]}).map(Number)}
 var $=function(s){return document.querySelector(s)};
 var esc=function(s){return String(s==null?'':s).replace(/[&<>"']/g,function(c){
   return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]})};
@@ -130,10 +156,12 @@ function renderLogin(err){
 // ---------- 主界面 ----------
 function load(){
   api('overview?q='+encodeURIComponent(S.q)+'&filter='+encodeURIComponent(S.filter||'')+
+      (hasF()?'&f='+encodeURIComponent(JSON.stringify(S.f)):'')+
       '&limit='+S.pageSize+'&offset='+(S.offset||0)).then(function(d){
     if(!d.ok){if(!d.unauth)renderLogin(d.err||'加载失败');return}
     S.users=d.users;S.tiers=d.tiers;S.skills=d.skills;S.board=d.board;S.total=d.total;S.matched=d.matched;
     S.catalog=d.catalog||[];S.tierCounts=d.tierCounts||{};
+    S.matchedIds=d.matchedIds||[];S.maxBulk=d.maxBulk||500;
     render()})
 }
 function render(){
@@ -170,18 +198,99 @@ function usageCell(used,lim){
 var USER_FILTERS=[['','全部'],['overmonth','本月已触顶'],['nearmonth','本月≥80%'],
   ['overday','今日已触顶'],['suspended','已停用'],['pwchange','待改密'],['idle','30天未活跃']];
 
-function paneUsers(){
+// ---- 列头筛选（Excel 式）----
+// 每个可筛的列头挂一个 ▾，点开是勾选浮层；列之间 AND、同列多选 OR（服务端 buildUserPredicate 同口径）。
+var SKMODE=[['follow','跟随档位'],['any','全部允许'],['pick','自定义白名单']];
+function skillModeOf(u){return u.overrides.skills==null?'follow':(String(u.overrides.skills)?'pick':'any')}
+function skillCell(u){
+  var m=skillModeOf(u);
+  if(m==='follow')return '<span class="tag">跟随档位</span><div class="mut" style="font-size:12px">'+
+    (u.skills.length?u.skills.length+' 个技能':'不限')+'</div>';
+  if(m==='any')return '<span class="tag ok">全部允许</span>';
+  return '<span class="tag warn">白名单 '+u.skills.length+'</span>'+
+    '<div class="mut" style="font-size:12px" title="'+esc(u.skills.join('、'))+'">'+
+    esc(u.skills.slice(0,2).map(skillLabel).join('、'))+(u.skills.length>2?' …':'')+'</div>'}
+function skillLabel(id){var hit=S.skills.filter(function(s){return s.id===id})[0];return hit?hit.label:id}
+function tierFilterOpts(){
+  var seen={},out=[];
+  S.tiers.forEach(function(t){seen[t.key]=1;out.push([t.key,t.key+'（'+(S.tierCounts[t.key]||0)+' 人）'])});
+  Object.keys(S.tierCounts).forEach(function(k){if(!seen[k])out.push([k,k+'（'+S.tierCounts[k]+' 人，档位已删）'])});
+  return out}
+// 每列的筛选分组。bool=单个开关（活跃列），text=文本包含（姓名列里的医院）。
+function popGroups(col){
+  if(col==='tier')return [{k:'tiers',t:'档位',opts:tierFilterOpts()}];
+  if(col==='status')return [{k:'status',t:'状态',opts:[['active','正常'],['suspended','已停用'],['pwchange','待改密']]}];
+  if(col==='skill')return [{k:'skillMode',t:'授权形态',opts:SKMODE},
+    {k:'hasSkill',t:'能用这些技能（须全部满足）',opts:S.skills.map(function(s){return [s.id,s.label]})}];
+  if(col==='usage')return [{k:'usage',t:'用量',opts:[['overday','今日已触顶'],['nearmonth','本月≥80%'],['overmonth','本月已触顶']]}];
+  if(col==='seen')return [{k:'idle',t:'活跃',bool:1,opts:[['idle','30 天未活跃']]}];
+  if(col==='name')return [{k:'hospital',t:'医院包含',text:1}];
+  return []}
+function popCount(col){
+  return popGroups(col).reduce(function(n,g){
+    if(g.bool)return n+(S.f[g.k]?1:0);
+    if(g.text)return n+(S.f[g.k]?1:0);
+    return n+(S.f[g.k]||[]).length},0)}
+function th(label,col){
+  if(!col)return '<th>'+label+'</th>';
+  var n=popCount(col);
+  // role/tabindex：这是个 span 做的按钮，不给这两样键盘用户根本按不到它
+  return '<th>'+label+'<span class="fbtn'+(n?' on':'')+'" data-col="'+col+'" role="button" tabindex="0"'+
+    ' title="筛选'+(n?'（已设 '+n+' 项）':'')+'" aria-label="筛选'+esc(label)+(n?'（已设 '+n+' 项）':'')+'">▾'+
+    (n?' '+n:'')+'</span></th>'}
+function closePop(){var p=$('#pop');p.className='';p.innerHTML=''}
+function openPop(btn,col){
+  var groups=popGroups(col);if(!groups.length)return;
+  var html=groups.map(function(g){
+    if(g.text)return '<div class="grp">'+g.t+'</div><input data-t="'+g.k+'" value="'+esc(S.f[g.k]||'')+'" style="width:100%">';
+    return '<div class="grp">'+g.t+'</div>'+(g.opts.length?g.opts.map(function(o){
+      var on=g.bool?!!S.f[g.k]:(S.f[g.k]||[]).indexOf(o[0])>=0;
+      return '<label><input type="checkbox" data-g="'+g.k+'" data-v="'+esc(o[0])+'"'+(g.bool?' data-bool="1"':'')+
+        (on?' checked':'')+'>'+esc(o[1])+'</label>'}).join(''):'<div class="mut" style="font-size:12.5px">（无可选项）</div>')}).join('');
+  var p=$('#pop');
+  p.innerHTML=html+'<div class="pf"><button class="btn sm" data-p="clear">清空本列</button>'+
+    '<span class="sp" style="flex:1"></span><button class="btn sm primary" data-p="ok">确定</button></div>';
+  var r=btn.getBoundingClientRect();
+  p.className='on';
+  // 贴着按钮左下角，右侧空间不够时往左挪，避免浮层跑出视口
+  var left=Math.min(r.left+window.scrollX,window.scrollX+document.documentElement.clientWidth-p.offsetWidth-12);
+  p.style.left=Math.max(8,left)+'px';p.style.top=(r.bottom+window.scrollY+6)+'px';
+  var apply=function(){
+    groups.forEach(function(g){
+      if(g.text){S.f[g.k]=(p.querySelector('[data-t="'+g.k+'"]')||{value:''}).value.trim();return}
+      if(g.bool){var b=p.querySelector('[data-g="'+g.k+'"]');S.f[g.k]=!!(b&&b.checked);return}
+      S.f[g.k]=Array.prototype.filter.call(p.querySelectorAll('[data-g="'+g.k+'"]'),function(c){return c.checked})
+        .map(function(c){return c.dataset.v})});
+    S.offset=0;closePop();load()};
+  p.querySelector('[data-p="ok"]').onclick=apply;
+  p.querySelector('[data-p="clear"]').onclick=function(){
+    groups.forEach(function(g){S.f[g.k]=g.bool?false:(g.text?'':[])});S.offset=0;closePop();load()};
+  var inp=p.querySelector('input[data-t]');
+  if(inp){inp.focus();inp.onkeydown=function(e){if(e.key==='Enter')apply()}}
+}
+document.addEventListener('mousedown',function(e){
+  var p=$('#pop');if(!p||!p.classList.contains('on'))return;
+  if(!p.contains(e.target)&&!(e.target.classList&&e.target.classList.contains('fbtn')))closePop()});
+document.addEventListener('keydown',function(e){
+  if(e.key==='Escape'&&$('#pop')&&$('#pop').classList.contains('on'))closePop()});
+
+// opt.keep=1：这次重绘不要把焦点抢回搜索框（勾选复选框引起的局部重绘用它，
+// 否则每点一下人名前的框，光标就跳去搜索框，接着敲的字全跑进搜索里）。
+function paneUsers(opt){
+  var sel=selIds();
   var rows=S.users.map(function(u){
     // 【月用量必须画出来】月额度才是主闸，而列表以前只画今日 —— 谁快到月上限只能逐个
     // 点开用量弹窗看。数据（usage.month / limits.monthly）后端一直就在返回，纯粹没画。
     var usage=usageCell(u.usage.today,u.limits.daily);
     var musage=usageCell(u.usage.month,u.limits.monthly);
     return '<tr data-id="'+u.id+'">'+
+      '<td class="ck"><input type="checkbox" data-ck="'+u.id+'"'+(S.sel[u.id]?' checked':'')+'></td>'+
       '<td><b>'+esc(u.displayName)+'</b>'+(u.surname?' <span class="rank">姓:'+esc(u.surname)+'</span>':'')+
         '<div class="mut" style="font-size:12.5px">'+esc(u.username)+(u.hospital?' · '+esc(u.hospital):'')+'</div></td>'+
       '<td><span class="tag">'+esc(u.tier)+'</span></td>'+
       '<td>'+(u.status==='active'?'<span class="tag ok">正常</span>':'<span class="tag bad">已停用</span>')+
         (u.mustChangePw?' <span class="tag warn">待改密</span>':'')+'</td>'+
+      '<td>'+skillCell(u)+'</td>'+
       '<td>'+usage+'</td>'+
       '<td>'+musage+'</td>'+
       '<td class="mut" style="font-size:12.5px">'+dt(u.lastSeenAt)+(u.clientVersion?'<br>v'+esc(u.clientVersion):'')+'</td>'+
@@ -197,6 +306,18 @@ function paneUsers(){
       '<span class="sp"></span><button class="btn sm" id="prev"'+(S.offset<=0?' disabled':'')+'>上一页</button>'+
       '<button class="btn sm" id="next"'+(to>=S.matched?' disabled':'')+'>下一页</button></div>'
     : '';
+  // 全选/全不选：只管【当前这页】。跨页要用下面那个"选中全部命中"，两者分开才不会误伤。
+  var pageAll=S.users.length>0&&S.users.every(function(u){return !!S.sel[u.id]});
+  var canAllMatched=S.matched>S.users.length&&S.matchedIds.length>0;
+  var bulk=sel.length?'<div class="bulkbar">'+
+      '<b>已选 '+sel.length+' 人</b>'+
+      '<button class="btn sm" id="b-skill">批量技能授权</button>'+
+      '<button class="btn sm" id="b-tier">批量改档位</button>'+
+      '<button class="btn sm" id="b-susp">批量停用</button>'+
+      '<button class="btn sm" id="b-resume">批量恢复</button>'+
+      '<span class="sp" style="flex:1"></span>'+
+      '<span class="mut" style="font-size:12.5px">一次最多 '+S.maxBulk+' 人</span>'+
+      '<button class="btn sm" id="b-clear">取消选择</button></div>':'';
   $('#pane').innerHTML='<section>'+
     '<div class="row" style="margin-bottom:12px">'+
       '<input id="q" placeholder="按姓名筛选：输一个字或两个字（姓氏优先）" value="'+esc(S.q)+'" style="flex:1;min-width:260px">'+
@@ -204,18 +325,50 @@ function paneUsers(){
       '<span class="sp"></span><button class="btn primary" id="add">+ 新建账号</button></div>'+
     '<div class="chips" style="margin-bottom:10px">'+USER_FILTERS.map(function(f){
       return '<span class="chip'+((S.filter||'')===f[0]?' on':'')+'" data-f="'+f[0]+'">'+f[1]+'</span>'}).join('')+'</div>'+
-    '<div class="hint">例：输「张」→ 姓张的排最前，名字里带张的排后面；输「欧阳」「小明」同样可用。也可用登录名/手机号/医院找人。</div>'+
-    ((S.q||S.filter)?'<div class="hint">命中 '+S.matched+' / '+S.total+'</div>':'')+
-    '<table style="margin-top:12px"><thead><tr><th>姓名 / 账号</th><th>档位</th><th>状态</th>'+
-    '<th>今日用量</th><th>本月用量</th><th>最近活跃</th><th></th></tr></thead><tbody>'+
-    (rows||'<tr><td colspan="7" class="mut" style="padding:22px;text-align:center">没有匹配的账号</td></tr>')+
-    '</tbody></table>'+pager+'</section>';
+    '<div class="hint">例：输「张」→ 姓张的排最前，名字里带张的排后面；输「欧阳」「小明」同样可用。也可用登录名/手机号/医院找人。'+
+    '　列头的 <b>▾</b> 可按档位 / 状态 / 技能授权 / 用量 组合筛选，勾人后可批量调整。</div>'+
+    ((S.q||S.filter||hasF())?'<div class="hint">命中 '+S.matched+' / '+S.total+
+      (hasF()?' <button class="btn sm" id="fclear" style="margin-left:6px">清空列筛选</button>':'')+'</div>':'')+
+    bulk+
+    '<table style="margin-top:12px"><thead><tr>'+
+    '<th class="ck"><input type="checkbox" id="ckall"'+(pageAll?' checked':'')+' title="选中本页"></th>'+
+    th('姓名 / 账号','name')+th('档位','tier')+th('状态','status')+th('技能授权','skill')+
+    th('今日用量','usage')+th('本月用量')+th('最近活跃','seen')+th('')+
+    '</tr></thead><tbody>'+
+    (rows||'<tr><td colspan="9" class="mut" style="padding:22px;text-align:center">没有匹配的账号</td></tr>')+
+    '</tbody></table>'+
+    (canAllMatched?'<div class="hint"><button class="btn sm" id="selall">选中全部命中的 '+
+      Math.min(S.matched,S.matchedIds.length)+' 人</button>'+
+      (S.matched>S.matchedIds.length?' <span class="mut">（命中 '+S.matched+' 人，一次最多勾 '+S.maxBulk+'）</span>':'')+'</div>':'')+
+    pager+'</section>';
 
   var q=$('#q');
   q.oninput=function(){clearTimeout(q.t);q.t=setTimeout(function(){S.q=q.value;S.offset=0;load()},220)};
-  q.focus();q.setSelectionRange(q.value.length,q.value.length);
-  $('#clear').onclick=function(){S.q='';S.filter='';S.offset=0;load()};
+  if(!(opt&&opt.keep)){q.focus();q.setSelectionRange(q.value.length,q.value.length)}
+  $('#clear').onclick=function(){S.q='';S.filter='';
+    S.f={tiers:[],status:[],skillMode:[],usage:[],hasSkill:[],hospital:'',idle:false};S.offset=0;load()};
+  if($('#fclear'))$('#fclear').onclick=$('#clear').onclick;
   $('#add').onclick=dlgAdd;
+  // 列头 ▾
+  Array.prototype.forEach.call(document.querySelectorAll('#pane .fbtn'),function(b){
+    b.onclick=function(e){e.stopPropagation();
+      var open=$('#pop').classList.contains('on')&&$('#pop').dataset.col===b.dataset.col;
+      closePop();if(open)return;$('#pop').dataset.col=b.dataset.col;openPop(b,b.dataset.col)};
+    b.onkeydown=function(e){if(e.key==='Enter'||e.key===' '){e.preventDefault();b.onclick(e)}}});
+  // 勾选
+  Array.prototype.forEach.call(document.querySelectorAll('#pane [data-ck]'),function(c){
+    c.onclick=function(){S.sel[c.dataset.ck]=c.checked;paneUsers({keep:1})}});
+  $('#ckall').onclick=function(){var on=$('#ckall').checked;
+    S.users.forEach(function(u){S.sel[u.id]=on});paneUsers({keep:1})};
+  if($('#selall'))$('#selall').onclick=function(){
+    S.matchedIds.forEach(function(id){S.sel[id]=true});paneUsers({keep:1})};
+  if(sel.length){
+    $('#b-clear').onclick=function(){S.sel={};paneUsers({keep:1})};
+    $('#b-skill').onclick=function(){dlgBulkSkills(sel)};
+    $('#b-tier').onclick=function(){dlgBulkTier(sel)};
+    $('#b-susp').onclick=function(){bulkApply(sel,{suspended:true},'停用')};
+    $('#b-resume').onclick=function(){bulkApply(sel,{suspended:false},'恢复')};
+  }
   if($('#prev'))$('#prev').onclick=function(){S.offset=Math.max(0,S.offset-S.pageSize);load()};
   if($('#next'))$('#next').onclick=function(){S.offset=S.offset+S.pageSize;load()};
   Array.prototype.forEach.call(document.querySelectorAll('#pane .chip[data-f]'),function(c){
@@ -230,6 +383,76 @@ function paneUsers(){
         toast(j.ok?'已'+(u.status==='active'?'停用':'恢复')+' '+u.displayName:(j.err||'失败'),j.ok);load()});
       else dlgMore(u)}});
 }
+
+// ---- 批量操作 ----
+// 名单在弹窗里【列出来给人看】：批量操作没有撤销，"我以为选的是另一批人"是这里唯一
+// 真正危险的失误，所以宁可多占几行也要把姓名摆出来。
+function selNames(ids){
+  var byId={};S.users.forEach(function(u){byId[u.id]=u});
+  var named=ids.map(function(id){return byId[id]?byId[id].displayName:null}).filter(Boolean);
+  var rest=ids.length-named.length;
+  return esc(named.slice(0,12).join('、'))+(named.length>12?' 等':'')+
+    (rest?'<span class="mut">（另有 '+rest+' 人在其它页）</span>':'')}
+function bulkApply(ids,patch,what){
+  if(!ids.length)return;
+  if(ids.length>S.maxBulk)return toast('一次最多 '+S.maxBulk+' 人，请缩小范围',false);
+  if(!confirm('确认对选中的 '+ids.length+' 个账号执行「'+what+'」？这会吊销他们已签发的 key（需重新登录），且不可撤销。'))return;
+  post('users-bulk',Object.assign({ids:ids},patch)).then(function(j){
+    if(!j.ok)return toast(j.err||'批量操作失败',false);
+    var d=$('#dlg');if(d&&d.open)d.close();
+    S.sel={};
+    toast('已对 '+j.changed+' 个账号'+what+'（已吊销 key，需重新登录）'+
+      (j.missing&&j.missing.length?'；'+j.missing.length+' 个已不存在，已跳过':''),true);
+    load()})}
+function dlgBulkTier(ids){
+  dlg('批量改档位 · '+ids.length+' 人',
+    '<div class="hint" style="margin-bottom:10px">将要改的账号：'+selNames(ids)+'</div>'+
+    // 【必须有一个空的占位项】否则下拉一打开就默认选中第一个档位，管理员不点也是"已选"，
+    // 手滑一次就把一批人改到了列表里的第一档。
+    '<div class="grid"><label>目标档位</label><select id="bt">'+
+      '<option value="">（请选择档位）</option>'+tierOpts('')+'</select></div>'+
+    '<div class="hint" style="margin-top:10px">档位决定日/月额度、默认模型与技能白名单。'+
+    '各人若单独设过额度覆盖或技能覆盖，那些覆盖<b>仍然优先</b>——要一并清掉请用「批量技能授权 → 跟随档位」。</div>',
+    '<button class="btn primary" id="ok" value="default">应用</button>');
+  $('#ok').onclick=function(e){e.preventDefault();
+    var t=$('#bt').value;if(!t)return toast('请选择档位',false);
+    bulkApply(ids,{tier:t},'改到档位 '+t)}}
+function dlgBulkSkills(ids){
+  dlg('批量技能授权 · '+ids.length+' 人',
+    '<div class="hint" style="margin-bottom:10px">将要改的账号：'+selNames(ids)+'</div>'+
+    '<div class="hint">与单人编辑同一套三态语义：'+
+    '<b>跟随档位</b>＝清掉个人覆盖；<b>全部允许</b>＝覆盖档位、放行所有技能；<b>白名单</b>＝只许选中的这些。</div>'+
+    skillChips([],S.skills)+
+    '<div class="row" style="margin-top:8px"><button class="btn sm" id="b-follow">跟随档位</button>'+
+    '<button class="btn sm" id="b-any">全部允许</button>'+
+    '<button class="btn sm" id="b-all">全选为白名单</button>'+
+    '<button class="btn sm" id="b-none">清空选择</button></div>'+
+    '<div class="hint" id="b-state"></div>'+
+    '<div class="hint" style="margin-top:10px">技能是<b>软管控</b>（在客户端执行）：改完会吊销这些人的 key，'+
+    '他们下次请求即按新授权走；客户端界面上的模块卡片最迟在<b>下次登录</b>时跟着变。</div>',
+    '<button class="btn primary" id="ok" value="default">应用</button>');
+  var chips=$('#dlg-b').querySelectorAll('.chip');
+  var mode='pick';
+  var showState=function(){
+    var n=0;Array.prototype.forEach.call(chips,function(c){if(c.classList.contains('on'))n++});
+    $('#b-state').innerHTML=mode==='follow'?'将设为：<b>跟随档位</b>（清掉这些人的个人技能覆盖）'
+      :mode==='any'?'将设为：<b>全部允许</b>（覆盖档位，放行所有技能）'
+      :'将设为：<b>白名单</b>，只允许选中的 '+n+' 个'+(n?'':' —— 一个都没选等于「全部允许」，别用它来收紧')};
+  Array.prototype.forEach.call(chips,function(c){c.onclick=function(){mode='pick';c.classList.toggle('on');showState()}});
+  $('#b-follow').onclick=function(e){e.preventDefault();mode='follow';
+    Array.prototype.forEach.call(chips,function(c){c.classList.remove('on')});showState()};
+  $('#b-any').onclick=function(e){e.preventDefault();mode='any';
+    Array.prototype.forEach.call(chips,function(c){c.classList.remove('on')});showState()};
+  $('#b-all').onclick=function(e){e.preventDefault();mode='pick';
+    Array.prototype.forEach.call(chips,function(c){c.classList.add('on')});showState()};
+  $('#b-none').onclick=function(e){e.preventDefault();mode='pick';
+    Array.prototype.forEach.call(chips,function(c){c.classList.remove('on')});showState()};
+  showState();
+  $('#ok').onclick=function(e){e.preventDefault();
+    var picked=[];Array.prototype.forEach.call(chips,function(c){if(c.classList.contains('on'))picked.push(c.dataset.s)});
+    var val=mode==='follow'?null:picked.join(',');
+    var what=mode==='follow'?'技能授权改为跟随档位':(picked.length?'技能白名单设为 '+picked.length+' 个技能':'技能授权改为全部允许');
+    bulkApply(ids,{skillsOverride:val},what)}}
 
 function dlg(title,bodyHtml,footHtml){
   $('#dlg-h').textContent=title;$('#dlg-b').innerHTML=bodyHtml;

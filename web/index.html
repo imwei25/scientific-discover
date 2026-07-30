@@ -1388,12 +1388,25 @@ function setModBadge(modId) {   // chat 不显示徽标；受限模块常显在�
   modBadge.textContent = m.name; modBadge.classList.add("on")
   q.placeholder = "【" + m.name + "】" + (m.skill ? "描述你的需求…" : "发消息…")
 }
+let entRev = ""   // 当前生效授权的摘要（服务端算：档位/模型清单/技能白名单/可用模块）
 async function loadModules() {
-  try { MODULES = (await fetch("api/modules").then(r => r.json())).modules || [] } catch { MODULES = [] }
+  let j = null
+  try { j = await fetch("api/modules").then(r => r.json()) } catch {}
+  MODULES = (j && j.modules) || []
+  if (j && j.entRev) entRev = j.entRev
   const allowed = MODULES.filter((m) => m.allowed)
   if (allowed.length && !allowed.some((m) => m.id === currentModule)) currentModule = allowed[0].id   // chat 被收权时落到首个可用模块
   setModBadge(sessionId ? (sessList.find((s) => s.id === sessionId)?.module || "chat") : currentModule)
   const w = log.querySelector(".welcome"); if (w) { w.remove(); renderWelcome() }   // 清单晚到 → 重画欢迎页补上模块卡
+}
+// 管理员在运营后台改了技能授权 / 档位 / 可选模型 → 公告轮询回来的 entRev 与本地不一样 →
+// 就地把模块卡片和模型下拉刷新掉，并明说一句。不这么做的话，界面要等到下次登录才对，
+// 而用户会先撞上"点了模块却被服务端拒"的困惑。
+async function onEntChanged(rev) {
+  entRev = rev
+  await loadModules()
+  window.dispatchEvent(new Event("sci-models-changed"))   // 顶部模型 pill 重取清单
+  addNote("ℹ 管理员更新了你的账号授权（可用模块 / 模型已刷新）")
 }
 let sseFailStreak = 0   // 连续 SSE 重连失败次数；收到任何事件即清零，累计过多则停手提示刷新（防非 401 的持续失败无限重连）
 let sending = false     // POST /api/chat/start 往返期间为 true：此时还没有 activeES，靠它挡住连点重复发送
@@ -2084,6 +2097,12 @@ async function refreshNotice(force) {
   try {
     const j = await (await fetch("api/cloud/notice", { signal: AbortSignal.timeout(8000) })).json()
     renderNoticeBanner(j && j.notice, j && j.needUpgrade)
+    // 登录态在后台被作废（管理员改了档位/技能会连 refresh 一起吊销）→ 当场弹登录窗。
+    // 不这么做的话，用户会对着一个权限已经变了的旧界面继续操作，直到发消息那一刻才被打断。
+    if (j && j.loggedOut) return openCloud(true)
+    // 授权摘要变了 → 刷新模块/模型。第一次拿到（entRev 还空着）只记下来，不提示：
+    // 那不是"管理员刚改了"，而是本页刚打开。
+    if (j && j.entRev) { if (!entRev) entRev = j.entRev; else if (j.entRev !== entRev) await onEntChanged(j.entRev) }
   } catch { /* 拉不到就保持现状：把已经显示的维护通知抹掉比留着旧的更糟 */ }
 }
 

@@ -462,15 +462,43 @@ const ALLOWED_SKILLS_SET = (() => {   // null = 不设限（全部技能）
   if (!valid.length) console.warn(`[skills] ALLOWED_SKILLS 无一合法：${JSON.stringify(raw)} → 按全部禁用处理，请修正 users/<名>.env 的 SKILLS`)
   return new Set([...valid, "env-setup"])
 })()
-const skillAllowed = (name) => !ALLOWED_SKILLS_SET || ALLOWED_SKILLS_SET.has(name)
+// ---- 云端账号的技能授权（运营后台改完，客户端要跟着变）----
+//
+// 【为什么必须在客户端这边落地】技能是"软管控"：技能在客户端执行，云端网关只看得到
+// 每一单 LLM 请求，而请求里并没有"这是哪个技能在跑"的信息（X-Skill 由客户端自愿携带，
+// 本客户端不带——opencode 直连本机代理，中间没有能可靠标出技能名的地方）。所以运营后台
+// 那份白名单要真正生效，靠的就是这里：模块卡片、chat 前言、事件流强制三处都读它。
+//
+// 生效时机（回答"管理员改完客户端多久知道"）：白名单在 /api/me 的档案里，档案随
+// ① 登录、② access key 续期（改档位/技能会 bumpEpoch 吊销 key → 下一次模型请求即被迫续）、
+// ③ /api/cloud/notice 那条 5 分钟轮询顺带同步（见 syncProfileSoon）刷新。
+// 最坏情况也就是"下次登录必然生效"，正常情况几分钟内自己就变了。
+const cloudSkillSet = () => {
+  if (!cloudLoggedIn()) return null                     // 没走云端账号（容器/自设 API）→ 只看 env
+  const list = Cloud.loadState()?.profile?.skills
+  if (!Array.isArray(list) || !list.length) return null // [] = 档位不限技能
+  return new Set([...list.map(String), "env-setup"])     // env-setup 恒许可（各技能都靠它建 .venv）
+}
+/** env 白名单 ∩ 云端白名单；null = 两层都不限 */
+const effectiveSkillSet = () => {
+  const env = ALLOWED_SKILLS_SET, cloud = cloudSkillSet()
+  if (!env) return cloud
+  if (!cloud) return env
+  return new Set([...env].filter((s) => cloud.has(s)))
+}
+const skillAllowed = (name) => { const s = effectiveSkillSet(); return !s || s.has(name) }
 // chat 会话的技能限制前言（受限模块会话不用它——那边本就锁死单技能）。
 // 注意：受限容器的技能目录已被 deploy 侧过滤挂载（未开通技能物理不存在，见 render-compose.sh），
 // 所以这里【只能】列"已开通"的一边——SKILL_IDS 读自过滤后的目录，算不出被禁清单。
 // 单行无空行（stripPreamble 按第一个空行剥离，见 modulePreamble 同款约束）。
 const skillsPreamble = () => {
-  if (!ALLOWED_SKILLS_SET) return ""
-  const allowed = [...ALLOWED_SKILLS_SET].filter((s) => s !== "env-setup")
-  return `\n- **【技能授权，最高优先级】**本账号只开通了以下技能：${allowed.join("、")}（外加 env-setup），本环境也只安装了这些——AGENTS.md 流水线里提到的其它技能在这里【不存在】，不要尝试调用、查找或读取它们；涉及未开通技能的步骤直接跳过并明确告知用户"该步骤因未开通对应技能而省略"，也不要徒手模仿该技能的产出。`
+  const set = effectiveSkillSet()
+  if (!set) return ""
+  const allowed = [...set].filter((s) => s !== "env-setup")
+  // 措辞对两种来源都成立：容器形态下未开通技能确实不存在，云端账号形态下它们装着但没授权。
+  // 早先只说"本环境也只安装了这些"，云端授权收紧时那句话是假的，agent 会去 ls 技能目录、
+  // 发现明明在，然后照常调用。
+  return `\n- **【技能授权，最高优先级】**本账号只开通了以下技能：${allowed.join("、")}（外加 env-setup）。其它技能对本账号【未授权】（本环境里可能根本没安装，即使目录里看得到也不许用）：不要尝试调用、查找或读取它们；涉及未开通技能的步骤直接跳过并明确告知用户"该步骤因未开通对应技能而省略"，也不要徒手模仿该技能的产出。`
 }
 // 本会话若已从 Zotero 导入小文献库（前端「Zotero 文献库」面板的"导入"），告诉 agent 怎么按范围选 RAG scope。
 // 与 skillsPreamble / modulePreamble 同块注入，故同样【单行、不许有空行】（stripPreamble 按第一个空行剥离）。
@@ -478,6 +506,49 @@ const skillsPreamble = () => {
 const zoteroPreamble = (outDir) => {
   try { if (!fs.existsSync(path.join(outDir, "zotero_lib", "zotero_refs.json"))) return "" } catch { return "" }
   return `\n- 本会话已从 Zotero 导入一个小文献库到当前目录下的 \`zotero_lib/\`（含 PDF 与 zotero_refs.csv）。用 zotero-library 技能做全文 RAG 时按范围选：用户说"基于我导入的文献 / 这批文献 / 我的小库"→ 只检索该目录 \`\${REPO_ROOT:-/app}/.venv/bin/python \${REPO_ROOT:-/app}/.opencode/skills/zotero-library/references/zotero_rag.py --pdf-dir zotero_lib --backend embed\`（可加 \`--rerank\`）；用户明确说"整个 Zotero 库"→ 换成 \`--library\`。证据表写当前目录。`
+}
+
+// ---- 云端档案的定期同步 ----
+// 运营后台改了档位 / 技能授权 / 可选模型之后，客户端靠三条路知道：登录、key 续期、以及这里。
+// 挂在 /api/cloud/notice 那条已有的 5 分钟轮询上（前端本来就在打它），不新增任何定时器；
+// 自己再限流 5 分钟，多标签页 / 窗口聚焦补拉都不会把 /api/me 打穿。
+let profileSyncAt = 0
+const PROFILE_SYNC_MS = 5 * 60 * 1000
+async function syncProfileSoon() {
+  if (!cloudLoggedIn()) return
+  const now = Date.now()
+  if (now - profileSyncAt < PROFILE_SYNC_MS) return
+  profileSyncAt = now
+  // 【只刷数据，不重启 opencode】/api/cloud/refresh 那条路会在默认模型变了时重启后台，
+  // 而这里是后台轮询：重启会把正在跑的所有轮连根拔掉（用户可能正跑一小时的综述）。
+  // 模型切换仍然是用户主动动作，这里只把授权/清单更新到本地状态。
+  let r = null
+  try { r = await Cloud.fetchProfile() } catch {}
+  // 管理员改档位/技能会 key_epoch++，这把 access key 与 refresh 一起作废（服务端设计如此）。
+  // 于是 /api/me 回的是 KEY_EXPIRED —— 档案根本刷不到。这时【主动续一次】：
+  //   · 续得上（管理员只是加了模型之类不吊销的改动）→ 档案跟着回包一起更新；
+  //   · 续不上（refresh 已随 epoch 作废）→ cloud-account 会清掉本地登录态，
+  //     前端下一次轮询看到 loggedOut 就弹登录窗 —— 这正是"改了权限要重新登录"的如实呈现，
+  //     比让用户对着一个权限已变的旧界面继续点、直到发消息才被打断要好。
+  const code = r && !r.ok && r.error && r.error.code
+  if (code === "KEY_EXPIRED" || code === "KEY_INVALID" || code === "KEY_MISSING") {
+    try { await Cloud.currentAccess({ force: true }) } catch {}
+  }
+}
+/**
+ * 影响界面的授权摘要。前端拿它和上次比：变了就重取模块清单与模型清单并提示一句。
+ * 只放"看得见的授权"，不放用量——用量每分钟都在变，摘要就永远在变，提示会成噪音。
+ */
+const entRev = () => {
+  const p = (cloudLoggedIn() && Cloud.loadState()?.profile) || {}
+  const set = effectiveSkillSet()
+  const payload = {
+    tier: p.tier || "", model: p.model || "",
+    models: (p.models || []).map((m) => (m && m.model) || m).sort(),
+    skills: set ? [...set].sort() : null,
+    modules: ALLOWED_MODULES.filter((id) => !MODULE_DEFS[id]?.skill || skillAllowed(MODULE_DEFS[id].skill)),
+  }
+  return crypto.createHash("sha1").update(JSON.stringify(payload)).digest("hex").slice(0, 12)
 }
 
 // 会话 → 模块 绑定表（持久化在 ocdata 卷，容器重建不丢；与 quota.json 同目录）
@@ -1065,7 +1136,8 @@ function startJob(sid, sentText, modId) {
   // 模块闸的判据：受限模块只允许这一个技能名；null = 非受限模块（chat / 未传 modId 的兼容路径）
   const onlySkill = MODULE_DEFS[modId]?.skill || null
   // 本轮实际生效的技能白名单：受限模块锁单技能（+env-setup 基础设施）；chat 用账号级白名单；null=不限
-  const skillGate = onlySkill ? new Set([onlySkill, "env-setup"]) : ALLOWED_SKILLS_SET
+  // 账号级白名单取【env ∩ 云端档案】：运营后台收权后，这一轮就按新授权强制，不用等重启
+  const skillGate = onlySkill ? new Set([onlySkill, "env-setup"]) : effectiveSkillSet()
   const job = {
     sid, running: true, finished: false, subs: new Set(),
     // 增量快照：text 是累积全文、reasoning 按 id、tool 按 callID 各存最新一条，attach 时按序重放即可还原界面
@@ -1967,7 +2039,8 @@ export const server = http.createServer(async (req, res) => {
     if (req.method === "GET" && u.pathname === "/api/modules") {
       // 模块可用 = 模块本身获授权 且 其绑定技能未被技能白名单收权（chat 无绑定技能，只看模块授权）
       const list = Object.entries(MODULE_DEFS).map(([id, m]) => ({ id, name: m.name, desc: m.desc, skill: m.skill, allowed: ALLOWED_MODULES.includes(id) && (!m.skill || skillAllowed(m.skill)) }))
-      return send(res, 200, "application/json", JSON.stringify({ modules: list }))
+      // entRev 一起回：前端在公告轮询里发现它变了就重取本接口，两处用同一个摘要才不会来回打转
+      return send(res, 200, "application/json", JSON.stringify({ modules: list, entRev: entRev() }))
     }
     if (req.method === "GET" && u.pathname === "/api/quota") {   // 前端显示今日额度用量（含在跑轮的实时成本）
       return send(res, 200, "application/json", JSON.stringify({ used: quotaUsedLive(), limit: DAILY_COST_LIMIT }))
@@ -2232,7 +2305,15 @@ export const server = http.createServer(async (req, res) => {
     // 而公告是一条全站共享的信息，没必要每次都打云端。60 秒足够让"刚发布"感觉是即时的，
     // 又把上游请求量压到每分钟一次。未登录/未接入云端时直接回空，不产生任何外网请求。
     if (req.method === "GET" && u.pathname === "/api/cloud/notice") {
-      if (!cloudLoggedIn()) return send(res, 200, "application/json", JSON.stringify({ ok: true, notice: null }))
+      // 顺手同步一次云端档案（自身限流 5 分钟）：运营后台改了技能授权 / 档位 / 可选模型后，
+      // 客户端就在这条本来就有的轮询里知道，不必等下次登录，也不必新加一个定时器。
+      // 【必须在下面那道 loggedOut 判断之前】这次同步本身就可能把登录态清掉（改权限会连
+      // refresh 一起吊销）；顺序反了的话，本次仍回一个"看着正常"的包，前端要多等 5 分钟才知道。
+      if (cloudLoggedIn()) await syncProfileSoon()
+      // loggedOut：接了云端但本机登录态已经没了（多半是管理员改了档位/技能 → epoch++ →
+      // 连 refresh 一并作废）。前端据此当场弹登录窗，而不是等用户下一次发消息才被打断。
+      if (!cloudLoggedIn())
+        return send(res, 200, "application/json", JSON.stringify({ ok: true, notice: null, entRev: entRev(), loggedOut: !!Cloud.cloudBase() }))
       const now = Date.now()
       if (!noticeCache || now - noticeCache.at > 60_000) {
         const r = await Cloud.fetchNotice().catch(() => ({ ok: false }))
@@ -2242,7 +2323,9 @@ export const server = http.createServer(async (req, res) => {
         if (r.ok) noticeCache = { at: now, data: { notice: r.notice, needUpgrade: r.needUpgrade, clientVersion: r.clientVersion } }
         else noticeCache = { at: now - 45_000, data: (noticeCache && noticeCache.data) || { notice: null } }
       }
-      return send(res, 200, "application/json", JSON.stringify({ ok: true, ...noticeCache.data }))
+      // entRev = 当前生效授权的摘要（档位/模型清单/技能白名单/可用模块）。前端拿它跟上次比，
+      // 一变就重取模块清单与模型清单并提示一句——这是"管理员改完，客户端自己就变了"的那条线。
+      return send(res, 200, "application/json", JSON.stringify({ ok: true, ...noticeCache.data, entRev: entRev() }))
     }
 
     // 当前后台模型配置（apiKey 不回传，只报是否已设）

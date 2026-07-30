@@ -54,6 +54,9 @@ async function gateway(cloudUrl) {
     CLOUD_CFG_PATH: path.join(dir, "no-such-cloud.json"),   // 别读到开发机真实的 cloud.json
     MODEL_CFG_PATH: path.join(dir, "model-config.json"),
     OC_CONFIG_PATH: path.join(dir, "opencode.json"),
+    // 不设这个的话，测试实例会读写【开发机真实的】web/sessions-meta.json（它还在版本控制里），
+    // 跑一次测试就把本机的会话→项目归属清空。server.mjs 那边的注释早就提醒过，这里漏了。
+    SESSIONS_META_PATH: path.join(dir, "sessions-meta.json"),
   })
   const mod = await import(`../server.mjs?g=${++seq}`)
   // server.mjs 自己会 listen(PORT)，PORT=0 时端口由系统分配；等它真的绑上再往下走

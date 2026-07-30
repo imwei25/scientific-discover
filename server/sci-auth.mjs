@@ -433,6 +433,48 @@ const USER_FILTERS = {
   idle: (u) => !u.lastSeenAt || u.lastSeenAt < Date.now() - 30 * 86400 * 1000,
 }
 
+/** 该用户的技能授权形态：follow=跟随档位 / any=覆盖为全部放行 / pick=自己一份白名单 */
+export const skillModeOf = (u) =>
+  u.overrides.skills == null ? "follow" : (String(u.overrides.skills) ? "pick" : "any")
+
+/**
+ * 多条件筛选（Excel 那种"每列一个筛子"）。前端把条件拼成 JSON 放在 ?f= 里：
+ *   {tiers:[],status:[],skillMode:[],usage:[],hasSkill:[],hospital:"",idle:false}
+ * 【列之间 AND、同列多选 OR】——与 Excel 的筛选直觉一致；空数组/空串 = 这一列不筛。
+ * 老的单键 filter=overmonth 继续有效（运维脚本与书签里还在用），两者可以叠加。
+ *
+ * 【坏 JSON 当没传】管理员手改地址栏、或前端版本不一致时，宁可返回未筛选的全量，
+ * 也不要 500 —— 后台列表是排查问题的入口，它不能因为一个参数写错就整页打不开。
+ */
+export function buildUserPredicate({ filter = "", f = "" } = {}) {
+  const preds = []
+  if (USER_FILTERS[filter]) preds.push(USER_FILTERS[filter])
+  let spec = null
+  try { spec = f ? JSON.parse(f) : null } catch { spec = null }
+  if (spec && typeof spec === "object") {
+    const arr = (v) => (Array.isArray(v) ? v.map(String).filter(Boolean) : [])
+    const tiers = arr(spec.tiers)
+    if (tiers.length) preds.push((u) => tiers.includes(u.tier))
+    const status = arr(spec.status)                     // active | suspended | pwchange
+    if (status.length) preds.push((u) => status.some((s) => (s === "pwchange" ? !!u.mustChangePw : u.status === s)))
+    const modes = arr(spec.skillMode)                   // follow | any | pick
+    if (modes.length) preds.push((u) => modes.includes(skillModeOf(u)))
+    const usage = arr(spec.usage)                       // overday | overmonth | nearmonth
+    if (usage.length) preds.push((u) => usage.some((k) => USER_FILTERS[k] && USER_FILTERS[k](u)))
+    if (spec.idle) preds.push(USER_FILTERS.idle)
+    const hos = String(spec.hospital || "").trim()
+    if (hos) preds.push((u) => String(u.hospital || "").includes(hos))
+    // 「能用这些技能的人」：u.skills 是生效后的白名单，空数组 = 不限（等于全都能用）。
+    // 多选时取 AND —— 运维意图通常是"把能写标书【且】能查引用的人挑出来再统一调整"。
+    const has = arr(spec.hasSkill)
+    if (has.length) preds.push((u) => has.every((s) => !u.skills.length || u.skills.includes(s)))
+  }
+  return preds.length ? (u) => preds.every((p) => p(u)) : null
+}
+// 批量操作一次最多改多少人。上限存在的意义是"手滑保护"：全选 800 人再点一下按钮，
+// 与其静默改掉全部，不如让它报错、让管理员明确缩小范围。
+const MAX_BULK = 500
+
 function userRow(u) {
   const ent = DB.resolveEntitlement(db, u)
   return {
@@ -493,16 +535,21 @@ async function handleAdminApi(req, res, pathname) {
     const limit = Math.min(500, Math.max(1, Number(url.searchParams.get("limit")) || 200))
     const offset = Math.max(0, Number(url.searchParams.get("offset")) || 0)
     const filter = String(url.searchParams.get("filter") || "")
+    const pred = buildUserPredicate({ filter, f: url.searchParams.get("f") || "" })
     // 【matched 必须是真实命中数】以前直接取 rows.length，被 limit 截断过 ——
     // 账号数超过一页时后台写着"命中 200 / 640"，而管理员正是靠这个数字判断要不要再缩关键词。
-    let rows, matched
-    if (USER_FILTERS[filter]) {
-      const all = DB.searchUsers(db, q, { limit: 100000, offset: 0 }).map(userRow).filter(USER_FILTERS[filter])
+    // matchedIds 是给"选中全部命中的人"用的：批量操作要按 id 明确点名（可审计、不受翻页影响），
+    // 不做成"按条件批量"——那样一旦条件与管理员以为的不一致，改的就是一批他没看见的人。
+    let rows, matched, matchedIds
+    if (pred) {
+      const all = DB.searchUsers(db, q, { limit: 100000, offset: 0 }).map(userRow).filter(pred)
       matched = all.length
       rows = all.slice(offset, offset + limit)
+      matchedIds = all.slice(0, MAX_BULK).map((u) => u.id)
     } else {
       rows = DB.searchUsers(db, q, { limit, offset }).map(userRow)
       matched = DB.countSearchUsers(db, q)
+      matchedIds = DB.searchUsers(db, q, { limit: MAX_BULK, offset: 0 }).map((u) => u.id)
     }
     const dayAgo = Date.now() - 24 * 3600 * 1000
     return json(res, 200, {
@@ -510,6 +557,7 @@ async function handleAdminApi(req, res, pathname) {
       users: rows,
       total: DB.countUsers(db),
       matched, offset, limit, filter,
+      matchedIds, maxBulk: MAX_BULK,
       tiers: DB.listTiers(db),
       // 【档位人数要服务端 GROUP BY 出】前端拿"当前这页的用户"去数，一旦有搜索词或翻了页，
       // 每档显示的人数就是错的 —— 管理员据此判断"这个档还有没有人、能不能删"。
@@ -584,6 +632,48 @@ async function handleAdminApi(req, res, pathname) {
     if (sensitive) DB.bumpEpoch(db, u.id)
     audit("user.update", { actor: "admin", target: u.username, ip, detail: JSON.stringify(patch).slice(0, 300) })
     return json(res, 200, { ok: true, user: userRow(DB.getUserById(db, u.id)), keyRevoked: sensitive })
+  }
+
+  // ---- 批量调整（勾一批人 → 一次改档位 / 技能授权 / 停用恢复）----
+  //
+  // 【为什么按 id 点名而不是"按当前筛选条件批量改"】筛选条件在前端，改的人在后端 ——
+  // 两边对条件的理解差一点，动的就是一批管理员没看见的账号，而这类操作没有撤销。
+  // 明确的 id 列表既能审计（逐人一条 user.update），也不会被翻页/并发新账号影响。
+  //
+  // 语义与单人编辑严格一致，避免"批量的口径和单改不一样"这种最难查的不一致：
+  //   skillsOverride: null=跟随档位 / ""=全部放行（覆盖档位）/ "a,b"=白名单
+  //   改档位或技能 → 吊销这些人已签发的 key（下次请求即按新权限走）；只改状态同样吊销。
+  if (req.method === "POST" && pathname === "/admin/api/users-bulk") {
+    const b = await readBody(req)
+    const ids = Array.isArray(b.ids) ? [...new Set(b.ids.map(Number).filter((n) => Number.isInteger(n) && n > 0))] : []
+    if (!ids.length) return json(res, 400, { ok: false, err: "没有选中任何账号" })
+    if (ids.length > MAX_BULK) return json(res, 400, { ok: false, err: `一次最多批量 ${MAX_BULK} 个账号（当前 ${ids.length} 个），请缩小筛选范围` })
+    const patch = {}
+    if (b.tier !== undefined) {
+      if (!DB.getTier(db, String(b.tier))) return json(res, 400, { ok: false, err: "档位不存在" })
+      patch.tier = String(b.tier)
+    }
+    if (b.skillsOverride !== undefined)
+      patch.skills_override = b.skillsOverride === null ? null : String(b.skillsOverride)
+    if (b.suspended !== undefined) patch.status = b.suspended ? "suspended" : "active"
+    if (!Object.keys(patch).length) return json(res, 400, { ok: false, err: "没有要改的项（档位 / 技能授权 / 状态至少给一项）" })
+    // 这三项全都要吊销 key：档位与技能在票据里，状态决定还能不能用 —— 都不能等 key 自然过期
+    const changed = [], missing = []
+    for (const id of ids) {
+      const u = DB.getUserById(db, id)
+      if (!u) { missing.push(id); continue }
+      DB.updateUser(db, u.id, patch)
+      DB.bumpEpoch(db, u.id)
+      changed.push(u.username)
+      // 逐人留一条：按 target 查某个账号的历史时，批量改的那一次也必须在场
+      audit("user.update", { actor: "admin", target: u.username, ip, detail: "bulk " + JSON.stringify(patch).slice(0, 240) })
+    }
+    audit("user.bulk_update", { actor: "admin", target: `${changed.length} 个账号`, ip,
+      detail: JSON.stringify(patch).slice(0, 200) + " | " + changed.slice(0, 40).join(",") + (changed.length > 40 ? " …" : "") })
+    return json(res, 200, {
+      ok: true, changed: changed.length, usernames: changed, missing,
+      keyRevoked: changed.length,   // 与单人编辑同口径：前端据此提示"需重新登录"
+    })
   }
 
   if (req.method === "POST" && pathname === "/admin/api/suspend") {
