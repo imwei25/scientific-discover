@@ -17,6 +17,8 @@ ${REPO_ROOT:-/app}/.venv/bin/python
 ```
 
 ## 一、Table 1 基线特征表
+> ⚠️ **先跑数据体检再出 Table 1**（`data-analysis/scripts/data_profile.py --input <文件> --group <分组列>`，用法见 [../data-analysis/SKILL.md](../data-analysis/SKILL.md) §第一步）。**重复患者ID 没去掉、分类水平（男/M/1/尾空格）没归一、分组变量有缺失时，Table 1 的每一个 n(%) 与每个组间 p 都是错的**，而这种错在表里看不出异常。体检的"必须处置"项清完、`cleaning_log.md` 记好，再跑 `table1.py`。
+
 按变量类型**自动选择**呈现与检验（连续变量先做 Shapiro 正态性判断）：
 - 连续+正态 → `均数±标准差` + t 检验(两组)/ANOVA(多组)
 - 连续+非正态 → `中位数[IQR]` + Mann-Whitney(两组)/Kruskal-Wallis(多组)
