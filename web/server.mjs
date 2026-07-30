@@ -1420,6 +1420,116 @@ async function cloudForward(req, res, u) {
   }
 }
 
+// ==== 下一步输入建议（前端的"接下来可以问"气泡）===========================
+// 每轮结束后，前端把「最后一问一答」送来这里，换回 2–3 条用户口吻的短指令；点一下填进输入框
+// （【不自动发送】——用户还要改），省去从零打字。
+//
+// 【为什么不让主 agent 顺带把建议写在答案末尾】主 agent 挂着全套技能与长前言，让它多写一段
+// ① 拖慢正文收尾、② 它会把"下一步"当成任务真去执行（实测过 question 工具那类翻车）、
+// ③ 建议混在 markdown 正文里没法做成可点气泡。故走一次独立的小请求：不带工具、max_tokens 很小，
+// 与主流程完全解耦，失败就当没有建议（前端什么都不显示），绝不影响正文与会话状态。
+const SUGGEST_ENABLED = process.env.SUGGEST_ENABLED !== "0"     // 运维可一键关（省额度）
+const SUGGEST_MAX_IN = 1200                                     // 一问一答各截多少字送进提示词（成本可控）
+const SUGGEST_TIMEOUT_MS = Number(process.env.SUGGEST_TIMEOUT_MS || 20000)
+const SUGGEST_MODEL = (process.env.SUGGEST_MODEL || "").trim()   // 想用更便宜的小模型出建议就配它（与上面几个开关一样：改了要重启才生效）
+const SUGGEST_MAX_CONC = 3                                      // 同时在途的建议请求上限（防连点刷额度）
+let suggestInFlight = 0
+
+/** 建议请求用哪套 API：跟着当前路由走（云端账号 / 静态网关 / 用户自设），可用 SUGGEST_MODEL 换个便宜模型 */
+function suggestProvider() {
+  const route = currentRoute()
+  let p = null
+  if (route === "custom") {
+    const s = loadModelCfg()
+    if (!s?.baseURL || !s?.apiKey || !s?.modelID) return null
+    p = { route, baseURL: s.baseURL, apiKey: s.apiKey, modelID: s.modelID }
+  } else if (route === "cloud" || route === "gateway") {
+    const g = platformProvider()
+    if (!g.baseURL || !g.apiKey || !g.modelID) return null
+    p = { route, baseURL: g.baseURL, apiKey: g.apiKey, modelID: g.modelID }
+  }
+  if (!p) return null
+  // 换模型要过档位白名单：云端形态下选一个档位没开通的模型，网关会静默打回，白花一次往返
+  if (SUGGEST_MODEL && (p.route !== "cloud" || modelAllowed(SUGGEST_MODEL))) p.modelID = SUGGEST_MODEL
+  return p
+}
+
+const SUGGEST_SYS = [
+  "你是科研写作平台的输入助手。根据用户与助手的最近一轮对话，猜用户下一步最可能想让助手做什么，写成可以直接发送的短指令。",
+  "要求：",
+  "1) 用【用户对助手说话】的口吻（祈使句），不要写成对用户的建议，不要出现“你可以…”“建议您…”。",
+  "2) 每条 8–24 个字，具体、可执行；不要“继续”“好的”“再说说”这类空话。",
+  "3) 恰好 3 条，方向互不重复：一般是「把当前结果做深一步」「推进到流程下一步」「换个角度检查/补充」各一条。",
+  "4) 贴着这段对话的真实内容与已产出的文件说，不要编造不存在的数据、文件名或结论。",
+  "5) 只输出一个 JSON 字符串数组，例如 [\"...\",\"...\",\"...\"]；不要解释、不要编号、不要代码块。",
+].join("\n")
+
+/** 从模型回复里抠出建议数组：优先当 JSON 解析，退化成按行拆（模型不听话时也别整轮作废） */
+function parseSuggestions(text) {
+  let s = String(text || "").trim()
+  const fence = s.match(/```(?:json)?\s*([\s\S]*?)```/)
+  if (fence) s = fence[1].trim()
+  let arr = null
+  const i = s.indexOf("["), j = s.lastIndexOf("]")
+  if (i >= 0 && j > i) { try { arr = JSON.parse(s.slice(i, j + 1)) } catch {} }
+  if (!Array.isArray(arr)) arr = s.split("\n")
+  const out = []
+  for (const x of arr) {
+    const t = String(x == null ? "" : x)
+      .replace(/\s+/g, " ")
+      .replace(/^\s*(?:[-*·—]|\d+[.、)）])\s*/, "")          // 行首的项目符号/编号
+      .replace(/^["'“”‘’]+|["'“”‘’]+$/g, "")                 // 包裹的引号
+      .trim()
+    if (t.length < 4 || t.length > 40) continue               // 太短没信息、太长不像气泡（多半是模型在解释）
+    if (out.includes(t)) continue
+    out.push(t)
+    if (out.length >= 3) break
+  }
+  return out
+}
+
+/**
+ * 要一批建议。返回 { list, err }：err 只用于日志/调试，前端拿不到建议就静默不显示。
+ * 成本按 usage 自己入账（这条请求不经 opencode，session.cost 里没有它，不记就等于绕开每日额度）。
+ */
+async function suggestNext({ q, a, modName }) {
+  const p = suggestProvider()
+  if (!p) return { list: [], err: "no-provider" }
+  const cut = (s, n) => { const t = String(s || "").trim(); return t.length > n ? t.slice(0, n) + "…（略）" : t }
+  const user = [
+    modName ? `【当前功能模块】${modName}——本会话只做这一类事，3 条建议都必须落在该范围内。` : "",
+    `【用户刚才说】\n${cut(q, SUGGEST_MAX_IN) || "(空)"}`,
+    `【助手的回答（节选）】\n${cut(a, SUGGEST_MAX_IN) || "(空)"}`,
+    "请给出 3 条下一步指令（JSON 数组）。",
+  ].filter(Boolean).join("\n\n")
+  const url = p.baseURL.replace(/\/+$/, "") + "/chat/completions"
+  try {
+    const r = await fetch(url, {
+      method: "POST",
+      redirect: "manual",                                    // 与 /api/model/test 同口径：不跟随跳转
+      signal: AbortSignal.timeout(SUGGEST_TIMEOUT_MS),
+      headers: { "Content-Type": "application/json", Authorization: "Bearer " + p.apiKey },
+      body: JSON.stringify({
+        model: p.modelID, stream: false, temperature: 0.7, max_tokens: 220,
+        messages: [{ role: "system", content: SUGGEST_SYS }, { role: "user", content: user }],
+      }),
+    })
+    if (!r.ok) return { list: [], err: "http-" + r.status }
+    const j = await r.json().catch(() => null)
+    const content = j?.choices?.[0]?.message?.content || ""
+    // 入账：走的是同一条计费通道，漏记就是给"无限点建议"开了个不花钱的口子
+    try {
+      const price = (p.route === "cloud" ? costOfModel(p.modelID) : null) || _modelCost()
+      const inTok = Number(j?.usage?.prompt_tokens) || 0, outTok = Number(j?.usage?.completion_tokens) || 0
+      const cost = inTok / 1e6 * (price.input || 0) + outTok / 1e6 * (price.output || 0)
+      if (cost > 0) addCost(cost)
+    } catch {}
+    return { list: parseSuggestions(content), err: "" }
+  } catch (e) {
+    return { list: [], err: e?.name === "TimeoutError" ? "timeout" : (e?.message || "fetch-failed") }
+  }
+}
+
 // 导出供自动化测试拿端口/关闭；生产路径不受影响（下面照常 listen）
 export const server = http.createServer(async (req, res) => {
   const u = new URL(req.url, "http://localhost")
@@ -2003,6 +2113,32 @@ export const server = http.createServer(async (req, res) => {
       const job = jobs.get(u.searchParams.get("sid") || "")
       if (job) await job.abort()
       return send(res, 200, "application/json", JSON.stringify({ ok: true, aborted: !!job }))
+    }
+
+    // 下一步输入建议：前端在一轮结束后送来「最后一问一答」，换回 2–3 条可点即填的短指令。
+    // 【失败一律回 200 + 空数组】这是纯锦上添花的功能，任何错误都不该在界面上冒出红字打断用户；
+    // 前端拿到空数组就什么都不画。err 字段只是给排查用，前端不显示。
+    if (req.method === "POST" && u.pathname === "/api/suggest") {
+      const nope = (err) => send(res, 200, "application/json", JSON.stringify({ ok: false, suggestions: [], err }))
+      if (!SUGGEST_ENABLED) return nope("disabled")
+      const chunks = []; let total = 0
+      for await (const c of req) {
+        total += c.length
+        if (total > 200_000) return sendClose(res, 413, "application/json", JSON.stringify({ ok: false, suggestions: [], err: "too-large" }))
+        chunks.push(c)
+      }
+      let sq = "", sa = "", sid = ""
+      try { const b = JSON.parse(Buffer.concat(chunks).toString() || "{}"); sq = String(b.q ?? ""); sa = String(b.a ?? ""); sid = b.sid ? String(b.sid) : "" } catch {}
+      if (!sq.trim() && !sa.trim()) return nope("empty")
+      if (quotaOver()) return nope("quota")                       // 额度已尽：别再为锦上添花的功能烧钱
+      if (suggestInFlight >= SUGGEST_MAX_CONC) return nope("busy")   // 连点/多开页面时封顶，防被当成免费刷额度的口子
+      suggestInFlight++
+      try {
+        const modId = sid ? sessionModule(sid) : "chat"   // 受限模块的会话，建议也只能落在该模块能干的事上
+        const { list, err } = await suggestNext({ q: sq, a: sa, modName: modId === "chat" ? "" : (MODULE_DEFS[modId]?.name || "") })
+        if (err) console.warn(`[suggest] 取建议失败：${err}`)
+        return send(res, 200, "application/json", JSON.stringify({ ok: list.length > 0, suggestions: list }))
+      } finally { suggestInFlight-- }
     }
 
     // 某会话是否有进行中的一轮（切会话/重开页面时决定要不要续流）

@@ -372,6 +372,15 @@
   .asksubmit:hover { filter: brightness(1.06); }
   .asksubmit .ic { width: 14px; height: 14px; }
 
+  /* 下一步建议气泡：一轮结束后出现在回合底部，点一下填进输入框（不自动发送） */
+  .sugs { display: flex; flex-wrap: wrap; align-items: center; gap: 7px; margin: 10px 0 2px; }
+  .sugs .sglbl { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; color: var(--faint); }
+  .sugs .sglbl .ic { width: 13px; height: 13px; color: var(--cyan); }
+  .sugchip { display: inline-flex; align-items: center; gap: 5px; max-width: 100%; background: var(--card); border: 1px solid var(--line-hi); color: #334153; border-radius: 999px; padding: 6px 13px; font-size: 12.5px; text-align: left; cursor: pointer; transition: border-color .15s, color .15s, background .15s; }
+  .sugchip:hover { border-color: var(--cyan); color: #0f6cae; background: rgba(56,189,248,.06); }
+  .sugchip .ic { width: 12px; height: 12px; flex: none; opacity: .55; }
+  .sugs.loading .sglbl { opacity: .8; }
+
   /* image lightbox */
   .lightbox { position: fixed; inset: 0; z-index: 60; display: none; align-items: center; justify-content: center; background: rgba(4,8,16,.82); backdrop-filter: blur(8px); cursor: zoom-out; padding: 32px; }
   .lightbox.on { display: flex; }
@@ -697,7 +706,9 @@ const ICONS = {
   clock: '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>',
   cog: '<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1Z"/>',
   logout: '<path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/>',
-  key: '<circle cx="7.5" cy="15.5" r="4.5"/><path d="m21 2-9.6 9.6"/><path d="m15.5 7.5 3 3L22 7l-3-3"/>'
+  key: '<circle cx="7.5" cy="15.5" r="4.5"/><path d="m21 2-9.6 9.6"/><path d="m15.5 7.5 3 3L22 7l-3-3"/>',
+  sparkle: '<path d="M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9Z"/><path d="M18.5 15.5l.7 1.8 1.8.7-1.8.7-.7 1.8-.7-1.8-1.8-.7 1.8-.7Z"/>',
+  plus: '<path d="M12 5v14"/><path d="M5 12h14"/>'
 }
 function ic(name, cls) { return '<svg class="ic' + (cls ? " " + cls : "") + '" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">' + (ICONS[name] || "") + "</svg>" }
 const setIc = (id, name) => { const el = document.getElementById(id); if (el) el.innerHTML = ic(name) }
@@ -1441,6 +1452,48 @@ function renderAsk(answerEl, turnEl) {
   turnEl.appendChild(form)
 }
 
+// ---- 下一步输入建议：一轮结束后在回合底部给 2–3 个气泡，点一下把话填进输入框 ----
+// 【点了不自动发送】用户多半要改一改再发；直接发出去等于替用户做决定，还可能白烧一轮额度。
+function clearSugs() { log.querySelectorAll(".sugs").forEach((e) => e.remove()) }   // 只给"最后一轮"留建议
+function fillComposer(text) {
+  const cur = q.value.trim()
+  q.value = cur ? cur + " " + text : text   // 输入框已有内容就追加：别把用户打了一半的字覆盖掉
+  q.focus()
+  try { q.setSelectionRange(q.value.length, q.value.length) } catch {}
+  q.dispatchEvent(new Event("input"))       // 触发可能存在的高度自适应/字数统计
+  q.scrollLeft = q.scrollWidth
+}
+async function requestSugs(turn, userText, answerText) {
+  if (!turn.isConnected || turn.querySelector(".sugs")) return
+  if (turn.querySelector(".askform")) return               // 本轮已经用选项卡在问用户了，再叠一排气泡是干扰
+  if (!(userText || "").trim() && !(answerText || "").trim()) return
+  const box = document.createElement("div"); box.className = "sugs loading"
+  box.innerHTML = '<span class="sglbl">' + ic("sparkle") + "正在想下一步…</span>"
+  turn.appendChild(box)
+  let list = []
+  try {
+    const r = await fetch("api/suggest", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ q: (userText || "").slice(0, 4000), a: (answerText || "").slice(0, 4000), sid: sessionId }),
+    })
+    if (r.ok) list = (await r.json()).suggestions || []    // 401/500 一律当"没有建议"，绝不打断用户
+  } catch {}
+  // 等回包期间用户又发了一轮（或切走了会话）→ 这批建议已经过期，别贴到旧回合上误导人
+  if (!turn.isConnected || activeES) return box.remove()
+  if (!Array.isArray(list) || !list.length) return box.remove()   // 没建议就当没这回事，不留空壳
+  box.classList.remove("loading")
+  box.innerHTML = '<span class="sglbl">' + ic("sparkle") + "下一步</span>"
+  list.forEach((t) => {
+    const b = document.createElement("button"); b.type = "button"; b.className = "sugchip"; b.title = "填入输入框（不会直接发送）"
+    b.setAttribute("aria-label", t + "（填入输入框）")   // 读屏要念出这条建议本身，只留 title 会念成一串一样的"填入输入框"
+    b.innerHTML = ic("plus")
+    const s = document.createElement("span"); s.textContent = t
+    b.appendChild(s)
+    b.addEventListener("click", () => fillComposer(t))
+    box.appendChild(b)
+  })
+}
+
 const STI = { pending: "○", running: "○", completed: "✓", error: "✕" }
 // 发消息＝两步：POST /api/chat/start 起轮（正文在 body），再 GET /api/chat/attach 订阅直播。
 // 为什么不再用 GET 直接起轮：① GET 带副作用 + SameSite=Lax → 跨站诱导点击可代发一轮烧额度；
@@ -1450,6 +1503,7 @@ async function sendMessage(text) {
   if (activeES || sending) return   // 已有流在跑，或上一次 start 还没返回（防连点重复发）
   if (sessionId) pendingProjectId = null   // 往已有会话里继续发 → 不是「新建对话」，解除项目归入
   const w = log.querySelector(".welcome"); if (w) w.remove()
+  clearSugs()   // 已经开口问了 → 上一轮的"下一步"气泡失效，撤掉
   const bubble = add("user", text)
   sending = true; setStreamingUI(true)   // 立刻进入"生成中"态：POST 往返期间也不许再发
   // 记下发起时的会话：POST 往返期间（冷启动容器时可达数秒）用户仍能点左侧会话列表或"新对话"
@@ -1516,6 +1570,7 @@ function addNote(msg) {
 // 不再靠 SSE 事件反推——那种推断在 attach 续流时会误判，现在的判据来自服务端权威答复。
 function openStream(url) {
   setStreamingUI(true)
+  clearSugs()   // 续流/新一轮开始 → 旧建议作废（sendMessage 那条路已清过一次，这里兜住 attach 那条路）
 
   // 本轮助手块：技能徽章(常显) + 工具(默认折叠) + 思考(默认折叠) + 回答
   const turn = document.createElement("div"); turn.className = "msg bot turn"
@@ -1532,6 +1587,10 @@ function openStream(url) {
   setGen("等待模型输出…")
   turn.append(skillsEl, toolsD, thinkD, answer, genEl)
   log.appendChild(turn); log.scrollTop = log.scrollHeight
+
+  // 本轮对应的用户提问（给"下一步建议"当上下文）。幽灵气泡要排除：那条根本没发出去，
+  // 而这条流放的是【上一轮】的输出，拿它当问题会给出驴唇不对马嘴的建议。
+  const askedText = (() => { const us = log.querySelectorAll(".msg.user:not([data-ghost])"); const last = us[us.length - 1]; return last ? (last.dataset.text || "") : "" })()
 
   const toolRows = new Map()   // callID -> row
   const seenSkills = new Set()
@@ -1557,6 +1616,9 @@ function openStream(url) {
     else if (!gotText) answer.textContent = "(无文本输出)"
     loadSessions()   // 刷新会话列表（新会话入列 / 更新时间与高亮）
     refreshQuota()   // 本轮成本已入账 → 刷新顶栏额度
+    // 正常收尾（没出错、确有回答）才去要"下一步"建议：出错/被终止的轮次建议不出下一步，
+    // 用户此刻要的是重试或看提示，不是被推着往前走。
+    if (!note && gotText) requestSugs(turn, askedText, answer.textContent || "")
   }
   es.addEventListener("session", (ev) => { sseFailStreak = 0; const nid = JSON.parse(ev.data).id; sessionId = nid; localStorage.setItem("nm_sid", nid); consumePendingProject(nid); loadUploads(); loadZotLib() })   // 连上了 → 清零重连计数
 

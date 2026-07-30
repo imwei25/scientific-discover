@@ -127,6 +127,10 @@ tier_field() { [ -f tiers.env ] || return 0; awk -v t="$1" -v c="$2" '!/^[[:spac
       OC_COST_INPUT: \${OC_COST_INPUT:-0.27}
       OC_COST_OUTPUT: \${OC_COST_OUTPUT:-1.10}
       OC_COST_CACHE_READ: \${OC_COST_CACHE_READ:-0.07}
+      # 「下一步」输入建议（每轮结束后给 3 个可点即填的气泡）。每次约几百 token，走同一条计费通道、
+      # 照常计入每日额度。SUGGEST_ENABLED=0 整体关掉；SUGGEST_MODEL 可指定一个更便宜的小模型来出建议。
+      SUGGEST_ENABLED: \${SUGGEST_ENABLED:-1}
+      SUGGEST_MODEL: \${SUGGEST_MODEL:-}
       # 堆上限（防单进程膨胀吃满 mem_limit 被 OOM kill -9，长会话宁可多 GC 也别猝死）：
       #   NODE_OPTIONS 管容器里所有 Node 进程（网关 server.mjs 实测常驻仅 ~60M，512M 硬顶很宽裕）；
       #   opencode 是 Bun 编译的原生二进制（JavaScriptCore 引擎，不认 NODE_OPTIONS），
