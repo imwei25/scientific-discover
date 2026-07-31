@@ -42,6 +42,9 @@ HEADCJKFONT=""; HEADFONTSIZE=""
 # 表格两开关默认开：pandoc 出的 docx 表要么 autofit（Word 自动布局不可预测）要么按
 # 分隔行均分列宽，长列名必然排丑；推断列宽 + 后处理三线表是兜底，不改变表内容。
 INFERCW=1; TABLETUNE=1
+# 块级空行补齐默认开：表题贴着表格写（模型极常见）会让 pandoc 把整张表摊平成一段文本，
+# docx 里一个 <w:tbl> 都没有且**不报错**——静默丢表比排丑严重得多，故默认兜住。
+NORMALIZE=1
 usage() {
   cat >&2 <<EOF
 Usage: $(basename "$0") -i <input.md> [-o <output.docx>] [options] [-- <pandoc args>]
@@ -59,6 +62,7 @@ Usage: $(basename "$0") -i <input.md> [-o <output.docx>] [options] [-- <pandoc a
   --figures-at-end  把图表搬到正文末尾（NEJM/JAMA/Lancet 送审稿要求）
   --no-infer-colwidths  关掉默认的按内容推断表格列宽（infer_colwidths.py）
   --no-table-tune       关掉默认的 docx 表格调优（三线表/固定列宽/表内字号降档）
+  --no-normalize        关掉默认的块级空行补齐（表格/标题/列表前缺空行会被 pandoc 摊平成正文）
   --ref          reference .docx (styles/fonts template；与格式参数可叠加，模板先套、参数后覆盖)
   --csl          CSL style: 文件路径或 presets/csl 里的名字 (vancouver / the-lancet …) — needs @keys + --bib
   --bib          bibliography (.bib) for --csl
@@ -99,6 +103,7 @@ while [[ $# -gt 0 ]]; do
     --figures-at-end) FIGSATEND=1; shift ;;
     --no-infer-colwidths) INFERCW=""; shift ;;
     --no-table-tune) TABLETUNE=""; shift ;;
+    --no-normalize) NORMALIZE=""; shift ;;
     --ref) REF="$2"; shift 2 ;;
     --csl) CSL="$2"; shift 2 ;;
     --bib) BIB="$2"; shift 2 ;;
@@ -197,14 +202,34 @@ if [[ -n "$CSL" || -n "$BIB" ]]; then
   fi
 fi
 
-# --figures-at-end: 先把图表搬到文末，再交 pandoc（不改原稿，写临时文件）
 SRCMD="$INPUT"
+
+# --no-normalize 可关：把表格/标题/列表前缺的空行补上，必须排在所有预处理之前——
+# 后面的 figures_at_end / infer_colwidths 都靠"能认出这是张表"才生效，表没被识别就全落空。
+if [[ -n "$NORMALIZE" ]]; then
+  PYNM="$(resolve_py)"
+  if [[ -n "$PYNM" ]]; then
+    if [[ -z "${TMPD:-}" ]]; then TMPD="$(mktemp -d)"; trap 'rm -rf "$TMPD"' EXIT; fi
+    NMOUT="$TMPD/nm_$(basename "$SRCMD")"
+    if "$PYNM" "$SCRIPT_DIR/normalize_md_blocks.py" "$SRCMD" --out "$NMOUT"; then
+      SRCMD="$NMOUT"
+    else
+      echo "[render_docx] WARN: normalize_md_blocks.py 运行失败，跳过空行补齐（表格可能被摊平成正文）" >&2
+    fi
+  else
+    echo "[render_docx] WARN: 未找到 Python，跳过空行补齐；若稿件里表题与表格贴着写，表会丢" >&2
+  fi
+fi
+
+# --figures-at-end: 先把图表搬到文末，再交 pandoc（不改原稿，写临时文件）
 if [[ -n "$FIGSATEND" ]]; then
   PYBIN="$(resolve_py)"
   [[ -z "$PYBIN" ]] && { echo "ERROR: --figures-at-end 需 Python（.venv/PATH 均未找到）；先跑 env-setup" >&2; exit 5; }
-  TMPD="$(mktemp -d)"; trap 'rm -rf "$TMPD"' EXIT
+  if [[ -z "${TMPD:-}" ]]; then TMPD="$(mktemp -d)"; trap 'rm -rf "$TMPD"' EXIT; fi
+  # 【读 $SRCMD 而非 $INPUT】否则上一步补好空行的中间文件会被直接丢掉、退回原稿
+  FEIN="$SRCMD"
   SRCMD="$TMPD/figend_$(basename "$INPUT")"
-  FE=("$PYBIN" "$SCRIPT_DIR/figures_at_end.py" "$INPUT" --out "$SRCMD")
+  FE=("$PYBIN" "$SCRIPT_DIR/figures_at_end.py" "$FEIN" --out "$SRCMD")
   # 与 citeproc 参考文献并用时，插文献锚点让参考文献表排在图表之前（正文→参考文献→图表）
   [[ -n "$CSL" ]] && FE+=(--refs-anchor)
   "${FE[@]}" || { echo "ERROR: figures_at_end.py failed" >&2; exit 5; }
