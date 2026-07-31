@@ -41,7 +41,7 @@ JOURNAL=""; FONT=""; CJKFONT=""; FONTSIZE=""; MARGIN=""; LINESPACING=""; LINENUM
 HEADCJKFONT=""; HEADFONTSIZE=""
 # 表格两开关默认开：pandoc 出的 docx 表要么 autofit（Word 自动布局不可预测）要么按
 # 分隔行均分列宽，长列名必然排丑；推断列宽 + 后处理三线表是兜底，不改变表内容。
-INFERCW=1; TABLETUNE=1
+INFERCW=1; TABLETUNE=1; LANDSCAPEWIDE=""
 # 块级空行补齐默认开：表题贴着表格写（模型极常见）会让 pandoc 把整张表摊平成一段文本，
 # docx 里一个 <w:tbl> 都没有且**不报错**——静默丢表比排丑严重得多，故默认兜住。
 NORMALIZE=1
@@ -63,6 +63,7 @@ Usage: $(basename "$0") -i <input.md> [-o <output.docx>] [options] [-- <pandoc a
   --no-infer-colwidths  关掉默认的按内容推断表格列宽（infer_colwidths.py）
   --no-table-tune       关掉默认的 docx 表格调优（三线表/固定列宽/表内字号降档）
   --no-normalize        关掉默认的块级空行补齐（表格/标题/列表前缺空行会被 pandoc 摊平成正文）
+  --landscape-wide-tables 纵向压不下的宽表连同表题转入横向节（跨页表默认已重复表头+禁止行内断页）
   --ref          reference .docx (styles/fonts template；与格式参数可叠加，模板先套、参数后覆盖)
   --csl          CSL style: 文件路径或 presets/csl 里的名字 (vancouver / the-lancet …) — needs @keys + --bib
   --bib          bibliography (.bib) for --csl
@@ -103,6 +104,7 @@ while [[ $# -gt 0 ]]; do
     --figures-at-end) FIGSATEND=1; shift ;;
     --no-infer-colwidths) INFERCW=""; shift ;;
     --no-table-tune) TABLETUNE=""; shift ;;
+    --landscape-wide-tables) LANDSCAPEWIDE=1; shift ;;
     --no-normalize) NORMALIZE=""; shift ;;
     --ref) REF="$2"; shift 2 ;;
     --csl) CSL="$2"; shift 2 ;;
@@ -274,6 +276,7 @@ if [[ -n "$FONT$CJKFONT$FONTSIZE$MARGIN$LINESPACING$LINENUMBERS$HEADCJKFONT$HEAD
     [[ -n "$MARGIN" ]] && PP+=(--margin "$MARGIN")
     [[ -n "$LINESPACING" ]] && PP+=(--line-spacing "$LINESPACING")
     [[ -n "$LINENUMBERS" ]] && PP+=(--line-numbers)
+    [[ -n "$LANDSCAPEWIDE" ]] && PP+=(--landscape-wide-tables)
     [[ -n "$HEADCJKFONT" ]] && PP+=(--heading-cjk-font "$HEADCJKFONT")
     [[ -n "$HEADFONTSIZE" ]] && PP+=(--heading-fontsize "$HEADFONTSIZE")
     [[ -n "$TABLETUNE" ]] && PP+=(--tables)

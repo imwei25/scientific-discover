@@ -23,6 +23,7 @@ python-docx 直接改样式与节属性，让 render_docx.sh 的 --font/--fontsi
     tblGrid/gridCol 与每格 tcW（只写一处 Word 会无视），tblLayout 固定。
 """
 import argparse
+import copy
 import re
 import sys
 import unicodedata
@@ -99,6 +100,102 @@ def _three_line_borders(table):
         )
 
 
+def _repeat_header_and_keep_rows(table):
+    """跨页表的标准做法：首行设为重复表头，各行禁止被从中间劈到两页。
+
+    期刊接受表格跨页，难看的是跨页后没表头、或一行文字被劈开。这两个开关不改
+    任何内容，纯排版兜底。
+    """
+    trPr = table.rows[0]._tr.get_or_add_trPr()
+    if not trPr.findall(qn("w:tblHeader")):
+        el = trPr.makeelement(qn("w:tblHeader"), {})
+        el.set(qn("w:val"), "true")
+        trPr.append(el)
+    for row in table.rows:
+        p = row._tr.get_or_add_trPr()
+        if not p.findall(qn("w:cantSplit")):
+            p.append(p.makeelement(qn("w:cantSplit"), {}))
+
+
+def _caption_before(tbl):
+    """表格上方紧邻的表题段落（`**表n …**`）。转横向时要连它一起搬，否则题在上一页。"""
+    prev = tbl.getprevious()
+    if prev is None or prev.tag != qn("w:p"):
+        return None
+    txt = "".join(prev.itertext()).strip()
+    return prev if re.match(r"^\**\s*(表|Table)\s*\d", txt) else None
+
+
+def _note_after(tbl):
+    """表格下方紧邻的表注段落（`表注：…` / `注：…` / `Note.…`）。
+
+    不一起搬进横向节的话，表在横向页、注被甩到下一张纵向页，比不转横向还难看。
+    """
+    nxt = tbl.getnext()
+    if nxt is None or nxt.tag != qn("w:p"):
+        return None
+    txt = "".join(nxt.itertext()).strip()
+    return nxt if re.match(r"^\**\s*(表注|注|Note|注意)\s*[:：.]", txt) else None
+
+
+def _set_pgsz(sect, w_pt, h_pt, orient):
+    """写 sectPr 的 w:pgSz（缺就新建）。pandoc 默认模板压根不写页面尺寸，必须补。
+
+    sectPr 里子元素有固定次序，pgSz 必须排在 pgMar 之前，否则 Word 判文档损坏。
+    """
+    pg = sect.find(qn("w:pgSz"))
+    if pg is None:
+        pg = sect.makeelement(qn("w:pgSz"), {})
+        pgmar = sect.find(qn("w:pgMar"))
+        if pgmar is not None:
+            pgmar.addprevious(pg)
+        else:
+            sect.append(pg)
+    pg.set(qn("w:w"), str(int(round(w_pt * 20))))   # pt → dxa（1/20 pt）
+    pg.set(qn("w:h"), str(int(round(h_pt * 20))))
+    pg.set(qn("w:orient"), orient)
+
+
+def _wrap_in_landscape(doc, table, pw_pt, ph_pt):
+    """把该表（含表题）单独放进一个横向节：表前后各插一个带 sectPr 的空段落。
+
+    OOXML 语义：段落 pPr 里的 sectPr 描述的是「以该段落结尾的那一节」。
+    所以 表前段落带纵向 sectPr（结束前面的纵向节）、表后段落带横向 sectPr
+    （结束包住表格的这一节）→ 正好只有表格所在节是横向。
+
+    两个 sectPr 先全部构造校验完再动文档：中途失败就插了一半，会留下多余的分节符。
+    """
+    body = doc.element.body
+    body_sect = body.find(qn("w:sectPr"))
+    if body_sect is None:
+        return False
+    tbl = table._tbl
+    cap = _caption_before(tbl)
+    anchor = tbl if cap is None else cap
+
+    note = _note_after(tbl)
+    tail = tbl if note is None else note
+
+    portrait = copy.deepcopy(body_sect)
+    _set_pgsz(portrait, pw_pt, ph_pt, "portrait")
+    land = copy.deepcopy(body_sect)
+    _set_pgsz(land, ph_pt, pw_pt, "landscape")  # 横向：宽高互换
+    # 文末那节（body 级 sectPr）也补上纵向尺寸：只给前两节写了 pgSz 的话，
+    # 末节会退回 Word 的默认纸张，同一份稿子里出现两种纸张。
+    _set_pgsz(body_sect, pw_pt, ph_pt, "portrait")
+
+    def _mk_sect_para(sect_el):
+        p = body.makeelement(qn("w:p"), {})
+        pPr = body.makeelement(qn("w:pPr"), {})
+        pPr.append(sect_el)
+        p.append(pPr)
+        return p
+
+    anchor.addprevious(_mk_sect_para(portrait))
+    tail.addnext(_mk_sect_para(land))
+    return True
+
+
 def _alloc_widths_pt(units, avail_pt, tsize):
     """按内容单位数分配列宽（pt）。返回 (widths, overflow)。
 
@@ -136,22 +233,36 @@ def _alloc_widths_pt(units, avail_pt, tsize):
     return widths, False
 
 
-def _tune_tables(doc, body_pt):
-    """全部表格：三线表 + 固定列宽 + 表内字号降档/表头加粗居中/单倍行距。
+def _tune_tables(doc, body_pt, landscape_wide=False, long_rows=20):
+    """全部表格：三线表 + 固定列宽 + 表内字号降档/表头加粗居中/单倍行距 + 跨页兜底。
 
     返回 (完整调优数, 仅样式数)。含合并格（gridSpan/vMerge）的表不动列宽只调样式。
+    landscape_wide=True 时，按内容压不下的宽表连同表题单独放进横向节。
     """
     tsize = max(9.0, body_pt - 1.5)
     sec = doc.sections[0]
     # pandoc 默认模板的 sectPr 可缺 w:pgSz/边距 → python-docx 返回 None，按 Letter/1in 回退
     _pt = lambda v, default: (v / 12700) if v is not None else default  # EMU→pt
-    avail_pt = _pt(sec.page_width, 612.0) - _pt(sec.left_margin, 72.0) - _pt(sec.right_margin, 72.0)
-    done = styled_only = 0
+    pw = _pt(sec.page_width, 612.0)
+    ph = _pt(sec.page_height, 792.0)
+    lm = _pt(sec.left_margin, 72.0)
+    rm = _pt(sec.right_margin, 72.0)
+    avail_pt = pw - lm - rm
+    avail_land_pt = ph - lm - rm  # 转横向后版心宽 = 原页高 − 左右边距
+    done = styled_only = landscaped = 0
     for ti, table in enumerate(doc.tables, 1):
         try:
             if not table.rows:
                 continue
             _three_line_borders(table)
+            _repeat_header_and_keep_rows(table)
+            if len(table.rows) > long_rows:
+                print(
+                    f"[postprocess_docx] 注：第{ti}张表 {len(table.rows)} 行，必然跨页"
+                    f"（已设重复表头 + 禁止行内断页）。若审稿方要求单页放下，"
+                    f"按 write-paper 表格铁律拆成 表na/表nb 或移入补充材料",
+                    file=sys.stderr,
+                )
             for ri, row in enumerate(table.rows):
                 for cell in row.cells:
                     for p in cell.paragraphs:
@@ -176,6 +287,14 @@ def _tune_tables(doc, body_pt):
                     for p in cells[c].paragraphs:
                         units[c] = max(units[c], _display_width(p.text))
             widths, overflow = _alloc_widths_pt(units, avail_pt, tsize)
+            # 纵向压不下 → 先试横向：版心从页宽变页高，通常能多出 40% 以上
+            if overflow and landscape_wide:
+                w2, of2 = _alloc_widths_pt(units, avail_land_pt, tsize)
+                if _wrap_in_landscape(doc, table, pw, ph):
+                    widths, overflow = w2, of2
+                    landscaped += 1
+                    print(f"[postprocess_docx] 第{ti}张表纵向放不下，已连同表题转入横向节"
+                          f"（版心 {avail_pt:.0f}pt → {avail_land_pt:.0f}pt）", file=sys.stderr)
             table.autofit = False  # tblLayout fixed，列宽不再由 Word 自动布局漂移
             for c, col in enumerate(table.columns):
                 col.width = Pt(widths[c])  # 写 tblGrid/gridCol
@@ -205,7 +324,7 @@ def _tune_tables(doc, body_pt):
             done += 1
         except Exception as e:  # 单表失败不拖垮整份文档，保持 pandoc 原样
             print(f"[postprocess_docx] WARN: 第{ti}张表调优失败，保持原样：{e}", file=sys.stderr)
-    return done, styled_only
+    return done, styled_only, landscaped
 
 
 def main():
@@ -220,6 +339,8 @@ def main():
     ap.add_argument("--heading-cjk-font", default="")
     ap.add_argument("--heading-fontsize", type=float, default=0)
     ap.add_argument("--tables", action="store_true")
+    ap.add_argument("--landscape-wide-tables", action="store_true",
+                    help="纵向版心压不下的宽表，连同表题单独放进横向节")
     args = ap.parse_args()
 
     doc = Document(args.docx)
@@ -300,11 +421,14 @@ def main():
                 body_pt = sz.pt if sz is not None else 12.0
             except KeyError:
                 body_pt = 12.0
-        done, styled_only = _tune_tables(doc, body_pt)
+        done, styled_only, landscaped = _tune_tables(
+            doc, body_pt, landscape_wide=args.landscape_wide_tables)
         if done or styled_only:
             note = f"tables={done}张(三线表/固定列宽/{max(9.0, body_pt - 1.5):g}pt)"
             if styled_only:
                 note += f"+{styled_only}张仅样式(含合并格)"
+            if landscaped:
+                note += f"+{landscaped}张转横向节"
             applied.append(note)
 
     if not applied:
