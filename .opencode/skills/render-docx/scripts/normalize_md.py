@@ -50,6 +50,14 @@ SUP_RE = re.compile('[' + ''.join(SUP_MAP) + ']+')
 SUB_RE = re.compile('[' + ''.join(SUB_MAP) + ']+')
 CODE_SPAN_RE = re.compile(r'`[^`]*`')
 
+# 宋体（中文投稿默认正文字体）缺字形、且有安全等价写法的字符。
+# U+2212 数学减号：宋体没有它，而它按 UAX#11 属"东亚歧义宽度"，Word 在中文文档里
+# 倾向按东亚字体取字 → 落到宋体 → 缺字形 → 系统兜底字体，于是每个负号都跟前后不是
+# 一套字。满屏负数的结果表尤其明显。换成 ASCII 连字符后无歧义走西文字体，宋体本身
+# 也有这个字形，两条路都正确。中文医学期刊本来就用连字符写负数。
+GLYPH_SAFE = {'−': '-'}
+GLYPH_RE = re.compile('[' + ''.join(GLYPH_SAFE) + ']')
+
 
 def _convert_supsub(text):
     """Unicode 上下标 → pandoc ^x^ / ~x~。行内代码区不碰（那里要的就是字面量）。"""
@@ -65,14 +73,20 @@ def _convert_supsub(text):
         n += 1
         return '~' + ''.join(SUB_MAP[c] for c in m.group(0)) + '~'
 
+    def glyph(m):
+        nonlocal n
+        n += 1
+        return GLYPH_SAFE[m.group(0)]
+
+    def one(seg):
+        return GLYPH_RE.sub(glyph, SUB_RE.sub(sub, SUP_RE.sub(sup, seg)))
+
     out, last = [], 0
     for m in CODE_SPAN_RE.finditer(text):
-        seg = SUP_RE.sub(sup, text[last:m.start()])
-        out.append(SUB_RE.sub(sub, seg))
+        out.append(one(text[last:m.start()]))
         out.append(m.group(0))
         last = m.end()
-    seg = SUP_RE.sub(sup, text[last:])
-    out.append(SUB_RE.sub(sub, seg))
+    out.append(one(text[last:]))
     return ''.join(out), n
 
 
@@ -180,7 +194,7 @@ def main():
         print(f"[normalize_md] 补空行：表格 {stats['table']} 处、标题 {stats['heading']} 处、"
               f"列表 {stats['list']} 处（不补则 pandoc 会把它们摊平成普通段落）", file=sys.stderr)
     if stats['supsub']:
-        print(f"[normalize_md] Unicode 上下标转真上下标：{stats['supsub']} 处"
+        print(f"[normalize_md] Unicode 上下标转真上下标 + 缺字形字符替换：{stats['supsub']} 处"
               f"（原样保留则中文字体缺字形、Word 换字兜底，大小基线对不齐）", file=sys.stderr)
 
 
