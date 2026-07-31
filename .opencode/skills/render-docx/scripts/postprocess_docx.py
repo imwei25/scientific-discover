@@ -196,6 +196,33 @@ def _wrap_in_landscape(doc, table, pw_pt, ph_pt):
     return True
 
 
+def _ensure_tblgrid(table):
+    """保证表有与实际列数一致的 w:tblGrid，返回列数。
+
+    pandoc 并非每张表都输出 tblGrid（实测同一份稿件里 3 张表有 1 张有、2 张没有）。
+    缺了的话 python-docx 的 table.columns 为空 → 列宽分配整段跳过 → 末尾还会写下
+    `tblW w:w="0"`（表宽声明为 0），Word 只能自行猜宽度，表格排版随机漂移。
+    这是"表格排得丑"的一个隐形大头，且不报任何错。
+    """
+    tbl = table._tbl
+    ncols = max((len(r.cells) for r in table.rows), default=0)
+    if ncols == 0:
+        return 0
+    grid = tbl.find(qn("w:tblGrid"))
+    if grid is None:
+        grid = tbl.makeelement(qn("w:tblGrid"), {})
+        tbl.tblPr.addnext(grid)  # tblGrid 必须紧跟 tblPr、排在第一个 w:tr 之前
+    cols = grid.findall(qn("w:gridCol"))
+    if len(cols) != ncols:
+        for c in cols:
+            grid.remove(c)
+        for _ in range(ncols):
+            gc = grid.makeelement(qn("w:gridCol"), {})
+            gc.set(qn("w:w"), "1000")  # 占位值，随后按内容重写
+            grid.append(gc)
+    return ncols
+
+
 def _alloc_widths_pt(units, avail_pt, tsize):
     """按内容单位数分配列宽（pt）。返回 (widths, overflow)。
 
@@ -279,7 +306,10 @@ def _tune_tables(doc, body_pt, landscape_wide=False, long_rows=20):
             if table._tbl.xpath(".//w:gridSpan | .//w:vMerge"):
                 styled_only += 1
                 continue
-            ncols = len(table.columns)
+            ncols = _ensure_tblgrid(table)
+            if ncols == 0:
+                styled_only += 1
+                continue
             units = [1] * ncols
             for row in table.rows:
                 cells = row.cells
