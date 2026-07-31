@@ -106,6 +106,14 @@ const writeOcProvider = (cfg) => {
   enforceOcTools(oc)
   fs.writeFileSync(OC_CONFIG_PATH, JSON.stringify(oc, null, 2))
 }
+// opencode 只在【启动时】读 opencode.json，所以"文件里写着什么"和"它正在用的是什么"是两码事。
+// ocLiveProvider 记的是后者：每次重启成功时把当时文件里的那份 provider 存下来。
+// 有了它才能判断"这次改动到底用不用重启" —— 见 /api/cloud/login：同一个账号重新登录（闲置锁屏
+// 后输口令解锁走的正是这条）写出来的 provider 与正在跑的一模一样，重启纯属把用户留着跑的轮拔掉。
+const ocProviderOnDisk = () => {
+  try { return JSON.stringify(readJsonFile(OC_CONFIG_PATH)?.provider?.[CUSTOM_PROVIDER_ID] ?? null) } catch { return "null" }
+}
+let ocLiveProvider = null
 const removeOcProvider = () => {
   try {
     const oc = readJsonFile(OC_CONFIG_PATH)
@@ -2360,8 +2368,16 @@ export const server = http.createServer(async (req, res) => {
     if (req.method === "POST" && (u.pathname === "/api/cloud/login" || u.pathname === "/api/cloud/password" || u.pathname === "/api/cloud/logout")) {
       const chunks = []; for await (const c of req) chunks.push(c)
       let b = {}; try { b = JSON.parse(Buffer.concat(chunks).toString() || "{}") } catch {}
+      // 【同一个账号重新登录不算"切换账号"】前端闲置超时是锁屏而非登出（登录态、正在跑的轮都留着），
+      // 解锁走的就是这条 login —— 它写出来的 provider 与正在跑的那份一模一样（地址是本机 /cloud/v1、
+      // key 是本进程的 CLOUD_LOCAL_TOKEN、模型也没变；access key 是转发时才贴的，见 cloud-account.mjs），
+      // 根本不需要重启。拿"要重启后台"去拦他，等于让"留着跑一轮综述去吃饭"的用户回来解不了锁。
+      // 配置真变了（管理员趁这会儿改了他的默认模型）下面还会再判一次 busy，漏不掉。
+      const relogin = u.pathname === "/api/cloud/login" && cloudLoggedIn() &&
+        !Cloud.status().mustChangePassword &&
+        Cloud.status().username === String(b.username || "").trim()
       const busy = runningRounds()
-      if (busy > 0 && !b.force) {
+      if (busy > 0 && !b.force && !relogin) {
         return send(res, 409, "application/json", JSON.stringify({ ok: false, busy, needForce: true, err: `有 ${busy} 轮正在生成中，切换账号需重启后台，会中断它们` }))
       }
       let r
@@ -2392,7 +2408,19 @@ export const server = http.createServer(async (req, res) => {
       // 重配路由：登录/改密后走云端账号；登出后回落静态网关 key，都没有就清掉 provider
       if (platformAvailable()) useGatewayRoute()
       else { try { fs.unlinkSync(MODEL_CFG_PATH) } catch {}; removeOcProvider(); MODEL = { providerID: PID, modelID: MID } }
-      let restarted = false; try { restarted = await restartOpencode() } catch {}
+      // 写出来的 provider 与 opencode 正在跑的那份一致 → 重启没有任何意义，只会拔掉在跑的轮。
+      // 这正是解锁（同账号重登）的常态。ocLiveProvider 为 null（没接管 opencode / 还没成功重启过）
+      // 时两边不会相等，行为与改动前一致。
+      let restarted = false
+      if (ocProviderOnDisk() !== ocLiveProvider) {
+        // 确实要重启：此刻若还有轮在跑（上面对 relogin 放行过），如实回 needForce 让前端二次确认，
+        // 别偷偷把它们拔了。
+        const busy2 = runningRounds()
+        if (busy2 > 0 && !b.force) {
+          return send(res, 409, "application/json", JSON.stringify({ ok: false, busy: busy2, needForce: true, err: `有 ${busy2} 轮正在生成中，本次变更需重启后台，会中断它们` }))
+        }
+        try { restarted = await restartOpencode() } catch {}
+      }
       return send(res, 200, "application/json", JSON.stringify({ ok: true, restarted, ...Cloud.status(), route: currentRoute() }))
     }
     // 主动刷新档案（档位/额度/用量）；模型名变了就顺带重配 provider
@@ -2706,7 +2734,9 @@ async function waitOcHealthy(tries = 60) {
 async function restartOpencode() {
   if (!OC_MANAGED) return false
   killPort(OC_PORT); await sleep(800); spawnOc()
-  return waitOcHealthy()
+  const ok = await waitOcHealthy()
+  if (ok) ocLiveProvider = ocProviderOnDisk()   // 记下它这次读进去的那一份，见 ocLiveProvider
+  return ok
 }
 async function ensureOpencode() {
   if (!OC_MANAGED) {

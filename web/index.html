@@ -422,6 +422,12 @@
   .msel .mitem.cur { color: var(--accent-deep); font-weight: 600; }
   .modal { position: fixed; inset: 0; z-index: 70; display: none; align-items: center; justify-content: center; background: rgba(20,32,54,.35); backdrop-filter: blur(4px); padding: 24px; }
   .modal.on { display: flex; }
+  /* ---- 登录闸：没登录（或没改密）时，聊天界面根本不该露出来 ----
+     此前"必须登录"只是在完整的聊天界面上盖一个不可关的弹窗：用户仍看得见历史、侧栏、上传区，
+     壳里点顶栏「退出登录」或探测失败落到无闸状态时，看到的就是一个能翻能点的聊天界面。
+     锁上时整个应用壳不渲染，只留登录窗 —— 这才叫"停在登录页"。 */
+  body.locked > *:not(#cloudModal) { display: none !important; }
+  body.locked #cloudModal { background: transparent; backdrop-filter: none; }
   .modal-card { width: 100%; max-width: 470px; background: #fff; border: 1px solid var(--line); border-radius: var(--r-lg); box-shadow: 0 20px 60px rgba(30,50,90,.25); overflow: hidden; animation: rise .18s ease; }
   .modal-head { display: flex; align-items: center; justify-content: space-between; padding: 14px 18px; border-bottom: 1px solid var(--line); }
   .modal-title { display: inline-flex; align-items: center; gap: 8px; font-size: 14px; font-weight: 700; color: var(--text); }
@@ -1526,6 +1532,7 @@ const STI = { pending: "○", running: "○", completed: "✓", error: "✕" }
 // ② 长正文塞 URL 会撞 16KB 请求头上限 → 431，且被 SSE 重连逻辑吞成"消息静默消失"。
 async function sendMessage(text) {
   if (!text) return
+  if (cloudMandatory) { reassertCloudGate(); return }   // 登录闸开着 → 一个字也不该发得出去
   if (activeES || sending) return   // 已有流在跑，或上一次 start 还没返回（防连点重复发）
   if (sessionId) pendingProjectId = null   // 往已有会话里继续发 → 不是「新建对话」，解除项目归入
   const w = log.querySelector(".welcome"); if (w) w.remove()
@@ -1871,6 +1878,9 @@ function clShow(mode, st) {
   clMode = mode
   // login/pw 两态 = 还不能用应用 → 锁死；info 态是查看账号，可以随便关
   cloudMandatory = (mode === "login" || mode === "pw")
+  // 锁死时把整个应用壳藏起来（见 body.locked 那几条 CSS）：不给用户"其实已经进来了"的错觉，
+  // 也顺手挡住那些绕过弹窗直接够到界面的操作（Tab 键跳进输入框、拖拽上传……）。
+  document.body.classList.toggle("locked", cloudMandatory)
   document.getElementById("cloudClose").style.display = cloudMandatory ? "none" : ""
   document.getElementById("cloudPaneLogin").style.display = mode === "login" ? "" : "none"
   document.getElementById("cloudPanePw").style.display = mode === "pw" ? "" : "none"
@@ -1942,15 +1952,28 @@ async function loadClSkills() {
     }
   } catch { box.innerHTML = "" }
 }
+// 这台机是不是"要登录才能用"的形态（= 接了云端账号）。首启探测失败时用它兜底，见下面那段 IIFE。
+const GATED_KEY = "nm_cloud_gated"
+const cloudGatedHint = () => { try { return localStorage.getItem(GATED_KEY) === "1" } catch { return false } }
+// 闲置锁屏标记。【锁屏 ≠ 登出】：登录态、access key、后台正在跑的轮全都留着，只是界面锁上，
+// 重新输一次口令即可解锁。用 localStorage 是要让它扛得住刷新和重开应用 —— 否则"重启一下就绕过去了"，
+// 这道闸对无人看管的机器就没有意义了。
+const LOCK_KEY = "nm_locked"
+const cloudLocked = () => { try { return localStorage.getItem(LOCK_KEY) === "1" } catch { return false } }
+const setCloudLocked = (v) => { try { v ? localStorage.setItem(LOCK_KEY, "1") : localStorage.removeItem(LOCK_KEY) } catch {} }
 async function openCloud(force) {
   clMsg("info", "")
   cloudModal.classList.add("on")
+  // force = 这是一道闸（首启未登录、登出后、闲置锁屏、登录态被吊销），不是用户自己点开来看账号的。
+  // 问状态要一次往返，这期间先按"锁上"渲染：否则每次开闸都会先闪一下完整的聊天界面。
+  if (force) { cloudMandatory = true; document.body.classList.add("locked") }
   try {
     const st = await (await fetch("api/cloud/status", { signal: AbortSignal.timeout(8000) })).json()
     if (!st.loggedIn) clShow("login")
     else if (st.mustChangePassword) clShow("pw")
+    else if (cloudLocked()) { clShow("login"); clMsg("info", "闲置超时已锁屏。输入口令解锁——登录态和后台正在跑的任务都还在。") }
     else clShow("info", st)
-  } catch { clShow(force ? "login" : "login") }
+  } catch { clShow("login") }   // 状态问不出来一律按"要登录"处理：宁可多挡一次，也别把人放进聊天界面
 }
 // 【登录窗在"必须登录"时不可关闭】没登录（或没改密）时整个应用根本用不了：
 // 关掉它就等于把用户扔在一个空界面上，而且没有再次唤起的显眼入口（只能靠输 account）。
@@ -1961,6 +1984,7 @@ let cloudMandatory = false
 function closeCloud(force) {
   if (cloudMandatory && !force) return       // 必须登录时，一切关闭动作一律无视
   cloudModal.classList.remove("on")
+  document.body.classList.remove("locked")
 }
 document.getElementById("cloudClose").addEventListener("click", () => closeCloud())
 cloudModal.addEventListener("click", (e) => { if (e.target === cloudModal) closeCloud() })
@@ -1971,6 +1995,9 @@ function reassertCloudGate() {
 }
 window.addEventListener("focus", reassertCloudGate)
 document.addEventListener("visibilitychange", () => { if (!document.hidden) reassertCloudGate() })
+// 锁上后应用壳是不渲染的：万一登录窗被什么路径关掉，用户面对的就是一片空白，且窗口没失焦、
+// 上面两个事件都不会来。低频自检一次，成本只是一个 DOM 判断。
+setInterval(reassertCloudGate, 3000)
 async function cloudPost(path, body, retryForce) {
   const r = await (await fetch("api/cloud/" + path, {
     method: "POST", headers: { "Content-Type": "application/json" },
@@ -1993,6 +2020,7 @@ document.getElementById("clGo").addEventListener("click", async () => {
       clMsg("info", "登录中…")
       const r = await cloudPost("login", { username, password }); if (!r) return
       if (!r.ok) return clMsg("err", r.err || "登录失败")
+      setCloudLocked(false)   // 口令对上了 → 解锁（闲置锁屏就是从这里放行的）
       document.getElementById("clPass").value = ""
       if (r.mustChangePassword) { clShow("pw"); return clMsg("info", "请先修改口令") }
       clMsg("ok", "已登录，页面即将刷新…"); setTimeout(() => location.reload(), 1000)
@@ -2030,13 +2058,23 @@ document.getElementById("clLogout").addEventListener("click", async () => {
 //   既没平台也没自设模型 → 模型 API 设置窗（纯单机形态）
 //   云端多用户容器恒有 gateway，两个都不弹。
 ;(async () => {
-  try {
-    const m = await (await fetch("api/model", { signal: AbortSignal.timeout(8000) })).json()
-    const c = (m && m.cloud) || {}
-    if (c.configured && !c.loggedIn) return openCloud(true)
-    if (c.loggedIn && c.mustChangePassword) return openCloud(true)
-    if (m && !m.gateway && !m.isCustom) openApiCfg()
-  } catch {}
+  // 【探不到就按"未登录"处理，绝不放进聊天界面】原来这里是 try{...}catch{}：网关慢一点、
+  // 刚重启完 opencode 的那几秒、或本机负载高把 8 秒超时耗光，探测一失败就一道闸都不设，
+  // 用户直接落在完整的聊天界面上 —— 而他此刻很可能根本没登录。改成重试三次，仍失败则按
+  // 上一次探到的形态兜底：这台机若是要登云端账号的，就把登录窗摆出来（宁可多挡一次）。
+  let m = null
+  for (let i = 0; i < 3 && !m; i++) {
+    try { m = await (await fetch("api/model", { signal: AbortSignal.timeout(8000) })).json() }
+    catch { if (i < 2) await new Promise((r) => setTimeout(r, 1200)) }
+  }
+  if (!m) { if (cloudGatedHint()) openCloud(true); return }
+  const c = m.cloud || {}
+  try { localStorage.setItem(GATED_KEY, c.configured ? "1" : "0") } catch {}
+  if (c.configured && !c.loggedIn) return openCloud(true)
+  if (c.loggedIn && c.mustChangePassword) return openCloud(true)
+  if (c.loggedIn && cloudLocked()) return openCloud(true)   // 闲置锁屏中：账号还登着，但要输口令才能进来
+  if (!c.configured) setCloudLocked(false)                  // 不是云端账号形态就没有锁屏这回事，别留个解不开的标记
+  if (!m.gateway && !m.isCustom) openApiCfg()
 })()
 f.addEventListener("submit", (e) => {
   e.preventDefault()
@@ -2426,14 +2464,48 @@ document.addEventListener("visibilitychange", () => { if (!document.hidden) refr
   var txt = ov.querySelector("#idleTxt")
   ov.querySelector("#idleStay").addEventListener("click", bump)
   function fmt(ms) { var s = Math.max(0, Math.ceil(ms / 1000)); return Math.floor(s / 60) + ":" + ("0" + (s % 60)).slice(-2) }
-  async function logout() { if (out) return; out = true; try { await fetch("api/logout", { method: "POST" }) } catch (e) {} location.href = "./" }   // 相对：多用户 /alice/ 部署下别跳出本容器前缀
-  // 顶栏「退出登录」按钮：复用同一套登出逻辑（清 lan_auth cookie → 跳回登录页）
+  // 顶栏「退出登录」与闲置超时共用。auto=true 表示是计时器触发的：屏幕前没有人。
+  //
+  // 【为什么不只是清 lan_auth cookie】那道门禁对 127.0.0.1 的请求一律免登录（server.mjs 的
+  // isLocal），所以在桌面壳里（以及本机浏览器里）清不清 cookie 都进得来：点了"退出登录"，
+  // 页面跳回 "./" 拿到的还是完整的聊天界面，闲置十分钟的自动登出同样等于没发生。
+  // 本机真正的身份是【云端账号】——手动退出要把它一并登出，闲置超时则只锁屏（见下）。
+  async function logout(auto) {
+    if (out) return
+    out = true
+    var st = null
+    try { st = await (await fetch("api/cloud/status", { signal: AbortSignal.timeout(8000) })).json() } catch (e) {}
+    // 闲置超时【只锁屏，不撤登录态】：access key、后台正在跑的轮全都留着（撤登录态要重配
+    // provider 并重启 opencode，会把用户留着跑的那轮综述连根拔掉）。重新输一次口令即解锁。
+    if (auto && st && st.configured && st.loggedIn) {
+      setCloudLocked(true)
+      clShow("login")
+      cloudModal.classList.add("on")
+      clMsg("info", "闲置超时已锁屏。输入口令解锁——登录态和后台正在跑的任务都还在。")
+      out = false; bump()          // 解锁后还要能再次触发锁屏，闲置计时也从此刻重新算
+      return
+    }
+    try { await fetch("api/logout", { method: "POST" }) } catch (e) {}   // 相对：多用户 /alice/ 部署下别跳出本容器前缀
+    if (st && st.configured && st.loggedIn) {
+      try {
+        var r = await cloudPost("logout", {})   // 有轮在跑时它会二次确认，用户点了确定才带 force 重发
+        if (!r) { out = false; return }         // 用户在二次确认里点了取消 → 不登出
+        if (r.ok === false) { out = false; alert("退出登录失败：" + (r.err || "未知错误")); return }
+      } catch (e) { /* 网络异常：照样跳回去，首启那道闸会按"未登录"兜底 */ }
+    }
+    setCloudLocked(false)   // 真登出了就没有"锁屏待解锁"这回事，别留个标记下次误挡
+    location.href = "./"
+  }
+  // 顶栏「退出登录」按钮：复用同一套登出逻辑（清 lan_auth cookie + 登出云端账号 → 回到登录页）
   var _lb = document.getElementById("logoutBtn"); if (_lb) _lb.addEventListener("click", function () { if (confirm("确定退出登录？")) logout() })
   setInterval(function () {
     if (out) return
+    // 已经停在登录闸上了：没有什么可登出的，也别再定时把页面刷掉（会把人正打着的账号清空）
+    if (cloudMandatory) { bump(); return }
     var idle = Date.now() - last
-    if (idle >= LOGOUT_MS) { ov.style.display = "none"; logout(); return }
-    if (idle >= WARN_MS) { txt.textContent = "你已闲置较久，将在 " + fmt(LOGOUT_MS - idle) + " 后自动退出，届时需重新登录。移动鼠标或点“继续使用”即可保持登录。"; ov.style.display = "flex" }
+    if (idle >= LOGOUT_MS) { ov.style.display = "none"; logout(true); return }
+    // 措辞对两种形态都成立：桌面/云端账号形态是锁屏（登录态与在跑的轮都留着），局域网形态是真登出
+    if (idle >= WARN_MS) { txt.textContent = "你已闲置较久，将在 " + fmt(LOGOUT_MS - idle) + " 后自动锁定，届时需重新输入口令。移动鼠标或点“继续使用”即可保持。"; ov.style.display = "flex" }
     else if (ov.style.display !== "none") ov.style.display = "none"
   }, 1000)
 })()
