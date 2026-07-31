@@ -59,6 +59,38 @@ GLYPH_SAFE = {'−': '-'}
 GLYPH_RE = re.compile('[' + ''.join(GLYPH_SAFE) + ']')
 
 
+# 真上下标：内容短、无空白、纯 ASCII 记号（3 / -4 / 9 / 2,5 / max）。
+# 中文范围号写法 `0.61~0.80`、`图1~3`、`10~3,682倍` 都过不了这一关，会被转义。
+TIGHT_SUB = re.compile(r'~[0-9A-Za-z+\-,.()]{1,8}~')
+TIGHT_SUP = re.compile(r'\^[0-9A-Za-z+\-,.()]{1,8}\^')
+STRIKE = re.compile(r'~~[^~]{1,80}~~')
+SENTINEL = '\x00%d\x00'
+
+
+def _escape_stray_marks(text):
+    """把不构成上下标的 `~` `^` 转义掉，防止 pandoc 乱配对。
+
+    中文稿里 `~` 几乎都是范围号（`1~2个平台`、`0.61~0.80`、`图1~3`）。pandoc 会把
+    它们**两两配对**当下标定界符，于是「1~2个平台…差异达10~」之间的整段正文被
+    整体压成下标——而且不报错。实测一份稿件 60 个 `~` 配出 3 段被吞的正文。
+    """
+    keep = []
+
+    def _stash(m):
+        keep.append(m.group(0))
+        return SENTINEL % (len(keep) - 1)
+
+    t = STRIKE.sub(_stash, text)      # ~~删除线~~ 先保住
+    t = TIGHT_SUB.sub(_stash, t)      # 已经写对的 ~3~ 保住
+    t = TIGHT_SUP.sub(_stash, t)      # 已经写对的 ^-4^ 保住
+    # 负向后视：已经转义过的 `\~` 不再重复转义，否则二次运行会变成 `\\~`（幂等性）
+    t = re.sub(r'(?<!\\)~', r'\\~', t)
+    t = re.sub(r'(?<!\\)\^', r'\\^', t)
+    for i, s in enumerate(keep):
+        t = t.replace(SENTINEL % i, s)
+    return t
+
+
 def _convert_supsub(text):
     """Unicode 上下标 → pandoc ^x^ / ~x~。行内代码区不碰（那里要的就是字面量）。"""
     n = 0
@@ -79,6 +111,9 @@ def _convert_supsub(text):
         return GLYPH_SAFE[m.group(0)]
 
     def one(seg):
+        # 顺序要紧：先转义源稿里的杂散 `~`/`^`，再插入我们自己生成的 ~x~/^x^，
+        # 否则刚生成的定界符会被自己转义掉。
+        seg = _escape_stray_marks(seg)
         return GLYPH_RE.sub(glyph, SUB_RE.sub(sub, SUP_RE.sub(sup, seg)))
 
     out, last = [], 0
