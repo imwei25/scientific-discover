@@ -4,6 +4,7 @@
 // 也看上游【实际收到】什么 —— 计量和管控的正确性一半在"我们改写了请求"这件事上。
 import test from "node:test"
 import assert from "node:assert/strict"
+import zlib from "node:zlib"
 import { startApp, adminLogin, asAdmin, startFakeUpstream, sse } from "./helper.mjs"
 import { normalizeUsage, costOf, joinUpstream } from "../lib/gateway.mjs"
 
@@ -81,6 +82,14 @@ test("joinUpstream：客户端 /llm 与 /llm/v1 两种写法都要能用，且�
   // 只吃掉【开头那一段】/v1，路径里别处的 v1 不能动
   assert.equal(joinUpstream("http://x/v1", "/v1/foo/v1/bar"), "http://x/v1/foo/v1/bar")
   assert.equal(joinUpstream("http://x/apiv1", "/v1/chat"), "http://x/apiv1/v1/chat", "只有真的以 /v1 结尾才算")
+  // 上游端点不是 /v1 而是 /v3（火山方舟：/api/coding/v3、/api/v3）——客户端照旧发 /v1/...，
+  // 版本以上游 base 为准，别拼出 /v3/v1/...（后台「测试连通」是绿的，转发却 404，最难查）
+  assert.equal(joinUpstream("https://ark.cn-beijing.volces.com/api/coding/v3", "/v1/chat/completions"),
+    "https://ark.cn-beijing.volces.com/api/coding/v3/chat/completions")
+  assert.equal(joinUpstream("https://ark.cn-beijing.volces.com/api/v3", "/chat/completions"),
+    "https://ark.cn-beijing.volces.com/api/v3/chat/completions")
+  assert.equal(joinUpstream("https://ark.cn-beijing.volces.com/api/v3/", "/v1/models"),
+    "https://ark.cn-beijing.volces.com/api/v3/models")
 })
 
 test("costOf：新鲜输入/缓存输入/输出 三段单价", () => {
@@ -615,6 +624,27 @@ test("非 JSON 请求体原样透传（不崩，只是记不到账）", async (t
     headers: { authorization: "Bearer " + r.access, "content-type": "text/plain" },
   })
   assert.equal(x.status, 200)
+})
+
+test("上游回 gzip 也要计到账（转发钉 identity + 记账侧兜底解压）", async (t) => {
+  // 真机踩的：客户端默认带 accept-encoding: gzip,br，照转过去火山方舟就回压缩体，
+  // 旁路攒到压缩字节 → JSON.parse 失败 → usage 丢 → 这一单白送，客户端毫无察觉。
+  let sawAcceptEncoding = ""
+  const r = await rig({
+    upstream: (req, res) => {
+      sawAcceptEncoding = String(req.headers["accept-encoding"] || "")
+      // 故意无视 identity，硬回 gzip：兜底那层要能接住
+      const body = zlib.gzipSync(Buffer.from(JSON.stringify({ model: "m", usage: { prompt_tokens: 1000, completion_tokens: 0 } })))
+      res.writeHead(200, { "content-type": "application/json", "content-encoding": "gzip" })
+      res.end(body)
+    },
+    tier: { key: "t", dailyUSD: 0, model: "m" },
+  })
+  t.after(() => r.close())
+  await r.call({ model: "m" })
+  assert.equal(sawAcceptEncoding, "identity", "转发时必须把 accept-encoding 钉成 identity")
+  assert.equal(r.rows().length, 1, "压缩响应仍要入账")
+  assert.equal(r.rows()[0].prompt_tokens, 1000)
 })
 
 test("用量落进 /api/me 与后台明细", async (t) => {

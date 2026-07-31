@@ -23,6 +23,7 @@
 
 import http from "node:http"
 import https from "node:https"
+import zlib from "node:zlib"
 import { Transform } from "node:stream"
 import { StringDecoder } from "node:string_decoder"
 
@@ -71,11 +72,17 @@ export function costOf(usage, cfg) {
  * 而 LLM_UPSTREAM_URL 接 one-api 时必须带 /v1（它的 OpenAI 兼容端点就在 /v1 下）。
  * 直接相加就会出现 http://127.0.0.1:3010/v1 + /v1/chat/completions = /v1/v1/... → 上游 404。
  * 真机第一次接 one-api 就是栽在这里，而且报错只是个干巴巴的 404，看不出是拼错了。
+ *
+ * 【版本号不只有 v1】火山方舟这类端点是 .../api/coding/v3、.../api/v3，客户端仍然按 OpenAI
+ * 协议发 /v1/chat/completions。只认 /v1 结尾的话就拼成 /api/coding/v3/v1/chat/completions
+ * → 又是个干巴巴的 404。更糟的是后台「测试连通」用的 normalizeBase 认 /v\d+，那边一片绿、
+ * 一转发就 404，最难查。所以这里与 normalizeBase 口径对齐：base 以 /vN 结尾时，吃掉客户端
+ * 路径开头的那段 /vN（版本以【上游 base 写的】为准）。
  */
 export function joinUpstream(baseUrl, fwdPath) {
   const base = String(baseUrl || "").replace(/\/+$/, "")
   let p = String(fwdPath || "")
-  if (/\/v1$/.test(base) && /^\/v1\//.test(p)) p = p.slice(3)
+  if (/\/v\d+$/.test(base) && /^\/v\d+\//.test(p)) p = p.replace(/^\/v\d+/, "")
   return base + p
 }
 
@@ -153,11 +160,28 @@ export function buildAttempts(model, routes, CFG) {
   }]
 }
 
+/** 记账侧兜底：上游压缩了就解出来看 usage（透传的字节不动，客户端拿到的还是原样）。 */
+function inflateForUsage(buf, encoding) {
+  const enc = String(encoding || "").trim().toLowerCase()
+  if (!enc || enc === "identity") return buf
+  try {
+    if (enc === "gzip" || enc === "x-gzip") return zlib.gunzipSync(buf)
+    if (enc === "deflate") return zlib.inflateSync(buf)
+    if (enc === "br") return zlib.brotliDecompressSync(buf)
+    if (enc === "zstd" && zlib.zstdDecompressSync) return zlib.zstdDecompressSync(buf)
+  } catch { /* 解不开就当没 usage，日志里会喊"未返回 usage" */ }
+  return buf
+}
+
 /**
  * 旁路解析响应里的 usage，同时把数据原样透传。
  * 用 Transform + pipe 而不是手写 res.write：pipe 自带背压，慢客户端不会把内存撑爆。
+ *
+ * 【encoding 这个参数不是可有可无的】上游若回 gzip，攒下来的就是压缩字节，JSON.parse 必失败
+ * → usage=null → 这一单【白送】（不计费、不扣额度），而客户端一切正常，只有日志里一行
+ * "未返回 usage"。转发时已把 accept-encoding 钉成 identity，这里是上游不听话时的第二道。
  */
-function makeUsageTap(isSse, onUsage) {
+function makeUsageTap(isSse, onUsage, encoding = "") {
   const dec = new StringDecoder("utf8")   // 防多字节字符被切在两个 chunk 之间
   let sseBuf = ""
   const jsonChunks = []; let jsonLen = 0
@@ -195,7 +219,7 @@ function makeUsageTap(isSse, onUsage) {
         if (sseBuf) scanLine(sseBuf.replace(/\r$/, ""))
       } else if (jsonLen && jsonLen < JSON_CAP) {
         try {
-          const o = JSON.parse(Buffer.concat(jsonChunks).toString("utf8"))
+          const o = JSON.parse(inflateForUsage(Buffer.concat(jsonChunks), encoding).toString("utf8"))
           if (o && o.usage) usage = o.usage
           if (o && o.model) model = String(o.model)
         } catch { /* 上游返回的不是 JSON（错误页等），记不到账 */ }
@@ -272,6 +296,10 @@ export async function llmForward({ req, res, pathname, ctx }) {
   const baseHeaders = { ...req.headers }
   for (const h of ["host", "connection", "content-length", "transfer-encoding", "authorization",
     "x-forwarded-for", "x-forwarded-proto", "x-forwarded-prefix", "x-skill", "x-client-version"]) delete baseHeaders[h]
+  // 【必须钉成 identity】客户端默认带 accept-encoding: gzip,br；照转的话上游（火山方舟就会）
+  // 回压缩体，旁路攒到的是压缩字节 → 解不出 usage → 这一单不计费、不扣额度，而客户端毫无察觉。
+  // 少压这一段的代价远小于账目静默漏记。（上游仍压缩时由 inflateForUsage 兜底。）
+  baseHeaders["accept-encoding"] = "identity"
 
   // ---- ⑤ 并发闸：满了就排队，别把 429 甩给用户 ----------------------------------
   //
@@ -418,7 +446,7 @@ export async function llmForward({ req, res, pathname, ctx }) {
           })
         } catch (e) { log(`[llm] ${user.username} 记账失败：${e.message}`) }
         log(`[llm] ${user.username} ${model}@${at.providerName}${respModel && respModel !== model ? `(上游 ${respModel})` : ""} in=${u.prompt}(cache ${u.cached}) out=${u.completion} $${cost.toFixed(6)} ${Date.now() - started}ms`)
-      })
+      }, upRes.headers["content-encoding"])
 
       // ★ 上游可读侧的 error 必须自己接：pipe 不转发它，抛出去就是进程级未捕获异常
       upRes.on("error", (e) => {
