@@ -4,9 +4,14 @@
 example.duckdns.org {
 	encode zstd gzip
 
-	# 上传体积上限：默认留小（桌面客户端平时不往服务器传大文件），
-	# 确实要传的两条路在下面各自放宽 —— 别为了那两条把全站都开成几十 MB。
-	request_body {
+	# 上传体积上限：默认留小（桌面客户端平时不往服务器传大文件），只有确实要传大件的
+	# 那几条路排除在外，在各自的 handle 里另设上限 —— 别为了它们把全站都开成几十 MB。
+	#
+	# 【必须用"排除"而不是在 handle 里覆盖】站点级的 request_body 是一道独立的处理器，
+	# 对所有请求先跑一遍；在 handle 里再写一个大的【盖不掉它】，表现是上传照旧 413，
+	# 而日志里只有 Caddy 自己的错误页，看不出是谁拦的。（部署当天实测踩到。）
+	@small not path /api/feedback /admin/api/skill-pack-upload /admin/api/web-pack-upload
+	request_body @small {
 		max_size 2MB
 	}
 
@@ -26,9 +31,8 @@ example.duckdns.org {
 				# 别给长推理设读超时，误杀比挂着更糟。
 				#
 				# ⚠ 这个值必须【明显大于】后台「并发与排队」里的「最长等待」（默认 5 分钟）：
-				#   并发满时请求会先在 sci-auth 里排队，那段时间响应头还没发出 —— 两者相加都算在
-				#   这个超时里。配小了就会出现"排队快轮到了，却被 Caddy 以 504 掐掉"，
-				#   而日志里只有一个看不出原因的 504。
+				#   并发满时请求先在 sci-auth 里排队，那段时间响应头还没发出 —— 两者相加都算在
+				#   这个超时里。配小了就会出现"排队快轮到了，却被 Caddy 以 504 掐掉"。
 				response_header_timeout 15m
 			}
 		}
@@ -48,7 +52,10 @@ example.duckdns.org {
 	}
 
 	# 管理台手动上传技能包 / 界面包（zip）。技能包整包可以到几十 MB。
-	handle /admin/api/skill-pack-upload /admin/api/web-pack-upload {
+	# 【多个路径要用命名匹配器】handle 只收一个参数，写两个路径会在 caddy validate 时报
+	# "wrong argument count" —— 这条改完必须 validate 过了再 reload。
+	@packupload path /admin/api/skill-pack-upload /admin/api/web-pack-upload
+	handle @packupload {
 		request_body {
 			max_size 80MB
 		}
