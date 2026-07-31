@@ -211,10 +211,10 @@ if [[ -n "$NORMALIZE" ]]; then
   if [[ -n "$PYNM" ]]; then
     if [[ -z "${TMPD:-}" ]]; then TMPD="$(mktemp -d)"; trap 'rm -rf "$TMPD"' EXIT; fi
     NMOUT="$TMPD/nm_$(basename "$SRCMD")"
-    if "$PYNM" "$SCRIPT_DIR/normalize_md_blocks.py" "$SRCMD" --out "$NMOUT"; then
+    if "$PYNM" "$SCRIPT_DIR/normalize_md.py" "$SRCMD" --out "$NMOUT"; then
       SRCMD="$NMOUT"
     else
-      echo "[render_docx] WARN: normalize_md_blocks.py 运行失败，跳过空行补齐（表格可能被摊平成正文）" >&2
+      echo "[render_docx] WARN: normalize_md.py 运行失败，跳过空行补齐（表格可能被摊平成正文）" >&2
     fi
   else
     echo "[render_docx] WARN: 未找到 Python，跳过空行补齐；若稿件里表题与表格贴着写，表会丢" >&2
