@@ -11,6 +11,7 @@
 #                  [--font NAME] [--cjk-font NAME] [--fontsize PT]
 #                  [--margin 1in|2.5cm] [--line-spacing 1.0|1.5|2.0|single|double]
 #                  [--line-numbers]
+#                  [--no-infer-colwidths] [--no-table-tune]   # 表格自动排版兜底，默认开
 #                  [--ref reference.docx]        # template for styles/fonts
 #                  [--csl style.csl] [--bib refs.bib]   # citation rendering (pandoc @keys)
 #                  [-- <extra pandoc args>]
@@ -37,6 +38,10 @@ resolve_py() {
 
 INPUT=""; OUTPUT=""; REF=""; CSL=""; BIB=""; EXTRA=()
 JOURNAL=""; FONT=""; CJKFONT=""; FONTSIZE=""; MARGIN=""; LINESPACING=""; LINENUMBERS=""; FIGSATEND=""
+HEADCJKFONT=""; HEADFONTSIZE=""
+# 表格两开关默认开：pandoc 出的 docx 表要么 autofit（Word 自动布局不可预测）要么按
+# 分隔行均分列宽，长列名必然排丑；推断列宽 + 后处理三线表是兜底，不改变表内容。
+INFERCW=1; TABLETUNE=1
 usage() {
   cat >&2 <<EOF
 Usage: $(basename "$0") -i <input.md> [-o <output.docx>] [options] [-- <pandoc args>]
@@ -49,7 +54,11 @@ Usage: $(basename "$0") -i <input.md> [-o <output.docx>] [options] [-- <pandoc a
   --margin SPEC  页边距 (1in / 2.5cm)
   --line-spacing 行距: 数字倍数或 single/onehalf/double
   --line-numbers 连续行号
+  --heading-cjk-font N  标题(Heading 1-6)中文字体，与正文分开（标书"标题黑体、正文宋体"）
+  --heading-fontsize PT 标题字号（各级统一；如四号=14）
   --figures-at-end  把图表搬到正文末尾（NEJM/JAMA/Lancet 送审稿要求）
+  --no-infer-colwidths  关掉默认的按内容推断表格列宽（infer_colwidths.py）
+  --no-table-tune       关掉默认的 docx 表格调优（三线表/固定列宽/表内字号降档）
   --ref          reference .docx (styles/fonts template；与格式参数可叠加，模板先套、参数后覆盖)
   --csl          CSL style: 文件路径或 presets/csl 里的名字 (vancouver / the-lancet …) — needs @keys + --bib
   --bib          bibliography (.bib) for --csl
@@ -85,7 +94,11 @@ while [[ $# -gt 0 ]]; do
     --margin) MARGIN="$2"; shift 2 ;;
     --line-spacing) LINESPACING="$(norm_spacing "$2")"; shift 2 ;;
     --line-numbers) LINENUMBERS=1; shift ;;
+    --heading-cjk-font) HEADCJKFONT="$2"; shift 2 ;;
+    --heading-fontsize) HEADFONTSIZE="$2"; shift 2 ;;
     --figures-at-end) FIGSATEND=1; shift ;;
+    --no-infer-colwidths) INFERCW=""; shift ;;
+    --no-table-tune) TABLETUNE=""; shift ;;
     --ref) REF="$2"; shift 2 ;;
     --csl) CSL="$2"; shift 2 ;;
     --bib) BIB="$2"; shift 2 ;;
@@ -116,10 +129,13 @@ if [[ -n "$JOURNAL" ]]; then
   fi
   PRESET_MARGIN=""; PRESET_FONT=""; PRESET_CJKFONT=""; PRESET_FONTSIZE=""
   PRESET_LINESPACING=""; PRESET_LINENUMBERS=""; PRESET_CSL=""
+  PRESET_HEADING_CJKFONT=""; PRESET_HEADING_FONTSIZE=""
   # shellcheck disable=SC1090
   source "$PFILE"
   [[ -z "$FONT" ]] && FONT="$PRESET_FONT"
   [[ -z "$CJKFONT" ]] && CJKFONT="$PRESET_CJKFONT"
+  [[ -z "$HEADCJKFONT" ]] && HEADCJKFONT="$PRESET_HEADING_CJKFONT"
+  [[ -z "$HEADFONTSIZE" ]] && HEADFONTSIZE="$PRESET_HEADING_FONTSIZE"
   [[ -z "$FONTSIZE" ]] && FONTSIZE="$PRESET_FONTSIZE"
   [[ -z "$MARGIN" ]] && MARGIN="$PRESET_MARGIN"
   [[ -z "$LINESPACING" ]] && LINESPACING="$PRESET_LINESPACING"
@@ -194,24 +210,50 @@ if [[ -n "$FIGSATEND" ]]; then
   "${FE[@]}" || { echo "ERROR: figures_at_end.py failed" >&2; exit 5; }
 fi
 
-echo "[render_docx] in=$INPUT out=$OUTPUT journal='${JOURNAL:-none}' ref='${REF:-none}' csl='${CSL:-none}' figsatend='${FIGSATEND:-0}'" >&2
+# --infer-colwidths（默认开）：借 render-pdf-doc 的同名脚本按内容重写 pipe 表分隔行比例，
+# 让 pandoc 把内容比例列宽带进 docx，而不是 autofit/均分。失败只降级警告，不阻塞渲染。
+if [[ -n "$INFERCW" ]]; then
+  ICW="$SCRIPT_DIR/../../render-pdf-doc/scripts/infer_colwidths.py"
+  PYCW="$(resolve_py)"
+  if [[ -f "$ICW" && -n "$PYCW" ]]; then
+    if [[ -z "${TMPD:-}" ]]; then TMPD="$(mktemp -d)"; trap 'rm -rf "$TMPD"' EXIT; fi
+    CWOUT="$TMPD/cw_$(basename "$SRCMD")"
+    if "$PYCW" "$ICW" "$SRCMD" --out "$CWOUT" >/dev/null 2>&1; then
+      SRCMD="$CWOUT"
+    else
+      echo "[render_docx] WARN: infer_colwidths.py 运行失败，跳过列宽推断（表用 pandoc 原列宽）" >&2
+    fi
+  else
+    echo "[render_docx] WARN: 未找到 infer_colwidths.py（render-pdf-doc 技能）或 Python，跳过列宽推断" >&2
+  fi
+fi
+
+echo "[render_docx] in=$INPUT out=$OUTPUT journal='${JOURNAL:-none}' ref='${REF:-none}' csl='${CSL:-none}' figsatend='${FIGSATEND:-0}' infercw='${INFERCW:-0}' tabletune='${TABLETUNE:-0}'" >&2
 pandoc "${ARGS[@]}" ${EXTRA[@]+"${EXTRA[@]}"} "$SRCMD" || { echo "ERROR: pandoc failed" >&2; exit 4; }
 
-# ---- post-process: bake font / size / margin / spacing / line numbers into the docx ----
-if [[ -n "$FONT$CJKFONT$FONTSIZE$MARGIN$LINESPACING$LINENUMBERS" ]]; then
+# ---- post-process: bake font / size / margin / spacing / line numbers / tables into the docx ----
+if [[ -n "$FONT$CJKFONT$FONTSIZE$MARGIN$LINESPACING$LINENUMBERS$HEADCJKFONT$HEADFONTSIZE$TABLETUNE" ]]; then
   PYBIN="$(resolve_py)"
   if [[ -z "$PYBIN" ]]; then
-    echo "ERROR: 找不到 Python（项目根 .venv 或 PATH），格式参数无法落盘；先跑 env-setup" >&2
-    exit 5
+    # 显式格式参数拿不到 Python 是硬错误；只剩默认表格调优则降级警告，保住 docx 产物
+    if [[ -n "$FONT$CJKFONT$FONTSIZE$MARGIN$LINESPACING$LINENUMBERS$HEADCJKFONT$HEADFONTSIZE" ]]; then
+      echo "ERROR: 找不到 Python（项目根 .venv 或 PATH），格式参数无法落盘；先跑 env-setup" >&2
+      exit 5
+    fi
+    echo "[render_docx] WARN: 找不到 Python，跳过表格调优（三线表/固定列宽未生效）；先跑 env-setup" >&2
+  else
+    PP=("$PYBIN" "$SCRIPT_DIR/postprocess_docx.py" "$OUTPUT")
+    [[ -n "$FONT" ]] && PP+=(--font "$FONT")
+    [[ -n "$CJKFONT" ]] && PP+=(--cjk-font "$CJKFONT")
+    [[ -n "$FONTSIZE" ]] && PP+=(--fontsize "$FONTSIZE")
+    [[ -n "$MARGIN" ]] && PP+=(--margin "$MARGIN")
+    [[ -n "$LINESPACING" ]] && PP+=(--line-spacing "$LINESPACING")
+    [[ -n "$LINENUMBERS" ]] && PP+=(--line-numbers)
+    [[ -n "$HEADCJKFONT" ]] && PP+=(--heading-cjk-font "$HEADCJKFONT")
+    [[ -n "$HEADFONTSIZE" ]] && PP+=(--heading-fontsize "$HEADFONTSIZE")
+    [[ -n "$TABLETUNE" ]] && PP+=(--tables)
+    "${PP[@]}" || { echo "ERROR: postprocess_docx.py failed（pandoc 产物在 $OUTPUT，但格式参数未生效）" >&2; exit 5; }
   fi
-  PP=("$PYBIN" "$SCRIPT_DIR/postprocess_docx.py" "$OUTPUT")
-  [[ -n "$FONT" ]] && PP+=(--font "$FONT")
-  [[ -n "$CJKFONT" ]] && PP+=(--cjk-font "$CJKFONT")
-  [[ -n "$FONTSIZE" ]] && PP+=(--fontsize "$FONTSIZE")
-  [[ -n "$MARGIN" ]] && PP+=(--margin "$MARGIN")
-  [[ -n "$LINESPACING" ]] && PP+=(--line-spacing "$LINESPACING")
-  [[ -n "$LINENUMBERS" ]] && PP+=(--line-numbers)
-  "${PP[@]}" || { echo "ERROR: postprocess_docx.py failed（pandoc 产物在 $OUTPUT，但格式参数未生效）" >&2; exit 5; }
 fi
 
 [[ -n "$PRESET_NOTE" ]] && echo "[render_docx] 预设提示: $PRESET_NOTE" >&2

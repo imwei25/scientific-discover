@@ -48,7 +48,8 @@ bash ${REPO_ROOT:-/app}/.opencode/skills/render-docx/scripts/render_docx.sh -i m
 > **常用 CSL 已内置** 在 `presets/csl/`（vancouver / the-lancet / the-new-england-journal-of-medicine / american-medical-association / bmj / china-national-standard-gb-t-7714-2015-numeric），`--csl` 直接写名字即可（不必带路径和 .csl 后缀）；期刊预设配 `--bib` 时自动选用对应样式。要别的样式：本仓库 `backend/.venv/Lib/site-packages/citeproc_styles/styles/` 内置 5 万+ 官方 CSL 可拷进 `presets/csl/`，或从 `citation-style-language/styles` / `zotero-chinese/styles` 下载后 `--csl` 指绝对路径。
 
 ## 说明
-- **期刊预设（`--journal`）**：预设文件在 `presets/*.env`（与 render-pdf-doc 共用），一个参数落齐页面格式 + 参考文献样式；渲染完会打印该预设的 `PRESET_NOTE` 提醒预设覆盖不到的期刊要求（字数、结构式摘要、图表数等）。预设值可被命令行单项覆盖。加新期刊见 `presets/README.md`。
+- **期刊/标书预设（`--journal`）**：预设文件在 `presets/*.env`（与 render-pdf-doc 共用），一个参数落齐页面格式 + 参考文献样式；渲染完会打印该预设的 `PRESET_NOTE` 提醒预设覆盖不到的要求（字数、结构式摘要、图表数等）。预设值可被命令行单项覆盖。除期刊外另有标书预设：`most-key-rd`（重点研发）/`municipal-sci`（市科局）/`nih-forms-i`（NIH）/`hospital-fund`（院内基金）。加新预设见 `presets/README.md`。
+- **标题与正文分开设字体字号**：`--heading-cjk-font 黑体 --heading-fontsize 14` 单独控制 Heading 1-6 的中文字体与字号（各级统一；Title/Subtitle 不动）——中式标书"标题黑体四号、正文宋体小四"靠这对参数（标书预设已内置）。仅 docx 侧支持，PDF 侧忽略。
 - **格式参数的实现**：pandoc 本身不管字体/边距/行距，脚本在 pandoc 之后用 python-docx（项目根 `.venv`）后处理落格式——改 Normal/Body Text/标题样式的字体（含 eastAsia 中文字体）、字号、行距，改节属性的边距与 `w:lnNumType` 连续行号。**格式参数后处理失败会报错退出（exit 5）**，不会静默给你一个没格式的产物。
 - **中文字体**：不给 `--journal`/`--cjk-font`/`--reference-doc` 时 pandoc 用内置默认模板，中文能显示但字体是"等线"之类、并非期刊要求的宋体/黑体/仿宋。**中文投稿至少用 `--journal cmj` 或 `--cjk-font 宋体`**；有期刊官方 Word 模板则 `--reference-doc` 更优——参考文献悬挂缩进、表格线型、题注这些更细的格式仍以模板为准。
 - **期刊模板**：多数中华系列/SCI 期刊提供 Word 模板。把模板作为 `--reference-doc` 传入，pandoc 套用其"Normal/标题/表格"等样式——比手动排版稳。用户有目标刊模板就优先用它。
@@ -56,6 +57,7 @@ bash ${REPO_ROOT:-/app}/.opencode/skills/render-docx/scripts/render_docx.sh -i m
   - **稿件里已是写好的 `[n]` 编号引用文本**（本套件 `search-lit`/`write-paper` 的默认产出形态）→ 直接转，`--csl` **用不上**、不要传。想改成 GB/T 7714 格式得手工调或让写作阶段就按国标写。
   - 稿件用 pandoc 引用键 `[@Smith2024]` + 提供 `.bib` → 加 `--csl`（见上方下载说明）+ `--bib`，pandoc 自动生成文末参考文献表并按国标格式化。
 - **图表**：Markdown 里 `![标题](图片路径)` 的图会嵌入 docx；出版级图先用 `nature-figure` 生成 PNG/TIFF 再引用。注意嵌入的图标题只是普通文字，**不是 Word 自动编号的"题注域"**，增删图后编号要手工核对。
+- **表格自动排版（默认开）**：pandoc 直转的 docx 表格要么 autofit（Word 自动布局、宽度不可预测）要么按分隔行均分列宽，长列名必然排丑。脚本默认做两层兜底：① 渲染前跑 `infer_colwidths.py`（借用 render-pdf-doc 的，CJK 按 2 格计宽）按内容重写 pipe 表分隔行比例；② 渲染后 python-docx 后处理：**三线表**（顶/底 1.5pt、表头下线 0.75pt、去竖线）、按内容分配**固定列宽**（tblLayout fixed + gridCol/tcW 双写，超长列封顶靠换行、短列保底）、表内字号比正文降 1.5pt（下限 9pt）、表头加粗居中、表内单倍行距（不吃正文双倍行距）。含合并单元格的表只调样式不动列宽。**表按内容连保底宽都放不下时打印 WARN**（建议列名改缩写/转置/拆表，见 write-paper 表格排版铁律）——见到这警告别硬交，回稿件改表。关闭用 `--no-infer-colwidths` / `--no-table-tune`（用期刊官方 `--ref` 模板且其表格样式更权威时可关后者）。
 
 ## 当前限制（如实告知用户，别假装能做）
 - **修订模式 (track changes)**：返修阶段期刊常要保留修订痕迹，本脚本裸转不产生 track changes；需要的话在 Word 里开启修订后再改。

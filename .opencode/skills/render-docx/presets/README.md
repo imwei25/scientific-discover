@@ -1,6 +1,6 @@
-# 期刊格式预设（render-docx 与 render-pdf-doc 共用）
+# 期刊/标书格式预设（render-docx 与 render-pdf-doc 共用）
 
-每个 `<名>.env` 是一个期刊送审稿格式预设，被 `render_docx.sh --journal <名>` 与
+每个 `<名>.env` 是一个期刊送审稿或标书的格式预设，被 `render_docx.sh --journal <名>` 与
 `render_pdf.sh --journal <名>` 读取（render-pdf-doc 通过相对路径引用本目录，
 两技能共用同一份，别复制出第二份）。
 
@@ -15,11 +15,14 @@
 | `PRESET_LINESPACING` | 行距倍数（1.0/1.5/2.0） | `2.0` |
 | `PRESET_LINENUMBERS` | 连续行号（1 开 / 0 关） | `1` |
 | `PRESET_CSL` | 参考文献 CSL 文件名，指向本目录 `csl/`；仅当稿件用 `[@key]` 引用 + `--bib` 时生效 | `vancouver.csl` |
+| `PRESET_HEADING_CJKFONT` | 标题(Heading 1-6)中文字体，与正文分开（标书"标题黑体、正文宋体"）；**仅 docx 侧生效**，PDF 侧忽略 | `黑体` |
+| `PRESET_HEADING_FONTSIZE` | 标题字号 pt（各级统一；四号=14）；**仅 docx 侧生效** | `14` |
 | `PRESET_NOTE` | 渲染时打印给用户的提示（预设覆盖不到的期刊要求） | — |
 
 ## 现有预设
 
-`nejm` `lancet` `jama` `bmj` `cmj`（中华系列） `generic-submission`（通用送审）
+- 期刊：`nejm` `lancet` `jama` `bmj` `cmj`（中华系列） `generic-submission`（通用送审）
+- 标书：`most-key-rd`（重点研发） `municipal-sci`（市科技局） `nih-forms-i`（NIH） `hospital-fund`（院内基金）——格式值取自 `grant-proposal/references/` 对应文件，无官方来源的字段留空不编
 
 ## 加新期刊
 
