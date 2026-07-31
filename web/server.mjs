@@ -10,6 +10,8 @@ import { setGlobalDispatcher, Agent } from "undici"
 import { createOpencodeClient } from "@opencode-ai/sdk"
 import * as Cloud from "./cloud-account.mjs"
 import * as SkillUp from "./skill-update.mjs"
+import * as WebUp from "./web-update.mjs"
+import { zip as zipPack } from "./minizip.mjs"
 
 // opencode 的完整流水线（标书/论文/系统综述）单轮可跑十几分钟，而 session.prompt 是“等整轮结束才返回”的请求；
 // undici 默认 5 分钟 headers/body 超时会让这类长轮假性抛错。关掉这两个超时（0=不限），连接超时保留。
@@ -144,8 +146,12 @@ const cloudLoggedIn = () => !!Cloud.loadState()
 //   · clear：连数据一起丢。只有切换账号（登录/登出）才用 —— 换了人还拿着上一个账号那次
 //     的结果，表现是登出后公告还挂着、或换号后短时间看到不属于自己的通知。
 let noticeCache = null
-const expireNoticeCache = () => { if (noticeCache) noticeCache.at = 0 }
-const clearNoticeCache = () => { noticeCache = null }
+// 公告列表（带正文，近半年）的缓存，见 /api/cloud/notices。与上面那份分开：它只在用户
+// 点开公告面板时才用得上，缓存久一点（2 分钟）；两份的失效动作同步进行，别让面板里的
+// 列表与红点算出来的未读数对不上。
+let noticesCache = null
+const expireNoticeCache = () => { if (noticeCache) noticeCache.at = 0; if (noticesCache) noticesCache.at = 0 }
+const clearNoticeCache = () => { noticeCache = null; noticesCache = null }
 // ---- 技能包更新检查（桌面版）----
 // 挂在公告轮询顺风车上，但自己限流半小时：技能包发布是低频事件，公告那条 60 秒的节奏
 // 对它纯属浪费。检查失败 5 分钟后重试（第一次打开就赶上断网时，别把"有更新"憋到半小时后）。
@@ -166,6 +172,51 @@ function skillUpdateInfo(latest) {
   if (!latest || !latest.relevant) return null
   if (latest.version === SkillUp.currentVersion()) return null
   return { version: latest.version, changedSkills: latest.changedSkills || [], changelog: latest.changelog || "", size: latest.size || 0 }
+}
+/**
+ * 取一个会话的完整对话（提交反馈用）。与 /api/history 同一套提取口径（剥掉注入的工作区前言），
+ * 但多带两样管理员复现时用得上的东西：时间戳与这一轮走了哪些技能。
+ *
+ * 【单独写一个而不是复用 /api/history 的处理器】那个是 HTTP 处理器、还掺着"生成中的末轮要
+ * 从历史里剔除"的直播逻辑；反馈要的恰恰是【全部】，包括刚生成完的那一轮。
+ */
+async function collectTranscript(sid) {
+  const msgs = un(await client.session.messages({ path: { id: sid } })) || []
+  const out = []
+  for (const m of msgs) {
+    const role = m.info?.role
+    if (role !== "user" && role !== "assistant") continue
+    const parts = m.parts || []
+    let text = parts.filter((p) => p.type === "text").map((p) => p.text).join("\n").trim()
+    text = stripPreamble(text)
+    // 技能名的取法与直播那条一致（见 broadcast("tool") 处）：state.input.name，
+    // 只有 running/completed 的调用才有；取不到就退到 title，再取不到就不记。
+    const skills = [...new Set(parts.filter((p) => p.type === "tool" && p.tool === "skill")
+      .map((p) => p.state?.input?.name || p.state?.title || "").filter(Boolean))]
+    if (!text && !skills.length) continue
+    out.push({ role, text, ts: m.info?.time?.created || 0, ...(skills.length ? { skills } : {}) })
+  }
+  return out
+}
+
+// ---- 界面包更新检查（桌面版）----
+// 与技能包同一条顺风车、同一套节流。分开缓存是因为两者版本号各走各的，
+// 而且界面包换完【不重启任何进程】——网关每次请求现读 index.html，用户刷新页面就生效。
+let webLatestCache = null
+const clearWebLatestCache = () => { webLatestCache = null }
+async function webLatestSoon(force) {
+  if (!cloudLoggedIn()) return null
+  const now = Date.now()
+  if (!force && webLatestCache && now - webLatestCache.at < SKILL_CHECK_MS) return webLatestCache.latest
+  const r = await Cloud.fetchWebLatest(WebUp.currentVersion()).catch(() => null)
+  if (r && r.ok) webLatestCache = { at: now, latest: r.latest }
+  else webLatestCache = { at: now - SKILL_CHECK_MS + 5 * 60_000, latest: webLatestCache?.latest ?? null }
+  return webLatestCache.latest
+}
+function webUpdateInfo(latest) {
+  if (!latest) return null
+  if (latest.version === WebUp.currentVersion()) return null
+  return { version: latest.version, changelog: latest.changelog || "", size: latest.size || 0, files: latest.files || [] }
 }
 const gatewayEnvSet = () => !!(process.env.OC_GATEWAY_URL && process.env.OC_GATEWAY_KEY)
 /** 平台路由是否可用：登录了云端账号（桌面版），或注入了静态网关 key（云端多用户容器） */
@@ -2464,15 +2515,35 @@ export const server = http.createServer(async (req, res) => {
         // 【拉失败保留上一份】断网/云端抖动时把已经显示着的公告抹掉，比继续显示旧的更糟：
         // 用户会以为维护通知撤销了。所以失败时只把重试时间往前挪 15 秒，数据原样留着；
         // 也别每次请求都去戳一个已经挂了的云端（前端多标签页轮询能戳得很密）。
-        if (r.ok) noticeCache = { at: now, data: { notice: r.notice, needUpgrade: r.needUpgrade, clientVersion: r.clientVersion } }
-        else noticeCache = { at: now - 45_000, data: (noticeCache && noticeCache.data) || { notice: null } }
+        if (r.ok) noticeCache = { at: now, data: { notice: r.notice, digest: r.digest, keepDays: r.keepDays, needUpgrade: r.needUpgrade, clientVersion: r.clientVersion } }
+        else noticeCache = { at: now - 45_000, data: (noticeCache && noticeCache.data) || { notice: null, digest: [] } }
       }
-      // 技能包更新检查搭这趟顺风车（自身限流半小时）。失败回 null = 这次不提示，无害。
-      let skillUpdate = null
+      // 技能包 / 界面包的更新检查都搭这趟顺风车（各自限流半小时）。失败回 null = 这次不提示，无害。
+      let skillUpdate = null, webUpdate = null
       try { skillUpdate = skillUpdateInfo(await skillLatestSoon()) } catch {}
+      try { webUpdate = webUpdateInfo(await webLatestSoon()) } catch {}
       // entRev = 当前生效授权的摘要（档位/模型清单/技能白名单/可用模块）。前端拿它跟上次比，
       // 一变就重取模块清单与模型清单并提示一句——这是"管理员改完，客户端自己就变了"的那条线。
-      return send(res, 200, "application/json", JSON.stringify({ ok: true, ...noticeCache.data, entRev: entRev(), skillUpdate }))
+      return send(res, 200, "application/json", JSON.stringify({ ok: true, ...noticeCache.data, entRev: entRev(), skillUpdate, webUpdate }))
+    }
+
+    // 公告列表（带正文，近半年）。前端点开「公告」面板时才拉，所以缓存可以长一点。
+    //
+    // 【为什么不塞进上面那条轮询】那条 5 分钟一次、每个标签页都在打；正文每条最多 2000 字、
+    // 半年可能几十条，白搬。轮询只带 digest（id/级别/时间）够算未读红点，正文按需取。
+    if (req.method === "GET" && u.pathname === "/api/cloud/notices") {
+      if (!cloudLoggedIn())
+        return send(res, 200, "application/json", JSON.stringify({ ok: true, notices: [], loggedOut: !!Cloud.cloudBase() }))
+      const now = Date.now()
+      const force = u.searchParams.get("force") === "1"
+      if (force || !noticesCache || now - noticesCache.at > 120_000) {
+        const r = await Cloud.fetchNotices().catch(() => ({ ok: false }))
+        // 与单条那份同一口径：拉失败保留上一份（面板已经打开时别当场变空），只把重试时间挪近
+        if (r.ok) noticesCache = { at: now, data: { notices: r.notices, keepDays: r.keepDays } }
+        else if (noticesCache) noticesCache = { at: now - 105_000, data: noticesCache.data }
+        else return send(res, 200, "application/json", JSON.stringify({ ok: false, err: "拉不到公告列表（云端不可达）", notices: [] }))
+      }
+      return send(res, 200, "application/json", JSON.stringify({ ok: true, ...noticesCache.data }))
     }
 
     // ==== 技能包：本机状态 / 在线更新 / 回退（桌面版；详见 skill-update.mjs 头注）=====
@@ -2522,6 +2593,156 @@ export const server = http.createServer(async (req, res) => {
       clearSkillLatestCache()   // 立刻重查：装完/退完横幅状态要马上正确，别等半小时
       return send(res, 200, "application/json", JSON.stringify({
         ok: true, restarted, current: SkillUp.currentVersion(), local: SkillUp.listLocal(),
+      }))
+    }
+
+    // ==== 云端 API 通用转发（给"以后只发界面包"留的口）==============================
+    //
+    // 【为什么要有它】前端只能打本机网关，够不到云端（access key 在本进程手里）。于是每加一个
+    // "前端 + 云端新接口"的功能，都得改一次 web/server.mjs —— 而 .mjs 恰恰是界面包发不了的，
+    // 等于每个这类小功能都要重发一次安装器。有了这个口，以后那类功能就真能只发前端。
+    //
+    // 【边界】它不是"任意代理"：
+    //   · 只准打本平台自己的云端地址（Cloud.cloudBase()），不是用户给什么地址就打什么；
+    //   · 只准 /api/ 下的路径，且【明确排除 /api/auth/*】—— 登录、续期、改密、登出这些动的是
+    //     凭证本身，必须走各自那条有专门处理的路（比如续期要 single-flight、改密要清缓存），
+    //     从这里绕过去只会把登录态弄坏；
+    //   · 路径里出现 .. 或以 // 开头一律拒（别让它拼出别的主机/越界路径）。
+    // 这不构成提权：浏览器里的人就是这台机器的用户，本来就能用自己的账号调这些接口。
+    if (req.method === "POST" && u.pathname === "/api/cloud/call") {
+      if (!cloudLoggedIn()) return send(res, 400, "application/json", JSON.stringify({ ok: false, err: "未登录云端账号" }))
+      const chunks = []; for await (const c of req) chunks.push(c)
+      let b = {}; try { b = JSON.parse(Buffer.concat(chunks).toString() || "{}") } catch {}
+      const p = String(b.path || "")
+      if (!/^\/api\/[A-Za-z0-9\-_/.?=&%]*$/.test(p) || p.includes("..") || p.startsWith("//"))
+        return send(res, 400, "application/json", JSON.stringify({ ok: false, err: "path 必须是本平台 /api/ 下的路径" }))
+      if (/^\/api\/auth\//.test(p))
+        return send(res, 403, "application/json", JSON.stringify({ ok: false, err: "凭证类接口不走通用转发（登录/续期/改密各有专门处理）" }))
+      const method = b.method === "POST" ? "POST" : "GET"
+      const r = await Cloud.callApi(p, { method, body: b.body })
+      if (!r.ok) return send(res, r.status && r.status >= 400 ? r.status : 502, "application/json",
+        JSON.stringify({ ok: false, err: (r.error && r.error.message) || "云端请求失败", code: r.error && r.error.code }))
+      return send(res, 200, "application/json", JSON.stringify({ ok: true, data: r.data }))
+    }
+
+    // ==== 用户反馈：把一次会话交给管理员 ==========================================
+    //
+    // 用户对某次结果满意/不满意，光说一句"不好用"管理员无从复现。这里把【整段对话】连同
+    // 赞/踩、一段评论、以及用户**自己勾选**的产出文件打成一个 zip 交上去。
+    //
+    // 【隐私】会话里可能有患者信息。所以：① 产出文件默认一个都不勾；② 前端弹窗把"会把整段
+    // 对话发给管理员"写在最显眼处；③ 服务端只存不看，导出时全程转义。发不发由用户自己决定。
+    if (req.method === "GET" && u.pathname === "/api/feedback/preview") {
+      const sid = u.searchParams.get("sid") || ""
+      if (!sid) return send(res, 400, "application/json", JSON.stringify({ ok: false, err: "缺少会话 id" }))
+      if (!cloudLoggedIn()) return send(res, 400, "application/json", JSON.stringify({ ok: false, err: "未登录云端账号，无法提交反馈" }))
+      let title = "", msgs = []
+      try { title = (un(await client.session.get({ path: { id: sid } })) || {}).title || "" } catch {}
+      try { msgs = await collectTranscript(sid) } catch (e) {
+        return send(res, 500, "application/json", JSON.stringify({ ok: false, err: "读不到这个会话的记录：" + (e.message || e) }))
+      }
+      let files = []
+      try {
+        const dir = await sessionOut(sid)
+        if (fs.existsSync(dir)) files = Object.entries(dirState(dir))
+          .map(([rel]) => { try { return { name: rel, size: fs.statSync(path.join(dir, rel)).size } } catch { return null } })
+          .filter(Boolean).sort((a, b) => a.name.localeCompare(b.name))
+      } catch {}
+      const chars = msgs.reduce((n, m) => n + (m.text || "").length, 0)
+      return send(res, 200, "application/json", JSON.stringify({ ok: true, title, msgs: msgs.length, chars, files }))
+    }
+
+    if (req.method === "POST" && u.pathname === "/api/feedback/send") {
+      if (!cloudLoggedIn()) return send(res, 400, "application/json", JSON.stringify({ ok: false, err: "未登录云端账号，无法提交反馈" }))
+      const chunks = []; for await (const c of req) chunks.push(c)
+      let b = {}; try { b = JSON.parse(Buffer.concat(chunks).toString() || "{}") } catch {}
+      const sid = String(b.sid || "")
+      if (!sid) return send(res, 400, "application/json", JSON.stringify({ ok: false, err: "缺少会话 id" }))
+      const comment = String(b.comment || "").slice(0, 4000)
+      const vote = Math.sign(Number(b.vote) || 0)
+      if (!vote && !comment.trim())
+        return send(res, 400, "application/json", JSON.stringify({ ok: false, err: "请至少点个赞/踩，或写一句说明" }))
+      let title = "", msgs = []
+      try { title = (un(await client.session.get({ path: { id: sid } })) || {}).title || "" } catch {}
+      try { msgs = await collectTranscript(sid) } catch (e) {
+        return send(res, 500, "application/json", JSON.stringify({ ok: false, err: "读不到这个会话的记录：" + (e.message || e) }))
+      }
+      // 打包：feedback.json + files/<勾选的产出>
+      const entries = [{
+        name: "feedback.json",
+        data: Buffer.from(JSON.stringify({
+          sessionId: sid, title, vote, comment, transcript: msgs,
+          meta: { model: MODEL.modelID, route: currentRoute(), skills: [...new Set(msgs.flatMap((m) => m.skills || []))] },
+        }), "utf8"),
+      }]
+      const want = Array.isArray(b.files) ? b.files.map(String) : []
+      if (want.length) {
+        const dir = await sessionOut(sid)
+        const known = fs.existsSync(dir) ? new Set(Object.keys(dirState(dir))) : new Set()
+        for (const rel of want) {
+          // 【只收本会话产物目录里确实存在的相对路径】名字来自前端，拼进 path.join 前必须比对
+          if (!known.has(rel)) return send(res, 400, "application/json", JSON.stringify({ ok: false, err: `产出文件不存在：${rel}` }))
+          const p = path.join(dir, rel)
+          const st = fs.statSync(p)
+          if (st.size > 8 * 1024 * 1024)
+            return send(res, 400, "application/json", JSON.stringify({ ok: false, err: `${rel} 有 ${(st.size / 1048576).toFixed(1)}MB，超过单个附件 8MB 上限，请取消勾选` }))
+          // 【重名要错开】产出可以在子目录里（figures/forest.png），包内一律拍平成文件名；
+          // 两个子目录里同名的文件拍平后会互相覆盖 —— 管理员看到两条记录、磁盘上只有一个文件。
+          let base = rel.split(/[\\/]/).pop()
+          if (entries.some((e) => e.name === "files/" + base)) base = rel.replace(/[\\/]/g, "_")
+          entries.push({ name: "files/" + base, data: fs.readFileSync(p) })
+        }
+      }
+      const buf = zipPack(entries)
+      if (buf.length > 32 * 1024 * 1024)
+        return send(res, 400, "application/json", JSON.stringify({ ok: false, err: "反馈包超过 32MB，请少勾几个产出文件" }))
+      const r = await Cloud.sendFeedback(buf)
+      if (!r.ok) return send(res, 502, "application/json", JSON.stringify({ ok: false, err: (r.error && r.error.message) || "提交失败" }))
+      return send(res, 200, "application/json", JSON.stringify({ ok: true, id: r.id, size: buf.length, files: entries.length - 1 }))
+    }
+
+    // ==== 界面包：本机状态 / 在线更新 / 回退（桌面版；详见 web-update.mjs 头注）=========
+    //
+    // 与技能包最大的不同：**不重启任何进程**。网关每次请求都从磁盘现读 index.html，
+    // 所以换完文件让用户刷新一下页面就生效，正在跑的轮一个都不会被打断。
+    if (req.method === "GET" && u.pathname === "/api/webpacks/status") {
+      if (!cloudLoggedIn())
+        return send(res, 200, "application/json", JSON.stringify({ ok: true, available: false }))
+      const latest = await webLatestSoon(u.searchParams.get("fresh") === "1").catch(() => null) || null
+      return send(res, 200, "application/json", JSON.stringify({
+        ok: true, available: true,
+        current: WebUp.currentVersion(),        // '' = 出厂版（安装器自带那套界面）
+        local: WebUp.listLocal(),               // 可回退的本机留存版本
+        latest, update: webUpdateInfo(latest),
+      }))
+    }
+    if (req.method === "POST" && (u.pathname === "/api/webpacks/update" || u.pathname === "/api/webpacks/rollback")) {
+      if (!cloudLoggedIn() && u.pathname === "/api/webpacks/update")
+        return send(res, 400, "application/json", JSON.stringify({ ok: false, err: "未登录云端账号，无法在线更新界面" }))
+      const chunks = []; for await (const c of req) chunks.push(c)
+      let b = {}; try { b = JSON.parse(Buffer.concat(chunks).toString() || "{}") } catch {}
+      // 【这里没有"有轮在跑就拦"那道闸】换的是静态文件、不重启后台，正在生成的轮不受影响。
+      try {
+        if (u.pathname === "/api/webpacks/update") {
+          const latest = await webLatestSoon(true)
+          if (!latest) return send(res, 400, "application/json", JSON.stringify({ ok: false, err: "云端当前没有可用的界面包" }))
+          // 只允许装"云端现在的最新版"：旧版一律走本机回退（云端撤下的版本本来就不该再装）
+          const dl = await Cloud.downloadWebPack(latest.version)
+          if (!dl.ok) return send(res, 502, "application/json", JSON.stringify({ ok: false, err: (dl.error && dl.error.message) || "下载失败" }))
+          WebUp.installBuffer(dl.buf, { version: latest.version, sha256: latest.sha256 })
+        } else {
+          const version = String(b.version || "").trim()
+          if (!version) return send(res, 400, "application/json", JSON.stringify({ ok: false, err: "缺 version" }))
+          WebUp.rollback(version)
+        }
+      } catch (e) {
+        return send(res, 500, "application/json", JSON.stringify({ ok: false, err: String(e.message || e) }))
+      }
+      clearWebLatestCache()   // 立刻重查：装完/退完提示条状态要马上正确，别等半小时
+      return send(res, 200, "application/json", JSON.stringify({
+        ok: true, current: WebUp.currentVersion(), local: WebUp.listLocal(),
+        // 前端据此提示"刷新一下页面即可看到新界面"——这就是它与技能包更新的全部差别
+        reload: true,
       }))
     }
 

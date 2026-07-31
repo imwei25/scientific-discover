@@ -409,6 +409,40 @@
   .hbtn { width: 34px; height: 34px; display: grid; place-items: center; border-radius: var(--r-sm); background: #fff; border: 1px solid var(--line-hi); color: var(--muted); cursor: pointer; transition: color .15s, border-color .15s; }
   .hbtn:hover { color: var(--accent); border-color: var(--cyan); }
   .hbtn .ic { width: 17px; height: 17px; }
+  /* 公告中心：顶栏一个按钮 + 未读红点，点开是近半年的列表。
+     【为什么不是横幅】老设计弹一条横幅、点「知道了」就永远找不回来 —— 用户第二天想确认
+     "维护到底几点"只能去问管理员。现在默认折叠、只标未读，内容一直在这儿可查。 */
+  .ntwrap { position: relative; }
+  .ntwrap .dotmark { position: absolute; top: -4px; right: -4px; min-width: 16px; height: 16px; padding: 0 4px; border-radius: 9px;
+    background: var(--cyan); color: #fff; font-size: 10px; line-height: 16px; text-align: center; font-weight: 700; pointer-events: none; }
+  .ntwrap .dotmark.urgent { background: #dc2626; }
+  .ntpanel { position: absolute; top: 40px; right: 0; z-index: 80; width: 380px; max-width: calc(100vw - 32px); max-height: 66vh; overflow: auto;
+    background: #fff; border: 1px solid var(--line); border-radius: var(--r-sm); box-shadow: 0 12px 40px rgba(30,50,90,.18); display: none; }
+  .ntpanel.on { display: block; }
+  .ntpanel .nthead { display: flex; align-items: center; gap: 8px; padding: 10px 12px; border-bottom: 1px solid var(--line); font-size: 12.5px; color: var(--muted); }
+  .ntpanel .nthead b { color: var(--text); font-size: 13px; }
+  .ntitem { padding: 11px 12px; border-bottom: 1px solid var(--line); border-left: 3px solid transparent; }
+  .ntitem:last-child { border-bottom: 0; }
+  .ntitem.unread { background: #f7fbff; border-left-color: var(--cyan); }
+  .ntitem.warn { border-left-color: #d97706; }
+  .ntitem.urgent { border-left-color: #dc2626; }
+  .ntitem .ntmeta { display: flex; align-items: center; gap: 7px; font-size: 11.5px; color: var(--faint); margin-bottom: 4px; }
+  .ntitem .ntlv { padding: 1px 6px; border-radius: 4px; font-weight: 600; background: #e8f1fd; color: #14508f; }
+  .ntitem.warn .ntlv { background: #fff4e5; color: #8a4b08; }
+  .ntitem.urgent .ntlv { background: #fdecea; color: #a3261a; }
+  .ntitem .nttext { font-size: 13px; color: var(--text); line-height: 1.6; white-space: pre-wrap; word-break: break-word; }
+  .ntitem .ntup { margin-top: 6px; font-size: 12px; color: #a3261a; }
+  .ntitem .ntup a { color: inherit; }
+  .ntempty { padding: 22px 12px; text-align: center; color: var(--faint); font-size: 12.5px; }
+  /* 反馈弹窗 */
+  .fb-votes { display: flex; gap: 10px; margin: 4px 0 12px; }
+  .fb-vote { flex: 1; padding: 9px; border-radius: var(--r-sm); border: 1px solid var(--line-hi); background: #fff; cursor: pointer; font-size: 13px; color: var(--muted); }
+  .fb-vote:hover { border-color: var(--cyan); }
+  .fb-vote.on[data-v="1"] { background: #ecfdf5; border-color: #34d399; color: #065f46; font-weight: 600; }
+  .fb-vote.on[data-v="-1"] { background: #fef2f2; border-color: #f87171; color: #991b1b; font-weight: 600; }
+  .fb-flist { max-height: 150px; overflow: auto; border: 1px solid var(--line); border-radius: var(--r-sm); padding: 6px 8px; }
+  .fb-flist label { display: flex; align-items: center; gap: 7px; padding: 3px 0; font-size: 12.5px; color: var(--text); cursor: pointer; }
+  .fb-flist .sz { color: var(--faint); font-size: 11.5px; margin-left: auto; }
   /* 模型切换器（普通用户：看供应商+模型，同供应商下切换） */
   .msel { position: relative; }
   .msel .mpill { display: inline-flex; align-items: center; gap: 6px; height: 34px; padding: 0 11px; border-radius: var(--r-sm); background: #fff; border: 1px solid var(--line-hi); color: var(--muted); cursor: pointer; font-size: 12px; white-space: nowrap; max-width: 260px; }
@@ -486,23 +520,18 @@
   #storebanner .sbx { margin-left: auto; background: none; border: 1px solid currentColor; color: inherit;
     border-radius: 6px; padding: 3px 10px; font-size: 12px; cursor: pointer; opacity: .75; }
   #storebanner .sbx:hover { opacity: 1; }
-  /* 平台公告横幅（见 body 里 #noticebanner 处的注释）。三档配色与后台的级别一一对应。
-     #skillbanner（技能更新提示）复用同一套样式：同为"顶部一条、可关掉"的平台消息。 */
-  #noticebanner, #skillbanner { padding: 9px 16px; font-size: 13px; line-height: 1.5; display: flex; align-items: center;
+  /* 技能 / 界面更新提示条（平台公告已改成顶栏的「公告」按钮 + 面板，不再占用横幅位）。 */
+  #skillbanner, #webbanner { padding: 9px 16px; font-size: 13px; line-height: 1.5; display: flex; align-items: center;
     gap: 10px; flex-wrap: wrap; border-bottom: 1px solid rgba(0,0,0,.08); }
-  #noticebanner.info, #skillbanner.info { background: #e8f1fd; color: #14508f; }
-  #noticebanner.warn { background: #fff4e5; color: #8a4b08; }
-  #noticebanner.urgent { background: #fdecea; color: #a3261a; }
-  #noticebanner b, #skillbanner b { font-weight: 600; }
-  #noticebanner a { color: inherit; text-decoration: underline; }
-  #noticebanner .nbx, #skillbanner .nbx { background: none; border: 1px solid currentColor; color: inherit;
+  #skillbanner.info, #webbanner.info { background: #e8f1fd; color: #14508f; }
+  #skillbanner b, #webbanner b { font-weight: 600; }
+  #skillbanner .nbx, #webbanner .nbx { background: none; border: 1px solid currentColor; color: inherit;
     border-radius: 6px; padding: 3px 10px; font-size: 12px; cursor: pointer; opacity: .75; }
-  #noticebanner .nbx { margin-left: auto; }
-  #noticebanner .nbx:hover, #skillbanner .nbx:hover { opacity: 1; }
+  #skillbanner .nbx:hover, #webbanner .nbx:hover { opacity: 1; }
   /* 技能横幅有两个按钮：第一个（立即更新）顶到右侧，实心强调（横幅恒为 info 蓝底） */
-  #skillbanner .nba { margin-left: auto; background: #14508f; color: #fff; border: none; border-radius: 6px;
+  #skillbanner .nba, #webbanner .nba { margin-left: auto; background: #14508f; color: #fff; border: none; border-radius: 6px;
     padding: 4px 12px; font-size: 12px; cursor: pointer; }
-  #skillbanner .nba:disabled { opacity: .6; cursor: default; }
+  #skillbanner .nba:disabled, #webbanner .nba:disabled { opacity: .6; cursor: default; }
 </style>
 </head>
 <body>
@@ -516,6 +545,13 @@
   <div class="hright">
     <span id="quotabar" class="status" hidden title="今日模型额度：已用 / 上限（每日 0 点 UTC 重置）"></span>
     <div id="modelSel" class="msel" hidden></div>
+    <!-- 公告中心：默认折叠，只在按钮上标未读数；点开是近半年的公告，随时查得回来。
+         老设计是顶部弹横幅、点「知道了」就永远消失，用户想回看只能问管理员。 -->
+    <div id="ntWrap" class="ntwrap" hidden>
+      <button id="ntBtn" class="hbtn" type="button" title="平台公告"></button>
+      <span id="ntDot" class="dotmark" hidden></span>
+      <div id="ntPanel" class="ntpanel"></div>
+    </div>
     <button id="pwBtn" class="hbtn" type="button" title="修改密码"></button>
     <button id="logoutBtn" class="hbtn" type="button" title="退出登录"></button>
     <div class="status"><span class="dot"></span>在线</div>
@@ -525,11 +561,11 @@
      撞上限（新上传被 413 拒收、产物写不进去）之前基本看不到预警。放在 header 之下、main
      之外，与侧栏开合无关，任何屏宽都挡不住。仅 ≥90% 时出现，掉回去自动消失。 -->
 <div id="storebanner" hidden></div>
-<!-- 平台公告横幅：站长在云端后台发一条，所有已登录客户端几分钟内在这里看到（此前只能一个个
-     发微信）。位置同存储告急横幅 —— header 之下、main 之外，与侧栏开合无关，任何屏宽都挡不住。
-     用户点「知道了」后按公告 id 记进 localStorage 不再弹；站长改了内容 id 会 ++，于是重新弹一次。 -->
-<div id="noticebanner" hidden></div>
+<!-- 平台公告不再占横幅位：改成顶栏的「公告」按钮 + 未读红点 + 可查半年的面板（见 #ntWrap）。
+     老设计弹一条横幅、点「知道了」就永远找不回来，用户想回看只能问管理员。 -->
 <div id="skillbanner" hidden></div>
+<!-- 界面更新提示条：只换前端静态资源，点一下装完刷新页面即生效，不重启后台、不打断在跑的轮 -->
+<div id="webbanner" hidden></div>
 <main>
   <div id="sessbar">
     <div class="sb-top">
@@ -608,6 +644,29 @@
       <div class="mm-msg info" id="pwMsg"></div>
       <div class="mm-actions"><button id="pwSave" class="mm-btn primary" type="button">保存</button></div>
       <div class="mm-hint">改完当前登录会失效，需用新密码重新登录。</div>
+    </div>
+  </div>
+</div>
+<!-- 反馈：把一次会话（完整对话 + 可选勾选的产出）交给管理员，附赞/踩与一段说明。
+     隐私在这里是硬要求：产出文件默认一个都不勾，弹窗顶部明写"会把整段对话发过去"。 -->
+<div id="fbModal" class="modal">
+  <div class="modal-card" style="max-width:520px">
+    <div class="modal-head">
+      <span class="modal-title">反馈给管理员</span>
+      <button class="modal-x" id="fbClose" type="button" title="关闭"></button>
+    </div>
+    <div class="modal-body">
+      <div class="mm-route" id="fbHead"></div>
+      <div class="fb-votes">
+        <button type="button" class="fb-vote" data-v="1"><span>👍</span> 这次不错</button>
+        <button type="button" class="fb-vote" data-v="-1"><span>👎</span> 有问题</button>
+      </div>
+      <label class="mm-field"><span>说明（哪里好 / 哪里不对，越具体越好）</span>
+        <textarea id="fbComment" class="mm-input" rows="4" placeholder="例：写出来的讨论部分把两篇文献的结论说反了；或：这次的森林图很好用"></textarea></label>
+      <div id="fbFiles"></div>
+      <div class="mm-msg info" id="fbMsg"></div>
+      <div class="mm-actions"><button id="fbSend" class="mm-btn primary" type="button">提交</button></div>
+      <div class="mm-hint">提交后管理员能看到<b>这次会话的完整对话</b>与你勾选的产出文件。涉及患者信息时请先确认已脱敏。</div>
     </div>
   </div>
 </div>
@@ -726,7 +785,9 @@ const ICONS = {
   logout: '<path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/>',
   key: '<circle cx="7.5" cy="15.5" r="4.5"/><path d="m21 2-9.6 9.6"/><path d="m15.5 7.5 3 3L22 7l-3-3"/>',
   sparkle: '<path d="M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9Z"/><path d="M18.5 15.5l.7 1.8 1.8.7-1.8.7-.7 1.8-.7-1.8-1.8-.7 1.8-.7Z"/>',
-  plus: '<path d="M12 5v14"/><path d="M5 12h14"/>'
+  plus: '<path d="M12 5v14"/><path d="M5 12h14"/>',
+  megaphone: '<path d="M3 11v2a1 1 0 0 0 1 1h2l6 4V6L6 10H4a1 1 0 0 0-1 1Z"/><path d="M16 8.5a4 4 0 0 1 0 7"/><path d="M8 15v4"/>',
+  feedback: '<path d="M21 15a2 2 0 0 1-2 2H8l-4 3V6a2 2 0 0 1 2-2h13a2 2 0 0 1 2 2Z"/><path d="M9 10h7"/><path d="M9 13.5h4"/>'
 }
 function ic(name, cls) { return '<svg class="ic' + (cls ? " " + cls : "") + '" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">' + (ICONS[name] || "") + "</svg>" }
 const setIc = (id, name) => { const el = document.getElementById(id); if (el) el.innerHTML = ic(name) }
@@ -1159,6 +1220,7 @@ function sessRow(s) {
   const acts = document.createElement("span"); acts.className = "sess-acts" + (s.pinned ? " keep" : "")
   const mk = (icon, cls, title, fn) => { const a = document.createElement("span"); a.className = "sess-act" + (cls ? " " + cls : ""); a.title = title; a.innerHTML = ic(icon); a.addEventListener("click", (e) => { e.stopPropagation(); fn() }); return a }
   acts.appendChild(mk("edit", "", "重命名", () => renameSession(s.id, s.title, t)))
+  acts.appendChild(mk("feedback", "", "把这次会话反馈给管理员", () => openFeedback(s.id, s.title)))
   acts.appendChild(mk("pin", s.pinned ? "on" : "", s.pinned ? "取消持久化" : "持久化保留（钉住，续 7 天）", () => togglePin(s.id, !s.pinned)))
   acts.appendChild(mk("trash", "del", "删除会话", () => deleteSession(s.id, s.title)))
   b.appendChild(acts)
@@ -2176,41 +2238,190 @@ function renderStoreBanner(pct, usedMb, limitMb, full) {
   el.append(msg, x)
   el.hidden = false
 }
-// ---- 平台公告：站长在云端后台发一条，这里显示 ----
-// 「知道了」按公告 id 记进 localStorage：本应用刷新是常规操作（会话靠 localStorage.nm_sid
-// 恢复），存内存变量的话点掉了一刷新又弹回来。站长改了公告内容，服务端会把 id ++，于是
-// 重新弹一次 —— 只改开关、不动内容不会重复打扰（那是服务端 setNotice 保证的）。
-const NT_KEY = "nm_notice_dismissed"
-const noticeDismissed = () => { const v = parseInt(localStorage.getItem(NT_KEY) || "-1", 10); return Number.isFinite(v) ? v : -1 }
-function renderNoticeBanner(n, needUpgrade) {
-  const el = document.getElementById("noticebanner")
-  if (!el) return
-  if (!n || (!n.text && !n.minClientVersion)) { el.hidden = true; return }
-  if (noticeDismissed() >= n.id) { el.hidden = true; return }
-  el.className = n.level === "urgent" ? "urgent" : n.level === "warn" ? "warn" : "info"
-  el.textContent = ""
-  const msg = document.createElement("span")
-  const tag = document.createElement("b")
-  tag.textContent = n.level === "urgent" ? "紧急通知：" : n.level === "warn" ? "注意：" : "公告："
-  msg.append(tag, document.createTextNode(n.text || ""))
-  // 【只有真的偏旧才提升级】服务端比过版本号（认不出版本的构建一律不催），前端不再自己判断
-  if (needUpgrade) {
-    const up = document.createElement("b")
-    up.textContent = `　请升级到 ${n.minClientVersion} 或更高版本。`
-    msg.append(up)
-    // 链接只在服务端校验过是 http(s) 时才会下发，这里再显式限定一次协议，别让它变成脚本
-    if (/^https?:\/\//i.test(n.downloadUrl || "")) {
-      const a = document.createElement("a")
-      a.href = n.downloadUrl; a.target = "_blank"; a.rel = "noopener noreferrer"; a.textContent = "下载新版"
-      msg.append(document.createTextNode(" "), a)
-    }
-  }
-  const x = document.createElement("button")
-  x.className = "nbx"; x.type = "button"; x.textContent = "知道了"
-  x.onclick = () => { try { localStorage.setItem(NT_KEY, String(n.id)) } catch {}; el.hidden = true }
-  el.append(msg, x)
-  el.hidden = false
+// ---- 反馈给管理员：把一次会话交上去 ----
+// 用户说"这次答得不好"，管理员没有上下文根本没法复现；让用户自己复述又会丢掉最关键的细节。
+// 所以这里直接把【整段对话】交上去，产出文件由用户自己勾（默认一个都不勾 —— 里面可能有患者数据）。
+const fbModal = document.getElementById("fbModal")
+let fbSid = "", fbVote = 0, fbBusy = false
+const fbSetMsg = (t, m) => { const e = document.getElementById("fbMsg"); e.className = "mm-msg " + t; e.textContent = m }
+const closeFeedback = () => { fbModal.classList.remove("on"); fbBusy = false }
+document.getElementById("fbClose").addEventListener("click", closeFeedback)
+fbModal.addEventListener("click", (e) => { if (e.target === fbModal && !fbBusy) closeFeedback() })
+document.addEventListener("keydown", (e) => { if (e.key === "Escape" && fbModal.classList.contains("on") && !fbBusy) closeFeedback() })
+for (const b of fbModal.querySelectorAll(".fb-vote")) {
+  b.addEventListener("click", () => {
+    const v = Number(b.dataset.v)
+    fbVote = fbVote === v ? 0 : v          // 再点一次取消：只想留言不表态也是合法的
+    for (const x of fbModal.querySelectorAll(".fb-vote")) x.classList.toggle("on", Number(x.dataset.v) === fbVote)
+  })
 }
+
+async function openFeedback(sid, title) {
+  fbSid = sid; fbVote = 0; fbBusy = false
+  for (const x of fbModal.querySelectorAll(".fb-vote")) x.classList.remove("on")
+  document.getElementById("fbComment").value = ""
+  document.getElementById("fbFiles").innerHTML = ""
+  document.getElementById("fbHead").className = "mm-route"
+  document.getElementById("fbHead").textContent = "正在读取会话「" + (title || "未命名") + "」…"
+  fbSetMsg("info", "")
+  fbModal.classList.add("on")
+  let p = null
+  try { p = await (await fetch("api/feedback/preview?sid=" + encodeURIComponent(sid), { signal: AbortSignal.timeout(15000) })).json() } catch {}
+  if (!p || !p.ok) {
+    document.getElementById("fbHead").className = "mm-route custom"
+    document.getElementById("fbHead").textContent = (p && p.err) || "读不到这个会话，无法反馈"
+    return
+  }
+  const kb = Math.max(1, Math.round(p.chars / 1024))
+  document.getElementById("fbHead").innerHTML = "会话：<b>" + esc(p.title || title || "未命名") + "</b><br>" +
+    "将附上 <b>" + p.msgs + " 条消息</b>（约 " + kb + " KB 文字）的完整对话。"
+  // 产出文件：默认不勾。这里是整个功能里最需要用户自己判断的一步（可能含患者数据）
+  const box = document.getElementById("fbFiles")
+  if (!p.files.length) { box.innerHTML = '<div class="mm-hint" style="margin:0 0 10px">这个会话没有产出文件。</div>'; return }
+  box.innerHTML = '<div class="mm-field"><span>附带产出文件（可选，默认不发）</span>' +
+    '<div class="fb-flist">' + p.files.map((f) =>
+      '<label><input type="checkbox" value="' + esc(f.name) + '"><span>' + esc(f.name) +
+      '</span><span class="sz">' + (f.size >= 1048576 ? (f.size / 1048576).toFixed(1) + " MB" : Math.max(1, Math.round(f.size / 1024)) + " KB") + '</span></label>').join("") +
+    '</div></div>'
+}
+
+document.getElementById("fbSend").addEventListener("click", async () => {
+  if (fbBusy) return
+  const comment = document.getElementById("fbComment").value.trim()
+  if (!fbVote && !comment) return fbSetMsg("err", "请点个赞/踩，或写一句说明")
+  const files = [...document.querySelectorAll("#fbFiles input:checked")].map((x) => x.value)
+  fbBusy = true
+  const btn = document.getElementById("fbSend")
+  btn.disabled = true; btn.textContent = "提交中…"
+  fbSetMsg("info", "正在打包并上传…")
+  try {
+    const r = await (await fetch("api/feedback/send", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ sid: fbSid, vote: fbVote, comment, files }),
+    })).json()
+    if (!r.ok) { fbSetMsg("err", r.err || "提交失败"); btn.disabled = false; btn.textContent = "提交"; fbBusy = false; return }
+    fbSetMsg("ok", "已提交，谢谢！管理员会看到这次会话的完整记录" + (r.files ? "与 " + r.files + " 个产出文件" : "") + "。")
+    btn.textContent = "已提交"
+    setTimeout(() => { closeFeedback(); btn.disabled = false; btn.textContent = "提交" }, 1600)
+  } catch {
+    fbSetMsg("err", "网络错误，请稍后重试"); btn.disabled = false; btn.textContent = "提交"; fbBusy = false
+  }
+})
+
+// ---- 平台公告中心：顶栏一个按钮 + 未读红点，点开是近半年的公告 ----
+//
+// 【为什么不再弹横幅】老设计弹一条横幅、点「知道了」就永远消失：用户第二天想确认"维护到底
+// 几点"只能去问管理员，而且换台机器/重装就什么都没了。现在历史在服务端留半年，客户端默认
+// 折叠、只在按钮上标未读数，随时点开可查，谁也不会被打断。
+//
+// 已读记的是【已读到哪个 id】（公告 id 单调递增）：打开面板即视为全部已读。用 localStorage
+// 而不是内存变量 —— 本应用刷新是常规操作（会话靠 localStorage.nm_sid 恢复）。
+const NT_KEY = "nm_notice_read"
+const noticeReadTo = () => {
+  const v = parseInt(localStorage.getItem(NT_KEY) || "", 10)
+  if (Number.isFinite(v)) return v
+  // 【认老键】升级前用的是"点掉的那条 id"（nm_notice_dismissed），语义相同（都是"看到这儿了"）。
+  // 不认的话，老用户升上来会把已经看过的公告全标成未读，红点上来就是一串。
+  const old = parseInt(localStorage.getItem("nm_notice_dismissed") || "", 10)
+  return Number.isFinite(old) ? old : -1
+}
+let ntDigest = []        // [{id, level, createdAt}]，来自 5 分钟轮询，只用来算未读
+let ntKeepDays = 180
+let ntListCache = null   // 面板打开时拉到的正文列表
+
+function ntUnread() { const to = noticeReadTo(); return ntDigest.filter((n) => n.id > to) }
+
+/** 未读红点。只标数字，不自动展开 —— 这是"默认折叠"的全部含义。 */
+function renderNoticeDot() {
+  const wrap = document.getElementById("ntWrap"), dot = document.getElementById("ntDot")
+  if (!wrap || !dot) return
+  // 没有云端账号（单机版/自设 API）时压根没有公告这回事，按钮也别占位
+  wrap.hidden = !ntDigest.length && !ntListCache
+  const un = ntUnread()
+  dot.hidden = !un.length
+  dot.textContent = un.length > 99 ? "99+" : String(un.length)
+  dot.className = "dotmark" + (un.some((n) => n.level === "urgent") ? " urgent" : "")
+  const btn = document.getElementById("ntBtn")
+  if (btn) btn.title = un.length ? `平台公告（${un.length} 条未读）` : "平台公告"
+}
+
+const ntFmt = (ms) => {
+  const d = new Date(Number(ms) || 0), now = new Date()
+  const sameYear = d.getFullYear() === now.getFullYear()
+  const p = (x) => String(x).padStart(2, "0")
+  return (sameYear ? "" : d.getFullYear() + "-") + p(d.getMonth() + 1) + "-" + p(d.getDate()) + " " + p(d.getHours()) + ":" + p(d.getMinutes())
+}
+
+function renderNoticePanel(list, err) {
+  const p = document.getElementById("ntPanel")
+  if (!p) return
+  const readTo = noticeReadTo()
+  p.textContent = ""
+  const head = document.createElement("div")
+  head.className = "nthead"
+  const t = document.createElement("b"); t.textContent = "平台公告"
+  const sub = document.createElement("span")
+  sub.textContent = err ? "（暂时拉不到，显示的是上次的）" : `保留最近 ${Math.round(ntKeepDays / 30)} 个月`
+  head.append(t, sub)
+  p.append(head)
+  if (!list || !list.length) {
+    const e = document.createElement("div"); e.className = "ntempty"
+    e.textContent = err ? "拉不到公告（云端不可达），稍后再试" : "还没有公告"
+    p.append(e); return
+  }
+  for (const n of list) {
+    const it = document.createElement("div")
+    it.className = "ntitem" + (n.level === "urgent" ? " urgent" : n.level === "warn" ? " warn" : "") + (n.id > readTo ? " unread" : "")
+    const meta = document.createElement("div"); meta.className = "ntmeta"
+    const lv = document.createElement("span"); lv.className = "ntlv"
+    lv.textContent = n.level === "urgent" ? "紧急" : n.level === "warn" ? "注意" : "公告"
+    const when = document.createElement("span"); when.textContent = ntFmt(n.createdAt)
+    meta.append(lv, when)
+    if (n.id > readTo) { const nw = document.createElement("span"); nw.textContent = "· 未读"; meta.append(nw) }
+    const body = document.createElement("div"); body.className = "nttext"; body.textContent = n.text || ""
+    it.append(meta, body)
+    // 【只有真的偏旧才提升级】服务端比过版本号（认不出版本的构建一律不催），前端不自己判断
+    if (n.needUpgrade && n.minClientVersion) {
+      const up = document.createElement("div"); up.className = "ntup"
+      up.textContent = `你当前的版本偏旧，请升级到 ${n.minClientVersion} 或更高版本。`
+      // 链接只在服务端校验过是 http(s) 时才会下发，这里再显式限定一次协议，别让它变成脚本
+      if (/^https?:\/\//i.test(n.downloadUrl || "")) {
+        const a = document.createElement("a")
+        a.href = n.downloadUrl; a.target = "_blank"; a.rel = "noopener noreferrer"; a.textContent = "下载新版"
+        up.append(document.createTextNode(" "), a)
+      }
+      it.append(up)
+    }
+    p.append(it)
+  }
+}
+
+async function openNoticePanel() {
+  const p = document.getElementById("ntPanel")
+  if (!p) return
+  if (p.classList.contains("on")) { p.classList.remove("on"); return }
+  p.classList.add("on")
+  renderNoticePanel(ntListCache || [])          // 先画上次的，避免点开是一片空白
+  let err = false
+  try {
+    const j = await (await fetch("api/cloud/notices", { signal: AbortSignal.timeout(8000) })).json()
+    if (j && j.ok) { ntListCache = j.notices || []; if (j.keepDays) ntKeepDays = j.keepDays }
+    else err = true
+  } catch { err = true }
+  renderNoticePanel(ntListCache || [], err)
+  // 打开即全部已读。【记最大 id，不是列表长度】撤下/过期都会让条数变少，用条数当游标会
+  // 让已经读过的公告重新变成未读。
+  const maxId = Math.max(noticeReadTo(), ...(ntListCache || []).map((n) => n.id), ...ntDigest.map((n) => n.id))
+  if (Number.isFinite(maxId)) { try { localStorage.setItem(NT_KEY, String(maxId)) } catch {} }
+  renderNoticeDot()
+}
+
+document.getElementById("ntBtn").innerHTML = ic("megaphone")
+document.getElementById("ntBtn").addEventListener("click", (e) => { e.stopPropagation(); openNoticePanel() })
+// 点面板内部（选中文字、点下载链接）不该把它关掉，点别处才关
+document.getElementById("ntPanel").addEventListener("click", (e) => e.stopPropagation())
+document.addEventListener("click", () => document.getElementById("ntPanel")?.classList.remove("on"))
+document.addEventListener("keydown", (e) => { if (e.key === "Escape") document.getElementById("ntPanel")?.classList.remove("on") })
 // ---- 技能包更新：横幅提示（不强制，可按版本忽略）+ 更新/回退动作 ----
 // 与升级客户端不同，技能更新是"换掉 .opencode/skills 目录 + 重启后台 opencode"，
 // 本机就能完成；有权限的账号（服务端按技能授权算 relevant）才会收到提示。
@@ -2259,6 +2470,40 @@ function renderSkillBanner(su) {
   el.append(msg, go, x)
   el.hidden = false
 }
+// ---- 界面更新：与技能更新同一条提示条，但代价小得多 ----
+// 换的只是这个页面本身（网关每次请求现读 index.html），**不重启后台、不打断正在跑的轮**，
+// 装完刷新一下页面就换过去了。所以按钮直接写"更新并刷新"，别让用户猜要不要重启。
+const WB_KEY = "nm_webpack_dismissed"
+function renderWebBanner(wu) {
+  const el = document.getElementById("webbanner")
+  if (!el) return
+  if (!wu || !wu.version) { el.hidden = true; return }
+  if (localStorage.getItem(WB_KEY) === wu.version) { el.hidden = true; return }
+  el.className = "info"
+  el.textContent = ""
+  const msg = document.createElement("span")
+  const tag = document.createElement("b"); tag.textContent = "界面更新："
+  msg.append(tag, document.createTextNode("v" + wu.version +
+    (wu.changelog ? " — " + String(wu.changelog).slice(0, 100) : "") + "（约 " + Math.max(1, Math.round((wu.size || 0) / 1024)) + " KB，不影响正在跑的任务）"))
+  const go = document.createElement("button")
+  go.className = "nba"; go.type = "button"; go.textContent = "更新并刷新"
+  go.onclick = async () => {
+    go.disabled = true; go.textContent = "更新中…"
+    try {
+      const r = await (await fetch("api/webpacks/update", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" })).json()
+      if (!r.ok) { alert("界面更新失败：" + (r.err || "未知错误")); go.disabled = false; go.textContent = "更新并刷新"; return }
+      el.textContent = "✅ 已更新到 v" + r.current + "，正在刷新页面…"
+      // 【刷新即生效】新文件已经在磁盘上，重新拉一次页面就是新界面；带个时间戳绕开缓存
+      setTimeout(() => { location.href = "./?v=" + encodeURIComponent(r.current) }, 800)
+    } catch { alert("网络错误"); go.disabled = false; go.textContent = "更新并刷新" }
+  }
+  const x = document.createElement("button")
+  x.className = "nbx"; x.type = "button"; x.textContent = "本版忽略"
+  x.title = "这一版不再提示；之后在「云端账号」面板里随时可以手动更新或回退"
+  x.onclick = () => { try { localStorage.setItem(WB_KEY, wu.version) } catch {}; el.hidden = true }
+  el.append(msg, go, x)
+  el.hidden = false
+}
 let noticeLastFetch = 0
 async function refreshNotice(force) {
   // 窗口每次聚焦都会调这里，节流到 60 秒；本机网关另有一层 60 秒缓存，云端不会被打穿
@@ -2266,8 +2511,18 @@ async function refreshNotice(force) {
   noticeLastFetch = Date.now()
   try {
     const j = await (await fetch("api/cloud/notice", { signal: AbortSignal.timeout(8000) })).json()
-    renderNoticeBanner(j && j.notice, j && j.needUpgrade)
+    // 公告：轮询只拿摘要（id/级别/时间）算未读红点，正文等用户点开面板时才拉。
+    // 【digest 缺失时不要清空】老版本的本机网关（打包版还没更新）不带这个字段，清空会让
+    // 公告按钮凭空消失；宁可显示上一份。
+    if (j && Array.isArray(j.digest)) {
+      ntDigest = j.digest
+      if (j.keepDays) ntKeepDays = j.keepDays
+      // 面板正开着时顺手重画一次：新公告进来能立刻看到"未读"标记的变化
+      if (document.getElementById("ntPanel")?.classList.contains("on")) renderNoticePanel(ntListCache || [])
+    }
+    renderNoticeDot()
     renderSkillBanner(j && j.skillUpdate)
+    renderWebBanner(j && j.webUpdate)
     // 登录态在后台被作废（管理员改了档位/技能会连 refresh 一起吊销）→ 当场弹登录窗。
     // 不这么做的话，用户会对着一个权限已经变了的旧界面继续操作，直到发消息那一刻才被打断。
     if (j && j.loggedOut) return openCloud(true)
@@ -2433,9 +2688,13 @@ setInterval(() => refreshNotice(true), 5 * 60 * 1000)
 window.addEventListener("focus", () => refreshNotice())
 document.addEventListener("visibilitychange", () => { if (!document.hidden) refreshNotice() })
 
-/* ---- 闲置倒计时：闲置 7 分钟弹 3 分钟倒计时，满 10 分钟自动退出、需重新登录 ---- */
+/* ---- 闲置锁屏：闲置满 24 小时才锁，锁前 3 分钟弹倒计时 ----
+   【为什么从 10 分钟改成 24 小时】原来的 7/10 分钟是照"公共电脑离开座位"的口径定的，
+   而实际用法是医生自己的机器上开着一整天：写标书时去查个资料、开个会回来，就被弹一次
+   "输口令解锁"——一天好几回，锁屏挡住的风险远小于它造成的打断。
+   锁屏本身仍然保留（≠ 登出：登录态与后台在跑的轮都留着），只是把门槛提到"一天没碰过"。 */
 ;(function () {
-  var WARN_MS = 7 * 60 * 1000, LOGOUT_MS = 10 * 60 * 1000
+  var LOGOUT_MS = 24 * 60 * 60 * 1000, WARN_MS = LOGOUT_MS - 3 * 60 * 1000
   var last = Date.now(), out = false
   function bump() { last = Date.now() }
   // SSE 生成期间也算活跃：包一层 EventSource，任何事件都刷新闲置计时，避免长流水线跑一半被登出

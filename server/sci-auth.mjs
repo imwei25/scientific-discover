@@ -27,6 +27,8 @@ import { createQueue, sanitizeLimits, LIMIT_DEFAULTS } from "./lib/queue.mjs"
 import { ADMIN_HTML } from "./lib/admin-ui.mjs"
 import * as SkillPacks from "./lib/skillpacks.mjs"
 import * as SkillSrc from "./lib/skillsrc.mjs"
+import * as WebPacks from "./lib/webpacks.mjs"
+import * as MiniZip from "./lib/minizip.mjs"
 // 版本比较的实现挪进了 lib/skillpacks.mjs（skillsrc 也要用，从这里 import 会循环）；
 // 这里 re-export 保持既有引用（测试拿的是 app.mod.cmpVersion）不变。
 import { cmpVersion } from "./lib/skillpacks.mjs"
@@ -90,6 +92,11 @@ export const CFG = {
 export const oneapiCfg = () => ({ url: CFG.oneapiUrl, token: CFG.oneapiToken })
 
 const log = (...a) => console.log(new Date().toISOString(), ...a)
+
+// 公告保留期：客户端"能往回翻多久"就是它，默认半年。
+// 【一个数管三处】列表接口、未读 digest、每天的清理扫描都读它 —— 分开配就一定会出现
+// "后台还列着、客户端翻不到"（或反过来）的错位。
+const NOTICE_KEEP_DAYS = envNum("NOTICE_KEEP_DAYS", DB.NOTICE_KEEP_DAYS, { min: 7 })
 
 // ==== 库 ======================================================================
 const DB_FILE = process.env.DB_FILE || path.join(CFG.dataDir, "sci.db")
@@ -266,13 +273,15 @@ export function authClient(req, { requireFullScope = true } = {}) {
   return { ok: true, user, payload: v.payload }
 }
 
-/** 客户端每次带 X-Client-Version / X-Skills-Version 上来就顺手记一下（需求 §3.5 版本可追溯）。 */
+/** 客户端每次带 X-Client-Version / X-Skills-Version / X-Web-Version 上来就顺手记一下（需求 §3.5 版本可追溯）。 */
 function noteClient(user, req) {
   const v = String(req.headers["x-client-version"] || "").slice(0, 40)
   const sv = String(req.headers["x-skills-version"] || "").slice(0, 40)
+  const wv = String(req.headers["x-web-version"] || "").slice(0, 40)
   const patch = { last_seen_at: Date.now() }
   if (v && v !== user.client_version) patch.client_version = v
   if (sv && sv !== user.skills_version) patch.skills_version = sv
+  if (wv && wv !== user.web_version) patch.web_version = wv
   try { DB.updateUser(db, user.id, patch) } catch {}
 }
 
@@ -322,6 +331,113 @@ function publishParsedPack(buf, parsed, { commitSha = "", ip, via, forced = fals
   audit("skillpack.publish", { actor: "admin", ip, target: parsed.pack.version,
     detail: `via=${via} size=${buf.length} skills=${parsed.skills.length}${commitSha ? ` commit=${commitSha.slice(0, 10)}` : ""}${forced ? " (强制发布，lint 有告警)" : ""}` })
   return { ok: true, sha }
+}
+
+// ==== 界面包（在线分发前端静态资源，见 lib/webpacks.mjs 头注）====================
+// 与技能包同一套骨架，但完全独立：换的是 web/*.html 这类静态资源，客户端刷新页面即生效，
+// 不重启任何进程 —— 所以没有"相关性"过滤（界面对所有人一样），也不需要 lint。
+const WEB_PACKS_DIR = () => path.join(CFG.dataDir, "web-packs")
+const webPackFile = (version) => path.join(WEB_PACKS_DIR(), `${version}.zip`)   // version 已过 VERSION_RE
+
+function latestWebPack() {
+  let best = null
+  for (const p of DB.listWebPacks(db)) {
+    if (p.status !== "active") continue
+    if (!best || cmpVersion(p.version, best.version) > 0) best = p
+  }
+  return best
+}
+
+/** 落盘 + 入库。先落盘再写库：反过来会留下"客户端看得到、却永远下不到"的版本。 */
+function publishWebPack(buf, parsed, { commitSha = "", ip, via }) {
+  fs.mkdirSync(WEB_PACKS_DIR(), { recursive: true })
+  const sha = crypto.createHash("sha256").update(buf).digest("hex")
+  const tmp = webPackFile(parsed.pack.version) + ".tmp"
+  fs.writeFileSync(tmp, buf)
+  fs.renameSync(tmp, webPackFile(parsed.pack.version))
+  const ins = DB.addWebPack(db, {
+    version: parsed.pack.version, sha256: sha, size: buf.length,
+    changelog: parsed.pack.changelog, files: parsed.names.join(","), commit_sha: commitSha,
+  })
+  if (!ins.ok) { try { fs.unlinkSync(webPackFile(parsed.pack.version)) } catch {}; return ins }
+  audit("webpack.publish", { actor: "admin", ip, target: parsed.pack.version,
+    detail: `via=${via} size=${buf.length} files=${parsed.names.length}${commitSha ? ` commit=${commitSha.slice(0, 10)}` : ""}` })
+  return { ok: true, sha }
+}
+
+// ==== 用户反馈 ================================================================
+// 用户把某一次会话（完整对话 + 可选的产出文件）连同赞/踩与评论交给管理员。
+//
+// 【为什么用 zip 上传而不是 JSON】附件是 docx/pdf/png 这类二进制，塞进 JSON 只能 base64，
+// 体积涨三分之一还得两头编解码；而 zip 这套（打包/解包/路径消毒/大小闸）本仓已经有了。
+// 包内布局：feedback.json（元信息 + 对话）+ files/<文件名>（用户勾选的产出，可无）。
+const FEEDBACK_DIR = () => path.join(CFG.dataDir, "feedback")
+const FEEDBACK_MAX = 32 * 1024 * 1024        // 单次上传上限（客户端也拦一道）
+const FEEDBACK_FILE_MAX = 8 * 1024 * 1024
+
+/** 附件名消毒：只留文件名本身，非法字符换掉 —— 这串会被拼进磁盘路径与下载链接 */
+function safeAttachName(name) {
+  const base = String(name || "").split(/[\\/]/).pop() || "file"
+  return base.replace(/[\x00-\x1f<>:"|?*]/g, "_").slice(0, 120) || "file"
+}
+
+/**
+ * 把若干条反馈渲染成一个自带样式的单文件 HTML（离线可看、可转发、可存档）。
+ *
+ * 【全程转义】对话正文是用户与模型写的内容，里面出现 <script>、</div> 再正常不过。
+ * 导出的文件会被人用浏览器打开，不转义就是一个"用户可控内容 → 管理员浏览器"的注入面。
+ */
+function feedbackHtml(items) {
+  const esc = (s) => String(s == null ? "" : s)
+    .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;")
+  const when = (ms) => new Date(Number(ms) || 0).toLocaleString("zh-CN", { timeZone: "Asia/Shanghai", hour12: false })
+  const voteTag = (v) => v > 0 ? '<span class="v up">👍 点赞</span>' : v < 0 ? '<span class="v down">👎 点踩</span>' : '<span class="v">💬 留言</span>'
+  const body = items.map((f) => {
+    let tr = [], files = [], meta = {}
+    try { tr = JSON.parse(f.transcript || "[]") } catch {}
+    try { files = JSON.parse(f.files || "[]") } catch {}
+    try { meta = JSON.parse(f.meta || "{}") } catch {}
+    const msgs = tr.map((m) => {
+      const role = m && m.role === "user" ? "user" : "assistant"
+      const parts = []
+      if (m && m.text) parts.push(`<div class="txt">${esc(m.text)}</div>`)
+      if (m && Array.isArray(m.skills) && m.skills.length)
+        parts.push(`<div class="skills">技能：${m.skills.map(esc).join("、")}</div>`)
+      return `<div class="msg ${role}"><div class="who">${role === "user" ? "用户" : "助手"}${m && m.ts ? " · " + esc(when(m.ts)) : ""}</div>${parts.join("")}</div>`
+    }).join("")
+    return `<section class="fb">
+  <h2>#${f.id} ${esc(f.title || "(未命名会话)")} ${voteTag(f.vote)}</h2>
+  <div class="meta">${esc(f.username)} · ${esc(when(f.created_at))} · ${f.msgs} 条消息 · ${f.status === "done" ? "已处理" : "待处理"}
+    ${meta.clientVersion ? " · 客户端 " + esc(meta.clientVersion) : ""}${meta.model ? " · 模型 " + esc(meta.model) : ""}</div>
+  ${f.comment ? `<div class="comment"><b>用户留言：</b>${esc(f.comment)}</div>` : ""}
+  ${files.length ? `<div class="files"><b>附带产出：</b>${files.map((x) => esc(x.name) + `（${Math.round((x.size || 0) / 1024)} KB）`).join("、")}
+    <div class="note">附件本体不在本文件里，请到后台下载。</div></div>` : ""}
+  <div class="chat">${msgs || '<div class="note">（这条反馈没有带对话记录）</div>'}</div>
+</section>`
+  }).join("\n")
+  return `<!doctype html><html lang="zh"><head><meta charset="utf-8">
+<title>用户反馈导出（${items.length} 条）</title>
+<style>
+ body{margin:0;padding:24px;background:#f6f8fb;color:#1f2937;font:14px/1.7 system-ui,"Microsoft YaHei",sans-serif}
+ h1{font-size:20px;margin:0 0 4px} .sub{color:#6b7280;font-size:12.5px;margin-bottom:20px}
+ .fb{background:#fff;border:1px solid #e5e7eb;border-radius:12px;padding:18px 20px;margin:0 auto 18px;max-width:900px}
+ .fb h2{font-size:16px;margin:0 0 6px} .meta{color:#6b7280;font-size:12.5px;margin-bottom:10px}
+ .v{font-size:12.5px;padding:2px 8px;border-radius:6px;background:#eef2ff;color:#3730a3;margin-left:6px}
+ .v.up{background:#ecfdf5;color:#065f46} .v.down{background:#fef2f2;color:#991b1b}
+ .comment{background:#fffbeb;border:1px solid #fde68a;border-radius:8px;padding:9px 12px;margin-bottom:10px}
+ .files{background:#f8fafc;border:1px solid #e5e7eb;border-radius:8px;padding:9px 12px;margin-bottom:10px;font-size:13px}
+ .note{color:#9ca3af;font-size:12px;margin-top:4px}
+ .chat{border-top:1px dashed #e5e7eb;padding-top:12px}
+ .msg{margin:0 0 12px;padding:9px 12px;border-radius:9px}
+ .msg.user{background:#eff6ff} .msg.assistant{background:#f9fafb;border:1px solid #f0f1f3}
+ .who{font-size:12px;color:#6b7280;margin-bottom:4px}
+ .txt{white-space:pre-wrap;word-break:break-word}
+ .skills{font-size:12px;color:#6b7280;margin-top:4px}
+</style></head><body>
+<h1>用户反馈导出</h1>
+<div class="sub">共 ${items.length} 条 · 导出于 ${esc(when(Date.now()))}（北京时间）</div>
+${body}
+</body></html>`
 }
 
 // ==== 客户端 API ==============================================================
@@ -409,7 +525,10 @@ async function handleClientApi(req, res, pathname) {
    *
    * 【为什么要单独一个口】档案（/api/me）只在登录、access key 续期（TTL 24h、提前 10 分钟续）
    * 或用户手点"刷新"时才会重取 —— 一条"今晚 10 点维护"的公告要等到明天才到用户眼前，
-   * 那这功能就白做了。这个口只读一行 meta，可以放心高频轮询。
+   * 那这功能就白做了。这个口只读一行库，可以放心高频轮询。
+   *
+   * 【digest 是给"未读红点"用的】客户端不该为了算未读数把半年的正文全拉下来。这里给一份
+   * 只有 id/级别/时间的清单（几十条也就 2KB），正文等用户点开公告面板时再走 /api/notices。
    *
    * requireFullScope:false —— 还没改初始口令的人也该看到维护通知，他们同样会受影响。
    */
@@ -418,7 +537,20 @@ async function handleClientApi(req, res, pathname) {
     if (!au.ok) return fail(res, au.status, au.code, au.message)
     const notice = DB.publicNotice(db)
     const cv = String(req.headers["x-client-version"] || "")
-    return json(res, 200, { ok: true, notice, needUpgrade: needsUpgrade(notice, cv), clientVersion: cv })
+    const digest = DB.publicNotices(db, NOTICE_KEEP_DAYS).map((n) => ({ id: n.id, level: n.level, createdAt: n.createdAt }))
+    return json(res, 200, { ok: true, notice, digest, keepDays: NOTICE_KEEP_DAYS, needUpgrade: needsUpgrade(notice, cv), clientVersion: cv })
+  }
+
+  /**
+   * 公告列表（近半年、没撤下的）。客户端点开「公告」面板时才拉，用来常驻可查 ——
+   * 老设计里横幅点掉就再也找不回来，用户第二天想确认"维护到底几点"只能去问管理员。
+   */
+  if (req.method === "GET" && pathname === "/api/notices") {
+    const au = authClient(req, { requireFullScope: false })
+    if (!au.ok) return fail(res, au.status, au.code, au.message)
+    const cv = String(req.headers["x-client-version"] || "")
+    const notices = DB.publicNotices(db, NOTICE_KEEP_DAYS).map((n) => ({ ...n, needUpgrade: needsUpgrade(n, cv) }))
+    return json(res, 200, { ok: true, notices, keepDays: NOTICE_KEEP_DAYS, clientVersion: cv })
   }
 
   /**
@@ -498,6 +630,101 @@ async function handleClientApi(req, res, pathname) {
     const stream = fs.createReadStream(packFile(version))
     stream.on("error", () => { try { res.destroy() } catch {} })
     return stream.pipe(res)
+  }
+
+  /**
+   * 界面包：最新版元数据。与技能包同一形状，少了 relevant —— 界面对所有人都一样。
+   */
+  if (req.method === "GET" && pathname === "/api/web/latest") {
+    const au = authClient(req)
+    if (!au.ok) return fail(res, au.status, au.code, au.message)
+    noteClient(au.user, req)   // 顺手记 X-Web-Version：后台要看"谁还停在旧版界面"
+    const p = latestWebPack()
+    if (!p) return json(res, 200, { ok: true, latest: null })
+    return json(res, 200, {
+      ok: true,
+      latest: {
+        version: p.version, sha256: p.sha256, size: p.size, changelog: p.changelog,
+        files: String(p.files || "").split(",").map((s) => s.trim()).filter(Boolean),
+        publishedAt: p.created_at,
+      },
+    })
+  }
+
+  /** 界面包：下载指定版本的 zip（只发 active 的——disabled 即"已撤下"）。 */
+  if (req.method === "GET" && pathname === "/api/web/pack") {
+    const au = authClient(req)
+    if (!au.ok) return fail(res, au.status, au.code, au.message)
+    const url = new URL(req.url, "http://x")
+    const version = String(url.searchParams.get("version") || "").trim()
+    if (!SkillPacks.VERSION_RE.test(version)) return fail(res, 400, "BAD_REQUEST", "版本号格式不对")
+    const p = DB.getWebPack(db, version)
+    if (!p || p.status !== "active") return fail(res, 404, "NOT_FOUND", "没有这个界面包版本（可能已被撤下）")
+    let stat
+    try { stat = fs.statSync(webPackFile(version)) } catch {
+      log(`[webpack] 元数据在库里、文件却不在盘上：${webPackFile(version)} —— 迁移/备份漏了 DATA_DIR/web-packs？`)
+      return fail(res, 500, "INTERNAL", "服务器上的包文件缺失，请联系管理员")
+    }
+    audit("webpack.download", { actor: au.user.username, ip, target: version })
+    res.writeHead(200, {
+      "content-type": "application/zip",
+      "content-length": stat.size,
+      "x-pack-sha256": p.sha256,
+      "cache-control": "no-store",
+    })
+    const stream = fs.createReadStream(webPackFile(version))
+    stream.on("error", () => { try { res.destroy() } catch {} })
+    return stream.pipe(res)
+  }
+
+  /**
+   * 提交反馈。body 是一个 zip（见上面的布局说明）。
+   *
+   * 【为什么不做频控之外的内容审查】反馈是用户主动交上来的材料，服务端只负责收好、别让它
+   * 撑爆磁盘：单次 32MB、单附件 8MB、附件名消毒、zip 层已有 zip-slip 防线。
+   */
+  if (req.method === "POST" && pathname === "/api/feedback") {
+    const au = authClient(req)
+    if (!au.ok) return fail(res, au.status, au.code, au.message)
+    let buf
+    try { buf = await readRawBody(req, FEEDBACK_MAX) }
+    catch (e) { return fail(res, e && e.tooLarge ? 413 : 400, "BODY_TOO_LARGE", `反馈包过大（上限 ${FEEDBACK_MAX / 1048576}MB）—— 少勾几个产出文件再试`) }
+    if (!buf.length) return fail(res, 400, "BAD_REQUEST", "空的反馈包")
+
+    let entries
+    try { entries = MiniZip.unzip(buf) } catch (e) { return fail(res, 400, "BAD_REQUEST", "反馈包解不开：" + e.message) }
+    const metaEntry = entries.find((e) => e.name === "feedback.json")
+    if (!metaEntry) return fail(res, 400, "BAD_REQUEST", "反馈包里没有 feedback.json")
+    let fb
+    try { fb = JSON.parse(metaEntry.data.toString("utf8").replace(/^﻿/, "")) } catch { return fail(res, 400, "BAD_REQUEST", "feedback.json 不是合法 JSON") }
+
+    const atts = entries.filter((e) => e.name.startsWith("files/") && e.name !== "files/")
+    for (const a of atts) {
+      if (a.data.length > FEEDBACK_FILE_MAX)
+        return fail(res, 413, "BODY_TOO_LARGE", `附件 ${safeAttachName(a.name)} 超过单个 ${FEEDBACK_FILE_MAX / 1048576}MB 上限`)
+    }
+    const transcript = Array.isArray(fb.transcript) ? fb.transcript : []
+    const row = DB.addFeedback(db, {
+      user_id: au.user.id, username: au.user.username,
+      session_id: fb.sessionId, title: fb.title,
+      vote: fb.vote, comment: fb.comment,
+      transcript: JSON.stringify(transcript), msgs: transcript.length,
+      files: JSON.stringify(atts.map((a) => ({ name: safeAttachName(a.name.slice(6)), size: a.data.length }))),
+      meta: JSON.stringify({ ...(fb.meta || {}), clientVersion: String(req.headers["x-client-version"] || "") }),
+    })
+    // 【先入库拿到 id 再落附件】反过来要先猜一个目录名，失败时还得回收；这样最差是
+    // "有记录没附件"，列表里看得见、点开报缺文件，比孤儿目录好查。
+    if (atts.length) {
+      const dir = path.join(FEEDBACK_DIR(), String(row.id))
+      try {
+        fs.mkdirSync(dir, { recursive: true })
+        for (const a of atts) fs.writeFileSync(path.join(dir, safeAttachName(a.name.slice(6))), a.data)
+      } catch (e) { log(`[feedback] 附件落盘失败 id=${row.id}：${e.message}`) }
+    }
+    noteClient(au.user, req)
+    audit("feedback.new", { actor: au.user.username, ip, target: String(row.id),
+      detail: `vote=${row.vote} msgs=${row.msgs} files=${atts.length} ${String(fb.title || "").slice(0, 60)}` })
+    return json(res, 200, { ok: true, id: row.id })
   }
 
   return fail(res, 404, "NOT_FOUND", "没有这个接口")
@@ -1192,27 +1419,243 @@ async function handleAdminApi(req, res, pathname) {
     return json(res, 200, { ok: true, current: (latestSkillPack() || {}).version || "" })
   }
 
+  // ---- 用户反馈 ----
+  // 用户把整段会话交上来（赞/踩 + 评论 + 可选产出文件），这里给管理员浏览、标记、导出。
+  if (req.method === "GET" && pathname === "/admin/api/feedback") {
+    const url = new URL(req.url, "http://x")
+    const id = Number(url.searchParams.get("id")) || 0
+    if (id) {
+      // 详情：这一条才带 transcript（列表页不带，见 db.listFeedback 的注释）
+      const f = DB.getFeedback(db, id)
+      if (!f) return json(res, 404, { ok: false, err: "没有这条反馈" })
+      let transcript = []
+      try { transcript = JSON.parse(f.transcript || "[]") } catch {}
+      return json(res, 200, { ok: true, item: { ...f, transcript, files: JSON.parse(f.files || "[]"), meta: JSON.parse(f.meta || "{}") } })
+    }
+    const r = DB.listFeedback(db, {
+      limit: Number(url.searchParams.get("limit")) || 50,
+      offset: Number(url.searchParams.get("offset")) || 0,
+      status: url.searchParams.get("status") || "",
+      vote: url.searchParams.get("vote") || "",
+      q: url.searchParams.get("q") || "",
+    })
+    return json(res, 200, {
+      ok: true, total: r.total, counts: r.counts,
+      rows: r.rows.map((x) => ({ ...x, files: JSON.parse(x.files || "[]"), meta: JSON.parse(x.meta || "{}") })),
+    })
+  }
+  if (req.method === "POST" && pathname === "/admin/api/feedback") {
+    const b = await readBody(req)
+    const id = Number(b.id) || 0
+    const f = id ? DB.getFeedback(db, id) : null
+    if (!f) return json(res, 404, { ok: false, err: "没有这条反馈" })
+    if (b.action === "delete") {
+      DB.deleteFeedback(db, id)
+      try { fs.rmSync(path.join(FEEDBACK_DIR(), String(id)), { recursive: true, force: true }) } catch {}
+      audit("feedback.delete", { actor: "admin", ip, target: String(id) })
+      return json(res, 200, { ok: true })
+    }
+    if (b.action !== "done" && b.action !== "reopen") return json(res, 400, { ok: false, err: "action 要是 done / reopen / delete" })
+    DB.setFeedbackStatus(db, id, b.action === "done" ? "done" : "new")
+    audit("feedback." + b.action, { actor: "admin", ip, target: String(id) })
+    return json(res, 200, { ok: true })
+  }
+  /** 附件下载。文件名只认库里记着的那几个，不接受任意路径。 */
+  if (req.method === "GET" && pathname === "/admin/api/feedback-file") {
+    const url = new URL(req.url, "http://x")
+    const id = Number(url.searchParams.get("id")) || 0
+    const name = String(url.searchParams.get("name") || "")
+    const f = id ? DB.getFeedback(db, id) : null
+    if (!f) return json(res, 404, { ok: false, err: "没有这条反馈" })
+    let files = []
+    try { files = JSON.parse(f.files || "[]") } catch {}
+    // 【比对库里的清单，不是拼路径后判存在】拼了再判就等于把 ../ 交给文件系统去解释
+    if (!files.some((x) => x.name === name)) return json(res, 404, { ok: false, err: "没有这个附件" })
+    const p = path.join(FEEDBACK_DIR(), String(id), name)
+    let stat
+    try { stat = fs.statSync(p) } catch { return json(res, 404, { ok: false, err: "附件文件在磁盘上不见了（迁移漏了 DATA_DIR/feedback？）" }) }
+    res.writeHead(200, {
+      "content-type": "application/octet-stream",
+      "content-length": stat.size,
+      "content-disposition": `attachment; filename*=UTF-8''${encodeURIComponent(name)}`,
+      "cache-control": "no-store",
+    })
+    const stream = fs.createReadStream(p)
+    stream.on("error", () => { try { res.destroy() } catch {} })
+    return stream.pipe(res)
+  }
+  /**
+   * 导出 HTML：单文件、自带样式、离线可看 —— 管理员要把某条反馈转给别人看（微信/邮件），
+   * 或者存档。导出的是【当时提交的那份对话】，与客户端上现在的会话无关。
+   */
+  if (req.method === "GET" && pathname === "/admin/api/feedback-export") {
+    const url = new URL(req.url, "http://x")
+    const ids = String(url.searchParams.get("id") || "").split(",").map((x) => Number(x)).filter(Boolean)
+    const items = ids.length
+      ? ids.map((i) => DB.getFeedback(db, i)).filter(Boolean)
+      : DB.listFeedback(db, { limit: 200, status: url.searchParams.get("status") || "", vote: url.searchParams.get("vote") || "" })
+        .rows.map((r) => DB.getFeedback(db, r.id))
+    if (!items.length) return json(res, 404, { ok: false, err: "没有可导出的反馈" })
+    const html = feedbackHtml(items)
+    audit("feedback.export", { actor: "admin", ip, target: ids.join(",").slice(0, 100) || "filtered", detail: `${items.length} 条` })
+    res.writeHead(200, {
+      "content-type": "text/html; charset=utf-8",
+      "content-disposition": `attachment; filename*=UTF-8''${encodeURIComponent(`反馈导出-${DB.dayOf()}.html`)}`,
+      "cache-control": "no-store",
+    })
+    return res.end(html)
+  }
+
+  // ---- 界面包（前端静态资源）----
+  // 改个文案 / 调个样式 / 修个按钮，本来要重新打包整个安装器再催所有人重装。这里发一个包，
+  // 客户端提示一下、点一次、刷新页面就换过去了；坏了在这一页把它撤下、客户端一键回退。
+  if (req.method === "GET" && pathname === "/admin/api/web-packs") {
+    const latest = latestWebPack()
+    const versions = db.prepare(`SELECT web_version AS v, COUNT(*) AS n FROM users
+                                 GROUP BY web_version ORDER BY n DESC`).all()
+    const cfg = SkillSrc.srcConfig(CFG)
+    return json(res, 200, {
+      ok: true,
+      packs: DB.listWebPacks(db).map((p) => ({
+        version: p.version, sha256: p.sha256, size: p.size, changelog: p.changelog,
+        files: String(p.files || "").split(",").filter(Boolean),
+        commitSha: p.commit_sha || "", status: p.status, createdAt: p.created_at,
+        fileOk: fs.existsSync(webPackFile(p.version)),
+      })),
+      current: latest ? latest.version : "",
+      versions,
+      // 「从仓库发布」用得上：有没有配远端仓、本地检出在哪
+      remote: { configured: !!cfg.url, url: SkillSrc.maskUrl(cfg.url), ref: cfg.ref,
+        cloneReady: fs.existsSync(path.join(cfg.cloneDir, ".git")) },
+      localRoot: cfg.localRoot,
+      lastPublished: latest ? { version: latest.version, commitSha: latest.commit_sha || "" } : null,
+    })
+  }
+
+  if (req.method === "POST" && pathname === "/admin/api/web-pack-upload") {
+    const buf = await readRawBody(req)
+    if (!buf.length) return json(res, 400, { ok: false, err: "请求体是空的——请选择要上传的界面包 zip" })
+    const r = WebPacks.parseWebPack(buf)
+    if (!r.ok) return json(res, 400, { ok: false, err: r.err })
+    if (DB.getWebPack(db, r.pack.version))
+      return json(res, 400, { ok: false, err: `版本 ${r.pack.version} 已发布过——同一版本号不许重发，请换个版本号` })
+    const pub = publishWebPack(buf, r, { ip, via: "upload" })
+    if (!pub.ok) return json(res, 400, { ok: false, err: pub.err })
+    return json(res, 200, { ok: true, version: r.pack.version, sha256: pub.sha, size: buf.length,
+      files: r.names, warnings: r.warnings })
+  }
+
+  // 从仓库发布：check 预览（差异 / 下个版本号 / 会打进包的文件），publish 出包并发布。
+  // 与技能包共用 skillsrc 的检出与版本排号，只是收的文件不同。
+  if (req.method === "POST" && pathname === "/admin/api/web-src") {
+    const b = await readBody(req)
+    const source = b.source === "local" ? "local" : "remote"
+    const latest = latestWebPack()
+    const lastSha = (latest && latest.commit_sha) || ""
+    let src
+    try { src = await SkillSrc.resolveSource(CFG, source) } catch (e) { return json(res, 400, { ok: false, err: e.message }) }
+    const webDir = path.join(src.root, "web")
+    if (!fs.existsSync(webDir)) return json(res, 400, { ok: false, err: `源树里没有 web/ 目录：${webDir}` })
+    const version = SkillSrc.nextVersion(latest && latest.version, (v) => !!DB.getWebPack(db, v))
+
+    if (b.action === "check") {
+      let c
+      try { c = WebPacks.collectWebEntries(webDir) } catch (e) { return json(res, 400, { ok: false, err: `源树读不了：${e.message}` }) }
+      const warnings = [...c.warnings]
+      if (!src.sha) warnings.push("该检出不是 git 仓库：包里不记 commit，也算不出与上次发布的差异")
+      else if (lastSha && src.sha === lastSha) warnings.push("源 commit 与上次发布的相同：内容多半没变，确认要再发一版吗")
+      return json(res, 200, {
+        ok: true, source, sha: src.sha, shortSha: src.sha.slice(0, 10),
+        upToDate: !!(src.sha && lastSha && src.sha === lastSha),
+        nextVersion: version, files: c.entries.map((e) => e.name), sizeBytes: c.totalBytes, warnings,
+      })
+    }
+    if (b.action !== "publish") return json(res, 400, { ok: false, err: "action 要是 check / publish" })
+
+    // 与技能包同一道闸：预览之后源被人推动过 → 打回重看，别把没看过的改动发出去
+    if (src.sha && String(b.sha || "") !== src.sha)
+      return json(res, 409, { ok: false, staleSha: true,
+        err: `源已更新（现在是 ${src.sha.slice(0, 10)}，你预览的是 ${String(b.sha || "").slice(0, 10) || "?"}）——请重新「检查更新」看过差异再发布` })
+    const changelog = String(b.changelog || "").trim().slice(0, 2000) ||
+      `同步自${source === "remote" ? "仓库" : "本地检出"} ${src.sha ? src.sha.slice(0, 10) : "（非 git 检出）"}`
+    let built
+    try { built = WebPacks.buildWebPack({ webDir, version, changelog }) }
+    catch (e) { return json(res, 500, { ok: false, err: `出包失败：${e.message}` }) }
+    if (!built.ok) return json(res, 400, { ok: false, err: built.err })
+    const parsed = WebPacks.parseWebPack(built.buf)
+    if (!parsed.ok) return json(res, 500, { ok: false, err: `出的包没过发布校验（属于 bug，请报告）：${parsed.err}` })
+    const pub = publishWebPack(built.buf, parsed, { commitSha: src.sha, ip, via: `sync:${source}` })
+    if (!pub.ok) return json(res, 400, { ok: false, err: pub.err })
+    return json(res, 200, { ok: true, version, sha256: pub.sha, size: built.buf.length, commitSha: src.sha,
+      files: parsed.names, warnings: [...built.warnings, ...parsed.warnings] })
+  }
+
+  if (req.method === "POST" && pathname === "/admin/api/web-pack") {
+    const b = await readBody(req)
+    const version = String(b.version || "").trim()
+    const p = DB.getWebPack(db, version)
+    if (!p) return json(res, 404, { ok: false, err: "没有这个版本" })
+    if (b.action === "delete") {
+      DB.deleteWebPack(db, version)
+      try { fs.unlinkSync(webPackFile(version)) } catch {}
+      audit("webpack.delete", { actor: "admin", ip, target: version })
+      return json(res, 200, { ok: true })
+    }
+    const st = b.action === "enable" ? "active" : b.action === "disable" ? "disabled" : null
+    if (!st) return json(res, 400, { ok: false, err: "action 要是 enable / disable / delete 之一" })
+    DB.setWebPackStatus(db, version, st)
+    audit("webpack." + b.action, { actor: "admin", ip, target: version })
+    return json(res, 200, { ok: true, current: (latestWebPack() || {}).version || "" })
+  }
+
   // ---- 公告 ----
-  // 站长通知全员此前只能一个个发微信。这里维护的一条公告随 /api/me 与 /api/notice 下发。
+  // 站长通知全员此前只能一个个发微信。一条公告一行，客户端拿到近半年的列表常驻可查；
+  // 撤下只是标记（不删行），管理员仍要看得到自己发过什么。
   if (req.method === "GET" && pathname === "/admin/api/notice") {
     // 版本分布顺带给出来：要不要卡最低版本，得先知道现在大家都在用什么版本
     const versions = db.prepare(`SELECT client_version AS v, COUNT(*) AS n FROM users
                                  WHERE client_version <> '' GROUP BY client_version ORDER BY n DESC`).all()
-    return json(res, 200, { ok: true, notice: DB.getNotice(db), versions, levels: DB.NOTICE_LEVELS })
+    return json(res, 200, {
+      ok: true, notices: DB.listNotices(db, { all: true }), versions,
+      levels: DB.NOTICE_LEVELS, keepDays: NOTICE_KEEP_DAYS,
+    })
   }
   if (req.method === "POST" && pathname === "/admin/api/notice") {
     const b = await readBody(req)
+    const id = Number(b.id) || 0
+    const act = String(b.action || "publish")
+
+    // 撤下 / 恢复 / 删除：都要指名 id
+    if (act === "withdraw" || act === "restore" || act === "remove") {
+      const cur = id ? DB.getNoticeById(db, id) : null
+      if (!cur) return json(res, 400, { ok: false, err: "没有这条公告（可能已被删除或超过保留期）" })
+      if (act === "remove") DB.deleteNotice(db, id)
+      else DB.setNoticeStatus(db, id, act === "withdraw" ? "withdrawn" : "active")
+      audit("notice." + act, { actor: "admin", ip, target: String(id), detail: cur.text.slice(0, 120) })
+      return json(res, 200, { ok: true, notices: DB.listNotices(db, { all: true }) })
+    }
+
     if (b.minClientVersion && !/^\d+(\.\d+)*$/.test(String(b.minClientVersion).trim()))
       return json(res, 400, { ok: false, err: "最低客户端版本要写成点分数字，如 1.2.0（留空 = 不检查）" })
     // 下载地址只允许 http(s)：这串会被客户端渲染成一个链接，别让它变成 javascript: 之类的东西
     if (b.downloadUrl && !/^https?:\/\//i.test(String(b.downloadUrl).trim()))
       return json(res, 400, { ok: false, err: "下载地址要以 http:// 或 https:// 开头（留空 = 不给链接）" })
-    if (b.enabled && !String(b.text || "").trim() && !String(b.minClientVersion || "").trim())
+    if (!String(b.text || "").trim() && !String(b.minClientVersion || "").trim())
       return json(res, 400, { ok: false, err: "公告内容与最低版本至少填一个，否则发出去用户什么也看不到" })
-    const n = DB.setNotice(db, b)
-    audit("notice.set", { actor: "admin", ip, target: n.enabled ? "on" : "off",
-      detail: `id=${n.id} level=${n.level} min=${n.minClientVersion || "-"} ${n.text.slice(0, 120)}` })
-    return json(res, 200, { ok: true, notice: n })
+
+    // 【改已发的那条 vs 发新的一条】改错别字用 edit（id 不变 = 已读过的人不会被重新标未读）；
+    // 有新消息就发新的一条。两者混用会让"未读"这个概念失去意义，所以由调用方明确指定。
+    if (act === "edit") {
+      if (!DB.getNoticeById(db, id)) return json(res, 400, { ok: false, err: "没有这条公告（可能已被删除或超过保留期）" })
+      const n = DB.updateNotice(db, id, b)
+      audit("notice.edit", { actor: "admin", ip, target: String(id), detail: `level=${n.level} ${n.text.slice(0, 120)}` })
+      return json(res, 200, { ok: true, notice: n, notices: DB.listNotices(db, { all: true }) })
+    }
+
+    const n = DB.publishNotice(db, b)
+    audit("notice.publish", { actor: "admin", ip, target: String(n.id),
+      detail: `level=${n.level} min=${n.minClientVersion || "-"} ${n.text.slice(0, 120)}` })
+    return json(res, 200, { ok: true, notice: n, notices: DB.listNotices(db, { all: true }) })
   }
 
   // ---- 并发与排队 ----
@@ -1398,8 +1841,12 @@ const AUDIT_KEEP_DAYS = envNum("AUDIT_KEEP_DAYS", 180, { min: 7 })
 const sweep = setInterval(() => {
   try { DB.purgeExpiredRefresh(db) } catch {}
   try { const n = DB.purgeAudit(db, AUDIT_KEEP_DAYS); if (n) log(`[sweep] 清理 ${n} 条超过 ${AUDIT_KEEP_DAYS} 天的审计`) } catch {}
+  try { const n = DB.purgeNotices(db, NOTICE_KEEP_DAYS); if (n) log(`[sweep] 清理 ${n} 条超过 ${NOTICE_KEEP_DAYS} 天的公告`) } catch {}
 }, 24 * 3600 * 1000)
 sweep.unref?.()
+// 【启动时也扫一次】进程通常几周才重启一次，但反过来说：一台停了很久又开起来的机器，
+// 不能等 24 小时后才把过期公告清掉（客户端拉列表按天数过滤，看不到；后台却列着一堆）。
+try { const n = DB.purgeNotices(db, NOTICE_KEEP_DAYS); if (n) log(`[sweep] 启动清理 ${n} 条超过 ${NOTICE_KEEP_DAYS} 天的公告`) } catch {}
 
 // 直接执行才起服务；被 import（测试）时只导出
 if (process.argv[1] && path.resolve(process.argv[1]) === path.resolve(fileURLToPath(import.meta.url))) start()

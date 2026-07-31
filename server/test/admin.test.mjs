@@ -257,18 +257,17 @@ test("审计：保留策略会清掉过老的行", async () => {
 
 // ---- 公告 --------------------------------------------------------------------
 
-test("公告：发布 → 随 /api/me 与 /api/notice 下发；停发后什么都不下发", async (t) => {
+test("公告：发布 → 随 /api/me、/api/notice、/api/notices 下发；撤下后客户端不再看到", async (t) => {
   const { app, admin } = await setup(); t.after(() => app.close())
   const empty = await admin("/admin/api/notice")
-  assert.equal(empty.json.notice.enabled, false)
-  assert.equal(empty.json.notice.id, 0)
+  assert.deepEqual(empty.json.notices, [])
 
-  const set = await admin("/admin/api/notice", { method: "POST", body: {
-    enabled: true, text: "今晚 22:00 维护", level: "warn" } })
+  const set = await admin("/admin/api/notice", { method: "POST", body: { text: "今晚 22:00 维护", level: "warn" } })
   assert.equal(set.status, 200)
   assert.equal(set.json.notice.id, 1)
+  assert.equal(set.json.notice.status, "active")
 
-  // 客户端侧：/api/notice 与 /api/me 都要带上
+  // 客户端侧：/api/notice（最新一条 + 摘要）与 /api/me 都要带上
   const add = await admin("/admin/api/user-add", { method: "POST", body: { username: "u1", displayName: "张三" } })
   const li = await app.req("/api/auth/login", { method: "POST", body: { username: "u1", password: add.json.initialPassword } })
   const chg = await app.req("/api/auth/password", { method: "POST", headers: { authorization: "Bearer " + li.json.access },
@@ -280,26 +279,92 @@ test("公告：发布 → 随 /api/me 与 /api/notice 下发；停发后什么�
   assert.equal(n.json.notice.level, "warn")
   assert.equal(n.json.needUpgrade, false, "没设最低版本就不该催升级")
   assert.equal(chg.json.profile.notice.text, "今晚 22:00 维护")
+  // digest 只给 id/级别/时间：未读红点要的就这些，正文不必每 5 分钟搬一遍
+  assert.deepEqual(Object.keys(n.json.digest[0]).sort(), ["createdAt", "id", "level"])
+  assert.equal(n.json.keepDays, 180)
 
-  const off = await admin("/admin/api/notice", { method: "POST", body: { enabled: false } })
-  assert.equal(off.json.notice.enabled, false)
+  // 列表（面板里那份，带正文）
+  const list = await app.req("/api/notices", { headers: tok })
+  assert.equal(list.json.notices.length, 1)
+  assert.equal(list.json.notices[0].text, "今晚 22:00 维护")
+
+  const off = await admin("/admin/api/notice", { method: "POST", body: { action: "withdraw", id: 1 } })
+  assert.equal(off.status, 200)
   assert.equal((await app.req("/api/notice", { headers: tok })).json.notice, null)
+  assert.deepEqual((await app.req("/api/notices", { headers: tok })).json.notices, [])
+  assert.equal(off.json.notices[0].status, "withdrawn", "后台仍要看得到自己发过什么")
 })
 
-test("公告：只有用户看得见的东西变了才 ++id（否则每次保存都把所有人重新打扰一遍）", async (t) => {
+test("公告：发多条留历史（这就是「点掉就再也找不回来」的解法）；改错别字不换 id", async (t) => {
   const { app, admin } = await setup(); t.after(() => app.close())
-  const a = await admin("/admin/api/notice", { method: "POST", body: { enabled: true, text: "hi", level: "info" } })
+  const a = await admin("/admin/api/notice", { method: "POST", body: { text: "第一条", level: "info" } })
+  const b = await admin("/admin/api/notice", { method: "POST", body: { text: "第二条", level: "urgent" } })
   assert.equal(a.json.notice.id, 1)
-  // 一字未改地再存一次
-  const b = await admin("/admin/api/notice", { method: "POST", body: { enabled: true, text: "hi", level: "info" } })
-  assert.equal(b.json.notice.id, 1, "内容没变就不该 ++")
-  assert.ok(b.json.notice.updatedAt >= a.json.notice.updatedAt)
-  // 改了正文
-  const c = await admin("/admin/api/notice", { method: "POST", body: { enabled: true, text: "hi2", level: "info" } })
-  assert.equal(c.json.notice.id, 2)
-  // 只改级别也算变
-  const d = await admin("/admin/api/notice", { method: "POST", body: { enabled: true, text: "hi2", level: "urgent" } })
-  assert.equal(d.json.notice.id, 3)
+  assert.equal(b.json.notice.id, 2)
+
+  const add = await admin("/admin/api/user-add", { method: "POST", body: { username: "u1", displayName: "张三" } })
+  const li = await app.req("/api/auth/login", { method: "POST", body: { username: "u1", password: add.json.initialPassword } })
+  const chg = await app.req("/api/auth/password", { method: "POST", headers: { authorization: "Bearer " + li.json.access },
+    body: { oldPassword: add.json.initialPassword, newPassword: "Aa1!aaaa9" } })
+  const tok = { authorization: "Bearer " + chg.json.access }
+
+  const list = await app.req("/api/notices", { headers: tok })
+  assert.deepEqual(list.json.notices.map((x) => x.text), ["第二条", "第一条"], "新的在前")
+  assert.equal((await app.req("/api/notice", { headers: tok })).json.notice.text, "第二条", "老客户端只认最新一条")
+
+  // 改错别字：id 不变 —— 客户端的"已读到哪儿"是按 id 记的，换 id = 所有人重新未读一遍
+  const ed = await admin("/admin/api/notice", { method: "POST", body: { action: "edit", id: 1, text: "第一条（改）", level: "info" } })
+  assert.equal(ed.json.notice.id, 1)
+  assert.equal(ed.json.notice.text, "第一条（改）")
+  assert.equal((await app.req("/api/notices", { headers: tok })).json.notices.find((x) => x.id === 1).text, "第一条（改）")
+
+  // 删除是真删；撤下只是标记（上一条用例已验）
+  const del = await admin("/admin/api/notice", { method: "POST", body: { action: "remove", id: 1 } })
+  assert.deepEqual(del.json.notices.map((x) => x.id), [2])
+  assert.equal((await admin("/admin/api/notice", { method: "POST", body: { action: "remove", id: 999 } })).status, 400)
+})
+
+test("公告：超过保留期的自动清掉，客户端与后台都不再看到", async (t) => {
+  const { app, admin } = await setup(); t.after(() => app.close())
+  await admin("/admin/api/notice", { method: "POST", body: { text: "半年前那条" } })
+  await admin("/admin/api/notice", { method: "POST", body: { text: "昨天那条" } })
+  app.db.prepare("UPDATE notices SET created_at=? WHERE id=1").run(Date.now() - 200 * 86400_000)
+  // 列表按天数过滤（清理是每天一次的后台任务，两者口径必须一致，否则会出现
+  // "后台列着、客户端翻不到"）
+  assert.deepEqual(DB.publicNotices(app.db).map((x) => x.text), ["昨天那条"])
+  assert.equal(DB.purgeNotices(app.db), 1)
+  assert.deepEqual((await admin("/admin/api/notice")).json.notices.map((x) => x.text), ["昨天那条"])
+})
+
+test("公告：老库里 meta 那一条要搬进表，且只搬一次（升级当天挂着的公告不能凭空消失）", async (t) => {
+  const { app } = await setup(); t.after(() => app.close())
+  const db = app.db
+  db.prepare("DELETE FROM notices").run()
+  db.prepare("DELETE FROM meta WHERE k='notice_migrated'").run()
+  const when = Date.now() - 3 * 86400_000
+  db.prepare("INSERT INTO meta(k,v) VALUES('notice',?) ON CONFLICT(k) DO UPDATE SET v=excluded.v")
+    .run(JSON.stringify({ enabled: true, text: "老公告", level: "warn", minClientVersion: "1.2.0", downloadUrl: "", id: 7, updatedAt: when }))
+
+  const moved = DB.migrateLegacyNotice(db)
+  assert.equal(moved.text, "老公告")
+  // 【id 必须越过老 id】老客户端判"要不要弹"用的是 已读id >= notice.id；新公告 id 低于
+  // 老游标就会被静默吞掉 —— 管理员以为发出去了，老用户永远看不到
+  assert.ok(moved.id > 7, "搬过来的那条 id 要大于老 meta 里的 id=7，实际 " + moved.id)
+  assert.equal(moved.level, "warn")
+  assert.equal(moved.minClientVersion, "1.2.0")
+  assert.equal(moved.createdAt, when, "时间要用老记录的，否则升级当天所有老公告都变成「刚刚发布」")
+  assert.equal(DB.migrateLegacyNotice(db), null, "幂等：再跑一次不该复制一份")
+  assert.equal(DB.listNotices(db, { all: true }).length, 1)
+  assert.ok(DB.publishNotice(db, { text: "升级后新发" }).id > 7, "升级后新发的也要越过老游标")
+
+  // 停发状态的那条不搬（它本来就不该出现在用户眼前）
+  db.prepare("DELETE FROM notices").run()
+  db.prepare("DELETE FROM meta WHERE k='notice_migrated'").run()
+  db.prepare("UPDATE meta SET v=? WHERE k='notice'").run(JSON.stringify({ enabled: false, text: "停发的", id: 12, updatedAt: when }))
+  assert.equal(DB.migrateLegacyNotice(db), null)
+  assert.equal(DB.listNotices(db, { all: true }).length, 0)
+  // 停发的那条不搬内容，但用户照样点过它 —— id 序列同样要抬过去
+  assert.ok(DB.publishNotice(db, { text: "之后新发的" }).id > 12)
 })
 
 test("公告：最低客户端版本按 X-Client-Version 判，认不出版本的构建一律不催", async (t) => {
@@ -333,9 +398,16 @@ test("公告：非法的最低版本与下载地址被拒（下载地址会被�
     assert.match(r.json.err, /http/)
   }
   // 内容与最低版本都空 = 发出去用户什么也看不到
-  const blank = await admin("/admin/api/notice", { method: "POST", body: { enabled: true, text: "   " } })
+  const blank = await admin("/admin/api/notice", { method: "POST", body: { text: "   " } })
   assert.equal(blank.status, 400)
-  assert.equal(DB.getNotice(app.db).enabled, false, "被拒的请求不该留下任何痕迹")
+  assert.equal(DB.listNotices(app.db, { all: true }).length, 0, "被拒的请求不该留下任何痕迹")
+})
+
+test("公告：/api/notices 也要凭 access key（未登录看不到平台在发什么）", async (t) => {
+  const { app, admin } = await setup(); t.after(() => app.close())
+  await admin("/admin/api/notice", { method: "POST", body: { text: "维护中" } })
+  assert.equal((await app.req("/api/notices")).status, 401)
+  assert.equal((await app.req("/api/notices", { headers: { authorization: "Bearer bogus" } })).status, 401)
 })
 
 test("公告：/api/notice 要凭 access key，且还没改初始口令的人也看得到（维护通知对他们同样有效）", async (t) => {

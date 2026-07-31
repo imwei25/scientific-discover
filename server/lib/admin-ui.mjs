@@ -169,7 +169,7 @@ function render(){
   $('#sub').textContent='共 '+S.total+' 个账号';
   $('#app').innerHTML=
     '<div class="tabs">'+
-      tabBtn('users','用户')+tabBtn('board','看板')+tabBtn('bill','对账')+tabBtn('tiers','档位')+tabBtn('prov','模型供应商')+tabBtn('chan','上游通道')+tabBtn('packs','技能包')+tabBtn('audit','审计')+
+      tabBtn('users','用户')+tabBtn('board','看板')+tabBtn('bill','对账')+tabBtn('tiers','档位')+tabBtn('prov','模型供应商')+tabBtn('chan','上游通道')+tabBtn('packs','技能包')+tabBtn('webpacks','界面包')+tabBtn('feedback','用户反馈')+tabBtn('audit','审计')+
     '</div><div id="pane"></div>';
   Array.prototype.forEach.call(document.querySelectorAll('.tabs button'),function(b){
     b.onclick=function(){S.tab=b.dataset.k;
@@ -178,6 +178,8 @@ function render(){
       else if(S.tab==='prov')loadProviders();
       else if(S.tab==='bill')loadBill();
       else if(S.tab==='packs')loadPacks();
+      else if(S.tab==='webpacks')loadWebPacks();
+      else if(S.tab==='feedback')loadFeedback();
       else render()}});
   if(S.tab==='users')paneUsers();
   else if(S.tab==='board')paneBoard();
@@ -709,17 +711,42 @@ function renderLimits(d){
 
 // ---------- 公告 ----------
 // 通知全员（今晚维护 / 某模型下线 / 新版客户端已发）此前只能一个个发微信。
-// 公告随 /api/me 下发，客户端另有 /api/notice 轻量轮询（档案 24h 才续一次，维护通知等不了）。
+//
+// 【2026-07-31 改成"一条一行 + 历史"】老设计全站只有当前那一条：客户端点掉就再也找不回来，
+// 管理员自己也查不到发过什么。现在发一条是新增一行，客户端在「公告」面板里能往回翻半年；
+// 撤下只是标记（这一页仍列着，标灰），删除才是真删。
+// 客户端拿列表走 /api/notices，未读红点走 /api/notice 的 digest（只有 id/级别/时间）。
+var NT_EDIT = 0;   // 正在改哪一条（0 = 在写新的）
 function renderNotice(d){
   var box=$('#nt-box');if(!box)return;              // 用户可能已经切走了
-  var n=d.notice||{},vs=d.versions||[];
+  var list=d.notices||[],vs=d.versions||[],keep=d.keepDays||180;
+  var editing=NT_EDIT?list.filter(function(x){return x.id===NT_EDIT})[0]:null;
+  if(NT_EDIT&&!editing)NT_EDIT=0;                   // 那条被别处删了
+  var n=editing||{level:'info'};
   var lv=function(v,label,hint){return '<option value="'+v+'"'+(n.level===v?' selected':'')+'>'+label+' —— '+hint+'</option>'};
+  var lvTag=function(l){return l==='urgent'?'<span class="tag bad">紧急</span>':
+    l==='warn'?'<span class="tag warn">警告</span>':'<span class="tag">提示</span>'};
+
+  var rows=list.map(function(x){
+    var withdrawn=x.status!=='active';
+    return '<tr data-id="'+x.id+'"'+(withdrawn?' style="opacity:.55"':'')+'>'+
+      '<td style="white-space:nowrap">'+dt(x.createdAt)+
+        (x.updatedAt-x.createdAt>60000?'<div class="mut" style="font-size:12px">改于 '+dt(x.updatedAt)+'</div>':'')+'</td>'+
+      '<td>'+lvTag(x.level)+'</td>'+
+      '<td>'+esc(x.text||'')+
+        (x.minClientVersion?'<div class="mut" style="font-size:12.5px">要求 ≥ '+esc(x.minClientVersion)+
+          (x.downloadUrl?'（带下载链接）':'')+'</div>':'')+'</td>'+
+      '<td>'+(withdrawn?'<span class="tag">已撤下</span>':'<span class="tag ok">在架</span>')+'</td>'+
+      '<td class="row" style="gap:5px;flex-wrap:nowrap">'+
+        '<button class="btn sm" data-a="ed">编辑</button>'+
+        '<button class="btn sm" data-a="'+(withdrawn?'restore':'withdraw')+'">'+(withdrawn?'恢复':'撤下')+'</button>'+
+        '<button class="btn sm danger" data-a="rm">删除</button></td></tr>'}).join('');
+
   box.innerHTML='<div class="row"><h2 style="margin:0">公告</h2>'+
-    (n.enabled?'<span class="tag ok">发布中</span>':'<span class="tag">未发布</span>')+
-    '<span class="sp"></span><span class="mut" style="font-size:12.5px">'+
-      (n.updatedAt?'上次改动 '+dt(n.updatedAt)+' · 第 '+n.id+' 版':'还没发过公告')+'</span></div>'+
-    '<div class="hint" style="margin:8px 0 12px">发布后：已登录的客户端几分钟内在顶部看到一条横幅，'+
-    '用户点掉就不再弹 —— 但你<b>改了内容</b>会重新弹给所有人（只改开关不动内容不会重复打扰）。</div>'+
+    '<span class="mut" style="font-size:12.5px">共 '+list.length+' 条 · 保留 '+keep+' 天</span></div>'+
+    '<div class="hint" style="margin:8px 0 12px">发出去后：已登录的客户端几分钟内在顶栏「公告」按钮上看到未读红点，'+
+    '点开就是<b>近 '+keep+' 天的公告列表</b>——不会自己弹出来打断人，也不会像以前那样点一下就再也找不回来。'+
+    '内容写错了用「编辑」改（不会把已读的人重新标成未读）；有新消息就<b>发新的一条</b>。</div>'+
     '<div class="grid" style="grid-template-columns:104px 1fr">'+
     '<label>内容</label><textarea id="nt-t" rows="3" style="width:100%" placeholder="今晚 22:00–22:30 维护，期间可能无法生成。">'+esc(n.text||'')+'</textarea>'+
     '<label>级别</label><select id="nt-l">'+
@@ -732,26 +759,47 @@ function renderNotice(d){
     '<div class="hint" style="margin-top:6px">当前在用的客户端版本：'+
       (vs.length?vs.map(function(v){return '<span class="tag">'+esc(v.v)+' × '+v.n+'</span>'}).join(' ')
                 :'<span class="mut">还没有客户端报过版本</span>')+'</div>'+
-    '<div class="row" style="margin-top:14px"><button class="btn primary" id="nt-save">发布</button>'+
-    '<button class="btn" id="nt-off"'+(n.enabled?'':' disabled')+'>停止发布</button>'+
-    '<span class="sp"></span><button class="btn sm" id="nt-prev">预览</button></div>'+
-    '<div id="nt-pv" style="margin-top:12px"></div>';
+    '<div class="row" style="margin-top:14px">'+
+      '<button class="btn primary" id="nt-save">'+(editing?'保存修改（第 '+editing.id+' 条）':'发布新公告')+'</button>'+
+      (editing?'<button class="btn" id="nt-cancel">取消编辑</button>':'')+
+      '<span class="sp"></span><button class="btn sm" id="nt-prev">预览</button></div>'+
+    '<div id="nt-pv" style="margin-top:12px"></div>'+
+    '<h3 style="margin:18px 0 8px;font-size:15px">已发布的公告</h3>'+
+    '<table><thead><tr><th>时间</th><th>级别</th><th>内容</th><th>状态</th><th></th></tr></thead>'+
+    '<tbody>'+(rows||'<tr><td colspan="5" class="mut">还没发过公告</td></tr>')+'</tbody></table>'+
+    '<div class="hint" style="margin-top:8px">「撤下」= 客户端立刻不再显示，但这一页仍留着（你要能查到自己发过什么）；'+
+    '「删除」才是真删。超过 '+keep+' 天的行每天自动清理。</div>';
 
-  var body=function(en){return {enabled:en,text:$('#nt-t').value,level:$('#nt-l').value,
+  var body=function(){return {text:$('#nt-t').value,level:$('#nt-l').value,
     minClientVersion:$('#nt-v').value.trim(),downloadUrl:$('#nt-u').value.trim()}};
-  var save=function(en){
-    post('notice',body(en)).then(function(j){
+  var reload=function(){api('notice').then(function(d2){if(d2.ok)renderNotice(d2)})};
+  $('#nt-save').onclick=function(e){e.preventDefault();
+    var b=body();b.action=NT_EDIT?'edit':'publish';if(NT_EDIT)b.id=NT_EDIT;
+    post('notice',b).then(function(j){
       if(!j.ok)return toast(j.err||'保存失败',false);
-      toast(en?'公告已发布（客户端几分钟内看到）':'已停止发布',true);
-      api('notice').then(function(d2){if(d2.ok)renderNotice(d2)})})};
-  $('#nt-save').onclick=function(e){e.preventDefault();save(true)};
-  $('#nt-off').onclick=function(e){e.preventDefault();save(false)};
+      toast(NT_EDIT?'已保存修改（不会重新打扰已读的人）':'公告已发布（客户端几分钟内看到红点）',true);
+      NT_EDIT=0;reload()})};
+  if($('#nt-cancel'))$('#nt-cancel').onclick=function(e){e.preventDefault();NT_EDIT=0;reload()};
   $('#nt-prev').onclick=function(e){e.preventDefault();
-    var b=body(true),cls=b.level==='urgent'?'err':b.level==='warn'?'err':'ok';
+    var b=body(),cls=b.level==='info'?'ok':'err';
     $('#nt-pv').innerHTML='<div class="msg '+cls+'" style="position:static;max-width:none;display:block">'+
       (b.level==='urgent'?'🔴 ':b.level==='warn'?'🟡 ':'🔵 ')+esc(b.text||'（没有正文）')+
       (b.minClientVersion?'<br><b>请升级到 '+esc(b.minClientVersion)+' 或更高版本</b>'+
         (b.downloadUrl?'（公告里会带一个下载链接）':''):'')+'</div>'};
+
+  Array.prototype.forEach.call(box.querySelectorAll('tbody button'),function(btn){
+    btn.onclick=function(e){e.preventDefault();
+      var id=Number(btn.closest('tr').dataset.id),a=btn.dataset.a;
+      if(a==='ed'){NT_EDIT=id;renderNotice(d);
+        // 【重画后再滚回表单】编辑框在页面上半部分，长列表下点「编辑」不滚就像什么都没发生
+        var t=$('#nt-t');if(t){t.scrollIntoView({block:'center'});t.focus()}
+        return}
+      if(a==='rm'&&!confirm('删除这条公告？删了就找不回来了（只是不想让客户端看到的话，用「撤下」）。'))return;
+      post('notice',{action:a==='rm'?'remove':a,id:id}).then(function(j){
+        if(!j.ok)return toast(j.err||'操作失败',false);
+        toast(a==='rm'?'已删除':a==='withdraw'?'已撤下（客户端几分钟内不再显示）':'已恢复',true);
+        if(a==='rm'&&NT_EDIT===id)NT_EDIT=0;
+        reload()})}});
 }
 
 // ---------- 对账 ----------
@@ -1357,6 +1405,178 @@ function loadPacks(){
         post('skill-pack',{version:v,action:act}).then(function(r){
           if(r.ok){toast('已'+(act==='delete'?'删除':act==='disable'?'撤下':'恢复')+' '+v,true);loadPacks()}
           else toast(r.err||'操作失败',false)})}});
+  })
+}
+
+// ---------- 界面包 ----------
+// 改个文案 / 调个样式 / 修个按钮，原先要重新打包整个安装器再催所有人重装。这里发一个包，
+// 客户端提示一下、点一次、刷新页面就换过去了 —— 不重启后台、不打断正在跑的任务。
+//
+// 【能发什么】只有 web/ 下的静态资源（html/css/js/图片/字体）。**.mjs 发不了**：那是本机
+// 网关的服务端代码，换它要重启网关、坏了客户端直接起不来，只能走重新打包安装器。
+function loadWebPacks(){
+  render();
+  $('#pane').innerHTML='<section><h2>界面包</h2><p class="mut">加载中…</p></section>';
+  api('web-packs').then(function(j){
+    if(!j.ok){if(!j.unauth)$('#pane').innerHTML='<section><div class="msg err" style="display:block">'+esc(j.err||'加载失败')+'</div></section>';return}
+    var rows=(j.packs||[]).map(function(p){
+      var tag=p.version===j.current?'<span class="tag" style="background:var(--acc);color:#fff">当前最新</span>'
+        :p.status!=='active'?'<span class="tag">已撤下</span>':'';
+      return '<tr'+(p.status!=='active'?' style="opacity:.55"':'')+'>'+
+        '<td><b>'+esc(p.version)+'</b> '+tag+(p.fileOk?'':' <span class="tag" style="color:var(--bad)">文件缺失</span>')+'</td>'+
+        '<td class="mut" style="white-space:nowrap">'+dt(p.createdAt)+'</td>'+
+        '<td>'+fmtSize(p.size)+'</td>'+
+        '<td class="mut" style="font-size:12.5px;max-width:320px">'+esc(p.changelog||'')+
+          (p.files.length?'<div style="font-size:12px;margin-top:3px">'+esc(p.files.join('、'))+'</div>':'')+'</td>'+
+        '<td style="white-space:nowrap">'+
+          (p.status==='active'
+            ?'<button class="btn sm" data-wact="disable" data-v="'+esc(p.version)+'">撤下</button>'
+            :'<button class="btn sm" data-wact="enable" data-v="'+esc(p.version)+'">恢复</button>')+
+          ' <button class="btn sm danger" data-wact="delete" data-v="'+esc(p.version)+'">删除</button></td></tr>'}).join('');
+    var vers=(j.versions||[]).map(function(v){
+      return '<span class="tag">'+esc(v.v||'出厂版')+' × '+v.n+'</span>'}).join(' ');
+    var srcLine=j.remote.configured
+      ?'远程：<code>'+esc(j.remote.url)+'</code> @ <code>'+esc(j.remote.ref)+'</code>'
+      :'<b>未配置 SKILL_REPO_URL</b>（/etc/sci-auth.env）——只能从服务器本地检出发布';
+    $('#pane').innerHTML='<section><h2>从仓库发布（推荐）</h2>'+
+      '<div class="hint" style="margin:0 0 10px">把 <code>web/</code> 下的<b>前端静态资源</b>打成一个版本包发给客户端：'+
+      '改文案、调样式、修按钮这类小更新<b>不用再重打安装器</b>。客户端提示「更新并刷新」，点一次就换过去了——'+
+      '不重启后台、不打断正在跑的任务；出问题在下面「撤下」，客户端可一键回退（本地留最近 5 版，出厂版永不清）。<br>'+
+      '<b>发不了的东西</b>：<code>web/*.mjs</code>（本机网关代码）、Python/pandoc 等依赖、桌面壳本身 —— 那些仍要重新打包安装器。<br>'+srcLine+
+      (j.lastPublished?'　·　上次发布：<code>'+esc(j.lastPublished.version)+'</code>'+(j.lastPublished.commitSha?' @ <code>'+esc(j.lastPublished.commitSha.slice(0,10))+'</code>':''):'')+'</div>'+
+      '<div class="row"><select id="wr-src" style="max-width:180px">'+
+        (j.remote.configured?'<option value="remote">远程同步（git fetch）</option>':'')+
+        '<option value="local">服务器本地检出</option></select>'+
+      '<button class="btn primary" id="wr-check">检查更新</button></div>'+
+      '<div id="wr-preview"></div></section>'+
+      '<section><h2>手动上传（兜底）</h2>'+
+      '<div class="hint" style="margin:0 0 10px">zip 里要有 <code>pack.json</code>（含点分数字 version）与 <code>web/…</code> 若干静态资源。'+
+      '不合规的条目（.mjs / .json / node_modules / 越界路径）一律整包拒收。</div>'+
+      '<div class="row"><input type="file" id="wk-file" accept=".zip">'+
+      '<button class="btn" id="wk-up">上传并发布</button></div></section>'+
+      '<section><h2>已发布版本'+(j.current?'（当前最新：'+esc(j.current)+'）':'（还没发布过）')+'</h2>'+
+      '<div class="hint" style="margin:0 0 10px">客户端界面版本分布：'+(vers||'<span class="mut">暂无数据（客户端升级后才会汇报）</span>')+'</div>'+
+      '<table><thead><tr><th>版本</th><th>发布时间</th><th>大小</th><th>说明 / 包含文件</th><th></th></tr></thead>'+
+      '<tbody>'+(rows||'<tr><td colspan="5" class="mut">暂无版本</td></tr>')+'</tbody></table></section>';
+
+    $('#wk-up').onclick=function(){
+      var f=$('#wk-file').files[0];
+      if(!f)return toast('先选择界面包 zip',false);
+      $('#wk-up').disabled=true;toast('上传中…（'+fmtSize(f.size)+'）',true);
+      api('web-pack-upload',{method:'POST',body:f}).then(function(r){
+        $('#wk-up').disabled=false;
+        if(!r.ok)return toast(r.err||'上传失败',false);
+        toast('已发布 '+r.version+'（'+r.files.length+' 个文件）',true);loadWebPacks()})};
+
+    function wrPublish(pv){
+      var btn=$('#wr-go');if(btn){btn.disabled=true;btn.textContent='发布中…'}
+      post('web-src',{action:'publish',source:pv.source,sha:pv.sha,
+        changelog:($('#wr-log')?$('#wr-log').value.trim():'')}).then(function(r){
+        if(r.ok){toast('已发布 '+r.version+'（'+r.files.length+' 个文件）',true);loadWebPacks();return}
+        if(r.staleSha){toast(r.err,false);wrCheck();return}
+        toast(r.err||'发布失败',false);if(btn){btn.disabled=false;btn.textContent='发布 '+pv.nextVersion}})}
+    function wrCheck(){
+      $('#wr-check').disabled=true;$('#wr-preview').innerHTML='<p class="mut">同步并比对中…（首次要克隆仓库，可能要一会儿）</p>';
+      post('web-src',{action:'check',source:$('#wr-src').value}).then(function(pv){
+        $('#wr-check').disabled=false;
+        if(!pv.ok){$('#wr-preview').innerHTML='<div class="msg err" style="display:block">'+esc(pv.err||'检查失败')+'</div>';return}
+        $('#wr-preview').innerHTML=
+          '<div class="hint" style="margin:10px 0 8px">源 <code>'+esc(pv.shortSha||'（非 git 检出）')+'</code> · '+
+            (pv.files||[]).length+' 个文件，'+fmtSize(pv.sizeBytes)+' · 将发布为 <b>'+esc(pv.nextVersion)+'</b></div>'+
+          ((pv.warnings||[]).length?'<div class="msg" style="display:block">'+pv.warnings.map(esc).join('<br>')+'</div>':'')+
+          '<div class="mut" style="font-size:12.5px;margin:8px 0">'+(pv.files||[]).map(esc).join('、')+'</div>'+
+          '<div class="row" style="margin-top:8px"><input id="wr-log" placeholder="更新说明（会显示在客户端的提示条上，如：闲置锁屏改成 24 小时）" style="flex:1">'+
+          '<button class="btn primary" id="wr-go">发布 '+esc(pv.nextVersion)+'</button></div>';
+        var go=$('#wr-go');if(go)go.onclick=function(){wrPublish(pv)}})}
+    $('#wr-check').onclick=wrCheck;
+    Array.prototype.forEach.call(document.querySelectorAll('#pane [data-wact]'),function(b){
+      b.onclick=function(){
+        var v=b.dataset.v,act=b.dataset.wact;
+        if(act==='delete'&&!confirm('删除版本 '+v+'？包文件一并删除，已装该版的客户端不受影响，但无法再从服务器重新下到它。'))return;
+        if(act==='disable'&&!confirm('撤下版本 '+v+'？客户端将不再提示更新到它；已更新的客户端可自行回退本地留存的旧版。'))return;
+        post('web-pack',{version:v,action:act}).then(function(r){
+          if(r.ok){toast('已'+(act==='delete'?'删除':act==='disable'?'撤下':'恢复')+' '+v,true);loadWebPacks()}
+          else toast(r.err||'操作失败',false)})}});
+  })
+}
+
+// ---------- 用户反馈 ----------
+// 用户把一次会话（完整对话 + 可选产出）连同赞/踩与说明交上来。这一页管浏览、标记已处理、
+// 下载附件、导出 HTML（单文件、离线可看，方便转给别人或存档）。
+var FB = { status: '', vote: '', q: '', open: 0 }
+function loadFeedback(){
+  render();
+  $('#pane').innerHTML='<section><h2>用户反馈</h2><p class="mut">加载中…</p></section>';
+  api('feedback?status='+encodeURIComponent(FB.status)+'&vote='+encodeURIComponent(FB.vote)+'&q='+encodeURIComponent(FB.q))
+    .then(function(j){
+      if(!j.ok){if(!j.unauth)$('#pane').innerHTML='<section><div class="msg err" style="display:block">'+esc(j.err||'加载失败')+'</div></section>';return}
+      paneFeedback(j)})
+}
+function voteTag(v){return v>0?'<span class="tag ok">👍</span>':v<0?'<span class="tag bad">👎</span>':'<span class="tag">💬</span>'}
+function paneFeedback(j){
+  var c=j.counts||{};
+  var rows=(j.rows||[]).map(function(f){
+    return '<tr data-id="'+f.id+'"'+(f.status==='done'?' style="opacity:.6"':'')+'>'+
+      '<td>'+voteTag(f.vote)+'</td>'+
+      '<td><b>'+esc(f.title||'(未命名会话)')+'</b>'+
+        '<div class="mut" style="font-size:12.5px">'+esc(f.comment||'（没有留言）').slice(0,120)+'</div></td>'+
+      '<td class="mut" style="white-space:nowrap">'+esc(f.username)+'<div style="font-size:12px">'+dt(f.created_at)+'</div></td>'+
+      '<td class="mut" style="font-size:12.5px;white-space:nowrap">'+f.msgs+' 条'+(f.files.length?'<br>'+f.files.length+' 个附件':'')+'</td>'+
+      '<td>'+(f.status==='done'?'<span class="tag">已处理</span>':'<span class="tag warn">待处理</span>')+'</td>'+
+      '<td style="white-space:nowrap">'+
+        '<button class="btn sm" data-fa="open">查看</button> '+
+        '<a class="btn sm" style="text-decoration:none" href="/admin/api/feedback-export?id='+f.id+'">导出</a> '+
+        '<button class="btn sm" data-fa="'+(f.status==='done'?'reopen':'done')+'">'+(f.status==='done'?'重开':'标记已处理')+'</button> '+
+        '<button class="btn sm danger" data-fa="delete">删除</button></td></tr>'}).join('');
+  var sel=function(id,cur,opts){return '<select id="'+id+'">'+opts.map(function(o){
+    return '<option value="'+o[0]+'"'+(cur===o[0]?' selected':'')+'>'+o[1]+'</option>'}).join('')+'</select>'};
+  $('#pane').innerHTML='<section><div class="row"><h2 style="margin:0">用户反馈</h2>'+
+      '<span class="mut" style="font-size:12.5px">共 '+(c.all_n||0)+' 条 · 待处理 '+(c.new_n||0)+' · 👍'+(c.up_n||0)+' 👎'+(c.down_n||0)+'</span>'+
+      '<span class="sp"></span>'+
+      sel('fb-status',FB.status,[['','全部状态'],['new','待处理'],['done','已处理']])+
+      sel('fb-vote',FB.vote,[['','赞踩不限'],['up','只看👍'],['down','只看👎']])+
+      '<input id="fb-q" placeholder="搜用户/标题/留言" value="'+esc(FB.q)+'" style="max-width:200px">'+
+      '<button class="btn" id="fb-go">筛选</button>'+
+      '<a class="btn" style="text-decoration:none" href="/admin/api/feedback-export?status='+encodeURIComponent(FB.status)+'&vote='+encodeURIComponent(FB.vote)+'">导出当前筛选</a></div>'+
+    '<div class="hint" style="margin:8px 0 12px">用户提交时会附上<b>那次会话的完整对话</b>（以及他自己勾选的产出文件）。'+
+      '导出的是单文件 HTML，离线可看、可转发存档。<b>内容可能含患者信息</b>，转发前请自行判断。</div>'+
+    '<table><thead><tr><th></th><th>会话 / 留言</th><th>用户 / 时间</th><th>规模</th><th>状态</th><th></th></tr></thead>'+
+    '<tbody>'+(rows||'<tr><td colspan="6" class="mut">还没有反馈</td></tr>')+'</tbody></table></section>'+
+    '<section id="fb-detail" hidden></section>';
+  $('#fb-go').onclick=function(){FB.status=$('#fb-status').value;FB.vote=$('#fb-vote').value;FB.q=$('#fb-q').value.trim();loadFeedback()};
+  $('#fb-q').onkeydown=function(e){if(e.key==='Enter')$('#fb-go').click()};
+  Array.prototype.forEach.call($('#pane').querySelectorAll('tbody [data-fa]'),function(b){
+    b.onclick=function(){
+      var id=Number(b.closest('tr').dataset.id),a=b.dataset.fa;
+      if(a==='open')return openFeedbackDetail(id);
+      if(a==='delete'&&!confirm('删除这条反馈？对话记录与附件一并删除，不可恢复。'))return;
+      post('feedback',{id:id,action:a}).then(function(r){
+        if(!r.ok)return toast(r.err||'操作失败',false);
+        toast(a==='delete'?'已删除':a==='done'?'已标记处理':'已重开',true);loadFeedback()})}});
+}
+function openFeedbackDetail(id){
+  var box=$('#fb-detail');box.hidden=false;box.innerHTML='<h2>反馈 #'+id+'</h2><p class="mut">加载中…</p>';
+  box.scrollIntoView({block:'start'});
+  api('feedback?id='+id).then(function(j){
+    if(!j.ok)return box.innerHTML='<div class="msg err" style="display:block">'+esc(j.err||'加载失败')+'</div>';
+    var f=j.item;
+    var msgs=(f.transcript||[]).map(function(m){
+      var who=m.role==='user'?'用户':'助手';
+      return '<div style="margin:0 0 10px;padding:9px 12px;border-radius:9px;background:'+(m.role==='user'?'#eff6ff':'#f9fafb')+
+        ';border:1px solid var(--line)">'+
+        '<div class="mut" style="font-size:12px;margin-bottom:4px">'+who+(m.ts?' · '+dt(m.ts):'')+
+          ((m.skills||[]).length?' · 技能：'+esc(m.skills.join('、')):'')+'</div>'+
+        '<div style="white-space:pre-wrap;word-break:break-word">'+esc(m.text||'')+'</div></div>'}).join('');
+    box.innerHTML='<div class="row"><h2 style="margin:0">反馈 #'+f.id+' '+voteTag(f.vote)+'</h2>'+
+      '<span class="mut" style="font-size:12.5px">'+esc(f.username)+' · '+dt(f.created_at)+' · '+f.msgs+' 条消息'+
+        (f.meta.clientVersion?' · 客户端 '+esc(f.meta.clientVersion):'')+(f.meta.model?' · 模型 '+esc(f.meta.model):'')+'</span>'+
+      '<span class="sp"></span><a class="btn sm" style="text-decoration:none" href="/admin/api/feedback-export?id='+f.id+'">导出 HTML</a>'+
+      '<button class="btn sm" id="fb-hide">收起</button></div>'+
+      (f.comment?'<div class="msg" style="display:block;position:static;max-width:none;margin:10px 0"><b>用户留言：</b>'+esc(f.comment)+'</div>':'')+
+      ((f.files||[]).length?'<div class="hint" style="margin:8px 0">附带产出：'+f.files.map(function(x){
+        return '<a href="/admin/api/feedback-file?id='+f.id+'&name='+encodeURIComponent(x.name)+'">'+esc(x.name)+'</a>（'+Math.round((x.size||0)/1024)+' KB）'}).join('　')+'</div>':'')+
+      '<div style="max-height:60vh;overflow:auto;margin-top:10px">'+(msgs||'<p class="mut">（这条反馈没有带对话记录）</p>')+'</div>';
+    $('#fb-hide').onclick=function(){box.hidden=true};
   })
 }
 

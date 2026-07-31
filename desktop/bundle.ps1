@@ -311,6 +311,11 @@ foreach ($f in $dirty) { if (Test-Path $f) { Remove-Item $f -Force; Write-Host "
 foreach ($d in @("$App\outputs", "$App\uploads")) {
   if (Test-Path $d) { Get-ChildItem $d -Force | Remove-Item -Recurse -Force -Confirm:$false }
 }
+# 技能包 / 界面包的本机换版记录：打进安装器会让新装的客户端一上来就"已经装过某个在线版本"，
+# 于是回退链的最后一环（factory = 出厂版）指向的其实是开发机某次更新后的状态。必须清干净。
+foreach ($d in @("$App\skill-packs", "$App\web-packs")) {
+  if (Test-Path $d) { Remove-Item $d -Recurse -Force -Confirm:$false; Write-Host "  删除 $d" -ForegroundColor Yellow }
+}
 # 收尾自检：整个 staging 里绝不能再有任何 apiKey 字样的 json（opencode.json 由上面写的干净基线覆盖）
 $leak = Get-ChildItem $App -Recurse -Include "model-config.json","cloud-state.json" -ErrorAction SilentlyContinue
 if ($leak) { throw "打包中止：仍存在 model-config.json —— $($leak.FullName -join '; ')" }

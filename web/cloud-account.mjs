@@ -168,22 +168,42 @@ export async function fetchProfile() {
 }
 
 /**
- * 拉一次平台公告（站长在后台发布的横幅 / 最低客户端版本）。
+ * 拉一次平台公告：最新一条 + 一份【摘要清单】（digest：只有 id/级别/时间，没有正文）。
  *
  * 【为什么不复用 fetchProfile】档案只在登录、access key 续期（TTL 24h、提前 10 分钟续）
  * 或用户手点"刷新"时才重取 —— 一条"今晚 10 点维护"的公告要等到明天才到用户眼前。
- * 这个口只读服务端一行 meta，可以放心几分钟问一次。
+ * 这个口只读几行库，可以放心几分钟问一次。
+ *
+ * 【为什么轮询只拿摘要】未读红点要的只是"有哪些 id"，正文（每条最多 2000 字 × 半年）
+ * 没必要每 5 分钟搬一遍；用户点开公告面板时才走 fetchNotices 拿正文。
  *
  * 也【刻意不写进 cloud-state.json】：公告是纯展示信息，落盘只会带来"本地缓存与服务端
- * 不一致"的一类新问题（比如站长撤了公告、本地还留着）。要不要记"用户点掉过"由前端的
- * localStorage 按公告 id 记，那才是真正需要持久的东西。
+ * 不一致"的一类新问题（比如站长撤了公告、本地还留着）。哪些已读由前端 localStorage 记，
+ * 那才是真正需要持久的东西。
  */
 export async function fetchNotice() {
   const a = await currentAccess()
   if (!a.ok) return a
   const r = await api("/api/notice", { token: a.token })
   if (!r.ok) return r
-  return { ok: true, notice: r.data.notice || null, needUpgrade: !!r.data.needUpgrade, clientVersion: r.data.clientVersion || "" }
+  return {
+    ok: true, notice: r.data.notice || null,
+    digest: Array.isArray(r.data.digest) ? r.data.digest : [],
+    keepDays: Number(r.data.keepDays) || 180,
+    needUpgrade: !!r.data.needUpgrade, clientVersion: r.data.clientVersion || "",
+  }
+}
+
+/**
+ * 拉近半年的公告列表（带正文）。用户点开「公告」面板时才调 —— 这就是"点掉就再也找不回来"
+ * 的解法：历史在服务端，换机、重装、清缓存都还在。
+ */
+export async function fetchNotices() {
+  const a = await currentAccess()
+  if (!a.ok) return a
+  const r = await api("/api/notices", { token: a.token })
+  if (!r.ok) return r
+  return { ok: true, notices: Array.isArray(r.data.notices) ? r.data.notices : [], keepDays: Number(r.data.keepDays) || 180 }
 }
 
 /**
@@ -215,14 +235,36 @@ export async function fetchSkillLatest(installedVersion) {
   return { ok: true, latest: r.data.latest || null }
 }
 
+/**
+ * 界面包：问一次"服务器上最新发布的前端资源是哪版"，顺便把本机已装版本用 X-Web-Version 报上去。
+ * 与技能包分开两条线：界面包换完刷新页面就生效，不重启任何进程。
+ */
+export async function fetchWebLatest(installedVersion) {
+  const a = await currentAccess()
+  if (!a.ok) return a
+  const r = await api("/api/web/latest", { token: a.token, headers: { "x-web-version": installedVersion || "" } })
+  if (!r.ok) return r
+  return { ok: true, latest: r.data.latest || null }
+}
+
+/** 界面包：下载指定版本的 zip（与技能包同款，包小得多）。 */
+export async function downloadWebPack(version) {
+  return downloadPack("/api/web/pack?version=", version)
+}
+
 /** 技能包：下载指定版本的 zip。二进制走不了 api()（那边固定 r.json()），单独写。 */
 export async function downloadSkillPack(version) {
+  return downloadPack("/api/skills/pack?version=", version)
+}
+
+/** 两类包共用的下载：只有路径不同，别为此写两遍超时/校验/错误翻译。 */
+async function downloadPack(pathPrefix, version) {
   const a = await currentAccess()
   if (!a.ok) return a
   const base = cloudBase()
   if (!base) return { ok: false, error: { code: "NO_CLOUD_URL", message: "未配置云端地址" } }
   try {
-    const r = await fetch(base + "/api/skills/pack?version=" + encodeURIComponent(version), {
+    const r = await fetch(base + pathPrefix + encodeURIComponent(version), {
       headers: { authorization: "Bearer " + a.token, "x-client-version": process.env.APP_VERSION || "dev" },
       // 包是几 MB～几十 MB 的 zip，弱网下 20s 不够；给到 5 分钟，再慢就该报错让用户重试了
       signal: AbortSignal.timeout(5 * 60_000),
@@ -236,6 +278,45 @@ export async function downloadSkillPack(version) {
   } catch (e) {
     return { ok: false, status: 0, error: { code: "NETWORK", message: e?.name === "TimeoutError" ? "下载超时" : "连不上云端服务" } }
   }
+}
+
+/**
+ * 提交一条用户反馈（zip：feedback.json + files/**）。
+ * 【超时给到 2 分钟】包里可能有几 MB 附件，弱网下 20 秒不够；但也不能像下载那样给 5 分钟——
+ * 这是用户点了「提交」正等着的动作，卡太久不如早点报错让他重试。
+ */
+export async function sendFeedback(buf) {
+  const a = await currentAccess()
+  if (!a.ok) return a
+  const base = cloudBase()
+  if (!base) return { ok: false, error: { code: "NO_CLOUD_URL", message: "未配置云端地址" } }
+  try {
+    const r = await fetch(base + "/api/feedback", {
+      method: "POST",
+      headers: {
+        authorization: "Bearer " + a.token,
+        "content-type": "application/zip",
+        "x-client-version": process.env.APP_VERSION || "dev",
+      },
+      body: buf,
+      signal: AbortSignal.timeout(2 * 60_000),
+    })
+    let j = null; try { j = await r.json() } catch {}
+    if (!r.ok) return { ok: false, status: r.status, error: (j && j.error) || { code: "HTTP_" + r.status, message: "提交失败（HTTP " + r.status + "）" } }
+    return { ok: true, id: (j && j.id) || 0 }
+  } catch (e) {
+    return { ok: false, status: 0, error: { code: "NETWORK", message: e?.name === "TimeoutError" ? "提交超时" : "连不上云端服务" } }
+  }
+}
+
+/**
+ * 通用调用：贴上 access key 打云端的某个 /api/* 接口。给本机网关的 /api/cloud/call 用
+ * （路径白名单与凭证类接口的排除都在那一层做，这里只负责带票据发出去）。
+ */
+export async function callApi(pathname, { method = "GET", body } = {}) {
+  const a = await currentAccess()
+  if (!a.ok) return a
+  return api(pathname, { method, body, token: a.token })
 }
 
 /** 给界面用的状态摘要（不含任何凭证） */

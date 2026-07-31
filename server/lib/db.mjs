@@ -173,6 +173,55 @@ CREATE TABLE IF NOT EXISTS skill_packs (
   created_at     INTEGER NOT NULL
 );
 
+-- 用户反馈：用户把某一次会话（完整对话 + 可选的产出文件）连同赞/踩与一段评论交给管理员。
+-- 【为什么把整段对话存进来】反馈"这次答得不好"如果不带上下文，管理员根本无从复现；而用户
+-- 自己描述又会丢掉最关键的细节（提示词、模型答了什么、走了哪几个技能）。
+-- transcript 存 JSON 文本（服务端不解析，导出与展示时才用）；附件落在 DATA_DIR/feedback/<id>/。
+CREATE TABLE IF NOT EXISTS feedback (
+  id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id    INTEGER NOT NULL,
+  username   TEXT    NOT NULL DEFAULT '',      -- 冗余一份：用户被删了反馈也还看得出是谁提的
+  session_id TEXT    NOT NULL DEFAULT '',
+  title      TEXT    NOT NULL DEFAULT '',      -- 会话标题（列表里一眼看出是哪次）
+  vote       INTEGER NOT NULL DEFAULT 0,       -- 1 = 赞，-1 = 踩，0 = 只留言
+  comment    TEXT    NOT NULL DEFAULT '',
+  transcript TEXT    NOT NULL DEFAULT '',      -- JSON：[{role, text, ts, ...}]
+  msgs       INTEGER NOT NULL DEFAULT 0,       -- 消息条数（列表里显示，不必解析 transcript）
+  files      TEXT    NOT NULL DEFAULT '',      -- JSON：[{name,size}]，本体在磁盘
+  meta       TEXT    NOT NULL DEFAULT '',      -- JSON：客户端版本/模型/技能等
+  status     TEXT    NOT NULL DEFAULT 'new',   -- new | done（管理员标记已处理）
+  created_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS ix_feedback_created ON feedback(created_at);
+
+-- 界面包：客户端前端静态资源（web/*.html 等）的版本包。与 skill_packs 同形状、分开一张表：
+-- 两者生效方式不同（这个只要刷新页面，技能包要重启 opencode），版本号也各走各的。
+CREATE TABLE IF NOT EXISTS web_packs (
+  version    TEXT PRIMARY KEY,               -- 点分数字
+  sha256     TEXT NOT NULL,
+  size       INTEGER NOT NULL,
+  changelog  TEXT NOT NULL DEFAULT '',
+  files      TEXT NOT NULL DEFAULT '',       -- 包内文件清单，逗号分隔（展示用）
+  commit_sha TEXT NOT NULL DEFAULT '',       -- "从仓库发布"时的源 commit
+  status     TEXT NOT NULL DEFAULT 'active', -- active | disabled（撤下即对客户端不可见）
+  created_at INTEGER NOT NULL
+);
+
+-- 公告：一条一行。老设计是 meta 里一行 JSON（全站只留当前这一条），用户点掉就再也找不回来，
+-- 管理员也查不到发过什么。现在留半年（purgeNotices 每天扫），客户端界面上常驻可查。
+-- status: active | withdrawn（撤下只是标记，不删行 —— 管理员仍要看得到自己发过什么）
+CREATE TABLE IF NOT EXISTS notices (
+  id                 INTEGER PRIMARY KEY AUTOINCREMENT,
+  text               TEXT    NOT NULL DEFAULT '',
+  level              TEXT    NOT NULL DEFAULT 'info',   -- info | warn | urgent
+  min_client_version TEXT    NOT NULL DEFAULT '',       -- 比它旧的客户端会被额外催升级
+  download_url       TEXT    NOT NULL DEFAULT '',
+  status             TEXT    NOT NULL DEFAULT 'active',
+  created_at         INTEGER NOT NULL,
+  updated_at         INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS ix_notices_created ON notices(created_at);
+
 CREATE TABLE IF NOT EXISTS audit (
   id     INTEGER PRIMARY KEY AUTOINCREMENT,
   ts     INTEGER NOT NULL,
@@ -219,6 +268,8 @@ function ensureColumns(db) {
   if (!has("tiers", "max_conc")) db.exec("ALTER TABLE tiers ADD COLUMN max_conc INTEGER NOT NULL DEFAULT 0")
   // 客户端汇报的本机技能包版本（与 client_version 同机制：请求头顺手记下，供后台看升级面）
   if (!has("users", "skills_version")) db.exec("ALTER TABLE users ADD COLUMN skills_version TEXT NOT NULL DEFAULT ''")
+  // 同上，本机界面包（前端静态资源）版本
+  if (!has("users", "web_version")) db.exec("ALTER TABLE users ADD COLUMN web_version TEXT NOT NULL DEFAULT ''")
   // "从仓库发布"的包记下出包时的 commit：下次发布 diff 这两个 sha 就能精确算出变更技能
   if (!has("skill_packs", "commit_sha")) db.exec("ALTER TABLE skill_packs ADD COLUMN commit_sha TEXT NOT NULL DEFAULT ''")
 }
@@ -246,6 +297,9 @@ export function openDb(file) {
   } else if (Number(cur.v) < SCHEMA_VERSION) {
     migrate(db, Number(cur.v))
   }
+  // 【无条件跑，与 ensureColumns 同理】它自己带幂等标记；挂在版本号上就会漏掉那些
+  // "meta 表在、schema_version 却缺一行"的库 —— 那种库会走上面的新库分支，公告就搬不过来。
+  migrateLegacyNotice(db)
   return db
 }
 
@@ -287,7 +341,7 @@ export function bumpEpoch(db, userId) {
 const USER_PATCH_FIELDS = new Set([
   "display_name", "surname", "hospital", "position", "phone", "tier", "status",
   "daily_override", "monthly_override", "skills_override", "note",
-  "pass_hash", "pass_salt", "must_change_pw", "client_version", "skills_version", "last_login_at", "last_seen_at",
+  "pass_hash", "pass_salt", "must_change_pw", "client_version", "skills_version", "web_version", "last_login_at", "last_seen_at",
 ])
 export function updateUser(db, id, patch) {
   const cols = [], vals = []
@@ -695,52 +749,144 @@ export const purgeExpiredRefresh = (db, now = Date.now()) =>
 //
 // 站长要通知全员（今晚维护、某模型下线、新版客户端已发）此前只能一个个发微信。
 //
-// 【为什么存在 meta 里而不是新建一张表】全站同一时刻只有一条公告，一行就够；建表要连
-// 带迁移，收益是零。id 单调递增，客户端"不再提示"记的是它 —— 于是改一次内容就会重新
-// 弹给所有人，而用户点掉之后不会因为某次轮询又冒出来。
+// 【2026-07-31 从"一行 meta"改成一张表】老设计全站只留【当前这一条】：客户端点掉就再也
+// 找不回来（用户第二天想确认"维护是几点来着"只能问管理员），管理员自己也查不到发过什么。
+// 现在一条公告一行，客户端拿到的是【近半年的列表】，界面上常驻可查；撤下只是标记，不删行。
+//
+// 保留期：`purgeNotices` 每天扫一次，删掉超过 NOTICE_KEEP_DAYS（默认 180 天）的行 ——
+// 与审计同款策略。客户端那边也按同一个天数过滤，两边都不显示更老的。
 export const NOTICE_LEVELS = ["info", "warn", "urgent"]
+/** 保留期：与审计同款策略，只不过公告的默认值是半年（用户要能回看"上个月那条维护通知"）。 */
+export const NOTICE_KEEP_DAYS = 180
 
-const NOTICE_EMPTY = { enabled: false, text: "", level: "info", minClientVersion: "", downloadUrl: "", id: 0, updatedAt: 0 }
+const NOTICE_COLS ="id, text, level, min_client_version AS minClientVersion, download_url AS downloadUrl, status, created_at AS createdAt, updated_at AS updatedAt"
 
-export function getNotice(db) {
-  const row = db.prepare("SELECT v FROM meta WHERE k='notice'").get()
-  if (!row) return { ...NOTICE_EMPTY }
-  try { return { ...NOTICE_EMPTY, ...JSON.parse(row.v) } } catch { return { ...NOTICE_EMPTY } }
-}
-
-export function setNotice(db, n) {
-  const cur = getNotice(db)
-  const text = String(n.text == null ? cur.text : n.text).slice(0, 2000)
-  const level = NOTICE_LEVELS.includes(n.level) ? n.level : cur.level
-  const next = {
-    enabled: n.enabled === undefined ? cur.enabled : !!n.enabled,
-    text, level,
-    minClientVersion: String(n.minClientVersion == null ? cur.minClientVersion : n.minClientVersion).trim().slice(0, 32),
-    downloadUrl: String(n.downloadUrl == null ? cur.downloadUrl : n.downloadUrl).trim().slice(0, 500),
-    // 【只有"用户会看到的东西变了"才 ++id】否则每点一次保存（哪怕只是改了个错别字之外
-    // 什么都没动）都会把已经点掉公告的人重新弹一遍，公告条就变成了噪音。
-    id: cur.id,
-    updatedAt: Date.now(),
-  }
-  const visibleChanged = next.enabled !== cur.enabled || next.text !== cur.text ||
-    next.level !== cur.level || next.minClientVersion !== cur.minClientVersion || next.downloadUrl !== cur.downloadUrl
-  if (visibleChanged) next.id = cur.id + 1
-  db.prepare("INSERT INTO meta(k,v) VALUES('notice',?) ON CONFLICT(k) DO UPDATE SET v=excluded.v")
-    .run(JSON.stringify(next))
-  return next
+/** 发一条新公告。校验（级别/版本号/链接协议）在路由层做，这里只管截断与落库。 */
+export function publishNotice(db, n) {
+  const now = Date.now()
+  const r = db.prepare(`INSERT INTO notices(text, level, min_client_version, download_url, status, created_at, updated_at)
+                        VALUES(?,?,?,?,'active',?,?)`).run(
+    String(n.text || "").slice(0, 2000),
+    NOTICE_LEVELS.includes(n.level) ? n.level : "info",
+    String(n.minClientVersion || "").trim().slice(0, 32),
+    String(n.downloadUrl || "").trim().slice(0, 500),
+    now, now)
+  return getNoticeById(db, r.lastInsertRowid)
 }
 
 /**
- * 客户端要看到的那份（关掉了就什么都不下发）。
- * 【不下发 updatedAt 之外的内部字段】客户端只需要"显示什么、要不要催升级、记哪个 id"。
+ * 改一条已发的（改错别字、补链接）。
+ *
+ * 【不换 id】id 就是客户端的"已读到哪儿"游标：换 id = 所有人重新未读一遍。改错别字不该
+ * 惊动全员，所以老设计里那套"内容变了才 ++id"的逻辑在这里不需要了 —— 新消息就发新的一条。
  */
-export function publicNotice(db) {
-  const n = getNotice(db)
-  if (!n.enabled || (!n.text && !n.minClientVersion)) return null
-  return {
-    id: n.id, text: n.text, level: n.level,
-    minClientVersion: n.minClientVersion, downloadUrl: n.downloadUrl, updatedAt: n.updatedAt,
-  }
+export function updateNotice(db, id, patch) {
+  const cur = getNoticeById(db, id)
+  if (!cur) return null
+  const val = (k, cut) => (patch[k] === undefined || patch[k] === null ? cur[k] : String(patch[k]).trim().slice(0, cut))
+  db.prepare(`UPDATE notices SET text=?, level=?, min_client_version=?, download_url=?, updated_at=? WHERE id=?`).run(
+    patch.text === undefined || patch.text === null ? cur.text : String(patch.text).slice(0, 2000),
+    NOTICE_LEVELS.includes(patch.level) ? patch.level : cur.level,
+    val("minClientVersion", 32), val("downloadUrl", 500), Date.now(), Number(id))
+  return getNoticeById(db, id)
+}
+
+export const getNoticeById = (db, id) =>
+  db.prepare(`SELECT ${NOTICE_COLS} FROM notices WHERE id=?`).get(Number(id)) || null
+
+/** 撤下 / 恢复。撤下只是标记：管理员仍要能看到自己发过什么（这正是改成表的目的之一）。 */
+export function setNoticeStatus(db, id, status) {
+  const st = status === "withdrawn" ? "withdrawn" : "active"
+  return db.prepare("UPDATE notices SET status=?, updated_at=? WHERE id=?").run(st, Date.now(), Number(id)).changes > 0
+}
+export const deleteNotice = (db, id) =>
+  db.prepare("DELETE FROM notices WHERE id=?").run(Number(id)).changes > 0
+
+/**
+ * 列公告。
+ *   客户端：`{ days: 180 }` —— 只给还在保留期内的、没撤下的。
+ *   后台：  `{ all: true }` —— 连撤下的也要，好回看发过什么。
+ * 【上限 200 条】半年内发到 200 条本身就不正常，但接口不能因此把整张表甩给客户端。
+ */
+export function listNotices(db, { days = 0, all = false, limit = 200 } = {}) {
+  const where = [], args = []
+  if (!all) where.push("status='active'")
+  if (days > 0) { where.push("created_at >= ?"); args.push(Date.now() - Number(days) * 86400_000) }
+  const w = where.length ? "WHERE " + where.join(" AND ") : ""
+  return db.prepare(`SELECT ${NOTICE_COLS} FROM notices ${w} ORDER BY created_at DESC, id DESC LIMIT ?`)
+    .all(...args, Math.min(500, Math.max(1, Number(limit) || 200)))
+}
+
+/** 最新一条在架公告（老客户端只认这一条：它们还在用 /api/notice 与 profile.notice）。 */
+export const latestNotice = (db) =>
+  db.prepare(`SELECT ${NOTICE_COLS} FROM notices WHERE status='active' ORDER BY created_at DESC, id DESC LIMIT 1`).get() || null
+
+const publicShape = (n) => n && ({
+  id: n.id, text: n.text, level: n.level,
+  minClientVersion: n.minClientVersion, downloadUrl: n.downloadUrl,
+  createdAt: n.createdAt, updatedAt: n.updatedAt,
+})
+
+/**
+ * 客户端要看到的那一条（没有在架公告就什么都不下发）。
+ * 【不下发内部字段】客户端只需要"显示什么、要不要催升级、记哪个 id"。
+ */
+export const publicNotice = (db) => publicShape(latestNotice(db))
+
+/** 客户端要看到的那一批（近 days 天、在架的）。 */
+export const publicNotices = (db, days = NOTICE_KEEP_DAYS) =>
+  listNotices(db, { days }).map(publicShape)
+
+export const purgeNotices = (db, keepDays = NOTICE_KEEP_DAYS) =>
+  db.prepare("DELETE FROM notices WHERE created_at < ?").run(Date.now() - Number(keepDays) * 86400_000).changes
+
+/**
+ * 把新公告的 id 起点抬到 `atLeast` 之上。
+ *
+ * 【为什么必须有这一步】老客户端（0.1.3 及更早）判"这条要不要弹"用的是
+ * `localStorage 里记的已读 id >= notice.id`，而老设计的 id 是 meta 里一个自增计数（可能已经
+ * 涨到 7、12…）。改成表之后 id 变成 rowid、从 1 起 —— 于是新发的公告 id=2 会被"已读到 7"的
+ * 老客户端**静默吞掉**：管理员以为发出去了，老用户永远看不到。把序列抬过去就没这回事。
+ * 新客户端按 id 记已读，同样受益（不会把老 id 当成"更新的"）。
+ */
+function bumpNoticeSeq(db, atLeast) {
+  const n = Math.floor(Number(atLeast) || 0)
+  if (n <= 0) return
+  // AUTOINCREMENT 表的下一个 id = sqlite_sequence.seq + 1。表还没插过行时这一行不存在。
+  const cur = db.prepare("SELECT seq FROM sqlite_sequence WHERE name='notices'").get()
+  if (!cur) db.prepare("INSERT INTO sqlite_sequence(name, seq) VALUES('notices', ?)").run(n)
+  else if (Number(cur.seq) < n) db.prepare("UPDATE sqlite_sequence SET seq=? WHERE name='notices'").run(n)
+}
+
+/**
+ * 把老库里 meta 那一条搬进表，只搬一次（搬完打个标记）。
+ *
+ * 不搬会怎样：升级当天，正挂着的那条公告（"今晚 10 点维护"）会**当场消失** —— 客户端拉到
+ * 空列表，用户与管理员都以为公告功能坏了。只搬"发布中且有内容"的那条：停发的本就不该出现。
+ *
+ * 【不管搬不搬，都要把 id 序列抬到老 id 之上】见 bumpNoticeSeq —— 老客户端的"已读"游标记的
+ * 是老 id，新公告的 id 低于它就会被老客户端静默吞掉。停发状态那条也算数：用户照样点过它。
+ */
+export function migrateLegacyNotice(db) {
+  if (db.prepare("SELECT 1 FROM meta WHERE k='notice_migrated'").get()) return null
+  db.prepare("INSERT INTO meta(k,v) VALUES('notice_migrated','1') ON CONFLICT(k) DO UPDATE SET v='1'").run()
+  const row = db.prepare("SELECT v FROM meta WHERE k='notice'").get()
+  if (!row) return null
+  let old = null
+  try { old = JSON.parse(row.v) } catch { return null }
+  if (!old) return null
+  bumpNoticeSeq(db, old.id)
+  if (!old.enabled || (!old.text && !old.minClientVersion)) return null
+  const now = Date.now()
+  const r = db.prepare(`INSERT INTO notices(text, level, min_client_version, download_url, status, created_at, updated_at)
+                        VALUES(?,?,?,?,'active',?,?)`).run(
+    String(old.text || "").slice(0, 2000),
+    NOTICE_LEVELS.includes(old.level) ? old.level : "info",
+    String(old.minClientVersion || "").slice(0, 32),
+    String(old.downloadUrl || "").slice(0, 500),
+    // 【时间用老记录里的 updatedAt】否则升级当天所有老公告都变成"刚刚发布"，一进来全是未读
+    Number(old.updatedAt) || now, Number(old.updatedAt) || now)
+  return getNoticeById(db, r.lastInsertRowid)
 }
 
 // ==== 技能包 ==================================================================
@@ -782,6 +928,84 @@ export function setSkillPackStatus(db, version, status) {
 
 export const deleteSkillPack = (db, version) =>
   db.prepare("DELETE FROM skill_packs WHERE version=?").run(String(version)).changes > 0
+
+// ==== 界面包 ==================================================================
+// 与技能包同形状（元数据在库、zip 在 DATA_DIR/web-packs/ 下），但完全独立的一条线：
+// 换的是前端静态资源，客户端刷新页面即生效，不重启任何进程。
+
+export function addWebPack(db, p) {
+  if (db.prepare("SELECT 1 FROM web_packs WHERE version=?").get(String(p.version)))
+    return { ok: false, err: `版本 ${p.version} 已发布过 —— 同一版本号不许重发（客户端按版本号判断更新），请换个版本号` }
+  db.prepare(`INSERT INTO web_packs(version,sha256,size,changelog,files,commit_sha,status,created_at)
+              VALUES(?,?,?,?,?,?,'active',?)`).run(
+    String(p.version), String(p.sha256), Number(p.size),
+    String(p.changelog || ""), String(p.files || ""), String(p.commit_sha || ""), Date.now())
+  return { ok: true, pack: getWebPack(db, p.version) }
+}
+
+export const getWebPack = (db, version) =>
+  db.prepare("SELECT * FROM web_packs WHERE version=?").get(String(version)) || null
+
+export const listWebPacks = (db) =>
+  db.prepare("SELECT * FROM web_packs ORDER BY created_at DESC").all()
+
+export function setWebPackStatus(db, version, status) {
+  const st = status === "disabled" ? "disabled" : "active"
+  return db.prepare("UPDATE web_packs SET status=? WHERE version=?").run(st, String(version)).changes > 0
+}
+
+export const deleteWebPack = (db, version) =>
+  db.prepare("DELETE FROM web_packs WHERE version=?").run(String(version)).changes > 0
+
+// ==== 用户反馈 ================================================================
+// 附件本体在 DATA_DIR/feedback/<id>/ 下，这里只管元数据与对话文本。
+
+export function addFeedback(db, f) {
+  const r = db.prepare(`INSERT INTO feedback(user_id,username,session_id,title,vote,comment,transcript,msgs,files,meta,status,created_at)
+                        VALUES(?,?,?,?,?,?,?,?,?,?,'new',?)`).run(
+    Number(f.user_id) || 0, String(f.username || ""), String(f.session_id || "").slice(0, 128),
+    String(f.title || "").slice(0, 200), Math.sign(Number(f.vote) || 0),
+    String(f.comment || "").slice(0, 4000), String(f.transcript || ""),
+    Number(f.msgs) || 0, String(f.files || "[]"), String(f.meta || "{}"), Date.now())
+  return getFeedback(db, r.lastInsertRowid)
+}
+
+export const getFeedback = (db, id) =>
+  db.prepare("SELECT * FROM feedback WHERE id=?").get(Number(id)) || null
+
+/**
+ * 列表。**不带 transcript**：那是每条几十上百 KB 的对话正文，列表页一次拉 50 条就是几 MB，
+ * 而列表上只用得到标题与摘要。详情页才按 id 取整条。
+ */
+export function listFeedback(db, { limit = 50, offset = 0, status = "", vote = "", q = "" } = {}) {
+  const where = [], args = []
+  if (status === "new" || status === "done") { where.push("status=?"); args.push(status) }
+  if (vote === "up") where.push("vote>0")
+  else if (vote === "down") where.push("vote<0")
+  if (q) {
+    const like = "%" + String(q).replace(/[\\%_]/g, (c) => "\\" + c) + "%"
+    where.push("(username LIKE ? ESCAPE '\\' OR title LIKE ? ESCAPE '\\' OR comment LIKE ? ESCAPE '\\')")
+    args.push(like, like, like)
+  }
+  const w = where.length ? "WHERE " + where.join(" AND ") : ""
+  const total = db.prepare(`SELECT COUNT(*) AS n FROM feedback ${w}`).get(...args).n
+  const rows = db.prepare(`SELECT id,user_id,username,session_id,title,vote,comment,msgs,files,meta,status,created_at
+                           FROM feedback ${w} ORDER BY created_at DESC, id DESC LIMIT ? OFFSET ?`)
+    .all(...args, Math.min(200, Math.max(1, Number(limit) || 50)), Math.max(0, Number(offset) || 0))
+  const counts = db.prepare(`SELECT
+      COUNT(*) AS all_n,
+      SUM(CASE WHEN status='new' THEN 1 ELSE 0 END) AS new_n,
+      SUM(CASE WHEN vote>0 THEN 1 ELSE 0 END) AS up_n,
+      SUM(CASE WHEN vote<0 THEN 1 ELSE 0 END) AS down_n FROM feedback`).get()
+  return { rows, total, counts }
+}
+
+export function setFeedbackStatus(db, id, status) {
+  const st = status === "done" ? "done" : "new"
+  return db.prepare("UPDATE feedback SET status=? WHERE id=?").run(st, Number(id)).changes > 0
+}
+export const deleteFeedback = (db, id) =>
+  db.prepare("DELETE FROM feedback WHERE id=?").run(Number(id)).changes > 0
 
 // ==== 并发限额 ================================================================
 //

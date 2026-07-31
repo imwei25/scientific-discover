@@ -4,7 +4,8 @@
 example.duckdns.org {
 	encode zstd gzip
 
-	# 上传体积上限（桌面客户端不上传大文件到服务器，留小一点就够）
+	# 上传体积上限：默认留小（桌面客户端平时不往服务器传大文件），
+	# 确实要传的两条路在下面各自放宽 —— 别为了那两条把全站都开成几十 MB。
 	request_body {
 		max_size 2MB
 	}
@@ -30,6 +31,29 @@ example.duckdns.org {
 				#   而日志里只有一个看不出原因的 504。
 				response_header_timeout 15m
 			}
+		}
+	}
+
+	# 用户反馈上传：一次会话的完整对话 + 用户勾选的产出文件（图/表/docx）。
+	# 【必须单独放宽】全站默认的 2MB 对它太小 —— 用户随手带一张森林图就被 Caddy 以 413 打回，
+	# 而且那是 Caddy 自己的错误页，客户端拿不到我们的结构化提示，用户只看到"提交失败"。
+	# 服务端另有自己的两道闸（单次 32MB、单附件 8MB），这里留点余量给 zip 头与多附件。
+	handle /api/feedback {
+		request_body {
+			max_size 40MB
+		}
+		reverse_proxy 127.0.0.1:8090 {
+			flush_interval -1
+		}
+	}
+
+	# 管理台手动上传技能包 / 界面包（zip）。技能包整包可以到几十 MB。
+	handle /admin/api/skill-pack-upload /admin/api/web-pack-upload {
+		request_body {
+			max_size 80MB
+		}
+		reverse_proxy 127.0.0.1:8090 {
+			flush_interval -1
 		}
 	}
 
