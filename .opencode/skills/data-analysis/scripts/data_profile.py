@@ -230,7 +230,9 @@ def profile(df: pd.DataFrame, id_col=None, group=None) -> dict:
                     findings["must"].append({
                         "type": "coding_mix",
                         "msg": f"「{c}」混用了多套编码：{sorted(set(sys_hit))}",
-                        "action": "映射到同一套编码后再统计（如 男/M/1 → M），否则该变量的每个 n(%) 都是错的",
+                        "action": "把能确定对应关系的映射到同一套（男/M/male → M），否则该变量的每个 n(%) 都是错的。"
+                                  "⚠️ **判不出方向的编码一律记缺失，别猜**：像 0/1/2 这种数字码，没有数据字典就无法确定 1 是男还是女，"
+                                  "猜错等于给真实病人凭空指定属性——标缺失只损失 1 例，猜错是造假。要用就先向用户要编码本",
                     })
             info["levels"] = {str(k): int(v) for k, v in s.value_counts(dropna=False).head(12).items()}
 

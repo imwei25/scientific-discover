@@ -76,6 +76,7 @@ ${REPO_ROOT:-/app}/.venv/bin/python ${REPO_ROOT:-/app}/.opencode/skills/data-ana
 - 始终报**效应量 + 95% 置信区间 + 精确 p 值 + 样本量 n**，不要只写 `p<0.05`（95%CI 优先于单独 p）。**效应量怎么算**：两组均值差用 **Cohen's d / Hedges' g**（小样本用 g）、相关用 **Pearson r 的 Fisher-z 95%CI**——scipy 不直接给，用 `scripts/stat_extras.py` 的 `cohens_d` / `hedges_g` / `pearson_r_ci`。
 > **固化实现 `scripts/stat_extras.py`**（只依赖 numpy/scipy/sklearn）：方法比对(Bland-Altman/Passing-Bablok/Deming)、诊断 CI(DeLong/bootstrap AUC、Wilson 比例)、效应量(Cohen's d/Hedges' g/Pearson r-CI)。这些库不直接给或手写易错，**优先 import 调用、别每次现写**。跑 `python scripts/stat_extras.py` 可看自检（已知构造能否还原）。
 - **任何 n 都只能取自代码输出**：样本量、分组例数及结论里出现的每一个 n，一律来自脚本打印结果（`df.shape`、`df.groupby(组变量).size()`、`value_counts()`），**禁止目测 / 手数 / 按数据文件行数推断**（文件行数含表头，直接用会多算 1 例）。写进结论、报告或交给下游技能（write-paper / render-*）的 n 必须与脚本打印值逐一一致；发现不一致以脚本输出为准，重跑核对后再成文。
+- **每个主要结果再补一句临床解读**：效应量+CI 只说"差多少、多准"，不说"这点差别临床上算不算事"。**用 MCID / 允许总误差 TEa 判定时必须同时给出处**（文献/指南/说明书/用户提供的科室标准）；**给不出出处就不准写具体阈值数字**，也不准用"通常认为""常用参照约"这类无主语口吻把凭空的数包装成共识——照实写"本次未获得可引用的阈值来源，仅报效应量与 95%CI，临床重要性由临床团队判断"，只描述幅度、不下判决。⚠️ 别拿"CI 宽 / 下限贴近 1 / 精度有限"顶替临床意义——那是估计有多准，不是值不值得改变临床决策；`Hedges' g=0.9（大效应）`同理，是统计学分级不是临床重要性。细则见清单 §一之二。
 - 数字格式统一：p 值 2–3 位有效数字、`<0.001` 不写 0.000；OR/RR/HR 保留 2 位小数 + 95%CI；百分比 1 位小数 + 分子/分母。
 - 连续变量按分布报 `均数±标准差` 或 `中位数[IQR]`；分类变量报 `n (%)`。
 - 说明缺失值如何处理、是否做了多重比较校正；软件及版本、显著性水平与单双侧写进 Methods。
