@@ -70,7 +70,10 @@
   ; RMDir（不带 /r）只删空目录：outputs/uploads 里有东西就会原样留下，正是我们要的
   RMDir "$INSTDIR\bundle\app\outputs"
   RMDir "$INSTDIR\bundle\app\uploads"
-  RMDir "$INSTDIR\bundle\app\web"
+  ; web 必须 /r：界面包在线更新会往 web\ 里【新增】NSIS 没登记过的文件（如后来加的
+  ; workspace.html），只删空目录必然失败，进而连锁到 app/bundle/$INSTDIR 全都删不掉。
+  ; web\ 下没有用户数据（凭证上面已显式删，产出在 app\outputs）——整树删除是安全的。
+  RMDir /r "$INSTDIR\bundle\app\web"
   RMDir "$INSTDIR\bundle\app"
   RMDir "$INSTDIR\bundle"
   RMDir "$INSTDIR"
