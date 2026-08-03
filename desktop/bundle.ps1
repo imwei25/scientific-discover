@@ -316,6 +316,22 @@ foreach ($d in @("$App\outputs", "$App\uploads")) {
 foreach ($d in @("$App\skill-packs", "$App\web-packs")) {
   if (Test-Path $d) { Remove-Item $d -Recurse -Force -Confirm:$false; Write-Host "  删除 $d" -ForegroundColor Yellow }
 }
+# ★ 出厂时间戳：清干净之后，只写回一条"这个安装包是什么时候打的"。
+#   出厂版没有版本号（current 空串），客户端判"服务器上的包是不是真比我新"只能靠它——
+#   不写的话，刚打的安装包（技能是今天的仓库快照）遇到服务器上更早发布的包也会弹
+#   "有新版技能"，点下去把技能换旧。判定逻辑见 web/pack-freshness.mjs。
+$factoryAt = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
+foreach ($d in @("$App\skill-packs", "$App\web-packs")) {
+  New-Item -ItemType Directory -Force $d | Out-Null
+  @"
+{
+  "current": "",
+  "history": [],
+  "factoryAt": $factoryAt
+}
+"@ | Write-Utf8NoBom "$d\installed.json"
+}
+Write-Host "  写入出厂时间戳 factoryAt=$factoryAt（$([DateTimeOffset]::FromUnixTimeMilliseconds($factoryAt).ToLocalTime().ToString('yyyy-MM-dd HH:mm')))" -ForegroundColor Green
 # 收尾自检：整个 staging 里绝不能再有任何 apiKey 字样的 json（opencode.json 由上面写的干净基线覆盖）
 $leak = Get-ChildItem $App -Recurse -Include "model-config.json","cloud-state.json" -ErrorAction SilentlyContinue
 if ($leak) { throw "打包中止：仍存在 model-config.json —— $($leak.FullName -join '; ')" }

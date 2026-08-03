@@ -11,6 +11,7 @@ import { createOpencodeClient } from "@opencode-ai/sdk"
 import * as Cloud from "./cloud-account.mjs"
 import * as SkillUp from "./skill-update.mjs"
 import * as WebUp from "./web-update.mjs"
+import { shouldOfferUpdate } from "./pack-freshness.mjs"
 import { zip as zipPack } from "./minizip.mjs"
 
 // opencode 的完整流水线（标书/论文/系统综述）单轮可跑十几分钟，而 session.prompt 是“等整轮结束才返回”的请求；
@@ -167,10 +168,14 @@ async function skillLatestSoon(force) {
   else skillLatestCache = { at: now - SKILL_CHECK_MS + 5 * 60_000, latest: skillLatestCache?.latest ?? null }
   return skillLatestCache.latest
 }
-/** 要不要在界面上提示更新：有新版、且这次变更与本账号的技能授权有交集（服务端算好 relevant） */
+/**
+ * 要不要在界面上提示更新：这个包确实比本机新（见 pack-freshness.mjs——刚装的新安装包
+ * 里技能可能比服务器上最后一次发布还新，那种"更新"是把技能换旧），
+ * 且这次变更与本账号的技能授权有交集（服务端算好 relevant）。
+ */
 function skillUpdateInfo(latest) {
   if (!latest || !latest.relevant) return null
-  if (latest.version === SkillUp.currentVersion()) return null
+  if (!shouldOfferUpdate(latest, { current: SkillUp.currentVersion(), factoryAt: SkillUp.factoryAt() })) return null
   return { version: latest.version, changedSkills: latest.changedSkills || [], changelog: latest.changelog || "", size: latest.size || 0 }
 }
 /**
@@ -215,7 +220,8 @@ async function webLatestSoon(force) {
 }
 function webUpdateInfo(latest) {
   if (!latest) return null
-  if (latest.version === WebUp.currentVersion()) return null
+  // 与技能包同一把尺子：只有确实比本机新才提示（出厂版按打包时间比，见 pack-freshness.mjs）
+  if (!shouldOfferUpdate(latest, { current: WebUp.currentVersion(), factoryAt: WebUp.factoryAt() })) return null
   return { version: latest.version, changelog: latest.changelog || "", size: latest.size || 0, files: latest.files || [] }
 }
 const gatewayEnvSet = () => !!(process.env.OC_GATEWAY_URL && process.env.OC_GATEWAY_KEY)

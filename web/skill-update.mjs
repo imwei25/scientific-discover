@@ -39,8 +39,14 @@ const KEEP = 5   // 归档最多留几个版本（不含出厂版）
 export function state() {
   try {
     const s = JSON.parse(fs.readFileSync(STATE(), "utf8"))
-    return { current: String(s.current || ""), history: Array.isArray(s.history) ? s.history : [] }
-  } catch { return { current: "", history: [] } }
+    return {
+      current: String(s.current || ""),
+      history: Array.isArray(s.history) ? s.history : [],
+      // 安装器打包时刻（bundle.ps1 写入）。出厂版没有版本号可比，判"服务端的包是不是
+      // 真的比我新"只能靠它，见 pack-freshness.mjs
+      factoryAt: Number(s.factoryAt) || 0,
+    }
+  } catch { return { current: "", history: [], factoryAt: 0 } }
 }
 function saveState(s) {
   fs.mkdirSync(STORE(), { recursive: true })
@@ -50,6 +56,8 @@ function saveState(s) {
 }
 /** 现用版本；空串 = 出厂版（安装器自带、没有在线更新过） */
 export const currentVersion = () => state().current
+/** 安装器的打包时刻（ms）；0 = 不知道（0.1.5 及更早的安装器没写这一项） */
+export const factoryAt = () => state().factoryAt
 
 /** 本机留存的可回退版本（含出厂版），新的在前 */
 export function listLocal() {

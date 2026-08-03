@@ -55,8 +55,12 @@ export function managed(rel) {
 export function state() {
   try {
     const s = JSON.parse(fs.readFileSync(STATE(), "utf8"))
-    return { current: String(s.current || ""), history: Array.isArray(s.history) ? s.history : [] }
-  } catch { return { current: "", history: [] } }
+    return {
+      current: String(s.current || ""),
+      history: Array.isArray(s.history) ? s.history : [],
+      factoryAt: Number(s.factoryAt) || 0,
+    }
+  } catch { return { current: "", history: [], factoryAt: 0 } }
 }
 function saveState(s) {
   fs.mkdirSync(STORE(), { recursive: true })
@@ -66,6 +70,8 @@ function saveState(s) {
 }
 /** 现用版本；空串 = 出厂版（安装器自带、没有在线更新过） */
 export const currentVersion = () => state().current
+/** 安装器的打包时刻（ms）；0 = 不知道（0.1.5 及更早的安装器没写）。判"包是不是真的更新"用，见 pack-freshness.mjs */
+export const factoryAt = () => state().factoryAt
 
 /** 本机留存的可回退版本（含出厂版），新的在前 */
 export function listLocal() {
