@@ -152,6 +152,27 @@ test("登录：账号不存在与口令错返回同一个码（不泄露账号�
   assert.deepEqual(a.json.error, b.json.error)
 })
 
+test("登录：口令带首尾空白(粘贴事故)按 trim 回退放行；错口令加空白仍拒", async (t) => {
+  const { app, admin } = await setup(); t.after(() => app.close())
+  const u = await makeReadyUser(app, admin, "pastey", "粘贴侠")
+  const ok = await app.req("/api/auth/login", { method: "POST", body: { username: "pastey", password: u.password + " \n" } })
+  assert.equal(ok.status, 200, "尾随空白应被 trim 回退救回")
+  const bad = await app.req("/api/auth/login", { method: "POST", body: { username: "pastey", password: " wrongPw1! " } })
+  assert.equal(bad.status, 401)
+})
+
+test("改密：新口令首尾空白 trim 后落库，此后不带空白也能登", async (t) => {
+  const { app, admin } = await setup(); t.after(() => app.close())
+  const u = await makeReadyUser(app, admin, "pastey2", "粘贴侠二号")
+  const chg = await app.req("/api/auth/password", {
+    method: "POST", headers: { authorization: "Bearer " + u.access },
+    body: { oldPassword: u.password, newPassword: "  Bb2!bbbb8  " },
+  })
+  assert.equal(chg.status, 200)
+  const li = await app.req("/api/auth/login", { method: "POST", body: { username: "pastey2", password: "Bb2!bbbb8" } })
+  assert.equal(li.status, 200, "落库的应是 trim 后的口令")
+})
+
 test("改密：校验原口令与复杂度，改完换新票据且旧票据立即失效", async (t) => {
   const { app, admin } = await setup(); t.after(() => app.close())
   const add = await admin("/admin/api/user-add", { method: "POST", body: { username: "zhangsan", displayName: "张三" } })

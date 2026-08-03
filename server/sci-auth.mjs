@@ -461,8 +461,13 @@ async function handleClientApi(req, res, pathname) {
       return fail(res, 429, "RATE_LIMITED", `尝试过于频繁，请 ${Math.ceil(left / 60000)} 分钟后再试`)
     }
     const user = DB.getUserByName(db, username)
+    // 口令先按原文比对，不中再试 trim 后的：凭证多从「账号:xxx 口令:yyy」的聊天消息里粘贴，
+    // 常带行尾空格/换行（审计里出现过 actor="daimao:" 的粘贴事故，同批 5 连败）；老架构登录
+    // 就 trim，用户肌肉记忆是"粘贴直接登"。改密路径 trim 后才落库，两侧自洽，回退不降强度。
+    const pwOk = user && (A.verifyPassword(password, user.pass_hash, user.pass_salt) ||
+      (password !== password.trim() && A.verifyPassword(password.trim(), user.pass_hash, user.pass_salt)))
     // 用户不存在与口令错误返回同一个错误码/文案：不给爆破者"这个账号存在"的信号
-    if (!user || !A.verifyPassword(password, user.pass_hash, user.pass_salt)) {
+    if (!pwOk) {
       A.noteLoginFail(lockKey)
       audit("login.fail", { actor: username, ip })
       return fail(res, 401, "BAD_CREDENTIALS", "账号或口令不正确")
@@ -506,8 +511,13 @@ async function handleClientApi(req, res, pathname) {
     const au = authClient(req, { requireFullScope: false })
     if (!au.ok) return fail(res, au.status, au.code, au.message)
     const b = await readBody(req)
-    const oldPw = String(b.oldPassword || ""), newPw = String(b.newPassword || "")
-    if (!A.verifyPassword(oldPw, au.user.pass_hash, au.user.pass_salt))
+    // newPw 落库前 trim：保证存储口令永无首尾空白，登录侧的 trim 回退才能与之自洽
+    // （若 trim 后缺了特殊字符，下面的强度检查会如实拒绝，不会静默吞掉用户的意图）。
+    // oldPw 用与登录同款的回退，粘贴带空白的用户别在改密这步又被"原口令不正确"卡死。
+    const oldPw = String(b.oldPassword || ""), newPw = String(b.newPassword || "").trim()
+    const oldOk = A.verifyPassword(oldPw, au.user.pass_hash, au.user.pass_salt) ||
+      (oldPw !== oldPw.trim() && A.verifyPassword(oldPw.trim(), au.user.pass_hash, au.user.pass_salt))
+    if (!oldOk)
       return fail(res, 401, "BAD_CREDENTIALS", "原口令不正确")
     const bad = A.checkPasswordStrength(newPw)
     if (bad) return fail(res, 400, "WEAK_PASSWORD", bad)
