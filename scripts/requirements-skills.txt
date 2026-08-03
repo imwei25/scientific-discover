@@ -39,6 +39,9 @@ adjustText         # 标签自动避让
 # ---- 全文下载 / PDF 转换（fulltext-retrieval）----
 pymupdf            # 读/校验 PDF
 pymupdf4llm        # PDF → Markdown（喂给 LLM 分析）
+playwright         # 机构通道 fetch_institutional.py：CDP 挂接用户已登录 Chrome；
+                   # 只 attach 不启动，无需 `playwright install` 下载浏览器内核；
+                   # 服务器上无浏览器时该通道优雅降级，装着无害
 
 # ---- 数据完整性自查（data-integrity；封装第三方 paperconan CLI）----
 paperconan[all]==0.8.2   # 源数据数值取证；[all] 含 python-calamine(旧 xls) + pdfplumber(pdf 表)；锁版本，见 THIRD_PARTY_SKILLS.md

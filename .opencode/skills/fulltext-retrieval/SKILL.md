@@ -1,7 +1,7 @@
 ---
 name: fulltext-retrieval
-description: Batch download open-access PDFs by DOI, PMID, or title using legitimate OA APIs (Unpaywall, PMC, OpenAlex, Crossref). PMID/Title inputs auto-resolve to a DOI first. Per-record crash isolation (one truncated download never sinks the batch). Optional PDF→Markdown conversion for token-efficient LLM analysis.
-triggers: PDF download, fulltext retrieval, open access PDF, batch download papers, meta-analysis PDF, PDF to markdown, convert PDF
+description: Batch download full-text PDFs by DOI, PMID, or title. Tier 1 uses legitimate OA APIs (Unpaywall, PMC, OpenAlex, Crossref); tier 2 (fetch_institutional.py) attaches to the user's own logged-in Chrome via CDP to reuse their CARSI/institutional SSO session for subscribed-but-paywalled papers — never touches credentials, waits for the user at login walls. PMID/Title inputs auto-resolve to a DOI first. Per-record crash isolation. Optional PDF→Markdown conversion.
+triggers: PDF download, fulltext retrieval, open access PDF, batch download papers, meta-analysis PDF, PDF to markdown, convert PDF, 机构订阅全文, CARSI, 校园网下文献, institutional access PDF
 tools: Read, Write, Edit, Bash, Grep, Glob
 model: inherit
 ---
@@ -17,7 +17,11 @@ Batch download open-access full-text PDFs from a DOI list using legitimate OA AP
 ## Pipeline
 
 ```
-输入 DOI / PMID / 标题 →（PMID/标题先解析成 DOI）→ arXiv → Unpaywall → PMC (Europe PMC render / OA FTP / web) → OpenAlex → Crossref → landing page
+第一梯队（fetch_oa.py，纯 OA，可无人值守）：
+  输入 DOI / PMID / 标题 →（PMID/标题先解析成 DOI）→ arXiv → Unpaywall → PMC (Europe PMC render / OA FTP / web) → OpenAlex → Crossref → landing page
+  ↓ 失败的进 manual_needed.txt
+第二梯队（fetch_institutional.py，机构通道，需本机已登录 Chrome，见下节）：
+  manual_needed.txt → CDP 挂接用户已登录 CARSI/SSO 的 Chrome → doi.org 落地 → （遇登录墙等用户人工过）→ 带机构会话取 PDF
 ```
 
 Each DOI goes through these sources in order until a valid PDF (≥10 KB, `%PDF-` header) is found. arXiv DOIs (`10.48550/arXiv.2401.01234`, version suffixes, old-style `hep-th/9901001`, or a bare `arXiv:` id) resolve directly to the arXiv PDF first.
@@ -125,6 +129,40 @@ override with `--report PATH`):
   `unavailable`; a `mismatch` is **flagged** for review and **never** auto-rejects a PDF
   (guards against a publisher serving a wrong/redirect PDF that still passes the `%PDF-` check).
 
+## 机构通道（CARSI / 浏览器登录态）— `fetch_institutional.py`
+
+OA 渠道天然拿不到「付费墙内但**机构已订购**」的文献。第二梯队借鉴 nature-downloader 的思路：**不启动新浏览器，而是通过 CDP 挂接用户本机已登录 CARSI / 机构 SSO 的真实 Chrome**，复用其合法授权会话取全文。这是用用户自己的订阅权限，不是绕付费墙。
+
+### 前置（一次性）
+
+```bash
+# 1. 用专用资料目录启动 Chrome 并开 CDP（Chrome 136+ 禁止对默认资料目录开远程调试）
+#    Windows (PowerShell)：
+#    & "C:\Program Files\Google\Chrome\Application\chrome.exe" --remote-debugging-port=9222 --user-data-dir="$env:LOCALAPPDATA\sci-scholar-chrome"
+#    Linux/macOS 命令见脚本 --help / CDP_HELP；没有 Chrome 用 Edge（msedge）也行。
+# 2. 在该窗口经图书馆 / CARSI（www.carsi.edu.cn）登录一次——会话存在专用资料目录，之后直接复用
+# 3. 装可选依赖（只挂接现有 Chrome，不需要 playwright install 下载浏览器内核）
+${REPO_ROOT:-/app}/.venv/bin/python -m pip install playwright
+```
+
+### 用法
+
+```bash
+# 典型：接在 fetch_oa.py 之后，吃它的 manual_needed.txt，写同一个 pdfs/ 和同一份报告
+python fetch_institutional.py pdfs/manual_needed.txt -o pdfs/
+
+# 也接受 fetch_oa 支持的任何 worklist 格式；限量/限速/CDP 地址可调
+python fetch_institutional.py worklist.tsv -o pdfs/ --max 10 --delay 8 --cdp http://127.0.0.1:9222
+```
+
+行为要点：
+
+- **遇登录墙 / 人机验证只等人**：检测到 CARSI/Shibboleth/OpenAthens/EZproxy/验证页时暂停，提示用户去 Chrome 窗口自己完成（默认最多等 240s，`--login-timeout` 可调），**脚本绝不读取、存储、代填任何密码/OTP**，也绝不自动过验证码。
+- **限量限速是硬闸**：单次默认 ≤20 条（`--max`）、逐条间隔默认 5s（下限 3s）。出版商对批量下载有风控，触发会**连累全机构的访问权限**——别为省事拉高上限做全刊批量抓取。
+- **结果并回同一份报告**：成功条目在 `retrieval_report.json` 里记 `status: "institutional"`（`counts.institutional` 单独计数），已下到的自动从 `manual_needed.txt` 划掉；同样做标题交叉核对。**向用户汇报时如实区分哪些走 OA、哪些走机构通道、哪些仍失败及原因**。
+- **优雅降级**：探测不到 CDP（服务器多用户部署、无浏览器环境）→ 打印启动指引后 exit 2，不影响 OA 主管线——与 `zotero-library` 的同机降级策略一致；此时失败清单仍走人工/馆际互借。
+- 每条独立隔离（同 fetch_oa），单条超时/异常绝不拖垮整批。
+
 ## Attach PDFs into Zotero ("Find Available PDF")
 
 OA-only resolvers miss paywalled-but-licensed papers. To attach full text **inside
@@ -216,7 +254,8 @@ After conversion, `.md` files sit alongside `.pdf` files. Claude Code can then u
 
 ## Limitations
 
-- Only retrieves **open-access** articles. Paywalled articles require institutional access.
+- `fetch_oa.py` only retrieves **open-access** articles. Paywalled-but-subscribed articles go through `fetch_institutional.py` (requires a same-machine logged-in Chrome; unavailable on the multi-user server — expected, not a bug). Articles the user's institution has **not** licensed fail in both tiers by design.
+- The institutional tier is **interactive**: login walls and bot checks are handed to the user, never automated. It is deliberately rate-limited and batch-capped.
 - Landing page scraping may fail on publisher-specific JavaScript-heavy pages.
 - Some recent articles may not yet be indexed by OA sources.
 - PDF→Markdown quality depends on the PDF's text layer. Scanned-only PDFs may produce poor output.

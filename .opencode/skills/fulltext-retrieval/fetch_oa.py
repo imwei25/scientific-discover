@@ -753,7 +753,9 @@ def read_doi_file(path: Path) -> list[dict]:
     Title columns); and a Markdown pipe table with a DOI column. Each record is
     {"doi", "pmid", "title"}.
     """
-    text = Path(path).read_text(encoding="utf-8")
+    # utf-8-sig：Windows 工具（PowerShell 5.1 的 Set-Content -Encoding utf8 等）写的
+    # 清单常带 BOM，用普通 utf-8 读首行会变成 "﻿10.xxx/..."，DOI 识别整条失效。
+    text = Path(path).read_text(encoding="utf-8-sig")
     lines = text.splitlines()
     first = next((ln for ln in lines
                   if ln.strip() and not ln.strip().startswith("#")), "")

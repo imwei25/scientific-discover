@@ -40,7 +40,7 @@
 ## 四、单步直派：请求 → 技能
 - **画图 / 看数 / 统计**：`data-analysis`（探索性看数、150dpi 预览）、`nature-figure`（投稿级出版图：森林图/KM/火山图，300dpi+矢量）、`clinical-stats`（基线表/Table 1、样本量）
 - **临床推断统计的归属（避免误派）**：方法比对（Bland-Altman / Passing-Bablok / 一致性 LoA）、生存分析（KM / Cox）、ROC / 诊断效能、组间检验 / 相关 / 回归等**分析**一律走 `data-analysis`，要投稿级图再叠 `nature-figure`；`clinical-stats` **只**管 Table 1 基线表与样本量 / 把握度，别拿它做上述分析。**且诊断准确性 / 方法比对 / 纯实验室验证类研究常无人口学基线协变量（年龄 / 性别 / 分期等）→ 此时 Table 1 无对应数据，`clinical-stats` 可整步跳过、全走 `data-analysis`，别把检测值 / 生存时间硬塞成"基线表"制造误导。**
-- **检索 / 全文**：`search-lit`（PubMed 系）、`literature-review`（Europe PMC / 叙述性综述成文）、`fulltext-retrieval`（下 PDF/OA、PDF 转 md）
+- **检索 / 全文**：`search-lit`（PubMed 系）、`literature-review`（Europe PMC / 叙述性综述成文）、`fulltext-retrieval`（下 PDF：OA 渠道 + 机构通道（挂本机已登录 CARSI 的 Chrome，仅同机可用、服务器优雅降级）、PDF 转 md）
 - **本地文献库**：`zotero-library`（读用户**本机 Zotero** 题录 + 对其中 PDF 做全文证据检索，“基于我自己的文献库回答”；默认只读，导出回写用 `push`（写操作）。**仅在 opencode 与 Zotero 同机运行时可用**，中心服务器多用户下探测失败会优雅回退，改用 `search-lit`/`fulltext-retrieval`）
 - **把综述检索到的文献导入 Zotero / 会话小库**（做完 `search-lit`/`literature-review` 后，用户说“把这批文献存进 Zotero / 存成小库问答”）：
   - → **Zotero**：`zotero-library` 的 `push --csv evidence_table.csv`（或 `--bib refs.bib`）把题录写进 Zotero 当前选中分类（**只有题录、无 PDF 附件**）。
