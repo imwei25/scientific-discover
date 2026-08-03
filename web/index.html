@@ -1376,7 +1376,10 @@ function renderReminder() {
   }
   reminderEl.appendChild(list); reminderEl.classList.add("show")
 }
-const loadSessions = () => fetch("api/sessions").then(r => r.json()).then((l) => { sessList = l || []; renderSessions(sessList); if (sessionId) setModBadge(sessList.find((s) => s.id === sessionId)?.module || "chat") }).catch(() => {})
+// 【sessList 必须是数组】api/sessions 自项目分组后回的是 {projects, sessions} 对象；此前把整个
+// 对象塞进 sessList，下游三处 sessList.find(...) 全是 TypeError——resumeSession 在 find 处同步
+// 抛错，点左侧会话「毫无反应」（打包版实测复现）。对象只交给 renderSessions，缓存只存数组。
+const loadSessions = () => fetch("api/sessions").then(r => r.json()).then((l) => { sessList = (l && l.sessions) || []; renderSessions(l); if (sessionId) setModBadge(sessList.find((s) => s.id === sessionId)?.module || "chat") }).catch(() => {})
 async function resumeSession(id) {                 // 载入历史 → 设为当前会话 →（后台还在生成则续流）
   pendingProjectId = null                          // 打开的是已有会话 → 不是「立刻新建对话」，解除项目归入
   detachStream()                                   // 只退订原会话的流，后台生成不受影响
