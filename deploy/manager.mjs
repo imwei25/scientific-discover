@@ -455,7 +455,8 @@ async function handleUserLogin(u, fwdPath, req, res) {
     return res.end(JSON.stringify({ ok: false, err: "验证码错误", captcha: true }))
   }
   await ensureUp(u, clientIp(req))   // 登录也走冷启动限流（本路径已先过图形验证码，正常用户不会撞到）
-  proxyBuffered(u, fwdPath, req, res, body, (status) => audit(status === 200 ? "login.ok" : "login.fail", { user: u.name, ip: clientIp(req), reason: status === 200 ? "" : "password" }))
+  // reason 只在 401 记 "password"：429(锁定)/502 等也记 password 会把排障带偏（曾把网关故障当成用户密码错）
+  proxyBuffered(u, fwdPath, req, res, body, (status) => audit(status === 200 ? "login.ok" : "login.fail", { user: u.name, ip: clientIp(req), reason: status === 200 ? "" : status === 401 ? "password" : "http_" + status }))
 }
 
 // ---- 通用登录页（服务于裸 /）：沿用原 web/login.html 的视觉（背景视频 + 玻璃登录框 + 主视觉文案），
@@ -562,7 +563,13 @@ const LOGIN_HTML = `<!doctype html>
       if(r.ok){go.textContent='Welcome ✓';location.href='/'+encodeURIComponent(username)+'/';return}
       var j={};try{j=await r.json()}catch(_){}
       refreshCap();
-      if(j&&j.captcha){fail('验证码错误')}else if(r.status===503){fail('服务器繁忙，请稍候重试')}else{fail('账号或密码错误')}
+      // 只有 401 才是密码错；429(限流/锁定)/502(容器不可用)/504 等误报成"账号或密码错误"会让密码正确的用户
+      // 在弱网/冷启动时白改密码。服务端各错误分支都给了 JSON err 文案，优先原样展示。
+      if(j&&j.captcha){fail('验证码错误')}
+      else if(j&&j.err){fail(j.err)}
+      else if(r.status===401){fail('账号或密码错误')}
+      else if(r.status===503){fail('服务正在启动，请稍后重试')}
+      else{fail('服务器暂时无法访问（HTTP '+r.status+'），请稍后重试')}
     }catch(_){refreshCap();fail('网络异常，请重试')}
     go.disabled=false;go.textContent='Sign In';
   });
