@@ -15,6 +15,21 @@ description: 把 Markdown 稿件渲染成 Word (.docx) 投稿版。医学期刊�
 ## 依赖
 需要 **pandoc**（仓库根 `install.ps1 -WithPdf` / `install.sh --with-pdf` 已装；单独装：`winget install JohnMacFarlane.Pandoc` / `apt-get install pandoc` / `brew install pandoc`）。**不需要 xelatex/MiKTeX**（那是 PDF 才要的）。
 
+## 默认送审格式：`--journal generic-submission`（用户没指定期刊时就用它）
+**用户没说投哪个刊、或说"不知道投什么期刊" → 一个参数出件，别再逐项问格式**：
+```bash
+bash ${REPO_ROOT:-/app}/.opencode/skills/render-docx/scripts/render_docx.sh -i manuscript.md --journal generic-submission
+```
+预设落齐：Times New Roman（中文宋体）12pt / 双倍行距 / 连续行号 / 页脚居中页码 /
+正文首行缩进 4 个英文字符 / 图题表题 10.5pt 居中且序号加粗 / 表内 10pt 单倍行距 /
+三线表（顶底 1.5 磅、表头下 0.5 磅）/ 论文标题 16pt、一级标题 14pt、其余标题 12pt 全加粗 /
+作者与机构 10.5pt 居中 / 1in 边距（`--margin 0.75in` 可换窄边距）。
+
+**用户指定了期刊** → 先看 `--journal list` 有无现成预设；没有就 **WebFetch 该刊的
+Instructions for Authors** 取其字体字号/行距/行号/图表位置/参考文献风格，再用下面的单项参数落，
+或照 `presets/README.md` 存成新预设。查不到就如实说明、退回 `generic-submission`，
+**别凭印象编该刊要求**。
+
 ## 用法
 脚本在 `/app/.opencode/skills/render-docx/scripts/`（容器内的实际路径；命令行里写 `${REPO_ROOT:-/app}/...` 由 shell 展开，但**散文里的路径要能直接拿去 Read/ls**，所以这里写实路径）（Windows 经 Git Bash 跑 .sh）：
 ```bash
@@ -29,6 +44,11 @@ bash ${REPO_ROOT:-/app}/.opencode/skills/render-docx/scripts/render_docx.sh -i m
 # 手动指定送审格式（不套预设）：双倍行距 + 连续行号 + Times 12pt + 1in 边距
 bash ${REPO_ROOT:-/app}/.opencode/skills/render-docx/scripts/render_docx.sh -i manuscript.md \
   --font "Times New Roman" --fontsize 12 --margin 1in --line-spacing double --line-numbers
+
+# 细排单项（各自可单独用，也可覆盖预设值）：页码 / 首行缩进 / 图表题与表内字号 / 分级标题字号 / 作者块
+bash ${REPO_ROOT:-/app}/.opencode/skills/render-docx/scripts/render_docx.sh -i manuscript.md \
+  --page-numbers --indent-chars 4 --caption-fontsize 10.5 --table-fontsize 10 \
+  --title-fontsize 16 --h1-fontsize 14 --heading-fontsize 12 --author-fontsize 10.5
 
 # 图表置于正文末尾（NEJM/JAMA/Lancet 送审稿要求，原位留"见文末"占位）
 bash ${REPO_ROOT:-/app}/.opencode/skills/render-docx/scripts/render_docx.sh -i manuscript.md \
@@ -49,6 +69,13 @@ bash ${REPO_ROOT:-/app}/.opencode/skills/render-docx/scripts/render_docx.sh -i m
 
 ## 说明
 - **期刊/标书预设（`--journal`）**：预设文件在 `presets/*.env`（与 render-pdf-doc 共用），一个参数落齐页面格式 + 参考文献样式；渲染完会打印该预设的 `PRESET_NOTE` 提醒预设覆盖不到的要求（字数、结构式摘要、图表数等）。预设值可被命令行单项覆盖。除期刊外另有标书预设：`most-key-rd`（重点研发）/`municipal-sci`（市科局）/`nih-forms-i`（NIH）/`hospital-fund`（院内基金）。加新预设见 `presets/README.md`。
+- **分级标题字号**：`--heading-fontsize` 管 Heading 1-6（统一值），`--h1-fontsize` 单独覆盖一级标题，`--title-fontsize` 管稿件 YAML `title:` 生成的论文标题。**给了任一标题字号，就顺带把 Title/Heading 1-6 统一改成加粗 + 黑色**——pandoc 默认模板的标题是主题蓝且不加粗，送审稿不能是蓝的。
+- **页码 / 首行缩进 / 题注 / 表内字号 / 作者块**（`--page-numbers` `--indent-chars N` `--caption-fontsize PT` `--table-fontsize PT` `--author-fontsize PT`）：
+  - `--page-numbers` 在页脚居中插 PAGE 域（pandoc 默认模板不带页码，审稿人没法按页提意见）。
+  - `--indent-chars N` 按 0.5em/字符折算首行缩进（4 字符 ≈ 24pt @12pt 正文）。**pandoc 模板里几乎所有样式都 base=Normal**，所以脚本会把标题、题名块、题注、列表、代码块、页眉页脚的首行缩进显式清零——不清就会被继承，标题整体被顶进去 4 个字符。
+  - `--caption-fontsize` 同时作用于 pandoc 题注样式与稿件里手写的 `**表1. …**` 题注段：设字号、单倍行距、**只加粗序号前缀**（说明文字改常规）、图表题居中、去掉 pandoc 默认的斜体；表注 / 图注（`表注：`/`注：`/`Note.` 开头）跟着用同一字号但不居中。表题另加"与下段同页"，否则分页时表题留在上一页页脚、表格甩到下一页。
+    - ⚠️ 手写题注**必须整段加粗**（`**表1. 基线特征**`）才会被认出来——否则以"表2 显示……"开头的正文段会被误判成题注拉去居中。
+  - `--table-fontsize` 显式定表内字号；不给则沿用旧行为（正文 −1.5pt、下限 9pt）。
 - **标题与正文分开设字体字号**：`--heading-cjk-font 黑体 --heading-fontsize 14` 单独控制 Heading 1-6 的中文字体与字号（各级统一；Title/Subtitle 不动）——中式标书"标题黑体四号、正文宋体小四"靠这对参数（标书预设已内置）。仅 docx 侧支持，PDF 侧忽略。
 - **格式参数的实现**：pandoc 本身不管字体/边距/行距，脚本在 pandoc 之后用 python-docx（项目根 `.venv`）后处理落格式——改 Normal/Body Text/标题样式的字体（含 eastAsia 中文字体）、字号、行距，改节属性的边距与 `w:lnNumType` 连续行号。**格式参数后处理失败会报错退出（exit 5）**，不会静默给你一个没格式的产物。
 - **中文字体**：不给 `--journal`/`--cjk-font`/`--reference-doc` 时 pandoc 用内置默认模板，中文能显示但字体是"等线"之类、并非期刊要求的宋体/黑体/仿宋。**中文投稿至少用 `--journal cmj` 或 `--cjk-font 宋体`**；有期刊官方 Word 模板则 `--reference-doc` 更优——参考文献悬挂缩进、表格线型、题注这些更细的格式仍以模板为准。
@@ -69,6 +96,9 @@ bash ${REPO_ROOT:-/app}/.opencode/skills/render-docx/scripts/render_docx.sh -i m
   > 转横向是排版层的最后一招，**治标不治本**：源头把列名缩短、拆表、或把次要列移进补充材料，才是投稿更稳的做法（见 `write-paper` 表格排版铁律第 1/3 条）。
 
 ## 当前限制（如实告知用户，别假装能做）
+- **页数不统计**：脚本不知道成稿有多少页（分页由 Word 排版时决定）。"正文 ≤30 页"这类要求得让用户打开 Word 自己看，别口头保证。
+- **参考文献的期刊全称 / et al. 规则管不了**：`[n]` 文本引用是写作阶段定死的文字，排版层不重排（`--csl` 只认 `[@key]`+.bib）。要"期刊名全称、第 3 位作者后 et al."得在 `write-paper` 阶段写对。
+- **图表位置**：脚本按稿件里图表所在位置渲染（默认即"放正文对应位置"）；要后置得显式加 `--figures-at-end`。
 - **修订模式 (track changes)**：返修阶段期刊常要保留修订痕迹，本脚本裸转不产生 track changes；需要的话在 Word 里开启修订后再改。
 - **双栏**：送审稿几乎都是单栏（双栏是期刊出版排版，投稿不需要）；确需双栏靠 `--reference-doc` 模板。
 - **`[n]` 文本引用不能被 CSL 重排**：本套件 `write-paper` 默认产出 `[n]` 编号文本引用，`--csl` 对它无效（只认 `[@key]`+.bib）。要换参考文献样式得回写作层改，或手工调。

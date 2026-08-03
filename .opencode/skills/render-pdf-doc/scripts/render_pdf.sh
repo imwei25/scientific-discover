@@ -42,6 +42,9 @@ CJKFONT=""
 CLI_MAINFONT_SET=0
 CLI_CJKFONT_SET=0
 JOURNAL=""; MARGIN=""; FONTSIZE=""; LINESTRETCH=""; LINENUMBERS=""; CSL=""; BIB=""; FIGSATEND=""
+# 送审稿细排（与 render-docx 同名参数对齐；PDF 侧靠 -H 头注入 LaTeX 实现）
+INDENTCHARS=""; CAPTIONFONTSIZE=""; TABLEFONTSIZE=""; TITLEFONTSIZE=""; H1FONTSIZE=""
+HEADFONTSIZE=""; AUTHORFONTSIZE=""
 EXTRA=()
 
 # 期刊预设与 CSL 同 render-docx 共用一份（单一源头，别复制）
@@ -63,6 +66,13 @@ Options:
   --fontsize PT         字号，LaTeX 只认 10/11/12 (default 12)
   --line-spacing V      行距: 数字倍数或 single/onehalf/double (default 1.4)
   --line-numbers        连续行号 (lineno 宏包)
+  --indent-chars N      正文首行缩进 N 个英文半角字符 (按 0.5em/字符折算)
+  --caption-fontsize PT 图题/表题字号 (caption 宏包；序号加粗、居中)
+  --table-fontsize PT   表内字号 (longtable/tabular 环境内)
+  --title-fontsize PT   论文标题字号 (titling)
+  --h1-fontsize PT      一级标题 \section 字号
+  --heading-fontsize PT 二级及以下标题 \subsection.. 字号
+  --author-fontsize PT  作者/机构块字号 (titling)
   --figures-at-end      把图表搬到正文末尾 (NEJM/JAMA/Lancet 送审稿要求)
   --csl STYLE           CSL 文件路径或 presets/csl 里的名字 — 需稿件用 [@key] 引用 + --bib
   --bib FILE            bibliography (.bib)
@@ -96,6 +106,13 @@ while [[ $# -gt 0 ]]; do
     --fontsize) FONTSIZE="$2"; shift 2 ;;
     --line-spacing) LINESTRETCH="$(norm_spacing "$2")"; shift 2 ;;
     --line-numbers) LINENUMBERS=1; shift ;;
+    --indent-chars) INDENTCHARS="$2"; shift 2 ;;
+    --caption-fontsize) CAPTIONFONTSIZE="$2"; shift 2 ;;
+    --table-fontsize) TABLEFONTSIZE="$2"; shift 2 ;;
+    --title-fontsize) TITLEFONTSIZE="$2"; shift 2 ;;
+    --h1-fontsize) H1FONTSIZE="$2"; shift 2 ;;
+    --heading-fontsize) HEADFONTSIZE="$2"; shift 2 ;;
+    --author-fontsize) AUTHORFONTSIZE="$2"; shift 2 ;;
     --figures-at-end) FIGSATEND=1; shift ;;
     --csl) CSL="$2"; shift 2 ;;
     --bib) BIB="$2"; shift 2 ;;
@@ -129,12 +146,22 @@ if [[ -n "$JOURNAL" ]]; then
   fi
   PRESET_MARGIN=""; PRESET_FONT=""; PRESET_CJKFONT=""; PRESET_FONTSIZE=""
   PRESET_LINESPACING=""; PRESET_LINENUMBERS=""; PRESET_CSL=""
+  PRESET_INDENT_CHARS=""; PRESET_CAPTION_FONTSIZE=""; PRESET_TABLE_FONTSIZE=""
+  PRESET_TITLE_FONTSIZE=""; PRESET_H1_FONTSIZE=""; PRESET_HEADING_FONTSIZE=""
+  PRESET_AUTHOR_FONTSIZE=""
   # shellcheck disable=SC1090
   source "$PFILE"
   [[ -z "$MARGIN" ]] && MARGIN="$PRESET_MARGIN"
   [[ -z "$FONTSIZE" ]] && FONTSIZE="$PRESET_FONTSIZE"
   [[ -z "$LINESTRETCH" ]] && LINESTRETCH="$PRESET_LINESPACING"
   [[ -z "$LINENUMBERS" && "$PRESET_LINENUMBERS" == "1" ]] && LINENUMBERS=1
+  [[ -z "$INDENTCHARS" ]] && INDENTCHARS="$PRESET_INDENT_CHARS"
+  [[ -z "$CAPTIONFONTSIZE" ]] && CAPTIONFONTSIZE="$PRESET_CAPTION_FONTSIZE"
+  [[ -z "$TABLEFONTSIZE" ]] && TABLEFONTSIZE="$PRESET_TABLE_FONTSIZE"
+  [[ -z "$TITLEFONTSIZE" ]] && TITLEFONTSIZE="$PRESET_TITLE_FONTSIZE"
+  [[ -z "$H1FONTSIZE" ]] && H1FONTSIZE="$PRESET_H1_FONTSIZE"
+  [[ -z "$HEADFONTSIZE" ]] && HEADFONTSIZE="$PRESET_HEADING_FONTSIZE"
+  [[ -z "$AUTHORFONTSIZE" ]] && AUTHORFONTSIZE="$PRESET_AUTHOR_FONTSIZE"
   # 预设西文字体只在用户没自己指定字体时生效（中文稿的中文字体由 ctex fontset 管）
   if [[ "$CLI_MAINFONT_SET" == "0" && -n "$PRESET_FONT" ]]; then MAINFONT="$PRESET_FONT"; CLI_MAINFONT_SET=1; fi
   if [[ -z "$CSL" && -n "$BIB" && -n "$PRESET_CSL" ]]; then CSL="$PRESET_CSL"; fi
@@ -307,6 +334,18 @@ PY
   echo "[render_pdf] redact_internal: stripped internal history/version/PI lines" >&2
 fi
 
+# 手写表题（`**表1. …**` 写在表格上方）→ pandoc 表格题注（表后 `: **表1.** …`）。
+# 只在要求了题注字号时做：caption 宏包只作用于真 \caption{}，不转的话表题就是一段
+# 普通正文，PDF 里表题 12pt、图题 10.5pt，两者不一致。列宽推断之前做（转换会动表块）。
+if [[ -n "$CAPTIONFONTSIZE" && -n "${PYBIN:-}" ]]; then
+  mktmp
+  TC_SRC="$WORK"; WORK="$TMPDIR/tc_$(basename "$INPUT")"
+  if ! "${PYBIN:-python3}" "$SCRIPT_DIR/table_caption_to_pandoc.py" "$TC_SRC" --out "$WORK"; then
+    echo "[render_pdf] WARN: table_caption_to_pandoc.py 失败，表题保持正文字号" >&2
+    WORK="$TC_SRC"
+  fi
+fi
+
 if [[ "$INFER_COLWIDTHS" == "1" ]]; then
   mktmp
   SRC="$WORK"
@@ -354,6 +393,94 @@ if [[ -n "$LINENUMBERS" ]]; then
   LNHDR="$TMPDIR/lineno.tex"
   printf '%s\n' '\usepackage{lineno}' '\linenumbers' > "$LNHDR"
   ARGS+=(-H "$LNHDR")
+fi
+
+# ---- 送审稿细排：首行缩进 / 题注字号 / 表内字号 / 标题与题名块字号 ----
+# docx 侧靠 python-docx 改样式，PDF 侧只能靠 LaTeX，所以这里生成一个 -H 头。
+# 每项都由对应参数（或 --journal 预设字段）单独开关，没给就一行都不注入——
+# 免得给不需要送审格式的文档（标书、简报）平白引入 titlesec/titling 这类会改版式的宏包。
+if [[ -n "$INDENTCHARS$CAPTIONFONTSIZE$TABLEFONTSIZE$TITLEFONTSIZE$H1FONTSIZE$HEADFONTSIZE$AUTHORFONTSIZE" ]]; then
+  mktmp
+  SUBHDR="$TMPDIR/submission.tex"
+  : > "$SUBHDR"
+  # 行距按 1.2×字号给（LaTeX 惯例）；linestretch 会在其上再乘，双倍行距仍成立
+  lead() { awk -v s="$1" 'BEGIN{printf "%.1f", s*1.2}'; }
+
+  if [[ -n "$INDENTCHARS" ]]; then
+    # 1 个英文半角字符 ≈ 0.5em
+    IND_EM="$(awk -v n="$INDENTCHARS" 'BEGIN{printf "%.2f", n*0.5}')"
+    # pandoc 默认模板在无 indent 变量时强制 \parindent=0pt + 段间距，必须先关掉它
+    extra_has "indent" || ARGS+=(-V "indent=true")
+    # \AtBeginDocument 兜第二遍：ctex/其它宏包也在 begin document 时设 parindent
+    printf '%s\n' \
+      "\\setlength{\\parindent}{${IND_EM}em}" \
+      "\\AtBeginDocument{\\setlength{\\parindent}{${IND_EM}em}}" >> "$SUBHDR"
+  fi
+
+  if [[ -n "$CAPTIONFONTSIZE" ]]; then
+    printf '%s\n' \
+      '\usepackage{caption}' \
+      "\\DeclareCaptionFont{sciCapFont}{\\fontsize{${CAPTIONFONTSIZE}}{$(lead "$CAPTIONFONTSIZE")}\\selectfont}" \
+      '\captionsetup{font=sciCapFont,labelfont={sciCapFont,bf},justification=centering,singlelinecheck=false}' >> "$SUBHDR"
+    # 本套件的题注自带编号（`![图1. …]`、`**表1. …**`），LaTeX 再加一层就成
+    # "Figure 1: 图1. …"。题注自编号时关掉 LaTeX 的标签，别双重编号。
+    NCAP="$(grep -cE '^!\[' "$WORK" || true)"
+    NSELF="$(grep -cE '^!\[\s*\**\s*(图|表|Figure|Table|Fig\.?|Tab\.?)\s*S?[0-9]' "$WORK" || true)"
+    if [[ "$NSELF" -gt 0 ]]; then
+      printf '%s\n' '\captionsetup{labelformat=empty}' >> "$SUBHDR"
+      echo "[render_pdf] 注：题注自带编号（$NSELF/$NCAP 张图），已关掉 LaTeX 自动标签避免 'Figure 1: 图1.' 双重编号" >&2
+    fi
+  fi
+
+  if [[ -n "$TABLEFONTSIZE" ]]; then
+    # pandoc 的 pipe 表一律落成 longtable，所以只钩 longtable：
+    #   · 不能用 \AtBeginEnvironment 把 \fontsize 塞进环境内部——那会打断 longtable 的
+    #     列声明解析，直接 "Misplaced \crcr" 编译失败；要用 Before/After 在环境外套 group。
+    #   · 也别顺手把 tabular 一起钩上：LaTeX 的**作者块本身就是个 tabular**
+    #     （\and 展开成 \end{tabular}…\begin{tabular}），钩了就把作者名一起缩成表内字号。
+    TBLFONT="\\fontsize{${TABLEFONTSIZE}}{$(lead "$TABLEFONTSIZE")}\\selectfont"
+    printf '%s\n' \
+      '\usepackage{etoolbox}' \
+      "\\BeforeBeginEnvironment{longtable}{\\begingroup${TBLFONT}}" \
+      '\AfterEndEnvironment{longtable}{\endgroup}' >> "$SUBHDR"
+  fi
+
+  if [[ -n "$H1FONTSIZE$HEADFONTSIZE" ]]; then
+    H1="${H1FONTSIZE:-$HEADFONTSIZE}"; HN="${HEADFONTSIZE:-$H1FONTSIZE}"
+    if [[ "$CJK_KIND" == "han" ]]; then
+      # ctexart 自己管章节格式，titlesec 与它冲突；用 ctex 官方接口 format+= 追加
+      printf '%s\n' \
+        "\\ctexset{section/format+={\\bfseries\\fontsize{${H1}}{$(lead "$H1")}\\selectfont}," \
+        "  subsection/format+={\\bfseries\\fontsize{${HN}}{$(lead "$HN")}\\selectfont}," \
+        "  subsubsection/format+={\\bfseries\\fontsize{${HN}}{$(lead "$HN")}\\selectfont}}" >> "$SUBHDR"
+    else
+      printf '%s\n' \
+        '\usepackage{titlesec}' \
+        "\\titleformat*{\\section}{\\bfseries\\fontsize{${H1}}{$(lead "$H1")}\\selectfont}" \
+        "\\titleformat*{\\subsection}{\\bfseries\\fontsize{${HN}}{$(lead "$HN")}\\selectfont}" \
+        "\\titleformat*{\\subsubsection}{\\bfseries\\fontsize{${HN}}{$(lead "$HN")}\\selectfont}" >> "$SUBHDR"
+    fi
+  fi
+
+  if [[ -n "$TITLEFONTSIZE$AUTHORFONTSIZE" ]]; then
+    printf '%s\n' '\usepackage{titling}' >> "$SUBHDR"
+    if [[ -n "$TITLEFONTSIZE" ]]; then
+      printf '%s\n' \
+        "\\pretitle{\\begin{center}\\bfseries\\fontsize{${TITLEFONTSIZE}}{$(lead "$TITLEFONTSIZE")}\\selectfont}" \
+        '\posttitle{\par\end{center}\vskip 0.5em}' >> "$SUBHDR"
+    fi
+    if [[ -n "$AUTHORFONTSIZE" ]]; then
+      AF="\\fontsize{${AUTHORFONTSIZE}}{$(lead "$AUTHORFONTSIZE")}\\selectfont"
+      # \preauthor 必须照 titling 默认那样**开一个 tabular**、\postauthor 关掉它：
+      # pandoc 用 \and 分隔多作者，而 \and 展开成 \end{tabular}…\begin{tabular}，
+      # 少了这层就是不配对的 tabular → 编译报 "Misplaced \crcr"（错在表格行，很难联想到作者块）。
+      printf '%s\n' \
+        "\\preauthor{\\begin{center}${AF}\\lineskip 0.5em\\begin{tabular}[t]{c}}" \
+        '\postauthor{\end{tabular}\par\end{center}}' \
+        "\\predate{\\begin{center}${AF}}" '\postdate{\par\end{center}}' >> "$SUBHDR"
+    fi
+  fi
+  ARGS+=(-H "$SUBHDR")
 fi
 
 # 参考文献 CSL 重排（稿件须用 [@key] 引用）

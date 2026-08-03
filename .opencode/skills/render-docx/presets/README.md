@@ -17,7 +17,17 @@
 | `PRESET_CSL` | 参考文献 CSL 文件名，指向本目录 `csl/`；仅当稿件用 `[@key]` 引用 + `--bib` 时生效 | `vancouver.csl` |
 | `PRESET_HEADING_CJKFONT` | 标题(Heading 1-6)中文字体，与正文分开（标书"标题黑体、正文宋体"）；**仅 docx 侧生效**，PDF 侧忽略 | `黑体` |
 | `PRESET_HEADING_FONTSIZE` | 标题字号 pt（各级统一；四号=14）；**仅 docx 侧生效** | `14` |
+| `PRESET_TITLE_FONTSIZE` | 论文标题(Title 样式，来自稿件 YAML `title:`)字号 pt；**仅 docx 侧生效** | `16` |
+| `PRESET_H1_FONTSIZE` | 一级标题(Heading 1)字号 pt，覆盖统一值；**仅 docx 侧生效** | `14` |
+| `PRESET_PAGENUMBERS` | 页脚居中页码（1 开 / 0 关）；PDF 侧 LaTeX 本就带页码，忽略此项 | `1` |
+| `PRESET_INDENT_CHARS` | 正文每段首行缩进的英文半角字符数；**仅 docx 侧生效**（PDF 中文走 ctex 自带 2 字缩进） | `4` |
+| `PRESET_CAPTION_FONTSIZE` | 图题/表题/表注字号 pt（图表题并居中、单倍行距、序号加粗）；**仅 docx 侧生效** | `10.5` |
+| `PRESET_TABLE_FONTSIZE` | 表内字号 pt（不给则正文-1.5pt）；**仅 docx 侧生效** | `10` |
+| `PRESET_AUTHOR_FONTSIZE` | 作者/机构块字号 pt 并居中（稿件 YAML `author:` 生成的 Author 样式段）；**仅 docx 侧生效** | `10.5` |
 | `PRESET_NOTE` | 渲染时打印给用户的提示（预设覆盖不到的期刊要求） | — |
+
+> 动了任一标题字号字段后，docx 侧会顺带把 Title/Heading 1-6 统一**加粗 + 黑色**
+> （pandoc 默认模板标题是主题蓝、非加粗，期刊送审稿不能是蓝的）。
 
 ## 现有预设
 

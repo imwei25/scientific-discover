@@ -57,6 +57,7 @@
 - **数据含患者信息且未脱敏 → 先 `deidentify`**，再做任何统计 / 建库 / 分析。
 - 写完综述 / 论文**自动跑 `reference-check`** 查假引用，全绿再排版。
 - **论文成稿 / 润色完交付时，向用户附查重工具推荐**（中文：PaperPass / PaperYY 免费初查，知网定稿；英文：Scribbr 免费版 / Plagly 免费初查，iThenticate 定稿；详表见 `write-paper`「查重工具推荐」节）。仅论文 / 投稿稿件适用（标书、PPT 等不附）；查重站均为网页端需用户**自行上传**，不代查。
+- **论文 / 润色稿排版出件：没指定期刊就用默认送审格式，别再问格式细节**——`render-docx`（或 `render-pdf-doc`）加 `--journal generic-submission` 一键落齐（Times New Roman 12pt、双倍行距、连续行号、页码、首行缩进 4 字符、图表题 10.5pt 居中且序号加粗、表内 10pt 三线表、标题 16/14/12pt 加粗、作者机构 10.5pt 居中、1in 边距）。**用户指定了期刊** → 先看 `--journal list` 有无现成预设，没有就 **WebFetch 该刊 Instructions for Authors** 摘出要求再落参数；查不到如实说明并退回默认预设，**不凭印象编该刊格式**。细则见 `write-paper`「排版交付格式」。
 - Python 统一走项目根 `.venv`（用 `${REPO_ROOT:-/app}/.venv/bin/python`；缺则先跑 `env-setup`）。
 - **产物直接写当前工作目录，用裸文件名，别拼任何 `outputs/` 前缀。**
   每轮对话的当前工作目录**就是本会话的产物目录**（网关建会话时把 opencode 的 `directory` 定到

@@ -18,7 +18,19 @@ model: inherit
 >
 > **中文全自动、零参数**：`render_pdf.sh` 扫描稿件，**含汉字时自动走 `ctexart` 文档类**——宋体正文 / 黑体标题、标点避头尾、首行缩进、页眉页码，英文数字用 Times，代码框等宽字体覆盖制表符 `├└│─`（Windows Consolas / macOS Menlo / Linux DejaVu Sans Mono）。含韩文时走原 article 路径（Malgun Gothic / Noto CJK KR / Apple SD Gothic Neo）。**中文稿不必再加 `--cjk-font`**。若 frontmatter 写了 `CJKmainfont` 或命令行传了 `--cjk-font`，脚本会尊重覆盖。
 >
-> **期刊送审格式（新）**：`render_pdf.sh` 支持 `--journal nejm|lancet|jama|bmj|cmj|generic-submission`（预设与 render-docx 共用，`--journal list` 列出）一键落齐边距/字号/行距/行号/参考文献 CSL；也可单项指定 `--margin 1in`、`--fontsize 12`（LaTeX 只认 10/11/12）、`--line-spacing double`（或数字倍数）、`--line-numbers`（lineno 连续行号）、`--figures-at-end`（图表搬到正文末，NEJM/JAMA/Lancet 要求）、`--csl vancouver --bib refs.bib`（稿件须用 `[@key]` 引用；无 `[@key]` 却传 CSL 会 WARN 提示不生效）。优先级：命令行 > 预设 > frontmatter > 默认；**只要用户在 `--` 后透传了同名 `-V geometry/fontsize/linestretch`，脚本一律不再注入同名值（透传最优先），彻底避免重复 `-V` 拼接（`\setstretch{1.42.0}`）导致的编译崩溃**——无论我方值来自默认、命令行还是预设。例：`bash scripts/render_pdf.sh -i ms.md --journal nejm --figures-at-end --bib refs.bib`。
+> **默认送审格式（用户没指定期刊时用它）**：`--journal generic-submission` 一键落齐——Times New Roman 12pt、双倍行距、连续行号、页码（LaTeX 本就有）、正文首行缩进 4 个英文字符、图题表题 10.5pt 居中且序号加粗、表内 10pt、论文标题 16pt / 一级标题 14pt / 其余 12pt 全加粗、作者与机构 10.5pt 居中、1in 边距。**用户指定了期刊**则先看有无现成预设，没有就 WebFetch 该刊 Instructions for Authors 后按其要求给参数；查不到就如实说明并退回本预设，别编该刊要求。**注意 PDF 侧几处硬限制见下方「送审细排参数」**——要求严格时优先出 Word（`render-docx`），医学期刊投稿系统本来也多只收 .docx。
+>
+> **期刊送审格式**：`render_pdf.sh` 支持 `--journal nejm|lancet|jama|bmj|cmj|generic-submission`（预设与 render-docx 共用，`--journal list` 列出）一键落齐边距/字号/行距/行号/参考文献 CSL；也可单项指定 `--margin 1in`、`--fontsize 12`（LaTeX 只认 10/11/12）、`--line-spacing double`（或数字倍数）、`--line-numbers`（lineno 连续行号）、`--figures-at-end`（图表搬到正文末，NEJM/JAMA/Lancet 要求）、`--csl vancouver --bib refs.bib`（稿件须用 `[@key]` 引用；无 `[@key]` 却传 CSL 会 WARN 提示不生效）。优先级：命令行 > 预设 > frontmatter > 默认；**只要用户在 `--` 后透传了同名 `-V geometry/fontsize/linestretch`，脚本一律不再注入同名值（透传最优先），彻底避免重复 `-V` 拼接（`\setstretch{1.42.0}`）导致的编译崩溃**——无论我方值来自默认、命令行还是预设。例：`bash scripts/render_pdf.sh -i ms.md --journal nejm --figures-at-end --bib refs.bib`。
+>
+> **送审细排参数（PDF 侧靠注入 LaTeX 实现，与 render-docx 同名参数对齐）**：
+> `--indent-chars N`（首行缩进，按 0.5em/字符）、`--caption-fontsize PT`（caption 宏包：题注字号、居中、标签加粗）、`--table-fontsize PT`（只钩 longtable）、`--title-fontsize` / `--h1-fontsize` / `--heading-fontsize`（中文走 `\ctexset`、西文走 titlesec）、`--author-fontsize`（titling）。这些参数只在显式给出（或预设含对应字段）时才注入宏包，不影响标书/简报等其它文档。三个已踩过的坑，改这段代码前先看：
+> 1. **表内字号只能钩 `longtable`，不能钩 `tabular`**——LaTeX 的**作者块本身就是 tabular**（`\and` 展开成 `\end{tabular}…\begin{tabular}`），钩了作者名会被缩成表内字号。
+> 2. **不能用 `\AtBeginEnvironment{longtable}` 塞 `\fontsize`**（打断列声明解析 → `Misplaced \crcr` 编译失败），要用 `\BeforeBeginEnvironment` + `\AfterEndEnvironment` 在环境外套 group。
+> 3. **改 `\preauthor` 必须照 titling 默认那样自己开一个 `tabular`**、`\postauthor` 关掉它，否则多作者的 `\and` 一展开就是不配对的 tabular（报错还落在表格行上，很难联想到作者块）。
+>
+> **手写表题自动转 pandoc 题注**：给了 `--caption-fontsize` 时，脚本先跑 `scripts/table_caption_to_pandoc.py`，把 write-paper 风格的 `**表1. …**`（写在表格上方的加粗段）改写成表后的 `: **表1.** …`——caption 宏包只作用于真 `\caption{}`，不转的话表题就是一段普通正文、字号和图题对不上。同时若题注自带编号（`![图1. …]`），自动加 `\captionsetup{labelformat=empty}`，避免渲染成 "Figure 1: 图1. …" 双重编号。
+>
+> **PDF 侧做不到、需如实告知用户的**：① 正文基准字号 **LaTeX 只认 10/11/12pt**（10.5pt 这类中文字号做不到，要精确字号出 Word）；② 表注 / 图注段（`表注：`/`Note.`）在 PDF 里保持正文字号——它不是 `\caption`，docx 侧才会按题注字号处理；③ 页数不统计（"≤30 页"要用户自己看）；④ 参考文献的期刊全称与 et al. 规则由写作阶段保证，排版层不重排 `[n]` 文本引用。
 >
 > 以下为上游技能原文（vendored）；本仓库对 `render_pdf.sh` 做了实质增强：中文 ctex 版式、期刊预设与送审格式参数、Python 解释器自动解析、pandoc/xelatex 的 winget/MiKTeX 路径自探测、`redact_internal` 落地。
 

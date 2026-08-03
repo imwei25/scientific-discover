@@ -71,6 +71,14 @@ ${REPO_ROOT:-/app}/.venv/bin/python ${REPO_ROOT:-/app}/.opencode/skills/humanize
 1. 让用户给原文（或指向 `uploads/` 里的文件）。
 2. 改完给出：**改写稿** + **改动说明**（列出改掉了哪些 AI 腔、为什么），必要时并排 before/after 关键句。
 3. 长文写到 `humanized.md`，并跑上面的不变量校验。
+4. **润色对象是整篇论文 / 投稿稿件时，顺手出排版件**（用户要的是能投的稿子，不是一个 md）：
+   - 用户**没指定期刊** → 直接用默认送审格式出 Word（要 PDF 同理换 `render-pdf-doc`）：
+     ```bash
+     bash ${REPO_ROOT:-/app}/.opencode/skills/render-docx/scripts/render_docx.sh -i humanized.md --journal generic-submission
+     ```
+     该预设 = Times New Roman 12pt、双倍行距、连续行号、页码、首行缩进 4 字符、图题表题 10.5pt 居中（序号加粗）、表内 10pt、三线表、标题 16/14/12pt 加粗、作者与机构 10.5pt 居中、1in 边距。
+   - 用户**指定了期刊** → 先看 `--journal list` 有无预设，没有就 WebFetch 该刊 Instructions for Authors 按其要求给参数；查不到如实说明并退回默认预设，别编该刊要求。
+   - 段落/句子级润色（只改一段话）不必出件，给改写稿即可。
 
 ## 提醒
 - "AI 检测器"分数仅供参考、不可靠；本技能目标是**读起来自然且学术严谨**，不是骗检测器。

@@ -9,6 +9,9 @@ python-docx 直接改样式与节属性，让 render_docx.sh 的 --font/--fontsi
   python postprocess_docx.py FILE.docx [--font NAME] [--cjk-font NAME]
          [--fontsize PT] [--margin SPEC] [--line-spacing MULT] [--line-numbers]
          [--heading-cjk-font NAME] [--heading-fontsize PT] [--tables]
+         [--page-numbers] [--indent-chars N] [--caption-fontsize PT]
+         [--table-fontsize PT] [--title-fontsize PT] [--h1-fontsize PT]
+         [--author-fontsize PT]
 
   --heading-cjk-font/--heading-fontsize 单独控制标题（Heading 1-6）的中文字体与
     字号——中式标书常要求"标题黑体四号、正文宋体小四"这种标题/正文双字体双字号，
@@ -17,6 +20,15 @@ python-docx 直接改样式与节属性，让 render_docx.sh 的 --font/--fontsi
   --margin 接受 1in / 2.5cm / 25mm / 72pt 形式。
   --line-spacing 是行距倍数 (1.0 单倍 / 1.5 / 2.0 双倍)。
   --line-numbers 在每个 section 打开连续行号 (w:lnNumType)。
+  --page-numbers 页脚居中插 PAGE 域（pandoc 默认模板不带页码，审稿人没法引用页位）。
+  --indent-chars N 正文每段首行缩进 N 个英文半角字符（按 0.5em/字符折算成 pt；
+    图表题/表注/作者块/表格单元格会被显式清零，不吃这个缩进）。
+  --caption-fontsize 图题/表题/表注字号；图表题并居中、单倍行距、序号加粗。
+  --table-fontsize 表内字号（默认正文-1.5pt、下限 9pt；显式给了就用给的值）。
+  --title-fontsize / --h1-fontsize 论文标题(Title)与一级标题(Heading 1)字号；
+    给了任一标题字号参数时，Title/Heading 1-6 统一加粗并把 pandoc 默认的
+    主题蓝改成黑色（期刊送审稿标题不是蓝的）。
+  --author-fontsize 作者/机构块（pandoc 的 Author/Affiliation 样式）字号并居中。
   --tables 表格调优：三线表 + 按内容分配固定列宽 + 表内字号降档/单倍行距。
     pandoc 不给列宽时 docx 落成 autofit 表格，Word 自动布局宽度不可预测；
     给了也常是均分。这里按各列内容显示宽度（CJK 记 2 格）重新分配，并同时写
@@ -31,11 +43,35 @@ import unicodedata
 from docx import Document
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.oxml.ns import qn
-from docx.shared import Cm, Inches, Mm, Pt
+from docx.shared import Cm, Inches, Mm, Pt, RGBColor
+from docx.text.run import Run
 
 # pandoc 默认模板里正文/引文类样式；标题单列（字体同步、但不动其字号）
 BODY_STYLES = ["Normal", "Body Text", "First Paragraph", "Compact", "Block Text"]
+# 首行缩进只给真正的正文段：Compact 是列表（参考文献表就用它）、Block Text 是引用块，
+# 它们自带列表/引用缩进，再叠首行缩进会把编号顶歪
+INDENT_STYLES = ["Normal", "Body Text", "First Paragraph"]
+# pandoc 模板里几乎所有样式都 base=Normal，给 Normal 设首行缩进会顺着继承漏到标题、
+# 题名块、题注、列表、代码块上（标题被顶进去 4 个字符，一眼就看出排版坏了）。
+# 故这些样式必须显式清零——继承来的值不清就是生效值。
+NOINDENT_STYLES = [
+    "Title", "Subtitle", "Author", "Affiliation", "Date", "Abstract",
+    "Caption", "Image Caption", "Table Caption", "Captioned Figure",
+    "Compact", "Block Text", "Source Code", "Bibliography",
+    "Footer", "Header", "Footnote Text", "TOC Heading",
+] + [f"Heading {i}" for i in range(1, 7)]
 HEADING_STYLES = ["Title", "Subtitle"] + [f"Heading {i}" for i in range(1, 7)]
+# pandoc 把 YAML 的 author/date 元数据落成这几个段落样式（题名块，随作者一起排）
+AUTHOR_STYLES = ["Author", "Affiliation", "Date"]
+# pandoc 图题/表题的段落样式（`![…](x.png)` 的题注进 Image Caption/Caption）
+CAPTION_STYLES = ["Caption", "Image Caption", "Table Caption"]
+
+# 手写题注段（本套件 write-paper 约定：`**表1. …**` 独立一行、图题在 `![]()` 里）
+CAP_RE = re.compile(r"^\s*(图|表|Figure|Table|Fig\.?|Tab\.?)\s*S?\d+", re.I)
+# 题注里要加粗的序号前缀：「图1.」「表2：」「Figure 3.」（含随后的分隔符）
+CAP_PREFIX_RE = re.compile(r"^\s*(图|表|Figure|Table|Fig\.?|Tab\.?)\s*S?\d+\s*[\.．。:：]?", re.I)
+# 表注/图注段（跟在表格/图下方，不居中、但同样用题注字号）
+NOTE_RE = re.compile(r"^\s*(表注|图注|注|Note|Notes)\s*[:：.．]")
 
 
 def parse_margin(spec: str):
@@ -74,7 +110,7 @@ def _mk_border(parent, tag, val, sz):
 
 
 def _three_line_borders(table):
-    """医学期刊三线表：顶/底 1.5pt（sz 以 1/8pt 计 → 12），表头下线 0.75pt，无竖线。"""
+    """医学期刊三线表：顶/底 1.5pt（sz 以 1/8pt 计 → 12），表头下线 0.5pt，无竖线。"""
     tblPr = table._tbl.tblPr
     for old in tblPr.findall(qn("w:tblBorders")):
         tblPr.remove(old)
@@ -93,7 +129,7 @@ def _three_line_borders(table):
         for old in tcPr.findall(qn("w:tcBorders")):
             tcPr.remove(old)
         tcb = tcPr.makeelement(qn("w:tcBorders"), {})
-        _mk_border(tcb, "bottom", "single", 6)
+        _mk_border(tcb, "bottom", "single", 4)
         tcPr.insert_element_before(
             tcb, "w:shd", "w:noWrap", "w:tcMar", "w:textDirection",
             "w:tcFitText", "w:vAlign", "w:hideMark",
@@ -115,6 +151,135 @@ def _repeat_header_and_keep_rows(table):
         p = row._tr.get_or_add_trPr()
         if not p.findall(qn("w:cantSplit")):
             p.append(p.makeelement(qn("w:cantSplit"), {}))
+
+
+def _add_page_numbers(doc):
+    """页脚居中插 PAGE 域。pandoc 默认模板不带页码；审稿人提意见要能指到第几页。
+
+    只写第一节的 footer：后续节（如宽表横向节）没有自己的 footerReference 时，
+    OOXML 语义是沿用前一节的页脚，正好全篇统一。
+    """
+    footer = doc.sections[0].footer
+    footer.is_linked_to_previous = False
+    p = footer.paragraphs[0] if footer.paragraphs else footer.add_paragraph()
+    for r in list(p.runs):
+        r._r.getparent().remove(r._r)
+    p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    pf = p.paragraph_format
+    pf.line_spacing = 1.0  # Footer 基于 Normal，正文双倍行距别把页脚也撑高
+    pf.first_line_indent = Pt(0)
+    run = p.add_run()
+    r = run._r
+    for tag, attrs, text in (
+        ("w:fldChar", {"w:fldCharType": "begin"}, None),
+        ("w:instrText", {"xml:space": "preserve"}, " PAGE "),
+        ("w:fldChar", {"w:fldCharType": "end"}, None),
+    ):
+        el = r.makeelement(qn(tag), {})
+        for k, v in attrs.items():
+            el.set(qn(k), v)
+        if text is not None:
+            el.text = text
+        r.append(el)
+
+
+def _bold_caption_prefix(p):
+    """题注段只加粗序号前缀（「图1.」「Table 2:」），说明文字改常规——期刊惯例。
+
+    稿件里题注常整行写成 `**表1. 基线特征**`（对 Markdown 阅读友好），照搬进 Word
+    就是一整行黑压压的加粗。前缀可能横跨多个 run（pandoc 会拆），跨界的 run 在
+    边界处劈成两半。
+    """
+    m = CAP_PREFIX_RE.match(p.text)
+    if not m:
+        return
+    remain = len(m.group(0))
+    for run in list(p.runs):
+        if remain <= 0:
+            run.bold = False
+            continue
+        n = len(run.text)
+        if n <= remain:
+            run.bold = True
+            remain -= n
+        else:
+            r2 = copy.deepcopy(run._r)
+            run._r.addnext(r2)
+            rest = Run(r2, p)
+            rest.text = run.text[remain:]
+            rest.bold = False  # 尾巴不在上面的 runs 快照里，得就地取消加粗
+            run.text = run.text[:remain]
+            run.bold = True
+            remain = 0
+
+
+def _style_captions_and_notes(doc, cap_pt):
+    """图题/表题：cap_pt 字号、居中、单倍行距、序号加粗；表注/图注：同字号、不居中。
+
+    覆盖两类来源：pandoc 题注样式（Caption/Image Caption/Table Caption）与
+    write-paper 约定的手写题注段（`**表1. …**` 独立一行、整行加粗）。手写题注
+    必须整段加粗才认——正文段落常以「表2显示……」开头，只看正则会把正文误判
+    成题注拉去居中。都显式清首行缩进，否则 --indent-chars 会把居中的题注顶歪。
+    """
+
+    def _all_bold(par):
+        runs = [r for r in par.runs if r.text.strip()]
+        return bool(runs) and all(r.bold for r in runs)
+
+    caps = notes = 0
+    for p in doc.paragraphs:
+        try:
+            sname = p.style.name if p.style is not None else ""
+        except Exception:
+            sname = ""
+        text = p.text.strip()
+        if not text:
+            continue
+        is_cap = sname in CAPTION_STYLES or (CAP_RE.match(text) and _all_bold(p))
+        is_note = (not is_cap) and NOTE_RE.match(text)
+        if not (is_cap or is_note):
+            continue
+        pf = p.paragraph_format
+        pf.line_spacing = 1.0
+        pf.first_line_indent = Pt(0)
+        for run in p.runs:
+            run.font.size = Pt(cap_pt)
+            run.font.italic = False  # pandoc 的 Image Caption 默认斜体，期刊不用斜体题注
+        if is_cap:
+            p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+            _bold_caption_prefix(p)
+            # 表题写在表格上方，不锁的话会被分页留在上一页页脚、表格甩到下一页
+            if re.match(r"^\s*\**\s*(表|Table|Tab\.?)\s*S?\d", text, re.I):
+                pf.keep_with_next = True
+            caps += 1
+        else:
+            notes += 1
+    # 图所在段也锁住：图与紧随其后的图注被分页拆开同样难看
+    for p in doc.paragraphs:
+        if p._p.findall(".//" + qn("w:drawing")):
+            p.paragraph_format.keep_with_next = True
+    # 样式级也压一遍：题注若无 direct 字号，Caption 样式默认值才是生效值。
+    # 按 style.name 遍历而不是 doc.styles[name] 取——后者对内置样式名会退回 style_id
+    # 查找并抛 UserWarning（"Caption" 就会），刷在 stderr 里像出了错。
+    for st in doc.styles:
+        if st.name in CAPTION_STYLES and hasattr(st, "paragraph_format"):
+            st.font.size = Pt(cap_pt)
+            st.font.italic = False
+            st.paragraph_format.line_spacing = 1.0
+            st.paragraph_format.first_line_indent = Pt(0)
+    return caps, notes
+
+
+def _force_heading_black_bold(styles):
+    """标题统一加粗 + 黑色。pandoc 默认模板的 Heading 是主题蓝、非加粗——
+    期刊送审稿的标题不是蓝的，套字号时顺带归一。"""
+    for name in ["Title"] + [f"Heading {i}" for i in range(1, 7)]:
+        try:
+            st = styles[name]
+        except KeyError:
+            continue
+        st.font.bold = True
+        st.font.color.rgb = RGBColor(0, 0, 0)
 
 
 def _caption_before(tbl):
@@ -260,13 +425,14 @@ def _alloc_widths_pt(units, avail_pt, tsize):
     return widths, False
 
 
-def _tune_tables(doc, body_pt, landscape_wide=False, long_rows=20):
+def _tune_tables(doc, body_pt, landscape_wide=False, long_rows=20, table_pt=0):
     """全部表格：三线表 + 固定列宽 + 表内字号降档/表头加粗居中/单倍行距 + 跨页兜底。
 
     返回 (完整调优数, 仅样式数)。含合并格（gridSpan/vMerge）的表不动列宽只调样式。
     landscape_wide=True 时，按内容压不下的宽表连同表题单独放进横向节。
+    table_pt 显式给了就用（期刊常明说"图表 10pt"），否则默认正文-1.5pt、下限 9pt。
     """
-    tsize = max(9.0, body_pt - 1.5)
+    tsize = table_pt if table_pt else max(9.0, body_pt - 1.5)
     sec = doc.sections[0]
     # pandoc 默认模板的 sectPr 可缺 w:pgSz/边距 → python-docx 返回 None，按 Letter/1in 回退
     _pt = lambda v, default: (v / 12700) if v is not None else default  # EMU→pt
@@ -297,6 +463,7 @@ def _tune_tables(doc, body_pt, landscape_wide=False, long_rows=20):
                         pf.line_spacing = 1.0  # 表内单倍行距，不吃正文的双倍行距
                         pf.space_before = Pt(1)
                         pf.space_after = Pt(1)
+                        pf.first_line_indent = Pt(0)  # 别吃 --indent-chars 的正文缩进
                         if ri == 0:
                             p.alignment = WD_ALIGN_PARAGRAPH.CENTER
                         for run in p.runs:
@@ -371,6 +538,14 @@ def main():
     ap.add_argument("--tables", action="store_true")
     ap.add_argument("--landscape-wide-tables", action="store_true",
                     help="纵向版心压不下的宽表，连同表题单独放进横向节")
+    ap.add_argument("--page-numbers", action="store_true")
+    ap.add_argument("--indent-chars", type=float, default=0,
+                    help="正文每段首行缩进的英文半角字符数（按 0.5em/字符折算）")
+    ap.add_argument("--caption-fontsize", type=float, default=0)
+    ap.add_argument("--table-fontsize", type=float, default=0)
+    ap.add_argument("--title-fontsize", type=float, default=0)
+    ap.add_argument("--h1-fontsize", type=float, default=0)
+    ap.add_argument("--author-fontsize", type=float, default=0)
     args = ap.parse_args()
 
     doc = Document(args.docx)
@@ -403,6 +578,24 @@ def main():
                 continue
         applied.append(f"heading_fontsize={args.heading_fontsize:g}pt")
 
+    # 分级标题字号（覆盖顺序：先 --heading-fontsize 统一，再 --h1/--title 单点覆盖）
+    if args.h1_fontsize:
+        try:
+            styles["Heading 1"].font.size = Pt(args.h1_fontsize)
+            applied.append(f"h1_fontsize={args.h1_fontsize:g}pt")
+        except KeyError:
+            pass
+    if args.title_fontsize:
+        try:
+            styles["Title"].font.size = Pt(args.title_fontsize)
+            applied.append(f"title_fontsize={args.title_fontsize:g}pt")
+        except KeyError:
+            pass
+    if args.heading_fontsize or args.h1_fontsize or args.title_fontsize:
+        # 动了标题字号就顺带归一：加粗 + 黑色（pandoc 默认是主题蓝、非加粗）
+        _force_heading_black_bold(styles)
+        applied.append("headings=bold+black")
+
     if args.fontsize:
         for name in BODY_STYLES:
             try:
@@ -426,6 +619,54 @@ def main():
             sec.left_margin = sec.right_margin = emu
         applied.append(f"margin={args.margin}")
 
+    # 正文基准字号：显式给了用给的，否则读 Normal 样式（后面缩进/表格都要用）
+    body_pt = args.fontsize
+    if not body_pt:
+        try:
+            sz = styles["Normal"].font.size
+            body_pt = sz.pt if sz is not None else 12.0
+        except KeyError:
+            body_pt = 12.0
+
+    if args.indent_chars:
+        indent = Pt(args.indent_chars * 0.5 * body_pt)  # 1 英文半角字符 ≈ 0.5em
+        for st in doc.styles:
+            # 同名字符样式（如 "Source Code" 有段落版也有字符版）没有 paragraph_format
+            if not hasattr(st, "paragraph_format"):
+                continue
+            if st.name in INDENT_STYLES:
+                st.paragraph_format.first_line_indent = indent
+            elif st.name in NOINDENT_STYLES:
+                st.paragraph_format.first_line_indent = Pt(0)  # 断掉从 Normal 的继承
+        applied.append(f"indent={args.indent_chars:g}字符({indent.pt:g}pt)")
+
+    if args.author_fontsize:
+        hit = 0
+        for st in doc.styles:  # 按 name 遍历：doc.styles["Date"] 会退回 id 查找并告警
+            if st.name not in AUTHOR_STYLES or not hasattr(st, "paragraph_format"):
+                continue
+            st.font.size = Pt(args.author_fontsize)
+            # Author/Date 在 pandoc 模板里 base=Title，会把标题的加粗继承过来——
+            # 作者与机构不该是粗体，显式关掉（不写 False 就是"继承生效"）
+            st.font.bold = False
+            st.paragraph_format.alignment = WD_ALIGN_PARAGRAPH.CENTER
+            st.paragraph_format.first_line_indent = Pt(0)
+            hit += 1
+        if hit:
+            applied.append(f"author_fontsize={args.author_fontsize:g}pt(居中)")
+        else:
+            print("[postprocess_docx] 注：文档无 Author/Affiliation 样式段"
+                  "（作者块要写在稿件 YAML 的 author: 里才会生成），--author-fontsize 未生效",
+                  file=sys.stderr)
+
+    if args.caption_fontsize:
+        caps, notes = _style_captions_and_notes(doc, args.caption_fontsize)
+        applied.append(f"captions={caps}题+{notes}注@{args.caption_fontsize:g}pt")
+
+    if args.page_numbers:
+        _add_page_numbers(doc)
+        applied.append("page_numbers=页脚居中")
+
     if args.line_numbers:
         for sec in doc.sections:
             spr = sec._sectPr
@@ -444,17 +685,12 @@ def main():
         applied.append("line_numbers=continuous")
 
     if args.tables:  # 放最后：列宽分配依赖上面 --margin 生效后的版心宽度
-        body_pt = args.fontsize
-        if not body_pt:
-            try:
-                sz = styles["Normal"].font.size
-                body_pt = sz.pt if sz is not None else 12.0
-            except KeyError:
-                body_pt = 12.0
         done, styled_only, landscaped = _tune_tables(
-            doc, body_pt, landscape_wide=args.landscape_wide_tables)
+            doc, body_pt, landscape_wide=args.landscape_wide_tables,
+            table_pt=args.table_fontsize)
         if done or styled_only:
-            note = f"tables={done}张(三线表/固定列宽/{max(9.0, body_pt - 1.5):g}pt)"
+            tsize = args.table_fontsize if args.table_fontsize else max(9.0, body_pt - 1.5)
+            note = f"tables={done}张(三线表/固定列宽/{tsize:g}pt)"
             if styled_only:
                 note += f"+{styled_only}张仅样式(含合并格)"
             if landscaped:

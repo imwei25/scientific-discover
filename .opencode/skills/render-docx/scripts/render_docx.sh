@@ -39,6 +39,7 @@ resolve_py() {
 INPUT=""; OUTPUT=""; REF=""; CSL=""; BIB=""; EXTRA=()
 JOURNAL=""; FONT=""; CJKFONT=""; FONTSIZE=""; MARGIN=""; LINESPACING=""; LINENUMBERS=""; FIGSATEND=""
 HEADCJKFONT=""; HEADFONTSIZE=""
+PAGENUMBERS=""; INDENTCHARS=""; CAPTIONFONTSIZE=""; TABLEFONTSIZE=""; TITLEFONTSIZE=""; H1FONTSIZE=""; AUTHORFONTSIZE=""
 # 表格两开关默认开：pandoc 出的 docx 表要么 autofit（Word 自动布局不可预测）要么按
 # 分隔行均分列宽，长列名必然排丑；推断列宽 + 后处理三线表是兜底，不改变表内容。
 INFERCW=1; TABLETUNE=1; LANDSCAPEWIDE=""
@@ -59,6 +60,13 @@ Usage: $(basename "$0") -i <input.md> [-o <output.docx>] [options] [-- <pandoc a
   --line-numbers 连续行号
   --heading-cjk-font N  标题(Heading 1-6)中文字体，与正文分开（标书"标题黑体、正文宋体"）
   --heading-fontsize PT 标题字号（各级统一；如四号=14）
+  --title-fontsize PT   论文标题(Title 样式，来自稿件 YAML title)字号
+  --h1-fontsize PT      一级标题(Heading 1)字号，覆盖 --heading-fontsize 的统一值
+  --page-numbers        页脚居中加页码（PAGE 域）
+  --indent-chars N      正文每段首行缩进 N 个英文半角字符（如 4）
+  --caption-fontsize PT 图题/表题/表注字号（图表题并居中、单倍行距、序号加粗）
+  --table-fontsize PT   表内字号（默认正文-1.5pt）
+  --author-fontsize PT  作者/机构块字号并居中（稿件 YAML author: 生成的 Author 样式段）
   --figures-at-end  把图表搬到正文末尾（NEJM/JAMA/Lancet 送审稿要求）
   --no-infer-colwidths  关掉默认的按内容推断表格列宽（infer_colwidths.py）
   --no-table-tune       关掉默认的 docx 表格调优（三线表/固定列宽/表内字号降档）
@@ -101,6 +109,13 @@ while [[ $# -gt 0 ]]; do
     --line-numbers) LINENUMBERS=1; shift ;;
     --heading-cjk-font) HEADCJKFONT="$2"; shift 2 ;;
     --heading-fontsize) HEADFONTSIZE="$2"; shift 2 ;;
+    --title-fontsize) TITLEFONTSIZE="$2"; shift 2 ;;
+    --h1-fontsize) H1FONTSIZE="$2"; shift 2 ;;
+    --page-numbers) PAGENUMBERS=1; shift ;;
+    --indent-chars) INDENTCHARS="$2"; shift 2 ;;
+    --caption-fontsize) CAPTIONFONTSIZE="$2"; shift 2 ;;
+    --table-fontsize) TABLEFONTSIZE="$2"; shift 2 ;;
+    --author-fontsize) AUTHORFONTSIZE="$2"; shift 2 ;;
     --figures-at-end) FIGSATEND=1; shift ;;
     --no-infer-colwidths) INFERCW=""; shift ;;
     --no-table-tune) TABLETUNE=""; shift ;;
@@ -137,6 +152,9 @@ if [[ -n "$JOURNAL" ]]; then
   PRESET_MARGIN=""; PRESET_FONT=""; PRESET_CJKFONT=""; PRESET_FONTSIZE=""
   PRESET_LINESPACING=""; PRESET_LINENUMBERS=""; PRESET_CSL=""
   PRESET_HEADING_CJKFONT=""; PRESET_HEADING_FONTSIZE=""
+  PRESET_PAGENUMBERS=""; PRESET_INDENT_CHARS=""; PRESET_CAPTION_FONTSIZE=""
+  PRESET_TABLE_FONTSIZE=""; PRESET_TITLE_FONTSIZE=""; PRESET_H1_FONTSIZE=""
+  PRESET_AUTHOR_FONTSIZE=""
   # shellcheck disable=SC1090
   source "$PFILE"
   [[ -z "$FONT" ]] && FONT="$PRESET_FONT"
@@ -147,6 +165,13 @@ if [[ -n "$JOURNAL" ]]; then
   [[ -z "$MARGIN" ]] && MARGIN="$PRESET_MARGIN"
   [[ -z "$LINESPACING" ]] && LINESPACING="$PRESET_LINESPACING"
   [[ -z "$LINENUMBERS" && "$PRESET_LINENUMBERS" == "1" ]] && LINENUMBERS=1
+  [[ -z "$PAGENUMBERS" && "$PRESET_PAGENUMBERS" == "1" ]] && PAGENUMBERS=1
+  [[ -z "$INDENTCHARS" ]] && INDENTCHARS="$PRESET_INDENT_CHARS"
+  [[ -z "$CAPTIONFONTSIZE" ]] && CAPTIONFONTSIZE="$PRESET_CAPTION_FONTSIZE"
+  [[ -z "$TABLEFONTSIZE" ]] && TABLEFONTSIZE="$PRESET_TABLE_FONTSIZE"
+  [[ -z "$TITLEFONTSIZE" ]] && TITLEFONTSIZE="$PRESET_TITLE_FONTSIZE"
+  [[ -z "$H1FONTSIZE" ]] && H1FONTSIZE="$PRESET_H1_FONTSIZE"
+  [[ -z "$AUTHORFONTSIZE" ]] && AUTHORFONTSIZE="$PRESET_AUTHOR_FONTSIZE"
   # 预设的 CSL 只在用户给了 .bib（稿件是 @key 引用）时才用得上
   if [[ -z "$CSL" && -n "$BIB" && -n "$PRESET_CSL" ]]; then CSL="$PRESET_CSL"; fi
   if [[ -z "$BIB" && -n "$PRESET_CSL" ]]; then
@@ -259,11 +284,12 @@ echo "[render_docx] in=$INPUT out=$OUTPUT journal='${JOURNAL:-none}' ref='${REF:
 pandoc "${ARGS[@]}" ${EXTRA[@]+"${EXTRA[@]}"} "$SRCMD" || { echo "ERROR: pandoc failed" >&2; exit 4; }
 
 # ---- post-process: bake font / size / margin / spacing / line numbers / tables into the docx ----
-if [[ -n "$FONT$CJKFONT$FONTSIZE$MARGIN$LINESPACING$LINENUMBERS$HEADCJKFONT$HEADFONTSIZE$TABLETUNE" ]]; then
+FMTARGS="$FONT$CJKFONT$FONTSIZE$MARGIN$LINESPACING$LINENUMBERS$HEADCJKFONT$HEADFONTSIZE$PAGENUMBERS$INDENTCHARS$CAPTIONFONTSIZE$TABLEFONTSIZE$TITLEFONTSIZE$H1FONTSIZE$AUTHORFONTSIZE"
+if [[ -n "$FMTARGS$TABLETUNE" ]]; then
   PYBIN="$(resolve_py)"
   if [[ -z "$PYBIN" ]]; then
     # 显式格式参数拿不到 Python 是硬错误；只剩默认表格调优则降级警告，保住 docx 产物
-    if [[ -n "$FONT$CJKFONT$FONTSIZE$MARGIN$LINESPACING$LINENUMBERS$HEADCJKFONT$HEADFONTSIZE" ]]; then
+    if [[ -n "$FMTARGS" ]]; then
       echo "ERROR: 找不到 Python（项目根 .venv 或 PATH），格式参数无法落盘；先跑 env-setup" >&2
       exit 5
     fi
@@ -279,6 +305,13 @@ if [[ -n "$FONT$CJKFONT$FONTSIZE$MARGIN$LINESPACING$LINENUMBERS$HEADCJKFONT$HEAD
     [[ -n "$LANDSCAPEWIDE" ]] && PP+=(--landscape-wide-tables)
     [[ -n "$HEADCJKFONT" ]] && PP+=(--heading-cjk-font "$HEADCJKFONT")
     [[ -n "$HEADFONTSIZE" ]] && PP+=(--heading-fontsize "$HEADFONTSIZE")
+    [[ -n "$TITLEFONTSIZE" ]] && PP+=(--title-fontsize "$TITLEFONTSIZE")
+    [[ -n "$H1FONTSIZE" ]] && PP+=(--h1-fontsize "$H1FONTSIZE")
+    [[ -n "$PAGENUMBERS" ]] && PP+=(--page-numbers)
+    [[ -n "$INDENTCHARS" ]] && PP+=(--indent-chars "$INDENTCHARS")
+    [[ -n "$CAPTIONFONTSIZE" ]] && PP+=(--caption-fontsize "$CAPTIONFONTSIZE")
+    [[ -n "$TABLEFONTSIZE" ]] && PP+=(--table-fontsize "$TABLEFONTSIZE")
+    [[ -n "$AUTHORFONTSIZE" ]] && PP+=(--author-fontsize "$AUTHORFONTSIZE")
     [[ -n "$TABLETUNE" ]] && PP+=(--tables)
     "${PP[@]}" || { echo "ERROR: postprocess_docx.py failed（pandoc 产物在 $OUTPUT，但格式参数未生效）" >&2; exit 5; }
   fi
