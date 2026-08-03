@@ -1,0 +1,286 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>研究工作台 · Niuma Research</title>
+<meta name="theme-color" content="#010101" />
+<!-- 字体与 login.html 同源（断网时回退系统字体，页面照常可用） -->
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@300;400;500&display=swap" rel="stylesheet" />
+<link rel="stylesheet" href="https://db.onlinewebfonts.com/c/2bf40ab72ea4897a3fd9b6e48b233a19?family=Garamond" />
+<style>
+  :root {
+    --sans: 'Geist', -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei", sans-serif;
+    --serif: 'Garamond', 'Times New Roman', serif;
+    /* 单一克制强调色，仅用于焦点环 / 可用态 hover，其余保持与登录页一致的纯白单色 */
+    --accent: #6ea8fe;
+    --accent-soft: rgba(110,168,254,.16);
+    --lock: #c8c0a8;
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body {
+    background: #010101; color: #fff; min-height: 100vh; overflow-x: hidden;
+    font-family: var(--sans); -webkit-font-smoothing: antialiased; text-rendering: optimizeLegibility;
+  }
+
+  /* ---- 背景：与登录页同款视频 + 径向压暗 ---- */
+  .stage { position: fixed; inset: 0; overflow: hidden; background: #010101; z-index: 0; }
+  .stage video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; object-position: center; }
+  .stage .veil { position: absolute; inset: 0;
+    background:
+      radial-gradient(ellipse 90% 70% at 50% 0%, rgba(1,1,1,.15) 0%, rgba(1,1,1,.6) 100%),
+      linear-gradient(180deg, rgba(1,1,1,.55) 0%, rgba(1,1,1,.78) 60%, rgba(1,1,1,.92) 100%);
+  }
+  .wrap { position: relative; z-index: 10; display: flex; flex-direction: column; min-height: 100vh; }
+
+  /* ---- 顶栏（与登录页一致） ---- */
+  nav { display: flex; align-items: center; justify-content: space-between; padding: 28px 40px; z-index: 20; }
+  .brand { font-weight: 300; font-size: 12px; letter-spacing: .3em; text-transform: uppercase; color: #fff; white-space: nowrap; }
+  .nav-links { display: flex; gap: 36px; align-items: center; }
+  .nav-links a { font-weight: 300; font-size: 11px; letter-spacing: .2em; text-transform: uppercase; color: rgba(255,255,255,.68); text-decoration: none; transition: color .3s ease; }
+  .nav-links a:hover { color: #fff; }
+  .nav-right { display: flex; align-items: center; gap: 16px; }
+
+  /* 账户胶囊 */
+  .account { display: flex; align-items: center; gap: 10px; padding: 6px 8px 6px 14px; border-radius: 999px;
+    background: rgba(4,7,10,.6); backdrop-filter: blur(16px) saturate(1.2); -webkit-backdrop-filter: blur(16px) saturate(1.2);
+    border: 1px solid rgba(255,255,255,.1); }
+  .account .who { display: flex; flex-direction: column; line-height: 1.25; text-align: right; }
+  .account .who b { font-weight: 400; font-size: 12px; letter-spacing: .02em; }
+  .account .who span { font-size: 9.5px; letter-spacing: .14em; text-transform: uppercase; color: rgba(255,255,255,.45); }
+  .account .ava { width: 30px; height: 30px; border-radius: 50%; display: grid; place-items: center;
+    background: rgba(255,255,255,.08); border: 1px solid rgba(255,255,255,.16); font-size: 12px; }
+  .account .signout { background: none; border: none; color: rgba(255,255,255,.5); cursor: pointer; font-family: var(--sans);
+    font-size: 10px; letter-spacing: .12em; text-transform: uppercase; padding: 0 6px; transition: color .2s; }
+  .account .signout:hover { color: #fff; }
+
+  .hamburger { display: none; background: none; border: none; color: #fff; cursor: pointer; padding: 0; }
+  .hamburger svg { width: 24px; height: 24px; stroke: currentColor; stroke-width: 1.6; fill: none; }
+
+  /* ---- 主体 ---- */
+  main { flex: 1; width: 100%; max-width: 1180px; margin: 0 auto; padding: 40px 40px 72px; }
+
+  .eyebrow { font-weight: 300; font-size: 11px; letter-spacing: .34em; text-transform: uppercase; color: rgba(255,255,255,.55); margin: 0 0 14px; }
+  .headline { font-family: var(--serif); font-weight: 400; font-size: clamp(34px, 5.4vw, 60px); line-height: 1.05; letter-spacing: -.01em; margin: 0; }
+  .subhead { margin: 16px 0 40px; font-weight: 300; font-size: 15px; color: rgba(255,255,255,.58); line-height: 1.7; max-width: 560px; }
+
+  /* ---- 模块网格 ---- */
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(255px, 1fr)); gap: 18px; }
+
+  /* 模块多时（>4）自动切横向滚动：卡片固定宽、滚动吸附，两端渐隐提示"还有更多"，
+     细滚动条与整体玻璃语言一致；鼠标滚轮在容器上直接横滚（见 script）。 */
+  .grid.scroll { display: flex; overflow-x: auto; padding: 4px 4px 14px;
+    scroll-snap-type: x proximity; -webkit-overflow-scrolling: touch;
+    mask-image: linear-gradient(90deg, transparent 0, #000 24px, #000 calc(100% - 24px), transparent 100%);
+    -webkit-mask-image: linear-gradient(90deg, transparent 0, #000 24px, #000 calc(100% - 24px), transparent 100%); }
+  .grid.scroll .card { flex: 0 0 280px; scroll-snap-align: start; }
+  .grid.scroll::-webkit-scrollbar { height: 6px; }
+  .grid.scroll::-webkit-scrollbar-track { background: rgba(255,255,255,.05); border-radius: 999px; }
+  .grid.scroll::-webkit-scrollbar-thumb { background: rgba(255,255,255,.18); border-radius: 999px; }
+  .grid.scroll::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,.3); }
+
+  .card { position: relative; display: flex; flex-direction: column; gap: 14px; padding: 26px 24px 22px;
+    border-radius: 18px; background: rgba(255,255,255,.04); border: 1px solid rgba(255,255,255,.08);
+    backdrop-filter: blur(14px) saturate(1.15); -webkit-backdrop-filter: blur(14px) saturate(1.15);
+    box-shadow: 0 2px 18px rgba(0,0,0,.32); cursor: pointer; overflow: hidden;
+    opacity: 0; transform: translateY(18px); animation: rise .7s cubic-bezier(.2,.7,.2,1) forwards;
+    transition: border-color .25s ease, background .25s ease, transform .25s ease, box-shadow .25s ease; }
+  .card::before { content: ""; position: absolute; inset: 0; border-radius: inherit; pointer-events: none;
+    background: radial-gradient(120% 80% at 50% -10%, var(--accent-soft), transparent 60%); opacity: 0; transition: opacity .3s ease; }
+  .card:hover { border-color: rgba(255,255,255,.18); background: rgba(255,255,255,.055);
+    transform: translateY(-4px); box-shadow: 0 18px 40px rgba(0,0,0,.45); }
+  .card:hover::before { opacity: 1; }
+  .card:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+
+  .card .ic { width: 46px; height: 46px; border-radius: 12px; display: grid; place-items: center;
+    background: rgba(255,255,255,.06); border: 1px solid rgba(255,255,255,.12); color: #fff; }
+  .card .ic svg { width: 24px; height: 24px; stroke: currentColor; stroke-width: 1.5; fill: none; stroke-linecap: round; stroke-linejoin: round; }
+  .card .tt { display: flex; flex-direction: column; gap: 4px; }
+  .card .tt b { font-weight: 500; font-size: 17px; letter-spacing: .02em; }
+  .card .tt span { font-size: 10px; letter-spacing: .2em; text-transform: uppercase; color: rgba(255,255,255,.42); }
+  .card .ds { font-weight: 300; font-size: 13px; line-height: 1.65; color: rgba(255,255,255,.56); margin: 2px 0 4px; flex: 1; }
+  .card .enter { align-self: flex-start; display: inline-flex; align-items: center; gap: 7px; margin-top: 4px;
+    font-size: 11px; letter-spacing: .16em; text-transform: uppercase; color: rgba(255,255,255,.72);
+    padding: 9px 16px; border-radius: 999px; border: 1px solid rgba(255,255,255,.14);
+    background: rgba(4,7,10,.5); transition: all .22s ease; }
+  .card:hover .enter { color: #fff; border-color: rgba(255,255,255,.28); background: rgba(4,7,10,.8); }
+  .card .enter svg { width: 14px; height: 14px; stroke: currentColor; stroke-width: 1.6; fill: none; }
+
+  /* 锁定态：当前全部模块开放，此形态保留给将来接模块授权数据后使用 */
+  .card.locked { cursor: not-allowed; opacity: .42; filter: grayscale(.4); }
+  .card.locked:hover { transform: none; box-shadow: 0 2px 18px rgba(0,0,0,.32); border-color: rgba(255,255,255,.08); background: rgba(255,255,255,.04); }
+  .card.locked:hover::before { opacity: 0; }
+  .card.locked .ic { color: var(--lock); }
+  .card .badge { position: absolute; top: 16px; right: 16px; display: inline-flex; align-items: center; gap: 5px;
+    font-size: 9.5px; letter-spacing: .14em; text-transform: uppercase; color: var(--lock);
+    padding: 5px 10px; border-radius: 999px; background: rgba(0,0,0,.35); border: 1px solid rgba(200,192,168,.22); }
+  .card .badge svg { width: 12px; height: 12px; stroke: currentColor; stroke-width: 1.6; fill: none; }
+  .card.locked .enter { color: rgba(255,255,255,.4); border-color: rgba(255,255,255,.1); background: transparent; }
+
+  @keyframes rise { to { opacity: 1; transform: none; } }
+
+  footer { text-align: center; padding: 28px 20px 40px; font-size: 10px; letter-spacing: .22em; text-transform: uppercase; color: rgba(255,255,255,.28); }
+
+  /* 轻提示 */
+  .toast { position: fixed; left: 50%; bottom: 36px; transform: translate(-50%, 18px); z-index: 80;
+    padding: 13px 22px; border-radius: 999px; background: rgba(4,7,10,.86); backdrop-filter: blur(16px);
+    border: 1px solid rgba(255,255,255,.14); color: #fff; font-size: 12.5px; letter-spacing: .04em;
+    box-shadow: 0 10px 30px rgba(0,0,0,.5); opacity: 0; pointer-events: none; transition: all .3s ease; }
+  .toast.show { opacity: 1; transform: translate(-50%, 0); }
+
+  /* 移动端菜单 */
+  .mobile-menu { display: none; flex-direction: column; gap: 4px; padding: 8px 24px 22px; }
+  .mobile-menu a { color: rgba(255,255,255,.78); text-decoration: none; font-size: 13px; letter-spacing: .08em; padding: 12px 0; border-bottom: 1px solid rgba(255,255,255,.07); }
+
+  @media (max-width: 767px) {
+    nav { padding: 22px 24px; }
+    .nav-links, .account .who, .account .signout { display: none; }
+    .hamburger { display: inline-flex; }
+    main { padding: 20px 24px 60px; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .card { animation: none; opacity: 1; transform: none; }
+    * { transition: none !important; }
+  }
+</style>
+</head>
+<body>
+  <div class="stage">
+    <video autoplay muted loop playsinline
+      src="https://oss-crm-test-tellgen.oss-cn-shanghai.aliyuncs.com/videos/hf_20260619_191346_9d19d66e-86a4-47f7-8dc6-712c1788c3b2_1783489695679.mp4"></video>
+    <div class="veil"></div>
+  </div>
+
+  <div class="wrap">
+    <nav>
+      <span class="brand">Niuma Research</span>
+      <div class="nav-links">
+        <a href="#">Research</a>
+        <a href="#">Database</a>
+        <a href="#">Skills</a>
+        <a href="#">About</a>
+      </div>
+      <div class="nav-right">
+        <div class="account" title="账户">
+          <div class="who"><b id="accName">…</b><span id="accRole">已登录</span></div>
+          <div class="ava" id="accAva">·</div>
+          <button class="signout" id="signout" type="button">退出</button>
+        </div>
+        <button class="hamburger" aria-label="菜单" onclick="toggleMenu()">
+          <svg viewBox="0 0 24 24"><path d="M3 6h18M3 12h18M3 18h18"/></svg>
+        </button>
+      </div>
+    </nav>
+    <div class="mobile-menu" id="mmenu">
+      <a href="#">Research</a><a href="#">Database</a><a href="#">Skills</a><a href="#">About</a>
+      <a href="#" id="signoutM">退出登录</a>
+    </div>
+
+    <main>
+      <p class="eyebrow">Niuma Research · Workspace</p>
+      <h1 class="headline">Your Research Workspace</h1>
+      <p class="subhead">选择下方研究工具，进入对应工作流。</p>
+
+      <div class="grid" id="grid"></div>
+    </main>
+
+    <footer>© Niuma Research · AI-Powered Medical Research Platform</footer>
+  </div>
+
+  <div class="toast" id="toast"></div>
+
+<script>
+  /* 图标（细描边线性，与登录页极简语言一致） */
+  const ICON = {
+    grant: '<svg viewBox="0 0 24 24"><path d="M6 3h9l4 4v14H6z"/><path d="M14 3v5h5"/><path d="M9 13h7M9 17h5"/><path d="M9 9h2"/></svg>',
+    verify:'<svg viewBox="0 0 24 24"><path d="M12 3l7 3v5c0 4.4-3 8.3-7 10-4-1.7-7-5.6-7-10V6z"/><path d="M9 12l2 2 4-4"/></svg>',
+    deai:  '<svg viewBox="0 0 24 24"><path d="M12 3l1.8 4.6L18 9l-4.2 1.4L12 15l-1.8-4.6L6 9l4.2-1.4z"/><path d="M18 15l.9 2.3L21 18l-2.1.7L18 21l-.9-2.3L15 18l2.1-.7z"/></svg>',
+    chat:  '<svg viewBox="0 0 24 24"><path d="M4 5h16v11H9l-5 4z"/><path d="M8 10h8M8 13h5"/></svg>'
+  };
+  const ARROW = '<svg viewBox="0 0 24 24"><path d="M5 12h14M13 6l6 6-6 6"/></svg>';
+  const LOCK  = '<svg viewBox="0 0 24 24"><rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></svg>';
+
+  /* 模块定义。locked 目前全 false：等模块授权接口接上后，由账号真实权限驱动（锁定态样式已备好）。
+     chat 直达聊天主界面；其余模块同样进主界面，并把模块 id 挂在 hash 上供后续预置工作流用。 */
+  const MODULES = [
+    { id:'grant',  cn:'标书撰写',      en:'Grant Proposal',    desc:'国自然 / 基金标书智能生成、润色与格式校验，覆盖立项依据到研究基础全章节。' },
+    { id:'verify', cn:'文献真实性检查', en:'Literature Verify', desc:'溯源核验文献与引用来源，识别伪造、篡改与 AI 幻觉内容，输出可信度报告。' },
+    { id:'deai',   cn:'去AI味写作',    en:'Humanize',          desc:'消除生成式文本痕迹，还原自然学术语感与逻辑节奏，通过学术风格检测。' },
+    { id:'chat',   cn:'自由对话',      en:'Free Chat',         desc:'与科研助手开放对话，随问随答，支持上传文献、数据与方法学讨论。' },
+  ];
+
+  function render(){
+    const grid = document.getElementById('grid');
+    grid.innerHTML = '';
+    grid.classList.toggle('scroll', MODULES.length > 4);   // 模块多才横滚，4 个以内维持网格铺开
+    MODULES.forEach((m, i) => {
+      const locked = !!m.locked;
+      const el = document.createElement('div');
+      el.className = 'card' + (locked ? ' locked' : '');
+      el.style.animationDelay = (0.06 * i + 0.1) + 's';
+      el.tabIndex = 0;
+      el.setAttribute('role', 'button');
+      el.innerHTML = `
+        ${locked ? `<span class="badge">${LOCK} 无权限</span>` : ''}
+        <div class="ic">${ICON[m.id]}</div>
+        <div class="tt"><b>${m.cn}</b><span>${m.en}</span></div>
+        <div class="ds">${m.desc}</div>
+        <span class="enter">${locked ? '申请开通' : '进入'}${locked ? '' : ARROW}</span>`;
+      el.addEventListener('click', () => onEnter(m, locked));
+      el.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onEnter(m, locked); } });
+      grid.appendChild(el);
+    });
+  }
+
+  let toastT;
+  function toast(msg){
+    const t = document.getElementById('toast');
+    t.textContent = msg; t.classList.add('show');
+    clearTimeout(toastT); toastT = setTimeout(() => t.classList.remove('show'), 2200);
+  }
+
+  function onEnter(m, locked){
+    if (locked) { toast('「' + m.cn + '」暂未对当前账号开放，请联系管理员开通'); return; }
+    location.href = m.id === 'chat' ? './' : './#module=' + m.id;
+  }
+
+  /* 横滚模式下，普通鼠标的纵向滚轮直接推横向位移（触控板横扫本来就好使，不拦） */
+  document.getElementById('grid').addEventListener('wheel', (e) => {
+    const g = e.currentTarget;
+    if (!g.classList.contains('scroll')) return;
+    if (Math.abs(e.deltaY) > Math.abs(e.deltaX)) { g.scrollLeft += e.deltaY; e.preventDefault(); }
+  }, { passive: false });
+
+  function toggleMenu(){
+    const mm = document.getElementById('mmenu');
+    mm.style.display = (mm.style.display === 'flex') ? 'none' : 'flex';
+  }
+
+  /* 账户信息尽力而为：桌面版有云端账号时显示用户名/档位；局域网部署没有此接口则保持默认文案 */
+  (async () => {
+    try {
+      const st = await (await fetch('api/cloud/status', { signal: AbortSignal.timeout(5000) })).json();
+      const name = st && (st.username || (st.profile && st.profile.displayName));
+      if (name) {
+        document.getElementById('accName').textContent = name;
+        document.getElementById('accAva').textContent = name[0].toUpperCase();
+        const tier = st.profile && (st.profile.tierName || st.profile.tier);
+        if (tier) document.getElementById('accRole').textContent = tier;
+      }
+    } catch (_) {}
+  })();
+
+  async function signout(){
+    try { await fetch('api/logout', { method: 'POST' }); } catch (_) {}
+    location.href = 'login.html';
+  }
+  document.getElementById('signout').addEventListener('click', signout);
+  document.getElementById('signoutM').addEventListener('click', (e) => { e.preventDefault(); signout(); });
+
+  render();
+</script>
+</body>
+</html>

@@ -174,7 +174,13 @@
         go.textContent = 'Welcome ✓';
         // next 只允许【同源】目标，否则回落 './'：防开放重定向——
         // ?next=https://evil.com 或 //evil.com 会把刚在真站登录的用户带去外域仿冒页。
-        let next = new URLSearchParams(location.search).get('next') || './';
+        let next = new URLSearchParams(location.search).get('next');
+        if (!next) {
+          // 默认进模块选择页（工作台）；老版 server.mjs 没有 /workspace.html 路由（界面包只热更
+          // html、.mjs 要等安装包），先探测一下，404 就照旧直接进聊天页，新旧客户端都不坏。
+          next = './';
+          try { if ((await fetch('workspace.html', { cache: 'no-store' })).ok) next = 'workspace.html'; } catch (_) {}
+        }
         try { if (new URL(next, location.href).origin !== location.origin) next = './'; }
         catch { next = './'; }
         if (/^[a-z][a-z0-9+.-]*:/i.test(next)) next = './';   // 再挡 javascript:/data: 等伪协议

@@ -1887,6 +1887,12 @@ export const server = http.createServer(async (req, res) => {
       res.writeHead(200, { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" })   // 每次取最新页面，避免浏览器缓存旧版
       return res.end(fs.readFileSync(path.join(__dirname, "index.html")))
     }
+    // 登录后的模块选择页（工作台）。login.html 登录成功后会先 GET 探测本路由：老版 server.mjs
+    // 没有这条 → 404 → login.html 回落直接进 './'，所以界面包先于安装包发布也不会把老客户端跳崩。
+    if (req.method === "GET" && u.pathname === "/workspace.html") {
+      res.writeHead(200, { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" })
+      return res.end(fs.readFileSync(path.join(__dirname, "workspace.html")))
+    }
 
     if (req.method === "POST" && u.pathname === "/api/upload") {
       let sid = u.searchParams.get("sid") || null
