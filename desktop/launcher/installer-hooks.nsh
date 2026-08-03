@@ -16,6 +16,20 @@
   Pop $0
   ; 给句柄释放留点时间：进程退出到文件锁真正解除之间有延迟，紧接着解压仍可能撞上
   Sleep 1500
+
+  ; 升级时清掉【上一版留下的在线更新状态】。
+  ;
+  ; 【为什么】skill-packs\ 与 web-packs\ 里存的是"当前装的是哪个在线版本 + 各版归档"，
+  ; 而覆盖安装会把技能与前端换成本安装包自带的那套 —— 状态文件却还写着"我在用
+  ; 2026.7.30 那版"，于是客户端认为自己已是最新、不再提示更新，回退列表里的"出厂版"
+  ; 指的也是上一个安装包的内容。清掉它们，装完就是干净的出厂状态。
+  ; 【不动 outputs / uploads / cloud-state.json】用户的产出、上传与登录态要跨升级留着。
+  DetailPrint "清理上一版的在线更新状态…"
+  RMDir /r "$INSTDIR\bundle\app\skill-packs"
+  RMDir /r "$INSTDIR\bundle\app\web-packs"
+  Delete "$INSTDIR\bundle\app\gateway.log"
+  Delete "$INSTDIR\bundle\app\serve.out"
+  Delete "$INSTDIR\bundle\app\serve.err"
 !macroend
 
 !macro NSIS_HOOK_PREUNINSTALL
