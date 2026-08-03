@@ -67,16 +67,29 @@
   Delete "$INSTDIR\bundle\app\serve.out"
   Delete "$INSTDIR\bundle\app\serve.err"
   Delete "$INSTDIR\bundle\app\*.txt"
-  ; RMDir（不带 /r）只删空目录：outputs/uploads 里有东西就会原样留下，正是我们要的
-  RMDir "$INSTDIR\bundle\app\outputs"
-  RMDir "$INSTDIR\bundle\app\uploads"
   ; web 必须 /r：界面包在线更新会往 web\ 里【新增】NSIS 没登记过的文件（如后来加的
   ; workspace.html），只删空目录必然失败，进而连锁到 app/bundle/$INSTDIR 全都删不掉。
   ; web\ 下没有用户数据（凭证上面已显式删，产出在 app\outputs）——整树删除是安全的。
   RMDir /r "$INSTDIR\bundle\app\web"
-  RMDir "$INSTDIR\bundle\app"
-  RMDir "$INSTDIR\bundle"
-  RMDir "$INSTDIR"
-  IfFileExists "$INSTDIR\bundle\app\outputs\*.*" 0 +2
+
+  ; 收尾：空的就删掉
+  RMDir "$INSTDIR\bundle\app\outputs"
+  RMDir "$INSTDIR\bundle\app\uploads"
+
+  ; 【最后一道，别再逐个点名】上面那串 Delete/RMDir 是"把已知会产生的东西一个个列出来"，
+  ; 这类清单天生会漏：0.1.4 漏了整个 web-packs，0.1.5/0.1.6 漏了热更新增的 workspace.html，
+  ; 每漏一个，$INSTDIR 就删不掉、用户就看到"卸载不掉"。技能脚本还会随手往 app\ 根写临时文件
+  ; （xlsx_tail_*.txt 之类），清单永远追不上。
+  ; 所以：**用户没有数据时，整棵树直接删**，不再依赖清单的完整性；
+  ; 有数据（outputs/uploads 还在）才退回保守路径，只留那两个目录并告诉用户位置。
+  IfFileExists "$INSTDIR\bundle\app\outputs\*.*" keepdata 0
+  IfFileExists "$INSTDIR\bundle\app\uploads\*.*" keepdata 0
+    RMDir /r "$INSTDIR"
+    Goto donecleanup
+  keepdata:
+    RMDir "$INSTDIR\bundle\app"
+    RMDir "$INSTDIR\bundle"
+    RMDir "$INSTDIR"
     DetailPrint "你的产出与上传保留在 $INSTDIR\bundle\app（outputs / uploads），可自行备份后删除"
+  donecleanup:
 !macroend
