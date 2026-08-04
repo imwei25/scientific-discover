@@ -390,6 +390,84 @@
   .sugchip .ic { width: 12px; height: 12px; flex: none; opacity: .55; }
   .sugs.loading .sglbl { opacity: .8; }
 
+  /* ---- 模块工作流：首屏表单卡 / 步骤条 / 结构化产物 ---- */
+  /* 表单卡内联在对话流里（不是弹窗）——用户随时可以不填、直接打字，表单只是给第一条消息灌初值 */
+  .wfcard { align-self: stretch; background: var(--card); border: 1px solid var(--line-hi); border-radius: var(--r-md); padding: 16px 18px; box-shadow: var(--shadow-sm); margin: 4px 0; }
+  .wfcard .wfhd { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 4px; }
+  .wfcard .wftitle { font-size: 14px; font-weight: 600; color: var(--text); }
+  .wfcard .wfsub { font-size: 12px; color: var(--faint); line-height: 1.6; margin-bottom: 12px; }
+  .wfcard .wffoot { font-size: 11.5px; color: var(--faint); line-height: 1.6; margin-top: 12px; padding-top: 10px; border-top: 1px dashed var(--line-hi); }
+  .wff { margin-bottom: 13px; }
+  .wff > label { display: block; font-size: 12.5px; font-weight: 600; color: #334153; margin-bottom: 5px; }
+  .wff > label .req { color: #e0564f; margin-left: 3px; }
+  .wff .wfhelp { font-size: 11px; color: var(--faint); line-height: 1.55; margin-top: 4px; }
+  .wff input[type=text], .wff input[type=number], .wff textarea, .wff select {
+    width: 100%; box-sizing: border-box; background: var(--bg); border: 1px solid var(--line-hi); border-radius: var(--r-sm);
+    padding: 7px 9px; font: inherit; font-size: 12.5px; color: var(--text); }
+  .wff textarea { min-height: 56px; resize: vertical; line-height: 1.6; }
+  .wff input:focus, .wff textarea:focus, .wff select:focus { outline: none; border-color: var(--cyan); }
+  .wfopts { display: flex; flex-wrap: wrap; gap: 6px; }
+  .wfopt { display: inline-flex; align-items: center; gap: 5px; background: var(--bg); border: 1px solid var(--line-hi); border-radius: 999px;
+    padding: 5px 11px; font-size: 12px; color: #46586e; cursor: pointer; transition: border-color .15s, background .15s, color .15s; }
+  .wfopt:hover { border-color: var(--cyan); }
+  .wfopt.on { border-color: var(--cyan); background: rgba(56,189,248,.1); color: #0f6cae; font-weight: 600; }
+  .wfrange { display: flex; align-items: center; gap: 8px; }
+  .wfrange input { flex: 1; }
+  .wfrange span { font-size: 12px; color: var(--faint); flex: none; }
+  .wfacts { display: flex; align-items: center; gap: 10px; margin-top: 4px; }
+  .wfgo { display: inline-flex; align-items: center; gap: 6px; color: #06263b; background: linear-gradient(180deg, rgba(122,212,246,.9), rgba(69,182,230,.9));
+    border: none; padding: 9px 20px; border-radius: var(--r-sm); font: inherit; font-size: 13px; font-weight: 700; cursor: pointer; box-shadow: 0 4px 12px rgba(34,184,240,.26); }
+  .wfgo:hover { filter: brightness(1.06); }
+  .wfskip { background: none; border: none; font: inherit; font-size: 12px; color: var(--faint); cursor: pointer; text-decoration: underline; text-underline-offset: 3px; }
+  .wfskip:hover { color: #0f6cae; }
+  .wferr { font-size: 12px; color: #e0564f; margin-top: 8px; }
+
+  /* 步骤条：顶部一行，显示本模块走到哪一步。进度由"产物文件出现了没有"反推，不阻断 agent */
+  .wfsteps { display: flex; flex-wrap: wrap; gap: 5px; align-items: center; padding: 8px 12px; background: var(--card);
+    border: 1px solid var(--line-hi); border-radius: var(--r-md); margin: 0 0 8px; font-size: 11.5px; }
+  .wfsteps .wsl { color: var(--faint); margin-right: 3px; font-weight: 600; }
+  .wfstep { display: inline-flex; align-items: center; gap: 4px; padding: 3px 9px; border-radius: 999px; background: var(--bg); border: 1px solid var(--line-hi); color: var(--faint); }
+  .wfstep.done { border-color: rgba(52,168,110,.5); background: rgba(52,168,110,.1); color: #1f7a52; }
+  .wfstep.cur { border-color: var(--cyan); background: rgba(56,189,248,.12); color: #0f6cae; font-weight: 600; }
+  .wfstep.gate::after { content: "闸"; font-size: 9px; opacity: .7; border: 1px solid currentColor; border-radius: 3px; padding: 0 2px; }
+  .wfstep .wsx { opacity: .6; }
+
+  /* 结构化产物卡：文献列表 / 核查报告 / 检索成败分栏 */
+  .art { align-self: stretch; background: var(--card); border: 1px solid var(--line-hi); border-radius: var(--r-md); margin: 6px 0; overflow: hidden; }
+  .art .arthd { display: flex; align-items: center; gap: 8px; padding: 9px 13px; border-bottom: 1px solid var(--line-hi); background: var(--bg); }
+  .art .arthd b { font-size: 12.5px; color: var(--text); font-weight: 600; }
+  .art .arthd .artn { font-size: 11.5px; color: var(--faint); }
+  .art .arthd .artsp { flex: 1; }
+  .art .artbd { max-height: 420px; overflow: auto; }
+  .art .artft { padding: 7px 13px; border-top: 1px solid var(--line-hi); font-size: 11px; color: var(--faint); }
+  .artbtn { background: var(--bg); border: 1px solid var(--line-hi); border-radius: var(--r-sm); padding: 3px 9px; font: inherit; font-size: 11.5px; color: #46586e; cursor: pointer; }
+  .artbtn:hover { border-color: var(--cyan); color: #0f6cae; }
+  /* 文献卡片 */
+  .lit { display: flex; gap: 9px; padding: 10px 13px; border-bottom: 1px solid var(--line); }
+  .lit:last-child { border-bottom: none; }
+  .lit.off { opacity: .45; }
+  .lit .litck { flex: none; margin-top: 2px; cursor: pointer; }
+  .lit .litbd { min-width: 0; flex: 1; }
+  .lit .litti { font-size: 12.5px; color: var(--text); line-height: 1.5; font-weight: 500; }
+  .lit .litmeta { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-top: 5px; font-size: 11px; color: var(--faint); }
+  .lit .litj { color: #46586e; font-style: italic; }
+  .lit .tag { border: 1px solid var(--line-hi); border-radius: 999px; padding: 0 6px; line-height: 16px; }
+  .lit .tag.oa { border-color: rgba(52,168,110,.5); color: #1f7a52; }
+  .lit .tag.imp { border-color: rgba(56,189,248,.5); color: #0f6cae; }
+  .lit a { color: #0f6cae; text-decoration: none; }
+  .lit a:hover { text-decoration: underline; }
+  /* 报告类：按严重度分组 */
+  .rpt { padding: 4px 0; }
+  .rpt .rline { display: flex; gap: 8px; padding: 7px 13px; font-size: 12px; line-height: 1.6; border-bottom: 1px solid var(--line); }
+  .rpt .rline:last-child { border-bottom: none; }
+  .rpt .rdot { flex: none; width: 8px; height: 8px; border-radius: 50%; margin-top: 6px; background: var(--faint); }
+  .rpt .rdot.red { background: #e0564f; } .rpt .rdot.amber { background: #e0a23f; } .rpt .rdot.green { background: #34a86e; }
+  .art .split { display: grid; grid-template-columns: 1fr 1fr; gap: 0; }
+  .art .split > div { padding: 9px 13px; font-size: 12px; line-height: 1.7; }
+  .art .split > div + div { border-left: 1px solid var(--line); }
+  .art .split h5 { margin: 0 0 6px; font-size: 11.5px; color: var(--faint); font-weight: 600; }
+  @media (max-width: 640px) { .art .split { grid-template-columns: 1fr; } .art .split > div + div { border-left: none; border-top: 1px solid var(--line); } }
+
   /* image lightbox */
   .lightbox { position: fixed; inset: 0; z-index: 60; display: none; align-items: center; justify-content: center; background: rgba(4,8,16,.82); backdrop-filter: blur(8px); cursor: zoom-out; padding: 32px; }
   .lightbox.on { display: flex; }
@@ -1549,6 +1627,7 @@ async function resumeSession(id) {                 // 载入历史 → 设为当
   loadSessions()                                   // 重渲染以高亮当前会话
   loadUploads()                                    // 回显该会话已上传的文件
   loadZotLib()                                     // 回显该会话的 Zotero 小库（有则显示条数与「导出」按钮）
+  loadWorkflowState()                              // 受限模块会话：把步骤条恢复到当前进度（刷新/切会话不丢）
   if (job.running) attachStream(id)                // 这轮还在后台生成 → 重放快照并续流
   q.focus(); log.scrollTop = log.scrollHeight
 }
@@ -1556,6 +1635,7 @@ async function resumeSession(id) {                 // 载入历史 → 设为当
 function clearCurrentSession() {
   detachStream(); sessionId = null; localStorage.removeItem("nm_sid")
   log.innerHTML = ""; renderFiles([]); renderUploads([]); renderWelcome(); zScopeReset(); loadZotLib()
+  stepsHost = null                                 // 步骤条随会话走：清了会话就没有它了，别留个野引用
 }
 async function deleteSession(id, title) {           // 删除会话（不可撤销，先确认；进行中的生成由后端一并终止）
   if (!confirm("删除会话「" + (title || id) + "」？此操作不可撤销。")) return
@@ -1598,6 +1678,7 @@ function renderWelcome() {
         currentModule = m.id; setModBadge(m.id)
         grid.querySelectorAll(".modcard").forEach((x) => x.classList.remove("sel")); b.classList.add("sel")
         chips.style.display = m.id === "chat" ? "" : "none"   // 示例 chip 只对自由对话有意义
+        showIntake(w, m.id)     // 受限模块：就地展开首屏表单卡（自由对话没有表单，会自行清掉）
         q.focus()
       })
       grid.appendChild(b)
@@ -1608,6 +1689,445 @@ function renderWelcome() {
   CHIPS.forEach((c) => { const b = document.createElement("button"); b.type = "button"; b.className = "chip"; b.textContent = c; b.addEventListener("click", () => sendMessage(c)); chips.appendChild(b) })
   if (currentModule !== "chat") chips.style.display = "none"
   w.appendChild(chips); log.appendChild(w)
+  if (currentModule !== "chat") showIntake(w, currentModule)   // 从工作台直接点模块进来的：立刻展开表单
+}
+
+// ============ 模块工作流：首屏表单 → 任务卡 → 结构化产物 ============
+// 【定位】表单只给第一条消息灌初值，不是硬状态机：一项不填直接打字照样能走，
+// 服务端也不会因为"表单没填完"拒收任何东西（见 workflows.mjs 头注的设计铁律）。
+let UPLOADED = []                  // 本会话已上传文件名（renderUploads 维护），表单的 files/columns 字段用它当候选
+const wfCache = new Map()          // 模块 id → workflow 定义（/api/modules/<id>/workflow 的结果）
+let pendingWfCard = ""             // 待随下一条消息发出的任务卡文本（用法同 zScopePrefix）
+let pendingWfForm = null           // 待随下一条消息落盘的表单值（服务端建完会话后写进 _workflow.json）
+async function loadWorkflow(modId) {
+  if (wfCache.has(modId)) return wfCache.get(modId)
+  let wf = null
+  try {
+    const r = await fetch("api/modules/" + encodeURIComponent(modId) + "/workflow", { signal: AbortSignal.timeout(8000) })
+    if (r.ok) wf = (await r.json()).workflow || null
+  } catch (_) { /* 拿不到就退化成"没有表单"，用户照常打字 —— 绝不因此挡住发消息 */ }
+  wfCache.set(modId, wf)
+  return wf
+}
+/** 在欢迎页里就地展开某模块的首屏表单卡（chat 或取不到定义时只清理，不报错） */
+async function showIntake(host, modId) {
+  host.querySelectorAll(".wfcard").forEach((x) => x.remove())
+  pendingWfCard = ""; pendingWfForm = null
+  if (modId === "chat") return
+  const wf = await loadWorkflow(modId)
+  if (!wf || !wf.intake?.length) return
+  if (currentModule !== modId) return          // 拉取期间用户又换了模块 → 这份已经过期，别贴上去
+  const card = buildFormCard({
+    title: wf.name + " · " + (wf.intakeTitle || "开始"),
+    sub: "填完点「开始」，AI 会按这些设定推进；也可以直接跳过，在下面输入框里说也一样。",
+    fields: wf.intake, footnote: wf.footnote, steps: wf.steps,
+    onSubmit: (values) => startWithForm(modId, values),
+    onSkip: () => { host.querySelectorAll(".wfcard").forEach((x) => x.remove()); q.focus() },
+  })
+  host.appendChild(card)
+}
+/** 表单提交 → 换成任务卡 → 当作第一条消息发出去 */
+async function startWithForm(modId, values) {
+  let card = ""
+  try {
+    const r = await fetch("api/workflow/form", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ module: modId, values }) })
+    if (r.ok) card = (await r.json()).card || ""
+  } catch (_) {}
+  if (!card) { addNote("⚠ 表单没能提交（可能一项都没填）——直接在输入框里说你的需求也一样。"); q.focus(); return }
+  pendingWfCard = card
+  pendingWfForm = values
+  await sendMessage(formSummary(modId, values) || "按上面的设定开始。")
+}
+/** 气泡里显示的那一行：用户选了什么，一眼看得出（完整任务卡走 pendingWfCard，不占气泡） */
+function formSummary(modId, values) {
+  const wf = wfCache.get(modId)
+  if (!wf) return ""
+  const parts = []
+  for (const f of wf.intake || []) {
+    const v = values[f.id]
+    if (v === undefined || v === null || v === "" || (Array.isArray(v) && !v.length)) continue
+    const lbl = (x) => (f.options || []).find((o) => o.v === x)?.t || x
+    let s = Array.isArray(v) ? v.map(lbl).join("/") : (f.type === "bool" ? (v ? f.label : "") : (f.type === "range" ? "" : lbl(v)))
+    if (!s) continue
+    parts.push(String(s).slice(0, 40))
+    if (parts.length >= 4) break
+  }
+  return "开始「" + wf.name + "」：" + (parts.join(" · ") || "按默认设定")
+}
+/** 通用表单卡渲染器。schema 全部来自服务端，这里只管画 —— 改流程不用动前端 */
+function buildFormCard({ title, sub, fields, footnote, steps, onSubmit, onSkip, submitText }) {
+  const values = {}
+  for (const f of fields) if (f.default !== undefined) values[f.id] = Array.isArray(f.default) ? [...f.default] : f.default
+  const box = document.createElement("div"); box.className = "wfcard"
+  const hd = document.createElement("div"); hd.className = "wfhd"
+  const t = document.createElement("div"); t.className = "wftitle"; t.textContent = title
+  hd.appendChild(t); box.appendChild(hd)
+  if (sub) { const s = document.createElement("div"); s.className = "wfsub"; s.textContent = sub; box.appendChild(s) }
+  if (steps?.length) box.appendChild(stepsBar(steps, [], null))
+  const body = document.createElement("div")
+  box.appendChild(body)
+  // 条件字段：任一字段变化都整块重画（表单最多十几项，重画成本可忽略，换来的是 when 逻辑只有一份）
+  const redraw = () => {
+    body.innerHTML = ""
+    for (const f of fields) {
+      if (!condOk(f.when, values)) { delete values[f.id]; continue }   // 条件不成立 → 连值一起清掉，别把隐藏项拼进任务卡
+      // 重新出现的条件字段要把默认值补回来：上面那行清值是对的（隐藏项不该进任务卡），
+      // 但清完就再也不补的话，字段重新可见时值是 undefined —— 服务端据此裁剪步骤会走错分支
+      //（实测：勾上"有原始数据"后"已脱敏"开关显示为「否」，而传出去的是 undefined）。
+      if (values[f.id] === undefined && f.default !== undefined) values[f.id] = Array.isArray(f.default) ? [...f.default] : f.default
+      body.appendChild(fieldEl(f, values, redraw))
+    }
+  }
+  redraw()
+  if (footnote) { const fn = document.createElement("div"); fn.className = "wffoot"; fn.innerHTML = wfInlineMd(footnote); box.appendChild(fn) }
+  const acts = document.createElement("div"); acts.className = "wfacts"
+  const go = document.createElement("button"); go.type = "button"; go.className = "wfgo"; go.textContent = submitText || "开始"
+  const err = document.createElement("div"); err.className = "wferr"; err.style.display = "none"
+  go.addEventListener("click", () => {
+    const miss = fields.filter((f) => f.required && condOk(f.when, values) &&
+      (values[f.id] === undefined || values[f.id] === "" || (Array.isArray(values[f.id]) && !values[f.id].length)))
+    // 必填项只是提醒，不是闸：用户执意跳过仍可点「跳过表单」直接打字（设计铁律：不阻断）
+    if (miss.length) { err.textContent = "还没填：" + miss.map((f) => f.label).join("、") + "（也可以点右边跳过，直接在输入框里说）"; err.style.display = ""; return }
+    go.disabled = true; go.textContent = "提交中…"
+    onSubmit(values)
+  })
+  acts.appendChild(go)
+  if (onSkip) { const sk = document.createElement("button"); sk.type = "button"; sk.className = "wfskip"; sk.textContent = "跳过表单，直接打字"; sk.addEventListener("click", onSkip); acts.appendChild(sk) }
+  box.appendChild(acts); box.appendChild(err)
+  return box
+}
+/** 条件判定：必须与服务端 workflows.mjs 的 condOk 行为一致，否则表单显示的和任务卡拼出来的会对不上 */
+function condOk(cond, values) {
+  if (!cond) return true
+  if (Array.isArray(cond)) return cond.every((c) => condOk(c, values))
+  const v = values?.[cond.field]
+  if ("eq" in cond) return v === cond.eq
+  if ("ne" in cond) return v !== cond.ne
+  if ("in" in cond) return cond.in.includes(v)
+  if ("has" in cond) return Array.isArray(v) && v.includes(cond.has)
+  if ("hasNot" in cond) return !Array.isArray(v) || !v.includes(cond.hasNot)
+  if ("truthy" in cond) return cond.truthy ? !!v : !v
+  return true
+}
+function fieldEl(f, values, onChange) {
+  const wrap = document.createElement("div"); wrap.className = "wff"
+  const lab = document.createElement("label"); lab.textContent = f.label
+  if (f.required) { const r = document.createElement("span"); r.className = "req"; r.textContent = "*"; lab.appendChild(r) }
+  wrap.appendChild(lab)
+  const mk = (tag, props) => Object.assign(document.createElement(tag), props)
+  if (f.type === "multi" || (f.type === "select" && (f.options || []).length <= 6)) {
+    // 选项少就摊开成 chip（比下拉少一次点击，也让用户一眼看全候选）
+    const opts = document.createElement("div"); opts.className = "wfopts"
+    const multi = f.type === "multi"
+    if (multi && !Array.isArray(values[f.id])) values[f.id] = values[f.id] ? [values[f.id]] : []
+    for (const o of f.options || []) {
+      const b = mk("button", { type: "button", className: "wfopt", textContent: o.t })
+      const on = () => multi ? (values[f.id] || []).includes(o.v) : values[f.id] === o.v
+      if (on()) b.classList.add("on")
+      b.addEventListener("click", () => {
+        if (multi) {
+          const arr = values[f.id] || (values[f.id] = [])
+          const i = arr.indexOf(o.v); i >= 0 ? arr.splice(i, 1) : arr.push(o.v)
+        } else values[f.id] = values[f.id] === o.v ? undefined : o.v
+        onChange()
+      })
+      opts.appendChild(b)
+    }
+    wrap.appendChild(opts)
+  } else if (f.type === "select") {
+    const sel = mk("select", {})
+    sel.appendChild(mk("option", { value: "", textContent: "（不限 / 未选）" }))
+    for (const o of f.options || []) sel.appendChild(mk("option", { value: o.v, textContent: o.t }))
+    sel.value = values[f.id] ?? ""
+    sel.addEventListener("change", () => { values[f.id] = sel.value || undefined; onChange() })
+    wrap.appendChild(sel)
+  } else if (f.type === "bool") {
+    const b = mk("button", { type: "button", className: "wfopt" + (values[f.id] ? " on" : ""), textContent: values[f.id] ? "✓ 是" : "否" })
+    b.addEventListener("click", () => { values[f.id] = !values[f.id]; onChange() })
+    wrap.appendChild(b)
+  } else if (f.type === "range") {
+    const box = document.createElement("div"); box.className = "wfrange"
+    const cur = values[f.id] || {}
+    const lo = mk("input", { type: "number", placeholder: "最低", value: cur.min ?? "" })
+    const hi = mk("input", { type: "number", placeholder: "最高", value: cur.max ?? "" })
+    const sync = () => {
+      const o = {}
+      if (lo.value !== "") o.min = Number(lo.value)
+      if (hi.value !== "") o.max = Number(hi.value)
+      values[f.id] = Object.keys(o).length ? o : undefined
+    }
+    lo.addEventListener("input", sync); hi.addEventListener("input", sync)
+    box.appendChild(lo); box.appendChild(mk("span", { textContent: "—" })); box.appendChild(hi)
+    if (f.unit) box.appendChild(mk("span", { textContent: f.unit }))
+    wrap.appendChild(box)
+  } else if (f.type === "files") {
+    const opts = document.createElement("div"); opts.className = "wfopts"
+    if (!Array.isArray(values[f.id])) values[f.id] = []
+    if (!UPLOADED.length) opts.appendChild(mk("span", { className: "wfhelp", textContent: "还没有上传文件 —— 用左侧「上传数据」传上来后回到这里就能选。" }))
+    for (const name of UPLOADED) {
+      const b = mk("button", { type: "button", className: "wfopt" + (values[f.id].includes(name) ? " on" : ""), textContent: name })
+      b.addEventListener("click", () => {
+        const arr = values[f.id]; const i = arr.indexOf(name); i >= 0 ? arr.splice(i, 1) : arr.push(name)
+        onChange()
+      })
+      opts.appendChild(b)
+    }
+    wrap.appendChild(opts)
+  } else if (f.type === "columns") {
+    // 真实表头下拉：「列名猜错/写错」是最高频的失败模式，从真表头选能根治。
+    // 读不出表头（xlsx 等）时降级成手填输入框，并如实说明原因，绝不给一个空下拉让人以为没有列。
+    const host = document.createElement("div")
+    wrap.appendChild(host)
+    const src = (values[f.source] || [])[0]
+    if (!src) host.appendChild(mk("div", { className: "wfhelp", textContent: "先在上面选好数据文件，这里会读出真实列名供你挑选。" }))
+    else {
+      host.appendChild(mk("div", { className: "wfhelp", textContent: "正在读取表头…" }))
+      fetch("api/data/headers?name=" + encodeURIComponent(src) + sidQ()).then((r) => r.json()).then((j) => {
+        host.innerHTML = ""
+        if (!j.headers?.length) {
+          const inp = mk("input", { type: "text", value: values[f.id] ?? "", placeholder: "手动填列名" })
+          inp.addEventListener("input", () => { values[f.id] = inp.value || undefined })
+          host.appendChild(inp)
+          host.appendChild(mk("div", { className: "wfhelp", textContent: j.reason || "读不出表头，请手动填写列名。" }))
+          return
+        }
+        const opts = document.createElement("div"); opts.className = "wfopts"
+        const multi = !!f.multiple
+        if (multi && !Array.isArray(values[f.id])) values[f.id] = []
+        for (const h of j.headers) {
+          const on = multi ? (values[f.id] || []).includes(h) : values[f.id] === h
+          const b = mk("button", { type: "button", className: "wfopt" + (on ? " on" : ""), textContent: h })
+          b.addEventListener("click", () => {
+            if (multi) { const arr = values[f.id]; const i = arr.indexOf(h); i >= 0 ? arr.splice(i, 1) : arr.push(h) }
+            else values[f.id] = values[f.id] === h ? undefined : h
+            onChange()
+          })
+          opts.appendChild(b)
+        }
+        host.appendChild(opts)
+      }).catch(() => { host.innerHTML = ""; host.appendChild(mk("div", { className: "wfhelp", textContent: "读表头失败，请手动在对话里说明列名。" })) })
+    }
+  } else if (f.type === "textarea") {
+    const ta = mk("textarea", { value: values[f.id] ?? "", placeholder: f.placeholder || "" })
+    ta.addEventListener("input", () => { values[f.id] = ta.value || undefined })
+    wrap.appendChild(ta)
+  } else if (f.type === "number") {
+    const inp = mk("input", { type: "number", value: values[f.id] ?? "", placeholder: f.placeholder || "" })
+    if (f.min !== undefined) inp.min = f.min
+    if (f.max !== undefined) inp.max = f.max
+    inp.addEventListener("input", () => { values[f.id] = inp.value === "" ? undefined : Number(inp.value) })
+    wrap.appendChild(inp)
+  } else {
+    const inp = mk("input", { type: "text", value: values[f.id] ?? "", placeholder: f.placeholder || "" })
+    inp.addEventListener("input", () => { values[f.id] = inp.value || undefined })
+    wrap.appendChild(inp)
+  }
+  if (f.help) wrap.appendChild(Object.assign(document.createElement("div"), { className: "wfhelp", textContent: f.help }))
+  return wrap
+}
+/** 步骤条：done 来自"产物出现了没有"的反推，cur 是最近提交的那一步 */
+function stepsBar(steps, done, cur) {
+  const bar = document.createElement("div"); bar.className = "wfsteps"
+  bar.appendChild(Object.assign(document.createElement("span"), { className: "wsl", textContent: "流程" }))
+  steps.forEach((s, i) => {
+    if (i) bar.appendChild(Object.assign(document.createElement("span"), { className: "wsx", textContent: "›" }))
+    const el = document.createElement("span")
+    el.className = "wfstep" + ((done || []).includes(s.id) ? " done" : "") + (s.id === cur ? " cur" : "") + (s.gate ? " gate" : "")
+    el.textContent = ((done || []).includes(s.id) ? "✓ " : "") + s.name + (s.optional ? "(可选)" : "")
+    if (s.hint) el.title = s.hint
+    bar.appendChild(el)
+  })
+  return bar
+}
+// 表单脚注的极简 markdown：【先转义再处理粗体】。不能复用上面那个 mdInline —— 它假定入参
+// 已经转义过（正文渲染管线在上游做了），拿它直接吃未转义文本会开出 XSS 口子。
+const wfInlineMd = (s) => String(s).replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c])).replace(/\*\*(.+?)\*\*/g, "<b>$1</b>")
+// 任务卡/表单值都是【一次性】的：取走即清。
+// 不清的话，用户在同一会话里发第二条消息会把整张卡再拼一遍——agent 会以为用户又交代了一次，
+// 且服务端会把已经过时的表单值重复写回状态簿。
+function wfCardPrefix() { const c = pendingWfCard; pendingWfCard = ""; return c }
+function wfFormSeed() { const v = pendingWfForm; pendingWfForm = null; return v || undefined }
+
+// ============ 结构化产物渲染 ============
+// 认的是【文件名】，不是让 agent 吐 JSON —— 模型的输出格式会漂，而技能产出的文件名本来就是固定的。
+// 认不出的产物照旧走 addProducts 的普通卡片，绝不因为"没匹配上渲染器"就把文件藏起来。
+const ART_TITLE = { evidence: "检索到的文献", retrieval: "全文获取结果", refcheck: "引用核查",
+  review: "评审意见", integrity: "数据完整性自查", topics: "候选选题", diff: "润色对照",
+  table: "结果表", figure: "图", doc: "文档", manuscript: "稿件", report: "报告" }
+// 只对这几类做富渲染；其余类型（figure/doc/manuscript/report/table）普通产物卡已经够好，不重复占屏
+const ART_RICH = new Set(["evidence", "retrieval", "refcheck", "review", "integrity", "topics"])
+async function renderArtifacts(list) {
+  for (const a of list) {
+    if (!ART_RICH.has(a.render)) continue
+    try {
+      const txt = await fetch("api/raw?name=" + encodeURIComponent(a.name) + sidQ()).then((r) => r.ok ? r.text() : "")
+      if (!txt) continue
+      const el = a.render === "evidence" ? evidenceCard(a.name, txt)
+        : a.render === "retrieval" ? retrievalCard(a.name, txt)
+        : reportCard(a.name, txt, a.render)
+      if (el) { log.appendChild(el); follow() }
+    } catch (_) { /* 渲染失败不影响普通产物卡，静默跳过 */ }
+  }
+}
+function artShell(name, title, count) {
+  const box = document.createElement("div"); box.className = "art"
+  const hd = document.createElement("div"); hd.className = "arthd"
+  hd.appendChild(Object.assign(document.createElement("b"), { textContent: title }))
+  // 计数格【总是】建出来（哪怕暂时空着）：reportCard 要在统计完严重度之后回填它，
+  // 之前按 `if (count)` 跳过创建 → querySelector 拿到 null，那行"3 严重 · 2 待核"就永远不显示。
+  hd.appendChild(Object.assign(document.createElement("span"), { className: "artn", textContent: count || "" }))
+  hd.appendChild(Object.assign(document.createElement("span"), { className: "artsp" }))
+  const dl = document.createElement("a"); dl.className = "artbtn"; dl.textContent = "下载原表"
+  dl.href = "api/download?name=" + encodeURIComponent(name) + sidQ(); dl.download = name.split("/").pop()
+  hd.appendChild(dl)
+  box.appendChild(hd)
+  const bd = document.createElement("div"); bd.className = "artbd"; box.appendChild(bd)
+  return { box, bd, hd }
+}
+/** 极简 CSV 解析（支持引号内逗号与转义双引号）——证据表里标题带逗号是常态，不处理会整行错位 */
+function parseCsv(text) {
+  const rows = []; let row = [], cell = "", inQ = false
+  const s = text.charCodeAt(0) === 0xfeff ? text.slice(1) : text
+  for (let i = 0; i < s.length; i++) {
+    const c = s[i]
+    if (inQ) {
+      if (c === '"') { if (s[i + 1] === '"') { cell += '"'; i++ } else inQ = false }
+      else cell += c
+    } else if (c === '"') inQ = true
+    else if (c === ",") { row.push(cell); cell = "" }
+    else if (c === "\n") { row.push(cell); rows.push(row); row = []; cell = "" }
+    else if (c !== "\r") cell += c
+  }
+  if (cell || row.length) { row.push(cell); rows.push(row) }
+  return rows.filter((r) => r.some((x) => x.trim() !== ""))
+}
+const pick = (obj, ...keys) => { for (const k of keys) { const hit = Object.keys(obj).find((h) => h.toLowerCase().replace(/[\s_-]/g, "") === k); if (hit && obj[hit]) return obj[hit] } return "" }
+/** 文献卡片列表：证据表里最要紧的几列拎出来，其余仍可下载原表看 */
+function evidenceCard(name, text) {
+  const rows = parseCsv(text)
+  if (rows.length < 2) return null
+  const head = rows[0].map((h) => h.trim())
+  const recs = rows.slice(1).map((r) => Object.fromEntries(head.map((h, i) => [h, (r[i] || "").trim()])))
+  const { box, bd, hd } = artShell(name, ART_TITLE.evidence, recs.length + " 篇")
+  // 排除勾选：勾掉的会在"把排除清单发给 AI"时带过去（下一步筛选用），本地不改文件
+  const excluded = new Set()
+  for (const r of recs) {
+    const title = pick(r, "title", "标题") || "(无标题)"
+    const row = document.createElement("div"); row.className = "lit"
+    const ck = document.createElement("input"); ck.type = "checkbox"; ck.className = "litck"; ck.checked = true; ck.title = "取消勾选 = 排除这篇"
+    ck.addEventListener("change", () => { ck.checked ? excluded.delete(title) : excluded.add(title); row.classList.toggle("off", !ck.checked); upd() })
+    const bdy = document.createElement("div"); bdy.className = "litbd"
+    bdy.appendChild(Object.assign(document.createElement("div"), { className: "litti", textContent: title }))
+    const meta = document.createElement("div"); meta.className = "litmeta"
+    const journal = pick(r, "journal", "期刊", "source", "venue", "container")
+    const year = pick(r, "year", "年份", "date", "pubyear")
+    const doi = pick(r, "doi")
+    const cites = pick(r, "citations", "citedby", "citationcount", "被引")
+    const imp = pick(r, "journalimpact", "impact", "2yrmeancitedness", "期刊影响力")
+    const oa = pick(r, "isoa", "oa", "openaccess")
+    if (journal) meta.appendChild(Object.assign(document.createElement("span"), { className: "litj", textContent: journal }))
+    if (year) meta.appendChild(Object.assign(document.createElement("span"), { textContent: year }))
+    if (cites) meta.appendChild(Object.assign(document.createElement("span"), { className: "tag", textContent: "被引 " + cites }))
+    // 措辞守死：这是 OpenAlex 的两年篇均被引，不是官方影响因子，标签绝不能写成 "IF"
+    if (imp) meta.appendChild(Object.assign(document.createElement("span"), { className: "tag imp", textContent: "影响力≈" + imp, title: "OpenAlex 两年篇均被引，非官方影响因子" }))
+    if (oa && /^(1|true|yes|是)$/i.test(oa)) meta.appendChild(Object.assign(document.createElement("span"), { className: "tag oa", textContent: "OA" }))
+    if (doi) { const a = document.createElement("a"); a.href = "https://doi.org/" + doi.replace(/^https?:\/\/doi\.org\//, ""); a.target = "_blank"; a.rel = "noopener noreferrer"; a.textContent = "DOI"; meta.appendChild(a) }
+    bdy.appendChild(meta)
+    row.appendChild(ck); row.appendChild(bdy)
+    bd.appendChild(row)
+  }
+  // 勾选结果 → 一句话填进输入框（不自动发送，与"下一步建议"气泡同款克制）
+  const act = document.createElement("button"); act.className = "artbtn"; act.textContent = "把排除清单交给 AI"; act.style.display = "none"
+  act.addEventListener("click", () => {
+    q.value = "请把这几篇从纳入范围里排除，其余照常推进：\n" + [...excluded].map((t) => "- " + t).join("\n")
+    q.dispatchEvent(new Event("input")); q.focus()
+  })
+  hd.insertBefore(act, hd.querySelector("a"))
+  const upd = () => { act.style.display = excluded.size ? "" : "none"; act.textContent = `把 ${excluded.size} 篇排除项交给 AI` }
+  const ft = document.createElement("div"); ft.className = "artft"
+  ft.textContent = "取消勾选可标记要排除的文献；「影响力」为 OpenAlex 两年篇均被引的近似值，非官方影响因子。"
+  box.appendChild(ft)
+  return box
+}
+/** 全文获取：成功 / 失败分栏 —— 把"如实区分哪些下到了、哪些没下到"这条铁律做成界面 */
+function retrievalCard(name, text) {
+  if (!/\.json$/i.test(name)) return null
+  let j; try { j = JSON.parse(text) } catch { return null }
+  const items = Array.isArray(j) ? j : (j.results || j.items || [])
+  if (!Array.isArray(items) || !items.length) return null
+  const ok = items.filter((x) => /success|institutional|downloaded|ok/i.test(String(x.status || "")))
+  const bad = items.filter((x) => !ok.includes(x))
+  const { box, bd } = artShell(name, ART_TITLE.retrieval, `${ok.length} 成功 / ${bad.length} 未获取`)
+  const split = document.createElement("div"); split.className = "split"
+  const col = (title, arr, fmt) => {
+    const d = document.createElement("div")
+    d.appendChild(Object.assign(document.createElement("h5"), { textContent: title }))
+    if (!arr.length) d.appendChild(Object.assign(document.createElement("div"), { textContent: "（无）" }))
+    for (const x of arr.slice(0, 60)) d.appendChild(Object.assign(document.createElement("div"), { textContent: fmt(x) }))
+    if (arr.length > 60) d.appendChild(Object.assign(document.createElement("div"), { textContent: `…另有 ${arr.length - 60} 条，见原始报告` }))
+    return d
+  }
+  split.appendChild(col(`✅ 已下到全文（${ok.length}）`, ok, (x) => "· " + (x.title || x.doi || x.pmid || "?")))
+  split.appendChild(col(`⚠️ 未获取（${bad.length}）`, bad, (x) => "· " + (x.title || x.doi || x.pmid || "?") + "：" + (x.reason || x.status || "未知原因")))
+  bd.appendChild(split)
+  return box
+}
+/** 报告类（引用核查 / 评审 / 完整性 / 选题）：按严重度着色逐条列出 */
+function reportCard(name, text, kind) {
+  const lines = text.split(/\r?\n/).map((l) => l.trim()).filter((l) => l && !/^#{1,6}\s*$/.test(l))
+  if (!lines.length) return null
+  const sev = (l) => /严重|critical|major|❌|✗|错误|不存在|撤稿|假引用|red|高危/i.test(l) ? "red"
+    : /注意|minor|warning|⚠|待核|存疑|amber|中等/i.test(l) ? "amber"
+    : /通过|✓|✅|无异常|green|正常/i.test(l) ? "green" : ""
+  const items = lines.filter((l) => /^([-*•]|\d+[.)]|#{1,6}\s)/.test(l)).slice(0, 120)
+  if (items.length < 2) return null            // 不成列表的报告让 markdown 预览去展示，别硬拆
+  const counts = { red: 0, amber: 0, green: 0 }
+  const { box, bd } = artShell(name, ART_TITLE[kind] || "报告", "")
+  const rpt = document.createElement("div"); rpt.className = "rpt"
+  for (const l of items) {
+    const s = sev(l); if (s) counts[s]++
+    const row = document.createElement("div"); row.className = "rline"
+    row.appendChild(Object.assign(document.createElement("span"), { className: "rdot " + s }))
+    row.appendChild(Object.assign(document.createElement("span"), { textContent: l.replace(/^([-*•]|\d+[.)]|#{1,6})\s*/, "") }))
+    rpt.appendChild(row)
+  }
+  bd.appendChild(rpt)
+  const n = box.querySelector(".artn")
+  if (n) n.textContent = [counts.red && `${counts.red} 严重`, counts.amber && `${counts.amber} 待核`, counts.green && `${counts.green} 通过`].filter(Boolean).join(" · ") || `${items.length} 条`
+  // 闸不过 → 返工按钮：把报告作为下一步输入，省得用户自己复述
+  if (counts.red || counts.amber) {
+    const ft = document.createElement("div"); ft.className = "artft"
+    const b = document.createElement("button"); b.className = "artbtn"; b.textContent = "按这份报告返工"
+    b.addEventListener("click", () => {
+      q.value = `请按 ${name} 里列出的问题逐条返工修正，改完把修改点列给我。`
+      q.dispatchEvent(new Event("input")); q.focus()
+    })
+    ft.appendChild(b); box.appendChild(ft)
+  }
+  return box
+}
+// ---- 步骤条：挂在对话区顶部，进度由服务端按"产物出现了没有"反推 ----
+let stepsHost = null
+function updateStepsBar(done, cur) {
+  const wf = wfCache.get(currentModule)
+  if (!wf?.steps?.length) return
+  const bar = stepsBar(wf.steps, done, cur)
+  if (stepsHost && stepsHost.parentNode) stepsHost.replaceWith(bar)
+  else log.insertBefore(bar, log.firstChild)
+  stepsHost = bar
+}
+/** 切会话/刷新时把步骤条恢复到当前进度 */
+async function loadWorkflowState() {
+  if (stepsHost && stepsHost.parentNode) { stepsHost.remove(); stepsHost = null }
+  if (!sessionId) return
+  try {
+    const j = await fetch("api/workflow/state" + (sessionId ? "?sid=" + encodeURIComponent(sessionId) : "")).then((r) => r.json())
+    if (!j?.state || !j.steps?.length) return
+    wfCache.set(j.module, { ...(wfCache.get(j.module) || {}), name: j.name, steps: j.steps })
+    currentModule = j.module
+    updateStepsBar(j.state.done || [], j.state.cur)
+  } catch (_) {}
 }
 
 let sessionId = null   // reused across messages so the agent keeps context
@@ -1658,7 +2178,7 @@ let sending = false     // POST /api/chat/start 往返期间为 true：此时还
 function sidQ() { return sessionId ? "&sid=" + encodeURIComponent(sessionId) : "" }   // 上传/下载/预览都带上会话 id，隔离各会话目录
 document.getElementById("new").addEventListener("click", () => {
   detachStream()   // 只退订不终止：原会话若在生成会继续跑，从左侧列表随时切回来看
-  sessionId = null; localStorage.removeItem("nm_sid"); log.innerHTML = ""; renderFiles([]); loadUploads(); loadSessions(); zScopeReset(); loadZotLib()
+  sessionId = null; localStorage.removeItem("nm_sid"); log.innerHTML = ""; renderFiles([]); loadUploads(); loadSessions(); zScopeReset(); loadZotLib(); stepsHost = null
   // 新对话回到默认模块（chat 可用则 chat，否则首个可用），在欢迎页重新选
   const allowed = MODULES.filter((m) => m.allowed)
   currentModule = allowed.some((m) => m.id === "chat") ? "chat" : (allowed[0]?.id || "chat")
@@ -1770,12 +2290,16 @@ async function sendMessage(text) {
   // "界面显示会话 B 的历史、A 的生成内容一条条流进 B 的对话框"，且此后上传/下载/预览的 sid 全指向 A，
   // 刷新页面又落回 A。老实现是同步 openStream，窗口只有一瞬；改成 POST 两步后这个窗口被显著拉长。
   const mySid = sessionId
+  // 任务卡与表单值取走即清（见 wfCardPrefix），但发送失败时要还回去 —— 否则用户按提示重发一次，
+  // 表单里那一整页勾选就凭空蒸发了，而他根本不知道少了什么。
+  const myCard = wfCardPrefix(), myForm = wfFormSeed()
   let r = null, why = "网络异常"
   try {
     const resp = await fetch("api/chat/start", {
       method: "POST", headers: { "Content-Type": "application/json" },
-      // q 前面可能带一行 Zotero「检索范围」指示（服务端回看历史时会剥掉）；气泡里显示的仍是用户原话
-      body: JSON.stringify({ q: zScopePrefix() + text, sid: sessionId, module: sessionId ? undefined : currentModule, auto: autoChk.checked }),   // 模块只在建会话时绑定；续会话由服务端按绑定表裁定；auto=无人值守勾选态
+      // q 前面可能带一行 Zotero「检索范围」指示、以及一整块工作流「任务卡」（服务端回看历史时会剥掉）；
+      // 气泡里显示的仍是用户原话/一行摘要 —— 与 zScopePrefix 同一套路，别让长表单把对话框刷屏。
+      body: JSON.stringify({ q: zScopePrefix() + myCard + text, sid: sessionId, module: sessionId ? undefined : currentModule, auto: autoChk.checked, wfForm: myForm }),   // 模块只在建会话时绑定；续会话由服务端按绑定表裁定；auto=无人值守勾选态
     })
     // 登录已过期 → 去登录页。先复位 sending/streaming 再跳：万一跳转被拦或很慢，
     // 按钮不至于永久禁用（否则用户只能刷新页面才能再发消息）。
@@ -1792,6 +2316,7 @@ async function sendMessage(text) {
   // 免得盖掉用户在等待期间新输入的内容。
   if (!r) {
     bubble.dataset.ghost = "1"; setStreamingUI(false)
+    if (myCard) { pendingWfCard = myCard; pendingWfForm = myForm }   // 还回去，重发时仍带着那一页勾选
     if (!q.value.trim()) { q.value = text; q.dispatchEvent(new Event("input")) }   // 触发已有的高度自适应（若有）
     addNote("⚠ 发送失败（" + why + "）——原文已放回输入框，可直接重发")
     return false
@@ -1918,6 +2443,10 @@ function openStream(url) {
   es.addEventListener("text", (ev) => { if (!painted) { gotText = true; answer.textContent = JSON.parse(ev.data); setGen("正在输出…"); follow() } })   // 流式期间纯文本，final 时才渲染 markdown
   es.addEventListener("final", (ev) => { const t = JSON.parse(ev.data).text; if (t && !painted) { gotText = true; answer.textContent = t } paintAnswer(); follow() })
   es.addEventListener("files", (ev) => { const list = JSON.parse(ev.data); if (list.length) { renderFiles(list); addProducts(list) } })   // 本轮没产物就保留上一轮，不清空
+  // 结构化产物：服务端按文件名认出渲染器（文献表→文献卡片、核查报告→红黄绿逐条…）。
+  // 这是 files 之外【额外】的一份，不是替代 —— 认不出的产物仍走上面那条，绝不会因此消失。
+  es.addEventListener("artifacts", (ev) => { try { renderArtifacts(JSON.parse(ev.data)) } catch (_) {} })
+  es.addEventListener("workflow", (ev) => { try { const w = JSON.parse(ev.data); updateStepsBar(w.done || [], w.cur) } catch (_) {} })
   es.addEventListener("auto", (ev) => { try { autoNextInfo = JSON.parse(ev.data) } catch {} })   // 无人值守：done 后服务端已同步起了下一轮
   es.addEventListener("done", () => {
     paintAnswer(); finalize(); refreshStorage()   // 本轮产物落盘后刷新存储用量
@@ -2372,6 +2901,7 @@ function fmtSize(n) {
 function setUpMsg(text, isErr) { upmsgEl.textContent = text; upmsgEl.classList.toggle("err", !!isErr) }
 // 渲染 uploads/ 里的文件（名字 + 大小 + 下载/删除）
 function renderUploads(list) {
+  UPLOADED = (list || []).map((it) => it.name)   // 工作流表单的 files/columns 字段从这里取候选
   uplistEl.innerHTML = ""
   upcountEl.textContent = list && list.length ? list.length + " 个文件" : ""
   if (!list || !list.length) return

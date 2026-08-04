@@ -13,6 +13,7 @@ import * as SkillUp from "./skill-update.mjs"
 import * as WebUp from "./web-update.mjs"
 import { shouldOfferUpdate } from "./pack-freshness.mjs"
 import { zip as zipPack } from "./minizip.mjs"
+import * as WF from "./workflows.mjs"
 
 // opencode 的完整流水线（标书/论文/系统综述）单轮可跑十几分钟，而 session.prompt 是“等整轮结束才返回”的请求；
 // undici 默认 5 分钟 headers/body 超时会让这类长轮假性抛错。关掉这两个超时（0=不限），连接超时保留。
@@ -427,6 +428,7 @@ const dirState = (dir, depth = DIRSTATE_DEPTH, prefix = "") => {
   let ents; try { ents = fs.readdirSync(dir, { withFileTypes: true }) } catch { return m }
   for (const e of ents) {
     if (e.name.startsWith(".")) continue          // .preview 等派生缓存不进列表
+    if (e.name === "_workflow.json") continue     // 工作流状态是网关自己的簿子，不是用户产物
     const p = path.join(dir, e.name)
     const rel = prefix ? prefix + "/" + e.name : e.name
     let st; try { st = fs.statSync(p) } catch { continue }
@@ -471,6 +473,14 @@ const send = (res, code, type, body) => { res.writeHead(code, { "Content-Type": 
 // （实测：同一 keepAlive Agent 上先发超限请求拿到 413，紧接着的请求 >15s 无响应）。
 // 典型场景：上传/发消息的体积超限，我们不想把几 MB 收完才拒绝。
 const sendClose = (res, code, type, body) => { res.writeHead(code, { "Content-Type": type, "Connection": "close" }); res.end(body) }
+// 小 JSON 请求体（工作流表单等）。带上限：表单值全由前端给，不设限等于让任意登录用户拿内存说事。
+// 超限直接抛，调用方 catch 成 400 —— 这类请求正常也就几 KB。
+const JSON_BODY_MAX = 256 * 1024
+async function readJson(req) {
+  const chunks = []; let n = 0
+  for await (const c of req) { n += c.length; if (n > JSON_BODY_MAX) throw new Error("请求体过大"); chunks.push(c) }
+  return JSON.parse(Buffer.concat(chunks).toString("utf8") || "{}")
+}
 
 // ---- 局域网访问的简易单用户登录（demo）----
 // 本机（localhost）访问免登录；从局域网 IP 访问才要求输入密码。登录成功发一个随机 token 到 Cookie。
@@ -495,8 +505,12 @@ const LOGIN_URL = BASE_PATH ? "/" : "/login"
 // agent 一旦调用模块外的技能（或试图用 task 子代理绕道），本轮立即中止（见 startJob 的模块闸）。
 // 会话在创建那一刻绑定模块，绑定持久化在 ocdata 卷（module-map.json），之后不可改——
 // 换功能 = 新开会话。老会话（本功能上线前建的）一律按 chat 处理。
-// skills：该模块放行的技能【集合】（首个 = 主技能，模块可用性看它；其余是这条流水线必需的配套技能，
-// 比如"数据统计与分析"要出 ROC 图就绕不开 nature-figure）。null = 不受限（仅 chat）。
+// skills：该模块放行的技能【集合】。**不再手写**——由 workflows.mjs 的 steps 展开（WF.skillsOf），
+// 那份定义同时喂前端表单与任务卡，一份事实多用，不会再与 AGENTS.md §三 的路由表漂开
+// （手写时代的实况：paper 缺了脱敏/统计/作图整个前半段、litread 缺排版出件）。null = 不受限（仅 chat）。
+// primary：主技能，模块可用性看它（被技能白名单收权则整个模块不可用）。
+// ★ 必须【显式声明】，不能再取 skills[0]：技能集现在是从 steps 自动展开的，数组顺序不再可控，
+//   而它决定模块开不开 —— 靠顺序会静默错判（旧写法遗留的真隐患，随本次改造一并修掉）。
 // 【三处同步维护】本表 ↔ deploy/manager.mjs 的 MODULE_TABLE ↔ deploy/scripts/user-modules.sh 的 ALL_MODULES。
 // 模块 id 一经发布就不要改：deploy 的 users/<名>.env 里 MODULES= 存的是 id，改名等于把老用户的授权改没。
 // group：工作台（workspace.html）按它把卡片分到两栏——
@@ -506,31 +520,43 @@ const LOGIN_URL = BASE_PATH ? "/" : "/login"
 // 将来新增模块若忘了写 group，工作台把它落到「核心能力」栏——不会从界面上凭空消失。
 const MODULE_DEFS = {
   review:   { name: "综述撰写",       group: "workbench",
-              skills: ["literature-review", "search-lit", "fulltext-retrieval", "reference-check", "render-docx", "render-pdf-doc"],
               desc: "整合医学前沿研究成果，梳理领域发展脉络，挖掘研究缺口，明晰创新方向，为课题设计与成果输出夯实理论基础。" },
   grant:    { name: "基金申报",       group: "workbench",
-              skills: ["grant-proposal", "research-scan", "topic-selection", "novelty-check", "peer-review", "render-pdf-doc", "render-docx"],
               desc: "国自然 / 基金标书智能生成、润色与格式校验，搭建完整研究方案，优化技术路线，覆盖立项依据到研究基础全章节。" },
   paper:    { name: "SCI 论文",       group: "workbench",
-              skills: ["write-paper", "literature-review", "reference-check", "peer-review", "humanize-academic", "render-docx"],
               desc: "契合医学期刊规范，梳理试验逻辑、深化结果讨论，雕琢全文表述，助力高水平学术成果刊发。" },
   chat:     { name: "自由对话",       group: "workbench", skills: null,
               desc: "与科研助手开放对话，随问随答，支持上传文献、数据与方法学讨论。" },
   litread:  { name: "文献研读",       group: "skills",
-              skills: ["search-lit", "fulltext-retrieval", "literature-review", "zotero-library", "deep-research", "research-scan"],
               desc: "追踪医学领域前沿文献，梳理研究脉络，挖掘研究空白，提炼创新思路，为课题设计、文稿创作提供理论支撑。" },
   refcheck: { name: "文稿核查与审校", group: "skills",
-              skills: ["reference-check", "peer-review", "data-integrity"],
               desc: "校验试验逻辑、专业术语、数据及格式、核验文献与引用来源，识别伪造、篡改与 AI 幻觉内容，输出可信度报告。" },
   humanize: { name: "文章润色",       group: "skills",
-              skills: ["humanize-academic", "render-docx", "render-pdf-doc"],
               desc: "贴合期刊写作范式，优化行文逻辑、专业表述与段落架构，消除生成式文本痕迹，还原自然学术语感与逻辑节奏。" },
   stats:    { name: "数据统计与分析", group: "skills",
-              skills: ["data-analysis", "clinical-stats", "nature-figure", "deidentify", "data-integrity"],
               desc: "一站式医学科研数据服务，涵盖统计建模、基线分析、期刊图表绘制、数据脱敏与源数据核查，完成从数据质控到结果可视化全流程处理。" },
 }
+// 技能集与主技能由 workflows.mjs 回填（chat 例外：skills 恒为 null = 不受限）。
+// 就地写回 MODULE_DEFS 而不是到处调 WF.skillsOf()：下游有十几处读 m.skills，保持它们不用改。
+for (const [id, m] of Object.entries(MODULE_DEFS)) {
+  if (m.skills === null) continue                     // chat
+  m.skills = WF.skillsOf(id)
+  m.primary = WF.primaryOf(id)
+  if (!m.skills || !m.primary) console.warn(`[modules] 模块 ${id} 在 workflows.mjs 里没有对应工作流 → 该模块将不可用，请补上定义`)
+}
 /** 模块的主技能（决定该模块是否可用）；chat 无主技能 */
-const modPrimarySkill = (id) => MODULE_DEFS[id]?.skills?.[0] || null
+const modPrimarySkill = (id) => MODULE_DEFS[id]?.primary || null
+/**
+ * 技能 → "该去哪个模块" 的反查，用于越权报错时指路。
+ * 只说"请到自由对话"太糊：用户在 SCI 论文模块里被 nature-figure 挡下时，真正该去的是
+ * 「数据统计与分析」。找不到归属（如 systematic-review 不属于任何模块）才回落到自由对话。
+ */
+const skillHome = (skill) => {
+  const name = String(skill || "").replace(/（.*$/, "").trim()   // 剥掉 "（bash 直呼技能脚本）" 这类后缀
+  const hits = Object.entries(MODULE_DEFS).filter(([, m]) => m.skills?.includes(name)).map(([, m]) => m.name)
+  if (!hits.length) return ""
+  return `「${name}」属于${hits.map((h) => `「${h}」`).join(" / ")}模块，请到那里新开会话继续。`
+}
 /** 模块是否可用 = 模块本身获授权 且 主技能未被技能白名单收权 */
 const moduleUsable = (id) => ALLOWED_MODULES.includes(id) && (!modPrimarySkill(id) || skillAllowed(modPrimarySkill(id)))
 // 每用户授权（ALLOWED_MODULES=chat,grant,...，由 deploy 的 users/<名>.env 注入）。
@@ -557,6 +583,16 @@ const SKILL_IDS = (() => {   // 以技能目录为唯一事实来源（含 SKILL
       .map((e) => e.name)
   } catch { return [] }
 })()
+// 工作流自检：steps 里写的技能必须真实存在，否则那一步会静默变成"agent 调了就被闸掐掉"的哑失败
+// （技能改名/删除时尤其容易发生）。只告警不阻断——受限容器过滤挂载后技能目录本就是子集，
+// SKILL_IDS 读到的东西比仓库少是正常的，不能因此拒绝启动。
+if (SKILL_IDS.length) {
+  for (const [id, m] of Object.entries(MODULE_DEFS)) {
+    if (!m.skills) continue
+    const missing = m.skills.filter((s) => !SKILL_IDS.includes(s))
+    if (missing.length) console.warn(`[modules] 模块 ${id} 的工作流引用了本环境不存在的技能：${missing.join("、")}（该步骤会被技能闸挡下，请核对 workflows.mjs 与技能目录）`)
+  }
+}
 const ALLOWED_SKILLS_SET = (() => {   // null = 不设限（全部技能）
   const raw = String(process.env.ALLOWED_SKILLS || "").trim()
   if (!raw) return null
@@ -692,12 +728,48 @@ const saveModuleMap = () => { try { fs.mkdirSync(path.dirname(MODULE_MAP_FILE), 
 const sessionModule = (sid) => moduleMap()[safeSid(sid)] || "chat"   // 未登记的老会话一律按 chat
 const bindSessionModule = (sid, modId) => { moduleMap()[safeSid(sid)] = modId; saveModuleMap() }
 const unbindSessionModule = (sid) => { if (moduleMap()[safeSid(sid)]) { delete moduleMap()[safeSid(sid)]; saveModuleMap() } }
+// ---- 会话的工作流状态（表单值 + 步骤进度）----
+// 落在【会话产物目录】而不是全局表：它天然随会话建、随会话删（删会话会整目录清掉），
+// 也跟着产物一起被打包/迁移。下划线前缀 → dirState 不过滤下划线，所以这里额外在产物列表里排掉它，
+// 免得用户在"产出"侧栏看到一个莫名其妙的 json。
+// 【谁写】服务端。agent 只读不写：进度由"产物文件出现了没有"反推（见 wfSyncDone），
+// 不依赖模型自觉，也不给它篡改进度的机会。
+const WF_STATE = "_workflow.json"
+const wfLoad = (outDir) => {
+  try { return JSON.parse(fs.readFileSync(path.join(outDir, WF_STATE), "utf8")) || null } catch { return null }
+}
+const wfSave = (outDir, st) => {
+  try { fs.mkdirSync(outDir, { recursive: true }); fs.writeFileSync(path.join(outDir, WF_STATE), JSON.stringify(st, null, 2)) }
+  catch (e) { console.warn(`[workflow] 状态写入失败：${e.message}`) }
+}
+/** 表单值（intake + 各步 form 合并成一张平表，供 when 条件判定与跨步继承）*/
+const wfValues = (outDir) => wfLoad(outDir)?.form || {}
+/** 按"产物文件是否已出现"反推已完成的步骤（权威判据，不问 agent）*/
+function wfSyncDone(outDir, modId) {
+  const st = wfLoad(outDir)
+  if (!st || st.module !== modId) return st
+  const files = Object.keys(dirState(outDir))
+  const done = new Set(st.done || [])
+  for (const s of WF.stepsFor(modId, st.form || {})) {
+    if (done.has(s.id)) continue
+    if ((s.emits || []).some((g) => files.some((f) => WF.globMatch(g, f)))) done.add(s.id)
+  }
+  const arr = [...done]
+  if (arr.length !== (st.done || []).length) { st.done = arr; wfSave(outDir, st) }
+  return st
+}
+
 // 受限模块的会话前言：与工作区前言同一个块注入（中间不能有空行——stripPreamble 按"第一个空行"剥离）
-const modulePreamble = (modId) => {
+// 【三段】① 技能白名单（硬边界，网关强制）② 步骤链剧本 ③ 产物文件名契约。
+// 为什么要 ②③：技能集从"手写几个"变成"按 pipeline 展开的一整条"之后，光靠白名单已经区分不出
+// 模块了（paper 的技能集几乎覆盖全部）。真正让模块成其为模块的是剧本 —— 走哪几步、哪几步是闸、
+// 闸不过退到哪。产物契约则是界面能把结果渲染成表格/文献卡片的前提。
+const modulePreamble = (modId, outDir) => {
   const m = MODULE_DEFS[modId]
   if (!m || !m.skills) return ""
   const list = m.skills.map((s) => `\`${s}\``).join("、")
-  return `\n- **【模块限制，最高优先级，覆盖 AGENTS.md 的一切路由规则】本会话是「${m.name}」专用模块**：你【只允许】调用这些技能——${list}（其中 \`${m.skills[0]}\` 是主技能，其余按需配套），禁止调用任何其它技能，也禁止用 task/子代理间接调用其它技能。\n- 只在本模块职责范围内推进，不越界做别的模块的事；缺信息就直接向用户要。\n- 用户的需求超出「${m.name}」范围时，明确告知“本模块只负责${m.name}，其它需求请到「自由对话」模块”，不要自己徒手代替其它技能去做。\n- 网关会强制校验技能调用：一旦调用上述清单之外的技能，本轮会被立即中止。`
+  const vals = outDir ? wfValues(outDir) : {}
+  return `\n- **【模块限制，最高优先级，覆盖 AGENTS.md 的一切路由规则】本会话是「${m.name}」专用模块**：你【只允许】调用这些技能——${list}（其中 \`${m.primary}\` 是主技能，其余按需配套），禁止调用任何其它技能，也禁止用 task/子代理间接调用其它技能。\n- 只在本模块职责范围内推进，不越界做别的模块的事；缺信息就直接向用户要。\n- 用户的需求超出「${m.name}」范围时，明确告知“本模块只负责${m.name}，其它需求请到「自由对话」模块”，不要自己徒手代替其它技能去做。\n- 网关会强制校验技能调用：一旦调用上述清单之外的技能，本轮会被立即中止。${WF.pipelineLine(modId, vals)}${WF.artifactLine(modId, vals)}`
 }
 
 // HTTP 响应头只能承载 latin1：中文文件名直接塞进 Content-Disposition 会 ERR_INVALID_CHAR → 下载必 500。
@@ -1151,7 +1223,11 @@ const PREAMBLE_RE = new RegExp("^(?:" + _reEsc(PREAMBLE_MARK) + "|" + _reEsc(PRE
 // 与工作区前言是两段独立注入，回看历史时也要一并剥掉，否则用户看见自己"说"了一句没说过的话。
 // 顺序：先剥工作区前言，再剥范围指示（注入时前言在前、范围指示紧跟其后、再是原话）。
 const ZSCOPE_RE = /^【检索范围：[^\n]*】\n/
-const stripPreamble = (t) => t.replace(PREAMBLE_RE, "").replace(ZSCOPE_RE, "")
+// 工作流表单注入的"任务卡"：同样拼在用户原话最前面（见前端 wfCardPrefix），回看历史时剥掉，
+// 否则用户看到自己"说"了一大段带【以上为用户通过表单勾选提交…】的话——那是给 agent 的，不是他打的。
+// 卡片结构固定：以【任务卡 · 开头，到那段以【以上为用户通过表单…】结尾的说明为止（含其后的空行）。
+const WFCARD_RE = /^【任务卡 · [\s\S]*?【以上为用户通过表单[\s\S]*?】\n*/
+const stripPreamble = (t) => t.replace(PREAMBLE_RE, "").replace(ZSCOPE_RE, "").replace(WFCARD_RE, "")
 
 const jobs = new Map()   // sid -> 进行中的 job
 // ---- 首事件看门狗的超时（ms）----
@@ -1537,9 +1613,14 @@ function startJob(sid, sentText, modId) {
           // 看不见，所以整个 task 工具都得禁；tools:{task:false} 已在 prompt 参数里禁掉，这里是双保险。
           // chat 不禁 task——禁了会破坏正常流水线，子会话逃逸是已接受的取舍，见 ALLOWED_SKILLS 注释）。
           // 违规立即 abort 本轮，prompt 返回后统一广播报错（见下方 moduleHit 分支）。
+          // ★ 第三条判据：bash 里直接跑白名单外的技能脚本。
+          //   前言本来就教 agent 用 `${REPO_ROOT}/.venv/bin/python ${REPO_ROOT}/.opencode/skills/<技能>/xxx.py`
+          //   跑脚本，于是受限模块里"顺手跑一个隔壁模块的脚本"是条【真实且高频】的绕道路径，而它
+          //   走的是 bash 工具、压根不经过上面那条 skill 判据。技能集扩成整条 pipeline 后这个口子更大。
+          //   绕过面（变量拼接、cd 进去用相对路径、base64）堵不死 —— 与本文件既有口径一致：
+          //   这是产品分权闸，不是对抗边界。堵住顺手绕道就已经拿到绝大部分收益。
           if (skillGate && !job.moduleHit) {
-            const bad = (p.tool === "skill" && p.state.input?.name && !skillGate.has(p.state.input.name)) ? p.state.input.name
-              : (modSkills && p.tool === "task" ? "task(子代理)" : null)
+            const bad = WF.gateViolation({ tool: p.tool, input: p.state.input, skillGate, restricted: !!modSkills })
             if (bad) {
               job.moduleHit = bad
               console.warn(`[modules] 会话 ${sid}（模块 ${modId}）调用了越权技能/工具：${bad}，中止本轮`)
@@ -1596,7 +1677,7 @@ function startJob(sid, sentText, modId) {
     if (job.aborting) return finish()                       // 用户显式终止：job.abort 已广播 aborted
     if (job.timedOut) return finish()                       // 首事件看门狗已收场并广播过原因（prompt 此刻才姗姗返回/报错），别再报一遍
     if (job.moduleHit) { broadcast("failed", { message: modSkills
-      ? `模块限制：本会话是「${MODULE_DEFS[modId]?.name || modId}」专用模块，只能使用「${modSkills.join("、")}」技能；检测到调用「${job.moduleHit}」，本轮已中止。此类需求请到「自由对话」模块新开会话。`
+      ? `模块限制：本会话是「${MODULE_DEFS[modId]?.name || modId}」专用模块，只能使用「${modSkills.join("、")}」技能；检测到调用「${job.moduleHit}」，本轮已中止。${skillHome(job.moduleHit) || "此类需求请到「自由对话」模块新开会话。"}`
       : `技能未开通：你的账号未开通「${job.moduleHit}」技能，本轮已中止。如需使用请联系管理员开通。` }); return finish() }
     if (job.quotaHit) { broadcast("failed", { message: `本轮已达今日额度上限（$${DAILY_COST_LIMIT.toFixed(2)}），已自动中止；明日 0 点(UTC)恢复。` }); return finish() }
     if (promptErr) {
@@ -1621,7 +1702,18 @@ function startJob(sid, sentText, modId) {
     // 用 notice（气泡内提示）而不是 failed：本轮技术上确实正常结束了，产物/工具结果还在。
     if (!finalText.trim()) broadcast("notice", { message: "模型这一轮没有返回任何文本。若反复如此，多半是上游模型服务异常，请换个模型或联系管理员。" })
     const changed = changedSince(outDir, before)
-    broadcast("files", changed)   // 只推本会话本轮新建/改动的产物
+    broadcast("files", changed)   // 只推本会话本轮新建/改动的产物（保持字符串数组：老前端直接吃这个）
+    // 结构化产物：按文件名认出渲染器（文献表→文献卡片、核查报告→红黄绿逐条…），认不出的不在此列，
+    // 前端照常按普通产物展示 —— 绝不能因为"没匹配上渲染器"就把文件藏起来。
+    const rendered = changed.map((n) => ({ name: n, render: WF.rendererFor(n) })).filter((x) => x.render)
+    if (rendered.length) broadcast("artifacts", rendered)
+    // 步骤进度：产物出现 = 该步完成（权威判据，不问 agent）。放在广播之后，别让簿子出问题拖累正文。
+    if (modId !== "chat") {
+      try {
+        const st = wfSyncDone(outDir, modId)
+        if (st) broadcast("workflow", { cur: st.cur || null, done: st.done || [] })
+      } catch (e) { console.warn(`[workflow] 进度同步失败：${e.message}`) }
+    }
     warmPreviews(outDir, changed)   // 后台把新产出的 office/docx 预转缓存，用户点预览即秒开
     // ---- 无人值守：只有走到这里的轮（正常收尾）才考虑续跑；出错/终止/越权/封顶都在上面 return 了 ----
     const av = autoDecide(sid, finalText)
@@ -2366,6 +2458,89 @@ export const server = http.createServer(async (req, res) => {
       // entRev 一起回：前端在公告轮询里发现它变了就重取本接口，两处用同一个摘要才不会来回打转
       return send(res, 200, "application/json", JSON.stringify({ modules: list, entRev: entRev() }))
     }
+    // 某模块的工作流：首屏表单 schema + 步骤链。前端只当渲染器，schema 全由这里下发 ——
+    // 改流程走「界面包」热更新即可，不用重发桌面安装包。
+    if (req.method === "GET" && u.pathname.startsWith("/api/modules/") && u.pathname.endsWith("/workflow")) {
+      const modId = decodeURIComponent(u.pathname.slice("/api/modules/".length, -"/workflow".length))
+      if (!MODULE_DEFS[modId]) return send(res, 404, "application/json", JSON.stringify({ err: `未知模块：${modId}` }))
+      if (!moduleUsable(modId)) return send(res, 403, "application/json", JSON.stringify({ err: "你的账号未开通该模块" }))
+      const wf = WF.workflowFor(modId)
+      if (!wf) return send(res, 200, "application/json", JSON.stringify({ workflow: null }))   // chat：没有工作流，前端照旧
+      return send(res, 200, "application/json", JSON.stringify({ workflow: { ...wf, name: MODULE_DEFS[modId].name } }))
+    }
+    // 本会话的工作流状态（表单值 + 已完成步骤）。切会话 / 刷新页面靠它恢复到当前步。
+    if (req.method === "GET" && u.pathname === "/api/workflow/state") {
+      const sid = u.searchParams.get("sid") || ""
+      if (!sid) return send(res, 200, "application/json", JSON.stringify({ state: null }))
+      const modId = sessionModule(sid)
+      if (modId === "chat") return send(res, 200, "application/json", JSON.stringify({ state: null, module: "chat" }))
+      const out = await sessionOut(sid)
+      const st = wfSyncDone(out, modId) || { module: modId, form: {}, done: [] }
+      // steps 按已填表单值裁剪后回：条件不成立的步骤（如"数据已脱敏"→不需要脱敏步）不该出现在进度条上
+      return send(res, 200, "application/json", JSON.stringify({
+        state: st, module: modId, name: MODULE_DEFS[modId]?.name || modId,
+        steps: WF.workflowFor(modId, st.form || {})?.steps || [],
+      }))
+    }
+    // 提交某一步的表单 → 存进状态簿 + 回一段任务卡文本，由前端拼在这条消息前面发出。
+    // 【为什么不在这里直接发消息】发消息那条路（/api/chat/start）有一整套并发/额度/绑定判定，
+    // 不该复制一份。这里只负责"把勾选变成文本"，发送仍走原来的口。
+    if (req.method === "POST" && u.pathname === "/api/workflow/form") {
+      const b = await readJson(req).catch(() => null)
+      if (!b) return send(res, 400, "application/json", JSON.stringify({ ok: false, err: "请求体不是合法 JSON" }))
+      const modId = String(b.module || "")
+      const stepId = b.step ? String(b.step) : ""       // 空 = 首屏 intake
+      const values = (b.values && typeof b.values === "object") ? b.values : {}
+      const wf = WF.WORKFLOWS[modId]
+      if (!wf) return send(res, 400, "application/json", JSON.stringify({ ok: false, err: `模块 ${modId} 没有工作流` }))
+      if (!moduleUsable(modId)) return send(res, 403, "application/json", JSON.stringify({ ok: false, err: "你的账号未开通该模块" }))
+      const step = stepId ? wf.steps.find((s) => s.id === stepId) : null
+      if (stepId && !step) return send(res, 400, "application/json", JSON.stringify({ ok: false, err: `未知步骤：${stepId}` }))
+      const fields = step ? (step.form || []) : wf.intake
+      const title = step ? step.name : (wf.intakeTitle || "开始")
+      const card = WF.taskCard(MODULE_DEFS[modId]?.name || modId, title, fields, values,
+        { footnote: step ? "" : (wf.footnote || "") })
+      // 有 sid 才落盘（首屏表单是在会话建立【之前】填的，此时还没有 sid —— 那份值由
+      // /api/chat/start 建完会话后补写，见那里的 wfSeed）
+      const sid = b.sid ? String(b.sid) : ""
+      if (sid && sessionModule(sid) === modId) {
+        const out = await sessionOut(sid)
+        const st = wfLoad(out) || { module: modId, form: {}, done: [] }
+        st.module = modId
+        st.form = { ...(st.form || {}), ...values }     // 跨步继承：立项卡填的目标期刊，后面各步直接复用
+        if (stepId) st.cur = stepId
+        wfSave(out, st)
+      }
+      return send(res, 200, "application/json", JSON.stringify({ ok: true, card }))
+    }
+    // 读某个已上传数据表的表头，供 columns 型字段做真实列名下拉。
+    // ★ 这是 stats/paper 表单最值钱的一环："列名猜错/写错"是当前最高频的失败模式，从真实表头选能根治。
+    if (req.method === "GET" && u.pathname === "/api/data/headers") {
+      const sid = u.searchParams.get("sid") || ""
+      const name = u.searchParams.get("name") || ""
+      const dir = sid ? await sessionUp(sid) : UPLOADS
+      const f = safeUnder(dir, name)
+      if (!f || !fs.existsSync(f) || !fs.statSync(f).isFile()) return send(res, 404, "application/json", JSON.stringify({ err: "文件不存在" }))
+      const ext = path.extname(name).toLowerCase()
+      if (![".csv", ".tsv", ".txt"].includes(ext))
+        // xlsx 要解析二进制，网关不背这个依赖（Python 侧有 pandas，但为一个下拉框起进程不值）。
+        // 如实回"读不了"，前端把 columns 字段降级成手填输入框，而不是给一个空下拉让用户以为没列。
+        return send(res, 200, "application/json", JSON.stringify({ headers: null, reason: `${ext || "该格式"} 需要 AI 在分析时读取，这里先手动填列名即可` }))
+      try {
+        const fd = fs.openSync(f, "r")
+        const buf = Buffer.alloc(64 * 1024)                 // 只读头部：表可能很大，不整读进内存
+        const n = fs.readSync(fd, buf, 0, buf.length, 0)
+        fs.closeSync(fd)
+        let line = buf.slice(0, n).toString("utf8").split(/\r?\n/)[0] || ""
+        if (line.charCodeAt(0) === 0xfeff) line = line.slice(1)   // 剥 BOM，否则第一列名会带个看不见的字符
+        const sep = ext === ".tsv" ? "\t" : (line.split(",").length >= line.split("\t").length ? "," : "\t")
+        // 极简 CSV 头解析：够用即可（表头里带逗号的引号字段少见，命中时用户仍可手填）
+        const headers = line.split(sep).map((s) => s.trim().replace(/^"(.*)"$/, "$1")).filter(Boolean)
+        return send(res, 200, "application/json", JSON.stringify({ headers, sep }))
+      } catch (e) {
+        return send(res, 200, "application/json", JSON.stringify({ headers: null, reason: `读表头失败：${String(e.message || e).slice(0, 120)}` }))
+      }
+    }
     // 前端顶栏的额度显示。两种形态各有各的权威账本，一个口子同时回：
     //   · used/limit：本机 env 额度（容器部署 / 单机自用），美元，含在跑轮的实时成本；
     //   · cloud：云端账号的【积分】视图（打包版用户看的就是它）——日、月两条线，权威在服务端。
@@ -2462,8 +2637,10 @@ export const server = http.createServer(async (req, res) => {
         if (total > 4_000_000) return sendClose(res, 413, "application/json", JSON.stringify({ ok: false, sent: false, err: "消息过长（超过 4MB）" }))   // 从 for-await 里提前 return → body 未读完，必须关连接
         chunks.push(c)
       }
-      let q = "", sid = null, reqMod = "", autoReq
-      try { const b = JSON.parse(Buffer.concat(chunks).toString() || "{}"); q = String(b.q ?? ""); sid = b.sid ? String(b.sid) : null; reqMod = String(b.module || ""); if (typeof b.auto === "boolean") autoReq = b.auto } catch {}
+      let q = "", sid = null, reqMod = "", autoReq, wfSeed = null
+      // wfSeed：首屏表单的值。表单是在【会话还不存在】的时候填的（用户还没发第一条消息），
+      // 所以那份值没法在 /api/workflow/form 里落盘，只能随第一条消息捎进来，建完会话再写。
+      try { const b = JSON.parse(Buffer.concat(chunks).toString() || "{}"); q = String(b.q ?? ""); sid = b.sid ? String(b.sid) : null; reqMod = String(b.module || ""); if (typeof b.auto === "boolean") autoReq = b.auto; if (b.wfForm && typeof b.wfForm === "object") wfSeed = b.wfForm } catch {}
       if (!q.trim()) return send(res, 400, "application/json", JSON.stringify({ ok: false, sent: false, err: "消息为空" }))
       // ---- 模块裁定 ----
       // 续会话：绑定在创建时已定死，忽略前端传值（防伪造请求把受限会话"升级"成 chat）。
@@ -2485,6 +2662,14 @@ export const server = http.createServer(async (req, res) => {
         }
       }
       const ws = await ensureWs(sid)
+      // 首屏表单值落盘。必须在下面拼 preamble 之前 —— modulePreamble 要读它来裁剪步骤链
+      //（例如"数据已脱敏"会把脱敏那步整个剔掉，剧本里就不该再出现它）。
+      if (wfSeed && modId !== "chat" && WF.WORKFLOWS[modId]) {
+        const st = wfLoad(ws.out) || { module: modId, form: {}, done: [] }
+        st.module = modId
+        st.form = { ...(st.form || {}), ...wfSeed }
+        wfSave(ws.out, st)
+      }
       // ensureSessionTitle 里有 await（打 opencode 网络）——必须放在“检查 running → startJob”这段【全同步】区之前。
       // 否则同 sid 的两个并发请求会在这个 await 处双双让出、都看到没有 running job、各自 startJob，
       // 后者 jobs.set 覆盖前者 → 两轮 prompt 并发打同一会话、先收尾的把另一轮从表里删成无法 attach/abort 的孤儿。
@@ -2502,7 +2687,7 @@ export const server = http.createServer(async (req, res) => {
       // 给 agent 注入本会话专属目录，覆盖技能默认的 outputs/，实现多用户/多会话隔离
       // 注意：本会话的工作目录（cwd）已在建会话时通过 opencode 的 session.directory 定在【会话产物目录】，
       // 所以 agent 的所有工具默认就在正确的地方读写，preamble 只需说清"当前目录就是产物目录"与几个绝对路径。
-      const preamble = `${PREAMBLE_MARK}\n- **你的当前工作目录就是本会话的产物目录**（\`${ws.out}\`）。所有产物（图表 PNG/PDF、CSV/Excel、md/docx 等）**直接写到当前目录即可**，用相对文件名如 \`fig1.png\`、\`manuscript.md\`，不要再自己拼 \`outputs/xxx\` 前缀。\n- 临时脚本、中间文件同样写当前目录（要归拢可用 \`./.scratch/\`）。\n- 用户上传的数据文件在 \`${ws.up}/\`（读数据从这里找，用这个绝对路径）。\n- 跑本套件的脚本用 \`\${REPO_ROOT:-/app}\` 前缀定位仓库，例如 \`\${REPO_ROOT:-/app}/.venv/bin/python \${REPO_ROOT:-/app}/.opencode/skills/<技能>/xxx.py\`——因为当前目录不是仓库根，写 \`.venv/...\` 这种相对路径会找不到。\n- 正文里嵌入图片直接用文件名：\`![图注](fig1.png)\`（图和稿件都在当前目录，渲染也从当前目录跑）。\n- **不要把产物写到仓库根或 \`\${REPO_ROOT:-/app}\` 下**：那是所有会话共享的，会互相覆盖，也不会出现在界面的"产出"侧栏。${modId === "chat" ? skillsPreamble() : modulePreamble(modId)}${zoteroPreamble(ws.out)}${autoOn ? autoPreamble() : ""}\n\n`
+      const preamble = `${PREAMBLE_MARK}\n- **你的当前工作目录就是本会话的产物目录**（\`${ws.out}\`）。所有产物（图表 PNG/PDF、CSV/Excel、md/docx 等）**直接写到当前目录即可**，用相对文件名如 \`fig1.png\`、\`manuscript.md\`，不要再自己拼 \`outputs/xxx\` 前缀。\n- 临时脚本、中间文件同样写当前目录（要归拢可用 \`./.scratch/\`）。\n- 用户上传的数据文件在 \`${ws.up}/\`（读数据从这里找，用这个绝对路径）。\n- 跑本套件的脚本用 \`\${REPO_ROOT:-/app}\` 前缀定位仓库，例如 \`\${REPO_ROOT:-/app}/.venv/bin/python \${REPO_ROOT:-/app}/.opencode/skills/<技能>/xxx.py\`——因为当前目录不是仓库根，写 \`.venv/...\` 这种相对路径会找不到。\n- 正文里嵌入图片直接用文件名：\`![图注](fig1.png)\`（图和稿件都在当前目录，渲染也从当前目录跑）。\n- **不要把产物写到仓库根或 \`\${REPO_ROOT:-/app}\` 下**：那是所有会话共享的，会互相覆盖，也不会出现在界面的"产出"侧栏。${modId === "chat" ? skillsPreamble() : modulePreamble(modId, ws.out)}${zoteroPreamble(ws.out)}${autoOn ? autoPreamble() : ""}\n\n`
       startJob(sid, preamble + q, modId)   // 同步建 job（jobs.set 在函数首行）→ 返回后前端 attach 必能接上
       return send(res, 200, "application/json", JSON.stringify({ ok: true, sid, sent: true, module: modId }))
     }

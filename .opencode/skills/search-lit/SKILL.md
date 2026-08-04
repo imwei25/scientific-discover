@@ -58,6 +58,26 @@ never generate citations from memory alone.
    - 用途边界：`enhanced_search.py` 是**广召回 + 跨源去重**的证据池生成器，产出的 `doi/pmid`
      仍须经 Phase 4 反幻觉协议 / `reference-check` 技能逐条核实后才能进正文引用。
 
+5. **期刊影响力补列与筛选**（`references/journal_metrics.py`）——用户要求"只看高分杂志 /
+   某分区以上"时用它给 `evidence_table.csv` 补 `journal_impact` / `journal_quartile` /
+   `is_oa` 列，并可直接按条件筛掉。
+
+   ```bash
+   PY=${REPO_ROOT:-/app}/.venv/bin/python
+   S=${REPO_ROOT:-/app}/.opencode/skills/search-lit/references/journal_metrics.py
+   "$PY" "$S" evidence_table.csv --email you@example.com            # 只补列
+   "$PY" "$S" evidence_table.csv --min-impact 3 --quartile Q1,Q2    # 补列 + 筛选
+   "$PY" "$S" evidence_table.csv --table /path/中科院分区表.csv      # 用机构分区表覆盖成官方真值
+   ```
+
+   > ⚠️ **措辞铁律（违反即为编造数据，见 AGENTS.md §五）**：`journal_impact` 是 OpenAlex 的
+   > **两年篇均被引**，与 JCR 影响因子算法思路相近但**口径不同、数值不同**；`journal_quartile`
+   > 是**本次结果集内部**的四分位，**不是**中科院/JCR 分区。向用户汇报时一律说
+   > "期刊影响力（近似）""结果集内四分位"，**绝不能**说成"影响因子 X 分""X 区"。
+   > 官方 IF 与中科院分区是授权数据，本套件没有；用户要精确值就请他提供本机构的分区表，
+   > 用 `--table` 覆盖（覆盖过的行 `impact_source` 列会标出来源，如实告诉用户哪些是官方值）。
+   > 查不到的期刊 `journal_impact` **留空**，不要拿 0 当真值去排序或筛选。
+
 ## Search Tools: MCP (Primary) + E-utilities / Europe PMC (Fallback)
 
 ### Primary: MCP Tools (Claude.ai Remote)
