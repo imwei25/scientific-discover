@@ -1696,6 +1696,10 @@ function renderWelcome() {
 // 【定位】表单只给第一条消息灌初值，不是硬状态机：一项不填直接打字照样能走，
 // 服务端也不会因为"表单没填完"拒收任何东西（见 workflows.mjs 头注的设计铁律）。
 let UPLOADED = []                  // 本会话已上传文件名（renderUploads 维护），表单的 files/columns 字段用它当候选
+// 贴到底部时才跟随滚动（用户往上翻看历史就别把他拽回来）。
+// attachStream 里另有一个同名的局部 follow —— 那个只在流式回调链里可见，
+// 结构化产物是在它之外异步贴进来的，必须用这份模块级的，否则 ReferenceError。
+const scrollFollow = () => { if (log.scrollHeight - log.scrollTop - log.clientHeight < 60) log.scrollTop = log.scrollHeight }
 const wfCache = new Map()          // 模块 id → workflow 定义（/api/modules/<id>/workflow 的结果）
 let pendingWfCard = ""             // 待随下一条消息发出的任务卡文本（用法同 zScopePrefix）
 let pendingWfForm = null           // 待随下一条消息落盘的表单值（服务端建完会话后写进 _workflow.json）
@@ -1966,7 +1970,7 @@ async function renderArtifacts(list) {
       const el = a.render === "evidence" ? evidenceCard(a.name, txt)
         : a.render === "retrieval" ? retrievalCard(a.name, txt)
         : reportCard(a.name, txt, a.render)
-      if (el) { log.appendChild(el); follow() }
+      if (el) { log.appendChild(el); scrollFollow() }
     } catch (_) { /* 渲染失败不影响普通产物卡，静默跳过 */ }
   }
 }
