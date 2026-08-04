@@ -441,6 +441,13 @@ test("上游错误翻成人话：余额不足/密钥失效/限流各给各的下
   assert.doesNotMatch(qt, /api-config/)
   assert.match(D({ name: "APIError", data: { statusCode: 503, message: '{"error":{"code":"QUEUE_FULL"}}' } }, "cloud"), /排队|人太多/)
   assert.match(D({ name: "APIError", data: { statusCode: 429, message: '{"error":{"code":"UPSTREAM_RATE_LIMITED"}}' } }, "cloud"), /限速/)
+  // 积分用尽也是 429，但"稍等片刻再试"在这里是错的建议：日积分要等 UTC 0 点。云端那句话要原样透出来。
+  const qe = D({ name: "APIError", data: { statusCode: 429,
+    message: '{"error":{"code":"QUOTA_EXCEEDED","message":"今日积分已用尽（上限 30 积分），明日 0 点(UTC)恢复"}}' } }, "cloud")
+  assert.match(qe, /今日积分已用尽（上限 30 积分）/)
+  assert.doesNotMatch(qe, /稍等片刻再试/)
+  // 正文被截断 / 认不出结构时也得给一句完整的话，不能只留个错误码
+  assert.match(D({ name: "APIError", data: { statusCode: 429, message: "QUOTA_EXCEEDED" } }, "cloud"), /积分已用尽/)
   assert.match(D({ name: "APIError", data: { statusCode: 503, message: "" } }, "cloud"), /异常|重试/)
   assert.match(D({ name: "MessageOutputLengthError", data: {} }, "cloud"), /长度上限|截断/)
   // 兜底也必须是一句完整的话，不能是空字符串（空 = 又回到"空气泡"）
@@ -557,4 +564,64 @@ test("/api/model 的 cloud 摘要不含凭证", async (t) => {
   const dump = JSON.stringify(m.json)
   assert.equal(dump.includes(st.access), false)
   assert.equal(dump.includes(st.refresh), false)
+})
+
+// ---- 剩余积分（打包版顶栏那一栏）--------------------------------------------
+
+/** 往云端库里补一笔花费（金额精确可控，走的就是网关计量用的那个函数） */
+async function spend(r, usd) {
+  const DB = await import("../../server/lib/db.mjs")
+  DB.recordUsage(r.be.db, r.be.user.id, { model: "m", provider: "t", cost_usd: usd })
+}
+
+test("积分：未登录时 cloud 为 null，且不往云端发请求", async (t) => {
+  const r = await rig(); t.after(() => r.close())
+  await r.be.close()                       // 云端整个关掉，证明这条路压根没往外发
+  const q = await r.gw.req("/api/quota")
+  assert.equal(q.status, 200)
+  assert.equal(q.json.cloud, null)
+  assert.equal(q.json.limit, 0, "本机 env 额度没设 = 不限额（顶栏隐藏）")
+})
+
+test("积分：登录后拿到日/月剩余（档位 $5/天 = 500 积分，月不限）", async (t) => {
+  const r = await rig(); t.after(() => r.close())
+  await loginReady(r)
+  const q = await r.gw.req("/api/quota")
+  assert.equal(q.json.cloud.creditUsd, 0.01)
+  assert.equal(q.json.cloud.daily.limit, 500)
+  assert.equal(q.json.cloud.daily.remain, 500)
+  assert.equal(q.json.cloud.monthly.unlimited, true)
+  assert.equal(q.json.cloud.monthly.remain, null)
+  assert.equal(q.json.cloud.stale, false)
+})
+
+test("积分：本机 20 秒缓存挡住轮询，一轮结束的 fresh=1 立刻穿透", async (t) => {
+  const r = await rig(); t.after(() => r.close())
+  await loginReady(r)
+  assert.equal((await r.gw.req("/api/quota")).json.cloud.daily.remain, 500)
+
+  await spend(r, 1.23)                     // 花掉 123 积分
+  assert.equal((await r.gw.req("/api/quota")).json.cloud.daily.remain, 500, "缓存内不该每次都打云端")
+  const fresh = await r.gw.req("/api/quota?fresh=1")
+  assert.equal(fresh.json.cloud.daily.remain, 377, "floor(500 - 123)")
+  assert.equal(fresh.json.cloud.daily.used, 123)
+})
+
+test("积分：云端拉不到时保留上一份并标 stale（额度栏凭空消失会被当成'被停用'）", async (t) => {
+  const r = await rig(); t.after(() => r.close())
+  await loginReady(r)
+  assert.equal((await r.gw.req("/api/quota")).json.cloud.daily.remain, 500)
+  await r.be.close()                       // 云端没了
+  const q = await r.gw.req("/api/quota?fresh=1")
+  assert.equal(q.status, 200, "云端挂了也不该把本机接口带崩")
+  assert.equal(q.json.cloud.daily.remain, 500)
+  assert.equal(q.json.cloud.stale, true)
+})
+
+test("积分：登出后不再下发（缓存要跟着账号切换失效）", async (t) => {
+  const r = await rig(); t.after(() => r.close())
+  await loginReady(r)
+  assert.equal((await r.gw.req("/api/quota")).json.cloud.daily.limit, 500)
+  await r.gw.req("/api/cloud/logout", { method: "POST" })
+  assert.equal((await r.gw.req("/api/quota")).json.cloud, null)
 })

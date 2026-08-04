@@ -24,6 +24,7 @@ import * as OneAPI from "./lib/oneapi.mjs"
 import * as Upstream from "./lib/upstream.mjs"
 import { llmForward, GATEWAY_PATH_PREFIX } from "./lib/gateway.mjs"
 import { createQueue, sanitizeLimits, LIMIT_DEFAULTS } from "./lib/queue.mjs"
+import * as Credits from "./lib/credits.mjs"
 import { ADMIN_HTML } from "./lib/admin-ui.mjs"
 import * as SkillPacks from "./lib/skillpacks.mjs"
 import * as SkillSrc from "./lib/skillsrc.mjs"
@@ -77,6 +78,11 @@ export const CFG = {
   priceIn: envNum("COST_INPUT", 0.27),
   priceOut: envNum("COST_OUTPUT", 1.10),
   priceCached: envNum("COST_CACHE_READ", 0.07),
+  // 客户端看到的额度单位：1 积分 = 这么多美元。后台一切照旧记美元（要跟上游账单对得上），
+  // 只有下发给客户端的那一层换算成积分（见 lib/credits.mjs）。
+  // 【改这个值会立刻改变所有人看到的积分数】它只是换算比例，不改任何真实额度；
+  // 但用户会以为"额度被改了"，所以要改的话顺手发条公告。
+  creditUsd: envNum("CREDIT_USD", Credits.DEFAULT_CREDIT_USD, { min: 0, allowZero: false }),
   skillsDir: process.env.SKILLS_DIR || path.join(__dirname, "..", ".opencode", "skills"),
   // "从仓库发布"的同步源（见 lib/skillsrc.mjs）；不配 = 只有"本地检出"通道
   skillRepoUrl: process.env.SKILL_REPO_URL || "",
@@ -229,6 +235,19 @@ function needsUpgrade(notice, clientVersion) {
   return c !== null && c < 0
 }
 
+/**
+ * 这个人此刻的额度视图（积分）。/api/quota 与 /api/me 的档案共用，两处口径必须一致。
+ * 【现查库，不缓存】用量每一轮都在变，客户端拿它显示"还剩多少"，缓存住就等于骗人；
+ * 代价是两次很轻的索引查询（usage_daily 上有 (user_id,day) 主键与 month 索引）。
+ */
+function quotaOf(user, ent = DB.resolveEntitlement(db, user)) {
+  return Credits.quotaView({
+    dailyUsd: ent.daily, monthlyUsd: ent.monthly,
+    todayUsd: DB.todayCost(db, user.id), monthUsd: DB.monthCost(db, user.id),
+    creditUsd: CFG.creditUsd,
+  })
+}
+
 function profileOf(user, ent = DB.resolveEntitlement(db, user)) {
   return {
     username: user.username,
@@ -241,6 +260,9 @@ function profileOf(user, ent = DB.resolveEntitlement(db, user)) {
     skills: ent.skills,                    // [] = 不限（全部技能）
     limits: { daily: ent.daily, monthly: ent.monthly },
     usage: { today: DB.todayCost(db, user.id), month: DB.monthCost(db, user.id) },
+    // 同一份数字的【积分视图】。美元那两行留着不动：后台、审计、对账都在用，
+    // 客户端界面则一律只显示 quota 里的积分（见 web/index.html 的顶栏与账号面板）。
+    quota: quotaOf(user, ent),
     // 公告随档案一并下发：登录后第一屏就能看到，不用等客户端另外去问一次
     notice: DB.publicNotice(db),
   }
@@ -583,6 +605,22 @@ async function handleClientApi(req, res, pathname) {
     const ent = DB.resolveEntitlement(db, au.user)
     if (ent.maxConc > 0) q.perUser = ent.maxConc
     return json(res, 200, { ok: true, queue: q })
+  }
+
+  /**
+   * 剩余额度（积分）。客户端顶栏常驻显示，每轮对话结束后刷新一次。
+   *
+   * 【为什么不让客户端直接用 /api/me】档案里带着可选模型清单、技能白名单、公告正文，
+   * 是一份"几分钟才可能变一次"的重包；而额度每轮都在变，要的是能高频问的轻口。
+   * 这里只读两行汇总（usage_daily 有主键与月索引），可以放心每轮问、也扛得住 30 秒轮询。
+   *
+   * requireFullScope:false —— 还没改初始口令的人也该看得见自己有多少额度（与 /api/queue 同口径）。
+   */
+  if (req.method === "GET" && pathname === "/api/quota") {
+    const au = authClient(req, { requireFullScope: false })
+    if (!au.ok) return fail(res, au.status, au.code, au.message)
+    noteClient(au.user, req)
+    return json(res, 200, { ok: true, quota: quotaOf(au.user) })
   }
 
   if (req.method === "GET" && pathname === "/api/me") {
@@ -940,6 +978,10 @@ async function handleAdminApi(req, res, pathname) {
         activeUsers: db.prepare("SELECT COUNT(*) AS n FROM users WHERE last_seen_at >= ?").get(dayAgo).n,
         series: DB.usageTotalSeries(db, 30),
       },
+      // 客户端把额度显示成积分（1 积分 = creditUsd 美元）。后台照旧按美元填，但要把
+      // 换算比例带过去 —— 管理员填 $0.30 时得当场看见"用户看到的是 30 积分"，
+      // 否则用户来问"我怎么只有 30 分"，管理员对着一屏美元根本对不上号。
+      creditUsd: CFG.creditUsd,
     })
   }
 

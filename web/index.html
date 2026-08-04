@@ -618,7 +618,9 @@
     </div>
   </div>
   <div class="hright">
-    <span id="quotabar" class="status" hidden title="今日模型额度：已用 / 上限（每日 0 点 UTC 重置）"></span>
+    <!-- 剩余额度：云端账号显示剩余积分（日/月），本机 env 额度形态显示美元「已用/上限」。
+         title 由 refreshQuota 按实际形态改写，这里只给个不会误导的初值。 -->
+    <span id="quotabar" class="status" hidden title="剩余额度"></span>
     <div id="modelSel" class="msel" hidden></div>
     <!-- 公告中心：默认折叠，只在按钮上标未读数；点开是近半年的公告，随时查得回来。
          老设计是顶部弹横幅、点「知道了」就永远消失，用户想回看只能问管理员。 -->
@@ -1874,7 +1876,7 @@ function openStream(url) {
     if (note) { if (!gotText && !painted) answer.textContent = ""; const n = document.createElement("div"); n.className = "note"; n.textContent = note; answer.appendChild(n) }
     else if (!gotText) answer.textContent = "(无文本输出)"
     loadSessions()   // 刷新会话列表（新会话入列 / 更新时间与高亮）
-    refreshQuota()   // 本轮成本已入账 → 刷新顶栏额度
+    refreshQuota(true)   // 本轮成本已入账 → 绕过缓存问一次云端，顶栏立刻反映这轮扣掉的积分
     // 正常收尾（没出错、确有回答）才去要"下一步"建议：出错/被终止的轮次建议不出下一步，
     // 用户此刻要的是重试或看提示，不是被推着往前走。无人值守续跑中也不要：马上就自动开下一轮，
     // 建议既没人点，还每轮白烧一次小模型请求。
@@ -2136,10 +2138,23 @@ function clShow(mode, st) {
   document.getElementById("clLogout").style.display = mode === "info" ? "" : "none"
   if (mode === "info" && st) {
     const p = st.profile || {}
+    // 用户看积分，不看美元：档案里的 quota 是服务端算好的积分视图（1 积分 = $0.01）。
+    // 老档案（本地缓存还是上一版客户端写的）没有 quota 字段 → 回退到 limits/usage 自己换算，
+    // 不然刚更新界面包的那一刻这块会空着，直到下次登录才恢复。
     const lim = p.limits || {}, use = p.usage || {}
-    const money = (n) => "$" + (Number(n) || 0).toFixed(4).replace(/0+$/, "").replace(/\.$/, ".00")
-    const bar = (used, limit) => !limit ? money(used) + ' <span class="mm-faint">/ 不限</span>'
-      : money(used) + ' <span class="mm-faint">/ ' + money(limit) + "（" + Math.min(100, Math.round(used / limit * 100)) + "%）</span>"
+    const rate = (p.quota && p.quota.creditUsd) || 0.01
+    const line = (l, usedUsd, limitUsd) => l || {
+      unlimited: !(limitUsd > 0), limit: Math.floor((limitUsd || 0) / rate),
+      used: Math.ceil(((usedUsd || 0) / rate) * 10) / 10,
+      remain: !(limitUsd > 0) ? null : Math.max(0, Math.floor((limitUsd - (usedUsd || 0)) / rate)),
+      pct: !(limitUsd > 0) ? 0 : Math.min(100, Math.round((usedUsd || 0) / limitUsd * 100)),
+    }
+    const dayL = line(p.quota && p.quota.daily, use.today, lim.daily)
+    const monL = line(p.quota && p.quota.monthly, use.month, lim.monthly)
+    const bar = (l) => l.unlimited
+      ? '不限 <span class="mm-faint">（已用 ' + fmtCredits(l.used) + " 积分）</span>"
+      : "剩 " + fmtCredits(l.remain) + ' 积分 <span class="mm-faint">/ 共 ' + fmtCredits(l.limit)
+        + "（已用 " + fmtCredits(l.used) + "，" + l.pct + "%）</span>"
     document.getElementById("cloudPaneInfo").innerHTML =
       '<div class="mm-kv"><span>账号</span><b>' + esc(st.username) + "</b></div>" +
       '<div class="mm-kv"><span>档位</span><b>' + esc(p.tier || "—") + "</b></div>" +
@@ -2149,12 +2164,13 @@ function clShow(mode, st) {
       ((p.models && p.models.length > 1)
         ? '<div class="mm-kv"><span>可选模型</span><b>' + p.models.map(function (m) { return esc(m.label || m.model) + (m.providerName ? '<span class="mm-faint">（' + esc(m.providerName) + "）</span>" : "") }).join("、") + "</b></div>"
         : '<div class="mm-kv"><span>可选模型</span><b class="mm-faint">仅默认模型（本档位未开放切换）</b></div>') +
-      '<div class="mm-kv"><span>今日用量</span><b>' + bar(use.today, lim.daily) + "</b></div>" +
-      '<div class="mm-kv"><span>本月用量</span><b>' + bar(use.month, lim.monthly) + "</b></div>" +
+      '<div class="mm-kv"><span>今日积分</span><b>' + bar(dayL) + "</b></div>" +
+      '<div class="mm-kv"><span>本月积分</span><b>' + bar(monL) + "</b></div>" +
       '<div class="mm-kv"><span>可用技能</span><b>' + ((p.skills && p.skills.length) ? p.skills.map(esc).join("、") : "全部") + "</b></div>" +
       '<div id="clSkills"></div>' +
-      '<div class="mm-hint" style="margin-top:12px">额度、可选模型与技能由管理员在后台调整；点上面的「刷新」即可拉到最新，'
-      + "换模型在顶部的 🧠 里选。</div>"
+      '<div class="mm-hint" style="margin-top:12px">积分按每轮对话的实际消耗扣减：日积分每天 0 点(UTC)重置，'
+      + "月积分每月 1 日(UTC)重置，两条线哪条用尽都会暂停调用。<br>积分、可选模型与技能由管理员在后台调整；"
+      + "点上面的「刷新」即可拉到最新，换模型在顶部的 🧠 里选。</div>"
     loadClSkills()
   }
 }
@@ -2726,14 +2742,60 @@ async function refreshNotice(force) {
   } catch { /* 拉不到就保持现状：把已经显示的维护通知抹掉比留着旧的更糟 */ }
 }
 
-// ---- 今日额度：顶栏常驻「已用/上限」，撞限前心里有数（清单 P2-2）。limit=0 不限额则不显示；≥90% 变红 ----
-async function refreshQuota() {
+// ---- 剩余额度：顶栏常驻，撞限前心里有数（清单 P2-2）。不限额则不显示；用掉 ≥90% 变红 ----
+//
+// 两种形态，同一个位置：
+//   · 云端账号（打包版）→ 显示【剩余积分】的日/月两条线，权威在服务端（1 积分 = $0.01，
+//     换算也在服务端做，客户端只负责显示，改汇率不用等客户端更新）。
+//   · 本机 env 额度（容器/单机自用）→ 沿用旧的美元「已用/上限」。
+const fmtCredits = (n) => (Number(n) || 0).toLocaleString("zh-CN")
+function quotaTitle(c) {
+  const line = (l, name, reset) => l.unlimited
+    ? `${name}：不限`
+    : `${name}：剩 ${fmtCredits(l.remain)} 积分（已用 ${fmtCredits(l.used)} / 共 ${fmtCredits(l.limit)}，${l.pct}%）${reset}`
+  return [
+    line(c.daily, "今日", "，每日 0 点(UTC)重置"),
+    line(c.monthly, "本月", "，每月 1 日(UTC)重置"),
+    `1 积分 = $${Number(c.creditUsd || 0.01)}；每轮对话结束后自动更新`,
+    c.stale ? "⚠ 暂时连不上云端，显示的是上一次的读数" : "",
+  ].filter(Boolean).join("\n")
+}
+// 云端积分从哪来：新网关（本机 server.mjs 已带 cloud 字段）直接给，含 20 秒缓存与 stale 标记；
+// 老网关（安装包里的 .mjs 还是旧的）就走通用转发口 /api/cloud/call 自己问云端一次。
+// 【为什么要这条回退】.mjs 发不了界面包，只能随安装器走。有了它，「剩余积分」能作为纯界面包
+// 推给已经装好的用户，不必等所有人重装客户端。等大家都升过安装包后，这段可以删。
+async function cloudQuotaOf(s) {
+  if (s && s.cloud !== undefined) return s.cloud
+  try {
+    const r = await (await fetch("api/cloud/call", {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ path: "/api/quota" }),
+    })).json()
+    return (r && r.ok && r.data && r.data.quota) || null   // 没登云端账号时这口回 ok:false → null
+  } catch { return null }
+}
+async function refreshQuota(fresh = false) {
   const el = document.getElementById("quotabar")
   try {
-    const s = await fetch("api/quota").then(r => r.json())
+    // fresh=1：一轮刚结束时用，跳过网关那 20 秒缓存直接问云端——用户此刻正想看这轮扣了多少
+    const s = await fetch("api/quota" + (fresh ? "?fresh=1" : "")).then(r => r.json())
+    const c = await cloudQuotaOf(s)
+    if (c && !(c.daily.unlimited && c.monthly.unlimited)) {
+      // 两条线都限时并列显示；只限一条就只显示那条（"日 —"这种占位只会让人以为坏了）
+      const parts = []
+      if (!c.daily.unlimited) parts.push("日 " + fmtCredits(c.daily.remain))
+      if (!c.monthly.unlimited) parts.push("月 " + fmtCredits(c.monthly.remain))
+      const pct = Math.max(c.daily.unlimited ? 0 : c.daily.pct, c.monthly.unlimited ? 0 : c.monthly.pct)
+      el.hidden = false
+      el.textContent = "剩余积分 " + parts.join(" · ") + (c.stale ? " ·未更新" : "")
+      el.title = quotaTitle(c)
+      el.style.color = pct >= 90 ? "#dc4b37" : ""
+      return
+    }
     if (!s || !(s.limit > 0)) { el.hidden = true; return }
     const pct = Math.min(100, Math.round(s.used / s.limit * 100))
     el.hidden = false
+    el.title = "今日模型额度：已用 / 上限（每日 0 点 UTC 重置）"
     el.textContent = `今日额度 $${Number(s.used).toFixed(3)} / $${Number(s.limit).toFixed(2)}（${pct}%）`
     el.style.color = pct >= 90 ? "#dc4b37" : ""
   } catch { el.hidden = true }

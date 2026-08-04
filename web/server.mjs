@@ -641,6 +641,29 @@ async function syncProfileSoon() {
     try { await Cloud.currentAccess({ force: true }) } catch {}
   }
 }
+// ---- 云端剩余额度（积分）的本机短缓存 ----
+// 权威在云端（服务端按每一单 LLM 响应的 usage 记账，客户端算不出也改不了），这里只做两件事：
+// 压掉高频轮询（顶栏 30 秒一次 × 多标签页）、以及断网时别把已经显示着的数字抹成空白。
+//
+// 【不落盘】剩余额度是"过一分钟就不准"的东西，写进 cloud-state.json 只会让离线启动时
+// 顶栏显示一个骗人的旧数；进程重启后重新问一次云端即可，代价一次轻请求。
+let cloudQuotaCache = null
+const CLOUD_QUOTA_TTL = 20_000
+const clearCloudQuotaCache = () => { cloudQuotaCache = null }
+async function cloudQuota(fresh = false) {
+  if (!cloudLoggedIn()) return null           // 容器/自设 API 形态：没有云端积分这回事
+  const now = Date.now()
+  if (!fresh && cloudQuotaCache && now - cloudQuotaCache.at < CLOUD_QUOTA_TTL)
+    return { ...cloudQuotaCache.data, stale: false }
+  const r = await Cloud.fetchQuota().catch(() => ({ ok: false }))
+  if (r.ok && r.quota) { cloudQuotaCache = { at: now, data: r.quota }; return { ...r.quota, stale: false } }
+  // 拉失败：保留上一份并标 stale（前端加一句"未更新"），与公告同一口径 —— 断网时让额度栏
+  // 凭空消失，用户会理解成"额度被清零/被停用"，比显示一个几十秒前的旧数糟得多。
+  // 同时把重试时间挪近（5 秒后可再试），但不是每次请求都去戳一个已经不可达的云端。
+  if (cloudQuotaCache) { cloudQuotaCache.at = now - (CLOUD_QUOTA_TTL - 5_000); return { ...cloudQuotaCache.data, stale: true } }
+  return null
+}
+
 /**
  * 影响界面的授权摘要。前端拿它和上次比：变了就重取模块清单与模型清单并提示一句。
  * 只放"看得见的授权"，不放用量——用量每分钟都在变，摘要就永远在变，提示会成噪音。
@@ -1229,6 +1252,15 @@ export function describeModelError(err, route) {
   if (/QUEUE_TIMEOUT/.test(raw)) return "云端排队超时：此刻同时使用的人太多，本轮未能开始。请稍后重试（管理员可在后台「并发与排队」调大上限）。"
   if (/QUEUE_FULL/.test(raw)) return "云端排队已满：此刻同时使用的人太多，本轮未能开始。请稍等几分钟再试。"
   if (/UPSTREAM_RATE_LIMITED/.test(raw)) return "上游模型服务正在限速，本轮未能生成。稍等片刻再试即可（这不是你的额度问题）。"
+  // 平台积分用尽（云端 429 QUOTA_EXCEEDED）。它同样是 429，但落到下面那条通用限流分支上就全错了：
+  // "稍等片刻再试"对日积分来说要等到 UTC 0 点，对月积分更是要等下个月，用户会一直重试到放弃。
+  // 云端已经把该说的话（哪条线、上限多少、什么时候恢复）写在 message 里，直接用它。
+  if (/QUOTA_EXCEEDED/.test(raw)) {
+    let msg = ""
+    try { msg = JSON.parse(raw.slice(raw.indexOf("{"))).error?.message || "" } catch {}
+    return (msg || "平台积分已用尽，本轮未能生成。日积分每天 0 点(UTC)重置，月积分每月 1 日(UTC)重置")
+      + "。顶栏的「剩余积分」可随时查看；需要更多请联系管理员调整档位。"
+  }
   const balance = code === 402 || /insufficient|balance|欠费|余额|arrears|payment|billing/i.test(raw)
   if (balance) return `上游模型账户余额不足或已欠费，本轮未能生成。${who}${tail}`
   if (code === 401 || code === 403 || err?.name === "ProviderAuthError")
@@ -2334,8 +2366,16 @@ export const server = http.createServer(async (req, res) => {
       // entRev 一起回：前端在公告轮询里发现它变了就重取本接口，两处用同一个摘要才不会来回打转
       return send(res, 200, "application/json", JSON.stringify({ modules: list, entRev: entRev() }))
     }
-    if (req.method === "GET" && u.pathname === "/api/quota") {   // 前端显示今日额度用量（含在跑轮的实时成本）
-      return send(res, 200, "application/json", JSON.stringify({ used: quotaUsedLive(), limit: DAILY_COST_LIMIT }))
+    // 前端顶栏的额度显示。两种形态各有各的权威账本，一个口子同时回：
+    //   · used/limit：本机 env 额度（容器部署 / 单机自用），美元，含在跑轮的实时成本；
+    //   · cloud：云端账号的【积分】视图（打包版用户看的就是它）——日、月两条线，权威在服务端。
+    // 打包版走云端账号时 DAILY_COST_LIMIT 通常没设（limit=0 → 前端不显示本机那条），
+    // 于是顶栏显示的就是 cloud 这份。两者都不设 = 不限额，顶栏整块隐藏（与改动前一致）。
+    if (req.method === "GET" && u.pathname === "/api/quota") {
+      // fresh=1：一轮对话刚结束时前端会带上它，跳过缓存直接问云端 —— 用户此刻正想看
+      // "这轮花了多少"，给他一个最多 20 秒前的旧数就白刷新了。
+      const cloud = await cloudQuota(u.searchParams.get("fresh") === "1")
+      return send(res, 200, "application/json", JSON.stringify({ used: quotaUsedLive(), limit: DAILY_COST_LIMIT, cloud }))
     }
     if (req.method === "GET" && u.pathname === "/api/storage") {   // 前端显示存储用量（uploads+outputs）
       return send(res, 200, "application/json", JSON.stringify({ used: storageUsed(), limit: storageLimitBytes() }))
@@ -2559,6 +2599,7 @@ export const server = http.createServer(async (req, res) => {
       }
       let r
       clearNoticeCache()
+      clearCloudQuotaCache()    // 换了人就别让上一个账号的剩余积分继续挂在顶栏上
       clearSkillLatestCache()   // 换账号后"最新技能包/relevant"要按新账号重新算
       if (u.pathname === "/api/cloud/login") {
         const username = String(b.username || "").trim(), password = String(b.password || "")

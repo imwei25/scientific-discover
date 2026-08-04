@@ -128,6 +128,8 @@
   <div class="wrap">
     <nav>
       <span class="brand">Niuma Science</span>
+      <!-- 剩余积分挂在档位那一行：这是登录后的第一屏，用户第一眼就该知道自己还剩多少，
+           不用先进对话页看顶栏。不限额或拉不到时什么都不加（宁可不显示，也别显示个假数）。 -->
       <div class="account" title="账户">
         <div class="who"><b id="accName">…</b><span id="accRole">已登录</span></div>
         <div class="ava" id="accAva">·</div>
@@ -253,7 +255,36 @@
         if (tier) document.getElementById("accRole").textContent = tier;
       }
     } catch (_) {}
+    if (cloudLoggedIn) showQuota();
   })();
+
+  /* 剩余积分（1 积分 = $0.01，换算在服务端做）。日、月两条线哪条限额就显示哪条；
+     两条都不限、或云端一时拉不到，就保持原样不动——档位那行本来就有内容，不会空着。 */
+  async function showQuota() {
+    let c = null;
+    try {
+      const s = await (await fetch("api/quota", { signal: AbortSignal.timeout(8000) })).json();
+      c = s.cloud;
+      // 老网关（安装包里的 .mjs 还没这个字段）走通用转发口自己问一次 —— 这条回退让本功能
+      // 能作为纯界面包推给已装好的用户，不必等重装。大家都升过安装包后可以删。
+      if (c === undefined) {
+        const r = await (await fetch("api/cloud/call", {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ path: "/api/quota" }), signal: AbortSignal.timeout(8000),
+        })).json();
+        c = (r && r.ok && r.data && r.data.quota) || null;
+      }
+    } catch (_) { return; }
+    if (!c || (c.daily.unlimited && c.monthly.unlimited)) return;
+    const parts = [];
+    if (!c.daily.unlimited) parts.push("日剩 " + c.daily.remain);
+    if (!c.monthly.unlimited) parts.push("月剩 " + c.monthly.remain);
+    const el = document.getElementById("accRole");
+    el.textContent = (el.textContent === "已登录" ? "" : el.textContent + " · ") + parts.join(" / ") + " 积分";
+    el.parentElement.parentElement.title = "剩余积分（1 积分 = $" + (c.creditUsd || 0.01) + "）"
+      + "\n今日：" + (c.daily.unlimited ? "不限" : "剩 " + c.daily.remain + " / 共 " + c.daily.limit + "，每日 0 点(UTC)重置")
+      + "\n本月：" + (c.monthly.unlimited ? "不限" : "剩 " + c.monthly.remain + " / 共 " + c.monthly.limit + "，每月 1 日(UTC)重置");
+  }
 
   /* 退出：两种形态各退各的。
      - 云端账号（打包版常态）：退云端账号，回聊天页会停在登录闸上。

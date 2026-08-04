@@ -26,6 +26,7 @@ import https from "node:https"
 import zlib from "node:zlib"
 import { Transform } from "node:stream"
 import { StringDecoder } from "node:string_decoder"
+import * as Credits from "./credits.mjs"
 
 export const GATEWAY_PATH_PREFIX = "/llm/"
 
@@ -251,18 +252,22 @@ export async function llmForward({ req, res, pathname, ctx }) {
   noteClient(user, req)
 
   // ---- ② 额度闸（请求前预检）----
+  // 判定仍然全程用美元（与计量、对账同一口径）；只有【给用户看的那句话】换成积分，
+  // 否则用户顶栏看的是"还剩 0 积分"、被拦时却收到一句 "$0.30"，对不上号。
+  // used/limit 两个字段保持美元不变：老客户端与运维脚本在读它们。
   const ent = ctx.resolveEntitlement(user)
+  const cr = (usd) => Credits.toCredits(usd, CFG.creditUsd)
   const today = ctx.todayCost(user.id)
   if (ent.daily > 0 && today >= ent.daily) {
     audit("llm.quota_block", { actor: user.username, ip, detail: `day ${today.toFixed(4)}/${ent.daily}` })
-    return fail(res, 429, "QUOTA_EXCEEDED", `今日额度已用尽（上限 $${ent.daily.toFixed(2)}），明日 0 点(UTC)恢复`,
-      { scope: "daily", used: today, limit: ent.daily })
+    return fail(res, 429, "QUOTA_EXCEEDED", `今日积分已用尽（上限 ${Math.floor(cr(ent.daily))} 积分），明日 0 点(UTC)恢复`,
+      { scope: "daily", used: today, limit: ent.daily, usedCredits: Math.ceil(cr(today)), limitCredits: Math.floor(cr(ent.daily)) })
   }
   const month = ctx.monthCost(user.id)
   if (ent.monthly > 0 && month >= ent.monthly) {
     audit("llm.quota_block", { actor: user.username, ip, detail: `month ${month.toFixed(4)}/${ent.monthly}` })
-    return fail(res, 429, "QUOTA_EXCEEDED", `本月额度已用尽（上限 $${ent.monthly.toFixed(2)}），请联系管理员升级`,
-      { scope: "monthly", used: month, limit: ent.monthly })
+    return fail(res, 429, "QUOTA_EXCEEDED", `本月积分已用尽（上限 ${Math.floor(cr(ent.monthly))} 积分），请联系管理员升级`,
+      { scope: "monthly", used: month, limit: ent.monthly, usedCredits: Math.ceil(cr(month)), limitCredits: Math.floor(cr(ent.monthly)) })
   }
 
   // ---- ③ 技能白名单（软管控，见改造方案 §3.3）----

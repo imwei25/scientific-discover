@@ -168,6 +168,21 @@ export async function fetchProfile() {
 }
 
 /**
+ * 拉一次剩余额度（积分）。顶栏每轮对话结束后刷新一次、平时低频轮询。
+ *
+ * 【为什么不复用 fetchProfile】档案是重包（可选模型、技能白名单、公告正文）且会写盘，
+ * 而额度每一轮都在变、要能高频问。这个口在云端只读两行汇总，客户端也不落盘：
+ * 剩余额度属于"过一分钟就不准"的东西，缓存到本地只会让离线时显示一个骗人的数。
+ */
+export async function fetchQuota() {
+  const a = await currentAccess()
+  if (!a.ok) return a
+  const r = await api("/api/quota", { token: a.token })
+  if (!r.ok) return r
+  return { ok: true, quota: r.data.quota || null }
+}
+
+/**
  * 拉一次平台公告：最新一条 + 一份【摘要清单】（digest：只有 id/级别/时间，没有正文）。
  *
  * 【为什么不复用 fetchProfile】档案只在登录、access key 续期（TTL 24h、提前 10 分钟续）

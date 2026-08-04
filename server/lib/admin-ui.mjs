@@ -107,6 +107,12 @@ var $=function(s){return document.querySelector(s)};
 var esc=function(s){return String(s==null?'':s).replace(/[&<>"']/g,function(c){
   return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]})};
 var money=function(n){return '$'+(Number(n)||0).toFixed(4).replace(/0+$/,'').replace(/\\.$/,'.00')};
+// 客户端只看积分（1 积分 = S.creditUsd 美元，默认 0.01）。后台仍按美元填写，但每处额度
+// 旁边都要跟一句"用户看到的是 N 积分" —— 否则用户来问"我怎么只剩 3 分"，管理员对着
+// 一屏美元根本对不上号。取整方向与客户端一致（上限下取整），显示的数就是用户看到的数。
+var CREDIT=function(){return Number(S.creditUsd)||0.01};
+var credits=function(n){return Math.floor((Number(n)||0)/CREDIT())};
+var creditNote=function(n){return (Number(n)>0)?'<div class="mut" style="font-size:12.5px">= '+credits(n)+' 积分</div>':''};
 var dt=function(ms){if(!ms)return '—';var d=new Date(Number(ms));
   return d.toLocaleString('zh-CN',{timeZone:'Asia/Shanghai',hour12:false})};
 
@@ -160,7 +166,7 @@ function load(){
       '&limit='+S.pageSize+'&offset='+(S.offset||0)).then(function(d){
     if(!d.ok){if(!d.unauth)renderLogin(d.err||'加载失败');return}
     S.users=d.users;S.tiers=d.tiers;S.skills=d.skills;S.board=d.board;S.total=d.total;S.matched=d.matched;
-    S.catalog=d.catalog||[];S.tierCounts=d.tierCounts||{};
+    S.catalog=d.catalog||[];S.tierCounts=d.tierCounts||{};S.creditUsd=d.creditUsd||0.01;
     S.matchedIds=d.matchedIds||[];S.maxBulk=d.maxBulk||500;
     render()})
 }
@@ -878,7 +884,8 @@ function paneTiers(){
     var msHtml=ms.length?ms.map(function(m){
       return live[m]?esc(m):'<span class="tag bad" title="目录里没有它、或它的供应商已停用——用户实际选不到">'+esc(m)+'</span>'}).join('、'):'';
     return '<tr data-k="'+esc(t.key)+'"><td><b>'+esc(t.key)+'</b><div class="mut" style="font-size:12.5px">'+esc(t.note||'')+'</div></td>'+
-      '<td>'+(t.daily_usd?money(t.daily_usd):'不限')+'</td><td>'+(t.monthly_usd?money(t.monthly_usd):'不限')+'</td>'+
+      '<td>'+(t.daily_usd?money(t.daily_usd)+creditNote(t.daily_usd):'不限')+'</td>'+
+      '<td>'+(t.monthly_usd?money(t.monthly_usd)+creditNote(t.monthly_usd):'不限')+'</td>'+
       '<td>'+(t.model?esc(t.model):'<span class="tag bad" title="默认模型为空：该档用户可自选任意模型名，绕过允许清单">未设默认模型</span>')+
         (msHtml?'<div class="mut" style="font-size:12.5px">可选：'+msHtml+'</div>':'<div class="mut" style="font-size:12.5px">不可切换</div>')+'</td>'+
       '<td class="mut" style="font-size:12.5px">'+(t.skills?esc(t.skills):'全部技能')+'</td>'+
@@ -924,8 +931,12 @@ function dlgTier(t){
   dlg(t.key?('编辑档位 · '+t.key):'新增档位',
     '<div class="grid">'+
     '<label>档位键 *</label><input id="t-k" value="'+esc(t.key)+'"'+(t.key?' readonly':'')+' placeholder="小写字母开头，如 gold">'+
+    // 额度按美元填（与计量、对账同一口径），旁边实时显示客户端会看到的积分数——
+    // 边填边看，省得保存完再去客户端核对一遍。
     '<label>日额度 USD</label><input id="t-d" value="'+t.daily_usd+'" placeholder="0 = 不限">'+
+    '<label></label><div class="hint" id="t-dc"></div>'+
     '<label>月额度 USD</label><input id="t-m" value="'+t.monthly_usd+'" placeholder="0 = 不限">'+
+    '<label></label><div class="hint" id="t-mc"></div>'+
     '<label>单用户并发</label><input id="t-c" value="'+(t.max_conc||0)+'" placeholder="0 = 跟随全局设置">'+
     '<label>默认模型</label><select id="t-mosel">'+catOpts+'</select>'+
     '<label></label><input id="t-mo" value="'+esc(t.model)+'" placeholder="模型名（上面选一个会自动填到这里）">'+
@@ -943,6 +954,12 @@ function dlgTier(t){
   Array.prototype.forEach.call(mchips,function(c){c.onclick=function(){c.classList.toggle('on')}});
   Array.prototype.forEach.call(schips,function(c){c.onclick=function(){c.classList.toggle('on')}});
   $('#t-mosel').onchange=function(){if(this.value)$('#t-mo').value=this.value};
+  // 积分预览：非法输入不猜，直说"填个 ≥0 的数字"，别显示成 0 积分（0 在额度闸里是【不限】）
+  var showCr=function(inp,box){var v=Number($(inp).value);
+    $(box).innerHTML=(!$(inp).value.trim()||!isFinite(v)||v<0)?'请填 ≥0 的数字（0 = 不限）'
+      :(v>0?'用户看到：<b>'+credits(v)+' 积分</b>（1 积分 = '+money(CREDIT())+'）':'不限额，用户看到「不限」')};
+  ['#t-d','#t-m'].forEach(function(id,i){var box=i?'#t-mc':'#t-dc';
+    $(id).oninput=function(){showCr(id,box)};showCr(id,box)});
   $('#ok').onclick=function(e){e.preventDefault();
     // 【别再用 Number(x)||0】负数与「abc」都会被它吞成 0，而 0 在额度闸里是【不限】——
     // 一次手滑就把整档放开，后台还显示得一切正常。
