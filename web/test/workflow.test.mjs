@@ -174,11 +174,57 @@ test("模块闸：bash 直呼白名单外的技能脚本要被拦（技能集变
 
 // ---- 以下每条都对应一个实测踩到的坑，别因为"看着显然"就删 ----
 
-test("只算样本量的人不该被『数据文件』必填卡死（做研究之前根本没有数据）", () => {
+test("只算样本量的人不该被『数据文件』必填卡死，但『样本量+别的分析』必须仍要数据", () => {
   const f = WF.WORKFLOWS.stats.intake.find((x) => x.id === "dataFiles")
-  assert.ok(!f.required, "不能无条件必填")
+  assert.ok(!f.required, "不能无条件必填：样本量是做研究【之前】算的，此时根本没有数据")
   assert.equal(WF.isRequired(f, { analyses: ["power"] }), false, "只算样本量 → 不必填")
   assert.equal(WF.isRequired(f, { analyses: ["survival"] }), true, "要跑分析 → 必填")
+  // ★ 这条是回归防线：写成 hasNot:"power" 会让"只要勾了样本量就一律不必填"，于是
+  //   「生存分析 + 样本量」（很常见的组合）会让一个【没有任何数据】的 KM/Cox 请求静默通过。
+  //   放行一个注定失败的请求，比过度拦截更危险。
+  assert.equal(WF.isRequired(f, { analyses: ["survival", "power"] }), true,
+    "样本量 + 生存分析 → 仍必须有数据，否则 KM/Cox 根本算不出来")
+  assert.equal(WF.isRequired(f, { analyses: ["power", "table1"] }), true)
+})
+
+test("生存分析 / ROC 缺了必要的列就跑不出来——勾了该分析这几列必须必填", () => {
+  const F = (id) => WF.WORKFLOWS.stats.intake.find((x) => x.id === id)
+  for (const id of ["timeCol", "eventCol"])
+    assert.equal(WF.isRequired(F(id), { analyses: ["survival"] }), true, `${id} 该必填`)
+  for (const id of ["testCol", "goldCol"])
+    assert.equal(WF.isRequired(F(id), { analyses: ["roc"] }), true, `${id} 该必填`)
+  // 逐步表单（paper 的统计步）同样不能漏 —— 此前那 11 张步骤卡一个必填标记都没有
+  const st = WF.WORKFLOWS.paper.steps.find((s) => s.id === "stats")
+  for (const id of ["timeCol", "eventCol"])
+    assert.equal(WF.isRequired(st.form.find((x) => x.id === id), { analyses: ["survival"] }), true,
+      `paper:stats 的 ${id} 该必填`)
+})
+
+test("前瞻性 / RCT 下预注册被提到最前，就不能还标『可选』——那等于说这步可以跳", () => {
+  const raw = { materials: ["rawdata"] }
+  for (const t of ["rct", "prospective"]) {
+    const v = { ...raw, studyType: t }
+    const first = WF.stepsFor("paper", v)[0]
+    assert.equal(first.id, "novelty")
+    assert.equal(WF.isOptional(first, v), false, `${t} 下预注册是必做的采数前锁`)
+  }
+  const v2 = { ...raw, studyType: "retrospective" }
+  const nov = WF.stepsFor("paper", v2).find((s) => s.id === "novelty")
+  assert.equal(WF.isOptional(nov, v2), true, "回顾性研究已有数据，这步可选")
+  // 前言里的剧本也要跟着变
+  assert.doesNotMatch(WF.pipelineLine("paper", { ...raw, studyType: "rct" }), /新颖性裁定 \/ 预注册\(可选\)/)
+})
+
+test("勾了『格式与体例』得真有一步会走它，否则是勾了没用的哑选项", () => {
+  const w = WF.WORKFLOWS.refcheck
+  assert.ok(w.intake.find((f) => f.id === "checks").options.some((o) => o.v === "format"))
+  const ids = WF.stepsFor("refcheck", { checks: ["format"] }).map((s) => s.id)
+  assert.ok(ids.includes("review"), "格式与体例由评审自查那一步顺带查")
+})
+
+test("国自然正文里『特色与创新』是必备章节，默认不能不勾", () => {
+  const sec = WF.WORKFLOWS.grant.steps.find((s) => s.id === "write").form.find((f) => f.id === "sections")
+  assert.ok(sec.default.includes("feature"), "默认漏掉它等于让申请人交一份缺章节的标书")
 })
 
 test("勾了 Table 1 就得能选分组列（Table 1 的本质就是按组分列对比）", () => {

@@ -1640,9 +1640,16 @@ async function resumeSession(id) {                 // 载入历史 → 设为当
   if (histFailed) addNote("⚠ 这个会话的历史没能载入（网络或服务异常）。请刷新重试——你的对话没有丢失，只是这次没读到。")
   for (const m of hist) add(m.role === "user" ? "user" : "bot", m.text)
   renderFiles((outs || []).map(o => o.name))       // 产物随会话持久回显
-  sessionStarted = hist.length > 0                 // 有历史 = 这个会话已经开始过，别再带 module 去补绑
+  // 有历史 = 这个会话已经开始过，别再带 module 去补绑。
+  // ★ histFailed 时 hist 是空数组，但那【不代表】会话是空的 —— 它代表"不知道"。判成"没开始过"的话：
+  //   用户在一个几十轮的老会话里发下一条消息会带上 currentModule（它还停在上一个会话的模块），
+  //   服务端见该会话未绑定就补绑 → 这条老对话被永久绑进受限模块，而界面没有解绑的入口。
+  //   方向必须 fail-safe：拿不准就按"已开始"处理，代价只是少补一次绑定。
+  sessionStarted = hist.length > 0 || histFailed
   liveSteps = null                                 // 步骤集随会话走，别把上一个会话裁剪后的带过来
-  pendingWfCard = ""; pendingWfForm = null         // 上一个会话没发成功的任务卡不许跟过来
+  pendingWfCard = ""; pendingWfForm = null; lastCardText = ""   // 上一个会话没发成功的任务卡不许跟过来
+  offeredSteps.clear()                             // 逐步表单的"已给过"记录是每会话的
+  HDR_CACHE.clear()                                // 表头缓存按文件名存，跨会话同名文件会串列名
   if (!hist.length && !job.running && !histFailed) renderWelcome()   // 载入失败时别用欢迎页盖掉上面那条错误提示
   loadSessions()                                   // 重渲染以高亮当前会话
   loadUploads()                                    // 回显该会话已上传的文件
@@ -1654,7 +1661,8 @@ async function resumeSession(id) {                 // 载入历史 → 设为当
 // 当前会话被删掉后回到空态（单删与批删共用，别两处各写一遍漏项）
 function clearCurrentSession() {
   detachStream(); sessionId = null; localStorage.removeItem("nm_sid")
-  sessionStarted = false; pendingWfCard = ""; pendingWfForm = null
+  sessionStarted = false; pendingWfCard = ""; pendingWfForm = null; lastCardText = ""
+  offeredSteps.clear(); HDR_CACHE.clear()
   log.innerHTML = ""; renderFiles([]); renderUploads([]); renderWelcome(); zScopeReset(); loadZotLib()
   stepsHost = null                                 // 步骤条随会话走：清了会话就没有它了，别留个野引用
 }
@@ -1820,7 +1828,7 @@ function buildFormCard({ title, sub, fields, footnote, steps, onSubmit, onSkip, 
         curSection = f.section
         body.appendChild(Object.assign(document.createElement("div"), { className: "wfsec", textContent: f.section }))
       }
-      body.appendChild(fieldEl(f, values, redraw))
+      body.appendChild(fieldEl(f, values, redraw, fields))
     }
   }
   redraw()
@@ -1854,6 +1862,7 @@ function condOk(cond, values) {
   if ("in" in cond) return cond.in.includes(v)
   if ("has" in cond) return Array.isArray(v) && v.includes(cond.has)
   if ("hasNot" in cond) return !Array.isArray(v) || !v.includes(cond.hasNot)
+  if ("hasOther" in cond) return Array.isArray(v) && v.some((x) => !cond.hasOther.includes(x))
   if ("truthy" in cond) return cond.truthy ? !!v : !v
   return true
 }
@@ -1861,7 +1870,9 @@ function condOk(cond, values) {
 // 和"任务卡里拼的"对不上，那种 bug 从界面上完全看不出来。
 const fieldVisible = (f, values) => condOk(f.when, values) && (!f.whenAny || f.whenAny.some((c) => condOk(c, values)))
 const fieldRequired = (f, values) => !!f.required || (!!f.requiredWhen && condOk(f.requiredWhen, values))
-function fieldEl(f, values, onChange) {
+// allFields：整张表单的字段定义。option 的 sets 回滚时要查目标字段自己的默认值，
+// 只有本字段 f 是不够的（sets 指向的是【别的】字段，如 mode 的选项去设 fulltext）。
+function fieldEl(f, values, onChange, allFields) {
   const wrap = document.createElement("div"); wrap.className = "wff"
   const lab = document.createElement("label"); lab.textContent = f.label
   if (fieldRequired(f, values)) { const r = document.createElement("span"); r.className = "req"; r.textContent = "*"; lab.appendChild(r) }
@@ -1877,6 +1888,8 @@ function fieldEl(f, values, onChange) {
       const on = () => multi ? (values[f.id] || []).includes(o.v) : values[f.id] === o.v
       if (on()) b.classList.add("on")
       b.addEventListener("click", () => {
+        const wasOn = on()
+        const prev = multi ? [...(values[f.id] || [])] : values[f.id]   // 供下面比对"点之前的选中态"
         if (multi) {
           let arr = values[f.id] || (values[f.id] = [])
           const i = arr.indexOf(o.v)
@@ -1885,9 +1898,22 @@ function fieldEl(f, values, onChange) {
           else { arr = values[f.id] = arr.filter((v) => !(f.options.find((x) => x.v === v)?.exclusive)); arr.push(o.v) }
         } else values[f.id] = values[f.id] === o.v ? undefined : o.v
         // sets：选了某项就顺带把另一个字段设好（选"下载全文后问答"必然要开"尝试下载全文"，
-        // 不联动的话会静悄悄接受一个不可能的组合 —— 没有全文哪来的基于原文问答）
-        const on = multi ? (values[f.id] || []).includes(o.v) : values[f.id] === o.v
-        if (on && o.sets) for (const [k, v] of Object.entries(o.sets)) values[k] = v
+        // 不联动的话会静悄悄接受一个不可能的组合 —— 没有全文哪来的基于原文问答）。
+        // 【要能回滚】否则改选之后残留：选"下载全文后问答"→ fulltext 置真 → 改选"快速扫描"，
+        // fulltext 仍是真，用户并没有要求下载全文，系统却替他改了一个他没动过的开关且不还原。
+        // 逐个 option 比"点之前在不在" vs "现在在不在"：单选题改选到别的项时，是【新项】的
+        // 按钮在响应，旧项的 handler 根本不会触发 —— 只看当前这个 o 的话就漏掉了回滚。
+        const isOn = (x) => multi ? (values[f.id] || []).includes(x.v) : values[f.id] === x.v
+        for (const x of f.options || []) {
+          if (!x.sets) continue
+          const before = x === o ? wasOn : (multi ? (prev || []).includes(x.v) : prev === x.v)
+          const after = isOn(x)
+          if (after && !before) for (const [k, v] of Object.entries(x.sets)) values[k] = v
+          else if (before && !after) for (const k of Object.keys(x.sets)) {   // 还原成该字段自己的默认值
+            const tgt = (allFields || []).find((y) => y.id === k)
+            values[k] = tgt && tgt.default !== undefined ? (Array.isArray(tgt.default) ? [...tgt.default] : tgt.default) : undefined
+          }
+        }
         onChange()
       })
       opts.appendChild(b)
@@ -1941,14 +1967,21 @@ function fieldEl(f, values, onChange) {
     const src = (values[f.source] || [])[0]
     if (!src) host.appendChild(mk("div", { className: "wfhelp", textContent: "先在上面选好数据文件，这里会读出真实列名供你挑选。" }))
     else {
-      // 表头按文件缓存：任一选项一点就整卡重画，不缓存的话每点一下都重发一轮请求，
+      // 表头缓存：任一选项一点就整卡重画，不缓存的话每点一下都重发一轮请求，
       // 且"正在读取表头…"会反复闪一下，看着像卡住了。
-      host.appendChild(mk("div", { className: "wfhelp", textContent: HDR_CACHE.has(src) ? "" : "正在读取表头…" }))
+      // 【键要带 sid】只按文件名缓存的话，会话 A 的 data.csv（列 A/B/C）会被会话 B 的同名
+      // data.csv（列 X/Y）复用 —— 而这个下拉的全部价值就是"列名一定对"。切会话时也会整体清空。
+      const ck = (sessionId || "-") + "|" + src
+      host.appendChild(mk("div", { className: "wfhelp", textContent: HDR_CACHE.has(ck) ? "" : "正在读取表头…" }))
       // 缓存的是【Promise 而非结果】：同一张卡里通常有好几个 columns 字段（分组列/结局列/协变量），
       // 它们同时发起、都还没回来，只缓存结果的话这一批仍会各打一次。缓存 Promise 后合并成一次。
-      if (!HDR_CACHE.has(src))
-        HDR_CACHE.set(src, fetch("api/data/headers?name=" + encodeURIComponent(src) + sidQ()).then((r) => r.json()))
-      HDR_CACHE.get(src).then((j) => {
+      // 【失败不入缓存】否则一次网络抖动之后永远停在"读表头失败"，连重试的机会都没有 ——
+      // 这与 loadWorkflow 那处是同一类错误，别在两个地方各犯一次。
+      if (!HDR_CACHE.has(ck))
+        HDR_CACHE.set(ck, fetch("api/data/headers?name=" + encodeURIComponent(src) + sidQ())
+          .then((r) => r.json())
+          .catch((e) => { HDR_CACHE.delete(ck); throw e }))
+      HDR_CACHE.get(ck).then((j) => {
         host.innerHTML = ""
         if (!j.headers?.length) {
           const inp = mk("input", { type: "text", value: values[f.id] ?? "", placeholder: "手动填列名" })
@@ -2050,6 +2083,10 @@ const ART_TITLE = { evidence: "检索到的文献", retrieval: "全文获取结�
   table: "结果表", figure: "图", doc: "文档", manuscript: "稿件", report: "报告" }
 // 只对这几类做富渲染；其余类型（figure/doc/manuscript/report/table）普通产物卡已经够好，不重复占屏
 const ART_RICH = new Set(["evidence", "retrieval", "refcheck", "review", "integrity", "topics"])
+// 严重度符号：写成 alternation + u 标志，绝不要写成字符类 —— 见 reportCard 里 ① 的说明
+const RED_MARK = /❌|✗|🔴|🛑/u   // ❌ ✗ 🔴 🛑
+const AMBER_MARK = /⚠|🟡/u                     // ⚠ 🟡
+const OK_MARK = /✓|✅/u                              // ✓ ✅
 async function renderArtifacts(list) {
   for (const a of list) {
     if (!ART_RICH.has(a.render)) continue
@@ -2196,12 +2233,26 @@ function reportCard(name, text, kind) {
   //   · "the majority matched" → red（ma**jor**ity）；"Predicted values" → red（P**red**icted）
   //   · 真问题"参考文献 7 的期刊名与 DOI 不匹配" → 灰，不计数
   // 而这个计数在界面上是当结论读的（还决定要不要弹「返工」按钮），把人推去返工一份没问题的稿子。
-  // 所以改成：先看有没有"没问题"的明说，再认符号标记与行首severity标签，其余一律留灰。
+  // 所以改成：只认明确标记（符号 / 行首 severity 标签），其余一律留灰。
+  // 换成"只认明确标记"之后又踩了三个坑，都实测过：
+  // ① emoji 字符类【必须带 u 标志】。`/[❌✗🔴]/` 没有 u 时，星形平面 emoji 的代理对被拆成两个
+  //    字符塞进字符类，类里就含了 \uD83D —— 而 U+1F400–1F7FF 的所有 emoji（📌📊🔍📄…）高位
+  //    代理都是它。实测 `/[❌✗🔴]/.test("📄") === true` → 报告里随手一个 📌 就让整行判红并弹出
+  //    「返工」按钮。这里干脆用 alternation + u 标志，不留字符类。
+  // ② 判之前【先剥掉列表符号与 markdown 粗体】。真实报告最常见的写法是 `- **严重**：…` 和
+  //    `1. 严重：…`，而 `^(\W*)(严重)\s*[:：]` 两种都匹配不上（`**` 不是 `[:：]`，数字不是 `\W`）
+  //    → 主流写法一条都判不出来，卡头显示"N 条"、返工按钮不出现，用户读成"没标出问题"。
+  // ③ 明确的失败标记【优先于】否定短语。否则 `- ❌ 数据无异常检查未执行` 会因为命中"无…异常"判绿。
   const NEG = /(未|没有|无|不存在)(发现|见|有)?[^，。；]{0,6}(严重|重大|问题|错误|异常)|全部(核实)?通过|均(已)?通过|no\s+(critical|major|serious)\s+(issue|problem|error)|all\s+\w+\s+(verified|passed)/i
+  const stripMark = (l) => l.replace(/^\s*([-*•]|\d+[.)]|#{1,6})\s*/, "").replace(/\*\*/g, "").trim()
+  const RED_LABEL = /^(严重|重大|高危|critical|major)\s*[:：]/i
+  const AMBER_LABEL = /^(注意|待核|存疑|轻微|警告|minor|warning)\s*[:：]/i
+  const OK_LABEL = /^(通过|正常|无异常|pass|ok)\s*[:：]/i
   const sev = (l) => {
-    if (/[✓✅]/.test(l) || NEG.test(l)) return "green"
-    if (/[❌✗🔴]/.test(l) || /^(\W*)(严重|重大|高危|critical|major)\s*[:：]/i.test(l)) return "red"
-    if (/[⚠️⚠🟡]/.test(l) || /^(\W*)(注意|待核|存疑|轻微|minor|warning)\s*[:：]/i.test(l)) return "amber"
+    const t = stripMark(l)
+    if (RED_MARK.test(t) || RED_LABEL.test(t)) return "red"
+    if (AMBER_MARK.test(t) || AMBER_LABEL.test(t)) return "amber"
+    if (OK_MARK.test(t) || OK_LABEL.test(t) || NEG.test(t)) return "green"
     return ""
   }
   const items = lines.filter((l) => /^([-*•]|\d+[.)]|#{1,6}\s)/.test(l)).slice(0, 120)
@@ -2252,20 +2303,31 @@ function updateStepsBar(done, cur, steps) {
 // 【为什么只对有 form 的步骤给】不是每一步都值得插卡。像"引用核查"这种没有可勾选参数的步骤，
 // 弹一张空卡只会多一次点击；那种情况退回原来的"下一步建议"气泡即可。
 // 【为什么不阻断】卡片只是个快捷入口，用户完全可以无视它继续打字 —— 与首屏表单同一条铁律。
+const offeredSteps = new Set()   // 本会话已经给过卡的步骤，别每轮重复挂同一张（随会话清空）
 async function offerStepForm(turn) {
   if (!turn?.isConnected || turn.querySelector(".wfcard") || turn.querySelector(".askform")) return false
   if (!sessionId) return false
+  const mySid = sessionId
   let st
-  try { st = await fetch("api/workflow/state?sid=" + encodeURIComponent(sessionId)).then((r) => r.json()) } catch { return false }
+  try { st = await fetch("api/workflow/state?sid=" + encodeURIComponent(mySid)).then((r) => r.json()) } catch { return false }
+  // ★ 所有守卫都要放在动 DOM【之前】：这个 await 期间用户可能已经点了侧栏另一个会话
+  //   （log 已被清空）。先画步骤条再检查的话，会把【上一个会话】的进度条插进新会话的对话区顶部，
+  //   还会把 liveSteps 一起污染成上一个会话的。
+  if (!turn.isConnected || sessionId !== mySid) return false
   if (!st?.state || !st.steps?.length) return false                 // chat 会话 / 没有工作流
   updateStepsBar(st.state.done || [], st.state.cur, st.steps)       // 顺手把步骤条刷到最新（产物反推的进度）
   const done = new Set(st.state.done || [])
-  const next = st.steps.find((s) => !done.has(s.id) && s.form?.length)
+  // 同一步只给一次卡。不然：产物没出现之前这一步一直是"未完成"，之后【每一轮】回复底部都会
+  // 再挂一张一模一样的卡；而 paper 有 7 个带表单的步骤 → 整场对话里「下一步建议」几乎不再出现，
+  // 哪怕用户问的是完全无关的问题。
+  const next = st.steps.find((s) => !done.has(s.id) && s.form?.length && !offeredSteps.has(s.id))
   if (!next) return false
-  if (!turn.isConnected) return false                               // 等回包期间用户切走了会话
+  offeredSteps.add(next.id)
+  const pos = st.steps.findIndex((s) => s.id === next.id) + 1
   const card = buildFormCard({
-    title: "下一步 · " + next.name,
-    sub: next.hint ? next.hint + "（也可以直接在输入框里说，不用非填这张卡）" : "勾选后提交，比打字快；也可以直接在输入框里说。",
+    // 一条 12 步的流水线里突然弹一张卡，不说清是第几步、还剩几步，用户是懵的
+    title: `下一步 · ${next.name}（第 ${pos} 步 / 共 ${st.steps.length} 步）`,
+    sub: (next.hint ? next.hint + "。" : "") + "勾选后提交比打字快；也可以跳过，直接在输入框里说。",
     fields: next.form, steps: null, submitText: "提交并继续",
     seed: st.state.form || {},                                      // 跨步继承：首屏选的数据文件、目标期刊等
     onSubmit: (values) => submitStepForm(st.module, next, values, card),
@@ -2276,14 +2338,19 @@ async function offerStepForm(turn) {
   return true
 }
 async function submitStepForm(modId, step, values, card) {
-  let text = ""
+  let text = "", failed = false
   try {
     const r = await fetch("api/workflow/form", { method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ module: modId, step: step.id, values, sid: sessionId }) })
     if (r.ok) text = (await r.json()).card || ""
-  } catch (_) {}
+    else failed = true
+  } catch (_) { failed = true }
+  // ★ 失败时【保留卡片】。此前无条件先 card.remove() 再判：网络异常或服务端非 200 时，用户填的
+  //   一整页勾选无法恢复，而提示还断言是"没勾选任何内容"——三种原因说成一种。首屏表单那条路
+  //   （startWithForm）本来就是保留的，两处行为要一致。
+  if (failed) { addNote("⚠ 这一步没能提交（后台暂时没响应）——你的勾选还在，可以再点一次「提交并继续」。"); return }
+  if (!text) { card.remove(); addNote("⚠ 这一步一项都没勾——直接在输入框里说就行。"); q.focus(); return }
   card.remove()
-  if (!text) { addNote("⚠ 这一步没勾选任何内容——直接在输入框里说就行。"); q.focus(); return }
   pendingWfCard = text
   await sendMessage("继续下一步：" + step.name)
 }
@@ -2354,7 +2421,8 @@ function sidQ() { return sessionId ? "&sid=" + encodeURIComponent(sessionId) : "
 document.getElementById("new").addEventListener("click", () => {
   detachStream()   // 只退订不终止：原会话若在生成会继续跑，从左侧列表随时切回来看
   sessionId = null; localStorage.removeItem("nm_sid"); log.innerHTML = ""; renderFiles([]); loadUploads(); loadSessions(); zScopeReset(); loadZotLib(); stepsHost = null
-  sessionStarted = false; pendingWfCard = ""; pendingWfForm = null   // 任务卡是一次性的，绝不能漏进下一个会话
+  sessionStarted = false; pendingWfCard = ""; pendingWfForm = null; lastCardText = ""   // 任务卡是一次性的，绝不能漏进下一个会话
+  offeredSteps.clear(); HDR_CACHE.clear()
   // 新对话回到默认模块（chat 可用则 chat，否则首个可用），在欢迎页重新选
   const allowed = MODULES.filter((m) => m.allowed)
   currentModule = allowed.some((m) => m.id === "chat") ? "chat" : (allowed[0]?.id || "chat")
@@ -2453,16 +2521,26 @@ const STI = { pending: "○", running: "○", completed: "✓", error: "✕" }
 // 为什么不再用 GET 直接起轮：① GET 带副作用 + SameSite=Lax → 跨站诱导点击可代发一轮烧额度；
 // ② 长正文塞 URL 会撞 16KB 请求头上限 → 431，且被 SSE 重连逻辑吞成"消息静默消失"。
 async function sendMessage(text) {
-  if (!text) return
-  if (cloudMandatory) { reassertCloudGate(); return }   // 登录闸开着 → 一个字也不该发得出去
-  if (activeES || sending) return   // 已有流在跑，或上一次 start 还没返回（防连点重复发）
+  // ★ 这三条早退必须把待发的任务卡一并丢掉。留着的话，用户【下一条毫不相干的消息】会被拼上
+  //   上一次表单的任务卡（"视同用户明确指令，按它推进即可"），气泡上也会挂出别人的
+  //   「查看我提交的完整设定」。这是"任务卡泄漏"的残余形态，触发条件是 sending/登录闸竞态。
+  const dropCard = () => { pendingWfCard = ""; pendingWfForm = null; lastCardText = "" }
+  if (!text) { dropCard(); return }
+  if (cloudMandatory) { dropCard(); reassertCloudGate(); return }   // 登录闸开着 → 一个字也不该发得出去
+  if (activeES || sending) { dropCard(); return }   // 已有流在跑，或上一次 start 还没返回（防连点重复发）
   if (sessionId) pendingProjectId = null   // 往已有会话里继续发 → 不是「新建对话」，解除项目归入
   const w = log.querySelector(".welcome"); if (w) w.remove()
   clearSugs()   // 已经开口问了 → 上一轮的"下一步"气泡失效，撤掉
   const bubble = add("user", text)
   // 表单提交的那一条：气泡里只有一行摘要（前 4 项），完整设定在任务卡里。挂个可展开的
   // 「查看完整设定」，否则用户提交完就再也看不到自己勾了什么 —— 表单此刻已经从界面上消失了。
-  if (lastCardText) { attachCardDetail(bubble, lastCardText); lastCardText = "" }
+  if (lastCardText) {
+    attachCardDetail(bubble, lastCardText); lastCardText = ""
+    // 「编辑这条消息」在这种气泡上是死按钮：气泡里只是一行摘要，真正发出去的是整张任务卡，
+    // 按气泡文字重发等于把勾选全丢。改不了就别摆在那儿——旁边刚加了「查看完整设定」，
+    // 用户看完发现填错，手会很自然地移到那支铅笔上。
+    bubble.querySelectorAll(".editbtn").forEach((x) => x.remove())
+  }
   sending = true; setStreamingUI(true)   // 立刻进入"生成中"态：POST 往返期间也不许再发
   // 记下发起时的会话：POST 往返期间（冷启动容器时可达数秒）用户仍能点左侧会话列表或"新对话"
   // （sending 只挡住了发消息与编辑，没挡切会话）。回包若无条件覆盖 sessionId，就会出现

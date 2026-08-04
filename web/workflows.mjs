@@ -29,6 +29,10 @@ export function condOk(cond, values) {
   if ("in" in cond) return cond.in.includes(v)
   if ("has" in cond) return Array.isArray(v) && v.includes(cond.has)   // 多选题里勾了某项
   if ("hasNot" in cond) return !Array.isArray(v) || !v.includes(cond.hasNot)
+  // 勾了 exempt 之外的【任何】一项。"只勾了免除项"与"免除项 + 别的"必须分得开 ——
+  // 用 hasNot 表达"只勾了样本量就不用传数据"是错的：那会变成"只要勾了样本量，
+  // 哪怕同时勾了生存分析也不用传数据"，一个没有数据的 KM/Cox 请求就这么放行了。
+  if ("hasOther" in cond) return Array.isArray(v) && v.some((x) => !cond.hasOther.includes(x))
   if ("truthy" in cond) return cond.truthy ? !!v : !v
   return true
 }
@@ -38,6 +42,13 @@ export const visible = (f, values) =>
   condOk(f?.when, values) && (!f?.whenAny || f.whenAny.some((c) => condOk(c, values)))
 /** 是否必填：required 恒真，或 requiredWhen 条件成立（如"勾了数据完整性才必须传数值表"） */
 export const isRequired = (f, values) => !!f?.required || (!!f?.requiredWhen && condOk(f.requiredWhen, values))
+/**
+ * 步骤是不是"可选"。optional 恒可选；optionalUnless 表示"除非该条件成立，否则可选"——
+ * 用于同一步在不同研究设计下的分量不同（回顾性里新颖性裁定可跳过，前瞻性/RCT 里它是必做的
+ * 预注册锁）。既然把它提到了最前，就不能还标"可选"，那等于告诉用户这步能跳。
+ */
+export const isOptional = (s, values) =>
+  !!s?.optional || (!!s?.optionalUnless && !condOk(s.optionalUnless, values))
 
 // ---- 字段类型 ----
 // text/textarea/number/select/multi/bool ：常规控件
@@ -48,7 +59,9 @@ export const isRequired = (f, values) => !!f?.required || (!!f?.requiredWhen && 
 // ★ columns 是 stats/paper 最值钱的一个控件：「列名猜错/写错」是当前最高频的失败模式，
 //   从真实表头下拉能从根上消灭它。source 指向同表单里那个 files 字段的 id。
 
-const LANG = { id: "lang", label: "输出语言", type: "select", default: "zh",
+// section 一旦起了标题，后面的字段就都被视觉上归进去了。所以凡是排在 JOURNAL_FILTER 之后的
+// 字段都要自带一个新 section 来"收尾"，否则"输出语言"会被读成一条文献筛选条件。
+const LANG = { id: "lang", label: "输出语言", type: "select", default: "zh", section: "成稿与输出",
   options: [{ v: "zh", t: "中文" }, { v: "en", t: "English" }] }
 
 // 期刊筛选：一组字段，多个模块复用。**筛的是"检索到的文献发表在什么刊上"，不是"你想投哪本刊"。**
@@ -136,12 +149,14 @@ export const WORKFLOWS = {
           { id: "groupCol", label: "分组列", type: "columns", source: "dataFiles",
             help: "区分组别的那一列，如 治疗组/对照组、手术方式。" },
           { id: "outcomeCol", label: "结局列", type: "columns", source: "dataFiles",
+            requiredWhen: { field: "analyses", hasOther: ["desc"] },
             help: "你要解释或预测的那个结果，如 是否复发、住院天数。" },
+          // 生存分析缺了这两列就根本算不出来 —— 必填，别让用户提交一个注定失败的请求
           { id: "timeCol", label: "随访时间列（生存分析用）", type: "columns", source: "dataFiles",
-            when: { field: "analyses", has: "survival" },
+            when: { field: "analyses", has: "survival" }, required: true,
             help: "从起点到终点事件或末次随访的时长。" },
           { id: "eventCol", label: "终点事件列（生存分析用）", type: "columns", source: "dataFiles",
-            when: { field: "analyses", has: "survival" },
+            when: { field: "analyses", has: "survival" }, required: true,
             help: "1 = 事件发生，0 = 删失。" },
           { id: "covars", label: "需要校正的协变量", type: "columns", source: "dataFiles", multiple: true,
             help: "多因素分析里要一并放进模型的因素，如 年龄、性别、分期。" },
@@ -165,7 +180,10 @@ export const WORKFLOWS = {
             { v: "300", t: "300 dpi（多数期刊最低要求）" }, { v: "600", t: "600 dpi（线条图）" }] },
         ],
         emits: ["fig*.png", "fig*.pdf", "fig*.svg", "figures/*"], render: "figure" },
-      { id: "novelty", name: "新颖性裁定 / 预注册", skill: "novelty-check", optional: true,
+      { id: "novelty", name: "新颖性裁定 / 预注册", skill: "novelty-check",
+        // 回顾性研究里这步可选（已有数据，无法再"采数前预注册"）；前瞻性 / RCT 里它是【必做】的
+        // 预注册锁 —— 既然把它提到了最前，就不能同时标"可选"，那等于说这步可以跳。
+        optionalUnless: { field: "studyType", in: ["prospective", "rct"] },
         // 前瞻性与 RCT：必须在采数前把假设与主分析计划冻住 → 提到最前；回顾性研究已有数据，
         // 无法再"采数前预注册"，这步降级为可选的新颖性裁定（AGENTS.md §三 表下注）。
         first: { field: "studyType", in: ["prospective", "rct"] },
@@ -176,7 +194,8 @@ export const WORKFLOWS = {
             placeholder: "留空则由 AI 依据研究主题自拟检索式" },
           { id: "years", label: "时间范围", type: "select", default: "10", options: [
             { v: "5", t: "近 5 年" }, { v: "10", t: "近 10 年" }, { v: "0", t: "不限" }] },
-          { id: "limit", label: "文献数量上限", type: "number", default: 40, min: 5, max: 200 },
+          { id: "limit", label: "最多检索多少篇", type: "number", default: 40, min: 5, max: 200, unit: "篇",
+            help: "检索阶段的召回上限；后面还会按条件筛，最终纳入的通常少于这个数。" },
         ],
         emits: ["evidence_table.csv", "evidence.md", "refs.bib"], render: "evidence",
         hint: "引言与讨论的文献部分基于本步综述撰写；综述单薄是回退触发点" },
@@ -196,8 +215,8 @@ export const WORKFLOWS = {
           { id: "strength", label: "润色强度", type: "select", default: "standard", options: [
             { v: "light", t: "保守（只动明显 AI 腔）" }, { v: "standard", t: "标准（推荐）" },
             { v: "heavy", t: "激进（重写句式节奏）" }] },
-          { id: "protectRefs", label: "不要改动引用处的文字", type: "bool", default: true,
-            help: "改了引用文字会自动重跑一次引用核查兜底。" },
+          { id: "protectRefs", label: "保持引用处的文字原样不动", type: "bool", default: true,
+            help: "默认保持。关掉的话，润色后会自动把引用重新核一遍兜底。" },
         ],
         emits: ["manuscript_humanized.md", "*_humanized.md"], render: "diff" },
       { id: "review", name: "投稿前自审", skill: "peer-review", gate: true,
@@ -236,7 +255,7 @@ export const WORKFLOWS = {
       { id: "limit", label: "最多检索多少篇", type: "number", default: 50, min: 10, max: 300, unit: "篇",
         help: "指检索阶段的召回上限；后面还会按你的条件筛，最终纳入的通常少于这个数。" },
       ...JOURNAL_FILTER,
-      { id: "length", label: "目标篇幅", type: "select", default: "4000", options: [
+      { id: "length", label: "目标篇幅", type: "select", default: "4000", section: "成稿与输出", options: [
         { v: "2000", t: "约 2000 字（短综述）" }, { v: "4000", t: "约 4000 字（推荐）" },
         { v: "8000", t: "约 8000 字（长篇）" }] },
       { id: "fulltext", label: "尝试下载开放获取全文", type: "bool", default: false,
@@ -313,7 +332,7 @@ export const WORKFLOWS = {
         emits: ["novelty_report.md", "preregistration.md"], render: "report", onFail: "topic" },
       { id: "write", name: "标书成文", skill: "grant-proposal",
         form: [{ id: "sections", label: "要写的章节", type: "multi",
-          default: ["basis", "content", "route", "foundation", "condition"],
+          default: ["basis", "content", "route", "feature", "foundation", "condition"],
           options: [{ v: "basis", t: "立项依据" }, { v: "content", t: "研究内容与目标" },
             { v: "route", t: "研究方案与技术路线" }, { v: "feature", t: "特色与创新" },
             { v: "foundation", t: "研究基础" }, { v: "condition", t: "工作条件" },
@@ -349,7 +368,8 @@ export const WORKFLOWS = {
         { v: "3", t: "近 3 年" }, { v: "5", t: "近 5 年" }, { v: "10", t: "近 10 年" }, { v: "0", t: "不限" }] },
       { id: "limit", label: "最多检索多少篇", type: "number", default: 30, min: 5, max: 200, unit: "篇" },
       ...JOURNAL_FILTER,
-      { id: "fulltext", label: "尝试下载开放获取全文", type: "bool", default: false },
+      { id: "fulltext", label: "尝试下载开放获取全文", type: "bool", default: false, section: "成稿与输出",
+        help: "只下 OA 渠道能拿到的；下不到的会如实列出原因，不会假装拿到了。" },
       { id: "toZotero", label: "把结果推进本机 Zotero", type: "bool", default: false,
         help: "仅在与 Zotero 同机运行时可用；只写题录，不含 PDF 附件。" },
       LANG,
@@ -360,7 +380,7 @@ export const WORKFLOWS = {
       { id: "fulltext", name: "全文获取", skill: "fulltext-retrieval", optional: true,
         when: { field: "fulltext", eq: true },
         emits: ["pdfs/*", "zotero_lib/*", "retrieval_report.json", "manual_needed.txt"], render: "retrieval",
-        hint: "只把真正下到 PDF 的算入小库，没下到的列出原因" },
+        hint: "只把真正下到 PDF 的算进可问答的范围，没下到的逐条列出原因" },
       { id: "rag", name: "基于全文问答", skill: "zotero-library", optional: true,
         when: { field: "mode", eq: "rag" },
         emits: ["zotero_evidence.csv", "rag_*.md"], render: "evidence" },
@@ -385,9 +405,13 @@ export const WORKFLOWS = {
     intake: [
       { id: "dataFiles", label: "数据文件", type: "files",
         // ★ 不能无条件必填：「样本量 / 把握度」是【做研究之前】算要收多少例的，此时根本没有数据。
-        //   之前写死 required 的结果是——设计课题的医生一进来就被"还没填：数据文件"挡住，
+        //   写死 required 的结果是——设计课题的医生一进来就被"还没填：数据文件"挡住，
         //   等于"想算样本量？先去伪造一份数据"。
-        requiredWhen: { field: "analyses", hasNot: "power" },
+        // ★ 但也不能写成 hasNot:"power"：那变成"只要勾了样本量就一律不必填"，于是
+        //   「生存分析 + 样本量」这种很常见的组合（先看现有队列的曲线、顺便算扩样本要多少例）
+        //   会让一个没有任何数据的 KM/Cox 请求静默通过 —— 比过度拦截更危险。
+        //   判据是"除样本量之外还勾了别的吗"。
+        requiredWhen: { field: "analyses", hasOther: ["power"] },
         help: "从左侧「上传数据」里挑。选好后下面的变量映射会自动读出真实表头。只算样本量 / 把握度的话不用传数据。" },
       { id: "hasPHI", label: "数据里含患者身份信息（姓名/住院号/身份证/住址等）", type: "bool", default: false,
         help: "勾上会先做脱敏再分析 —— 未脱敏的患者数据不得进入统计，这是平台的硬性规定。" },
@@ -407,17 +431,18 @@ export const WORKFLOWS = {
         help: "区分组别的那一列，如 治疗组/对照组、手术方式。用于基线表与组间比较。" },
       { id: "outcomeCol", label: "结局列", type: "columns", source: "dataFiles",
         help: "你要解释或预测的那个结果，如 是否复发、住院天数、缓解与否。" },
+      // 这四个是对应分析的必要输入，缺了那一步跑不出来 —— 勾了该分析就必填
       { id: "timeCol", label: "随访时间列（生存分析用）", type: "columns", source: "dataFiles",
-        when: { field: "analyses", has: "survival" },
+        when: { field: "analyses", has: "survival" }, required: true,
         help: "从起点到终点事件或末次随访的时长，如 随访月数。" },
       { id: "eventCol", label: "终点事件列（生存分析用）", type: "columns", source: "dataFiles",
-        when: { field: "analyses", has: "survival" },
+        when: { field: "analyses", has: "survival" }, required: true,
         help: "1 = 事件发生（死亡/复发），0 = 删失（失访或随访结束时仍无事件）。" },
       { id: "testCol", label: "待评价指标列（ROC 用）", type: "columns", source: "dataFiles",
-        when: { field: "analyses", has: "roc" },
+        when: { field: "analyses", has: "roc" }, required: true,
         help: "你想评价诊断效能的那个检测值，如 某标志物浓度、某评分。" },
       { id: "goldCol", label: "金标准列（ROC 用）", type: "columns", source: "dataFiles",
-        when: { field: "analyses", has: "roc" },
+        when: { field: "analyses", has: "roc" }, required: true,
         help: "公认的确诊依据，如 病理结果。1 = 有病，0 = 无病。" },
       { id: "covars", label: "需要校正的协变量", type: "columns", source: "dataFiles", multiple: true,
         help: "多因素分析里要一并放进模型的因素，如 年龄、性别、分期。可多选，也可不选。" },
@@ -459,6 +484,7 @@ export const WORKFLOWS = {
         default: ["refs", "doi", "retracted"],
         options: [{ v: "refs", t: "假引用（文献是否真实存在）" }, { v: "doi", t: "DOI 是否正确" },
           { v: "retracted", t: "是否引用了已撤稿文献" }, { v: "stats", t: "统计陷阱与方法硬伤" },
+          { v: "format", t: "格式与体例（章节结构、图表题注、参考文献格式）" },
           { v: "integrity", t: "数据完整性（需一并上传数值表）" }],
         help: "勾了「数据完整性」就必须把配套的数值表也传上来，否则这一项没法做。" },
       { id: "strict", label: "严格度", type: "select", default: "standard", options: [
@@ -470,7 +496,8 @@ export const WORKFLOWS = {
         when: { field: "checks", has: "refs" },
         emits: ["refcheck_report.md", "reference_check*.md", "reference_check*.csv"], render: "refcheck" },
       { id: "review", name: "方法与统计审校", skill: "peer-review", gate: true,
-        when: { field: "checks", has: "stats" },
+        // 格式与体例也由这一步顺带查（peer-review 的清单里本就含体例）—— 别让选项勾了却没有任何一步走它
+        whenAny: [{ field: "checks", has: "stats" }, { field: "checks", has: "format" }],
         emits: ["review_report.md"], render: "review" },
       { id: "integrity", name: "数据完整性自查", skill: "data-integrity", gate: true,
         when: { field: "checks", has: "integrity" },
@@ -643,7 +670,9 @@ const SKILL_PATH_RE = /\.opencode[/\\]+skills[/\\]+([a-z0-9_-]+)/gi
 // 只读命令不算"调用技能"：agent 常常需要 cat/grep 一下别的技能的 SKILL.md 才能把话讲清楚
 // （综述模块的脚注就是让它告诉用户"系统综述在自由对话"，它顺手 cat 一下那份文档很自然）。
 // 把这些也判成越权会整轮 abort，属于误杀 —— 读文档不产生该技能的产出，不是分权要挡的东西。
-const READONLY_CMD = /^\s*(sudo\s+)?(cat|head|tail|less|more|grep|rg|ls|ll|find|wc|file|stat|md5sum|sha\w*sum|diff)\b/
+// ★ find 不在此列：`find -exec` / `-delete` 是标准的"执行任意命令"入口，不是只读命令。
+//   曾经放进来过，等于给了一条大路。同理不要加 xargs、sh、env、nohup、timeout 这类能带执行的。
+const READONLY_CMD = /^\s*(sudo\s+)?(cat|head|tail|less|more|grep|rg|ls|ll|wc|file|stat|md5sum|sha\w*sum|diff)\b/
 export function gateViolation({ tool, input, skillGate, restricted }) {
   if (!skillGate) return null
   if (tool === "skill" && input?.name && !skillGate.has(input.name)) return input.name
@@ -655,7 +684,9 @@ export function gateViolation({ tool, input, skillGate, restricted }) {
     // ★ 必须【逐段】判，不能拿整条命令的第一个词放行整条：
     //   `cat x.py | python .opencode/skills/nature-figure/y.py` 开头是 cat，整条放行等于白闸。
     //   按管道与分隔符切开，只有"这一段自身是只读命令"才跳过这一段。
-    for (const seg of cmd.split(/[|;\r\n]|&&/)) {
+    // 分隔符要把单个 & （后台执行）也算上 —— 只写 && 的话 `ls & python …/别的技能/x.py` 整条被
+    // 当成一段、开头是 ls 就放行了。$( ) 与反引号里的命令同样切出来单独判。
+    for (const seg of cmd.split(/[|;&\r\n`]|\$\(|\)/)) {
       if (READONLY_CMD.test(seg)) continue
       // matchAll 按规范会克隆正则，不会推进原对象的 lastIndex，故无需手动归零
       for (const m of seg.matchAll(SKILL_PATH_RE))
@@ -675,10 +706,14 @@ export function workflowFor(mod, values) {
     intakeTitle: w.intakeTitle,
     intake: w.intake,
     footnote: w.footnote || null,
+    // 条件字段（when / whenAny / first）必须【一个不落】地下发：前端的 trimSteps 要用它们
+    // 重算出与 stepsFor 完全相同的步骤集。漏掉任何一个，那一半条件在前端就恒为"成立"，
+    // 界面显示的流程与实际执行的流程就会不一致 —— 而这种错从界面上完全看不出来。
     steps: (values ? stepsFor(mod, values) : w.steps).map((s) => ({
-      id: s.id, name: s.name, skill: s.skill, gate: !!s.gate, optional: !!s.optional,
+      id: s.id, name: s.name, skill: s.skill, gate: !!s.gate,
+      optional: values ? isOptional(s, values) : !!s.optional,
       hint: s.hint || null, form: s.form || null, render: s.render || null, emits: s.emits || null,
-      when: s.when || null, first: s.first || null,
+      when: s.when || null, whenAny: s.whenAny || null, first: s.first || null, onFail: s.onFail || null,
     })),
   }
 }
@@ -687,7 +722,7 @@ export function workflowFor(mod, values) {
 export function pipelineLine(mod, values) {
   const steps = stepsFor(mod, values)
   if (!steps.length) return ""
-  const chain = steps.map((s) => s.name + (s.optional ? "(可选)" : "") + (s.gate ? "(闸)" : "")).join(" → ")
+  const chain = steps.map((s) => s.name + (isOptional(s, values) ? "(可选)" : "") + (s.gate ? "(闸)" : "")).join(" → ")
   const gates = steps.filter((s) => s.gate)
   const gateTxt = gates.length
     ? `质量闸：${gates.map((g) => `${g.name}（不过则回退到「${steps.find((x) => x.id === g.onFail)?.name || "上游相应步骤"}」返工）`).join("；")}。`
