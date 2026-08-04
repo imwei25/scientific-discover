@@ -4,9 +4,12 @@
 # 分层思路：本机网关 → 外网 → DNS(系统+公共对照) → 直连IP:443(绕开DNS) → TLS证书 → HTTP。
 # 每层只依赖上一层，第一处断掉的层就是结论。
 param(
-  [string]$Domain   = 'weigu.duckdns.org',
-  # 服务器公网 IP：用来绕开域名解析直测线路（duckdns 在部分国内网络会被污染/阻断，
-  # 不能拿它当唯一入口）。服务器迁移换 IP 后这里要同步改。
+  [string]$Domain   = 'niuma.tellgen.com',
+  # 服务器公网 IP：用来绕开域名解析直测线路（域名可能被污染/按名封禁，不能拿它当唯一入口）。
+  # 服务器迁移换 IP 后这里要同步改。
+  #
+  # 旧域名 weigu.duckdns.org 已于 2026-08-04 确认【被按域名封禁】（duckdns.org 后缀整片），
+  # 症状正是本脚本 [5/6] 的"TLS 握手失败"。要复查那个域名：-Domain weigu.duckdns.org
   [string]$ServerIp = '47.86.27.60'
 )
 $ErrorActionPreference = 'Continue'

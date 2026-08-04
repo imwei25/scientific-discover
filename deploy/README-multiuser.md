@@ -100,16 +100,20 @@ scripts/user-add.sh bob
 
 ## 功能模块（封装的技能入口）与每用户授权
 
-把三个高频技能封装成「模块」，加上不设限的自由对话，共四个模块；**用户在欢迎页选模块开会话，会话在创建时绑定模块、之后不可改**（换功能=新开会话）：
+把常用科研场景封装成「模块」，加上不设限的自由对话，共八个模块；**用户在登录后的工作台（或欢迎页）选模块开会话，会话在创建时绑定模块、之后不可改**（换功能=新开会话）。每个模块放行一**组**技能：首个是主技能（决定模块是否可用），其余是这条流水线绕不开的配套技能：
 
-| 模块 id | 名称 | 绑定技能 | 行为 |
-|---|---|---|---|
-| `chat` | 自由对话 | —（不限） | 现状：AGENTS.md 完整路由 / 全部技能 |
-| `grant` | 标书撰写 | `grant-proposal` | 只许调用该技能 |
-| `refcheck` | 文献真实性检查 | `reference-check` | 只许调用该技能 |
-| `humanize` | 去AI味写作 | `humanize-academic` | 只许调用该技能 |
+| 模块 id | 名称 | 放行技能（首个=主技能） |
+|---|---|---|
+| `chat` | 自由对话 | —（不限，AGENTS.md 完整路由 / 全部技能） |
+| `review` | 综述撰写 | `literature-review`、`search-lit`、`fulltext-retrieval`、`reference-check`、`render-docx`、`render-pdf-doc` |
+| `grant` | 基金申报 | `grant-proposal`、`research-scan`、`topic-selection`、`novelty-check`、`peer-review`、`render-pdf-doc`、`render-docx` |
+| `paper` | SCI 论文 | `write-paper`、`literature-review`、`reference-check`、`peer-review`、`humanize-academic`、`render-docx` |
+| `stats` | 数据统计与分析 | `data-analysis`、`clinical-stats`、`nature-figure`、`deidentify`、`data-integrity` |
+| `litread` | 文献研读 | `search-lit`、`fulltext-retrieval`、`literature-review`、`zotero-library`、`deep-research`、`research-scan` |
+| `refcheck` | 文稿核查与审校 | `reference-check`、`peer-review`、`data-integrity` |
+| `humanize` | 文章润色 | `humanize-academic`、`render-docx`、`render-pdf-doc` |
 
-- **强制在网关而非提示词**：受限模块除了注入模块专用前言，容器网关（`web/server.mjs`）还在 opencode 事件流里校验技能调用——一旦调了绑定技能之外的技能，**立即 abort 本轮**并回「模块限制」报错；同时该轮的 `session.prompt` 传 `tools:{task:false}` 禁掉子代理（子会话里的技能调用逃逸出主会话事件过滤，索性不让开）。会话↔模块绑定持久化在 `ocdata` 卷的 `module-map.json`，容器重建不丢。
+- **强制在网关而非提示词**：受限模块除了注入模块专用前言，容器网关（`web/server.mjs`）还在 opencode 事件流里校验技能调用——一旦调了本模块技能组之外的技能，**立即 abort 本轮**并回「模块限制」报错；同时该轮的 `session.prompt` 传 `tools:{task:false}` 禁掉子代理（子会话里的技能调用逃逸出主会话事件过滤，索性不让开）。会话↔模块绑定持久化在 `ocdata` 卷的 `module-map.json`，容器重建不丢。
 - **每用户授权**：`users/<name>.env` 里 `MODULES=chat,grant,...`（逗号分隔；**空/缺省=全部模块**，兼容老用户）。`render-compose.sh` 把它注入容器 env `ALLOWED_MODULES`；未授权的模块在前端置灰、后端拒绝（含续聊绑定了已收权模块的老会话）。非空但全非法的值容器侧 fail-closed 到仅 `chat`。
 - **改授权**：`scripts/user-modules.sh <name> <列表|all>`（校验模块 id → 改 env → 重渲染 → **重建**容器即时生效，同 `user-tier.sh` 范式）；或在 `/admin` 管理台用户表勾选模块后点保存。
 - **同步维护点**（加新模块要改齐三处）：`web/server.mjs` 的 `MODULE_DEFS`、`deploy/manager.mjs` 的 `MODULE_TABLE`、`scripts/user-modules.sh` 的 `ALL_MODULES`。
@@ -118,7 +122,7 @@ scripts/user-add.sh bob
 
 管理员还能管**每个用户在自由对话里能用哪些技能**：`users/<name>.env` 的 `SKILLS=`（逗号分隔技能目录名；**空/缺省=全部技能**）→ `render-compose.sh` 注入容器 env `ALLOWED_SKILLS`。
 
-- **生效语义**（enforcement 同模块闸，在容器网关）：自由对话会话注入"未开通技能"前言（agent 规划流水线时直接跳过并告知用户），且事件流强制校验——调用白名单外技能**立即中止本轮**；`env-setup` 恒许可（基础设施）。受限模块（标书/查引用/去AI味）的绑定技能被收权时，**该模块整体不可用**（前端隐藏、后端 403）。
+- **生效语义**（enforcement 同模块闸，在容器网关）：自由对话会话注入"未开通技能"前言（agent 规划流水线时直接跳过并告知用户），且事件流强制校验——调用白名单外技能**立即中止本轮**；`env-setup` 恒许可（基础设施）。受限模块的**主技能**被收权时，**该模块整体不可用**（前端隐藏、后端 403）；组内配套技能被收权时，只是该技能在本模块里也调不了。
 - **技能清单以 `.opencode/skills/` 目录为唯一事实来源**（含 `SKILL.md` 的子目录），加新技能无需改任何清单代码；管理台的中文标签在 `manager.mjs` 的 `SKILL_LABELS`（没配标签回落目录名）。
 - **改白名单**：`scripts/user-skills.sh <name> <列表|all>`（`all`=清除限制；`--list` 列全部技能 id；校验→改 env→重建容器），或 `/admin` 用户表「技能」列点**编辑**弹窗勾选。
 - **物理隔离（最硬的一层）**：`SKILLS` 受限用户的容器用 **tmpfs 遮蔽镜像内技能目录 + 白名单技能逐个只读回挂**（`render-compose.sh` 生成）——未开通的技能在容器里**物理不存在**：read/bash/glob 读不到、opencode 启动扫描不注册、技能列表里不出现，连"徒手跑技能脚本"的 shell 逃逸面也一并堵掉。网关的调用闸与前言仍保留（防御纵深 + 受限模块会话仍需要）。

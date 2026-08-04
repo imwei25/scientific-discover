@@ -1,7 +1,20 @@
 # /etc/caddy/Caddyfile —— 唯一对公网开放的东西。
-# 把 example.duckdns.org 换成你的域名；Caddy 会自动签发/续期证书。
+# 把 example.com 换成你的域名；Caddy 会自动签发/续期证书。
+#
+# 【别用免费动态 DNS 域名】duckdns.org / no-ip / 3322 / f3322 这一类在运营商与单位网络里
+# 是【按域名整片封禁】的。2026-08-04 实测（scripts/net-diagnose/probe-sni.ps1）：
+#   · 打本机 IP 的 80 端口，Host 写 weigu.duckdns.org → 立刻 RST；写别的域名 → 正常 308
+#   · 大小写、带尾点、换个二级域名（x.duckdns.org）照样 RST → 匹配的是 duckdns.org 后缀
+#   · 把同样的 Host 打到一台【无关服务器】也 RST → 拦的是域名字符串，与我们的 IP 无关
+# 严的网络（带审计的单位网）连 TLS 的 SNI 一起匹配，表现就是 443 能连上、ClientHello 一发就被
+# 掐断。换二级域名没用，必须彻底离开这类免费动态 DNS；也别挑 .top/.xyz/.tk 这种低信誉 TLD。
+#
+# 【换域名过渡期：两个域名并存】站点地址写成逗号分隔即可，Caddy 会各签一张证书，
+# 老客户端（cloud.json 里写死旧地址的桌面版）不断线，等都迁完再把旧的删掉：
+#     旧域名, 新域名 {
+# setup.sh 的 DOMAIN 也支持逗号分隔：DOMAIN="旧域名, 新域名" sudo -E deploy-auth/setup.sh
 
-example.duckdns.org {
+example.com {
 	encode zstd gzip
 
 	# 上传体积上限：默认留小（桌面客户端平时不往服务器传大文件），只有确实要传大件的
@@ -78,3 +91,6 @@ example.duckdns.org {
 
 # fail2ban 的 caddy-login jail 认的是 access.log 里 /admin/api/login 与
 # /api/auth/login 的 401。改路径要同步改 /etc/fail2ban/filter.d/caddy-login.conf。
+#
+# 改完必须先 `caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile` 再
+# `systemctl reload caddy`；加了新域名后头几十秒是在签证书，此时访问新域名会短暂报错，属正常。

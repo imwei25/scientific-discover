@@ -5,7 +5,8 @@
 # 幂等：重复跑不会覆盖已有的 /etc/sci-auth.env 与库，只补齐缺的部分。
 #
 # 用法：sudo deploy-auth/setup.sh
-#      DOMAIN=xxx.duckdns.org sudo -E deploy-auth/setup.sh    # 顺便写 Caddyfile
+#      DOMAIN=xxx.example.com sudo -E deploy-auth/setup.sh     # 顺便写 Caddyfile
+#      DOMAIN="旧域名, 新域名" sudo -E deploy-auth/setup.sh      # 换域名过渡期：两个并存，各签一张证书
 # ============================================================================
 set -euo pipefail
 [ "$(id -u)" = "0" ] || { echo "!! 请用 root 跑（sudo）" >&2; exit 1; }

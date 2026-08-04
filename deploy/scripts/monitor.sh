@@ -12,7 +12,7 @@ set -uo pipefail
 CONF=/etc/sci-monitor.conf
 [ -f "$CONF" ] && . "$CONF"
 WECOM_WEBHOOK="${WECOM_WEBHOOK:-}"
-DOMAIN="${DOMAIN:-weigu.duckdns.org}"
+DOMAIN="${DOMAIN:-niuma.tellgen.com}"
 DISK_PCT="${DISK_PCT:-85}"                 # 根分区使用率阈值 %
 SWAP_PCT="${SWAP_PCT:-70}"                 # swap 使用率阈值 %
 COST_USER="${COST_USER_USD:-5}"            # 单用户今日成本阈值 USD

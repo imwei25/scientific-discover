@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>登录 · Niuma Research</title>
+<title>登录 · Niuma Science</title>
 <meta name="theme-color" content="#010101" />
 <!-- Login page fonts（与官方站一致；断网时回退到系统衬线/无衬线，页面照常可用） -->
 <link rel="preconnect" href="https://fonts.googleapis.com" />
@@ -31,25 +31,10 @@
 
   .wrap { position: relative; z-index: 10; display: flex; flex-direction: column; min-height: 100vh; }
 
-  /* ---- 顶栏 ---- */
-  nav { display: flex; align-items: center; justify-content: space-between; padding: 28px 40px; z-index: 20; }
+  /* ---- 顶栏：只留品牌。此前那排 Research/Database/Skills/About 与 Try it now 都是死链，
+     点了什么也不会发生 —— 登录页上"看着能点却点不动"的东西一律不留。 ---- */
+  nav { display: flex; align-items: center; padding: 28px 40px; z-index: 20; }
   .brand { font-weight: 300; font-size: 12px; letter-spacing: .3em; text-transform: uppercase; color: #fff; white-space: nowrap; }
-  .nav-links { display: flex; gap: 36px; align-items: center; }
-  .nav-links a {
-    font-weight: 300; font-size: 11px; letter-spacing: .2em; text-transform: uppercase;
-    color: rgba(255,255,255,.68); text-decoration: none; transition: color .3s ease;
-  }
-  .nav-links a:hover { color: #fff; }
-  .nav-right { display: flex; align-items: center; gap: 16px; }
-  .try-btn {
-    background: transparent; border: 1px solid rgba(255,255,255,.28); border-radius: 999px;
-    color: rgba(255,255,255,.8); font-family: var(--sans); font-weight: 300; font-size: 11px;
-    letter-spacing: .18em; text-transform: uppercase; padding: 7px 20px; cursor: pointer; white-space: nowrap;
-    transition: background .22s ease, border-color .22s ease, color .22s ease;
-  }
-  .try-btn:hover { background: rgba(255,255,255,.08); border-color: rgba(255,255,255,.5); color: #fff; }
-  .hamburger { display: none; background: none; border: none; color: #fff; cursor: pointer; padding: 0; align-items: center; }
-  .hamburger svg { width: 24px; height: 24px; stroke: currentColor; stroke-width: 1.6; fill: none; }
 
   /* ---- 主视觉 ---- */
   .hero { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center;
@@ -97,8 +82,6 @@
   /* ---- 响应式：窄屏收起导航，登录框回到底部居中 ---- */
   @media (max-width: 767px) {
     nav { padding: 22px 24px; }
-    .nav-links, .try-btn { display: none; }
-    .hamburger { display: flex; }
     .hero { margin-top: -60px; }
     form.login { position: fixed; top: auto; bottom: 40px; right: 0; left: 0; transform: none;
       align-items: center; }
@@ -114,24 +97,12 @@
 
   <div class="wrap">
     <nav>
-      <span class="brand">Niuma Research</span>
-      <div class="nav-links">
-        <a href="#">Research</a>
-        <a href="#">Database</a>
-        <a href="#">Skills</a>
-        <a href="#">About</a>
-      </div>
-      <div class="nav-right">
-        <button type="button" class="try-btn" id="try">Try it now</button>
-        <button type="button" class="hamburger" aria-label="Toggle menu">
-          <svg viewBox="0 0 24 24"><path d="M3 6h18M3 12h18M3 18h18"/></svg>
-        </button>
-      </div>
+      <span class="brand">Niuma Science</span>
     </nav>
 
     <div class="hero">
       <h1><div>AI-POWERED</div><div>MEDICAL RESEARCH</div><div>REIMAGINED</div></h1>
-      <p>250+ Research Skills · 50+ Medical Databases<br>Your all-in-one AI platform for medical science.</p>
+      <p>文献研读 · 综述撰写 · 基金申报 · SCI 论文 · 数据统计与分析</p>
     </div>
   </div>
 
@@ -148,8 +119,6 @@
   const pw = document.getElementById('pw');
   const err = document.getElementById('err');
   const go = document.getElementById('go');
-
-  document.getElementById('try').onclick = () => user.focus();
 
   function fail(msg) {
     err.textContent = msg; err.classList.add('show');

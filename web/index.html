@@ -63,7 +63,7 @@
   .sb-toggle:hover { color: var(--cyan); border-color: var(--cyan); }
   .sb-toggle .ic { width: 16px; height: 16px; }
   .sb-title { flex: 1; font-size: 13px; font-weight: 600; color: #334153; white-space: nowrap; overflow: hidden; }
-  body:not(.sessbar-open) .sb-title, body:not(.sessbar-open) #refreshSess, body:not(.sessbar-open) #sessions { display: none; }
+  body:not(.sessbar-open) .sb-title, body:not(.sessbar-open) #refreshSess, body:not(.sessbar-open) #selModeBtn, body:not(.sessbar-open) #sessions { display: none; }
   .sess-del { position: absolute; right: 6px; top: 50%; transform: translateY(-50%); width: 22px; height: 22px; display: grid; place-items: center; color: var(--faint); border-radius: 5px; opacity: 0; transition: opacity .12s, color .12s, background .12s; }
   .sess:hover .sess-del { opacity: 1; }
   .sess-del:hover { color: var(--rose); background: rgba(251,113,133,.12); }
@@ -197,6 +197,7 @@
   .mini { display: inline-flex; padding: 3px 8px; color: var(--muted); background: #eef2f8; border: 1px solid var(--line-hi); border-radius: 7px; }
   .mini .ic { width: 14px; height: 14px; }
   .mini:hover { color: var(--cyan); border-color: var(--cyan); }
+  .mini.on { color: #fff; background: var(--cyan); border-color: var(--cyan); }
 
   /* recent sessions */
   #sessions { display: flex; flex-direction: column; gap: 6px; flex: 1; min-height: 0; overflow-y: auto; }
@@ -220,10 +221,24 @@
   .sess-act:hover { color: var(--cyan); background: rgba(30,159,230,.1); }
   .sess-act.del:hover { color: var(--rose); background: rgba(239,68,68,.12); }
   .sess-act.on { color: var(--cyan); opacity: 1; }         /* 已钉 */
-  /* 到期徽标 */
-  .sess .exp { display: inline-block; margin-left: 6px; font-size: 11px; padding: 0 5px; border-radius: 5px; background: #eef2f8; color: var(--muted); }
-  .sess .exp.soon { background: rgba(217,119,6,.14); color: #b45309; }
-  .sess .exp.perm { background: rgba(22,163,74,.12); color: #15803d; }
+  /* 批量勾选删除：进入选择模式后每行长出复选框，点行=勾选而非打开 */
+  #selBar { display: none; align-items: center; gap: 6px; font-size: 12px; background: #eef2f8; border: 1px solid var(--line); border-radius: var(--r-sm); padding: 6px 8px; }
+  body.sel-mode #selBar { display: flex; }
+  body:not(.sessbar-open) #selBar { display: none !important; }
+  #selBar .sel-n { flex: 1; color: var(--muted); font-variant-numeric: tabular-nums; }
+  #selBar button { font: inherit; font-size: 11px; padding: 2px 8px; border-radius: 5px; border: 1px solid var(--line-hi); background: #fff; color: var(--muted); cursor: pointer; }
+  #selBar button:hover { color: var(--cyan); border-color: var(--cyan); }
+  #selBar button.danger { color: var(--rose); border-color: rgba(239,68,68,.45); }
+  #selBar button.danger:hover { background: rgba(239,68,68,.1); }
+  #selBar button:disabled { opacity: .45; cursor: not-allowed; }
+  .sess .ck { display: none; position: absolute; left: 8px; top: 50%; transform: translateY(-50%); width: 15px; height: 15px; border: 1.5px solid var(--line-hi); border-radius: 4px; background: #fff; color: #fff; }
+  .sess .ck .ic { width: 11px; height: 11px; stroke-width: 3; opacity: 0; }
+  body.sel-mode #sessions .sess { padding-left: 32px; padding-right: 12px; }
+  body.sel-mode .sess .ck { display: grid; place-items: center; }
+  body.sel-mode .sess .sess-acts { display: none; }
+  .sess.picked { border-color: var(--cyan); background: rgba(56,189,248,.09); }
+  .sess.picked .ck { background: var(--cyan); border-color: var(--cyan); }
+  .sess.picked .ck .ic { opacity: 1; }
   /* 项目分组 */
   .pgroup { margin-bottom: 4px; }
   .pghead { display: flex; align-items: center; gap: 5px; padding: 5px 6px; border-radius: var(--r-sm); cursor: pointer; color: #334153; font-size: 12px; font-weight: 600; }
@@ -250,19 +265,6 @@
   body.sessbar-open #newProject { display: flex; }
   #newProject:hover { color: var(--cyan); border-color: var(--cyan); }
   #newProject .ic { width: 14px; height: 14px; }
-  /* 临期提醒条 */
-  #expireReminder { display: none; font-size: 12px; background: rgba(217,119,6,.1); border: 1px solid rgba(217,119,6,.35); color: #92400e; border-radius: var(--r-sm); padding: 8px 10px; }
-  body:not(.sessbar-open) #expireReminder { display: none !important; }
-  #expireReminder.show { display: block; }
-  #expireReminder .er-top { display: flex; align-items: center; gap: 6px; font-weight: 600; }
-  #expireReminder .er-top .ic { width: 14px; height: 14px; flex: none; }
-  #expireReminder .er-x { margin-left: auto; cursor: pointer; opacity: .6; }
-  #expireReminder .er-x:hover { opacity: 1; }
-  #expireReminder .er-list { margin-top: 6px; display: flex; flex-direction: column; gap: 4px; }
-  #expireReminder .er-item { display: flex; align-items: center; gap: 6px; }
-  #expireReminder .er-item .er-t { flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  #expireReminder .er-keep { flex: none; font-size: 11px; color: var(--cyan); cursor: pointer; border: 1px solid rgba(30,159,230,.4); border-radius: 4px; padding: 1px 6px; background: #fff; }
-  #expireReminder .er-keep:hover { background: rgba(30,159,230,.1); }
 
   /* upload dropzone */
   #up { display: none; }
@@ -463,8 +465,78 @@
      此前"必须登录"只是在完整的聊天界面上盖一个不可关的弹窗：用户仍看得见历史、侧栏、上传区，
      壳里点顶栏「退出登录」或探测失败落到无闸状态时，看到的就是一个能翻能点的聊天界面。
      锁上时整个应用壳不渲染，只留登录窗 —— 这才叫"停在登录页"。 */
-  body.locked > *:not(#cloudModal) { display: none !important; }
+  body.locked > *:not(#cloudModal):not(#loginStage) { display: none !important; }
   body.locked #cloudModal { background: transparent; backdrop-filter: none; }
+  /* ---- 登录闸的外观 = 登录页（login.html）那一套：全屏视频 + 压暗 + 衬线主视觉 + 玻璃胶囊输入 ----
+     打包版没有独立的登录页（本机免 LAN 登录，云端账号闸就在这个弹窗里），所以把这个弹窗
+     在"必须登录/必须改密"状态下整块换成登录页的样子，两种形态的第一眼保持一致。
+     只在 body.locked 下生效：查看账号（info 态）仍是普通的浅色弹窗，不动。 */
+  #cloudModal .modal-card { max-width: 400px; }
+  #loginStage { display: none; }
+  body.locked #loginStage { display: block; position: fixed; inset: 0; z-index: 60; background: #010101; overflow: hidden; }
+  #loginStage video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; object-position: center; }
+  #loginStage .lg-veil { position: absolute; inset: 0;
+    background: radial-gradient(ellipse 80% 80% at 50% 50%, rgba(1,1,1,.08) 0%, rgba(1,1,1,.5) 100%); }
+  #loginStage .lg-brand { position: absolute; top: 28px; left: 40px; font-size: 12px; font-weight: 300;
+    letter-spacing: .3em; text-transform: uppercase; color: #fff; }
+  #loginStage .lg-hero { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center;
+    justify-content: center; text-align: center; gap: 20px; padding: 0 20px; margin-top: -28vh; }
+  #loginStage .lg-hero h1 { margin: 0; font-family: 'Garamond', 'Times New Roman', serif; font-weight: 400;
+    font-size: clamp(32px, 6.4vw, 84px); line-height: 1.08; letter-spacing: -.01em; color: #fff; }
+  #loginStage .lg-hero p { margin: 0; font-size: clamp(12px, 1.6vw, 15px); font-weight: 300; color: rgba(255,255,255,.58); }
+  /* 弹窗本体：靠右悬浮的一列玻璃胶囊（窄屏回到底部居中）。
+     几何照抄 login.html 的 form.login —— top:72% + 右侧 14%：主视觉在上、胶囊在下，
+     两者靠【纵向】错开而不是靠窗口够宽。垂直居中那版在 1000px 上下的窗口里会和标题叠在一起。 */
+  body.locked #cloudModal { display: block; padding: 0; }
+  body.locked #cloudModal .modal-card { position: fixed; top: 72%; right: 14%; transform: translateY(-50%);
+    width: auto; max-width: none; max-height: 92vh; overflow-y: auto; background: transparent; border: 0;
+    border-radius: 0; box-shadow: none; }
+  body.locked #cloudModal .modal-head { border: 0; padding: 0 0 12px; justify-content: flex-end; }
+  body.locked #cloudModal .modal-title { color: rgba(255,255,255,.72); font-size: 11px; font-weight: 400;
+    letter-spacing: .22em; text-transform: uppercase; }
+  body.locked #cloudModal .modal-body { padding: 0; display: flex; flex-direction: column; align-items: flex-end; }
+  /* 各面板自己也要右对齐：否则面板被里面的提示文字撑到 300px 宽，240px 的输入胶囊在它里面
+     靠左，就和按钮差出 60px（按钮是按面板右边缘对齐的）。 */
+  body.locked #cloudModal #cloudPaneLogin,
+  body.locked #cloudModal #cloudPanePw { display: flex; flex-direction: column; align-items: flex-end; }
+  body.locked #cloudModal .mm-field { margin: 0 0 10px; width: 240px; }
+  body.locked #cloudModal .mm-field > span { color: rgba(255,255,255,.4); font-size: 10px; font-weight: 400;
+    letter-spacing: .18em; text-transform: uppercase; margin: 0 0 5px 16px; }
+  body.locked #cloudModal .mm-input { width: 240px; padding: 11px 20px; border-radius: 999px;
+    background: rgba(4,7,10,.72); backdrop-filter: blur(16px) saturate(1.2); -webkit-backdrop-filter: blur(16px) saturate(1.2);
+    border: 1px solid rgba(255,255,255,.1); box-shadow: 0 2px 16px rgba(0,0,0,.4);
+    color: rgba(255,255,255,.9); font-size: 13px; }
+  body.locked #cloudModal .mm-input:focus { border-color: rgba(255,255,255,.24); box-shadow: 0 2px 16px rgba(0,0,0,.4); }
+  body.locked #cloudModal .mm-hint, body.locked #cloudModal .mm-msg { max-width: 300px; text-align: right; }
+  body.locked #cloudModal .mm-hint { color: rgba(255,255,255,.42); }
+  body.locked #cloudModal .mm-msg.info { color: rgba(255,255,255,.62); }
+  body.locked #cloudModal .mm-msg.ok { color: #7ee0a8; }
+  body.locked #cloudModal .mm-msg.err { color: #f08a7a; }
+  body.locked #cloudModal .mm-actions { justify-content: flex-end; }
+  body.locked #cloudModal .mm-btn.primary { width: 240px; padding: 11px 20px; border-radius: 999px;
+    background: rgba(4,7,10,.72); backdrop-filter: blur(16px) saturate(1.2); -webkit-backdrop-filter: blur(16px) saturate(1.2);
+    border: 1px solid rgba(255,255,255,.14); color: rgba(255,255,255,.85);
+    font-size: 11px; font-weight: 400; letter-spacing: .22em; text-transform: uppercase; }
+  body.locked #cloudModal .mm-btn.primary:hover:not(:disabled) { background: rgba(4,7,10,.92); border-color: rgba(255,255,255,.28); color: #fff; filter: none; }
+  /* 窄屏：胶囊回到底部居中，主视觉整体上移（与 login.html 的窄屏规则一致） */
+  @media (max-width: 767px) {
+    #loginStage .lg-brand { top: 22px; left: 24px; }
+    body.locked #cloudModal .modal-card { top: auto; bottom: 32px; right: 0; left: 0; transform: none;
+      display: flex; flex-direction: column; align-items: center; }
+    body.locked #cloudModal .modal-head { justify-content: center; }
+    body.locked #cloudModal .modal-body { align-items: center; }
+    body.locked #cloudModal #cloudPaneLogin,
+    body.locked #cloudModal #cloudPanePw { align-items: center; }
+    body.locked #cloudModal .mm-field > span { text-align: center; margin-left: 0; }
+    body.locked #cloudModal .mm-actions { width: 240px; justify-content: center; }
+    body.locked #cloudModal .mm-hint, body.locked #cloudModal .mm-msg { text-align: center; }
+  }
+  /* 矮窗口（比如把桌面版窗口拉扁）：主视觉缩一号并让出上方空间，别把胶囊挤出屏幕 */
+  @media (max-height: 620px) {
+    #loginStage .lg-hero { margin-top: -22vh; gap: 12px; }
+    #loginStage .lg-hero h1 { font-size: clamp(24px, 6vh, 52px); }
+    #loginStage .lg-hero p { font-size: 12px; }
+  }
   .modal-card { width: 100%; max-width: 470px; background: #fff; border: 1px solid var(--line); border-radius: var(--r-lg); box-shadow: 0 20px 60px rgba(30,50,90,.25); overflow: hidden; animation: rise .18s ease; }
   .modal-head { display: flex; align-items: center; justify-content: space-between; padding: 14px 18px; border-bottom: 1px solid var(--line); }
   .modal-title { display: inline-flex; align-items: center; gap: 8px; font-size: 14px; font-weight: 700; color: var(--text); }
@@ -555,6 +627,7 @@
       <span id="ntDot" class="dotmark" hidden></span>
       <div id="ntPanel" class="ntpanel"></div>
     </div>
+    <button id="wsBtn" class="hbtn" type="button" title="模块工作台（换个功能开新会话）"></button>
     <button id="pwBtn" class="hbtn" type="button" title="修改密码"></button>
     <button id="logoutBtn" class="hbtn" type="button" title="退出登录"></button>
     <div class="status"><span class="dot"></span>在线</div>
@@ -575,9 +648,16 @@
       <button id="sessToggle" class="sb-toggle" type="button" title="最近会话"></button>
       <span class="sb-title">会话与项目</span>
       <button id="newProjBtn" class="mini" type="button" title="新建项目"></button>
+      <button id="selModeBtn" class="mini" type="button" title="批量选择（勾选多个会话一次删除）"></button>
       <button id="refreshSess" class="mini" type="button" title="刷新列表"></button>
     </div>
-    <div id="expireReminder"></div>
+    <!-- 批量删除操作条：只在批量选择模式下出现 -->
+    <div id="selBar">
+      <span class="sel-n">已选 0 个</span>
+      <button id="selAll" type="button">全选</button>
+      <button id="selDel" class="danger" type="button">删除</button>
+      <button id="selExit" type="button">退出</button>
+    </div>
     <button id="newProject" type="button"></button>
     <div id="sessions"><span class="hint">加载中…</span></div>
   </div>
@@ -696,8 +776,23 @@
     </div>
   </div>
 </div>
+<!-- 登录闸的背景板：只在 body.locked（必须登录/必须改密）时显示，见上面 #loginStage 那段 CSS。
+     视频取自登录页同一个地址；断网/取不到时就是纯黑底，登录照常可用。 -->
+<div id="loginStage">
+  <!-- src 是懒加载的（见 ensureLoginStage）：已登录的用户根本看不到这一屏，不该为它付流量 -->
+  <video autoplay muted loop playsinline preload="none"
+    data-src="https://oss-crm-test-tellgen.oss-cn-shanghai.aliyuncs.com/videos/hf_20260619_191346_9d19d66e-86a4-47f7-8dc6-712c1788c3b2_1783489695679.mp4"></video>
+  <div class="lg-veil"></div>
+  <div class="lg-brand">Niuma Science</div>
+  <div class="lg-hero">
+    <h1>AI-POWERED<br>MEDICAL RESEARCH<br>REIMAGINED</h1>
+    <p>文献研读 · 综述撰写 · 基金申报 · SCI 论文 · 数据统计与分析</p>
+  </div>
+</div>
 <div id="cloudModal" class="modal">
-  <div class="modal-card" style="max-width:400px">
+  <!-- 宽度写在 CSS 里（#cloudModal .modal-card），别用行内 style：行内样式会盖掉登录闸那套
+       body.locked 的规则，卡片就撑不满、胶囊列会偏到一边去。 -->
+  <div class="modal-card">
     <div class="modal-head">
       <span class="modal-title" id="cloudTitle">登录</span>
       <button class="modal-x" id="cloudClose" type="button" title="关闭"></button>
@@ -775,6 +870,7 @@ const ICONS = {
   refresh: '<path d="M21 12a9 9 0 1 1-2.6-6.4"/><path d="M21 4v5h-5"/>',
   stop: '<rect x="6" y="6" width="12" height="12" rx="2"/>',
   check: '<path d="M20 6 9 17l-5-5"/>',
+  checkSquare: '<rect x="3" y="3" width="18" height="18" rx="3"/><path d="m8 12 3 3 5-6"/>',
   x: '<path d="M18 6 6 18"/><path d="M6 6l12 12"/>',
   download: '<path d="M12 4v11"/><path d="m7 11 5 4 5-4"/><path d="M5 20h14"/>',
   eye: '<path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/>',
@@ -798,16 +894,24 @@ const ICONS = {
   sparkle: '<path d="M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9Z"/><path d="M18.5 15.5l.7 1.8 1.8.7-1.8.7-.7 1.8-.7-1.8-1.8-.7 1.8-.7Z"/>',
   plus: '<path d="M12 5v14"/><path d="M5 12h14"/>',
   megaphone: '<path d="M3 11v2a1 1 0 0 0 1 1h2l6 4V6L6 10H4a1 1 0 0 0-1 1Z"/><path d="M16 8.5a4 4 0 0 1 0 7"/><path d="M8 15v4"/>',
-  feedback: '<path d="M21 15a2 2 0 0 1-2 2H8l-4 3V6a2 2 0 0 1 2-2h13a2 2 0 0 1 2 2Z"/><path d="M9 10h7"/><path d="M9 13.5h4"/>'
+  feedback: '<path d="M21 15a2 2 0 0 1-2 2H8l-4 3V6a2 2 0 0 1 2-2h13a2 2 0 0 1 2 2Z"/><path d="M9 10h7"/><path d="M9 13.5h4"/>',
+  grid: '<rect x="4" y="4" width="7" height="7" rx="1.5"/><rect x="13" y="4" width="7" height="7" rx="1.5"/><rect x="4" y="13" width="7" height="7" rx="1.5"/><rect x="13" y="13" width="7" height="7" rx="1.5"/>'
 }
 function ic(name, cls) { return '<svg class="ic' + (cls ? " " + cls : "") + '" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">' + (ICONS[name] || "") + "</svg>" }
 const setIc = (id, name) => { const el = document.getElementById(id); if (el) el.innerHTML = ic(name) }
 setIc("icUp", "upload"); setIc("icOut", "box"); setIc("dzIc", "upload")
 document.getElementById("refreshSess").innerHTML = ic("refresh")
+document.getElementById("selModeBtn").innerHTML = ic("checkSquare")
 sendBtn.innerHTML = ic("send") + "发送"
 stopBtn.innerHTML = ic("stop") + "终止"
 
 document.getElementById("logoutBtn").innerHTML = ic("logout")
+// 顶栏「模块工作台」：登录后的模块选择页（workspace.html），随时能回去换个功能开新会话
+;(function () {
+  const b = document.getElementById("wsBtn"); if (!b) return
+  b.innerHTML = ic("grid")
+  b.addEventListener("click", () => { location.href = "workspace.html" })
+})()
 // ---- 模型切换器：显示 当前供应商·模型，可在同供应商下切换（仅接入网关时出现）----
 ;(function () {
   const sel = document.getElementById("modelSel"); if (!sel) return
@@ -1188,30 +1292,20 @@ async function openPreview(name) {
 document.getElementById("pvClose").addEventListener("click", closePreview)
 document.addEventListener("keydown", (e) => { if (e.key === "Escape") { if (lb.classList.contains("on")) lb.classList.remove("on"); else if (preview.classList.contains("on")) closePreview() } })
 
-// ---- 会话管理：项目分组 + 持久化(钉) + 7 天 TTL + 断点续问 ----
+// ---- 会话管理：项目分组 + 置顶(钉) + 批量删除 + 断点续问 ----
+// 【会话永久保留】过去非项目会话 7 天无活动就被自动删（配套到期徽标 / 临期提醒 / 续期），已整体去掉：
+// 会话只在用户自己删时才消失。要清理就进「批量选择」勾几条一次删。
 const sessionsEl = document.getElementById("sessions")
 const fmtTime = (ms) => { const d = new Date(ms), p = (n) => String(n).padStart(2, "0"); return `${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}` }
-const DAY_MS = 86400000
 let META_STATE = { projects: [], sessions: [] }          // 最近一次 /api/sessions 结果
 const collapsedProjects = new Set(JSON.parse(localStorage.getItem("nm_collapsed") || "[]"))
 const saveCollapsed = () => localStorage.setItem("nm_collapsed", JSON.stringify([...collapsedProjects]))
 
-// 到期徽标：项目内=永久；否则按剩余时间显示，≤2 天标红（soon）
-function expBadge(s) {
-  const sp = document.createElement("span"); sp.className = "exp"
-  if (s.permanent) { sp.classList.add("perm"); sp.textContent = "永久"; sp.title = "在项目中，永久保留"; return sp }
-  const left = (s.expiresAt || 0) - Date.now()
-  if (left <= 0) { sp.classList.add("soon"); sp.textContent = "即将删除"; return sp }
-  const days = Math.ceil(left / DAY_MS)
-  sp.textContent = "剩 " + days + " 天"
-  sp.title = "无活动将于 " + fmtTime(s.expiresAt) + " 自动删除"
-  if (left <= 2 * DAY_MS) sp.classList.add("soon")
-  return sp
-}
-
 // 单个会话行
 function sessRow(s) {
-  const b = document.createElement("div"); b.className = "sess" + (s.id === sessionId ? " active" : ""); b.setAttribute("role", "button"); b.draggable = true
+  const b = document.createElement("div"); b.className = "sess" + (s.id === sessionId ? " active" : "") + (selected.has(s.id) ? " picked" : "")
+  b.setAttribute("role", "button"); b.draggable = !selMode          // 选择模式下禁拖，免得勾选时误拖进项目
+  const ck = document.createElement("span"); ck.className = "ck"; ck.innerHTML = ic("check"); b.appendChild(ck)
   const t = document.createElement("span"); t.className = "t"; t.textContent = s.title
   const d = document.createElement("span"); d.className = "d"
   if (s.running) d.innerHTML = '<span class="run" title="正在生成"></span>'
@@ -1221,9 +1315,8 @@ function sessRow(s) {
     d.appendChild(mt)
   }
   d.appendChild(document.createTextNode(fmtTime(s.updated)))
-  d.appendChild(expBadge(s))
   b.appendChild(t); b.appendChild(d)
-  b.addEventListener("click", () => resumeSession(s.id))
+  b.addEventListener("click", () => { if (selMode) togglePick(s.id, b); else resumeSession(s.id) })
   // 拖拽：记录被拖会话 id
   b.addEventListener("dragstart", (e) => { e.dataTransfer.setData("text/plain", s.id); e.dataTransfer.effectAllowed = "move"; b.classList.add("dragging") })
   b.addEventListener("dragend", () => b.classList.remove("dragging"))
@@ -1232,7 +1325,7 @@ function sessRow(s) {
   const mk = (icon, cls, title, fn) => { const a = document.createElement("span"); a.className = "sess-act" + (cls ? " " + cls : ""); a.title = title; a.innerHTML = ic(icon); a.addEventListener("click", (e) => { e.stopPropagation(); fn() }); return a }
   acts.appendChild(mk("edit", "", "重命名", () => renameSession(s.id, s.title, t)))
   acts.appendChild(mk("feedback", "", "把这次会话反馈给管理员", () => openFeedback(s.id, s.title)))
-  acts.appendChild(mk("pin", s.pinned ? "on" : "", s.pinned ? "取消持久化" : "持久化保留（钉住，续 7 天）", () => togglePin(s.id, !s.pinned)))
+  acts.appendChild(mk("pin", s.pinned ? "on" : "", s.pinned ? "取消置顶" : "钉住置顶（放到「已钉住」分组）", () => togglePin(s.id, !s.pinned)))
   acts.appendChild(mk("trash", "del", "删除会话", () => deleteSession(s.id, s.title)))
   b.appendChild(acts)
   return b
@@ -1257,7 +1350,9 @@ function renderSessions(data) {
   META_STATE = data && data.sessions ? data : { projects: [], sessions: [] }
   const { projects, sessions } = META_STATE
   sessionsEl.innerHTML = ""
-  if (!sessions.length && !projects.length) { sessionsEl.innerHTML = '<span class="hint">还没有会话</span>'; renderReminder(); return }
+  // 列表刷新后，勾选集里已不存在的会话（别处删了 / 被别的窗口删了）要跟着掉，否则"已选 N"会虚高
+  for (const id of [...selected]) if (!sessions.some((s) => s.id === id)) selected.delete(id)
+  if (!sessions.length && !projects.length) { sessionsEl.innerHTML = '<span class="hint">还没有会话</span>'; updateSelBar(); return }
   const byProject = new Map(projects.map((p) => [p.id, []]))
   const pinned = [], loose = []
   for (const s of sessions) {
@@ -1277,24 +1372,24 @@ function renderSessions(data) {
     makeDropTarget(group, p.id)                       // 拖到本项目（整组都可接收）
     group.append(h, body); sessionsEl.appendChild(group)
   }
-  // 2) 已持久化（钉住、无项目）—— 拖会话到此即钉住（持久化保留）
+  // 2) 已钉住（无项目）—— 拖会话到此即钉住置顶
   {
-    const lbl = document.createElement("div"); lbl.className = "sect-label"; lbl.innerHTML = ic("pin"); lbl.appendChild(document.createTextNode("已持久化")); sessionsEl.appendChild(lbl)
+    const lbl = document.createElement("div"); lbl.className = "sect-label"; lbl.innerHTML = ic("pin"); lbl.appendChild(document.createTextNode("已钉住")); sessionsEl.appendChild(lbl)
     const area = document.createElement("div"); area.className = "droparea"; area.style.minHeight = "20px"; makeDropTarget(area, "pin")
-    if (!pinned.length) { const e = document.createElement("span"); e.className = "hint"; e.textContent = "拖会话到此钉住，持久化保留"; area.appendChild(e) }
+    if (!pinned.length) { const e = document.createElement("span"); e.className = "hint"; e.textContent = "拖会话到此钉住置顶"; area.appendChild(e) }
     else for (const s of pinned) area.appendChild(sessRow(s))
     sessionsEl.appendChild(area)
   }
-  // 3) 最近会话（普通、7 天 TTL）—— 也是「移出项目」的拖放目标
+  // 3) 最近会话（普通，永久保留）—— 也是「移出项目」的拖放目标
   const lbl = document.createElement("div"); lbl.className = "sect-label"; lbl.innerHTML = ic("history"); lbl.appendChild(document.createTextNode("最近会话")); sessionsEl.appendChild(lbl)
   const area = document.createElement("div"); area.className = "droparea"; area.style.minHeight = "20px"; makeDropTarget(area, "none")
   if (!loose.length) { const e = document.createElement("span"); e.className = "hint"; e.textContent = "拖项目里的会话到此可移出"; area.appendChild(e) }
   else for (const s of loose) area.appendChild(sessRow(s))
   sessionsEl.appendChild(area)
-  renderReminder()
+  updateSelBar()
 }
 
-// 让某元素成为拖放目标：target = 项目 id（归入项目）/ "none"（移出项目）/ "pin"（钉住持久化）
+// 让某元素成为拖放目标：target = 项目 id（归入项目）/ "none"（移出项目）/ "pin"（钉住置顶）
 function makeDropTarget(el, target) {
   el.addEventListener("dragover", (e) => { e.preventDefault(); e.dataTransfer.dropEffect = "move"; el.classList.add("drop-hint") })
   el.addEventListener("dragleave", (e) => { if (!el.contains(e.relatedTarget)) el.classList.remove("drop-hint") })
@@ -1303,7 +1398,7 @@ function makeDropTarget(el, target) {
     const sid = e.dataTransfer.getData("text/plain"); if (!sid) return
     const cur = META_STATE.sessions.find((s) => s.id === sid)
     if (target === "pin") {
-      if (cur && cur.pinned && !cur.projectId) return             // 已在「已持久化」里
+      if (cur && cur.pinned && !cur.projectId) return             // 已在「已钉住」里
       if (cur && cur.projectId) await fetch("api/session/project?id=" + encodeURIComponent(sid) + "&projectId=none", { method: "POST" }).catch(() => {})
       await fetch("api/session/pin?id=" + encodeURIComponent(sid) + "&pinned=1", { method: "POST" }).catch(() => {})
     } else {
@@ -1357,35 +1452,72 @@ async function createProject() {
   loadSessions()
 }
 async function deleteProject(id, name) {
-  if (!confirm("删除项目「" + name + "」？项目内会话不会被删，会变回普通会话（从现在起 7 天后过期）。")) return
+  if (!confirm("删除项目「" + name + "」？项目内会话不会被删，只是变回普通会话（照样永久保留）。")) return
   await fetch("api/project/delete?id=" + encodeURIComponent(id), { method: "POST" }).catch(() => {})
   loadSessions()
 }
 
-// 临期提醒：列出 2 天内将自动删除的非项目会话，给「续期」一键保留
-const reminderEl = document.getElementById("expireReminder")
-const dismissedReminders = new Set()
-function renderReminder() {
-  const soon = (META_STATE.sessions || []).filter((s) => !s.permanent && s.expiresAt && (s.expiresAt - Date.now()) <= 2 * DAY_MS && !dismissedReminders.has(s.id))
-  if (!soon.length) { reminderEl.classList.remove("show"); reminderEl.innerHTML = ""; return }
-  reminderEl.innerHTML = ""
-  const top = document.createElement("div"); top.className = "er-top"; top.innerHTML = ic("clock")
-  top.appendChild(document.createTextNode(soon.length + " 个会话临近删除"))
-  const x = document.createElement("span"); x.className = "er-x"; x.innerHTML = ic("x"); x.title = "本次不再提醒"
-  x.addEventListener("click", () => { soon.forEach((s) => dismissedReminders.add(s.id)); renderReminder() })
-  top.appendChild(x); reminderEl.appendChild(top)
-  const list = document.createElement("div"); list.className = "er-list"
-  for (const s of soon.slice(0, 6)) {
-    const it = document.createElement("div"); it.className = "er-item"
-    const t = document.createElement("span"); t.className = "er-t"; t.textContent = s.title
-    const days = Math.max(0, Math.ceil((s.expiresAt - Date.now()) / DAY_MS))
-    const tip = document.createElement("span"); tip.style.cssText = "font-size:11px;opacity:.75;flex:none"; tip.textContent = days <= 0 ? "即将删除" : "剩 " + days + " 天"
-    const keep = document.createElement("span"); keep.className = "er-keep"; keep.textContent = "续 7 天"
-    keep.title = "重置存活期为 7 天（或拖入项目永久保留）"
-    keep.addEventListener("click", async () => { await fetch("api/session/renew?id=" + encodeURIComponent(s.id), { method: "POST" }).catch(() => {}); dismissedReminders.add(s.id); loadSessions() })
-    it.append(t, tip, keep); list.appendChild(it)
+// ---- 批量选择删除 ----
+// 会话永久保留，所以「清理」这件事完全交给用户：进选择模式 → 勾若干条 → 一次删。
+// 删除逐条走既有的 /api/session/delete（同一条硬删路径：终止在跑的轮 + 删目录 + 清元数据），
+// 不另开批量接口——界面包能单独热更新，新界面配老 server.mjs 是真实存在的组合，逐条调保证都能用。
+const selBar = document.getElementById("selBar")
+const selNEl = selBar.querySelector(".sel-n")
+const selAllBtn = document.getElementById("selAll"), selDelBtn = document.getElementById("selDel")
+const selModeBtn = document.getElementById("selModeBtn")
+let selMode = false
+const selected = new Set()
+function updateSelBar() {
+  const total = (META_STATE.sessions || []).length
+  selNEl.textContent = "已选 " + selected.size + " 个" + (total ? " / 共 " + total : "")
+  selDelBtn.disabled = !selected.size
+  selAllBtn.textContent = total && selected.size >= total ? "取消全选" : "全选"
+}
+function setSelMode(on) {
+  selMode = on
+  document.body.classList.toggle("sel-mode", on)
+  if (!on) selected.clear()
+  selModeBtn.classList.toggle("on", on)
+  selModeBtn.title = on ? "退出批量选择" : "批量选择（勾选多个会话一次删除）"
+  renderSessions(META_STATE)      // 重渲染：复选框显隐、拖拽开关、点击语义都随模式变
+}
+function togglePick(id, rowEl) {
+  selected.has(id) ? selected.delete(id) : selected.add(id)
+  rowEl.classList.toggle("picked", selected.has(id))
+  updateSelBar()
+}
+selModeBtn.addEventListener("click", () => { if (!document.body.classList.contains("sessbar-open")) setSessbar(true); setSelMode(!selMode) })
+document.getElementById("selExit").addEventListener("click", () => setSelMode(false))
+selAllBtn.addEventListener("click", () => {
+  const all = META_STATE.sessions || []
+  if (selected.size >= all.length) selected.clear(); else all.forEach((s) => selected.add(s.id))
+  renderSessions(META_STATE)
+})
+selDelBtn.addEventListener("click", deleteSelected)
+async function deleteSelected() {
+  const ids = [...selected]; if (!ids.length) return
+  const names = (META_STATE.sessions || []).filter((s) => selected.has(s.id)).map((s) => s.title)
+  if (!confirm("删除选中的 " + ids.length + " 个会话？\n" + names.slice(0, 5).join("、") + (names.length > 5 ? " 等" : "") +
+    "\n\n对话内容与该会话的产物文件会一并删除，不可撤销。")) return
+  const hadCurrent = !!sessionId && selected.has(sessionId)
+  selDelBtn.disabled = true; selAllBtn.disabled = true
+  const queue = ids.slice()
+  let done = 0, failed = 0
+  // 并发 3：一条条串行删几十个太慢，全量并发又会把后端的 opencode 删除+目录回收打满
+  const worker = async () => {
+    while (queue.length) {
+      const id = queue.shift()
+      const ok = await fetch("api/session/delete?id=" + encodeURIComponent(id), { method: "POST" }).then((r) => r.ok).catch(() => false)
+      ok ? done++ : failed++
+      selNEl.textContent = "删除中… " + (done + failed) + "/" + ids.length
+    }
   }
-  reminderEl.appendChild(list); reminderEl.classList.add("show")
+  await Promise.all([worker(), worker(), worker()])
+  selAllBtn.disabled = false
+  if (hadCurrent) clearCurrentSession()          // 把当前打开的会话也删了 → 回到空态
+  setSelMode(false)
+  loadSessions(); refreshStorage()               // 删会话已释放其存储 → 刷新用量
+  if (failed) alert("有 " + failed + " 个会话没能删除（网络或服务异常），请刷新后重试。")
 }
 // 【sessList 必须是数组】api/sessions 自项目分组后回的是 {projects, sessions} 对象；此前把整个
 // 对象塞进 sessList，下游三处 sessList.find(...) 全是 TypeError——resumeSession 在 find 处同步
@@ -1418,15 +1550,21 @@ async function resumeSession(id) {                 // 载入历史 → 设为当
   if (job.running) attachStream(id)                // 这轮还在后台生成 → 重放快照并续流
   q.focus(); log.scrollTop = log.scrollHeight
 }
+// 当前会话被删掉后回到空态（单删与批删共用，别两处各写一遍漏项）
+function clearCurrentSession() {
+  detachStream(); sessionId = null; localStorage.removeItem("nm_sid")
+  log.innerHTML = ""; renderFiles([]); renderUploads([]); renderWelcome(); zScopeReset(); loadZotLib()
+}
 async function deleteSession(id, title) {           // 删除会话（不可撤销，先确认；进行中的生成由后端一并终止）
   if (!confirm("删除会话「" + (title || id) + "」？此操作不可撤销。")) return
   await fetch("api/session/delete?id=" + encodeURIComponent(id), { method: "POST" }).catch(() => {})
-  if (id === sessionId) { detachStream(); sessionId = null; localStorage.removeItem("nm_sid"); log.innerHTML = ""; renderFiles([]); renderUploads([]); renderWelcome(); zScopeReset(); loadZotLib() }   // 删的是当前会话 → 回到空态
+  if (id === sessionId) clearCurrentSession()       // 删的是当前会话 → 回到空态
   loadSessions(); refreshStorage()   // 删会话已释放其存储 → 刷新用量
 }
 // 左侧会话栏折叠/展开（默认折叠）
 const sessToggle = document.getElementById("sessToggle")
 function setSessbar(open) {
+  if (!open && selMode) setSelMode(false)      // 收起会话栏时退出批量选择，别留一个看不见的勾选状态
   document.body.classList.toggle("sessbar-open", open)
   sessToggle.innerHTML = ic(open ? "chevronL" : "history")
   sessToggle.title = open ? "收起会话" : "最近会话"
@@ -1473,7 +1611,11 @@ function renderWelcome() {
 let sessionId = null   // reused across messages so the agent keeps context
 // ---- 功能模块：新会话在创建时绑定所选模块，受限模块只能用对应技能（服务端强制）----
 let MODULES = []              // /api/modules 清单：[{id,name,desc,skill,allowed}]
-let currentModule = "chat"    // 新会话将绑定的模块（欢迎页选择）
+let currentModule = "chat"    // 新会话将绑定的模块（欢迎页 / 工作台选择）
+// 工作台（workspace.html）点模块卡片进来时带着 #module=<id>：这一次的新会话就绑定它。
+// 只认一次并当场把 hash 消费掉（否则用户刷新页面会被反复拽回同一个模块），之后在欢迎页照常可改选。
+let pendingModule = (() => { const m = /^#module=([A-Za-z0-9_-]+)$/.exec(location.hash || ""); return m ? m[1] : "" })()
+if (pendingModule) { try { history.replaceState(null, "", location.pathname + location.search) } catch (_) {} }
 let sessList = []             // 最近会话缓存（含各会话绑定的模块，切会话时用）
 const modById = (id) => MODULES.find((m) => m.id === id)
 const modBadge = document.getElementById("modBadge")
@@ -1490,6 +1632,12 @@ async function loadModules() {
   MODULES = (j && j.modules) || []
   if (j && j.entRev) entRev = j.entRev
   const allowed = MODULES.filter((m) => m.allowed)
+  if (pendingModule) {   // 从工作台点进来的模块：清单到手才知道它是否已开通
+    const hit = allowed.find((m) => m.id === pendingModule)
+    if (hit) currentModule = hit.id
+    else if (MODULES.some((m) => m.id === pendingModule)) addNote("ℹ 你的账号未开通该模块，已回到自由对话")
+    pendingModule = ""
+  }
   if (allowed.length && !allowed.some((m) => m.id === currentModule)) currentModule = allowed[0].id   // chat 被收权时落到首个可用模块
   setModBadge(sessionId ? (sessList.find((s) => s.id === sessionId)?.module || "chat") : currentModule)
   const w = log.querySelector(".welcome"); if (w) { w.remove(); renderWelcome() }   // 清单晚到 → 重画欢迎页补上模块卡
@@ -1962,10 +2110,20 @@ const esc = (s) => String(s == null ? "" : s).replace(/[&<>"']/g, (c) =>
 const cloudModal = document.getElementById("cloudModal")
 const clMsg = (t, m) => { const e = document.getElementById("clMsg"); e.className = "mm-msg " + t; e.textContent = m }
 let clMode = "login"   // login | pw | info
+// 登录闸的背景视频按需加载：已登录的用户根本看不到这一屏，别让每次开应用都去拉几 MB。
+// 取不到（断网/OSS 不可达）就是纯黑底，登录照常可用。
+function ensureLoginStage() {
+  const v = document.querySelector("#loginStage video")
+  if (v && !v.getAttribute("src") && v.dataset.src) {
+    v.src = v.dataset.src
+    const p = v.play(); if (p && p.catch) p.catch(() => {})
+  }
+}
 function clShow(mode, st) {
   clMode = mode
   // login/pw 两态 = 还不能用应用 → 锁死；info 态是查看账号，可以随便关
   cloudMandatory = (mode === "login" || mode === "pw")
+  if (cloudMandatory) ensureLoginStage()
   // 锁死时把整个应用壳藏起来（见 body.locked 那几条 CSS）：不给用户"其实已经进来了"的错觉，
   // 也顺手挡住那些绕过弹窗直接够到界面的操作（Tab 键跳进输入框、拖拽上传……）。
   document.body.classList.toggle("locked", cloudMandatory)
@@ -2054,7 +2212,7 @@ async function openCloud(force) {
   cloudModal.classList.add("on")
   // force = 这是一道闸（首启未登录、登出后、闲置锁屏、登录态被吊销），不是用户自己点开来看账号的。
   // 问状态要一次往返，这期间先按"锁上"渲染：否则每次开闸都会先闪一下完整的聊天界面。
-  if (force) { cloudMandatory = true; document.body.classList.add("locked") }
+  if (force) { cloudMandatory = true; document.body.classList.add("locked"); ensureLoginStage() }
   try {
     const st = await (await fetch("api/cloud/status", { signal: AbortSignal.timeout(8000) })).json()
     if (!st.loggedIn) clShow("login")
@@ -2086,6 +2244,12 @@ document.addEventListener("visibilitychange", () => { if (!document.hidden) reas
 // 锁上后应用壳是不渲染的：万一登录窗被什么路径关掉，用户面对的就是一片空白，且窗口没失焦、
 // 上面两个事件都不会来。低频自检一次，成本只是一个 DOM 判断。
 setInterval(reassertCloudGate, 3000)
+// 登录/改密成功后进模块选择页。老网关没有 /workspace.html 这条路由（界面包可能先于安装包
+// 更新）→ 探测一下，404 就照旧刷新回聊天页，新旧客户端都不会卡在一个 404 上。
+async function gotoWorkspace() {
+  try { if ((await fetch("workspace.html", { cache: "no-store" })).ok) { location.href = "workspace.html"; return } } catch (_) {}
+  location.reload()
+}
 async function cloudPost(path, body, retryForce) {
   const r = await (await fetch("api/cloud/" + path, {
     method: "POST", headers: { "Content-Type": "application/json" },
@@ -2108,10 +2272,14 @@ document.getElementById("clGo").addEventListener("click", async () => {
       clMsg("info", "登录中…")
       const r = await cloudPost("login", { username, password }); if (!r) return
       if (!r.ok) return clMsg("err", r.err || "登录失败")
+      // 【解锁 ≠ 新登录】闲置锁屏解锁的人本来就在某个会话里（可能还有轮在跑），把他甩去工作台
+      // 等于打断他；只有真正的新登录才进模块选择页。
+      const unlock = cloudLocked()
       setCloudLocked(false)   // 口令对上了 → 解锁（闲置锁屏就是从这里放行的）
       document.getElementById("clPass").value = ""
       if (r.mustChangePassword) { clShow("pw"); return clMsg("info", "请先修改口令") }
-      clMsg("ok", "已登录，页面即将刷新…"); setTimeout(() => location.reload(), 1000)
+      clMsg("ok", unlock ? "已解锁，页面即将刷新…" : "已登录，正在进入…")
+      setTimeout(() => (unlock ? location.reload() : gotoWorkspace()), 1000)
     } else if (clMode === "pw") {
       const oldPassword = document.getElementById("clOld").value
       const newPassword = document.getElementById("clNew").value
@@ -2120,7 +2288,7 @@ document.getElementById("clGo").addEventListener("click", async () => {
       clMsg("info", "提交中…改完要重启后台模型进程，大约需要半分钟，请勿关闭窗口")
       const r = await cloudPost("password", { oldPassword, newPassword }); if (!r) return
       if (!r.ok) return clMsg("err", r.err || "修改失败")
-      clMsg("ok", "已修改，页面即将刷新…"); setTimeout(() => location.reload(), 1000)
+      clMsg("ok", "已修改，正在进入…"); setTimeout(gotoWorkspace, 1000)
     } else {
       clMsg("info", "刷新中…")
       const r = await (await fetch("api/cloud/refresh", { method: "POST" })).json()
@@ -2703,8 +2871,10 @@ zPushBtn.addEventListener("click", async () => {
 loadZoteroStatus()
 
 // ---- 启动恢复：记住上次会话，重开页面自动回显历史与产物；后台若还在生成则续流 ----
+// 从工作台选了模块进来 = 明确要开一轮新的（模块只在建会话时绑定，续老会话改不了），
+// 所以这种情况不恢复上次会话，直接停在欢迎页。老会话没丢，左侧列表随时切回去。
 const savedSid = localStorage.getItem("nm_sid")
-if (savedSid) resumeSession(savedSid)
+if (savedSid && !pendingModule) resumeSession(savedSid)
 else renderWelcome()
 refreshStorage(); refreshQuota()
 // 公告：进来先拉一次，之后 5 分钟一次；窗口重新聚焦时补一次（节流 60s）。

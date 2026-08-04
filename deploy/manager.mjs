@@ -609,9 +609,13 @@ const userEnv = (name) => { try { return parseEnvFile(path.join(USERS_DIR, name 
 // 授权注入容器 env（ALLOWED_MODULES），受限模块的技能调用由网关事件流强制校验。
 const MODULE_TABLE = [
   { id: "chat",     name: "自由对话",       short: "对话" },
-  { id: "grant",    name: "标书撰写",       short: "标书" },
-  { id: "refcheck", name: "文献真实性检查", short: "查引用" },
-  { id: "humanize", name: "去AI味写作",     short: "去AI味" },
+  { id: "review",   name: "综述撰写",       short: "综述" },
+  { id: "grant",    name: "基金申报",       short: "基金" },
+  { id: "paper",    name: "SCI 论文",       short: "论文" },
+  { id: "stats",    name: "数据统计与分析", short: "统计" },
+  { id: "litread",  name: "文献研读",       short: "研读" },
+  { id: "refcheck", name: "文稿核查与审校", short: "核查" },
+  { id: "humanize", name: "文章润色",       short: "润色" },
 ]
 // 某用户已授权的模块 id 列表；空数组 = 未设 MODULES = 全部模块（与容器网关的默认一致）
 const userModules = (name) => (userEnv(name).MODULES || "").split(",").map((s) => s.trim()).filter((s) => MODULE_TABLE.some((m) => m.id === s))
@@ -777,7 +781,7 @@ function skillEditor(u,SKT){
   const cur=(!u.skills||!u.skills.length)?SKT.map(s=>s.id):u.skills
   const boxes=SKT.map(s=>'<label class="mchk" style="margin:0" title="'+s.id+'"><input type="checkbox" data-s="'+s.id+'"'+(cur.indexOf(s.id)>=0?' checked':'')+'>'+s.label+'</label>').join('')
   const ovl=document.createElement('div');ovl.id='ovl'
-  ovl.innerHTML='<div class="dlg"><h3>'+u.name+' 的技能白名单<span class="hint">全选=不限；保存即重建容器生效（自由对话里未勾选的技能会被拒；标书/查引用/去AI味模块的技能被取消则该模块不可用）</span></h3><div class="skgrid">'+boxes+'</div><div class="row" style="margin-top:14px"><button class="btn" id="skall">全选</button><button class="btn" id="sknone">清空</button><span style="flex:1"></span><button class="btn" id="skcancel">取消</button><button class="btn primary" id="sksave">保存</button></div></div>'
+  ovl.innerHTML='<div class="dlg"><h3>'+u.name+' 的技能白名单<span class="hint">全选=不限；保存即重建容器生效（自由对话里未勾选的技能会被拒；受限模块的主技能被取消则该模块不可用）</span></h3><div class="skgrid">'+boxes+'</div><div class="row" style="margin-top:14px"><button class="btn" id="skall">全选</button><button class="btn" id="sknone">清空</button><span style="flex:1"></span><button class="btn" id="skcancel">取消</button><button class="btn primary" id="sksave">保存</button></div></div>'
   document.body.appendChild(ovl)
   ovl.addEventListener('click',e=>{if(e.target===ovl)ovl.remove()})
   ovl.querySelector('#skall').onclick=()=>ovl.querySelectorAll('.skgrid input').forEach(x=>x.checked=true)

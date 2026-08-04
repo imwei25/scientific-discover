@@ -103,16 +103,20 @@ test("云端档案的技能白名单直接决定模块卡片：没授权的模�
   t.after(() => gw.close())
   const { map } = await gw.modules()
   assert.equal(map.chat, true, "自由对话没有绑定技能，永远可用")
-  assert.equal(map.grant, true, "白名单里有 grant-proposal")
+  assert.equal(map.grant, true, "白名单里有 grant-proposal（基金申报的主技能）")
   assert.equal(map.refcheck, false, "reference-check 不在白名单")
   assert.equal(map.humanize, false)
+  assert.equal(map.review, false, "literature-review 不在白名单 → 综述撰写整块不可用")
+  assert.equal(map.paper, false)
+  assert.equal(map.stats, false)
+  assert.equal(map.litread, false)
 })
 
 test("白名单为空 = 不限：所有模块都开", async (t) => {
   const gw = await gateway({ profile: prof([]) })
   t.after(() => gw.close())
   const { map } = await gw.modules()
-  assert.deepEqual(map, { chat: true, grant: true, refcheck: true, humanize: true })
+  assert.deepEqual(map, { chat: true, review: true, grant: true, paper: true, stats: true, litread: true, refcheck: true, humanize: true })
 })
 
 test("容器 env 白名单与云端白名单取交集（两层都得放行）", async (t) => {
@@ -191,5 +195,5 @@ test("没登录云端账号时这条闸完全不生效（容器/自设 API 形�
     for (const [k, v] of Object.entries(saved)) { if (v === undefined) delete process.env[k]; else process.env[k] = v }
   })
   const { map } = await gw.modules()
-  assert.deepEqual(map, { chat: true, grant: true, refcheck: true, humanize: true })
+  assert.deepEqual(map, { chat: true, review: true, grant: true, paper: true, stats: true, litread: true, refcheck: true, humanize: true })
 })

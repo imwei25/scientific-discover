@@ -1,13 +1,14 @@
 #!/usr/bin/env bash
 # 改某用户可用的功能模块：改写 users/<name>.env 的 MODULES= → 重渲染 compose → 重建该用户容器即时生效。
 # 模块 id（与 web/server.mjs 的 MODULE_DEFS 对应）：
-#   chat=自由对话  grant=标书撰写(grant-proposal)  refcheck=文献真实性检查(reference-check)  humanize=去AI味写作(humanize-academic)
+#   chat=自由对话  review=综述撰写  grant=基金申报  paper=SCI论文
+#   stats=数据统计与分析  litread=文献研读  refcheck=文稿核查与审校  humanize=文章润色
 # 用法：scripts/user-modules.sh <用户名> <模块列表逗号分隔|all>   （all = 全部模块）
 #      scripts/user-modules.sh <用户名>                            （只查看当前授权）
 set -euo pipefail
 cd "$(dirname "$0")/.."   # -> deploy/
 
-ALL_MODULES="chat,grant,refcheck,humanize"
+ALL_MODULES="chat,review,grant,paper,stats,litread,refcheck,humanize"
 
 name="${1:-}"; mods="${2:-}"
 env="users/${name}.env"

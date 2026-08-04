@@ -99,9 +99,40 @@ test("正常回包 → 出 3 条建议，且请求带上了对话上下文", asy
   assert.equal(up.seen[0].auth, "Bearer sk-test")
   assert.equal(up.seen[0].body.model, "test-model")
   assert.equal(up.seen[0].body.stream, false)
+  // 思考模型（火山 deepseek/doubao 系）不关思考会把 max_tokens 全花在 reasoning_content 上，
+  // content 空着回来 → 前端气泡闪两秒就没。请求必须显式带上「关思考」。
+  assert.deepEqual(up.seen[0].body.thinking, { type: "disabled" })
   const userMsg = up.seen[0].body.messages.at(-1).content
   assert.match(userMsg, /基线表/)
   assert.match(userMsg, /table1\.csv/)
+})
+
+test("严格供应商不认 thinking 字段回 400 → 去掉该字段重试一次，建议照出", async (t) => {
+  const up = await fakeUpstream((req, res, n) => {
+    const hasThinking = "thinking" in (up.seen[n - 1].body || {})
+    if (hasThinking) { res.writeHead(400, { "Content-Type": "application/json" }); return res.end(JSON.stringify({ error: { message: "Unrecognized request argument supplied: thinking" } })) }
+    return reply(JSON.stringify(["继续做生存分析", "核对缺失值比例"]))(req, res)
+  })
+  const gw = await gateway({ upstream: up.url })
+  t.after(async () => { await gw.close(); await up.close() })
+
+  const r = await gw.suggest(ROUND)
+  assert.equal(r.json.ok, true)
+  assert.deepEqual(r.json.suggestions, ["继续做生存分析", "核对缺失值比例"])
+  assert.equal(up.seen.length, 2, "应该恰好重试一次")
+  assert.ok(!("thinking" in up.seen[1].body), "重试那次不该再带 thinking")
+})
+
+test("上游没关掉思考、content 空着回来 → 200 + 空数组（前端静默不画）", async (t) => {
+  // 真实翻车现场：思考模型把 max_tokens 全花在 reasoning_content 上，finish=length、content=""
+  const up = await fakeUpstream(reply(""))
+  const gw = await gateway({ upstream: up.url })
+  t.after(async () => { await gw.close(); await up.close() })
+
+  const r = await gw.suggest(ROUND)
+  assert.equal(r.status, 200)
+  assert.equal(r.json.ok, false)
+  assert.deepEqual(r.json.suggestions, [])
 })
 
 test("脏输出照样能用：代码块 + 编号 + 引号 + 重复 + 超长，清洗后最多 3 条", async (t) => {
@@ -204,7 +235,7 @@ test("受限模块的会话：建议要被圈在该模块范围内", async (t) =
 
   await gw.suggest({ ...ROUND, sid: "ses123" })
   const userMsg = up.seen[0].body.messages.at(-1).content
-  assert.match(userMsg, /文献真实性检查/)
+  assert.match(userMsg, /文稿核查与审校/)
   assert.match(userMsg, /只做这一类事/)
 })
 

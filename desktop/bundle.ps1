@@ -247,7 +247,9 @@ Step "应用本体：web 网关 + 技能 + AGENTS.md"
 # 测试目录里有 "sk-mine" 这种假 key，混进包既是无谓体积，也会让密钥扫描工具误报。
 Copy-Tree "$Root\web" "$App\web" `
   -ExcludeFiles @("model-config.json", "cloud-state.json", "sessions-meta.json", "dev-test.mjs", "dev-gateway.mjs") `
-  -ExcludeDirs  @("test")
+  -ExcludeDirs  @("test", "Microsoft")
+# ↑ Microsoft/：PowerShell 在 HOME/LOCALAPPDATA 被改向时会往当前目录拉一棵
+#   Microsoft\Windows\PowerShell\ModuleAnalysisCache 出来。开发机上是垃圾，跟着进包更没意义。
 # .opencode：技能 + opencode 插件依赖
 # 排除 __pycache__：开发机跑过技能脚本就会生成，进包纯属无谓体积（本次实测 18 个目录）
 Copy-Tree "$Root\.opencode" "$App\.opencode" -ExcludeDirs @("__pycache__")
@@ -279,7 +281,7 @@ savefig.bbox: tight
 {
   "//": "复制本文件为 cloud.json 并把 gatewayUrl 改成你们的站点地址；应用启动后在对话框输入 account 登录",
   "//key": "这里【不要】再填 apiKey —— 登录后由本机网关代持 access key 并自动续期，静态 key 会在一天后失效",
-  "gatewayUrl": "https://你的站点域名"
+  "gatewayUrl": "https://niuma.tellgen.com"
 }
 "@ | Write-Utf8NoBom "$App\cloud.json.example"
 

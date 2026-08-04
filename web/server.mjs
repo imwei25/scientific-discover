@@ -364,27 +364,20 @@ async function createSession(title) {
 }
 
 // ---- 会话/项目元数据（网关级，opencode 不管这些）----
-// 三档生命周期：① 普通会话——7 天无活动自动删；② 持久化(钉)——同样 7 天但可「续期」重置；③ 项目会话——永久。
-// opencode 只存会话本体；项目分组 / 钉标记 / 续期时间存这里，随磁盘持久（已 gitignore）。
+// 【会话永久保留】曾经有过"非项目会话 7 天无活动自动删"的 TTL 档位（配套钉住/续期/临期提醒），
+// 已整体移除：用户的会话与产物只在用户自己动手删时才消失，系统不再替他做保留期判断。
+// 钉（pinned）保留下来，但语义只剩"置顶分组"，不再影响存活。要清理请用界面上的批量勾选删除。
+// opencode 只存会话本体；项目分组 / 钉标记存这里，随磁盘持久（已 gitignore）。
 // 路径可用 SESSIONS_META_PATH 覆盖：测试/隔离实例必须能把它重定向到临时文件，
 // 否则任何在本仓库里起的第二个网关实例都会读写【开发机真实的】会话元数据并互相覆盖
 // （cloud-state/model-config/opencode.json 早就有同款覆盖开关，唯独这个漏了）。
 const META_PATH = process.env.SESSIONS_META_PATH || path.join(__dirname, "sessions-meta.json")
-const TTL_MS = 7 * 24 * 60 * 60 * 1000                 // 非项目会话的存活期：7 天
-const EXPIRE_SOON_MS = 2 * 24 * 60 * 60 * 1000          // 剩余 ≤2 天视为「临近删除」，前端据此提醒
 let META = { version: 1, projects: [], sessions: {} }
 try { const m = JSON.parse(fs.readFileSync(META_PATH, "utf8")); META = { version: 1, projects: m.projects || [], sessions: m.sessions || {} } } catch {}
 let _metaSaveTimer = null
 const saveMeta = () => { try { clearTimeout(_metaSaveTimer) } catch {}; _metaSaveTimer = setTimeout(() => { try { fs.writeFileSync(META_PATH, JSON.stringify(META, null, 2)) } catch {} }, 50) }
 const sessMeta = (sid) => (META.sessions[sid] ||= {})   // 取（不存在则建空）某会话的元数据
 const projectOf = (sid) => { const p = META.sessions[sid]?.projectId; return p && META.projects.some((x) => x.id === p) ? p : null }
-// 某会话的到期时间戳（ms）；在项目里 → null（永久）。非项目 = max(最后活动+7天, 续期时间)
-const expiryOf = (sess) => {
-  const sid = sess.id, m = META.sessions[sid] || {}
-  if (projectOf(sid)) return null
-  const base = (sess.time?.updated || 0) + TTL_MS
-  return Math.max(base, m.keepUntil || 0)
-}
 const newId = (p) => p + crypto.randomBytes(6).toString("hex")
 // 彻底删除一个会话：终止在跑的轮 → 删 opencode 会话 → 删产物/上传目录 → 清元数据
 async function hardDeleteSession(id) {
@@ -395,7 +388,7 @@ async function hardDeleteSession(id) {
   // outputs/<sid>，而真实目录是 outputs/ws_xxx → rmSync 对着一个不存在的路径 force 空转，
   // 返回 ok:true 但一个字节都没删。容器按需停起是本架构常态，网关重启后 dirCache 就是空的，
   // 即"删会话释放空间"这唯一的回收手段在最常见的情形下完全失效，最终把用户卡在存储上限上。
-  // （TTL 自动清理也走这里，所以这条次序对定时清理同样要紧。）
+  // （批量删除也走这里，所以这条次序对批删同样要紧。）
   const delOut = await sessionOut(id), delUp = await sessionUp(id)
   try { await client.session.delete({ path: { id } }) } catch {}
   try { fs.rmSync(delUp, { recursive: true, force: true }); fs.rmSync(delOut, { recursive: true, force: true }); dirCache.delete(safeSid(id)) } catch {}
@@ -403,20 +396,12 @@ async function hardDeleteSession(id) {
   unbindSessionModule(id)     // 模块绑定同样随会话删除，别在持久表里越积越多
   if (META.sessions[id]) { delete META.sessions[id]; saveMeta() }
 }
-// 清理过期会话：删「非项目、已过期、且当前没有正在生成」的会话（含目录）。启动跑一次 + 每小时一次。
-async function cleanupExpiredSessions() {
+// 元数据整理：只清掉「元数据里还挂着、但 opencode 里已经没有」的会话残留。
+// 【不会删任何会话】按会话年龄自动删除的机制已整体移除，会话永久保留，删只由用户主动发起。
+async function pruneOrphanMeta() {
   try {
     const all = un(await client.session.list()) || []
-    const now = Date.now()
-    for (const s of all) {
-      if (s.parentID) continue
-      const ex = expiryOf(s)
-      if (ex !== null && ex < now && !jobs.get(s.id)?.running) {
-        await hardDeleteSession(s.id)
-        console.log("[cleanup] 删除过期会话", s.id, s.title || "")
-      }
-    }
-    // 顺带清掉元数据里已不存在的会话残留。
+    // 清掉元数据里已不存在的会话残留。
     // 【空列表不算数】opencode 返回空数组既可能是"真的一条会话都没有"，也可能是它刚起来还没
     // 加载完 / 连到了另一个数据目录 / 降级返回空——后几种情况下按"全都不存在"去删，会把用户
     // 全部的项目归属与钉标记一次性抹平（表现为 sessions 被清成 {}，projects 还在）。
@@ -426,7 +411,7 @@ async function cleanupExpiredSessions() {
     let dirty = false
     for (const id of Object.keys(META.sessions)) if (!live.has(id)) { delete META.sessions[id]; dirty = true }
     if (dirty) saveMeta()
-  } catch (e) { console.warn("[cleanup] 失败:", String(e).slice(0, 200)) }
+  } catch (e) { console.warn("[meta] 整理失败:", String(e).slice(0, 200)) }
 }
 // 某目录里顶层文件的 name -> mtime 快照（跳过隐藏项和子目录）
 // 递归【一层】：键是相对 dir 的路径，顶层文件仍是裸文件名（"a.png"），子目录里的是 "pdfs/a.pdf"。
@@ -510,12 +495,44 @@ const LOGIN_URL = BASE_PATH ? "/" : "/login"
 // agent 一旦调用模块外的技能（或试图用 task 子代理绕道），本轮立即中止（见 startJob 的模块闸）。
 // 会话在创建那一刻绑定模块，绑定持久化在 ocdata 卷（module-map.json），之后不可改——
 // 换功能 = 新开会话。老会话（本功能上线前建的）一律按 chat 处理。
+// skills：该模块放行的技能【集合】（首个 = 主技能，模块可用性看它；其余是这条流水线必需的配套技能，
+// 比如"数据统计与分析"要出 ROC 图就绕不开 nature-figure）。null = 不受限（仅 chat）。
+// 【三处同步维护】本表 ↔ deploy/manager.mjs 的 MODULE_TABLE ↔ deploy/scripts/user-modules.sh 的 ALL_MODULES。
+// 模块 id 一经发布就不要改：deploy 的 users/<名>.env 里 MODULES= 存的是 id，改名等于把老用户的授权改没。
+// group：工作台（workspace.html）按它把卡片分到两栏——
+//   workbench =「工作台 / Research Tools」：从零到成稿的完整流程模块（含自由对话）
+//   skills    =「核心能力 / Skills」：单点能力，随时插进任一流程
+// 表内顺序即两个页面的展示顺序（工作台分栏、聊天页欢迎区列表都读 /api/modules 的原序）。
+// 将来新增模块若忘了写 group，工作台把它落到「核心能力」栏——不会从界面上凭空消失。
 const MODULE_DEFS = {
-  chat:     { name: "自由对话",       skill: null,               desc: "不限功能的科研助手：综述、论文、统计、作图、检索……完整流水线都在这里" },
-  grant:    { name: "标书撰写",       skill: "grant-proposal",   desc: "基金标书专用：按资助渠道模板起草申请书正文" },
-  refcheck: { name: "文献真实性检查", skill: "reference-check",  desc: "查假引用：核对参考文献是否真实存在、DOI/题录是否一致" },
-  humanize: { name: "去AI味写作",     skill: "humanize-academic", desc: "学术文本去 AI 味改写：保留事实与引用，只改表达" },
+  review:   { name: "综述撰写",       group: "workbench",
+              skills: ["literature-review", "search-lit", "fulltext-retrieval", "reference-check", "render-docx", "render-pdf-doc"],
+              desc: "整合医学前沿研究成果，梳理领域发展脉络，挖掘研究缺口，明晰创新方向，为课题设计与成果输出夯实理论基础。" },
+  grant:    { name: "基金申报",       group: "workbench",
+              skills: ["grant-proposal", "research-scan", "topic-selection", "novelty-check", "peer-review", "render-pdf-doc", "render-docx"],
+              desc: "国自然 / 基金标书智能生成、润色与格式校验，搭建完整研究方案，优化技术路线，覆盖立项依据到研究基础全章节。" },
+  paper:    { name: "SCI 论文",       group: "workbench",
+              skills: ["write-paper", "literature-review", "reference-check", "peer-review", "humanize-academic", "render-docx"],
+              desc: "契合医学期刊规范，梳理试验逻辑、深化结果讨论，雕琢全文表述，助力高水平学术成果刊发。" },
+  chat:     { name: "自由对话",       group: "workbench", skills: null,
+              desc: "与科研助手开放对话，随问随答，支持上传文献、数据与方法学讨论。" },
+  litread:  { name: "文献研读",       group: "skills",
+              skills: ["search-lit", "fulltext-retrieval", "literature-review", "zotero-library", "deep-research", "research-scan"],
+              desc: "追踪医学领域前沿文献，梳理研究脉络，挖掘研究空白，提炼创新思路，为课题设计、文稿创作提供理论支撑。" },
+  refcheck: { name: "文稿核查与审校", group: "skills",
+              skills: ["reference-check", "peer-review", "data-integrity"],
+              desc: "校验试验逻辑、专业术语、数据及格式、核验文献与引用来源，识别伪造、篡改与 AI 幻觉内容，输出可信度报告。" },
+  humanize: { name: "文章润色",       group: "skills",
+              skills: ["humanize-academic", "render-docx", "render-pdf-doc"],
+              desc: "贴合期刊写作范式，优化行文逻辑、专业表述与段落架构，消除生成式文本痕迹，还原自然学术语感与逻辑节奏。" },
+  stats:    { name: "数据统计与分析", group: "skills",
+              skills: ["data-analysis", "clinical-stats", "nature-figure", "deidentify", "data-integrity"],
+              desc: "一站式医学科研数据服务，涵盖统计建模、基线分析、期刊图表绘制、数据脱敏与源数据核查，完成从数据质控到结果可视化全流程处理。" },
 }
+/** 模块的主技能（决定该模块是否可用）；chat 无主技能 */
+const modPrimarySkill = (id) => MODULE_DEFS[id]?.skills?.[0] || null
+/** 模块是否可用 = 模块本身获授权 且 主技能未被技能白名单收权 */
+const moduleUsable = (id) => ALLOWED_MODULES.includes(id) && (!modPrimarySkill(id) || skillAllowed(modPrimarySkill(id)))
 // 每用户授权（ALLOWED_MODULES=chat,grant,...，由 deploy 的 users/<名>.env 注入）。
 // 空/未设 = 全部模块（单机部署与老容器的兼容默认）。非空但没有一个合法 id = 配置错误 →
 // fail-closed 回落到仅 chat 并响亮告警（别把乱码静默当"全开"）。
@@ -635,7 +652,7 @@ const entRev = () => {
     tier: p.tier || "", model: p.model || "",
     models: (p.models || []).map((m) => (m && m.model) || m).sort(),
     skills: set ? [...set].sort() : null,
-    modules: ALLOWED_MODULES.filter((id) => !MODULE_DEFS[id]?.skill || skillAllowed(MODULE_DEFS[id].skill)),
+    modules: ALLOWED_MODULES.filter(moduleUsable),
   }
   return crypto.createHash("sha1").update(JSON.stringify(payload)).digest("hex").slice(0, 12)
 }
@@ -655,8 +672,9 @@ const unbindSessionModule = (sid) => { if (moduleMap()[safeSid(sid)]) { delete m
 // 受限模块的会话前言：与工作区前言同一个块注入（中间不能有空行——stripPreamble 按"第一个空行"剥离）
 const modulePreamble = (modId) => {
   const m = MODULE_DEFS[modId]
-  if (!m || !m.skill) return ""
-  return `\n- **【模块限制，最高优先级，覆盖 AGENTS.md 的一切路由规则】本会话是「${m.name}」专用模块**：你【只允许】调用一个技能——\`${m.skill}\`，禁止调用任何其它技能，也禁止用 task/子代理间接调用其它技能。\n- 不做任何流水线编排（不选题、不检索、不统计、不排版……），缺信息就直接向用户要。\n- 用户的需求超出「${m.name}」范围时，明确告知“本模块只负责${m.name}，其它需求请到「自由对话」模块”，不要自己徒手代替其它技能去做。\n- 网关会强制校验技能调用：一旦调用 \`${m.skill}\` 之外的技能，本轮会被立即中止。`
+  if (!m || !m.skills) return ""
+  const list = m.skills.map((s) => `\`${s}\``).join("、")
+  return `\n- **【模块限制，最高优先级，覆盖 AGENTS.md 的一切路由规则】本会话是「${m.name}」专用模块**：你【只允许】调用这些技能——${list}（其中 \`${m.skills[0]}\` 是主技能，其余按需配套），禁止调用任何其它技能，也禁止用 task/子代理间接调用其它技能。\n- 只在本模块职责范围内推进，不越界做别的模块的事；缺信息就直接向用户要。\n- 用户的需求超出「${m.name}」范围时，明确告知“本模块只负责${m.name}，其它需求请到「自由对话」模块”，不要自己徒手代替其它技能去做。\n- 网关会强制校验技能调用：一旦调用上述清单之外的技能，本轮会被立即中止。`
 }
 
 // HTTP 响应头只能承载 latin1：中文文件名直接塞进 Content-Disposition 会 ERR_INVALID_CHAR → 下载必 500。
@@ -1291,11 +1309,15 @@ function startJob(sid, sentText, modId) {
   // 新一轮 prompt 就是回退的提交动作（opencode 收到新消息会把 revert 标记清成 null），
   // 待提交登记到此结束；之后再出现的 revert 标记就真是残留了，交还给 clearStaleRevert 自愈。
   pendingReverts.delete(sid)
-  // 模块闸的判据：受限模块只允许这一个技能名；null = 非受限模块（chat / 未传 modId 的兼容路径）
-  const onlySkill = MODULE_DEFS[modId]?.skill || null
-  // 本轮实际生效的技能白名单：受限模块锁单技能（+env-setup 基础设施）；chat 用账号级白名单；null=不限
-  // 账号级白名单取【env ∩ 云端档案】：运营后台收权后，这一轮就按新授权强制，不用等重启
-  const skillGate = onlySkill ? new Set([onlySkill, "env-setup"]) : effectiveSkillSet()
+  // 模块闸的判据：受限模块只允许它那一组技能；null = 非受限模块（chat / 未传 modId 的兼容路径）
+  const modSkills = MODULE_DEFS[modId]?.skills || null
+  // 本轮实际生效的技能白名单：受限模块锁本模块技能组（+env-setup 基础设施），且仍要过账号级白名单
+  //（管理员单独收掉组里某个技能时，那个技能在本模块里也用不了；主技能被收掉时整个模块已在入口被挡）；
+  // chat 用账号级白名单；null=不限。账号级白名单取【env ∩ 云端档案】：运营后台收权后这一轮就按新授权强制，不用等重启
+  const acctSkills = effectiveSkillSet()
+  const skillGate = modSkills
+    ? new Set([...modSkills.filter((s) => !acctSkills || acctSkills.has(s)), "env-setup"])
+    : acctSkills
   const job = {
     sid, running: true, finished: false, subs: new Set(),
     // 增量快照：text 是累积全文、reasoning 按 id、tool 按 callID 各存最新一条，attach 时按序重放即可还原界面
@@ -1485,7 +1507,7 @@ function startJob(sid, sentText, modId) {
           // 违规立即 abort 本轮，prompt 返回后统一广播报错（见下方 moduleHit 分支）。
           if (skillGate && !job.moduleHit) {
             const bad = (p.tool === "skill" && p.state.input?.name && !skillGate.has(p.state.input.name)) ? p.state.input.name
-              : (onlySkill && p.tool === "task" ? "task(子代理)" : null)
+              : (modSkills && p.tool === "task" ? "task(子代理)" : null)
             if (bad) {
               job.moduleHit = bad
               console.warn(`[modules] 会话 ${sid}（模块 ${modId}）调用了越权技能/工具：${bad}，中止本轮`)
@@ -1511,7 +1533,7 @@ function startJob(sid, sentText, modId) {
     let result, promptErr = null
     try {
       // 受限模块：从工具层面禁掉 task 子代理（子会话里的技能调用逃逸出上面的模块闸，索性不让开子代理）
-      result = un(await client.session.prompt({ path: { id: sid }, body: { model: MODEL, parts: [{ type: "text", text: sentText }], ...(onlySkill ? { tools: { task: false } } : {}) } }))
+      result = un(await client.session.prompt({ path: { id: sid }, body: { model: MODEL, parts: [{ type: "text", text: sentText }], ...(modSkills ? { tools: { task: false } } : {}) } }))
     } catch (err) { promptErr = err }
     // 无论正常结束 / 被额度中止 / 被用户终止，都把本轮成本记进今日额度——否则中止的轮不计费，用户可无限重试绕过额度。
     // 真实增量（session.cost 只含完成步）+ 估算兜底（cost=0 的消息 = 被 abort 的那一步，opencode 对它记
@@ -1541,8 +1563,8 @@ function startJob(sid, sentText, modId) {
     }
     if (job.aborting) return finish()                       // 用户显式终止：job.abort 已广播 aborted
     if (job.timedOut) return finish()                       // 首事件看门狗已收场并广播过原因（prompt 此刻才姗姗返回/报错），别再报一遍
-    if (job.moduleHit) { broadcast("failed", { message: onlySkill
-      ? `模块限制：本会话是「${MODULE_DEFS[modId]?.name || modId}」专用模块，只能使用「${onlySkill}」技能；检测到调用「${job.moduleHit}」，本轮已中止。此类需求请到「自由对话」模块新开会话。`
+    if (job.moduleHit) { broadcast("failed", { message: modSkills
+      ? `模块限制：本会话是「${MODULE_DEFS[modId]?.name || modId}」专用模块，只能使用「${modSkills.join("、")}」技能；检测到调用「${job.moduleHit}」，本轮已中止。此类需求请到「自由对话」模块新开会话。`
       : `技能未开通：你的账号未开通「${job.moduleHit}」技能，本轮已中止。如需使用请联系管理员开通。` }); return finish() }
     if (job.quotaHit) { broadcast("failed", { message: `本轮已达今日额度上限（$${DAILY_COST_LIMIT.toFixed(2)}），已自动中止；明日 0 点(UTC)恢复。` }); return finish() }
     if (promptErr) {
@@ -1829,17 +1851,26 @@ async function suggestNext({ q, a, modName }) {
     "请给出 3 条下一步指令（JSON 数组）。",
   ].filter(Boolean).join("\n\n")
   const url = p.baseURL.replace(/\/+$/, "") + "/chat/completions"
+  // 【必须关思考】平台档位里的火山 deepseek/doubao 系是思考模型：默认先在 reasoning_content 里
+  // 推理，真实一问一答下推理轻松吃满 max_tokens，content 空着回来（finish=length）——前端解析出
+  // 空数组，「正在想下一步…」气泡闪两秒就撤，且 err 为空连日志都不留。出 3 条短建议不值得思考，
+  // 用火山的 OpenAI 兼容扩展字段显式关掉（网关 rewriteBody 只改 model、其余原样透传）。
+  // 自设路由可能指向严格校验参数的供应商（OpenAI 之类见到不认识的字段直接 400）→ 去掉该字段重试一次。
+  const attempt = (noThink) => fetch(url, {
+    method: "POST",
+    redirect: "manual",                                    // 与 /api/model/test 同口径：不跟随跳转
+    signal: AbortSignal.timeout(SUGGEST_TIMEOUT_MS),       // 每次尝试各自计时（fetch 不能复用已超时的 signal）
+    headers: { "Content-Type": "application/json", Authorization: "Bearer " + p.apiKey },
+    body: JSON.stringify({
+      // max_tokens 500：给「上游不认 thinking 字段却又要思考」的模型留点余量，思考短的还能把答案挤出来
+      model: p.modelID, stream: false, temperature: 0.7, max_tokens: 500,
+      ...(noThink ? {} : { thinking: { type: "disabled" } }),
+      messages: [{ role: "system", content: SUGGEST_SYS }, { role: "user", content: user }],
+    }),
+  })
   try {
-    const r = await fetch(url, {
-      method: "POST",
-      redirect: "manual",                                    // 与 /api/model/test 同口径：不跟随跳转
-      signal: AbortSignal.timeout(SUGGEST_TIMEOUT_MS),
-      headers: { "Content-Type": "application/json", Authorization: "Bearer " + p.apiKey },
-      body: JSON.stringify({
-        model: p.modelID, stream: false, temperature: 0.7, max_tokens: 220,
-        messages: [{ role: "system", content: SUGGEST_SYS }, { role: "user", content: user }],
-      }),
-    })
+    let r = await attempt(false)
+    if (r.status === 400 || r.status === 422) r = await attempt(true)
     if (!r.ok) return { list: [], err: "http-" + r.status }
     const j = await r.json().catch(() => null)
     const content = j?.choices?.[0]?.message?.content || ""
@@ -1850,7 +1881,10 @@ async function suggestNext({ q, a, modName }) {
       const cost = inTok / 1e6 * (price.input || 0) + outTok / 1e6 * (price.output || 0)
       if (cost > 0) addCost(cost)
     } catch {}
-    return { list: parseSuggestions(content), err: "" }
+    const list = parseSuggestions(content)
+    // 空手而归也要留下线索：过去「content 为空 / 解析不出」err 是空串，一行日志都没有，
+    // 排查只能靠去上游账单里数 completion_tokens —— 这次就是这么破的案（思考吃满 max_tokens）。
+    return { list, err: list.length ? "" : (content.trim() ? "unparsable-content" : "empty-content") }
   } catch (e) {
     return { list: [], err: e?.name === "TimeoutError" ? "timeout" : (e?.message || "fetch-failed") }
   }
@@ -2068,11 +2102,13 @@ export const server = http.createServer(async (req, res) => {
           const mod = sessionModule(s.id)
           const m = META.sessions[s.id] || {}
           const projectId = projectOf(s.id)
-          const expiresAt = expiryOf(s)
-          // 模块徽标（HEAD 原有）与 项目/钉/到期（会话管理）两组信息都要，前端各用各的
+          // 模块徽标（HEAD 原有）与 项目/钉（会话管理）两组信息都要，前端各用各的。
+          // permanent/expiresAt 是 TTL 时代的字段：本身已无意义，但仍固定回「永久」——
+          // 界面包可单独热更新，老 index.html 配新 server.mjs 是真实组合，它读这两个字段
+          // 决定徽标与临期提醒条；给 true/null 让它显示"永久"、提醒条恒空，不会吓唬用户。
           return { id: s.id, title: s.title || "(未命名)", updated: s.time?.updated || 0, running: !!jobs.get(s.id)?.running,
             module: mod, moduleName: MODULE_DEFS[mod]?.name || mod,
-            projectId, pinned: !!m.pinned, permanent: expiresAt === null, expiresAt }
+            projectId, pinned: !!m.pinned, permanent: true, expiresAt: null }
         })
       const projects = [...META.projects].sort((a, b) => (a.order ?? 0) - (b.order ?? 0)).map((p) => ({ id: p.id, name: p.name, order: p.order ?? 0 }))
       return send(res, 200, "application/json", JSON.stringify({ projects, sessions }))
@@ -2088,32 +2124,28 @@ export const server = http.createServer(async (req, res) => {
       return send(res, 200, "application/json", JSON.stringify({ ok: true }))
     }
 
-    // 钉/取消钉（持久化标记）。钉住时顺带续期（重置 7 天）；取消钉则回到普通 7 天 TTL。
+    // 钉/取消钉：置顶分组标记（会话永久保留，钉与存活期无关）
     if (req.method === "POST" && u.pathname === "/api/session/pin") {
       const id = u.searchParams.get("id") || ""
       const pinned = u.searchParams.get("pinned") !== "0"
       if (!id) return send(res, 400, "application/json", JSON.stringify({ ok: false }))
-      const m = sessMeta(id); m.pinned = pinned
-      if (pinned) m.keepUntil = Date.now() + TTL_MS
+      sessMeta(id).pinned = pinned
       saveMeta()
       return send(res, 200, "application/json", JSON.stringify({ ok: true, pinned }))
     }
 
-    // 续期：把非项目会话的存活期重置为「现在 +7 天」（临期提醒里的一键保留）
+    // 续期：TTL 时代的接口，会话已永久保留 → 保留为空操作，只为老界面包（可单独热更新）调用时不报错
     if (req.method === "POST" && u.pathname === "/api/session/renew") {
-      const id = u.searchParams.get("id") || ""
-      if (!id) return send(res, 400, "application/json", JSON.stringify({ ok: false }))
-      sessMeta(id).keepUntil = Date.now() + TTL_MS; saveMeta()
-      return send(res, 200, "application/json", JSON.stringify({ ok: true }))
+      return send(res, 200, "application/json", JSON.stringify({ ok: true, noop: true }))
     }
 
-    // 会话归属项目（拖拽落点）：projectId 传空串/none = 移出项目。移出后给一次续期避免旧会话立即被清。
+    // 会话归属项目（拖拽落点）：projectId 传空串/none = 移出项目
     if (req.method === "POST" && u.pathname === "/api/session/project") {
       const id = u.searchParams.get("id") || ""
       let pid = u.searchParams.get("projectId") || ""
       if (!id) return send(res, 400, "application/json", JSON.stringify({ ok: false }))
       const m = sessMeta(id)
-      if (!pid || pid === "none") { delete m.projectId; m.keepUntil = Date.now() + TTL_MS }
+      if (!pid || pid === "none") delete m.projectId
       else { if (!META.projects.some((p) => p.id === pid)) return send(res, 404, "application/json", JSON.stringify({ ok: false, err: "no such project" })); m.projectId = pid }
       saveMeta()
       return send(res, 200, "application/json", JSON.stringify({ ok: true }))
@@ -2137,14 +2169,13 @@ export const server = http.createServer(async (req, res) => {
       return send(res, 200, "application/json", JSON.stringify({ ok: true }))
     }
 
-    // 删除项目（只删分组，不删会话；组内会话变回普通会话并续期一次，从现在起算 7 天）
+    // 删除项目（只删分组，不删会话；组内会话变回普通会话，照样永久保留）
     if (req.method === "POST" && u.pathname === "/api/project/delete") {
       const id = u.searchParams.get("id") || ""
       const idx = META.projects.findIndex((x) => x.id === id)
       if (idx < 0) return send(res, 404, "application/json", JSON.stringify({ ok: false }))
       META.projects.splice(idx, 1)
-      const now = Date.now()
-      for (const sid of Object.keys(META.sessions)) { const m = META.sessions[sid]; if (m.projectId === id) { delete m.projectId; m.keepUntil = now + TTL_MS } }
+      for (const sid of Object.keys(META.sessions)) { const m = META.sessions[sid]; if (m.projectId === id) delete m.projectId }
       saveMeta()
       return send(res, 200, "application/json", JSON.stringify({ ok: true }))
     }
@@ -2299,7 +2330,7 @@ export const server = http.createServer(async (req, res) => {
     // 功能模块清单：全部模块 + 本账号是否开通（前端据此渲染模块选择卡；未开通的置灰）
     if (req.method === "GET" && u.pathname === "/api/modules") {
       // 模块可用 = 模块本身获授权 且 其绑定技能未被技能白名单收权（chat 无绑定技能，只看模块授权）
-      const list = Object.entries(MODULE_DEFS).map(([id, m]) => ({ id, name: m.name, desc: m.desc, skill: m.skill, allowed: ALLOWED_MODULES.includes(id) && (!m.skill || skillAllowed(m.skill)) }))
+      const list = Object.entries(MODULE_DEFS).map(([id, m]) => ({ id, name: m.name, desc: m.desc, group: m.group || "skills", skill: modPrimarySkill(id), skills: m.skills || null, allowed: moduleUsable(id) }))
       // entRev 一起回：前端在公告轮询里发现它变了就重取本接口，两处用同一个摘要才不会来回打转
       return send(res, 200, "application/json", JSON.stringify({ modules: list, entRev: entRev() }))
     }
@@ -2401,7 +2432,7 @@ export const server = http.createServer(async (req, res) => {
       // 老会话若绑着已收权的模块，续聊也要挡住。
       let modId = sid ? sessionModule(sid) : (reqMod || "chat")
       if (!MODULE_DEFS[modId]) return send(res, 400, "application/json", JSON.stringify({ ok: false, sent: false, err: `未知模块：${modId}` }))
-      if (!ALLOWED_MODULES.includes(modId) || (MODULE_DEFS[modId].skill && !skillAllowed(MODULE_DEFS[modId].skill)))
+      if (!moduleUsable(modId))
         return send(res, 403, "application/json", JSON.stringify({ ok: false, sent: false, err: `你的账号未开通「${MODULE_DEFS[modId].name}」模块${sid ? "（本会话绑定于该模块）" : ""}，请联系管理员开通。` }))
       // 新会话要先向 opencode 建会话；它没起来时这里会抛，此前会被外层 catch 变成一个带堆栈的 500，
       // 用户只看到"发送失败"，根本不知道是后台模型服务没起来。这里单独兜住并给人话。
@@ -3087,11 +3118,11 @@ server.listen(PORT, "0.0.0.0", () => {
     // 只打掩码：位数信息足够运维确认"密码确实注入了"，又不泄露内容。
     ? `  局域网登录：账号 ${LAN_USER} / 密码 ${LAN_PASSWORD ? "*".repeat(Math.min(LAN_PASSWORD.length, 12)) + `（${LAN_PASSWORD.length} 位，见 users/<用户>.env）` : "(未设置)"}（本机 localhost 免登录；改账号密码用环境变量 LAN_USER/LAN_PASSWORD，关登录用 LAN_AUTH=0）`
     : `  登录已关闭（LAN_AUTH=0）`)
-  // 过期会话清理：启动后延迟跑一次（等 opencode 就绪），之后每小时一次。
+  // 元数据整理（只清残留、不删会话）：启动后延迟跑一次（等 opencode 就绪），之后每小时一次。
   // 两个定时器都 unref：它们不该成为"进程能不能退出"的理由 —— 否则自动化测试里
   // 网关关掉后事件循环仍被这个每小时的 interval 挂住，测试进程永远退不出去。
-  setTimeout(cleanupExpiredSessions, 15_000).unref?.()
-  setInterval(cleanupExpiredSessions, 60 * 60 * 1000).unref?.()
+  setTimeout(pruneOrphanMeta, 15_000).unref?.()
+  setInterval(pruneOrphanMeta, 60 * 60 * 1000).unref?.()
 })
 
 // ---- 优雅退出 ----
