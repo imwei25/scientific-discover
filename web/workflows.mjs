@@ -649,14 +649,18 @@ export function gateViolation({ tool, input, skillGate, restricted }) {
   if (tool === "skill" && input?.name && !skillGate.has(input.name)) return input.name
   if (restricted && tool === "task") return "task(子代理)"
   if (tool === "bash") {
-    let cmd = String(input?.command || "")
-    if (READONLY_CMD.test(cmd)) return null
     // 归一化再匹配：`skills//deidentify`、`skills/./deidentify`、`"…/skills"/deidentify`
     // 这几种写法在 shell 里都很平常（路径含空格时加引号是习惯），不归一的话直接漏过去。
-    cmd = cmd.replace(/["']/g, "").replace(/\/\.\//g, "/").replace(/\\\.\\/g, "\\")
-    // matchAll 按规范会克隆正则，不会推进原对象的 lastIndex，故无需手动归零
-    for (const m of cmd.matchAll(SKILL_PATH_RE))
-      if (!skillGate.has(m[1].toLowerCase())) return `${m[1]}（bash 直呼技能脚本）`
+    const cmd = String(input?.command || "").replace(/["']/g, "").replace(/\/\.\//g, "/").replace(/\\\.\\/g, "\\")
+    // ★ 必须【逐段】判，不能拿整条命令的第一个词放行整条：
+    //   `cat x.py | python .opencode/skills/nature-figure/y.py` 开头是 cat，整条放行等于白闸。
+    //   按管道与分隔符切开，只有"这一段自身是只读命令"才跳过这一段。
+    for (const seg of cmd.split(/[|;\r\n]|&&/)) {
+      if (READONLY_CMD.test(seg)) continue
+      // matchAll 按规范会克隆正则，不会推进原对象的 lastIndex，故无需手动归零
+      for (const m of seg.matchAll(SKILL_PATH_RE))
+        if (!skillGate.has(m[1].toLowerCase())) return `${m[1]}（bash 直呼技能脚本）`
+    }
   }
   return null
 }

@@ -227,6 +227,12 @@ test("模块闸不该误杀只读命令，几种平常的路径写法也不能�
                      'python "/app/.opencode/skills"/deidentify/x.py'])
     assert.match(V(cmd) || "", /deidentify/, `漏过：${cmd}`)
   assert.equal(V("python .opencode/skills/write-paper/a.py"), null, "白名单内的照常放行")
+  // ★ 只读放行必须【逐段】判：拿整条命令的第一个词放行整条的话，把 cat 当前缀就能绕过整道闸
+  assert.match(V("cat x.py | python .opencode/skills/nature-figure/y.py") || "", /nature-figure/,
+    "管道后半段是执行，不能因为开头是 cat 就整条放行")
+  assert.match(V("grep -n x a.md && python .opencode/skills/deidentify/run.py") || "", /deidentify/)
+  assert.match(V(["ls .opencode/skills/write-paper/", "python .opencode/skills/peer-review/r.py"].join("\n")) || "",
+    /peer-review/, "换行分隔的第二条命令同样要查")
 })
 
 test("stats 出完表要能导成 Word——不放行排版技能，这个模块最常见的下一句就被闸掐掉", () => {
@@ -333,6 +339,26 @@ test("读数据表头：CSV 给真列名，读不了的格式如实说原因（�
   const x = await gw.get("/api/data/headers?name=" + encodeURIComponent("x.xlsx"))
   assert.equal(x.status, 404)
   void upl
+})
+
+test("上传先于对话：会话被上传接口提前建出来时，模块绑定要补登记（否则整条模块闸静默消失）", async (t) => {
+  const gw = await gateway()
+  t.after(() => gw.close())
+  const mapFile = path.join(gw.dir, ".local", "share", "opencode", "module-map.json")
+  const sid = "ses_preexisting_from_upload"
+  // 模拟 /api/upload 的产物：会话已存在（有 id）但 module-map 里没有任何记录
+  assert.equal(fs.existsSync(mapFile), false, "前置：绑定表还是空的")
+
+  // 带 module 的第一条消息 —— 服务端应当认下它并补绑（opencode 是死的，这一轮会失败，不影响绑定）
+  await gw.post("/api/chat/start", { q: "帮我核查这篇稿子的引用", sid, module: "refcheck" })
+  const map = JSON.parse(fs.readFileSync(mapFile, "utf8"))
+  assert.equal(map[sid], "refcheck",
+    "没补绑的话这个会话会被当成自由对话：模块前言 / 技能闸 / 表单值 / 步骤条全部失效，而 AI 照常回答")
+
+  // 已绑定之后就【不再】认前端传的 module —— 防伪造请求把受限会话"升级"成不受限
+  await gw.post("/api/chat/start", { q: "换个话题", sid, module: "chat" })
+  const map2 = JSON.parse(fs.readFileSync(mapFile, "utf8"))
+  assert.equal(map2[sid], "refcheck", "续会话不许改绑定")
 })
 
 test("回看历史时任务卡要被剥干净——否则用户看到自己'说'了一大段没说过的话", async (t) => {
