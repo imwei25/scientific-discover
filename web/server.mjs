@@ -742,8 +742,16 @@ const wfSave = (outDir, st) => {
   try { fs.mkdirSync(outDir, { recursive: true }); fs.writeFileSync(path.join(outDir, WF_STATE), JSON.stringify(st, null, 2)) }
   catch (e) { console.warn(`[workflow] 状态写入失败：${e.message}`) }
 }
-/** 表单值（intake + 各步 form 合并成一张平表，供 when 条件判定与跨步继承）*/
-const wfValues = (outDir) => wfLoad(outDir)?.form || {}
+/**
+ * 表单值（intake + 各步 form 合并成一张平表，供 when 条件判定与跨步继承）。
+ * 【要求传 modId 并核对】这个文件落在会话产物目录里，而 agent 对该目录有读写权（它有 shell）。
+ * 不核对的话，一份 module 对不上的簿子会被拿去裁剪【另一个模块】的步骤链，前言就成了胡话。
+ * 这不是权限问题（技能白名单来自 MODULE_DEFS，不看这个文件），但足以让剧本失效且极难排查。
+ */
+const wfValues = (outDir, modId) => {
+  const st = wfLoad(outDir)
+  return (st && st.module === modId && st.form) ? st.form : {}
+}
 /** 按"产物文件是否已出现"反推已完成的步骤（权威判据，不问 agent）*/
 function wfSyncDone(outDir, modId) {
   const st = wfLoad(outDir)
@@ -755,7 +763,14 @@ function wfSyncDone(outDir, modId) {
     if ((s.emits || []).some((g) => files.some((f) => WF.globMatch(g, f)))) done.add(s.id)
   }
   const arr = [...done]
-  if (arr.length !== (st.done || []).length) { st.done = arr; wfSave(outDir, st) }
+  if (arr.length !== (st.done || []).length) {
+    // 落盘前重读一次再只覆盖 done：本函数在【轮次收尾】跑，而用户可能正好在同一时刻提交下一步表单
+    //（/api/workflow/form 也写这个文件）。拿本函数开头那份旧快照整体写回，会把刚提交的表单值抹掉。
+    const fresh = wfLoad(outDir) || st
+    fresh.done = arr
+    wfSave(outDir, fresh)
+    return fresh
+  }
   return st
 }
 
@@ -768,7 +783,7 @@ const modulePreamble = (modId, outDir) => {
   const m = MODULE_DEFS[modId]
   if (!m || !m.skills) return ""
   const list = m.skills.map((s) => `\`${s}\``).join("、")
-  const vals = outDir ? wfValues(outDir) : {}
+  const vals = outDir ? wfValues(outDir, modId) : {}
   return `\n- **【模块限制，最高优先级，覆盖 AGENTS.md 的一切路由规则】本会话是「${m.name}」专用模块**：你【只允许】调用这些技能——${list}（其中 \`${m.primary}\` 是主技能，其余按需配套），禁止调用任何其它技能，也禁止用 task/子代理间接调用其它技能。\n- 只在本模块职责范围内推进，不越界做别的模块的事；缺信息就直接向用户要。\n- 用户的需求超出「${m.name}」范围时，明确告知“本模块只负责${m.name}，其它需求请到「自由对话」模块”，不要自己徒手代替其它技能去做。\n- 网关会强制校验技能调用：一旦调用上述清单之外的技能，本轮会被立即中止。${WF.pipelineLine(modId, vals)}${WF.artifactLine(modId, vals)}`
 }
 

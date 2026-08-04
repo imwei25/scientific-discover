@@ -254,11 +254,17 @@ test("读数据表头：CSV 给真列名，读不了的格式如实说原因（�
 test("回看历史时任务卡要被剥干净——否则用户看到自己'说'了一大段没说过的话", async (t) => {
   const gw = await gateway()
   t.after(() => gw.close())
-  const r = await gw.post("/api/workflow/form", { module: "humanize", values: { goals: ["deai"], strength: "standard" } })
-  const card = r.json.card
-  assert.ok(card)
   // 与 server.mjs 的 WFCARD_RE 同款判据：整块（含结尾说明与空行）必须能被一次剥掉
   const re = /^【任务卡 · [\s\S]*?【以上为用户通过表单[\s\S]*?】\n*/
-  const full = card + "帮我润色这篇稿子"
-  assert.equal(full.replace(re, ""), "帮我润色这篇稿子")
+  const r = await gw.post("/api/workflow/form", { module: "humanize", values: { goals: ["deai"], strength: "standard" } })
+  assert.ok(r.json.card)
+  assert.equal((r.json.card + "帮我润色这篇稿子").replace(re, ""), "帮我润色这篇稿子")
+  // ★ 带脚注的模块（综述）最容易漏：脚注若拼在结束标记之后，剥完会残留在用户气泡里，
+  //   用户会看到自己"说"了一句"需要 PRISMA/RoB 请到自由对话"——他根本没说过。
+  const rv = await gw.post("/api/workflow/form", { module: "review", values: { topic: "PD-1 在肝癌" } })
+  assert.match(rv.json.card, /系统综述|Meta/, "脚注要进卡（agent 需要它来给用户指路）")
+  assert.equal((rv.json.card + "开始吧").replace(re, ""), "开始吧", "脚注必须落在可剥区间之内")
+  // 用户自己手打一段普通话，绝不能被这条正则吃掉
+  for (const t2 of ["帮我看看任务卡怎么写", "【重要】这是我的原始需求", "任务卡 · 我自己列的清单"])
+    assert.equal(t2.replace(re, ""), t2, `误吃了用户的话：${t2}`)
 })

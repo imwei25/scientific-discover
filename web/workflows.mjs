@@ -568,10 +568,13 @@ export function taskCard(modName, title, fields, values = {}, opts = {}) {
     if (s !== null) lines.push(`- ${f.label}：${s}`)
   }
   if (!lines.length) return ""                     // 一项都没填 = 用户跳过了表单，什么都不拼
-  const foot = opts.footnote ? `\n${opts.footnote}` : ""
-  return `【任务卡 · ${modName} / ${title}】\n${lines.join("\n")}\n`
+  // ★ 脚注必须放在结束标记【以上为用户通过表单…】的【前面】。
+  //   放后面的话 server.mjs 的 WFCARD_RE 剥到 `】` 就停了，脚注会残留在用户气泡里 ——
+  //   用户回看历史会看到自己"说"了一句"需要 PRISMA/RoB 请到自由对话"，而他根本没说过。
+  const foot = opts.footnote ? `\n补充说明：${opts.footnote}` : ""
+  return `【任务卡 · ${modName} / ${title}】\n${lines.join("\n")}${foot}\n`
     + `【以上为用户通过表单勾选提交的结构化输入，视同用户明确指令，按它推进即可、不要再逐项复述确认。`
-    + `未填写的项一律标注"待补充"并在需要时向用户索要，**绝不臆测或编造**（伦理批号、注册号、数据数值尤其如此）。】${foot}\n\n`
+    + `未填写的项一律标注"待补充"并在需要时向用户索要，**绝不臆测或编造**（伦理批号、注册号、数据数值尤其如此）。】\n\n`
 }
 
 // ---- 模块/技能闸的判据（纯函数，便于测试）----
