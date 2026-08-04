@@ -194,6 +194,7 @@ async function collectTranscript(sid) {
     const parts = m.parts || []
     let text = parts.filter((p) => p.type === "text").map((p) => p.text).join("\n").trim()
     text = stripPreamble(text)
+    if (role === "assistant") text = autoStripSentinel(text)   // 与 /api/history 同口径：协议哨兵不进反馈正文
     // 技能名的取法与直播那条一致（见 broadcast("tool") 处）：state.input.name，
     // 只有 running/completed 的调用才有；取不到就退到 title，再取不到就不记。
     const skills = [...new Set(parts.filter((p) => p.type === "tool" && p.tool === "skill")
@@ -388,6 +389,7 @@ const newId = (p) => p + crypto.randomBytes(6).toString("hex")
 // 彻底删除一个会话：终止在跑的轮 → 删 opencode 会话 → 删产物/上传目录 → 清元数据
 async function hardDeleteSession(id) {
   try { await jobs.get(id)?.abort() } catch {}   // 会话还在生成中 → 先终止再删
+  autoStates.delete(id)   // 无人值守状态一并清掉（abort 里也清，这里兜没有在跑轮的情形）
   // 【顺序要紧】必须在 session.delete 之【前】把目录解析出来：sessionOut/sessionUp 在 dirCache 未命中时
   // 要回头问 opencode 要 session.directory，而会话一旦删掉，session.get 必然 404 → 静默回落到
   // outputs/<sid>，而真实目录是 outputs/ws_xxx → rmSync 对着一个不存在的路径 force 空转，
@@ -1221,6 +1223,70 @@ export function describeModelError(err, route) {
   if (err?.name === "MessageOutputLengthError") return "本轮输出超出模型的长度上限，已被截断中止。可以让它分几次写，或换一个上下文更长的模型。"
   return `本轮模型调用出错${code ? `（HTTP ${code}）` : ""}。${who}${tail}`
 }
+
+// ==== 无人值守模式（autopilot）================================================
+//
+// 用户在输入框旁勾选「自动推进」后：
+//   ① 起轮 preamble 多注入一段自主指令（autoPreamble）：编号选项自行采用推荐项（第 1 项）、
+//      缺事实性输入标「待补充」继续、只有全部交付完成才在回复末尾单独一行输出 [FINAL] 哨兵；
+//   ② 每轮【正常收尾】后由网关判定要不要自动续跑（autoDecide）：没见哨兵就把「按推荐方向
+//      继续」当用户消息再起一轮 —— 出错 / 用户终止 / 越权 / 额度封顶的轮一律不续。
+//
+// 判定以哨兵为主：模型自己声明「我交付了」远比网关猜"这段话像不像问句"可靠。各技能与
+// AGENTS.md §六 要求提问一律给编号选项且推荐项放第 1 个，所以「继续」的语义就是"选 1"。
+// 护栏（缺一不可，ralph-loop 最大的坑是原地打转烧钱）：
+//   · 连续轮数上限 OC_AUTO_MAX_ROUNDS（默认 15）；
+//   · 停滞检测：连续两轮文本归一化后一模一样 → 停；
+//   · 每轮续跑前查当日额度（quotaOver），进行中的额度中途封顶照常生效；
+//   · abort / 删会话即清态（见 job.abort 与 /api/session/delete）。
+// 状态只在内存：进程重启后自然熄火，用户重发一条勾选消息即从第 1 轮重计——不值得持久化。
+const AUTO_MAX_ROUNDS = Math.max(1, Number(process.env.OC_AUTO_MAX_ROUNDS || 15))
+const AUTO_SENTINEL = "[FINAL]"
+const autoStates = new Map()   // sid -> { rounds, lastText }
+
+// 只认【结尾】的哨兵：正文中途出现 [FINAL]（比如模型复述规则）不算完成
+export const autoHasSentinel = (t) => /\[FINAL\]$/.test(String(t || "").trimEnd())
+// 展示前剥掉哨兵：它是网关与模型之间的协议标记，不是给用户看的正文
+export const autoStripSentinel = (t) => String(t || "").replace(/\n?[ \t]*\[FINAL\]\s*$/, "")
+const _autoNorm = (t) => String(t || "").replace(/\s+/g, " ").trim()
+
+/** 纯判定（导出供测试）：收下这轮文本后要不要续跑。不改状态、不看额度。 */
+export function autoVerdict(finalText, st) {
+  const t = String(finalText || "")
+  if (autoHasSentinel(t)) return { go: false, why: "final" }
+  if (!t.trim()) return { go: false, why: "empty" }          // 空文本多半是上游异常，别拿它续跑烧钱
+  if ((st?.rounds || 0) >= AUTO_MAX_ROUNDS) return { go: false, why: "cap" }
+  if (st?.lastText && _autoNorm(t) === st.lastText) return { go: false, why: "stalled" }
+  return { go: true, why: "continue" }
+}
+const AUTO_STOP_NOTES = {
+  cap: () => `无人值守：已连续自动推进 ${AUTO_MAX_ROUNDS} 轮仍未见完成标记，为防失控已停止。请检查目前的产物后手动继续。`,
+  stalled: () => "无人值守：连续两轮输出几乎相同（疑似原地打转），已停止自动推进。请检查产物后手动继续。",
+  quota: () => "无人值守：今日额度已用尽，自动推进停止；明日恢复后可手动继续。",
+  empty: () => "无人值守：本轮没有文本输出（多半是上游异常），自动推进停止。",
+}
+/** 一轮正常收尾后调用：要续跑则推进状态并返回 {go:true, round}；停下返回 {go:false, note?}；未开无人值守返回 null */
+function autoDecide(sid, finalText) {
+  const st = autoStates.get(sid)
+  if (!st) return null
+  const v = autoVerdict(finalText, st)
+  if (v.go && quotaOver()) { v.go = false; v.why = "quota" }
+  if (!v.go) {
+    st.rounds = 0; st.lastText = ""   // 开关本身保留：用户下一条勾选消息从第 1 轮重新计
+    if (v.why === "final") console.log(`[auto] 会话 ${sid}：检测到完成哨兵，自动推进收官`)
+    else console.warn(`[auto] 会话 ${sid}：自动推进停止（${v.why}）`)
+    return { go: false, note: AUTO_STOP_NOTES[v.why]?.() }
+  }
+  st.rounds++; st.lastText = _autoNorm(finalText)
+  console.log(`[auto] 会话 ${sid}：未见完成哨兵，自动续跑第 ${st.rounds}/${AUTO_MAX_ROUNDS} 轮`)
+  return { go: true, round: st.rounds }
+}
+// 注入进首轮 preamble 的自主指令。与【本会话工作区】同一块注入，故同样【不得含空行】
+// （stripPreamble 按第一个空行剥离，见 skillsPreamble 处的同款约束）。
+const autoPreamble = () => `\n- 【无人值守模式已开启】用户不在电脑前：全程不要向用户提问、不要停下等确认。遇到要选择的地方（单步还是完整流程、选哪条 pipeline、选题、方案、期刊……），直接采用你本要推荐的那一项（相当于用户回了「1」），并在正文用一行说明「已自动采用：xxx」。缺少无法自行获得的事实性信息（数据文件、伦理批号、作者名单等）就标「待补充」，继续完成其余部分，别停下来要。\n- 【完成哨兵】只有当本次目标已全部交付（成稿/成品文件已写盘、该跑的质量闸已跑完）时，才在回复最后单独一行输出 ${AUTO_SENTINEL} 。尚未完成时绝不能输出它（提前输出=任务被腰斩）；反之只要不输出它，系统就会自动让你继续下一轮，所以也不必问"是否继续"。`
+/** 自动续跑轮发给模型的用户消息 */
+const autoContinueText = (round) => `【无人值守·自动续跑 第 ${round} 轮】继续按你的推荐方向推进：上一轮若列了编号选项，视为用户选了第 1 项（推荐项）；若在等待确认，视为已确认。缺的事实性信息标「待补充」继续。全部交付完成时在回复末尾单独一行输出 ${AUTO_SENTINEL}；未完成就继续干活，不要输出该标记。`
+
 function startJob(sid, sentText, modId) {
   // 新一轮 prompt 就是回退的提交动作（opencode 收到新消息会把 revert 标记清成 null），
   // 待提交登记到此结束；之后再出现的 revert 标记就真是残留了，交还给 clearStaleRevert 自愈。
@@ -1264,6 +1330,7 @@ function startJob(sid, sentText, modId) {
   job.abort = async () => {
     if (job.finished) return
     job.aborting = true          // 让 prompt 的报错分支知道这是用户终止，别再广播 failed
+    autoStates.delete(sid)       // 用户主动终止 = 无人值守也熄火，绝不能 abort 完又自动续一轮
     broadcast("aborted", {})     // 先告知订阅者（保证前端能收到"已终止"），再实际掐断
     try { await client.session.abort({ path: { id: sid } }) } catch {}
     finish()
@@ -1491,19 +1558,26 @@ function startJob(sid, sentText, modId) {
     // 上游把这一轮判错了：先把已经流出来的半截正文定稿，再如实报错收尾。
     // 【不能只 final 一下就 done】那正是"空气泡"的来源：用户看不出是出错还是模型没话说。
     if (job.modelError) {
-      if (finalText) broadcast("final", { text: finalText })
+      if (finalText) broadcast("final", { text: autoStripSentinel(finalText) })
       broadcast("failed", { message: describeModelError(job.modelError, currentRoute()) })
       return finish()
     }
-    broadcast("final", { text: finalText })
+    broadcast("final", { text: autoStripSentinel(finalText) })   // 哨兵是无人值守的协议标记，不渲染给用户
     // 没报错也没正文：不常见，但同样不能默默收场（多半是上游返回了空 choices）。
     // 用 notice（气泡内提示）而不是 failed：本轮技术上确实正常结束了，产物/工具结果还在。
     if (!finalText.trim()) broadcast("notice", { message: "模型这一轮没有返回任何文本。若反复如此，多半是上游模型服务异常，请换个模型或联系管理员。" })
     const changed = changedSince(outDir, before)
     broadcast("files", changed)   // 只推本会话本轮新建/改动的产物
     warmPreviews(outDir, changed)   // 后台把新产出的 office/docx 预转缓存，用户点预览即秒开
+    // ---- 无人值守：只有走到这里的轮（正常收尾）才考虑续跑；出错/终止/越权/封顶都在上面 return 了 ----
+    const av = autoDecide(sid, finalText)
+    if (av && !av.go && av.note) broadcast("notice", { message: av.note })
+    if (av?.go) broadcast("auto", { round: av.round, max: AUTO_MAX_ROUNDS })   // 前端据此在 done 后自动接流下一轮
     broadcast("done", {})
     finish()
+    // finish() 已把本轮从 jobs 表摘除；同一 tick 里同步起下一轮 —— /api/busy 与前端 attach 都无空窗，
+    // 也不给并发的 /api/chat/start 留下双开同会话的缝（那边的 running 检查到 startJob 是全同步区）。
+    if (av?.go && !jobs.get(sid)?.running) startJob(sid, autoContinueText(av.round), modId)
   })().catch(() => { try { broadcast("failed", { message: "本轮出错（网关内部异常）" }) } catch {} finish() })
   return job
 }
@@ -2092,6 +2166,7 @@ export const server = http.createServer(async (req, res) => {
         if (role !== "user" && role !== "assistant") continue
         let text = (m.parts || []).filter((p) => p.type === "text").map((p) => p.text).join("\n").trim()
         text = stripPreamble(text)   // 剥掉注入的工作区前言，只回显真正对话
+        if (role === "assistant") text = autoStripSentinel(text)   // 无人值守的完成哨兵与直播口径一致：不给用户看
         if (text) out.push({ role, text })
       }
       // 这一轮还在生成中：末尾未完成的助手输出交给续流（/api/chat/attach）直播，从历史里剔除避免重复
@@ -2316,8 +2391,8 @@ export const server = http.createServer(async (req, res) => {
         if (total > 4_000_000) return sendClose(res, 413, "application/json", JSON.stringify({ ok: false, sent: false, err: "消息过长（超过 4MB）" }))   // 从 for-await 里提前 return → body 未读完，必须关连接
         chunks.push(c)
       }
-      let q = "", sid = null, reqMod = ""
-      try { const b = JSON.parse(Buffer.concat(chunks).toString() || "{}"); q = String(b.q ?? ""); sid = b.sid ? String(b.sid) : null; reqMod = String(b.module || "") } catch {}
+      let q = "", sid = null, reqMod = "", autoReq
+      try { const b = JSON.parse(Buffer.concat(chunks).toString() || "{}"); q = String(b.q ?? ""); sid = b.sid ? String(b.sid) : null; reqMod = String(b.module || ""); if (typeof b.auto === "boolean") autoReq = b.auto } catch {}
       if (!q.trim()) return send(res, 400, "application/json", JSON.stringify({ ok: false, sent: false, err: "消息为空" }))
       // ---- 模块裁定 ----
       // 续会话：绑定在创建时已定死，忽略前端传值（防伪造请求把受限会话"升级"成 chat）。
@@ -2347,10 +2422,16 @@ export const server = http.createServer(async (req, res) => {
         return send(res, 200, "application/json", JSON.stringify({ ok: true, sid, sent: false, running: true, notice: "上一轮仍在进行中，本条消息未发送；请等本轮结束后重发。" }))
       if (quotaOver())
         return send(res, 200, "application/json", JSON.stringify({ ok: false, sid, sent: false, err: `今日额度已用尽（已用 $${quotaUsedLive().toFixed(3)} / 上限 $${DAILY_COST_LIMIT.toFixed(2)}），明天恢复。` }))
+      // ---- 无人值守开关：以每条消息带来的勾选态为准 ----
+      // 勾着 → （重）置状态、连续轮数从 0 重计；没勾 → 清态熄火。老前端不带 auto 字段 → 不动现状。
+      // 放在 running/quota 检查之后：消息被拒收时不该动开关状态。
+      if (autoReq === true) autoStates.set(sid, { rounds: 0, lastText: "" })
+      else if (autoReq === false) autoStates.delete(sid)
+      const autoOn = autoStates.has(sid)
       // 给 agent 注入本会话专属目录，覆盖技能默认的 outputs/，实现多用户/多会话隔离
       // 注意：本会话的工作目录（cwd）已在建会话时通过 opencode 的 session.directory 定在【会话产物目录】，
       // 所以 agent 的所有工具默认就在正确的地方读写，preamble 只需说清"当前目录就是产物目录"与几个绝对路径。
-      const preamble = `${PREAMBLE_MARK}\n- **你的当前工作目录就是本会话的产物目录**（\`${ws.out}\`）。所有产物（图表 PNG/PDF、CSV/Excel、md/docx 等）**直接写到当前目录即可**，用相对文件名如 \`fig1.png\`、\`manuscript.md\`，不要再自己拼 \`outputs/xxx\` 前缀。\n- 临时脚本、中间文件同样写当前目录（要归拢可用 \`./.scratch/\`）。\n- 用户上传的数据文件在 \`${ws.up}/\`（读数据从这里找，用这个绝对路径）。\n- 跑本套件的脚本用 \`\${REPO_ROOT:-/app}\` 前缀定位仓库，例如 \`\${REPO_ROOT:-/app}/.venv/bin/python \${REPO_ROOT:-/app}/.opencode/skills/<技能>/xxx.py\`——因为当前目录不是仓库根，写 \`.venv/...\` 这种相对路径会找不到。\n- 正文里嵌入图片直接用文件名：\`![图注](fig1.png)\`（图和稿件都在当前目录，渲染也从当前目录跑）。\n- **不要把产物写到仓库根或 \`\${REPO_ROOT:-/app}\` 下**：那是所有会话共享的，会互相覆盖，也不会出现在界面的"产出"侧栏。${modId === "chat" ? skillsPreamble() : modulePreamble(modId)}${zoteroPreamble(ws.out)}\n\n`
+      const preamble = `${PREAMBLE_MARK}\n- **你的当前工作目录就是本会话的产物目录**（\`${ws.out}\`）。所有产物（图表 PNG/PDF、CSV/Excel、md/docx 等）**直接写到当前目录即可**，用相对文件名如 \`fig1.png\`、\`manuscript.md\`，不要再自己拼 \`outputs/xxx\` 前缀。\n- 临时脚本、中间文件同样写当前目录（要归拢可用 \`./.scratch/\`）。\n- 用户上传的数据文件在 \`${ws.up}/\`（读数据从这里找，用这个绝对路径）。\n- 跑本套件的脚本用 \`\${REPO_ROOT:-/app}\` 前缀定位仓库，例如 \`\${REPO_ROOT:-/app}/.venv/bin/python \${REPO_ROOT:-/app}/.opencode/skills/<技能>/xxx.py\`——因为当前目录不是仓库根，写 \`.venv/...\` 这种相对路径会找不到。\n- 正文里嵌入图片直接用文件名：\`![图注](fig1.png)\`（图和稿件都在当前目录，渲染也从当前目录跑）。\n- **不要把产物写到仓库根或 \`\${REPO_ROOT:-/app}\` 下**：那是所有会话共享的，会互相覆盖，也不会出现在界面的"产出"侧栏。${modId === "chat" ? skillsPreamble() : modulePreamble(modId)}${zoteroPreamble(ws.out)}${autoOn ? autoPreamble() : ""}\n\n`
       startJob(sid, preamble + q, modId)   // 同步建 job（jobs.set 在函数首行）→ 返回后前端 attach 必能接上
       return send(res, 200, "application/json", JSON.stringify({ ok: true, sid, sent: true, module: modId }))
     }
@@ -2369,7 +2450,9 @@ export const server = http.createServer(async (req, res) => {
 
     // 显式终止某会话进行中的一轮（前端"终止"按钮；断开连接不再意味着终止）
     if (req.method === "POST" && u.pathname === "/api/chat/abort") {
-      const job = jobs.get(u.searchParams.get("sid") || "")
+      const sid = u.searchParams.get("sid") || ""
+      const job = jobs.get(sid)
+      autoStates.delete(sid)   // 没有在跑的轮也要清：无人值守可能正停在两轮之间的判定瞬间
       if (job) await job.abort()
       return send(res, 200, "application/json", JSON.stringify({ ok: true, aborted: !!job }))
     }

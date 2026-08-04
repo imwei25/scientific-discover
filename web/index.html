@@ -171,6 +171,9 @@
     background: #ffffff; border: 1px solid var(--line-hi); border-radius: var(--r-md); transition: border-color .15s, box-shadow .15s;
   }
   form.composer:focus-within { border-color: var(--cyan); box-shadow: 0 0 0 3px rgba(56,189,248,.15); }
+  .auto-lbl { display: flex; align-items: center; gap: 4px; font-size: 12px; color: var(--dim, #94a3b8); white-space: nowrap; cursor: pointer; user-select: none; }
+  .auto-lbl input { accent-color: var(--cyan); cursor: pointer; margin: 0; }
+  .auto-lbl.on { color: var(--cyan); }
   #q { flex: 1; padding: 10px 12px; border: 0; background: transparent; color: var(--text); font-size: 14px; outline: none; }
   #q::placeholder { color: var(--faint); }
   button { border: 0; border-radius: var(--r-sm); cursor: pointer; font-size: 14px; font-weight: 600; transition: filter .15s, background .15s, transform .05s; }
@@ -583,6 +586,7 @@
     <form id="f" class="composer">
       <span id="modBadge" title="本会话绑定的功能模块"></span>
       <input id="q" placeholder="给 Niuma Science 发消息…" autocomplete="off" />
+      <label id="autoLbl" class="auto-lbl" title="勾选后 AI 不再停下向你提问：所有选择自动采用推荐项，连续推进直到给出最终产出（或达到轮数/额度上限）才停。随时可点「终止」。"><input type="checkbox" id="autoChk" />自动推进</label>
       <button id="send" type="submit">发送</button>
       <button id="stop" type="button" title="终止本次输出" hidden>终止</button>
       <button id="new" type="button" title="清空上下文，开始新会话">新对话</button>
@@ -726,6 +730,13 @@ const f = document.getElementById("f")
 const q = document.getElementById("q")
 const sendBtn = document.getElementById("send")
 const stopBtn = document.getElementById("stop")
+// 无人值守开关：跨页面刷新记住勾选态；勾选态随每条消息发给网关（见 sendMessage 的 auto 字段）
+const autoChk = document.getElementById("autoChk")
+const autoLbl = document.getElementById("autoLbl")
+autoChk.checked = localStorage.getItem("nm_auto") === "1"
+const syncAutoLbl = () => autoLbl.classList.toggle("on", autoChk.checked)
+autoChk.addEventListener("change", () => { localStorage.setItem("nm_auto", autoChk.checked ? "1" : "0"); syncAutoLbl() })
+syncAutoLbl()
 const filesEl = document.getElementById("files")
 let activeES = null   // 当前订阅中的 SSE 连接——只是"订阅"，断开/切走都不会打断后台生成
 function setStreamingUI(on) {
@@ -1614,7 +1625,7 @@ async function sendMessage(text) {
     const resp = await fetch("api/chat/start", {
       method: "POST", headers: { "Content-Type": "application/json" },
       // q 前面可能带一行 Zotero「检索范围」指示（服务端回看历史时会剥掉）；气泡里显示的仍是用户原话
-      body: JSON.stringify({ q: zScopePrefix() + text, sid: sessionId, module: sessionId ? undefined : currentModule }),   // 模块只在建会话时绑定；续会话由服务端按绑定表裁定
+      body: JSON.stringify({ q: zScopePrefix() + text, sid: sessionId, module: sessionId ? undefined : currentModule, auto: autoChk.checked }),   // 模块只在建会话时绑定；续会话由服务端按绑定表裁定；auto=无人值守勾选态
     })
     // 登录已过期 → 去登录页。先复位 sending/streaming 再跳：万一跳转被拦或很慢，
     // 按钮不至于永久禁用（否则用户只能刷新页面才能再发消息）。
@@ -1717,10 +1728,13 @@ function openStream(url) {
     loadSessions()   // 刷新会话列表（新会话入列 / 更新时间与高亮）
     refreshQuota()   // 本轮成本已入账 → 刷新顶栏额度
     // 正常收尾（没出错、确有回答）才去要"下一步"建议：出错/被终止的轮次建议不出下一步，
-    // 用户此刻要的是重试或看提示，不是被推着往前走。
-    if (!note && gotText) requestSugs(turn, askedText, answer.textContent || "")
+    // 用户此刻要的是重试或看提示，不是被推着往前走。无人值守续跑中也不要：马上就自动开下一轮，
+    // 建议既没人点，还每轮白烧一次小模型请求。
+    if (!note && gotText && !autoNextInfo) requestSugs(turn, askedText, answer.textContent || "")
   }
-  es.addEventListener("session", (ev) => { sseFailStreak = 0; const nid = JSON.parse(ev.data).id; sessionId = nid; localStorage.setItem("nm_sid", nid); consumePendingProject(nid); loadUploads(); loadZotLib() })   // 连上了 → 清零重连计数
+  let streamSid = null      // 本条流服务的会话（区别于全局 sessionId：用户中途可能切走会话）
+  let autoNextInfo = null   // 服务端宣告"done 之后还有自动续跑的下一轮"（auto 事件），done 时据此接流
+  es.addEventListener("session", (ev) => { sseFailStreak = 0; const nid = JSON.parse(ev.data).id; streamSid = nid; sessionId = nid; localStorage.setItem("nm_sid", nid); consumePendingProject(nid); loadUploads(); loadZotLib() })   // 连上了 → 清零重连计数
 
   es.addEventListener("tool", (ev) => {
     const d = JSON.parse(ev.data)
@@ -1754,7 +1768,16 @@ function openStream(url) {
   es.addEventListener("text", (ev) => { if (!painted) { gotText = true; answer.textContent = JSON.parse(ev.data); setGen("正在输出…"); follow() } })   // 流式期间纯文本，final 时才渲染 markdown
   es.addEventListener("final", (ev) => { const t = JSON.parse(ev.data).text; if (t && !painted) { gotText = true; answer.textContent = t } paintAnswer(); follow() })
   es.addEventListener("files", (ev) => { const list = JSON.parse(ev.data); if (list.length) { renderFiles(list); addProducts(list) } })   // 本轮没产物就保留上一轮，不清空
-  es.addEventListener("done", () => { paintAnswer(); finalize(); refreshStorage() })   // 本轮产物落盘后刷新存储用量
+  es.addEventListener("auto", (ev) => { try { autoNextInfo = JSON.parse(ev.data) } catch {} })   // 无人值守：done 后服务端已同步起了下一轮
+  es.addEventListener("done", () => {
+    paintAnswer(); finalize(); refreshStorage()   // 本轮产物落盘后刷新存储用量
+    // 无人值守续跑：服务端在 done 前广播过 auto 事件，且用户没切走会话 → 自动接流下一轮。
+    // 用户切走了就不接（免得把 A 会话的输出流进 B 的界面）；服务端照跑，切回来时 resumeSession 会续上。
+    if (autoNextInfo && sessionId === streamSid) {
+      addNote("🔁 无人值守：本轮未见完成标记，自动进入第 " + autoNextInfo.round + (autoNextInfo.max ? "/" + autoNextInfo.max : "") + " 轮继续推进…（点「终止」可停）")
+      attachStream(streamSid)
+    }
+  })
   es.addEventListener("failed", (ev) => { let m = "本轮出错"; try { m = JSON.parse(ev.data).message } catch {} finalize("⚠ " + m) })   // 服务端出错：如实提示，不丢会话
   es.addEventListener("aborted", () => finalize("⏹ 已终止"))   // 后端确认已终止（本页或别的页点了"终止"）
   es.addEventListener("notice", (ev) => { try { const n = document.createElement("div"); n.className = "note"; n.textContent = "⚠ " + JSON.parse(ev.data).message; answer.appendChild(n) } catch {} })   // 流内提示（气泡的幽灵标记已由 start 接口决定，不在这里推断）
