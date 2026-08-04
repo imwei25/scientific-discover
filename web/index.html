@@ -1760,9 +1760,13 @@ function formSummary(modId, values) {
   return "开始「" + wf.name + "」：" + (parts.join(" · ") || "按默认设定")
 }
 /** 通用表单卡渲染器。schema 全部来自服务端，这里只管画 —— 改流程不用动前端 */
-function buildFormCard({ title, sub, fields, footnote, steps, onSubmit, onSkip, submitText }) {
-  const values = {}
-  for (const f of fields) if (f.default !== undefined) values[f.id] = Array.isArray(f.default) ? [...f.default] : f.default
+function buildFormCard({ title, sub, fields, footnote, steps, onSubmit, onSkip, submitText, seed }) {
+  // seed = 之前各步已填过的值（服务端 _workflow.json 里那张平表）。
+  // 【必须有】步骤表单里的 columns 字段 source 指向的是【首屏】选的数据文件，不在本卡的 fields 里；
+  // 不把旧值带进来，"分组列"就会永远停在"先在上面选好数据文件"，这个下拉等于废了。
+  // 多带的键无害：服务端 taskCard 只遍历本步 fields，不会把继承来的值重复拼进卡。
+  const values = { ...(seed || {}) }
+  for (const f of fields) if (f.default !== undefined && values[f.id] === undefined) values[f.id] = Array.isArray(f.default) ? [...f.default] : f.default
   const box = document.createElement("div"); box.className = "wfcard"
   const hd = document.createElement("div"); hd.className = "wfhd"
   const t = document.createElement("div"); t.className = "wftitle"; t.textContent = title
@@ -2121,6 +2125,46 @@ function updateStepsBar(done, cur) {
   else log.insertBefore(bar, log.firstChild)
   stepsHost = bar
 }
+// ---- 逐步表单：一轮结束后，若下一步是"有表单的步骤"就地给一张卡 ----
+// 【为什么只对有 form 的步骤给】不是每一步都值得插卡。像"引用核查"这种没有可勾选参数的步骤，
+// 弹一张空卡只会多一次点击；那种情况退回原来的"下一步建议"气泡即可。
+// 【为什么不阻断】卡片只是个快捷入口，用户完全可以无视它继续打字 —— 与首屏表单同一条铁律。
+async function offerStepForm(turn) {
+  if (!turn?.isConnected || turn.querySelector(".wfcard") || turn.querySelector(".askform")) return false
+  if (!sessionId) return false
+  let st
+  try { st = await fetch("api/workflow/state?sid=" + encodeURIComponent(sessionId)).then((r) => r.json()) } catch { return false }
+  if (!st?.state || !st.steps?.length) return false                 // chat 会话 / 没有工作流
+  updateStepsBar(st.state.done || [], st.state.cur)                 // 顺手把步骤条刷到最新（产物反推的进度）
+  const done = new Set(st.state.done || [])
+  const next = st.steps.find((s) => !done.has(s.id) && s.form?.length)
+  if (!next) return false
+  if (!turn.isConnected) return false                               // 等回包期间用户切走了会话
+  const card = buildFormCard({
+    title: "下一步 · " + next.name,
+    sub: next.hint ? next.hint + "（也可以直接在输入框里说，不用非填这张卡）" : "勾选后提交，比打字快；也可以直接在输入框里说。",
+    fields: next.form, steps: null, submitText: "提交并继续",
+    seed: st.state.form || {},                                      // 跨步继承：首屏选的数据文件、目标期刊等
+    onSubmit: (values) => submitStepForm(st.module, next, values, card),
+    onSkip: () => { card.remove(); q.focus() },
+  })
+  turn.appendChild(card)
+  scrollFollow()
+  return true
+}
+async function submitStepForm(modId, step, values, card) {
+  let text = ""
+  try {
+    const r = await fetch("api/workflow/form", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ module: modId, step: step.id, values, sid: sessionId }) })
+    if (r.ok) text = (await r.json()).card || ""
+  } catch (_) {}
+  card.remove()
+  if (!text) { addNote("⚠ 这一步没勾选任何内容——直接在输入框里说就行。"); q.focus(); return }
+  pendingWfCard = text
+  await sendMessage("继续下一步：" + step.name)
+}
+
 /** 切会话/刷新时把步骤条恢复到当前进度 */
 async function loadWorkflowState() {
   if (stepsHost && stepsHost.parentNode) { stepsHost.remove(); stepsHost = null }
@@ -2409,7 +2453,11 @@ function openStream(url) {
     // 正常收尾（没出错、确有回答）才去要"下一步"建议：出错/被终止的轮次建议不出下一步，
     // 用户此刻要的是重试或看提示，不是被推着往前走。无人值守续跑中也不要：马上就自动开下一轮，
     // 建议既没人点，还每轮白烧一次小模型请求。
-    if (!note && gotText && !autoNextInfo) requestSugs(turn, askedText, answer.textContent || "")
+    // 下一步若是一个"有表单的步骤"，就地给一张卡（勾选比打字快）；否则退回原来的建议气泡。
+    // 两者互斥：叠在一起会让回合底部塞满东西，用户不知道该看哪个。
+    if (!note && gotText && !autoNextInfo) offerStepForm(turn).then((shown) => {
+      if (!shown) requestSugs(turn, askedText, answer.textContent || "")
+    })
   }
   let streamSid = null      // 本条流服务的会话（区别于全局 sessionId：用户中途可能切走会话）
   let autoNextInfo = null   // 服务端宣告"done 之后还有自动续跑的下一轮"（auto 事件），done 时据此接流
