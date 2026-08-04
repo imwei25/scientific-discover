@@ -530,7 +530,9 @@ const MODULE_DEFS = {
   litread:  { name: "文献研读",       group: "skills",
               desc: "追踪医学领域前沿文献，梳理研究脉络，挖掘研究空白，提炼创新思路，为课题设计、文稿创作提供理论支撑。" },
   refcheck: { name: "文稿核查与审校", group: "skills",
-              desc: "校验试验逻辑、专业术语、数据及格式、核验文献与引用来源，识别伪造、篡改与 AI 幻觉内容，输出可信度报告。" },
+              // ⚠️ 别写成"识别伪造、篡改" —— data-integrity 技能的铁律是「只出待核信号、不下造假结论」
+              // （signal not verdict）。首屏承诺"查得出造假"而实际只给待核清单，既让用户失望，本身也有风险。
+              desc: "核验文献与引用是否真实存在、DOI 与撤稿情况，检查统计方法与数据的自洽性，逐条列出需要你复核的疑点。" },
   humanize: { name: "文章润色",       group: "skills",
               desc: "贴合期刊写作范式，优化行文逻辑、专业表述与段落架构，消除生成式文本痕迹，还原自然学术语感与逻辑节奏。" },
   stats:    { name: "数据统计与分析", group: "skills",
@@ -542,7 +544,15 @@ for (const [id, m] of Object.entries(MODULE_DEFS)) {
   if (m.skills === null) continue                     // chat
   m.skills = WF.skillsOf(id)
   m.primary = WF.primaryOf(id)
-  if (!m.skills || !m.primary) console.warn(`[modules] 模块 ${id} 在 workflows.mjs 里没有对应工作流 → 该模块将不可用，请补上定义`)
+  if (!m.skills || !m.primary) {
+    // ★ 必须显式置成不可用。此前只打一行告警就完事，而 moduleUsable 的写法是
+    //   `!modPrimarySkill(id) || skillAllowed(...)` —— primary 为 null 时前半段为真 → 模块【照常可选】，
+    //   建出来的会话 modSkills=null → skillGate 退成账号级、restricted=false、连 task 都不禁，
+    //   等于这个受限模块完全没有闸。是 fail-open，方向错了。
+    //   触发条件：往 MODULE_DEFS 加模块或改 id 而忘了在 workflows.mjs 加对应条目。
+    m.broken = true
+    console.warn(`[modules] 模块 ${id} 在 workflows.mjs 里没有对应工作流 → 已置为不可用（fail-closed），请补上定义`)
+  }
 }
 /** 模块的主技能（决定该模块是否可用）；chat 无主技能 */
 const modPrimarySkill = (id) => MODULE_DEFS[id]?.primary || null
@@ -551,14 +561,16 @@ const modPrimarySkill = (id) => MODULE_DEFS[id]?.primary || null
  * 只说"请到自由对话"太糊：用户在 SCI 论文模块里被 nature-figure 挡下时，真正该去的是
  * 「数据统计与分析」。找不到归属（如 systematic-review 不属于任何模块）才回落到自由对话。
  */
-const skillHome = (skill) => {
+const skillHome = (skill, curMod) => {
   const name = String(skill || "").replace(/（.*$/, "").trim()   // 剥掉 "（bash 直呼技能脚本）" 这类后缀
-  const hits = Object.entries(MODULE_DEFS).filter(([, m]) => m.skills?.includes(name)).map(([, m]) => m.name)
+  // 排除用户当前所在的模块：技能集扩成整条 pipeline 后一个技能常属于多个模块（nature-figure 同属
+  // paper 与 stats）。账号级白名单单独收掉它时，在 paper 里被拦却提示"请到 SCI 论文模块"——指回原地。
+  const hits = Object.entries(MODULE_DEFS).filter(([id, m]) => id !== curMod && m.skills?.includes(name)).map(([, m]) => m.name)
   if (!hits.length) return ""
   return `「${name}」属于${hits.map((h) => `「${h}」`).join(" / ")}模块，请到那里新开会话继续。`
 }
 /** 模块是否可用 = 模块本身获授权 且 主技能未被技能白名单收权 */
-const moduleUsable = (id) => ALLOWED_MODULES.includes(id) && (!modPrimarySkill(id) || skillAllowed(modPrimarySkill(id)))
+const moduleUsable = (id) => !MODULE_DEFS[id]?.broken && ALLOWED_MODULES.includes(id) && (!modPrimarySkill(id) || skillAllowed(modPrimarySkill(id)))
 // 每用户授权（ALLOWED_MODULES=chat,grant,...，由 deploy 的 users/<名>.env 注入）。
 // 空/未设 = 全部模块（单机部署与老容器的兼容默认）。非空但没有一个合法 id = 配置错误 →
 // fail-closed 回落到仅 chat 并响亮告警（别把乱码静默当"全开"）。
@@ -732,11 +744,22 @@ const unbindSessionModule = (sid) => { if (moduleMap()[safeSid(sid)]) { delete m
 // 落在【会话产物目录】而不是全局表：它天然随会话建、随会话删（删会话会整目录清掉），
 // 也跟着产物一起被打包/迁移。下划线前缀 → dirState 不过滤下划线，所以这里额外在产物列表里排掉它，
 // 免得用户在"产出"侧栏看到一个莫名其妙的 json。
-// 【谁写】服务端。agent 只读不写：进度由"产物文件出现了没有"反推（见 wfSyncDone），
-// 不依赖模型自觉，也不给它篡改进度的机会。
+// 【谁写】服务端。进度由"产物文件出现了没有"反推（见 wfSyncDone），不依赖模型自觉汇报。
+// 【不是防篡改边界】这个文件就在会话产物目录里，agent 有 shell、对该目录有写权，它想改就能改
+// （把 done 全填上、或把 form.deidDone 置真把脱敏步从自己的剧本里剔掉）。这不构成提权——技能白名单
+// 来自 MODULE_DEFS，压根不看这个文件——但别把它当权威账本用。真正的强制在事件流那道闸上。
+// 故 wfLoad 对形状做基本校验：坏数据（如 done 写成字符串）会被 new Set("abc") 拆成 ["a","b","c"] 写回。
 const WF_STATE = "_workflow.json"
 const wfLoad = (outDir) => {
-  try { return JSON.parse(fs.readFileSync(path.join(outDir, WF_STATE), "utf8")) || null } catch { return null }
+  try {
+    const st = JSON.parse(fs.readFileSync(path.join(outDir, WF_STATE), "utf8"))
+    if (!st || typeof st !== "object" || Array.isArray(st)) return null
+    if (typeof st.module !== "string") return null
+    if (!Array.isArray(st.done)) st.done = []
+    else st.done = st.done.filter((x) => typeof x === "string")
+    if (!st.form || typeof st.form !== "object" || Array.isArray(st.form)) st.form = {}
+    return st
+  } catch { return null }
 }
 const wfSave = (outDir, st) => {
   try { fs.mkdirSync(outDir, { recursive: true }); fs.writeFileSync(path.join(outDir, WF_STATE), JSON.stringify(st, null, 2)) }
@@ -1692,7 +1715,7 @@ function startJob(sid, sentText, modId) {
     if (job.aborting) return finish()                       // 用户显式终止：job.abort 已广播 aborted
     if (job.timedOut) return finish()                       // 首事件看门狗已收场并广播过原因（prompt 此刻才姗姗返回/报错），别再报一遍
     if (job.moduleHit) { broadcast("failed", { message: modSkills
-      ? `模块限制：本会话是「${MODULE_DEFS[modId]?.name || modId}」专用模块，只能使用「${modSkills.join("、")}」技能；检测到调用「${job.moduleHit}」，本轮已中止。${skillHome(job.moduleHit) || "此类需求请到「自由对话」模块新开会话。"}`
+      ? `模块限制：本会话是「${MODULE_DEFS[modId]?.name || modId}」专用模块，只能使用「${modSkills.join("、")}」技能；检测到调用「${job.moduleHit}」，本轮已中止。${skillHome(job.moduleHit, modId) || "此类需求请到「自由对话」模块新开会话。"}`
       : `技能未开通：你的账号未开通「${job.moduleHit}」技能，本轮已中止。如需使用请联系管理员开通。` }); return finish() }
     if (job.quotaHit) { broadcast("failed", { message: `本轮已达今日额度上限（$${DAILY_COST_LIMIT.toFixed(2)}），已自动中止；明日 0 点(UTC)恢复。` }); return finish() }
     if (promptErr) {
@@ -2501,8 +2524,10 @@ export const server = http.createServer(async (req, res) => {
     // 【为什么不在这里直接发消息】发消息那条路（/api/chat/start）有一整套并发/额度/绑定判定，
     // 不该复制一份。这里只负责"把勾选变成文本"，发送仍走原来的口。
     if (req.method === "POST" && u.pathname === "/api/workflow/form") {
+      // sendClose 而非 send：超限时 body 还没读完就回包，不声明关闭连接的话残留 body 会把这条
+      // keep-alive 彻底堵死（同一连接的下一个请求永不返回）。/api/upload、/api/chat/start 同款。
       const b = await readJson(req).catch(() => null)
-      if (!b) return send(res, 400, "application/json", JSON.stringify({ ok: false, err: "请求体不是合法 JSON" }))
+      if (!b) return sendClose(res, 400, "application/json", JSON.stringify({ ok: false, err: "请求体不是合法 JSON 或超过大小上限" }))
       const modId = String(b.module || "")
       const stepId = b.step ? String(b.step) : ""       // 空 = 首屏 intake
       const values = (b.values && typeof b.values === "object") ? b.values : {}
@@ -2662,12 +2687,21 @@ export const server = http.createServer(async (req, res) => {
       // 新会话：用请求的模块（缺省 chat），必须是已知且授权的模块。
       // 授权在这里查而不是只在创建时查：管理员收权后容器会被重建（env 变更即重建），
       // 老会话若绑着已收权的模块，续聊也要挡住。
-      let modId = sid ? sessionModule(sid) : (reqMod || "chat")
+      // ★ 例外：会话已存在但【从未绑定过】—— 这不是"续会话"，是"会话被上传接口提前建出来了"。
+      //   /api/upload 在没有 sid 时会现建一个会话并把 id 回给前端；而 stats/refcheck/humanize
+      //   三个模块的规定流程就是"先传文件、再填表单、再发第一条消息"，必然走这条路。
+      //   不补绑的话：modId 落成 chat → 没有模块前言、没有技能闸、表单值不落盘、步骤条永不出现，
+      //   而 AI 照常回答，用户完全看不出流程已经失效（哑失败）。账号若没开通 chat 更会直接 403。
+      //   安全方向是收紧不是放宽：未绑定(=chat) → 受限模块，只会让能用的技能变少。
+      const unbound = sid && !moduleMap()[safeSid(sid)]
+      let modId = sid ? (unbound && MODULE_DEFS[reqMod] ? reqMod : sessionModule(sid)) : (reqMod || "chat")
       if (!MODULE_DEFS[modId]) return send(res, 400, "application/json", JSON.stringify({ ok: false, sent: false, err: `未知模块：${modId}` }))
       if (!moduleUsable(modId))
         return send(res, 403, "application/json", JSON.stringify({ ok: false, sent: false, err: `你的账号未开通「${MODULE_DEFS[modId].name}」模块${sid ? "（本会话绑定于该模块）" : ""}，请联系管理员开通。` }))
       // 新会话要先向 opencode 建会话；它没起来时这里会抛，此前会被外层 catch 变成一个带堆栈的 500，
       // 用户只看到"发送失败"，根本不知道是后台模型服务没起来。这里单独兜住并给人话。
+      // 上传接口提前建出来的会话：在这里补登记绑定（见上面 unbound 的说明）
+      if (unbound && modId !== "chat") bindSessionModule(sid, modId)
       if (!sid) {
         try { sid = await createSession(q.slice(0, 40)); titledSessions.add(sid); if (modId !== "chat") bindSessionModule(sid, modId) }
         catch {

@@ -22,7 +22,7 @@
 // / { field:"deidDone", eq:false }。前端与服务端共用同一套判定，行为必然一致。
 export function condOk(cond, values) {
   if (!cond) return true
-  if (Array.isArray(cond)) return cond.every((c) => condOk(c, values))
+  if (Array.isArray(cond)) return cond.every((c) => condOk(c, values))   // 数组 = 全部成立（AND）
   const v = values?.[cond.field]
   if ("eq" in cond) return v === cond.eq
   if ("ne" in cond) return v !== cond.ne
@@ -32,6 +32,12 @@ export function condOk(cond, values) {
   if ("truthy" in cond) return cond.truthy ? !!v : !v
   return true
 }
+
+/** 字段/步骤是否显示：when 全部成立（AND）且 whenAny 至少一条成立（OR）。两者都可缺省。 */
+export const visible = (f, values) =>
+  condOk(f?.when, values) && (!f?.whenAny || f.whenAny.some((c) => condOk(c, values)))
+/** 是否必填：required 恒真，或 requiredWhen 条件成立（如"勾了数据完整性才必须传数值表"） */
+export const isRequired = (f, values) => !!f?.required || (!!f?.requiredWhen && condOk(f.requiredWhen, values))
 
 // ---- 字段类型 ----
 // text/textarea/number/select/multi/bool ：常规控件
@@ -45,19 +51,25 @@ export function condOk(cond, values) {
 const LANG = { id: "lang", label: "输出语言", type: "select", default: "zh",
   options: [{ v: "zh", t: "中文" }, { v: "en", t: "English" }] }
 
-// 期刊筛选：三个字段一组，多个模块复用。
-// ⚠️ 措辞是刻意的：官方 JCR IF 与中科院分区是授权数据，本产品没有、也不能内置分发。
-// 默认档用 OpenAlex 的两年篇均被引作近似分级（见 server.mjs 的 journalMetrics），
-// 所以标签一律写「期刊影响力（近似）」「影响力四分位」，绝不写成 IF / 分区 —— 那等于凭空造数，
-// 违反 AGENTS.md §五 不虚构。用户上传了本机构的 JCR/中科院分区表时才切到精确档并标明来源。
+// 期刊筛选：一组字段，多个模块复用。**筛的是"检索到的文献发表在什么刊上"，不是"你想投哪本刊"。**
+//
+// ⚠️ 两条必须守住的措辞：
+// ① 官方 JCR IF 与中科院分区是授权数据，本产品没有、也不能内置分发。默认档用 OpenAlex 的
+//    两年篇均被引作近似分级，所以标签一律写「影响力（近似）」，绝不写成 IF / 分区 ——
+//    那等于凭空造数（不虚构是本平台的硬性规定）。用户传了本机构的分区表才切精确档并标明来源。
+// ② 在 SCI 论文表单里，这组字段紧跟在"目标期刊梯队/具体期刊"后面，实测会被百分之百读成
+//    "我想投的刊影响因子几到几"。所以字段名写死成「**文献来源期刊**的影响力」，并靠 section
+//    分组把它和目标期刊隔开。别为了简洁把"文献来源期刊"这五个字删掉。
 const JOURNAL_FILTER = [
-  { id: "jImpact", label: "期刊影响力（近似）", type: "range", min: 0, max: 100, unit: "两年篇均被引",
-    help: "OpenAlex 两年篇均被引，是 JIF 式的近似指标，非官方影响因子。留空 = 不筛。" },
-  { id: "jQuartile", label: "影响力四分位", type: "multi", options: [
-    { v: "Q1", t: "Q1（前 25%）" }, { v: "Q2", t: "Q2" }, { v: "Q3", t: "Q3" }, { v: "Q4", t: "Q4" }],
-    help: "按同领域期刊的影响力排序分四档，近似替代「分区」。" },
-  { id: "jOA", label: "只要开放获取（OA）", type: "bool", default: false,
-    help: "勾上后优先保留能直接下到全文的文献。" },
+  { id: "jImpact", label: "文献来源期刊的影响力（近似值）", type: "range", min: 0, max: 100, step: 0.1,
+    unit: "两年篇均被引", section: "检索到的文献要满足什么条件",
+    help: "筛的是「检索结果」发表在什么刊上，不是你想投的刊。这个数来自 OpenAlex 的两年篇均被引，"
+        + "跟影响因子算法思路相近但口径不同，不是官方影响因子。留空 = 不筛。" },
+  { id: "jQuartile", label: "影响力档位（近似）", type: "multi", options: [
+    { v: "Q1", t: "前 25%（Q1）" }, { v: "Q2", t: "前 50%（Q2）" }, { v: "Q3", t: "后 50%（Q3）" }, { v: "Q4", t: "后 25%（Q4）" }],
+    help: "按检索结果里各刊影响力排序分四档，近似替代「分区」的说法，不是中科院或 JCR 分区。" },
+  { id: "jOA", label: "只保留开放获取（OA）的文献", type: "bool", default: false,
+    help: "OA = 不用订阅就能下到全文。勾上后只保留这类文献，能显著提高后续「全文获取」的成功率。" },
 ]
 
 // ---- 各模块工作流 ----
@@ -88,10 +100,14 @@ export const WORKFLOWS = {
         help: "从「上传数据」里挑。没上传的先去左侧上传。" },
       { id: "deidDone", label: "这份数据已经脱敏过了", type: "bool", default: false,
         when: { field: "materials", has: "rawdata" },
-        help: "没脱敏的话流程会先插一步脱敏 —— 含患者信息的数据未脱敏不得进入任何统计（AGENTS.md §五）。" },
+        help: "没脱敏的话流程会自动先做一步脱敏 —— 含患者信息的数据未脱敏不得进入任何统计，这是平台的硬性规定。" },
+      { id: "draftFiles", label: "已有的初稿 / 图表 / 文献库文件", type: "files",
+        whenAny: [{ field: "materials", has: "draft" }, { field: "materials", has: "figures" }, { field: "materials", has: "refs" }],
+        help: "从「上传数据」里挑。勾了「已有初稿 / 已有图表 / 参考文献库」就得把文件传上来，否则那几项等于没说。" },
       { id: "ethicsNo", label: "伦理批件号", type: "text", when: { field: "materials", has: "ethics" },
         placeholder: "原样填写，没有就留空（会标『待补充』，不会编造）" },
-      { id: "registryNo", label: "注册号", type: "text", when: { field: "materials", has: "registry" } },
+      { id: "registryNo", label: "临床试验注册号", type: "text", when: { field: "materials", has: "registry" },
+        placeholder: "如 NCT01234567 / ChiCTR2400000000；没有就留空（会标『待补充』，不会编造）" },
       { id: "journalTier", label: "目标期刊梯队", type: "select", default: "target", options: [
         { v: "target", t: "target 主投（推荐）" }, { v: "reach", t: "reach 冲刺" }, { v: "safety", t: "safety 保底" }],
         help: "投稿前就想好被拒后下一站，省来回。" },
@@ -117,13 +133,18 @@ export const WORKFLOWS = {
             { v: "corr", t: "相关 / 回归" }, { v: "survival", t: "生存分析（KM / Cox）" },
             { v: "roc", t: "ROC / 诊断效能" }, { v: "agreement", t: "方法比对（Bland-Altman / Passing-Bablok）" },
             { v: "repeated", t: "重复测量 / 纵向" }] },
-          { id: "groupCol", label: "分组列", type: "columns", source: "dataFiles" },
-          { id: "outcomeCol", label: "结局列", type: "columns", source: "dataFiles" },
-          { id: "timeCol", label: "时间列（生存分析用）", type: "columns", source: "dataFiles",
-            when: { field: "analyses", has: "survival" } },
-          { id: "eventCol", label: "事件列（生存分析用）", type: "columns", source: "dataFiles",
-            when: { field: "analyses", has: "survival" } },
-          { id: "covars", label: "协变量", type: "columns", source: "dataFiles", multiple: true },
+          { id: "groupCol", label: "分组列", type: "columns", source: "dataFiles",
+            help: "区分组别的那一列，如 治疗组/对照组、手术方式。" },
+          { id: "outcomeCol", label: "结局列", type: "columns", source: "dataFiles",
+            help: "你要解释或预测的那个结果，如 是否复发、住院天数。" },
+          { id: "timeCol", label: "随访时间列（生存分析用）", type: "columns", source: "dataFiles",
+            when: { field: "analyses", has: "survival" },
+            help: "从起点到终点事件或末次随访的时长。" },
+          { id: "eventCol", label: "终点事件列（生存分析用）", type: "columns", source: "dataFiles",
+            when: { field: "analyses", has: "survival" },
+            help: "1 = 事件发生，0 = 删失。" },
+          { id: "covars", label: "需要校正的协变量", type: "columns", source: "dataFiles", multiple: true,
+            help: "多因素分析里要一并放进模型的因素，如 年龄、性别、分期。" },
         ],
         emits: ["data_profile.md", "cleaning_log.md", "stats_*.csv", "*_results.csv"], render: "table" },
       { id: "table1", name: "基线表 Table 1", skill: "clinical-stats",
@@ -204,14 +225,16 @@ export const WORKFLOWS = {
     intake: [
       { id: "topic", label: "综述主题", type: "textarea", required: true,
         placeholder: "例：PD-1 抑制剂在肝细胞癌一线治疗中的进展与争议" },
-      { id: "pico", label: "PICO（有就填，能大幅提高检索精度）", type: "textarea",
-        placeholder: "P 人群 / I 干预 / C 对照 / O 结局，各一行" },
+      { id: "pico", label: "研究问题的四要素（填了检索会精准很多）", type: "textarea",
+        placeholder: "人群：晚期肝细胞癌初治患者　干预：PD-1 抑制剂联合靶向　对照：单药靶向　结局：总生存期",
+        help: "就是临床研究里常说的 PICO：人群(P) / 干预(I) / 对照(C) / 结局(O)，每项一行或用空格隔开都行。不确定就留空，照样能检索。" },
       { id: "years", label: "时间范围", type: "select", default: "10", options: [
         { v: "3", t: "近 3 年" }, { v: "5", t: "近 5 年" }, { v: "10", t: "近 10 年" }, { v: "0", t: "不限" }] },
       { id: "designs", label: "纳入的研究设计", type: "multi", options: [
         { v: "rct", t: "随机对照试验" }, { v: "cohort", t: "队列研究" }, { v: "casecontrol", t: "病例对照" },
         { v: "crosssection", t: "横断面" }, { v: "review", t: "综述 / 指南" }, { v: "basic", t: "基础研究" }] },
-      { id: "limit", label: "文献数量上限", type: "number", default: 50, min: 10, max: 300 },
+      { id: "limit", label: "最多检索多少篇", type: "number", default: 50, min: 10, max: 300, unit: "篇",
+        help: "指检索阶段的召回上限；后面还会按你的条件筛，最终纳入的通常少于这个数。" },
       ...JOURNAL_FILTER,
       { id: "length", label: "目标篇幅", type: "select", default: "4000", options: [
         { v: "2000", t: "约 2000 字（短综述）" }, { v: "4000", t: "约 4000 字（推荐）" },
@@ -254,8 +277,10 @@ export const WORKFLOWS = {
       { id: "funder", label: "资助渠道", type: "select", required: true, options: [
         { v: "nsfc-general", t: "国自然 面上项目" }, { v: "nsfc-young", t: "国自然 青年科学基金" },
         { v: "nsfc-region", t: "国自然 地区科学基金" }, { v: "provincial", t: "省 / 市级基金" },
-        { v: "hospital", t: "院级 / 校级课题" }, { v: "other", t: "其它（下方说明）" }] },
-      { id: "funderOther", label: "渠道说明", type: "text", when: { field: "funder", eq: "other" } },
+        { v: "hospital", t: "院级 / 校级课题" }, { v: "other", t: "其它" }],
+        help: "选「其它」的话，下面要写清楚是哪个渠道 —— 不同渠道的正文结构和字数要求差别很大。" },
+      { id: "funderOther", label: "具体是哪个资助渠道", type: "text", when: { field: "funder", eq: "other" },
+        required: true, placeholder: "例：中华医学会临床医学科研专项 / 某某市卫健委面上项目" },
       { id: "discipline", label: "申请代码 / 学部方向", type: "text",
         placeholder: "例：H16 消化系统；不确定可留空，会给建议" },
       { id: "applicant", label: "申请人身份", type: "select", required: true, options: [
@@ -267,12 +292,14 @@ export const WORKFLOWS = {
       { id: "basis", label: "已有工作基础", type: "multi", options: [
         { v: "papers", t: "代表作 / 已发表论文" }, { v: "preliminary", t: "预实验数据" },
         { v: "platform", t: "平台 / 设备条件" }, { v: "cohort", t: "已有样本库 / 队列" },
-        { v: "none", t: "暂无（从零开始）" }] },
+        { v: "none", t: "暂无（从零开始）", exclusive: true }] },
       { id: "basisFiles", label: "上传代表作 / 预实验材料", type: "files",
         when: { field: "basis", hasNot: "none" } },
-      { id: "deadline", label: "申报截止日期", type: "text", placeholder: "例：2026-03-20" },
-      { id: "wordLimit", label: "正文字数上限", type: "number", default: 0, min: 0, max: 100000,
-        help: "0 = 按所选渠道的常规要求。" },
+      { id: "deadline", label: "申报截止日期", type: "date",
+        help: "填了会按剩余时间安排步骤的详略；不填也能写。" },
+      { id: "wordLimit", label: "正文字数上限", type: "number", min: 1000, max: 100000, unit: "字",
+        placeholder: "留空 = 按所选渠道的常规要求",
+        help: "留空即可，系统会按该渠道的通行要求控制篇幅。" },
       LANG,
     ],
     steps: [
@@ -310,8 +337,9 @@ export const WORKFLOWS = {
       { id: "mode", label: "怎么读", type: "select", required: true, default: "scan", options: [
         { v: "scan", t: "快速扫描（摸清一个方向有什么）" },
         { v: "deep", t: "深度研究（把一个问题挖到底）" },
-        { v: "rag", t: "建小库问答（下全文后基于原文回答）" }] },
-      { id: "topic", label: "主题 / 问题", type: "textarea", required: true },
+        { v: "rag", t: "下载全文后基于原文问答（回答时逐句给出处）", sets: { fulltext: true } }] },
+      { id: "topic", label: "主题 / 问题", type: "textarea", required: true,
+        placeholder: "例：CAR-T 治疗实体瘤当前的主要瓶颈是什么，近三年有哪些突破方向" },
       { id: "sources", label: "检索源", type: "multi", default: ["epmc"], options: [
         { v: "epmc", t: "Europe PMC（国内可达，推荐）" }, { v: "pubmed", t: "PubMed / NCBI（需境外网络）" },
         { v: "s2", t: "Semantic Scholar" }, { v: "openalex", t: "OpenAlex" },
@@ -319,7 +347,7 @@ export const WORKFLOWS = {
         help: "国内网络下 NCBI 常被阻断，勾了也可能自动降级到 Europe PMC，会如实告知。" },
       { id: "years", label: "时间范围", type: "select", default: "5", options: [
         { v: "3", t: "近 3 年" }, { v: "5", t: "近 5 年" }, { v: "10", t: "近 10 年" }, { v: "0", t: "不限" }] },
-      { id: "limit", label: "文献数量上限", type: "number", default: 30, min: 5, max: 200 },
+      { id: "limit", label: "最多检索多少篇", type: "number", default: 30, min: 5, max: 200, unit: "篇" },
       ...JOURNAL_FILTER,
       { id: "fulltext", label: "尝试下载开放获取全文", type: "bool", default: false },
       { id: "toZotero", label: "把结果推进本机 Zotero", type: "bool", default: false,
@@ -333,7 +361,7 @@ export const WORKFLOWS = {
         when: { field: "fulltext", eq: true },
         emits: ["pdfs/*", "zotero_lib/*", "retrieval_report.json", "manual_needed.txt"], render: "retrieval",
         hint: "只把真正下到 PDF 的算入小库，没下到的列出原因" },
-      { id: "rag", name: "小库问答", skill: "zotero-library", optional: true,
+      { id: "rag", name: "基于全文问答", skill: "zotero-library", optional: true,
         when: { field: "mode", eq: "rag" },
         emits: ["zotero_evidence.csv", "rag_*.md"], render: "evidence" },
       { id: "deep", name: "深度研究", skill: "deep-research", optional: true,
@@ -355,10 +383,14 @@ export const WORKFLOWS = {
     primary: "data-analysis",
     intakeTitle: "数据与分析设置",
     intake: [
-      { id: "dataFiles", label: "数据文件", type: "files", required: true,
-        help: "从左侧「上传数据」里挑。选好后下面的变量映射会自动读出真实表头。" },
+      { id: "dataFiles", label: "数据文件", type: "files",
+        // ★ 不能无条件必填：「样本量 / 把握度」是【做研究之前】算要收多少例的，此时根本没有数据。
+        //   之前写死 required 的结果是——设计课题的医生一进来就被"还没填：数据文件"挡住，
+        //   等于"想算样本量？先去伪造一份数据"。
+        requiredWhen: { field: "analyses", hasNot: "power" },
+        help: "从左侧「上传数据」里挑。选好后下面的变量映射会自动读出真实表头。只算样本量 / 把握度的话不用传数据。" },
       { id: "hasPHI", label: "数据里含患者身份信息（姓名/住院号/身份证/住址等）", type: "bool", default: false,
-        help: "勾上会先做脱敏再分析 —— 未脱敏的患者数据不得进入统计（AGENTS.md §五）。" },
+        help: "勾上会先做脱敏再分析 —— 未脱敏的患者数据不得进入统计，这是平台的硬性规定。" },
       { id: "analyses", label: "要做的分析", type: "multi", required: true, options: [
         { v: "profile", t: "数据体检（缺失 / 异常 / 重复 ID）" },
         { v: "desc", t: "描述性统计" }, { v: "table1", t: "基线表 Table 1" },
@@ -367,18 +399,28 @@ export const WORKFLOWS = {
         { v: "agreement", t: "方法比对（Bland-Altman / Passing-Bablok）" },
         { v: "repeated", t: "重复测量 / 纵向" }, { v: "power", t: "样本量 / 把握度" }],
         help: "建议先勾「数据体检」—— 重复 ID 没去、分类水平没归一时，后面每个 p 值都是错的，而表面看不出来。" },
+      // 六个"列"长得一模一样，各自属于哪个分析必须写在 help 里，否则一定填串
       { id: "groupCol", label: "分组列", type: "columns", source: "dataFiles",
-        when: { field: "analyses", has: "compare" } },
-      { id: "outcomeCol", label: "结局列", type: "columns", source: "dataFiles" },
-      { id: "timeCol", label: "时间列", type: "columns", source: "dataFiles",
-        when: { field: "analyses", has: "survival" } },
-      { id: "eventCol", label: "事件列（1=事件发生）", type: "columns", source: "dataFiles",
-        when: { field: "analyses", has: "survival" } },
-      { id: "testCol", label: "待评价指标列", type: "columns", source: "dataFiles",
-        when: { field: "analyses", has: "roc" } },
-      { id: "goldCol", label: "金标准列", type: "columns", source: "dataFiles",
-        when: { field: "analyses", has: "roc" } },
-      { id: "covars", label: "协变量", type: "columns", source: "dataFiles", multiple: true },
+        section: "把分析用到的变量对到你表里的列",
+        // Table 1 的本质就是"按组分列对比"，勾了它却不给选分组列是说不通的
+        whenAny: [{ field: "analyses", has: "compare" }, { field: "analyses", has: "table1" }],
+        help: "区分组别的那一列，如 治疗组/对照组、手术方式。用于基线表与组间比较。" },
+      { id: "outcomeCol", label: "结局列", type: "columns", source: "dataFiles",
+        help: "你要解释或预测的那个结果，如 是否复发、住院天数、缓解与否。" },
+      { id: "timeCol", label: "随访时间列（生存分析用）", type: "columns", source: "dataFiles",
+        when: { field: "analyses", has: "survival" },
+        help: "从起点到终点事件或末次随访的时长，如 随访月数。" },
+      { id: "eventCol", label: "终点事件列（生存分析用）", type: "columns", source: "dataFiles",
+        when: { field: "analyses", has: "survival" },
+        help: "1 = 事件发生（死亡/复发），0 = 删失（失访或随访结束时仍无事件）。" },
+      { id: "testCol", label: "待评价指标列（ROC 用）", type: "columns", source: "dataFiles",
+        when: { field: "analyses", has: "roc" },
+        help: "你想评价诊断效能的那个检测值，如 某标志物浓度、某评分。" },
+      { id: "goldCol", label: "金标准列（ROC 用）", type: "columns", source: "dataFiles",
+        when: { field: "analyses", has: "roc" },
+        help: "公认的确诊依据，如 病理结果。1 = 有病，0 = 无病。" },
+      { id: "covars", label: "需要校正的协变量", type: "columns", source: "dataFiles", multiple: true,
+        help: "多因素分析里要一并放进模型的因素，如 年龄、性别、分期。可多选，也可不选。" },
       { id: "figs", label: "顺便出投稿级图", type: "bool", default: false,
         help: "300dpi + 矢量，可直接投稿；不勾则只给 150dpi 预览图。" },
       LANG,
@@ -399,7 +441,9 @@ export const WORKFLOWS = {
       { id: "integrity", name: "源数据完整性自查", skill: "data-integrity", optional: true, gate: true,
         emits: ["integrity_report.md", "audit/*"], render: "integrity", onFail: "analyze" },
     ],
-    extra: [],
+    // 出完基线表/结果表，用户下一句多半是"导成 Word 给我" —— 不放行排版技能就会被模块闸掐掉，
+    // 报"模块限制"。这两个不进 steps（不是规定流程的一环），只作为随时可用的配套。
+    extra: ["render-docx", "render-pdf-doc"],
   },
 
   // ============ 文稿核查与审校 ============
@@ -408,15 +452,18 @@ export const WORKFLOWS = {
     intakeTitle: "核查设置",
     intake: [
       { id: "docFiles", label: "待核查的稿件", type: "files", required: true },
-      { id: "dataFiles", label: "配套的数值表（有就传，做完整性自查用）", type: "files" },
+      { id: "dataFiles", label: "配套的数值表", type: "files",
+        requiredWhen: { field: "checks", has: "integrity" },
+        help: "只有勾了「数据完整性」才需要 —— 没有数值表这一项做不了。" },
       { id: "checks", label: "核查项", type: "multi", required: true,
         default: ["refs", "doi", "retracted"],
         options: [{ v: "refs", t: "假引用（文献是否真实存在）" }, { v: "doi", t: "DOI 是否正确" },
           { v: "retracted", t: "是否引用了已撤稿文献" }, { v: "stats", t: "统计陷阱与方法硬伤" },
-          { v: "integrity", t: "数据完整性（需配套数值表）" }, { v: "format", t: "格式与体例" }] },
+          { v: "integrity", t: "数据完整性（需一并上传数值表）" }],
+        help: "勾了「数据完整性」就必须把配套的数值表也传上来，否则这一项没法做。" },
       { id: "strict", label: "严格度", type: "select", default: "standard", options: [
-        { v: "standard", t: "标准（推荐）" }, { v: "strict", t: "严格（对抗红队，宁可多报）" }] },
-      LANG,
+        { v: "standard", t: "标准（推荐）" }, { v: "strict", t: "严格（宁可多报，把可疑的都列出来让你自己判断）" }] },
+      { ...LANG, label: "核查报告用什么语言", help: "只影响报告，不改动你的稿件。" },
     ],
     steps: [
       { id: "refcheck", name: "引用核查", skill: "reference-check", gate: true,
@@ -449,11 +496,15 @@ export const WORKFLOWS = {
       { id: "strength", label: "润色强度", type: "select", default: "standard", options: [
         { v: "light", t: "保守（只动明显问题）" }, { v: "standard", t: "标准（推荐）" },
         { v: "heavy", t: "激进（重写句式节奏）" }] },
-      { id: "protectRefs", label: "不要改动引用处的文字", type: "bool", default: true,
-        help: "关掉的话，润色后会自动重跑一次引用核查兜底。" },
+      { id: "protectRefs", label: "保持引用处的文字原样不动", type: "bool", default: true,
+        help: "默认保持。关掉的话，润色后会自动把引用重新核一遍兜底。" },
       { id: "outFmt", label: "输出格式", type: "select", default: "docx", options: [
         { v: "md", t: "只要 Markdown" }, { v: "docx", t: "Word（.docx）" }, { v: "pdf", t: "PDF" }] },
-      LANG,
+      // ★ 这里【不能】用通用的 LANG。润色模块里"输出语言=中文"会被理解成"把我的英文稿翻成中文"，
+      //   而那是不可逆的后果（拿回来一篇中文稿）。默认改成"保持原文语言"。
+      { id: "lang", label: "润色后稿件用什么语言", type: "select", default: "keep", options: [
+        { v: "keep", t: "保持原文语言（推荐）" }, { v: "zh", t: "改写成中文" }, { v: "en", t: "改写成英文" }],
+        help: "选「保持原文语言」只润色不翻译；选另外两个等于要求翻译改写，改动会大得多。" },
     ],
     steps: [
       { id: "humanize", name: "润色改写", skill: "humanize-academic",
@@ -461,7 +512,7 @@ export const WORKFLOWS = {
       { id: "refcheck", name: "引用兜底核查", skill: "reference-check", optional: true, gate: true,
         when: { field: "protectRefs", eq: false },
         emits: ["refcheck_report.md", "reference_check*.md"], render: "refcheck", onFail: "humanize",
-        hint: "润色动了引用文字 → 必须重查一遍（AGENTS.md §二）" },
+        hint: "润色如果动过引用处的文字，必须把引用重新核一遍" },
       { id: "render", name: "排版出件", skill: "render-docx", optional: true,
         when: { field: "outFmt", ne: "md" },
         emits: ["*.docx", "*.pdf"], render: "doc" },
@@ -484,7 +535,7 @@ export const primaryOf = (mod) => WORKFLOWS[mod]?.primary || null
 export function stepsFor(mod, values = {}) {
   const w = WORKFLOWS[mod]
   if (!w) return []
-  const keep = w.steps.filter((s) => condOk(s.when, values))
+  const keep = w.steps.filter((s) => visible(s, values))
   const head = [], rest = []
   for (const s of keep) (condOk(s.first, values) && s.first ? head : rest).push(s)
   return [...head, ...rest]
@@ -563,7 +614,7 @@ const fmtVal = (f, v) => {
 export function taskCard(modName, title, fields, values = {}, opts = {}) {
   const lines = []
   for (const f of fields || []) {
-    if (!condOk(f.when, values)) continue          // 条件没成立的字段压根没显示过，别拼进去
+    if (!visible(f, values)) continue              // 条件没成立的字段压根没显示过，别拼进去
     const s = fmtVal(f, values[f.id])
     if (s !== null) lines.push(`- ${f.label}：${s}`)
   }
@@ -588,16 +639,24 @@ export function taskCard(modName, title, fields, values = {}, opts = {}) {
 // 【边界，别误解】变量拼接、cd 进目录后用相对路径、base64 等刻意绕法都能过 —— 这与本套件
 // 既有口径一致：模块闸是**产品分权**，不是对抗边界（agent 本来就有 shell）。堵住顺手绕道
 // 已经拿到绝大部分收益；真要物理隔离得每模块一个 opencode 实例，代价不值。
-const SKILL_PATH_RE = /\.opencode[/\\]skills[/\\]([a-z0-9_-]+)/gi
+const SKILL_PATH_RE = /\.opencode[/\\]+skills[/\\]+([a-z0-9_-]+)/gi
+// 只读命令不算"调用技能"：agent 常常需要 cat/grep 一下别的技能的 SKILL.md 才能把话讲清楚
+// （综述模块的脚注就是让它告诉用户"系统综述在自由对话"，它顺手 cat 一下那份文档很自然）。
+// 把这些也判成越权会整轮 abort，属于误杀 —— 读文档不产生该技能的产出，不是分权要挡的东西。
+const READONLY_CMD = /^\s*(sudo\s+)?(cat|head|tail|less|more|grep|rg|ls|ll|find|wc|file|stat|md5sum|sha\w*sum|diff)\b/
 export function gateViolation({ tool, input, skillGate, restricted }) {
   if (!skillGate) return null
   if (tool === "skill" && input?.name && !skillGate.has(input.name)) return input.name
   if (restricted && tool === "task") return "task(子代理)"
   if (tool === "bash") {
-    const cmd = String(input?.command || "")
-    SKILL_PATH_RE.lastIndex = 0            // 全局正则带状态，复用前必须归零，否则会隔次漏判
+    let cmd = String(input?.command || "")
+    if (READONLY_CMD.test(cmd)) return null
+    // 归一化再匹配：`skills//deidentify`、`skills/./deidentify`、`"…/skills"/deidentify`
+    // 这几种写法在 shell 里都很平常（路径含空格时加引号是习惯），不归一的话直接漏过去。
+    cmd = cmd.replace(/["']/g, "").replace(/\/\.\//g, "/").replace(/\\\.\\/g, "\\")
+    // matchAll 按规范会克隆正则，不会推进原对象的 lastIndex，故无需手动归零
     for (const m of cmd.matchAll(SKILL_PATH_RE))
-      if (!skillGate.has(m[1])) return `${m[1]}（bash 直呼技能脚本）`
+      if (!skillGate.has(m[1].toLowerCase())) return `${m[1]}（bash 直呼技能脚本）`
   }
   return null
 }
