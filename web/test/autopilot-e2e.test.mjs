@@ -38,7 +38,9 @@ function scriptReply(userTexts) {
   if (all.includes("SCENARIO_STALL")) return "我已经把能做的都做完了，等待进一步指示。"
   return "（剧本外的请求）"
 }
-function mockLLM(delayMs = 300) {
+// delayMs 同时决定两轮之间客户端重连（re-attach）的时间窗：太小则慢机器上测试端还没
+// 接上流、这一轮已经结束（final/auto 不在 attach 快照里，错过就是错过）→ 假失败。
+function mockLLM(delayMs = 700) {
   const srv = http.createServer((req, res) => {
     if (req.method !== "POST" || !req.url.includes("/chat/completions")) { res.statusCode = 404; return res.end("{}") }
     const chunks = []
@@ -68,7 +70,10 @@ function mockLLM(delayMs = 300) {
 const freePort = () => new Promise((r) => { const s = net.createServer(); s.listen(0, "127.0.0.1", () => { const p = s.address().port; s.close(() => r(p)) }) })
 
 // ---- SSE 收流：读一轮直播到服务端关流为止，返回 [{ev, data}] ----
-async function collectRound(base, sid, timeoutMs = 30_000) {
+// 【超时要留足】串行全量套件里 opencode 为每个会话目录 bootstrap instance 会越跑越慢
+// （实测末位子测试的首轮能超过 30s）——超时把轮切一半，auto/final 事件被截断，表现成
+// "循环只跑了 1 轮"的假失败。120s 只是兜底，正常远用不满。
+async function collectRound(base, sid, timeoutMs = 120_000) {
   const ac = new AbortController()
   const timer = setTimeout(() => ac.abort(), timeoutMs)
   const events = []
@@ -226,16 +231,25 @@ test("无人值守端到端", { skip: hasOpencode ? false : "本机没有 openco
   })
 
   await t.test("循环中终止：立即停且不再自动续跑", async () => {
+    // 前置条件用 /api/job 轮询而不是抓 SSE 事件：无人值守的轮与轮之间同步衔接，
+    // 循环没结束 running 恒 true —— 这判据不受"测试端有没有恰好接上流"的时序影响。
     const r = await fetch(`${gw.base}/api/chat/start`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ q: "SCENARIO_NEVER 跑起来我就砍", auto: true }) })
     const j = await r.json()
     assert.equal(j.sent, true)
-    const first = await collectRound(gw.base, j.sid)
-    assert.equal(evOf(first, "auto").length, 1, "第 1 轮结束时已宣告续跑")
-    // 此刻第 2 轮已在跑（mock 每轮至少 300ms）——当场终止
+    const running = async () => (await (await fetch(`${gw.base}/api/job?sid=${encodeURIComponent(j.sid)}`)).json()).running
+    const deadline = Date.now() + 60_000
+    while (!(await running())) { assert.ok(Date.now() < deadline, "循环迟迟没跑起来"); await new Promise((x) => setTimeout(x, 100)) }
+    await new Promise((x) => setTimeout(x, 900))   // 让它跑进循环深处再砍（NEVER 剧本不会自己停）
     const ab = await (await fetch(`${gw.base}/api/chat/abort?sid=${encodeURIComponent(j.sid)}`, { method: "POST" })).json()
     assert.equal(ab.aborted, true, "终止时确有在跑的一轮")
-    await new Promise((x) => setTimeout(x, 1500))   // 若终止没清掉无人值守，这个窗口足够它偷跑下一轮
-    const job = await (await fetch(`${gw.base}/api/job?sid=${encodeURIComponent(j.sid)}`)).json()
-    assert.equal(job.running, false, "终止后没有偷跑新一轮")
+    // 基线要等 abort 的落库暂态过去再取：紧贴着 abort 取历史，被砍那轮的用户消息可能还没
+    // 写完（实测取到 0 条），2 秒后它补齐入列会被误判成"偷跑注入"。
+    await new Promise((x) => setTimeout(x, 700))
+    assert.equal(await running(), false, "终止即停，没有在跑的轮")
+    const hist1 = await (await fetch(`${gw.base}/api/history?sid=${encodeURIComponent(j.sid)}`)).json()
+    await new Promise((x) => setTimeout(x, 2000))   // 若终止没清掉无人值守，这个窗口足够它偷跑下一轮
+    assert.equal(await running(), false, "终止后没有偷跑新一轮")
+    const hist2 = await (await fetch(`${gw.base}/api/history?sid=${encodeURIComponent(j.sid)}`)).json()
+    assert.equal(hist2.filter((m) => m.role === "user").length, hist1.filter((m) => m.role === "user").length, "终止后没再注入新的续跑消息")
   })
 })
