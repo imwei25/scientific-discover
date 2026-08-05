@@ -40,12 +40,19 @@ $PY $SR/sr_dedup.py --input imported/ --output 01_deduplicated.csv --counts coun
 纯确定性三段去重（DOI 精确 → 标题精确 → 同年 difflib 模糊，阈值 `--fuzzy` 默认 0.92）。**保留每条记录可审计**：被删记录的 `dup_of` 指向合并到的 canonical 记录。产出去重 CSV + identification 计数。
 
 ### 4. 双人独立筛选 + κ（screening 阶段）
-两位评审者**各自独立**判定，再消解冲突。筛选 CSV 的列规范（喂给计数脚本）见 [references/search-and-screen.md](references/search-and-screen.md)：`reviewer1_decision / reviewer2_decision / consensus_decision / conflict`（全文阶段另加 `pdf_retrieved / exclusion_reason_category`）。**不确定 → 纳入**（保守，留到下一阶段再看）。全文获取用 `fulltext-retrieval`。
+两位评审者**各自独立**判定，再消解冲突。
+> ⚠️ **两列判定必须真的独立产生**，不能一次判完复制成两列。`sr_prisma_count.py` 会检测：
+> **n≥20 且两列逐行完全一致（零分歧）时拒绝报出 κ**，并给出可直接照抄的如实措辞
+> （`... was performed by a single reviewer; inter-rater reliability was therefore not assessed.`）。
+> 实测出现过硬编码 include 名单、把同一判定赋值给两列 → κ=1.000 被写进 PRISMA 图与稿件 Methods，
+> Methods 还写了「Discrepancies were resolved by discussion」——没有第二个人时，那是**虚假方法学陈述**。
+> 报不出 κ 只是少一个数；报一个假的 κ 是学术不端。
+筛选 CSV 的列规范（喂给计数脚本）见 [references/search-and-screen.md](references/search-and-screen.md)：`reviewer1_decision / reviewer2_decision / consensus_decision / conflict`（全文阶段另加 `pdf_retrieved / exclusion_reason_category`）。**不确定 → 纳入**（保守，留到下一阶段再看）。全文获取用 `fulltext-retrieval`。
 
 ### 5. PRISMA 计数 + 一致性校验
 ```bash
-$PY $SR/sr_prisma_count.py --identification outputs/counts/identification.json \
-   --ta outputs/02_title_abstract_screen.csv --ft outputs/03_fulltext_screen.csv \
+$PY $SR/sr_prisma_count.py --identification counts/identification.json \
+   --ta 02_title_abstract_screen.csv --ft 03_fulltext_screen.csv \
    --output counts/prisma-summary.md
 ```
 自动算出流程图每个框的数字 + 每阶段 **Cohen's κ**（附一致性等级）+ **8 条内部自洽校验**（如 排除+纳入=评估数）。任一校验 FAIL 会退出码 1、提示回去核数。数字交 `nature-figure` 画 **PRISMA 2020 流程图**。
@@ -54,7 +61,21 @@ $PY $SR/sr_prisma_count.py --identification outputs/counts/identification.json \
 按研究设计选工具（RCT→RoB2、非随机干预→ROBINS-I、观察性→NOS、诊断→QUADAS-2、患病率→JBI），逐 domain 回答 signaling questions（Y/PY/PN/N/NI）→ 按决策算法给 domain 判定 → 汇总总体偏倚。完整规则见 [references/rob-grade.md](references/rob-grade.md)。偏倚图（traffic-light / summary）交 `nature-figure`。
 
 ### 7. 数据提取 + Meta 合并（如做定量合并）
-按预定义 schema 提取；缺数据联系作者；需要时用 [references/protocol-extraction.md](references/protocol-extraction.md) 的**效应量换算公式**（如 中位数[IQR]→均值±SD、SE↔SD、OR↔RR）统一口径。
+按预定义 schema 提取；缺数据联系作者；
+
+**提取完必跑数值回查**（`sr_verify_extraction.py`）——提取表里每个数字都要能在来源文本里找到：
+```bash
+$PY $SR/sr_verify_extraction.py --extraction extraction_table.csv \
+   --records 01_deduplicated.csv --computed-cols se,weight,log_hr \
+   --output extraction_verify.md          # 有全文再加 --fulltext-dir pdfs/
+```
+找不到出处的逐条列出、退出码 1。**这是待核信号不是造假结论**：算出来的列（SE、权重、合并效应量）
+本就不在原文里，用 `--computed-cols` 排除；剩下的必须回原文核对或说明来源，**不得直接写进稿件**。
+> 实测：8 篇纳入研究里 **4 篇的样本量在摘要中查无此数**（提取表写 36241，摘要写的是 16,676），
+> 而那一轮**一篇全文都没下过**——这些数只能来自记忆。同批的 HR/CI 反而全准确，
+> 错的只有样本量，因此更隐蔽，且它直接决定读者对证据分量的第一眼判断。
+
+需要时用 [references/protocol-extraction.md](references/protocol-extraction.md) 的**效应量换算公式**（如 中位数[IQR]→均值±SD、SE↔SD、OR↔RR）统一口径。
 
 **Meta 统计合并——用 `data-analysis/scripts/stat_extras.py` 的 `meta_pool(effects, ses=...)`**（固定/随机效应逆方差 + DerSimonian-Laird，**已内置零异质性钳制**）：
 ```python
@@ -69,13 +90,19 @@ r = meta_pool(log_or_list, ses=se_list)   # 效应量用 logOR/logHR/MD；返回
 对每个主要结局，从五个降级域（偏倚风险/不一致性/间接性/不精确性/发表偏倚）起评，观察性研究可用三个升级因素（大效应/剂量反应/混杂方向）→ 得 high/moderate/low/very low。规则与打分表见 [references/rob-grade.md](references/rob-grade.md)。产出证据概要表（Summary of Findings）。
 
 ## 交付与衔接
-- 产物写工作区 `outputs/`（去重 CSV、筛选 CSV、PRISMA 计数、RoB 表、提取表、GRADE SoF 表）。
+- 产物直接写**当前工作目录**、用裸文件名（去重 CSV、筛选 CSV、PRISMA 计数、RoB 表、提取表、GRADE SoF 表）。
+  子目录可以用（如 `counts/`、`figures/`），但**别拼 `outputs/` 前缀** —— 会写成 `outputs/<会话id>/outputs/…`，而界面「产出」侧栏只递归一层，用户什么都看不到。
 - **写成投稿稿**交 `write-paper`（走其报告规范自检的 PRISMA 2020，含流程图硬性产出）；参考文献查 `reference-check`；出 PDF/Word 走 `render-pdf-doc`/`render-docx`。
 - 完整目标时按 AGENTS.md 的 `systematic` 流水线顺序走：本技能方法学八步 → write-paper 成文 → reference-check → render-docx。
 - 中文报告出图/排版记得指定中文字体。
 
 ## 硬约束
-- **协议先注册后筛选**；**双人独立筛选**（不得单次 LLM pass 定稿）；**PRISMA 流程图必出**。
+- **协议先注册后筛选**；**双人独立筛选**（不得单次 LLM pass 定稿，脚本会检测零分歧并拒绝报 κ）；**PRISMA 流程图必出**。
+- **没下全文就不是全文筛选**：一篇 PDF 都没获取时，`pdf_retrieved` 不得填 Y，PRISMA 必须如实印
+  `Abstract-level screening`、差额计入 `Reports not retrieved`。`sr_prisma_count.py` 会拿声称数
+  与目录里真实的 PDF 数对账（数文件系统，改 CSV 绕不过去）。**绝不要为了让校验从 FAIL 变 PASS 而改数据。**
+- **提取表里的每个数字都要有出处**：跑 `sr_verify_extraction.py` 回查；查无此数的一律标「待核」，
+  不得凭记忆填写（尤其样本量——它最容易被当成背景信息随手写下，却是读者判断证据分量的第一眼指标）。
 - 去重/计数用脚本（可复现、可审计），别手数；κ 低时说明并加强培训/校准后重筛。
 - 不虚构注册号、纳入研究、提取数据、偏倚判定；缺就标"待补充"或"待人工复核"。
 - GRADE/RoB 判定是**人类方法学裁决**，脚本与规则只是辅助；关键降级/升级要有据可依。

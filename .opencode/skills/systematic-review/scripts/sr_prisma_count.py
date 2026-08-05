@@ -57,8 +57,16 @@ def read_csv(path):
         return list(csv.DictReader(f))
 
 
+ZERO_CONFLICT_MIN_N = 20   # 低于这个量，零分歧还算正常；到这个量就不可能了
+
+
 def cohens_kappa(pairs):
-    """pairs: list of (r1, r2) in {include, exclude}. Returns (kappa, n) or (None, 0)."""
+    """pairs: list of (r1, r2) in {include, exclude}. Returns (kappa, n) or (None, 0).
+
+    零分歧检测：两列判定逐行完全一致且样本量不小时，返回 (None, n) 而不是 1.0。
+    真做双人独立筛选，n>=20 时几乎不可能一条分歧都没有；而"一次判定复制成两列"必然零分歧
+    —— 实测就是后者，κ=1.000 被写进了 PRISMA 图和稿件 Methods。
+    报不出 κ 比报一个假的 κ 好：前者只是少一个数，后者是虚假的方法学陈述。"""
     pairs = [(a, b) for a, b in pairs if a in ("include", "exclude")
              and b in ("include", "exclude")]
     n = len(pairs)
@@ -68,10 +76,28 @@ def cohens_kappa(pairs):
     po = sum(1 for a, b in pairs if a == b) / n
     pe = sum((sum(1 for a, _ in pairs if a == c) / n) *
              (sum(1 for _, b in pairs if b == c) / n) for c in cats)
+    if n >= ZERO_CONFLICT_MIN_N and po == 1.0:
+        return None, n            # 零分歧 → 判定这两列并非独立产生，拒绝报 κ
     if pe == 1:
         return 1.0, n
     return (po - pe) / (1 - pe), n
 
+
+def kappa_line(k, n, stage):
+    """κ 那一行的成稿措辞。报不出来时给出可直接照抄的如实写法，别留空让模型自己发挥。"""
+    if k is not None:
+        return "**%.3f** (%s, n=%d)" % (k, kappa_label(k), n)
+    if n >= ZERO_CONFLICT_MIN_N:
+        honest = ("%s screening was performed by a single reviewer; "
+                  "inter-rater reliability was therefore not assessed." % stage)
+        return (
+            "**not reportable** — %d 条判定逐行完全一致、零分歧。" % n
+            + "双人独立筛选在这个量级上不可能零分歧，故判定这两列并非独立产生"
+            + "（多半是一次判定复制成了两列）。\n"
+            + "  > **Methods 必须如实写**：`" + honest + "`\n"
+            + "  > **不得**写成 two reviewers independently / κ=1.000 / "
+            + "discrepancies resolved by discussion —— 没有第二位评审者时那是虚假的方法学陈述。")
+    return "n/a (n=%d)" % n
 
 def kappa_label(k):
     if k is None:
@@ -140,8 +166,7 @@ def main():
     lines.append(f"- Reports sought for retrieval: **{reports_sought}**")
     lines.append(f"- Conflicts flagged for human resolution: {ta_conflicts}")
     lines.append(f"- Inter-rater reliability (Cohen's κ): "
-                 f"**{'%.3f' % ta_kappa if ta_kappa is not None else 'n/a'}** "
-                 f"({kappa_label(ta_kappa)}, n={ta_n})\n")
+                 f"{kappa_line(ta_kappa, ta_n, 'Title/abstract')}\n")
 
     checks = []
     checks.append(("Total identified = Σ database records",
@@ -199,8 +224,7 @@ def main():
         lines.append(f"- **Studies included in review: {studies_included}**")
         lines.append(f"- Conflicts flagged for human resolution: {ft_conflicts}")
         lines.append(f"- Inter-rater reliability (Cohen's κ): "
-                     f"**{'%.3f' % ft_kappa if ft_kappa is not None else 'n/a'}** "
-                     f"({kappa_label(ft_kappa)}, n={ft_n})\n")
+                     f"{kappa_line(ft_kappa, ft_n, 'Full-text')}\n")
         lines.append("### Full-text exclusions by reason\n")
         lines.append("| Reason | n |")
         lines.append("|--------|---|")

@@ -6,7 +6,7 @@ tools: Read, Write, Edit, Bash, Grep, Glob
 model: inherit
 ---
 
-> **本仓库运行环境（先读）**：Python 用 `.venv/Scripts/python.exe`（Windows）/ `.venv/bin/python`（Linux/macOS）（项目根 `.venv`；缺则先跑 `env-setup`）。本技能脚本在 `.opencode/skills/zotero-library/references/` 下，运行时用全路径或先 `cd`。产出写 `outputs/`（有会话专属目录时以它为准，勿写仓库根固定名）。依赖 `fitz`(pymupdf)/`scikit-learn`，均已装。
+> **本仓库运行环境（先读）**：Python 用 `.venv/Scripts/python.exe`（Windows）/ `.venv/bin/python`（Linux/macOS）（项目根 `.venv`；缺则先跑 `env-setup`）。本技能脚本在 `.opencode/skills/zotero-library/references/` 下，运行时用全路径或先 `cd`。产出直接写**当前工作目录**、用裸文件名（网关已把 cwd 指到本会话的产物目录）；别拼 `outputs/` 前缀，也别写仓库根固定名。依赖 `fitz`(pymupdf)/`scikit-learn`，均已装。
 
 > **决策规约（照 AGENTS.md §六）**：任何要用户拍板的抉择——用哪个分类、按哪几篇、要不要补检索等——一律**在正文里列 2–4 个编号候选**（推荐项放第 1 个并写明“推荐 X，因为……”），让用户**回一个数字即推进**；别用开放式提问，也别弹交互选项卡。
 
@@ -48,15 +48,15 @@ SK=.opencode/skills/zotero-library/references
 # 3) 导入题录 → 统一 Reference（写 evidence 表）
 #    某分类：
 "$PY" "$SK/zotero_read.py" items <COLLECTION_KEY> --cap 200 \
-    --out outputs/zotero_refs.json --csv outputs/zotero_refs.csv
+    --out zotero_refs.json --csv zotero_refs.csv
 #    整库顶层 My Library（用户没建分类文件夹、文献堆在根层时）：
-"$PY" "$SK/zotero_read.py" items --top --cap 200 --csv outputs/zotero_refs.csv
+"$PY" "$SK/zotero_read.py" items --top --cap 200 --csv zotero_refs.csv
 
 # 4) 看某条目的 PDF 附件与磁盘路径
 "$PY" "$SK/zotero_read.py" attachments <ITEM_KEY>
 
 # 5) 取某条目 PDF 全文（Zotero 预索引优先，回退 pymupdf 解析）
-"$PY" "$SK/zotero_read.py" fulltext <ITEM_KEY> --out outputs/ft.txt
+"$PY" "$SK/zotero_read.py" fulltext <ITEM_KEY> --out ft.txt
 
 # 6) 会话小库落地：把选中文献的 PDF 复制进一个目录（供 --pdf-dir 检索）
 "$PY" "$SK/zotero_read.py" materialize --top --to zotero_lib
@@ -91,7 +91,7 @@ SK=.opencode/skills/zotero-library/references
 # 对某分类的全部文献，按问题排出带页码引用的证据段
 "$PY" "$SK/zotero_rag.py" --question "阿司匹林是否增加消化道出血风险？" \
     --collection <COLLECTION_KEY> --top-k 12 \
-    --out-md outputs/zotero_evidence.md --out-csv outputs/zotero_evidence.csv
+    --out-md zotero_evidence.md --out-csv zotero_evidence.csv
 
 # 整库顶层（没建分类时）
 "$PY" "$SK/zotero_rag.py" --question "..." --library --top-k 12 ...
