@@ -787,8 +787,13 @@ const wfValues = (outDir, modId) => {
 //    这两句都不含"不通过"三个字。
 // 所以：无歧义的定论词全文匹配；容易误伤的词（reject / 不通过 / critical）只在【结论行】上算数，
 // 而"结论行"要排除 markdown 标题 —— 小节标题里出现"结论"二字太常见（上面那个 Critical 标题就是）。
-const GATE_FAIL_SURE = /(闸不过|闸未过|不予通过|未通过|需返工|需要返工|退回返工|条件性通过|major\s*revision|需要?重大修改|fabricated|假引用|伪造引用|编造(的)?引用|查无此文|未能核实|not[_\s]?found|该文献不存在)/i
-const GATE_FAIL_CTX = /(reject|不通过|critical|严重问题|硬伤)/i
+const GATE_FAIL_SURE = /(闸不过|闸未过|不予通过|未通过|不通过|需返工|需要返工|退回返工|条件性通过|major\s*revision|需要?重大修改|假引用|伪造引用|编造(的)?引用|查无此文|未能核实|该文献不存在)/i
+const GATE_FAIL_CTX = /(reject|critical|严重问题|硬伤)/i
+// reference-check / data-integrity 的裁定是结构化词，不是散文。两种真实写法：
+//   统计行  `RETRACTED 1，FABRICATED 2，NOT_FOUND 1，MISMATCH 1`（全绿时是 0，不能裸匹配）
+//   表格行  `| [7] | … | **FABRICATED** | 高 |`
+const GATE_FAIL_COUNT = /(FABRICATED|RETRACTED|MISMATCH|NOT[_\s]?FOUND)\s*[:：=]?\s*[1-9]/i
+const GATE_FAIL_CELL = /\|\s*\*{0,2}(FABRICATED|RETRACTED|MISMATCH|NOT[_\s]?FOUND)\*{0,2}\s*\|/i
 const VERDICT_LINE = /(判定|裁定|结论|总体评价|总评|倾向|建议|verdict|recommendation|decision)/i
 function gateFailed(outDir, step, files) {
   for (const g of step.emits || []) {
@@ -796,7 +801,7 @@ function gateFailed(outDir, step, files) {
       if (!WF.globMatch(g, f) || !/\.(md|txt)$/i.test(f)) continue   // 只读文本报告
       try {
         const t = fs.readFileSync(path.join(outDir, f), "utf8").slice(0, 20000)
-        if (GATE_FAIL_SURE.test(t)) return true
+        if (GATE_FAIL_SURE.test(t) || GATE_FAIL_COUNT.test(t) || GATE_FAIL_CELL.test(t)) return true
         for (const ln of t.split(/\r?\n/)) {
           if (/^\s*#/.test(ln)) continue                       // markdown 标题不是结论行
           if (VERDICT_LINE.test(ln) && GATE_FAIL_CTX.test(ln)) return true
@@ -821,12 +826,17 @@ function wfSyncDone(outDir, modId) {
   const done = new Set(st.done || [])
   const failed = new Set()
   for (const s of WF.stepsFor(modId, st.form || {})) {
-    if (done.has(s.id)) continue
+    // ★ 闸【每次都重新裁定】，不能吃 done 的缓存。
+    //   闸的 emits 里往往既有中间机器产物、也有最终裁定报告，两者可能差好几分钟；用户在这中间
+    //   刷新一次页面（切会话 / F5 都会打 /api/workflow/state），这一步就被写进 done 并落盘，
+    //   而后 agent 才写出「本闸判定 不通过」—— 闸再也不看了，进度条永远是绿的。实测踩到过两次。
+    //   非闸步骤仍吃缓存：它们没有"结论"可翻，重算只是白读文件。
+    if (done.has(s.id) && !s.gate) continue
     if (!(s.emits || []).some((g) => files.some((f) => WF.globMatch(g, f)))) continue
     // ★ 质量闸不能"有文件就算过"。实测：peer-review 报告白纸黑字写着「倾向 Major revision」
     //   并列了一条 Critical，步骤条照样打绿勾 —— 而医生正是靠这条进度条判断"能不能交稿"。
     //   读一眼报告结论：判为未通过的标成 failed（界面显示"需返工"），不计入 done。
-    if (s.gate && gateFailed(outDir, s, files)) { failed.add(s.id); continue }
+    if (s.gate && gateFailed(outDir, s, files)) { failed.add(s.id); done.delete(s.id); continue }
     done.add(s.id)
   }
   const arr = [...done], farr = [...failed]

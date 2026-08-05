@@ -200,10 +200,34 @@ def compare_titles(claimed, found):
     return sim, True
 
 
+def _norm_for_contain(x):
+    """包含式比对用的归一化：小写、去掉所有非字母数字（含标点/空格/连字符）。
+    这样 'Hepatocellular Carcinoma' 与著录里的 'Hepatocellular carcinoma.' 能对上。"""
+    return re.sub(r"[^0-9a-z\u4e00-\u9fff]+", "", (x or "").lower())
+
+
+def _title_contained(claimed, rt):
+    """真标题是否【完整出现】在引用串里。
+
+    ★ 为什么需要这条：纯文本引用列表（refs.txt，SKILL.md 明确支持）里，每行是完整著录——
+      作者 + 标题 + 刊名 + 年卷页 + DOI。extract() 拿整行当 claimed_title，再做全串相似度，
+      短标题被其余部分稀释，分数暴跌 → 【全对的参考文献被判成"标题是编的"】。
+      实测 8 条全真的引用 OK 0 条，其中 N Engl J Med 那条 sim 只有 0.39。
+      而这个错误是随机触发的：同一份稿子，生成 refs.bib 就全对、生成 refs.txt 就全错。
+    ★ 为什么不会放过张冠李戴：真正引错号时，解析回来的是【另一篇】的标题，它不会逐字出现在
+      用户写的引用串里。实测那条埋雷（真 DOI 配错标题）仍被判 MISMATCH。
+    """
+    a, b = _norm_for_contain(rt), _norm_for_contain(claimed)
+    # 太短的标题（如 "COVID-19"）容易碰巧命中，要求有足够长度才认包含
+    return len(a) >= 12 and a in b
+
+
 def _decide_title(claimed, rt, id_kind):
     """据(引用标题, 解析标题)给出 (verdict, sim, note)。claimed 为空=只有标识、无标题可比。"""
     if not claimed:
         return "OK", 1.0, "该标识真实存在（无引用标题可比对，仅核存在性）"
+    if _title_contained(claimed, rt):
+        return "OK", 1.0, "标题吻合（解析到的标题完整出现在引用著录中）"
     sim, comparable = compare_titles(claimed, rt)
     if not comparable:
         return "CHECK", round(sim, 2), \

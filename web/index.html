@@ -2448,7 +2448,9 @@ async function loadWorkflowState() {
     if (!j?.state || !j.steps?.length) return
     wfCache.set(j.module, { ...(wfCache.get(j.module) || {}), name: j.name, steps: j.steps })
     currentModule = j.module
-    updateStepsBar(j.state.done || [], j.state.cur, j.steps)
+    // 第 4 个参数不能漏：漏了 updateStepsBar 会沿用旧的 liveFailed（切会话/刷新时是 []），
+    // 于是「需返工」的红标在刷新后凭空消失，那一步显示成"还没做"。服务端是有 failed 的。
+    updateStepsBar(j.state.done || [], j.state.cur, j.steps, j.state.failed || [])
   } catch (_) {}
 }
 

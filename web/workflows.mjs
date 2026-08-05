@@ -523,7 +523,9 @@ export const WORKFLOWS = {
         emits: ["integrity_report.md", "audit/*"], render: "integrity",
         hint: "只出待核信号、不下造假结论" },
     ],
-    extra: [],
+    // reference-check / peer-review 的技能文档都写着"出 PDF：交给 render-pdf-doc"，
+    // 而医生拿到核查报告最自然的下一步就是发给通讯作者。此前 extra 是空的，这条路直接堵死。
+    extra: ["render-pdf-doc", "render-docx"],
   },
 
   // ============ 文章润色 ============
