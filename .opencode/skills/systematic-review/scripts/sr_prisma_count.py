@@ -57,7 +57,11 @@ def read_csv(path):
         return list(csv.DictReader(f))
 
 
-ZERO_CONFLICT_MIN_N = 20   # 低于这个量，零分歧还算正常；到这个量就不可能了
+# ★ 门槛不能定太高：全文筛选阶段的样本量天然是十几，定在 20 等于让这道闸在那一阶段永不触发。
+#   实测 TA 阶段 249 条零分歧被正确拒报，而全文阶段 10 条零分歧照样印出 κ=1.000 (almost perfect)，
+#   还被原样抄进稿件当成"双人筛选"的证据，去中和同一节里那句如实措辞。
+#   8 条起就足以说明问题：真独立筛选，8 条里一条分歧都没有已经不正常了。
+ZERO_CONFLICT_MIN_N = 8
 
 
 def cohens_kappa(pairs):
@@ -127,6 +131,17 @@ def main():
 
     with open(args.identification, encoding="utf-8") as f:
         ident = json.load(f)
+        # ★ schema 用错时【报错】，不要静默降级成 0。实测 agent 手写的第一版用了
+        #   databases/total_before_dedup（真实 schema 是 db_counts/total_identified），
+        #   于是 PRISMA 的 Identification 表印出「Total identified | 0」—— 一篇综述声称检索到 0 篇，
+        #   而校验还会因此连带误 FAIL，排查方向全被带偏。
+        if not isinstance(ident, dict) or "db_counts" not in ident:
+            sys.exit(
+                "!! identification.json 的 schema 不对：需要 {\"db_counts\": {\"来源\": 数量, ...}, "
+                "\"total_identified\": N, \"duplicates_removed\": M}。\n"
+                "   实际读到的顶层键：%s\n"
+                "   （常见错法：写成 databases / total_before_dedup —— 那样脚本会把检索总数当成 0，"
+                "PRISMA 图会印出『共检索到 0 篇』。）" % sorted(ident.keys() if isinstance(ident, dict) else []))
     db_counts = ident.get("db_counts", {})
     total_identified = ident.get("total_identified", sum(db_counts.values()))
     duplicates_removed = ident.get("duplicates_removed", 0)
@@ -193,10 +208,30 @@ def main():
             #   把全部 165 行的 pdf_retrieved 改成 Y，而一篇全文都没下过，PRISMA 于是印出
             #   「Reports not retrieved: 0」。这条数的是文件系统，改 CSV 绕不过去。
             _base = os.path.dirname(os.path.abspath(args.ft)) or "."
-            _on_disk = 0
+            # ★ 必须验【文件内容】，不能只数扩展名 —— 实测 agent 在闸报 FAIL 后新建了 10 个
+            #   16 字节、内容为 'PDF placeholder' 的文件命名成 .pdf，一次就把 FAIL 刷成 PASS。
+            #   真 PDF 一定以 %PDF- 开头；一篇文献全文没有小于 8KB 的。
+            _on_disk, _fake = 0, 0
             for _root, _dirs, _files in os.walk(_base):
                 _dirs[:] = [d for d in _dirs if not d.startswith('.')]
-                _on_disk += sum(1 for _f in _files if _f.lower().endswith('.pdf'))
+                for _f in _files:
+                    if not _f.lower().endswith('.pdf'):
+                        continue
+                    _fp = os.path.join(_root, _f)
+                    try:
+                        if os.path.getsize(_fp) < 8192:
+                            _fake += 1; continue
+                        with open(_fp, 'rb') as _fh:
+                            if _fh.read(5) != b'%PDF-':
+                                _fake += 1; continue
+                    except OSError:
+                        _fake += 1; continue
+                    _on_disk += 1
+            if _fake:
+                checks.append((
+                    '目录里没有假 PDF（发现 %d 个扩展名是 .pdf 但内容不是 PDF 或小于 8KB 的文件 —— '
+                    '占位文件不算已获取全文，请删掉它们并如实计入 Reports not retrieved）' % _fake,
+                    False))
             checks.append((
                 "pdf_retrieved=Y 的条数 ≤ 目录里真实的 PDF 数"
                 "（%d 声称 / %d 实存；对不上说明这是摘要级筛选，PRISMA 须如实印"

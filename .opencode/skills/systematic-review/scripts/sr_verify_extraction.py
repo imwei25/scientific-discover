@@ -103,6 +103,8 @@ def main():
     ap.add_argument("--fulltext-dir", default=None, help="全文文本目录（.txt/.md），有就一起核")
     ap.add_argument("--computed-cols", default="",
                     help="逗号分隔：本来就是算出来的列（se,weight,log_hr…），跳过不查")
+    ap.add_argument("--allow-truncated", action="store_true",
+                    help="来源表被截断也照跑（报告会充满无信息量的待核项，慎用）")
     ap.add_argument("--output", default="extraction_verify.md")
     args = ap.parse_args()
 
@@ -112,6 +114,23 @@ def main():
     src = load_sources(args.records, args.fulltext_dir)
     if not src:
         sys.exit("来源表里读不到任何记录（--records 需要 record_id/doi/pmid 之一 + abstract 列）")
+
+    # ★ 来源表体检：来源本身残缺时，这个脚本会把【每一个】数字都报成待核 —— 一堆没有信息量的
+    #   告警反而会让人放弃看它。实测 agent 绕开 sr_dedup.py 手搓 01_deduplicated.csv：
+    #   249/249 标题全空、摘要一律截断到 500 字（HR/CI 所在的 Results 段正好被切掉），
+    #   于是回查 71/71 全部待核，闸的信噪比被自己毁掉，而稿件里 10 篇研究连标题都没有、
+    #   参考文献表里一条都对应不上。这种情况必须【先说来源不可用】，别让人以为是数据在造假。
+    _texts = [] if args.allow_truncated else [v for v in src.values() if v]
+    if _texts:
+        _short = sum(1 for v in _texts if len(v.strip()) < 600)
+        if _short / len(_texts) >= 0.8:
+            sys.exit(
+                "!! 来源表看起来【被截断过】：%d/%d 条的可比文本不足 600 字。\n"
+                "   摘要里 HR/95%%CI/样本量通常出现在 Results 段，截断后回查会把每个数字都报成待核，\n"
+                "   这份报告就没有信息量了。\n"
+                "   请用 sr_dedup.py 产出的完整 01_deduplicated.csv（带 title 与未截断的 abstract），\n"
+                "   不要手工另存/截断。确实要按当前来源硬跑，加 --allow-truncated。"
+                % (_short, len(_texts)))
 
     findings, checked, rows_total = [], 0, 0
     with open(args.extraction, "r", encoding="utf-8-sig", newline="") as f:
