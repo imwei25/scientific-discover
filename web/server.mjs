@@ -65,10 +65,20 @@ const _modelCost = () => {
 }
 // cost 传了就用传的（云端账号形态下，每个模型的单价由服务器随档案下发——各家价格不同，
 // 拿 env 里那套 DeepSeek 价去算别家的模型，本机显示的成本会系统性偏）。没传才回落 env。
+// 思考模型的"关思考"开关。OC_THINKING=off 时给模型带上停用思考的参数。
+// 【为什么没有 low】实测火山 Ark 的 /api/coding/v3 上，reasoning_effort=low / minimal 被静默忽略
+// （思考长度不降反升几个字），只有 reasoning_effort=none 与 thinking={type:"disabled"} 真正生效：
+// 同一问题的输出 token 从 105 降到 4。所以这里是二值开关，不是强度档位。
+// 两个字段都发：不同厂商吃不同的那一个，多发一个无害（未识别的参数被忽略）。
+// 【默认不开】思考对方法学推理、统计判断是有价值的；关掉是拿质量换配额，要由使用者显式决定。
+const THINKING_OFF = String(process.env.OC_THINKING || "").toLowerCase() === "off"
 const customProviderCfg = ({ baseURL, apiKey, modelID, cost }) => ({
   npm: "@ai-sdk/openai-compatible", name: "Custom (OpenAI 兼容)",
   options: { baseURL, apiKey },
-  models: { [modelID]: { name: modelID, tool_call: true, attachment: true, cost: cost || _modelCost() } },   // 开工具调用 + 注入定价（用于算成本额度）
+  models: { [modelID]: {
+    name: modelID, tool_call: true, attachment: true, cost: cost || _modelCost(),   // 开工具调用 + 注入定价（用于算成本额度）
+    ...(THINKING_OFF ? { options: { thinking: { type: "disabled" }, reasoning_effort: "none" } } : {}),
+  } },
 })
 // opencode 的 `question` 工具会弹交互式提问卡片；本部署（web 网关）没有应答它的 UI，
 // 模型一旦调用就整轮 error/卡死（实测卡在“确认方向选择”那步）。各技能与 AGENTS.md §六 已要求
