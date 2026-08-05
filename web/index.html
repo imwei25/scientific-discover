@@ -1358,6 +1358,15 @@ function addProducts(list) {
       const badge = document.createElement("span"); badge.className = "fbadge"; badge.textContent = (name.split(".").pop() || "").slice(0, 4); icon.appendChild(badge)
       const nm = document.createElement("span"); nm.className = "pname"; nm.textContent = name
       const acts = document.createElement("div"); acts.className = "pacts"
+      // 送审/交付类文件（docx/pdf）遇上"有闸没过"时必须带警示：实测出现过 docx 比核查报告
+      // 早 13 秒生成 —— render 在 done、refcheck 在 failed 同时成立，而用户拿到的 Word 看不出
+      // 任何异常，直接就投出去了。不阻断（那违背不做硬状态机的设计），但绝不让它看起来是干净的。
+      if (/\.(docx?|pdf)$/i.test(name) && liveFailed.length) {
+        const w = document.createElement("span"); w.className = "pwarn"
+        w.textContent = "⚠ 生成这份文件时还有质量闸没通过（" + failedNames().join("、")
+          + "）。请先按报告返工、重跑该闸，再拿它去投稿或对外交付。"
+        card.appendChild(w)
+      }
       // 还原表：不给预览按钮，改成一行警示（内联预览会把病人真名铺在对话框里）。下载保留。
       if (isSecret(name)) {
         nm.title = "含可还原到个人的对照信息"
@@ -2376,6 +2385,10 @@ let liveSteps = null   // 本会话【按表单裁剪后】的步骤集（/api/w
 let liveDone = []      // 最近一次已知的完成集（服务端按产物反推）；实时高亮时要沿用它，别把 ✓ 冲掉
 let liveCur = null     // 实时推断的当前步（技能一开跑就点亮，不等本轮结束）
 let liveFailed = []    // 闸跑了但【没过】的步骤（报告里写着 Major revision / 未通过 等）
+const failedNames = () => {   // 未过闸步骤的中文名，给产物卡的警示用
+  const list = liveSteps || wfCache.get(currentModule)?.steps || []
+  return liveFailed.map((id) => list.find((s) => s.id === id)?.name || id)
+}
 // 技能名 → 步骤：agent 一调起某个技能，就把步骤条推到对应那一步。
 // 【为什么要这条】服务端的进度只在【轮次收尾】才广播一次，而一轮跑十几分钟；期间用户盯着的
 // 是一条纹丝不动的进度条，无从判断它到底在干什么、还是卡死了。技能调用是唯一实时可得的信号。
