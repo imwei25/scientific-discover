@@ -215,6 +215,70 @@ test("前瞻性 / RCT 下预注册被提到最前，就不能还标『可选』�
   assert.doesNotMatch(WF.pipelineLine("paper", { ...raw, studyType: "rct" }), /新颖性裁定 \/ 预注册\(可选\)/)
 })
 
+test("脱敏还原表绝不能当普通表格渲染——那会把病人真名铺在对话框里", () => {
+  // 实测产出过 deid_cohort_mapping.csv：200 例真实姓名 + 住院号，当时可一键下载且会内联预览
+  for (const f of ["deid_cohort_mapping.csv", "患者对照表.csv", "id_map.csv", "subject_crosswalk.csv"])
+    assert.equal(WF.rendererFor(f), "secret", `${f} 必须判成 secret（界面只给警示、不预览）`)
+  // 脱敏步的 emits 也不该把还原表算成自己的产物（写成 deid_*.csv 就会）
+  const deid = WF.WORKFLOWS.paper.steps.find((s) => s.id === "deid")
+  assert.ok(!deid.emits.some((g) => WF.globMatch(g, "deid_cohort_mapping.csv")),
+    "还原表不进产物契约，不主动推给用户")
+  // 正常脱敏结果照常渲染
+  assert.equal(WF.rendererFor("deid_cohort.csv"), "table")
+})
+
+test("排版出件的 emits 不能被任意 pdf 命中——画过一张图就说'稿子出件了'是假信号", () => {
+  const render = WF.WORKFLOWS.paper.steps.find((s) => s.id === "render")
+  // 实测：emits 写 ["*.docx","*.pdf"]，nature-figure 出的 fig1.pdf 直接让这步在第 4 轮变绿，
+  // 而 manuscript.docx 第 6 轮才存在 —— 医生会以为稿子已经能交了
+  assert.ok(!render.emits.some((g) => WF.globMatch(g, "fig1.pdf")), "图不该算作出件")
+  assert.ok(!render.emits.some((g) => WF.globMatch(g, "fig3.svg")))
+  assert.ok(render.emits.some((g) => WF.globMatch(g, "manuscript.docx")), "真正的成稿要能算上")
+})
+
+test("基金申报要能检索文献——research-scan / novelty-check 一动手就得用检索技能", () => {
+  const sk = WF.skillsOf("grant")
+  for (const s of ["search-lit", "literature-review"])
+    assert.ok(sk.includes(s), `grant 少了 ${s}：领域扫描与新颖性裁定都要检索，缺了会撞模块闸整轮作废`)
+})
+
+test("表头解析：中文版 Excel 存的 GBK 必须读对——那是医院里最常见的导出方式", () => {
+  const rows = "样本编号,方法A_Ddimer,金标准PE,年龄\n1,0.8,1,65\n2,0.3,0,54\n"
+  const want = ["样本编号", "方法A_Ddimer", "金标准PE", "年龄"]
+  // UTF-8 / BOM / GBK 三种都要给出同一份列名
+  assert.deepEqual(WF.parseHeaders(Buffer.from(rows, "utf8"), ".csv").headers, want)
+  assert.deepEqual(WF.parseHeaders(Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), Buffer.from(rows, "utf8")]), ".csv").headers, want)
+  // Node 没有内置 GBK 编码器，用 iconv 式的手工构造不现实 —— 改用 TextDecoder 的反向验证：
+  // 只要 UTF-8 解码出现替换字符就必须走嗅探分支，且不能把乱码当列名返回。
+  const garbled = Buffer.from([0xd1, 0xf9, 0xb1, 0xbe, 0x2c, 0xa1, 0xa1])   // GBK 字节流
+  const r = WF.parseHeaders(garbled, ".csv")
+  assert.ok(!r.headers || !r.headers.some((h) => h.includes("�")),
+    "绝不能把带替换字符的乱码当成真列名返回——它会被盖章确认灌进任务卡")
+})
+
+test("表头解析：解析歪了必须降级成手填，不能回一个'看着像模像样'的假下拉", () => {
+  const P = (s) => WF.parseHeaders(Buffer.from(s, "utf8"), ".csv")
+  // 首行是标题行（LIS 导出常见）→ 此前会把整行当成唯一列名塞进下拉
+  assert.equal(P("某某医院检验科 D-二聚体方法比对原始数据 2026-08\na,b,c\n1,2,3\n").headers, null)
+  // 引号不成对 → 带逗号的引号字段会被拆成一堆带残留引号的假列
+  assert.equal(P('样本编号,"D-二聚体, 方法A (mg/L)\n1,0.8\n').headers, null)
+  // 首行/次行字段数对不上 → 首行多半不是表头
+  assert.equal(P("a,b,c,d,e\n1,2,3\n").headers, null)
+  // 降级时必须给出【能照做的】理由，不能只回 null
+  for (const s of ["某某医院原始数据\na,b\n1,2\n", "a,b,c,d,e\n1,2,3\n"])
+    assert.match(P(s).reason || "", /手动填列名/)
+})
+
+test("表头解析：分号分隔要认，空列名与重名列要显式标出而不是静默吞掉", () => {
+  const P = (s) => WF.parseHeaders(Buffer.from(s, "utf8"), ".csv")
+  assert.deepEqual(P("样本编号;方法A;金标准\n1;0.8;1\n").headers, ["样本编号", "方法A", "金标准"])
+  // 静默 filter(Boolean) 会让用户以为那一列不存在（而脚本里它确实在）；重名列则分不清点了哪个
+  const h = P("id,val,val,,x\n1,2,3,4,5\n").headers
+  assert.equal(h.length, 5, "空列名不该被吞掉——列的位置会错位")
+  assert.ok(h[2].includes("重名"))
+  assert.ok(h[3].includes("无列名"))
+})
+
 test("步骤条：没有明确 cur 时当前步 = 第一个未完成的，且质量闸不能抢走高亮", () => {
   // 实测踩过：第一轮 cur 是空的（只有提交过步骤表单才有值），整条链全灰，而闸那一步带着颜色
   // → 用户把「引用核查(闸)」读成当前步骤，以为 AI 起步就跳到了核查。这里锁住修复后的语义。

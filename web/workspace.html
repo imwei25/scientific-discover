@@ -233,9 +233,16 @@
   /* 模块清单只列【本账号已开通】的：没开通的不展示（与聊天页欢迎区同一口径），
      所以这个页面上不存在"看着能点却点不动"的卡片。 */
   (async () => {
+    /* 重试三次再放弃：网关同时跑着几轮生成时这个接口会变慢（实测并发三轮即触发），
+       一次超时就放弃 → 用户看到"取不到模块清单"，而此刻 curl /api/modules 是 200、内容完整。
+       他得知道要按 F5 才进得去。超时也放宽到 20 秒，并把文案改成不撒谎的版本。 */
     let j = null;
-    try { j = await (await fetch("api/modules", { signal: AbortSignal.timeout(10000) })).json(); } catch (_) {}
-    if (!j || !Array.isArray(j.modules)) return fallback("模块清单暂时取不到（网关可能还在启动）。稍后刷新本页即可。");
+    for (let i = 0; i < 3 && !j; i++) {
+      if (i) await new Promise((r) => setTimeout(r, 1200 * i));
+      try { j = await (await fetch("api/modules", { signal: AbortSignal.timeout(20000) })).json(); } catch (_) {}
+      if (j && !Array.isArray(j.modules)) j = null;
+    }
+    if (!j || !Array.isArray(j.modules)) return fallback("模块清单暂时取不到（网关可能正忙或还在启动）。稍等片刻刷新本页即可。");
     const allowed = j.modules.filter((m) => m.allowed);
     if (!allowed.length) return fallback("你的账号当前没有开通任何模块，请联系管理员开通。");
     render(allowed);

@@ -136,7 +136,10 @@ export const WORKFLOWS = {
         //   而这恰恰是最该插脱敏的情形（含患者信息且未声明脱敏）。方向必须 fail-safe：
         //   没明说脱敏过 = 当作没脱敏（AGENTS.md §五 硬规矩）。
         when: [{ field: "materials", has: "rawdata" }, { field: "deidDone", truthy: false }],
-        emits: ["deid_*.csv", "deid_*.xlsx", "deid_report.md"], render: "report",
+        // ⚠️ 不要写成 deid_*.csv：那会把 deid_*_mapping.csv（真实姓名/住院号 ↔ 假名的【还原表】）
+        //    也当成本步产物渲染成卡片并可一键下载，而会话目录整包分享时它跟着走。
+        //    还原表照常留在磁盘上供用户自己取，但不进产物契约、不主动推给他。
+        emits: ["deid_report.md"], render: "report",
         hint: "含患者信息的数据未脱敏不得进入统计" },
       { id: "stats", name: "数据体检与统计分析", skill: "data-analysis",
         when: { field: "materials", has: "rawdata" },
@@ -229,7 +232,7 @@ export const WORKFLOWS = {
       { id: "render", name: "排版出件", skill: "render-docx",
         form: [{ id: "fmt", label: "输出格式", type: "select", default: "docx", options: [
           { v: "docx", t: "Word（.docx）" }, { v: "pdf", t: "PDF" }, { v: "both", t: "两种都要" }] }],
-        emits: ["*.docx", "*.pdf"], render: "doc",
+        emits: ["manuscript*.docx", "manuscript*.pdf"], render: "doc",
         hint: "没指定期刊就用通用送审格式，交付时附查重工具推荐" },
     ],
     extra: ["search-lit", "fulltext-retrieval", "render-pdf-doc"],
@@ -269,10 +272,10 @@ export const WORKFLOWS = {
       { id: "screen", name: "纳入 / 排除筛选", skill: "literature-review",
         form: [{ id: "excluded", label: "排除的文献", type: "picklist", source: "evidence_table.csv",
           help: "在上一步的文献卡片里勾掉不要的，这里会同步。留空 = 全部纳入。" }],
-        emits: ["screening_log.md", "included.csv"], render: "table" },
+        emits: ["screening_log.md", "included.csv"], render: "evidence" },
       { id: "fulltext", name: "全文获取", skill: "fulltext-retrieval", optional: true,
         when: { field: "fulltext", eq: true },
-        emits: ["pdfs/*", "retrieval_report.json", "manual_needed.txt"], render: "retrieval",
+        emits: ["pdfs/*.pdf", "retrieval_report.json", "manual_needed.txt"], render: "retrieval",
         hint: "如实区分哪些下到了、哪些没下到及原因" },
       { id: "write", name: "综述成文", skill: "literature-review",
         emits: ["review.md", "literature_review.md", "*_review.md"], render: "manuscript" },
@@ -283,7 +286,7 @@ export const WORKFLOWS = {
       { id: "render", name: "排版出件", skill: "render-pdf-doc",
         form: [{ id: "fmt", label: "输出格式", type: "select", default: "docx", options: [
           { v: "docx", t: "Word（.docx）" }, { v: "pdf", t: "PDF" }, { v: "both", t: "两种都要" }] }],
-        emits: ["*.docx", "*.pdf"], render: "doc" },
+        emits: ["manuscript*.docx", "manuscript*.pdf", "review*.docx", "review*.pdf", "proposal*.docx", "proposal*.pdf"], render: "doc" },
     ],
     extra: ["render-docx"],
   },
@@ -351,9 +354,12 @@ export const WORKFLOWS = {
       { id: "render", name: "排版出件", skill: "render-pdf-doc",
         form: [{ id: "fmt", label: "输出格式", type: "select", default: "docx", options: [
           { v: "docx", t: "Word（.docx）" }, { v: "pdf", t: "PDF" }, { v: "both", t: "两种都要" }] }],
-        emits: ["*.docx", "*.pdf"], render: "doc" },
+        emits: ["manuscript*.docx", "manuscript*.pdf", "review*.docx", "review*.pdf", "proposal*.docx", "proposal*.pdf"], render: "doc" },
     ],
-    extra: ["render-docx"],
+    // ★ research-scan（领域扫描）与 novelty-check（新颖性裁定）本质上都要【检索文献】——
+    //   白名单里不给检索技能，它们一动手就撞模块闸、整轮作废（实测在另一会话里复现过：
+   //    "网关把 literature-review 的脚本当越权拦了"）。标书的立项依据本来就建立在文献之上。
+    extra: ["render-docx", "search-lit", "literature-review", "fulltext-retrieval"],
   },
 
   // ============ 文献研读 ============
@@ -387,7 +393,7 @@ export const WORKFLOWS = {
         emits: ["evidence_table.csv", "evidence.md", "refs.bib"], render: "evidence" },
       { id: "fulltext", name: "全文获取", skill: "fulltext-retrieval", optional: true,
         when: { field: "fulltext", eq: true },
-        emits: ["pdfs/*", "zotero_lib/*", "retrieval_report.json", "manual_needed.txt"], render: "retrieval",
+        emits: ["pdfs/*.pdf", "zotero_lib/*.pdf", "retrieval_report.json", "manual_needed.txt"], render: "retrieval",
         hint: "只把真正下到 PDF 的算进可问答的范围，没下到的逐条列出原因" },
       { id: "rag", name: "基于全文问答", skill: "zotero-library", optional: true,
         when: { field: "mode", eq: "rag" },
@@ -401,7 +407,7 @@ export const WORKFLOWS = {
       { id: "render", name: "出件", skill: "render-pdf-doc", optional: true,
         form: [{ id: "fmt", label: "输出格式", type: "select", default: "pdf", options: [
           { v: "pdf", t: "PDF" }, { v: "docx", t: "Word（.docx）" }] }],
-        emits: ["*.pdf", "*.docx"], render: "doc" },
+        emits: ["report*.pdf", "report*.docx", "digest*.pdf", "digest*.docx", "research_report*.pdf", "research_report*.docx"], render: "doc" },
     ],
     extra: ["research-scan", "render-docx"],
   },
@@ -460,18 +466,23 @@ export const WORKFLOWS = {
     ],
     steps: [
       { id: "deid", name: "数据脱敏", skill: "deidentify", when: { field: "hasPHI", eq: true },
-        emits: ["deid_*.csv", "deid_*.xlsx", "deid_report.md"], render: "report" },
+        emits: ["deid_report.md"], render: "report" },   // 同上：还原表不进产物契约
       { id: "profile", name: "数据体检", skill: "data-analysis",
+        // 只算样本量（做研究之前）时没有任何数据，这几步永不可能完成 —— 留在条上等于让进度
+        // 永远停在第一步。判据用 hasOther：勾了样本量【之外】的分析才需要真数据。
+        when: { field: "analyses", hasOther: ["power"] },
         emits: ["data_profile.md", "cleaning_log.md"], render: "report",
         hint: "重复 ID / 分类水平不一致 / 分组缺失必须先清，否则后面每个 p 都是错的" },
       { id: "table1", name: "基线表 Table 1", skill: "clinical-stats",
         when: { field: "analyses", has: "table1" },
         emits: ["table1.csv"], render: "table" },
       { id: "analyze", name: "统计分析", skill: "data-analysis",
-        emits: ["stats_*.csv", "*_results.csv", "analysis*.md"], render: "table" },
+        // 样本量/把握度也归这一步做（它就是 clinical-stats/data-analysis 的活），所以无条件保留
+        emits: ["stats_*.csv", "*_results.csv", "analysis*.md", "sample_size*.md"], render: "table" },
       { id: "figure", name: "出版级图表", skill: "nature-figure", when: { field: "figs", eq: true },
         emits: ["fig*.png", "fig*.pdf", "fig*.svg", "figures/*"], render: "figure" },
       { id: "integrity", name: "源数据完整性自查", skill: "data-integrity", optional: true, gate: true,
+        when: { field: "analyses", hasOther: ["power"] },   // 没有源数据就无从自查
         emits: ["integrity_report.md", "audit/*"], render: "integrity", onFail: "analyze" },
     ],
     // 出完基线表/结果表，用户下一句多半是"导成 Word 给我" —— 不放行排版技能就会被模块闸掐掉，
@@ -550,7 +561,7 @@ export const WORKFLOWS = {
         hint: "润色如果动过引用处的文字，必须把引用重新核一遍" },
       { id: "render", name: "排版出件", skill: "render-docx", optional: true,
         when: { field: "outFmt", ne: "md" },
-        emits: ["*.docx", "*.pdf"], render: "doc" },
+        emits: ["manuscript*.docx", "manuscript*.pdf", "review*.docx", "review*.pdf", "proposal*.docx", "proposal*.pdf"], render: "doc" },
     ],
     extra: ["render-pdf-doc"],
   },
@@ -593,6 +604,10 @@ export function globMatch(glob, name) {
   return re.test(String(name).split("/").pop())
 }
 const RENDER_RULES = [
+  // ⚠️ 必须放在最前：脱敏的【还原表】（真实姓名/住院号 ↔ 假名）。绝不能落进 table 渲染器——
+  //    那会把病人真名直接铺在对话框里。给它专用渲染器，界面只显示警示、不预览内容。
+  //    （实测产出过 deid_cohort_mapping.csv：200 例真实姓名+住院号，当时可一键下载且会内联预览。）
+  { render: "secret", globs: ["*mapping*.csv", "*_map.csv", "*crosswalk*.csv", "*对照表*.csv", "*还原表*.csv", "*keyfile*.csv"] },
   { render: "evidence", globs: ["evidence_table.csv", "evidence.csv", "included.csv", "zotero_evidence.csv", "zotero_refs.csv"] },
   { render: "retrieval", globs: ["retrieval_report.json", "manual_needed.txt"] },
   { render: "refcheck", globs: ["refcheck_report.md", "reference_check*.md", "reference_check*.csv"] },
@@ -601,16 +616,55 @@ const RENDER_RULES = [
   { render: "topics", globs: ["topic_candidates*.csv", "topic_selection*.md"] },
   { render: "diff", globs: ["*_humanized.md", "humanized*.md"] },
   { render: "figure", globs: ["*.png", "*.jpg", "*.jpeg", "*.svg", "*.webp"] },
-  { render: "doc", globs: ["*.docx", "*.doc", "*.pdf", "*.pptx"] },
+  { render: "doc", globs: ["*.docx", "*.doc", "*.pdf", "*.pptx", "*.xlsx", "*.xls"] },   // xlsx 漏过一次：脱敏步 emits 里写着 deid_*.xlsx，却落进"认不出"
   { render: "table", globs: ["*.csv", "*.tsv"] },
   { render: "manuscript", globs: ["manuscript*.md", "proposal*.md", "review.md", "*_review.md", "digest*.md", "research_report*.md", "deep_research*.md"] },
   { render: "report", globs: ["*_report.md", "*_log.md", "data_profile.md", "preregistration.md"] },
 ]
 const COMPILED = RENDER_RULES.map((r) => ({ render: r.render, res: r.globs.map(globRe) }))
+// 各步 emits → render 的反查表：由 WORKFLOWS 自动展开。
+// ★ 为什么必须有这张表：网关注入的前言原话是"**产物文件名用约定名**（名字对不上就只能当普通附件
+//   列出）：…、analysis*.md、…"。模型照做了，结果 rendererFor 只查下面那张【全局文件名表】，
+//   而 report 组写的是 *_report.md / *_log.md —— analysis.md 落进"认不出"。
+//   两处定义各写各的，说好的契约对不上，主报告反而没有结构化卡片（实测踩到）。
+//   现在以 steps 的 emits 为准、全局表兜底，契约只有一处定义。
+// 一步的 emits 常常【混着体裁】：统计那步既出 stats_*.csv 又出 analysis*.md，筛选那步既出
+// included.csv 又出 screening_log.md。step.render 只能写一个，直接套用会把文字报告渲染成表格。
+// 按扩展名纠正：md/txt 的散文用 report，csv/tsv 的用 table，二进制文档用 doc。
+// （比给每条 emits 单独标注渲染器更省事，且新增 emits 时自动正确。）
+const byExt = (glob, declared) => {
+  const ext = (glob.match(/\.([a-z0-9]+)$/i) || [])[1]?.toLowerCase()
+  if (!ext) return declared
+  if (["md", "txt"].includes(ext) && ["table", "figure", "doc", "evidence"].includes(declared)) return "report"
+  if (["csv", "tsv"].includes(ext) && ["report", "manuscript", "diff", "doc"].includes(declared)) return "table"
+  if (["docx", "doc", "pdf", "xlsx", "xls", "pptx"].includes(ext)) return "doc"
+  if (["png", "jpg", "jpeg", "svg", "pdf"].includes(ext) && declared === "report") return "figure"
+  return declared
+}
+// 【必须按具体度排序，不能靠书写顺序】撰写步的 `manuscript_*.md` 会吞掉润色步的
+// `manuscript_humanized.md` —— 谁先匹配上全看两个模块在本文件里谁写在前面。这种依赖太脆：
+// 挪一下定义顺序，渲染器就悄悄变了，而且从界面上完全看不出来。
+// 具体度 = 去掉通配符后剩下的字面长度（越长越具体），同分时通配符少的优先。
+const specificity = (g) => [g.replace(/\*/g, "").length, -(g.split("*").length - 1)]
+const EMIT_RULES = (() => {
+  const out = []
+  for (const w of Object.values(WORKFLOWS))
+    for (const s of w.steps)
+      if (s.render) for (const g of s.emits || []) out.push({ render: byExt(g, s.render), re: globRe(g), glob: g })
+  return out.sort((a, b) => {
+    const [la, wa] = specificity(a.glob), [lb, wb] = specificity(b.glob)
+    return lb - la || wb - wa
+  })
+})()
 /** 文件名（可含一层子目录，如 pdfs/a.pdf）→ 渲染器 id；认不出返回 null */
 export function rendererFor(name) {
   if (!name) return null
-  const base = String(name).split("/").pop()
+  const s = String(name), base = s.split("/").pop()
+  // secret 先判：它比任何 emits 契约都优先——某一步的 emits 若不慎写宽了（deid_*.csv 就踩过），
+  // 还原表会被当成该步的正常产物渲染出来，那是把病人真名摊在屏幕上。
+  if (COMPILED[0].render === "secret" && COMPILED[0].res.some((re) => re.test(base))) return "secret"
+  // 先按各步声明的 emits 认（契约的唯一来源），再落到全局文件名表兜底
+  for (const r of EMIT_RULES) if (r.re.test(r.glob.includes("/") ? s : base)) return r.render
   for (const r of COMPILED) if (r.res.some((re) => re.test(base))) return r.render
   return null
 }
@@ -661,6 +715,60 @@ export function taskCard(modName, title, fields, values = {}, opts = {}) {
   return `【任务卡 · ${modName} / ${title}】\n${lines.join("\n")}${foot}\n`
     + `【以上为用户通过表单勾选提交的结构化输入，视同用户明确指令，按它推进即可、不要再逐项复述确认。`
     + `未填写的项一律标注"待补充"并在需要时向用户索要，**绝不臆测或编造**（伦理批号、注册号、数据数值尤其如此）。】\n\n`
+}
+
+// ---- 数据表表头解析（/api/data/headers 用；纯函数，便于测试）----
+//
+// 这是 stats / paper 表单最值钱的一环："列名猜错 / 写错"是当前最高频的失败模式，从真实表头
+// 下拉能从根上消灭它。**代价是：一旦解析歪了却仍回一个"看着像模像样"的下拉，比不做这个控件
+// 更危险** —— 用户会从荒唐选项里挑一个，而 testCol / goldCol 这类字段还是必填的。
+// 所以下面每一道判据都宁可降级成"手动填列名"，也不输出可疑结果。判据都是实测踩出来的，别删。
+export function parseHeaders(buf, ext = ".csv") {
+  const bad = (reason) => ({ headers: null, reason })
+  // ① 编码嗅探。★ 中文版 Excel「另存为 CSV」默认写 GBK，这是医院里【最常见】的导出方式，
+  //    不是边缘情况。硬按 UTF-8 解会把表头变成 "������"，而那串乱码会被当成真列名盖章确认、
+  //    灌进任务卡交给模型（实测：ROC 的待评价指标列填成 "����A_Ddimer"）。
+  const utf8 = buf.toString("utf8")
+  let text = utf8, enc = "utf-8"
+  if (utf8.includes("�")) {                       // 有替换字符 = 不是合法 UTF-8
+    enc = null
+    for (const e of ["gbk", "gb18030", "big5"]) {
+      try {
+        const t = new TextDecoder(e, { fatal: false }).decode(buf)
+        if (!t.includes("�")) { text = t; enc = e; break }
+      } catch { /* 运行时不支持该编码，跳过 */ }
+    }
+    if (!enc) return bad("这个文件的编码认不出来（不是 UTF-8，也不是 GBK/GB18030/Big5）。请另存为「CSV UTF-8」再传，或先手动填列名。")
+  }
+  const lines = text.split(/\r?\n/)
+  let line = lines[0] || ""
+  if (line.charCodeAt(0) === 0xfeff) line = line.slice(1)   // 剥 BOM，否则第一列名会带个看不见的字符
+  if (!line.trim()) return bad("文件第一行是空的，读不出表头。请手动填列名。")
+  // ② 分隔符：把分号也算进来（欧洲区 Excel 与不少 LIS 导出用它）
+  const count = (s, c) => s.split(c).length - 1
+  const sep = ext === ".tsv" ? "\t" : [",", "\t", ";"].sort((a, b) => count(line, b) - count(line, a))[0]
+  // ③ 引号不成对 → 带逗号的引号字段会被拆碎成一堆假列（还带残留引号），直接降级
+  if ((line.match(/"/g) || []).length % 2 === 1)
+    return bad("表头里有没配对的引号，拆出来的列名不可信。请手动填列名。")
+  const cells = line.split(sep).map((s) => s.trim().replace(/^"(.*)"$/, "$1"))
+  // ④ 只解析出 1 列：多半首行是标题行（"某某医院检验科…原始数据 2026-08"，LIS 导出常见），
+  //    或用了没认出来的分隔符。此前会把整行原样塞进下拉当唯一选项。
+  if (cells.filter(Boolean).length <= 1)
+    return bad("这个文件的第一行不像表头（只解析出一列）。可能首行是标题行，或分隔符特殊——请手动填列名。")
+  // ⑤ 首行与次行字段数对不上 → 首行多半不是表头
+  const second = (lines[1] || "").split(sep).length
+  if (second > 1 && Math.abs(second - cells.length) > 1)
+    return bad(`第一行有 ${cells.length} 个字段、第二行有 ${second} 个，对不上——首行可能不是表头。请手动填列名。`)
+  // ⑥ 空列名与重名列都要显式标出：静默丢弃会让用户以为那列不存在（而脚本里它确实存在），
+  //    两个一模一样的按钮则根本分不清点了哪个。
+  const seen = new Map()
+  const headers = cells.map((h, i) => {
+    const base = h || `（第 ${i + 1} 列·无列名）`
+    const k = base.toLowerCase()
+    const n = (seen.get(k) || 0) + 1; seen.set(k, n)
+    return n > 1 ? `${base}（重名 ${n}）` : base
+  })
+  return { headers, sep, encoding: enc }
 }
 
 // ---- 模块/技能闸的判据（纯函数，便于测试）----

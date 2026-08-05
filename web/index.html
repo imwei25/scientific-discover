@@ -304,6 +304,7 @@
   .pcard img { max-width: 224px; max-height: 220px; border-radius: var(--r-sm); display: block; cursor: zoom-in; }
   .pbar { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 8px; }
   .pcard.file { display: flex; align-items: center; gap: 11px; max-width: none; }
+  .pwarn { flex-basis: 100%; font-size: 11px; line-height: 1.5; color: #b4553f; background: rgba(224,86,79,.07); border: 1px solid rgba(224,86,79,.28); border-radius: var(--r-sm); padding: 5px 8px; margin-top: 6px; }
   .picon { position: relative; width: 30px; height: 30px; flex: none; color: var(--muted); }
   .picon .ic { width: 30px; height: 30px; stroke-width: 1.6; }
   .fbadge { position: absolute; left: 50%; bottom: 2px; transform: translateX(-50%); font-size: 8px; font-weight: 700; letter-spacing: .2px; color: #06263b; background: var(--cyan); border-radius: 3px; padding: 0 3px; text-transform: uppercase; line-height: 1.45; }
@@ -452,6 +453,9 @@
   .wfstep.gate { border-color: rgba(224,162,63,.45); color: #8a6215; }
   .wfstep.gate::after { content: "把关"; font-size: 9px; margin-left: 1px; border: 1px solid currentColor; border-radius: 3px; padding: 0 3px; opacity: .8; }
   .wfstep.gate.done { border-color: rgba(52,168,110,.5); background: rgba(52,168,110,.1); color: #1f7a52; }
+  /* 闸跑了但没过：必须一眼看出来。此前只要报告落盘就打绿勾，而报告结论可能是 Major revision —— 
+     医生正是靠这条进度条判断"能不能交稿"，给错信号比不给更糟。 */
+  .wfstep.failed, .wfstep.gate.failed { border-color: rgba(224,86,79,.55); background: rgba(224,86,79,.1); color: #b4553f; font-weight: 600; }
   /* .cur 放在 .gate 之后：同特异度下后写的赢，保证"当前步骤"永远是最醒目的那个（闸也不例外） */
   .wfstep.cur, .wfstep.gate.cur { border-color: var(--cyan); background: rgba(56,189,248,.14); color: #0f6cae; font-weight: 600; }
   /* 带说明的步骤给个虚线下划线 + 问号光标，否则那几句最要紧的话（"未脱敏不得进统计"
@@ -1271,14 +1275,27 @@ async function submitEdit(userDiv, newText) {
     addNote("⚠ 这条之后的对话已被清空（编辑必须先回退，且无法撤销），但重新发送没成功。编辑后的内容已放回输入框，请直接重发。")
   }
 }
+// 中间文件：脚本、日志、临时表。它们确实是本轮产物，但对用户不是"结果" ——
+// 一股脑摊在侧栏里，医生得自己在 analysis_main.py / run.log / data_profile.json 里认哪个是结论。
+// 不隐藏（有时确实要看脚本或日志），而是排到后面：结果类文件优先。
+// 脱敏还原表（真实姓名/住院号 ↔ 假名）。判据要与服务端 workflows.mjs 的 secret 组一致。
+// 【绝不内联预览】此前它走普通 CSV 卡片，会把病人真名直接铺在对话框里；下载保留——
+// 用户确实需要这张表回溯，但那是他主动点下载、在自己机器上看，不是摊在共享的会话界面上。
+const SECRET_RE = /(mapping|_map|crosswalk|keyfile|对照表|还原表)[^/]*\.csv$/i
+const isSecret = (n) => SECRET_RE.test(String(n).split("/").pop())
+const SCRATCHY = /\.(py|log|sh|ps1|ipynb|json)$/i
+const isScratch = (n) => { const b = n.split("/").pop(); return SCRATCHY.test(b) && !/^(retrieval_report|manual_needed)/i.test(b) }
 function renderFiles(list) {
   if (!list || !list.length) { filesEl.innerHTML = '<span class="hint">对话生成的文件会显示在这里</span>'; return }
   filesEl.innerHTML = ""
+  list = [...list].sort((a, b) => (isScratch(a) ? 1 : 0) - (isScratch(b) ? 1 : 0))   // 结果在前、中间文件在后
   for (const name of list) {
     const row = document.createElement("div"); row.className = "frow"
     const s = document.createElement("span"); s.className = "fname"; s.textContent = name   // 文件名在左、撑满宽度
     const raw = "api/raw?name=" + encodeURIComponent(name) + sidQ()
-    const doPv = IMG.test(name) ? () => openLightbox(raw) : CANPV(name) ? () => openPreview(name) : null   // 图片开灯箱，其余走半屏预览
+    const doPv = isSecret(name) ? null                                   // 还原表不给预览（含真实姓名）
+      : IMG.test(name) ? () => openLightbox(raw) : CANPV(name) ? () => openPreview(name) : null   // 图片开灯箱，其余走半屏预览
+    if (isSecret(name)) { s.title = "含可还原到个人的对照信息，不在界面内预览；如需查看请下载后在本机打开"; s.style.color = "#b4553f" }
     if (doPv) { s.classList.add("pv"); s.title = "点击预览"; s.addEventListener("click", doPv) }
     row.appendChild(s)
     if (doPv) { const pv = document.createElement("button"); pv.type = "button"; pv.className = "fbtn"; pv.title = "预览"; pv.innerHTML = ic("eye"); pv.addEventListener("click", doPv); row.appendChild(pv) }
@@ -1319,7 +1336,13 @@ function addProducts(list) {
       const badge = document.createElement("span"); badge.className = "fbadge"; badge.textContent = (name.split(".").pop() || "").slice(0, 4); icon.appendChild(badge)
       const nm = document.createElement("span"); nm.className = "pname"; nm.textContent = name
       const acts = document.createElement("div"); acts.className = "pacts"
-      if (CANPV(name)) { const pv = document.createElement("button"); pv.type = "button"; pv.className = "pbtn"; pv.innerHTML = ic("eye") + "预览"; pv.addEventListener("click", () => openPreview(name)); acts.appendChild(pv) }
+      // 还原表：不给预览按钮，改成一行警示（内联预览会把病人真名铺在对话框里）。下载保留。
+      if (isSecret(name)) {
+        nm.title = "含可还原到个人的对照信息"
+        const w = document.createElement("span"); w.className = "pwarn"
+        w.textContent = "含真实身份信息，未在界面内展示；下载后请妥善保管、勿随会话外发"
+        card.appendChild(w)
+      } else if (CANPV(name)) { const pv = document.createElement("button"); pv.type = "button"; pv.className = "pbtn"; pv.innerHTML = ic("eye") + "预览"; pv.addEventListener("click", () => openPreview(name)); acts.appendChild(pv) }
       acts.appendChild(dlBtn())
       card.appendChild(icon); card.appendChild(nm); card.appendChild(acts)
     }
@@ -1661,7 +1684,7 @@ async function resumeSession(id) {                 // 载入历史 → 设为当
   //   服务端见该会话未绑定就补绑 → 这条老对话被永久绑进受限模块，而界面没有解绑的入口。
   //   方向必须 fail-safe：拿不准就按"已开始"处理，代价只是少补一次绑定。
   sessionStarted = hist.length > 0 || histFailed
-  liveSteps = null; liveDone = []; liveCur = null  // 步骤集/进度随会话走，别把上一个会话的带过来
+  liveSteps = null; liveDone = []; liveCur = null; liveFailed = []  // 步骤集/进度随会话走
   stepsHost = null; stepsHostEl.replaceChildren()   // 步骤条也随会话清掉
   pendingWfCard = ""; pendingWfForm = null; lastCardText = ""   // 上一个会话没发成功的任务卡不许跟过来
   offeredSteps.clear()                             // 逐步表单的"已给过"记录是每会话的
@@ -2020,7 +2043,16 @@ function fieldEl(f, values, onChange, allFields) {
           opts.appendChild(b)
         }
         host.appendChild(opts)
-      }).catch(() => { host.innerHTML = ""; host.appendChild(mk("div", { className: "wfhelp", textContent: "读表头失败，请手动在对话里说明列名。" })) })
+      }).catch(() => {
+        // ★ 必须给输入框。此前只塞一句提示 → 这个字段变成不可填，而 testCol/goldCol 这类勾了就必填，
+        //   用户会卡在"还没填：待评价指标列"永远提交不了（网关繁忙导致本接口超时时就会这样）。
+        //   与 `!j.headers` 那条降级路径保持一致。
+        host.innerHTML = ""
+        const inp = mk("input", { type: "text", value: values[f.id] ?? "", placeholder: "手动填列名" })
+        inp.addEventListener("input", () => { values[f.id] = inp.value || undefined })
+        host.appendChild(inp)
+        host.appendChild(mk("div", { className: "wfhelp", textContent: "读表头失败（网关可能正忙），请手动填列名——名字要和数据表里完全一致。" }))
+      })
     }
   } else if (f.type === "textarea") {
     const ta = mk("textarea", { value: values[f.id] ?? "", placeholder: f.placeholder || "" })
@@ -2059,8 +2091,8 @@ function trimSteps(steps, values) {
   return [...head, ...rest]
 }
 /** 步骤条：done 来自"产物出现了没有"的反推，cur 是最近提交的那一步 */
-function stepsBar(steps, done, cur) {
-  const dn = new Set(done || [])
+function stepsBar(steps, done, cur, failed) {
+  const dn = new Set(done || []), fl = new Set(failed || [])
   // cur 只有"提交过某一步的表单"才会有值，所以第一轮它一定是空的。空着不补的话整条链全是灰的，
   // 而闸那一步又带着颜色 → 用户把闸读成"当前步骤"（实测发生过，以为 AI 起步就跳到了引用核查）。
   // 兜底：没有明确的当前步就取【第一个未完成的步骤】，这也正是流程实际所处的位置。
@@ -2071,10 +2103,13 @@ function stepsBar(steps, done, cur) {
     if (i) bar.appendChild(Object.assign(document.createElement("span"), { className: "wsx", textContent: "›" }))
     const el = document.createElement("span")
     const isCur = s.id === at
-    el.className = "wfstep" + (dn.has(s.id) ? " done" : "") + (isCur ? " cur" : "") + (s.gate ? " gate" : "")
-    el.textContent = (dn.has(s.id) ? "✓ " : isCur ? "▸ " : "") + s.name + (s.optional ? "(可选)" : "")
+    const isFail = fl.has(s.id)
+    el.className = "wfstep" + (dn.has(s.id) ? " done" : "") + (isFail ? " failed" : "") + (isCur ? " cur" : "") + (s.gate ? " gate" : "")
+    el.textContent = (dn.has(s.id) ? "✓ " : isFail ? "✕ " : isCur ? "▸ " : "") + s.name
+      + (isFail ? "·需返工" : "") + (s.optional ? "(可选)" : "")
     // 把"这是干什么的"和"现在在哪"都说清楚：光靠颜色，色觉障碍与截图场景都传达不到
-    el.title = [isCur ? "当前进行到这一步" : dn.has(s.id) ? "已完成" : "尚未开始",
+    el.title = [isFail ? "这道闸跑过了，但结论是未通过——报告里列了要改的问题，改完要重跑本闸"
+        : isCur ? "当前进行到这一步" : dn.has(s.id) ? "已完成" : "尚未开始",
       s.gate ? "这是质量把关步骤，不通过会退回上游返工" : "", s.hint || ""].filter(Boolean).join("；")
     bar.appendChild(el)
   })
@@ -2314,6 +2349,7 @@ let stepsHost = null
 let liveSteps = null   // 本会话【按表单裁剪后】的步骤集（/api/workflow/state 下发）
 let liveDone = []      // 最近一次已知的完成集（服务端按产物反推）；实时高亮时要沿用它，别把 ✓ 冲掉
 let liveCur = null     // 实时推断的当前步（技能一开跑就点亮，不等本轮结束）
+let liveFailed = []    // 闸跑了但【没过】的步骤（报告里写着 Major revision / 未通过 等）
 // 技能名 → 步骤：agent 一调起某个技能，就把步骤条推到对应那一步。
 // 【为什么要这条】服务端的进度只在【轮次收尾】才广播一次，而一轮跑十几分钟；期间用户盯着的
 // 是一条纹丝不动的进度条，无从判断它到底在干什么、还是卡死了。技能调用是唯一实时可得的信号。
@@ -2329,7 +2365,7 @@ function markStepBySkill(skill) {
   liveCur = hit.id
   updateStepsBar(liveDone, liveCur)
 }
-function updateStepsBar(done, cur, steps) {
+function updateStepsBar(done, cur, steps, failed) {
   // 优先用裁剪后的：wfCache 里那份来自 /api/modules/<id>/workflow（不带 values），是未裁剪的全量。
   // 拿它画进度条，勾了"已脱敏"而被剔掉的"数据脱敏"会永远挂在条上、永远打不上勾。
   if (steps?.length) liveSteps = steps
@@ -2342,7 +2378,8 @@ function updateStepsBar(done, cur, steps) {
   if (cur) liveCur = cur
   // 已完成的步骤不该再当"当前"：产物出来了就说明那步过了，此时当前步应交给 stepsBar 的兜底去推
   if (liveCur && liveDone.includes(liveCur)) liveCur = null
-  const bar = stepsBar(list, liveDone, cur || liveCur)
+  if (failed) liveFailed = failed
+  const bar = stepsBar(list, liveDone, cur || liveCur, liveFailed)
   stepsHostEl.replaceChildren(bar)   // 独立容器，一行就是它自己；不再往 #log 里插（会挡正文）
   stepsHost = bar
 }
@@ -2765,7 +2802,7 @@ function openStream(url) {
   // 结构化产物：服务端按文件名认出渲染器（文献表→文献卡片、核查报告→红黄绿逐条…）。
   // 这是 files 之外【额外】的一份，不是替代 —— 认不出的产物仍走上面那条，绝不会因此消失。
   es.addEventListener("artifacts", (ev) => { try { renderArtifacts(JSON.parse(ev.data)) } catch (_) {} })
-  es.addEventListener("workflow", (ev) => { try { const w = JSON.parse(ev.data); updateStepsBar(w.done || [], w.cur) } catch (_) {} })
+  es.addEventListener("workflow", (ev) => { try { const w = JSON.parse(ev.data); updateStepsBar(w.done || [], w.cur, null, w.failed || []) } catch (_) {} })
   es.addEventListener("auto", (ev) => { try { autoNextInfo = JSON.parse(ev.data) } catch {} })   // 无人值守：done 后服务端已同步起了下一轮
   es.addEventListener("done", () => {
     paintAnswer(); finalize(); refreshStorage()   // 本轮产物落盘后刷新存储用量

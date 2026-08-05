@@ -428,7 +428,7 @@ const dirState = (dir, depth = DIRSTATE_DEPTH, prefix = "") => {
   let ents; try { ents = fs.readdirSync(dir, { withFileTypes: true }) } catch { return m }
   for (const e of ents) {
     if (e.name.startsWith(".")) continue          // .preview 等派生缓存不进列表
-    if (e.name === "_workflow.json") continue     // 工作流状态是网关自己的簿子，不是用户产物
+    if (e.name === "_workflow.json" || e.name === "_lasterror.json") continue   // 网关自己的簿子，不是用户产物
     const p = path.join(dir, e.name)
     const rel = prefix ? prefix + "/" + e.name : e.name
     let st; try { st = fs.statSync(p) } catch { continue }
@@ -775,6 +775,24 @@ const wfValues = (outDir, modId) => {
   const st = wfLoad(outDir)
   return (st && st.module === modId && st.form) ? st.form : {}
 }
+/**
+ * 质量闸的报告到底判没判过。
+ * 只认【明确写出的否定结论】，其余一律当通过 —— 宁可漏判也不能误判：把一份其实通过了的稿子
+ * 标成"需返工"，用户会白白多跑一轮。所以这里的词表是各技能报告里真实用的定论措辞，不做泛化匹配。
+ */
+const GATE_FAIL_RE = /(major\s*revision|reject|不予通过|未通过|不通过|需要?重大修改|重大修改|退回返工|存在严重问题|critical)/i
+function gateFailed(outDir, step, files) {
+  for (const g of step.emits || []) {
+    for (const f of files) {
+      if (!WF.globMatch(g, f) || !/\.(md|txt)$/i.test(f)) continue   // 只读文本报告
+      try {
+        const t = fs.readFileSync(path.join(outDir, f), "utf8").slice(0, 20000)
+        if (GATE_FAIL_RE.test(t)) return true
+      } catch { /* 读不到就别拦，按通过处理 */ }
+    }
+  }
+  return false
+}
 /** 按"产物文件是否已出现"反推已完成的步骤（权威判据，不问 agent）*/
 function wfSyncDone(outDir, modId) {
   let st = wfLoad(outDir)
@@ -788,16 +806,22 @@ function wfSyncDone(outDir, modId) {
   if (st.module !== modId) return st   // 簿子记的是别的模块（agent 乱写过）→ 不拿它算，也不覆盖
   const files = Object.keys(dirState(outDir))
   const done = new Set(st.done || [])
+  const failed = new Set()
   for (const s of WF.stepsFor(modId, st.form || {})) {
     if (done.has(s.id)) continue
-    if ((s.emits || []).some((g) => files.some((f) => WF.globMatch(g, f)))) done.add(s.id)
+    if (!(s.emits || []).some((g) => files.some((f) => WF.globMatch(g, f)))) continue
+    // ★ 质量闸不能"有文件就算过"。实测：peer-review 报告白纸黑字写着「倾向 Major revision」
+    //   并列了一条 Critical，步骤条照样打绿勾 —— 而医生正是靠这条进度条判断"能不能交稿"。
+    //   读一眼报告结论：判为未通过的标成 failed（界面显示"需返工"），不计入 done。
+    if (s.gate && gateFailed(outDir, s, files)) { failed.add(s.id); continue }
+    done.add(s.id)
   }
-  const arr = [...done]
-  if (arr.length !== (st.done || []).length) {
+  const arr = [...done], farr = [...failed]
+  if (arr.length !== (st.done || []).length || farr.join() !== (st.failed || []).join()) {
     // 落盘前重读一次再只覆盖 done：本函数在【轮次收尾】跑，而用户可能正好在同一时刻提交下一步表单
     //（/api/workflow/form 也写这个文件）。拿本函数开头那份旧快照整体写回，会把刚提交的表单值抹掉。
     const fresh = wfLoad(outDir) || st
-    fresh.done = arr
+    fresh.done = arr; fresh.failed = farr
     wfSave(outDir, fresh)
     return fresh
   }
@@ -1300,6 +1324,31 @@ const explainNetErr = (e) => {
   return chain.slice(0, 200)   // 认不出也要把 cause 链给出来，绝不再只留一句 "fetch failed"
 }
 
+// ---- 最近一次失败（每会话，落盘）----
+// broadcast() 只写【当下挂着的 SSE 订阅者】，finish() 一到就 jobs.delete —— 于是 failed/notice
+// 一个字节都不落盘。用户关掉页面、或网络断一下，回来时 /api/history 里只有他自己那条消息，
+// 没有回复、也没有任何解释，第一反应是"我是不是没点发送"，然后重发，双倍时间与额度。
+// 存一份最近失败，/api/history 在"这一轮没留下助手回复"时把它补到末尾。
+// 落在会话产物目录（随会话建、随会话删），不进产物列表（下划线前缀已在 dirState 排除同名文件）。
+const ERR_FILE = "_lasterror.json"
+const noteError = async (sid, message) => {
+  try {
+    const dir = await sessionOut(sid)
+    fs.mkdirSync(dir, { recursive: true })
+    fs.writeFileSync(path.join(dir, ERR_FILE), JSON.stringify({ at: Date.now(), message: String(message).slice(0, 500) }))
+  } catch (e) { console.warn(`[error] 失败记录写不进去（不影响本轮报错）：${e.message}`) }
+}
+const lastError = (sid) => {
+  try {
+    const dir = dirCache.get(safeSid(sid)); if (!dir) return null   // 没解析过目录就别为这个去打 opencode
+    const j = JSON.parse(fs.readFileSync(path.join(dir, ERR_FILE), "utf8"))
+    return (j && j.message) ? j : null
+  } catch { return null }
+}
+const clearError = async (sid) => {
+  try { const dir = await sessionOut(sid); fs.unlinkSync(path.join(dir, ERR_FILE)) } catch { /* 本就没有 */ }
+}
+
 const jobs = new Map()   // sid -> 进行中的 job
 // ---- 首事件看门狗的超时（ms）----
 // 为什么要有：opencode 打不通上游模型时（API 地址填错 / DNS 解析不了 / 地址黑洞丢包 / 上游连上了
@@ -1485,6 +1534,7 @@ const autoPreamble = () => `\n- 【无人值守模式已开启】用户不在电
 const autoContinueText = (round) => `【无人值守·自动续跑 第 ${round} 轮】继续按你的推荐方向推进：上一轮若列了编号选项，视为用户选了第 1 项（推荐项）；若在等待确认，视为已确认。缺的事实性信息标「待补充」继续。全部交付完成时在回复末尾单独一行输出 ${AUTO_SENTINEL}；未完成就继续干活，不要输出该标记。`
 
 function startJob(sid, sentText, modId) {
+  clearError(sid)   // 新一轮开跑 → 上一次的失败记录作废，别让它一直挂在历史末尾
   // 新一轮 prompt 就是回退的提交动作（opencode 收到新消息会把 revert 标记清成 null），
   // 待提交登记到此结束；之后再出现的 revert 标记就真是残留了，交还给 clearStaleRevert 自愈。
   pendingReverts.delete(sid)
@@ -1512,6 +1562,11 @@ function startJob(sid, sentText, modId) {
     if (ev === "text") job.text = data
     else if (ev === "reasoning") job.reasoning.set(data.id, data)
     else if (ev === "tool") { if (data.tool === "skill") { if (data.skill) job.skills.set(data.skill, data) } else if (data.callID) job.tools.set(data.callID, data) }
+    // ★ 失败一律落盘（在这一处收口，六个报错点全覆盖，将来新增的也自动覆盖）。
+    //   下面这行 for 循环只写【当下挂着的】订阅者：页面关了、网断了、切走了会话，这条报错就永远
+    //   消失了 —— 用户回来只看到自己那条消息，没有任何解释。落一份，/api/history 会补回末尾。
+    else if (ev === "failed" && data?.message) noteError(sid, data.message)
+    if (ev === "done" || ev === "failed" || ev === "aborted") job.ended = true   // 本轮已有结论，finish 不必再补
     for (const r of job.subs) sseWrite(r, ev, data)
   }
   // 首输出看门狗的句柄（守的是"模型第一个输出"，不是"第一个事件"）：定义在 finish 之前，好让 finish 无条件把它清掉
@@ -1522,6 +1577,17 @@ function startJob(sid, sentText, modId) {
   const noteModelOutput = () => { if (sawOutput) return; sawOutput = true; clearWatchdog() }
   const finish = () => {
     if (job.finished) return
+    // ★ 本轮【没有任何终止事件】就收场 —— 必须补一条，否则用户什么都看不到。
+    //   实测（两个独立测试各中一次）：一轮跑到一半，SSE 只有 reasoning/text/tool，
+    //   没有 final / done / failed / notice，连接直接被 end()；前端 onerror 把整轮 DOM 丢掉、
+    //   重连拿到 idle、回放历史 —— 用户只看到助手说了半句话就没了，不知道该重发还是该等。
+    //   上游返回空 choices、opencode 侧消息 parts 为空而 info.error 又是 null 时会走到这里。
+    //   注意：正常收尾（done/aborted）与已报错的路径都设了 ended，不会被这条覆盖。
+    if (!job.ended && !job.aborting) {
+      const msg = "本轮没有正常结束（后台没有给出结果，也没有报错）。这通常是上游模型服务这一次返回异常；直接重发一次通常就好。"
+      try { for (const r of job.subs) sseWrite(r, "failed", { message: msg }) } catch {}
+      noteError(sid, msg)
+    }
     job.finished = true; job.running = false; jobs.delete(sid); runningCost.delete(sid)   // 本轮成本已由 addCost 入账，撤掉实时占位
     clearWatchdog()
     try { evAbort.abort() } catch {}   // 立刻掐掉本轮的 opencode 事件流，别留着空转到下一个事件
@@ -1783,7 +1849,7 @@ function startJob(sid, sentText, modId) {
     if (modId !== "chat") {
       try {
         const st = wfSyncDone(outDir, modId)
-        if (st) broadcast("workflow", { cur: st.cur || null, done: st.done || [] })
+        if (st) broadcast("workflow", { cur: st.cur || null, done: st.done || [], failed: st.failed || [] })
       } catch (e) { console.warn(`[workflow] 进度同步失败：${e.message}`) }
     }
     warmPreviews(outDir, changed)   // 后台把新产出的 office/docx 预转缓存，用户点预览即秒开
@@ -2402,6 +2468,14 @@ export const server = http.createServer(async (req, res) => {
         out.forEach((m, i) => { if (m.role === "user") lastUser = i })
         return send(res, 200, "application/json", JSON.stringify(out.filter((m, i) => i <= lastUser || m.role === "user")))
       }
+      // ★ 把最后一次失败补回历史末尾。
+      //   此前所有 failed/notice 都只走实时 SSE（broadcast 只写当下挂着的订阅者），finish() 一到
+      //   jobs.delete 就什么都不剩 —— 用户关了页面去查个房，回来只看到自己那条消息、没有任何回复、
+      //   也不知道该不该重发（实测：一轮跑了 10 分钟异常收场，history 里 assistant 零条）。
+      //   只在"这一轮确实没留下助手回复"时补，避免与正常回复重复。
+      const le = lastError(id)
+      if (le && (!out.length || out[out.length - 1].role === "user"))
+        out.push({ role: "assistant", text: `⚠ 上一轮没有正常结束：${le.message}`, isError: true, at: le.at })
       return send(res, 200, "application/json", JSON.stringify(out))
     }
 
@@ -2605,12 +2679,9 @@ export const server = http.createServer(async (req, res) => {
         const buf = Buffer.alloc(64 * 1024)                 // 只读头部：表可能很大，不整读进内存
         const n = fs.readSync(fd, buf, 0, buf.length, 0)
         fs.closeSync(fd)
-        let line = buf.slice(0, n).toString("utf8").split(/\r?\n/)[0] || ""
-        if (line.charCodeAt(0) === 0xfeff) line = line.slice(1)   // 剥 BOM，否则第一列名会带个看不见的字符
-        const sep = ext === ".tsv" ? "\t" : (line.split(",").length >= line.split("\t").length ? "," : "\t")
-        // 极简 CSV 头解析：够用即可（表头里带逗号的引号字段少见，命中时用户仍可手填）
-        const headers = line.split(sep).map((s) => s.trim().replace(/^"(.*)"$/, "$1")).filter(Boolean)
-        return send(res, 200, "application/json", JSON.stringify({ headers, sep }))
+        // 解析逻辑抽到 workflows.mjs（纯函数、可单测）——这一段的判据全是踩出来的，没有回归测试
+        // 迟早会被"顺手简化"掉。
+        return send(res, 200, "application/json", JSON.stringify(WF.parseHeaders(buf.slice(0, n), ext)))
       } catch (e) {
         return send(res, 200, "application/json", JSON.stringify({ headers: null, reason: `读表头失败：${String(e.message || e).slice(0, 120)}` }))
       }
