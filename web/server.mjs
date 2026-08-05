@@ -777,8 +777,15 @@ const wfValues = (outDir, modId) => {
 }
 /** 按"产物文件是否已出现"反推已完成的步骤（权威判据，不问 agent）*/
 function wfSyncDone(outDir, modId) {
-  const st = wfLoad(outDir)
-  if (!st || st.module !== modId) return st
+  let st = wfLoad(outDir)
+  // ★ 状态簿不存在就地建一份。它此前只在两条路上被写出来：用户填了首屏表单、或提交了某步表单。
+  //   而【直接在输入框打字】是最常见的路径（表单本来就设计成可跳过），那条路下这个文件永远不存在
+  //   → 本函数直接返回 null → 进度永远是空的 → 步骤条从第一步纹丝不动。
+  //   实测后果：综述跑完了检索、筛选、成文，screening_log.md / included.csv / review.md 全都在，
+  //   而用户看到条还停在"文献检索"，以为 AI 把中间几步全跳了。
+  //   "产物反推进度、不依赖 agent 自觉"这条设计，不 seed 就只对填了表单的人生效，等于废了一半。
+  if (!st) { st = { module: modId, form: {}, done: [] }; wfSave(outDir, st) }
+  if (st.module !== modId) return st   // 簿子记的是别的模块（agent 乱写过）→ 不拿它算，也不覆盖
   const files = Object.keys(dirState(outDir))
   const done = new Set(st.done || [])
   for (const s of WF.stepsFor(modId, st.form || {})) {

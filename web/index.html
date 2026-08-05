@@ -434,6 +434,12 @@
   .wferr { font-size: 12px; color: #e0564f; margin-top: 8px; }
 
   /* 步骤条：顶部一行，显示本模块走到哪一步。进度由"产物文件出现了没有"反推，不阻断 agent */
+  /* 常驻在对话区【上方】（#stepsHost，不在 #log 滚动容器里）：一条 12 步的流水线跑几十分钟，
+     用户往下翻看输出时最想知道的就是"现在到哪了"，让它随内容滚走等于白做。
+     ★ 别用 position:sticky 放进 #log —— 那样正文会从它底下穿过去被挡住（实测反馈）。
+       放在外面它自己占一行、对话区相应变矮，永远不会与正文重叠。 */
+  #stepsHost:empty { display: none; }
+  #stepsHost { margin-bottom: 8px; }
   .wfsteps { display: flex; flex-wrap: wrap; gap: 5px; align-items: center; padding: 8px 12px; background: var(--card);
     border: 1px solid var(--line-hi); border-radius: var(--r-md); margin: 0 0 8px; font-size: 11.5px; }
   .wfsteps .wsl { color: var(--faint); margin-right: 3px; font-weight: 600; }
@@ -763,6 +769,10 @@
     <div id="sessions"><span class="hint">加载中…</span></div>
   </div>
   <section id="chat">
+    <!-- 步骤条挂在这里（对话区【之上】，不在滚动容器里）。
+         曾经用 position:sticky 放在 #log 内部，结果正文会从它底下穿过去被挡住——sticky 本来就是
+         这个行为。放到外面，它自己占一行、对话区相应变矮，永远不会与正文重叠。 -->
+    <div id="stepsHost"></div>
     <div id="log"></div>
     <form id="f" class="composer">
       <span id="modBadge" title="本会话绑定的功能模块"></span>
@@ -934,6 +944,7 @@ const syncAutoLbl = () => autoLbl.classList.toggle("on", autoChk.checked)
 autoChk.addEventListener("change", () => { localStorage.setItem("nm_auto", autoChk.checked ? "1" : "0"); syncAutoLbl() })
 syncAutoLbl()
 const filesEl = document.getElementById("files")
+const stepsHostEl = document.getElementById("stepsHost")   // 步骤条的独立容器（在 #log 之外，不挡正文）
 let activeES = null   // 当前订阅中的 SSE 连接——只是"订阅"，断开/切走都不会打断后台生成
 function setStreamingUI(on) {
   sendBtn.disabled = on; sendBtn.hidden = on; stopBtn.hidden = !on
@@ -1650,7 +1661,8 @@ async function resumeSession(id) {                 // 载入历史 → 设为当
   //   服务端见该会话未绑定就补绑 → 这条老对话被永久绑进受限模块，而界面没有解绑的入口。
   //   方向必须 fail-safe：拿不准就按"已开始"处理，代价只是少补一次绑定。
   sessionStarted = hist.length > 0 || histFailed
-  liveSteps = null                                 // 步骤集随会话走，别把上一个会话裁剪后的带过来
+  liveSteps = null; liveDone = []; liveCur = null  // 步骤集/进度随会话走，别把上一个会话的带过来
+  stepsHost = null; stepsHostEl.replaceChildren()   // 步骤条也随会话清掉
   pendingWfCard = ""; pendingWfForm = null; lastCardText = ""   // 上一个会话没发成功的任务卡不许跟过来
   offeredSteps.clear()                             // 逐步表单的"已给过"记录是每会话的
   HDR_CACHE.clear()                                // 表头缓存按文件名存，跨会话同名文件会串列名
@@ -1668,7 +1680,7 @@ function clearCurrentSession() {
   sessionStarted = false; pendingWfCard = ""; pendingWfForm = null; lastCardText = ""
   offeredSteps.clear(); HDR_CACHE.clear()
   log.innerHTML = ""; renderFiles([]); renderUploads([]); renderWelcome(); zScopeReset(); loadZotLib()
-  stepsHost = null                                 // 步骤条随会话走：清了会话就没有它了，别留个野引用
+  stepsHost = null; stepsHostEl.replaceChildren()  // 步骤条在 #log 之外，清 log 不会连带清它
 }
 async function deleteSession(id, title) {           // 删除会话（不可撤销，先确认；进行中的生成由后端一并终止）
   if (!confirm("删除会话「" + (title || id) + "」？此操作不可撤销。")) return
@@ -2300,15 +2312,38 @@ function reportCard(name, text, kind) {
 // ---- 步骤条：挂在对话区顶部，进度由服务端按"产物出现了没有"反推 ----
 let stepsHost = null
 let liveSteps = null   // 本会话【按表单裁剪后】的步骤集（/api/workflow/state 下发）
+let liveDone = []      // 最近一次已知的完成集（服务端按产物反推）；实时高亮时要沿用它，别把 ✓ 冲掉
+let liveCur = null     // 实时推断的当前步（技能一开跑就点亮，不等本轮结束）
+// 技能名 → 步骤：agent 一调起某个技能，就把步骤条推到对应那一步。
+// 【为什么要这条】服务端的进度只在【轮次收尾】才广播一次，而一轮跑十几分钟；期间用户盯着的
+// 是一条纹丝不动的进度条，无从判断它到底在干什么、还是卡死了。技能调用是唯一实时可得的信号。
+// 【为什么仍以服务端为准】这里只动"当前步"，完成集（✓）始终来自产物反推 —— 调了技能不等于
+// 那一步做成了，拿它去打勾会虚报进度。
+function markStepBySkill(skill) {
+  const list = liveSteps || wfCache.get(currentModule)?.steps
+  if (!list?.length) return
+  // 同一个技能可能对应多步（如 literature-review 既做筛选又做成文）：取【第一个还没完成的】那步，
+  // 否则进度会被打回到已经走过的位置。
+  const hit = list.find((s) => s.skill === skill && !liveDone.includes(s.id)) || list.find((s) => s.skill === skill)
+  if (!hit || hit.id === liveCur) return
+  liveCur = hit.id
+  updateStepsBar(liveDone, liveCur)
+}
 function updateStepsBar(done, cur, steps) {
   // 优先用裁剪后的：wfCache 里那份来自 /api/modules/<id>/workflow（不带 values），是未裁剪的全量。
   // 拿它画进度条，勾了"已脱敏"而被剔掉的"数据脱敏"会永远挂在条上、永远打不上勾。
   if (steps?.length) liveSteps = steps
   const list = liveSteps || wfCache.get(currentModule)?.steps
   if (!list?.length) return
-  const bar = stepsBar(list, done, cur)
-  if (stepsHost && stepsHost.parentNode) stepsHost.replaceWith(bar)
-  else log.insertBefore(bar, log.firstChild)
+  // 记住最新的一份，供 markStepBySkill 实时高亮时沿用（否则它一刷新就把 ✓ 全冲掉）
+  liveDone = done || []
+  // cur 只在服务端明确给出时才覆盖实时推断值；服务端不给（多数情况）就沿用 markStepBySkill 的判断。
+  // 反过来写会让"轮次收尾广播 cur:null"把刚点亮的当前步又熄灭掉。
+  if (cur) liveCur = cur
+  // 已完成的步骤不该再当"当前"：产物出来了就说明那步过了，此时当前步应交给 stepsBar 的兜底去推
+  if (liveCur && liveDone.includes(liveCur)) liveCur = null
+  const bar = stepsBar(list, liveDone, cur || liveCur)
+  stepsHostEl.replaceChildren(bar)   // 独立容器，一行就是它自己；不再往 #log 里插（会挡正文）
   stepsHost = bar
 }
 // ---- 逐步表单：一轮结束后，若下一步是"有表单的步骤"就地给一张卡 ----
@@ -2369,7 +2404,7 @@ async function submitStepForm(modId, step, values, card) {
 
 /** 切会话/刷新时把步骤条恢复到当前进度 */
 async function loadWorkflowState() {
-  if (stepsHost && stepsHost.parentNode) { stepsHost.remove(); stepsHost = null }
+  stepsHost = null; stepsHostEl.replaceChildren()
   if (!sessionId) return
   try {
     const j = await fetch("api/workflow/state" + (sessionId ? "?sid=" + encodeURIComponent(sessionId) : "")).then((r) => r.json())
@@ -2432,7 +2467,7 @@ let sending = false     // POST /api/chat/start 往返期间为 true：此时还
 function sidQ() { return sessionId ? "&sid=" + encodeURIComponent(sessionId) : "" }   // 上传/下载/预览都带上会话 id，隔离各会话目录
 document.getElementById("new").addEventListener("click", () => {
   detachStream()   // 只退订不终止：原会话若在生成会继续跑，从左侧列表随时切回来看
-  sessionId = null; localStorage.removeItem("nm_sid"); log.innerHTML = ""; renderFiles([]); loadUploads(); loadSessions(); zScopeReset(); loadZotLib(); stepsHost = null
+  sessionId = null; localStorage.removeItem("nm_sid"); log.innerHTML = ""; renderFiles([]); loadUploads(); loadSessions(); zScopeReset(); loadZotLib(); stepsHost = null; stepsHostEl.replaceChildren()
   sessionStarted = false; pendingWfCard = ""; pendingWfForm = null; lastCardText = ""   // 任务卡是一次性的，绝不能漏进下一个会话
   offeredSteps.clear(); HDR_CACHE.clear()
   // 新对话回到默认模块（chat 可用则 chat，否则首个可用），在欢迎页重新选
@@ -2594,7 +2629,12 @@ async function sendMessage(text) {
     addNote("⚠ 发送失败（" + why + "）——原文已放回输入框，可直接重发")
     return false
   }
-  if (r.sid) { sessionId = r.sid; localStorage.setItem("nm_sid", sessionId); loadUploads() }
+  if (r.sid) {
+    sessionId = r.sid; localStorage.setItem("nm_sid", sessionId); loadUploads()
+    // 受限模块：会话一建立就把步骤条画出来。此前要等第一轮【跑完】（可能十几分钟）才出现，
+    // 而那恰恰是用户最想知道"这条流程有哪几步、现在在哪"的时候。
+    if (currentModule !== "chat" && !stepsHost) loadWorkflowState()
+  }
   if (r.sent) sessionStarted = true   // 真发出去了才算「本会话已开始」；没发出去下次仍要带 module 补绑
   if (!r.sent) {
     // 没真发出去 → 这个气泡是"幽灵"：后端没记这条消息，编辑历史时必须跳过它，否则 revert 会砍错真实消息
@@ -2692,6 +2732,7 @@ function openStream(url) {
   es.addEventListener("tool", (ev) => {
     const d = JSON.parse(ev.data)
     if (d.tool === "skill") {   // 技能：常显徽章，不进折叠列表（名字在 running/completed 才出现）
+      if (d.skill) markStepBySkill(d.skill)     // 顺手把步骤条推到对应的那一步（实时，不等本轮结束）
       if (d.skill && !seenSkills.has(d.skill)) { seenSkills.add(d.skill); const pill = document.createElement("span"); pill.className = "skill-pill"; pill.innerHTML = ic("puzzle"); const s = document.createElement("span"); s.textContent = d.skill; pill.appendChild(s); skillsEl.appendChild(pill); follow() }
       return
     }
