@@ -20,7 +20,7 @@
     --indigo: #6366f1; --green: #2bb673; --rose: #ef4444;
     --press: #2c3038;                       /* 按下态深灰（发送/附件等圆钮） */
     --r-lg: 16px; --r-md: 12px; --r-sm: 10px;
-    --hdr-h: 53px;                          /* 顶栏高度：半屏预览按它定位 */
+    --hdr-h: 46px;                          /* 顶栏高度：半屏预览按它定位 */
     --shadow-lg: 0 6px 22px rgba(20,24,30,.10);
     --shadow-sm: 0 2px 8px rgba(20,24,30,.06);
   }
@@ -47,12 +47,12 @@
   /* Header：与主体同色的浅灰窄条，只用一根细线与主体分开 */
   header {
     flex: none; display: flex; align-items: center; justify-content: space-between;
-    height: var(--hdr-h); padding: 0 20px; border-bottom: 1px solid var(--line); background: var(--bg);
+    height: var(--hdr-h); padding: 0 22px; border-bottom: 1px solid var(--line); background: var(--bg);
   }
   .brand { display: flex; align-items: center; gap: 10px; }
-  .logo { width: 26px; height: 26px; display: grid; place-items: center; border-radius: 7px; background: #dfe3e9; overflow: hidden; }
-  .logo img { width: 100%; height: 100%; object-fit: contain; padding: 3px; }
-  .brand .title { font-weight: 400; font-size: 14px; letter-spacing: .2em; text-transform: uppercase; }
+  .logo { width: 24px; height: 24px; display: block; }
+  .logo img { width: 100%; height: 100%; object-fit: contain; display: block; }
+  .brand .title { font-weight: 400; font-size: 14px; letter-spacing: .22em; text-transform: uppercase; }
   .brand .sub { color: var(--muted); font-size: 12px; margin-top: 1px; }
   .status { display: flex; align-items: center; gap: 7px; padding: 5px 12px; border-radius: 999px;
     background: rgba(255,255,255,.72); border: 1px solid var(--line); color: var(--muted); font-size: 12px; letter-spacing: .04em; }
@@ -63,7 +63,7 @@
   main { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(0,56px) minmax(0,1fr) minmax(0,300px); background: var(--bg); transition: width .2s ease; }
   body.sessbar-open main { grid-template-columns: minmax(0,264px) minmax(0,1fr) minmax(0,300px); }
   body.preview-open main { width: 50vw; }
-  #chat { display: flex; flex-direction: column; min-width: 0; min-height: 0; padding: 18px 28px 16px; }
+  #chat { display: flex; flex-direction: column; min-width: 0; min-height: 0; padding: 22px 36px 18px; }
   /* 左侧「会话与项目」 */
   #sessbar { grid-column: 1; overflow: hidden; display: flex; flex-direction: column; gap: 10px; background: var(--panel); border-right: 1px solid var(--line); padding: 14px 10px 10px; }
   .sb-top { display: flex; align-items: center; gap: 8px; }
@@ -89,7 +89,7 @@
   .welcome { margin: auto; max-width: 720px; text-align: center; padding: 8px 16px 24px; }
   .welcome .wic { width: 56px; height: 56px; color: #aec4de; margin: 0 auto 14px; display: block; stroke-width: 1.4; }
   .welcome .wtitle { color: var(--text); font-family: var(--serif); font-weight: 400; text-transform: uppercase;
-    font-size: clamp(32px, 4.6vw, 56px); line-height: 1.05; letter-spacing: -.01em; }
+    font-size: clamp(34px, 5.4vw, 60px); line-height: 1.05; letter-spacing: -.01em; }
   .welcome .wsub { color: var(--muted); font-size: 13px; margin-top: 14px; line-height: 1.7; }
   .welcome .chips { display: flex; flex-wrap: wrap; gap: 10px; justify-content: center; margin-top: 20px; }
   .chip { background: var(--card); border: 1px solid var(--line); color: var(--muted); border-radius: 999px; padding: 8px 14px; font-size: 12px; font-weight: 400; cursor: pointer; transition: border-color .15s, color .15s, background .15s; }
@@ -185,7 +185,7 @@
   button { border: 0; border-radius: var(--r-sm); cursor: pointer; font-size: 14px; font-weight: 600; transition: filter .15s, background .15s, transform .05s; }
   button:active { transform: translateY(1px); }
   button:disabled { opacity: .5; cursor: default; }
-  form.composer { flex: none; width: 100%; max-width: 900px; margin: 12px auto 0; }
+  form.composer { flex: none; width: 100%; max-width: 760px; margin: 14px auto 0; }
   .input-box {
     display: flex; flex-direction: column; gap: 10px; padding: 12px 14px;
     background: var(--panel); border: 1px solid var(--line); border-radius: var(--r-lg);
@@ -243,10 +243,13 @@
   /* Aside：右侧贴边的白色工具列（上传 / 本轮产出 / Zotero） */
   aside { display: flex; flex-direction: column; gap: 12px; min-height: 0; overflow-y: auto;
     padding: 14px; background: var(--panel); border-left: 1px solid var(--line); }
-  .panel { flex: none; background: var(--panel); border: 1px solid var(--line); border-radius: var(--r-lg); padding: 14px; }
+  .panel { flex: none; background: var(--panel); border: 1px solid var(--line); border-radius: var(--r-lg); padding: 16px; }
   /* 「本轮产出」占满中间的剩余高度，Zotero 顶到最底部（与设计稿一致） */
   #outpanel { flex: 1 1 auto; min-height: 180px; display: flex; flex-direction: column; }
   #outpanel #files { flex: 1 1 auto; min-height: 0; overflow-y: auto; }
+  /* 空态：铺满面板的虚线占位框（设计稿的 .tool-placeholder），别只在左上角丢一行小字 */
+  #outpanel #files:has(> .hint:only-child) { display: grid; place-items: center; border: 1px dashed var(--line); border-radius: var(--r-sm); }
+  #outpanel #files > .hint:only-child { text-align: center; padding: 0 12px; }
   #zpanel { margin-top: auto; }
   .panel h3 { margin: 0 0 10px; font-size: 13px; font-weight: 600; color: #334153; display: flex; align-items: center; justify-content: space-between; letter-spacing: .2px; }
   .h3l { display: inline-flex; align-items: center; gap: 7px; }
@@ -258,16 +261,18 @@
   .mini.on { color: #fff; background: var(--cyan); border-color: var(--cyan); }
 
   /* recent sessions */
-  #sessions { display: flex; flex-direction: column; gap: 6px; flex: 1; min-height: 0; overflow-y: auto; }
+  #sessions { display: flex; flex-direction: column; gap: 2px; flex: 1; min-height: 0; overflow-y: auto; }
+  /* 会话行：无边框，靠 hover / 选中底色区分（设计稿的样子）。选中态左侧一根绿色小竖条。
+     此前每行是一个带边框的白卡片，二十几条排下来整面都是框，很吵。 */
   #sessions .sess {
     position: relative; width: 100%; text-align: left; cursor: pointer; font-size: 12px;
-    background: var(--card); border: 1px solid var(--line); border-radius: var(--r-sm); padding: 8px 28px 8px 12px; transition: border-color .15s, transform .1s, background .15s;
+    background: transparent; border: 0; border-radius: var(--r-sm); padding: 9px 28px 9px 11px; transition: background .12s;
   }
-  #sessions .sess:hover { border-color: var(--cyan); transform: translateY(-1px); }
-  #sessions .sess.active { border-color: var(--cyan); background: rgba(59,111,212,.07); }
-  #sessions .sess.active::before { content: ""; position: absolute; left: 0; top: 8px; bottom: 8px; width: 3px; border-radius: 3px; background: var(--cyan); }
-  #sessions .sess .t { display: block; color: var(--text); font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  #sessions .sess .d { color: var(--faint); font-size: 12px; margin-top: 2px; font-variant-numeric: tabular-nums; }
+  #sessions .sess:hover { background: var(--panel-soft); }
+  #sessions .sess.active { background: var(--panel-soft); }
+  #sessions .sess.active::before { content: ""; position: absolute; left: 0; top: 9px; bottom: 9px; width: 2px; border-radius: 2px; background: var(--green); }
+  #sessions .sess .t { display: block; color: var(--text); font-weight: 400; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  #sessions .sess .d { color: var(--faint); font-size: 10px; margin-top: 3px; font-variant-numeric: tabular-nums; }
   #sessions .sess .run { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--green); margin-right: 6px; vertical-align: 1px; animation: pulse 2.4s infinite; }
   #sessions .sess { padding-right: 46px; }                 /* 给右侧多个操作图标留位 */
   #sessions .sess.dragging { opacity: .4; }
@@ -294,13 +299,13 @@
   body.sel-mode #sessions .sess { padding-left: 32px; padding-right: 12px; }
   body.sel-mode .sess .ck { display: grid; place-items: center; }
   body.sel-mode .sess .sess-acts { display: none; }
-  .sess.picked { border-color: var(--cyan); background: rgba(59,111,212,.09); }
+  .sess.picked { background: var(--accent-soft); box-shadow: inset 0 0 0 1px rgba(59,111,212,.35); }
   .sess.picked .ck { background: var(--cyan); border-color: var(--cyan); }
   .sess.picked .ck .ic { opacity: 1; }
   /* 项目分组 */
   .pgroup { margin-bottom: 4px; }
-  .pghead { display: flex; align-items: center; gap: 5px; padding: 5px 6px; border-radius: var(--r-sm); cursor: pointer; color: #334153; font-size: 12px; font-weight: 600; }
-  .pghead:hover { background: #eef2f8; }
+  .pghead { display: flex; align-items: center; gap: 7px; padding: 8px 9px; border-radius: var(--r-sm); cursor: pointer; color: var(--muted); font-size: 13px; font-weight: 400; }
+  .pghead:hover { background: var(--panel-soft); color: var(--text); }
   .pghead .ic { width: 14px; height: 14px; color: var(--muted); flex: none; }
   .pghead .caret { width: 13px; height: 13px; transition: transform .15s; color: var(--faint); }
   .pgroup.collapsed .caret { transform: rotate(-90deg); }
@@ -312,14 +317,17 @@
   .pghead .pg-act .ic { width: 13px; height: 13px; }
   .pghead .pg-act:hover { color: var(--cyan); background: rgba(59,111,212,.12); }
   .pghead .pg-act.del:hover { color: var(--rose); background: rgba(239,68,68,.12); }
-  .pgbody { display: flex; flex-direction: column; gap: 6px; padding: 4px 0 4px 8px; }
+  .pgbody { display: flex; flex-direction: column; gap: 2px; padding: 2px 0 4px 8px; }
   .pgroup.drop-hint > .pghead, .droparea.drop-hint { outline: 2px dashed var(--cyan); outline-offset: -2px; background: rgba(59,111,212,.08); border-radius: var(--r-sm); }
-  .sect-label { display: flex; align-items: center; gap: 6px; margin: 8px 2px 2px; font-size: 11px; font-weight: 600; color: var(--faint); text-transform: none; }
-  .sect-label .ic { width: 12px; height: 12px; }
+  .sect-label { display: flex; align-items: center; gap: 7px; margin: 10px 0 2px; padding: 0 9px; font-size: 12px; font-weight: 400; color: var(--faint); text-transform: none; }
+  .sect-label .ic { width: 13px; height: 13px; }
+  .sect-label .sl-t { flex: 1; }
+  .sect-label .sl-c { font-variant-numeric: tabular-nums; }
   /* 内联改名输入 */
   .rename-inp { width: 100%; font: inherit; font-size: 12px; padding: 4px 8px; border: 1px solid var(--cyan); border-radius: var(--r-sm); background: #fff; color: var(--text); outline: none; }
   /* 新建项目按钮 */
-  #newProject { display: none; align-items: center; justify-content: center; gap: 5px; font-size: 12px; color: var(--muted); background: transparent; border: 1px dashed var(--line-hi); border-radius: var(--r-sm); padding: 6px; cursor: pointer; }
+  #newProject { display: none; align-items: center; justify-content: center; gap: 6px; font-size: 12px; color: var(--text); background: var(--panel); border: 1px solid var(--line); border-radius: var(--r-sm); padding: 10px 12px; margin-bottom: 4px; cursor: pointer; transition: .15s; }
+  #newProject:hover { border-color: var(--line-hi); background: var(--panel-soft); }
   body.sessbar-open #newProject { display: flex; }
   #newProject:hover { color: var(--cyan); border-color: var(--cyan); }
   #newProject .ic { width: 14px; height: 14px; }
@@ -328,7 +336,7 @@
   #up { display: none; }
   .dropzone {
     display: flex; flex-direction: column; align-items: center; gap: 6px; text-align: center;
-    padding: 16px 12px; border: 1.5px dashed var(--line-hi); border-radius: var(--r-md); cursor: pointer;
+    padding: 22px 12px; border: 1px dashed var(--line-hi); border-radius: var(--r-sm); cursor: pointer;
     color: var(--muted); font-size: 12px; transition: border-color .15s, background .15s, color .15s;
   }
   .dropzone:hover, .dropzone.drag { border-color: var(--cyan); color: var(--cyan); background: rgba(59,111,212,.06); }
@@ -468,7 +476,7 @@
   .pv-body img { max-width: 100%; height: auto; }                            /* docx 里的内联图片自适应 */
 
   /* header actions + model settings modal */
-  .hright { display: flex; align-items: center; gap: 6px; }
+  .hright { display: flex; align-items: center; gap: 8px; }
   .hright .status { margin-right: 4px; }
   .hbtn { width: 30px; height: 30px; display: grid; place-items: center; border-radius: 50%; background: transparent;
     border: 1px solid transparent; color: var(--muted); cursor: pointer; transition: .15s; }
@@ -666,6 +674,9 @@
   .umenu .umhead .t { font-size: 11.5px; color: var(--faint); margin-top: 2px; }
   #quotabar { display: block; margin: 0 3px 6px; padding: 7px 9px; border-radius: var(--r-sm);
     background: var(--panel-soft); border: 1px solid var(--line); color: var(--muted); font-size: 12px; line-height: 1.5; }
+  #quotabar .qrow { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; padding: 1px 0; }
+  #quotabar .qrow b { color: inherit; font-weight: 600; font-variant-numeric: tabular-nums; }
+  #quotabar .qnote { margin-top: 3px; font-size: 11px; color: var(--faint); }
   .umitem { display: flex; align-items: center; gap: 9px; width: 100%; padding: 8px 9px; border-radius: 8px;
     background: transparent; border: 0; color: var(--text); font-size: 13px; font-weight: 400; text-align: left; cursor: pointer; }
   .umitem:hover { background: var(--panel-soft); }
@@ -741,7 +752,7 @@
     <div class="status"><span class="dot"></span>在线</div>
     <!-- 公告中心：默认折叠，只在按钮上标未读数；点开是近半年的公告，随时查得回来。
          老设计是顶部弹横幅、点「知道了」就永远消失，用户想回看只能问管理员。 -->
-    <div id="ntWrap" class="ntwrap" hidden>
+    <div id="ntWrap" class="ntwrap">
       <button id="ntBtn" class="hbtn" type="button" title="系统消息 / 平台公告"></button>
       <span id="ntDot" class="dotmark" hidden></span>
       <div id="ntPanel" class="ntpanel"></div>
@@ -763,6 +774,8 @@
 <div id="webbanner" hidden></div>
 <main>
   <div id="sessbar">
+    <!-- 「新建项目」顶在最上面（设计稿如此）；收起会话栏时它连同下面这排图标一起隐藏，只留折叠按钮 -->
+    <button id="newProject" type="button"></button>
     <div class="sb-top">
       <button id="sessToggle" class="sb-toggle" type="button" title="最近会话"></button>
       <span class="sb-title">会话与项目</span>
@@ -777,7 +790,6 @@
       <button id="selDel" class="danger" type="button">删除</button>
       <button id="selExit" type="button">退出</button>
     </div>
-    <button id="newProject" type="button"></button>
     <div id="sessions"><span class="hint">加载中…</span></div>
     <!-- 左下角「用户」：账户相关的功能都在这里（剩余积分 / 云端账号 / 修改密码 / 退出登录）。
          头像、名字、整块 meta 都可点，点哪都能开菜单——别让用户去瞄那个小小的「⋯」。 -->
@@ -1023,6 +1035,7 @@ const ICONS = {
   flask: '<path d="M9 3v6l-5 8.5A1.7 1.7 0 0 0 5.5 20h13a1.7 1.7 0 0 0 1.5-2.5L15 9V3"/><path d="M8 3h8"/><path d="M8.5 14h7"/>',
   history: '<path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 4v4h4"/><path d="M12 8v4l3 2"/>',
   upload: '<path d="M12 15V4"/><path d="m7 9 5-5 5 5"/><path d="M5 16v2a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-2"/>',
+  cloudUp: '<path d="M7 18.5a4.5 4.5 0 0 1 .8-8.93 6 6 0 0 1 11.4 1.6A3.9 3.9 0 0 1 18.4 18.5"/><path d="M12 21v-9"/><path d="m9 15 3-3 3 3"/>',
   box: '<path d="M21 8 12 3 3 8v8l9 5 9-5V8Z"/><path d="m3.3 7.2 8.7 5 8.7-5"/><path d="M12 12.2V22"/>',
   refresh: '<path d="M21 12a9 9 0 1 1-2.6-6.4"/><path d="M21 4v5h-5"/>',
   stop: '<rect x="6" y="6" width="12" height="12" rx="2"/>',
@@ -1056,11 +1069,12 @@ const ICONS = {
   user: '<circle cx="12" cy="8" r="3.6"/><path d="M4.5 20a7.5 7.5 0 0 1 15 0"/>',
   dots: '<path d="M5 12h.01"/><path d="M12 12h.01"/><path d="M19 12h.01"/>',
   share: '<circle cx="18" cy="5" r="2.6"/><circle cx="6" cy="12" r="2.6"/><circle cx="18" cy="19" r="2.6"/><path d="m8.4 13.5 7.2 4.2"/><path d="m15.6 6.3-7.2 4.2"/>',
-  paperclip: '<path d="M21.2 11.1 12.1 20.2a5.4 5.4 0 0 1-7.6-7.6l9.1-9.1a3.6 3.6 0 0 1 5.1 5.1l-9.1 9.1a1.8 1.8 0 0 1-2.5-2.5l8.4-8.4"/>'
+  paperclip: '<path d="M21.2 11.1 12.1 20.2a5.4 5.4 0 0 1-7.6-7.6l9.1-9.1a3.6 3.6 0 0 1 5.1 5.1l-9.1 9.1a1.8 1.8 0 0 1-2.5-2.5l8.4-8.4"/>',
+  backSquare: '<rect x="3" y="3" width="18" height="18" rx="3"/><path d="M13.5 8.5 10 12l3.5 3.5"/>'
 }
 function ic(name, cls) { return '<svg class="ic' + (cls ? " " + cls : "") + '" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">' + (ICONS[name] || "") + "</svg>" }
 const setIc = (id, name) => { const el = document.getElementById(id); if (el) el.innerHTML = ic(name) }
-setIc("icUp", "upload"); setIc("icOut", "box"); setIc("dzIc", "upload")
+setIc("icUp", "upload"); setIc("icOut", "box"); setIc("dzIc", "cloudUp")
 document.getElementById("refreshSess").innerHTML = ic("refresh")
 document.getElementById("selModeBtn").innerHTML = ic("checkSquare")
 // 发送/终止：默认只露图标（圆钮），悬停展开成胶囊时才显示文字 → 文字必须包在 .send-label 里
@@ -1086,7 +1100,7 @@ document.getElementById("logoutBtn").innerHTML = ic("logout") + "<span>退出登
 // 顶栏「模块工作台」：登录后的模块选择页（workspace.html），随时能回去换个功能开新会话
 ;(function () {
   const b = document.getElementById("wsBtn"); if (!b) return
-  b.innerHTML = ic("grid")
+  b.innerHTML = ic("backSquare")
   b.addEventListener("click", () => { location.href = "workspace.html" })
 })()
 // ---- 模型切换器：显示 当前供应商·模型，可在同供应商下切换（仅接入网关时出现）----
@@ -1609,19 +1623,29 @@ function renderSessions(data) {
   }
   // 2) 已钉住（无项目）—— 拖会话到此即钉住置顶
   {
-    const lbl = document.createElement("div"); lbl.className = "sect-label"; lbl.innerHTML = ic("pin"); lbl.appendChild(document.createTextNode("已钉住")); sessionsEl.appendChild(lbl)
+    sessionsEl.appendChild(sectLabel("pin", "已钉住", pinned.length))
     const area = document.createElement("div"); area.className = "droparea"; area.style.minHeight = "20px"; makeDropTarget(area, "pin")
     if (!pinned.length) { const e = document.createElement("span"); e.className = "hint"; e.textContent = "拖会话到此钉住置顶"; area.appendChild(e) }
     else for (const s of pinned) area.appendChild(sessRow(s))
     sessionsEl.appendChild(area)
   }
   // 3) 最近会话（普通，永久保留）—— 也是「移出项目」的拖放目标
-  const lbl = document.createElement("div"); lbl.className = "sect-label"; lbl.innerHTML = ic("history"); lbl.appendChild(document.createTextNode("最近会话")); sessionsEl.appendChild(lbl)
+  sessionsEl.appendChild(sectLabel("history", "最近会话", loose.length))
   const area = document.createElement("div"); area.className = "droparea"; area.style.minHeight = "20px"; makeDropTarget(area, "none")
   if (!loose.length) { const e = document.createElement("span"); e.className = "hint"; e.textContent = "拖项目里的会话到此可移出"; area.appendChild(e) }
   else for (const s of loose) area.appendChild(sessRow(s))
   sessionsEl.appendChild(area)
   updateSelBar()
+}
+
+// 分区标签：图标 + 名称 + 条数（"最近会话 12"）。项目分组头本来就有计数，这两个分区没有，
+// 看着像少了点东西，且用户也想知道"散着的会话到底有多少条"。
+function sectLabel(icon, text, count) {
+  const lbl = document.createElement("div"); lbl.className = "sect-label"
+  lbl.innerHTML = ic(icon)
+  const t = document.createElement("span"); t.className = "sl-t"; t.textContent = text
+  const c = document.createElement("span"); c.className = "sl-c"; c.textContent = count || 0
+  lbl.append(t, c); return lbl
 }
 
 // 让某元素成为拖放目标：target = 项目 id（归入项目）/ "none"（移出项目）/ "pin"（钉住置顶）
@@ -2794,8 +2818,10 @@ function ntUnread() { const to = noticeReadTo(); return ntDigest.filter((n) => n
 function renderNoticeDot() {
   const wrap = document.getElementById("ntWrap"), dot = document.getElementById("ntDot")
   if (!wrap || !dot) return
-  // 没有云端账号（单机版/自设 API）时压根没有公告这回事，按钮也别占位
-  wrap.hidden = !ntDigest.length && !ntListCache
+  // 【常驻，不随公告条数显隐】老规则是"一条公告都没有就把按钮藏起来"，于是新装的客户端、
+  // 或公告都过期之后这个入口会凭空消失——用户想找"上次那条维护通知"根本无处可点，
+  // 只能怀疑自己记错了。没有公告时点开会明说"还没有公告"，比让按钮时有时无诚实得多。
+  wrap.hidden = false
   const un = ntUnread()
   dot.hidden = !un.length
   dot.textContent = un.length > 99 ? "99+" : String(un.length)
@@ -2875,7 +2901,7 @@ async function openNoticePanel() {
   renderNoticeDot()
 }
 
-document.getElementById("ntBtn").innerHTML = ic("megaphone")
+document.getElementById("ntBtn").innerHTML = ic("feedback")
 document.getElementById("ntBtn").addEventListener("click", (e) => { e.stopPropagation(); openNoticePanel() })
 // 点面板内部（选中文字、点下载链接）不该把它关掉，点别处才关
 document.getElementById("ntPanel").addEventListener("click", (e) => e.stopPropagation())
@@ -3029,6 +3055,14 @@ function setQuotaMini(text, low) {
   m.textContent = text ? " · " + text : ""
   m.classList.toggle("low", !!low)
 }
+// 菜单里额度块的一行：左边标签、右边数值
+function quotaRow(label, value, dim) {
+  const r = document.createElement("div"); r.className = "qrow"
+  const l = document.createElement("span"); l.textContent = label
+  const v = document.createElement("b"); v.textContent = value
+  if (dim) v.className = "mm-faint"
+  r.append(l, v); return r
+}
 async function refreshQuota(fresh = false) {
   const el = document.getElementById("quotabar")
   try {
@@ -3036,25 +3070,34 @@ async function refreshQuota(fresh = false) {
     const s = await fetch("api/quota" + (fresh ? "?fresh=1" : "")).then(r => r.json())
     const c = await cloudQuotaOf(s)
     if (c && !(c.daily.unlimited && c.monthly.unlimited)) {
-      // 两条线都限时并列显示；只限一条就只显示那条（"日 —"这种占位只会让人以为坏了）
+      // 【日、月各占一行】此前挤成一行"剩余积分 日 X · 月 Y"，月的那一截太容易被当成没有；
+      // 两条线哪条用尽都会停调用，所以两条都得摆明白。某条不限就写"不限"，不要省略——
+      // 省略会让人以为这条坏了/没算出来。
       const parts = []
       if (!c.daily.unlimited) parts.push("日 " + fmtCredits(c.daily.remain))
       if (!c.monthly.unlimited) parts.push("月 " + fmtCredits(c.monthly.remain))
       const pct = Math.max(c.daily.unlimited ? 0 : c.daily.pct, c.monthly.unlimited ? 0 : c.monthly.pct)
       el.hidden = false
-      el.textContent = "剩余积分 " + parts.join(" · ") + (c.stale ? " ·未更新" : "")
+      el.textContent = ""
+      const line = (l) => (l.unlimited ? "不限" : fmtCredits(l.remain) + " 积分")
+      el.append(quotaRow("今日剩余", line(c.daily)), quotaRow("本月剩余", line(c.monthly)))
+      if (c.stale) { const n = document.createElement("div"); n.className = "qnote"; n.textContent = "⚠ 暂时连不上云端，显示的是上次读数"; el.append(n) }
       el.title = quotaTitle(c)
       el.style.color = pct >= 90 ? "#dc4b37" : ""
-      setQuotaMini(parts.join(" "), pct >= 90)
+      setQuotaMini(parts.join(" · "), pct >= 90)
       return
     }
     if (!s || !(s.limit > 0)) { el.hidden = true; setQuotaMini(""); return }
+    // 本机 env 额度形态：服务端只有"今日美元上限"这一条，压根没有月度数据——
+    // 所以这里只画今日那行，不编一行空的"本月"出来。云端账号才有日/月两条线。
     const pct = Math.min(100, Math.round(s.used / s.limit * 100))
     el.hidden = false
-    el.title = "今日模型额度：已用 / 上限（每日 0 点 UTC 重置）"
-    el.textContent = `今日额度 $${Number(s.used).toFixed(3)} / $${Number(s.limit).toFixed(2)}（${pct}%）`
+    el.title = "今日模型额度：已用 / 上限（每日 0 点 UTC 重置）。本机额度形态没有月度上限。"
+    el.textContent = ""
+    el.append(quotaRow("今日已用", `$${Number(s.used).toFixed(3)} / $${Number(s.limit).toFixed(2)}（${pct}%）`),
+              quotaRow("本月", "本机额度形态无月上限", true))
     el.style.color = pct >= 90 ? "#dc4b37" : ""
-    setQuotaMini(`$${Number(s.used).toFixed(2)}/$${Number(s.limit).toFixed(2)}`, pct >= 90)
+    setQuotaMini(`今日 $${Number(s.used).toFixed(2)}/$${Number(s.limit).toFixed(2)}`, pct >= 90)
   } catch { el.hidden = true; setQuotaMini("") }
 }
 setInterval(refreshQuota, 30_000)   // 生成中成本在涨（/api/quota 含在跑轮的实时成本），低频轮询保持大致新鲜
