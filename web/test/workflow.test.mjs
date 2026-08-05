@@ -215,6 +215,20 @@ test("前瞻性 / RCT 下预注册被提到最前，就不能还标『可选』�
   assert.doesNotMatch(WF.pipelineLine("paper", { ...raw, studyType: "rct" }), /新颖性裁定 \/ 预注册\(可选\)/)
 })
 
+test("步骤条：没有明确 cur 时当前步 = 第一个未完成的，且质量闸不能抢走高亮", () => {
+  // 实测踩过：第一轮 cur 是空的（只有提交过步骤表单才有值），整条链全灰，而闸那一步带着颜色
+  // → 用户把「引用核查(闸)」读成当前步骤，以为 AI 起步就跳到了核查。这里锁住修复后的语义。
+  // stepsBar 在 index.html 里（要 DOM），这里只验它依赖的两条判据。
+  const steps = WF.stepsFor("review", {})
+  const at = (done) => (steps.find((s) => !new Set(done).has(s.id)) || {}).id
+  assert.equal(at([]), "search", "什么都没做时，当前步是第一步而不是别的")
+  assert.equal(at(["search"]), "screen")
+  assert.equal(at(["search", "screen", "write"]), "refcheck", "写完才轮到引用核查")
+  // 闸不是第一步 —— 若哪天有模块把闸排到最前，上面那条"第一轮高亮第一步"的兜底就要重新想。
+  // 注意 stepsFor 给的是原始定义（gate 只在为真时存在，归一成布尔是 workflowFor 干的），故用 !
+  assert.ok(!steps[0].gate, "review 的第一步不该是质量闸")
+})
+
 test("勾了『格式与体例』得真有一步会走它，否则是勾了没用的哑选项", () => {
   const w = WF.WORKFLOWS.refcheck
   assert.ok(w.intake.find((f) => f.id === "checks").options.some((o) => o.v === "format"))

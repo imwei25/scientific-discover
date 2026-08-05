@@ -439,11 +439,15 @@
   .wfsteps .wsl { color: var(--faint); margin-right: 3px; font-weight: 600; }
   .wfstep { display: inline-flex; align-items: center; gap: 4px; padding: 3px 9px; border-radius: 999px; background: var(--bg); border: 1px solid var(--line-hi); color: var(--faint); }
   .wfstep.done { border-color: rgba(52,168,110,.5); background: rgba(52,168,110,.1); color: #1f7a52; }
-  .wfstep.cur { border-color: var(--cyan); background: rgba(56,189,248,.12); color: #0f6cae; font-weight: 600; }
-  /* 质量闸要在视觉上认得出来（"哪几步是把关步骤"是这套流程的卖点，同色同粗细等于不存在） */
-  .wfstep.gate { border-color: rgba(224,162,63,.55); background: rgba(224,162,63,.09); color: #8a6215; font-weight: 600; }
-  .wfstep.gate::after { content: "把关"; font-size: 9px; margin-left: 1px; border: 1px solid currentColor; border-radius: 3px; padding: 0 3px; opacity: .85; }
+  /* 质量闸要认得出来，但【绝不能比"当前步骤"还响】。
+     实测踩过：第一轮 cur 还是空的（只有提交过步骤表单才会有值），于是整条 6 步的灰色链上
+     唯一被填色加粗的就是"引用核查(闸)"——用户一眼读成"起步就走到引用核查了"，
+     以为 AI 跳步了。所以闸【只留角标 + 文字颜色】，不给底色和粗细，视觉重量压在 .cur 之下。 */
+  .wfstep.gate { border-color: rgba(224,162,63,.45); color: #8a6215; }
+  .wfstep.gate::after { content: "把关"; font-size: 9px; margin-left: 1px; border: 1px solid currentColor; border-radius: 3px; padding: 0 3px; opacity: .8; }
   .wfstep.gate.done { border-color: rgba(52,168,110,.5); background: rgba(52,168,110,.1); color: #1f7a52; }
+  /* .cur 放在 .gate 之后：同特异度下后写的赢，保证"当前步骤"永远是最醒目的那个（闸也不例外） */
+  .wfstep.cur, .wfstep.gate.cur { border-color: var(--cyan); background: rgba(56,189,248,.14); color: #0f6cae; font-weight: 600; }
   /* 带说明的步骤给个虚线下划线 + 问号光标，否则那几句最要紧的话（"未脱敏不得进统计"
      "不凭记忆造引用""只出待核信号"）藏在没人会去悬停的 tooltip 里，触屏上更是永远看不到 */
   .wfstep[title] { text-decoration: underline dotted currentColor 1px; text-underline-offset: 3px; cursor: help; }
@@ -2044,14 +2048,22 @@ function trimSteps(steps, values) {
 }
 /** 步骤条：done 来自"产物出现了没有"的反推，cur 是最近提交的那一步 */
 function stepsBar(steps, done, cur) {
+  const dn = new Set(done || [])
+  // cur 只有"提交过某一步的表单"才会有值，所以第一轮它一定是空的。空着不补的话整条链全是灰的，
+  // 而闸那一步又带着颜色 → 用户把闸读成"当前步骤"（实测发生过，以为 AI 起步就跳到了引用核查）。
+  // 兜底：没有明确的当前步就取【第一个未完成的步骤】，这也正是流程实际所处的位置。
+  const at = cur || (steps.find((s) => !dn.has(s.id)) || {}).id
   const bar = document.createElement("div"); bar.className = "wfsteps"
   bar.appendChild(Object.assign(document.createElement("span"), { className: "wsl", textContent: "流程" }))
   steps.forEach((s, i) => {
     if (i) bar.appendChild(Object.assign(document.createElement("span"), { className: "wsx", textContent: "›" }))
     const el = document.createElement("span")
-    el.className = "wfstep" + ((done || []).includes(s.id) ? " done" : "") + (s.id === cur ? " cur" : "") + (s.gate ? " gate" : "")
-    el.textContent = ((done || []).includes(s.id) ? "✓ " : "") + s.name + (s.optional ? "(可选)" : "")
-    if (s.hint) el.title = s.hint
+    const isCur = s.id === at
+    el.className = "wfstep" + (dn.has(s.id) ? " done" : "") + (isCur ? " cur" : "") + (s.gate ? " gate" : "")
+    el.textContent = (dn.has(s.id) ? "✓ " : isCur ? "▸ " : "") + s.name + (s.optional ? "(可选)" : "")
+    // 把"这是干什么的"和"现在在哪"都说清楚：光靠颜色，色觉障碍与截图场景都传达不到
+    el.title = [isCur ? "当前进行到这一步" : dn.has(s.id) ? "已完成" : "尚未开始",
+      s.gate ? "这是质量把关步骤，不通过会退回上游返工" : "", s.hint || ""].filter(Boolean).join("；")
     bar.appendChild(el)
   })
   return bar
