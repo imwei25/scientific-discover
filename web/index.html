@@ -95,6 +95,14 @@
   .chip { background: var(--card); border: 1px solid var(--line); color: var(--muted); border-radius: 999px; padding: 8px 14px; font-size: 12px; font-weight: 400; cursor: pointer; transition: border-color .15s, color .15s, background .15s; }
   /* 功能模块选择卡（欢迎页）与输入框模块徽标 */
   .welcome .mods { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; margin-top: 22px; text-align: left; }
+  /* 当前模块提示条：聊天页不再选模块，这里只回答"我在哪个模块、怎么换" */
+  .welcome .modhint { display: inline-flex; align-items: center; gap: 10px; flex-wrap: wrap; justify-content: center;
+    margin-top: 14px; padding: 8px 14px; border-radius: 999px; background: var(--card);
+    border: 1px solid var(--line-hi); font-size: 12.5px; color: var(--faint); line-height: 1.6; }
+  .welcome .modhint b { color: var(--text); font-weight: 600; }
+  .modswitch { flex: none; background: transparent; border: 1px solid var(--line-hi); color: var(--cyan);
+    border-radius: 999px; padding: 3px 12px; font: inherit; font-size: 12px; cursor: pointer; transition: border-color .15s, background .15s; }
+  .modswitch:hover { border-color: var(--cyan); background: var(--accent-soft); }
   .modcard { background: var(--card); border: 1px solid var(--line); border-radius: var(--r-md); padding: 11px 13px; cursor: pointer; transition: border-color .15s, background .15s; font: inherit; text-align: left; box-shadow: var(--shadow-sm); }
   .modcard:hover { border-color: var(--cyan); }
   .modcard.sel { border-color: var(--cyan); background: rgba(59,111,212,.08); box-shadow: 0 0 0 2px rgba(59,111,212,.12); }
@@ -2035,32 +2043,41 @@ loadModules()
 const CHIPS = ["分析 uploads 里的 CSV 数据", "帮我查一个 DOI 是否真实", "写一份研究计划书", "把这段数据脱敏"]
 function renderWelcome() {
   const w = document.createElement("div"); w.className = "welcome"
-  w.innerHTML = '<div class="wtitle">Niuma Science</div><div class="wsub">一站式科研平台，文献综述、选题立项、基金申报、论文撰写全链路，<br>科研需求一键直达！</div>'
-  // 功能模块选择卡：只列已开通的（未开通的不展示）。仅剩 chat 一个时不渲染（没得选）
-  const av = MODULES.filter((m) => m.allowed)
-  if (av.length && (av.length > 1 || av[0].id !== "chat")) {
-    const grid = document.createElement("div"); grid.className = "mods"
-    for (const m of av) {
-      const b = document.createElement("button"); b.type = "button"; b.className = "modcard" + (m.id === currentModule ? " sel" : "")
-      const mn = document.createElement("span"); mn.className = "mn"; mn.textContent = m.name
-      const md = document.createElement("span"); md.className = "md"; md.textContent = m.desc
-      b.appendChild(mn); b.appendChild(md)
-      b.addEventListener("click", () => {
-        currentModule = m.id; setModBadge(m.id)
-        grid.querySelectorAll(".modcard").forEach((x) => x.classList.remove("sel")); b.classList.add("sel")
-        chips.style.display = m.id === "chat" ? "" : "none"   // 示例 chip 只对自由对话有意义
-        showIntake(w, m.id)     // 受限模块：就地展开首屏表单卡（自由对话没有表单，会自行清掉）
-        q.focus()
-      })
-      grid.appendChild(b)
-    }
-    w.appendChild(grid)
+  const cur = modById(currentModule)
+  // ★ 聊天页【不再选模块】。模块在建会话那一刻绑定、之后不可改（服务端强制），
+  //   把模块卡摆在这儿等于暗示"在这能换"——实际只对还没发第一条消息的空会话有效，
+  //   一开聊就换不了了。两个入口讲同一件事、语义还不一致，用户很容易以为自己换成功了。
+  //   现在这里只回答"我在哪个模块、怎么换"，选择权收回工作台一处。
+  if (cur && cur.id !== "chat") {
+    w.innerHTML = '<div class="wtitle">' + esc(cur.name) + '</div>'
+      + '<div class="wsub">' + esc(cur.desc || "") + '</div>'
+    const bar = document.createElement("div"); bar.className = "modhint"
+    const txt = document.createElement("span")
+    txt.innerHTML = '当前在 <b>' + esc(cur.name) + '</b> 模块 —— 本次对话只会用这个模块的能力。'
+    const go = document.createElement("button"); go.type = "button"; go.className = "modswitch"
+    go.textContent = "换个模块"
+    go.title = "回到工作台重新选功能（模块在新建会话时绑定，开聊后不可更改）"
+    go.addEventListener("click", () => { location.href = "./workspace.html" })
+    bar.appendChild(txt); bar.appendChild(go)
+    w.appendChild(bar)
+  } else {
+    w.innerHTML = '<div class="wtitle">Niuma Science</div><div class="wsub">一站式科研平台，文献综述、选题立项、基金申报、论文撰写全链路，<br>科研需求一键直达！</div>'
+    const bar = document.createElement("div"); bar.className = "modhint"
+    const txt = document.createElement("span"); txt.textContent = "当前是自由对话，随问随答。想走结构化流程（综述 / 论文 / 标书…）请到工作台选模块。"
+    const go = document.createElement("button"); go.type = "button"; go.className = "modswitch"
+    go.textContent = "去工作台"
+    go.addEventListener("click", () => { location.href = "./workspace.html" })
+    bar.appendChild(txt); bar.appendChild(go)
+    w.appendChild(bar)
   }
-  const chips = document.createElement("div"); chips.className = "chips"
-  CHIPS.forEach((c) => { const b = document.createElement("button"); b.type = "button"; b.className = "chip"; b.textContent = c; b.addEventListener("click", () => sendMessage(c)); chips.appendChild(b) })
-  if (currentModule !== "chat") chips.style.display = "none"
-  w.appendChild(chips); log.appendChild(w)
-  if (currentModule !== "chat") showIntake(w, currentModule)   // 从工作台直接点模块进来的：立刻展开表单
+  // 示例 chip 只对自由对话有意义：受限模块有自己的首屏表单
+  if (currentModule === "chat") {
+    const chips = document.createElement("div"); chips.className = "chips"
+    CHIPS.forEach((c) => { const b = document.createElement("button"); b.type = "button"; b.className = "chip"; b.textContent = c; b.addEventListener("click", () => sendMessage(c)); chips.appendChild(b) })
+    w.appendChild(chips)
+  }
+  log.appendChild(w)
+  if (currentModule !== "chat") showIntake(w, currentModule)
 }
 
 // ============ 模块工作流：首屏表单 → 任务卡 → 结构化产物 ============
@@ -2820,9 +2837,13 @@ document.getElementById("new").addEventListener("click", () => {
   sessionId = null; localStorage.removeItem("nm_sid"); log.innerHTML = ""; renderFiles([]); loadUploads(); loadSessions(); zScopeReset(); loadZotLib(); stepsHost = null; stepsHostEl.replaceChildren()
   sessionStarted = false; pendingWfCard = ""; pendingWfForm = null; lastCardText = ""   // 任务卡是一次性的，绝不能漏进下一个会话
   offeredSteps.clear(); HDR_CACHE.clear()
-  // 新对话回到默认模块（chat 可用则 chat，否则首个可用），在欢迎页重新选
+  // ★「新对话」= 在【当前模块】下再开一个，不再弹回自由对话。
+  //   医生在「SCI 论文」里连开三个会话是常态，每次被踢回自由对话、再自己走一趟工作台点回来，
+  //   是纯粹的白折腾。要换模块请点欢迎页那个「换个模块」（回工作台）。
+  //   只在当前模块已被收权时才回落，避免停在一个点了会 403 的模块上。
   const allowed = MODULES.filter((m) => m.allowed)
-  currentModule = allowed.some((m) => m.id === "chat") ? "chat" : (allowed[0]?.id || "chat")
+  if (!allowed.some((m) => m.id === currentModule))
+    currentModule = allowed.some((m) => m.id === "chat") ? "chat" : (allowed[0]?.id || "chat")
   setModBadge(currentModule)
   renderWelcome(); q.focus()
 })
