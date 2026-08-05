@@ -19,6 +19,7 @@
 """
 import argparse
 import csv
+import io
 import os
 import re
 import sys
@@ -563,10 +564,52 @@ def extract(text):
             "pmid": pmid.group(1) if pmid else None}
 
 
+def _looks_like_citation(line):
+    """这一行像不像一条文献著录。判据宽松：宁可放过噪声，也别把真引用挡在外面。"""
+    t = (line or "").strip()
+    if not t:
+        return False
+    if re.search(r"10\.\d{4,9}/\S+", t) or re.search(r"\bPMID\s*[:：]?\s*\d{6,}", t, re.I):
+        return True          # 带 DOI/PMID 的一定算
+    if re.match(r"^\s*#{1,6}\s", t) or t.startswith(">") or t.startswith("```"):
+        return False         # markdown 标题 / 引用块 / 代码围栏，一定不算
+    # 著录的典型特征：有年份，且有期刊/卷期/页码那一类结构
+    has_year = bool(re.search(r"(19|20)\d{2}", t))
+    has_struct = bool(re.search(r"\d+\s*[（(]\d+[)）]|\d+\s*:\s*\d+|;\s*\d+|et al\.?|等[\.，,]", t, re.I))
+    return has_year and has_struct
+
+
+def check_input_shape(entries, raw_lines):
+    """输入体检：像稿件正文而不是参考文献列表时，拒跑并说清楚该喂什么。
+
+    ★ 为什么要拒跑而不是"跑完再提示"：跑完就已经产生了十几条假「疑似虚构」，
+      医生看到 `## 摘要 —— 疑似虚构` 只会认为工具坏了；而且闸会据此判红（假红）。
+      白烧的 API 往返还是次要的。
+    """
+    n = len(entries)
+    if n < 5:
+        return                       # 条目少，噪声也有限，交给人眼
+    good = sum(1 for ln in raw_lines if _looks_like_citation(ln))
+    ratio = good / max(1, len(raw_lines))
+    if ratio >= 0.5:
+        return
+    sys.exit(
+        "!! 这份输入看起来【不是参考文献列表】：%d 行里只有 %d 行像文献著录（%.0f%%）。\n"
+        "   直接跑下去，稿件的标题行和正文段落都会被当成引用去核，出一堆「查不到、疑似虚构」的假警报，\n"
+        "   而真正的引用反而被淹掉。\n"
+        "   请只把【参考文献部分】单独存成一个文件再喂进来，每行一条完整著录，例如：\n"
+        "     [1] Villanueva A. Hepatocellular carcinoma. N Engl J Med. 2019;380(15):1450-1462. doi:10.1056/NEJMra1713263\n"
+        "   .bib / .ris 也可以（会按字段解析，更准）。\n"
+        "   确实要按当前输入硬跑，加 --no-shape-check。"
+        % (len(raw_lines), good, ratio * 100))
+
+
 def main():
     ap = argparse.ArgumentParser(description="文献真实性核查")
     ap.add_argument("ids", nargs="*", help="直接给 DOI/PMID/标题（可多个）")
     ap.add_argument("--input", help="refs.bib / refs.ris / refs.txt")
+    ap.add_argument("--no-shape-check", action="store_true",
+                    help="跳过输入形态体检（确实要拿整篇稿子硬跑时用）")
     ap.add_argument("--outdir", default=None)
     ap.add_argument("--no-retraction", action="store_true",
                     help="跳过撤稿检测（离线/赶时间；默认开启）")
@@ -577,6 +620,20 @@ def main():
     RETRACTION_CHECK = not args.no_retraction
 
     entries = parse_input(args.input, args.ids)
+
+    if not args.no_shape_check:
+
+        try:
+
+            _raw = [l for l in io.open(args.input, encoding='utf-8', errors='ignore').read().splitlines() if l.strip()]
+
+        except Exception:
+
+            _raw = []
+
+        if _raw:
+
+            check_input_shape(entries, _raw)
     if not entries:
         sys.exit("没有输入。给 --input 文件，或直接列 DOI/PMID/标题。")
     os.makedirs(args.outdir, exist_ok=True)

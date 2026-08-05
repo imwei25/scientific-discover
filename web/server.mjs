@@ -357,6 +357,17 @@ async function sessionOut(sid) {
   return dir
 }
 const relFromRoot = (abs) => path.relative(ROOT, abs).replace(/\\/g, "/")   // 仅用于回给前端展示，统一正斜杠
+// 本机真实可用的 python。前言里【必须给这个绝对路径】，不能再教 agent 写 ${REPO_ROOT:-/app}/.venv/bin/python：
+// 容器里那是对的，但开发机 / 自建部署上 REPO_ROOT 常常没设 → 落到 /app/... （不存在）→ agent 转去
+// which python3，在 Windows 上找到的是 Microsoft Store 的 0 字节 app-execution alias（无输出、
+// 退出码还被 cmd 吞掉），它完全看不出坏在哪，于是同一条命令连发 35+ 次、跑满 10 分钟零产出。
+const PY_BIN = (() => {
+  for (const rel of ["Scripts/python.exe", "bin/python.exe", "bin/python", "bin/python3"]) {
+    const f = path.join(ROOT, ".venv", rel)
+    try { if (fs.statSync(f).isFile()) return f } catch {}
+  }
+  return null   // 没建过 .venv：前言里如实说，让它先跑 env-setup
+})()
 // uploads 与 outputs 同名配对：outputs/<ws> ←→ uploads/<ws>（老会话则同为 <sid>）
 const sessionUp = async (sid) => path.join(UPLOADS, path.basename(await sessionOut(sid)))
 const ensureWsAt = (outDir, upDir) => { fs.mkdirSync(outDir, { recursive: true }); fs.mkdirSync(upDir, { recursive: true }) }
@@ -1821,6 +1832,23 @@ function startJob(sid, sentText, modId) {
           //   走的是 bash 工具、压根不经过上面那条 skill 判据。技能集扩成整条 pipeline 后这个口子更大。
           //   绕过面（变量拼接、cd 进去用相对路径、base64）堵不死 —— 与本文件既有口径一致：
           //   这是产品分权闸，不是对抗边界。堵住顺手绕道就已经拿到绝大部分收益。
+          // ★ 死循环护栏：同一条命令反复发 = agent 已经卡住了，再跑下去只是烧时间和配额。
+          //   实测（kimi）：python 路径落空后它连发 35+ 次一模一样的 `python -c "print('hello')"`，
+          //   跑满 10 分钟零产出，直到被人工掐断 —— 没有任何机制会停下它。
+          //   阈值给到 8：正常重试（改参数、换写法）不会一字不差地重复这么多次。
+          if (p.tool === "bash" && p.state.status === "running" && !job.loopHit) {
+            const cmd = String(p.state.input?.command || "").trim()
+            if (cmd) {
+              job.lastCmd = job.lastCmd === cmd ? cmd : cmd
+              job.cmdRepeat = (job.cmdSeen === cmd ? (job.cmdRepeat || 0) + 1 : 1)
+              job.cmdSeen = cmd
+              if (job.cmdRepeat >= 8) {
+                job.loopHit = cmd.slice(0, 120)
+                console.warn(`[loop] 会话 ${sid}：同一条命令已重复 ${job.cmdRepeat} 次，判定卡死，中止本轮：${job.loopHit}`)
+                client.session.abort({ path: { id: sid } }).catch(() => {})
+              }
+            }
+          }
           if (skillGate && !job.moduleHit) {
             const bad = WF.gateViolation({ tool: p.tool, input: p.state.input, skillGate, restricted: !!modSkills })
             if (bad) {
@@ -1878,6 +1906,8 @@ function startJob(sid, sentText, modId) {
     }
     if (job.aborting) return finish()                       // 用户显式终止：job.abort 已广播 aborted
     if (job.timedOut) return finish()                       // 首事件看门狗已收场并广播过原因（prompt 此刻才姗姗返回/报错），别再报一遍
+    if (job.loopHit) { broadcast("failed", { message:
+      `本轮检测到卡死并已中止：同一条命令被反复执行了 8 次以上（\`${job.loopHit}\`），说明它撞上了一个自己看不出来的错误（常见于命令实际执行失败但没有任何输出）。再跑下去只会白烧时间与额度。请把这条命令的真实报错贴出来，或换一种做法重发。` }); return finish() }
     if (job.moduleHit) { broadcast("failed", { message: modSkills
       ? `模块限制：本会话是「${MODULE_DEFS[modId]?.name || modId}」专用模块，只能使用「${modSkills.join("、")}」技能；检测到调用「${job.moduleHit}」，本轮已中止。${skillHome(job.moduleHit, modId) || "此类需求请到「自由对话」模块新开会话。"}`
       : `技能未开通：你的账号未开通「${job.moduleHit}」技能，本轮已中止。如需使用请联系管理员开通。` }); return finish() }
@@ -2915,7 +2945,7 @@ export const server = http.createServer(async (req, res) => {
       // 给 agent 注入本会话专属目录，覆盖技能默认的 outputs/，实现多用户/多会话隔离
       // 注意：本会话的工作目录（cwd）已在建会话时通过 opencode 的 session.directory 定在【会话产物目录】，
       // 所以 agent 的所有工具默认就在正确的地方读写，preamble 只需说清"当前目录就是产物目录"与几个绝对路径。
-      const preamble = `${PREAMBLE_MARK}\n- **你的当前工作目录就是本会话的产物目录**（\`${ws.out}\`）。所有产物（图表 PNG/PDF、CSV/Excel、md/docx 等）**直接写到当前目录即可**，用相对文件名如 \`fig1.png\`、\`manuscript.md\`，不要再自己拼 \`outputs/xxx\` 前缀。\n- 临时脚本、中间文件同样写当前目录（要归拢可用 \`./.scratch/\`）。\n- 用户上传的数据文件在 \`${ws.up}/\`（读数据从这里找，用这个绝对路径）。\n- 跑本套件的脚本用 \`\${REPO_ROOT:-/app}\` 前缀定位仓库，例如 \`\${REPO_ROOT:-/app}/.venv/bin/python \${REPO_ROOT:-/app}/.opencode/skills/<技能>/xxx.py\`——因为当前目录不是仓库根，写 \`.venv/...\` 这种相对路径会找不到。\n- 正文里嵌入图片直接用文件名：\`![图注](fig1.png)\`（图和稿件都在当前目录，渲染也从当前目录跑）。\n- **不要把产物写到仓库根或 \`\${REPO_ROOT:-/app}\` 下**：那是所有会话共享的，会互相覆盖，也不会出现在界面的"产出"侧栏。${modId === "chat" ? skillsPreamble() : modulePreamble(modId, ws.out)}${zoteroPreamble(ws.out)}${autoOn ? autoPreamble() : ""}\n\n`
+      const preamble = `${PREAMBLE_MARK}\n- **你的当前工作目录就是本会话的产物目录**（\`${ws.out}\`）。所有产物（图表 PNG/PDF、CSV/Excel、md/docx 等）**直接写到当前目录即可**，用相对文件名如 \`fig1.png\`、\`manuscript.md\`，不要再自己拼 \`outputs/xxx\` 前缀。\n- 临时脚本、中间文件同样写当前目录（要归拢可用 \`./.scratch/\`）。\n- 用户上传的数据文件在 \`${ws.up}/\`（读数据从这里找，用这个绝对路径）。\n- **跑本套件的脚本，python 用这个绝对路径**：\`${PY_BIN || "（本机还没建 .venv，先跑 env-setup 技能）"}\`，技能脚本在 \`${ROOT}/.opencode/skills/<技能>/\` 下。**照抄这两个路径，不要自己拼 \`\${REPO_ROOT:-/app}\`，也不要用 \`python\`/\`python3\`裸命令**——本机 PATH 里的 python 可能是个不能用的占位程序（跑起来没有任何输出），你会看不出它坏了。当前目录不是仓库根，写 \`.venv/...\` 这种相对路径同样找不到。\n- 正文里嵌入图片直接用文件名：\`![图注](fig1.png)\`（图和稿件都在当前目录，渲染也从当前目录跑）。\n- **不要把产物写到仓库根或 \`\${REPO_ROOT:-/app}\` 下**：那是所有会话共享的，会互相覆盖，也不会出现在界面的"产出"侧栏。${modId === "chat" ? skillsPreamble() : modulePreamble(modId, ws.out)}${zoteroPreamble(ws.out)}${autoOn ? autoPreamble() : ""}\n\n`
       startJob(sid, preamble + q, modId)   // 同步建 job（jobs.set 在函数首行）→ 返回后前端 attach 必能接上
       return send(res, 200, "application/json", JSON.stringify({ ok: true, sid, sent: true, module: modId }))
     }
@@ -2934,6 +2964,8 @@ export const server = http.createServer(async (req, res) => {
 
     // 显式终止某会话进行中的一轮（前端"终止"按钮；断开连接不再意味着终止）
     if (req.method === "POST" && u.pathname === "/api/chat/abort") {
+      // sid 两处都收：前端用 query，脚本化调用习惯放 body。只认 query 的话 body 调用会拿到
+      // {ok:true, aborted:false} —— 看起来成功、实际没停，是个哑坑。
       const sid = u.searchParams.get("sid") || ""
       const job = jobs.get(sid)
       autoStates.delete(sid)   // 没有在跑的轮也要清：无人值守可能正停在两轮之间的判定瞬间
