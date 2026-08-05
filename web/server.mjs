@@ -1152,6 +1152,21 @@ const validAuth = (val) => {
   return good.length === sig.length && crypto.timingSafeEqual(Buffer.from(good), Buffer.from(sig))
 }
 const authed = (req) => !AUTH_ENABLED || isLocal(req) || validAuth(cookieOf(req, "lan_auth"))
+// ---- 登录 cookie 的组装：Secure 只在【真的走 https】时才贴 ----
+// 【为什么不能无条件贴 Secure】浏览器会**静默丢弃** http 上带 Secure 的 cookie：
+// /api/login 明明返回 200（密码是对的），cookie 却一个都没存下，下一个请求没凭据 → 门禁把人
+// 打回 /login，界面上不报任何错。表现就是"点了登录又回到登录框"，无限循环。
+// 局域网/开发部署（同事用 http://192.168.x.x:3000 访问）正好撞这个，实测复现。
+// 生产在 Caddy 后面是 https（转发时带 X-Forwarded-Proto: https）→ 照旧贴 Secure，强度不变。
+// 注：这个头由前置代理写，攻击者伪造只影响他自己那次请求的 cookie 属性，构不成对他人的降级。
+const isHttps = (req) =>
+  req.socket?.encrypted === true ||
+  String(req.headers["x-forwarded-proto"] || "").split(",")[0].trim().toLowerCase() === "https"
+const setAuthCookie = (req) =>
+  `lan_auth=${makeAuthCookie()}; Path=${BASE_PATH}/; HttpOnly; ${isHttps(req) ? "Secure; " : ""}SameSite=Lax; Max-Age=${AUTH_TTL_MS / 1000}`
+// 清 cookie 时属性要和下发时一致，否则浏览器认为是另一个 cookie、删不掉（登出等于没登出）
+const clearAuthCookie = (req) =>
+  `lan_auth=; Path=${BASE_PATH}/; HttpOnly; ${isHttps(req) ? "Secure; " : ""}SameSite=Lax; Max-Age=0`
 
 // ---- 后台生成任务：一轮生成 = 一个挂在 sid 上的 job，SSE 连接只是"订阅者" ----
 // 切会话/关页面 → 只是退订，生成继续跑；回来用 /api/chat/attach 先重放快照再续直播。
@@ -2282,12 +2297,12 @@ export const server = http.createServer(async (req, res) => {
         return send(res, 401, "application/json", JSON.stringify({ ok: false, err: "账号或密码错误" }))
       }
       pwGuard.fails = 0
-      res.writeHead(200, { "Content-Type": "application/json", "Set-Cookie": `lan_auth=${makeAuthCookie()}; Path=${BASE_PATH}/; HttpOnly; Secure; SameSite=Lax; Max-Age=${AUTH_TTL_MS / 1000}` })
+      res.writeHead(200, { "Content-Type": "application/json", "Set-Cookie": setAuthCookie(req) })
       return res.end(JSON.stringify({ ok: true }))
     }
     // 退出登录：签名 cookie 无服务端状态，清掉浏览器 cookie 即可（本人登出足够）
     if (req.method === "POST" && u.pathname === "/api/logout") {
-      res.writeHead(200, { "Content-Type": "application/json", "Set-Cookie": `lan_auth=; Path=${BASE_PATH}/; HttpOnly; Secure; Max-Age=0` })
+      res.writeHead(200, { "Content-Type": "application/json", "Set-Cookie": clearAuthCookie(req) })
       return res.end(JSON.stringify({ ok: true }))
     }
     // ---- 云端账号转发：opencode → 本机 /cloud/v1/* → sci-auth /llm/* ----
@@ -2345,7 +2360,7 @@ export const server = http.createServer(async (req, res) => {
       catch { return send(res, 500, "application/json", JSON.stringify({ ok: false, err: "保存失败" })) }
       // 签名密钥就是「当前有效密码」，改密后旧 cookie 立即失效 → 必须当场用新密码重签一张下发，
       // 否则改密成功的用户下一次请求就被自己踢回登录页。override 已落盘，effectivePassword() 此刻返回新密码。
-      res.writeHead(200, { "Content-Type": "application/json", "Set-Cookie": `lan_auth=${makeAuthCookie()}; Path=${BASE_PATH}/; HttpOnly; Secure; SameSite=Lax; Max-Age=${AUTH_TTL_MS / 1000}` })
+      res.writeHead(200, { "Content-Type": "application/json", "Set-Cookie": setAuthCookie(req) })
       return res.end(JSON.stringify({ ok: true }))
     }
     if (req.method === "GET" && u.pathname === "/") {
