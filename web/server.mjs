@@ -797,12 +797,18 @@ const wfValues = (outDir, modId) => {
 //    这两句都不含"不通过"三个字。
 // 所以：无歧义的定论词全文匹配；容易误伤的词（reject / 不通过 / critical）只在【结论行】上算数，
 // 而"结论行"要排除 markdown 标题 —— 小节标题里出现"结论"二字太常见（上面那个 Critical 标题就是）。
-const GATE_FAIL_SURE = /(闸不过|闸未过|不予通过|未通过|不通过|需返工|需要返工|退回返工|条件性通过|major\s*revision|需要?重大修改|假引用|伪造引用|编造(的)?引用|查无此文|未能核实|该文献不存在)/i
+// 否定前缀：这些词一旦被否定，含义就反过来了 —— 「无需返工」「未发现假引用」「无未通过项」
+// 都是【通过】的意思。纯子串匹配会把它们全判成红（实测 7 条真实通过措辞全中招）。
+// 用变长负向后顾把它们挡掉。宁可漏判也不能误判：假红会让用户白跑一轮，还会把交付物警示变成狼来了。
+const NEG_PREFIX = "(?<!无|不|未|毋|没|没有|未见|未发现|不存在|未出现|无任何|不含|零)"
+const GATE_FAIL_SURE = new RegExp(NEG_PREFIX +
+  "(闸不过|闸未过|不予通过|未通过|不通过|需返工|需要返工|退回返工|条件性通过|major\\s*revision|需要?重大修改" +
+  "|假引用|伪造引用|编造的?引用|查无此文|未能核实|该文献不存在)", "i")
 const GATE_FAIL_CTX = /(reject|critical|严重问题|硬伤)/i
 // reference-check / data-integrity 的裁定是结构化词，不是散文。两种真实写法：
 //   统计行  `RETRACTED 1，FABRICATED 2，NOT_FOUND 1，MISMATCH 1`（全绿时是 0，不能裸匹配）
 //   表格行  `| [7] | … | **FABRICATED** | 高 |`
-const GATE_FAIL_COUNT = /(FABRICATED|RETRACTED|MISMATCH|NOT[_\s]?FOUND)\s*[:：=]?\s*[1-9]/i
+const GATE_FAIL_COUNT = /(FABRICATED|RETRACTED|MISMATCH|NOT[_\s]?FOUND|UNVERIFIED|ERROR)\s*[:：=]?\s*[1-9]/i
 const GATE_FAIL_CELL = /\|\s*\*{0,2}(FABRICATED|RETRACTED|MISMATCH|NOT[_\s]?FOUND)\*{0,2}\s*\|/i
 const VERDICT_LINE = /(判定|裁定|结论|总体评价|总评|倾向|建议|verdict|recommendation|decision)/i
 function gateFailed(outDir, step, files) {
@@ -810,8 +816,31 @@ function gateFailed(outDir, step, files) {
     for (const f of files) {
       if (!WF.globMatch(g, f) || !/\.(md|txt)$/i.test(f)) continue   // 只读文本报告
       try {
-        const t = fs.readFileSync(path.join(outDir, f), "utf8").slice(0, 20000)
+        // ★ 实测 kimi 把 reference_check_report.md 写成了同名【目录】，里面才是真报告。
+        //   直接 readFileSync 会抛 EISDIR → 落进下面的 catch → "读不到就按通过处理" → 闸静默变绿。
+        //   命中目录就往里找一层文本报告，找不到再放弃。
+        let fp = path.join(outDir, f)
+        if (fs.statSync(fp).isDirectory()) {
+          const inner = fs.readdirSync(fp).filter((x) => /\.(md|txt)$/i.test(x))
+          if (!inner.length) { console.warn(`[workflow] 闸产物 ${f} 是个空目录，无法裁定`); continue }
+          fp = path.join(fp, inner[0])
+        }
+        const t = fs.readFileSync(fp, "utf8").slice(0, 20000)
         if (GATE_FAIL_SURE.test(t) || GATE_FAIL_COUNT.test(t) || GATE_FAIL_CELL.test(t)) return true
+        // 正文里的严重条目：结论行的措辞可能被模型写软（实测正文 4 条 **Major**，总评却是
+        // "Minor to moderate revision"），只认总评就被绕过。只数【条目行】，标题行不算。
+        // 带否定的条目（"无 Major 问题"）不计 —— 同 P0 的教训。
+        let sev = 0
+        for (const ln of t.split(/\r?\n/)) {
+          if (/^\s*#/.test(ln)) continue
+          if (!/^\s*([-*•]|\d+[.)]|\|)/.test(ln)) continue
+          if (!/\*\*\s*(major|critical|严重)\s*\*\*/i.test(ln)) continue
+          if (/(无|没有|未发现|不存在|none|no)\s*(major|critical|严重)/i.test(ln)) continue
+          // 否定词也可能在标记【之后】：`- 本节 **Major** 问题：无` / `Critical: none` / `严重问题：0`
+          if (/[:：]\s*(无|没有|none|n\/?a|0)\s*[条项个]?\s*$/i.test(ln)) continue
+          sev++
+        }
+        if (sev) return true
         for (const ln of t.split(/\r?\n/)) {
           if (/^\s*#/.test(ln)) continue                       // markdown 标题不是结论行
           if (VERDICT_LINE.test(ln) && GATE_FAIL_CTX.test(ln)) return true
