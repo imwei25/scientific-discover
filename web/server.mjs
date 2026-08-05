@@ -780,14 +780,27 @@ const wfValues = (outDir, modId) => {
  * 只认【明确写出的否定结论】，其余一律当通过 —— 宁可漏判也不能误判：把一份其实通过了的稿子
  * 标成"需返工"，用户会白白多跑一轮。所以这里的词表是各技能报告里真实用的定论措辞，不做泛化匹配。
  */
-const GATE_FAIL_RE = /(major\s*revision|reject|不予通过|未通过|不通过|需要?重大修改|重大修改|退回返工|存在严重问题|critical)/i
+// 判据分两层，都是踩出来的：
+// ① 单看关键词会【反向误报】—— peer-review 的报告哪怕结论是通过，也照样有一节标题叫
+//    "### Critical（不改会被拒/结论不成立）"。拿裸 critical 判失败，等于每份评审报告都标"需返工"。
+// ② 只列书面词又会【漏判】—— 模型实际写的是「裁定：**闸不过（回退 #1）**」「条件性通过（需返工）」，
+//    这两句都不含"不通过"三个字。
+// 所以：无歧义的定论词全文匹配；容易误伤的词（reject / 不通过 / critical）只在【结论行】上算数，
+// 而"结论行"要排除 markdown 标题 —— 小节标题里出现"结论"二字太常见（上面那个 Critical 标题就是）。
+const GATE_FAIL_SURE = /(闸不过|闸未过|不予通过|未通过|需返工|需要返工|退回返工|条件性通过|major\s*revision|需要?重大修改|fabricated|假引用|伪造引用|编造(的)?引用|查无此文|未能核实|not[_\s]?found|该文献不存在)/i
+const GATE_FAIL_CTX = /(reject|不通过|critical|严重问题|硬伤)/i
+const VERDICT_LINE = /(判定|裁定|结论|总体评价|总评|倾向|建议|verdict|recommendation|decision)/i
 function gateFailed(outDir, step, files) {
   for (const g of step.emits || []) {
     for (const f of files) {
       if (!WF.globMatch(g, f) || !/\.(md|txt)$/i.test(f)) continue   // 只读文本报告
       try {
         const t = fs.readFileSync(path.join(outDir, f), "utf8").slice(0, 20000)
-        if (GATE_FAIL_RE.test(t)) return true
+        if (GATE_FAIL_SURE.test(t)) return true
+        for (const ln of t.split(/\r?\n/)) {
+          if (/^\s*#/.test(ln)) continue                       // markdown 标题不是结论行
+          if (VERDICT_LINE.test(ln) && GATE_FAIL_CTX.test(ln)) return true
+        }
       } catch { /* 读不到就别拦，按通过处理 */ }
     }
   }

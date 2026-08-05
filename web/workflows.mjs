@@ -542,8 +542,12 @@ export const WORKFLOWS = {
       { id: "strength", label: "润色强度", type: "select", default: "standard", options: [
         { v: "light", t: "保守（只动明显问题）" }, { v: "standard", t: "标准（推荐）" },
         { v: "heavy", t: "激进（重写句式节奏）" }] },
-      { id: "protectRefs", label: "保持引用处的文字原样不动", type: "bool", default: true,
-        help: "默认保持。关掉的话，润色后会自动把引用重新核一遍兜底。" },
+      { id: "protectRefs", label: "带文献角标的句子一个字都不要改", type: "bool", default: true,
+        // ★ 措辞是踩出来的：原来写"保持引用处的文字原样不动"，AI 把"引用处"理解成【只有 [n] 这个编号】，
+        //   于是 4 条带引用的句子全被改写 —— 其中「显著低于」→「低于」、「Meta 分析提示」→「显示」，
+        //   等于替别人的论文改了统计学结论，投稿会被审稿人抓"引用失实"。标签必须说死是【整句】。
+        help: "指的是含 [1]、[2] 这类角标的【整句话】，不只是角标本身 —— 那些句子在转述别人的研究结论，"
+            + "改一个「显著」就变成了另一个意思。默认不动。关掉的话，润色后会自动把引用重新核一遍兜底。" },
       { id: "outFmt", label: "输出格式", type: "select", default: "docx", options: [
         { v: "md", t: "只要 Markdown" }, { v: "docx", t: "Word（.docx）" }, { v: "pdf", t: "PDF" }] },
       // ★ 这里【不能】用通用的 LANG。润色模块里"输出语言=中文"会被理解成"把我的英文稿翻成中文"，
@@ -555,13 +559,22 @@ export const WORKFLOWS = {
     steps: [
       { id: "humanize", name: "润色改写", skill: "humanize-academic",
         emits: ["*_humanized.md", "humanized*.md"], render: "diff" },
-      { id: "refcheck", name: "引用兜底核查", skill: "reference-check", optional: true, gate: true,
+      // ★ 不标 optional：本步只在【用户主动关掉引用保护】时才出现，存在即必做。
+      //   标成可选时 pipelineLine 会往模块前言里写"引用兜底核查(可选)"，等于亲口告诉 AI 这步能跳 ——
+      //   实测它就跳了：直接出 docx，事后才反问"要不要核查引用"。而这正是那个开关存在的唯一意义。
+      { id: "refcheck", name: "引用兜底核查", skill: "reference-check", gate: true,
         when: { field: "protectRefs", eq: false },
         emits: ["refcheck_report.md", "reference_check*.md"], render: "refcheck", onFail: "humanize",
-        hint: "润色如果动过引用处的文字，必须把引用重新核一遍" },
+        hint: "必须核【润色后的稿件】而不是原稿——润色引入的引用漂移只有核新稿才看得出来；"
+            + "本步没跑完不许进排版出件" },
       { id: "render", name: "排版出件", skill: "render-docx", optional: true,
         when: { field: "outFmt", ne: "md" },
-        emits: ["manuscript*.docx", "manuscript*.pdf", "review*.docx", "review*.pdf", "proposal*.docx", "proposal*.pdf"], render: "doc" },
+        // ★ 必须含 *_humanized.*：render-docx 的输出名是「输入名.docx」，而本模块的输入叫
+        //   humanized.md / draft_humanized.md → 输出 humanized.docx / draft_humanized.docx。
+        //   只写 manuscript*/proposal*/review* 的话，这步在本模块永远不会变绿（用户看到
+        //   "跑完了但进度条差一格"，以为排版没做）。
+        emits: ["*_humanized.docx", "*_humanized.pdf", "humanized*.docx", "humanized*.pdf",
+                "manuscript*.docx", "manuscript*.pdf"], render: "doc" },
     ],
     extra: ["render-pdf-doc"],
   },
@@ -843,7 +856,7 @@ export function pipelineLine(mod, values) {
   const gateTxt = gates.length
     ? `质量闸：${gates.map((g) => `${g.name}（不过则回退到「${steps.find((x) => x.id === g.onFail)?.name || "上游相应步骤"}」返工）`).join("；")}。`
     : ""
-  return `\n- **本模块的标准流程**：${chain}。${gateTxt}按此顺序推进；确有理由跳步或合并要先向用户说明。同一闸反复回退 ≥2 次仍不过就停下问用户，别无限返工。`
+  return `\n- **本模块的标准流程**：${chain}。${gateTxt}按此顺序推进；确有理由跳步或合并要先向用户说明。同一闸反复回退 ≥2 次仍不过就停下问用户，别无限返工。\n- **闸的结论只能由重新跑一遍得出**：因某道闸不过而返工后，必须【真的重跑那道闸】并让它写出新报告，才可以说闸已通过。拿上一版的旧报告宣布通过是错的 —— 界面会同时显示「已通过」和一份写着问题的报告，自相矛盾。\n- **不要替校验脚本夸大结论**：不变量校验之类的自动检查只比对数字、角标、术语这些「集合」，查不出「显著低于→低于」「提示→显示」这种措辞漂移。校验通过只能说「数字与角标未变」，**不许说成「引用保留不动」或「内容未改」** —— 用户看到那句话就不会再去逐句核对了。`
 }
 
 /** 产物契约：告诉 agent 用约定文件名，界面才认得出并渲染成表格/卡片 */
