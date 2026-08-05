@@ -186,15 +186,15 @@ def classify_design(title, abstract):
     return a
 
 
-def one_query(q, limit, since):
-    query = q
-    if since:
-        query += f" AND (FIRST_PDATE:[{since}-01-01 TO 3000-12-31])"
+def _one_pass(query, limit, sort=None):
+    """按给定排序取一批。sort=None 用 EPMC 默认顺序（实测等同按时间倒排）。"""
     out, cursor = [], "*"
     while len(out) < limit:
         params = {"query": query, "format": "json",
                   "pageSize": min(100, limit - len(out)),
                   "cursorMark": cursor, "resultType": "core"}
+        if sort:
+            params["sort"] = sort
         r = _get(EPMC, params=params)
         r.raise_for_status()
         d = r.json()
@@ -208,6 +208,33 @@ def one_query(q, limit, since):
         cursor = nxt
         time.sleep(0.34)
     return out[:limit]
+
+
+def one_query(q, limit, since):
+    """两趟检索再合并去重：一趟按被引降序捞经典，一趟默认顺序捞最新。
+
+    ★ 为什么不能只用默认顺序：EPMC 不给 sort 时按时间倒排，于是结果全是当年新文、cites 恒为 0，
+      领域基石一篇都进不来（实测 25 篇里 23 篇当年、被引全 0）。医生问一个方向，拿回的是一堆
+      零被引新综述，Routy/Baruch 这些必读文献不在里面。
+    ★ 为什么不能只按被引降序：那会系统性偏向老文献，把近两年的进展全挤掉 —— 而"最新进展"
+      恰恰是综述最要紧的部分。
+    ★ 为什么这条比"结果不够好"严重：模型拿不到经典文献时会自己想办法补，实测出现过
+      【凭记忆手敲 landmark DOI】，同一轮里它自述"我编造了 DOI"。把经典捞回来就消掉了这个动机。
+    """
+    query = q
+    if since:
+        query += f" AND (FIRST_PDATE:[{since}-01-01 TO 3000-12-31])"
+    half = max(1, limit // 2)
+    cited = _one_pass(query, half, sort="CITED desc")
+    recent = _one_pass(query, limit - len(cited) + half, sort=None)
+    merged, seen = [], set()
+    for rec in list(cited) + list(recent):          # 经典在前，同一篇只留一次
+        key = (rec.get("doi") or "").lower() or (rec.get("pmid") or "") or (rec.get("title") or "")[:80].lower()
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        merged.append(rec)
+    return merged[:limit]
 
 
 def main():

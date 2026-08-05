@@ -403,13 +403,23 @@ export const WORKFLOWS = {
         emits: ["research_report*.md", "deep_research*.md"], render: "manuscript" },
       { id: "digest", name: "研读综述", skill: "literature-review", optional: true,
         when: { field: "mode", eq: "scan" },
-        emits: ["review.md", "digest*.md", "*_review.md"], render: "manuscript" },
+        // research_scan* 必须算：scan 模式下 agent 用 research-scan 技能出简报完全合理
+        //（它在白名单里，模式名就叫"快速扫描"），漏掉它这步永远点不亮。
+        emits: ["review.md", "digest*.md", "*_review.md", "research_scan*.md"], render: "manuscript" },
       { id: "render", name: "出件", skill: "render-pdf-doc", optional: true,
         form: [{ id: "fmt", label: "输出格式", type: "select", default: "pdf", options: [
           { v: "pdf", t: "PDF" }, { v: "docx", t: "Word（.docx）" }] }],
-        emits: ["report*.pdf", "report*.docx", "digest*.pdf", "digest*.docx", "research_report*.pdf", "research_report*.docx"], render: "doc" },
+        // ★ 必须与上游各步的产物名对齐：deep 步产 deep_research*.md、digest 步产 review.md /
+        //   research_scan.md，排版出来就是同名的 pdf/docx。此前只列 report*/digest*/research_report*，
+        //   于是 review.pdf、deep_research.pdf 一个都不认 —— 这步在本模块永远点不亮。
+        emits: ["review*.pdf", "review*.docx", "deep_research*.pdf", "deep_research*.docx",
+                "research_scan*.pdf", "research_scan*.docx", "digest*.pdf", "digest*.docx",
+                "report*.pdf", "report*.docx"], render: "doc" },
     ],
-    extra: ["research-scan", "render-docx"],
+    // reference-check 必须在白名单里：AGENTS.md §五 要求写完综述自动查假引用，而模块前言
+    // 明写"覆盖 AGENTS.md 的一切路由规则"。不给这个技能，那条铁律在本模块就被悄悄关掉了 ——
+    // 实测结果不是报错，是静默降级成模型现写的自制核查器（无撤稿库、自己给自己打分）。
+    extra: ["research-scan", "render-docx", "reference-check"],
   },
 
   // ============ 数据统计与分析 ============
@@ -697,7 +707,9 @@ const fmtVal = (f, v) => {
     return arr.length ? arr.map(label).join("、") : null
   }
   if (f.type === "range") {
-    const { min, max } = v || {}
+    // 兼容标量：接口调用方传 jImpact: 5 时此前落到 return null 被【无声丢掉】——
+    // 任务卡里整行消失且没有任何提示，用户以为筛选生效了。按"下限"理解更符合直觉。
+    const { min, max } = (typeof v === "number" || typeof v === "string") ? { min: Number(v) } : (v || {})
     if (min === undefined && max === undefined) return null
     if (min !== undefined && max !== undefined) return `${min} – ${max}${f.unit ? " " + f.unit : ""}`
     return min !== undefined ? `≥ ${min}` : `≤ ${max}`

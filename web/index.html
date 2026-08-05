@@ -304,6 +304,9 @@
   .pcard img { max-width: 224px; max-height: 220px; border-radius: var(--r-sm); display: block; cursor: zoom-in; }
   .pbar { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 8px; }
   .pcard.file { display: flex; align-items: center; gap: 11px; max-width: none; }
+  .fbulk { border: 1px solid var(--line-hi); border-radius: var(--r-sm); padding: 4px 8px; margin-bottom: 6px; }
+  .fbulk > summary { cursor: pointer; font-size: 12px; color: var(--faint); padding: 2px 0; }
+  .fbulk > summary:hover { color: #0f6cae; }
   .pwarn { flex-basis: 100%; font-size: 11px; line-height: 1.5; color: #b4553f; background: rgba(224,86,79,.07); border: 1px solid rgba(224,86,79,.28); border-radius: var(--r-sm); padding: 5px 8px; margin-top: 6px; }
   .picon { position: relative; width: 30px; height: 30px; flex: none; color: var(--muted); }
   .picon .ic { width: 30px; height: 30px; stroke-width: 1.6; }
@@ -1285,10 +1288,29 @@ const SECRET_RE = /(mapping|_map|crosswalk|keyfile|对照表|还原表)[^/]*\.cs
 const isSecret = (n) => SECRET_RE.test(String(n).split("/").pop())
 const SCRATCHY = /\.(py|log|sh|ps1|ipynb|json)$/i
 const isScratch = (n) => { const b = n.split("/").pop(); return SCRATCHY.test(b) && !/^(retrieval_report|manual_needed)/i.test(b) }
+// 批量下载来的文献全文：一个方向下 40~60 篇是常态。它们确实是本轮产物，但不是"结果"——
+// 平铺出来会把成稿彻底淹掉（实测侧栏 73 条里 65 条是 pdfs/*，交付物混在里面找不着）。
+// 折叠成一行，点开才展开。
+const isBulkPdf = (n) => /^(pdfs|zotero_lib)\//i.test(String(n))
 function renderFiles(list) {
   if (!list || !list.length) { filesEl.innerHTML = '<span class="hint">对话生成的文件会显示在这里</span>'; return }
   filesEl.innerHTML = ""
   list = [...list].sort((a, b) => (isScratch(a) ? 1 : 0) - (isScratch(b) ? 1 : 0))   // 结果在前、中间文件在后
+  const bulk = list.filter(isBulkPdf)
+  list = list.filter((n) => !isBulkPdf(n))
+  if (bulk.length) {
+    const d = document.createElement("details"); d.className = "fbulk"
+    const sm = document.createElement("summary"); sm.textContent = `已下载文献全文 ${bulk.length} 篇`
+    d.appendChild(sm)
+    for (const name of bulk) {
+      const row = document.createElement("div"); row.className = "frow"
+      const nm = document.createElement("span"); nm.className = "fname"; nm.textContent = name.split("/").pop(); nm.title = name
+      const a = document.createElement("a"); a.href = "api/download?name=" + encodeURIComponent(name) + sidQ()
+      a.download = name.split("/").pop(); a.className = "fbtn"; a.title = "下载"; a.innerHTML = ic("download")
+      row.appendChild(nm); row.appendChild(a); d.appendChild(row)
+    }
+    filesEl.appendChild(d)
+  }
   for (const name of list) {
     const row = document.createElement("div"); row.className = "frow"
     const s = document.createElement("span"); s.className = "fname"; s.textContent = name   // 文件名在左、撑满宽度
@@ -1825,7 +1847,11 @@ function formSummary(modId, values) {
     const v = values[f.id]
     if (v === undefined || v === null || v === "" || (Array.isArray(v) && !v.length)) continue
     const lbl = (x) => (f.options || []).find((o) => o.v === x)?.t || x
-    let s = Array.isArray(v) ? v.map(lbl).join("/") : (f.type === "bool" ? (v ? f.label : "") : (f.type === "range" ? "" : lbl(v)))
+    // range 此前硬编码成 ""，于是即使填对了，气泡里那句"开始「文献研读」：…"也永远不提影响力筛选
+    const rng = (x) => x && (x.min !== undefined || x.max !== undefined)
+      ? (x.min !== undefined && x.max !== undefined ? `${f.label} ${x.min}–${x.max}`
+        : x.min !== undefined ? `${f.label} ≥${x.min}` : `${f.label} ≤${x.max}`) : ""
+    let s = Array.isArray(v) ? v.map(lbl).join("/") : (f.type === "bool" ? (v ? f.label : "") : (f.type === "range" ? rng(v) : lbl(v)))
     if (!s) continue
     parts.push(String(s).slice(0, 40))
     if (parts.length >= 4) break
