@@ -1572,6 +1572,9 @@ function startJob(sid, sentText, modId) {
     : acctSkills
   const job = {
     sid, running: true, finished: false, subs: new Set(),
+    // 本轮发出去的用户原话（剥掉注入前言）。/api/history 靠它判断"最后一条 user 消息是不是本轮的"，
+    // 判错了会把上一轮的回答整段删掉（见该处注释）。
+    sentUser: stripPreamble(sentText).trim(),
     // 增量快照：text 是累积全文、reasoning 按 id、tool 按 callID 各存最新一条，attach 时按序重放即可还原界面
     text: "", reasoning: new Map(), tools: new Map(), skills: new Map(),
   }
@@ -2485,11 +2488,20 @@ export const server = http.createServer(async (req, res) => {
         if (role === "assistant") text = autoStripSentinel(text)   // 无人值守的完成哨兵与直播口径一致：不给用户看
         if (text) out.push({ role, text })
       }
-      // 这一轮还在生成中：末尾未完成的助手输出交给续流（/api/chat/attach）直播，从历史里剔除避免重复
-      if (jobs.get(id)?.running) {
+      // 这一轮还在生成中：末尾未完成的助手输出交给续流（/api/chat/attach）直播，从历史里剔除避免重复。
+      // ★ 但必须先确认【最后一条 user 消息就是本轮发出的那条】。opencode 落盘有延迟，在那个窗口里
+      //   lastUser 指向的是【上一轮】的 user 消息，于是上一轮全部 assistant 回复会被当成
+      //   "本轮未完成输出"删掉 —— 用户点完发送刷新一下，上一条回答就凭空消失了（实测 4 次命中 2 次）。
+      //   对不上就一条都不删：多显示一点未完成输出，远好过让用户以为对话丢了。
+      const running = jobs.get(id)
+      if (running?.running) {
         let lastUser = -1
         out.forEach((m, i) => { if (m.role === "user") lastUser = i })
-        return send(res, 200, "application/json", JSON.stringify(out.filter((m, i) => i <= lastUser || m.role === "user")))
+        const lastUserText = lastUser >= 0 ? out[lastUser].text.trim() : ""
+        const isThisRound = !running.sentUser || lastUserText === running.sentUser
+        if (isThisRound)
+          return send(res, 200, "application/json", JSON.stringify(out.filter((m, i) => i <= lastUser || m.role === "user")))
+        return send(res, 200, "application/json", JSON.stringify(out))
       }
       // ★ 把最后一次失败补回历史末尾。
       //   此前所有 failed/notice 都只走实时 SSE（broadcast 只写当下挂着的订阅者），finish() 一到

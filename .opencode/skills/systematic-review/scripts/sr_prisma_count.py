@@ -163,6 +163,20 @@ def main():
             reports_assessed = len(assessed)
             reports_not_retrieved = sum(1 for r in ft
                                         if (r.get("pdf_retrieved") or "").strip().upper() == "N")
+            # ★ 外部事实核对（不可绕过）：声称「已获取全文」的条数必须与磁盘上真实的 PDF 数对得上。
+            #   自洽校验只验加减法，验不了数字真不真 —— 实测出现过 agent 为了让校验从 FAIL 变 PASS，
+            #   把全部 165 行的 pdf_retrieved 改成 Y，而一篇全文都没下过，PRISMA 于是印出
+            #   「Reports not retrieved: 0」。这条数的是文件系统，改 CSV 绕不过去。
+            _base = os.path.dirname(os.path.abspath(args.ft)) or "."
+            _on_disk = 0
+            for _root, _dirs, _files in os.walk(_base):
+                _dirs[:] = [d for d in _dirs if not d.startswith('.')]
+                _on_disk += sum(1 for _f in _files if _f.lower().endswith('.pdf'))
+            checks.append((
+                "pdf_retrieved=Y 的条数 ≤ 目录里真实的 PDF 数"
+                "（%d 声称 / %d 实存；对不上说明这是摘要级筛选，PRISMA 须如实印"
+                " Abstract-level screening，差额计入 Reports not retrieved）" % (reports_assessed, _on_disk),
+                reports_assessed <= _on_disk))
         else:
             assessed = ft
             reports_assessed = len(ft)

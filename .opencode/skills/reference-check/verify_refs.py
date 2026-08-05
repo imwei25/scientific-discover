@@ -225,7 +225,13 @@ def _title_contained(claimed, rt):
 def _decide_title(claimed, rt, id_kind):
     """据(引用标题, 解析标题)给出 (verdict, sim, note)。claimed 为空=只有标识、无标题可比。"""
     if not claimed:
-        return "OK", 1.0, "该标识真实存在（无引用标题可比对，仅核存在性）"
+        # ★ 绝不能判 OK。喂进来的是裸标识符清单时，这里【一条标题都没比对过】，
+        #   而「真 DOI 配错标题」正是本工具存在的意义 —— 判 OK 等于把这道闸整个关掉，
+        #   且报告长得和真通过一模一样。实测放行了两条编造引用（其中一条指向「桡神经病变」），
+        #   agent 据此宣布「质量闸通过」并直接排版出 Word。
+        return "UNVERIFIED", 1.0, (
+            "该标识真实存在，但【没有可比对的标题】——本条只验证了「这个号存在」，"
+            "没有验证「这个号是不是你引用的那篇」。要查张冠李戴，请把引用标题一并给出。")
     if _title_contained(claimed, rt):
         return "OK", 1.0, "标题吻合（解析到的标题完整出现在引用著录中）"
     sim, comparable = compare_titles(claimed, rt)
@@ -594,13 +600,21 @@ def main():
 
     # Markdown 报告（按风险排序）
     order = {"RETRACTED": 0, "FABRICATED": 1, "ID_FAKE": 2, "NOT_FOUND": 3,
-             "MISMATCH": 4, "CHECK": 5, "ERROR": 6, "OK": 7}
+             "MISMATCH": 4, "CHECK": 5, "ERROR": 6, "UNVERIFIED": 7, "OK": 8}
     results.sort(key=lambda r: order.get(r["verdict"], 9))
     from collections import Counter
     dist = Counter(r["verdict"] for r in results)
+    unver = dist.get("UNVERIFIED", 0)
     with open(os.path.join(args.outdir, "reference_check.md"), "w", encoding="utf-8") as f:
         f.write(f"# 文献真实性核查报告（{len(results)} 条）\n\n")
         f.write("统计：" + "，".join(f"{k} {v}" for k, v in dist.items()) + "\n\n")
+        if unver:
+            f.write(
+                f"> ⚠️ **本次有 {unver}/{len(results)} 条只验证了标识符存在、没有比对标题**"
+                "（输入里没有给出引用标题，例如喂的是裸 DOI 清单）。\n"
+                "> 这意味着**查不出「真 DOI 配错标题」这类张冠李戴** —— 而那正是假引用最常见的形态。\n"
+                "> **不要据此宣布「引用核查全绿 / 质量闸通过」**。要真查，请把「标题 + DOI」成对"
+                "喂进来（每行一条完整著录即可）。\n\n")
         for r in results:
             f.write(f"- **{r['verdict']}** — {r['claimed_title'] or r['id']}\n")
             f.write(f"  - {r['note']}\n")
@@ -611,6 +625,9 @@ def main():
     print("-" * 50)
     print(f"结果：{dict(dist)}")
     print(f"可疑/存疑 {bad} 条。报告见 {args.outdir}/reference_check.md / .csv")
+    if unver:
+        print(f"!! 注意：{unver}/{len(results)} 条【只验了存在性、没比对标题】（输入没给引用标题）。"
+              "这查不出「真 DOI 配错标题」，不要当成核查通过。")
 
 
 if __name__ == "__main__":
