@@ -1267,6 +1267,32 @@ const ZSCOPE_RE = /^【检索范围：[^\n]*】\n/
 const WFCARD_RE = /^【任务卡 · [\s\S]*?【以上为用户通过表单[\s\S]*?】\n*/
 const stripPreamble = (t) => t.replace(PREAMBLE_RE, "").replace(ZSCOPE_RE, "").replace(WFCARD_RE, "")
 
+// ---- 网络错误的"人话化" ----
+// undici 的 fetch 失败一律抛 `TypeError: fetch failed`，真正的原因藏在 `.cause`（可能再套一层）。
+// 只报外壳的话，用户和排查的人都只能看到一句"本轮出错：fetch failed" —— 说了等于没说：
+// 到底是模型服务没起来、上游超时、被墙、还是连接被重置，四种处置方式完全不同。
+/** 把 error.cause 链摊平成一行，供服务端日志（含 code，排查全靠它）*/
+const errChain = (e) => {
+  const out = []
+  for (let x = e, i = 0; x && i < 5; x = x.cause, i++)
+    out.push(`${x.name || "Error"}: ${x.message || x}${x.code ? ` (${x.code})` : ""}`)
+  return out.join(" ← ")
+}
+/** 给用户看的一句话：认得出的原因给处置建议，认不出的至少把 cause 带上，别只留个空壳 */
+const explainNetErr = (e) => {
+  const chain = errChain(e)
+  const code = (() => { for (let x = e, i = 0; x && i < 5; x = x.cause, i++) if (x.code) return String(x.code) })() || ""
+  if (/HEADERS_TIMEOUT|BODY_TIMEOUT|ETIMEDOUT|UND_ERR_CONNECT_TIMEOUT/i.test(code + chain))
+    return "等模型响应超时了。长流程（综述 / 标书 / 论文）单轮本来就慢，多半是上游这一次特别久或网络不稳；直接重发一次通常就好。若反复如此，换个模型或分几步来。"
+  if (/ECONNREFUSED/i.test(code + chain))
+    return "连不上后台模型服务（opencode）—— 它可能没起来或已退出。等几十秒重试；若一直如此请联系管理员。"
+  if (/ECONNRESET|SOCKET|EPIPE/i.test(code + chain))
+    return "与模型服务的连接被中途切断。多半是上游或网络抖了一下，重发一次即可；若每次都在同一处断，多半是这一轮太长，试着拆成几步。"
+  if (/ENOTFOUND|EAI_AGAIN|CERT|SSL|TLS/i.test(code + chain))
+    return "解析或连接模型服务的域名失败（DNS / 证书 / 被阻断）。检查网络与代理设置后重试。"
+  return chain.slice(0, 200)   // 认不出也要把 cause 链给出来，绝不再只留一句 "fetch failed"
+}
+
 const jobs = new Map()   // sid -> 进行中的 job
 // ---- 首事件看门狗的超时（ms）----
 // 为什么要有：opencode 打不通上游模型时（API 地址填错 / DNS 解析不了 / 地址黑洞丢包 / 上游连上了
@@ -1723,7 +1749,8 @@ function startJob(sid, sentText, modId) {
       // 出错时【绝不】新建空会话重放消息——会丢光多轮上下文；如实报错，真失效时用户点「新对话」。
       const msg = String(promptErr?.message || promptErr)
       const gone = /not found|no such session|does not exist|404/i.test(msg)
-      broadcast("failed", { message: gone ? "该会话已失效，请点「新对话」重新开始。" : ("本轮出错：" + msg.slice(0, 200)) })
+      console.warn(`[prompt] 会话 ${sid} 本轮失败：${errChain(promptErr)}`)   // 服务端留全链，前端只看人话
+      broadcast("failed", { message: gone ? "该会话已失效，请点「新对话」重新开始。" : ("本轮出错：" + explainNetErr(promptErr) ) })
       return finish()
     }
     if (job.finished) return finish()
