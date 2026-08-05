@@ -317,7 +317,9 @@
   .pghead .pg-act .ic { width: 13px; height: 13px; }
   .pghead .pg-act:hover { color: var(--cyan); background: rgba(59,111,212,.12); }
   .pghead .pg-act.del:hover { color: var(--rose); background: rgba(239,68,68,.12); }
-  .pgbody { display: flex; flex-direction: column; gap: 2px; padding: 2px 0 4px 8px; }
+  /* 空分组/空分区不再放"拖会话到此"的占位文案，但仍要留出一块可落点，否则高度塌成 0 就拖不进去了 */
+  .pgbody { display: flex; flex-direction: column; gap: 2px; padding: 2px 0 4px 8px; min-height: 18px; }
+  .droparea { min-height: 18px; }
   .pgroup.drop-hint > .pghead, .droparea.drop-hint { outline: 2px dashed var(--cyan); outline-offset: -2px; background: rgba(59,111,212,.08); border-radius: var(--r-sm); }
   .sect-label { display: flex; align-items: center; gap: 7px; margin: 10px 0 2px; padding: 0 9px; font-size: 12px; font-weight: 400; color: var(--faint); text-transform: none; }
   .sect-label .ic { width: 13px; height: 13px; }
@@ -677,6 +679,11 @@
   #quotabar .qrow { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; padding: 1px 0; }
   #quotabar .qrow b { color: inherit; font-weight: 600; font-variant-numeric: tabular-nums; }
   #quotabar .qnote { margin-top: 3px; font-size: 11px; color: var(--faint); }
+  .umstat { display: flex; align-items: baseline; justify-content: space-between; gap: 10px;
+    margin: 0 3px 6px; padding: 7px 9px; border-radius: var(--r-sm);
+    background: var(--panel-soft); border: 1px solid var(--line); color: var(--muted); font-size: 12px; }
+  .umstat b { color: inherit; font-weight: 600; font-variant-numeric: tabular-nums; }
+  .umstat b.low { color: #dc4b37; }
   .umitem { display: flex; align-items: center; gap: 9px; width: 100%; padding: 8px 9px; border-radius: 8px;
     background: transparent; border: 0; color: var(--text); font-size: 13px; font-weight: 400; text-align: left; cursor: pointer; }
   .umitem:hover { background: var(--panel-soft); }
@@ -805,9 +812,14 @@
           <div class="n" id="umName">未登录</div>
           <div class="t" id="umTier"></div>
         </div>
-        <!-- 剩余额度：云端账号显示剩余积分（日/月），本机 env 额度形态显示美元「已用/上限」。
+        <!-- 剩余额度：云端账号显示剩余积分（日/月），本机 env 额度形态显示今日「已用/上限」积分。
              title 由 refreshQuota 按实际形态改写，这里只给个不会误导的初值。 -->
         <span id="quotabar" hidden title="剩余额度"></span>
+        <!-- 本地数据占用：所有会话的上传 + 产出合计。本地版不限容量，所以这里只报"占了多大"，
+             不画一条永远不会满的进度条；云端有配额时才在后面补上"/ 上限"。 -->
+        <div class="umstat" id="storagerow" title="所有会话的上传文件与产出文件合计（uploads/ + outputs/）">
+          <span>本地数据</span><b id="storagebar">—</b>
+        </div>
         <button class="umitem" id="acctBtn" type="button">云端账号</button>
         <button class="umitem" id="pwBtn" type="button">修改密码</button>
         <button class="umitem danger" id="logoutBtn" type="button">退出登录</button>
@@ -850,7 +862,6 @@
         <span class="dzsub">支持一次选择 / 拖拽多个文件</span>
       </label>
       <div id="upmsg" class="hint">文件会放进 uploads/，可在对话里让 agent 分析。</div>
-      <div id="storebar" class="hint" style="display:none;margin-top:2px"></div>
       <div id="uplist"></div>
     </div>
     <div class="panel" id="outpanel">
@@ -1231,7 +1242,8 @@ async function refreshUserBox() {
   roleEl.append(t, c)
   if (mn) mn.textContent = nameEl.textContent
   if (mt) mt.textContent = tier ? "档位 " + tier : (name ? "云端账号" : "未接入云端账号")
-  refreshQuota()   // 骨架重建后把积分补回去（不然刚刷新完这块会空一拍）
+  refreshQuota()      // 骨架重建后把积分补回去（不然刚刷新完这块会空一拍）
+  refreshStorage()    // 「本地数据」也在这个菜单里，打开时给个新鲜数
 }
 // ---- 修改密码 ----
 document.getElementById("pwBtn").innerHTML = ic("key") + "<span>修改密码</span>"
@@ -1574,7 +1586,7 @@ function sessRow(s) {
   const mk = (icon, cls, title, fn) => { const a = document.createElement("span"); a.className = "sess-act" + (cls ? " " + cls : ""); a.title = title; a.innerHTML = ic(icon); a.addEventListener("click", (e) => { e.stopPropagation(); fn() }); return a }
   acts.appendChild(mk("edit", "", "重命名", () => renameSession(s.id, s.title, t)))
   acts.appendChild(mk("feedback", "", "把这次会话反馈给管理员", () => openFeedback(s.id, s.title)))
-  acts.appendChild(mk("pin", s.pinned ? "on" : "", s.pinned ? "取消置顶" : "钉住置顶（放到「已钉住」分组）", () => togglePin(s.id, !s.pinned)))
+  acts.appendChild(mk("pin", s.pinned ? "on" : "", s.pinned ? "取消置顶" : "置顶（放到「置顶」分组）", () => togglePin(s.id, !s.pinned)))
   acts.appendChild(mk("trash", "del", "删除会话", () => deleteSession(s.id, s.title)))
   b.appendChild(acts)
   return b
@@ -1615,25 +1627,22 @@ function renderSessions(data) {
     const group = document.createElement("div"); group.className = "pgroup" + (collapsedProjects.has(p.id) ? " collapsed" : "")
     const { h } = projectHead(p, list.length)
     const body = document.createElement("div"); body.className = "pgbody"
-    if (!list.length) { const e = document.createElement("span"); e.className = "hint"; e.textContent = "拖会话到此归入项目"; body.appendChild(e) }
-    else for (const s of list) body.appendChild(sessRow(s))
+    for (const s of list) body.appendChild(sessRow(s))
     h.addEventListener("click", () => { group.classList.toggle("collapsed"); collapsedProjects.has(p.id) ? collapsedProjects.delete(p.id) : collapsedProjects.add(p.id); saveCollapsed() })
     makeDropTarget(group, p.id)                       // 拖到本项目（整组都可接收）
     group.append(h, body); sessionsEl.appendChild(group)
   }
-  // 2) 已钉住（无项目）—— 拖会话到此即钉住置顶
+  // 2) 置顶（无项目）—— 拖会话到此即置顶
   {
-    sessionsEl.appendChild(sectLabel("pin", "已钉住", pinned.length))
+    sessionsEl.appendChild(sectLabel("pin", "置顶", pinned.length))
     const area = document.createElement("div"); area.className = "droparea"; area.style.minHeight = "20px"; makeDropTarget(area, "pin")
-    if (!pinned.length) { const e = document.createElement("span"); e.className = "hint"; e.textContent = "拖会话到此钉住置顶"; area.appendChild(e) }
-    else for (const s of pinned) area.appendChild(sessRow(s))
+    for (const s of pinned) area.appendChild(sessRow(s))
     sessionsEl.appendChild(area)
   }
   // 3) 最近会话（普通，永久保留）—— 也是「移出项目」的拖放目标
   sessionsEl.appendChild(sectLabel("history", "最近会话", loose.length))
   const area = document.createElement("div"); area.className = "droparea"; area.style.minHeight = "20px"; makeDropTarget(area, "none")
-  if (!loose.length) { const e = document.createElement("span"); e.className = "hint"; e.textContent = "拖项目里的会话到此可移出"; area.appendChild(e) }
-  else for (const s of loose) area.appendChild(sessRow(s))
+  for (const s of loose) area.appendChild(sessRow(s))
   sessionsEl.appendChild(area)
   updateSelBar()
 }
@@ -1657,7 +1666,7 @@ function makeDropTarget(el, target) {
     const sid = e.dataTransfer.getData("text/plain"); if (!sid) return
     const cur = META_STATE.sessions.find((s) => s.id === sid)
     if (target === "pin") {
-      if (cur && cur.pinned && !cur.projectId) return             // 已在「已钉住」里
+      if (cur && cur.pinned && !cur.projectId) return             // 已在「置顶」里
       if (cur && cur.projectId) await fetch("api/session/project?id=" + encodeURIComponent(sid) + "&projectId=none", { method: "POST" }).catch(() => {})
       await fetch("api/session/pin?id=" + encodeURIComponent(sid) + "&pinned=1", { method: "POST" }).catch(() => {})
     } else {
@@ -2674,20 +2683,26 @@ async function deleteUpload(name) {
 // 多文件上传：逐个 POST（并实时更新进度），全部完成后刷新列表
 // ---- 存储用量：显示 已用/上限，≥90% 变红提示。未设上限(limit=0)则不显示 ----
 async function refreshStorage() {
-  const bar = document.getElementById("storebar")
+  const bar = document.getElementById("storagebar")
   try {
     const s = await fetch("api/storage").then(r => r.json())
-    if (!s || !s.limit) { bar.style.display = "none"; hideStoreBanner(); return }
+    if (!s || typeof s.used !== "number") { if (bar) bar.textContent = "—"; hideStoreBanner(); return }
     const mb = (b) => (b / 1048576).toFixed(b >= 10485760 ? 0 : 1)
+    // 【本地版没有存储上限】所以默认只报"占了多大"。以前那行"存储 0.0 / 2000 MB（0%）"挂在上传面板里，
+    // 在一台根本不限容量的机器上纯属误导（用户会以为自己有 2GB 的天花板）。
+    // 云端多用户部署确实有配额 → 此时才补上"/ 上限（百分比）"，并保留 ≥90% 的顶部横幅：
+    // 那是真会拒收上传的硬闸，光靠菜单里一行小字不够。
+    if (!s.limit) { if (bar) { bar.textContent = fmtSize(s.used); bar.classList.remove("low") } ; hideStoreBanner(); return }
     const pct = Math.min(100, Math.round(s.used / s.limit * 100))
-    bar.style.display = ""
-    bar.textContent = `存储 ${mb(s.used)} / ${mb(s.limit)} MB（${pct}%）` + (pct >= 90 ? "　⚠ 接近上限，请删除旧会话/文件" : "")
-    bar.style.color = pct >= 90 ? "#dc4b37" : ""
+    if (bar) {
+      bar.textContent = `${fmtSize(s.used)} / ${fmtSize(s.limit)}（${pct}%）`   // 两边同一套单位，别出现 "1.80 GB / 2000 MB"
+      bar.classList.toggle("low", pct >= 90)
+    }
     // full 用【字节数】判，不能用四舍五入后的百分比：995/1000MB 会被 Math.round 变成 100%，
     // 横幅就写"存储已满、新的上传会被拒收"，而实际还有 5MB 能写 —— 用户要么被吓去删数据，
     // 要么在真撞限时不再相信这个提示。
     renderStoreBanner(pct, mb(s.used), mb(s.limit), s.used >= s.limit)
-  } catch { bar.style.display = "none"; hideStoreBanner() }
+  } catch { if (bar) bar.textContent = "—"; hideStoreBanner() }
 }
 // 顶部横幅：≥90% 才出现，重点是说清【后果】而非只报个百分比 —— 用户看到 "93%" 未必知道
 // 那意味着下一次上传会被直接拒收。"知道了"只压住当前这一档（90/95/100），用量再涨一档会
@@ -3022,8 +3037,22 @@ async function refreshNotice(force) {
 // 两种形态，同一个位置：
 //   · 云端账号（打包版）→ 显示【剩余积分】的日/月两条线，权威在服务端（1 积分 = $0.01，
 //     换算也在服务端做，客户端只负责显示，改汇率不用等客户端更新）。
-//   · 本机 env 额度（容器/单机自用）→ 沿用旧的美元「已用/上限」。
+//   · 本机 env 额度（容器/单机自用）→ 服务端记的是美元，界面一律换算成积分再显示
+//     （1 积分 = $0.01，见 CREDIT_USD）。用户面前【不出现美元】：两种形态口径一致，
+//     省得同一个人在云端看积分、在本机看美元，还得自己心算两者的关系。
+const CREDIT_USD = 0.01                                   // 1 积分 = $0.01（与服务端 quota.creditUsd 同口径）
 const fmtCredits = (n) => (Number(n) || 0).toLocaleString("zh-CN")
+// 美元 → 积分。本机 env 额度形态服务端只给美元，界面换算后再显示。
+// 小数位随量级走：几十积分时保留一位（不然一轮几分钱的消耗会被抹成 0，用户以为没扣）。
+const usdToCredits = (usd) => (Number(usd) || 0) / CREDIT_USD
+const fmtCreditsFine = (n) => {
+  const v = Number(n) || 0
+  if (v >= 100 || Number.isInteger(v)) return Math.round(v).toLocaleString("zh-CN")   // 整数别写成 "30.0"
+  const one = Math.round(v * 10) / 10
+  // 不足 0.1 积分（＜1 分钱）时写 "<0.1" 而不是 "0.0"：确实扣了一点，只是四舍五入看不见，
+  // 直接显示 0 会让人以为这轮没花钱。
+  return one === 0 ? (v > 0 ? "<0.1" : "0") : one.toFixed(1)
+}
 function quotaTitle(c) {
   const line = (l, name, reset) => l.unlimited
     ? `${name}：不限`
@@ -3088,16 +3117,17 @@ async function refreshQuota(fresh = false) {
       return
     }
     if (!s || !(s.limit > 0)) { el.hidden = true; setQuotaMini(""); return }
-    // 本机 env 额度形态：服务端只有"今日美元上限"这一条，压根没有月度数据——
+    // 本机 env 额度形态：服务端只有"今日上限"这一条（记的是美元，这里换算成积分显示），
+    // 压根没有月度数据——
     // 所以这里只画今日那行，不编一行空的"本月"出来。云端账号才有日/月两条线。
     const pct = Math.min(100, Math.round(s.used / s.limit * 100))
     el.hidden = false
-    el.title = "今日模型额度：已用 / 上限（每日 0 点 UTC 重置）。本机额度形态没有月度上限。"
+    el.title = `今日模型额度：已用 / 上限（每日 0 点 UTC 重置）。1 积分 = $${CREDIT_USD}。本机额度形态没有月度上限。`
     el.textContent = ""
-    el.append(quotaRow("今日已用", `$${Number(s.used).toFixed(3)} / $${Number(s.limit).toFixed(2)}（${pct}%）`),
+    el.append(quotaRow("今日已用", `${fmtCreditsFine(usdToCredits(s.used))} / ${fmtCreditsFine(usdToCredits(s.limit))} 积分（${pct}%）`),
               quotaRow("本月", "本机额度形态无月上限", true))
     el.style.color = pct >= 90 ? "#dc4b37" : ""
-    setQuotaMini(`今日 $${Number(s.used).toFixed(2)}/$${Number(s.limit).toFixed(2)}`, pct >= 90)
+    setQuotaMini(`今日 ${fmtCreditsFine(usdToCredits(s.used))}/${fmtCreditsFine(usdToCredits(s.limit))} 积分`, pct >= 90)
   } catch { el.hidden = true; setQuotaMini("") }
 }
 setInterval(refreshQuota, 30_000)   // 生成中成本在涨（/api/quota 含在跑轮的实时成本），低频轮询保持大致新鲜
