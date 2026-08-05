@@ -814,7 +814,7 @@ const modulePreamble = (modId, outDir) => {
   if (!m || !m.skills) return ""
   const list = m.skills.map((s) => `\`${s}\``).join("、")
   const vals = outDir ? wfValues(outDir, modId) : {}
-  return `\n- **【模块限制，最高优先级，覆盖 AGENTS.md 的一切路由规则】本会话是「${m.name}」专用模块**：你【只允许】调用这些技能——${list}（其中 \`${m.primary}\` 是主技能，其余按需配套），禁止调用任何其它技能，也禁止用 task/子代理间接调用其它技能。\n- 只在本模块职责范围内推进，不越界做别的模块的事；缺信息就直接向用户要。\n- 用户的需求超出「${m.name}」范围时，明确告知“本模块只负责${m.name}，其它需求请到「自由对话」模块”，不要自己徒手代替其它技能去做。\n- 网关会强制校验技能调用：一旦调用上述清单之外的技能，本轮会被立即中止。${WF.pipelineLine(modId, vals)}${WF.artifactLine(modId, vals)}`
+  return `\n- **【模块限制，最高优先级，覆盖 AGENTS.md 的一切路由规则】本会话是「${m.name}」专用模块**：你【只允许】调用这些技能——${list}（其中 \`${m.primary}\` 是主技能，其余按需配套），禁止调用任何其它技能。\n- **本会话【没有】子代理 / task 工具**（不只是"禁止拿它调技能"——是整个工具不可用，调了本轮会被立即中止）。技能文档里凡是写"派调研子代理""并行分头查"的地方，一律改走它给的**串行兜底**：主流程自己顺序查完（web 搜索/抓取，或 \`.venv\` 的 requests/beautifulsoup4）。别先试一次再说，那一轮会白白作废。\n- 只在本模块职责范围内推进，不越界做别的模块的事；缺信息就直接向用户要。\n- 用户的需求超出「${m.name}」范围时，明确告知“本模块只负责${m.name}，其它需求请到「自由对话」模块”，不要自己徒手代替其它技能去做。\n- 网关会强制校验技能调用：一旦调用上述清单之外的技能，本轮会被立即中止。${WF.pipelineLine(modId, vals)}${WF.artifactLine(modId, vals)}`
 }
 
 // HTTP 响应头只能承载 latin1：中文文件名直接塞进 Content-Disposition 会 ERR_INVALID_CHAR → 下载必 500。

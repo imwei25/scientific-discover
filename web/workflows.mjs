@@ -314,6 +314,14 @@ export const WORKFLOWS = {
         { v: "none", t: "暂无（从零开始）", exclusive: true }] },
       { id: "basisFiles", label: "上传代表作 / 预实验材料", type: "files",
         when: { field: "basis", hasNot: "none" } },
+      // ★ 这一项在技能里是【优先级最高】的输入（grant-proposal SKILL.md 第 1.5 步①、第 2 步）：
+      //   拿到当年官方文件就不必联网调研，且其结构提纲/字数硬限【压过】内置要求卡。
+      //   省市级、卫健委、院级这些渠道的模板常年锁在申报平台内、网上根本查不到，只有申请人手里有。
+      //   表单成了主要入口之后再不给它一个位置，等于把技能最可靠的一条路藏了起来。
+      { id: "guideFiles", label: "官方申报通知 / 申请书模板（有就传）", type: "files",
+        section: "申报要求（决定标书的结构与硬限）",
+        help: "当年的申报通知、申请书模板、指南文件都行。传了就以它为准——它比内置要求卡更新、更权威。"
+            + "没有也能写：会按内置要求卡起草，并在产出上标明「提交前请以当年官方模板核对」。" },
       { id: "deadline", label: "申报截止日期", type: "date",
         help: "填了会按剩余时间安排步骤的详略；不填也能写。" },
       { id: "wordLimit", label: "正文字数上限", type: "number", min: 1000, max: 100000, unit: "字",
