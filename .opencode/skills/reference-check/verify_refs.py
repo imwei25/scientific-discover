@@ -452,6 +452,32 @@ def _apply_retraction(result):
     return result
 
 
+def _first_surname(ca):
+    """从各种作者串里取【第一作者的姓】。取不出就回空串（空串 = 不做作者比对，无害）。
+
+    ★ 必须同时吃两种写法，这是踩出来的：
+      · bibtex 标准：`Finn, Richard S and Qin, Shukui`
+      · **Vancouver 串**：`Finn RS, Qin S, Ikeda M, et al`  ← Europe PMC 的 authorString 就是这个
+    原来的写法是"有逗号就取逗号前、否则取最后一个词"，对 Vancouver 串就变成了
+    `first` = 整串、`surname` = "finn rs" —— 拿它去 authorString 里找当然永远找不到，
+    于是**每一条引用都被判"首作者不符——疑似张冠李戴"**。
+    实测后果：一份 31 条【全部真实、标题相似度 1.0】的参考文献被整体降级成 CHECK，
+    而 CHECK 现在会打红闸 —— 等于这道闸对着一份干净稿子亮红灯。
+    比"漏判"糟得多：模型看到 31/31 全红，要么谎报、要么用话术放行，两条都是明令禁止的。
+    """
+    if not ca:
+        return ""
+    first = re.split(r"\s+and\s+", ca)[0].strip()
+    first = first.split(",")[0].strip()          # "Finn, Richard S"→"Finn"；"Finn RS, Qin S"→"Finn RS"
+    toks = first.split()
+    if not toks:
+        return ""
+    # 末尾是首字母缩写（RS / J / A.）就砍掉，剩下的才是姓；复姓（van der Berg）因此得以保全
+    if len(toks) > 1 and re.fullmatch(r"[a-z]{1,3}\.?", toks[-1]):
+        toks = toks[:-1]
+    return " ".join(toks).strip()
+
+
 def _author_year_flags(entry, meta):
     """Cross-check claimed first-author surname + year against the resolved record.
     Catches 'DOI is real but points to a different paper'. Returns a note fragment or ''."""
@@ -462,10 +488,7 @@ def _author_year_flags(entry, meta):
         flags.append(f"年份不符(引用{cy} vs 库{my})")
     ca = (entry.get("claimed_authors") or "").lower()
     if ca:
-        # first author surname: bibtex "Last, First and ..." or "First Last and ..."
-        first = re.split(r"\s+and\s+", ca)[0]
-        surname = first.split(",")[0].strip() if "," in first else first.split()[-1:] and first.split()[-1]
-        surname = (surname or "").strip()
+        surname = _first_surname(ca)
         found_auth = (meta or {}).get("authors", "").lower()
         if surname and len(surname) > 2 and found_auth and surname not in found_auth:
             flags.append(f"首作者不符(引用{surname})")

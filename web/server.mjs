@@ -935,7 +935,8 @@ function wfSyncDone(outDir, modId) {
   //   "产物反推进度、不依赖 agent 自觉"这条设计，不 seed 就只对填了表单的人生效，等于废了一半。
   if (!st) { st = { module: modId, form: {}, done: [] }; wfSave(outDir, st) }
   if (st.module !== modId) return st   // 簿子记的是别的模块（agent 乱写过）→ 不拿它算，也不覆盖
-  const files = Object.keys(dirState(outDir))
+  const fstate = dirState(outDir)
+  const files = Object.keys(fstate)
   const done = new Set(st.done || [])
   const failed = new Set()
   for (const s of WF.stepsFor(modId, st.form || {})) {
@@ -968,19 +969,42 @@ function wfSyncDone(outDir, modId) {
   //   "做过了"，而其实没有。两种都标成中性的"无产物"，比一律绿勾诚实。
   const implied = new Set()
   const ordered = WF.stepsFor(modId, st.form || {})
+  // ★ 闸红之后，排在它后面、产物却【早于闸报告】的步骤要标成"已过期"，不能继续打绿勾。
+  //   实测：一份综述先干净跑完出了 review.docx（22:46），随后用户加进两条假引用、闸转红
+  //   （reference_check.md 23:00）。模型行为是对的 —— 它拒绝重新出件；但界面同时显示
+  //   「引用核查 ✗ 未通过」和「排版出件 ✓ 已完成」，读起来就是"闸红了还是出了件"。
+  //   done 纯靠"产物文件在不在"反推，不比时间戳，旧 docx 还躺在那儿就恒判完成。
+  //   这与本函数注释里反复防的 fail-open 是同一类问题，只是换了个时间维度。
+  const stale = new Set()
+  const newestOf = (s) => {
+    let t = 0
+    for (const g of s.emits || []) for (const f of files) if (WF.globMatch(g, f)) t = Math.max(t, fstate[f] || 0)
+    return t
+  }
+  ordered.forEach((g, gi) => {
+    if (!failed.has(g.id)) return
+    const gateAt = newestOf(g)
+    if (!gateAt) return
+    for (let i = gi + 1; i < ordered.length; i++) {
+      const s = ordered[i]
+      if (!done.has(s.id)) continue
+      const at = newestOf(s)
+      if (at && at < gateAt) { done.delete(s.id); stale.add(s.id) }
+    }
+  })
   let lastDone = -1
   ordered.forEach((s, i) => { if (done.has(s.id)) lastDone = i })
   for (let i = 0; i < lastDone; i++) {
     const s = ordered[i]
     if (!s.gate && !done.has(s.id) && !failed.has(s.id)) { done.add(s.id); implied.add(s.id) }
   }
-  const arr = [...done], farr = [...failed], iarr = [...implied]
+  const arr = [...done], farr = [...failed], iarr = [...implied], sarr = [...stale]
   if (arr.length !== (st.done || []).length || farr.join() !== (st.failed || []).join()
-      || iarr.join() !== (st.implied || []).join()) {
+      || iarr.join() !== (st.implied || []).join() || sarr.join() !== (st.stale || []).join()) {
     // 落盘前重读一次再只覆盖 done：本函数在【轮次收尾】跑，而用户可能正好在同一时刻提交下一步表单
     //（/api/workflow/form 也写这个文件）。拿本函数开头那份旧快照整体写回，会把刚提交的表单值抹掉。
     const fresh = wfLoad(outDir) || st
-    fresh.done = arr; fresh.failed = farr; fresh.implied = iarr
+    fresh.done = arr; fresh.failed = farr; fresh.implied = iarr; fresh.stale = sarr
     wfSave(outDir, fresh)
     return fresh
   }
@@ -1026,6 +1050,10 @@ const modulePreamble = (modId, outDir) => {
 // HTTP 响应头只能承载 latin1：中文文件名直接塞进 Content-Disposition 会 ERR_INVALID_CHAR → 下载必 500。
 // 按 RFC 5987 同时给两份：ASCII 兜底名（老客户端读它；剔掉引号、反斜杠、控制字符与非 ASCII 字节）
 // 与 filename*=UTF-8''<百分号编码>（现代浏览器优先读它，中文名原样还原）。
+// ★ 纯文本响应必须声明 charset。这些报错文案是【中文】，而前端下载走的是 <a href="api/download…">
+// 直接导航 —— 浏览器对没有 charset 的 text/plain 默认按 windows-1252 解码，
+// 于是这句精心写的中文提示在用户眼里就是一串乱码，等于白写。
+const TEXT_UTF8 = "text/plain; charset=utf-8"
 // 产物/上传取不到时的统一文案（下载、原文、预览三处共用）
 const FILE_GONE = "这个文件不在本会话的产出或上传里——可能还没生成、名字对不上，或这个会话已被清理过。回到对话里让它重新生成一次即可。"
 
@@ -1198,7 +1226,7 @@ const pipeFile = (f, res) => {
   const rs = fs.createReadStream(f)
   rs.on("error", (e) => {
     console.warn(`[download] 读取失败 ${f}: ${e?.code || e?.message || e}`)
-    if (!res.headersSent) { try { return send(res, 404, "text/plain", "not found") } catch {} }
+    if (!res.headersSent) { try { return send(res, 404, TEXT_UTF8, "not found") } catch {} }
     try { res.destroy() } catch {}
   })
   return rs.pipe(res)
@@ -2137,7 +2165,7 @@ function startJob(sid, sentText, modId) {
     if (modId !== "chat") {
       try {
         const st = wfSyncDone(outDir, modId)
-        if (st) broadcast("workflow", { cur: st.cur || null, done: st.done || [], failed: st.failed || [], implied: st.implied || [] })
+        if (st) broadcast("workflow", { cur: st.cur || null, done: st.done || [], failed: st.failed || [], implied: st.implied || [], stale: st.stale || [] })
       } catch (e) { console.warn(`[workflow] 进度同步失败：${e.message}`) }
     }
     warmPreviews(outDir, changed)   // 后台把新产出的 office/docx 预转缓存，用户点预览即秒开
@@ -2854,7 +2882,7 @@ export const server = http.createServer(async (req, res) => {
       // isFile 不能省：只判 existsSync 时，?name=.preview（服务端自己在每个产物目录里建的预览缓存目录，
       // 必然存在）会让 createReadStream 异步抛 EISDIR，而进程没有 uncaughtException 兜底 → 整个容器崩、
       // opencode 一起没。任意已登录用户一个 URL 即可打崩。/api/raw 本来就有这个判断，这里漏了。
-      if (!f || !fs.existsSync(f) || !fs.statSync(f).isFile()) return send(res, 404, "text/plain", FILE_GONE)
+      if (!f || !fs.existsSync(f) || !fs.statSync(f).isFile()) return send(res, 404, TEXT_UTF8, FILE_GONE)
       // 下载文件名只取最后一段：带上 "pdfs/" 前缀的话，浏览器保存时会把斜杠当非法字符或造出怪名字
       res.writeHead(200, { "Content-Type": "application/octet-stream", "Content-Disposition": contentDisposition(path.basename(name)) })
       return pipeFile(f, res)
@@ -2867,7 +2895,7 @@ export const server = http.createServer(async (req, res) => {
       const up = u.searchParams.get("dir") === "up"
       const root = sid ? (up ? await sessionUp(sid) : await sessionOut(sid)) : (up ? UPLOADS : OUTPUTS)
       const f = safeUnder(root, name)
-      if (!f || !fs.existsSync(f) || !fs.statSync(f).isFile()) return send(res, 404, "text/plain", FILE_GONE)
+      if (!f || !fs.existsSync(f) || !fs.statSync(f).isFile()) return send(res, 404, TEXT_UTF8, FILE_GONE)
       const MIME = { ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".gif": "image/gif",
         ".webp": "image/webp", ".svg": "image/svg+xml", ".bmp": "image/bmp", ".pdf": "application/pdf",
         ".html": "text/html; charset=utf-8", ".htm": "text/html; charset=utf-8", ".md": "text/markdown; charset=utf-8",
@@ -2895,19 +2923,19 @@ export const server = http.createServer(async (req, res) => {
       let r
       try { r = await ensurePreviewCache(dir, name) }
       catch (e) {
-        if (e.code === "no-src") return send(res, 404, "text/plain", FILE_GONE)
+        if (e.code === "no-src") return send(res, 404, TEXT_UTF8, FILE_GONE)
         // 转义再插进 HTML：e.message 里含被转换文件的路径/文件名，而文件名是 agent 产出的、可含尖括号。
         // 影响仅限用户自己（一人一容器），但顺手堵掉，别留个会往 HTML 里塞未转义内容的口子。
         if (e.code === "docx-fail") return send(res, 500, "text/html; charset=utf-8", `<p style="color:#b91c1c">DOCX 预览转换失败：${String(e.message).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")}</p>`)
-        if (e.code === "no-soffice") return send(res, 501, "text/plain", "服务器未安装 LibreOffice，无法预览此类型（装好后即可）")
+        if (e.code === "no-soffice") return send(res, 501, TEXT_UTF8, "服务器未安装 LibreOffice，无法预览此类型（装好后即可）")
         // 人话 + 可行动的下一步；完整命令行/stderr 已在 ensurePreviewCache 里 console.error，不外泄。
-        if (e.code === "office-fail") return send(res, 500, "text/plain", e.timedOut
+        if (e.code === "office-fail") return send(res, 500, TEXT_UTF8, e.timedOut
           ? "文档转换超时（首次转换要启动办公组件，会慢一些）。可先下载文件在本地打开；稍后重试通常会快很多。"
           : "文档转换失败，可下载文件后在本地打开。")
-        if (e.code === "no-pdf") return send(res, 500, "text/plain", "转换未产出 PDF")
-        return send(res, 500, "text/plain", "转换失败：" + e.message)
+        if (e.code === "no-pdf") return send(res, 500, TEXT_UTF8, "转换未产出 PDF")
+        return send(res, 500, TEXT_UTF8, "转换失败：" + e.message)
       }
-      if (!r) return send(res, 415, "text/plain", "该类型不支持预览")
+      if (!r) return send(res, 415, TEXT_UTF8, "该类型不支持预览")
       // docx 转出来的 HTML 是 mammoth 直出的：它保留原文档里的超链接，且【不过滤 javascript: 协议】。
       // 这条路径以前因为 mammoth 没装、docx 预览 100% 失败而从没真正跑过，装上后才第一次生效 → 补上沙箱。
       // 与 /api/raw 对 html/svg 的处理保持一致：不允许脚本、不接触本站源。
@@ -3826,9 +3854,9 @@ export const server = http.createServer(async (req, res) => {
       }))
     }
 
-    send(res, 404, "text/plain", "not found")
+    send(res, 404, TEXT_UTF8, "not found")
   } catch (err) {
-    try { send(res, 500, "text/plain", String(err?.stack || err)) } catch {}
+    try { send(res, 500, TEXT_UTF8, String(err?.stack || err)) } catch {}
   }
 })
 // ---- opencode 生命周期：网关启动时刷新一个干净的 opencode，让它重扫 .opencode/skills/ ----
