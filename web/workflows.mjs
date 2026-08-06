@@ -74,17 +74,19 @@ const LANG = { id: "lang", label: "输出语言", type: "select", default: "zh",
 //    "我想投的刊影响因子几到几"。所以字段名写死成「**文献来源期刊**的影响力」，并靠 section
 //    分组把它和目标期刊隔开。别为了简洁把"文献来源期刊"这五个字删掉。
 const JOURNAL_FILTER = [
-  { id: "jImpact", label: "文献来源期刊的影响力（近似值）", type: "range", min: 0, max: 100, step: 0.1,
+  // 标题里【不能出现「影响因子」四个字】，连「非影响因子」这种否定式也不行 ——
+  // 任务卡会原样带上这个标签，测试里有专门的守卫防止把近似指标说成影响因子。
+  { id: "jImpact", label: "文献来源期刊的影响力（两年篇均被引，近似）", type: "range", min: 0, max: 100, step: 0.1,
     unit: "两年篇均被引", section: "检索到的文献要满足什么条件",
-    help: "筛的是「检索结果」发表在什么刊上，不是你想投的刊。这个数来自 OpenAlex 的两年篇均被引，"
+    help: "筛的是检索结果发表在什么刊上，不是你想投的刊。"
         + "跟影响因子算法思路相近但口径不同，不是官方影响因子。留空 = 不筛。" },
   { id: "jQuartile", label: "影响力档位（近似）", type: "multi", options: [
     // 分档要写成互不重叠的区间：原来 Q2「前50%」、Q3「后50%」看着像两段重叠（实测反馈）
     { v: "Q1", t: "前 25%（Q1）" }, { v: "Q2", t: "25%–50%（Q2）" },
     { v: "Q3", t: "50%–75%（Q3）" }, { v: "Q4", t: "后 25%（Q4）" }],
-    help: "按检索结果里各刊影响力排序分四档，近似替代「分区」的说法，不是中科院或 JCR 分区。" },
+    help: "按检索结果内部排序分的四档，不是中科院或 JCR 分区，别直接当分区汇报。" },
   { id: "jOA", label: "只保留开放获取（OA）的文献", type: "bool", default: false,
-    help: "OA = 不用订阅就能下到全文。勾上后只保留这类文献，能显著提高后续「全文获取」的成功率。" },
+    help: "OA = 不用订阅就能下全文。勾上能明显提高「全文获取」成功率。" },
 ]
 
 // ---- 各模块工作流 ----
@@ -100,11 +102,11 @@ export const WORKFLOWS = {
         { v: "rct", t: "随机对照试验（RCT）" }, { v: "diagnostic", t: "诊断准确性研究" },
         { v: "casecontrol", t: "病例对照" }, { v: "crosssection", t: "横断面" },
         { v: "caseseries", t: "病例系列 / 个案" }, { v: "basic", t: "体外 / 动物实验" }],
-        help: "决定流程走法：前瞻性与 RCT 会把新颖性裁定提到最前做预注册锁；诊断准确性研究通常无人口学基线，会跳过基线表那步。" },
+        help: "决定流程走法：前瞻性 / RCT 会先锁定假设；诊断准确性研究无人口学基线，会跳过 Table 1。" },
       { id: "articleType", label: "稿件类型", type: "select", default: "original", options: [
         // 加中文：临床医生未必都对得上这几个英文体裁名（评审反馈）
         { v: "original", t: "原著（Original Article）" }, { v: "brief", t: "简报（Brief Report）" },
-        { v: "case", t: "Case Report" }, { v: "letter", t: "Letter / Correspondence" }] },
+        { v: "case", t: "个案报道（Case Report）" }, { v: "letter", t: "通讯（Letter）" }] },
       { id: "topic", label: "研究主题一句话", type: "textarea", required: true,
         placeholder: "例：术前中性粒细胞/淋巴细胞比值对胃癌根治术后 3 年生存的预测价值" },
       { id: "materials", label: "已有材料", type: "multi", options: [
@@ -112,14 +114,16 @@ export const WORKFLOWS = {
         { v: "figures", t: "已有图表" }, { v: "ethics", t: "伦理批件号" },
         { v: "registry", t: "临床试验注册号" }, { v: "refs", t: "参考文献库（bib/Zotero）" }],
         help: "没有的不用勾，缺的会在对应步骤问你要，绝不替你编。" },
-      { id: "dataFiles", label: "数据文件", type: "files", when: { field: "materials", has: "rawdata" },
+      { id: "dataFiles", label: "原始数据表", type: "files", when: { field: "materials", has: "rawdata" },
+        uploadText: "上传数据表", accept: ".xlsx / .csv",
         help: "从「上传数据」里挑。没上传的先去左侧上传。" },
       { id: "deidDone", label: "这份数据已经脱敏过了", type: "bool", default: false,
         when: { field: "materials", has: "rawdata" },
-        help: "没脱敏的话流程会自动先做一步脱敏 —— 含患者信息的数据未脱敏不得进入任何统计，这是平台的硬性规定。" },
+        help: "选「是」会先脱敏再分析。未脱敏的患者数据不得进入统计。" },
       { id: "draftFiles", label: "已有的初稿 / 图表 / 文献库文件", type: "files",
+        uploadText: "上传初稿 / 图表 / 文献库", accept: ".docx / .pdf / 图片 / .bib",
         whenAny: [{ field: "materials", has: "draft" }, { field: "materials", has: "figures" }, { field: "materials", has: "refs" }],
-        help: "从「上传数据」里挑。勾了「已有初稿 / 已有图表 / 参考文献库」就得把文件传上来，否则那几项等于没说。" },
+        help: "上面勾了已有初稿 / 图表 / 文献库的，把对应文件传上来。" },
       { id: "ethicsNo", label: "伦理批件号", type: "text", when: { field: "materials", has: "ethics" },
         placeholder: "原样填写，没有就留空（会标『待补充』，不会编造）" },
       { id: "registryNo", label: "临床试验注册号", type: "text", when: { field: "materials", has: "registry" },
@@ -257,7 +261,7 @@ export const WORKFLOWS = {
         placeholder: "例：PD-1 抑制剂在肝细胞癌一线治疗中的进展与争议" },
       { id: "pico", label: "研究问题的四要素（填了检索会精准很多）", type: "textarea",
         placeholder: "人群：晚期肝细胞癌初治患者　干预：PD-1 抑制剂联合靶向　对照：单药靶向　结局：总生存期",
-        help: "就是临床研究里常说的 PICO：人群(P) / 干预(I) / 对照(C) / 结局(O)，每项一行或用空格隔开都行。不确定就留空，照样能检索。" },
+        help: "不确定就留空，照样能检索。" },
       { id: "years", label: "时间范围", type: "select", default: "10", options: [
         { v: "3", t: "近 3 年" }, { v: "5", t: "近 5 年" }, { v: "10", t: "近 10 年" }, { v: "0", t: "不限" }] },
       { id: "designs", label: "纳入的研究设计", type: "multi", options: [
@@ -323,16 +327,17 @@ export const WORKFLOWS = {
         { v: "papers", t: "代表作 / 已发表论文" }, { v: "preliminary", t: "预实验数据" },
         { v: "platform", t: "平台 / 设备条件" }, { v: "cohort", t: "已有样本库 / 队列" },
         { v: "none", t: "暂无（从零开始）", exclusive: true }] },
-      { id: "basisFiles", label: "上传代表作 / 预实验材料", type: "files",
+      { id: "basisFiles", label: "代表作 / 预实验材料", type: "files",
+        uploadText: "上传代表作 / 预实验材料", accept: ".pdf / .docx（代表作建议 5 篇以内）",
         when: { field: "basis", hasNot: "none" } },
       // ★ 这一项在技能里是【优先级最高】的输入（grant-proposal SKILL.md 第 1.5 步①、第 2 步）：
       //   拿到当年官方文件就不必联网调研，且其结构提纲/字数硬限【压过】内置要求卡。
       //   省市级、卫健委、院级这些渠道的模板常年锁在申报平台内、网上根本查不到，只有申请人手里有。
       //   表单成了主要入口之后再不给它一个位置，等于把技能最可靠的一条路藏了起来。
       { id: "guideFiles", label: "官方申报通知 / 申请书模板（有就传）", type: "files",
+        uploadText: "上传通知 / 模板", accept: ".pdf / .docx",
         section: "申报要求（决定标书的结构与硬限）",
-        help: "当年的申报通知、申请书模板、指南文件都行。传了就以它为准——它比内置要求卡更新、更权威。"
-            + "没有也能写：会按内置要求卡起草，并在产出上标明「提交前请以当年官方模板核对」。" },
+        help: "申报通知 / 模板 / 指南都行，传了就以它为准；没有也能写，会标明请以当年官方模板核对。" },
       { id: "deadline", label: "申报截止日期", type: "date",
         help: "填了会按剩余时间安排步骤的详略；不填也能写。" },
       { id: "wordLimit", label: "正文字数上限", type: "number", min: 1000, max: 100000, unit: "字",
@@ -436,6 +441,7 @@ export const WORKFLOWS = {
     intakeTitle: "数据与分析设置",
     intake: [
       { id: "dataFiles", label: "数据文件", type: "files",
+        uploadText: "上传数据表", accept: ".xlsx / .csv",
         // ★ 不能无条件必填：「样本量 / 把握度」是【做研究之前】算要收多少例的，此时根本没有数据。
         //   写死 required 的结果是——设计课题的医生一进来就被"还没填：数据文件"挡住，
         //   等于"想算样本量？先去伪造一份数据"。
@@ -444,8 +450,10 @@ export const WORKFLOWS = {
         //   会让一个没有任何数据的 KM/Cox 请求静默通过 —— 比过度拦截更危险。
         //   判据是"除样本量之外还勾了别的吗"。
         requiredWhen: { field: "analyses", hasOther: ["power"] },
-        help: "从左侧「上传数据」里挑。选好后下面的变量映射会自动读出真实表头。只算样本量 / 把握度的话不用传数据。" },
-      { id: "hasPHI", label: "数据里含患者身份信息（姓名/住院号/身份证/住址等）", type: "bool", default: false,
+        help: "选好后下面的列名会自动读出来。只算样本量 / 把握度可以不传。" },
+      // ★ 这题【不能有默认值】：默认「否」等于替用户声明「本数据不含身份信息」，
+      //   而他表里就摆着 300 个姓名和住院号。改成必答，两个都不预选。
+      { id: "hasPHI", label: "数据里含患者身份信息（姓名/住院号/身份证/住址等）", type: "bool", required: true,
         help: "勾上会先做脱敏再分析 —— 未脱敏的患者数据不得进入统计，这是平台的硬性规定。" },
       { id: "analyses", label: "要做的分析", type: "multi", required: true, options: [
         { v: "profile", t: "数据体检（缺失 / 异常 / 重复 ID）" },
@@ -513,8 +521,10 @@ export const WORKFLOWS = {
     primary: "reference-check",
     intakeTitle: "核查设置",
     intake: [
-      { id: "docFiles", label: "待核查的稿件", type: "files", required: true },
+      { id: "docFiles", label: "待核查的稿件", type: "files", required: true,
+        uploadText: "上传稿件", accept: ".docx / .pdf / .md" },
       { id: "dataFiles", label: "配套的数值表", type: "files",
+        uploadText: "上传数值表", accept: ".xlsx / .csv",
         requiredWhen: { field: "checks", has: "integrity" },
         help: "只有勾了「数据完整性」才需要 —— 没有数值表这一项做不了。" },
       { id: "checks", label: "核查项", type: "multi", required: true,
@@ -553,7 +563,8 @@ export const WORKFLOWS = {
     primary: "humanize-academic",
     intakeTitle: "润色设置",
     intake: [
-      { id: "docFiles", label: "待润色的稿件", type: "files", required: true },
+      { id: "docFiles", label: "待润色的稿件", type: "files", required: true,
+        uploadText: "上传稿件", accept: ".docx / .pdf / .md" },
       { id: "goals", label: "润色目标", type: "multi", required: true, default: ["deai"],
         options: [{ v: "deai", t: "去除生成式文本痕迹（去 AI 味）" },
           { v: "language", t: "语言润色（语法 / 措辞 / 流畅度）" },
@@ -571,7 +582,7 @@ export const WORKFLOWS = {
         // ★ 措辞是踩出来的：原来写"保持引用处的文字原样不动"，AI 把"引用处"理解成【只有 [n] 这个编号】，
         //   于是 4 条带引用的句子全被改写 —— 其中「显著低于」→「低于」、「Meta 分析提示」→「显示」，
         //   等于替别人的论文改了统计学结论，投稿会被审稿人抓"引用失实"。标签必须说死是【整句】。
-        help: "指的是含 [1]、[2] 这类角标的【整句话】，不只是角标本身 —— 那些句子在转述别人的研究结论，"
+        help: "指含 [1][2] 角标的【整句话】，不只是角标本身 —— 这些句子在转述别人的结论，"
             + "改一个「显著」就变成了另一个意思。默认不动。关掉的话，润色后会自动把引用重新核一遍兜底。" },
       { id: "outFmt", label: "输出格式", type: "select", default: "docx", options: [
         { v: "md", t: "只要 Markdown" }, { v: "docx", t: "Word（.docx）" }, { v: "pdf", t: "PDF" }] },

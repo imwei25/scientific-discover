@@ -87,6 +87,8 @@
   }
   /* welcome / empty state = 主视觉：衬线大标题 + 副标题 + 模块卡 + 示例 chip，整体垂直居中 */
   .welcome { margin: auto; max-width: 720px; text-align: center; padding: 8px 16px 24px; }
+  /* 模块入口装的是整张表单，不是一段说明文字 —— 放宽到略超输入框（760），别比输入框还窄 */
+  .welcome.modentry { max-width: 880px; }
   .welcome .wic { width: 56px; height: 56px; color: #aec4de; margin: 0 auto 14px; display: block; stroke-width: 1.4; }
   .welcome .wtitle { color: var(--text); font-family: var(--serif); font-weight: 400; text-transform: uppercase;
     font-size: clamp(34px, 5.4vw, 60px); line-height: 1.05; letter-spacing: -.01em; }
@@ -492,8 +494,12 @@
   .wfnotice b { color: #4a350c; }
   .wfcard .wffoot { font-size: 11.5px; color: var(--faint); line-height: 1.6; margin-top: 12px; padding-top: 10px; border-top: 1px dashed var(--line-hi); }
   .wff { margin-bottom: 13px; }
+  /* 最后一个字段要能完整露出来，不能永远被吸底条压着（五份评审都栽在这）*/
+  .wff:last-of-type { margin-bottom: 8px; }
   .wff > label { display: block; font-size: 12.5px; font-weight: 600; color: #334153; margin-bottom: 5px; }
   .wff > label .req { color: #e0564f; margin-left: 3px; }
+  .wfmulti { margin-left: 6px; padding: 1px 6px; border-radius: 999px; font-size: 10.5px;
+    font-weight: 400; color: var(--faint); background: var(--chip); vertical-align: 1px; }
   /* 帮助文字：所有"这不是影响因子""未脱敏不得进统计"之类的反误导说明都写在这里。
      原来 11px + --faint（白底对比度约 2.9:1，低于 WCAG AA 的 4.5:1）等于写了没人看得见。 */
   .wff .wfhelp { font-size: 12px; color: #55657a; line-height: 1.6; margin-top: 5px; }
@@ -507,9 +513,12 @@
   .cardpeek-body { margin-top: 6px; padding: 8px 10px; border-radius: var(--r-sm); background: rgba(255,255,255,.14);
     white-space: pre-wrap; line-height: 1.7; font-size: 12px; }
   .wff input[type=text], .wff input[type=number], .wff textarea, .wff select {
-    width: 100%; box-sizing: border-box; background: var(--bg); border: 1px solid var(--line-hi); border-radius: var(--r-sm);
+    width: 100%; max-width: 520px; box-sizing: border-box; background: var(--bg); border: 1px solid var(--line-hi); border-radius: var(--r-sm);
     padding: 7px 9px; font: inherit; font-size: 12.5px; color: var(--text); }
-  .wff textarea { min-height: 56px; resize: vertical; line-height: 1.6; }
+  .wff textarea { min-height: 56px; max-width: none; resize: vertical; line-height: 1.6; }
+  /* 只填一个数的框不该拉满整行 */
+  .wff input[type=number] { max-width: 130px; }
+  .wfrange input { max-width: 110px; }
   .wff input:focus, .wff textarea:focus, .wff select:focus { outline: none; border-color: var(--cyan); }
   .wfopts { display: flex; flex-wrap: wrap; gap: 6px; }
   .wfopt { display: inline-flex; align-items: center; gap: 5px; background: var(--bg); border: 1px solid var(--line-hi); border-radius: 999px;
@@ -517,11 +526,16 @@
   .wfopt:hover { border-color: var(--cyan); }
   .wfopt.on { border-color: var(--cyan); background: rgba(59,111,212,.1); color: var(--cyan); font-weight: 600; }
   .wfrange { display: flex; align-items: center; gap: 8px; }
-  .wfrange input { flex: 1; }
+  .wfrange input { flex: 0 1 110px; }
   .wfrange span { font-size: 12px; color: var(--faint); flex: none; }
   /* ★ 卡内吸底：论文模块的表单有十几项，按钮落在最底下会被输入框切掉 —— 实测第一屏根本
      看不到「开始」，用户既不知道还有多长、也不知道填完点哪。让操作区始终贴在可视区底部。 */
-  .wfacts { position: sticky; bottom: 0; z-index: 2; display: flex; align-items: center; gap: 10px;
+  .wfcard { padding-bottom: 4px; }   /* 吸底条自带 padding，卡片底部不必再留 */
+  /* 吸底条要看得出是【浮在内容上】，否则被它盖住的那半行会被读成「内容被截断了」——
+     五份评审都以为表单到此为止，其实往下滚就有。加一道上边阴影把层次说清楚。 */
+  .wfacts::before { content: ""; position: absolute; left: 0; right: 0; top: -14px; height: 14px;
+    pointer-events: none; background: linear-gradient(to bottom, rgba(20,40,80,0), rgba(20,40,80,.07)); }
+  .wfacts { position: sticky; bottom: 0; z-index: 2; display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
     margin: 8px -18px -16px; padding: 12px 18px; background: var(--card);
     border-top: 1px solid var(--line); border-radius: 0 0 var(--r-md) var(--r-md); }
   /* 与 v19 改版后的 .asksubmit 同款：实心主色 + 白字。
@@ -531,6 +545,8 @@
   .wfgo:hover { filter: brightness(1.06); }
   /* 必填没填满：置灰但仍可点（不阻断），悬停有 title 说明还差什么 */
   .wfgo.dim { background: #9fb4d8; box-shadow: none; }
+  /* 醒目但不做成报错红：用户只是还没填完，不是做错了事 */
+  .wfneed { font-size: 12px; color: #8a6d1f; line-height: 1.5; }
   .wfsteps .gatelegend { flex-basis: 100%; margin-top: 5px; font-size: 11px; color: var(--faint); line-height: 1.6; }
   .wfskip { background: none; border: none; font: inherit; font-size: 12px; color: var(--faint); cursor: pointer; text-decoration: underline; text-underline-offset: 3px; }
   .wfskip:hover { color: var(--cyan); }
@@ -1008,7 +1024,7 @@
         <span><b>点击选择</b> 或拖拽文件到此</span>
         <span class="dzsub">支持一次选择 / 拖拽多个文件</span>
       </label>
-      <div id="upmsg" class="hint">文件会放进 uploads/，可在对话里让 agent 分析。</div>
+      <div id="upmsg" class="hint">上传后回到左边表单里就能选中它。文件只留在本次会话里，不会用于模型训练。</div>
       <div id="uplist"></div>
     </div>
     <div class="panel" id="outpanel">
@@ -2254,10 +2270,14 @@ function buildFormCard({ title, sub, notice, fields, footnote, steps, onSubmit, 
   //   仍然可点（不阻断是设计铁律），只是把代价先说清楚。
   const miss = () => fields.filter((f) => fieldRequired(f, values) && fieldVisible(f, values) &&
     (values[f.id] === undefined || values[f.id] === "" || (Array.isArray(values[f.id]) && !values[f.id].length)))
+  const need = document.createElement("span"); need.className = "wfneed"
   const syncGo = () => {
     const m = miss()
     go.classList.toggle("dim", m.length > 0)
-    go.title = m.length ? "还差：" + m.map((f) => f.label).join("、") : ""
+    // 缺项必须【常驻可见】：写进 title 不悬停就看不见，等于没写。
+    need.textContent = m.length ? "还差：" + m.map((f) => f.label).join("、") : ""
+    need.style.display = m.length ? "" : "none"
+    go.title = m.length ? "填完这几项就能开始" : ""
   }
   const err = document.createElement("div"); err.className = "wferr"; err.style.display = "none"
   go.addEventListener("click", () => {
@@ -2271,7 +2291,7 @@ function buildFormCard({ title, sub, notice, fields, footnote, steps, onSubmit, 
       if (box.isConnected) { go.disabled = false; go.textContent = submitText || "开始" }
     })
   })
-  acts.appendChild(go)
+  acts.appendChild(go); acts.appendChild(need)
   if (onSkip) { const sk = document.createElement("button"); sk.type = "button"; sk.className = "wfskip"; sk.textContent = "跳过表单，直接打字"; sk.addEventListener("click", onSkip); acts.appendChild(sk) }
   box.appendChild(acts); box.appendChild(err)
   return box
@@ -2299,6 +2319,8 @@ const fieldRequired = (f, values) => !!f.required || (!!f.requiredWhen && condOk
 function fieldEl(f, values, onChange, allFields) {
   const wrap = document.createElement("div"); wrap.className = "wff"
   const lab = document.createElement("label"); lab.textContent = f.label
+  if (f.type === "multi" || f.type === "files") lab.appendChild(Object.assign(document.createElement("span"),
+    { className: "wfmulti", textContent: "可多选" }))
   if (fieldRequired(f, values)) { const r = document.createElement("span"); r.className = "req"; r.textContent = "*"; lab.appendChild(r) }
   wrap.appendChild(lab)
   const mk = (tag, props) => Object.assign(document.createElement(tag), props)
@@ -2389,10 +2411,10 @@ function fieldEl(f, values, onChange, allFields) {
     if (!UPLOADED.length) {
       // 就地给一个上传按钮：此前只写一句「用左侧『上传数据』」——而那块面板在【右上角】，
       // 方向说反了；就算说对，勾完字段还要满屏找入口也不合理。#up 是页面上那个文件 input。
-      const pick = mk("button", { type: "button", className: "wfopt", textContent: "＋ 上传数据文件" })
+      const pick = mk("button", { type: "button", className: "wfopt", textContent: "＋ " + (f.uploadText || "上传文件") })
       pick.addEventListener("click", () => document.getElementById("up")?.click())
       opts.appendChild(pick)
-      opts.appendChild(mk("span", { className: "wfhelp", textContent: "传完回到这里就能选；也可以用右上角「上传数据」面板。" }))
+      opts.appendChild(mk("span", { className: "wfhelp", textContent: (f.accept ? "支持 " + f.accept + "。" : "") + "传完这里会列出文件，点一下即可选中。" }))
       f = { ...f, help: "" }
     }
     for (const name of UPLOADED) {
