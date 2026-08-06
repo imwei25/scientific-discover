@@ -967,7 +967,6 @@
     </div>
     <!-- 分享：把当前会话导出成一个自包含 HTML（含思考与工具调用，默认折叠；不含任何产出文件） -->
     <button id="shareBtn" class="hbtn" type="button" title="分享：把本次会话导出成一个 HTML 文件"></button>
-    <button id="setBtn" class="hbtn" type="button" title="模型 API 设置"></button>
     <button id="wsBtn" class="hbtn" type="button" title="模块工作台（换个功能开新会话）"></button>
   </div>
 </header>
@@ -1152,7 +1151,10 @@
       <label class="mm-field"><span>模型 ID</span><input id="apiModel" class="mm-input" type="text" placeholder="如 deepseek-chat" autocomplete="off" spellcheck="false" /></label>
       <div class="mm-msg info" id="apiMsg"></div>
       <div class="mm-actions">
-        <button id="apiReset" class="mm-btn ghost" type="button" style="display:none">切回云端网关</button>
+        <!-- 「切回云端」常驻显示（此前只在"已走自定义 API 且接了平台"时才出现）：它是从自建
+             路由退回平台的唯一入口，藏起来等于用户填错 key 之后找不到回头路。用不上的时候
+             置灰并在 title 里说明为什么。 -->
+        <button id="apiReset" class="mm-btn ghost" type="button">切回云端</button>
         <span style="flex:1"></span>
         <button id="apiTest" class="mm-btn ghost" type="button">测试连通</button>
         <button id="apiSave" class="mm-btn primary" type="button">保存并生效</button>
@@ -1298,7 +1300,7 @@ document.getElementById("selModeBtn").innerHTML = ic("checkSquare")
 sendBtn.innerHTML = ic("send") + '<span class="send-label">发送</span>'
 stopBtn.innerHTML = ic("stop") + '<span class="send-label">终止</span>'
 setIc("new", "plus"); setIc("attachBtn", "paperclip")
-setIc("userMenuBtn", "dots"); setIc("shareBtn", "share"); setIc("setBtn", "cog")
+setIc("userMenuBtn", "dots"); setIc("shareBtn", "share")
 
 // ---- Toast：一句话的轻提示（顶部居中，两秒自动消失）----
 let toastTimer = null
@@ -1344,8 +1346,9 @@ document.getElementById("shareBtn").addEventListener("click", async () => {
   } catch (e) { toast("导出失败：" + (e && e.message || e)) }
   finally { btn.disabled = false }
 })
-// 顶栏「设置」＝模型 API 设置（此前只能在对话框输入 api-config 唤起，桌面/单机版没有可见入口）
-document.getElementById("setBtn").addEventListener("click", () => openApiCfg())
+// 【顶栏没有「模型 API 设置」按钮，这是有意的】默认路由就是云端，普通用户不该被引着去
+// 填自己的 key（填错就把自己踢出平台调度，还看不出为什么不能用）。要改自建路由的人，
+// 在对话框输入 api-config 即可唤起同一个窗口（见下面 f 的 submit 处理）。
 
 document.getElementById("logoutBtn").innerHTML = ic("logout") + "<span>退出登录</span>"
 // 顶栏「模块工作台」：登录后的模块选择页（workspace.html），随时能回去换个功能开新会话
@@ -3508,7 +3511,7 @@ function openStream(url) {
 const apiModal = document.getElementById("apiModal")
 const apiMsgEl = document.getElementById("apiMsg")
 const apiSetMsg = (t, m) => { apiMsgEl.className = "mm-msg " + t; apiMsgEl.textContent = m }
-// 渲染"当前走哪条路"，并决定要不要给出「切回云端网关」入口。
+// 渲染"当前走哪条路"，并把「切回云端」按钮调到该有的状态。
 // 判据用后端给的 route（见 server.mjs 的 currentRoute）——前端自己拿 isCustom 判会错：
 // 接了网关时后台也是走 CUSTOM_PROVIDER_ID 的。
 function renderApiRoute(m) {
@@ -3517,7 +3520,17 @@ function renderApiRoute(m) {
   const gwHost = (() => { try { return new URL(m.gatewayURL).host } catch { return m.gatewayURL || "" } })()
   const c = (m && m.cloud) || {}
   const route = m && m.route
-  resetBtn.style.display = "none"
+  // 「切回云端」常驻：一直看得见，只是在用不上时置灰并说明原因。
+  // 走平台（cloud/gateway）时无处可切；没登录也没网关 key 时切了会落到没有 provider 的状态，
+  // 所以这两种情况禁用而不是让它点下去失败。
+  {
+    const onPlatform = route === "cloud" || route === "gateway"
+    resetBtn.textContent = "切回" + (c.loggedIn ? "云端账号" : (m && m.gateway ? "云端网关" : "云端"))
+    resetBtn.disabled = onPlatform || !(m && m.gateway)
+    resetBtn.title = onPlatform ? "当前已经走云端，无需切换"
+      : (m && m.gateway) ? "清掉自设 API，回到平台统一调度"
+      : c.configured ? "本机尚未登录云端账号：先在对话框输入 account 登录" : "本机未接入云端"
+  }
 
   if (route === "cloud") {
     box.className = "mm-route gw"
@@ -3531,9 +3544,8 @@ function renderApiRoute(m) {
     box.className = "mm-route custom"
     const backTo = c.loggedIn ? "云端账号" : "云端网关"
     box.innerHTML = "当前：<b>自定义 API</b>（" + esc(m.baseURL || "") + "）—— 走你自己的路由，<b>不计入平台额度</b>。<br>" +
-      (m.gateway ? "要回到平台统一调度，点右下的「切回" + backTo + "」。"
+      (m.gateway ? "要回到平台统一调度，点左下的「切回" + backTo + "」。"
                  : (c.configured ? "本机尚未登录云端账号；输入 <b>account</b> 可登录。" : "本机未接入云端。"))
-    if (m.gateway) { resetBtn.style.display = ""; resetBtn.textContent = "切回" + backTo }
   } else {
     box.className = "mm-route custom"
     box.innerHTML = c.configured
@@ -3561,13 +3573,13 @@ async function openApiCfg() {
 // 切回云端网关：清掉自设配置、按网关重写 provider（与重启后的默认行为一致）
 async function resetToGateway(force) {
   const btn = document.getElementById("apiReset"); btn.disabled = true
-  apiSetMsg("info", "切回云端网关并重启后台中…（约数秒）")
+  apiSetMsg("info", "切回云端并重启后台中…（约数秒）")
   try {
     const r = await (await fetch("api/model/reset", {
       method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ force: !!force }),
     })).json()
     if (r.ok) {
-      apiSetMsg("ok", "已切回云端网关。页面即将刷新…")
+      apiSetMsg("ok", "已切回云端。页面即将刷新…")
       setTimeout(() => location.reload(), 1200)
       return
     }
@@ -3849,8 +3861,10 @@ document.getElementById("clLogout").addEventListener("click", async () => {
 
 // 首启引导：按当前形态决定弹哪个窗。
 //   接了云端但没登录 / 登录了但没改密 → 云端账号窗（桌面版的常态）
-//   既没平台也没自设模型 → 模型 API 设置窗（纯单机形态）
-//   云端多用户容器恒有 gateway，两个都不弹。
+//   云端多用户容器恒有 gateway，什么都不弹。
+// 【首启不再弹「模型 API 设置」】默认路由是云端，新装的用户不该一进来就被要求填 API key
+// —— 那既让人以为"不填就用不了"，填了还会把自己从平台调度里摘出去。真要自建路由的人
+// 在对话框输入 api-config 唤起即可。探不到平台时只让登录窗兜底，别再引导填 key。
 ;(async () => {
   // 【探不到就按"未登录"处理，绝不放进聊天界面】原来这里是 try{...}catch{}：网关慢一点、
   // 刚重启完 opencode 的那几秒、或本机负载高把 8 秒超时耗光，探测一失败就一道闸都不设，
@@ -3868,7 +3882,6 @@ document.getElementById("clLogout").addEventListener("click", async () => {
   if (c.loggedIn && c.mustChangePassword) return openCloud(true)
   if (c.loggedIn && cloudLocked()) return openCloud(true)   // 闲置锁屏中：账号还登着，但要输口令才能进来
   if (!c.configured) setCloudLocked(false)                  // 不是云端账号形态就没有锁屏这回事，别留个解不开的标记
-  if (!m.gateway && !m.isCustom) openApiCfg()
 })()
 f.addEventListener("submit", (e) => {
   e.preventDefault()
