@@ -128,10 +128,6 @@ export const WORKFLOWS = {
         placeholder: "原样填写，没有就留空（会标『待补充』，不会编造）" },
       { id: "registryNo", label: "临床试验注册号", type: "text", when: { field: "materials", has: "registry" },
         placeholder: "如 NCT01234567 / ChiCTR2400000000；没有就留空（会标『待补充』，不会编造）" },
-      { id: "journalTier", label: "目标期刊梯队", type: "select", default: "target", options: [
-        // 选项文字只给中文：英文键名已经是 v，再在 t 里写一遍 target/reach/safety 纯属噪音
-        { v: "target", t: "主投（推荐）" }, { v: "reach", t: "冲刺更高一档" }, { v: "safety", t: "保底" }],
-        help: "投稿前就想好被拒后下一站，省来回。" },
       { id: "journalName", label: "已经想好具体期刊", type: "text",
         placeholder: "填了就按该刊稿约排版；留空则用通用送审格式" },
       ...JOURNAL_FILTER,

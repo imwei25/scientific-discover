@@ -509,6 +509,24 @@
   /* 帮助文字：所有"这不是影响因子""未脱敏不得进统计"之类的反误导说明都写在这里。
      原来 11px + --faint（白底对比度约 2.9:1，低于 WCAG AA 的 4.5:1）等于写了没人看得见。 */
   .wff .wfhelp { font-size: 12px; color: #55657a; line-height: 1.6; margin-top: 5px; }
+  /* 说明「？」：静态只是个小圆点，不抢标题的视线 */
+  .wfdot { position: relative; display: inline-flex; align-items: center; justify-content: center;
+    width: 14px; height: 14px; margin-left: 5px; border-radius: 50%; vertical-align: 1px;
+    background: var(--chip); color: var(--faint); border: 1px solid var(--line-hi);
+    font-size: 10px; font-weight: 700; cursor: help; user-select: none; }
+  .wfdot:hover { background: var(--cyan); color: #fff; border-color: var(--cyan); }
+  /* fixed 而非 absolute：位置由 JS 按实测坐标给（见 helpDot），既能夹在视口内不被裁，
+     也不受任何祖先 overflow 的影响。--ax 是箭头相对气泡左边的位置。 */
+  .wftip { position: fixed; left: 0; top: 0; --ax: 50%;
+    z-index: 90; width: max-content; max-width: min(300px, calc(100vw - 24px));
+    padding: 7px 10px; border-radius: var(--r-sm);
+    background: #24344b; color: #eef4ff; font-size: 12px; font-weight: 400; line-height: 1.65;
+    text-align: left; white-space: normal; box-shadow: 0 6px 20px rgba(20,40,80,.28);
+    opacity: 0; visibility: hidden; transition: opacity .12s; pointer-events: none; }
+  .wftip::after { content: ""; position: absolute; left: var(--ax); top: 100%; margin-left: -5px;
+    border: 5px solid transparent; border-top-color: #24344b; }
+  .wftip.below::after { top: auto; bottom: 100%; border-top-color: transparent; border-bottom-color: #24344b; }
+  .wfdot:hover .wftip { opacity: 1; visibility: visible; }
   /* 字段分组小标题：把"检索到的文献要满足什么条件"和上面的"你想投哪本刊"隔开 */
   .wfsec { font-size: 11.5px; font-weight: 600; color: #46586e; letter-spacing: .02em;
     margin: 16px 0 9px; padding-top: 11px; border-top: 1px solid var(--line-hi); }
@@ -2118,7 +2136,7 @@ function renderWelcome() {
       + '<div class="wsub">' + esc(cur.desc || "") + '</div>'
     const bar = document.createElement("div"); bar.className = "modhint"
     const txt = document.createElement("span")
-    txt.innerHTML = '当前在 <b>' + esc(cur.name) + '</b> 模块 —— 本次对话只会用这个模块的能力。'
+    txt.innerHTML = '当前在 <b>' + esc(cur.name) + '</b> 模块'
     const go = document.createElement("button"); go.type = "button"; go.className = "modswitch"
     go.textContent = "换个模块"
     go.title = "回到工作台重新选功能（模块在新建会话时绑定，开聊后不可更改）"
@@ -2327,6 +2345,31 @@ const fieldVisible = (f, values) => condOk(f.when, values) && (!f.whenAny || f.w
 const fieldRequired = (f, values) => !!f.required || (!!f.requiredWhen && condOk(f.requiredWhen, values))
 // allFields：整张表单的字段定义。option 的 sets 回滚时要查目标字段自己的默认值，
 // 只有本字段 f 是不够的（sets 指向的是【别的】字段，如 mode 的选项去设 fulltext）。
+/** 说明用的「？」：平时只占一个小圆点，鼠标移上去才把话展开 */
+function helpDot(text) {
+  const d = document.createElement("span"); d.className = "wfdot"; d.textContent = "?"
+  d.setAttribute("role", "note")
+  // 原生 title 也留着：触屏和读屏设备上没有 hover，气泡永远出不来
+  d.title = text
+  const tip = document.createElement("span"); tip.className = "wftip"; tip.textContent = text
+  d.appendChild(tip)
+  // 悬停时按实测位置定位：靠左/靠右的图标若还按「以自己为中心」展开，就会有半截伸到
+  // 卡片外被裁掉。夹在视口内 8px 处，箭头单独对准图标。
+  d.addEventListener("mouseenter", () => {
+    const r = d.getBoundingClientRect()
+    tip.style.left = "0px"; tip.style.top = "0px"      // 先归零再量，免得上一次的位移算进宽度
+    const w = tip.offsetWidth, h = tip.offsetHeight, pad = 8
+    const mid = r.left + r.width / 2
+    const x = Math.max(pad, Math.min(mid - w / 2, innerWidth - w - pad))
+    // 上方放不下就翻到下方（第一个字段的说明就属于这种）
+    const up = r.top - h - 7 >= pad
+    tip.classList.toggle("below", !up)
+    tip.style.left = x + "px"
+    tip.style.top = (up ? r.top - h - 7 : r.bottom + 7) + "px"
+    tip.style.setProperty("--ax", (mid - x) + "px")   // 箭头对准图标，而不是气泡中点
+  })
+  return d
+}
 function fieldEl(f, values, onChange, allFields) {
   const wrap = document.createElement("div"); wrap.className = "wff"
   const lab = document.createElement("label"); lab.textContent = f.label
@@ -2425,7 +2468,7 @@ function fieldEl(f, values, onChange, allFields) {
       const pick = mk("button", { type: "button", className: "wfopt", textContent: "＋ " + (f.uploadText || "上传文件") })
       pick.addEventListener("click", () => document.getElementById("up")?.click())
       opts.appendChild(pick)
-      opts.appendChild(mk("span", { className: "wfhelp", textContent: (f.accept ? "支持 " + f.accept + "。" : "") + "传完这里会列出文件，点一下即可选中。" }))
+      opts.appendChild(helpDot((f.accept ? "支持 " + f.accept + "。" : "") + "传完这里会列出文件，点一下即可选中。"))
       f = { ...f, help: "" }
     }
     for (const name of UPLOADED) {
@@ -2514,7 +2557,9 @@ function fieldEl(f, values, onChange, allFields) {
     inp.addEventListener("input", () => { values[f.id] = inp.value || undefined })
     wrap.appendChild(inp)
   }
-  if (f.help) wrap.appendChild(Object.assign(document.createElement("div"), { className: "wfhelp", textContent: f.help }))
+  // 说明文字改成标题后的「？」：常驻灰字把表单撑得又长又密，而这些话多数人只在拿不准时才想看。
+  // 挂在 label 上（不是单独一行），鼠标移上去才展开。
+  if (f.help) lab.appendChild(helpDot(f.help))
   return wrap
 }
 /**
