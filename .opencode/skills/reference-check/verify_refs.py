@@ -341,18 +341,46 @@ def resolve_pmid(pmid):
     return rec.get("title", ""), meta
 
 
-def title_search(title):
-    """只有标题时，去 Europe PMC 反查是否真有这篇。返回最佳匹配 (title, sim, meta)。"""
-    params = {"query": f'TITLE:"{epmc_escape(title)}"', "format": "json", "pageSize": 3, "resultType": "core"}
+def _epmc_title_query(query, probe):
+    """跑一次 Europe PMC 检索，按与 probe 的相似度取最佳匹配。"""
+    params = {"query": query, "format": "json", "pageSize": 5, "resultType": "core"}
     r = _get(EPMC, params=params)
     r.raise_for_status()
     best = (None, 0.0, None)
     for rec in r.json().get("resultList", {}).get("result", []):
-        s = title_sim(title, rec.get("title", ""))
+        s = title_sim(probe, rec.get("title", ""))
         if s > best[1]:
             best = (rec.get("title", ""), s,
                     {"journal": rec.get("journalTitle", ""), "year": rec.get("pubYear", ""),
-                     "doi": rec.get("doi", ""), "pmid": rec.get("pmid", "")})
+                     "doi": rec.get("doi", ""), "pmid": rec.get("pmid", ""),
+                     # ★ 必须带上作者：title-only 命中后要走 _verdict_with_meta 做首作者/年份交叉核对，
+                     #   meta 里没有 authors 的话那一步等于白跑（见 verify_one 的 title 分支）。
+                     "authors": rec.get("authorString", "")})
+    return best
+
+
+def title_search(title):
+    """只有标题时，去 Europe PMC 反查是否真有这篇。返回最佳匹配 (title, sim, meta)。
+
+    ★ 两级检索，缺一不可：
+      ① 先用 TITLE:"整串" 做精确短语查 —— 命中率最高、误配最少；
+      ② 精确查扑空时，换成 TITLE:(不带引号) 再查一次。
+    为什么要 ②：.txt 输入（SKILL.md 明确推荐的「每行一条完整著录」）传进来的 claimed_title
+    是【整行著录】（作者+标题+刊名+卷期页），拿它做短语查必然零命中 —— 于是
+    **凡是没有 DOI/PMID 的引用一律被判「疑似虚构」**，而中文期刊文献和老文献大量属于这一类。
+    实测：一条 100% 正确的 EMPEROR-Reduced 著录被判 NOT_FOUND，只喂裸标题却判 OK。
+    一个"查真假"的工具在自己的核心功能上系统性误报，比查不出更糟。
+    """
+    probe = guess_title(title) or title
+    best = _epmc_title_query(f'TITLE:"{epmc_escape(probe)}"', probe)
+    if best[0] and best[1] >= 0.85:
+        return best
+    # 退一步：不加引号，只取前 12 个词（Europe PMC 对超长查询会直接零命中）
+    words = re.findall(r"[\w一-鿿]+", probe)[:12]
+    if words:
+        loose = _epmc_title_query("TITLE:(%s)" % epmc_escape(" ".join(words)), probe)
+        if loose[1] > best[1]:
+            best = loose
     return best
 
 
@@ -500,12 +528,23 @@ def verify_one(entry):
             ft, sim, meta = title_search(claimed)
             if ft and sim >= 0.85:
                 extra = f" (匹配 DOI:{meta.get('doi') or 'NA'})" if meta else ""
-                return dict(verdict="OK", id="title", found_title=ft, sim=round(sim, 2),
-                            note="按标题查到真实文献" + extra,
+                # ★ 必须走 _verdict_with_meta —— DOI/PMID 两条分支都走了，唯独这条此前直接 return，
+                #   于是"文献真实存在、但著录的期刊/年份是错的"被判成 OK 打绿勾。
+                #   实测：.bib 里写着 Lancet 2018，查到的是 NEJM 2020，照样 OK ——
+                #   用户会继续把 "Lancet 2018;392" 投出去。
+                v, note = _verdict_with_meta("OK", "按标题查到真实文献" + extra, entry, meta)
+                return dict(verdict=v, id="title", found_title=ft, sim=round(sim, 2),
+                            note=note,
                             _match_doi=(meta or {}).get("doi") or None,
                             _match_pmid=(meta or {}).get("pmid") or None, **entry)
-            return dict(verdict="NOT_FOUND", id="title", found_title=ft or "",
-                        sim=round(sim, 2), note="按标题查不到匹配——疑似虚构，请人工确认", **entry)
+            # 查不到时【不再一口咬定"疑似虚构"】：没有 DOI/PMID 的引用本来就只能靠标题查，
+            # 而中文期刊、老文献、会议摘要大量不在 Europe PMC 里 —— 判"虚构"是误报，
+            # 而这个误报的代价是用户去删一条真实存在的文献。降级成 CHECK：说清楚是"没查到"，
+            # 不是"不存在"。真·编造的条目仍会因为查不到而进人工复核清单，一条都不会漏掉。
+            return dict(verdict="CHECK", id="title", found_title=ft or "",
+                        sim=round(sim, 2),
+                        note="没有 DOI/PMID，按标题也没查到匹配——可能是编造的，也可能只是不在检索库里"
+                             "（中文期刊 / 老文献 / 会议摘要常见）。请人工确认这条是否真实存在", **entry)
         return dict(verdict="ERROR", id="", found_title="", sim=0.0,
                     note="没提取到 DOI/PMID/标题", **entry)
     except Exception as e:
@@ -549,6 +588,38 @@ def parse_input(path, positional):
     return entries
 
 
+_AUTHOR_SEG = re.compile(r"\bet\s+al\b", re.I)
+_JOURNALISH = re.compile(r"\d{4}\s*[;:；，,]\s*\d+|\bdoi\b|\bPMID\b|\d+\s*[（(]\d+[)）]\s*[:：]", re.I)
+
+
+def guess_title(text):
+    """从一条【完整著录】里猜出标题那一段；猜不出就原样返回。
+
+    只在检索时用来构造查询词，不改变报告里回显给用户的 claimed_title ——
+    猜错了最多是多查一次，绝不能让用户看到一个被程序裁过的"他没写过的标题"。
+    """
+    t = (text or "").strip()
+    if not t:
+        return ""
+    t = re.sub(r"^\s*[\[\(【]?\d{1,3}[\]\)】.、]\s*", "", t)   # 砍掉 "[1]" / "1." / "(1)" 这类序号
+    segs = [s.strip() for s in re.split(r"(?<=[.．。])\s+", t) if s.strip()]
+    if len(segs) <= 1:
+        return t
+
+    def is_authors(s):
+        s2 = s.rstrip(".．。").strip()
+        if _AUTHOR_SEG.search(s2):
+            return True
+        parts = [p.strip() for p in s2.split(",") if p.strip()]
+        # "Packer M, Anker SD, Butler J" —— 逗号分隔，每段都是 姓 + 首字母缩写
+        return len(parts) >= 2 and all(re.fullmatch(r"[^\s,]+\s+[A-Z]{1,3}", p) for p in parts)
+
+    cands = [s for s in segs if not is_authors(s) and not _JOURNALISH.search(s)]
+    if not cands:
+        return t
+    return max(cands, key=len).rstrip(".．。").strip()
+
+
 def extract(text):
     """从一行文字里抽 DOI/PMID/标题。"""
     doi = DOI_RE.search(text)
@@ -559,7 +630,13 @@ def extract(text):
         claimed = ""
     if pmid and re.fullmatch(r"PMID:?\s*\d+", text.strip(), re.I):
         claimed = ""
+    # 从著录里顺手抽一个年份（1900–2099），供 _verdict_with_meta 做交叉核对。
+    # .bib 走解析器有 claimed_year，而 .txt 那条路此前完全没有 —— 于是"期刊/年份写错"
+    # 这类著录错误在 .txt 输入下一个都抓不出来。取【最后一个】四位数：著录里年份通常在刊名之后，
+    # 而标题里偶尔也含年份（如 "2021 ESC Guidelines"），取最后一个更稳。
+    years = re.findall(r"\b(19\d{2}|20\d{2})\b", text or "")
     return {"raw": text, "claimed_title": claimed,
+            "claimed_year": years[-1] if years else "",
             "doi": doi.group(0) if doi else None,
             "pmid": pmid.group(1) if pmid else None}
 
@@ -621,7 +698,13 @@ def main():
 
     entries = parse_input(args.input, args.ids)
 
-    if not args.no_shape_check:
+    # ★ 形态体检只对 .txt 有意义。它读的是【物理行】，而 .bib/.ris 的绝大多数行长这样：
+    #   `  journal = {Lancet},` —— 当然不像文献著录，于是一个完全合法的 8 条目 .bib
+    #   会被判成"只有 9% 的行像著录"直接 sys.exit，而它吐的错误提示里偏偏还写着"用 .bib 更准"。
+    #   实测后果：agent 只好加 --no-shape-check 硬闯，等于被这条提示诱导着关掉一个真实存在的安全网。
+    #   结构化格式本来就有条目数可查，不需要形态启发式。
+    _ext = os.path.splitext(args.input or "")[1].lower()
+    if not args.no_shape_check and _ext not in (".bib", ".ris"):
 
         try:
 
@@ -678,7 +761,10 @@ def main():
             if r["found_title"] and r["found_title"] != r["claimed_title"]:
                 f.write(f"  - 实际匹配到：{r['found_title']}\n")
 
-    bad = sum(dist.get(k, 0) for k in ("RETRACTED", "FABRICATED", "ID_FAKE", "NOT_FOUND", "MISMATCH"))
+    # CHECK 必须计入。它现在承载两种真正要人看的情况：① 没有 DOI/PMID 且按标题没查到
+    # （可能编造、也可能只是不在库里）；② 查到了但年份/首作者对不上（张冠李戴）。
+    # 不计的话，一份含 2 条存疑引用的报告会在末尾打出"可疑/存疑 0 条"，把人直接劝走。
+    bad = sum(dist.get(k, 0) for k in ("RETRACTED", "FABRICATED", "ID_FAKE", "NOT_FOUND", "MISMATCH", "CHECK"))
     print("-" * 50)
     print(f"结果：{dict(dist)}")
     print(f"可疑/存疑 {bad} 条。报告见 {args.outdir}/reference_check.md / .csv")

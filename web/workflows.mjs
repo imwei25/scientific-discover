@@ -545,14 +545,24 @@ export const WORKFLOWS = {
       { ...LANG, label: "核查报告用什么语言", help: "只影响报告，不改动你的稿件。" },
     ],
     steps: [
+      // ★ 三个勾选项由【同一个脚本一次跑完】（verify_refs.py 本来就同时验 DOI、比标题、查撤稿），
+      //   所以条件必须是 whenAny。此前只认 refs：用户想"我的文献都读过、只验一下 DOI 抄错没有"
+      //   而取消勾选「假引用」，整条流水线就退化成零步骤 —— 没有闸、没有流程线、没有产物契约，
+      //   而界面上什么异常都看不出来。
       { id: "refcheck", name: "引用核查", skill: "reference-check", gate: true,
-        when: { field: "checks", has: "refs" },
+        whenAny: [{ field: "checks", has: "refs" }, { field: "checks", has: "doi" },
+                  { field: "checks", has: "retracted" }],
         emits: ["refcheck_report.md", "reference_check*.md", "reference_check*.csv"], render: "refcheck" },
       { id: "review", name: "方法与统计审校", skill: "peer-review", gate: true,
         // 格式与体例也由这一步顺带查（peer-review 的清单里本就含体例）—— 别让选项勾了却没有任何一步走它
         whenAny: [{ field: "checks", has: "stats" }, { field: "checks", has: "format" }],
         emits: ["review_report.md"], render: "review" },
-      { id: "integrity", name: "数据完整性自查", skill: "data-integrity", gate: true,
+      // ★ gateBy:"signals" —— 这道闸【不能】按裁定语判。data-integrity 的铁律是"只出待核信号、
+      //   不下造假结论"，也就是它被明令禁止写出 gateFailed 认得的那些措辞，于是通用判据永远判不了红。
+      //   实测：报告里 6 条硬性不自洽（含生理不可能的 eGFR=1220），步骤条照打绿勾。改按信号条数判。
+      //   failLabel：界面上别写"需返工"——那等于替它下了"数据有问题"的结论，与 signal-not-verdict 打架。
+      { id: "integrity", name: "数据完整性自查", skill: "data-integrity", gate: true, gateBy: "signals",
+        failLabel: "有待核信号",
         when: { field: "checks", has: "integrity" },
         emits: ["integrity_report.md", "audit/*"], render: "integrity",
         hint: "只出待核信号、不下造假结论" },
@@ -574,7 +584,11 @@ export const WORKFLOWS = {
           { v: "language", t: "语言润色（语法 / 措辞 / 流畅度）" },
           { v: "style", t: "对齐目标期刊写作风格" },
           { v: "logic", t: "梳理段落逻辑与衔接" }] },
-      { id: "journalName", label: "目标期刊", type: "text", when: { field: "goals", has: "style" },
+      // ★ 不能只挂在「对齐期刊风格」上：出 Word/PDF 的【排版】同样要期刊（render-docx --journal 预设）。
+      //   实测一个"只想去 AI 味 + 出中华系列格式 Word"的用户，表单里没有任何地方能填期刊，
+      //   模型只好在交付之后反问 —— 而那时稿子已经按通用送审格式排完了。
+      { id: "journalName", label: "目标期刊", type: "text",
+        whenAny: [{ field: "goals", has: "style" }, { field: "outFmt", ne: "md" }],
         placeholder: "填了会去查该刊稿约；查不到会如实说明，不凭印象编" },
       { id: "strength", label: "润色强度", type: "select", default: "standard", options: [
         { v: "light", t: "保守（只动明显问题）" }, { v: "standard", t: "标准（推荐）" },
@@ -629,11 +643,38 @@ export function skillsOf(mod) {
 }
 export const primaryOf = (mod) => WORKFLOWS[mod]?.primary || null
 
+/**
+ * 把 intake 里声明的 default 回填进表单值。
+ *
+ * 【为什么必须有】默认值此前【只】在前端建卡时播种（index.html 的 buildFormCard）。
+ * 而"跳过表单直接打字"是设计上允许、且实测最常见的路径 —— 那条路根本不经过前端表单，
+ * 于是服务端拿到的是 `{}`，所有 when 条件按"字段未填"求值：
+ *   · refcheck：三个步骤的 when 全部不成立 → stepsFor 回【空数组】→ 步骤条一片空白、
+ *     pipelineLine/artifactLine 退化成空串、三道闸一道都没排上 → 这一轮实际上【没有任何闸】。
+ *   · humanize：protectRefs 默认"带角标整句一字不动"这条保护【压根没进上下文】，
+ *     模型只能自己猜要不要改别人论文里的"显著低于"。
+ * 两处都是哑失败：界面看不出少了东西，用户以为流程照常走完了。
+ *
+ * 只填 undefined，绝不覆盖用户的显式选择 —— protectRefs 的默认是 true，
+ * 用 `||` 之类的写法会把用户特意选的 false 又翻回 true。
+ */
+export function withDefaults(mod, values = {}) {
+  const w = WORKFLOWS[mod]
+  if (!w) return values || {}
+  const out = { ...(values || {}) }
+  for (const f of w.intake || []) {
+    if (f.default === undefined || out[f.id] !== undefined) continue
+    out[f.id] = Array.isArray(f.default) ? [...f.default] : f.default
+  }
+  return out
+}
+
 // ---- 派生：按 intake 值裁剪出本次实际要走的步骤 ----
 // when 不成立的整步剔除；first 成立的步骤提到最前（前瞻性研究的预注册锁）。
-export function stepsFor(mod, values = {}) {
+export function stepsFor(mod, rawValues = {}) {
   const w = WORKFLOWS[mod]
   if (!w) return []
+  const values = withDefaults(mod, rawValues)
   const keep = w.steps.filter((s) => visible(s, values))
   const head = [], rest = []
   for (const s of keep) (condOk(s.first, values) && s.first ? head : rest).push(s)
@@ -726,7 +767,7 @@ export function rendererFor(name) {
 // 抄 index.html 的 zScopePrefix()：把结构化输入拼成一段【…】块塞在用户消息前面。
 // 【格式约束】必须是纯文本、可读、并明确声明"这是用户通过表单提交的"，否则 agent 会把它
 // 当成系统噪音忽略掉。末尾那句反幻觉提示是必须的 —— 表单必然有留空项，不写死它就会去编。
-const fmtVal = (f, v) => {
+const fmtVal = (f, v, upDir) => {
   if (v === undefined || v === null || v === "") return null
   const label = (val) => (f.options || []).find((o) => o.v === val)?.t || val
   if (f.type === "bool") return v ? "是" : "否"
@@ -742,7 +783,19 @@ const fmtVal = (f, v) => {
     if (min !== undefined && max !== undefined) return `${min} – ${max}${f.unit ? " " + f.unit : ""}`
     return min !== undefined ? `≥ ${min}` : `≤ ${max}`
   }
-  if (f.type === "files") { const arr = Array.isArray(v) ? v : [v]; return arr.length ? arr.join("、") : null }
+  // ★ 文件字段必须给【可直接打开的路径】，不能只给裸文件名。
+  //   实测：任务卡写 "待润色的稿件：manu.md"，而 agent 的工作目录是【产物目录】，
+  //   于是第一次 read 直接失败，再花 2–3 次 bash/glob 去别处摸索（最慢一次 32 秒），
+  //   界面上还多一张红色的报错工具卡。前言里其实已经给了上传目录的绝对路径，
+  //   裸文件名等于跟前言抢注意力 —— 两处说法打架，模型未必挑对。
+  //   upDir 未知时（首屏 intake 卡是在会话建立【之前】填的，服务端此刻还没有 sid）
+  //   也要明说"在上传目录下"，别让它以为文件就在当前目录。
+  if (f.type === "files") {
+    const arr = (Array.isArray(v) ? v : [v]).filter(Boolean)
+    if (!arr.length) return null
+    if (upDir) return arr.map((n) => `${String(upDir).replace(/[\\/]+$/, "")}/${n}`).join("、")
+    return arr.join("、") + "（在上传目录下，绝对路径见前言）"
+  }
   if (f.type === "select") return label(v)
   return String(v)
 }
@@ -754,12 +807,14 @@ const fmtVal = (f, v) => {
  * @param fields  字段定义数组
  * @param values  用户填的值
  * @param opts    { footnote, upDir }
+ *                upDir：本会话 uploads/ 的【绝对路径】。给了就把 files 型字段拼成完整路径
+ *                （此前这个参数只写在这行文档里，函数体从没读过它 —— 于是任务卡一直发裸文件名）。
  */
 export function taskCard(modName, title, fields, values = {}, opts = {}) {
   const lines = []
   for (const f of fields || []) {
     if (!visible(f, values)) continue              // 条件没成立的字段压根没显示过，别拼进去
-    const s = fmtVal(f, values[f.id])
+    const s = fmtVal(f, values[f.id], opts.upDir)
     if (s !== null) lines.push(`- ${f.label}：${s}`)
   }
   if (!lines.length) return ""                     // 一项都没填 = 用户跳过了表单，什么都不拼
@@ -921,8 +976,8 @@ export function workflowFor(mod, values) {
     // 重算出与 stepsFor 完全相同的步骤集。漏掉任何一个，那一半条件在前端就恒为"成立"，
     // 界面显示的流程与实际执行的流程就会不一致 —— 而这种错从界面上完全看不出来。
     steps: (values ? stepsFor(mod, values) : w.steps).map((s) => ({
-      id: s.id, name: s.name, skill: s.skill, gate: !!s.gate,
-      optional: values ? isOptional(s, values) : !!s.optional,
+      id: s.id, name: s.name, skill: s.skill, gate: !!s.gate, failLabel: s.failLabel || null,
+      optional: values ? isOptional(s, withDefaults(mod, values)) : !!s.optional,
       hint: s.hint || null, form: s.form || null, render: s.render || null, emits: s.emits || null,
       when: s.when || null, whenAny: s.whenAny || null, first: s.first || null, onFail: s.onFail || null,
     })),
@@ -930,7 +985,8 @@ export function workflowFor(mod, values) {
 }
 
 /** 模块前言里那句"本模块的标准流程"——把步骤链与质量闸讲给 agent 听 */
-export function pipelineLine(mod, values) {
+export function pipelineLine(mod, rawValues) {
+  const values = withDefaults(mod, rawValues)   // 跳过表单时也按默认勾选算，否则整条流程线是空串
   const steps = stepsFor(mod, values)
   if (!steps.length) return ""
   const chain = steps.map((s) => s.name + (isOptional(s, values) ? "(可选)" : "") + (s.gate ? "(闸)" : "")).join(" → ")

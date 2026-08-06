@@ -2315,9 +2315,14 @@ async function showIntake(host, modId) {
 async function startWithForm(modId, values) {
   let card = ""
   try {
+    // ★ sid 必须带上。用户"先上传文件再填表单"时会话【已经建好了】（/api/upload 会现建一个），
+    //   服务端有了 sid 才知道本会话的 uploads 绝对路径，才能把任务卡里的文件字段拼成完整路径
+    //   （不然发出去的是裸文件名，agent 要多花 2–3 次工具调用去找），也才能顺带体检
+    //   "这个文件到底传上来没有"。没有 sid（真·从零开始）时服务端会自动降级，不影响。
     const r = await fetch("api/workflow/form", { method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ module: modId, values }) })
-    if (r.ok) card = (await r.json()).card || ""
+      body: JSON.stringify({ module: modId, values, sid: sessionId || undefined }) })
+    if (r.ok) { const j = await r.json(); card = j.card || ""; (j.warnings || []).forEach((w) => addNote("⚠ " + w)) }
+    else { const j = await r.json().catch(() => null); if (j && j.err) { addNote("⚠ " + j.err); q.focus(); return } }
   } catch (_) {}
   if (!card) { addNote("⚠ 表单没能提交（可能一项都没填，或后台暂时没响应）——可以再点一次「开始」，或直接在输入框里说你的需求。"); q.focus(); return }
   pendingWfCard = card
@@ -2707,11 +2712,15 @@ function stepsBar(steps, done, cur, failed, off) {
     const isFail = fl.has(s.id)
     const isOff = of.has(s.id)
     el.className = "wfstep" + (dn.has(s.id) ? " done" : "") + (isFail ? " failed" : "") + (isCur ? " cur" : "") + (s.gate ? " gate" : "") + (isOff ? " off" : "")
+    // failLabel：个别闸不能说"需返工"。数据完整性自查的铁律是「只出待核信号、不下造假结论」，
+    // 界面替它把话说成"需返工"，等于替它下了"你的数据有问题"这个结论 —— 与技能本身的口径打架。
     el.textContent = (dn.has(s.id) ? "✓ " : isFail ? "✕ " : isCur ? "▸ " : "") + s.name
-      + (isFail ? "·需返工" : "") + (isOff ? "（未启用）" : s.optional ? "(可选)" : "")
+      + (isFail ? "·" + (s.failLabel || "需返工") : "") + (isOff ? "（未启用）" : s.optional ? "(可选)" : "")
     // 把"这是干什么的"和"现在在哪"都说清楚：光靠颜色，色觉障碍与截图场景都传达不到
     el.title = [isOff ? "按你当前的选择，这一步不会跑——勾上对应的选项才会启用"
-        : isFail ? "这道闸跑过了，但结论是未通过——报告里列了要改的问题，改完要重跑本闸"
+        : isFail ? (s.failLabel
+          ? "这一步跑过了，报告里列出了需要你核对的信号——核完原始记录再重跑本步"
+          : "这道闸跑过了，但结论是未通过——报告里列了要改的问题，改完要重跑本闸")
         : isCur ? "当前进行到这一步" : dn.has(s.id) ? "已完成" : "尚未开始",
       s.gate ? "这是质量把关步骤，不通过会退回上游返工" : "", s.hint || ""].filter(Boolean).join("；")
     bar.appendChild(el)
@@ -3038,8 +3047,10 @@ async function submitStepForm(modId, step, values, card) {
   try {
     const r = await fetch("api/workflow/form", { method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ module: modId, step: step.id, values, sid: sessionId }) })
-    if (r.ok) text = (await r.json()).card || ""
-    else failed = true
+    if (r.ok) { const j = await r.json(); text = j.card || ""; (j.warnings || []).forEach((w) => addNote("⚠ " + w)) }
+    // 服务端现在会对缺必填回 400 + 人话文案（与本文件的前端校验同一口径）。把它原样透出来，
+    // 别再笼统说成"后台没响应"——那会让用户去点重试，而真正要做的是补一个字段。
+    else { const j = await r.json().catch(() => null); if (j && j.err) { addNote("⚠ " + j.err); return } failed = true }
   } catch (_) { failed = true }
   // ★ 失败时【保留卡片】。此前无条件先 card.remove() 再判：网络异常或服务端非 200 时，用户填的
   //   一整页勾选无法恢复，而提示还断言是"没勾选任何内容"——三种原因说成一种。首屏表单那条路

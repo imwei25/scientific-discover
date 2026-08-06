@@ -796,9 +796,12 @@ const wfSave = (outDir, st) => {
  * 不核对的话，一份 module 对不上的簿子会被拿去裁剪【另一个模块】的步骤链，前言就成了胡话。
  * 这不是权限问题（技能白名单来自 MODULE_DEFS，不看这个文件），但足以让剧本失效且极难排查。
  */
+// 表单值（含 intake 里声明的默认值）。★ 必须过 withDefaults：跳过表单直接打字这条路
+// 服务端拿到的是 {}，而所有 when 条件按"字段未填"求值 —— refcheck 会因此退化成【零步骤】
+// （没有任何闸），humanize 则丢掉"带角标整句不动"的默认保护。两处都是界面看不出来的哑失败。
 const wfValues = (outDir, modId) => {
   const st = wfLoad(outDir)
-  return (st && st.module === modId && st.form) ? st.form : {}
+  return WF.withDefaults(modId, (st && st.module === modId && st.form) ? st.form : {})
 }
 /**
  * 质量闸的报告到底判没判过。
@@ -823,9 +826,38 @@ const GATE_FAIL_CTX = /(reject|critical|严重问题|硬伤)/i
 // reference-check / data-integrity 的裁定是结构化词，不是散文。两种真实写法：
 //   统计行  `RETRACTED 1，FABRICATED 2，NOT_FOUND 1，MISMATCH 1`（全绿时是 0，不能裸匹配）
 //   表格行  `| [7] | … | **FABRICATED** | 高 |`
-const GATE_FAIL_COUNT = /(FABRICATED|RETRACTED|MISMATCH|NOT[_\s]?FOUND|UNVERIFIED|ERROR)\s*[:：=]?\s*[1-9]/i
-const GATE_FAIL_CELL = /\|\s*\*{0,2}(FABRICATED|RETRACTED|MISMATCH|NOT[_\s]?FOUND)\*{0,2}\s*\|/i
+// ★ CHECK 必须在列表里。verify_refs.py 现在对「没有 DOI/PMID 且按标题没查到」的条目
+//   判 CHECK 而不是 NOT_FOUND —— 因为中文期刊 / 老文献 / 会议摘要大量不在检索库里，
+//   一口咬定"疑似虚构"是误报，代价是用户去删一条真实存在的文献。但**闸照样要红**：
+//   一条没人能确认真假的引用，正是最该让作者自己去核的东西。漏了 CHECK 就等于把这个改动
+//   变成"把假引用悄悄放行"。（_verdict_with_meta 因年份/首作者不符降级出的 CHECK 同理。）
+const GATE_FAIL_COUNT = /(FABRICATED|RETRACTED|MISMATCH|NOT[_\s]?FOUND|UNVERIFIED|CHECK|ERROR)\s*[:：=]?\s*[1-9]/i
+const GATE_FAIL_CELL = /\|\s*\*{0,2}(FABRICATED|RETRACTED|MISMATCH|NOT[_\s]?FOUND|CHECK)\*{0,2}\s*\|/i
 const VERDICT_LINE = /(判定|裁定|结论|总体评价|总评|倾向|建议|verdict|recommendation|decision)/i
+// 「信号型」闸的判据。data-integrity 是唯一一个【被铁律明令禁止写裁定语】的闸
+// （signal not verdict：只出待核信号、不下造假结论）。而上面那四条判据全都在找裁定语
+// （未通过 / 需返工 / major revision / FABRICATED n / 结论行+硬伤）—— 两个设计天然互斥，
+// 结果不是"偶尔漏判"，是【这道闸永远判不了红】。
+// 实测：模型自己在对话里说"三道全红，不建议在现状下排版出件"，报告里列了 6 条硬性不自洽
+// （含生理不可能的 eGFR=1220、3 对完全相同的生物标志物行、死亡数 8 vs 9），
+// 而步骤条上「数据完整性」照打绿勾，导出的 Word 上也不会提到"你的原始数据有 6 处对不上"。
+// 所以按【信号条数】判，不按措辞判：
+//   · audit/REPORT.md 的机器统计行 `信号统计：🟡 Medium 2，🔵 Low 1`（High/Medium 才算）
+//   · integrity_report.md 的人工核对条目 `★1 …`
+// Low 单独出现不拦：那一档大量是良性提示（实测 paperconan 对二分类结局列报"值重复"）。
+const SIGNAL_MED_HIGH = /(High|Medium|高|中)\s*[:：]?\s*([1-9]\d*)/g
+const SIGNAL_ITEM = /^\s*★\s*\d+/m
+function signalGateFailed(t) {
+  if (SIGNAL_ITEM.test(t)) return true
+  let m
+  SIGNAL_MED_HIGH.lastIndex = 0
+  while ((m = SIGNAL_MED_HIGH.exec(t))) {
+    // 只在"信号统计"这类计数行上算数，避免把正文里的"中位数 3"之类误读成信号数
+    const line = t.slice(t.lastIndexOf("\n", m.index) + 1, t.indexOf("\n", m.index) < 0 ? undefined : t.indexOf("\n", m.index))
+    if (/信号|signal|统计|统计：/i.test(line)) return true
+  }
+  return false
+}
 function gateFailed(outDir, step, files) {
   for (const g of step.emits || []) {
     for (const f of files) {
@@ -841,6 +873,9 @@ function gateFailed(outDir, step, files) {
           fp = path.join(fp, inner[0])
         }
         const t = fs.readFileSync(fp, "utf8").slice(0, 20000)
+        // 信号型闸（data-integrity）：它被铁律禁止写裁定语，只能按信号条数判 —— 见 signalGateFailed。
+        // 仍然把下面几条通用判据一并跑一遍：万一模型确实写了"未通过"，没有理由放过。
+        if (step.gateBy === "signals" && signalGateFailed(t)) return true
         if (GATE_FAIL_SURE.test(t) || GATE_FAIL_COUNT.test(t) || GATE_FAIL_CELL.test(t)) return true
         // 正文里的严重条目：结论行的措辞可能被模型写软（实测正文 4 条 **Major**，总评却是
         // "Minor to moderate revision"），只认总评就被绕过。只数【条目行】，标题行不算。
@@ -910,17 +945,43 @@ function wfSyncDone(outDir, modId) {
 // 为什么要 ②③：技能集从"手写几个"变成"按 pipeline 展开的一整条"之后，光靠白名单已经区分不出
 // 模块了（paper 的技能集几乎覆盖全部）。真正让模块成其为模块的是剧本 —— 走哪几步、哪几步是闸、
 // 闸不过退到哪。产物契约则是界面能把结果渲染成表格/文献卡片的前提。
+/**
+ * 「本模块之外的需求该去哪个模块」的对照表，注入进模块前言。
+ *
+ * 【为什么必须注入】此前前言里把目的地写死成「自由对话」。而 `skillHome()` 早就能算出正确归属，
+ * 它只挂在【硬闸】那条路上（agent 真去调了越权技能才触发）。实测最常见的路径根本不是硬闸 ——
+ * 模型看了前言就【主动拒绝、一个工具都没调】，于是用户拿到的永远是那句写死的错指路：
+ *   · 在「文章润色」里要求画投稿级图 → 被指去「自由对话」，而正确答案是「数据统计与分析」；
+ *   · 在「文稿核查与审校」里要求去 AI 味 → 被指去「自由对话」，而正确答案是「文章润色」。
+ * 用户照做，等于放弃了专为这件事做的模块（连同它的表单与流程）。
+ *
+ * 另外只列 `moduleUsable()` 为真的模块：多用户部署里 `ALLOWED_MODULES` 可以不含 chat，
+ * 那时"请到自由对话"是条死路 —— 指一个用户根本打不开的地方，比不指还糟。
+ */
+const moduleMapLine = (curMod) => {
+  const rows = Object.entries(MODULE_DEFS)
+    .filter(([id, m]) => id !== curMod && id !== "chat" && moduleUsable(id) && m.skills?.length)
+    .map(([, m]) => `「${m.name}」=${m.skills.join("、")}`)
+  const fallback = curMod !== "chat" && moduleUsable("chat")
+    ? "表里都没有的技能才说「自由对话」"
+    : "表里都没有的就如实说本账号暂时没开通那项能力，**不要**指向用户打不开的模块"
+  return rows.length ? `（技能→模块对照：${rows.join("；")}；${fallback}）。` : `（${fallback}）。`
+}
+
 const modulePreamble = (modId, outDir) => {
   const m = MODULE_DEFS[modId]
   if (!m || !m.skills) return ""
   const list = m.skills.map((s) => `\`${s}\``).join("、")
   const vals = outDir ? wfValues(outDir, modId) : {}
-  return `\n- **【模块限制，最高优先级，覆盖 AGENTS.md 的一切路由规则】本会话是「${m.name}」专用模块**：你【只允许】调用这些技能——${list}（其中 \`${m.primary}\` 是主技能，其余按需配套），禁止调用任何其它技能。\n- **本会话【没有】子代理 / task 工具**（不只是"禁止拿它调技能"——是整个工具不可用，调了本轮会被立即中止）。技能文档里凡是写"派调研子代理""并行分头查"的地方，一律改走它给的**串行兜底**：主流程自己顺序查完（web 搜索/抓取，或 \`.venv\` 的 requests/beautifulsoup4）。别先试一次再说，那一轮会白白作废。\n- 只在本模块职责范围内推进，不越界做别的模块的事；缺信息就直接向用户要。\n- 用户的需求超出「${m.name}」范围时，明确告知“本模块只负责${m.name}，其它需求请到「自由对话」模块”，不要自己徒手代替其它技能去做。\n- 网关会强制校验技能调用：一旦调用上述清单之外的技能，本轮会被立即中止。${WF.pipelineLine(modId, vals)}${WF.artifactLine(modId, vals)}`
+  return `\n- **【模块限制，最高优先级，覆盖 AGENTS.md 的一切路由规则】本会话是「${m.name}」专用模块**：你【只允许】调用这些技能——${list}（其中 \`${m.primary}\` 是主技能，其余按需配套），禁止调用任何其它技能。\n- **本会话【没有】子代理 / task 工具**（不只是"禁止拿它调技能"——是整个工具不可用，调了本轮会被立即中止）。技能文档里凡是写"派调研子代理""并行分头查"的地方，一律改走它给的**串行兜底**：主流程自己顺序查完（web 搜索/抓取，或 \`.venv\` 的 requests/beautifulsoup4）。别先试一次再说，那一轮会白白作废。\n- 只在本模块职责范围内推进，不越界做别的模块的事；缺信息就直接向用户要。\n- 用户的需求超出「${m.name}」范围时，明确告知本模块做不了，并**按下面这张表把他指到对的模块**去新开会话，不要自己徒手代替其它技能去做${moduleMapLine(modId)}\n- 网关会强制校验技能调用：一旦调用上述清单之外的技能，本轮会被立即中止。${WF.pipelineLine(modId, vals)}${WF.artifactLine(modId, vals)}`
 }
 
 // HTTP 响应头只能承载 latin1：中文文件名直接塞进 Content-Disposition 会 ERR_INVALID_CHAR → 下载必 500。
 // 按 RFC 5987 同时给两份：ASCII 兜底名（老客户端读它；剔掉引号、反斜杠、控制字符与非 ASCII 字节）
 // 与 filename*=UTF-8''<百分号编码>（现代浏览器优先读它，中文名原样还原）。
+// 产物/上传取不到时的统一文案（下载、原文、预览三处共用）
+const FILE_GONE = "这个文件不在本会话的产出或上传里——可能还没生成、名字对不上，或这个会话已被清理过。回到对话里让它重新生成一次即可。"
+
 const contentDisposition = (name) => {
   const ascii = name.replace(/[^\x20-\x7e]/g, "_").replace(/["\\]/g, "_").trim() || "download"
   return `attachment; filename="${ascii}"; filename*=UTF-8''${encodeURIComponent(name)}`
@@ -1371,6 +1432,10 @@ function warmPreviews(dir, names) {
 }
 
 // ---- 注入给 agent 的"工作区前言"：写入与剥离必须共用同一个标记 ----
+// 【上传目录那句为什么措辞要宽】原来写的是"用户上传的【数据】文件在 …"。实测模型把它读成
+// "这条只管 .csv/.xlsx"，于是拿着稿件名（.md/.docx）去【产物目录】里翻，一次要白花 2–3 次
+// glob/bash（最慢 32 秒），界面上还多出一张红色的 read 报错卡。改成"上传的文件都在…"并把
+// 三类文件都点名，配合任务卡里已经拼成绝对路径的 files 字段（WF.taskCard 的 upDir），两处口径一致。
 // 【为什么要共用常量】原来这两处各写各的字面量：注入端是 `【本会话工作区，务必遵守】`，
 // 而 /api/history 的剥离正则却还在找旧文案 `【本会话专属目录`（我改注入端时漏改了剥离端）。
 // 后果：实时流式输出正常（不走剥离），但用户【重开或切回会话】时，整段内部指令会被当成
@@ -2731,6 +2796,8 @@ export const server = http.createServer(async (req, res) => {
       return send(res, 200, "application/json", JSON.stringify({ ok: true }))
     }
 
+    // 文件取不到时给人话。裸 "not found" 既是英文、又把三种成因说成一种：文件本来就没生成过、
+    // 名字对不上、会话被清理过。医生点了下载看到这四个字母，只会以为系统坏了。
     if (req.method === "GET" && u.pathname === "/api/download") {
       const sid = u.searchParams.get("sid") || ""
       const name = u.searchParams.get("name") || ""   // 可含一层子目录（如 pdfs/a.pdf），由 safeUnder 做包含性校验
@@ -2740,7 +2807,7 @@ export const server = http.createServer(async (req, res) => {
       // isFile 不能省：只判 existsSync 时，?name=.preview（服务端自己在每个产物目录里建的预览缓存目录，
       // 必然存在）会让 createReadStream 异步抛 EISDIR，而进程没有 uncaughtException 兜底 → 整个容器崩、
       // opencode 一起没。任意已登录用户一个 URL 即可打崩。/api/raw 本来就有这个判断，这里漏了。
-      if (!f || !fs.existsSync(f) || !fs.statSync(f).isFile()) return send(res, 404, "text/plain", "not found")
+      if (!f || !fs.existsSync(f) || !fs.statSync(f).isFile()) return send(res, 404, "text/plain", FILE_GONE)
       // 下载文件名只取最后一段：带上 "pdfs/" 前缀的话，浏览器保存时会把斜杠当非法字符或造出怪名字
       res.writeHead(200, { "Content-Type": "application/octet-stream", "Content-Disposition": contentDisposition(path.basename(name)) })
       return pipeFile(f, res)
@@ -2753,7 +2820,7 @@ export const server = http.createServer(async (req, res) => {
       const up = u.searchParams.get("dir") === "up"
       const root = sid ? (up ? await sessionUp(sid) : await sessionOut(sid)) : (up ? UPLOADS : OUTPUTS)
       const f = safeUnder(root, name)
-      if (!f || !fs.existsSync(f) || !fs.statSync(f).isFile()) return send(res, 404, "text/plain", "not found")
+      if (!f || !fs.existsSync(f) || !fs.statSync(f).isFile()) return send(res, 404, "text/plain", FILE_GONE)
       const MIME = { ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".gif": "image/gif",
         ".webp": "image/webp", ".svg": "image/svg+xml", ".bmp": "image/bmp", ".pdf": "application/pdf",
         ".html": "text/html; charset=utf-8", ".htm": "text/html; charset=utf-8", ".md": "text/markdown; charset=utf-8",
@@ -2781,7 +2848,7 @@ export const server = http.createServer(async (req, res) => {
       let r
       try { r = await ensurePreviewCache(dir, name) }
       catch (e) {
-        if (e.code === "no-src") return send(res, 404, "text/plain", "not found")
+        if (e.code === "no-src") return send(res, 404, "text/plain", FILE_GONE)
         // 转义再插进 HTML：e.message 里含被转换文件的路径/文件名，而文件名是 agent 产出的、可含尖括号。
         // 影响仅限用户自己（一人一容器），但顺手堵掉，别留个会往 HTML 里塞未转义内容的口子。
         if (e.code === "docx-fail") return send(res, 500, "text/html; charset=utf-8", `<p style="color:#b91c1c">DOCX 预览转换失败：${String(e.message).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")}</p>`)
@@ -2866,11 +2933,41 @@ export const server = http.createServer(async (req, res) => {
       if (stepId && !step) return send(res, 400, "application/json", JSON.stringify({ ok: false, err: `未知步骤：${stepId}` }))
       const fields = step ? (step.form || []) : wf.intake
       const title = step ? step.name : (wf.intakeTitle || "开始")
+      const sid = b.sid ? String(b.sid) : ""
+      // ---- 落卡之前先体检：缺必填、指了不存在的文件 ----
+      // 【为什么必须在服务端也做】必填此前只有前端拦（index.html 的 buildFormCard），接口自己
+      // 一律回 200 —— 纵深防御缺口。而**文件不存在**更要紧：那不是用户的选择，是事实错误
+      // （选了文件但上传失败、或换了会话），实测服务端照拼任务卡、照发，模型花两分半连开 4 次
+      // glob/find 全仓库扫，最后只能回一句"没找到，请重新上传" —— 白烧一整轮真实模型调用。
+      // 两者都只回 warnings、**都不挡**：
+      //   · 本接口同时也是一个纯粹的"把表单值序列化成任务卡"的函数（测试与工具都这么用它），
+      //     对缺字段回 400 会把这个契约改掉 —— 而缺必填本来就有前端的友好拦截兜着，
+      //     真漏到模型那里也不至于出事：前言明令"未填写的项一律标注待补充并向用户索要"，
+      //     实测模型确实会开口要，而不是编一个。
+      //   · 文件不存在同理不挡：用户完全可能先填表单再补传，硬拦会把一个能自愈的顺序问题变成死路。
+      //     但**必须报**——实测服务端照拼任务卡照发，模型花两分半连开 4 次 glob/find 全仓库扫，
+      //     最后只能回"没找到，请重新上传"，白烧一整轮真实模型调用。
+      const vals = values
+      const warnings = (fields || [])
+        .filter((f) => WF.visible(f, vals) && WF.isRequired(f, vals))
+        .filter((f) => { const v = vals[f.id]; return v === undefined || v === null || v === "" || (Array.isArray(v) && !v.length) })
+        .map((f) => `必填项「${f.label}」还没填——不补的话我只能标成"待补充"再向你要`)
+      let upDir = ""
+      if (sid && sessionModule(sid) === modId) {
+        try {
+          upDir = await sessionUp(sid)
+          const have = new Set(fs.existsSync(upDir) ? fs.readdirSync(upDir) : [])
+          for (const f of fields || []) {
+            if (f.type !== "files" || !WF.visible(f, vals)) continue
+            for (const n of (Array.isArray(vals[f.id]) ? vals[f.id] : [vals[f.id]]).filter(Boolean))
+              if (!have.has(String(n))) warnings.push(`「${f.label}」里的 ${n} 在本会话的上传里找不到，可能上传失败了`)
+          }
+        } catch { /* 读不到上传目录就别体检，正常发卡 */ }
+      }
       const card = WF.taskCard(MODULE_DEFS[modId]?.name || modId, title, fields, values,
-        { footnote: step ? "" : (wf.footnote || "") })
+        { footnote: step ? "" : (wf.footnote || ""), upDir })
       // 有 sid 才落盘（首屏表单是在会话建立【之前】填的，此时还没有 sid —— 那份值由
       // /api/chat/start 建完会话后补写，见那里的 wfSeed）
-      const sid = b.sid ? String(b.sid) : ""
       if (sid && sessionModule(sid) === modId) {
         const out = await sessionOut(sid)
         const st = wfLoad(out) || { module: modId, form: {}, done: [] }
@@ -2879,7 +2976,7 @@ export const server = http.createServer(async (req, res) => {
         if (stepId) st.cur = stepId
         wfSave(out, st)
       }
-      return send(res, 200, "application/json", JSON.stringify({ ok: true, card }))
+      return send(res, 200, "application/json", JSON.stringify({ ok: true, card, warnings }))
     }
     // 读某个已上传数据表的表头，供 columns 型字段做真实列名下拉。
     // ★ 这是 stats/paper 表单最值钱的一环："列名猜错/写错"是当前最高频的失败模式，从真实表头选能根治。
@@ -3061,7 +3158,7 @@ export const server = http.createServer(async (req, res) => {
       // 给 agent 注入本会话专属目录，覆盖技能默认的 outputs/，实现多用户/多会话隔离
       // 注意：本会话的工作目录（cwd）已在建会话时通过 opencode 的 session.directory 定在【会话产物目录】，
       // 所以 agent 的所有工具默认就在正确的地方读写，preamble 只需说清"当前目录就是产物目录"与几个绝对路径。
-      const preamble = `${PREAMBLE_MARK}\n- **你的当前工作目录就是本会话的产物目录**（\`${ws.out}\`）。所有产物（图表 PNG/PDF、CSV/Excel、md/docx 等）**直接写到当前目录即可**，用相对文件名如 \`fig1.png\`、\`manuscript.md\`，不要再自己拼 \`outputs/xxx\` 前缀。\n- 临时脚本、中间文件同样写当前目录（要归拢可用 \`./.scratch/\`）。\n- 用户上传的数据文件在 \`${ws.up}/\`（读数据从这里找，用这个绝对路径）。\n- **跑本套件的脚本，python 用这个绝对路径**：\`${PY_BIN || "（本机还没建 .venv，先跑 env-setup 技能）"}\`，技能脚本在 \`${ROOT}/.opencode/skills/<技能>/\` 下。**照抄这两个路径，不要自己拼 \`\${REPO_ROOT:-/app}\`，也不要用 \`python\`/\`python3\`裸命令**——本机 PATH 里的 python 可能是个不能用的占位程序（跑起来没有任何输出），你会看不出它坏了。当前目录不是仓库根，写 \`.venv/...\` 这种相对路径同样找不到。\n- 正文里嵌入图片直接用文件名：\`![图注](fig1.png)\`（图和稿件都在当前目录，渲染也从当前目录跑）。\n- **不要把产物写到仓库根或 \`\${REPO_ROOT:-/app}\` 下**：那是所有会话共享的，会互相覆盖，也不会出现在界面的"产出"侧栏。${modId === "chat" ? skillsPreamble() : modulePreamble(modId, ws.out)}${zoteroPreamble(ws.out)}${autoOn ? autoPreamble() : ""}\n\n`
+      const preamble = `${PREAMBLE_MARK}\n- **你的当前工作目录就是本会话的产物目录**（\`${ws.out}\`）。所有产物（图表 PNG/PDF、CSV/Excel、md/docx 等）**直接写到当前目录即可**，用相对文件名如 \`fig1.png\`、\`manuscript.md\`，不要再自己拼 \`outputs/xxx\` 前缀。\n- 临时脚本、中间文件同样写当前目录（要归拢可用 \`./.scratch/\`）。\n- **用户上传的文件都在 \`${ws.up}/\`**：稿件（.md/.docx/.pdf）、数值表（.csv/.xlsx）、附件全都在这里，读任何用户给的文件都用这个绝对路径。\n- **跑本套件的脚本，python 用这个绝对路径**：\`${PY_BIN || "（本机还没建 .venv，先跑 env-setup 技能）"}\`，技能脚本在 \`${ROOT}/.opencode/skills/<技能>/\` 下。**照抄这两个路径，不要自己拼 \`\${REPO_ROOT:-/app}\`，也不要用 \`python\`/\`python3\`裸命令**——本机 PATH 里的 python 可能是个不能用的占位程序（跑起来没有任何输出），你会看不出它坏了。当前目录不是仓库根，写 \`.venv/...\` 这种相对路径同样找不到。\n- 正文里嵌入图片直接用文件名：\`![图注](fig1.png)\`（图和稿件都在当前目录，渲染也从当前目录跑）。\n- **不要把产物写到仓库根或 \`\${REPO_ROOT:-/app}\` 下**：那是所有会话共享的，会互相覆盖，也不会出现在界面的"产出"侧栏。${modId === "chat" ? skillsPreamble() : modulePreamble(modId, ws.out)}${zoteroPreamble(ws.out)}${autoOn ? autoPreamble() : ""}\n\n`
       startJob(sid, preamble + q, modId)   // 同步建 job（jobs.set 在函数首行）→ 返回后前端 attach 必能接上
       return send(res, 200, "application/json", JSON.stringify({ ok: true, sid, sent: true, module: modId }))
     }
