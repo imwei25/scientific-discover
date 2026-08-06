@@ -285,16 +285,19 @@ savefig.bbox: tight
 }
 "@ | Write-Utf8NoBom "$App\cloud.json.example"
 
-# 预置站点地址：打包时给 SCI_CLOUD_URL 就直接写好 cloud.json，客户装完开箱即到登录页。
+# 预置站点地址：cloud.json 【每次打包都写】，客户装完开箱即到登录页、默认走云端。
 # 只写地址不写 key，所以这个文件可以随包发给任何人。
-if ($env:SCI_CLOUD_URL) {
-  @"
+#
+# 【为什么不再是"给了 SCI_CLOUD_URL 才写"】不写就等于发了一个"没接入任何平台"的包：
+# 客户装完既没有登录窗、也没有模型，界面只能引导他去填自己的 API key —— 这正是要消除的
+# 首启体验。默认站点写死在下面这个常量里，要打给别家就临时设 SCI_CLOUD_URL 覆盖。
+$CloudUrl = if ($env:SCI_CLOUD_URL) { $env:SCI_CLOUD_URL } else { "https://niuma.tellgen.com" }
+@"
 {
-  "gatewayUrl": "$($env:SCI_CLOUD_URL)"
+  "gatewayUrl": "$CloudUrl"
 }
 "@ | Write-Utf8NoBom "$App\cloud.json"
-  Write-Host "  已预置 cloud.json → $($env:SCI_CLOUD_URL)" -ForegroundColor Green
-}
+Write-Host "  已预置 cloud.json → $CloudUrl" -ForegroundColor Green
 
 # 诊断脚本随包走：客户机上出问题时，用包内 bash 跑它即可定位（bash bundle\smoke.sh）
 Copy-Item "$PSScriptRoot\smoke.sh" $Staging -Force

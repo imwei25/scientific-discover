@@ -32,6 +32,92 @@
   Delete "$INSTDIR\bundle\app\serve.err"
 !macroend
 
+; ---------------------------------------------------------------------------
+; 装完之后：把 0.1.8 及更早的【SciAgent】旧版数据接管过来，再把它静默卸掉。
+;
+; 【为什么必须有】0.1.9 起 productName 从 SciAgent 改成 Niuma Science，而 NSIS 是按
+; productName 认安装目录与卸载登记项的：装到 %LOCALAPPDATA%\Niuma Science，注册表写的是
+; Uninstall\Niuma Science。也就是说新包【不会覆盖升级】旧版 —— 不做任何事的话，老用户机器上
+; 会并存两套应用（旧的还占着 380MB 且还能被点开、连着同一个云端账号），且新装的这套是空的：
+; 要重新登录、看不到以前的产出。所以这里把该带走的带走，然后调旧版自己的卸载器把它清掉。
+;
+; 【为什么放 POSTINSTALL 而不是 PREINSTALL】要等新目录的文件都解压成功了再动旧的。
+; 万一解压中途失败，用户至少还留着一套能用的旧应用，而不是新的没装上、旧的已经被卸了。
+;
+; 【会话记录不在这里】opencode 的会话数据存在用户配置目录、不在安装目录下，改名不影响，
+; 所以只搬安装目录内的这几样：登录态、会话标题/归类、自设模型路由、产出与上传。
+; ---------------------------------------------------------------------------
+!macro NSIS_HOOK_POSTINSTALL
+  Push $0
+  Push $R8
+  Push $R9
+  StrCpy $R8 ""   ; 迁移出错标记：非空 = 别删旧目录
+
+  ; 旧版装在哪：先读它自己写的键（用户可能装到了别处），读不到再退回默认的 per-user 目录
+  ReadRegStr $R9 HKCU "Software\sciagent\SciAgent" ""
+  StrCmp $R9 "" 0 +2
+    StrCpy $R9 "$LOCALAPPDATA\SciAgent"
+  StrCmp $R9 $INSTDIR nm_migrate_done   ; 同一个目录：不可能，但绝不能自己卸自己
+  ; 判据放宽到"旧目录还在"：用户可能已经手工卸载过旧版，但卸载器按设计留下了
+  ; outputs/uploads —— 那些同样该接管过来，不然就成了谁也不认领的孤儿目录。
+  IfFileExists "$R9\*.*" 0 nm_migrate_done
+
+  DetailPrint "发现旧版 SciAgent（$R9），正在接管数据…"
+  ; 旧版可能正开着（用户边装边用），先结束【旧安装目录下】的进程。同上：只按路径前缀，
+  ; 绝不按镜像名杀，否则会连累用户自己别处跑的 node。
+  nsExec::ExecToLog 'powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "$$ErrorActionPreference=\"SilentlyContinue\"; Get-CimInstance Win32_Process | Where-Object { $$_.ExecutablePath -and $$_.ExecutablePath.StartsWith(\"$R9\", [StringComparison]::OrdinalIgnoreCase) } | ForEach-Object { Stop-Process -Id $$_.ProcessId -Force }"'
+  Pop $0
+  Sleep 1500
+
+  ; 1) 小文件：这三样旧卸载器会【显式删掉】，必须赶在卸载之前拷走。
+  ;    cloud-state.json = 登录态（不搬就得重新登录）；sessions-meta.json = 会话标题与项目归类；
+  ;    model-config.json = 用户自设的 API 路由（没设过就没有这个文件，拷不到属正常）。
+  CreateDirectory "$INSTDIR\bundle\app\web"
+  CopyFiles /SILENT "$R9\bundle\app\web\cloud-state.json"   "$INSTDIR\bundle\app\web"
+  CopyFiles /SILENT "$R9\bundle\app\web\sessions-meta.json" "$INSTDIR\bundle\app\web"
+  CopyFiles /SILENT "$R9\bundle\app\web\model-config.json"  "$INSTDIR\bundle\app\web"
+
+  ; 2) 用户的产出与上传。这两样旧卸载器会保留，但会连同旧目录一起留在磁盘上 ——
+  ;    不搬过来，用户在新应用里就看不到自己以前的东西。
+  ;    拷贝一旦出错就【保留旧目录】：宁可让用户看到一个多余的文件夹，也不能把数据删没了。
+  CreateDirectory "$INSTDIR\bundle\app\outputs"
+  CreateDirectory "$INSTDIR\bundle\app\uploads"
+  ClearErrors
+  IfFileExists "$R9\bundle\app\outputs\*.*" 0 +2
+    CopyFiles /SILENT "$R9\bundle\app\outputs\*.*" "$INSTDIR\bundle\app\outputs"
+  IfFileExists "$R9\bundle\app\uploads\*.*" 0 +2
+    CopyFiles /SILENT "$R9\bundle\app\uploads\*.*" "$INSTDIR\bundle\app\uploads"
+  IfErrors 0 +3
+    StrCpy $R8 "keep"
+    DetailPrint "迁移产出/上传时出错，旧目录将原样保留：$R9"
+
+  ; 3) 卸载旧版。/S 静默，_?= 让它就地同步执行（不自我复制到临时目录、也不自删），
+  ;    这样 ExecWait 才真的能等到它跑完，收尾动作不会和它抢。
+  IfFileExists "$R9\uninstall.exe" 0 nm_old_manual
+    DetailPrint "正在卸载旧版 SciAgent…"
+    ExecWait '"$R9\uninstall.exe" /S _?=$R9'
+  nm_old_manual:
+  ; 收尾。两种情况都要兜住：卸载器正常跑完（只剩自己和被保留的数据目录），
+  ; 以及卸载器根本不在/跑失败（那就手工把目录、登记项、快捷方式清干净，
+  ; 否则控制面板里会留一条点了没反应的「SciAgent」）。
+  Delete "$R9\uninstall.exe"
+  StrCmp $R8 "keep" +2 0
+    RMDir /r "$R9"
+  DeleteRegKey HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\SciAgent"
+  DeleteRegKey HKCU "Software\sciagent\SciAgent"
+  DeleteRegKey /ifempty HKCU "Software\sciagent"
+  Delete "$SMPROGRAMS\SciAgent.lnk"
+  Delete "$SMPROGRAMS\SciAgent\SciAgent.lnk"
+  RMDir "$SMPROGRAMS\SciAgent"
+  Delete "$DESKTOP\SciAgent.lnk"
+  DetailPrint "旧版 SciAgent 已卸载，登录态与产出已接管"
+
+nm_migrate_done:
+  Pop $R9
+  Pop $R8
+  Pop $0
+!macroend
+
 !macro NSIS_HOOK_PREUNINSTALL
   DetailPrint "正在结束运行中的实例…"
   nsExec::ExecToLog 'powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "$$ErrorActionPreference=\"SilentlyContinue\"; Get-CimInstance Win32_Process | Where-Object { $$_.ExecutablePath -and $$_.ExecutablePath.StartsWith(\"$INSTDIR\", [StringComparison]::OrdinalIgnoreCase) } | ForEach-Object { Stop-Process -Id $$_.ProcessId -Force }"'

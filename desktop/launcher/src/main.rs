@@ -1,4 +1,4 @@
-// 科研医学 Agent 桌面版启动器
+// Niuma Science 桌面版启动器
 //
 // 职责（与 deploy/entrypoint.sh + 容器 env 对齐）：
 //   1. 把 bundle 里的便携运行时（node / opencode / PortableGit / pandoc / 嵌入式 Python）前插进 PATH；
@@ -150,7 +150,7 @@ fn unique_path(dir: &Path, name: &str) -> PathBuf {
 fn open_app_window(handle: &tauri::AppHandle) -> tauri::Result<tauri::WebviewWindow> {
     let url: tauri::Url = format!("http://127.0.0.1:{PORT}/").parse().unwrap();
     WebviewWindowBuilder::new(handle, "app", WebviewUrl::External(url))
-        .title("科研医学 Agent")
+        .title("Niuma Science")
         .inner_size(1280.0, 860.0)
         // 【必须关掉】默认为 true 时，Tauri 会在 webview 层截走全部拖放事件去做
         // 原生文件拖入，于是页面自己的 HTML5 拖放【整个失效】：
