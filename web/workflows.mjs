@@ -846,6 +846,12 @@ const fmtVal = (f, v, upDir) => {
     // 任务卡里整行消失且没有任何提示，用户以为筛选生效了。按"下限"理解更符合直觉。
     const { min, max } = (typeof v === "number" || typeof v === "string") ? { min: Number(v) } : (v || {})
     if (min === undefined && max === undefined) return null
+    // ★ 上下限倒挂时【不要把这个条件发给模型】。界面那边已经报了 warning，但任务卡里照样写着
+    //   "90 – 5 两年篇均被引" —— 于是模型收到一个不可能满足的条件，只能自己消化这个自相矛盾
+    //   （实测它在思考里嘀咕 "this is a weird range"，然后自行猜了一个意思）。
+    //   提示了却照发，等于把矛盾从用户转嫁给模型。按未填处理，并明说原因。
+    if (min !== undefined && max !== undefined && Number(min) > Number(max))
+      return `（你填的是 ${min} – ${max}，下限比上限大，这个条件无法成立，已按"不筛"处理——需要的话请重新告诉我区间）`
     if (min !== undefined && max !== undefined) return `${min} – ${max}${f.unit ? " " + f.unit : ""}`
     return min !== undefined ? `≥ ${min}` : `≤ ${max}`
   }

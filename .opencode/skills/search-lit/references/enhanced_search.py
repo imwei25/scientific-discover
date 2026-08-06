@@ -270,15 +270,14 @@ def blank_record():
 # --------------------------------------------------------------------------- #
 # 各源检索：统一返回 blank_record() 形状的 list
 # --------------------------------------------------------------------------- #
-def search_europepmc(query, limit, since):
-    q = query
-    if since:
-        q += f" AND (FIRST_PDATE:[{since}-01-01 TO 3000-12-31])"
+def _epmc_pass(q, limit, sort=None):
     out, cursor = [], "*"
     while len(out) < limit:
         params = {"query": q, "format": "json",
                   "pageSize": min(100, limit - len(out)),
                   "cursorMark": cursor, "resultType": "core"}
+        if sort:
+            params["sort"] = sort        # urlencode 会把空格与冒号正确转义，别自己拼字符串
         d = _get_json(EPMC + "?" + urllib.parse.urlencode(params))
         batch = d.get("resultList", {}).get("result", [])
         if not batch:
@@ -301,6 +300,40 @@ def search_europepmc(query, limit, since):
         cursor = nxt
         time.sleep(0.34)
     return out[:limit]
+
+
+def search_europepmc(query, limit, since):
+    """两趟检索再合并去重：一趟按被引降序捞经典，一趟默认顺序捞最新。
+
+    ★ 为什么不能只用默认顺序：EPMC 不给 sort 时【按时间倒排】，于是结果全是当年新文、
+      cites 恒为 0，领域基石一篇都进不来。实测（SGLT2i × HFpEF，limit=25）：25 篇全是 2026 年、
+      被引 0–1，EMPEROR-Preserved / DELIVER / EMPA-KIDNEY 这些里程碑 RCT 一篇都没有；
+      而同一检索式加 `sort=CITED desc` 一发就中（3708 次被引那篇排第一）。
+      模型那一轮自己察觉不对，又花了约 7 分钟、十几轮工具调用去 Crossref 逐个把里程碑捞回来 ——
+      一个不较真的模型交付的就是"一份只有当年综述、没有一篇原始 RCT 的证据摸底"。
+    ★ 为什么不能只按被引降序：那会系统性偏向老文献，把近两年的进展全挤掉 ——
+      而"最新进展"恰恰是综述最要紧的部分。
+    ★ 这条比"结果不够好"严重：模型拿不到经典文献时会自己想办法补，
+      隔壁 literature-review/search.py 的注释记着实测出现过【凭记忆手敲 landmark DOI】。
+      把经典捞回来就消掉了这个动机。
+
+    做法与 literature-review/search.py 的 _two_pass() 一致 —— 那边早就修过这个坑，
+    这边一直没移植过来，于是走 `--sources` 多源的用户拿到的是没排序的那一版。
+    """
+    q = query
+    if since:
+        q += f" AND (FIRST_PDATE:[{since}-01-01 TO 3000-12-31])"
+    half = max(1, limit // 2)
+    cited = _epmc_pass(q, half, sort="CITED desc")
+    recent = _epmc_pass(q, limit - len(cited) + half, sort=None)
+    merged, seen = [], set()
+    for rec in list(cited) + list(recent):          # 经典在前，同一篇只留一次
+        key = norm_doi(rec.get("doi")) or (rec.get("pmid") or "") or norm_title(rec.get("title"))[:80]
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        merged.append(rec)
+    return merged[:limit]
 
 
 def search_semantic_scholar(query, limit, since):
