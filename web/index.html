@@ -2666,11 +2666,20 @@ function fieldEl(f, values, onChange, allFields) {
         //   —— 而 testCol/goldCol 这类勾了就必填，不挑就提交不了。留个逃生口，成本一行。
         const manual = mk("details", {})
         manual.appendChild(mk("summary", { className: "wfhelp", textContent: "列表里没有？手动填" }))
-        const inp = mk("input", { type: "text", value: (multi ? "" : (j.headers.includes(values[f.id]) ? "" : values[f.id] ?? "")), placeholder: "列名要和数据表里完全一致" })
+        // 多选时手填的是【上面按钮之外的追加项】。此前直接 `values[f.id] = 拆出来的数组`，
+        // 是覆盖不是追加 —— 用户点了「年龄」「性别」再补填一个列名，前两个会无声消失，
+        // 而旁边的说明写的却是"追加"。这里显式记住"按钮选中的那部分"，每次重算成并集。
+        const picked0 = multi ? (values[f.id] || []).filter((x) => j.headers.includes(x)) : null
+        const inp = mk("input", { type: "text",
+          value: multi ? (values[f.id] || []).filter((x) => !j.headers.includes(x)).join("，")
+                       : (j.headers.includes(values[f.id]) ? "" : values[f.id] ?? ""),
+          placeholder: multi ? "上面没有的列名，用逗号分隔（会与上面的选择合并）" : "列名要和数据表里完全一致" })
         inp.addEventListener("input", () => {
           const v = inp.value.trim()
-          if (multi) { /* 多选字段用逗号分隔追加 */ values[f.id] = v ? v.split(/[,，]/).map((s) => s.trim()).filter(Boolean) : [] }
-          else values[f.id] = v || undefined
+          if (multi) {
+            const extra = v ? v.split(/[,，]/).map((s) => s.trim()).filter(Boolean) : []
+            values[f.id] = [...new Set([...(picked0 || []), ...extra])]
+          } else values[f.id] = v || undefined
         })
         manual.appendChild(inp)
         host.appendChild(manual)

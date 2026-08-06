@@ -401,7 +401,21 @@ def main():
         sh = int(a.sheet) if str(a.sheet).isdigit() else a.sheet
         df = pd.read_excel(p, sheet_name=sh)
     else:
-        df = pd.read_csv(p, sep=None, engine="python", encoding="utf-8-sig")
+        # ★ 编码要嗅，不能写死 utf-8-sig。**中文版 Excel「另存为 CSV」默认写 GBK**，
+        #   这是医院里最常见的导出方式，不是边缘情况；写死 UTF-8 的话每次都要先由上游转一遍码
+        #   （白花一次调用），转得不干净还会把中文列名变成乱码带进后面每一张表。
+        #   判据与网关侧的 parseHeaders 一致：UTF-8 解不动就依次试 GBK/GB18030/Big5。
+        df = None
+        last_err = None
+        for enc in ("utf-8-sig", "gbk", "gb18030", "big5"):
+            try:
+                df = pd.read_csv(p, sep=None, engine="python", encoding=enc)
+                break
+            except UnicodeDecodeError as exc:
+                last_err = exc
+        if df is None:
+            sys.exit(f"这个文件的编码认不出来（试过 UTF-8 / GBK / GB18030 / Big5）：{last_err}\n"
+                     f"请在 Excel 里另存为「CSV UTF-8」后重试。")
     df.columns = [str(c).strip() for c in df.columns]
 
     res = profile(df, id_col=a.id_col, group=a.group)

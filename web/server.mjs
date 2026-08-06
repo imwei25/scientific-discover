@@ -3050,7 +3050,13 @@ export const server = http.createServer(async (req, res) => {
           }
           for (const f of fields || []) {
             if (f.type !== "columns" || !f.source || !WF.visible(f, vals)) continue
-            const src = (Array.isArray(vals[f.source]) ? vals[f.source] : [vals[f.source]]).filter(Boolean)[0]
+            // ★ 必须先认前端的文件切换器。多表时 index.html 把"这个字段的列名读自哪张表"存在
+            //   `__src_<字段id>` 里；服务端若仍恒取 dataFiles[0]，用户明明在界面上选对了第二张表的列，
+            //   却会收到一条"这一列不存在"的红字 —— 一个纯粹由两处各说各话造出来的假警报，
+            //   而它出现在一个专门用来提高可信度的提示里，比不提示更糟。
+            const srcs = (Array.isArray(vals[f.source]) ? vals[f.source] : [vals[f.source]]).filter(Boolean)
+            const picked = vals["__src_" + f.id]
+            const src = (picked && srcs.includes(picked)) ? picked : srcs[0]
             if (!src) continue
             const cols = headersOf(String(src))
             if (!cols || !cols.length) continue          // 读不出表头就别判（xlsx / 宽表降级 / 编码认不出）
