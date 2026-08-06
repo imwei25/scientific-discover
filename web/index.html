@@ -95,6 +95,15 @@
   .chip { background: var(--card); border: 1px solid var(--line); color: var(--muted); border-radius: 999px; padding: 8px 14px; font-size: 12px; font-weight: 400; cursor: pointer; transition: border-color .15s, color .15s, background .15s; }
   /* 功能模块选择卡（欢迎页）与输入框模块徽标 */
   .welcome .mods { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; margin-top: 22px; text-align: left; }
+  /* 进模块的首屏：标题不该用欢迎页那个巨型字号 —— 实测一个「数据统计与分析」吃掉首屏 1/6，
+     把表单整个挤到折叠线以下。用户进来最该先看到的是「要填什么」，不是一块招牌。 */
+  .welcome.modentry .wtitle { font-size: 21px; letter-spacing: .01em; }
+  .welcome.modentry .wsub { max-width: 620px; margin-left: auto; margin-right: auto; }
+  /* 表单一律左对齐：.welcome 是居中布局，表单卡继承过去后标签和帮助文字全部居中，
+     一长列居中标签像海报不像表单，扫读成本很高。 */
+  .wfcard, .wfcard * { text-align: left; }
+  .wfcard .wfacts { justify-content: flex-start; }
+
   /* 当前模块提示条：聊天页不再选模块，这里只回答"我在哪个模块、怎么换" */
   .welcome .modhint { display: inline-flex; align-items: center; gap: 10px; flex-wrap: wrap; justify-content: center;
     margin-top: 14px; padding: 8px 14px; border-radius: 999px; background: var(--card);
@@ -476,6 +485,11 @@
   .wfcard .wfhd { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 4px; }
   .wfcard .wftitle { font-size: 14px; font-weight: 600; color: var(--text); }
   .wfcard .wfsub { font-size: 12px; color: var(--faint); line-height: 1.6; margin-bottom: 12px; }
+  /* 进来第一眼必须知道的话（体裁声明等）：放顶部、给一点存在感，但别做成报错的样子 */
+  .wfnotice { margin: 2px 0 12px; padding: 9px 12px; border-radius: var(--r-sm);
+    background: rgba(224,162,63,.08); border: 1px solid rgba(224,162,63,.35);
+    font-size: 12.5px; line-height: 1.7; color: #6b4d12; }
+  .wfnotice b { color: #4a350c; }
   .wfcard .wffoot { font-size: 11.5px; color: var(--faint); line-height: 1.6; margin-top: 12px; padding-top: 10px; border-top: 1px dashed var(--line-hi); }
   .wff { margin-bottom: 13px; }
   .wff > label { display: block; font-size: 12.5px; font-weight: 600; color: #334153; margin-bottom: 5px; }
@@ -505,12 +519,19 @@
   .wfrange { display: flex; align-items: center; gap: 8px; }
   .wfrange input { flex: 1; }
   .wfrange span { font-size: 12px; color: var(--faint); flex: none; }
-  .wfacts { display: flex; align-items: center; gap: 10px; margin-top: 4px; }
+  /* ★ 卡内吸底：论文模块的表单有十几项，按钮落在最底下会被输入框切掉 —— 实测第一屏根本
+     看不到「开始」，用户既不知道还有多长、也不知道填完点哪。让操作区始终贴在可视区底部。 */
+  .wfacts { position: sticky; bottom: 0; z-index: 2; display: flex; align-items: center; gap: 10px;
+    margin: 8px -18px -16px; padding: 12px 18px; background: var(--card);
+    border-top: 1px solid var(--line); border-radius: 0 0 var(--r-md) var(--r-md); }
   /* 与 v19 改版后的 .asksubmit 同款：实心主色 + 白字。
      别再用改版前那个青色渐变 —— 主色已从 #38bdf8 系换成 #3b6fd4，渐变会在一片蓝里透出一块青。 */
   .wfgo { display: inline-flex; align-items: center; gap: 6px; color: #fff; background: var(--accent);
     border: none; padding: 9px 20px; border-radius: var(--r-sm); font: inherit; font-size: 13px; font-weight: 600; cursor: pointer; box-shadow: 0 4px 12px rgba(59,111,212,.26); }
   .wfgo:hover { filter: brightness(1.06); }
+  /* 必填没填满：置灰但仍可点（不阻断），悬停有 title 说明还差什么 */
+  .wfgo.dim { background: #9fb4d8; box-shadow: none; }
+  .wfsteps .gatelegend { flex-basis: 100%; margin-top: 5px; font-size: 11px; color: var(--faint); line-height: 1.6; }
   .wfskip { background: none; border: none; font: inherit; font-size: 12px; color: var(--faint); cursor: pointer; text-decoration: underline; text-underline-offset: 3px; }
   .wfskip:hover { color: var(--cyan); }
   .wferr { font-size: 12px; color: #e0564f; margin-top: 8px; }
@@ -1736,12 +1757,30 @@ let META_STATE = { projects: [], sessions: [] }          // 最近一次 /api/se
 const collapsedProjects = new Set(JSON.parse(localStorage.getItem("nm_collapsed") || "[]"))
 const saveCollapsed = () => localStorage.setItem("nm_collapsed", JSON.stringify([...collapsedProjects]))
 
+// 判断标题是不是没法看：替换字符 / 私用区 / 看不见的控制符占比过半，就当它是乱码。
+// 只在【显示】时兜底，不动服务端存的原标题 —— 用户自己重命名过的一定原样显示。
+const GARBLED = /[\uFFFD\u0000-\u0008\u000E-\u001F\uE000-\uF8FF]/g
+function sessTitle(s) {
+  const raw = String(s.title || "").trim()
+  if (!raw) return "未命名会话"
+  const bad = (raw.match(GARBLED) || []).length
+  // 看得懂的字符：中日韩、字母数字、常用标点。一个都没有，或垃圾字符过半 → 判定乱码。
+  const good = (raw.match(/[\u4e00-\u9fa5\u3040-\u30ffA-Za-z0-9]/g) || []).length
+  if (bad * 2 >= raw.length || good === 0) {
+    const mod = MODULES.find((m) => m.id === s.module)
+    return (mod && mod.id !== "chat" ? mod.name : "未命名会话") + "（标题异常）"
+  }
+  return raw
+}
 // 单个会话行
 function sessRow(s) {
   const b = document.createElement("div"); b.className = "sess" + (s.id === sessionId ? " active" : "") + (selected.has(s.id) ? " picked" : "")
   b.setAttribute("role", "button"); b.draggable = !selMode          // 选择模式下禁拖，免得勾选时误拖进项目
   const ck = document.createElement("span"); ck.className = "ck"; ck.innerHTML = ic("check"); b.appendChild(ck)
-  const t = document.createElement("span"); t.className = "t"; t.textContent = s.title
+  // ★ 标题来自模型首轮输出，模型偶尔吐出乱码或断掉的多字节序列（实测列表里出现过
+  //   一整行 ◆◆◆◆Δθ◆◆Π…）。这种标题对用户零信息量、还找不回是哪次会话 ——
+  //   兜底成模块名 + 时间，别把垃圾字符直接摆在列表里。
+  const t = document.createElement("span"); t.className = "t"; t.textContent = sessTitle(s)
   const d = document.createElement("span"); d.className = "d"
   if (s.running) d.innerHTML = '<span class="run" title="正在生成"></span>'
   // 模块徽标（非"自由对话"才显示）—— 分组视图同样需要一眼看出会话属于哪个模块
@@ -2049,6 +2088,7 @@ function renderWelcome() {
   //   一开聊就换不了了。两个入口讲同一件事、语义还不一致，用户很容易以为自己换成功了。
   //   现在这里只回答"我在哪个模块、怎么换"，选择权收回工作台一处。
   if (cur && cur.id !== "chat") {
+    w.classList.add("modentry")
     w.innerHTML = '<div class="wtitle">' + esc(cur.name) + '</div>'
       + '<div class="wsub">' + esc(cur.desc || "") + '</div>'
     const bar = document.createElement("div"); bar.className = "modhint"
@@ -2116,7 +2156,7 @@ async function showIntake(host, modId) {
   const card = buildFormCard({
     title: wf.name + " · " + (wf.intakeTitle || "开始"),
     sub: "填完点「开始」，AI 会按这些设定推进；也可以直接跳过，在下面输入框里说也一样。",
-    fields: wf.intake, footnote: wf.footnote, steps: wf.steps,
+    fields: wf.intake, footnote: wf.footnote, notice: wf.notice, steps: wf.steps,
     onSubmit: (values) => startWithForm(modId, values),
     onSkip: () => { host.querySelectorAll(".wfcard").forEach((x) => x.remove()); q.focus() },
   })
@@ -2157,7 +2197,7 @@ function formSummary(modId, values) {
   return "开始「" + wf.name + "」：" + (parts.join(" · ") || "按默认设定")
 }
 /** 通用表单卡渲染器。schema 全部来自服务端，这里只管画 —— 改流程不用动前端 */
-function buildFormCard({ title, sub, fields, footnote, steps, onSubmit, onSkip, submitText, seed }) {
+function buildFormCard({ title, sub, notice, fields, footnote, steps, onSubmit, onSkip, submitText, seed }) {
   // seed = 之前各步已填过的值（服务端 _workflow.json 里那张平表）。
   // 【必须有】步骤表单里的 columns 字段 source 指向的是【首屏】选的数据文件，不在本卡的 fields 里；
   // 不把旧值带进来，"分组列"就会永远停在"先在上面选好数据文件"，这个下拉等于废了。
@@ -2169,6 +2209,13 @@ function buildFormCard({ title, sub, fields, footnote, steps, onSubmit, onSkip, 
   const t = document.createElement("div"); t.className = "wftitle"; t.textContent = title
   hd.appendChild(t); box.appendChild(hd)
   if (sub) { const s = document.createElement("div"); s.className = "wfsub"; s.textContent = sub; box.appendChild(s) }
+  // notice 放在卡片【顶部】：体裁声明这种「填之前就得知道」的话，放底部脚注等于没说 ——
+  // 实测医生把一整屏填完才发现这里不做 Meta。
+  if (notice) { const n = document.createElement("div"); n.className = "wfnotice"; n.innerHTML = wfInlineMd(notice); box.appendChild(n) }
+  // ★ 用【显式标记】判断用户动过没有，不能看 values 是否为空：建卡时就会灌进各字段的默认值
+  //   （lang / hasPHI / figs…），按「非空即已填」判断会一进来就当成已填，
+  //   流程条随即被裁成残缺链条 —— 实测「数据统计与分析」只剩一步「统计分析」。
+  let touched = false
   const body = document.createElement("div")   // 步骤条画在 body 里（随 redraw 一起重画，见下）
   box.appendChild(body)
   // 条件字段：任一字段变化都整块重画（表单最多十几项，重画成本可忽略，换来的是 when 逻辑只有一份）
@@ -2177,7 +2224,11 @@ function buildFormCard({ title, sub, fields, footnote, steps, onSubmit, onSkip, 
     // 步骤条必须跟着表单一起重画：服务端 stepsFor() 【确实会按表单裁剪步骤】（勾了"已脱敏"就没有脱敏步、
     // 诊断准确性研究没有基线表）。只在建卡时画一次的话，用户看到的流程和实际要跑的流程是两回事，
     // 而且会跟它上方那句"会跳过基线表那步"的帮助文字当面打架。
-    if (steps?.length) body.appendChild(stepsBar(trimSteps(steps, values), [], null))
+    if (steps?.length) body.appendChild(stepsBar(trimSteps(steps, touched ? values : null), [], null))
+    // 必须包一层箭头函数：syncGo 是下面的 const，而首次 redraw() 是同步跑的 ——
+    // 直接写 setTimeout(syncGo,0) 会在这里就去取 syncGo，撞上暂时性死区抛 ReferenceError，
+    // 整个 redraw 当场中断，表单一个字段都画不出来。
+    setTimeout(() => syncGo(), 0)   // 字段重画后同步「开始」按钮的可用态与缺项提示
     let curSection = null
     for (const f of fields) {
       if (!fieldVisible(f, values)) { delete values[f.id]; continue }   // 条件不成立 → 连值一起清掉，别把隐藏项拼进任务卡
@@ -2191,13 +2242,23 @@ function buildFormCard({ title, sub, fields, footnote, steps, onSubmit, onSkip, 
         curSection = f.section
         body.appendChild(Object.assign(document.createElement("div"), { className: "wfsec", textContent: f.section }))
       }
-      body.appendChild(fieldEl(f, values, redraw, fields))
+      body.appendChild(fieldEl(f, values, () => { touched = true; redraw() }, fields))
     }
   }
   redraw()
   if (footnote) { const fn = document.createElement("div"); fn.className = "wffoot"; fn.innerHTML = wfInlineMd(footnote); box.appendChild(fn) }
   const acts = document.createElement("div"); acts.className = "wfacts"
   const go = document.createElement("button"); go.type = "button"; go.className = "wfgo"; go.textContent = submitText || "开始"
+  // ★ 必填没满足时把按钮置灰、并在 title 写出缺什么。此前无论填没填都是亮蓝色，用户不知道
+  //   点下去是报错还是白跑一轮（还要扣积分）—— 三份评审都卡在这里。
+  //   仍然可点（不阻断是设计铁律），只是把代价先说清楚。
+  const miss = () => fields.filter((f) => fieldRequired(f, values) && fieldVisible(f, values) &&
+    (values[f.id] === undefined || values[f.id] === "" || (Array.isArray(values[f.id]) && !values[f.id].length)))
+  const syncGo = () => {
+    const m = miss()
+    go.classList.toggle("dim", m.length > 0)
+    go.title = m.length ? "还差：" + m.map((f) => f.label).join("、") : ""
+  }
   const err = document.createElement("div"); err.className = "wferr"; err.style.display = "none"
   go.addEventListener("click", () => {
     const miss = fields.filter((f) => fieldRequired(f, values) && fieldVisible(f, values) &&
@@ -2241,7 +2302,9 @@ function fieldEl(f, values, onChange, allFields) {
   if (fieldRequired(f, values)) { const r = document.createElement("span"); r.className = "req"; r.textContent = "*"; lab.appendChild(r) }
   wrap.appendChild(lab)
   const mk = (tag, props) => Object.assign(document.createElement(tag), props)
-  if (f.type === "multi" || (f.type === "select" && (f.options || []).length <= 6)) {
+  // 阈值 8 而不是 6：研究类型有 8 个选项，落到下拉后成了全屏唯一的下拉控件，
+  // 而它偏偏是第一个必填项 —— 用户看不见里面有什么，第一步就卡住（实测反馈）。
+  if (f.type === "multi" || (f.type === "select" && (f.options || []).length <= 8)) {
     // 选项少就摊开成 chip（比下拉少一次点击，也让用户一眼看全候选）
     const opts = document.createElement("div"); opts.className = "wfopts"
     const multi = f.type === "multi"
@@ -2284,15 +2347,25 @@ function fieldEl(f, values, onChange, allFields) {
     wrap.appendChild(opts)
   } else if (f.type === "select") {
     const sel = mk("select", {})
-    sel.appendChild(mk("option", { value: "", textContent: "（不限 / 未选）" }))
+    // 必填项的占位不能写「不限」——那是"随便，都行"的意思，与"必须选一个"直接打架。
+    sel.appendChild(mk("option", { value: "",
+      textContent: fieldRequired(f, values) ? "请选择…" : "（不限 / 未选）" }))
     for (const o of f.options || []) sel.appendChild(mk("option", { value: o.v, textContent: o.t }))
     sel.value = values[f.id] ?? ""
     sel.addEventListener("change", () => { values[f.id] = sel.value || undefined; onChange() })
     wrap.appendChild(sel)
   } else if (f.type === "bool") {
-    const b = mk("button", { type: "button", className: "wfopt" + (values[f.id] ? " on" : ""), textContent: values[f.id] ? "✓ 是" : "否" })
-    b.addEventListener("click", () => { values[f.id] = !values[f.id]; onChange() })
-    wrap.appendChild(b)
+    // ★ 两个互斥选项，不要只画一个按钮。单按钮的问题：用户看到一个孤零零的「否」，
+    //   既不知道它可以点，也不知道点了会变成什么 —— 实测截图里这一项完全读不出是开关。
+    const box = document.createElement("div"); box.className = "wfopts"
+    for (const [val, label] of [[true, "是"], [false, "否"]]) {
+      // ★ 用严格相等，不要 !!：undefined 会被 !! 变成 false，于是「未作答」被画成已选「否」。
+      //   合规类问题（数据里有没有患者身份信息）被替用户答成「没有」，脱敏那步就整个跳过了。
+      const b = mk("button", { type: "button", className: "wfopt" + (values[f.id] === val ? " on" : ""), textContent: label })
+      b.addEventListener("click", () => { values[f.id] = val; onChange() })
+      box.appendChild(b)
+    }
+    wrap.appendChild(box)
   } else if (f.type === "range") {
     const box = document.createElement("div"); box.className = "wfrange"
     const cur = values[f.id] || {}
@@ -2312,7 +2385,16 @@ function fieldEl(f, values, onChange, allFields) {
   } else if (f.type === "files") {
     const opts = document.createElement("div"); opts.className = "wfopts"
     if (!Array.isArray(values[f.id])) values[f.id] = []
-    if (!UPLOADED.length) opts.appendChild(mk("span", { className: "wfhelp", textContent: "还没有上传文件 —— 用左侧「上传数据」传上来后回到这里就能选。" }))
+    // 没上传时只说一句：此前这里一句、字段自带的 help 又一句，两行意思重复（实测截图里很刺眼）
+    if (!UPLOADED.length) {
+      // 就地给一个上传按钮：此前只写一句「用左侧『上传数据』」——而那块面板在【右上角】，
+      // 方向说反了；就算说对，勾完字段还要满屏找入口也不合理。#up 是页面上那个文件 input。
+      const pick = mk("button", { type: "button", className: "wfopt", textContent: "＋ 上传数据文件" })
+      pick.addEventListener("click", () => document.getElementById("up")?.click())
+      opts.appendChild(pick)
+      opts.appendChild(mk("span", { className: "wfhelp", textContent: "传完回到这里就能选；也可以用右上角「上传数据」面板。" }))
+      f = { ...f, help: "" }
+    }
     for (const name of UPLOADED) {
       const b = mk("button", { type: "button", className: "wfopt" + (values[f.id].includes(name) ? " on" : ""), textContent: name })
       b.addEventListener("click", () => {
@@ -2409,6 +2491,12 @@ function fieldEl(f, values, onChange, allFields) {
  * 少做①或②，界面上显示的流程就和实际要跑的流程对不上 —— 这种错从界面上完全看不出来。
  */
 function trimSteps(steps, values) {
+  // ★ 表单还没填任何东西时，显示【完整】流程。
+  //   按空表单裁剪的结果是条件步全被裁掉：「数据统计与分析」只剩一步「统计分析」，
+  //   「SCI 论文」第一步显示成「出版级图表」（真正的第一步依赖 materials，被裁没了）——
+  //   用户进来第一眼看到的是一条残缺链条，既不知道有几步，还被误导了顺序。
+  //   填了东西之后再裁才有意义（那时裁掉的确实是用不上的步骤）。
+  if (!values) return steps   // null = 用户还没动过表单（见 buildFormCard 的 touched）
   const keep = steps.filter((st) => fieldVisible(st, values))
   const head = [], rest = []
   for (const st of keep) (st.first && condOk(st.first, values) ? head : rest).push(st)
@@ -2422,7 +2510,9 @@ function stepsBar(steps, done, cur, failed) {
   // 兜底：没有明确的当前步就取【第一个未完成的步骤】，这也正是流程实际所处的位置。
   const at = cur || (steps.find((s) => !dn.has(s.id)) || {}).id
   const bar = document.createElement("div"); bar.className = "wfsteps"
-  bar.appendChild(Object.assign(document.createElement("span"), { className: "wsl", textContent: "流程" }))
+  // 给出总步数：12 个标签折成两行又没编号，用户数不清有几步（实测反馈）。
+  bar.appendChild(Object.assign(document.createElement("span"), { className: "wsl",
+    textContent: `流程（共 ${steps.length} 步）` }))
   steps.forEach((s, i) => {
     if (i) bar.appendChild(Object.assign(document.createElement("span"), { className: "wsx", textContent: "›" }))
     const el = document.createElement("span")
@@ -2437,6 +2527,12 @@ function stepsBar(steps, done, cur, failed) {
       s.gate ? "这是质量把关步骤，不通过会退回上游返工" : "", s.hint || ""].filter(Boolean).join("；")
     bar.appendChild(el)
   })
+  // 把关这个黄标签三份评审都看不懂（谁把关？不过会怎样？）。给一行图例，别让人猜。
+  if (steps.some((x) => x.gate)) {
+    const lg = document.createElement("div"); lg.className = "gatelegend"
+    lg.textContent = "标「把关」的步骤会自动做一次质量检查（如查假引用、查统计硬伤）；没通过会退回上一步返工，不会直接出稿。"
+    bar.appendChild(lg)
+  }
   return bar
 }
 // 表单脚注的极简 markdown：【先转义再处理粗体】。不能复用上面那个 mdInline —— 它假定入参

@@ -79,7 +79,9 @@ const JOURNAL_FILTER = [
     help: "筛的是「检索结果」发表在什么刊上，不是你想投的刊。这个数来自 OpenAlex 的两年篇均被引，"
         + "跟影响因子算法思路相近但口径不同，不是官方影响因子。留空 = 不筛。" },
   { id: "jQuartile", label: "影响力档位（近似）", type: "multi", options: [
-    { v: "Q1", t: "前 25%（Q1）" }, { v: "Q2", t: "前 50%（Q2）" }, { v: "Q3", t: "后 50%（Q3）" }, { v: "Q4", t: "后 25%（Q4）" }],
+    // 分档要写成互不重叠的区间：原来 Q2「前50%」、Q3「后50%」看着像两段重叠（实测反馈）
+    { v: "Q1", t: "前 25%（Q1）" }, { v: "Q2", t: "25%–50%（Q2）" },
+    { v: "Q3", t: "50%–75%（Q3）" }, { v: "Q4", t: "后 25%（Q4）" }],
     help: "按检索结果里各刊影响力排序分四档，近似替代「分区」的说法，不是中科院或 JCR 分区。" },
   { id: "jOA", label: "只保留开放获取（OA）的文献", type: "bool", default: false,
     help: "OA = 不用订阅就能下到全文。勾上后只保留这类文献，能显著提高后续「全文获取」的成功率。" },
@@ -100,7 +102,8 @@ export const WORKFLOWS = {
         { v: "caseseries", t: "病例系列 / 个案" }, { v: "basic", t: "体外 / 动物实验" }],
         help: "决定流程走法：前瞻性与 RCT 会把新颖性裁定提到最前做预注册锁；诊断准确性研究通常无人口学基线，会跳过基线表那步。" },
       { id: "articleType", label: "稿件类型", type: "select", default: "original", options: [
-        { v: "original", t: "Original Article" }, { v: "brief", t: "Brief Report" },
+        // 加中文：临床医生未必都对得上这几个英文体裁名（评审反馈）
+        { v: "original", t: "原著（Original Article）" }, { v: "brief", t: "简报（Brief Report）" },
         { v: "case", t: "Case Report" }, { v: "letter", t: "Letter / Correspondence" }] },
       { id: "topic", label: "研究主题一句话", type: "textarea", required: true,
         placeholder: "例：术前中性粒细胞/淋巴细胞比值对胃癌根治术后 3 年生存的预测价值" },
@@ -122,7 +125,8 @@ export const WORKFLOWS = {
       { id: "registryNo", label: "临床试验注册号", type: "text", when: { field: "materials", has: "registry" },
         placeholder: "如 NCT01234567 / ChiCTR2400000000；没有就留空（会标『待补充』，不会编造）" },
       { id: "journalTier", label: "目标期刊梯队", type: "select", default: "target", options: [
-        { v: "target", t: "target 主投（推荐）" }, { v: "reach", t: "reach 冲刺" }, { v: "safety", t: "safety 保底" }],
+        // 选项文字只给中文：英文键名已经是 v，再在 t 里写一遍 target/reach/safety 纯属噪音
+        { v: "target", t: "主投（推荐）" }, { v: "reach", t: "冲刺更高一档" }, { v: "safety", t: "保底" }],
         help: "投稿前就想好被拒后下一站，省来回。" },
       { id: "journalName", label: "已经想好具体期刊", type: "text",
         placeholder: "填了就按该刊稿约排版；留空则用通用送审格式" },
@@ -242,6 +246,10 @@ export const WORKFLOWS = {
   review: {
     primary: "literature-review",
     intakeTitle: "选题与检索范围",
+    // ★ 体裁声明必须在【首屏第一眼】就说，不能只放在卡片底部的脚注里 —— 本模块用的
+    //   「纳入/排除」「研究设计」「PICO」全是系统综述的标配语汇，医生会理所当然以为这里能做 Meta，
+    //   填完一整屏才发现没有 PRISMA / 双人筛选 / 偏倚风险，那时已经白填了。
+    notice: "本模块做的是**叙述性综述**（传统文献综述）。不做双人独立筛选、PRISMA 流程图、偏倚风险评估与 Meta 合并 —— 要那些请回工作台选「自由对话」，在那里说明你要做系统综述 / Meta 分析。",
     // ⚠️ 这一行会显示在表单底部：系统综述不属于任何模块，必须给用户指路，别成哑失败。
     footnote: "需要双人独立筛选 / PRISMA 流程图 / 偏倚风险 RoB / GRADE 这类方法学强度的**系统综述或 Meta 分析**，请到「自由对话」模块 —— 本模块做的是叙述性综述。",
     intake: [
@@ -510,7 +518,9 @@ export const WORKFLOWS = {
         requiredWhen: { field: "checks", has: "integrity" },
         help: "只有勾了「数据完整性」才需要 —— 没有数值表这一项做不了。" },
       { id: "checks", label: "核查项", type: "multi", required: true,
-        default: ["refs", "doi", "retracted"],
+        // 默认必须把「统计陷阱」也勾上：模块副标题与流程条都写着会查统计方法，
+        // 而默认不勾等于按介绍点「开始」的人拿到一份没查统计的报告，自己还不知道。
+        default: ["refs", "doi", "retracted", "stats"],
         options: [{ v: "refs", t: "假引用（文献是否真实存在）" }, { v: "doi", t: "DOI 是否正确" },
           { v: "retracted", t: "是否引用了已撤稿文献" }, { v: "stats", t: "统计陷阱与方法硬伤" },
           { v: "format", t: "格式与体例（章节结构、图表题注、参考文献格式）" },
@@ -554,7 +564,10 @@ export const WORKFLOWS = {
       { id: "strength", label: "润色强度", type: "select", default: "standard", options: [
         { v: "light", t: "保守（只动明显问题）" }, { v: "standard", t: "标准（推荐）" },
         { v: "heavy", t: "激进（重写句式节奏）" }] },
-      { id: "protectRefs", label: "带文献角标的句子一个字都不要改", type: "bool", default: true,
+      // ★ 别用「否定式标题 + 是/否」：那是双重否定（是=不改、否=可以改），实测医生要停下来想一遍。
+      //   改成中性字段名 + 正向选项，选项文字自己把话说完。
+      { id: "protectRefs", label: "带文献角标的句子怎么处理", type: "select", default: true,
+        options: [{ v: true, t: "原句一字不动（推荐）" }, { v: false, t: "允许改写，改完自动重查引用" }],
         // ★ 措辞是踩出来的：原来写"保持引用处的文字原样不动"，AI 把"引用处"理解成【只有 [n] 这个编号】，
         //   于是 4 条带引用的句子全被改写 —— 其中「显著低于」→「低于」、「Meta 分析提示」→「显示」，
         //   等于替别人的论文改了统计学结论，投稿会被审稿人抓"引用失实"。标签必须说死是【整句】。
@@ -849,6 +862,7 @@ export function workflowFor(mod, values) {
     intakeTitle: w.intakeTitle,
     intake: w.intake,
     footnote: w.footnote || null,
+    notice: w.notice || null,   // 进来第一眼就该知道的话（如体裁声明），渲染在卡片顶部而非底部
     // 条件字段（when / whenAny / first）必须【一个不落】地下发：前端的 trimSteps 要用它们
     // 重算出与 stepsFor 完全相同的步骤集。漏掉任何一个，那一半条件在前端就恒为"成立"，
     // 界面显示的流程与实际执行的流程就会不一致 —— 而这种错从界面上完全看不出来。
