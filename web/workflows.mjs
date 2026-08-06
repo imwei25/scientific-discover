@@ -201,7 +201,7 @@ export const WORKFLOWS = {
         // 前瞻性与 RCT：必须在采数前把假设与主分析计划冻住 → 提到最前；回顾性研究已有数据，
         // 无法再"采数前预注册"，这步降级为可选的新颖性裁定（AGENTS.md §三 表下注）。
         first: { field: "studyType", in: ["prospective", "rct"] },
-        emits: ["novelty_report.md", "preregistration.md"], render: "report" },
+        emits: ["novelty_report.md", "preregistration.md", "analysis_plan.md"], render: "report" },
       { id: "litreview", name: "文献综述", skill: "literature-review",
         form: [
           { id: "query", label: "检索式 / 关键词", type: "textarea",
@@ -318,8 +318,13 @@ export const WORKFLOWS = {
         help: "选「其它」的话，下面要写清楚是哪个渠道 —— 不同渠道的正文结构和字数要求差别很大。" },
       { id: "funderOther", label: "具体是哪个资助渠道", type: "text", when: { field: "funder", eq: "other" },
         required: true, placeholder: "例：中华医学会临床医学科研专项 / 某某市卫健委面上项目" },
+      // ★ 示范值必须用【2026 新码表】里真实存在的组合。原来写的是"H16 消化系统"，两处都错：
+      //   2026 年医学部代码自 H10 起整体位移，H16 现在是【急重症医学】，消化系统是 H03，
+      //   肿瘤一律 H18（见 grant-proposal/references/nsfc-medical-h.md：旧表的"H16 肿瘤学"已失效）。
+      //   实测用户照抄这个示范值填进去，模型第一轮就得停下来纠正 —— 示范值是最容易被照抄的东西，
+      //   界面拿一个错的去教用户，比不给示范更糟。
       { id: "discipline", label: "申请代码 / 学部方向", type: "text",
-        placeholder: "例：H16 消化系统；不确定可留空，会给建议" },
+        placeholder: "例：H18 肿瘤学 / H03 消化系统；不确定可留空，会按你的方向给建议" },
       { id: "applicant", label: "申请人身份", type: "select", required: true, options: [
         { v: "student", t: "在读研究生" }, { v: "postdoc", t: "博士后" }, { v: "lecturer", t: "讲师 / 主治" },
         { v: "associate", t: "副高" }, { v: "professor", t: "正高" }],
@@ -356,7 +361,7 @@ export const WORKFLOWS = {
         emits: ["topic_candidates*.csv", "topic_selection*.md"], render: "topics",
         hint: "候选选题会列成卡片，你选一个再往下" },
       { id: "novelty", name: "新颖性裁定与预注册", skill: "novelty-check", gate: true,
-        emits: ["novelty_report.md", "preregistration.md"], render: "report", onFail: "topic" },
+        emits: ["novelty_report.md", "preregistration.md", "analysis_plan.md"], render: "report", onFail: "topic" },
       // ★ 这一步在流程条上必须单列：它决定后面所有章节的结构与逐节字数，查错了整篇作废。
       //   摆出来，用户才能在这时候就发现「它按的是去年口径」，而不是等成稿之后才发现。
       //   与 write 同属 grant-proposal 技能，靠产物（要求卡）区分先后 —— markStepBySkill
@@ -383,7 +388,12 @@ export const WORKFLOWS = {
     // ★ research-scan（领域扫描）与 novelty-check（新颖性裁定）本质上都要【检索文献】——
     //   白名单里不给检索技能，它们一动手就撞模块闸、整轮作废（实测在另一会话里复现过：
    //    "网关把 literature-review 的脚本当越权拦了"）。标书的立项依据本来就建立在文献之上。
-    extra: ["render-docx", "search-lit", "literature-review", "fulltext-retrieval"],
+    //   同理必须给 reference-check：CLAUDE.md §五 明令"写完综述/论文自动跑 reference-check 查假引用"，
+    //   而标书立项依据的假引用风险不比论文低（评审看的就是那几十条文献）。此前没给的实测后果是
+    //   **干完活才被打断**：agent 写完标书正要核引用，整轮被模块闸掐掉 → peer-review 与排版出件
+    //   都没跑成，用户拿到一份没过任何闸的 proposal.md，十分钟的活丢了后半截。
+    //   拦在最贵的时刻，是所有拦法里最差的一种。
+    extra: ["render-docx", "search-lit", "literature-review", "fulltext-retrieval", "reference-check"],
   },
 
   // ============ 文献研读 ============
@@ -779,7 +789,7 @@ const RENDER_RULES = [
   { render: "doc", globs: ["*.docx", "*.doc", "*.pdf", "*.pptx", "*.xlsx", "*.xls"] },   // xlsx 漏过一次：脱敏步 emits 里写着 deid_*.xlsx，却落进"认不出"
   { render: "table", globs: ["*.csv", "*.tsv"] },
   { render: "manuscript", globs: ["manuscript*.md", "proposal*.md", "review.md", "*_review.md", "digest*.md", "research_report*.md", "deep_research*.md"] },
-  { render: "report", globs: ["*_report.md", "*_log.md", "data_profile.md", "preregistration.md"] },
+  { render: "report", globs: ["*_report.md", "*_log.md", "data_profile.md", "preregistration.md", "analysis_plan.md"] },
 ]
 const COMPILED = RENDER_RULES.map((r) => ({ render: r.render, res: r.globs.map(globRe) }))
 // 各步 emits → render 的反查表：由 WORKFLOWS 自动展开。

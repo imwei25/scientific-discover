@@ -2739,8 +2739,9 @@ function trimSteps(steps, values) {
   return [...head, ...rest]
 }
 /** 步骤条：done 来自"产物出现了没有"的反推，cur 是最近提交的那一步 */
-function stepsBar(steps, done, cur, failed, off) {
+function stepsBar(steps, done, cur, failed, off, implied) {
   const dn = new Set(done || []), fl = new Set(failed || []), of = new Set(off || [])
+  const im = new Set(implied || [])
   // cur 只有"提交过某一步的表单"才会有值，所以第一轮它一定是空的。空着不补的话整条链全是灰的，
   // 而闸那一步又带着颜色 → 用户把闸读成"当前步骤"（实测发生过，以为 AI 起步就跳到了引用核查）。
   // 兜底：没有明确的当前步就取【第一个未完成的步骤】，这也正是流程实际所处的位置。
@@ -2760,8 +2761,12 @@ function stepsBar(steps, done, cur, failed, off) {
     el.className = "wfstep" + (dn.has(s.id) ? " done" : "") + (isFail ? " failed" : "") + (isCur ? " cur" : "") + (s.gate ? " gate" : "") + (isOff ? " off" : "")
     // failLabel：个别闸不能说"需返工"。数据完整性自查的铁律是「只出待核信号、不下造假结论」，
     // 界面替它把话说成"需返工"，等于替它下了"你的数据有问题"这个结论 —— 与技能本身的口径打架。
-    el.textContent = (dn.has(s.id) ? "✓ " : isFail ? "✕ " : isCur ? "▸ " : "") + s.name
-      + (isFail ? "·" + (s.failLabel || "需返工") : "") + (isOff ? "（未启用）" : s.optional ? "(可选)" : "")
+    // implied：由"后面的步骤完成了"反推出来的，本身没有任何产物文件。成因有两种（步骤真跑了但
+    // 不产出文件，如零结果检索；或用户明说跳过），服务端分不清，所以只说事实"无产物"，不打包票。
+    const isImplied = (im || new Set()).has(s.id) && !isFail
+    el.textContent = (dn.has(s.id) ? (isImplied ? "· " : "✓ ") : isFail ? "✕ " : isCur ? "▸ " : "") + s.name
+      + (isFail ? "·" + (s.failLabel || "需返工") : isImplied ? "·无产物" : "")
+      + (isOff ? "（未启用）" : s.optional ? "(可选)" : "")
     // 把"这是干什么的"和"现在在哪"都说清楚：光靠颜色，色觉障碍与截图场景都传达不到
     el.title = [isOff ? "按你当前的选择，这一步不会跑——勾上对应的选项才会启用"
         : isFail ? (s.failLabel
@@ -3008,6 +3013,7 @@ let liveSteps = null   // 本会话【按表单裁剪后】的步骤集（/api/w
 let liveDone = []      // 最近一次已知的完成集（服务端按产物反推）；实时高亮时要沿用它，别把 ✓ 冲掉
 let liveCur = null     // 实时推断的当前步（技能一开跑就点亮，不等本轮结束）
 let liveFailed = []    // 闸跑了但【没过】的步骤（报告里写着 Major revision / 未通过 等）
+let liveImplied = []   // 由「后面完成了」反推补齐的步骤：没有产物文件，界面标「无产物」而不是绿勾
 const failedNames = () => {   // 未过闸步骤的中文名，给产物卡的警示用
   const list = liveSteps || wfCache.get(currentModule)?.steps || []
   return liveFailed.map((id) => list.find((s) => s.id === id)?.name || id)
@@ -3027,7 +3033,7 @@ function markStepBySkill(skill) {
   liveCur = hit.id
   updateStepsBar(liveDone, liveCur)
 }
-function updateStepsBar(done, cur, steps, failed) {
+function updateStepsBar(done, cur, steps, failed, implied) {
   // 优先用裁剪后的：wfCache 里那份来自 /api/modules/<id>/workflow（不带 values），是未裁剪的全量。
   // 拿它画进度条，勾了"已脱敏"而被剔掉的"数据脱敏"会永远挂在条上、永远打不上勾。
   if (steps?.length) liveSteps = steps
@@ -3041,7 +3047,8 @@ function updateStepsBar(done, cur, steps, failed) {
   // 已完成的步骤不该再当"当前"：产物出来了就说明那步过了，此时当前步应交给 stepsBar 的兜底去推
   if (liveCur && liveDone.includes(liveCur)) liveCur = null
   if (failed) liveFailed = failed
-  const bar = stepsBar(list, liveDone, cur || liveCur, liveFailed)
+  if (implied) liveImplied = implied
+  const bar = stepsBar(list, liveDone, cur || liveCur, liveFailed, null, liveImplied)
   stepsHostEl.replaceChildren(bar)   // 独立容器，一行就是它自己；不再往 #log 里插（会挡正文）
   stepsHost = bar
 }
@@ -3061,7 +3068,7 @@ async function offerStepForm(turn) {
   //   还会把 liveSteps 一起污染成上一个会话的。
   if (!turn.isConnected || sessionId !== mySid) return false
   if (!st?.state || !st.steps?.length) return false                 // chat 会话 / 没有工作流
-  updateStepsBar(st.state.done || [], st.state.cur, st.steps)       // 顺手把步骤条刷到最新（产物反推的进度）
+  updateStepsBar(st.state.done || [], st.state.cur, st.steps, st.state.failed || [], st.state.implied || [])       // 顺手把步骤条刷到最新（产物反推的进度）
   const done = new Set(st.state.done || [])
   // 同一步只给一次卡。不然：产物没出现之前这一步一直是"未完成"，之后【每一轮】回复底部都会
   // 再挂一张一模一样的卡；而 paper 有 7 个带表单的步骤 → 整场对话里「下一步建议」几乎不再出现，
@@ -3119,7 +3126,7 @@ async function loadWorkflowState() {
     currentModule = j.module
     // 第 4 个参数不能漏：漏了 updateStepsBar 会沿用旧的 liveFailed（切会话/刷新时是 []），
     // 于是「需返工」的红标在刷新后凭空消失，那一步显示成"还没做"。服务端是有 failed 的。
-    updateStepsBar(j.state.done || [], j.state.cur, j.steps, j.state.failed || [])
+    updateStepsBar(j.state.done || [], j.state.cur, j.steps, j.state.failed || [], j.state.implied || [])
   } catch (_) {}
 }
 
@@ -3498,7 +3505,7 @@ function openStream(url) {
   // 结构化产物：服务端按文件名认出渲染器（文献表→文献卡片、核查报告→红黄绿逐条…）。
   // 这是 files 之外【额外】的一份，不是替代 —— 认不出的产物仍走上面那条，绝不会因此消失。
   es.addEventListener("artifacts", (ev) => { try { renderArtifacts(JSON.parse(ev.data)) } catch (_) {} })
-  es.addEventListener("workflow", (ev) => { try { const w = JSON.parse(ev.data); updateStepsBar(w.done || [], w.cur, null, w.failed || []) } catch (_) {} })
+  es.addEventListener("workflow", (ev) => { try { const w = JSON.parse(ev.data); updateStepsBar(w.done || [], w.cur, null, w.failed || [], w.implied || []) } catch (_) {} })
   es.addEventListener("auto", (ev) => { try { autoNextInfo = JSON.parse(ev.data) } catch {} })   // 无人值守：done 后服务端已同步起了下一轮
   es.addEventListener("done", () => {
     paintAnswer(); finalize(); refreshStorage()   // 本轮产物落盘后刷新存储用量

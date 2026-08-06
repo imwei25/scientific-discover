@@ -83,7 +83,11 @@ ${REPO_ROOT:-/app}/.venv/bin/python
 - 下游：裁定为**真新颖/增量/有争议**且（前瞻时）预注册锁定后 → grant 流水线接 `grant-proposal`（写标书，Methods 引用预注册的主假设与分析计划）；paper 流水线（数据已备的可选位）接 `nature-figure` → `literature-review`（成文综述）→ `write-paper`。深挖 prior-art 用 `deep-research`。
 
 ## 产出与交付
-- 《新颖性裁定记录》→ 工作区 `outputs/novelty_assessment.md`；预注册草案 → `outputs/preregistration.md`。
+- 《新颖性裁定记录》→ 工作区 `novelty_assessment.md`；预注册草案 → `preregistration.md`。
+- **★ 回顾性研究（数据已采完）不要叫 `preregistration.md`**，落盘成 `analysis_plan.md`。
+  数据已经收完就不存在"前瞻性预注册"，你在正文里也会写明这一点 —— 但**产出侧栏只显示文件名**，
+  同事或评委看到一个叫 preregistration 的文件，会直接理解成"这项研究做了前瞻预注册"，
+  而那是一个会被审稿人对时间线的严重问题。文件名本身就是一次对外声明，别让它说反话。
 - 出 PDF 交 `render-pdf-doc`（中文报告指定 `--cjk-font`：本地 `Microsoft YaHei`，服务器 `Noto Sans CJK SC`）。
 
 ## 硬约束

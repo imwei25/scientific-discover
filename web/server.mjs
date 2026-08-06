@@ -901,7 +901,14 @@ function gateFailed(outDir, step, files) {
         for (const ln of t.split(/\r?\n/)) {
           if (/^\s*#/.test(ln)) continue
           if (!/^\s*([-*•]|\d+[.)]|\|)/.test(ln)) continue
-          if (!/\*\*\s*(major|critical|严重)\s*\*\*/i.test(ln)) continue
+          // ★ 严重度标记不能要求"这个词【单独】被加粗"。实测 peer-review 真实写出来的是
+          //   **整行加粗的表头式条目**：`**M1 | Critical | H18 改革试点段第②部分 | 缺乏申请人自己的科学证据**`
+          //   —— `**Critical**` 这种形态一次都没出现，于是一份含 2 条 Critical + 4 条 Major 的报告
+          //   被判成通过，标书七步全打绿勾，而医生正是靠这条进度条判断"能不能交稿"。
+          //   收两种形态：① 行内任一加粗段里出现该词；② 表格单元格 `| Critical |`。
+          if (!/\*\*[^*\n]*\b(major|critical)\b[^*\n]*\*\*/i.test(ln)
+              && !/\*\*[^*\n]*严重[^*\n]*\*\*/.test(ln)
+              && !/\|\s*\**\s*(major|critical|严重)\s*\**\s*\|/i.test(ln)) continue
           if (/(无|没有|未发现|不存在|none|no)\s*(major|critical|严重)/i.test(ln)) continue
           // 否定词也可能在标记【之后】：`- 本节 **Major** 问题：无` / `Critical: none` / `严重问题：0`
           if (/[:：]\s*(无|没有|none|n\/?a|0)\s*[条项个]?\s*$/i.test(ln)) continue
@@ -954,19 +961,26 @@ function wfSyncDone(outDir, modId) {
   //   同理适用于可选步在无对象时（如没有全文可下）。
   //   **闸不补**：闸的结论只能由它自己写出的报告得出，凭"后面做完了"推断闸通过，
   //   正是这套代码在别处反复防的那种 fail-open。
+  // ★ 补齐的步骤单独记进 implied，界面上与"真有产物"的步骤区分显示。
+  //   【为什么不能都打绿勾】补齐的成因有两种，服务端分不清：① 步骤真跑了但成功时没有产物
+  //   （零结果检索）；② 用户明说"这两步别做了"，它确实没做。实测后者：用户要求跳过领域扫描与
+  //   选题收敛，产物目录里也确实没有这两步的文件，界面却把它们打成绿勾 —— 那是在告诉用户
+  //   "做过了"，而其实没有。两种都标成中性的"无产物"，比一律绿勾诚实。
+  const implied = new Set()
   const ordered = WF.stepsFor(modId, st.form || {})
   let lastDone = -1
   ordered.forEach((s, i) => { if (done.has(s.id)) lastDone = i })
   for (let i = 0; i < lastDone; i++) {
     const s = ordered[i]
-    if (!s.gate && !done.has(s.id) && !failed.has(s.id)) done.add(s.id)
+    if (!s.gate && !done.has(s.id) && !failed.has(s.id)) { done.add(s.id); implied.add(s.id) }
   }
-  const arr = [...done], farr = [...failed]
-  if (arr.length !== (st.done || []).length || farr.join() !== (st.failed || []).join()) {
+  const arr = [...done], farr = [...failed], iarr = [...implied]
+  if (arr.length !== (st.done || []).length || farr.join() !== (st.failed || []).join()
+      || iarr.join() !== (st.implied || []).join()) {
     // 落盘前重读一次再只覆盖 done：本函数在【轮次收尾】跑，而用户可能正好在同一时刻提交下一步表单
     //（/api/workflow/form 也写这个文件）。拿本函数开头那份旧快照整体写回，会把刚提交的表单值抹掉。
     const fresh = wfLoad(outDir) || st
-    fresh.done = arr; fresh.failed = farr
+    fresh.done = arr; fresh.failed = farr; fresh.implied = iarr
     wfSave(outDir, fresh)
     return fresh
   }
@@ -2123,7 +2137,7 @@ function startJob(sid, sentText, modId) {
     if (modId !== "chat") {
       try {
         const st = wfSyncDone(outDir, modId)
-        if (st) broadcast("workflow", { cur: st.cur || null, done: st.done || [], failed: st.failed || [] })
+        if (st) broadcast("workflow", { cur: st.cur || null, done: st.done || [], failed: st.failed || [], implied: st.implied || [] })
       } catch (e) { console.warn(`[workflow] 进度同步失败：${e.message}`) }
     }
     warmPreviews(outDir, changed)   // 后台把新产出的 office/docx 预转缓存，用户点预览即秒开
