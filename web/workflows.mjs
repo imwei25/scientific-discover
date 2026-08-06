@@ -595,7 +595,9 @@ export const WORKFLOWS = {
         { v: "heavy", t: "激进（重写句式节奏）" }] },
       // ★ 别用「否定式标题 + 是/否」：那是双重否定（是=不改、否=可以改），实测医生要停下来想一遍。
       //   改成中性字段名 + 正向选项，选项文字自己把话说完。
-      { id: "protectRefs", label: "带文献角标的句子怎么处理", type: "select", default: true,
+      // pin：钉进模块前言、每轮都发。默认值传达不到时后果不可逆（替别人的论文改了统计学结论），
+      // 而跳过表单那条路根本不生成任务卡 —— 只有前言能兜住。见 settingsLine 的说明。
+      { id: "protectRefs", label: "带文献角标的句子怎么处理", type: "select", default: true, pin: true,
         options: [{ v: true, t: "原句一字不动（推荐）" }, { v: false, t: "允许改写，改完自动重查引用" }],
         // ★ 措辞是踩出来的：原来写"保持引用处的文字原样不动"，AI 把"引用处"理解成【只有 [n] 这个编号】，
         //   于是 4 条带引用的句子全被改写 —— 其中「显著低于」→「低于」、「Meta 分析提示」→「显示」，
@@ -606,7 +608,8 @@ export const WORKFLOWS = {
         { v: "md", t: "只要 Markdown" }, { v: "docx", t: "Word（.docx）" }, { v: "pdf", t: "PDF" }] },
       // ★ 这里【不能】用通用的 LANG。润色模块里"输出语言=中文"会被理解成"把我的英文稿翻成中文"，
       //   而那是不可逆的后果（拿回来一篇中文稿）。默认改成"保持原文语言"。
-      { id: "lang", label: "润色后稿件用什么语言", type: "select", default: "keep", options: [
+      // pin：同上。"改写成中文"是不可逆的——用户会拿回一篇被翻译过的稿子。
+      { id: "lang", label: "润色后稿件用什么语言", type: "select", default: "keep", pin: true, options: [
         { v: "keep", t: "保持原文语言（推荐）" }, { v: "zh", t: "改写成中文" }, { v: "en", t: "改写成英文" }],
         help: "选「保持原文语言」只润色不翻译；选另外两个等于要求翻译改写，改动会大得多。" },
     ],
@@ -663,10 +666,43 @@ export function withDefaults(mod, values = {}) {
   if (!w) return values || {}
   const out = { ...(values || {}) }
   for (const f of w.intake || []) {
-    if (f.default === undefined || out[f.id] !== undefined) continue
+    if (f.default === undefined) continue
+    const v = out[f.id]
+    // 空数组 / null 也算"没填"。多选题的值是数组，`checks: []`（用户把默认勾选全取消）
+    // 与 `checks` 缺失在语义上是一回事，而只判 undefined 会让前者继续退化成零步骤。
+    const blank = v === undefined || v === null || v === "" || (Array.isArray(v) && !v.length)
+    if (!blank) continue
     out[f.id] = Array.isArray(f.default) ? [...f.default] : f.default
   }
   return out
+}
+
+/**
+ * 「本次生效的关键设定」——钉进模块前言，每一轮都跟着走。
+ *
+ * 【为什么不能只靠任务卡】任务卡只在【第一条消息】里出现一次，而前言是每轮重新注入的
+ * （server.mjs 的 startJob(sid, preamble + q, modId)）。更要命的是「跳过表单」这条路
+ * 压根不调 /api/workflow/form —— 任务卡根本不存在，无论怎么改 taskCard 都到不了模型。
+ * 实测后果：humanize 的 protectRefs 默认「带角标的整句一字不动」传达不到，模型自行把
+ * 「Meta 分析明确指出…显著优于后者[2]」改成了「存在优势」—— 替别人的论文改了统计学结论。
+ * 上一轮它碰巧扛住了，这一轮没扛住，说明一直在靠运气。
+ *
+ * 只渲染打了 `pin: true` 的字段：这类字段的共同点是**默认值一旦没传达，后果不可逆**
+ * （改了内容、翻译了语言）。别一次性铺开——每加一个都该有实测证据。
+ */
+export function settingsLine(mod, rawValues) {
+  const w = WORKFLOWS[mod]
+  if (!w) return ""
+  const values = withDefaults(mod, rawValues)
+  const parts = []
+  for (const f of w.intake || []) {
+    if (!f.pin || !visible(f, values)) continue
+    const s = fmtVal(f, values[f.id])
+    if (s !== null) parts.push(`${f.label}＝${s}`)
+  }
+  if (!parts.length) return ""
+  return `\n- **本次生效的关键设定（用户没改就是默认值，同样作数）**：${parts.join("；")}。`
+    + `这几项即使用户跳过了表单也照样生效，不要因为"他没明说"就自行其是。`
 }
 
 // ---- 派生：按 intake 值裁剪出本次实际要走的步骤 ----
@@ -793,7 +829,13 @@ const fmtVal = (f, v, upDir) => {
   if (f.type === "files") {
     const arr = (Array.isArray(v) ? v : [v]).filter(Boolean)
     if (!arr.length) return null
-    if (upDir) return arr.map((n) => `${String(upDir).replace(/[\\/]+$/, "")}/${n}`).join("、")
+    // 分隔符跟着 upDir 走，别硬编码 "/"：Windows 桌面版会拼出 `D:\...\uploads\ws_xxx/manu.md`
+    // 这种半反半正的路径。模型认得，但难看，也容易被后续脚本处理歪。
+    if (upDir) {
+      const base = String(upDir).replace(/[\\/]+$/, "")
+      const sep = base.includes("\\") && !base.includes("/") ? "\\" : "/"
+      return arr.map((n) => base + sep + n).join("、")
+    }
     return arr.join("、") + "（在上传目录下，绝对路径见前言）"
   }
   if (f.type === "select") return label(v)

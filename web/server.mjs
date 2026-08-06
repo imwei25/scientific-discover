@@ -447,6 +447,7 @@ async function pruneOrphanMeta() {
 // 为什么只一层：够覆盖已知的技能产出结构，同时把列表规模与前端展示复杂度控制住；
 // 更深的层级仍读得到（下载接口按包含性校验，不限深度），只是不主动列出来。
 const DIRSTATE_DEPTH = 1
+const WIN_RESERVED = /^(nul|con|prn|aux|com[1-9]|lpt[1-9])(\.|$)/i
 const dirState = (dir, depth = DIRSTATE_DEPTH, prefix = "") => {
   if (!fs.existsSync(dir)) return {}
   const m = {}
@@ -454,6 +455,10 @@ const dirState = (dir, depth = DIRSTATE_DEPTH, prefix = "") => {
   for (const e of ents) {
     if (e.name.startsWith(".")) continue          // .preview 等派生缓存不进列表
     if (e.name === "_workflow.json" || e.name === "_lasterror.json") continue   // 网关自己的簿子，不是用户产物
+    // Windows 保留名。agent 偶尔会写出 `... 2>nul` 这种 cmd 习惯的重定向，而 Git Bash 不认
+    // `nul` 这个设备名，直接当普通文件建了出来 —— 于是一个 172 字节的垃圾文件出现在用户的
+    // "产出"侧栏里（实测见过）。Linux 生产不会有（那边是 /dev/null），但桌面版就是 Windows。
+    if (WIN_RESERVED.test(e.name)) continue
     const p = path.join(dir, e.name)
     const rel = prefix ? prefix + "/" + e.name : e.name
     let st; try { st = fs.statSync(p) } catch { continue }
@@ -846,9 +851,21 @@ const VERDICT_LINE = /(判定|裁定|结论|总体评价|总评|倾向|建议|ve
 //   · integrity_report.md 的人工核对条目 `★1 …`
 // Low 单独出现不拦：那一档大量是良性提示（实测 paperconan 对二分类结局列报"值重复"）。
 const SIGNAL_MED_HIGH = /(High|Medium|高|中)\s*[:：]?\s*([1-9]\d*)/g
-const SIGNAL_ITEM = /^\s*★\s*\d+/m
+// ★ 条目锚点必须写宽。原来是 /^\s*★\s*\d+/m，只认【裸行开头】的 `★1` —— 实测模型真实写出来的
+//   两版报告一次都没命中过：一版是 `### ★1. 死亡例数：…`（★ 前面有 "### "），另一版压根没用 ★，
+//   写的是 `## 🔴 重大信号（5 项，须作者核实原始记录）` + `### 1. …`。
+//   于是那两轮判红全靠另外两条【偶然】命中（audit 的 Medium 计数行、模型碰巧写了"未通过"），
+//   把偶然去掉就还原成绿 —— 等于这道闸仍然是靠运气。
+// 两条锚点并列，别只留一条：
+//   ① 条目符号（★/⭐），允许前面有 markdown 标题号、列表符、加粗；
+//   ② 小节计数短语（"重大信号（5 项）" / "需核对 3 条" / "待核信号：2 项"）——
+//      不依赖模型这次挑了哪个符号，比 ① 稳。
+const SIGNAL_ITEM = /(^|\n)\s*(?:#{1,6}\s*)?(?:[-*•]\s*)?(?:\*\*\s*)?[★⭐]\s*\d+/
+// 分隔符要连空格一起收：模型写的既有"重大信号（5 项）"也有"需核对 3 条"。
+// 数字只认 1-9 开头 → "0 项"天然不算。再挡一次否定式（"无需核对…"/"未发现需核对…"）。
+const SIGNAL_COUNT_PHRASE = /(?<![无未没])(重大信号|严重信号|待核信号|需核对|需要核对|待核对|人工核对)[^\n]{0,12}?[（(：:\s]\s*([1-9]\d*)\s*[项条个]/
 function signalGateFailed(t) {
-  if (SIGNAL_ITEM.test(t)) return true
+  if (SIGNAL_ITEM.test(t) || SIGNAL_COUNT_PHRASE.test(t)) return true
   let m
   SIGNAL_MED_HIGH.lastIndex = 0
   while ((m = SIGNAL_MED_HIGH.exec(t))) {
@@ -973,7 +990,7 @@ const modulePreamble = (modId, outDir) => {
   if (!m || !m.skills) return ""
   const list = m.skills.map((s) => `\`${s}\``).join("、")
   const vals = outDir ? wfValues(outDir, modId) : {}
-  return `\n- **【模块限制，最高优先级，覆盖 AGENTS.md 的一切路由规则】本会话是「${m.name}」专用模块**：你【只允许】调用这些技能——${list}（其中 \`${m.primary}\` 是主技能，其余按需配套），禁止调用任何其它技能。\n- **本会话【没有】子代理 / task 工具**（不只是"禁止拿它调技能"——是整个工具不可用，调了本轮会被立即中止）。技能文档里凡是写"派调研子代理""并行分头查"的地方，一律改走它给的**串行兜底**：主流程自己顺序查完（web 搜索/抓取，或 \`.venv\` 的 requests/beautifulsoup4）。别先试一次再说，那一轮会白白作废。\n- 只在本模块职责范围内推进，不越界做别的模块的事；缺信息就直接向用户要。\n- 用户的需求超出「${m.name}」范围时，明确告知本模块做不了，并**按下面这张表把他指到对的模块**去新开会话，不要自己徒手代替其它技能去做${moduleMapLine(modId)}\n- 网关会强制校验技能调用：一旦调用上述清单之外的技能，本轮会被立即中止。${WF.pipelineLine(modId, vals)}${WF.artifactLine(modId, vals)}`
+  return `\n- **【模块限制，最高优先级，覆盖 AGENTS.md 的一切路由规则】本会话是「${m.name}」专用模块**：你【只允许】调用这些技能——${list}（其中 \`${m.primary}\` 是主技能，其余按需配套），禁止调用任何其它技能。\n- **本会话【没有】子代理 / task 工具**（不只是"禁止拿它调技能"——是整个工具不可用，调了本轮会被立即中止）。技能文档里凡是写"派调研子代理""并行分头查"的地方，一律改走它给的**串行兜底**：主流程自己顺序查完（web 搜索/抓取，或 \`.venv\` 的 requests/beautifulsoup4）。别先试一次再说，那一轮会白白作废。\n- 只在本模块职责范围内推进，不越界做别的模块的事；缺信息就直接向用户要。\n- 用户的需求超出「${m.name}」范围时，明确告知本模块做不了，并**按下面这张表把他指到对的模块**去新开会话，不要自己徒手代替其它技能去做${moduleMapLine(modId)}\n- 网关会强制校验技能调用：一旦调用上述清单之外的技能，本轮会被立即中止。${WF.settingsLine(modId, vals)}${WF.pipelineLine(modId, vals)}${WF.artifactLine(modId, vals)}`
 }
 
 // HTTP 响应头只能承载 latin1：中文文件名直接塞进 Content-Disposition 会 ERR_INVALID_CHAR → 下载必 500。
@@ -2952,8 +2969,15 @@ export const server = http.createServer(async (req, res) => {
         .filter((f) => WF.visible(f, vals) && WF.isRequired(f, vals))
         .filter((f) => { const v = vals[f.id]; return v === undefined || v === null || v === "" || (Array.isArray(v) && !v.length) })
         .map((f) => `必填项「${f.label}」还没填——不补的话我只能标成"待补充"再向你要`)
+      // ★ 这里【只能】判 sid，不能再加 `sessionModule(sid) === modId`。
+      //   模块绑定发生在 /api/chat/start，而真实顺序是 **上传（现建一个未绑定会话）→ 填首屏表单
+      //   → 发第一条消息**；`sessionModule()` 对未登记会话一律回 "chat"，于是首屏提交时条件恒假。
+      //   后果很讽刺：文件体检唯一的意义就是挡住"选了文件但没传上去、白烧一整轮"，
+      //   而那个场景 100% 发生在首轮 —— 恰恰是它唯一守不到的时刻（两个测试员各自独立复现了这条）。
+      //   "这个文件在不在上传目录里"跟会话绑没绑模块本来就没关系。
+      //   下面写 _workflow.json 那段【保留】模块核对：那条是防串模块写簿子的，两件事不该共用一个 if。
       let upDir = ""
-      if (sid && sessionModule(sid) === modId) {
+      if (sid) {
         try {
           upDir = await sessionUp(sid)
           const have = new Set(fs.existsSync(upDir) ? fs.readdirSync(upDir) : [])

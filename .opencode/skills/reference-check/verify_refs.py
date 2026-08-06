@@ -620,6 +620,25 @@ def guess_title(text):
     return max(cands, key=len).rstrip(".．。").strip()
 
 
+# 年份必须靠【位置】认，不能"取最后一个四位数"。温哥华格式是 `刊名. 2019;381(21):1995-2008.`
+# —— 页码在年份【之后】，于是"取最后一个"系统性地取到页码尾数。实测 8 条真实参考文献错 2 条（25%）：
+#   · `N Engl J Med. 2019;381(21):1995-2008.` → 抽成 2008（页码），把一条完全正确的引用判成
+#     "年份不符(引用2008 vs 库2019)——疑似张冠李戴"；
+#   · `doi:10.1016/j.jacc.2007.05.014` → 抽成 2007，而那恰好等于库里那篇被引错文献的年份，
+#     于是真正该报的"引用2017 vs 库2007"被静默吞掉（同一个 bug 的假阴性面）。
+# 而 CHECK 现在会打红闸，一条页码造成的假 CHECK 就能让一份全真的稿件过不了闸。
+# 判据：年份后面紧跟 `;卷(期):页` 或 `:` —— 在实测那 8 条上 8/8 正确。
+# ★ 抽不到宁可留空：claimed_year 为空只是不做年份交叉核对（无害），抽错则直接制造假警报。
+_YEAR_POS = re.compile(r"(?:^|[.;,．。]\s*|\(\s*)((?:19|20)\d{2})\s*[;:：)]")
+
+
+def guess_year(text):
+    """从一条著录里抽发表年份；抽不出就回空串（绝不猜）。"""
+    t = re.sub(r"\bdoi\s*[:：]?\s*10\.\S+", " ", text or "", flags=re.I)   # DOI 里常含年份，先剔掉
+    m = _YEAR_POS.search(t)
+    return m.group(1) if m else ""
+
+
 def extract(text):
     """从一行文字里抽 DOI/PMID/标题。"""
     doi = DOI_RE.search(text)
@@ -630,13 +649,8 @@ def extract(text):
         claimed = ""
     if pmid and re.fullmatch(r"PMID:?\s*\d+", text.strip(), re.I):
         claimed = ""
-    # 从著录里顺手抽一个年份（1900–2099），供 _verdict_with_meta 做交叉核对。
-    # .bib 走解析器有 claimed_year，而 .txt 那条路此前完全没有 —— 于是"期刊/年份写错"
-    # 这类著录错误在 .txt 输入下一个都抓不出来。取【最后一个】四位数：著录里年份通常在刊名之后，
-    # 而标题里偶尔也含年份（如 "2021 ESC Guidelines"），取最后一个更稳。
-    years = re.findall(r"\b(19\d{2}|20\d{2})\b", text or "")
     return {"raw": text, "claimed_title": claimed,
-            "claimed_year": years[-1] if years else "",
+            "claimed_year": guess_year(text),
             "doi": doi.group(0) if doi else None,
             "pmid": pmid.group(1) if pmid else None}
 
