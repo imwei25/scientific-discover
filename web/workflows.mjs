@@ -74,15 +74,19 @@ const LANG = { id: "lang", label: "输出语言", type: "select", default: "zh",
 //    "我想投的刊影响因子几到几"。所以字段名写死成「**文献来源期刊**的影响力」，并靠 section
 //    分组把它和目标期刊隔开。别为了简洁把"文献来源期刊"这五个字删掉。
 const JOURNAL_FILTER = [
-  { id: "jImpact", label: "文献来源期刊的影响力（近似值）", type: "range", min: 0, max: 100, step: 0.1,
+  // 标题里【不能出现「影响因子」四个字】，连「非影响因子」这种否定式也不行 ——
+  // 任务卡会原样带上这个标签，测试里有专门的守卫防止把近似指标说成影响因子。
+  { id: "jImpact", label: "文献来源期刊的影响力（两年篇均被引，近似）", type: "range", min: 0, max: 100, step: 0.1,
     unit: "两年篇均被引", section: "检索到的文献要满足什么条件",
-    help: "筛的是「检索结果」发表在什么刊上，不是你想投的刊。这个数来自 OpenAlex 的两年篇均被引，"
+    help: "筛的是检索结果发表在什么刊上，不是你想投的刊。"
         + "跟影响因子算法思路相近但口径不同，不是官方影响因子。留空 = 不筛。" },
   { id: "jQuartile", label: "影响力档位（近似）", type: "multi", options: [
-    { v: "Q1", t: "前 25%（Q1）" }, { v: "Q2", t: "前 50%（Q2）" }, { v: "Q3", t: "后 50%（Q3）" }, { v: "Q4", t: "后 25%（Q4）" }],
-    help: "按检索结果里各刊影响力排序分四档，近似替代「分区」的说法，不是中科院或 JCR 分区。" },
+    // 分档要写成互不重叠的区间：原来 Q2「前50%」、Q3「后50%」看着像两段重叠（实测反馈）
+    { v: "Q1", t: "前 25%（Q1）" }, { v: "Q2", t: "25%–50%（Q2）" },
+    { v: "Q3", t: "50%–75%（Q3）" }, { v: "Q4", t: "后 25%（Q4）" }],
+    help: "按检索结果内部排序分的四档，不是中科院或 JCR 分区，别直接当分区汇报。" },
   { id: "jOA", label: "只保留开放获取（OA）的文献", type: "bool", default: false,
-    help: "OA = 不用订阅就能下到全文。勾上后只保留这类文献，能显著提高后续「全文获取」的成功率。" },
+    help: "OA = 不用订阅就能下全文。勾上能明显提高「全文获取」成功率。" },
 ]
 
 // ---- 各模块工作流 ----
@@ -98,10 +102,11 @@ export const WORKFLOWS = {
         { v: "rct", t: "随机对照试验（RCT）" }, { v: "diagnostic", t: "诊断准确性研究" },
         { v: "casecontrol", t: "病例对照" }, { v: "crosssection", t: "横断面" },
         { v: "caseseries", t: "病例系列 / 个案" }, { v: "basic", t: "体外 / 动物实验" }],
-        help: "决定流程走法：前瞻性与 RCT 会把新颖性裁定提到最前做预注册锁；诊断准确性研究通常无人口学基线，会跳过基线表那步。" },
+        help: "决定流程走法：前瞻性 / RCT 会先锁定假设；诊断准确性研究无人口学基线，会跳过 Table 1。" },
       { id: "articleType", label: "稿件类型", type: "select", default: "original", options: [
-        { v: "original", t: "Original Article" }, { v: "brief", t: "Brief Report" },
-        { v: "case", t: "Case Report" }, { v: "letter", t: "Letter / Correspondence" }] },
+        // 加中文：临床医生未必都对得上这几个英文体裁名（评审反馈）
+        { v: "original", t: "原著（Original Article）" }, { v: "brief", t: "简报（Brief Report）" },
+        { v: "case", t: "个案报道（Case Report）" }, { v: "letter", t: "通讯（Letter）" }] },
       { id: "topic", label: "研究主题一句话", type: "textarea", required: true,
         placeholder: "例：术前中性粒细胞/淋巴细胞比值对胃癌根治术后 3 年生存的预测价值" },
       { id: "materials", label: "已有材料", type: "multi", options: [
@@ -109,21 +114,20 @@ export const WORKFLOWS = {
         { v: "figures", t: "已有图表" }, { v: "ethics", t: "伦理批件号" },
         { v: "registry", t: "临床试验注册号" }, { v: "refs", t: "参考文献库（bib/Zotero）" }],
         help: "没有的不用勾，缺的会在对应步骤问你要，绝不替你编。" },
-      { id: "dataFiles", label: "数据文件", type: "files", when: { field: "materials", has: "rawdata" },
+      { id: "dataFiles", label: "原始数据表", type: "files", when: { field: "materials", has: "rawdata" },
+        uploadText: "上传数据表", accept: ".xlsx / .csv",
         help: "从「上传数据」里挑。没上传的先去左侧上传。" },
       { id: "deidDone", label: "这份数据已经脱敏过了", type: "bool", default: false,
         when: { field: "materials", has: "rawdata" },
-        help: "没脱敏的话流程会自动先做一步脱敏 —— 含患者信息的数据未脱敏不得进入任何统计，这是平台的硬性规定。" },
+        help: "选「是」会先脱敏再分析。未脱敏的患者数据不得进入统计。" },
       { id: "draftFiles", label: "已有的初稿 / 图表 / 文献库文件", type: "files",
+        uploadText: "上传初稿 / 图表 / 文献库", accept: ".docx / .pdf / 图片 / .bib",
         whenAny: [{ field: "materials", has: "draft" }, { field: "materials", has: "figures" }, { field: "materials", has: "refs" }],
-        help: "从「上传数据」里挑。勾了「已有初稿 / 已有图表 / 参考文献库」就得把文件传上来，否则那几项等于没说。" },
+        help: "上面勾了已有初稿 / 图表 / 文献库的，把对应文件传上来。" },
       { id: "ethicsNo", label: "伦理批件号", type: "text", when: { field: "materials", has: "ethics" },
         placeholder: "原样填写，没有就留空（会标『待补充』，不会编造）" },
       { id: "registryNo", label: "临床试验注册号", type: "text", when: { field: "materials", has: "registry" },
         placeholder: "如 NCT01234567 / ChiCTR2400000000；没有就留空（会标『待补充』，不会编造）" },
-      { id: "journalTier", label: "目标期刊梯队", type: "select", default: "target", options: [
-        { v: "target", t: "target 主投（推荐）" }, { v: "reach", t: "reach 冲刺" }, { v: "safety", t: "safety 保底" }],
-        help: "投稿前就想好被拒后下一站，省来回。" },
       { id: "journalName", label: "已经想好具体期刊", type: "text",
         placeholder: "填了就按该刊稿约排版；留空则用通用送审格式" },
       ...JOURNAL_FILTER,
@@ -242,6 +246,10 @@ export const WORKFLOWS = {
   review: {
     primary: "literature-review",
     intakeTitle: "选题与检索范围",
+    // ★ 体裁声明必须在【首屏第一眼】就说，不能只放在卡片底部的脚注里 —— 本模块用的
+    //   「纳入/排除」「研究设计」「PICO」全是系统综述的标配语汇，医生会理所当然以为这里能做 Meta，
+    //   填完一整屏才发现没有 PRISMA / 双人筛选 / 偏倚风险，那时已经白填了。
+    notice: "本模块做的是**叙述性综述**（传统文献综述）。不做双人独立筛选、PRISMA 流程图、偏倚风险评估与 Meta 合并 —— 要那些请回工作台选「自由对话」，在那里说明你要做系统综述 / Meta 分析。",
     // ⚠️ 这一行会显示在表单底部：系统综述不属于任何模块，必须给用户指路，别成哑失败。
     footnote: "需要双人独立筛选 / PRISMA 流程图 / 偏倚风险 RoB / GRADE 这类方法学强度的**系统综述或 Meta 分析**，请到「自由对话」模块 —— 本模块做的是叙述性综述。",
     intake: [
@@ -249,7 +257,7 @@ export const WORKFLOWS = {
         placeholder: "例：PD-1 抑制剂在肝细胞癌一线治疗中的进展与争议" },
       { id: "pico", label: "研究问题的四要素（填了检索会精准很多）", type: "textarea",
         placeholder: "人群：晚期肝细胞癌初治患者　干预：PD-1 抑制剂联合靶向　对照：单药靶向　结局：总生存期",
-        help: "就是临床研究里常说的 PICO：人群(P) / 干预(I) / 对照(C) / 结局(O)，每项一行或用空格隔开都行。不确定就留空，照样能检索。" },
+        help: "不确定就留空，照样能检索。" },
       { id: "years", label: "时间范围", type: "select", default: "10", options: [
         { v: "3", t: "近 3 年" }, { v: "5", t: "近 5 年" }, { v: "10", t: "近 10 年" }, { v: "0", t: "不限" }] },
       { id: "designs", label: "纳入的研究设计", type: "multi", options: [
@@ -315,16 +323,17 @@ export const WORKFLOWS = {
         { v: "papers", t: "代表作 / 已发表论文" }, { v: "preliminary", t: "预实验数据" },
         { v: "platform", t: "平台 / 设备条件" }, { v: "cohort", t: "已有样本库 / 队列" },
         { v: "none", t: "暂无（从零开始）", exclusive: true }] },
-      { id: "basisFiles", label: "上传代表作 / 预实验材料", type: "files",
+      { id: "basisFiles", label: "代表作 / 预实验材料", type: "files",
+        uploadText: "上传代表作 / 预实验材料", accept: ".pdf / .docx（代表作建议 5 篇以内）",
         when: { field: "basis", hasNot: "none" } },
       // ★ 这一项在技能里是【优先级最高】的输入（grant-proposal SKILL.md 第 1.5 步①、第 2 步）：
       //   拿到当年官方文件就不必联网调研，且其结构提纲/字数硬限【压过】内置要求卡。
       //   省市级、卫健委、院级这些渠道的模板常年锁在申报平台内、网上根本查不到，只有申请人手里有。
       //   表单成了主要入口之后再不给它一个位置，等于把技能最可靠的一条路藏了起来。
       { id: "guideFiles", label: "官方申报通知 / 申请书模板（有就传）", type: "files",
+        uploadText: "上传通知 / 模板", accept: ".pdf / .docx",
         section: "申报要求（决定标书的结构与硬限）",
-        help: "当年的申报通知、申请书模板、指南文件都行。传了就以它为准——它比内置要求卡更新、更权威。"
-            + "没有也能写：会按内置要求卡起草，并在产出上标明「提交前请以当年官方模板核对」。" },
+        help: "申报通知 / 模板 / 指南都行，传了就以它为准；没有也能写，会标明请以当年官方模板核对。" },
       { id: "deadline", label: "申报截止日期", type: "date",
         help: "填了会按剩余时间安排步骤的详略；不填也能写。" },
       { id: "wordLimit", label: "正文字数上限", type: "number", min: 1000, max: 100000, unit: "字",
@@ -341,6 +350,14 @@ export const WORKFLOWS = {
         hint: "候选选题会列成卡片，你选一个再往下" },
       { id: "novelty", name: "新颖性裁定与预注册", skill: "novelty-check", gate: true,
         emits: ["novelty_report.md", "preregistration.md"], render: "report", onFail: "topic" },
+      // ★ 这一步在流程条上必须单列：它决定后面所有章节的结构与逐节字数，查错了整篇作废。
+      //   摆出来，用户才能在这时候就发现「它按的是去年口径」，而不是等成稿之后才发现。
+      //   与 write 同属 grant-proposal 技能，靠产物（要求卡）区分先后 —— markStepBySkill
+      //   取「第一个未完成的同技能步」，所以要求卡出来打上勾之后，进度才会走到成文。
+      { id: "spec", name: "摸清申报要求", skill: "grant-proposal",
+        emits: ["要求卡*.md", "grant_spec*.md", "requirements*.md"], render: "report",
+        hint: "定渠道、取当年结构提纲与逐节字数硬限、形式审查清单；传了官方模板就以它为准，没有内置卡的渠道会联网查并标明来源与年份",
+        note: "动笔写正文【之前】，先把本次实际采用的要求写成 `要求卡-<渠道>.md` 落盘 —— **用内置要求卡的渠道也要写**，不能因为「卡在 references/ 里读过了」就跳过。至少包含：章节结构提纲（标题原文）、逐节字数/页数硬限、格式规定、形式审查与附件清单、以及每一项的来源与年份口径（内置卡写明卡的年份，联网查的附 URL，没查到的写「未找到官方来源」）。用户传了当年官方模板 / 申报通知的，以用户文件为准，并把它与内置卡的差异逐条列出来 —— 那正是发现「今年又改版了」的地方。这一步的结论决定后面每一节怎么写、写多长，不落盘用户就看不见你按的是哪一版，只能等成稿之后才发现按错了。" },
       { id: "write", name: "标书成文", skill: "grant-proposal",
         form: [{ id: "sections", label: "要写的章节", type: "multi",
           default: ["basis", "content", "route", "feature", "foundation", "condition"],
@@ -428,6 +445,7 @@ export const WORKFLOWS = {
     intakeTitle: "数据与分析设置",
     intake: [
       { id: "dataFiles", label: "数据文件", type: "files",
+        uploadText: "上传数据表", accept: ".xlsx / .csv",
         // ★ 不能无条件必填：「样本量 / 把握度」是【做研究之前】算要收多少例的，此时根本没有数据。
         //   写死 required 的结果是——设计课题的医生一进来就被"还没填：数据文件"挡住，
         //   等于"想算样本量？先去伪造一份数据"。
@@ -436,9 +454,11 @@ export const WORKFLOWS = {
         //   会让一个没有任何数据的 KM/Cox 请求静默通过 —— 比过度拦截更危险。
         //   判据是"除样本量之外还勾了别的吗"。
         requiredWhen: { field: "analyses", hasOther: ["power"] },
-        help: "从左侧「上传数据」里挑。选好后下面的变量映射会自动读出真实表头。只算样本量 / 把握度的话不用传数据。" },
-      { id: "hasPHI", label: "数据里含患者身份信息（姓名/住院号/身份证/住址等）", type: "bool", default: false,
-        help: "勾上会先做脱敏再分析 —— 未脱敏的患者数据不得进入统计，这是平台的硬性规定。" },
+        help: "选好后下面的列名会自动读出来。只算样本量 / 把握度可以不传。" },
+      // ★ 这题【不能有默认值】：默认「否」等于替用户声明「本数据不含身份信息」，
+      //   而他表里就摆着 300 个姓名和住院号。改成必答，两个都不预选。
+      { id: "hasPHI", label: "数据里含患者身份信息（姓名/住院号/身份证/住址等）", type: "bool", required: true,
+        help: "选「是」会先脱敏再分析。未脱敏的患者数据不得进入统计。" },
       { id: "analyses", label: "要做的分析", type: "multi", required: true, options: [
         { v: "profile", t: "数据体检（缺失 / 异常 / 重复 ID）" },
         { v: "desc", t: "描述性统计" }, { v: "table1", t: "基线表 Table 1" },
@@ -454,7 +474,7 @@ export const WORKFLOWS = {
         whenAny: [{ field: "analyses", has: "compare" }, { field: "analyses", has: "table1" }],
         help: "区分组别的那一列，如 治疗组/对照组、手术方式。用于基线表与组间比较。" },
       { id: "outcomeCol", label: "结局列", type: "columns", source: "dataFiles",
-        help: "你要解释或预测的那个结果，如 是否复发、住院天数、缓解与否。" },
+        help: "要解释或预测的结果，如 是否复发、住院天数。选好数据文件后这里会读出真实列名。" },
       // 这四个是对应分析的必要输入，缺了那一步跑不出来 —— 勾了该分析就必填
       { id: "timeCol", label: "随访时间列（生存分析用）", type: "columns", source: "dataFiles",
         when: { field: "analyses", has: "survival" }, required: true,
@@ -469,7 +489,7 @@ export const WORKFLOWS = {
         when: { field: "analyses", has: "roc" }, required: true,
         help: "公认的确诊依据，如 病理结果。1 = 有病，0 = 无病。" },
       { id: "covars", label: "需要校正的协变量", type: "columns", source: "dataFiles", multiple: true,
-        help: "多因素分析里要一并放进模型的因素，如 年龄、性别、分期。可多选，也可不选。" },
+        help: "要一并放进模型的因素，如 年龄、性别、分期。可不选。" },
       { id: "figs", label: "顺便出投稿级图", type: "bool", default: false,
         help: "300dpi + 矢量，可直接投稿；不勾则只给 150dpi 预览图。" },
       LANG,
@@ -505,12 +525,16 @@ export const WORKFLOWS = {
     primary: "reference-check",
     intakeTitle: "核查设置",
     intake: [
-      { id: "docFiles", label: "待核查的稿件", type: "files", required: true },
+      { id: "docFiles", label: "待核查的稿件", type: "files", required: true,
+        uploadText: "上传稿件", accept: ".docx / .pdf / .md" },
       { id: "dataFiles", label: "配套的数值表", type: "files",
+        uploadText: "上传数值表", accept: ".xlsx / .csv",
         requiredWhen: { field: "checks", has: "integrity" },
         help: "只有勾了「数据完整性」才需要 —— 没有数值表这一项做不了。" },
       { id: "checks", label: "核查项", type: "multi", required: true,
-        default: ["refs", "doi", "retracted"],
+        // 默认必须把「统计陷阱」也勾上：模块副标题与流程条都写着会查统计方法，
+        // 而默认不勾等于按介绍点「开始」的人拿到一份没查统计的报告，自己还不知道。
+        default: ["refs", "doi", "retracted", "stats"],
         options: [{ v: "refs", t: "假引用（文献是否真实存在）" }, { v: "doi", t: "DOI 是否正确" },
           { v: "retracted", t: "是否引用了已撤稿文献" }, { v: "stats", t: "统计陷阱与方法硬伤" },
           { v: "format", t: "格式与体例（章节结构、图表题注、参考文献格式）" },
@@ -543,7 +567,8 @@ export const WORKFLOWS = {
     primary: "humanize-academic",
     intakeTitle: "润色设置",
     intake: [
-      { id: "docFiles", label: "待润色的稿件", type: "files", required: true },
+      { id: "docFiles", label: "待润色的稿件", type: "files", required: true,
+        uploadText: "上传稿件", accept: ".docx / .pdf / .md" },
       { id: "goals", label: "润色目标", type: "multi", required: true, default: ["deai"],
         options: [{ v: "deai", t: "去除生成式文本痕迹（去 AI 味）" },
           { v: "language", t: "语言润色（语法 / 措辞 / 流畅度）" },
@@ -554,11 +579,14 @@ export const WORKFLOWS = {
       { id: "strength", label: "润色强度", type: "select", default: "standard", options: [
         { v: "light", t: "保守（只动明显问题）" }, { v: "standard", t: "标准（推荐）" },
         { v: "heavy", t: "激进（重写句式节奏）" }] },
-      { id: "protectRefs", label: "带文献角标的句子一个字都不要改", type: "bool", default: true,
+      // ★ 别用「否定式标题 + 是/否」：那是双重否定（是=不改、否=可以改），实测医生要停下来想一遍。
+      //   改成中性字段名 + 正向选项，选项文字自己把话说完。
+      { id: "protectRefs", label: "带文献角标的句子怎么处理", type: "select", default: true,
+        options: [{ v: true, t: "原句一字不动（推荐）" }, { v: false, t: "允许改写，改完自动重查引用" }],
         // ★ 措辞是踩出来的：原来写"保持引用处的文字原样不动"，AI 把"引用处"理解成【只有 [n] 这个编号】，
         //   于是 4 条带引用的句子全被改写 —— 其中「显著低于」→「低于」、「Meta 分析提示」→「显示」，
         //   等于替别人的论文改了统计学结论，投稿会被审稿人抓"引用失实"。标签必须说死是【整句】。
-        help: "指的是含 [1]、[2] 这类角标的【整句话】，不只是角标本身 —— 那些句子在转述别人的研究结论，"
+        help: "指含 [1][2] 角标的【整句话】，不只是角标本身 —— 这些句子在转述别人的结论，"
             + "改一个「显著」就变成了另一个意思。默认不动。关掉的话，润色后会自动把引用重新核一遍兜底。" },
       { id: "outFmt", label: "输出格式", type: "select", default: "docx", options: [
         { v: "md", t: "只要 Markdown" }, { v: "docx", t: "Word（.docx）" }, { v: "pdf", t: "PDF" }] },
@@ -888,6 +916,7 @@ export function workflowFor(mod, values) {
     intakeTitle: w.intakeTitle,
     intake: w.intake,
     footnote: w.footnote || null,
+    notice: w.notice || null,   // 进来第一眼就该知道的话（如体裁声明），渲染在卡片顶部而非底部
     // 条件字段（when / whenAny / first）必须【一个不落】地下发：前端的 trimSteps 要用它们
     // 重算出与 stepsFor 完全相同的步骤集。漏掉任何一个，那一半条件在前端就恒为"成立"，
     // 界面显示的流程与实际执行的流程就会不一致 —— 而这种错从界面上完全看不出来。
@@ -905,11 +934,15 @@ export function pipelineLine(mod, values) {
   const steps = stepsFor(mod, values)
   if (!steps.length) return ""
   const chain = steps.map((s) => s.name + (isOptional(s, values) ? "(可选)" : "") + (s.gate ? "(闸)" : "")).join(" → ")
+  // 个别步骤有非做不可的交代（如「要求卡必须落盘」），挂在 step.note 上随流程一起发出去。
+  // hint 是给界面做悬停提示的，不进提示词；两者别混用。
+  const notes = steps.filter((s) => s.note)
+  const noteTxt = notes.length ? notes.map((s) => `\n- **「${s.name}」这一步**：${s.note}`).join("") : ""
   const gates = steps.filter((s) => s.gate)
   const gateTxt = gates.length
     ? `质量闸：${gates.map((g) => `${g.name}（不过则回退到「${steps.find((x) => x.id === g.onFail)?.name || "上游相应步骤"}」返工）`).join("；")}。`
     : ""
-  return `\n- **本模块的标准流程**：${chain}。${gateTxt}按此顺序推进；确有理由跳步或合并要先向用户说明。同一闸反复回退 ≥2 次仍不过就停下问用户，别无限返工。\n- **闸的结论只能由重新跑一遍得出**：因某道闸不过而返工后，必须【真的重跑那道闸】并让它写出新报告，才可以说闸已通过。拿上一版的旧报告宣布通过是错的 —— 界面会同时显示「已通过」和一份写着问题的报告，自相矛盾。\n- **不要替校验脚本夸大结论**：不变量校验之类的自动检查只比对数字、角标、术语这些「集合」，查不出「显著低于→低于」「提示→显示」这种措辞漂移。校验通过只能说「数字与角标未变」，**不许说成「引用保留不动」或「内容未改」** —— 用户看到那句话就不会再去逐句核对了。\n- **闸没跑完不许出件**：排版 / 交付类步骤必须排在质量闸【之后】。实测出现过 docx 比核查报告早 13 秒生成 —— 用户拿到一份没过闸的送审稿，而它看起来跟过了闸的一模一样。\n- **闸红着的时候不许用话术放行**：不得说「通常可以放心使用」「来源可靠的话就没问题」这类话。闸没过就如实说没过、说清要改什么；把判断推回给用户，等于替他把闸抹平了。`
+  return `${noteTxt}\n- **本模块的标准流程**：${chain}。${gateTxt}按此顺序推进；确有理由跳步或合并要先向用户说明。同一闸反复回退 ≥2 次仍不过就停下问用户，别无限返工。\n- **闸的结论只能由重新跑一遍得出**：因某道闸不过而返工后，必须【真的重跑那道闸】并让它写出新报告，才可以说闸已通过。拿上一版的旧报告宣布通过是错的 —— 界面会同时显示「已通过」和一份写着问题的报告，自相矛盾。\n- **不要替校验脚本夸大结论**：不变量校验之类的自动检查只比对数字、角标、术语这些「集合」，查不出「显著低于→低于」「提示→显示」这种措辞漂移。校验通过只能说「数字与角标未变」，**不许说成「引用保留不动」或「内容未改」** —— 用户看到那句话就不会再去逐句核对了。\n- **闸没跑完不许出件**：排版 / 交付类步骤必须排在质量闸【之后】。实测出现过 docx 比核查报告早 13 秒生成 —— 用户拿到一份没过闸的送审稿，而它看起来跟过了闸的一模一样。\n- **闸红着的时候不许用话术放行**：不得说「通常可以放心使用」「来源可靠的话就没问题」这类话。闸没过就如实说没过、说清要改什么；把判断推回给用户，等于替他把闸抹平了。`
 }
 
 /** 产物契约：告诉 agent 用约定文件名，界面才认得出并渲染成表格/卡片 */
