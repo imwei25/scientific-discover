@@ -14,6 +14,7 @@ import * as WebUp from "./web-update.mjs"
 import { shouldOfferUpdate } from "./pack-freshness.mjs"
 import { zip as zipPack } from "./minizip.mjs"
 import * as WF from "./workflows.mjs"
+import { scrubShare, renderShareHtml } from "./share-export.mjs"
 
 // opencode 的完整流水线（标书/论文/系统综述）单轮可跑十几分钟，而 session.prompt 是“等整轮结束才返回”的请求；
 // undici 默认 5 分钟 headers/body 超时会让这类长轮假性抛错。关掉这两个超时（0=不限），连接超时保留。
@@ -197,7 +198,10 @@ function skillUpdateInfo(latest) {
  * 从历史里剔除"的直播逻辑；反馈要的恰恰是【全部】，包括刚生成完的那一轮。
  */
 async function collectTranscript(sid) {
-  const msgs = un(await client.session.messages({ path: { id: sid } })) || []
+  // Array.isArray 而非 `|| []`：会话不存在时 SDK 不抛，交回来的是 NotFoundError 的 data
+  //（一个对象），`|| []` 判不住，后面 for-of 会 is-not-iterable 抛成 500。
+  const raw = un(await client.session.messages({ path: { id: sid } }))
+  const msgs = Array.isArray(raw) ? raw : []
   const out = []
   for (const m of msgs) {
     const role = m.info?.role
@@ -1615,6 +1619,75 @@ function autoDecide(sid, finalText) {
   console.log(`[auto] 会话 ${sid}：未见完成哨兵，自动续跑第 ${st.rounds}/${AUTO_MAX_ROUNDS} 轮`)
   return { go: true, round: st.rounds }
 }
+// ---- 分享：把整个会话导出成一个自包含 HTML ----
+//
+// 【★ 别拿前端 DOM 去序列化 ★】这是本功能唯一一个致命坑，踩了看不出来：
+//   /api/history 只留 `p.type === "text"` 的 part —— reasoning 与 tool 一个都不回。
+//   于是界面上的「思考过程」「工具调用」两块，【只有本页 SSE 直播过的那几轮】才有 DOM 节点；
+//   用户刷新一下、或从左侧列表切回一个旧会话，历史是走 /api/history 重建的，那些轮次在 DOM 里
+//   压根没有思考与工具。照 DOM 导出的话：刚聊完的会话看着完全正常，任何回看过的会话导出来
+//   思考与工具全空，而界面上看不出任何异常。所以导出必须在服务端重新拉一次【完整】part 列表。
+//
+// 分轮口径与界面一致：一条 user 消息 + 其后所有 assistant 消息 = 一轮
+// （opencode 每个 LLM step 落一条 assistant 消息，界面把它们并进同一个回合渲染）。
+// 正文按 text part 顺序拼（与直播的 emitLive 同口径），思考按 reasoning part 顺序拼。
+/** 会话消息 → 分享用的轮次数组（导出供测试；不碰文件产出，见 share-export.mjs 顶部注释②）*/
+export function shareTurns(msgs) {
+  const scrub = (t) => scrubShare(t, { root: ROOT, home: os.homedir() })
+  const turns = []
+  let cur = null
+  const open = (ask) => { cur = { ask, answer: "", reasoning: "", tools: [], skills: [], error: "" }; turns.push(cur); return cur }
+  // 【必须判 isArray，不能只 `msgs || []`】会话 id 不存在时 opencode 回 404 而 SDK【不抛】：
+  // un() 把 `{name:"NotFoundError",data:{message:...}}` 里的 data 拆出来交过来 —— 一个对象。
+  // 只写 `|| []` 的话它是 truthy，for...of 当场 TypeError，导出变成 500。实测踩到过。
+  for (const m of Array.isArray(msgs) ? msgs : []) {
+    const role = m.info?.role
+    const parts = m.parts || []
+    if (role === "user") {
+      // 【先剥后 trim，不能反过来】前言/任务卡的正则都以「\n\n」收尾，先 trim 掉尾部空行的话，
+      // 一条【只有前言没有正文】的消息就剥不掉了，整段内部指令会原样进分享件。
+      const raw = parts.filter((p) => p.type === "text").map((p) => p.text || "").join("\n")
+      open(scrub(stripPreamble(raw).trim()))
+      continue
+    }
+    if (role !== "assistant") continue
+    if (!cur) open("")           // 没有对应 user 消息的助手输出（如无人值守续跑轮）也要收
+    const text = parts.filter((p) => p.type === "text").map((p) => p.text || "").join("\n")
+    if (text.trim()) cur.answer += (cur.answer ? "\n" : "") + text
+    const think = parts.filter((p) => p.type === "reasoning").map((p) => p.text || "").filter(Boolean)
+    if (think.length) cur.reasoning += (cur.reasoning ? "\n\n" : "") + think.join("\n\n")
+    for (const p of parts) {
+      if (p.type !== "tool" || !p.state?.status) continue
+      // 技能与其它工具分开：界面上技能是常显徽章、其余进折叠列表，分享件照搬这个分法
+      if (p.tool === "skill") {
+        const name = p.state?.input?.name || p.state?.title || ""
+        if (name && !cur.skills.includes(name)) cur.skills.push(name)
+        continue
+      }
+      // 只记「调了什么」，【不记 state.output】：工具输出里是整份文件内容、整张数据表，
+      // 那既是「文件产出」又是最容易夹带患者数据的地方。界面本身也只显示 tool + title。
+      cur.tools.push({ tool: p.tool, title: scrub(p.state.title || ""), status: p.state.status })
+    }
+    if (m.info?.error) cur.error = scrub(String(m.info.error.message || m.info.error.name || m.info.error)).slice(0, 300)
+  }
+  for (const t of turns) {
+    t.answer = scrub(autoStripSentinel(t.answer).trim())   // 哨兵是网关与模型的协议标记，与直播/历史同口径不外露
+    t.reasoning = scrub(t.reasoning.trim())
+  }
+  return turns.filter((t) => t.ask || t.answer || t.reasoning || t.tools.length || t.skills.length || t.error)
+}
+/** 会话消息 → 完整分享 HTML（导出供测试：路由就是调它，测到这里等于测到出口）*/
+export function shareHtmlFromMessages(msgs, opts = {}) {
+  return renderShareHtml({ title: opts.title, exportedAt: opts.exportedAt, turns: shareTurns(msgs) })
+}
+// 下载名：去掉文件系统与 HTTP 头都嫌麻烦的字符；长标题会被截断（有些会话标题是整段任务卡）
+const shareFileName = (title) => {
+  const d = new Date()
+  const day = `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, "0")}${String(d.getDate()).padStart(2, "0")}`
+  const base = String(title || "会话记录").replace(/[\\/:*?"<>|\r\n\t]+/g, " ").replace(/\s+/g, " ").trim().slice(0, 40) || "会话记录"
+  return `${base}-${day}.html`
+}
+
 // 注入进首轮 preamble 的自主指令。与【本会话工作区】同一块注入，故同样【不得含空行】
 // （stripPreamble 按第一个空行剥离，见 skillsPreamble 处的同款约束）。
 const autoPreamble = () => `\n- 【无人值守模式已开启】用户不在电脑前：全程不要向用户提问、不要停下等确认。遇到要选择的地方（单步还是完整流程、选哪条 pipeline、选题、方案、期刊……），直接采用你本要推荐的那一项（相当于用户回了「1」），并在正文用一行说明「已自动采用：xxx」。缺少无法自行获得的事实性信息（数据文件、伦理批号、作者名单等）就标「待补充」，继续完成其余部分，别停下来要。\n- 【完成哨兵】只有当本次目标已全部交付（成稿/成品文件已写盘、该跑的质量闸已跑完）时，才在回复最后单独一行输出 ${AUTO_SENTINEL} 。尚未完成时绝不能输出它（提前输出=任务被腰斩）；反之只要不输出它，系统就会自动让你继续下一轮，所以也不必问"是否继续"。`
@@ -2562,7 +2635,11 @@ export const server = http.createServer(async (req, res) => {
       // 把"读取失败"渲染成"这个会话是空的"，用户以为对话丢了。回一个明显不是结果的对象。
       if (!id) return send(res, 400, "application/json", JSON.stringify({ err: "缺少会话 id" }))
       await clearStaleRevert(id)   // 打开会话即自愈：清掉上次编辑遗留的半回退标记，让历史与后续编辑基于完整消息列表
-      const msgs = un(await client.session.messages({ path: { id } })) || []
+      // 同上：会话被别处删掉时这里拿到的是错误对象而非数组。回 404 说清「会话没了」，
+      // 别让它掉进 catch 变成 500「服务异常」—— 两者用户该做的事完全不同。
+      const rawMsgs = un(await client.session.messages({ path: { id } }))
+      if (!Array.isArray(rawMsgs)) return send(res, 404, "application/json", JSON.stringify({ err: "找不到这个会话（可能已被删除）" }))
+      const msgs = rawMsgs
       const out = []
       for (const m of msgs) {
         const role = m.info?.role
@@ -2570,7 +2647,15 @@ export const server = http.createServer(async (req, res) => {
         let text = (m.parts || []).filter((p) => p.type === "text").map((p) => p.text).join("\n").trim()
         text = stripPreamble(text)   // 剥掉注入的工作区前言，只回显真正对话
         if (role === "assistant") text = autoStripSentinel(text)   // 无人值守的完成哨兵与直播口径一致：不给用户看
-        if (text) out.push({ role, text })
+        if (!text) continue
+        // ★ 连续的 assistant 合成一条：opencode 一轮回答常落成多条消息（文字 → 调工具 →
+        //   接着文字），一条一个气泡的话，刷新后同一轮回答会碎成好几块。直播时它们是累加进
+        //   同一个 .answer 的，所以这个分歧只有刷新 / 切回旧会话才现形 —— 同一段对话两种长相。
+        //   「一轮」的边界只有服务端看得到完整消息序列，所以在这里合，别推给前端。
+        //   与分享导出的 shareTurns 同口径。
+        const prev = out[out.length - 1]
+        if (role === "assistant" && prev?.role === "assistant") prev.text += "\n\n" + text
+        else out.push({ role, text })
       }
       // 这一轮还在生成中：末尾未完成的助手输出交给续流（/api/chat/attach）直播，从历史里剔除避免重复。
       // ★ 但必须先确认【最后一条 user 消息就是本轮发出的那条】。opencode 落盘有延迟，在那个窗口里
@@ -2598,6 +2683,27 @@ export const server = http.createServer(async (req, res) => {
       return send(res, 200, "application/json", JSON.stringify(out))
     }
 
+    // 分享：把整个会话导出成一个自包含 HTML（思考与工具调用默认折叠；产出文件一概不带）。
+    // 为什么走服务端而不是前端序列化 DOM —— 见 shareTurns 上方那段注释，那是本功能唯一的致命坑。
+    if (req.method === "GET" && u.pathname === "/api/share/export") {
+      const id = u.searchParams.get("sid") || u.searchParams.get("id") || ""
+      // 错误一律回 HTML/纯文本而不是 JSON：这个 URL 是【直接导航】过去的（要触发浏览器下载），
+      // 出错时用户看到的就是这个页面本身，回一坨 JSON 等于让他自己解码。
+      if (!id) return send(res, 400, "text/plain; charset=utf-8", "缺少会话 id")
+      let msgs, title = ""
+      try {
+        msgs = un(await client.session.messages({ path: { id } }))
+        title = un(await client.session.get({ path: { id } }))?.title || ""
+      } catch (e) { return send(res, 502, "text/plain; charset=utf-8", `读取会话失败：${explainNetErr(e)}`) }
+      // id 不存在时 SDK 不抛，回的是 NotFoundError 的 data —— 与「会话是空的」是两回事，分开说
+      if (!Array.isArray(msgs)) return send(res, 404, "text/plain; charset=utf-8", "找不到这个会话（可能已被删除）")
+      const turns = shareTurns(msgs)
+      if (!turns.length) return send(res, 404, "text/plain; charset=utf-8", "这个会话还没有内容，没什么可分享的")
+      const html = shareHtmlFromMessages(msgs, { title: title.split("\n")[0].slice(0, 60) || "会话记录" })
+      res.writeHead(200, { "Content-Type": "text/html; charset=utf-8", "Content-Disposition": contentDisposition(shareFileName(title.split("\n")[0])) })
+      return res.end(html)
+    }
+
     // 删除一个会话（连同 outputs/uploads 目录与元数据一并清；进行中的生成先终止）
     if (req.method === "POST" && u.pathname === "/api/session/delete") {
       const id = u.searchParams.get("id") || ""
@@ -2618,7 +2724,9 @@ export const server = http.createServer(async (req, res) => {
       if (jobs.get(sid)?.running) return send(res, 409, "application/json", JSON.stringify({ ok: false, err: "本轮生成进行中，无法编辑，请等结束后再试" }))
       pendingReverts.delete(sid)   // 重新发起编辑 → 上一次未提交的暂存作废，让下面的自愈把它撤干净再重算
       await clearStaleRevert(sid)   // 先清掉上一次没提交的残留回退，确保 uindex→messageID 对着完整消息列表算，而非回退视图
-      const msgs = un(await client.session.messages({ path: { id: sid } })) || []
+      const rawMsgs = un(await client.session.messages({ path: { id: sid } }))
+      if (!Array.isArray(rawMsgs)) return send(res, 404, "application/json", JSON.stringify({ ok: false, err: "找不到这个会话（可能已被删除）" }))
+      const msgs = rawMsgs
       const target = msgs.filter((m) => m.info?.role === "user")[uindex]   // 按顺序取第 uindex 个用户消息
       if (!target?.info?.id) return send(res, 404, "application/json", JSON.stringify({ ok: false, err: "message not found" }))
       // 【先登记后 revert】：若反过来（revert 落地后才登记），并发 history 的 clearStaleRevert
