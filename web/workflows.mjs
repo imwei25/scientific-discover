@@ -500,7 +500,11 @@ export const WORKFLOWS = {
       { id: "profile", name: "数据体检", skill: "data-analysis",
         // 只算样本量（做研究之前）时没有任何数据，这几步永不可能完成 —— 留在条上等于让进度
         // 永远停在第一步。判据用 hasOther：勾了样本量【之外】的分析才需要真数据。
-        when: { field: "analyses", hasOther: ["power"] },
+        // ★ 第二条 whenAny 是给【跳过表单直接打字】那条路的：`analyses` 此时为空，hasOther 恒假，
+        //   于是步骤条只剩「统计分析」一格 —— 而实测那一轮它做完了体检、基线表、组间比较三件事，
+        //   用户看到的却是"1 步，已完成"。体检恰恰是"没有它后面每个 p 都是错的"那一步，
+        //   空表单时默认排上它比漏掉安全。（table1/figure 这类无从推断的仍然不猜。）
+        whenAny: [{ field: "analyses", hasOther: ["power"] }, { field: "analyses", truthy: false }],
         emits: ["data_profile.md", "cleaning_log.md"], render: "report",
         hint: "重复 ID / 分类水平不一致 / 分组缺失必须先清，否则后面每个 p 都是错的" },
       { id: "table1", name: "基线表 Table 1", skill: "clinical-stats",
@@ -894,8 +898,21 @@ export function taskCard(modName, title, fields, values = {}, opts = {}) {
 // 下拉能从根上消灭它。**代价是：一旦解析歪了却仍回一个"看着像模像样"的下拉，比不做这个控件
 // 更危险** —— 用户会从荒唐选项里挑一个，而 testCol / goldCol 这类字段还是必填的。
 // 所以下面每一道判据都宁可降级成"手动填列名"，也不输出可疑结果。判据都是实测踩出来的，别删。
-export function parseHeaders(buf, ext = ".csv") {
+export function parseHeaders(buf, ext = ".csv", opts = {}) {
   const bad = (reason) => ({ headers: null, reason })
+  // ⓪ 【只读了文件头部时，必须先切到最后一个换行】。调用方只读前 64KB（表可能很大），
+  //    于是缓冲区末尾几乎必然停在一行的中间 —— 对中文表就是停在一个多字节字符的中间。
+  //    实测后果比"少几列"严重得多：半个 UTF-8 字符解出 U+FFFD → 判定"不是合法 UTF-8" →
+  //    回退嗅探 GBK → GBK 能把合法的 UTF-8 中文解成乱码而【不产生 U+FFFD】→ 判定成功 →
+  //    返回一整排 "妫€楠屾寚鏍嘷1" 这样的乱码列名，还标着 encoding:"gbk"，**完全不降级**。
+  //    用户看到的是一个三千多项、看着像模像样的下拉 —— 正是本函数注释里点名"比不做这个控件
+  //    更危险"的那种失败形态。纯 ASCII 宽表则表现为静默截断（12000 列悄悄变成 5554 列）。
+  //    换行字节在 UTF-8 / GBK / Big5 里都不会出现在多字节序列内部，切在这里对三种编码都安全。
+  if (opts.partial) {
+    const nl = buf.lastIndexOf(0x0a)
+    if (nl < 0) return bad("表头行太长（前 64KB 里一个换行都没有），读不全就不敢给你列名——请手动填，或把表另存得窄一些。")
+    buf = buf.slice(0, nl)
+  }
   // ① 编码嗅探。★ 中文版 Excel「另存为 CSV」默认写 GBK，这是医院里【最常见】的导出方式，
   //    不是边缘情况。硬按 UTF-8 解会把表头变成 "������"，而那串乱码会被当成真列名盖章确认、
   //    灌进任务卡交给模型（实测：ROC 的待评价指标列填成 "����A_Ddimer"）。

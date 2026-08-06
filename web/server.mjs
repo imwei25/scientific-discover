@@ -2986,6 +2986,39 @@ export const server = http.createServer(async (req, res) => {
             for (const n of (Array.isArray(vals[f.id]) ? vals[f.id] : [vals[f.id]]).filter(Boolean))
               if (!have.has(String(n))) warnings.push(`「${f.label}」里的 ${n} 在本会话的上传里找不到，可能上传失败了`)
           }
+          // columns 型字段：用户填的列名在真实表头里存不存在。
+          // 【为什么要查】实测：任务卡写着「分组列：手术方式」，而表里根本没有这一列（真名叫「组别」），
+          // 模型自己认定"手术方式 → 就是组别"，拿组别跑完全程，**全程一个字都没告诉用户它换了列**。
+          // 这次它猜对了纯属侥幸 —— 真实表里同时有「手术方式」（术式）和「组别」（试验/对照）两列极常见，
+          // 静默替换会产出一份【看起来完全正常、实际分错了组】的 Table 1。
+          // 同一个进程里 parseHeaders 已经能从同一个 upDir 读出真表头（/api/data/headers 走的就是它），
+          // 成本几乎为零。同样只 warning 不挡：表头读不出来的情况太多（xlsx、宽表降级），硬拦会误伤。
+          const headCache = new Map()
+          const headersOf = (fname) => {
+            if (headCache.has(fname)) return headCache.get(fname)
+            let cols = null
+            try {
+              const fp = path.join(upDir, path.basename(fname))
+              const ext = path.extname(fname).toLowerCase()
+              if ([".csv", ".tsv", ".txt"].includes(ext) && fs.existsSync(fp)) {
+                const fd = fs.openSync(fp, "r"); const b = Buffer.alloc(64 * 1024)
+                const n = fs.readSync(fd, b, 0, b.length, 0); fs.closeSync(fd)
+                cols = WF.parseHeaders(b.slice(0, n), ext, { partial: n === b.length }).headers || null
+              }
+            } catch { cols = null }
+            headCache.set(fname, cols)
+            return cols
+          }
+          for (const f of fields || []) {
+            if (f.type !== "columns" || !f.source || !WF.visible(f, vals)) continue
+            const src = (Array.isArray(vals[f.source]) ? vals[f.source] : [vals[f.source]]).filter(Boolean)[0]
+            if (!src) continue
+            const cols = headersOf(String(src))
+            if (!cols || !cols.length) continue          // 读不出表头就别判（xlsx / 宽表降级 / 编码认不出）
+            for (const n of (Array.isArray(vals[f.id]) ? vals[f.id] : [vals[f.id]]).filter(Boolean))
+              if (!cols.includes(String(n)))
+                warnings.push(`「${f.label}」填的是「${n}」，但 ${src} 的表头里没有这一列（实际列名：${cols.slice(0, 8).join("、")}${cols.length > 8 ? "…" : ""}）`)
+          }
         } catch { /* 读不到上传目录就别体检，正常发卡 */ }
       }
       const card = WF.taskCard(MODULE_DEFS[modId]?.name || modId, title, fields, values,
@@ -3022,7 +3055,9 @@ export const server = http.createServer(async (req, res) => {
         fs.closeSync(fd)
         // 解析逻辑抽到 workflows.mjs（纯函数、可单测）——这一段的判据全是踩出来的，没有回归测试
         // 迟早会被"顺手简化"掉。
-        return send(res, 200, "application/json", JSON.stringify(WF.parseHeaders(buf.slice(0, n), ext)))
+        // partial：缓冲区被读满 = 文件还有后续，末尾必然停在一行（很可能是一个多字节字符）的中间。
+        // parseHeaders 会据此先切到最后一个换行再解码，否则中文宽表会被误判成 GBK 返回整排乱码列名。
+        return send(res, 200, "application/json", JSON.stringify(WF.parseHeaders(buf.slice(0, n), ext, { partial: n === buf.length })))
       } catch (e) {
         return send(res, 200, "application/json", JSON.stringify({ headers: null, reason: `读表头失败：${String(e.message || e).slice(0, 120)}` }))
       }
@@ -3787,6 +3822,11 @@ function spawnOc() {
   const err = fs.openSync(path.join(ROOT, "serve.err"), "a")
   const child = spawn(oc.cmd, ["serve", "--port", String(OC_PORT)], {
     cwd: ROOT, detached: true, stdio: ["ignore", out, err], shell: oc.shell,
+    // Windows 下 Python 的 stdout 默认走 GBK，技能脚本一打印中文就是乱码。agent 每次都得
+    // 绕路（"我把详细信息 dump 到 UTF-8 文件再读"、"写个 wrapper 直接调它的 main"），
+    // 一轮白烧 2–4 次 bash 调用，日志里的"乱码"字样还会让用户以为出错了。
+    // 桌面版就是 Windows，这两个变量一劳永逸。Linux 上本来就是 UTF-8，设了无副作用。
+    env: { ...process.env, PYTHONUTF8: "1", PYTHONIOENCODING: "utf-8" },
     // 【Windows 必须给】detached + shell 会让 cmd.exe 另开一个控制台窗口，
     // opencode 的启动横幅就直接糊在用户脸上（桌面版尤其突兀：主窗口旁边跳出个黑框）。
     // windowsHide 对应 CREATE_NO_WINDOW，Tauri 壳起 node 时也是这么做的，这里补齐最后一段。

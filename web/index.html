@@ -2597,9 +2597,28 @@ function fieldEl(f, values, onChange, allFields) {
     // 读不出表头（xlsx 等）时降级成手填输入框，并如实说明原因，绝不给一个空下拉让人以为没有列。
     const host = document.createElement("div")
     wrap.appendChild(host)
-    const src = (values[f.source] || [])[0]
+    // ★ 传了多个数据表时，此前恒取【第一个】，界面上还不说列名来自哪张表 ——
+    //   用户传了「基线表.csv」+「随访表.csv」，"随访时间列/终点事件列"的下拉里列的却是基线表的列名，
+    //   而这几个字段勾了就必填，于是他只能从错表的列里挑一个。这正是这个控件要根治的失败模式本身。
+    //   多表时给一个切换器，并把"当前读的是哪张表"写在界面上。
+    const srcAll = (values[f.source] || []).filter(Boolean)
+    const pickKey = "__src_" + f.id
+    if (srcAll.length > 1 && !srcAll.includes(values[pickKey])) values[pickKey] = srcAll[0]
+    const src = srcAll.length > 1 ? values[pickKey] : srcAll[0]
     if (!src) host.appendChild(mk("div", { className: "wfhelp", textContent: "先在上面选好数据文件，这里会读出真实列名供你挑选。" }))
     else {
+      if (srcAll.length > 1) {
+        // 切换器插在 host【之前】——下面的 .then 会 host.innerHTML="" 重画列名区，
+        // 放进 host 里会被那一下抹掉（而且是异步抹的，界面上表现为"切换器闪了一下就没了"）。
+        const bar = document.createElement("div"); bar.className = "wfopts"
+        for (const s of srcAll) {
+          const b = mk("button", { type: "button", className: "wfopt" + (s === src ? " on" : ""), textContent: s })
+          b.addEventListener("click", () => { values[pickKey] = s; onChange() })
+          bar.appendChild(b)
+        }
+        wrap.insertBefore(mk("div", { className: "wfhelp", textContent: "列名读自哪张表：" }), host)
+        wrap.insertBefore(bar, host)
+      }
       // 表头缓存：任一选项一点就整卡重画，不缓存的话每点一下都重发一轮请求，
       // 且"正在读取表头…"会反复闪一下，看着像卡住了。
       // 【键要带 sid】只按文件名缓存的话，会话 A 的 data.csv（列 A/B/C）会被会话 B 的同名
@@ -2637,6 +2656,19 @@ function fieldEl(f, values, onChange, allFields) {
           opts.appendChild(b)
         }
         host.appendChild(opts)
+        // ★ 成功分支也要留手填入口。此前手填只在"读不出表头"时出现，于是表头读成功但
+        //   【读的是错的那张表】（多表时恒取第一个）或列名被解析歪时，用户被逼着从列表里挑一个
+        //   —— 而 testCol/goldCol 这类勾了就必填，不挑就提交不了。留个逃生口，成本一行。
+        const manual = mk("details", {})
+        manual.appendChild(mk("summary", { className: "wfhelp", textContent: "列表里没有？手动填" }))
+        const inp = mk("input", { type: "text", value: (multi ? "" : (j.headers.includes(values[f.id]) ? "" : values[f.id] ?? "")), placeholder: "列名要和数据表里完全一致" })
+        inp.addEventListener("input", () => {
+          const v = inp.value.trim()
+          if (multi) { /* 多选字段用逗号分隔追加 */ values[f.id] = v ? v.split(/[,，]/).map((s) => s.trim()).filter(Boolean) : [] }
+          else values[f.id] = v || undefined
+        })
+        manual.appendChild(inp)
+        host.appendChild(manual)
       }).catch(() => {
         // ★ 必须给输入框。此前只塞一句提示 → 这个字段变成不可填，而 testCol/goldCol 这类勾了就必填，
         //   用户会卡在"还没填：待评价指标列"永远提交不了（网关繁忙导致本接口超时时就会这样）。

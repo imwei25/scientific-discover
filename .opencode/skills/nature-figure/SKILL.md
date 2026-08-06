@@ -72,6 +72,8 @@ Apply the loaded material in this order:
 
 The chart serves the scientific logic; aesthetic polish is subordinate to making the core conclusion clear, defensible, and reviewable.
 
+**Never invent units.** Axis labels, cut-off annotations, and legends may only carry a unit that is stated in the data itself (in the column name, data dictionary, or a free-text column) or given by the user. When no unit is stated, print the bare number (`Cutoff 1.20`) — do **not** infer one from the magnitude. Observed failure: a source table whose column was just `D-dimer` produced a 300 dpi submission figure reading `Cutoff 1.20 mg/L`; D-dimer is reported as mg/L FEU, µg/mL FEU, or ng/mL DDU depending on the lab, and those differ by up to 1000×. A figure is the artefact that gets published — a wrong unit baked into it survives every later review. Ask the user instead.
+
 ### 5. Reach for references only when needed
 
 The files under `references/` are deep references, not defaults. Open them on demand per the `references.on_demand` table in the manifest — for example `references/figure-contract.md` to build the contract, `references/api.md` for the Python palette and helpers, `references/r-workflow.md` for R, `references/design-theory.md` for color/typography/export rationale, `references/common-patterns.md` and `references/chart-types.md` for layout/chart recipes, `references/nature-2026-observations.md` for real Nature page archetypes, `references/qa-contract.md` before final delivery, and `references/tutorials.md` / `references/demos.md` for worked examples.

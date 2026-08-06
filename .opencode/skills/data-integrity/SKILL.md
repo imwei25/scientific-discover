@@ -42,8 +42,11 @@ ${REPO_ROOT:-/app}/.venv/bin/python ${REPO_ROOT:-/app}/.opencode/skills/data-int
 
 ## 工作流程
 1. **确认 CLI**：`${REPO_ROOT:-/app}/.venv/bin/python -m paperconan --version`（应回 `paperconan 0.x`）。缺了就 `${REPO_ROOT:-/app}/.venv/bin/python -m pip install "paperconan[all]"`。
-2. **备数据目录**：把用户要查的表格文件集中到一个目录（如 `pc-in/`）；含患者信息的先脱敏。
-3. **跑扫描 + 出报告**（两步，见上）：`paperconan pc-in --out audit`（不加 --md）→ `audit_report.py audit/scan.json --data-dir pc-in --out audit/REPORT.md`。**不许编造扫描结果**，一切以 CLI 产物为准。
+2. **备数据目录**：把用户要查的表格文件集中到 **`.pc-in/`**（点号开头，**必须**）；含患者信息的先脱敏。
+   > 点号不是随手写的：这个目录装的是**用户自己刚上传的表的副本**，而界面的"产出"侧栏会列出
+   > 当前目录下的文件。写成 `pc-in/` 的话，医生会在"产出"里看到自己的输入文件（实测发生过），
+   > 以为系统生成了什么。点号开头的目录不会被侧栏收录。
+3. **跑扫描 + 出报告**（两步，见上）：`paperconan .pc-in --out audit`（不加 --md）→ `audit_report.py audit/scan.json --data-dir .pc-in --out audit/REPORT.md`。**不许编造扫描结果**，一切以 CLI 产物为准。
 4. **读产物**：读 `audit/REPORT.md`（按 High/Medium/Low 分组的信号，含跨表复用、GRIM、汇总一致性等）与 `audit/scan.json`（结构化明细，定位到 文件·sheet·行·检测器·数值）。
 5. **复核并汇报**：对每条 High/Medium，**回原表看一眼**具体单元格，套"良性解释优先"给出判断，再按上面"铁律"的自查口径向用户汇报，并列出 `report.html` 路径供其自查细看。
 
