@@ -454,7 +454,7 @@ export const WORKFLOWS = {
       // ★ 这题【不能有默认值】：默认「否」等于替用户声明「本数据不含身份信息」，
       //   而他表里就摆着 300 个姓名和住院号。改成必答，两个都不预选。
       { id: "hasPHI", label: "数据里含患者身份信息（姓名/住院号/身份证/住址等）", type: "bool", required: true,
-        help: "勾上会先做脱敏再分析 —— 未脱敏的患者数据不得进入统计，这是平台的硬性规定。" },
+        help: "选「是」会先脱敏再分析。未脱敏的患者数据不得进入统计。" },
       { id: "analyses", label: "要做的分析", type: "multi", required: true, options: [
         { v: "profile", t: "数据体检（缺失 / 异常 / 重复 ID）" },
         { v: "desc", t: "描述性统计" }, { v: "table1", t: "基线表 Table 1" },
@@ -470,7 +470,7 @@ export const WORKFLOWS = {
         whenAny: [{ field: "analyses", has: "compare" }, { field: "analyses", has: "table1" }],
         help: "区分组别的那一列，如 治疗组/对照组、手术方式。用于基线表与组间比较。" },
       { id: "outcomeCol", label: "结局列", type: "columns", source: "dataFiles",
-        help: "你要解释或预测的那个结果，如 是否复发、住院天数、缓解与否。" },
+        help: "要解释或预测的结果，如 是否复发、住院天数。选好数据文件后这里会读出真实列名。" },
       // 这四个是对应分析的必要输入，缺了那一步跑不出来 —— 勾了该分析就必填
       { id: "timeCol", label: "随访时间列（生存分析用）", type: "columns", source: "dataFiles",
         when: { field: "analyses", has: "survival" }, required: true,
@@ -485,7 +485,7 @@ export const WORKFLOWS = {
         when: { field: "analyses", has: "roc" }, required: true,
         help: "公认的确诊依据，如 病理结果。1 = 有病，0 = 无病。" },
       { id: "covars", label: "需要校正的协变量", type: "columns", source: "dataFiles", multiple: true,
-        help: "多因素分析里要一并放进模型的因素，如 年龄、性别、分期。可多选，也可不选。" },
+        help: "要一并放进模型的因素，如 年龄、性别、分期。可不选。" },
       { id: "figs", label: "顺便出投稿级图", type: "bool", default: false,
         help: "300dpi + 矢量，可直接投稿；不勾则只给 150dpi 预览图。" },
       LANG,

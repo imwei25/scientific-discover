@@ -81,14 +81,20 @@
   .sess-del .ic { width: 14px; height: 14px; }
   /* 对话流：不再是一整块白卡片——底色留浅灰，消息自己是白卡片（与设计稿一致，也让空态的
      主视觉能真正"浮"在页面中间）。宽度收在 900px 内居中。 */
+  /* ★ 对话列宽只有这一个来源：消息流、模块表单卡、底部输入框全部用它，
+     三者才能在【任何】分辨率下左右对齐。以前是各写各的 max-width（900 / 880 / 760），
+     只在某个特定视口宽度下碰巧看齐，换台机器就错开。
+     min() 让窄屏时三者一起收，不必再为每个断点各调一次。 */
+  :root { --colw: min(880px, 100%); }
   #log {
     flex: 1; display: flex; flex-direction: column; gap: 12px; overflow-y: auto;
-    width: 100%; max-width: 900px; margin: 0 auto; padding: 4px 2px 8px;
+    width: 100%; max-width: var(--colw); margin: 0 auto; padding: 4px 0 8px;
   }
   /* welcome / empty state = 主视觉：衬线大标题 + 副标题 + 模块卡 + 示例 chip，整体垂直居中 */
   .welcome { margin: auto; max-width: 720px; text-align: center; padding: 8px 16px 24px; }
-  /* 模块入口装的是整张表单，不是一段说明文字 —— 放宽到略超输入框（760），别比输入框还窄 */
-  .welcome.modentry { max-width: 880px; }
+  /* 模块入口装的是整张表单，不是一段说明文字：吃满整列宽，且【不再自带左右内边距】——
+     叠在 #log 上的那 16px 会让卡片比输入框每边窄 16px，就是用户看到的那点错位。 */
+  .welcome.modentry { max-width: none; width: 100%; padding-left: 0; padding-right: 0; }
   .welcome .wic { width: 56px; height: 56px; color: #aec4de; margin: 0 auto 14px; display: block; stroke-width: 1.4; }
   .welcome .wtitle { color: var(--text); font-family: var(--serif); font-weight: 400; text-transform: uppercase;
     font-size: clamp(34px, 5.4vw, 60px); line-height: 1.05; letter-spacing: -.01em; }
@@ -204,7 +210,7 @@
   button { border: 0; border-radius: var(--r-sm); cursor: pointer; font-size: 14px; font-weight: 600; transition: filter .15s, background .15s, transform .05s; }
   button:active { transform: translateY(1px); }
   button:disabled { opacity: .5; cursor: default; }
-  form.composer { flex: none; width: 100%; max-width: 760px; margin: 14px auto 0; }
+  form.composer { flex: none; width: 100%; max-width: var(--colw); margin: 14px auto 0; }
   .input-box {
     display: flex; flex-direction: column; gap: 10px; padding: 12px 14px;
     background: var(--panel); border: 1px solid var(--line); border-radius: var(--r-lg);
@@ -858,6 +864,7 @@
 
   /* responsive */
   @media (max-width: 1180px) {
+    :root { --colw: 100%; }   /* 窗口一窄就吃满可用宽度，别再留一条用不上的死边距 */
     main { grid-template-columns: minmax(0,56px) minmax(0,1fr) minmax(0,260px); }
     body.sessbar-open main { grid-template-columns: minmax(0,232px) minmax(0,1fr) minmax(0,260px); }
     #chat { padding: 14px 16px 14px; }
@@ -2171,7 +2178,6 @@ async function showIntake(host, modId) {
   if (currentModule !== modId) return          // 拉取期间用户又换了模块 → 这份已经过期，别贴上去
   const card = buildFormCard({
     title: wf.name + " · " + (wf.intakeTitle || "开始"),
-    sub: "填完点「开始」，AI 会按这些设定推进；也可以直接跳过，在下面输入框里说也一样。",
     fields: wf.intake, footnote: wf.footnote, notice: wf.notice, steps: wf.steps,
     onSubmit: (values) => startWithForm(modId, values),
     onSkip: () => { host.querySelectorAll(".wfcard").forEach((x) => x.remove()); q.focus() },
@@ -2549,12 +2555,6 @@ function stepsBar(steps, done, cur, failed) {
       s.gate ? "这是质量把关步骤，不通过会退回上游返工" : "", s.hint || ""].filter(Boolean).join("；")
     bar.appendChild(el)
   })
-  // 把关这个黄标签三份评审都看不懂（谁把关？不过会怎样？）。给一行图例，别让人猜。
-  if (steps.some((x) => x.gate)) {
-    const lg = document.createElement("div"); lg.className = "gatelegend"
-    lg.textContent = "标「把关」的步骤会自动做一次质量检查（如查假引用、查统计硬伤）；没通过会退回上一步返工，不会直接出稿。"
-    bar.appendChild(lg)
-  }
   return bar
 }
 // 表单脚注的极简 markdown：【先转义再处理粗体】。不能复用上面那个 mdInline —— 它假定入参
