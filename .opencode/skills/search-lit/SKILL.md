@@ -20,6 +20,22 @@ never generate citations from memory alone.
 - All citation content (titles, abstracts, BibTeX) in English.
 - Medical terminology is always in English.
 
+### 筛选条件没生效，必须【明说它没生效】
+
+用户勾了「影响力 / 档位」这类筛选，而取指标的源（OpenAlex，按额度计费）拿不到数时，
+**不能只说"限流未能获取指标"就把结果照常交出去** —— 那句话用户读成"少了一列元数据"，
+而真实含义是"**你勾的筛选条件根本没起作用，这份结果没按它过滤过**"。
+
+实测踩过：用户勾了 Q1，交付的 20 篇里 18 篇指标为空、2 篇是 `0.0` 的垃圾值，池子里混着
+Cureus ×2、Frontiers ×3 —— 一个都不像 Q1，而汇报里只有一句轻描淡写的"限流"。
+
+正确做法：在结果表**之前**单独一行写清楚，例如
+`⚠️ 本次未能获取期刊影响力指标（OpenAlex 额度不可用），因此「Q1」这个筛选条件没有生效——下面 20 篇未经该条件过滤，请自行判断刊物层次。`
+同理适用于任何"某个源没打通 → 某个条件没执行"的情形。**取不到 ≠ 悄悄不筛**。
+
+另：某个检索源要求等待很久（`Retry-After` 以小时计，OpenAlex 额度耗尽时就是如此）时，
+脚本会直接判它本轮不可用并抛错（不再真的 sleep 下去）。**换源继续，并在报告里注明少了哪个源**。
+
 ## Key Directories
 
 - **BibTeX output**: User-specified directory (default: current working directory)

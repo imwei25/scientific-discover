@@ -2560,6 +2560,11 @@ function fieldEl(f, values, onChange, allFields) {
     const lo = mk("input", { type: "number", placeholder: "最低", value: cur.min ?? "" })
     const hi = mk("input", { type: "number", placeholder: "最高", value: cur.max ?? "" })
     lo.step = hi.step = f.step ?? "any"   // 影响因子是小数，不给 step 部分浏览器会把 4.5 判成非法
+    // min/max 也要继承。此前只设了 step，于是 schema 上写着 0–100 的影响因子字段可以填 9999，
+    // 上下限倒挂（"90 – 5"）也原样进任务卡，模型只在思考里嘀咕一句"this is a weird range"，
+    // 系统一句没说。同文件的 number 分支本来就设了这两项，两处行为要一致。
+    if (f.min !== undefined) lo.min = hi.min = f.min
+    if (f.max !== undefined) lo.max = hi.max = f.max
     const sync = () => {
       const o = {}
       if (lo.value !== "") o.min = Number(lo.value)

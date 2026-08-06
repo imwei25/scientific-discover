@@ -945,6 +945,22 @@ function wfSyncDone(outDir, modId) {
     if (s.gate && gateFailed(outDir, s, files)) { failed.add(s.id); done.delete(s.id); continue }
     done.add(s.id)
   }
+  // ★ 单调补齐：后面的步骤已完成 ⇒ 它前面的非闸步骤也一定跑过了。
+  //   【为什么必须补】进度是靠"产物文件出现没有"反推的，而有些步骤**成功时也可能不产出文件**：
+  //   实测零结果那轮 —— 检索认真跑了 10 轮、逐级放宽、正确得出"确实一篇都没有"的结论，
+  //   但 evidence_table.csv / refs.bib 天然不会有，于是「文献检索」停在未完成，
+  //   而后面的「研读综述」（有 research_scan.md）打了绿勾。用户看到的是
+  //   "第一步没做、第三步做完了"，会以为结论是凭空来的。零结果是**成功**，不是未完成。
+  //   同理适用于可选步在无对象时（如没有全文可下）。
+  //   **闸不补**：闸的结论只能由它自己写出的报告得出，凭"后面做完了"推断闸通过，
+  //   正是这套代码在别处反复防的那种 fail-open。
+  const ordered = WF.stepsFor(modId, st.form || {})
+  let lastDone = -1
+  ordered.forEach((s, i) => { if (done.has(s.id)) lastDone = i })
+  for (let i = 0; i < lastDone; i++) {
+    const s = ordered[i]
+    if (!s.gate && !done.has(s.id) && !failed.has(s.id)) done.add(s.id)
+  }
   const arr = [...done], farr = [...failed]
   if (arr.length !== (st.done || []).length || farr.join() !== (st.failed || []).join()) {
     // 落盘前重读一次再只覆盖 done：本函数在【轮次收尾】跑，而用户可能正好在同一时刻提交下一步表单
@@ -2969,6 +2985,29 @@ export const server = http.createServer(async (req, res) => {
         .filter((f) => WF.visible(f, vals) && WF.isRequired(f, vals))
         .filter((f) => { const v = vals[f.id]; return v === undefined || v === null || v === "" || (Array.isArray(v) && !v.length) })
         .map((f) => `必填项「${f.label}」还没填——不补的话我只能标成"待补充"再向你要`)
+      // 数值区间的合法性：上下限倒挂、超出 schema 声明的 min/max。
+      // ★ 这段【不能】放进下面那个 `if (sid)` 里——它跟上传目录毫无关系，放进去就又变成
+      //   "只有已建会话才检查"，与刚修掉的那个 bug 同一形态。
+      // 实测：影响力区间填 `90 – 5`（下限比上限大）原样进任务卡，模型只在思考里嘀咕一句
+      //   "this is a weird range (90 to 5)"，系统一句没说；schema 写着 0–100 的字段填 9999 也照过。
+      // 同样只提示不挡：用户可能正填到一半就点了提交，硬拦一个"填反了"比提示它更烦人。
+      for (const f of fields || []) {
+        if (!WF.visible(f, vals)) continue
+        const v = vals[f.id]
+        if (f.type === "range" && v && typeof v === "object") {
+          const { min, max } = v
+          if (min !== undefined && max !== undefined && Number(min) > Number(max))
+            warnings.push(`「${f.label}」的区间填反了：下限 ${min} 比上限 ${max} 还大`)
+          for (const [k, n] of [["下限", min], ["上限", max]]) {
+            if (n === undefined) continue
+            if (f.min !== undefined && Number(n) < f.min) warnings.push(`「${f.label}」的${k} ${n} 小于允许的最小值 ${f.min}`)
+            if (f.max !== undefined && Number(n) > f.max) warnings.push(`「${f.label}」的${k} ${n} 超过允许的最大值 ${f.max}`)
+          }
+        } else if (f.type === "number" && v !== undefined && v !== "" && Number.isFinite(Number(v))) {
+          if (f.min !== undefined && Number(v) < f.min) warnings.push(`「${f.label}」填的 ${v} 小于允许的最小值 ${f.min}`)
+          if (f.max !== undefined && Number(v) > f.max) warnings.push(`「${f.label}」填的 ${v} 超过允许的最大值 ${f.max}`)
+        }
+      }
       // ★ 这里【只能】判 sid，不能再加 `sessionModule(sid) === modId`。
       //   模块绑定发生在 /api/chat/start，而真实顺序是 **上传（现建一个未绑定会话）→ 填首屏表单
       //   → 发第一条消息**；`sessionModule()` 对未登记会话一律回 "chat"，于是首屏提交时条件恒假。

@@ -65,6 +65,8 @@ _EMAIL = (os.environ.get("SCI_CONTACT_EMAIL")
           or "sci-skill@users.noreply.github.com")
 UA = f"sci-agent-enhanced-search/1.1 (mailto:{_EMAIL})"
 TIMEOUT = 30
+# 服务端要求等待超过这个秒数，就当这个源本轮不可用（别真的 sleep 下去，见 _fetch 的说明）
+MAX_RETRY_AFTER = float(os.environ.get("SCI_MAX_RETRY_AFTER", "60"))
 
 EPMC = "https://www.ebi.ac.uk/europepmc/webservices/rest/search"
 S2_SEARCH = "https://api.semanticscholar.org/graph/v1/paper/search"
@@ -199,8 +201,20 @@ def _http_get(url, headers=None, retries=4):
         except urllib.error.HTTPError as exc:
             last = exc
             if exc.code in (429, 503) and attempt < retries - 1:
+                # ★ Retry-After 必须封顶。OpenAlex 已改成按额度计费，额度用尽时回的是
+                #   `Retry-After: 42170`（≈11.7 小时，"Resets at midnight UTC"）——原样 sleep
+                #   等于把整轮检索挂死在这里。实测后果：Europe PMC 明明已经拿到 60 条，
+                #   整轮却因为卡在 OpenAlex 超时中断，**已检索到的结果一条都没落盘**，
+                #   用户白等一轮还得重跑。
+                #   等不起就别等：判定该源本轮不可用，抛出去让调用方降级并在报告里注明。
                 ra = exc.headers.get("Retry-After")
                 wait = float(ra) if (ra and str(ra).isdigit()) else delay
+                if wait > MAX_RETRY_AFTER:
+                    raise RuntimeError(
+                        "该检索源要求等待 %.0f 秒（超过 %d 秒上限）才肯再受理请求，本轮判定它不可用。"
+                        "常见原因：按额度计费的源（如 OpenAlex）当日额度已用尽。"
+                        "请改用其它源，并在报告里注明这一源本次没能参与检索。" % (wait, MAX_RETRY_AFTER)
+                    ) from exc
                 time.sleep(wait)
                 delay *= 2
                 continue
