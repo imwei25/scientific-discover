@@ -283,6 +283,15 @@ fn main() {
                     fwd(&appdir.join(".opencode").join("skills").join("ppt-master")),
                 )
                 .env("SCI_PYTHON", appdir.join(".venv").join("Scripts").join("python.exe"))
+                // pip 默认走 pypi.org，国内实测冷装 icecream（4 个包、1.4MB）要 25.6s，清华源 7.3s。
+                // 25s 这个量级正好卡在 bash 工具超时（默认 60s）与"输出分段太多"的射程里，用户看到的
+                // 就是"让 agent 装个包，每次都失败"。索性在这儿把镜像钉死：网关 spawn opencode 时不传
+                // env、直接继承本进程，所以一处注入就覆盖 agent 跑的所有 pip。
+                // EXTRA 留官方源兜底：pip 在主 index 不可达时会自动回退到 extra index（已实测），
+                // 于是校园网屏蔽清华源、或用户在境外时不至于整个装不了包。
+                .env("PIP_INDEX_URL", "https://pypi.tuna.tsinghua.edu.cn/simple")
+                .env("PIP_EXTRA_INDEX_URL", "https://pypi.org/simple")
+                .env("PIP_DISABLE_PIP_VERSION_CHECK", "1")
                 .env("MPLBACKEND", "Agg")
                 // 中文字体兜底 rc。matplotlib 的查找顺序是 $MATPLOTLIBRC → cwd/matplotlibrc →
                 // configdir（与 deploy/Dockerfile 注释一致，env 优先级最高）；技能都在会话产物目录里跑

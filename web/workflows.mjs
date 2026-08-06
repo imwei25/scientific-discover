@@ -839,6 +839,45 @@ export function gateViolation({ tool, input, skillGate, restricted }) {
   return null
 }
 
+// ---- 死循环护栏的判据（纯函数，便于测试）----
+// 「同一条命令被反复调用」= agent 已经卡住了，再跑下去只是烧时间和配额。
+// 实测（kimi）：python 路径落空后它连发 35+ 次一模一样的 `python -c "print('hello')"`，
+// 跑满 10 分钟零产出，没有任何机制会停下它。阈值 8：正常重试（改参数、换写法）不会一字不差地
+// 重复这么多次。
+//
+// ★★ 必须按【调用】计数，不能按事件计数 ★★
+// opencode 的 bash 工具每吐一段输出就发一个 message.part.updated，status 恒为 running、
+// command 一字不差、callID 也不变。真机记录：一次 `pip install icecream` 就发了 8 个
+// （metadata.output 长度 0→21→87→240→284→351→396）。按事件累加的话，【一次没有任何重试的
+// 调用】会被判成"重复 8 次"当场掐死 —— 那两次 pip 只活了 8.2s 与 20.3s，远没到工具超时，
+// 是被本闸杀的。受害面不止 pip：凡是输出分段够多的长命令（下载、跑得久的技能脚本）都会中招。
+export const LOOP_REPEAT_LIMIT = 8
+/**
+ * 喂一个 tool part 事件，返回 true 表示"判定卡死，该中止本轮了"。
+ * st 是本轮的护栏状态（{}即可）：call=当前调用id、cmd=当前命令、repeat=该命令被调用次数、
+ * out=当前调用已产生的真实输出、hit=命中的命令。
+ *
+ * st.out 是特意留的：工具被中止时 opencode 把已收到的输出【只】塞进 state.metadata.output，
+ * 交给模型的 state.output 是 null —— 模型拿到"错了，但没有任何信息"，于是原样重发，正好又撞闸。
+ * 网关手里有这段输出，闸触发时必须交出去，否则就是我们自己看得见、却让用户去"把真实报错贴出来"。
+ */
+export function loopGuardStep(st, part) {
+  if (part?.tool !== "bash") return false
+  const state = part.state || {}
+  const call = part.callID || part.id || ""
+  const out = state.metadata?.output
+  if (typeof out === "string" && out && call === st.call) st.out = out   // 同一次调用：留底最新输出
+  const cmd = String(state.input?.command || "").trim()
+  if (st.hit || !cmd || state.status !== "running" || call === st.call) return false
+  st.call = call
+  st.out = ""
+  st.repeat = st.cmd === cmd ? (st.repeat || 0) + 1 : 1
+  st.cmd = cmd
+  if (st.repeat < LOOP_REPEAT_LIMIT) return false
+  st.hit = cmd.slice(0, 120)
+  return true
+}
+
 /** 模块的完整工作流描述，供 /api/modules/<id>/workflow 下发给前端 */
 export function workflowFor(mod, values) {
   const w = WORKFLOWS[mod]

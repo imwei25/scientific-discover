@@ -1847,22 +1847,14 @@ function startJob(sid, sentText, modId) {
           //   走的是 bash 工具、压根不经过上面那条 skill 判据。技能集扩成整条 pipeline 后这个口子更大。
           //   绕过面（变量拼接、cd 进去用相对路径、base64）堵不死 —— 与本文件既有口径一致：
           //   这是产品分权闸，不是对抗边界。堵住顺手绕道就已经拿到绝大部分收益。
-          // ★ 死循环护栏：同一条命令反复发 = agent 已经卡住了，再跑下去只是烧时间和配额。
-          //   实测（kimi）：python 路径落空后它连发 35+ 次一模一样的 `python -c "print('hello')"`，
-          //   跑满 10 分钟零产出，直到被人工掐断 —— 没有任何机制会停下它。
-          //   阈值给到 8：正常重试（改参数、换写法）不会一字不差地重复这么多次。
-          if (p.tool === "bash" && p.state.status === "running" && !job.loopHit) {
-            const cmd = String(p.state.input?.command || "").trim()
-            if (cmd) {
-              job.lastCmd = job.lastCmd === cmd ? cmd : cmd
-              job.cmdRepeat = (job.cmdSeen === cmd ? (job.cmdRepeat || 0) + 1 : 1)
-              job.cmdSeen = cmd
-              if (job.cmdRepeat >= 8) {
-                job.loopHit = cmd.slice(0, 120)
-                console.warn(`[loop] 会话 ${sid}：同一条命令已重复 ${job.cmdRepeat} 次，判定卡死，中止本轮：${job.loopHit}`)
-                client.session.abort({ path: { id: sid } }).catch(() => {})
-              }
-            }
+          // ★ 死循环护栏：同一条命令反复调用 = agent 已经卡住了，再跑下去只是烧时间和配额。
+          //   判据、阈值理由，以及"为什么必须按【调用】而不是按事件计数"（曾误杀 pip install）
+          //   都在 WF.loopGuardStep —— 纯函数，回归测试见 test/loop-guard.test.mjs。
+          //   job.loop.out 存着被中止那次调用的真实输出，闸触发时要交给用户（见下方 loopHit 分支）。
+          if (WF.loopGuardStep(job.loop ||= {}, p)) {
+            job.loopHit = job.loop.hit
+            console.warn(`[loop] 会话 ${sid}：同一条命令已被调用 ${job.loop.repeat} 次，判定卡死，中止本轮：${job.loopHit}`)
+            client.session.abort({ path: { id: sid } }).catch(() => {})
           }
           if (skillGate && !job.moduleHit) {
             const bad = WF.gateViolation({ tool: p.tool, input: p.state.input, skillGate, restricted: !!modSkills })
@@ -1922,7 +1914,8 @@ function startJob(sid, sentText, modId) {
     if (job.aborting) return finish()                       // 用户显式终止：job.abort 已广播 aborted
     if (job.timedOut) return finish()                       // 首事件看门狗已收场并广播过原因（prompt 此刻才姗姗返回/报错），别再报一遍
     if (job.loopHit) { broadcast("failed", { message:
-      `本轮检测到卡死并已中止：同一条命令被反复执行了 8 次以上（\`${job.loopHit}\`），说明它撞上了一个自己看不出来的错误（常见于命令实际执行失败但没有任何输出）。再跑下去只会白烧时间与额度。请把这条命令的真实报错贴出来，或换一种做法重发。` }); return finish() }
+      `本轮检测到卡死并已中止：同一条命令被【重新调用】了 8 次以上（\`${job.loopHit}\`），说明它撞上了一个自己看不出来的错误（工具被中止时不会把已产生的输出交给 agent，它每次都是瞎的）。再跑下去只会白烧时间与额度。` +
+      (job.loop?.out ? `\n\n最后一次执行的真实输出（末 800 字，网关抓到的）：\n\`\`\`\n${job.loop.out.slice(-800)}\n\`\`\`\n把上面这段连同你的要求一起重发，agent 就能对症下药。` : `\n\n这条命令一个字的输出都没有，多半是路径不存在或解释器没找到。请手动跑一次拿到报错，或换一种做法重发。`) }); return finish() }
     if (job.moduleHit) { broadcast("failed", { message: modSkills
       ? `模块限制：本会话是「${MODULE_DEFS[modId]?.name || modId}」专用模块，只能使用「${modSkills.join("、")}」技能；检测到调用「${job.moduleHit}」，本轮已中止。${skillHome(job.moduleHit, modId) || "此类需求请到「自由对话」模块新开会话。"}`
       : `技能未开通：你的账号未开通「${job.moduleHit}」技能，本轮已中止。如需使用请联系管理员开通。` }); return finish() }
