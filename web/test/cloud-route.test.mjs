@@ -8,6 +8,7 @@ import path from "node:path"
 import http from "node:http"
 
 let seq = 0
+const REPO_ROOT = path.resolve(import.meta.dirname, "..", "..")   // 会话产物目录在仓库根，测试后要清掉自己建的那几个
 
 /** 假上游模型服务 */
 function fakeUpstream(handler) {
@@ -221,6 +222,70 @@ test("额度用尽：429 与结构化错误码原样透传给客户端", async (
   assert.equal(x.status, 429)
   assert.equal(x.json.error.code, "QUOTA_EXCEEDED")
   assert.equal(x.json.error.scope, "daily")
+})
+
+// 打包版的额度就是云端积分这条线（本机 DAILY_COST_LIMIT 通常没设）。修前：网关只把 429 原样
+// 甩给 opencode 就不管了，而 opencode 把它当限流去退避重试，首输出看门狗此刻又已经撤掉了（轮内
+// 触顶意味着前面已经出过字）—— 没有任何东西会来收场，用户看到的就是静默转圈到自己放弃。
+test("积分用尽：网关自己认出来 → 记下封顶态、清掉额度缓存、下一条消息当场拒收", async (t) => {
+  const r = await rig((_q, res) => {
+    res.writeHead(200, { "content-type": "application/json" })
+    res.end(JSON.stringify({ usage: { prompt_tokens: 40_000_000, completion_tokens: 0 } }))
+  })
+  t.after(() => r.close())
+  await loginReady(r)
+  const H = { authorization: "Bearer " + r.gw.cfg().apiKey }
+  const call = () => r.gw.req("/cloud/v1/chat/completions", { method: "POST", body: { model: "x" }, headers: H })
+
+  assert.equal(r.gw.mod.cloudQuotaState(), null, "还没触顶时不该有封顶态")
+  assert.equal((await call()).status, 200, "这一发把 5 美元的日额度花光")
+  const x = await call()
+  assert.equal(x.status, 429)
+  assert.equal(x.json.error.code, "QUOTA_EXCEEDED", "429 与结构化错误码仍要原样透传给 opencode")
+
+  // ★ 本次要修的核心：网关必须自己知道这件事，否则轮内触顶就只剩无限转圈
+  const blk = r.gw.mod.cloudQuotaState()
+  assert.ok(blk, "网关要记下这次触顶（在跑的轮据此被中止并报错）")
+  assert.equal(blk.scope, "daily")
+  assert.match(blk.message, /积分已用尽/)
+
+  // 顶栏：20 秒缓存被清掉，问到的是"这条线真的用尽了"（前端据此显示剩余 0 并转红）
+  const cq = (await r.gw.req("/api/quota")).json.cloud
+  assert.ok(cq.daily.usedUsd >= cq.daily.limitUsd, "日线已用尽（美元口径，与云端判据一致）")
+  assert.equal(cq.daily.remain, 0)
+
+  // 下一条消息当场拒收，并把云端原话（哪条线、上限多少、何时恢复）带给用户
+  const sid = "ws_quotablocktest"
+  t.after(() => { for (const d of ["outputs", "uploads"]) fs.rmSync(path.join(REPO_ROOT, d, sid), { recursive: true, force: true }) })
+  const s = await r.gw.req("/api/chat/start", { method: "POST", body: { q: "接着写讨论部分", sid } })
+  assert.equal(s.status, 200)
+  assert.equal(s.json.ok, false)
+  assert.equal(s.json.sent, false, "不许再起一轮白转圈")
+  assert.match(s.json.err, /积分已用尽/)
+  assert.match(s.json.err, /剩余积分/, "得告诉用户去哪儿看、找谁加")
+})
+
+test("积分恢复（管理员临时加额度）：封顶态自愈，消息照常发得出去", async (t) => {
+  const r = await rig((_q, res) => {
+    res.writeHead(200, { "content-type": "application/json" })
+    res.end(JSON.stringify({ usage: { prompt_tokens: 40_000_000, completion_tokens: 0 } }))
+  })
+  t.after(() => r.close())
+  await loginReady(r)
+  const H = { authorization: "Bearer " + r.gw.cfg().apiKey }
+  await r.gw.req("/cloud/v1/chat/completions", { method: "POST", body: { model: "x" }, headers: H })
+  await r.gw.req("/cloud/v1/chat/completions", { method: "POST", body: { model: "x" }, headers: H })
+  assert.ok(r.gw.mod.cloudQuotaState(), "先触顶")
+
+  // 管理员给这个人临时加额度（dailyOverride：故意【不】吊销 key，正在干活的人不该被踢下线，
+  // 见 sci-auth 那处注释）→ 起轮前那次"再问一次云端"必须能把旧判定撤掉，
+  // 否则用户得干等封顶态过期（5 分钟）才发得出消息，而额度明明已经加过了。
+  await r.be.admin("/admin/api/user-update", { method: "POST", body: { id: r.be.user.id, dailyOverride: 5000 } })
+  const sid = "ws_quotahealtest"
+  t.after(() => { for (const d of ["outputs", "uploads"]) fs.rmSync(path.join(REPO_ROOT, d, sid), { recursive: true, force: true }) })
+  const s = await r.gw.req("/api/chat/start", { method: "POST", body: { q: "继续", sid } })
+  assert.doesNotMatch(String(s.json.err || ""), /积分已用尽/, "额度加过了就别再拿旧判定拦人：" + s.text)
+  assert.equal(r.gw.mod.cloudQuotaState(), null, "封顶态应被撤掉")
 })
 
 test("流式：SSE 原样透传", async (t) => {
@@ -450,8 +515,37 @@ test("上游错误翻成人话：余额不足/密钥失效/限流各给各的下
   assert.match(D({ name: "APIError", data: { statusCode: 429, message: "QUOTA_EXCEEDED" } }, "cloud"), /积分已用尽/)
   assert.match(D({ name: "APIError", data: { statusCode: 503, message: "" } }, "cloud"), /异常|重试/)
   assert.match(D({ name: "MessageOutputLengthError", data: {} }, "cloud"), /长度上限|截断/)
+  // ---- 登录票据失效：只需用户自己重登一次，别指去找管理员 ----
+  // 修前实况：这几种都落到"上游模型服务拒绝了密钥（无效或无权限）。请联系管理员…（上游原话：
+  // 账号信息已变更，请重新登录）"—— 一句小白看不懂的话，指的还是错的人，真正该做的那一步没说。
+  for (const raw of [
+    '{"error":{"code":"KEY_REVOKED","message":"账号信息已变更，请重新登录"}}',
+    '{"error":{"code":"REFRESH_INVALID","message":"登录已失效，请重新登录"}}',
+    "账号信息已变更，请重新登录",              // 只剩一句原话（opencode 转手时常见）
+  ]) {
+    const m = D({ name: "ProviderAuthError", data: { statusCode: 401, message: raw } }, "cloud")
+    assert.match(m, /退出登录/, "要直说这一步怎么做：" + m)
+    assert.match(m, /重新登录|再.*登录/, m)
+    assert.doesNotMatch(m, /联系管理员/, "这事管理员帮不上，别把人推过去：" + m)
+    assert.doesNotMatch(m, /拒绝了密钥/, m)
+  }
+  // 用自己 API 的人压根没有平台票据，401 照旧指去 api-config 自查（别叫他退出重登）
+  const cu = D({ name: "ProviderAuthError", data: { statusCode: 401, message: "invalid key, 请重新登录" } }, "custom")
+  assert.match(cu, /api-config/)
+  assert.doesNotMatch(cu, /退出登录/)
   // 兜底也必须是一句完整的话，不能是空字符串（空 = 又回到"空气泡"）
   assert.equal(D({ name: "UnknownError", data: {} }, "cloud").length > 10, true)
+})
+
+test("积分用尽的兜底措辞：云端没给 message 时也要说清哪条线、何时恢复", async (t) => {
+  const r = await rig(); t.after(() => r.close())
+  const Q = r.gw.mod.quotaBlockMessage
+  assert.match(Q({ code: "QUOTA_EXCEEDED", message: "今日积分已用尽（上限 30 积分），明日 0 点(UTC)恢复" }),
+    /上限 30 积分/, "云端原话最准，优先用它")
+  assert.match(Q({ scope: "daily" }), /今日.*用尽/)
+  assert.match(Q({ scope: "daily" }), /0 点\(UTC\)/, "得告诉用户什么时候恢复")
+  assert.match(Q({ scope: "monthly" }), /本月.*用尽/)
+  assert.match(Q({}), /积分已用尽/, "连 scope 都没有时也不能给空话")
 })
 
 // ---- 平台公告 ----------------------------------------------------------------

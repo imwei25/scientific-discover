@@ -3379,7 +3379,13 @@ async function sendMessage(text) {
       if (!q.value.trim()) { q.value = text; q.dispatchEvent(new Event("input")) }   // 原文放回输入框，省得用户手抄
       attachStream(sessionId)
     }   // 那一轮还在跑 → 接上去看
-    else { setStreamingUI(false); addNote("⚠ " + (r.err || "发送失败")) }
+    else {
+      setStreamingUI(false); addNote("⚠ " + (r.err || "发送失败"))
+      // 服务端拒收（额度/积分用尽、其它前置检查）→ 原文放回输入框。它压根没被发出去，用户等额度
+      // 恢复后原封不动重发一次就行；不还回去的话，那段话只剩在幽灵气泡里，得靠手动框选找回来。
+      if (myCard) { pendingWfCard = myCard; pendingWfForm = myForm }   // 任务卡与表单勾选一并还回去
+      if (!q.value.trim()) { q.value = text; q.dispatchEvent(new Event("input")) }
+    }
     loadSessions(); return false
   }
   attachStream(sessionId)   // 起轮成功 → 订阅直播（attachJob 会先重放快照，POST 与 attach 之间产生的输出不会丢）

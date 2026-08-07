@@ -1691,6 +1691,16 @@ export function describeModelError(err, route) {
   }
   const balance = code === 402 || /insufficient|balance|欠费|余额|arrears|payment|billing/i.test(raw)
   if (balance) return `上游模型账户余额不足或已欠费，本轮未能生成。${who}${tail}`
+  // 平台这边的登录票据失效（管理员改了档位/重置了口令/停用又启用 → key_epoch 变了 → KEY_REVOKED；
+  // 或续期票据本身失效 → REFRESH_INVALID）。这类【只需要用户自己重登一次】就好了，此前却落到
+  // 下面那条"上游模型服务拒绝了密钥（无效或无权限）。请联系管理员…"上 —— 对着一句自己看不懂的
+  // 话去找管理员，而管理员也无从下手，真正该做的那一步（退出重登）反倒一个字都没说。
+  // 【为什么连 message 一起认】code 只在结构化错误里有，opencode 转手时常常只剩一句原话。
+  // （只对走平台的路由成立：用自己 API 的人压根没有平台票据这回事，别把他指去退出重登。）
+  if (route !== "custom" && (/KEY_REVOKED|REFRESH_INVALID|KEY_EXPIRED|KEY_INVALID|KEY_MISSING/.test(raw) ||
+      ((code === 401 || code === 403) && /重新登录|重登|登录已(失效|过期)|账号信息已变更/.test(raw))))
+    return "你的登录状态已失效（多半是管理员刚调整过你的账号，或这台设备的登录太久了），本轮未能生成。"
+      + "请点左下角的「用户」→「退出登录」，再用原来的账号密码登录一次，就能接着用了（会话与产物都不会丢）。"
   if (code === 401 || code === 403 || err?.name === "ProviderAuthError")
     return `上游模型服务拒绝了密钥（无效或无权限）。${who}${tail}`
   if (code === 429 || /rate limit|too many requests|限流/i.test(raw))
@@ -1740,7 +1750,7 @@ export function autoVerdict(finalText, st) {
 const AUTO_STOP_NOTES = {
   cap: () => `无人值守：已连续自动推进 ${AUTO_MAX_ROUNDS} 轮仍未见完成标记，为防失控已停止。请检查目前的产物后手动继续。`,
   stalled: () => "无人值守：连续两轮输出几乎相同（疑似原地打转），已停止自动推进。请检查产物后手动继续。",
-  quota: () => "无人值守：今日额度已用尽，自动推进停止；明日恢复后可手动继续。",
+  quota: () => "无人值守：额度/积分已用尽，自动推进停止；恢复后可手动继续（日额度每日 0 点(UTC) 重置）。",
   empty: () => "无人值守：本轮没有文本输出（多半是上游异常），自动推进停止。",
 }
 /** 一轮正常收尾后调用：要续跑则推进状态并返回 {go:true, round}；停下返回 {go:false, note?}；未开无人值守返回 null */
@@ -1748,7 +1758,9 @@ function autoDecide(sid, finalText) {
   const st = autoStates.get(sid)
   if (!st) return null
   const v = autoVerdict(finalText, st)
-  if (v.go && quotaOver()) { v.go = false; v.why = "quota" }
+  // 两条额度线都要看：本机 env 额度（容器部署）与云端账号积分（打包版）。少看一条就会在触顶后
+  // 继续自动续跑，每轮都撞回 429 —— 无人值守正好没人在旁边看着，能空转到轮数上限。
+  if (v.go && (quotaOver() || cloudQuotaBlocked())) { v.go = false; v.why = "quota" }
   if (!v.go) {
     st.rounds = 0; st.lastText = ""   // 开关本身保留：用户下一条勾选消息从第 1 轮重新计
     if (v.why === "final") console.log(`[auto] 会话 ${sid}：检测到完成哨兵，自动推进收官`)
@@ -1914,6 +1926,17 @@ function startJob(sid, sentText, modId) {
   // 云端排队时把这条提示推给前端（"正在排队，前面还有 N 个"）。定义在这里是因为要用 broadcast；
   // 触发方是 probeCloudQueue（见「云端排队感知」一节），它按用户维度推给所有在跑的轮。
   job.onQueue = (info) => { if (!job.finished) broadcast("queue", info) }
+  // 云端积分在轮内触顶：由 cloudForward 认出 429 QUOTA_EXCEEDED 后推过来（见「云端积分用尽」一节）。
+  // 收场方式与首输出看门狗完全一致（广播 failed + abort + finish），只是原因不同；本轮已花的成本
+  // 仍会在 session.prompt 返回后照常结算（那段在 job.cloudQuotaHit 的检查之前，见下方）。
+  job.onQuotaBlock = (message) => {
+    if (job.finished || job.cloudQuotaHit) return
+    job.cloudQuotaHit = message   // 让 prompt 返回后的分支知道本轮已收过场，别再广播第二条错误
+    console.warn(`[quota] 会话 ${sid}：云端积分已用尽，中途中止本轮`)
+    broadcast("failed", { message: `${message}。本轮已在中途自动中止；已经生成的内容与产物都保留。${QUOTA_TAIL}` })
+    client.session.abort({ path: { id: sid } }).catch(() => {})
+    finish()
+  }
   const fire = () => {
     watchdog = null
     if (job.finished || sawOutput) return
@@ -2126,6 +2149,7 @@ function startJob(sid, sentText, modId) {
     }
     if (job.aborting) return finish()                       // 用户显式终止：job.abort 已广播 aborted
     if (job.timedOut) return finish()                       // 首事件看门狗已收场并广播过原因（prompt 此刻才姗姗返回/报错），别再报一遍
+    if (job.cloudQuotaHit) return finish()                  // 云端积分用尽已收场并广播过原因（同上），别再报一遍
     if (job.loopHit) { broadcast("failed", { message:
       `本轮检测到卡死并已中止：同一条命令被【重新调用】了 8 次以上（\`${job.loopHit}\`），说明它撞上了一个自己看不出来的错误（工具被中止时不会把已产生的输出交给 agent，它每次都是瞎的）。再跑下去只会白烧时间与额度。` +
       (job.loop?.out ? `\n\n最后一次执行的真实输出（末 800 字，网关抓到的）：\n\`\`\`\n${job.loop.out.slice(-800)}\n\`\`\`\n把上面这段连同你的要求一起重发，agent 就能对症下药。` : `\n\n这条命令一个字的输出都没有，多半是路径不存在或解释器没找到。请手动跑一次拿到报错，或换一种做法重发。`) }); return finish() }
@@ -2191,6 +2215,67 @@ function attachJob(job, req, res) {
   if (job.text) sseWrite(res, "text", job.text)
   job.subs.add(res)
   req.on("close", () => job.subs.delete(res))
+}
+
+// ==== 云端积分用尽：让"额度触顶"看得见 =======================================
+//
+// 本机 env 额度（DAILY_COST_LIMIT）那条链路本来是完整的：起轮前 quotaOver() 拦下、轮内
+// updateRunning() 中途封顶、收尾广播一条说清原因的 failed。但【打包版走的是云端账号积分】，
+// 它的 DAILY_COST_LIMIT 通常压根没设（见 /api/quota 处的注释），于是那三道对它全部形同不存在：
+//   · 起轮前不拦 —— 明知积分已用尽也照发；
+//   · 轮内没人认得云端回的 429 QUOTA_EXCEEDED —— cloudForward 只是把它原样透传给 opencode；
+//   · 而 opencode 把 429 当"限流"退避重试，此刻首输出看门狗【已经被撤掉】了（轮内触顶意味着
+//     前面已经出过字，sawOutput=true），于是没有任何超时会来收场。
+// 三道都不响，用户看到的就是：转圈圈一直转到自己放弃，一个字的提示都没有。这一节就是治它。
+//
+// 修法：在唯一能第一时间看见真相的地方 —— cloudForward 收到 429 且 code=QUOTA_EXCEEDED ——
+// 当场记一笔，并像本机封顶那样掐掉在跑的轮、广播说清"哪条线用尽、什么时候恢复"的 failed。
+//
+// 【为什么当场广播而不是只置标记、等 session.prompt 返回】opencode 认为 429 是限流，会先退避
+// 睡一会儿再重试，退避期间 abort 未必立刻生效 —— 等它就等于让转圈继续。所以照首输出看门狗
+// 那套办法办：当场报错收场（本轮已花的成本仍会在 prompt 返回后正常结算，与看门狗同一条路）。
+// 【为什么要连带 abort】积分是按账号算的：这一步撞了 429，本轮后续每一步都会照样撞回来。
+// 【为什么记一段"封顶态"而不是只报这一轮】用户被拦下后第一反应是再发一条。留着这段判定，
+// 下一条消息就能立刻拒收（并附上云端原话），不必再赔一轮转圈。
+let cloudQuotaBlock = null                   // { message, scope, at } —— 最近一次云端判定的积分用尽
+const CLOUD_QUOTA_BLOCK_TTL = 5 * 60_000     // 判定的新鲜期：过期即自愈（起轮前还会再问云端确认一次，见 /api/chat/start）
+const cloudQuotaBlocked = () => (cloudQuotaBlock && Date.now() - cloudQuotaBlock.at < CLOUD_QUOTA_BLOCK_TTL) ? cloudQuotaBlock : null
+/** 仅供测试与排障 */
+export const cloudQuotaState = () => cloudQuotaBlocked()
+
+// 每条提示都带上这句：用户此刻最需要知道的是"去哪儿看还剩多少"和"找谁能加"。
+const QUOTA_TAIL = "顶栏的「剩余积分」可随时查看；需要更多请联系管理员调整档位。"
+
+/**
+ * 与云端网关同一个判据（【美元】口径，不是积分）：这条线是不是真的用尽了。
+ * 积分是 floor 过的（见 server/lib/credits.mjs 的取整说明），按"剩余积分 = 0"拒收会连
+ * 云端其实还放行的调用一起拒掉（floor 掉的零头还够跑一小步），那就成了我们自己造的假触顶。
+ */
+const lineExhausted = (l) => !!l && !l.unlimited && Number(l.limitUsd) > 0 && Number(l.usedUsd) >= Number(l.limitUsd)
+const cloudQuotaExhausted = (q) => !!q && (lineExhausted(q.daily) || lineExhausted(q.monthly))
+
+/**
+ * 云端 429 的 error 体 → 给用户的一句话。
+ * 优先用云端原话：哪条线、上限多少积分、什么时候恢复，那边都已经算好写在 message 里了
+ * （见 server/lib/gateway.mjs 的额度闸）。只有它缺失时才退回本地兜底措辞。
+ */
+export function quotaBlockMessage(err) {
+  const m = String(err?.message || "").replace(/\s+/g, " ").trim()
+  if (m) return m
+  if (err?.scope === "monthly") return "本月平台积分已用尽（每月 1 日 0 点(UTC)重置）"
+  if (err?.scope === "daily") return "今日平台积分已用尽（每日 0 点(UTC)重置）"
+  return "平台积分已用尽（日积分每日 0 点(UTC)重置，月积分每月 1 日重置）"
+}
+
+/** cloudForward 认出云端的 429 QUOTA_EXCEEDED 时调用：记下封顶态 + 掐掉在跑的各轮 */
+function noteCloudQuotaExceeded(err) {
+  const message = quotaBlockMessage(err)
+  const first = !cloudQuotaBlocked()
+  cloudQuotaBlock = { message, scope: String(err?.scope || ""), at: Date.now() }
+  clearCloudQuotaCache()   // 顶栏下一次刷新要看到真实的"已用尽"，别再喂那份 20 秒前还有余额的旧数
+  if (first) console.warn(`[cloud] 云端积分已用尽（${cloudQuotaBlock.scope || "?"}）：${message}`)
+  // 推给所有在跑的轮：积分按账号算，这台机器上任何一轮都撞在同一条线上（打包版通常也只有一轮）。
+  for (const j of jobs.values()) { if (j.running && j.onQuotaBlock) { try { j.onQuotaBlock(message) } catch {} } }
 }
 
 // ==== 云端排队感知 ===========================================================
@@ -2331,6 +2416,23 @@ async function cloudForward(req, res, u) {
 
   const h = { "content-type": r.headers.get("content-type") || "application/json" }
   const ce = r.headers.get("cache-control"); if (ce) h["cache-control"] = ce
+
+  // ---- 积分用尽就在这里认出来（唯一第一时间知道真相的地方，缘由见「云端积分用尽」一节）----
+  // 【为什么整块读下来而不是 r.clone()】这条通道正常情况下是长 SSE 流，clone 会为两个读者
+  // 缓冲整条流；而 429 的体只是一小段 JSON，读完再原样写回去没有任何代价。
+  // 认出来了也照旧把 429 透传给 opencode：本函数只是【多】做一件事（让用户看见），
+  // 协议层的行为一个字节都不改（老客户端与 /cloud 的其它调用方不受影响）。
+  if (r.status === 429) {
+    const txt = await r.text().catch(() => "")
+    let e = null
+    try { e = JSON.parse(txt)?.error || null } catch { /* 不是我们的结构化错误（网关外的 429）→ 只透传 */ }
+    if (e?.code === "QUOTA_EXCEEDED") noteCloudQuotaExceeded(e)
+    res.writeHead(429, h)
+    return res.end(txt)
+  }
+  // 又调通了 = 跨了重置时刻或管理员调高了档位 → 撤掉封顶态，别让旧判定继续拦新消息
+  if (r.ok && cloudQuotaBlock) cloudQuotaBlock = null
+
   res.writeHead(r.status, h)
   if (!r.body) return res.end()
   try {
@@ -3295,6 +3397,19 @@ export const server = http.createServer(async (req, res) => {
         return send(res, 200, "application/json", JSON.stringify({ ok: true, sid, sent: false, running: true, notice: "上一轮仍在进行中，本条消息未发送；请等本轮结束后重发。" }))
       if (quotaOver())
         return send(res, 200, "application/json", JSON.stringify({ ok: false, sid, sent: false, err: `今日额度已用尽（已用 $${quotaUsedLive().toFixed(3)} / 上限 $${DAILY_COST_LIMIT.toFixed(2)}），明天恢复。` }))
+      // 云端积分已被判定用尽 → 别再起一轮白转圈（打包版的额度就是这条线，本机那条通常没设）。
+      // 【拒收前必须再问一次云端】旧判定可能已经过时：跨了 UTC 零点、管理员刚调高档位。确认还有
+      // 余额就把判定撤掉照常发；云端这会儿问不到（q 为 null）也照常发 —— 宁可让本轮走到真实报错，
+      // 也别凭一个问不到的判定甩用户一句"积分已用尽"，那种误报最难解释。
+      {
+        const blk = cloudQuotaBlocked()
+        if (blk) {
+          const cq = await cloudQuota(true)   // 别叫 q —— 本作用域里的 q 是用户这条消息的正文
+          if (cloudQuotaExhausted(cq))
+            return send(res, 200, "application/json", JSON.stringify({ ok: false, sid, sent: false, err: `${blk.message}。${QUOTA_TAIL}` }))
+          if (cq) cloudQuotaBlock = null
+        }
+      }
       // ---- 无人值守开关：以每条消息带来的勾选态为准 ----
       // 勾着 → （重）置状态、连续轮数从 0 重计；没勾 → 清态熄火。老前端不带 auto 字段 → 不动现状。
       // 放在 running/quota 检查之后：消息被拒收时不该动开关状态。
