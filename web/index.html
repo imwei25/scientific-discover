@@ -20,7 +20,9 @@
     --indigo: #6366f1; --green: #2bb673; --rose: #ef4444;
     --press: #2c3038;                       /* 按下态深灰（发送/附件等圆钮） */
     --r-lg: 16px; --r-md: 12px; --r-sm: 10px;
-    --hdr-h: 46px;                          /* 顶栏高度：半屏预览按它定位 */
+    /* 顶栏已整条撤掉（品牌行 + 在线状态没信息量，公告/分享/返回都搬去了左下角），
+       这里留 0 是为了半屏预览等按它定位的地方不必逐处改数值；哪天再加回顶栏改这一个值即可。 */
+    --hdr-h: 0px;
     --shadow-lg: 0 6px 22px rgba(20,24,30,.10);
     --shadow-sm: 0 2px 8px rgba(20,24,30,.06);
   }
@@ -44,20 +46,8 @@
   ::-webkit-scrollbar-thumb { background: #c6d0df; border-radius: 20px; border: 2px solid transparent; background-clip: padding-box; }
   ::-webkit-scrollbar-thumb:hover { background: #a9b7cc; background-clip: padding-box; }
 
-  /* Header：与主体同色的浅灰窄条，只用一根细线与主体分开 */
-  header {
-    flex: none; display: flex; align-items: center; justify-content: space-between;
-    height: var(--hdr-h); padding: 0 22px; border-bottom: 1px solid var(--line); background: var(--bg);
-  }
-  .brand { display: flex; align-items: center; gap: 10px; }
-  .logo { width: 24px; height: 24px; display: block; }
-  .logo img { width: 100%; height: 100%; object-fit: contain; display: block; }
-  .brand .title { font-weight: 400; font-size: 14px; letter-spacing: .22em; text-transform: uppercase; }
-  .brand .sub { color: var(--muted); font-size: 12px; margin-top: 1px; }
-  .status { display: flex; align-items: center; gap: 7px; padding: 5px 12px; border-radius: 999px;
-    background: rgba(255,255,255,.72); border: 1px solid var(--line); color: var(--muted); font-size: 12px; letter-spacing: .04em; }
-  .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--green); box-shadow: 0 0 0 0 rgba(43,182,115,.5); animation: pulse 3.5s infinite; }
-  @keyframes pulse { 0% { box-shadow: 0 0 0 0 rgba(43,182,115,.5); } 70% { box-shadow: 0 0 0 7px rgba(43,182,115,0); } 100% { box-shadow: 0 0 0 0 rgba(43,182,115,0); } }
+  /* 顶栏整条已删：品牌行与「在线」都不承载信息（用户知道自己在用什么、连不上时界面自己会报），
+     公告 / 分享 / 返回工作台整体搬到左下角（见 .sbtools）。多出来的 46px 全给了对话区。 */
 
   /* Layout：左会话栏 / 中工作区 / 右工具栏。两侧是贴边的白色列，中间留浅灰底。 */
   main { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(0,56px) minmax(0,1fr) minmax(0,300px); background: var(--bg); transition: width .2s ease; }
@@ -342,6 +332,8 @@
   #sessions .sess .t { display: block; color: var(--text); font-weight: 400; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   #sessions .sess .d { color: var(--faint); font-size: 10px; margin-top: 3px; font-variant-numeric: tabular-nums; }
   #sessions .sess .run { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--green); margin-right: 6px; vertical-align: 1px; animation: pulse 2.4s infinite; }
+  /* 原来定义在顶栏「在线」那个小绿点旁边；顶栏删了，动画挪到唯一还在用它的这条规则边上 */
+  @keyframes pulse { 0% { box-shadow: 0 0 0 0 rgba(43,182,115,.5); } 70% { box-shadow: 0 0 0 7px rgba(43,182,115,0); } 100% { box-shadow: 0 0 0 0 rgba(43,182,115,0); } }
   #sessions .sess { padding-right: 46px; }                 /* 给右侧多个操作图标留位 */
   #sessions .sess.dragging { opacity: .4; }
   /* 会话行右侧操作区（改名/钉/删）：默认隐藏，hover 显示 */
@@ -921,12 +913,16 @@
   .pv-body.frame iframe { width: 100%; height: 100%; border: 0; display: block; }
   .pv-body img { max-width: 100%; height: auto; }                            /* docx 里的内联图片自适应 */
 
-  /* header actions + model settings modal */
-  .hright { display: flex; align-items: center; gap: 8px; }
-  .hright .status { margin-right: 4px; }
+  /* 左下角工具条（原顶栏的三个入口：公告 / 分享 / 返回工作台）+ 模型设置弹窗 */
+  /* margin-top:auto 挂在这儿而不是 .user-info 上：两块都要贴底，空白得留在【这一条之前】。
+     挂在 .user-info 上的话空白会落在两块中间，工具条被顶到会话列表底下去。 */
+  #sbtools { margin-top: auto; flex: none; display: flex; align-items: center; gap: 4px;
+    padding: 6px 2px 0; border-top: 1px solid var(--line); }
+  body:not(.sessbar-open) #sbtools { flex-direction: column; gap: 2px; padding: 6px 0 0; }
   .hbtn { width: 30px; height: 30px; display: grid; place-items: center; border-radius: 50%; background: transparent;
     border: 1px solid transparent; color: var(--muted); cursor: pointer; transition: .15s; }
-  .hbtn:hover { color: var(--text); background: rgba(255,255,255,.92); border-color: var(--line); }
+  /* 底色已是白面板，原来那个半透明白 hover 等于没有反馈 —— 换成浅灰 */
+  .hbtn:hover { color: var(--accent); background: var(--panel-soft); border-color: var(--line); }
   .hbtn .ic { width: 16px; height: 16px; }
   /* 公告中心：顶栏一个按钮 + 未读红点，点开是近半年的列表。
      【为什么不是横幅】老设计弹一条横幅、点「知道了」就永远找不回来 —— 用户第二天想确认
@@ -935,7 +931,9 @@
   .ntwrap .dotmark { position: absolute; top: -4px; right: -4px; min-width: 16px; height: 16px; padding: 0 4px; border-radius: 9px;
     background: var(--cyan); color: #fff; font-size: 10px; line-height: 16px; text-align: center; font-weight: 700; pointer-events: none; }
   .ntwrap .dotmark.urgent { background: #dc2626; }
-  .ntpanel { position: absolute; top: 40px; right: 0; z-index: 80; width: 380px; max-width: calc(100vw - 32px); max-height: 66vh; overflow: auto;
+  /* 面板改从左下角【向上】弹。position 必须是 fixed 不能是 absolute：会话栏是 overflow:hidden
+     的窄列（收起时才 56px），absolute 的 380px 面板会被整块裁掉，只剩一条缝。 */
+  .ntpanel { position: fixed; bottom: 74px; left: 10px; z-index: 80; width: 380px; max-width: calc(100vw - 32px); max-height: 66vh; overflow: auto;
     background: #fff; border: 1px solid var(--line); border-radius: var(--r-sm); box-shadow: 0 12px 40px rgba(30,50,90,.18); display: none; }
   .ntpanel.on { display: block; }
   .ntpanel .nthead { display: flex; align-items: center; gap: 8px; padding: 10px 12px; border-bottom: 1px solid var(--line); font-size: 12.5px; color: var(--muted); }
@@ -1096,7 +1094,10 @@
   /* ---- 左下角「用户」：账户相关的功能全收在这里 ----
      顶栏原来平铺着 额度 / 修改密码 / 退出登录 三个入口，越加越挤，而它们都是"我的账号"这一类。
      现在合成一个用户按钮：一眼看到自己是谁、还剩多少积分，点开是账号 / 改密 / 退出。 */
-  .user-info { margin-top: auto; position: relative; display: flex; align-items: center; gap: 10px;
+  /* 【别再给它 margin-top:auto】贴底的活儿交给紧挨在它上面的 #sbtools 一个人干：
+     两个都写 auto 的话，剩余空白会在这两处【平分】—— 会话栏收起时列表整块隐藏、空白一大截，
+     实测两块一起飘到了半空（工具条 y=392）。 */
+  .user-info { position: relative; display: flex; align-items: center; gap: 10px;
     padding: 12px 6px 4px; border-top: 1px solid var(--line); }
   .user-info .avatar { width: 34px; height: 34px; border-radius: 50%; flex: none; cursor: pointer;
     background: linear-gradient(135deg, rgba(59,111,212,.95), rgba(43,182,115,.95));
@@ -1170,8 +1171,6 @@
     body.preview-open.pvtab-files aside { display: none; }
   }
   @media (max-width: 560px) {
-    header { padding: 0 12px; }
-    .hright .status { display: none; }
     #chat { padding: 12px; }
   }
   /* 存储告急横幅（见 body 里 #storebanner 处的注释） */
@@ -1201,30 +1200,8 @@
 <div class="stage"></div>
 <div class="toast" id="toast"></div>
 <div class="app">
-<header>
-  <div class="brand">
-    <span class="logo" id="logoIc"><img src="data:image/png;base64,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" alt="Niuma logo" /></span>
-    <div class="brandtext">
-      <div class="title">Niuma Science</div>
-    </div>
-  </div>
-  <!-- 顶栏只留"平台级"的入口：在线状态 / 系统消息 / 分享 / 设置 / 工作台。
-       账号那一类（剩余积分、云端账号、修改密码、退出登录）已整体搬到左下角的用户按钮里，
-       模型切换器搬到了输入框底部 —— 顶栏原来横着排七八个东西，越加越挤。 -->
-  <div class="hright">
-    <div class="status"><span class="dot"></span>在线</div>
-    <!-- 公告中心：默认折叠，只在按钮上标未读数；点开是近半年的公告，随时查得回来。
-         老设计是顶部弹横幅、点「知道了」就永远消失，用户想回看只能问管理员。 -->
-    <div id="ntWrap" class="ntwrap">
-      <button id="ntBtn" class="hbtn" type="button" title="系统消息 / 平台公告"></button>
-      <span id="ntDot" class="dotmark" hidden></span>
-      <div id="ntPanel" class="ntpanel"></div>
-    </div>
-    <!-- 分享：把当前会话导出成一个自包含 HTML（含思考与工具调用，默认折叠；不含任何产出文件） -->
-    <button id="shareBtn" class="hbtn" type="button" title="分享：把本次会话导出成一个 HTML 文件"></button>
-    <button id="wsBtn" class="hbtn" type="button" title="模块工作台（换个功能开新会话）"></button>
-  </div>
-</header>
+<!-- 顶栏整条已删：品牌行 + 「在线」+ 公告 / 分享 / 返回工作台。前两样不承载信息，
+     三个入口整体搬到左下角会话栏底部（见 #sbtools）。腾出的 46px 全给了对话区。 -->
 <!-- 存储告急横幅：原先只有侧栏上传面板里一行小字变红，而侧栏在窄屏会收起 —— 等于用户在
      撞上限（新上传被 413 拒收、产物写不进去）之前基本看不到预警。放在 header 之下、main
      之外，与侧栏开合无关，任何屏宽都挡不住。仅 ≥90% 时出现，掉回去自动消失。 -->
@@ -1259,6 +1236,21 @@
       <button id="selExit" type="button">退出</button>
     </div>
     <div id="sessions"><span class="hint">加载中…</span></div>
+    <!-- 原顶栏那三个「平台级」入口整体搬到这里：公告 / 分享 / 返回工作台。
+         都不是会话内容，跟上面的会话列表不是一类，所以贴着用户块单独一行；
+         会话栏收起（56px）时改成竖排，图标仍在、位置不跳。 -->
+    <div id="sbtools">
+      <!-- 公告中心：默认折叠，只在按钮上标未读数；点开是近半年的公告，随时查得回来。
+           老设计是顶部弹横幅、点「知道了」就永远消失，用户想回看只能问管理员。 -->
+      <div id="ntWrap" class="ntwrap">
+        <button id="ntBtn" class="hbtn" type="button" title="系统消息 / 平台公告"></button>
+        <span id="ntDot" class="dotmark" hidden></span>
+        <div id="ntPanel" class="ntpanel"></div>
+      </div>
+      <!-- 分享：把当前会话导出成一个自包含 HTML（含思考与工具调用，默认折叠；不含任何产出文件） -->
+      <button id="shareBtn" class="hbtn" type="button" title="分享：把本次会话导出成一个 HTML 文件"></button>
+      <button id="wsBtn" class="hbtn" type="button" title="返回模块工作台（换个功能开新会话）"></button>
+    </div>
     <!-- 左下角「用户」：账户相关的功能都在这里（剩余积分 / 云端账号 / 修改密码 / 退出登录）。
          头像、名字、整块 meta 都可点，点哪都能开菜单——别让用户去瞄那个小小的「⋯」。 -->
     <div class="user-info" id="userBox">
