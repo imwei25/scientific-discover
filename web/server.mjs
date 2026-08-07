@@ -825,7 +825,15 @@ const wfValues = (outDir, modId) => {
 // 用变长负向后顾把它们挡掉。宁可漏判也不能误判：假红会让用户白跑一轮，还会把交付物警示变成狼来了。
 const NEG_PREFIX = "(?<!无|不|未|毋|没|没有|未见|未发现|不存在|未出现|无任何|不含|零)"
 const GATE_FAIL_SURE = new RegExp(NEG_PREFIX +
-  "(闸不过|闸未过|不予通过|未通过|不通过|需返工|需要返工|退回返工|条件性通过|major\\s*revision|需要?重大修改" +
+  // ★ 「不通过」后面必须跟句读或行尾。医学写作里它极常见地当【普通动宾】用 ——
+  //   "不通过血脑屏障""不通过静脉给药"，实测踩到的原句是预注册文件里的假设：
+  //   "缺氧**不通过**甲基化改变促进复发"。而 GATE_FAIL_SURE 是全文匹配、不限行，
+  //   于是新颖性闸被判红、界面显示「✕ 需返工」，而报告裁定明明是"进入标书起草"、
+  //   模型也在对话里说"闸1 通过" —— 界面与对话直接打架，还是往最吓人的方向打。
+  //   裁定语本来就有 未通过 / 不予通过 / 闸不过 覆盖，这一条只需堵住动宾用法。
+  //   收尾字符里【必须带上 markdown 标记】：真实写法是「本闸判定 **不通过**」，
+  //   `不通过` 后面紧跟的是 `**` 而不是句读 —— 漏了它就会把一条真裁定放过去（既有测试当场抓住）。
+  "(闸不过|闸未过|不予通过|未通过|不通过(?=[\\s，。；、）)\\]】*_`~]|$)|需返工|需要返工|退回返工|条件性通过|major\\s*revision|需要?重大修改" +
   "|假引用|伪造引用|编造的?引用|查无此文|未能核实|该文献不存在)", "i")
 const GATE_FAIL_CTX = /(reject|critical|严重问题|硬伤)/i
 // reference-check / data-integrity 的裁定是结构化词，不是散文。两种真实写法：
@@ -909,9 +917,22 @@ function gateFailed(outDir, step, files) {
           if (!/\*\*[^*\n]*\b(major|critical)\b[^*\n]*\*\*/i.test(ln)
               && !/\*\*[^*\n]*严重[^*\n]*\*\*/.test(ln)
               && !/\|\s*\**\s*(major|critical|严重)\s*\**\s*\|/i.test(ln)) continue
-          if (/(无|没有|未发现|不存在|none|no)\s*(major|critical|严重)/i.test(ln)) continue
+          // ★ 放宽检出侧之后，【否定侧必须同步放宽】，否则就是不对称的误报机器。
+          //   实测一份总评 A、闸结论写"✅ 通过"的报告被判红，触发句是这几类：
+          //     · `- 未发现 **Major** 问题`      ← 否定词与严重度词之间隔了一个 `**` 就失配
+          //     · `- 无 **Critical** 问题，仅 4 条 Minor`
+          //   同一句话加不加粗结果相反，这种不对称最难被发现。允许中间夹 markdown 标记。
+          if (/(无|没有|未发现|不存在|none|no)\s*[*_`]*\s*(major|critical|严重)/i.test(ln)) continue
           // 否定词也可能在标记【之后】：`- 本节 **Major** 问题：无` / `Critical: none` / `严重问题：0`
-          if (/[:：]\s*(无|没有|none|n\/?a|0)\s*[条项个]?\s*$/i.test(ln)) continue
+          if (/[:：]\s*[*_`]*\s*(无|没有|none|n\/?a|0)\s*[条项个]?\s*$/i.test(ln)) continue
+          // ★ 分级说明 / 图例行不是条目。三级并列出现（Critical、Major、Minor 同在一行）
+          //   就是在解释severity 分级，不是在报告一条问题。peer-review 的技能文档本身就要求
+          //   "每条按五元组写：**严重度（Critical / Major / Minor）| 位置 | …**"，
+          //   模型复述这句模板就会踩中，而那一行恰恰说明它【还没开始】列问题。
+          if (/critical/i.test(ln) && /major/i.test(ln) && /minor/i.test(ln)) continue
+          // ★ 计数为零的表格行放行：`| Critical | 不改则拒 | 0 |`、`| Major | … | 无 |`
+          //   这是严重度图例表，在评审报告里非常常见，命中数写的就是 0。
+          if (/^\s*\|/.test(ln) && /\|\s*\**\s*(0|无|未使用|未命中|none)\s*[条项个]?\s*\**\s*\|?\s*$/i.test(ln)) continue
           sev++
         }
         if (sev) return true
@@ -981,22 +1002,34 @@ function wfSyncDone(outDir, modId) {
     for (const g of s.emits || []) for (const f of files) if (WF.globMatch(g, f)) t = Math.max(t, fstate[f] || 0)
     return t
   }
+  // ★ 判据是"这道闸【现在】红着"，而不是"下游产物比闸报告旧"。
+  //   只判旧的那一半漏掉了更危险的另一半：闸已经红了、下游【之后】还是跑了。
+  //   实测：闸报告 09:40:49 判红，review.docx 09:41:38 生成（晚于闸报告），
+  //   步骤条照样是「引用核查 ✕ 需返工」+「✓ 排版出件」，与改动前观感一模一样，
+  //   只是这次 Word 是新的 —— 而"闸红着还把件出了"恰恰比"拿旧件充数"更要命。
+  //   闸红着的时候，它下游的任何产物都不能算数，不论先后。
   ordered.forEach((g, gi) => {
     if (!failed.has(g.id)) return
-    const gateAt = newestOf(g)
-    if (!gateAt) return
     for (let i = gi + 1; i < ordered.length; i++) {
       const s = ordered[i]
       if (!done.has(s.id)) continue
-      const at = newestOf(s)
-      if (at && at < gateAt) { done.delete(s.id); stale.add(s.id) }
+      if (!newestOf(s)) continue          // 这一步压根没有产物 → 交给下面的 implied 处理
+      done.delete(s.id); stale.add(s.id)
     }
   })
+  // ★ 判据必须是"这一步有没有产物"，【不能】写成"它还不在 done 里"。
+  //   done 在函数开头就用上一次落盘的 st.done 播种，补齐过的步骤第二次进来已经在 done 里，
+  //   于是永远进不了 implied；接着空的 implied 被覆盖写回文件，标记就被永久擦除了。
+  //   实测：用户开会话、刷页面各触发一次 state 读取，所以「·无产物」几乎没人看得到 ——
+  //   连查三次，第一次有、后两次恒为 []。按产物判则是幂等的，与"进度靠产物反推"的原设计一致。
+  const hasArtifact = (s) => (s.emits || []).some((g) => files.some((f) => WF.globMatch(g, f)))
   let lastDone = -1
   ordered.forEach((s, i) => { if (done.has(s.id)) lastDone = i })
   for (let i = 0; i < lastDone; i++) {
     const s = ordered[i]
-    if (!s.gate && !done.has(s.id) && !failed.has(s.id)) { done.add(s.id); implied.add(s.id) }
+    // 排除 stale：那一步刚被上面从 done 里摘出去（闸红着），这里再原样加回来还打上「·无产物」，
+    // 会把一个明明有 22KB 产物的步骤标成"没有产物"，同时把"已过期"的提示挤掉。
+    if (!s.gate && !failed.has(s.id) && !stale.has(s.id) && !hasArtifact(s)) { done.add(s.id); implied.add(s.id) }
   }
   const arr = [...done], farr = [...failed], iarr = [...implied], sarr = [...stale]
   if (arr.length !== (st.done || []).length || farr.join() !== (st.failed || []).join()

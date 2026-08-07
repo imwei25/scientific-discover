@@ -487,9 +487,21 @@ def _author_year_flags(entry, meta):
     if cy and my and cy.isdigit() and my.isdigit() and abs(int(cy) - int(my)) > 1:
         flags.append(f"年份不符(引用{cy} vs 库{my})")
     ca = (entry.get("claimed_authors") or "").lower()
-    if ca:
+    found_auth = (meta or {}).get("authors", "").lower()
+    # ★ 集体署名（协作组 / consortium / 研究者组）一律跳过作者比对。
+    #   两个数据源对同一篇的作者口径【本来就不一样】，实测 Lancet 2022 那篇 SGLT2i 肾脏结局协作 meta：
+    #     Europe PMC authorString = "Nuffield Department of Population Health Renal Studies Group, …"
+    #     Crossref  author        = [Baigent C, Emberson J, Haynes R, …]（个人名）
+    #   证据表取自 EPMC → bib 里是集体名；核查时解析到的是个人名 → 恒判"首作者不符"。
+    #   而这类文献（大型协作试验组、consortium meta、指南工作组）恰恰是综述最该引的那种，
+    #   一条假阳性就能把闸打红 —— 实测正是它把模型逼进了"在报告里用文字覆盖闸结论"这条路。
+    #   取不出就不比对，是本函数一贯的无害路径，这里沿用。
+    def _collective(s):
+        return bool(re.search(r"\b(group|consortium|investigators?|collaborat\w*|trialists?|"
+                              r"network|committee|society|working\s+party|study\s+group)\b", s or "", re.I)
+                    or re.search(r"(协作组|研究组|工作组|课题组|学会|联盟)", s or ""))
+    if ca and not _collective(ca) and not _collective(found_auth):
         surname = _first_surname(ca)
-        found_auth = (meta or {}).get("authors", "").lower()
         if surname and len(surname) > 2 and found_auth and surname not in found_auth:
             flags.append(f"首作者不符(引用{surname})")
     return "；".join(flags)
