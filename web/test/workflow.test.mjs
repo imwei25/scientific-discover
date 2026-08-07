@@ -381,6 +381,42 @@ test("步骤裁剪的每种组合都要和帮助文字里的承诺对得上（�
     assert.ok(!noData.includes(s), `没有数据却排了「${s}」这一步`)
 })
 
+// ---- 历史回放的步骤归属（前端按步骤分组的依据）----
+// 【为什么值得测】这套口径必须与前端直播分组（index.html 的 markStepBySkill / absorbTail）
+//   逐条对齐。漂了不会报错，只会让同一段对话"刷新前按步骤分了组、刷新后另一个样"——
+//   而那恰恰是没人会去点开对比的地方。
+test("历史消息按技能调用归到步骤：一轮只认第一步，同技能多步按序取", () => {
+  const steps = WF.stepsFor("review", { topic: "x" })
+  const skillPart = (name) => ({ type: "tool", tool: "skill", state: { input: { name } } })
+  const seen = new Set()
+  // 综述里 screen 与 write 都用 literature-review：第一次归"筛选"，第二次才归"成文"。
+  // 取错的话，用户点流程条上的「综述成文」会跳到筛选那一段。
+  assert.equal(WF.stepOfParts([skillPart("search-lit")], steps, seen).id, "search")
+  assert.equal(WF.stepOfParts([skillPart("literature-review")], steps, seen).id, "screen")
+  assert.equal(WF.stepOfParts([skillPart("literature-review")], steps, seen).id, "write")
+  // 一条消息里横跨两步 → 只认第一个（界面上一个回合是不可分割的框）
+  const seen2 = new Set()
+  assert.equal(WF.stepOfParts([skillPart("reference-check"), skillPart("render-pdf-doc")], steps, seen2).id, "refcheck")
+  // 没有技能调用 / 没有步骤集（自由对话）→ null，前端据此完全不分组
+  assert.equal(WF.stepOfParts([{ type: "text", text: "hi" }], steps, new Set()), null)
+  assert.equal(WF.stepOfParts([skillPart("search-lit")], [], new Set()), null)
+  assert.equal(WF.stepOfParts([skillPart("不存在的技能")], steps, new Set()), null)
+})
+
+test("用户提问归到它引出的那一步，而不是上一步", () => {
+  const out = [
+    { role: "user", text: "开始" },
+    { role: "assistant", text: "检索完了", step: "search", stepName: "文献检索" },
+    { role: "user", text: "继续下一步：纳入 / 排除筛选", step: "search", stepName: "文献检索" },
+    { role: "assistant", text: "筛完了", step: "screen", stepName: "纳入 / 排除筛选" },
+    { role: "user", text: "最后一条还没人回" },
+  ]
+  WF.fillUserSteps(out)
+  assert.equal(out[0].step, "search", "第一条提问要归进它引出的第一步，否则那一步的框从 AI 开口才开始")
+  assert.equal(out[2].step, "screen", "「继续下一步」必须归到新的那一步，不能留在上一步的框尾")
+  assert.equal(out[4].step, undefined, "还没有回复的末条提问没有归属可言，别硬塞给上一步")
+})
+
 // ============ 网关接口层 ============
 
 let seq = 0
