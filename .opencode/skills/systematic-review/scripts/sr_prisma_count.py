@@ -292,8 +292,34 @@ def main():
     with open(args.output, "w", encoding="utf-8") as f:
         f.write(out)
 
+    # ★ 同时吐一份机读 JSON，给 sr_prisma_flow.py 画流程图用。
+    #   【为什么不让画图脚本自己再数一遍】那等于把同一套计数逻辑写两份，
+    #   迟早一处改了另一处没跟上 —— 而流程图上的数字与自洽校验的数字对不上，
+    #   恰恰是审稿人一眼就会揪住的地方。计数只有这一个源头。
+    counts = {
+        "total_identified": total_identified,
+        "duplicates_removed": duplicates_removed,
+        "records_after_dedup": records_after_dedup,
+        "records_screened": records_screened,
+        "ta_excluded": ta_excluded,
+        "reports_sought": reports_sought,
+        "all_checks_pass": all(ok for _, ok in checks),
+    }
+    if ft:
+        counts.update({
+            "reports_not_retrieved": reports_not_retrieved,
+            "reports_assessed": reports_assessed,
+            "ft_excluded": ft_excluded,
+            "studies_included": studies_included,
+            "exclusion_reasons": dict(reasons),
+        })
+    json_path = os.path.splitext(args.output)[0] + ".json"
+    with open(json_path, "w", encoding="utf-8") as f:
+        json.dump(counts, f, ensure_ascii=False, indent=2)
+
     print(out)
     print(f"\nWrote {args.output}")
+    print(f"Wrote {json_path}  （给 sr_prisma_flow.py 画流程图用）")
     if not all_pass:
         sys.exit(1)
 

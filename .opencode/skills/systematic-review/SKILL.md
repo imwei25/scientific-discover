@@ -55,7 +55,22 @@ $PY $SR/sr_prisma_count.py --identification counts/identification.json \
    --ta 02_title_abstract_screen.csv --ft 03_fulltext_screen.csv \
    --output counts/prisma-summary.md
 ```
-自动算出流程图每个框的数字 + 每阶段 **Cohen's κ**（附一致性等级）+ **8 条内部自洽校验**（如 排除+纳入=评估数）。任一校验 FAIL 会退出码 1、提示回去核数。数字交 `nature-figure` 画 **PRISMA 2020 流程图**。
+自动算出流程图每个框的数字 + 每阶段 **Cohen's κ**（附一致性等级）+ **8 条内部自洽校验**（如 排除+纳入=评估数）。任一校验 FAIL 会退出码 1、提示回去核数。
+同时落一份机读 `counts/prisma-summary.json`，供下一步画图 —— 计数只有这一个源头，别再数第二遍。
+
+### 5b. PRISMA 2020 流程图（**用脚本，不要自己写 matplotlib**）
+```bash
+$PY $SR/sr_prisma_flow.py --counts counts/prisma-summary.json \
+   --out prisma_flow.png --also-svg --also-pdf
+```
+版式已固定，数字直接读上一步的 JSON。未跑全文筛选阶段时只画到「寻求获取全文的报告」，不臆造后半程。
+
+> ⚠️ **别再现搓画图脚本**。此前本技能没有画图脚本，每次都由模型临时写一段 matplotlib，
+> 实测出来的图：右侧「去除重复记录」与「(n = 5)」两个框**叠印在一起**、数字完全读不出；
+> 主干箭头从三个方框的**文字中间穿过去**；最后两步之间**没有连接箭头**。
+> 更要紧的是——**当前部署的模型没有图像输入能力**（它自己会说 "I can't visually inspect the PNG"），
+> 也就是"画完看一眼"这条兜底根本不存在，坏版式会一路带到投稿件里。版式必须是代码，不是每次的手艺。
+> 需要改样式就改 `sr_prisma_flow.py`，让所有人一起受益。
 
 ### 6. 偏倚风险评估（RoB）
 按研究设计选工具（RCT→RoB2、非随机干预→ROBINS-I、观察性→NOS、诊断→QUADAS-2、患病率→JBI），逐 domain 回答 signaling questions（Y/PY/PN/N/NI）→ 按决策算法给 domain 判定 → 汇总总体偏倚。完整规则见 [references/rob-grade.md](references/rob-grade.md)。偏倚图（traffic-light / summary）交 `nature-figure`。

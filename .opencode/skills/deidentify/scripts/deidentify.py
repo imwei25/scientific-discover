@@ -482,14 +482,29 @@ def main():
 
     # 映射表另存，提醒单独保管
     if mapping:
-        map_path = os.path.splitext(args.out)[0] + "_mapping.csv"
+        # ★ 映射表【绝不能】和脱敏产物并排躺在产物目录里。
+        #   实测：界面的"产出"侧栏会把产物目录整个列出来，于是 patients_deid.csv 与
+        #   patients_deid_mapping.csv 并排出现、都能一键下载 —— 而后者第一列就是
+        #   真实姓名、住院号、身份证号、手机号。模型嘴上说着"映射表单独存放勿外发"，
+        #   用户看到的却是两个挨着的下载按钮，一次误点/误转发就是一起真实的信息泄露。
+        #   写进 `.private/`：点号开头的目录不会被侧栏收录（dirState 跳过），
+        #   但路径确定、用户需要时仍能取回 —— 隐藏的是"顺手就能拿走"，不是"拿不到"。
+        out_dir = os.path.dirname(os.path.abspath(args.out))
+        priv_dir = os.path.join(out_dir, ".private")
+        os.makedirs(priv_dir, exist_ok=True)
+        map_path = os.path.join(
+            priv_dir, os.path.basename(os.path.splitext(args.out)[0]) + "_mapping.csv")
         with open(map_path, "w", newline="", encoding="utf-8-sig") as f:
             w = csv.writer(f)
             w.writerow(["类别", "原值", "假名"])
             for (cat, val), pseudo in mapping.items():
                 w.writerow([cat, val, pseudo])
         print(f"脱敏输出：{args.out}")
-        print(f"⚠️ 映射表：{map_path} —— 含原始 PII，请单独妥善保管或用后销毁，切勿随数据一起外发。")
+        print(f"⚠️ 映射表：{map_path}")
+        print("   含原始 PII（真实姓名 / 住院号 / 身份证 / 电话）。已【刻意】放进 .private/，"
+              "所以它不会出现在界面的\"产出\"侧栏里——这是为了防止随成果一起被转发。")
+        print("   告诉用户时只说\"映射表已单独存放、不在下载列表里\"，需要时再取；"
+              "**不要**把它复制回产物目录，也不要把里面的内容贴进对话。")
 
     # ---- 醒目复核闸：防自动化流程据"成功"直接往下、把漏检的姓名/住址外泄 ----
     got_name = dist.get("姓名", 0)
