@@ -41,6 +41,7 @@ ${REPO_ROOT:-/app}/.venv/bin/python ${REPO_ROOT:-/app}/.opencode/skills/referenc
 | `OK` | 存在且标题吻合 | 通过 |
 | `ERROR` | 查询失败（网络等） | 重试 |
 
+> **标题比对是大小写不敏感的**：两侧都先做 casefold + 空白/标点折叠再比，所以全大写著录、Title Case、句首大写这三种写法互相比都算吻合，纯大小写差异**不会**被判 MISMATCH/CHECK（用 `casefold()` 而非 `lower()`：德语全大写把 ß 写成 SS，`GROSSE GEFÄSSE` 与库里 `Große Gefäße` 只有 casefold 才对得上）。首作者姓的比对同理。报告里回显的标题仍是**原文大小写**，只有比较用的中间值被折叠。
 > **中文标题**：脚本保留汉字做字符级比对；当引用是中文、而库里只存英文标题（中文期刊在 Crossref 常见）时，不会误判 MISMATCH，而是降为 `CHECK` 让人工核对——既不误伤真文献、也不放行两个不同中文标题的张冠李戴。
 > **数据源**：DOI 依次查 Crossref → **doi.org 内容协商（CSL-JSON）** → Europe PMC。doi.org 兜底能覆盖 DataCite/mEDRA 的 DOI，并区分"号根本不存在"与"真 DOI 但库暂未索引"（刚见刊的真文献不会被误判 FABRICATED）。
 

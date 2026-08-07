@@ -169,10 +169,28 @@ def _get(url, **kw):
     return r
 
 
+def _casefold_cmp(s):
+    """比对用的大小写归一化。**只作用于比较副本**——报告里回显给用户的
+    claimed_title / found_title 一律保持原文大小写，绝不被这里改动。
+
+    用 casefold() 而不是 lower()：lower() 只做逐字符映射，遇到"一个字母折成两个"
+    的情况折不动。踩到的实例：德语全大写著录按排印惯例把 ß 写成 SS，
+    `GROSSE GEFÄSSE` 与库里的 `Große Gefäße` 在 lower() 下归一成
+    'grosse gef sse' vs 'gro e gef e'，相似度只有 0.80 —— 一条完全正确的引用
+    被判成 CHECK（黄，会计入"可疑/存疑"条数）。casefold() 把 ß 折成 ss，
+    两边归一结果完全一致 → OK。同类还有 ẞ/ﬅ/ǅ 这些特殊折叠字符。
+    所有做标题比对的归一化（norm_title / _norm_for_contain）都从这里过，
+    避免两条路径各自 lower 一遍、日后其中一条被改掉而另一条没跟上。
+    """
+    return (s or "").casefold()
+
+
 def norm_title(s):
     # 保留 CJK 汉字：旧版只留 [a-z0-9]，中文标题会被剥成空串，于是两个空串
     # SequenceMatcher 判满分 1.0 —— 真·张冠李戴的两个不同中文标题会被误判 OK（漏报）。
-    return re.sub(r"[^a-z0-9一-鿿]+", " ", (s or "").lower()).strip()
+    # 大小写与空白：先 casefold（见 _casefold_cmp），再把所有非字母数字压成单个空格，
+    # 所以标题比对对**大小写和多余空白/标点都不敏感**。
+    return re.sub(r"[^a-z0-9一-鿿]+", " ", _casefold_cmp(s)).strip()
 
 
 def title_sim(a, b):
@@ -189,7 +207,9 @@ def compare_titles(claimed, found):
     comparable=False 表示两者无法做有意义的字符串比对——① 任一为空；
     ② 跨语种（一中一西）且相似度不高：中文期刊常在 Crossref 只存英文标题，
     此时用户中文引用 vs 库内英文标题相似度≈0，若判 MISMATCH 会误伤真文献。
-    这类交给人工核（CHECK），既不误伤也不放行。"""
+    这类交给人工核（CHECK），既不误伤也不放行。
+    两侧一律先过 norm_title（casefold + 空白/标点折叠），所以**纯大小写差异不影响判定**：
+    全大写著录、Title Case、句首大写三种写法互相比都是满分。"""
     na, nb = norm_title(claimed), norm_title(found)
     if not na or not nb:
         return 0.0, False
@@ -202,9 +222,10 @@ def compare_titles(claimed, found):
 
 
 def _norm_for_contain(x):
-    """包含式比对用的归一化：小写、去掉所有非字母数字（含标点/空格/连字符）。
-    这样 'Hepatocellular Carcinoma' 与著录里的 'Hepatocellular carcinoma.' 能对上。"""
-    return re.sub(r"[^0-9a-z\u4e00-\u9fff]+", "", (x or "").lower())
+    """包含式比对用的归一化：大小写折叠、去掉所有非字母数字（含标点/空格/连字符）。
+    这样 'Hepatocellular Carcinoma' 与著录里的 'Hepatocellular carcinoma.' 能对上。
+    大小写折叠与 norm_title 共用 _casefold_cmp，两条比对路径不会各说各话。"""
+    return re.sub(r"[^0-9a-z\u4e00-\u9fff]+", "", _casefold_cmp(x))
 
 
 def _title_contained(claimed, rt):
@@ -263,8 +284,9 @@ def _epmc_by_doi(doi):
 def _crossref_retracted(msg, title):
     """Crossref 侧的撤稿信号（EPMC pubTypeList 之外的兜底）：
     ① 标题以 RETRACTED/WITHDRAWN 开头（Crossref 对撤稿文常加此前缀）；
-    ② update-to 关系里含 retraction/withdrawal 类型。"""
-    t = (title or "").strip().lower()
+    ② update-to 关系里含 retraction/withdrawal 类型。
+    前缀判定同样走 _casefold_cmp，`RETRACTED:` / `Retracted:` / `retracted:` 一视同仁。"""
+    t = _casefold_cmp(title).strip()
     if t.startswith("retracted") or t.startswith("withdrawn"):
         return True
     for u in (msg.get("update-to") or []):
@@ -473,7 +495,9 @@ def _first_surname(ca):
     if not toks:
         return ""
     # 末尾是首字母缩写（RS / J / A.）就砍掉，剩下的才是姓；复姓（van der Berg）因此得以保全
-    if len(toks) > 1 and re.fullmatch(r"[a-z]{1,3}\.?", toks[-1]):
+    # re.I：调用方虽已 casefold，但缩写本来就该大小写不敏感地认——别让这里的判据依赖调用顺序，
+    # 一旦哪天有人直接拿原文调它，`Finn RS` 的 `RS` 认不出来就会退回"每条都判首作者不符"的老 bug。
+    if len(toks) > 1 and re.fullmatch(r"[a-z]{1,3}\.?", toks[-1], re.I):
         toks = toks[:-1]
     return " ".join(toks).strip()
 
@@ -486,10 +510,13 @@ def _author_year_flags(entry, meta):
     my = str((meta or {}).get("year") or "").strip()
     if cy and my and cy.isdigit() and my.isdigit() and abs(int(cy) - int(my)) > 1:
         flags.append(f"年份不符(引用{cy} vs 库{my})")
-    ca = (entry.get("claimed_authors") or "").lower()
+    # 作者串也走 _casefold_cmp（与标题同一套大小写折叠）：全大写的作者字段
+    # `GROSS, PETER` 与库里的 `Gross P` 必须对上，德语姓 `WEISS` / `Weiß` 亦然，
+    # 否则又是一条"纯大小写造成的首作者不符"假警报（会把 OK 降成 CHECK 打黄）。
+    ca = _casefold_cmp(entry.get("claimed_authors"))
     if ca:
         surname = _first_surname(ca)
-        found_auth = (meta or {}).get("authors", "").lower()
+        found_auth = _casefold_cmp((meta or {}).get("authors"))
         if surname and len(surname) > 2 and found_auth and surname not in found_auth:
             flags.append(f"首作者不符(引用{surname})")
     return "；".join(flags)
