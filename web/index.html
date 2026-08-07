@@ -62,7 +62,27 @@
   /* Layout：左会话栏 / 中工作区 / 右工具栏。两侧是贴边的白色列，中间留浅灰底。 */
   main { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(0,56px) minmax(0,1fr) minmax(0,300px); background: var(--bg); transition: width .2s ease; }
   body.sessbar-open main { grid-template-columns: minmax(0,264px) minmax(0,1fr) minmax(0,300px); }
-  body.preview-open main { width: 50vw; }
+  /* 预览态：左半屏放文件预览、右半屏放对话。左侧会话栏与右侧工具列整列收起——
+     不然三列挤在 50vw 里，正文只剩一条缝。收起靠 display:none，关掉预览就自动还原，
+     sessbar-open 等状态不受影响、不用记忆再恢复。
+     右半屏顶部再挂一条「对话 / 本轮产出」切换条：产出列表随 aside 一起被收起了，
+     没有它就只能先关预览才能换一个文件看。 */
+  body.preview-open main { width: 50vw; margin-left: 50vw; }
+  body.preview-open main, body.sessbar-open.preview-open main {
+    grid-template-columns: minmax(0,1fr); grid-template-rows: auto minmax(0,1fr); }
+  body.preview-open #sessbar { display: none; }
+  body.preview-open #pvTabs { display: flex; grid-row: 1; grid-column: 1; }
+  body.preview-open #chat, body.preview-open aside { grid-row: 2; grid-column: 1; min-height: 0; }
+  body.preview-open aside { border-left: 0; padding-top: 12px; }
+  body.preview-open aside > .panel:not(#outpanel) { display: none; }   /* 产出页只留「本轮产出」，上传与 Zotero 归对话态 */
+  body.preview-open:not(.pvtab-files) aside { display: none; }
+  body.preview-open.pvtab-files #chat { display: none; }
+  #pvTabs { display: none; align-items: center; gap: 6px; padding: 8px 14px 0; background: var(--bg); }
+  .pvtab { flex: none; padding: 7px 16px; font-size: 12.5px; font-family: inherit; color: var(--muted); cursor: pointer;
+    background: transparent; border: 1px solid transparent; border-radius: var(--r-sm) var(--r-sm) 0 0; }
+  .pvtab:hover { color: var(--text); }
+  .pvtab.on { color: var(--accent); font-weight: 600; background: var(--panel); border-color: var(--line); border-bottom-color: var(--panel); }
+  .pvtab .count { margin-left: 6px; color: var(--faint); font-weight: 400; }
   #chat { display: flex; flex-direction: column; min-width: 0; min-height: 0; padding: 22px 36px 18px; }
   /* 左侧「会话与项目」 */
   #sessbar { grid-column: 1; overflow: hidden; display: flex; flex-direction: column; gap: 10px; background: var(--panel); border-right: 1px solid var(--line); padding: 14px 10px 10px; }
@@ -885,8 +905,8 @@
   .lightbox.on { display: flex; }
   .lightbox img { max-width: 92vw; max-height: 92vh; border-radius: 10px; box-shadow: 0 20px 60px rgba(0,0,0,.6); }
 
-  /* markdown preview (half screen) */
-  #preview { position: fixed; top: var(--hdr-h); right: 0; width: 50vw; height: calc(100vh - var(--hdr-h)); z-index: 40; display: none; flex-direction: column; background: #ffffff; border-left: 1px solid var(--line-hi); box-shadow: -14px 0 44px rgba(20,24,30,.22); }
+  /* markdown preview（左半屏：文件在左、对话在右，与上面 body.preview-open 的布局配套） */
+  #preview { position: fixed; top: var(--hdr-h); left: 0; width: 50vw; height: calc(100vh - var(--hdr-h)); z-index: 40; display: none; flex-direction: column; background: #ffffff; border-right: 1px solid var(--line-hi); box-shadow: 14px 0 44px rgba(20,24,30,.22); }
   #preview.on { display: flex; }
   .pv-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 12px 16px; border-bottom: 1px solid var(--line); }
   .pv-title { display: flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 600; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -1130,7 +1150,7 @@
     body { overflow: auto; }
     .app { height: auto; min-height: 100vh; }
     main, body.sessbar-open main { grid-template-columns: 1fr; }
-    body.preview-open main { width: 100vw; }
+    body.preview-open main { width: 100vw; margin-left: 0; }   /* 窄屏没有左右两半可分，预览直接盖满 */
     #sessbar { border-right: 0; border-bottom: 1px solid var(--line); }
     #log { min-height: 55vh; }
     aside { order: -1; border-left: 0; border-bottom: 1px solid var(--line); }
@@ -1202,6 +1222,12 @@
 <!-- 界面更新提示条：只换前端静态资源，点一下装完刷新页面即生效，不重启后台、不打断在跑的轮 -->
 <div id="webbanner" hidden></div>
 <main>
+  <!-- 右半屏的「对话 / 本轮产出」切换条：只在预览态显示（CSS 控制），
+       预览时右侧工具列整列收起，靠它把产出列表调回来换文件预览。 -->
+  <div id="pvTabs" role="tablist" aria-label="右侧面板">
+    <button type="button" class="pvtab on" id="pvTabChat" role="tab" aria-selected="true">对话</button>
+    <button type="button" class="pvtab" id="pvTabFiles" role="tab" aria-selected="false">本轮产出<span class="count" id="pvTabCount"></span></button>
+  </div>
   <div id="sessbar">
     <!-- 「新建项目」顶在最上面（设计稿如此）；收起会话栏时它连同下面这排图标一起隐藏，只留折叠按钮 -->
     <button id="newProject" type="button"></button>
@@ -1442,6 +1468,7 @@ const syncAutoLbl = () => autoLbl.classList.toggle("on", autoChk.checked)
 autoChk.addEventListener("change", () => { localStorage.setItem("nm_auto", autoChk.checked ? "1" : "0"); syncAutoLbl() })
 syncAutoLbl()
 const filesEl = document.getElementById("files")
+const pvTabCount = document.getElementById("pvTabCount")
 const stepsHostEl = document.getElementById("stepsHost")   // 步骤条的独立容器（在 #log 之外，不挡正文）
 let activeES = null   // 当前订阅中的 SSE 连接——只是"订阅"，断开/切走都不会打断后台生成
 function setStreamingUI(on) {
@@ -2072,6 +2099,7 @@ const isScratch = (n) => { const b = n.split("/").pop(); return SCRATCHY.test(b)
 // 折叠成一行，点开才展开。
 const isBulkPdf = (n) => /^(pdfs|zotero_lib)\//i.test(String(n))
 function renderFiles(list) {
+  pvTabCount.textContent = list && list.length ? String(list.length) : ""   // 预览态切换条上的产出条数
   if (!list || !list.length) { filesEl.innerHTML = '<span class="hint">对话生成的文件会显示在这里</span>'; return }
   filesEl.innerHTML = ""
   list = [...list].sort((a, b) => (isScratch(a) ? 1 : 0) - (isScratch(b) ? 1 : 0))   // 结果在前、中间文件在后
@@ -2194,11 +2222,28 @@ function csvTable(text, delim) {
     + (all.length > MAX + 1 ? '<div class="hint">共 ' + all.length + ' 行，仅预览前 ' + MAX + ' 行，完整内容请下载</div>' : "")
 }
 
-// ---- Markdown 半屏预览 ----
+// ---- Markdown 半屏预览（左半屏文件 / 右半屏对话）----
 const preview = document.getElementById("preview")
 const pvBody = document.getElementById("pvBody")
 const pvTitle = document.getElementById("pvTitle")
-function closePreview() { preview.classList.remove("on"); document.body.classList.remove("preview-open"); if (pvObjUrl) { URL.revokeObjectURL(pvObjUrl); pvObjUrl = null } }
+// 预览态右半屏的两个页签。产出列表（aside）在预览时被整列收起，用它切回来换文件预览。
+const pvTabChat = document.getElementById("pvTabChat")
+const pvTabFiles = document.getElementById("pvTabFiles")
+function setPvTab(tab) {
+  const onFiles = tab === "files"
+  document.body.classList.toggle("pvtab-files", onFiles)
+  pvTabChat.classList.toggle("on", !onFiles); pvTabFiles.classList.toggle("on", onFiles)
+  pvTabChat.setAttribute("aria-selected", String(!onFiles)); pvTabFiles.setAttribute("aria-selected", String(onFiles))
+  // 对话区被 display:none 藏过一轮后 scrollHeight 归零，回来时会停在顶部——切回时重新贴底。
+  if (!onFiles) requestAnimationFrame(() => { log.scrollTop = log.scrollHeight })
+}
+pvTabChat.addEventListener("click", () => setPvTab("chat"))
+pvTabFiles.addEventListener("click", () => setPvTab("files"))
+function closePreview() {
+  preview.classList.remove("on"); document.body.classList.remove("preview-open")
+  setPvTab("chat")                      // 退出预览还原成原始界面：三列布局 + 对话页
+  if (pvObjUrl) { URL.revokeObjectURL(pvObjUrl); pvObjUrl = null }
+}
 let pvObjUrl = null   // 上一次 pptx/docx 预览的 blob URL，切换/关闭时回收
 async function openPreview(name) {
   pvTitle.innerHTML = ic("file"); const s = document.createElement("span"); s.textContent = name; pvTitle.appendChild(s)
