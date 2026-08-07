@@ -85,6 +85,18 @@ class KeySourceTest(unittest.TestCase):
         self.assertEqual(os.environ["QWEN_API_KEY"], FAKE)
         self.assertEqual(os.environ["QWEN_MODEL"], "qwen-image-2.0")
 
+    def test_utf8_bom_file_is_read(self):
+        """Windows PowerShell 的 Set-Content/Out-File 写的是带 BOM 的 UTF-8。
+
+        用 utf-8 读会把 BOM 留在第一行行首，键名变成 '\\ufeffQWEN_API_KEY' → 不在白名单 →
+        静默忽略 → 用户照着说明写好了 key 却被告知"没找到"，且毫无线索。必须用 utf-8-sig。
+        """
+        p = Path(self._tmp) / "bom.env"
+        p.write_bytes(b"\xef\xbb\xbf" + f"QWEN_API_KEY={FAKE}\n".encode("utf-8"))
+        os.environ["SCI_IMAGE_ENV"] = str(p)
+        rf.load_key_file()
+        self.assertEqual(os.environ.get("QWEN_API_KEY"), FAKE, "带 BOM 的 key 文件也必须读得出来")
+
     def test_missing_key_message_tells_user_both_safe_ways(self):
         os.environ["SCI_IMAGE_ENV"] = str(Path(self._tmp) / "does-not-exist.env")
         with self.assertRaises(SystemExit) as cm:

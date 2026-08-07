@@ -124,7 +124,10 @@ def load_key_file():
                 ]))
             except ValueError:
                 pass   # 不在仓库内 —— 正常情况
-            for line in f.read_text(encoding="utf-8", errors="replace").splitlines():
+            # utf-8-sig：Windows PowerShell 的 Set-Content/Out-File 写的是【带 BOM】的 UTF-8，
+            # 而用 utf-8 读会把 BOM 留在第一行行首 → 键名变成 "﻿QWEN_API_KEY" → 不在白名单里
+            # → 【静默忽略】，用户明明照着说明写好了 key 却报"没找到 key"，且毫无线索。
+            for line in f.read_text(encoding="utf-8-sig", errors="replace").splitlines():
                 line = line.strip()
                 if not line or line.startswith("#") or "=" not in line:
                     continue
