@@ -23,7 +23,9 @@ import * as A from "./lib/auth.mjs"
 import * as OneAPI from "./lib/oneapi.mjs"
 import * as Upstream from "./lib/upstream.mjs"
 import { llmForward, GATEWAY_PATH_PREFIX } from "./lib/gateway.mjs"
+import { imageForward, IMAGE_PATH_PREFIX } from "./lib/imagegen.mjs"
 import { createQueue, sanitizeLimits, LIMIT_DEFAULTS } from "./lib/queue.mjs"
+import { createSupply, WINDOWS, WINDOW_LABELS, isWindow } from "./lib/supply.mjs"
 import * as Credits from "./lib/credits.mjs"
 import { ADMIN_HTML } from "./lib/admin-ui.mjs"
 import * as SkillPacks from "./lib/skillpacks.mjs"
@@ -94,6 +96,12 @@ export const CFG = {
   // 转发，只是后台的「上游通道」页会显示未接入。
   oneapiUrl: (process.env.ONEAPI_URL || "").replace(/\/+$/, ""),
   oneapiToken: process.env.ONEAPI_TOKEN || "",
+  // 生图（/img 代理，mechanism-figure 技能用）。变量名与技能脚本、ppt-master 保持一致，
+  // 配一次到处能用。没配 = /img 回 503 并说清是"平台没配"，不冤枉用户的张数。
+  // 【这把 key 只留在服务器】客户端永远拿不到它 —— 与 LLM_UPSTREAM_KEY 同一条原则。
+  imageKey: process.env.QWEN_API_KEY || process.env.DASHSCOPE_API_KEY || "",
+  imageModel: process.env.QWEN_MODEL || "",
+  imageEndpoint: process.env.QWEN_IMAGE_ENDPOINT || "",
 }
 export const oneapiCfg = () => ({ url: CFG.oneapiUrl, token: CFG.oneapiToken })
 
@@ -181,12 +189,17 @@ const audit = (ev, fields = {}) => {
   try { DB.addAudit(db, { event: ev, ...fields }) } catch (e) { log("[audit] 写失败", e.message) }
 }
 
+// 供应侧闸：谁的预算见底了、谁刚被上游打回来，转发前据此跳过那家（见 lib/supply.mjs）。
+// 【必须在 audit 之后建】它启动时要读库、跳闸时要写审计，audit 还没定义就会 TDZ 崩在启动路径上。
+export const supply = createSupply({ db, log, audit })
+
 // 技能清单以仓库技能目录为唯一事实来源（新增技能不用重启）
 const SKILL_LABELS = {
   "clinical-stats": "临床统计", "data-analysis": "数据分析", "data-integrity": "数据自查",
   "deep-research": "深度研究", "deidentify": "数据脱敏", "fulltext-retrieval": "全文获取",
   "grant-proposal": "标书撰写", "humanize-academic": "去AI味", "literature-review": "文献综述",
-  "nature-figure": "出版级图表", "novelty-check": "新颖性核查", "ocr": "OCR识字",
+  "mechanism-figure": "机制示意图", "nature-figure": "出版级图表",
+  "novelty-check": "新颖性核查", "ocr": "OCR识字",
   "peer-review": "同行评审", "ppt-master": "PPT制作", "reference-check": "查引用",
   "render-docx": "Word排版", "render-pdf-doc": "PDF排版", "research-scan": "领域扫描",
   "search-lit": "文献检索", "systematic-review": "系统综述", "topic-selection": "选题",
@@ -1173,11 +1186,17 @@ async function handleAdminApi(req, res, pathname) {
       if (!Number.isFinite(n) || n < 0 || Math.floor(n) !== n)
         return json(res, 400, { ok: false, err: "单用户并发须是 ≥0 的整数（0 = 跟随全局）" })
     }
+    // 生图张数：与上面几个额度同一套校验口径（负数/乱输入静默变 0 = 静默变不限，是烧钱洞）
+    if (b.imgDaily !== undefined && b.imgDaily !== null && b.imgDaily !== "") {
+      const n = Number(b.imgDaily)
+      if (!Number.isFinite(n) || n < 0 || Math.floor(n) !== n)
+        return json(res, 400, { ok: false, err: "每日生图张数须是 ≥0 的整数（0 = 不限）" })
+    }
     const before = DB.getTier(db, key)
     DB.upsertTier(db, {
       key, daily_usd: b.dailyUSD, monthly_usd: b.monthlyUSD,
       model: b.model, models: b.models, skills: b.skills, note: b.note, sort: b.sort,
-      max_conc: b.maxConc,
+      max_conc: b.maxConc, img_daily: b.imgDaily,
     })
     const after = DB.getTier(db, key)
     // 改档位定义影响该档全体用户的额度/默认模型/技能 → 全部吊销 key，下次登录按新权限走。
@@ -1201,10 +1220,15 @@ async function handleAdminApi(req, res, pathname) {
   if (req.method === "GET" && pathname === "/admin/api/providers") {
     const models = DB.listModels(db)
     const tiers = DB.listTiers(db)
+    const provRows = DB.listProviders(db)
     return json(res, 200, {
       ok: true,
+      // 供应侧：每家的预算用了多少、现在是不是被摘着。和供应商清单同一口请求下发，
+      // 免得后台要为一张表发两次请求（这一页本来就是运维盯着看的，越少往返越好）。
+      supply: supply.snapshot(provRows),
+      windows: Object.keys(WINDOWS).map((w) => ({ win: w, label: WINDOW_LABELS[w] })),
       // api_key 只报"有没有"，绝不回显：后台页面被肩窥/截图不该泄露上游凭证
-      providers: DB.listProviders(db).map((p) => ({
+      providers: provRows.map((p) => ({
         key: p.key, name: p.name, baseUrl: p.base_url, hasKey: !!p.api_key,
         status: p.status, note: p.note, sort: p.sort, createdAt: p.created_at,
         models: models.filter((m) => m.provider === p.key).length,
@@ -1245,6 +1269,8 @@ async function handleAdminApi(req, res, pathname) {
     if (b.remove) {
       if (!DB.getProvider(db, key)) return json(res, 404, { ok: false, err: "供应商不存在" })
       const r = DB.deleteProvider(db, key)
+      // 内存里那份健康/预算缓存也得跟着忘掉，否则日后重建同名供应商会继承上一次的摘除标记
+      supply.clear(key)
       const dropped = Object.entries(r.droppedFromTiers || {}).map(([t, ms]) => `${t}:${ms.join("/")}`).join(" ")
       audit("provider.del", { actor: "admin", target: key, ip, detail: `models=${r.removedModels}${dropped ? " 档位清单已摘 " + dropped : ""}` })
       return json(res, 200, { ok: true, removedModels: r.removedModels, droppedFromTiers: r.droppedFromTiers })
@@ -1260,6 +1286,52 @@ async function handleAdminApi(req, res, pathname) {
     })
     audit(existed ? "provider.update" : "provider.add", { actor: "admin", target: key, ip, detail: baseUrl })
     return json(res, 200, { ok: true })
+  }
+
+  /**
+   * 供应侧预算与摘除标记。
+   *
+   * action=budget：给某家落一条（或几条）预算线。limitUSD ≤ 0 = 取消这条线。
+   * action=clear ：手动解除摘除标记（充完值不想等冷却到期就点它）。
+   *
+   * 【为什么预算与供应商分开两个接口】改预算是运维天天会动的（充值、调额度），而改供应商
+   * 要碰 base_url 与 key。搅在一起的话，一次「改个预算」的表单提交就有可能把凭证写坏 ——
+   * upsertProvider 那边为此专门留了「key 留空 = 不改」的坑防护，别再造第二个同类坑。
+   */
+  if (req.method === "POST" && pathname === "/admin/api/supply") {
+    const b = await readBody(req)
+    const key = String(b.provider || "").trim()
+    if (!DB.getProvider(db, key)) return json(res, 404, { ok: false, err: "供应商不存在" })
+
+    if (b.action === "clear") {
+      supply.clear(key, { byAdmin: true })
+      log(`[supply] 管理员手动解除 ${key} 的摘除标记`)
+      return json(res, 200, { ok: true })
+    }
+
+    if (b.action === "budget") {
+      const rows = Array.isArray(b.budgets) ? b.budgets : [b]
+      const saved = []
+      for (const it of rows) {
+        const win = String(it.win || "").trim()
+        if (!isWindow(win)) return json(res, 400, { ok: false, err: `窗口名不认识：${win}（可用 ${Object.keys(WINDOWS).join("/")}）` })
+        const lim = Number(it.limitUSD)
+        if (!Number.isFinite(lim)) return json(res, 400, { ok: false, err: "额度要填数字（美元）" })
+        // anchor 只对 total 有意义；没传就按「此刻起算」——新充的值当然从现在开始算起，
+        // 默认 0 的话会把这家历史上所有消费都算进来，一填就显示"已用尽"。
+        const anchor = win === "total"
+          ? (Number(it.anchor) > 0 ? Number(it.anchor) : (DB.listBudgets(db, key).find((r) => r.win === "total")?.anchor || Date.now()))
+          : 0
+        saved.push({ win, row: DB.setBudget(db, key, win, lim, anchor) })
+      }
+      supply.invalidate(key)
+      const detail = saved.map((s) => `${s.win}=${s.row ? "$" + s.row.limit_usd : "取消"}`).join(" ")
+      audit("supply.budget", { actor: "admin", target: key, ip, detail })
+      log(`[supply] ${key} 预算已更新：${detail}`)
+      return json(res, 200, { ok: true, budgets: supply.snapshot([key])[0]?.budgets || [] })
+    }
+
+    return json(res, 400, { ok: false, err: "action 只能是 budget 或 clear" })
   }
 
   if (req.method === "POST" && pathname === "/admin/api/model") {
@@ -1827,6 +1899,8 @@ export const server = http.createServer(async (req, res) => {
   try {
     // LLM 转发必须最先路由：body 要原样管道给上游，绝不能先被别处读掉
     if (p.startsWith(GATEWAY_PATH_PREFIX)) return await llmForward({ req, res, pathname: p, ctx })
+    // 生图转发（同理，body 自己读）
+    if (p.startsWith(IMAGE_PATH_PREFIX)) return await imageForward({ req, res, pathname: p, ctx })
 
     if (p === "/healthz") return json(res, 200, { ok: true, service: "sci-auth", users: DB.countUsers(db), node: process.versions.node })
 
@@ -1857,12 +1931,14 @@ export const server = http.createServer(async (req, res) => {
 const ctx = {
   db, CFG, log, audit, clientIp,
   authClient, json, fail,
-  queue,
+  queue, supply,
   resolveEntitlement: (u) => DB.resolveEntitlement(db, u),
   modelRoutes: (m) => DB.modelRoutes(db, m),
   recordUsage: (uid, rec) => DB.recordUsage(db, uid, rec),
   todayCost: (uid) => DB.todayCost(db, uid),
   monthCost: (uid) => DB.monthCost(db, uid),
+  todayImages: (uid) => DB.todayImages(db, uid),
+  recordImage: (uid) => DB.recordImage(db, uid),
   noteClient,
 }
 

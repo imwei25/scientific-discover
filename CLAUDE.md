@@ -29,7 +29,7 @@
 | 系统综述 / Meta | `systematic` | systematic-review(方法学八步，含 PRISMA/RoB 出图) → write-paper → reference-check → render-docx |
 | 基金标书 | `grant` | research-scan → topic-selection → **novelty-check**(新颖性裁定+预注册) → grant-proposal → peer-review(自查) → render-pdf-doc |
 | 原创研究论文 | `paper` | deidentify(如含患者数据) → clinical-stats + data-analysis → data-integrity(可选，源数据自查，见表下注) → **novelty-check**(可选，见表下注) → nature-figure → **literature-review**(成文综述) → write-paper(基于综述) → reference-check → humanize-academic → peer-review → render-docx |
-| 深度研究一个问题 | `research` | deep-research → render-pdf-doc |
+| 深度研究一个问题 | `research` | deep-research → reference-check(查报告引用真伪) → render-pdf-doc |
 
 - 拿不准归哪条 → 用编号选项问（见 §六）："**1)** 叙述性综述　**2)** 系统综述 / Meta　**3)** 原创研究论文　**4)** 基金标书　**5)** 深挖一个问题"，用户回一个数字即定 pipeline。
 - **综述体裁判别（信号词优先）**：出现 **双人筛选 / PRISMA / RoB / 偏倚风险 / GRADE / Meta / 森林图合并** 任一 → `systematic`；只说"写篇综述 / 讲讲某方向进展"、**未提**这些方法学词 → 默认 `review`，但开工前用编号选项确认（见 §六）："**1)** 叙述性综述就够（推荐，按你所述）　**2)** 做到系统综述强度（双人筛选/PRISMA/RoB）"。
@@ -38,7 +38,8 @@
 - **paper 里 `data-integrity`（可选自查闸）**：用户**提供了原始数值表**（xlsx/csv）时，可在 `data-analysis` 后对源数据跑一遍数值完整性自查，抓复制粘贴错误 / 常数偏移 / 跨表复用 / GRIM 不自洽等——**目的是投稿前主动核对补说明，非指控**（signal not verdict，见技能内铁律）。默认 `review` 档假阳性低；纯理论/无数值原始表的稿件跳过。发现需核对的项属回退触发点：回 `data-analysis`／让用户核原始记录后再往下。
 
 ## 四、单步直派：请求 → 技能
-- **画图 / 看数 / 统计**：`data-analysis`（探索性看数、150dpi 预览）、`nature-figure`（投稿级出版图：森林图/KM/火山图，300dpi+矢量）、`clinical-stats`（基线表/Table 1、样本量）
+- **画图 / 看数 / 统计**：`data-analysis`（探索性看数、150dpi 预览）、`nature-figure`（投稿级出版图：森林图/KM/火山图，300dpi+矢量）、`clinical-stats`（基线表/Table 1、样本量）、`mechanism-figure`（机制/通路**示意图**、图形摘要：文生图，非数据图）
+- **数据图 vs 示意图（避免误派）**：**图上形状由数字决定 → `nature-figure`**（森林图/KM/火山图/ROC/箱线图…，可直接投稿）；**由生物学关系决定、没有数据 → `mechanism-figure`**（多栏通路图、药物阻断、结构示意、graphical abstract）。`mechanism-figure` 出的是 **AI 生成位图**：交付时必须说清三件事——不是矢量、多数期刊（Nature 系基本禁用 / Cell Press 需披露）不接受 AI 生成图入稿、标签必然有拼错要逐个核。**最适合标书插图与组会汇报**；投稿终稿走"按 spec 在 BioRender 重绘"的路径。用户同时要机制图与数据图 → 分别派这两个技能，别混一次做。
 - **临床推断统计的归属（避免误派）**：方法比对（Bland-Altman / Passing-Bablok / 一致性 LoA）、生存分析（KM / Cox）、ROC / 诊断效能、组间检验 / 相关 / 回归等**分析**一律走 `data-analysis`，要投稿级图再叠 `nature-figure`；`clinical-stats` **只**管 Table 1 基线表与样本量 / 把握度，别拿它做上述分析。**且诊断准确性 / 方法比对 / 纯实验室验证类研究常无人口学基线协变量（年龄 / 性别 / 分期等）→ 此时 Table 1 无对应数据，`clinical-stats` 可整步跳过、全走 `data-analysis`，别把检测值 / 生存时间硬塞成"基线表"制造误导。**
 - **检索 / 全文**：`search-lit`（PubMed 系）、`literature-review`（Europe PMC / 叙述性综述成文）、`fulltext-retrieval`（下 PDF：OA 渠道 + 机构通道（挂本机已登录 CARSI 的 Chrome，仅同机可用、服务器优雅降级）、PDF 转 md）
 - **本地文献库**：`zotero-library`（读用户**本机 Zotero** 题录 + 对其中 PDF 做全文证据检索，“基于我自己的文献库回答”；默认只读，导出回写用 `push`（写操作）。**仅在 opencode 与 Zotero 同机运行时可用**，中心服务器多用户下探测失败会优雅回退，改用 `search-lit`/`fulltext-retrieval`）
@@ -47,6 +48,7 @@
   - → **会话小库做 RAG**：检索结果**多数没有全文**——**必须先用 `fulltext-retrieval` 按 DOI 试下 OA 全文**到当前目录的 `zotero_lib/`，**只把真正下到 PDF 的算入小库**，再用 `zotero-library` 对该目录 RAG。**务必诚实汇报**：哪些下到了全文（已入小库）、哪些没下到（**因此没入小库**、给出原因，如非 OA / 无 DOI），**绝不假装全部导入**。没全文的仍可 `push` 进 Zotero（只题录）。
 - **文稿处理**：`humanize-academic`（去 AI 味）、`reference-check`（查假引用 / 核 DOI）、`render-docx` / `render-pdf-doc`（排版出件）
 - **数据合规**：`deidentify`（患者数据脱敏）
+- **图片识字**：`ocr`（把图片/扫描件/官方以图片发布的文件识别成文字；调云端 OCR.space、本地不装模型；**signal not verdict**，代码/金额/批号等关键字段须人工复核）
 - **数据自查**：`data-integrity`（源数据数值完整性 sanity check：查复制粘贴错误 / 常数偏移 / 跨表复用 / GRIM 不自洽等；投稿前自查或审他人数据，**只出待核信号、不下造假结论**；只看结构化数值表，不看图像篡改）
 - **评审**：`peer-review`（投稿前自查 / 对抗红队）
 - **基础设施**：`env-setup`（缺 `.venv` 时先跑）

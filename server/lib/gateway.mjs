@@ -232,6 +232,57 @@ function makeUsageTap(isSse, onUsage, encoding = "") {
   return t
 }
 
+/**
+ * 上游的 429 分两种，给用户的话完全相反，必须分开：
+ *   · 真限速（RPM/TPM 打满）：几秒到几十秒就好，"稍等再试"是对的建议；
+ *   · 额度耗尽（账号配额/余额打光）：要等到某个时刻或要充值，**重试完全无用**。
+ *
+ * 【为什么非分不可】实测（2026-08-07 生产）火山方舟额度耗尽时回的就是 429：
+ *   {"error":{"code":"AccountQuotaExceeded","type":"TooManyRequests",
+ *     "message":"You have exceeded the 5-hour usage quota. It will reset at 2026-08-07 14:12:52 +0800 CST..."}}
+ * 而当时全都按"限速"处理 → queue 记一段 rateLimited → 客户端把它显示成
+ * 「上游限速中，正在等待重试…本轮会在限速解除后自动继续，请不要重发」，同时首输出看门狗
+ * 因为 cloudQueueBlocking() 每 30 秒续一次命、**永不超时** —— 用户就守着转圈等一个
+ * 五小时后才恢复的额度，还被明确告知别重发。这正是"额度触顶静默转圈"的第二条入口。
+ *
+ * 判据取"够用且不误伤"：认供应商的机器码（各家都给），再兜一层措辞。
+ * 纯限速的措辞（rate limit / too many requests / TPM / RPM / concurrenc*）不在此列。
+ */
+const QUOTA_CODES = new Set([
+  "accountquotaexceeded",      // 火山方舟
+  "insufficient_quota",        // OpenAI 系
+  "insufficient_user_quota",   // one-api / new-api 中转
+  "quota_exceeded", "exceeded_quota", "insufficientbalance", "insufficient_balance",
+])
+const QUOTA_WORDS = /exceeded[^.]{0,40}quota|quota[^.]{0,20}(exceeded|exhausted|used up|run out)|out of (credits?|quota)|额度(已)?(用尽|耗尽|不足)|配额(已)?(用尽|耗尽|不足)|余额不足|欠费|arrears|insufficient (quota|balance|credit)/i
+
+/** 上游 429/402 的响应体 → 是不是"额度耗尽"（而非短暂限速）。读不出结构就按限速处理（保守）。 */
+export function isUpstreamQuotaExhausted(bodyText) {
+  const s = String(bodyText || "")
+  if (!s.trim()) return false
+  let code = ""
+  try {
+    const e = JSON.parse(s)?.error
+    code = String(e?.code ?? e?.type ?? "").trim().toLowerCase()
+    if (QUOTA_CODES.has(code)) return true
+  } catch { /* 非 JSON：只靠措辞兜 */ }
+  return QUOTA_WORDS.test(s)
+}
+
+/**
+ * 从上游原话里抠出"什么时候恢复"。这是用户唯一真正需要的信息，而它只存在于上游那句话里
+ * —— 丢掉它，用户就只能每隔几分钟试一次直到蒙对。抠不出来就返回空串，由调用方省略这一句。
+ */
+export function extractResetHint(bodyText) {
+  const s = String(bodyText || "").replace(/\s+/g, " ")
+  // 排除类里【必须含引号与花括号】：抽的是 JSON 串里的一段，不排掉就会把 `"}}` 一起带出来
+  // （实测漏过，已被测试锚定）。也排掉逗号/句号/右括号/换行 —— 时间后面通常紧跟一句解释。
+  const STOP = '[^,.)"}\\n，。）]'
+  const m = s.match(new RegExp(`reset(?:s|ting)?\\s+(?:at|on)\\s+([0-9]{4}-[0-9]{2}-[0-9]{2}${STOP}{0,30})`, "i"))
+    || s.match(new RegExp(`(?:恢复|重置)(?:时间|于)?\\s*[:：]?\\s*([0-9]{4}-[0-9]{2}-[0-9]{2}${STOP}{0,25})`))
+  return m ? m[1].trim() : ""
+}
+
 /** 上游 429 带的 Retry-After（秒，或 HTTP-date）→ 毫秒。读不出来就 0，由 queue 用自己的默认值。 */
 export function retryAfterMs(v) {
   const s = String(v || "").trim()
@@ -291,10 +342,22 @@ export async function llmForward({ req, res, pathname, ctx }) {
     log(`[llm] ${user.username} 点名的模型不在档位允许清单内，已打回 ${model}（档位 ${ent.tier}）`)
 
   const routes = ctx.modelRoutes ? ctx.modelRoutes(model) : []
-  const attempts = buildAttempts(model, routes, CFG)
+  let attempts = buildAttempts(model, routes, CFG)
   // 没有任何可用凭证就别白跑一趟：目录里那家没填 key、或压根没建目录而 env 也是空的
   if (!attempts.some((a) => a.apiKey && a.baseUrl))
     return fail(res, 503, "UPSTREAM_UNCONFIGURED", "服务器未配置上游模型密钥，请联系管理员")
+
+  // ---- ④.5 供应侧闸：预算用尽 / 刚撞过墙的家，这一单直接跳过 --------------------
+  // 上面那套切家是【事后】的：先打过去、被 402 打回来、再切下一家，每一单都要浪费一个 RTT，
+  // 而且没人手动停用就会一直撞。supply 记着「谁的预算见底了、谁刚回过 402」，在这里就把它
+  // 们从候选里划掉。全被划掉时 filter 会原样放回（fail-open，见 supply.mjs），绝不让这层
+  // 自己把全站饿死。
+  if (ctx.supply) {
+    const f = ctx.supply.filter(attempts)
+    if (f.dropped.length)
+      log(`[llm] ${user.username} ${model} 跳过 ${f.dropped.map((d) => `${d.providerName}(${d.why})`).join("、")}${f.failOpen ? " —— 全被跳过，兜底照原顺序试" : ""}`)
+    attempts = f.attempts
+  }
 
   const fwdPath = pathname.slice(GATEWAY_PATH_PREFIX.length - 1) // "/llm/v1/x" -> "/v1/x"
   const query = req.url.includes("?") ? req.url.slice(req.url.indexOf("?")) : ""
@@ -406,18 +469,60 @@ export async function llmForward({ req, res, pathname, ctx }) {
       // 【429 要单独认出来】它不是"服务器坏了"而是"被限速了"，两者给用户的话完全不同，
       // 而客户端只看得见状态码。记一段"正在限速"（/api/queue 会把它下发给前端显示），
       // 并在无处可切时回结构化错误码 + Retry-After，而不是把上游那个裸 429 页甩过去。
+      // 【供应侧记一笔】成功就解除这家的摘除标记（管理员充完值不用手动点，见 supply.mjs
+      // 的半开重试）；402/401/403/429 则记下来，冷却期内不再往这家派单。5xx 与网络错误
+      // 刻意不记 —— 那是抖动，不是「这家不能用了」，按它摘家会把一次几秒的抖动放大成半小时降级。
+      try {
+        const st = Number(upRes.statusCode) || 0
+        if (st >= 200 && st < 300) ctx.supply?.noteSuccess(at.provider)
+        else ctx.supply?.noteFailure(at.provider, st, retryAfterMs(upRes.headers["retry-after"]))
+      } catch (e) { log(`[llm] 供应侧记录失败：${e.message}`) }
+
       if (Number(upRes.statusCode) === 429) {
         const ra = retryAfterMs(upRes.headers["retry-after"])
+        // 【无处可切时先把错误体读出来分类】限速 vs 额度耗尽给用户的话完全相反（见
+        // isUpstreamQuotaExhausted 的注释）。错误体只有几百字节，读它的代价可以忽略；
+        // 而分错的代价是用户守着一个五小时后才恢复的额度转圈，还被告知"别重发"。
+        // 只在这条终止路径上读：要切下一家时抓紧切，那几毫秒不值得等。
+        if (last && !res.headersSent) {
+          settled = true
+          let body = ""
+          const done = () => {
+            const exhausted = isUpstreamQuotaExhausted(body)
+            if (!exhausted) {
+              // 真限速：照旧记一段"正在限速"，前端显示"稍等自动重试"是对的建议。
+              try { ctx.queue?.noteRateLimit({ model, provider: at.provider, retryAfterMs: ra }) } catch {}
+              audit("llm.upstream_rate_limited", { actor: user.username, ip, detail: `${at.providerName} ${model}${ra ? ` retry-after ${ra}ms` : ""}` })
+              log(`[llm] ${user.username} ${at.providerName} 限速（429），无备用可切`)
+              return fail(res, 429, "UPSTREAM_RATE_LIMITED",
+                `上游模型服务正在限速，请稍等片刻再试${ra ? `（建议 ${Math.ceil(ra / 1000)} 秒后）` : ""}`,
+                { provider: at.provider, model, retryAfterMs: ra || 20_000 })
+            }
+            // 额度耗尽：【刻意不记 noteRateLimit】—— 它会让客户端显示"限速中，正在等待重试、
+            // 请不要重发"，并给首输出看门狗无限续命（cloudQueueBlocking），于是本轮永不超时。
+            // 这是老客户端也能受益的关键一改：不喂这个状态，它们至少不会卡在"别重发"的假等待里。
+            const reset = extractResetHint(body)
+            const upMsg = (() => { try { return String(JSON.parse(body)?.error?.message || "").trim() } catch { return "" } })()
+            audit("llm.upstream_quota_exceeded", { actor: user.username, ip,
+              detail: `${at.providerName} ${model}${reset ? ` reset=${reset}` : ""}` })
+            log(`[llm] ${user.username} ${at.providerName} 上游额度耗尽（429）${reset ? `，${reset} 恢复` : ""}，无备用可切`)
+            return fail(res, 429, "UPSTREAM_QUOTA_EXCEEDED",
+              `平台的上游模型额度已用尽（不是你的积分），本轮未能生成${reset ? `；预计 ${reset} 恢复` : ""}。`
+              + "现在重试不会成功，请联系管理员充值或换一家供应商。",
+              { provider: at.provider, model, resetHint: reset, upstreamMessage: upMsg.slice(0, 300) })
+          }
+          let n = 0, finished = false
+          const finish = () => { if (!finished) { finished = true; try { upRes.destroy() } catch {}; done() } }
+          upRes.on("data", (c) => { if (n < 8192) { body += c.toString("utf8"); n += c.length } })
+          upRes.on("end", finish)
+          upRes.on("error", finish)          // 读不到体 → body 为空 → 按限速处理（保守，行为同修改前）
+          setTimeout(finish, 3000).unref?.() // 上游挂着不收尾也不能把用户拖在这儿
+          return
+        }
+        // 还有下一家可切（或响应头已发出）：抓紧走下面的切家分支，不为分类等那几毫秒。
+        // 这里仍记一段"正在限速"：切家成功的话本轮照常出结果，这个提示只是个短暂的进度说明。
         try { ctx.queue?.noteRateLimit({ model, provider: at.provider, retryAfterMs: ra }) } catch {}
         audit("llm.upstream_rate_limited", { actor: user.username, ip, detail: `${at.providerName} ${model}${ra ? ` retry-after ${ra}ms` : ""}` })
-        if (last && !res.headersSent) {
-          upRes.resume()
-          settled = true
-          log(`[llm] ${user.username} ${at.providerName} 限速（429），无备用可切`)
-          return fail(res, 429, "UPSTREAM_RATE_LIMITED",
-            `上游模型服务正在限速，请稍等片刻再试${ra ? `（建议 ${Math.ceil(ra / 1000)} 秒后）` : ""}`,
-            { provider: at.provider, model, retryAfterMs: ra || 20_000 })
-        }
       }
       if (shouldRetryStatus(upRes.statusCode) && !last && !res.headersSent) {
         upRes.resume()
@@ -449,6 +554,9 @@ export async function llmForward({ req, res, pathname, ctx }) {
             prompt_tokens: u.prompt, completion_tokens: u.completion,
             cached_tokens: u.cached, cost_usd: cost,
           })
+          // 供应侧同步加一笔，让预算闸在缓存到期前就跟上 —— 只靠 TTL 的话，一波并发长任务
+          // 足以在 20 秒内把预算冲穿而闸毫无察觉。
+          ctx.supply?.noteSpend(at.provider, cost)
         } catch (e) { log(`[llm] ${user.username} 记账失败：${e.message}`) }
         log(`[llm] ${user.username} ${model}@${at.providerName}${respModel && respModel !== model ? `(上游 ${respModel})` : ""} in=${u.prompt}(cache ${u.cached}) out=${u.completion} $${cost.toFixed(6)} ${Date.now() - started}ms`)
       }, upRes.headers["content-encoding"])

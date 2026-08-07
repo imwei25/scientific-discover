@@ -1001,8 +1001,28 @@ function paneProviders(){
   // 否则 render() ↔ paneProviders() 会互相回调成死循环。
   if(!d){$('#pane').innerHTML='<section><h2>模型供应商</h2><p class="mut">加载中…</p></section>';return}
   var provs=d.providers||[],models=d.models||[],lg=d.legacy||{};
+  // 供应侧（预算 / 摘除状态）与供应商清单同一口请求下发，按 key 索引好备用
+  var sup={};(d.supply||[]).forEach(function(s){sup[s.provider]=s});
+  S.windows=d.windows||[];
+
+  // 一家的额度与健康画成一格。【为什么两者画在一起】运维看这张表只想回答一个问题：
+  // "这家现在还能不能出活"。预算见底和刚撞过 402 是同一个答案的两种原因，分开两列反而要来回对。
+  function supCell(k){
+    var s=sup[k];if(!s)return '<span class="mut">—</span>';
+    var out=[];
+    var h=s.health||{};
+    if(h.cooling)out.push('<div><span class="tag bad">已摘除</span> <span class="mut" style="font-size:12.5px">'+
+      esc(h.reason||h.state||'')+'，约 '+Math.ceil((h.remainMs||0)/60000)+' 分钟后自动重试</span></div>');
+    (s.budgets||[]).forEach(function(b){
+      var cls=b.exhausted?'bad':(b.pct>=85?'warn':'ok');
+      out.push('<div style="font-size:12.5px"><span class="tag '+cls+'">'+esc(b.label)+'</span> '+
+        '$'+b.spentUsd.toFixed(2)+' / $'+b.limitUsd.toFixed(2)+
+        '<span class="mut"> · 剩 $'+b.remainUsd.toFixed(2)+'（'+b.pct+'%）</span></div>')});
+    if(!out.length)return '<span class="mut" style="font-size:12.5px">未设额度</span>';
+    return out.join('')}
 
   var prows=provs.map(function(p){
+    var s=sup[p.key]||{},cooling=(s.health||{}).cooling;
     return '<tr data-k="'+esc(p.key)+'">'+
       '<td><b>'+esc(p.name||p.key)+'</b><div class="mut" style="font-size:12.5px">'+esc(p.key)+
         (p.note?' · '+esc(p.note):'')+'</div></td>'+
@@ -1010,8 +1030,11 @@ function paneProviders(){
       '<td>'+(p.status==='active'?'<span class="tag ok">启用</span>':'<span class="tag bad">已停用</span>')+
         (p.hasKey?'':' <span class="tag warn">缺 Key</span>')+'</td>'+
       '<td>'+p.models+' 个</td>'+
+      '<td>'+supCell(p.key)+'</td>'+
       '<td class="row" style="gap:5px;flex-wrap:nowrap">'+
         '<button class="btn sm" data-a="ed">编辑</button>'+
+        '<button class="btn sm" data-a="budget">额度</button>'+
+        (cooling?'<button class="btn sm" data-a="clear" title="充完值不想等冷却到期就点它">解除</button>':'')+
         '<button class="btn sm" data-a="add-models">+ 模型</button>'+
         '<button class="btn sm" data-a="toggle">'+(p.status==='active'?'停用':'启用')+'</button>'+
         '<button class="btn sm danger" data-a="rm">删除</button></td></tr>'}).join('');
@@ -1035,9 +1058,12 @@ function paneProviders(){
     '<section><div class="row"><h2 style="margin:0">供应商</h2><span class="sp"></span>'+
       '<button class="btn primary" id="p-add">+ 新增供应商</button></div>'+
     '<div class="hint" style="margin:8px 0 12px">任何 <b>OpenAI 兼容</b>端点都能加（DeepSeek、硅基流动、自建 one-api……）。'+
-    'API Key 只存在服务器库里、转发时才贴，<b>绝不下发到客户端</b>；后台也只显示"有没有"，不回显。</div>'+
-    '<table><thead><tr><th>名称</th><th>地址</th><th>状态</th><th>模型</th><th></th></tr></thead><tbody>'+
-    (prows||'<tr><td colspan="5" class="mut" style="padding:18px">还没有供应商——所有流量都走下面那条 env 兜底上游。</td></tr>')+
+    'API Key 只存在服务器库里、转发时才贴，<b>绝不下发到客户端</b>；后台也只显示"有没有"，不回显。<br>'+
+    '「额度」填的是<b>这家账户有多少钱</b>（不是用户额度）。填了之后：用到 85% 会在日志与审计里告警，'+
+    '<b>用尽就不再往这家派单</b>，流量自动走同一模型名下的下一家。撞上 402/401/429 也会自动摘除一段时间，'+
+    '到点半开重试——充完值不用手动点，但等不及可以点「解除」。</div>'+
+    '<table><thead><tr><th>名称</th><th>地址</th><th>状态</th><th>模型</th><th>额度 / 供应侧状态</th><th></th></tr></thead><tbody>'+
+    (prows||'<tr><td colspan="6" class="mut" style="padding:18px">还没有供应商——所有流量都走下面那条 env 兜底上游。</td></tr>')+
     '</tbody></table></section>'+
 
     '<section><div class="row"><h2 style="margin:0">模型目录</h2><span class="sp"></span>'+
@@ -1066,6 +1092,9 @@ function paneProviders(){
       if(tr.dataset.k!==undefined&&tr.dataset.k!==''){
         var p=provs.filter(function(x){return x.key===tr.dataset.k})[0];
         if(a==='ed')return dlgProvider(p);
+        if(a==='budget')return dlgBudget(p,sup[p.key]);
+        if(a==='clear')return post('supply',{provider:p.key,action:'clear'}).then(function(j){
+          toast(j.ok?'已解除摘除标记，下一单就会试这家':(j.err||'失败'),j.ok);loadProviders()});
         if(a==='add-models')return dlgFetchModels(p);
         if(a==='toggle')return post('provider',{key:p.key,name:p.name,baseURL:p.baseUrl,
           status:p.status==='active'?'disabled':'active',note:p.note,sort:p.sort}).then(function(j){
@@ -1129,6 +1158,48 @@ function dlgProvider(p){
     post('provider',body()).then(function(j){
       if(!j.ok)return pmsg('err',j.err||'保存失败');
       $('#dlg').close();toast('已保存供应商',true);loadProviders()})}
+}
+
+/**
+ * 某家的额度线。一家可以同时挂几条（如包月套餐既有"每 5 小时"又有"每月"上限），
+ * 任意一条用尽就不再往这家派单。
+ *
+ * 【全部是滚动窗口】"24 小时"是往前推 24 小时，不是自然日 —— 自然日切会在跨日那一刻把额度
+ * 全放开，等于给了「23:59 和 00:01 各花一整天预算」的口子。累计窗口则从充值时刻起算、不重置。
+ * 【留空 = 不限】不是 0；0 会被当成"取消这条线"。
+ */
+function dlgBudget(p,s){
+  var cur={};((s&&s.budgets)||[]).forEach(function(b){cur[b.win]=b});
+  var wins=(S.windows&&S.windows.length)?S.windows:
+    [{win:'h5',label:'5 小时'},{win:'day',label:'24 小时'},{win:'week',label:'7 天'},
+     {win:'month',label:'30 天'},{win:'total',label:'累计'}];
+  dlg('额度 · '+(p.name||p.key),
+    '<div class="grid">'+wins.map(function(w){
+      var b=cur[w.win];
+      return '<label>'+esc(w.label)+(w.win==='total'?'<div class="mut" style="font-size:12px;font-weight:400">从充值时刻起算</div>':'')+'</label>'+
+        '<div><input id="b-'+w.win+'" value="'+(b?b.limitUsd:'')+'" placeholder="留空 = 不限，单位美元">'+
+        (b?'<div class="mut" style="font-size:12.5px;margin-top:4px">已用 $'+b.spentUsd.toFixed(2)+
+          '，剩 $'+b.remainUsd.toFixed(2)+'（'+b.pct+'%）</div>':'')+'</div>'}).join('')+'</div>'+
+    '<div class="hint" style="margin-top:12px">额度按<b>我们自己的单价表</b>算出来的消费额判定，与对方真实账单必有偏差'+
+    '（缓存计价、最小计费单位…）。它是<b>闸不是账本</b>——写宽一点没关系，写到分毫反而会误伤。<br>'+
+    '改「累计」额度时会把起算时刻重置为现在，正好对应"又充了一笔"。要对账仍看「对账」页。</div>'+
+    '<div class="msg" id="b-msg" style="position:static;max-width:none;margin-top:10px"></div>',
+    '<button class="btn primary" id="ok" value="default">保存</button>');
+  var bmsg=function(cls,t){var e=$('#b-msg');e.className='msg '+cls;e.style.display='block';e.textContent=t};
+  $('#ok').onclick=function(e){e.preventDefault();
+    var rows=[],bad='';
+    wins.forEach(function(w){
+      var v=$('#b-'+w.win).value.trim();
+      // 留空 = 这条线不设；已经设过的留空 = 取消它（发 0 过去，服务端会删行）
+      if(v===''){if(cur[w.win])rows.push({win:w.win,limitUSD:0});return}
+      var n=Number(v);
+      if(!Number.isFinite(n)||n<0){bad=w.label;return}
+      rows.push({win:w.win,limitUSD:n,anchor:w.win==='total'?Date.now():0})});
+    if(bad)return bmsg('err','「'+bad+'」要填 ≥0 的数字（美元），留空表示不限');
+    if(!rows.length){$('#dlg').close();return}
+    post('supply',{provider:p.key,action:'budget',budgets:rows}).then(function(j){
+      if(!j.ok)return bmsg('err',j.err||'保存失败');
+      $('#dlg').close();toast('已保存额度',true);loadProviders()})}
 }
 
 // 从某家拉模型列表 → 勾选 → 批量落库（这一步才让"加了供应商"变成"用户能选到的模型"）

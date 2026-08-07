@@ -6,7 +6,7 @@ import test from "node:test"
 import assert from "node:assert/strict"
 import zlib from "node:zlib"
 import { startApp, adminLogin, asAdmin, startFakeUpstream, sse } from "./helper.mjs"
-import { normalizeUsage, costOf, joinUpstream } from "../lib/gateway.mjs"
+import { normalizeUsage, costOf, joinUpstream, isUpstreamQuotaExhausted, extractResetHint } from "../lib/gateway.mjs"
 
 const STRONG = "Aa1!aaaa9"
 const CHAT = "/llm/v1/chat/completions"
@@ -590,6 +590,86 @@ test("上游限速（429）→ 429 UPSTREAM_RATE_LIMITED，且 /api/queue 报「
   const q = await r.app.req("/api/queue", { headers: { authorization: "Bearer " + r.access } })
   assert.ok(q.json.queue.rateLimited, "前端要能据此显示「上游限速，正在等待」而不是「服务器坏了」")
   assert.ok(q.json.queue.rateLimited.retryAfterMs > 0)
+})
+
+// 这一段是照 2026-08-07 生产实况写的：火山方舟账号 5 小时配额打光时回的【也是 429】。
+// 修前全被当成限速 → queue 记 rateLimited → 客户端显示「上游限速中，正在等待重试…本轮会在
+// 限速解除后自动继续，请不要重发」，同时首输出看门狗被 cloudQueueBlocking 每 30 秒续一次命、
+// 永不超时 → 用户守着转圈等一个五小时后才恢复的额度，还被明确告知别重发。
+const ARK_QUOTA_BODY = JSON.stringify({ error: {
+  code: "AccountQuotaExceeded", type: "TooManyRequests", param: "",
+  message: "You have exceeded the 5-hour usage quota. It will reset at 2026-08-07 14:12:52 +0800 CST. "
+    + "We recommend upgrading your plan for more quota, or waiting for the reset. Request id: 0217860715299",
+} })
+
+test("上游额度耗尽（火山 429 AccountQuotaExceeded）→ 与限速分开：给恢复时刻，且不记 rateLimited", async (t) => {
+  const r = await rig({
+    upstream: (_q, res) => {
+      res.writeHead(429, { "content-type": "application/json" })   // 注意：火山不给 Retry-After
+      res.end(ARK_QUOTA_BODY)
+    },
+  })
+  t.after(() => r.close())
+  const x = await r.call({ model: "m" })
+  assert.equal(x.status, 429)
+  assert.equal(x.json.error.code, "UPSTREAM_QUOTA_EXCEEDED", "不能再判成 UPSTREAM_RATE_LIMITED：" + JSON.stringify(x.json))
+  assert.equal(x.json.error.resetHint, "2026-08-07 14:12:52 +0800 CST", "恢复时刻只存在于上游原话里，丢了用户只能盲试")
+  assert.match(x.json.error.message, /不是你的积分/, "必须说清跟他自己的积分无关")
+  assert.match(x.json.error.message, /14:12:52/)
+  assert.match(x.json.error.message, /重试不会成功/, "别给出'稍等片刻再试'这种反向建议")
+  assert.equal(r.rows().length, 0, "没生成内容，不计费")
+
+  // ★ 关键：不许记成"正在限速"。这个状态是客户端「请不要重发 + 看门狗无限续命」的唯一来源，
+  //   老客户端也靠它 —— 不喂它，老客户端至少不会卡在假等待里。
+  const q = await r.app.req("/api/queue", { headers: { authorization: "Bearer " + r.access } })
+  assert.ok(!q.json.queue.rateLimited, "额度耗尽 ≠ 限速，绝不能记 rateLimited：" + JSON.stringify(q.json.queue))
+})
+
+test("真限速仍走老路（措辞相反，不能被上一条改坏）", async (t) => {
+  const r = await rig({
+    upstream: (_q, res) => {
+      res.writeHead(429, { "content-type": "application/json", "retry-after": "7" })
+      res.end('{"error":{"message":"Rate limit reached for TPM","type":"rate_limit_error"}}')
+    },
+  })
+  t.after(() => r.close())
+  const x = await r.call({ model: "m" })
+  assert.equal(x.json.error.code, "UPSTREAM_RATE_LIMITED")
+  assert.match(x.json.error.message, /稍等片刻再试/)
+  const q = await r.app.req("/api/queue", { headers: { authorization: "Bearer " + r.access } })
+  assert.ok(q.json.queue.rateLimited, "真限速照旧要记，前端提示「稍等自动重试」是对的建议")
+})
+
+test("读不到错误体时按限速处理（保守，行为同修改前）", async (t) => {
+  const r = await rig({
+    upstream: (_q, res) => { res.writeHead(429, { "content-type": "application/json" }); res.end("") },
+  })
+  t.after(() => r.close())
+  const x = await r.call({ model: "m" })
+  assert.equal(x.json.error.code, "UPSTREAM_RATE_LIMITED", "分不出来就别乱判成额度耗尽")
+})
+
+test("额度耗尽的分类函数：认机器码、认措辞，不误伤纯限速", () => {
+  const F = isUpstreamQuotaExhausted
+  assert.equal(F(ARK_QUOTA_BODY), true, "火山 AccountQuotaExceeded")
+  assert.equal(F('{"error":{"type":"insufficient_quota","message":"You exceeded your current quota"}}'), true, "OpenAI 系")
+  assert.equal(F('{"error":{"code":"insufficient_user_quota"}}'), true, "one-api 中转")
+  assert.equal(F('{"error":{"message":"当前账户额度已用尽"}}'), true, "中文措辞")
+  assert.equal(F('{"error":{"message":"余额不足，请充值"}}'), true)
+  // ★ 纯限速一律不能被认成额度耗尽：认错了就会告诉用户"重试不会成功"，而其实等几秒就好
+  assert.equal(F('{"error":{"message":"Rate limit reached for TPM","type":"rate_limit_error"}}'), false)
+  assert.equal(F('{"error":{"message":"Too many requests, please slow down"}}'), false)
+  assert.equal(F('{"error":{"message":"concurrency limit exceeded"}}'), false, "并发上限是限速，不是额度")
+  assert.equal(F(""), false, "读不到体 → 保守按限速")
+  assert.equal(F("<html>502 Bad Gateway</html>"), false)
+})
+
+test("恢复时刻抽取：抠不出来就返回空串，别编一个时间", () => {
+  const E = extractResetHint
+  assert.equal(E(ARK_QUOTA_BODY), "2026-08-07 14:12:52 +0800 CST")
+  assert.equal(E('{"error":{"message":"额度已用尽，恢复时间：2026-08-07 14:12"}}'), "2026-08-07 14:12")
+  assert.equal(E('{"error":{"message":"quota exhausted"}}'), "", "没说什么时候恢复就别瞎猜")
+  assert.equal(E(""), "")
 })
 
 test("后台能改并发上限并立刻生效，且重启后仍是新值（落库）", async (t) => {

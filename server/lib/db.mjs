@@ -134,6 +134,8 @@ CREATE TABLE IF NOT EXISTS usage_log (
 );
 CREATE INDEX IF NOT EXISTS ix_usage_user_day ON usage_log(user_id, day);
 CREATE INDEX IF NOT EXISTS ix_usage_ts ON usage_log(ts);
+-- ix_usage_provider_ts 不在这里建，而在 ensureColumns 之后 —— provider 是补出来的列，
+-- SCHEMA 跑在补列之前，老库（v1）在这儿建索引会直接 "no such column: provider" 崩在启动路径上。
 
 -- 汇总：查额度走这张，不扫明细
 CREATE TABLE IF NOT EXISTS usage_daily (
@@ -145,6 +147,37 @@ CREATE TABLE IF NOT EXISTS usage_daily (
   PRIMARY KEY (user_id, day)
 );
 CREATE INDEX IF NOT EXISTS ix_usage_daily_month ON usage_daily(user_id, month);
+
+-- ==== 供应侧：每家供应商的预算与健康 ==========================================
+-- 【为什么要有这两张表】tiers.daily_usd 管的是「这个**用户**能花多少」，跟得很准；而
+-- 「**供应商账户**里还剩多少钱」系统一直一个字节都没存。2026-08 火山账户耗尽那次，
+-- 发现途径是用户报「没输出」——网关侧只能靠撞 402 才知道，而且每来一单撞一次。
+-- 这两张表就是补这个洞：预算是**我们自己记的账**（不依赖各家余额 API，一份代码通吃），
+-- 健康是**上游打脸后记下的状态**（撞过一次就别再往这家送，直到冷却到期）。
+--
+-- 【为什么不去调各家的余额接口】火山/DeepSeek/opencode 各有各的接口与字段，每接一家写一份
+-- 适配，还都可能改。而 usage_log 里本来就逐单记着 provider 与 cost_usd，按窗口一聚合就是
+-- 消费额；管理员只需要填一个「这个账号有多少额度」。误差来自单价表与真实账单的偏差，
+-- 用于「还该不该往这家打」完全够 —— 它是闸，不是账本。
+CREATE TABLE IF NOT EXISTS provider_budgets (
+  provider  TEXT    NOT NULL,             -- providers.key
+  win       TEXT    NOT NULL,             -- h5 | day | week | month | total（见 supply.mjs WINDOWS）
+  limit_usd REAL    NOT NULL DEFAULT 0,   -- 0 = 不限（等于没设这条线）
+  anchor    INTEGER NOT NULL DEFAULT 0,   -- 仅 total 窗口用：从这个时刻起算（= 充值时刻）
+  PRIMARY KEY (provider, win)
+);
+
+-- 上游打脸后的状态。**内存里那份才是热路径的权威**（见 supply.mjs），这张表管两件事：
+-- 进程重启后能恢复（否则一重启就把所有干涸标记忘光，又开始挨家撞 402），以及后台能看见。
+CREATE TABLE IF NOT EXISTS provider_health (
+  provider    TEXT    PRIMARY KEY,
+  state       TEXT    NOT NULL DEFAULT 'ok',  -- ok | dry | invalid_key | rate_limited
+  until       INTEGER NOT NULL DEFAULT 0,     -- 冷却到期（ms）；到点后半开放行一单探路
+  reason      TEXT    NOT NULL DEFAULT '',
+  http_status INTEGER NOT NULL DEFAULT 0,
+  noted_at    INTEGER NOT NULL DEFAULT 0,
+  trips       INTEGER NOT NULL DEFAULT 0      -- 累计跳闸次数：后台据此看出「这家老出事」
+);
 
 CREATE TABLE IF NOT EXISTS refresh_tokens (
   id         INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -272,6 +305,30 @@ function ensureColumns(db) {
   if (!has("users", "web_version")) db.exec("ALTER TABLE users ADD COLUMN web_version TEXT NOT NULL DEFAULT ''")
   // "从仓库发布"的包记下出包时的 commit：下次发布 diff 这两个 sha 就能精确算出变更技能
   if (!has("skill_packs", "commit_sha")) db.exec("ALTER TABLE skill_packs ADD COLUMN commit_sha TEXT NOT NULL DEFAULT ''")
+
+  // ---- 生图张数限额（mechanism-figure 技能走 /img 代理）----
+  // 【为什么不并进 daily_usd 的美元额度】生图按【张】计价且单价比一次对话高一两个量级，
+  // 混进美元额度里，用户一天画几张图就把当天的对话额度烧光了，而他完全看不出是被图吃掉的。
+  // 分开一条独立的"每天几张"，出问题时话也好说：「今天的 2 张画完了」。
+  // 【默认值取 2 而不是 0】本仓库的额度约定是 0=不限（daily_usd / max_conc 都是），生图沿用
+  // 这个口径以免运营记两套规则；但**列默认值**必须保守 —— 以后新建一个档位忘了填，
+  // 默认成"不限"就是一个直接烧钱的洞。所以默认 2 张：够试，烧不穿。
+  if (!has("tiers", "img_daily")) {
+    db.exec("ALTER TABLE tiers ADD COLUMN img_daily INTEGER NOT NULL DEFAULT 2")
+    // 老库升上来铺一次运营定的初值（2026-08-07）：free 2 / plus 5 / admin 10。
+    // 只在【首次加列】时跑，之后管理员在后台怎么改就是什么，不会被这段覆盖回去。
+    for (const [k, n] of [["plus", 5], ["admin", 10]]) {
+      try { db.prepare("UPDATE tiers SET img_daily=? WHERE key=?").run(n, k) } catch {}
+    }
+  }
+  // 当天已生成张数：挂在既有的日汇总上，不另开表 —— UTC 日切、删用户清理都跟着 usage_daily 走，
+  // 不会出现"用户删了图配额还留着"这类孤儿数据。
+  if (!has("usage_daily", "images")) db.exec("ALTER TABLE usage_daily ADD COLUMN images INTEGER NOT NULL DEFAULT 0")
+
+  // 【必须在补完 provider 列之后】供应侧的预算闸按 (provider, ts) 聚合（见 providerSpend），
+  // 没索引就要全表扫 usage_log —— 那是只增不减的明细表，上线几个月后每一单请求都会被它拖慢。
+  // 放在 SCHEMA 里会崩：SCHEMA 跑在本函数之前，那时老库还没有 provider 这一列。
+  db.exec("CREATE INDEX IF NOT EXISTS ix_usage_provider_ts ON usage_log(provider, ts)")
 }
 
 function migrate(db, from) {
@@ -442,15 +499,22 @@ export const listTiers = (db) => db.prepare("SELECT * FROM tiers ORDER BY sort, 
 export const getTier = (db, key) => db.prepare("SELECT * FROM tiers WHERE key=?").get(String(key)) || null
 
 export function upsertTier(db, t) {
-  db.prepare(`INSERT INTO tiers(key,daily_usd,monthly_usd,model,models,skills,note,sort,max_conc)
-              VALUES(?,?,?,?,?,?,?,?,?)
+  // img_daily 缺省时【保留原值】而不是落成 0：后台改档位的表单若没带这个字段（老版本管理台、
+  // 或脚本只想改额度），落 0 就等于把该档静默改成"生图不限"——一个纯靠疏忽产生的烧钱洞。
+  const prev = getTier(db, t.key)
+  const img = t.img_daily === undefined || t.img_daily === null || t.img_daily === ""
+    ? (prev ? Number(prev.img_daily) || 0 : 2)
+    : Math.max(0, Math.floor(Number(t.img_daily) || 0))
+  db.prepare(`INSERT INTO tiers(key,daily_usd,monthly_usd,model,models,skills,note,sort,max_conc,img_daily)
+              VALUES(?,?,?,?,?,?,?,?,?,?)
               ON CONFLICT(key) DO UPDATE SET
                 daily_usd=excluded.daily_usd, monthly_usd=excluded.monthly_usd,
                 model=excluded.model, models=excluded.models, skills=excluded.skills,
-                note=excluded.note, sort=excluded.sort, max_conc=excluded.max_conc`).run(
+                note=excluded.note, sort=excluded.sort, max_conc=excluded.max_conc,
+                img_daily=excluded.img_daily`).run(
     String(t.key), Number(t.daily_usd) || 0, Number(t.monthly_usd) || 0,
     String(t.model || ""), String(t.models || ""), String(t.skills || ""),
-    String(t.note || ""), Number(t.sort) || 0, Math.max(0, Math.floor(Number(t.max_conc) || 0)))
+    String(t.note || ""), Number(t.sort) || 0, Math.max(0, Math.floor(Number(t.max_conc) || 0)), img)
   return getTier(db, t.key)
 }
 export function deleteTier(db, key) {
@@ -514,6 +578,10 @@ export function deleteProvider(db, key) {
   const models = db.prepare("SELECT COUNT(*) AS n FROM models WHERE provider=?").get(k).n
   db.prepare("DELETE FROM models WHERE provider=?").run(k)
   db.prepare("DELETE FROM providers WHERE key=?").run(k)
+  // 预算与健康跟着走：留下孤儿行的话，日后重建同名供应商会**继承上一次的干涸标记**，
+  // 表现是「刚加完的新账号一上来就被摘掉」，且后台看不出为什么。
+  db.prepare("DELETE FROM provider_budgets WHERE provider=?").run(k)
+  db.prepare("DELETE FROM provider_health WHERE provider=?").run(k)
   return { ok: true, removedModels: models, droppedFromTiers: pruneTierModels(db) }
 }
 
@@ -647,6 +715,9 @@ export function resolveEntitlement(db, user) {
     skills: csv(skillsRaw),
     // 单用户并发上限：0 = 跟随全局（网关的并发闸现查现用，不进 access key，改完立刻生效）
     maxConc: Math.max(0, Math.floor(Number(t?.max_conc) || 0)),
+    // 每天可生成几张图（0 = 不限，与 daily 同口径）。没有档位时给 0 而不是默认值：
+    // 走到这儿说明 tier 已经被删了，此时"不限"是既有 num() 对所有额度的一致行为，别在这条上搞特例。
+    imgDaily: t ? Math.max(0, Math.floor(Number(t.img_daily) || 0)) : 0,
   }
 }
 
@@ -680,6 +751,27 @@ export function todayCost(db, userId, ts = Date.now()) {
   const r = db.prepare("SELECT cost_usd FROM usage_daily WHERE user_id=? AND day=?").get(Number(userId), dayOf(ts))
   return r ? Number(r.cost_usd) || 0 : 0
 }
+/** 今天已生成几张图（UTC 日切，与 todayCost 同一个 day 键，两处口径永远一致）。 */
+export function todayImages(db, userId, ts = Date.now()) {
+  const r = db.prepare("SELECT images FROM usage_daily WHERE user_id=? AND day=?").get(Number(userId), dayOf(ts))
+  return r ? Number(r.images) || 0 : 0
+}
+
+/**
+ * 记一张已生成的图，返回记完之后的当天张数。
+ *
+ * 【必须是 upsert 而不是 UPDATE】当天第一张图很可能发生在这个用户当天第一次对话【之前】
+ * （比如他上来就画图），那时 usage_daily 还没有今天这一行，UPDATE 会静默影响 0 行 —— 张数
+ * 永远停在 0，限额形同虚设。cost_usd 留 0：生图的钱不进美元额度（见 ensureColumns 的说明）。
+ */
+export function recordImage(db, userId, ts = Date.now()) {
+  const uid = Number(userId), day = dayOf(ts), month = monthOf(ts)
+  db.prepare(`INSERT INTO usage_daily(user_id,day,month,cost_usd,calls,images)
+              VALUES(?,?,?,0,0,1)
+              ON CONFLICT(user_id,day) DO UPDATE SET images=images+1`).run(uid, day, month)
+  return todayImages(db, uid, ts)
+}
+
 export function monthCost(db, userId, ts = Date.now()) {
   const r = db.prepare("SELECT SUM(cost_usd) AS c FROM usage_daily WHERE user_id=? AND month=?").get(Number(userId), monthOf(ts))
   return r && r.c ? Number(r.c) : 0
@@ -731,6 +823,68 @@ export const usageRange = (db, from, to, limit = 50000) => db.prepare(`
   FROM usage_log l LEFT JOIN users u ON u.id = l.user_id
   WHERE l.day >= ? AND l.day <= ?
   ORDER BY l.ts DESC, l.id DESC LIMIT ?`).all(String(from), String(to), Number(limit) || 50000)
+
+// ==== 供应侧：预算与健康 ======================================================
+// 表定义与「为什么要有」见上面 SCHEMA 里 provider_budgets / provider_health 那段。
+// 这里只放存取；窗口语义、失败分类、候选过滤在 lib/supply.mjs（那边全是纯函数，好单测）。
+
+/** 某家在 [from, ∞) 内的消费（USD）。走 ix_usage_provider_ts，不扫全表。 */
+export function providerSpend(db, provider, from) {
+  const r = db.prepare("SELECT SUM(cost_usd) AS c FROM usage_log WHERE provider=? AND ts>=?")
+    .get(String(provider), Number(from) || 0)
+  return r && r.c ? Number(r.c) : 0
+}
+
+/** 一家的全部预算行（没设过就是空数组 = 不限）。 */
+export const listBudgets = (db, provider) =>
+  db.prepare("SELECT provider, win, limit_usd, anchor FROM provider_budgets WHERE provider=? ORDER BY win")
+    .all(String(provider))
+
+/** 全部预算行，按供应商分组好，供 supply.mjs 一次性建缓存。 */
+export function allBudgets(db) {
+  const out = new Map()
+  for (const r of db.prepare("SELECT provider, win, limit_usd, anchor FROM provider_budgets").all()) {
+    if (!out.has(r.provider)) out.set(r.provider, [])
+    out.get(r.provider).push(r)
+  }
+  return out
+}
+
+/**
+ * 落一条预算线。limit_usd ≤ 0 视为「取消这条线」，直接删行 ——
+ * 留一行 0 会和「不限」同义却多占一行，后台列表里看着像设过，其实没有。
+ */
+export function setBudget(db, provider, win, limitUsd, anchor = 0) {
+  const p = String(provider), w = String(win)
+  const lim = Number(limitUsd) || 0
+  if (lim <= 0) {
+    db.prepare("DELETE FROM provider_budgets WHERE provider=? AND win=?").run(p, w)
+    return null
+  }
+  db.prepare(`INSERT INTO provider_budgets(provider,win,limit_usd,anchor) VALUES(?,?,?,?)
+              ON CONFLICT(provider,win) DO UPDATE SET limit_usd=excluded.limit_usd, anchor=excluded.anchor`)
+    .run(p, w, lim, Number(anchor) || 0)
+  return db.prepare("SELECT provider, win, limit_usd, anchor FROM provider_budgets WHERE provider=? AND win=?").get(p, w)
+}
+
+export const deleteBudgets = (db, provider) =>
+  db.prepare("DELETE FROM provider_budgets WHERE provider=?").run(String(provider))
+
+/** 健康状态：全量读（进程启动时载进内存），与单家写入。 */
+export const listHealth = (db) => db.prepare("SELECT * FROM provider_health").all()
+
+export function saveHealth(db, provider, h) {
+  db.prepare(`INSERT INTO provider_health(provider,state,until,reason,http_status,noted_at,trips)
+              VALUES(?,?,?,?,?,?,?)
+              ON CONFLICT(provider) DO UPDATE SET
+                state=excluded.state, until=excluded.until, reason=excluded.reason,
+                http_status=excluded.http_status, noted_at=excluded.noted_at, trips=excluded.trips`).run(
+    String(provider), String(h.state || "ok"), Number(h.until) || 0, String(h.reason || ""),
+    Number(h.httpStatus) || 0, Number(h.notedAt) || 0, Number(h.trips) || 0)
+}
+
+export const deleteHealth = (db, provider) =>
+  db.prepare("DELETE FROM provider_health WHERE provider=?").run(String(provider))
 
 // ==== refresh token ===========================================================
 

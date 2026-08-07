@@ -147,6 +147,11 @@ tier_field() { [ -f tiers.env ] || return 0; awk -v t="$1" -v c="$2" '!/^[[:spac
       # OCR.space 图片识字 key（ocr 技能用；免费可重置，风险同检索 key 一档，故与其一并注入。
       # 全体用户共用这一个 key 的月度配额；空=ocr 技能报错提示未配置）。
       OCR_SPACE_API_KEY: \${OCR_SPACE_API_KEY:-}
+      # 生图 key（mechanism-figure 技能出机制示意图用）。风险与 OCR key 同一档：全体用户容器
+      # 共用这一把、容器内 agent 读得到，所以要在阿里云侧给它单独设消费上限，异常就重置。
+      # 空 = 该技能只能 --dry-run（做提示词、不出图），其余功能不受影响。详见 deploy/.env.example。
+      QWEN_API_KEY: \${QWEN_API_KEY:-}
+      QWEN_MODEL: \${QWEN_MODEL:-}
       LAN_AUTH: "${lauth}"
       LAN_USER: "${luser}"
       LAN_PASSWORD: "${lpass}"
