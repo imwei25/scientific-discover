@@ -67,7 +67,9 @@
      sessbar-open 等状态不受影响、不用记忆再恢复。
      右半屏顶部再挂一条「对话 / 本轮产出」切换条：产出列表随 aside 一起被收起了，
      没有它就只能先关预览才能换一个文件看。 */
-  body.preview-open main { width: 50vw; margin-left: 50vw; }
+  /* 这里必须关掉 main 的 width 过渡：预览开着时拖窗口，main 会在 200ms 里停在旧宽度上，
+     跟已经按新 vw 铺好的预览对不上，横向滚动条一闪。开合本身是瞬间切换，不靠这条动画。 */
+  body.preview-open main { width: 50vw; margin-left: 50vw; transition: none; }
   body.preview-open main, body.sessbar-open.preview-open main {
     grid-template-columns: minmax(0,1fr); grid-template-rows: auto minmax(0,1fr); }
   body.preview-open #sessbar { display: none; }
@@ -1150,7 +1152,9 @@
     body { overflow: auto; }
     .app { height: auto; min-height: 100vh; }
     main, body.sessbar-open main { grid-template-columns: 1fr; }
-    body.preview-open main { width: 100vw; margin-left: 0; }   /* 窄屏没有左右两半可分，预览直接盖满 */
+    /* 窄屏没有左右两半可分，预览直接盖满。宽度用 100%（不是 100vw）：有竖向滚动条时
+       100vw 含滚动条那 10px，main 会比可视区宽出一条。 */
+    body.preview-open main { width: 100%; margin-left: 0; }
     #sessbar { border-right: 0; border-bottom: 1px solid var(--line); }
     #log { min-height: 55vh; }
     aside { order: -1; border-left: 0; border-bottom: 1px solid var(--line); }
@@ -1159,6 +1163,7 @@
        是块看不见也用不了的死 DOM。窄屏索性不给页签，关掉预览再换文件。 */
     body.preview-open #pvTabs { display: none; }
     body.preview-open main, body.sessbar-open.preview-open main { grid-template-rows: minmax(0,1fr); }
+    body.preview-open #chat, body.preview-open aside { grid-row: auto; }   /* 行数收回一行了，别再钉在第 2 行凭空撑出一条空行 */
     /* 没了页签就没了切换入口：万一是在宽屏切到「本轮产出」再把窗口拖窄进来的，
        别把对话区永久藏起来——窄屏一律回到「对话」这一种形态。 */
     body.preview-open.pvtab-files #chat { display: flex; }
