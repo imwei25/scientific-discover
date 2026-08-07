@@ -63,3 +63,15 @@ web/sessions-meta.json
 
 # PowerShell 模块分析缓存：本机运行时产物，被 `git add -A` 扫进来过一次
 Microsoft/
+
+# 本机 opencode 的 provider 配置（含上游 API key，与上面的 opencode.json 同一类东西，
+# 只是文件名不同）。此前【没有】任何一条规则挡它 —— 一次 `git add -A` 就会把 key 提进历史，
+# 而历史里的密钥删不干净，只能整把作废重换。
+config.json
+
+# push 被拦时用 `git bundle create` + scp 传包留下的中转产物（deploy-r*.bundle）。
+# 随时可以重新生成，没有留在仓库里的理由；曾经攒到 28 个。
+deploy-r*.bundle
+
+# 技能跑出来的证据表等产物，落在仓库根只是因为当时的工作目录在这儿
+zotero_evidence.csv
