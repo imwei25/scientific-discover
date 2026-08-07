@@ -557,8 +557,10 @@ const MODULE_DEFS = {
               desc: "契合医学期刊规范，梳理试验逻辑、深化结果讨论，雕琢全文表述，助力高水平学术成果刊发。" },
   chat:     { name: "自由对话",       group: "workbench", skills: null,
               desc: "与科研助手开放对话，随问随答，支持上传文献、数据与方法学讨论。" },
+  // 模块 id 保持 litread 不变（deploy 的 users/<名>.env 里 MODULES= 存的是 id，改名等于把老用户的授权改没）；
+  // 变的是它做什么：从"检索一个方向的文献"改成"把用户上传的这一篇读透"（专用界面 web/reader.html）。
   litread:  { name: "文献研读",       group: "skills",
-              desc: "追踪医学领域前沿文献，梳理研究脉络，挖掘研究空白，提炼创新思路，为课题设计、文稿创作提供理论支撑。" },
+              desc: "上传一篇 PDF / Word 文献，逐篇读透：自动导读理清核心与论证逻辑，可全文翻译、生成汇报 PPT，也能对着原文随时追问。" },
   refcheck: { name: "文稿核查与审校", group: "skills",
               // ⚠️ 别写成"识别伪造、篡改" —— data-integrity 技能的铁律是「只出待核信号、不下造假结论」
               // （signal not verdict）。首屏承诺"查得出造假"而实际只给待核清单，既让用户失望，本身也有风险。
@@ -2722,6 +2724,14 @@ export const server = http.createServer(async (req, res) => {
       res.writeHead(200, { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" })
       return res.end(fs.readFileSync(path.join(__dirname, "workspace.html")))
     }
+    // 文献研读的专用界面（左原文 / 右助手 / 最右模式条）。它不是 index.html 的一个视图，而是
+    // 一个独立页面 —— 那个模块的形状（一篇文献 × 四种模式）与通用壳的"表单 + 步骤条"完全不同。
+    // 与 workspace.html 同款容错：老 server.mjs 配新界面包时这里会 404，跳转方那侧要能兜住
+    //（见 workspace.html 的 enter() 与 index.html 的 readerRedirect）。
+    if (req.method === "GET" && u.pathname === "/reader.html") {
+      res.writeHead(200, { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" })
+      return res.end(fs.readFileSync(path.join(__dirname, "reader.html")))
+    }
 
     if (req.method === "POST" && u.pathname === "/api/upload") {
       let sid = u.searchParams.get("sid") || null
@@ -3079,7 +3089,11 @@ export const server = http.createServer(async (req, res) => {
       // 包含性校验交给 ensurePreviewCache 内部的 safeUnder（此前因为这里先 basename 过，
       // 那道 safeUnder 一直是空转的死代码）。
       const name = u.searchParams.get("name") || ""
-      const dir = sid ? await sessionOut(sid) : OUTPUTS
+      // dir=up 取【上传目录】。文献研读要在左栏原地显示用户刚传上来的 .docx —— 那是上传文件，
+      // 不是产物，而本接口此前写死了只看产物目录 → 一律 404「这个文件不在本会话的产出或上传里」，
+      // 而报错文案还提了"上传"，更让人以为是文件没传上去。与 /api/raw、/api/download 的
+      // dir=up 保持同一套口径（安全边界仍是 ensurePreviewCache 内部那道 safeUnder）。
+      const dir = sid ? (u.searchParams.get("dir") === "up" ? await sessionUp(sid) : await sessionOut(sid)) : OUTPUTS
       let r
       try { r = await ensurePreviewCache(dir, name) }
       catch (e) {
@@ -3122,7 +3136,10 @@ export const server = http.createServer(async (req, res) => {
     // 功能模块清单：全部模块 + 本账号是否开通（前端据此渲染模块选择卡；未开通的置灰）
     if (req.method === "GET" && u.pathname === "/api/modules") {
       // 模块可用 = 模块本身获授权 且 其绑定技能未被技能白名单收权（chat 无绑定技能，只看模块授权）
-      const list = Object.entries(MODULE_DEFS).map(([id, m]) => ({ id, name: m.name, desc: m.desc, group: m.group || "skills", skill: modPrimarySkill(id), skills: m.skills || null, allowed: moduleUsable(id) }))
+      // ui：这个模块用哪个界面壳（null = index.html 通用壳；"reader" = 专用的 reader.html）。
+      // 必须随清单一起下发 —— 工作台点卡片时就要知道往哪儿跳，不能等进了聊天页再拉工作流定义，
+      // 那样用户会先看见一闪而过的通用表单再被弹走。
+      const list = Object.entries(MODULE_DEFS).map(([id, m]) => ({ id, name: m.name, desc: m.desc, group: m.group || "skills", ui: WF.WORKFLOWS[id]?.ui || null, skill: modPrimarySkill(id), skills: m.skills || null, allowed: moduleUsable(id) }))
       // entRev 一起回：前端在公告轮询里发现它变了就重取本接口，两处用同一个摘要才不会来回打转
       return send(res, 200, "application/json", JSON.stringify({ modules: list, entRev: entRev() }))
     }

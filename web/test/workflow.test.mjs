@@ -23,7 +23,7 @@ test("技能白名单由 steps 展开，且与 AGENTS.md §三 的流水线对�
                    "novelty-check", "nature-figure", "literature-review", "write-paper",
                    "reference-check", "humanize-academic", "peer-review", "render-docx"])
     assert.ok(paper.includes(s), `paper 少了 ${s}`)
-  assert.ok(WF.skillsOf("litread").includes("render-pdf-doc"), "litread 补上排版出件，否则 research 流水线最后一步做不了")
+  assert.ok(WF.skillsOf("litread").includes("render-pdf-doc"), "litread 要能把导读 / 译文排成 PDF 交出去")
   assert.ok(WF.skillsOf("review").includes("humanize-academic"), "review 补上去 AI 味")
   // 系统综述不属于任何模块（2026-08-04 决定：只走自由对话）
   for (const m of Object.keys(WF.WORKFLOWS))
@@ -39,10 +39,39 @@ test("primary 显式声明，且与旧的 skills[0] 语义一致（模块可用�
   assert.equal(WF.primaryOf("stats"), "data-analysis")
   assert.equal(WF.primaryOf("refcheck"), "reference-check")
   assert.equal(WF.primaryOf("humanize"), "humanize-academic")
-  assert.equal(WF.primaryOf("litread"), "search-lit")
+  // 文献研读改成"读用户上传的这一篇"之后，第一件事永远是把 PDF/Word 抽成文本（pdf_to_md.py
+  // 就在 fulltext-retrieval 里）。它被收权时整个模块该整体不可用——抽不出原文，四种模式一个都做不成。
+  assert.equal(WF.primaryOf("litread"), "fulltext-retrieval")
   // primary 必须真在技能集里，否则模块永远不可用而且没人看得出为什么
   for (const m of Object.keys(WF.WORKFLOWS))
     assert.ok(WF.skillsOf(m).includes(WF.primaryOf(m)), `${m} 的 primary 不在技能集里`)
+})
+
+// 文献研读是唯一一个【前端与提示词各存一份同样字符串】的模块：reader.html 的 MODES[*].mark
+// 拼在消息开头当模式信号，workflows.mjs 的 litread.flow 把这几个标记教给 agent，
+// 而刷新页面后又靠它们把每一轮认回哪个面板。三处任意一处漂了，症状都是"能跑，但结果落错面板"
+// —— 界面上完全看不出是标记对不上，只会觉得模型忽然不听话了。所以在这里钉死。
+test("文献研读：界面的模式标记与前言里教给 agent 的必须逐字一致", () => {
+  const wf = WF.WORKFLOWS.litread
+  assert.equal(wf.ui, "reader", "它有专用界面，工作台/聊天页靠这个字段决定往哪儿跳")
+  assert.equal(WF.workflowFor("litread", {}).ui, "reader", "ui 必须随 /api/modules 与工作流一起下发")
+
+  const html = fs.readFileSync(new URL("../reader.html", import.meta.url), "utf8")
+  const marks = [...html.matchAll(/mark:\s*"([^"]*)"/g)].map((m) => m[1]).filter(Boolean)
+  assert.equal(marks.length, 3, "导读 / 翻译 / PPT 三个模式各有一个标记（智能助手没有标记，是自由问答）")
+  const line = WF.pipelineLine("litread", {})
+  for (const mk of marks) assert.ok(line.includes(mk), `前言里没教 agent 认「${mk}」这个标记`)
+
+  // 界面按文件名把正文捞回来渲染（MODES[*].file），所以这几个名字必须进产物契约那句话，
+  // 否则模型自己起名 → 界面只剩一句"已完成"，正文不知去向。
+  const art = WF.artifactLine("litread", {})
+  for (const f of ["reading_guide.md", "translation_zh.md", "ppt_outline.md"])
+    assert.ok(art.includes(f), `产物契约里少了 ${f}`)
+
+  // 这是"单篇研读"，不是检索模块：给了检索技能就等于默许它去找别的文献
+  const sk = WF.skillsOf("litread")
+  for (const s of ["search-lit", "literature-review", "deep-research", "research-scan"])
+    assert.ok(!sk.includes(s), `文献研读不该有检索类技能 ${s}`)
 })
 
 test("步骤按表单值裁剪：已脱敏就不再插脱敏步，前瞻性研究把预注册提到最前", () => {

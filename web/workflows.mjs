@@ -453,64 +453,68 @@ export const WORKFLOWS = {
             "mechanism-figure", "humanize-academic"],
   },
 
-  // ============ 文献研读 ============
+  // ============ 文献研读（单篇）============
+  //
+  // 【它和别的模块不是一个形状】其余模块都是"一条线性流水线 + 首屏表单 + 步骤条"，共用
+  // index.html 那个通用壳。本模块是【一篇文献 × 四种看法】：导读 / 自由问答 / 全文翻译 /
+  // 演示 PPT —— 用户在这四者之间来回切，没有先后、也没有"跑到第几步"。硬塞进步骤条的话，
+  // 条子上永远显示"共 N 步、已完成 1 步"，而用户其实哪一步都可以随时再来一遍。
+  // 所以它自带一个专用界面（web/reader.html：左边原文、右边助手、最右四个模式按钮），
+  // `ui: "reader"` 就是那层路由信号 —— 工作台与聊天页看到它就把用户送去那个页面，
+  // 不再渲染表单与步骤条。除此之外的一切（会话、技能闸、前言注入、产物侧栏）都走原有那套。
+  //
+  // 【一篇文献 = 一个会话】四种模式共享同一个 opencode 会话，所以原文只抽一次，
+  // 切到"智能助手"时前面翻译 / 做 PPT 的上下文原样都在，接着问就是了（这正是产品要的
+  // "保留最近那个会话"）。换一篇 = 新开会话。
   litread: {
-    primary: "search-lit",
-    intakeTitle: "研读设置",
+    // 主技能取 fulltext-retrieval：本模块干的第一件事永远是"把上传的 PDF/Word 抽成文本"
+    //（pdf_to_md.py 就在这个技能里）。它被技能白名单收权时整个模块该整体不可用 —— 因为
+    // 抽不出原文，导读 / 翻译 / PPT 一个都做不成，让模块半开着只会让用户白等一轮。
+    primary: "fulltext-retrieval",
+    ui: "reader",
+    intakeTitle: "上传要研读的文献",
+    // intake 仍然声明：reader.html 自己画上传界面，但 /api/workflow/form 那条路（落盘表单值、
+    // 拼任务卡）与服务端的必填体检都读这份 schema，缺了它这些机制就整段失效。
     intake: [
-      { id: "mode", label: "怎么读", type: "select", required: true, default: "scan", options: [
-        { v: "scan", t: "快速扫描（摸清一个方向有什么）" },
-        { v: "deep", t: "深度研究（把一个问题挖到底）" },
-        { v: "rag", t: "下载全文后基于原文问答（回答时逐句给出处）", sets: { fulltext: true } }] },
-      { id: "topic", label: "主题 / 问题", type: "textarea", required: true,
-        placeholder: "例：CAR-T 治疗实体瘤当前的主要瓶颈是什么，近三年有哪些突破方向" },
-      { id: "sources", label: "检索源", type: "multi", default: ["epmc"], options: [
-        { v: "epmc", t: "Europe PMC（国内可达，推荐）" }, { v: "pubmed", t: "PubMed / NCBI（需境外网络）" },
-        { v: "s2", t: "Semantic Scholar" }, { v: "openalex", t: "OpenAlex" },
-        { v: "preprint", t: "预印本 bioRxiv / medRxiv" }],
-        help: "国内网络下 NCBI 常被阻断，勾了也可能自动降级到 Europe PMC，会如实告知。" },
-      { id: "years", label: "时间范围", type: "select", default: "5", options: [
-        { v: "3", t: "近 3 年" }, { v: "5", t: "近 5 年" }, { v: "10", t: "近 10 年" }, { v: "0", t: "不限" }] },
-      { id: "limit", label: "最多检索多少篇", type: "number", default: 30, min: 5, max: 200, unit: "篇" },
-      ...JOURNAL_FILTER,
-      { id: "fulltext", label: "尝试下载开放获取全文", type: "bool", default: false, section: "成稿与输出",
-        help: "只下 OA 渠道能拿到的；下不到的会如实列出原因，不会假装拿到了。" },
-      { id: "toZotero", label: "把结果推进本机 Zotero", type: "bool", default: false,
-        help: "仅在与 Zotero 同机运行时可用；只写题录，不含 PDF 附件。" },
+      { id: "docFile", label: "文献原文", type: "files", required: true,
+        uploadText: "上传文献", accept: ".pdf / .docx",
+        help: "一次只研读一篇。图片型扫描件会先走 OCR，识别不准的地方会如实标出来。" },
       LANG,
     ],
     steps: [
-      { id: "search", name: "文献检索", skill: "search-lit",
-        emits: ["evidence_table.csv", "evidence.md", "refs.bib"], render: "evidence" },
-      { id: "fulltext", name: "全文获取", skill: "fulltext-retrieval", optional: true,
-        when: { field: "fulltext", eq: true },
-        emits: ["pdfs/*.pdf", "zotero_lib/*.pdf", "retrieval_report.json", "manual_needed.txt"], render: "retrieval",
-        hint: "只把真正下到 PDF 的算进可问答的范围，没下到的逐条列出原因" },
-      { id: "rag", name: "基于全文问答", skill: "zotero-library", optional: true,
-        when: { field: "mode", eq: "rag" },
-        emits: ["zotero_evidence.csv", "rag_*.md"], render: "evidence" },
-      { id: "deep", name: "深度研究", skill: "deep-research", optional: true,
-        when: { field: "mode", eq: "deep" },
-        emits: ["research_report*.md", "deep_research*.md"], render: "manuscript" },
-      { id: "digest", name: "研读综述", skill: "literature-review", optional: true,
-        when: { field: "mode", eq: "scan" },
-        // research_scan* 必须算：scan 模式下 agent 用 research-scan 技能出简报完全合理
-        //（它在白名单里，模式名就叫"快速扫描"），漏掉它这步永远点不亮。
-        emits: ["review.md", "digest*.md", "*_review.md", "research_scan*.md"], render: "manuscript" },
-      { id: "render", name: "出件", skill: "render-pdf-doc", optional: true,
-        form: [{ id: "fmt", label: "输出格式", type: "select", default: "pdf", options: [
-          { v: "pdf", t: "PDF" }, { v: "docx", t: "Word（.docx）" }] }],
-        // ★ 必须与上游各步的产物名对齐：deep 步产 deep_research*.md、digest 步产 review.md /
-        //   research_scan.md，排版出来就是同名的 pdf/docx。此前只列 report*/digest*/research_report*，
-        //   于是 review.pdf、deep_research.pdf 一个都不认 —— 这步在本模块永远点不亮。
-        emits: ["review*.pdf", "review*.docx", "deep_research*.pdf", "deep_research*.docx",
-                "research_scan*.pdf", "research_scan*.docx", "digest*.pdf", "digest*.docx",
-                "report*.pdf", "report*.docx"], render: "doc" },
+      { id: "ingest", name: "读入原文", skill: "fulltext-retrieval",
+        // 后三个不是这一步产的（导读 / 翻译两种模式没有对应的技能，也就没有对应的 step），
+        // 但 artifactLine 只从 steps[].emits 收集"产物用约定名"那句话。挂在这里，是为了让
+        // 这三个名字每一轮都随前言到模型手上 —— reader.html 正是按这几个名字去把正文捞回来渲染的
+        //（见 MODES[*].file），名字漂了界面就只剩一句"已完成"、正文不知去向。
+        emits: ["fulltext.md", "fulltext_*.md", "reading_guide.md", "translation_zh.md"], render: "report",
+        hint: "PDF 走 pdf_to_md.py，Word 走 python-docx；抽不动的扫描件再走 ocr",
+        note: "抽出来的正文必须落成 `fulltext.md`——后面导读、翻译、做 PPT 全都读它，"
+            + "别每种模式各抽一遍（既慢又可能三份内容不一致）。" },
+      { id: "ppt", name: "演示 PPT", skill: "ppt-master", optional: true,
+        emits: ["ppt_outline.md", "*.pptx", "exports/*.pptx"], render: "doc" },
     ],
-    // reference-check 必须在白名单里：AGENTS.md §五 要求写完综述自动查假引用，而模块前言
-    // 明写"覆盖 AGENTS.md 的一切路由规则"。不给这个技能，那条铁律在本模块就被悄悄关掉了 ——
-    // 实测结果不是报错，是静默降级成模型现写的自制核查器（无撤稿库、自己给自己打分）。
-    extra: ["research-scan", "render-docx", "reference-check"],
+    // ocr：图片型扫描件（pdf_to_md 抽出来是空的）唯一的出路。
+    // render-docx / render-pdf-doc：翻译稿、导读稿用户常要一份 Word/PDF 拿走。
+    extra: ["ocr", "render-docx", "render-pdf-doc"],
+    // ---- 用 flow 顶掉通用的"标准流程"那段话 ----
+    // 通用版会写成「读入原文 → 演示 PPT(可选)。按此顺序推进」，而本模块根本没有这个顺序：
+    // 用户可能一上来就点翻译，也可能导读看完直接问问题。照通用版说，模型会去"按流程推进"，
+    // 甚至在用户只想问一句话时自作主张跑起 ppt-master。
+    flow: `\n- **本模块 = 研读【用户上传的这一篇】文献**，不检索、不找别的文献、不写综述。用户问的一切都以这篇原文为准。`
+      + `\n- **第一步永远是把原文抽成文本**：PDF 用 \`fulltext-retrieval\` 技能里的 \`pdf_to_md.py\`；`
+      + `Word(.docx) 用 \`.venv\` 的 python-docx；抽出来几乎没有正文（图片型扫描件）才转 \`ocr\` 技能。`
+      + `抽好的正文写成 \`fulltext.md\`，**本会话后续所有模式都直接读它，不要重复抽取**。`
+      + `\n- **界面有四种模式，用户消息开头的方括号标记就是他点的那个按钮**，照它做：`
+      + `\n  · \`【文献导读】\`＝抽取核心重点、梳理论证逻辑，正文写进回答里，同时存一份 \`reading_guide.md\`；`
+      + `\n  · \`【全文翻译】\`＝**逐段全文**翻译（不是摘要、不许跳段），译文写进 \`translation_zh.md\`，`
+      + `回答里只报一句"已完成、共几节"，**不要把整篇译文再贴进对话**（界面直接渲染那个文件给用户看）；`
+      + `\n  · \`【演示 PPT】\`＝走 \`ppt-master\` 技能做汇报用 PPT，另存一份大纲 \`ppt_outline.md\`；`
+      + `\n  · 没有标记的就是自由问答，直接基于本篇原文回答，不要再重跑上面任何一件事。`
+      + `\n- **一切结论只能来自这篇原文**：数字、剂量、样本量、p 值、结论一律照抄原文；`
+      + `原文没写的就写「原文未报告」，**不许拿你的背景知识补齐，也不许引入原文没有的参考文献**。`
+      + `引用具体数据时带上出处（第几节 / 哪张图表）。`
+      + `\n- 用户想让你去检索别的文献、写综述、查引用真伪 → 那不是本模块的事，按下面那张表指路。`,
   },
 
   // ============ 数据统计与分析 ============
@@ -1191,6 +1195,9 @@ export function workflowFor(mod, values) {
   return {
     module: mod,
     primary: w.primary,
+    // 这个模块用哪个界面壳：缺省 null = index.html 的通用壳（表单 + 步骤条 + 对话流）；
+    // "reader" = 专用的 web/reader.html（左原文右助手）。工作台与聊天页据此决定往哪儿跳。
+    ui: w.ui || null,
     intakeTitle: w.intakeTitle,
     intakeSub: w.intakeSub || null,   // 流程条第 1 格「基础信息录入」那行小字，各模块不同
     intake: w.intake,
@@ -1212,6 +1219,10 @@ export function workflowFor(mod, values) {
 /** 模块前言里那句"本模块的标准流程"——把步骤链与质量闸讲给 agent 听 */
 export function pipelineLine(mod, rawValues) {
   const values = withDefaults(mod, rawValues)   // 跳过表单时也按默认勾选算，否则整条流程线是空串
+  // 【flow 覆写】不是所有模块都是一条线。文献研读是"一篇文献 × 四种模式"，用户随时在四者间来回切，
+  // 通用版那句「按此顺序推进」会让模型去执行一个根本不存在的顺序（实测最坏是用户只想问一句话，
+  // 它却自作主张跑起 ppt-master）。这类模块自己写清楚该怎么干，下面那整段闸的规矩也一并不适用。
+  if (WORKFLOWS[mod]?.flow) return WORKFLOWS[mod].flow
   const steps = stepsFor(mod, values)
   if (!steps.length) return ""
   const chain = steps.map((s) => s.name + (isOptional(s, values) ? "(可选)" : "") + (s.gate ? "(闸)" : "")).join(" → ")

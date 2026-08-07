@@ -2551,6 +2551,11 @@ async function deleteSelected() {
 // 抛错，点左侧会话「毫无反应」（打包版实测复现）。对象只交给 renderSessions，缓存只存数组。
 const loadSessions = () => fetch("api/sessions").then(r => r.json()).then((l) => { sessList = (l && l.sessions) || []; renderSessions(l); if (sessionId) setModBadge(sessList.find((s) => s.id === sessionId)?.module || "chat") }).catch(() => {})
 async function resumeSession(id) {                 // 载入历史 → 设为当前会话 →（后台还在生成则续流）
+  // 有专用界面的模块（文献研读的 reader.html）：会话本身在这里也打得开，但用户看到的会是一条
+  // 没有原文、没有模式条的裸对话流 —— 前面几轮还全是【文献导读】这类内部标记开头的长消息。
+  // 把它送回它自己的壳里，而不是让人在通用页面里对着半个功能发愣。
+  const modUi = modById(sessList.find((s) => s.id === id)?.module || "")?.ui
+  if (modUi === "reader") { location.href = "./reader.html?sid=" + encodeURIComponent(id); return }
   pendingProjectId = null                          // 打开的是已有会话 → 不是「立刻新建对话」，解除项目归入
   detachStream()                                   // 只退订原会话的流，后台生成不受影响
   sessionId = id; localStorage.setItem("nm_sid", id)
@@ -3833,6 +3838,10 @@ async function loadModules() {
   const allowed = MODULES.filter((m) => m.allowed)
   if (pendingModule) {   // 从工作台点进来的模块：清单到手才知道它是否已开通
     const hit = allowed.find((m) => m.id === pendingModule)
+    // 有专用界面的模块（ui="reader"）：老书签、老工作台（界面包只更新了一半时）仍会把人
+    // 送到 `./#module=litread`。这里兜住，转投它自己的页面 —— 判据用服务端下发的 ui，
+    // 不在前端写死 id。
+    if (hit && hit.ui === "reader") { location.href = "./reader.html"; return }
     if (hit) currentModule = hit.id
     else if (MODULES.some((m) => m.id === pendingModule)) addNote("ℹ 你的账号未开通该模块，已回到自由对话")
     pendingModule = ""
