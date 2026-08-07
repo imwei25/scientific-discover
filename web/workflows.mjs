@@ -379,7 +379,9 @@ export const WORKFLOWS = {
       { id: "baseDesc", label: "已有工作基础", type: "textarea",
         placeholder: "可填写已有工作基础，例如：代表作 / 已发表论文、预试验数据、平台 / 设备条件、已有样本库 / 队列等",
         help: "提示：代表作 / 已发表论文 · 预试验数据 · 平台 / 设备条件 · 已有样本库 / 队列。没有就留空，缺的会在对应步骤问你要，绝不替你编。" },
-      { id: "attachFiles", label: "申请课题要求文件 / 代表作 / 预实验数据", type: "files",
+      // divider：上传区前面加一条分隔线（设计稿 v3 在「上传参考资料」之前有一条 <hr>）——
+      // 上面两项是"你自己写点什么"，这一项是"你交点什么给我"，两件事该断开
+      { id: "attachFiles", label: "申请课题要求文件 / 代表作 / 预实验数据", type: "files", divider: true,
         uploadText: "上传材料", accept: ".pdf / .docx / .xlsx / .png，单个 ≤ 20MB",
         help: "可上传申报指南、申请书模板、代表性论文、预实验数据表等；传了官方通知 / 模板就以它为准。" },
     ],
