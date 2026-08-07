@@ -538,7 +538,19 @@ def _author_year_flags(entry, meta):
         #   所以两个候选都试：整串（保住复姓）+ 首个 token（保住 Family Given）。
         cands = [surname] + ([surname.split()[0]] if surname and len(surname.split()) > 1 else [])
         cands = [c for c in cands if c and len(c) > 2]
-        if cands and found_auth and not any(c in found_auth for c in cands):
+        # ★ 按【词边界】比，不能裸子串。裸子串会放过两类真问题：
+        #   · 引用 `van der Berg Piet`，库里其实是 `Vandenbroucke J` —— "van" 是
+        #     "vandenbroucke" 的前缀，子串命中，张冠李戴被放行；
+        #   · 引用把第 3 作者当成首作者写（中文投稿里不算罕见）—— 那个姓在串里当然找得到。
+        #   所以：整串候选仍按词边界在全串里找（复姓要成立）；首个 token 只在
+        #   **解析侧的第一作者段**里找（逗号前那一段），避免把非首作者算成相符。
+        first_seg = re.split(r"[,;]", found_auth)[0] if found_auth else ""
+        def _hit(c, hay):
+            return bool(hay) and re.search(r"(?<![a-z])" + re.escape(c) + r"(?![a-z])", hay) is not None
+        ok = _hit(cands[0], found_auth) if cands else True
+        if not ok and len(cands) > 1:
+            ok = _hit(cands[1], first_seg)
+        if cands and found_auth and not ok:
             surname = cands[0]
             flags.append(f"首作者不符(引用{surname})")
     return "；".join(flags)

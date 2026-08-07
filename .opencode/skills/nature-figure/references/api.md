@@ -158,20 +158,20 @@ exports. Never use `.png` alone when the figure contains text that may need adju
 ## apply_publication_style()
 
 ```python
-def apply_publication_style(font_size=16, axes_linewidth=2.5, use_tex=False):
-    """Apply Nature-style rcParams. Call once before creating any figures."""
-    # ── MANDATORY: editable SVG text ──────────────────────────────────────────
-    # ★ 字体【必须】走 figfont，不要手抄 rcParams。
+# ★ 字体【必须】走 figfont，不要手抄 rcParams。
 # 手抄的字体链写死的是 Linux 容器里的字体名（Liberation Sans / WenQuanYi Zen Hei / Noto Sans CJK JP），
 # 而桌面版跑在 Windows 上——这四个一个都没有，于是中文全渲染成豆腐块(□)，
 # 且模型【没有图像输入能力】、看不出来，坏图会一路带进投稿件。实测踩过一整张 KM 图。
 # setup_fonts() 会现场探测本机真正装了什么（Linux/Windows/macOS 都覆盖）并组好回退链。
-import sys; sys.path.insert(0, f"{SKILL_DIR}/scripts")
+import sys
+sys.path.insert(0, f"{SKILL_DIR}/scripts")      # SKILL_DIR = 会话前言里给的技能目录绝对路径
 from figfont import setup_fonts, guard_cjk
-setup_fonts(font_size=7)          # 同时设好 svg.fonttype='none' / pdf.fonttype=42
-...
-guard_cjk(title, xlabel, ylabel, *legend_labels)   # ★ 存图【之前】必须调：含中文却无可用字体时直接报错，
-fig.savefig(...)                                    #   把"静默出豆腐块图"变成显式失败
+
+
+def apply_publication_style(font_size=7, axes_linewidth=2.5, use_tex=False):
+    """Apply Nature-style rcParams. Call once before creating any figures."""
+    # 字体 + svg.fonttype='none' + pdf.fonttype=42 都由 setup_fonts 一次设好
+    setup_fonts(font_size=font_size)
     # ── Layout & style ────────────────────────────────────────────────────────
     plt.rcParams['font.size'] = font_size
     plt.rcParams['axes.spines.right'] = False

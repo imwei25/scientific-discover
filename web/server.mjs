@@ -848,7 +848,14 @@ const GATE_FAIL_CTX = /(reject|critical|严重问题|硬伤)/i
 //   一口咬定"疑似虚构"是误报，代价是用户去删一条真实存在的文献。但**闸照样要红**：
 //   一条没人能确认真假的引用，正是最该让作者自己去核的东西。漏了 CHECK 就等于把这个改动
 //   变成"把假引用悄悄放行"。（_verdict_with_meta 因年份/首作者不符降级出的 CHECK 同理。）
+// ★ UNVERIFIED 必须在列表里，且不能只认"UNVERIFIED n"这一种写法。实测踩过：
+//   报告统计行写的是 `统计：UNVERIFIED 3`，正文里技能自己还加了一句
+//   「⚠️ 本次有 3/3 条只验证了标识符存在、没有比对标题…**不要据此宣布「引用核查全绿 / 质量闸通过」**」，
+//   而闸照样判绿 —— 技能作者已经把警告写进报告了，网关却把它读成绿灯，正是这套代码
+//   在别处反复防的 fail-open。
 const GATE_FAIL_COUNT = /(FABRICATED|RETRACTED|MISMATCH|NOT[_\s]?FOUND|UNVERIFIED|CHECK|ERROR)\s*[:：=]?\s*[1-9]/i
+// 技能在报告里主动写的"别据此宣布通过"——它比任何计数都更明确，直接认。
+const GATE_SELF_WARN = /不要据此宣布|不能据此宣布|不应据此宣布|别据此宣布/
 const GATE_FAIL_CELL = /\|\s*\*{0,2}(FABRICATED|RETRACTED|MISMATCH|NOT[_\s]?FOUND|CHECK)\*{0,2}\s*\|/i
 const VERDICT_LINE = /(判定|裁定|结论|总体评价|总评|倾向|建议|verdict|recommendation|decision)/i
 // 「信号型」闸的判据。data-integrity 是唯一一个【被铁律明令禁止写裁定语】的闸
@@ -905,7 +912,8 @@ function gateFailed(outDir, step, files) {
         // 信号型闸（data-integrity）：它被铁律禁止写裁定语，只能按信号条数判 —— 见 signalGateFailed。
         // 仍然把下面几条通用判据一并跑一遍：万一模型确实写了"未通过"，没有理由放过。
         if (step.gateBy === "signals" && signalGateFailed(t)) return true
-        if (GATE_FAIL_SURE.test(t) || GATE_FAIL_COUNT.test(t) || GATE_FAIL_CELL.test(t)) return true
+        if (GATE_FAIL_SURE.test(t) || GATE_FAIL_COUNT.test(t) || GATE_FAIL_CELL.test(t)
+            || GATE_SELF_WARN.test(t)) return true
         // 正文里的严重条目：结论行的措辞可能被模型写软（实测正文 4 条 **Major**，总评却是
         // "Minor to moderate revision"），只认总评就被绕过。只数【条目行】，标题行不算。
         // 带否定的条目（"无 Major 问题"）不计 —— 同 P0 的教训。
@@ -934,6 +942,16 @@ function gateFailed(outDir, step, files) {
           //   "每条按五元组写：**严重度（Critical / Major / Minor）| 位置 | …**"，
           //   模型复述这句模板就会踩中，而那一行恰恰说明它【还没开始】列问题。
           if (/critical/i.test(ln) && /major/i.test(ln) && /minor/i.test(ln)) continue
+          // ★★ 「等用户补事实」不是稿件缺陷，不能计入。这条是加了服务端硬拦【之后】才致命的：
+          //   AGENTS.md §五 明令不许编造伦理批号，所以 AI 协助写的稿子【几乎必然】以
+          //   "伦理批号待补充"收尾；而一个称职的投稿前评审【必然】把"缺伦理批准"标成 Critical。
+          //   于是这条链稳定复现：不编造(对) → 评审标 Critical(对) → 闸判红(按规则也对)
+          //   → render 被硬拦 → **用户永远拿不到 Word**。实测：模型完整照做了解锁流程
+          //   （改稿 → 重跑引用核查 3/3 OK → 重跑自审并写出新报告、总评"修订后可投"），
+          //   仍然出不了件，而被拦时的文案还在说"重跑那道闸即可"—— 把人带进死胡同。
+          //   闸该量的是【稿件本身的方法学缺陷】，不是【用户还没交的材料】。后者拦不出质量，
+          //   只会把交付卡死；它照样留在报告里，用户看得到、也知道投稿前必须补。
+          if (/(待补充|待填|需你|只能由你|无法代为编造|不能代填|由你(方|们)?提供|需(用户|作者|申请人)提供|投稿前(必办|补齐|填入))/.test(ln)) continue
           // ★ 计数为零的表格行放行：`| Critical | 不改则拒 | 0 |`、`| Major | … | 无 |`
           //   这是严重度图例表，在评审报告里非常常见，命中数写的就是 0。
           if (/^\s*\|/.test(ln) && /\|\s*\**\s*(0|无|未使用|未命中|none)\s*[条项个]?\s*\**\s*\|?\s*$/i.test(ln)) continue
@@ -1573,7 +1591,12 @@ function warmPreviews(dir, names) {
 const PREAMBLE_MARK = "【本会话工作区，务必遵守】"
 const PREAMBLE_MARK_LEGACY = "【本会话专属目录"   // 老会话里存的是旧文案，回看时同样要剥掉
 const _reEsc = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
-const PREAMBLE_RE = new RegExp("^(?:" + _reEsc(PREAMBLE_MARK) + "|" + _reEsc(PREAMBLE_MARK_LEGACY) + ")[\\s\\S]*?\\n\\n")
+// 结尾用 \n\n+ 贪婪吃掉【连续】空行：前言尾部拼的是
+// `…${chat?skillsPreamble():modulePreamble()}${zoteroPreamble()}${autoOn?…:""}\n\n`，
+// 而不受限的 chat 会话这几个插值全是空串。只要有人给某条 bullet 末尾多留一个 \n，
+// 尾部就变成三个换行，非贪婪的 \n\n 只吃两个，第三个留在用户原话前面 ——
+// 表现为 chat 的用户气泡全部多一个前导空行（实测过，且只有 chat 会中招，很难联想到前言）。
+const PREAMBLE_RE = new RegExp("^(?:" + _reEsc(PREAMBLE_MARK) + "|" + _reEsc(PREAMBLE_MARK_LEGACY) + ")[\\s\\S]*?\\n\\n+")
 // Zotero 面板注入的"检索范围"指示：拼在用户原话【最前面】（见前端 zScopePrefix），
 // 与工作区前言是两段独立注入，回看历史时也要一并剥掉，否则用户看见自己"说"了一句没说过的话。
 // 顺序：先剥工作区前言，再剥范围指示（注入时前言在前、范围指示紧跟其后、再是原话）。
@@ -2164,9 +2187,10 @@ function startJob(sid, sentText, modId) {
           //   模型换一个就可能再犯，而用户拿到的是一份看起来完全正常的送审稿。
           //   【只拦 docx/pdf 这类"送审件"】——markdown 稿件照常产出，用户永远拿得到内容，
           //   所以这不是死锁：闸误判时他仍有稿子，重跑那道闸即可解锁出件。
-          if (!job.gateBlock && p.tool === "skill" && modSkills) {
-            const called = String(p.state.input?.name || "")
-            if (DELIVERY_SKILLS.has(called)) {
+          if (!job.gateBlock && modSkills) {
+            // skill 工具与 bash 直呼脚本 / 裸 pandoc 都要认 —— 只认前者等于留了一条大路
+            const called = WF.isDeliveryCall({ tool: p.tool, input: p.state.input })
+            if (called) {
               const red = await failedGatesFor(sid, modId)
               if (red.length) {
                 job.gateBlock = { skill: called, gates: red }
@@ -2243,7 +2267,11 @@ function startJob(sid, sentText, modId) {
         `质量闸未过就出件，本轮已中止：「${names.join("、")}」当前判定为未通过，而你调用了「${g.skill}」。\n` +
         `报告里写着什么就是什么——改完稿子【必须重新跑一遍那道闸】、让它写出新报告，才算通过；` +
         `拿上一版报告、或自己在报告里标注"已处理"，都不算。\n` +
-        `Markdown 稿件不受影响、照常产出，你随时能看到内容；只有 Word/PDF 送审件要等闸转绿。` })
+        `Markdown 稿件不受影响、照常产出，你随时能看到内容；只有 Word/PDF 送审件要等闸转绿。\n` +
+        `如果重跑之后仍被拦，去看新报告里还剩哪几条 Critical/Major：` +
+        `**只剩"等用户补事实"（伦理批号、注册号、方案细节待补充）的话不该拦**，` +
+        `把这类条目写成"待补充/只能由你提供"的措辞即可，闸不会把它们算成稿件缺陷；` +
+        `若剩的是真的方法学硬伤，那就还得改稿。` })
       return finish()
     }
     if (job.moduleHit) { broadcast("failed", { message: modSkills
@@ -3034,8 +3062,16 @@ export const server = http.createServer(async (req, res) => {
       //   jobs.delete 就什么都不剩 —— 用户关了页面去查个房，回来只看到自己那条消息、没有任何回复、
       //   也不知道该不该重发（实测：一轮跑了 10 分钟异常收场，history 里 assistant 零条）。
       //   只在"这一轮确实没留下助手回复"时补，避免与正常回复重复。
+      //   ★ 但"末条是 assistant"不等于"这一轮好好结束了"：本轮被系统中止（闸拦、越权、卡死）
+      //   之前，模型往往已经吐了一段文字。实测那次被闸拦下的轮，历史末条是
+      //   「…自审闸通过。现在排版 Word 送审版。」——然后什么都没有，用户刷新回来只看到它
+      //   宣布要排版却没排，完全不知道是被拦了。这类"系统中止"的原因必须补进去，
+      //   哪怕这一轮已经有助手回复：它不是"没有回复"，是"被拦了"。
+      //   用时间戳判重，避免同一条错误被重复补（历史会被反复拉取）。
       const le = lastError(id)
-      if (le && (!out.length || out[out.length - 1].role === "user"))
+      const lastMsg = out[out.length - 1]
+      const already = lastMsg?.isError && lastMsg?.at === le?.at
+      if (le && !already && (!out.length || lastMsg.role === "user" || le.at >= (lastMsg.at || 0)))
         out.push({ role: "assistant", text: `⚠ 上一轮没有正常结束：${le.message}`, isError: true, at: le.at })
       return send(res, 200, "application/json", JSON.stringify(out))
     }
@@ -3547,7 +3583,7 @@ export const server = http.createServer(async (req, res) => {
       // 给 agent 注入本会话专属目录，覆盖技能默认的 outputs/，实现多用户/多会话隔离
       // 注意：本会话的工作目录（cwd）已在建会话时通过 opencode 的 session.directory 定在【会话产物目录】，
       // 所以 agent 的所有工具默认就在正确的地方读写，preamble 只需说清"当前目录就是产物目录"与几个绝对路径。
-      const preamble = `${PREAMBLE_MARK}\n- **你的当前工作目录就是本会话的产物目录**（\`${ws.out}\`）。所有产物（图表 PNG/PDF、CSV/Excel、md/docx 等）**直接写到当前目录即可**，用相对文件名如 \`fig1.png\`、\`manuscript.md\`，不要再自己拼 \`outputs/xxx\` 前缀。\n- 临时脚本、中间文件同样写当前目录（要归拢可用 \`./.scratch/\`）。\n- **用户上传的文件都在 \`${ws.up}/\`**：稿件（.md/.docx/.pdf）、数值表（.csv/.xlsx）、附件全都在这里，读任何用户给的文件都用这个绝对路径。\n- **跑本套件的脚本，python 用这个绝对路径**：\`${PY_BIN || "（本机还没建 .venv，先跑 env-setup 技能）"}\`，技能脚本在 \`${ROOT}/.opencode/skills/<技能>/\` 下。**照抄这两个路径，不要自己拼 \`\${REPO_ROOT:-/app}\`，也不要用 \`python\`/\`python3\`裸命令**——本机 PATH 里的 python 可能是个不能用的占位程序（跑起来没有任何输出），你会看不出它坏了。当前目录不是仓库根，写 \`.venv/...\` 这种相对路径同样找不到。\n- 正文里嵌入图片直接用文件名：\`![图注](fig1.png)\`（图和稿件都在当前目录，渲染也从当前目录跑）。\n- **不要把产物写到仓库根或 \`\${REPO_ROOT:-/app}\` 下**：那是所有会话共享的，会互相覆盖，也不会出现在界面的"产出"侧栏。\n- **上面这些路径与文件名是给你用的，不要说给用户**：他用的是图形界面，看不到也进不去 \`uploads/ws_.../\`、\`outputs/\`、\`.venv\`、\`AGENTS.md\` 这些东西。要他传文件就说"点输入框旁边的上传按钮"；提产物就只说文件名（\`table1.csv\`），别带目录。让用户照抄一个他根本打不开的路径，等于把他卡在那里。\n- **答复用用户说话的语言**（他用中文你就用中文），并且**只写最终结论**：查了什么、下一步打算干什么这类过程叙述不要写进答复正文——界面已经把工具调用一条条显示出来了，正文里再复述一遍，用户要在一堆过程碎片里翻找真正的结论。\n${modId === "chat" ? skillsPreamble() : modulePreamble(modId, ws.out)}${zoteroPreamble(ws.out)}${autoOn ? autoPreamble() : ""}\n\n`
+      const preamble = `${PREAMBLE_MARK}\n- **你的当前工作目录就是本会话的产物目录**（\`${ws.out}\`）。所有产物（图表 PNG/PDF、CSV/Excel、md/docx 等）**直接写到当前目录即可**，用相对文件名如 \`fig1.png\`、\`manuscript.md\`，不要再自己拼 \`outputs/xxx\` 前缀。\n- 临时脚本、中间文件同样写当前目录（要归拢可用 \`./.scratch/\`）。\n- **用户上传的文件都在 \`${ws.up}/\`**：稿件（.md/.docx/.pdf）、数值表（.csv/.xlsx）、附件全都在这里，读任何用户给的文件都用这个绝对路径。\n- **跑本套件的脚本，python 用这个绝对路径**：\`${PY_BIN || "（本机还没建 .venv，先跑 env-setup 技能）"}\`，技能脚本在 \`${ROOT}/.opencode/skills/<技能>/\` 下。**照抄这两个路径，不要自己拼 \`\${REPO_ROOT:-/app}\`，也不要用 \`python\`/\`python3\`裸命令**——本机 PATH 里的 python 可能是个不能用的占位程序（跑起来没有任何输出），你会看不出它坏了。当前目录不是仓库根，写 \`.venv/...\` 这种相对路径同样找不到。\n- 正文里嵌入图片直接用文件名：\`![图注](fig1.png)\`（图和稿件都在当前目录，渲染也从当前目录跑）。\n- **不要把产物写到仓库根或 \`\${REPO_ROOT:-/app}\` 下**：那是所有会话共享的，会互相覆盖，也不会出现在界面的"产出"侧栏。\n- **上面这些路径与文件名是给你用的，不要说给用户**：他用的是图形界面，看不到也进不去 \`uploads/ws_.../\`、\`outputs/\`、\`.venv\`、\`AGENTS.md\` 这些东西。要他传文件就说"点输入框旁边的上传按钮"；提产物就只说文件名（\`table1.csv\`），别带目录。让用户照抄一个他根本打不开的路径，等于把他卡在那里。\n- **答复用用户说话的语言**（他用中文你就用中文），并且**只写最终结论**：查了什么、下一步打算干什么这类过程叙述不要写进答复正文——界面已经把工具调用一条条显示出来了，正文里再复述一遍，用户要在一堆过程碎片里翻找真正的结论。${modId === "chat" ? skillsPreamble() : modulePreamble(modId, ws.out)}${zoteroPreamble(ws.out)}${autoOn ? autoPreamble() : ""}\n\n`
       startJob(sid, preamble + q, modId)   // 同步建 job（jobs.set 在函数首行）→ 返回后前端 attach 必能接上
       return send(res, 200, "application/json", JSON.stringify({ ok: true, sid, sent: true, module: modId }))
     }

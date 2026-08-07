@@ -1033,6 +1033,34 @@ export function gateViolation({ tool, input, skillGate, restricted }) {
   return null
 }
 
+/**
+ * 这一步是不是在【出送审件】（Word/PDF）。闸红时要拦的就是它。
+ *
+ * ★ 只认 `skill` 工具是不够的。render-docx 自带可直接执行的脚本
+ *   （scripts/render_docx.sh 等），`bash .opencode/skills/render-docx/scripts/render_docx.sh x.md`
+ *   或干脆 `pandoc x.md -o x.docx` 都不经过 skill 工具，闸红时不会被拦 ——
+ *   这是读代码找出来的路径缺口（本轮实测里模型走的是 skill 工具，没有真发生绕过）。
+ *   复用 gateViolation 那套【逐段】解析：管道/分号/后台符切开，避免
+ *   `cat a.md | pandoc - -o a.docx` 因为开头是 cat 就整条放行。
+ */
+export function isDeliveryCall({ tool, input }) {
+  if (tool === "skill") {
+    const n = String(input?.name || "")
+    return (n === "render-docx" || n === "render-pdf-doc") ? n : null
+  }
+  if (tool !== "bash") return null
+  const cmd = String(input?.command || "").replace(/["']/g, "").replace(/\/\.\//g, "/").replace(/\\\.\\/g, "\\")
+  for (const seg of cmd.split(/[|;&\r\n`]|\$\(|\)/)) {
+    if (READONLY_CMD.test(seg)) continue
+    const m = /\.opencode[/\\]+skills[/\\]+(render-docx|render-pdf-doc)\b/i.exec(seg)
+    if (m) return `${m[1]}（bash 直呼技能脚本）`
+    // 裸 pandoc / libreoffice 出 docx/pdf 也算出件
+    if (/\b(pandoc|soffice|libreoffice)\b/i.test(seg) && /-o\s*\S+\.(docx|pdf)\b|--convert-to\s+(docx|pdf)\b/i.test(seg))
+      return "pandoc/libreoffice 直接出件"
+  }
+  return null
+}
+
 // ---- 死循环护栏的判据（纯函数，便于测试）----
 // 「同一条命令被反复调用」= agent 已经卡住了，再跑下去只是烧时间和配额。
 // 实测（kimi）：python 路径落空后它连发 35+ 次一模一样的 `python -c "print('hello')"`，

@@ -122,8 +122,22 @@ def main():
     ]
     if has_ft:
         excl = [T("全文排除的报告", "Reports excluded"), f"(n = {c['ft_excluded']})"]
+        # ★ 排除原因必须按框宽折行/截断。侧框宽是定值(SIDE_W)，而 matplotlib 的 wrap=True
+        #   按 figure 宽度算、不按框宽算，等于没用。实测「结局指标不符（未报Clavien-Dindo）：1」
+        #   左端的 · 探出框外、右端的数字被框线裁断 —— 而真实系统综述的排除原因几乎必然比
+        #   「非随机对照」长，这不是边缘情况。
+        #   中文按字宽约 1 个单位、拉丁按 0.55 估，超出就截断加省略号（宁可短，不可压线）。
+        def _fit(s, budget=13.0):
+            w, out = 0.0, []
+            for ch in s:
+                w += 1.0 if ord(ch) > 0x2E80 else 0.55
+                if w > budget:
+                    out.append("…")
+                    break
+                out.append(ch)
+            return "".join(out)
         for reason, n in list((c.get("exclusion_reasons") or {}).items())[:5]:
-            excl.append(f"· {reason}：{n}" if zh else f"· {reason}: {n}")
+            excl.append(_fit(f"· {reason}：{n}" if zh else f"· {reason}: {n}"))
         rows.append(([T("评估合格性的报告", "Reports assessed for eligibility"),
                       f"(n = {c['reports_assessed']})"], excl))
         rows.append(([T("纳入系统综述的研究", "Studies included in review"),

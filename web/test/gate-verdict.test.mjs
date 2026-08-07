@@ -32,8 +32,11 @@ function loadGate() {
     const end = rest.indexOf("\nconst ", 1)
     return rest.slice(0, end > 0 ? end : 400)
   }
+  // ★ 判定段落里新引用了哪个常量，就要在这里登记，否则求值时 ReferenceError。
+  //   （加 GATE_SELF_WARN 时当场被这条测试抓住——这正是它的用处。）
   const decls = ["NEG_PREFIX", "GATE_FAIL_SURE", "GATE_FAIL_CTX",
-                 "GATE_FAIL_COUNT", "GATE_FAIL_CELL", "VERDICT_LINE"].map(grab).join("\n")
+                 "GATE_FAIL_COUNT", "GATE_FAIL_CELL", "GATE_SELF_WARN",
+                 "VERDICT_LINE"].map(grab).join("\n")
   const fnStart = SRC.indexOf("function gateFailed(")
   assert.ok(fnStart >= 0, "找不到 gateFailed")
   const body = SRC.slice(fnStart, SRC.indexOf("\n}", fnStart))
