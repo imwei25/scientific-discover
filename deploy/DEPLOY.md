@@ -87,6 +87,7 @@ sudo deploy/scripts/user-add.sh bob             # 省略档位=free（普通，$
 | 给某用户单独设额度（覆盖档位） | 编辑 `deploy/users/<名>.env` 取消注释 `DAILY_COST_LIMIT=`（USD/天，0=不限）→ `render-compose.sh && docker rm -f agent-<名> && docker compose up --no-start agent-<名>` |
 
 > ⚠ 额度/存储上限是容器**环境变量**，在容器「创建」时固化；manager 唤醒用的是 `docker start`，**`docker restart` 不会重读 compose**。所以改额度后必须**重建**容器（如上；数据在命名卷里，重建不丢），或直接用 `user-tier.sh`（改档位时已自动重建）。
+| 加 / 换一把技能用的 API key（检索、OCR、生图…） | 编辑 **`deploy/.env`**（模板见 `deploy/.env.example`）→ `sudo deploy/scripts/render-compose.sh` → **重建**容器 `docker compose up --no-start --force-recreate`。<br>⚠ 必须重建：这些 key 是容器**环境变量**，在容器「创建」时固化，`docker restart` 不会重读 compose（同下方⚠注）。<br>⚠ 这类 key 注入容器后**容器内 agent 一句 `env` 就读得到**，等于全体用户共用。所以只放"可随时重置、能设消费上限"的 key（检索 / OCR / 生图）；主上游 LLM key 刻意不走这条路，见下方「上游 key 不再进容器」 |
 | 改了代码后更新 | `sudo bash deploy/scripts/redeploy-skills.sh --pull`（拉代码 → 重建镜像 → **重建**容器）。<br>⚠ 别用 `docker restart`：它只重启既有容器、仍跑创建时那份旧镜像，**新代码看着更新了其实没生效**（同下方⚠注）。另 `docker restart agent-*` 里的 `agent-*` 不是文件名，shell 不会展开，命令本身也跑不通 |
 | 每日备份（建 cron） | `sudo deploy/scripts/backup.sh`（7 天轮转，写 `/var/backups/sci/`） |
 | 看谁在跑 | `docker ps --filter name=agent-` |
