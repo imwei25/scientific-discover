@@ -364,14 +364,16 @@ export const WORKFLOWS = {
         hint: "候选选题会列成卡片，你选一个再往下" },
       { id: "novelty", name: "新颖性裁定与预注册", skill: "novelty-check", gate: true,
         emits: ["novelty_report.md", "preregistration.md", "analysis_plan.md"], render: "report", onFail: "topic" },
-      // ★ 这一步在流程条上必须单列：它决定后面所有章节的结构与逐节字数，查错了整篇作废。
-      //   摆出来，用户才能在这时候就发现「它按的是去年口径」，而不是等成稿之后才发现。
-      //   与 write 同属 grant-proposal 技能，靠产物（要求卡）区分先后 —— markStepBySkill
-      //   取「第一个未完成的同技能步」，所以要求卡出来打上勾之后，进度才会走到成文。
-      { id: "spec", name: "摸清申报要求", skill: "grant-proposal",
-        emits: ["要求卡*.md", "grant_spec*.md", "requirements*.md"], render: "report",
-        hint: "定渠道、取当年结构提纲与逐节字数硬限、形式审查清单；传了官方模板就以它为准，没有内置卡的渠道会联网查并标明来源与年份",
-        note: "动笔写正文【之前】，先把本次实际采用的要求写成 `要求卡-<渠道>.md` 落盘 —— **用内置要求卡的渠道也要写**，不能因为「卡在 references/ 里读过了」就跳过。至少包含：章节结构提纲（标题原文）、逐节字数/页数硬限、格式规定、形式审查与附件清单、以及每一项的来源与年份口径（内置卡写明卡的年份，联网查的附 URL，没查到的写「未找到官方来源」）。用户传了当年官方模板 / 申报通知的，以用户文件为准，并把它与内置卡的差异逐条列出来 —— 那正是发现「今年又改版了」的地方。这一步的结论决定后面每一节怎么写、写多长，不落盘用户就看不见你按的是哪一版，只能等成稿之后才发现按错了。" },
+      // ★「摸清申报要求」原本是独立的一步，2026-08-07 按用户要求并进本步 —— 基金申报的流程条
+      //   本来就有 6~7 格，而这两步同属 grant-proposal 技能、在同一轮里连着做完是常态，
+      //   拆成两格只是把一条本来连贯的工作切开数。
+      //   【合并要守住的东西】要求卡【仍然必须先落盘】：它决定后面每一节怎么写、写多长，
+      //   按错版本整篇作废。原来靠"流程条上单独一格"让用户在动笔前就看见「它按的是去年口径」，
+      //   现在这个提醒点没有了 → 改由 note 强制它把要求卡写成文件、并在回话里报出年份与来源口径，
+      //   用户在产出侧栏里照样能第一时间核对。
+      //   【emits 为什么不收要求卡】判完成靠"约定产物出现了没有"（server.mjs 的 wfSyncDone）。
+      //   把 `要求卡*.md` 也列进来的话，要求卡一落盘这一步就打绿勾 —— 而正文还没写。
+      //   要求卡的结构化卡片渲染改由 RENDER_RULES 的 report 组兜住，不走 step.emits。
       { id: "write", name: "标书成文", skill: "grant-proposal",
         form: [{ id: "sections", label: "要写的章节", type: "multi",
           default: ["basis", "content", "route", "feature", "foundation", "condition"],
@@ -379,7 +381,9 @@ export const WORKFLOWS = {
             { v: "route", t: "研究方案与技术路线" }, { v: "feature", t: "特色与创新" },
             { v: "foundation", t: "研究基础" }, { v: "condition", t: "工作条件" },
             { v: "budget", t: "经费预算说明" }] }],
-        emits: ["proposal.md", "grant_proposal*.md"], render: "manuscript" },
+        emits: ["proposal.md", "grant_proposal*.md"], render: "manuscript",
+        hint: "先定渠道、取当年结构提纲与逐节字数硬限，再按它逐节动笔；传了官方模板就以它为准",
+        note: "**动笔写正文之前，先把本次实际采用的要求写成 `要求卡-<渠道>.md` 落盘**，然后才逐节起草 —— 两件事在同一步里做完，但顺序不能颠倒。要求卡**用内置卡的渠道也要写**，不能因为「卡在 references/ 里读过了」就跳过；至少包含：章节结构提纲（标题原文）、逐节字数/页数硬限、格式规定、形式审查与附件清单、以及每一项的来源与年份口径（内置卡写明卡的年份，联网查的附 URL，没查到的写「未找到官方来源」）。用户传了当年官方模板 / 申报通知的，以用户文件为准，并把它与内置卡的差异逐条列出来 —— 那正是发现「今年又改版了」的地方。落盘之后**在回话里点名说清本次按的是哪个渠道、哪一年的口径**：流程条上不再单列这一步，用户只能从你这句话和产出侧栏里的要求卡去核对，含糊过去他就只能等成稿之后才发现按错了版本。" },
       { id: "review", name: "评审自查", skill: "peer-review", gate: true,
         emits: ["review_report.md"], render: "review", onFail: "write" },
       { id: "render", name: "排版出件", skill: "render-pdf-doc",
@@ -839,7 +843,11 @@ const RENDER_RULES = [
   { render: "doc", globs: ["*.docx", "*.doc", "*.pdf", "*.pptx", "*.xlsx", "*.xls"] },   // xlsx 漏过一次：脱敏步 emits 里写着 deid_*.xlsx，却落进"认不出"
   { render: "table", globs: ["*.csv", "*.tsv"] },
   { render: "manuscript", globs: ["manuscript*.md", "proposal*.md", "review.md", "*_review.md", "digest*.md", "research_report*.md", "deep_research*.md"] },
-  { render: "report", globs: ["*_report.md", "*_log.md", "data_profile.md", "preregistration.md", "analysis_plan.md"] },
+  // 要求卡：原来靠 grant 的 spec 步 emits 兜着，那一步并进「标书成文」之后它不再是任何步骤的
+  // 约定产物（并进去的理由见 grant.steps 里的注释）。不在这儿补一条，标书最要紧的那份
+  // 「本次按的是哪一版口径」就会掉进"认不出"、只剩一个下载按钮。
+  { render: "report", globs: ["*_report.md", "*_log.md", "data_profile.md", "preregistration.md", "analysis_plan.md",
+                              "要求卡*.md", "grant_spec*.md", "requirements*.md"] },
 ]
 const COMPILED = RENDER_RULES.map((r) => ({ render: r.render, res: r.globs.map(globRe) }))
 // 各步 emits → render 的反查表：由 WORKFLOWS 自动展开。
