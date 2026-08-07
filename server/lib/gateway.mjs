@@ -342,10 +342,22 @@ export async function llmForward({ req, res, pathname, ctx }) {
     log(`[llm] ${user.username} 点名的模型不在档位允许清单内，已打回 ${model}（档位 ${ent.tier}）`)
 
   const routes = ctx.modelRoutes ? ctx.modelRoutes(model) : []
-  const attempts = buildAttempts(model, routes, CFG)
+  let attempts = buildAttempts(model, routes, CFG)
   // 没有任何可用凭证就别白跑一趟：目录里那家没填 key、或压根没建目录而 env 也是空的
   if (!attempts.some((a) => a.apiKey && a.baseUrl))
     return fail(res, 503, "UPSTREAM_UNCONFIGURED", "服务器未配置上游模型密钥，请联系管理员")
+
+  // ---- ④.5 供应侧闸：预算用尽 / 刚撞过墙的家，这一单直接跳过 --------------------
+  // 上面那套切家是【事后】的：先打过去、被 402 打回来、再切下一家，每一单都要浪费一个 RTT，
+  // 而且没人手动停用就会一直撞。supply 记着「谁的预算见底了、谁刚回过 402」，在这里就把它
+  // 们从候选里划掉。全被划掉时 filter 会原样放回（fail-open，见 supply.mjs），绝不让这层
+  // 自己把全站饿死。
+  if (ctx.supply) {
+    const f = ctx.supply.filter(attempts)
+    if (f.dropped.length)
+      log(`[llm] ${user.username} ${model} 跳过 ${f.dropped.map((d) => `${d.providerName}(${d.why})`).join("、")}${f.failOpen ? " —— 全被跳过，兜底照原顺序试" : ""}`)
+    attempts = f.attempts
+  }
 
   const fwdPath = pathname.slice(GATEWAY_PATH_PREFIX.length - 1) // "/llm/v1/x" -> "/v1/x"
   const query = req.url.includes("?") ? req.url.slice(req.url.indexOf("?")) : ""
@@ -457,6 +469,15 @@ export async function llmForward({ req, res, pathname, ctx }) {
       // 【429 要单独认出来】它不是"服务器坏了"而是"被限速了"，两者给用户的话完全不同，
       // 而客户端只看得见状态码。记一段"正在限速"（/api/queue 会把它下发给前端显示），
       // 并在无处可切时回结构化错误码 + Retry-After，而不是把上游那个裸 429 页甩过去。
+      // 【供应侧记一笔】成功就解除这家的摘除标记（管理员充完值不用手动点，见 supply.mjs
+      // 的半开重试）；402/401/403/429 则记下来，冷却期内不再往这家派单。5xx 与网络错误
+      // 刻意不记 —— 那是抖动，不是「这家不能用了」，按它摘家会把一次几秒的抖动放大成半小时降级。
+      try {
+        const st = Number(upRes.statusCode) || 0
+        if (st >= 200 && st < 300) ctx.supply?.noteSuccess(at.provider)
+        else ctx.supply?.noteFailure(at.provider, st, retryAfterMs(upRes.headers["retry-after"]))
+      } catch (e) { log(`[llm] 供应侧记录失败：${e.message}`) }
+
       if (Number(upRes.statusCode) === 429) {
         const ra = retryAfterMs(upRes.headers["retry-after"])
         // 【无处可切时先把错误体读出来分类】限速 vs 额度耗尽给用户的话完全相反（见
@@ -533,6 +554,9 @@ export async function llmForward({ req, res, pathname, ctx }) {
             prompt_tokens: u.prompt, completion_tokens: u.completion,
             cached_tokens: u.cached, cost_usd: cost,
           })
+          // 供应侧同步加一笔，让预算闸在缓存到期前就跟上 —— 只靠 TTL 的话，一波并发长任务
+          // 足以在 20 秒内把预算冲穿而闸毫无察觉。
+          ctx.supply?.noteSpend(at.provider, cost)
         } catch (e) { log(`[llm] ${user.username} 记账失败：${e.message}`) }
         log(`[llm] ${user.username} ${model}@${at.providerName}${respModel && respModel !== model ? `(上游 ${respModel})` : ""} in=${u.prompt}(cache ${u.cached}) out=${u.completion} $${cost.toFixed(6)} ${Date.now() - started}ms`)
       }, upRes.headers["content-encoding"])

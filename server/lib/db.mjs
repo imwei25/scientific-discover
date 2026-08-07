@@ -134,6 +134,8 @@ CREATE TABLE IF NOT EXISTS usage_log (
 );
 CREATE INDEX IF NOT EXISTS ix_usage_user_day ON usage_log(user_id, day);
 CREATE INDEX IF NOT EXISTS ix_usage_ts ON usage_log(ts);
+-- ix_usage_provider_ts 不在这里建，而在 ensureColumns 之后 —— provider 是补出来的列，
+-- SCHEMA 跑在补列之前，老库（v1）在这儿建索引会直接 "no such column: provider" 崩在启动路径上。
 
 -- 汇总：查额度走这张，不扫明细
 CREATE TABLE IF NOT EXISTS usage_daily (
@@ -145,6 +147,37 @@ CREATE TABLE IF NOT EXISTS usage_daily (
   PRIMARY KEY (user_id, day)
 );
 CREATE INDEX IF NOT EXISTS ix_usage_daily_month ON usage_daily(user_id, month);
+
+-- ==== 供应侧：每家供应商的预算与健康 ==========================================
+-- 【为什么要有这两张表】tiers.daily_usd 管的是「这个**用户**能花多少」，跟得很准；而
+-- 「**供应商账户**里还剩多少钱」系统一直一个字节都没存。2026-08 火山账户耗尽那次，
+-- 发现途径是用户报「没输出」——网关侧只能靠撞 402 才知道，而且每来一单撞一次。
+-- 这两张表就是补这个洞：预算是**我们自己记的账**（不依赖各家余额 API，一份代码通吃），
+-- 健康是**上游打脸后记下的状态**（撞过一次就别再往这家送，直到冷却到期）。
+--
+-- 【为什么不去调各家的余额接口】火山/DeepSeek/opencode 各有各的接口与字段，每接一家写一份
+-- 适配，还都可能改。而 usage_log 里本来就逐单记着 provider 与 cost_usd，按窗口一聚合就是
+-- 消费额；管理员只需要填一个「这个账号有多少额度」。误差来自单价表与真实账单的偏差，
+-- 用于「还该不该往这家打」完全够 —— 它是闸，不是账本。
+CREATE TABLE IF NOT EXISTS provider_budgets (
+  provider  TEXT    NOT NULL,             -- providers.key
+  win       TEXT    NOT NULL,             -- h5 | day | week | month | total（见 supply.mjs WINDOWS）
+  limit_usd REAL    NOT NULL DEFAULT 0,   -- 0 = 不限（等于没设这条线）
+  anchor    INTEGER NOT NULL DEFAULT 0,   -- 仅 total 窗口用：从这个时刻起算（= 充值时刻）
+  PRIMARY KEY (provider, win)
+);
+
+-- 上游打脸后的状态。**内存里那份才是热路径的权威**（见 supply.mjs），这张表管两件事：
+-- 进程重启后能恢复（否则一重启就把所有干涸标记忘光，又开始挨家撞 402），以及后台能看见。
+CREATE TABLE IF NOT EXISTS provider_health (
+  provider    TEXT    PRIMARY KEY,
+  state       TEXT    NOT NULL DEFAULT 'ok',  -- ok | dry | invalid_key | rate_limited
+  until       INTEGER NOT NULL DEFAULT 0,     -- 冷却到期（ms）；到点后半开放行一单探路
+  reason      TEXT    NOT NULL DEFAULT '',
+  http_status INTEGER NOT NULL DEFAULT 0,
+  noted_at    INTEGER NOT NULL DEFAULT 0,
+  trips       INTEGER NOT NULL DEFAULT 0      -- 累计跳闸次数：后台据此看出「这家老出事」
+);
 
 CREATE TABLE IF NOT EXISTS refresh_tokens (
   id         INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -291,6 +324,11 @@ function ensureColumns(db) {
   // 当天已生成张数：挂在既有的日汇总上，不另开表 —— UTC 日切、删用户清理都跟着 usage_daily 走，
   // 不会出现"用户删了图配额还留着"这类孤儿数据。
   if (!has("usage_daily", "images")) db.exec("ALTER TABLE usage_daily ADD COLUMN images INTEGER NOT NULL DEFAULT 0")
+
+  // 【必须在补完 provider 列之后】供应侧的预算闸按 (provider, ts) 聚合（见 providerSpend），
+  // 没索引就要全表扫 usage_log —— 那是只增不减的明细表，上线几个月后每一单请求都会被它拖慢。
+  // 放在 SCHEMA 里会崩：SCHEMA 跑在本函数之前，那时老库还没有 provider 这一列。
+  db.exec("CREATE INDEX IF NOT EXISTS ix_usage_provider_ts ON usage_log(provider, ts)")
 }
 
 function migrate(db, from) {
@@ -540,6 +578,10 @@ export function deleteProvider(db, key) {
   const models = db.prepare("SELECT COUNT(*) AS n FROM models WHERE provider=?").get(k).n
   db.prepare("DELETE FROM models WHERE provider=?").run(k)
   db.prepare("DELETE FROM providers WHERE key=?").run(k)
+  // 预算与健康跟着走：留下孤儿行的话，日后重建同名供应商会**继承上一次的干涸标记**，
+  // 表现是「刚加完的新账号一上来就被摘掉」，且后台看不出为什么。
+  db.prepare("DELETE FROM provider_budgets WHERE provider=?").run(k)
+  db.prepare("DELETE FROM provider_health WHERE provider=?").run(k)
   return { ok: true, removedModels: models, droppedFromTiers: pruneTierModels(db) }
 }
 
@@ -781,6 +823,68 @@ export const usageRange = (db, from, to, limit = 50000) => db.prepare(`
   FROM usage_log l LEFT JOIN users u ON u.id = l.user_id
   WHERE l.day >= ? AND l.day <= ?
   ORDER BY l.ts DESC, l.id DESC LIMIT ?`).all(String(from), String(to), Number(limit) || 50000)
+
+// ==== 供应侧：预算与健康 ======================================================
+// 表定义与「为什么要有」见上面 SCHEMA 里 provider_budgets / provider_health 那段。
+// 这里只放存取；窗口语义、失败分类、候选过滤在 lib/supply.mjs（那边全是纯函数，好单测）。
+
+/** 某家在 [from, ∞) 内的消费（USD）。走 ix_usage_provider_ts，不扫全表。 */
+export function providerSpend(db, provider, from) {
+  const r = db.prepare("SELECT SUM(cost_usd) AS c FROM usage_log WHERE provider=? AND ts>=?")
+    .get(String(provider), Number(from) || 0)
+  return r && r.c ? Number(r.c) : 0
+}
+
+/** 一家的全部预算行（没设过就是空数组 = 不限）。 */
+export const listBudgets = (db, provider) =>
+  db.prepare("SELECT provider, win, limit_usd, anchor FROM provider_budgets WHERE provider=? ORDER BY win")
+    .all(String(provider))
+
+/** 全部预算行，按供应商分组好，供 supply.mjs 一次性建缓存。 */
+export function allBudgets(db) {
+  const out = new Map()
+  for (const r of db.prepare("SELECT provider, win, limit_usd, anchor FROM provider_budgets").all()) {
+    if (!out.has(r.provider)) out.set(r.provider, [])
+    out.get(r.provider).push(r)
+  }
+  return out
+}
+
+/**
+ * 落一条预算线。limit_usd ≤ 0 视为「取消这条线」，直接删行 ——
+ * 留一行 0 会和「不限」同义却多占一行，后台列表里看着像设过，其实没有。
+ */
+export function setBudget(db, provider, win, limitUsd, anchor = 0) {
+  const p = String(provider), w = String(win)
+  const lim = Number(limitUsd) || 0
+  if (lim <= 0) {
+    db.prepare("DELETE FROM provider_budgets WHERE provider=? AND win=?").run(p, w)
+    return null
+  }
+  db.prepare(`INSERT INTO provider_budgets(provider,win,limit_usd,anchor) VALUES(?,?,?,?)
+              ON CONFLICT(provider,win) DO UPDATE SET limit_usd=excluded.limit_usd, anchor=excluded.anchor`)
+    .run(p, w, lim, Number(anchor) || 0)
+  return db.prepare("SELECT provider, win, limit_usd, anchor FROM provider_budgets WHERE provider=? AND win=?").get(p, w)
+}
+
+export const deleteBudgets = (db, provider) =>
+  db.prepare("DELETE FROM provider_budgets WHERE provider=?").run(String(provider))
+
+/** 健康状态：全量读（进程启动时载进内存），与单家写入。 */
+export const listHealth = (db) => db.prepare("SELECT * FROM provider_health").all()
+
+export function saveHealth(db, provider, h) {
+  db.prepare(`INSERT INTO provider_health(provider,state,until,reason,http_status,noted_at,trips)
+              VALUES(?,?,?,?,?,?,?)
+              ON CONFLICT(provider) DO UPDATE SET
+                state=excluded.state, until=excluded.until, reason=excluded.reason,
+                http_status=excluded.http_status, noted_at=excluded.noted_at, trips=excluded.trips`).run(
+    String(provider), String(h.state || "ok"), Number(h.until) || 0, String(h.reason || ""),
+    Number(h.httpStatus) || 0, Number(h.notedAt) || 0, Number(h.trips) || 0)
+}
+
+export const deleteHealth = (db, provider) =>
+  db.prepare("DELETE FROM provider_health WHERE provider=?").run(String(provider))
 
 // ==== refresh token ===========================================================
 
