@@ -152,6 +152,18 @@ class TestLayoutSkeleton(unittest.TestCase):
         self.assertIn("'GRP78 ↑'", p)
         self.assertIn("'CHOP ↑'", p)
 
+    def test_quotes_declared_as_delimiters_not_glyphs(self):
+        """引号是定界符，不能被画进图里。
+
+        真机实测过：不说这句，模型会把撇号一起画出来（满图 'GRP78 ↑），
+        看着像排版事故；而"事后 PS 掉"恰恰是各刊明令禁止的图像操作。正文与负面词各堵一次。
+        """
+        p, neg = bp.build(spec())
+        self.assertIn("never draw the quotation marks", p)
+        self.assertIn("delimiters", p)
+        self.assertIn("quotation marks", neg)
+        self.assertIn("appear exactly once", p, "同一标签画两遍也实测出现过")
+
     def test_no_markdown_survives(self):
         s = spec(panels=[{"name": "**Trigger**", "labels": ["CaOx"],
                           "elements": ["# heading", "- bullet", "`code`"]}], arrows=[])

@@ -287,9 +287,15 @@ def main():
         sys.exit("!! --n 取 1–4（再多纯属烧额度，构图不稳靠改 spec 而不是靠抽卡）")
 
     model = args.model or (os.environ.get("QWEN_MODEL") or "").strip() or DEFAULT_MODEL
-    url = (os.environ.get("QWEN_BASE_URL") or "").strip() or DEFAULT_ENDPOINT
-    if not url.endswith("/generation"):
-        url = url.rstrip("/") + "/api/v1/services/aigc/multimodal-generation/generation"
+    # ★ 走平台代理时【终点就是代理地址】。这里曾经漏了一句：算出了代理地址却还是往 DashScope
+    #   直发，于是把「代理协议的请求体 + 本机转发令牌」发给了 DashScope —— 它当然回
+    #   InvalidApiKey，而服务端日志里一条记录都没有（请求压根没到），最难查的那种。
+    if proxy_url():
+        url = proxy_url()
+    else:
+        url = (os.environ.get("QWEN_BASE_URL") or "").strip() or DEFAULT_ENDPOINT
+        if not url.endswith("/generation"):
+            url = url.rstrip("/") + "/api/v1/services/aigc/multimodal-generation/generation"
     size = SIZES[ratio]
 
     payload = {
@@ -318,8 +324,10 @@ def main():
         print(json.dumps(proxy_payload if via else payload, ensure_ascii=False, indent=2)[:4000])
         return 0
 
-    # 平台代理这条路【不需要任何 key】：本机网关会贴上你的登录票据转给服务器。
-    key = None if via else api_key()
+    # 平台代理这条路【不需要生图 key】，但要带本机网关的转发令牌（网关注入 SCI_IMAGE_TOKEN）：
+    # /cloud/* 那道闸只收带令牌的本机请求，否则同机任何程序都能白嫖你的云端生图额度。
+    # 真正的生图 key 与登录票据都在网关/服务器那边贴，技能自始至终看不到。
+    key = (os.environ.get("SCI_IMAGE_TOKEN") or "").strip() if via else api_key()
     outdir = resolve_out_dir(args.outdir)
     saved = []
     stopped = None      # 被平台明确拒绝 → 记下原因并停掉后续候选张

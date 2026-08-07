@@ -118,7 +118,9 @@ NEG_LAYOUT = ("giant vertical cell on left, left brush border, vertical cell mem
               "central circular nucleus, panels merged into one scene, uneven panel widths")
 # 文字质量负面词：标签糊/串/重是这类图最高频的报废原因。
 NEG_TEXT = ("messy overlapping labels, blurry labels, text noise, garbled text, gibberish letters, "
-            "duplicated labels, label outside its panel, watermark, signature, caption block")
+            "duplicated labels, repeated label, label outside its panel, watermark, signature, caption block, "
+            # 实测：模型会把当作定界符的单引号一并画出来（满图 'GRP78 ↑），负面词与正文各堵一次
+            "quotation marks, apostrophes, quoted text, stray punctuation around labels")
 NEG_SCI = ("simple textbook illustration, generic kinase cascade, decorative DNA double helix, "
            "unrelated organelles, random floating molecules, low quality, lowres")
 
@@ -346,7 +348,13 @@ def build(spec):
         parts.append(strip_markdown(spec["notes"]).rstrip(".") + ".")
 
     parts.append(sty["tail"])
-    parts.append("Every label must be spelled exactly as given and must not overlap any other element.")
+    # 【必须显式说明引号只是定界符】实测（2026-08-07 真机出图）：单引号是让模型"照抄这几个字"
+    # 最有效的信号，但它会把撇号本身也画进图里 —— 满图的 'GRP78 ↑ 看着像排版事故。
+    # 说清楚"引号是分隔符、不要画"，比事后 PS 掉靠谱（PS 图恰恰是各刊明令禁止的操作）。
+    parts.append("The single quotation marks in this description are delimiters that mark exactly which "
+                 "characters to render; draw the enclosed text only and never draw the quotation marks "
+                 "themselves. Every label must be spelled exactly as given, appear exactly once, "
+                 "and must not overlap any other element.")
 
     prompt = strip_markdown(" ".join(parts))
 

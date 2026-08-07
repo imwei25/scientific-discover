@@ -4079,7 +4079,14 @@ function spawnOc() {
     // 技能会回退到读本机 QWEN_API_KEY，老用法不受影响。
     env: {
       ...process.env, PYTHONUTF8: "1", PYTHONIOENCODING: "utf-8",
-      ...(cloudLoggedIn() ? { SCI_IMAGE_URL: `http://127.0.0.1:${PORT}${CLOUD_PROXY_PREFIX}img/generate` } : {}),
+      // SCI_IMAGE_TOKEN 必须一起给：/cloud/* 那道闸【要求带本进程本次启动生成的转发令牌】
+      // （见下方 CLOUD_PROXY_PREFIX 的两道闸），少给这一个就是 401「本机转发令牌不正确」。
+      // 不能为了省事把 /cloud/img 从闸里放行 —— 那会让同机任何程序都能白嫖云端生图额度。
+      // 令牌本就随 provider 配置交给了 opencode（apiKey: local-…），给技能用是同一层信任。
+      ...(cloudLoggedIn() ? {
+        SCI_IMAGE_URL: `http://127.0.0.1:${PORT}${CLOUD_PROXY_PREFIX}img/generate`,
+        SCI_IMAGE_TOKEN: CLOUD_LOCAL_TOKEN,
+      } : {}),
     },
     // 【Windows 必须给】detached + shell 会让 cmd.exe 另开一个控制台窗口，
     // opencode 的启动横幅就直接糊在用户脸上（桌面版尤其突兀：主窗口旁边跳出个黑框）。
