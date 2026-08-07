@@ -110,6 +110,25 @@ test("阅读器型模块：reader 配置完整、模式标记与前言逐字一�
   }
 })
 
+// 前置条件闸（need）在界面上是三段：算出缺什么 → 存进状态 → 画到屏幕上。
+// 踩过的坑是【第三段丢了】：showBlocked 把提示写进 S[k].block 就完了，没有任何渲染代码读它，
+// 于是用户点了按钮界面纹丝不动，只剩一句通用空态文案。而且当时是从状态而不是从 DOM 确认的，
+// 所以"测过了"却没发现。另一处是闸只接在模式条上，面板里那个按钮直接调 run() 绕过去了。
+// 这几条都不需要浏览器就能守住：静态检查 reader.html 里这几段有没有同时在。
+test("阅读器：前置条件闸的三段必须齐全，且起一轮只有一个入口", () => {
+  const html = fs.readFileSync(new URL("../reader.html", import.meta.url), "utf8")
+  assert.match(html, /S\[k\]\.block\s*=/, "showBlocked 要把缺什么写进状态")
+  assert.match(html, /if \(s\.block\)/, "render 必须真的把 s.block 画出来——只写进状态等于没提示")
+  assert.match(html, /function tryRun\(/, "起一轮要有统一入口")
+  // 面板里那个按钮与「重新生成」都必须走 tryRun；直接调 run() 就绕过了闸
+  assert.match(html, /closest\("\[data-run\]"\)[\s\S]{0,120}tryRun\(/,
+    "面板中央那个按钮必须走 tryRun，不能直接 run()")
+  assert.match(html, /btnRerun[\s\S]{0,80}tryRun\(/, "「重新生成」也要走 tryRun")
+  // 缺配套文件时要给得出上传口，否则提示是死路
+  assert.match(html, /function extraUploadBtn\(/, "缺 extraUploadBtn")
+  assert.match(html, /data-upload/, "block 提示里要留上传按钮的位置，且 render 要把按钮挂进去")
+})
+
 // 这是"单篇研读"，不是检索模块：给了检索技能就等于默许它去找别的文献
 test("文献研读不该有检索类技能", () => {
   const sk = WF.skillsOf("litread")

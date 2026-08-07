@@ -228,6 +228,7 @@ button{font:inherit}
 .notebox.warn{background:#fdf3e6;border:1px solid #f0d7ae;color:#8a5a12}
 .notebox.err{background:#fdecea;border:1px solid #f5c2bd;color:var(--red)}
 .notebox.info{background:#fff;border:1px solid var(--line);color:var(--muted)}
+.notebox .blockact{margin-top:10px}
 
 .empty-hint{padding:38px 18px;text-align:center;color:var(--faint);font-size:13px;line-height:2}
 .empty-hint .big{display:block;font-size:14px;color:var(--muted);font-weight:600;margin-bottom:6px}
@@ -926,9 +927,7 @@ function blockedBy(k) {
 function onRail(k) {
   setMode(k)
   if (k === "chat") { $("q").focus(); return }
-  const miss = blockedBy(k)
-  if (miss) { showBlocked(k, miss); return }
-  if (S[k].status === "idle" && !busy()) run(k)
+  if (S[k].status === "idle") tryRun(k)     // 没跑过就顺手跑一轮；闸由 tryRun 统一把
 }
 
 /** 缺前置条件：就地说清缺什么、并把用户送到能补上它的地方（展开变量面板 / 亮出上传按钮） */
@@ -942,6 +941,9 @@ function showBlocked(k, miss) {
     return ""
   }).filter(Boolean)
   S[k].block = parts.join("；") + "。" + (M.needHint || "")
+  // 缺的是什么【种类】要留着：render 据此决定要不要在提示下面摆一个上传按钮。
+  // 只留文字的话，用户看到"请先上传配套的数值表"却没有任何地方能传 —— 死路一条。
+  S[k].blockMiss = miss
   if (miss.some((x) => x.kind === "var")) {
     $("varsBox").open = true
     renderVars(miss.filter((x) => x.kind === "var").map((x) => x.field))
@@ -964,11 +966,25 @@ function setMode(k) {
   $("aiBody").scrollTop = 0
 }
 
-$("btnRerun").addEventListener("click", () => { if (!busy()) run(mode, true) })
-// 空面板里那个「开始…」按钮（每次重画都会换一个 DOM 节点，所以用委托，别逐个绑）
+/**
+ * 起一轮的【唯一入口】——先过前置条件闸，再决定发不发。
+ *
+ * ★ 这里踩过一次：闸只接在了模式条那一个入口上，而面板中央那个按钮和「重新生成」都直接调
+ *   run()。于是 refcheck 里点面板里的「数据完整性」，没有数值表也照发；stats 的「基线表」
+ *   没指分组列也照发 —— 右边条子拦得住、面板里拦不住，同一件事两种行为。
+ *   凡是"起一轮"都必须走这里。
+ */
+function tryRun(k, force) {
+  if (busy()) return
+  const miss = blockedBy(k)
+  if (miss) { setMode(k); showBlocked(k, miss); return }
+  run(k, force)
+}
+$("btnRerun").addEventListener("click", () => tryRun(mode, true))
+// 空面板里那个按钮（每次重画都会换一个 DOM 节点，所以用委托，别逐个绑）
 $("aiBody").addEventListener("click", (e) => {
   const b = e.target.closest("[data-run]")
-  if (b && !busy()) run(b.dataset.run)
+  if (b) tryRun(b.dataset.run)
 })
 
 /* ============================================================
@@ -1010,6 +1026,16 @@ function render(m) {
   if (m === "chat") return renderChat()
   const s = S[m]
   let h = runHtml(m)
+  // ★ 缺前置条件的提示必须【真的画出来】。此前 showBlocked 只把它写进 S[k].block 就完了，
+  //   没有任何渲染代码读它 —— 于是用户点了按钮，界面纹丝不动、只剩一句通用空态文案，
+  //   完全不知道是缺了分组列还是缺了数值表。（我自己也差点漏过：当时是从 S[k].block
+  //   这个状态确认"闸生效"的，而屏幕上根本没有这句话。看状态不等于看见。）
+  if (s.block) {
+    h += '<div class="notebox warn">' + esc(s.block)
+      // 缺配套文件时就地给一个上传按钮，别让用户读完提示还得自己找地方传
+      + ((s.blockMiss || []).some((x) => x.kind === "data") ? '<div class="blockact" data-upload="1"></div>' : "")
+      + "</div>"
+  }
   if (s.err) h += '<div class="notebox err">⚠ ' + esc(s.err) + "</div>"
   // 正文优先用产物文件（翻译/大纲是写进文件的，对话里只有一句"已完成"），没有就用对话正文
   const body = s.doc != null ? s.doc : s.raw
@@ -1025,6 +1051,9 @@ function render(m) {
   }
   h += filesHtml(s.files)
   el.innerHTML = h
+  // 上传按钮是带监听的真 DOM 节点，塞不进 innerHTML 字符串里，重画完再挂进占位槽
+  const slot = el.querySelector("[data-upload]")
+  if (slot) { const b = extraUploadBtn(); if (b) slot.appendChild(b) }
   updateFoot()
 }
 
@@ -1079,6 +1108,7 @@ async function run(m, force, userTxt) {
   if (busy()) return
   if (!sid || !docName) return
   const s = S[m]
+  s.block = ""; s.blockMiss = null      // 真开跑了就把"缺前置条件"的提示撤掉
   if (m !== "chat" && force) { s.raw = ""; s.doc = null; s.docName = ""; s.files = [] }
 
   let q = ""

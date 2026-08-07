@@ -30,5 +30,20 @@ Object.assign(process.env, {
   CLOUD_STATE_PATH: process.env.CLOUD_STATE_PATH || path.join(DEV_DIR, "cloud-state.json"),
   MODEL_CFG_PATH: process.env.MODEL_CFG_PATH || path.join(DEV_DIR, "model-config.json"),
 })
+// ---- 登录态播种 ----
+// 登录态与模型配置落在 DEV_DIR（不污染 worktree 里被 git 跟踪的那两个文件）。但空目录起步
+// 意味着【没有任何模型凭据】—— route=none、hasKey=false，发一条消息就报没配模型，
+// 而界面上一切正常，只有真去跑一轮才发现。所以首次启动从主检出的 web/ 复制一份过来。
+// 只复制、之后各写各的：刷新 token 不会写回主检出，也就不会把那边的登录挤掉。
+const MAIN_WEB = process.env.MAIN_WEB || "D:/projects/scientific-discover/web"
+for (const [f, dest] of [["cloud-state.json", process.env.CLOUD_STATE_PATH], ["model-config.json", process.env.MODEL_CFG_PATH]]) {
+  try {
+    if (fs.existsSync(dest)) continue
+    const src = path.join(MAIN_WEB, f)
+    if (fs.existsSync(src)) { fs.copyFileSync(src, dest); console.log(`[dev] 已从主检出播种 ${f}`) }
+    else console.warn(`[dev] 主检出没有 ${f} —— 本网关将没有模型凭据，真实生成会失败`)
+  } catch (e) { console.warn(`[dev] 播种 ${f} 失败：${e.message}`) }
+}
+
 console.log(`[dev] skill-modules worktree 网关：端口=${process.env.PORT}，自带 opencode=${process.env.OC_URL}`)
 await import("./server.mjs")
