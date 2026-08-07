@@ -537,6 +537,59 @@ test("上游错误翻成人话：余额不足/密钥失效/限流各给各的下
   assert.equal(D({ name: "UnknownError", data: {} }, "cloud").length > 10, true)
 })
 
+// 上游额度耗尽（火山 5 小时配额打光，实测 2026-08-07 生产）是【另一条】通往"静默转圈"的路：
+// 它同样是 429，修前被当成限速 → 客户端显示"正在等待重试、请不要重发" + 看门狗无限续命。
+// 对用户的话必须与限速相反，而且绝不能说成"你的积分用尽"（他一分钱没花）。
+test("上游额度耗尽：与限速措辞相反、点明不是用户的积分、不指去 api-config", async (t) => {
+  const r = await rig(); t.after(() => r.close())
+  const D = r.gw.mod.describeModelError
+  const raw = '{"error":{"code":"UPSTREAM_QUOTA_EXCEEDED","message":"平台的上游模型额度已用尽（不是你的积分），本轮未能生成；预计 2026-08-07 14:12:52 +0800 CST 恢复。现在重试不会成功，请联系管理员充值或换一家供应商。"}}'
+  const m = D({ name: "APIError", data: { statusCode: 429, message: raw } }, "cloud")
+  assert.match(m, /14:12:52/, "恢复时刻要透到用户眼前，否则他只能盲试")
+  assert.match(m, /不是你的积分/)
+  assert.match(m, /重试不会成功/)
+  assert.doesNotMatch(m, /稍等片刻再试/, "这是限速的建议，用在额度耗尽上就是让用户白等几小时")
+  assert.doesNotMatch(m, /api-config/, "跟他自己的 API 配置无关")
+  // 与限速那条必须分得开
+  const rl = D({ name: "APIError", data: { statusCode: 429, message: '{"error":{"code":"UPSTREAM_RATE_LIMITED"}}' } }, "cloud")
+  assert.match(rl, /限速/)
+  assert.doesNotMatch(rl, /重试不会成功/)
+  // 正文被截断只剩错误码时也要给完整一句话
+  assert.match(D({ name: "APIError", data: { statusCode: 429, message: "UPSTREAM_QUOTA_EXCEEDED" } }, "cloud"), /上游模型额度已用尽/)
+})
+
+test("上游额度耗尽：网关记的是 upstream 档封顶态，不会误报成用户积分用尽", async (t) => {
+  const r = await rig((_q, res) => {
+    // 假上游照火山原样回：429 + AccountQuotaExceeded，且【不带】Retry-After
+    res.writeHead(429, { "content-type": "application/json" })
+    res.end(JSON.stringify({ error: {
+      code: "AccountQuotaExceeded", type: "TooManyRequests",
+      message: "You have exceeded the 5-hour usage quota. It will reset at 2026-08-07 14:12:52 +0800 CST.",
+    } }))
+  })
+  t.after(() => r.close())
+  await loginReady(r)
+  const x = await r.gw.req("/cloud/v1/chat/completions", {
+    method: "POST", body: { model: "x" }, headers: { authorization: "Bearer " + r.gw.cfg().apiKey },
+  })
+  assert.equal(x.status, 429)
+  assert.equal(x.json.error.code, "UPSTREAM_QUOTA_EXCEEDED", "sci-auth 要把它与限速分开：" + x.text)
+
+  const blk = r.gw.mod.cloudQuotaState()
+  assert.ok(blk, "本机网关也要记下来，否则 opencode 会把这个 429 当限速退避重试很久")
+  assert.equal(blk.kind, "upstream", "档位要对：说成 user 就会告诉用户'你的积分用尽'")
+  assert.match(blk.message, /不是你的积分/)
+  assert.match(blk.message, /14:12:52/)
+
+  // 下一条消息当场拒收，且【不去查用户积分】（他积分好得很，查了只会放行一轮必然失败的对话）
+  const sid = "ws_upstreamblocktest"
+  t.after(() => { for (const d of ["outputs", "uploads"]) fs.rmSync(path.join(REPO_ROOT, d, sid), { recursive: true, force: true }) })
+  const s = await r.gw.req("/api/chat/start", { method: "POST", body: { q: "继续写", sid } })
+  assert.equal(s.json.sent, false)
+  assert.match(s.json.err, /不是你的积分/)
+  assert.doesNotMatch(s.json.err, /积分已用尽（上限/, "别把上游耗尽说成用户的积分线用尽")
+})
+
 test("积分用尽的兜底措辞：云端没给 message 时也要说清哪条线、何时恢复", async (t) => {
   const r = await rig(); t.after(() => r.close())
   const Q = r.gw.mod.quotaBlockMessage

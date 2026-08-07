@@ -1680,6 +1680,16 @@ export function describeModelError(err, route) {
   if (/QUEUE_TIMEOUT/.test(raw)) return "云端排队超时：此刻同时使用的人太多，本轮未能开始。请稍后重试（管理员可在后台「并发与排队」调大上限）。"
   if (/QUEUE_FULL/.test(raw)) return "云端排队已满：此刻同时使用的人太多，本轮未能开始。请稍等几分钟再试。"
   if (/UPSTREAM_RATE_LIMITED/.test(raw)) return "上游模型服务正在限速，本轮未能生成。稍等片刻再试即可（这不是你的额度问题）。"
+  // 上游【额度耗尽】：同样是 429，但和上面那条限速的建议完全相反 —— 它要等到某个时刻或要充值，
+  // 现在重试一次都不会成功。实测（2026-08-07 生产）火山方舟额度打光就回这个，而修前全被当成
+  // 限速：客户端显示"正在等待重试、请不要重发"、看门狗又被无限续命，用户守着转圈到放弃。
+  // 云端已把恢复时刻写进 message（那是唯一有用的信息，只存在于上游原话里），直接用它。
+  if (/UPSTREAM_QUOTA_EXCEEDED/.test(raw)) {
+    let msg = ""
+    try { msg = JSON.parse(raw.slice(raw.indexOf("{"))).error?.message || "" } catch {}
+    return (msg || "平台的上游模型额度已用尽（不是你的积分），本轮未能生成。现在重试不会成功，请联系管理员充值或换一家供应商。")
+      + "（你自己的积分没有被扣。）"
+  }
   // 平台积分用尽（云端 429 QUOTA_EXCEEDED）。它同样是 429，但落到下面那条通用限流分支上就全错了：
   // "稍等片刻再试"对日积分来说要等到 UTC 0 点，对月积分更是要等下个月，用户会一直重试到放弃。
   // 云端已经把该说的话（哪条线、上限多少、什么时候恢复）写在 message 里，直接用它。
@@ -2237,9 +2247,19 @@ function attachJob(job, req, res) {
 // 【为什么要连带 abort】积分是按账号算的：这一步撞了 429，本轮后续每一步都会照样撞回来。
 // 【为什么记一段"封顶态"而不是只报这一轮】用户被拦下后第一反应是再发一条。留着这段判定，
 // 下一条消息就能立刻拒收（并附上云端原话），不必再赔一轮转圈。
-let cloudQuotaBlock = null                   // { message, scope, at } —— 最近一次云端判定的积分用尽
-const CLOUD_QUOTA_BLOCK_TTL = 5 * 60_000     // 判定的新鲜期：过期即自愈（起轮前还会再问云端确认一次，见 /api/chat/start）
-const cloudQuotaBlocked = () => (cloudQuotaBlock && Date.now() - cloudQuotaBlock.at < CLOUD_QUOTA_BLOCK_TTL) ? cloudQuotaBlock : null
+// 两种"发不出去"的封顶，机制相同、对用户的话完全不同，用 kind 区分：
+//   · user     —— 你自己的平台积分用尽（云端 QUOTA_EXCEEDED）：等日/月重置或找管理员升档；
+//   · upstream —— 平台的上游模型额度用尽（云端 UPSTREAM_QUOTA_EXCEEDED，如火山方舟 5 小时配额
+//                 打光）：跟用户的积分【无关】，他一分钱没花掉，只能等恢复或管理员充值/换供应商。
+// 把 upstream 说成"你的积分用尽"会招来一堆"我明明还有积分"的质问，反过来也一样糟。
+let cloudQuotaBlock = null                   // { kind, message, scope, at }
+// 新鲜期分开：用户积分要等 UTC 零点/月初，判定放 5 分钟很安全（起轮前还会再问云端确认）；
+// 上游额度随时可能被管理员充值/加一家供应商救活，所以只压 60 秒，过期就让它真去试一次。
+const BLOCK_TTL = { user: 5 * 60_000, upstream: 60_000 }
+const cloudQuotaBlocked = () => {
+  if (!cloudQuotaBlock) return null
+  return Date.now() - cloudQuotaBlock.at < (BLOCK_TTL[cloudQuotaBlock.kind] || 60_000) ? cloudQuotaBlock : null
+}
 /** 仅供测试与排障 */
 export const cloudQuotaState = () => cloudQuotaBlocked()
 
@@ -2267,14 +2287,27 @@ export function quotaBlockMessage(err) {
   return "平台积分已用尽（日积分每日 0 点(UTC)重置，月积分每月 1 日重置）"
 }
 
-/** cloudForward 认出云端的 429 QUOTA_EXCEEDED 时调用：记下封顶态 + 掐掉在跑的各轮 */
-function noteCloudQuotaExceeded(err) {
-  const message = quotaBlockMessage(err)
+/** 上游额度耗尽时给用户的一句话（云端已把恢复时刻算进 message，那是唯一真正有用的信息）。 */
+export function upstreamBlockMessage(err) {
+  const m = String(err?.message || "").replace(/\s+/g, " ").trim()
+  const base = m || "平台的上游模型额度已用尽（不是你的积分），现在重试不会成功，请联系管理员充值或换一家供应商"
+  return base + (m ? "" : "。") + "你自己的积分没有被扣。"
+}
+
+/**
+ * cloudForward 认出云端的 429 时调用：记下封顶态 + 掐掉在跑的各轮。
+ * kind="user" 是用户自己的积分用尽；kind="upstream" 是平台的上游额度用尽（与他的积分无关）。
+ */
+function noteCloudQuotaExceeded(err, kind = "user") {
+  const message = kind === "upstream" ? upstreamBlockMessage(err) : quotaBlockMessage(err)
   const first = !cloudQuotaBlocked()
-  cloudQuotaBlock = { message, scope: String(err?.scope || ""), at: Date.now() }
-  clearCloudQuotaCache()   // 顶栏下一次刷新要看到真实的"已用尽"，别再喂那份 20 秒前还有余额的旧数
-  if (first) console.warn(`[cloud] 云端积分已用尽（${cloudQuotaBlock.scope || "?"}）：${message}`)
-  // 推给所有在跑的轮：积分按账号算，这台机器上任何一轮都撞在同一条线上（打包版通常也只有一轮）。
+  cloudQuotaBlock = { kind, message, scope: String(err?.scope || ""), at: Date.now() }
+  // 只有"用户积分用尽"才要刷顶栏：上游额度耗尽时用户的积分没变，把缓存清掉只是白问一次云端。
+  if (kind === "user") clearCloudQuotaCache()
+  if (first) console.warn(kind === "upstream"
+    ? `[cloud] 上游模型额度已用尽：${message}`
+    : `[cloud] 云端积分已用尽（${cloudQuotaBlock.scope || "?"}）：${message}`)
+  // 推给所有在跑的轮：两种封顶都是账号/平台级的，这台机器上任何一轮都撞在同一条线上。
   for (const j of jobs.values()) { if (j.running && j.onQuotaBlock) { try { j.onQuotaBlock(message) } catch {} } }
 }
 
@@ -2426,7 +2459,10 @@ async function cloudForward(req, res, u) {
     const txt = await r.text().catch(() => "")
     let e = null
     try { e = JSON.parse(txt)?.error || null } catch { /* 不是我们的结构化错误（网关外的 429）→ 只透传 */ }
-    if (e?.code === "QUOTA_EXCEEDED") noteCloudQuotaExceeded(e)
+    if (e?.code === "QUOTA_EXCEEDED") noteCloudQuotaExceeded(e, "user")
+    // 上游额度耗尽同样要当场收场：opencode 把 429 当限速会退避重试很久，而这个 429
+    // 等到恢复时刻之前【一次都不会成功】—— 等它就是让用户白转圈（实测过的第二条入口）。
+    else if (e?.code === "UPSTREAM_QUOTA_EXCEEDED") noteCloudQuotaExceeded(e, "upstream")
     res.writeHead(429, h)
     return res.end(txt)
   }
@@ -3403,6 +3439,12 @@ export const server = http.createServer(async (req, res) => {
       // 也别凭一个问不到的判定甩用户一句"积分已用尽"，那种误报最难解释。
       {
         const blk = cloudQuotaBlocked()
+        if (blk?.kind === "upstream") {
+          // 上游额度耗尽：【不能】拿用户的积分去确认——他积分好得很，问了也只会得出"没用尽"
+          // 从而放行一轮必然失败的对话。这里只靠判定本身，而它的新鲜期只有 60 秒
+          // （管理员充值/加供应商后最多等一分钟就会真去试一次）。
+          return send(res, 200, "application/json", JSON.stringify({ ok: false, sid, sent: false, err: blk.message }))
+        }
         if (blk) {
           const cq = await cloudQuota(true)   // 别叫 q —— 本作用域里的 q 是用户这条消息的正文
           if (cloudQuotaExhausted(cq))
