@@ -762,6 +762,51 @@ export function stepsFor(mod, rawValues = {}) {
   return [...head, ...rest]
 }
 
+// ---- 派生：一段历史消息属于哪一步（前端把对话按步骤分组回显时用）----
+// 【为什么要在服务端算】步骤归属藏在消息的 tool part 里，而 /api/history 只回文本；
+//   前端刷新后拿不到这些 part，只能得到一条没有段落的流水。直播时前端是靠 SSE 的 skill 事件
+//   分的组（index.html 的 markStepBySkill），这里必须用【同一套口径】重放 —— 否则同一段对话
+//   "刷新前按步骤分了组、刷新后糊成一片"。
+// 【纯函数】不碰 IO，回归测试见 test/workflow.test.mjs。
+
+/**
+ * 一条消息调了哪些技能 → 它属于哪一步。
+ * 口径：取消息里【第一个】认得出步骤的技能。一轮可能横跨两步（agent 会合并步骤），而界面上
+ *   一个回合是一个不可分割的框，只能整体归给一步；前端也是"本轮第一个说了算"，两边必须一致。
+ * 同一技能对应多步时（综述的"筛选"与"成文"都用 literature-review）取【还没用过的】那一步，
+ *   与前端 markStepBySkill 的"取第一个还没完成的"同序。用过的记进 seen（调用方持有，跨消息累积）。
+ * @param parts 消息的 parts 数组
+ * @param steps stepsFor() 的结果（已按表单裁剪）
+ * @param seen  Set<stepId>，被本函数就地更新
+ * @returns 命中的 step 对象；认不出回 null
+ */
+export function stepOfParts(parts, steps, seen) {
+  if (!steps?.length) return null
+  for (const p of parts || []) {
+    if (p?.type !== "tool" || p.tool !== "skill") continue
+    const sk = p.state?.input?.name        // 技能名的取法与直播那条一致（server.mjs 的 broadcast("tool")）
+    if (!sk) continue
+    const hit = steps.find((s) => s.skill === sk && !seen.has(s.id)) || steps.find((s) => s.skill === sk)
+    if (hit) { seen.add(hit.id); return hit }
+  }
+  return null
+}
+
+/**
+ * 用户的提问归到它【引出的】那一步（紧随其后那条助手消息的步骤），而不是上一步。
+ * 【为什么】直播时分组是在这一轮开跑之后才识别出来的，前端会把提问气泡一起收进新分组
+ * （index.html 的 absorbTail）。不做这一步，刷新后每个步骤框都从"AI 已经开口"的中间开始，
+ * 用户的提问被留在上一步的框里，读起来像张冠李戴。就地修改并返回同一个数组。
+ */
+export function fillUserSteps(msgs) {
+  for (let i = 0; i < msgs.length; i++) {
+    if (msgs[i].role !== "user") continue
+    const nx = msgs[i + 1]
+    if (nx?.role === "assistant" && nx.step) { msgs[i].step = nx.step; msgs[i].stepName = nx.stepName }
+  }
+  return msgs
+}
+
 // ---- 产物 → 渲染器 ----
 // 认产物文件名，不要求 agent 输出 JSON（模型格式会漂，脆）。认不出的返回 null，
 // 由前端按既有逻辑当普通产物展示 —— 绝不能因为"没匹配上渲染器"就把文件藏起来。

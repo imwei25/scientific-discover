@@ -621,6 +621,29 @@
      "不凭记忆造引用""只出待核信号"）藏在没人会去悬停的 tooltip 里，触屏上更是永远看不到 */
   .wfstep[title] { text-decoration: underline dotted currentColor 1px; text-underline-offset: 3px; cursor: help; }
   .wfsteps .wsx { opacity: .6; }
+  /* 已经有输出的步骤 = 可点的锚点。写在 .wfstep[title] 之后：同特异度下后写的赢，
+     否则光标会一直是 help，用户看不出它能点。 */
+  .wfstep.jump { cursor: pointer; }
+  .wfstep.jump:hover { border-color: var(--cyan); color: var(--cyan); }
+  .wfstep.jump:focus-visible { outline: 2px solid var(--cyan); outline-offset: 2px; }
+
+  /* 步骤分组框：同一步骤产生的对话与产物收在一起，步骤之间明确隔开（机制见 JS 里 startGroup 的头注） */
+  .wfgrp { align-self: stretch; border: 1px solid var(--line-hi); border-radius: var(--r-md);
+    background: rgba(59,111,212,.028); scroll-margin-top: 6px; }
+  .wfgrp-hd { display: flex; align-items: center; gap: 7px; padding: 7px 12px; font-size: 12px; color: #46586e;
+    background: var(--card); border-bottom: 1px solid var(--line-hi); border-radius: var(--r-md) var(--r-md) 0 0; }
+  .wfgrp-hd .wgno { flex: none; display: inline-flex; align-items: center; justify-content: center;
+    min-width: 17px; height: 17px; padding: 0 4px; border-radius: 999px;
+    background: var(--chip); color: var(--faint); font-size: 10.5px; font-weight: 700; }
+  .wfgrp-hd b { color: var(--text); font-weight: 600; }
+  .wfgrp-hd .wgtag { flex: none; font-size: 10px; color: var(--faint);
+    border: 1px solid var(--line-hi); border-radius: 3px; padding: 0 4px; }
+  /* 与 #log 同一套 flex 列布局：.user 靠右、.bot 撑满都是靠父级 flex 生效的，
+     换成普通块级容器的话，所有气泡会一起变成整宽，与分组外的对话长相不一致。 */
+  .wfgrp-bd { display: flex; flex-direction: column; gap: 12px; padding: 12px; }
+  /* 点流程条跳过来时闪一下：长对话里滚过去之后，用户需要知道"就是这一框" */
+  .wfgrp.flash { animation: wgflash 1.5s ease; }
+  @keyframes wgflash { 0%, 12% { box-shadow: 0 0 0 3px rgba(59,111,212,.3); } 100% { box-shadow: 0 0 0 3px rgba(59,111,212,0); } }
 
   /* 结构化产物卡：文献列表 / 核查报告 / 检索成败分栏 */
   .art { align-self: stretch; background: var(--card); border: 1px solid var(--line-hi); border-radius: var(--r-md); margin: 6px 0; overflow: hidden; }
@@ -1655,6 +1678,116 @@ function paintStreamMd(el, src) {
   notes.forEach((x) => el.appendChild(x))
 }
 
+// ============ 步骤分组：同一步骤的输出收进一个框，步骤之间隔开 ============
+// 【为什么要分组】一条 12 步的流水线跑几十分钟、几十轮，输出全糊在一条流水里 —— 用户想回头看
+//   "引用核查那步到底说了什么"只能从头翻。切开之后，顶部流程条的每一格就成了可点的锚点。
+// 【归属规则】一轮（一个 .turn）属于本轮【第一个】识别出来的步骤，认定后本轮不再改。
+//   agent 会把两步并在一轮里做，而 DOM 上没法把一个回合劈成两半；"第一个说了算"这条规则
+//   同时也是服务端 /api/history 回放时用的口径 —— 两边必须一致，否则同一段对话
+//   "刷新前按步骤分了组、刷新后糊成一片"（本文件里 assistant 合并那处踩的是同一类坑）。
+// 【返工会开新框】流程退回上游重做时，同一步骤会出现第二个框（标「第 2 次」）。
+//   点流程条跳的是【第一个】框：用户找的是这一步最初的产出。
+// 【自由对话不分组】chat 会话没有步骤集，startGroup 永远不会被调到，界面与改前完全一样。
+let wfGroups = []          // 按时间顺序的分组：{ step, name, el, body, seq, pinned }
+let wfCurGroup = null      // 当前收内容的分组（null = 还没识别出步骤，内容照旧直接挂在 #log 上）
+let liveTurn = null        // 正在直播的那个 .turn（absorbTail 要把它从上一组挪进新组）
+let turnStepFixed = false  // 本轮是否已认过步骤（"第一个说了算"）
+
+/** 往对话流里追加内容的统一入口：有当前分组就进分组，没有就照旧挂 #log */
+function logAppend(node) { (wfCurGroup ? wfCurGroup.body : log).appendChild(node); return node }
+function wfResetGroups() { wfGroups = []; wfCurGroup = null; liveTurn = null; turnStepFixed = false }
+const wfFirstGroup = (id) => wfGroups.find((g) => g.step === id)
+
+/** 分组头：第几步 + 名称（+ 把关角标 / 返工次数）。
+ *  步骤集要等 /api/workflow/state 回来才有，拿不到就先只写名字，updateStepsBar 里会再刷一遍。 */
+function labelGroup(g) {
+  const list = liveSteps || wfCache.get(currentModule)?.steps || []
+  const i = list.findIndex((s) => s.id === g.step)
+  const st = i >= 0 ? list[i] : null
+  if (st?.name) { g.name = st.name; g.el.dataset.name = st.name }
+  const hd = g.el.querySelector(".wfgrp-hd")
+  hd.replaceChildren()
+  if (i >= 0) hd.appendChild(Object.assign(document.createElement("span"), { className: "wgno", textContent: String(i + 1) }))
+  hd.appendChild(Object.assign(document.createElement("b"), { textContent: g.name || g.step }))
+  if (st?.gate) hd.appendChild(Object.assign(document.createElement("span"), { className: "wgtag", textContent: "把关" }))
+  // 同一步骤的第二个框 = 返工重做。不标的话，上下两个同名的框看起来像重复渲染。
+  if (g.seq > 1) hd.appendChild(Object.assign(document.createElement("span"), { className: "wgtag", textContent: "第 " + g.seq + " 次" }))
+}
+
+/** 开一个新分组。同一步骤连着来不重开框；步骤变了才切。pinned = 用户刚提交过这一步的表单。 */
+function startGroup(stepId, stepName, pinned) {
+  if (!stepId) return null
+  if (wfCurGroup?.step === stepId) return wfCurGroup
+  const el = document.createElement("div"); el.className = "wfgrp"; el.dataset.step = stepId
+  if (stepName) el.dataset.name = stepName
+  el.append(Object.assign(document.createElement("div"), { className: "wfgrp-hd" }),
+            Object.assign(document.createElement("div"), { className: "wfgrp-bd" }))
+  log.appendChild(el)
+  const g = { step: stepId, name: stepName || "", el, body: el.querySelector(".wfgrp-bd"),
+    seq: wfGroups.filter((x) => x.step === stepId).length + 1, pinned: !!pinned }
+  wfGroups.push(g)
+  absorbTail(g)        // 触发这一步的那条用户提问、以及已经开跑的这一轮，要一起收进来
+  wfCurGroup = g
+  labelGroup(g)
+  refreshStepBar()     // 这一步现在有落点了 → 流程条上那一格变成可点
+  return g
+}
+
+/**
+ * 把"本该属于新分组、却已经先贴出去了"的尾巴挪进来。
+ * 【为什么需要】步骤是靠技能调用识别的，而识别发生在这一轮【开跑之后】—— 那时用户的提问气泡
+ *   和本轮的回合框都已经贴进上一个分组（或 #log）里了。不挪的话，每个步骤的框都从
+ *   "AI 已经开口"的中间开始，用户的提问被留在上一步的框里，读起来像张冠李戴。
+ * 【边界】只收「正在直播的这一轮」和它前面紧挨着的用户消息，别的一概不动 ——
+ *   上一步的产物卡、已收尾的助手回合都是上一步的产出，拖过来等于篡改历史。
+ */
+function absorbTail(g) {
+  const take = []
+  const grab = (n) => {
+    if (!n) return false
+    if (n === liveTurn) { take.push(n); return true }
+    if (n.classList?.contains("msg") && n.classList.contains("user")) { take.push(n); return true }
+    return false
+  }
+  const prev = wfGroups[wfGroups.length - 2]   // g 已经入列，上一组在倒数第二个
+  let n = prev ? prev.body.lastElementChild : g.el.previousElementSibling
+  while (grab(n)) n = n.previousElementSibling
+  take.reverse().forEach((x) => g.body.appendChild(x))
+}
+
+/** 点流程条 → 滚到这一步的第一个分组，并闪一下 */
+function jumpToStep(id) {
+  const g = wfFirstGroup(id); if (!g) return
+  // 不用 scrollIntoView：#log 才是滚动容器，交给浏览器挑"最近的可滚动祖先"在嵌套布局里不稳。
+  const top = log.scrollTop + g.el.getBoundingClientRect().top - log.getBoundingClientRect().top - 6
+  log.scrollTo({ top: Math.max(0, top), behavior: "smooth" })
+  g.el.classList.remove("flash"); void g.el.offsetWidth; g.el.classList.add("flash")
+  setTimeout(() => { g.el.classList.remove("flash") }, 1600)
+}
+
+/** 重画流程条（分组有增减 → 哪几格可点会变）。步骤集还没下发时 updateStepsBar 自己会早退。 */
+function refreshStepBar() { try { updateStepsBar(liveDone, liveCur) } catch (_) {} }
+
+/** 按 DOM 重建分组索引（编辑回退砍掉半截对话之后用）*/
+function resyncGroups() {
+  wfGroups = [...log.children].filter((el) => el.classList.contains("wfgrp"))
+    .map((el) => ({ step: el.dataset.step, name: el.dataset.name || "", el, body: el.querySelector(".wfgrp-bd"), seq: 1 }))
+    .filter((g) => { if (!g.body || !g.body.children.length) { g.el.remove(); return false } return true })   // 被砍空的框别留在界面上
+  wfGroups.forEach((g, i) => { g.seq = wfGroups.slice(0, i).filter((x) => x.step === g.step).length + 1; labelGroup(g) })
+  wfCurGroup = wfGroups[wfGroups.length - 1] || null
+  refreshStepBar()
+}
+
+/** 编辑历史消息时清掉这条及其之后的一切。
+ *  【为什么不能只删同级兄弟】分组把对话切成了嵌套结构：只删 nextSibling 的话，
+ *  后面几个步骤的【整框】会留在界面上 —— 后端已经把那些轮次回退掉了，界面却还显示着。 */
+function truncateFrom(node) {
+  for (let n = node; n && n !== log; n = n.parentElement)
+    for (let s = n.nextSibling; s; ) { const nx = s.nextSibling; s.remove(); s = nx }
+  node.remove()
+  resyncGroups()
+}
+
 function add(cls, text) {
   const d = document.createElement("div"); d.className = "msg " + cls
   if (cls === "bot") { d.classList.add("answer", "md"); d.innerHTML = renderMarkdown(text); enhanceCode(d) }
@@ -1665,7 +1798,7 @@ function add(cls, text) {
     eb.addEventListener("click", () => startEdit(d))
     d.append(span, eb)
   }
-  log.appendChild(d); log.scrollTop = log.scrollHeight; return d
+  logAppend(d); log.scrollTop = log.scrollHeight; return d
 }
 // 编辑历史消息：改文本 → 从这条起清空后续对话记录（文件不动）→ 以编辑后的内容重新生成
 function startEdit(userDiv) {
@@ -1708,7 +1841,7 @@ async function submitEdit(userDiv, newText) {
     try { ok = (await fetch("api/revert?uindex=" + idx + sidQ(), { method: "POST" }).then(r => r.json())).ok } catch {}
     if (!ok) { alert("回退失败，无法编辑，请重试"); return }
   }
-  for (let n = userDiv; n; ) { const next = n.nextSibling; n.remove(); n = next }   // 清空这条及之后的 DOM
+  truncateFrom(userDiv)   // 清空这条及之后的 DOM（要穿透步骤分组，见函数头注）
   // 【这一步失败是不可逆的】revert 已经在后端把这条及其后的所有轮次丢掉了，无法撤销。
   // 若紧接着的重发再失败（网络抖动/容器重启），结果就是：后续对话真的没了，而编辑后的内容
   // 也从未提交 —— 用户刷新页面才发现丢了十几轮。所以必须如实告知，并保住编辑后的原文。
@@ -1819,7 +1952,7 @@ function addProducts(list) {
     }
     wrap.appendChild(card)
   }
-  log.appendChild(wrap); log.scrollTop = log.scrollHeight
+  logAppend(wrap); log.scrollTop = log.scrollHeight
 }
 // ---- 图片灯箱 ----
 const lb = document.createElement("div"); lb.className = "lightbox"; lb.innerHTML = '<img alt="">'; document.body.appendChild(lb)
@@ -2171,8 +2304,17 @@ async function resumeSession(id) {                 // 载入历史 → 设为当
   ])
   if (sessionId !== id) return                     // 等待期间用户又切走了 → 放弃本次渲染
   log.innerHTML = ""
+  // ★ 这几行必须在【渲染历史之前】。它们原来排在 for 循环下面，而回放历史时要按每条消息的
+  //   step 开分组、分组头要拿 liveSteps 里的步骤名与序号 —— 清理排在后面的话，整段历史会用
+  //   【上一个会话】的步骤集来标号（切会话看到的是另一个模块的步骤名）。
+  liveSteps = null; liveDone = []; liveCur = null; liveFailed = []  // 步骤集/进度随会话走
+  liveImplied = []; liveStale = []
+  wfResetGroups()                                   // 分组索引也随会话清掉，别把上一个会话的框认成本会话的
+  stepsHost = null; stepsHostEl.replaceChildren()   // 步骤条也随会话清掉
   if (histFailed) addNote("⚠ 这个会话的历史没能载入（网络或服务异常）。请刷新重试——你的对话没有丢失，只是这次没读到。")
-  for (const m of hist) add(m.role === "user" ? "user" : "bot", m.text)
+  // step 由服务端按 tool part 里的技能重放得出（见 /api/history）：与直播同口径，
+  // 刷新前后同一段对话分组一致。chat 会话不带 step，这里就一个分组都不会开。
+  for (const m of hist) { if (m.step) startGroup(m.step, m.stepName); add(m.role === "user" ? "user" : "bot", m.text) }
   renderFiles((outs || []).map(o => o.name))       // 产物随会话持久回显
   // 有历史 = 这个会话已经开始过，别再带 module 去补绑。
   // ★ histFailed 时 hist 是空数组，但那【不代表】会话是空的 —— 它代表"不知道"。判成"没开始过"的话：
@@ -2180,8 +2322,6 @@ async function resumeSession(id) {                 // 载入历史 → 设为当
   //   服务端见该会话未绑定就补绑 → 这条老对话被永久绑进受限模块，而界面没有解绑的入口。
   //   方向必须 fail-safe：拿不准就按"已开始"处理，代价只是少补一次绑定。
   sessionStarted = hist.length > 0 || histFailed
-  liveSteps = null; liveDone = []; liveCur = null; liveFailed = []  // 步骤集/进度随会话走
-  stepsHost = null; stepsHostEl.replaceChildren()   // 步骤条也随会话清掉
   pendingWfCard = ""; pendingWfForm = null; lastCardText = ""   // 上一个会话没发成功的任务卡不许跟过来
   offeredSteps.clear()                             // 逐步表单的"已给过"记录是每会话的
   HDR_CACHE.clear()                                // 表头缓存按文件名存，跨会话同名文件会串列名
@@ -2198,7 +2338,7 @@ function clearCurrentSession() {
   detachStream(); sessionId = null; localStorage.removeItem("nm_sid")
   sessionStarted = false; pendingWfCard = ""; pendingWfForm = null; lastCardText = ""
   offeredSteps.clear(); HDR_CACHE.clear()
-  log.innerHTML = ""; renderFiles([]); renderUploads([]); renderWelcome(); zScopeReset(); loadZotLib()
+  log.innerHTML = ""; wfResetGroups(); renderFiles([]); renderUploads([]); renderWelcome(); zScopeReset(); loadZotLib()
   stepsHost = null; stepsHostEl.replaceChildren()  // 步骤条在 #log 之外，清 log 不会连带清它
 }
 async function deleteSession(id, title) {           // 删除会话（不可撤销，先确认；进行中的生成由后端一并终止）
@@ -2778,6 +2918,14 @@ function stepsBar(steps, done, cur, failed, off, implied, stale) {
           : "这道闸跑过了，但结论是未通过——报告里列了要改的问题，改完要重跑本闸")
         : isCur ? "当前进行到这一步" : dn.has(s.id) ? "已完成" : "尚未开始",
       s.gate ? "这是质量把关步骤，不通过会退回上游返工" : "", s.hint || ""].filter(Boolean).join("；")
+    // 这一步已经有输出框了 → 变成可点的锚点，跳到它的【第一个】框（返工会有第二个框，
+    // 用户找的是这一步最初的产出）。没有框就不给点：一个点了没反应的控件比不可点更糟。
+    if (wfFirstGroup(s.id)) {
+      el.classList.add("jump"); el.setAttribute("role", "button"); el.tabIndex = 0
+      el.title = (el.title ? el.title + "；" : "") + "点击跳到这一步的输出"
+      el.addEventListener("click", () => jumpToStep(s.id))
+      el.addEventListener("keydown", (ev) => { if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); jumpToStep(s.id) } })
+    }
     bar.appendChild(el)
   })
   return bar
@@ -2822,7 +2970,7 @@ async function renderArtifacts(list) {
       const el = a.render === "evidence" ? evidenceCard(a.name, txt)
         : a.render === "retrieval" ? retrievalCard(a.name, txt)
         : reportCard(a.name, txt, a.render)
-      if (el) { log.appendChild(el); scrollFollow() }
+      if (el) { logAppend(el); scrollFollow() }
     } catch (_) { /* 渲染失败不影响普通产物卡，静默跳过 */ }
   }
 }
@@ -3034,7 +3182,15 @@ function markStepBySkill(skill) {
   // 同一个技能可能对应多步（如 literature-review 既做筛选又做成文）：取【第一个还没完成的】那步，
   // 否则进度会被打回到已经走过的位置。
   const hit = list.find((s) => s.skill === skill && !liveDone.includes(s.id)) || list.find((s) => s.skill === skill)
-  if (!hit || hit.id === liveCur) return
+  if (!hit) return
+  // 本轮的步骤分组："第一个说了算"（见 startGroup 头注）。pinned = 用户刚用步骤表单点过名，
+  // 那一步已经开好框了，本轮不因为 agent 顺手先调了别的技能就改归属；标记一次性消费。
+  if (!turnStepFixed) {
+    turnStepFixed = true
+    if (wfCurGroup?.pinned) wfCurGroup.pinned = false
+    else startGroup(hit.id, hit.name)
+  }
+  if (hit.id === liveCur) return
   liveCur = hit.id
   updateStepsBar(liveDone, liveCur)
 }
@@ -3057,6 +3213,9 @@ function updateStepsBar(done, cur, steps, failed, implied, stale) {
   const bar = stepsBar(list, liveDone, cur || liveCur, liveFailed, null, liveImplied, liveStale)
   stepsHostEl.replaceChildren(bar)   // 独立容器，一行就是它自己；不再往 #log 里插（会挡正文）
   stepsHost = bar
+  // 分组头要的步骤名与序号来自这份 list，而分组可能在 list 下发【之前】就建好了
+  // （回放历史时 /api/workflow/state 还在路上）—— 拿到就补标一遍，否则头上只有一个 id。
+  wfGroups.forEach(labelGroup)
 }
 // ---- 逐步表单：一轮结束后，若下一步是"有表单的步骤"就地给一张卡 ----
 // 【为什么只对有 form 的步骤给】不是每一步都值得插卡。像"引用核查"这种没有可勾选参数的步骤，
@@ -3118,6 +3277,9 @@ async function submitStepForm(modId, step, values, card) {
   if (!text) { card.remove(); addNote("⚠ 这一步一项都没勾——直接在输入框里说就行。"); q.focus(); return }
   card.remove()
   pendingWfCard = text
+  // 用户点名要走这一步 → 现在就开框，接下来那条"继续下一步"的气泡才落在新框里而不是上一步框尾。
+  // pinned：本轮不再被技能识别改归属（agent 可能顺手先调了别的技能）。
+  startGroup(step.id, step.name, true)
   await sendMessage("继续下一步：" + step.name)
 }
 
@@ -3188,9 +3350,10 @@ let sending = false     // POST /api/chat/start 往返期间为 true：此时还
 function sidQ() { return sessionId ? "&sid=" + encodeURIComponent(sessionId) : "" }   // 上传/下载/预览都带上会话 id，隔离各会话目录
 document.getElementById("new").addEventListener("click", () => {
   detachStream()   // 只退订不终止：原会话若在生成会继续跑，从左侧列表随时切回来看
-  sessionId = null; localStorage.removeItem("nm_sid"); log.innerHTML = ""; renderFiles([]); loadUploads(); loadSessions(); zScopeReset(); loadZotLib(); stepsHost = null; stepsHostEl.replaceChildren()
+  sessionId = null; localStorage.removeItem("nm_sid"); log.innerHTML = ""; wfResetGroups(); renderFiles([]); loadUploads(); loadSessions(); zScopeReset(); loadZotLib(); stepsHost = null; stepsHostEl.replaceChildren()
   sessionStarted = false; pendingWfCard = ""; pendingWfForm = null; lastCardText = ""   // 任务卡是一次性的，绝不能漏进下一个会话
   offeredSteps.clear(); HDR_CACHE.clear()
+  liveSteps = null; liveDone = []; liveCur = null; liveFailed = []; liveImplied = []; liveStale = []   // 步骤集随会话走，新对话别沿用上一个的
   // ★「新对话」= 在【当前模块】下再开一个，不再弹回自由对话。
   //   医生在「SCI 论文」里连开三个会话是常态，每次被踢回自由对话、再自己走一趟工作台点回来，
   //   是纯粹的白折腾。要换模块请点欢迎页那个「换个模块」（回工作台）。
@@ -3397,7 +3560,7 @@ function attachStream(sid) { openStream("api/chat/attach?sid=" + encodeURICompon
 function addNote(msg) {
   const d = document.createElement("div"); d.className = "msg bot"
   const n = document.createElement("div"); n.className = "note"; n.textContent = msg
-  d.appendChild(n); log.appendChild(d); log.scrollTop = log.scrollHeight
+  d.appendChild(n); logAppend(d); log.scrollTop = log.scrollHeight
   return d
 }
 
@@ -3422,7 +3585,10 @@ function openStream(url) {
   const setGen = (t) => { genEl.querySelector(".genlbl").textContent = t }
   setGen("等待模型输出…")
   turn.append(skillsEl, toolsD, thinkD, answer, genEl)
-  log.appendChild(turn); log.scrollTop = log.scrollHeight
+  // 本轮开始 → 步骤归属重新认一次（"第一个说了算"只在一轮之内有效）。
+  // liveTurn 让 absorbTail 认得出"哪个回合框是可以跟着挪进新分组的"。
+  liveTurn = turn; turnStepFixed = false
+  logAppend(turn); log.scrollTop = log.scrollHeight
 
   // 本轮对应的用户提问（给"下一步建议"当上下文）。幽灵气泡要排除：那条根本没发出去，
   // 而这条流放的是【上一轮】的输出，拿它当问题会给出驴唇不对马嘴的建议。
@@ -3455,6 +3621,7 @@ function openStream(url) {
   }
   const finalize = (note) => {                    // 收尾：关流、复原按钮、清 live 态；note 作为附注追加
     if (finished) return; finished = true
+    if (liveTurn === turn) liveTurn = null   // 收尾的回合不再是"可挪的当前轮"，下一步开框时不许把它拖走
     stopLive()
     if (gotText && !painted) paintAnswer()   // 中途终止 / 出错：实时版为防抖动扣着的尾行，这里补画完整
     es.close(); if (activeES === es) { activeES = null; setStreamingUI(false) }

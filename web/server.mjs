@@ -2914,10 +2914,22 @@ export const server = http.createServer(async (req, res) => {
       const rawMsgs = un(await client.session.messages({ path: { id } }))
       if (!Array.isArray(rawMsgs)) return send(res, 404, "application/json", JSON.stringify({ err: "找不到这个会话（可能已被删除）" }))
       const msgs = rawMsgs
+      // 每条消息属于工作流的哪一步：前端据此把对话按步骤分组回显（口径与实现见 WF.stepOfParts）。
+      // 拿不到步骤集就退化成不分组 —— 绝不能因为算不出分组而让历史读不出来。
+      let hSteps = []
+      try {
+        const hMod = sessionModule(id)
+        if (hMod && hMod !== "chat") hSteps = WF.stepsFor(hMod, (wfLoad(await sessionOut(id)) || {}).form || {})
+      } catch { hSteps = [] }
+      const stepSeen = new Set()
+      let curStep = null
       const out = []
       for (const m of msgs) {
         const role = m.info?.role
         if (role !== "user" && role !== "assistant") continue
+        // ★ 步骤要在下面 `if (!text) continue` 【之前】认：只调了工具、一个字都没写的助手消息
+        //   在历史里会被丢掉，而它恰恰常常就是这一步开始的标志 —— 漏认的话整步没有归属。
+        if (role === "assistant") { const st = WF.stepOfParts(m.parts, hSteps, stepSeen); if (st) curStep = st }
         let text = (m.parts || []).filter((p) => p.type === "text").map((p) => p.text).join("\n").trim()
         text = stripPreamble(text)   // 剥掉注入的工作区前言，只回显真正对话
         if (role === "assistant") text = autoStripSentinel(text)   // 无人值守的完成哨兵与直播口径一致：不给用户看
@@ -2928,9 +2940,14 @@ export const server = http.createServer(async (req, res) => {
         //   「一轮」的边界只有服务端看得到完整消息序列，所以在这里合，别推给前端。
         //   与分享导出的 shareTurns 同口径。
         const prev = out[out.length - 1]
-        if (role === "assistant" && prev?.role === "assistant") prev.text += "\n\n" + text
-        else out.push({ role, text })
+        // 合并进来的这段若带出了步骤、而合并目标还没有归属，就补给它（同一轮只认一次，先来的不覆盖）
+        if (role === "assistant" && prev?.role === "assistant") {
+          prev.text += "\n\n" + text
+          if (!prev.step && curStep) { prev.step = curStep.id; prev.stepName = curStep.name }
+        }
+        else out.push({ role, text, ...(curStep ? { step: curStep.id, stepName: curStep.name } : {}) })
       }
+      WF.fillUserSteps(out)   // 用户提问归到它引出的那一步（理由见函数头注）
       // 这一轮还在生成中：末尾未完成的助手输出交给续流（/api/chat/attach）直播，从历史里剔除避免重复。
       // ★ 但必须先确认【最后一条 user 消息就是本轮发出的那条】。opencode 落盘有延迟，在那个窗口里
       //   lastUser 指向的是【上一轮】的 user 消息，于是上一轮全部 assistant 回复会被当成
