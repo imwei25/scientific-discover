@@ -2212,11 +2212,15 @@ document.addEventListener("click", (e) => {
 })
 
 // ---- CSV/TSV 解析渲染（带引号转义处理；预览截断到 300 行）----
-function parseCsv(text, delim) {
+// 全站唯一的分隔符解析器：支持引号内的分隔符/换行与转义双引号（""），并剥掉 BOM。
+// 名字不能再叫 parseCsv —— 下面 evidenceCard 那边曾有个同名的单参版本，classic script 里
+// 函数声明会提升且后者整个覆盖前者，导致这里传的 "\t" 被静默吃掉、TSV 按逗号解析。
+function parseDelimited(text, delim) {
   const rows = []; let row = [], cell = "", inQ = false
-  for (let i = 0; i < text.length; i++) {
-    const ch = text[i]
-    if (inQ) { if (ch === '"') { if (text[i + 1] === '"') { cell += '"'; i++ } else inQ = false } else cell += ch }
+  const s = text.charCodeAt(0) === 0xfeff ? text.slice(1) : text
+  for (let i = 0; i < s.length; i++) {
+    const ch = s[i]
+    if (inQ) { if (ch === '"') { if (s[i + 1] === '"') { cell += '"'; i++ } else inQ = false } else cell += ch }
     else if (ch === '"') inQ = true
     else if (ch === delim) { row.push(cell); cell = "" }
     else if (ch === "\n") { row.push(cell); rows.push(row); row = []; cell = "" }
@@ -2226,7 +2230,7 @@ function parseCsv(text, delim) {
   return rows
 }
 function csvTable(text, delim) {
-  const all = parseCsv(text, delim).filter((r) => r.length > 1 || (r[0] || "").trim() !== "")   // 丢掉纯空行
+  const all = parseDelimited(text, delim).filter((r) => r.length > 1 || (r[0] || "").trim() !== "")   // 丢掉纯空行
   if (!all.length) return '<div class="hint">（空表）</div>'
   const MAX = 300
   const [head, ...body] = all.slice(0, MAX + 1)
@@ -3361,8 +3365,11 @@ function stepsBar(steps, done, cur, failed, off, implied, stale) {
     const el = document.createElement("div")
     el.className = "fstep" + (isDone && !isStale ? " done" : "") + (isFail ? " failed" : "")
       + (isCur ? " cur" : "") + (s.gate ? " gate" : "") + (isOff ? " off" : "")
-    // 圆圈里放什么：完成打勾、闸没过打叉、过期打 ⟳、无产物打 ·，其余一律是序号。
-    const mark = isFail ? "✕" : isStale ? "⟳" : isImplied ? "·" : isDone ? "✓" : String(i + 1)
+    // 圆圈里放什么：闸没过打叉、过期打 ⟳、无产物打 ·，其余一律是序号。
+    // 【完成态不换符号】只把圆圈染绿，序号留着 —— 打勾会把"第几步"这个信息抹掉，
+    // 一条 13 步的流程跑到后半程，前面全是勾，用户对不上"现在是第几步/刚才那步是第几步"。
+    // 完成的语义由绿圈 + 绿标题 + 悬停气泡里的"已完成"承担。
+    const mark = isFail ? "✕" : isStale ? "⟳" : isImplied ? "·" : String(i + 1)
     el.appendChild(Object.assign(document.createElement("span"), { className: "n", textContent: mark }))
     const meta = document.createElement("div"); meta.className = "fmeta"
     meta.appendChild(Object.assign(document.createElement("div"), { className: "ft", textContent: s.name }))
@@ -3499,22 +3506,10 @@ function artShell(name, title, count) {
   const bd = document.createElement("div"); bd.className = "artbd"; box.appendChild(bd)
   return { box, bd, hd }
 }
-/** 极简 CSV 解析（支持引号内逗号与转义双引号）——证据表里标题带逗号是常态，不处理会整行错位 */
+/** 证据表专用的逗号解析（支持引号内逗号与转义双引号）——标题带逗号是常态，不处理会整行错位。
+ *  额外滤掉整行空白：表尾那几行空行会被 evidenceCard 当成记录，撑出一堆空卡片。 */
 function parseCsv(text) {
-  const rows = []; let row = [], cell = "", inQ = false
-  const s = text.charCodeAt(0) === 0xfeff ? text.slice(1) : text
-  for (let i = 0; i < s.length; i++) {
-    const c = s[i]
-    if (inQ) {
-      if (c === '"') { if (s[i + 1] === '"') { cell += '"'; i++ } else inQ = false }
-      else cell += c
-    } else if (c === '"') inQ = true
-    else if (c === ",") { row.push(cell); cell = "" }
-    else if (c === "\n") { row.push(cell); rows.push(row); row = []; cell = "" }
-    else if (c !== "\r") cell += c
-  }
-  if (cell || row.length) { row.push(cell); rows.push(row) }
-  return rows.filter((r) => r.some((x) => x.trim() !== ""))
+  return parseDelimited(text, ",").filter((r) => r.some((x) => x.trim() !== ""))
 }
 const pick = (obj, ...keys) => { for (const k of keys) { const hit = Object.keys(obj).find((h) => h.toLowerCase().replace(/[\s_-]/g, "") === k); if (hit && obj[hit]) return obj[hit] } return "" }
 /** 文献卡片列表：证据表里最要紧的几列拎出来，其余仍可下载原表看 */
