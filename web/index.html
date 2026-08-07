@@ -1439,7 +1439,6 @@
     </div>
     <div class="modal-body">
       <div id="cloudPaneLogin">
-        <div class="mm-hint" style="margin:0 0 14px">用管理员发给你的账号登录。登录后模型、额度与可用技能由平台统一分配。</div>
         <label class="mm-field"><span>账号</span><input id="clUser" class="mm-input" type="text" autocomplete="username" spellcheck="false" /></label>
         <label class="mm-field"><span>口令</span><input id="clPass" class="mm-input" type="password" autocomplete="current-password" /></label>
       </div>
@@ -4427,7 +4426,8 @@ function clShow(mode, st) {
   document.getElementById("cloudPaneLogin").style.display = mode === "login" ? "" : "none"
   document.getElementById("cloudPanePw").style.display = mode === "pw" ? "" : "none"
   document.getElementById("cloudPaneInfo").style.display = mode === "info" ? "" : "none"
-  document.getElementById("cloudTitle").textContent = mode === "login" ? "登录云端账号" : mode === "pw" ? "首次登录请修改口令" : "云端账号"
+  // 登录态不写标题：登录页只留账号/口令两栏，文案一概不要（改动来自用户要求）
+  document.getElementById("cloudTitle").textContent = mode === "login" ? "" : mode === "pw" ? "首次登录请修改口令" : "云端账号"
   document.getElementById("clGo").textContent = mode === "login" ? "登录" : mode === "pw" ? "修改并继续" : "刷新"
   document.getElementById("clLogout").style.display = mode === "info" ? "" : "none"
   if (mode === "info" && st) {
