@@ -47,31 +47,77 @@ test("primary 显式声明，且与旧的 skills[0] 语义一致（模块可用�
     assert.ok(WF.skillsOf(m).includes(WF.primaryOf(m)), `${m} 的 primary 不在技能集里`)
 })
 
-// 文献研读是唯一一个【前端与提示词各存一份同样字符串】的模块：reader.html 的 MODES[*].mark
-// 拼在消息开头当模式信号，workflows.mjs 的 litread.flow 把这几个标记教给 agent，
-// 而刷新页面后又靠它们把每一轮认回哪个面板。三处任意一处漂了，症状都是"能跑，但结果落错面板"
-// —— 界面上完全看不出是标记对不上，只会觉得模型忽然不听话了。所以在这里钉死。
-test("文献研读：界面的模式标记与前言里教给 agent 的必须逐字一致", () => {
-  const wf = WF.WORKFLOWS.litread
-  assert.equal(wf.ui, "reader", "它有专用界面，工作台/聊天页靠这个字段决定往哪儿跳")
-  assert.equal(WF.workflowFor("litread", {}).ui, "reader", "ui 必须随 /api/modules 与工作流一起下发")
+// 四个「核心能力」模块共用 web/reader.html 那个壳，而壳里没有任何一个模块的名字 ——
+// 模式清单、提示词、首屏文案全部由 workflows.mjs 的 reader 段下发。这里钉住那份契约：
+// 少一样前端就画不出来，而症状往往不是报错，是「某个按钮点了没反应」或「结果落错面板」。
+test("阅读器型模块：reader 配置完整、模式标记与前言逐字一致", () => {
+  const readers = Object.entries(WF.WORKFLOWS).filter(([, w]) => w.ui === "reader").map(([id]) => id)
+  assert.deepEqual(readers.sort(), ["humanize", "litread", "refcheck", "stats"],
+    "四个核心能力模块都该用阅读器壳")
 
-  const html = fs.readFileSync(new URL("../reader.html", import.meta.url), "utf8")
-  const marks = [...html.matchAll(/mark:\s*"([^"]*)"/g)].map((m) => m[1]).filter(Boolean)
-  assert.equal(marks.length, 3, "导读 / 翻译 / PPT 三个模式各有一个标记（智能助手没有标记，是自由问答）")
-  const line = WF.pipelineLine("litread", {})
-  for (const mk of marks) assert.ok(line.includes(mk), `前言里没教 agent 认「${mk}」这个标记`)
+  for (const id of readers) {
+    const w = WF.WORKFLOWS[id]
+    const r = w.reader
+    const at = (m) => id + "." + m
 
-  // 界面按文件名把正文捞回来渲染（MODES[*].file），所以这几个名字必须进产物契约那句话，
-  // 否则模型自己起名 → 界面只剩一句"已完成"，正文不知去向。
-  const art = WF.artifactLine("litread", {})
-  for (const f of ["reading_guide.md", "translation_zh.md", "ppt_outline.md"])
-    assert.ok(art.includes(f), `产物契约里少了 ${f}`)
+    // 下发的整份配置必须能 JSON 序列化：正则一律写成【字符串】，别放 RegExp 或函数 ——
+    // 放了不会报错，只会在下发时被 JSON.stringify 悄悄变成 {}，前端拿到一个空对象。
+    const wf = WF.workflowFor(id, {})
+    assert.equal(wf.ui, "reader", at("ui 要随工作流下发"))
+    assert.doesNotThrow(() => JSON.parse(JSON.stringify(wf)), at("reader 配置必须可 JSON 序列化"))
 
-  // 这是"单篇研读"，不是检索模块：给了检索技能就等于默许它去找别的文献
+    for (const k of ["title", "lead", "dropTitle", "dropHint", "startText"])
+      assert.ok(r.intro && r.intro[k], at("intro." + k + " 不能空——首屏那一格会是空白"))
+    assert.ok(r.source && r.source.field && (r.source.exts || []).length, at("source 要说清收哪个字段、什么扩展名"))
+    assert.ok(["doc", "table"].includes(r.source.kind), at("source.kind 只有 doc / table 两种"))
+
+    // 每个模式：有 id/label/icon；除自由问答外必须有 mark + prompt + tell
+    const ids = r.modes.map((m) => m.id)
+    assert.equal(new Set(ids).size, ids.length, at("模式 id 不能重复"))
+    assert.ok(ids.includes("chat"), at("每个模块都要留一格自由问答"))
+    assert.ok(ids.includes(r.first), at("first 指的模式不存在：" + r.first))
+    const line = WF.pipelineLine(id, {})
+    for (const m of r.modes) {
+      assert.ok(m.label && m.icon, at(m.id + " 缺 label/icon"))
+      assert.ok(Array.isArray(m.empty) && m.empty.length === 2, at(m.id + " 的 empty 要给两句（标题 + 说明）"))
+      if (m.id === "chat") { assert.ok(!m.mark, at("自由问答不能有 mark——有标记就不是自由问答了")); continue }
+      assert.ok(m.mark && m.prompt && m.tell, at(m.id + " 缺 mark/prompt/tell"))
+      // 【最要紧的一条】前端把 mark 拼在消息前面发出去，模型照前言里教的做，刷新后前端又靠 mark
+      // 把每一轮认回对应面板。前言里没教这个标记 = 模型不认识它 = 三处对不上。
+      assert.ok(line.includes(m.mark), at("前言里没教 agent 认「" + m.mark + "」"))
+      // prompt 里的占位符只认这三个，写错了前端不会替换，会把 {xxx} 原样发给模型
+      for (const ph of (m.prompt.match(/\{[a-z]+\}/g) || []))
+        assert.ok(["{doc}", "{data}", "{vars}"].includes(ph), at(m.id + " 用了未知占位符 " + ph))
+      // need 的三种写法必须指向真实存在的东西，否则那个按钮会被永久卡住而没人看得出为什么
+      for (const n of m.need || []) {
+        if (n === "data") { assert.ok(r.extraUpload, at(m.id + " 需要 data 但模块没配 extraUpload")); continue }
+        if (n.startsWith("var:")) { assert.ok((r.vars?.fields || []).includes(n.slice(4)), at(m.id + " 要的列 " + n + " 不在 vars.fields 里")); continue }
+        if (n.startsWith("after:")) { assert.ok(ids.includes(n.slice(6)), at(m.id + " 依赖的模式 " + n + " 不存在")); continue }
+        assert.fail(at(m.id + " 的 need 写法认不出来：" + n))
+      }
+      assert.ok(!m.need || m.needHint, at(m.id + " 有 need 就必须有 needHint——不然用户只看到按钮没反应"))
+      // ★ empty / needHint 是【直接转义后塞进界面】的纯文本，不走 markdown 渲染。
+      //   写了 **加粗** 或 `代码` 的话，用户看到的就是字面的星号和反引号。
+      //   prompt 与 tell 不在此列 —— 那两个是发给模型的，markdown 正是它要的。
+      for (const t of [m.needHint, ...(m.empty || [])])
+        if (t) assert.doesNotMatch(t, /\*\*|`/, at(m.id + " 的界面文案里混进了 markdown：" + t))
+    }
+
+    // 设置弹层 / 必答题 / 变量面板引用的字段必须真在 intake 里，否则那一格渲染不出来
+    const known = new Set((w.intake || []).map((f) => f.id))
+    for (const fid of [...(r.settings || []), ...(r.intro.ask || []), ...(r.vars?.fields || [])])
+      assert.ok(known.has(fid), at("引用了 intake 里没有的字段 " + fid))
+  }
+})
+
+// 这是"单篇研读"，不是检索模块：给了检索技能就等于默许它去找别的文献
+test("文献研读不该有检索类技能", () => {
   const sk = WF.skillsOf("litread")
   for (const s of ["search-lit", "literature-review", "deep-research", "research-scan"])
-    assert.ok(!sk.includes(s), `文献研读不该有检索类技能 ${s}`)
+    assert.ok(!sk.includes(s), "文献研读不该有检索类技能 " + s)
+  const art = WF.artifactLine("litread", {})
+  for (const f of ["reading_guide.md", "translation_zh.md", "ppt_outline.md"])
+    assert.ok(art.includes(f), "产物契约里少了 " + f)
 })
 
 test("步骤按表单值裁剪：已脱敏就不再插脱敏步，前瞻性研究把预注册提到最前", () => {

@@ -122,6 +122,49 @@ button{font:inherit}
 .chip:hover{border-color:var(--accent);color:var(--accent)}
 .chip svg{width:14px;height:14px}
 
+/* 首屏必答题（stats 的「含不含患者身份信息」）。它不是设置、是安全闸，所以摆在按钮上方、
+   没答之前「开始」是灰的 —— 默认「否」等于替用户声明「本表不含身份信息」，而他表里就摆着
+   300 个姓名和住院号。 */
+.askbox{margin-top:14px;padding:12px 14px;border:1px solid var(--line-hi);border-radius:var(--r-sm);background:var(--panel-soft);text-align:left}
+.askbox .asklbl{font-size:13px;font-weight:600}
+.askbox .asklbl .req{color:var(--red);font-size:11px;margin-left:4px}
+.askbox .askhelp{font-size:11.5px;color:var(--faint);margin-top:3px;line-height:1.7}
+.askbox .askopts{display:flex;gap:8px;margin-top:9px}
+.askbtn{flex:1;height:34px;border:1px solid var(--line-hi);background:#fff;border-radius:8px;color:var(--muted);cursor:pointer;font-size:13px;transition:.15s}
+.askbtn:hover{border-color:var(--accent);color:var(--accent)}
+.askbtn.on{background:var(--accent);border-color:var(--accent);color:#fff;font-weight:600}
+
+/* 设置弹层：复用 .menu 的 fixed 定位，只是内容是一组控件 */
+.setmenu{min-width:320px;max-width:min(420px,92vw);padding:12px 14px}
+.setmenu .sf{margin-bottom:12px}
+.setmenu .sf:last-child{margin-bottom:0}
+.setmenu .sf > label{display:block;font-size:12.5px;font-weight:600;margin-bottom:5px}
+.setmenu .sf .sh{font-size:11px;color:var(--faint);line-height:1.7;margin-bottom:5px}
+.setmenu select,.setmenu input[type=text]{width:100%;height:32px;border:1px solid var(--line-hi);border-radius:8px;padding:0 9px;font:inherit;font-size:12.5px;background:#fff;color:var(--text)}
+.setmenu .schk{display:flex;align-items:center;gap:7px;font-size:12.5px;color:var(--muted);margin-bottom:4px;cursor:pointer}
+
+/* 变量对应面板（只有 stats）：默认折叠的一条，展开是两列下拉 */
+.varsbox{flex:none;border-bottom:1px solid var(--line);background:#fff}
+.varsbox > summary{cursor:pointer;padding:9px 16px;font-size:12.5px;font-weight:600;display:flex;align-items:center;gap:8px;list-style:none}
+.varsbox > summary::-webkit-details-marker{display:none}
+.varsbox > summary::before{content:"▸";color:var(--faint);font-size:11px}
+.varsbox[open] > summary::before{content:"▾"}
+.varsbox .varssum{font-weight:400;color:var(--faint);font-size:11.5px}
+.varsbox .varssub{padding:0 16px 8px;font-size:11.5px;color:var(--faint);line-height:1.7}
+.varsgrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:9px;padding:0 16px 14px}
+.varsgrid .vf label{display:block;font-size:11.5px;color:var(--muted);margin-bottom:4px}
+.varsgrid .vf select,.varsgrid .vf input{width:100%;height:30px;border:1px solid var(--line-hi);border-radius:7px;padding:0 8px;font:inherit;font-size:12px;background:#fff;color:var(--text)}
+.varsgrid .vf.miss label{color:var(--red);font-weight:600}
+.varsgrid .vf.miss select,.varsgrid .vf.miss input{border-color:var(--red)}
+
+/* 数据表预览（stats 左栏）：xlsx 前端解析不了，只有 csv/tsv 能真渲染成表 */
+.tablewrap{position:absolute;inset:0;overflow:auto;padding:14px 16px;background:#fff}
+.tablewrap table{border-collapse:collapse;font-size:12px;white-space:nowrap}
+.tablewrap th,.tablewrap td{border:1px solid var(--line);padding:5px 9px;text-align:left}
+.tablewrap th{background:var(--panel-soft);font-weight:600;position:sticky;top:0;z-index:1}
+.tablewrap tbody tr:nth-child(even){background:#fafbfc}
+.tablewrap .more{margin-top:10px;font-size:11.5px;color:var(--faint)}
+
 .introcard .tip{margin-top:22px;font-size:11.5px;color:var(--faint);line-height:1.8}
 .introcard .err{margin-top:14px;padding:10px 12px;border-radius:var(--r-sm);background:#fdecea;border:1px solid #f5c2bd;color:var(--red);font-size:12.5px;display:none;text-align:left;line-height:1.75}
 .introcard .err.on{display:block}
@@ -283,47 +326,43 @@ button{font:inherit}
 <!-- 「最近」下拉。两个位置的按钮共用同一个菜单（见 .menu 的说明），所以它挂在 body 上，
      打开时按触发按钮算坐标。 -->
 <div class="menu" id="recentMenu"></div>
+<div class="menu setmenu" id="setMenu"></div>
 
-<!-- ============ 首屏：上传一篇文献 ============ -->
-<div class="intro" id="intro">
+<!-- ============ 首屏：上传 ============
+     文案、拖拽区提示、chips、必答题、按钮文字全部由 renderIntro() 按模块配置填进去，
+     这里只留骨架。硬编码任何一句都会让另外三个模块说错话。 -->
+<div class="intro" id="intro" hidden>
   <div class="introcard">
-    <div class="hero-ic">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.247 18 16.5 18c-1.746 0-3.332.477-4.5 1.253"/></svg>
-    </div>
+    <div class="hero-ic" id="introIcon"></div>
 
-    <h1>文献研读</h1>
-    <p class="lead">上传一篇 PDF 或 Word 文献，点「开始研读」——先自动出一份导读，理清它的核心与论证逻辑；之后随时可以对着原文追问、要全文翻译，或让它做一套汇报 PPT。</p>
+    <h1 id="introTitle"></h1>
+    <p class="lead" id="introLead"></p>
 
     <div class="divider"></div>
 
     <div class="drop" id="drop">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 16V4M12 4l-4 4M12 4l4 4"/><path d="M4 16v2a2 2 0 002 2h12a2 2 0 002-2v-2"/></svg>
-      <div class="d1">点击或拖拽文献到此处</div>
-      <div class="d2">支持 PDF / Word（.pdf · .docx · .doc）　·　一次研读一篇</div>
+      <div class="d1" id="dropTitle"></div>
+      <div class="d2" id="dropHint"></div>
     </div>
-    <input type="file" id="file" accept=".pdf,.docx,.doc,.odt" hidden>
+    <input type="file" id="file" hidden>
 
     <div id="pickedSlot"></div>
+    <div id="introAsk"></div>
     <div class="bar" id="upbar"><i></i></div>
     <div class="err" id="introErr"></div>
 
     <button class="gobtn" id="btnStart" type="button" disabled>
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 3l14 9-14 9V3z"/></svg>
-      开始研读
+      <span id="btnStartTxt">开始</span>
     </button>
 
-    <div class="chips">
-      <span class="chip"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 6.25v13m0-13C10.83 5.48 9.25 5 7.5 5S4.17 5.48 3 6.25v13C4.17 18.48 5.75 18 7.5 18s3.33.48 4.5 1.25m0-13C13.17 5.48 14.75 5 16.5 5s3.33.48 4.5 1.25v13C19.83 18.48 18.25 18 16.5 18s-3.33.48-4.5 1.25"/></svg>文献导读</span>
-      <span class="chip"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 11.5a8.4 8.4 0 01-9 8.4 8.9 8.9 0 01-4-.9L3 21l1.9-4.5A8.4 8.4 0 013 11.5 8.4 8.4 0 0112 3a8.4 8.4 0 019 8.5z"/></svg>对着原文追问</span>
-      <span class="chip"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 8l6 6M4 14l6-6 2-3M2 5h12M7 2h1M21 12a9 9 0 01-9 9m9-9h-6m6 0v6"/></svg>全文翻译</span>
-      <span class="chip"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8 20h8M12 16v4"/></svg>汇报 PPT</span>
-    </div>
-
-    <div class="tip">图片型扫描件会先走 OCR，识别不准的地方会如实标出来。<br>所有结论只依据这篇原文——原文没写的，它会写「原文未报告」，不会替你补。</div>
+    <div class="chips" id="introChips"></div>
+    <div class="tip" id="introTip"></div>
   </div>
 
   <div class="intronav">
-    <button class="linkbtn" type="button" data-act="recent">最近研读过的</button>
+    <button class="linkbtn" type="button" data-act="recent">最近做过的</button>
     <span>·</span>
     <button class="linkbtn" type="button" data-act="ws">回工作台</button>
   </div>
@@ -347,13 +386,13 @@ button{font:inherit}
         <div class="zval" id="zval">100%</div>
         <button id="zoomIn" title="放大" type="button"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M11 8v6M8 11h6M21 21l-4.3-4.3"/></svg></button>
       </div>
-      <button class="hbtn" id="btnOpenDoc" type="button" title="在新标签打开原文">原文</button>
+      <button class="hbtn" id="btnOpenDoc" type="button" title="在新标签打开">原文</button>
       <span class="barsep"></span>
-      <button class="hbtn" type="button" data-act="new" title="换一篇文献（新开一个会话）">换一篇</button>
-      <button class="hbtn" type="button" data-act="recent" title="最近研读过的文献">最近</button>
+      <button class="hbtn" type="button" data-act="new" title="换一份（新开一个会话）">换一份</button>
+      <button class="hbtn" type="button" data-act="recent" title="最近做过的">最近</button>
       <button class="hbtn" type="button" data-act="ws" title="回工作台">工作台</button>
     </div>
-    <div class="docview" id="docView"><div class="docmsg">正在载入原文…</div></div>
+    <div class="docview" id="docView"><div class="docmsg">正在载入…</div></div>
   </div>
 
   <!-- 中：助手 -->
@@ -362,16 +401,21 @@ button{font:inherit}
       <div class="title" id="paneTitle"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2a10 10 0 100 20 10 10 0 000-20z"/><path d="M12 6v6l4 2"/></svg><span>文献导读</span></div>
       <div class="acts">
         <span class="badge">基于本文</span>
+        <button class="hbtn" id="btnSettings" type="button" title="本模块的设置" hidden>设置</button>
         <button class="hbtn" id="btnRerun" type="button" hidden>重新生成</button>
       </div>
     </div>
 
-    <div class="ai-body" id="aiBody">
-      <div class="pane" id="pane-guide"></div>
-      <div class="pane" id="pane-chat"></div>
-      <div class="pane" id="pane-translate"></div>
-      <div class="pane" id="pane-ppt"></div>
-    </div>
+    <!-- 变量对应（只有 stats 有）。默认折叠：不做生存分析的人根本不用展开它；
+         点某个模式时若缺了它必需的列，会自动展开并把缺的那几个标红。 -->
+    <details class="varsbox" id="varsBox" hidden>
+      <summary><span id="varsTitle">变量对应</span><span class="varssum" id="varsSum"></span></summary>
+      <div class="varssub" id="varsSub"></div>
+      <div class="varsgrid" id="varsGrid"></div>
+    </details>
+
+    <!-- 面板由 installConfig 按模式清单生成（每个模式一个 .pane），这里留空 -->
+    <div class="ai-body" id="aiBody"></div>
 
     <!-- 智能助手模式：输入框 -->
     <div class="composer" id="composer" hidden>
@@ -416,7 +460,23 @@ const ICON = {
   file: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><path d="M14 2v6h6"/></svg>',
   bot: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2a10 10 0 100 20 10 10 0 000-20z"/><path d="M12 6v6l4 2"/></svg>',
   x: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6L6 18M6 6l12 12"/></svg>',
+  // 下面这些给另外三个模块的模式用。图标名由 workflows.mjs 的 modes[].icon 指定；
+  // 认不出的名字回落到 dot，绝不因为少配一个图标就让按钮渲染不出来。
+  check: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2h11"/></svg>',
+  review: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3M8.5 11h5M11 8.5v5"/></svg>',
+  table: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 10h18M9 10v10M15 10v10"/></svg>',
+  wand: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M15 4V2M15 10V8M12 6h-2M20 6h-2M17.8 8.8l1.4 1.4M17.8 3.2l1.4-1.4M12.2 3.2l-1.4-1.4M3 21l9-9"/></svg>',
+  diff: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3v18M5 8H2m3 8H2M22 8h-3m3 8h-3"/><rect x="5" y="5" width="6" height="14" rx="1"/><rect x="13" y="5" width="6" height="14" rx="1"/></svg>',
+  doc: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><path d="M14 2v6h6M8 13h8M8 17h5"/></svg>',
+  stethoscope: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 3v6a5 5 0 0010 0V3"/><path d="M4 3h3M15 3h3M11 14v2a5 5 0 0010 0v-1"/><circle cx="21" cy="13" r="2"/></svg>',
+  chart: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 3v18h18"/><path d="M7 15l4-5 3 3 5-7"/></svg>',
+  image: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="8.5" cy="9.5" r="1.5"/><path d="M21 16l-5-5-4 4-2-2-5 5"/></svg>',
+  shield: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><path d="M9 12l2 2 4-4"/></svg>',
+  gear: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 00.3 1.9l.1.1a2 2 0 11-2.8 2.8l-.1-.1a1.7 1.7 0 00-1.9-.3 1.7 1.7 0 00-1 1.5V21a2 2 0 11-4 0v-.1A1.7 1.7 0 008.9 19a1.7 1.7 0 00-1.9.3l-.1.1a2 2 0 11-2.8-2.8l.1-.1a1.7 1.7 0 00.3-1.9 1.7 1.7 0 00-1.5-1H3a2 2 0 110-4h.1A1.7 1.7 0 004.6 8.9a1.7 1.7 0 00-.3-1.9l-.1-.1a2 2 0 112.8-2.8l.1.1a1.7 1.7 0 001.9.3H9a1.7 1.7 0 001-1.5V3a2 2 0 114 0v.1a1.7 1.7 0 001 1.5 1.7 1.7 0 001.9-.3l.1-.1a2 2 0 112.8 2.8l-.1.1a1.7 1.7 0 00-.3 1.9V9a1.7 1.7 0 001.5 1H21a2 2 0 110 4h-.1a1.7 1.7 0 00-1.5 1z"/></svg>',
+  dot: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="4"/></svg>',
+  up: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 16V4M12 4l-4 4M12 4l4 4"/><path d="M4 16v2a2 2 0 002 2h12a2 2 0 002-2v-2"/></svg>',
 }
+const ic = (n) => ICON[n] || ICON.dot
 
 /* ---- 极简 markdown 渲染 ----
    【为什么不复用 index.html 那份】那一份缠着灯箱、产物侧栏、ask 选项卡与会话态（sidQ / mdImgSrc），
@@ -482,96 +542,100 @@ function renderMd(src) {
 }
 
 /* ============================================================
-   1. 四种模式
+   1. 模块配置：本页面【不认识任何一个具体模块】
    ------------------------------------------------------------
-   mark 是【发给 agent 的模式信号】，与 workflows.mjs 里 litread.flow 教给它的那四个标记
-   必须逐字一致；同时也是刷新页面后从历史里把每一轮认回哪个面板的唯一依据（restore()）。
-   改这里就要一起改那里，否则症状是"能跑，但刷新后全部掉进智能助手"。
-   ============================================================ */
-const MODES = {
-  guide: {
-    label: "文献导读", icon: ICON.guide, mark: "【文献导读】",
-    badge: "抽取核心 · 梳理逻辑",
-    // 产物名与 litread.flow 里要求 agent 写的文件名对齐；认不出就退回用对话正文渲染，不会空白
-    file: /^reading_guide.*\.md$/i,
-    // out = 面板下方列哪些产物。fulltext.md 归导读：它是"读入原文"那一步的成果，
-    // 用户想核对"它到底读到了什么"时找的就是这个文件。
-    out: /^(reading_guide|fulltext)[^/]*\.(md|docx|pdf)$/i,
-    empty: ["还没有导读", "点右边的「文献导读」，让它把这篇文章的核心与论证逻辑理一遍。"],
-  },
-  chat: {
-    label: "智能助手", icon: ICON.chat, mark: "",
-    badge: "基于本文",
-    empty: ["对着这篇文章随便问", "它读的是你左边这一篇；前面的导读、翻译、做 PPT 都还在上下文里，可以接着问。"],
-  },
-  translate: {
-    label: "全文翻译", icon: ICON.translate, mark: "【全文翻译】",
-    badge: "逐段全文 · 非摘要",
-    file: /^translation.*\.md$/i,
-    out: /^translation[^/]*\.(md|docx|pdf)$/i,
-    empty: ["还没有译文", "点右边的「全文翻译」，逐段译成中文（不是摘要）。整篇文章要花几分钟。"],
-  },
-  ppt: {
-    label: "演示 PPT", icon: ICON.ppt, mark: "【演示 PPT】",
-    badge: "汇报用 · 可下载 .pptx",
-    file: /(^|\/)ppt_outline.*\.md$/i,
-    // ppt-master 把导出的 .pptx 放在 <项目名>/exports/ 下，所以要允许一层子目录
-    out: /(^|\/)(ppt_outline[^/]*\.md|[^/]*\.pptx)$/i,
-    empty: ["还没有 PPT", "点右边的「演示 PPT」，按这篇文献做一套组会汇报用的片子。这一步最慢，通常要十分钟上下。"],
-  },
-}
-const ORDER = ["guide", "chat", "translate", "ppt"]
+   模式清单、每个模式发什么话、首屏文案、设置字段、变量对应面板 —— 全部来自
+   GET /api/modules/<id>/workflow 的 reader 段（定义在 workflows.mjs）。
+   本文件只负责照着画、照着发、照着把结果摆回对应的面板。
+   所以「加一个模式」「改一句提示词」只动 workflows.mjs，走界面包热更新即可。
 
-/** 各模式发出去的那句话。docName 用反引号括起来，agent 前言里已给了上传目录的绝对路径。 */
-function promptFor(m) {
-  const f = "`" + docName + "`"
-  if (m === "guide") return MODES.guide.mark + "请研读我上传的这篇文献 " + f + "，做一份**导读**：抽出它的核心重点，把论证逻辑梳理清楚。\n\n"
-    + "按这个结构写：\n"
-    + "1. **一句话结论** —— 这篇文章做了什么、最重要的发现是什么；\n"
-    + "2. **背景与缺口** —— 它要解决的问题是什么，此前卡在哪；\n"
-    + "3. **研究设计** —— 研究类型、对象与样本量、分组与干预、主要终点、统计或实验手段；\n"
-    + "4. **主要结果** —— 按图表逐条给关键数字（效应量、95%CI、p 值……原文有多少给多少）；\n"
-    + "5. **论证链条** —— 从问题 → 假设 → 证据 → 结论一步一步串起来，指出哪一步最关键、哪一步最薄弱；\n"
-    + "6. **局限与存疑**；\n"
-    + "7. **这篇能用在哪** —— 对读者课题的意义。\n\n"
-    + "只依据原文：数字与结论一律照抄，原文没写的写「原文未报告」，不许拿背景知识补，也不许引入原文之外的参考文献。"
-    + "引用具体数据时带上出处（第几节 / 哪张图表）。\n"
-    + "写完把这份导读同时存一份 `reading_guide.md`。"
-  if (m === "translate") return MODES.translate.mark + "把我上传的文献 " + f + " **全文**翻译成中文。\n\n"
-    + "要求：\n"
-    + "- **逐段译全文**，保留原文的章节结构与标题层级（Abstract / Introduction / Methods / Results / Discussion…）；"
-    + "**这是翻译不是摘要**，不许概括、不许跳段、不许只译摘要；\n"
-    + "- 学术书面语；专业术语用规范中文译名，并在**首次出现**时括注英文原文；\n"
-    + "- 图表题注一并译出，表格用 markdown 表格；公式、基因 / 蛋白 / 药物名、统计量符号保留原样；\n"
-    + "- 参考文献列表不用翻译，按原样保留即可。\n\n"
-    + "**产物**：写成一个文件 `translation_zh.md`（完整全文）。文件写完后，回答里**只回一句话**说明已完成、共几节，"
-    + "**不要把译文再贴进对话**——界面会直接把那个文件渲染给我看。"
-  if (m === "ppt") return MODES.ppt.mark + "基于我上传的文献 " + f + "，用 `ppt-master` 技能做一套**组会汇报用**的演示 PPT。\n\n"
-    + "要求：\n"
-    + "- 12–18 页：封面 / 背景与问题 / 研究设计 / 主要结果（按图表分页）/ 结论 / 局限 / 对我们课题的启发；\n"
-    + "- 结果页要带原文的关键数字，**不许编数据**，原文没有的写「原文未报告」；\n"
-    + "- 先把大纲写成 `ppt_outline.md`（我要先审一遍），再导出 .pptx 到当前目录；\n"
-    + "- 做完告诉我 .pptx 的文件名。"
-  return ""
+   MODES / ORDER 在 boot() 里由配置填好，之后与原来的用法完全一致。
+   ============================================================ */
+let MOD = "litread"        // 当前模块 id
+let CFG = null             // reader 配置（workflows.mjs 的 reader 段）
+let MODES = {}             // id → 模式定义（含由 file/out 字符串编译出来的正则）
+let ORDER = []             // 模式在右侧条上的顺序
+
+/** 把下发的配置装进 MODES / ORDER。正则以字符串下发（要能 JSON 序列化），这里编译。 */
+function installConfig(cfg) {
+  CFG = cfg
+  MODES = {}; ORDER = []
+  const re = (x) => { try { return x ? new RegExp(x, "i") : null } catch (_) { return null } }
+  for (const m of cfg.modes || []) {
+    MODES[m.id] = { ...m, icon: ic(m.icon), file: re(m.file), out: re(m.out) }
+    ORDER.push(m.id)
+  }
 }
+
+/**
+ * 某个模式发出去的那段话 = mark + prompt（占位符替换后）。
+ *  {doc}  左栏那份文件名        {data} 配套数值表 / 数据表        {vars} 变量对应面板填了什么
+ * 取不到值的占位符【整句删掉】，不能留下一个字面的 "{data}" 发给模型。
+ */
+function promptFor(id) {
+  const M = MODES[id]
+  if (!M || !M.prompt) return ""
+  const bq = (n) => "`" + n + "`"
+  const map = {
+    doc: docName ? bq(docName) : "",
+    data: (CFG.source.kind === "table" ? docName : dataName) ? bq(CFG.source.kind === "table" ? docName : dataName) : "",
+    vars: varsBlock(),
+  }
+  let t = M.prompt
+  for (const [k, v] of Object.entries(map)) {
+    const ph = "{" + k + "}"
+    if (!t.includes(ph)) continue
+    // 有值就替换；没值就把它所在的那一句整句去掉（句号/换行为界），免得留下半截话
+    t = v ? t.split(ph).join(v) : t.replace(new RegExp("[^。\n]*" + ph + "[^。\n]*。?", "g"), "")
+  }
+  return M.mark + t
+}
+
+/** stats 的「变量对应」：把用户指的列拼成一段话，跟在 prompt 里的 {vars} 位置 */
+function varsBlock() {
+  if (!CFG || !CFG.vars) return ""
+  const parts = []
+  for (const f of CFG.vars.fields || []) {
+    const fld = fieldDef(f); const v = SETTINGS[f]
+    if (!fld || v === undefined || v === null || v === "" || (Array.isArray(v) && !v.length)) continue
+    parts.push(fld.label + "＝" + (Array.isArray(v) ? v.join("、") : v))
+  }
+  if (!parts.length) return ""
+  return "\n\n【变量对应，以我指定的为准】" + parts.join("；")
+    + "。我没指定的列你可以推断，但**必须在回答里写清你把哪一列当成了什么**。"
+}
+
+/** 按 id 找 intake 字段定义（设置弹层 / 变量面板都用它渲染控件） */
+const fieldDef = (id) => (CFG && CFG.intake || []).find((f) => f.id === id) || null
 
 /* ============================================================
    2. 状态
    ============================================================ */
-let sid = new URLSearchParams(location.search).get("sid") || null
-let docName = ""          // 左栏那篇文献的文件名（会话上传目录里的裸文件名）
+const QS = new URLSearchParams(location.search)
+let sid = QS.get("sid") || null
+let docName = ""          // 左栏那份东西的文件名（会话上传目录里的裸文件名）
 let docSize = null
-let mode = "guide"
-let turns = 0             // 本会话已经发出过几轮（决定要不要给自由问答补一句原文上下文）
+let dataName = ""         // 配套数值表（只有 refcheck 的「数据完整性」用得上，见 CFG.extraUpload）
+let mode = ""
+let turns = 0             // 本会话已经发出过几轮（决定要不要给自由问答补一句上下文）
 let pendingFile = null    // 首屏选中、尚未上传的 File
 let outputs = []          // /api/outputs 的最近一次结果
+// 设置弹层 + 变量对应面板的值。它们【就是 intake 的字段值】，改完立刻回写 _workflow.json，
+// 于是 pin:true 的字段（humanize 的 protectRefs、stats 的 hasPHI）每一轮都会被 settingsLine
+// 钉进模块前言 —— 这条路是踩出来的（默认值传达不到 → 模型替别人的论文改了统计学结论），
+// 别改成只在前端存着。
+let SETTINGS = {}
 
-// 每个面板的内容。raw = 该模式最近一轮的对话正文；doc = 从产物文件读回来的正文（翻译/大纲）。
-const S = {
-  guide:     { raw: "", doc: null, docName: "", status: "idle", err: "", files: [] },
-  translate: { raw: "", doc: null, docName: "", status: "idle", err: "", files: [] },
-  ppt:       { raw: "", doc: null, docName: "", status: "idle", err: "", files: [] },
-  chat:      { msgs: [], status: "idle", err: "" },
+// 每个面板的内容。raw = 该模式最近一轮的对话正文；doc = 从产物文件读回来的正文（译文/报告/大纲）。
+// 模式是配置来的，所以这张表要等 installConfig 之后才建得出来。
+let S = {}
+function initState() {
+  S = {}
+  for (const id of ORDER) {
+    S[id] = id === "chat"
+      ? { msgs: [], status: "idle", err: "" }
+      : { raw: "", doc: null, docName: "", status: "idle", err: "", files: [] }
+  }
 }
 // 正在跑的那一轮
 let RUN = null            // { mode, label, skills:[], tools:Map, es }
@@ -589,24 +653,70 @@ async function jget(url, opt) {
 /* ============================================================
    3. 首屏：选文件 → 上传 → 开始
    ============================================================ */
-const OK_EXT = ["pdf", "docx", "doc", "odt"]
+const okExt = () => (CFG && CFG.source.exts) || []
 
 // 真错误一律红色。必须显式去掉 info —— 启动时那条"旧会话没有原文"的灰色提示用的是同一个框，
 // 不清掉的话，用户接着传错格式时会看到一条【灰色的】报错，读起来像句无关紧要的说明。
 function showIntroErr(msg) { const e = $("introErr"); e.textContent = msg; e.className = "err" + (msg ? " on" : "") }
 
+/** 首屏：整块按配置画出来（标题 / 引导语 / 拖拽区文案 / chips / 必答题 / 按钮文字都来自 workflows.mjs） */
+function renderIntro() {
+  const I = CFG.intro
+  $("introTitle").textContent = I.title
+  $("introLead").textContent = I.lead
+  $("dropTitle").textContent = I.dropTitle
+  $("dropHint").textContent = I.dropHint
+  $("btnStartTxt").textContent = I.startText
+  $("file").setAttribute("accept", CFG.source.accept)
+  $("introTip").innerHTML = I.tip || ""
+  $("introChips").innerHTML = (I.chips || []).map((c, i) =>
+    '<span class="chip">' + (MODES[ORDER[i]] ? MODES[ORDER[i]].icon : "") + esc(c) + "</span>").join("")
+  // 首屏必答题（目前只有 stats 的 hasPHI）。它不是"设置"，是安全闸：
+  // 未脱敏的患者数据不得进入统计，所以没答之前「开始」按钮是灰的。
+  const askHost = $("introAsk"); askHost.innerHTML = ""
+  for (const id of I.ask || []) {
+    const f = fieldDef(id); if (!f) continue
+    const box = document.createElement("div"); box.className = "askbox"
+    box.innerHTML = '<div class="asklbl">' + esc(f.label) + (f.required ? ' <b class="req">必答</b>' : "") + "</div>"
+      + (f.help ? '<div class="askhelp">' + esc(f.help) + "</div>" : "")
+    const opts = document.createElement("div"); opts.className = "askopts"
+    for (const o of (f.type === "bool" ? [{ v: true, t: "是" }, { v: false, t: "否" }] : f.options || [])) {
+      const b = document.createElement("button")
+      b.type = "button"; b.className = "askbtn"; b.textContent = o.t
+      b.addEventListener("click", () => {
+        SETTINGS[id] = o.v
+        opts.querySelectorAll(".askbtn").forEach((x) => x.classList.remove("on"))
+        b.classList.add("on"); syncStart()
+      })
+      opts.appendChild(b)
+    }
+    box.appendChild(opts); askHost.appendChild(box)
+  }
+  syncStart()
+}
+
+/** 「开始」按钮什么时候能点：文件选了 + 首屏必答题都答了 */
+function syncStart() {
+  const asked = (CFG.intro.ask || []).every((id) => SETTINGS[id] !== undefined && SETTINGS[id] !== null && SETTINGS[id] !== "")
+  $("btnStart").disabled = !pendingFile || !asked || busy()
+}
+
 function pickFile(f) {
   if (!f) return
-  if (!OK_EXT.includes(extOf(f.name))) { showIntroErr("只支持 PDF 与 Word（.pdf / .docx / .doc / .odt），这个是 ." + extOf(f.name)); return }
+  const ok = okExt()
+  if (!ok.includes(extOf(f.name))) {
+    showIntroErr("这个模块只收 " + ok.map((x) => "." + x).join(" / ") + "，你选的是 ." + (extOf(f.name) || "（无扩展名）"))
+    return
+  }
   showIntroErr("")
   pendingFile = f
   $("pickedSlot").innerHTML =
-    // 徽标里放扩展名（PDF / DOCX），比一个通用文件图标信息量大：用户一眼能看出传的是不是自己想传的那种
+    // 徽标里放扩展名（PDF / DOCX / XLSX），比一个通用文件图标信息量大：用户一眼能看出传的是不是自己想传的那种
     '<div class="picked"><div class="fic">' + esc(extOf(f.name).toUpperCase().slice(0, 4)) + "</div>"
     + '<div class="fn"><b>' + esc(f.name) + "</b><span>" + fmtSize(f.size) + "</span></div>"
     + '<button class="rm" type="button" id="rmPick" title="移除">×</button></div>'
-  $("rmPick").addEventListener("click", () => { pendingFile = null; $("pickedSlot").innerHTML = ""; $("btnStart").disabled = true; $("file").value = "" })
-  $("btnStart").disabled = false
+  $("rmPick").addEventListener("click", () => { pendingFile = null; $("pickedSlot").innerHTML = ""; $("file").value = ""; syncStart() })
+  syncStart()
 }
 
 $("drop").addEventListener("click", () => $("file").click())
@@ -615,34 +725,46 @@ $("file").addEventListener("change", (e) => pickFile(e.target.files && e.target.
 ;["dragleave", "drop"].forEach((t) => $("drop").addEventListener(t, (e) => { e.preventDefault(); $("drop").classList.remove("over") }))
 $("drop").addEventListener("drop", (e) => pickFile(e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0]))
 
+/** 上传一个文件到本会话（没有 sid 时服务端会现建一个会话并把 id 回给我们，与聊天页同一条路） */
+async function upload(file) {
+  const r = await jget("api/upload?name=" + encodeURIComponent(file.name) + (sid ? "&sid=" + encodeURIComponent(sid) : ""),
+    { method: "POST", body: file })
+  const j = await r.json().catch(() => null)
+  if (!r.ok || !j || !j.ok) throw new Error((j && j.err) || "上传失败（HTTP " + r.status + "）")
+  sid = j.sid || sid
+  try { history.replaceState(null, "", location.pathname + "?m=" + encodeURIComponent(MOD) + "&sid=" + encodeURIComponent(sid)) } catch (_) {}
+  return j
+}
+
 $("btnStart").addEventListener("click", async () => {
   if (!pendingFile || busy()) return
   $("btnStart").disabled = true
   $("upbar").classList.add("on")
   showIntroErr("")
+  // ★ 这一步可能要几十秒：文件本身传得很快，慢的是【建会话】——服务端要向 opencode 要一个新
+  //   session，机器忙的时候实测等过 25 秒。此前这段时间界面上只有一条无字的进度条，
+  //   看着就是"点了没反应"，用户会去反复点或刷新。所以把按钮文字改成实时的状态。
+  const startTxt = $("btnStartTxt").textContent
+  $("btnStartTxt").textContent = "正在上传…"
+  const slow = setTimeout(() => { $("btnStartTxt").textContent = "正在准备会话…（首次会慢一些）" }, 1500)
   try {
-    // 上传：没有 sid 时服务端会现建一个会话并把 id 回给我们（与聊天页同一条路）。
-    // 会话的模块绑定要等第一条消息（body 里带 module:"litread"）才落，服务端对
-    // "已建但从未绑定"的会话会补绑，所以这里不需要额外做什么。
-    const r = await jget("api/upload?name=" + encodeURIComponent(pendingFile.name) + (sid ? "&sid=" + encodeURIComponent(sid) : ""),
-      { method: "POST", body: pendingFile })
-    const j = await r.json().catch(() => null)
-    if (!r.ok || !j || !j.ok) throw new Error((j && j.err) || "上传失败（HTTP " + r.status + "）")
-    sid = j.sid || sid
+    await upload(pendingFile)
+    clearTimeout(slow); $("btnStartTxt").textContent = startTxt
     docName = pendingFile.name
     docSize = pendingFile.size
-    try { history.replaceState(null, "", location.pathname + "?sid=" + encodeURIComponent(sid)) } catch (_) {}
     enterReader()
-    // 会话标题：不改名的话它会被自动取成第一条消息的前 40 字，也就是"【文献导读】请研读我上传的…"
-    // ——「最近」列表里每一条都长一个样，认不出是哪篇文献。改成文件名。
+    // 会话标题：不改名的话它会被自动取成第一条消息的前 40 字，也就是那句长提示词
+    // ——「最近」列表里每一条都长一个样，认不出是哪一份。改成文件名。
     // ★ 必须 await：服务端的 ensureSessionTitle 只在标题还是占位值时才补名，且【每会话只尝试一次】。
     //   不等它落地就发第一条消息，两者会撞在一起——补名先跑赢，标题被钉成那句提示词，之后再也改不回来。
     await fetch("api/session/rename?id=" + encodeURIComponent(sid) + "&title=" + encodeURIComponent(docName.slice(0, 60)), { method: "POST" }).catch(() => {})
-    setMode("guide")
-    run("guide")
+    if (CFG.source.kind === "table") loadHeaders()   // 读真表头，喂「变量对应」面板的下拉
+    setMode(CFG.first)
+    run(CFG.first)
   } catch (e) {
+    clearTimeout(slow); $("btnStartTxt").textContent = startTxt
     showIntroErr(String((e && e.message) || e))
-    $("btnStart").disabled = false
+    syncStart()
   } finally {
     $("upbar").classList.remove("on")
   }
@@ -656,31 +778,78 @@ function enterReader() {
   $("reader").hidden = false
   $("docName").textContent = docName || "—"
   $("docSub").textContent = [extOf(docName).toUpperCase(), fmtSize(docSize)].filter(Boolean).join(" · ")
+  $("btnSettings").hidden = !(CFG.settings || []).length
+  $("varsBox").hidden = !CFG.vars
+  if (CFG.vars) { $("varsTitle").textContent = CFG.vars.title; $("varsSub").textContent = CFG.vars.sub; renderVars() }
   renderDoc()
   renderRail()
 }
 
-/* ---- 左栏：原文 ----
-   pdf 走 api/raw（浏览器自带阅读器，缩放由它自己管，所以我们把缩放按钮藏起来，不做一个假的）；
-   docx/doc/odt 走 api/preview（服务端转 HTML/PDF），这一路是我们自己套在 iframe 里的，可以缩放。 */
+/* ---- 左栏：那份东西 ----
+   kind=doc   ：pdf 走 api/raw（浏览器自带阅读器）、Word 走 api/preview（服务端转 HTML/PDF）
+   kind=table ：csv/tsv 前端直接渲染成表格；xlsx 前端解析不了，如实说明并给下载 */
 let zoom = 1
 function docUrl() {
   const e = extOf(docName)
-  const base = e === "pdf" ? "api/raw" : "api/preview"
+  const base = (e === "pdf" || CFG.source.kind === "table") ? "api/raw" : "api/preview"
   return base + "?name=" + encodeURIComponent(docName) + "&dir=up" + sidQ()
 }
+
+/** csv/tsv → 表格。只画前 200 行：几万行的表全塞进 DOM 会把页面卡死，而左栏是用来"对着看"的。 */
+function renderCsv(text, sep) {
+  const rows = []
+  for (const line of text.split(/\r?\n/)) {
+    if (!line.trim() && rows.length) continue
+    rows.push(line.split(sep).map((c) => c.replace(/^"|"$/g, "").trim()))
+    if (rows.length > 201) break
+  }
+  if (!rows.length) return '<div class="docmsg">这个文件是空的</div>'
+  const head = rows[0], body = rows.slice(1, 201)
+  return '<div class="tablewrap"><table><thead><tr>'
+    + head.map((c) => "<th>" + esc(c) + "</th>").join("")
+    + "</tr></thead><tbody>"
+    + body.map((r) => "<tr>" + head.map((_, i) => "<td>" + esc(r[i] == null ? "" : r[i]) + "</td>").join("") + "</tr>").join("")
+    + "</tbody></table>"
+    + (rows.length > 200 ? '<div class="more">只显示前 200 行——完整的表交给分析那边读，不受这里影响。</div>' : "")
+    + "</div>"
+}
+
 async function renderDoc() {
   const view = $("docView")
-  if (!docName) { view.innerHTML = '<div class="docmsg">还没有原文</div>'; return }
+  if (!docName) { view.innerHTML = '<div class="docmsg">还没有文件</div>'; return }
   const e = extOf(docName)
+
+  if (CFG.source.kind === "table") {
+    $("zoomBox").hidden = true
+    if (["csv", "tsv", "txt"].includes(e)) {
+      view.innerHTML = '<div class="docmsg">正在读表…</div>'
+      try {
+        const r = await jget(docUrl())
+        if (!r.ok) throw new Error("HTTP " + r.status)
+        view.innerHTML = renderCsv(await r.text(), e === "tsv" ? "	" : ",")
+      } catch (err) {
+        if (String((err && err.message) || err) === "unauthorized") return
+        view.innerHTML = '<div class="docmsg">这张表读不出来（' + esc(String((err && err.message) || err)) + '）。<br>不影响右边的分析——那边读的是文件本身。</div>'
+      }
+      return
+    }
+    // xlsx/xls：解析它要一个几百 KB 的前端库，为了一个只读预览不值得；而且服务端的
+    // /api/data/headers 对 xlsx 也明说了"读不了、交给 AI 在分析时读"。这里如实讲，别装作能预览。
+    view.innerHTML = '<div class="docmsg">Excel 表格（.' + esc(e) + '）在这里没法直接预览。<br><br>'
+      + '<b>不影响分析</b>——右边每个模式读的都是文件本身。<br>'
+      + '想核对内容可以点右上角「原文」下载，或先跑一次「数据体检」，它会把每一列的类型、缺失与分布都列出来。<br>'
+      + '（要在左栏直接看表，把数据另存成 .csv 再传一次即可。）</div>'
+    return
+  }
+
   const scalable = e !== "pdf"                       // PDF 用浏览器自带阅读器，缩放归它管
   $("zoomBox").hidden = !scalable
   const url = docUrl()
   // Word 走 /api/preview（服务端转 HTML/PDF），这一路是会失败的：没装 LibreOffice、
   // 转换超时、mammoth 抛错……iframe 的 error 事件【对 HTTP 错误不触发】，直接塞进去的话
-  // 用户看到的是一框服务端返回的纯文本报错，还以为是文献内容。所以先探一次，失败就自己说人话。
+  // 用户看到的是一框服务端返回的纯文本报错，还以为是正文。所以先探一次，失败就自己说人话。
   if (scalable) {
-    view.innerHTML = '<div class="docmsg">正在转换原文以便预览…</div>'
+    view.innerHTML = '<div class="docmsg">正在转换以便预览…</div>'
     let msg = ""
     try {
       const r = await jget(url)
@@ -691,8 +860,8 @@ async function renderDoc() {
     }
     if (msg) {
       view.innerHTML = '<div class="docmsg">' + esc(msg.slice(0, 300))
-        + '<br><br>左栏只是预览——<b>不影响右边的导读、翻译与问答</b>，那些读的是文件本身。'
-        + '<br>想看原文可以点右上角「原文」下载到本地。</div>'
+        + '<br><br>左栏只是预览——<b>不影响右边的各个模式</b>，那些读的是文件本身。'
+        + '<br>想看原件可以点右上角「原文」下载到本地。</div>'
       return
     }
   }
@@ -707,8 +876,7 @@ async function renderDoc() {
 }
 function applyZoom() {
   const f = $("docFrame"); if (!f) return
-  const scalable = extOf(docName) !== "pdf"
-  const z = scalable ? zoom : 1
+  const z = extOf(docName) !== "pdf" ? zoom : 1
   f.style.width = (100 / z) + "%"
   f.style.height = (100 / z) + "%"
   f.style.transform = "scale(" + z + ")"
@@ -728,23 +896,62 @@ function renderRail() {
     b.type = "button"
     b.className = "tool-btn" + (k === mode ? " active" : "")
     b.title = M.label
-    const st = k === "chat" ? (S.chat.msgs.length ? "done" : "") : (S[k].status === "running" ? "run" : S[k].status === "error" ? "err" : S[k].status === "done" ? "done" : "")
+    const st = k === "chat" ? (S.chat.msgs.length ? "done" : "")
+      : (S[k].status === "running" ? "run" : S[k].status === "error" ? "err" : S[k].status === "done" ? "done" : "")
     b.innerHTML = M.icon + "<span>" + esc(M.label) + "</span>" + (st ? '<i class="dot ' + st + '"></i>' : "")
     b.addEventListener("click", () => onRail(k))
     rail.appendChild(b)
   })
 }
 
-/** 点模式按钮：切过去看；该模式还没跑过就顺手跑一轮（智能助手除外——它等用户开口） */
+/**
+ * 这个模式现在跑得了吗？跑不了要说清缺什么，而不是发出去让模型自己发现。
+ * need 的三种写法（定义在 workflows.mjs 的 modes[].need）：
+ *   "data"        需要配套数值表（refcheck 的数据完整性）
+ *   "var:xxx"     需要「变量对应」里指定某一列（stats 的基线表要分组列）
+ *   "after:yyy"   需要先跑过另一个模式（humanize 的改动对照要先有润色稿）
+ */
+function blockedBy(k) {
+  const M = MODES[k]
+  const miss = []
+  for (const n of M.need || []) {
+    if (n === "data" && !dataName) miss.push({ kind: "data" })
+    else if (n.startsWith("var:")) { const f = n.slice(4); const v = SETTINGS[f]; if (v === undefined || v === null || v === "" || (Array.isArray(v) && !v.length)) miss.push({ kind: "var", field: f }) }
+    else if (n.startsWith("after:")) { const m2 = n.slice(6); if (!S[m2] || S[m2].status === "idle") miss.push({ kind: "after", mode: m2 }) }
+  }
+  return miss.length ? miss : null
+}
+
+/** 点模式按钮：切过去看；该模式还没跑过、也不缺前置条件，就顺手跑一轮（智能助手除外——它等用户开口） */
 function onRail(k) {
   setMode(k)
   if (k === "chat") { $("q").focus(); return }
+  const miss = blockedBy(k)
+  if (miss) { showBlocked(k, miss); return }
   if (S[k].status === "idle" && !busy()) run(k)
+}
+
+/** 缺前置条件：就地说清缺什么、并把用户送到能补上它的地方（展开变量面板 / 亮出上传按钮） */
+function showBlocked(k, miss) {
+  const M = MODES[k]
+  S[k].err = ""
+  const parts = miss.map((x) => {
+    if (x.kind === "data") return "还没有配套的数值表"
+    if (x.kind === "var") { const f = fieldDef(x.field); return "还没指定「" + (f ? f.label : x.field) + "」" }
+    if (x.kind === "after") return "得先跑一次「" + (MODES[x.mode] ? MODES[x.mode].label : x.mode) + "」"
+    return ""
+  }).filter(Boolean)
+  S[k].block = parts.join("；") + "。" + (M.needHint || "")
+  if (miss.some((x) => x.kind === "var")) {
+    $("varsBox").open = true
+    renderVars(miss.filter((x) => x.kind === "var").map((x) => x.field))
+  }
+  render(k)
 }
 
 function setMode(k) {
   mode = k
-  ORDER.forEach((x) => { $("pane-" + x).classList.toggle("on", x === k) })
+  ORDER.forEach((x) => { const el = $("pane-" + x); if (el) el.classList.toggle("on", x === k) })
   const M = MODES[k]
   $("paneTitle").innerHTML = M.icon + "<span>" + esc(M.label) + "</span>"
   document.querySelector(".ai-head .badge").textContent = M.badge
@@ -792,7 +999,9 @@ function emptyHtml(m) {
   // 这个按钮在忙的时候是禁用态并写明在等谁，忙完点它就能开跑。
   const btn = m === "chat" ? ""
     : '<div style="margin-top:16px"><button class="hbtn" data-run="' + m + '"' + (busy() ? " disabled" : "") + ">"
-      + (busy() ? "等「" + esc(MODES[RUN ? RUN.mode : "guide"].label) + "」跑完" : "开始" + esc(MODES[m].label)) + "</button></div>"
+      // 按钮文字直接用模式名。别拼成"开始"+模式名——「开始基线表」「开始数据完整性」都不是人话，
+      // 而这几个名字本身就是动宾结构，单独摆着就是一个动作。忙的时候写明在等谁。
+      + (busy() ? "等「" + esc(MODES[RUN ? RUN.mode : CFG.first].label) + "」跑完" : esc(MODES[m].label)) + "</button></div>"
   return '<div class="empty-hint"><span class="big">' + esc(big) + "</span>" + esc(sub) + btn + "</div>"
 }
 
@@ -1097,11 +1306,25 @@ async function restore() {
     ])
   } catch (e) { return false }
 
-  const doc = (Array.isArray(ups) ? ups : []).find((f) => OK_EXT.includes(extOf(f.name)))
-  if (!doc) return false                       // 这个会话里没有可研读的原文 → 回首屏让他传一篇
+  const list = Array.isArray(ups) ? ups : []
+  const doc = list.find((f) => okExt().includes(extOf(f.name)))
+  if (!doc) return false                       // 这个会话里没有本模块能处理的文件 → 回首屏让他传一份
   docName = doc.name; docSize = doc.size
+  // 配套数值表（refcheck）：上传目录里另一个符合 extraUpload 扩展名的文件
+  if (CFG.extraUpload) {
+    const d2 = list.find((f) => f.name !== docName && CFG.extraUpload.exts.includes(extOf(f.name)))
+    if (d2) dataName = d2.name
+  }
 
-  // 历史 → 四个面板。同一模式跑过多轮时【后面的覆盖前面的】：用户看到的应该是最近那一版。
+  // 已落盘的表单值（设置 / 必答题 / 变量对应）。刷新页面、换台机器打开同一个会话，
+  // 勾选都得原样回来 —— 否则 pin 的那几项会在下一轮悄悄变回默认值。
+  try {
+    const st = await jget("api/workflow/state?sid=" + encodeURIComponent(sid)).then((r) => (r.ok ? r.json() : null))
+    if (st && st.state && st.state.form) SETTINGS = { ...st.state.form }
+  } catch (_) {}
+
+  // 历史 → 各个面板。同一模式跑过多轮时【后面的覆盖前面的】：用户看到的应该是最近那一版。
+  const auto = ORDER.filter((k) => k !== "chat")
   if (Array.isArray(hist)) {
     let cur = null
     hist.forEach((msg) => {
@@ -1119,18 +1342,19 @@ async function restore() {
   }
 
   await refreshOutputs()
-  await Promise.all(["guide", "translate", "ppt"].map((m) => loadDocFor(m)))
-  ;["guide", "translate", "ppt"].forEach((m) => { if (S[m].status !== "idle") collectFiles(m) })
+  await Promise.all(auto.map((m) => loadDocFor(m)))
+  auto.forEach((m) => { if (S[m].status !== "idle") collectFiles(m) })
 
   enterReader()
-  // 进来先看哪个面板：优先最近跑过的那个自动模式，都没有就看导读
-  const first = ["ppt", "translate", "guide"].find((m) => S[m].status !== "idle") || "guide"
-  setMode(S.chat.msgs.length && first === "guide" && S.guide.status === "idle" ? "chat" : first)
+  if (CFG.source.kind === "table") loadHeaders()
+  // 进来先看哪个面板：最近跑过的那个（按模式条倒序找），都没跑过就看配置指定的首个模式
+  const done = auto.slice().reverse().find((m) => S[m].status !== "idle")
+  setMode(done || (S.chat.msgs.length ? "chat" : CFG.first))
 
   // 后台还在跑：接上去。属于哪个模式看最后一条 user 消息的标记。
   if (job && job.running) {
     const lastUser = [...(hist || [])].reverse().find((x) => x.role === "user")
-    const m = lastUser ? modeOfUserText(lastUser.text || "") : "guide"
+    const m = lastUser ? modeOfUserText(lastUser.text || "") : CFG.first
     S[m].status = "running"
     setMode(m)
     attach(m)
@@ -1146,13 +1370,15 @@ async function restore() {
    另一个点了没反应。改成 data-act + 事件委托：将来再往哪儿放一个，写个属性就通了。
    ============================================================ */
 const menu = $("recentMenu")
-const closeMenu = () => menu.classList.remove("on")
+// 两个弹层（最近 / 设置）共用一套定位与关闭：它们都可能被不同位置的按钮触发，
+// 所以都是 body 级 position:fixed，打开时按触发按钮算坐标。
+const closeMenu = () => { menu.classList.remove("on"); const sm = $("setMenu"); if (sm) sm.classList.remove("on") }
 
-/** 把菜单摆到触发按钮下面（position:fixed，坐标自己算），并且不许越出视口右/下边 */
-function openMenuAt(btn) {
-  menu.classList.add("on")                       // 先显示再量，否则 offsetWidth/Height 都是 0
+/** 把弹层摆到触发按钮下面（position:fixed，坐标自己算），并且不许越出视口右/下边 */
+function placeMenu(el, btn) {
+  el.classList.add("on")                         // 先显示再量，否则 offsetWidth/Height 都是 0
   const r = btn.getBoundingClientRect()
-  const w = menu.offsetWidth, h = menu.offsetHeight
+  const w = el.offsetWidth, h = el.offsetHeight
   let left = Math.min(r.right - w, innerWidth - w - 10)
   let top = r.bottom + 6
   if (top + h > innerHeight - 10) top = Math.max(10, r.top - h - 6)   // 下面放不下就翻到按钮上方
@@ -1163,12 +1389,12 @@ function openMenuAt(btn) {
 async function showRecent(btn) {
   if (menu.classList.contains("on")) return closeMenu()
   menu.innerHTML = '<div class="empty">正在读取…</div>'
-  openMenuAt(btn)
+  placeMenu(menu, btn)
   let j = null
   try { j = await jget("api/sessions").then((r) => r.json()) } catch (_) {}
   // 只列本模块的会话。别的模块的会话在这个页面里打不开（没有原文、没有模式），列出来只会误导。
   const list = ((j && j.sessions) || []).filter((s) => s.module === "litread").slice(0, 20)
-  if (!list.length) { menu.innerHTML = '<div class="empty">还没有研读过的文献</div>'; return openMenuAt(btn) }
+  if (!list.length) { menu.innerHTML = '<div class="empty">还没有做过的记录</div>'; return placeMenu(menu, btn) }
   menu.innerHTML = ""
   list.forEach((s) => {
     const b = document.createElement("button")
@@ -1195,33 +1421,217 @@ document.addEventListener("click", (e) => {
 addEventListener("resize", closeMenu)             // fixed 定位的菜单不会跟着按钮走，改窗口就收起来
 
 /* ============================================================
-   9. 启动
+   9. 设置弹层 / 变量对应 / 附加上传
    ============================================================ */
-;(async () => {
-  // 模块没开通就别把人晾在一个用不了的页面上（多用户部署里 litread 可能没授权）
-  try {
-    const j = await jget("api/modules").then((r) => r.json())
-    const m = ((j && j.modules) || []).find((x) => x.id === "litread")
-    if (m && !m.allowed) {
-      document.body.innerHTML = '<div class="intro"><div class="introcard"><h1>文献研读</h1>'
-        + '<div class="sub">你的账号还没有开通这个模块，请联系管理员。</div>'
-        + '<div class="gobar"><button class="gobtn" onclick="location.href=\'./workspace.html\'">回工作台</button></div></div></div>'
-      return
+/** 本会话要落盘的表单值 = 设置弹层 + 首屏必答题 + 变量对应，再加上左栏那份文件 */
+function wfFormValues() {
+  const v = { ...SETTINGS }
+  if (CFG.source.field && docName) v[CFG.source.field] = [docName]
+  if (CFG.extraUpload && dataName) v[CFG.extraUpload.field] = [dataName]
+  return v
+}
+
+/** 设置改了就立刻回写 _workflow.json —— pin:true 的字段靠它进入【下一轮】的模块前言 */
+let saveT = 0
+function saveSettings() {
+  if (!sid) return
+  clearTimeout(saveT)
+  saveT = setTimeout(() => {
+    fetch("api/workflow/form", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ module: MOD, sid, values: wfFormValues() }),
+    }).catch(() => {})
+  }, 400)
+}
+
+let HEADERS = []          // 真实表头（stats 的 columns 下拉靠它）
+let HEADERS_WHY = ""      // 读不出来时的原因（xlsx 要 AI 在分析时读，服务端如实回这一句）
+
+/** 通用控件：select / bool / text / multi / columns（columns 的候选来自真实表头） */
+function fieldControl(f, onChange) {
+  const wrap = document.createElement("div")
+  const v = SETTINGS[f.id]
+  if (f.type === "multi") {
+    for (const o of f.options || []) {
+      const l = document.createElement("label"); l.className = "schk"
+      const cb = document.createElement("input"); cb.type = "checkbox"
+      cb.checked = Array.isArray(v) && v.includes(o.v)
+      cb.addEventListener("change", () => {
+        const cur = Array.isArray(SETTINGS[f.id]) ? SETTINGS[f.id].slice() : []
+        SETTINGS[f.id] = cb.checked ? [...new Set([...cur, o.v])] : cur.filter((x) => x !== o.v)
+        onChange()
+      })
+      l.appendChild(cb); l.appendChild(document.createTextNode(o.t)); wrap.appendChild(l)
     }
-  } catch (_) { /* 清单拿不到就照常进，真没授权时发第一条消息会被服务端挡下并说明 */ }
+    return wrap
+  }
+  if (f.type === "text") {
+    const i = document.createElement("input"); i.type = "text"; i.value = v == null ? "" : v
+    if (f.placeholder) i.placeholder = f.placeholder
+    i.addEventListener("input", () => { SETTINGS[f.id] = i.value; onChange() })
+    wrap.appendChild(i); return wrap
+  }
+  // columns 读不出表头（xlsx）时降级成手填输入框，而不是给一个空下拉让人以为这张表没有列
+  if (f.type === "columns" && !HEADERS.length) {
+    const i = document.createElement("input"); i.type = "text"; i.value = v == null ? "" : v
+    i.placeholder = HEADERS_WHY || "手动填列名"
+    i.addEventListener("input", () => { SETTINGS[f.id] = i.value; onChange() })
+    wrap.appendChild(i); return wrap
+  }
+  const sel = document.createElement("select")
+  const opts = f.type === "bool" ? [{ v: true, t: "是" }, { v: false, t: "否" }]
+    : f.type === "columns" ? [{ v: "", t: "（不指定）" }].concat(HEADERS.map((h) => ({ v: h, t: h })))
+    : (f.options || []).slice()
+  if (f.type !== "columns" && f.type !== "bool" && !f.required) opts.unshift({ v: "", t: "（不指定）" })
+  for (const o of opts) {
+    const op = document.createElement("option")
+    op.value = String(o.v); op.textContent = o.t
+    if (String(v) === String(o.v)) op.selected = true
+    sel.appendChild(op)
+  }
+  sel.addEventListener("change", () => {
+    SETTINGS[f.id] = f.type === "bool" ? sel.value === "true" : sel.value
+    onChange()
+  })
+  wrap.appendChild(sel); return wrap
+}
+
+async function loadHeaders() {
+  if (!CFG.vars || !docName || !sid) return
+  try {
+    const j = await jget("api/data/headers?name=" + encodeURIComponent(docName) + sidQ()).then((r) => r.json())
+    HEADERS = Array.isArray(j.headers) ? j.headers : []
+    HEADERS_WHY = j.reason || ""
+  } catch (_) { HEADERS = []; HEADERS_WHY = "" }
+  renderVars()
+}
+
+function renderVars(missing) {
+  if (!CFG || !CFG.vars) return
+  const grid = $("varsGrid"); grid.innerHTML = ""
+  const miss = new Set(missing || [])
+  let filled = 0
+  for (const id of CFG.vars.fields) {
+    const f = fieldDef(id); if (!f) continue
+    const v = SETTINGS[id]
+    if (v !== undefined && v !== null && v !== "" && !(Array.isArray(v) && !v.length)) filled++
+    const box = document.createElement("div")
+    box.className = "vf" + (miss.has(id) ? " miss" : "")
+    const l = document.createElement("label"); l.textContent = f.label
+    if (f.help) l.title = f.help
+    box.appendChild(l)
+    box.appendChild(fieldControl(f, () => { saveSettings(); renderVars() }))
+    grid.appendChild(box)
+  }
+  $("varsSum").textContent = HEADERS.length
+    ? "（已指定 " + filled + " / " + CFG.vars.fields.length + " 项，列名读自你的表）"
+    : (HEADERS_WHY ? "（" + HEADERS_WHY + "）" : "（已指定 " + filled + " 项）")
+}
+
+const setMenu = $("setMenu")
+$("btnSettings").addEventListener("click", (e) => {
+  e.stopPropagation()
+  if (setMenu.classList.contains("on")) { setMenu.classList.remove("on"); return }
+  setMenu.innerHTML = ""
+  for (const id of CFG.settings || []) {
+    const f = fieldDef(id); if (!f) continue
+    const box = document.createElement("div"); box.className = "sf"
+    const l = document.createElement("label"); l.textContent = f.label; box.appendChild(l)
+    if (f.help) { const h = document.createElement("div"); h.className = "sh"; h.textContent = f.help; box.appendChild(h) }
+    box.appendChild(fieldControl(f, saveSettings))
+    setMenu.appendChild(box)
+  }
+  closeMenu()
+  setMenu.classList.add("on")
+  placeMenu(setMenu, $("btnSettings"))
+})
+
+/* ---- 附加上传（目前只有 refcheck 的配套数值表）----
+   它只被一个模式用到，摆在首屏会挡住所有人的路，所以点到那个模式、发现缺了才就地要。 */
+function extraUploadBtn() {
+  if (!CFG.extraUpload) return null
+  const b = document.createElement("button")
+  b.type = "button"; b.className = "hbtn"
+  b.innerHTML = ic("up") + "<span>" + (dataName ? "换一份" + CFG.extraUpload.label : "上传" + CFG.extraUpload.label) + "</span>"
+  b.addEventListener("click", () => {
+    const inp = document.createElement("input")
+    inp.type = "file"; inp.accept = CFG.extraUpload.accept
+    inp.addEventListener("change", async () => {
+      const f = inp.files && inp.files[0]; if (!f) return
+      const cur = mode
+      if (!CFG.extraUpload.exts.includes(extOf(f.name))) {
+        S[cur].err = "只收 " + CFG.extraUpload.exts.map((x) => "." + x).join(" / ") + "，你选的是 ." + (extOf(f.name) || "（无扩展名）")
+        render(cur); return
+      }
+      S[cur].err = ""; S[cur].block = "正在上传 " + f.name + "…"; render(cur)
+      try { await upload(f); dataName = f.name; S[cur].block = ""; saveSettings(); render(cur) }
+      catch (e) { S[cur].block = ""; S[cur].err = String((e && e.message) || e); render(cur) }
+    })
+    inp.click()
+  })
+  return b
+}
+
+/**
+ * 启动：确定是哪个模块 → 取它的 reader 配置 → 按配置把界面搭出来。
+ * 模块来自三处，优先级从高到低：
+ *   ?m=<id>        工作台点卡片进来时带的（见 workspace.html 的 enter）
+ *   ?sid= 的会话   会话在创建那一刻就绑定了模块，服务端说了算
+ *   litread        兜底（老书签直接开 /reader.html）
+ */
+;(async () => {
+  const fail = (title, msg) => {
+    document.body.innerHTML = '<div class="intro" style="display:flex"><div class="introcard"><h1>' + esc(title) + "</h1>"
+      + '<div class="lead">' + esc(msg) + "</div>"
+      + '<div style="margin-top:22px"><button class="gobtn" data-act="ws">回工作台</button></div></div></div>'
+    document.body.addEventListener("click", (e) => { if (e.target.closest('[data-act="ws"]')) location.href = "./workspace.html" })
+  }
+
+  MOD = QS.get("m") || ""
+  let mods = []
+  try { mods = ((await jget("api/modules").then((r) => r.json())) || {}).modules || [] } catch (_) { return }
+
+  // 带了 sid 却没带 m：会话绑的模块以服务端为准（用户可能是从「最近」或聊天页跳过来的）
+  if (!MOD && sid) {
+    try {
+      const j = await jget("api/sessions").then((r) => r.json())
+      const hit = ((j && j.sessions) || []).find((x) => x.id === sid)
+      if (hit && hit.module) MOD = hit.module
+    } catch (_) {}
+  }
+  if (!MOD) MOD = "litread"
+
+  const meta = mods.find((x) => x.id === MOD)
+  if (!meta) return fail("打不开这个模块", "服务端没有「" + MOD + "」这个模块。可能是链接过期了，回工作台重新进一次。")
+  if (meta.ui !== "reader") { location.href = "./#module=" + encodeURIComponent(MOD); return }
+  if (!meta.allowed) return fail(meta.name, "你的账号还没有开通这个模块，请联系管理员。")
+
+  let wf = null
+  try { wf = ((await jget("api/modules/" + encodeURIComponent(MOD) + "/workflow").then((r) => r.json())) || {}).workflow } catch (_) {}
+  if (!wf || !wf.reader) return fail(meta.name, "取不到这个模块的界面配置（服务端版本可能比界面包旧）。刷新一次；还不行就回工作台，从对话里也能用这些能力。")
+
+  document.title = meta.name + " · Niuma Science"
+  installConfig(wf.reader)
+  initState()
+  mode = CFG.first
+  // 面板容器按模式清单生成（每个模式一个），HTML 里不再写死任何一个模块的面板
+  $("aiBody").innerHTML = ORDER.map((id) => '<div class="pane" id="pane-' + id + '"></div>').join("")
+  // 首屏那个大图标用「首个模式」的图标：它就是这个模块最主要在干的事
+  $("introIcon").innerHTML = MODES[CFG.first] ? MODES[CFG.first].icon : ic("dot")
+  renderIntro()
 
   if (sid) {
     const ok = await restore()
     if (ok) return
-    // 这个会话里没有可研读的原文 → 回首屏当新的一篇。
-    // ★ 必须说一句为什么。最常见的来源是【旧版「文献研读」留下的会话】——那时这个模块是
-    //   "检索一个方向的文献"，没有上传件，「最近」列表里它们和新会话长得一模一样。
-    //   静默弹回上传页的话，用户会以为是自己点错了或者会话丢了，而且会反复再点一次。
+    // 这个会话里没有本模块能处理的文件 → 回首屏当新的一份。
+    // ★ 必须说一句为什么。最常见的来源是【这个模块改版前留下的会话】——那时它是表单+流程条那一套，
+    //   未必有上传件，而「最近」列表里新旧长得一模一样。静默弹回上传页的话，用户会以为自己点错了，
+    //   而且会反复再点一次。
     sid = null
-    try { history.replaceState(null, "", location.pathname) } catch (_) {}
+    try { history.replaceState(null, "", location.pathname + "?m=" + encodeURIComponent(MOD)) } catch (_) {}
     $("introErr").className = "err on info"
-    $("introErr").textContent = "刚才那个会话里没有可研读的原文——多半是旧版「文献研读」（检索式）留下的，"
-      + "那时候这个模块不需要上传文件。它的对话记录还在，从左侧「自由对话」那边照常能翻到；要研读某一篇，在下面传上来即可。"
+    $("introErr").textContent = "刚才那个会话里没有这个模块能处理的文件——多半是改版前留下的老会话，"
+      + "那时候不需要先上传。它的对话记录还在，从「自由对话」那边照常能翻到；要开始新的一份，在上面传上来即可。"
   }
   $("intro").hidden = false
 })()
