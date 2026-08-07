@@ -1,0 +1,1684 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>文献研读 · Niuma Science</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+/* ============================================================
+   阅读器壳 —— 四个「核心能力」模块共用（文献研读 / 文稿核查与审校 / 文章润色 / 数据统计与分析）
+   ------------------------------------------------------------
+   【本文件不认识任何一个具体模块】模式清单、每个模式发什么话、首屏文案、设置字段、变量对应
+   面板，全部来自 GET /api/modules/<id>/workflow 的 reader 段（定义在 workflows.mjs）。
+   这里只负责照着画、照着发、照着把结果摆回对应的面板。所以加一个模式、改一句提示词，
+   只动 workflows.mjs，走「界面包」热更新即可，不用重发安装包。
+   ★ 推论：本文件里【不该出现任何模块 id 的字面量】（兜底默认值与注释除外）。写死过两次，
+     两次都是同一种后果——别的模块被当成文献研读：会话绑错模块（前言与技能闸全是别人的）、
+     「最近」列表列出别的模块的会话，而界面照常显示本模块的样子，从外面完全看不出来。
+
+   【为什么这四个模块该用它】它们的输入都是【一份东西】（一篇文献 / 一份稿件 / 一张数据表），
+   想对它做的事有好几种、彼此没有先后、随时来回切。套进通用壳（首屏表单 → 步骤条 → 一条
+   对话流）时，步骤条永远停在"共 N 步、已完成 1 步"，而那份东西本身没地方摆。
+
+   【与后端的关系：一个字都没多加】会话、模块闸、前言注入、额度、产物目录全走原有接口：
+     POST api/chat/start  → 起一轮（body 带 module=<当前模块>，服务端据此绑定会话并注入前言）
+     GET  api/chat/attach → SSE 直播
+     POST api/upload      → 上传（没有 sid 时它会现建一个会话，此时会话【还没有模块绑定】）
+     GET  api/raw/preview → 左栏渲染那份东西；api/outputs 列产物
+   模式之间的区别只在【发过去的那句话】：消息开头的方括号标记（modes[].mark）就是模式信号，
+   workflows.mjs 的 flow 里把这些标记教给了 agent，刷新页面后也靠它把每一轮认回对应面板。
+
+   【一份东西 = 一个会话】各模式共享同一个 opencode 会话，所以原文只抽一次；切到"智能助手"
+   时前面几轮的上下文原样都在，接着问就行。换一份 = 新开会话。
+   ============================================================ */
+:root{
+  --bg:#eef1f5;
+  --panel:#ffffff;
+  --panel-soft:#f5f7fa;
+  --text:#1f2329;
+  --muted:#5b6573;
+  --faint:#8a93a0;
+  --accent:#3b6fd4;
+  --accent-deep:#2f5bb8;
+  --accent-soft:rgba(59,111,212,.10);
+  --green:#2bb673;
+  --amber:#d98324;
+  --red:#c0392b;
+  --line:rgba(20,24,30,.10);
+  --line-hi:rgba(20,24,30,.16);
+  --r-lg:16px; --r-md:12px; --r-sm:10px;
+  --shadow-sm:0 2px 8px rgba(20,24,30,.06);
+  --shadow-md:0 6px 22px rgba(20,24,30,.10);
+  /* Space Grotesk 与工作台 / 登录页同源。它没有汉字，中文自然落到后面的 雅黑 / 苹方 ——
+     设计稿要的就是这个"拉丁字母是它、汉字是系统字"的混排。字体拉不下来（离线 / 被墙）时
+     整条回落到系统字，页面照常可用，所以不必为它做任何兜底。 */
+  --sans:'Space Grotesk',system-ui,-apple-system,"Segoe UI","Microsoft YaHei","PingFang SC",sans-serif;
+}
+*{box-sizing:border-box}
+html,body{height:100%}
+body{margin:0;background:var(--bg);color:var(--text);font-family:var(--sans);font-size:14px;line-height:1.6;-webkit-font-smoothing:antialiased}
+button{font:inherit}
+
+/* ---------- 通用小按钮 ----------
+   顶栏整条撤掉了：首屏那一行（品牌 + 模块徽标 + 已就绪 + 最近 + 工作台）说的每一件事，
+   卡片里都已经说过一遍（书本图标、大标题「文献研读」、副标题），三处重复只是在占地方；
+   进了阅读器之后左栏顶上就是文件名，也不需要再有一条横幅告诉你在哪。
+   原来挂在顶栏上的三个动作各自找到了更该待的地方：
+     · 首屏 → 卡片下面一行浅色文字链（最近研读过的 / 回工作台）
+     · 阅读器 → 左栏文件工具条的右端（换一篇 / 最近 / 工作台），与「原文」按钮并排 */
+.hbtn{display:inline-flex;align-items:center;gap:6px;height:28px;padding:0 10px;border-radius:8px;border:1px solid var(--line-hi);background:#fff;color:var(--muted);cursor:pointer;font-size:12.5px;transition:.15s;flex:none}
+.hbtn:hover{border-color:var(--accent);color:var(--accent)}
+.hbtn svg{width:14px;height:14px}
+.hbtn[disabled]{opacity:.45;cursor:not-allowed}
+/* 首屏卡片底下那一行文字链 */
+.intronav{display:flex;align-items:center;justify-content:center;gap:12px;margin-top:18px;font-size:12.5px;color:var(--faint)}
+.linkbtn{border:none;background:none;padding:2px 4px;color:var(--muted);cursor:pointer;font-size:12.5px;border-radius:6px}
+.linkbtn:hover{color:var(--accent);text-decoration:underline}
+
+/* 「最近」下拉。position:fixed + 打开时按触发按钮算坐标 —— 因为这个菜单要被两个位置的按钮
+   共用（首屏卡片下方、阅读器的文件工具条），绝对定位就得跟着各自的定位父级走，坐标会打架。 */
+.menu{position:fixed;min-width:270px;max-width:min(380px,92vw);max-height:60vh;overflow:auto;background:#fff;border:1px solid var(--line-hi);border-radius:var(--r-md);box-shadow:var(--shadow-md);padding:6px;display:none;z-index:200}
+.menu.on{display:block}
+.menu .mi{display:block;width:100%;text-align:left;border:none;background:none;padding:8px 10px;border-radius:8px;cursor:pointer;color:var(--text);font-size:13px}
+.menu .mi:hover{background:var(--panel-soft)}
+.menu .mi small{display:block;color:var(--faint);font-size:11px;margin-top:2px}
+.menu .empty{padding:12px 10px;color:var(--faint);font-size:12.5px}
+
+/* ---------- 上传首屏（居中大卡片，与基金申报 / 综述撰写的首屏同源）---------- */
+.stage{position:fixed;inset:0;z-index:0;pointer-events:none;background:radial-gradient(ellipse 80% 50% at 50% 0%,rgba(59,111,212,.06) 0%,transparent 60%)}
+/* ★ [hidden] 必须显式写死。作者样式里的 display:flex 优先级高过浏览器给 [hidden] 的
+   display:none —— 少了这一行，点「开始研读」之后首屏【根本不会消失】，它和阅读器上下叠成
+   两屏，用户得用滚轮往下拉才看得到阅读器，看上去就像"点了没跳转"。下面 .reader[hidden] 是同一回事。 */
+.intro[hidden]{display:none}
+.intro{position:relative;z-index:1;height:100vh;overflow:auto;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:40px 20px 56px}
+.introcard{width:min(760px,100%);background:var(--panel);border:1px solid var(--line-hi);border-radius:var(--r-lg);box-shadow:var(--shadow-md);padding:44px 38px 34px;text-align:center}
+.introcard .hero-ic{width:56px;height:56px;margin:0 auto 22px;border-radius:14px;background:var(--accent-soft);color:var(--accent);display:grid;place-items:center;box-shadow:0 6px 18px -6px rgba(59,111,212,.4)}
+.introcard .hero-ic svg{width:28px;height:28px}
+.introcard h1{margin:0 0 12px;font-size:30px;font-weight:700;letter-spacing:.01em}
+.introcard .lead{font-size:15px;color:var(--muted);line-height:1.78;margin:0 auto;max-width:560px}
+.divider{height:1px;background:var(--line);margin:30px auto;max-width:500px}
+
+.drop{border:1.5px dashed var(--line-hi);border-radius:var(--r-md);background:var(--panel-soft);padding:26px 20px;text-align:center;color:var(--muted);cursor:pointer;transition:.15s}
+.drop:hover,.drop.over{border-color:var(--accent);background:var(--accent-soft);color:var(--accent)}
+.drop svg{width:26px;height:26px;color:var(--accent);margin-bottom:8px}
+.drop .d1{font-size:14px;font-weight:600;color:var(--text)}
+.drop .d2{font-size:12.5px;color:var(--muted);margin-top:6px}
+
+/* 选中的文件：扩展名徽标 + 名字 + 大小 + 移除。左对齐（卡片整体居中，唯独这一行是数据，
+   居中会让长文件名的省略号跑到两头，读起来别扭）。 */
+.picked{display:flex;align-items:center;gap:10px;margin-top:12px;padding:9px 11px;border:1px solid var(--line-hi);border-radius:var(--r-sm);background:var(--panel);text-align:left}
+.picked .fic{width:30px;height:30px;flex:none;border-radius:8px;background:var(--accent-soft);color:var(--accent);display:grid;place-items:center;font-size:11px;font-weight:700}
+.picked .fn{flex:1;min-width:0}
+.picked .fn b{display:block;font-size:13px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.picked .fn span{font-size:11.5px;color:var(--faint)}
+.picked .rm{border:none;background:none;color:var(--faint);cursor:pointer;width:26px;height:26px;border-radius:6px;font-size:15px;line-height:1;flex:none}
+.picked .rm:hover{color:#e0564f;background:rgba(224,86,79,.10)}
+
+.gobtn{display:inline-flex;align-items:center;justify-content:center;gap:7px;border:none;cursor:pointer;font:inherit;font-size:13px;font-weight:600;padding:11px 22px;border-radius:var(--r-sm);margin-top:20px;transition:.15s;background:var(--accent);color:#fff;box-shadow:0 4px 12px rgba(59,111,212,.26)}
+.gobtn:hover{background:var(--accent-deep)}
+.gobtn[disabled]{background:#c3ccd8;box-shadow:none;cursor:not-allowed}
+.gobtn svg{width:16px;height:16px}
+
+/* 底部这排 chip 写的是本模块真能做的四件事，不是装饰性形容词 —— 用户第一眼要看到的是
+   "传进来之后能干嘛"，而不是五个漂亮的四字词。 */
+.chips{display:flex;flex-wrap:wrap;gap:8px;justify-content:center;margin-top:28px}
+.chip{display:inline-flex;align-items:center;gap:6px;background:var(--panel-soft);border:1px solid var(--line-hi);border-radius:999px;padding:7px 14px;font-size:12.5px;color:#46586e;transition:.15s}
+.chip:hover{border-color:var(--accent);color:var(--accent)}
+.chip svg{width:14px;height:14px}
+
+/* 首屏必答题（stats 的「含不含患者身份信息」）。它不是设置、是安全闸，所以摆在按钮上方、
+   没答之前「开始」是灰的 —— 默认「否」等于替用户声明「本表不含身份信息」，而他表里就摆着
+   300 个姓名和住院号。 */
+.askbox{margin-top:14px;padding:12px 14px;border:1px solid var(--line-hi);border-radius:var(--r-sm);background:var(--panel-soft);text-align:left}
+.askbox .asklbl{font-size:13px;font-weight:600}
+.askbox .asklbl .req{color:var(--red);font-size:11px;margin-left:4px}
+.askbox .askhelp{font-size:11.5px;color:var(--faint);margin-top:3px;line-height:1.7}
+.askbox .askopts{display:flex;gap:8px;margin-top:9px}
+.askbtn{flex:1;height:34px;border:1px solid var(--line-hi);background:#fff;border-radius:8px;color:var(--muted);cursor:pointer;font-size:13px;transition:.15s}
+.askbtn:hover{border-color:var(--accent);color:var(--accent)}
+.askbtn.on{background:var(--accent);border-color:var(--accent);color:#fff;font-weight:600}
+
+/* 设置弹层：复用 .menu 的 fixed 定位，只是内容是一组控件 */
+.setmenu{min-width:320px;max-width:min(420px,92vw);padding:12px 14px}
+.setmenu .sf{margin-bottom:12px}
+.setmenu .sf:last-child{margin-bottom:0}
+.setmenu .sf > label{display:block;font-size:12.5px;font-weight:600;margin-bottom:5px}
+.setmenu .sf .sh{font-size:11px;color:var(--faint);line-height:1.7;margin-bottom:5px}
+.setmenu select,.setmenu input[type=text]{width:100%;height:32px;border:1px solid var(--line-hi);border-radius:8px;padding:0 9px;font:inherit;font-size:12.5px;background:#fff;color:var(--text)}
+.setmenu .schk{display:flex;align-items:center;gap:7px;font-size:12.5px;color:var(--muted);margin-bottom:4px;cursor:pointer}
+
+/* 变量对应面板（只有 stats）：默认折叠的一条，展开是两列下拉 */
+.varsbox{flex:none;border-bottom:1px solid var(--line);background:#fff}
+.varsbox > summary{cursor:pointer;padding:9px 16px;font-size:12.5px;font-weight:600;display:flex;align-items:center;gap:8px;list-style:none}
+.varsbox > summary::-webkit-details-marker{display:none}
+.varsbox > summary::before{content:"▸";color:var(--faint);font-size:11px}
+.varsbox[open] > summary::before{content:"▾"}
+.varsbox .varssum{font-weight:400;color:var(--faint);font-size:11.5px}
+.varsbox .varssub{padding:0 16px 8px;font-size:11.5px;color:var(--faint);line-height:1.7}
+.varsgrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:9px;padding:0 16px 14px}
+.varsgrid .vf label{display:block;font-size:11.5px;color:var(--muted);margin-bottom:4px}
+.varsgrid .vf select,.varsgrid .vf input{width:100%;height:30px;border:1px solid var(--line-hi);border-radius:7px;padding:0 8px;font:inherit;font-size:12px;background:#fff;color:var(--text)}
+.varsgrid .vf.miss label{color:var(--red);font-weight:600}
+.varsgrid .vf.miss select,.varsgrid .vf.miss input{border-color:var(--red)}
+
+/* 数据表预览（stats 左栏）：xlsx 前端解析不了，只有 csv/tsv 能真渲染成表 */
+.tablewrap{position:absolute;inset:0;overflow:auto;padding:14px 16px;background:#fff}
+.tablewrap table{border-collapse:collapse;font-size:12px;white-space:nowrap}
+.tablewrap th,.tablewrap td{border:1px solid var(--line);padding:5px 9px;text-align:left}
+.tablewrap th{background:var(--panel-soft);font-weight:600;position:sticky;top:0;z-index:1}
+.tablewrap tbody tr:nth-child(even){background:#fafbfc}
+.tablewrap .more{margin-top:10px;font-size:11.5px;color:var(--faint)}
+
+.introcard .tip{margin-top:22px;font-size:11.5px;color:var(--faint);line-height:1.8}
+.introcard .err{margin-top:14px;padding:10px 12px;border-radius:var(--r-sm);background:#fdecea;border:1px solid #f5c2bd;color:var(--red);font-size:12.5px;display:none;text-align:left;line-height:1.75}
+.introcard .err.on{display:block}
+/* 不是错、只是要交代一句（例如点开的是旧版留下的、没有原文的会话）——别用红色吓人 */
+.introcard .err.info{background:var(--panel-soft);border-color:var(--line-hi);color:var(--muted)}
+.bar{height:4px;border-radius:999px;background:var(--line);overflow:hidden;margin-top:14px;display:none}
+.bar.on{display:block}
+.bar i{display:block;height:100%;width:30%;background:var(--accent);border-radius:999px;animation:slide 1.1s ease-in-out infinite}
+@keyframes slide{0%{margin-left:-30%}100%{margin-left:100%}}
+@media (max-width:520px){
+  .introcard{padding:32px 22px 26px}
+  .introcard h1{font-size:26px}
+}
+
+/* ---------- 阅读器三栏 ---------- */
+.reader{display:flex;height:100vh;overflow:hidden}
+.reader[hidden]{display:none}
+
+/* 左：原文 */
+.doc-pane{flex:1 1 0;min-width:0;background:#e7eaef;display:flex;flex-direction:column}
+.docbar{height:48px;flex:none;display:flex;align-items:center;gap:12px;padding:0 14px;border-bottom:1px solid var(--line);background:rgba(231,234,239,.96)}
+.docbar .ficon{width:28px;height:28px;border-radius:8px;background:#fff;border:1px solid var(--line);display:grid;place-items:center;color:var(--accent);flex:none}
+.docbar .ficon svg{width:15px;height:15px}
+.docbar .fmeta{flex:1;min-width:0}
+.docbar .fname{font-size:13px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.docbar .fsub{font-size:11px;color:var(--faint);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.barsep{width:1px;height:18px;background:var(--line-hi);flex:none;margin:0 2px}
+.zoom{display:flex;align-items:center;gap:2px;flex:none;background:#fff;border:1px solid var(--line);border-radius:9px;padding:3px}
+.zoom button{width:26px;height:24px;border:none;background:none;border-radius:6px;color:var(--muted);cursor:pointer;display:grid;place-items:center}
+.zoom button:hover{background:var(--accent-soft);color:var(--accent)}
+.zoom button svg{width:14px;height:14px}
+.zoom .zval{min-width:40px;text-align:center;font-size:11.5px;color:var(--muted);font-variant-numeric:tabular-nums}
+.docview{flex:1;position:relative;overflow:hidden;background:#e7eaef}
+.docview iframe{position:absolute;left:0;top:0;border:0;background:#fff;transform-origin:top left}
+.docmsg{position:absolute;inset:0;display:grid;place-items:center;padding:30px;text-align:center;color:var(--muted);font-size:13px;line-height:1.9}
+
+/* 中：助手 */
+.ai-pane{width:clamp(440px,42%,660px);min-width:400px;flex:none;background:var(--panel);border-left:1px solid var(--line);display:flex;flex-direction:column;z-index:20}
+.ai-head{height:48px;flex:none;border-bottom:1px solid var(--line);display:flex;align-items:center;justify-content:space-between;gap:10px;padding:0 16px;background:#fff}
+.ai-head .title{display:flex;align-items:center;gap:8px;font-size:14px;font-weight:600}
+.ai-head .title svg{width:17px;height:17px;color:var(--accent)}
+.ai-head .badge{font-size:11px;color:var(--faint);background:var(--panel-soft);border:1px solid var(--line);padding:3px 9px;border-radius:999px;white-space:nowrap}
+.ai-head .acts{display:flex;gap:6px}
+.ai-body{flex:1;overflow:auto;padding:18px 18px 22px;background:var(--panel-soft)}
+.pane{display:none}
+.pane.on{display:block}
+
+/* 运行状态条 */
+.runbox{background:#fff;border:1px solid var(--line);border-radius:var(--r-md);padding:12px 14px;margin-bottom:14px;box-shadow:var(--shadow-sm)}
+.runbox .rh{display:flex;align-items:center;gap:9px;font-size:12.5px;color:var(--muted)}
+.spin{width:13px;height:13px;border-radius:50%;border:2px solid var(--line-hi);border-top-color:var(--accent);animation:sp .8s linear infinite;flex:none}
+@keyframes sp{to{transform:rotate(360deg)}}
+.pills{display:flex;flex-wrap:wrap;gap:5px;margin-top:9px}
+.pill{display:inline-flex;align-items:center;gap:5px;font-size:11px;padding:3px 8px;border-radius:999px;background:var(--accent-soft);color:var(--accent);border:1px solid rgba(59,111,212,.25)}
+.runbox details{margin-top:9px}
+.runbox summary{cursor:pointer;font-size:11.5px;color:var(--faint)}
+.runbox .trow{font-size:11.5px;color:var(--muted);padding:3px 0;display:flex;gap:7px}
+.runbox .trow .st{width:12px;flex:none;color:var(--faint)}
+
+.notebox{padding:11px 13px;border-radius:var(--r-sm);font-size:12.5px;line-height:1.8;margin-bottom:14px}
+.notebox.warn{background:#fdf3e6;border:1px solid #f0d7ae;color:#8a5a12}
+.notebox.err{background:#fdecea;border:1px solid #f5c2bd;color:var(--red)}
+.notebox.info{background:#fff;border:1px solid var(--line);color:var(--muted)}
+.notebox .blockact{margin-top:10px}
+
+.empty-hint{padding:38px 18px;text-align:center;color:var(--faint);font-size:13px;line-height:2}
+.empty-hint .big{display:block;font-size:14px;color:var(--muted);font-weight:600;margin-bottom:6px}
+
+/* markdown 正文 */
+.card{background:#fff;border:1px solid var(--line);border-radius:var(--r-md);padding:16px 18px;box-shadow:var(--shadow-sm)}
+.md{font-size:13.5px;line-height:1.85;color:var(--text);word-wrap:break-word;overflow-wrap:anywhere}
+.md h1{font-size:18px;margin:18px 0 10px}
+.md h2{font-size:16px;margin:16px 0 9px}
+.md h3{font-size:14.5px;margin:14px 0 8px}
+.md h4,.md h5,.md h6{font-size:13.5px;margin:12px 0 7px}
+.md h1:first-child,.md h2:first-child,.md h3:first-child{margin-top:0}
+.md p{margin:0 0 10px}
+.md ul,.md ol{margin:0 0 10px;padding-left:20px}
+.md li{margin-bottom:5px}
+.md strong{font-weight:600}
+.md code{background:var(--panel-soft);border:1px solid var(--line);border-radius:4px;padding:1px 4px;font-size:12px;font-family:ui-monospace,Consolas,monospace}
+.md pre{background:#f7f8fa;border:1px solid var(--line);border-radius:var(--r-sm);padding:11px 13px;overflow:auto}
+.md pre code{background:none;border:none;padding:0}
+.md blockquote{margin:0 0 10px;padding:6px 12px;border-left:3px solid var(--line-hi);color:var(--muted);background:var(--panel-soft);border-radius:0 6px 6px 0}
+.md hr{border:none;border-top:1px solid var(--line);margin:14px 0}
+.md img{max-width:100%;border-radius:8px;border:1px solid var(--line)}
+.md a{color:var(--accent)}
+.tblw{overflow-x:auto;margin:0 0 10px}
+.md table{border-collapse:collapse;font-size:12.5px;min-width:100%}
+.md th,.md td{border:1px solid var(--line);padding:6px 9px;text-align:left}
+.md th{background:var(--panel-soft);font-weight:600}
+.md td.num{text-align:right;font-variant-numeric:tabular-nums}
+
+/* 产物 */
+.files{margin-top:14px}
+.files .ft{font-size:11.5px;color:var(--faint);margin-bottom:7px}
+.frow{display:flex;align-items:center;gap:10px;padding:9px 11px;border:1px solid var(--line);border-radius:var(--r-sm);background:#fff;margin-bottom:6px}
+.frow svg{width:15px;height:15px;color:var(--accent);flex:none}
+.frow b{flex:1;min-width:0;font-size:12.5px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.frow a{font-size:12px;color:var(--accent);text-decoration:none;flex:none}
+.frow a:hover{text-decoration:underline}
+
+/* 聊天 */
+.msg{margin-bottom:16px}
+.msg.user{display:flex;justify-content:flex-end}
+.msg.user .bubble{background:var(--accent);color:#fff;border-radius:14px 14px 4px 14px;padding:9px 13px;font-size:13px;line-height:1.65;max-width:88%;white-space:pre-wrap;word-break:break-word}
+.msg.ai .bubble{background:#fff;border:1px solid var(--line);border-radius:4px 14px 14px 14px;padding:14px 16px;box-shadow:var(--shadow-sm)}
+.msg.ai .who{display:flex;align-items:center;gap:7px;color:var(--accent);font-weight:600;font-size:12px;margin-bottom:9px}
+.msg.ai .who svg{width:14px;height:14px}
+.msg.tag .bubble{background:#fff;border:1px dashed var(--line-hi);border-radius:12px;padding:9px 13px;font-size:12.5px;color:var(--muted)}
+
+.composer{flex:none;border-top:1px solid var(--line);padding:12px 16px 14px;background:#fff}
+.composer .wrap{display:flex;align-items:flex-end;gap:9px;background:var(--panel-soft);border:1px solid var(--line-hi);border-radius:var(--r-md);padding:9px 11px;transition:.15s}
+.composer .wrap:focus-within{border-color:var(--accent);background:#fff;box-shadow:0 0 0 3px var(--accent-soft)}
+.composer textarea{flex:1;border:none;background:none;outline:none;resize:none;font:inherit;font-size:13px;line-height:1.55;color:var(--text);max-height:130px;min-height:22px}
+.composer textarea::placeholder{color:var(--faint)}
+.composer .send{width:32px;height:32px;border:none;border-radius:8px;background:var(--accent);color:#fff;display:grid;place-items:center;cursor:pointer;flex:none}
+.composer .send:hover{background:var(--accent-deep)}
+.composer .send[disabled]{background:#c3ccd8;cursor:not-allowed}
+.composer .send svg{width:15px;height:15px}
+.composer .foot{margin-top:7px;font-size:11px;color:var(--faint);display:flex;justify-content:space-between;gap:10px}
+.composer .stop{border:1px solid var(--line-hi);background:#fff;color:var(--red);border-radius:7px;padding:2px 9px;font-size:11.5px;cursor:pointer}
+
+/* 非聊天模式的底栏 */
+.modefoot{flex:none;border-top:1px solid var(--line);padding:10px 16px;background:#fff;display:flex;align-items:center;gap:9px;font-size:12px;color:var(--faint)}
+.modefoot .grow{flex:1;min-width:0}
+
+/* 右：模式条 */
+.tools{width:64px;flex:none;background:#fff;border-left:1px solid var(--line);display:flex;flex-direction:column;align-items:center;padding:12px 0;gap:6px;z-index:30}
+.tool-btn{width:52px;display:flex;flex-direction:column;align-items:center;gap:5px;padding:9px 3px;border-radius:10px;border:1px solid transparent;background:none;cursor:pointer;color:var(--faint);transition:.15s;position:relative}
+.tool-btn:hover{background:var(--panel-soft);color:var(--accent);border-color:var(--line)}
+.tool-btn.active{background:var(--accent-soft);color:var(--accent);border-color:rgba(59,111,212,.35)}
+.tool-btn svg{width:18px;height:18px}
+.tool-btn span{font-size:10px;line-height:1.25;text-align:center}
+.tool-btn .dot{position:absolute;top:6px;right:7px;width:6px;height:6px;border-radius:50%}
+.tool-btn .dot.run{background:var(--accent);animation:blink 1s ease-in-out infinite}
+.tool-btn .dot.done{background:var(--green)}
+.tool-btn .dot.err{background:var(--red)}
+@keyframes blink{50%{opacity:.25}}
+
+/* 窄窗口：三栏改上下堆叠。
+   ★ 两处必须显式覆写，否则这个布局是坏的：
+     ① .doc-pane 的 flex:1 1 0 —— 列方向下 flex-basis:0 管的就是【高度】，它压过 height，
+        原文栏会塌成一条 48px 的工具条（只剩文件名，文献本身完全看不见）；
+     ② .reader 若用 height:auto，两栏加起来必然超过一屏 → 整页出现纵向滚动，
+        又回到"要用滚轮往下拉才看得到下半截"那种观感。这里改成整体钉死一屏、内部分配。 */
+@media (max-width:1080px){
+  .reader{flex-direction:column;height:100vh;overflow:hidden}
+  .doc-pane{flex:0 0 45%;height:auto;min-height:0}
+  .ai-pane{width:100%;min-width:auto;flex:1 1 auto;height:auto;min-height:0;border-left:none;border-top:1px solid var(--line)}
+  .tools{flex-direction:row;width:100%;flex:none;border-left:none;border-top:1px solid var(--line);padding:8px;justify-content:center;flex-wrap:wrap;gap:8px}
+  .tool-btn{flex-direction:row;width:auto;padding:7px 12px;gap:7px}
+}
+</style>
+</head>
+<body>
+
+<div class="stage"></div>
+
+<!-- 「最近」下拉。两个位置的按钮共用同一个菜单（见 .menu 的说明），所以它挂在 body 上，
+     打开时按触发按钮算坐标。 -->
+<div class="menu" id="recentMenu"></div>
+<div class="menu setmenu" id="setMenu"></div>
+
+<!-- ============ 首屏：上传 ============
+     文案、拖拽区提示、chips、必答题、按钮文字全部由 renderIntro() 按模块配置填进去，
+     这里只留骨架。硬编码任何一句都会让另外三个模块说错话。 -->
+<div class="intro" id="intro" hidden>
+  <div class="introcard">
+    <div class="hero-ic" id="introIcon"></div>
+
+    <h1 id="introTitle"></h1>
+    <p class="lead" id="introLead"></p>
+
+    <div class="divider"></div>
+
+    <div class="drop" id="drop">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 16V4M12 4l-4 4M12 4l4 4"/><path d="M4 16v2a2 2 0 002 2h12a2 2 0 002-2v-2"/></svg>
+      <div class="d1" id="dropTitle"></div>
+      <div class="d2" id="dropHint"></div>
+    </div>
+    <input type="file" id="file" hidden>
+
+    <div id="pickedSlot"></div>
+    <div id="introAsk"></div>
+    <div class="bar" id="upbar"><i></i></div>
+    <div class="err" id="introErr"></div>
+
+    <button class="gobtn" id="btnStart" type="button" disabled>
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 3l14 9-14 9V3z"/></svg>
+      <span id="btnStartTxt">开始</span>
+    </button>
+
+    <div class="chips" id="introChips"></div>
+    <div class="tip" id="introTip"></div>
+  </div>
+
+  <div class="intronav">
+    <button class="linkbtn" type="button" data-act="recent">最近做过的</button>
+    <span>·</span>
+    <button class="linkbtn" type="button" data-act="ws">回工作台</button>
+  </div>
+</div>
+
+<!-- ============ 阅读器 ============ -->
+<div class="reader" id="reader" hidden>
+
+  <!-- 左：原文 -->
+  <div class="doc-pane">
+    <div class="docbar">
+      <div class="ficon">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><path d="M14 2v6h6"/></svg>
+      </div>
+      <div class="fmeta">
+        <div class="fname" id="docName">—</div>
+        <div class="fsub" id="docSub"></div>
+      </div>
+      <div class="zoom" id="zoomBox" hidden>
+        <button id="zoomOut" title="缩小" type="button"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M8 11h6M21 21l-4.3-4.3"/></svg></button>
+        <div class="zval" id="zval">100%</div>
+        <button id="zoomIn" title="放大" type="button"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M11 8v6M8 11h6M21 21l-4.3-4.3"/></svg></button>
+      </div>
+      <button class="hbtn" id="btnOpenDoc" type="button" title="在新标签打开">原文</button>
+      <span class="barsep"></span>
+      <button class="hbtn" type="button" data-act="new" title="换一份（新开一个会话）">换一份</button>
+      <button class="hbtn" type="button" data-act="recent" title="最近做过的">最近</button>
+      <button class="hbtn" type="button" data-act="ws" title="回工作台">工作台</button>
+    </div>
+    <div class="docview" id="docView"><div class="docmsg">正在载入…</div></div>
+  </div>
+
+  <!-- 中：助手 -->
+  <div class="ai-pane">
+    <div class="ai-head">
+      <div class="title" id="paneTitle"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2a10 10 0 100 20 10 10 0 000-20z"/><path d="M12 6v6l4 2"/></svg><span>文献导读</span></div>
+      <div class="acts">
+        <span class="badge">基于本文</span>
+        <button class="hbtn" id="btnSettings" type="button" title="本模块的设置" hidden>设置</button>
+        <button class="hbtn" id="btnRerun" type="button" hidden>重新生成</button>
+      </div>
+    </div>
+
+    <!-- 变量对应（只有 stats 有）。默认折叠：不做生存分析的人根本不用展开它；
+         点某个模式时若缺了它必需的列，会自动展开并把缺的那几个标红。 -->
+    <details class="varsbox" id="varsBox" hidden>
+      <summary><span id="varsTitle">变量对应</span><span class="varssum" id="varsSum"></span></summary>
+      <div class="varssub" id="varsSub"></div>
+      <div class="varsgrid" id="varsGrid"></div>
+    </details>
+
+    <!-- 面板由 installConfig 按模式清单生成（每个模式一个 .pane），这里留空 -->
+    <div class="ai-body" id="aiBody"></div>
+
+    <!-- 智能助手模式：输入框 -->
+    <div class="composer" id="composer" hidden>
+      <div class="wrap">
+        <textarea id="q" rows="1" placeholder="对着左边这篇文献随便问，例如：第 3 组的样本量是多少？"></textarea>
+        <button class="send" id="btnSend" type="button" aria-label="发送">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 2L11 13M22 2l-7 20-4-9-9-4 20-7z"/></svg>
+        </button>
+      </div>
+      <div class="foot">
+        <span id="chatFoot">回答只依据这篇原文；原文没写的会标「原文未报告」。</span>
+        <button class="stop" id="btnStop" type="button" hidden>终止本轮</button>
+      </div>
+    </div>
+
+    <!-- 其它模式：状态底栏 -->
+    <div class="modefoot" id="modeFoot" hidden>
+      <span class="grow" id="modeFootTxt"></span>
+      <button class="stop" id="btnStop2" type="button" hidden>终止本轮</button>
+    </div>
+  </div>
+
+  <!-- 右：模式条 -->
+  <div class="tools" id="rail"></div>
+</div>
+
+<script>
+"use strict"
+/* ============================================================
+   0. 小工具
+   ============================================================ */
+const $ = (id) => document.getElementById(id)
+const esc = (s) => String(s == null ? "" : s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]))
+const fmtSize = (n) => n == null ? "" : (n < 1024 ? n + " B" : n < 1048576 ? (n / 1024).toFixed(0) + " KB" : (n / 1048576).toFixed(1) + " MB")
+const extOf = (n) => (String(n).match(/\.([^.]+)$/) || [, ""])[1].toLowerCase()
+
+const ICON = {
+  guide: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 6.25v13m0-13C10.83 5.48 9.25 5 7.5 5S4.17 5.48 3 6.25v13C4.17 18.48 5.75 18 7.5 18s3.33.48 4.5 1.25m0-13C13.17 5.48 14.75 5 16.5 5s3.33.48 4.5 1.25v13C19.83 18.48 18.25 18 16.5 18s-3.33.48-4.5 1.25"/></svg>',
+  chat: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 11.5a8.4 8.4 0 01-9 8.4 8.9 8.9 0 01-4-.9L3 21l1.9-4.5A8.4 8.4 0 013 11.5 8.4 8.4 0 0112 3a8.4 8.4 0 019 8.5z"/></svg>',
+  translate: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 8l6 6M4 14l6-6 2-3M2 5h12M7 2h1M21 12a9 9 0 01-9 9m9-9h-6m6 0v6"/></svg>',
+  ppt: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8 20h8M12 16v4"/></svg>',
+  file: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><path d="M14 2v6h6"/></svg>',
+  bot: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2a10 10 0 100 20 10 10 0 000-20z"/><path d="M12 6v6l4 2"/></svg>',
+  x: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6L6 18M6 6l12 12"/></svg>',
+  // 下面这些给另外三个模块的模式用。图标名由 workflows.mjs 的 modes[].icon 指定；
+  // 认不出的名字回落到 dot，绝不因为少配一个图标就让按钮渲染不出来。
+  check: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2h11"/></svg>',
+  review: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3M8.5 11h5M11 8.5v5"/></svg>',
+  table: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 10h18M9 10v10M15 10v10"/></svg>',
+  wand: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M15 4V2M15 10V8M12 6h-2M20 6h-2M17.8 8.8l1.4 1.4M17.8 3.2l1.4-1.4M12.2 3.2l-1.4-1.4M3 21l9-9"/></svg>',
+  diff: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3v18M5 8H2m3 8H2M22 8h-3m3 8h-3"/><rect x="5" y="5" width="6" height="14" rx="1"/><rect x="13" y="5" width="6" height="14" rx="1"/></svg>',
+  doc: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><path d="M14 2v6h6M8 13h8M8 17h5"/></svg>',
+  stethoscope: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 3v6a5 5 0 0010 0V3"/><path d="M4 3h3M15 3h3M11 14v2a5 5 0 0010 0v-1"/><circle cx="21" cy="13" r="2"/></svg>',
+  chart: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 3v18h18"/><path d="M7 15l4-5 3 3 5-7"/></svg>',
+  image: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="8.5" cy="9.5" r="1.5"/><path d="M21 16l-5-5-4 4-2-2-5 5"/></svg>',
+  shield: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><path d="M9 12l2 2 4-4"/></svg>',
+  gear: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 00.3 1.9l.1.1a2 2 0 11-2.8 2.8l-.1-.1a1.7 1.7 0 00-1.9-.3 1.7 1.7 0 00-1 1.5V21a2 2 0 11-4 0v-.1A1.7 1.7 0 008.9 19a1.7 1.7 0 00-1.9.3l-.1.1a2 2 0 11-2.8-2.8l.1-.1a1.7 1.7 0 00.3-1.9 1.7 1.7 0 00-1.5-1H3a2 2 0 110-4h.1A1.7 1.7 0 004.6 8.9a1.7 1.7 0 00-.3-1.9l-.1-.1a2 2 0 112.8-2.8l.1.1a1.7 1.7 0 001.9.3H9a1.7 1.7 0 001-1.5V3a2 2 0 114 0v.1a1.7 1.7 0 001 1.5 1.7 1.7 0 001.9-.3l.1-.1a2 2 0 112.8 2.8l-.1.1a1.7 1.7 0 00-.3 1.9V9a1.7 1.7 0 001.5 1H21a2 2 0 110 4h-.1a1.7 1.7 0 00-1.5 1z"/></svg>',
+  dot: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="4"/></svg>',
+  up: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 16V4M12 4l-4 4M12 4l4 4"/><path d="M4 16v2a2 2 0 002 2h12a2 2 0 002-2v-2"/></svg>',
+}
+const ic = (n) => ICON[n] || ICON.dot
+
+/* ---- 极简 markdown 渲染 ----
+   【为什么不复用 index.html 那份】那一份缠着灯箱、产物侧栏、ask 选项卡与会话态（sidQ / mdImgSrc），
+   拆出来要动 5000 行的主页面，风险远大于收益。这里只留本页面真正会遇到的语法：
+   标题 / 列表 / 表格 / 代码 / 引用 / 粗斜体 / 链接 / 同源图片。行为对不齐的地方只会是"少渲染一种花样"，
+   不会渲染错。 */
+function mdImg(u) {
+  if (!/\.(png|jpe?g|gif|webp|svg|bmp)$/i.test(u)) return null
+  if (/^https?:/i.test(u)) return null                            // 外链图片一概不加载（同 index.html 的口径）
+  const m = u.replace(/^\.\//, "").match(/^([^\/?#:]+(?:\/[^\/?#:]+)?)$/)
+  return m ? "api/raw?name=" + encodeURIComponent(m[1]) + sidQ() : null
+}
+function mdInline(s) {
+  const codes = []
+  s = s.replace(/`([^`]+)`/g, (m, c) => { codes.push(c); return "@@C" + (codes.length - 1) + "@@" })
+  s = s.replace(/!\[([^\]]*)\]\(([^)\s]+)[^)]*\)/g, (m, a, u) => {
+    const src = mdImg(u)
+    return src ? '<img src="' + src + '" alt="' + a.replace(/"/g, "&quot;") + '">' : esc(a || u)
+  })
+  s = s.replace(/\[([^\]]+)\]\(([^)\s]+)[^)]*\)/g, (m, t, u) =>
+    /^(https?:\/\/|api\/)/i.test(u) ? '<a href="' + u.replace(/"/g, "%22") + '" target="_blank" rel="noopener">' + t + "</a>" : t)
+  s = s.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>").replace(/__([^_]+)__/g, "<strong>$1</strong>")
+  s = s.replace(/(^|[^*\w])\*([^*\n]+)\*/g, "$1<em>$2</em>")
+  s = s.replace(/~~([^~]+)~~/g, "<del>$1</del>")
+  return s.replace(/@@C(\d+)@@/g, (m, i) => "<code>" + codes[+i] + "</code>")
+}
+const splitRow = (l) => l.trim().replace(/^\|/, "").replace(/\|$/, "").split("|").map((c) => c.trim())
+function renderMd(src) {
+  src = (src || "").replace(/\r\n/g, "\n")
+  const blocks = []
+  src = src.replace(/```[\w-]*\n?([\s\S]*?)```/g, (m, code) => { blocks.push("<pre><code>" + esc(code.replace(/\n$/, "")) + "</code></pre>"); return "@@B" + (blocks.length - 1) + "@@" })
+  const lines = esc(src).split("\n"), out = []
+  let i = 0
+  const blank = (l) => /^\s*$/.test(l)
+  while (i < lines.length) {
+    const l = lines[i]
+    const pm = l.match(/^@@B(\d+)@@\s*$/); if (pm) { out.push(blocks[+pm[1]]); i++; continue }
+    if (blank(l)) { i++; continue }
+    if (/^\s*([-*_])(\s*\1){2,}\s*$/.test(l)) { out.push("<hr>"); i++; continue }
+    const h = l.match(/^(#{1,6})\s+(.*)$/)
+    if (h) { const n = h[1].length; out.push("<h" + n + ">" + mdInline(h[2].trim()) + "</h" + n + ">"); i++; continue }
+    if (/^\s*&gt;\s?/.test(l)) { const b = []; while (i < lines.length && /^\s*&gt;\s?/.test(lines[i])) { b.push(lines[i].replace(/^\s*&gt;\s?/, "")); i++ } out.push("<blockquote>" + mdInline(b.join("<br>")) + "</blockquote>"); continue }
+    if (/\|/.test(l) && i + 1 < lines.length && /-/.test(lines[i + 1]) && /^\s*\|?[\s:|-]*$/.test(lines[i + 1])) {
+      const head = splitRow(l); i += 2; const rows = []
+      while (i < lines.length && /\|/.test(lines[i]) && !blank(lines[i])) { const r = splitRow(lines[i]); while (r.length < head.length) r.push(""); rows.push(r.slice(0, head.length)); i++ }
+      const isNum = (x) => /^[+-]?[\d,]*\.?\d+(\s*[%‰])?$/.test(x.replace(/[\s*]/g, ""))
+      const cls = head.map((_, c) => { const v = rows.map((r) => (r[c] || "").trim()).filter(Boolean); return v.length && v.every(isNum) ? " class=\"num\"" : "" })
+      out.push('<div class="tblw"><table><thead><tr>' + head.map((c) => "<th>" + mdInline(c) + "</th>").join("")
+        + "</tr></thead><tbody>" + rows.map((r) => "<tr>" + r.map((c, x) => "<td" + cls[x] + ">" + mdInline(c) + "</td>").join("") + "</tr>").join("") + "</tbody></table></div>")
+      continue
+    }
+    if (/^\s*([-*+]|\d+[.)])\s+/.test(l)) {
+      const ordered = /^\s*\d+[.)]\s+/.test(l), items = []
+      while (i < lines.length && /^\s*([-*+]|\d+[.)])\s+/.test(lines[i])) { items.push(lines[i].replace(/^\s*([-*+]|\d+[.)])\s+/, "")); i++ }
+      out.push((ordered ? "<ol>" : "<ul>") + items.map((t) => "<li>" + mdInline(t) + "</li>").join("") + (ordered ? "</ol>" : "</ul>"))
+      continue
+    }
+    const buf = [l]; i++
+    while (i < lines.length && !blank(lines[i]) && !/^\s*(#{1,6}\s|&gt;|([-*+]|\d+[.)])\s|@@B\d+@@)/.test(lines[i])) { buf.push(lines[i]); i++ }
+    out.push("<p>" + mdInline(buf.join("<br>")) + "</p>")
+  }
+  return out.join("\n").replace(/@@B(\d+)@@/g, (m, x) => blocks[+x] || "")
+}
+
+/* ============================================================
+   1. 模块配置：本页面【不认识任何一个具体模块】
+   ------------------------------------------------------------
+   模式清单、每个模式发什么话、首屏文案、设置字段、变量对应面板 —— 全部来自
+   GET /api/modules/<id>/workflow 的 reader 段（定义在 workflows.mjs）。
+   本文件只负责照着画、照着发、照着把结果摆回对应的面板。
+   所以「加一个模式」「改一句提示词」只动 workflows.mjs，走界面包热更新即可。
+
+   MODES / ORDER 在 boot() 里由配置填好，之后与原来的用法完全一致。
+   ============================================================ */
+let MOD = "litread"        // 当前模块 id
+let CFG = null             // reader 配置（workflows.mjs 的 reader 段）
+let MODES = {}             // id → 模式定义（含由 file/out 字符串编译出来的正则）
+let ORDER = []             // 模式在右侧条上的顺序
+
+/** 把下发的配置装进 MODES / ORDER。正则以字符串下发（要能 JSON 序列化），这里编译。 */
+function installConfig(cfg) {
+  CFG = cfg
+  MODES = {}; ORDER = []
+  const re = (x) => { try { return x ? new RegExp(x, "i") : null } catch (_) { return null } }
+  for (const m of cfg.modes || []) {
+    MODES[m.id] = { ...m, icon: ic(m.icon), file: re(m.file), out: re(m.out) }
+    ORDER.push(m.id)
+  }
+}
+
+/**
+ * 某个模式发出去的那段话 = mark + prompt（占位符替换后）。
+ *  {doc}  左栏那份文件名        {data} 配套数值表 / 数据表        {vars} 变量对应面板填了什么
+ * 取不到值的占位符【整句删掉】，不能留下一个字面的 "{data}" 发给模型。
+ */
+function promptFor(id) {
+  const M = MODES[id]
+  if (!M || !M.prompt) return ""
+  const bq = (n) => "`" + n + "`"
+  const map = {
+    doc: docName ? bq(docName) : "",
+    data: (CFG.source.kind === "table" ? docName : dataName) ? bq(CFG.source.kind === "table" ? docName : dataName) : "",
+    vars: varsBlock(),
+  }
+  let t = M.prompt
+  for (const [k, v] of Object.entries(map)) {
+    const ph = "{" + k + "}"
+    if (!t.includes(ph)) continue
+    // 有值就替换；没值就把它所在的那一句整句去掉（句号/换行为界），免得留下半截话
+    t = v ? t.split(ph).join(v) : t.replace(new RegExp("[^。\n]*" + ph + "[^。\n]*。?", "g"), "")
+  }
+  return M.mark + t
+}
+
+/** stats 的「变量对应」：把用户指的列拼成一段话，跟在 prompt 里的 {vars} 位置 */
+function varsBlock() {
+  if (!CFG || !CFG.vars) return ""
+  const parts = []
+  for (const f of CFG.vars.fields || []) {
+    const fld = fieldDef(f); const v = SETTINGS[f]
+    if (!fld || v === undefined || v === null || v === "" || (Array.isArray(v) && !v.length)) continue
+    parts.push(fld.label + "＝" + (Array.isArray(v) ? v.join("、") : v))
+  }
+  if (!parts.length) return ""
+  return "\n\n【变量对应，以我指定的为准】" + parts.join("；")
+    + "。我没指定的列你可以推断，但**必须在回答里写清你把哪一列当成了什么**。"
+}
+
+/** 按 id 找 intake 字段定义（设置弹层 / 变量面板都用它渲染控件） */
+const fieldDef = (id) => (CFG && CFG.intake || []).find((f) => f.id === id) || null
+
+/* ============================================================
+   2. 状态
+   ============================================================ */
+const QS = new URLSearchParams(location.search)
+let sid = QS.get("sid") || null
+let docName = ""          // 左栏那份东西的文件名（会话上传目录里的裸文件名）
+let docSize = null
+let dataName = ""         // 配套数值表（只有 refcheck 的「数据完整性」用得上，见 CFG.extraUpload）
+let mode = ""
+let turns = 0             // 本会话已经发出过几轮（决定要不要给自由问答补一句上下文）
+let pendingFile = null    // 首屏选中、尚未上传的 File
+let outputs = []          // /api/outputs 的最近一次结果
+// 设置弹层 + 变量对应面板的值。它们【就是 intake 的字段值】，改完立刻回写 _workflow.json，
+// 于是 pin:true 的字段（humanize 的 protectRefs、stats 的 hasPHI）每一轮都会被 settingsLine
+// 钉进模块前言 —— 这条路是踩出来的（默认值传达不到 → 模型替别人的论文改了统计学结论），
+// 别改成只在前端存着。
+let SETTINGS = {}
+
+// 每个面板的内容。raw = 该模式最近一轮的对话正文；doc = 从产物文件读回来的正文（译文/报告/大纲）。
+// 模式是配置来的，所以这张表要等 installConfig 之后才建得出来。
+let S = {}
+function initState() {
+  S = {}
+  for (const id of ORDER) {
+    S[id] = id === "chat"
+      ? { msgs: [], status: "idle", err: "" }
+      : { raw: "", doc: null, docName: "", status: "idle", err: "", files: [] }
+  }
+}
+// 正在跑的那一轮
+let RUN = null            // { mode, label, skills:[], tools:Map, es }
+let starting = false      // POST /api/chat/start 往返期间（此时还没有 es，靠它防连点）
+
+const sidQ = () => (sid ? "&sid=" + encodeURIComponent(sid) : "")
+const busy = () => starting || !!RUN
+
+async function jget(url, opt) {
+  const r = await fetch(url, opt)
+  if (r.status === 401) { location.href = "./login"; throw new Error("unauthorized") }
+  return r
+}
+
+/* ============================================================
+   3. 首屏：选文件 → 上传 → 开始
+   ============================================================ */
+const okExt = () => (CFG && CFG.source.exts) || []
+
+// 真错误一律红色。必须显式去掉 info —— 启动时那条"旧会话没有原文"的灰色提示用的是同一个框，
+// 不清掉的话，用户接着传错格式时会看到一条【灰色的】报错，读起来像句无关紧要的说明。
+function showIntroErr(msg) { const e = $("introErr"); e.textContent = msg; e.className = "err" + (msg ? " on" : "") }
+
+/** 首屏：整块按配置画出来（标题 / 引导语 / 拖拽区文案 / chips / 必答题 / 按钮文字都来自 workflows.mjs） */
+function renderIntro() {
+  const I = CFG.intro
+  $("introTitle").textContent = I.title
+  $("introLead").textContent = I.lead
+  $("dropTitle").textContent = I.dropTitle
+  $("dropHint").textContent = I.dropHint
+  $("btnStartTxt").textContent = I.startText
+  $("file").setAttribute("accept", CFG.source.accept)
+  $("introTip").innerHTML = I.tip || ""
+  $("introChips").innerHTML = (I.chips || []).map((c, i) =>
+    '<span class="chip">' + (MODES[ORDER[i]] ? MODES[ORDER[i]].icon : "") + esc(c) + "</span>").join("")
+  // 首屏必答题（目前只有 stats 的 hasPHI）。它不是"设置"，是安全闸：
+  // 未脱敏的患者数据不得进入统计，所以没答之前「开始」按钮是灰的。
+  const askHost = $("introAsk"); askHost.innerHTML = ""
+  for (const id of I.ask || []) {
+    const f = fieldDef(id); if (!f) continue
+    const box = document.createElement("div"); box.className = "askbox"
+    box.innerHTML = '<div class="asklbl">' + esc(f.label) + (f.required ? ' <b class="req">必答</b>' : "") + "</div>"
+      + (f.help ? '<div class="askhelp">' + esc(f.help) + "</div>" : "")
+    const opts = document.createElement("div"); opts.className = "askopts"
+    for (const o of (f.type === "bool" ? [{ v: true, t: "是" }, { v: false, t: "否" }] : f.options || [])) {
+      const b = document.createElement("button")
+      b.type = "button"; b.className = "askbtn"; b.textContent = o.t
+      b.addEventListener("click", () => {
+        SETTINGS[id] = o.v
+        opts.querySelectorAll(".askbtn").forEach((x) => x.classList.remove("on"))
+        b.classList.add("on"); syncStart()
+      })
+      opts.appendChild(b)
+    }
+    box.appendChild(opts); askHost.appendChild(box)
+  }
+  syncStart()
+}
+
+/** 「开始」按钮什么时候能点：文件选了 + 首屏必答题都答了 */
+function syncStart() {
+  const asked = (CFG.intro.ask || []).every((id) => SETTINGS[id] !== undefined && SETTINGS[id] !== null && SETTINGS[id] !== "")
+  $("btnStart").disabled = !pendingFile || !asked || busy()
+}
+
+function pickFile(f) {
+  if (!f) return
+  const ok = okExt()
+  if (!ok.includes(extOf(f.name))) {
+    showIntroErr("这个模块只收 " + ok.map((x) => "." + x).join(" / ") + "，你选的是 ." + (extOf(f.name) || "（无扩展名）"))
+    return
+  }
+  showIntroErr("")
+  pendingFile = f
+  $("pickedSlot").innerHTML =
+    // 徽标里放扩展名（PDF / DOCX / XLSX），比一个通用文件图标信息量大：用户一眼能看出传的是不是自己想传的那种
+    '<div class="picked"><div class="fic">' + esc(extOf(f.name).toUpperCase().slice(0, 4)) + "</div>"
+    + '<div class="fn"><b>' + esc(f.name) + "</b><span>" + fmtSize(f.size) + "</span></div>"
+    + '<button class="rm" type="button" id="rmPick" title="移除">×</button></div>'
+  $("rmPick").addEventListener("click", () => { pendingFile = null; $("pickedSlot").innerHTML = ""; $("file").value = ""; syncStart() })
+  syncStart()
+}
+
+$("drop").addEventListener("click", () => $("file").click())
+$("file").addEventListener("change", (e) => pickFile(e.target.files && e.target.files[0]))
+;["dragenter", "dragover"].forEach((t) => $("drop").addEventListener(t, (e) => { e.preventDefault(); $("drop").classList.add("over") }))
+;["dragleave", "drop"].forEach((t) => $("drop").addEventListener(t, (e) => { e.preventDefault(); $("drop").classList.remove("over") }))
+$("drop").addEventListener("drop", (e) => pickFile(e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0]))
+
+/** 上传一个文件到本会话（没有 sid 时服务端会现建一个会话并把 id 回给我们，与聊天页同一条路） */
+async function upload(file) {
+  const r = await jget("api/upload?name=" + encodeURIComponent(file.name) + (sid ? "&sid=" + encodeURIComponent(sid) : ""),
+    { method: "POST", body: file })
+  const j = await r.json().catch(() => null)
+  if (!r.ok || !j || !j.ok) throw new Error((j && j.err) || "上传失败（HTTP " + r.status + "）")
+  sid = j.sid || sid
+  try { history.replaceState(null, "", location.pathname + "?m=" + encodeURIComponent(MOD) + "&sid=" + encodeURIComponent(sid)) } catch (_) {}
+  return j
+}
+
+$("btnStart").addEventListener("click", async () => {
+  if (!pendingFile || busy()) return
+  $("btnStart").disabled = true
+  $("upbar").classList.add("on")
+  showIntroErr("")
+  // ★ 这一步可能要几十秒：文件本身传得很快，慢的是【建会话】——服务端要向 opencode 要一个新
+  //   session，机器忙的时候实测等过 25 秒。此前这段时间界面上只有一条无字的进度条，
+  //   看着就是"点了没反应"，用户会去反复点或刷新。所以把按钮文字改成实时的状态。
+  const startTxt = $("btnStartTxt").textContent
+  $("btnStartTxt").textContent = "正在上传…"
+  const slow = setTimeout(() => { $("btnStartTxt").textContent = "正在准备会话…（首次会慢一些）" }, 1500)
+  try {
+    await upload(pendingFile)
+    clearTimeout(slow); $("btnStartTxt").textContent = startTxt
+    docName = pendingFile.name
+    docSize = pendingFile.size
+    enterReader()
+    // 会话标题：不改名的话它会被自动取成第一条消息的前 40 字，也就是那句长提示词
+    // ——「最近」列表里每一条都长一个样，认不出是哪一份。改成文件名。
+    // ★ 必须 await：服务端的 ensureSessionTitle 只在标题还是占位值时才补名，且【每会话只尝试一次】。
+    //   不等它落地就发第一条消息，两者会撞在一起——补名先跑赢，标题被钉成那句提示词，之后再也改不回来。
+    await fetch("api/session/rename?id=" + encodeURIComponent(sid) + "&title=" + encodeURIComponent(docName.slice(0, 60)), { method: "POST" }).catch(() => {})
+    if (CFG.source.kind === "table") loadHeaders()   // 读真表头，喂「变量对应」面板的下拉
+    setMode(CFG.first)
+    run(CFG.first)
+  } catch (e) {
+    clearTimeout(slow); $("btnStartTxt").textContent = startTxt
+    showIntroErr(String((e && e.message) || e))
+    syncStart()
+  } finally {
+    $("upbar").classList.remove("on")
+  }
+})
+
+/* ============================================================
+   4. 阅读器外壳
+   ============================================================ */
+function enterReader() {
+  $("intro").hidden = true
+  $("reader").hidden = false
+  $("docName").textContent = docName || "—"
+  $("docSub").textContent = [extOf(docName).toUpperCase(), fmtSize(docSize)].filter(Boolean).join(" · ")
+  $("btnSettings").hidden = !(CFG.settings || []).length
+  $("varsBox").hidden = !CFG.vars
+  if (CFG.vars) { $("varsTitle").textContent = CFG.vars.title; $("varsSub").textContent = CFG.vars.sub; renderVars() }
+  renderDoc()
+  renderRail()
+}
+
+/* ---- 左栏：那份东西 ----
+   kind=doc   ：pdf 走 api/raw（浏览器自带阅读器）、Word 走 api/preview（服务端转 HTML/PDF）
+   kind=table ：csv/tsv 前端直接渲染成表格；xlsx 前端解析不了，如实说明并给下载 */
+let zoom = 1
+function docUrl() {
+  const e = extOf(docName)
+  const base = (e === "pdf" || CFG.source.kind === "table") ? "api/raw" : "api/preview"
+  return base + "?name=" + encodeURIComponent(docName) + "&dir=up" + sidQ()
+}
+
+/** csv/tsv → 表格。只画前 200 行：几万行的表全塞进 DOM 会把页面卡死，而左栏是用来"对着看"的。 */
+function renderCsv(text, sep) {
+  const rows = []
+  for (const line of text.split(/\r?\n/)) {
+    if (!line.trim() && rows.length) continue
+    rows.push(line.split(sep).map((c) => c.replace(/^"|"$/g, "").trim()))
+    if (rows.length > 201) break
+  }
+  if (!rows.length) return '<div class="docmsg">这个文件是空的</div>'
+  const head = rows[0], body = rows.slice(1, 201)
+  return '<div class="tablewrap"><table><thead><tr>'
+    + head.map((c) => "<th>" + esc(c) + "</th>").join("")
+    + "</tr></thead><tbody>"
+    + body.map((r) => "<tr>" + head.map((_, i) => "<td>" + esc(r[i] == null ? "" : r[i]) + "</td>").join("") + "</tr>").join("")
+    + "</tbody></table>"
+    + (rows.length > 200 ? '<div class="more">只显示前 200 行——完整的表交给分析那边读，不受这里影响。</div>' : "")
+    + "</div>"
+}
+
+async function renderDoc() {
+  const view = $("docView")
+  if (!docName) { view.innerHTML = '<div class="docmsg">还没有文件</div>'; return }
+  const e = extOf(docName)
+
+  if (CFG.source.kind === "table") {
+    $("zoomBox").hidden = true
+    if (["csv", "tsv", "txt"].includes(e)) {
+      view.innerHTML = '<div class="docmsg">正在读表…</div>'
+      try {
+        const r = await jget(docUrl())
+        if (!r.ok) throw new Error("HTTP " + r.status)
+        view.innerHTML = renderCsv(await r.text(), e === "tsv" ? "	" : ",")
+      } catch (err) {
+        if (String((err && err.message) || err) === "unauthorized") return
+        view.innerHTML = '<div class="docmsg">这张表读不出来（' + esc(String((err && err.message) || err)) + '）。<br>不影响右边的分析——那边读的是文件本身。</div>'
+      }
+      return
+    }
+    // xlsx/xls：解析它要一个几百 KB 的前端库，为了一个只读预览不值得；而且服务端的
+    // /api/data/headers 对 xlsx 也明说了"读不了、交给 AI 在分析时读"。这里如实讲，别装作能预览。
+    view.innerHTML = '<div class="docmsg">Excel 表格（.' + esc(e) + '）在这里没法直接预览。<br><br>'
+      + '<b>不影响分析</b>——右边每个模式读的都是文件本身。<br>'
+      + '想核对内容可以点右上角「原文」下载，或先跑一次「数据体检」，它会把每一列的类型、缺失与分布都列出来。<br>'
+      + '（要在左栏直接看表，把数据另存成 .csv 再传一次即可。）</div>'
+    return
+  }
+
+  const scalable = e !== "pdf"                       // PDF 用浏览器自带阅读器，缩放归它管
+  $("zoomBox").hidden = !scalable
+  const url = docUrl()
+  // Word 走 /api/preview（服务端转 HTML/PDF），这一路是会失败的：没装 LibreOffice、
+  // 转换超时、mammoth 抛错……iframe 的 error 事件【对 HTTP 错误不触发】，直接塞进去的话
+  // 用户看到的是一框服务端返回的纯文本报错，还以为是正文。所以先探一次，失败就自己说人话。
+  if (scalable) {
+    view.innerHTML = '<div class="docmsg">正在转换以便预览…</div>'
+    let msg = ""
+    try {
+      const r = await jget(url)
+      if (!r.ok) msg = (await r.text().catch(() => "")) || "预览转换失败（HTTP " + r.status + "）"
+    } catch (err) {
+      if (String((err && err.message) || err) === "unauthorized") return
+      msg = "预览请求没发出去（网络异常）"
+    }
+    if (msg) {
+      view.innerHTML = '<div class="docmsg">' + esc(msg.slice(0, 300))
+        + '<br><br>左栏只是预览——<b>不影响右边的各个模式</b>，那些读的是文件本身。'
+        + '<br>想看原件可以点右上角「原文」下载到本地。</div>'
+      return
+    }
+  }
+  view.innerHTML = ""
+  const f = document.createElement("iframe")
+  f.id = "docFrame"
+  // docx 预览是服务端 mammoth 直出的 HTML，响应头带 CSP sandbox（不许脚本、不接触本站源）；
+  // PDF 走浏览器内置阅读器。两种都只读。
+  f.src = url
+  view.appendChild(f)
+  applyZoom()
+}
+function applyZoom() {
+  const f = $("docFrame"); if (!f) return
+  const z = extOf(docName) !== "pdf" ? zoom : 1
+  f.style.width = (100 / z) + "%"
+  f.style.height = (100 / z) + "%"
+  f.style.transform = "scale(" + z + ")"
+  $("zval").textContent = Math.round(z * 100) + "%"
+}
+$("zoomIn").addEventListener("click", () => { zoom = Math.min(2, +(zoom + 0.1).toFixed(2)); applyZoom() })
+$("zoomOut").addEventListener("click", () => { zoom = Math.max(0.6, +(zoom - 0.1).toFixed(2)); applyZoom() })
+$("btnOpenDoc").addEventListener("click", () => { if (docName) window.open(docUrl(), "_blank", "noopener") })
+
+/* ---- 右栏：模式条 ---- */
+function renderRail() {
+  const rail = $("rail")
+  rail.innerHTML = ""
+  ORDER.forEach((k) => {
+    const M = MODES[k]
+    const b = document.createElement("button")
+    b.type = "button"
+    b.className = "tool-btn" + (k === mode ? " active" : "")
+    b.title = M.label
+    const st = k === "chat" ? (S.chat.msgs.length ? "done" : "")
+      : (S[k].status === "running" ? "run" : S[k].status === "error" ? "err" : S[k].status === "done" ? "done" : "")
+    b.innerHTML = M.icon + "<span>" + esc(M.label) + "</span>" + (st ? '<i class="dot ' + st + '"></i>' : "")
+    b.addEventListener("click", () => onRail(k))
+    rail.appendChild(b)
+  })
+}
+
+/**
+ * 这个模式现在跑得了吗？跑不了要说清缺什么，而不是发出去让模型自己发现。
+ * need 的三种写法（定义在 workflows.mjs 的 modes[].need）：
+ *   "data"        需要配套数值表（refcheck 的数据完整性）
+ *   "var:xxx"     需要「变量对应」里指定某一列（stats 的基线表要分组列）
+ *   "after:yyy"   需要先跑过另一个模式（humanize 的改动对照要先有润色稿）
+ */
+function blockedBy(k) {
+  const M = MODES[k]
+  const miss = []
+  for (const n of M.need || []) {
+    if (n === "data" && !dataName) miss.push({ kind: "data" })
+    else if (n.startsWith("var:")) { const f = n.slice(4); const v = SETTINGS[f]; if (v === undefined || v === null || v === "" || (Array.isArray(v) && !v.length)) miss.push({ kind: "var", field: f }) }
+    else if (n.startsWith("after:")) { const m2 = n.slice(6); if (!S[m2] || S[m2].status === "idle") miss.push({ kind: "after", mode: m2 }) }
+  }
+  return miss.length ? miss : null
+}
+
+/** 点模式按钮：切过去看；该模式还没跑过、也不缺前置条件，就顺手跑一轮（智能助手除外——它等用户开口） */
+function onRail(k) {
+  setMode(k)
+  if (k === "chat") { $("q").focus(); return }
+  if (S[k].status === "idle") tryRun(k)     // 没跑过就顺手跑一轮；闸由 tryRun 统一把
+}
+
+/** 缺前置条件：就地说清缺什么、并把用户送到能补上它的地方（展开变量面板 / 亮出上传按钮） */
+function showBlocked(k, miss) {
+  const M = MODES[k]
+  S[k].err = ""
+  const parts = miss.map((x) => {
+    if (x.kind === "data") return "还没有配套的数值表"
+    if (x.kind === "var") { const f = fieldDef(x.field); return "还没指定「" + (f ? f.label : x.field) + "」" }
+    if (x.kind === "after") return "得先跑一次「" + (MODES[x.mode] ? MODES[x.mode].label : x.mode) + "」"
+    return ""
+  }).filter(Boolean)
+  S[k].block = parts.join("；") + "。" + (M.needHint || "")
+  // 缺的是什么【种类】要留着：render 据此决定要不要在提示下面摆一个上传按钮。
+  // 只留文字的话，用户看到"请先上传配套的数值表"却没有任何地方能传 —— 死路一条。
+  S[k].blockMiss = miss
+  if (miss.some((x) => x.kind === "var")) {
+    $("varsBox").open = true
+    renderVars(miss.filter((x) => x.kind === "var").map((x) => x.field))
+  }
+  render(k)
+}
+
+function setMode(k) {
+  mode = k
+  ORDER.forEach((x) => { const el = $("pane-" + x); if (el) el.classList.toggle("on", x === k) })
+  const M = MODES[k]
+  $("paneTitle").innerHTML = M.icon + "<span>" + esc(M.label) + "</span>"
+  document.querySelector(".ai-head .badge").textContent = M.badge
+  $("composer").hidden = k !== "chat"
+  $("modeFoot").hidden = k === "chat"
+  // 「重新生成」只对三个自动模式有意义；正在跑的时候不给点，避免同一模式起两轮
+  $("btnRerun").hidden = k === "chat" || S[k].status === "idle"
+  renderRail()
+  render(k)
+  $("aiBody").scrollTop = 0
+}
+
+/**
+ * 起一轮的【唯一入口】——先过前置条件闸，再决定发不发。
+ *
+ * ★ 这里踩过一次：闸只接在了模式条那一个入口上，而面板中央那个按钮和「重新生成」都直接调
+ *   run()。于是 refcheck 里点面板里的「数据完整性」，没有数值表也照发；stats 的「基线表」
+ *   没指分组列也照发 —— 右边条子拦得住、面板里拦不住，同一件事两种行为。
+ *   凡是"起一轮"都必须走这里。
+ */
+function tryRun(k, force) {
+  if (busy()) return
+  const miss = blockedBy(k)
+  if (miss) { setMode(k); showBlocked(k, miss); return }
+  run(k, force)
+}
+$("btnRerun").addEventListener("click", () => tryRun(mode, true))
+// 空面板里那个按钮（每次重画都会换一个 DOM 节点，所以用委托，别逐个绑）
+$("aiBody").addEventListener("click", (e) => {
+  const b = e.target.closest("[data-run]")
+  if (b) tryRun(b.dataset.run)
+})
+
+/* ============================================================
+   5. 面板渲染
+   ============================================================ */
+function runHtml(m) {
+  if (!RUN || RUN.mode !== m) return ""
+  const tools = [...RUN.tools.values()]
+  const live = tools.filter((t) => t.status === "running" || t.status === "pending").length
+  return '<div class="runbox"><div class="rh"><span class="spin"></span><span>' + esc(RUN.label) + "</span></div>"
+    + (RUN.skills.length ? '<div class="pills">' + RUN.skills.map((s) => '<span class="pill">' + esc(s) + "</span>").join("") + "</div>" : "")
+    + (tools.length ? '<details><summary>工具调用（' + tools.length + (live ? "，" + live + " 个在跑" : "") + "）</summary>"
+        + tools.map((t) => '<div class="trow"><span class="st">' + (t.status === "completed" ? "✓" : t.status === "error" ? "✕" : "○") + "</span><span>" + esc(t.label) + "</span></div>").join("")
+        + "</details>" : "")
+    + "</div>"
+}
+function filesHtml(list) {
+  if (!list || !list.length) return ""
+  return '<div class="files"><div class="ft">本轮产物</div>' + list.map((n) =>
+    '<div class="frow">' + ICON.file + "<b>" + esc(n) + "</b>"
+    + '<a href="api/raw?name=' + encodeURIComponent(n) + sidQ() + '" target="_blank" rel="noopener">查看</a>'
+    + '<a href="api/download?name=' + encodeURIComponent(n) + sidQ() + '">下载</a></div>').join("") + "</div>"
+}
+function emptyHtml(m) {
+  const [big, sub] = MODES[m].empty
+  // 空面板里必须有个能直接点的按钮：上一轮还在跑的时候，点右边模式条只会把你切过来看
+  //（同一时刻只能跑一轮），此时若面板里只有一句提示，用户会以为"点了没反应"而反复点。
+  // 这个按钮在忙的时候是禁用态并写明在等谁，忙完点它就能开跑。
+  const btn = m === "chat" ? ""
+    : '<div style="margin-top:16px"><button class="hbtn" data-run="' + m + '"' + (busy() ? " disabled" : "") + ">"
+      // 按钮文字直接用模式名。别拼成"开始"+模式名——「开始基线表」「开始数据完整性」都不是人话，
+      // 而这几个名字本身就是动宾结构，单独摆着就是一个动作。忙的时候写明在等谁。
+      + (busy() ? "等「" + esc(MODES[RUN ? RUN.mode : CFG.first].label) + "」跑完" : esc(MODES[m].label)) + "</button></div>"
+  return '<div class="empty-hint"><span class="big">' + esc(big) + "</span>" + esc(sub) + btn + "</div>"
+}
+
+function render(m) {
+  const el = $("pane-" + m)
+  if (m === "chat") return renderChat()
+  const s = S[m]
+  let h = runHtml(m)
+  // ★ 缺前置条件的提示必须【真的画出来】。此前 showBlocked 只把它写进 S[k].block 就完了，
+  //   没有任何渲染代码读它 —— 于是用户点了按钮，界面纹丝不动、只剩一句通用空态文案，
+  //   完全不知道是缺了分组列还是缺了数值表。（我自己也差点漏过：当时是从 S[k].block
+  //   这个状态确认"闸生效"的，而屏幕上根本没有这句话。看状态不等于看见。）
+  if (s.block) {
+    h += '<div class="notebox warn">' + esc(s.block)
+      // 缺配套文件时就地给一个上传按钮，别让用户读完提示还得自己找地方传
+      + ((s.blockMiss || []).some((x) => x.kind === "data") ? '<div class="blockact" data-upload="1"></div>' : "")
+      + "</div>"
+  }
+  if (s.err) h += '<div class="notebox err">⚠ ' + esc(s.err) + "</div>"
+  // 正文优先用产物文件（翻译/大纲是写进文件的，对话里只有一句"已完成"），没有就用对话正文
+  const body = s.doc != null ? s.doc : s.raw
+  if (body && body.trim()) {
+    if (s.doc != null && s.docName) h += '<div class="notebox info">正文来自产物文件 <b>' + esc(s.docName) + "</b>，可在下方下载。</div>"
+    h += '<div class="card md">' + renderMd(body) + "</div>"
+  } else if (s.status === "running") {
+    if (!RUN || RUN.mode !== m) h += '<div class="notebox info">正在生成…</div>'
+  } else if (s.status !== "idle" && !s.err) {
+    h += '<div class="notebox warn">这一轮没有产出可显示的正文。可以点右上角「重新生成」再来一次。</div>'
+  } else if (s.status === "idle") {
+    h = emptyHtml(m) + h
+  }
+  h += filesHtml(s.files)
+  el.innerHTML = h
+  // 上传按钮是带监听的真 DOM 节点，塞不进 innerHTML 字符串里，重画完再挂进占位槽
+  const slot = el.querySelector("[data-upload]")
+  if (slot) { const b = extraUploadBtn(); if (b) slot.appendChild(b) }
+  updateFoot()
+}
+
+function renderChat() {
+  const el = $("pane-chat")
+  const s = S.chat
+  if (!s.msgs.length && !RUN) { el.innerHTML = emptyHtml("chat"); updateFoot(); return }
+  let h = ""
+  s.msgs.forEach((m) => {
+    if (m.role === "user") h += '<div class="msg user"><div class="bubble">' + esc(m.text) + "</div></div>"
+    else if (m.role === "tag") h += '<div class="msg tag"><div class="bubble">' + esc(m.text) + "</div></div>"
+    else h += '<div class="msg ai"><div class="bubble"><div class="who">' + ICON.bot + "助手</div>"
+      + '<div class="md">' + renderMd(m.text) + "</div></div></div>"
+  })
+  if (RUN && RUN.mode === "chat") h += runHtml("chat")
+  if (s.err) h += '<div class="notebox err">⚠ ' + esc(s.err) + "</div>"
+  el.innerHTML = h
+  updateFoot()
+}
+
+function updateFoot() {
+  const running = !!RUN
+  $("btnStop").hidden = !running
+  $("btnStop2").hidden = !running
+  $("btnSend").disabled = busy()
+  $("btnRerun").hidden = mode === "chat" || S[mode].status === "idle" || busy()
+  if (mode !== "chat") {
+    const s = S[mode]
+    $("modeFootTxt").textContent = RUN && RUN.mode === mode ? RUN.label
+      : RUN ? "「" + MODES[RUN.mode].label + "」正在跑，跑完才能开下一轮"
+      : s.status === "done" ? "已完成。想追问就点右边的「智能助手」。"
+      : s.status === "error" ? "上一轮没有正常结束。"
+      : ""
+  }
+}
+
+/** 滚到底（用户往上翻看内容时不要把他拽回来） */
+function follow() {
+  const b = $("aiBody")
+  if (b.scrollHeight - b.scrollTop - b.clientHeight < 90) b.scrollTop = b.scrollHeight
+}
+
+/* ============================================================
+   6. 发起一轮 + SSE 直播
+   ============================================================ */
+/**
+ * @param m       模式
+ * @param force   true = 用户点了「重新生成」（已有内容时先清掉，免得新旧混在一起）
+ * @param userTxt 智能助手模式下用户打的那句话
+ */
+async function run(m, force, userTxt) {
+  if (busy()) return
+  if (!sid || !docName) return
+  const s = S[m]
+  s.block = ""; s.blockMiss = null      // 真开跑了就把"缺前置条件"的提示撤掉
+  if (m !== "chat" && force) { s.raw = ""; s.doc = null; s.docName = ""; s.files = [] }
+
+  let q = ""
+  if (m === "chat") {
+    q = String(userTxt || "").trim()
+    if (!q) return
+    // 会话里还没跑过任何一轮 → agent 手上没有原文，先补一句上下文（正常路径是导读先跑，
+    // 只有导读失败 / 用户一进来就直接提问才会走到这里）
+    if (!turns) q = "我上传了一篇文献 `" + docName + "`，请先按前言把它抽成文本再回答。我的问题是：" + q
+    s.msgs.push({ role: "user", text: userTxt })
+  } else {
+    q = promptFor(m)
+    if (!q) return
+  }
+
+  s.status = "running"; s.err = ""
+  RUN = { mode: m, label: "正在提交…", skills: [], tools: new Map(), es: null }
+  starting = true
+  renderRail(); render(m)
+
+  let j = null, why = "网络异常"
+  try {
+    const resp = await jget("api/chat/start", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        q, sid,
+        // module 只在会话【还没发过消息】时起作用（服务端对已绑定的会话忽略它）。
+        // 必须带：上传接口已经把会话建出来了，不带的话它会被判成自由对话——没有模块前言、
+        // 没有技能闸，而界面上一点异样都看不出来。
+        // ★ 必须是 MOD，不能写死。写死成 "litread" 时，核查 / 润色 / 统计的会话全都被绑成
+        //   文献研读：前言是别人的、技能闸是别人的，而界面照常显示本模块的样子。
+        module: turns ? undefined : MOD,
+        // ★ 每一轮都带上，不是只带第一轮。服务端这一侧是 merge 而不是覆盖，重复发无害；
+        //   而只发第一轮会漏掉一整类情况：会话由 /api/upload 先建出来、此时还【没有模块绑定】，
+        //   用户在第一轮跑之前（或第一轮失败之后）改设置，saveSettings 走的 /api/workflow/form
+        //   有个 `sessionModule(sid) === modId` 的条件，不满足就【静默不写】还回 ok:true。
+        //   于是 protectRefs / hasPHI 这些 pin 字段悄悄退回默认值——正是它们存在的意义所在。
+        wfForm: wfFormValues(),
+      }),
+    })
+    if (resp.status === 429) why = "请求过于频繁，请稍后再试"
+    try { j = await resp.json() } catch (_) { if (resp.status !== 429) why = "服务端错误（HTTP " + resp.status + "）" }
+  } catch (e) {
+    if (String((e && e.message) || e) === "unauthorized") return
+  }
+  starting = false
+
+  if (!j) { failRun(m, why); return }
+  if (j.sid) { sid = j.sid; try { history.replaceState(null, "", location.pathname + "?sid=" + encodeURIComponent(sid)) } catch (_) {} }
+  if (!j.sent) {
+    // 服务端没收下这条：上一轮还在跑、额度用尽、模块未开通…… 一律如实说，别让转圈一直转
+    failRun(m, (j.running ? "上一轮还在进行中，本条没有发出去。" : "") + (j.err || j.notice || "发送失败"))
+    if (m === "chat") { S.chat.msgs.pop(); renderChat() }
+    return
+  }
+  turns++
+  attach(m)
+}
+
+function failRun(m, msg) {
+  RUN = null
+  S[m].status = "error"
+  S[m].err = msg
+  renderRail(); render(m); updateFoot()
+}
+
+function attach(m) {
+  const es = new EventSource("api/chat/attach?sid=" + encodeURIComponent(sid))
+  if (!RUN) RUN = { mode: m, label: "正在生成…", skills: [], tools: new Map(), es: null }
+  RUN.es = es
+  RUN.label = "等待模型输出…"
+  render(m); updateFoot()   // 起轮成功了，先把"正在提交…"换掉——第一个 SSE 事件可能要等十几秒才来
+  let raw = ""
+  let aiMsg = null                       // 聊天模式下这一轮的助手气泡
+  let finished = false
+  let paintT = 0
+  const repaint = () => { paintT = 0; render(m); follow() }
+  const schedule = () => { if (!paintT) paintT = setTimeout(repaint, 120) }
+
+  const close = (note, isErr) => {
+    if (finished) return
+    finished = true
+    if (paintT) { clearTimeout(paintT); paintT = 0 }
+    es.close()
+    RUN = null
+    const s = S[m]
+    s.status = isErr ? "error" : "done"
+    if (note) { if (isErr) s.err = note; else if (m === "chat") s.msgs.push({ role: "tag", text: note }) }
+    if (m !== "chat") s.raw = raw
+    afterRun(m).then(() => { renderRail(); render(m); updateFoot(); follow() })
+  }
+
+  es.addEventListener("tool", (ev) => {
+    let d; try { d = JSON.parse(ev.data) } catch (_) { return }
+    if (d.tool === "skill") { if (d.skill && !RUN.skills.includes(d.skill)) RUN.skills.push(d.skill); schedule(); return }
+    RUN.tools.set(d.callID, { status: d.status, label: d.title ? d.tool + " · " + d.title : d.tool })
+    const live = [...RUN.tools.values()].filter((t) => t.status === "running" || t.status === "pending").length
+    RUN.label = live ? "工具运行中（" + live + "）…" : "等待模型输出…"
+    schedule()
+  })
+  es.addEventListener("reasoning", () => { if (RUN) { RUN.label = "思考中…"; schedule() } })
+  es.addEventListener("text", (ev) => {
+    try { raw = JSON.parse(ev.data) } catch (_) { return }
+    if (RUN) RUN.label = "正在输出…"
+    if (m === "chat") { if (!aiMsg) { aiMsg = { role: "ai", text: "" }; S.chat.msgs.push(aiMsg) } aiMsg.text = raw }
+    else S[m].raw = raw
+    schedule()
+  })
+  es.addEventListener("final", (ev) => {
+    try { const t = JSON.parse(ev.data).text; if (t) raw = t } catch (_) {}
+    if (m === "chat") { if (!aiMsg) { aiMsg = { role: "ai", text: "" }; S.chat.msgs.push(aiMsg) } aiMsg.text = raw }
+    else S[m].raw = raw
+    schedule()
+  })
+  // 服务端推的是【本轮新建/改动的产物】文件名数组（字符串）。聊天模式不列产物：那一栏是对话，
+  // 突然冒出一排文件卡只会挤走上下文；产物在导读/翻译/PPT 三个面板里各自展示。
+  es.addEventListener("files", (ev) => {
+    if (m === "chat") return
+    try { const l = JSON.parse(ev.data); if (Array.isArray(l) && l.length) S[m].files = l.filter((x) => typeof x === "string") } catch (_) {}
+    schedule()
+  })
+  es.addEventListener("queue", (ev) => {
+    let d; try { d = JSON.parse(ev.data) } catch (_) { return }
+    if (!RUN) return
+    RUN.label = !d || !d.queued ? "等待模型输出…"
+      : d.rateLimited ? "上游限速中，正在等待重试…"
+      : "正在云端排队（第 " + (d.position || 1) + " 位）…"
+    schedule()
+  })
+  es.addEventListener("done", () => close(""))
+  es.addEventListener("aborted", () => close("已终止本轮。", false))
+  es.addEventListener("failed", (ev) => { let msg = "本轮出错"; try { msg = JSON.parse(ev.data).message } catch (_) {} close(msg, true) })
+  es.addEventListener("idle", () => close(""))      // 接上去时后台已经没有进行中的一轮
+  es.onerror = () => {
+    if (finished) return
+    // 后台还在跑，只是这条订阅断了（网络抖动 / 网关重启）。等一下再接一次，别把用户吓成"失败了"。
+    finished = true
+    es.close(); RUN = null
+    render(m)
+    setTimeout(async () => {
+      if (RUN || !sid) return
+      let running = false
+      try { running = (await jget("api/job?sid=" + encodeURIComponent(sid)).then((r) => r.json())).running } catch (_) {}
+      if (running) { finished = false; attach(m) }
+      else { S[m].status = "error"; S[m].err = "连接中断了，而后台这一轮也已经结束。点「重新生成」可以再来一次。"; renderRail(); render(m); updateFoot() }
+    }, 2500)
+  }
+}
+
+/** 一轮跑完：把该模式对应的产物文件读回来（翻译 / 大纲的正文在文件里，不在对话里） */
+async function afterRun(m) {
+  await refreshOutputs()
+  if (m === "chat") return
+  await loadDocFor(m)
+  collectFiles(m)
+}
+async function refreshOutputs() {
+  try { outputs = await jget("api/outputs?sid=" + encodeURIComponent(sid)).then((r) => (r.ok ? r.json() : [])) } catch (_) { outputs = [] }
+}
+/**
+ * 该模式要在自己面板下方列哪些产物。
+ * 两个来源合并：① SSE 的 files 事件（本轮真正新建/改动的，最准）；② 产物目录里按约定名匹配的
+ * （刷新页面后 ① 已经没了，且子目录产物 ① 有时给不全）。
+ * ★ 必须按模式过滤：一股脑列全部产物的话，翻译面板下面会挂着导读的 md、PPT 的 pptx，
+ *   用户点开发现不是自己要的东西。
+ */
+function collectFiles(m) {
+  if (m === "chat" || !MODES[m].out) return
+  const named = outputs.map((f) => f.name).filter((n) => MODES[m].out.test(n))
+  S[m].files = [...new Set([...(S[m].files || []), ...named])].slice(0, 12)
+}
+
+async function loadDocFor(m) {
+  const re = MODES[m].file
+  if (!re) return
+  const hit = outputs.map((f) => f.name).filter((n) => re.test(n)).sort()[0]
+  if (!hit) return
+  try {
+    const r = await jget("api/raw?name=" + encodeURIComponent(hit) + sidQ())
+    if (!r.ok) return
+    const t = await r.text()
+    if (t && t.trim()) { S[m].doc = t; S[m].docName = hit }
+  } catch (_) {}
+}
+
+/* ---- 终止 ---- */
+async function abortRun() {
+  if (!sid || !RUN) return
+  try { await jget("api/chat/abort?sid=" + encodeURIComponent(sid), { method: "POST" }) } catch (_) {}
+}
+$("btnStop").addEventListener("click", abortRun)
+$("btnStop2").addEventListener("click", abortRun)
+
+/* ---- 智能助手：发消息 ---- */
+const qEl = $("q")
+qEl.addEventListener("input", () => { qEl.style.height = "auto"; qEl.style.height = Math.min(130, qEl.scrollHeight) + "px" })
+qEl.addEventListener("keydown", (e) => { if (e.key === "Enter" && !e.shiftKey && !e.isComposing) { e.preventDefault(); sendChat() } })
+$("btnSend").addEventListener("click", sendChat)
+function sendChat() {
+  const t = qEl.value.trim()
+  if (!t) return
+  if (busy()) return
+  qEl.value = ""; qEl.style.height = "auto"
+  run("chat", false, t)
+  renderChat(); follow()
+}
+
+/* ============================================================
+   7. 恢复：带 ?sid= 打开 / 刷新页面
+   ------------------------------------------------------------
+   四个面板的内容不落在任何自定义存储里，全部从服务端已有的三样东西重建：
+     api/uploads  → 左栏那篇原文是哪个文件
+     api/history  → 每一轮属于哪个模式（靠消息开头的 MODES.mark 标记认）
+     api/outputs  → 翻译 / 大纲 / pptx 等产物
+   好处是换台机器、换个浏览器打开同一个会话，看到的东西完全一样。
+   ============================================================ */
+function modeOfUserText(t) {
+  for (const k of ORDER) { const mk = MODES[k].mark; if (mk && t.startsWith(mk)) return k }
+  return "chat"
+}
+
+async function restore() {
+  if (!sid) return false
+  let ups = [], hist = [], job = { running: false }
+  try {
+    [ups, hist, job] = await Promise.all([
+      jget("api/uploads?sid=" + encodeURIComponent(sid)).then((r) => (r.ok ? r.json() : [])).catch(() => []),
+      jget("api/history?sid=" + encodeURIComponent(sid)).then((r) => (r.ok ? r.json() : [])).catch(() => []),
+      jget("api/job?sid=" + encodeURIComponent(sid)).then((r) => (r.ok ? r.json() : { running: false })).catch(() => ({ running: false })),
+    ])
+  } catch (e) { return false }
+
+  const list = Array.isArray(ups) ? ups : []
+  const doc = list.find((f) => okExt().includes(extOf(f.name)))
+  if (!doc) return false                       // 这个会话里没有本模块能处理的文件 → 回首屏让他传一份
+  docName = doc.name; docSize = doc.size
+  // 配套数值表（refcheck）：上传目录里另一个符合 extraUpload 扩展名的文件
+  if (CFG.extraUpload) {
+    const d2 = list.find((f) => f.name !== docName && CFG.extraUpload.exts.includes(extOf(f.name)))
+    if (d2) dataName = d2.name
+  }
+
+  // 已落盘的表单值（设置 / 必答题 / 变量对应）。刷新页面、换台机器打开同一个会话，
+  // 勾选都得原样回来 —— 否则 pin 的那几项会在下一轮悄悄变回默认值。
+  try {
+    const st = await jget("api/workflow/state?sid=" + encodeURIComponent(sid)).then((r) => (r.ok ? r.json() : null))
+    if (st && st.state && st.state.form) SETTINGS = { ...st.state.form }
+  } catch (_) {}
+
+  // 历史 → 各个面板。同一模式跑过多轮时【后面的覆盖前面的】：用户看到的应该是最近那一版。
+  const auto = ORDER.filter((k) => k !== "chat")
+  if (Array.isArray(hist)) {
+    let cur = null
+    hist.forEach((msg) => {
+      if (msg.role === "user") {
+        cur = modeOfUserText(msg.text || "")
+        turns++
+        if (cur === "chat") S.chat.msgs.push({ role: "user", text: msg.text })
+        else { S[cur].raw = ""; S[cur].status = "done" }
+      } else {
+        if (cur === "chat" || cur == null) S.chat.msgs.push({ role: "ai", text: msg.text })
+        else { S[cur].raw = msg.text; S[cur].status = msg.isError ? "error" : "done" }
+        if (cur && cur !== "chat" && msg.isError) S[cur].err = msg.text
+      }
+    })
+  }
+
+  await refreshOutputs()
+  await Promise.all(auto.map((m) => loadDocFor(m)))
+  auto.forEach((m) => { if (S[m].status !== "idle") collectFiles(m) })
+
+  enterReader()
+  if (CFG.source.kind === "table") loadHeaders()
+  // 进来先看哪个面板：最近跑过的那个（按模式条倒序找），都没跑过就看配置指定的首个模式
+  const done = auto.slice().reverse().find((m) => S[m].status !== "idle")
+  setMode(done || (S.chat.msgs.length ? "chat" : CFG.first))
+
+  // 后台还在跑：接上去。属于哪个模式看最后一条 user 消息的标记。
+  if (job && job.running) {
+    const lastUser = [...(hist || [])].reverse().find((x) => x.role === "user")
+    const m = lastUser ? modeOfUserText(lastUser.text || "") : CFG.first
+    S[m].status = "running"
+    setMode(m)
+    attach(m)
+  }
+  return true
+}
+
+/* ============================================================
+   8. 导航（换一篇 / 最近 / 工作台）
+   ------------------------------------------------------------
+   顶栏撤掉后这三个动作出现在两个地方（首屏卡片下方、阅读器的文件工具条），同一个动作有两个
+   按钮。所以【不能再按 id 绑】—— 一个页面里两个同 id 是无效 HTML，而且 $() 只会拿到第一个，
+   另一个点了没反应。改成 data-act + 事件委托：将来再往哪儿放一个，写个属性就通了。
+   ============================================================ */
+const menu = $("recentMenu")
+// 两个弹层（最近 / 设置）共用一套定位与关闭：它们都可能被不同位置的按钮触发，
+// 所以都是 body 级 position:fixed，打开时按触发按钮算坐标。
+const closeMenu = () => { menu.classList.remove("on"); const sm = $("setMenu"); if (sm) sm.classList.remove("on") }
+
+/** 把弹层摆到触发按钮下面（position:fixed，坐标自己算），并且不许越出视口右/下边 */
+function placeMenu(el, btn) {
+  el.classList.add("on")                         // 先显示再量，否则 offsetWidth/Height 都是 0
+  const r = btn.getBoundingClientRect()
+  const w = el.offsetWidth, h = el.offsetHeight
+  let left = Math.min(r.right - w, innerWidth - w - 10)
+  let top = r.bottom + 6
+  if (top + h > innerHeight - 10) top = Math.max(10, r.top - h - 6)   // 下面放不下就翻到按钮上方
+  menu.style.left = Math.max(10, left) + "px"
+  menu.style.top = top + "px"
+}
+
+async function showRecent(btn) {
+  if (menu.classList.contains("on")) return closeMenu()
+  menu.innerHTML = '<div class="empty">正在读取…</div>'
+  placeMenu(menu, btn)
+  let j = null
+  try { j = await jget("api/sessions").then((r) => r.json()) } catch (_) {}
+  // 只列本模块的会话。别的模块的会话在这个页面里打不开（没有原文、没有模式），列出来只会误导。
+  // ★ 只列【当前模块】的会话，不能写死 litread：别的模块的会话在这个页面里打不开
+  //（没有它认得的文件、没有对应的模式），列出来只会让人点进去撞一鼻子灰。
+  const list = ((j && j.sessions) || []).filter((s) => s.module === MOD).slice(0, 20)
+  if (!list.length) { menu.innerHTML = '<div class="empty">还没有做过的记录</div>'; return placeMenu(menu, btn) }
+  menu.innerHTML = ""
+  list.forEach((s) => {
+    const b = document.createElement("button")
+    b.type = "button"; b.className = "mi"
+    b.innerHTML = esc(s.title || "(未命名)") + "<small>" + (s.running ? "生成中 · " : "") + new Date(s.updated || Date.now()).toLocaleString("zh-CN", { hour12: false }) + "</small>"
+    b.addEventListener("click", () => { location.href = location.pathname + "?sid=" + encodeURIComponent(s.id) })
+    menu.appendChild(b)
+  })
+  openMenuAt(btn)                                // 内容换完高度变了，重新摆一次
+}
+
+document.addEventListener("click", (e) => {
+  const btn = e.target.closest("[data-act]")
+  if (!btn) { closeMenu(); return }               // 点空白处收起菜单
+  e.stopPropagation()
+  if (btn.dataset.act === "ws") { location.href = "./workspace.html"; return }
+  if (btn.dataset.act === "new") {
+    if (RUN && !confirm("这一轮还在跑，换一篇会让你看不到它的结果（后台仍会跑完，可以从「最近」再进来）。确定？")) return
+    location.href = location.pathname
+    return
+  }
+  if (btn.dataset.act === "recent") showRecent(btn)
+})
+addEventListener("resize", closeMenu)             // fixed 定位的菜单不会跟着按钮走，改窗口就收起来
+
+/* ============================================================
+   9. 设置弹层 / 变量对应 / 附加上传
+   ============================================================ */
+/** 本会话要落盘的表单值 = 设置弹层 + 首屏必答题 + 变量对应，再加上左栏那份文件 */
+function wfFormValues() {
+  const v = { ...SETTINGS }
+  if (CFG.source.field && docName) v[CFG.source.field] = [docName]
+  if (CFG.extraUpload && dataName) v[CFG.extraUpload.field] = [dataName]
+  return v
+}
+
+/** 设置改了就立刻回写 _workflow.json —— pin:true 的字段靠它进入【下一轮】的模块前言 */
+let saveT = 0
+function saveSettings() {
+  if (!sid) return
+  clearTimeout(saveT)
+  saveT = setTimeout(() => {
+    fetch("api/workflow/form", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ module: MOD, sid, values: wfFormValues() }),
+    }).catch(() => {})
+  }, 400)
+}
+
+let HEADERS = []          // 真实表头（stats 的 columns 下拉靠它）
+let HEADERS_WHY = ""      // 读不出来时的原因（xlsx 要 AI 在分析时读，服务端如实回这一句）
+
+/** 通用控件：select / bool / text / multi / columns（columns 的候选来自真实表头） */
+function fieldControl(f, onChange) {
+  const wrap = document.createElement("div")
+  const v = SETTINGS[f.id]
+  if (f.type === "multi") {
+    for (const o of f.options || []) {
+      const l = document.createElement("label"); l.className = "schk"
+      const cb = document.createElement("input"); cb.type = "checkbox"
+      cb.checked = Array.isArray(v) && v.includes(o.v)
+      cb.addEventListener("change", () => {
+        const cur = Array.isArray(SETTINGS[f.id]) ? SETTINGS[f.id].slice() : []
+        SETTINGS[f.id] = cb.checked ? [...new Set([...cur, o.v])] : cur.filter((x) => x !== o.v)
+        onChange()
+      })
+      l.appendChild(cb); l.appendChild(document.createTextNode(o.t)); wrap.appendChild(l)
+    }
+    return wrap
+  }
+  if (f.type === "text") {
+    const i = document.createElement("input"); i.type = "text"; i.value = v == null ? "" : v
+    if (f.placeholder) i.placeholder = f.placeholder
+    i.addEventListener("input", () => { SETTINGS[f.id] = i.value; onChange() })
+    wrap.appendChild(i); return wrap
+  }
+  // columns 读不出表头（xlsx）时降级成手填输入框，而不是给一个空下拉让人以为这张表没有列
+  if (f.type === "columns" && !HEADERS.length) {
+    const i = document.createElement("input"); i.type = "text"; i.value = v == null ? "" : v
+    i.placeholder = HEADERS_WHY || "手动填列名"
+    i.addEventListener("input", () => { SETTINGS[f.id] = i.value; onChange() })
+    wrap.appendChild(i); return wrap
+  }
+  const sel = document.createElement("select")
+  const opts = f.type === "bool" ? [{ v: true, t: "是" }, { v: false, t: "否" }]
+    : f.type === "columns" ? [{ v: "", t: "（不指定）" }].concat(HEADERS.map((h) => ({ v: h, t: h })))
+    : (f.options || []).slice()
+  if (f.type !== "columns" && f.type !== "bool" && !f.required) opts.unshift({ v: "", t: "（不指定）" })
+  for (const o of opts) {
+    const op = document.createElement("option")
+    op.value = String(o.v); op.textContent = o.t
+    if (String(v) === String(o.v)) op.selected = true
+    sel.appendChild(op)
+  }
+  sel.addEventListener("change", () => {
+    SETTINGS[f.id] = f.type === "bool" ? sel.value === "true" : sel.value
+    onChange()
+  })
+  wrap.appendChild(sel); return wrap
+}
+
+async function loadHeaders() {
+  if (!CFG.vars || !docName || !sid) return
+  try {
+    const j = await jget("api/data/headers?name=" + encodeURIComponent(docName) + sidQ()).then((r) => r.json())
+    HEADERS = Array.isArray(j.headers) ? j.headers : []
+    HEADERS_WHY = j.reason || ""
+  } catch (_) { HEADERS = []; HEADERS_WHY = "" }
+  renderVars()
+}
+
+function renderVars(missing) {
+  if (!CFG || !CFG.vars) return
+  const grid = $("varsGrid"); grid.innerHTML = ""
+  const miss = new Set(missing || [])
+  let filled = 0
+  for (const id of CFG.vars.fields) {
+    const f = fieldDef(id); if (!f) continue
+    const v = SETTINGS[id]
+    if (v !== undefined && v !== null && v !== "" && !(Array.isArray(v) && !v.length)) filled++
+    const box = document.createElement("div")
+    box.className = "vf" + (miss.has(id) ? " miss" : "")
+    const l = document.createElement("label"); l.textContent = f.label
+    if (f.help) l.title = f.help
+    box.appendChild(l)
+    box.appendChild(fieldControl(f, () => { saveSettings(); renderVars() }))
+    grid.appendChild(box)
+  }
+  $("varsSum").textContent = HEADERS.length
+    ? "（已指定 " + filled + " / " + CFG.vars.fields.length + " 项，列名读自你的表）"
+    : (HEADERS_WHY ? "（" + HEADERS_WHY + "）" : "（已指定 " + filled + " 项）")
+}
+
+const setMenu = $("setMenu")
+$("btnSettings").addEventListener("click", (e) => {
+  e.stopPropagation()
+  if (setMenu.classList.contains("on")) { setMenu.classList.remove("on"); return }
+  setMenu.innerHTML = ""
+  for (const id of CFG.settings || []) {
+    const f = fieldDef(id); if (!f) continue
+    const box = document.createElement("div"); box.className = "sf"
+    const l = document.createElement("label"); l.textContent = f.label; box.appendChild(l)
+    if (f.help) { const h = document.createElement("div"); h.className = "sh"; h.textContent = f.help; box.appendChild(h) }
+    box.appendChild(fieldControl(f, saveSettings))
+    setMenu.appendChild(box)
+  }
+  closeMenu()
+  setMenu.classList.add("on")
+  placeMenu(setMenu, $("btnSettings"))
+})
+
+/* ---- 附加上传（目前只有 refcheck 的配套数值表）----
+   它只被一个模式用到，摆在首屏会挡住所有人的路，所以点到那个模式、发现缺了才就地要。 */
+function extraUploadBtn() {
+  if (!CFG.extraUpload) return null
+  const b = document.createElement("button")
+  b.type = "button"; b.className = "hbtn"
+  b.innerHTML = ic("up") + "<span>" + (dataName ? "换一份" + CFG.extraUpload.label : "上传" + CFG.extraUpload.label) + "</span>"
+  b.addEventListener("click", () => {
+    const inp = document.createElement("input")
+    inp.type = "file"; inp.accept = CFG.extraUpload.accept
+    inp.addEventListener("change", async () => {
+      const f = inp.files && inp.files[0]; if (!f) return
+      const cur = mode
+      if (!CFG.extraUpload.exts.includes(extOf(f.name))) {
+        S[cur].err = "只收 " + CFG.extraUpload.exts.map((x) => "." + x).join(" / ") + "，你选的是 ." + (extOf(f.name) || "（无扩展名）")
+        render(cur); return
+      }
+      S[cur].err = ""; S[cur].block = "正在上传 " + f.name + "…"; render(cur)
+      try { await upload(f); dataName = f.name; S[cur].block = ""; saveSettings(); render(cur) }
+      catch (e) { S[cur].block = ""; S[cur].err = String((e && e.message) || e); render(cur) }
+    })
+    inp.click()
+  })
+  return b
+}
+
+/**
+ * 启动：确定是哪个模块 → 取它的 reader 配置 → 按配置把界面搭出来。
+ * 模块来自三处，优先级从高到低：
+ *   ?m=<id>        工作台点卡片进来时带的（见 workspace.html 的 enter）
+ *   ?sid= 的会话   会话在创建那一刻就绑定了模块，服务端说了算
+ *   litread        兜底（老书签直接开 /reader.html）
+ */
+;(async () => {
+  const fail = (title, msg) => {
+    document.body.innerHTML = '<div class="intro" style="display:flex"><div class="introcard"><h1>' + esc(title) + "</h1>"
+      + '<div class="lead">' + esc(msg) + "</div>"
+      + '<div style="margin-top:22px"><button class="gobtn" data-act="ws">回工作台</button></div></div></div>'
+    document.body.addEventListener("click", (e) => { if (e.target.closest('[data-act="ws"]')) location.href = "./workspace.html" })
+  }
+
+  MOD = QS.get("m") || ""
+  let mods = []
+  try { mods = ((await jget("api/modules").then((r) => r.json())) || {}).modules || [] } catch (_) { return }
+
+  // 带了 sid 却没带 m：会话绑的模块以服务端为准（用户可能是从「最近」或聊天页跳过来的）
+  if (!MOD && sid) {
+    try {
+      const j = await jget("api/sessions").then((r) => r.json())
+      const hit = ((j && j.sessions) || []).find((x) => x.id === sid)
+      if (hit && hit.module) MOD = hit.module
+    } catch (_) {}
+  }
+  if (!MOD) MOD = "litread"
+
+  const meta = mods.find((x) => x.id === MOD)
+  if (!meta) return fail("打不开这个模块", "服务端没有「" + MOD + "」这个模块。可能是链接过期了，回工作台重新进一次。")
+  if (meta.ui !== "reader") { location.href = "./#module=" + encodeURIComponent(MOD); return }
+  if (!meta.allowed) return fail(meta.name, "你的账号还没有开通这个模块，请联系管理员。")
+
+  let wf = null
+  try { wf = ((await jget("api/modules/" + encodeURIComponent(MOD) + "/workflow").then((r) => r.json())) || {}).workflow } catch (_) {}
+  if (!wf || !wf.reader) return fail(meta.name, "取不到这个模块的界面配置（服务端版本可能比界面包旧）。刷新一次；还不行就回工作台，从对话里也能用这些能力。")
+
+  document.title = meta.name + " · Niuma Science"
+  installConfig(wf.reader)
+  initState()
+  mode = CFG.first
+  // 面板容器按模式清单生成（每个模式一个），HTML 里不再写死任何一个模块的面板
+  $("aiBody").innerHTML = ORDER.map((id) => '<div class="pane" id="pane-' + id + '"></div>').join("")
+  // 首屏那个大图标用「首个模式」的图标：它就是这个模块最主要在干的事
+  $("introIcon").innerHTML = MODES[CFG.first] ? MODES[CFG.first].icon : ic("dot")
+  renderIntro()
+
+  if (sid) {
+    const ok = await restore()
+    if (ok) return
+    // 这个会话里没有本模块能处理的文件 → 回首屏当新的一份。
+    // ★ 必须说一句为什么。最常见的来源是【这个模块改版前留下的会话】——那时它是表单+流程条那一套，
+    //   未必有上传件，而「最近」列表里新旧长得一模一样。静默弹回上传页的话，用户会以为自己点错了，
+    //   而且会反复再点一次。
+    sid = null
+    try { history.replaceState(null, "", location.pathname + "?m=" + encodeURIComponent(MOD)) } catch (_) {}
+    $("introErr").className = "err on info"
+    $("introErr").textContent = "刚才那个会话里没有这个模块能处理的文件——多半是改版前留下的老会话，"
+      + "那时候不需要先上传。它的对话记录还在，从「自由对话」那边照常能翻到；要开始新的一份，在上面传上来即可。"
+  }
+  $("intro").hidden = false
+})()
+</script>
+</body>
+</html>

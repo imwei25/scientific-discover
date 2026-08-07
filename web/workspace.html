@@ -182,7 +182,7 @@
     grant:    { ic: "grant",  en: "Grant Proposal" },
     paper:    { ic: "paper",  en: "SCI Paper" },
     chat:     { ic: "chat",   en: "Free Chat" },
-    litread:  { ic: "lit",    en: "Literature Reading" },
+    litread:  { ic: "lit",    en: "Close Reading" },
     refcheck: { ic: "proof",  en: "Manuscript Check" },
     humanize: { ic: "refine", en: "Language Polishing" },
     stats:    { ic: "stat",   en: "Statistic & Analysis" },
@@ -222,8 +222,13 @@
     }
   }
 
-  // 进模块 = 回聊天页并把模块挂在 hash 上（index.html 读它，把这一次的新会话绑定到该模块）
-  function enter(m) { location.href = m.id === "chat" ? "./" : "./#module=" + encodeURIComponent(m.id); }
+  /* 进模块 = 回聊天页并把模块挂在 hash 上（index.html 读它，把这一次的新会话绑定到该模块）。
+     例外：服务端下发 ui="reader" 的模块（文献研读）有自己的界面壳，直接送去那个页面。
+     判据用服务端下发的 ui 字段而不是在这里写死 id —— 将来再加同形态的模块，这里不用改。 */
+  function enter(m) {
+    if (m.ui === "reader") { location.href = "./reader.html"; return; }
+    location.href = m.id === "chat" ? "./" : "./#module=" + encodeURIComponent(m.id);
+  }
 
   function fallback(msg) {
     document.getElementById("fallbackSlot").innerHTML =

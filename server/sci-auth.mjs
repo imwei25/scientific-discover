@@ -24,6 +24,7 @@ import * as OneAPI from "./lib/oneapi.mjs"
 import * as Upstream from "./lib/upstream.mjs"
 import { llmForward, GATEWAY_PATH_PREFIX } from "./lib/gateway.mjs"
 import { imageForward, IMAGE_PATH_PREFIX } from "./lib/imagegen.mjs"
+import { ocrForward, OCR_PATH_PREFIX } from "./lib/ocrspace.mjs"
 import { createQueue, sanitizeLimits, LIMIT_DEFAULTS } from "./lib/queue.mjs"
 import { createSupply, WINDOWS, WINDOW_LABELS, isWindow } from "./lib/supply.mjs"
 import * as Credits from "./lib/credits.mjs"
@@ -102,6 +103,17 @@ export const CFG = {
   imageKey: process.env.QWEN_API_KEY || process.env.DASHSCOPE_API_KEY || "",
   imageModel: process.env.QWEN_MODEL || "",
   imageEndpoint: process.env.QWEN_IMAGE_ENDPOINT || "",
+  // 图片识字（/ocr 代理，ocr 技能用）。变量名与容器版注入给技能的那个一致（OCR_SPACE_API_KEY），
+  // 一处配置两种形态通用。没配 = /ocr 回 503 并说清是"平台没配"，不冤枉用户的次数。
+  // 【这把 key 只留在服务器】客户端永远拿不到它 —— 与 LLM_UPSTREAM_KEY 同一条原则。
+  ocrKey: process.env.OCR_SPACE_API_KEY || "",
+  ocrEngine: process.env.OCR_ENGINE || "",
+  ocrEndpoint: process.env.OCR_ENDPOINT || "",
+  // 全平台的识字次数闸（0 = 不限）。OCR.space 按 key + 出口 IP 计额，走代理后所有用户
+  // 共用本服务器这一个 IP，故除每人每天的档位闸外还要有这两条。默认值对着免费档留了余量
+  // （免费：每天 500 次/IP、Engine3 每月 2500 次）；换成付费 key 就把两条都设成 0。
+  ocrDailyCap: envNum("OCR_DAILY_CAP", 480, { min: 0 }),
+  ocrMonthlyCap: envNum("OCR_MONTHLY_CAP", 2400, { min: 0 }),
 }
 export const oneapiCfg = () => ({ url: CFG.oneapiUrl, token: CFG.oneapiToken })
 
@@ -1192,11 +1204,17 @@ async function handleAdminApi(req, res, pathname) {
       if (!Number.isFinite(n) || n < 0 || Math.floor(n) !== n)
         return json(res, 400, { ok: false, err: "每日生图张数须是 ≥0 的整数（0 = 不限）" })
     }
+    // 图片识字次数：同上（免费档的 OCR 额度是全平台共享的，静默变不限比生图更容易把公共池吃穿）
+    if (b.ocrDaily !== undefined && b.ocrDaily !== null && b.ocrDaily !== "") {
+      const n = Number(b.ocrDaily)
+      if (!Number.isFinite(n) || n < 0 || Math.floor(n) !== n)
+        return json(res, 400, { ok: false, err: "每日图片识字次数须是 ≥0 的整数（0 = 不限）" })
+    }
     const before = DB.getTier(db, key)
     DB.upsertTier(db, {
       key, daily_usd: b.dailyUSD, monthly_usd: b.monthlyUSD,
       model: b.model, models: b.models, skills: b.skills, note: b.note, sort: b.sort,
-      max_conc: b.maxConc, img_daily: b.imgDaily,
+      max_conc: b.maxConc, img_daily: b.imgDaily, ocr_daily: b.ocrDaily,
     })
     const after = DB.getTier(db, key)
     // 改档位定义影响该档全体用户的额度/默认模型/技能 → 全部吊销 key，下次登录按新权限走。
@@ -1901,6 +1919,8 @@ export const server = http.createServer(async (req, res) => {
     if (p.startsWith(GATEWAY_PATH_PREFIX)) return await llmForward({ req, res, pathname: p, ctx })
     // 生图转发（同理，body 自己读）
     if (p.startsWith(IMAGE_PATH_PREFIX)) return await imageForward({ req, res, pathname: p, ctx })
+    // 图片识字转发（同理，body 自己读：里面是一整张 base64 图）
+    if (p.startsWith(OCR_PATH_PREFIX)) return await ocrForward({ req, res, pathname: p, ctx })
 
     if (p === "/healthz") return json(res, 200, { ok: true, service: "sci-auth", users: DB.countUsers(db), node: process.versions.node })
 
@@ -1939,6 +1959,9 @@ const ctx = {
   monthCost: (uid) => DB.monthCost(db, uid),
   todayImages: (uid) => DB.todayImages(db, uid),
   recordImage: (uid) => DB.recordImage(db, uid),
+  todayOcr: (uid) => DB.todayOcr(db, uid),
+  recordOcr: (uid) => DB.recordOcr(db, uid),
+  ocrTotals: () => DB.ocrTotals(db),
   noteClient,
 }
 

@@ -20,7 +20,9 @@
     --indigo: #6366f1; --green: #2bb673; --rose: #ef4444;
     --press: #2c3038;                       /* 按下态深灰（发送/附件等圆钮） */
     --r-lg: 16px; --r-md: 12px; --r-sm: 10px;
-    --hdr-h: 46px;                          /* 顶栏高度：半屏预览按它定位 */
+    /* 顶栏已整条撤掉（品牌行 + 在线状态没信息量，公告/分享/返回都搬去了左下角），
+       这里留 0 是为了半屏预览等按它定位的地方不必逐处改数值；哪天再加回顶栏改这一个值即可。 */
+    --hdr-h: 0px;
     --shadow-lg: 0 6px 22px rgba(20,24,30,.10);
     --shadow-sm: 0 2px 8px rgba(20,24,30,.06);
   }
@@ -44,25 +46,35 @@
   ::-webkit-scrollbar-thumb { background: #c6d0df; border-radius: 20px; border: 2px solid transparent; background-clip: padding-box; }
   ::-webkit-scrollbar-thumb:hover { background: #a9b7cc; background-clip: padding-box; }
 
-  /* Header：与主体同色的浅灰窄条，只用一根细线与主体分开 */
-  header {
-    flex: none; display: flex; align-items: center; justify-content: space-between;
-    height: var(--hdr-h); padding: 0 22px; border-bottom: 1px solid var(--line); background: var(--bg);
-  }
-  .brand { display: flex; align-items: center; gap: 10px; }
-  .logo { width: 24px; height: 24px; display: block; }
-  .logo img { width: 100%; height: 100%; object-fit: contain; display: block; }
-  .brand .title { font-weight: 400; font-size: 14px; letter-spacing: .22em; text-transform: uppercase; }
-  .brand .sub { color: var(--muted); font-size: 12px; margin-top: 1px; }
-  .status { display: flex; align-items: center; gap: 7px; padding: 5px 12px; border-radius: 999px;
-    background: rgba(255,255,255,.72); border: 1px solid var(--line); color: var(--muted); font-size: 12px; letter-spacing: .04em; }
-  .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--green); box-shadow: 0 0 0 0 rgba(43,182,115,.5); animation: pulse 3.5s infinite; }
-  @keyframes pulse { 0% { box-shadow: 0 0 0 0 rgba(43,182,115,.5); } 70% { box-shadow: 0 0 0 7px rgba(43,182,115,0); } 100% { box-shadow: 0 0 0 0 rgba(43,182,115,0); } }
+  /* 顶栏整条已删：品牌行与「在线」都不承载信息（用户知道自己在用什么、连不上时界面自己会报），
+     公告 / 分享 / 返回工作台整体搬到左下角（见 .sbtools）。多出来的 46px 全给了对话区。 */
 
   /* Layout：左会话栏 / 中工作区 / 右工具栏。两侧是贴边的白色列，中间留浅灰底。 */
   main { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(0,56px) minmax(0,1fr) minmax(0,300px); background: var(--bg); transition: width .2s ease; }
   body.sessbar-open main { grid-template-columns: minmax(0,264px) minmax(0,1fr) minmax(0,300px); }
-  body.preview-open main { width: 50vw; }
+  /* 预览态：左半屏放文件预览、右半屏放对话。左侧会话栏与右侧工具列整列收起——
+     不然三列挤在 50vw 里，正文只剩一条缝。收起靠 display:none，关掉预览就自动还原，
+     sessbar-open 等状态不受影响、不用记忆再恢复。
+     右半屏顶部再挂一条「对话 / 本轮产出」切换条：产出列表随 aside 一起被收起了，
+     没有它就只能先关预览才能换一个文件看。 */
+  /* 这里必须关掉 main 的 width 过渡：预览开着时拖窗口，main 会在 200ms 里停在旧宽度上，
+     跟已经按新 vw 铺好的预览对不上，横向滚动条一闪。开合本身是瞬间切换，不靠这条动画。 */
+  body.preview-open main { width: 50vw; margin-left: 50vw; transition: none; }
+  body.preview-open main, body.sessbar-open.preview-open main {
+    grid-template-columns: minmax(0,1fr); grid-template-rows: auto minmax(0,1fr); }
+  body.preview-open #sessbar { display: none; }
+  body.preview-open #pvTabs { display: flex; grid-row: 1; grid-column: 1; }
+  body.preview-open #chat, body.preview-open aside { grid-row: 2; grid-column: 1; min-height: 0; }
+  body.preview-open aside { border-left: 0; padding-top: 12px; }
+  body.preview-open aside > .panel:not(#outpanel) { display: none; }   /* 产出页只留「本轮产出」，上传与 Zotero 归对话态 */
+  body.preview-open:not(.pvtab-files) aside { display: none; }
+  body.preview-open.pvtab-files #chat { display: none; }
+  #pvTabs { display: none; align-items: center; gap: 6px; padding: 8px 14px 0; background: var(--bg); }
+  .pvtab { flex: none; padding: 7px 16px; font-size: 12.5px; font-family: inherit; color: var(--muted); cursor: pointer;
+    background: transparent; border: 1px solid transparent; border-radius: var(--r-sm) var(--r-sm) 0 0; }
+  .pvtab:hover { color: var(--text); }
+  .pvtab.on { color: var(--accent); font-weight: 600; background: var(--panel); border-color: var(--line); border-bottom-color: var(--panel); }
+  .pvtab .count { margin-left: 6px; color: var(--faint); font-weight: 400; }
   #chat { display: flex; flex-direction: column; min-width: 0; min-height: 0; padding: 22px 36px 18px; }
   /* 左侧「会话与项目」 */
   #sessbar { grid-column: 1; overflow: hidden; display: flex; flex-direction: column; gap: 10px; background: var(--panel); border-right: 1px solid var(--line); padding: 14px 10px 10px; }
@@ -320,6 +332,8 @@
   #sessions .sess .t { display: block; color: var(--text); font-weight: 400; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   #sessions .sess .d { color: var(--faint); font-size: 10px; margin-top: 3px; font-variant-numeric: tabular-nums; }
   #sessions .sess .run { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--green); margin-right: 6px; vertical-align: 1px; animation: pulse 2.4s infinite; }
+  /* 原来定义在顶栏「在线」那个小绿点旁边；顶栏删了，动画挪到唯一还在用它的这条规则边上 */
+  @keyframes pulse { 0% { box-shadow: 0 0 0 0 rgba(43,182,115,.5); } 70% { box-shadow: 0 0 0 7px rgba(43,182,115,0); } 100% { box-shadow: 0 0 0 0 rgba(43,182,115,0); } }
   #sessions .sess { padding-right: 46px; }                 /* 给右侧多个操作图标留位 */
   #sessions .sess.dragging { opacity: .4; }
   /* 会话行右侧操作区（改名/钉/删）：默认隐藏，hover 显示 */
@@ -885,8 +899,8 @@
   .lightbox.on { display: flex; }
   .lightbox img { max-width: 92vw; max-height: 92vh; border-radius: 10px; box-shadow: 0 20px 60px rgba(0,0,0,.6); }
 
-  /* markdown preview (half screen) */
-  #preview { position: fixed; top: var(--hdr-h); right: 0; width: 50vw; height: calc(100vh - var(--hdr-h)); z-index: 40; display: none; flex-direction: column; background: #ffffff; border-left: 1px solid var(--line-hi); box-shadow: -14px 0 44px rgba(20,24,30,.22); }
+  /* markdown preview（左半屏：文件在左、对话在右，与上面 body.preview-open 的布局配套） */
+  #preview { position: fixed; top: var(--hdr-h); left: 0; width: 50vw; height: calc(100vh - var(--hdr-h)); z-index: 40; display: none; flex-direction: column; background: #ffffff; border-right: 1px solid var(--line-hi); box-shadow: 14px 0 44px rgba(20,24,30,.22); }
   #preview.on { display: flex; }
   .pv-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 12px 16px; border-bottom: 1px solid var(--line); }
   .pv-title { display: flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 600; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -899,12 +913,16 @@
   .pv-body.frame iframe { width: 100%; height: 100%; border: 0; display: block; }
   .pv-body img { max-width: 100%; height: auto; }                            /* docx 里的内联图片自适应 */
 
-  /* header actions + model settings modal */
-  .hright { display: flex; align-items: center; gap: 8px; }
-  .hright .status { margin-right: 4px; }
+  /* 左下角工具条（原顶栏的三个入口：公告 / 分享 / 返回工作台）+ 模型设置弹窗 */
+  /* margin-top:auto 挂在这儿而不是 .user-info 上：两块都要贴底，空白得留在【这一条之前】。
+     挂在 .user-info 上的话空白会落在两块中间，工具条被顶到会话列表底下去。 */
+  #sbtools { margin-top: auto; flex: none; display: flex; align-items: center; gap: 4px;
+    padding: 6px 2px 0; border-top: 1px solid var(--line); }
+  body:not(.sessbar-open) #sbtools { flex-direction: column; gap: 2px; padding: 6px 0 0; }
   .hbtn { width: 30px; height: 30px; display: grid; place-items: center; border-radius: 50%; background: transparent;
     border: 1px solid transparent; color: var(--muted); cursor: pointer; transition: .15s; }
-  .hbtn:hover { color: var(--text); background: rgba(255,255,255,.92); border-color: var(--line); }
+  /* 底色已是白面板，原来那个半透明白 hover 等于没有反馈 —— 换成浅灰 */
+  .hbtn:hover { color: var(--accent); background: var(--panel-soft); border-color: var(--line); }
   .hbtn .ic { width: 16px; height: 16px; }
   /* 公告中心：顶栏一个按钮 + 未读红点，点开是近半年的列表。
      【为什么不是横幅】老设计弹一条横幅、点「知道了」就永远找不回来 —— 用户第二天想确认
@@ -913,7 +931,9 @@
   .ntwrap .dotmark { position: absolute; top: -4px; right: -4px; min-width: 16px; height: 16px; padding: 0 4px; border-radius: 9px;
     background: var(--cyan); color: #fff; font-size: 10px; line-height: 16px; text-align: center; font-weight: 700; pointer-events: none; }
   .ntwrap .dotmark.urgent { background: #dc2626; }
-  .ntpanel { position: absolute; top: 40px; right: 0; z-index: 80; width: 380px; max-width: calc(100vw - 32px); max-height: 66vh; overflow: auto;
+  /* 面板改从左下角【向上】弹。position 必须是 fixed 不能是 absolute：会话栏是 overflow:hidden
+     的窄列（收起时才 56px），absolute 的 380px 面板会被整块裁掉，只剩一条缝。 */
+  .ntpanel { position: fixed; bottom: 74px; left: 10px; z-index: 80; width: 380px; max-width: calc(100vw - 32px); max-height: 66vh; overflow: auto;
     background: #fff; border: 1px solid var(--line); border-radius: var(--r-sm); box-shadow: 0 12px 40px rgba(30,50,90,.18); display: none; }
   .ntpanel.on { display: block; }
   .ntpanel .nthead { display: flex; align-items: center; gap: 8px; padding: 10px 12px; border-bottom: 1px solid var(--line); font-size: 12.5px; color: var(--muted); }
@@ -1074,7 +1094,10 @@
   /* ---- 左下角「用户」：账户相关的功能全收在这里 ----
      顶栏原来平铺着 额度 / 修改密码 / 退出登录 三个入口，越加越挤，而它们都是"我的账号"这一类。
      现在合成一个用户按钮：一眼看到自己是谁、还剩多少积分，点开是账号 / 改密 / 退出。 */
-  .user-info { margin-top: auto; position: relative; display: flex; align-items: center; gap: 10px;
+  /* 【别再给它 margin-top:auto】贴底的活儿交给紧挨在它上面的 #sbtools 一个人干：
+     两个都写 auto 的话，剩余空白会在这两处【平分】—— 会话栏收起时列表整块隐藏、空白一大截，
+     实测两块一起飘到了半空（工具条 y=392）。 */
+  .user-info { position: relative; display: flex; align-items: center; gap: 10px;
     padding: 12px 6px 4px; border-top: 1px solid var(--line); }
   .user-info .avatar { width: 34px; height: 34px; border-radius: 50%; flex: none; cursor: pointer;
     background: linear-gradient(135deg, rgba(59,111,212,.95), rgba(43,182,115,.95));
@@ -1130,15 +1153,24 @@
     body { overflow: auto; }
     .app { height: auto; min-height: 100vh; }
     main, body.sessbar-open main { grid-template-columns: 1fr; }
-    body.preview-open main { width: 100vw; }
+    /* 窄屏没有左右两半可分，预览直接盖满。宽度用 100%（不是 100vw）：有竖向滚动条时
+       100vw 含滚动条那 10px，main 会比可视区宽出一条。 */
+    body.preview-open main { width: 100%; margin-left: 0; }
     #sessbar { border-right: 0; border-bottom: 1px solid var(--line); }
     #log { min-height: 55vh; }
     aside { order: -1; border-left: 0; border-bottom: 1px solid var(--line); }
-    #preview { width: 100vw; }
+    #preview { width: 100vw; box-shadow: none; }   /* 铺满时投影全打在屏幕外，白合成一层 */
+    /* 预览盖满整屏 → 底下那条页签条 100% 被 z-index:40 的预览挡住、点不到，
+       是块看不见也用不了的死 DOM。窄屏索性不给页签，关掉预览再换文件。 */
+    body.preview-open #pvTabs { display: none; }
+    body.preview-open main, body.sessbar-open.preview-open main { grid-template-rows: minmax(0,1fr); }
+    body.preview-open #chat, body.preview-open aside { grid-row: auto; }   /* 行数收回一行了，别再钉在第 2 行凭空撑出一条空行 */
+    /* 没了页签就没了切换入口：万一是在宽屏切到「本轮产出」再把窗口拖窄进来的，
+       别把对话区永久藏起来——窄屏一律回到「对话」这一种形态。 */
+    body.preview-open.pvtab-files #chat { display: flex; }
+    body.preview-open.pvtab-files aside { display: none; }
   }
   @media (max-width: 560px) {
-    header { padding: 0 12px; }
-    .hright .status { display: none; }
     #chat { padding: 12px; }
   }
   /* 存储告急横幅（见 body 里 #storebanner 处的注释） */
@@ -1168,30 +1200,8 @@
 <div class="stage"></div>
 <div class="toast" id="toast"></div>
 <div class="app">
-<header>
-  <div class="brand">
-    <span class="logo" id="logoIc"><img src="data:image/png;base64,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" alt="Niuma logo" /></span>
-    <div class="brandtext">
-      <div class="title">Niuma Science</div>
-    </div>
-  </div>
-  <!-- 顶栏只留"平台级"的入口：在线状态 / 系统消息 / 分享 / 设置 / 工作台。
-       账号那一类（剩余积分、云端账号、修改密码、退出登录）已整体搬到左下角的用户按钮里，
-       模型切换器搬到了输入框底部 —— 顶栏原来横着排七八个东西，越加越挤。 -->
-  <div class="hright">
-    <div class="status"><span class="dot"></span>在线</div>
-    <!-- 公告中心：默认折叠，只在按钮上标未读数；点开是近半年的公告，随时查得回来。
-         老设计是顶部弹横幅、点「知道了」就永远消失，用户想回看只能问管理员。 -->
-    <div id="ntWrap" class="ntwrap">
-      <button id="ntBtn" class="hbtn" type="button" title="系统消息 / 平台公告"></button>
-      <span id="ntDot" class="dotmark" hidden></span>
-      <div id="ntPanel" class="ntpanel"></div>
-    </div>
-    <!-- 分享：把当前会话导出成一个自包含 HTML（含思考与工具调用，默认折叠；不含任何产出文件） -->
-    <button id="shareBtn" class="hbtn" type="button" title="分享：把本次会话导出成一个 HTML 文件"></button>
-    <button id="wsBtn" class="hbtn" type="button" title="模块工作台（换个功能开新会话）"></button>
-  </div>
-</header>
+<!-- 顶栏整条已删：品牌行 + 「在线」+ 公告 / 分享 / 返回工作台。前两样不承载信息，
+     三个入口整体搬到左下角会话栏底部（见 #sbtools）。腾出的 46px 全给了对话区。 -->
 <!-- 存储告急横幅：原先只有侧栏上传面板里一行小字变红，而侧栏在窄屏会收起 —— 等于用户在
      撞上限（新上传被 413 拒收、产物写不进去）之前基本看不到预警。放在 header 之下、main
      之外，与侧栏开合无关，任何屏宽都挡不住。仅 ≥90% 时出现，掉回去自动消失。 -->
@@ -1202,6 +1212,12 @@
 <!-- 界面更新提示条：只换前端静态资源，点一下装完刷新页面即生效，不重启后台、不打断在跑的轮 -->
 <div id="webbanner" hidden></div>
 <main>
+  <!-- 右半屏的「对话 / 本轮产出」切换条：只在预览态显示（CSS 控制），
+       预览时右侧工具列整列收起，靠它把产出列表调回来换文件预览。 -->
+  <div id="pvTabs" role="tablist" aria-label="右侧面板">
+    <button type="button" class="pvtab on" id="pvTabChat" role="tab" aria-selected="true">对话</button>
+    <button type="button" class="pvtab" id="pvTabFiles" role="tab" aria-selected="false">本轮产出<span class="count" id="pvTabCount"></span></button>
+  </div>
   <div id="sessbar">
     <!-- 「新建项目」顶在最上面（设计稿如此）；收起会话栏时它连同下面这排图标一起隐藏，只留折叠按钮 -->
     <button id="newProject" type="button"></button>
@@ -1220,6 +1236,21 @@
       <button id="selExit" type="button">退出</button>
     </div>
     <div id="sessions"><span class="hint">加载中…</span></div>
+    <!-- 原顶栏那三个「平台级」入口整体搬到这里：公告 / 分享 / 返回工作台。
+         都不是会话内容，跟上面的会话列表不是一类，所以贴着用户块单独一行；
+         会话栏收起（56px）时改成竖排，图标仍在、位置不跳。 -->
+    <div id="sbtools">
+      <!-- 公告中心：默认折叠，只在按钮上标未读数；点开是近半年的公告，随时查得回来。
+           老设计是顶部弹横幅、点「知道了」就永远消失，用户想回看只能问管理员。 -->
+      <div id="ntWrap" class="ntwrap">
+        <button id="ntBtn" class="hbtn" type="button" title="系统消息 / 平台公告"></button>
+        <span id="ntDot" class="dotmark" hidden></span>
+        <div id="ntPanel" class="ntpanel"></div>
+      </div>
+      <!-- 分享：把当前会话导出成一个自包含 HTML（含思考与工具调用，默认折叠；不含任何产出文件） -->
+      <button id="shareBtn" class="hbtn" type="button" title="分享：把本次会话导出成一个 HTML 文件"></button>
+      <button id="wsBtn" class="hbtn" type="button" title="返回模块工作台（换个功能开新会话）"></button>
+    </div>
     <!-- 左下角「用户」：账户相关的功能都在这里（剩余积分 / 云端账号 / 修改密码 / 退出登录）。
          头像、名字、整块 meta 都可点，点哪都能开菜单——别让用户去瞄那个小小的「⋯」。 -->
     <div class="user-info" id="userBox">
@@ -1442,6 +1473,7 @@ const syncAutoLbl = () => autoLbl.classList.toggle("on", autoChk.checked)
 autoChk.addEventListener("change", () => { localStorage.setItem("nm_auto", autoChk.checked ? "1" : "0"); syncAutoLbl() })
 syncAutoLbl()
 const filesEl = document.getElementById("files")
+const pvTabCount = document.getElementById("pvTabCount")
 const stepsHostEl = document.getElementById("stepsHost")   // 步骤条的独立容器（在 #log 之外，不挡正文）
 let activeES = null   // 当前订阅中的 SSE 连接——只是"订阅"，断开/切走都不会打断后台生成
 function setStreamingUI(on) {
@@ -2072,6 +2104,7 @@ const isScratch = (n) => { const b = n.split("/").pop(); return SCRATCHY.test(b)
 // 折叠成一行，点开才展开。
 const isBulkPdf = (n) => /^(pdfs|zotero_lib)\//i.test(String(n))
 function renderFiles(list) {
+  pvTabCount.textContent = list && list.length ? String(list.length) : ""   // 预览态切换条上的产出条数
   if (!list || !list.length) { filesEl.innerHTML = '<span class="hint">对话生成的文件会显示在这里</span>'; return }
   filesEl.innerHTML = ""
   list = [...list].sort((a, b) => (isScratch(a) ? 1 : 0) - (isScratch(b) ? 1 : 0))   // 结果在前、中间文件在后
@@ -2171,11 +2204,15 @@ document.addEventListener("click", (e) => {
 })
 
 // ---- CSV/TSV 解析渲染（带引号转义处理；预览截断到 300 行）----
-function parseCsv(text, delim) {
+// 全站唯一的分隔符解析器：支持引号内的分隔符/换行与转义双引号（""），并剥掉 BOM。
+// 名字不能再叫 parseCsv —— 下面 evidenceCard 那边曾有个同名的单参版本，classic script 里
+// 函数声明会提升且后者整个覆盖前者，导致这里传的 "\t" 被静默吃掉、TSV 按逗号解析。
+function parseDelimited(text, delim) {
   const rows = []; let row = [], cell = "", inQ = false
-  for (let i = 0; i < text.length; i++) {
-    const ch = text[i]
-    if (inQ) { if (ch === '"') { if (text[i + 1] === '"') { cell += '"'; i++ } else inQ = false } else cell += ch }
+  const s = text.charCodeAt(0) === 0xfeff ? text.slice(1) : text
+  for (let i = 0; i < s.length; i++) {
+    const ch = s[i]
+    if (inQ) { if (ch === '"') { if (s[i + 1] === '"') { cell += '"'; i++ } else inQ = false } else cell += ch }
     else if (ch === '"') inQ = true
     else if (ch === delim) { row.push(cell); cell = "" }
     else if (ch === "\n") { row.push(cell); rows.push(row); row = []; cell = "" }
@@ -2185,7 +2222,7 @@ function parseCsv(text, delim) {
   return rows
 }
 function csvTable(text, delim) {
-  const all = parseCsv(text, delim).filter((r) => r.length > 1 || (r[0] || "").trim() !== "")   // 丢掉纯空行
+  const all = parseDelimited(text, delim).filter((r) => r.length > 1 || (r[0] || "").trim() !== "")   // 丢掉纯空行
   if (!all.length) return '<div class="hint">（空表）</div>'
   const MAX = 300
   const [head, ...body] = all.slice(0, MAX + 1)
@@ -2194,16 +2231,36 @@ function csvTable(text, delim) {
     + (all.length > MAX + 1 ? '<div class="hint">共 ' + all.length + ' 行，仅预览前 ' + MAX + ' 行，完整内容请下载</div>' : "")
 }
 
-// ---- Markdown 半屏预览 ----
+// ---- Markdown 半屏预览（左半屏文件 / 右半屏对话）----
 const preview = document.getElementById("preview")
 const pvBody = document.getElementById("pvBody")
 const pvTitle = document.getElementById("pvTitle")
-function closePreview() { preview.classList.remove("on"); document.body.classList.remove("preview-open"); if (pvObjUrl) { URL.revokeObjectURL(pvObjUrl); pvObjUrl = null } }
+// 预览态右半屏的两个页签。产出列表（aside）在预览时被整列收起，用它切回来换文件预览。
+const pvTabChat = document.getElementById("pvTabChat")
+const pvTabFiles = document.getElementById("pvTabFiles")
+function setPvTab(tab) {
+  const onFiles = tab === "files"
+  document.body.classList.toggle("pvtab-files", onFiles)
+  pvTabChat.classList.toggle("on", !onFiles); pvTabFiles.classList.toggle("on", onFiles)
+  pvTabChat.setAttribute("aria-selected", String(!onFiles)); pvTabFiles.setAttribute("aria-selected", String(onFiles))
+  // 对话区被 display:none 藏过一轮后 scrollHeight 归零，回来时会停在顶部——切回时重新贴底。
+  if (!onFiles) requestAnimationFrame(() => { log.scrollTop = log.scrollHeight })
+}
+pvTabChat.addEventListener("click", () => setPvTab("chat"))
+pvTabFiles.addEventListener("click", () => setPvTab("files"))
+function closePreview() {
+  preview.classList.remove("on"); document.body.classList.remove("preview-open")
+  setPvTab("chat")                      // 退出预览还原成原始界面：三列布局 + 对话页
+  if (pvObjUrl) { URL.revokeObjectURL(pvObjUrl); pvObjUrl = null }
+}
 let pvObjUrl = null   // 上一次 pptx/docx 预览的 blob URL，切换/关闭时回收
 async function openPreview(name) {
   pvTitle.innerHTML = ic("file"); const s = document.createElement("span"); s.textContent = name; pvTitle.appendChild(s)
   pvBody.classList.remove("frame"); pvBody.innerHTML = '<div class="hint">加载中…</div>'
+  const wasOpen = preview.classList.contains("on")
   preview.classList.add("on"); document.body.classList.add("preview-open")
+  // 首次打开时右半屏顶上多出 40px 的页签条，对话区相应变矮 —— 不补一下，最后几条消息会往上跳出视野。
+  if (!wasOpen) requestAnimationFrame(() => { log.scrollTop = log.scrollHeight })
   if (pvObjUrl) { URL.revokeObjectURL(pvObjUrl); pvObjUrl = null }
   const ext = (name.split(".").pop() || "").toLowerCase()
   const raw = "api/raw?name=" + encodeURIComponent(name) + sidQ()
@@ -2494,6 +2551,11 @@ async function deleteSelected() {
 // 抛错，点左侧会话「毫无反应」（打包版实测复现）。对象只交给 renderSessions，缓存只存数组。
 const loadSessions = () => fetch("api/sessions").then(r => r.json()).then((l) => { sessList = (l && l.sessions) || []; renderSessions(l); if (sessionId) setModBadge(sessList.find((s) => s.id === sessionId)?.module || "chat") }).catch(() => {})
 async function resumeSession(id) {                 // 载入历史 → 设为当前会话 →（后台还在生成则续流）
+  // 有专用界面的模块（文献研读的 reader.html）：会话本身在这里也打得开，但用户看到的会是一条
+  // 没有原文、没有模式条的裸对话流 —— 前面几轮还全是【文献导读】这类内部标记开头的长消息。
+  // 把它送回它自己的壳里，而不是让人在通用页面里对着半个功能发愣。
+  const modUi = modById(sessList.find((s) => s.id === id)?.module || "")?.ui
+  if (modUi === "reader") { location.href = "./reader.html?sid=" + encodeURIComponent(id); return }
   pendingProjectId = null                          // 打开的是已有会话 → 不是「立刻新建对话」，解除项目归入
   detachStream()                                   // 只退订原会话的流，后台生成不受影响
   sessionId = id; localStorage.setItem("nm_sid", id)
@@ -3300,8 +3362,11 @@ function stepsBar(steps, done, cur, failed, off, implied, stale) {
     const el = document.createElement("div")
     el.className = "fstep" + (isDone && !isStale ? " done" : "") + (isFail ? " failed" : "")
       + (isCur ? " cur" : "") + (s.gate ? " gate" : "") + (isOff ? " off" : "")
-    // 圆圈里放什么：完成打勾、闸没过打叉、过期打 ⟳、无产物打 ·，其余一律是序号。
-    const mark = isFail ? "✕" : isStale ? "⟳" : isImplied ? "·" : isDone ? "✓" : String(i + 1)
+    // 圆圈里放什么：闸没过打叉、过期打 ⟳、无产物打 ·，其余一律是序号。
+    // 【完成态不换符号】只把圆圈染绿，序号留着 —— 打勾会把"第几步"这个信息抹掉，
+    // 一条 13 步的流程跑到后半程，前面全是勾，用户对不上"现在是第几步/刚才那步是第几步"。
+    // 完成的语义由绿圈 + 绿标题 + 悬停气泡里的"已完成"承担。
+    const mark = isFail ? "✕" : isStale ? "⟳" : isImplied ? "·" : String(i + 1)
     el.appendChild(Object.assign(document.createElement("span"), { className: "n", textContent: mark }))
     const meta = document.createElement("div"); meta.className = "fmeta"
     meta.appendChild(Object.assign(document.createElement("div"), { className: "ft", textContent: s.name }))
@@ -3442,22 +3507,10 @@ function artShell(name, title, count) {
   const bd = document.createElement("div"); bd.className = "artbd"; box.appendChild(bd)
   return { box, bd, hd }
 }
-/** 极简 CSV 解析（支持引号内逗号与转义双引号）——证据表里标题带逗号是常态，不处理会整行错位 */
+/** 证据表专用的逗号解析（支持引号内逗号与转义双引号）——标题带逗号是常态，不处理会整行错位。
+ *  额外滤掉整行空白：表尾那几行空行会被 evidenceCard 当成记录，撑出一堆空卡片。 */
 function parseCsv(text) {
-  const rows = []; let row = [], cell = "", inQ = false
-  const s = text.charCodeAt(0) === 0xfeff ? text.slice(1) : text
-  for (let i = 0; i < s.length; i++) {
-    const c = s[i]
-    if (inQ) {
-      if (c === '"') { if (s[i + 1] === '"') { cell += '"'; i++ } else inQ = false }
-      else cell += c
-    } else if (c === '"') inQ = true
-    else if (c === ",") { row.push(cell); cell = "" }
-    else if (c === "\n") { row.push(cell); rows.push(row); row = []; cell = "" }
-    else if (c !== "\r") cell += c
-  }
-  if (cell || row.length) { row.push(cell); rows.push(row) }
-  return rows.filter((r) => r.some((x) => x.trim() !== ""))
+  return parseDelimited(text, ",").filter((r) => r.some((x) => x.trim() !== ""))
 }
 const pick = (obj, ...keys) => { for (const k of keys) { const hit = Object.keys(obj).find((h) => h.toLowerCase().replace(/[\s_-]/g, "") === k); if (hit && obj[hit]) return obj[hit] } return "" }
 /** 文献卡片列表：证据表里最要紧的几列拎出来，其余仍可下载原表看 */
@@ -3789,6 +3842,10 @@ async function loadModules() {
   const allowed = MODULES.filter((m) => m.allowed)
   if (pendingModule) {   // 从工作台点进来的模块：清单到手才知道它是否已开通
     const hit = allowed.find((m) => m.id === pendingModule)
+    // 有专用界面的模块（ui="reader"）：老书签、老工作台（界面包只更新了一半时）仍会把人
+    // 送到 `./#module=litread`。这里兜住，转投它自己的页面 —— 判据用服务端下发的 ui，
+    // 不在前端写死 id。
+    if (hit && hit.ui === "reader") { location.href = "./reader.html"; return }
     if (hit) currentModule = hit.id
     else if (MODULES.some((m) => m.id === pendingModule)) addNote("ℹ 你的账号未开通该模块，已回到自由对话")
     pendingModule = ""

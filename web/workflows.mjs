@@ -96,6 +96,230 @@ const JOURNAL_FILTER = [
     help: "OA = 不用订阅就能下全文。勾上能明显提高「全文获取」成功率。" },
 ]
 
+// ============================================================
+// 阅读器型模块（ui:"reader"）—— 四个「核心能力」模块共用的一套定义
+// ------------------------------------------------------------
+// 【什么样的模块适合它】输入是【一份东西】（一篇文献 / 一份稿件 / 一张数据表），
+// 用户想对它做的事有好几种、彼此没有先后、随时来回切。这类模块套进通用壳（首屏表单 →
+// 步骤条 → 一条对话流）是别扭的：步骤条永远停在"共 N 步、已完成 1 步"，而那份东西本身
+// 没地方摆。阅读器壳给它：左边常驻那份东西，右边是助手，最右一列模式按钮。
+//
+// 【前端只是渲染器】下面这份 reader 配置由 /api/modules/<id>/workflow 整份下发，
+// web/reader.html 不认识任何一个具体模块 —— 它只会照着 modes 画按钮、照着 prompt 发消息。
+// 所以改模式、改措辞、加一个新模式，都只动这个文件，走「界面包」热更新即可，不用重发安装包。
+//
+// 【mark 是模式信号，且只有这一处定义】用户点某个按钮 → 前端把 `mark` 拼在消息最前面 →
+// 模型照 `tell` 里教的去做 → 刷新页面时前端又靠 `mark` 把每一轮认回对应的面板。
+// 三处用途、一个来源。此前 mark 在 reader.html 和 flow 文案里各写了一份，漂了的症状是
+// "能跑，但刷新后所有轮次都掉进智能助手"——从界面上完全看不出是标记对不上。
+// ============================================================
+
+/** 自由问答那一格：四个模块都有，且都【没有 mark】——没有标记就是普通提问 */
+const chatMode = (badge, big, sub) => ({
+  id: "chat", label: "智能助手", icon: "chat", badge, empty: [big, sub],
+})
+
+/**
+ * 由 modes 生成模块前言里那段「界面有几种模式、标记是什么、各自该做什么」。
+ * tell 是写给模型看的一句话；prompt 是前端真正发出去的那段话。两者都要有：
+ * 前言每一轮都在（用户切到自由问答、或直接打字时它仍然生效），prompt 只在点按钮那一次出现。
+ */
+function readerModeLines(modes) {
+  const marked = modes.filter((m) => m.mark)
+  return `\n- **界面有 ${modes.length} 种模式，用户消息开头的方括号标记就是他点的那个按钮**，照它做：`
+    + marked.map((m) => `\n  · \`${m.mark}\`＝${m.tell}`).join("")
+    + `\n  · 没有标记的就是自由问答，基于已有上下文直接回答，**不要再重跑上面任何一件事**。`
+}
+
+// prompt 里的占位符由前端替换：{doc}=左栏那份文件名（带反引号）、{data}=配套数值表、
+// {vars}=stats 的「变量对应」面板填了什么。占位符没有对应值时前端会整句删掉，不会留下 "{data}"。
+
+const LITREAD_MODES = [
+  { id: "guide", label: "文献导读", icon: "guide", mark: "【文献导读】", badge: "抽取核心 · 梳理逻辑",
+    file: "^reading_guide.*\\.md$",
+    // out = 面板下方列哪些产物。fulltext.md 归导读：它是"读入原文"的成果，
+    // 用户想核对"它到底读到了什么"时找的就是这个文件。
+    out: "^(reading_guide|fulltext)[^/]*\\.(md|docx|pdf)$",
+    empty: ["还没有导读", "点右边的「文献导读」，让它把这篇文章的核心与论证逻辑理一遍。"],
+    tell: "抽取核心重点、梳理论证逻辑，正文写进回答里，同时存一份 `reading_guide.md`",
+    prompt: "请研读我上传的这篇文献 {doc}，做一份**导读**：抽出它的核心重点，把论证逻辑梳理清楚。\n\n"
+      + "按这个结构写：\n"
+      + "1. **一句话结论** —— 这篇文章做了什么、最重要的发现是什么；\n"
+      + "2. **背景与缺口** —— 它要解决的问题是什么，此前卡在哪；\n"
+      + "3. **研究设计** —— 研究类型、对象与样本量、分组与干预、主要终点、统计或实验手段；\n"
+      + "4. **主要结果** —— 按图表逐条给关键数字（效应量、95%CI、p 值……原文有多少给多少）；\n"
+      + "5. **论证链条** —— 从问题 → 假设 → 证据 → 结论一步一步串起来，指出哪一步最关键、哪一步最薄弱；\n"
+      + "6. **局限与存疑**；\n"
+      + "7. **这篇能用在哪** —— 对读者课题的意义。\n\n"
+      + "只依据原文：数字与结论一律照抄，原文没写的写「原文未报告」，不许拿背景知识补，也不许引入原文之外的参考文献。"
+      + "引用具体数据时带上出处（第几节 / 哪张图表）。\n"
+      + "写完把这份导读同时存一份 `reading_guide.md`。" },
+  chatMode("基于本文", "对着这篇文章随便问",
+    "它读的是你左边这一篇；前面的导读、翻译、做 PPT 都还在上下文里，可以接着问。"),
+  { id: "translate", label: "全文翻译", icon: "translate", mark: "【全文翻译】", badge: "逐段全文 · 非摘要",
+    file: "^translation.*\\.md$", out: "^translation[^/]*\\.(md|docx|pdf)$",
+    empty: ["还没有译文", "点右边的「全文翻译」，逐段译成中文（不是摘要）。整篇文章要花几分钟。"],
+    tell: "**逐段全文**翻译（不是摘要、不许跳段），译文写进 `translation_zh.md`，"
+      + "回答里只报一句\"已完成、共几节\"，**不要把整篇译文再贴进对话**（界面直接渲染那个文件给用户看）",
+    prompt: "把我上传的文献 {doc} **全文**翻译成中文。\n\n"
+      + "要求：\n"
+      + "- **逐段译全文**，保留原文的章节结构与标题层级（Abstract / Introduction / Methods / Results / Discussion…）；"
+      + "**这是翻译不是摘要**，不许概括、不许跳段、不许只译摘要；\n"
+      + "- 学术书面语；专业术语用规范中文译名，并在**首次出现**时括注英文原文；\n"
+      + "- 图表题注一并译出，表格用 markdown 表格；公式、基因 / 蛋白 / 药物名、统计量符号保留原样；\n"
+      + "- 参考文献列表不用翻译，按原样保留即可。\n\n"
+      + "**产物**：写成一个文件 `translation_zh.md`（完整全文）。文件写完后，回答里**只回一句话**说明已完成、共几节，"
+      + "**不要把译文再贴进对话**——界面会直接把那个文件渲染给我看。" },
+  { id: "ppt", label: "演示 PPT", icon: "ppt", mark: "【演示 PPT】", badge: "汇报用 · 可下载 .pptx",
+    file: "(^|/)ppt_outline.*\\.md$",
+    // ppt-master 把导出的 .pptx 放在 <项目名>/exports/ 下，所以要允许一层子目录
+    out: "(^|/)(ppt_outline[^/]*\\.md|[^/]*\\.pptx)$",
+    empty: ["还没有 PPT", "点右边的「演示 PPT」，按这篇文献做一套组会汇报用的片子。这一步最慢，通常要十分钟上下。"],
+    tell: "走 `ppt-master` 技能做汇报用 PPT，另存一份大纲 `ppt_outline.md`",
+    prompt: "基于我上传的文献 {doc}，用 `ppt-master` 技能做一套**组会汇报用**的演示 PPT。\n\n"
+      + "要求：\n"
+      + "- 12–18 页：封面 / 背景与问题 / 研究设计 / 主要结果（按图表分页）/ 结论 / 局限 / 对我们课题的启发；\n"
+      + "- 结果页要带原文的关键数字，**不许编数据**，原文没有的写「原文未报告」；\n"
+      + "- 先把大纲写成 `ppt_outline.md`（我要先审一遍），再导出 .pptx 到当前目录；\n"
+      + "- 做完告诉我 .pptx 的文件名。" },
+]
+
+const REFCHECK_MODES = [
+  { id: "refs", label: "引用核查", icon: "check", mark: "【引用核查】", badge: "查假引用 · 核 DOI · 撤稿",
+    file: "^(refcheck_report|reference_check).*\\.md$",
+    out: "^(refcheck_report|reference_check)[^/]*\\.(md|csv|docx|pdf)$",
+    empty: ["还没核查引用", "点右边的「引用核查」，逐条去线上核实这份稿子的参考文献是否真实存在、DOI 对不对、有没有引到撤稿文献。"],
+    tell: "用 `reference-check` 技能逐条核实参考文献，报告写成 `refcheck_report.md`",
+    prompt: "请核查我上传的稿件 {doc} 的参考文献，用 `reference-check` 技能。\n\n"
+      + "逐条核这四件事：\n"
+      + "1. 这篇文献**是否真实存在**（标题 / 作者 / 期刊 / 年份 / 卷页对不对得上）；\n"
+      + "2. **DOI 是否正确**、能否解析到同一篇；\n"
+      + "3. 是否引用了**已撤稿**文献；\n"
+      + "4. 正文角标与文末条目**是否一一对应**（有引无据 / 有据无引）。\n\n"
+      + "逐条给结论，用 🟢 / 🟡 / 🔴 三档：绿＝核实无误，黄＝有出入需我复核（写清哪一项对不上），红＝查无此文献 / DOI 错 / 已撤稿。\n"
+      + "**查不到 ≠ 不存在**：网络受限或数据库没收录时如实写「未能核实」并说明原因，不许判成假引用。\n"
+      + "报告写成 `refcheck_report.md`，末尾给一行汇总（共几条、绿黄红各几条、几条未能核实）。" },
+  chatMode("基于这份稿件", "对着这份稿子随便问",
+    "前面跑过的核查报告都还在上下文里——可以追问某一条为什么判黄，或让它把某一段重写。"),
+  { id: "review", label: "方法与统计审校", icon: "review", mark: "【方法与统计审校】", badge: "投稿前自查 · 找硬伤",
+    file: "^review_report.*\\.md$", out: "^review_report[^/]*\\.(md|docx|pdf)$",
+    empty: ["还没审校", "点右边的「方法与统计审校」，按审稿人的眼光找研究设计与统计上的硬伤。"],
+    tell: "用 `peer-review` 技能做投稿前自查，报告写成 `review_report.md`",
+    prompt: "请用 `peer-review` 技能审校我上传的稿件 {doc}，按**审稿人**的眼光找硬伤。\n\n"
+      + "重点看：研究设计与问题是否匹配、样本量与把握度、统计方法选得对不对（含多重比较、生存分析的前提、"
+      + "回归的共线性与过拟合）、结果与结论是否一致、有没有过度解读因果、图表与正文数字是否对得上。\n"
+      + "每条问题给：**严重度（致命 / 重大 / 一般 / 建议）+ 在稿件哪一处 + 为什么是问题 + 具体怎么改**。\n"
+      + "**不许只夸不批**，也不许把\"我没看出问题\"写成\"没有问题\"——看不出来的地方如实说看不出来。\n"
+      + "报告写成 `review_report.md`。" },
+  { id: "integrity", label: "数据完整性", icon: "table", mark: "【数据完整性自查】", badge: "需配套数值表",
+    file: "^integrity_report.*\\.md$", out: "^(integrity_report[^/]*\\.md|audit/.*)$",
+    need: ["data"],
+    needHint: "这一项要对着源数据查，请先上传配套的数值表（.xlsx / .csv）。",
+    empty: ["还没做数据自查", "点右边的「数据完整性」，对源数据做一遍数值 sanity check（需要先传数值表）。"],
+    tell: "用 `data-integrity` 技能对配套数值表做数值完整性自查，报告写成 `integrity_report.md`",
+    prompt: "请用 `data-integrity` 技能，对我上传的数值表 {data} 做一遍**投稿前的数值完整性自查**"
+      + "（稿件是 {doc}，可对照它报告的数字）。\n\n"
+      + "查：复制粘贴错误、整列常数偏移、跨表重复使用同一段数据、均值/SD 与样本量不自洽（GRIM / GRIMMER）、"
+      + "小数位与有效数字异常、末位数字分布异常、稿件正文里的数字与表里对不对得上。\n"
+      + "**铁律：只出「待核信号」，不下「造假」结论**（signal not verdict）。每条写清：在哪一格 / 哪一列、"
+      + "为什么值得核、**最可能的良性解释是什么**、你该去核哪份原始记录。\n"
+      + "报告写成 `integrity_report.md`。" },
+]
+
+const HUMANIZE_MODES = [
+  { id: "polish", label: "润色改写", icon: "wand", mark: "【润色改写】", badge: "去 AI 味 · 保住原意",
+    file: "(^|/)[^/]*humanized[^/]*\\.md$", out: "(^|/)[^/]*humanized[^/]*\\.(md|docx|pdf)$",
+    empty: ["还没润色", "点右边的「润色改写」，按期刊写作范式改一遍行文，同时把生成式文本的痕迹去掉。"],
+    tell: "用 `humanize-academic` 技能改写，成稿写成 `<原名>_humanized.md`",
+    prompt: "请用 `humanize-academic` 技能润色我上传的稿件 {doc}。\n\n"
+      + "**底线（比任何润色目标都优先）**：\n"
+      + "- 不许改动任何**数字、单位、统计量、样本量、p 值、置信区间**；\n"
+      + "- 不许改动结论的**强度**——「显著低于」不许变成「低于」，「证实」不许变成「提示」，反之亦然；\n"
+      + "- 参考文献角标与其所在句子的事实主张一字不动。\n\n"
+      + "改完把成稿写成 `<原文件名>_humanized.md`，并在回答里**只报一句**改了多少段、"
+      + "主要改了哪几类问题——逐句对照放到「改动对照」那个模式里，这里不用铺开。" },
+  chatMode("基于这份稿件", "对着这份稿子随便问",
+    "润色稿和改动清单都还在上下文里——可以让它把某一段再改一版，或问某处为什么这么改。"),
+  { id: "changes", label: "改动对照", icon: "diff", mark: "【改动对照】", badge: "逐条列 · 可回退",
+    file: "^changes.*\\.md$", out: "^changes[^/]*\\.(md|csv|docx)$",
+    need: ["after:polish"],
+    needHint: "改动对照是拿润色稿和原稿逐句比出来的。",
+    empty: ["还没有改动清单", "润色完点这里，逐条看它到底改了什么、为什么改——不同意的地方可以让它回退。"],
+    tell: "把润色稿与原稿逐条对照，清单写成 `changes.md`",
+    prompt: "把你刚才的润色稿与**原稿** {doc} 逐条对照，列出改动清单。\n\n"
+      + "每条一行，给：**原句 → 改后句 + 为什么改（属于哪一类：语法 / 冗余 / AI 味 / 术语统一 / 逻辑连接）**。\n"
+      + "按段落顺序排。**只改了标点或空格的不用列**。\n"
+      + "如果有任何一处你动了数字、单位或结论强度，**单独拎出来放在最前面并标红说明**——那是不该发生的，我要第一时间看到。\n"
+      + "清单写成 `changes.md`。" },
+  { id: "render", label: "排版出件", icon: "doc", mark: "【排版出件】", badge: "默认送审格式",
+    file: null, out: "(^|/)[^/]*\\.(docx|pdf)$",
+    need: ["after:polish"],
+    needHint: "排版排的是润色后的稿子，不是你传上来的原稿。",
+    empty: ["还没出件", "润色完点这里，排成可直接送审的 Word / PDF。"],
+    tell: "用 `render-docx` / `render-pdf-doc` 按默认送审格式出件",
+    prompt: "把润色后的稿子排版出件。没指定期刊就用默认送审格式：`--journal generic-submission`"
+      + "（Times New Roman 12pt、1.5 倍行距、页码、首行缩进 4 字符、三线表、1in 边距）。\n"
+      + "**如果我在设置里填了目标期刊**，先查该刊的 Instructions for Authors 再落参数；"
+      + "查不到就如实说明并退回默认预设，**不许凭印象编该刊格式**。\n"
+      + "出件后告诉我文件名。" },
+]
+
+const STATS_MODES = [
+  { id: "profile", label: "数据体检", icon: "stethoscope", mark: "【数据体检】", badge: "先查再算",
+    file: "^(data_profile|cleaning_log).*\\.md$", out: "^(data_profile|cleaning_log)[^/]*\\.(md|csv)$",
+    empty: ["还没体检", "点右边的「数据体检」。重复 ID 没去、分类水平没归一时，后面每一个 p 值都是错的，而表面看不出来——所以这一步值得先做。"],
+    tell: "用 `data-analysis` 做数据体检（缺失 / 异常 / 重复 ID / 分类水平不一致），报告写成 `data_profile.md`",
+    prompt: "请对我上传的数据表 {data} 做一遍**数据体检**（`data-analysis` 技能）。{vars}\n\n"
+      + "查：每列的缺失率与缺失模式、重复 ID / 重复行、分类变量的水平是否需要归一（如「男 / 男性 / M」）、"
+      + "连续变量的分布与离群值、日期与数值列的类型是否被读错、组间样本量是否悬殊。\n"
+      + "**先别做任何推断统计**。发现的问题逐条列出并给出建议的处理方式；"
+      + "**不要自己替我把数据改掉**，要改也先告诉我改哪些、为什么。\n"
+      + "报告写成 `data_profile.md`。" },
+  chatMode("基于这份数据", "对着这张表随便问",
+    "前面跑过的体检、基线表、统计结果都还在上下文里——可以追问某个 p 值怎么来的，或让它换个方法再算一次。"),
+  { id: "table1", label: "基线表", icon: "table", mark: "【基线表 Table 1】", badge: "分组对比 · 三线表",
+    file: "^table1.*\\.csv$", out: "^table1[^/]*\\.(csv|md|docx)$",
+    need: ["var:groupCol"],
+    needHint: "基线表的本质是「按组分列对比」，先在上面的「变量对应」里指一下分组列。",
+    empty: ["还没有基线表", "点右边的「基线表」，按分组列出各组的人口学与临床特征，含组间检验与 SMD。"],
+    tell: "用 `clinical-stats` 出 Table 1（含组间检验与 SMD），存成 `table1.csv`",
+    prompt: "请用 `clinical-stats` 技能，按 {data} 出一张基线表 Table 1。{vars}\n\n"
+      + "连续变量按分布选均值±SD 或中位数(IQR) 并注明用了哪个；分类变量给 n(%)。"
+      + "给组间检验的 p 值（写清用的是什么检验）与标准化均数差 SMD。\n"
+      + "**这份研究如果没有人口学基线协变量（诊断准确性 / 方法比对 / 纯实验室验证常常如此），"
+      + "就直接告诉我「本研究无对应的基线数据，Table 1 不适用」，不要把检测值硬塞成基线表。**\n"
+      + "存成 `table1.csv`。" },
+  { id: "analyze", label: "统计分析", icon: "chart", mark: "【统计分析】", badge: "组间 / 生存 / ROC / 回归",
+    file: "^(analysis|stats_|sample_size).*\\.(md|csv)$", out: "^(analysis|stats_|sample_size)[^/]*\\.(md|csv)$",
+    empty: ["还没跑分析", "点右边的「统计分析」。要做哪些分析、用哪几列，在上面的「变量对应」里指一下。"],
+    tell: "用 `data-analysis` 跑推断统计（组间比较 / 生存 / ROC / 回归 / 样本量），结果写成 `analysis.md` + `stats_*.csv`",
+    prompt: "请用 `data-analysis` 技能对 {data} 做统计分析。{vars}\n\n"
+      + "**每一步都要写清用了什么方法、为什么选它、前提是否满足**（正态性 / 方差齐性 / 比例风险假定 / 共线性…）；"
+      + "前提不满足就换稳健方法并说明。报结果时给**效应量与 95%CI**，不要只给一个 p 值。\n"
+      + "多重比较要校正并说明用了哪种校正。\n"
+      + "**不许编数字**：算不出来的、数据不支持的，直接说算不出来和缺什么。\n"
+      + "结果写成 `analysis.md`（含方法与解读）+ `stats_*.csv`（可复用的结果表）。" },
+  { id: "figure", label: "出版级图", icon: "image", mark: "【出版级图】", badge: "300dpi + 矢量",
+    file: null, out: "(^|/)(fig[^/]*|figures/.*)\\.(png|pdf|svg)$",
+    empty: ["还没出图", "点右边的「出版级图」，把结果画成可直接投稿的图（300dpi + 矢量）。"],
+    tell: "用 `nature-figure` 出投稿级图（300dpi + 矢量），文件名用 `fig1.png` 这类约定名",
+    prompt: "请用 `nature-figure` 技能，把上面的分析结果画成**可直接投稿**的图。{vars}\n\n"
+      + "300dpi 位图 + 一份矢量（pdf/svg）；字号、线宽、配色按投稿规范；坐标轴与图例要有单位；"
+      + "**中文标签注意别出豆腐块**（缺字体时换英文标签并告诉我）。\n"
+      + "**图上的每一个数字都必须来自前面真实算出来的结果**，不许为了好看造点。\n"
+      + "文件名用 `fig1.png` / `fig1.pdf` 这类约定名，并告诉我每张图画的是什么。" },
+  { id: "integrity", label: "源数据自查", icon: "shield", mark: "【源数据完整性自查】", badge: "只出待核信号",
+    file: "^integrity_report.*\\.md$", out: "^(integrity_report[^/]*\\.md|audit/.*)$",
+    empty: ["还没自查", "投稿前可以点这里，对源数据做一遍数值 sanity check——目的是主动发现要补说明的地方，不是指控谁。"],
+    tell: "用 `data-integrity` 对源数据做数值完整性自查（signal not verdict），报告写成 `integrity_report.md`",
+    prompt: "请用 `data-integrity` 技能，对 {data} 做一遍**投稿前的数值完整性自查**。\n\n"
+      + "查：复制粘贴错误、整列常数偏移、跨表重复使用同一段数据、均值/SD 与样本量不自洽（GRIM / GRIMMER）、"
+      + "小数位与有效数字异常、末位数字分布异常。\n"
+      + "**铁律：只出「待核信号」，不下「造假」结论**（signal not verdict）。每条写清：在哪一格 / 哪一列、"
+      + "为什么值得核、**最可能的良性解释是什么**、该去核哪份原始记录。\n"
+      + "报告写成 `integrity_report.md`。" },
+]
+
 // ---- 各模块工作流 ----
 export const WORKFLOWS = {
 
@@ -458,64 +682,79 @@ export const WORKFLOWS = {
             "mechanism-figure", "humanize-academic"],
   },
 
-  // ============ 文献研读 ============
+  // ============ 文献研读（单篇）============
+  //
+  // 【它和别的模块不是一个形状】其余模块都是"一条线性流水线 + 首屏表单 + 步骤条"，共用
+  // index.html 那个通用壳。本模块是【一篇文献 × 四种看法】：导读 / 自由问答 / 全文翻译 /
+  // 演示 PPT —— 用户在这四者之间来回切，没有先后、也没有"跑到第几步"。硬塞进步骤条的话，
+  // 条子上永远显示"共 N 步、已完成 1 步"，而用户其实哪一步都可以随时再来一遍。
+  // 所以它自带一个专用界面（web/reader.html：左边原文、右边助手、最右四个模式按钮），
+  // `ui: "reader"` 就是那层路由信号 —— 工作台与聊天页看到它就把用户送去那个页面，
+  // 不再渲染表单与步骤条。除此之外的一切（会话、技能闸、前言注入、产物侧栏）都走原有那套。
+  //
+  // 【一篇文献 = 一个会话】四种模式共享同一个 opencode 会话，所以原文只抽一次，
+  // 切到"智能助手"时前面翻译 / 做 PPT 的上下文原样都在，接着问就是了（这正是产品要的
+  // "保留最近那个会话"）。换一篇 = 新开会话。
   litread: {
-    primary: "search-lit",
-    intakeTitle: "研读设置",
+    // 主技能取 fulltext-retrieval：本模块干的第一件事永远是"把上传的 PDF/Word 抽成文本"
+    //（pdf_to_md.py 就在这个技能里）。它被技能白名单收权时整个模块该整体不可用 —— 因为
+    // 抽不出原文，导读 / 翻译 / PPT 一个都做不成，让模块半开着只会让用户白等一轮。
+    primary: "fulltext-retrieval",
+    ui: "reader",
+    intakeTitle: "上传要研读的文献",
+    // intake 仍然声明：reader.html 自己画上传界面，但 /api/workflow/form 那条路（落盘表单值、
+    // 拼任务卡）与服务端的必填体检都读这份 schema，缺了它这些机制就整段失效。
     intake: [
-      { id: "mode", label: "怎么读", type: "select", required: true, default: "scan", options: [
-        { v: "scan", t: "快速扫描（摸清一个方向有什么）" },
-        { v: "deep", t: "深度研究（把一个问题挖到底）" },
-        { v: "rag", t: "下载全文后基于原文问答（回答时逐句给出处）", sets: { fulltext: true } }] },
-      { id: "topic", label: "主题 / 问题", type: "textarea", required: true,
-        placeholder: "例：CAR-T 治疗实体瘤当前的主要瓶颈是什么，近三年有哪些突破方向" },
-      { id: "sources", label: "检索源", type: "multi", default: ["epmc"], options: [
-        { v: "epmc", t: "Europe PMC（国内可达，推荐）" }, { v: "pubmed", t: "PubMed / NCBI（需境外网络）" },
-        { v: "s2", t: "Semantic Scholar" }, { v: "openalex", t: "OpenAlex" },
-        { v: "preprint", t: "预印本 bioRxiv / medRxiv" }],
-        help: "国内网络下 NCBI 常被阻断，勾了也可能自动降级到 Europe PMC，会如实告知。" },
-      { id: "years", label: "时间范围", type: "select", default: "5", options: [
-        { v: "3", t: "近 3 年" }, { v: "5", t: "近 5 年" }, { v: "10", t: "近 10 年" }, { v: "0", t: "不限" }] },
-      { id: "limit", label: "最多检索多少篇", type: "number", default: 30, min: 5, max: 200, unit: "篇" },
-      ...JOURNAL_FILTER,
-      { id: "fulltext", label: "尝试下载开放获取全文", type: "bool", default: false, section: "成稿与输出",
-        help: "只下 OA 渠道能拿到的；下不到的会如实列出原因，不会假装拿到了。" },
-      { id: "toZotero", label: "把结果推进本机 Zotero", type: "bool", default: false,
-        help: "仅在与 Zotero 同机运行时可用；只写题录，不含 PDF 附件。" },
+      { id: "docFile", label: "文献原文", type: "files", required: true,
+        uploadText: "上传文献", accept: ".pdf / .docx",
+        help: "一次只研读一篇。图片型扫描件会先走 OCR，识别不准的地方会如实标出来。" },
       LANG,
     ],
     steps: [
-      { id: "search", name: "文献检索", skill: "search-lit",
-        emits: ["evidence_table.csv", "evidence.md", "refs.bib"], render: "evidence" },
-      { id: "fulltext", name: "全文获取", skill: "fulltext-retrieval", optional: true,
-        when: { field: "fulltext", eq: true },
-        emits: ["pdfs/*.pdf", "zotero_lib/*.pdf", "retrieval_report.json", "manual_needed.txt"], render: "retrieval",
-        hint: "只把真正下到 PDF 的算进可问答的范围，没下到的逐条列出原因" },
-      { id: "rag", name: "基于全文问答", skill: "zotero-library", optional: true,
-        when: { field: "mode", eq: "rag" },
-        emits: ["zotero_evidence.csv", "rag_*.md"], render: "evidence" },
-      { id: "deep", name: "深度研究", skill: "deep-research", optional: true,
-        when: { field: "mode", eq: "deep" },
-        emits: ["research_report*.md", "deep_research*.md"], render: "manuscript" },
-      { id: "digest", name: "研读综述", skill: "literature-review", optional: true,
-        when: { field: "mode", eq: "scan" },
-        // research_scan* 必须算：scan 模式下 agent 用 research-scan 技能出简报完全合理
-        //（它在白名单里，模式名就叫"快速扫描"），漏掉它这步永远点不亮。
-        emits: ["review.md", "digest*.md", "*_review.md", "research_scan*.md"], render: "manuscript" },
-      { id: "render", name: "出件", skill: "render-pdf-doc", optional: true,
-        form: [{ id: "fmt", label: "输出格式", type: "select", default: "pdf", options: [
-          { v: "pdf", t: "PDF" }, { v: "docx", t: "Word（.docx）" }] }],
-        // ★ 必须与上游各步的产物名对齐：deep 步产 deep_research*.md、digest 步产 review.md /
-        //   research_scan.md，排版出来就是同名的 pdf/docx。此前只列 report*/digest*/research_report*，
-        //   于是 review.pdf、deep_research.pdf 一个都不认 —— 这步在本模块永远点不亮。
-        emits: ["review*.pdf", "review*.docx", "deep_research*.pdf", "deep_research*.docx",
-                "research_scan*.pdf", "research_scan*.docx", "digest*.pdf", "digest*.docx",
-                "report*.pdf", "report*.docx"], render: "doc" },
+      { id: "ingest", name: "读入原文", skill: "fulltext-retrieval",
+        // 后三个不是这一步产的（导读 / 翻译两种模式没有对应的技能，也就没有对应的 step），
+        // 但 artifactLine 只从 steps[].emits 收集"产物用约定名"那句话。挂在这里，是为了让
+        // 这三个名字每一轮都随前言到模型手上 —— reader.html 正是按这几个名字去把正文捞回来渲染的
+        //（见 MODES[*].file），名字漂了界面就只剩一句"已完成"、正文不知去向。
+        emits: ["fulltext.md", "fulltext_*.md", "reading_guide.md", "translation_zh.md"], render: "report",
+        hint: "PDF 走 pdf_to_md.py，Word 走 python-docx；抽不动的扫描件再走 ocr",
+        note: "抽出来的正文必须落成 `fulltext.md`——后面导读、翻译、做 PPT 全都读它，"
+            + "别每种模式各抽一遍（既慢又可能三份内容不一致）。" },
+      { id: "ppt", name: "演示 PPT", skill: "ppt-master", optional: true,
+        emits: ["ppt_outline.md", "*.pptx", "exports/*.pptx"], render: "doc" },
     ],
-    // reference-check 必须在白名单里：AGENTS.md §五 要求写完综述自动查假引用，而模块前言
-    // 明写"覆盖 AGENTS.md 的一切路由规则"。不给这个技能，那条铁律在本模块就被悄悄关掉了 ——
-    // 实测结果不是报错，是静默降级成模型现写的自制核查器（无撤稿库、自己给自己打分）。
-    extra: ["research-scan", "render-docx", "reference-check"],
+    // ocr：图片型扫描件（pdf_to_md 抽出来是空的）唯一的出路。
+    // render-docx / render-pdf-doc：翻译稿、导读稿用户常要一份 Word/PDF 拿走。
+    extra: ["ocr", "render-docx", "render-pdf-doc"],
+    // ---- 专用界面的配置（整份下发给 reader.html，见文件上方「阅读器型模块」那段说明）----
+    reader: {
+      intro: {
+        title: "文献研读",
+        lead: "上传一篇 PDF 或 Word 文献，点「开始研读」——先自动出一份导读，理清它的核心与论证逻辑；之后随时可以对着原文追问、要全文翻译，或让它做一套汇报 PPT。",
+        dropTitle: "点击或拖拽文献到此处",
+        dropHint: "支持 PDF / Word（.pdf · .docx · .doc）　·　一次研读一篇",
+        startText: "开始研读",
+        chips: ["文献导读", "对着原文追问", "全文翻译", "汇报 PPT"],
+        tip: "图片型扫描件会先走 OCR，识别不准的地方会如实标出来。<br>所有结论只依据这篇原文——原文没写的，它会写「原文未报告」，不会替你补。",
+      },
+      source: { kind: "doc", field: "docFile", accept: ".pdf,.docx,.doc,.odt", exts: ["pdf", "docx", "doc", "odt"] },
+      first: "guide",          // 传完点「开始」自动跑哪一个
+      settings: ["lang"],      // 齿轮弹层里放哪些 intake 字段
+      modes: LITREAD_MODES,
+    },
+    // ---- 用 flow 顶掉通用的"标准流程"那段话 ----
+    // 通用版会写成「读入原文 → 演示 PPT(可选)。按此顺序推进」，而本模块根本没有这个顺序：
+    // 用户可能一上来就点翻译，也可能导读看完直接问问题。照通用版说，模型会去"按流程推进"，
+    // 甚至在用户只想问一句话时自作主张跑起 ppt-master。
+    flow: `\n- **本模块 = 研读【用户上传的这一篇】文献**，不检索、不找别的文献、不写综述。用户问的一切都以这篇原文为准。`
+      + `\n- **第一步永远是把原文抽成文本**：PDF 用 \`fulltext-retrieval\` 技能里的 \`pdf_to_md.py\`；`
+      + `Word(.docx) 用 \`.venv\` 的 python-docx；抽出来几乎没有正文（图片型扫描件）才转 \`ocr\` 技能。`
+      + `抽好的正文写成 \`fulltext.md\`，**本会话后续所有模式都直接读它，不要重复抽取**。`
+      + readerModeLines(LITREAD_MODES)
+      + `\n- **一切结论只能来自这篇原文**：数字、剂量、样本量、p 值、结论一律照抄原文；`
+      + `原文没写的就写「原文未报告」，**不许拿你的背景知识补齐，也不许引入原文没有的参考文献**。`
+      + `引用具体数据时带上出处（第几节 / 哪张图表）。`
+      + `\n- 用户想让你去检索别的文献、写综述、查引用真伪 → 那不是本模块的事，按下面那张表指路。`,
   },
 
   // ============ 数据统计与分析 ============
@@ -536,7 +775,15 @@ export const WORKFLOWS = {
         help: "选好后下面的列名会自动读出来。只算样本量 / 把握度可以不传。" },
       // ★ 这题【不能有默认值】：默认「否」等于替用户声明「本数据不含身份信息」，
       //   而他表里就摆着 300 个姓名和住院号。改成必答，两个都不预选。
-      { id: "hasPHI", label: "数据里含患者身份信息（姓名/住院号/身份证/住址等）", type: "bool", required: true,
+      // pin：钉进模块前言、每一轮都发。阅读器壳里用户是在首屏答的这一题，之后每次点某个分析模式
+      // 都是一轮新对话 —— 不 pin 的话，"这份数据含身份信息"只在第一轮出现过，后面几轮模型完全不知情，
+      // 照样把姓名住院号拿去做统计。这正是 §五「未脱敏不得进入统计」那条铁律的落点。
+      { id: "hasPHI", label: "数据里含患者身份信息（姓名/住院号/身份证/住址等）", type: "bool", required: true, pin: true,
+        options: [
+          { v: true, t: "是", pinNote: "**在做任何统计之前先用 `deidentify` 技能脱敏**，之后所有分析、出图、"
+            + "出表一律基于脱敏后的表；还原表只留在本会话目录，不许写进任何报告或图表" },
+          { v: false, t: "否", pinNote: "用户已声明本表不含可识别身份的字段；若你在表里【实际看到】姓名 / 住院号 / "
+            + "身份证 / 住址这类列，**停下来告诉用户**，不要闷头继续算" }],
         help: "选「是」会先脱敏再分析。未脱敏的患者数据不得进入统计。" },
       { id: "analyses", label: "要做的分析", type: "multi", required: true, options: [
         { v: "profile", t: "数据体检（缺失 / 异常 / 重复 ID）" },
@@ -601,6 +848,45 @@ export const WORKFLOWS = {
     // 出完基线表/结果表，用户下一句多半是"导成 Word 给我" —— 不放行排版技能就会被模块闸掐掉，
     // 报"模块限制"。这两个不进 steps（不是规定流程的一环），只作为随时可用的配套。
     extra: ["render-docx", "render-pdf-doc"],
+    ui: "reader",
+    reader: {
+      intro: {
+        title: "数据统计与分析",
+        lead: "上传一张数据表，先做体检把脏数据挑出来，再出基线表、跑统计、画投稿级图。左边始终摆着你的原表，算出来的每个数都能对回去。",
+        dropTitle: "点击或拖拽数据表到此处",
+        dropHint: "支持 Excel / CSV（.xlsx · .csv · .tsv）　·　一次一张",
+        startText: "开始分析",
+        chips: ["数据体检", "基线表 Table 1", "生存 / ROC / 回归", "投稿级图表"],
+        tip: "建议先跑「数据体检」——重复 ID 没去、分类水平没归一时，后面每个 p 值都是错的，而表面看不出来。<br>算不出来的它会说算不出来，不会给你一个编的数字。",
+        // 首屏就要答的必答题（不是设置，是安全闸）。未脱敏的患者数据不得进入统计，
+        // 这一题没答之前「开始分析」是灰的。
+        ask: ["hasPHI"],
+      },
+      source: { kind: "table", field: "dataFiles", accept: ".xlsx,.csv,.tsv,.xls", exts: ["xlsx", "csv", "tsv", "xls"] },
+      first: "profile",
+      settings: ["figs", "lang"],
+      // ---- 变量对应面板（只有本模块有）----
+      // 【为什么必须留着】「列名猜错 / 写错」是这个模块最高频的失败模式，而它不会报错 ——
+      // 医生表里 `随访时间` 和 `入院时间` 并排，认错了只会给出一份看起来很正常的错 KM 曲线。
+      // 从真实表头下拉能从根上消灭它，所以哪怕界面改成了按钮式，这几个下拉也得留下来，
+      // 只是收进一张默认折叠的面板：不做生存分析的人根本不用展开它。
+      vars: {
+        title: "变量对应",
+        sub: "把分析用到的变量对到你表里的列。点某个分析时若缺了它必需的列，这里会自动展开。",
+        fields: ["groupCol", "outcomeCol", "timeCol", "eventCol", "testCol", "goldCol", "covars"],
+      },
+      modes: STATS_MODES,
+    },
+    flow: `\n- **本模块 = 分析【用户上传的这张数据表】**，不写论文、不查文献、不润色。`
+      + `\n- **一切结果只能来自这张表**：算不出来的、数据不支持的，直接说算不出来和缺什么。`
+      + `**绝不许编造样本量、p 值、置信区间或任何一个数字** —— 这里编的数会一路进到投稿稿件里。`
+      + readerModeLines(STATS_MODES)
+      + `\n- **用户在界面上指定了哪一列是什么，就以他指定的为准**（消息里会带一段「变量对应」）。`
+      + `他没指的列你可以推断，但**必须在回答里写清你把哪一列当成了什么**，让他能一眼发现认错了。`
+      + `\n- **方法要交代**：用了什么检验 / 模型、为什么选它、前提是否满足（正态性 / 方差齐性 / 比例风险假定 / `
+      + `共线性…）。前提不满足就换稳健方法并说明。报结果给**效应量与 95%CI**，不要只给一个 p 值；`
+      + `多重比较要校正并说明用了哪种。`
+      + `\n- **不要替用户改数据**：体检发现的问题逐条列出来、给建议，改不改由他定。`,
   },
 
   // ============ 文稿核查与审校 ============
@@ -653,6 +939,35 @@ export const WORKFLOWS = {
     // reference-check / peer-review 的技能文档都写着"出 PDF：交给 render-pdf-doc"，
     // 而医生拿到核查报告最自然的下一步就是发给通讯作者。此前 extra 是空的，这条路直接堵死。
     extra: ["render-pdf-doc", "render-docx"],
+    ui: "reader",
+    reader: {
+      intro: {
+        title: "文稿核查与审校",
+        lead: "上传一份稿件，逐条核实参考文献是否真实存在、DOI 与撤稿情况；再按审稿人的眼光找研究设计与统计上的硬伤。带上配套数值表还能做一遍源数据自查。",
+        dropTitle: "点击或拖拽稿件到此处",
+        dropHint: "支持 Word / PDF / Markdown（.docx · .pdf · .md）　·　一次一份",
+        startText: "开始核查",
+        chips: ["假引用与 DOI", "撤稿检索", "统计陷阱", "数据完整性"],
+        tip: "查不到 ≠ 不存在：网络受限或数据库没收录时它会写「未能核实」，不会判成假引用。<br>数据完整性只出「待核信号」，不下造假结论——目的是投稿前主动补说明。",
+      },
+      source: { kind: "doc", field: "docFiles", accept: ".docx,.pdf,.md,.doc,.txt", exts: ["docx", "pdf", "md", "doc", "txt"] },
+      // 第二份可选上传：数值表。只有「数据完整性」那个模式要用，所以不摆在首屏挡路，
+      // 点到那个模式发现缺了再就地要（见 modes[].need / needHint）。
+      extraUpload: { field: "dataFiles", key: "data", label: "配套数值表", accept: ".xlsx,.csv,.tsv", exts: ["xlsx", "csv", "tsv"] },
+      first: "refs",
+      settings: ["strict", "lang"],
+      modes: REFCHECK_MODES,
+    },
+    flow: `\n- **本模块 = 核查【用户上传的这一份稿件】**，不写稿、不润色、不做统计分析。`
+      + `\n- **核查结论必须建立在真的查过之上**：引用要真的去线上核（\`reference-check\` 技能），`
+      + `不许凭印象说"这篇我知道，是真的"。`
+      + readerModeLines(REFCHECK_MODES)
+      + `\n- **查不到 ≠ 不存在**：网络受限、数据库没收录、检索被阻断时，如实写「未能核实」并说明原因，`
+      + `**绝不能因此判成假引用** —— 那会让用户去删掉一条真文献。`
+      + `\n- **数据完整性只出「待核信号」，不下「造假」结论**（signal not verdict）。每条都要给出`
+      + `「最可能的良性解释」和「你该去核哪份原始记录」。`
+      + `\n- **不许只报喜**：没查出问题要说清"查了什么、都过了"；查不动的部分要说查不动，`
+      + `不许把"我没看出问题"写成"没有问题"。`,
   },
 
   // ============ 文章润色 ============
@@ -728,6 +1043,34 @@ export const WORKFLOWS = {
                 "manuscript*.docx", "manuscript*.pdf"], render: "doc" },
     ],
     extra: ["render-pdf-doc"],
+    ui: "reader",
+    reader: {
+      intro: {
+        title: "文章润色",
+        lead: "上传一份稿件，按期刊写作范式优化行文逻辑与专业表述，消除生成式文本痕迹。改完能逐条看它动了什么、为什么动，不同意的可以让它回退。",
+        dropTitle: "点击或拖拽稿件到此处",
+        dropHint: "支持 Word / PDF / Markdown（.docx · .pdf · .md）　·　一次一份",
+        startText: "开始润色",
+        chips: ["去 AI 味", "语言润色", "逻辑衔接", "改动逐条可查"],
+        tip: "数字、统计量与结论强度一律不动——「显著低于」不会被改成「低于」。<br>带 [n] 角标的整句默认逐字保留：那是在转述别人的结论，改一个词就变成了另一个意思。",
+      },
+      source: { kind: "doc", field: "docFiles", accept: ".docx,.pdf,.md,.doc,.txt", exts: ["docx", "pdf", "md", "doc", "txt"] },
+      first: "polish",
+      // protectRefs / lang 都是 pin:true —— 它们进齿轮弹层，改完立刻回写 _workflow.json，
+      // 于是 settingsLine 每一轮都把它们钉进前言（这条路是踩出来的，见 protectRefs 的注释）。
+      settings: ["goals", "strength", "protectRefs", "journalName", "outFmt", "lang"],
+      modes: HUMANIZE_MODES,
+    },
+    flow: `\n- **本模块 = 润色【用户上传的这一份稿件】**，不替他写新内容、不做统计、不查文献真伪`
+      + `（除非他关掉了引用保护，那时润色完要跑一遍 \`reference-check\` 兜底）。`
+      + `\n- **改写的底线，优先级高于任何润色目标**：数字、单位、统计量、样本量、p 值、置信区间一律不动；`
+      + `结论的**强度**不许变（「显著低于」↛「低于」，「证实」↛「提示」）；`
+      + `带 \`[n]\` 角标的整句按用户的设定处理（默认逐字保留）。`
+      + readerModeLines(HUMANIZE_MODES)
+      + `\n- **改了什么必须能说清楚**：用户会点「改动对照」逐条看。凡是你动了数字 / 单位 / 结论强度的地方，`
+      + `主动拎到最前面标出来 —— 那本来就不该发生，藏起来比改错本身更糟。`
+      + `\n- **不要替校验脚本夸大结论**：不变量校验只比对数字与角标这些「集合」，查不出「显著低于→低于」`
+      + `这种措辞漂移。校验通过只能说「数字与角标未变」，**不许说成「内容未改」**。`,
   },
 }
 
@@ -1224,6 +1567,16 @@ export function workflowFor(mod, values) {
   return {
     module: mod,
     primary: w.primary,
+    // 这个模块用哪个界面壳：缺省 null = index.html 的通用壳（表单 + 步骤条 + 对话流）；
+    // "reader" = 专用的 web/reader.html（左原文右助手）。工作台与聊天页据此决定往哪儿跳。
+    ui: w.ui || null,
+    // 阅读器壳的整份配置（模式、提示词、首屏文案、变量对应面板）。前端不认识任何具体模块，
+    // 全靠这一份下发 —— 所以改模式 / 改措辞只动 workflows.mjs，走界面包热更新即可。
+    // 里面的字段要能被 JSON 序列化：正则一律写成字符串（前端 new RegExp），别放函数。
+    reader: w.reader
+      ? { ...w.reader, intake: (w.reader.settings || []).concat(w.reader.intro?.ask || [], w.reader.vars?.fields || [])
+          .map((id) => (w.intake || []).find((f) => f.id === id)).filter(Boolean) }
+      : null,
     intakeTitle: w.intakeTitle,
     intakeSub: w.intakeSub || null,   // 流程条第 1 格「基础信息录入」那行小字，各模块不同
     intake: w.intake,
@@ -1245,6 +1598,10 @@ export function workflowFor(mod, values) {
 /** 模块前言里那句"本模块的标准流程"——把步骤链与质量闸讲给 agent 听 */
 export function pipelineLine(mod, rawValues) {
   const values = withDefaults(mod, rawValues)   // 跳过表单时也按默认勾选算，否则整条流程线是空串
+  // 【flow 覆写】不是所有模块都是一条线。文献研读是"一篇文献 × 四种模式"，用户随时在四者间来回切，
+  // 通用版那句「按此顺序推进」会让模型去执行一个根本不存在的顺序（实测最坏是用户只想问一句话，
+  // 它却自作主张跑起 ppt-master）。这类模块自己写清楚该怎么干，下面那整段闸的规矩也一并不适用。
+  if (WORKFLOWS[mod]?.flow) return WORKFLOWS[mod].flow
   const steps = stepsFor(mod, values)
   if (!steps.length) return ""
   const chain = steps.map((s) => s.name + (isOptional(s, values) ? "(可选)" : "") + (s.gate ? "(闸)" : "")).join(" → ")

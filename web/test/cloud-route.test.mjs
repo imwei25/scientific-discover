@@ -19,12 +19,13 @@ function fakeUpstream(handler) {
 }
 
 /** 起 sci-auth + 建好一个改完密的账号 */
-async function cloudBackend(upstreamUrl) {
+async function cloudBackend(upstreamUrl, extraEnv = {}) {
   const prev = { ...process.env }
   Object.assign(process.env, {
     DB_FILE: ":memory:", LISTEN: "127.0.0.1:0", ADMIN_PASSWORD: "adminpw",
     KEY_SECRET: "route-" + (++seq), LLM_UPSTREAM_KEY: "up-key", LLM_UPSTREAM_URL: upstreamUrl,
     DATA_DIR: "", TEST_BYPASS_TOKEN: "t-bypass",
+    ...extraEnv,
   })
   const mod = await import(`../../server/sci-auth.mjs?r=${seq}`)
   await new Promise((r) => mod.server.listen(0, "127.0.0.1", r))
@@ -90,12 +91,12 @@ async function gateway(cloudUrl) {
   }
 }
 
-async function rig(upstream) {
+async function rig(upstream, beEnv = {}) {
   const up = await fakeUpstream(upstream || ((_q, res) => {
     res.writeHead(200, { "content-type": "application/json" })
     res.end(JSON.stringify({ model: "tier-model", choices: [], usage: { prompt_tokens: 5, completion_tokens: 7 } }))
   }))
-  const be = await cloudBackend(up.url)
+  const be = await cloudBackend(up.url, beEnv)
   const gw = await gateway(be.base)
   return { up, be, gw, close: async () => { await gw.close(); await be.close(); await up.close() } }
 }
@@ -771,4 +772,50 @@ test("积分：登出后不再下发（缓存要跟着账号切换失效）", as
   assert.equal((await r.gw.req("/api/quota")).json.cloud.daily.limit, 500)
   await r.gw.req("/api/cloud/logout", { method: "POST" })
   assert.equal((await r.gw.req("/api/quota")).json.cloud, null)
+})
+
+// ---- 图片识字（/cloud/ocr/* → sci-auth /ocr/*）------------------------------
+// 【为什么单独测这一条】/cloud/<rest> 默认会被套上 /llm 前缀转给云端，而识字在云端是独立
+// 通道。少了这条豁免，请求会被转成 /llm/ocr/parse —— 报的是一句莫名其妙的模型路由错误，
+// 而不是"识字失败"，现场根本查不到这儿。桌面版拿不到 OCR key，全靠这条路。
+test("识字转发：/cloud/ocr/parse 不套 /llm，key 由服务器贴，客户端一个字节都拿不到", async (t) => {
+  let seen = null
+  const ocr = await fakeUpstream((q, res) => {
+    const c = []
+    q.on("data", (x) => c.push(x))
+    q.on("end", () => {
+      seen = { url: q.url, form: new URLSearchParams(Buffer.concat(c).toString()) }
+      res.writeHead(200, { "content-type": "application/json" })
+      res.end(JSON.stringify({ ParsedResults: [{ ParsedText: "申请代码 H2701", FileParseExitCode: 1 }], IsErroredOnProcessing: false }))
+    })
+  })
+  const r = await rig(undefined, { OCR_SPACE_API_KEY: "server-only-ocr-key", OCR_ENDPOINT: ocr.url + "/parse" })
+  t.after(async () => { await r.close(); await ocr.close() })
+  await loginReady(r)
+  const localTok = r.gw.cfg().apiKey
+
+  // 令牌不对 → 一个字节都不该发出去（否则同机任何程序都能白嫖云端识字额度）
+  const bad = await r.gw.req("/cloud/ocr/parse", { method: "POST", body: { image: "QUJD" }, headers: { authorization: "Bearer wrong" } })
+  assert.equal(bad.status, 401)
+  assert.equal(seen, null)
+
+  const x = await r.gw.req("/cloud/ocr/parse", {
+    method: "POST", body: { image: "QUJD" }, headers: { authorization: "Bearer " + localTok },
+  })
+  assert.equal(x.status, 200, "体=" + x.text)
+  assert.equal(x.json.text, "申请代码 H2701")
+  assert.equal(x.json.quota.used, 1)
+  assert.equal(seen.url, "/parse", "打的是识字上游本身，不是被套了 /llm 的路径")
+  assert.equal(seen.form.get("apikey"), "server-only-ocr-key", "OCR key 只在服务器上")
+})
+
+test("识字：平台没配 key → 503 说清是平台的事（桌面版此前是本机报'缺 OCR_SPACE_API_KEY'）", async (t) => {
+  const r = await rig(); t.after(() => r.close())     // 不给 OCR_SPACE_API_KEY
+  await loginReady(r)
+  const x = await r.gw.req("/cloud/ocr/parse", {
+    method: "POST", body: { image: "QUJD" }, headers: { authorization: "Bearer " + r.gw.cfg().apiKey },
+  })
+  assert.equal(x.status, 503)
+  assert.equal(x.json.error.code, "OCR_UNCONFIGURED")
+  assert.match(x.json.error.message, /管理员/)
 })

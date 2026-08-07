@@ -325,6 +325,22 @@ function ensureColumns(db) {
   // 不会出现"用户删了图配额还留着"这类孤儿数据。
   if (!has("usage_daily", "images")) db.exec("ALTER TABLE usage_daily ADD COLUMN images INTEGER NOT NULL DEFAULT 0")
 
+  // ---- OCR 次数限额（ocr 技能走 /ocr 代理）----
+  // 【为什么又是一条独立的次数而不是并进美元额度】与生图同一个理由：OCR 走的是 OCR.space 的
+  // 免费档，计价单位是"次"、且额度是【全平台共享】的（Engine3 每月 2500 次、每天 500 次/IP，
+  // 而所有用户的请求现在都从本服务器这一个 IP 出去）。一个用户扫一本三百页的书，就能把全平台
+  // 当月的额度吃干净 —— 所以必须有每人每天的闸。
+  // 【默认 20 而非 0】理由同 img_daily：本仓库 0=不限，但列默认值必须保守，新建档位忘了填
+  // 不能默认成"不限"。20 次/天够查十几张官方图片表，又不至于一个人吃穿全平台。
+  if (!has("tiers", "ocr_daily")) {
+    db.exec("ALTER TABLE tiers ADD COLUMN ocr_daily INTEGER NOT NULL DEFAULT 20")
+    for (const [k, n] of [["plus", 50], ["admin", 100]]) {
+      try { db.prepare("UPDATE tiers SET ocr_daily=? WHERE key=?").run(n, k) } catch {}
+    }
+  }
+  // 当天已识别次数：同 images，挂在日汇总上，日切与删用户清理都跟着 usage_daily 走。
+  if (!has("usage_daily", "ocr")) db.exec("ALTER TABLE usage_daily ADD COLUMN ocr INTEGER NOT NULL DEFAULT 0")
+
   // 【必须在补完 provider 列之后】供应侧的预算闸按 (provider, ts) 聚合（见 providerSpend），
   // 没索引就要全表扫 usage_log —— 那是只增不减的明细表，上线几个月后每一单请求都会被它拖慢。
   // 放在 SCHEMA 里会崩：SCHEMA 跑在本函数之前，那时老库还没有 provider 这一列。
@@ -505,16 +521,20 @@ export function upsertTier(db, t) {
   const img = t.img_daily === undefined || t.img_daily === null || t.img_daily === ""
     ? (prev ? Number(prev.img_daily) || 0 : 2)
     : Math.max(0, Math.floor(Number(t.img_daily) || 0))
-  db.prepare(`INSERT INTO tiers(key,daily_usd,monthly_usd,model,models,skills,note,sort,max_conc,img_daily)
-              VALUES(?,?,?,?,?,?,?,?,?,?)
+  // ocr_daily 同理保留原值（管理台的档位表单同样没有这一栏，只有 API/脚本会带）
+  const ocr = t.ocr_daily === undefined || t.ocr_daily === null || t.ocr_daily === ""
+    ? (prev ? Number(prev.ocr_daily) || 0 : 20)
+    : Math.max(0, Math.floor(Number(t.ocr_daily) || 0))
+  db.prepare(`INSERT INTO tiers(key,daily_usd,monthly_usd,model,models,skills,note,sort,max_conc,img_daily,ocr_daily)
+              VALUES(?,?,?,?,?,?,?,?,?,?,?)
               ON CONFLICT(key) DO UPDATE SET
                 daily_usd=excluded.daily_usd, monthly_usd=excluded.monthly_usd,
                 model=excluded.model, models=excluded.models, skills=excluded.skills,
                 note=excluded.note, sort=excluded.sort, max_conc=excluded.max_conc,
-                img_daily=excluded.img_daily`).run(
+                img_daily=excluded.img_daily, ocr_daily=excluded.ocr_daily`).run(
     String(t.key), Number(t.daily_usd) || 0, Number(t.monthly_usd) || 0,
     String(t.model || ""), String(t.models || ""), String(t.skills || ""),
-    String(t.note || ""), Number(t.sort) || 0, Math.max(0, Math.floor(Number(t.max_conc) || 0)), img)
+    String(t.note || ""), Number(t.sort) || 0, Math.max(0, Math.floor(Number(t.max_conc) || 0)), img, ocr)
   return getTier(db, t.key)
 }
 export function deleteTier(db, key) {
@@ -718,6 +738,8 @@ export function resolveEntitlement(db, user) {
     // 每天可生成几张图（0 = 不限，与 daily 同口径）。没有档位时给 0 而不是默认值：
     // 走到这儿说明 tier 已经被删了，此时"不限"是既有 num() 对所有额度的一致行为，别在这条上搞特例。
     imgDaily: t ? Math.max(0, Math.floor(Number(t.img_daily) || 0)) : 0,
+    // 每天可识别几次图片（0 = 不限）。档位被删时给 0 的理由同 imgDaily。
+    ocrDaily: t ? Math.max(0, Math.floor(Number(t.ocr_daily) || 0)) : 0,
   }
 }
 
@@ -770,6 +792,34 @@ export function recordImage(db, userId, ts = Date.now()) {
               VALUES(?,?,?,0,0,1)
               ON CONFLICT(user_id,day) DO UPDATE SET images=images+1`).run(uid, day, month)
   return todayImages(db, uid, ts)
+}
+
+/** 今天这个用户已识别几次（UTC 日切，与 todayCost / todayImages 同一个 day 键）。 */
+export function todayOcr(db, userId, ts = Date.now()) {
+  const r = db.prepare("SELECT ocr FROM usage_daily WHERE user_id=? AND day=?").get(Number(userId), dayOf(ts))
+  return r ? Number(r.ocr) || 0 : 0
+}
+
+/** 记一次成功的识别，返回记完之后当天的次数。upsert 的理由同 recordImage。 */
+export function recordOcr(db, userId, ts = Date.now()) {
+  const uid = Number(userId), day = dayOf(ts), month = monthOf(ts)
+  db.prepare(`INSERT INTO usage_daily(user_id,day,month,cost_usd,calls,ocr)
+              VALUES(?,?,?,0,0,1)
+              ON CONFLICT(user_id,day) DO UPDATE SET ocr=ocr+1`).run(uid, day, month)
+  return todayOcr(db, uid, ts)
+}
+
+/**
+ * 全平台今天 / 本月的识别总次数。
+ *
+ * 【为什么要有"全平台"这一档】OCR.space 的额度不是按用户算的，是按【我们这一把 key、
+ * 这一个服务器 IP】算的（免费档 Engine3 每月 2500 次、每天 500 次/IP）。只有每人每天的闸
+ * 挡不住"人多把公共额度耗光"，而耗光后上游只回一句限速，谁也不知道发生了什么。
+ */
+export function ocrTotals(db, ts = Date.now()) {
+  const d = db.prepare("SELECT SUM(ocr) AS n FROM usage_daily WHERE day=?").get(dayOf(ts))
+  const m = db.prepare("SELECT SUM(ocr) AS n FROM usage_daily WHERE month=?").get(monthOf(ts))
+  return { day: Number(d?.n) || 0, month: Number(m?.n) || 0 }
 }
 
 export function monthCost(db, userId, ts = Date.now()) {
