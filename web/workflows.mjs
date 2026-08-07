@@ -311,59 +311,101 @@ export const WORKFLOWS = {
   // ============ 基金申报 ============
   grant: {
     primary: "grant-proposal",
-    intakeTitle: "标书立项信息",
+    intakeTitle: "基础信息录入",
+    intakeSub: "填写申报类别、关键字与撰写要求",
+    // ★ 本表按设计稿「基金申报页面_单列流程版.html」重排：三张区块卡（项目基本信息 / 申请人信息 /
+    //   撰写要求与工作基础），字段两列。section / sectionSub / sectionIcon 三项只影响前端画法。
     intake: [
-      { id: "funder", label: "资助渠道", type: "select", required: true, options: [
-        { v: "nsfc-general", t: "国自然 面上项目" }, { v: "nsfc-young", t: "国自然 青年科学基金" },
-        { v: "nsfc-region", t: "国自然 地区科学基金" }, { v: "provincial", t: "省 / 市级基金" },
-        { v: "hospital", t: "院级 / 校级课题" }, { v: "other", t: "其它" }],
-        help: "选「其它」的话，下面要写清楚是哪个渠道 —— 不同渠道的正文结构和字数要求差别很大。" },
-      { id: "funderOther", label: "具体是哪个资助渠道", type: "text", when: { field: "funder", eq: "other" },
-        required: true, placeholder: "例：中华医学会临床医学科研专项 / 某某市卫健委面上项目" },
-      // ★ 示范值必须用【2026 新码表】里真实存在的组合。原来写的是"H16 消化系统"，两处都错：
-      //   2026 年医学部代码自 H10 起整体位移，H16 现在是【急重症医学】，消化系统是 H03，
-      //   肿瘤一律 H18（见 grant-proposal/references/nsfc-medical-h.md：旧表的"H16 肿瘤学"已失效）。
-      //   实测用户照抄这个示范值填进去，模型第一轮就得停下来纠正 —— 示范值是最容易被照抄的东西，
-      //   界面拿一个错的去教用户，比不给示范更糟。
-      { id: "discipline", label: "申请代码 / 学部方向", type: "text",
-        placeholder: "例：H18 肿瘤学 / H03 消化系统；不确定可留空，会按你的方向给建议" },
-      { id: "applicant", label: "申请人身份", type: "select", required: true, options: [
-        { v: "student", t: "在读研究生" }, { v: "postdoc", t: "博士后" }, { v: "lecturer", t: "讲师 / 主治" },
-        { v: "associate", t: "副高" }, { v: "professor", t: "正高" }],
-        help: "决定选题的体量与风险偏好 —— 青年基金和面上项目的选题策略完全不同。" },
-      { id: "direction", label: "研究方向", type: "textarea", required: true,
-        placeholder: "你想做的大方向，越具体越好；还没定也可以只写领域，会帮你收敛" },
-      { id: "basis", label: "已有工作基础", type: "multi", options: [
-        { v: "papers", t: "代表作 / 已发表论文" }, { v: "preliminary", t: "预实验数据" },
-        { v: "platform", t: "平台 / 设备条件" }, { v: "cohort", t: "已有样本库 / 队列" },
-        { v: "none", t: "暂无（从零开始）", exclusive: true }] },
-      { id: "basisFiles", label: "代表作 / 预实验材料", type: "files",
-        uploadText: "上传代表作 / 预实验材料", accept: ".pdf / .docx（代表作建议 5 篇以内）",
-        when: { field: "basis", hasNot: "none" } },
+      // ---- 区块 1：项目基本信息 ----
+      { id: "funder", label: "申请类型", type: "select", required: true,
+        section: "项目基本信息", sectionSub: "确定申报类别、关键要素与研究周期", sectionIcon: "lines",
+        options: [
+          { v: "nsfc-general", t: "国家自然科学基金·面上项目" }, { v: "nsfc-young", t: "青年科学基金" },
+          { v: "nsfc-key", t: "重点项目" }, { v: "provincial", t: "省自然科学基金" },
+          { v: "industry", t: "企业横向合作" }],
+        help: "不同类型对应不同的额度上限与评审要点，请先确认申报口。" },
+      // ★ 关键字取代了原来的「研究方向」长文本：流程第 2 步就是「研究方向生成」——
+      //   方向由 AI 依据关键字初拟，用户不必在第一屏就把方向想好（那正是他来找工具的原因）。
+      { id: "keywords", label: "项目关键字", type: "tags", required: true,
+        placeholder: "输入后回车添加，如：单细胞测序、生物标志物",
+        help: "用于匹配研究领域、生成研究方向与摘要，建议 3–6 个。",
+        errMsg: "请至少添加一个项目关键字" },
+      { id: "discipline", label: "领域分类", type: "select", dropdown: true, options: [
+        { v: "肿瘤学", t: "肿瘤学" }, { v: "免疫学", t: "免疫学" }, { v: "神经科学", t: "神经科学" },
+        { v: "心血管", t: "心血管" }, { v: "代谢与内分泌", t: "代谢与内分泌" },
+        { v: "感染与微生物", t: "感染与微生物" }, { v: "基础医学", t: "基础医学" },
+        { v: "临床医学", t: "临床医学" }, { v: "预防医学", t: "预防医学" },
+        { v: "药学", t: "药学" }, { v: "生物信息学", t: "生物信息学" }],
+        help: "如暂不确定可留空，会依据项目关键字推断研究方向。" },
+      { id: "amount", label: "申请金额（万元）", type: "number", required: true, min: 0, step: 1,
+        col2: false, placeholder: "例如：60", help: "该额度将作为预算合计的上限。",
+        errMsg: "请填写有效的申请金额" },
+      // 起止年给默认值：设计稿里这两个下拉是预选好的，而本产品的可选下拉默认停在
+      //「（不限 / 未选）」—— 研究周期留空对标书没有任何意义，反而多两次点击。
+      { id: "yearStart", label: "研究起始年", type: "select", dropdown: true, col2: false, default: "2026",
+        options: [{ v: "2026", t: "2026" }, { v: "2027", t: "2027" }] },
+      { id: "yearEnd", label: "研究终止年", type: "select", dropdown: true, col2: false, default: "2029",
+        options: [{ v: "2029", t: "2029" }, { v: "2030", t: "2030" }, { v: "2031", t: "2031" }] },
+
+      // ---- 区块 2：申请人信息 ----
+      // ⚠️ 姓名 / 单位会随任务卡交给模型（封面与研究基础一节要用），而【邮箱和电话它一个字都用不上】
+      //   —— 标了 noCard，只留在本地表单里，不进提示词。个人联系方式没有任何理由送进模型上下文。
+      { id: "applicantName", label: "申请人姓名", type: "text", required: true, col2: false,
+        section: "申请人信息", sectionSub: "负责人与依托单位", sectionIcon: "user",
+        placeholder: "请输入真实姓名", errMsg: "请填写申请人姓名" },
+      { id: "applicant", label: "职称", type: "select", dropdown: true, required: true, col2: false,
+        options: [
+          { v: "professor", t: "研究员 / 教授" }, { v: "associate", t: "副研究员 / 副教授" },
+          { v: "lecturer", t: "主治医师 / 助理研究员" }, { v: "other", t: "其他" }],
+        help: "决定选题的体量与风险偏好 —— 青年基金和面上项目的选题策略完全不同。",
+        errMsg: "请选择职称" },
+      { id: "org", label: "依托单位", type: "text", required: true, col2: true,
+        placeholder: "例如：某某大学附属医院", errMsg: "请填写依托单位" },
+      { id: "email", label: "联系邮箱", type: "text", required: true, col2: false, noCard: true,
+        placeholder: "name@hospital.com", errMsg: "请填写有效的邮箱地址",
+        help: "只留在本机表单里，不会随任务交给 AI。" },
+      { id: "phone", label: "联系电话", type: "text", required: true, col2: false, noCard: true,
+        placeholder: "11 位手机号", errMsg: "请填写有效的 11 位手机号",
+        help: "只留在本机表单里，不会随任务交给 AI。" },
+
+      // ---- 区块 3：撰写要求与工作基础（均选填）----
       // ★ 这一项在技能里是【优先级最高】的输入（grant-proposal SKILL.md 第 1.5 步①、第 2 步）：
       //   拿到当年官方文件就不必联网调研，且其结构提纲/字数硬限【压过】内置要求卡。
       //   省市级、卫健委、院级这些渠道的模板常年锁在申报平台内、网上根本查不到，只有申请人手里有。
-      //   表单成了主要入口之后再不给它一个位置，等于把技能最可靠的一条路藏了起来。
-      { id: "guideFiles", label: "官方申报通知 / 申请书模板（有就传）", type: "files",
-        uploadText: "上传通知 / 模板", accept: ".pdf / .docx",
-        section: "申报要求（决定标书的结构与硬限）",
-        help: "申报通知 / 模板 / 指南都行，传了就以它为准；没有也能写，会标明请以当年官方模板核对。" },
-      { id: "deadline", label: "申报截止日期", type: "date",
-        help: "填了会按剩余时间安排步骤的详略；不填也能写。" },
-      { id: "wordLimit", label: "正文字数上限", type: "number", min: 1000, max: 100000, unit: "字",
-        placeholder: "留空 = 按所选渠道的常规要求",
-        help: "留空即可，系统会按该渠道的通行要求控制篇幅。" },
-      LANG,
+      { id: "reqDesc", label: "基金申请书撰写要求", type: "textarea",
+        section: "撰写要求与工作基础", sectionSub: "基金撰写要求、已有工作基础与材料（均选填）", sectionIcon: "fileText",
+        placeholder: "例如：正文不超过 4000 字，需含立项依据、研究内容、研究方案、创新点、预期成果、研究基础；参考文献限 30 篇以内……",
+        help: "可粘贴基金委 / 单位申报通知里的核心格式要求；填了就以它为准，没填会按该渠道的通行要求控制篇幅。" },
+      { id: "baseDesc", label: "已有工作基础", type: "textarea",
+        placeholder: "可填写已有工作基础，例如：代表作 / 已发表论文、预试验数据、平台 / 设备条件、已有样本库 / 队列等",
+        help: "提示：代表作 / 已发表论文 · 预试验数据 · 平台 / 设备条件 · 已有样本库 / 队列。没有就留空，缺的会在对应步骤问你要，绝不替你编。" },
+      { id: "attachFiles", label: "申请课题要求文件 / 代表作 / 预实验数据", type: "files",
+        uploadText: "上传材料", accept: ".pdf / .docx / .xlsx / .png，单个 ≤ 20MB",
+        help: "可上传申报指南、申请书模板、代表性论文、预实验数据表等；传了官方通知 / 模板就以它为准。" },
     ],
     steps: [
-      { id: "scan", name: "领域扫描", skill: "research-scan",
+      // ★ 步骤名与 sub 按设计稿「基金申报页面_单列流程版.html」的六格流程改写。
+      //   sub 是流程条上那行小字，只给界面用，不进给 agent 的流程线（那条线要的是步骤名与闸）。
+      { id: "scan", name: "研究方向生成", skill: "research-scan",
+        sub: "AI 依据信息初拟若干研究方向",
         emits: ["research_scan*.md", "landscape*.csv"], render: "report",
         hint: "没搜到 ≠ 研究空白，四象限采样后再下判断" },
-      { id: "topic", name: "选题收敛", skill: "topic-selection",
-        emits: ["topic_candidates*.csv", "topic_selection*.md"], render: "topics",
-        hint: "候选选题会列成卡片，你选一个再往下" },
-      { id: "novelty", name: "新颖性裁定与预注册", skill: "novelty-check", gate: true,
-        emits: ["novelty_report.md", "preregistration.md", "analysis_plan.md"], render: "report", onFail: "topic" },
+      // ★「选题收敛」与「新颖性裁定与预注册」2026-08-07 按用户要求并成一格「选题遴选」。这两步在
+      //   真实使用里本来就是一件事的两半：先列候选、再判"这个题还新不新、能不能锁住"，判不过就换个
+      //   候选重来 —— 拆成两格只是把一次来回切开数两遍。
+      //   【合并要守住的东西】
+      //   ① 它【仍然是闸】：新颖性不过不许硬着头皮往下写。onFail 改指 scan（原来指 topic，
+      //      而 topic 现在就是本步自己，指向自己等于原地打转）。
+      //   ② emits【不收】topic_candidates：判完成靠"约定产物出现了没有"（server.mjs 的 wfSyncDone），
+      //      候选表一落盘这格就绿了，而新颖性还没判、预注册还没写。只收最后那批产物才对。
+      //      候选选题卡照样渲染 —— RENDER_RULES 按文件名认 topic_candidates*.csv，不走 step.emits。
+      //   ③ 流程条上不再单列"新颖性裁定"这一格 → 用户失去了"动笔前先看裁定结论"的提醒点，
+      //      改由 note 强制它把裁定结论与预注册在回话里点名说清。
+      { id: "topic", name: "选题遴选确认", skill: "topic-selection", skillAlias: ["novelty-check"], gate: true,
+        sub: "用户校订并确认最终选题",
+        emits: ["novelty_report.md", "preregistration.md", "analysis_plan.md"], render: "report", onFail: "scan",
+        hint: "先把候选选题列成卡片让你挑；选定的那个当场做新颖性裁定与预注册，不过就退回领域扫描重挑",
+        note: "这一格是【两件事连着做完】，顺序不能颠倒：先用 topic-selection 把候选选题写成 `topic_candidates*.csv` 落盘、让用户挑定一个，**再**对挑定的那个题跑 novelty-check 出 `novelty_report.md` 与 `preregistration.md`。**候选表必须真的落盘**，不能只在回话里列几条就算选过题 —— 界面靠这个文件把候选渲染成卡片。裁定完**在回话里点名说清结论属于哪一档（真新 / 增量 / 已被回答）以及依据**：流程条上不再单列「新颖性裁定」这一格，用户只能从你这句话和产出侧栏里的报告去核对。裁定为「已被回答」的，退回「领域扫描」重新采样换题，不许带着一个已被回答的题去写标书。" },
       // ★「摸清申报要求」原本是独立的一步，2026-08-07 按用户要求并进本步 —— 基金申报的流程条
       //   本来就有 6~7 格，而这两步同属 grant-proposal 技能、在同一轮里连着做完是常态，
       //   拆成两格只是把一条本来连贯的工作切开数。
@@ -374,7 +416,8 @@ export const WORKFLOWS = {
       //   【emits 为什么不收要求卡】判完成靠"约定产物出现了没有"（server.mjs 的 wfSyncDone）。
       //   把 `要求卡*.md` 也列进来的话，要求卡一落盘这一步就打绿勾 —— 而正文还没写。
       //   要求卡的结构化卡片渲染改由 RENDER_RULES 的 report 组兜住，不走 step.emits。
-      { id: "write", name: "标书成文", skill: "grant-proposal",
+      { id: "write", name: "标书初稿生成", skill: "grant-proposal",
+        sub: "产出立项依据 / 研究内容 / 方案等",
         form: [{ id: "sections", label: "要写的章节", type: "multi",
           default: ["basis", "content", "route", "feature", "foundation", "condition"],
           options: [{ v: "basis", t: "立项依据" }, { v: "content", t: "研究内容与目标" },
@@ -384,9 +427,14 @@ export const WORKFLOWS = {
         emits: ["proposal.md", "grant_proposal*.md"], render: "manuscript",
         hint: "先定渠道、取当年结构提纲与逐节字数硬限，再按它逐节动笔；传了官方模板就以它为准",
         note: "**动笔写正文之前，先把本次实际采用的要求写成 `要求卡-<渠道>.md` 落盘**，然后才逐节起草 —— 两件事在同一步里做完，但顺序不能颠倒。要求卡**用内置卡的渠道也要写**，不能因为「卡在 references/ 里读过了」就跳过；至少包含：章节结构提纲（标题原文）、逐节字数/页数硬限、格式规定、形式审查与附件清单、以及每一项的来源与年份口径（内置卡写明卡的年份，联网查的附 URL，没查到的写「未找到官方来源」）。用户传了当年官方模板 / 申报通知的，以用户文件为准，并把它与内置卡的差异逐条列出来 —— 那正是发现「今年又改版了」的地方。落盘之后**在回话里点名说清本次按的是哪个渠道、哪一年的口径**：流程条上不再单列这一步，用户只能从你这句话和产出侧栏里的要求卡去核对，含糊过去他就只能等成稿之后才发现按错了版本。" },
-      { id: "review", name: "评审自查", skill: "peer-review", gate: true,
+      { id: "review", name: "评审自查校验", skill: "peer-review", gate: true,
+        sub: "完整性、格式与逻辑核查",
         emits: ["review_report.md"], render: "review", onFail: "write" },
-      { id: "render", name: "排版出件", skill: "render-pdf-doc",
+      // ★ 设计稿把最后一格写作「标书最终成稿 · 语言润色与定稿输出」——既然界面上承诺了"润色"，
+      //   白名单里就得给 humanize-academic（见下面 extra），否则 agent 一动手就撞模块闸，
+      //   用户看着流程条上写着润色、拿到的却是没润色的稿子。
+      { id: "render", name: "标书最终成稿", skill: "render-pdf-doc",
+        sub: "语言润色与定稿输出",
         form: [{ id: "fmt", label: "输出格式", type: "select", default: "docx", options: [
           { v: "docx", t: "Word（.docx）" }, { v: "pdf", t: "PDF" }, { v: "both", t: "两种都要" }] }],
         emits: ["manuscript*.docx", "manuscript*.pdf", "review*.docx", "review*.pdf", "proposal*.docx", "proposal*.pdf"], render: "doc" },
@@ -402,7 +450,7 @@ export const WORKFLOWS = {
     // mechanism-figure：标书的"研究方案总览图 / 技术路线示意图"是本技能最合适的场景
     // （标书不投期刊，期刊那套 AI 生成图限制不适用），同样属可选配图、不进固定步骤。
     extra: ["render-docx", "search-lit", "literature-review", "fulltext-retrieval", "reference-check",
-            "mechanism-figure"],
+            "mechanism-figure", "humanize-academic"],
   },
 
   // ============ 文献研读 ============
@@ -679,11 +727,15 @@ export const WORKFLOWS = {
 }
 
 // ---- 派生：技能白名单 ----
-// 模块的技能集 = steps 的 skill ∪ extra。MODULE_DEFS.skills 由它展开，不再手写。
+// 模块的技能集 = steps 的 skill（含 skillAlias）∪ extra。MODULE_DEFS.skills 由它展开，不再手写。
+//
+// ★ skillAlias：一格流程条里实际会调起【不止一个】技能时用（如基金申报的「选题遴选」＝
+//   topic-selection + novelty-check）。合并步骤时最容易漏的就是这里 —— 副技能不在白名单里，
+//   agent 一调它就撞模块闸、整轮作废，而界面上什么异常都看不出来。
 export function skillsOf(mod) {
   const w = WORKFLOWS[mod]
   if (!w) return null
-  return [...new Set([...w.steps.map((s) => s.skill), ...(w.extra || [])])]
+  return [...new Set([...w.steps.flatMap((s) => [s.skill, ...(s.skillAlias || [])]), ...(w.extra || [])])]
 }
 export const primaryOf = (mod) => WORKFLOWS[mod]?.primary || null
 
@@ -790,7 +842,10 @@ export function stepOfParts(parts, steps, seen) {
     if (p?.type !== "tool" || p.tool !== "skill") continue
     const sk = p.state?.input?.name        // 技能名的取法与直播那条一致（server.mjs 的 broadcast("tool")）
     if (!sk) continue
-    const hit = steps.find((s) => s.skill === sk && !seen.has(s.id)) || steps.find((s) => s.skill === sk)
+    // skillAlias 也要认：合并出来的步骤（如「选题遴选」）一格里会调两个技能，
+    // 只认主技能的话，副技能那一轮的对话会掉出所有分组，回放时糊成一片。
+    const own = (s) => s.skill === sk || (s.skillAlias || []).includes(sk)
+    const hit = steps.find((s) => own(s) && !seen.has(s.id)) || steps.find(own)
     if (hit) { seen.add(hit.id); return hit }
   }
   return null
@@ -909,6 +964,11 @@ const fmtVal = (f, v, upDir) => {
     const arr = Array.isArray(v) ? v : [v]
     return arr.length ? arr.map(label).join("、") : null
   }
+  // tags：自由输入的关键字数组，没有 options 可查，原样罗列即可
+  if (f.type === "tags") {
+    const arr = (Array.isArray(v) ? v : [v]).map((x) => String(x).trim()).filter(Boolean)
+    return arr.length ? arr.join("、") : null
+  }
   if (f.type === "range") {
     // 兼容标量：接口调用方传 jImpact: 5 时此前落到 return null 被【无声丢掉】——
     // 任务卡里整行消失且没有任何提示，用户以为筛选生效了。按"下限"理解更符合直觉。
@@ -960,6 +1020,10 @@ export function taskCard(modName, title, fields, values = {}, opts = {}) {
   const lines = []
   for (const f of fields || []) {
     if (!visible(f, values)) continue              // 条件没成立的字段压根没显示过，别拼进去
+    // noCard：表单要收、但【不该进提示词】的字段。目前只有联系邮箱与手机号 —— 模型写标书
+    // 一个字都用不上，而任务卡是要发给模型的。收集 ≠ 外发，这道口子得在序列化这一层堵死，
+    // 不能指望每个调用方自己记得过滤。
+    if (f.noCard) continue
     const s = fmtVal(f, values[f.id], opts.upDir)
     if (s !== null) lines.push(`- ${f.label}：${s}`)
   }
@@ -1128,6 +1192,7 @@ export function workflowFor(mod, values) {
     module: mod,
     primary: w.primary,
     intakeTitle: w.intakeTitle,
+    intakeSub: w.intakeSub || null,   // 流程条第 1 格「基础信息录入」那行小字，各模块不同
     intake: w.intake,
     footnote: w.footnote || null,
     notice: w.notice || null,   // 进来第一眼就该知道的话（如体裁声明），渲染在卡片顶部而非底部
@@ -1135,7 +1200,8 @@ export function workflowFor(mod, values) {
     // 重算出与 stepsFor 完全相同的步骤集。漏掉任何一个，那一半条件在前端就恒为"成立"，
     // 界面显示的流程与实际执行的流程就会不一致 —— 而这种错从界面上完全看不出来。
     steps: (values ? stepsFor(mod, values) : w.steps).map((s) => ({
-      id: s.id, name: s.name, skill: s.skill, gate: !!s.gate, failLabel: s.failLabel || null,
+      id: s.id, name: s.name, sub: s.sub || null, skill: s.skill, skillAlias: s.skillAlias || null,
+      gate: !!s.gate, failLabel: s.failLabel || null,
       optional: values ? isOptional(s, withDefaults(mod, values)) : !!s.optional,
       hint: s.hint || null, form: s.form || null, render: s.render || null, emits: s.emits || null,
       when: s.when || null, whenAny: s.whenAny || null, first: s.first || null, onFail: s.onFail || null,
