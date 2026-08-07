@@ -671,8 +671,14 @@
      只靠颜色传达不到色觉障碍与截图场景，所以圆圈里的符号和 .fsub 里的说明都得留着。 */
   .fstep.failed .n { background: var(--rose); border-color: var(--rose); color: #fff; }
   .fstep.failed .ft { color: var(--rose); font-weight: 600; }
-  .fstep.off { opacity: .5; }
-  .fstep.off .ft { text-decoration: line-through; }
+  /* ★ 「未启用」不能用 opacity 压。整格 .5 透明度下，那行副标题（"按当前设定不跑这一步"）
+     对比度只有 1.67:1、步骤名 2.23:1 —— 而那句话正是唯一解释"它为什么是灰的"的文字，
+     压到看不清等于把解释删了。改成显式的中性色：删除线表达"不跑"，文字仍然读得清。 */
+  /* 用 --faint（#6b7585，4.6:1）而不是更浅的灰：#7b8492 只有 3.78:1，仍然不达标。
+     "这一步不跑"由删除线和空心圆点表达，不靠把字调淡。 */
+  .fstep.off .n { background: var(--bg); color: var(--faint); border-color: var(--line); }
+  .fstep.off .ft { color: var(--faint); text-decoration: line-through; }
+  .fstep.off .fsub { color: var(--faint); }
   .fstep.gate .ft::after { content: "把关"; margin-left: 6px; font-size: 10px; font-weight: 600;
     color: var(--faint); border: 1px solid var(--line-hi); border-radius: 3px; padding: 0 3px; vertical-align: 1px; }
   .fstep.jump { cursor: pointer; }
@@ -717,6 +723,11 @@
      十几个字段的表单里用户得自己回去一个个找是哪三个。 */
   .wff.invalid input, .wff.invalid select, .wff.invalid textarea,
   .wff.invalid .wftags, .wff.invalid .wfdrop { border-color: var(--rose); background: rgba(224,86,79,.08); }
+  /* ★ chip 类控件也要标红。漏掉它的后果不是"不好看"：stats 的两个必填项（数据里有没有
+     患者信息、要做哪些分析）【全是】chip，点提交后它们和填好的字段像素级一模一样，
+     "已在上面标红"那句提示就成了空话——用户按提示回去找，什么也找不到。
+     未选中的才标红：已选中的 .on 本来就是蓝的，再套红边会读成"这一项选错了"。 */
+  .wff.invalid .wfopt:not(.on) { border-color: var(--rose); background: rgba(224,86,79,.08); color: #b03a34; }
   .wff.invalid .wfhelp2 { color: var(--rose); }
   .wferrmsg { font-size: 12px; color: var(--rose); margin-top: 5px; display: none; }
   .wff.invalid .wferrmsg { display: block; }
@@ -3057,7 +3068,17 @@ function buildFormCard({ title, sub, notice, fields, footnote, steps, intakeSub,
       const f = fields.find((x) => x.id === el.dataset.fid)
       if (f && !blank(f)) el.classList.remove("invalid")
     })
+    // ★ 底部那条红色缺项横幅也要跟着走。此前它只在【提交成功】那一支里被关掉，于是：
+    //   点了提交 → 弹「还没填：待润色的稿件」→ 用户照着补上 → 进度已经是「100% · 2/2」，
+    //   而红字还在原地写着"还没填"。一个界面同时说两件相反的事，读起来就是表单坏了。
+    if (err.style.display !== "none") {
+      if (!m.length) err.style.display = "none"
+      else err.textContent = missText(m)
+    }
   }
+  // 缺项横幅的文案只有一份，别在两处各写一遍（写两遍就会漂）
+  const missText = (m) => "还没填：" + m.map((f) => f.label).join("、")
+    + "（已在上面标红；也可以点「跳过表单」直接在输入框里说）"
   const err = document.createElement("div"); err.className = "wferr"; err.style.display = "none"
   go.addEventListener("click", () => {
     const m = miss()
@@ -3072,7 +3093,7 @@ function buildFormCard({ title, sub, notice, fields, footnote, steps, intakeSub,
         if (bad && !first) first = el
       })
       first?.scrollIntoView({ behavior: "smooth", block: "center" })
-      err.textContent = "还没填：" + m.map((f) => f.label).join("、") + "（已在上面标红；也可以点「跳过表单」直接在输入框里说）"
+      err.textContent = missText(m)
       err.style.display = ""
       return
     }
@@ -3157,9 +3178,13 @@ function helpDot(text) {
 // 两列栅格里，哪些控件天生要占满整行：多行文本、成排的 chip、标签输入、上传区、
 // 真实表头下拉（列名多时一行放不下）。schema 里显式写 col2 可以覆盖这个判断。
 const WIDE_TYPES = new Set(["textarea", "multi", "files", "tags", "columns", "range"])
-// select 摊成一排 chip 时才算宽；dropdown:true 强制走原生下拉（如"起始年/终止年"要并排放）
+// select 摊成一排 chip 时【选项多】才算宽。
+// ★ 原来是"凡摊成 chip 的一律占满整行"，结果除 grant 外六个模块的两列栅格全退化成一列
+//   （实测：review 0 对 3 单、paper 0 对 2 单），右边空着一大片。5 个以上选项一行确实放不下，
+//   4 个以内在半栏里最多折成两行，没必要霸占整行。
 const isWideField = (f) => f.col2 !== undefined ? !!f.col2
-  : WIDE_TYPES.has(f.type) || (f.type === "select" && !f.dropdown && (f.options || []).length <= 8)
+  : WIDE_TYPES.has(f.type) || (f.type === "select" && !f.dropdown && (f.options || []).length > 4
+                                                  && (f.options || []).length <= 8)
 function fieldEl(f, values, onChange, allFields) {
   const wrap = document.createElement("div"); wrap.className = "wff" + (isWideField(f) ? " col2" : "")
   wrap.dataset.fid = f.id                     // 校验不过时按 id 找到它标红（见 buildFormCard 的 go 点击）
@@ -3568,9 +3593,11 @@ function stepsBar(steps, done, cur, failed, off, implied, stale) {
   // 而闸那一步又带着颜色 → 用户把闸读成"当前步骤"（实测发生过，以为 AI 起步就跳到了引用核查）。
   // 兜底：没有明确的当前步就取【第一个未完成的步骤】，这也正是流程实际所处的位置。
   const at = cur || (steps.find((s) => !dn.has(s.id) && !of.has(s.id)) || {}).id
-  // many：步骤多到副标题只会把格子挤成竖缝时整排收掉副标题（阈值 7 = 基金/综述都还留得住，
-  // 论文那条 12 步的会收）
-  const box = document.createElement("div"); box.className = "wfflow" + (steps.length > 7 ? " many" : "")
+  // many = 整排收掉副标题，把长度还回来。
+  // ★ 别按步数拍脑袋定阈值。原来写的是 steps.length > 7，注释还说"基金/综述都留得住"——
+  //   实测综述是 8 格（7 步 + 基础信息录入），正好越线，副标题全没了。步数不等于长度：
+  //   4 个短名的模块可能比 8 个长名的还窄。改成【先按真实宽度量一次再决定】（见下面的 rAF）。
+  const box = document.createElement("div"); box.className = "wfflow"
   // 总步数仍要给：一条 12 步的流水线横着滚出屏幕，不写清楚用户数不清有几步（实测反馈）。
   const onCnt = steps.length - steps.filter((x) => of.has(x.id)).length
   box.appendChild(Object.assign(document.createElement("div"), { className: "ftitle",
@@ -3610,11 +3637,17 @@ function stepsBar(steps, done, cur, failed, off, implied, stale) {
     // ★ 副标题是 nowrap + ellipsis，步骤多时（.many）还整排藏起来 —— 不给气泡的话，
     //   "AI 依据信息初拟若干研究方向"这种话用户永远只看得到前半截。
     const canJump = !!wfFirstGroup(s.id)
+    // ★ 状态分支要和格子里显示的完全一致。漏掉 stale / implied 的后果是【自相矛盾】：
+    //   格子上写着「已过期，闸红后未重做」，气泡里却说「已完成」；格子写「跑过了但没有产物
+    //   文件」，气泡说「尚未开始」。这两态本来就是要提醒用户"别把它当成做完了"，
+    //   气泡再说一句"已完成"正好把提醒抵消掉。
     const tipTxt = [s.name,
       [isOff ? "按你当前的选择，这一步不会跑——勾上对应的选项才会启用"
         : isFail ? (s.failLabel
           ? "这一步跑过了，报告里列出了需要你核对的信号——核完原始记录再重跑本步"
           : "这道闸跑过了，但结论是未通过——报告里列了要改的问题，改完要重跑本闸")
+        : isStale ? "上游的闸转红之后，这一步没有重做过——它的产物比闸报告还早，不能当成有效结果"
+        : isImplied ? "没有找到这一步的产物文件。可能是它确实跑了但不产出文件（如零结果检索），也可能是被跳过了——分不清，所以只报事实"
         : isCur ? "当前进行到这一步" : isDone ? "已完成" : "尚未开始",
         s.gate ? "质量把关步骤，不通过会退回上游返工" : ""].filter(Boolean).join(" · "),
       s.sub || "", s.hint || "", canJump ? "点击跳到这一步的输出" : ""]
@@ -3669,8 +3702,15 @@ function stepsBar(steps, done, cur, failed, off, implied, stale) {
   // ★ 但【只在当前步变了】的时候才自动居中。这条子在一轮里会被重建好几次
   //   （markStepBySkill / startGroup / SSE 的 workflow 事件 / loadWorkflowState 都会重画），
   //   每次都强行居中的话，用户刚往右拖过去看后面几步，下一个工具调用就把他拽回来。
-  requestAnimationFrame(() => {
+  // ★ 用 setTimeout 而不是 requestAnimationFrame。rAF 在【页面不可见时根本不触发】
+  //   （后台标签页、窗口最小化都算），于是"自动居中当前步"和下面那个收副标题的判断会一直不执行，
+  //   直到用户把窗口切回来。setTimeout 照常跑，而读 scrollWidth 本身会强制同步布局 ——
+  //   量得准不依赖有没有出过一帧。（实测：内嵌浏览器面板没显示时，rAF 一次都没回调。）
+  setTimeout(() => {
     if (!scroller.isConnected) return
+    // ④ 量一次真实宽度再决定要不要收副标题：超出容器 1.8 倍以上，滚起来就没完没了了
+    //    （13 步带副标题要滚两千多像素），这时副标题的信息交给悬停气泡承载。
+    if (scroller.scrollWidth > scroller.clientWidth * 1.8) box.classList.add("many")
     const key = at || ""
     const memo = flowScroll.get(key)
     if (memo !== undefined) scroller.scrollLeft = memo
@@ -3680,7 +3720,7 @@ function stepsBar(steps, done, cur, failed, off, implied, stale) {
       flowScroll.set(key, scroller.scrollLeft)
     }
     syncFade()
-  })
+  }, 0)
   return box
 }
 // 当前步 → 用户把流程条横向拖到了哪儿。键用【当前步 id】：进到下一步时自然没有记录，
