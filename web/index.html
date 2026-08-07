@@ -1154,7 +1154,15 @@
     #sessbar { border-right: 0; border-bottom: 1px solid var(--line); }
     #log { min-height: 55vh; }
     aside { order: -1; border-left: 0; border-bottom: 1px solid var(--line); }
-    #preview { width: 100vw; }
+    #preview { width: 100vw; box-shadow: none; }   /* 铺满时投影全打在屏幕外，白合成一层 */
+    /* 预览盖满整屏 → 底下那条页签条 100% 被 z-index:40 的预览挡住、点不到，
+       是块看不见也用不了的死 DOM。窄屏索性不给页签，关掉预览再换文件。 */
+    body.preview-open #pvTabs { display: none; }
+    body.preview-open main, body.sessbar-open.preview-open main { grid-template-rows: minmax(0,1fr); }
+    /* 没了页签就没了切换入口：万一是在宽屏切到「本轮产出」再把窗口拖窄进来的，
+       别把对话区永久藏起来——窄屏一律回到「对话」这一种形态。 */
+    body.preview-open.pvtab-files #chat { display: flex; }
+    body.preview-open.pvtab-files aside { display: none; }
   }
   @media (max-width: 560px) {
     header { padding: 0 12px; }
@@ -2248,7 +2256,10 @@ let pvObjUrl = null   // 上一次 pptx/docx 预览的 blob URL，切换/关闭�
 async function openPreview(name) {
   pvTitle.innerHTML = ic("file"); const s = document.createElement("span"); s.textContent = name; pvTitle.appendChild(s)
   pvBody.classList.remove("frame"); pvBody.innerHTML = '<div class="hint">加载中…</div>'
+  const wasOpen = preview.classList.contains("on")
   preview.classList.add("on"); document.body.classList.add("preview-open")
+  // 首次打开时右半屏顶上多出 40px 的页签条，对话区相应变矮 —— 不补一下，最后几条消息会往上跳出视野。
+  if (!wasOpen) requestAnimationFrame(() => { log.scrollTop = log.scrollHeight })
   if (pvObjUrl) { URL.revokeObjectURL(pvObjUrl); pvObjUrl = null }
   const ext = (name.split(".").pop() || "").toLowerCase()
   const raw = "api/raw?name=" + encodeURIComponent(name) + sidQ()
