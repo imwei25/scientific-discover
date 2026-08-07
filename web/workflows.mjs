@@ -124,9 +124,14 @@ export const WORKFLOWS = {
       { id: "dataFiles", label: "原始数据表", type: "files", when: { field: "materials", has: "rawdata" },
         uploadText: "上传数据表", accept: ".xlsx / .csv",
         help: "从「上传数据」里挑。没上传的先去左侧上传。" },
+      // ★ help 的方向以前是【反的】，而且反向不安全：写的是"选「是」会先脱敏再分析"，
+      //   而实际逻辑是 deidDone=true → 把脱敏步【剔掉】。一个手里拿着带姓名住院号原始表的医生，
+      //   照字面意思勾「是」，得到的是【跳过脱敏、PHI 直接进统计】——正好是这道闸要防的事。
+      //   默认「否」（fail-safe）本身是对的，坏的只有这句文案。
       { id: "deidDone", label: "这份数据已经脱敏过了", type: "bool", default: false,
         when: { field: "materials", has: "rawdata" },
-        help: "选「是」会先脱敏再分析。未脱敏的患者数据不得进入统计。" },
+        help: "勾「是」= 这份表你已经处理过（姓名/住院号/身份证/电话都去掉了），会【跳过脱敏步】直接分析；"
+            + "没处理过就留「否」，系统先脱敏再统计。拿不准就留「否」——未脱敏的患者数据不得进入统计。" },
       { id: "draftFiles", label: "已有的初稿 / 图表 / 文献库文件", type: "files",
         uploadText: "上传初稿 / 图表 / 文献库", accept: ".docx / .pdf / 图片 / .bib",
         whenAny: [{ field: "materials", has: "draft" }, { field: "materials", has: "figures" }, { field: "materials", has: "refs" }],
@@ -201,7 +206,7 @@ export const WORKFLOWS = {
         // 前瞻性与 RCT：必须在采数前把假设与主分析计划冻住 → 提到最前；回顾性研究已有数据，
         // 无法再"采数前预注册"，这步降级为可选的新颖性裁定（AGENTS.md §三 表下注）。
         first: { field: "studyType", in: ["prospective", "rct"] },
-        emits: ["novelty_report.md", "preregistration.md", "analysis_plan.md"], render: "report" },
+        emits: ["novelty_report.md", "novelty_*.md", "preregistration.md", "analysis_plan.md"], render: "report" },
       { id: "litreview", name: "文献综述", skill: "literature-review",
         form: [
           { id: "query", label: "检索式 / 关键词", type: "textarea",
@@ -363,7 +368,7 @@ export const WORKFLOWS = {
         emits: ["topic_candidates*.csv", "topic_selection*.md"], render: "topics",
         hint: "候选选题会列成卡片，你选一个再往下" },
       { id: "novelty", name: "新颖性裁定与预注册", skill: "novelty-check", gate: true,
-        emits: ["novelty_report.md", "preregistration.md", "analysis_plan.md"], render: "report", onFail: "topic" },
+        emits: ["novelty_report.md", "novelty_*.md", "preregistration.md", "analysis_plan.md"], render: "report", onFail: "topic" },
       // ★ 这一步在流程条上必须单列：它决定后面所有章节的结构与逐节字数，查错了整篇作废。
       //   摆出来，用户才能在这时候就发现「它按的是去年口径」，而不是等成稿之后才发现。
       //   与 write 同属 grant-proposal 技能，靠产物（要求卡）区分先后 —— markStepBySkill

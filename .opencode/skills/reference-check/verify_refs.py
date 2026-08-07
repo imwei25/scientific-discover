@@ -529,7 +529,17 @@ def _author_year_flags(entry, meta):
                     or re.search(r"(协作组|研究组|工作组|课题组|学会|联盟)", s or ""))
     if ca and not _collective(ca) and not _collective(found_auth):
         surname = _first_surname(ca)
-        if surname and len(surname) > 2 and found_auth and surname not in found_auth:
+        # ★ 姓要按【两种读法】各试一次，任一命中即算相符。
+        #   第三种作者写法又漏进来了：Crossref/CSL 的自然写法是 `Family Given`
+        #   （`Templeton Arnoud J.`），砍掉结尾缩写后剩下 `templeton arnoud` 两段，
+        #   而库里是 Vancouver 串 `templeton aj, mcnamara mg…` —— 整串做 `in` 必然落空。
+        #   实测：一份 Crossref 逐条核实过的 14 条参考文献被判 12 条"疑似张冠李戴"，闸当场变红。
+        #   但又不能一律只取首个 token —— 复姓 `van der berg` 得整串才对得上。
+        #   所以两个候选都试：整串（保住复姓）+ 首个 token（保住 Family Given）。
+        cands = [surname] + ([surname.split()[0]] if surname and len(surname.split()) > 1 else [])
+        cands = [c for c in cands if c and len(c) > 2]
+        if cands and found_auth and not any(c in found_auth for c in cands):
+            surname = cands[0]
             flags.append(f"首作者不符(引用{surname})")
     return "；".join(flags)
 

@@ -9,7 +9,10 @@ Derived from scripts in the [figures4papers](https://github.com/ChenLiu-1996/fig
 
 ### Font stack (priority order)
 - **Required stack** — a **multi-family `font.family` list**, Latin first, CJK appended:
-  `font.family = ['Liberation Sans', 'DejaVu Sans', 'WenQuanYi Zen Hei', 'Noto Sans CJK JP']`
+  built by `figfont.setup_fonts()` — **call it, do not hardcode this list**. The literal names below are
+  Linux-container fonts; the desktop build runs on Windows where none of them exist, so a hardcoded
+  chain renders every CJK glyph as tofu (□) and the model cannot see it. Shown only to explain the shape:
+  `font.family = ['Liberation Sans', 'DejaVu Sans', '<first CJK font actually installed>']`
 - This is the **only** form that falls back **per glyph** (Latin from Liberation Sans/DejaVu, CJK from
   WenQuanYi Zen Hei). Do **not** write `font.family = 'sans-serif'` + `font.sans-serif = [...]`:
   that path resolves the **first available family only** and never looks further, so CJK never reaches

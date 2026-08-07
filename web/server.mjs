@@ -459,6 +459,10 @@ const dirState = (dir, depth = DIRSTATE_DEPTH, prefix = "") => {
     // `nul` 这个设备名，直接当普通文件建了出来 —— 于是一个 172 字节的垃圾文件出现在用户的
     // "产出"侧栏里（实测见过）。Linux 生产不会有（那边是 /dev/null），但桌面版就是 Windows。
     if (WIN_RESERVED.test(e.name)) continue
+    // ★ 脱敏还原表绝不进"产出"侧栏。deidentify 现在已经写进 .private/（点号目录本就被上面跳过），
+    //   这条是纵深防御：兜住旧会话里已经落在产物目录的、以及别的技能日后可能写出的同类文件。
+    //   它第一列就是真实姓名 / 住院号 / 身份证 / 手机号，和成果并排摆着，一次误转发就是真实泄露。
+    if (/_mapping\.csv$/i.test(e.name)) continue
     const p = path.join(dir, e.name)
     const rel = prefix ? prefix + "/" + e.name : e.name
     let st; try { st = fs.statSync(p) } catch { continue }
@@ -946,6 +950,23 @@ function gateFailed(outDir, step, files) {
   return false
 }
 /** 按"产物文件是否已出现"反推已完成的步骤（权威判据，不问 agent）*/
+// 「送审件」类技能：出 Word/PDF 的那两个。闸红着时只拦它们，不拦 markdown ——
+// 用户永远拿得到稿件内容，所以闸误判也不会把人锁死，重跑那道闸即可解锁。
+const DELIVERY_SKILLS = new Set(["render-docx", "render-pdf-doc"])
+
+/**
+ * 本会话当前【真正红着】的闸。必须现算，不能读上一轮落盘的 failed ——
+ * 实测那次违规就发生在同一轮内：闸报告 16:25:46 写出、docx 16:26:21 生成，
+ * 而上一轮的 failed 里当然还没有它。wfSyncDone 每次都重新裁定闸（见其注释），
+ * 顺带把步骤条也刷新了，正好一举两得。
+ */
+async function failedGatesFor(sid, modId) {
+  try {
+    const out = await sessionOut(sid)
+    return wfSyncDone(out, modId)?.failed || []
+  } catch { return [] }
+}
+
 function wfSyncDone(outDir, modId) {
   let st = wfLoad(outDir)
   // ★ 状态簿不存在就地建一份。它此前只在两条路上被写出来：用户填了首屏表单、或提交了某步表单。
@@ -2135,6 +2156,25 @@ function startJob(sid, sentText, modId) {
             console.warn(`[loop] 会话 ${sid}：同一条命令已被调用 ${job.loop.repeat} 次，判定卡死，中止本轮：${job.loopHit}`)
             client.session.abort({ path: { id: sid } }).catch(() => {})
           }
+          // ★ 闸红着就不许出【送审件】。这条必须在服务端强制，不能继续靠 agent 自觉 ——
+          //   实测：peer-review 报告白纸黑字写着「推荐倾向：Major revision」+1 条 Critical+5 条 Major，
+          //   模型改完稿子【没有重跑那道闸】，35 秒后照样出了 manuscript.docx，还在聊天区宣布
+          //   "质量闸全部跑完 ✅、Critical/Major 意见均已修订"，与步骤条上的「✗ 需返工」正面冲突。
+          //   前言里三条硬规矩（结论只能由重跑得出 / 闸没跑完不许出件 / 不许用话术放行）同时被违反。
+          //   模型换一个就可能再犯，而用户拿到的是一份看起来完全正常的送审稿。
+          //   【只拦 docx/pdf 这类"送审件"】——markdown 稿件照常产出，用户永远拿得到内容，
+          //   所以这不是死锁：闸误判时他仍有稿子，重跑那道闸即可解锁出件。
+          if (!job.gateBlock && p.tool === "skill" && modSkills) {
+            const called = String(p.state.input?.name || "")
+            if (DELIVERY_SKILLS.has(called)) {
+              const red = await failedGatesFor(sid, modId)
+              if (red.length) {
+                job.gateBlock = { skill: called, gates: red }
+                console.warn(`[gate] 会话 ${sid}：闸 ${red.join("、")} 未过就调用 ${called}，中止本轮`)
+                client.session.abort({ path: { id: sid } }).catch(() => {})
+              }
+            }
+          }
           if (skillGate && !job.moduleHit) {
             const bad = WF.gateViolation({ tool: p.tool, input: p.state.input, skillGate, restricted: !!modSkills })
             if (bad) {
@@ -2196,6 +2236,16 @@ function startJob(sid, sentText, modId) {
     if (job.loopHit) { broadcast("failed", { message:
       `本轮检测到卡死并已中止：同一条命令被【重新调用】了 8 次以上（\`${job.loopHit}\`），说明它撞上了一个自己看不出来的错误（工具被中止时不会把已产生的输出交给 agent，它每次都是瞎的）。再跑下去只会白烧时间与额度。` +
       (job.loop?.out ? `\n\n最后一次执行的真实输出（末 800 字，网关抓到的）：\n\`\`\`\n${job.loop.out.slice(-800)}\n\`\`\`\n把上面这段连同你的要求一起重发，agent 就能对症下药。` : `\n\n这条命令一个字的输出都没有，多半是路径不存在或解释器没找到。请手动跑一次拿到报错，或换一种做法重发。`) }); return finish() }
+    if (job.gateBlock) {
+      const g = job.gateBlock
+      const names = g.gates.map((id) => WF.stepsFor(modId, {}).find((s) => s.id === id)?.name || id)
+      broadcast("failed", { message:
+        `质量闸未过就出件，本轮已中止：「${names.join("、")}」当前判定为未通过，而你调用了「${g.skill}」。\n` +
+        `报告里写着什么就是什么——改完稿子【必须重新跑一遍那道闸】、让它写出新报告，才算通过；` +
+        `拿上一版报告、或自己在报告里标注"已处理"，都不算。\n` +
+        `Markdown 稿件不受影响、照常产出，你随时能看到内容；只有 Word/PDF 送审件要等闸转绿。` })
+      return finish()
+    }
     if (job.moduleHit) { broadcast("failed", { message: modSkills
       ? `模块限制：本会话是「${MODULE_DEFS[modId]?.name || modId}」专用模块，只能使用「${modSkills.join("、")}」技能；检测到调用「${job.moduleHit}」，本轮已中止。${skillHome(job.moduleHit, modId) || "此类需求请到「自由对话」模块新开会话。"}`
       : `技能未开通：你的账号未开通「${job.moduleHit}」技能，本轮已中止。如需使用请联系管理员开通。` }); return finish() }

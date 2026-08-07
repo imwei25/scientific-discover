@@ -74,6 +74,13 @@ Apply the loaded material in this order:
 
 The chart serves the scientific logic; aesthetic polish is subordinate to making the core conclusion clear, defensible, and reviewable.
 
+**字体必须走 `figfont`，存图前必须调 `guard_cjk()`。** 不要手抄 rcParams 字体链——文档里那几段
+写死的是 Linux 容器的字体名，而桌面版跑在 Windows 上，一个都没有，于是中文标签全渲染成豆腐块(□)。
+**而你没有图像输入能力，看不出来**：实测一整张 KM 图的标题、坐标轴、图例全是 □，脚本"没有报错"，
+模型据此宣布"图已生成"，用户拿去就往稿子里贴。`setup_fonts()` 会现场探测本机真装了什么，
+`guard_cjk(标题, 轴标签, 图例…)` 会在"含中文却无可用字体"时直接抛错——把静默的坏图变成显式失败。
+**没调 `guard_cjk()` 不算画完。**
+
 **Never invent units.** Axis labels, cut-off annotations, and legends may only carry a unit that is stated in the data itself (in the column name, data dictionary, or a free-text column) or given by the user. When no unit is stated, print the bare number (`Cutoff 1.20`) — do **not** infer one from the magnitude. Observed failure: a source table whose column was just `D-dimer` produced a 300 dpi submission figure reading `Cutoff 1.20 mg/L`; D-dimer is reported as mg/L FEU, µg/mL FEU, or ng/mL DDU depending on the lab, and those differ by up to 1000×. A figure is the artefact that gets published — a wrong unit baked into it survives every later review. Ask the user instead.
 
 ### 5. Reach for references only when needed

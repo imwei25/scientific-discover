@@ -126,13 +126,23 @@ fig.savefig("figure.svg")
 只在 stderr 刷 findfont 警告。`figfont.setup_fonts()` 改为从候选链选实际已装的字体，
 `guard_cjk()` 把静默豆腐块变成显式报错。
 
-若不便 import（如无法定位 scripts 目录），至少手动写等价的多族列表并**自行核对中文不是豆腐块**：
+**没有"不便 import"这条退路**：scripts 目录的绝对路径每轮都在会话前言里给了，照抄即可。
+以前这里写着"至少手动写等价的多族列表并自行核对中文不是豆腐块"——那是一条**模型根本执行不了**的指令
+（它没有图像输入，看不了自己出的图），实测结果就是一整张 KM 图的中文标签全是 □ 而它宣布"图已生成"。
+下面这段是唯一正确的写法：
 
 ```python
-# 多族列表 = matplotlib 唯一会逐字形回退的写法：拉丁在前、CJK 在后。
-# 别拆成 font.family='sans-serif' + font.sans-serif=[...]：那条只认第一个能解析的字体、CJK 轮不到。
-plt.rcParams['font.family'] = ['Liberation Sans', 'DejaVu Sans', 'WenQuanYi Zen Hei', 'Noto Sans CJK JP']
-plt.rcParams['svg.fonttype'] = 'none'   # keeps text as <text> nodes, not paths
+# ★ 字体【必须】走 figfont，不要手抄 rcParams。
+# 手抄的字体链写死的是 Linux 容器里的字体名（Liberation Sans / WenQuanYi Zen Hei / Noto Sans CJK JP），
+# 而桌面版跑在 Windows 上——这四个一个都没有，于是中文全渲染成豆腐块(□)，
+# 且模型【没有图像输入能力】、看不出来，坏图会一路带进投稿件。实测踩过一整张 KM 图。
+# setup_fonts() 会现场探测本机真正装了什么（Linux/Windows/macOS 都覆盖）并组好回退链。
+import sys; sys.path.insert(0, f"{SKILL_DIR}/scripts")
+from figfont import setup_fonts, guard_cjk
+setup_fonts(font_size=7)          # 同时设好 svg.fonttype='none' / pdf.fonttype=42
+...
+guard_cjk(title, xlabel, ylabel, *legend_labels)   # ★ 存图【之前】必须调：含中文却无可用字体时直接报错，
+fig.savefig(...)                                    #   把"静默出豆腐块图"变成显式失败   # keeps text as <text> nodes, not paths
 ```
 
 **Why `svg.fonttype = 'none'`**: matplotlib's default (`'path'`) converts every
@@ -151,15 +161,17 @@ exports. Never use `.png` alone when the figure contains text that may need adju
 def apply_publication_style(font_size=16, axes_linewidth=2.5, use_tex=False):
     """Apply Nature-style rcParams. Call once before creating any figures."""
     # ── MANDATORY: editable SVG text ──────────────────────────────────────────
-    # 多族列表 = matplotlib 唯一会逐字形回退的写法：拉丁取 Liberation Sans/DejaVu，中文取 WenQuanYi Zen Hei。
-    # 别拆成 font.family='sans-serif' + font.sans-serif=[...]：那条路径只认第一个能解析的字体、不再往后找，
-    # CJK 永远轮不到 WenQuanYi → 中文全豆腐块（实测 28 条缺字警告）。
-    # Liberation Sans 与 Arial 度量兼容，故满足 Nature 的 Arial/Helvetica 要求；链里刻意不放 Arial —— 镜像未装它，
-    # 放进去每图会刷 41 行 "Font family 'Arial' not found" 假错误而渲染结果完全相同，别误当故障去修。
-    # 若某期刊坚持字面 Arial：装 msttcorefonts 后把 'Arial' 插到链首（代价：恢复 41 行/图 噪音）。
-    # 也别设 axes.unicode_minus=False：负号 U+2212 由 DejaVu 提供、排版正确，设 False 会降级成连字符。
-    plt.rcParams['font.family'] = ['Liberation Sans', 'DejaVu Sans', 'WenQuanYi Zen Hei', 'Noto Sans CJK JP']
-    plt.rcParams['svg.fonttype'] = 'none'
+    # ★ 字体【必须】走 figfont，不要手抄 rcParams。
+# 手抄的字体链写死的是 Linux 容器里的字体名（Liberation Sans / WenQuanYi Zen Hei / Noto Sans CJK JP），
+# 而桌面版跑在 Windows 上——这四个一个都没有，于是中文全渲染成豆腐块(□)，
+# 且模型【没有图像输入能力】、看不出来，坏图会一路带进投稿件。实测踩过一整张 KM 图。
+# setup_fonts() 会现场探测本机真正装了什么（Linux/Windows/macOS 都覆盖）并组好回退链。
+import sys; sys.path.insert(0, f"{SKILL_DIR}/scripts")
+from figfont import setup_fonts, guard_cjk
+setup_fonts(font_size=7)          # 同时设好 svg.fonttype='none' / pdf.fonttype=42
+...
+guard_cjk(title, xlabel, ylabel, *legend_labels)   # ★ 存图【之前】必须调：含中文却无可用字体时直接报错，
+fig.savefig(...)                                    #   把"静默出豆腐块图"变成显式失败
     # ── Layout & style ────────────────────────────────────────────────────────
     plt.rcParams['font.size'] = font_size
     plt.rcParams['axes.spines.right'] = False
