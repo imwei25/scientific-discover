@@ -115,6 +115,25 @@ test("阅读器型模块：reader 配置完整、模式标记与前言逐字一�
 // 于是用户点了按钮界面纹丝不动，只剩一句通用空态文案。而且当时是从状态而不是从 DOM 确认的，
 // 所以"测过了"却没发现。另一处是闸只接在模式条上，面板里那个按钮直接调 run() 绕过去了。
 // 这几条都不需要浏览器就能守住：静态检查 reader.html 里这几段有没有同时在。
+// 阅读器壳是四个模块共用的，所以它【不该认识任何一个具体模块】。
+// 这条踩过两次，两次都是同一个后果：写死 module:"litread" 发出去 → 核查/润色/统计的会话
+// 被绑成文献研读（前言与技能闸全是别人的）；「最近」写死 litread → 列出别的模块的会话。
+// 而界面照常显示本模块的样子，从外面完全看不出来。（两次都发生在用整段 splice 改文件时
+// 覆盖掉了更早的修复，事后没回头校验。）
+test("阅读器壳里不许出现模块 id 字面量（兜底默认值与注释除外）", () => {
+  const html = fs.readFileSync(new URL("../reader.html", import.meta.url), "utf8")
+  const ids = Object.entries(WF.WORKFLOWS).filter(([, w]) => w.ui === "reader").map(([id]) => id)
+  const lines = html.split("\n")
+  const bad = []
+  lines.forEach((ln, i) => {
+    const code = ln.trim()
+    if (code.startsWith("//") || code.startsWith("*") || code.startsWith("/*")) return   // 注释里提一嘴没问题
+    if (/^let MOD = /.test(code) || /if \(!MOD\) MOD = /.test(code)) return             // 兜底默认值
+    for (const id of ids) if (new RegExp('"' + id + '"').test(code)) bad.push((i + 1) + ": " + code.slice(0, 100))
+  })
+  assert.deepEqual(bad, [], "这些行把模块 id 写死了，应该用 MOD：\n" + bad.join("\n"))
+})
+
 test("阅读器：前置条件闸的三段必须齐全，且起一轮只有一个入口", () => {
   const html = fs.readFileSync(new URL("../reader.html", import.meta.url), "utf8")
   assert.match(html, /S\[k\]\.block\s*=/, "showBlocked 要把缺什么写进状态")

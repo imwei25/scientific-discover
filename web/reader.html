@@ -9,23 +9,30 @@
 <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
 /* ============================================================
-   文献研读（litread）专用界面
+   阅读器壳 —— 四个「核心能力」模块共用（文献研读 / 文稿核查与审校 / 文章润色 / 数据统计与分析）
    ------------------------------------------------------------
-   【为什么它不是 index.html 的一个视图】其余模块都是"一条流水线"：首屏表单 → 步骤条 →
-   一条对话流，共用通用壳。本模块的形状是【一篇文献 × 四种看法】（导读 / 问答 / 翻译 / PPT），
-   四者之间随时来回切、没有先后，用户的注意力始终在左边那篇原文上。把它塞进通用壳，
-   步骤条永远显示"共 2 步、已完成 1 步"，而原文根本没地方放。
+   【本文件不认识任何一个具体模块】模式清单、每个模式发什么话、首屏文案、设置字段、变量对应
+   面板，全部来自 GET /api/modules/<id>/workflow 的 reader 段（定义在 workflows.mjs）。
+   这里只负责照着画、照着发、照着把结果摆回对应的面板。所以加一个模式、改一句提示词，
+   只动 workflows.mjs，走「界面包」热更新即可，不用重发安装包。
+   ★ 推论：本文件里【不该出现任何模块 id 的字面量】（兜底默认值与注释除外）。写死过两次，
+     两次都是同一种后果——别的模块被当成文献研读：会话绑错模块（前言与技能闸全是别人的）、
+     「最近」列表列出别的模块的会话，而界面照常显示本模块的样子，从外面完全看不出来。
+
+   【为什么这四个模块该用它】它们的输入都是【一份东西】（一篇文献 / 一份稿件 / 一张数据表），
+   想对它做的事有好几种、彼此没有先后、随时来回切。套进通用壳（首屏表单 → 步骤条 → 一条
+   对话流）时，步骤条永远停在"共 N 步、已完成 1 步"，而那份东西本身没地方摆。
 
    【与后端的关系：一个字都没多加】会话、模块闸、前言注入、额度、产物目录全走原有接口：
-     POST api/chat/start  → 起一轮（body 带 module:"litread"，服务端据此绑定会话并注入模块前言）
+     POST api/chat/start  → 起一轮（body 带 module=<当前模块>，服务端据此绑定会话并注入前言）
      GET  api/chat/attach → SSE 直播
-     POST api/upload      → 上传原文（没有 sid 时它会现建一个会话）
-     GET  api/raw/preview → 左栏渲染原文；api/outputs 列产物
-   四种模式的区别只在【发过去的那句话】：消息开头的方括号标记（见 MODES.mark）就是模式信号，
-   workflows.mjs 的 litread.flow 里把这四个标记教给了 agent。
+     POST api/upload      → 上传（没有 sid 时它会现建一个会话，此时会话【还没有模块绑定】）
+     GET  api/raw/preview → 左栏渲染那份东西；api/outputs 列产物
+   模式之间的区别只在【发过去的那句话】：消息开头的方括号标记（modes[].mark）就是模式信号，
+   workflows.mjs 的 flow 里把这些标记教给了 agent，刷新页面后也靠它把每一轮认回对应面板。
 
-   【四种模式共享同一个 opencode 会话】所以原文只抽一次；切到"智能助手"时，前面翻译 / 做 PPT
-   的上下文原样都在，接着问就行。这就是产品要的"保留最近那个会话"——实际上四个都保留了。
+   【一份东西 = 一个会话】各模式共享同一个 opencode 会话，所以原文只抽一次；切到"智能助手"
+   时前面几轮的上下文原样都在，接着问就行。换一份 = 新开会话。
    ============================================================ */
 :root{
   --bg:#eef1f5;
@@ -1138,10 +1145,15 @@ async function run(m, force, userTxt) {
         // module 只在会话【还没发过消息】时起作用（服务端对已绑定的会话忽略它）。
         // 必须带：上传接口已经把会话建出来了，不带的话它会被判成自由对话——没有模块前言、
         // 没有技能闸，而界面上一点异样都看不出来。
-        module: turns ? undefined : "litread",
-        // 表单值随第一条消息落盘（服务端写进 _workflow.json）。本页面不画表单，但产物侧栏、
-        // 会话恢复与将来的运营统计都读它。
-        wfForm: turns ? undefined : { docFile: [docName], lang: "zh" },
+        // ★ 必须是 MOD，不能写死。写死成 "litread" 时，核查 / 润色 / 统计的会话全都被绑成
+        //   文献研读：前言是别人的、技能闸是别人的，而界面照常显示本模块的样子。
+        module: turns ? undefined : MOD,
+        // ★ 每一轮都带上，不是只带第一轮。服务端这一侧是 merge 而不是覆盖，重复发无害；
+        //   而只发第一轮会漏掉一整类情况：会话由 /api/upload 先建出来、此时还【没有模块绑定】，
+        //   用户在第一轮跑之前（或第一轮失败之后）改设置，saveSettings 走的 /api/workflow/form
+        //   有个 `sessionModule(sid) === modId` 的条件，不满足就【静默不写】还回 ok:true。
+        //   于是 protectRefs / hasPHI 这些 pin 字段悄悄退回默认值——正是它们存在的意义所在。
+        wfForm: wfFormValues(),
       }),
     })
     if (resp.status === 429) why = "请求过于频繁，请稍后再试"
@@ -1423,7 +1435,9 @@ async function showRecent(btn) {
   let j = null
   try { j = await jget("api/sessions").then((r) => r.json()) } catch (_) {}
   // 只列本模块的会话。别的模块的会话在这个页面里打不开（没有原文、没有模式），列出来只会误导。
-  const list = ((j && j.sessions) || []).filter((s) => s.module === "litread").slice(0, 20)
+  // ★ 只列【当前模块】的会话，不能写死 litread：别的模块的会话在这个页面里打不开
+  //（没有它认得的文件、没有对应的模式），列出来只会让人点进去撞一鼻子灰。
+  const list = ((j && j.sessions) || []).filter((s) => s.module === MOD).slice(0, 20)
   if (!list.length) { menu.innerHTML = '<div class="empty">还没有做过的记录</div>'; return placeMenu(menu, btn) }
   menu.innerHTML = ""
   list.forEach((s) => {
