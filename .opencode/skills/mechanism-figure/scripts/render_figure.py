@@ -143,6 +143,24 @@ def load_key_file():
     return None
 
 
+# 平台生图代理的地址：网关起 opencode 时注入（见 web/server.mjs）。
+#
+# 【为什么优先走它】技能是在【用户自己那台机器】上跑的，把生图 key 发到每台机器上，就等于
+# 把一把共享密钥散出去：用户看得到、没法按人限额、泄了要全员换。走代理则 key 只留在服务器，
+# 客户端一个字节都拿不到，张数限额与审计也都在服务端做——与平台对 LLM key 的既有原则一致。
+# 没有这个变量（自设 API 形态 / 本机自用）才回退到本机 key，老用法不受影响。
+def proxy_url():
+    return (os.environ.get("SCI_IMAGE_URL") or "").strip()
+
+
+class QuotaUsedUp(Exception):
+    """今天的张数用完了。重试毫无意义，必须立刻停——别把剩下的候选张也一张张撞上去。"""
+
+
+class PlatformSaidNo(Exception):
+    """平台侧明确拒绝（没配生图 / 平台自己的上游额度没了）。同样不该重试。"""
+
+
 def api_key():
     src = load_key_file()
     for k in ("QWEN_API_KEY", "DASHSCOPE_API_KEY"):
@@ -153,7 +171,10 @@ def api_key():
             return v
     home_env = Path.home() / ".sci-agent" / "image.env"
     sys.exit("\n".join([
-        "!! 没找到生图 API key，已中止。任选一种（两种都不会把 key 写进仓库）：",
+        "!! 既没有平台生图通道，也没找到本机 key，已中止。",
+        "   登录平台账号后本来【不需要你配任何 key】（服务器会代你出图）；现在走到这里，",
+        "   说明没登录平台账号，或平台还没配生图服务（可让管理员看一眼）。",
+        "   本机自用的话，任选一种（两种都不会把 key 写进仓库）：",
         "",
         "   ① 本机自用（推荐，一次配好长期有效）：把 key 写进仓库【外】的这个文件——",
         "        " + str(home_env),
@@ -172,12 +193,27 @@ def api_key():
 
 
 def post_once(url, key, payload):
-    r = requests.post(url, headers={"Authorization": "Bearer " + key,
-                                    "Content-Type": "application/json"},
-                      json=payload, timeout=TIMEOUT)
+    """发一次生图请求。key=None 表示走平台代理（本机网关贴登录票据，不需要 key）。"""
+    headers = {"Content-Type": "application/json"}
+    if key:
+        headers["Authorization"] = "Bearer " + key
+    r = requests.post(url, headers=headers, json=payload, timeout=TIMEOUT)
     if r.status_code != 200:
         body = (r.text or "")[:400].replace("\n", " ")
-        raise RuntimeError(f"HTTP {r.status_code}：{body}", )
+        # 平台侧的结构化错误值得单独翻一下：张数用完 / 平台没配 / 平台自己的上游额度没了，
+        # 三种情况用户该做的事完全不同，甩一句 HTTP 429 等于没说。
+        try:
+            e = r.json().get("error") or {}
+            code, msg = e.get("code") or "", (e.get("message") or "").strip()
+            if code == "IMAGE_QUOTA_EXCEEDED":
+                raise QuotaUsedUp(msg or "今天的生图张数已用完")
+            if code in ("IMAGE_UNCONFIGURED", "IMAGE_UPSTREAM_QUOTA", "IMAGE_UPSTREAM_ERROR", "IMAGE_NO_RESULT"):
+                raise PlatformSaidNo(msg or f"平台生图失败（{code}）")
+        except (QuotaUsedUp, PlatformSaidNo):
+            raise
+        except Exception:
+            pass
+        raise RuntimeError(f"HTTP {r.status_code}：{body}")
     return r.json()
 
 
@@ -269,30 +305,51 @@ def main():
         },
     }
 
-    print(f"[图] 模型 {model} | 比例 {ratio} ({size}) | 候选 {args.n} 张")
+    # 走平台代理时，请求体是我们自己那个小协议（服务端来定模型、贴 key、扣张数），
+    # 不是 DashScope 的原生结构；模型名也由服务端说了算，客户端点名无效（防自选价格）。
+    via = proxy_url()
+    proxy_payload = {"prompt": prompt, "negative_prompt": negative, "size": size}
+
+    print(f"[图] 通道 {'平台代理（key 在服务器）' if via else '本机 key 直连'}"
+          f" | 模型 {model if not via else '由平台指定'} | 比例 {ratio} ({size}) | 候选 {args.n} 张")
     print(f"[图] prompt {len(prompt)} 字符，负面词 {len(negative)} 字符")
     if args.dry_run:
         print("\n---- 将要发送的 payload（--dry-run，未调用 API）----")
-        print(json.dumps(payload, ensure_ascii=False, indent=2)[:4000])
+        print(json.dumps(proxy_payload if via else payload, ensure_ascii=False, indent=2)[:4000])
         return 0
 
-    key = api_key()
+    # 平台代理这条路【不需要任何 key】：本机网关会贴上你的登录票据转给服务器。
+    key = None if via else api_key()
     outdir = resolve_out_dir(args.outdir)
     saved = []
+    stopped = None      # 被平台明确拒绝 → 记下原因并停掉后续候选张
+    quota = None        # 平台回的张数余额，收尾时报给用户
     for i in range(1, args.n + 1):
+        if stopped:
+            break
         name = stem if args.n == 1 else f"{stem}_v{i}"
         last = None
         for attempt in range(RETRIES):
             try:
                 t0 = time.time()
-                data = post_once(url, key, payload)
-                urls = extract_image_urls(data)
+                data = post_once(url, key, proxy_payload if via else payload)
+                # 平台代理回的是 {ok,images[],quota{}}；直连回的是 DashScope 原生结构
+                urls = data.get("images") if via else extract_image_urls(data)
+                if via and isinstance(data.get("quota"), dict):
+                    quota = data["quota"]
                 if not urls:
                     raise RuntimeError(f"响应里没有图片 URL：{json.dumps(data, ensure_ascii=False)[:300]}")
                 dest = download(urls[0], outdir / (name + ".png"))
-                print(f"[ok] {dest}（{time.time() - t0:.1f}s）")
+                print(f"[ok] {dest}（{time.time() - t0:.1f}s）"
+                      + (f"　今日已用 {quota['used']}/{quota['limit']} 张" if quota and not quota.get("unlimited") else ""))
                 saved.append(dest)
                 last = None
+                break
+            except (QuotaUsedUp, PlatformSaidNo) as e:
+                # 【绝不重试、且立刻停掉后面的候选张】张数用完了还一张张撞上去，只会把同一句
+                # "已用完"打印 N 遍，用户还以为是网络在抖。
+                last = e
+                stopped = e
                 break
             except Exception as e:
                 last = e
@@ -308,6 +365,11 @@ def main():
         if last is not None:
             # 一张失败不拖累其它张：已经出来的图是有价值的，如实报告失败那张。
             print(f"[fail] 第 {i} 张没出来：{last}", file=sys.stderr)
+    if stopped:
+        print(f"\n[停] {stopped}", file=sys.stderr)
+        if isinstance(stopped, QuotaUsedUp):
+            print("     张数每天 0 点(UTC)重置；需要更多请联系管理员调整档位。", file=sys.stderr)
+            print("     提示词已经做好了，明天直接用同一份 .built.json 重跑即可，不用重来。", file=sys.stderr)
 
     if not saved:
         sys.exit("!! 一张也没生成成功（上面有原因）。key/额度/网络排查后重试；prompt 本身可用 --dry-run 检查。")

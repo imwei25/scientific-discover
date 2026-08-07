@@ -2412,7 +2412,10 @@ async function cloudForward(req, res, u) {
     body = Buffer.concat(chunks)
   } catch { return send(res, 400, "application/json", JSON.stringify({ error: { message: "读取请求体失败" } })) }
 
-  const fwdPath = "/llm" + u.pathname.slice(CLOUD_PROXY_PREFIX.length - 1) + u.search
+  // /cloud/<rest> → 云端的 /llm/<rest>；唯一的例外是生图，它在云端是独立的 /img 通道
+  // （按张限额、不按 token 计费，见 server/lib/imagegen.mjs），别把它套进 /llm 里去。
+  const rest = u.pathname.slice(CLOUD_PROXY_PREFIX.length - 1)
+  const fwdPath = (rest === "/img/generate" || rest.startsWith("/img/") ? rest : "/llm" + rest) + u.search
 
   const once = async (force) => {
     const a = await Cloud.currentAccess({ force })
@@ -4070,7 +4073,14 @@ function spawnOc() {
     // 绕路（"我把详细信息 dump 到 UTF-8 文件再读"、"写个 wrapper 直接调它的 main"），
     // 一轮白烧 2–4 次 bash 调用，日志里的"乱码"字样还会让用户以为出错了。
     // 桌面版就是 Windows，这两个变量一劳永逸。Linux 上本来就是 UTF-8，设了无副作用。
-    env: { ...process.env, PYTHONUTF8: "1", PYTHONIOENCODING: "utf-8" },
+    // SCI_IMAGE_URL：生图技能（mechanism-figure）该往哪儿打。指向本机这一跳，由 cloudForward
+    // 贴上 access key 转给云端 /img —— 生图 key 只在服务器上，客户端一个字节都拿不到
+    // （与 LLM 同一条原则）。没走云端账号（自设 API / 容器形态）时不设这个变量，
+    // 技能会回退到读本机 QWEN_API_KEY，老用法不受影响。
+    env: {
+      ...process.env, PYTHONUTF8: "1", PYTHONIOENCODING: "utf-8",
+      ...(cloudLoggedIn() ? { SCI_IMAGE_URL: `http://127.0.0.1:${PORT}${CLOUD_PROXY_PREFIX}img/generate` } : {}),
+    },
     // 【Windows 必须给】detached + shell 会让 cmd.exe 另开一个控制台窗口，
     // opencode 的启动横幅就直接糊在用户脸上（桌面版尤其突兀：主窗口旁边跳出个黑框）。
     // windowsHide 对应 CREATE_NO_WINDOW，Tauri 壳起 node 时也是这么做的，这里补齐最后一段。

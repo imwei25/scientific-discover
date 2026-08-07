@@ -7,7 +7,9 @@ description: 机制示意图 / 通路图 / 图形摘要的 AI 生图工作流（
 > - Python 用项目根 `.venv`：Linux `${REPO_ROOT:-/app}/.venv/bin/python`，Windows `.venv\Scripts\python.exe`。没有先跑 `env-setup` 技能。依赖只用已装的 `requests`（+ 可选 `Pillow`），**无新增依赖**。
 > - 本技能脚本在 `${REPO_ROOT:-/app}/.opencode/skills/mechanism-figure/` 下。
 > - 产物**直接写当前工作目录、用裸文件名**（当前目录就是本会话的产物目录）。图放一层子目录 `figures/` 也会被界面"产出"侧栏列出；**别拼任何 `outputs/` 前缀**——脚本会响亮报错。
-> - 生图 key：`QWEN_API_KEY`（或 `DASHSCOPE_API_KEY`），**与 `ppt-master` 同名**，配过一次两边都能用。三个来源，优先级从高到低：**① 进程环境变量**（服务器上由容器注入，见 `deploy/.env.example`）→ **② `~/.sci-agent/image.env`** → **③ `~/.ppt-master/.env`**。全在**仓库之外**——key 文件若放在仓库里，脚本会直接中止（key 一进 git 历史就只能换 key）。没配 key 时仍可用 `--dry-run` 把提示词做完、检查完。
+> - **生图通道**：**登录了平台账号就什么都不用配**——网关把生图请求转给平台的 `/img`，生图 key 只在服务器上，客户端一个字节都拿不到（与 LLM key 同一条原则）。平台按档位限**每天几张**，超了会明确说 `今天的生图张数已用完（N/M 张）`，那不是报错、也不用重试，明天 0 点(UTC) 重置。
+>   **没走平台时**（自设 API / 本机自用）才要本机 key：`QWEN_API_KEY`（或 `DASHSCOPE_API_KEY`，**与 `ppt-master` 同名**，配过一次两边都能用）。三个来源，优先级从高到低：**① 进程环境变量** → **② `~/.sci-agent/image.env`** → **③ `~/.ppt-master/.env`**。全在**仓库之外**——key 文件若放在仓库里，脚本会直接中止（key 一进 git 历史就只能换 key）。
+>   两条都没有时仍可用 `--dry-run` 把提示词做完、检查完。
 
 # 机制示意图（Mechanism Figure）
 
@@ -123,7 +125,9 @@ ${REPO_ROOT:-/app}/.venv/bin/python \
 | 标签糊成一片 / 拼错 / 画两遍 | 标签太多。砍到每栏 ≤ 5–6 个，或拆成两张图。这是模型能力边界，不是提示词问题 |
 | 图里冒出用户没提的细胞器/分子 | `prompt_extend` 被打开了，或 spec 的 `elements` 写得太发挥。`elements` 只写要画的结构，别写形容词堆 |
 | 图上出现中文注释 | 标签里混了 CJK 字符导致自动的中文负面词没加上。把标签统一成英文，或在 `extra_negative` 手动加 `chinese characters` |
-| `!! 没找到生图 API key` | 设 `QWEN_API_KEY`。平台部署由管理员统一注入；本机自用在当前 shell 里 set/export |
+| `今天的生图张数已用完（N/M 张）` | **不是故障，别重试**。张数按档位算，每天 0 点(UTC) 重置；要更多让管理员调档位。提示词已经做好了，明天拿同一份 `.built.json` 重跑即可，不用从头来 |
+| `平台的生图服务额度已用尽…不是你的张数` | 平台自己的上游额度没了，**你的张数没被扣**。只能等管理员充值，重试没用 |
+| `!! 既没有平台生图通道，也没找到本机 key` | 登录平台账号即可（正常情况不用配 key）；自设 API 形态才需要设 `QWEN_API_KEY` |
 | `HTTP 429` | 上游限速，脚本已退避重试 3 次；仍失败就等几分钟。**不要**改成无限重试 |
 | 4 栏里有一栏几乎是空的 | 机制没有 4 步却按 4 栏填了。**减栏，不要编内容填满** |
 

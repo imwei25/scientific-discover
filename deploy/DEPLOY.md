@@ -87,7 +87,9 @@ sudo deploy/scripts/user-add.sh bob             # 省略档位=free（普通，$
 | 给某用户单独设额度（覆盖档位） | 编辑 `deploy/users/<名>.env` 取消注释 `DAILY_COST_LIMIT=`（USD/天，0=不限）→ `render-compose.sh && docker rm -f agent-<名> && docker compose up --no-start agent-<名>` |
 
 > ⚠ 额度/存储上限是容器**环境变量**，在容器「创建」时固化；manager 唤醒用的是 `docker start`，**`docker restart` 不会重读 compose**。所以改额度后必须**重建**容器（如上；数据在命名卷里，重建不丢），或直接用 `user-tier.sh`（改档位时已自动重建）。
-| 加 / 换一把技能用的 API key（检索、OCR、生图…） | 编辑 **`deploy/.env`**（模板见 `deploy/.env.example`）→ `sudo deploy/scripts/render-compose.sh` → **重建**容器 `docker compose up --no-start --force-recreate`。<br>⚠ 必须重建：这些 key 是容器**环境变量**，在容器「创建」时固化，`docker restart` 不会重读 compose（同下方⚠注）。<br>⚠ 这类 key 注入容器后**容器内 agent 一句 `env` 就读得到**，等于全体用户共用。所以只放"可随时重置、能设消费上限"的 key（检索 / OCR / 生图）；主上游 LLM key 刻意不走这条路，见下方「上游 key 不再进容器」 |
+| **加 / 换生图 key（`QWEN_API_KEY`）** | **网关形态（当前生产）**：写进 **`/etc/sci-auth.env`** → `systemctl restart sci-auth`。走服务端 `/img` 转发通道，**key 只在服务器、客户端拿不到**，并按档位限每天张数（见下一行）。<br>容器形态才改 `deploy/.env`（那条路没有转发通道，key 会进容器、全体用户共用）。 |
+| **改某档位每天能出几张图** | 管理台「档位」→ 每日生图张数（`imgDaily`，0 = 不限）；或 API `POST /admin/api/tier {key, imgDaily}`。**现查库、改完下一次调用即生效**，不吊销 key、不用重登。<br>当前初值：free 2 / plus 5 / admin 10（张/天，UTC 0 点重置）。<br>⚠ **不传 `imgDaily` 时保留原值**——漏传不会把限额抹成"不限"。 |
+| 加 / 换一把技能用的 API key（检索、OCR…） | 编辑 **`deploy/.env`**（模板见 `deploy/.env.example`）→ `sudo deploy/scripts/render-compose.sh` → **重建**容器 `docker compose up --no-start --force-recreate`。<br>⚠ 必须重建：这些 key 是容器**环境变量**，在容器「创建」时固化，`docker restart` 不会重读 compose（同下方⚠注）。<br>⚠ 这类 key 注入容器后**容器内 agent 一句 `env` 就读得到**，等于全体用户共用。所以只放"可随时重置、能设消费上限"的 key（检索 / OCR）；主上游 LLM key 与生图 key 都刻意不走这条路 |
 | 改了代码后更新 | `sudo bash deploy/scripts/redeploy-skills.sh --pull`（拉代码 → 重建镜像 → **重建**容器）。<br>⚠ 别用 `docker restart`：它只重启既有容器、仍跑创建时那份旧镜像，**新代码看着更新了其实没生效**（同下方⚠注）。另 `docker restart agent-*` 里的 `agent-*` 不是文件名，shell 不会展开，命令本身也跑不通 |
 | 每日备份（建 cron） | `sudo deploy/scripts/backup.sh`（7 天轮转，写 `/var/backups/sci/`） |
 | 看谁在跑 | `docker ps --filter name=agent-` |

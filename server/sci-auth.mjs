@@ -23,6 +23,7 @@ import * as A from "./lib/auth.mjs"
 import * as OneAPI from "./lib/oneapi.mjs"
 import * as Upstream from "./lib/upstream.mjs"
 import { llmForward, GATEWAY_PATH_PREFIX } from "./lib/gateway.mjs"
+import { imageForward, IMAGE_PATH_PREFIX } from "./lib/imagegen.mjs"
 import { createQueue, sanitizeLimits, LIMIT_DEFAULTS } from "./lib/queue.mjs"
 import * as Credits from "./lib/credits.mjs"
 import { ADMIN_HTML } from "./lib/admin-ui.mjs"
@@ -94,6 +95,12 @@ export const CFG = {
   // 转发，只是后台的「上游通道」页会显示未接入。
   oneapiUrl: (process.env.ONEAPI_URL || "").replace(/\/+$/, ""),
   oneapiToken: process.env.ONEAPI_TOKEN || "",
+  // 生图（/img 代理，mechanism-figure 技能用）。变量名与技能脚本、ppt-master 保持一致，
+  // 配一次到处能用。没配 = /img 回 503 并说清是"平台没配"，不冤枉用户的张数。
+  // 【这把 key 只留在服务器】客户端永远拿不到它 —— 与 LLM_UPSTREAM_KEY 同一条原则。
+  imageKey: process.env.QWEN_API_KEY || process.env.DASHSCOPE_API_KEY || "",
+  imageModel: process.env.QWEN_MODEL || "",
+  imageEndpoint: process.env.QWEN_IMAGE_ENDPOINT || "",
 }
 export const oneapiCfg = () => ({ url: CFG.oneapiUrl, token: CFG.oneapiToken })
 
@@ -1174,11 +1181,17 @@ async function handleAdminApi(req, res, pathname) {
       if (!Number.isFinite(n) || n < 0 || Math.floor(n) !== n)
         return json(res, 400, { ok: false, err: "单用户并发须是 ≥0 的整数（0 = 跟随全局）" })
     }
+    // 生图张数：与上面几个额度同一套校验口径（负数/乱输入静默变 0 = 静默变不限，是烧钱洞）
+    if (b.imgDaily !== undefined && b.imgDaily !== null && b.imgDaily !== "") {
+      const n = Number(b.imgDaily)
+      if (!Number.isFinite(n) || n < 0 || Math.floor(n) !== n)
+        return json(res, 400, { ok: false, err: "每日生图张数须是 ≥0 的整数（0 = 不限）" })
+    }
     const before = DB.getTier(db, key)
     DB.upsertTier(db, {
       key, daily_usd: b.dailyUSD, monthly_usd: b.monthlyUSD,
       model: b.model, models: b.models, skills: b.skills, note: b.note, sort: b.sort,
-      max_conc: b.maxConc,
+      max_conc: b.maxConc, img_daily: b.imgDaily,
     })
     const after = DB.getTier(db, key)
     // 改档位定义影响该档全体用户的额度/默认模型/技能 → 全部吊销 key，下次登录按新权限走。
@@ -1828,6 +1841,8 @@ export const server = http.createServer(async (req, res) => {
   try {
     // LLM 转发必须最先路由：body 要原样管道给上游，绝不能先被别处读掉
     if (p.startsWith(GATEWAY_PATH_PREFIX)) return await llmForward({ req, res, pathname: p, ctx })
+    // 生图转发（同理，body 自己读）
+    if (p.startsWith(IMAGE_PATH_PREFIX)) return await imageForward({ req, res, pathname: p, ctx })
 
     if (p === "/healthz") return json(res, 200, { ok: true, service: "sci-auth", users: DB.countUsers(db), node: process.versions.node })
 
@@ -1864,6 +1879,8 @@ const ctx = {
   recordUsage: (uid, rec) => DB.recordUsage(db, uid, rec),
   todayCost: (uid) => DB.todayCost(db, uid),
   monthCost: (uid) => DB.monthCost(db, uid),
+  todayImages: (uid) => DB.todayImages(db, uid),
+  recordImage: (uid) => DB.recordImage(db, uid),
   noteClient,
 }
 

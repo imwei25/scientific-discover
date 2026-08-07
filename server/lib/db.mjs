@@ -272,6 +272,25 @@ function ensureColumns(db) {
   if (!has("users", "web_version")) db.exec("ALTER TABLE users ADD COLUMN web_version TEXT NOT NULL DEFAULT ''")
   // "从仓库发布"的包记下出包时的 commit：下次发布 diff 这两个 sha 就能精确算出变更技能
   if (!has("skill_packs", "commit_sha")) db.exec("ALTER TABLE skill_packs ADD COLUMN commit_sha TEXT NOT NULL DEFAULT ''")
+
+  // ---- 生图张数限额（mechanism-figure 技能走 /img 代理）----
+  // 【为什么不并进 daily_usd 的美元额度】生图按【张】计价且单价比一次对话高一两个量级，
+  // 混进美元额度里，用户一天画几张图就把当天的对话额度烧光了，而他完全看不出是被图吃掉的。
+  // 分开一条独立的"每天几张"，出问题时话也好说：「今天的 2 张画完了」。
+  // 【默认值取 2 而不是 0】本仓库的额度约定是 0=不限（daily_usd / max_conc 都是），生图沿用
+  // 这个口径以免运营记两套规则；但**列默认值**必须保守 —— 以后新建一个档位忘了填，
+  // 默认成"不限"就是一个直接烧钱的洞。所以默认 2 张：够试，烧不穿。
+  if (!has("tiers", "img_daily")) {
+    db.exec("ALTER TABLE tiers ADD COLUMN img_daily INTEGER NOT NULL DEFAULT 2")
+    // 老库升上来铺一次运营定的初值（2026-08-07）：free 2 / plus 5 / admin 10。
+    // 只在【首次加列】时跑，之后管理员在后台怎么改就是什么，不会被这段覆盖回去。
+    for (const [k, n] of [["plus", 5], ["admin", 10]]) {
+      try { db.prepare("UPDATE tiers SET img_daily=? WHERE key=?").run(n, k) } catch {}
+    }
+  }
+  // 当天已生成张数：挂在既有的日汇总上，不另开表 —— UTC 日切、删用户清理都跟着 usage_daily 走，
+  // 不会出现"用户删了图配额还留着"这类孤儿数据。
+  if (!has("usage_daily", "images")) db.exec("ALTER TABLE usage_daily ADD COLUMN images INTEGER NOT NULL DEFAULT 0")
 }
 
 function migrate(db, from) {
@@ -442,15 +461,22 @@ export const listTiers = (db) => db.prepare("SELECT * FROM tiers ORDER BY sort, 
 export const getTier = (db, key) => db.prepare("SELECT * FROM tiers WHERE key=?").get(String(key)) || null
 
 export function upsertTier(db, t) {
-  db.prepare(`INSERT INTO tiers(key,daily_usd,monthly_usd,model,models,skills,note,sort,max_conc)
-              VALUES(?,?,?,?,?,?,?,?,?)
+  // img_daily 缺省时【保留原值】而不是落成 0：后台改档位的表单若没带这个字段（老版本管理台、
+  // 或脚本只想改额度），落 0 就等于把该档静默改成"生图不限"——一个纯靠疏忽产生的烧钱洞。
+  const prev = getTier(db, t.key)
+  const img = t.img_daily === undefined || t.img_daily === null || t.img_daily === ""
+    ? (prev ? Number(prev.img_daily) || 0 : 2)
+    : Math.max(0, Math.floor(Number(t.img_daily) || 0))
+  db.prepare(`INSERT INTO tiers(key,daily_usd,monthly_usd,model,models,skills,note,sort,max_conc,img_daily)
+              VALUES(?,?,?,?,?,?,?,?,?,?)
               ON CONFLICT(key) DO UPDATE SET
                 daily_usd=excluded.daily_usd, monthly_usd=excluded.monthly_usd,
                 model=excluded.model, models=excluded.models, skills=excluded.skills,
-                note=excluded.note, sort=excluded.sort, max_conc=excluded.max_conc`).run(
+                note=excluded.note, sort=excluded.sort, max_conc=excluded.max_conc,
+                img_daily=excluded.img_daily`).run(
     String(t.key), Number(t.daily_usd) || 0, Number(t.monthly_usd) || 0,
     String(t.model || ""), String(t.models || ""), String(t.skills || ""),
-    String(t.note || ""), Number(t.sort) || 0, Math.max(0, Math.floor(Number(t.max_conc) || 0)))
+    String(t.note || ""), Number(t.sort) || 0, Math.max(0, Math.floor(Number(t.max_conc) || 0)), img)
   return getTier(db, t.key)
 }
 export function deleteTier(db, key) {
@@ -647,6 +673,9 @@ export function resolveEntitlement(db, user) {
     skills: csv(skillsRaw),
     // 单用户并发上限：0 = 跟随全局（网关的并发闸现查现用，不进 access key，改完立刻生效）
     maxConc: Math.max(0, Math.floor(Number(t?.max_conc) || 0)),
+    // 每天可生成几张图（0 = 不限，与 daily 同口径）。没有档位时给 0 而不是默认值：
+    // 走到这儿说明 tier 已经被删了，此时"不限"是既有 num() 对所有额度的一致行为，别在这条上搞特例。
+    imgDaily: t ? Math.max(0, Math.floor(Number(t.img_daily) || 0)) : 0,
   }
 }
 
@@ -680,6 +709,27 @@ export function todayCost(db, userId, ts = Date.now()) {
   const r = db.prepare("SELECT cost_usd FROM usage_daily WHERE user_id=? AND day=?").get(Number(userId), dayOf(ts))
   return r ? Number(r.cost_usd) || 0 : 0
 }
+/** 今天已生成几张图（UTC 日切，与 todayCost 同一个 day 键，两处口径永远一致）。 */
+export function todayImages(db, userId, ts = Date.now()) {
+  const r = db.prepare("SELECT images FROM usage_daily WHERE user_id=? AND day=?").get(Number(userId), dayOf(ts))
+  return r ? Number(r.images) || 0 : 0
+}
+
+/**
+ * 记一张已生成的图，返回记完之后的当天张数。
+ *
+ * 【必须是 upsert 而不是 UPDATE】当天第一张图很可能发生在这个用户当天第一次对话【之前】
+ * （比如他上来就画图），那时 usage_daily 还没有今天这一行，UPDATE 会静默影响 0 行 —— 张数
+ * 永远停在 0，限额形同虚设。cost_usd 留 0：生图的钱不进美元额度（见 ensureColumns 的说明）。
+ */
+export function recordImage(db, userId, ts = Date.now()) {
+  const uid = Number(userId), day = dayOf(ts), month = monthOf(ts)
+  db.prepare(`INSERT INTO usage_daily(user_id,day,month,cost_usd,calls,images)
+              VALUES(?,?,?,0,0,1)
+              ON CONFLICT(user_id,day) DO UPDATE SET images=images+1`).run(uid, day, month)
+  return todayImages(db, uid, ts)
+}
+
 export function monthCost(db, userId, ts = Date.now()) {
   const r = db.prepare("SELECT SUM(cost_usd) AS c FROM usage_daily WHERE user_id=? AND month=?").get(Number(userId), monthOf(ts))
   return r && r.c ? Number(r.c) : 0
