@@ -12,8 +12,8 @@
 | `PRESET_FONT` | 西文正文字体 | `Times New Roman` |
 | `PRESET_CJKFONT` | 中文正文字体（docx 的 eastAsia 字体；PDF 中文走 ctex 自动宋体，一般留空） | `宋体` |
 | `PRESET_FONTSIZE` | 字号 pt（PDF 侧受 LaTeX 限制只认 10/11/12） | `12` |
-| `PRESET_LINESPACING` | 行距倍数（1.0/1.5/2.0） | `2.0` |
-| `PRESET_LINENUMBERS` | 连续行号（1 开 / 0 关） | `1` |
+| `PRESET_LINESPACING` | 行距倍数（1.0/1.5/2.0；默认预设用 1.5，NEJM 系送审稿用 2.0） | `1.5` |
+| `PRESET_LINENUMBERS` | 连续行号（1 开 / 0 关；默认预设关，NEJM 系开） | `0` |
 | `PRESET_CSL` | 参考文献 CSL 文件名，指向本目录 `csl/`；仅当稿件用 `[@key]` 引用 + `--bib` 时生效 | `vancouver.csl` |
 | `PRESET_HEADING_CJKFONT` | 标题(Heading 1-6)中文字体，与正文分开（标书"标题黑体、正文宋体"）；**仅 docx 侧生效**，PDF 侧忽略 | `黑体` |
 | `PRESET_HEADING_FONTSIZE` | 标题字号 pt（各级统一；四号=14）；**仅 docx 侧生效** | `14` |

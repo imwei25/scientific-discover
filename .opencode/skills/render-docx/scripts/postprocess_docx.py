@@ -166,7 +166,7 @@ def _add_page_numbers(doc):
         r._r.getparent().remove(r._r)
     p.alignment = WD_ALIGN_PARAGRAPH.CENTER
     pf = p.paragraph_format
-    pf.line_spacing = 1.0  # Footer 基于 Normal，正文双倍行距别把页脚也撑高
+    pf.line_spacing = 1.0  # Footer 基于 Normal，正文放大的行距别把页脚也撑高
     pf.first_line_indent = Pt(0)
     run = p.add_run()
     r = run._r
@@ -392,7 +392,8 @@ def _alloc_widths_pt(units, avail_pt, tsize):
     """按内容单位数分配列宽（pt）。返回 (widths, overflow)。
 
     超长列封顶 36 单位靠换行消化；短列保底 8 单位不被挤成竖条；
-    总宽占版心过半就拉满版心（投稿表惯例），小表保持自然宽度。
+    **表宽一律拉满版心**（满行显示）——列宽比例仍按内容算，只是整体等比放大到
+    版心宽，不留右侧空白。三线表两端对齐版心是投稿表惯例，窄表悬在左边最难看。
     """
     unit_pt = 0.5 * tsize  # 1 单位 ≈ 半个字宽（CJK 全角记 2 单位 = 1 字宽）
     pad = 11.0             # 默认单元格左右边距合计 ≈ 2×108dxa = 10.8pt
@@ -400,10 +401,8 @@ def _alloc_widths_pt(units, avail_pt, tsize):
     low = [min(u, 8) * unit_pt + pad for u in units]
     total = sum(nat)
     if total <= avail_pt:
-        if total >= 0.55 * avail_pt:
-            k = avail_pt / total
-            return [w * k for w in nat], False
-        return nat, False
+        k = avail_pt / total  # 内容比例不变，等比撑满版心
+        return [w * k for w in nat], False
     if sum(low) >= avail_pt:
         k = avail_pt / sum(low)
         return [w * k for w in low], True
@@ -423,6 +422,24 @@ def _alloc_widths_pt(units, avail_pt, tsize):
                 nxt.append(i)
         free = nxt
     return widths, False
+
+
+def _set_tblW(table, w, wtype):
+    """重写表宽声明 w:tblW（dxa=二十分之一磅 / pct=五十分之一百分点）。
+
+    tblPr 的子元素有固定顺序，必须插在 w:jc 等之前，否则 Word 判文档损坏。
+    """
+    tblPr = table._tbl.tblPr
+    for old in tblPr.findall(qn("w:tblW")):
+        tblPr.remove(old)
+    tblW = tblPr.makeelement(qn("w:tblW"), {})
+    tblW.set(qn("w:w"), str(int(w)))
+    tblW.set(qn("w:type"), wtype)
+    tblPr.insert_element_before(
+        tblW, "w:jc", "w:tblCellSpacing", "w:tblInd", "w:tblBorders",
+        "w:shd", "w:tblLayout", "w:tblCellMar", "w:tblLook",
+        "w:tblCaption", "w:tblDescription",
+    )
 
 
 def _tune_tables(doc, body_pt, landscape_wide=False, long_rows=20, table_pt=0):
@@ -460,7 +477,7 @@ def _tune_tables(doc, body_pt, landscape_wide=False, long_rows=20, table_pt=0):
                 for cell in row.cells:
                     for p in cell.paragraphs:
                         pf = p.paragraph_format
-                        pf.line_spacing = 1.0  # 表内单倍行距，不吃正文的双倍行距
+                        pf.line_spacing = 1.0  # 表内单倍行距，不吃正文放大的行距
                         pf.space_before = Pt(1)
                         pf.space_after = Pt(1)
                         pf.first_line_indent = Pt(0)  # 别吃 --indent-chars 的正文缩进
@@ -471,6 +488,9 @@ def _tune_tables(doc, body_pt, landscape_wide=False, long_rows=20, table_pt=0):
                             if ri == 0:
                                 run.font.bold = True
             if table._tbl.xpath(".//w:gridSpan | .//w:vMerge"):
+                # 合并格的表不动列宽（改了会撕开合并），但仍声明表宽 100% 版心，
+                # 让 Word 自己把各列按比例撑满一行，不至于窄窄地缩在左边
+                _set_tblW(table, 5000, "pct")
                 styled_only += 1
                 continue
             ncols = _ensure_tblgrid(table)
@@ -499,17 +519,7 @@ def _tune_tables(doc, body_pt, landscape_wide=False, long_rows=20, table_pt=0):
                 cells = row.cells
                 for c in range(min(len(widths), len(cells))):
                     cells[c].width = Pt(widths[c])  # 写每格 tcW
-            tblPr = table._tbl.tblPr
-            for old in tblPr.findall(qn("w:tblW")):
-                tblPr.remove(old)
-            tblW = tblPr.makeelement(qn("w:tblW"), {})
-            tblW.set(qn("w:w"), str(int(sum(widths) * 20)))
-            tblW.set(qn("w:type"), "dxa")
-            tblPr.insert_element_before(
-                tblW, "w:jc", "w:tblCellSpacing", "w:tblInd", "w:tblBorders",
-                "w:shd", "w:tblLayout", "w:tblCellMar", "w:tblLook",
-                "w:tblCaption", "w:tblDescription",
-            )
+            _set_tblW(table, sum(widths) * 20, "dxa")  # pt → dxa(1/20 pt)
             if overflow:
                 need = sum(min(u, 8) * 0.5 * tsize + 11.0 for u in units)
                 print(

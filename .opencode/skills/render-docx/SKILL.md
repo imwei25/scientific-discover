@@ -1,6 +1,6 @@
 ---
 name: render-docx
-description: 把 Markdown 稿件渲染成 Word (.docx) 投稿版。医学期刊投稿绝大多数要 Word（不是 PDF），国自然正文、中文核心期刊也多用 .docx 模板。内置期刊格式预设（--journal nejm/lancet/jama/bmj/cmj/generic-submission：字体、字号、边距、双倍行距、连续行号、参考文献 CSL 一键落齐），也可单独指定 --font/--fontsize/--margin/--line-spacing/--line-numbers，或套用期刊 Word 模板（--reference-doc）；可按 GB/T 7714 等 CSL 渲染参考文献（仅当稿件用 pandoc `[@key]` 引用+.bib 时生效，本套件默认的 `[n]` 文本引用不适用）。用 pandoc，中文比 xelatex PDF 路线更不容易漏字。当用户说"出 Word""转 docx""投稿要 Word 版""按 XX 期刊格式排版""双倍行距加行号""生成 .docx"时使用。要出 PDF 用 render-pdf-doc；要查引用真实性用 reference-check。用户只说"排版"没指明格式时，先问要 PDF 还是投稿系统要的 Word。
+description: 把 Markdown 稿件渲染成 Word (.docx) 投稿版。医学期刊投稿绝大多数要 Word（不是 PDF），国自然正文、中文核心期刊也多用 .docx 模板。内置期刊格式预设（--journal nejm/lancet/jama/bmj/cmj/generic-submission：字体、字号、边距、行距、行号、参考文献 CSL 一键落齐；默认预设 generic-submission 为 1.5 倍行距、不加行号），也可单独指定 --font/--fontsize/--margin/--line-spacing/--line-numbers，或套用期刊 Word 模板（--reference-doc）；可按 GB/T 7714 等 CSL 渲染参考文献（仅当稿件用 pandoc `[@key]` 引用+.bib 时生效，本套件默认的 `[n]` 文本引用不适用）。用 pandoc，中文比 xelatex PDF 路线更不容易漏字。当用户说"出 Word""转 docx""投稿要 Word 版""按 XX 期刊格式排版""双倍行距加行号""生成 .docx"时使用。要出 PDF 用 render-pdf-doc；要查引用真实性用 reference-check。用户只说"排版"没指明格式时，先问要 PDF 还是投稿系统要的 Word。
 ---
 
 # Markdown → Word (.docx) 投稿排版技能
@@ -20,10 +20,13 @@ description: 把 Markdown 稿件渲染成 Word (.docx) 投稿版。医学期刊�
 ```bash
 bash ${REPO_ROOT:-/app}/.opencode/skills/render-docx/scripts/render_docx.sh -i manuscript.md --journal generic-submission
 ```
-预设落齐：Times New Roman（中文宋体）12pt / 双倍行距 / 连续行号 / 页脚居中页码 /
+预设落齐：Times New Roman（中文宋体）12pt / **1.5 倍行距** / **不加行号** / 页脚居中页码 /
 正文首行缩进 4 个英文字符 / 图题表题 10.5pt 居中且序号加粗 / 表内 10pt 单倍行距 /
-三线表（顶底 1.5 磅、表头下 0.5 磅）/ 论文标题 16pt、一级标题 14pt、其余标题 12pt 全加粗 /
+三线表（顶底 1.5 磅、表头下 0.5 磅）且**表宽拉满版心** / 论文标题 16pt、一级标题 14pt、其余标题 12pt 全加粗 /
 作者与机构 10.5pt 居中 / 1in 边距（`--margin 0.75in` 可换窄边距）。
+
+目标刊明确要求双倍行距 + 连续行号（NEJM/JAMA/Lancet/BMJ 系送审稿）时，用对应期刊预设，
+或在默认预设上补 `--line-spacing double --line-numbers`。
 
 **用户指定了期刊** → 先看 `--journal list` 有无现成预设；没有就 **WebFetch 该刊的
 Instructions for Authors** 取其字体字号/行距/行号/图表位置/参考文献风格，再用下面的单项参数落，
@@ -41,7 +44,7 @@ bash ${REPO_ROOT:-/app}/.opencode/skills/render-docx/scripts/render_docx.sh -i m
 #   可用预设：nejm lancet jama bmj cmj(中华系列) generic-submission(通用送审)；--journal list 列出
 #   预设值可被单项覆盖，如：--journal lancet --line-spacing 1.5
 
-# 手动指定送审格式（不套预设）：双倍行距 + 连续行号 + Times 12pt + 1in 边距
+# 手动指定送审格式（不套预设）：双倍行距 + 连续行号 + Times 12pt + 1in 边距（默认预设是 1.5 倍行距、无行号）
 bash ${REPO_ROOT:-/app}/.opencode/skills/render-docx/scripts/render_docx.sh -i manuscript.md \
   --font "Times New Roman" --fontsize 12 --margin 1in --line-spacing double --line-numbers
 
@@ -90,7 +93,7 @@ bash ${REPO_ROOT:-/app}/.opencode/skills/render-docx/scripts/render_docx.sh -i m
   > 实测（2026-07-31）：一份 123 行、含 3 张结果表的中文稿，不补空行 → **0 张表、53 段**；补了 → **4 张表、260 段**。注意 `infer_colwidths` 与三线表后处理都以"能认出这是张表"为前提，表没被识别时那两层兜底全部空转——所以这一步必须排在最前面。**交稿前务必核对 docx 里表格数与稿件一致**，这个失败模式是静默的。
   > **写作阶段就该写对**：正文里请直接用 `FT~3~`、`10^9^/L`、`m^2^`，别用 Unicode 上下标字符，也别平排写成 `FT3`/`10^9/L`（后者连上下标都没有）。
   > 实测（2026-07-31，一份 123 行、含 3 张结果表的中文稿）：不补 → **0 张表、53 段**；补了 → **4 张表、260 段**。注意后面的 `infer_colwidths` 与三线表后处理都以"能认出这是张表"为前提，表没被识别时那两层兜底全部空转——所以这一步必须排在最前面。**交稿前务必核对 docx 里表格数与稿件一致**，这个失败模式是静默的。
-- **表格自动排版（默认开）**：pandoc 直转的 docx 表格要么 autofit（Word 自动布局、宽度不可预测）要么按分隔行均分列宽，长列名必然排丑。脚本默认做两层兜底：① 渲染前跑 `infer_colwidths.py`（借用 render-pdf-doc 的，CJK 按 2 格计宽）按内容重写 pipe 表分隔行比例；② 渲染后 python-docx 后处理：**三线表**（顶/底 1.5pt、表头下线 0.75pt、去竖线）、按内容分配**固定列宽**（tblLayout fixed + gridCol/tcW 双写，超长列封顶靠换行、短列保底）、表内字号比正文降 1.5pt（下限 9pt）、表头加粗居中、表内单倍行距（不吃正文双倍行距）。含合并单元格的表只调样式不动列宽。**表按内容连保底宽都放不下时打印 WARN**（建议列名改缩写/转置/拆表，见 write-paper 表格排版铁律）——见到这警告别硬交，回稿件改表。关闭用 `--no-infer-colwidths` / `--no-table-tune`（用期刊官方 `--ref` 模板且其表格样式更权威时可关后者）。
+- **表格自动排版（默认开）**：pandoc 直转的 docx 表格要么 autofit（Word 自动布局、宽度不可预测）要么按分隔行均分列宽，长列名必然排丑。脚本默认做两层兜底：① 渲染前跑 `infer_colwidths.py`（借用 render-pdf-doc 的，CJK 按 2 格计宽）按内容重写 pipe 表分隔行比例；② 渲染后 python-docx 后处理：**三线表**（顶/底 1.5pt、表头下线 0.75pt、去竖线）、按内容分配**固定列宽**（tblLayout fixed + gridCol/tcW 双写，超长列封顶靠换行、短列保底）、表内字号比正文降 1.5pt（下限 9pt）、表头加粗居中、表内单倍行距（不吃正文行距）。**表宽一律拉满版心（满行显示）**：列宽比例仍按内容算，只是整体等比放大到版心宽，两端与正文对齐、右侧不留空白；含合并单元格的表不动列宽，但也会声明表宽 100% 版心，由 Word 自行撑满。**表按内容连保底宽都放不下时打印 WARN**（建议列名改缩写/转置/拆表，见 write-paper 表格排版铁律）——见到这警告别硬交，回稿件改表。关闭用 `--no-infer-colwidths` / `--no-table-tune`（用期刊官方 `--ref` 模板且其表格样式更权威时可关后者）。
 - **跨页表兜底（默认开，随 `--table-tune`）**：期刊接受表格跨页，难看的是**跨页后没表头**、或**某一行被从中间劈成两半**。故每张表默认设首行 `tblHeader`（每页重复表头）+ 各行 `cantSplit`（禁止行内断页）——不改任何内容。表超过 20 行时另打印一条提示，告诉你它必然跨页、若要求单页放下就得拆表或移入补充材料。
 - **宽表转横向（`--landscape-wide-tables`，默认关）**：列太多、纵向版心按内容压不下时，把该表**连同表题与表注**单独放进一个横向节（前后各插一个分节符，只有这一节横向，正文其余部分不受影响）。A4 纵向版心约 470pt，转横向后约 720pt，多出 50%。用法：`--journal cmj --landscape-wide-tables`。
   > 转横向是排版层的最后一招，**治标不治本**：源头把列名缩短、拆表、或把次要列移进补充材料，才是投稿更稳的做法（见 `write-paper` 表格排版铁律第 1/3 条）。
