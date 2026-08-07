@@ -13,6 +13,7 @@
 ## 我们做的改动（须按许可声明）
 1. 每个技能的 `SKILL.md` **顶部新增一段引用块**：说明本仓库的 Python 解释器（项目根 `.venv`（Windows `.venv/Scripts/python.exe` / Linux `.venv/bin/python`））、脚本目录 `skills/<name>/`、产出目录 `outputs/`。技能正文其余部分未改。
 2. `nature-figure`：删除了 `assets/`（约 30MB 的示例图库 chart-atlas/figures4papers/gallery），仅保留 `SKILL.md / manifest.yaml / static / references / scripts / evals`。因此 `references/demos.md` 里指向 figures4papers 的示例图链接会失效——对无界面文本 Agent 无影响。
+   **另（2026-08-07）**：`description` 收窄到**数据图**，并在顶部引用块加了一条分工说明——机制图 / 通路示意图 / 图形摘要改由自研技能 `mechanism-figure` 负责（上游那条可选的 OpenRouter 图像示意图路线本就在本仓库关闭）。改动理由：两个技能的 description 都写着"机制示意图 / 图形摘要"会让顶层路由在同一请求上来回摇摆。技能正文（方法论）未改。
 3. `search-lit` / `fulltext-retrieval`：删除了 `*_challenge/` 与 `tests/` 测试夹具，保留 SKILL.md 与运行脚本。
 
 ## 封装第三方 CLI（非 vendored 源码，pip 运行时依赖 + 自写薄封装）

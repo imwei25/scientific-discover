@@ -1,0 +1,62 @@
+{
+  "_说明": "机制示意图的 spec 模板。照抄这份改内容即可；下划线开头的键是注释，脚本会忽略。",
+  "_铁律": "panels/labels 里的每一个分子、基因、结局名，只能来自用户给的稿件或描述。编一个就是造假。",
+
+  "title": "草酸钙诱导内质网应激并经 CHAC1-GSH-GPX4 轴触发铁死亡",
+  "style": "flat",
+  "_style可选": "flat=极简扁平多栏通路图(默认) | realistic=高拟真3D封面图 | structure=结构生物学图",
+  "aspect_ratio": "1:1",
+  "membrane": "horizontal-top",
+  "_membrane": "horizontal-top=顶部横贯一条双层磷脂膜（多栏通路图标配）；none=不画膜",
+
+  "panels": [
+    {
+      "name": "Trigger",
+      "bg": "light yellow",
+      "scene": "Extracellular space above the membrane showing the initiating insult",
+      "elements": ["ball-and-stick chemical structure icons for the crystal species"],
+      "labels": ["Hyperoxaluria", "CaOx"]
+    },
+    {
+      "name": "ER stress",
+      "bg": "light blue",
+      "scene": "Cytoplasm with a tubular ER membrane network",
+      "elements": [
+        "colored rounded pill badges arranged along the ER tubules",
+        "an 'ER stress' bubble at the bottom emitting three divergent curved arrows upward",
+        "a blue dashed arc at the very bottom representing the nucleus"
+      ],
+      "labels": ["GRP78 ↑", "PERK", "IRE1", "ATF4 ↑", "CHOP ↑", "Nucleus"]
+    },
+    {
+      "name": "Redox collapse",
+      "bg": "light pink",
+      "scene": "Cytoplasm with mitochondria and the glutathione axis",
+      "elements": [
+        "a pink 3D mitochondrion icon with calcium flux arrows",
+        "a blue Pacman-shaped enzyme icon consuming its substrate",
+        "a spiky ferroptotic cell icon at the right edge"
+      ],
+      "labels": ["CHAC1 ↑", "GSH", "GPX4 ↓", "Ferroptosis", "Apoptosis"]
+    },
+    {
+      "name": "Tissue outcome",
+      "bg": "salmon pink",
+      "scene": "Ruptured epithelium releasing crystalline material",
+      "elements": ["3D geometric gray crystal aggregates deposited on the ruptured membrane"],
+      "labels": ["CaOx crystal deposition"]
+    }
+  ],
+
+  "arrows": [
+    { "from": "CaOx", "to": "GRP78 ↑", "type": "activate" },
+    { "from": "ATF4 ↑", "to": "CHOP ↑", "type": "activate" },
+    { "from": "CHOP ↑", "to": "Nucleus", "type": "translocate", "label": "CHAC1 ↑" },
+    { "from": "CHAC1 ↑", "to": "GSH", "type": "convert", "label": "GSH degradation" },
+    { "from": "GSH", "to": "GPX4 ↓", "type": "inhibit" },
+    { "from": "GPX4 ↓", "to": "Ferroptosis", "type": "activate" }
+  ],
+
+  "notes": "Keep every panel readable at 100 mm print width; do not add any organelle that is not listed above.",
+  "extra_negative": []
+}

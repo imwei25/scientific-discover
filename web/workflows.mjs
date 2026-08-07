@@ -246,7 +246,9 @@ export const WORKFLOWS = {
         emits: ["manuscript*.docx", "manuscript*.pdf"], render: "doc",
         hint: "没指定期刊就用通用送审格式，交付时附查重工具推荐" },
     ],
-    extra: ["search-lit", "fulltext-retrieval", "render-pdf-doc"],
+    // mechanism-figure：论文常要一张图形摘要 / 机制示意图，它不是流程里的固定步骤（可选配图），
+    // 但不放进白名单的话，用户在本模块里一提"画个机制图"就会被技能闸中止本轮。
+    extra: ["search-lit", "fulltext-retrieval", "render-pdf-doc", "mechanism-figure"],
   },
 
   // ============ 综述撰写（叙述性）============
@@ -393,7 +395,10 @@ export const WORKFLOWS = {
     //   **干完活才被打断**：agent 写完标书正要核引用，整轮被模块闸掐掉 → peer-review 与排版出件
     //   都没跑成，用户拿到一份没过任何闸的 proposal.md，十分钟的活丢了后半截。
     //   拦在最贵的时刻，是所有拦法里最差的一种。
-    extra: ["render-docx", "search-lit", "literature-review", "fulltext-retrieval", "reference-check"],
+    // mechanism-figure：标书的"研究方案总览图 / 技术路线示意图"是本技能最合适的场景
+    // （标书不投期刊，期刊那套 AI 生成图限制不适用），同样属可选配图、不进固定步骤。
+    extra: ["render-docx", "search-lit", "literature-review", "fulltext-retrieval", "reference-check",
+            "mechanism-figure"],
   },
 
   // ============ 文献研读 ============

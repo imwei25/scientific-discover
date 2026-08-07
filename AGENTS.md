@@ -37,7 +37,8 @@
 - **paper 里 `data-integrity`（可选自查闸）**：用户**提供了原始数值表**（xlsx/csv）时，可在 `data-analysis` 后对源数据跑一遍数值完整性自查，抓复制粘贴错误 / 常数偏移 / 跨表复用 / GRIM 不自洽等——**目的是投稿前主动核对补说明，非指控**（signal not verdict，见技能内铁律）。默认 `review` 档假阳性低；纯理论/无数值原始表的稿件跳过。发现需核对的项属回退触发点：回 `data-analysis`／让用户核原始记录后再往下。
 
 ## 四、单步直派：请求 → 技能
-- **画图 / 看数 / 统计**：`data-analysis`（探索性看数、150dpi 预览）、`nature-figure`（投稿级出版图：森林图/KM/火山图，300dpi+矢量）、`clinical-stats`（基线表/Table 1、样本量）
+- **画图 / 看数 / 统计**：`data-analysis`（探索性看数、150dpi 预览）、`nature-figure`（投稿级出版图：森林图/KM/火山图，300dpi+矢量）、`clinical-stats`（基线表/Table 1、样本量）、`mechanism-figure`（机制/通路**示意图**、图形摘要：文生图，非数据图）
+- **数据图 vs 示意图（避免误派）**：**图上形状由数字决定 → `nature-figure`**（森林图/KM/火山图/ROC/箱线图…，可直接投稿）；**由生物学关系决定、没有数据 → `mechanism-figure`**（多栏通路图、药物阻断、结构示意、graphical abstract）。`mechanism-figure` 出的是 **AI 生成位图**：交付时必须说清三件事——不是矢量、多数期刊（Nature 系基本禁用 / Cell Press 需披露）不接受 AI 生成图入稿、标签必然有拼错要逐个核。**最适合标书插图与组会汇报**；投稿终稿走"按 spec 在 BioRender 重绘"的路径。用户同时要机制图与数据图 → 分别派这两个技能，别混一次做。
 - **临床推断统计的归属（避免误派）**：方法比对（Bland-Altman / Passing-Bablok / 一致性 LoA）、生存分析（KM / Cox）、ROC / 诊断效能、组间检验 / 相关 / 回归等**分析**一律走 `data-analysis`，要投稿级图再叠 `nature-figure`；`clinical-stats` **只**管 Table 1 基线表与样本量 / 把握度，别拿它做上述分析。**且诊断准确性 / 方法比对 / 纯实验室验证类研究常无人口学基线协变量（年龄 / 性别 / 分期等）→ 此时 Table 1 无对应数据，`clinical-stats` 可整步跳过、全走 `data-analysis`，别把检测值 / 生存时间硬塞成"基线表"制造误导。**
 - **检索 / 全文**：`search-lit`（PubMed 系）、`literature-review`（Europe PMC / 叙述性综述成文）、`fulltext-retrieval`（下 PDF：OA 渠道 + 机构通道（挂本机已登录 CARSI 的 Chrome，仅同机可用、服务器优雅降级）、PDF 转 md）
 - **本地文献库**：`zotero-library`（读用户**本机 Zotero** 题录 + 对其中 PDF 做全文证据检索，“基于我自己的文献库回答”；默认只读，导出回写用 `push`（写操作）。**仅在 opencode 与 Zotero 同机运行时可用**，中心服务器多用户下探测失败会优雅回退，改用 `search-lit`/`fulltext-retrieval`）
