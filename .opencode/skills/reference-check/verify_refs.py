@@ -185,6 +185,16 @@ def _casefold_cmp(s):
     return (s or "").casefold()
 
 
+def norm_doi(s):
+    """DOI 归一化（去 URL 前缀 / `doi:` 前缀 / 大小写 / 尾随标点）。
+    与 systematic-review/sr_dedup.py、search-lit/references/enhanced_search.py 同规则——
+    全套件已有三处同规则实现，这是第四处，别再自创第五套。"""
+    d = (s or "").strip().lower()
+    d = re.sub(r"^https?://(dx\.)?doi\.org/", "", d)
+    d = re.sub(r"^doi:\s*", "", d)
+    return d.rstrip(".,;)").strip()
+
+
 def norm_title(s):
     # 保留 CJK 汉字：旧版只留 [a-z0-9]，中文标题会被剥成空串，于是两个空串
     # SequenceMatcher 判满分 1.0 —— 真·张冠李戴的两个不同中文标题会被误判 OK（漏报）。
@@ -602,12 +612,158 @@ def verify_one(entry):
                     note=f"查询出错：{e}", **entry)
 
 
+def _number_entries(entries):
+    """给每条补上 seq（第几条，1 起）与 cite_no（著录里的方括号号，抽不到留空）。
+    查重报告只有能指名道姓说出"[3] 与 [5]"才有用；.bib/.ris 没有方括号号，
+    退回用 seq 说"第 3 条"。**绝不拿 seq 冒充 cite_no**——.bib 的条目顺序不一定
+    等于正文引用顺序，说成"[3]"会把用户指向错误的编号去改正文。"""
+    for i, e in enumerate(entries, 1):
+        e["seq"] = i
+        e.setdefault("cite_no", "")
+    return entries
+
+
+# --------------------------------------------------------------------------- #
+# 跨条目查重（同一篇文献占了多个编号）
+#
+# ★ 为什么必须在这里做：上面每一步都是【逐条独立】的——verify_one 只吃一条 entry，
+#   两条之间没有任何共享状态。于是 AI 手写参考文献列表时把同一篇分配了两个编号
+#   （实测形态：[3] 与 [5] 同为 DOI:10.3390/ijms241814374，标题各自截断得略有不同），
+#   两条会【各自查真、各自判 OK】，报告全绿、bad 计数为 0，主控据此宣布"引用核查通过"
+#   直接排版出件。这道闸原本只验"每条是不是真的"，而重复编号是"这批合起来对不对"——
+#   两者正交，不在这里补就永远漏。
+#   后果不是小瑕疵：Vancouver 体系下同一文献只能有一个号，重复编号是编辑部/审稿人
+#   一眼能看到的硬伤，还会虚高参考文献数、撑不住"本文共引 N 篇"的表述。
+#   综述最危险——文献量大、编号密，恰恰是人工肉眼最核不动的场景。
+# --------------------------------------------------------------------------- #
+
+# 有这些结论的条目才算"真解析到了一条库内记录"，它的 found_title 才能当身份键用。
+# FABRICATED / NOT_FOUND 的 found_title 是 title_search 的【弱匹配】(sim<0.85)，
+# 拿它当键会把两条毫不相干的编造引用凑成一组"重复"——比漏报更糟。
+_RESOLVED_VERDICTS = ("OK", "CHECK", "MISMATCH", "RETRACTED", "UNVERIFIED", "ID_FAKE")
+
+
+def _resolved_title_key(r):
+    if r.get("verdict") not in _RESOLVED_VERDICTS:
+        return ""
+    by_id = str(r.get("id") or "").startswith(("doi:", "pmid:"))
+    try:
+        strong = float(r.get("sim") or 0) >= 0.85
+    except (TypeError, ValueError):
+        strong = False
+    if not (by_id or strong):
+        return ""
+    t = norm_title(r.get("found_title"))
+    # 太短的标题容易撞车（"COVID-19"），与 _title_contained 用同一道长度闸
+    return t if len(t) >= 12 else ""
+
+
+def _strong_keys(r):
+    """一条结果的身份键，命中任一即判定为同一篇。
+
+    ★ 关键在于**不只用用户著录的 DOI**，还用【解析回来的身份】(_match_doi / found_title)：
+      光比 claimed 侧的 DOI，只能抓到"两条写了同一个 DOI"这一种最简单的形态；
+      而 ① 一条给了 DOI、另一条只写标题，② 一条引预印本 DOI、另一条引正式版 DOI ——
+      这两种 claimed 侧完全对不上，但它们解析到的是同一篇，只有用解析结果才归得到一起。
+    """
+    keys = []
+    for d in (r.get("doi"), r.get("_match_doi")):
+        nd = norm_doi(d)
+        if nd:
+            keys.append("doi:" + nd)
+    for p in (r.get("pmid"), r.get("_match_pmid")):
+        np_ = re.sub(r"\D", "", str(p or ""))
+        if np_:
+            keys.append("pmid:" + np_)
+    rt = _resolved_title_key(r)
+    if rt:
+        keys.append("rtitle:" + rt)
+    return keys
+
+
+def _find(parent, i):
+    while parent[i] != i:
+        parent[i] = parent[parent[i]]
+        i = parent[i]
+    return i
+
+
+def cite_label(r):
+    """报告里指代一条引用的说法。有方括号号就用 `[3]`（用户能直接按它去改正文），
+    没有就退回 `第3条`。"""
+    n = str(r.get("cite_no") or "").strip()
+    return f"[{n}]" if n else f"第{r.get('seq', '?')}条"
+
+
+def mark_duplicates(results):
+    """跨条目归并同一篇文献，就地写入 `dup_of` 并追加 note。
+
+    返回 (hard_groups, suspects)：
+      hard_groups — [[r, r, ...], ...]  强键命中，同一篇板上钉钉
+      suspects    — [(r_a, r_b, sim), ...]  仅标题高度相似，需人工确认
+
+    强弱两档是刻意分的：`…Part I` / `…Part II`、`…in adults` / `…in children`
+    这类系列题的归一化相似度能到 0.93，直接判"重复"会让用户去删一条真实存在的独立文献。
+    """
+    n = len(results)
+    parent = list(range(n))
+    canon = {}
+    for i, r in enumerate(results):
+        for k in _strong_keys(r):
+            if k in canon:
+                a, b = _find(parent, canon[k]), _find(parent, i)
+                if a != b:
+                    parent[max(a, b)] = min(a, b)
+            else:
+                canon[k] = i
+
+    # 弱档：标题高度相似但没共享强键。条目数是几十~几百量级，O(n²) 无所谓。
+    suspects = []
+    probes = [norm_title(guess_title(r.get("claimed_title") or "")) for r in results]
+    idents = [set(_strong_keys(r)) for r in results]
+    for i in range(n):
+        if len(probes[i]) < 12:
+            continue
+        for j in range(i + 1, n):
+            if len(probes[j]) < 12 or _find(parent, i) == _find(parent, j):
+                continue
+            # 两条都各自解析到了记录，且身份键完全不重叠 → 已被证明是不同的两篇，别再猜
+            if idents[i] and idents[j] and not (idents[i] & idents[j]):
+                continue
+            yi = str(results[i].get("claimed_year") or "").strip()
+            yj = str(results[j].get("claimed_year") or "").strip()
+            if yi and yj and yi != yj:
+                continue
+            sim = SequenceMatcher(None, probes[i], probes[j]).ratio()
+            if sim >= 0.92:
+                suspects.append((results[i], results[j], round(sim, 2)))
+
+    groups = {}
+    for i, r in enumerate(results):
+        root = _find(parent, i)
+        if root != i:
+            groups.setdefault(root, [results[root]]).append(r)
+            r["dup_of"] = cite_label(results[root])
+            # 也写进本条的 note：CSV 是逐条读的，只写在报告的汇总节里，
+            # 拿 CSV 逐条过的人（以及下游脚本）会完全看不到这条已经重复了。
+            r["note"] = (r.get("note") or "") + \
+                f"；⚠️ 与 {cite_label(results[root])} 是同一篇文献（重复编号）"
+    for root, members in groups.items():
+        members[0]["note"] = (members[0].get("note") or "") + \
+            "；⚠️ 本条被重复引用了 " + str(len(members) - 1) + " 次（见报告「重复引用」节）"
+    for a, b, sim in suspects:
+        for x, y in ((a, b), (b, a)):
+            x["note"] = (x.get("note") or "") + \
+                f"；⚠️ 标题与 {cite_label(y)} 高度相似(相似度{sim})，请确认是否同一篇"
+    return [groups[k] for k in sorted(groups)], suspects
+
+
 def parse_input(path, positional):
     entries = []
     if positional:
         for tok in positional:
             entries.append(extract(tok))
-        return entries
+        return _number_entries(entries)
     if not path:
         return entries
     ext = os.path.splitext(path)[1].lower()
@@ -635,7 +791,7 @@ def parse_input(path, positional):
                 line = line.strip()
                 if line:
                     entries.append(extract(line))
-    return entries
+    return _number_entries(entries)
 
 
 _AUTHOR_SEG = re.compile(r"\bet\s+al\b", re.I)
@@ -689,6 +845,12 @@ def guess_year(text):
     return m.group(1) if m else ""
 
 
+# 条目序号 `[3]` / `3.` / `(3)` / `3、`。与 guess_title 里剥序号用的是同一形状，
+# 只是这里把数字【捕获下来】——查重报告要能说出"是哪两个编号指向同一篇"，
+# 光说"有两条重复"，用户还得自己回去数行。
+_CITE_NO_RE = re.compile(r"^\s*[\[\(【]?(\d{1,3})[\]\)】.、]\s*")
+
+
 def extract(text):
     """从一行文字里抽 DOI/PMID/标题。"""
     doi = DOI_RE.search(text)
@@ -699,8 +861,10 @@ def extract(text):
         claimed = ""
     if pmid and re.fullmatch(r"PMID:?\s*\d+", text.strip(), re.I):
         claimed = ""
+    _no = _CITE_NO_RE.match(text or "")
     return {"raw": text, "claimed_title": claimed,
             "claimed_year": guess_year(text),
+            "cite_no": _no.group(1) if _no else "",
             "doi": doi.group(0) if doi else None,
             "pmid": pmid.group(1) if pmid else None}
 
@@ -794,8 +958,12 @@ def main():
         print(f"  [{i}/{len(entries)}] {r['verdict']:10} {(r['claimed_title'] or r['id'])[:60]}")
         time.sleep(0.2)
 
+    # 跨条目查重。必须在下面的按风险排序【之前】跑：排序会打乱条目顺序，
+    # 而"保留最先出现的那个编号"要靠原始顺序才认得出谁是首现。
+    dup_groups, dup_suspects = mark_duplicates(results)
+
     # CSV
-    cols = ["verdict", "sim", "claimed_title", "found_title", "id", "note", "raw"]
+    cols = ["verdict", "sim", "cite_no", "dup_of", "claimed_title", "found_title", "id", "note", "raw"]
     with open(os.path.join(args.outdir, "reference_check.csv"), "w",
               encoding="utf-8", newline="") as f:
         w = csv.DictWriter(f, fieldnames=cols, extrasaction="ignore")
@@ -819,6 +987,41 @@ def main():
                 "> 这意味着**查不出「真 DOI 配错标题」这类张冠李戴** —— 而那正是假引用最常见的形态。\n"
                 "> **不要据此宣布「引用核查全绿 / 质量闸通过」**。要真查，请把「标题 + DOI」成对"
                 "喂进来（每行一条完整著录即可）。\n\n")
+        if dup_groups:
+            f.write(f"## ⚠️ 重复引用（同一篇文献占了多个编号，{len(dup_groups)} 组）\n\n")
+            f.write("每条引用逐条查都是真的，但下列几组指向**同一篇文献**——"
+                    "同一文献只能有一个编号，这是投稿硬伤，且会虚高参考文献数。\n\n")
+            for g in dup_groups:
+                keep = cite_label(g[0])
+                drop = "、".join(cite_label(x) for x in g[1:])
+                ident = g[0].get("doi") or g[0].get("_match_doi") or \
+                    g[0].get("pmid") or g[0].get("found_title") or "（同一篇）"
+                # 有真方括号号才谈"改正文编号"；.bib/.ris 只有条目序号，正文编号是排版时
+                # 由 CSL 生成的，让用户去"把第3条改成第1条"是句没法执行的话。
+                numbered = bool(str(g[0].get("cite_no") or "").strip())
+                f.write(f"- **{ident}** → {'编号' if numbered else '条目'} {keep}、{drop}\n")
+                f.write(f"  - 文献：{g[0].get('found_title') or g[0].get('claimed_title')}\n")
+                if numbered:
+                    f.write(f"  - 建议：保留 {keep}；正文里所有 {drop} 改成 {keep}，"
+                            f"其后编号整体前移；**改完重跑本技能**（重排编号容易引入新的错位）。\n")
+                else:
+                    f.write(f"  - 建议：保留 {keep}，从题录里删掉 {drop}；"
+                            f"若正文已按编号引用，把指向 {drop} 的引用并到 {keep}。\n")
+                for x in g[1:]:
+                    f.write(f"  - {cite_label(x)} 原著录：{x.get('claimed_title') or x.get('raw')}\n")
+            f.write("\n")
+        if dup_suspects:
+            f.write(f"## 疑似重复（标题高度相似，待人工确认，{len(dup_suspects)} 组）\n\n")
+            f.write("没有共同的 DOI/PMID，只是标题很像——可能是同一篇的两种著录，"
+                    "也可能是 `…Part I` / `…Part II`、`…in adults` / `…in children` 这类"
+                    "**本就不同**的姊妹篇。请人工看一眼，别直接删。\n\n")
+            for a, b, sim in dup_suspects:
+                f.write(f"- {cite_label(a)} ⟷ {cite_label(b)}（相似度 {sim}）\n")
+                f.write(f"  - {cite_label(a)}：{a.get('claimed_title') or a.get('raw')}\n")
+                f.write(f"  - {cite_label(b)}：{b.get('claimed_title') or b.get('raw')}\n")
+            f.write("\n")
+        if dup_groups or dup_suspects:
+            f.write("## 逐条结论\n\n")
         for r in results:
             f.write(f"- **{r['verdict']}** — {r['claimed_title'] or r['id']}\n")
             f.write(f"  - {r['note']}\n")
@@ -829,9 +1032,21 @@ def main():
     # （可能编造、也可能只是不在库里）；② 查到了但年份/首作者对不上（张冠李戴）。
     # 不计的话，一份含 2 条存疑引用的报告会在末尾打出"可疑/存疑 0 条"，把人直接劝走。
     bad = sum(dist.get(k, 0) for k in ("RETRACTED", "FABRICATED", "ID_FAKE", "NOT_FOUND", "MISMATCH", "CHECK"))
+    # 重复条目也必须计入。它们逐条查都是 OK，不计的话一份含重复编号的稿子会打出
+    # "可疑/存疑 0 条"——而这正是这道闸此前放行重复编号的原因。
+    dup_extra = sum(len(g) - 1 for g in dup_groups)
+    bad += dup_extra
     print("-" * 50)
     print(f"结果：{dict(dist)}")
     print(f"可疑/存疑 {bad} 条。报告见 {args.outdir}/reference_check.md / .csv")
+    if dup_groups:
+        print(f"!! 发现 {len(dup_groups)} 组【重复引用】（同一篇文献占了 {dup_extra + len(dup_groups)} 个编号）："
+              + "；".join("=".join(cite_label(x) for x in g) for g in dup_groups[:5])
+              + ("…" if len(dup_groups) > 5 else "")
+              + " —— 逐条查都是真的，但同一文献只能有一个编号，**不要当成核查通过**，"
+                "按报告「重复引用」节合并编号后重跑。")
+    if dup_suspects:
+        print(f"!! 另有 {len(dup_suspects)} 组【标题高度相似】待人工确认是否同一篇（见报告）。")
     if unver:
         print(f"!! 注意：{unver}/{len(results)} 条【只验了存在性、没比对标题】（输入没给引用标题）。"
               "这查不出「真 DOI 配错标题」，不要当成核查通过。")
