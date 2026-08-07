@@ -26,6 +26,22 @@
       "runtimeExecutable": "node",
       "runtimeArgs": ["--no-warnings", "web/dev-gateway.mjs"],
       "port": 3001
+    },
+    {
+      "//": "核心能力四模块阅读器化的 worktree（分支 feat/skill-modules），自测用。",
+      "//2": "MANAGE_OC=0 由 dev-skillmods.mjs 设死——主检出同时在用同一个 opencode，别去 kill 它。",
+      "name": "web-skillmods",
+      "runtimeExecutable": "node",
+      "runtimeArgs": ["--no-warnings", "D:/projects/sci-skillmods-wt/web/dev-skillmods.mjs"],
+      "port": 3007
+    },
+    {
+      "//": "v3 表单改版的 worktree（分支 feat/intake-v3），自测用。绝对路径指过去，",
+      "//2": "server.mjs 全部路径都基于 __dirname、不读 cwd，所以产物/状态都落在 worktree 里，不会污染主检出。",
+      "name": "web-v3",
+      "runtimeExecutable": "node",
+      "runtimeArgs": ["--no-warnings", "D:/projects/sci-v3-wt/web/dev-gateway.mjs"],
+      "port": 3003
     }
   ]
 }
