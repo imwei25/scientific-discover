@@ -2412,10 +2412,12 @@ async function cloudForward(req, res, u) {
     body = Buffer.concat(chunks)
   } catch { return send(res, 400, "application/json", JSON.stringify({ error: { message: "读取请求体失败" } })) }
 
-  // /cloud/<rest> → 云端的 /llm/<rest>；唯一的例外是生图，它在云端是独立的 /img 通道
-  // （按张限额、不按 token 计费，见 server/lib/imagegen.mjs），别把它套进 /llm 里去。
+  // /cloud/<rest> → 云端的 /llm/<rest>；例外是生图与图片识字，它们在云端各是一条独立通道
+  // （/img 按张限额、/ocr 按次限额，都不按 token 计费，见 server/lib/imagegen.mjs 与
+  // server/lib/ocrspace.mjs），别把它们套进 /llm 里去。
   const rest = u.pathname.slice(CLOUD_PROXY_PREFIX.length - 1)
-  const fwdPath = (rest === "/img/generate" || rest.startsWith("/img/") ? rest : "/llm" + rest) + u.search
+  const passthru = rest.startsWith("/img/") || rest.startsWith("/ocr/")
+  const fwdPath = (passthru ? rest : "/llm" + rest) + u.search
 
   const once = async (force) => {
     const a = await Cloud.currentAccess({ force })
@@ -4100,9 +4102,15 @@ function spawnOc() {
       // （见下方 CLOUD_PROXY_PREFIX 的两道闸），少给这一个就是 401「本机转发令牌不正确」。
       // 不能为了省事把 /cloud/img 从闸里放行 —— 那会让同机任何程序都能白嫖云端生图额度。
       // 令牌本就随 provider 配置交给了 opencode（apiKey: local-…），给技能用是同一层信任。
+      // SCI_OCR_URL 同理：ocr 技能（图片识字）也是一把【全体用户共用】的上游 key，
+      // 桌面版此前没有任何一处给它赋值 —— 技能一跑就报「缺 OCR_SPACE_API_KEY」，
+      // 而容器版靠 render-compose 注入、看不出问题。走代理后 key 只留在服务器，
+      // 每人每天的次数与全平台的池子都在服务端算（见 server/lib/ocrspace.mjs）。
       ...(cloudLoggedIn() ? {
         SCI_IMAGE_URL: `http://127.0.0.1:${PORT}${CLOUD_PROXY_PREFIX}img/generate`,
         SCI_IMAGE_TOKEN: CLOUD_LOCAL_TOKEN,
+        SCI_OCR_URL: `http://127.0.0.1:${PORT}${CLOUD_PROXY_PREFIX}ocr/parse`,
+        SCI_OCR_TOKEN: CLOUD_LOCAL_TOKEN,
       } : {}),
     },
     // 【Windows 必须给】detached + shell 会让 cmd.exe 另开一个控制台窗口，

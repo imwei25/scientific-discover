@@ -16,9 +16,12 @@ OCR 是**辅助提取**，不是权威原件。Engine3 中文准确度很高，�
 - 完整性可自查：连续编号（代码表、条目表）OCR 后检查有没有跳号，跳号=漏行。
 
 ## 依赖与 key
-- **API key**：环境变量 `OCR_SPACE_API_KEY`。多用户容器**已由部署注入**（`deploy/.env` → `render-compose.sh`），会话里直接可用。本机手动跑时先 `export OCR_SPACE_API_KEY=<key>`（免费注册 https://ocr.space/ocrapi ，邮箱即可，**别写进仓库**）。
+脚本自己选通道，**正常情况下你不需要配任何 key**：
+- **① 平台代理（登录了平台账号就走它）**：图片发到本机网关 → 网关贴登录票据转给服务器 → 服务器贴 OCR key 调上游。**key 只留在服务器，客户端拿不到**；引擎由服务端定，次数由服务端扣。网关注入 `SCI_OCR_URL` 即代表此通道可用（桌面打包版走的就是这条）。
+- **② 本机 key 直连**：没有①时读环境变量 `OCR_SPACE_API_KEY`。多用户容器**已由部署注入**（`deploy/.env` → `render-compose.sh`）。本机手动跑先 `export OCR_SPACE_API_KEY=<key>`（免费注册 https://ocr.space/ocrapi ，邮箱即可，**别写进仓库**）。
+- 两条都没有 → 脚本报错并说清该找谁（管理员没配识字服务 / 本机自用该 export 什么），**不是你写错命令**。
 - **Python**：项目根 `.venv`（脚本自动解析；缺则先跑 `env-setup`）。`requests` 必需，`Pillow` 用于压缩 >1MB 的图。
-- **免费额度**（所有用户容器共用同一个 key 的配额，注意别刷爆）：Engine3 **2500 次/月**、Engine1/2 25000/月、500 次/天/IP、**单图 ≤1MB**（脚本自动压缩超标图）。
+- **免费额度**（**全平台共用同一把 key 的配额**，注意别刷爆）：Engine3 **2500 次/月**、Engine1/2 25000/月、500 次/天/IP、**单图 ≤1MB**（脚本自动压缩超标图）。走平台代理时还有两层闸：每人每天若干次（档位定）、全平台每天/每月上限（`OCR_DAILY_CAP` / `OCR_MONTHLY_CAP`）。撞到闸时脚本**立刻停下并说明是哪一层**（自己的次数用完 vs 全平台池子满了 vs 平台没配），不会把剩下的图一张张再撞一遍。
 
 ## 用法
 ```bash
@@ -30,7 +33,7 @@ bash ${REPO_ROOT:-/app}/.opencode/skills/ocr/scripts/ocr.sh a.jpg b.png c.jpg > 
 
 # 官方页面里的图先解析出真实图片 URL 再喂进来（页面常是 <img src=...jpg>）
 ```
-脚本做的事：取图（URL 下载 / 本地读）→ >1MB 自动用 Pillow 压缩到 1MB 内 → POST 到 OCR.space（`language=chs, OCREngine=3, isTable=true`）→ 输出识别文本。
+脚本做的事：取图（URL 下载 / 本地读）→ >1MB 自动用 Pillow 压缩到 1MB 内 → 走平台代理或直连 OCR.space（`language=chs, OCREngine=3, isTable=true`）→ 识别文本走 **stdout**，通道/额度/失败信息走 **stderr**（所以 `> out.txt` 拿到的是干净文本）。
 
 ## 典型流程（官方图片文件 → 可用文本）
 1. 目标是网页里的图 → 先用 `.venv` 的 requests+bs4 解析页面 `<img>` 的 src，拿到真实图片 URL（NSFC 等站点直接抓页面可能 412，加 User-Agent）。
