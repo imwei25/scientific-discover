@@ -75,3 +75,9 @@ deploy-r*.bundle
 
 # 技能跑出来的证据表等产物，落在仓库根只是因为当时的工作目录在这儿
 zotero_evidence.csv
+
+# ppt-master 的项目工作区与开发期的试验残留。都是【本机产物】：换台机器重跑一遍
+# 就有，而且体量不小（各几 MB、上百个文件），跟着仓库走只会让 clone 变慢、
+# git status 长期是脏的。文件本身留在磁盘上，需要的人照旧能翻。
+projects/
+scratchpad/
