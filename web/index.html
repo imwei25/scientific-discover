@@ -3178,13 +3178,19 @@ function helpDot(text) {
 // 两列栅格里，哪些控件天生要占满整行：多行文本、成排的 chip、标签输入、上传区、
 // 真实表头下拉（列名多时一行放不下）。schema 里显式写 col2 可以覆盖这个判断。
 const WIDE_TYPES = new Set(["textarea", "multi", "files", "tags", "columns", "range"])
+// 单选题摊成一排 chip 还是收成原生下拉：
+//   chips:true    → 强制摊开（选项再多也摊）
+//   dropdown:true → 强制收起
+//   都不写        → 8 个以内摊开。阈值 8 而不是 6：研究类型有 8 个选项，落到下拉后成了全屏
+//                  唯一的下拉控件，而它偏偏是第一个必填项 —— 用户看不见里面有什么（实测反馈）。
+const asChips = (f) => f.type === "multi"
+  || (f.type === "select" && (f.chips || (!f.dropdown && (f.options || []).length <= 8)))
 // select 摊成一排 chip 时【选项多】才算宽。
 // ★ 原来是"凡摊成 chip 的一律占满整行"，结果除 grant 外六个模块的两列栅格全退化成一列
 //   （实测：review 0 对 3 单、paper 0 对 2 单），右边空着一大片。5 个以上选项一行确实放不下，
 //   4 个以内在半栏里最多折成两行，没必要霸占整行。
 const isWideField = (f) => f.col2 !== undefined ? !!f.col2
-  : WIDE_TYPES.has(f.type) || (f.type === "select" && !f.dropdown && (f.options || []).length > 4
-                                                  && (f.options || []).length <= 8)
+  : WIDE_TYPES.has(f.type) || (f.type === "select" && asChips(f) && (f.options || []).length > 4)
 function fieldEl(f, values, onChange, allFields) {
   const wrap = document.createElement("div"); wrap.className = "wff" + (isWideField(f) ? " col2" : "")
   wrap.dataset.fid = f.id                     // 校验不过时按 id 找到它标红（见 buildFormCard 的 go 点击）
@@ -3197,9 +3203,8 @@ function fieldEl(f, values, onChange, allFields) {
   else lab.appendChild(Object.assign(document.createElement("span"), { className: "opt", textContent: "选填" }))
   wrap.appendChild(lab)
   const mk = (tag, props) => Object.assign(document.createElement(tag), props)
-  // 阈值 8 而不是 6：研究类型有 8 个选项，落到下拉后成了全屏唯一的下拉控件，
-  // 而它偏偏是第一个必填项 —— 用户看不见里面有什么，第一步就卡住（实测反馈）。
-  if (f.type === "multi" || (f.type === "select" && !f.dropdown && (f.options || []).length <= 8)) {
+  // 摊开还是收起，判据集中在 asChips 一处（见其头注），别在这里再写一遍阈值
+  if (asChips(f)) {
     // 选项少就摊开成 chip（比下拉少一次点击，也让用户一眼看全候选）
     const opts = document.createElement("div"); opts.className = "wfopts"
     const multi = f.type === "multi"
