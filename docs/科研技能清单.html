@@ -1,0 +1,213 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>科研医学 Agent · 技能清单</title>
+<style>
+  :root{
+    --bg:#fbfaf7;
+    --panel:#ffffff;
+    --ink:#1c1f23;
+    --ink-2:#4a5158;
+    --ink-3:#767d85;
+    --line:#e5e2da;
+    --line-2:#efece5;
+    --accent:#0f5f5c;
+    --accent-soft:#e6f0ef;
+    --warn:#8a5a12;
+    --warn-soft:#fbf3e3;
+    --radius:10px;
+  }
+  @media (prefers-color-scheme: dark){
+    :root{
+      --bg:#16181a;
+      --panel:#1d2023;
+      --ink:#e9e7e2;
+      --ink-2:#b4b8bd;
+      --ink-3:#868c93;
+      --line:#31353a;
+      --line-2:#26292d;
+      --accent:#6bc0b8;
+      --accent-soft:#1d2c2b;
+      --warn:#d9ab5f;
+      --warn-soft:#2b2519;
+    }
+  }
+  *{box-sizing:border-box}
+  html{-webkit-text-size-adjust:100%}
+  body{
+    margin:0;
+    background:var(--bg);
+    color:var(--ink);
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Hiragino Sans GB","Microsoft YaHei","Noto Sans CJK SC",sans-serif;
+    font-size:16px;
+    line-height:1.75;
+  }
+  .wrap{max-width:920px;margin:0 auto;padding:56px 24px 96px}
+
+  /* ---------- header ---------- */
+  header{margin-bottom:52px}
+  .eyebrow{
+    font-size:12px;letter-spacing:.14em;text-transform:uppercase;
+    color:var(--accent);font-weight:600;margin:0 0 12px
+  }
+  h1{
+    font-size:34px;line-height:1.25;margin:0 0 14px;font-weight:700;letter-spacing:-.01em
+  }
+  .lede{font-size:17px;color:var(--ink-2);margin:0;max-width:62ch}
+  .meta{
+    margin-top:22px;padding-top:18px;border-top:1px solid var(--line);
+    display:flex;flex-wrap:wrap;gap:8px 28px;font-size:13.5px;color:var(--ink-3)
+  }
+  .meta b{color:var(--ink-2);font-weight:600}
+
+  /* ---------- section ---------- */
+  section{margin-bottom:46px}
+  h2{
+    font-size:13px;letter-spacing:.1em;font-weight:700;color:var(--accent);
+    margin:0 0 4px;text-transform:uppercase
+  }
+  .sec-title{
+    display:flex;align-items:baseline;gap:12px;flex-wrap:wrap;
+    margin:0 0 18px;padding-bottom:12px;border-bottom:2px solid var(--line)
+  }
+  .sec-title h3{font-size:21px;margin:0;font-weight:700}
+  .sec-title .count{
+    font-size:13px;color:var(--ink-3);font-variant-numeric:tabular-nums
+  }
+
+  /* ---------- skill rows ---------- */
+  .skills{
+    background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);
+    overflow:hidden
+  }
+  .row{
+    display:grid;grid-template-columns:190px 1fr;gap:20px;
+    padding:15px 20px;border-top:1px solid var(--line-2);align-items:baseline
+  }
+  .row:first-child{border-top:none}
+  .name{
+    font-family:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;
+    font-size:14px;font-weight:600;color:var(--accent);
+    word-break:break-word;line-height:1.6
+  }
+  .desc{font-size:15px;color:var(--ink-2);margin:0}
+  .desc strong{color:var(--ink);font-weight:600}
+  @media (max-width:640px){
+    .row{grid-template-columns:1fr;gap:4px;padding:14px 16px}
+    .name{font-size:13.5px}
+  }
+
+  footer{
+    margin-top:56px;padding-top:20px;border-top:1px solid var(--line);
+    font-size:13.5px;color:var(--ink-3);line-height:1.8
+  }
+
+  @media print{
+    body{background:#fff;font-size:11pt}
+    .wrap{padding:0;max-width:none}
+    .skills{break-inside:avoid}
+    .row{break-inside:avoid}
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <p class="eyebrow">Research &amp; Medical Agent</p>
+  <h1>科研医学 Agent · 技能清单</h1>
+  <p class="lede">覆盖从选题、检索、统计作图，到成稿、查引用、排版出件的科研全流程。每项技能按需触发，也可以串成流水线连续跑完一个完整目标。</p>
+  <div class="meta">
+    <span><b>22</b> 项技能</span>
+    <span><b>5</b> 个大类</span>
+    <span>本清单不含系统综述 / Meta 方法学模块</span>
+  </div>
+</header>
+
+<!-- ============ 1 ============ -->
+<section>
+  <div class="sec-title">
+    <h2>01</h2>
+    <h3>检索与文献</h3>
+    <span class="count">7 项</span>
+  </div>
+  <div class="skills">
+    <div class="row"><div class="name">search-lit</div><p class="desc">医学文献精准检索与引用管理，覆盖 PubMed、Semantic Scholar、预印本三大源，含检索式构建、逐条 API 核实、BibTeX 导出全流程。</p></div>
+    <div class="row"><div class="name">literature-review</div><p class="desc">叙述性文献综述智能撰写，覆盖主题测绘、缺口驱动的回合制检索、证据分级、跨文献矛盾扫描到成文与参考文献表全流程。</p></div>
+    <div class="row"><div class="name">research-scan</div><p class="desc">科研方向全景摸底与背景调研，覆盖核心问题、主要流派、近年趋势、关键团队、争议焦点与可切入空白六个维度。</p></div>
+    <div class="row"><div class="name">deep-research</div><p class="desc">单一具体问题的多源深度求证，覆盖多路检索、原文抓取、跨来源交叉核实到带引用、带置信度的结论报告全流程。</p></div>
+    <div class="row"><div class="name">fulltext-retrieval</div><p class="desc">全文 PDF 批量获取与格式转换，覆盖 DOI / PMID / 标题解析、开放获取渠道、机构订阅通道到 PDF 转 Markdown 全流程。</p></div>
+    <div class="row"><div class="name">zotero-library</div><p class="desc">本机 Zotero 文献库智能问答，覆盖文献库探测、分类导入、PDF 全文解析、语义检索到带页码引用的证据段输出。</p></div>
+    <div class="row"><div class="name">reference-check</div><p class="desc">参考文献真实性核查与假引用识别，覆盖 DOI 验证、中英文标题比对、PubMed 核实与撤稿检测四道关口。</p></div>
+  </div>
+</section>
+
+<!-- ============ 2 ============ -->
+<section>
+  <div class="sec-title">
+    <h2>02</h2>
+    <h3>选题与立项</h3>
+    <span class="count">3 项</span>
+  </div>
+  <div class="skills">
+    <div class="row"><div class="name">topic-selection</div><p class="desc">研究选题与科学假设生成，覆盖研究空白识别、候选课题发散、PICO 结构化到新颖性 / 可行性 / 价值 / 竞争度四维打分排序。</p></div>
+    <div class="row"><div class="name">novelty-check</div><p class="desc">课题新颖性严格裁定与研究预注册，覆盖文献与试验注册库双重检索、新颖性分级判定到假设与主分析计划冻结。</p></div>
+    <div class="row"><div class="name">grant-proposal</div><p class="desc">国自然 / 基金标书智能生成、润色与格式校验，覆盖立项依据到研究基础全章节，并含模拟评审打分。</p></div>
+  </div>
+</section>
+
+<!-- ============ 3 ============ -->
+<section>
+  <div class="sec-title">
+    <h2>03</h2>
+    <h3>数据、统计与作图</h3>
+    <span class="count">5 项</span>
+  </div>
+  <div class="skills">
+    <div class="row"><div class="name">data-analysis</div><p class="desc">科研数据分析与统计建模，覆盖数据体检、描述统计、假设检验、回归 / 生存 / ROC / 方法比对到探索性可视化全流程。</p></div>
+    <div class="row"><div class="name">clinical-stats</div><p class="desc">临床基线特征表与样本量测算，覆盖变量类型识别、组间检验选择、效应量与 SMD 计算到 Table 1 三线表输出。</p></div>
+    <div class="row"><div class="name">nature-figure</div><p class="desc">投稿级科研图表制作，覆盖结论定义、配色与版式规范、森林图 / 生存曲线 / 火山图绘制到 300 dpi 与矢量格式导出。</p></div>
+    <div class="row"><div class="name">deidentify</div><p class="desc">临床数据脱敏与去标识化，覆盖身份证、手机号、住院号、姓名、住址等敏感信息检测、一致性假名替换到人工复核提示全流程。</p></div>
+    <div class="row"><div class="name">data-integrity</div><p class="desc">论文源数据数值完整性自查，覆盖复制粘贴痕迹、列间常数偏移、跨表复用、均值方差自洽等多类可疑模式筛查。</p></div>
+  </div>
+</section>
+
+<!-- ============ 4 ============ -->
+<section>
+  <div class="sec-title">
+    <h2>04</h2>
+    <h3>写作与评审</h3>
+    <span class="count">3 项</span>
+  </div>
+  <div class="skills">
+    <div class="row"><div class="name">write-paper</div><p class="desc">原创研究论文全文撰写，覆盖标题、摘要、引言、方法、结果、讨论全章节，并含病例报告、投稿信与审稿意见回复。</p></div>
+    <div class="row"><div class="name">humanize-academic</div><p class="desc">学术文本去 AI 味与润色，覆盖句式节奏重塑、AI 腔用词替换、中英文分别适配，术语、数据与引用零改动。</p></div>
+    <div class="row"><div class="name">peer-review</div><p class="desc">论文与标书模拟评审，覆盖整体判断、方法与统计逐节剖析、报告规范核对到推荐意见，并含对抗红队攻击模式。</p></div>
+  </div>
+</section>
+
+<!-- ============ 5 ============ -->
+<section>
+  <div class="sec-title">
+    <h2>05</h2>
+    <h3>出件与识别</h3>
+    <span class="count">4 项</span>
+  </div>
+  <div class="skills">
+    <div class="row"><div class="name">render-docx</div><p class="desc">稿件转 Word 投稿版排版，覆盖期刊格式预设、字体字号与页边距、双倍行距与连续行号到参考文献样式全套落参。</p></div>
+    <div class="row"><div class="name">render-pdf-doc</div><p class="desc">学术文档转出版级 PDF，覆盖中英韩多语种排版、表格列宽自适应、中文学术字体到标书与简报成件输出。</p></div>
+    <div class="row"><div class="name">ppt-master</div><p class="desc">文档与主题一键转演示文稿，覆盖素材解析、版式设计、SVG 页面生成到 PPTX 导出全流程。</p></div>
+    <div class="row"><div class="name">ocr</div><p class="desc">图片与扫描件文字识别，覆盖网页截图、拍照表格、证件与图片版 PDF 多类输入，输出可编辑文本。</p></div>
+  </div>
+</section>
+
+<footer>
+  完整目标（从零到成稿）不必逐个点技能——直接说清目标，系统会按对应流水线依次调用并在每个质量闸汇报结果。<br>
+  硬规矩：不虚构数据、结果、统计量、参考文献、伦理批号与注册号；缺的一律标「待补充」向你索要。
+</footer>
+
+</div>
+</body>
+</html>
