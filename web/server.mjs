@@ -420,6 +420,7 @@ async function hardDeleteSession(id) {
   try { fs.rmSync(delUp, { recursive: true, force: true }); fs.rmSync(delOut, { recursive: true, force: true }); dirCache.delete(safeSid(id)) } catch {}
   pendingReverts.delete(id)   // 已删会话的待提交登记没人再消费，别驻留到进程重启
   unbindSessionModule(id)     // 模块绑定同样随会话删除，别在持久表里越积越多
+  clearGateBypass(id)         // 手动放行的标记同理：会话没了就不该在放行表里留着
   if (META.sessions[id]) { delete META.sessions[id]; saveMeta() }
 }
 // 元数据整理：只清掉「元数据里还挂着、但 opencode 里已经没有」的会话残留。
@@ -773,6 +774,36 @@ const moduleMap = () => {
   return _modMap
 }
 const saveModuleMap = () => { try { fs.mkdirSync(path.dirname(MODULE_MAP_FILE), { recursive: true }); fs.writeFileSync(MODULE_MAP_FILE, JSON.stringify(_modMap || {})) } catch (e) { console.warn(`[modules] 绑定表写入失败：${e.message}`) } }
+// ---- 用户手动放行质量闸（会话级）----
+// 【为什么要有】闸的判据是关键词匹配报告正文（GATE_FAIL_*），必然有假阳性，而假阳性的代价是
+// 【用户永远拿不到送审件】：实测 11 条"其实通过"的英文写法里 6 条被判红
+// （`Decision: Accept. No major revision required.` —— NEG_PREFIX 只列了中文否定词，挡不住英文 No；
+//  `Recommendation: Accept. No critical issues.` —— 结论行判据压根没做否定处理），
+// 而"改稿→重跑闸"这条解锁路径对措辞型误判是无效的：报告写得再对，措辞一样会被读成红。
+// 所以给用户一个出口，由【他】判断这是误判还是真硬伤。
+//
+// 【为什么不落在会话产物目录】那个文件（_workflow.json）agent 有写权，把开关放进去等于让被拦的一方
+// 自己解锁 —— 模型撞了两次墙之后完全可能"顺手"改掉它。放在 ocdata 卷里，与模块绑定表同处。
+// 【但这也不是防篡改边界】agent 有 shell，铁了心也能写到这儿；它挡的是"顺手改掉"，不是恶意。
+// 【放行 ≠ 闸转绿】failed / stale 照旧按实际结论显示，产物卡与步骤条仍写"未通过"。放行只免掉"中止本轮"。
+const GATE_BYPASS_FILE = path.join(os.homedir(), ".local", "share", "opencode", "gate-bypass.json")
+let _gbMap = null
+const gbMap = () => {
+  if (_gbMap) return _gbMap
+  try { _gbMap = JSON.parse(fs.readFileSync(GATE_BYPASS_FILE, "utf8")) || {} } catch { _gbMap = {} }
+  return _gbMap
+}
+const saveGbMap = () => { try { fs.mkdirSync(path.dirname(GATE_BYPASS_FILE), { recursive: true }); fs.writeFileSync(GATE_BYPASS_FILE, JSON.stringify(_gbMap || {})) } catch (e) { console.warn(`[gate] 放行表写入失败：${e.message}`) } }
+const gateBypassed = (sid) => !!gbMap()[safeSid(sid)]
+const setGateBypass = (sid, on) => {
+  const s = safeSid(sid); if (!s) return false
+  if (on) gbMap()[s] = new Date().toISOString()   // 存时间而不是 true：排查时能看出是什么时候放行的
+  else delete gbMap()[s]
+  saveGbMap()
+  return !!on
+}
+const clearGateBypass = (sid) => { const s = safeSid(sid); if (gbMap()[s]) { delete _gbMap[s]; saveGbMap() } }
+
 const sessionModule = (sid) => moduleMap()[safeSid(sid)] || "chat"   // 未登记的老会话一律按 chat
 const bindSessionModule = (sid, modId) => { moduleMap()[safeSid(sid)] = modId; saveModuleMap() }
 const unbindSessionModule = (sid) => { if (moduleMap()[safeSid(sid)]) { delete moduleMap()[safeSid(sid)]; saveModuleMap() } }
@@ -829,7 +860,16 @@ const wfValues = (outDir, modId) => {
 // 否定前缀：这些词一旦被否定，含义就反过来了 —— 「无需返工」「未发现假引用」「无未通过项」
 // 都是【通过】的意思。纯子串匹配会把它们全判成红（实测 7 条真实通过措辞全中招）。
 // 用变长负向后顾把它们挡掉。宁可漏判也不能误判：假红会让用户白跑一轮，还会把交付物警示变成狼来了。
-const NEG_PREFIX = "(?<!无|不|未|毋|没|没有|未见|未发现|不存在|未出现|无任何|不含|零)"
+// ★ 英文同样要挡，而且【不能只挡紧挨着的那个词】。实测（判据直接从本文件抠出来跑）：
+//   `Decision: Accept as is. No major revision required.` 被判红 —— "major revision" 前面那个
+//   英文 No 不在词表里，一个字都挡不住。11 条"其实通过"的英文写法里 6 条中招。
+//   而真实写法还有 `does not require major revision` 这种否定词与裁定语之间隔着动词的，
+//   所以英文这一支允许中间夹最多 24 个【非句末】字符（句号/分号/问号/换行不跨，免得把上一句的
+//   否定算到下一句头上）。
+// ★ 中文那一支保持"紧邻"不变：中文里"不/未"与裁定语之间基本不插词，放宽反而会把
+//   "未做敏感性分析，需返工"这类【否定在前、裁定在后】的句子误放行 —— 那是两件事，不是否定。
+const NEG_PREFIX = "(?<!无|不|未|毋|没|没有|未见|未发现|不存在|未出现|无任何|不含|零" +
+  "|\\b(?:no|not|none|without|free of)\\b[^.;!?\\n]{0,24})"
 const GATE_FAIL_SURE = new RegExp(NEG_PREFIX +
   // ★ 「不通过」后面必须跟句读或行尾。医学写作里它极常见地当【普通动宾】用 ——
   //   "不通过血脑屏障""不通过静脉给药"，实测踩到的原句是预注册文件里的假设：
@@ -841,7 +881,30 @@ const GATE_FAIL_SURE = new RegExp(NEG_PREFIX +
   //   `不通过` 后面紧跟的是 `**` 而不是句读 —— 漏了它就会把一条真裁定放过去（既有测试当场抓住）。
   "(闸不过|闸未过|不予通过|未通过|不通过(?=[\\s，。；、）)\\]】*_`~]|$)|需返工|需要返工|退回返工|条件性通过|major\\s*revision|需要?重大修改" +
   "|假引用|伪造引用|编造的?引用|查无此文|未能核实|该文献不存在)", "i")
-const GATE_FAIL_CTX = /(reject|critical|严重问题|硬伤)/i
+// 否定写在裁定语【后面】的写法：`Major revision: none` / `Major revision — N/A` /
+// `Major revision is not necessary.` / `需返工：无`。GATE_FAIL_SURE 是纯前缀否定（NEG_PREFIX），
+// 这四句实测【全判红】，而它们全是通过。所以再加一道后缀否定，由 sureFailed 逐行配合使用。
+// 距离限制 16 字符且不跨句读（`;`/`。`/`.` 都在排除集里）—— 不限的话，
+// `Major revision required; none of the analyses account for clustering` 会被后半句的 none 放行。
+const SURE_TAIL_NEG = /^[^。.;!?\n]{0,16}(无|没有|none|n\/?a|unnecessary|not\s+(required|necessary|needed|warranted|recommended)|0\s*[条项个]?\s*$)/i
+// GATE_FAIL_SURE 的实际用法：【逐行】判，并放过后缀被否定掉的那一行。
+// 为什么改成逐行：原来是整篇 test 一次，于是"哪一行命中的"这个信息拿不到，也就无从判断
+// 后面跟的是不是否定。裁定语不会跨行，所以逐行与整篇在检出侧等价，只是多了否定的判断余地。
+const sureFailed = (t) => {
+  for (const ln of t.split(/\r?\n/)) {
+    const m = ln.match(GATE_FAIL_SURE)
+    if (!m) continue
+    if (SURE_TAIL_NEG.test(ln.slice(m.index + m[0].length))) continue
+    return true
+  }
+  return false
+}
+// g 标志是给下面【逐个匹配、逐个查否定】用的（见 gateFailed 末尾那段）：整行 test 一下就返回红，
+// 会把 `Recommendation: Accept. No critical issues.` 这类【否定过的】判成未通过。用前必须归零 lastIndex。
+const GATE_FAIL_CTX = /(reject|critical|严重问题|硬伤)/gi
+// 「这个词是不是被否定掉了」：只看它【前面】那一小段。中英都收；`[^。.;!?\n]{0,24}` 限制作用距离，
+// 且不跨句 —— 不限距离的话，"未做敏感性分析。结论：存在硬伤"会被上一句的"未"放行。
+const NEG_NEAR = /(无|没有|未见|未发现|不存在|未出现|不含|零|\b(?:no|not|none|without|free of)\b)[^。.;!?\n]{0,24}$/i
 // reference-check / data-integrity 的裁定是结构化词，不是散文。两种真实写法：
 //   统计行  `RETRACTED 1，FABRICATED 2，NOT_FOUND 1，MISMATCH 1`（全绿时是 0，不能裸匹配）
 //   表格行  `| [7] | … | **FABRICATED** | 高 |`
@@ -855,11 +918,34 @@ const GATE_FAIL_CTX = /(reject|critical|严重问题|硬伤)/i
 //   「⚠️ 本次有 3/3 条只验证了标识符存在、没有比对标题…**不要据此宣布「引用核查全绿 / 质量闸通过」**」，
 //   而闸照样判绿 —— 技能作者已经把警告写进报告了，网关却把它读成绿灯，正是这套代码
 //   在别处反复防的 fail-open。
-const GATE_FAIL_COUNT = /(FABRICATED|RETRACTED|MISMATCH|NOT[_\s]?FOUND|UNVERIFIED|CHECK|ERROR)\s*[:：=]?\s*[1-9]/i
+// ★ 按词分成两条，是因为大小写敏感性不能一刀切：
+//   · 这几个词不会在散文里当普通词用，保留 i —— 模型转述统计行时写成 `unverified 3` 也要认。
+const GATE_FAIL_COUNT = /(FABRICATED|RETRACTED|MISMATCH|NOT[_\s]?FOUND|UNVERIFIED)\s*[:：=]?\s*[1-9]/i
+//   · CHECK / ERROR 则是英文散文里的日常词，带 i 就会把 `Check 1: sample size reported`
+//     （英文报告里再普通不过的编号清单）读成"有 1 条待核引用"→ 整份报告判红（实测中招）。
+//     它们在真报告里只以【全大写机器裁定词】出现（verify_refs.py 吐的），所以限定大写。
+const GATE_FAIL_COUNT_CAPS = /\b(CHECK|ERROR)\s*[:：=]?\s*[1-9]/
 // 技能在报告里主动写的"别据此宣布通过"——它比任何计数都更明确，直接认。
 const GATE_SELF_WARN = /不要据此宣布|不能据此宣布|不应据此宣布|别据此宣布/
 const GATE_FAIL_CELL = /\|\s*\*{0,2}(FABRICATED|RETRACTED|MISMATCH|NOT[_\s]?FOUND|CHECK)\*{0,2}\s*\|/i
 const VERDICT_LINE = /(判定|裁定|结论|总体评价|总评|倾向|建议|verdict|recommendation|decision)/i
+// 报告里【明确写出的通过裁定】。出现它时，正文里的 Major/Critical 条目不再单独把闸判红。
+//
+// 【为什么让位】评审报告里的 Major 有相当一部分根本不是稿件的方法学缺陷，而是"用户还没交的材料"
+// —— 伦理批号、注册号、原始记录、代表作清单。这类条目的措辞五花八门，靠词表（待补充 / to be
+// provided by…）永远补不全，补不到的那些就把用户锁死在出不了件的状态里。既然报告自己已经把
+// 总裁定写成"通过"，那就以裁定为准。
+// 【让位的边界，三条都要】
+//   ① 只有【明确的通过裁定】才让位。总评被写软（实测「Minor to moderate revision」而正文 4 条
+//      **Major**）不算通过，照旧按条目判红 —— 那正是"只认总评就被绕过"的原始教训。
+//   ② 只让位给【条目计数】这一条。sureFailed（未通过/需返工/假引用…）、机器统计行、
+//      GATE_SELF_WARN、结论行的 reject 一律照旧 —— 报告同时写"已通过"和"需返工"时，否定的那句说了算。
+//   ③ 「通过」前面不能是 未/不。`(?<![未不])` 就为此 —— 否则「评审闸未通过」会被读成通过裁定，
+//      直接把闸变成永远绿的摆设。
+const GATE_PASS_SURE = new RegExp(
+  "(闸\\s*(?:已|均|全部)?\\s*(?<![未不])通过" +
+  "|(?:判定|裁定|结论|总评|总体评价)\\s*[:：]?\\s*\\**\\s*(?:已|均)?\\s*(?<![未不])通过" +
+  "|(?:verdict|recommendation|decision)\\s*[:：]\\s*\\**\\s*(?:accept|pass)\\b)", "i")
 // 「信号型」闸的判据。data-integrity 是唯一一个【被铁律明令禁止写裁定语】的闸
 // （signal not verdict：只出待核信号、不下造假结论）。而上面那四条判据全都在找裁定语
 // （未通过 / 需返工 / major revision / FABRICATED n / 结论行+硬伤）—— 两个设计天然互斥，
@@ -914,8 +1000,8 @@ function gateFailed(outDir, step, files) {
         // 信号型闸（data-integrity）：它被铁律禁止写裁定语，只能按信号条数判 —— 见 signalGateFailed。
         // 仍然把下面几条通用判据一并跑一遍：万一模型确实写了"未通过"，没有理由放过。
         if (step.gateBy === "signals" && signalGateFailed(t)) return true
-        if (GATE_FAIL_SURE.test(t) || GATE_FAIL_COUNT.test(t) || GATE_FAIL_CELL.test(t)
-            || GATE_SELF_WARN.test(t)) return true
+        if (sureFailed(t) || GATE_FAIL_COUNT.test(t) || GATE_FAIL_COUNT_CAPS.test(t)
+            || GATE_FAIL_CELL.test(t) || GATE_SELF_WARN.test(t)) return true
         // 正文里的严重条目：结论行的措辞可能被模型写软（实测正文 4 条 **Major**，总评却是
         // "Minor to moderate revision"），只认总评就被绕过。只数【条目行】，标题行不算。
         // 带否定的条目（"无 Major 问题"）不计 —— 同 P0 的教训。
@@ -936,7 +1022,7 @@ function gateFailed(outDir, step, files) {
           //     · `- 未发现 **Major** 问题`      ← 否定词与严重度词之间隔了一个 `**` 就失配
           //     · `- 无 **Critical** 问题，仅 4 条 Minor`
           //   同一句话加不加粗结果相反，这种不对称最难被发现。允许中间夹 markdown 标记。
-          if (/(无|没有|未发现|不存在|none|no)\s*[*_`]*\s*(major|critical|严重)/i.test(ln)) continue
+          if (/(无|没有|未发现|未见|不存在|none|no|not|without)\s*[*_`]*\s*(major|critical|严重)/i.test(ln)) continue
           // 否定词也可能在标记【之后】：`- 本节 **Major** 问题：无` / `Critical: none` / `严重问题：0`
           if (/[:：]\s*[*_`]*\s*(无|没有|none|n\/?a|0)\s*[条项个]?\s*$/i.test(ln)) continue
           // ★ 分级说明 / 图例行不是条目。三级并列出现（Critical、Major、Minor 同在一行）
@@ -954,15 +1040,31 @@ function gateFailed(outDir, step, files) {
           //   闸该量的是【稿件本身的方法学缺陷】，不是【用户还没交的材料】。后者拦不出质量，
           //   只会把交付卡死；它照样留在报告里，用户看得到、也知道投稿前必须补。
           if (/(待补充|待填|需你|只能由你|无法代为编造|不能代填|由你(方|们)?提供|需(用户|作者|申请人)提供|投稿前(必办|补齐|填入))/.test(ln)) continue
+          // ★ 同一条豁免的英文写法。少了它，这条豁免在英文报告里【整个失效】：实测
+          //   `- **Critical** — IRB approval number to be provided by the applicant` 照样计入严重度，
+          //   于是"不编造伦理批号 → 评审标 Critical → 闸判红 → 出不了件"这条死链在英文稿上原样复现，
+          //   而中文稿早就修好了。闸量的是稿件的方法学缺陷，不是用户还没交的材料 —— 与语言无关。
+          if (/\b(to be (provided|supplied|filled|completed|confirmed|obtained|added)|pending (irb|ethic|approval|registration|submission)|awaiting (irb|ethic|approval)|not yet (provided|obtained|available)|tbd|to be determined|only you can provide)\b/i.test(ln)) continue
           // ★ 计数为零的表格行放行：`| Critical | 不改则拒 | 0 |`、`| Major | … | 无 |`
           //   这是严重度图例表，在评审报告里非常常见，命中数写的就是 0。
           if (/^\s*\|/.test(ln) && /\|\s*\**\s*(0|无|未使用|未命中|none)\s*[条项个]?\s*\**\s*\|?\s*$/i.test(ln)) continue
           sev++
         }
-        if (sev) return true
+        // ★ 报告已经明确写了"通过"裁定 → 条目计数让位（见 GATE_PASS_SURE 的三条边界）。
+        //   Major 里混着"用户还没交的材料"是常态，而那类条目的措辞穷举不完。
+        if (sev && !GATE_PASS_SURE.test(t)) return true
         for (const ln of t.split(/\r?\n/)) {
           if (/^\s*#/.test(ln)) continue                       // markdown 标题不是结论行
-          if (VERDICT_LINE.test(ln) && GATE_FAIL_CTX.test(ln)) return true
+          if (!VERDICT_LINE.test(ln)) continue
+          // ★★ 否定必须在这里也认。这条判据原来是裸的"结论行里出现 reject/critical 就红"——
+          //   而结论行恰恰是最爱写否定式的地方，实测四句【全是通过】的话全被判红：
+          //     `Recommendation: Accept. No critical issues were identified.`
+          //     `Verdict: Pass. No rejection grounds found.`（reject 是 rejection 的子串）
+          //     `结论：未发现严重问题，可以出件。`  `建议：接收，不存在严重问题。`
+          //   逐个匹配、逐个查它前面有没有否定词；全被否定掉才算这行没问题。
+          GATE_FAIL_CTX.lastIndex = 0
+          let m
+          while ((m = GATE_FAIL_CTX.exec(ln))) if (!NEG_NEAR.test(ln.slice(0, m.index))) return true
         }
       } catch { /* 读不到就别拦，按通过处理 */ }
     }
@@ -2262,7 +2364,20 @@ function startJob(sid, sentText, modId) {
             const called = WF.isDeliveryCall({ tool: p.tool, input: p.state.input })
             if (called) {
               const red = await failedGatesFor(sid, modId)
-              if (red.length) {
+              // 用户在流程条上手动放行过这个会话 → 不拦（理由见 GATE_BYPASS_FILE 头注）。
+              // 但【必须说】：件出来了、闸没过。静默放行会让用户以为问题已经解决。
+              // job.gateBypassNoted：一轮里可能连着出 docx 和 pdf，提示只给一次。
+              if (red.length && gateBypassed(sid)) {
+                if (!job.gateBypassNoted) {
+                  job.gateBypassNoted = true
+                  const names = red.map((id) => (WF.workflowFor(modId, {})?.steps || []).find((s) => s.id === id)?.name || id)
+                  console.warn(`[gate] 会话 ${sid}：闸 ${red.join("、")} 仍未过，但用户已手动放行，${called} 照常执行`)
+                  broadcast("notice", { message:
+                    `你已手动放行质量闸：「${names.join("、")}」当前仍判定为未通过，这次的出件不再拦截。\n` +
+                    `注意闸没有转绿——报告里列的问题仍然在那儿，流程条上也照旧标着未通过。` +
+                    `送审前请自己确认那是判据误伤（英文报告、或只剩"等你补材料"的条目最容易被误判），而不是真的方法学硬伤。` })
+                }
+              } else if (red.length) {
                 job.gateBlock = { skill: called, gates: red }
                 console.warn(`[gate] 会话 ${sid}：闸 ${red.join("、")} 未过就调用 ${called}，中止本轮`)
                 client.session.abort({ path: { id: sid } }).catch(() => {})
@@ -2341,7 +2456,11 @@ function startJob(sid, sentText, modId) {
         `如果重跑之后仍被拦，去看新报告里还剩哪几条 Critical/Major：` +
         `**只剩"等用户补事实"（伦理批号、注册号、方案细节待补充）的话不该拦**，` +
         `把这类条目写成"待补充/只能由你提供"的措辞即可，闸不会把它们算成稿件缺陷；` +
-        `若剩的是真的方法学硬伤，那就还得改稿。` })
+        `若剩的是真的方法学硬伤，那就还得改稿。\n` +
+        // ★ 出口必须写在这条消息里。判据是关键词匹配、必有误判（英文报告尤甚），被误判的用户看到的
+        //   就是这段文案 —— 不告诉他有放行开关，他面前就是一堵没有尽头的墙，而重跑闸并不会让墙消失。
+        `**如果你判断这是误判**（报告通篇英文、或结论其实是"接收/无严重问题"却被读成红），` +
+        `点流程条右上角的「仍要出件」就能放行本会话的拦截，闸的红字照旧保留、你自己心里有数即可。` })
       return finish()
     }
     if (job.moduleHit) { broadcast("failed", { message: modSkills
@@ -2380,7 +2499,7 @@ function startJob(sid, sentText, modId) {
     if (modId !== "chat") {
       try {
         const st = wfSyncDone(outDir, modId)
-        if (st) broadcast("workflow", { cur: st.cur || null, done: st.done || [], failed: st.failed || [], implied: st.implied || [], stale: st.stale || [] })
+        if (st) broadcast("workflow", { cur: st.cur || null, done: st.done || [], failed: st.failed || [], implied: st.implied || [], stale: st.stale || [], gateBypass: gateBypassed(sid) })
       } catch (e) { console.warn(`[workflow] 进度同步失败：${e.message}`) }
     }
     warmPreviews(outDir, changed)   // 后台把新产出的 office/docx 预转缓存，用户点预览即秒开
@@ -3352,7 +3471,20 @@ export const server = http.createServer(async (req, res) => {
       return send(res, 200, "application/json", JSON.stringify({
         state: st, module: modId, name: MODULE_DEFS[modId]?.name || modId,
         steps: WF.workflowFor(modId, st.form || {})?.steps || [],
+        gateBypass: gateBypassed(sid),   // 用户手动放行了质量闸 → 流程条上要显示这个状态（且可撤销）
       }))
+    }
+    // 手动放行/恢复质量闸拦截。只改"拦不拦"，不动闸的结论（failed 仍按报告实际内容显示）。
+    // 【为什么是独立接口而不是塞进 /api/workflow/form】那条路会顺带拼任务卡、写会话簿子；
+    // 这里只翻一个服务端开关，且必须是【用户】翻的 —— 走表单口会让 agent 也能顺着同一条路自解锁。
+    if (req.method === "POST" && u.pathname === "/api/workflow/gate-bypass") {
+      const b = await readJson(req).catch(() => null)
+      if (!b) return sendClose(res, 400, "application/json", JSON.stringify({ ok: false, err: "请求体不是合法 JSON" }))
+      const sid = b.sid ? String(b.sid) : ""
+      if (!sid || !safeSid(sid)) return send(res, 400, "application/json", JSON.stringify({ ok: false, err: "缺少会话 id" }))
+      const on = setGateBypass(sid, !!b.on)
+      console.warn(`[gate] 会话 ${sid}：用户${on ? "手动放行了质量闸拦截" : "恢复了质量闸拦截"}`)
+      return send(res, 200, "application/json", JSON.stringify({ ok: true, on }))
     }
     // 提交某一步的表单 → 存进状态簿 + 回一段任务卡文本，由前端拼在这条消息前面发出。
     // 【为什么不在这里直接发消息】发消息那条路（/api/chat/start）有一整套并发/额度/绑定判定，

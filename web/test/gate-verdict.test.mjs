@@ -34,15 +34,15 @@ function loadGate() {
   }
   // ★ 判定段落里新引用了哪个常量，就要在这里登记，否则求值时 ReferenceError。
   //   （加 GATE_SELF_WARN 时当场被这条测试抓住——这正是它的用处。）
-  const decls = ["NEG_PREFIX", "GATE_FAIL_SURE", "GATE_FAIL_CTX",
-                 "GATE_FAIL_COUNT", "GATE_FAIL_CELL", "GATE_SELF_WARN",
+  const decls = ["NEG_PREFIX", "GATE_FAIL_SURE", "SURE_TAIL_NEG", "sureFailed", "GATE_FAIL_CTX", "NEG_NEAR", "GATE_PASS_SURE",
+                 "GATE_FAIL_COUNT", "GATE_FAIL_COUNT_CAPS", "GATE_FAIL_CELL", "GATE_SELF_WARN",
                  "VERDICT_LINE"].map(grab).join("\n")
   const fnStart = SRC.indexOf("function gateFailed(")
   assert.ok(fnStart >= 0, "找不到 gateFailed")
   const body = SRC.slice(fnStart, SRC.indexOf("\n}", fnStart))
-  const from = body.indexOf("if (GATE_FAIL_SURE.test(t)")
+  const from = body.indexOf("if (sureFailed(t)")
   const to = body.indexOf("      } catch")
-  assert.ok(from >= 0 && to > from, "gateFailed 的判定段落抠不出来（函数结构变了？）")
+  assert.ok(from >= 0 && to > from, "gateFailed 的判定段落抠不出来（函数结构变了？入口从 GATE_FAIL_SURE.test 换成 sureFailed 了）")
   const decide = body.slice(from, to).split("\n").map((l) => l.replace(/^ {8}/, "  ")).join("\n")
   const ctx = {}
   new Function("ctx", decls + "\nctx.failed = (t) => {\n" + decide + "\n  return false\n}")(ctx)
@@ -65,6 +65,28 @@ test("闸判据：真实的『通过』措辞一条都不许判红", () => {
     ["- 本节 **Major** 问题：无", "否定词在标记【之后】"],
     ["- **Critical**: none", "英文后置否定"],
     ["我们 rejected the null hypothesis（P<0.05）", "统计术语，不是评审结论"],
+    // ---- 英文报告。改判据之前这一组【6 条全判红】，而它们全是「通过」的写法。
+    //      模型用哪种语言写报告纯属偶然（用户一句"用英文写"就够），闸不该因此把人锁死。
+    ["Recommendation: Accept. No critical issues were identified.", "结论行 + 前置否定"],
+    ["Decision: Accept as is. No major revision required.", "英文 No 挡不住中文词表"],
+    ["Verdict: Pass. No rejection grounds found.", "reject 是 rejection 的子串"],
+    ["Recommendation: The manuscript does not require major revision.", "否定词与裁定语之间隔着动词"],
+    ["Checklist\nCheck 1: sample size reported\nCheck 2: CONSORT followed", "编号清单，不是机器统计行"],
+    ["- **Critical** — IRB approval number to be provided by the applicant", "等用户补材料的英文写法"],
+    ["- **Critical** — trial registration pending, to be supplied by the author", "同上"],
+    ["结论：未发现严重问题，可以出件。", "中文结论行的否定式——改之前同样判红"],
+    ["评审闸已通过。", "最朴素的一句通过——「已通过」里没有任何否定裁定词，不能因为带「闸」「过」就红"],
+    // ---- 明确写了通过裁定 → 正文的 Major/Critical 条目让位。评审里的 Major 有相当一部分是
+    //      「用户还没交的材料」（伦理批号、注册号、原始记录），措辞穷举不完，靠词表补不齐。
+    ["- **Major** 伦理批准文件尚未提供\n- **Major** 代表作清单待定\n\n评审闸已通过。", "条目让位于明确的通过裁定"],
+    ["## 裁定\n判定：通过\n\n### 问题\n- M1 **Critical** 注册号缺失", "「判定：通过」同样算明确裁定"],
+    ["Verdict: Accept.\n\n- **Critical** IRB approval letter not yet on file", "英文的明确通过裁定"],
+    ["Major revision: none", "否定写在裁定语【后面】"],
+    ["Major revision — N/A", "同上，破折号 + N/A"],
+    ["需返工：无", "中文的后缀否定式"],
+    ["Verdict: Accept. Major revision is not necessary.", "否定与裁定语之间隔着 is"],
+    ["建议：接收，不存在严重问题。", "中文结论行的否定式"],
+    ["总体评价：无硬伤。", "中文结论行的否定式"],
   ]
   for (const [t, why] of PASS)
     assert.equal(failed(t), false, `误判红：${why}\n  原文：${t.slice(0, 60)}`)
@@ -81,8 +103,22 @@ test("闸判据：真实的『没过』措辞一条都不许漏", () => {
     ["统计：UNVERIFIED 19", "裸 DOI 只验了存在性"],
     ["RETRACTED 1，FABRICATED 2，NOT_FOUND 1，MISMATCH 1", "机器统计行"],
     ["| [7] | 张三 | **FABRICATED** | 高 |", "表格里的裁定单元格"],
+    // ★ 这条与上面「条目让位于通过裁定」是一对，边界就划在这里：让位只认【明确的通过裁定】，
+    //   总评被写软（Minor to moderate revision 不是"通过"）不算，照旧按条目判红。
     ["## 总评\nMinor to moderate revision\n\n### 问题\n- M1 **Major** 3年生存声称与随访不符\n- M2 **Major** 切点循环论证",
      "总评被写软、正文却列了 Major——只认总评就被绕过"],
+    ["评审闸未通过。\n\n- **Major** 样本量计算缺失", "「未通过」不能被读成通过裁定，否则闸就是永远绿的摆设"],
+    ["裁定：不予通过\n\n- **Critical** 主要结局在揭盲后被更换", "同上，另一种否定裁定"],
+    // ---- 放宽否定判定之后，这一组是【防放过头】的对照：英文的真·没过一条都不许溜。
+    ["Decision: Reject. The primary endpoint was changed after unblinding.", "英文拒稿结论"],
+    ["Recommendation: Major revision before further consideration.", "英文大修"],
+    ["- **Critical** — endpoint definition changed after unblinding", "英文硬伤条目"],
+    ["统计：CHECK 3", "全大写机器统计行——CHECK 限定大写后仍要命中"],
+    ["统计：unverified 3", "模型转述统计行时写成小写——这几个词不会在散文里当普通词用，仍要认"],
+    ["Major revision required; none of the analyses account for clustering",
+     "后缀否定不许跨句读——分号后面那个 none 说的是另一件事，不能拿它把大修放行"],
+    ["Verdict: Not acceptable in the present form; critical flaws in the analysis.",
+     "句号断句：前半句的 Not 不该把后半句的 critical 放行"],
   ]
   for (const [t, why] of FAIL)
     assert.equal(failed(t), true, `漏判：${why}\n  原文：${t.slice(0, 60)}`)

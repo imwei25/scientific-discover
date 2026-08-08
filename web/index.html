@@ -639,7 +639,15 @@
   .wfflow { position: relative; background: var(--card); border: 1px solid var(--line-hi);
     border-radius: var(--r-md); box-shadow: var(--shadow-sm); padding: 14px 16px 10px; margin: 0 0 16px; }
   .wfflow .ftitle { font-size: 11px; font-weight: 700; letter-spacing: .08em; color: var(--faint);
-    padding: 0 4px 12px; }
+    padding: 0 4px 12px; display: flex; align-items: center; gap: 10px; }
+  /* 「仍要出件」：闸判红时才出现在流程条右上角。判据是关键词匹配，必有误判（英文报告尤甚），
+     没有这个出口时用户面前就是一堵没有尽头的墙 —— 重跑闸并不会让措辞型误判消失。 */
+  .wfflow .fbypass { margin-left: auto; font: inherit; letter-spacing: inherit; cursor: pointer;
+    border: 1px solid var(--line-hi); background: var(--bg); color: var(--muted);
+    border-radius: 999px; padding: 3px 10px; white-space: nowrap; }
+  .wfflow .fbypass:hover { border-color: var(--brand); color: var(--brand); }
+  /* 放行【生效中】必须一眼看见：这是"件可以出但没过闸"的状态，藏起来就成了默默降标准。 */
+  .wfflow .fbypass.on { border-color: #d9a441; background: #fff8e8; color: #8a5a00; }
   /* ★ 格子按【自然宽度】排，容器横向滚 —— 别为了塞进一屏去压缩它。
      压缩版试过一版：.fstep 等分 + min-width 120px，结果步骤名是 nowrap 又没有省略号，
      "源数据完整性自查"这种 8 个字的名字直接顶到下一格的圆圈上（实测反馈"相邻文字有重叠"）。
@@ -3354,6 +3362,43 @@ const INTAKE_OFFSET = 1
 const withIntake = (steps, intakeSub) =>
   [intakeSub ? { ...INTAKE_STEP, sub: intakeSub } : INTAKE_STEP, ...(steps || [])]
 
+/** 流程条右上角的「仍要出件」：手动放行本会话的质量闸拦截（服务端 /api/workflow/gate-bypass）。
+ *
+ * ★ 为什么要给用户这个开关：闸判红的依据是关键词匹配报告正文，必然有假阳性，而假阳性的代价是
+ *   【用户永远拿不到送审件】——实测 11 条"其实通过"的英文写法里 6 条被判红
+ *   （`Decision: Accept. No major revision required.`、`Recommendation: Accept. No critical issues.`），
+ *   而"改稿→重跑闸"对这种措辞型误判是无效的：报告写得再对，措辞一样会被读成红。
+ * ★ 放行【不动闸的结论】：✕ 与「需返工」照旧显示，产物卡的警示照旧给。它只免掉"中止本轮"。
+ *   所以开着它并不会让界面开始撒谎，用户随时看得到闸还是红的。
+ */
+function gateBypassBtn() {
+  const b = document.createElement("button")
+  b.type = "button"
+  b.className = "fbypass" + (liveBypass ? " on" : "")
+  b.textContent = liveBypass ? "已放行 · 恢复拦截" : "仍要出件"
+  attachTip(b, liveBypass
+    ? "本会话的质量闸拦截已放行：闸没过也能出 Word/PDF。\n流程条上的「未通过」是真的，出来的件没有过闸。\n点一下恢复拦截。"
+    : "质量闸判了未通过，Word/PDF 会被拦下。\n如果你判断这是误判（报告通篇英文、或结论其实是「接收 / 无严重问题」却被读成红），点这里放行本会话的拦截。\n闸的红字会保留，不会因此变绿。")
+  b.addEventListener("click", async () => {
+    const on = !liveBypass
+    if (on && !confirm("放行本会话的质量闸拦截？\n\n闸当前判定为【未通过】。放行之后 Word/PDF 照常产出，但它没有过闸——报告里列的问题仍然存在。\n\n只有在你确认这是判据误伤（比如报告是英文的、或只剩「等你补材料」的条目）时才这么做；真的方法学硬伤请改完稿再重跑那道闸。"))
+      return
+    b.disabled = true
+    try {
+      const r = await fetch("api/workflow/gate-bypass", { method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ sid: sessionId, on }) }).then((x) => x.json())
+      if (!r?.ok) throw new Error(r?.err || "服务端未接受")
+      liveBypass = !!r.on
+      toast(liveBypass ? "已放行：闸未过也能出件（闸仍显示未通过）" : "已恢复拦截：闸没过就不出件")
+      updateStepsBar(liveDone, liveCur)   // 重画，让按钮切到对应状态
+    } catch (e) {
+      b.disabled = false
+      toast("设置失败：" + (e.message || e))
+    }
+  })
+  return b
+}
+
 /**
  * 流程条（设计稿的「横向单行流程」）：编号圆圈 + 步骤名 + 一行副标题，用连接线串成一行，
  * 窄了横向滚而不折行。done 来自"产物出现了没有"的反推，cur 是最近提交的那一步。
@@ -3374,9 +3419,13 @@ function stepsBar(steps, done, cur, failed, off, implied, stale) {
   const box = document.createElement("div"); box.className = "wfflow" + (steps.length > 7 ? " many" : "")
   // 总步数仍要给：一条 12 步的流水线横着滚出屏幕，不写清楚用户数不清有几步（实测反馈）。
   const onCnt = steps.length - steps.filter((x) => of.has(x.id)).length
-  box.appendChild(Object.assign(document.createElement("div"), { className: "ftitle",
+  const titleEl = Object.assign(document.createElement("div"), { className: "ftitle",
     textContent: onCnt === steps.length ? `流程 · 共 ${steps.length} 步`
-      : `流程 · 共 ${steps.length} 步，按当前设定跑 ${onCnt} 步` }))
+      : `流程 · 共 ${steps.length} 步，按当前设定跑 ${onCnt} 步` })
+  // 闸红了（或已放行）才挂「仍要出件」。没红时不挂：一个常驻的"绕过质量闸"按钮等于明示可以绕，
+  // 而绝大多数情况下闸是对的，该改稿就得改稿。
+  if (sessionId && (fl.size || liveBypass)) titleEl.appendChild(gateBypassBtn())
+  box.appendChild(titleEl)
   // 滚动层单独一个元素：渐隐遮罩要挂在【不滚】的 .wfflow 上，挂在滚动元素里会跟着内容一起跑掉
   const scroller = document.createElement("div"); scroller.className = "fscroll"
   const track = document.createElement("div"); track.className = "ftrack"
@@ -3704,6 +3753,9 @@ let liveCur = null     // 实时推断的当前步（技能一开跑就点亮，
 let liveFailed = []    // 闸跑了但【没过】的步骤（报告里写着 Major revision / 未通过 等）
 let liveImplied = []   // 由「后面完成了」反推补齐的步骤：没有产物文件，界面标「无产物」而不是绿勾
 let liveStale = []     // 闸红之后没重做的下游步骤：产物早于闸报告，标「已过期」而不是绿勾
+// 用户是否手动放行了本会话的质量闸拦截（服务端存，见 gateBypassBtn）。切会话/刷新时由
+// /api/workflow/state 下发重置 —— 不重置的话，上一个会话放行过，新会话的按钮会显示成"已放行"。
+let liveBypass = false
 const failedNames = () => {   // 未过闸步骤的中文名，给产物卡的警示用
   const list = liveSteps || wfCache.get(currentModule)?.steps || []
   return liveFailed.map((id) => list.find((s) => s.id === id)?.name || id)
@@ -3776,6 +3828,7 @@ async function offerStepForm(turn) {
   //   还会把 liveSteps 一起污染成上一个会话的。
   if (!turn.isConnected || sessionId !== mySid) return false
   if (!st?.state || !st.steps?.length) return false                 // chat 会话 / 没有工作流
+  liveBypass = !!st.gateBypass
   updateStepsBar(st.state.done || [], st.state.cur, st.steps, st.state.failed || [], st.state.implied || [], st.state.stale || [])       // 顺手把步骤条刷到最新（产物反推的进度）
   const done = new Set(st.state.done || [])
   // 同一步只给一次卡。不然：产物没出现之前这一步一直是"未完成"，之后【每一轮】回复底部都会
@@ -3837,6 +3890,7 @@ async function loadWorkflowState() {
     if (!j?.state || !j.steps?.length) return
     wfCache.set(j.module, { ...(wfCache.get(j.module) || {}), name: j.name, steps: j.steps })
     currentModule = j.module
+    liveBypass = !!j.gateBypass   // 放行是会话级的，切会话/刷新都要按服务端的说法重置
     // 第 4 个参数不能漏：漏了 updateStepsBar 会沿用旧的 liveFailed（切会话/刷新时是 []），
     // 于是「需返工」的红标在刷新后凭空消失，那一步显示成"还没做"。服务端是有 failed 的。
     updateStepsBar(j.state.done || [], j.state.cur, j.steps, j.state.failed || [], j.state.implied || [], j.state.stale || [])
@@ -4234,7 +4288,7 @@ function openStream(url) {
   // 结构化产物：服务端按文件名认出渲染器（文献表→文献卡片、核查报告→红黄绿逐条…）。
   // 这是 files 之外【额外】的一份，不是替代 —— 认不出的产物仍走上面那条，绝不会因此消失。
   es.addEventListener("artifacts", (ev) => { try { renderArtifacts(JSON.parse(ev.data)) } catch (_) {} })
-  es.addEventListener("workflow", (ev) => { try { const w = JSON.parse(ev.data); updateStepsBar(w.done || [], w.cur, null, w.failed || [], w.implied || [], w.stale || []) } catch (_) {} })
+  es.addEventListener("workflow", (ev) => { try { const w = JSON.parse(ev.data); if (w.gateBypass !== undefined) liveBypass = !!w.gateBypass; updateStepsBar(w.done || [], w.cur, null, w.failed || [], w.implied || [], w.stale || []) } catch (_) {} })
   es.addEventListener("auto", (ev) => { try { autoNextInfo = JSON.parse(ev.data) } catch {} })   // 无人值守：done 后服务端已同步起了下一轮
   es.addEventListener("done", () => {
     paintAnswer(); finalize(); refreshStorage()   // 本轮产物落盘后刷新存储用量

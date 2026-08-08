@@ -739,3 +739,25 @@ test("数据体检的报告名：脚本默认值必须等于模块契约里的�
   assert.ok(WF.WORKFLOWS.paper.steps.find((s) => s.id === "stats").emits.includes(m[1]),
     `${m[1]} 不在 paper 统计步的 emits 里`)
 })
+
+// 手动放行质量闸：闸的判据是关键词匹配报告正文，必然有假阳性（实测英文报告里
+// "Decision: Accept. No major revision required." 被判红），而误判的代价是【用户永远拿不到送审件】。
+// 所以有这个用户开关。它必须：① 真的落盘（刷新/重启后还在）；② 能撤销；③ 认不出会话就明确报错，
+// 不能悄悄放行一个空 sid —— 那等于给所有会话开了后门。
+test("手动放行质量闸：开关能存能撤，缺会话 id 要报错", async (t) => {
+  const gw = await gateway()
+  t.after(() => gw.close())
+  const sid = "ses_gatebypass_test"
+  const on = await gw.post("/api/workflow/gate-bypass", { sid, on: true })
+  assert.equal(on.status, 200)
+  assert.equal(on.json.on, true, "放行没生效")
+  // 落盘：与模块绑定表同目录（HOME 被测试指到临时目录），重启网关后仍要认得
+  const f = path.join(gw.dir, ".local", "share", "opencode", "gate-bypass.json")
+  assert.ok(fs.existsSync(f), "放行标记没落盘——重启/刷新后用户又被拦住，等于没放行")
+  assert.ok(JSON.parse(fs.readFileSync(f, "utf8"))[sid], "落盘内容里没有这个会话")
+  const off = await gw.post("/api/workflow/gate-bypass", { sid, on: false })
+  assert.equal(off.json.on, false, "撤销没生效——放行必须能收回，否则闸就永久失效了")
+  assert.ok(!JSON.parse(fs.readFileSync(f, "utf8"))[sid], "撤销后落盘里还留着")
+  const bad = await gw.post("/api/workflow/gate-bypass", { on: true })
+  assert.equal(bad.status, 400, "没有 sid 也照单全收 = 后门")
+})
