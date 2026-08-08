@@ -189,6 +189,22 @@ test("阅读器：切模式不自动开跑，开跑入口都走 tryRun", () => {
   assert.match(html, /function settingsSig\(/, "记的应该是字段+取值的指纹，不是模块 id")
 })
 
+// 全站【只有用户点「开始」才会开跑】。首屏传完文件后自动跑第一个模式是最后一处自动开跑：
+// 文件一传上去就发出去，用户既没机会看一眼口径、也来不及补配套数值表，想拦只能现找终止，
+// 而那一轮的额度已经花掉了。
+test("阅读器：首屏传完文件不许自动开跑", () => {
+  const html = fs.readFileSync(new URL("../reader.html", import.meta.url), "utf8")
+  const from = html.indexOf('$("btnStart").addEventListener')
+  assert.notEqual(from, -1, "找不到首屏「开始」的处理函数")
+  // 注释里会提到"这里原来是 run(CFG.first)"，那是说明改动缘由的，不能算数 —— 先把行注释剥掉。
+  // ★ 用 [^\r\n]* 而不是 .*$：这个文件是 CRLF，而 JS 正则里 \r 算行终止符、. 不匹配它，
+  //   于是 /\/\/.*$/ 在每一行都对不上（$ 只认字符串末尾），注释一句也剥不掉，断言恒真/恒假全看运气。
+  const seg = html.slice(from, html.indexOf("function enterReader(", from))
+    .replace(/\s*\/\/[^\r\n]*/g, "")
+  assert.ok(seg.length > 200, "截取范围不对，这条断言会永远通过")
+  assert.doesNotMatch(seg, /[^a-zA-Z]run\(/, "首屏传完不该直接开跑——开跑只能由用户点「开始」触发")
+})
+
 // 这是"单篇研读"，不是检索模块：给了检索技能就等于默许它去找别的文献
 test("文献研读不该有检索类技能", () => {
   const sk = WF.skillsOf("litread")

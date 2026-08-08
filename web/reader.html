@@ -387,6 +387,15 @@ button{font:inherit}
 .composer textarea::placeholder{color:var(--faint)}
 .composer .foot{margin-top:7px;font-size:11px;color:var(--faint);display:flex;justify-content:space-between;gap:10px}
 .composer .foot .kbd{flex:none;white-space:nowrap}
+/* 交接卡：从别的模式「转交」过来的那份结果，挂在输入框上方等着随下一句话一起发出。
+   摆在这里而不是对话流里，是因为它【还没发出去】—— 画成一条消息的话，用户会以为已经发了。 */
+.composer .hoff{display:flex;align-items:flex-start;gap:8px;margin-bottom:9px;padding:8px 10px;border:1px dashed rgba(59,111,212,.45);border-radius:10px;background:var(--accent-soft)}
+.composer .hoff svg{width:14px;height:14px;flex:none;margin-top:2px;color:var(--accent)}
+.composer .hoff .t{flex:1;min-width:0;font-size:12px;line-height:1.6;color:#3a4a63}
+.composer .hoff .t b{color:var(--accent)}
+.composer .hoff .x{flex:none;width:22px;height:22px;display:grid;place-items:center;border:none;background:none;border-radius:6px;color:var(--faint);cursor:pointer}
+.composer .hoff .x:hover{background:#fff;color:var(--red)}
+.composer .hoff .x svg{width:12px;height:12px;margin:0;color:inherit}
 
 /* 发送 / 终止 —— 与工作台聊天（index.html 的 #send / #stop）同一套设计：
    默认是 32px 的圆钮、只露一个图标；悬停时展开成胶囊并把文字滑出来。
@@ -447,6 +456,8 @@ button{font:inherit}
      打开时按触发按钮算坐标。 -->
 <div class="menu" id="recentMenu"></div>
 <div class="menu setmenu" id="setMenu"></div>
+<!-- 「转交给智能助手」时选覆盖 / 续写 / 取消。同样挂在 body 上、按触发按钮算坐标（见 placeMenu）。 -->
+<div class="menu" id="hoffMenu"></div>
 
 <!-- ============ 首屏：上传 ============
      文案、拖拽区提示、chips、必答题、按钮文字全部由 renderIntro() 按模块配置填进去，
@@ -472,9 +483,11 @@ button{font:inherit}
     <div class="bar" id="upbar"><i></i></div>
     <div class="err" id="introErr"></div>
 
-    <!-- 首屏这个「开始」与面板头部那个用同一枚实心三角（见 ICON.play 的说明） -->
+    <!-- 这枚按钮只负责【上传并进入】：传完不再自动开跑，所以图标用上传箭头而不是那枚三角。
+         全站的实心三角只留给"真的会开跑"的按钮（头部「开始」、面板里的大按钮、设置弹层里那枚），
+         免得用户按下三角却什么都没发生。 -->
     <button class="gobtn" id="btnStart" type="button" disabled>
-      <svg viewBox="0 0 24 24" fill="currentColor" stroke="none"><path d="M8 5.5v13a1 1 0 001.53.85l10-6.5a1 1 0 000-1.7l-10-6.5A1 1 0 008 5.5z"/></svg>
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 16V4M12 4l-4 4M12 4l4 4"/><path d="M4 16v2a2 2 0 002 2h12a2 2 0 002-2v-2"/></svg>
       <span id="btnStartTxt">开始</span>
     </button>
 
@@ -548,6 +561,12 @@ button{font:inherit}
         <button class="ibtn" id="btnRerun" type="button" data-tip="重新生成" aria-label="重新生成" hidden>
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M20 11a8 8 0 10-2.3 6.3"/><path d="M20 4v7h-7"/></svg>
         </button>
+        <!-- 转交给智能助手：把【本面板这一轮的结果】做成一张交接卡，挂到智能助手的输入框上，
+             随用户下一句话一起发出（见 doHoff / renderHoff）。data-act 而不是只绑 id ——
+             不然 document 上那个"点空白处收起弹层"的监听会在本次点击冒泡时把刚开的弹层当场收掉。 -->
+        <button class="ibtn" id="btnHoff" type="button" data-act="hoff" data-tip="转交给智能助手" aria-label="转交给智能助手" hidden>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M13 4h6a2 2 0 012 2v9a2 2 0 01-2 2h-3l-4 3v-3"/><path d="M2 10h7M6.5 7l3 3-3 3"/></svg>
+        </button>
         <button class="ibtn" id="btnSettings" type="button" data-tip="本模块的设置" aria-label="设置" hidden>
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 00.3 1.9l.1.1a2 2 0 11-2.8 2.8l-.1-.1a1.7 1.7 0 00-1.9-.3 1.7 1.7 0 00-1 1.5V21a2 2 0 11-4 0v-.1A1.7 1.7 0 008.9 19a1.7 1.7 0 00-1.9.3l-.1.1a2 2 0 11-2.8-2.8l.1-.1a1.7 1.7 0 00.3-1.9 1.7 1.7 0 00-1.5-1H3a2 2 0 110-4h.1A1.7 1.7 0 004.6 8.9a1.7 1.7 0 00-.3-1.9l-.1-.1a2 2 0 112.8-2.8l.1.1a1.7 1.7 0 001.9.3H9a1.7 1.7 0 001-1.5V3a2 2 0 114 0v.1a1.7 1.7 0 001 1.5 1.7 1.7 0 001.9-.3l.1-.1a2 2 0 112.8 2.8l-.1.1a1.7 1.7 0 00-.3 1.9V9a1.7 1.7 0 001.5 1H21a2 2 0 110 4h-.1a1.7 1.7 0 00-1.5 1z"/></svg>
         </button>
@@ -570,6 +589,8 @@ button{font:inherit}
 
     <!-- 智能助手模式：输入框 -->
     <div class="composer" id="composer" hidden>
+      <!-- 待发出的交接卡（从别的模式转交过来的那份结果）。空的时候整条收起来。 -->
+      <div class="hoff" id="hoffChip" hidden></div>
       <div class="wrap">
         <textarea id="q" rows="1" placeholder="对着左边这篇文献随便问，例如：第 3 组的样本量是多少？"></textarea>
         <!-- 发送 / 终止占同一个位置，互斥显示（与工作台一致）。文字包在 .lbl 里，悬停展开才露出来。 -->
@@ -1025,7 +1046,11 @@ $("btnStart").addEventListener("click", async () => {
     await fetch("api/session/rename?id=" + encodeURIComponent(sid) + "&title=" + encodeURIComponent(title), { method: "POST" }).catch(() => {})
     if (CFG.source.kind === "table") loadHeaders()   // 读真表头，喂「变量对应」面板的下拉
     setMode(CFG.first)
-    run(CFG.first)
+    // ★ 传完【不自动开跑】。这里原来是 run(CFG.first)：文件一传上去，第一个模式立刻发出去，
+    //   用户既没机会看一眼严格度 / 输出语言 / 保护引用，也来不及先去补配套数值表 —— 想拦只能
+    //   现找终止，而那一轮的额度已经花掉了。现在全站只有一种开跑方式：用户自己点「开始」。
+    //   （设置摊开来让他先确认口径，但摊开 ≠ 开跑，得点弹层里的那枚「开始」才走。）
+    if ((CFG.settings || []).length && !settingsSeen()) openSettings(true)
   } catch (e) {
     clearTimeout(slow); $("btnStartTxt").textContent = startTxt
     showIntroErr(String((e && e.message) || e))
@@ -1794,12 +1819,14 @@ function updateFoot() {
   // 所以"在等谁"这句话必须由下面的底栏说出来，不能只指望这个按钮。
   $("btnGo").disabled = busy()
   $("btnRerun").hidden = mode === "chat" || !s || s.status === "idle" || busy()
+  // 转交：这一格真的跑出东西了才给。跑到一半 / 出错的面板上摆一颗"转交"，转过去的是半截结果。
+  $("btnHoff").hidden = !hoffReady(mode)
 
   let foot = ""
   if (mode !== "chat") {
     foot = mine ? RUN.label
       : RUN ? "「" + MODES[RUN.mode].label + "」正在跑，跑完才能开下一轮"
-      : s.status === "done" ? "已完成。想追问就点右边的「智能助手」。"
+      : s.status === "done" ? "已完成。想接着这份结果聊，点上方的「转交给智能助手」。"
       : s.status === "error" ? "上一轮没有正常结束。"
       : ""
   }
@@ -1830,6 +1857,7 @@ async function run(m, force, userTxt) {
   if (m !== "chat" && force) { s.raw = ""; s.doc = null; s.docName = ""; s.files = [] }
 
   let q = ""
+  let myHoff = null                     // 本轮带出去的交接卡（发送失败时要还回去）
   if (m === "chat") {
     q = String(userTxt || "").trim()
     if (!q) return
@@ -1844,6 +1872,9 @@ async function run(m, force, userTxt) {
       const src = CFG.source.kind === "table" ? docListStr() : ""
       q = tpl.replace("{doc}", src || "`" + docName + "`") + q
     }
+    // 待发的交接卡拼在最前面（取走即清，与工作台的 wfCardPrefix 同一套规矩）。面板里对应地
+    // 留一条转交记录 —— 卡片本身不进气泡，气泡里只有用户自己打的那句话。
+    if (handoff) { myHoff = handoff; handoff = null; renderHoff(); q = myHoff.card + "\n\n" + q; s.msgs.push({ role: "tag", text: myHoff.tag }) }
     s.msgs.push({ role: "user", text: userTxt })
   } else {
     q = promptFor(m)
@@ -1887,7 +1918,13 @@ async function run(m, force, userTxt) {
   if (!j.sent) {
     // 服务端没收下这条：上一轮还在跑、额度用尽、模块未开通…… 一律如实说，别让转圈一直转
     failRun(m, (j.running ? "上一轮还在进行中，本条没有发出去。" : "") + (j.err || j.notice || "发送失败"))
-    if (m === "chat") { S.chat.msgs.pop(); renderChat() }
+    if (m === "chat") {
+      S.chat.msgs.pop()                                                   // 用户气泡
+      // 交接卡也得还回去（连同那条转交记录一起撤掉）：不还的话用户按提示重发一次，
+      // 这一次就【不带】交接卡了 —— 模型不知道在谈哪一轮，而用户完全看不出少了什么。
+      if (myHoff) { S.chat.msgs.pop(); handoff = myHoff; renderHoff() }
+      renderChat()
+    }
     return
   }
   turns++
@@ -2041,6 +2078,107 @@ async function loadDocFor(m) {
   } catch (_) {}
 }
 
+/* ============================================================
+   6.5 转交给智能助手
+   ------------------------------------------------------------
+   【它解决的是什么】四个模式共用同一个会话，所以切到智能助手时【模型手上】的上下文本来就全在。
+   但用户看到的是一格空白面板 —— 刚看完的那份译文 / 核查报告在这一格里连个影子都没有，
+   于是他要么以为"切过来就断片了"，要么把整段结果复制粘贴一遍再问。这颗按钮把那份结果
+   明确地"交"过去：面板里留一条转交记录，模型那边收到一张交接卡（说清转交的是哪一轮、
+   产物在哪个文件、不要重跑）。
+
+   【不自动发送】交接卡只是挂到输入框上，随用户下一句话一起发出去。点一下就自动发一轮的话，
+   得到的只会是一句"好的我看到了"—— 白烧一轮额度。这与聊天页「下一步」气泡的规矩是同一条。
+
+   【覆盖 / 续写】智能助手那一格已经聊过东西时才问：
+     覆盖 = 那些问答用户不要了 → 面板清空，交接卡里明写"别再接前面的话头"；
+     续写 = 接着聊 → 面板保留，交接卡挂在末尾。
+   ★ 一句实话：会话是共用的，opencode 那边【删不掉】已经发生过的对话，所以"覆盖"能做到的是
+     「界面上不再显示 + 明确告诉模型翻篇」，不是把它从模型记忆里抹掉。别在文案里把它说成
+     "清空会话"，那是承诺一件做不到的事。
+   ============================================================ */
+let handoff = null            // 待随下一条聊天消息发出的交接卡：{mode,label,replace,card,tag,snapshot}
+const HOFF_END = "【以上为界面转交的上下文，不是用户输入】"
+// 交接卡在【历史里是留着的】（不像工作台的任务卡由服务端剥掉）：刷新页面后靠它才认得出
+// "这一轮是转交过来的、当时选的是覆盖还是续写"，否则覆盖掉的那几轮会在刷新后原样长回来。
+// 显示时由前端剥掉（stripHoff），用户气泡里只留他自己打的那句话。
+const HOFF_HEAD_RE = /^【转交 · 「([^」]*)」 · (覆盖|续写)】/
+const HOFF_RE = /^【转交 · 「[^」]*」 · (?:覆盖|续写)】[\s\S]*?【以上为界面转交的上下文，不是用户输入】\n*/
+const hoffOf = (t) => { const m = HOFF_HEAD_RE.exec(String(t || "")); return m ? { label: m[1], replace: m[2] === "覆盖" } : null }
+const stripHoff = (t) => String(t || "").replace(HOFF_RE, "").trim()
+const hoffTag = (label, replace) => "已把「" + label + "」的结果转交过来" + (replace ? "（此前的问答已按你的选择清掉）" : "")
+
+/** 交接卡正文。只给【指路】不搬正文：同一个会话里模型已经有那一轮的内容，再贴一遍是白花 token。 */
+function hoffCard(m, replace) {
+  const M = MODES[m], s = S[m]
+  const files = (s.files || []).slice(0, 8)
+  const L = ["【转交 · 「" + M.label + "」 · " + (replace ? "覆盖" : "续写") + "】"]
+  L.push("用户在界面上把「" + M.label + "」那一轮的结果转交到了智能助手这一格，下面这句话就是基于它问的。")
+  if (s.docName) L.push("- 那一轮的正文落在 `" + s.docName + "`，要引用具体内容直接读这个文件，别凭印象复述。")
+  if (files.length) L.push("- 那一轮的产物：" + files.map((n) => "`" + n + "`").join("、") + "。")
+  L.push("- **不要重跑「" + M.label + "」**：结果已经有了，用户要的是基于它接着谈。")
+  if (replace) L.push("- 此前在这一格里的自由问答用户已经不要了，别再接那边的话头，从这份结果重新开始。")
+  L.push(HOFF_END)
+  return L.join("\n")
+}
+
+/** 这一格现在有没有东西可转交（跑完了、且面板上真有正文） */
+function hoffReady(m) {
+  const s = S[m]
+  return m !== "chat" && !!s && s.status === "done" && !!((s.doc || "") + (s.raw || "")).trim()
+}
+
+const hoffMenu = $("hoffMenu")
+function askHoff(btn) {
+  const m = mode
+  if (!hoffReady(m)) return
+  if (hoffMenu.classList.contains("on")) return closeMenu()
+  // 那一格还是空的 → 没有"覆盖谁"可言，直接转交，别为难用户做一道没有内容的选择题
+  if (!S.chat.msgs.length) return doHoff(m, false)
+  hoffMenu.innerHTML = ""
+  const item = (title, sub, fn) => {
+    const b = document.createElement("button")
+    b.type = "button"; b.className = "mi"
+    b.innerHTML = esc(title) + "<small>" + esc(sub) + "</small>"
+    b.addEventListener("click", fn)
+    hoffMenu.appendChild(b)
+  }
+  item("覆盖已有的对话", "智能助手里现有的问答不再显示，从这份「" + MODES[m].label + "」重新开始", () => doHoff(m, true))
+  item("续写已有的对话", "保留现有问答，把这份结果接在后面", () => doHoff(m, false))
+  item("取消", "什么都不做", () => closeMenu())
+  placeMenu(hoffMenu, btn)
+}
+
+function doHoff(m, replace) {
+  closeMenu()
+  const M = MODES[m]
+  // 覆盖是"还没发出去"的动作：把清掉的这几条留一份，用户撤掉交接卡时要原样放回去
+  const snapshot = replace ? S.chat.msgs.slice() : null
+  if (replace) S.chat.msgs = []
+  handoff = { mode: m, label: M.label, replace, snapshot, card: hoffCard(m, replace), tag: hoffTag(M.label, replace) }
+  setMode("chat")
+  renderHoff()
+  qEl.focus()
+}
+
+function renderHoff() {
+  const el = $("hoffChip")
+  if (!handoff) { el.hidden = true; el.innerHTML = ""; return }
+  el.hidden = false
+  el.innerHTML = ICON.chat
+    + '<div class="t">已带上<b>「' + esc(handoff.label) + '」</b>的结果'
+    + (handoff.replace ? "（覆盖此前的对话）" : "") + "，随你下一条消息一起发出。</div>"
+    + '<button class="x" type="button" id="hoffX" aria-label="撤掉这张交接卡" title="撤掉">' + ICON.x + "</button>"
+  $("hoffX").addEventListener("click", cancelHoff)
+}
+
+function cancelHoff() {
+  if (!handoff) return
+  if (handoff.snapshot) S.chat.msgs = handoff.snapshot    // 覆盖还没生效，撤掉就得把对话放回来
+  handoff = null
+  renderHoff(); renderChat()
+}
+
 /* ---- 终止 ---- */
 async function abortRun() {
   if (!sid || !RUN) return
@@ -2116,7 +2254,17 @@ async function restore() {
       if (msg.role === "user") {
         cur = modeOfUserText(msg.text || "")
         turns++
-        if (cur === "chat") S.chat.msgs.push({ role: "user", text: msg.text })
+        if (cur === "chat") {
+          // 转交过来的那一轮：卡片不进气泡（只留用户自己那句话），但"当时选的是覆盖"这件事要认出来 ——
+          // 不认的话，被覆盖掉的那几轮会在刷新页面后原样长回来，用户会以为覆盖根本没生效。
+          const h = hoffOf(msg.text)
+          if (h) {
+            if (h.replace) S.chat.msgs.length = 0
+            S.chat.msgs.push({ role: "tag", text: hoffTag(h.label, h.replace) })
+          }
+          const t = h ? stripHoff(msg.text) : msg.text
+          if (t) S.chat.msgs.push({ role: "user", text: t })
+        }
         else { S[cur].raw = ""; S[cur].status = "done" }
       } else {
         if (cur === "chat" || cur == null) S.chat.msgs.push({ role: "ai", text: msg.text })
@@ -2158,7 +2306,7 @@ async function restore() {
 const menu = $("recentMenu")
 // 两个弹层（最近 / 设置）共用一套定位与关闭：它们都可能被不同位置的按钮触发，
 // 所以都是 body 级 position:fixed，打开时按触发按钮算坐标。
-const closeMenu = () => { menu.classList.remove("on"); const sm = $("setMenu"); if (sm) sm.classList.remove("on") }
+const closeMenu = () => { menu.classList.remove("on"); for (const id of ["setMenu", "hoffMenu"]) { const el = $(id); if (el) el.classList.remove("on") } }
 
 /** 把弹层摆到触发按钮下面（position:fixed，坐标自己算），并且不许越出视口右/下边 */
 function placeMenu(el, btn) {
@@ -2216,6 +2364,7 @@ document.addEventListener("click", (e) => {
     return
   }
   if (btn.dataset.act === "recent") showRecent(btn)
+  if (btn.dataset.act === "hoff") askHoff(btn)
 })
 addEventListener("resize", closeMenu)             // fixed 定位的菜单不会跟着按钮走，改窗口就收起来
 
