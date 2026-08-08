@@ -678,8 +678,13 @@ export const WORKFLOWS = {
     //   拦在最贵的时刻，是所有拦法里最差的一种。
     // mechanism-figure：标书的"研究方案总览图 / 技术路线示意图"是本技能最合适的场景
     // （标书不投期刊，期刊那套 AI 生成图限制不适用），同样属可选配图、不进固定步骤。
+    // ocr：申报口的官方材料【大量以图片发布】——NSFC 的申请代码表与学部注意事项只有 JPG，
+    //   没有文字版（见 grant-proposal/references/nsfc-medical-h.md 开头那条警告），
+    //   本技能 references/ 下那张 382 个二级码的表本身就是 OCR 出来的，且注明"官方图片每年更新，
+    //   本表须随之重跑 OCR 刷新"。用户手上的申报通知、限项说明、模板截图同理。
+    //   此前白名单里没有它 → agent 拿到一张代码表截图只能干看着，或者更糟：照印象编一个代码。
     extra: ["render-docx", "search-lit", "literature-review", "fulltext-retrieval", "reference-check",
-            "mechanism-figure", "humanize-academic"],
+            "mechanism-figure", "humanize-academic", "ocr"],
   },
 
   // ============ 文献研读（单篇）============
