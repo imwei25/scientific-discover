@@ -29,9 +29,9 @@ ${REPO_ROOT:-/app}/.venv/bin/python analysis.py
 **别读进来就 groupby / 画图 / 做检验。** 先跑体检脚本——它专查你最容易漏、且一漏就全盘错的那几件事：
 ```
 ${REPO_ROOT:-/app}/.venv/bin/python ${REPO_ROOT:-/app}/.opencode/skills/data-analysis/scripts/data_profile.py \
-  --input <数据文件> --group <分组变量列名> --id-col <患者/标本标识列> --out data_quality.md
+  --input <数据文件> --group <分组变量列名> --id-col <患者/标本标识列> --out data_profile.md
 ```
-产出 `data_quality.md`（人读，分 **必须处置 / 建议核对 / 记录备查** 三级 + "必须回答的问题"清单）与 `data_quality.json`（机读）。它查：
+产出 `data_profile.md`（人读，分 **必须处置 / 建议核对 / 记录备查** 三级 + "必须回答的问题"清单）与 `data_profile.json`（机读）。**报告名就用 `data_profile.md`（脚本默认值），别改**——界面按这个名字认体检报告，改了名脚本照样跑完，但面板里什么都不显示。它查：
 - **重复行 / 重复患者ID**（并单独点名"同号但数值不一致"的）——**最容易漏、后果最重**：重复没去掉，n 虚高，Table 1 的每个 n(%)、每个组间 p 全建在虚高分母上，且这种错在结果里毫无异常迹象、审稿人也看不出来，只有你自己去查才会发现。
 - **数值列混进字符串**（检测限 `<0.05`/`>100`、单位后缀、区间值）——**严禁 `pd.to_numeric(errors="coerce")` 一把带过**：那会把它们静默变 NaN，样本量凭空缩水且不留痕。检测限值属**左/右删失**，要明确替代规则（LoD/2 或 LoD/√2）或改用删失方法，并写进 Methods；剔除也要报剔除例数。
 - **分类水平的多种写法**（`男`/`M`/`1`/尾空格/全角）——不归一则分组数虚增、Table 1 每一行都错。

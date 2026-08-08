@@ -39,7 +39,10 @@ function makeEnv({ mod, docName = "", docFiles = null, dataFiles = [], settings 
   const MODES = {}
   for (const m of cfg.modes) MODES[m.id] = m
   const fieldDef = (id) => (cfg.intake || []).find((f) => f.id === id) || null
-  const src = grabFn("varsBlock") + "\n" + grabFn("promptFor") + "\nreturn { promptFor, varsBlock }"
+  // promptFor 依赖的整条链都要抠进来（少一个就是 ReferenceError，不是"测出问题"）：
+  // docListStr = {data} 的取值；settingsBlock/fmtSetting = 每轮跟着发的齿轮设定。
+  const src = ["varsBlock", "docListStr", "settingsBlock", "fmtSetting", "promptFor"].map(grabFn).join("\n")
+    + "\nreturn { promptFor, varsBlock, settingsBlock }"
   const make = new Function("MODES", "CFG", "docName", "docFiles", "dataFiles", "SETTINGS", "fieldDef", src)
   const docs = docFiles || (docName ? [{ name: docName }] : [])
   return { ...make(MODES, cfg, docName, docs, dataFiles, settings, fieldDef), cfg, MODES }
@@ -119,4 +122,37 @@ test("变量对应：指了的列要原样进提示词，没指的不许瞎编",
   // 一个都没指时，整块不该出现（而不是留一个空的【变量对应】）
   const empty = makeEnv({ mod: "stats", docName: "cohort.csv" })
   assert.equal(empty.varsBlock(), "", "没指定任何列时不该拼出空的变量对应块")
+})
+
+// 齿轮弹层里的设定【每一轮都要跟着发】。后端只把 pin:true 的字段钉进模块前言，而阅读器四个
+// 模块的设定大多不是 pin —— 不在消息里带上的话，用户拨了开关（输出语言、顺便出投稿级图）
+// 模型那边一个字都收不到，界面上却完全看不出没生效。
+test("齿轮设定要进提示词：改了开关模型才收得到", () => {
+  const { promptFor, settingsBlock } = makeEnv({
+    mod: "stats", docName: "cohort.csv", settings: { figs: true, lang: "en" },
+  })
+  const blk = settingsBlock()
+  assert.match(blk, /顺便出投稿级图＝是/, "布尔开关要发成人话，不是 true")
+  assert.match(blk, /输出语言＝English/, "选项要发它的标签，不是内部值 en")
+  for (const id of ["profile", "table1", "analyze"])
+    assert.ok(promptFor(id).includes(blk), `${id} 的提示词末尾没带上本次设定`)
+
+  // 用户没动过设置时要发【默认值】，不是什么都不发 —— 默认值同样作数（见 settingsLine 的注释：
+  // "用户跳过表单时也照样生效，不要因为他没明说就自行其是"）。
+  const dflt = makeEnv({ mod: "stats", docName: "cohort.csv", settings: {} }).settingsBlock()
+  assert.match(dflt, /顺便出投稿级图＝否/, "没动过开关时要发它的默认值")
+  assert.match(dflt, /输出语言＝中文/)
+})
+
+// 壳里写死过"这篇文献"，于是数据模块对着一张 Excel 说"我上传了一篇文献"。文案归模块管之后，
+// 每个阅读器模块都必须自带这两句，否则又会退回壳里那个中性兜底。
+test("智能助手的文案归模块管，四个阅读器模块都要有", () => {
+  for (const mod of READER_MODS) {
+    const cfg = WF.workflowFor(mod, {}).reader
+    assert.ok(cfg.chat && cfg.chat.placeholder && cfg.chat.firstTurn, `${mod} 缺 reader.chat 文案`)
+    assert.match(cfg.chat.firstTurn, /\{doc\}/, `${mod}.chat.firstTurn 里没有 {doc}，文件名带不进去`)
+  }
+  // 数据模块不许再自称"文献"
+  const stats = WF.workflowFor("stats", {}).reader.chat
+  assert.doesNotMatch(stats.placeholder + stats.firstTurn, /文献/, "数据模块的文案还在说「文献」")
 })

@@ -2,8 +2,8 @@
 """数据体检（pre-flight QC）——进推断统计之前先给数据做一次体检。
 
 只依赖 pandas / numpy（+ openpyxl 读 xlsx）。产出：
-  - data_quality.md    人读报告（按 必须处置 / 建议核对 / 记录备查 分级）
-  - data_quality.json  机读结构化结果（下游脚本或 agent 引用）
+  - data_profile.md    人读报告（按 必须处置 / 建议核对 / 记录备查 分级）
+  - data_profile.json  机读结构化结果（下游脚本或 agent 引用）
   - stdout 摘要        含"必须回答的问题"清单
 
 定位：这一步只**发现并量化**问题，不替用户改数据。清洗决策要么由用户确认、
@@ -391,7 +391,10 @@ def main():
     ap.add_argument("--sheet", default=0)
     ap.add_argument("--id-col", default=None, help="患者/标本唯一标识列（不传则按列名自动猜）")
     ap.add_argument("--group", default=None, help="分组变量列名")
-    ap.add_argument("--out", default="data_quality.md")
+    # ★ 默认名【必须】是 data_profile.md：界面（web/workflows.mjs 的 stats/paper 两个模块）按这个名字
+    #   认体检报告——mode.file / mode.out 正则与 step.emits 三处都写死了它。叫别的名字时脚本照样跑完、
+    #   退出码 0，而面板正文空着、步骤判不完成，表现成"跑完了但界面显示还没跑"。改名要三处一起改。
+    ap.add_argument("--out", default="data_profile.md")
     a = ap.parse_args()
 
     p = Path(a.input)

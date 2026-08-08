@@ -711,3 +711,31 @@ test("回看历史时任务卡要被剥干净——否则用户看到自己'说'
   for (const t2 of ["帮我看看任务卡怎么写", "【重要】这是我的原始需求", "任务卡 · 我自己列的清单"])
     assert.equal(t2.replace(re, ""), t2, `误吃了用户的话：${t2}`)
 })
+
+// ---- 两条跨文件契约：改了一边、忘了另一边就静默失效，且界面上看不出任何异常 ----
+
+test("data-integrity 的每一步都要带 gateBy:signals —— 少一个，那道闸就永远判不了红", () => {
+  // 这个技能有条铁律：只出「待核信号」、不下「造假」结论，也就是它【被明令禁止】写出通用判据
+  // （server.mjs 的 GATE_FAIL_*）认得的那些裁定语。于是不写 gateBy 的步骤恒绿：报告里 6 条硬性
+  // 不自洽（含生理不可能的 eGFR=1220）也照打绿勾，出件拦截跟着失效（fail-open）。
+  // refcheck 修过一次，stats 与 paper 两处漏改了大半年——所以这条改成全量断言，别再逐个模块记。
+  const bad = []
+  for (const [mod, w] of Object.entries(WF.WORKFLOWS))
+    for (const s of w.steps || [])
+      if (s.skill === "data-integrity" && s.gate && s.gateBy !== "signals") bad.push(`${mod}.${s.id}`)
+  assert.deepEqual(bad, [], "这些 data-integrity 闸缺 gateBy:'signals'，永远判不了红")
+})
+
+test("数据体检的报告名：脚本默认值必须等于模块契约里的名字", () => {
+  // 对不上时脚本照样跑完、退出码 0，而面板正文空着、步骤判不完成 —— 表现成"跑完了但界面显示还没跑"。
+  // 实际发生过：脚本默认 data_quality.md，而 stats/paper 两个模块三处都写 data_profile.md。
+  const py = fs.readFileSync(new URL("../../.opencode/skills/data-analysis/scripts/data_profile.py", import.meta.url), "utf8")
+  const m = py.match(/add_argument\("--out",\s*default="([^"]+)"/)
+  assert.ok(m, "data_profile.py 的 --out 默认值找不到了（脚本改结构了？）")
+  const profile = WF.WORKFLOWS.stats.reader.modes.find((x) => x.id === "profile")
+  assert.match(m[1], new RegExp(profile.file), `脚本默认写 ${m[1]}，而 stats 的体检面板只认 ${profile.file}`)
+  assert.ok(WF.WORKFLOWS.stats.steps.find((s) => s.id === "profile").emits.includes(m[1]),
+    `${m[1]} 不在 stats 体检步的 emits 里，产物契约会漏掉它`)
+  assert.ok(WF.WORKFLOWS.paper.steps.find((s) => s.id === "stats").emits.includes(m[1]),
+    `${m[1]} 不在 paper 统计步的 emits 里`)
+})

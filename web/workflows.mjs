@@ -272,7 +272,10 @@ const STATS_MODES = [
   chatMode("基于这份数据", "对着你的数据随便问",
     "前面跑过的体检、基线表、统计结果都还在上下文里——可以追问某个 p 值怎么来的，或让它换个方法再算一次。"),
   { id: "profile", label: "数据体检", icon: "stethoscope", mark: "【数据体检】", badge: "先查再算",
-    file: "^(data_profile|cleaning_log).*\\.md$", out: "^(data_profile|cleaning_log)[^/]*\\.(md|csv)$",
+    // file 只认体检报告本身：loadDocFor 命中多份时取【排序后第一份】，把 cleaning_log 也算进来的话
+    // 字母序让它排在 data_profile 前面 —— 两份都在时面板正文显示的是清洗日志，而标题写着「数据体检」。
+    // 清洗日志仍在 out 里，作为产物列在面板下方（该下载下载、该预览预览）。
+    file: "^data_profile.*\\.md$", out: "^(data_profile|cleaning_log)[^/]*\\.(md|csv)$",
     empty: ["还没体检", "点上方的「开始」。重复 ID 没去、分类水平没归一时，后面每一个 p 值都是错的，而表面看不出来——所以这一步值得先做。"],
     tell: "用 `data-analysis` 做数据体检（缺失 / 异常 / 重复 ID / 分类水平不一致），报告写成 `data_profile.md`",
     prompt: "请对我上传的数据表 {data} 做一遍**数据体检**（`data-analysis` 技能）。{vars}\n\n"
@@ -292,9 +295,18 @@ const STATS_MODES = [
       + "给组间检验的 p 值（写清用的是什么检验）与标准化均数差 SMD。\n"
       + "**这份研究如果没有人口学基线协变量（诊断准确性 / 方法比对 / 纯实验室验证常常如此），"
       + "就直接告诉我「本研究无对应的基线数据，Table 1 不适用」，不要把检测值硬塞成基线表。**\n"
+      // 模式条随点随跑（这是本壳的设计），所以技能里"体检没做完不许进 Table 1"那道闸在这里没有
+      // 强制力。做成【软提醒】而不是硬闸：数据干净的人不该被拦住，但"每个 n(%) 都建在虚高分母上"
+      // 这件事必须有人说出来 —— 同一个会话，模型知道体检跑没跑过。
+      + "**如果本会话还没跑过数据体检，先用一句话提醒我**（重复 ID 没去、分类水平没归一时，"
+      + "这张表的每个 n(%) 和每个组间 p 都是错的），然后照常把表出出来，别因此停下不做。\n"
+      + "**标识列（ID / 住院号 / 编号）、原始日期列、自由文本列不要进表**——它们不是基线特征；"
+      + "跳过了哪几列要告诉我。\n"
       + "存成 `table1.csv`。" },
   { id: "analyze", label: "统计分析", icon: "chart", mark: "【统计分析】", badge: "组间 / 生存 / ROC / 回归",
-    file: "^(analysis|stats_|sample_size).*\\.(md|csv)$", out: "^(analysis|stats_|sample_size)[^/]*\\.(md|csv)$",
+    // 同上，且 file 不收 .csv：结果表（stats_*.csv）是给下游用的，正文该显示 analysis.md。
+    // 面板正文按 markdown 渲染，csv 落进来会被渲染成一坨逗号（表头和数据全糊在一行）。
+    file: "^(analysis|sample_size).*\\.md$", out: "^(analysis|stats_|sample_size)[^/]*\\.(md|csv)$",
     empty: ["还没跑分析", "点上方的「开始」。要做哪些分析、用哪几列，在上面的「变量对应」里指一下。"],
     tell: "用 `data-analysis` 跑推断统计（组间比较 / 生存 / ROC / 回归 / 样本量），结果写成 `analysis.md` + `stats_*.csv`",
     prompt: "请用 `data-analysis` 技能对 {data} 做统计分析。{vars}\n\n"
@@ -302,6 +314,10 @@ const STATS_MODES = [
       + "前提不满足就换稳健方法并说明。报结果时给**效应量与 95%CI**，不要只给一个 p 值。\n"
       + "多重比较要校正并说明用了哪种校正。\n"
       + "**不许编数字**：算不出来的、数据不支持的，直接说算不出来和缺什么。\n"
+      + "**如果本会话还没跑过数据体检，先用一句话提醒我**（重复 ID / 分类水平不一致会让下面每个 p 都是错的），"
+      + "然后照常把分析做完。\n"
+      + "**我要做的分析缺关键列时（生存分析缺随访时间或终点事件、ROC 缺待评价指标或金标准），"
+      + "先告诉我缺哪一列、表里有哪几列可选，别自己挑一列凑上去算。**\n"
       + "结果写成 `analysis.md`（含方法与解读）+ `stats_*.csv`（可复用的结果表）。" },
   { id: "figure", label: "出版级图", icon: "image", mark: "【出版级图】", badge: "300dpi + 矢量",
     file: null, out: "(^|/)(fig[^/]*|figures/.*)\\.(png|pdf|svg)$",
@@ -414,7 +430,11 @@ export const WORKFLOWS = {
         // 此时 Table 1 无对应数据，整步跳过，别把检测值硬塞成"基线表"制造误导。
         when: [{ field: "materials", has: "rawdata" }, { field: "studyType", in: ["retrospective", "prospective", "rct", "casecontrol", "crosssection"] }],
         emits: ["table1.csv"], render: "table" },
+      // gateBy:"signals" / failLabel 的理由见 refcheck 模块同名步骤的长注释：data-integrity 被铁律
+      // 禁止写裁定语，通用判据（server.mjs 的 GATE_FAIL_*）永远命中不了，不写 gateBy 这道闸恒绿。
+      // 三处 data-integrity 步骤必须一起带上，此前只有 refcheck 有 —— stats 与本步都漏了。
       { id: "integrity", name: "源数据完整性自查", skill: "data-integrity", optional: true, gate: true,
+        gateBy: "signals", failLabel: "有待核信号",
         when: { field: "materials", has: "rawdata" },
         emits: ["integrity_report.md", "audit/*"], render: "integrity", onFail: "stats",
         hint: "投稿前主动核对补说明，只出待核信号、不下造假结论" },
@@ -751,6 +771,10 @@ export const WORKFLOWS = {
       source: { kind: "doc", field: "docFile", accept: ".pdf,.docx,.doc,.odt", exts: ["pdf", "docx", "doc", "odt"] },
       first: "guide",          // 传完点「开始」自动跑哪一个
       settings: ["lang"],      // 齿轮弹层里放哪些 intake 字段
+      // 智能助手那一格的文案（输入框提示 + 会话第一轮补的那句上下文）。四个阅读器模块各写各的：
+      // 壳里原来写死的是文献版，数据模块因此会对着一张 Excel 说"我上传了一篇文献"。
+      chat: { placeholder: "对着左边这篇文献随便问，例如：第 3 组的样本量是多少？",
+        firstTurn: "我上传了一篇文献 {doc}，请先按前言把它抽成文本再回答。我的问题是：" },
       modes: LITREAD_MODES,
     },
     // ---- 用 flow 顶掉通用的"标准流程"那段话 ----
@@ -852,7 +876,9 @@ export const WORKFLOWS = {
         emits: ["stats_*.csv", "*_results.csv", "analysis*.md", "sample_size*.md"], render: "table" },
       { id: "figure", name: "出版级图表", skill: "nature-figure", when: { field: "figs", eq: true },
         emits: ["fig*.png", "fig*.pdf", "fig*.svg", "figures/*"], render: "figure" },
+      // gateBy:"signals"：同 refcheck / paper 两处，缺了它这道闸永远判不了红（见那边的长注释）
       { id: "integrity", name: "源数据完整性自查", skill: "data-integrity", optional: true, gate: true,
+        gateBy: "signals", failLabel: "有待核信号",
         when: { field: "analyses", hasOther: ["power"] },   // 没有源数据就无从自查
         emits: ["integrity_report.md", "audit/*"], render: "integrity", onFail: "analyze" },
     ],
@@ -881,6 +907,8 @@ export const WORKFLOWS = {
         accept: ".xlsx,.xlsm,.csv,.tsv,.xls", exts: ["xlsx", "xlsm", "csv", "tsv", "xls"] },
       first: "profile",
       settings: ["figs", "lang"],
+      chat: { placeholder: "对着你的数据随便问，例如：治疗组的中位随访时间是多少？",
+        firstTurn: "我上传了数据表 {doc}，请先把表读进来、看清有哪些列和多少行，再回答。我的问题是：" },
       // ---- 变量对应面板（只有本模块有）----
       // 【为什么必须留着】「列名猜错 / 写错」是这个模块最高频的失败模式，而它不会报错 ——
       // 医生表里 `随访时间` 和 `入院时间` 并排，认错了只会给出一份看起来很正常的错 KM 曲线。
@@ -902,10 +930,19 @@ export const WORKFLOWS = {
       + readerModeLines(STATS_MODES)
       + `\n- **用户在界面上指定了哪一列是什么，就以他指定的为准**（消息里会带一段「变量对应」）。`
       + `他没指的列你可以推断，但**必须在回答里写清你把哪一列当成了什么**，让他能一眼发现认错了。`
+      // xlsx 的列名是用户【手打】的（网关读不了 xlsx 表头，那几个下拉会降级成输入框），打错是常态。
+      // 静默挑一个近似列替上去 → 一份看起来完全正常、实际分错了组的表，用户和审稿人都看不出来。
+      + `\n- **他指定的列名在表里找不到 → 停下来告诉他实际列名，让他改**（列名相近的两列并存极常见，`
+      + `如「手术方式」与「组别」）。**绝不许自己挑一个像的替上去**——哪怕在回答里写了，`
+      + `那也是一份看起来完全正常、实际分错组的表。`
       + `\n- **方法要交代**：用了什么检验 / 模型、为什么选它、前提是否满足（正态性 / 方差齐性 / 比例风险假定 / `
       + `共线性…）。前提不满足就换稳健方法并说明。报结果给**效应量与 95%CI**，不要只给一个 p 值；`
       + `多重比较要校正并说明用了哪种。`
-      + `\n- **不要替用户改数据**：体检发现的问题逐条列出来、给建议，改不改由他定。`,
+      + `\n- **不要替用户改数据**：体检发现的问题逐条列出来、给建议，改不改由他定。`
+      // 界面上那个开关的语义要写清楚，否则"顺便出投稿级图＝是"传过去了模型也不知道该做什么。
+      + `\n- 消息末尾的「本次设定」里，**「顺便出投稿级图＝是」= 统计分析这一步直接出 300dpi + 矢量`
+      + `（\`nature-figure\`，可直接投稿）；＝否 = 只给 150dpi 预览图**（\`data-analysis\` 自带的即可）。`
+      + `「输出语言」管的是报告、表头与解读文字用什么语言写。`,
   },
 
   // ============ 文稿核查与审校 ============
@@ -975,6 +1012,8 @@ export const WORKFLOWS = {
       extraUpload: { field: "dataFiles", key: "data", label: "配套数值表", accept: ".xlsx,.csv,.tsv", exts: ["xlsx", "csv", "tsv"] },
       first: "refs",
       settings: ["strict", "lang"],
+      chat: { placeholder: "对着这份稿件随便问，例如：第 12 条引用为什么判黄？",
+        firstTurn: "我上传了一份稿件 {doc}，请先读它再回答。我的问题是：" },
       modes: REFCHECK_MODES,
     },
     flow: `\n- **本模块 = 核查【用户上传的这一份稿件】**，不写稿、不润色、不做统计分析。`
@@ -1078,6 +1117,8 @@ export const WORKFLOWS = {
       // protectRefs / lang 都是 pin:true —— 它们进齿轮弹层，改完立刻回写 _workflow.json，
       // 于是 settingsLine 每一轮都把它们钉进前言（这条路是踩出来的，见 protectRefs 的注释）。
       settings: ["goals", "strength", "protectRefs", "journalName", "outFmt", "lang"],
+      chat: { placeholder: "对着这份稿子随便问，例如：把讨论第二段再改一版",
+        firstTurn: "我上传了一份稿件 {doc}，请先读它再回答。我的问题是：" },
       modes: HUMANIZE_MODES,
     },
     flow: `\n- **本模块 = 润色【用户上传的这一份稿件】**，不替他写新内容、不做统计、不查文献真伪`

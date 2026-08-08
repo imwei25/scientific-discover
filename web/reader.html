@@ -560,6 +560,9 @@ button{font:inherit}
       <summary><span id="varsTitle">变量对应</span><span class="varssum" id="varsSum"></span></summary>
       <div class="varssub" id="varsSub"></div>
       <div class="varsgrid" id="varsGrid"></div>
+      <!-- 服务端对「填的列名在真实表头里存不存在」的体检结论落在这里。CSV 能读表头时才有；
+           xlsx 读不出表头，那一路由模块前言要求模型自己核对列名后停下报错。 -->
+      <div class="notebox warn" id="varsWarn" hidden></div>
     </details>
 
     <!-- 面板由 installConfig 按模式清单生成（每个模式一个 .pane），这里留空 -->
@@ -741,6 +744,10 @@ let ORDER = []             // 模式在右侧条上的顺序
 /** 把下发的配置装进 MODES / ORDER。正则以字符串下发（要能 JSON 序列化），这里编译。 */
 function installConfig(cfg) {
   CFG = cfg
+  // 智能助手那一格的文案也归模块管。写死过一次："对着左边这篇文献随便问" 在数据模块里指着
+  // 一张 Excel 说"这篇文献"，在核查模块里指着一份稿件说同样的话 —— 本文件不该认识任何一个
+  // 具体模块（见文件头），文案同理。缺配置时的兜底措辞要【中性】，不许再提"文献"。
+  $("q").placeholder = (cfg.chat && cfg.chat.placeholder) || "对着左边这份文件随便问"
   MODES = {}; ORDER = []
   const re = (x) => { try { return x ? new RegExp(x, "i") : null } catch (_) { return null } }
   for (const m of cfg.modes || []) {
@@ -762,12 +769,9 @@ function promptFor(id) {
   // 可以有好几份，全都列出来（只发第一份的话，模型会把其余几份当不存在，用户完全看不出来）。
   // 多文件模块要把【全部】文件都列出来：只发当前在看的那张，模型会把其余几张当不存在，
   // 而用户在界面上明明看见传了三张 —— 这种"各说各话"最难被发现。
-  const dnames = CFG.source.kind === "table"
-    ? (docFiles.length ? docFiles.map((f) => f.name) : (docName ? [docName] : []))
-    : dataFiles.map((f) => f.name)
   const map = {
     doc: docName ? bq(docName) : "",
-    data: dnames.length ? dnames.map(bq).join("、") : "",
+    data: docListStr(),
     vars: varsBlock(),
   }
   let t = M.prompt
@@ -777,7 +781,42 @@ function promptFor(id) {
     // 有值就替换；没值就把它所在的那一句整句去掉（句号/换行为界），免得留下半截话
     t = v ? t.split(ph).join(v) : t.replace(new RegExp("[^。\n]*" + ph + "[^。\n]*。?", "g"), "")
   }
-  return M.mark + t
+  return M.mark + t + settingsBlock()
+}
+
+/** {data} 的取值：本会话【全部】数据表 / 配套数值表，反引号包好用顿号连起来 */
+function docListStr() {
+  const names = CFG.source.kind === "table"
+    ? (docFiles.length ? docFiles.map((f) => f.name) : (docName ? [docName] : []))
+    : dataFiles.map((f) => f.name)
+  return names.map((n) => "`" + n + "`").join("、")
+}
+
+/**
+ * 齿轮弹层里的设定 → 每一轮都跟着发出去。
+ * 【为什么必须发】阅读器壳每个模式发的是一句【写死的】提示词，设定值一个字都不在里面；
+ * 后端只把 `pin:true` 的字段钉进模块前言（stats 里只有 hasPHI 是 pin）。于是把「输出语言」
+ * 改成 English、把「顺便出投稿级图」勾上之后，模型那边【什么都没收到】——界面上摆着一个开关，
+ * 拨了却毫无变化，而用户没有任何办法看出是没传到。
+ */
+function settingsBlock() {
+  const parts = []
+  for (const id of (CFG && CFG.settings) || []) {
+    const f = fieldDef(id); if (!f) continue
+    const v = SETTINGS[id] !== undefined ? SETTINGS[id] : f.default
+    const s = fmtSetting(f, v)
+    if (s) parts.push(f.label + "＝" + s)
+  }
+  return parts.length ? "\n\n【本次设定，以此为准】" + parts.join("；") + "。" : ""
+}
+
+/** 设定值 → 人话（选项取它的中文标签，别把 "zh" / "true" 这种内部值发给模型） */
+function fmtSetting(f, v) {
+  if (v === undefined || v === null || v === "") return ""
+  const lab = (x) => { const o = (f.options || []).find((o2) => String(o2.v) === String(x)); return o ? o.t : String(x) }
+  if (f.type === "bool") return v === true || v === "true" ? "是" : "否"
+  if (Array.isArray(v)) return v.length ? v.map(lab).join("、") : ""
+  return lab(v)
 }
 
 /** stats 的「变量对应」：把用户指的列拼成一段话，跟在 prompt 里的 {vars} 位置 */
@@ -831,7 +870,7 @@ function initState() {
   S = {}
   for (const id of ORDER) {
     S[id] = id === "chat"
-      ? { msgs: [], status: "idle", err: "" }
+      ? { msgs: [], status: "idle", err: "", files: [] }
       : { raw: "", doc: null, docName: "", status: "idle", err: "", files: [] }
   }
 }
@@ -1297,13 +1336,36 @@ function renderXlsxSheet() {
 }
 
 /** csv/tsv → 表格。只画前 200 行：几万行的表全塞进 DOM 会把页面卡死，而左栏是用来"对着看"的。 */
-function renderCsv(text, sep) {
+/**
+ * CSV/TSV 切行切格。**必须认引号**：裸按分隔符切的话，`table1.csv` 的效应量列
+ * （`"均值差 1.00 (-2.02, 4.02)"`）会被劈成两格，那一行往右错一列而表头还在原位 ——
+ * 看起来就像统计算错了。医生自己的表里"备注"列带逗号同样常见。
+ */
+function splitDelim(text, sep, maxRows) {
+  const t = String(text).replace(/^﻿/, "").replace(/\r\n?/g, "\n")
   const rows = []
-  for (const line of text.split(/\r?\n/)) {
-    if (!line.trim() && rows.length) continue
-    rows.push(line.split(sep).map((c) => c.replace(/^"|"$/g, "").trim()))
-    if (rows.length > 201) break
+  let row = [], cell = "", inQ = false
+  for (let i = 0; i < t.length; i++) {
+    const c = t[i]
+    if (inQ) {
+      if (c !== '"') { cell += c; continue }
+      if (t[i + 1] === '"') { cell += '"'; i++; continue }   // "" = 一个字面引号
+      inQ = false
+    } else if (c === '"' && !cell) inQ = true
+    else if (c === sep) { row.push(cell); cell = "" }
+    else if (c === "\n") {
+      row.push(cell); cell = ""
+      if (row.length > 1 || row[0].trim()) rows.push(row)    // 空行跳过
+      row = []
+      if (maxRows && rows.length >= maxRows) return rows
+    } else cell += c
   }
+  if (cell || row.length) { row.push(cell); rows.push(row) }
+  return rows
+}
+
+function renderCsv(text, sep) {
+  const rows = splitDelim(text, sep, 201).map((r) => r.map((c) => c.trim()))
   if (!rows.length) return '<div class="docmsg">这个文件是空的</div>'
   const head = rows[0], body = rows.slice(1, 201)
   return '<div class="tablewrap"><table><thead><tr>'
@@ -1556,9 +1618,9 @@ function runHtml(m) {
         + "</details>" : "")
     + "</div>"
 }
-function filesHtml(list) {
+function filesHtml(list, title) {
   if (!list || !list.length) return ""
-  return '<div class="files"><div class="ft">本轮产物</div>' + list.map((n) => {
+  return '<div class="files"><div class="ft">' + esc(title || "本轮产物") + "</div>" + list.map((n) => {
     // download 属性只给最后一段：带 "pdfs/" 前缀的话浏览器保存时会把斜杠清洗成怪名字
     const dl = '<a class="fbtn" href="api/download?name=' + encodeURIComponent(n) + sidQ()
       + '" download="' + esc(String(n).split("/").pop()) + '" title="下载" aria-label="下载 ' + esc(n) + '">' + ICON.download + "</a>"
@@ -1670,7 +1732,12 @@ function render(m) {
   const body = s.doc != null ? s.doc : s.raw
   if (body && body.trim()) {
     if (s.doc != null && s.docName) h += '<div class="notebox info">正文来自产物文件 <b>' + esc(s.docName) + "</b>，可在下方下载。</div>"
-    h += '<div class="card md">' + renderMd(body) + "</div>"
+    // 产物本身就是一张表（基线表就是 table1.csv）时按【表】渲染。markdown 渲染器眼里 csv 只是
+    // 一段普通文字：逗号、引号原样铺开，表头和数据糊成一坨 —— 用户点开「基线表」看到的
+    // 不是一张三线表，而是一段乱码似的文本，第一反应是"它算错了"。
+    h += (s.doc != null && PV_CSV.test(s.docName))
+      ? '<div class="card">' + renderCsv(s.doc, /\.tsv$/i.test(s.docName) ? "\t" : ",") + "</div>"
+      : '<div class="card md">' + renderMd(body) + "</div>"
   } else if (s.status === "running") {
     if (!RUN || RUN.mode !== m) h += '<div class="notebox info">正在生成…</div>'
   } else if (s.status !== "idle" && !s.err) {
@@ -1686,16 +1753,21 @@ function render(m) {
 function renderChat() {
   const el = $("pane-chat")
   const s = S.chat
-  if (!s.msgs.length && !RUN) { el.innerHTML = emptyHtml("chat"); updateFoot(); return }
+  // 还没聊过 → 空态。但产物栏要留着：用户可能是跑完几个模式后切过来找那份 Word 的。
+  if (!s.msgs.length && !RUN) { el.innerHTML = emptyHtml("chat") + filesHtml(s.files, "本会话产物"); updateFoot(); return }
   let h = ""
   s.msgs.forEach((m) => {
     if (m.role === "user") h += '<div class="msg user"><div class="bubble">' + esc(m.text) + "</div></div>"
     else if (m.role === "tag") h += '<div class="msg tag"><div class="bubble">' + esc(m.text) + "</div></div>"
     else h += '<div class="msg ai"><div class="bubble"><div class="who">' + ICON.bot + "助手</div>"
-      + '<div class="md">' + renderMd(m.text) + "</div></div></div>"
+      + '<div class="md">' + renderMd(m.text) + "</div>" + filesHtml(m.files) + "</div></div>"
   })
   if (RUN && RUN.mode === "chat") h += runHtml("chat")
   if (s.err) h += '<div class="notebox err">⚠ ' + esc(s.err) + "</div>"
+  // 没被任何模式认领的产物挂在这一格底部。两种来源：① 在这里让它"导成 Word"生成的 docx；
+  // ② 模式跑出来但文件名不合该模式 out 契约的。阅读器【没有】工作台那样的全局产出侧栏，
+  // 不在这兜住的话，文件确实生成了、会话目录里也在，而界面上没有任何一处能点开或下载。
+  h += filesHtml(s.files, "本会话产物")
   el.innerHTML = h
   updateFoot()
 }
@@ -1763,7 +1835,15 @@ async function run(m, force, userTxt) {
     if (!q) return
     // 会话里还没跑过任何一轮 → agent 手上没有原文，先补一句上下文（正常路径是导读先跑，
     // 只有导读失败 / 用户一进来就直接提问才会走到这里）
-    if (!turns) q = "我上传了一篇文献 `" + docName + "`，请先按前言把它抽成文本再回答。我的问题是：" + q
+    // 文案同样来自配置：数据模块里"我上传了一篇文献 `队列.xlsx`"会把模型往"读文献"上带一步，
+    // 而它手里是一张表。{doc} 展开成本会话的【全部】文件（数据常常分散在主表 + 随访表里）。
+    if (!turns) {
+      const tpl = (CFG.chat && CFG.chat.firstTurn) || "我上传了 {doc}，请先读它再回答。我的问题是："
+      // 数据模块的"那份东西"是一组表（docListStr 就是它）；文献 / 稿件模块只有左栏这一份。
+      // 别在这里用 docListStr 兜底：对那几个模块它返回的是【配套数值表】，不是正文那份。
+      const src = CFG.source.kind === "table" ? docListStr() : ""
+      q = tpl.replace("{doc}", src || "`" + docName + "`") + q
+    }
     s.msgs.push({ role: "user", text: userTxt })
   } else {
     q = promptFor(m)
@@ -1869,11 +1949,17 @@ function attach(m) {
     else S[m].raw = raw
     schedule()
   })
-  // 服务端推的是【本轮新建/改动的产物】文件名数组（字符串）。聊天模式不列产物：那一栏是对话，
-  // 突然冒出一排文件卡只会挤走上下文；产物在导读/翻译/PPT 三个面板里各自展示。
+  // 服务端推的是【本轮新建/改动的产物】文件名数组（字符串）。
+  // 聊天模式【也要列】，但挂在当轮那条回复下面（不是单独一栏），这样既不打断对话，
+  // 又不会出现"文件生成了却无处可取"——数据模块里「导成 Word」正是发生在这一格。
   es.addEventListener("files", (ev) => {
-    if (m === "chat") return
-    try { const l = JSON.parse(ev.data); if (Array.isArray(l) && l.length) S[m].files = l.filter((x) => typeof x === "string") } catch (_) {}
+    let l; try { l = JSON.parse(ev.data) } catch (_) { return }
+    const names = Array.isArray(l) ? l.filter((x) => typeof x === "string") : []
+    if (!names.length) return
+    if (m === "chat") {
+      if (!aiMsg) { aiMsg = { role: "ai", text: "" }; S.chat.msgs.push(aiMsg) }
+      aiMsg.files = names
+    } else S[m].files = names
     schedule()
   })
   es.addEventListener("queue", (ev) => {
@@ -1907,6 +1993,7 @@ function attach(m) {
 /** 一轮跑完：把该模式对应的产物文件读回来（翻译 / 大纲的正文在文件里，不在对话里） */
 async function afterRun(m) {
   await refreshOutputs()
+  collectOrphanFiles()          // 聊天格底部那一栏：谁都不认领的产物
   if (m === "chat") return
   await loadDocFor(m)
   collectFiles(m)
@@ -1925,6 +2012,20 @@ function collectFiles(m) {
   if (m === "chat" || !MODES[m].out) return
   const named = outputs.map((f) => f.name).filter((n) => MODES[m].out.test(n))
   S[m].files = [...new Set([...(S[m].files || []), ...named])].slice(0, 12)
+}
+
+/**
+ * 谁都不认领的产物 → 挂到智能助手那一格底部。
+ * 【为什么需要】各模式只列自己 out 契约认得的文件名，而真实产物经常落在契约之外：在聊天里让它
+ * 「导成 Word」生成的 docx、模型给报告起了个契约没覆盖的名字（fig1.tiff、km_results.csv…）。
+ * 阅读器没有工作台那样的全局产出侧栏，这些文件就成了"生成了但界面上摸不着"。刷新页面后
+ * SSE 的 files 事件也没了，所以这一栏必须从 outputs 现算，不能只靠当轮推送。
+ */
+function collectOrphanFiles() {
+  // 已经挂在某条回复下面的不再重复列一遍（同一格里同一个文件出现两次，看着像生成了两份）
+  const shown = new Set(S.chat.msgs.flatMap((m) => m.files || []))
+  const claimed = (n) => shown.has(n) || ORDER.some((k) => k !== "chat" && MODES[k].out && MODES[k].out.test(n))
+  S.chat.files = outputs.map((f) => f.name).filter((n) => !claimed(n)).slice(0, 12)
 }
 
 async function loadDocFor(m) {
@@ -2028,6 +2129,7 @@ async function restore() {
   await refreshOutputs()
   await Promise.all(auto.map((m) => loadDocFor(m)))
   auto.forEach((m) => { if (S[m].status !== "idle") collectFiles(m) })
+  collectOrphanFiles()          // 刷新后 SSE 那份 files 已经没了，聊天格的产物只能从这里现算
 
   enterReader()
   if (CFG.source.kind === "table") loadHeaders()
@@ -2138,12 +2240,31 @@ let saveT = 0
 function saveSettings() {
   if (!sid) return
   clearTimeout(saveT)
-  saveT = setTimeout(() => {
-    fetch("api/workflow/form", {
-      method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ module: MOD, sid, values: wfFormValues() }),
-    }).catch(() => {})
+  saveT = setTimeout(async () => {
+    let j = null
+    try {
+      const r = await fetch("api/workflow/form", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ module: MOD, sid, values: wfFormValues() }),
+      })
+      j = r.ok ? await r.json() : null
+    } catch (_) { return }
+    // ★ 响应体【必须】读回来：服务端就在这个接口里做「你填的列名在真实表头里存不存在」的体检，
+    //   结论只出现在 j.warnings 里。此前这里是 fetch(...).catch(()=>{})，响应从来没被读过 ——
+    //   分组列打错字（表里叫「组别」，用户填了「手术方式」）在界面上没有任何反馈，模型自行推断
+    //   一列跑完全程，产出一份【看起来完全正常、实际分错了组】的 Table 1。服务端那段注释写着
+    //   这道体检"成本几乎为零"，而它的产出在阅读器里被 100% 丢弃了。
+    showVarsWarn(j && Array.isArray(j.warnings) ? j.warnings : [])
   }, 400)
+}
+
+/** 列名体检的结论摊在「变量对应」面板里（只 warning 不挡：表头读不出来的情况太多，硬拦会误伤） */
+function showVarsWarn(list) {
+  if (!CFG || !CFG.vars) return
+  const el = $("varsWarn"); if (!el) return
+  el.hidden = !list.length
+  el.textContent = list.length ? "⚠ " + list.join("；") : ""
+  if (list.length) $("varsBox").open = true      // 折叠着的话等于没说
 }
 
 let HEADERS = []          // 真实表头（stats 的 columns 下拉靠它）

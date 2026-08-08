@@ -24,8 +24,10 @@ ${REPO_ROOT:-/app}/.venv/bin/python
 - 连续+非正态 → `中位数[IQR]` + Mann-Whitney(两组)/Kruskal-Wallis(多组)
 - 分类 → `n (%)` + **未校正 Pearson 卡方**（与 R tableone/SAS 默认口径一致，便于读者复核；旧版 scipy 默认对 2×2 加 Yates 会对不上）；2×2 且期望频数 <5 → Fisher 精确检验
 
+**自动推断会跳过这几类列**（跳了会在 stdout 逐条打印哪列、为什么）：列名像标识列的（`患者ID` / `住院号` / `编号` / `case_no`…）、日期时间列（原始日期不是基线特征，先派生成年龄 / 住院天数 / 随访时长）、几乎每行一个取值的、以及 >20 个不同取值的文本列。**这不是可有可无的清洁工作**：不跳的话表里会多出「住院号 3841029.4±221.7」这样一行，或者备注列铺开两百行 n(%)——每一行看起来都很正常（有均值、有 p 值），错得毫无异常迹象。要强行纳入某列就用 `--continuous` / `--categorical` **显式指定**（显式指定的一律照做，不跳），要额外排除几列用 `--exclude a,b`。**跳过清单要转述给用户**——万一它把真变量当标识列跳了，只有用户看得出来。
+
 ```bash
-# 自动推断变量类型（数值且取值多→连续，其余→分类）
+# 自动推断变量类型（数值且取值多→连续，其余→分类；标识列/日期列/自由文本自动跳过并打印）
 ${REPO_ROOT:-/app}/.venv/bin/python ${REPO_ROOT:-/app}/.opencode/skills/clinical-stats/scripts/table1.py \
   --input uploads/data.csv --group arm --out table1.csv
 

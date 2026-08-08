@@ -22,6 +22,7 @@
 """
 import argparse
 import os
+import re
 import sys
 
 try:
@@ -372,12 +373,46 @@ def summarize_categorical(df, var, group, groups, two):
     return rows
 
 
+# ---- 自动推断时哪些列不该进表 ----
+# 【为什么必须有】自动推断原本把"除分组列以外的每一列"都铺进去，于是：住院号变成一行
+# 「住院号 3841029.4±221.7」、入院日期变成两百行 n(%)、备注列把整张表撑爆。这些行单看
+# 都"很正常"（有均值有 p 值），错得毫无异常迹象，往往到审稿意见回来才发现。
+# 三条原则：① 只在【自动推断】时跳，显式 --continuous/--categorical 指定的一律照做；
+#          ② 跳了必须打印出来（哪列、为什么），不许静默吞列；③ 用户能覆盖（显式指定或 --exclude）。
+ID_PAT = re.compile(
+    # 中文列名的 ID 后缀（患者ID / 病人id / 样本No）——只靠"几乎每行一个取值"那条行为判据会漏：
+    # 恰恰是【有重复 ID】的表（最该被拦下的那种）不满足唯一性，于是被当成连续变量报出均值±SD。
+    r"[一-龥](id|no)$|"
+    r"(^|[_\s\-])(id|no|num)([_\s\-]|$)|(^|[_\s\-])(序号|编号)([_\s\-]|$)|住院号|病案号|门诊号|"
+    r"标本号|样本号|卡号|身份证|patient[_\s\-]?id|case[_\s\-]?(id|no)|record[_\s\-]?(id|no)|subject[_\s\-]?id",
+    re.I)
+DATE_PAT = re.compile(r"日期|时间|date|time|dob|birth", re.I)
+
+
+def auto_skip_reason(df, col):
+    """自动推断时该不该跳过这一列；返回原因字符串，None = 可以进表。"""
+    s = df[col]
+    n = int(s.notna().sum())
+    nu = int(s.nunique(dropna=True))
+    if ID_PAT.search(str(col)):
+        return "列名像标识列（ID / 编号 / 住院号…）"
+    if pd.api.types.is_datetime64_any_dtype(s) or DATE_PAT.search(str(col)):
+        return "日期/时间列——原始日期不是基线特征，先派生成年龄、住院天数、随访时长再纳入"
+    # 名字看不出来时按行为判：几乎每行一个取值，那就是标识列（哪怕它叫「编码2」）
+    if n >= 10 and nu >= 0.9 * n and not pd.api.types.is_float_dtype(s):
+        return f"几乎每行一个不同取值（{nu}/{n}），像标识列"
+    if not pd.api.types.is_numeric_dtype(s) and nu > 20:
+        return f"{nu} 个不同取值的文本列（自由文本或高基数分类，铺开会有 {nu} 行）"
+    return None
+
+
 def main():
     ap = argparse.ArgumentParser(description="生成 Table 1 基线特征表")
     ap.add_argument("--input", required=True)
     ap.add_argument("--group", default=None, help="分组列名（可选）")
     ap.add_argument("--continuous", default="", help="连续变量，逗号分隔（默认自动推断）")
     ap.add_argument("--categorical", default="", help="分类变量，逗号分隔（默认自动推断）")
+    ap.add_argument("--exclude", default="", help="不进表的列，逗号分隔（自动推断时额外排除）")
     ap.add_argument("--out", default=None)
     args = ap.parse_args()
     args.out = str(_resolve_out_file(args.out, "table1.csv"))
@@ -399,13 +434,29 @@ def main():
     cont = [c.strip() for c in args.continuous.split(",") if c.strip()]
     cat = [c.strip() for c in args.categorical.split(",") if c.strip()]
     if not cont and not cat:  # 自动推断
+        dropped = [c.strip() for c in args.exclude.split(",") if c.strip()]
+        skipped = []
         for c in df.columns:
             if c == group:
+                continue
+            if c in dropped:
+                skipped.append((c, "你用 --exclude 排除的"))
+                continue
+            why = auto_skip_reason(df, c)
+            if why:
+                skipped.append((c, why))
                 continue
             if pd.api.types.is_numeric_dtype(df[c]) and df[c].nunique() > 6:
                 cont.append(c)
             else:
                 cat.append(c)
+        if skipped:
+            print(f"ℹ️ 自动推断跳过 {len(skipped)} 列（要强制纳入就用 --continuous / --categorical 显式指定）：")
+            for c, why in skipped:
+                print(f"   · {c} —— {why}")
+        if not cont and not cat:
+            sys.exit("自动推断之后没有任何变量可以进表（全被判为标识列/日期列/自由文本）。"
+                     "请用 --continuous / --categorical 显式指定要进 Table 1 的变量。")
     else:
         # 显式指定时做合理性检查，防用反
         for c in cont:
