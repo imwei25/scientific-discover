@@ -571,13 +571,29 @@ export const WORKFLOWS = {
     //   撰写要求与工作基础），字段两列。section / sectionSub / sectionIcon 三项只影响前端画法。
     intake: [
       // ---- 区块 1：项目基本信息 ----
-      { id: "funder", label: "申请类型", type: "select", required: true,
+      // ★★ 这一项【直接决定成稿对不对】，所以选项必须覆盖 grant-proposal 有内置要求卡的渠道。
+      //   技能第 1 步就是"定渠道 → Read 对应要求卡"，结构提纲、逐节字数硬限、格式规定、
+      //   形式审查清单全部按卡对齐（SKILL.md 开头原话）；渠道选错 = 加载错的卡 = 整篇作废。
+      //   references/ 下现有 17 张卡，其中省卫健委、院级、博士后、学会临床都是【只有卡、
+      //   界面上却没有入口】—— 那些用户只能挑一个最像的，等于系统亲手给他配错模板。
+      //   「其它」+ 自由填写也必须留着：它触发技能的第 1.5 步（先问官方文件、再联网调研出
+      //   要求卡，不凭常识硬写），是表外渠道唯一正确的出口。
+      // chips:true —— 11 个选项本会掉进原生下拉，而这是全表最要紧的一项，收起来等于把
+      //   "有哪些渠道可选"藏了。摊开占两行，值这个地方。
+      { id: "funder", label: "申请类型", type: "select", required: true, chips: true, col2: true,
         section: "项目基本信息", sectionSub: "确定申报类别、关键要素与研究周期", sectionIcon: "lines",
         options: [
           { v: "nsfc-general", t: "国家自然科学基金·面上项目" }, { v: "nsfc-young", t: "青年科学基金" },
-          { v: "nsfc-key", t: "重点项目" }, { v: "provincial", t: "省自然科学基金" },
-          { v: "industry", t: "企业横向合作" }],
-        help: "不同类型对应不同的额度上限与评审要点，请先确认申报口。" },
+          { v: "nsfc-region", t: "地区科学基金" }, { v: "nsfc-key", t: "重点项目" },
+          { v: "provincial", t: "省自然科学基金" }, { v: "health-commission", t: "省 / 市卫健委课题" },
+          { v: "hospital", t: "院级 / 校级课题" }, { v: "postdoc", t: "博士后基金" },
+          { v: "society", t: "学会临床基金" }, { v: "industry", t: "企业横向合作" },
+          { v: "other", t: "其它" }],
+        help: "**决定按哪一份官方要求起草**（结构提纲、逐节字数硬限、形式审查清单都按它对齐），选错会导致整篇返工。不在表里就选「其它」并写清渠道名。" },
+      { id: "funderOther", label: "具体是哪个资助渠道", type: "text", when: { field: "funder", eq: "other" },
+        required: true, col2: true,
+        placeholder: "例：中华医学会临床医学科研专项 / 某某市卫健委面上项目 / 国家重点研发计划某专项",
+        help: "没有内置要求卡的渠道，会先请你提供当年的申报通知 / 模板，拿不到再联网把要求查清楚才动笔。" },
       // ★ 关键字取代了原来的「研究方向」长文本：流程第 2 步就是「研究方向生成」——
       //   方向由 AI 依据关键字初拟，用户不必在第一屏就把方向想好（那正是他来找工具的原因）。
       { id: "keywords", label: "项目关键字", type: "tags", required: true,
@@ -591,6 +607,15 @@ export const WORKFLOWS = {
         { v: "临床医学", t: "临床医学" }, { v: "预防医学", t: "预防医学" },
         { v: "药学", t: "药学" }, { v: "生物信息学", t: "生物信息学" }],
         help: "如暂不确定可留空，会依据项目关键字推断研究方向。" },
+      // ★ 申请代码单独留一格，别指望上面那个 11 项的粗分类顶替它。
+      //   grant-proposal 的硬闸里有一条是「研究方向属该渠道受理范围（NSFC 代码分流）」，
+      //   而 references/nsfc-medical-h.md 是一整张 H01–H35 代码表 + 分流规则 ——
+      //   拿"肿瘤学"是判不了分流的，代码错会在形式审查阶段被打回。
+      //   示范值必须用【2026 新码表】里真实存在的组合：H16 现在是急重症医学，消化系统是 H03，
+      //   肿瘤一律 H18（旧表的"H16 肿瘤学"已失效）。示范值是最容易被照抄的东西，给错比不给更糟。
+      { id: "applyCode", label: "申请代码 / 学部方向", type: "text", col2: false,
+        placeholder: "例：H18 肿瘤学 / H03 消化系统",
+        help: "国自然系渠道填了能少一轮返工；不确定可留空，会按你的方向给建议。" },
       { id: "amount", label: "申请金额（万元）", type: "number", required: true, min: 0, step: 1,
         col2: false, placeholder: "例如：60", help: "该额度将作为预算合计的上限。",
         errMsg: "请填写有效的申请金额" },
@@ -607,19 +632,27 @@ export const WORKFLOWS = {
       { id: "applicantName", label: "申请人姓名", type: "text", required: true, col2: false,
         section: "申请人信息", sectionSub: "负责人与依托单位", sectionIcon: "user",
         placeholder: "请输入真实姓名", errMsg: "请填写申请人姓名" },
-      { id: "applicant", label: "职称", type: "select", dropdown: true, required: true, col2: false,
+      // ★ 在读研究生 / 博士后必须留着。topic-selection 第 3.5 步是【按申请人类型分流可行路径】，
+      //   原话"同一方向，不同身份能做的设计天差地别，别给临床医生推需湿实验室的机制题"——
+      //   身份直接改变选题，而选题是后面每一节的地基。博士后另有独立要求卡（references/postdoc.md）。
+      //   标签写「职称 / 身份」：在读研究生没有职称，只叫"职称"会让人不知道该选哪个。
+      { id: "applicant", label: "职称 / 身份", type: "select", dropdown: true, required: true, col2: false,
         options: [
-          { v: "professor", t: "研究员 / 教授" }, { v: "associate", t: "副研究员 / 副教授" },
-          { v: "lecturer", t: "主治医师 / 助理研究员" }, { v: "other", t: "其他" }],
+          { v: "student", t: "在读研究生" }, { v: "postdoc", t: "博士后" },
+          { v: "lecturer", t: "主治医师 / 助理研究员" }, { v: "associate", t: "副研究员 / 副教授" },
+          { v: "professor", t: "研究员 / 教授" }, { v: "other", t: "其他" }],
         help: "决定选题的体量与风险偏好 —— 青年基金和面上项目的选题策略完全不同。",
-        errMsg: "请选择职称" },
+        errMsg: "请选择职称 / 身份" },
       { id: "org", label: "依托单位", type: "text", required: true, col2: true,
         placeholder: "例如：某某大学附属医院", errMsg: "请填写依托单位" },
-      { id: "email", label: "联系邮箱", type: "text", required: true, col2: false, noCard: true,
-        placeholder: "name@hospital.com", errMsg: "请填写有效的邮箱地址",
-        help: "只留在本机表单里，不会随任务交给 AI。" },
-      { id: "phone", label: "联系电话", type: "text", required: true, col2: false, noCard: true,
-        placeholder: "11 位手机号", errMsg: "请填写有效的 11 位手机号",
+      // ★ 这两项【不设必填】。它们标了 noCard、一个字都不进提示词，对成稿没有任何贡献；
+      //   而设成必填就成了硬门槛（前端缺必填不放行提交）——用一份永远不会被用到的数据，
+      //   挡住用户拿到稿子，怎么算都不合算。设计稿标的是必填，这里是有意不照抄。
+      { id: "email", label: "联系邮箱", type: "text", col2: false, noCard: true,
+        placeholder: "name@hospital.com",
+        help: "只留在本机表单里，不会随任务交给 AI；填了方便你自己回看申报信息。" },
+      { id: "phone", label: "联系电话", type: "text", col2: false, noCard: true,
+        placeholder: "11 位手机号",
         help: "只留在本机表单里，不会随任务交给 AI。" },
 
       // ---- 区块 3：撰写要求与工作基础（均选填）----
@@ -633,7 +666,9 @@ export const WORKFLOWS = {
       { id: "baseDesc", label: "已有工作基础", type: "textarea",
         placeholder: "可填写已有工作基础，例如：代表作 / 已发表论文、预试验数据、平台 / 设备条件、已有样本库 / 队列等",
         help: "提示：代表作 / 已发表论文 · 预试验数据 · 平台 / 设备条件 · 已有样本库 / 队列。没有就留空，缺的会在对应步骤问你要，绝不替你编。" },
-      { id: "attachFiles", label: "申请课题要求文件 / 代表作 / 预实验数据", type: "files",
+      // divider：上传区前面加一条分隔线（设计稿 v3 在「上传参考资料」之前有一条 <hr>）——
+      // 上面两项是"你自己写点什么"，这一项是"你交点什么给我"，两件事该断开
+      { id: "attachFiles", label: "申请课题要求文件 / 代表作 / 预实验数据", type: "files", divider: true,
         uploadText: "上传材料", accept: ".pdf / .docx / .xlsx / .png，单个 ≤ 20MB",
         help: "可上传申报指南、申请书模板、代表性论文、预实验数据表等；传了官方通知 / 模板就以它为准。" },
     ],
