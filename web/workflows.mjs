@@ -510,7 +510,7 @@ export const WORKFLOWS = {
     primary: "literature-review",
     intakeTitle: "选题与检索范围",
     // ★ 体裁声明必须在【首屏第一眼】就说，不能只放在卡片底部的脚注里 —— 本模块用的
-    //   「纳入/排除」「研究设计」「PICO」全是系统综述的标配语汇，医生会理所当然以为这里能做 Meta，
+    //   「纳入的研究设计」「PICO」这些全是系统综述的标配语汇，医生会理所当然以为这里能做 Meta，
     //   填完一整屏才发现没有 PRISMA / 双人筛选 / 偏倚风险，那时已经白填了。
     notice: "本模块做的是**叙述性综述**（传统文献综述）。不做双人独立筛选、PRISMA 流程图、偏倚风险评估与 Meta 合并 —— 要那些请回工作台选「自由对话」，在那里说明你要做系统综述 / Meta 分析。",
     // ⚠️ 这一行会显示在表单底部：系统综述不属于任何模块，必须给用户指路，别成哑失败。
@@ -540,10 +540,12 @@ export const WORKFLOWS = {
       { id: "search", name: "文献检索", skill: "search-lit",
         emits: ["evidence_table.csv", "evidence.md", "refs.bib"], render: "evidence",
         hint: "每条引用都经 API 核实，不凭记忆造引用" },
-      { id: "screen", name: "纳入 / 排除筛选", skill: "literature-review",
-        form: [{ id: "excluded", label: "排除的文献", type: "picklist", source: "evidence_table.csv",
-          help: "在上一步的文献卡片里勾掉不要的，这里会同步。留空 = 全部纳入。" }],
-        emits: ["screening_log.md", "included.csv"], render: "evidence" },
+      // 【2026-08-08 删了「纳入 / 排除筛选」这一步】它做的是系统综述那套双人筛选的形，
+      //   而本模块明写了不做系统综述（见上面的 notice/footnote）。实际跑起来的样子是：
+      //   agent 一路把综述写完了，这一步的表单才在回复末尾弹出来让用户勾"排除哪几篇"——
+      //   稿子都成文了，勾了也没有意义（那张卡是"下一步未完成的带表单步骤"才给的，见
+      //   index.html 的 offerStepForm）。叙述性综述的取舍本来就在 write 那步由检索范围
+      //   （时间 / 研究设计 / 期刊条件）与成文时的论证决定，不必再让用户逐篇点一遍。
       { id: "fulltext", name: "全文获取", skill: "fulltext-retrieval", optional: true,
         when: { field: "fulltext", eq: true },
         emits: ["pdfs/*.pdf", "retrieval_report.json", "manual_needed.txt"], render: "retrieval",

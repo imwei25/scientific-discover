@@ -879,10 +879,12 @@
   /* 文献卡片 */
   .lit { display: flex; gap: 9px; padding: 10px 13px; border-bottom: 1px solid var(--line); }
   .lit:last-child { border-bottom: none; }
-  .lit.off { opacity: .45; }
-  .lit .litck { flex: none; margin-top: 2px; cursor: pointer; }
   .lit .litbd { min-width: 0; flex: 1; }
-  .lit .litti { font-size: 12.5px; color: var(--text); line-height: 1.5; font-weight: 500; }
+  .lit .litti { font-size: 12.5px; color: var(--text); line-height: 1.5; font-weight: 500; display: block; }
+  /* 标题即链接：颜色仍是正文色（一整列蓝字读起来全是噪音），靠悬停下划线 + 手型提示可点 */
+  .lit a.litti { cursor: pointer; }
+  .lit a.litti:hover { color: var(--cyan); text-decoration: underline; }
+  .lit .litdoi { font-variant-numeric: tabular-nums; }
   .lit .litmeta { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-top: 5px; font-size: 11px; color: var(--faint); }
   .lit .litj { color: #46586e; font-style: italic; }
   .lit .tag { border: 1px solid var(--line-hi); border-radius: 999px; padding: 0 6px; line-height: 16px; }
@@ -2242,6 +2244,46 @@ document.addEventListener("click", (e) => {
   if (t && t.tagName === "IMG" && (t.closest(".answer.md") || t.closest(".pv-body"))) openLightbox(t.src)
 })
 
+// ---- 外部链接：桌面壳里 target="_blank" 会被【静默吞掉】，兜一层 ----
+// 成因在壳侧：WebView2 收到"要开新窗口"的请求时，宿主没接 on_new_window 就直接 SetHandled(true)
+// 丢弃（wry 源码里就是那个 else 分支）—— 表现是链接明明是蓝的、鼠标也变手型，点了什么都不发生。
+// 中招的不只是文献卡的 DOI：AI 回答里的每一条链接、公告里的「下载新版」都一样。
+// 壳侧已补上处理（见 desktop/launcher/src/main.rs 的 on_new_window → 交给系统默认浏览器），
+// 但【已经装在用户机器上的旧壳换不掉】——界面包能在线更新，壳不能。所以这里再兜一层：
+//   · 能开（浏览器 / 修好后的新壳）→ 照常开，本函数什么都不改；
+//   · 开不起来 → 把地址复制到剪贴板并明说一句，用户粘进浏览器就能看。绝不让点击悄无声息。
+async function copyText(s) {
+  try { if (navigator.clipboard) { await navigator.clipboard.writeText(s); return true } } catch (_) {}
+  try {   // http 页面 / 老 WebView 没有 clipboard API，退回 execCommand
+    const ta = document.createElement("textarea")
+    ta.value = s; ta.style.position = "fixed"; ta.style.opacity = "0"
+    document.body.appendChild(ta); ta.select()
+    const ok = document.execCommand("copy"); ta.remove(); return ok
+  } catch (_) { return false }
+}
+document.addEventListener("click", (e) => {
+  // 用户自己按住 Ctrl/Shift/中键的另开方式不拦；已被别的处理器接管的也不拦
+  if (e.defaultPrevented || e.button !== 0 || e.ctrlKey || e.metaKey || e.shiftKey || e.altKey) return
+  const a = e.target && e.target.closest && e.target.closest('a[target="_blank"]')
+  if (!a || a.hasAttribute("download")) return
+  const href = a.href || ""
+  if (!/^https?:\/\//i.test(href)) return
+  e.preventDefault()
+  const bail = async () => {
+    const ok = await copyText(href)
+    toast(ok ? "这里打不开浏览器，链接已复制——粘到浏览器地址栏即可打开"
+             : "打不开浏览器，也没能复制链接，请手动复制：" + href)
+  }
+  let w = null
+  // 【不能带 noopener】按规范，window.open(..., "noopener") 一律返回 null —— 那样就永远
+  // 判不出"到底开没开成"，正常浏览器里也会走进复制分支。改成开完手动断掉 opener 引用。
+  try { w = window.open(href, "_blank") } catch (_) {}
+  if (!w) { bail(); return }
+  try { w.opener = null } catch (_) {}
+  // 壳里也可能回一个"开了但其实没开"的空窗口对象，稍后再确认一次
+  setTimeout(() => { try { if (w.closed) bail() } catch (_) {} }, 500)
+})
+
 // ---- CSV/TSV 解析渲染（带引号转义处理；预览截断到 300 行）----
 // 全站唯一的分隔符解析器：支持引号内的分隔符/换行与转义双引号（""），并剥掉 BOM。
 // 名字不能再叫 parseCsv —— 下面 evidenceCard 那边曾有个同名的单参版本，classic script 里
@@ -3593,26 +3635,56 @@ function parseCsv(text) {
   return parseDelimited(text, ",").filter((r) => r.some((x) => x.trim() !== ""))
 }
 const pick = (obj, ...keys) => { for (const k of keys) { const hit = Object.keys(obj).find((h) => h.toLowerCase().replace(/[\s_-]/g, "") === k); if (hit && obj[hit]) return obj[hit] } return "" }
+// 标题列的别名要尽量全：证据表【不一定是脚本写的】—— agent 自己整理的清单常写成
+// "文献标题 / 题目 / 篇名 / 文章"。差一个名字，整张卡就是一列「(无标题)」，
+// 而 DOI、期刊照常显示 —— 用户看到的是"检索结果全都没有标题"（实测反馈）。
+const TITLE_KEYS = ["title", "标题", "文献标题", "文章标题", "论文标题", "题目", "篇名", "文献", "文章", "论文",
+  "articletitle", "papertitle", "name"]
+// 已知的非标题列：兜底猜标题时要跳过它们（见 titleOf）
+const NON_TITLE = new Set(["year", "年份", "date", "pubyear", "journal", "期刊", "source", "sources", "venue",
+  "container", "doi", "pmid", "pmcid", "cites", "citations", "citedby", "citationcount", "被引", "design",
+  "研究设计", "authors", "author", "作者", "abstract", "摘要", "序号", "编号", "id", "no", "url", "link", "链接",
+  "isoa", "oa", "openaccess", "journalimpact", "impact", "2yrmeancitedness", "期刊影响力", "纳入理由", "理由", "备注"])
+const normKey = (h) => h.toLowerCase().replace(/[\s_-]/g, "")
+/** 取一条记录的标题：先按别名认列；认不出就退回"第一个不是已知元数据列、且像句子的单元格"。
+ *  绝不轻易给「(无标题)」—— 那是这张卡最要紧的一行字。 */
+function titleOf(r) {
+  const t = pick(r, ...TITLE_KEYS)
+  if (t) return t
+  for (const [h, v] of Object.entries(r)) {
+    if (NON_TITLE.has(normKey(h))) continue
+    const s = (v || "").trim()
+    if (s.length >= 8 && !/^\d+(\.\d+)?$/.test(s)) return s
+  }
+  return "(无标题)"
+}
 /** 文献卡片列表：证据表里最要紧的几列拎出来，其余仍可下载原表看 */
 function evidenceCard(name, text) {
   const rows = parseCsv(text)
   if (rows.length < 2) return null
   const head = rows[0].map((h) => h.trim())
   const recs = rows.slice(1).map((r) => Object.fromEntries(head.map((h, i) => [h, (r[i] || "").trim()])))
-  const { box, bd, hd } = artShell(name, ART_TITLE.evidence, recs.length + " 篇")
-  // 排除勾选：勾掉的会在"把排除清单发给 AI"时带过去（下一步筛选用），本地不改文件
-  const excluded = new Set()
+  const { box, bd } = artShell(name, ART_TITLE.evidence, recs.length + " 篇")
   for (const r of recs) {
-    const title = pick(r, "title", "标题") || "(无标题)"
+    const title = titleOf(r)
     const row = document.createElement("div"); row.className = "lit"
-    const ck = document.createElement("input"); ck.type = "checkbox"; ck.className = "litck"; ck.checked = true; ck.title = "取消勾选 = 排除这篇"
-    ck.addEventListener("change", () => { ck.checked ? excluded.delete(title) : excluded.add(title); row.classList.toggle("off", !ck.checked); upd() })
     const bdy = document.createElement("div"); bdy.className = "litbd"
-    bdy.appendChild(Object.assign(document.createElement("div"), { className: "litti", textContent: title }))
-    const meta = document.createElement("div"); meta.className = "litmeta"
     const journal = pick(r, "journal", "期刊", "source", "venue", "container")
     const year = pick(r, "year", "年份", "date", "pubyear")
-    const doi = pick(r, "doi")
+    const doi = pick(r, "doi").replace(/^https?:\/\/(dx\.)?doi\.org\//i, "")
+    const pmid = pick(r, "pmid")
+    // 原文链接：表里给了就用表里的，否则由 DOI / PMID 拼。三样都没有就不造链接
+    //（造一个点开是 404 的链接，比没有链接更坏）。
+    const rawUrl = pick(r, "url", "link", "链接", "原文链接", "fulltext", "fulltexturl", "pdf", "pdfurl")
+    const url = /^https?:\/\//i.test(rawUrl) ? rawUrl
+      : doi ? "https://doi.org/" + encodeURI(doi)
+      : pmid ? "https://pubmed.ncbi.nlm.nih.gov/" + encodeURIComponent(pmid) + "/"
+      : ""
+    // 标题本身就是入口：有链接就点标题直达原文（比把链接藏在一个「DOI」小字里好找得多）
+    const ti = document.createElement(url ? "a" : "div"); ti.className = "litti"; ti.textContent = title
+    if (url) { ti.href = url; ti.target = "_blank"; ti.rel = "noopener noreferrer"; ti.title = "打开原文：" + url }
+    bdy.appendChild(ti)
+    const meta = document.createElement("div"); meta.className = "litmeta"
     // "cites" 是 enhanced_search.py / literature-review 的 search.py 真实写出的列名，漏了它这个标签永远不显示
     const cites = pick(r, "cites", "citations", "citedby", "citationcount", "被引")
     const imp = pick(r, "journalimpact", "impact", "2yrmeancitedness", "期刊影响力")
@@ -3623,21 +3695,29 @@ function evidenceCard(name, text) {
     // 措辞守死：这是 OpenAlex 的两年篇均被引，不是官方影响因子，标签绝不能写成 "IF"
     if (imp) meta.appendChild(Object.assign(document.createElement("span"), { className: "tag imp", textContent: "影响力≈" + imp, title: "OpenAlex 两年篇均被引，非官方影响因子" }))
     if (oa && /^(1|true|yes|是)$/i.test(oa)) meta.appendChild(Object.assign(document.createElement("span"), { className: "tag oa", textContent: "OA" }))
-    if (doi) { const a = document.createElement("a"); a.href = "https://doi.org/" + doi.replace(/^https?:\/\/doi\.org\//, ""); a.target = "_blank"; a.rel = "noopener noreferrer"; a.textContent = "DOI"; meta.appendChild(a) }
+    // DOI 一律【把号码本身显示出来】，不再缩成一个「DOI」小字：没有原文链接时它就是用户
+    // 手动去查这篇文献的唯一凭据（也是复制进查重/引文工具的那串东西）。有 DOI 就顺带可点。
+    if (doi) {
+      const a = document.createElement("a"); a.className = "litdoi"
+      a.href = "https://doi.org/" + encodeURI(doi); a.target = "_blank"; a.rel = "noopener noreferrer"
+      a.textContent = "DOI " + doi; a.title = "打开 https://doi.org/" + doi
+      meta.appendChild(a)
+    }
+    if (pmid) {
+      const a = document.createElement("a")
+      a.href = "https://pubmed.ncbi.nlm.nih.gov/" + encodeURIComponent(pmid) + "/"
+      a.target = "_blank"; a.rel = "noopener noreferrer"; a.textContent = "PubMed " + pmid
+      meta.appendChild(a)
+    }
+    // 三样都没有 → 明说"这条没有链接"，别让用户以为是界面把链接吞了
+    if (!url && !doi && !pmid) meta.appendChild(Object.assign(document.createElement("span"),
+      { textContent: "无 DOI / 链接", title: "这条记录里没有 DOI、PMID 或原文链接" }))
     bdy.appendChild(meta)
-    row.appendChild(ck); row.appendChild(bdy)
+    row.appendChild(bdy)
     bd.appendChild(row)
   }
-  // 勾选结果 → 一句话填进输入框（不自动发送，与"下一步建议"气泡同款克制）
-  const act = document.createElement("button"); act.className = "artbtn"; act.textContent = "把排除清单交给 AI"; act.style.display = "none"
-  act.addEventListener("click", () => {
-    q.value = "请把这几篇从纳入范围里排除，其余照常推进：\n" + [...excluded].map((t) => "- " + t).join("\n")
-    q.dispatchEvent(new Event("input")); q.focus()
-  })
-  hd.insertBefore(act, hd.querySelector("a"))
-  const upd = () => { act.style.display = excluded.size ? "" : "none"; act.textContent = `把 ${excluded.size} 篇排除项交给 AI` }
   const ft = document.createElement("div"); ft.className = "artft"
-  ft.textContent = "取消勾选可标记要排除的文献；「影响力」为 OpenAlex 两年篇均被引的近似值，非官方影响因子。"
+  ft.textContent = "点标题可打开原文（没有原文链接的按 DOI 跳转）；「影响力」为 OpenAlex 两年篇均被引的近似值，非官方影响因子。"
   box.appendChild(ft)
   return box
 }
