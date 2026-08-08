@@ -456,8 +456,8 @@ test("步骤条：没有明确 cur 时当前步 = 第一个未完成的，且质
   const steps = WF.stepsFor("review", {})
   const at = (done) => (steps.find((s) => !new Set(done).has(s.id)) || {}).id
   assert.equal(at([]), "search", "什么都没做时，当前步是第一步而不是别的")
-  assert.equal(at(["search"]), "screen")
-  assert.equal(at(["search", "screen", "write"]), "refcheck", "写完才轮到引用核查")
+  assert.equal(at(["search"]), "write")
+  assert.equal(at(["search", "write"]), "refcheck", "写完才轮到引用核查")
   // 闸不是第一步 —— 若哪天有模块把闸排到最前，上面那条"第一轮高亮第一步"的兜底就要重新想。
   // 注意 stepsFor 给的是原始定义（gate 只在为真时存在，归一成布尔是 workflowFor 干的），故用 !
   assert.ok(!steps[0].gate, "review 的第一步不该是质量闸")
@@ -559,10 +559,9 @@ test("历史消息按技能调用归到步骤：一轮只认第一步，同技�
   const steps = WF.stepsFor("review", { topic: "x" })
   const skillPart = (name) => ({ type: "tool", tool: "skill", state: { input: { name } } })
   const seen = new Set()
-  // 综述里 screen 与 write 都用 literature-review：第一次归"筛选"，第二次才归"成文"。
-  // 取错的话，用户点流程条上的「综述成文」会跳到筛选那一段。
   assert.equal(WF.stepOfParts([skillPart("search-lit")], steps, seen).id, "search")
-  assert.equal(WF.stepOfParts([skillPart("literature-review")], steps, seen).id, "screen")
+  assert.equal(WF.stepOfParts([skillPart("literature-review")], steps, seen).id, "write")
+  // 同一个技能第二次出现（成文那步返工重跑）→ 仍归它自己那一步，不能顺移到下一格
   assert.equal(WF.stepOfParts([skillPart("literature-review")], steps, seen).id, "write")
   // 一条消息里横跨两步 → 只认第一个（界面上一个回合是不可分割的框）
   const seen2 = new Set()
@@ -577,13 +576,13 @@ test("用户提问归到它引出的那一步，而不是上一步", () => {
   const out = [
     { role: "user", text: "开始" },
     { role: "assistant", text: "检索完了", step: "search", stepName: "文献检索" },
-    { role: "user", text: "继续下一步：纳入 / 排除筛选", step: "search", stepName: "文献检索" },
-    { role: "assistant", text: "筛完了", step: "screen", stepName: "纳入 / 排除筛选" },
+    { role: "user", text: "继续下一步：综述成文", step: "search", stepName: "文献检索" },
+    { role: "assistant", text: "写完了", step: "write", stepName: "综述成文" },
     { role: "user", text: "最后一条还没人回" },
   ]
   WF.fillUserSteps(out)
   assert.equal(out[0].step, "search", "第一条提问要归进它引出的第一步，否则那一步的框从 AI 开口才开始")
-  assert.equal(out[2].step, "screen", "「继续下一步」必须归到新的那一步，不能留在上一步的框尾")
+  assert.equal(out[2].step, "write", "「继续下一步」必须归到新的那一步，不能留在上一步的框尾")
   assert.equal(out[4].step, undefined, "还没有回复的末条提问没有归属可言，别硬塞给上一步")
 })
 

@@ -26,7 +26,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::Mutex;
 use std::time::Duration;
-use tauri::webview::DownloadEvent;
+use tauri::webview::{DownloadEvent, NewWindowResponse};
 use tauri::{Manager, RunEvent, WebviewUrl, WebviewWindowBuilder};
 
 const PORT: u16 = 27821; // 网关端口（避开常见 3000/8080，降低撞车概率；server.mjs 启动时会清掉本端口残留进程）
@@ -202,7 +202,30 @@ fn open_app_window(handle: &tauri::AppHandle) -> tauri::Result<tauri::WebviewWin
             }
             true // 放行下载；返回 false 就是那个"点了没反应"
         })
+        // 不接这个钩子，WebView2 对 <a target="_blank"> / window.open 也是【静默丢弃】：
+        // wry 的 NewWindowRequested 处理里，宿主没给 handler 就走 `args.SetHandled(true)` 直接吃掉。
+        // 现场表现同样是"点了没反应"——文献卡的 DOI、AI 回答里的每条链接、公告里的「下载新版」全中。
+        // 壳里开第二个 WebView 窗口没意义（用户要的是在自己的浏览器里看、能收藏能登录），
+        // 所以一律交给系统默认浏览器，然后 Deny 掉壳内的新窗口。
+        .on_new_window(|url, _features| {
+            open_in_browser(url.as_str());
+            NewWindowResponse::Deny
+        })
         .build()
+}
+
+/// 用系统默认浏览器打开一个 http(s) 地址。
+/// ★ 协议必须白名单：新窗口请求的 URL 来自页面内容（AI 回答里的链接也算），
+///   不设限就等于把任意协议处理器（file: / ms-… / 自定义 scheme）交给页面去触发。
+/// ★ 用 rundll32 而不是 `cmd /c start`：后者要经 shell 解析，URL 里的 & ^ 会被当成命令语法。
+fn open_in_browser(url: &str) {
+    if !(url.starts_with("http://") || url.starts_with("https://")) {
+        return;
+    }
+    let _ = Command::new("rundll32")
+        .args(["url.dll,FileProtocolHandler", url])
+        .creation_flags(CREATE_NO_WINDOW)
+        .spawn();
 }
 
 fn kill_port(port: u16) {
