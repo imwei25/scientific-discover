@@ -33,9 +33,16 @@ OpenAlex 鉴权（对齐 openscience 的做法）
 ----------
 所有记录均来自真实 API 返回，绝不凭记忆生成。抓不到就少，不编。
 
+检索条数
+--------
+**默认不限**：每源每检索式都翻页取到源枯竭（或该源 API 自己的深翻上限）。各源命中总数会打印。
+只有检索式过宽时才由跑飞护栏 SCI_SEARCH_MAX（默认 5000/源/式，设 0 取消）截断，且截断必定
+【响亮报告】。要少取就显式 `--limit N`。
+
 用法
 ----
-    python enhanced_search.py "sglt2 inhibitor heart failure" --limit 25 --since 2019
+    python enhanced_search.py "sglt2 inhibitor heart failure" --since 2019   # 不限条数
+    python enhanced_search.py "sglt2 inhibitor heart failure" --limit 25     # 只要前 25 条
     python enhanced_search.py "graph neural network" "protein design" \
         --sources semantic_scholar,arxiv,openalex --email you@example.com
 产出
@@ -47,6 +54,7 @@ OpenAlex 鉴权（对齐 openscience 的做法）
 
 import argparse
 import json
+import math
 import os
 import re
 import sys
@@ -55,6 +63,15 @@ import urllib.error
 import urllib.parse
 import urllib.request
 import xml.etree.ElementTree as ET
+
+# Windows 控制台默认 GBK；强制 UTF-8，否则本脚本的中文进度/告警在 agent 那边是一串乱码
+# （"⚠ 命中 N 条 > 上限"这种话读不出来 = 等于没报）。与 literature-review/search.py 同法。
+for _s in (sys.stdout, sys.stderr):
+    if hasattr(_s, "reconfigure"):
+        try:
+            _s.reconfigure(encoding="utf-8")
+        except Exception:
+            pass
 
 # One unified contact var (older names incl. OPENALEX_MAILTO kept for back-compat).
 # The mailto in the UA enrolls Europe PMC / OpenAlex / Crossref polite pools for free.
@@ -74,6 +91,39 @@ ARXIV = "http://export.arxiv.org/api/query"
 OPENALEX = "https://api.openalex.org/works"
 
 ALL_SOURCES = ("europepmc", "semantic_scholar", "arxiv", "openalex")
+
+# 每页取多少（都在各源允许范围内）。EPMC 允许 pageSize 到 1000，但 resultType=core 每条都带
+# 摘要，1000 条一页实测十几 MB，代理那层直接掐断连接 —— 100 是稳的，翻页靠 cursorMark。
+PAGE_EPMC, PAGE_S2, PAGE_ARXIV, PAGE_OA = 100, 100, 100, 200
+# S2 的 relevance 检索端点（/paper/search）**总量硬上限 1000 条**（offset+limit>1000 直接报错），
+# 再多要走 bulk 端点。arXiv 建议每页 ≤2000 且请求间隔 3 秒。这些是源方的限制，取不到就如实说。
+S2_SEARCH_HARD_TOTAL = 1000
+
+# ---- 检索条数：默认【不限】----
+# 不给 --limit 就每源翻页取到枯竭。SCI_SEARCH_MAX 只是跑飞护栏（每源每式取到这么多就停下并
+# 响亮报告截断），设 0 则真·不限。显式 --limit N 时按 N 精确取，护栏不介入。
+DEFAULT_HARD_CAP = 5000
+
+
+def _hard_cap():
+    raw = (os.environ.get("SCI_SEARCH_MAX") or "").strip()
+    if not raw:
+        return DEFAULT_HARD_CAP
+    try:
+        v = int(raw)
+    except ValueError:
+        sys.stderr.write(f"⚠ SCI_SEARCH_MAX={raw!r} 不是整数，按默认 {DEFAULT_HARD_CAP} 处理\n")
+        return DEFAULT_HARD_CAP
+    return v if v > 0 else math.inf
+
+
+def _page(remaining, cap):
+    """本次请求要多少条：不限时按整页取。"""
+    return cap if remaining == math.inf else max(1, min(cap, int(remaining)))
+
+
+def _cut(rows, limit):
+    return rows if limit == math.inf else rows[:limit]
 
 # 研究类型粗分类（与 literature-review/search.py 对齐）
 DESIGN = [
@@ -274,7 +324,7 @@ def _epmc_pass(q, limit, sort=None):
     out, cursor = [], "*"
     while len(out) < limit:
         params = {"query": q, "format": "json",
-                  "pageSize": min(100, limit - len(out)),
+                  "pageSize": _page(limit - len(out), PAGE_EPMC),
                   "cursorMark": cursor, "resultType": "core"}
         if sort:
             params["sort"] = sort        # urlencode 会把空格与冒号正确转义，别自己拼字符串
@@ -298,12 +348,20 @@ def _epmc_pass(q, limit, sort=None):
         if not nxt or nxt == cursor:
             break
         cursor = nxt
+        if len(out) >= PAGE_EPMC * 5:      # 长检索报进度，别看着像卡死
+            sys.stderr.write(f"[europepmc] …已取 {len(out)} 条\n")
         time.sleep(0.34)
-    return out[:limit]
+    return _cut(out, limit)
+
+
+def _epmc_hit_count(q):
+    d = _get_json(EPMC + "?" + urllib.parse.urlencode(
+        {"query": q, "format": "json", "pageSize": 1, "resultType": "idlist"}))
+    return int(d.get("hitCount") or 0)
 
 
 def search_europepmc(query, limit, since):
-    """两趟检索再合并去重：一趟按被引降序捞经典，一趟默认顺序捞最新。
+    """默认取全；取不全时才两趟合并：一趟按被引降序捞经典，一趟默认顺序捞最新。
 
     ★ 为什么不能只用默认顺序：EPMC 不给 sort 时【按时间倒排】，于是结果全是当年新文、
       cites 恒为 0，领域基石一篇都进不来。实测（SGLT2i × HFpEF，limit=25）：25 篇全是 2026 年、
@@ -323,9 +381,17 @@ def search_europepmc(query, limit, since):
     q = query
     if since:
         q += f" AND (FIRST_PDATE:[{since}-01-01 TO 3000-12-31])"
-    half = max(1, limit // 2)
+    try:
+        hits = _epmc_hit_count(q)
+        sys.stderr.write(f"[europepmc] 命中 {hits} 条\n")
+    except Exception as e:                    # noqa: BLE001 —— 探测失败不影响检索本身
+        sys.stderr.write(f"[europepmc] 命中数探测失败（{e}），直接取\n")
+        hits = None
+    if hits is not None and hits <= limit:    # 取得全 → 一趟翻到底，排序无所谓
+        return _epmc_pass(q, limit)
+    half = max(1, limit // 2) if limit != math.inf else math.inf
     cited = _epmc_pass(q, half, sort="CITED desc")
-    recent = _epmc_pass(q, limit - len(cited) + half, sort=None)
+    recent = _epmc_pass(q, limit - len(cited) + half if limit != math.inf else math.inf, sort=None)
     merged, seen = [], set()
     for rec in list(cited) + list(recent):          # 经典在前，同一篇只留一次
         key = norm_doi(rec.get("doi")) or (rec.get("pmid") or "") or norm_title(rec.get("title"))[:80]
@@ -333,49 +399,72 @@ def search_europepmc(query, limit, since):
             continue
         seen.add(key)
         merged.append(rec)
-    return merged[:limit]
+    merged = _cut(merged, limit)
+    if hits is not None and hits > limit:
+        sys.stderr.write(f"[europepmc] ⚠ 命中 {hits} 条 > 上限 {limit}，只取回 {len(merged)} 条"
+                         f"（一半按被引取经典、一半按时间取最新）。收窄检索式，"
+                         f"或设 SCI_SEARCH_MAX=0 取消上限。\n")
+    return merged
 
 
 def search_semantic_scholar(query, limit, since):
+    """按 offset 翻页取。
+
+    ⚠ S2 的 relevance 检索端点自己有 **1000 条总量硬上限**（offset+limit 超了直接报错），
+    所以这一源"不限"最多也就到 1000 —— 到顶时明说，别让人以为这就是全部命中。"""
     fields = "title,year,venue,externalIds,abstract,citationCount,authors.name"
-    params = {"query": query, "limit": min(100, limit), "fields": fields}
-    if since:
-        params["year"] = f"{since}-"
     headers = {}
     key = os.environ.get("S2_API_KEY")
     if key:
         headers["x-api-key"] = key
-    d = _get_json(S2_SEARCH + "?" + urllib.parse.urlencode(params), headers=headers)
-    out = []
-    for p in d.get("data", []) or []:
-        if not p.get("title"):
-            continue
-        ext = p.get("externalIds") or {}
-        r = blank_record()
-        r["title"] = (p.get("title") or "").strip().rstrip(".")
-        r["year"] = str(p.get("year") or "")
-        r["journal"] = p.get("venue", "") or ""
-        r["authors"] = ", ".join(a.get("name", "") for a in (p.get("authors") or []) if a.get("name"))
-        r["doi"] = ext.get("DOI", "") or ""
-        r["pmid"] = ext.get("PubMed", "") or ""
-        r["arxiv_id"] = ext.get("ArXiv", "") or ""
-        r["cites"] = _int(p.get("citationCount", 0))
-        r["abstract"] = (p.get("abstract") or "").replace("\n", " ").strip()
-        r["sources"] = ["semantic_scholar"]
-        out.append(r)
-    return out[:limit]
+    out, offset, total = [], 0, None
+    while len(out) < limit and offset < S2_SEARCH_HARD_TOTAL:
+        page = min(_page(limit - len(out), PAGE_S2), S2_SEARCH_HARD_TOTAL - offset)
+        params = {"query": query, "limit": page, "offset": offset, "fields": fields}
+        if since:
+            params["year"] = f"{since}-"
+        d = _get_json(S2_SEARCH + "?" + urllib.parse.urlencode(params), headers=headers)
+        if total is None:
+            total = _int(d.get("total"))
+            sys.stderr.write(f"[semantic_scholar] 命中 {total} 条\n")
+        batch = d.get("data") or []
+        if not batch:
+            break
+        for p in batch:
+            if not p.get("title"):
+                continue
+            ext = p.get("externalIds") or {}
+            r = blank_record()
+            r["title"] = (p.get("title") or "").strip().rstrip(".")
+            r["year"] = str(p.get("year") or "")
+            r["journal"] = p.get("venue", "") or ""
+            r["authors"] = ", ".join(a.get("name", "") for a in (p.get("authors") or []) if a.get("name"))
+            r["doi"] = ext.get("DOI", "") or ""
+            r["pmid"] = ext.get("PubMed", "") or ""
+            r["arxiv_id"] = ext.get("ArXiv", "") or ""
+            r["cites"] = _int(p.get("citationCount", 0))
+            r["abstract"] = (p.get("abstract") or "").replace("\n", " ").strip()
+            r["sources"] = ["semantic_scholar"]
+            out.append(r)
+        nxt = d.get("next")
+        if nxt is None:
+            break
+        offset = _int(nxt)
+        time.sleep(0.34)
+    if total and total > len(out) and offset >= S2_SEARCH_HARD_TOTAL:
+        sys.stderr.write(f"[semantic_scholar] ⚠ 命中 {total} 条，但该端点最多只给前 "
+                         f"{S2_SEARCH_HARD_TOTAL} 条（源方限制，非本次设的上限），"
+                         f"已取 {len(out)} 条。\n")
+    return _cut(out, limit)
 
 
-def search_arxiv(query, limit, since):
-    params = {"search_query": f"all:{query}", "start": 0,
-              "max_results": min(100, limit),
-              "sortBy": "relevance", "sortOrder": "descending"}
-    raw = _http_get(ARXIV + "?" + urllib.parse.urlencode(params))
+def _arxiv_parse(raw, since):
     ns = {"a": "http://www.w3.org/2005/Atom",
           "arxiv": "http://arxiv.org/schemas/atom"}
     root = ET.fromstring(raw)
+    entries = root.findall("a:entry", ns)
     out = []
-    for e in root.findall("a:entry", ns):
+    for e in entries:
         title = (e.findtext("a:title", default="", namespaces=ns) or "").strip()
         title = re.sub(r"\s+", " ", title)
         if not title:
@@ -405,7 +494,25 @@ def search_arxiv(query, limit, since):
         r["abstract"] = summary
         r["sources"] = ["arxiv"]
         out.append(r)
-    return out[:limit]
+    # 返回本页解析出的记录 + 本页【原始】条目数：靠后者判断还有没有下一页
+    # （--since 会滤掉一部分，拿过滤后的数量判断会提前收工）
+    return out, len(entries)
+
+
+def search_arxiv(query, limit, since):
+    out, start = [], 0
+    while len(out) < limit:
+        params = {"search_query": f"all:{query}", "start": start,
+                  "max_results": _page(limit - len(out), PAGE_ARXIV),
+                  "sortBy": "relevance", "sortOrder": "descending"}
+        raw = _http_get(ARXIV + "?" + urllib.parse.urlencode(params))
+        page, got = _arxiv_parse(raw, since)
+        out.extend(page)
+        if got < params["max_results"]:      # 不满一页 = 到底了
+            break
+        start += got
+        time.sleep(3.0)                      # arXiv 明确要求请求间隔 3 秒，别改小
+    return _cut(out, limit)
 
 
 def _openalex_abstract(inv):
@@ -421,16 +528,33 @@ def _openalex_abstract(inv):
 
 
 def search_openalex(query, limit, since, email):
-    params = {"search": query, "per-page": min(50, limit),
-              "mailto": email or "support@example.org"}
-    if since:
-        params["filter"] = f"from_publication_date:{since}-01-01"
-    key = os.environ.get("OPENALEX_API_KEY")
-    if key:
-        params["api_key"] = key
-    d = _get_json(OPENALEX + "?" + urllib.parse.urlencode(params))
+    """cursor 翻页取全（OpenAlex 的深翻只能用 cursor，page= 参数到 1 万条就被拒）。"""
+    out, cursor, reported = [], "*", False
+    while len(out) < limit and cursor:
+        params = {"search": query, "per-page": _page(limit - len(out), PAGE_OA),
+                  "cursor": cursor, "mailto": email or "support@example.org"}
+        if since:
+            params["filter"] = f"from_publication_date:{since}-01-01"
+        key = os.environ.get("OPENALEX_API_KEY")
+        if key:
+            params["api_key"] = key
+        d = _get_json(OPENALEX + "?" + urllib.parse.urlencode(params))
+        meta = d.get("meta") or {}
+        if not reported:
+            sys.stderr.write(f"[openalex] 命中 {_int(meta.get('count'))} 条\n")
+            reported = True
+        batch = d.get("results") or []
+        if not batch:
+            break
+        out.extend(_openalex_rows(batch))
+        cursor = meta.get("next_cursor")
+        time.sleep(0.34)
+    return _cut(out, limit)
+
+
+def _openalex_rows(results):
     out = []
-    for w in d.get("results", []) or []:
+    for w in results:
         title = (w.get("display_name") or w.get("title") or "").strip()
         if not title:
             continue
@@ -450,7 +574,7 @@ def search_openalex(query, limit, since, email):
         r["abstract"] = _openalex_abstract(w.get("abstract_inverted_index"))
         r["sources"] = ["openalex"]
         out.append(r)
-    return out[:limit]
+    return out
 
 
 SEARCHERS = {
@@ -515,7 +639,9 @@ def main():
     ap.add_argument("queries", nargs="+", help="一个或多个检索式")
     ap.add_argument("--sources", default=",".join(ALL_SOURCES),
                     help=f"逗号分隔，默认全开：{','.join(ALL_SOURCES)}")
-    ap.add_argument("--limit", type=int, default=25, help="每源每检索式取多少")
+    ap.add_argument("--limit", type=int, default=0,
+                    help="每源每检索式取多少。默认 0 = 不限（翻页取到源枯竭）；"
+                         "只有确实只想要前 N 条时才给")
     ap.add_argument("--since", type=int, help="起始年份（含）")
     ap.add_argument("--email", default=_EMAIL,
                     help="OpenAlex polite pool 联系邮箱（也读 OPENALEX_MAILTO）")
@@ -529,6 +655,13 @@ def main():
         sys.exit(f"未知来源：{bad}；可选：{list(SEARCHERS)}")
     os.makedirs(args.outdir, exist_ok=True)
 
+    # 不给 --limit 就不限条数；跑飞护栏见 _hard_cap()。
+    target = args.limit if args.limit and args.limit > 0 else _hard_cap()
+    sys.stderr.write("检索条数：" + ("不限（取到各源枯竭）" if target == math.inf
+                                 else (f"每源每式最多 {target} 条"
+                                       + ("（跑飞护栏 SCI_SEARCH_MAX，设 0 可取消）"
+                                          if not args.limit else "（--limit 指定）"))) + "\n")
+
     all_records = []
     per_source = {}   # source -> 命中数（去重前）
     failures = {}     # source -> 错误信息
@@ -536,7 +669,7 @@ def main():
         cnt = 0
         for q in args.queries:
             try:
-                recs = SEARCHERS[src](q, args.limit, args.since, args.email)
+                recs = SEARCHERS[src](q, target, args.since, args.email)
             except Exception as e:  # noqa: BLE001 —— 单源失败不阻断整体
                 failures[src] = str(e)
                 sys.stderr.write(f"[{src}] 失败（跳过）：{e}\n")

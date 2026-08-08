@@ -4,16 +4,22 @@
 综述用检索：一个或多个检索式 → 去重的证据表（供模型据此写综述）。
 
 用法：
-  python search.py "concept1" "concept2" --limit 25 --since 2018
+  python search.py "concept1" "concept2" --since 2018          # 不限条数，命中多少取多少
+  python search.py "concept1" "concept2" --limit 25            # 只要前 25 条时才显式给
 产出：
   outputs/evidence_table.csv   标题/年份/期刊/研究类型线索/DOI/PMID/摘要
   outputs/evidence.md          精简清单（模型写综述时读它，逐条引用）
 
 研究类型线索：从标题/摘要里粗粒度识别 RCT / cohort / meta-analysis /
 review / case report 等，方便按证据等级组织综述。不替代人工判读。
+
+检索条数：**默认不限**（命中多少取多少，翻页到源枯竭）。命中数会打印出来（PRISMA 要记）。
+只有检索式过宽（命中十万级）时才由跑飞护栏 SCI_SEARCH_MAX（默认 5000，设 0 取消）截断，
+且截断一定【响亮报告】。要少取就显式 `--limit N`。
 """
 import argparse
 import csv
+import math
 import os
 import re
 import sys
@@ -39,6 +45,31 @@ _EMAIL = (os.environ.get("SCI_CONTACT_EMAIL")
           or "sci-skill@users.noreply.github.com")
 UA = {"User-Agent": f"sci-agent-literature-review/1.1 (mailto:{_EMAIL})"}
 TIMEOUT = 30
+# 每页取多少。EPMC 允许到 1000，但 resultType=core 每条都带全文摘要，1000 条一页实测能到
+# 十几 MB，代理/网关那一层直接把连接掐了（RemoteDisconnected）。100 是稳的，翻页靠 cursorMark，
+# 多几次请求换不掉链子。
+PAGE = 100
+
+# ---- 检索条数：默认【不限】 ----
+# 不给 --limit 就一路翻页，命中多少取多少。理由：做综述的人没有"只要前 25 篇"的需求，
+# 而一个默认上限会把"这个方向到底有多少文献"变成由默认值决定的假答案（旧默认 25 实测
+# 把 EMPEROR-Preserved 这类里程碑 RCT 直接挤出结果集）。
+# SCI_SEARCH_MAX 只是【跑飞护栏】：检索式过宽（命中十万级）时取到这么多就停下并【响亮报告】
+# 截断，而不是闷头翻上半小时。设 SCI_SEARCH_MAX=0 连护栏也去掉，真·不限。
+# 显式给了 --limit N 时按 N 精确取，护栏不介入。
+DEFAULT_HARD_CAP = 5000
+
+
+def _hard_cap():
+    raw = (os.environ.get("SCI_SEARCH_MAX") or "").strip()
+    if not raw:
+        return DEFAULT_HARD_CAP
+    try:
+        v = int(raw)
+    except ValueError:
+        sys.stderr.write(f"⚠ SCI_SEARCH_MAX={raw!r} 不是整数，按默认 {DEFAULT_HARD_CAP} 处理\n")
+        return DEFAULT_HARD_CAP
+    return v if v > 0 else math.inf
 
 
 # ---- 产物目录解析（8 个技能脚本统一；见 AGENTS.md §五）----
@@ -187,11 +218,14 @@ def classify_design(title, abstract):
 
 
 def _one_pass(query, limit, sort=None):
-    """按给定排序取一批。sort=None 用 EPMC 默认顺序（实测等同按时间倒排）。"""
+    """按给定排序取一批（limit 可为 math.inf = 翻到源枯竭）。
+
+    sort=None 用 EPMC 默认顺序（实测等同按时间倒排）。"""
     out, cursor = [], "*"
     while len(out) < limit:
+        remaining = limit - len(out)
         params = {"query": query, "format": "json",
-                  "pageSize": min(100, limit - len(out)),
+                  "pageSize": PAGE if remaining == math.inf else min(PAGE, remaining),
                   "cursorMark": cursor, "resultType": "core"}
         if sort:
             params["sort"] = sort
@@ -206,27 +240,52 @@ def _one_pass(query, limit, sort=None):
         if not nxt or nxt == cursor:
             break
         cursor = nxt
+        if len(out) >= PAGE:            # 多页时报进度，别让长检索看着像卡死
+            print(f"    …已取 {len(out)} 条")
         time.sleep(0.34)
-    return out[:limit]
+    return out if limit == math.inf else out[:limit]
+
+
+def _hit_count(query):
+    """先问一句"总共命中多少"。既决定要不要分两趟取，也是 PRISMA 要记的命中数。"""
+    r = _get(EPMC, params={"query": query, "format": "json",
+                           "pageSize": 1, "resultType": "idlist"})
+    r.raise_for_status()
+    return int(r.json().get("hitCount") or 0)
 
 
 def one_query(q, limit, since):
-    """两趟检索再合并去重：一趟按被引降序捞经典，一趟默认顺序捞最新。
+    """取回该检索式的文献。默认【不限条数】：命中多少取多少。
 
-    ★ 为什么不能只用默认顺序：EPMC 不给 sort 时按时间倒排，于是结果全是当年新文、cites 恒为 0，
-      领域基石一篇都进不来（实测 25 篇里 23 篇当年、被引全 0）。医生问一个方向，拿回的是一堆
-      零被引新综述，Routy/Baruch 这些必读文献不在里面。
+    只有在取不全时（显式 --limit N，或命中数超过跑飞护栏）才分两趟取：
+    一趟按被引降序捞经典，一趟默认顺序捞最新 —— 保证被截断的那份仍然两头兼顾。
+
+    ★ 为什么截断时不能只用默认顺序：EPMC 不给 sort 时按时间倒排，于是结果全是当年新文、
+      cites 恒为 0，领域基石一篇都进不来（实测 25 篇里 23 篇当年、被引全 0）。医生问一个方向，
+      拿回的是一堆零被引新综述，Routy/Baruch 这些必读文献不在里面。
     ★ 为什么不能只按被引降序：那会系统性偏向老文献，把近两年的进展全挤掉 —— 而"最新进展"
       恰恰是综述最要紧的部分。
     ★ 为什么这条比"结果不够好"严重：模型拿不到经典文献时会自己想办法补，实测出现过
       【凭记忆手敲 landmark DOI】，同一轮里它自述"我编造了 DOI"。把经典捞回来就消掉了这个动机。
+      —— 默认不限之后这个坑基本消失（全都取回来了），但护栏截断时它照样存在，所以两趟逻辑留着。
     """
     query = q
     if since:
         query += f" AND (FIRST_PDATE:[{since}-01-01 TO 3000-12-31])"
-    half = max(1, limit // 2)
+    target = limit if (limit and limit > 0) else _hard_cap()
+    try:
+        hits = _hit_count(query)
+        print(f"  命中 {hits} 条" + ("（全部取回）" if hits <= target else ""))
+    except Exception as e:                      # 数不到就直接照 target 取，别为一次探测中断检索
+        print(f"  (命中数探测失败：{e}；直接取)")
+        hits = None
+
+    if hits is not None and hits <= target:
+        return _one_pass(query, math.inf if target == math.inf else target)
+
+    half = max(1, target // 2) if target != math.inf else math.inf
     cited = _one_pass(query, half, sort="CITED desc")
-    recent = _one_pass(query, limit - len(cited) + half, sort=None)
+    recent = _one_pass(query, target - len(cited) + half if target != math.inf else math.inf, sort=None)
     merged, seen = [], set()
     for rec in list(cited) + list(recent):          # 经典在前，同一篇只留一次
         key = (rec.get("doi") or "").lower() or (rec.get("pmid") or "") or (rec.get("title") or "")[:80].lower()
@@ -234,13 +293,21 @@ def one_query(q, limit, since):
             continue
         seen.add(key)
         merged.append(rec)
-    return merged[:limit]
+    merged = merged if target == math.inf else merged[:target]
+    if hits is not None and hits > target:
+        print(f"  ⚠ 命中 {hits} 条 > 本次上限 {target} 条，只取回 {len(merged)} 条"
+              f"（一半按被引降序取经典、一半按时间取最新，避免只剩当年新文）。"
+              + ("检索式偏宽，建议收窄；要全取请设环境变量 SCI_SEARCH_MAX=0。"
+                 if not (limit and limit > 0) else "这是你用 --limit 指定的条数。"))
+    return merged
 
 
 def main():
     ap = argparse.ArgumentParser(description="综述检索 → 证据表")
     ap.add_argument("queries", nargs="+", help="一个或多个检索概念（默认 AND 合成一条聚焦检索）")
-    ap.add_argument("--limit", type=int, default=25, help="取多少（AND 模式=总数；--union 模式=每式）")
+    ap.add_argument("--limit", type=int, default=0,
+                    help="取多少（AND 模式=总数；--union 模式=每式）。"
+                         "默认 0 = 不限，命中多少取多少；只有确实只想要前 N 篇时才给这个参数")
     ap.add_argument("--since", type=int)
     ap.add_argument("--union", action="store_true",
                     help="把多个参数各自独立检索再并集（旧行为；会掺入只命中单个概念的离题文献）")
@@ -316,6 +383,13 @@ def main():
     from collections import Counter
     dist = Counter(r["design"] for r in rows)
     print(f"去重后 {len(rows)} 篇。研究类型分布：{dict(dist)}")
+    # 不限条数之后证据表可以是几千篇（evidence.md 上兆）。**别把它整份读进上下文**——
+    # 这不是"少读点省钱"，是读了也用不了：几千条摘要会把后面写综述的空间挤没。
+    if len(rows) > 300:
+        print(f"⚠ 本次 {len(rows)} 篇，evidence.md 约 {os.path.getsize(md_path) // 1024} KB。"
+              f"别整份读进上下文：按 design / year / cites 在 evidence_table.csv 里先筛出要用的那部分"
+              f"（如只看 meta-analysis + RCT、或近 5 年被引前 100），再读那一段。"
+              f"检索式过宽也是原因之一，必要时收窄后重跑。")
     print(f"已写：{csv_path}\n      {md_path}")
 
 

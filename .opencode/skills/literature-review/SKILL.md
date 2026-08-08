@@ -27,16 +27,25 @@ ${REPO_ROOT:-/app}/.venv/bin/python
 > 循环的通用规矩（编排决策、回合制检索、停止判据、覆盖批判、反向核查）在 [references/iterative-retrieval.md](references/iterative-retrieval.md)，本节只写综述特有的落法。
 
 ### 阶段 1 — 主题测绘 + 多视角展开（先搭骨架，再检索）
-不要一上来就拍 2–4 个检索式。先对该主题的**已有综述**做一轮定向检索（`search.py "主题" review --limit 10`），从中归纳这篇综述**必须覆盖的子面**——医学主题的标准子面：机制 / 流行病学 / 诊断 / 干预疗效 / 预后 / 争议 / 指南（按题裁剪）。产出一份**覆盖大纲**存 `outputs/outline.md`——它既是综述骨架、又是检索计划。
+不要一上来就拍 2–4 个检索式。先对该主题的**已有综述**做一轮定向检索（`search.py "主题 AND review"`；这一轮只是摸骨架，可以用 `--limit 10` 少取几篇），从中归纳这篇综述**必须覆盖的子面**——医学主题的标准子面：机制 / 流行病学 / 诊断 / 干预疗效 / 预后 / 争议 / 指南（按题裁剪）。产出一份**覆盖大纲**存 `outputs/outline.md`——它既是综述骨架、又是检索计划。
 
 ### 阶段 2 — 缺口驱动的迭代检索（把"检索一次"改成回合制）
 把 `search.py` 当**可反复调用的检索原语**，一回合一回合补：
 ```
-${REPO_ROOT:-/app}/.venv/bin/python ${REPO_ROOT:-/app}/.opencode/skills/literature-review/search.py "概念1" "概念2" --limit 25 --since 2018
+${REPO_ROOT:-/app}/.venv/bin/python ${REPO_ROOT:-/app}/.opencode/skills/literature-review/search.py "概念1" "概念2" --since 2018
 ```
 > **多个概念默认 AND 合成一条聚焦检索（取交集）**——脚本会打印实际合成的检索式。这样聚焦主题、
 > 不掺入只命中单个概念的离题文献。要各自独立检索再并集（旧行为，会掺离题）显式加 `--union`。
 > 单概念一条式最可控：`"概念1 AND 概念2 AND (同义词1 OR 同义词2)"`。
+>
+> **条数默认不限**（不传 `--limit`）：命中多少取多少，脚本会打印命中数（PRISMA 要记这个数）。
+> **别随手加 `--limit 25`** —— 综述要的是覆盖，而不是"前 25 篇"；收窄范围请收窄检索式或用
+> `--since`，别用条数上限。检索式太宽时脚本按 `SCI_SEARCH_MAX`（默认 5000）截断并**打印告警**，
+> 看到告警就收窄重跑（或设 `SCI_SEARCH_MAX=0` 取消），并在汇报里如实说明被截断。
+>
+> ⚠️ 不限条数之后一条检索式可能回几千篇、`evidence.md` 上兆：**不要整份读进上下文**（读了也用不了，
+> 摘要会把写作空间挤没）。按 `design`/`year`/`cites` 在 `evidence_table.csv` 里先筛出这一轮真正要
+> 用的那部分（如只看 meta-analysis + RCT、或近 5 年被引前 100）再细读；全量表照旧留在产物里备查。
 
 产出/追加 `outputs/evidence_table.csv`（含 design 列 + MeSH 词可作归一化信号）和 `outputs/evidence.md`。**每回合读完摘要后自评缺口**（照共享 doc）：哪个子面证据稀薄→补检；哪条论断只靠单一/弱证据→**沿证据等级爬升**（只有队列就去找 RCT/meta）；冒出的新药名/标志物→单独一轮。**停止判据**：每个子面在相关等级上取到 ≥3–5 篇、或连续两回合无新增、或到回合上限（默认 3–4 轮）。逐轮记 `outputs/search_log.md`。
 

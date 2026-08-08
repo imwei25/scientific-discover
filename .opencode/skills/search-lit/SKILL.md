@@ -61,11 +61,20 @@ Cureus ×2、Frontiers ×3 —— 一个都不像 Q1，而汇报里只有一句�
    ```bash
    PY=${REPO_ROOT:-/app}/.venv/bin/python   # Linux/macOS: ${REPO_ROOT:-/app}/.venv/bin/python
    S=${REPO_ROOT:-/app}/.opencode/skills/search-lit/references/enhanced_search.py
-   # 默认四源全开，跨源去重
-   "$PY" "$S" "graph neural network drug discovery" --limit 25 --since 2021 --email you@example.com
+   # 默认四源全开、跨源去重，**条数不限**（命中多少取多少）
+   "$PY" "$S" "graph neural network drug discovery" --since 2021 --email you@example.com
    # 只要预印本+跨学科（跳过 PubMed 系）
-   "$PY" "$S" "protein language model" --sources semantic_scholar,arxiv,openalex --limit 20
+   "$PY" "$S" "protein language model" --sources semantic_scholar,arxiv,openalex
    ```
+
+   - **检索条数默认不限**（`--limit` 不传即可）：每源每检索式翻页取到源枯竭，各源命中总数会打印
+     在 stderr（PRISMA 要记的就是这个数）。**别为了"省事"随手加 `--limit 25`** —— 那会把领域
+     里的绝大多数文献挡在外面，而用户看到的只是一份"看起来完整"的证据表。只有用户明确说
+     "先看前 N 篇"时才给 `--limit N`。
+     - 跑飞护栏：检索式过宽时按 `SCI_SEARCH_MAX`（默认 5000/源/式）截断，**截断一定会打印告警**，
+       看到就收窄检索式重跑，或设 `SCI_SEARCH_MAX=0` 取消上限。汇报时如实说"本次被截断到 N 条"。
+     - 源方自己的上限不算护栏：Semantic Scholar 的 relevance 检索端点最多只给前 1000 条，
+       脚本会单独说明 —— 这种情况要如实转达"该源只给了前 1000 条"，不能说成"共命中 1000 篇"。
 
    - **OpenAlex 鉴权**：默认走 polite pool，只需 `--email`（或环境变量 `OPENALEX_MAILTO`）
      一个联系邮箱即可**匿名调通，不需要 API key**（与 openscience 同法）；设了环境变量

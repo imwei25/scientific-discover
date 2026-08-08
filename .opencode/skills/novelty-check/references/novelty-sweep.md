@@ -18,8 +18,9 @@ Outcome:       [主要结局词]
 ```bash
 PY=${REPO_ROOT:-/app}/.venv/bin/python   # Linux/mac: ${REPO_ROOT:-/app}/.venv/bin/python
 # literature-review 的 search.py：Europe PMC，结果含被引数(cites)，可按高被引排序
-# 用法：多个概念作位置参数，各自 OR 展开；--limit 每式取多少，--since 起始年，--outdir 产物目录
-$PY ${REPO_ROOT:-/app}/.opencode/skills/literature-review/search.py "<P 概念>" "<I 概念>" "<O 概念>" --limit 30 --since 2016 --outdir .
+# 用法：多个概念作位置参数，默认 AND 合成；--since 起始年，--outdir 产物目录
+# 条数【默认不限】（命中多少取多少）——新颖性裁定尤其不能限量：漏掉的那篇正好可能是"已经有人做过了"
+$PY ${REPO_ROOT:-/app}/.opencode/skills/literature-review/search.py "<P 概念>" "<I 概念>" "<O 概念>" --since 2016 --outdir .
 ```
 - 按 `cites`（被引数）降序看：**有一篇高被引论文直接回答了你的问题 → 近乎确定"已被回答"**。
 - 关键文献要读全文：`fulltext-retrieval`。

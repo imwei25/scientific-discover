@@ -4,7 +4,7 @@
 # Usage: bash pubmed_eutils.sh <command> <args...>
 #
 # NCBI commands (blocked from mainland China networks fairly often):
-#   search <query> [retmax]       -- Search PubMed, return PMIDs
+#   search <query> [retmax]       -- Search PubMed, return PMIDs (retmax 默认不限 = 单次上限)
 #   fetch <pmid1,pmid2,...>       -- Fetch article metadata (XML)
 #   fetch_json <pmid1,pmid2,...>  -- Fetch article summary (JSON, DocSum)
 #   related <pmid> [retmax]       -- Find related articles
@@ -12,7 +12,7 @@
 #
 # Europe PMC commands (ebi.ac.uk -- reachable from mainland China; use these
 # when NCBI fails with SSL/timeout errors; results cover PubMed via SRC:MED):
-#   epmc_search <query> [retmax]      -- Search Europe PMC, JSON records
+#   epmc_search <query> [retmax]      -- Search Europe PMC, JSON records (retmax 默认 200；要全取用 search.py)
 #   epmc_cite_lookup <title>          -- Verify a citation by title
 #   epmc_fetch <pmid1,pmid2,...>      -- Fetch records for PMIDs
 #
@@ -79,7 +79,10 @@ _curl() {
 
 cmd_search() {
   local query="${1:?Usage: search <query> [retmax]}"
-  local retmax="${2:-20}"
+  # 默认【不限】：取 NCBI esearch 单次允许的上限 10000，而不是原来的 20。
+  # 真要更多得靠 retstart 翻页，那种规模请改用 literature-review/search.py（走 EPMC，翻页取全）。
+  local retmax="${2:-10000}"
+  case "$retmax" in all|0|unlimited) retmax=10000 ;; esac
   # --data-urlencode does the escaping: no shell->python interpolation, so quotes,
   # $(), backticks etc. in the query are data, never code.
   _curl "${BASE}/esearch.fcgi" -G \
@@ -143,7 +146,12 @@ cmd_cite_lookup() {
 
 cmd_epmc_search() {
   local query="${1:?Usage: epmc_search <query> [retmax]}"
-  local retmax="${2:-20}"
+  # 默认放宽到 200（原来是 20）。本函数只发【一次】请求，所以给不了真正的"不限"——
+  # 要把命中全部取回请用 literature-review/search.py（cursorMark 翻页，默认不限条数）。
+  # ★ 为什么不干脆默认成单页上限 1000：resultType=core 每条都带摘要，1000 条一页是十几 MB，
+  #   实测经代理/网关时对端直接掐断连接（Python 那边同样的坑，见 enhanced_search.py 的 PAGE_EPMC）。
+  local retmax="${2:-200}"
+  case "$retmax" in all|0|unlimited) retmax=1000 ;; esac   # 显式要"全部"才顶到 1000，风险自负
   _curl "${EPMC}/search" -G \
     --data-urlencode "query=${query}" \
     --data-urlencode "format=json" \
