@@ -199,7 +199,7 @@ foreach ($d in "msvcp140.dll", "msvcp140_1.dll", "vcomp140.dll", "vcruntime140.d
 }
 
 if (-not $SkipPip) {
-  Step "pip + 科研依赖（deploy\requirements.txt，钉版与容器一致）"
+  Step "pip + 科研依赖（packaging\requirements.txt，钉版）"
   if (-not (Test-Path "$vs\Lib\site-packages\pip")) {
     $gp = Get-Cached "get-pip.py" @("https://bootstrap.pypa.io/get-pip.py")
     & "$vs\python.exe" $gp --no-warn-script-location -i https://pypi.tuna.tsinghua.edu.cn/simple
@@ -211,10 +211,10 @@ if (-not $SkipPip) {
   & "$vs\python.exe" -m pip install --no-warn-script-location setuptools wheel -i https://pypi.tuna.tsinghua.edu.cn/simple
   if ($LASTEXITCODE -ne 0) { & "$vs\python.exe" -m pip install --no-warn-script-location setuptools wheel }
   if ($LASTEXITCODE -ne 0) { throw "setuptools/wheel 安装失败" }
-  & "$vs\python.exe" -m pip install --no-cache-dir --no-warn-script-location -r "$Root\deploy\requirements.txt" -i https://pypi.tuna.tsinghua.edu.cn/simple
+  & "$vs\python.exe" -m pip install --no-cache-dir --no-warn-script-location -r "$Root\packaging\requirements.txt" -i https://pypi.tuna.tsinghua.edu.cn/simple
   if ($LASTEXITCODE -ne 0) {
     Write-Warning "tuna 源失败，换官方 PyPI 重试"
-    & "$vs\python.exe" -m pip install --no-cache-dir --no-warn-script-location -r "$Root\deploy\requirements.txt"
+    & "$vs\python.exe" -m pip install --no-cache-dir --no-warn-script-location -r "$Root\packaging\requirements.txt"
     if ($LASTEXITCODE -ne 0) { throw "pip install 失败" }
   }
 }
@@ -264,7 +264,7 @@ Copy-Item "$Root\AGENTS.md" $App -Force
 "@ | Write-Utf8NoBom "$App\opencode.json"
 New-Item -ItemType Directory -Force "$App\outputs", "$App\uploads" | Out-Null
 
-# matplotlibrc（Windows 字体版；机制同 deploy\matplotlibrc，见彼处长注释——
+# matplotlibrc（Windows 字体版；机制同 packaging\matplotlibrc，见彼处长注释——
 # font.family 多族列表才有逐字形回退；Windows 自带 Arial/微软雅黑，无需装字体）
 @"
 font.family: Arial, Microsoft YaHei, SimSun, DejaVu Sans

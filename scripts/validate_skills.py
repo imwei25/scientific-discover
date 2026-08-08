@@ -5,11 +5,10 @@
   1) SKILL.md 无 BOM（带 BOM 会让 OpenCode 崩溃——本仓库踩过的坑）
   2) frontmatter 合法，含 name + description，且 name 与目录名一致
   3) 技能引用的辅助脚本存在
-  4) shell 脚本不得带 CRLF（技能目录会被 COPY 进 Linux 容器，CRLF 会破坏 bash）
+  4) shell 脚本不得带 CRLF（技能会在 Linux/mac 上直接执行，CRLF 会破坏 bash）
 
 历史注：仓库曾维护 .opencode/skills 与 deploy/skills 双镜像并在此比对漂移；
-deploy 副本已删除（deploy/Dockerfile 直接 COPY .opencode/skills/），
-本脚本随之只校验唯一源 .opencode/skills。
+deploy 副本连同整个容器部署目录已删除，本脚本随之只校验唯一源 .opencode/skills。
 
 退出码非 0 表示有问题（供一键安装脚本判定）。
 """

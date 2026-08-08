@@ -87,5 +87,5 @@
    一律读作两步：**先问，本轮结束；拿到回答后的下一轮再做 Y**。
 
 ## 技能位置
-全部技能随本套件装到你所用框架的技能目录（OpenCode：项目 `.opencode/skills/`——**唯一源头**，部署镜像由 Dockerfile 直接 COPY 它，不再维护 deploy 副本；Claude Code：`~/.claude/skills/`），每个 `<名>/SKILL.md` 有 description（触发条件）与职责。完整目标的流水线就是 §三 里按顺序依次调用这些技能，无额外编排引擎。本文件（AGENTS.md）即顶层主控指令；安装脚本把它镜像成**项目根**的 `CLAUDE.md`（受管块，供 Claude Code 读；**不碰机器全局 `~/.claude/CLAUDE.md`**，以免在无关项目触发路由），OpenCode 直接读项目根 / `/app` 的 `AGENTS.md`。
+全部技能随本套件装到你所用框架的技能目录（OpenCode：项目 `.opencode/skills/`——**唯一源头**，桌面安装包由 `desktop/bundle.ps1` 直接打包它，不再维护任何副本；Claude Code：`~/.claude/skills/`），每个 `<名>/SKILL.md` 有 description（触发条件）与职责。完整目标的流水线就是 §三 里按顺序依次调用这些技能，无额外编排引擎。本文件（AGENTS.md）即顶层主控指令；安装脚本把它镜像成**项目根**的 `CLAUDE.md`（受管块，供 Claude Code 读；**不碰机器全局 `~/.claude/CLAUDE.md`**，以免在无关项目触发路由），OpenCode 直接读项目根 / `/app` 的 `AGENTS.md`。
 <!-- END sci-skill router (auto-managed) -->

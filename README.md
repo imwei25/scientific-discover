@@ -3,7 +3,7 @@
 自托管科研 Agent 后端验证分支。基于 **OpenCode**（`opencode serve`）+ **DeepSeek**（OpenAI 格式），
 复用本目录 `backend/.venv` 里的科学计算环境（pandas/numpy/scipy/matplotlib/scikit-learn 等）作为“技能”。
 
-- Agent 技能：`.opencode/skills/`（**唯一源头**，本地与部署镜像共用；Dockerfile 直接 COPY 它，`zotero-library` 由 `.dockerignore` 排除不进镜像）
+- Agent 技能：`.opencode/skills/`（**唯一源头**，本地与桌面安装包共用；`desktop/bundle.ps1` 直接打包它）
 - 启动后端：`opencode serve --port 4098`
 - 前端：见 `web/`（流式对话 + 文件上传/下载）
 - 上传目录 `uploads/`，产出目录 `outputs/`
@@ -52,11 +52,11 @@ bash scripts/setup.sh        # 之后 source .venv/bin/activate 再起服务
 
 脚本会：在项目根建/复用 `.venv` → 装 `scripts/requirements-skills.txt` 全部依赖 → 装 pandoc + xelatex（`render-pdf-doc` 用，Windows 走 winget / Linux 走 apt）→ 逐包冒烟测试 →
 运行 `scripts/validate_skills.py` 校验所有 SKILL.md（无 BOM、frontmatter 合法、两套镜像一致）→ 把顶层主控 `AGENTS.md` 镜像成**项目根** `CLAUDE.md`（受管块，供 Claude Code 读；OpenCode 直接读 `AGENTS.md`）。
-Docker 部署走 `deploy/requirements.txt` + `deploy/Dockerfile`（已含全部 pip 包与 pandoc/texlive/CJK 字体）。
+桌面安装包走 `packaging/requirements.txt`（钉版的科研 Python 栈，由 `desktop/bundle.ps1` 装进内嵌解释器）。
 
 > **换机器 / 换智能体框架（OpenCode·OpenClaw·WorkBuddy…）时**：技能不写死任何机器路径——解释器统一指向**项目根 `.venv`**（Windows `.venv\Scripts\python.exe`，Linux/mac `.venv/bin/python`）。把 `skills/` 拷到目标框架的技能根、让 agent 先跑 `env-setup` 技能（或 `scripts/setup.*`）建好 `.venv` 即可，无需改任何 SKILL.md。
 >
-> **顶层主控（AGENTS.md）跨框架**：路由铁律放**项目根**，OpenCode 直接读 `AGENTS.md`（Docker 里由 Dockerfile `COPY AGENTS.md /app/AGENTS.md`，直接取仓库根这份）；Claude Code 读项目根 `CLAUDE.md`——安装脚本用 `scripts/install_router.py` 把 `AGENTS.md` 镜像过去（**受管块、幂等、保留你原有 CLAUDE.md 内容**）。**故意只落项目根、不写全局 `~/.claude/CLAUDE.md`**，免得在无关项目也触发科研路由。
+> **顶层主控（AGENTS.md）跨框架**：路由铁律放**项目根**，OpenCode 直接读 `AGENTS.md`（桌面安装包由 `bundle.ps1` 打包仓库根这份）；Claude Code 读项目根 `CLAUDE.md`——安装脚本用 `scripts/install_router.py` 把 `AGENTS.md` 镜像过去（**受管块、幂等、保留你原有 CLAUDE.md 内容**）。**故意只落项目根、不写全局 `~/.claude/CLAUDE.md`**，免得在无关项目也触发科研路由。
 
 > **实测注意（详见 [THIRD_PARTY_SKILLS.md](THIRD_PARTY_SKILLS.md)）**：
 > - `render-pdf-doc` 排**中文**稿件要传 `--cjk-font "Microsoft YaHei"`（服务器 `Noto Sans CJK SC`），否则汉字漏字；MiKTeX 首次渲染需先 `miktex packages update`。
@@ -103,7 +103,7 @@ Docker 部署走 `deploy/requirements.txt` + `deploy/Dockerfile`（已含全部 
 
 另用 `requests` / `httpx` / `beautifulsoup4` / `lxml` / `tqdm`（均来自 PyPI）。
 
-**系统依赖（非 pip，供 `render-pdf-doc`）**：pandoc + xelatex（Windows: MiKTeX；Linux/Docker: `texlive-xetex`）+ CJK 字体（Windows 自带 Microsoft YaHei；Linux 装 `fonts-noto-cjk`）。一键脚本与 Dockerfile 已包含。
+**系统依赖（非 pip，供 `render-pdf-doc`）**：pandoc + xelatex（Windows: MiKTeX；Linux: `texlive-xetex`）+ CJK 字体（Windows 自带 Microsoft YaHei；Linux 装 `fonts-noto-cjk`）。一键脚本与桌面安装包已包含。
 
 **免费 API / 数据源（无需 key）**：
 - [Europe PMC REST](https://europepmc.org/RestfulWebService) — 文献检索 / 下载 / 核查（覆盖 PubMed + 预印本 + 全文，国内可达）

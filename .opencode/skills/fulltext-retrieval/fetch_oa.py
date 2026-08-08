@@ -62,7 +62,7 @@ def _ua(email: str) -> str:
 
 
 # --- Contact + optional API keys ---------------------------------------------
-# All optional; injected once via deploy/.env → container env (see
+# All optional; set them in the environment where the agent runs (see
 # deploy/检索通道-API配置.md). Absent = anonymous free tier (still works, slower).
 # One contact var covers every source; the older names are kept for back-compat
 # so a server that already set them keeps working without reconfiguration.

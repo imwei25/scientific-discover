@@ -106,8 +106,8 @@ def _repo_root():
 def load_key_file():
     """把 key 文件里的白名单变量补进 os.environ（【已存在的进程环境变量优先】，不覆盖）。
 
-    进程环境优先的理由：服务器上 key 由容器 env 注入（见 deploy/scripts/render-compose.sh），
-    那是权威来源；key 文件只是本机自用时的便利层。
+    进程环境优先的理由：运行环境（桌面壳 / systemd 单元）注入的 env 是权威来源；
+    key 文件只是本机自用时的便利层。
     """
     for f in _key_file_candidates():
         try:
@@ -184,8 +184,7 @@ def api_key():
         "        PowerShell:  $env:QWEN_API_KEY = 'sk-xxxx'",
         "        bash:        export QWEN_API_KEY=sk-xxxx",
         "",
-        "   平台（服务器）部署由管理员在 deploy/.env 里配一次、所有用户容器自动继承，",
-        "   见 deploy/.env.example 的「生图 API key」一节。",
+        "   平台部署由管理员在服务端配一次，客户端走平台代理、不落 key。",
         "",
         "   变量名与 ppt-master 相同（也认 DASHSCOPE_API_KEY），配过一次两个技能都能用。",
         "   还没配 key 也能先用 --dry-run 把提示词做完、检查完，那条不需要 key。",

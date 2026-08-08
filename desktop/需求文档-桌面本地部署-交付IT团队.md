@@ -14,7 +14,7 @@
 
 - **应用本体已成熟可运行**（这是本次交付的基础，应该不在 IT 改造范围内）：
   web 界面网关（node, `web/server.mjs`）→ opencode agent 引擎 → 23 个技能
-  （SKILL.md 提示词 + Python/Bash 脚本，Python 栈钉版于 `deploy/requirements.txt`）。
+  （SKILL.md 提示词 + Python/Bash 脚本，Python 栈钉版于 `packaging/requirements.txt`）。
 - **云端服务是空白画布**：需求方此前个人做过一些服务器端的试验验证（不成熟、不移交、
   不必沿用），云端的正式架构由 IT 团队从零设计；试验中验证过的个别结论会在相关条目
   标注"参考"字样，仅供缩短调研，采不采用完全由 IT 决定。
@@ -24,7 +24,7 @@
 
 | 角色 | 负责 | 不负责 |
 |---|---|---|
-| **AI团队** | `.opencode/skills/` 全部技能内容、`AGENTS.md` 主控指令、`deploy/requirements.txt` Python 依赖钉版 | 打包、分发、云端服务、运维 |
+| **AI团队** | `.opencode/skills/` 全部技能内容、`AGENTS.md` 主控指令、`packaging/requirements.txt` Python 依赖钉版 | 打包、分发、云端服务、运维 |
 | **IT 团队** | 桌面客户端（打包/安装/启动/更新）、云端服务（注册登录/key 管理/计量/后台）、发布、注册流程 | 技能内容本身 |
 
 **接口约定（最重要的一条）**：技能目录 + AGENTS.md + requirements.txt 就是双方的全部接口。
@@ -87,7 +87,7 @@
 以下是技能正常运行的环境契约，**无论 IT 采用什么打包方案都必须成立**：
 
 1. 项目根存在 `.venv`，且 `.venv/bin/python`（POSIX 风格路径）与 `.venv\Scripts\python.exe`
-   **都能执行**并加载同一套科研 Python 栈（钉版 `deploy/requirements.txt`）；
+   **都能执行**并加载同一套科研 Python 栈（钉版 `packaging/requirements.txt`）；
 2. 环境变量 `REPO_ROOT` 指向应用根（正斜杠路径），bash 中 `${REPO_ROOT:-/app}` 展开正确；
 3. 命令行环境提供：`bash`（支持 heredoc/管道/source）、`git`、`pandoc`、裸 `python3`；
 4. matplotlib 中文不出豆腐块（系统级 rc 兜底，含逐字形回退）；
@@ -138,6 +138,6 @@
 ## 5. 交接与协作方式
 
 - 代码仓库、分支、PoC 全部移交 IT；AI团队保留 `.opencode/skills/`、`AGENTS.md`、
-  `deploy/requirements.txt`。
+  `packaging/requirements.txt`。
 - 需求疑问找需求方澄清；技术选型 IT 自主决策，以验收标准为准。
 

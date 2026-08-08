@@ -21,7 +21,7 @@ description: Per-page rubric-based visual self-review via parallel subagents. Ru
 >   这能覆盖 rubric 的大部分条目，只是无法捕捉真正需要"看见像素"才发现的问题
 >   （如字体缺字回退、渐变/滤镜渲染异常）——这类局限要向用户讲明。
 >
-> 若将来要启用：见 `deploy/requirements.txt` 中「刻意不装 flask / playwright / chromium」一节。
+> 若将来要启用：见 `packaging/requirements.txt` 中「刻意不装 flask / playwright / chromium」一节。
 
 > Standalone post-generation step. Goal: reduce human iteration by letting AI subagents visually self-check each rendered slide against a fixed rubric and apply atomic position/spacing fixes.
 >

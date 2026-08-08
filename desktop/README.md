@@ -25,7 +25,10 @@ cargo tauri build
   bash 展开；裸 `python3` 靠 PATH 里的 `.venv\Scripts\python3.exe`。详见技能 POSIX 依赖
   摸底结论（2026-07-28）：16 技能仅需此 shim，peer-review 纯净，硬二进制依赖只有 pandoc。
 - **中文图表**：Windows 自带微软雅黑/宋体，`app\matplotlibrc`（`MATPLOTLIBRC` env 指入）
-  用 `font.family` 多族列表做逐字形回退，机制同 `deploy/matplotlibrc`（见彼处长注释）。
+  用 `font.family` 多族列表做逐字形回退。**关键点**：逐字形回退**只在 `font.family` 写多族列表时才有**——
+  写成 `font.sans-serif` 列表是没有的（它只取第一个能解析的字体就不再往后找，实测推翻过这个想当然）。
+  链里每个字体都得真的装了：没装的不影响渲染，但 matplotlib 会为每次查找往 stderr 刷
+  `findfont: Font family 'X' not found.`，实测曾达 41 行/图，agent 很容易误读成故障去"修"。
 - **云端接入**：`app\cloud.json`（模板 `cloud.json.example`）→ 启动器注入
   `OC_GATEWAY_URL/OC_GATEWAY_KEY/OC_MODEL` → server.mjs 自动写 opencode provider。
   或者客户直接在界面「模型设置」里填网关地址+key（写 `web/model-config.json`）。

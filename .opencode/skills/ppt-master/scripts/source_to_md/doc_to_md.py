@@ -1262,7 +1262,7 @@ def _convert_ipynb(input_file: Path, out_file: Path) -> str:
         from nbconvert.writers import FilesWriter
     except ImportError:
         # 本部署【刻意不装】nbconvert（它会拖进整个 jupyter 生态、十几个不钉版本的传递依赖，
-        # 镜像还要涨几百 MB —— 见 deploy/requirements.txt 的说明）。那份说明写的替代方案是
+        # 镜像还要涨几百 MB —— 见 packaging/requirements.txt 的说明）。那份说明写的替代方案是
         # 「镜像里已有 pandoc，pandoc x.ipynb -o x.md 同样能转」，但代码里 .ipynb 在
         # NATIVE_FORMATS 中，压根走不到下面的 pandoc 回退分支 —— 于是这条替代方案从未被接上，
         # 用户上传 notebook 只会看到"请 pip install nbconvert"，agent 多半就真去装了。

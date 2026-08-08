@@ -28,7 +28,7 @@ BASE="https://eutils.ncbi.nlm.nih.gov/entrez/eutils"
 EPMC="https://www.ebi.ac.uk/europepmc/webservices/rest"
 TOOL="claude-code-search-lit"
 # One unified contact var (older names kept for back-compat). NCBI wants a real
-# email; set SCI_CONTACT_EMAIL once in deploy/.env and every skill picks it up.
+# email; set SCI_CONTACT_EMAIL in the environment and every skill picks it up.
 EMAIL="${SCI_CONTACT_EMAIL:-${MEDSCI_CONTACT_EMAIL:-${CONTACT_EMAIL:-noreply@example.com}}}"
 DB="pubmed"
 SLEEP=0.35

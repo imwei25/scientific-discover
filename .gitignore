@@ -20,8 +20,6 @@ __pycache__/
 *.pyc
 
 # 部署密钥与密码文件（绝不入库）
-deploy/.env
-deploy/htpasswd
 .env
 serve.out
 serve.err
@@ -29,22 +27,15 @@ serve.err
 web/model-config.json
 opencode.json
 
-# 档位定义：管理台(/admin 的 tier-def 接口)会在运行时重写它（见 deploy/manager.mjs），
-# 属于「机器上的实际配置」而非源码——与 deploy/.env、users/*.env、docker-compose.yml 同类。
-# 跟踪它会让服务器 git status 永远是脏的、每次 pull 都可能冲突。
-# 模板见 deploy/tiers.env.example；首次部署由 setup.sh/手工 cp 一份。
-deploy/tiers.env
-
 # 桌面版（路线2）构建产物：bundle 组装目录（GB 级）与 Rust 构建缓存。
 # icons/ 与 app-icon.png 刻意【跟踪】：tauri.conf.json 引用 icons/icon.ico，进 git 才能克隆即构建
 desktop/dist/
 desktop/launcher/target/
 desktop/launcher/gen/
 
-# 导出/备份产物：含 .env 与 users/*.env（全部账号 + 明文密码）与用户数据。
-# export-all.sh 的默认目录已改到仓库之外（/var/backups/sci-export），这几条是兜底——
-# 万一有人显式传了仓库内路径，也不能让它进 git 历史（历史里删不干净）。
-deploy/backups/
+# 导出/备份产物：含账号、口令与用户数据。ops/migrate-export.sh 的默认目录已在仓库之外
+# （/var/backups/sci-auth），这两条是兜底——万一有人显式传了仓库内路径，
+# 也不能让它进 git 历史（历史里删不干净）。
 backups/
 sci-agent-backup-*.tar.gz
 

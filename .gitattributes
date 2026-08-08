@@ -1,9 +1,12 @@
-# 全仓强制 LF 的文件类型：.opencode/skills/ 现在直接 COPY 进 Linux 容器（见 deploy/Dockerfile），
-# shell 脚本带 CRLF 会破坏 shebang / 让 bash 报 '\r' 语法错。deploy/ 目录另有更细的 deploy/.gitattributes。
+# 全仓强制 LF 的文件类型：这些文件会在 Linux 服务器上直接执行/加载（sci-auth、ops/、
+# deploy-auth/ 的安装脚本与 systemd 单元），shell 脚本带 CRLF 会破坏 shebang / 让 bash
+# 报 '\r' 语法错，systemd 也会解析失败。
 *.sh text eol=lf
 *.mjs text eol=lf
-# 技能预设(.env 被容器内 bash `source`，带 \r 会污染变量值如 linestretch=2.0\r 破坏 LaTeX)
-# 与随技能进 Linux 容器的 .py/.csl 也强制 LF，防 Windows 检出重提交引入 CRLF。
+*.service text eol=lf
+Caddyfile.example text eol=lf
+# 技能预设(.env 被 bash `source`，带 \r 会污染变量值如 linestretch=2.0\r 破坏 LaTeX)
+# 与在 Linux 上执行的 .py/.csl 也强制 LF，防 Windows 检出重提交引入 CRLF。
 .opencode/skills/**/*.env text eol=lf
 .opencode/skills/**/*.py text eol=lf
 .opencode/skills/**/*.csl text eol=lf

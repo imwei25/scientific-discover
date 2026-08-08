@@ -294,7 +294,7 @@ fn main() {
                 .env("PIP_DISABLE_PIP_VERSION_CHECK", "1")
                 .env("MPLBACKEND", "Agg")
                 // 中文字体兜底 rc。matplotlib 的查找顺序是 $MATPLOTLIBRC → cwd/matplotlibrc →
-                // configdir（与 deploy/Dockerfile 注释一致，env 优先级最高）；技能都在会话产物目录里跑
+                // configdir（env 优先级最高）；技能都在会话产物目录里跑
                 // （那儿没有 rc 文件、configdir 也没铺过），故这条 env 是包内 matplotlibrc 唯一的生效通道；
                 // node 把整份 env 传给 opencode 再传给技能 python，一处注入全链路生效。
                 .env("MATPLOTLIBRC", appdir.join("matplotlibrc"))

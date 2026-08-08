@@ -19,8 +19,10 @@ bash scripts/setup.sh                                            # 或 install.s
 
 > **换机器 / 换框架（OpenCode·Claude Code·OpenClaw…）同理**：把技能拷到目标项目根后，在那儿跑一次脚本即可，无需改任何 SKILL.md。
 
-## 唯一源头（deploy 副本已删除）
+## 唯一源头
 本目录 `.opencode/skills/` 是技能的**唯一源头**：本地 OpenCode / Claude Code 直接读它，
-部署镜像也由 `deploy/Dockerfile` 直接 `COPY .opencode/skills/`（`zotero-library` 为本机专用技能，
-由 `.dockerignore` 排除，不进镜像）。改技能只改这里一处；**线上生效需重建 Docker 镜像**
-（服务器上跑 `deploy/scripts/redeploy-skills.sh`）。
+桌面安装包由 `desktop/bundle.ps1` 直接打包它。改技能只改这里一处。
+
+技能跑在**用户自己的机器上**（桌面版），服务器只做鉴权 + LLM 网关，不跑技能、不跑容器。
+所以技能改完的分发路径是：① 技能包在线发布（管理台一键，客户端提示更新）；
+② 或随下一版安装包发。**没有"重建镜像"这一步**——旧的 Docker 多用户架构已整体废弃。
