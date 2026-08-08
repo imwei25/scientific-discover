@@ -59,7 +59,7 @@ const readJsonFile = (p) => JSON.parse(stripBom(fs.readFileSync(p, "utf8")))
 const loadModelCfg = () => { try { return readJsonFile(MODEL_CFG_PATH) } catch { return null } }
 const saveModelCfg = (c) => { try { fs.writeFileSync(MODEL_CFG_PATH, JSON.stringify(c, null, 2)) } catch {} }
 // 给自定义/网关模型注入定价（USD / 每百万 token），否则 opencode 不知道价格 → session.cost 恒为 0 →
-// 每日成本额度与中途封顶全部失效。价格由 OC_COST_* 环境变量给（deploy/.env 集中配），缺省按 DeepSeek 常见价。
+// 每日成本额度与中途封顶全部失效。价格由 OC_COST_* 环境变量给（部署时按环境变量配），缺省按 DeepSeek 常见价。
 const _modelCost = () => {
   const n = (v, d) => { const x = Number(v); return Number.isFinite(x) ? x : d }
   return { input: n(process.env.OC_COST_INPUT, 0.27), output: n(process.env.OC_COST_OUTPUT, 1.10), cache_read: n(process.env.OC_COST_CACHE_READ, 0.07), cache_write: n(process.env.OC_COST_CACHE_WRITE, 0) }
@@ -545,8 +545,8 @@ const LOGIN_URL = BASE_PATH ? "/" : "/login"
 // primary：主技能，模块可用性看它（被技能白名单收权则整个模块不可用）。
 // ★ 必须【显式声明】，不能再取 skills[0]：技能集现在是从 steps 自动展开的，数组顺序不再可控，
 //   而它决定模块开不开 —— 靠顺序会静默错判（旧写法遗留的真隐患，随本次改造一并修掉）。
-// 【三处同步维护】本表 ↔ deploy/manager.mjs 的 MODULE_TABLE ↔ deploy/scripts/user-modules.sh 的 ALL_MODULES。
-// 模块 id 一经发布就不要改：deploy 的 users/<名>.env 里 MODULES= 存的是 id，改名等于把老用户的授权改没。
+// 本表是模块清单的【唯一来源】（旧的容器架构曾把它抄在 manager.mjs 与 user-modules.sh 里三处同步，
+// 那套已随 Docker 部署整体删除）。模块 id 一经发布就不要改：授权记录存的是 id，改名等于把老用户的授权改没。
 // group：工作台（workspace.html）按它把卡片分到两栏——
 //   workbench =「工作台 / Research Tools」：从零到成稿的完整流程模块（含自由对话）
 //   skills    =「核心能力 / Skills」：单点能力，随时插进任一流程
@@ -1399,7 +1399,68 @@ const PYEXE = () => {
   if (!_pyexe) _pyexe = process.platform === "win32" ? "python" : "python3"
   return _pyexe
 }
-const MAMMOTH_PY = "import sys,mammoth\nsrc,out=sys.argv[1],sys.argv[2]\nf=open(src,'rb');h=mammoth.convert_to_html(f).value;f.close()\nopen(out,'w',encoding='utf-8').write(h)"
+// mammoth 直出的是一段【裸 HTML 片段】：没有 <html>/<head>，一行样式也没有。
+// 工作台的通用预览是 innerHTML 注入的，还能吃到 .pv-body img{max-width:100%}；而 reader 壳
+// （文稿核查与审校 / 文献研读）左栏是 <iframe src=api/preview>，父页 CSS 一点也进不去 ——
+// 于是两个只在 reader 里暴露的毛病：
+//   ① mammoth 丢掉 docx 的显示尺寸（wp:extent），图片按【原始像素】渲染：Word 里 8cm 宽、
+//      源图 1600px 的插图，在 400 多像素宽的左栏里铺 1600px，撑爆版面、只看得见左上角一块；
+//   ② Word 里粘贴的 Excel 图表 / 公式 / Visio 在 docx 里存的是 EMF/WMF，mammoth 照样
+//      base64 塞进 <img src="data:image/x-emf;...">，浏览器一律裂图。mammoth 自己会发
+//      "unlikely to display in web browsers" 的告警，但旧代码只取 .value，把 .messages
+//      整个丢了，服务端日志里连条线索都没有。
+// 所以这里：套完整 HTML 文档 + 内联样式（CSP 里 style-src 'unsafe-inline' 是放行的，
+// 但 <link> 不行，故只能内联）；非 web 格式的图换成看得懂的占位说明；告警写 stderr 供网关记日志。
+const MAMMOTH_PY = `
+import sys, base64, mammoth, mammoth.html as H
+
+# 浏览器真能渲染的格式；其余（EMF/WMF/TIFF…）一律换占位说明，别摆个裂图让人以为文件坏了
+WEB_OK = ("image/png", "image/gif", "image/jpeg", "image/jpg", "image/bmp", "image/webp", "image/svg+xml")
+
+HEAD = """<!doctype html><html lang="zh"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1"><title>文档预览</title><style>
+:root{color-scheme:light}
+body{margin:0;padding:24px 28px;background:#fff;color:#1f2328;overflow-wrap:break-word;
+     font:15px/1.85 -apple-system,"Segoe UI","Microsoft YaHei","PingFang SC",system-ui,sans-serif}
+img{max-width:100%;height:auto;display:block;margin:12px auto}
+p{margin:0 0 10px}
+h1,h2,h3,h4,h5,h6{margin:1.4em 0 .6em;line-height:1.4}
+h1{font-size:1.6em}h2{font-size:1.35em}h3{font-size:1.15em}
+table{border-collapse:collapse;max-width:100%;margin:12px 0}
+td,th{border:1px solid #d6dae0;padding:5px 9px;vertical-align:top}
+pre{white-space:pre-wrap;background:#f6f7f9;padding:10px;border-radius:6px}
+blockquote{margin:10px 0;padding:2px 14px;border-left:3px solid #d6dae0;color:#57606a}
+.noimg{display:block;margin:12px 0;padding:10px 14px;border:1px dashed #c9ced6;border-radius:8px;
+       background:#f6f7f9;color:#57606a;font-size:.92em}
+</style></head><body>"""
+TAIL = "</body></html>"
+
+def convert_image(image):
+    ct = (image.content_type or "").lower()
+    if ct in WEB_OK:
+        with image.open() as fh:
+            src = "data:" + ct + ";base64," + base64.b64encode(fh.read()).decode("ascii")
+        attrs = {"src": src}
+        if image.alt_text:
+            attrs["alt"] = image.alt_text
+        return [H.element("img", attrs)]
+    kind = (ct.split("/")[-1] or "unknown").replace("x-", "").upper()
+    note = "［这里有一张 " + kind + " 格式的图片，网页预览显示不了；点右上角「原文」下载原件即可正常查看］"
+    if image.alt_text:
+        note = note + "  " + image.alt_text
+    # 用 span 而不是 div：图片在 docx 里是段落的行内内容，占位块会落在 <p> 里 ——
+    # <p><div> 是非法嵌套，浏览器会当场把 <p> 截断，把一段话劈成两半。
+    return [H.element("span", {"class": "noimg"}, [H.text(note)])]
+
+src, out = sys.argv[1], sys.argv[2]
+with open(src, "rb") as fh:
+    r = mammoth.convert_to_html(fh, convert_image=convert_image)
+with open(out, "w", encoding="utf-8") as fh:
+    fh.write(HEAD); fh.write(r.value); fh.write(TAIL)
+# 告警只进服务端日志、不打扰用户（Result.messages 已去重，同一种问题不会刷屏）
+for m in r.messages:
+    sys.stderr.write(str(getattr(m, "type", "warning")) + ": " + str(getattr(m, "message", m)) + "\\n")
+`
 let _soffice   // 惰性探测并缓存（LibreOffice 可能在网关启动后才装好）
 const soffice = () => {
   if (_soffice !== undefined) return _soffice
@@ -1520,7 +1581,14 @@ async function ensurePreviewCache(dir, name) {
   if (ext === ".docx") {
     const out = path.join(cacheDir, flat + ".html")
     if (!fresh(out)) {
-      try { await execFileAsync(PYEXE(), ["-X", "utf8", "-c", MAMMOTH_PY, src, out], { timeout: 60_000, windowsHide: true }) }
+      // maxBuffer 显式给足：脚本现在会把 mammoth 的告警写 stderr，样式复杂的稿件能攒出不少行，
+      //   而 execFile 默认 1MB 上限一旦撑爆是【直接杀进程】→ 整个预览失败在一条日志上，太亏。
+      try {
+        const { stderr } = await execFileAsync(PYEXE(), ["-X", "utf8", "-c", MAMMOTH_PY, src, out], { timeout: 60_000, maxBuffer: 8 * 1024 * 1024, windowsHide: true })
+        // 告警不外泄给用户（界面上只会是噪音），但服务端必须留痕：EMF 图为什么变成占位块、
+        // 哪些样式没映射上，出问题时全靠这条日志定位。
+        if (stderr && stderr.trim()) console.warn(`[preview] docx 转换告警（${src}）：\n${stderr.trim().slice(0, 2000)}`)
+      }
       catch (err) { const e = new Error(String(err).slice(0, 200)); e.code = "docx-fail"; throw e }
     }
     prunePreviewCache(cacheDir, out)
