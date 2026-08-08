@@ -3843,8 +3843,9 @@ async function loadModules() {
     const hit = allowed.find((m) => m.id === pendingModule)
     // 有专用界面的模块（ui="reader"）：老书签、老工作台（界面包只更新了一半时）仍会把人
     // 送到 `./#module=litread`。这里兜住，转投它自己的页面 —— 判据用服务端下发的 ui，
-    // 不在前端写死 id。
-    if (hit && hit.ui === "reader") { location.href = "./reader.html"; return }
+    // 不在前端写死 id。★ 必须把 ?m= 带上（reader.html 是四个模块共用的壳，缺了就兜底成
+    // litread —— 那正是「点数据统计却进了文献研读」的成因）。
+    if (hit && hit.ui === "reader") { location.href = "./reader.html?m=" + encodeURIComponent(hit.id); return }
     if (hit) currentModule = hit.id
     else if (MODULES.some((m) => m.id === pendingModule)) addNote("ℹ 你的账号未开通该模块，已回到自由对话")
     pendingModule = ""

@@ -120,6 +120,26 @@ test("阅读器型模块：reader 配置完整、模式标记与前言逐字一�
 // 被绑成文献研读（前言与技能闸全是别人的）；「最近」写死 litread → 列出别的模块的会话。
 // 而界面照常显示本模块的样子，从外面完全看不出来。（两次都发生在用整段 splice 改文件时
 // 覆盖掉了更早的修复，事后没回头校验。）
+// reader.html 是四个模块【共用】的壳，靠 URL 上的 ?m=<模块id> 知道自己该扮演谁；取不到就
+// 兜底成 litread。于是每一个跳进它的入口都必须把 ?m= 带上——漏了不会报错，只会让用户点
+// 「数据统计与分析」却进了文献研读，而页面看起来一切正常。
+// 这个 bug 真发生过：reader.html 从 litread 专用改成通用壳时，两个调用方（工作台的卡片、
+// 聊天页的重定向）都没跟着改。上一条「壳里不许写死模块 id」的守卫抓不到它——问题在调用方，
+// 而那句兜底默认值是被显式豁免的。所以这里单独钉调用方。
+test("跳进阅读器壳的入口都必须带上 ?m=（否则三个模块全落进文献研读）", () => {
+  for (const f of ["../workspace.html", "../index.html"]) {
+    const src = fs.readFileSync(new URL(f, import.meta.url), "utf8")
+    for (const ln of src.split("\n")) {
+      const code = ln.trim()
+      if (code.startsWith("//") || code.startsWith("*") || code.startsWith("/*")) continue
+      if (!/location\.href\s*=\s*["'`]\.\/reader\.html/.test(code)) continue
+      // 带 ?sid= 的那条是「打开某个已存在的会话」——模块由会话绑定决定，不需要 m
+      assert.ok(/\?m=/.test(code) || /\?sid=/.test(code),
+        f + " 里这行跳转既没带 ?m= 也没带 ?sid=，用户会落进兜底的文献研读：" + code)
+    }
+  }
+})
+
 test("阅读器壳里不许出现模块 id 字面量（兜底默认值与注释除外）", () => {
   const html = fs.readFileSync(new URL("../reader.html", import.meta.url), "utf8")
   const ids = Object.entries(WF.WORKFLOWS).filter(([, w]) => w.ui === "reader").map(([id]) => id)
