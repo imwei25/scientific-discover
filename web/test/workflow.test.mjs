@@ -163,9 +163,30 @@ test("阅读器：前置条件闸的三段必须齐全，且起一轮只有一�
   assert.match(html, /closest\("\[data-run\]"\)[\s\S]{0,120}tryRun\(/,
     "面板中央那个按钮必须走 tryRun，不能直接 run()")
   assert.match(html, /btnRerun[\s\S]{0,80}tryRun\(/, "「重新生成」也要走 tryRun")
-  // 缺配套文件时要给得出上传口，否则提示是死路
-  assert.match(html, /function extraUploadBtn\(/, "缺 extraUploadBtn")
-  assert.match(html, /data-upload/, "block 提示里要留上传按钮的位置，且 render 要把按钮挂进去")
+  // 需要配套文件的模式，面板里要常驻一张清单卡：看得见传了哪几份、能再加、能删掉传错的。
+  // （原先是"缺了才冒出一个上传按钮"：传完什么都不显示，用户不知道传上去没有，也没法删。）
+  assert.match(html, /function dataCardHtml\(/, "缺配套数值表的清单卡 dataCardHtml")
+  assert.match(html, /data-dataadd/, "清单卡里要有添加入口")
+  assert.match(html, /data-datadel/, "清单卡里每一份都要能删")
+  assert.match(html, /closest\("\[data-dataadd\]"\)[\s\S]{0,120}pickDataFiles\(/, "添加要接到 pickDataFiles")
+  assert.match(html, /api\/upload\/delete/, "删除要真的调服务端，否则刷新一次它又回来了")
+})
+
+// 点模式条【只切过去看，不开跑】：一点就发等于用户还没看清要干什么、也没来得及改设置，
+// 额度就已经花出去了。开跑的入口只有三个，且都必须走 tryRun（那里才有前置条件闸）。
+test("阅读器：切模式不自动开跑，开跑入口都走 tryRun", () => {
+  const html = fs.readFileSync(new URL("../reader.html", import.meta.url), "utf8")
+  const onRail = html.slice(html.indexOf("function onRail("), html.indexOf("function showBlocked("))
+  assert.doesNotMatch(onRail, /tryRun\(|\brun\(/, "onRail 不该自己开跑——那正是要改掉的行为")
+  assert.match(html, /btnGo[\s\S]{0,80}tryRun\(/, "头部「开始」要走 tryRun")
+  assert.match(html, /btnHalt[\s\S]{0,60}abortRun/, "头部「终止」要接 abortRun")
+  // 没跑过的模式切过去要把设置摊开（填完点里面的「开始」直接开跑）
+  assert.match(html, /function openSettings\(/, "缺 openSettings")
+  assert.match(onRail, /openSettings\(true\)/, "切到没跑过的模式要自动摊开设置")
+  // 但同一套设置只问一次：一模一样的字段+取值在别处确认过了就别再弹（否则用户会被训练成闭眼点掉）
+  assert.match(onRail, /settingsSeen\(\)/, "自动摊开前要先看这套设置是不是已经确认过")
+  assert.match(html, /function markSettingsSeen\(/, "缺 markSettingsSeen")
+  assert.match(html, /function settingsSig\(/, "记的应该是字段+取值的指纹，不是模块 id")
 })
 
 // 这是"单篇研读"，不是检索模块：给了检索技能就等于默许它去找别的文献
@@ -205,13 +226,13 @@ test("任务卡：只拼可见字段，标签用中文选项文案，末尾必�
   const card = WF.taskCard("SCI 论文", "立项确认", f, {
     studyType: "retrospective", articleType: "original", topic: "NLR 与胃癌预后",
     materials: ["rawdata", "ethics"], ethicsNo: "2025-KY-081", deidDone: false,
-    journalTier: "target", jImpact: { min: 3, max: 6 }, lang: "zh",
+    journalTier: "target", jQuartile: ["Q1", "Q2"], lang: "zh",
   })
   assert.match(card, /^【任务卡 · SCI 论文 \/ 立项确认】/)
   assert.match(card, /研究类型：回顾性队列/, "select 要显示选项文案而不是 v 值")
   assert.match(card, /已有材料：原始数据表（xlsx\/csv）、伦理批件号/, "multi 要逐项展开")
   assert.match(card, /伦理批件号：2025-KY-081/)
-  assert.match(card, /文献来源期刊的影响力（两年篇均被引，近似）：3 – 6 两年篇均被引/, "range 要带单位")
+  assert.match(card, /影响力档位（近似）：前 25%（Q1）、25%–50%（Q2）/, "multi 要展开成中文档位")
   assert.match(card, /绝不臆测或编造/, "反幻觉声明是硬要求：表单必然有留空项，不写死它就会去编")
   // 条件字段未成立 → 连提都不该提（注册号只在勾了 registry 时出现）。
   // 只看卡片正文：末尾那句反幻觉声明本身举例提到了"注册号"，整卡去匹配会误判。
@@ -223,16 +244,32 @@ test("任务卡：只拼可见字段，标签用中文选项文案，末尾必�
 })
 
 test("任务卡措辞不得把近似指标说成影响因子（§五 不虚构）", () => {
-  const j = WF.WORKFLOWS.paper.intake.find((x) => x.id === "jImpact")
-  assert.match(j.label, /近似/)
-  assert.doesNotMatch(j.label, /影响因子|IF|JIF/)
-  assert.match(j.help, /不是官方影响因子/)
-  // 且必须写明筛的是"检索结果"而非"你想投的刊"——它紧跟在目标期刊字段后面，实测会被读反
-  assert.match(j.label, /文献来源期刊/)
-  assert.match(j.help, /不是你想投的刊/)
-  const q = WF.WORKFLOWS.paper.intake.find((x) => x.id === "jQuartile")
-  assert.doesNotMatch(q.label, /分区/, "别叫'分区'——那是中科院/JCR 的授权数据，我们没有")
-  assert.match(q.help, /不是中科院或 JCR 分区/)
+  for (const mod of ["paper", "review"]) {
+    const q = WF.WORKFLOWS[mod].intake.find((x) => x.id === "jQuartile")
+    assert.ok(q, `${mod} 应保留影响力档位`)
+    assert.match(q.label, /近似/)
+    assert.doesNotMatch(q.label, /影响因子|IF|JIF/)
+    assert.doesNotMatch(q.label, /分区/, "别叫'分区'——那是中科院/JCR 的授权数据，我们没有")
+    assert.match(q.help, /不是中科院或 JCR 分区/)
+    // 必须写明筛的是"检索结果"而非"你想投的刊"——它紧跟在目标期刊字段后面，实测会被读反
+    assert.match(q.help, /不是你想投的刊/)
+    // 取不到指标就静默不筛是实测踩过的坑，界面上必须先说清楚
+    assert.match(q.help, /本项不生效/)
+    // 分组标题是防"读成我想投的刊的影响因子"的唯一手段，删了 jImpact 后必须由它接着挂
+    assert.equal(q.section, "检索到的文献要满足什么条件")
+    assert.ok(!WF.WORKFLOWS[mod].intake.some((x) => x.id === "jImpact"),
+      "影响力区间输入框已按用户要求移除，别又加回来")
+  }
+})
+
+test("检索不设条数上限：表单里不能再出现「最多检索多少篇」这类召回上限输入", () => {
+  // 写综述没有理由给召回设上限——上限会让"这个方向有多少文献"变成由输入框决定的假答案。
+  // 检索脚本（literature-review/search.py、search-lit/enhanced_search.py）默认已改成不限条数。
+  for (const [id, wf] of Object.entries(WF.WORKFLOWS)) {
+    const fields = [...(wf.intake || []), ...(wf.steps || []).flatMap((s) => s.form || [])]
+    const bad = fields.filter((f) => f.id === "limit" || /最多检索|检索.*上限|多少篇/.test(f.label || ""))
+    assert.deepEqual(bad.map((f) => f.label), [], `${id} 模块不该有召回上限字段`)
+  }
 })
 
 test("产物 → 渲染器：认得出的认出来，认不出的必须回 null（走普通产物卡，绝不藏文件）", () => {
@@ -615,6 +652,9 @@ test("表单提交换任务卡：服务端只负责把勾选变成文本，发�
   assert.match(r.json.card, /【任务卡 · 综述撰写/)
   assert.match(r.json.card, /综述主题：PD-1 在肝癌一线治疗/)
   assert.match(r.json.card, /时间范围：近 5 年/)
+  // limit 字段已删除：老前端/接口调用方仍可能带着它，服务端只遍历现有字段，所以它该被丢掉，
+  // 绝不能又以"最多 30 篇"的形式回到任务卡里（那等于偷偷把上限还给了模型）
+  assert.doesNotMatch(r.json.card, /30/, "已删除的召回上限不该再出现在任务卡里")
   assert.match(r.json.card, /系统综述|Meta/, "综述模块的脚注要跟着卡片一起给到 agent")
   const bad = await gw.post("/api/workflow/form", { module: "chat", values: {} })
   assert.equal(bad.status, 400, "chat 没有工作流，要明确拒绝而不是回一张空卡")

@@ -29,16 +29,20 @@ function grabFn(name) {
   return html.slice(start, i + 1)
 }
 
-/** 造一个跑得动 promptFor 的最小环境 */
-function makeEnv({ mod, docName = "", dataName = "", settings = {} }) {
+/** 造一个跑得动 promptFor 的最小环境。
+ *  docName   ：当前在左栏看的那一份
+ *  docFiles  ：左栏那一组（多文件模块用，形如 [{ name, size }]）；不给就按只有 docName 一份算
+ *  dataFiles ：配套数值表【可以有好几份】，promptFor 要把它们全列进去 */
+function makeEnv({ mod, docName = "", docFiles = null, dataFiles = [], settings = {} }) {
   const w = WF.WORKFLOWS[mod]
   const cfg = WF.workflowFor(mod, {}).reader
   const MODES = {}
   for (const m of cfg.modes) MODES[m.id] = m
   const fieldDef = (id) => (cfg.intake || []).find((f) => f.id === id) || null
   const src = grabFn("varsBlock") + "\n" + grabFn("promptFor") + "\nreturn { promptFor, varsBlock }"
-  const make = new Function("MODES", "CFG", "docName", "dataName", "SETTINGS", "fieldDef", src)
-  return { ...make(MODES, cfg, docName, dataName, settings, fieldDef), cfg, MODES }
+  const make = new Function("MODES", "CFG", "docName", "docFiles", "dataFiles", "SETTINGS", "fieldDef", src)
+  const docs = docFiles || (docName ? [{ name: docName }] : [])
+  return { ...make(MODES, cfg, docName, docs, dataFiles, settings, fieldDef), cfg, MODES }
 }
 
 const READER_MODS = Object.entries(WF.WORKFLOWS).filter(([, w]) => w.ui === "reader").map(([id]) => id)
@@ -48,7 +52,7 @@ test("占位符都有值时：全部替换掉，不留任何 {xxx}", () => {
     const cfg = WF.workflowFor(mod, {}).reader
     const settings = {}
     for (const f of cfg.vars?.fields || []) settings[f] = "某一列"
-    const { promptFor } = makeEnv({ mod, docName: "原件.pdf", dataName: "数据.csv", settings })
+    const { promptFor } = makeEnv({ mod, docName: "原件.pdf", dataFiles: [{ name: "数据.csv" }], settings })
     for (const m of cfg.modes) {
       if (!m.prompt) continue
       const out = promptFor(m.id)
@@ -68,7 +72,7 @@ test("占位符都有值时：全部替换掉，不留任何 {xxx}", () => {
 test("占位符没值时：只删掉它所在的那一句，别把相邻的要求一起吃掉", () => {
   for (const mod of READER_MODS) {
     const cfg = WF.workflowFor(mod, {}).reader
-    // 什么都不给：docName / dataName 空、变量一个没指
+    // 什么都不给：docName 空、一份数值表都没传、变量一个没指
     const { promptFor } = makeEnv({ mod })
     for (const m of cfg.modes) {
       if (!m.prompt) continue
@@ -82,6 +86,19 @@ test("占位符没值时：只删掉它所在的那一句，别把相邻的要�
         `${mod}.${m.id} 占位符没值时，正文里的要求被一起删掉了`)
     }
   }
+})
+
+// 配套数值表是【一组】：一篇稿子的数据常常分散在主表 + 附表 + 随访表里。只把第一份发出去的话，
+// 界面上明明写着"已上传 3 份"，模型却只看得见一份 —— 它不会报错，只会把没看见的当作不存在，
+// 而核查报告读起来完全正常。
+test("配套数值表有多份时：提示词里要全部列出", () => {
+  const { promptFor } = makeEnv({
+    mod: "refcheck", docName: "稿件.docx",
+    dataFiles: [{ name: "主表.xlsx" }, { name: "附表.csv" }],
+  })
+  const out = promptFor("integrity")
+  assert.ok(out.includes("主表.xlsx"), "少了第 1 份数值表")
+  assert.ok(out.includes("附表.csv"), "少了第 2 份数值表 —— 只发第一份等于悄悄漏掉数据")
 })
 
 test("变量对应：指了的列要原样进提示词，没指的不许瞎编", () => {

@@ -71,27 +71,28 @@ const LANG = { id: "lang", label: "输出语言", type: "select", default: "zh",
 //    两年篇均被引作近似分级，所以标签一律写「影响力（近似）」，绝不写成 IF / 分区 ——
 //    那等于凭空造数（不虚构是本平台的硬性规定）。用户传了本机构的分区表才切精确档并标明来源。
 // ② 在 SCI 论文表单里，这组字段紧跟在"目标期刊梯队/具体期刊"后面，实测会被百分之百读成
-//    "我想投的刊影响因子几到几"。所以字段名写死成「**文献来源期刊**的影响力」，并靠 section
-//    分组把它和目标期刊隔开。别为了简洁把"文献来源期刊"这五个字删掉。
+//    "我想投的刊影响因子几到几"。靠 section 分组（"检索到的文献要满足什么条件"）把它和目标
+//    期刊隔开——**这个分组标题是唯一的防误读手段，必须始终挂在本组第一个字段上**。
+//
+// 【2026-08-08 删了 jImpact】原来第一项是「文献来源期刊的影响力（两年篇均被引，近似）」区间输入框，
+// 按用户要求移除：它填的是一个连自己都要在 help 里解释三行"不是影响因子、可能不生效"的近似数，
+// 用户读不懂、填了还常常静默失效。档位（jQuartile）留着够用了。
 const JOURNAL_FILTER = [
   // 标题里【不能出现「影响因子」四个字】，连「非影响因子」这种否定式也不行 ——
   // 任务卡会原样带上这个标签，测试里有专门的守卫防止把近似指标说成影响因子。
-  { id: "jImpact", label: "文献来源期刊的影响力（两年篇均被引，近似）", type: "range", min: 0, max: 100, step: 0.1,
-    unit: "两年篇均被引", section: "检索到的文献要满足什么条件",
-    help: "筛的是检索结果发表在什么刊上，不是你想投的刊。"
-        + "跟影响因子算法思路相近但口径不同，不是官方影响因子。留空 = 不筛。"
-        // ★ 这句必须留着。指标唯一的取数口是 OpenAlex，而它已改成按额度计费；没配额度时
-        //   取数恒 429，本项**静默不生效**——实测勾了 Q1，结果池里混着 Cureus 和一堆 Frontiers，
-        //   而模型只轻描淡写说了句"OpenAlex 限流未能获取指标"，没说"你勾的筛选没起作用"。
-        //   界面上不写清楚，用户就会把一份没筛过的结果当成筛过的。
-        + "⚠️ 该指标取自 OpenAlex，需要该服务的可用额度；取不到时**本项不生效**"
-        + "（结果不会按它过滤），届时报告里会注明。" },
-  { id: "jQuartile", label: "影响力档位（近似）", type: "multi", options: [
+  { id: "jQuartile", label: "影响力档位（近似）", section: "检索到的文献要满足什么条件",
+    type: "multi", options: [
     // 分档要写成互不重叠的区间：原来 Q2「前50%」、Q3「后50%」看着像两段重叠（实测反馈）
     { v: "Q1", t: "前 25%（Q1）" }, { v: "Q2", t: "25%–50%（Q2）" },
     { v: "Q3", t: "50%–75%（Q3）" }, { v: "Q4", t: "后 25%（Q4）" }],
-    help: "按检索结果内部排序分的四档，不是中科院或 JCR 分区，别直接当分区汇报。"
-        + "⚠️ 与上一项同源（OpenAlex），取不到指标时**本项同样不生效**。" },
+    help: "筛的是检索结果发表在什么刊上，不是你想投的刊。"
+        + "按检索结果内部排序分的四档，不是中科院或 JCR 分区，别直接当分区汇报。留空 = 不筛。"
+        // ★ 这句必须留着（原挂在已删除的 jImpact 上）。档位的取数口只有 OpenAlex，而它已改成
+        //   按额度计费；没配额度时取数恒 429，本项**静默不生效**——实测勾了 Q1，结果池里混着
+        //   Cureus 和一堆 Frontiers，而模型只轻描淡写说了句"OpenAlex 限流未能获取指标"，
+        //   没说"你勾的筛选没起作用"。界面上不写清楚，用户就会把一份没筛过的结果当成筛过的。
+        + "⚠️ 档位取自 OpenAlex，需要该服务的可用额度；取不到时**本项不生效**"
+        + "（结果不会按它过滤），届时报告里会注明。" },
   { id: "jOA", label: "只保留开放获取（OA）的文献", type: "bool", default: false,
     help: "OA = 不用订阅就能下全文。勾上能明显提高「全文获取」成功率。" },
 ]
@@ -145,7 +146,7 @@ const LITREAD_MODES = [
     // out = 面板下方列哪些产物。fulltext.md 归导读：它是"读入原文"的成果，
     // 用户想核对"它到底读到了什么"时找的就是这个文件。
     out: "^(reading_guide|fulltext)[^/]*\\.(md|docx|pdf)$",
-    empty: ["还没有导读", "点右边的「文献导读」，让它把这篇文章的核心与论证逻辑理一遍。"],
+    empty: ["还没有导读", "点上方的「开始」，让它把这篇文章的核心与论证逻辑理一遍。"],
     tell: "抽取核心重点、梳理论证逻辑，正文写进回答里，同时存一份 `reading_guide.md`",
     prompt: "请研读我上传的这篇文献 {doc}，做一份**导读**：抽出它的核心重点，把论证逻辑梳理清楚。\n\n"
       + "按这个结构写：\n"
@@ -161,7 +162,7 @@ const LITREAD_MODES = [
       + "写完把这份导读同时存一份 `reading_guide.md`。" },
   { id: "translate", label: "全文翻译", icon: "translate", mark: "【全文翻译】", badge: "逐段全文 · 非摘要",
     file: "^translation.*\\.md$", out: "^translation[^/]*\\.(md|docx|pdf)$",
-    empty: ["还没有译文", "点右边的「全文翻译」，逐段译成中文（不是摘要）。整篇文章要花几分钟。"],
+    empty: ["还没有译文", "点上方的「开始」，逐段译成中文（不是摘要）。整篇文章要花几分钟。"],
     tell: "**逐段全文**翻译（不是摘要、不许跳段），译文写进 `translation_zh.md`，"
       + "回答里只报一句\"已完成、共几节\"，**不要把整篇译文再贴进对话**（界面直接渲染那个文件给用户看）",
     prompt: "把我上传的文献 {doc} **全文**翻译成中文。\n\n"
@@ -177,7 +178,7 @@ const LITREAD_MODES = [
     file: "(^|/)ppt_outline.*\\.md$",
     // ppt-master 把导出的 .pptx 放在 <项目名>/exports/ 下，所以要允许一层子目录
     out: "(^|/)(ppt_outline[^/]*\\.md|[^/]*\\.pptx)$",
-    empty: ["还没有 PPT", "点右边的「演示 PPT」，按这篇文献做一套组会汇报用的片子。这一步最慢，通常要十分钟上下。"],
+    empty: ["还没有 PPT", "点上方的「开始」，按这篇文献做一套组会汇报用的片子。这一步最慢，通常要十分钟上下。"],
     tell: "走 `ppt-master` 技能做汇报用 PPT，另存一份大纲 `ppt_outline.md`",
     prompt: "基于我上传的文献 {doc}，用 `ppt-master` 技能做一套**组会汇报用**的演示 PPT。\n\n"
       + "要求：\n"
@@ -193,7 +194,7 @@ const REFCHECK_MODES = [
   { id: "refs", label: "引用核查", icon: "check", mark: "【引用核查】", badge: "查假引用 · 核 DOI · 撤稿",
     file: "^(refcheck_report|reference_check).*\\.md$",
     out: "^(refcheck_report|reference_check)[^/]*\\.(md|csv|docx|pdf)$",
-    empty: ["还没核查引用", "点右边的「引用核查」，逐条去线上核实这份稿子的参考文献是否真实存在、DOI 对不对、有没有引到撤稿文献。"],
+    empty: ["还没核查引用", "点上方的「开始」，逐条去线上核实这份稿子的参考文献是否真实存在、DOI 对不对、有没有引到撤稿文献。"],
     tell: "用 `reference-check` 技能逐条核实参考文献，报告写成 `refcheck_report.md`",
     prompt: "请核查我上传的稿件 {doc} 的参考文献，用 `reference-check` 技能。\n\n"
       + "逐条核这四件事：\n"
@@ -206,7 +207,7 @@ const REFCHECK_MODES = [
       + "报告写成 `refcheck_report.md`，末尾给一行汇总（共几条、绿黄红各几条、几条未能核实）。" },
   { id: "review", label: "方法与统计审校", icon: "review", mark: "【方法与统计审校】", badge: "投稿前自查 · 找硬伤",
     file: "^review_report.*\\.md$", out: "^review_report[^/]*\\.(md|docx|pdf)$",
-    empty: ["还没审校", "点右边的「方法与统计审校」，按审稿人的眼光找研究设计与统计上的硬伤。"],
+    empty: ["还没审校", "点上方的「开始」，按审稿人的眼光找研究设计与统计上的硬伤。"],
     tell: "用 `peer-review` 技能做投稿前自查，报告写成 `review_report.md`",
     prompt: "请用 `peer-review` 技能审校我上传的稿件 {doc}，按**审稿人**的眼光找硬伤。\n\n"
       + "重点看：研究设计与问题是否匹配、样本量与把握度、统计方法选得对不对（含多重比较、生存分析的前提、"
@@ -218,7 +219,7 @@ const REFCHECK_MODES = [
     file: "^integrity_report.*\\.md$", out: "^(integrity_report[^/]*\\.md|audit/.*)$",
     need: ["data"],
     needHint: "这一项要对着源数据查，请先上传配套的数值表（.xlsx / .csv）。",
-    empty: ["还没做数据自查", "点右边的「数据完整性」，对源数据做一遍数值 sanity check（需要先传数值表）。"],
+    empty: ["还没做数据自查", "点上方的「开始」，对源数据做一遍数值 sanity check（需要先传数值表）。"],
     tell: "用 `data-integrity` 技能对配套数值表做数值完整性自查，报告写成 `integrity_report.md`",
     prompt: "请用 `data-integrity` 技能，对我上传的数值表 {data} 做一遍**投稿前的数值完整性自查**"
       + "（稿件是 {doc}，可对照它报告的数字）。\n\n"
@@ -234,7 +235,7 @@ const HUMANIZE_MODES = [
     "润色稿和改动清单都还在上下文里——可以让它把某一段再改一版，或问某处为什么这么改。"),
   { id: "polish", label: "润色改写", icon: "wand", mark: "【润色改写】", badge: "去 AI 味 · 保住原意",
     file: "(^|/)[^/]*humanized[^/]*\\.md$", out: "(^|/)[^/]*humanized[^/]*\\.(md|docx|pdf)$",
-    empty: ["还没润色", "点右边的「润色改写」，按期刊写作范式改一遍行文，同时把生成式文本的痕迹去掉。"],
+    empty: ["还没润色", "点上方的「开始」，按期刊写作范式改一遍行文，同时把生成式文本的痕迹去掉。"],
     tell: "用 `humanize-academic` 技能改写，成稿写成 `<原名>_humanized.md`",
     prompt: "请用 `humanize-academic` 技能润色我上传的稿件 {doc}。\n\n"
       + "**底线（比任何润色目标都优先）**：\n"
@@ -268,11 +269,11 @@ const HUMANIZE_MODES = [
 ]
 
 const STATS_MODES = [
-  chatMode("基于这份数据", "对着这张表随便问",
+  chatMode("基于这份数据", "对着你的数据随便问",
     "前面跑过的体检、基线表、统计结果都还在上下文里——可以追问某个 p 值怎么来的，或让它换个方法再算一次。"),
   { id: "profile", label: "数据体检", icon: "stethoscope", mark: "【数据体检】", badge: "先查再算",
     file: "^(data_profile|cleaning_log).*\\.md$", out: "^(data_profile|cleaning_log)[^/]*\\.(md|csv)$",
-    empty: ["还没体检", "点右边的「数据体检」。重复 ID 没去、分类水平没归一时，后面每一个 p 值都是错的，而表面看不出来——所以这一步值得先做。"],
+    empty: ["还没体检", "点上方的「开始」。重复 ID 没去、分类水平没归一时，后面每一个 p 值都是错的，而表面看不出来——所以这一步值得先做。"],
     tell: "用 `data-analysis` 做数据体检（缺失 / 异常 / 重复 ID / 分类水平不一致），报告写成 `data_profile.md`",
     prompt: "请对我上传的数据表 {data} 做一遍**数据体检**（`data-analysis` 技能）。{vars}\n\n"
       + "查：每列的缺失率与缺失模式、重复 ID / 重复行、分类变量的水平是否需要归一（如「男 / 男性 / M」）、"
@@ -284,7 +285,7 @@ const STATS_MODES = [
     file: "^table1.*\\.csv$", out: "^table1[^/]*\\.(csv|md|docx)$",
     need: ["var:groupCol"],
     needHint: "基线表的本质是「按组分列对比」，先在上面的「变量对应」里指一下分组列。",
-    empty: ["还没有基线表", "点右边的「基线表」，按分组列出各组的人口学与临床特征，含组间检验与 SMD。"],
+    empty: ["还没有基线表", "点上方的「开始」，按分组列出各组的人口学与临床特征，含组间检验与 SMD。"],
     tell: "用 `clinical-stats` 出 Table 1（含组间检验与 SMD），存成 `table1.csv`",
     prompt: "请用 `clinical-stats` 技能，按 {data} 出一张基线表 Table 1。{vars}\n\n"
       + "连续变量按分布选均值±SD 或中位数(IQR) 并注明用了哪个；分类变量给 n(%)。"
@@ -294,7 +295,7 @@ const STATS_MODES = [
       + "存成 `table1.csv`。" },
   { id: "analyze", label: "统计分析", icon: "chart", mark: "【统计分析】", badge: "组间 / 生存 / ROC / 回归",
     file: "^(analysis|stats_|sample_size).*\\.(md|csv)$", out: "^(analysis|stats_|sample_size)[^/]*\\.(md|csv)$",
-    empty: ["还没跑分析", "点右边的「统计分析」。要做哪些分析、用哪几列，在上面的「变量对应」里指一下。"],
+    empty: ["还没跑分析", "点上方的「开始」。要做哪些分析、用哪几列，在上面的「变量对应」里指一下。"],
     tell: "用 `data-analysis` 跑推断统计（组间比较 / 生存 / ROC / 回归 / 样本量），结果写成 `analysis.md` + `stats_*.csv`",
     prompt: "请用 `data-analysis` 技能对 {data} 做统计分析。{vars}\n\n"
       + "**每一步都要写清用了什么方法、为什么选它、前提是否满足**（正态性 / 方差齐性 / 比例风险假定 / 共线性…）；"
@@ -304,7 +305,7 @@ const STATS_MODES = [
       + "结果写成 `analysis.md`（含方法与解读）+ `stats_*.csv`（可复用的结果表）。" },
   { id: "figure", label: "出版级图", icon: "image", mark: "【出版级图】", badge: "300dpi + 矢量",
     file: null, out: "(^|/)(fig[^/]*|figures/.*)\\.(png|pdf|svg)$",
-    empty: ["还没出图", "点右边的「出版级图」，把结果画成可直接投稿的图（300dpi + 矢量）。"],
+    empty: ["还没出图", "点上方的「开始」，把结果画成可直接投稿的图（300dpi + 矢量）。"],
     tell: "用 `nature-figure` 出投稿级图（300dpi + 矢量），文件名用 `fig1.png` 这类约定名",
     prompt: "请用 `nature-figure` 技能，把上面的分析结果画成**可直接投稿**的图。{vars}\n\n"
       + "300dpi 位图 + 一份矢量（pdf/svg）；字号、线宽、配色按投稿规范；坐标轴与图例要有单位；"
@@ -440,8 +441,9 @@ export const WORKFLOWS = {
             placeholder: "留空则由 AI 依据研究主题自拟检索式" },
           { id: "years", label: "时间范围", type: "select", default: "10", options: [
             { v: "5", t: "近 5 年" }, { v: "10", t: "近 10 年" }, { v: "0", t: "不限" }] },
-          { id: "limit", label: "最多检索多少篇", type: "number", default: 40, min: 5, max: 200, unit: "篇",
-            help: "检索阶段的召回上限；后面还会按条件筛，最终纳入的通常少于这个数。" },
+          // 【2026-08-08 删了 limit】原来这里有个「最多检索多少篇」（默认 40）。写综述没有理由
+          // 给召回设上限——上限只会让"这个方向到底有多少文献"这个问题得到一个由输入框决定的假答案。
+          // 检索脚本现在默认不限条数（命中多少取多少），要收窄就收窄检索式，不靠这个数字。
         ],
         emits: ["evidence_table.csv", "evidence.md", "refs.bib"], render: "evidence",
         hint: "引言与讨论的文献部分基于本步综述撰写；综述单薄是回退触发点" },
@@ -504,8 +506,8 @@ export const WORKFLOWS = {
       { id: "designs", label: "纳入的研究设计", type: "multi", options: [
         { v: "rct", t: "随机对照试验" }, { v: "cohort", t: "队列研究" }, { v: "casecontrol", t: "病例对照" },
         { v: "crosssection", t: "横断面" }, { v: "review", t: "综述 / 指南" }, { v: "basic", t: "基础研究" }] },
-      { id: "limit", label: "最多检索多少篇", type: "number", default: 50, min: 10, max: 300, unit: "篇",
-        help: "指检索阶段的召回上限；后面还会按你的条件筛，最终纳入的通常少于这个数。" },
+      // 【2026-08-08 删了 limit】同 paper 模块：综述的召回不设条数上限（见 JOURNAL_FILTER 上方说明）。
+      // 收窄范围靠时间范围 / 研究设计 / 下面这组期刊条件，不靠"最多多少篇"这个数字。
       ...JOURNAL_FILTER,
       { id: "length", label: "目标篇幅", type: "select", default: "4000", section: "成稿与输出", options: [
         { v: "2000", t: "约 2000 字（短综述）" }, { v: "4000", t: "约 4000 字（推荐）" },
@@ -861,9 +863,9 @@ export const WORKFLOWS = {
     reader: {
       intro: {
         title: "数据统计与分析",
-        lead: "上传一张数据表，先做体检把脏数据挑出来，再出基线表、跑统计、画投稿级图。左边始终摆着你的原表，算出来的每个数都能对回去。",
+        lead: "上传数据表（可以一次传好几张），先做体检把脏数据挑出来，再出基线表、跑统计、画投稿级图。左边始终摆着你的原表，算出来的每个数都能对回去。",
         dropTitle: "点击或拖拽数据表到此处",
-        dropHint: "支持 Excel / CSV（.xlsx · .csv · .tsv）　·　一次一张",
+        dropHint: "支持 Excel / CSV（.xlsx · .xlsm · .csv · .tsv）　·　可多选，进去以后还能加、能删",
         startText: "开始分析",
         chips: [{ t: "数据体检", i: "stethoscope" }, { t: "基线表 Table 1", i: "table" }, { t: "生存 / ROC / 回归", i: "chart" }, { t: "投稿级图表", i: "image" }],
         tip: "建议先跑「数据体检」——重复 ID 没去、分类水平没归一时，后面每个 p 值都是错的，而表面看不出来。<br>算不出来的它会说算不出来，不会给你一个编的数字。",
@@ -871,7 +873,12 @@ export const WORKFLOWS = {
         // 这一题没答之前「开始分析」是灰的。
         ask: ["hasPHI"],
       },
-      source: { kind: "table", field: "dataFiles", accept: ".xlsx,.csv,.tsv,.xls", exts: ["xlsx", "csv", "tsv", "xls"] },
+      // multi:true —— 本模块【收一组表】而不是一张：一份研究的数据常常分散在主表 + 随访表 +
+      // 检验表里，只收一张的话用户只能反复覆盖，传错了还删不掉、只能整个会话重来。
+      // 阅读器壳据此：首屏可多选、左栏顶上出一条文件 chip（点着换看、× 删除、＋ 再传一张），
+      // 发给模型的是【全部】文件名，而"变量对应"的列名读的是当前在看的那张。
+      source: { kind: "table", field: "dataFiles", multi: true,
+        accept: ".xlsx,.xlsm,.csv,.tsv,.xls", exts: ["xlsx", "xlsm", "csv", "tsv", "xls"] },
       first: "profile",
       settings: ["figs", "lang"],
       // ---- 变量对应面板（只有本模块有）----
@@ -886,8 +893,11 @@ export const WORKFLOWS = {
       },
       modes: STATS_MODES,
     },
-    flow: `\n- **本模块 = 分析【用户上传的这张数据表】**，不写论文、不查文献、不润色。`
-      + `\n- **一切结果只能来自这张表**：算不出来的、数据不支持的，直接说算不出来和缺什么。`
+    flow: `\n- **本模块 = 分析【用户上传的数据表】**（可能不止一张），不写论文、不查文献、不润色。`
+      + `\n- **多张表时**：消息里会把本会话的全部表都列出来。**先弄清每张表是什么、能不能按 ID 关联**，`
+      + `再决定用哪张/怎么合；**合表前后的行数变化要报出来**（合错了最常见的症状就是行数悄悄变了）。`
+      + `每个结果都要写清用的是哪张表。用户只提了其中一张时就只用那张，别自作主张把别的表并进去。`
+      + `\n- **一切结果只能来自这些表**：算不出来的、数据不支持的，直接说算不出来和缺什么。`
       + `**绝不许编造样本量、p 值、置信区间或任何一个数字** —— 这里编的数会一路进到投稿稿件里。`
       + readerModeLines(STATS_MODES)
       + `\n- **用户在界面上指定了哪一列是什么，就以他指定的为准**（消息里会带一段「变量对应」）。`

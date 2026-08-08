@@ -79,9 +79,9 @@ button{font:inherit}
    等于跟主操作抢注意力。挪到右上角这个惯常的次要导航位。
    用 fixed 不用 absolute：.intro 自己是可滚动的整屏容器（内容长了会滚），absolute 会让它
    跟着内容滚走。.intro[hidden] 时整屏 display:none，子元素连它一起不渲染，不会漏到阅读器上。 */
-.intronav{position:fixed;top:14px;right:18px;z-index:3;display:flex;align-items:center;gap:8px;margin:0;font-size:12.5px;color:var(--faint)}
-.linkbtn{border:none;background:none;padding:2px 4px;color:var(--muted);cursor:pointer;font-size:12.5px;border-radius:6px}
-.linkbtn:hover{color:var(--accent);text-decoration:underline}
+.intronav{position:fixed;top:14px;right:18px;z-index:3;display:flex;align-items:center;gap:6px;margin:0}
+/* 里面那两个按钮用全局的 .ibtn（见「图标按钮 + 悬停浮出的文字」那一节）。
+   原来的 .linkbtn 文字链已经没有使用者，删掉，别留一条没人用的样式让人以为还有第三种按钮。 */
 
 /* 「最近」下拉。position:fixed + 打开时按触发按钮算坐标 —— 因为这个菜单要被两个位置的按钮
    共用（首屏卡片下方、阅读器的文件工具条），绝对定位就得跟着各自的定位父级走，坐标会打架。 */
@@ -154,6 +154,12 @@ button{font:inherit}
 .setmenu .sf .sh{font-size:11px;color:var(--faint);line-height:1.7;margin-bottom:5px}
 .setmenu select,.setmenu input[type=text]{width:100%;height:32px;border:1px solid var(--line-hi);border-radius:8px;padding:0 9px;font:inherit;font-size:12.5px;background:#fff;color:var(--text)}
 .setmenu .schk{display:flex;align-items:center;gap:7px;font-size:12.5px;color:var(--muted);margin-bottom:4px;cursor:pointer}
+/* 「切到没跑过的模式 → 自动摊开设置」那条路，底部这枚按钮就是"填完了，开跑" */
+.setmenu .sfoot{margin-top:13px;padding-top:12px;border-top:1px solid var(--line)}
+.setmenu .sfoot .st{font-size:11px;color:var(--faint);line-height:1.7;margin-bottom:8px}
+.setmenu .gostart{display:flex;align-items:center;justify-content:center;gap:7px;width:100%;height:34px;border:none;border-radius:9px;background:var(--accent);color:#fff;font:inherit;font-size:13px;font-weight:500;cursor:pointer;transition:background .15s}
+.setmenu .gostart:hover{background:var(--accent-deep)}
+.setmenu .gostart svg{width:13px;height:13px}
 
 /* 变量对应面板（只有 stats）：默认折叠的一条，展开是两列下拉 */
 .varsbox{flex:none;border-bottom:1px solid var(--line);background:#fff}
@@ -169,8 +175,29 @@ button{font:inherit}
 .varsgrid .vf.miss label{color:var(--red);font-weight:600}
 .varsgrid .vf.miss select,.varsgrid .vf.miss input{border-color:var(--red)}
 
-/* 数据表预览（stats 左栏）：xlsx 前端解析不了，只有 csv/tsv 能真渲染成表 */
+/* 多文件条（source.multi 的模块）：已传的每一份一枚 chip，点着切换，× 删除，末尾一个「+ 再传一张」 */
+.filestrip{flex:none;display:flex;align-items:center;gap:6px;padding:7px 12px;overflow-x:auto;
+  border-bottom:1px solid var(--line);background:rgba(231,234,239,.96)}
+.filestrip[hidden]{display:none}
+.filestrip .fchip{display:inline-flex;align-items:center;gap:6px;flex:none;max-width:230px;height:27px;padding:0 4px 0 9px;
+  border:1px solid var(--line);border-radius:8px;background:#fff;color:var(--muted);font-size:12px;cursor:pointer}
+.filestrip .fchip:hover{border-color:var(--line-hi)}
+.filestrip .fchip.on{border-color:var(--accent);color:var(--accent);background:var(--accent-soft);font-weight:600}
+.filestrip .fchip .nm{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.filestrip .fchip .x{width:18px;height:18px;flex:none;border:none;background:none;border-radius:5px;color:var(--faint);
+  cursor:pointer;display:grid;place-items:center;font-size:14px;line-height:1}
+.filestrip .fchip .x:hover{background:#fdecea;color:var(--red)}
+.filestrip .fchip .x:disabled{opacity:.4;cursor:default}
+.filestrip .addf{flex:none;height:27px;padding:0 10px;border:1px dashed var(--line-hi);border-radius:8px;background:none;
+  color:var(--muted);font:inherit;font-size:12px;cursor:pointer}
+.filestrip .addf:hover{border-color:var(--accent);color:var(--accent)}
+.filestrip .addf:disabled{opacity:.5;cursor:default}
+.filestrip .fnote{flex:none;font-size:11.5px;color:var(--faint);margin-left:2px}
+
+/* 数据表预览（stats 左栏）：csv/tsv 直接渲染；xlsx 在前端解压解析后同样渲染成表 */
 .tablewrap{position:absolute;inset:0;overflow:auto;padding:14px 16px;background:#fff}
+.tablewrap .sheetbar{display:flex;align-items:center;gap:8px;margin-bottom:10px;font-size:11.5px;color:var(--muted)}
+.tablewrap .sheetbar select{height:26px;border:1px solid var(--line-hi);border-radius:7px;background:#fff;font:inherit;font-size:12px;padding:0 6px}
 .tablewrap table{border-collapse:collapse;font-size:12px;white-space:nowrap}
 .tablewrap th,.tablewrap td{border:1px solid var(--line);padding:5px 9px;text-align:left}
 .tablewrap th{background:var(--panel-soft);font-weight:600;position:sticky;top:0;z-index:1}
@@ -219,7 +246,7 @@ button{font:inherit}
 .ai-head .title{display:flex;align-items:center;gap:8px;font-size:14px;font-weight:600}
 .ai-head .title svg{width:17px;height:17px;color:var(--accent)}
 .ai-head .badge{font-size:11px;color:var(--faint);background:var(--panel-soft);border:1px solid var(--line);padding:3px 9px;border-radius:999px;white-space:nowrap}
-.ai-head .acts{display:flex;gap:6px}
+.ai-head .acts{display:flex;align-items:center;gap:6px}
 .ai-body{flex:1;overflow:auto;padding:18px 18px 22px;background:var(--panel-soft)}
 .pane{display:none}
 .pane.on{display:block}
@@ -230,7 +257,9 @@ button{font:inherit}
 .spin{width:13px;height:13px;border-radius:50%;border:2px solid var(--line-hi);border-top-color:var(--accent);animation:sp .8s linear infinite;flex:none}
 @keyframes sp{to{transform:rotate(360deg)}}
 .pills{display:flex;flex-wrap:wrap;gap:5px;margin-top:9px}
-.pill{display:inline-flex;align-items:center;gap:5px;font-size:11px;padding:3px 8px;border-radius:999px;background:var(--accent-soft);color:var(--accent);border:1px solid rgba(59,111,212,.25)}
+/* ★ 选择器必须带 .pills：下面「发送 / 终止」那组按钮也叫 .pill，两条同名规则里后写的赢，
+   技能小标签会被套上按钮样式（32px 高、白字白底 = 看不见字）。加一层限定就各归各。 */
+.pills .pill{display:inline-flex;align-items:center;gap:5px;height:auto;min-width:0;font-size:11px;padding:3px 8px;border-radius:999px;background:var(--accent-soft);color:var(--accent);border:1px solid rgba(59,111,212,.25)}
 .runbox details{margin-top:9px}
 .runbox summary{cursor:pointer;font-size:11.5px;color:var(--faint)}
 .runbox .trow{font-size:11.5px;color:var(--muted);padding:3px 0;display:flex;gap:7px}
@@ -240,7 +269,42 @@ button{font:inherit}
 .notebox.warn{background:#fdf3e6;border:1px solid #f0d7ae;color:#8a5a12}
 .notebox.err{background:#fdecea;border:1px solid #f5c2bd;color:var(--red)}
 .notebox.info{background:#fff;border:1px solid var(--line);color:var(--muted)}
-.notebox .blockact{margin-top:10px}
+
+/* ---- 图标按钮 + 悬停浮出的文字 ----
+   工具条上的动作全是图标（换一份 / 最近 / 工作台 / 设置 / 重新生成）。原生 title 要悬停约
+   一秒才出，图标按钮上等于没有提示 —— 用户只能靠猜，猜错的代价是「换一份」把当前会话换掉。
+   所以自己画一个即时浮层：写在 data-tip 上，谁都能用。 */
+.ibtn{position:relative;width:32px;height:32px;flex:none;display:grid;place-items:center;border:1px solid var(--line);border-radius:9px;background:#fff;color:var(--muted);cursor:pointer;transition:color .15s,background .15s,border-color .15s}
+.ibtn:hover:not([disabled]){color:var(--accent);border-color:var(--line-hi);background:var(--panel-soft)}
+.ibtn[disabled]{opacity:.45;cursor:not-allowed}
+.ibtn svg{width:15px;height:15px}
+.ibtn.danger:hover:not([disabled]){color:var(--red);border-color:#f0c4bf;background:#fdecea}
+[data-tip]{position:relative}
+[data-tip]:hover::after{content:attr(data-tip);position:absolute;top:calc(100% + 7px);right:0;z-index:400;padding:5px 9px;border-radius:7px;background:rgba(20,24,30,.92);color:#fff;font-size:11.5px;line-height:1.45;white-space:nowrap;pointer-events:none;box-shadow:var(--shadow-sm)}
+/* 屏幕左半边的按钮把浮层挂到左边，否则贴着窗口右缘会被裁掉 */
+[data-tip].tipL:hover::after{right:auto;left:0}
+
+/* ---- 配套数值表（refcheck 的「数据完整性」）----
+   此前这里只有一个按钮、传完什么都不显示：用户不知道传上去没有、传了几份、传的是不是刚才
+   那一份，更没有办法删掉传错的。改成一张常驻的清单卡：传了什么一目了然，可加可删。 */
+.datacard{background:#fff;border:1px solid var(--line);border-radius:var(--r-md);padding:12px 13px 13px;margin-bottom:14px;box-shadow:var(--shadow-sm)}
+.datacard .dh{display:flex;align-items:baseline;gap:8px;margin-bottom:9px}
+.datacard .dh .t{font-size:12.5px;font-weight:600;color:var(--text)}
+.datacard .dh .n{font-size:11.5px;color:var(--faint)}
+.datacard .dempty{font-size:12px;color:var(--faint);line-height:1.8;padding:2px 0 4px}
+.datacard .drow{display:flex;align-items:center;gap:9px;padding:7px 9px;border:1px solid var(--line);border-radius:var(--r-sm);background:var(--panel-soft);margin-bottom:6px}
+.datacard .drow .fic{width:26px;height:26px;flex:none;border-radius:7px;background:var(--accent-soft);color:var(--accent);display:grid;place-items:center;font-size:9.5px;font-weight:700;letter-spacing:.02em}
+.datacard .drow b{flex:1;min-width:0;font-size:12.5px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.datacard .drow .sz{font-size:11px;color:var(--faint);flex:none;font-variant-numeric:tabular-nums}
+.datacard .drow .del{flex:none;width:26px;height:26px;display:grid;place-items:center;border:none;background:none;border-radius:7px;color:var(--faint);cursor:pointer;transition:.15s}
+.datacard .drow .del:hover{color:var(--red);background:#fdecea}
+.datacard .drow .del[disabled]{opacity:.4;cursor:not-allowed}
+.datacard .drow .del svg{width:14px;height:14px}
+/* 「添加」做成整行的虚线投放位，一眼看得出这里还能再加 —— 比一个灰扑扑的小按钮好认得多 */
+.addbtn{display:flex;align-items:center;justify-content:center;gap:7px;width:100%;padding:9px;border:1px dashed var(--line-hi);border-radius:var(--r-sm);background:none;color:var(--muted);font-size:12.5px;cursor:pointer;transition:.15s}
+.addbtn:hover:not([disabled]){border-color:var(--accent);color:var(--accent);background:var(--accent-soft)}
+.addbtn[disabled]{opacity:.5;cursor:not-allowed}
+.addbtn svg{width:14px;height:14px}
 
 .empty-hint{padding:38px 18px;text-align:center;color:var(--faint);font-size:13px;line-height:2}
 .empty-hint .big{display:block;font-size:14px;color:var(--muted);font-weight:600;margin-bottom:6px}
@@ -408,8 +472,9 @@ button{font:inherit}
     <div class="bar" id="upbar"><i></i></div>
     <div class="err" id="introErr"></div>
 
+    <!-- 首屏这个「开始」与面板头部那个用同一枚实心三角（见 ICON.play 的说明） -->
     <button class="gobtn" id="btnStart" type="button" disabled>
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 3l14 9-14 9V3z"/></svg>
+      <svg viewBox="0 0 24 24" fill="currentColor" stroke="none"><path d="M8 5.5v13a1 1 0 001.53.85l10-6.5a1 1 0 000-1.7l-10-6.5A1 1 0 008 5.5z"/></svg>
       <span id="btnStartTxt">开始</span>
     </button>
 
@@ -417,10 +482,15 @@ button{font:inherit}
     <div class="tip" id="introTip"></div>
   </div>
 
+  <!-- 与阅读器工具条同一套图标 + 悬停浮出文字（.ibtn / [data-tip]）：同一个动作在两屏长同一个样。
+       首屏这两个贴在窗口右上角，浮层照默认往右对齐即可（不会出界）。 -->
   <div class="intronav">
-    <button class="linkbtn" type="button" data-act="recent">最近做过的</button>
-    <span>·</span>
-    <button class="linkbtn" type="button" data-act="ws">回工作台</button>
+    <button class="ibtn" type="button" data-act="recent" data-tip="最近做过的" aria-label="最近做过的">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5.5l3.5 2"/></svg>
+    </button>
+    <button class="ibtn" type="button" data-act="ws" data-tip="回工作台" aria-label="回工作台">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7.5" height="7.5" rx="1.6"/><rect x="13.5" y="3" width="7.5" height="7.5" rx="1.6"/><rect x="3" y="13.5" width="7.5" height="7.5" rx="1.6"/><rect x="13.5" y="13.5" width="7.5" height="7.5" rx="1.6"/></svg>
+    </button>
   </div>
 </div>
 
@@ -442,12 +512,22 @@ button{font:inherit}
         <div class="zval" id="zval">100%</div>
         <button id="zoomIn" title="放大" type="button"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M11 8v6M8 11h6M21 21l-4.3-4.3"/></svg></button>
       </div>
-      <button class="hbtn" id="btnOpenDoc" type="button" title="在新标签打开">原文</button>
       <span class="barsep"></span>
-      <button class="hbtn" type="button" data-act="new" title="换一份（新开一个会话）">换一份</button>
-      <button class="hbtn" type="button" data-act="recent" title="最近做过的">最近</button>
-      <button class="hbtn" type="button" data-act="ws" title="回工作台">工作台</button>
+      <!-- 三个导航动作都是图标 + 悬停浮出文字（见 .ibtn / [data-tip]）。
+           aria-label 不能省：图标按钮没有可读文本，读屏软件只会念出 "button"。 -->
+      <button class="ibtn" type="button" data-act="new" data-tip="换一份（新开一个会话）" aria-label="换一份">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 8h13l-3-3M20 16H7l3 3"/></svg>
+      </button>
+      <button class="ibtn" type="button" data-act="recent" data-tip="最近做过的" aria-label="最近做过的">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5.5l3.5 2"/></svg>
+      </button>
+      <button class="ibtn" type="button" data-act="ws" data-tip="回工作台" aria-label="回工作台">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7.5" height="7.5" rx="1.6"/><rect x="13.5" y="3" width="7.5" height="7.5" rx="1.6"/><rect x="3" y="13.5" width="7.5" height="7.5" rx="1.6"/><rect x="13.5" y="13.5" width="7.5" height="7.5" rx="1.6"/></svg>
+      </button>
     </div>
+    <!-- 多文件模块（source.multi）才出现：已传的每一份都在这条上，点一下换着看，× 删掉传错的。
+         单文件模块（导读/润色/核查）保持原样，这条整条不画。 -->
+    <div class="filestrip" id="fileStrip" hidden></div>
     <div class="docview" id="docView"><div class="docmsg">正在载入…</div></div>
   </div>
 
@@ -457,8 +537,20 @@ button{font:inherit}
       <div class="title" id="paneTitle"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2a10 10 0 100 20 10 10 0 000-20z"/><path d="M12 6v6l4 2"/></svg><span>文献导读</span></div>
       <div class="acts">
         <span class="badge">基于本文</span>
-        <button class="hbtn" id="btnSettings" type="button" title="本模块的设置" hidden>设置</button>
-        <button class="hbtn" id="btnRerun" type="button" hidden>重新生成</button>
+        <!-- 开始 / 终止占同一个位置、互斥显示（与聊天输入框旁那一对同一套图标）。
+             点模式条【不再自动开跑】，这里就是那个"开跑"的入口，data-tip 会写清在跑哪一个。 -->
+        <button class="pill go" id="btnGo" type="button" aria-label="开始" hidden>
+          <svg viewBox="0 0 24 24" fill="currentColor" stroke="none"><path d="M8 5.5v13a1 1 0 001.53.85l10-6.5a1 1 0 000-1.7l-10-6.5A1 1 0 008 5.5z"/></svg><span class="lbl">开始</span>
+        </button>
+        <button class="pill halt" id="btnHalt" type="button" aria-label="终止" hidden>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="6" y="6" width="12" height="12" rx="2"/></svg><span class="lbl">终止</span>
+        </button>
+        <button class="ibtn" id="btnRerun" type="button" data-tip="重新生成" aria-label="重新生成" hidden>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M20 11a8 8 0 10-2.3 6.3"/><path d="M20 4v7h-7"/></svg>
+        </button>
+        <button class="ibtn" id="btnSettings" type="button" data-tip="本模块的设置" aria-label="设置" hidden>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 00.3 1.9l.1.1a2 2 0 11-2.8 2.8l-.1-.1a1.7 1.7 0 00-1.9-.3 1.7 1.7 0 00-1 1.5V21a2 2 0 11-4 0v-.1A1.7 1.7 0 008.9 19a1.7 1.7 0 00-1.9.3l-.1.1a2 2 0 11-2.8-2.8l.1-.1a1.7 1.7 0 00.3-1.9 1.7 1.7 0 00-1.5-1H3a2 2 0 110-4h.1A1.7 1.7 0 004.6 8.9a1.7 1.7 0 00-.3-1.9l-.1-.1a2 2 0 112.8-2.8l.1.1a1.7 1.7 0 001.9.3H9a1.7 1.7 0 001-1.5V3a2 2 0 114 0v.1a1.7 1.7 0 001 1.5 1.7 1.7 0 001.9-.3l.1-.1a2 2 0 112.8 2.8l-.1.1a1.7 1.7 0 00-.3 1.9V9a1.7 1.7 0 001.5 1H21a2 2 0 110 4h-.1a1.7 1.7 0 00-1.5 1z"/></svg>
+        </button>
       </div>
     </div>
 
@@ -491,12 +583,10 @@ button{font:inherit}
       </div>
     </div>
 
-    <!-- 其它模式：状态底栏 -->
+    <!-- 其它模式：状态底栏。★ 只说状态、不再放第二个「终止」——终止统一在上方那一对里，
+         同一个动作在同一屏出现两次时，用户会以为它们不是一回事。没话可说时整条收起来。 -->
     <div class="modefoot" id="modeFoot" hidden>
       <span class="grow" id="modeFootTxt"></span>
-      <button class="pill halt" id="btnStop2" type="button" aria-label="终止" title="终止本次输出" hidden>
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="6" y="6" width="12" height="12" rx="2"/></svg><span class="lbl">终止</span>
-      </button>
     </div>
   </div>
 
@@ -510,7 +600,6 @@ button{font:inherit}
     <div class="pvhead">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><path d="M14 2v6h6"/></svg>
       <span class="nm" id="pvName"></span>
-      <a class="hbtn" id="pvOpen" target="_blank" rel="noopener" hidden>新标签打开</a>
       <a class="hbtn" id="pvDl">下载</a>
       <button class="x" id="pvClose" type="button" aria-label="关闭">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6L6 18M6 6l12 12"/></svg>
@@ -557,6 +646,17 @@ const ICON = {
   // 长同一个样，用户不用重新认。
   eye: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/></svg>',
   download: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v11"/><path d="m7 11 5 4 5-4"/><path d="M5 20h14"/></svg>',
+  // ★ 全站【唯一】的一对开始 / 终止图标：实心三角 + 圆角方块。首屏的「开始」、面板头部的
+  //   开始·终止、聊天输入框旁的终止，全部用这两个，别再各画各的 —— 同一个动作长三种样子时，
+  //   用户每换一个位置都要重新认一遍。
+  play: '<svg viewBox="0 0 24 24" fill="currentColor" stroke="none"><path d="M8 5.5v13a1 1 0 001.53.85l10-6.5a1 1 0 000-1.7l-10-6.5A1 1 0 008 5.5z"/></svg>',
+  stop: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>',
+  swap: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 8h13l-3-3M20 16H7l3 3"/></svg>',
+  clock: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5.5l3.5 2"/></svg>',
+  grid: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7.5" height="7.5" rx="1.6"/><rect x="13.5" y="3" width="7.5" height="7.5" rx="1.6"/><rect x="3" y="13.5" width="7.5" height="7.5" rx="1.6"/><rect x="13.5" y="13.5" width="7.5" height="7.5" rx="1.6"/></svg>',
+  refresh: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M20 11a8 8 0 10-2.3 6.3"/><path d="M20 4v7h-7"/></svg>',
+  trash: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 7h16M9 7V5a1 1 0 011-1h4a1 1 0 011 1v2M6 7l1 13a1 1 0 001 1h8a1 1 0 001-1l1-13"/></svg>',
+  plus: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>',
 }
 const ic = (n) => ICON[n] || ICON.dot
 
@@ -658,9 +758,16 @@ function promptFor(id) {
   const M = MODES[id]
   if (!M || !M.prompt) return ""
   const bq = (n) => "`" + n + "`"
+  // {data}：stats 那种"上传的就是表"的模块用左栏那份；refcheck 用另传的配套数值表 ——
+  // 可以有好几份，全都列出来（只发第一份的话，模型会把其余几份当不存在，用户完全看不出来）。
+  // 多文件模块要把【全部】文件都列出来：只发当前在看的那张，模型会把其余几张当不存在，
+  // 而用户在界面上明明看见传了三张 —— 这种"各说各话"最难被发现。
+  const dnames = CFG.source.kind === "table"
+    ? (docFiles.length ? docFiles.map((f) => f.name) : (docName ? [docName] : []))
+    : dataFiles.map((f) => f.name)
   const map = {
     doc: docName ? bq(docName) : "",
-    data: (CFG.source.kind === "table" ? docName : dataName) ? bq(CFG.source.kind === "table" ? docName : dataName) : "",
+    data: dnames.length ? dnames.map(bq).join("、") : "",
     vars: varsBlock(),
   }
   let t = M.prompt
@@ -695,12 +802,21 @@ const fieldDef = (id) => (CFG && CFG.intake || []).find((f) => f.id === id) || n
    ============================================================ */
 const QS = new URLSearchParams(location.search)
 let sid = QS.get("sid") || null
-let docName = ""          // 左栏那份东西的文件名（会话上传目录里的裸文件名）
+let docName = ""          // 左栏当前在看的那份文件名（会话上传目录里的裸文件名）
 let docSize = null
-let dataName = ""         // 配套数值表（只有 refcheck 的「数据完整性」用得上，见 CFG.extraUpload）
+// 多文件模块（CFG.source.multi，目前是数据分析那类）：本会话里【本模块能处理的全部文件】。
+// 单文件模块这数组恒为 [当前那一份]，界面上那条 chip 条也不画。
+// 【为什么要有它】一份研究的数据常常分散在好几张表里（主表 + 随访表 + 检验表），
+// 只收一张的话用户只能反复覆盖；而传错一张却删不掉，就只能整个会话重来。
+let docFiles = []
+const isMulti = () => !!(CFG && CFG.source && CFG.source.multi)
+// 配套数值表（只有 refcheck 的「数据完整性」用得上，见 CFG.extraUpload）。
+// 是【一组】而不是一份：一篇稿子的数据常常分散在好几张表里（主表 + 附表 + 随访表），
+// 只收一份的话用户只能反复覆盖，最后核的还是残缺的数据。元素形如 { name, size }。
+let dataFiles = []
 let mode = ""
 let turns = 0             // 本会话已经发出过几轮（决定要不要给自由问答补一句上下文）
-let pendingFile = null    // 首屏选中、尚未上传的 File
+let pendingFiles = []     // 首屏选中、尚未上传的 File（多文件模块可以有好几个）
 let outputs = []          // /api/outputs 的最近一次结果
 // 设置弹层 + 变量对应面板的值。它们【就是 intake 的字段值】，改完立刻回写 _workflow.json，
 // 于是 pin:true 的字段（humanize 的 protectRefs、stats 的 hasPHI）每一轮都会被 settingsLine
@@ -750,6 +866,8 @@ function renderIntro() {
   $("dropHint").textContent = I.dropHint
   $("btnStartTxt").textContent = I.startText
   $("file").setAttribute("accept", CFG.source.accept)
+  // 多文件模块首屏就允许一次挑好几张（数据常常分散在主表 + 随访表 + 检验表里）
+  if (isMulti()) $("file").setAttribute("multiple", "multiple"); else $("file").removeAttribute("multiple")
   $("introTip").innerHTML = I.tip || ""
   // chips 支持两种写法：字符串（图标按位置取第 i 个模式，历史写法）或 {t,i}（文字 + 明确的图标名）。
   // 【为什么要有后者】按位置取图标把首屏文案和右侧模式条的【顺序】焊死了 —— 模式条一调顺序，
@@ -786,32 +904,46 @@ function renderIntro() {
 /** 「开始」按钮什么时候能点：文件选了 + 首屏必答题都答了 */
 function syncStart() {
   const asked = (CFG.intro.ask || []).every((id) => SETTINGS[id] !== undefined && SETTINGS[id] !== null && SETTINGS[id] !== "")
-  $("btnStart").disabled = !pendingFile || !asked || busy()
+  $("btnStart").disabled = !pendingFiles.length || !asked || busy()
 }
 
-function pickFile(f) {
-  if (!f) return
-  const ok = okExt()
-  if (!ok.includes(extOf(f.name))) {
-    showIntroErr("这个模块只收 " + ok.map((x) => "." + x).join(" / ") + "，你选的是 ." + (extOf(f.name) || "（无扩展名）"))
-    return
-  }
-  showIntroErr("")
-  pendingFile = f
-  $("pickedSlot").innerHTML =
+/** 已选待传的文件列表（单文件模块永远只有一行；多文件模块可以有好几行，每行都能移除） */
+function renderPicked() {
+  $("pickedSlot").innerHTML = pendingFiles.map((f, i) =>
     // 徽标里放扩展名（PDF / DOCX / XLSX），比一个通用文件图标信息量大：用户一眼能看出传的是不是自己想传的那种
     '<div class="picked"><div class="fic">' + esc(extOf(f.name).toUpperCase().slice(0, 4)) + "</div>"
     + '<div class="fn"><b>' + esc(f.name) + "</b><span>" + fmtSize(f.size) + "</span></div>"
-    + '<button class="rm" type="button" id="rmPick" title="移除">×</button></div>'
-  $("rmPick").addEventListener("click", () => { pendingFile = null; $("pickedSlot").innerHTML = ""; $("file").value = ""; syncStart() })
+    + '<button class="rm" type="button" data-rmpick="' + i + '" title="移除">×</button></div>').join("")
+  $("pickedSlot").querySelectorAll("[data-rmpick]").forEach((b) => b.addEventListener("click", () => {
+    pendingFiles.splice(Number(b.dataset.rmpick), 1)
+    $("file").value = ""          // 同一个文件移除后还要能再选一次（input 的 value 不清就不会触发 change）
+    renderPicked(); syncStart()
+  }))
+}
+
+/** 选中一批文件（单文件模块只取第一个；多文件模块累加，同名的按后来的覆盖） */
+function pickFiles(list) {
+  const files = [...(list || [])]
+  if (!files.length) return
+  const ok = okExt()
+  const bad = files.filter((f) => !ok.includes(extOf(f.name)))
+  const good = files.filter((f) => ok.includes(extOf(f.name)))
+  showIntroErr(bad.length
+    ? "这个模块只收 " + ok.map((x) => "." + x).join(" / ") + "，已跳过：" + bad.map((f) => f.name).join("、")
+    : "")
+  if (!good.length) return
+  pendingFiles = isMulti()
+    ? [...pendingFiles.filter((x) => !good.some((g) => g.name === x.name)), ...good]
+    : [good[0]]
+  renderPicked()
   syncStart()
 }
 
 $("drop").addEventListener("click", () => $("file").click())
-$("file").addEventListener("change", (e) => pickFile(e.target.files && e.target.files[0]))
+$("file").addEventListener("change", (e) => pickFiles(e.target.files))
 ;["dragenter", "dragover"].forEach((t) => $("drop").addEventListener(t, (e) => { e.preventDefault(); $("drop").classList.add("over") }))
 ;["dragleave", "drop"].forEach((t) => $("drop").addEventListener(t, (e) => { e.preventDefault(); $("drop").classList.remove("over") }))
-$("drop").addEventListener("drop", (e) => pickFile(e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0]))
+$("drop").addEventListener("drop", (e) => pickFiles(e.dataTransfer && e.dataTransfer.files))
 
 /** 上传一个文件到本会话（没有 sid 时服务端会现建一个会话并把 id 回给我们，与聊天页同一条路） */
 async function upload(file) {
@@ -825,7 +957,7 @@ async function upload(file) {
 }
 
 $("btnStart").addEventListener("click", async () => {
-  if (!pendingFile || busy()) return
+  if (!pendingFiles.length || busy()) return
   $("btnStart").disabled = true
   $("upbar").classList.add("on")
   showIntroErr("")
@@ -836,16 +968,22 @@ $("btnStart").addEventListener("click", async () => {
   $("btnStartTxt").textContent = "正在上传…"
   const slow = setTimeout(() => { $("btnStartTxt").textContent = "正在准备会话…（首次会慢一些）" }, 1500)
   try {
-    await upload(pendingFile)
+    // 多份就逐个传，并把进度写在按钮上（几十 MB 的表一份份传，用户得知道卡在第几份）
+    for (let i = 0; i < pendingFiles.length; i++) {
+      if (pendingFiles.length > 1) $("btnStartTxt").textContent = `正在上传 ${i + 1}/${pendingFiles.length}…`
+      await upload(pendingFiles[i])
+    }
     clearTimeout(slow); $("btnStartTxt").textContent = startTxt
-    docName = pendingFile.name
-    docSize = pendingFile.size
+    docFiles = pendingFiles.map((f) => ({ name: f.name, size: f.size }))
+    docName = docFiles[0].name
+    docSize = docFiles[0].size
     enterReader()
     // 会话标题：不改名的话它会被自动取成第一条消息的前 40 字，也就是那句长提示词
     // ——「最近」列表里每一条都长一个样，认不出是哪一份。改成文件名。
     // ★ 必须 await：服务端的 ensureSessionTitle 只在标题还是占位值时才补名，且【每会话只尝试一次】。
     //   不等它落地就发第一条消息，两者会撞在一起——补名先跑赢，标题被钉成那句提示词，之后再也改不回来。
-    await fetch("api/session/rename?id=" + encodeURIComponent(sid) + "&title=" + encodeURIComponent(docName.slice(0, 60)), { method: "POST" }).catch(() => {})
+    const title = docName.slice(0, 60) + (docFiles.length > 1 ? ` 等 ${docFiles.length} 份` : "")
+    await fetch("api/session/rename?id=" + encodeURIComponent(sid) + "&title=" + encodeURIComponent(title), { method: "POST" }).catch(() => {})
     if (CFG.source.kind === "table") loadHeaders()   // 读真表头，喂「变量对应」面板的下拉
     setMode(CFG.first)
     run(CFG.first)
@@ -869,9 +1007,107 @@ function enterReader() {
   $("btnSettings").hidden = !(CFG.settings || []).length
   $("varsBox").hidden = !CFG.vars
   if (CFG.vars) { $("varsTitle").textContent = CFG.vars.title; $("varsSub").textContent = CFG.vars.sub; renderVars() }
+  renderStrip()
   renderDoc()
   renderRail()
 }
+
+/* ---- 多文件条：切换 / 删除 / 再添加 ----
+   只有 CFG.source.multi 的模块画它。三件事都在这一条上，因为它们是同一件事的三个面：
+   用户手里有好几张表，要能看清传了哪几张、点开任意一张、把传错的那张删掉。 */
+function renderStrip() {
+  const strip = $("fileStrip")
+  if (!isMulti()) { strip.hidden = true; return }
+  strip.hidden = false
+  const busyNow = busy()
+  strip.innerHTML = docFiles.map((f) =>
+    '<span class="fchip' + (f.name === docName ? " on" : "") + '" data-pick="' + esc(f.name) + '" title="' + esc(f.name) + '">'
+    + '<span class="nm">' + esc(f.name) + "</span>"
+    + '<button type="button" class="x" data-del="' + esc(f.name) + '" aria-label="删除 ' + esc(f.name) + '"'
+    + (busyNow ? " disabled" : "") + ">×</button></span>").join("")
+    + '<button type="button" class="addf" id="addFile"' + (busyNow ? " disabled" : "") + ">＋ 再传一张</button>"
+    + (docFiles.length > 1 ? '<span class="fnote">共 ' + docFiles.length + " 张，都会交给分析；点一张在左边看它</span>" : "")
+  strip.querySelectorAll("[data-pick]").forEach((el) => el.addEventListener("click", (e) => {
+    if (e.target.closest("[data-del]")) return
+    switchDoc(el.dataset.pick)
+  }))
+  strip.querySelectorAll("[data-del]").forEach((b) => b.addEventListener("click", () => removeDocFile(b.dataset.del)))
+  const add = $("addFile"); if (add) add.addEventListener("click", pickMoreDocs)
+}
+
+/** 换一张看（只影响左栏与「变量对应」读哪张表的表头；发给模型的仍是全部） */
+function switchDoc(name) {
+  const f = docFiles.find((x) => x.name === name)
+  if (!f || f.name === docName) return
+  docName = f.name; docSize = f.size
+  $("docName").textContent = docName
+  $("docSub").textContent = [extOf(docName).toUpperCase(), fmtSize(docSize)].filter(Boolean).join(" · ")
+  renderStrip(); renderDoc()
+  if (CFG.source.kind === "table") loadHeaders()
+  saveSettings()
+}
+
+/** 再传一张（可多选）。传完自动切到最后一张，让用户立刻看见自己传上来的是什么。 */
+function pickMoreDocs() {
+  if (busy()) return
+  const inp = document.createElement("input")
+  inp.type = "file"; inp.accept = CFG.source.accept; inp.multiple = true
+  inp.addEventListener("change", async () => {
+    const files = [...(inp.files || [])]
+    if (!files.length) return
+    const ok = okExt()
+    const bad = files.filter((f) => !ok.includes(extOf(f.name)))
+    const good = files.filter((f) => ok.includes(extOf(f.name)))
+    if (bad.length) docMsg("只收 " + ok.map((x) => "." + x).join(" / ") + "；已跳过：" + bad.map((f) => f.name).join("、"))
+    let last = ""
+    for (let i = 0; i < good.length; i++) {
+      const f = good[i]
+      docMsg("正在上传 " + f.name + (good.length > 1 ? "（" + (i + 1) + "/" + good.length + "）" : "") + "…")
+      try {
+        await upload(f)
+        // 同名重传 = 覆盖（服务端按名字落盘），列表里也只留一条，别出现两行同名
+        docFiles = [...docFiles.filter((x) => x.name !== f.name), { name: f.name, size: f.size }]
+        last = f.name
+      } catch (e) {
+        docMsg("上传失败：" + String((e && e.message) || e))
+        renderStrip()
+        return
+      }
+    }
+    saveSettings()
+    if (last) { docName = ""; switchDoc(last) } else { renderStrip(); renderDoc() }
+  })
+  inp.click()
+}
+
+/** 删掉一张（服务端也真删，否则刷新一下它又回来了） */
+async function removeDocFile(name) {
+  if (busy()) return
+  const keep = docFiles.slice()
+  docFiles = docFiles.filter((f) => f.name !== name)
+  const wasCurrent = name === docName
+  if (wasCurrent) {
+    docName = docFiles.length ? docFiles[0].name : ""
+    docSize = docFiles.length ? docFiles[0].size : null
+    $("docName").textContent = docName || "—"
+    $("docSub").textContent = [extOf(docName).toUpperCase(), fmtSize(docSize)].filter(Boolean).join(" · ")
+  }
+  renderStrip(); renderDoc()
+  try {
+    const r = await jget("api/upload/delete?name=" + encodeURIComponent(name) + sidQ(), { method: "POST" })
+    if (!r.ok) throw new Error("HTTP " + r.status)
+    saveSettings()
+    if (wasCurrent && docName && CFG.source.kind === "table") loadHeaders()
+  } catch (e) {
+    docFiles = keep                                   // 删不掉就放回去，别让界面和磁盘对不上
+    if (wasCurrent) { docName = name; docSize = (keep.find((f) => f.name === name) || {}).size }
+    renderStrip(); renderDoc()
+    docMsg("没能删掉 " + name + "（" + String((e && e.message) || e) + "）")
+  }
+}
+
+/** 左栏那块区域里说一句话（上传进度 / 删除失败这类过程消息） */
+function docMsg(t) { $("docView").innerHTML = '<div class="docmsg">' + esc(t) + "</div>" }
 
 /* ---- 左栏：那份东西 ----
    kind=doc   ：pdf 走 api/raw（浏览器自带阅读器）、Word 走 api/preview（服务端转 HTML/PDF）
@@ -881,6 +1117,183 @@ function docUrl() {
   const e = extOf(docName)
   const base = (e === "pdf" || CFG.source.kind === "table") ? "api/raw" : "api/preview"
   return base + "?name=" + encodeURIComponent(docName) + "&dir=up" + sidQ()
+}
+
+/* ---- xlsx 就地预览（不引任何库）----------------------------------------
+   xlsx/xlsm 是一个 zip：里面 xl/worksheets/sheetN.xml 是单元格，xl/sharedStrings.xml 是字符串池。
+   解压用浏览器自带的 DecompressionStream('deflate-raw')（Chromium / WebView2 / 新 Safari 都有），
+   所以不需要 SheetJS 那几百 KB。解析不了就退回一句人话 —— 绝不画一张空表让人以为数据是空的。
+   ⚠ 只做【只读预览】：不求还原公式、样式、合并单元格。日期做了转换（Excel 存的是序列号，
+     不转的话满屏 45123 更看不懂），其余一律按字面显示。 */
+const XLSX_MAX_ROWS = 200
+let XLSX_VIEW = null      // { file, sheets:[{name,rows,total}], cur }
+
+async function inflateRaw(bytes) {
+  if (typeof DecompressionStream === "undefined") throw new Error("这个浏览器不支持内置解压")
+  const s = new Blob([bytes]).stream().pipeThrough(new DecompressionStream("deflate-raw"))
+  return new Uint8Array(await new Response(s).arrayBuffer())
+}
+
+/** zip → Map(路径 → Uint8Array)。只认标准 zip（不处理 zip64；碰上了就抛错走降级文案）。 */
+async function unzip(buf) {
+  const u8 = new Uint8Array(buf), dv = new DataView(buf)
+  let eocd = -1
+  for (let i = u8.length - 22; i >= Math.max(0, u8.length - 66000); i--)
+    if (dv.getUint32(i, true) === 0x06054b50) { eocd = i; break }
+  if (eocd < 0) throw new Error("文件不是有效的 xlsx（找不到 zip 结构）")
+  const count = dv.getUint16(eocd + 10, true)
+  let p = dv.getUint32(eocd + 16, true)
+  if (p === 0xffffffff) throw new Error("这是 zip64 格式的大文件，浏览器这边读不了")
+  const out = new Map(), td = new TextDecoder()
+  for (let i = 0; i < count && p + 46 <= u8.length; i++) {
+    if (dv.getUint32(p, true) !== 0x02014b50) break
+    const method = dv.getUint16(p + 10, true)
+    const csize = dv.getUint32(p + 20, true)
+    const nlen = dv.getUint16(p + 28, true), elen = dv.getUint16(p + 30, true), clen = dv.getUint16(p + 32, true)
+    const lho = dv.getUint32(p + 42, true)
+    const name = td.decode(u8.subarray(p + 46, p + 46 + nlen))
+    p += 46 + nlen + elen + clen
+    // 本地头里的名字/扩展字段长度可能与中央目录不同，数据偏移必须照本地头重算
+    const lnlen = dv.getUint16(lho + 26, true), lelen = dv.getUint16(lho + 28, true)
+    const start = lho + 30 + lnlen + lelen
+    const raw = u8.subarray(start, start + csize)
+    // 只解我们要用的那几个文件：整本解压在几十 MB 的表上是白花几秒
+    if (!/^xl\/(worksheets\/|sharedStrings|styles|workbook)/.test(name) && name !== "xl/_rels/workbook.xml.rels") continue
+    out.set(name, method === 0 ? raw.slice() : await inflateRaw(raw))
+  }
+  return out
+}
+
+const A1COL = (ref) => {              // "BC12" → 列序号（0 基）
+  let n = 0
+  for (const ch of String(ref)) {
+    const c = ch.charCodeAt(0)
+    if (c >= 65 && c <= 90) n = n * 26 + (c - 64); else break
+  }
+  return Math.max(0, n - 1)
+}
+
+/** Excel 序列号 → YYYY-MM-DD[ HH:MM]（1900 历，含它那个著名的 1900-02-29 假闰日） */
+function excelDate(v) {
+  const d = new Date(Math.round((v - 25569) * 86400 * 1000))
+  if (isNaN(d.getTime())) return String(v)
+  const p = (x) => String(x).padStart(2, "0")
+  const ymd = d.getUTCFullYear() + "-" + p(d.getUTCMonth() + 1) + "-" + p(d.getUTCDate())
+  const frac = v - Math.floor(v)
+  return frac > 1e-6 ? ymd + " " + p(d.getUTCHours()) + ":" + p(d.getUTCMinutes()) : ymd
+}
+
+/** 解析出每个工作表的前 XLSX_MAX_ROWS 行（rows 为二维数组，total 为该表的总行数） */
+async function xlsxSheets(buf) {
+  const files = await unzip(buf)
+  const td = new TextDecoder()
+  const xml = (n) => (files.has(n) ? td.decode(files.get(n)) : "")
+  const dom = (s) => new DOMParser().parseFromString(s, "application/xml")
+  const tag = (node, n) => [...node.getElementsByTagName(n)]
+
+  // 字符串池：富文本会被切成多个 <r><t>，拼起来才是完整一格
+  const shared = []
+  const ss = xml("xl/sharedStrings.xml")
+  if (ss) for (const si of tag(dom(ss), "si")) shared.push(tag(si, "t").map((t) => t.textContent).join(""))
+
+  // 哪些 style 是日期格式：内置 14–22 / 45–47，外加自定义格式里带 y-m-d 的
+  const dateStyles = new Set()
+  const st = xml("xl/styles.xml")
+  if (st) {
+    const sdoc = dom(st)
+    const custom = new Map()
+    for (const f of tag(sdoc, "numFmt")) {
+      const code = f.getAttribute("formatCode") || ""
+      if (/[ymdhs]/i.test(code.replace(/\[[^\]]*\]|"[^"]*"/g, "")) && !/^[#0.,%]+$/.test(code))
+        custom.set(f.getAttribute("numFmtId"), true)
+    }
+    const cellXfs = sdoc.getElementsByTagName("cellXfs")[0]
+    if (cellXfs) tag(cellXfs, "xf").forEach((xf, i) => {
+      const id = xf.getAttribute("numFmtId") || "0"
+      const n = Number(id)
+      if ((n >= 14 && n <= 22) || (n >= 45 && n <= 47) || custom.has(id)) dateStyles.add(i)
+    })
+  }
+
+  // 工作表清单与顺序：workbook.xml 的 <sheet r:id> → rels 里的 Target
+  const rels = new Map()
+  const rl = xml("xl/_rels/workbook.xml.rels")
+  if (rl) for (const r of tag(dom(rl), "Relationship"))
+    rels.set(r.getAttribute("Id"), (r.getAttribute("Target") || "").replace(/^\/?xl\//, "").replace(/^\.\//, ""))
+  let entries = []
+  const wb = xml("xl/workbook.xml")
+  if (wb) for (const s of tag(dom(wb), "sheet")) {
+    const rid = s.getAttribute("r:id") || s.getAttributeNS("http://schemas.openxmlformats.org/officeDocument/2006/relationships", "id")
+    const target = rels.get(rid)
+    if (target) entries.push({ name: s.getAttribute("name") || target, path: "xl/" + target })
+  }
+  if (!entries.length)   // workbook.xml 读不出来就按文件名兜底
+    entries = [...files.keys()].filter((k) => /^xl\/worksheets\/sheet\d+\.xml$/.test(k)).sort()
+      .map((k, i) => ({ name: "工作表 " + (i + 1), path: k }))
+
+  const sheets = []
+  for (const en of entries) {
+    const body = xml(en.path)
+    if (!body) continue
+    const rowsXml = tag(dom(body), "row")
+    const rows = []
+    for (const r of rowsXml) {
+      if (rows.length >= XLSX_MAX_ROWS) break
+      const line = []
+      for (const c of tag(r, "c")) {
+        const ref = c.getAttribute("r") || ""
+        const idx = ref ? A1COL(ref) : line.length
+        const t = c.getAttribute("t") || ""
+        const sIdx = Number(c.getAttribute("s") || "-1")
+        let val = ""
+        if (t === "inlineStr") val = tag(c, "t").map((x) => x.textContent).join("")
+        else {
+          const v = c.getElementsByTagName("v")[0]
+          const raw = v ? v.textContent : ""
+          if (t === "s") val = shared[Number(raw)] ?? ""
+          else if (t === "b") val = raw === "1" ? "TRUE" : "FALSE"
+          else if (t === "e") val = raw                     // 错误值（#DIV/0! 等）原样显示
+          else if (raw !== "" && dateStyles.has(sIdx) && !isNaN(Number(raw))) val = excelDate(Number(raw))
+          else val = raw
+        }
+        while (line.length < idx) line.push("")
+        line[idx] = val
+      }
+      rows.push(line)
+    }
+    sheets.push({ name: en.name, rows, total: rowsXml.length })
+  }
+  return sheets
+}
+
+/** 把当前选中的工作表画出来（多表时上面带一个切换下拉） */
+function renderXlsxSheet() {
+  const V = XLSX_VIEW
+  if (!V) return
+  const sh = V.sheets[V.cur] || V.sheets[0]
+  const rows = sh.rows.filter((r) => r.some((c) => String(c || "").trim() !== ""))
+  const width = rows.reduce((m, r) => Math.max(m, r.length), 0)
+  let h = '<div class="tablewrap">'
+  if (V.sheets.length > 1) {
+    h += '<div class="sheetbar"><span>工作表</span><select id="xlsxSheet">'
+      + V.sheets.map((s, i) => '<option value="' + i + '"' + (i === V.cur ? " selected" : "") + ">" + esc(s.name) + "</option>").join("")
+      + "</select><span>共 " + V.sheets.length + " 个</span></div>"
+  }
+  if (!rows.length) h += '<div class="docmsg">这个工作表是空的</div>'
+  else {
+    const head = rows[0], body = rows.slice(1)
+    const cell = (r, i) => esc(r[i] == null ? "" : String(r[i]))
+    h += "<table><thead><tr>"
+      + Array.from({ length: width }, (_, i) => "<th>" + cell(head, i) + "</th>").join("")
+      + "</tr></thead><tbody>"
+      + body.map((r) => "<tr>" + Array.from({ length: width }, (_, i) => "<td>" + cell(r, i) + "</td>").join("") + "</tr>").join("")
+      + "</tbody></table>"
+    if (sh.total > XLSX_MAX_ROWS)
+      h += '<div class="more">只显示前 ' + XLSX_MAX_ROWS + " 行（这张表共 " + sh.total + " 行）——完整的表交给分析那边读，不受这里影响。</div>"
+  }
+  $("docView").innerHTML = h + "</div>"
+  const sel = $("xlsxSheet")
+  if (sel) sel.addEventListener("change", () => { XLSX_VIEW.cur = Number(sel.value); renderXlsxSheet() })
 }
 
 /** csv/tsv → 表格。只画前 200 行：几万行的表全塞进 DOM 会把页面卡死，而左栏是用来"对着看"的。 */
@@ -904,7 +1317,10 @@ function renderCsv(text, sep) {
 
 async function renderDoc() {
   const view = $("docView")
-  if (!docName) { view.innerHTML = '<div class="docmsg">还没有文件</div>'; return }
+  if (!docName) {
+    view.innerHTML = '<div class="docmsg">' + (isMulti() ? "还没有文件——点上面的「＋ 再传一张」传一份进来。" : "还没有文件") + "</div>"
+    return
+  }
   const e = extOf(docName)
 
   if (CFG.source.kind === "table") {
@@ -921,12 +1337,36 @@ async function renderDoc() {
       }
       return
     }
-    // xlsx/xls：解析它要一个几百 KB 的前端库，为了一个只读预览不值得；而且服务端的
-    // /api/data/headers 对 xlsx 也明说了"读不了、交给 AI 在分析时读"。这里如实讲，别装作能预览。
-    view.innerHTML = '<div class="docmsg">Excel 表格（.' + esc(e) + '）在这里没法直接预览。<br><br>'
+    // xlsx/xlsm：就地解析、渲染成表。xlsx 本身是个 zip，解压用浏览器自带的
+    // DecompressionStream('deflate-raw')，所以【不引任何前端库】也能读（见 xlsxSheets）。
+    // 旧版在这里只放一句"没法预览"，于是用户传了 xlsx 之后左边整片是灰的 —— 而这个模块的
+    // 全部价值就是"左边摆着你的原表，算出来的数能对回去"。老的 .xls（BIFF 二进制，不是 zip）
+    // 仍然读不了，那种情况照旧如实说明。
+    if (["xlsx", "xlsm"].includes(e)) {
+      view.innerHTML = '<div class="docmsg">正在读表…</div>'
+      try {
+        const r = await jget(docUrl())
+        if (!r.ok) throw new Error("HTTP " + r.status)
+        const sheets = await xlsxSheets(await r.arrayBuffer())
+        if (!sheets.length) throw new Error("这个工作簿里没有工作表")
+        XLSX_VIEW = { file: docName, sheets, cur: 0 }
+        renderXlsxSheet()
+        // 顺便把真表头喂给「变量对应」的下拉：服务端读不了 xlsx（不背二进制解析依赖），
+        // 此前 xlsx 一律降级成手填列名 —— 而"列名写错"正是这个模块最高频的失败模式。
+        const head = (sheets[0].rows[0] || []).map((x) => String(x == null ? "" : x).trim()).filter(Boolean)
+        if (head.length && CFG.vars) { HEADERS = head; HEADERS_WHY = ""; renderVars() }
+      } catch (err) {
+        if (String((err && err.message) || err) === "unauthorized") return
+        view.innerHTML = '<div class="docmsg">这个 Excel 表在浏览器里没能解析（' + esc(String((err && err.message) || err)) + '）。<br><br>'
+          + '<b>不影响分析</b>——右边每个模式读的都是文件本身。<br>'
+          + '想核对内容可以点右上角「原文」下载，或先跑一次「数据体检」，它会把每一列的类型、缺失与分布都列出来。</div>'
+      }
+      return
+    }
+    // 老的 .xls（BIFF 二进制，不是 zip）：如实讲，别装作能预览
+    view.innerHTML = '<div class="docmsg">老格式的 Excel（.' + esc(e) + '）在这里没法直接预览。<br><br>'
       + '<b>不影响分析</b>——右边每个模式读的都是文件本身。<br>'
-      + '想核对内容可以点右上角「原文」下载，或先跑一次「数据体检」，它会把每一列的类型、缺失与分布都列出来。<br>'
-      + '（要在左栏直接看表，把数据另存成 .csv 再传一次即可。）</div>'
+      + '想在左栏直接看表，用 Excel 另存为 .xlsx 或 .csv 再传一次即可。</div>'
     return
   }
 
@@ -972,10 +1412,13 @@ function applyZoom() {
 }
 $("zoomIn").addEventListener("click", () => { zoom = Math.min(2, +(zoom + 0.1).toFixed(2)); applyZoom() })
 $("zoomOut").addEventListener("click", () => { zoom = Math.max(0.6, +(zoom - 0.1).toFixed(2)); applyZoom() })
-$("btnOpenDoc").addEventListener("click", () => { if (docName) window.open(docUrl(), "_blank", "noopener") })
+// （原来这里还有一个「原文」按钮，用 window.open 把原件开到新标签。已按要求撤掉：
+//   左栏本来就在显示这份原文，而在桌面壳里 target=_blank 那条路未必通。）
 
 /* ---- 右栏：模式条 ---- */
 function renderRail() {
+  // 跑起来 / 跑完时按钮的可点状态会变（跑的过程中不许删文件），顺手把文件条也重画一遍
+  renderStrip()
   const rail = $("rail")
   rail.innerHTML = ""
   ORDER.forEach((k) => {
@@ -1003,18 +1446,36 @@ function blockedBy(k) {
   const M = MODES[k]
   const miss = []
   for (const n of M.need || []) {
-    if (n === "data" && !dataName) miss.push({ kind: "data" })
+    if (n === "data" && !dataFiles.length) miss.push({ kind: "data" })
     else if (n.startsWith("var:")) { const f = n.slice(4); const v = SETTINGS[f]; if (v === undefined || v === null || v === "" || (Array.isArray(v) && !v.length)) miss.push({ kind: "var", field: f }) }
     else if (n.startsWith("after:")) { const m2 = n.slice(6); if (!S[m2] || S[m2].status === "idle") miss.push({ kind: "after", mode: m2 }) }
   }
   return miss.length ? miss : null
 }
 
-/** 点模式按钮：切过去看；该模式还没跑过、也不缺前置条件，就顺手跑一轮（智能助手除外——它等用户开口） */
+/**
+ * 点模式按钮：【只切过去看，不开跑】。
+ * ★ 这里原来是"没跑过就顺手跑一轮"。改掉的原因：点一下模式条就直接开始，等于用户还没看清
+ *   这个模式要干什么、也还没来得及改设置/补数值表，一轮就已经发出去了（花掉额度，且要停下来
+ *   得再找终止按钮）。现在切过去只看到空面板 + 上方的「开始」，什么时候跑由用户说了算。
+ *   面板中央那个大按钮和上方的「开始」是同一件事，都走 tryRun。
+ */
 function onRail(k) {
+  const fresh = S[k] && S[k].status === "idle"     // 这个模式还一轮都没跑过
   setMode(k)
   if (k === "chat") { $("q").focus(); return }
-  if (S[k].status === "idle") tryRun(k)     // 没跑过就顺手跑一轮；闸由 tryRun 统一把
+  // 没跑过 → 把设置摊开：这些口径（严格程度 / 语言 / 是否保护引用）跑完再改就得整轮重来，
+  // 所以先问一遍，用户填完点弹层里的「开始」就直接开跑。
+  // ★ 只在这里做。setMode 还会被恢复会话、首次进入调用，那两处弹出来纯属打扰。
+  // 模块没有任何设置项时不弹空弹层，用户照常点头部的「开始」。
+  // ★ 必须延到本次点击【冒泡完】再弹：document 上那个"点空白处收起菜单"的监听会在本函数
+  //   返回之后才跑（模式条按钮身上没有 data-act），同步打开的话会被它当场关掉 —— 表现就是
+  //   "点了模式条，设置闪一下就没了"。
+  //   settingsSeen() 也必须在延迟【之后】判：从一个开着设置的模式切过来时，"用户已看过"这件事
+  //   正是由那个 document 监听记下的，同步判会读到旧值，于是一模一样的设置又弹一遍。
+  if (fresh && !busy() && (CFG.settings || []).length) {
+    setTimeout(() => { if (!settingsSeen()) openSettings(true) }, 0)
+  }
 }
 
 /** 缺前置条件：就地说清缺什么、并把用户送到能补上它的地方（展开变量面板 / 亮出上传按钮） */
@@ -1045,9 +1506,8 @@ function setMode(k) {
   $("paneTitle").innerHTML = M.icon + "<span>" + esc(M.label) + "</span>"
   document.querySelector(".ai-head .badge").textContent = M.badge
   $("composer").hidden = k !== "chat"
-  $("modeFoot").hidden = k === "chat"
-  // 「重新生成」只对三个自动模式有意义；正在跑的时候不给点，避免同一模式起两轮
-  $("btnRerun").hidden = k === "chat" || S[k].status === "idle"
+  // 头部那几个按钮（开始 / 终止 / 重新生成）与底栏的显隐都由 updateFoot 一处决定，
+  // 别在这里再写一遍：两处各判一次，迟早会出现"切模式时对、跑完又不对"的错位。
   renderRail()
   render(k)
   $("aiBody").scrollTop = 0
@@ -1068,12 +1528,18 @@ function tryRun(k, force) {
   run(k, force)
 }
 $("btnRerun").addEventListener("click", () => tryRun(mode, true))
-// 空面板里那个按钮（每次重画都会换一个 DOM 节点，所以用委托，别逐个绑）
+$("btnGo").addEventListener("click", () => tryRun(mode))
+$("btnHalt").addEventListener("click", abortRun)
+// 面板里那些按钮每次重画都会换一个新的 DOM 节点，所以一律走委托，别逐个绑
 $("aiBody").addEventListener("click", (e) => {
   const b = e.target.closest("[data-run]")
   if (b) { tryRun(b.dataset.run); return }
-  const p = e.target.closest("[data-pv]")            // 产物那一行的「查看」（同样是每轮重画，走委托）
-  if (p) openPv(p.dataset.pv)
+  const p = e.target.closest("[data-pv]")            // 产物那一行的「预览」
+  if (p) { openPv(p.dataset.pv); return }
+  const add = e.target.closest("[data-dataadd]")     // 配套数值表：添加
+  if (add) { pickDataFiles(); return }
+  const del = e.target.closest("[data-datadel]")     // 配套数值表：移除某一份
+  if (del) removeDataFile(del.dataset.datadel)
 })
 
 /* ============================================================
@@ -1135,10 +1601,6 @@ async function openPv(name) {
   $("pvName").textContent = name
   $("pvDl").href = "api/download" + q
   const e = extOf(name)
-  // 「新标签打开」只给浏览器真能显示的类型；md/csv 那些给了也只是又下载一次，反而更像坏了
-  const openable = PV_PDF.test(name) || PV_HTML.test(name) || PV_IMG.test(name)
-  $("pvOpen").hidden = !openable
-  if (openable) $("pvOpen").href = "api/raw" + q
   $("pvMask").classList.add("on")
   body.className = "pvbody"
   body.innerHTML = '<div class="pvmsg">正在打开…</div>'
@@ -1182,8 +1644,10 @@ function emptyHtml(m) {
   // 这个按钮在忙的时候是禁用态并写明在等谁，忙完点它就能开跑。
   const btn = m === "chat" ? ""
     : '<div style="margin-top:16px"><button class="hbtn" data-run="' + m + '"' + (busy() ? " disabled" : "") + ">"
+      // 带上与头部「开始」同一枚三角：这两个按钮做的是同一件事，别让人以为是两个入口。
       // 按钮文字直接用模式名。别拼成"开始"+模式名——「开始基线表」「开始数据完整性」都不是人话，
       // 而这几个名字本身就是动宾结构，单独摆着就是一个动作。忙的时候写明在等谁。
+      + (busy() ? "" : ICON.play)
       + (busy() ? "等「" + esc(MODES[RUN ? RUN.mode : CFG.first].label) + "」跑完" : esc(MODES[m].label)) + "</button></div>"
   return '<div class="empty-hint"><span class="big">' + esc(big) + "</span>" + esc(sub) + btn + "</div>"
 }
@@ -1197,12 +1661,10 @@ function render(m) {
   //   没有任何渲染代码读它 —— 于是用户点了按钮，界面纹丝不动、只剩一句通用空态文案，
   //   完全不知道是缺了分组列还是缺了数值表。（我自己也差点漏过：当时是从 S[k].block
   //   这个状态确认"闸生效"的，而屏幕上根本没有这句话。看状态不等于看见。）
-  if (s.block) {
-    h += '<div class="notebox warn">' + esc(s.block)
-      // 缺配套文件时就地给一个上传按钮，别让用户读完提示还得自己找地方传
-      + ((s.blockMiss || []).some((x) => x.kind === "data") ? '<div class="blockact" data-upload="1"></div>' : "")
-      + "</div>"
-  }
+  if (s.block) h += '<div class="notebox warn">' + esc(s.block) + "</div>"
+  // 配套数值表的清单卡：需要它的模式一直摆在最上面（不是"缺了才出现"），
+  // 传了哪几份、还能不能再加、想删哪一份，全在这张卡里，用户不必读完警告再去找地方传。
+  h += dataCardHtml(m)
   if (s.err) h += '<div class="notebox err">⚠ ' + esc(s.err) + "</div>"
   // 正文优先用产物文件（翻译/大纲是写进文件的，对话里只有一句"已完成"），没有就用对话正文
   const body = s.doc != null ? s.doc : s.raw
@@ -1214,13 +1676,10 @@ function render(m) {
   } else if (s.status !== "idle" && !s.err) {
     h += '<div class="notebox warn">这一轮没有产出可显示的正文。可以点右上角「重新生成」再来一次。</div>'
   } else if (s.status === "idle") {
-    h = emptyHtml(m) + h
+    h += emptyHtml(m)   // 空态摆在数值表清单【之后】：先看到"要传什么/传了什么"，再看到"点这里开始"
   }
   h += filesHtml(s.files)
   el.innerHTML = h
-  // 上传按钮是带监听的真 DOM 节点，塞不进 innerHTML 字符串里，重画完再挂进占位槽
-  const slot = el.querySelector("[data-upload]")
-  if (slot) { const b = extraUploadBtn(); if (b) slot.appendChild(b) }
   updateFoot()
 }
 
@@ -1241,23 +1700,40 @@ function renderChat() {
   updateFoot()
 }
 
+/**
+ * 头部按钮 + 底栏的显隐【只在这里判一次】。规则：
+ *   智能助手：头部三个按钮全收起（它的开跑入口是输入框旁边的发送）。
+ *   其它模式：还没跑过 → 只有「开始」；正在跑这一个 → 只有「终止」；跑完 / 出错 → 只有「重新生成」。
+ *            别的模式在跑时，「开始」留着但置灰，并在提示里写清在等谁 —— 直接藏掉的话，
+ *            用户会以为这个模式坏了。
+ */
 function updateFoot() {
   const running = !!RUN
-  // 发送与终止共用同一个位置，互斥显示（与工作台的 setStreamingUI 同一套规矩）：
-  // 一开跑就把「发送」收起来、原地换成「终止」，用户不用再去别处找停止的入口。
+  // 聊天：发送与终止共用同一个位置，互斥显示（与工作台的 setStreamingUI 同一套规矩）
   $("btnSend").hidden = running
   $("btnStop").hidden = !running
-  $("btnStop2").hidden = !running
   $("btnSend").disabled = busy()
-  $("btnRerun").hidden = mode === "chat" || S[mode].status === "idle" || busy()
+
+  const mine = !!RUN && RUN.mode === mode                 // 正在跑的就是当前这个模式
+  const s = mode === "chat" ? null : S[mode]
+  $("btnHalt").hidden = mode === "chat" || !mine
+  $("btnGo").hidden = mode === "chat" || mine || (s && s.status !== "idle")
+  // 别的模式在跑 → 置灰。此时 .pill 的悬停展开是不生效的（:hover:not([disabled])），
+  // 所以"在等谁"这句话必须由下面的底栏说出来，不能只指望这个按钮。
+  $("btnGo").disabled = busy()
+  $("btnRerun").hidden = mode === "chat" || !s || s.status === "idle" || busy()
+
+  let foot = ""
   if (mode !== "chat") {
-    const s = S[mode]
-    $("modeFootTxt").textContent = RUN && RUN.mode === mode ? RUN.label
+    foot = mine ? RUN.label
       : RUN ? "「" + MODES[RUN.mode].label + "」正在跑，跑完才能开下一轮"
       : s.status === "done" ? "已完成。想追问就点右边的「智能助手」。"
       : s.status === "error" ? "上一轮没有正常结束。"
       : ""
   }
+  $("modeFootTxt").textContent = foot
+  // 没话可说时整条收起来：还没开跑的空面板底下挂一条空白栏，只会让人以为这里少了点什么
+  $("modeFoot").hidden = mode === "chat" || !foot
 }
 
 /** 滚到底（用户往上翻看内容时不要把他拽回来） */
@@ -1469,8 +1945,7 @@ async function abortRun() {
   if (!sid || !RUN) return
   try { await jget("api/chat/abort?sid=" + encodeURIComponent(sid), { method: "POST" }) } catch (_) {}
 }
-$("btnStop").addEventListener("click", abortRun)
-$("btnStop2").addEventListener("click", abortRun)
+$("btnStop").addEventListener("click", abortRun)   // 聊天输入框旁那一个（头部那个在 btnHalt 上绑）
 
 /* ---- 智能助手：发消息 ---- */
 const qEl = $("q")
@@ -1512,13 +1987,17 @@ async function restore() {
   } catch (e) { return false }
 
   const list = Array.isArray(ups) ? ups : []
-  const doc = list.find((f) => okExt().includes(extOf(f.name)))
-  if (!doc) return false                       // 这个会话里没有本模块能处理的文件 → 回首屏让他传一份
-  docName = doc.name; docSize = doc.size
-  // 配套数值表（refcheck）：上传目录里另一个符合 extraUpload 扩展名的文件
+  const mine = list.filter((f) => okExt().includes(extOf(f.name)))
+  if (!mine.length) return false               // 这个会话里没有本模块能处理的文件 → 回首屏让他传一份
+  // 多文件模块：本模块能处理的【全部】文件都要回来。只认第一个的话，刷新一次页面其余几张
+  // 既不显示、也不会随提示词发给模型，而用户完全看不出少了东西。
+  docFiles = (isMulti() ? mine : mine.slice(0, 1)).map((f) => ({ name: f.name, size: f.size }))
+  docName = docFiles[0].name; docSize = docFiles[0].size
+  // 配套数值表（refcheck）：上传目录里除原文之外、扩展名对得上的【全部】文件。
+  // 只找第一个的话，刷新一次页面就只剩一份，另外几份既不显示也不会发给模型。
   if (CFG.extraUpload) {
-    const d2 = list.find((f) => f.name !== docName && CFG.extraUpload.exts.includes(extOf(f.name)))
-    if (d2) dataName = d2.name
+    dataFiles = list.filter((f) => f.name !== docName && CFG.extraUpload.exts.includes(extOf(f.name)))
+      .map((f) => ({ name: f.name, size: f.size }))
   }
 
   // 已落盘的表单值（设置 / 必答题 / 变量对应）。刷新页面、换台机器打开同一个会话，
@@ -1624,7 +2103,9 @@ document.addEventListener("click", (e) => {
   // 用户永远选不中任何一项。
   if (e.target.closest && e.target.closest(".menu")) return
   const btn = e.target.closest("[data-act]")
-  if (!btn) { closeMenu(); return }               // 点空白处收起菜单
+  // 点空白处收起菜单。设置弹层是被这样收掉的，也算"他看过这套设置了"——
+  // 自动弹出来的那次多半就是这么关掉的，不记的话每切一个模式都会再弹一遍同样的东西。
+  if (!btn) { if (setMenu.classList.contains("on")) markSettingsSeen(); closeMenu(); return }
   e.stopPropagation()
   if (btn.dataset.act === "ws") { location.href = "./workspace.html"; return }
   if (btn.dataset.act === "new") {
@@ -1642,8 +2123,13 @@ addEventListener("resize", closeMenu)             // fixed 定位的菜单不会
 /** 本会话要落盘的表单值 = 设置弹层 + 首屏必答题 + 变量对应，再加上左栏那份文件 */
 function wfFormValues() {
   const v = { ...SETTINGS }
-  if (CFG.source.field && docName) v[CFG.source.field] = [docName]
-  if (CFG.extraUpload && dataName) v[CFG.extraUpload.field] = [dataName]
+  // 多文件模块把全部文件写进去（服务端的列名体检、任务卡都读这个字段）；
+  // 并用 __src_<字段id> 告诉服务端"变量对应里的列名读的是哪一张表"——它认这个键（见 server.mjs）。
+  if (CFG.source.field && docFiles.length) {
+    v[CFG.source.field] = docFiles.map((f) => f.name)
+    if (isMulti() && docName) for (const f of (CFG.vars && CFG.vars.fields) || []) v["__src_" + f] = docName
+  } else if (CFG.source.field && docName) v[CFG.source.field] = [docName]
+  if (CFG.extraUpload && dataFiles.length) v[CFG.extraUpload.field] = dataFiles.map((f) => f.name)
   return v
 }
 
@@ -1745,9 +2231,38 @@ function renderVars(missing) {
 }
 
 const setMenu = $("setMenu")
-$("btnSettings").addEventListener("click", (e) => {
-  e.stopPropagation()
-  if (setMenu.classList.contains("on")) { setMenu.classList.remove("on"); return }
+
+/* ---- 「这套设置我已经确认过了」的记忆 ----
+   设置是【模块级】的：refcheck 的严格度 / 语言，四个模式共用同一份。所以第一次摊开、用户看过
+   之后，再切到别的模式不该把一模一样的东西再问一遍 —— 那不是"确认"，是骚扰，而且会训练用户
+   闭着眼把弹层点掉，真正需要他看一眼的那次也就跟着被点掉了。
+   记的是【字段 + 取值】的指纹，不是模块 id：于是换个模块只要这套设置完全一样（比如同样只有一个
+   「输出语言＝中文」），也照样不再打扰；而只要有一项取值不同，指纹就变了，会重新问一次。
+   落在 localStorage：换会话、明天再来都算数（"已经在别处填过"本来就是跨会话的记忆）。 */
+const SEEN_KEY = "reader.settingsSeen"
+function settingsSig() {
+  const ids = CFG.settings || []
+  if (!ids.length) return ""
+  return ids.map((id) => id + "=" + JSON.stringify(SETTINGS[id] === undefined ? null : SETTINGS[id])).join("|")
+}
+function seenSet() { try { return new Set(JSON.parse(localStorage.getItem(SEEN_KEY) || "[]")) } catch (_) { return new Set() } }
+function settingsSeen() { const s = settingsSig(); return !!s && seenSet().has(s) }
+/** 用户看过这套设置了（点了里面的「开始」，或者看完把它收起来）——下次别再自动弹同一套 */
+function markSettingsSeen() {
+  const s = settingsSig(); if (!s) return
+  try {
+    const set = seenSet(); set.add(s)
+    localStorage.setItem(SEEN_KEY, JSON.stringify([...set].slice(-40)))   // 只留最近 40 条，别无限长
+  } catch (_) { /* 隐私模式下写不了 localStorage：那就每次都问一遍，不影响功能 */ }
+}
+
+/**
+ * 打开设置弹层。
+ * @param withStart true = 底部多一枚「开始」。这是"切到还没跑过的模式 → 自动摊开设置"那条路：
+ *   这些设置（严格程度 / 输出语言 / 保护引用…）决定这一轮按什么口径跑，跑完再改就得重跑一遍。
+ *   所以先问、填完就地开跑，不用再回头去头部找按钮。
+ */
+function openSettings(withStart) {
   setMenu.innerHTML = ""
   for (const id of CFG.settings || []) {
     const f = fieldDef(id); if (!f) continue
@@ -1757,35 +2272,101 @@ $("btnSettings").addEventListener("click", (e) => {
     box.appendChild(fieldControl(f, saveSettings))
     setMenu.appendChild(box)
   }
+  if (withStart) {
+    const foot = document.createElement("div"); foot.className = "sfoot"
+    const tip = document.createElement("div"); tip.className = "st"
+    tip.textContent = "这些是这一轮的口径，确认后就可以开始。"
+    const b = document.createElement("button")
+    b.type = "button"; b.className = "gostart"
+    b.innerHTML = ICON.play + "<span>" + esc(MODES[mode].label) + "</span>"
+    // 弹层内部的点击被 document 那个监听放行了（见 .menu 分支），这里自己收起来再开跑
+    b.addEventListener("click", (e) => { e.stopPropagation(); markSettingsSeen(); closeMenu(); tryRun(mode) })
+    foot.appendChild(tip); foot.appendChild(b); setMenu.appendChild(foot)
+  }
   closeMenu()
   setMenu.classList.add("on")
   placeMenu(setMenu, $("btnSettings"))
+}
+$("btnSettings").addEventListener("click", (e) => {
+  e.stopPropagation()
+  // 自己点开、自己收起 = 他已经看过这套设置了，之后切模式不用再替他弹一次
+  if (setMenu.classList.contains("on")) { markSettingsSeen(); setMenu.classList.remove("on"); return }
+  openSettings(false)
 })
 
-/* ---- 附加上传（目前只有 refcheck 的配套数值表）----
-   它只被一个模式用到，摆在首屏会挡住所有人的路，所以点到那个模式、发现缺了才就地要。 */
-function extraUploadBtn() {
-  if (!CFG.extraUpload) return null
-  const b = document.createElement("button")
-  b.type = "button"; b.className = "hbtn"
-  b.innerHTML = ic("up") + "<span>" + (dataName ? "换一份" + CFG.extraUpload.label : "上传" + CFG.extraUpload.label) + "</span>"
-  b.addEventListener("click", () => {
-    const inp = document.createElement("input")
-    inp.type = "file"; inp.accept = CFG.extraUpload.accept
-    inp.addEventListener("change", async () => {
-      const f = inp.files && inp.files[0]; if (!f) return
-      const cur = mode
-      if (!CFG.extraUpload.exts.includes(extOf(f.name))) {
-        S[cur].err = "只收 " + CFG.extraUpload.exts.map((x) => "." + x).join(" / ") + "，你选的是 ." + (extOf(f.name) || "（无扩展名）")
-        render(cur); return
+/* ---- 附加上传：配套数值表（目前只有 refcheck 的「数据完整性」用）----
+   摆在首屏会挡住所有人的路（另外三个模式根本不需要它），所以只在需要它的那个模式面板里常驻。
+   ★ 常驻，不是"缺了才出现"：用户得随时看得见【已经传了哪几份】，也得能删掉传错的那一份。 */
+
+/** 需要配套数值表的模式，面板顶上那张清单卡 */
+function dataCardHtml(m) {
+  const X = CFG.extraUpload
+  if (!X || !(MODES[m].need || []).includes("data")) return ""
+  const busyNow = busy()
+  const rows = dataFiles.map((f) =>
+    '<div class="drow"><span class="fic">' + esc(extOf(f.name).toUpperCase().slice(0, 4)) + "</span>"
+    + "<b>" + esc(f.name) + "</b>"
+    + (f.size == null ? "" : '<span class="sz">' + esc(fmtSize(f.size)) + "</span>")
+    + '<button type="button" class="del" data-datadel="' + esc(f.name) + '" aria-label="移除 ' + esc(f.name) + '"'
+    + (busyNow ? " disabled" : "") + ">" + ICON.trash + "</button></div>").join("")
+  return '<div class="datacard"><div class="dh"><span class="t">' + esc(X.label) + "</span>"
+    + '<span class="n">' + (dataFiles.length ? "已上传 " + dataFiles.length + " 份" : "还没有上传") + "</span></div>"
+    + (rows || '<div class="dempty">这一步要读你的原始数值表（' + X.exts.map((x) => "." + x).join(" / ") + "），可以一次传多份。</div>")
+    + '<button type="button" class="addbtn" data-dataadd="1" aria-label="添加' + esc(X.label) + '"' + (busyNow ? " disabled" : "") + ">"
+    + ICON.plus + "<span>" + (dataFiles.length ? "再添加一份" : "添加" + esc(X.label)) + "</span></button></div>"
+}
+
+/** 选文件 → 逐个传上去（可多选）。过程写在面板上，别让用户对着一个没反应的按钮等。 */
+function pickDataFiles() {
+  const X = CFG.extraUpload
+  if (!X || busy()) return
+  const inp = document.createElement("input")
+  inp.type = "file"; inp.accept = X.accept; inp.multiple = true
+  inp.addEventListener("change", async () => {
+    const files = [...(inp.files || [])]
+    if (!files.length) return
+    const cur = mode
+    const bad = files.filter((f) => !X.exts.includes(extOf(f.name)))
+    const good = files.filter((f) => X.exts.includes(extOf(f.name)))
+    S[cur].err = bad.length
+      ? "只收 " + X.exts.map((x) => "." + x).join(" / ") + "；已跳过：" + bad.map((f) => f.name).join("、")
+      : ""
+    for (let i = 0; i < good.length; i++) {
+      const f = good[i]
+      S[cur].block = "正在上传 " + f.name + (good.length > 1 ? "（" + (i + 1) + "/" + good.length + "）" : "") + "…"
+      S[cur].blockMiss = null
+      render(cur)
+      try {
+        await upload(f)
+        // 同名重传 = 覆盖（服务端就是按名字落盘的），列表里也只留一条，别出现两行同名
+        dataFiles = [...dataFiles.filter((x) => x.name !== f.name), { name: f.name, size: f.size }]
+      } catch (e) {
+        S[cur].err = String((e && e.message) || e)
+        break
       }
-      S[cur].err = ""; S[cur].block = "正在上传 " + f.name + "…"; render(cur)
-      try { await upload(f); dataName = f.name; S[cur].block = ""; saveSettings(); render(cur) }
-      catch (e) { S[cur].block = ""; S[cur].err = String((e && e.message) || e); render(cur) }
-    })
-    inp.click()
+    }
+    S[cur].block = ""; S[cur].blockMiss = null
+    saveSettings(); render(cur)
   })
-  return b
+  inp.click()
+}
+
+/** 删掉一份已传的数值表（服务端也真删，不然下次刷新它又回来了） */
+async function removeDataFile(name) {
+  if (busy()) return
+  const cur = mode
+  const keep = dataFiles.slice()
+  dataFiles = dataFiles.filter((f) => f.name !== name)   // 先让界面响应，失败再放回去
+  render(cur)
+  try {
+    const r = await jget("api/upload/delete?name=" + encodeURIComponent(name) + sidQ(), { method: "POST" })
+    if (!r.ok) throw new Error("HTTP " + r.status)
+    saveSettings()
+  } catch (e) {
+    dataFiles = keep
+    S[cur].err = "没能删掉 " + name + "（" + String((e && e.message) || e) + "）"
+  }
+  render(cur)
 }
 
 /**
