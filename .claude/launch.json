@@ -18,6 +18,15 @@
       "autoPort": true
     },
     {
+      "//": "局域网联测：专用网关 3010 + 专用 opencode 4099，不碰别的会话那套（详见 web/dev-lan.mjs 头注）。",
+      "//2": "口令每次启动随机生成并打印在日志里；要固定就传 LAN_PASSWORD。",
+      "name": "web-lan",
+      "runtimeExecutable": "node",
+      "runtimeArgs": ["--no-warnings", "web/dev-lan.mjs"],
+      "port": 3010,
+      "autoPort": true
+    },
+    {
       "name": "sci-auth",
       "runtimeExecutable": "node",
       "runtimeArgs": ["--no-warnings", "server/dev-server.mjs"],
