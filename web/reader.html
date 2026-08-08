@@ -47,6 +47,7 @@
   --green:#2bb673;
   --amber:#d98324;
   --red:#c0392b;
+  --red-deep:#9e2f22;
   --line:rgba(20,24,30,.10);
   --line-hi:rgba(20,24,30,.16);
   --r-lg:16px; --r-md:12px; --r-sm:10px;
@@ -275,8 +276,36 @@ button{font:inherit}
 .frow{display:flex;align-items:center;gap:10px;padding:9px 11px;border:1px solid var(--line);border-radius:var(--r-sm);background:#fff;margin-bottom:6px}
 .frow svg{width:15px;height:15px;color:var(--accent);flex:none}
 .frow b{flex:1;min-width:0;font-size:12.5px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.frow a{font-size:12px;color:var(--accent);text-decoration:none;flex:none}
-.frow a:hover{text-decoration:underline}
+/* 「预览」与「下载」都是图标（眼睛 / 下箭头），与聊天页（index.html）产出侧栏那两颗一模一样
+   —— 同一个动作在两个界面长同一个样，用户不用重新认。悬停才变色，静止时不跟文件名抢注意力。
+   一个是 <button>、一个是 <a>，所以要显式压掉链接的下划线与继承色。 */
+.frow .fbtn{flex:none;display:flex;align-items:center;padding:2px;border:none;background:none;cursor:pointer;color:var(--muted);text-decoration:none;border-radius:6px;transition:color .15s,background .15s}
+.frow .fbtn:hover{color:var(--accent);background:var(--panel-soft)}
+.frow .fbtn svg{color:inherit}   /* 否则被上面 .frow svg 的 accent 焊死，悬停不会变色 */
+.frow .fnote{font-size:11.5px;color:var(--faint);flex:none}
+
+/* 产物预览浮层。
+   【为什么必须有】原先产物那一行只给了一个 target=_blank 的链接。而 .md / .csv / .json / .py
+   这些类型浏览器【不会显示、只会下载】——点下去新标签一闪就没，用户看到的就是"点了没反应"。
+   所以就地渲染：文本/表格/图片/PDF 自己画，Word 与 PPT 走服务端 /api/preview 转换。 */
+.pvmask{position:fixed;inset:0;z-index:300;background:rgba(17,24,39,.42);display:none;padding:30px 22px}
+.pvmask.on{display:grid;place-items:center}
+.pvbox{width:min(1080px,94vw);height:min(86vh,920px);background:#fff;border:1px solid var(--line-hi);border-radius:var(--r-md);box-shadow:var(--shadow-md);display:flex;flex-direction:column;overflow:hidden}
+.pvhead{flex:none;display:flex;align-items:center;gap:10px;padding:10px 12px;border-bottom:1px solid var(--line);background:var(--panel-soft)}
+.pvhead svg{width:15px;height:15px;color:var(--accent);flex:none}
+.pvhead .nm{flex:1;min-width:0;font-size:13px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.pvhead .x{border:none;background:none;cursor:pointer;color:var(--muted);display:grid;place-items:center;padding:2px;border-radius:6px}
+.pvhead .x:hover{background:#fff;color:var(--text)}
+.pvbody{flex:1;position:relative;overflow:auto;background:#fff}
+.pvbody.pad{padding:16px 18px}
+.pvbody iframe{position:absolute;left:0;top:0;width:100%;height:100%;border:0;background:#fff}
+.pvbody pre.txt{margin:0;font-family:ui-monospace,Consolas,monospace;font-size:12px;line-height:1.75;white-space:pre-wrap;word-break:break-word;color:var(--text)}
+.pvbody img.shot{display:block;max-width:100%;margin:0 auto;border:1px solid var(--line);border-radius:8px}
+/* renderCsv 是给左栏写的：.tablewrap 用 position:absolute 铺满那一栏。放进浮层要还原成正常流，
+   否则它会盖住后面追加的"内容被截断"提示（提示看不见 = 用户以为看到的就是全部）。 */
+.pvbody .tablewrap{position:static;padding:14px 16px 0}
+.pvmsg{padding:34px 26px;text-align:center;color:var(--muted);font-size:13px;line-height:1.95}
+.pvcut{margin-top:12px;font-size:11.5px;color:var(--faint)}
 
 /* 聊天 */
 .msg{margin-bottom:16px}
@@ -292,12 +321,27 @@ button{font:inherit}
 .composer .wrap:focus-within{border-color:var(--accent);background:#fff;box-shadow:0 0 0 3px var(--accent-soft)}
 .composer textarea{flex:1;border:none;background:none;outline:none;resize:none;font:inherit;font-size:13px;line-height:1.55;color:var(--text);max-height:130px;min-height:22px}
 .composer textarea::placeholder{color:var(--faint)}
-.composer .send{width:32px;height:32px;border:none;border-radius:8px;background:var(--accent);color:#fff;display:grid;place-items:center;cursor:pointer;flex:none}
-.composer .send:hover{background:var(--accent-deep)}
-.composer .send[disabled]{background:#c3ccd8;cursor:not-allowed}
-.composer .send svg{width:15px;height:15px}
 .composer .foot{margin-top:7px;font-size:11px;color:var(--faint);display:flex;justify-content:space-between;gap:10px}
-.composer .stop{border:1px solid var(--line-hi);background:#fff;color:var(--red);border-radius:7px;padding:2px 9px;font-size:11.5px;cursor:pointer}
+.composer .foot .kbd{flex:none;white-space:nowrap}
+
+/* 发送 / 终止 —— 与工作台聊天（index.html 的 #send / #stop）同一套设计：
+   默认是 32px 的圆钮、只露一个图标；悬停时展开成胶囊并把文字滑出来。
+   两个钮占【同一个位置】、互斥显示：一开跑，「发送」让位给「终止」。
+   此前这里是"方块蓝发送钮 + 底栏一个红字小方框「终止本轮」"，两个动作分居两行、长相也各是各的，
+   跟工作台完全对不上；正在跑的时候用户还得往底栏找那个小字才能停下来。
+   modefoot（非聊天模式的状态底栏）里的终止钮共用这套样式，免得同一个动作在同一个界面有两种长相。 */
+.pill{display:inline-flex;align-items:center;justify-content:center;height:32px;min-width:32px;padding:0;border:none;border-radius:999px;color:#fff;cursor:pointer;flex:none;overflow:hidden;transition:background .18s ease,padding .2s ease,filter .15s}
+.pill[hidden]{display:none}                     /* 别让上面的 display 盖过 hidden 属性 */
+.pill svg{width:15px;height:15px;flex:none}
+.pill .lbl{max-width:0;opacity:0;overflow:hidden;white-space:nowrap;font-size:13px;font-weight:500;letter-spacing:.04em;margin-left:0;transition:max-width .22s ease,opacity .18s ease,margin-left .22s ease}
+.pill:hover:not([disabled]){padding:0 15px}
+.pill:hover:not([disabled]) .lbl{max-width:52px;opacity:1;margin-left:6px}
+.pill:active{transform:translateY(1px)}
+.pill.go{background:var(--accent)}
+.pill.go:hover:not([disabled]){background:var(--accent-deep)}
+.pill.go[disabled]{background:#c3ccd8;cursor:not-allowed}
+.pill.halt{background:var(--red)}
+.pill.halt:hover{background:var(--red-deep)}
 
 /* 非聊天模式的底栏 */
 .modefoot{flex:none;border-top:1px solid var(--line);padding:10px 16px;background:#fff;display:flex;align-items:center;gap:9px;font-size:12px;color:var(--faint)}
@@ -433,25 +477,47 @@ button{font:inherit}
     <div class="composer" id="composer" hidden>
       <div class="wrap">
         <textarea id="q" rows="1" placeholder="对着左边这篇文献随便问，例如：第 3 组的样本量是多少？"></textarea>
-        <button class="send" id="btnSend" type="button" aria-label="发送">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 2L11 13M22 2l-7 20-4-9-9-4 20-7z"/></svg>
+        <!-- 发送 / 终止占同一个位置，互斥显示（与工作台一致）。文字包在 .lbl 里，悬停展开才露出来。 -->
+        <button class="pill go" id="btnSend" type="button" aria-label="发送" title="发送">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 2L11 13M22 2l-7 20-4-9-9-4 20-7z"/></svg><span class="lbl">发送</span>
+        </button>
+        <button class="pill halt" id="btnStop" type="button" aria-label="终止" title="终止本次输出" hidden>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="6" y="6" width="12" height="12" rx="2"/></svg><span class="lbl">终止</span>
         </button>
       </div>
       <div class="foot">
         <span id="chatFoot">回答只依据这篇原文；原文没写的会标「原文未报告」。</span>
-        <button class="stop" id="btnStop" type="button" hidden>终止本轮</button>
+        <span class="kbd">Enter 发送 · Shift + Enter 换行</span>
       </div>
     </div>
 
     <!-- 其它模式：状态底栏 -->
     <div class="modefoot" id="modeFoot" hidden>
       <span class="grow" id="modeFootTxt"></span>
-      <button class="stop" id="btnStop2" type="button" hidden>终止本轮</button>
+      <button class="pill halt" id="btnStop2" type="button" aria-label="终止" title="终止本次输出" hidden>
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="6" y="6" width="12" height="12" rx="2"/></svg><span class="lbl">终止</span>
+      </button>
     </div>
   </div>
 
   <!-- 右：模式条 -->
   <div class="tools" id="rail"></div>
+</div>
+
+<!-- ============ 产物预览浮层（点产物行上的眼睛就地看，见 openPv） ============ -->
+<div class="pvmask" id="pvMask">
+  <div class="pvbox" role="dialog" aria-modal="true" aria-label="产物预览">
+    <div class="pvhead">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><path d="M14 2v6h6"/></svg>
+      <span class="nm" id="pvName"></span>
+      <a class="hbtn" id="pvOpen" target="_blank" rel="noopener" hidden>新标签打开</a>
+      <a class="hbtn" id="pvDl">下载</a>
+      <button class="x" id="pvClose" type="button" aria-label="关闭">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6L6 18M6 6l12 12"/></svg>
+      </button>
+    </div>
+    <div class="pvbody" id="pvBody"></div>
+  </div>
 </div>
 
 <script>
@@ -487,6 +553,10 @@ const ICON = {
   gear: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 00.3 1.9l.1.1a2 2 0 11-2.8 2.8l-.1-.1a1.7 1.7 0 00-1.9-.3 1.7 1.7 0 00-1 1.5V21a2 2 0 11-4 0v-.1A1.7 1.7 0 008.9 19a1.7 1.7 0 00-1.9.3l-.1.1a2 2 0 11-2.8-2.8l.1-.1a1.7 1.7 0 00.3-1.9 1.7 1.7 0 00-1.5-1H3a2 2 0 110-4h.1A1.7 1.7 0 004.6 8.9a1.7 1.7 0 00-.3-1.9l-.1-.1a2 2 0 112.8-2.8l.1.1a1.7 1.7 0 001.9.3H9a1.7 1.7 0 001-1.5V3a2 2 0 114 0v.1a1.7 1.7 0 001 1.5 1.7 1.7 0 001.9-.3l.1-.1a2 2 0 112.8 2.8l-.1.1a1.7 1.7 0 00-.3 1.9V9a1.7 1.7 0 001.5 1H21a2 2 0 110 4h-.1a1.7 1.7 0 00-1.5 1z"/></svg>',
   dot: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="4"/></svg>',
   up: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 16V4M12 4l-4 4M12 4l4 4"/><path d="M4 16v2a2 2 0 002 2h12a2 2 0 002-2v-2"/></svg>',
+  // 产物行的「预览 / 下载」。与聊天页（index.html）产出侧栏同一副图标，同一个动作在两个界面
+  // 长同一个样，用户不用重新认。
+  eye: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/></svg>',
+  download: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v11"/><path d="m7 11 5 4 5-4"/><path d="M5 20h14"/></svg>',
 }
 const ic = (n) => ICON[n] || ICON.dot
 
@@ -681,8 +751,14 @@ function renderIntro() {
   $("btnStartTxt").textContent = I.startText
   $("file").setAttribute("accept", CFG.source.accept)
   $("introTip").innerHTML = I.tip || ""
-  $("introChips").innerHTML = (I.chips || []).map((c, i) =>
-    '<span class="chip">' + (MODES[ORDER[i]] ? MODES[ORDER[i]].icon : "") + esc(c) + "</span>").join("")
+  // chips 支持两种写法：字符串（图标按位置取第 i 个模式，历史写法）或 {t,i}（文字 + 明确的图标名）。
+  // 【为什么要有后者】按位置取图标把首屏文案和右侧模式条的【顺序】焊死了 —— 模式条一调顺序，
+  // 首屏这几个小标签的图标就集体错位，而这两处本来毫不相干。新写法把图标写死在文案旁边。
+  $("introChips").innerHTML = (I.chips || []).map((c, i) => {
+    const txt = typeof c === "string" ? c : c.t
+    const icon = typeof c === "string" ? (MODES[ORDER[i]] ? MODES[ORDER[i]].icon : "") : ic(c.i)
+    return '<span class="chip">' + icon + esc(txt) + "</span>"
+  }).join("")
   // 首屏必答题（目前只有 stats 的 hasPHI）。它不是"设置"，是安全闸：
   // 未脱敏的患者数据不得进入统计，所以没答之前「开始」按钮是灰的。
   const askHost = $("introAsk"); askHost.innerHTML = ""
@@ -995,7 +1071,9 @@ $("btnRerun").addEventListener("click", () => tryRun(mode, true))
 // 空面板里那个按钮（每次重画都会换一个 DOM 节点，所以用委托，别逐个绑）
 $("aiBody").addEventListener("click", (e) => {
   const b = e.target.closest("[data-run]")
-  if (b) tryRun(b.dataset.run)
+  if (b) { tryRun(b.dataset.run); return }
+  const p = e.target.closest("[data-pv]")            // 产物那一行的「查看」（同样是每轮重画，走委托）
+  if (p) openPv(p.dataset.pv)
 })
 
 /* ============================================================
@@ -1014,10 +1092,88 @@ function runHtml(m) {
 }
 function filesHtml(list) {
   if (!list || !list.length) return ""
-  return '<div class="files"><div class="ft">本轮产物</div>' + list.map((n) =>
-    '<div class="frow">' + ICON.file + "<b>" + esc(n) + "</b>"
-    + '<a href="api/raw?name=' + encodeURIComponent(n) + sidQ() + '" target="_blank" rel="noopener">查看</a>'
-    + '<a href="api/download?name=' + encodeURIComponent(n) + sidQ() + '">下载</a></div>').join("") + "</div>"
+  return '<div class="files"><div class="ft">本轮产物</div>' + list.map((n) => {
+    // download 属性只给最后一段：带 "pdfs/" 前缀的话浏览器保存时会把斜杠清洗成怪名字
+    const dl = '<a class="fbtn" href="api/download?name=' + encodeURIComponent(n) + sidQ()
+      + '" download="' + esc(String(n).split("/").pop()) + '" title="下载" aria-label="下载 ' + esc(n) + '">' + ICON.download + "</a>"
+    // 预览不再是 target=_blank 的链接：.md/.csv/.json/.py 这些浏览器只会下载不会显示，
+    // 点下去新标签一闪就没 —— 症状正是"点了没反应"。改成就地开预览浮层（眼睛按钮）。
+    const act = isSecret(n) ? '<span class="fnote" title="含可还原到个人的对照信息，不在界面内展示">不在界面内预览</span>'
+      : canPv(n) ? '<button type="button" class="fbtn" title="预览" aria-label="预览 ' + esc(n) + '" data-pv="' + esc(n) + '">' + ICON.eye + "</button>"
+      : ""   // 预览不了的类型（xlsx/zip…）不给假按钮，只留下载
+    return '<div class="frow">' + ICON.file + "<b>" + esc(n) + "</b>" + act + dl + "</div>"
+  }).join("") + "</div>"
+}
+
+/* ---- 产物预览浮层 ----
+   能力对齐聊天页（index.html）的半屏预览，但这里是居中浮层：阅读器已经是"左原文 / 中助手 /
+   右模式条"三列，再劈一半会把两边都挤没。
+   分工与左栏 renderDoc 一致：pdf/html/图片/纯文本/表格前端自己渲染，Word/PPT 交服务端
+   /api/preview 转换（那一路会失败——没装 LibreOffice、转换超时——所以先探一次再塞 iframe）。 */
+const PV_IMG = /\.(png|jpe?g|gif|webp|svg|bmp)$/i
+const PV_MD = /\.(md|markdown)$/i
+const PV_CSV = /\.[ct]sv$/i
+const PV_TXT = /\.(txt|log|json|ya?ml|py|r|sh|ps1|sql|bib|tex|js|mjs|css|ini|toml)$/i
+const PV_PDF = /\.pdf$/i
+const PV_HTML = /\.html?$/i
+const PV_OFFICE = /\.(docx?|pptx?|odt|odp)$/i
+const canPv = (n) => PV_IMG.test(n) || PV_MD.test(n) || PV_CSV.test(n) || PV_TXT.test(n) || PV_PDF.test(n) || PV_HTML.test(n) || PV_OFFICE.test(n)
+// 脱敏还原表（真名/住院号 ↔ 假名）绝不内联预览：那等于把病人真名铺在界面上。判据与
+// index.html 的 SECRET_RE、workflows.mjs 的 secret 组保持一致；下载保留（用户在自己机器上看）。
+const SECRET_RE = /(mapping|_map|crosswalk|keyfile|对照表|还原表)[^/]*\.csv$/i
+const isSecret = (n) => SECRET_RE.test(String(n).split("/").pop())
+const PV_MAXTXT = 400000   // 文本/表格最多读这么多字节，几十 MB 的日志会把页面卡死
+
+function closePv() { $("pvMask").classList.remove("on"); $("pvBody").innerHTML = "" }
+$("pvClose").addEventListener("click", closePv)
+$("pvMask").addEventListener("click", (e) => { if (e.target === $("pvMask")) closePv() })
+document.addEventListener("keydown", (e) => { if (e.key === "Escape" && $("pvMask").classList.contains("on")) closePv() })
+
+async function openPv(name) {
+  const body = $("pvBody")
+  const q = "?name=" + encodeURIComponent(name) + sidQ()
+  $("pvName").textContent = name
+  $("pvDl").href = "api/download" + q
+  const e = extOf(name)
+  // 「新标签打开」只给浏览器真能显示的类型；md/csv 那些给了也只是又下载一次，反而更像坏了
+  const openable = PV_PDF.test(name) || PV_HTML.test(name) || PV_IMG.test(name)
+  $("pvOpen").hidden = !openable
+  if (openable) $("pvOpen").href = "api/raw" + q
+  $("pvMask").classList.add("on")
+  body.className = "pvbody"
+  body.innerHTML = '<div class="pvmsg">正在打开…</div>'
+
+  const fail = (msg) => { body.className = "pvbody"; body.innerHTML = '<div class="pvmsg">' + esc(msg) + "<br><br>可以点右上角「下载」，在本机打开。</div>" }
+  const frame = (url) => { body.className = "pvbody"; body.innerHTML = ""; const f = document.createElement("iframe"); f.src = url; body.appendChild(f) }
+
+  try {
+    if (PV_IMG.test(name)) {
+      body.className = "pvbody pad"
+      body.innerHTML = '<img class="shot" alt="' + esc(name) + '" src="api/raw' + q + '">'
+      return
+    }
+    if (PV_PDF.test(name) || PV_HTML.test(name)) { frame("api/raw" + q); return }   // html 由服务端带 CSP sandbox
+    if (PV_OFFICE.test(name)) {
+      // 先探一次：iframe 的 error 事件对 HTTP 错误不触发，直接塞进去用户会看到一框英文报错当成正文
+      const r = await jget("api/preview" + q)
+      if (!r.ok) { fail((await r.text().catch(() => "")) || "预览转换失败（HTTP " + r.status + "）"); return }
+      frame("api/preview" + q)
+      return
+    }
+    const r = await jget("api/raw" + q)
+    if (!r.ok) { fail((await r.text().catch(() => "")) || "打不开这个文件（HTTP " + r.status + "）"); return }
+    let t = await r.text()
+    const cut = t.length > PV_MAXTXT
+    if (cut) t = t.slice(0, PV_MAXTXT)
+    body.className = "pvbody" + (PV_CSV.test(name) ? "" : " pad")
+    if (PV_CSV.test(name)) body.innerHTML = renderCsv(t, e === "tsv" ? "\t" : ",")
+    else if (PV_MD.test(name)) body.innerHTML = '<div class="md">' + renderMd(t) + "</div>"
+    else body.innerHTML = '<pre class="txt">' + esc(t) + "</pre>"
+    if (cut) body.insertAdjacentHTML("beforeend", '<div class="pvcut">文件较大，这里只显示了前 ' + Math.round(PV_MAXTXT / 1000) + ' 千字符；完整内容请下载。</div>')
+  } catch (err) {
+    if (String((err && err.message) || err) === "unauthorized") return
+    fail("打不开这个文件（" + String((err && err.message) || err) + "）")
+  }
 }
 function emptyHtml(m) {
   const [big, sub] = MODES[m].empty
@@ -1087,6 +1243,9 @@ function renderChat() {
 
 function updateFoot() {
   const running = !!RUN
+  // 发送与终止共用同一个位置，互斥显示（与工作台的 setStreamingUI 同一套规矩）：
+  // 一开跑就把「发送」收起来、原地换成「终止」，用户不用再去别处找停止的入口。
+  $("btnSend").hidden = running
   $("btnStop").hidden = !running
   $("btnStop2").hidden = !running
   $("btnSend").disabled = busy()
@@ -1428,8 +1587,10 @@ function placeMenu(el, btn) {
   let left = Math.min(r.right - w, innerWidth - w - 10)
   let top = r.bottom + 6
   if (top + h > innerHeight - 10) top = Math.max(10, r.top - h - 6)   // 下面放不下就翻到按钮上方
-  menu.style.left = Math.max(10, left) + "px"
-  menu.style.top = top + "px"
+  // ★ 坐标要写回【传进来的那个 el】。这里原本写死 menu.style —— 于是设置弹层永远拿不到
+  //   left/top，position:fixed 退回静态位置，飘到页面左上角；顺带还把「最近」挪了一次。
+  el.style.left = Math.max(10, left) + "px"
+  el.style.top = top + "px"
 }
 
 async function showRecent(btn) {
@@ -1458,6 +1619,10 @@ async function showRecent(btn) {
 }
 
 document.addEventListener("click", (e) => {
+  // 弹层【内部】的点击不算「点空白处」。设置弹层里全是 select / checkbox / 输入框，
+  // 它们身上没有 data-act —— 不先放行的话，点开下拉的那一下就把整个弹层收了，
+  // 用户永远选不中任何一项。
+  if (e.target.closest && e.target.closest(".menu")) return
   const btn = e.target.closest("[data-act]")
   if (!btn) { closeMenu(); return }               // 点空白处收起菜单
   e.stopPropagation()

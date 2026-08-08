@@ -114,7 +114,10 @@ const JOURNAL_FILTER = [
 // "能跑，但刷新后所有轮次都掉进智能助手"——从界面上完全看不出是标记对不上。
 // ============================================================
 
-/** 自由问答那一格：四个模块都有，且都【没有 mark】——没有标记就是普通提问 */
+/** 自由问答那一格：四个模块都有，且都【没有 mark】——没有标记就是普通提问。
+ *  位置：四个模块一律【排在模式条第一个】。它是唯一一个"随时都能用、不依赖前面跑没跑过"的入口，
+ *  摆在第一格用户一眼就能找到；排在第二、三格时它看起来像是某条流程中间的一步。
+ *  ★ 这只改按钮顺序，不改"点开始跑哪一个"——那个由 reader.first 单独指定（guide / profile / refs / polish）。 */
 const chatMode = (badge, big, sub) => ({
   id: "chat", label: "智能助手", icon: "chat", badge, empty: [big, sub],
 })
@@ -135,6 +138,8 @@ function readerModeLines(modes) {
 // {vars}=stats 的「变量对应」面板填了什么。占位符没有对应值时前端会整句删掉，不会留下 "{data}"。
 
 const LITREAD_MODES = [
+  chatMode("基于本文", "对着这篇文章随便问",
+    "它读的是你左边这一篇；前面的导读、翻译、做 PPT 都还在上下文里，可以接着问。"),
   { id: "guide", label: "文献导读", icon: "guide", mark: "【文献导读】", badge: "抽取核心 · 梳理逻辑",
     file: "^reading_guide.*\\.md$",
     // out = 面板下方列哪些产物。fulltext.md 归导读：它是"读入原文"的成果，
@@ -154,8 +159,6 @@ const LITREAD_MODES = [
       + "只依据原文：数字与结论一律照抄，原文没写的写「原文未报告」，不许拿背景知识补，也不许引入原文之外的参考文献。"
       + "引用具体数据时带上出处（第几节 / 哪张图表）。\n"
       + "写完把这份导读同时存一份 `reading_guide.md`。" },
-  chatMode("基于本文", "对着这篇文章随便问",
-    "它读的是你左边这一篇；前面的导读、翻译、做 PPT 都还在上下文里，可以接着问。"),
   { id: "translate", label: "全文翻译", icon: "translate", mark: "【全文翻译】", badge: "逐段全文 · 非摘要",
     file: "^translation.*\\.md$", out: "^translation[^/]*\\.(md|docx|pdf)$",
     empty: ["还没有译文", "点右边的「全文翻译」，逐段译成中文（不是摘要）。整篇文章要花几分钟。"],
@@ -185,6 +188,8 @@ const LITREAD_MODES = [
 ]
 
 const REFCHECK_MODES = [
+  chatMode("基于这份稿件", "对着这份稿子随便问",
+    "前面跑过的核查报告都还在上下文里——可以追问某一条为什么判黄，或让它把某一段重写。"),
   { id: "refs", label: "引用核查", icon: "check", mark: "【引用核查】", badge: "查假引用 · 核 DOI · 撤稿",
     file: "^(refcheck_report|reference_check).*\\.md$",
     out: "^(refcheck_report|reference_check)[^/]*\\.(md|csv|docx|pdf)$",
@@ -199,8 +204,6 @@ const REFCHECK_MODES = [
       + "逐条给结论，用 🟢 / 🟡 / 🔴 三档：绿＝核实无误，黄＝有出入需我复核（写清哪一项对不上），红＝查无此文献 / DOI 错 / 已撤稿。\n"
       + "**查不到 ≠ 不存在**：网络受限或数据库没收录时如实写「未能核实」并说明原因，不许判成假引用。\n"
       + "报告写成 `refcheck_report.md`，末尾给一行汇总（共几条、绿黄红各几条、几条未能核实）。" },
-  chatMode("基于这份稿件", "对着这份稿子随便问",
-    "前面跑过的核查报告都还在上下文里——可以追问某一条为什么判黄，或让它把某一段重写。"),
   { id: "review", label: "方法与统计审校", icon: "review", mark: "【方法与统计审校】", badge: "投稿前自查 · 找硬伤",
     file: "^review_report.*\\.md$", out: "^review_report[^/]*\\.(md|docx|pdf)$",
     empty: ["还没审校", "点右边的「方法与统计审校」，按审稿人的眼光找研究设计与统计上的硬伤。"],
@@ -227,6 +230,8 @@ const REFCHECK_MODES = [
 ]
 
 const HUMANIZE_MODES = [
+  chatMode("基于这份稿件", "对着这份稿子随便问",
+    "润色稿和改动清单都还在上下文里——可以让它把某一段再改一版，或问某处为什么这么改。"),
   { id: "polish", label: "润色改写", icon: "wand", mark: "【润色改写】", badge: "去 AI 味 · 保住原意",
     file: "(^|/)[^/]*humanized[^/]*\\.md$", out: "(^|/)[^/]*humanized[^/]*\\.(md|docx|pdf)$",
     empty: ["还没润色", "点右边的「润色改写」，按期刊写作范式改一遍行文，同时把生成式文本的痕迹去掉。"],
@@ -238,8 +243,6 @@ const HUMANIZE_MODES = [
       + "- 参考文献角标与其所在句子的事实主张一字不动。\n\n"
       + "改完把成稿写成 `<原文件名>_humanized.md`，并在回答里**只报一句**改了多少段、"
       + "主要改了哪几类问题——逐句对照放到「改动对照」那个模式里，这里不用铺开。" },
-  chatMode("基于这份稿件", "对着这份稿子随便问",
-    "润色稿和改动清单都还在上下文里——可以让它把某一段再改一版，或问某处为什么这么改。"),
   { id: "changes", label: "改动对照", icon: "diff", mark: "【改动对照】", badge: "逐条列 · 可回退",
     file: "^changes.*\\.md$", out: "^changes[^/]*\\.(md|csv|docx)$",
     need: ["after:polish"],
@@ -265,6 +268,8 @@ const HUMANIZE_MODES = [
 ]
 
 const STATS_MODES = [
+  chatMode("基于这份数据", "对着这张表随便问",
+    "前面跑过的体检、基线表、统计结果都还在上下文里——可以追问某个 p 值怎么来的，或让它换个方法再算一次。"),
   { id: "profile", label: "数据体检", icon: "stethoscope", mark: "【数据体检】", badge: "先查再算",
     file: "^(data_profile|cleaning_log).*\\.md$", out: "^(data_profile|cleaning_log)[^/]*\\.(md|csv)$",
     empty: ["还没体检", "点右边的「数据体检」。重复 ID 没去、分类水平没归一时，后面每一个 p 值都是错的，而表面看不出来——所以这一步值得先做。"],
@@ -275,8 +280,6 @@ const STATS_MODES = [
       + "**先别做任何推断统计**。发现的问题逐条列出并给出建议的处理方式；"
       + "**不要自己替我把数据改掉**，要改也先告诉我改哪些、为什么。\n"
       + "报告写成 `data_profile.md`。" },
-  chatMode("基于这份数据", "对着这张表随便问",
-    "前面跑过的体检、基线表、统计结果都还在上下文里——可以追问某个 p 值怎么来的，或让它换个方法再算一次。"),
   { id: "table1", label: "基线表", icon: "table", mark: "【基线表 Table 1】", badge: "分组对比 · 三线表",
     file: "^table1.*\\.csv$", out: "^table1[^/]*\\.(csv|md|docx)$",
     need: ["var:groupCol"],
@@ -739,7 +742,8 @@ export const WORKFLOWS = {
         dropTitle: "点击或拖拽文献到此处",
         dropHint: "支持 PDF / Word（.pdf · .docx · .doc）　·　一次研读一篇",
         startText: "开始研读",
-        chips: ["文献导读", "对着原文追问", "全文翻译", "汇报 PPT"],
+        // 图标写死在文案旁边（{t,i}）：模式条的顺序调过之后，按位置取图标会让这几个小标签集体错位
+        chips: [{ t: "文献导读", i: "guide" }, { t: "对着原文追问", i: "chat" }, { t: "全文翻译", i: "translate" }, { t: "汇报 PPT", i: "ppt" }],
         tip: "图片型扫描件会先走 OCR，识别不准的地方会如实标出来。<br>所有结论只依据这篇原文——原文没写的，它会写「原文未报告」，不会替你补。",
       },
       source: { kind: "doc", field: "docFile", accept: ".pdf,.docx,.doc,.odt", exts: ["pdf", "docx", "doc", "odt"] },
@@ -861,7 +865,7 @@ export const WORKFLOWS = {
         dropTitle: "点击或拖拽数据表到此处",
         dropHint: "支持 Excel / CSV（.xlsx · .csv · .tsv）　·　一次一张",
         startText: "开始分析",
-        chips: ["数据体检", "基线表 Table 1", "生存 / ROC / 回归", "投稿级图表"],
+        chips: [{ t: "数据体检", i: "stethoscope" }, { t: "基线表 Table 1", i: "table" }, { t: "生存 / ROC / 回归", i: "chart" }, { t: "投稿级图表", i: "image" }],
         tip: "建议先跑「数据体检」——重复 ID 没去、分类水平没归一时，后面每个 p 值都是错的，而表面看不出来。<br>算不出来的它会说算不出来，不会给你一个编的数字。",
         // 首屏就要答的必答题（不是设置，是安全闸）。未脱敏的患者数据不得进入统计，
         // 这一题没答之前「开始分析」是灰的。
@@ -952,7 +956,7 @@ export const WORKFLOWS = {
         dropTitle: "点击或拖拽稿件到此处",
         dropHint: "支持 Word / PDF / Markdown（.docx · .pdf · .md）　·　一次一份",
         startText: "开始核查",
-        chips: ["假引用与 DOI", "撤稿检索", "统计陷阱", "数据完整性"],
+        chips: [{ t: "假引用与 DOI", i: "check" }, { t: "撤稿检索", i: "review" }, { t: "统计陷阱", i: "review" }, { t: "数据完整性", i: "table" }],
         tip: "查不到 ≠ 不存在：网络受限或数据库没收录时它会写「未能核实」，不会判成假引用。<br>数据完整性只出「待核信号」，不下造假结论——目的是投稿前主动补说明。",
       },
       source: { kind: "doc", field: "docFiles", accept: ".docx,.pdf,.md,.doc,.txt", exts: ["docx", "pdf", "md", "doc", "txt"] },
@@ -1056,7 +1060,7 @@ export const WORKFLOWS = {
         dropTitle: "点击或拖拽稿件到此处",
         dropHint: "支持 Word / PDF / Markdown（.docx · .pdf · .md）　·　一次一份",
         startText: "开始润色",
-        chips: ["去 AI 味", "语言润色", "逻辑衔接", "改动逐条可查"],
+        chips: [{ t: "去 AI 味", i: "wand" }, { t: "语言润色", i: "wand" }, { t: "逻辑衔接", i: "doc" }, { t: "改动逐条可查", i: "diff" }],
         tip: "数字、统计量与结论强度一律不动——「显著低于」不会被改成「低于」。<br>带 [n] 角标的整句默认逐字保留：那是在转述别人的结论，改一个词就变成了另一个意思。",
       },
       source: { kind: "doc", field: "docFiles", accept: ".docx,.pdf,.md,.doc,.txt", exts: ["docx", "pdf", "md", "doc", "txt"] },
