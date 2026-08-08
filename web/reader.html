@@ -67,14 +67,18 @@ button{font:inherit}
    卡片里都已经说过一遍（书本图标、大标题「文献研读」、副标题），三处重复只是在占地方；
    进了阅读器之后左栏顶上就是文件名，也不需要再有一条横幅告诉你在哪。
    原来挂在顶栏上的三个动作各自找到了更该待的地方：
-     · 首屏 → 卡片下面一行浅色文字链（最近研读过的 / 回工作台）
+     · 首屏 → 右上角（最近做过的 / 回工作台）
      · 阅读器 → 左栏文件工具条的右端（换一篇 / 最近 / 工作台），与「原文」按钮并排 */
 .hbtn{display:inline-flex;align-items:center;gap:6px;height:28px;padding:0 10px;border-radius:8px;border:1px solid var(--line-hi);background:#fff;color:var(--muted);cursor:pointer;font-size:12.5px;transition:.15s;flex:none}
 .hbtn:hover{border-color:var(--accent);color:var(--accent)}
 .hbtn svg{width:14px;height:14px}
 .hbtn[disabled]{opacity:.45;cursor:not-allowed}
-/* 首屏卡片底下那一行文字链 */
-.intronav{display:flex;align-items:center;justify-content:center;gap:12px;margin-top:18px;font-size:12.5px;color:var(--faint)}
+/* 首屏右上角那两个链接（最近做过的 / 回工作台）。
+   原来摆在卡片正下方、「开始」按钮底下——那是全屏视线落点，两个"离开这一屏"的动作放那里
+   等于跟主操作抢注意力。挪到右上角这个惯常的次要导航位。
+   用 fixed 不用 absolute：.intro 自己是可滚动的整屏容器（内容长了会滚），absolute 会让它
+   跟着内容滚走。.intro[hidden] 时整屏 display:none，子元素连它一起不渲染，不会漏到阅读器上。 */
+.intronav{position:fixed;top:14px;right:18px;z-index:3;display:flex;align-items:center;gap:8px;margin:0;font-size:12.5px;color:var(--faint)}
 .linkbtn{border:none;background:none;padding:2px 4px;color:var(--muted);cursor:pointer;font-size:12.5px;border-radius:6px}
 .linkbtn:hover{color:var(--accent);text-decoration:underline}
 
@@ -1447,7 +1451,10 @@ async function showRecent(btn) {
     b.addEventListener("click", () => { location.href = location.pathname + "?sid=" + encodeURIComponent(s.id) })
     menu.appendChild(b)
   })
-  openMenuAt(btn)                                // 内容换完高度变了，重新摆一次
+  // 内容换完宽高都变了，重新摆一次。【这里原本写的是 openMenuAt()——没有这个函数】，
+  // 于是每次列表非空都抛 ReferenceError，重新定位从来没跑过：弹层沿用「正在读取…」那一刻
+  // 按窄内容算的坐标，撑开之后就贴死在屏幕右边缘（按钮在右上角时尤其明显）。
+  placeMenu(menu, btn)
 }
 
 document.addEventListener("click", (e) => {

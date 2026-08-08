@@ -1076,6 +1076,15 @@
   .mm-btn.ghost:hover:not(:disabled) { color: var(--accent-deep); border-color: var(--cyan); }
   .mm-btn.reset { margin-left: auto; }
   .mm-btn:disabled { opacity: .55; cursor: default; }
+  /* 界面版本弹窗里的版本行 */
+  .uvrow { display: flex; align-items: center; gap: 10px; padding: 9px 2px; border-bottom: 1px solid var(--line); }
+  .uvrow:last-child { border-bottom: 0; }
+  .uvmeta { flex: 1; min-width: 0; }
+  .uvname { font-size: 13px; color: var(--text); display: flex; align-items: center; gap: 7px; }
+  .uvsub { font-size: 11.5px; color: var(--faint); margin-top: 2px; }
+  .uvcur { flex: none; font-size: 11px; font-weight: 600; color: var(--accent); border: 1px solid var(--accent); border-radius: 4px; padding: 0 5px; }
+  .uvnew { flex: none; font-size: 11px; font-weight: 600; color: #15803d; border: 1px solid #15803d; border-radius: 4px; padding: 0 5px; }
+  .uvrow .mm-btn { flex: none; padding: 6px 12px; font-size: 12.5px; }
   .mm-hint { font-size: 11.5px; color: var(--faint); line-height: 1.65; margin-top: 12px; }
   /* 当前走哪条路：网关 vs 用户自设。放在弹窗最上面，打开就知道自己在哪。 */
   .mm-route { font-size: 12.5px; line-height: 1.6; padding: 9px 11px; border-radius: 8px; margin-bottom: 14px;
@@ -1275,6 +1284,9 @@
         </div>
         <button class="umitem" id="acctBtn" type="button">云端账号</button>
         <button class="umitem" id="pwBtn" type="button">修改密码</button>
+        <!-- 界面版本：换/退这一层前端静态资源。放这里而不是顶部提示条里 —— 提示条只在"有新版"时
+             才出现，出了问题想退回去的时候它恰恰不在。JS 会在没有回退能力时整项隐藏。 -->
+        <button class="umitem" id="uiVerBtn" type="button" hidden>界面版本</button>
         <button class="umitem danger" id="logoutBtn" type="button">退出登录</button>
       </div>
     </div>
@@ -1365,6 +1377,22 @@
       <div class="mm-msg info" id="pwMsg"></div>
       <div class="mm-actions"><button id="pwSave" class="mm-btn primary" type="button">保存</button></div>
       <div class="mm-hint">改完当前登录会失效，需用新密码重新登录。</div>
+    </div>
+  </div>
+</div>
+<!-- 界面版本：当前用的哪一版前端、能退回哪几版、云端有没有更新。
+     只换 web/ 下的静态资源（永不含 .mjs），所以退/更新都【不重启后台】，正在跑的轮不受影响。 -->
+<div id="uiVerModal" class="modal">
+  <div class="modal-card" style="max-width:460px">
+    <div class="modal-head">
+      <!-- 「?」由 helpDot() 填进来（复用既有的 .wfdot + 气泡那一套，别再造一份） -->
+      <span class="modal-title">界面版本<span id="uiVerQ"></span></span>
+      <button class="modal-x" id="uiVerClose" type="button" title="关闭"></button>
+    </div>
+    <div class="modal-body">
+      <div class="mm-msg info" id="uiVerMsg">正在读取…</div>
+      <div id="uiVerList"></div>
+      <div class="mm-hint">换的只是界面文件，不重启后台、不打断正在生成的任务；换完页面会自动刷新一次。</div>
     </div>
   </div>
 </div>
@@ -1723,6 +1751,10 @@ document.getElementById("logoutBtn").innerHTML = ic("logout") + "<span>退出登
   })
   document.getElementById("pwBtn").addEventListener("click", closeMenu)
   document.getElementById("logoutBtn").addEventListener("click", closeMenu)
+  // 界面版本（桌面版才露出来，见下面 uiVerBtn 那段的探测）
+  const uv = document.getElementById("uiVerBtn")
+  uv.innerHTML = ic("history") + "<span>界面版本</span>"
+  uv.addEventListener("click", closeMenu)
 })()
 // 用户信息（名字 / 档位）来自云端账号档案；没接云端（局域网/单机形态）就如实显示"本机模式"。
 async function refreshUserBox() {
@@ -5028,11 +5060,111 @@ function renderWebBanner(wu) {
   }
   const x = document.createElement("button")
   x.className = "nbx"; x.type = "button"; x.textContent = "本版忽略"
-  x.title = "这一版不再提示；之后在「云端账号」面板里随时可以手动更新或回退"
+  x.title = "这一版不再提示；之后在左下角用户菜单的「界面版本」里随时可以手动更新或回退"
   x.onclick = () => { try { localStorage.setItem(WB_KEY, wu.version) } catch {}; el.hidden = true }
   el.append(msg, go, x)
   el.hidden = false
 }
+
+// ---- 界面版本：看当前用的哪一版、退回旧版、手动更新（桌面版；详见 web-update.mjs 头注）----
+// 【为什么非要有回退入口】更新提示条只在"云端有更高版本"时才冒出来，而人想退回去的那一刻，
+// 恰恰是新版出了问题、提示条早已消失的时刻——那时界面上没有任何地方够得着 rollback 接口。
+// 后端的回退能力一直是齐的（web-update.mjs 留 5 版归档），缺的只是这个入口。
+const uiVerModal = document.getElementById("uiVerModal")
+const uiVerList = document.getElementById("uiVerList")
+const uiVerMsg = document.getElementById("uiVerMsg")
+const uiVerBtn = document.getElementById("uiVerBtn")
+document.getElementById("uiVerQ").appendChild(helpDot(
+  "「界面版本」指的是这台机器上正在用的那套前端页面（web/ 下的静态文件），不含后台代码。\n" +
+  "因此更新和回退都不重启后台、不打断正在生成的任务，换完刷新一次页面就生效。\n\n" +
+  "新版界面不对劲时，可以退回本机留存的任一旧版（自动留最近 5 版，外加「出厂版」= 安装包自带的那套）。\n" +
+  "退回去之后云端那一版仍然在，随时能再更新回来——回退前会先把现在这套存档，两个方向都不会丢。"))
+function closeUiVer() { uiVerModal.classList.remove("on") }
+function uvSay(kind, text) { uiVerMsg.className = "mm-msg " + kind; uiVerMsg.textContent = text }
+const uvWhen = (ms) => { try { return new Date(ms).toLocaleString("zh-CN", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" }) } catch { return "" } }
+const uvLabel = (v) => (v === "factory" || !v ? "出厂版（安装包自带）" : "v" + v)
+
+/** 换版：更新走 update（装云端最新），回退走 rollback（装本机留存的某一版）。两者都不重启后台。 */
+async function uvSwitch(kind, version, btn) {
+  const all = [...uiVerList.querySelectorAll("button")]
+  all.forEach((b) => { b.disabled = true })
+  btn.textContent = kind === "update" ? "更新中…" : "回退中…"
+  try {
+    const r = await (await fetch("api/webpacks/" + kind, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(kind === "rollback" ? { version } : {}),
+    })).json()
+    if (!r.ok) { uvSay("err", (kind === "update" ? "更新失败：" : "回退失败：") + (r.err || "未知错误")); all.forEach((b) => { b.disabled = false }); renderUiVer(null); return }
+    uvSay("ok", "✅ 已切换到 " + uvLabel(r.current) + "，正在刷新页面…")
+    // 【刷新即生效】新文件已经在磁盘上，重新拉一次页面就是那一版；带时间戳绕开缓存
+    setTimeout(() => { location.href = "./?v=" + encodeURIComponent(r.current || "factory") }, 900)
+  } catch {
+    uvSay("err", "网络错误，没有换版"); all.forEach((b) => { b.disabled = false })
+  }
+}
+
+function renderUiVer(s) {
+  uiVerList.innerHTML = ""
+  if (!s) return
+  const cur = s.current || "factory"
+  const row = (opts) => {
+    const d = document.createElement("div"); d.className = "uvrow"
+    const meta = document.createElement("div"); meta.className = "uvmeta"
+    const n = document.createElement("div"); n.className = "uvname"
+    n.appendChild(document.createTextNode(opts.title))
+    if (opts.tag) { const t = document.createElement("span"); t.className = opts.tagCls; t.textContent = opts.tag; n.appendChild(t) }
+    meta.appendChild(n)
+    if (opts.sub) meta.appendChild(Object.assign(document.createElement("div"), { className: "uvsub", textContent: opts.sub }))
+    d.appendChild(meta)
+    if (opts.btn) d.appendChild(opts.btn)
+    uiVerList.appendChild(d)
+    return d
+  }
+  // 云端有更新 → 放最上面。【绕开「本版忽略」】提示条被忽略过就再也不出现了，
+  // 而这里是用户主动来找的，必须无条件显示，否则他会以为已经没有新版可更。
+  if (s.update && s.update.version) {
+    const b = document.createElement("button"); b.className = "mm-btn primary"; b.type = "button"; b.textContent = "更新"
+    b.onclick = () => uvSwitch("update", "", b)
+    row({ title: "v" + s.update.version, tag: "云端最新", tagCls: "uvnew", btn: b,
+      sub: (s.update.changelog || "").slice(0, 90) || "云端已发布的新界面" })
+  }
+  row({ title: uvLabel(cur), tag: "正在用", tagCls: "uvcur", sub: "当前这台机器加载的就是这一版" })
+  // 可回退的留存版本：排掉当前版（它的快照在转正时就被消耗掉了，本来就不在归档里）
+  const olds = (s.local || []).filter((v) => v.version !== cur)
+  for (const v of olds.sort((a, b) => (b.at || 0) - (a.at || 0))) {
+    const b = document.createElement("button"); b.className = "mm-btn ghost"; b.type = "button"; b.textContent = "回退到此版"
+    b.onclick = () => uvSwitch("rollback", v.version, b)
+    row({ title: uvLabel(v.version), btn: b, sub: (v.factory ? "安装包自带的那套界面" : "本机留存") + (v.at ? " · 存于 " + uvWhen(v.at) : "") })
+  }
+  if (!olds.length) uiVerList.appendChild(Object.assign(document.createElement("div"),
+    { className: "uvsub", textContent: "本机还没有可回退的旧版——第一次更新界面之后，被换下来的那一版就会留在这里。" }))
+}
+
+async function openUiVer() {
+  uiVerModal.classList.add("on")
+  uiVerList.innerHTML = ""
+  uvSay("info", "正在读取…")
+  let s = null
+  try { s = await (await fetch("api/webpacks/status?fresh=1", { signal: AbortSignal.timeout(20000) })).json() } catch {}
+  if (!s || !s.ok || !s.available) {
+    uvSay("info", "这个部署形态下不能在线换界面——界面由服务器统一提供，只有桌面版才有本机版本可换。")
+    return
+  }
+  uvSay("info", "")
+  renderUiVer(s)
+}
+// 菜单的收起由上面那段统一处理（document 上的 click 也会关它），这里只管开弹窗
+uiVerBtn.addEventListener("click", openUiVer)
+document.getElementById("uiVerClose").addEventListener("click", closeUiVer)
+uiVerModal.addEventListener("click", (e) => { if (e.target === uiVerModal) closeUiVer() })
+document.addEventListener("keydown", (e) => { if (e.key === "Escape" && uiVerModal.classList.contains("on")) closeUiVer() })
+// 入口只在【真能换】的形态下露出来：中心多用户部署里网关是服务器的，本机没有可换的界面。
+;(async () => {
+  try {
+    const s = await (await fetch("api/webpacks/status", { signal: AbortSignal.timeout(10000) })).json()
+    if (s && s.ok && s.available) uiVerBtn.hidden = false
+  } catch { /* 探不到就保持隐藏：宁可少一个入口，也别给一个点了报错的按钮 */ }
+})()
 let noticeLastFetch = 0
 async function refreshNotice(force) {
   // 窗口每次聚焦都会调这里，节流到 60 秒；本机网关另有一层 60 秒缓存，云端不会被打穿
