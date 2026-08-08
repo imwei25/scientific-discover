@@ -64,6 +64,10 @@ config.json
 # 随时可以重新生成，没有留在仓库里的理由；曾经攒到 28 个。
 deploy-r*.bundle
 
+# 「界面包」在线发布时打出来的分发包（web/*.html + pack.json）。与 deploy-r*.bundle 同类：
+# 从当前工作区随时能重打一份，版本号又带着日期，攒在仓库根只会让 git status 长期是脏的。
+webpack-*.zip
+
 # 技能跑出来的证据表等产物，落在仓库根只是因为当时的工作目录在这儿
 zotero_evidence.csv
 

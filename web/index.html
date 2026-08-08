@@ -2900,8 +2900,8 @@ function buildFormCard({ title, sub, notice, fields, footnote, steps, intakeSub,
     // 否则条件字段一藏，分母还停在原来的数上（实测："区块 2 / 3" 底下只有两张卡）。
     const shown = fields.filter((f) => fieldVisible(f, values))
     // 每个字段【实际】归哪个区块：没写 section 的跟着上一个走。
-    // ★ 这条继承不能省：JOURNAL_FILTER 三项里只有第一项写了 section，后两项靠继承留在同一组；
-    //   改成"没写就另起一组"会把「影响力档位」「只要 OA」从「检索到的文献要满足什么条件」里踢出去，
+    // ★ 这条继承不能省：JOURNAL_FILTER 里只有第一项（影响力档位）写了 section，其余靠继承留在同一组；
+    //   改成"没写就另起一组"会把「只要 OA」从「检索到的文献要满足什么条件」里踢出去，
     //   而那个分组存在的唯一理由就是别让它们被读成"我想投的刊的影响因子"。
     const secOf = new Map()
     { let c = ""; for (const f of shown) { if (f.section) c = f.section; secOf.set(f.id, c) } }
