@@ -26,6 +26,23 @@
 
 **淡化/别浪费笔墨**：Factor 3 的头衔与荣誉罗列、与 Aim 无关的背景铺陈、实验操作细节（Aims 页尤其不写）。**主动写 potential pitfalls & alternatives 是加分**（撑 Factor 2 的 feasibility），回避风险反而显天真。
 
+### 本渠道的立项依据长什么样（把公共卡 [rationale-and-innovation.md](rationale-and-innovation.md) 的五段骨架按本渠道调权重）
+
+**Specific Aims 一页就是五段骨架的英文压缩版**，逐段对应，别另找模板：
+
+| 五段骨架 | Aims 页对应段 |
+|---|---|
+| 痛点事实 | Opening hook（the problem worth solving） |
+| **失效分析** | **Gap paragraph** —— what existing approaches cannot do and why |
+| 关键科学问题 | Critical need + **central hypothesis** |
+| 切入点与假说 | Rationale + why this approach can close the gap |
+| 价值锚 | Payoff / expected outcomes and impact |
+
+- **Factor 1（Significance + Innovation，计分且权重最高）几乎全靠失效分析与增量撑**——Innovation 段必须写 *relative to existing approaches*，无对照物的 "first to" 在 NIH 评审里格外扎眼。
+- 公共卡 §6 的五要素直接映射成 Innovation 段的 claim / prior art / type of advance / why not before / falsifiable test。
+- Approach 里的 **pitfalls & alternatives** 与失效分析呼应：你指出别人的失效点，就得说清自己怎么不重蹈。
+
+
 ## 3. 页数与格式硬限
 
 **Page Limits**（https://grants.nih.gov/grants-process/write-application/how-to-apply-application-guide/page-limits ；NOFO 可覆盖）：
