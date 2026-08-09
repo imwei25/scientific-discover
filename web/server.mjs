@@ -415,13 +415,28 @@ async function hardDeleteSession(id) {
   // 返回 ok:true 但一个字节都没删。容器按需停起是本架构常态，网关重启后 dirCache 就是空的，
   // 即"删会话释放空间"这唯一的回收手段在最常见的情形下完全失效，最终把用户卡在存储上限上。
   // （批量删除也走这里，所以这条次序对批删同样要紧。）
+  // ★ 目录解析【失败】也要认出来，不能当成"解析到了"。上面那段注释修的是"删完再解析"的次序，
+  //   但没堵住"解析本身失败"（session.get 500 / 网关刚重启 dirCache 空 / opencode 暂时不可达）：
+  //   sessionOut 此时静默回落到 outputs/<sid>，而真实目录是 outputs/ws_xxx —— 于是会话被删掉、
+  //   目录原样留着占配额，界面上再也点不到它，而用户唯一的回收手段（删会话）刚刚已经用完了。
+  //   判据借 dirCache：sessionOut 只在【真从 opencode 问到 directory】时才写缓存（见那边的注释），
+  //   所以调用之后缓存里有没有它，就等于"这次解析成没成"。
   const delOut = await sessionOut(id), delUp = await sessionUp(id)
-  try { await client.session.delete({ path: { id } }) } catch {}
-  try { fs.rmSync(delUp, { recursive: true, force: true }); fs.rmSync(delOut, { recursive: true, force: true }); dirCache.delete(safeSid(id)) } catch {}
+  const resolved = dirCache.has(safeSid(id))
+  let ocOk = true
+  try { await client.session.delete({ path: { id } }) } catch (e) { ocOk = false; console.warn(`[session] 删除 ${id} 失败：${e.message}`) }
+  let dirOk = true
+  // 解析不到真实目录就【不要删】：对着一个猜出来的路径 force 空转，只会把"没删干净"伪装成成功。
+  if (!resolved) dirOk = false
+  else try { fs.rmSync(delUp, { recursive: true, force: true }); fs.rmSync(delOut, { recursive: true, force: true }); dirCache.delete(safeSid(id)) }
+  catch (e) { dirOk = false; console.warn(`[session] 删除 ${id} 的目录失败：${e.message}`) }
   pendingReverts.delete(id)   // 已删会话的待提交登记没人再消费，别驻留到进程重启
   unbindSessionModule(id)     // 模块绑定同样随会话删除，别在持久表里越积越多
   clearGateBypass(id)         // 手动放行的标记同理：会话没了就不该在放行表里留着
-  if (META.sessions[id]) { delete META.sessions[id]; saveMeta() }
+  // ★ 元数据只在 opencode 那侧真删掉之后才清。否则："删除失败 → 会话回到列表 → 但项目归属与
+  //   置顶被抹掉了"，用户再点一次删，还得先把它重新归类。
+  if (ocOk && META.sessions[id]) { delete META.sessions[id]; saveMeta() }
+  return { ok: ocOk && dirOk, ocOk, dirOk }
 }
 // 元数据整理：只清掉「元数据里还挂着、但 opencode 里已经没有」的会话残留。
 // 【不会删任何会话】按会话年龄自动删除的机制已整体移除，会话永久保留，删只由用户主动发起。
@@ -2682,6 +2697,11 @@ function startJob(sid, sentText, modId) {
     const syncTail = async () => {
       const changed = changedSince(outDir, before)
       broadcast("files", changed)
+      // ★ 更深层文件数也要【直播时】给。原来它只在 /api/outputs 里回，SSE 这条路上前端拿的是
+      //   上一次的值（默认 0）—— 而 agent 把图写进 figures/panel/fig1.png 的那一刻，正是用户
+      //   盯着屏幕的时候：侧栏既不列它、也不挂那句"另有 N 个更深层文件"，要刷新才知道有。
+      //   单发一个事件而不是改 files 的载荷形状：files 一直是裸字符串数组，老界面包直接吃它。
+      try { broadcast("filesmeta", { deeper: dirStateDeep(outDir).deeper }) } catch { /* 数不出来就不发，不影响正文 */ }
       const rendered = changed.map((n) => ({ name: n, render: WF.rendererFor(n) })).filter((x) => x.render)
       if (rendered.length) broadcast("artifacts", rendered)
       if (modId !== "chat") {
@@ -3225,15 +3245,28 @@ const AUTOMAP_SYS = [
 // 而用户唯一能做的补救是重传文件 —— 与 index.html 表头缓存那处踩过的是同一个坑。
 const _amCache = new Map()
 const AM_CACHE_MAX = 64
+const AUTOMAP_MAX_CONC = 2      // 同时在途的自动认列请求上限。它由页面装载触发（多标签/多用户
+let automapInFlight = 0         // 很容易并发），而每一个都会起一个 pandas 进程——容器内存就那么点
 async function automapCached(file, analyses, run) {
   let key = file
   try { const st = fs.statSync(file); key = `${file}|${st.mtimeMs}|${st.size}` } catch {}
   key += "|" + (Array.isArray(analyses) ? analyses.join(",") : "")
-  if (_amCache.has(key)) return _amCache.get(key)
+  if (_amCache.has(key)) {
+    const hit = _amCache.get(key)
+    if (!hit.__negUntil || Date.now() < hit.__negUntil) return hit
+    _amCache.delete(key)                  // 负缓存到期：可以再试一次了
+  }
   const r = await run()
   if (r?.used) {
     if (_amCache.size >= AM_CACHE_MAX) _amCache.delete(_amCache.keys().next().value)
     _amCache.set(key, r)
+  } else if (r) {
+    // ★ 失败也要短暂记一笔。原来只缓存 used===true 的结果，于是模型持续超时 / 返垃圾时，
+    //   【每次装载面板都重打一次】—— 进模块一次、切表一次、刷新一次、恢复会话又一次，
+    //   每次都要等满 AUTOMAP_TIMEOUT_MS 才回落到规则版，用户对着"正在读表、自动认列…"干等。
+    //   60 秒负缓存：既不至于把一次网络抖动钉死，也挡住了连点。
+    if (_amCache.size >= AM_CACHE_MAX) _amCache.delete(_amCache.keys().next().value)
+    _amCache.set(key, { ...r, __negUntil: Date.now() + 60_000 })
   }
   return r
 }
@@ -3418,7 +3451,10 @@ export const server = http.createServer(async (req, res) => {
       let sid = u.searchParams.get("sid") || null
       if (!sid) sid = await createSession("web")   // 上传先于对话则现建会话（createSession 会把 directory 定到会话产物目录）
       const ws = await ensureWs(sid)
-      const name = path.basename(u.searchParams.get("name") || "upload.bin")
+      // ★ 点号开头的名字要改掉，不能原样存。/api/uploads 列表会 filter 掉 `.` 开头的文件
+      //   （那条是给 .preview 这类派生缓存用的），于是拖一个 .DS_Store / .env 进来的结果是：
+      //   界面报"✅ 已上传 1 个文件"，而列表里没有、删不掉、还占着配额 —— 传上去就人间蒸发。
+      const name = path.basename(u.searchParams.get("name") || "upload.bin").replace(/^\.+/, "_")
       // 流式落盘（不整包缓冲进内存，大文件不再有 ~2×文件大小的内存尖峰）：
       // ① 有 Content-Length 就先预检存储余量（浏览器上传都带），拦在收数据之前；
       // ② 边写临时隐藏文件边累计大小（兜底 chunked 上传），超限即中止并删除；③ 成功才改名就位。
@@ -3724,8 +3760,14 @@ export const server = http.createServer(async (req, res) => {
     if (req.method === "POST" && u.pathname === "/api/session/delete") {
       const id = u.searchParams.get("id") || ""
       if (!id) return send(res, 400, "application/json", JSON.stringify({ ok: false }))
-      await hardDeleteSession(id)   // 目录解析次序等要紧逻辑已并入该函数，TTL 清理走同一条路
-      return send(res, 200, "application/json", JSON.stringify({ ok: true }))
+      // ★ 如实回报分段结果。原来无条件 {ok:true}：删目录成功、删 opencode 会话失败时，
+      //   界面收到"成功"，而会话原样回到列表 —— 用户看到"没删掉"就再点一次，
+      //   可十天的稿子在第一次点的时候就已经没了。
+      const r = await hardDeleteSession(id)   // 目录解析次序等要紧逻辑已并入该函数
+      if (r.ok) return send(res, 200, "application/json", JSON.stringify({ ok: true }))
+      return send(res, 200, "application/json", JSON.stringify({ ok: false, ...r,
+        err: !r.ocOk ? "后台没能删掉这个会话（它还会留在列表里）；产物文件已经清掉了，请稍后重试。"
+                     : "会话已删除，但它的产物目录没能清掉（后台暂时不可用），空间稍后才会释放。" }))
     }
 
     // 编辑历史消息：回退到第 uindex 个用户消息（含）之前，opencode 会丢弃其后的消息；
@@ -3887,6 +3929,11 @@ export const server = http.createServer(async (req, res) => {
       if (!sid) return send(res, 200, "application/json", JSON.stringify({ state: null }))
       const modId = sessionModule(sid)
       if (modId === "chat") return send(res, 200, "application/json", JSON.stringify({ state: null, module: "chat" }))
+      // ★ 同族接口（/api/modules/<id>/workflow、/api/workflow/form、/api/chat/start）都查了授权，
+      //   唯独这条没查。后果是模块被回收之后，步骤条照常渲染、进度照常显示，界面看起来一切正常，
+      //   只有用户打完一整段需求点发送的那一刻才吃 403 —— 典型的"闸的下游全绿、上游已红"。
+      if (!moduleUsable(modId))
+        return send(res, 403, "application/json", JSON.stringify({ err: `本会话绑定的「${MODULE_DEFS[modId]?.name || modId}」模块当前不可用（可能是授权被调整）。请联系管理员，或到「自由对话」新开会话。` }))
       const out = await sessionOut(sid)
       const st = wfSyncDone(out, modId) || { module: modId, form: {}, done: [] }
       // steps 按已填表单值裁剪后回：条件不成立的步骤（如"数据已脱敏"→不需要脱敏步）不该出现在进度条上
@@ -3993,21 +4040,25 @@ export const server = http.createServer(async (req, res) => {
           // 同一个进程里 parseHeaders 已经能从同一个 upDir 读出真表头（/api/data/headers 走的就是它），
           // 成本几乎为零。同样只 warning 不挡：表头读不出来的情况太多（xlsx、宽表降级），硬拦会误伤。
           const headCache = new Map()
-          const headersOf = (fname) => {
+          // ★ 走 tablePreview 而不是只认 csv/tsv/txt 的 parseHeaders。
+          //   变量对应改版之后，automap 专门为「医院导出的表绝大多数是 xlsx」起了 pandas ——
+          //   xlsx 从此是主战场，而这道"你填的列在不在表里"的体检当时还把它整个跳过（cols=null →
+          //   continue）。于是 xlsx 上机器认错列时，下拉之外再没有任何校验，
+          //   用户拿到一份看着完全正常、实际分错了组的 Table 1。
+          //   tablePreview 自带 mtime+size 缓存（同一请求内几乎零成本），csv 也照旧能走 JS 兜底。
+          // ★ 拿【真列名】比，不是消歧后的显示名：前端存进 values 的已经是真列名，
+          //   若这里用 headers（带"（重名 2）"后缀），两边就都在用同一份被污染的数据，
+          //   `cols.includes("组别（重名 2）")` 恒为真 —— 双保险同源失效，等于没有保险。
+          //   顺带认「第 N 列」：无列名的列前端就是这么存的。
+          const headersOf = async (fname) => {
             if (headCache.has(fname)) return headCache.get(fname)
             let cols = null
             try {
               const fp = path.join(upDir, path.basename(fname))
-              const ext = path.extname(fname).toLowerCase()
-              if ([".csv", ".tsv", ".txt"].includes(ext) && fs.existsSync(fp)) {
-                const fd = fs.openSync(fp, "r"); const b = Buffer.alloc(64 * 1024)
-                const n = fs.readSync(fd, b, 0, b.length, 0); fs.closeSync(fd)
-                // ★ 拿【真列名】比，不是消歧后的显示名。前端存进 values 的已经是真列名了；
-                //   这里若仍用 headers（带"（重名 2）"后缀），两边就都在用同一份被污染的数据，
-                //   `cols.includes("组别（重名 2）")` 恒为真 —— 双保险同源失效，等于没有保险。
-                //   顺带认「第 N 列」：无列名的列前端就是这么存的。
-                const ph = WF.parseHeaders(b.slice(0, n), ext, { partial: n === b.length })
-                cols = ph.headers ? (ph.raw || ph.headers).map((h, i) => (String(h || "").trim() || `第 ${i + 1} 列`)) : null
+              if (fs.existsSync(fp)) {
+                const pv = await tablePreview(fp, { rows: 1 })
+                if (pv.ok && pv.headers?.length)
+                  cols = (pv.raw || pv.headers).map((h, i) => (String(h || "").trim() || `第 ${i + 1} 列`))
               }
             } catch { cols = null }
             headCache.set(fname, cols)
@@ -4023,8 +4074,8 @@ export const server = http.createServer(async (req, res) => {
             const picked = vals["__src_" + f.id]
             const src = (picked && srcs.includes(picked)) ? picked : srcs[0]
             if (!src) continue
-            const cols = headersOf(String(src))
-            if (!cols || !cols.length) continue          // 读不出表头就别判（xlsx / 宽表降级 / 编码认不出）
+            const cols = await headersOf(String(src))
+            if (!cols || !cols.length) continue          // 读不出表头就别判（没装 pandas 的 xlsx / 编码认不出）
             for (const n of (Array.isArray(vals[f.id]) ? vals[f.id] : [vals[f.id]]).filter(Boolean))
               if (!cols.includes(String(n)))
                 warnings.push(`「${f.label}」填的是「${n}」，但 ${src} 的表头里没有这一列（实际列名：${cols.slice(0, 8).join("、")}${cols.length > 8 ? "…" : ""}）`)
@@ -4040,10 +4091,16 @@ export const server = http.createServer(async (req, res) => {
         const st = wfLoad(out) || { module: modId, form: {}, done: [] }
         st.module = modId
         // 跨步继承：立项卡填的目标期刊，后面各步直接复用。
-        // ★ 但 `__` 开头的键是【纯前端的界面状态】（如 `__src_<字段id>`：多表时列名读自哪张表），
-        //   不是表单值。原样落盘的话会作为 seed 继承进后面每一步的卡片、在会话簿子里越积越多，
-        //   而它们不属于任何 schema 字段。落盘前滤掉。
-        const persist = Object.fromEntries(Object.entries(values).filter(([k]) => !k.startsWith("__")))
+        // ★ 但 `__src_<字段id>`（多表时列名读自哪张表）是【纯前端的界面状态】、不是表单值：
+        //   原样落盘会作为 seed 继承进后面每一步的卡片、在会话簿子里越积越多，落盘前滤掉。
+        // ★★ 但 `__vars*` 【必须落盘】，别一起剥掉。`__varsBy` 记的是"这一格是机器认的还是用户
+        //   指定的"、`__varsOK` 记的是"用户核对过了"—— 剥掉之后刷新一次，reader 那边
+        //   `if (has) by[id] = by[id] || "user"` 会把机器猜的列【全部改判成 user】，
+        //   于是发给模型的提示词从"机器认的，请你核"升级成「以我指定的为准」——
+        //   正是 varsBlock 头注写明不许发生的那件事：给一个可能认错的列名披上用户的权威。
+        //   （反方向也有：用户点过"就按这个来"后不发消息就刷新，__varsOK 丢失、确认白点。）
+        const KEEP = /^__vars/
+        const persist = Object.fromEntries(Object.entries(values).filter(([k]) => !k.startsWith("__") || KEEP.test(k)))
         st.form = { ...(st.form || {}), ...persist }
         if (stepId) st.cur = stepId
         wfSave(out, st)
@@ -4100,10 +4157,20 @@ export const server = http.createServer(async (req, res) => {
       if (!pv.ok || !pv.headers?.length)
         return send(res, 200, "application/json", JSON.stringify({ ok: false, reason: pv.reason || "这张表读不出结构" }))
       const base = WF.guessVarMap(pv.cols, { headers: pv.headers })
+      // ★ 额度闸与并发封顶：这是除 /api/suggest 之外的第二个模型调用口，而它此前两道都没有。
+      //   它由【页面装载】触发（进模块、切表、刷新、恢复会话各一次），比用户主动点更容易连发；
+      //   而 reader / figure 两个壳根本没有额度顶栏 —— 在 stats 的唯一界面里，这笔钱花了也看不见。
+      //   额度尽了就只回规则版：功能不断，只是不再花钱请模型修正。
+      const canLLM = !quotaOver() && automapInFlight < AUTOMAP_MAX_CONC
       // 【模型那一段必须缓存】前端每次装载「变量对应」面板都会打这个接口：进模块一次、切一次表一次、
       // 刷新页面一次、恢复会话又一次。不缓存的话同一张表会被反复送去问模型 —— 每次都花钱，
       // 而答案必然一样（输入完全相同）。缓存键含 mtime+size：重传同名新表会重算。
-      const ai = await automapCached(f, body.analyses, () => automapLLM(pv, base, body.analyses))
+      const ai = canLLM
+        ? await automapCached(f, body.analyses, async () => {
+            automapInFlight++
+            try { return await automapLLM(pv, base, body.analyses) } finally { automapInFlight-- }
+          })
+        : { used: false, err: quotaOver() ? "今日额度已用尽，这次只按列名规则认列（不影响你自己改）" : "同时在认列的请求过多，这次只按列名规则认列" }
       // 合并：模型给的、且列名在真表头里的才采纳；其余保留规则版。by 记下每一项是谁填的，
       // 前端要把它显示出来——用户有权知道这一格是"照列名规则填的"还是"模型看了数据填的"。
       const map = { ...base.map }, why = { ...base.why }, conf = { ...base.conf }
@@ -4116,12 +4183,27 @@ export const server = http.createServer(async (req, res) => {
         if (ai.why?.[k]) why[k] = ai.why[k]
         conf[k] = ai.conf?.[k] || conf[k] || "med"
       }
+      // ★ map 里的值到这里为止都是【显示名】（guessVarMap 吃的就是消歧后的 pv.headers，
+      //   模型那一段也是拿 pv.headers 校验的）。统一在服务端换回真列名再下发 ——
+      //   否则每个前端都得各转一遍，而 reader 那侧压根没有 raw 的概念，一转就漏。
+      //   why 里的列名不换：那是给人读的句子，显示名反而更好对上界面。
+      if (pv.raw?.length === pv.headers.length) {
+        const d2r = new Map(pv.headers.map((h, i) => [h, String(pv.raw[i] ?? "").trim() || `第 ${i + 1} 列`]))
+        const toRaw = (v) => (Array.isArray(v) ? v.map((x) => d2r.get(x) ?? x) : (d2r.get(v) ?? v))
+        for (const k of Object.keys(map)) map[k] = toRaw(map[k])
+      }
       return send(res, 200, "application/json", JSON.stringify({
         ok: true, map, why, conf, by,
         notes: [...(base.notes || []), ...(ai.notes || [])],
         source: ai.used ? "ai+rule" : "rule",
         aiErr: ai.err || "",
-        headers: pv.headers, rows: pv.rows || [], cols: pv.cols || [],
+        // ★ raw / dupes 必须一起回。前端按钮上显示 headers（消歧后的名字）、存进 values 的是
+        //   raw（真列名）—— 而现在【没有任何前端还在调 /api/data/headers】，两个壳都走这条路，
+        //   所以只回 headers 等于让那套真列名契约整个空转：用户点一下，表里根本不存在的
+        //   「年龄（重名 2）」就进了任务卡，而服务端的列名体检拿真列名比，还会对系统自己填的值
+        //   报一句"表头里没有这一列"——自相矛盾的红字。
+        headers: pv.headers, raw: pv.raw || null, dupes: pv.dupes || [],
+        rows: pv.rows || [], cols: pv.cols || [],
         note: pv.note || "", sheets: pv.sheets || [], scanned: pv.scanned || 0, truncated: !!pv.truncated,
       }))
     }
@@ -4260,7 +4342,9 @@ export const server = http.createServer(async (req, res) => {
       if (wfSeed && modId !== "chat" && WF.WORKFLOWS[modId]) {
         const st = wfLoad(ws.out) || { module: modId, form: {}, done: [] }
         st.module = modId
-        st.form = { ...(st.form || {}), ...wfSeed }
+        // 与 /api/workflow/form 同一口径：`__src_*`（纯界面状态）不落盘，`__vars*`（谁填的 / 核过没）要落。
+        // 两条写盘路径此前口径相反 —— 表单口剥掉全部 `__`，这条一个都不剥。
+        st.form = { ...(st.form || {}), ...Object.fromEntries(Object.entries(wfSeed).filter(([k]) => !k.startsWith("__") || /^__vars/.test(k))) }
         wfSave(ws.out, st)
       }
       // ensureSessionTitle 里有 await（打 opencode 网络）——必须放在“检查 running → startJob”这段【全同步】区之前。

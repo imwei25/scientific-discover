@@ -1583,7 +1583,8 @@ async function renderDoc() {
         // 顺便把真表头喂给「变量对应」的下拉：服务端读不了 xlsx（不背二进制解析依赖），
         // 此前 xlsx 一律降级成手填列名 —— 而"列名写错"正是这个模块最高频的失败模式。
         const head = (sheets[0].rows[0] || []).map((x) => String(x == null ? "" : x).trim()).filter(Boolean)
-        if (head.length && CFG.vars) { HEADERS = head; HEADERS_WHY = ""; renderVars() }
+        // 浏览器自己解析出来的表头：没有消歧处理，显示名与真列名同一份
+        if (head.length && CFG.vars) { HEADERS = head; HEADER_VALS = head.slice(); HEADER_DUPES = []; HEADERS_WHY = ""; renderVars() }
       } catch (err) {
         if (String((err && err.message) || err) === "unauthorized") return
         view.innerHTML = '<div class="docmsg">这个 Excel 表在浏览器里没能解析（' + esc(String((err && err.message) || err)) + '）。<br><br>'
@@ -2745,8 +2746,13 @@ function showVarsWarn(list) {
   if (list.length) $("varsBox").open = true      // 折叠着的话等于没说
 }
 
-let HEADERS = []          // 真实表头（stats 的 columns 下拉靠它）
+let HEADERS = []          // 表头的【显示名】（含"（重名 2）""（第 N 列·无列名）"这些消歧后缀）
+let HEADER_VALS = []      // 与 HEADERS 一一对应的【真列名】：存进 SETTINGS、交给脚本的是它
+let HEADER_DUPES = []     // 表里真的重名的列（仅大小写不同的不算）——同名列脚本只取第一列，要说一声
 let HEADERS_WHY = ""      // 读不出来时的原因（xlsx 要 AI 在分析时读，服务端如实回这一句）
+// 显示名 ↔ 真列名 的互查。表头没解析出来时退化成恒等，调用方不必到处判空。
+const valOfHead = (h) => { const i = HEADERS.indexOf(h); return i >= 0 ? HEADER_VALS[i] : h }
+const headOfVal = (v) => { const i = HEADER_VALS.indexOf(v); return i >= 0 ? HEADERS[i] : v }
 
 /** 通用控件：select / bool / text / multi / columns（columns 的候选来自真实表头） */
 function fieldControl(f, onChange) {
@@ -2779,16 +2785,18 @@ function fieldControl(f, onChange) {
   if (f.type === "columns" && f.multiple && HEADERS.length) {
     const cur = new Set(Array.isArray(v) ? v : (v ? [v] : []))
     const row = document.createElement("div"); row.className = "vchips"
-    for (const h of HEADERS) {
+    // chip 上显示消歧名、选中态与存进 SETTINGS 的都用真列名（见 HEADER_VALS 的说明）
+    HEADERS.forEach((h, i) => {
+      const val = HEADER_VALS[i] ?? h
       const b = document.createElement("button")
-      b.type = "button"; b.className = "vchip" + (cur.has(h) ? " on" : ""); b.textContent = h
+      b.type = "button"; b.className = "vchip" + (cur.has(val) ? " on" : ""); b.textContent = h
       b.addEventListener("click", () => {
-        cur.has(h) ? cur.delete(h) : cur.add(h)
-        SETTINGS[f.id] = HEADERS.filter((x) => cur.has(x))     // 按表里的列序存，顺序稳定
+        cur.has(val) ? cur.delete(val) : cur.add(val)
+        SETTINGS[f.id] = HEADER_VALS.filter((x) => cur.has(x))     // 按表里的列序存，顺序稳定
         onChange()
       })
       row.appendChild(b)
-    }
+    })
     wrap.appendChild(row); return wrap
   }
   // columns 读不出表头（xlsx）时降级成手填输入框，而不是给一个空下拉让人以为这张表没有列
@@ -2807,7 +2815,8 @@ function fieldControl(f, onChange) {
   }
   const sel = document.createElement("select")
   const opts = f.type === "bool" ? [{ v: true, t: "是" }, { v: false, t: "否" }]
-    : f.type === "columns" ? [{ v: "", t: "（不指定）" }].concat(HEADERS.map((h) => ({ v: h, t: h })))
+    // 同理：option 的 value 是真列名，显示文字才是消歧后的名字
+    : f.type === "columns" ? [{ v: "", t: "（不指定）" }].concat(HEADERS.map((h, i) => ({ v: HEADER_VALS[i] ?? h, t: h })))
     : (f.options || []).slice()
   if (f.type !== "columns" && f.type !== "bool" && !f.required) opts.unshift({ v: "", t: "（不指定）" })
   for (const o of opts) {
@@ -2844,7 +2853,8 @@ async function loadHeaders() {
   if (!CFG.vars || !docName || !sid) return
   const seq = ++AUTOMAP_SEQ
   const forFile = docName
-  HEADERS = []; HEADERS_WHY = ""; PEEK = null; AUTOMAP = null
+  const headsBefore = HEADERS.slice(), valsBefore = HEADER_VALS.slice()   // automap 挂了要回落到它（见下）
+  HEADERS = []; HEADER_VALS = []; HEADER_DUPES = []; HEADERS_WHY = ""; PEEK = null; AUTOMAP = null
   AUTOMAP_LOADING = true
   renderVars()
   let j = null
@@ -2857,11 +2867,20 @@ async function loadHeaders() {
   if (seq !== AUTOMAP_SEQ) return          // 等待期间用户切了表：这份结果是上一张表的，丢掉
   AUTOMAP_LOADING = false
   if (!j || !j.ok) {
-    HEADERS = []
+    // ★ 回落到之前已经解析出来的表头，别清空。浏览器那侧（xlsx 预览，见 1586 行）可能早就把
+    //   这张表的列名解出来并渲染成表格了 —— automap 一失败就 HEADERS=[]，于是【左栏摆着整张表、
+    //   右边的变量对应却降级成手填输入框】，用户对着看得见的列名手敲一遍。
+    HEADERS = headsBefore; HEADER_VALS = valsBefore.length === headsBefore.length ? valsBefore : headsBefore.slice()
     HEADERS_WHY = (j && j.reason) || "这张表读不出结构（网关可能正忙），列名请手动填。"
     renderVars(); return
   }
+  // ★ 显示名与真列名分开。HEADERS 用来【显示】（带"（重名 2）""（第 N 列·无列名）"这些消歧后缀），
+  //   HEADER_VALS 才是存进 SETTINGS、最终交给脚本的【真列名】—— 后缀在真实表里根本不存在，
+  //   拿它去取列必然取不到，而这个面板存在的唯一理由就是"列名一定对"。
+  //   （index.html 那侧已经这么做了；这里是同一个坑的另一份实现，别只修一半。）
   HEADERS = Array.isArray(j.headers) ? j.headers : []
+  HEADER_VALS = HEADERS.map((h, i) => String(j.raw?.[i] ?? h ?? "").trim() || `第 ${i + 1} 列`)
+  HEADER_DUPES = Array.isArray(j.dupes) ? j.dupes : []
   HEADERS_WHY = j.note || ""
   PEEK = { headers: j.headers || [], rows: j.rows || [], cols: j.cols || [],
     note: j.note || "", scanned: j.scanned || 0, truncated: !!j.truncated }
@@ -2948,11 +2967,13 @@ function renderVars(missing) {
     }
     grid.appendChild(box)
   }
-  $("varsSum").textContent = AUTOMAP_LOADING ? "（正在读表、自动认列…）"
+  // 表里真有重名列时说一句：同名列脚本只会取第一列，用户得知道自己选的是哪一个
+  const dupNote = HEADER_DUPES.length ? "　⚠ 表里有重复的列名（" + HEADER_DUPES.join("、") + "），同名列只会取第一列" : ""
+  $("varsSum").textContent = (AUTOMAP_LOADING ? "（正在读表、自动认列…）"
     : HEADERS.length
       ? (varsNeedConfirm() ? "（已自动填 " + filled + " 项，等你核对）"
         : "（已指定 " + filled + " / " + CFG.vars.fields.length + " 项，列名读自你的表）")
-      : (HEADERS_WHY ? "（" + HEADERS_WHY + "）" : "（已指定 " + filled + " 项）")
+      : (HEADERS_WHY ? "（" + HEADERS_WHY + "）" : "（已指定 " + filled + " 项）")) + dupNote
   renderVarsConfirm()
   renderVarsPeek()
 }

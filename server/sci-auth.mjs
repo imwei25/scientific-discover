@@ -1224,7 +1224,13 @@ async function handleAdminApi(req, res, pathname) {
     // 强制登出（bumpEpoch 连 refresh 一起作废 = 要重新输口令），而"加个模型给大家用"
     // 本该是无感的。客户端下次拉档案（重启 / 账号面板点刷新）就能看到新模型。
     // 【并发上限同理不吊销】它也不在票据里，网关每一单现查现用，改完下一个请求就按新值排队。
-    const revoking = !before || ["daily_usd", "monthly_usd", "model", "skills"].some((k) => before[k] !== after[k])
+    // 【日/月额度同理不吊销】—— 上面 user.update 那处对【每用户额度覆盖】已经写明了理由：
+    //   "额度根本不在票据里：authClient 只用 payload 的 uid/ep/sc，网关每一单都现查库拿
+    //   resolveEntitlement，改完下一次请求就生效。为它 bumpEpoch 纯属白踢人"。
+    //   这句话逐字适用于档位级额度，而这里却把 daily_usd / monthly_usd 也算进吊销 ——
+    //   于是"给大家临时加点额度"这种纯善意操作，会把该档【全体】用户当场踢下线要求重输口令，
+    //   正在跑一小时综述的医生首当其冲。两处口径必须一致：只有进票据 / 影响 provider 的才吊销。
+    const revoking = !before || ["model", "skills"].some((k) => before[k] !== after[k])
     const affected = revoking ? db.prepare("SELECT id FROM users WHERE tier=?").all(key) : []
     for (const r of affected) DB.bumpEpoch(db, r.id)
     audit("tier.set", { actor: "admin", target: key, ip, detail: `affected=${affected.length}${revoking ? "" : " (仅改可选模型，未吊销)"}` })

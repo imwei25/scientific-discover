@@ -855,18 +855,32 @@ document.addEventListener("click", (e) => { if (!e.target.closest("#menu") && !e
    启动
    ============================================================ */
 ;(async () => {
+  // ★ 先拉模块清单核一遍，别把三种完全不同的失败都说成"网关可能正忙，稍等刷新"。
+  //   本页此前只打 /api/modules/<id>/workflow，而该接口对【未开通】的模块回 403 → r.ok 为假
+  //   → wf=null → 落进那句兜底，于是被回收权限的用户被指着去无限刷新一个永远不会好的页面。
+  //   reader.html 那侧做对了（先 meta 存在性、再 meta.allowed、最后才是配置），这里照抄。
+  const bail = (title, msg) => {
+    document.body.innerHTML = '<div style="padding:60px;text-align:center;color:#5b6573">'
+      + '<div style="font-size:17px;color:#1f2329;margin-bottom:10px">' + esc(title) + "</div>" + esc(msg)
+      + '<br><br><a href="./workspace.html" style="color:#3b6fd4">回工作台 →</a></div>'
+  }
+  let mods = null
+  try { mods = ((await jget("api/modules").then((r) => (r.ok ? r.json() : null))) || {}).modules } catch (e) {
+    if (String((e && e.message) || e) === "unauthorized") return
+  }
+  if (Array.isArray(mods)) {
+    const meta = mods.find((x) => x.id === MOD)
+    if (!meta) return bail("打不开这个模块", "服务端没有「" + MOD + "」这个模块。可能是链接过期了，回工作台重新进一次。")
+    if (!meta.allowed) return bail(meta.name || MOD, "你的账号还没有开通这个模块，请联系管理员。刷新本页不会有变化。")
+    if (meta.ui && meta.ui !== "figure") { location.href = "./" + (meta.ui === "reader" ? "reader.html" : "") + "?m=" + encodeURIComponent(MOD); return }
+  }
   let wf = null
   // ★ 接口回的是 {workflow:{...}}，要剥一层。直接把整个响应当配置用的话，页面会静默退化成
   //   「取不到配置」那条兜底 —— 而 F12 里那次请求是 200、内容完整，很难往这儿想。
   try { wf = ((await jget("api/modules/" + encodeURIComponent(MOD) + "/workflow").then((r) => (r.ok ? r.json() : null))) || {}).workflow } catch (e) {
     if (String((e && e.message) || e) === "unauthorized") return
   }
-  if (!wf || !wf.gen) {
-    document.body.innerHTML = '<div style="padding:60px;text-align:center;color:#5b6573">'
-      + "取不到本模块的配置（网关可能正忙或还在启动）。稍等片刻刷新本页即可。"
-      + '<br><br><a href="./workspace.html" style="color:#3b6fd4">回工作台 →</a></div>'
-    return
-  }
+  if (!wf || !wf.gen) return bail("取不到本模块的配置", "服务端版本可能比界面包旧，或网关还在启动。稍等片刻刷新本页试试。")
   CFG = wf.gen
   FIELDS = {}
   for (const f of CFG.intake || []) FIELDS[f.id] = f

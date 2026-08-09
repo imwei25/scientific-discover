@@ -242,14 +242,19 @@ test("无人值守端到端", { skip: hasOpencode ? false : "本机没有 openco
     await new Promise((x) => setTimeout(x, 900))   // 让它跑进循环深处再砍（NEVER 剧本不会自己停）
     const ab = await (await fetch(`${gw.base}/api/chat/abort?sid=${encodeURIComponent(j.sid)}`, { method: "POST" })).json()
     assert.equal(ab.aborted, true, "终止时确有在跑的一轮")
-    // 基线要等 abort 的落库暂态过去再取：紧贴着 abort 取历史，被砍那轮的用户消息可能还没
-    // 写完（实测取到 0 条），2 秒后它补齐入列会被误判成"偷跑注入"。
     await new Promise((x) => setTimeout(x, 700))
     assert.equal(await running(), false, "终止即停，没有在跑的轮")
+    // ★ 数【自动续跑消息】而不是用户消息总数。
+    //   总数是个代理指标，且有已知假阳性：被砍那一轮自己的用户消息可能还没落库（原注释写着
+    //   "实测取到 0 条"），2 秒后补齐入列就被误判成"偷跑注入" —— 原来靠一个固定 700ms 的
+    //   等待去躲它，实测 3 次里仍会挂 1 次（差值恰好是 1，且两次 running() 都是 false）。
+    //   而本用例真正要验的是"不再自动续跑"，那种消息带着「自动续跑 第」标记（autoContinueText
+    //   与 mock 的轮数判据用的都是它）。改数它：假阳性没了，真注入照样抓得到 —— 只会更严，不会更松。
+    const autoN = (h) => h.filter((m) => m.role === "user" && /自动续跑 第/.test(m.text || "")).length
     const hist1 = await (await fetch(`${gw.base}/api/history?sid=${encodeURIComponent(j.sid)}`)).json()
     await new Promise((x) => setTimeout(x, 2000))   // 若终止没清掉无人值守，这个窗口足够它偷跑下一轮
     assert.equal(await running(), false, "终止后没有偷跑新一轮")
     const hist2 = await (await fetch(`${gw.base}/api/history?sid=${encodeURIComponent(j.sid)}`)).json()
-    assert.equal(hist2.filter((m) => m.role === "user").length, hist1.filter((m) => m.role === "user").length, "终止后没再注入新的续跑消息")
+    assert.equal(autoN(hist2), autoN(hist1), "终止后没再注入新的续跑消息")
   })
 })

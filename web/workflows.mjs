@@ -1664,7 +1664,10 @@ const fmtVal = (f, v, upDir) => {
   if (v === undefined || v === null || v === "") return null
   const label = (val) => (f.options || []).find((o) => o.v === val)?.t || val
   if (f.type === "bool") return v ? "是" : "否"
-  if (f.type === "multi" || f.multiple) {
+  // ★ files 型不能落进这一支。它排在下面 `type === "files"` 之【前】，谁将来给某个 files 字段
+  //   加上 multiple: true，那个字段就会无声地退回裸文件名 —— 绝对路径没了，而任务卡看着依然正常。
+  //   （当前 9 个真实 files 字段都没设这个标志，属于埋着的坑，先堵上。）
+  if (f.type === "multi" || (f.multiple && f.type !== "files")) {
     const arr = Array.isArray(v) ? v : [v]
     return arr.length ? arr.map(label).join("、") : null
   }
@@ -1699,12 +1702,19 @@ const fmtVal = (f, v, upDir) => {
     if (!arr.length) return null
     // 分隔符跟着 upDir 走，别硬编码 "/"：Windows 桌面版会拼出 `D:\...\uploads\ws_xxx/manu.md`
     // 这种半反半正的路径。模型认得，但难看，也容易被后续脚本处理歪。
+    // ★ 路径要带引号、并且一行一个。技能大量走 bash，而用户传上来的文件名里空格与括号极常见
+    //   （「患者数据 2026-08(最终版).xlsx」这种是常态）：不加引号的话，空格会把一个路径拆成两个
+    //   参数，`(` `)` 在 bash 里直接是语法错误 —— 任务卡文本本身看着没毛病，落到 shell 才炸。
+    //   顿号分隔同理：多文件时模型很容易把「A、B」整串当成一个路径。
+    const q = (s) => "'" + String(s).replace(/'/g, "'\\''") + "'"
     if (upDir) {
       const base = String(upDir).replace(/[\\/]+$/, "")
       const sep = base.includes("\\") && !base.includes("/") ? "\\" : "/"
-      return arr.map((n) => base + sep + n).join("、")
+      return arr.length === 1 ? q(base + sep + arr[0])
+        : "\n" + arr.map((n) => "  - " + q(base + sep + n)).join("\n")
     }
-    return arr.join("、") + "（在上传目录下，绝对路径见前言）"
+    return (arr.length === 1 ? q(arr[0]) : "\n" + arr.map((n) => "  - " + q(n)).join("\n"))
+      + "（在上传目录下，绝对路径见前言）"
   }
   if (f.type === "select") return label(v)
   return String(v)
@@ -1845,8 +1855,13 @@ const VAR_ROLES = [
     // 分组列必然是"少数几个水平"。ID、纯文本、日期、空列一律不可能是它
     shape: (c) => c.nunique >= 2 && c.nunique <= 6 && !["id", "empty", "datetime", "text", "constant"].includes(c.kind),
     shapeWhy: (c) => `全表只有 ${c.nunique} 种取值（${vals(c)}）`,
-    // 性别确实能当分组，但十有八九是协变量。压一点分，让真正的组别列赢过它
-    demote: /性别|sex|gender/i },
+    // 性别确实能当分组，但十有八九是协变量。压一点分，让真正的组别列赢过它。
+    // ★ 分期 / 分级 / 分型同理，而且更要命：TNM 分型这类列【列名命中 + 形状也命中】（4 个水平），
+    //   于是拿到 high 置信 —— 界面上连"·待核"都不挂、也不淡化，用户直接照单全收，
+    //   而真正的分组列「治疗方案」反倒没被命中。服务端给模型的提示词第一条就写着"不是分期"，
+    //   规则版（也是关掉 AI / 没有 provider / 超时时的唯一结果）自己却在违反它。
+    //   用 demote 不用 deny：确有拿分期当组的研究，压到过不了槛、留空让用户自己指，比填错强。
+    demote: /性别|sex|gender|分期|分级|分型|亚型|\bstage\b|\bgrade\b|tnm/i },
   { id: "timeCol", label: "随访时间列", pri: 2,
     name: /随访|生存时间|生存期|观察时间|时长|时间.*(月|天|年|日)|(月|天|年|日)数|followup|follow_?up|survival_?time|\btime\b|\bos\b|\bpfs\b|\bdfs\b|\brfs\b|duration|months?|days?/i,
     // 时长必须是非负的连续/整数值。日期列不算——那是"某一天"，不是"多久"（见下面的 note）
@@ -1923,14 +1938,20 @@ export function guessVarMap(cols, opt = {}) {
         if (nameHit && n) notes.push(n)
         continue                                   // 形状对不上就一票否决，列名再像也不填
       }
-      let s = (nameHit ? 3 : 0) + (shapeHit ? 1.5 : 0) + (role.bonus && hasShape ? role.bonus(c) : 0)
-      if (role.demote && role.demote.test(c.name)) s -= 2.5
-      if (s <= 0) continue
-      if (!best || s > best.s) best = { c, s, nameHit, shapeHit }
+      // ★ 过槛分与排序分要分开。bonus 原来是直接加进 s 的，于是
+      //   `0(名不对) + 1.5(形对) + 1.5(binary01 加成) = 3.0` 恰好踩线过关 ——
+      //   任何一个 0/1 列（是否吸烟、是否饮酒、是否高血压…）都会被填成「终点事件列」，
+      //   而这正是本函数头注说的"只看形状根本分不开是否死亡与是否吸烟"。加成把作者
+      //   刻意留的那点余量吃光了。现在它只用来在【已经过槛的候选之间】排序。
+      const base = (nameHit ? 3 : 0) + (shapeHit ? 1.5 : 0)
+        - (role.demote && role.demote.test(c.name) ? 2.5 : 0)
+      const s = base + (role.bonus && hasShape ? role.bonus(c) : 0)
+      if (base < 3) continue                       // 门槛只看 base（见下）
+      if (!best || s > best.s) best = { c, s, base, nameHit, shapeHit }
     }
     // 门槛 3：等于"至少列名对上了"。只有形状对（1.5 分）绝不够——表里非负连续列一抓一把，
     // 挑一个填进「随访时间」纯属瞎猜，而用户会把它当成系统的判断。
-    if (!best || best.s < 3) continue
+    if (!best) continue
     const c = best.c
     taken.add(c.name)
     map[role.id] = c.name

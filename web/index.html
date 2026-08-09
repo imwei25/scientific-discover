@@ -2337,7 +2337,9 @@ const isScratch = (n) => { const b = n.split("/").pop(); return SCRATCHY.test(b)
 // 平铺出来会把成稿彻底淹掉（实测侧栏 73 条里 65 条是 pdfs/*，交付物混在里面找不着）。
 // 折叠成一行，点开才展开。
 const isBulkPdf = (n) => /^(pdfs|zotero_lib)\//i.test(String(n))
+let lastFilesList = []            // 上一次渲染的产物名单，供 filesmeta 到达时原样重画一遍
 function renderFiles(list) {
+  lastFilesList = list || []
   pvTabCount.textContent = list && list.length ? String(list.length) : ""   // 预览态切换条上的产出条数
   if (!list || !list.length) { filesEl.innerHTML = '<span class="hint">对话生成的文件会显示在这里</span>'; return }
   filesEl.innerHTML = ""
@@ -2558,9 +2560,16 @@ async function openPreview(name) {
     if (ext === "md" || ext === "markdown") {                 // markdown：前端渲染
       const txt = await fetch(raw).then(r => r.text())
       pvBody.innerHTML = renderMarkdown(txt); enhanceCode(pvBody)
-    } else if (ext === "docx") {                              // docx：服务端 mammoth 转 HTML 后注入
+    } else if (ext === "docx") {
+      // ★ 走 iframe，不要 innerHTML 注入。服务端给这条响应加了
+      //   `Content-Security-Policy: sandbox; default-src 'none'`（注释写明 mammoth 不过滤
+      //   `javascript:` 协议），而 innerHTML 是把响应体当【字符串】塞进父页 —— 响应头对它
+      //   完全无效，那道 CSP 等于死代码。`<script>` 虽不执行，但 `javascript:` 超链接与
+      //   `<img onerror>` 会在本站源上跑（能读到本站 cookie/localStorage）。
+      //   而产物 docx 的内容来自模型与用户上传的稿件，不是可信输入。
+      //   reader.html 那侧本来就是 iframe（frame("api/preview…")），两个壳口径对齐。
       const r = await fetch(prev); if (!r.ok) throw new Error(await r.text())
-      pvBody.innerHTML = await r.text()
+      pvBody.classList.add("frame"); pvBody.innerHTML = '<iframe title="预览" src="' + prev.replace(/"/g, "%22") + '"></iframe>'
     } else if (ext === "pdf") {                               // pdf：浏览器原生内嵌
       pvBody.classList.add("frame"); pvBody.innerHTML = '<iframe title="预览" src="' + raw + '"></iframe>'
     } else if (ext === "html" || ext === "htm") {             // html：沙箱 iframe（脚本可跑，隔离站点源）
@@ -2820,38 +2829,76 @@ selAllBtn.addEventListener("click", () => {
 selDelBtn.addEventListener("click", deleteSelected)
 async function deleteSelected() {
   const ids = [...selected]; if (!ids.length) return
-  const names = (META_STATE.sessions || []).filter((s) => selected.has(s.id)).map((s) => s.title)
-  if (!confirm("删除选中的 " + ids.length + " 个会话？\n" + names.slice(0, 5).join("、") + (names.length > 5 ? " 等" : "") +
-    "\n\n对话内容与该会话的产物文件会一并删除，不可撤销。")) return
+  // ★ 名字要走 sessTitle 并压成单行。原来用的是原始 s.title，而【模块首屏表单开场的会话】，
+  //   标题就是任务卡的前 40 字、自带换行 —— 设计上想显示 3 行，实测能变成 10 行，"、"分隔符
+  //   完全失效，两个同模块的会话在框里长得一模一样；乱码标题在侧栏显示为"XX（标题异常）"、
+  //   在这个框里却是一串方块，用户没法把框里的名字对回列表里的那一条。
+  const one = (s) => sessTitle(s).replace(/\s+/g, " ").slice(0, 24)
+  const names = (META_STATE.sessions || []).filter((s) => selected.has(s.id)).map(one)
+  if (!confirm("删除选中的 " + ids.length + " 个会话？\n" + names.slice(0, 5).join("、")
+    + (names.length > 5 ? ` 等 ${names.length} 个` : "") +
+    "\n\n对话记录、生成的产物文件、以及你上传到这些会话的原始文件都会被删除，无法恢复。")) return
   const hadCurrent = !!sessionId && selected.has(sessionId)
   selDelBtn.disabled = true; selAllBtn.disabled = true
   const queue = ids.slice()
   let done = 0, failed = 0
+  const failedList = []      // 没删成的会话名 + 原因，收齐了一次性告诉用户（见下面的 alert）
   // 并发 3：一条条串行删几十个太慢，全量并发又会把后端的 opencode 删除+目录回收打满
   const worker = async () => {
     while (queue.length) {
       const id = queue.shift()
-      const ok = await fetch("api/session/delete?id=" + encodeURIComponent(id), { method: "POST" }).then((r) => r.ok).catch(() => false)
-      ok ? done++ : failed++
+      // ★ 光看 r.ok 抓不到服务端的失败：那边删一半（产物没了、会话还在）时照样回 200。
+      //   现在端点会如实回 {ok:false, err}，这里要读 body 才判得准。
+      const j = await fetch("api/session/delete?id=" + encodeURIComponent(id), { method: "POST" })
+        .then((r) => (r.ok ? r.json().catch(() => ({ ok: true })) : { ok: false, err: "请求失败（" + r.status + "）" }))
+        .catch(() => ({ ok: false, err: "网络不通" }))
+      if (j.ok) done++
+      else { failed++; failedList.push(one((META_STATE.sessions || []).find((s) => s.id === id) || { title: id }) + "（" + (j.err || "未知原因") + "）") }
       selNEl.textContent = "删除中… " + (done + failed) + "/" + ids.length
     }
   }
   await Promise.all([worker(), worker(), worker()])
   selAllBtn.disabled = false
   if (hadCurrent) clearCurrentSession()          // 把当前打开的会话也删了 → 回到空态
-  setSelMode(false)
   loadSessions(); refreshStorage()               // 删会话已释放其存储 → 刷新用量
-  if (failed) alert("有 " + failed + " 个会话没能删除（网络或服务异常），请刷新后重试。")
+  // ★ 失败要报【是哪几个】。原来只说"有 N 个没能删除"，而且 setSelMode(false) 排在 alert 之前
+  //   把勾选先清空了 —— 用户既不知道哪些没删掉，也没法直接重试那几个。
+  if (failed) {
+    alert("有 " + failed + " 个会话没能删除：\n" + failedList.slice(0, 8).join("\n")
+      + (failedList.length > 8 ? `\n…等 ${failedList.length} 个` : "")
+      + "\n\n它们仍然勾选着，可以直接重试。")
+  } else setSelMode(false)   // 全成功才退出选择模式；有失败就留着勾选让用户重试
 }
 // 【sessList 必须是数组】api/sessions 自项目分组后回的是 {projects, sessions} 对象；此前把整个
 // 对象塞进 sessList，下游三处 sessList.find(...) 全是 TypeError——resumeSession 在 find 处同步
 // 抛错，点左侧会话「毫无反应」（打包版实测复现）。对象只交给 renderSessions，缓存只存数组。
-const loadSessions = () => fetch("api/sessions").then(r => r.json()).then((l) => { sessList = (l && l.sessions) || []; renderSessions(l); if (sessionId) setModBadge(sessList.find((s) => s.id === sessionId)?.module || "chat") }).catch(() => {})
+/** 登录态失效的统一出口。
+ *
+ * ★ 401 此前只有三处认得（发消息、SSE 断线探测、reader 的 jget），其余只读接口一律把它
+ *   当成"没数据"渲染：cookie 一过期，左侧会话列表【静默清空】、额度条【静默消失】——
+ *   用户看到的是"我的会话全没了"，会惊慌重登、甚至找管理员报数据丢失。
+ *   "没权限"和"没数据"必须分开说。
+ */
+let authGone = false
+const onUnauthorized = () => {
+  if (authGone) return true            // 已经在跳了，别让并发的几个请求各跳一次
+  authGone = true
+  try { addNote("⚠ 登录已过期，正在回到登录页（你的会话与产物都在，重新登录即可看到）") } catch (_) {}
+  location.href = "./login"
+  return true
+}
+/** fetch + 401 统一处理。回 null 表示"这次别渲染"（调用方保持原样，别把空数组当结果）。 */
+const apiGet = (url) => fetch(url).then((r) => {
+  if (r.status === 401) { onUnauthorized(); return null }
+  return r.ok ? r.json() : null
+}).catch(() => null)
+const loadSessions = () => apiGet("api/sessions").then((l) => { if (!l) return; sessList = (l && l.sessions) || []; renderSessions(l); if (sessionId) setModBadge(sessList.find((s) => s.id === sessionId)?.module || "chat") })
 /* 有专用界面壳的模块 → 该去哪个页面。ui 由服务端下发（workflows.mjs 的 ui 字段）。
    ★ 查表，不拿 ui 直接拼文件名：那等于把服务端字符串当 URL 用，是一条开放跳转。
    ★ 认不出的 ui 留在通用壳：新旧界面包错配时，用户至少还打得开这个会话。 */
 const SHELL = { reader: "reader.html", figure: "figure.html" }
 async function resumeSession(id) {                 // 载入历史 → 设为当前会话 →（后台还在生成则续流）
+  if (id !== sessionId && !confirmLeaveIntake()) return   // 首屏表单填了一半：切走会清空，先问一声
   // 有专用界面的模块（文献研读的 reader.html）：会话本身在这里也打得开，但用户看到的会是一条
   // 没有原文、没有模式条的裸对话流 —— 前面几轮还全是【文献导读】这类内部标记开头的长消息。
   // 把它送回它自己的壳里，而不是让人在通用页面里对着半个功能发愣。
@@ -2918,10 +2965,16 @@ function clearCurrentSession() {
   stepsHost = null; stepsHostEl.replaceChildren()  // 步骤条在 #log 之外，清 log 不会连带清它
 }
 async function deleteSession(id, title) {           // 删除会话（不可撤销，先确认；进行中的生成由后端一并终止）
-  if (!confirm("删除会话「" + (title || id) + "」？此操作不可撤销。")) return
-  await fetch("api/session/delete?id=" + encodeURIComponent(id), { method: "POST" }).catch(() => {})
+  // 说全三样：对话、产物、上传的原始文件。原来只说"此操作不可撤销"，既不提产物也不提上传 ——
+  // 而上传的往往就是那份从科室机器拷来的原始病例表。
+  if (!confirm("删除会话「" + String(title || id).replace(/\s+/g, " ").slice(0, 24) + "」？\n\n"
+    + "对话记录、生成的产物文件、以及你上传到这个会话的原始文件都会被删除，无法恢复。")) return
+  const j = await fetch("api/session/delete?id=" + encodeURIComponent(id), { method: "POST" })
+    .then((r) => (r.ok ? r.json().catch(() => ({ ok: true })) : { ok: false, err: "请求失败（" + r.status + "）" }))
+    .catch(() => ({ ok: false, err: "网络不通" }))
   if (id === sessionId) clearCurrentSession()       // 删的是当前会话 → 回到空态
   loadSessions(); refreshStorage()   // 删会话已释放其存储 → 刷新用量
+  if (!j.ok) addNote("⚠ 删除没有完成：" + (j.err || "未知原因"))   // 服务端会分段回报，别把半途失败说成成功
 }
 // 左侧会话栏折叠/展开（默认折叠）
 const sessToggle = document.getElementById("sessToggle")
@@ -3004,6 +3057,7 @@ const UPLOAD_SIZES = new Map()
 // 当前挂在界面上的表单卡的重画函数。上传完成后要通知它们刷新 files 字段的候选，
 // 否则拖进拖拽区的文件在卡片里【永远不出现】。卡片自己在离开文档时注销（见 buildFormCard）。
 const wfCardRedraws = new Set()
+const wfPruneUploads = new Set()   // 上传列表变了 → 让还开着的表单卡把指向已删文件的勾选摘掉
 // 贴到底部时才跟随滚动（用户往上翻看历史就别把他拽回来）。
 // attachStream 里另有一个同名的局部 follow —— 那个只在流式回调链里可见，
 // 结构化产物是在它之外异步贴进来的，必须用这份模块级的，否则 ReferenceError。
@@ -3235,9 +3289,23 @@ function buildFormCard({ title, sub, notice, fields, footnote, steps, intakeSub,
   // 上传回调也要注销 —— 否则会留一排点指向已不存在的区块，且上传后还去重画一张已经没了的卡。
   const selfRedraw = () => { captureFocus(); redraw() }
   wfCardRedraws.add(selfRedraw)
+  // 上传列表变化时，把本卡里指向【已删文件】的勾选摘掉（见 renderUploads 里的说明）。
+  // 只动 files 型字段：columns 字段存的是列名、不是文件名，别误伤。
+  const selfPrune = (gone) => {
+    let changed = false
+    for (const f of fields || []) {
+      if (f.type !== "files" || values[f.id] === undefined) continue
+      const next = gone(values[f.id])
+      const same = Array.isArray(next) && Array.isArray(values[f.id])
+        ? next.length === values[f.id].length : next === values[f.id]
+      if (!same) { values[f.id] = Array.isArray(next) && !next.length ? undefined : next; changed = true }
+    }
+    if (changed) selfRedraw()
+  }
+  wfPruneUploads.add(selfPrune)
   new MutationObserver((_, obs) => {
     if (box.isConnected) return
-    killRail(); wfCardRedraws.delete(selfRedraw); obs.disconnect()
+    killRail(); wfCardRedraws.delete(selfRedraw); wfPruneUploads.delete(selfPrune); obs.disconnect()
   }).observe(document.body, { childList: true, subtree: true })
 
   // 条件字段：任一字段变化都整块重画（表单最多十几项，重画成本可忽略，换来的是 when 逻辑只有一份）
@@ -3821,7 +3889,11 @@ function fieldEl(f, values, onChange, allFields) {
       // 且"正在读取表头…"会反复闪一下，看着像卡住了。
       // 【键要带 sid】只按文件名缓存的话，会话 A 的 data.csv（列 A/B/C）会被会话 B 的同名
       // data.csv（列 X/Y）复用 —— 而这个下拉的全部价值就是"列名一定对"。切会话时也会整体清空。
-      const ck = (sessionId || "-") + "|" + src
+      // ★ 键还要带【文件大小】。只按文件名缓存的话，医生在同一会话里改完表、重传同名 data.csv，
+      //   六个列名下拉给的仍是上一版的列，而界面一个字都不提示 —— 正是这个控件要根治的
+      //   失败模式本身。服务端的 _tpCache 已经按 mtime+size 做对了，坏的只剩前端这一层。
+      //   （size 由 /api/uploads 回、renderUploads 存进 UPLOAD_SIZES；取不到就退回旧行为。）
+      const ck = (sessionId || "-") + "|" + src + "|" + (UPLOAD_SIZES.get(src) ?? "?")
       host.appendChild(mk("div", { className: "wfhelp", textContent: HDR_CACHE.has(ck) ? "" : "正在读表、自动认列…" }))
       // 缓存的是【Promise 而非结果】：同一张卡里通常有好几个 columns 字段（分组列/结局列/协变量），
       // 它们同时发起、都还没回来，只缓存结果的话这一批仍会各打一次。缓存 Promise 后合并成一次。
@@ -4828,7 +4900,23 @@ async function loadModules() {
   }
   if (allowed.length && !allowed.some((m) => m.id === currentModule)) currentModule = allowed[0].id   // chat 被收权时落到首个可用模块
   setModBadge(sessionId ? (sessList.find((s) => s.id === sessionId)?.module || "chat") : currentModule)
-  const w = log.querySelector(".welcome"); if (w) { w.remove(); renderWelcome() }   // 清单晚到 → 重画欢迎页补上模块卡
+  // 清单晚到 → 重画欢迎页补上模块卡。
+  // ★ 但【首屏表单填到一半时不许重画】。表单卡是挂在 .welcome 上的（showIntake），值只活在 DOM 里，
+  //   一 remove 就全没了。而本函数不只在启动时跑：授权摘要一变（onEntChanged）也会调它，
+  //   而 entRev 对"管理员给档位加了一个新模型"这种【纯善意、用户无感】的运营动作同样敏感 ——
+  //   于是十几项的基金标书表单会在几分钟内凭空清空，不弹任何确认。
+  //   同一条不变量在 #new 与 resumeSession 两处都显式守着（confirmLeaveIntake），这里漏了。
+  //   有卡且用户动过 → 只更新徽标，不动 DOM；模块卡等下次自然重画（或用户提交后）再补。
+  const w = log.querySelector(".welcome")
+  if (w && !intakeDirty()) { w.remove(); renderWelcome() }
+}
+/** 首屏表单卡存在且用户真填过东西（判据与 confirmLeaveIntake 同源，别写两份） */
+function intakeDirty() {
+  const card = document.querySelector("#log .wfcard")
+  if (!card) return false
+  return [...card.querySelectorAll("input, textarea, select")].some((el) =>
+    el.type === "checkbox" || el.type === "radio" ? el.checked : String(el.value || "").trim() !== "")
+    || !!card.querySelector(".wfopt.on, .wftag, .upitem")
 }
 // 管理员在运营后台改了技能授权 / 档位 / 可选模型 → 公告轮询回来的 entRev 与本地不一样 →
 // 就地把模块卡片和模型下拉刷新掉，并明说一句。不这么做的话，界面要等到下次登录才对，
@@ -4842,7 +4930,19 @@ async function onEntChanged(rev) {
 let sseFailStreak = 0   // 连续 SSE 重连失败次数；收到任何事件即清零，累计过多则停手提示刷新（防非 401 的持续失败无限重连）
 let sending = false     // POST /api/chat/start 往返期间为 true：此时还没有 activeES，靠它挡住连点重复发送
 function sidQ() { return sessionId ? "&sid=" + encodeURIComponent(sessionId) : "" }   // 上传/下载/预览都带上会话 id，隔离各会话目录
+/** 首屏表单填了东西没提交时，切走会把它清空 —— 先问一声。
+ *
+ * ★ 表单值只活在 DOM 里（showIntake 把卡挂在 .welcome 上），log.innerHTML="" 一下就全没了，
+ *   而 grant / paper 的首屏表单有十几项。此前新建对话与切会话两条路都没有任何提示，
+ *   手误点到左上角那个圆圈，填了五分钟的东西直接归零。
+ */
+function confirmLeaveIntake() {
+  // "动过没有"按控件实际取值判（见 intakeDirty），不能只看卡在不在：一进来就弹确认框比不弹还烦
+  if (!intakeDirty()) return true
+  return confirm("首屏表单还没提交，切走会清空已经填的内容。要继续吗？")
+}
 document.getElementById("new").addEventListener("click", () => {
+  if (!confirmLeaveIntake()) return
   detachStream()   // 只退订不终止：原会话若在生成会继续跑，从左侧列表随时切回来看
   sessionId = null; localStorage.removeItem("nm_sid"); log.innerHTML = ""; wfResetGroups(); renderFiles([]); loadUploads(); loadSessions(); zScopeReset(); loadZotLib(); stepsHost = null; stepsHostEl.replaceChildren()
   sessionStarted = false; pendingWfCard = ""; pendingWfForm = null; lastCardText = ""   // 任务卡是一次性的，绝不能漏进下一个会话
@@ -5213,6 +5313,11 @@ function openStream(url) {
   // 脱钩的后果是用户【完全没看见 agent 在问他选 1/2/3】，直接打字问别的，那一轮白跑。
   es.addEventListener("final", (ev) => { const t = JSON.parse(ev.data).text; if (t && !painted) { gotText = true; rawText = t } withFollow(() => paintAnswer()) })
   es.addEventListener("files", (ev) => { const list = JSON.parse(ev.data); if (list.length) { renderFiles(list); addProducts(list) } })   // 本轮没产物就保留上一轮，不清空
+  // 更深层没列出来的文件数（服务端与 files 同时发）。不接的话，直播中侧栏那句"另有 N 个"永远是 0，
+  // 用户要刷新才知道 agent 把图写进了更深的目录。
+  es.addEventListener("filesmeta", (ev) => {
+    try { const m = JSON.parse(ev.data); if (typeof m.deeper === "number" && m.deeper !== deeperFiles) { deeperFiles = m.deeper; renderFiles(lastFilesList) } } catch (_) {}
+  })
   // 结构化产物：服务端按文件名认出渲染器（文献表→文献卡片、核查报告→红黄绿逐条…）。
   // 这是 files 之外【额外】的一份，不是替代 —— 认不出的产物仍走上面那条，绝不会因此消失。
   es.addEventListener("artifacts", (ev) => { try { renderArtifacts(JSON.parse(ev.data)) } catch (_) {} })
@@ -5276,8 +5381,15 @@ function openStream(url) {
     // 到浏览器默认超时（可达数分钟）。此刻 activeES 已置 null 但 setStreamingUI(false) 还没调用 →
     // 发送按钮仍隐藏、终止按钮仍显示，而终止按钮打的是同一个不可达后端、同样挂起 →
     // 整个界面卡死，用户只能刷新页面。超时就按"非 401"处理，走下面的重连分支。
-    let status = 0
-    try { status = (await fetch("api/job?sid=" + encodeURIComponent(sid), { signal: AbortSignal.timeout(5000) })).status } catch {}
+    // ★ 顺手把 running 也读出来。这一次探测本来就打的是 /api/job，只取状态码等于把已经拿到的
+    //   信息扔了 —— 而它恰好能区分"网络抖了一下、后台还在跑"和"网关重启了、那一轮已经没了"
+    //   （jobs 是进程内 Map，重启即空）。两种情况用户该做的事完全相反：前者等，后者重发。
+    let status = 0, stillRunning = null
+    try {
+      const pr = await fetch("api/job?sid=" + encodeURIComponent(sid), { signal: AbortSignal.timeout(5000) })
+      status = pr.status
+      if (pr.ok) { try { stillRunning = !!(await pr.json()).running } catch (_) {} }
+    } catch {}
     if (status === 401) { location.href = "./login"; return }
     if (++sseFailStreak >= 6) { turn.querySelector(".answer").innerHTML = ""; const n = document.createElement("div"); n.className = "note"; n.textContent = "⚠ 连接反复失败，请刷新页面重试"; turn.querySelector(".answer").appendChild(n); genEl.remove(); setStreamingUI(false); return }
     // ★ 【别先删】。原来是当场 turn.remove()、2.5 秒后才重连重建 —— 这 2.5 秒里已经流出来的
@@ -5287,7 +5399,11 @@ function openStream(url) {
     //   所以根本不需要先删：留着旧内容，等新流真的接上了再换掉。
     turn.classList.add("reconnecting")
     const rc = document.createElement("div"); rc.className = "note"
-    rc.textContent = "连接中断，正在重连…（后台还在跑，不用重发）"
+    //   横幅只在【确认后台那一轮还在】时才说"不用重发"。探到 running:false（网关重启过、
+    //   jobs 表已空）还说这句就是撒谎：用户会一直等，而那一轮根本不会回来。
+    rc.textContent = stillRunning === false
+      ? "连接中断了，后台那一轮也已经不在（服务可能重启过）——上面的内容保留着，你可以重发。"
+      : "连接中断，正在重连…（后台还在跑，不用重发）"
     turn.appendChild(rc)
     setTimeout(() => {
       if (sid !== sessionId || activeES) return
@@ -5722,6 +5838,11 @@ function renderUploads(list) {
   // ★ 通知还开着的表单卡重画。files 字段的候选就是 UPLOADED，不重画的话：用户把文件拖进
   //   卡片里那个拖拽区，右侧面板列出来了、卡片里的文件列表却还是空的，连选都选不了 ——
   //   而拖拽区正是现在最显眼的上传入口，看着像"拖了没反应"。
+  // ★ 顺带把【已经不存在的文件】从表单勾选里摘掉。原来只刷新候选列表、不动 values：
+  //   用户删掉一份数据表之后，卡片里那一项仍然勾着，提交时任务卡照写它的绝对路径，
+  //   agent 下一轮照着去 read → ENOENT。（产物那侧有 staleUp 盯新鲜度，上传这侧没有。）
+  const gone = (v) => (Array.isArray(v) ? v.filter((n) => UPLOADED.includes(n)) : (UPLOADED.includes(v) ? v : undefined))
+  wfPruneUploads.forEach((fn) => { try { fn(gone) } catch (_) {} })
   wfCardRedraws.forEach((fn) => { try { fn() } catch (_) {} })
   uplistEl.innerHTML = ""
   upcountEl.textContent = list && list.length ? list.length + " 个文件" : ""
@@ -5743,9 +5864,16 @@ function renderUploads(list) {
 }
 async function loadUploads() {
   if (!sessionId) { renderUploads([]); return }
-  try { renderUploads(await fetch("api/uploads?x=1" + sidQ()).then(r => r.json())) } catch { renderUploads([]) }
+  // 401 时保持原样（apiGet 回 null）：把"登录过期"渲染成"一个文件都没传过"会让用户以为文件丢了
+  const l = await apiGet("api/uploads?x=1" + sidQ())
+  if (Array.isArray(l)) renderUploads(l)
 }
 async function deleteUpload(name) {
+  // ★ 这是全系统唯一一个【删用户数据却不确认】的入口：一次点击直达服务端 unlinkSync，
+  //   而删的往往就是那份从科室机器拷来的原始病例表 —— 旁边只有一个 20px 的小叉，
+  //   紧挨着别的图标，误点没有任何回头路（全仓没有回收站，"不可撤销"是字面意义的）。
+  if (!confirm("删除上传的文件「" + String(name).slice(0, 40) + "」？\n\n"
+    + "后续步骤将读不到它，需要的话得重新上传。此操作无法撤销。")) return
   try { await fetch("api/upload/delete?name=" + encodeURIComponent(name) + sidQ(), { method: "POST" }) } catch {}
   loadUploads()
 }
@@ -6267,7 +6395,9 @@ async function refreshQuota(fresh = false) {
   const el = document.getElementById("quotabar")
   try {
     // fresh=1：一轮刚结束时用，跳过网关那 20 秒缓存直接问云端——用户此刻正想看这轮扣了多少
-    const s = await fetch("api/quota" + (fresh ? "?fresh=1" : "")).then(r => r.json())
+    // 401 → 统一出口跳登录，别 catch 成"额度条消失"（用户会读成额度被清零）
+    const s = await apiGet("api/quota" + (fresh ? "?fresh=1" : ""))
+    if (!s) return
     const c = await cloudQuotaOf(s)
     if (c && !(c.daily.unlimited && c.monthly.unlimited)) {
       // 【日、月各占一行】此前挤成一行"剩余积分 日 X · 月 Y"，月的那一截太容易被当成没有；
@@ -6318,7 +6448,12 @@ async function uploadFiles(files) {
     } catch { failed++ }
   }
   dz.classList.remove("busy")
-  setUpMsg(lastErr ? `⚠ ${lastErr}` : (failed ? `✅ ${done} 个已上传，${failed} 个失败` : `✅ 已上传 ${done} 个文件`), failed > 0)
+  // ★ 有错时也要把【成功了几个】说出来。原来 `lastErr ? ⚠错误 : …` 把成功数整个吞掉：
+  //   传 5 个、其中 1 个超限，用户只看到那句 413，另外 4 个传没传上完全不知道。
+  //   纯失败时也别以 ✅ 开头。
+  setUpMsg(!failed ? `✅ 已上传 ${done} 个文件`
+    : (done ? `⚠ ${done} 个已上传，${failed} 个失败${lastErr ? "：" + lastErr : ""}`
+            : `⚠ ${failed} 个都没传上${lastErr ? "：" + lastErr : ""}`), failed > 0)
   loadUploads(); loadSessions(); refreshStorage()
 }
 document.getElementById("up").addEventListener("change", (e) => { uploadFiles(e.target.files); e.target.value = "" })
