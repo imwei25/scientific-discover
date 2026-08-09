@@ -234,6 +234,24 @@ test("科研作图：生成器壳的配置契约（少一样界面就画不出�
   }
 })
 
+test("生成器壳里用到的 class 都得在本文件的样式里有规则（错一个字就是一张巨图）", () => {
+  // 【这条测试是拿真事故换来的】把面板卡从 .card 改名 .gcard 时漏改了左边那一格，于是
+  // `.gcard-h .ic svg{width:14px;height:14px}` 跟着失配 —— 那颗图标 SVG 只有 viewBox、没有宽高，
+  // 浏览器按默认的 300×150 渲染，卡片顶上出现一张巨大的、看着像加载失败的图。
+  // 少一条边框还看得出是"样式没生效"，这个则会被当成"图挂了"，方向都找错。
+  // 只查本文件：class 与样式都在同一份 html 里，没有外部样式表，所以"用到但没规则"必然是错的。
+  const html = fs.readFileSync(new URL("../figure.html", import.meta.url), "utf8")
+  const css = html.slice(0, html.indexOf("</style>"))
+  const used = new Set()
+  for (const m of html.matchAll(/class="([^"{}]+)"/g)) m[1].split(/\s+/).forEach((c) => c && used.add(c))
+  for (const m of html.matchAll(/className = "([^"{}]+)"/g)) m[1].split(/\s+/).forEach((c) => c && used.add(c))
+  // 状态类由 JS 加减（classList.add/toggle），单独收一遍
+  for (const m of html.matchAll(/classList\.(?:add|remove|toggle)\("([^"]+)"/g)) used.add(m[1])
+  const esc = (s) => s.replace(/[.*+?^${}()|[\]\\-]/g, "\\$&")
+  const bad = [...used].filter((c) => !new RegExp("\\." + esc(c) + "(?![\\w-])").test(css))
+  assert.deepEqual(bad, [], "这些 class 用到了却没有样式规则（多半是改名漏改）：" + bad.join("、"))
+})
+
 test("画幅几档必须与 render_figure.py 的 SIZES 对齐——认不出的比例会静默回落成方图", () => {
   // 脚本认不出的比例不会报错，它会拿默认的 2048*2048 出图，而界面上仍显示用户选的 9:16。
   // 出来一张方图，没人看得出是哪里错了。（同一类坑：data_profile.md 的报告名对不上，见下面那条。）

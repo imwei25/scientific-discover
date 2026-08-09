@@ -269,9 +269,11 @@ input[type=text]:focus{outline:none;border-color:var(--accent);background:#fff;b
     </div>
 
     <div class="grid2">
-      <div class="card">
-        <!-- 卡头别跟下面那个字段标题重名（都叫「要画什么」时，卡片看着像把同一句话说了两遍） -->
-        <div class="card-h"><span class="ic" id="icLeft"></span><span>用文字描述机制</span></div>
+      <!-- ★ 是 .gcard 不是 .card：.card 在本文件里是【markdown 正文卡】。写错过一次，后果不是
+           "少个边框"这么轻 —— .gcard-h .ic svg{width:14px} 跟着失配，那颗图标 SVG 只有 viewBox、
+           没有宽高，浏览器按默认的 300×150 渲染，卡片顶上就出现一张巨大的、看着像加载失败的图。
+           这一格【刻意不设卡头】：紧接着就是「要画什么」，再顶一行标题等于把同一句话说两遍。 -->
+      <div class="gcard">
         <div class="fld">
           <label id="promptLabel">要画什么<span class="req">*</span></label>
           <textarea id="prompt"></textarea>
@@ -347,7 +349,6 @@ const $ = (id) => document.getElementById(id)
 const esc = (s) => String(s == null ? "" : s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]))
 
 const ICON = {
-  image: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="8.5" cy="9.5" r="1.5"/><path d="M21 16l-5-5-4 4-2-2-5 5"/></svg>',
   gear: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 00.3 1.9 2 2 0 11-2.8 2.8 1.7 1.7 0 00-1.9-.3 1.7 1.7 0 00-1 1.5 2 2 0 11-4 0 1.7 1.7 0 00-1-1.5 1.7 1.7 0 00-1.9.3 2 2 0 11-2.8-2.8 1.7 1.7 0 00.3-1.9 1.7 1.7 0 00-1.5-1 2 2 0 110-4 1.7 1.7 0 001.5-1 1.7 1.7 0 00-.3-1.9 2 2 0 112.8-2.8 1.7 1.7 0 001.9.3 1.7 1.7 0 001-1.5 2 2 0 114 0 1.7 1.7 0 001 1.5 1.7 1.7 0 001.9-.3 2 2 0 112.8 2.8 1.7 1.7 0 00-.3 1.9 1.7 1.7 0 001.5 1 2 2 0 110 4 1.7 1.7 0 00-1.5 1z"/></svg>',
   play: '<svg viewBox="0 0 24 24" fill="currentColor" stroke="none"><path d="M8 5.5v13a1 1 0 001.53.85l10-6.5a1 1 0 000-1.7l-10-6.5A1 1 0 008 5.5z"/></svg>',
   stop: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>',
@@ -454,7 +455,6 @@ function renderIntro() {
   $("title").textContent = I.title || ""
   document.title = (I.title || "科研作图") + " · Niuma Science"
   $("lead").textContent = I.lead || ""
-  $("icLeft").innerHTML = ICON.image
   $("icRight").innerHTML = ICON.gear
   // ★ 这两颗按钮的 HTML 里是空的，而 JS 只赋 disabled/hidden，从来没人填过图标 ——
   //   实测渲染出来就是一个 38×38 的纯蓝空方块（发送，.iconbtn.send 有实心蓝底）和一个纯白空方块
