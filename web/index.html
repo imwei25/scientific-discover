@@ -3204,6 +3204,27 @@ function buildFormCard({ title, sub, notice, fields, footnote, steps, intakeSub,
   const values = { ...(seed || {}) }
   for (const f of fields) if (f.default !== undefined && values[f.id] === undefined) values[f.id] = Array.isArray(f.default) ? [...f.default] : f.default
   const box = document.createElement("div"); box.className = "wfcard"
+  // ★「用户动过没有」拿【初始快照】比，不扫 DOM。
+  //   values 是这张卡的唯一真值：每个控件在 input / click 的当下就写回它，redraw 也是从它重建 DOM，
+  //   所以"和初始值不同"精确等价于"用户改过"（包括把某项从默认值改成别的、又改回来 → 不算动过）。
+  //   旧判据是扫 `.wfopt.on` 与非空输入框，把【建卡时就灌进去的默认值】当成用户填的 ——
+  //   综述的检索源默认就选中一项，于是刚点进这个模块、一个字没碰就切走，也照样弹
+  //   "表单还没提交，切走会清空已经填的内容"。那正是 confirmLeaveIntake 头注里说"比不弹还烦"的情形，
+  //   而它一旦天天误弹，用户学会的是【无脑点确定】—— 真填了十几项的那次也就跟着点没了。
+  //   ★ 方向仍然 fail-safe：判不准时宁可多问一次，绝不静默清空（见下面 wfDirty 的第二个条件）。
+  //   ★ 空值一律归一成"没有"：undefined / "" / [] 三者必须算同一状态。控件在【首次画出来】时会把
+  //     tags / files / 多选类字段补成 []（见各 fieldEl 里的 `if (!Array.isArray(values[f.id]))`），
+  //     不归一的话每张卡一渲染完就"和初始值不同"了，误弹一次不落。
+  const sigOf = (v) => JSON.stringify(Object.keys(v).sort()
+    .filter((k) => !(v[k] === undefined || v[k] === "" || (Array.isArray(v[k]) && !v[k].length)))
+    .map((k) => [k, v[k]]))
+  const sig = () => sigOf(values)
+  // 快照在【第一次 redraw 之后】才定（见下面 `redraw(); sig0 = sig()`）：那一次补默认值仍属于初始状态。
+  let sig0 = null
+  // 标签输入框里那个还没敲回车的词：失焦会自动 commit 进 values（见 tags 的 blur），但键盘路径
+  // 可能绕过失焦，它是唯一"人已经打了、values 还不知道"的缝，单独兜一下。
+  box.wfDirty = () => (sig0 !== null && sig() !== sig0)
+    || [...box.querySelectorAll(".wftags input")].some((i) => i.value.trim())
   const hd = document.createElement("div"); hd.className = "wfhd"
   const t = document.createElement("div"); t.className = "wftitle"; t.textContent = title
   hd.appendChild(t); box.appendChild(hd)
@@ -3440,6 +3461,7 @@ function buildFormCard({ title, sub, notice, fields, footnote, steps, intakeSub,
     restoreFocus()
   }
   redraw()
+  sig0 = sig()   // 初始快照：这一次画完（含补默认值、把 tags/files 补成 []）才是"用户还没动过"的样子
   if (footnote) { const fn = document.createElement("div"); fn.className = "wffoot"; fn.innerHTML = wfInlineMd(footnote); box.appendChild(fn) }
   const acts = document.createElement("div"); acts.className = "wfacts"
   const go = document.createElement("button"); go.type = "button"; go.className = "wfgo"
@@ -4939,13 +4961,16 @@ async function loadModules() {
   const w = log.querySelector(".welcome")
   if (w && !intakeDirty()) { w.remove(); renderWelcome() }
 }
-/** 首屏表单卡存在且用户真填过东西（判据与 confirmLeaveIntake 同源，别写两份） */
+/** 界面上有表单卡且用户真填过东西（判据与 confirmLeaveIntake 同源，别写两份）。
+ *
+ * 判据由卡片自己给（buildFormCard 的 box.wfDirty：与建卡时的初始值比）。这里不再扫 DOM ——
+ * 扫 DOM 分不出"默认就选中的项"和"用户选的项"，见 wfDirty 头注。
+ * 逐步表单卡（对话中间那些）也一并算：它们同样只活在 DOM 里，切走一样清空。
+ */
 function intakeDirty() {
-  const card = document.querySelector("#log .wfcard")
-  if (!card) return false
-  return [...card.querySelectorAll("input, textarea, select")].some((el) =>
-    el.type === "checkbox" || el.type === "radio" ? el.checked : String(el.value || "").trim() !== "")
-    || !!card.querySelector(".wfopt.on, .wftag, .upitem")
+  const cards = [...document.querySelectorAll("#log .wfcard")]
+  // 兜底：万一有不是 buildFormCard 造出来的卡（现在没有），当它是"动过"——多问一次远好过静默清空
+  return cards.some((c) => (typeof c.wfDirty === "function" ? c.wfDirty() : true))
 }
 // 管理员在运营后台改了技能授权 / 档位 / 可选模型 → 公告轮询回来的 entRev 与本地不一样 →
 // 就地把模块卡片和模型下拉刷新掉，并明说一句。不这么做的话，界面要等到下次登录才对，
@@ -4966,9 +4991,11 @@ function sidQ() { return sessionId ? "&sid=" + encodeURIComponent(sessionId) : "
  *   手误点到左上角那个圆圈，填了五分钟的东西直接归零。
  */
 function confirmLeaveIntake() {
-  // "动过没有"按控件实际取值判（见 intakeDirty），不能只看卡在不在：一进来就弹确认框比不弹还烦
+  // "动过没有"= 和建卡时的初始值比（见 intakeDirty / buildFormCard 里的 wfDirty），不能只看卡在不在、
+  // 也不能扫 DOM 看有没有选中项：默认就选中的项会让它一进来就弹确认框，那比不弹还烦。
   if (!intakeDirty()) return true
-  return confirm("首屏表单还没提交，切走会清空已经填的内容。要继续吗？")
+  // 不写死"首屏"：逐步表单卡同样只活在 DOM 里，切走一样清空，这句话对两者都要成立
+  return confirm("表单还没提交，切走会清空已经填的内容。要继续吗？")
 }
 document.getElementById("new").addEventListener("click", () => {
   if (!confirmLeaveIntake()) return
