@@ -1750,20 +1750,25 @@ const zotJson = (r) => (r.stdout || "").trim() || JSON.stringify({ ok: false, er
 const TABLE_PREVIEW_PY = path.join(ROOT, ".opencode/skills/data-analysis/scripts/table_preview.py")
 const _tpCache = new Map()
 const TP_CACHE_MAX = 64
-async function tablePreview(file, { rows = 5 } = {}) {
+// sheet：多工作簿的 xlsx 要能切表。python 侧一直支持 --sheet（序号或表名），只是上面三层没接 ——
+// 于是界面告诉用户"这个工作簿有 3 张表"，却只认第一张、也给不了切换，而用户的数据在第二张里
+// 是很常见的情形。缓存键要带上它，否则切了表还是拿回第一张的结果。
+async function tablePreview(file, { rows = 5, sheet = "" } = {}) {
   let key = file
-  try { const st = fs.statSync(file); key = `${file}|${st.mtimeMs}|${st.size}|${rows}` } catch {}
+  try { const st = fs.statSync(file); key = `${file}|${st.mtimeMs}|${st.size}|${rows}|${sheet}` } catch {}
   if (_tpCache.has(key)) return _tpCache.get(key)
-  const r = await _tablePreviewRaw(file, rows)
+  const r = await _tablePreviewRaw(file, rows, sheet)
   if (_tpCache.size >= TP_CACHE_MAX) _tpCache.delete(_tpCache.keys().next().value)
   _tpCache.set(key, r)
   return r
 }
-async function _tablePreviewRaw(file, rows) {
+async function _tablePreviewRaw(file, rows, sheet = "") {
   const ext = path.extname(file).toLowerCase()
   // ① 首选 Python（pandas）：只有它能读 xlsx，也只有它给得出列画像
   if (fs.existsSync(TABLE_PREVIEW_PY)) {
-    const r = await runPy([TABLE_PREVIEW_PY, "--input", file, "--rows", String(rows)], 45_000)
+    const args = [TABLE_PREVIEW_PY, "--input", file, "--rows", String(rows)]
+    if (sheet !== "" && sheet !== null && sheet !== undefined) args.push("--sheet", String(sheet))
+    const r = await runPy(args, 45_000)
     let j = null
     try { j = JSON.parse((r.stdout || "").trim()) } catch {}
     if (j && j.ok) return { ...j, via: "python" }
@@ -4133,7 +4138,7 @@ export const server = http.createServer(async (req, res) => {
       const dir = sid ? await sessionUp(sid) : UPLOADS
       const f = safeUnder(dir, name)
       if (!f || !fs.existsSync(f) || !fs.statSync(f).isFile()) return send(res, 404, "application/json", JSON.stringify({ err: "文件不存在" }))
-      const pv = await tablePreview(f, { rows: PREVIEW_ROWS })
+      const pv = await tablePreview(f, { rows: PREVIEW_ROWS, sheet: u.searchParams.get("sheet") || "" })
       return send(res, 200, "application/json", JSON.stringify(pv))
     }
     // ---- 变量对应自动填：机器先认列，用户只核对 ----
@@ -4153,7 +4158,8 @@ export const server = http.createServer(async (req, res) => {
       const f = safeUnder(dir, name)
       if (!f || !fs.existsSync(f) || !fs.statSync(f).isFile())
         return send(res, 200, "application/json", JSON.stringify({ ok: false, reason: "文件不存在" }))
-      const pv = await tablePreview(f, { rows: PREVIEW_ROWS })
+      // sheet 由前端切表时带上（多工作簿）；不给就用第一张，python 会把全部表名回在 sheets 里
+      const pv = await tablePreview(f, { rows: PREVIEW_ROWS, sheet: body.sheet ?? "" })
       if (!pv.ok || !pv.headers?.length)
         return send(res, 200, "application/json", JSON.stringify({ ok: false, reason: pv.reason || "这张表读不出结构" }))
       const base = WF.guessVarMap(pv.cols, { headers: pv.headers })
@@ -4815,6 +4821,12 @@ export const server = http.createServer(async (req, res) => {
         route: currentRoute(),          // cloud | gateway | custom | none —— 前端据此显示"当前走哪条路"与切回入口
         gatewayURL: cloudLoggedIn() ? Cloud.cloudBase() : (process.env.OC_GATEWAY_URL || ""),   // 只回地址不回 key
         cloud: Cloud.status(),          // 云端账号摘要（不含任何凭证）
+        // ★ 「你现在显示的这个模型，其实已经不在你的档位里了」。
+        //   syncProfileSoon 有意不重配 provider、不重启 opencode（怕拔掉在跑的轮，理由成立），
+        //   代价是管理员撤掉某个模型之后 MODEL.modelID 仍是旧值 —— pill 上挂着一个
+        //   /api/models 清单里已经没有的名字，而每一轮都被云端网关按档位默认模型改写：
+        //   用户以为自己在用 A，实际在用 B。给个标志让 pill 打个提醒，不重启、不拔轮。
+        modelStale: currentRoute() === "cloud" && !!MODEL.modelID && !modelAllowed(MODEL.modelID),
       }))
     }
     // 测试一个 OpenAI 格式的 API（URL + key + 模型）是否可用

@@ -1838,7 +1838,7 @@ document.getElementById("logoutBtn").innerHTML = ic("logout") + "<span>退出登
 // ---- 模型切换器：显示 当前供应商·模型，可在同供应商下切换（仅接入网关时出现）----
 ;(function () {
   const sel = document.getElementById("modelSel"); if (!sel) return
-  let cur = "", prov = "", models = []
+  let cur = "", prov = "", models = [], stale = false
   async function refresh() {
     // 拿不到就把 pill 恢复成上一次已知的模型名，【不能直接 return】：pick() 在发请求前把 pill
     // 改成了"🧠 切换中…"，若这里早返回不重绘，容器正在被唤醒/重启时 pill 会永久定格在"切换中"，
@@ -1852,6 +1852,7 @@ document.getElementById("logoutBtn").innerHTML = ic("logout") + "<span>退出登
     }
     if (!m || !m.gateway) { sel.hidden = true; return }   // 没接平台就不显示切换器
     cur = m.modelID || ""
+    stale = !!m.modelStale   // 服务端说：这个模型已经不在你的档位里了（见 /api/model 的说明）
     // 先问本机网关要清单：云端账号形态下它来自服务器下发的档案（管理员在后台加了模型、
     // 勾进本档位，这里刷新一次就有 —— 打包版不用重装）。
     models = []; prov = ""
@@ -1873,9 +1874,14 @@ document.getElementById("logoutBtn").innerHTML = ic("logout") + "<span>退出登
   function render() {
     sel.hidden = false
     const curItem = models.filter(function (x) { return x.id === cur })[0]
-    sel.innerHTML = '<div class="mpill" id="mpill" title="点击切换模型">🧠 ' + (prov ? '<span style="opacity:.7">' + prov + '</span> · ' : '') + '<b>' + ((curItem && curItem.label) || cur) + '</b> ▾</div><div class="mmenu" id="mmenu"></div>'
+    // ★ 模型已被撤销时要明说。此前 curItem 落空只是让 pill 退回显示裸 id、菜单里一个 ✓ 都不打，
+    //   看着像"清单没加载好"——而真相是【你显示的这个模型已经不在你的档位里】，每一轮都被
+    //   云端网关按档位默认模型改写：用户以为在用 A，实际在用 B，账也对不上。
+    const warn = stale ? '<span style="color:#b03a34" title="这个模型已不在你的账号档位内，实际每轮会被替换成档位默认模型。点开选一个，或到「云端账号」点刷新">⚠ </span>' : ''
+    sel.innerHTML = '<div class="mpill' + (stale ? ' stale' : '') + '" id="mpill" title="点击切换模型">' + warn + '🧠 ' + (prov ? '<span style="opacity:.7">' + prov + '</span> · ' : '') + '<b>' + ((curItem && curItem.label) || cur) + '</b> ▾</div><div class="mmenu" id="mmenu"></div>'
     const menu = sel.querySelector("#mmenu")
-    menu.innerHTML = (prov ? '<div class="mprov">' + prov + ' · 可选模型</div>' : '') + (models.length ? models.map(function (m) { return '<div class="mitem' + (m.id === cur ? ' cur' : '') + '" data-m="' + m.id + '">' + (m.id === cur ? '✓ ' : '') + m.label + (m.prov && !prov ? ' <span style="opacity:.6">· ' + m.prov + '</span>' : '') + '</div>' }).join("") : '<div class="mprov">无可选模型</div>')
+    menu.innerHTML = (stale ? '<div class="mprov" style="color:#b03a34">当前模型「' + cur + '」已不在你的档位内，请选一个下面的</div>' : '')
+      + (prov ? '<div class="mprov">' + prov + ' · 可选模型</div>' : '') + (models.length ? models.map(function (m) { return '<div class="mitem' + (m.id === cur ? ' cur' : '') + '" data-m="' + m.id + '">' + (m.id === cur ? '✓ ' : '') + m.label + (m.prov && !prov ? ' <span style="opacity:.6">· ' + m.prov + '</span>' : '') + '</div>' }).join("") : '<div class="mprov">无可选模型</div>')
     sel.querySelector("#mpill").onclick = function (e) { e.stopPropagation(); menu.classList.toggle("on") }
     menu.querySelectorAll(".mitem").forEach(function (it) { it.onclick = async function () { const m = it.dataset.m; menu.classList.remove("on"); if (m !== cur) await pick(m) } })
   }
@@ -2908,7 +2914,17 @@ async function resumeSession(id) {                 // 载入历史 → 设为当
   detachStream()                                   // 只退订原会话的流，后台生成不受影响
   sessionId = id; localStorage.setItem("nm_sid", id)
   zScopeReset()                                    // 检索范围是页面级状态，切会话必须重置，别把 A 会话选的范围带进 B
-  setModBadge(sessList.find((s) => s.id === id)?.module || "chat")   // 徽标随会话绑定走；列表未载入时 loadSessions 回来会再校正
+  // 徽标【和 currentModule】都随会话绑定走；列表未载入时 loadSessions / loadWorkflowState 回来会再校正
+  const boundMod = sessList.find((s) => s.id === id)?.module || "chat"
+  setModBadge(boundMod)
+  // ★ currentModule 必须跟着切，而且要【同步】在下面 renderWelcome 之前改掉。
+  //   它是页面级的"下一条消息 / 下一个新会话用哪个模块"，原先只在 loadWorkflowState 里被【设上】、
+  //   从来没有被【清回去】的路径 —— 从综述会话切回自由对话时它仍停在综述，于是：
+  //   ① 这个空会话的欢迎页摆出综述的首屏表单、还顺手把输入框藏了（showIntake）；
+  //   ② 它发出的第一条消息带着 module=综述（sessionStarted 为 false），被服务端【永久绑】成
+  //      综述会话 —— 界面上没有解绑入口；③ 之后点「新对话」也继续开在综述里。
+  //   用户原话："切到写综述的会话再切回来，原本的自由对话也变成综述了。"
+  currentModule = boundMod
   // 【必须看 r.ok】历史接口失败时服务端回的是 400 + 空数组体，直接 .json() 会得到一个合法的 []，
   // 于是"载入失败"被渲染成"这个会话本来就是空的" —— 用户以为几十轮对话没了，而实际只是没读到。
   // 宁可显示一条明确的错误，也不要用空白冒充成功。
@@ -4847,11 +4863,24 @@ async function submitStepForm(modId, step, values, card) {
 async function loadWorkflowState() {
   stepsHost = null; stepsHostEl.replaceChildren()
   if (!sessionId) return
+  const sid = sessionId          // 这一趟是替谁取的：回来时用户可能已经切走，那份状态就不是本会话的了
   try {
-    const j = await fetch("api/workflow/state" + (sessionId ? "?sid=" + encodeURIComponent(sessionId) : "")).then((r) => r.json())
+    const j = await fetch("api/workflow/state?sid=" + encodeURIComponent(sid)).then((r) => r.json())
+    if (sessionId !== sid) return
+    // module 是服务端对"本会话绑定了什么"的权威说法，chat 会话也会回（{state:null,module:"chat"}）。
+    // ★ 在下面那个 return 之【前】采纳，包括回落到 chat —— 否则 currentModule 只增不减：
+    //   一旦进过受限模块会话，页面在本次生命周期里就再也回不到自由对话（见 resumeSession 头注）。
+    //   刷新页面恢复会话时列表还没到，resumeSession 只能先按 chat 兜底，靠这里校正回来。
+    if (j?.module && j.module !== currentModule) {
+      currentModule = j.module
+      setModBadge(currentModule)
+      // 空会话此时摆的是【上一个模块】的欢迎页/首屏表单：就地重画成本会话该有的样子。
+      // 用户已经填过东西的表单不动（判据与 confirmLeaveIntake 同源，别把填了一半的表清掉）。
+      const w = log.querySelector(".welcome")
+      if (w && !intakeDirty()) { w.remove(); renderWelcome() }
+    }
     if (!j?.state || !j.steps?.length) return
     wfCache.set(j.module, { ...(wfCache.get(j.module) || {}), name: j.name, steps: j.steps })
-    currentModule = j.module
     liveBypass = !!j.gateBypass   // 放行是会话级的，切会话/刷新都要按服务端的说法重置
     // 第 4 个参数不能漏：漏了 updateStepsBar 会沿用旧的 liveFailed（切会话/刷新时是 []），
     // 于是「需返工」的红标在刷新后凭空消失，那一步显示成"还没做"。服务端是有 failed 的。
@@ -6590,7 +6619,23 @@ document.addEventListener("visibilitychange", () => { if (!document.hidden) refr
 ;(function () {
   var LOGOUT_MS = 24 * 60 * 60 * 1000, WARN_MS = LOGOUT_MS - 3 * 60 * 1000
   var last = Date.now(), out = false
-  function bump() { last = Date.now() }
+  // ★ 活跃时间要【跨标签共享】。原来 last 与计时器都是每文档一份，于是这道闸两个方向都失效：
+  //   ① 用户在 B 标签干了一整天，闲置的 A 标签到点照样弹锁屏；
+  //   ② 反过来更要命 —— A 锁了，B 标签照常能发消息、能下载产物，
+  //      而这道闸防的正是"人离开、机器没人看管"，换个标签就绕过去等于没有。
+  //   写进 localStorage 取全局最大值；再监听 storage，别的标签锁了本标签立刻跟着锁。
+  var ACT_KEY = "nm_last_active"
+  function readAct() { try { return Number(localStorage.getItem(ACT_KEY)) || 0 } catch (_) { return 0 } }
+  function bump() {
+    last = Date.now()
+    // 节流：鼠标一动就是几十次事件，没必要每次都写盘（localStorage 是同步的）
+    if (last - (bump._w || 0) > 5000) { bump._w = last; try { localStorage.setItem(ACT_KEY, String(last)) } catch (_) {} }
+  }
+  window.addEventListener("storage", function (e) {
+    if (e.key === ACT_KEY) { var t = Number(e.newValue) || 0; if (t > last) last = t }
+    // 别的标签锁上了 → 本标签也立刻锁。不跟的话这道闸形同虚设。
+    if (e.key === LOCK_KEY && e.newValue === "1" && !cloudMandatory) { try { openCloud(true) } catch (_) {} }
+  })
   // SSE 生成期间也算活跃：包一层 EventSource，任何事件都刷新闲置计时，避免长流水线跑一半被登出
   var OES = window.EventSource
   if (OES) {
@@ -6655,6 +6700,8 @@ document.addEventListener("visibilitychange", () => { if (!document.hidden) refr
     if (out) return
     // 已经停在登录闸上了：没有什么可登出的，也别再定时把页面刷掉（会把人正打着的账号清空）
     if (cloudMandatory) { bump(); return }
+    // 取【全局】最后活跃时刻：别的标签在用，本标签就不该独自倒计时（见 bump 处的说明）
+    var act = readAct(); if (act > last) last = act
     var idle = Date.now() - last
     if (idle >= LOGOUT_MS) { ov.style.display = "none"; logout(true); return }
     // 措辞对两种形态都成立：桌面/云端账号形态是锁屏（登录态与在跑的轮都留着），局域网形态是真登出

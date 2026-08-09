@@ -205,8 +205,14 @@ test("科研作图：生成器壳的配置契约（少一样界面就画不出�
     const at = (s) => id + ".gen." + s
     assert.ok(g, at("缺整段配置——页面会退化成「取不到配置」"))
     for (const k of ["eyebrow", "title", "lead"]) assert.ok(g.intro?.[k], at("intro." + k + " 不能空"))
-    for (const k of ["limits", "wrongDoor", "prompt", "srcLine", "followPrefix", "followPlaceholder"])
+    for (const k of ["prompt", "srcLine", "followPrefix", "followPlaceholder"])
       assert.ok(g[k], at(k + " 不能空"))
+    // 【别回潮】生成条上方那两段横幅（AI 位图 / 期刊政策、数据图请去别处）2026-08-09 已删。
+    // 那两件事改由出图【之后】的 steps.check note 与 usage 的 pinNote 承担 —— 见 workflows.mjs
+    // 里的长注释。这两条断言是防止有人看到"缺提示"又把横幅加回首屏。
+    assert.ok(!g.limits && !g.wrongDoor, at("首屏不再挂横幅，提醒放到出图之后那一步"))
+    assert.match(WF.WORKFLOWS.figure.steps.find((s) => s.id === "check").note, /AI 生成的位图/,
+      "AI 位图这句话必须还在出图后那一步的 note 里 —— 首屏横幅删了，它就是唯一的出口")
     // 被点名的字段必须真的在 intake 里，否则界面上那一格【什么都不画】而且不报错
     const has = (fid) => (w.intake || []).some((f) => f.id === fid)
     assert.ok(has(g.promptField), at("promptField 指向不存在的字段 " + g.promptField))

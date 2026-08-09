@@ -2832,7 +2832,9 @@ function fieldControl(f, onChange) {
   wrap.appendChild(sel); return wrap
 }
 
-let PEEK = null           // 前 N 行 + 列画像（{headers,rows,cols,note,scanned,truncated}）
+let PEEK = null           // 前 N 行 + 列画像（{headers,rows,cols,note,scanned,truncated,sheets}）
+let SHEET = ""            // 当前读的是第几张工作簿（多表 xlsx；空 = 第一张）。切表时带给 automap
+let SHEET_FOR = ""        // 上面那个选择属于哪个文件 —— 换文件要清掉，别拿旧序号去读新表
 let AUTOMAP = null        // 自动认列的结果（{file,map,why,conf,by,notes,source}）
 let AUTOMAP_LOADING = false
 let AUTOMAP_SEQ = 0       // 竞态号：读表期间用户切了表，旧结果一律作废
@@ -2853,6 +2855,8 @@ async function loadHeaders() {
   if (!CFG.vars || !docName || !sid) return
   const seq = ++AUTOMAP_SEQ
   const forFile = docName
+  // 换了文件就把工作簿选择清掉：留着上一个文件的表序号，会去读新文件里根本不对应的那张表
+  if (SHEET_FOR !== forFile) { SHEET = ""; SHEET_FOR = forFile }
   const headsBefore = HEADERS.slice(), valsBefore = HEADER_VALS.slice()   // automap 挂了要回落到它（见下）
   HEADERS = []; HEADER_VALS = []; HEADER_DUPES = []; HEADERS_WHY = ""; PEEK = null; AUTOMAP = null
   AUTOMAP_LOADING = true
@@ -2861,7 +2865,7 @@ async function loadHeaders() {
   try {
     j = await jget("api/data/automap", {
       method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ sid, name: forFile, analyses: SETTINGS.analyses }),
+      body: JSON.stringify({ sid, name: forFile, analyses: SETTINGS.analyses, sheet: SHEET }),
     }).then((r) => r.json())
   } catch (_) { j = null }
   if (seq !== AUTOMAP_SEQ) return          // 等待期间用户切了表：这份结果是上一张表的，丢掉
@@ -2883,7 +2887,8 @@ async function loadHeaders() {
   HEADER_DUPES = Array.isArray(j.dupes) ? j.dupes : []
   HEADERS_WHY = j.note || ""
   PEEK = { headers: j.headers || [], rows: j.rows || [], cols: j.cols || [],
-    note: j.note || "", scanned: j.scanned || 0, truncated: !!j.truncated }
+    note: j.note || "", scanned: j.scanned || 0, truncated: !!j.truncated,
+    sheets: j.sheets || [] }   // 多工作簿：切表 chip 靠它（见 renderVarsPeek）
   AUTOMAP = { file: forFile, map: j.map || {}, why: j.why || {}, conf: j.conf || {},
     notes: j.notes || [], source: j.source || "rule" }
   // 【谁填的】记在 SETTINGS.__varsBy 里而不是 AUTOMAP 里：它要跟着 _workflow.json 落盘，
@@ -3039,6 +3044,22 @@ function renderVarsPeek() {
   $("varsPeekSum").textContent = "看看表的前 " + PEEK.rows.length + " 行"
     + (PEEK.scanned ? "（这张表读到 " + PEEK.scanned + " 行" + (PEEK.truncated ? "+，只扫了前一段" : "") + "）" : "")
     + (PEEK.note ? "　" + PEEK.note : "")
+  // ★ 多工作簿要能切。python 侧一直支持 --sheet，只是上面三层没接 —— 界面告诉用户
+  //   "这个工作簿有 3 张表"，却只认第一张、也给不了切换，而用户的数据在第二张里很常见。
+  body.innerHTML = ""
+  if ((PEEK.sheets || []).length > 1) {
+    const bar = document.createElement("div"); bar.className = "vchips"; bar.style.marginBottom = "8px"
+    bar.appendChild(Object.assign(document.createElement("span"),
+      { className: "vwhy", textContent: "这个工作簿有 " + PEEK.sheets.length + " 张表，当前读的是：" }))
+    PEEK.sheets.forEach((nm, i) => {
+      const b = document.createElement("button")
+      b.type = "button"; b.className = "vchip" + (String(SHEET) === String(i) || SHEET === nm || (!SHEET && i === 0) ? " on" : "")
+      b.textContent = nm
+      b.addEventListener("click", () => { if (String(SHEET) === String(i)) return; SHEET = i; loadHeaders() })
+      bar.appendChild(b)
+    })
+    body.appendChild(bar)
+  }
   // 被认走的列在表头里标一下颜色：用户一眼就能对上"机器说的那列"到底是表里的哪一列
   const used = new Set()
   if (AUTOMAP) for (const id of CFG.vars.fields) {
@@ -3047,7 +3068,8 @@ function renderVarsPeek() {
   }
   const th = PEEK.headers.map((h) => '<th class="' + (used.has(h) ? "hit" : "") + '">' + esc(h) + "</th>").join("")
   const tr = PEEK.rows.map((r) => "<tr>" + r.map((c) => "<td>" + (c === "" ? "<span style=\"opacity:.4\">(空)</span>" : esc(c)) + "</td>").join("") + "</tr>").join("")
-  body.innerHTML = "<table><thead><tr>" + th + "</tr></thead><tbody>" + tr + "</tbody></table>"
+  // 追加而不是赋值：上面的切表 chip 已经写进 body 了，innerHTML= 会把它冲掉
+  body.insertAdjacentHTML("beforeend", "<table><thead><tr>" + th + "</tr></thead><tbody>" + tr + "</tbody></table>")
 }
 
 const setMenu = $("setMenu")
@@ -3247,6 +3269,79 @@ async function removeDataFile(name) {
       + "那时候不需要先上传。它的对话记录还在，从「自由对话」那边照常能翻到；要开始新的一份，在上面传上来即可。"
   }
   $("intro").hidden = false
+})()
+
+/* ============================================================
+   专用壳的三件公共事：公告 / 更新提示 / 闲置锁
+   ------------------------------------------------------------
+   ★ 为什么这里要单独写一遍：这两个壳（reader / figure）是自包含页面，不引外部 js，
+     而聊天页那套公告面板 + 更新横幅 + 登录弹窗有几百行，整体搬过来既臃肿又要维护两份。
+     所以这里【只做察觉，不做处置】：发现有事就挂一条一行的提示、把用户交回主页去办。
+     用户在文献研读里泡一整天，至少不会对维护通知、界面更新、锁屏一无所知。
+   ★ 闲置锁与聊天页共用同一套 localStorage 键（nm_locked / nm_last_active）：
+     - 活跃时间写全局，别让"用户在别的标签干活"被本页算成闲置；
+     - 别的标签锁了 → 本页也立刻交回主页（那边有登录闸）。不跟的话这道闸换个标签就绕过去了。
+   ============================================================ */
+;(function () {
+  var LOCK_KEY = "nm_locked", ACT_KEY = "nm_last_active"
+  var LOGOUT_MS = 24 * 60 * 60 * 1000
+  var last = Date.now(), wrote = 0
+  function bump() {
+    last = Date.now()
+    if (last - wrote > 5000) { wrote = last; try { localStorage.setItem(ACT_KEY, String(last)) } catch (_) {} }
+  }
+  ;["mousemove", "mousedown", "keydown", "wheel", "touchstart", "visibilitychange"].forEach(function (e) {
+    window.addEventListener(e, bump, { passive: true })
+  })
+  function toHome(why) { try { sessionStorage.setItem("nm_shell_back", why || "") } catch (_) {} location.href = "./" }
+  window.addEventListener("storage", function (e) {
+    if (e.key === ACT_KEY) { var t = Number(e.newValue) || 0; if (t > last) last = t }
+    if (e.key === LOCK_KEY && e.newValue === "1") toHome("locked")
+  })
+  setInterval(function () {
+    var act = 0; try { act = Number(localStorage.getItem(ACT_KEY)) || 0 } catch (_) {}
+    if (act > last) last = act
+    try { if (localStorage.getItem(LOCK_KEY) === "1") return toHome("locked") } catch (_) {}
+    // 到点了就把全局锁一置、交回主页：锁屏弹窗归主页管，这里不重实现一套
+    if (Date.now() - last >= LOGOUT_MS) { try { localStorage.setItem(LOCK_KEY, "1") } catch (_) {} toHome("idle") }
+  }, 30000)
+
+  /* ---- 一行提示条：公告 / 界面包 / 技能包 / 登录态失效 ---- */
+  var bar = null
+  function showBar(text, act) {
+    if (!bar) {
+      bar = document.createElement("div")
+      bar.style.cssText = "position:fixed;left:0;right:0;top:0;z-index:9999;display:flex;gap:10px;"
+        + "align-items:center;justify-content:center;padding:7px 14px;font-size:13px;"
+        + "background:#fff8e6;border-bottom:1px solid #f0d7ae;color:#8a5a12"
+      document.body.appendChild(bar)
+    }
+    bar.textContent = ""
+    bar.appendChild(document.createTextNode(text))
+    var a = document.createElement("a")
+    a.href = "./"; a.textContent = act || "回主页处理 →"
+    a.style.cssText = "color:#3b6fd4;text-decoration:none;white-space:nowrap"
+    bar.appendChild(a)
+    var x = document.createElement("button")
+    x.type = "button"; x.textContent = "×"; x.title = "本次不再提示"
+    x.style.cssText = "border:0;background:transparent;color:inherit;cursor:pointer;font-size:15px;line-height:1"
+    x.addEventListener("click", function () { bar.remove(); bar = null })
+    bar.appendChild(x)
+  }
+  var seenNotice = 0
+  async function poll() {
+    var j = null
+    try { j = await (await fetch("api/cloud/notice", { signal: AbortSignal.timeout(8000) })).json() } catch (_) { return }
+    if (!j) return
+    // 登录态在后台被作废：主页有登录闸，交回去
+    if (j.loggedOut) return toHome("loggedOut")
+    if (j.webUpdate) return showBar("界面有新版本可用。", "回主页更新 →")
+    if (j.skillUpdate) return showBar("技能包有新版本可用。", "回主页更新 →")
+    var unread = Array.isArray(j.digest) ? j.digest.length : 0
+    if (unread && unread !== seenNotice) { seenNotice = unread; showBar("平台有新公告。", "回主页查看 →") }
+  }
+  poll(); setInterval(poll, 5 * 60 * 1000)
+  window.addEventListener("focus", poll)
 })()
 </script>
 </body>
