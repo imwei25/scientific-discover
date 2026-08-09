@@ -310,6 +310,32 @@ button{font:inherit}
 .notebox .gbypass:hover{background:rgba(0,0,0,.05)}
 .notebox .gbypass:disabled{opacity:.5;cursor:default}
 
+/* ---- 两阶段模式的阶段卡（目前只有「演示 PPT」：先出大纲，用户确认后才出片）----
+   【为什么必须有这张卡】第一步跑完时，面板里躺着的是一篇大纲，而用户点的按钮叫「演示 PPT」，
+   头部按钮还变成了「重新生成」——看上去就是"我要片子，它给了我一篇文字，然后说做完了"。
+   真正的下一步（让它照这份大纲出片）此前在界面上【没有任何入口】：唯一能想到的办法是在
+   输入框回一句"确认，出片"，而那会被打上追问标记，追问的规矩恰恰是"不要重跑、不要产出文件"。
+   这张卡把"现在到哪一步 / 下一步点哪里 / 想改先说话"三件事写在正文最上面，按钮直接发第二阶段。 */
+.stagecard{border:1px solid var(--line);border-left:3px solid var(--accent);border-radius:var(--r-sm);
+  background:var(--panel-soft);padding:12px 14px;margin-bottom:14px}
+.stagecard.ok{border-left-color:var(--green)}
+.stagecard .sc-step{font-size:11.5px;font-weight:700;color:var(--accent);margin-bottom:5px}
+.stagecard.ok .sc-step{color:var(--green)}
+.stagecard .sc-md{font-size:12.5px;line-height:1.85;color:var(--muted)}
+.stagecard .sc-md p{margin:0}
+.stagecard .sc-md p+p{margin-top:6px}
+.stagecard .sc-act{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin-top:11px}
+.stagecard .sc-go{display:inline-flex;align-items:center;gap:6px;height:30px;padding:0 14px;border:none;border-radius:8px;
+  background:var(--accent);color:#fff;font:inherit;font-size:12.5px;font-weight:600;cursor:pointer;transition:.15s}
+.stagecard .sc-go:hover{background:var(--accent-deep)}
+.stagecard .sc-go[disabled]{background:#c3ccd8;cursor:not-allowed}
+.stagecard .sc-go svg{width:14px;height:14px}
+.stagecard .sc-hint{font-size:11.5px;color:var(--faint)}
+/* 已出片之后，大纲折进来（它已经不是这一格的主角了，但也不能消失：用户会回来核对讲稿） */
+.foldbody{margin-bottom:14px}
+.foldbody>summary{cursor:pointer;font-size:12.5px;color:var(--muted);padding:5px 0}
+.foldbody>summary:hover{color:var(--accent)}
+
 /* ---- 图标按钮 + 悬停浮出的文字 ----
    工具条上的动作全是图标（换一份 / 最近 / 工作台 / 设置 / 重新生成）。原生 title 要悬停约
    一秒才出，图标按钮上等于没有提示 —— 用户只能靠猜，猜错的代价是「换一份」把当前会话换掉。
@@ -847,6 +873,9 @@ function installConfig(cfg) {
   const re = (x) => { try { return x ? new RegExp(x, "i") : null } catch (_) { return null } }
   for (const m of cfg.modes || []) {
     MODES[m.id] = { ...m, icon: ic(m.icon), file: re(m.file), out: re(m.out) }
+    // 两阶段模式（「演示 PPT」：先大纲、用户确认后才出片）。stage2.done 也是字符串下发的正则，
+    // 一并编译 —— 漏了它 stageFinals() 会拿 undefined 去 .test()，整格面板直接报错空白。
+    if (m.stage2) MODES[m.id].stage2 = { ...m.stage2, done: re(m.stage2.done) }
     ORDER.push(m.id)
   }
 }
@@ -855,10 +884,16 @@ function installConfig(cfg) {
  * 某个模式发出去的那段话 = mark + prompt（占位符替换后）。
  *  {doc}  左栏那份文件名        {data} 配套数值表 / 数据表        {vars} 变量对应面板填了什么
  * 取不到值的占位符【整句删掉】，不能留下一个字面的 "{data}" 发给模型。
+ *
+ * @param stage2 true = 发第二阶段那段话（两阶段模式的「按这份大纲出片」）。
+ *   ★ 前缀仍用【同一个 mark】：服务端与刷新后的前端都靠 mark 认这一轮归哪一格，
+ *     换个标记就会被当成自由对话，产物落回聊天格、这一格照旧空着。也【不能】用 askMark ——
+ *     追问的规矩明写着"不要重跑、不要产出文件"，用它发出去等于让模型不许出片。
  */
-function promptFor(id) {
+function promptFor(id, stage2) {
   const M = MODES[id]
-  if (!M || !M.prompt) return ""
+  const tpl = stage2 ? (M && M.stage2 && M.stage2.prompt) : (M && M.prompt)
+  if (!tpl) return ""
   const bq = (n) => "`" + n + "`"
   // {data}：stats 那种"上传的就是表"的模块用左栏那份；refcheck 用另传的配套数值表 ——
   // 可以有好几份，全都列出来（只发第一份的话，模型会把其余几份当不存在，用户完全看不出来）。
@@ -869,7 +904,7 @@ function promptFor(id) {
     data: docListStr(),
     vars: varsBlock(),
   }
-  let t = M.prompt
+  let t = tpl
   for (const [k, v] of Object.entries(map)) {
     const ph = "{" + k + "}"
     if (!t.includes(ph)) continue
@@ -1777,11 +1812,11 @@ function setMode(k) {
  *   没指分组列也照发 —— 右边条子拦得住、面板里拦不住，同一件事两种行为。
  *   凡是"起一轮"都必须走这里。
  */
-function tryRun(k, force) {
+function tryRun(k, force, stage2) {
   if (busy()) return
   const miss = blockedBy(k)
   if (miss) { setMode(k); showBlocked(k, miss); return }
-  run(k, force)
+  run(k, force, undefined, false, stage2)
 }
 $("btnRerun").addEventListener("click", () => tryRun(mode, true))
 $("btnGo").addEventListener("click", () => tryRun(mode))
@@ -1790,6 +1825,8 @@ $("btnHalt").addEventListener("click", abortRun)
 $("aiBody").addEventListener("click", (e) => {
   const b = e.target.closest("[data-run]")
   if (b) { tryRun(b.dataset.run); return }
+  const s2 = e.target.closest("[data-stage2]")       // 阶段卡上的「按这份大纲出片」
+  if (s2) { tryRun(s2.dataset.stage2, false, true); return }
   const p = e.target.closest("[data-pv]")            // 产物那一行的「预览」
   if (p) { openPv(p.dataset.pv); return }
   const add = e.target.closest("[data-dataadd]")     // 配套数值表：添加
@@ -1927,6 +1964,47 @@ function askHtml(m) {
     + " 转交给智能助手时会一起带过去</div>" + bubblesHtml(qa) + "</div>"
 }
 
+/* ---- 两阶段模式（「演示 PPT」）：现在到哪一步、下一步点哪里 ----
+   判据全落在【产物】上，不靠任何前端状态：
+     没有大纲                → 还没开跑（空态自己会说话，不画卡）
+     有大纲、没有 .pptx      → 第 1 步已完成，等用户点「按这份大纲出片」
+     有 .pptx                → 第 2 步已完成，卡里给"预览幻灯片 / 下载"
+   这样刷新页面、换台机器打开都还原得出来 —— 阶段不是记在内存里的一个变量。 */
+function stageFinals(m) {
+  const st = MODES[m] && MODES[m].stage2
+  if (!st || !st.done) return []
+  return outputs.map((f) => f.name).filter((n) => st.done.test(n))
+}
+function stageCardHtml(m) {
+  const st = MODES[m] && MODES[m].stage2
+  if (!st) return ""
+  const s = S[m]
+  // 第二阶段正在跑。★ 判据不能只看 RUN.stage2：页面刷新后是 attach() 直接把 RUN 设起来的
+  //   （没走 run()，那面旗子丢了）。"这一格的主结果轮正在跑、而大纲已经在手" ⇒ 只能是在出片
+  //   （重跑第一步走的是 force，force 会先把 doc 清掉）。
+  if (RUN && RUN.mode === m && !RUN.ask && (RUN.stage2 || s.doc != null))
+    return '<div class="stagecard"><div class="sc-step">第 2 步 / 2 · 出片中</div>'
+      + '<div class="sc-md md">' + renderMd(st.running) + "</div></div>"
+  const finals = stageFinals(m)
+  if (finals.length) {
+    const f = finals[0]
+    return '<div class="stagecard ok"><div class="sc-step">第 2 步 / 2 · 已完成</div>'
+      + '<div class="sc-md md">' + renderMd(st.doneNote) + "</div>"
+      + '<div class="sc-act">'
+      + (canPv(f) ? '<button type="button" class="sc-go" data-pv="' + esc(f) + '">' + ICON.eye + "预览幻灯片</button>" : "")
+      + '<a class="hbtn" href="api/download?name=' + encodeURIComponent(f) + sidQ()
+        + '" download="' + esc(String(f).split("/").pop()) + '">' + ICON.download + "下载 .pptx</a>"
+      + '<span class="sc-hint">' + esc(String(f).split("/").pop()) + "</span></div></div>"
+  }
+  // 还没跑过第一步 → 不画卡（空态里那颗「演示 PPT」就是入口，两处按钮反而让人不知道点哪个）
+  if (s.doc == null && !(s.raw || "").trim()) return ""
+  return '<div class="stagecard"><div class="sc-step">第 1 步 / 2 · 大纲已出</div>'
+    + '<div class="sc-md md">' + renderMd(st.note) + "</div>"
+    + '<div class="sc-act"><button type="button" class="sc-go" data-stage2="' + esc(m) + '"'
+      + (busy() ? " disabled" : "") + ">" + (busy() ? "" : ICON.play) + esc(st.btn) + "</button>"
+    + '<span class="sc-hint">' + (busy() ? "等上一轮跑完" : "约十分钟") + "</span></div></div>"
+}
+
 function render(m) {
   const el = $("pane-" + m)
   if (m === "chat") return renderChat()
@@ -1945,16 +2023,30 @@ function render(m) {
   // 传了哪几份、还能不能再加、想删哪一份，全在这张卡里，用户不必读完警告再去找地方传。
   h += dataCardHtml(m)
   if (s.err) h += '<div class="notebox err">⚠ ' + esc(s.err) + "</div>"
+  // 阶段卡（两阶段模式才有）摆在正文最上面：用户第一眼要知道的是"这只是大纲、下一步点这里"，
+  // 而不是先读完一整篇大纲再自己琢磨"片子在哪"。
+  h += stageCardHtml(m)
+  const stg = MODES[m].stage2
+  const staged = !!stg && !!stageFinals(m).length     // 两阶段模式且已出片 → 大纲让位给成品
   // 正文优先用产物文件（翻译/大纲是写进文件的，对话里只有一句"已完成"），没有就用对话正文
   const body = s.doc != null ? s.doc : s.raw
   if (body && body.trim()) {
-    if (s.doc != null && s.docName) h += '<div class="notebox info">正文来自产物文件 <b>' + esc(s.docName) + "</b>，可在下方下载。</div>"
+    if (s.doc != null && s.docName && !stg) h += '<div class="notebox info">正文来自产物文件 <b>' + esc(s.docName) + "</b>，可在下方下载。</div>"
     // 产物本身就是一张表（基线表就是 table1.csv）时按【表】渲染。markdown 渲染器眼里 csv 只是
     // 一段普通文字：逗号、引号原样铺开，表头和数据糊成一坨 —— 用户点开「基线表」看到的
     // 不是一张三线表，而是一段乱码似的文本，第一反应是"它算错了"。
-    h += (s.doc != null && PV_CSV.test(s.docName))
+    const bodyHtml = (s.doc != null && PV_CSV.test(s.docName))
       ? '<div class="card">' + renderCsv(s.doc, /\.tsv$/i.test(s.docName) ? "\t" : ",") + "</div>"
       : '<div class="card md">' + renderMd(body) + "</div>"
+    h += staged
+      ? '<details class="foldbody"><summary>这套片子的大纲（' + esc(s.docName || "ppt_outline.md") + "）</summary>" + bodyHtml + "</details>"
+      : bodyHtml
+    // ★ 两阶段模式必须把模型那一轮【说的话】也留一份出口。正文一律优先画产物文件，于是
+    //   模型说的（"第 7 页缺原文数据，我写了「原文未报告」"、"共 16 页、封面用了…"）整段被顶掉 ——
+    //   这正是"点了 PPT 只看见大纲"里最难自查的一环：屏幕上没有任何线索表明它还说过话。
+    //   折起来放，不与正文抢位置，但谁都找得到。
+    if (stg && s.doc != null && (s.raw || "").trim() && s.raw.trim() !== s.doc.trim())
+      h += '<details class="foldbody"><summary>助手这一轮说的话</summary><div class="card md">' + renderMd(s.raw) + "</div></details>"
   } else if (s.status === "running") {
     if (!RUN || RUN.mode !== m) h += '<div class="notebox info">正在生成…</div>'
   } else if (s.status !== "idle" && !s.err) {
@@ -2031,8 +2123,14 @@ function updateFoot() {
 
   let foot = ""
   if (mode !== "chat") {
+    // 两阶段模式停在"大纲已出、还没出片"时，底栏那句话必须跟着改。原来这里会说
+    // "已完成。想接着这份结果聊…"或"追问只针对这份结果" —— 两句都在暗示"事儿办完了"，
+    // 而真正的成品（.pptx）还没生成，用户正是在这一步以为它做完了。
+    const stg = MODES[mode].stage2
+    const pend = !!stg && s && s.status === "done" && s.doc != null && !stageFinals(mode).length
     foot = mine ? RUN.label
       : RUN ? "「" + MODES[RUN.mode].label + "」正在跑，跑完才能开下一轮"
+      : pend ? "这还只是大纲。点面板里的「" + stg.btn + "」才会生成 .pptx；想先改风格 / 页数 / 配图，在下方输入框说一句。"
       : canAsk ? "追问只针对这份结果，不会重跑「" + MODES[mode].label + "」；转交给智能助手时会连追问一起带过去。"
       : s.status === "done" ? "已完成。想接着这份结果聊，点上方的「转交给智能助手」。"
       : s.status === "error" ? "上一轮没有正常结束。"
@@ -2060,8 +2158,11 @@ function follow() {
  * @param force   true = 用户点了「重新生成」（已有内容时先清掉，免得新旧混在一起）
  * @param userTxt 用户打的那句话（智能助手的提问，或某一格结果下面的追问）
  * @param ask     true = 这是【追问】：不重跑这个模式，问答落在该格的追问区（S[m].qa）
+ * @param stage2  true = 两阶段模式的第二步（「按这份大纲出片」）：仍是这一格的【主结果】，
+ *                但不是重跑第一步 —— 大纲要留着（成品出来后折进正文里给用户核对讲稿），
+ *                大纲下面那串追问也要留着（它们问的还是这一版大纲，没有作废）。
  */
-async function run(m, force, userTxt, ask) {
+async function run(m, force, userTxt, ask, stage2) {
   if (busy()) return
   if (!sid || !docName) return
   const s = S[m]
@@ -2069,8 +2170,8 @@ async function run(m, force, userTxt, ask) {
   if (m !== "chat" && !ask) {
     if (force) { s.raw = ""; s.doc = null; s.docName = ""; s.files = [] }
     // 主结果重跑一次，旧追问就作废——它们问的是【上一版】结果，留着只会让人对着新结果
-    // 读到一串答非所问的问答，而看不出这是上一版留下的。
-    s.qa = []
+    // 读到一串答非所问的问答，而看不出这是上一版留下的。（第二阶段不算重跑，见上面 @param）
+    if (!stage2) s.qa = []
   }
 
   let q = ""
@@ -2104,12 +2205,12 @@ async function run(m, force, userTxt, ask) {
     if (handoff) { myHoff = handoff; handoff = null; renderHoff(); q = myHoff.card + "\n\n" + q; s.msgs.push({ role: "tag", text: myHoff.tag }) }
     s.msgs.push({ role: "user", text: userTxt })
   } else {
-    q = promptFor(m)
+    q = promptFor(m, stage2)
     if (!q) return
   }
 
   s.status = "running"; s.err = ""
-  RUN = { mode: m, ask: !!ask, label: "正在提交…", skills: [], tools: new Map(), es: null }
+  RUN = { mode: m, ask: !!ask, stage2: !!stage2, label: "正在提交…", skills: [], tools: new Map(), es: null }
   starting = true
   renderRail(); render(m)
 

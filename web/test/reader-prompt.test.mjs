@@ -182,3 +182,110 @@ test("智能助手的文案归模块管，四个阅读器模块都要有", () =>
   const stats = WF.workflowFor("stats", {}).reader.chat
   assert.doesNotMatch(stats.placeholder + stats.firstTurn, /文献/, "数据模块的文案还在说「文献」")
 })
+
+/* ============================================================
+   两阶段模式（「演示 PPT」）：先出大纲 → 用户点按钮 → 才出片
+   ------------------------------------------------------------
+   【为什么值得单独测】这一格此前是"点了只出大纲、看着像做完了"：
+     ① 提示词把"写大纲"和"出片"塞进一句话，还带一句"我要先审一遍"——模型写完大纲就结束；
+     ② `ppt-master` 内部那道 ⛔ BLOCKING 的 Strategist 确认闸默认要开 Confirm UI，
+        网页版用户打不开那个页面，于是它必然停在那里等确认；
+     ③ 就算跑完，成品在 `<项目名>/exports/` 里（两层深），/api/outputs 只列一层 → 界面上不存在。
+   三个坑都不会报错，都只表现为"它给了我一篇文字"。下面每条断言各钉住其中一个。
+   ============================================================ */
+const PPT = () => WF.workflowFor("litread", {}).reader.modes.find((m) => m.id === "ppt")
+
+test("演示 PPT：第一步的提示词只许出大纲，不许顺手把片子做了", () => {
+  const m = PPT()
+  const { promptFor } = makeEnv({ mod: "litread", docName: "原件.pdf" })
+  const out = promptFor("ppt")
+  assert.ok(out.startsWith(m.mark), "第一步那段话没带模式标记，服务端认不出它归哪一格")
+  // 这三句是"只做大纲"的全部约束。少任何一句，模型都会顺着往下把 ppt-master 跑起来，
+  // 然后停在 Confirm UI 那道闸上 —— 症状与改造前一模一样。
+  assert.ok(out.includes("不要建工程"), "第一步没写明不许建工程")
+  assert.ok(out.includes("不要调 `ppt-master`"), "第一步没写明这一轮不许调 ppt-master")
+  assert.match(out, /不要生成任何 \.svg \/ \.pptx/, "第一步没写明不许出片")
+  // 第一步必须要来"出片方向的推荐值"：第二步就是拿它当用户的确认值去满足 Strategist 那道闸的，
+  // 只列选项不给结论的话，第二步无从"按已确认值继续"，又会停下来问。
+  assert.ok(out.includes("出片方向"), "第一步没要求给出片方向")
+  assert.match(out, /明确的推荐值/, "出片方向必须给推荐值，否则第二步没有可确认的东西")
+})
+
+test("演示 PPT：第二步那段话带同一个 mark（不是追问标记），且把三个死结都解开", () => {
+  const m = PPT()
+  const { promptFor } = makeEnv({ mod: "litread", docName: "原件.pdf" })
+  const out = promptFor("ppt", true)
+  assert.ok(out.startsWith(m.mark), "第二步没带模式标记 → 会被当成自由对话，产物落回聊天格")
+  assert.ok(!out.startsWith(m.askMark), "第二步不能用追问标记：追问的规矩是「不要产出文件」，那等于禁止出片")
+  assert.ok(out.includes("ppt-master"), "第二步没说用哪个技能")
+  // ① Strategist 那道 BLOCKING 闸：用户的确认值一次交齐，别再停下来
+  assert.match(out, /不要再停下等我回话/, "第二步没交代「别再停下」，它会卡在确认闸上等一个打不开的页面")
+  assert.ok(out.includes("Confirm UI"), "第二步没交代不要开 Confirm UI（远程容器里那个页面用户打不开）")
+  // ② 成品要复制到会话根目录，否则 exports/ 在两层深处，界面列不出来
+  assert.match(out, /复制一份到会话根目录/, "第二步没要求把 .pptx 复制到会话根目录 → 界面上看不见也下载不到")
+  // ③ import-sources --move 会把根目录那两份素材移走，导读/翻译/大纲三格会一起白屏
+  assert.match(out, /必须各复制一份再交给技能/, "第二步没防住 --move 把 fulltext.md / ppt_outline.md 移进 sources/")
+})
+
+test("演示 PPT：阶段判定的两个契约（谁算成品、成品名进不进产物栏）", () => {
+  const m = PPT()
+  assert.ok(m.stage2, "ppt 模式没有 stage2 配置，界面就画不出阶段卡")
+  for (const k of ["done", "btn", "note", "running", "doneNote", "prompt"])
+    assert.ok(m.stage2[k], `stage2 缺 ${k}`)
+  const done = new RegExp(m.stage2.done, "i")
+  assert.ok(done.test("汇报_某研究.pptx"), "会话根目录的 pptx 没被判成成品 → 阶段卡永远停在第 1 步")
+  assert.ok(!done.test("ppt_outline.md"), "大纲被误判成成品 → 第一步一跑完就显示「已出片」")
+  // 成品还得被产物契约收着，否则面板下方那一栏列不出它（阶段卡里有按钮，但下载入口不该只有一处）
+  assert.ok(new RegExp(m.out, "i").test("汇报_某研究.pptx"), "根目录的 pptx 不在 out 契约里")
+})
+
+test("演示 PPT：「分两步」这件事必须进模块前言，不能只写在界面上", () => {
+  // 界面画了阶段卡、而模型手上的前言还写着"走 ppt-master 做 PPT" → 它第一轮就会去出片，
+  // 用户点「按这份大纲出片」时片子早已在做（或已停在确认闸上）。两边必须说同一件事。
+  const flow = WF.pipelineLine("litread", {})
+  assert.match(flow, /分两步走，这一轮只做第一步/, "模块前言里没说清 PPT 分两步")
+  assert.ok(flow.includes("按这份大纲出片"), "前言里没提那颗按钮，模型不知道第二步的指令会自己来")
+})
+
+/* ---- 阶段卡本身的三态（直接跑 reader.html 里那两个函数，不复刻）----
+   判据全落在【产物】上：没大纲→不画卡；有大纲无 pptx→"第 1 步"+出片按钮；有 pptx→"已完成"+预览。
+   最要紧的是最后一条：成品都出来了还挂着一颗「按这份大纲出片」，用户会再点一次，
+   白烧十分钟额度再出一份一模一样的片子。 */
+function makeStageEnv({ mode = "ppt", doc = null, raw = "", files = [], RUN = null } = {}) {
+  const cfg = WF.workflowFor("litread", {}).reader
+  const MODES = {}
+  for (const m of cfg.modes) MODES[m.id] = { ...m, stage2: m.stage2 ? { ...m.stage2, done: new RegExp(m.stage2.done, "i") } : undefined }
+  const S = { [mode]: { doc, raw, status: doc == null ? "idle" : "done", files: [], qa: [] } }
+  const outputs = files.map((n) => ({ name: n }))
+  const src = ["stageFinals", "stageCardHtml"].map(grabFn).join("\n") + "\nreturn { stageFinals, stageCardHtml }"
+  const make = new Function("MODES", "S", "RUN", "outputs", "renderMd", "esc", "ICON", "canPv", "sidQ", "busy", src)
+  return make(MODES, S, RUN, outputs, (t) => String(t), (t) => String(t),
+    { eye: "<eye/>", download: "<dl/>", play: "<play/>" }, () => true, () => "", () => false)
+}
+
+test("演示 PPT 的阶段卡：三种状态各画什么", () => {
+  // ① 还没跑过 → 不画卡（空态里那颗「演示 PPT」就是入口，两个按钮反而让人不知道点哪个）
+  assert.equal(makeStageEnv().stageCardHtml("ppt"), "")
+
+  // ② 有大纲、没成品 → 说清"这只是第 1 步"，并给出片按钮
+  const step1 = makeStageEnv({ doc: "# 大纲", files: ["ppt_outline.md"] }).stageCardHtml("ppt")
+  assert.match(step1, /第 1 步 \/ 2/)
+  assert.ok(step1.includes('data-stage2="ppt"'), "第 1 步的卡上没有出片按钮 —— 这一格又回到了「没有下一步」")
+  assert.ok(step1.includes("按这份大纲出片"))
+
+  // ③ 成品出来了 → 翻成"已完成"，给预览/下载，且【不再】有出片按钮
+  const step2 = makeStageEnv({ doc: "# 大纲", files: ["汇报_某研究.pptx", "ppt_outline.md"] }).stageCardHtml("ppt")
+  assert.match(step2, /第 2 步 \/ 2 · 已完成/)
+  assert.ok(step2.includes('data-pv="汇报_某研究.pptx"'), "已出片却没有预览入口")
+  assert.ok(step2.includes("api/download?name="), "已出片却没有下载入口")
+  assert.ok(!step2.includes("data-stage2"), "成品都出来了还挂着出片按钮，用户会再点一次白烧十分钟")
+
+  // ④ 正在出片（含刷新页面后 attach 起来的那一轮：RUN 上没有 stage2 旗子，靠"大纲已在手"判定）
+  const running = makeStageEnv({ doc: "# 大纲", files: ["ppt_outline.md"], RUN: { mode: "ppt", ask: false } }).stageCardHtml("ppt")
+  assert.match(running, /出片中/)
+  assert.ok(!running.includes("data-stage2"), "正在出片时还给按钮 → 连点会排队再跑一轮")
+
+  // ⑤ 别的模式不该被这套东西影响（它们没有 stage2，一张卡都不该画）
+  for (const id of ["guide", "translate"])
+    assert.equal(makeStageEnv({ mode: id, doc: "正文" }).stageCardHtml(id), "", `${id} 不该出现阶段卡`)
+})
