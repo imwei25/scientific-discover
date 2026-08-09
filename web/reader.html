@@ -631,6 +631,13 @@ button{font:inherit}
         <button class="pill halt" id="btnHalt" type="button" aria-label="终止" hidden>
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="6" y="6" width="12" height="12" rx="2"/></svg><span class="lbl">终止</span>
         </button>
+        <!-- 「继续」：只在【订阅断了、而后台那一轮已经跑完】时出现。它不是重跑 ——
+             那一轮的结果早就在服务端了（产物落了盘、回复进了历史），断的只是浏览器这条 SSE。
+             此前这里只给「重新生成」，用户照着提示点下去，等于把已经做好的东西再花十分钟做一遍
+             （PPT 那一格最狠）。图标用"向右取回"，与「重新生成」的回环箭头刻意不同形。 -->
+        <button class="ibtn" id="btnResume" type="button" data-tip="继续" aria-label="继续" hidden>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M10 8.5l4.5 3.5-4.5 3.5z"/></svg>
+        </button>
         <button class="ibtn" id="btnRerun" type="button" data-tip="重新生成" aria-label="重新生成" hidden>
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M20 11a8 8 0 10-2.3 6.3"/><path d="M20 4v7h-7"/></svg>
         </button>
@@ -1818,6 +1825,7 @@ function tryRun(k, force, stage2) {
   if (miss) { setMode(k); showBlocked(k, miss); return }
   run(k, force, undefined, false, stage2)
 }
+$("btnResume").addEventListener("click", () => resumeDropped(mode))
 $("btnRerun").addEventListener("click", () => tryRun(mode, true))
 $("btnGo").addEventListener("click", () => tryRun(mode))
 $("btnHalt").addEventListener("click", abortRun)
@@ -1827,6 +1835,8 @@ $("aiBody").addEventListener("click", (e) => {
   if (b) { tryRun(b.dataset.run); return }
   const s2 = e.target.closest("[data-stage2]")       // 阶段卡上的「按这份大纲出片」
   if (s2) { tryRun(s2.dataset.stage2, false, true); return }
+  const rs = e.target.closest("[data-resume]")       // 断线后那条提示里的「继续」（与头部那颗同一个动作）
+  if (rs) { resumeDropped(rs.dataset.resume); return }
   const p = e.target.closest("[data-pv]")            // 产物那一行的「预览」
   if (p) { openPv(p.dataset.pv); return }
   const add = e.target.closest("[data-dataadd]")     // 配套数值表：添加
@@ -1985,6 +1995,14 @@ function stageCardHtml(m) {
   if (RUN && RUN.mode === m && !RUN.ask && (RUN.stage2 || s.doc != null))
     return '<div class="stagecard"><div class="sc-step">第 2 步 / 2 · 出片中</div>'
       + '<div class="sc-md md">' + renderMd(st.running) + "</div></div>"
+  // 断线且后台已跑完：产物目录还没重新读过（afterRun 没跑），所以 stageFinals 此刻看到的是
+  // 【旧的】—— 片子可能早就出好了，卡片却会显示成"第 1 步、请出片"。那颗按钮一点就是
+  // 白跑十分钟出第二份一模一样的片子。所以这一态既不给出片按钮，也不下"到第几步"的结论。
+  if (s.dropped && !s.dropped.ask)
+    return '<div class="stagecard"><div class="sc-step">上一轮的结果还没取回来</div>'
+      + '<div class="sc-md md">连接中断了，而后台那一轮已经跑完 —— 现在看到的进度可能是旧的（片子也许已经出好了）。'
+      + '先把结果取回来再决定下一步，<b>别直接点出片</b>，那会白跑一遍十分钟。</div>'
+      + '<div class="sc-act"><button type="button" class="sc-go" data-resume="' + esc(m) + '">' + ICON.play + "继续</button></div></div>"
   const finals = stageFinals(m)
   if (finals.length) {
     const f = finals[0]
@@ -2022,7 +2040,9 @@ function render(m) {
   // 配套数值表的清单卡：需要它的模式一直摆在最上面（不是"缺了才出现"），
   // 传了哪几份、还能不能再加、想删哪一份，全在这张卡里，用户不必读完警告再去找地方传。
   h += dataCardHtml(m)
-  if (s.err) h += '<div class="notebox err">⚠ ' + esc(s.err) + "</div>"
+  const drop = dropNoteHtml(m)
+  if (drop) h += drop                        // 断线提示【顶替】报错条：它俩说的是同一件事
+  else if (s.err) h += '<div class="notebox err">⚠ ' + esc(s.err) + "</div>"
   // 阶段卡（两阶段模式才有）摆在正文最上面：用户第一眼要知道的是"这只是大纲、下一步点这里"，
   // 而不是先读完一整篇大纲再自己琢磨"片子在哪"。
   h += stageCardHtml(m)
@@ -2049,7 +2069,9 @@ function render(m) {
       h += '<details class="foldbody"><summary>助手这一轮说的话</summary><div class="card md">' + renderMd(s.raw) + "</div></details>"
   } else if (s.status === "running") {
     if (!RUN || RUN.mode !== m) h += '<div class="notebox info">正在生成…</div>'
-  } else if (s.status !== "idle" && !s.err) {
+  } else if (s.status !== "idle" && !s.err && !s.dropped && !s.pulling) {
+    // ★ dropped / pulling 时不许再说这句：那时上面已经画了"点「继续」取回来"，
+    //   两条并排（一条说重跑、一条说取回）用户只会照着更显眼的那条去重跑。
     h += '<div class="notebox warn">这一轮没有产出可显示的正文。可以点右上角「重新生成」再来一次。</div>'
   } else if (s.status === "idle") {
     h += emptyHtml(m)   // 空态摆在数值表清单【之后】：先看到"要传什么/传了什么"，再看到"点这里开始"
@@ -2059,6 +2081,18 @@ function render(m) {
   if (asking) h += runHtml(m)
   el.innerHTML = h
   updateFoot()
+}
+
+/* 断线之后那条提示：文案 + 【就地】一颗「继续」。头部那颗图标虽然也在，但报错就在眼前时
+   手会往报错上点 —— 同一个动作给两个入口。追问那一路不画这条（它的通知已经在追问串里了，
+   同一句话说两遍反而让人以为断了两次）。 */
+function dropNoteHtml(m) {
+  const s = S[m]
+  if (!s) return ""
+  if (s.pulling) return '<div class="notebox info">正在把那一轮的结果取回来…</div>'
+  if (!s.dropped || s.dropped.ask) return ""
+  return '<div class="notebox warn">⚠ 连接中断了，而后台这一轮已经跑完了。结果还在服务端 —— 点「继续」取回来，不用重跑。'
+    + '<button type="button" class="gbypass" data-resume="' + esc(m) + '">继续</button></div>'
 }
 
 function renderChat() {
@@ -2071,7 +2105,9 @@ function renderChat() {
   if (!s.msgs.length && !(RUN && RUN.mode === "chat")) { el.innerHTML = emptyHtml("chat") + filesHtml(s.files, "本会话产物"); updateFoot(); return }
   let h = bubblesHtml(s.msgs)
   if (RUN && RUN.mode === "chat") h += runHtml("chat")
-  if (s.err) h += '<div class="notebox err">⚠ ' + esc(s.err) + "</div>"
+  const drop = dropNoteHtml("chat")
+  if (drop) h += drop                        // 断线提示【顶替】报错条：它俩说的是同一件事
+  else if (s.err) h += '<div class="notebox err">⚠ ' + esc(s.err) + "</div>"
   // 没被任何模式认领的产物挂在这一格底部。两种来源：① 在这里让它"导成 Word"生成的 docx；
   // ② 模式跑出来但文件名不合该模式 out 契约的。阅读器【没有】工作台那样的全局产出侧栏，
   // 不在这兜住的话，文件确实生成了、会话目录里也在，而界面上没有任何一处能点开或下载。
@@ -2105,6 +2141,10 @@ function updateFoot() {
   // 所以"在等谁"这句话必须由下面的底栏说出来，不能只指望这个按钮。
   $("btnGo").disabled = busy()
   $("btnRerun").hidden = mode === "chat" || !s || s.status === "idle" || busy()
+  // 「继续」：只在这一格【断线且后台已跑完】时露出来（聊天格同样会遇到，所以不排除它）。
+  // 与「重新生成」并排放、不互相顶掉：取回失败时用户还得有重跑那条退路。
+  const dropped = !!(S[mode] && S[mode].dropped)
+  $("btnResume").hidden = !dropped || busy() || !!(S[mode] && S[mode].pulling)
   // 转交：这一格真的跑出东西了才给。跑到一半 / 出错的面板上摆一颗"转交"，转过去的是半截结果。
   $("btnHoff").hidden = !hoffReady(mode)
 
@@ -2130,6 +2170,10 @@ function updateFoot() {
     const pend = !!stg && s && s.status === "done" && s.doc != null && !stageFinals(mode).length
     foot = mine ? RUN.label
       : RUN ? "「" + MODES[RUN.mode].label + "」正在跑，跑完才能开下一轮"
+      // 断线态排在 pend / canAsk 之前：此刻面板上显示的东西可能整个是旧的，
+      // 先别跟用户聊"下一步做什么"，先让他把结果取回来。
+      : S[mode] && S[mode].pulling ? "正在把那一轮的结果取回来…"
+      : dropped ? "连接断了，而后台那一轮已经跑完。点上方的「继续」把结果取回来，不用重跑。"
       : pend ? "这还只是大纲。点面板里的「" + stg.btn + "」才会生成 .pptx；想先改风格 / 页数 / 配图，在下方输入框说一句。"
       : canAsk ? "追问只针对这份结果，不会重跑「" + MODES[mode].label + "」；转交给智能助手时会连追问一起带过去。"
       : s.status === "done" ? "已完成。想接着这份结果聊，点上方的「转交给智能助手」。"
@@ -2167,6 +2211,9 @@ async function run(m, force, userTxt, ask, stage2) {
   if (!sid || !docName) return
   const s = S[m]
   s.block = ""; s.blockMiss = null      // 真开跑了就把"缺前置条件"的提示撤掉
+  // 上一轮断线没取回来、这一轮又开跑了 → 那面旗子作废（否则「继续」会一直挂着，
+  // 点下去取回的是【上一轮】的回复，把这一轮的结果盖掉）。
+  s.dropped = null; s.pulling = false
   if (m !== "chat" && !ask) {
     if (force) { s.raw = ""; s.doc = null; s.docName = ""; s.files = [] }
     // 主结果重跑一次，旧追问就作废——它们问的是【上一版】结果，留着只会让人对着新结果
@@ -2319,6 +2366,11 @@ function attach(m, ask) {
       else if (thread) thread.push({ role: "tag", text: (isErr ? "⚠ " : "") + note })
     }
     if (!thread) s.raw = raw
+    // 一个字都没收到、也没有任何收尾说明 → 十有八九是【我们接上来之前那一轮就已经跑完了】：
+    // api/job 报 running 与 attach 真正接上之间有时间差，服务端此时只回一个 idle 事件。
+    // 这与断线是同一种局面（结果在服务端、只是这条订阅没赶上），所以同样给「继续」——
+    // 原来这里会落到"这一轮没有产出可显示的正文，点「重新生成」"，而重跑要再花一遍时间和额度。
+    if (!thread && !note && !String(raw || "").trim()) s.dropped = { ask: false }
     // ★ 除了重画跑完的那一格，【当前可见的那一格也得重画】。空态里那颗中央大按钮是按 busy()
     //   渲染的：用户在 A 跑的时候切到没跑过的 B，B 的按钮是灰的、写着"等「A」跑完"；A 跑完只重画
     //   A，B 就永远停在那句话上——而头部的「开始」倒是恢复了，同屏出现"上面能点、中间灰着且在等
@@ -2393,11 +2445,68 @@ function attach(m, ask) {
       let running = false
       try { running = (await jget("api/job?sid=" + encodeURIComponent(sid)).then((r) => r.json())).running } catch (_) {}
       if (running) { finished = false; attach(m, ask) }
-      // 同 failRun：追问断线不该把这一格判成 error（主结果还在），只在追问串里留一条记录
-      else if (ask) { S[m].status = "done"; S[m].qa.push({ role: "tag", text: "⚠ 连接中断了，而后台这一轮也已经结束。可以再问一次。" }); renderRail(); render(m); updateFoot() }
-      else { S[m].status = "error"; S[m].err = "连接中断了，而后台这一轮也已经结束。点「重新生成」可以再来一次。"; renderRail(); render(m); updateFoot() }
+      // 后台那一轮【已经跑完了】：结果就在服务端（产物落了盘、回复进了历史），断的只是这条订阅。
+      // 所以这里不是"失败"，而是"没收到"—— 出路是把它取回来（见 resumeDropped），不是重跑。
+      // ★ 原来这两句写的是"点「重新生成」可以再来一次"/"可以再问一次"：用户照着做，等于把已经
+      //   做好的东西再花一遍时间和额度做一次（PPT 那一格是十分钟起）。dropped 这面旗子让
+      //   「继续」按钮、阶段卡、底栏三处都知道现在缺的只是一次取回。
+      else if (ask) {
+        S[m].status = "done"; S[m].dropped = { ask: true }
+        // drop:true 标记这条记录是"断线通知"而不是真实问答 —— 取回成功后要把它删掉
+        S[m].qa.push({ role: "tag", text: "⚠ 连接中断了，而后台这一轮已经答完了。点上方的「继续」把回答取回来，不用再问一遍。", drop: true })
+        renderRail(); render(m); updateFoot()
+      }
+      else {
+        S[m].status = "error"; S[m].dropped = { ask: false }
+        S[m].err = "连接中断了，而后台这一轮已经跑完了。点「继续」把结果取回来——不用重跑。"
+        renderRail(); render(m); updateFoot()
+      }
     }, 2500)
   }
+}
+
+/**
+ * 「继续」：订阅断了、而后台那一轮已经跑完 —— 把结果从服务端取回来，【不重跑】。
+ *
+ * 取的东西与刷新页面时 restore() 用的是同一批（api/history + api/outputs），只是范围收到这一格：
+ * 历史里属于本格最后一轮的那条回复 + 产物目录 + 该模式的正文文件。
+ * 所以能取回来的前提也一样：那一轮真的跑完了（这条路径进来之前刚问过 api/job，running=false）。
+ *
+ * ★ 取不到就【如实说】并把「重新生成」交回给用户。假装成功（status=done 而面板空着）
+ *   比报错难查得多：用户看到"已完成"却什么都没有，只会以为模型这一轮什么都没做。
+ */
+async function resumeDropped(m) {
+  const s = S[m], d = s && s.dropped
+  if (!d || !sid || busy() || s.pulling) return
+  s.pulling = true; s.err = ""; render(m); updateFoot()
+  let hist = []
+  try { hist = await jget("api/history?sid=" + encodeURIComponent(sid)).then((r) => (r.ok ? r.json() : [])) } catch (_) {}
+  // 走一遍历史认轮次归属（与 restore 同一套判据：靠 user 消息开头的模式标记），
+  // 留【最后一条】命中的回复 —— 同一格可能跑过好几轮，用户要的是最近那一版。
+  let cur = null, curAsk = false, hit = null
+  for (const msg of Array.isArray(hist) ? hist : []) {
+    if (msg.role === "user") { const r = routeOf(msg.text || ""); cur = r.m; curAsk = r.ask; continue }
+    if (cur === m && curAsk === !!d.ask) hit = msg
+  }
+  s.pulling = false
+  if (!hit || !String(hit.text || "").trim()) {
+    s.err = "没能把那一轮的结果取回来（历史里找不到这一格的回复）。点「重新生成」再跑一次。"
+    if (!d.ask && m !== "chat") s.status = "error"
+    s.dropped = null; renderRail(); render(m); updateFoot(); return
+  }
+  if (m === "chat") s.msgs.push({ role: hit.isError ? "tag" : "ai", text: hit.text })
+  else if (d.ask) {
+    s.qa = (s.qa || []).filter((x) => !x.drop)     // 那条"连接中断"的记录不留：结果已经在下面了
+    s.qa.push({ role: hit.isError ? "tag" : "ai", text: hit.text })
+    s.status = "done"
+  } else {
+    s.raw = hit.text
+    s.status = hit.isError ? "error" : "done"
+    s.err = hit.isError ? hit.text : ""
+  }
+  s.dropped = null
+  await afterRun(m)      // 产物与正文文件一起刷新 —— 两阶段模式的阶段卡也靠它翻页
+  renderRail(); render(m); updateFoot()
 }
 
 /** 一轮跑完：把该模式对应的产物文件读回来（翻译 / 大纲的正文在文件里，不在对话里） */

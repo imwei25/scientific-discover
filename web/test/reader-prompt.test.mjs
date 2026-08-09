@@ -251,13 +251,14 @@ test("演示 PPT：「分两步」这件事必须进模块前言，不能只写�
    判据全落在【产物】上：没大纲→不画卡；有大纲无 pptx→"第 1 步"+出片按钮；有 pptx→"已完成"+预览。
    最要紧的是最后一条：成品都出来了还挂着一颗「按这份大纲出片」，用户会再点一次，
    白烧十分钟额度再出一份一模一样的片子。 */
-function makeStageEnv({ mode = "ppt", doc = null, raw = "", files = [], RUN = null } = {}) {
+function makeStageEnv({ mode = "ppt", doc = null, raw = "", files = [], RUN = null, dropped = null, pulling = false } = {}) {
   const cfg = WF.workflowFor("litread", {}).reader
   const MODES = {}
   for (const m of cfg.modes) MODES[m.id] = { ...m, stage2: m.stage2 ? { ...m.stage2, done: new RegExp(m.stage2.done, "i") } : undefined }
-  const S = { [mode]: { doc, raw, status: doc == null ? "idle" : "done", files: [], qa: [] } }
+  const S = { [mode]: { doc, raw, status: doc == null ? "idle" : "done", files: [], qa: [], dropped, pulling } }
   const outputs = files.map((n) => ({ name: n }))
-  const src = ["stageFinals", "stageCardHtml"].map(grabFn).join("\n") + "\nreturn { stageFinals, stageCardHtml }"
+  const src = ["stageFinals", "stageCardHtml", "dropNoteHtml"].map(grabFn).join("\n")
+    + "\nreturn { stageFinals, stageCardHtml, dropNoteHtml }"
   const make = new Function("MODES", "S", "RUN", "outputs", "renderMd", "esc", "ICON", "canPv", "sidQ", "busy", src)
   return make(MODES, S, RUN, outputs, (t) => String(t), (t) => String(t),
     { eye: "<eye/>", download: "<dl/>", play: "<play/>" }, () => true, () => "", () => false)
@@ -288,4 +289,31 @@ test("演示 PPT 的阶段卡：三种状态各画什么", () => {
   // ⑤ 别的模式不该被这套东西影响（它们没有 stage2，一张卡都不该画）
   for (const id of ["guide", "translate"])
     assert.equal(makeStageEnv({ mode: id, doc: "正文" }).stageCardHtml(id), "", `${id} 不该出现阶段卡`)
+})
+
+/* ---- 断线之后：给「继续」，不给「重跑」----
+   这条路径此前的提示是"点「重新生成」可以再来一次"，而后台那一轮【已经跑完了】——
+   照着做等于把已经做好的东西再花十分钟做一遍。最危险的是阶段卡：断线时产物目录还没重读，
+   stageFinals 看到的是旧的，卡片会显示成"第 1 步、请出片"，那颗按钮一点就是白跑一遍。 */
+test("断线后的阶段卡：不许下「到第几步」的结论，也不许给出片按钮", () => {
+  const env = makeStageEnv({ doc: "# 大纲", files: ["ppt_outline.md"], dropped: { ask: false } })
+  const card = env.stageCardHtml("ppt")
+  assert.ok(!card.includes("data-stage2"), "断线时还挂着出片按钮 —— 片子可能早出好了，点下去白跑十分钟")
+  assert.ok(card.includes('data-resume="ppt"'), "断线时没给「继续」入口")
+  assert.doesNotMatch(card, /第 1 步 \/ 2/, "产物没重读就宣布「停在第 1 步」，而那可能是旧状态")
+
+  // 取回中：卡片让位给"正在取回"，别再摆任何可点的下一步
+  const pulling = makeStageEnv({ doc: "# 大纲", files: ["ppt_outline.md"], pulling: true })
+  assert.equal(pulling.dropNoteHtml("ppt").includes("正在把那一轮的结果取回来"), true)
+})
+
+test("断线提示条：主结果给就地「继续」；追问那一路不重复画", () => {
+  const main = makeStageEnv({ doc: "# 大纲", dropped: { ask: false } }).dropNoteHtml("ppt")
+  assert.ok(main.includes('data-resume="ppt"'), "报错条里没有就地可点的「继续」")
+  assert.match(main, /不用重跑/, "没说清「不用重跑」，用户还是会去点重新生成")
+  assert.doesNotMatch(main, /重新生成/, "断线提示里不该再指向「重新生成」")
+
+  // 追问断线的通知已经落在追问串里了，这里再画一条 = 同一句话说两遍，看着像断了两次
+  const ask = makeStageEnv({ doc: "# 大纲", dropped: { ask: true } }).dropNoteHtml("ppt")
+  assert.equal(ask, "")
 })
