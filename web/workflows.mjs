@@ -185,19 +185,38 @@ const LITREAD_MODES = withAsk([
       + "只依据原文：数字与结论一律照抄，原文没写的写「原文未报告」，不许拿背景知识补，也不许引入原文之外的参考文献。"
       + "引用具体数据时带上出处（第几节 / 哪张图表）。\n"
       + "写完把这份导读同时存一份 `reading_guide.md`。" },
-  { id: "translate", label: "全文翻译", icon: "translate", mark: "【全文翻译】", badge: "逐段全文 · 非摘要",
-    file: "^translation.*\\.md$", out: "^translation[^/]*\\.(md|docx|pdf)$",
-    empty: ["还没有译文", "点上方的「开始」，逐段译成中文（不是摘要）。整篇文章要花几分钟。"],
-    tell: "**逐段全文**翻译（不是摘要、不许跳段），译文写进 `translation_zh.md`，"
-      + "回答里只报一句\"已完成、共几节\"，**不要把整篇译文再贴进对话**（界面直接渲染那个文件给用户看）",
+  // ★ 按【上传文件的格式】分流，别再一律出 markdown。
+  //   实测踩到：用户传了一份 .docx 进来点「全文翻译」，拿回的是 translation_zh.md ——
+  //   站在他的角度"我传了个 Word 让你翻译，凭什么给我 md"完全合理。而同一个动作在
+  //   【文章润色】模块里（稿件翻译）却保排版，两处结果不一致，用户没法预期。
+  //   .pdf 仍走 markdown：PDF 本来就没有可回填的排版载体。
+  { id: "translate", label: "全文翻译", icon: "translate", mark: "【全文翻译】", badge: "逐段全文 · Word 保排版",
+    file: "^translation.*\\.(md|docx)$", out: "^translation[^/]*\\.(md|docx|pdf)$",
+    empty: ["还没有译文", "点上方的「开始」，逐段译成中文（不是摘要）。Word 原稿会保着排版译回 Word。整篇要花几分钟。"],
+    tell: "**逐段全文**翻译（不是摘要、不许跳段）：Word 稿就地译回 `translation_zh.docx`（保排版），"
+      + "其余格式译成 `translation_zh.md`；回答里只报一句\"已完成、共几节\"，"
+      + "**不要把整篇译文再贴进对话**（界面直接渲染那个文件给用户看）",
     prompt: "把我上传的文献 {doc} **全文**翻译成中文。\n\n"
-      + "要求：\n"
+      + "**先看格式分流：**\n"
+      + "- 原文是 **`.docx`** → 走**就地翻译**，产物是 Word、排版原样不动"
+      + "（用 `humanize-academic` 技能里的脚本，路径 `.opencode/skills/humanize-academic/scripts/`）：\n"
+      + "  ① `docx_extract.py <原文>` → `<原名>_para.md`，每行 `[[p0007]] 原文`；\n"
+      + "  ② **逐行翻译**，写成 `<原名>_trans.md`——行首 `[[id]]` 一个字符都不动、不增删行；"
+      + "`⟦…⟧` 里是引文域 / 交叉引用 / 页码，**原样保留不翻译**；\n"
+      + "  ③ `docx_translate.py <原文> <原名>_trans.md -o translation_zh.docx "
+      + "--set-lang zh-CN --cjk-font 宋体`（译成英文则用 `--set-lang en-US --latin-font \"Times New Roman\"`）；\n"
+      + "  ④ `docx_verify.py <原文> translation_zh.docx --mode translate --expect-lang zh`，四道闸全过才算完。\n"
+      + "  这条路**不重建文件**，所以图、表、公式、页眉页脚、引文域全都不会动；"
+      + "交付时把校验打印的「图 N → N、表 M → M」和「多少段段内格式被统一」照实转告我。\n"
+      + "- 原文是 **`.pdf`** 或其他格式 → 没有可保的排版载体，按下面的要求译成 `translation_zh.md`。\n\n"
+      + "要求（两条路都适用）：\n"
       + "- **逐段译全文**，保留原文的章节结构与标题层级（Abstract / Introduction / Methods / Results / Discussion…）；"
       + "**这是翻译不是摘要**，不许概括、不许跳段、不许只译摘要；\n"
       + "- 学术书面语；专业术语用规范中文译名，并在**首次出现**时括注英文原文；\n"
       + "- 图表题注一并译出，表格用 markdown 表格；公式、基因 / 蛋白 / 药物名、统计量符号保留原样；\n"
       + "- 参考文献列表不用翻译，按原样保留即可。\n\n"
-      + "**产物**：写成一个文件 `translation_zh.md`（完整全文）。文件写完后，回答里**只回一句话**说明已完成、共几节，"
+      + "**产物**：Word 原稿 → `translation_zh.docx`；其余 → `translation_zh.md`（完整全文）。"
+      + "文件写完后，回答里**只回一句话**说明已完成、共几节，"
       + "**不要把译文再贴进对话**——界面会直接把那个文件渲染给我看。" },
   // ---- 演示 PPT：本模块唯一的【两阶段】模式（见下面 stage2 与 reader.html 的阶段卡）----
   // 【为什么非得分两步、并且让界面知道】原来这一格是一句话发出去："先把大纲写成 ppt_outline.md
@@ -941,8 +960,9 @@ export const WORKFLOWS = {
         // 但 artifactLine 只从 steps[].emits 收集"产物用约定名"那句话。挂在这里，是为了让
         // 这三个名字每一轮都随前言到模型手上 —— reader.html 正是按这几个名字去把正文捞回来渲染的
         //（见 MODES[*].file），名字漂了界面就只剩一句"已完成"、正文不知去向。
-        emits: ["fulltext.md", "fulltext_*.md", "reading_guide.md", "translation_zh.md"], render: "report",
-        hint: "PDF 走 pdf_to_md.py，Word 走 python-docx；抽不动的扫描件再走 ocr",
+        emits: ["fulltext.md", "fulltext_*.md", "reading_guide.md", "translation_zh.md",
+                "translation_zh.docx"], render: "report",
+        hint: "PDF 走 pdf_to_md.py，Word 走 ingest_doc.py（图和表一起抽出来）；抽不动的扫描件再走 ocr",
         note: "抽出来的正文必须落成 `fulltext.md`——后面导读、翻译、做 PPT 全都读它，"
             + "别每种模式各抽一遍（既慢又可能三份内容不一致）。" },
       { id: "ppt", name: "演示 PPT", skill: "ppt-master", optional: true,
@@ -950,7 +970,10 @@ export const WORKFLOWS = {
     ],
     // ocr：图片型扫描件（pdf_to_md 抽出来是空的）唯一的出路。
     // render-docx / render-pdf-doc：翻译稿、导读稿用户常要一份 Word/PDF 拿走。
-    extra: ["ocr", "render-docx", "render-pdf-doc"],
+    // humanize-academic：Word 原稿的读入（ingest_doc.py）与【就地翻译】（docx_extract /
+    //   docx_translate / docx_verify）三个脚本都在它名下。不加进白名单的话，模块闸会把
+    //   bash 直呼这些脚本挡掉，模型只能退回自己写 python-docx 临时脚本——正是要修的那条路。
+    extra: ["ocr", "render-docx", "render-pdf-doc", "humanize-academic"],
     // ---- 专用界面的配置（整份下发给 reader.html，见文件上方「阅读器型模块」那段说明）----
     reader: {
       intro: {
@@ -977,9 +1000,17 @@ export const WORKFLOWS = {
     // 用户可能一上来就点翻译，也可能导读看完直接问问题。照通用版说，模型会去"按流程推进"，
     // 甚至在用户只想问一句话时自作主张跑起 ppt-master。
     flow: `\n- **本模块 = 研读【用户上传的这一篇】文献**，不检索、不找别的文献、不写综述。用户问的一切都以这篇原文为准。`
+      // ★ Word 的抽法【不要】再写成"用 python-docx"。实测后果：模型照这句自己写了一个
+      //   `import docx; for p in d.paragraphs` 的临时脚本 —— 那条路取不到表（表在 doc.tables 里）、
+      //   也取不到图，而且全程不报错。改点名 ingest_doc.py（pandoc + --extract-media，图与表一并抽出）。
       + `\n- **第一步永远是把原文抽成文本**：PDF 用 \`fulltext-retrieval\` 技能里的 \`pdf_to_md.py\`；`
-      + `Word(.docx) 用 \`.venv\` 的 python-docx；抽出来几乎没有正文（图片型扫描件）才转 \`ocr\` 技能。`
-      + `抽好的正文写成 \`fulltext.md\`，**本会话后续所有模式都直接读它，不要重复抽取**。`
+      + `Word(.docx) 用 \`humanize-academic\` 技能里的 \`ingest_doc.py\`（它会把图抽到 \`<稿件名>_files/\`、`
+      + `把表转成 pipe 表）；抽出来几乎没有正文（图片型扫描件）才转 \`ocr\` 技能。`
+      + `**不许自己写 \`import docx\` 的临时脚本抽段落**——\`doc.paragraphs\` 里既没有表也没有图，`
+      + `丢了还不报错。抽好的正文写成 \`fulltext.md\`，**本会话后续所有模式都直接读它，不要重复抽取**。`
+      + `\n- **但「全文翻译」遇到 \`.docx\` 时不要用 \`fulltext.md\`**：那一格走就地翻译`
+      + `（\`docx_extract.py\` → 逐行译 → \`docx_translate.py\`），直接在原文件上改字，`
+      + `产物是保着排版的 \`translation_zh.docx\`。用 markdown 转一圈等于把用户的排版扔了。`
       + readerModeLines(LITREAD_MODES)
       + `\n- **一切结论只能来自这篇原文**：数字、剂量、样本量、p 值、结论一律照抄原文；`
       + `原文没写的就写「原文未报告」，**不许拿你的背景知识补齐，也不许引入原文没有的参考文献**。`

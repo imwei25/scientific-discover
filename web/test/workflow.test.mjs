@@ -773,6 +773,26 @@ test("润色步与排版步不能抢同一个产物——A 路的 *_humanized.do
   assert.ok(ingest.emits.some((g) => /_para\.md$/.test(g)), "读入原文这一步要认 A 路的 *_para.md")
 })
 
+test("文献研读：Word 稿不许再用 python-docx 抽，全文翻译要按格式分流", () => {
+  // 【踩过什么】前言原来写着「Word(.docx) 用 .venv 的 python-docx」，模型照办，
+  // 自己写了个 `import docx; for p in d.paragraphs` 的临时脚本 —— 表在 doc.tables 里取不到、
+  // 图更取不到，而且全程不报错。同一轮里用户传的 .docx 被翻成了 translation_zh.md，
+  // 而【文章润色】模块的同类动作却保排版，两处结果不一致。
+  const lit = WF.WORKFLOWS.litread
+  assert.doesNotMatch(lit.flow, /python-docx/,
+    "前言不许再教它用 python-docx 抽 Word——那条路丢表丢图且不报错")
+  assert.match(lit.flow, /ingest_doc\.py/, "Word 抽取要点名 ingest_doc.py")
+  assert.match(lit.flow, /docx_translate\.py/, "前言要写明 .docx 的翻译走就地那条")
+  const tr = lit.reader.modes.find((m) => m.id === "translate")
+  assert.match(tr.prompt, /docx_extract\.py/)
+  assert.match(tr.prompt, /docx_translate\.py/)
+  assert.match(tr.prompt, /translation_zh\.docx/, "Word 稿的产物必须是 docx，不是 md")
+  assert.match(tr.file, /docx/, "面板要认得出 docx 产物，否则译完面板是空的")
+  // 脚本挂在 humanize-academic 名下，不进白名单的话模块闸会把 bash 直呼挡掉
+  assert.ok(WF.skillsOf("litread").includes("humanize-academic"),
+    "litread 必须放行 humanize-academic，否则就地翻译的三个脚本一个都跑不了")
+})
+
 test("表单里不许出现内部文档编号（AGENTS.md §X 对医生用户是天书）", () => {
   const dump = JSON.stringify(WF.WORKFLOWS)
   assert.doesNotMatch(dump, /AGENTS\.md/, "把 §X 换成人话，如「这是平台的硬性规定」")
