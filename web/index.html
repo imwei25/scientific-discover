@@ -2807,6 +2807,32 @@ function makeDropTarget(el, target) {
   })
 }
 
+// 会话列表自己是 overflow-y:auto 的子容器（不是整页滚动），原生 HTML5 拖放不会替它自动滚动——
+// 拖一条排在很下面的会话去归到顶部的项目时，项目分组头压根没在视口里，怎么拖都够不到。
+// 手动补上边缘自动滚动：悬停在列表上/下边缘一小段区域时按距边缘远近匀速滚。
+// 用户原话："左侧历史聊天中，太靠下方的记录，没法拖放到上方的项目中。"
+;(function () {
+  const EDGE = 56, MAX_SPEED = 16
+  let pointerY = null, raf = null
+  function loop() {
+    if (pointerY == null) { raf = null; return }
+    const r = sessionsEl.getBoundingClientRect()
+    let dy = 0
+    if (pointerY < r.top + EDGE) dy = -MAX_SPEED * (1 - Math.max(0, pointerY - r.top) / EDGE)
+    else if (pointerY > r.bottom - EDGE) dy = MAX_SPEED * (1 - Math.max(0, r.bottom - pointerY) / EDGE)
+    if (dy) sessionsEl.scrollTop += dy
+    raf = requestAnimationFrame(loop)
+  }
+  sessionsEl.addEventListener("dragover", (e) => {
+    pointerY = e.clientY
+    if (!raf) raf = requestAnimationFrame(loop)
+  })
+  const stop = () => { pointerY = null; if (raf) { cancelAnimationFrame(raf); raf = null } }
+  sessionsEl.addEventListener("drop", stop)
+  sessionsEl.addEventListener("dragleave", (e) => { if (!sessionsEl.contains(e.relatedTarget)) stop() })
+  document.addEventListener("dragend", stop)
+})()
+
 // 内联改名（会话）：把标题元素替换成输入框，回车/失焦提交
 function inlineRename(anchorEl, cur, onSave) {
   const inp = document.createElement("input"); inp.className = "rename-inp"; inp.value = cur
@@ -6685,9 +6711,23 @@ loadZoteroStatus()
 // ---- 启动恢复：记住上次会话，重开页面自动回显历史与产物；后台若还在生成则续流 ----
 // 从工作台选了模块进来 = 明确要开一轮新的（模块只在建会话时绑定，续老会话改不了），
 // 所以这种情况不恢复上次会话，直接停在欢迎页。老会话没丢，左侧列表随时切回去。
+// ★ "自由对话"（module=chat）例外：它在工作台上是"回到聊天"的入口，不是某个受限技能，
+//   用户预期点进来接着聊上次的自由对话，而不是空着的欢迎页。用户原话："点自由对话，
+//   会返回原有综述对话，而不是返回最近的自由对话"——原因是 savedSid（nm_sid）是全局单一
+//   指针、记的是"最近碰过的任意会话"，从综述会话回工作台再点自由对话时它仍指着综述会话。
+//   这里改成：显式按 module 找最近一条【自由对话】会话来 resume，找不到才落回欢迎页。
 const savedSid = localStorage.getItem("nm_sid")
-if (savedSid && !pendingModule) resumeSession(savedSid)
-else renderWelcome()
+if (pendingModule === "chat") {
+  loadSessions().then(() => {
+    const lastChat = sessList.find((s) => (s.module || "chat") === "chat")
+    if (lastChat) resumeSession(lastChat.id)
+    else renderWelcome()
+  })
+} else if (savedSid && !pendingModule) {
+  resumeSession(savedSid)
+} else {
+  renderWelcome()
+}
 refreshStorage(); refreshQuota(); refreshUserBox()   // 左下角用户行：名字/档位/剩余积分
 // 公告：进来先拉一次，之后 5 分钟一次；窗口重新聚焦时补一次（节流 60s）。
 // 一条"今晚 22:00 维护"要在用户眼前出现，靠的就是这个轮询 —— 档案（/api/me）24h 才续一次。

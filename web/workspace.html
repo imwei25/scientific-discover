@@ -237,7 +237,9 @@
   function enter(m) {
     const shell = SHELL[m.ui];
     if (shell) { location.href = "./" + shell + "?m=" + encodeURIComponent(m.id); return; }
-    location.href = m.id === "chat" ? "./" : "./#module=" + encodeURIComponent(m.id);
+    // chat 也要带 #module=chat：不带的话 index.html 分不清"从工作台点进自由对话"与
+    // "刷新页面"，会盲目 resume 全局 nm_sid（可能停在别的模块会话上），而不是自由对话自己的最近会话。
+    location.href = "./#module=" + encodeURIComponent(m.id);
   }
 
   function fallback(msg) {
