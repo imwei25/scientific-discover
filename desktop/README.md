@@ -15,6 +15,12 @@ cd desktop\launcher
 cargo tauri build
 ```
 
+> **`bundle.ps1` 读的是【工作区文件】，不是某个 commit。** 组装完之后落地的提交不会进包，
+> 而包从外表看不出任何异常——0.1.15 就是这么废掉的（bundle 17:48 组装完，一个 reader.html
+> 的修复 18:20 才提交，包里是旧版）。所以：**先把要发的都提交掉、确认 `git status` 干净，
+> 再跑 bundle.ps1**；打完顺手核一下包里的文件与工作区一致（例如
+> `grep -c <本次改动的特征串> desktop\dist\bundle\app\web\<文件>`）。
+>
 > **别往 `tauri.conf.json` 里加 `"//"` 注释键。** 那份配置是强校验的（未知字段直接拒），
 > 加了之后 `cargo tauri build` 第一步就报
 > `error on 'bundle > windows > nsis': ... is not valid under any of the schemas listed in the 'anyOf' keyword`，
