@@ -441,11 +441,15 @@
   .pcard { background: var(--card); border: 1px solid var(--line-hi); border-radius: var(--r-md); padding: 8px; max-width: 240px; box-shadow: var(--shadow-sm); }
   .pcard img { max-width: 224px; max-height: 220px; border-radius: var(--r-sm); display: block; cursor: zoom-in; }
   .pbar { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 8px; }
-  .pcard.file { display: flex; align-items: center; gap: 11px; max-width: none; }
+  /* ★ 必须 flex-wrap:wrap —— .pwarn 是 flex-basis:100% 的整行警示条，容器不换行的话它会跟
+     图标/文件名/按钮挤在同一行：警示条按 100% 抢走全部宽度，flex:1 的 .pname 被压到 0，
+     再撞上 word-break:break-all，文件名就竖成一列一个字母（实测 manuscript.docx 竖排 15 行）。 */
+  .pcard.file { display: flex; flex-wrap: wrap; align-items: center; gap: 11px; max-width: none; }
   .fbulk { border: 1px solid var(--line-hi); border-radius: var(--r-sm); padding: 4px 8px; margin-bottom: 6px; }
   .fbulk > summary { cursor: pointer; font-size: 12px; color: var(--faint); padding: 2px 0; }
   .fbulk > summary:hover { color: var(--cyan); }
-  .pwarn { flex-basis: 100%; font-size: 11px; line-height: 1.5; color: #b4553f; background: rgba(224,86,79,.07); border: 1px solid rgba(224,86,79,.28); border-radius: var(--r-sm); padding: 5px 8px; margin-top: 6px; }
+  /* 整行警示条：占满卡片一整行（靠上面的 flex-wrap 换行），行距由容器 gap 给，别再叠 margin */
+  .pwarn { flex-basis: 100%; font-size: 11px; line-height: 1.5; color: #b4553f; background: rgba(224,86,79,.07); border: 1px solid rgba(224,86,79,.28); border-radius: var(--r-sm); padding: 5px 8px; }
   .picon { position: relative; width: 30px; height: 30px; flex: none; color: var(--muted); }
   .picon .ic { width: 30px; height: 30px; stroke-width: 1.6; }
   .fbadge { position: absolute; left: 50%; bottom: 2px; transform: translateX(-50%); font-size: 8px; font-weight: 700; letter-spacing: .2px; color: #fff; background: var(--accent); border-radius: 3px; padding: 0 3px; text-transform: uppercase; line-height: 1.45; }
@@ -2423,6 +2427,9 @@ function addProducts(list) {
       const badge = document.createElement("span"); badge.className = "fbadge"; badge.textContent = (name.split(".").pop() || "").slice(0, 4); icon.appendChild(badge)
       const nm = document.createElement("span"); nm.className = "pname"; nm.textContent = name
       const acts = document.createElement("div"); acts.className = "pacts"
+      // 警示条是整行元素（.pwarn 占满一行），必须【排在文件行之后】再插进卡片 ——
+      // 插在前面的话它会成为 flex 的第一行，图标/文件名被挤到警示语下面，读起来像两张卡。
+      const warns = []
       // 送审/交付类文件（docx/pdf）遇上"有闸没过"时必须带警示：实测出现过 docx 比核查报告
       // 早 13 秒生成 —— render 在 done、refcheck 在 failed 同时成立，而用户拿到的 Word 看不出
       // 任何异常，直接就投出去了。不阻断（那违背不做硬状态机的设计），但绝不让它看起来是干净的。
@@ -2430,17 +2437,18 @@ function addProducts(list) {
         const w = document.createElement("span"); w.className = "pwarn"
         w.textContent = "⚠ 生成这份文件时还有质量闸没通过（" + failedNames().join("、")
           + "）。请先按报告返工、重跑该闸，再拿它去投稿或对外交付。"
-        card.appendChild(w)
+        warns.push(w)
       }
       // 还原表：不给预览按钮，改成一行警示（内联预览会把病人真名铺在对话框里）。下载保留。
       if (isSecret(name)) {
         nm.title = "含可还原到个人的对照信息"
         const w = document.createElement("span"); w.className = "pwarn"
         w.textContent = "含真实身份信息，未在界面内展示；下载后请妥善保管、勿随会话外发"
-        card.appendChild(w)
+        warns.push(w)
       } else if (CANPV(name)) { const pv = document.createElement("button"); pv.type = "button"; pv.className = "pbtn"; pv.innerHTML = ic("eye") + "预览"; pv.addEventListener("click", () => openPreview(name)); acts.appendChild(pv) }
       acts.appendChild(dlBtn())
       card.appendChild(icon); card.appendChild(nm); card.appendChild(acts)
+      for (const w of warns) card.appendChild(w)
     }
     wrap.appendChild(card)
   }
