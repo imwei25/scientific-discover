@@ -1,6 +1,6 @@
 [package]
 name = "sciagent-desktop"
-version = "0.1.16"
+version = "0.1.17"
 description = "Niuma Science 桌面版启动器"
 edition = "2021"
 

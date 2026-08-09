@@ -2768,7 +2768,7 @@ dependencies = [
 
 [[package]]
 name = "sciagent-desktop"
-version = "0.1.16"
+version = "0.1.17"
 dependencies = [
  "dirs",
  "serde_json",
