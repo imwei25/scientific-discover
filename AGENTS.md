@@ -35,6 +35,7 @@
 - **综述体裁判别（信号词优先）**：出现 **双人筛选 / PRISMA / RoB / 偏倚风险 / GRADE / Meta / 森林图合并** 任一 → `systematic`；只说"写篇综述 / 讲讲某方向进展"、**未提**这些方法学词 → 默认 `review`，但开工前用编号选项确认（见 §六）："**1)** 叙述性综述就够（推荐，按你所述）　**2)** 做到系统综述强度（双人筛选/PRISMA/RoB）"。
 - 表内 `/` `+` 为并列展示：review 首步 search-lit 与 literature-review 按需二选一或并用；paper 的 `clinical-stats + data-analysis` 为两个并列步，先后皆可。
 - **paper 里 `novelty-check` 的位置随数据来源变**：前瞻性研究 / 尚未采数（假设待冻结）→ 放**最前**先做预注册锁（把假设与主分析计划冻结在采数前）；用户**已提供数据**（回顾性）→ 这步**可选**，置 `data-analysis` 之后做新颖性裁定即可（已有数据无法再"采数前预注册"）。**无论哪种，`write-paper` 前先跑 `literature-review` 成文综述**，`write-paper` 据此综述撰写引言与讨论的文献部分；综述不足属回退触发点（见 §二）。
+- **grant 里 `novelty-check` → `grant-proposal` 是硬接口，别跳**：novelty-check 产出的 `novelty_verdict.md`（最接近文献表**含"它在什么条件下失效"一列** + gap 归因四选一 + 差异点陈述）就是 grant-proposal 第 3.5 步「论证内核」的直接输入——立项依据的主体段与创新点都从它长出来。**跳过这一步，立项依据必然写成文献罗列**（"A 报道了…然而机制尚不清楚"），这是标书最常见的死法。用户直呼 grant-proposal 时，该技能会自己补一轮针对性检索，但成本更高、覆盖更窄。
 - **paper 里 `data-integrity`（可选自查闸）**：用户**提供了原始数值表**（xlsx/csv）时，可在 `data-analysis` 后对源数据跑一遍数值完整性自查，抓复制粘贴错误 / 常数偏移 / 跨表复用 / GRIM 不自洽等——**目的是投稿前主动核对补说明，非指控**（signal not verdict，见技能内铁律）。默认 `review` 档假阳性低；纯理论/无数值原始表的稿件跳过。发现需核对的项属回退触发点：回 `data-analysis`／让用户核原始记录后再往下。
 
 ## 四、单步直派：请求 → 技能
