@@ -638,6 +638,36 @@ test("润色模块的语言默认是『保持原文』——默认中文会把�
   assert.match(f.options.find((o) => o.v === "keep").t, /保持原文/)
 })
 
+// ---- 润色丢图表：三层防线，缺哪一层都会重新静默丢图（见 workflows.mjs humanize.steps 的注释）----
+//
+// 病症：上传带图带表的 .docx，润色完拿回来的稿子/Word 里图表没了，而全链路一句红字都没有。
+// 成因是三处叠加：① 模块根本没有"读入原文"这一步，agent 随手用 pandoc / python-docx 抽文本，
+// 图从入口就没了；② 改写侧只约束数字与引用，没人管图表；③ 排版时图片取不到，pandoc 只打
+// WARNING 然后退 0。这几条断言分别钉住这三层里【定义层能测到】的部分。
+test("润色模块必须有『读入原文』这一步，且排在润色改写之前", () => {
+  const ids = WF.WORKFLOWS.humanize.steps.map((s) => s.id)
+  assert.ok(ids.includes("ingest"), "少了 ingest：agent 会自己发挥，而每条现成的抽取路径都丢图")
+  assert.ok(ids.indexOf("ingest") < ids.indexOf("humanize"), "读入原文必须在润色改写之前")
+})
+
+test("读入原文这一步要点名 ingest_doc.py——裸 pandoc / python-docx 会把图表丢掉", () => {
+  const ingest = WF.WORKFLOWS.humanize.steps.find((s) => s.id === "ingest")
+  assert.match(`${ingest.hint || ""}${ingest.note || ""}`, /ingest_doc\.py/)
+  assert.equal(ingest.skill, "humanize-academic",
+    "必须挂在本模块的主技能上，否则 bash 直呼这个脚本会撞模块闸")
+  assert.ok(WF.skillsOf("humanize").includes("humanize-academic"))
+})
+
+test("润色模块的前言与首个模式必须写明『图表原样搬运』，否则整篇重写时会漏掉", () => {
+  const flow = WF.WORKFLOWS.humanize.flow
+  assert.match(flow, /图和表/, "前言没提图表 = 模型不知道要搬")
+  assert.match(flow, /ingest_doc\.py/)
+  assert.match(flow, /check_invariants/, "前言要把校验闸也说出来，否则模型不会去跑")
+  const polish = WF.WORKFLOWS.humanize.reader.modes.find((m) => m.id === "polish")
+  assert.match(polish.prompt, /ingest_doc\.py/)
+  assert.match(polish.prompt, /整行照抄|原样搬/, "prompt 要给出具体动作，只说『保留图表』模型会自行发挥")
+})
+
 test("表单里不许出现内部文档编号（AGENTS.md §X 对医生用户是天书）", () => {
   const dump = JSON.stringify(WF.WORKFLOWS)
   assert.doesNotMatch(dump, /AGENTS\.md/, "把 §X 换成人话，如「这是平台的硬性规定」")

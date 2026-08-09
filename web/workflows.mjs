@@ -261,24 +261,35 @@ const HUMANIZE_MODES = withAsk([
   { id: "polish", label: "润色改写", icon: "wand", mark: "【润色改写】", badge: "去 AI 味 · 保住原意",
     file: "(^|/)[^/]*humanized[^/]*\\.md$", out: "(^|/)[^/]*humanized[^/]*\\.(md|docx|pdf)$",
     empty: ["还没润色", "点上方的「开始」，按期刊写作范式改一遍行文，同时把生成式文本的痕迹去掉。"],
-    tell: "用 `humanize-academic` 技能改写，成稿写成 `<原名>_humanized.md`",
+    tell: "先用 `ingest_doc.py` 读入原文（图表一并抽出），再用 `humanize-academic` 技能改写，成稿写成 `<原名>_humanized.md`",
     prompt: "请用 `humanize-academic` 技能润色我上传的稿件 {doc}。\n\n"
+      + "**第一步：读入原文，图和表要一起进来。**\n"
+      + "`.venv/bin/python .opencode/skills/humanize-academic/scripts/ingest_doc.py <稿件>` "
+      + "→ 得到 `<原名>_src.md` 与 `<原名>_files/`，并记下它报的「图 N 张 / 表 M 张」。\n"
+      + "别自己拿 pandoc / python-docx 抽文本——那样抽出来的稿子没有图，而且后面一路不会报错。\n\n"
       + "**底线（比任何润色目标都优先）**：\n"
       + "- 不许改动任何**数字、单位、统计量、样本量、p 值、置信区间**；\n"
       + "- 不许改动结论的**强度**——「显著低于」不许变成「低于」，「证实」不许变成「提示」，反之亦然；\n"
-      + "- 参考文献角标与其所在句子的事实主张一字不动。\n\n"
-      + "改完把成稿写成 `<原文件名>_humanized.md`，并在回答里**只报一句**改了多少段、"
-      + "主要改了哪几类问题——逐句对照放到「改动对照」那个模式里，这里不用铺开。" },
+      + "- 参考文献角标与其所在句子的事实主张一字不动；\n"
+      + "- **图和表原样搬进润色稿**：`![alt](路径)` 整行照抄（含 `{width=...}`），pipe 表整块照抄，"
+      + "图题表题的措辞可以改但**序号不许动**。\n\n"
+      + "改完把成稿写成 `<原文件名>_humanized.md`，然后跑 "
+      + "`check_invariants.py --before <原名>_src.md --after <原名>_humanized.md` 核一遍"
+      + "（它对图表丢失打 `[FAIL]`，红了就把图表补回去重跑，别拿这份稿子去排版）。\n"
+      + "在回答里**只报一句**改了多少段、主要改了哪几类问题，外加一句图表的账"
+      + "（「原稿 N 图 M 表，润色稿同样 N 图 M 表」）——逐句对照放到「改动对照」那个模式里，这里不用铺开。" },
   { id: "changes", label: "改动对照", icon: "diff", mark: "【改动对照】", badge: "逐条列 · 可回退",
     file: "^changes.*\\.md$", out: "^changes[^/]*\\.(md|csv|docx)$",
     need: ["after:polish"],
     needHint: "改动对照是拿润色稿和原稿逐句比出来的。",
     empty: ["还没有改动清单", "润色完点这里，逐条看它到底改了什么、为什么改——不同意的地方可以让它回退。"],
     tell: "把润色稿与原稿逐条对照，清单写成 `changes.md`",
-    prompt: "把你刚才的润色稿与**原稿** {doc} 逐条对照，列出改动清单。\n\n"
+    prompt: "把你刚才的润色稿与**原稿**（读入原文那步产出的 `<原名>_src.md`；没有就用 {doc}）逐条对照，列出改动清单。\n\n"
       + "每条一行，给：**原句 → 改后句 + 为什么改（属于哪一类：语法 / 冗余 / AI 味 / 术语统一 / 逻辑连接）**。\n"
       + "按段落顺序排。**只改了标点或空格的不用列**。\n"
-      + "如果有任何一处你动了数字、单位或结论强度，**单独拎出来放在最前面并标红说明**——那是不该发生的，我要第一时间看到。\n"
+      + "如果有任何一处你动了数字、单位或结论强度，**或者少了一张图 / 一张表**，"
+      + "**单独拎出来放在最前面并标红说明**——那是不该发生的，我要第一时间看到。\n"
+      + "清单末尾附一行图表对账：原稿 N 图 M 表 / 润色稿 N 图 M 表。\n"
       + "清单写成 `changes.md`。" },
   { id: "render", label: "排版出件", icon: "doc", mark: "【排版出件】", badge: "默认送审格式",
     file: null, out: "(^|/)[^/]*\\.(docx|pdf)$",
@@ -290,7 +301,9 @@ const HUMANIZE_MODES = withAsk([
       + "（Times New Roman 12pt、1.5 倍行距、页码、首行缩进 4 字符、三线表、1in 边距）。\n"
       + "**如果我在设置里填了目标期刊**，先查该刊的 Instructions for Authors 再落参数；"
       + "查不到就如实说明并退回默认预设，**不许凭印象编该刊格式**。\n"
-      + "出件后告诉我文件名。" },
+      + "排版脚本若报「稿件引用的图片找不到」，那是硬错误：把图补齐再出件，"
+      + "**别改成把图删掉了事**。\n"
+      + "出件后告诉我文件名，并说明图表都在（几张图、几张表）。" },
 ])
 
 const STATS_MODES = withAsk([
@@ -1163,8 +1176,20 @@ export const WORKFLOWS = {
         help: "选「保持原文语言」只润色不翻译；选另外两个等于要求翻译改写，改动会大得多。" },
     ],
     steps: [
+      // ★ 这一步是补的，别再合并回润色步。原来本模块【没有】读入原文这一步，agent 自己发挥，
+      //   而它手边每条现成的路都丢图：裸 pandoc 不带 --extract-media（链接留着、文件没落盘）、
+      //   pdf_to_md.py 写死 ignore_images=True、python-docx 的 paragraphs 里既没图也没表。
+      //   丢了之后全链路无声：排版时 pandoc 只打一句 WARNING 就退 0，用户打开 Word 才发现图没了。
+      { id: "ingest", name: "读入原文", skill: "humanize-academic",
+        emits: ["*_src.md"], render: "manuscript",
+        hint: "用 `humanize-academic/scripts/ingest_doc.py` 抽，别自己拿 pandoc / python-docx 抽——"
+            + "那几条路会把原稿的图和表丢掉",
+        note: "脚本会报「抽出 图 N 张 / 表 M 张」，**把这个数记住**：它是润色后校验的基准，"
+            + "也是交付时要跟用户对的账。" },
       { id: "humanize", name: "润色改写", skill: "humanize-academic",
-        emits: ["*_humanized.md", "humanized*.md"], render: "diff" },
+        emits: ["*_humanized.md", "humanized*.md"], render: "diff",
+        hint: "图与表原样搬进润色稿（`![](路径)` 整行、pipe 表整块），改完跑 check_invariants.py 比对；"
+            + "它对图表丢失打 [FAIL]，没补回去不许进排版出件" },
       // ★ 不标 optional：本步只在【用户主动关掉引用保护】时才出现，存在即必做。
       //   标成可选时 pipelineLine 会往模块前言里写"引用兜底核查(可选)"，等于亲口告诉 AI 这步能跳 ——
       //   实测它就跳了：直接出 docx，事后才反问"要不要核查引用"。而这正是那个开关存在的唯一意义。
@@ -1191,8 +1216,8 @@ export const WORKFLOWS = {
         dropTitle: "点击或拖拽稿件到此处",
         dropHint: "支持 Word / PDF / Markdown（.docx · .pdf · .md）　·　一次一份",
         startText: "上传并进入",
-        chips: [{ t: "去 AI 味", i: "wand" }, { t: "语言润色", i: "wand" }, { t: "逻辑衔接", i: "doc" }, { t: "改动逐条可查", i: "diff" }],
-        tip: "数字、统计量与结论强度一律不动——「显著低于」不会被改成「低于」。<br>带 [n] 角标的整句默认逐字保留：那是在转述别人的结论，改一个词就变成了另一个意思。",
+        chips: [{ t: "去 AI 味", i: "wand" }, { t: "语言润色", i: "wand" }, { t: "逻辑衔接", i: "doc" }, { t: "图表原样保留", i: "image" }, { t: "改动逐条可查", i: "diff" }],
+        tip: "数字、统计量与结论强度一律不动——「显著低于」不会被改成「低于」。<br>带 [n] 角标的整句默认逐字保留：那是在转述别人的结论，改一个词就变成了另一个意思。<br>原稿里的图和表会原样带进润色稿，交付时按「几张图、几张表」跟你对账。",
       },
       source: { kind: "doc", field: "docFiles", accept: ".docx,.pdf,.md,.doc,.txt", exts: ["docx", "pdf", "md", "doc", "txt"] },
       first: "polish",
@@ -1208,6 +1233,17 @@ export const WORKFLOWS = {
       + `\n- **改写的底线，优先级高于任何润色目标**：数字、单位、统计量、样本量、p 值、置信区间一律不动；`
       + `结论的**强度**不许变（「显著低于」↛「低于」，「证实」↛「提示」）；`
       + `带 \`[n]\` 角标的整句按用户的设定处理（默认逐字保留）。`
+      // ★ 这三行是"润色完图表就没了"那个 bug 的正面修复，别删。三层缺一层就会重新静默丢图：
+      //   ①入口不抽媒体 → ②整篇重写时漏掉那几行 → ③排版时 pandoc 只警告不报错。
+      + `\n- **原稿的图和表必须原样出现在润色稿里**（用户最痛的一条：交回一篇没有图表的稿子，`
+      + `等于把人家的结果部分删了）。**第一步先用 \`ingest_doc.py\` 读入原文**——`
+      + `\`.venv/bin/python .opencode/skills/humanize-academic/scripts/ingest_doc.py <稿件>\`，`
+      + `它会把图抽到 \`<稿件名>_files/\`、把表转成 pipe 表，并报出「图 N 张 / 表 M 张」。`
+      + `**别自己拿 pandoc 或 python-docx 抽文本**：不带 \`--extract-media\` 的 pandoc 会留下`
+      + `指向空气的图片链接，python-docx 则连表都取不到。`
+      + `\n- 改写时 \`![alt](路径)\` 整行照抄（连 \`{width=... height=...}\` 都不要动）、pipe 表整块照抄；`
+      + `图题表题的措辞可以润色，但**序号不许动**。改完必须跑 \`check_invariants.py\` 比对原稿与润色稿，`
+      + `**它对图表丢失打 \`[FAIL]\`——没补回去不许进排版出件**。`
       + readerModeLines(HUMANIZE_MODES)
       + `\n- **改了什么必须能说清楚**：用户会点「改动对照」逐条看。凡是你动了数字 / 单位 / 结论强度的地方，`
       + `主动拎到最前面标出来 —— 那本来就不该发生，藏起来比改错本身更糟。`
