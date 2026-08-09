@@ -174,6 +174,41 @@ button{font:inherit}
 .varsgrid .vf select,.varsgrid .vf input{width:100%;height:30px;border:1px solid var(--line-hi);border-radius:7px;padding:0 8px;font:inherit;font-size:12px;background:#fff;color:var(--text)}
 .varsgrid .vf.miss label{color:var(--red);font-weight:600}
 .varsgrid .vf.miss select,.varsgrid .vf.miss input{border-color:var(--red)}
+/* 多选的 columns（协变量）：一排可点的列名，选中高亮。单选那几个仍是下拉。 */
+.varsgrid .vf .vchips{display:flex;flex-wrap:wrap;gap:4px}
+.varsgrid .vf .vchip{padding:3px 8px;border:1px solid var(--line-hi);border-radius:6px;background:#fff;
+  color:var(--muted);font:inherit;font-size:11.5px;line-height:1.5;cursor:pointer}
+.varsgrid .vf .vchip:hover{border-color:var(--accent)}
+.varsgrid .vf .vchip.on{background:var(--accent);border-color:var(--accent);color:#fff}
+/* 自动认列：每格底下一行「凭什么这么认」。用户核对的是这句话，不是那个下拉本身 —— 所以它
+   必须始终在场，不能收进 title 提示里（悬停才看得见 = 没人看得见）。 */
+.varsgrid .vf .vwhy{margin-top:4px;font-size:11px;line-height:1.6;color:var(--faint)}
+.varsgrid .vf .vwhy b{font-weight:600;color:var(--muted)}
+.varsgrid .vf.auto select{border-color:#bcd4f5;background:#f7fbff}
+.varsgrid .vf .vtag{display:inline-block;margin-left:5px;padding:0 5px;border-radius:5px;font-size:10px;
+  font-weight:600;vertical-align:1px;background:#eaf2fe;color:#2d61b5}
+.varsgrid .vf .vtag.low{background:#fdf3e6;color:#8a5a12}
+/* 确认条：整个改动的落点。自动填完【不算数】，用户点了这里才算「以我指定的为准」 */
+.varsconfirm{margin:0 16px 12px;padding:10px 12px;border:1px solid #cfe0f8;background:#f5f9ff;
+  border-radius:var(--r-sm);font-size:12px;line-height:1.75;color:#28456f}
+.varsconfirm.done{border-color:#cfe8d4;background:#f4faf5;color:#2c6136}
+.varsconfirm .row{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:8px}
+.varsconfirm button{height:28px;padding:0 12px;border-radius:7px;border:1px solid var(--line-hi);
+  background:#fff;color:var(--text);font:inherit;font-size:12px;cursor:pointer}
+.varsconfirm button.pri{background:var(--accent);border-color:var(--accent);color:#fff;font-weight:500}
+.varsconfirm button.pri:hover{background:var(--accent-deep)}
+.varsconfirm .lnk{background:none;border:none;padding:0;color:var(--accent);text-decoration:underline;height:auto}
+/* 前 5 行原样：认列认得对不对，看一眼真数据最快 */
+.varspeek{margin:0 16px 12px}
+.varspeek > summary{cursor:pointer;font-size:11.5px;color:var(--faint);list-style:none}
+.varspeek > summary::-webkit-details-marker{display:none}
+.varspeek .tw{overflow-x:auto;margin-top:7px;border:1px solid var(--line);border-radius:var(--r-sm)}
+.varspeek table{border-collapse:collapse;font-size:11.5px;white-space:nowrap}
+.varspeek th,.varspeek td{padding:4px 9px;border-bottom:1px solid var(--line);text-align:left}
+.varspeek th{background:var(--bg-soft, #f6f7f9);font-weight:600;position:sticky;top:0}
+.varspeek td{color:var(--muted)}
+.varspeek tr:last-child td{border-bottom:none}
+.varspeek th.hit{color:#2d61b5}
 
 /* 多文件条（source.multi 的模块）：已传的每一份一枚 chip，点着切换，× 删除，末尾一个「+ 再传一张」 */
 .filestrip{flex:none;display:flex;align-items:center;gap:6px;padding:7px 12px;overflow-x:auto;
@@ -578,7 +613,17 @@ button{font:inherit}
     <details class="varsbox" id="varsBox" hidden>
       <summary><span id="varsTitle">变量对应</span><span class="varssum" id="varsSum"></span></summary>
       <div class="varssub" id="varsSub"></div>
+      <!-- 自动认列的确认条。【为什么必须有】自动填的值再准也只是机器的判断；不经用户点头就
+           当成"用户指定的"发给模型，等于把一个错列名披上用户的权威 —— 而列名认错不会报错，
+           只会产出一条看着很正常的错 KM 曲线（这正是这整块面板存在的理由）。
+           所以：自动填 = 省掉用户找列的力气；确认 = 仍然由用户负责。两件事都不能省。 -->
+      <div class="varsconfirm" id="varsConfirm" hidden></div>
       <div class="varsgrid" id="varsGrid"></div>
+      <!-- 前 N 行原样：核对"这一列到底是什么"，看一眼真数据比读六个下拉快得多 -->
+      <details class="varspeek" id="varsPeek" hidden>
+        <summary id="varsPeekSum">看看表的前几行</summary>
+        <div class="tw" id="varsPeekBody"></div>
+      </details>
       <!-- 服务端对「填的列名在真实表头里存不存在」的体检结论落在这里。CSV 能读表头时才有；
            xlsx 读不出表头，那一路由模块前言要求模型自己核对列名后停下报错。 -->
       <div class="notebox warn" id="varsWarn" hidden></div>
@@ -840,18 +885,41 @@ function fmtSetting(f, v) {
   return lab(v)
 }
 
-/** stats 的「变量对应」：把用户指的列拼成一段话，跟在 prompt 里的 {vars} 位置 */
+/**
+ * stats 的「变量对应」：把列对应拼成一段话，跟在 prompt 里的 {vars} 位置。
+ *
+ * ★ 分两栏发，不能混成一栏。自动认列（见 loadHeaders）让用户不必再从二十几个列名里挑六个，
+ *   但机器认的和用户指的【权威完全不同】：
+ *     · 用户点过「对，就按这个来」→ 以他指定的为准，模型照做；
+ *     · 还没核对 → 必须原样告诉模型"这是机器认的、人还没看"，让它自己再核一遍取值形状。
+ *   把后者也写成"以我指定的为准"，等于给一个可能认错的列名披上用户的权威 ——
+ *   而列名认错不会报错，只会产出一条看着很正常的错 KM 曲线。
+ */
 function varsBlock() {
   if (!CFG || !CFG.vars) return ""
-  const parts = []
+  const by = SETTINGS.__varsBy || {}
+  const mine = [], auto = []
   for (const f of CFG.vars.fields || []) {
     const fld = fieldDef(f); const v = SETTINGS[f]
     if (!fld || v === undefined || v === null || v === "" || (Array.isArray(v) && !v.length)) continue
-    parts.push(fld.label + "＝" + (Array.isArray(v) ? v.join("、") : v))
+    const s = fld.label + "＝" + (Array.isArray(v) ? v.join("、") : v)
+    if (!SETTINGS.__varsOK && (by[f] === "ai" || by[f] === "rule")) auto.push(s)
+    else mine.push(s)
   }
-  if (!parts.length) return ""
-  return "\n\n【变量对应，以我指定的为准】" + parts.join("；")
-    + "。我没指定的列你可以推断，但**必须在回答里写清你把哪一列当成了什么**。"
+  if (!mine.length && !auto.length) return ""
+  let out = ""
+  if (mine.length) {
+    out += "\n\n【变量对应，以我指定的为准】" + mine.join("；")
+      + "。我没指定的列你可以推断，但**必须在回答里写清你把哪一列当成了什么**。"
+  }
+  if (auto.length) {
+    out += "\n\n【下面这几列是系统读了表的前几行自动认出来的，我还没核对】" + auto.join("；")
+      + "。**动手之前先自己核一遍**：每一列的取值形状对不对得上它的角色"
+      + "（终点事件该是两值、随访时间该是非负的时长而不是日期、金标准该是两值…）。"
+      + "对不上就停下来告诉我是哪一列、表里还有哪几列可选，**别将就着算**；"
+      + "核对结论和你实际用的列都要写在回答里。"
+  }
+  return out
 }
 
 /** 按 id 找 intake 字段定义（设置弹层 / 变量面板都用它渲染控件） */
@@ -2443,11 +2511,37 @@ function fieldControl(f, onChange) {
     i.addEventListener("input", () => { SETTINGS[f.id] = i.value; onChange() })
     wrap.appendChild(i); return wrap
   }
+  // ★ 多选的 columns（协变量）必须有自己的控件。此前它和单选共用一个 <select>：
+  //   界面上最多只能指一列，而值里真放了一个数组时（自动认列会一次给出年龄/性别/BMI），
+  //   <select> 匹配不上任何 option → 显示「（不指定）」，可发给模型的却是三列 ——
+  //   界面与提示词各说各话，且从产物上完全看不出来。
+  if (f.type === "columns" && f.multiple && HEADERS.length) {
+    const cur = new Set(Array.isArray(v) ? v : (v ? [v] : []))
+    const row = document.createElement("div"); row.className = "vchips"
+    for (const h of HEADERS) {
+      const b = document.createElement("button")
+      b.type = "button"; b.className = "vchip" + (cur.has(h) ? " on" : ""); b.textContent = h
+      b.addEventListener("click", () => {
+        cur.has(h) ? cur.delete(h) : cur.add(h)
+        SETTINGS[f.id] = HEADERS.filter((x) => cur.has(x))     // 按表里的列序存，顺序稳定
+        onChange()
+      })
+      row.appendChild(b)
+    }
+    wrap.appendChild(row); return wrap
+  }
   // columns 读不出表头（xlsx）时降级成手填输入框，而不是给一个空下拉让人以为这张表没有列
   if (f.type === "columns" && !HEADERS.length) {
-    const i = document.createElement("input"); i.type = "text"; i.value = v == null ? "" : v
-    i.placeholder = HEADERS_WHY || "手动填列名"
-    i.addEventListener("input", () => { SETTINGS[f.id] = i.value; onChange() })
+    const i = document.createElement("input"); i.type = "text"
+    i.value = Array.isArray(v) ? v.join("，") : (v == null ? "" : v)
+    i.placeholder = HEADERS_WHY || (f.multiple ? "手动填列名，多个用逗号分隔" : "手动填列名")
+    i.addEventListener("input", () => {
+      // 多选字段哪怕降级成输入框也得存成数组，否则下游（varsBlock / 任务卡）拿到的是一整串文字
+      SETTINGS[f.id] = f.multiple
+        ? i.value.split(/[,，、]/).map((s) => s.trim()).filter(Boolean)
+        : i.value
+      onChange()
+    })
     wrap.appendChild(i); return wrap
   }
   const sel = document.createElement("select")
@@ -2468,15 +2562,86 @@ function fieldControl(f, onChange) {
   wrap.appendChild(sel); return wrap
 }
 
+let PEEK = null           // 前 N 行 + 列画像（{headers,rows,cols,note,scanned,truncated}）
+let AUTOMAP = null        // 自动认列的结果（{file,map,why,conf,by,notes,source}）
+let AUTOMAP_LOADING = false
+let AUTOMAP_SEQ = 0       // 竞态号：读表期间用户切了表，旧结果一律作废
+
+/* ============================================================
+   自动认列：抽前几行 → 机器先把列认出来 → 用户只做核对
+   ============================================================
+   【为什么这么做】「分组列 / 结局列 / 随访时间列 / 终点事件列 / 待评价指标列 / 金标准列」
+   这一排下拉，是整套界面里用户最不知所云的地方 —— 医生看到「终点事件列」四个字，
+   第一反应是"这是啥"。而它填错【不会报错】，只会安静地产出一条看着很正常的错 KM 曲线。
+   让人从二十几个列名里挑出六个很难；请他核对一句
+   「分组列＝组别（全表只有 试验组 58 例 / 对照组 62 例）」很容易。所以把顺序反过来。
+
+   【自动填 ≠ 已确认】自动填只省掉"找列"的力气，责任不转移：没点确认之前，
+   发给模型的那段话会明说"这是机器认的、用户还没核对"，让它自己再核一遍并把用到的列写出来。
+   点了确认才升级成「以我指定的为准」。这条边界不能省——省掉它等于给一个错列名披上用户的权威。 */
 async function loadHeaders() {
   if (!CFG.vars || !docName || !sid) return
+  const seq = ++AUTOMAP_SEQ
+  const forFile = docName
+  HEADERS = []; HEADERS_WHY = ""; PEEK = null; AUTOMAP = null
+  AUTOMAP_LOADING = true
+  renderVars()
+  let j = null
   try {
-    const j = await jget("api/data/headers?name=" + encodeURIComponent(docName) + sidQ()).then((r) => r.json())
-    HEADERS = Array.isArray(j.headers) ? j.headers : []
-    HEADERS_WHY = j.reason || ""
-  } catch (_) { HEADERS = []; HEADERS_WHY = "" }
+    j = await jget("api/data/automap", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ sid, name: forFile, analyses: SETTINGS.analyses }),
+    }).then((r) => r.json())
+  } catch (_) { j = null }
+  if (seq !== AUTOMAP_SEQ) return          // 等待期间用户切了表：这份结果是上一张表的，丢掉
+  AUTOMAP_LOADING = false
+  if (!j || !j.ok) {
+    HEADERS = []
+    HEADERS_WHY = (j && j.reason) || "这张表读不出结构（网关可能正忙），列名请手动填。"
+    renderVars(); return
+  }
+  HEADERS = Array.isArray(j.headers) ? j.headers : []
+  HEADERS_WHY = j.note || ""
+  PEEK = { headers: j.headers || [], rows: j.rows || [], cols: j.cols || [],
+    note: j.note || "", scanned: j.scanned || 0, truncated: !!j.truncated }
+  AUTOMAP = { file: forFile, map: j.map || {}, why: j.why || {}, conf: j.conf || {},
+    notes: j.notes || [], source: j.source || "rule" }
+  // 【谁填的】记在 SETTINGS.__varsBy 里而不是 AUTOMAP 里：它要跟着 _workflow.json 落盘，
+  //   刷新页面 / 换台机器打开同一个会话时，"这一格是机器认的、还没人核对"这件事必须还在 ——
+  //   丢了它，界面上那几个下拉看起来就跟用户亲手指定的一模一样，而它们并不是。
+  const by = SETTINGS.__varsBy = { ...(SETTINGS.__varsBy || {}) }
+  // 只填【用户还没填过】的格子。他上一轮已经指过的列不许被机器改掉 —— 那是明确的用户输入，
+  // 而且一旦被静默覆盖，他根本不会发现（这两个值长得一模一样，都只是一个列名）。
+  let touched = false
+  for (const id of CFG.vars.fields) {
+    const cur = SETTINGS[id]
+    const has = cur !== undefined && cur !== null && cur !== "" && !(Array.isArray(cur) && !cur.length)
+    if (has) { by[id] = by[id] || "user"; continue }      // 已有值：保住它原来的出处，别一律改判成 user
+    const v = AUTOMAP.map[id]
+    if (v === undefined || v === null || v === "" || (Array.isArray(v) && !v.length)) continue
+    SETTINGS[id] = v; by[id] = j.by?.[id] === "ai" ? "ai" : "rule"; touched = true
+  }
+  if (touched) {
+    SETTINGS.__varsOK = false          // 换了表就得重新核对一次：上一张表确认过不代表这张也对
+    saveSettings()
+    $("varsBox").open = true           // 折叠着等于没填：用户必须看见这几项才谈得上核对
+  }
   renderVars()
 }
+
+/** 这一格是自动填进去的（出处记在 __varsBy，落盘随会话走） */
+function autoFilled(id) {
+  const b = (SETTINGS.__varsBy || {})[id]
+  if (b !== "ai" && b !== "rule") return false
+  const v = SETTINGS[id]
+  return v !== undefined && v !== null && v !== "" && !(Array.isArray(v) && !v.length)
+}
+/** 面板里这个值还是不是「这次认出来的那一个」（协变量是数组，要按内容比） */
+const sameVal = (a, b) => (Array.isArray(a) || Array.isArray(b))
+  ? JSON.stringify(Array.isArray(a) ? a : [a]) === JSON.stringify(Array.isArray(b) ? b : [b])
+  : a === b
+/** 面板里有没有"待用户核对"的自动填项 */
+const varsNeedConfirm = () => !SETTINGS.__varsOK && (CFG?.vars?.fields || []).some(autoFilled)
 
 function renderVars(missing) {
   if (!CFG || !CFG.vars) return
@@ -2488,16 +2653,119 @@ function renderVars(missing) {
     const v = SETTINGS[id]
     if (v !== undefined && v !== null && v !== "" && !(Array.isArray(v) && !v.length)) filled++
     const box = document.createElement("div")
-    box.className = "vf" + (miss.has(id) ? " miss" : "")
+    const auto = autoFilled(id)
+    // .auto 的淡蓝底 = "这是机器填的、等你过目"；确认之后就该收掉，否则一直像没办完
+    box.className = "vf" + (miss.has(id) ? " miss" : "") + (auto && !SETTINGS.__varsOK ? " auto" : "")
     const l = document.createElement("label"); l.textContent = f.label
     if (f.help) l.title = f.help
+    // 依据 / 把握度只在【面板里这个值就是这次认出来的那个】时才显示：用户手动改成了别的列，
+    // 却还挂着机器给那一列写的理由，是彻头彻尾的误导。
+    const same = auto && AUTOMAP && sameVal(AUTOMAP.map[id], v)
+    // 确认之后不再挂「自动认的·待核」：那时它已经是用户的选择了，还标着"待核"只会让人以为
+    // 自己没点过确认，又回去点一遍。依据（下面那行 why）保留——它随时能再核对。
+    if (auto && !SETTINGS.__varsOK) {
+      const conf = same ? AUTOMAP.conf[id] : ""
+      const t = document.createElement("span")
+      t.className = "vtag" + (conf === "high" ? "" : " low")
+      // 谁填的、有多确信，都摆在明面上：用户有权知道这一格是机器认的，以及它有多大把握
+      t.textContent = ((SETTINGS.__varsBy || {})[id] === "ai" ? "AI 认的" : "自动认的") + (conf === "high" ? "" : "·待核")
+      l.appendChild(t)
+    }
     box.appendChild(l)
-    box.appendChild(fieldControl(f, () => { saveSettings(); renderVars() }))
+    box.appendChild(fieldControl(f, () => {
+      // 用户一旦动手改，这一格就归他了，确认态也要清掉（改完得重新过一眼）
+      SETTINGS.__varsBy = { ...(SETTINGS.__varsBy || {}), [id]: "user" }
+      SETTINGS.__varsOK = false
+      saveSettings(); renderVars()
+    }))
+    // 依据必须常驻，不能收进 title：悬停才看得见 = 没人看得见，而用户核对的正是这句话
+    const w = same ? AUTOMAP.why[id] : ""
+    if (w) {
+      const d = document.createElement("div"); d.className = "vwhy"
+      d.innerHTML = mdLite(w)
+      box.appendChild(d)
+    }
     grid.appendChild(box)
   }
-  $("varsSum").textContent = HEADERS.length
-    ? "（已指定 " + filled + " / " + CFG.vars.fields.length + " 项，列名读自你的表）"
-    : (HEADERS_WHY ? "（" + HEADERS_WHY + "）" : "（已指定 " + filled + " 项）")
+  $("varsSum").textContent = AUTOMAP_LOADING ? "（正在读表、自动认列…）"
+    : HEADERS.length
+      ? (varsNeedConfirm() ? "（已自动填 " + filled + " 项，等你核对）"
+        : "（已指定 " + filled + " / " + CFG.vars.fields.length + " 项，列名读自你的表）")
+      : (HEADERS_WHY ? "（" + HEADERS_WHY + "）" : "（已指定 " + filled + " 项）")
+  renderVarsConfirm()
+  renderVarsPeek()
+}
+
+/** 只把 **加粗** 与「」保留下来的极简 markdown（依据里偶尔要强调一句，不值得引整个渲染器） */
+const mdLite = (s) => esc(s).replace(/\*\*(.+?)\*\*/g, "<b>$1</b>")
+
+function renderVarsConfirm() {
+  const el = $("varsConfirm"); if (!el) return
+  if (AUTOMAP_LOADING) {
+    el.hidden = false; el.className = "varsconfirm"
+    el.textContent = "正在读你这张表的前几行，自动认一下哪列是分组、哪列是终点事件…"
+    return
+  }
+  if (!AUTOMAP) { el.hidden = true; return }
+  const anyAuto = (CFG.vars.fields || []).some(autoFilled)
+  if (!anyAuto && !AUTOMAP.notes.length) { el.hidden = true; return }
+  el.hidden = false
+  el.innerHTML = ""
+  const div = (html, style) => {
+    const d = document.createElement("div")
+    if (style) d.setAttribute("style", style)
+    d.innerHTML = html
+    el.appendChild(d); return d
+  }
+  if (SETTINGS.__varsOK) {
+    el.className = "varsconfirm done"
+    div("✓ 变量对应已由你确认，后面每一轮都按这个来。改了任何一项要再确认一次。")
+    return
+  }
+  el.className = "varsconfirm"
+  const n = (CFG.vars.fields || []).filter(autoFilled).length
+  div("<b>已看过 " + esc(AUTOMAP.file) + " 的前几行，替你填好了 " + n + " 项。</b>"
+    + "请核对一遍——每一项下面写了是凭什么认出来的，不对就直接改。"
+    + "<br>没确认之前也能开跑，但发给它的话里会写明「这几列是机器认的、用户还没核对」，它会自己再核一次。")
+  for (const t of AUTOMAP.notes || []) div("· " + mdLite(t), "margin-top:6px")
+  // 多工作簿的提示不能只藏在折叠的「看看前几行」里：认列只认了其中一张表，
+  // 而用户要的数据在第二张表里是很常见的事，这句话必须摊在他眼前。
+  if (PEEK && PEEK.note) div("· " + esc(PEEK.note), "margin-top:6px")
+  const row = document.createElement("div"); row.className = "row"
+  const ok = document.createElement("button")
+  ok.type = "button"; ok.className = "pri"; ok.textContent = "对，就按这个来"
+  ok.addEventListener("click", () => { SETTINGS.__varsOK = true; saveSettings(); renderVars() })
+  row.appendChild(ok)
+  const clr = document.createElement("button")
+  clr.type = "button"; clr.className = "lnk"; clr.textContent = "全部清空，我自己填"
+  clr.addEventListener("click", () => {
+    const by = { ...(SETTINGS.__varsBy || {}) }
+    for (const id of CFG.vars.fields) { delete SETTINGS[id]; by[id] = "user" }
+    SETTINGS.__varsBy = by
+    SETTINGS.__varsOK = false
+    saveSettings(); renderVars()
+  })
+  row.appendChild(clr)
+  el.appendChild(row)
+}
+
+function renderVarsPeek() {
+  const box = $("varsPeek"), body = $("varsPeekBody")
+  if (!box || !body) return
+  if (!PEEK || !PEEK.rows.length) { box.hidden = true; return }
+  box.hidden = false
+  $("varsPeekSum").textContent = "看看表的前 " + PEEK.rows.length + " 行"
+    + (PEEK.scanned ? "（这张表读到 " + PEEK.scanned + " 行" + (PEEK.truncated ? "+，只扫了前一段" : "") + "）" : "")
+    + (PEEK.note ? "　" + PEEK.note : "")
+  // 被认走的列在表头里标一下颜色：用户一眼就能对上"机器说的那列"到底是表里的哪一列
+  const used = new Set()
+  if (AUTOMAP) for (const id of CFG.vars.fields) {
+    const v = SETTINGS[id]
+    if (Array.isArray(v)) v.forEach((x) => used.add(x)); else if (v) used.add(v)
+  }
+  const th = PEEK.headers.map((h) => '<th class="' + (used.has(h) ? "hit" : "") + '">' + esc(h) + "</th>").join("")
+  const tr = PEEK.rows.map((r) => "<tr>" + r.map((c) => "<td>" + (c === "" ? "<span style=\"opacity:.4\">(空)</span>" : esc(c)) + "</td>").join("") + "</tr>").join("")
+  body.innerHTML = "<table><thead><tr>" + th + "</tr></thead><tbody>" + tr + "</tbody></table>"
 }
 
 const setMenu = $("setMenu")

@@ -465,6 +465,69 @@ test("表头解析：分号分隔要认，空列名与重名列要显式标出�
   assert.ok(h[3].includes("无列名"))
 })
 
+// ---- 自动认列（guessVarMap）----
+// 【为什么单测它】这是整块"用户不必再填六个下拉"的地基，而它的失败形态是【静默的】：
+// 认错一列不会报错，只会产出一条看着完全正常的错 KM 曲线。所以要锁住两件事：
+// ① 常见的中文医学表要认对；② 认不准时【宁可留空】，绝不硬填。
+const COHORT = [
+  { name: "住院号", kind: "id", nunique: 120 },
+  { name: "年龄", kind: "integer", nunique: 52, min: 28, max: 84, all_nonneg: true },
+  { name: "性别", kind: "binary", nunique: 2, values: [{ v: "男", n: 55 }, { v: "女", n: 65 }] },
+  { name: "组别", kind: "binary", nunique: 2, values: [{ v: "试验组", n: 58 }, { v: "对照组", n: 62 }] },
+  { name: "术前D-dimer", kind: "numeric", nunique: 92, min: 0.11, max: 5.75, all_nonneg: true },
+  { name: "病理结果", kind: "binary01", nunique: 2, values: [{ v: "1", n: 65 }, { v: "0", n: 55 }], min: 0, max: 1, all_nonneg: true },
+  { name: "随访月数", kind: "numeric", nunique: 110, min: 1.4, max: 60, all_nonneg: true },
+  { name: "是否死亡", kind: "binary01", nunique: 2, values: [{ v: "0", n: 65 }, { v: "1", n: 55 }], min: 0, max: 1, all_nonneg: true },
+  { name: "备注", kind: "empty", nunique: 0 },
+]
+
+test("自动认列：典型中文队列表的六个角色都要认对，标识列不许当角色", () => {
+  const { map, why, conf } = WF.guessVarMap(COHORT)
+  assert.equal(map.groupCol, "组别", "分组列没认出来")
+  assert.equal(map.timeCol, "随访月数")
+  assert.equal(map.eventCol, "是否死亡")
+  assert.equal(map.goldCol, "病理结果")
+  assert.equal(map.testCol, "术前D-dimer")
+  // 住院号当分组列 → 一张 120 个"组"的 Table 1，而且不会报错
+  assert.ok(!Object.values(map).flat().includes("住院号"), "标识列绝不能充当任何角色")
+  // 性别是协变量，不是分组列：两者形状完全一样（都是两值列），只能靠这条压制区分
+  assert.equal(map.groupCol === "性别", false)
+  assert.ok((map.covars || []).includes("性别") && (map.covars || []).includes("年龄"))
+  // 依据要引用【看得见的证据】：用户核对的是这句话，写"通常"等于什么都没说
+  assert.match(why.groupCol, /试验组|对照组|2 种取值/)
+  assert.equal(conf.groupCol, "high", "列名与取值形状都对上了就该是 high")
+})
+
+test("自动认列：认不准就留空——填错比留空危险得多", () => {
+  // 一张没有任何生存/诊断信息的表：不许硬凑出随访时间与终点事件
+  const plain = [
+    { name: "编号", kind: "id", nunique: 50 },
+    { name: "身高", kind: "numeric", nunique: 40, min: 150, max: 190, all_nonneg: true },
+    { name: "体重", kind: "numeric", nunique: 44, min: 42, max: 95, all_nonneg: true },
+  ]
+  const { map } = WF.guessVarMap(plain)
+  for (const k of ["timeCol", "eventCol", "goldCol", "groupCol", "testCol"])
+    assert.equal(map[k], undefined, `${k} 在这张表里认不出来，就必须留空而不是随便挑一列`)
+  // 列名像、但取值形状对不上 → 一票否决。「随访日期」是某一天，不是时长
+  const dated = [
+    { name: "随访日期", kind: "datetime", nunique: 88 },
+    { name: "入院日期", kind: "datetime", nunique: 90 },
+  ]
+  const r = WF.guessVarMap(dated)
+  assert.equal(r.map.timeCol, undefined, "日期列不能当随访时长——KM 曲线会整条错掉")
+  assert.match(r.notes.join(" "), /日期/, "认不出来但该说的话要说出来（由日期相减派生）")
+  // 「事件」列名对但有 7 种取值 → 不是 0/1 删失编码，不许填
+  const multi = [{ name: "终点事件类型", kind: "categorical", nunique: 7 }]
+  assert.equal(WF.guessVarMap(multi).map.eventCol, undefined)
+})
+
+test("自动认列：只读到表头（没有取值画像）时也能按列名认，但把握度必须降级", () => {
+  const { map, conf, why } = WF.guessVarMap([], { headers: COHORT.map((c) => c.name) })
+  assert.equal(map.groupCol, "组别")
+  assert.equal(conf.groupCol, "med", "没核对过取值就不能自称 high")
+  assert.match(why.groupCol, /只读到了表头/, "凭什么认的要说实话，否则用户不会去核")
+})
+
 test("步骤条：没有明确 cur 时当前步 = 第一个未完成的，且质量闸不能抢走高亮", () => {
   // 实测踩过：第一轮 cur 是空的（只有提交过步骤表单才有值），整条链全灰，而闸那一步带着颜色
   // → 用户把「引用核查(闸)」读成当前步骤，以为 AI 起步就跳到了核查。这里锁住修复后的语义。

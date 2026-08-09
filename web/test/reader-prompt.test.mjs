@@ -124,6 +124,32 @@ test("变量对应：指了的列要原样进提示词，没指的不许瞎编",
   assert.equal(empty.varsBlock(), "", "没指定任何列时不该拼出空的变量对应块")
 })
 
+// 自动认列（界面读表的前几行替用户填好那六个下拉）之后，「机器认的」和「用户指的」必须分两段发。
+// 混成一段写"以我指定的为准"，等于给一个可能认错的列名披上用户的权威 —— 而列名认错不会报错，
+// 只会产出一条看着很正常的错 KM 曲线，这正是整块变量面板存在的理由。
+test("变量对应：机器自动填的、用户还没确认的列，不能冒充「用户指定」", () => {
+  const auto = makeEnv({
+    mod: "stats", docName: "cohort.xlsx",
+    settings: { groupCol: "组别", eventCol: "是否死亡", timeCol: "随访月数",
+      __varsBy: { groupCol: "ai", eventCol: "rule", timeCol: "user" }, __varsOK: false },
+  }).varsBlock()
+  assert.match(auto, /自动认出来的，我还没核对/, "自动填的那几列必须如实标明来路")
+  assert.ok(auto.includes("组别") && auto.includes("是否死亡"))
+  // 用户自己指的那一列仍然进「以我指定的为准」那一段
+  assert.match(auto, /以我指定的为准[^【]*随访月数/)
+  // 且必须明确要求模型自己再核一遍形状、对不上要停下来
+  assert.match(auto, /先自己核一遍/)
+  assert.match(auto, /别将就着算/)
+
+  // 用户点过确认 → 全部升级成「以我指定的为准」，不再有"还没核对"那一段
+  const okd = makeEnv({
+    mod: "stats", docName: "cohort.xlsx",
+    settings: { groupCol: "组别", __varsBy: { groupCol: "ai" }, __varsOK: true },
+  }).varsBlock()
+  assert.doesNotMatch(okd, /还没核对/, "用户确认之后不该还说他没核对")
+  assert.match(okd, /以我指定的为准[^【]*组别/)
+})
+
 // 齿轮弹层里的设定【每一轮都要跟着发】。后端只把 pin:true 的字段钉进模块前言，而阅读器四个
 // 模块的设定大多不是 pin —— 不在消息里带上的话，用户拨了开关（输出语言、顺便出投稿级图）
 // 模型那边一个字都收不到，界面上却完全看不出没生效。
