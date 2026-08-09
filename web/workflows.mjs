@@ -124,6 +124,22 @@ const chatMode = (badge, big, sub) => ({
 })
 
 /**
+ * 追问标记：`【文献导读】` → `【文献导读 · 追问】`。
+ *
+ * 【为什么要单独一个标记】结果跑完之后用户十有八九还有话说（"第 3 条能不能再细一点"、
+ * "这个 p 值怎么来的"）。此前这类问题只能切去「智能助手」问 —— 而那一格与结果不在同一屏，
+ * 问完还得自己记住是在谈哪一份结果。现在每一格结果下面就能接着问，答在原地。
+ *
+ * 它与 mark 一样【只有这一处定义】（由 mark 派生），三处共用：前端发消息时拼在最前面、
+ * 前言里教模型认它、刷新页面后靠它把这一轮认回【那一格的追问区】而不是主结果。
+ * ★ 派生而不是各写一份：mark 与 askMark 漂开的症状是"能跑，但刷新后追问全掉进智能助手"，
+ *   从界面上完全看不出是标记对不上。
+ * ★ `【X · 追问】` 不会 startsWith `【X】`（收尾的 `】` 位置不同），所以两种标记不会互相误认。
+ */
+export const askMarkOf = (mark) => (mark ? String(mark).replace(/】\s*$/, " · 追问】") : "")
+const withAsk = (modes) => modes.map((m) => (m.mark ? { ...m, askMark: askMarkOf(m.mark) } : m))
+
+/**
  * 由 modes 生成模块前言里那段「界面有几种模式、标记是什么、各自该做什么」。
  * tell 是写给模型看的一句话；prompt 是前端真正发出去的那段话。两者都要有：
  * 前言每一轮都在（用户切到自由问答、或直接打字时它仍然生效），prompt 只在点按钮那一次出现。
@@ -132,13 +148,19 @@ function readerModeLines(modes) {
   const marked = modes.filter((m) => m.mark)
   return `\n- **界面有 ${modes.length} 种模式，用户消息开头的方括号标记就是他点的那个按钮**，照它做：`
     + marked.map((m) => `\n  · \`${m.mark}\`＝${m.tell}`).join("")
+    // 追问：只用一行覆盖全部模式（每个模式各写一行会把前言撑长一倍，而规矩是同一条）。
+    // 最要紧的是"别重跑"：模型看到 `【文献导读 · 追问】` 很容易把它当成又一次导读请求，
+    // 于是重写一遍 reading_guide.md、再花十分钟 —— 而用户只是想问一句话。
+    + `\n  · 标记里带 \` · 追问】\` 的（如 \`${marked.length ? marked[0].askMark : ""}\`）＝用户在**那一格已经跑出来的结果**下面追问：`
+    + `直接基于那份结果与本会话上下文回答，**不要重跑那个模式、不要重写它的产物文件**，除非他明确要求重做；`
+    + `答案写进回答里即可，别为一句追问再产出一份文件。`
     + `\n  · 没有标记的就是自由问答，基于已有上下文直接回答，**不要再重跑上面任何一件事**。`
 }
 
 // prompt 里的占位符由前端替换：{doc}=左栏那份文件名（带反引号）、{data}=配套数值表、
 // {vars}=stats 的「变量对应」面板填了什么。占位符没有对应值时前端会整句删掉，不会留下 "{data}"。
 
-const LITREAD_MODES = [
+const LITREAD_MODES = withAsk([
   chatMode("基于本文", "对着这篇文章随便问",
     "它读的是你左边这一篇；前面的导读、翻译、做 PPT 都还在上下文里，可以接着问。"),
   { id: "guide", label: "文献导读", icon: "guide", mark: "【文献导读】", badge: "抽取核心 · 梳理逻辑",
@@ -186,9 +208,9 @@ const LITREAD_MODES = [
       + "- 结果页要带原文的关键数字，**不许编数据**，原文没有的写「原文未报告」；\n"
       + "- 先把大纲写成 `ppt_outline.md`（我要先审一遍），再导出 .pptx 到当前目录；\n"
       + "- 做完告诉我 .pptx 的文件名。" },
-]
+])
 
-const REFCHECK_MODES = [
+const REFCHECK_MODES = withAsk([
   chatMode("基于这份稿件", "对着这份稿子随便问",
     "前面跑过的核查报告都还在上下文里——可以追问某一条为什么判黄，或让它把某一段重写。"),
   { id: "refs", label: "引用核查", icon: "check", mark: "【引用核查】", badge: "查假引用 · 核 DOI · 撤稿",
@@ -228,9 +250,9 @@ const REFCHECK_MODES = [
       + "**铁律：只出「待核信号」，不下「造假」结论**（signal not verdict）。每条写清：在哪一格 / 哪一列、"
       + "为什么值得核、**最可能的良性解释是什么**、你该去核哪份原始记录。\n"
       + "报告写成 `integrity_report.md`。" },
-]
+])
 
-const HUMANIZE_MODES = [
+const HUMANIZE_MODES = withAsk([
   chatMode("基于这份稿件", "对着这份稿子随便问",
     "润色稿和改动清单都还在上下文里——可以让它把某一段再改一版，或问某处为什么这么改。"),
   { id: "polish", label: "润色改写", icon: "wand", mark: "【润色改写】", badge: "去 AI 味 · 保住原意",
@@ -279,9 +301,9 @@ const HUMANIZE_MODES = [
       + "排版脚本若报「稿件引用的图片找不到」，那是硬错误：把图补齐再出件，"
       + "**别改成把图删掉了事**。\n"
       + "出件后告诉我文件名，并说明图表都在（几张图、几张表）。" },
-]
+])
 
-const STATS_MODES = [
+const STATS_MODES = withAsk([
   chatMode("基于这份数据", "对着你的数据随便问",
     "前面跑过的体检、基线表、统计结果都还在上下文里——可以追问某个 p 值怎么来的，或让它换个方法再算一次。"),
   { id: "profile", label: "数据体检", icon: "stethoscope", mark: "【数据体检】", badge: "先查再算",
@@ -351,7 +373,7 @@ const STATS_MODES = [
       + "**铁律：只出「待核信号」，不下「造假」结论**（signal not verdict）。每条写清：在哪一格 / 哪一列、"
       + "为什么值得核、**最可能的良性解释是什么**、该去核哪份原始记录。\n"
       + "报告写成 `integrity_report.md`。" },
-]
+])
 
 // ---- 各模块工作流 ----
 export const WORKFLOWS = {

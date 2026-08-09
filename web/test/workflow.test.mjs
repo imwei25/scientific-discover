@@ -110,6 +110,55 @@ test("阅读器型模块：reader 配置完整、模式标记与前言逐字一�
   }
 })
 
+// 追问：每一格结果下面都能接着问，问答落在那一格里，转交给智能助手时一起带过去。
+// 这条链上有【三处标记必须对得上】——前端拼在消息前面的 askMark、前言里教模型认的那一行、
+// 刷新页面后按标记把这一轮认回追问区。漂了不会报错，症状是"能问，但刷新后追问全掉进智能助手"，
+// 或者更糟：模型把 `【文献导读 · 追问】` 当成又一次导读请求，重写一遍产物、再花十分钟。
+test("阅读器：追问标记由 mark 派生、与主结果标记互不误认，且前言里教了", () => {
+  const readers = Object.entries(WF.WORKFLOWS).filter(([, w]) => w.ui === "reader").map(([id]) => id)
+  for (const id of readers) {
+    const r = WF.WORKFLOWS[id].reader
+    const at = (m) => id + "." + m
+    const line = WF.pipelineLine(id, {})
+    // 前言里必须有那一行，否则模型不认识这个标记（它长得太像"再跑一次"了）
+    assert.match(line, / · 追问】/, at("前言里没教 agent 认追问标记"))
+    assert.match(line, /不要重跑那个模式/, at("前言里没写清追问【不许重跑】——这是它唯一要紧的一条"))
+    const marked = r.modes.filter((m) => m.mark)
+    for (const m of r.modes) {
+      if (!m.mark) { assert.ok(!m.askMark, at("自由问答不该有 askMark")); continue }
+      assert.equal(m.askMark, WF.askMarkOf(m.mark), at(m.id + " 的 askMark 必须由 mark 派生，不能各写一份"))
+      assert.notEqual(m.askMark, m.mark, at(m.id + " 的追问标记与主结果标记不能相同"))
+      // 前端认标记用的是 startsWith，所以真正的判据是【谁都不是谁的前缀】：
+      // 一旦某个 mark 成了另一个 askMark 的前缀，那一格的追问会被整格认成别人的主结果。
+      for (const o of marked) {
+        if (o.id === m.id) continue
+        assert.ok(!m.askMark.startsWith(o.mark), at(m.id + " 的追问标记会被认成「" + o.label + "」的主结果"))
+        assert.ok(!m.askMark.startsWith(o.askMark), at(m.id + " 与 " + o.id + " 的追问标记互为前缀"))
+      }
+      assert.ok(!m.mark.startsWith(m.askMark) && !m.askMark.startsWith(m.mark),
+        at(m.id + " 主结果与追问标记互为前缀——刷新后两者会混进同一格"))
+    }
+  }
+})
+
+test("阅读器：追问的三段（发得出、落得回、跟着转交）在壳里都得在", () => {
+  const html = fs.readFileSync(new URL("../reader.html", import.meta.url), "utf8")
+  // ① 发得出：输入框在非聊天格也要放出来，且发出去的是 askMark 打头的那一句
+  assert.match(html, /function askReady\(/, "缺 askReady——判断这一格能不能追问")
+  assert.match(html, /\$\("composer"\)\.hidden = !showComposer/, "输入框的显隐要按 askReady 算，不能只给聊天格")
+  assert.match(html, /MODES\[m\]\.askMark \+ q/, "追问必须带上 askMark，否则模型会当成重跑")
+  // ② 落得回：刷新页面后靠标记把那一轮认回【追问区】而不是主结果
+  assert.match(html, /function routeOf\(/, "缺 routeOf——按标记判这一轮属于哪一格、是不是追问")
+  assert.match(html, /askMark[\s\S]{0,80}startsWith\(a\)[\s\S]{0,40}ask: true/, "routeOf 要先认追问标记")
+  assert.match(html, /S\[cur\]\.qa\.push/, "restore 要把追问放回那一格的追问区")
+  // ③ 跟着转交：交接卡里要写明连带了几条追问（不写的话模型只知道有一份结果）
+  assert.match(html, /条追问/, "交接卡 / 转交记录里要说清带了几条追问")
+  // 主结果重跑一次，旧追问必须作废——它们问的是上一版结果
+  assert.match(html, /s\.qa = \[\]/, "重跑主结果时要清掉旧追问")
+  // 追问失败不许把这一格判成 error：那会诱导用户为一句问不出来的话把整份结果重跑一遍
+  assert.match(html, /if \(ask\) \{ S\[m\]\.status = "done"/, "追问失败不该把这一格标成出错")
+})
+
 // 前置条件闸（need）在界面上是三段：算出缺什么 → 存进状态 → 画到屏幕上。
 // 踩过的坑是【第三段丢了】：showBlocked 把提示写进 S[k].block 就完了，没有任何渲染代码读它，
 // 于是用户点了按钮界面纹丝不动，只剩一句通用空态文案。而且当时是从状态而不是从 DOM 确认的，

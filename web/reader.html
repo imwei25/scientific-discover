@@ -380,6 +380,13 @@ button{font:inherit}
 .msg.ai .who svg{width:14px;height:14px}
 .msg.tag .bubble{background:#fff;border:1px dashed var(--line-hi);border-radius:12px;padding:9px 13px;font-size:12.5px;color:var(--muted)}
 
+/* 追问区：挂在某一格结果【下面】的那串问答（见 askHtml）。
+   用一条虚线把它和结果正文分开 —— 不分的话，追问的回答看着像是结果的一部分，
+   而它俩的来源完全不同（一个是跑出来的产物，一个是随口问的）。 */
+.askwrap{margin-top:22px;padding-top:16px;border-top:1px dashed var(--line-hi)}
+.askwrap .askt{display:flex;align-items:center;gap:7px;font-size:11.5px;color:var(--faint);margin-bottom:12px}
+.askwrap .askt svg{width:13px;height:13px}
+
 .composer{flex:none;border-top:1px solid var(--line);padding:12px 16px 14px;background:#fff}
 .composer .wrap{display:flex;align-items:flex-end;gap:9px;background:var(--panel-soft);border:1px solid var(--line-hi);border-radius:var(--r-md);padding:9px 11px;transition:.15s}
 .composer .wrap:focus-within{border-color:var(--accent);background:#fff;box-shadow:0 0 0 3px var(--accent-soft)}
@@ -761,6 +768,10 @@ let MOD = "litread"        // 当前模块 id
 let CFG = null             // reader 配置（workflows.mjs 的 reader 段）
 let MODES = {}             // id → 模式定义（含由 file/out 字符串编译出来的正则）
 let ORDER = []             // 模式在右侧条上的顺序
+// 智能助手那一格的输入框提示与脚注。输入框是【共用】的（追问也用它），切模式时两句话都要换，
+// 所以原文得留一份，否则从追问切回智能助手时提示词就永远停在"对着这份「文献导读」的结果追问"。
+let CHAT_PH = ""
+let CHAT_FOOT = ""
 
 /** 把下发的配置装进 MODES / ORDER。正则以字符串下发（要能 JSON 序列化），这里编译。 */
 function installConfig(cfg) {
@@ -768,7 +779,20 @@ function installConfig(cfg) {
   // 智能助手那一格的文案也归模块管。写死过一次："对着左边这篇文献随便问" 在数据模块里指着
   // 一张 Excel 说"这篇文献"，在核查模块里指着一份稿件说同样的话 —— 本文件不该认识任何一个
   // 具体模块（见文件头），文案同理。缺配置时的兜底措辞要【中性】，不许再提"文献"。
-  $("q").placeholder = (cfg.chat && cfg.chat.placeholder) || "对着左边这份文件随便问"
+  CHAT_PH = (cfg.chat && cfg.chat.placeholder) || "对着左边这份文件随便问"
+  CHAT_FOOT = $("chatFoot").textContent    // HTML 里写着的那句默认脚注，切回智能助手时还原它
+  $("q").placeholder = CHAT_PH
+  // ★ 把 intake 的默认值【播种进 SETTINGS】。不播种的后果不只是"显示不准"，而是会丢数据：
+  //   settingsBlock() 发给模型时用的是 `SETTINGS[id] ?? f.default`（拿得到默认值），
+  //   而设置弹层的 fieldControl 用 `String(SETTINGS[id])===String(o.v)` 选中项 —— undefined
+  //   谁都不匹配，于是有默认值的字段一律显示成「（不指定）」。实测 humanize 八个字段里五个中招。
+  //   最狠的是 multi 型的「润色目标」（默认 ["deai"]、必填）：弹层里一个勾都没有，用户想"再加一项
+  //   语言润色"勾了 language，multi 分支从空数组起算 → SETTINGS.goals = ["language"]，
+  //   **"去 AI 味"被静默丢掉**，而那正是这个模块存在的理由。
+  //   服务端两条落盘路径都不做 withDefaults，所以这个错位刷新之后依然在，不是首屏一次性的。
+  for (const f of cfg.intake || [])
+    if (f.default !== undefined && SETTINGS[f.id] === undefined)
+      SETTINGS[f.id] = Array.isArray(f.default) ? [...f.default] : f.default
   MODES = {}; ORDER = []
   const re = (x) => { try { return x ? new RegExp(x, "i") : null } catch (_) { return null } }
   for (const m of cfg.modes || []) {
@@ -885,6 +909,8 @@ let outputs = []          // /api/outputs 的最近一次结果
 let SETTINGS = {}
 
 // 每个面板的内容。raw = 该模式最近一轮的对话正文；doc = 从产物文件读回来的正文（译文/报告/大纲）。
+// qa  = 挂在这份结果下面的【追问问答】（与 chat 的 msgs 同一种元素：{role,text,files}）。
+//       它是结果的附属物 —— 主结果重跑一次，旧追问就作废（问的是上一版），见 run()。
 // 模式是配置来的，所以这张表要等 installConfig 之后才建得出来。
 let S = {}
 function initState() {
@@ -892,7 +918,7 @@ function initState() {
   for (const id of ORDER) {
     S[id] = id === "chat"
       ? { msgs: [], status: "idle", err: "", files: [] }
-      : { raw: "", doc: null, docName: "", status: "idle", err: "", files: [] }
+      : { raw: "", doc: null, docName: "", status: "idle", err: "", files: [], qa: [] }
   }
 }
 // 正在跑的那一轮
@@ -901,6 +927,20 @@ let starting = false      // POST /api/chat/start 往返期间（此时还没有
 
 const sidQ = () => (sid ? "&sid=" + encodeURIComponent(sid) : "")
 const busy = () => starting || !!RUN
+
+/**
+ * 这一格现在能不能【追问】。
+ * 判据 = 真的有一份跑出来的结果（与「转交」同一条：跑到一半 / 出错的面板上没什么可追问的），
+ * 或者已经问过了（追问那一轮正在跑时 status 是 running，输入框不能因此消失）。
+ * ★ 用函数声明而不是 const 箭头：updateFoot 在它上面，靠 hoist 才调得到。
+ */
+function askReady(m) {
+  const s = S[m]
+  if (m === "chat" || !s || !MODES[m] || !MODES[m].askMark) return false
+  return (s.qa || []).length > 0 || (s.status === "done" && !!((s.doc || "") + (s.raw || "")).trim())
+}
+/** 这一格问过几条（转交时要说清带过去了几条追问） */
+const askCount = (m) => ((S[m] && S[m].qa) || []).filter((x) => x.role === "user").length
 
 async function jget(url, opt) {
   const r = await fetch(url, opt)
@@ -1592,8 +1632,8 @@ function setMode(k) {
   const M = MODES[k]
   $("paneTitle").innerHTML = M.icon + "<span>" + esc(M.label) + "</span>"
   document.querySelector(".ai-head .badge").textContent = M.badge
-  $("composer").hidden = k !== "chat"
-  // 头部那几个按钮（开始 / 终止 / 重新生成）与底栏的显隐都由 updateFoot 一处决定，
+  // 输入框（智能助手 + 有结果的模式的追问入口）、头部那几个按钮（开始 / 终止 / 重新生成）
+  // 与底栏的显隐都由 updateFoot 一处决定，
   // 别在这里再写一遍：两处各判一次，迟早会出现"切模式时对、跑完又不对"的错位。
   renderRail()
   render(k)
@@ -1739,11 +1779,33 @@ function emptyHtml(m) {
   return '<div class="empty-hint"><span class="big">' + esc(big) + "</span>" + esc(sub) + btn + "</div>"
 }
 
+/** 一串问答 → 气泡。智能助手那一格与各模式的追问区共用（同一种消息，就该长同一个样）。 */
+function bubblesHtml(list) {
+  return (list || []).map((m) => {
+    if (m.role === "user") return '<div class="msg user"><div class="bubble">' + esc(m.text) + "</div></div>"
+    if (m.role === "tag") return '<div class="msg tag"><div class="bubble">' + esc(m.text) + "</div></div>"
+    return '<div class="msg ai"><div class="bubble"><div class="who">' + ICON.bot + "助手</div>"
+      + '<div class="md">' + renderMd(m.text) + "</div>" + filesHtml(m.files) + "</div></div>"
+  }).join("")
+}
+
+/** 结果下面那串追问。没问过就整块不画 —— 空的标题栏只会让人以为这里少了点什么。 */
+function askHtml(m) {
+  const qa = (S[m] && S[m].qa) || []
+  if (!qa.length) return ""
+  const n = askCount(m)
+  return '<div class="askwrap"><div class="askt">' + ICON.chat + "追问（" + n + " 条）·"
+    + " 转交给智能助手时会一起带过去</div>" + bubblesHtml(qa) + "</div>"
+}
+
 function render(m) {
   const el = $("pane-" + m)
   if (m === "chat") return renderChat()
   const s = S[m]
-  let h = runHtml(m)
+  // 追问那一轮的直播条要挂在【问答串末尾】（那是它正在说话的地方），不能顶在结果上面 ——
+  // 顶在上面看着像"整份结果在重跑"，而它恰恰是"不重跑"的那条路。
+  const asking = !!RUN && RUN.mode === m && RUN.ask
+  let h = asking ? "" : runHtml(m)
   // ★ 缺前置条件的提示必须【真的画出来】。此前 showBlocked 只把它写进 S[k].block 就完了，
   //   没有任何渲染代码读它 —— 于是用户点了按钮，界面纹丝不动、只剩一句通用空态文案，
   //   完全不知道是缺了分组列还是缺了数值表。（我自己也差点漏过：当时是从 S[k].block
@@ -1771,6 +1833,8 @@ function render(m) {
     h += emptyHtml(m)   // 空态摆在数值表清单【之后】：先看到"要传什么/传了什么"，再看到"点这里开始"
   }
   h += filesHtml(s.files)
+  h += askHtml(m)
+  if (asking) h += runHtml(m)
   el.innerHTML = h
   updateFoot()
 }
@@ -1779,14 +1843,11 @@ function renderChat() {
   const el = $("pane-chat")
   const s = S.chat
   // 还没聊过 → 空态。但产物栏要留着：用户可能是跑完几个模式后切过来找那份 Word 的。
-  if (!s.msgs.length && !RUN) { el.innerHTML = emptyHtml("chat") + filesHtml(s.files, "本会话产物"); updateFoot(); return }
-  let h = ""
-  s.msgs.forEach((m) => {
-    if (m.role === "user") h += '<div class="msg user"><div class="bubble">' + esc(m.text) + "</div></div>"
-    else if (m.role === "tag") h += '<div class="msg tag"><div class="bubble">' + esc(m.text) + "</div></div>"
-    else h += '<div class="msg ai"><div class="bubble"><div class="who">' + ICON.bot + "助手</div>"
-      + '<div class="md">' + renderMd(m.text) + "</div>" + filesHtml(m.files) + "</div></div>"
-  })
+  // ★ 判据要看"在跑的是不是【本格】"。原来写的是 !RUN —— 别的模式在跑时 RUN 非空但 msgs 为空，
+  //   于是既不走空态、下面又什么都拼不出来（bubblesHtml([])=""、RUN.mode!=="chat" 不加 runbox），
+  //   最终 innerHTML = ""：用户点进「智能助手」看到的是一整列纯白 + 一个禁用的发送钮，零解释。
+  if (!s.msgs.length && !(RUN && RUN.mode === "chat")) { el.innerHTML = emptyHtml("chat") + filesHtml(s.files, "本会话产物"); updateFoot(); return }
+  let h = bubblesHtml(s.msgs)
   if (RUN && RUN.mode === "chat") h += runHtml("chat")
   if (s.err) h += '<div class="notebox err">⚠ ' + esc(s.err) + "</div>"
   // 没被任何模式认领的产物挂在这一格底部。两种来源：① 在这里让它"导成 Word"生成的 docx；
@@ -1798,11 +1859,14 @@ function renderChat() {
 }
 
 /**
- * 头部按钮 + 底栏的显隐【只在这里判一次】。规则：
+ * 头部按钮 + 底栏 + 输入框的显隐【只在这里判一次】。规则：
  *   智能助手：头部三个按钮全收起（它的开跑入口是输入框旁边的发送）。
  *   其它模式：还没跑过 → 只有「开始」；正在跑这一个 → 只有「终止」；跑完 / 出错 → 只有「重新生成」。
  *            别的模式在跑时，「开始」留着但置灰，并在提示里写清在等谁 —— 直接藏掉的话，
  *            用户会以为这个模式坏了。
+ *   输入框：智能助手一直有；其它模式【跑出结果之后】也有（那是追问入口，见 askReady）。
+ *          ★ 输入框只有这一个、且在面板【外面】—— 画进面板里的话，每次 SSE 重绘（120ms 一次）
+ *            都会把用户正在打的字和光标冲掉。
  */
 function updateFoot() {
   const running = !!RUN
@@ -1822,17 +1886,34 @@ function updateFoot() {
   // 转交：这一格真的跑出东西了才给。跑到一半 / 出错的面板上摆一颗"转交"，转过去的是半截结果。
   $("btnHoff").hidden = !hoffReady(mode)
 
+  // 追问入口：这一格有结果了就把输入框放出来（智能助手那一格一直有）
+  const canAsk = mode !== "chat" && askReady(mode)
+  const showComposer = mode === "chat" || canAsk
+  $("composer").hidden = !showComposer
+  // 交接卡只属于智能助手那一格。不加这一句的话，转交完切回某个有结果的模式，卡片还挂在
+  // 输入框上写着"随你下一条消息一起发出"，而这里打的字是【追问】，根本带不上它。
+  $("hoffChip").hidden = !handoff || mode !== "chat"
+  if (canAsk) {
+    qEl.placeholder = "对着这份「" + MODES[mode].label + "」的结果追问，例如：第 2 条能不能再说细一点？"
+  } else if (mode === "chat") {
+    qEl.placeholder = CHAT_PH
+  }
+
   let foot = ""
   if (mode !== "chat") {
     foot = mine ? RUN.label
       : RUN ? "「" + MODES[RUN.mode].label + "」正在跑，跑完才能开下一轮"
+      : canAsk ? "追问只针对这份结果，不会重跑「" + MODES[mode].label + "」；转交给智能助手时会连追问一起带过去。"
       : s.status === "done" ? "已完成。想接着这份结果聊，点上方的「转交给智能助手」。"
       : s.status === "error" ? "上一轮没有正常结束。"
       : ""
   }
-  $("modeFootTxt").textContent = foot
+  // 有输入框时这句话挂在输入框下面那一行，别再单独摆一条状态栏 —— 同一屏两条底栏，
+  // 用户会以为下面那条是另一个东西的状态。
+  $("chatFoot").textContent = mode === "chat" ? CHAT_FOOT : foot
+  $("modeFootTxt").textContent = showComposer ? "" : foot
   // 没话可说时整条收起来：还没开跑的空面板底下挂一条空白栏，只会让人以为这里少了点什么
-  $("modeFoot").hidden = mode === "chat" || !foot
+  $("modeFoot").hidden = mode === "chat" || showComposer || !foot
 }
 
 /** 滚到底（用户往上翻看内容时不要把他拽回来） */
@@ -1847,18 +1928,34 @@ function follow() {
 /**
  * @param m       模式
  * @param force   true = 用户点了「重新生成」（已有内容时先清掉，免得新旧混在一起）
- * @param userTxt 智能助手模式下用户打的那句话
+ * @param userTxt 用户打的那句话（智能助手的提问，或某一格结果下面的追问）
+ * @param ask     true = 这是【追问】：不重跑这个模式，问答落在该格的追问区（S[m].qa）
  */
-async function run(m, force, userTxt) {
+async function run(m, force, userTxt, ask) {
   if (busy()) return
   if (!sid || !docName) return
   const s = S[m]
   s.block = ""; s.blockMiss = null      // 真开跑了就把"缺前置条件"的提示撤掉
-  if (m !== "chat" && force) { s.raw = ""; s.doc = null; s.docName = ""; s.files = [] }
+  if (m !== "chat" && !ask) {
+    if (force) { s.raw = ""; s.doc = null; s.docName = ""; s.files = [] }
+    // 主结果重跑一次，旧追问就作废——它们问的是【上一版】结果，留着只会让人对着新结果
+    // 读到一串答非所问的问答，而看不出这是上一版留下的。
+    s.qa = []
+  }
 
   let q = ""
   let myHoff = null                     // 本轮带出去的交接卡（发送失败时要还回去）
-  if (m === "chat") {
+  if (ask) {
+    q = String(userTxt || "").trim()
+    if (!q) return
+    // 追问标记来自配置（MODES[m].askMark），与主结果的 mark 是两个不同的标记：模型据此
+    // 知道"别重跑"，刷新页面后前端也据此把这一轮认回追问区而不是当成又一次主结果。
+    // ★ 不拼 settingsBlock()：那段话里有「顺便出投稿级图」这类【动作型】设定，
+    //   跟在一句"这条为什么判黄"后面发出去，很可能真的又画一张图。语言口径在同一个会话的
+    //   上文里已经生效，不必每条追问都重申。
+    q = MODES[m].askMark + q
+    s.qa.push({ role: "user", text: userTxt })
+  } else if (m === "chat") {
     q = String(userTxt || "").trim()
     if (!q) return
     // 会话里还没跑过任何一轮 → agent 手上没有原文，先补一句上下文（正常路径是导读先跑，
@@ -1882,7 +1979,7 @@ async function run(m, force, userTxt) {
   }
 
   s.status = "running"; s.err = ""
-  RUN = { mode: m, label: "正在提交…", skills: [], tools: new Map(), es: null }
+  RUN = { mode: m, ask: !!ask, label: "正在提交…", skills: [], tools: new Map(), es: null }
   starting = true
   renderRail(); render(m)
 
@@ -1913,12 +2010,19 @@ async function run(m, force, userTxt) {
   }
   starting = false
 
-  if (!j) { failRun(m, why); return }
+  if (!j) { failRun(m, why, ask); return }
   if (j.sid) { sid = j.sid; try { history.replaceState(null, "", location.pathname + "?sid=" + encodeURIComponent(sid)) } catch (_) {} }
   if (!j.sent) {
     // 服务端没收下这条：上一轮还在跑、额度用尽、模块未开通…… 一律如实说，别让转圈一直转
-    failRun(m, (j.running ? "上一轮还在进行中，本条没有发出去。" : "") + (j.err || j.notice || "发送失败"))
-    if (m === "chat") {
+    failRun(m, (j.running ? "上一轮还在进行中，本条没有发出去。" : "") + (j.err || j.notice || "发送失败"), ask)
+    if (ask) {
+      // 这条追问没发出去 → 气泡撤掉，并把用户打的那句话【放回输入框】。
+      // 只撤气泡不还字的话，他得对着一句"发送失败"重新把问题打一遍。
+      s.qa.pop()                       // 刚 push 进去的就是它（这期间 busy() 拦着，不会有别的）
+      qEl.value = userTxt
+      qEl.dispatchEvent(new Event("input"))
+      render(m)
+    } else if (m === "chat") {
       S.chat.msgs.pop()                                                   // 用户气泡
       // 交接卡也得还回去（连同那条转交记录一起撤掉）：不还的话用户按提示重发一次，
       // 这一次就【不带】交接卡了 —— 模型不知道在谈哪一轮，而用户完全看不出少了什么。
@@ -1928,26 +2032,40 @@ async function run(m, force, userTxt) {
     return
   }
   turns++
-  attach(m)
+  attach(m, ask)
 }
 
-function failRun(m, msg) {
+/**
+ * 一轮没起来 / 中途挂了。
+ * ★ 追问失败【不能】把这一格判成 error：主结果好好地摆在那儿，把面板标红、把「重新生成」
+ *   亮出来，等于诱导用户为了一句问不出来的追问，把整份结果重跑一遍（十几分钟 + 一轮额度）。
+ *   所以失败只作为一条记录落在追问串里，这一格仍然是「已完成」。
+ */
+function failRun(m, msg, ask) {
   RUN = null
-  S[m].status = "error"
-  S[m].err = msg
+  if (ask) { S[m].status = "done"; S[m].qa.push({ role: "tag", text: "⚠ 这条追问没成功：" + msg }) }
+  else { S[m].status = "error"; S[m].err = msg }
   renderRail(); render(m); updateFoot()
 }
 
-function attach(m) {
+/**
+ * @param m    模式
+ * @param ask  这一轮是不是追问（决定正文往哪儿落：追问区 / 主结果）
+ */
+function attach(m, ask) {
   const es = new EventSource("api/chat/attach?sid=" + encodeURIComponent(sid))
-  if (!RUN) RUN = { mode: m, label: "正在生成…", skills: [], tools: new Map(), es: null }
+  if (!RUN) RUN = { mode: m, ask: !!ask, label: "正在生成…", skills: [], tools: new Map(), es: null }
   RUN.es = es
   RUN.label = "等待模型输出…"
   render(m); updateFoot()   // 起轮成功了，先把"正在提交…"换掉——第一个 SSE 事件可能要等十几秒才来
   let raw = ""
-  let aiMsg = null                       // 聊天模式下这一轮的助手气泡
+  let aiMsg = null                       // 这一轮的助手气泡（聊天 / 追问才有）
   let finished = false
   let paintT = 0
+  // 正文往哪儿落：智能助手 → 那一格的对话；追问 → 该模式结果下面的追问串；
+  // 主结果 → S[m].raw（那不是对话，是这一格的正文）。三条路只在这里分一次。
+  const thread = m === "chat" ? S.chat.msgs : ask ? S[m].qa : null
+  const bubble = () => { if (!aiMsg) { aiMsg = { role: "ai", text: "" }; thread.push(aiMsg) } return aiMsg }
   const repaint = () => { paintT = 0; render(m); follow() }
   const schedule = () => { if (!paintT) paintT = setTimeout(repaint, 120) }
 
@@ -1958,10 +2076,18 @@ function attach(m) {
     es.close()
     RUN = null
     const s = S[m]
-    s.status = isErr ? "error" : "done"
-    if (note) { if (isErr) s.err = note; else if (m === "chat") s.msgs.push({ role: "tag", text: note }) }
-    if (m !== "chat") s.raw = raw
-    afterRun(m).then(() => { renderRail(); render(m); updateFoot(); follow() })
+    // 追问出错不动这一格的状态（主结果还好好地在那儿），错误作为一条记录落进追问串。见 failRun。
+    s.status = isErr && !ask ? "error" : "done"
+    if (note) {
+      if (isErr && !ask) s.err = note
+      else if (thread) thread.push({ role: "tag", text: (isErr ? "⚠ " : "") + note })
+    }
+    if (!thread) s.raw = raw
+    // ★ 除了重画跑完的那一格，【当前可见的那一格也得重画】。空态里那颗中央大按钮是按 busy()
+    //   渲染的：用户在 A 跑的时候切到没跑过的 B，B 的按钮是灰的、写着"等「A」跑完"；A 跑完只重画
+    //   A，B 就永远停在那句话上——而头部的「开始」倒是恢复了，同屏出现"上面能点、中间灰着且在等
+    //   一个早就跑完的模式"。同一个 busy() 快照也卡住了配套数值表卡的添加/删除按钮。
+    afterRun(m).then(() => { renderRail(); render(m); if (mode !== m) render(mode); updateFoot(); follow() })
   }
 
   es.addEventListener("tool", (ev) => {
@@ -1976,27 +2102,26 @@ function attach(m) {
   es.addEventListener("text", (ev) => {
     try { raw = JSON.parse(ev.data) } catch (_) { return }
     if (RUN) RUN.label = "正在输出…"
-    if (m === "chat") { if (!aiMsg) { aiMsg = { role: "ai", text: "" }; S.chat.msgs.push(aiMsg) } aiMsg.text = raw }
+    if (thread) bubble().text = raw
     else S[m].raw = raw
     schedule()
   })
   es.addEventListener("final", (ev) => {
     try { const t = JSON.parse(ev.data).text; if (t) raw = t } catch (_) {}
-    if (m === "chat") { if (!aiMsg) { aiMsg = { role: "ai", text: "" }; S.chat.msgs.push(aiMsg) } aiMsg.text = raw }
+    if (thread) bubble().text = raw
     else S[m].raw = raw
     schedule()
   })
   // 服务端推的是【本轮新建/改动的产物】文件名数组（字符串）。
   // 聊天模式【也要列】，但挂在当轮那条回复下面（不是单独一栏），这样既不打断对话，
   // 又不会出现"文件生成了却无处可取"——数据模块里「导成 Word」正是发生在这一格。
+  // 追问同理挂在当条回答下面：虽然前言里让它"别为一句追问再产出文件"，真产出了也得能点到。
   es.addEventListener("files", (ev) => {
     let l; try { l = JSON.parse(ev.data) } catch (_) { return }
     const names = Array.isArray(l) ? l.filter((x) => typeof x === "string") : []
     if (!names.length) return
-    if (m === "chat") {
-      if (!aiMsg) { aiMsg = { role: "ai", text: "" }; S.chat.msgs.push(aiMsg) }
-      aiMsg.files = names
-    } else S[m].files = names
+    if (thread) bubble().files = names
+    else S[m].files = names
     schedule()
   })
   es.addEventListener("queue", (ev) => {
@@ -2021,7 +2146,9 @@ function attach(m) {
       if (RUN || !sid) return
       let running = false
       try { running = (await jget("api/job?sid=" + encodeURIComponent(sid)).then((r) => r.json())).running } catch (_) {}
-      if (running) { finished = false; attach(m) }
+      if (running) { finished = false; attach(m, ask) }
+      // 同 failRun：追问断线不该把这一格判成 error（主结果还在），只在追问串里留一条记录
+      else if (ask) { S[m].status = "done"; S[m].qa.push({ role: "tag", text: "⚠ 连接中断了，而后台这一轮也已经结束。可以再问一次。" }); renderRail(); render(m); updateFoot() }
       else { S[m].status = "error"; S[m].err = "连接中断了，而后台这一轮也已经结束。点「重新生成」可以再来一次。"; renderRail(); render(m); updateFoot() }
     }, 2500)
   }
@@ -2059,8 +2186,12 @@ function collectFiles(m) {
  * SSE 的 files 事件也没了，所以这一栏必须从 outputs 现算，不能只靠当轮推送。
  */
 function collectOrphanFiles() {
-  // 已经挂在某条回复下面的不再重复列一遍（同一格里同一个文件出现两次，看着像生成了两份）
-  const shown = new Set(S.chat.msgs.flatMap((m) => m.files || []))
+  // 已经挂在某条回复下面的不再重复列一遍（同一格里同一个文件出现两次，看着像生成了两份）。
+  // 追问那几条回复下面挂的也算 —— 它们同样是"用户已经在界面上看得见的文件"。
+  const shown = new Set([
+    ...S.chat.msgs.flatMap((m) => m.files || []),
+    ...ORDER.flatMap((k) => ((S[k] && S[k].qa) || []).flatMap((x) => x.files || [])),
+  ])
   const claimed = (n) => shown.has(n) || ORDER.some((k) => k !== "chat" && MODES[k].out && MODES[k].out.test(n))
   S.chat.files = outputs.map((f) => f.name).filter((n) => !claimed(n)).slice(0, 12)
 }
@@ -2068,7 +2199,10 @@ function collectOrphanFiles() {
 async function loadDocFor(m) {
   const re = MODES[m].file
   if (!re) return
-  const hit = outputs.map((f) => f.name).filter((n) => re.test(n)).sort()[0]
+  // ★ 别 sort()。/api/outputs 已经【按 mtime 倒序】返回，再字典序排一遍就把"最新"丢了：
+  //   返工出的 reading_guide_v2.md 会被 reading_guide.md 盖过；润色分段产出多份 *_humanized.md 时
+  //   取到的是 abstract_humanized.md 而不是最新那份。用户看到的正文是旧的，而他刚跑完新的。
+  const hit = outputs.map((f) => f.name).filter((n) => re.test(n))[0]
   if (!hit) return
   try {
     const r = await jget("api/raw?name=" + encodeURIComponent(hit) + sidQ())
@@ -2097,25 +2231,39 @@ async function loadDocFor(m) {
      「界面上不再显示 + 明确告诉模型翻篇」，不是把它从模型记忆里抹掉。别在文案里把它说成
      "清空会话"，那是承诺一件做不到的事。
    ============================================================ */
-let handoff = null            // 待随下一条聊天消息发出的交接卡：{mode,label,replace,card,tag,snapshot}
+let handoff = null            // 待随下一条聊天消息发出的交接卡：{mode,label,replace,asks,card,tag,snapshot}
 const HOFF_END = "【以上为界面转交的上下文，不是用户输入】"
 // 交接卡在【历史里是留着的】（不像工作台的任务卡由服务端剥掉）：刷新页面后靠它才认得出
-// "这一轮是转交过来的、当时选的是覆盖还是续写"，否则覆盖掉的那几轮会在刷新后原样长回来。
-// 显示时由前端剥掉（stripHoff），用户气泡里只留他自己打的那句话。
-const HOFF_HEAD_RE = /^【转交 · 「([^」]*)」 · (覆盖|续写)】/
-const HOFF_RE = /^【转交 · 「[^」]*」 · (?:覆盖|续写)】[\s\S]*?【以上为界面转交的上下文，不是用户输入】\n*/
-const hoffOf = (t) => { const m = HOFF_HEAD_RE.exec(String(t || "")); return m ? { label: m[1], replace: m[2] === "覆盖" } : null }
+// "这一轮是转交过来的、当时选的是覆盖还是续写、连带了几条追问"，否则覆盖掉的那几轮会在
+// 刷新后原样长回来。显示时由前端剥掉（stripHoff），用户气泡里只留他自己打的那句话。
+// ★ 追问条数写进标题里，是因为刷新后【只有这一行】还能告诉界面"当时带过去的不止主结果"——
+//   追问本身留在那一格里，转交记录这边看不见它们。
+const HOFF_ASK = "(?: · 含 \\d+ 条追问)?"
+const HOFF_HEAD_RE = /^【转交 · 「([^」]*)」 · (覆盖|续写)(?: · 含 (\d+) 条追问)?】/
+const HOFF_RE = new RegExp("^【转交 · 「[^」]*」 · (?:覆盖|续写)" + HOFF_ASK + "】[\\s\\S]*?" + HOFF_END + "\\n*")
+const hoffOf = (t) => { const m = HOFF_HEAD_RE.exec(String(t || "")); return m ? { label: m[1], replace: m[2] === "覆盖", asks: +(m[3] || 0) } : null }
 const stripHoff = (t) => String(t || "").replace(HOFF_RE, "").trim()
-const hoffTag = (label, replace) => "已把「" + label + "」的结果转交过来" + (replace ? "（此前的问答已按你的选择清掉）" : "")
+const hoffTag = (label, replace, asks) => "已把「" + label + "」的结果"
+  + (asks ? "连同 " + asks + " 条追问" : "") + "转交过来" + (replace ? "（此前的问答已按你的选择清掉）" : "")
 
 /** 交接卡正文。只给【指路】不搬正文：同一个会话里模型已经有那一轮的内容，再贴一遍是白花 token。 */
 function hoffCard(m, replace) {
   const M = MODES[m], s = S[m]
   const files = (s.files || []).slice(0, 8)
-  const L = ["【转交 · 「" + M.label + "」 · " + (replace ? "覆盖" : "续写") + "】"]
+  const asks = (s.qa || []).filter((x) => x.role === "user").map((x) => x.text)
+  const L = ["【转交 · 「" + M.label + "」 · " + (replace ? "覆盖" : "续写")
+    + (asks.length ? " · 含 " + asks.length + " 条追问" : "") + "】"]
   L.push("用户在界面上把「" + M.label + "」那一轮的结果转交到了智能助手这一格，下面这句话就是基于它问的。")
   if (s.docName) L.push("- 那一轮的正文落在 `" + s.docName + "`，要引用具体内容直接读这个文件，别凭印象复述。")
   if (files.length) L.push("- 那一轮的产物：" + files.map((n) => "`" + n + "`").join("、") + "。")
+  // 追问也一并转交：那几轮问答同样是"这份结果"的一部分，用户接着谈的往往正是它们。
+  // 只列问题不搬回答 —— 同一个会话里两边都在上文，列出来是为了【指明范围】，不是复述内容。
+  if (asks.length) {
+    L.push("- 那一轮的结果下面用户还追问过 " + asks.length + " 条，**这些问答也一并算在本次转交里**"
+      + "（原文都在本会话上文，直接接着谈，别重问也别重答）：")
+    asks.slice(0, 8).forEach((t) => L.push("  · " + String(t).replace(/\s+/g, " ").slice(0, 60)))
+    if (asks.length > 8) L.push("  · …（还有 " + (asks.length - 8) + " 条，同样在上文里）")
+  }
   L.push("- **不要重跑「" + M.label + "」**：结果已经有了，用户要的是基于它接着谈。")
   if (replace) L.push("- 此前在这一格里的自由问答用户已经不要了，别再接那边的话头，从这份结果重新开始。")
   L.push(HOFF_END)
@@ -2143,8 +2291,9 @@ function askHoff(btn) {
     b.addEventListener("click", fn)
     hoffMenu.appendChild(b)
   }
-  item("覆盖已有的对话", "智能助手里现有的问答不再显示，从这份「" + MODES[m].label + "」重新开始", () => doHoff(m, true))
-  item("续写已有的对话", "保留现有问答，把这份结果接在后面", () => doHoff(m, false))
+  const what = "这份「" + MODES[m].label + "」" + (askCount(m) ? "（连同 " + askCount(m) + " 条追问）" : "")
+  item("覆盖已有的对话", "智能助手里现有的问答不再显示，从" + what + "重新开始", () => doHoff(m, true))
+  item("续写已有的对话", "保留现有问答，把" + what + "接在后面", () => doHoff(m, false))
   item("取消", "什么都不做", () => closeMenu())
   placeMenu(hoffMenu, btn)
 }
@@ -2155,7 +2304,9 @@ function doHoff(m, replace) {
   // 覆盖是"还没发出去"的动作：把清掉的这几条留一份，用户撤掉交接卡时要原样放回去
   const snapshot = replace ? S.chat.msgs.slice() : null
   if (replace) S.chat.msgs = []
-  handoff = { mode: m, label: M.label, replace, snapshot, card: hoffCard(m, replace), tag: hoffTag(M.label, replace) }
+  const asks = askCount(m)
+  handoff = { mode: m, label: M.label, replace, asks, snapshot,
+    card: hoffCard(m, replace), tag: hoffTag(M.label, replace, asks) }
   setMode("chat")
   renderHoff()
   qEl.focus()
@@ -2164,9 +2315,10 @@ function doHoff(m, replace) {
 function renderHoff() {
   const el = $("hoffChip")
   if (!handoff) { el.hidden = true; el.innerHTML = ""; return }
-  el.hidden = false
+  el.hidden = mode !== "chat"    // 追问时输入框是共用的，这张卡只属于智能助手那一格（见 updateFoot）
   el.innerHTML = ICON.chat
     + '<div class="t">已带上<b>「' + esc(handoff.label) + '」</b>的结果'
+    + (handoff.asks ? "与 <b>" + handoff.asks + " 条追问</b>" : "")
     + (handoff.replace ? "（覆盖此前的对话）" : "") + "，随你下一条消息一起发出。</div>"
     + '<button class="x" type="button" id="hoffX" aria-label="撤掉这张交接卡" title="撤掉">' + ICON.x + "</button>"
   $("hoffX").addEventListener("click", cancelHoff)
@@ -2186,18 +2338,25 @@ async function abortRun() {
 }
 $("btnStop").addEventListener("click", abortRun)   // 聊天输入框旁那一个（头部那个在 btnHalt 上绑）
 
-/* ---- 智能助手：发消息 ---- */
+/* ---- 发消息 ----
+   同一个输入框两种用途，由当前在哪一格决定：
+     智能助手 → 一轮自由问答（可能带着交接卡）
+     其它模式 → 对这一格【已有结果】的追问（run 的 ask 分支），答在原地
+   ★ 只有一个输入框，是因为它必须活在面板【外面】：面板每 120ms 重绘一次，
+     画在里面的 textarea 会被连字带光标一起冲掉。 */
 const qEl = $("q")
 qEl.addEventListener("input", () => { qEl.style.height = "auto"; qEl.style.height = Math.min(130, qEl.scrollHeight) + "px" })
-qEl.addEventListener("keydown", (e) => { if (e.key === "Enter" && !e.shiftKey && !e.isComposing) { e.preventDefault(); sendChat() } })
-$("btnSend").addEventListener("click", sendChat)
-function sendChat() {
+qEl.addEventListener("keydown", (e) => { if (e.key === "Enter" && !e.shiftKey && !e.isComposing) { e.preventDefault(); sendMsg() } })
+$("btnSend").addEventListener("click", sendMsg)
+function sendMsg() {
   const t = qEl.value.trim()
   if (!t) return
   if (busy()) return
+  const ask = mode !== "chat"
+  if (ask && !askReady(mode)) return          // 这一格还没有结果，追问无从谈起
   qEl.value = ""; qEl.style.height = "auto"
-  run("chat", false, t)
-  renderChat(); follow()
+  run(ask ? mode : "chat", false, t, ask)
+  render(mode); follow()
 }
 
 /* ============================================================
@@ -2209,9 +2368,16 @@ function sendChat() {
      api/outputs  → 翻译 / 大纲 / pptx 等产物
    好处是换台机器、换个浏览器打开同一个会话，看到的东西完全一样。
    ============================================================ */
-function modeOfUserText(t) {
-  for (const k of ORDER) { const mk = MODES[k].mark; if (mk && t.startsWith(mk)) return k }
-  return "chat"
+/**
+ * 一条 user 消息属于哪一格、是不是追问。返回 { m, ask }。
+ * ★ 先认追问标记：`【文献导读 · 追问】` 与 `【文献导读】` 谁都不是谁的前缀（收尾的 `】` 位置不同），
+ *   本来就不会误认；先判一遍是为了将来有人改标记时不至于悄悄退化成"追问全落进主结果"。
+ */
+function routeOf(t) {
+  const s = String(t || "")
+  for (const k of ORDER) { const a = MODES[k].askMark; if (a && s.startsWith(a)) return { m: k, ask: true } }
+  for (const k of ORDER) { const mk = MODES[k].mark; if (mk && s.startsWith(mk)) return { m: k, ask: false } }
+  return { m: "chat", ask: false }
 }
 
 async function restore() {
@@ -2243,33 +2409,46 @@ async function restore() {
   // 勾选都得原样回来 —— 否则 pin 的那几项会在下一轮悄悄变回默认值。
   try {
     const st = await jget("api/workflow/state?sid=" + encodeURIComponent(sid)).then((r) => (r.ok ? r.json() : null))
-    if (st && st.state && st.state.form) SETTINGS = { ...st.state.form }
+    // 【叠在默认值之上】而不是整个替换：落盘的 form 只含用户真正动过的字段（服务端两条写入路径
+    // 都不做 withDefaults），整份替换会把 installConfig 播下去的默认值又冲掉，
+    // 于是刷新一次，弹层里那五个字段重新变回「（不指定）」。
+    if (st && st.state && st.state.form) SETTINGS = { ...SETTINGS, ...st.state.form }
   } catch (_) {}
 
   // 历史 → 各个面板。同一模式跑过多轮时【后面的覆盖前面的】：用户看到的应该是最近那一版。
   const auto = ORDER.filter((k) => k !== "chat")
   if (Array.isArray(hist)) {
-    let cur = null
+    let cur = null, curAsk = false
     hist.forEach((msg) => {
       if (msg.role === "user") {
-        cur = modeOfUserText(msg.text || "")
+        const r = routeOf(msg.text || "")
+        cur = r.m; curAsk = r.ask
         turns++
         if (cur === "chat") {
-          // 转交过来的那一轮：卡片不进气泡（只留用户自己那句话），但"当时选的是覆盖"这件事要认出来 ——
-          // 不认的话，被覆盖掉的那几轮会在刷新页面后原样长回来，用户会以为覆盖根本没生效。
+          // 转交过来的那一轮：卡片不进气泡（只留用户自己那句话），但"当时选的是覆盖、带了几条追问"
+          // 这件事要认出来 —— 不认的话，被覆盖掉的那几轮会在刷新页面后原样长回来，
+          // 用户会以为覆盖根本没生效。
           const h = hoffOf(msg.text)
           if (h) {
             if (h.replace) S.chat.msgs.length = 0
-            S.chat.msgs.push({ role: "tag", text: hoffTag(h.label, h.replace) })
+            S.chat.msgs.push({ role: "tag", text: hoffTag(h.label, h.replace, h.asks) })
           }
           const t = h ? stripHoff(msg.text) : msg.text
           if (t) S.chat.msgs.push({ role: "user", text: t })
         }
-        else { S[cur].raw = ""; S[cur].status = "done" }
+        else if (curAsk) {
+          // 追问：落回那一格的追问区，标记剥掉（气泡里只留用户自己打的那句话）。
+          // 主结果那一轮可能已经被历史截断了，但这一格确实跑过 —— 别显示成"还没跑过"。
+          if (S[cur].status === "idle") S[cur].status = "done"
+          S[cur].qa.push({ role: "user", text: String(msg.text || "").slice(MODES[cur].askMark.length) })
+        }
+        // 主结果重跑：正文清空、旧追问一并作废（与 run() 里那条同一个道理）
+        else { S[cur].raw = ""; S[cur].status = "done"; S[cur].qa = [] }
       } else {
         if (cur === "chat" || cur == null) S.chat.msgs.push({ role: "ai", text: msg.text })
+        else if (curAsk) S[cur].qa.push({ role: msg.isError ? "tag" : "ai", text: msg.text })
         else { S[cur].raw = msg.text; S[cur].status = msg.isError ? "error" : "done" }
-        if (cur && cur !== "chat" && msg.isError) S[cur].err = msg.text
+        if (cur && cur !== "chat" && !curAsk && msg.isError) S[cur].err = msg.text
       }
     })
   }
@@ -2285,13 +2464,13 @@ async function restore() {
   const done = auto.slice().reverse().find((m) => S[m].status !== "idle")
   setMode(done || (S.chat.msgs.length ? "chat" : CFG.first))
 
-  // 后台还在跑：接上去。属于哪个模式看最后一条 user 消息的标记。
+  // 后台还在跑：接上去。属于哪个模式、是不是追问，都看最后一条 user 消息的标记。
   if (job && job.running) {
     const lastUser = [...(hist || [])].reverse().find((x) => x.role === "user")
-    const m = lastUser ? modeOfUserText(lastUser.text || "") : CFG.first
-    S[m].status = "running"
-    setMode(m)
-    attach(m)
+    const r = lastUser ? routeOf(lastUser.text || "") : { m: CFG.first, ask: false }
+    S[r.m].status = "running"
+    setMode(r.m)
+    attach(r.m, r.ask)
   }
   return true
 }
