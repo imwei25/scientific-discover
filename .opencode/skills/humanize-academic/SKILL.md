@@ -12,9 +12,67 @@ description: 去 AI 味 / 学术润色（科研、医学文本，中英文都支
 
 对给定文本做两遍改写，去掉机器腔、保留学术严谨。参考 matsuikentaro1/humanizer_academic 与 blader/humanizer（二者均只覆盖英文），**本技能补齐了中文学术 AI 腔清单**，聚焦科研/医学稿件。
 
-## 第零步：读入原文——**图和表必须跟着一起进来**
+## 第零步：先按**稿件格式分流**——`.docx` 走就地改写，其余走 markdown
 
-用户给的是 `.docx` / `.pdf` 时，**不要自己拿 pandoc 或 python-docx 随手抽文本**。那几条路都丢图：
+| 用户给的是 | 走哪条 | 为什么 |
+|---|---|---|
+| **`.docx`** | **就地改写（A 路，默认）** | 只改文字、不重建文件，原稿格式一个字节都不动 |
+| `.pdf` / `.md` / `.doc` 转换失败 | markdown（B 路） | 这些格式没有可回填的结构，只能重排 |
+
+**`.doc`（97-2003）先转**：`soffice --headless --convert-to docx 稿件.doc`，转完走 A 路；
+转换本身会动格式，**要如实告诉用户这一步的损耗**。
+
+### A 路：就地改写（`.docx` 默认走这条）
+
+B 路（docx → markdown → 改写 → **重新生成** docx）的问题不是"格式没调好"，而是**重新生成**：
+原文件里 markdown 表达不了的东西会全部消失，且一路无声——
+EndNote / Zotero 引文域变成死文本（用户再也没法更新文献表）、合并单元格表头被拍平
+（pipe 表语法上就没有 rowspan/colspan）、页眉页脚 / 分节 / 页码 / 交叉引用 / 题注自动编号 /
+批注 / 他人修订痕迹一并丢失。A 路不生成新文件，这些问题**从根上不存在**。
+
+```bash
+V=${REPO_ROOT:-/app}/.venv/bin/python
+S=${REPO_ROOT:-/app}/.opencode/skills/humanize-academic/scripts
+
+# ① 抽出带编号的段落清单（正文 + 页眉页脚 + 脚注尾注一并覆盖）
+$V $S/docx_extract.py manuscript.docx
+# → manuscript_para.md：每行 `[[p0007]] 正文…`
+
+# ② 改写：整行替换 [[id]] 后面的正文，写成 manuscript_edited.md
+#    行首 [[id]] 一个字符都不要动；别增删行、别合并或拆分段落；
+#    ⟦…⟧ 里是域/公式/图内文字（引文、交叉引用、页码），可整体挪位置，里面一个字都不许改。
+
+# ③ 写回原文件，落成 Word 原生修订
+$V $S/docx_apply.py manuscript.docx manuscript_edited.md \
+     -o manuscript_humanized.docx --track-changes --author "AI 润色"
+
+# ④ 校验（四道闸，必跑）
+$V $S/docx_verify.py manuscript.docx manuscript_humanized.docx --auto-terms
+```
+
+**为什么默认 `--track-changes`**：用户要的是"看得见改了什么、能逐条否掉"，不是一份"据说改过"
+的新文件。修订标记由文件自己携带，比事后写一份 `changes.md` 可信——后者是模型回忆出来的。
+只在用户明说"给我干净稿"时去掉这个开关。
+
+**`docx_apply.py` 会自己拒绝的事**（拒绝即退出码 3，别忽略）：
+- ⟦⟧ 里的域内文字被改、被删或换了顺序 → 整段拒绝并指出是哪一处；
+- 段落编号在原稿里不存在 → 忽略并告警；
+- 改动**跨越可见格式边界**（颜色 / 高亮 / 粗斜 / 上下标 / 字号）→ 默认告警，因为被合并进来的
+  那截文字会被迫改成前一段的格式（用户会看到"某个词莫名变了颜色"）。**告警必须转告用户**，
+  或加 `--strict-format` 直接拒绝那些段。
+
+**`docx_verify.py` 的四道闸**：A) 除被改部件外，zip 条目**逐字节相同**；B) 表 / 行 / 单元格 /
+合并格 / 图 / 域 / 分节 / 段落数一一相等；C) 修订模式下**拒绝全部修订应还原成原文**
+（这是"没有任何改动绕过修订标记"的机械证明）；D) 数字、引用标记、DOI / PMID 前后一致。
+**任何一条 FAIL 都不许交付**。
+
+**A 路交付的就是 `manuscript_humanized.docx` 本身**——它的排版就是用户原稿的排版，
+**不要再跑 `render-docx`**（那会把原格式换成送审预设，等于白改一场）。
+用户另外要求换成某期刊格式时才走排版技能，并说明那是**另一件事**。
+
+### B 路：markdown（`.pdf` / `.md`）
+
+**不要自己拿 pandoc 或 python-docx 随手抽文本**。那几条路都丢图：
 裸 `pandoc x.docx -o x.md` 不带 `--extract-media`，md 里留下 `![](media/xxx.png)` 但文件没落盘；
 `pdf_to_md.py` 写死 `ignore_images=True`；`python-docx` 的 `doc.paragraphs` 里既没有图也没有表。
 丢了之后一路无声：排版时 pandoc 只打一句 WARNING 就退 0，用户打开 Word 才发现图没了。
@@ -23,10 +81,12 @@ description: 去 AI 味 / 学术润色（科研、医学文本，中英文都支
 
 ```bash
 ${REPO_ROOT:-/app}/.venv/bin/python \
-  ${REPO_ROOT:-/app}/.opencode/skills/humanize-academic/scripts/ingest_doc.py manuscript.docx
+  ${REPO_ROOT:-/app}/.opencode/skills/humanize-academic/scripts/ingest_doc.py manuscript.pdf
 # → manuscript_src.md + manuscript_files/fig_001.png ...
 # → [ingest] 抽出 图 N 张 / 表 M 张
 ```
+
+（它也认 `.docx`，但**拿到 .docx 请走 A 路**——走这里等于主动把用户的格式扔掉。）
 
 **把它报的「图 N 张 / 表 M 张」记下来**——那是后面校验的基准，也是交付时要跟用户对的账。
 它若报「图片链接在稿件里但文件没落盘」，**先解决再往下**，别揣着这个问题去润色。
@@ -73,7 +133,12 @@ ${REPO_ROOT:-/app}/.venv/bin/python \
 ## 硬约束（学术场景必须守）
 - **不改科学事实、数据、数字、术语、方法**。
 - **不动引用**：[n]、(Author, Year)、DOI 原样保留。
-- **图与表原样搬进改写稿**——这是最容易在整篇重写时"顺手漏掉"的一条，也是用户最痛的一条
+- **改行不改结构**（A 路）：整行替换 `[[id]]` 后面的正文，**别增删行、别把两段并成一段、
+  别把一段拆成两段**——段落是回填的锚点，行数一变就对不上了。真的需要合并段落时，
+  在交付说明里向用户提出建议，让用户自己在 Word 里合并，别自作主张。
+  ⟦⟧ 里的域内文字（引文、交叉引用、页码、超链接锚文本）**可整体挪位置，里面一个字都不许改**。
+- **图与表原样搬进改写稿**（**B 路专有**；A 路的图表根本没离开原文件，无需搬运）——
+  这是最容易在整篇重写时"顺手漏掉"的一条，也是用户最痛的一条
   （交回去一篇没有图表的稿子，等于把人家的结果部分删了）：
   - `![alt](路径)` 那一行**整行照抄**，路径与后面的 `{width=... height=...}` 一个字符都不要动
     （宽高是原稿里的显示尺寸，删了图会按原始像素撑爆版面）；
@@ -87,7 +152,17 @@ ${REPO_ROOT:-/app}/.venv/bin/python \
 - 保持目标语域（正式学术英文/中文），不要口语化过头。
 
 ## 机械校验（把硬约束从"声明"变成"检查"）
-长文改写后**必跑**不变量校验，确认数字 / 引用 / **图 / 表** / 术语没被动过：
+
+**A 路（docx 就地改写）跑 `docx_verify.py`**（四道闸见第零步）：
+```bash
+${REPO_ROOT:-/app}/.venv/bin/python \
+  ${REPO_ROOT:-/app}/.opencode/skills/humanize-academic/scripts/docx_verify.py \
+  manuscript.docx manuscript_humanized.docx --auto-terms
+```
+它比 B 路的校验强在**闸 C**：修订模式下"拒绝全部修订"必须逐字还原成原文——
+只要有一个字被改却没留下修订标记（用户在 Word 里看不见、也没法拒绝），立刻 FAIL。
+
+**B 路（markdown）跑 `check_invariants.py`**，确认数字 / 引用 / **图 / 表** / 术语没被动过：
 ```
 # Windows: ${REPO_ROOT:-/app}/.venv/bin/python ; Linux/macOS: ${REPO_ROOT:-/app}/.venv/bin/python
 ${REPO_ROOT:-/app}/.venv/bin/python ${REPO_ROOT:-/app}/.opencode/skills/humanize-academic/scripts/check_invariants.py \
@@ -102,12 +177,19 @@ ${REPO_ROOT:-/app}/.venv/bin/python ${REPO_ROOT:-/app}/.opencode/skills/humanize
 - **图 / 表丢失是硬伤**，脚本会打 `[FAIL]`：**补回去重跑，不许拿这份稿子去排版出件**，也不许在回答里说成"内容未改"。
 
 ## 用法
-1. 让用户给原文（或指向 `uploads/` 里的文件）。**.docx / .pdf 先走第零步** `ingest_doc.py` 抽成 `<原名>_src.md`。
+1. 让用户给原文（或指向 `uploads/` 里的文件）。**先按第零步分流**：`.docx` 走 A 路就地改写，
+   `.pdf` / `.md` 走 B 路 `ingest_doc.py`。
 2. 改完给出：**改写稿** + **改动说明**（列出改掉了哪些 AI 腔、为什么），必要时并排 before/after 关键句。
-3. 长文写到 `<原名>_humanized.md`，并跑上面的不变量校验。
-4. **交付时把图表的账报出来**：「原稿 N 张图 / M 张表，改写稿同样 N 张 / M 张，校验通过」。
-   一张都没有的稿子就明说"原稿没有图表"——别不提，用户看不到这句话时无从判断你有没有弄丢。
-4. **润色对象是整篇论文 / 投稿稿件时，顺手出排版件**（用户要的是能投的稿子，不是一个 md）：
+3. 长文：A 路写到 `<原名>_humanized.docx`（带修订），B 路写到 `<原名>_humanized.md`；
+   两条路都**必跑**对应的校验脚本。
+4. **交付时把账报出来**：
+   - A 路：「改写 N 段，落下修订 X 处插入 / Y 处删除；校验四道闸全过——除文字外零改动，
+     表 / 合并单元格 / 图 / 域 / 页眉页脚原样」。**跨可见格式边界的告警要照实转告**。
+     并告诉用户怎么用：Word →「审阅」→ 可**逐条接受 / 拒绝**，或「全部接受」得到干净稿。
+   - B 路：「原稿 N 张图 / M 张表，改写稿同样 N 张 / M 张，校验通过」。
+     一张都没有的稿子就明说"原稿没有图表"——别不提，用户看不到这句话时无从判断你有没有弄丢。
+4. **B 路且润色对象是整篇论文 / 投稿稿件时，顺手出排版件**（用户要的是能投的稿子，不是一个 md）。
+   **A 路不要做这一步**——产物本身就是保留原格式的 Word，再排一次等于把原格式换掉：
    - 用户**没指定期刊** → 直接用默认送审格式出 Word（要 PDF 同理换 `render-pdf-doc`）：
      ```bash
      bash ${REPO_ROOT:-/app}/.opencode/skills/render-docx/scripts/render_docx.sh -i humanized.md --journal generic-submission
