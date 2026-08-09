@@ -91,7 +91,10 @@ const JOURNAL_FILTER = [
         //   按额度计费；没配额度时取数恒 429，本项**静默不生效**——实测勾了 Q1，结果池里混着
         //   Cureus 和一堆 Frontiers，而模型只轻描淡写说了句"OpenAlex 限流未能获取指标"，
         //   没说"你勾的筛选没起作用"。界面上不写清楚，用户就会把一份没筛过的结果当成筛过的。
-        + "⚠️ 档位取自 OpenAlex，需要该服务的可用额度；取不到时**本项不生效**"
+        // ★ 这里【不能写 **粗体**】：字段的 help 是 textContent 渲染的（index.html 的 wfhelp2、
+        //   reader.html 的 .sh），星号会原样显示成「取不到时**本项不生效**」。要强调就用「」。
+        //   能吃 **粗体** 的只有 notice 与 footnote 两处（走 wfInlineMd）。
+        + "⚠️ 档位取自 OpenAlex，需要该服务的可用额度；取不到时「本项不生效」"
         + "（结果不会按它过滤），届时报告里会注明。" },
   { id: "jOA", label: "只保留开放获取（OA）的文献", type: "bool", default: false,
     help: "OA = 不用订阅就能下全文。勾上能明显提高「全文获取」成功率。" },
@@ -495,7 +498,10 @@ export const WORKFLOWS = {
           options: [{ v: "title", t: "标题" }, { v: "abstract", t: "摘要" }, { v: "intro", t: "引言" },
             { v: "methods", t: "方法" }, { v: "results", t: "结果" }, { v: "discussion", t: "讨论" },
             { v: "limitations", t: "局限性" }, { v: "cover", t: "投稿信 Cover Letter" }] }],
-        emits: ["manuscript.md", "manuscript_*.md"], render: "manuscript" },
+        // ★ emitsNot：`manuscript_*.md` 会把润色步的产物 manuscript_humanized.md 一起收走
+        //   （globMatch 对不含 / 的 glob 按 basename 比，躲不开）。实测后果：用户自带初稿、
+        //   只想润色，产物只有 manuscript_humanized.md —— AI 一个字没写，「撰写正文 ✓已完成」。
+        emits: ["manuscript.md", "manuscript_*.md"], emitsNot: ["*_humanized.*"], render: "manuscript" },
       { id: "refcheck", name: "引用核查", skill: "reference-check", gate: true,
         emits: ["refcheck_report.md", "reference_check*.md", "reference_check*.csv"],
         render: "refcheck", onFail: "write",
@@ -514,9 +520,18 @@ export const WORKFLOWS = {
           default: ["method", "stats"], options: [
             { v: "method", t: "方法学审稿人" }, { v: "stats", t: "统计审稿人" },
             { v: "clinical", t: "临床审稿人" }, { v: "editor", t: "编辑（是否送审）" }] }],
-        emits: ["review_report.md"], render: "review", onFail: "write",
+        // ★ 通配而不是精确名。模型第二轮返工常换名写 review_report_v2.md，精确名一条 glob 都不匹配
+        //   → 新报告既不进 done 判定、也不被 gateFailed 读到，第一轮那份红报告永远说了算：
+        //   闸永久红、重跑不管用，唯一出路是「仍要出件」。带上通配符它才落进 gateFailed 里
+        //   「同一通配组只认最新那份」的逻辑。（不加 peer_review*.md：那会把"给审稿人的回复信"
+        //   也读成裁定书。）
+        emits: ["review_report*.md"], render: "review", onFail: "write",
         hint: "发现设计/统计/结果硬伤则回上游返工" },
-      { id: "render", name: "排版出件", skill: "render-docx",
+      // ★ 两个渲染技能必须互认。这一格的输出格式由用户在 fmt 里选，选 PDF 时 agent 调的是
+      //   render-pdf-doc（模块 extra 里放行了它）—— 不认的话 markStepBySkill / stepOfParts
+      //   都找不到认领者：这一轮不开分组、进度条不动，最后产物把格子涂绿了却点不动
+      //   （canJump 靠"这一步开过框没有"判定），整条流水线只有最后一格点了没反应。
+      { id: "render", name: "排版出件", skill: "render-docx", skillAlias: ["render-pdf-doc"],
         form: [{ id: "fmt", label: "输出格式", type: "select", default: "docx", options: [
           { v: "docx", t: "Word（.docx）" }, { v: "pdf", t: "PDF" }, { v: "both", t: "两种都要" }] }],
         emits: ["manuscript*.docx", "manuscript*.pdf"], render: "doc",
@@ -578,7 +593,8 @@ export const WORKFLOWS = {
         emits: ["refcheck_report.md", "reference_check*.md"], render: "refcheck", onFail: "write" },
       { id: "humanize", name: "语言润色", skill: "humanize-academic", optional: true,
         emits: ["*_humanized.md"], render: "diff" },
-      { id: "render", name: "排版出件", skill: "render-pdf-doc",
+      // 同上：fmt 默认就是 docx，走 render-docx 的次数比 pdf 还多，两个都要认（见 paper 那格的说明）
+      { id: "render", name: "排版出件", skill: "render-pdf-doc", skillAlias: ["render-docx"],
         form: [{ id: "fmt", label: "输出格式", type: "select", default: "docx", options: [
           { v: "docx", t: "Word（.docx）" }, { v: "pdf", t: "PDF" }, { v: "both", t: "两种都要" }] }],
         emits: ["manuscript*.docx", "manuscript*.pdf", "review*.docx", "review*.pdf", "proposal*.docx", "proposal*.pdf"], render: "doc" },
@@ -613,7 +629,8 @@ export const WORKFLOWS = {
           { v: "hospital", t: "院级 / 校级课题" }, { v: "postdoc", t: "博士后基金" },
           { v: "society", t: "学会临床基金" }, { v: "industry", t: "企业横向合作" },
           { v: "other", t: "其它" }],
-        help: "**决定按哪一份官方要求起草**（结构提纲、逐节字数硬限、形式审查清单都按它对齐），选错会导致整篇返工。不在表里就选「其它」并写清渠道名。" },
+        // help 是纯文本渲染，别写 **粗体**（会原样显示成星号）—— 强调一律用「」
+        help: "「决定按哪一份官方要求起草」（结构提纲、逐节字数硬限、形式审查清单都按它对齐），选错会导致整篇返工。不在表里就选「其它」并写清渠道名。" },
       { id: "funderOther", label: "具体是哪个资助渠道", type: "text", when: { field: "funder", eq: "other" },
         required: true, col2: true,
         placeholder: "例：中华医学会临床医学科研专项 / 某某市卫健委面上项目 / 国家重点研发计划某专项",
@@ -742,11 +759,14 @@ export const WORKFLOWS = {
         note: "**动笔写正文之前，先把本次实际采用的要求写成 `要求卡-<渠道>.md` 落盘**，然后才逐节起草 —— 两件事在同一步里做完，但顺序不能颠倒。要求卡**用内置卡的渠道也要写**，不能因为「卡在 references/ 里读过了」就跳过；至少包含：章节结构提纲（标题原文）、逐节字数/页数硬限、格式规定、形式审查与附件清单、以及每一项的来源与年份口径（内置卡写明卡的年份，联网查的附 URL，没查到的写「未找到官方来源」）。用户传了当年官方模板 / 申报通知的，以用户文件为准，并把它与内置卡的差异逐条列出来 —— 那正是发现「今年又改版了」的地方。落盘之后**在回话里点名说清本次按的是哪个渠道、哪一年的口径**：流程条上不再单列这一步，用户只能从你这句话和产出侧栏里的要求卡去核对，含糊过去他就只能等成稿之后才发现按错了版本。" },
       { id: "review", name: "评审自查校验", skill: "peer-review", gate: true,
         sub: "完整性、格式与逻辑核查",
-        emits: ["review_report.md"], render: "review", onFail: "write" },
+        emits: ["review_report*.md"], render: "review", onFail: "write" },   // 通配理由见 paper 的同名步
       // ★ 设计稿把最后一格写作「标书最终成稿 · 语言润色与定稿输出」——既然界面上承诺了"润色"，
       //   白名单里就得给 humanize-academic（见下面 extra），否则 agent 一动手就撞模块闸，
       //   用户看着流程条上写着润色、拿到的却是没润色的稿子。
+      // 这一格实际会调三个技能：润色 + 两个渲染器（fmt 默认 docx 走 render-docx）。
+      // 只认一个的话，另外两个跑起来时进度条熄灭、那一轮掉出所有分组（见 paper 那格的说明）。
       { id: "render", name: "标书最终成稿", skill: "render-pdf-doc",
+        skillAlias: ["render-docx", "humanize-academic"],
         sub: "语言润色与定稿输出",
         form: [{ id: "fmt", label: "输出格式", type: "select", default: "docx", options: [
           { v: "docx", t: "Word（.docx）" }, { v: "pdf", t: "PDF" }, { v: "both", t: "两种都要" }] }],
@@ -1036,11 +1056,14 @@ export const WORKFLOWS = {
       { id: "refcheck", name: "引用核查", skill: "reference-check", gate: true,
         whenAny: [{ field: "checks", has: "refs" }, { field: "checks", has: "doi" },
                   { field: "checks", has: "retracted" }],
+        // ★ 本模块【故意不写 onFail】：它核的是用户自带的稿件，闸红时要改的是那份稿子本身，
+        //   流程里没有上游步骤可退。界面读不到 onFail 就退回"改完要重跑本闸"，那句话在这里是对的
+        //   —— 硬指一个步骤名反而误导（指回自己就成了循环）。
         emits: ["refcheck_report.md", "reference_check*.md", "reference_check*.csv"], render: "refcheck" },
       { id: "review", name: "方法与统计审校", skill: "peer-review", gate: true,
         // 格式与体例也由这一步顺带查（peer-review 的清单里本就含体例）—— 别让选项勾了却没有任何一步走它
         whenAny: [{ field: "checks", has: "stats" }, { field: "checks", has: "format" }],
-        emits: ["review_report.md"], render: "review" },
+        emits: ["review_report*.md"], render: "review" },   // 通配理由见 paper 的同名步
       // ★ gateBy:"signals" —— 这道闸【不能】按裁定语判。data-integrity 的铁律是"只出待核信号、
       //   不下造假结论"，也就是它被明令禁止写出 gateFailed 认得的那些措辞，于是通用判据永远判不了红。
       //   实测：报告里 6 条硬性不自洽（含生理不可能的 eGFR=1220），步骤条照打绿勾。改按信号条数判。
@@ -1150,8 +1173,8 @@ export const WORKFLOWS = {
         emits: ["refcheck_report.md", "reference_check*.md"], render: "refcheck", onFail: "humanize",
         hint: "必须核【润色后的稿件】而不是原稿——润色引入的引用漂移只有核新稿才看得出来；"
             + "本步没跑完不许进排版出件" },
-      { id: "render", name: "排版出件", skill: "render-docx", optional: true,
-        when: { field: "outFmt", ne: "md" },
+      { id: "render", name: "排版出件", skill: "render-docx", skillAlias: ["render-pdf-doc"],
+        optional: true, when: { field: "outFmt", ne: "md" },
         // ★ 必须含 *_humanized.*：render-docx 的输出名是「输入名.docx」，而本模块的输入叫
         //   humanized.md / draft_humanized.md → 输出 humanized.docx / draft_humanized.docx。
         //   只写 manuscript*/proposal*/review* 的话，这步在本模块永远不会变绿（用户看到
@@ -1190,6 +1213,161 @@ export const WORKFLOWS = {
       + `主动拎到最前面标出来 —— 那本来就不该发生，藏起来比改错本身更糟。`
       + `\n- **不要替校验脚本夸大结论**：不变量校验只比对数字与角标这些「集合」，查不出「显著低于→低于」`
       + `这种措辞漂移。校验通过只能说「数字与角标未变」，**不许说成「内容未改」**。`,
+  },
+
+  // ============ 科研作图（文生图示意图）============
+  // 【与「数据统计与分析」的分界，这是本模块最容易被用错的地方】
+  //   图上的形状由【数字】决定 → `nature-figure`（在 stats / paper 模块里，出 300dpi + 矢量，可投稿）；
+  //   由【生物学关系】决定、根本没有数据 → 本模块（文生图，出 AI 位图）。
+  //   派错技能是这类需求最常见的浪费，所以这条边界在模块简介、intake 的 notice、步骤 note 三处
+  //   都写了一遍 —— 用户在进来前、动手前、拿到图时各有一次机会发现自己走错了门。
+  // 【为什么用通用壳而不是阅读器壳】阅读器壳的前提是"左边常驻用户传上来的那份东西"，
+  //   而本模块【不要求任何上传】：用户打字描述 → 出图。硬套阅读器壳的结果是首屏卡在一个
+  //   传不了也跳不过的上传区。通用壳（表单 → 步骤条 → 对话流）正好：图作为产物由
+  //   rendererFor→"figure" 渲染成缩略图卡片，正文里的 `![](figures/fig1.png)` 也会被直接渲染。
+  figure: {
+    primary: "mechanism-figure",
+    intakeTitle: "作图设置",
+    intakeSub: "描述你要画的机制或流程，不用传数据",
+    // notice 渲染在表单卡【顶部】：这几条必须在他动手【之前】看到。出完图才说"这图不能投稿"，
+    // 那张图已经白出了 —— 而且实打实扣掉了他当天的生图张数（按档位限量，见 mechanism-figure 技能）。
+    notice: "这里出的是 **AI 生成的位图示意图**（不是矢量图），适合组会汇报、标书插图与投稿前的构思稿。"
+      + "多数期刊对生成式 AI 制图有限制（Nature 系基本禁止入稿，Cell Press / Elsevier 要求披露），"
+      + "投稿终稿建议照它给出的规格在 BioRender / Illustrator 里重绘成矢量图。"
+      + "另外，生图模型写字不可靠，图上的英文标签**必然有一部分被画错或画糊**，出图后要逐个核 —— "
+      + "这一步会替你列成清单。由数值画出来的统计图（森林图 / KM 曲线 / 火山图 / ROC）不归这里，"
+      + "请到「数据统计与分析」模块。",
+    intake: [
+      { id: "desc", label: "要画什么", type: "textarea", required: true,
+        placeholder: "把机制或流程按【步骤】讲清楚：分几步，每一步在哪里发生、有哪些分子或结构参与、"
+          + "谁激活谁、谁抑制谁，最后的结局是什么。\n"
+          + "例：① 高草酸尿使肾小管上皮细胞发生 ER 应激，PERK-ATF4 通路激活；"
+          + "② ATF4 上调 CHAC1，降解 GSH；③ GSH 耗竭使 GPX4 失活，脂质过氧化累积、发生铁死亡；"
+          + "④ 死亡的上皮细胞成为草酸钙结晶的黏附位点。",
+        // ★ 反编造闸的用户侧说明。技能里 build_prompt.py 会拿这段描述（或上传的稿件）逐个核对图上的
+        //   实体标签，找不到就中止 —— 这不是"画得不够好看"，是刻意的：给每张图补一个用户没测的
+        //   经典通路成员，就是在图里编数据，而审稿人一眼能看出来。
+        // help 是【纯文本】渲染的（前端不过 markdown），写 **粗体** 会原样显示成两个星号
+        help: "写得越具体，图越准。只写你材料里真有的分子 —— 图上每一个名字都会被逐个核对，"
+            + "缺的那一环宁可不画，也不会替你补一个经典通路成员上去。" },
+      // 【删掉了原来的「画哪一类」】它和「画风」讲的是同一件事的两半，而"通路图 / 技术路线图 /
+      // 图形摘要"这层意思已经由左卡那排「快捷模板」表达了（点一下就把该体裁的描述填进去）。
+      // 两个下拉并排问"画哪一类"和"什么画风"，实测用户要停下来想它们的区别。
+      { id: "style", label: "画风", type: "select", default: "flat", options: [
+        { v: "flat", t: "扁平学术风（推荐）" },
+        { v: "realistic", t: "高拟真 3D" },
+        { v: "structure", t: "结构生物学风" }] },
+      // 画幅五档【必须与 render_figure.py 的 SIZES 表逐字对齐】：那边认不出的比例会回落成
+      // 默认方图，而界面上仍显示用户选的 9:16 —— 出来一张方图，没人看得出是哪里错了。
+      { id: "ratio", label: "画幅", type: "select", default: "1:1", options: [
+        { v: "1:1", t: "方图 1:1" }, { v: "16:9", t: "横图 16:9" },
+        { v: "9:16", t: "竖图 9:16" }, { v: "4:3", t: "横图 4:3" }, { v: "3:4", t: "竖图 3:4" }] },
+      // 标签里不用再写「（可选）」：非必填字段前端自动挂一枚「选填」角标，写了就是「（可选）选填」
+      { id: "srcFiles", label: "你的稿件 / 摘要", type: "files",
+        uploadText: "上传材料", accept: ".md / .docx / .pdf / .txt",
+        // 传了才谈得上"逐字核对"：不传的话闸只能拿表单里那段描述当依据，覆盖面小得多。
+        help: "传了就用它做核对依据：图上出现的分子名必须能在材料里找到，找不到就会停下来问你，"
+            + "而不是照画。图片型扫描件会先走 OCR。" },
+      { id: "n", label: "出几张候选", type: "select", default: "2", options: [
+        { v: "1", t: "1 张" }, { v: "2", t: "2 张（推荐）" }, { v: "3", t: "3 张" }],
+        help: "构图有随机性，同一份提示词两张图可能一张规整一张翻车。每张都计入你当天的生图张数。" },
+      // pin：用途决定要不要去查期刊政策，而这件事漏掉的后果是用户拿一张不能用的图去投稿。
+      // 跳过表单那条路不生成任务卡，只有前言兜得住（见 settingsLine 的说明）。
+      { id: "usage", label: "这张图拿去做什么", type: "select", default: "meeting", pin: true, options: [
+        { v: "meeting", t: "组会 / 答辩汇报",
+          pinNote: "汇报场景，AI 生图限制不适用，出完图把标签必核清单过一遍即可" },
+        { v: "grant", t: "标书插图",
+          pinNote: "标书不投期刊，AI 生图限制不适用 —— 这是本技能最合适的场景，不用反复提醒期刊政策" },
+        { v: "paper", t: "论文配图（要投稿）",
+          // 实测的反面：模型会顺口说一句"多数期刊允许披露后使用"就把图交了。那是替期刊编政策。
+          pinNote: "**交付前必须先查目标期刊的 Instructions for Authors 里关于 generative AI images 的规定"
+            + "并如实转述（禁用 / 需披露 / 需许可），查不到就说查不到，绝不许凭印象替期刊编一条政策**；"
+            + "同时给一份可交给美编的重绘规格（栏数与顺序、每栏实体、每条箭头的起止与类型、配色、字号），"
+            + "让用户在 BioRender / Illustrator 里落成矢量图" }] },
+      { id: "journalName", label: "目标期刊", type: "text", when: { field: "usage", eq: "paper" },
+        placeholder: "填了会去查该刊稿约；查不到会如实说明，不凭印象编" },
+    ],
+    steps: [
+      { id: "spec", name: "作图方案", skill: "mechanism-figure",
+        emits: ["*.spec.json", "*.prompt.txt"], render: "report",
+        hint: "栏数按机制的真实步数来（1–6 栏），每栏 ≤ 8 个标签、全图 ≤ 24",
+        note: "spec 由你自己读懂用户的描述来填，**不要再去调一个「提示词改写模型」** —— 那一步只会顺手"
+            + "把用户没提的经典通路成员补进来。三条硬规矩：**栏数按机制真实步数来（1–6 栏），"
+            + "不要为了凑版面编内容**；每栏 ≤ 8 个标签、全图 ≤ 24（超了就拆成两张图，不是缩字号）；"
+            + "`labels` 只写实体名，关系写进 `arrows[].label`。"
+            + "**用户传了材料就必须带 `--source` 过反编造闸**，被拦下来照报错改 spec（中文全称对国际缩写"
+            + "用 `--allow` 显式声明；确实没测的分子直接删掉），不要绕开它。" },
+      { id: "draw", name: "生成图", skill: "mechanism-figure",
+        emits: ["figures/*.png", "fig*.png", "figures/*.meta.json"], render: "figure",
+        hint: "先 --dry-run 看要发什么（不花钱），再按候选张数出图",
+        note: "图写进 `figures/`，用 `fig1.png` 这类约定名；`.meta.json`（模型、完整 prompt、负面词、"
+            + "标签清单、AI 披露说明）跟着一起留下，半年后要改版全靠它。"
+            + "**出完在回答里用 `![图注](figures/fig1.png)` 把图贴出来**，界面会直接渲染，"
+            + "别只报一句「图已生成」让用户自己去产出栏翻。"
+            + "遇到 `今天的生图张数已用完（N/M 张）`：**那不是故障，不要重试**，按档位每天 0 点(UTC) 重置，"
+            + "提示词已经做好了，如实告诉用户明天拿同一份 `.built.json` 重跑即可。" },
+      { id: "check", name: "标签核对", skill: "mechanism-figure",
+        emits: ["figure_check.md"], render: "report",
+        hint: "生图模型必然拼错一部分标签，逐个核是必做步骤，不是可选建议",
+        note: "照脚本输出的必核清单**逐条核对**，把哪些标签画对了、哪些画错 / 画糊 / 画漏如实写进"
+            + "`figure_check.md` 并报给用户 —— **不许只说一句「图已生成」**。发现错字只能改 spec 重出，"
+            + "**不要手动 PS 掉**，那正是各刊明令禁止的图像操作。"
+            + "同时把这张图的性质讲清楚：AI 生成的位图、不是矢量、不能直接当投稿终稿。" },
+    ],
+    // ocr：用户传的材料是图片型扫描件时（标书评审意见、翻拍的机制图）唯一的出路。
+    // 【刻意不含 nature-figure】用户要的是由数值画出来的统计图时，正确做法是把他指到
+    // 「数据统计与分析」模块去（那里有数据表、有变量对应面板），而不是在这里硬画一张。
+    extra: ["ocr"],
+
+    // ---- 生成器界面（web/figure.html）----
+    // 【为什么另起一个壳，而不是用通用表单或阅读器壳】
+    //   通用壳是「填一张表 → 一条对话流」，而出图是【写一句 → 看一张图 → 改一句再来一版】，
+    //   最该占版面的是图本身；阅读器壳的前提又正好相反 —— 它左边常驻的是【用户传上来的】那份
+    //   东西，而这个模块根本不要求上传。所以给它一个自己的两栏生成器：左边写提示词，右边调
+    //   出图设置，出完图在同一页看图、追问、再来一版。
+    // 【前端仍然只是渲染器】下面这份 gen 配置由 /api/modules/figure/workflow 整份下发，
+    //   figure.html 不认识任何一句具体文案 —— 改模板、改措辞、加一档画幅都只动这里。
+    //   （代价要认：figure.html 归「界面包」热更，本文件是 .mjs，改它必须重发安装包。
+    //    所以经常要动的文案宁可放这儿一次性想好，也别为了图快写死进 html。）
+    ui: "figure",
+    gen: {
+      intro: {
+        eyebrow: "AI 生图 · 面向组会汇报与标书插图",
+        title: "科研作图",
+        lead: "用一段文字描述机制、通路或技术路线，直接生成示意图与图形摘要。不用传数据，也不用会画图。",
+      },
+      // 右卡按这个顺序把 intake 字段画成一排排 pill（值域来自各字段的 options）
+      pills: ["ratio", "style", "n", "usage"],
+      // 条件字段：when 成立时才出现（目标期刊只在「论文配图」时问）
+      extraFields: ["journalName"],
+      promptField: "desc",
+      uploadField: "srcFiles",
+      // 【不设「快捷模板」chips】按用户 2026-08-08 的要求去掉：一排预置的通路名（PI3K/AKT、
+      // PD-1/PD-L1…）看着省事，实际是在替他挑内容 —— 点一下就把一整段【不是他研究的】机制填进
+      // 提示词框，而这个模块的头号铁律恰恰是"图上每个分子名都必须来自用户自己的材料"。
+      // 提示词框的 placeholder 里已经有一个写到什么颗粒度的范例，那个够了。
+      // 三条限制放在生成按钮【上方】——出完图才说"这图不能投稿"，那张图已经白出了，
+      // 而且实打实扣掉了用户当天的生图张数。
+      limits: "出的是 **AI 生成的位图**（不是矢量图），适合组会汇报、标书插图与投稿前的构思稿。"
+        + "多数期刊对生成式 AI 制图有限制（Nature 系基本禁止入稿，Cell Press / Elsevier 要求披露），"
+        + "投稿终稿建议照它给的规格在 BioRender / Illustrator 里重绘。"
+        + "另外生图模型写字不可靠，**图上的英文标签必然有一部分被画错**，出完会给你一份必核清单。",
+      // 由数值画出来的图不归这里。这句话在模块简介里说过一遍，这里再说一遍 ——
+      // 从工作台点进来的人不一定读了卡片上的小字，而走错门的代价是白花一张生图额度。
+      wrongDoor: "要画的是森林图 / KM 曲线 / 火山图 / ROC 这类【由数值算出来】的统计图？那不在这里，请到「数据统计与分析」模块。",
+      // 发给模型的那一段。{desc}/{ratio}/{n}/{style}/{src} 由前端替换；没值的整句删掉。
+      // 模块前言里已经有三步的详细规矩（steps[].note），这里只交代"这一次要画什么、什么设置"。
+      prompt: "请用 `mechanism-figure` 技能画一张机制示意图。\n\n**要画的内容（只依据这一段，我没提的分子一个都不许补）**：\n{desc}\n\n"
+        + "出图设置：画幅 {ratio}，画风 {style}，出 {n} 张候选。{src}\n\n"
+        + "按技能的三步走：① 你自己读懂上面这段话填 spec（栏数按真实步数，1–6 栏；每栏 ≤ 8 个标签、全图 ≤ 24）；"
+        + "② `build_prompt.py` 编译并过反编造闸；③ `render_figure.py --outdir figures --n {n}` 出图。\n"
+        + "出完在回答里用 `![图注](figures/fig1.png)` 把图贴出来，再逐条走必核清单，"
+        + "把画错 / 画糊 / 画漏的标签如实告诉我，并写进 `figure_check.md`。",
+      srcLine: "核对材料：{files}（图上出现的名字必须能在这里面找到，`build_prompt.py` 记得带 `--source`）。",
+      followPlaceholder: "接着说，例如：第 3 栏太挤了，把 GSH 那条拆出去再来一版",
+      // 追问时的前缀：让模型知道这是"改上一版"，别从头再走一遍三步（也别再重填一份 spec）。
+      followPrefix: "接着改上一版的图（沿用同一份 spec，只改我说的地方，然后重新出图）：",
+    },
   },
 }
 
@@ -1349,11 +1527,21 @@ export function globMatch(glob, name) {
   if (glob.includes("/")) return re.test(String(name))
   return re.test(String(name).split("/").pop())
 }
+/** 脱敏还原表（真实姓名/住院号 ↔ 假名）的文件名判据 —— **只有一份定义**。
+ *
+ * ★ 原来这套判据散在三处且互不相同：server.mjs 的 dirState 只排 `*_mapping.csv`，
+ *   本文件的 RENDER_RULES 与 index.html 的 isSecret 收的是下面这一整组。结果是
+ *   **纵深防御只挡住了六分之一**：deid_crosswalk.csv / 姓名对照表.csv / patient_keyfile.csv
+ *   照常出现在"产出"侧栏、可一键下载 —— 而它们第一列就是真实姓名与住院号。
+ *   现在 dirState 也引这一份（server.mjs 用 WF.isSecretName）。
+ */
+export const SECRET_GLOBS = ["*mapping*.csv", "*_map.csv", "*crosswalk*.csv", "*对照表*.csv", "*还原表*.csv", "*keyfile*.csv"]
+export const isSecretName = (name) => SECRET_GLOBS.some((g) => globMatch(g, String(name)))
 const RENDER_RULES = [
   // ⚠️ 必须放在最前：脱敏的【还原表】（真实姓名/住院号 ↔ 假名）。绝不能落进 table 渲染器——
   //    那会把病人真名直接铺在对话框里。给它专用渲染器，界面只显示警示、不预览内容。
   //    （实测产出过 deid_cohort_mapping.csv：200 例真实姓名+住院号，当时可一键下载且会内联预览。）
-  { render: "secret", globs: ["*mapping*.csv", "*_map.csv", "*crosswalk*.csv", "*对照表*.csv", "*还原表*.csv", "*keyfile*.csv"] },
+  { render: "secret", globs: SECRET_GLOBS },
   { render: "evidence", globs: ["evidence_table.csv", "evidence.csv", "included.csv", "zotero_evidence.csv", "zotero_refs.csv"] },
   { render: "retrieval", globs: ["retrieval_report.json", "manual_needed.txt"] },
   { render: "refcheck", globs: ["refcheck_report.md", "reference_check*.md", "reference_check*.csv"] },
@@ -1389,6 +1577,10 @@ const byExt = (glob, declared) => {
   if (["csv", "tsv"].includes(ext) && ["report", "manuscript", "diff", "doc"].includes(declared)) return "table"
   if (["docx", "doc", "pdf", "xlsx", "xls", "pptx"].includes(ext)) return "doc"
   if (["png", "jpg", "jpeg", "svg", "pdf"].includes(ext) && declared === "report") return "figure"
+  // ★ 题录文件不是证据表。refs.bib 被声明成 evidence，而文献卡片渲染器按【行】切 —— 实测两条
+  //   BibTeX 题录被显示成「检索到的文献 14 篇」，每行一张卡（`title = {…}`、`author = {Smith`、
+  //   「(无标题)」…）。返回 null = 认不出，退回普通产物卡（"认不出绝不藏起来"仍成立）。
+  if (["bib", "ris", "nbib"].includes(ext)) return null
   return declared
 }
 // 【必须按具体度排序，不能靠书写顺序】撰写步的 `manuscript_*.md` 会吞掉润色步的
@@ -1561,14 +1753,25 @@ export function parseHeaders(buf, ext = ".csv", opts = {}) {
     return bad(`第一行有 ${cells.length} 个字段、第二行有 ${second} 个，对不上——首行可能不是表头。请手动填列名。`)
   // ⑥ 空列名与重名列都要显式标出：静默丢弃会让用户以为那列不存在（而脚本里它确实存在），
   //    两个一模一样的按钮则根本分不清点了哪个。
+  // ★ 显示名与【真列名】必须分开回。消歧后缀（"（重名 2）"、"（第 2 列·无列名）"）是给人看的，
+  //   在真实 CSV 里【根本不存在】—— 而前端此前把 headers 同时当 label 和 value 用，用户从下拉里
+  //   点一下，这个不存在的名字就原样进任务卡交给模型，脚本按它取列必然取不到。
+  //   更阴的是仅大小写不同的两列（Age / age）：本来都合法且不同，却因为按小写去重被判成重名，
+  //   于是第二列被改写成 "age（重名 2）"。服务端的列名核对又是拿同一份 headers 比，
+  //   `cols.includes("age（重名 2）")` 为真 → 双保险两边用同一份被污染的数据，等于没有保险。
   const seen = new Map()
+  const raw = cells.map((h) => h || "")          // 表头单元格的原文，按列序；空列名就是空串
   const headers = cells.map((h, i) => {
     const base = h || `（第 ${i + 1} 列·无列名）`
     const k = base.toLowerCase()
     const n = (seen.get(k) || 0) + 1; seen.set(k, n)
     return n > 1 ? `${base}（重名 ${n}）` : base
   })
-  return { headers, sep, encoding: enc }
+  // 真的重名的列名（大小写不同的不算——它们是两个合法且不同的列名）
+  const cnt = new Map()
+  for (const h of raw) if (h) cnt.set(h, (cnt.get(h) || 0) + 1)
+  const dupes = [...cnt].filter(([, n]) => n > 1).map(([h]) => h)
+  return { headers, raw, dupes, sep, encoding: enc }
 }
 
 // ---- 模块/技能闸的判据（纯函数，便于测试）----
@@ -1696,6 +1899,12 @@ export function workflowFor(mod, values) {
       ? { ...w.reader, intake: (w.reader.settings || []).concat(w.reader.intro?.ask || [], w.reader.vars?.fields || [])
           .map((id) => (w.intake || []).find((f) => f.id === id)).filter(Boolean) }
       : null,
+    // 生成器壳（web/figure.html）的配置。与 reader 同一套路：页面只认 gen.intake 里下发的字段定义，
+    // 不认识任何一个具体字段 id —— 加一档画幅、加一个设置项都只改 workflows.mjs。
+    gen: w.gen
+      ? { ...w.gen, intake: [w.gen.promptField, w.gen.uploadField, ...(w.gen.pills || []), ...(w.gen.extraFields || [])]
+          .filter(Boolean).map((id) => (w.intake || []).find((f) => f.id === id)).filter(Boolean) }
+      : null,
     intakeTitle: w.intakeTitle,
     intakeSub: w.intakeSub || null,   // 流程条第 1 格「基础信息录入」那行小字，各模块不同
     intake: w.intake,
@@ -1732,7 +1941,14 @@ export function pipelineLine(mod, rawValues) {
   const gateTxt = gates.length
     ? `质量闸：${gates.map((g) => `${g.name}（不过则回退到「${steps.find((x) => x.id === g.onFail)?.name || "上游相应步骤"}」返工）`).join("；")}。`
     : ""
-  return `${noteTxt}\n- **本模块的标准流程**：${chain}。${gateTxt}按此顺序推进；确有理由跳步或合并要先向用户说明。同一闸反复回退 ≥2 次仍不过就停下问用户，别无限返工。\n- **闸的结论只能由重新跑一遍得出**：因某道闸不过而返工后，必须【真的重跑那道闸】并让它写出新报告，才可以说闸已通过。拿上一版的旧报告宣布通过是错的 —— 界面会同时显示「已通过」和一份写着问题的报告，自相矛盾。\n- **不要替校验脚本夸大结论**：不变量校验之类的自动检查只比对数字、角标、术语这些「集合」，查不出「显著低于→低于」「提示→显示」这种措辞漂移。校验通过只能说「数字与角标未变」，**不许说成「引用保留不动」或「内容未改」** —— 用户看到那句话就不会再去逐句核对了。\n- **闸没跑完不许出件**：排版 / 交付类步骤必须排在质量闸【之后】。实测出现过 docx 比核查报告早 13 秒生成 —— 用户拿到一份没过闸的送审稿，而它看起来跟过了闸的一模一样。\n- **闸红着的时候不许用话术放行**：不得说「通常可以放心使用」「来源可靠的话就没问题」这类话。闸没过就如实说没过、说清要改什么；把判断推回给用户，等于替他把闸抹平了。`
+  // 后面那四段全是【闸】的规矩。一步都没有闸的模块（如「科研作图」）也照发，等于每一轮都往前言里
+  // 塞四段讲一个本模块根本不存在的机制 —— 不只是废话：模型会去找"那道闸在哪"，实测过它自行
+  // 加一道并不存在的检查步骤。有闸的模块（paper / review / grant）不受影响，它们恒有闸。
+  const gateRules = gates.length
+    ? `\n- **闸的结论只能由重新跑一遍得出**：因某道闸不过而返工后，必须【真的重跑那道闸】并让它写出新报告，才可以说闸已通过。拿上一版的旧报告宣布通过是错的 —— 界面会同时显示「已通过」和一份写着问题的报告，自相矛盾。\n- **不要替校验脚本夸大结论**：不变量校验之类的自动检查只比对数字、角标、术语这些「集合」，查不出「显著低于→低于」「提示→显示」这种措辞漂移。校验通过只能说「数字与角标未变」，**不许说成「引用保留不动」或「内容未改」** —— 用户看到那句话就不会再去逐句核对了。\n- **闸没跑完不许出件**：排版 / 交付类步骤必须排在质量闸【之后】。实测出现过 docx 比核查报告早 13 秒生成 —— 用户拿到一份没过闸的送审稿，而它看起来跟过了闸的一模一样。\n- **闸红着的时候不许用话术放行**：不得说「通常可以放心使用」「来源可靠的话就没问题」这类话。闸没过就如实说没过、说清要改什么；把判断推回给用户，等于替他把闸抹平了。`
+    : ""
+  const loopRule = gates.length ? "同一闸反复回退 ≥2 次仍不过就停下问用户，别无限返工。" : ""
+  return `${noteTxt}\n- **本模块的标准流程**：${chain}。${gateTxt}按此顺序推进；确有理由跳步或合并要先向用户说明。${loopRule}${gateRules}`
 }
 
 /** 产物契约：告诉 agent 用约定文件名，界面才认得出并渲染成表格/卡片 */

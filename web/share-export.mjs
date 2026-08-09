@@ -139,6 +139,17 @@ main{max-width:860px;margin:0 auto}
 .doc-meta{color:var(--dim);font-size:13px}
 .nofiles{margin:14px 0 0;padding:9px 12px;border:1px dashed var(--line);border-radius:8px;
   color:var(--dim);font-size:13px;background:var(--card)}
+.flow{margin:18px 0 0;padding:12px 14px;border:1px solid var(--line);border-radius:10px;background:var(--card)}
+.flow h2{margin:0 0 8px;font-size:14px;letter-spacing:.04em;color:var(--dim);font-weight:600}
+.flowwarn{margin:0 0 8px;font-size:13px;color:#b03a34}
+.flowlist{margin:0;padding:0;list-style:none;font-size:13px}
+.flowlist li{padding:3px 0;color:var(--dim)}
+.flowlist li b{display:inline-block;width:1.2em;font-weight:700}
+.flowlist li.ok{color:#1f7a52}
+.flowlist li.bad{color:#b03a34}
+.flowlist li.warn{color:#8a5a12}
+.flowlist .sy{color:var(--dim);font-size:12px;margin-left:6px}
+.flowlist .gt{font-size:11px;border:1px solid var(--line);border-radius:3px;padding:0 3px;color:var(--dim)}
 .turn{margin:22px 0;padding-top:20px;border-top:1px solid var(--line)}
 .turn:first-of-type{border-top:0;padding-top:0}
 .who{font-size:12px;letter-spacing:.06em;color:var(--dim);margin-bottom:6px}
@@ -190,7 +201,32 @@ footer{margin-top:34px;padding-top:14px;border-top:1px solid var(--line);color:v
  * 思考与工具调用的 <details> **一律不带 open**：用户要的是「保留过程但默认折叠」。
  * 谁要是顺手加了 open，分享件一打开就是几屏推理，正文反而找不到。
  */
-export function renderShareHtml({ title, turns, exportedAt } = {}) {
+/** 流程状态块：把步骤链与闸的结论一并存进导出件。
+ *
+ * ★ 为什么必须有：导出件此前【完全没有流程与闸的概念】—— 一份"闸没过、用户点了「仍要出件」
+ *   才产出"的稿子导出去，看的人看不出闸没过。放行警告是 notice（不落盘）、拦截解释在
+ *   _lasterror.json（下一轮就被清），被中止那轮在导出件里只剩一个 `⚠ aborted`。
+ *   收件人（导师 / 合作者 / 期刊编辑）拿到的是一份看起来一切正常的记录。
+ * ★ 这不违反"产出文件一概不进分享"：它是**状态**，不是文件内容。
+ */
+function flowBlock(flow) {
+  if (!flow || !Array.isArray(flow.steps) || !flow.steps.length) return ""
+  const dn = new Set(flow.done || []), fl = new Set(flow.failed || [])
+  const im = new Set(flow.implied || []), sl = new Set(flow.stale || [])
+  const rows = flow.steps.map((s, i) => {
+    const mark = fl.has(s.id) ? "×" : sl.has(s.id) ? "⟳" : im.has(s.id) ? "·" : dn.has(s.id) ? "✓" : "○"
+    const say = fl.has(s.id) ? "未通过" : sl.has(s.id) ? "已过期，未重做" : im.has(s.id) ? "无产物"
+      : dn.has(s.id) ? "已完成" : "未进行"
+    const cls = fl.has(s.id) ? "bad" : sl.has(s.id) || im.has(s.id) ? "warn" : dn.has(s.id) ? "ok" : ""
+    return `<li class="${cls}"><b>${mark}</b> ${i + 1}. ${escHtml(s.name || s.id)}`
+      + (s.gate ? ' <span class="gt">把关</span>' : "") + ` <span class="sy">${say}</span></li>`
+  }).join("")
+  const warn = fl.size
+    ? `<p class="flowwarn">⚠ 有 ${fl.size} 道质量闸判定未通过${flow.bypass ? "，且本会话已被手动放行——下面的送审件是在闸未过的情况下产出的" : ""}。</p>`
+    : flow.bypass ? '<p class="flowwarn">⚠ 本会话手动放行过质量闸的出件拦截。</p>' : ""
+  return `<section class="flow"><h2>流程状态</h2>${warn}<ol class="flowlist">${rows}</ol></section>`
+}
+export function renderShareHtml({ title, turns, exportedAt, flow } = {}) {
   const t = escHtml(title || "会话记录")
   const when = exportedAt ? new Date(exportedAt) : new Date()
   const stamp = `${when.getFullYear()}-${String(when.getMonth() + 1).padStart(2, "0")}-${String(when.getDate()).padStart(2, "0")} ` +
@@ -232,6 +268,7 @@ export function renderShareHtml({ title, turns, exportedAt } = {}) {
 <div class="doc-meta">导出于 ${stamp} · 共 ${list.length} 轮对话</div>
 <p class="nofiles">本次会话生成的文件（数据表、图表、文稿等）未包含在本分享中；此处只保留对话、思考与工具调用过程。</p>
 </header>
+${flowBlock(flow)}
 ${body}
 <footer>本文件为会话过程的只读存档，双击即可打开，不依赖网络与任何服务。</footer>
 </main>

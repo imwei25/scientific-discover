@@ -175,18 +175,69 @@ test("阅读器：追问的三段（发得出、落得回、跟着转交）在�
 // 这个 bug 真发生过：reader.html 从 litread 专用改成通用壳时，两个调用方（工作台的卡片、
 // 聊天页的重定向）都没跟着改。上一条「壳里不许写死模块 id」的守卫抓不到它——问题在调用方，
 // 而那句兜底默认值是被显式豁免的。所以这里单独钉调用方。
-test("跳进阅读器壳的入口都必须带上 ?m=（否则三个模块全落进文献研读）", () => {
+test("跳进专用界面壳的入口都必须带上 ?m=（否则模块全落进兜底的那一个）", () => {
+  // 壳不止阅读器一个了（还有科研作图的生成器壳），所以判据改成「跳进任何一个 SHELL 表里的页面」。
+  // 两处跳转都是拼出来的（"./" + SHELL[ui] + "?m=" + id），所以既认字面量也认这种拼法。
   for (const f of ["../workspace.html", "../index.html"]) {
     const src = fs.readFileSync(new URL(f, import.meta.url), "utf8")
     for (const ln of src.split("\n")) {
       const code = ln.trim()
       if (code.startsWith("//") || code.startsWith("*") || code.startsWith("/*")) continue
-      if (!/location\.href\s*=\s*["'`]\.\/reader\.html/.test(code)) continue
+      if (!/location\.href\s*=\s*["'`]\.\/(reader\.html|figure\.html|["'`]\s*\+\s*\w*[Ss]hell)/.test(code)
+        && !/location\.href\s*=\s*["'`]\.\/["'`]\s*\+\s*SHELL/.test(code)) continue
       // 带 ?sid= 的那条是「打开某个已存在的会话」——模块由会话绑定决定，不需要 m
       assert.ok(/\?m=/.test(code) || /\?sid=/.test(code),
-        f + " 里这行跳转既没带 ?m= 也没带 ?sid=，用户会落进兜底的文献研读：" + code)
+        f + " 里这行跳转既没带 ?m= 也没带 ?sid=，用户会落进兜底模块：" + code)
     }
   }
+  // 两个页面的 SHELL 表必须【一模一样】：一边加了新壳另一边没加，症状是"从工作台点进去是新界面、
+  // 从左侧会话列表点进去是通用壳"，同一个模块两副面孔，而且没人会去核对这两张表。
+  const tbl = (f) => (fs.readFileSync(new URL(f, import.meta.url), "utf8").match(/SHELL\s*=\s*\{([^}]*)\}/) || [, ""])[1]
+    .split(",").map((s) => s.trim()).filter(Boolean).sort().join(",")
+  assert.equal(tbl("../workspace.html"), tbl("../index.html"), "workspace 与 index 的 SHELL 表对不上")
+})
+
+test("科研作图：生成器壳的配置契约（少一样界面就画不出来）", () => {
+  const gens = Object.entries(WF.WORKFLOWS).filter(([, w]) => w.ui === "figure")
+  assert.equal(gens.length, 1, "目前只该有一个模块用生成器壳")
+  for (const [id, w] of gens) {
+    const g = w.gen
+    const at = (s) => id + ".gen." + s
+    assert.ok(g, at("缺整段配置——页面会退化成「取不到配置」"))
+    for (const k of ["eyebrow", "title", "lead"]) assert.ok(g.intro?.[k], at("intro." + k + " 不能空"))
+    for (const k of ["limits", "wrongDoor", "prompt", "srcLine", "followPrefix", "followPlaceholder"])
+      assert.ok(g[k], at(k + " 不能空"))
+    // 被点名的字段必须真的在 intake 里，否则界面上那一格【什么都不画】而且不报错
+    const has = (fid) => (w.intake || []).some((f) => f.id === fid)
+    assert.ok(has(g.promptField), at("promptField 指向不存在的字段 " + g.promptField))
+    assert.ok(has(g.uploadField), at("uploadField 指向不存在的字段 " + g.uploadField))
+    for (const fid of g.pills || []) {
+      const f = (w.intake || []).find((x) => x.id === fid)
+      assert.ok(f, at("pills 里的 " + fid + " 不在 intake"))
+      assert.ok((f.options || []).length >= 2, at(fid + " 没有 options，画不出 pill"))
+    }
+    for (const fid of g.extraFields || []) assert.ok(has(fid), at("extraFields 里的 " + fid + " 不在 intake"))
+    // 提示词模板里的占位符只认这几个：写错了前端不会替换，会把 {xxx} 原样发给模型
+    for (const ph of (g.prompt.match(/\{[a-z]+\}/g) || []))
+      assert.ok(["{desc}", "{ratio}", "{style}", "{n}", "{src}"].includes(ph), at("prompt 用了未知占位符 " + ph))
+    assert.match(g.srcLine, /\{files\}/, at("srcLine 少了 {files}，上传的材料名带不过去"))
+    // 【已删除的功能，别回潮】提示词模板 chips 会替用户挑内容，与"图上每个名字都得来自用户材料"
+    // 这条铁律直接冲突（2026-08-08 按用户要求去掉）。图生图同理：/img 代理只转 text，没有图输入。
+    assert.ok(!g.templates, at("不要再加提示词模板 chips"))
+    assert.ok(!/i2i|图生图|imageToImage/.test(JSON.stringify(g)), at("图生图后端不支持，别在界面上留入口"))
+  }
+})
+
+test("画幅几档必须与 render_figure.py 的 SIZES 对齐——认不出的比例会静默回落成方图", () => {
+  // 脚本认不出的比例不会报错，它会拿默认的 2048*2048 出图，而界面上仍显示用户选的 9:16。
+  // 出来一张方图，没人看得出是哪里错了。（同一类坑：data_profile.md 的报告名对不上，见下面那条。）
+  const py = fs.readFileSync(new URL("../../.opencode/skills/mechanism-figure/scripts/render_figure.py", import.meta.url), "utf8")
+  const block = (py.match(/SIZES\s*=\s*\{([\s\S]*?)\}/) || [, ""])[1]
+  const known = new Set([...block.matchAll(/"(\d+:\d+)"\s*:/g)].map((m) => m[1]))
+  assert.ok(known.size >= 4, "没解析出 SIZES 表，正则该跟着脚本改")
+  const ratio = WF.WORKFLOWS.figure.intake.find((f) => f.id === "ratio")
+  const bad = (ratio.options || []).map((o) => o.v).filter((v) => !known.has(v))
+  assert.deepEqual(bad, [], "这些画幅脚本不认识：" + bad.join("、"))
 })
 
 test("阅读器壳里不许出现模块 id 字面量（兜底默认值与注释除外）", () => {
@@ -371,6 +422,34 @@ test("模块前言带上步骤链与质量闸（技能集变大后，靠剧本�
   assert.match(line, /≥2 次仍不过就停下问用户/, "无限返工的护栏（AGENTS.md §二）")
   const art = WF.artifactLine("paper", {})
   assert.match(art, /evidence_table\.csv/)
+})
+
+test("一步闸都没有的模块，前言里不该出现闸的规矩（讲一个本模块不存在的机制）", () => {
+  const line = WF.pipelineLine("figure", {})
+  assert.match(line, /本模块的标准流程/)
+  assert.doesNotMatch(line, /质量闸|闸没跑完|闸红着|回退/, "科研作图没有任何 gate 步骤")
+  // 有闸的模块一条都不能少（上面那条断言的反面，防止把规矩误删）
+  assert.match(WF.pipelineLine("review", {}), /闸没跑完不许出件/)
+})
+
+test("科研作图：不用传任何文件就能开工，且不许在这里画数据图", () => {
+  const w = WF.WORKFLOWS.figure
+  // 【本模块存在的前提】它是文生图：用户打字描述就该能开跑。任何一个 files 型字段被标成必填，
+  // 首屏就变成"传了文件才能点开始"，而他手上根本没有文件可传。
+  const mustUpload = (w.intake || []).filter((f) => f.type === "files" && f.required)
+  assert.deepEqual(mustUpload.map((f) => f.id), [], "文生图模块不能强制上传")
+  assert.ok((w.intake || []).find((f) => f.id === "desc")?.required, "那段描述才是必填项")
+  // 自己的生成器壳（web/figure.html）。不能用阅读器壳——那个壳的前提是左边常驻一份【上传的】
+  // 东西，而本模块不要求上传，套进去首屏就是一个传不了也跳不过的上传区。
+  assert.equal(w.ui, "figure")
+  // 由数值画出来的统计图归 stats/paper —— 放行 nature-figure 等于在一个没有数据表、
+  // 没有变量对应面板的模块里画 KM 曲线，那条路只会画出编的数
+  assert.ok(!WF.skillsOf("figure").includes("nature-figure"), "数据图不该在这个模块里画")
+  // 图落在 figures/ 一层子目录（技能默认 --outdir figures）。emits 匹配不上的话这一步永远不变绿，
+  // 用户看到的是"图出来了但进度条差一格"
+  const draw = w.steps.find((s) => s.id === "draw")
+  assert.ok(draw.emits.some((g) => WF.globMatch(g, "figures/fig1.png")), "emits 要认得出 figures/ 里的图")
+  assert.equal(WF.rendererFor("figures/fig1.png"), "figure")
 })
 
 test("综述模块必须给系统综述指路——不给的话用户永远拿不到 PRISMA/RoB 且不知道为什么", () => {
@@ -562,6 +641,37 @@ test("润色模块的语言默认是『保持原文』——默认中文会把�
 test("表单里不许出现内部文档编号（AGENTS.md §X 对医生用户是天书）", () => {
   const dump = JSON.stringify(WF.WORKFLOWS)
   assert.doesNotMatch(dump, /AGENTS\.md/, "把 §X 换成人话，如「这是平台的硬性规定」")
+})
+
+test("界面上是纯文本渲染的字段里不许写 markdown——星号和反引号会原样显示给用户", () => {
+  // 【为什么会反复踩】这份文件同时喂两端：note / pinNote / flow 是【给模型看的】，markdown 越明确
+  // 越好；label / help / hint / 选项文案是【给用户看的】，而前端一律 textContent 渲染
+  // （index.html 的 wfhelp2、步骤条 fsub，reader.html 的 .sh / .askhelp），写了 **粗体**
+  // 就是让医生在表单上读到「**只写你材料里真有的分子**」。两类字段挨着写，抄一句就串了。
+  // 唯二能吃 **粗体** 的是 notice 与 footnote（走 wfInlineMd，且它也只认 **，反引号照样是字面量）。
+  const MD = /\*\*|`|\[[^\]]+\]\([^)]+\)/
+  const bad = []
+  const chk = (where, v) => { if (typeof v === "string" && MD.test(v)) bad.push(where) }
+  for (const [id, w] of Object.entries(WF.WORKFLOWS)) {
+    const fields = [...(w.intake || []), ...(w.steps || []).flatMap((s) => s.form || [])]
+    for (const f of fields) {
+      for (const k of ["label", "help", "placeholder", "section", "uploadText", "unit"]) chk(`${id}.${f.id}.${k}`, f[k])
+      for (const o of f.options || []) chk(`${id}.${f.id} 的选项「${o.t}」`, o.t)
+    }
+    for (const s of w.steps || []) for (const k of ["name", "hint", "sub", "failLabel"]) chk(`${id}.步骤 ${s.id}.${k}`, s[k])
+    chk(`${id}.intakeTitle`, w.intakeTitle); chk(`${id}.intakeSub`, w.intakeSub)
+    const r = w.reader
+    if (!r) continue
+    for (const k of ["title", "lead", "dropTitle", "dropHint", "startText"]) chk(`${id}.intro.${k}`, r.intro?.[k])
+    for (const c of r.intro?.chips || []) chk(`${id}.intro 的 chip「${c.t}」`, c.t)
+    for (const m of r.modes || []) {
+      for (const k of ["label", "badge", "needHint"]) chk(`${id}.模式 ${m.id}.${k}`, m[k])
+      for (const e of m.empty || []) chk(`${id}.模式 ${m.id}.empty`, e)
+    }
+    chk(`${id}.chat.placeholder`, r.chat?.placeholder)
+    chk(`${id}.vars.title`, r.vars?.title); chk(`${id}.vars.sub`, r.vars?.sub)
+  }
+  assert.deepEqual(bad, [], "这些字段是纯文本渲染的，把 markdown 改成「」")
 })
 
 test("选项里的括号说明不能是给界面看的指路语——它会原样进 AI 指令", () => {

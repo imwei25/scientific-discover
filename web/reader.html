@@ -269,6 +269,11 @@ button{font:inherit}
 .notebox.warn{background:#fdf3e6;border:1px solid #f0d7ae;color:#8a5a12}
 .notebox.err{background:#fdecea;border:1px solid #f5c2bd;color:var(--red)}
 .notebox.info{background:#fff;border:1px solid var(--line);color:var(--muted)}
+/* 闸红横幅里的「仍要出件 / 恢复拦截」。做成次要按钮：它是逃生口，不该比"去改稿"更显眼。 */
+.notebox .gbypass{margin-left:8px;padding:3px 10px;border-radius:6px;border:1px solid currentColor;
+  background:transparent;color:inherit;font-size:12px;cursor:pointer;white-space:nowrap}
+.notebox .gbypass:hover{background:rgba(0,0,0,.05)}
+.notebox .gbypass:disabled{opacity:.5;cursor:default}
 
 /* ---- 图标按钮 + 悬停浮出的文字 ----
    工具条上的动作全是图标（换一份 / 最近 / 工作台 / 设置 / 重新生成）。原生 title 要悬停约
@@ -907,6 +912,11 @@ let outputs = []          // /api/outputs 的最近一次结果
 // 钉进模块前言 —— 这条路是踩出来的（默认值传达不到 → 模型替别人的论文改了统计学结论），
 // 别改成只在前端存着。
 let SETTINGS = {}
+// 质量闸状态（服务端 /api/workflow/state）。本壳不画流程条，但【闸必须看得见】：
+// 出件拦截是模块无关的，闸红时用户在这儿一样出不了 Word/PDF，而此前本页对此只字不提。
+let GATES = []        // 判红的闸 step-id
+let GATE_STEPS = []   // 步骤定义，用来把 id 换成中文名
+let BYPASS = false    // 用户是否手动放行了本会话的拦截
 
 // 每个面板的内容。raw = 该模式最近一轮的对话正文；doc = 从产物文件读回来的正文（译文/报告/大纲）。
 // qa  = 挂在这份结果下面的【追问问答】（与 chat 的 msgs 同一种元素：{role,text,files}）。
@@ -1554,8 +1564,10 @@ function renderRail() {
     b.type = "button"
     b.className = "tool-btn" + (k === mode ? " active" : "")
     b.title = M.label
-    const st = k === "chat" ? (S.chat.msgs.length ? "done" : "")
-      : (S[k].status === "running" ? "run" : S[k].status === "error" ? "err" : S[k].status === "done" ? "done" : "")
+    // chat 也走同一套 status。原来它只判 msgs.length，于是聊天轮一开跑右条上就是【绿点（已完成）】，
+    // 失败了还是绿点 —— 而 S.chat.status 本来就在 run()/close()/failRun 里被正常维护着。
+    const st = S[k].status === "running" ? "run" : S[k].status === "error" ? "err"
+      : S[k].status === "done" ? "done" : (k === "chat" && S.chat.msgs.length ? "done" : "")
     b.innerHTML = M.icon + "<span>" + esc(M.label) + "</span>" + (st ? '<i class="dot ' + st + '"></i>' : "")
     b.addEventListener("click", () => onRail(k))
     rail.appendChild(b)
@@ -1606,6 +1618,30 @@ function onRail(k) {
 }
 
 /** 缺前置条件：就地说清缺什么、并把用户送到能补上它的地方（展开变量面板 / 亮出上传按钮） */
+/** 闸红横幅 + 「仍要出件」。只在闸红（或已放行）时出现 —— 常驻一个"绕过质量闸"的按钮
+ *  等于明示可以绕，而绝大多数情况下闸是对的，该改稿就得改稿。与聊天页 gateBypassBtn 同一个接口。 */
+function gateBannerHtml() {
+  if (!GATES.length && !BYPASS) return ""
+  const names = GATES.map((id) => GATE_STEPS.find((s) => s.id === id)?.name || id)
+  const body = BYPASS
+    ? "你已放行本会话的拦截：闸未过也能出件。" + (names.length ? `「${names.join("、")}」仍判定为未通过——出的件没有过闸。` : "")
+    : `质量闸未过：「${names.join("、")}」。Markdown 稿件照常产出，但 Word / PDF 送审件会被拦下，`
+      + "直到改完稿子并重新跑一遍那道闸。若你判断是误判（报告通篇英文、或结论其实是「通过」却被读成红），可以放行。"
+  return '<div class="notebox ' + (BYPASS ? "info" : "err") + '" id="gateBanner">' + esc(body)
+    + ' <button class="gbypass" data-on="' + (BYPASS ? "1" : "0") + '">' + (BYPASS ? "恢复拦截" : "仍要出件") + "</button></div>"
+}
+// 事件委托：横幅是 innerHTML 拼出来的，每次 render 都换新节点，挂不住直接绑定的监听
+document.addEventListener("click", async (e) => {
+  const b = e.target.closest(".gbypass"); if (!b || !sid) return
+  const on = b.dataset.on !== "1"
+  b.disabled = true
+  try {
+    const r = await jget("api/workflow/gate-bypass", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ sid, on }) }).then((x) => x.json())
+    BYPASS = !!r.on
+  } catch (_) { b.disabled = false; return }
+  render(mode)
+})
 function showBlocked(k, miss) {
   const M = MODES[k]
   S[k].err = ""
@@ -1811,6 +1847,7 @@ function render(m) {
   //   完全不知道是缺了分组列还是缺了数值表。（我自己也差点漏过：当时是从 S[k].block
   //   这个状态确认"闸生效"的，而屏幕上根本没有这句话。看状态不等于看见。）
   if (s.block) h += '<div class="notebox warn">' + esc(s.block) + "</div>"
+  h += gateBannerHtml()
   // 配套数值表的清单卡：需要它的模式一直摆在最上面（不是"缺了才出现"），
   // 传了哪几份、还能不能再加、想删哪一份，全在这张卡里，用户不必读完警告再去找地方传。
   h += dataCardHtml(m)
@@ -2132,6 +2169,16 @@ function attach(m, ask) {
       : "正在云端排队（第 " + (d.position || 1) + " 位）…"
     schedule()
   })
+  // 闸状态：轮末服务端会广播一次。不订阅的话，闸刚判红时本页毫无表示，
+  // 用户要等下一次刷新才知道自己的 Word 为什么出不来。
+  es.addEventListener("workflow", (ev) => {
+    try {
+      const w = JSON.parse(ev.data)
+      GATES = w.failed || []
+      if (w.gateBypass !== undefined) BYPASS = !!w.gateBypass
+      render(mode)
+    } catch (_) {}
+  })
   es.addEventListener("done", () => close(""))
   es.addEventListener("aborted", () => close("已终止本轮。", false))
   es.addEventListener("failed", (ev) => { let msg = "本轮出错"; try { msg = JSON.parse(ev.data).message } catch (_) {} close(msg, true) })
@@ -2413,6 +2460,12 @@ async function restore() {
     // 都不做 withDefaults），整份替换会把 installConfig 播下去的默认值又冲掉，
     // 于是刷新一次，弹层里那五个字段重新变回「（不指定）」。
     if (st && st.state && st.state.form) SETTINGS = { ...SETTINGS, ...st.state.form }
+    // ★ 闸状态也要取。本壳服务的四个模块（文稿核查 / 语言润色 / 数据统计 / 文献导读）加起来有
+    //   5 道质量闸，而服务端的【出件拦截是模块无关的】：用户在这儿说"导成 PDF"，闸红就中止本轮。
+    //   此前本页对闸一无所知——既不显示哪道红了，也没有聊天页那个「仍要出件」的逃生口，
+    //   用户面前就是一堵没有尽头的墙（改完重跑闸也不一定能过，判据是关键词匹配、必有误判）。
+    //   不画完整流程条：本模块是"四种模式随时切"、没有先后，硬塞进度条只会一直显示"共 N 步已完成 1 步"。
+    if (st && st.state) { GATES = st.state.failed || []; GATE_STEPS = st.steps || []; BYPASS = !!st.gateBypass }
   } catch (_) {}
 
   // 历史 → 各个面板。同一模式跑过多轮时【后面的覆盖前面的】：用户看到的应该是最近那一版。

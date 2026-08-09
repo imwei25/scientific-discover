@@ -1,0 +1,899 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>科研作图 · Niuma Science</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+/* ============================================================
+   生成器壳 —— 目前只有「科研作图」一个模块用它
+   ------------------------------------------------------------
+   【为什么不复用另外两个壳】
+     · 通用壳（index.html）：填一张表 → 一条对话流。而出图是「写一句 → 看一张图 → 改一句
+       再来一版」，最该占版面的是图本身，而不是对话。
+     · 阅读器壳（reader.html）：左边常驻【用户传上来的】那份东西。这个模块根本不要求上传，
+       套进去首屏就是一个传不了也跳不过的上传区。
+   所以给它一个自己的两栏生成器：左边写要画什么，右边调出图设置，出完在同一页看图、追问、
+   再来一版。
+
+   【本文件不认识任何一句具体文案】提示词框的措辞、几档画幅、三条限制、发给模型的那段话，
+   全部来自 GET /api/modules/<id>/workflow 的 gen 段（定义在 workflows.mjs）。这里只负责
+   照着画、照着发、照着把图摆回来。
+   ★ 推论：本文件里不该出现模块 id 的字面量（兜底默认值与注释除外）—— 与 reader.html 同一条
+     规矩，那边写死过两次，两次都是"别的模块被当成文献研读"。
+
+   【与后端一个字都没多加】全走现成接口：
+     GET  api/modules/<id>/workflow → 本页配置
+     POST api/upload                → 传核对材料（没有 sid 时它会现建一个会话）
+     POST api/chat/start            → 起一轮（body 带 module，服务端据此绑定会话并注入前言）
+     GET  api/chat/attach           → SSE 直播
+     GET  api/outputs / api/raw     → 产物列表与取文件（图就是从这里取的）
+   ============================================================ */
+:root{
+  --bg:#eef1f5;
+  --panel:#ffffff;
+  --panel-soft:#f5f7fa;
+  --text:#1f2329;
+  --muted:#5b6573;
+  --faint:#8a93a0;
+  --accent:#3b6fd4;
+  --accent-deep:#2f5bb8;
+  --accent-soft:rgba(59,111,212,.10);
+  --green:#2bb673;
+  --amber:#d98324;
+  --red:#c0392b;
+  --line:rgba(20,24,30,.10);
+  --line-hi:rgba(20,24,30,.16);
+  --r-lg:16px; --r-md:12px; --r-sm:10px;
+  --shadow-sm:0 2px 8px rgba(20,24,30,.06);
+  --shadow-md:0 6px 22px rgba(20,24,30,.10);
+  --sans:'Space Grotesk',system-ui,-apple-system,"Segoe UI","Microsoft YaHei","PingFang SC",sans-serif;
+}
+*{box-sizing:border-box}
+html,body{height:100%}
+body{margin:0;background:var(--bg);color:var(--text);font-family:var(--sans);font-size:14px;line-height:1.6;-webkit-font-smoothing:antialiased}
+button,textarea,input{font:inherit}
+
+.hbtn{display:inline-flex;align-items:center;gap:6px;height:28px;padding:0 10px;border-radius:8px;border:1px solid var(--line-hi);background:#fff;color:var(--muted);cursor:pointer;font-size:12.5px;transition:.15s;flex:none}
+.hbtn:hover{border-color:var(--accent);color:var(--accent)}
+.hbtn svg{width:14px;height:14px}
+.hbtn[disabled]{opacity:.45;cursor:not-allowed}
+
+/* 「最近」下拉：与阅读器壳同一套（position:fixed + 按触发按钮算坐标） */
+.menu{position:fixed;min-width:270px;max-width:min(380px,92vw);max-height:60vh;overflow:auto;background:#fff;border:1px solid var(--line-hi);border-radius:var(--r-md);box-shadow:var(--shadow-md);padding:6px;display:none;z-index:200}
+.menu.on{display:block}
+.menu .mi{display:block;width:100%;text-align:left;border:none;background:none;padding:8px 10px;border-radius:8px;cursor:pointer;color:var(--text);font-size:13px}
+.menu .mi:hover{background:var(--panel-soft)}
+.menu .mi small{display:block;color:var(--faint);font-size:11px;margin-top:2px}
+.menu .empty{padding:12px 10px;color:var(--faint);font-size:12.5px}
+
+.stage{position:fixed;inset:0;z-index:0;pointer-events:none;background:radial-gradient(ellipse 80% 50% at 50% 0%,rgba(59,111,212,.06) 0%,transparent 60%)}
+.nav{position:fixed;top:14px;right:18px;z-index:5;display:flex;align-items:center;gap:6px}
+
+/* ---------- 首屏：生成器 ---------- */
+.intro[hidden]{display:none}
+.intro{position:relative;z-index:1;min-height:100vh;overflow:auto;padding:52px 20px 48px}
+.wrap{width:min(1080px,100%);margin:0 auto}
+.hdr{text-align:center;margin-bottom:30px}
+.eyebrow{display:inline-flex;align-items:center;gap:7px;padding:5px 12px;background:#fff;border:1px solid var(--line-hi);border-radius:999px;font-size:12px;color:var(--muted);margin-bottom:16px;box-shadow:var(--shadow-sm)}
+.eyebrow .dot{width:6px;height:6px;border-radius:50%;background:var(--accent)}
+.hdr h1{margin:0 0 10px;font-size:30px;font-weight:700;letter-spacing:.01em}
+.hdr p{margin:0 auto;max-width:640px;color:var(--muted);font-size:14px}
+
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:16px;align-items:start}
+@media (max-width:880px){.grid2{grid-template-columns:1fr}.hdr h1{font-size:25px}.intro{padding:34px 14px 40px}}
+.card{background:var(--panel);border:1px solid var(--line-hi);border-radius:var(--r-lg);box-shadow:var(--shadow-sm);padding:20px}
+.card-h{display:flex;align-items:center;gap:9px;margin-bottom:16px;font-size:13.5px;font-weight:600}
+.card-h .ic{width:24px;height:24px;border-radius:7px;background:var(--accent-soft);color:var(--accent);display:grid;place-items:center;flex:none}
+.card-h .ic svg{width:14px;height:14px}
+
+.fld{margin-bottom:18px}
+.fld:last-child{margin-bottom:0}
+.fld > label{display:block;font-size:12.5px;font-weight:600;margin-bottom:8px}
+.fld .req{color:var(--red);margin-left:3px}
+.fld .sh{margin-top:7px;font-size:11.5px;color:var(--faint);line-height:1.7}
+textarea{width:100%;min-height:190px;padding:13px;border:1px solid var(--line-hi);border-radius:var(--r-md);background:var(--panel-soft);color:var(--text);font-size:13.5px;line-height:1.7;resize:vertical;transition:.15s}
+textarea::placeholder{color:var(--faint)}
+textarea:focus{outline:none;border-color:var(--accent);background:#fff;box-shadow:0 0 0 3px var(--accent-soft)}
+input[type=text]{width:100%;height:36px;padding:0 11px;border:1px solid var(--line-hi);border-radius:var(--r-sm);background:var(--panel-soft);color:var(--text);font-size:13px}
+input[type=text]:focus{outline:none;border-color:var(--accent);background:#fff;box-shadow:0 0 0 3px var(--accent-soft)}
+
+/* pill 组（画幅 / 画风 / 张数 / 用途）—— 一律按钮式，不用下拉：
+   四组加起来十几个选项，全做成下拉要点四次才看得全，而它们本来就该一眼扫完。 */
+.pills{display:flex;flex-wrap:wrap;gap:7px}
+.pill{padding:7px 13px;border:1px solid var(--line-hi);border-radius:999px;background:#fff;color:var(--muted);font-size:12.5px;cursor:pointer;transition:.15s}
+.pill:hover{border-color:var(--accent);color:var(--accent)}
+.pill.on{background:var(--accent);border-color:var(--accent);color:#fff}
+
+/* 核对材料：一行式上传，不做大拖拽区 —— 它是选填项，占一屏三分之一会喧宾夺主 */
+.uprow{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.upfiles{display:flex;flex-wrap:wrap;gap:6px}
+.upchip{display:inline-flex;align-items:center;gap:6px;max-width:230px;padding:4px 8px;border:1px solid var(--line-hi);border-radius:999px;background:var(--panel-soft);font-size:12px;color:var(--muted)}
+.upchip span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.upchip button{border:none;background:none;color:var(--faint);cursor:pointer;padding:0;line-height:1;display:grid;place-items:center}
+.upchip button:hover{color:var(--red)}
+.upchip button svg{width:12px;height:12px}
+
+/* 版面预览：一张【示意】骨架，不是生成样图。
+   ★ 刻意不放"效果样图"：那等于拿一张精挑细选的图当承诺，而生图的构图与标签本来就有波动，
+     出来的东西对不上时用户会觉得被骗。这里只如实预览【画幅】和技能锁死的版面结构
+     （N 栏 + 顶部编号圆圈 + 横贯的双层膜），标题也直说是示意。 */
+.preview{width:100%;border:1px solid var(--line);border-radius:var(--r-md);background:var(--panel-soft);overflow:hidden;transition:aspect-ratio .2s}
+.preview svg{display:block;width:100%;height:100%}
+
+.limits{margin:16px 0 0;padding:12px 14px;border-radius:var(--r-md);background:rgba(217,131,36,.08);border:1px solid rgba(217,131,36,.22);color:#7a4a10;font-size:12.5px;line-height:1.75}
+.limits b{color:#5e390c}
+.wrong{margin-top:8px;font-size:12.5px;color:var(--muted);text-align:center}
+.wrong a{color:var(--accent);text-decoration:none}
+.wrong a:hover{text-decoration:underline}
+
+.genbar{margin-top:16px;display:flex;align-items:center;justify-content:space-between;gap:16px;padding:14px 18px;background:var(--panel);border:1px solid var(--line-hi);border-radius:var(--r-lg);box-shadow:var(--shadow-sm);flex-wrap:wrap}
+.genbar .cost{font-size:12.5px;color:var(--muted)}
+.genbar .cost b{color:var(--text);font-weight:600}
+.btn-go{display:inline-flex;align-items:center;gap:8px;height:40px;padding:0 20px;border:none;border-radius:var(--r-md);background:var(--accent);color:#fff;font-size:14px;font-weight:500;cursor:pointer;transition:.15s;box-shadow:0 2px 10px -3px rgba(59,111,212,.6)}
+.btn-go:hover{background:var(--accent-deep)}
+.btn-go[disabled]{opacity:.5;cursor:not-allowed;box-shadow:none}
+.btn-go svg{width:15px;height:15px}
+.btn-go .spin{width:14px;height:14px;border:2px solid rgba(255,255,255,.35);border-top-color:#fff;border-radius:50%;animation:spin .7s linear infinite;display:none}
+.btn-go.busy .spin{display:inline-block}
+.btn-go.busy .play{display:none}
+@keyframes spin{to{transform:rotate(360deg)}}
+.err{margin-top:10px;color:var(--red);font-size:12.5px;text-align:center;display:none}
+.err.on{display:block}
+
+/* ---------- 结果页 ---------- */
+.work[hidden]{display:none}
+.work{position:relative;z-index:1;height:100vh;display:flex;flex-direction:column}
+.wtop{display:flex;align-items:center;gap:10px;padding:10px 16px;background:var(--panel);border-bottom:1px solid var(--line);flex:none}
+.wtop .t{font-weight:600;font-size:13.5px;margin-right:auto;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.wbody{flex:1;min-height:0;display:grid;grid-template-columns:1.35fr 1fr;gap:14px;padding:14px;overflow:hidden}
+@media (max-width:980px){.wbody{grid-template-columns:1fr;overflow:auto}}
+.pane{background:var(--panel);border:1px solid var(--line-hi);border-radius:var(--r-lg);display:flex;flex-direction:column;min-height:0;overflow:hidden}
+.pane-h{display:flex;align-items:center;gap:8px;padding:11px 14px;border-bottom:1px solid var(--line);font-size:13px;font-weight:600;flex:none}
+.pane-h .sp{margin-left:auto;display:flex;gap:6px}
+.pane-b{flex:1;min-height:0;overflow:auto;padding:14px}
+
+.figwrap{display:grid;place-items:center;min-height:220px}
+.figwrap img{max-width:100%;max-height:58vh;border-radius:var(--r-md);border:1px solid var(--line);background:#fff;cursor:zoom-in}
+.thumbs{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px}
+.thumbs img{width:74px;height:74px;object-fit:cover;border-radius:8px;border:2px solid transparent;cursor:pointer;background:#fff}
+.thumbs img.on{border-color:var(--accent)}
+.empty{color:var(--faint);font-size:13px;text-align:center;padding:40px 16px;line-height:1.9}
+.empty b{display:block;color:var(--muted);font-size:14px;margin-bottom:6px}
+
+.outs{border-top:1px solid var(--line);padding:10px 14px;flex:none;max-height:33%;overflow:auto}
+.outs .oh{font-size:11.5px;color:var(--faint);margin-bottom:7px}
+.orow{display:flex;align-items:center;gap:8px;padding:5px 0;font-size:12.5px}
+.orow .nm{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1;color:var(--muted)}
+.orow a{color:var(--faint);display:grid;place-items:center}
+.orow a:hover{color:var(--accent)}
+.orow svg{width:14px;height:14px}
+
+.msgs{display:flex;flex-direction:column;gap:12px}
+.bub{max-width:100%;padding:10px 13px;border-radius:var(--r-md);font-size:13.5px;line-height:1.75;word-break:break-word}
+.bub.me{background:var(--accent-soft);align-self:flex-end;max-width:88%}
+.bub.ai{background:var(--panel-soft);border:1px solid var(--line)}
+.bub.ai img{max-width:100%;border-radius:8px;border:1px solid var(--line);cursor:zoom-in;display:block;margin:6px 0}
+.bub.ai pre{background:#fff;border:1px solid var(--line);border-radius:8px;padding:9px;overflow:auto;font-size:12px}
+.bub.ai code{background:#fff;border:1px solid var(--line);border-radius:4px;padding:0 3px;font-size:12px}
+.bub.ai table{border-collapse:collapse;width:100%;font-size:12.5px;margin:6px 0}
+.bub.ai th,.bub.ai td{border:1px solid var(--line);padding:4px 7px;text-align:left}
+.bub.ai h1,.bub.ai h2,.bub.ai h3{font-size:14px;margin:10px 0 4px}
+.bub.ai p{margin:5px 0}
+.bub.ai ul,.bub.ai ol{margin:5px 0;padding-left:20px}
+.run{display:flex;align-items:center;gap:8px;font-size:12.5px;color:var(--muted);padding:8px 0}
+.run .spin{width:13px;height:13px;border:2px solid var(--line-hi);border-top-color:var(--accent);border-radius:50%;animation:spin .7s linear infinite}
+.runerr{color:var(--red);font-size:12.5px;padding:8px 0}
+
+.composer{border-top:1px solid var(--line);padding:10px;display:flex;gap:8px;align-items:flex-end;flex:none}
+.composer textarea{min-height:44px;max-height:150px;font-size:13px;padding:10px}
+.iconbtn{width:38px;height:38px;flex:none;border-radius:var(--r-sm);border:1px solid var(--line-hi);background:#fff;color:var(--muted);cursor:pointer;display:grid;place-items:center}
+.iconbtn:hover{border-color:var(--accent);color:var(--accent)}
+.iconbtn[disabled]{opacity:.45;cursor:not-allowed}
+.iconbtn svg{width:16px;height:16px}
+.iconbtn.send{background:var(--accent);border-color:var(--accent);color:#fff}
+.iconbtn.send:hover{background:var(--accent-deep);color:#fff}
+
+.lb{position:fixed;inset:0;background:rgba(15,18,22,.82);display:none;place-items:center;z-index:400;padding:24px}
+.lb.on{display:grid}
+.lb img{max-width:94vw;max-height:92vh;border-radius:10px}
+.toast{position:fixed;left:50%;bottom:26px;transform:translateX(-50%) translateY(14px);background:#1f2329;color:#fff;padding:10px 16px;border-radius:10px;font-size:13px;opacity:0;pointer-events:none;transition:.25s;z-index:500;box-shadow:var(--shadow-md)}
+.toast.on{opacity:1;transform:translateX(-50%) translateY(0)}
+</style>
+</head>
+<body>
+
+<div class="stage"></div>
+
+<div class="nav">
+  <button class="hbtn" id="navRecent">最近做过的</button>
+  <button class="hbtn" id="navWs">回工作台</button>
+</div>
+
+<!-- ================= 首屏：生成器 ================= -->
+<section class="intro" id="intro">
+  <div class="wrap">
+    <div class="hdr">
+      <span class="eyebrow"><span class="dot"></span><span id="eyebrow"></span></span>
+      <h1 id="title">科研作图</h1>
+      <p id="lead"></p>
+    </div>
+
+    <div class="grid2">
+      <div class="card">
+        <!-- 卡头别跟下面那个字段标题重名（都叫「要画什么」时，卡片看着像把同一句话说了两遍） -->
+        <div class="card-h"><span class="ic" id="icLeft"></span><span>用文字描述机制</span></div>
+        <div class="fld">
+          <label id="promptLabel">要画什么<span class="req">*</span></label>
+          <textarea id="prompt"></textarea>
+          <div class="sh" id="promptHelp"></div>
+        </div>
+        <div class="fld" id="upField">
+          <label id="upLabel"></label>
+          <div class="uprow">
+            <button class="hbtn" id="btnUp"></button>
+            <div class="upfiles" id="upFiles"></div>
+          </div>
+          <div class="sh" id="upHelp"></div>
+          <input type="file" id="upInput" multiple hidden>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-h"><span class="ic" id="icRight"></span><span>出图设置</span></div>
+        <div id="settings"></div>
+        <div class="fld">
+          <label>版面预览（示意，不是效果图）</label>
+          <div class="preview" id="preview"></div>
+          <div class="sh">按你选的画幅摆出技能锁死的版面骨架：N 栏色块 + 顶部编号圆圈 + 横贯的双层膜。真实内容由你上面那段描述决定。</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="limits" id="limits"></div>
+    <div class="wrong" id="wrongDoor"></div>
+
+    <div class="genbar">
+      <div class="cost" id="cost"></div>
+      <button class="btn-go" id="btnGo">
+        <span class="spin"></span>
+        <span class="play"></span>
+        <span id="goTxt">生成机制图</span>
+      </button>
+    </div>
+    <div class="err" id="err"></div>
+  </div>
+</section>
+
+<!-- ================= 结果页 ================= -->
+<section class="work" id="work" hidden>
+  <div class="wtop">
+    <button class="hbtn" id="btnBack">← 改提示词</button>
+    <div class="t" id="workTitle"></div>
+    <button class="hbtn" id="btnAgain">再来一版</button>
+    <button class="hbtn" id="wRecent">最近</button>
+    <button class="hbtn" id="wWs">工作台</button>
+  </div>
+  <div class="wbody">
+    <div class="pane">
+      <div class="pane-h"><span>图</span><span class="sp"><button class="hbtn" id="btnDl" disabled>下载当前图</button></span></div>
+      <div class="pane-b" id="figBody"></div>
+      <div class="outs" id="outs" hidden></div>
+    </div>
+    <div class="pane">
+      <div class="pane-h"><span>助手</span></div>
+      <div class="pane-b"><div class="msgs" id="msgs"></div></div>
+      <div class="composer">
+        <textarea id="follow" rows="1"></textarea>
+        <button class="iconbtn send" id="btnSend" title="发送"></button>
+        <button class="iconbtn" id="btnStop" title="终止本轮" hidden></button>
+      </div>
+    </div>
+  </div>
+</section>
+
+<div class="menu" id="menu"></div>
+<div class="lb" id="lb"><img alt=""></div>
+<div class="toast" id="toast"></div>
+
+<script>
+"use strict"
+const $ = (id) => document.getElementById(id)
+const esc = (s) => String(s == null ? "" : s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]))
+
+const ICON = {
+  image: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="8.5" cy="9.5" r="1.5"/><path d="M21 16l-5-5-4 4-2-2-5 5"/></svg>',
+  gear: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 00.3 1.9 2 2 0 11-2.8 2.8 1.7 1.7 0 00-1.9-.3 1.7 1.7 0 00-1 1.5 2 2 0 11-4 0 1.7 1.7 0 00-1-1.5 1.7 1.7 0 00-1.9.3 2 2 0 11-2.8-2.8 1.7 1.7 0 00.3-1.9 1.7 1.7 0 00-1.5-1 2 2 0 110-4 1.7 1.7 0 001.5-1 1.7 1.7 0 00-.3-1.9 2 2 0 112.8-2.8 1.7 1.7 0 001.9.3 1.7 1.7 0 001-1.5 2 2 0 114 0 1.7 1.7 0 001 1.5 1.7 1.7 0 001.9-.3 2 2 0 112.8 2.8 1.7 1.7 0 00-.3 1.9 1.7 1.7 0 001.5 1 2 2 0 110 4 1.7 1.7 0 00-1.5 1z"/></svg>',
+  play: '<svg viewBox="0 0 24 24" fill="currentColor" stroke="none"><path d="M8 5.5v13a1 1 0 001.53.85l10-6.5a1 1 0 000-1.7l-10-6.5A1 1 0 008 5.5z"/></svg>',
+  stop: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>',
+  send: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12h15M13 6l6 6-6 6"/></svg>',
+  x: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6L6 18M6 6l12 12"/></svg>',
+  eye: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/></svg>',
+  download: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v11"/><path d="m7 11 5 4 5-4"/><path d="M5 20h14"/></svg>',
+  up: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 16V4M12 4l-4 4M12 4l4 4"/><path d="M4 16v2a2 2 0 002 2h12a2 2 0 002-2v-2"/></svg>',
+}
+
+/* ---- 会话与配置 ---- */
+// 模块 id 从 ?m= 取；取不到才回落。★ 这个回落值是本文件里唯一允许出现的模块 id 字面量，
+// 且它只在"链接被人手改坏了"时才用得上 —— 别再往下面的逻辑里写第二个。
+const QS = new URLSearchParams(location.search)
+const MOD = (QS.get("m") || "figure").replace(/[^A-Za-z0-9_-]/g, "")
+let sid = QS.get("sid") || ""
+let CFG = null            // gen 段
+let FIELDS = {}           // id → 字段定义（gen.intake 下发）
+let vals = {}             // 表单值
+let upNames = []          // 已传的核对材料文件名
+let turns = 0             // 本会话已经发过几轮（决定要不要带 module / 要不要加追问前缀）
+let RUN = null            // 本轮直播状态
+let msgs = []             // 结果页的对话
+let figs = []             // 当前的图（产物文件名）
+let curFig = ""
+let outputs = []
+
+const sidQ = () => (sid ? "&sid=" + encodeURIComponent(sid) : "")
+async function jget(url, opt) {
+  const r = await fetch(url, opt)
+  if (r.status === 401) { location.href = "./login"; throw new Error("unauthorized") }
+  return r
+}
+function toast(msg) { const t = $("toast"); t.textContent = msg; t.classList.add("on"); setTimeout(() => t.classList.remove("on"), 2400) }
+function showErr(m) { const e = $("err"); e.textContent = m || ""; e.className = "err" + (m ? " on" : "") }
+
+/* ---- 极简 markdown（够渲染助手的回答；口径抄阅读器壳，只少不多）---- */
+function mdImg(u) {
+  if (!/\.(png|jpe?g|gif|webp|svg|bmp)$/i.test(u)) return null
+  if (/^https?:/i.test(u)) return null                     // 外链图片一概不加载
+  const m = u.replace(/^\.\//, "").match(/^([^\/?#:]+(?:\/[^\/?#:]+)?)$/)   // 允许一层子目录（figures/fig1.png）
+  return m ? "api/raw?name=" + encodeURIComponent(m[1]) + sidQ() : null
+}
+function mdInline(s) {
+  const codes = []
+  s = s.replace(/`([^`]+)`/g, (m, c) => { codes.push(c); return "@@C" + (codes.length - 1) + "@@" })
+  s = s.replace(/!\[([^\]]*)\]\(([^)\s]+)[^)]*\)/g, (m, a, u) => {
+    const src = mdImg(u)
+    return src ? '<img src="' + src + '" alt="' + a.replace(/"/g, "&quot;") + '">' : esc(a || u)
+  })
+  s = s.replace(/\[([^\]]+)\]\(([^)\s]+)[^)]*\)/g, (m, t, u) => /^(https?:\/\/|api\/)/i.test(u) ? '<a href="' + u.replace(/"/g, "%22") + '" target="_blank" rel="noopener">' + t + "</a>" : t)
+  s = s.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
+  s = s.replace(/~~([^~]+)~~/g, "<del>$1</del>")
+  return s.replace(/@@C(\d+)@@/g, (m, i) => "<code>" + codes[+i] + "</code>")
+}
+const splitRow = (l) => l.trim().replace(/^\|/, "").replace(/\|$/, "").split("|").map((c) => c.trim())
+function renderMd(src) {
+  src = (src || "").replace(/\r\n/g, "\n")
+  const blocks = []
+  src = src.replace(/```[\w-]*\n?([\s\S]*?)```/g, (m, code) => { blocks.push("<pre><code>" + esc(code.replace(/\n$/, "")) + "</code></pre>"); return "@@B" + (blocks.length - 1) + "@@" })
+  const lines = esc(src).split("\n"), out = []
+  let i = 0
+  const blank = (l) => /^\s*$/.test(l)
+  while (i < lines.length) {
+    const l = lines[i]
+    const pm = l.match(/^@@B(\d+)@@\s*$/); if (pm) { out.push(blocks[+pm[1]]); i++; continue }
+    if (blank(l)) { i++; continue }
+    const h = l.match(/^(#{1,6})\s+(.*)$/)
+    if (h) { const n = Math.min(3, h[1].length); out.push("<h" + n + ">" + mdInline(h[2].trim()) + "</h" + n + ">"); i++; continue }
+    if (/\|/.test(l) && i + 1 < lines.length && /^\s*\|?[\s:|-]*$/.test(lines[i + 1]) && /-/.test(lines[i + 1])) {
+      const head = splitRow(l); i += 2; const rows = []
+      while (i < lines.length && /\|/.test(lines[i]) && !blank(lines[i])) { const r = splitRow(lines[i]); while (r.length < head.length) r.push(""); rows.push(r.slice(0, head.length)); i++ }
+      out.push("<table><thead><tr>" + head.map((c) => "<th>" + mdInline(c) + "</th>").join("") + "</tr></thead><tbody>"
+        + rows.map((r) => "<tr>" + r.map((c) => "<td>" + mdInline(c) + "</td>").join("") + "</tr>").join("") + "</tbody></table>")
+      continue
+    }
+    if (/^\s*([-*+]|\d+[.)])\s+/.test(l)) {
+      const ordered = /^\s*\d+[.)]\s+/.test(l), items = []
+      while (i < lines.length && /^\s*([-*+]|\d+[.)])\s+/.test(lines[i])) { items.push(lines[i].replace(/^\s*([-*+]|\d+[.)])\s+/, "")); i++ }
+      out.push((ordered ? "<ol>" : "<ul>") + items.map((t) => "<li>" + mdInline(t) + "</li>").join("") + (ordered ? "</ol>" : "</ul>"))
+      continue
+    }
+    const buf = [l]; i++
+    while (i < lines.length && !blank(lines[i]) && !/^\s*(#{1,6}\s|([-*+]|\d+[.)])\s|@@B\d+@@)/.test(lines[i])) { buf.push(lines[i]); i++ }
+    out.push("<p>" + mdInline(buf.join("<br>")) + "</p>")
+  }
+  return out.join("\n").replace(/@@B(\d+)@@/g, (m, x) => blocks[+x] || "")
+}
+// 只认 **粗体**，与工作台的 wfInlineMd 同口径（那三条限制里就有粗体）
+const inlineB = (s) => esc(s).replace(/\*\*([^*]+)\*\*/g, "<b>$1</b>")
+
+/* ============================================================
+   首屏渲染：全部照 gen 配置画
+   ============================================================ */
+function renderIntro() {
+  const I = CFG.intro || {}
+  $("eyebrow").textContent = I.eyebrow || ""
+  $("title").textContent = I.title || ""
+  document.title = (I.title || "科研作图") + " · Niuma Science"
+  $("lead").textContent = I.lead || ""
+  $("icLeft").innerHTML = ICON.image
+  $("icRight").innerHTML = ICON.gear
+  // ★ 这两颗按钮的 HTML 里是空的，而 JS 只赋 disabled/hidden，从来没人填过图标 ——
+  //   实测渲染出来就是一个 38×38 的纯蓝空方块（发送，.iconbtn.send 有实心蓝底）和一个纯白空方块
+  //   （终止）。ICON.send / ICON.stop 在本文件的引用次数都是 0。
+  $("btnSend").innerHTML = ICON.send
+  $("btnStop").innerHTML = ICON.stop
+  $("limits").innerHTML = inlineB(CFG.limits || "")
+  $("wrongDoor").textContent = CFG.wrongDoor || ""
+
+  const pf = FIELDS[CFG.promptField]
+  if (pf) {
+    $("promptLabel").innerHTML = esc(pf.label) + '<span class="req">*</span>'
+    $("prompt").placeholder = pf.placeholder || ""
+    $("promptHelp").textContent = pf.help || ""
+    // ★ 这一行漏过一次：不把输入框接回 vals，点「生成」永远只会说"先说说你要画什么"——
+    //   而框里明明写满了字。renderIntro 只跑一次，绑在这里不会重复挂监听。
+    $("prompt").addEventListener("input", () => { vals[CFG.promptField] = $("prompt").value; showErr("") })
+  }
+  const uf = FIELDS[CFG.uploadField]
+  if (uf) {
+    $("upLabel").textContent = uf.label + "（选填）"
+    $("btnUp").innerHTML = ICON.up + "<span>" + esc(uf.uploadText || "上传") + "</span>"
+    $("upHelp").textContent = uf.help || ""
+    $("upInput").setAttribute("accept", (uf.accept || "").replace(/\s/g, "").replace(/\//g, ","))
+  } else $("upField").hidden = true
+
+  renderSettings()
+  renderPreview()
+  renderCost()
+}
+
+/** 右卡：把 gen.pills 里点名的字段挨个画成一排 pill；条件字段（extraFields）按 when 显隐 */
+function renderSettings() {
+  const box = $("settings")
+  box.innerHTML = ""
+  for (const id of CFG.pills || []) {
+    const f = FIELDS[id]
+    if (!f) continue
+    const fld = document.createElement("div"); fld.className = "fld"
+    const lab = document.createElement("label"); lab.textContent = f.label
+    const row = document.createElement("div"); row.className = "pills"
+    for (const o of f.options || []) {
+      const b = document.createElement("button")
+      b.type = "button"; b.className = "pill" + (vals[id] === o.v ? " on" : ""); b.textContent = o.t
+      b.addEventListener("click", () => { vals[id] = o.v; renderSettings(); renderPreview(); renderCost() })
+      row.appendChild(b)
+    }
+    fld.append(lab, row)
+    if (f.help) { const h = document.createElement("div"); h.className = "sh"; h.textContent = f.help; fld.appendChild(h) }
+    box.appendChild(fld)
+  }
+  for (const id of CFG.extraFields || []) {
+    const f = FIELDS[id]
+    if (!f || !condOk(f.when)) continue
+    const fld = document.createElement("div"); fld.className = "fld"
+    const lab = document.createElement("label"); lab.textContent = f.label
+    const inp = document.createElement("input")
+    inp.type = "text"; inp.value = vals[id] || ""; inp.placeholder = f.placeholder || ""
+    inp.addEventListener("input", () => { vals[id] = inp.value })
+    fld.append(lab, inp)
+    box.appendChild(fld)
+  }
+}
+/** 只实现 eq —— 本模块的条件字段只用得到它。将来要更多条件请把 workflows.mjs 的 condOk 抄过来，
+ *  别在这里发明第二套语义（两套判据不一致时，界面显示的与服务端算的会不是同一份表单）。 */
+const condOk = (c) => !c || (("eq" in c) ? vals[c.field] === c.eq : true)
+
+/* 版面预览：纯 SVG 骨架，随画幅变形。不联网、不放样图（理由见 CSS 里 .preview 那段注释）。 */
+const RATIO_N = { "1:1": [1, 1], "16:9": [16, 9], "9:16": [9, 16], "4:3": [4, 3], "3:4": [3, 4] }
+function renderPreview() {
+  const r = vals.ratio || "1:1"
+  const [rw, rh] = RATIO_N[r] || [1, 1]
+  const el = $("preview")
+  el.style.aspectRatio = rw + " / " + rh
+  const W = 400, H = Math.round(400 * rh / rw)
+  // 窄画幅摆不下 4 栏：竖图给 2 栏，其余 4 栏。只是示意，别当成"技能一定画几栏"——
+  // 真实栏数由机制的真实步数决定（1–6 栏，见 SKILL.md 的构图铁律）。
+  const cols = rh > rw ? 2 : 4
+  const pad = 12, cw = (W - pad * 2) / cols
+  const tint = ["#fdf6e3", "#e8f1fb", "#fbeef2", "#fdeee8"]
+  let s = '<svg viewBox="0 0 ' + W + " " + H + '" preserveAspectRatio="none" xmlns="http://www.w3.org/2000/svg">'
+  s += '<rect width="' + W + '" height="' + H + '" fill="#ffffff"/>'
+  for (let i = 0; i < cols; i++) {
+    const x = pad + i * cw
+    s += '<rect x="' + x + '" y="' + (pad + 22) + '" width="' + (cw - 6) + '" height="' + (H - pad * 2 - 22) + '" rx="6" fill="' + tint[i % tint.length] + '"/>'
+    s += '<circle cx="' + (x + cw / 2 - 3) + '" cy="' + (pad + 8) + '" r="8" fill="none" stroke="#9aa4b2" stroke-width="1.2"/>'
+    s += '<text x="' + (x + cw / 2 - 3) + '" y="' + (pad + 11.5) + '" font-size="9" fill="#7b8694" text-anchor="middle">' + (i + 1) + "</text>"
+    // 每栏里两条占位标签 + 一个图标位（对应铁律「位置锚 + 实体标签 + 箭头 + 结局图标」）
+    s += '<rect x="' + (x + 9) + '" y="' + (H * 0.52) + '" width="' + Math.max(16, cw - 26) + '" height="5" rx="2.5" fill="#c3cbd6"/>'
+    s += '<rect x="' + (x + 9) + '" y="' + (H * 0.52 + 11) + '" width="' + Math.max(12, cw * 0.55) + '" height="5" rx="2.5" fill="#d5dbe4"/>'
+    s += '<circle cx="' + (x + cw / 2 - 3) + '" cy="' + (H * 0.72) + '" r="' + Math.min(11, cw / 5) + '" fill="none" stroke="#b6bfcb" stroke-width="1.4"/>'
+    if (i < cols - 1) {
+      const ax = x + cw - 7
+      s += '<path d="M' + (ax - 5) + " " + (H * 0.72) + "h9m-3.5-3.5 3.5 3.5-3.5 3.5" + '" fill="none" stroke="#8b95a3" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>'
+    }
+  }
+  // 顶部横贯的双层磷脂膜（铁律 2：不写这一条，模型极易把左边画成一个占满高度的巨大竖细胞）
+  const my = pad + 34
+  s += '<path d="M' + pad + " " + my + "H" + (W - pad) + '" stroke="#a8b3c1" stroke-width="1.6"/>'
+  s += '<path d="M' + pad + " " + (my + 5) + "H" + (W - pad) + '" stroke="#a8b3c1" stroke-width="1.6"/>'
+  s += "</svg>"
+  el.innerHTML = s
+}
+
+/** 生成条左边那句话。★ 只说【真实存在】的代价：出几张图、计入当天生图张数。
+ *  不编"本次消耗 N 积分"——生图张数与模型积分是两套账，把它们混成一个数字是在骗用户。 */
+function renderCost() {
+  const n = Number(vals.n || 1) || 1
+  $("cost").innerHTML = "本次出 <b>" + n + "</b> 张候选图，计入你今天的生图张数（按账号档位限量，每天 0 点 UTC 重置）。"
+  $("goTxt").textContent = "生成机制图"
+  $("btnGo").querySelector(".play").innerHTML = ICON.play
+}
+
+/* ---- 核对材料上传 ---- */
+$("btnUp").addEventListener("click", () => $("upInput").click())
+$("upInput").addEventListener("change", async (e) => {
+  const files = [...(e.target.files || [])]
+  e.target.value = ""
+  for (const f of files) {
+    try {
+      const r = await jget("api/upload?name=" + encodeURIComponent(f.name) + (sid ? "&sid=" + encodeURIComponent(sid) : ""), { method: "POST", body: f })
+      const j = await r.json().catch(() => null)
+      if (!r.ok || !j || !j.ok) throw new Error((j && j.err) || "HTTP " + r.status)
+      sid = j.sid || sid
+      keepUrl()
+      if (!upNames.includes(f.name)) upNames.push(f.name)
+    } catch (err) {
+      if (String((err && err.message) || err) === "unauthorized") return
+      showErr("「" + f.name + "」没传上去：" + ((err && err.message) || err))
+    }
+  }
+  renderUpFiles()
+})
+function renderUpFiles() {
+  const box = $("upFiles"); box.innerHTML = ""
+  upNames.forEach((n, i) => {
+    const c = document.createElement("span"); c.className = "upchip"
+    const t = document.createElement("span"); t.textContent = n
+    const x = document.createElement("button"); x.title = "移除"; x.innerHTML = ICON.x
+    // 只从"这次要带给模型的清单"里移除，不删服务器上的文件：删文件是不可逆的，
+    // 而用户在这里的意图多半只是"这一版先不带它"。
+    x.addEventListener("click", () => { upNames.splice(i, 1); renderUpFiles() })
+    c.append(t, x); box.appendChild(c)
+  })
+}
+const keepUrl = () => { try { history.replaceState(null, "", location.pathname + "?m=" + encodeURIComponent(MOD) + (sid ? "&sid=" + encodeURIComponent(sid) : "")) } catch (_) {} }
+
+/* ============================================================
+   生成
+   ============================================================ */
+function composePrompt() {
+  const lab = (id) => (FIELDS[id]?.options || []).find((o) => o.v === vals[id])?.t || vals[id] || ""
+  const src = upNames.length && CFG.srcLine
+    ? CFG.srcLine.replace("{files}", upNames.map((n) => "`" + n + "`").join("、"))
+    : ""
+  return (CFG.prompt || "")
+    .replace("{desc}", vals[CFG.promptField] || "")
+    .replace(/\{ratio\}/g, vals.ratio || "1:1")
+    .replace(/\{style\}/g, lab("style"))
+    .replace(/\{n\}/g, String(vals.n || 1))
+    .replace("{src}", src)
+    .trim()
+}
+
+$("btnGo").addEventListener("click", () => start(composePrompt(), "生成机制图"))
+
+async function start(q, bubbleText) {
+  if (!q || RUN) return
+  const isFirst = !turns
+  if (isFirst && !String(vals[CFG.promptField] || "").trim()) {
+    showErr("先说说你要画什么——这段描述是唯一的依据，空着它没法开工。")
+    $("prompt").focus()
+    return
+  }
+  showErr("")
+  $("btnGo").classList.add("busy"); $("btnGo").disabled = true
+  $("goTxt").textContent = "正在准备…"
+  RUN = { label: "正在提交…", tools: 0, es: null }
+  msgs.push({ role: "me", text: bubbleText })
+  toWork(); render()
+
+  let j = null, why = "网络异常"
+  try {
+    const resp = await jget("api/chat/start", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      // module 只在会话还没发过消息时起作用；上传接口可能已经把会话建出来了，不带的话
+      // 它会被判成自由对话——没有模块前言、没有技能闸，而界面上一点异样都看不出来。
+      // wfForm 每轮都带：服务端那侧是 merge，重复发无害，而漏发会让 pin 字段退回默认值。
+      body: JSON.stringify({ q, sid, module: turns ? undefined : MOD, wfForm: formValues() }),
+    })
+    if (resp.status === 429) why = "请求过于频繁，请稍后再试"
+    try { j = await resp.json() } catch (_) { if (resp.status !== 429) why = "服务端错误（HTTP " + resp.status + "）" }
+  } catch (e) {
+    if (String((e && e.message) || e) === "unauthorized") return
+  }
+  resetGo()
+
+  if (!j) { failRun(why); return }
+  if (j.sid) { sid = j.sid; keepUrl() }
+  if (!j.sent) {
+    failRun((j.running ? "上一轮还在进行中，这一条没有发出去。" : "") + (j.err || j.notice || "发送失败"))
+    msgs.pop(); render()
+    return
+  }
+  turns++
+  attach()
+}
+function resetGo() { $("btnGo").classList.remove("busy"); $("btnGo").disabled = false; $("goTxt").textContent = "生成机制图" }
+function failRun(msg) { RUN = null; msgs.push({ role: "err", text: msg }); render() }
+
+/** 表单值：只交服务端认得的字段（gen.intake 就是从 intake 里挑出来的那几个） */
+function formValues() {
+  const v = {}
+  for (const id of Object.keys(FIELDS)) if (vals[id] !== undefined && vals[id] !== "") v[id] = vals[id]
+  if (upNames.length && CFG.uploadField) v[CFG.uploadField] = [...upNames]
+  return v
+}
+
+function attach() {
+  const es = new EventSource("api/chat/attach?sid=" + encodeURIComponent(sid))
+  if (!RUN) RUN = { label: "正在生成…", tools: 0, es: null }
+  RUN.es = es
+  RUN.label = "等待模型输出…"
+  let aiMsg = null, finished = false, paintT = 0
+  const schedule = () => { if (!paintT) paintT = setTimeout(() => { paintT = 0; render() }, 120) }
+  const close = async (note, isErr) => {
+    if (finished) return
+    finished = true
+    if (paintT) { clearTimeout(paintT); paintT = 0 }
+    es.close(); RUN = null
+    if (note) msgs.push({ role: isErr ? "err" : "tag", text: note })
+    await refreshOutputs()
+    render()
+  }
+  es.addEventListener("tool", (ev) => {
+    let d; try { d = JSON.parse(ev.data) } catch (_) { return }
+    if (d.tool === "skill") { RUN.label = "正在跑技能 " + (d.skill || "") + "…"; schedule(); return }
+    RUN.label = d.title ? d.tool + " · " + String(d.title).slice(0, 40) : "工具运行中…"
+    schedule()
+  })
+  es.addEventListener("reasoning", () => { if (RUN) { RUN.label = "思考中…"; schedule() } })
+  const onText = (ev) => {
+    let t = ""
+    try { t = typeof JSON.parse(ev.data) === "string" ? JSON.parse(ev.data) : (JSON.parse(ev.data).text || "") } catch (_) { return }
+    if (!t) return
+    if (RUN) RUN.label = "正在输出…"
+    if (!aiMsg) { aiMsg = { role: "ai", text: "" }; msgs.push(aiMsg) }
+    aiMsg.text = t
+    schedule()
+  }
+  es.addEventListener("text", onText)
+  es.addEventListener("final", onText)
+  // 服务端推的是【本轮新建 / 改动的】产物文件名数组。图一出来就先摆上，不等整轮结束 ——
+  // 出图往往在一轮的中段，让用户多等两分钟才看到图是没道理的。
+  es.addEventListener("files", async () => { await refreshOutputs(); render() })
+  es.addEventListener("done", () => close(""))
+  es.addEventListener("aborted", () => close("本轮已终止。", true))
+  // ★ 这三个事件不订阅的后果是【把所有真实失败谎报成断线】。服务端有 8 处 broadcast("failed")
+  //   ——今日额度用尽、云端积分触顶、首输出看门狗超时、质量闸拦出件、越权调技能、上游模型出错、
+  //   卡死护栏、网关内部异常 —— 广播完立刻 finish() 关掉 SSE，浏览器于是触发【原生】error
+  //   （没有 .data）→ 落进下面那条兜底 → 弹「连接中断了，这一轮可能还在后台跑，刷新本页可以续上」。
+  //   真实原因一个字都不显示，而"后台还在跑"是假的：那一轮已经收场了，用户会反复刷新等一个
+  //   永远不会来的结果。reader.html 与 index.html 都订阅了这几个，只有本页漏了。
+  es.addEventListener("failed", (ev) => {
+    let m = "本轮出错"
+    try { m = JSON.parse(ev.data).message || m } catch (_) {}
+    close(m, true)
+  })
+  es.addEventListener("idle", () => close(""))          // 服务端说这轮已经不在跑了：正常收场，别报错
+  es.addEventListener("notice", (ev) => {               // 非致命提示（如"模型这一轮没返回任何文本"）
+    let m = ""
+    try { m = JSON.parse(ev.data).message || "" } catch (_) {}
+    if (m) { msgs.push({ role: "tag", text: m }); schedule() }
+  })
+  es.addEventListener("queue", (ev) => {                // 云端排队：不说的话界面看起来就是卡死
+    let d; try { d = JSON.parse(ev.data) } catch (_) { return }
+    if (!RUN) return
+    RUN.label = !d || !d.queued ? "等待模型输出…"
+      : d.rateLimited ? "上游限速中，正在等待重试…"
+      : "正在云端排队（第 " + (d.position || 1) + " 位）…"
+    schedule()
+  })
+  es.addEventListener("error", (ev) => {
+    let m = ""
+    try { m = JSON.parse(ev.data).message } catch (_) {}
+    // EventSource 断线也会触发 error（没有 data）。这时不当成失败：轮可能还在后台跑，
+    // 刷新页面能续上；直接报错会让用户以为白跑了。
+    if (m) close(m, true)
+    else if (!finished) { finished = true; es.close(); RUN = null; msgs.push({ role: "tag", text: "连接中断了。这一轮可能还在后台跑，刷新本页可以续上。" }); render() }
+  })
+}
+
+$("btnStop").addEventListener("click", async () => {
+  if (!sid) return
+  try { await jget("api/chat/abort?sid=" + encodeURIComponent(sid), { method: "POST" }) } catch (_) {}
+})
+
+/* ---- 产物 ---- */
+const IMG_RE = /\.(png|jpe?g|webp)$/i
+async function refreshOutputs() {
+  try { outputs = await jget("api/outputs?sid=" + encodeURIComponent(sid)).then((r) => (r.ok ? r.json() : [])) } catch (_) { outputs = [] }
+  const next = outputs.map((f) => f.name).filter((n) => IMG_RE.test(n))
+  // 新出的图自动切成当前图：用户点了"再来一版"就是想看新的那张，还得自己去缩略图里点一下很怪
+  const fresh = next.find((n) => !figs.includes(n))
+  figs = next
+  // 回落取 figs[0] 而不是 figs[length-1]：/api/outputs 是【按 mtime 倒序】返回的，
+  // 末位是最旧那张 —— 原来在"当前图被删/换会话"时会把最早的一版摆出来当最新。
+  if (fresh || !figs.includes(curFig)) curFig = fresh || figs[0] || ""
+}
+
+/* ============================================================
+   结果页渲染
+   ============================================================ */
+function toWork() { $("intro").hidden = true; $("work").hidden = false; $("workTitle").textContent = (CFG.intro && CFG.intro.title) || "" }
+function toIntro() { $("work").hidden = true; $("intro").hidden = false }
+
+function render() {
+  // ---- 图 ----
+  const fb = $("figBody")
+  fb.innerHTML = ""
+  if (curFig) {
+    const w = document.createElement("div"); w.className = "figwrap"
+    const img = document.createElement("img")
+    img.src = "api/raw?name=" + encodeURIComponent(curFig) + sidQ()
+    img.alt = curFig
+    img.addEventListener("click", () => lightbox(img.src))
+    w.appendChild(img); fb.appendChild(w)
+    if (figs.length > 1) {
+      const th = document.createElement("div"); th.className = "thumbs"
+      for (const n of figs) {
+        const t = document.createElement("img")
+        t.src = "api/raw?name=" + encodeURIComponent(n) + sidQ()
+        t.className = n === curFig ? "on" : ""
+        t.title = n
+        t.addEventListener("click", () => { curFig = n; render() })
+        th.appendChild(t)
+      }
+      fb.appendChild(th)
+    }
+    $("btnDl").disabled = false
+  } else {
+    const e = document.createElement("div"); e.className = "empty"
+    e.innerHTML = RUN
+      ? "<b>正在出图…</b>先编译提示词并过反编造闸，再送去生图。整个过程通常一到三分钟。"
+      : "<b>还没有图</b>右边说一句就能开始。出来的图会摆在这里，可以点开看大图、直接下载。"
+    fb.appendChild(e)
+    $("btnDl").disabled = true
+  }
+
+  // ---- 产物条 ----
+  const nonImg = outputs.filter((f) => !IMG_RE.test(f.name))
+  const ob = $("outs")
+  ob.hidden = !nonImg.length
+  if (nonImg.length) {
+    ob.innerHTML = '<div class="oh">配套产物</div>'
+    for (const f of nonImg.slice(0, 12)) {
+      const row = document.createElement("div"); row.className = "orow"
+      const nm = document.createElement("span"); nm.className = "nm"; nm.textContent = f.name
+      const dl = document.createElement("a"); dl.href = "api/download?name=" + encodeURIComponent(f.name) + sidQ(); dl.title = "下载"; dl.innerHTML = ICON.download
+      row.append(nm, dl); ob.appendChild(row)
+    }
+  }
+
+  // ---- 对话 ----
+  const mb = $("msgs")
+  mb.innerHTML = ""
+  for (const m of msgs) {
+    const d = document.createElement("div")
+    if (m.role === "me") { d.className = "bub me"; d.textContent = m.text }
+    else if (m.role === "ai") { d.className = "bub ai"; d.innerHTML = renderMd(m.text) }
+    else if (m.role === "err") { d.className = "runerr"; d.textContent = "⚠ " + m.text }
+    else { d.className = "run"; d.textContent = m.text }
+    mb.appendChild(d)
+  }
+  if (RUN) {
+    const r = document.createElement("div"); r.className = "run"
+    r.innerHTML = '<span class="spin"></span><span>' + esc(RUN.label) + "</span>"
+    mb.appendChild(r)
+  }
+  $("btnStop").hidden = !RUN
+  $("btnSend").disabled = !!RUN
+  mb.parentElement.scrollTop = mb.parentElement.scrollHeight
+}
+
+function lightbox(src) { const lb = $("lb"); lb.querySelector("img").src = src; lb.classList.add("on") }
+$("lb").addEventListener("click", () => $("lb").classList.remove("on"))
+document.addEventListener("click", (e) => {
+  const t = e.target
+  if (t && t.tagName === "IMG" && t.closest(".bub.ai")) lightbox(t.src)
+})
+
+$("btnDl").addEventListener("click", () => { if (curFig) location.href = "api/download?name=" + encodeURIComponent(curFig) + sidQ() })
+$("btnBack").addEventListener("click", toIntro)
+$("btnAgain").addEventListener("click", () => {
+  // 「再来一版」= 沿用同一份 spec 重出，不是从头再走三步。这句前缀就是告诉模型这件事的。
+  start((CFG.followPrefix || "") + "再出一版，构图与内容不变，换一次随机构图。", "再来一版")
+})
+
+/* ---- 追问 ---- */
+const fu = $("follow")
+fu.addEventListener("input", () => { fu.style.height = "auto"; fu.style.height = Math.min(150, fu.scrollHeight) + "px" })
+fu.addEventListener("keydown", (e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendFollow() } })
+$("btnSend").addEventListener("click", sendFollow)
+function sendFollow() {
+  const t = fu.value.trim()
+  if (!t || RUN) return
+  fu.value = ""; fu.style.height = "auto"
+  start((turns ? (CFG.followPrefix || "") : "") + t, t)
+}
+
+/* ---- 顶部导航：最近做过的 / 回工作台 ---- */
+const goWs = () => { location.href = "./workspace.html" }
+$("navWs").addEventListener("click", goWs)
+$("wWs").addEventListener("click", goWs)
+$("navRecent").addEventListener("click", (e) => openRecent(e.currentTarget))
+$("wRecent").addEventListener("click", (e) => openRecent(e.currentTarget))
+async function openRecent(anchor) {
+  const menu = $("menu")
+  if (menu.classList.contains("on")) { menu.classList.remove("on"); return }
+  const r = anchor.getBoundingClientRect()
+  menu.style.top = (r.bottom + 6) + "px"
+  menu.style.left = Math.max(8, Math.min(r.left, window.innerWidth - 290)) + "px"
+  menu.innerHTML = '<div class="empty">正在读…</div>'
+  menu.classList.add("on")
+  let list = []
+  try {
+    const j = await jget("api/sessions").then((x) => x.json())
+    // 只列本模块的会话：混进别的模块的会话，点进来会是一条没有图、没有设置的裸对话
+    list = ((j && j.sessions) || []).filter((s) => s.module === MOD).slice(0, 20)
+  } catch (_) {}
+  if (!list.length) { menu.innerHTML = '<div class="empty">还没有本模块的会话</div>'; return }
+  menu.innerHTML = ""
+  for (const s of list) {
+    const b = document.createElement("button"); b.className = "mi"
+    // /api/sessions 回的 updated 是 epoch 毫秒【数字】（而且没有 created 字段）——原样 esc 出来
+    // 就是一串 13 位数字「1754712345678」。reader.html 同一处走的是 toLocaleString，这里对齐。
+    b.innerHTML = esc((s.title || "未命名").slice(0, 40)) + "<small>" + (s.running ? "生成中 · " : "")
+      + esc(new Date(s.updated || Date.now()).toLocaleString("zh-CN", { hour12: false })) + "</small>"
+    b.addEventListener("click", () => { location.href = location.pathname + "?m=" + encodeURIComponent(MOD) + "&sid=" + encodeURIComponent(s.id) })
+    menu.appendChild(b)
+  }
+}
+document.addEventListener("click", (e) => { if (!e.target.closest("#menu") && !e.target.closest(".hbtn")) $("menu").classList.remove("on") })
+
+/* ============================================================
+   启动
+   ============================================================ */
+;(async () => {
+  let wf = null
+  // ★ 接口回的是 {workflow:{...}}，要剥一层。直接把整个响应当配置用的话，页面会静默退化成
+  //   「取不到配置」那条兜底 —— 而 F12 里那次请求是 200、内容完整，很难往这儿想。
+  try { wf = ((await jget("api/modules/" + encodeURIComponent(MOD) + "/workflow").then((r) => (r.ok ? r.json() : null))) || {}).workflow } catch (e) {
+    if (String((e && e.message) || e) === "unauthorized") return
+  }
+  if (!wf || !wf.gen) {
+    document.body.innerHTML = '<div style="padding:60px;text-align:center;color:#5b6573">'
+      + "取不到本模块的配置（网关可能正忙或还在启动）。稍等片刻刷新本页即可。"
+      + '<br><br><a href="./workspace.html" style="color:#3b6fd4">回工作台 →</a></div>'
+    return
+  }
+  CFG = wf.gen
+  FIELDS = {}
+  for (const f of CFG.intake || []) FIELDS[f.id] = f
+  for (const f of CFG.intake || []) if (f.default !== undefined) vals[f.id] = f.default
+  renderIntro()
+
+  // 带 ?sid= 打开（从「最近」进来、或刷新页面）→ 直接进结果页，把这个会话的图和对话捞回来
+  if (sid) {
+    toWork()
+    let hist = [], job = { running: false }
+    try {
+      ;[hist, job] = await Promise.all([
+        jget("api/history?id=" + encodeURIComponent(sid)).then((r) => (r.ok ? r.json() : [])).catch(() => []),
+        jget("api/job?sid=" + encodeURIComponent(sid)).then((r) => (r.ok ? r.json() : { running: false })).catch(() => ({ running: false })),
+      ])
+    } catch (_) {}
+    for (const h of hist || []) {
+      if (!h || !h.text) continue
+      // 第一条用户消息是拼出来的长提示词，原样贴回去会占满半屏。只留一句可读的。
+      msgs.push({ role: h.role === "user" ? "me" : "ai", text: h.role === "user" && !turns ? "生成机制图" : h.text })
+      if (h.role === "user") turns++
+    }
+    await refreshOutputs()
+    render()
+    if (job && job.running) { RUN = { label: "这一轮还在后台跑，正在续上…", tools: 0, es: null }; attach() }
+  }
+})()
+</script>
+</body>
+</html>

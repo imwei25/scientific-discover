@@ -170,6 +170,9 @@
     proof:  '<svg viewBox="0 0 24 24"><rect x="5" y="3" width="14" height="18" rx="2"/><path d="M9 8l2 2 4-4M9 14h6"/></svg>',
     refine: '<svg viewBox="0 0 24 24"><path d="M4 20l4-1 11-11-3-3L5 16z"/><path d="M14 6l3 3"/></svg>',
     stat:   '<svg viewBox="0 0 24 24"><path d="M4 20V12M9 20V6M14 20V14M19 20V8"/><path d="M3 20h18"/></svg>',
+    /* 科研作图：画框 + 山影 + 一轮日 —— 与 stat 的柱状图刻意拉开距离，两张卡都叫"图"，
+       图标再撞就真分不出哪张是统计图、哪张是示意图了 */
+    figure: '<svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="8.5" cy="9.5" r="1.5"/><path d="M21 16l-5-5-4 4-2-2-5 5"/></svg>',
     dot:    '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/></svg>'
   };
   const ARROW = '<svg viewBox="0 0 24 24"><path d="M5 12h14M13 6l6 6-6 6"/></svg>';
@@ -186,6 +189,7 @@
     refcheck: { ic: "proof",  en: "Manuscript Check" },
     humanize: { ic: "refine", en: "Language Polishing" },
     stats:    { ic: "stat",   en: "Statistic & Analysis" },
+    figure:   { ic: "figure", en: "Scientific Illustration" },
   };
 
   const esc = (s) => String(s == null ? "" : s).replace(/[&<>"']/g, (c) =>
@@ -223,12 +227,16 @@
   }
 
   /* 进模块 = 回聊天页并把模块挂在 hash 上（index.html 读它，把这一次的新会话绑定到该模块）。
-     例外：服务端下发 ui="reader" 的模块有自己的界面壳，直接送去那个页面。
+     例外：服务端下发 ui 的模块有自己的界面壳（reader=阅读器、figure=生成器），直接送去那一页。
      判据用服务端下发的 ui 字段而不是在这里写死 id —— 将来再加同形态的模块，这里不用改。
-     ★ 必须把 ?m= 带上：reader.html 是四个模块共用的壳，取不到 m 就兜底成 litread，
-       于是点「数据统计与分析 / 引用核查 / 润色改写」全都落进文献研读。 */
+     ★ 必须把 ?m= 带上：这些壳都是"多个模块共用一份"的设计，取不到 m 就只能回落到兜底模块，
+       于是点「数据统计与分析 / 引用核查 / 润色改写」全都落进文献研读。
+     ★ 必须查表，不能拿 ui 直接拼文件名：那是一条把服务端字符串当 URL 用的开放跳转。
+     ★ 认不出的 ui 回落到通用壳而不是报错：新客户端配老服务端（或反过来）时，用户至少还进得去。 */
+  const SHELL = { reader: "reader.html", figure: "figure.html" };
   function enter(m) {
-    if (m.ui === "reader") { location.href = "./reader.html?m=" + encodeURIComponent(m.id); return; }
+    const shell = SHELL[m.ui];
+    if (shell) { location.href = "./" + shell + "?m=" + encodeURIComponent(m.id); return; }
     location.href = m.id === "chat" ? "./" : "./#module=" + encodeURIComponent(m.id);
   }
 

@@ -463,15 +463,36 @@ const dirState = (dir, depth = DIRSTATE_DEPTH, prefix = "") => {
     // ★ 脱敏还原表绝不进"产出"侧栏。deidentify 现在已经写进 .private/（点号目录本就被上面跳过），
     //   这条是纵深防御：兜住旧会话里已经落在产物目录的、以及别的技能日后可能写出的同类文件。
     //   它第一列就是真实姓名 / 住院号 / 身份证 / 手机号，和成果并排摆着，一次误转发就是真实泄露。
-    if (/_mapping\.csv$/i.test(e.name)) continue
+    // ★ 判据引 workflows.mjs 的唯一定义（WF.isSecretName）。原来这里只写了 `*_mapping.csv`，
+    //   而渲染器与前端 isSecret 收的是一整组 —— deid_crosswalk.csv / 姓名对照表.csv /
+    //   patient_keyfile.csv 三类真 PHI 表照常列在侧栏、可一键下载，"纵深防御"只挡住了六分之一。
+    //   代价：gene_mapping.csv 这类良性表也会被挡（判据宁可宽，泄露不可逆、找不到文件可补救）。
+    if (WF.isSecretName(e.name)) continue
     const p = path.join(dir, e.name)
     const rel = prefix ? prefix + "/" + e.name : e.name
     let st; try { st = fs.statSync(p) } catch { continue }
     if (st.isFile()) m[rel] = st.mtimeMs
     else if (st.isDirectory() && depth > 0) Object.assign(m, dirState(p, depth - 1, rel))
+    // ★ 再深一层就不列了（约定如此：侧栏只递归一层）。但【必须让用户知道它存在】——
+    //   实测 agent 把图写进 figures/panel/fig1.png 时，侧栏、正文嵌图、步骤条三条线索同时失效，
+    //   图等于凭空消失，用户零线索。这里只数个数，交给 /api/outputs 挂一行灰字提示。
+    else if (st.isDirectory()) deeperCount.n += countFilesDeep(p)
   }
   return m
 }
+// dirState 递归到底层时，被"只列一层"挡在外面的文件有多少个。用对象是为了在递归里累加。
+const deeperCount = { n: 0 }
+const countFilesDeep = (dir) => {
+  let n = 0
+  let ents; try { ents = fs.readdirSync(dir, { withFileTypes: true }) } catch { return 0 }
+  for (const e of ents) {
+    if (e.name.startsWith(".")) continue
+    try { n += e.isDirectory() ? countFilesDeep(path.join(dir, e.name)) : 1 } catch { /* 读不到就不数 */ }
+  }
+  return n
+}
+/** 跑一次 dirState 并顺带拿到"更深层还有几个文件没列出来" */
+const dirStateDeep = (dir) => { deeperCount.n = 0; const m = dirState(dir); return { map: m, deeper: deeperCount.n } }
 // 相对某个快照，哪些文件是本轮新建或被改动的（最新在前）
 const changedSince = (dir, before) => {
   const now = dirState(dir)
@@ -574,6 +595,13 @@ const MODULE_DEFS = {
               desc: "贴合期刊写作范式，优化行文逻辑、专业表述与段落架构，消除生成式文本痕迹，还原自然学术语感与逻辑节奏。" },
   stats:    { name: "数据统计与分析", group: "skills",
               desc: "一站式医学科研数据服务，涵盖统计建模、基线分析、期刊图表绘制、数据脱敏与源数据核查，完成从数据质控到结果可视化全流程处理。" },
+  // ⚠️ 简介里必须把「和 stats 的分界」与「AI 生图」两件事都说出来：
+  //   ① 由数值画出来的统计图（森林图 / KM / 火山图）在 stats 那张卡里，不在这里——两张卡都写着
+  //      "作图"时，带着一份 Excel 的用户十有八九点进这一个，然后发现没地方传表；
+  //   ② 出的是 AI 生成位图、不是矢量图，多数期刊不接受直接入稿。这句话放在进门之前说，
+  //      比等他出完图（还扣掉了当天的生图张数）才被告知要好。
+  figure:   { name: "科研作图",       group: "skills",
+              desc: "用一段文字描述机制、通路或技术路线，直接生成示意图与图形摘要，不用上传数据。出的是 AI 生成位图，适合组会汇报、标书插图与投稿前构思稿；由数值画出来的统计图请用「数据统计与分析」。" },
 }
 // 技能集与主技能由 workflows.mjs 回填（chat 例外：skills 恒为 null = 不受限）。
 // 就地写回 MODULE_DEFS 而不是到处调 WF.skillsOf()：下游有十几处读 m.skills，保持它们不用改。
@@ -982,10 +1010,27 @@ function signalGateFailed(t) {
   }
   return false
 }
-function gateFailed(outDir, step, files) {
+function gateFailed(outDir, step, files, fstate) {
   for (const g of step.emits || []) {
-    for (const f of files) {
-      if (!WF.globMatch(g, f) || !/\.(md|txt)$/i.test(f)) continue   // 只读文本报告
+    // ★ 一个通配 emits（如 reference_check*.md）下有多份报告时，【只认最新的那一份】。
+    //   原来是逐个读、任一判红就整体判红 —— 而模型第二轮换个文件名写新报告
+    //   （reference_check_round2.md）是完全合规的，第一轮那份红报告就永远躺在目录里：
+    //   闸永久卡红、重跑不管用，而拦截文案明说"重跑那道闸才算通过"。界面又没有删单个产物的入口，
+    //   唯一出路是「仍要出件」—— 一个明说"闸没转绿"的降级出口。这正是本函数注释里
+    //   反复要避免的"把人带进死胡同"。
+    //   ★ 只在【同一个 pattern 内】取最新，不跨 pattern：像 novelty 那样 emits 里并列着
+    //     novelty_report.md（裁定书）与 preregistration.md（另一份文档）的，跨组取最新会读到
+    //     不含裁定的那份 → 闸静默变绿，那是 fail-open，比卡红严重得多。
+    //     精确文件名各成一组、永远单独评判，塌缩只发生在通配组里。
+    let cand = files.filter((f) => WF.globMatch(g, f) && /\.(md|txt)$/i.test(f))
+    if (cand.length > 1 && /[*?]/.test(g)) {
+      const newest = cand.reduce((a, b) => ((fstate?.[b] || 0) > (fstate?.[a] || 0) ? b : a))
+      const dropped = cand.filter((f) => f !== newest)
+      if (dropped.length) console.warn(`[workflow] 闸 ${step.id}：${g} 命中多份报告，以最新的 ${newest} 为准（忽略 ${dropped.join("、")}）`)
+      cand = [newest]
+    }
+    for (const f of cand) {
+      if (!/\.(md|txt)$/i.test(f)) continue   // 只读文本报告
       try {
         // ★ 实测 kimi 把 reference_check_report.md 写成了同名【目录】，里面才是真报告。
         //   直接 readFileSync 会抛 EISDIR → 落进下面的 catch → "读不到就按通过处理" → 闸静默变绿。
@@ -1089,6 +1134,36 @@ async function failedGatesFor(sid, modId) {
   } catch { return [] }
 }
 
+/** 把闸的 step-id 换成步骤名，给用户看的文案用。
+ *
+ * ★ 必须按【这个会话真实的表单】裁剪步骤去查名字，不能拿空表单查（原来两处出件拦截文案都是
+ *   `WF.stepsFor(modId, {})`）。红闸的 id 来自 wfSyncDone —— 那边是按真实 form 裁的，
+ *   空表单裁掉的闸在这里就查不到名字，于是提示里直接甩一个裸 id：
+ *   「"integrity" 当前判定为未通过」而不是「源数据完整性自查」（paper / stats / refcheck 都命中，
+ *   humanize 则会把「引用兜底核查」显示成 refcheck）。用户根本不知道该去看哪一步。
+ */
+async function gateNames(sid, modId, ids) {
+  let form = {}
+  try { form = (wfLoad(await sessionOut(sid)) || {}).form || {} } catch { /* 读不到就退回空表单，至少不比原来差 */ }
+  const steps = WF.stepsFor(modId, form) || []
+  return ids.map((id) => steps.find((s) => s.id === id)?.name || id)
+}
+/** 这些闸判红后该退回哪几步（onFail 指向的步骤名，去重）。
+ *  ★ onFail 一直在数据里、也一直下发给前端，但两边都没人读过：拦截文案只说"重跑那道闸"，
+ *    不说改哪 —— 而重跑闸并不会让红字消失，用户最自然的反应恰恰是又点一次重跑。 */
+async function gateBackNames(sid, modId, ids) {
+  let form = {}
+  try { form = (wfLoad(await sessionOut(sid)) || {}).form || {} } catch {}
+  const steps = WF.stepsFor(modId, form) || []
+  const out = []
+  for (const id of ids) {
+    const back = steps.find((s) => s.id === id)?.onFail
+    const nm = back && back !== id ? steps.find((s) => s.id === back)?.name : ""
+    if (nm && !out.includes(nm)) out.push(nm)
+  }
+  return out
+}
+
 function wfSyncDone(outDir, modId) {
   let st = wfLoad(outDir)
   // ★ 状态簿不存在就地建一份。它此前只在两条路上被写出来：用户填了首屏表单、或提交了某步表单。
@@ -1103,6 +1178,13 @@ function wfSyncDone(outDir, modId) {
   const files = Object.keys(fstate)
   const done = new Set(st.done || [])
   const failed = new Set()
+  // ★ 一份文件算不算某一步的产物：emits 命中【且】不在 emitsNot 里。
+  //   加 emitsNot 是因为 emits 的通配互相重叠，一份文件会被算给排在前面的那一步、让它凭空变绿。
+  //   最真实的一例：用户自带初稿只想润色，产物只有 manuscript_humanized.md —— 它同时命中
+  //   润色步的 `*_humanized.md` 和撰写步的 `manuscript_*.md`，于是 AI 一个字没写，
+  //   「撰写正文 ✓已完成」。（globMatch 对不含 / 的 glob 是按 basename 比的，所以躲不开。）
+  const emitHit = (s, f) => (s.emits || []).some((g) => WF.globMatch(g, f))
+    && !(s.emitsNot || []).some((g) => WF.globMatch(g, f))
   for (const s of WF.stepsFor(modId, st.form || {})) {
     // ★ 闸【每次都重新裁定】，不能吃 done 的缓存。
     //   闸的 emits 里往往既有中间机器产物、也有最终裁定报告，两者可能差好几分钟；用户在这中间
@@ -1110,11 +1192,25 @@ function wfSyncDone(outDir, modId) {
     //   而后 agent 才写出「本闸判定 不通过」—— 闸再也不看了，进度条永远是绿的。实测踩到过两次。
     //   非闸步骤仍吃缓存：它们没有"结论"可翻，重算只是白读文件。
     if (done.has(s.id) && !s.gate) continue
-    if (!(s.emits || []).some((g) => files.some((f) => WF.globMatch(g, f)))) continue
+    if (!files.some((f) => emitHit(s, f))) continue
     // ★ 质量闸不能"有文件就算过"。实测：peer-review 报告白纸黑字写着「倾向 Major revision」
     //   并列了一条 Critical，步骤条照样打绿勾 —— 而医生正是靠这条进度条判断"能不能交稿"。
     //   读一眼报告结论：判为未通过的标成 failed（界面显示"需返工"），不计入 done。
-    if (s.gate && gateFailed(outDir, s, files)) { failed.add(s.id); done.delete(s.id); continue }
+    if (s.gate) {
+      // ★ 闸还得【有一份可裁定的文本报告】才谈得上"过"。gateFailed 只读 md/txt，一份候选都没有时
+      //   它返回 false —— 于是闸只要落下任何一个机器产物就被记成 done、打绿勾。实测两条真实路径：
+      //   ① data-integrity 先出 audit/scan.json、之后才写 audit/REPORT.md：REPORT 还没写出来
+      //      （或写失败）的窗口里，`audit/*` 已匹配 → 「源数据完整性自查 ✓已完成」；
+      //   ② verify_refs.py 先写 reference_check.csv 再写 .md，而 paper 的 emits 收了 csv →
+      //      CSV 里明明写着 3 条 FABRICATED，闸照样绿。
+      //   这和本函数反复防的 fail-open 是同一类，只是从"措辞"维度换到了"文件类型"维度。
+      //   没有报告就【不记 done】（停在未开始，等报告），绝不记成通过。
+      //   注：这只修显示。出件硬拦看的是 failed（红），灰着的闸本来就不拦 —— 那条策略不动，
+      //   因为"闸还没跑就把人拦死"正是这套代码一直在避免的死胡同。
+      const hasReport = files.some((f) => emitHit(s, f) && /\.(md|txt)$/i.test(f))
+      if (!hasReport) continue
+      if (gateFailed(outDir, s, files, fstate)) { failed.add(s.id); done.delete(s.id); continue }
+    }
     done.add(s.id)
   }
   // ★ 单调补齐：后面的步骤已完成 ⇒ 它前面的非闸步骤也一定跑过了。
@@ -1142,7 +1238,7 @@ function wfSyncDone(outDir, modId) {
   const stale = new Set()
   const newestOf = (s) => {
     let t = 0
-    for (const g of s.emits || []) for (const f of files) if (WF.globMatch(g, f)) t = Math.max(t, fstate[f] || 0)
+    for (const f of files) if (emitHit(s, f)) t = Math.max(t, fstate[f] || 0)
     return t
   }
   // ★ 判据是"这道闸【现在】红着"，而不是"下游产物比闸报告旧"。
@@ -1160,12 +1256,30 @@ function wfSyncDone(outDir, modId) {
       done.delete(s.id); stale.add(s.id)
     }
   })
+  // ★ 另一半：【上游改过之后没重做】。上面那条只在"闸现在红着"时生效，闸一转绿，时间维度的信息
+  //   就全丢了。实测两个假绿：
+  //   ① 出了 docx(t400) → 改稿(t500) → 重跑闸转绿(t600)：步骤条整排绿，而用户拿到的 Word
+  //      是【含假引用的那一版】；
+  //   ② 闸绿(t300) 之后稿子又改了(t500)：「引用核查 ✓」纹丝不动 —— 闸绿的是另一份稿子。
+  //   newestOf 早就算好了时间戳，却只被当布尔用过一次。按流水线顺序累计"上游最新产物时间"，
+  //   某步的产物比它旧 = 这一步是拿旧输入做的 → 标过期（不打绿勾，但也不算红：闸没判它不合格）。
+  //   单独记进 staleUp，好让界面把原因说准（"闸红后未重做" vs "上游改过之后没重做"是两回事）。
+  const staleUp = new Set()
+  let upstreamNewest = 0
+  for (const s of ordered) {
+    const t = newestOf(s)
+    if (!t) continue                                  // 无产物的步骤不参与（implied 那条线管它）
+    if (done.has(s.id) && upstreamNewest && t < upstreamNewest) {
+      done.delete(s.id); stale.add(s.id); staleUp.add(s.id)
+    }
+    if (t > upstreamNewest) upstreamNewest = t
+  }
   // ★ 判据必须是"这一步有没有产物"，【不能】写成"它还不在 done 里"。
   //   done 在函数开头就用上一次落盘的 st.done 播种，补齐过的步骤第二次进来已经在 done 里，
   //   于是永远进不了 implied；接着空的 implied 被覆盖写回文件，标记就被永久擦除了。
   //   实测：用户开会话、刷页面各触发一次 state 读取，所以「·无产物」几乎没人看得到 ——
   //   连查三次，第一次有、后两次恒为 []。按产物判则是幂等的，与"进度靠产物反推"的原设计一致。
-  const hasArtifact = (s) => (s.emits || []).some((g) => files.some((f) => WF.globMatch(g, f)))
+  const hasArtifact = (s) => files.some((f) => emitHit(s, f))
   let lastDone = -1
   ordered.forEach((s, i) => { if (done.has(s.id)) lastDone = i })
   for (let i = 0; i < lastDone; i++) {
@@ -1174,13 +1288,21 @@ function wfSyncDone(outDir, modId) {
     // 会把一个明明有 22KB 产物的步骤标成"没有产物"，同时把"已过期"的提示挤掉。
     if (!s.gate && !failed.has(s.id) && !stale.has(s.id) && !hasArtifact(s)) { done.add(s.id); implied.add(s.id) }
   }
-  const arr = [...done], farr = [...failed], iarr = [...implied], sarr = [...stale]
-  if (arr.length !== (st.done || []).length || farr.join() !== (st.failed || []).join()
-      || iarr.join() !== (st.implied || []).join() || sarr.join() !== (st.stale || []).join()) {
+  const arr = [...done], farr = [...failed], iarr = [...implied], sarr = [...stale], uarr = [...staleUp]
+  // ★ 完成即退位。st.cur 只有 /api/workflow/form 提交表单时写入，全仓库【没有任何清除点】——
+  //   那一步跑完之后 cur 仍然钉在它身上，此后每轮收尾广播、每次刷新、每次切回会话都把它送回前端，
+  //   于是一个早已跑完的格子被同时画成"当前步"，而真正在跑的那步是灰的（进度条还会自动滚回去）。
+  //   产物出来了就说明那步过了，当前位置交给前端的兜底（第一个未完成步）去推，比一个陈旧的值准。
+  const curStale = !!st.cur && done.has(st.cur)
+  if (curStale || arr.length !== (st.done || []).length || farr.join() !== (st.failed || []).join()
+      || iarr.join() !== (st.implied || []).join() || sarr.join() !== (st.stale || []).join()
+      || uarr.join() !== (st.staleUp || []).join()) {
     // 落盘前重读一次再只覆盖 done：本函数在【轮次收尾】跑，而用户可能正好在同一时刻提交下一步表单
     //（/api/workflow/form 也写这个文件）。拿本函数开头那份旧快照整体写回，会把刚提交的表单值抹掉。
     const fresh = wfLoad(outDir) || st
-    fresh.done = arr; fresh.failed = farr; fresh.implied = iarr; fresh.stale = sarr
+    fresh.done = arr; fresh.failed = farr; fresh.implied = iarr; fresh.stale = sarr; fresh.staleUp = uarr
+    // 重读之后再判一次：中间用户可能刚提交了下一步的表单，此时 fresh.cur 是新的、不该清
+    if (fresh.cur && done.has(fresh.cur)) fresh.cur = null
     wfSave(outDir, fresh)
     return fresh
   }
@@ -1328,6 +1450,14 @@ const quotaUsed = () => {
 const runningCost = new Map()
 const runningTotal = () => { let t = 0; for (const v of runningCost.values()) t += v; return t }
 const quotaUsedLive = () => quotaUsed() + runningTotal()   // 今日已入账 + 各在跑轮的实时成本
+// 面向用户的额度文案一律换算成积分（1 积分 = $0.01）。前端 index.html 明写"用户面前【不出现美元】"，
+// 而额度用尽时弹出的这两条恰恰是容器形态用户唯一一次看到真实上限的地方 —— 顶栏写着
+// "今日已用 42 / 150 积分"，撞限时却弹 "$0.42 / $1.50"，当面打架。取整方向与前端一致（少显示不多显示）。
+const CREDIT_USD_SRV = 0.01
+const creditsText = (usd) => {
+  const c = (Number(usd) || 0) / CREDIT_USD_SRV
+  return c > 0 && c < 0.1 ? "<0.1" : String(Math.round(c * 10) / 10)
+}
 const quotaOver = () => DAILY_COST_LIMIT > 0 && quotaUsedLive() >= DAILY_COST_LIMIT
 
 // ---- 轮内实时成本估算（供中途封顶 + abort 结算兜底）----
@@ -1691,7 +1821,19 @@ async function ensurePreviewCache(dir, name) {
         // 哪些样式没映射上，出问题时全靠这条日志定位。
         if (stderr && stderr.trim()) console.warn(`[preview] docx 转换告警（${src}）：\n${stderr.trim().slice(0, 2000)}`)
       }
-      catch (err) { const e = new Error(String(err).slice(0, 200)); e.code = "docx-fail"; throw e }
+      catch (err) {
+        // 别把 String(err) 直接当文案：execFile 的 message 是 "Command failed: <完整命令行>"，
+        // 而命令行里塞的是整段 MAMMOTH_PY —— 200 字截断后剩下的全是脚本头几行，
+        // 真正的原因（ModuleNotFoundError: No module named 'mammoth' 之类）在 stderr 尾部，一个字都看不到。
+        // 与上面 LibreOffice 分支同一口径：完整命令行 + stderr 只进服务端日志，给前端的是最后几行人话。
+        console.error(`[preview] docx 转换失败（${src}）：${err?.message || err}${err?.stderr ? "\n[preview] stderr: " + String(err.stderr).slice(0, 2000) : ""}`)
+        const tail = String(err?.stderr || "").trim().split(/\r?\n/).filter(Boolean).slice(-3).join("；")
+        const e = new Error(tail ? tail.slice(0, 300) : "转换进程异常退出，详见服务端日志")
+        // 缺依赖是【运维可修】的一类，单独给一句可行动的提示，别让用户对着 traceback 猜。
+        if (/No module named ['"]?mammoth/.test(String(err?.stderr || ""))) e.hint = "服务端 .venv 缺 mammoth 包（pip install mammoth），装好即可预览。"
+        e.code = "docx-fail"
+        throw e
+      }
     }
     prunePreviewCache(cacheDir, out)
     return { out, ctype: "text/html; charset=utf-8" }
@@ -2089,7 +2231,7 @@ export function shareTurns(msgs) {
 }
 /** 会话消息 → 完整分享 HTML（导出供测试：路由就是调它，测到这里等于测到出口）*/
 export function shareHtmlFromMessages(msgs, opts = {}) {
-  return renderShareHtml({ title: opts.title, exportedAt: opts.exportedAt, turns: shareTurns(msgs) })
+  return renderShareHtml({ title: opts.title, exportedAt: opts.exportedAt, turns: shareTurns(msgs), flow: opts.flow })
 }
 // 下载名：去掉文件系统与 HTTP 头都嫌麻烦的字符；长标题会被截断（有些会话标题是整段任务卡）
 const shareFileName = (title) => {
@@ -2105,8 +2247,35 @@ const autoPreamble = () => `\n- 【无人值守模式已开启】用户不在电
 /** 自动续跑轮发给模型的用户消息 */
 const autoContinueText = (round) => `【无人值守·自动续跑 第 ${round} 轮】继续按你的推荐方向推进：上一轮若列了编号选项，视为用户选了第 1 项（推荐项）；若在等待确认，视为已确认。缺的事实性信息标「待补充」继续。全部交付完成时在回复末尾单独一行输出 ${AUTO_SENTINEL}；未完成就继续干活，不要输出该标记。`
 
+/** 上一轮"非正常收场"停在哪一步、为什么停 —— 写进状态簿，供步骤条画成「中断」态。
+ *
+ * ★ 为什么必须有这个：终止 / 超时 / 卡死 / 积分用尽 / 越权 / 报错六种收场，在步骤条上原本是
+ *   同一张脸——【蓝色进行中】，悬停气泡还写着"当前进行到这一步"。聊天里的文案分得很细，
+ *   条子和文案说的不是一回事。更别扭的是：轮末同步补齐之后，被终止那一步会立刻按【半成品文件】
+ *   打绿勾——一个只写了引言就被掐断的 review.md 显示成"综述成文 ✓已完成"。
+ *   记一条 halted，界面就能说实话："这一步没跑完，因为你终止了它"。
+ * ★ 生命周期：下一轮开跑即清（startJob）。它描述的永远是【最近一次】非正常收场。
+ */
+const wfMarkHalted = async (sid, stepId, reason) => {
+  try {
+    const dir = await sessionOut(sid)
+    const st = wfLoad(dir); if (!st) return
+    st.halted = { step: stepId || null, reason: reason || "error", at: Date.now() }
+    wfSave(dir, st)
+  } catch (e) { console.warn(`[workflow] 中断标记写不进去（不影响本轮报错）：${e.message}`) }
+}
+const wfClearHalted = async (sid) => {
+  try {
+    const dir = await sessionOut(sid)
+    const st = wfLoad(dir); if (!st || !st.halted) return
+    delete st.halted
+    wfSave(dir, st)
+  } catch { /* 没有簿子就没什么可清 */ }
+}
+
 function startJob(sid, sentText, modId) {
   clearError(sid)   // 新一轮开跑 → 上一次的失败记录作废，别让它一直挂在历史末尾
+  wfClearHalted(sid)   // 同理：上一轮的「中断」标记作废（它描述的是最近一次非正常收场）
   // 新一轮 prompt 就是回退的提交动作（opencode 收到新消息会把 revert 标记清成 null），
   // 待提交登记到此结束；之后再出现的 revert 标记就真是残留了，交还给 clearStaleRevert 自愈。
   pendingReverts.delete(sid)
@@ -2174,6 +2343,10 @@ function startJob(sid, sentText, modId) {
     job.aborting = true          // 让 prompt 的报错分支知道这是用户终止，别再广播 failed
     autoStates.delete(sid)       // 用户主动终止 = 无人值守也熄火，绝不能 abort 完又自动续一轮
     broadcast("aborted", {})     // 先告知订阅者（保证前端能收到"已终止"），再实际掐断
+    // ★ 终止也要落盘。aborted 不进 _lasterror.json，于是刷新之后【连"我掐过它"都看不到】：
+    //   用户看到的是一段说到一半戛然而止的回答，加上一个（按半成品文件反推出来的）绿格子 ——
+    //   最自然的读法是"它做完了"。写一条，/api/history 会把它补到末尾。
+    noteError(sid, "你在这一轮中途点了「终止」，本轮没有跑完；这一步的产物可能只写了一半。")
     try { await client.session.abort({ path: { id: sid } }) } catch {}
     finish()
   }
@@ -2370,7 +2543,7 @@ function startJob(sid, sentText, modId) {
               if (red.length && gateBypassed(sid)) {
                 if (!job.gateBypassNoted) {
                   job.gateBypassNoted = true
-                  const names = red.map((id) => (WF.workflowFor(modId, {})?.steps || []).find((s) => s.id === id)?.name || id)
+                  const names = await gateNames(sid, modId, red)
                   console.warn(`[gate] 会话 ${sid}：闸 ${red.join("、")} 仍未过，但用户已手动放行，${called} 照常执行`)
                   broadcast("notice", { message:
                     `你已手动放行质量闸：「${names.join("、")}」当前仍判定为未通过，这次的出件不再拦截。\n` +
@@ -2439,6 +2612,48 @@ function startJob(sid, sentText, modId) {
         try { addCost(job.estExtra?.() || 0) } catch {}
       }
     }
+    // ★ 轮末同步（产物侧栏 + 步骤进度）抽成一函数，因为【异常收场也必须做】。
+    //   原来下面九条早退分支（终止 / 超时 / 卡死 / 云端积分 / 闸拦截 / 越权 / 日额度 / prompt 出错 /
+    //   模型出错）全是 `return finish()`，把这段整个跳过 —— 后果实测：
+    //   ① 这一轮写出来的产物一个都不进侧栏（积分耗尽那条文案还写着"已生成的产物都保留"，
+    //      而用户当下一个新文件都看不到）；
+    //   ② 步骤条冻在蓝色"进行中"，直到用户刷新才跳变；
+    //   ③ 最要命的是闸拦截：闸报告与出件在同一轮时，报错文案叫用户"点流程条右上角的「仍要出件」"，
+    //      而那个按钮只在 liveFailed 非空时才挂 —— 不广播 workflow，它此刻根本不存在。
+    const syncTail = async () => {
+      const changed = changedSince(outDir, before)
+      broadcast("files", changed)
+      const rendered = changed.map((n) => ({ name: n, render: WF.rendererFor(n) })).filter((x) => x.render)
+      if (rendered.length) broadcast("artifacts", rendered)
+      if (modId !== "chat") {
+        try {
+          const st = wfSyncDone(outDir, modId)
+          if (st) broadcast("workflow", { cur: st.cur || null, done: st.done || [], failed: st.failed || [], implied: st.implied || [], stale: st.stale || [], staleUp: st.staleUp || [], halted: st.halted || null, gateBypass: gateBypassed(sid) })
+        } catch (e) { console.warn(`[workflow] 进度同步失败：${e.message}`) }
+      }
+      warmPreviews(outDir, changed)
+    }
+    // 异常收场：先记下"停在哪一步、为什么"，再补齐轮末同步，最后才走各自的报错分支。
+    // 顺序要紧：halted 必须在 syncTail 之前落盘，syncTail 广播的 workflow 事件才带得上它 ——
+    // 否则界面要等到下一次刷新才知道这一步是被中断的，中间那段时间它是个绿格子。
+    const haltReason = job.aborting ? "aborted" : job.timedOut ? "timeout"
+      : job.cloudQuotaHit || job.quotaHit ? "quota" : job.loopHit ? "loop"
+      : job.gateBlock ? "gate" : job.moduleHit ? "denied"
+      : promptErr || job.modelError ? "error" : null
+    if (haltReason) {
+      // 停在哪一步 = 本轮【第一个】技能对应的那一步，与直播/回放的分组口径一致（第一个说了算）。
+      let hitId = null
+      try {
+        const first = [...job.skills.keys()][0]
+        if (first && modId !== "chat") {
+          const form = (wfLoad(await sessionOut(sid)) || {}).form || {}
+          const own = (s) => s.skill === first || (s.skillAlias || []).includes(first)
+          hitId = (WF.stepsFor(modId, form) || []).find(own)?.id || null
+        }
+      } catch { /* 认不出就只记原因，界面退回"本轮被中断"的通用说法 */ }
+      if (modId !== "chat") await wfMarkHalted(sid, hitId, haltReason)
+      try { await syncTail() } catch (e) { console.warn(`[tail] 异常轮收尾同步失败：${e.message}`) }
+    }
     if (job.aborting) return finish()                       // 用户显式终止：job.abort 已广播 aborted
     if (job.timedOut) return finish()                       // 首事件看门狗已收场并广播过原因（prompt 此刻才姗姗返回/报错），别再报一遍
     if (job.cloudQuotaHit) return finish()                  // 云端积分用尽已收场并广播过原因（同上），别再报一遍
@@ -2447,9 +2662,13 @@ function startJob(sid, sentText, modId) {
       (job.loop?.out ? `\n\n最后一次执行的真实输出（末 800 字，网关抓到的）：\n\`\`\`\n${job.loop.out.slice(-800)}\n\`\`\`\n把上面这段连同你的要求一起重发，agent 就能对症下药。` : `\n\n这条命令一个字的输出都没有，多半是路径不存在或解释器没找到。请手动跑一次拿到报错，或换一种做法重发。`) }); return finish() }
     if (job.gateBlock) {
       const g = job.gateBlock
-      const names = g.gates.map((id) => WF.stepsFor(modId, {}).find((s) => s.id === id)?.name || id)
+      const names = await gateNames(sid, modId, g.gates)
+      const backs = await gateBackNames(sid, modId, g.gates)
       broadcast("failed", { message:
         `质量闸未过就出件，本轮已中止：「${names.join("、")}」当前判定为未通过，而你调用了「${g.skill}」。\n` +
+        // ★ 必须说清【回哪一步改】。只说"重跑那道闸"的话，用户最自然的反应就是再点一次重跑 ——
+        //   而闸不会因为重跑变绿，稿子没改它还是红的。onFail 数据里一直有，这里第一次用上。
+        (backs.length ? `先回到「${backs.join("」/「")}」把问题改掉，再重跑这道闸。\n` : "") +
         `报告里写着什么就是什么——改完稿子【必须重新跑一遍那道闸】、让它写出新报告，才算通过；` +
         `拿上一版报告、或自己在报告里标注"已处理"，都不算。\n` +
         `Markdown 稿件不受影响、照常产出，你随时能看到内容；只有 Word/PDF 送审件要等闸转绿。\n` +
@@ -2466,7 +2685,7 @@ function startJob(sid, sentText, modId) {
     if (job.moduleHit) { broadcast("failed", { message: modSkills
       ? `模块限制：本会话是「${MODULE_DEFS[modId]?.name || modId}」专用模块，只能使用「${modSkills.join("、")}」技能；检测到调用「${job.moduleHit}」，本轮已中止。${skillHome(job.moduleHit, modId) || "此类需求请到「自由对话」模块新开会话。"}`
       : `技能未开通：你的账号未开通「${job.moduleHit}」技能，本轮已中止。如需使用请联系管理员开通。` }); return finish() }
-    if (job.quotaHit) { broadcast("failed", { message: `本轮已达今日额度上限（$${DAILY_COST_LIMIT.toFixed(2)}），已自动中止；明日 0 点(UTC)恢复。` }); return finish() }
+    if (job.quotaHit) { broadcast("failed", { message: `本轮已达今日额度上限（${creditsText(DAILY_COST_LIMIT)} 积分），已自动中止；明日 0 点(UTC)恢复。` }); return finish() }
     if (promptErr) {
       if (job.finished) return finish()
       // 出错时【绝不】新建空会话重放消息——会丢光多轮上下文；如实报错，真失效时用户点「新对话」。
@@ -2489,20 +2708,9 @@ function startJob(sid, sentText, modId) {
     // 没报错也没正文：不常见，但同样不能默默收场（多半是上游返回了空 choices）。
     // 用 notice（气泡内提示）而不是 failed：本轮技术上确实正常结束了，产物/工具结果还在。
     if (!finalText.trim()) broadcast("notice", { message: "模型这一轮没有返回任何文本。若反复如此，多半是上游模型服务异常，请换个模型或联系管理员。" })
-    const changed = changedSince(outDir, before)
-    broadcast("files", changed)   // 只推本会话本轮新建/改动的产物（保持字符串数组：老前端直接吃这个）
-    // 结构化产物：按文件名认出渲染器（文献表→文献卡片、核查报告→红黄绿逐条…），认不出的不在此列，
-    // 前端照常按普通产物展示 —— 绝不能因为"没匹配上渲染器"就把文件藏起来。
-    const rendered = changed.map((n) => ({ name: n, render: WF.rendererFor(n) })).filter((x) => x.render)
-    if (rendered.length) broadcast("artifacts", rendered)
-    // 步骤进度：产物出现 = 该步完成（权威判据，不问 agent）。放在广播之后，别让簿子出问题拖累正文。
-    if (modId !== "chat") {
-      try {
-        const st = wfSyncDone(outDir, modId)
-        if (st) broadcast("workflow", { cur: st.cur || null, done: st.done || [], failed: st.failed || [], implied: st.implied || [], stale: st.stale || [], gateBypass: gateBypassed(sid) })
-      } catch (e) { console.warn(`[workflow] 进度同步失败：${e.message}`) }
-    }
-    warmPreviews(outDir, changed)   // 后台把新产出的 office/docx 预转缓存，用户点预览即秒开
+    // 产物侧栏（只推本轮新建/改动的）+ 结构化渲染器 + 步骤进度（产物出现 = 该步完成，不问 agent）。
+    // 放在正文广播之后，别让簿子出问题拖累正文。异常收场那几条分支在上面已经调过同一个函数。
+    await syncTail()
     // ---- 无人值守：只有走到这里的轮（正常收尾）才考虑续跑；出错/终止/越权/封顶都在上面 return 了 ----
     const av = autoDecide(sid, finalText)
     if (av && !av.go && av.note) broadcast("notice", { message: av.note })
@@ -3026,9 +3234,14 @@ export const server = http.createServer(async (req, res) => {
     // 一个独立页面 —— 那个模块的形状（一篇文献 × 四种模式）与通用壳的"表单 + 步骤条"完全不同。
     // 与 workspace.html 同款容错：老 server.mjs 配新界面包时这里会 404，跳转方那侧要能兜住
     //（见 workspace.html 的 enter() 与 index.html 的 readerRedirect）。
-    if (req.method === "GET" && u.pathname === "/reader.html") {
+    // 生成器界面（科研作图）。同上：模块的形状（写一句 → 看一张图 → 改一句再来一版）与通用壳
+    // 和阅读器壳都对不上，所以自己一页。两条路由并成一条按 ui 名取文件 ——
+    // ★ 白名单必须写死。虽然 ui 值来自我们自己的 WORKFLOWS，但这里是 fs.readFileSync 拼路径，
+    //   用变量当文件名是路径穿越的经典入口，不给它这个机会。
+    const SHELLS = { "/reader.html": "reader.html", "/figure.html": "figure.html" }
+    if (req.method === "GET" && SHELLS[u.pathname]) {
       res.writeHead(200, { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" })
-      return res.end(fs.readFileSync(path.join(__dirname, "reader.html")))
+      return res.end(fs.readFileSync(path.join(__dirname, SHELLS[u.pathname])))
     }
 
     if (req.method === "POST" && u.pathname === "/api/upload") {
@@ -3233,13 +3446,24 @@ export const server = http.createServer(async (req, res) => {
       } catch { hSteps = [] }
       const stepSeen = new Set()
       let curStep = null
+      let turnFixed = false          // 本轮认过步骤没有（与前端 turnStepFixed 同口径）
       const out = []
       for (const m of msgs) {
         const role = m.info?.role
         if (role !== "user" && role !== "assistant") continue
+        if (role === "user") turnFixed = false          // user 消息 = 新一轮的边界
         // ★ 步骤要在下面 `if (!text) continue` 【之前】认：只调了工具、一个字都没写的助手消息
         //   在历史里会被丢掉，而它恰恰常常就是这一步开始的标志 —— 漏认的话整步没有归属。
-        if (role === "assistant") { const st = WF.stepOfParts(m.parts, hSteps, stepSeen); if (st) curStep = st }
+        // ★ 但【一轮只认一次、第一个说了算】，必须与直播口径一致（index.html 的 turnStepFixed）。
+        //   原来这里每条都覆盖 curStep，于是一轮跨两个技能时两边分歧：实测 paper 的
+        //   data-analysis（只调工具没写字）→ clinical-stats（写了正文"基线表做好了"），
+        //   直播把这段归到「数据体检与统计分析」，刷新后归到「基线表 Table 1」——
+        //   同一段对话，刷新前后挂在不同的步骤下。grant 的 topic-selection → grant-proposal 同病。
+        //   注意仍要【对每条都调】stepOfParts：stepSeen 得继续累积，否则后面几轮会认错步。
+        if (role === "assistant") {
+          const st = WF.stepOfParts(m.parts, hSteps, stepSeen)
+          if (st && !turnFixed) { curStep = st; turnFixed = true }
+        }
         let text = (m.parts || []).filter((p) => p.type === "text").map((p) => p.text).join("\n").trim()
         text = stripPreamble(text)   // 剥掉注入的工作区前言，只回显真正对话
         if (role === "assistant") text = autoStripSentinel(text)   // 无人值守的完成哨兵与直播口径一致：不给用户看
@@ -3308,7 +3532,20 @@ export const server = http.createServer(async (req, res) => {
       if (!Array.isArray(msgs)) return send(res, 404, "text/plain; charset=utf-8", "找不到这个会话（可能已被删除）")
       const turns = shareTurns(msgs)
       if (!turns.length) return send(res, 404, "text/plain; charset=utf-8", "这个会话还没有内容，没什么可分享的")
-      const html = shareHtmlFromMessages(msgs, { title: title.split("\n")[0].slice(0, 60) || "会话记录" })
+      // ★ 把流程与闸的结论一并存进导出件。不带的话，一份"闸没过、用户点了「仍要出件」才产出"
+      //   的稿子导出去，收件人（导师 / 合作者 / 编辑）看不出闸没过 —— 放行警告是 notice 不落盘，
+      //   拦截解释在 _lasterror.json 里下一轮就被清。这是状态不是文件，不违反"产出一概不进分享"。
+      let flow = null
+      try {
+        const fmod = sessionModule(id)
+        if (fmod && fmod !== "chat") {
+          const fst = wfSyncDone(await sessionOut(id), fmod)
+          if (fst) flow = { steps: WF.workflowFor(fmod, fst.form || {})?.steps || [],
+            done: fst.done || [], failed: fst.failed || [], implied: fst.implied || [], stale: fst.stale || [],
+            bypass: gateBypassed(id) }
+        }
+      } catch (e) { console.warn(`[share] 流程状态读不到，导出件不带这一块：${e.message}`) }
+      const html = shareHtmlFromMessages(msgs, { title: title.split("\n")[0].slice(0, 60) || "会话记录", flow })
       res.writeHead(200, { "Content-Type": "text/html; charset=utf-8", "Content-Disposition": contentDisposition(shareFileName(title.split("\n")[0])) })
       return res.end(html)
     }
@@ -3406,7 +3643,11 @@ export const server = http.createServer(async (req, res) => {
         if (e.code === "no-src") return send(res, 404, TEXT_UTF8, FILE_GONE)
         // 转义再插进 HTML：e.message 里含被转换文件的路径/文件名，而文件名是 agent 产出的、可含尖括号。
         // 影响仅限用户自己（一人一容器），但顺手堵掉，别留个会往 HTML 里塞未转义内容的口子。
-        if (e.code === "docx-fail") return send(res, 500, "text/html; charset=utf-8", `<p style="color:#b91c1c">DOCX 预览转换失败：${String(e.message).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")}</p>`)
+        if (e.code === "docx-fail") {
+          const esc = (s) => String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+          return send(res, 500, "text/html; charset=utf-8",
+            `<p style="color:#b91c1c">DOCX 预览转换失败：${esc(e.hint || e.message)}</p><p style="color:#57606a;font-size:.92em">可点右上角「原文」下载后在本地打开。</p>`)
+        }
         if (e.code === "no-soffice") return send(res, 501, TEXT_UTF8, "服务器未安装 LibreOffice，无法预览此类型（装好后即可）")
         // 人话 + 可行动的下一步；完整命令行/stderr 已在 ensurePreviewCache 里 console.error，不外泄。
         if (e.code === "office-fail") return send(res, 500, TEXT_UTF8, e.timedOut
@@ -3580,7 +3821,12 @@ export const server = http.createServer(async (req, res) => {
               if ([".csv", ".tsv", ".txt"].includes(ext) && fs.existsSync(fp)) {
                 const fd = fs.openSync(fp, "r"); const b = Buffer.alloc(64 * 1024)
                 const n = fs.readSync(fd, b, 0, b.length, 0); fs.closeSync(fd)
-                cols = WF.parseHeaders(b.slice(0, n), ext, { partial: n === b.length }).headers || null
+                // ★ 拿【真列名】比，不是消歧后的显示名。前端存进 values 的已经是真列名了；
+                //   这里若仍用 headers（带"（重名 2）"后缀），两边就都在用同一份被污染的数据，
+                //   `cols.includes("组别（重名 2）")` 恒为真 —— 双保险同源失效，等于没有保险。
+                //   顺带认「第 N 列」：无列名的列前端就是这么存的。
+                const ph = WF.parseHeaders(b.slice(0, n), ext, { partial: n === b.length })
+                cols = ph.headers ? (ph.raw || ph.headers).map((h, i) => (String(h || "").trim() || `第 ${i + 1} 列`)) : null
               }
             } catch { cols = null }
             headCache.set(fname, cols)
@@ -3612,7 +3858,12 @@ export const server = http.createServer(async (req, res) => {
         const out = await sessionOut(sid)
         const st = wfLoad(out) || { module: modId, form: {}, done: [] }
         st.module = modId
-        st.form = { ...(st.form || {}), ...values }     // 跨步继承：立项卡填的目标期刊，后面各步直接复用
+        // 跨步继承：立项卡填的目标期刊，后面各步直接复用。
+        // ★ 但 `__` 开头的键是【纯前端的界面状态】（如 `__src_<字段id>`：多表时列名读自哪张表），
+        //   不是表单值。原样落盘的话会作为 seed 继承进后面每一步的卡片、在会话簿子里越积越多，
+        //   而它们不属于任何 schema 字段。落盘前滤掉。
+        const persist = Object.fromEntries(Object.entries(values).filter(([k]) => !k.startsWith("__")))
+        st.form = { ...(st.form || {}), ...persist }
         if (stepId) st.cur = stepId
         wfSave(out, st)
       }
@@ -3790,7 +4041,7 @@ export const server = http.createServer(async (req, res) => {
       if (jobs.get(sid)?.running)   // 该会话已有进行中的一轮（双开页面/连点）→ 不重复发起，让前端去续流
         return send(res, 200, "application/json", JSON.stringify({ ok: true, sid, sent: false, running: true, notice: "上一轮仍在进行中，本条消息未发送；请等本轮结束后重发。" }))
       if (quotaOver())
-        return send(res, 200, "application/json", JSON.stringify({ ok: false, sid, sent: false, err: `今日额度已用尽（已用 $${quotaUsedLive().toFixed(3)} / 上限 $${DAILY_COST_LIMIT.toFixed(2)}），明天恢复。` }))
+        return send(res, 200, "application/json", JSON.stringify({ ok: false, sid, sent: false, err: `今日额度已用尽（已用 ${creditsText(quotaUsedLive())} / 上限 ${creditsText(DAILY_COST_LIMIT)} 积分），明天恢复。` }))
       // 云端积分已被判定用尽 → 别再起一轮白转圈（打包版的额度就是这条线，本机那条通常没设）。
       // 【拒收前必须再问一次云端】旧判定可能已经过时：跨了 UTC 零点、管理员刚调高档位。确认还有
       // 余额就把判定撤掉照常发；云端这会儿问不到（q 为 null）也照常发 —— 宁可让本轮走到真实报错，
@@ -3888,11 +4139,15 @@ export const server = http.createServer(async (req, res) => {
       // 但用户一刷新页面 / 切走再切回，子目录里的产物又全部消失 —— 症状与改动前一模一样，
       // 等于这次改造只在"当前这一轮"有效。（上面的 /api/uploads 不需要改：写入接口只收
       // basename，上传目录里天然不会出现子目录。）
-      const list = Object.entries(dirState(dir))
+      const { map, deeper } = dirStateDeep(dir)
+      const list = Object.entries(map)
         .map(([rel, mtime]) => { try { return { name: rel, size: fs.statSync(path.join(dir, rel)).size, mtime } } catch { return null } })
         .filter(Boolean)
         .sort((a, b) => b.mtime - a.mtime)
-      return send(res, 200, "application/json", JSON.stringify(list))
+      // ★ 更深层的文件数走响应头，不动数组结构（这条接口的返回值是【裸数组】，改成对象会
+      //   把所有既有调用方一起打翻）。前端据此在侧栏尾部挂一行灰字，别让它们无声消失。
+      res.writeHead(200, { "Content-Type": "application/json", "X-Deeper-Files": String(deeper) })
+      return res.end(JSON.stringify(list))
     }
 
     // ==== 云端账号（桌面版）====================================================
@@ -4134,7 +4389,10 @@ export const server = http.createServer(async (req, res) => {
           .map(([rel]) => { try { return { name: rel, size: fs.statSync(path.join(dir, rel)).size } } catch { return null } })
           .filter(Boolean).sort((a, b) => a.name.localeCompare(b.name))
       } catch {}
-      const chars = msgs.reduce((n, m) => n + (m.text || "").length, 0)
+      // ★ 按 UTF-8 真实字节算，不是字符数。前端拿它 /1024 报「约 N KB」，而中文一个字 3 字节 ——
+      //   5500 字的中文会话界面写"约 5 KB"、真实 16 KB，低估 3 倍。同一个弹窗里产出文件的大小
+      //   是真字节，两个"KB"不是一回事，而用户正是拿这个数判断要不要把整段会话交给管理员。
+      const chars = msgs.reduce((n, m) => n + Buffer.byteLength(m.text || "", "utf8"), 0)
       return send(res, 200, "application/json", JSON.stringify({ ok: true, title, msgs: msgs.length, chars, files }))
     }
 

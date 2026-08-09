@@ -670,7 +670,12 @@
   .wfflow.canL .fade.l, .wfflow.canR .fade.r { opacity: 1; }
   /* 步骤多到一定程度（论文 13 步）副标题只会把整条拉到两千多像素，滚起来没完没了；
      整排收掉副标题，把长度还回来 —— 名字看不清才是真的看不懂。 */
-  .wfflow.many .fsub { display: none; }
+  /* ★ 只收【描述型】副标题，状态型（"跑过了但没有产物文件" / "已过期，闸红后未重做" / "需返工" /
+     "按当前设定不跑这一步"）一律留着。原来是整排 display:none，而那四态的解释【只存在于副标题里】——
+     圆圈里那个 ·／⟳ 和一圈淡色描边根本承担不了，悬停气泡在触屏上又出不来。
+     实测代价：paper 13 格收掉全部副标题省 439px（2366→1927），仍要滚 2.3 屏；
+     只保留状态副标题是 2038px，比全收只多 111px（+5.8%）—— 正常步骤本就没有状态副标题。 */
+  .wfflow.many .fsub:not(.st) { display: none; }
   .fstep .n { width: 30px; height: 30px; flex: none; border-radius: 50%; display: grid; place-items: center;
     font-size: 13px; font-weight: 700; background: var(--bg); border: 1px solid var(--line-hi);
     color: var(--faint); z-index: 1; transition: .2s; }
@@ -687,12 +692,54 @@
   .fstep:last-child::after { background: linear-gradient(to right, var(--line-hi) 40%, rgba(20,24,30,0)); }
   .fstep.cur .n { background: var(--accent); border-color: var(--accent); color: #fff; box-shadow: 0 0 0 4px var(--accent-soft); }
   .fstep.cur .ft { color: var(--accent); font-weight: 600; }
-  .fstep.done .n { background: var(--green); border-color: var(--green); color: #fff; }
+  /* ★ 圈底用 #1f7a52 而不是 --green(#2bb673)：白色序号压在 #2bb673 上只有 2.61:1，远不达 AA 4.5，
+     而这个序号正是"现在第几步"的唯一锚点（done 故意保留序号，见下面 mark 那段注释）。
+     #1f7a52 是本文件已在用的深绿（.done .ft 就是它），白字 5.30:1。只改 .fstep 这一小片，不动 --root。 */
+  .fstep.done .n { background: #1f7a52; border-color: #1f7a52; color: #fff; }
   .fstep.done .ft { color: #1f7a52; }
   /* 以下四态是设计稿没画、但线上一直有的语义，不能丢：闸没过 / 未启用 / 无产物 / 已过期。
      只靠颜色传达不到色觉障碍与截图场景，所以圆圈里的符号和 .fsub 里的说明都得留着。 */
-  .fstep.failed .n { background: var(--rose); border-color: var(--rose); color: #fff; }
-  .fstep.failed .ft { color: var(--rose); font-weight: 600; }
+  /* 同理：白色 ✕ 压在 --rose(#ef4444) 上 3.76:1、红步骤名同样 3.76:1，两项都不达 AA。
+     换成本文件已在用的深红 #b03a34（见 .wff.invalid .wfopt），白字与文字都上 5.9:1 一档。
+     这一格是全条最要命的一格（"闸没过"），最不该是读不清的那个。 */
+  .fstep.failed .n { background: #b03a34; border-color: #b03a34; color: #fff; }
+  .fstep.failed .ft { color: #b03a34; font-weight: 600; }
+  /* 「跑过了但没有产物」：虚线绿环 + `·`。不实心填绿（那就是在说"做完了"，而它可能是用户让跳过的），
+     也不留成默认灰（那是"没开始"，而它确实走过了）—— 虚线表达"经过但没落下东西"。 */
+  /* 描边 2px 深绿而不是 1.5px 的 --green：淡圈四态（默认/implied/stale/off）的差别全压在描边上，
+     而 --green 描边对白底只有 2.61:1，不达图形对比 3:1 —— 红绿色盲下 implied 与"未开始"的圈底
+     ΔE 只有 3.79，等于同色。步骤名也得跟着变（原来与"未开始"同为 --muted，ΔE = 0.00）。 */
+  .fstep.implied .n { background: var(--green-soft, rgba(43,182,115,.12)); border-color: #1f7a52;
+    border-style: dashed; border-width: 2px; color: #1f7a52; }
+  .fstep.implied .ft { color: #1f7a52; }
+  /* 「已过期，闸红后未重做」：琥珀。原来它被摘出 done 之后没有任何类，直接落回默认灰，
+     与「从没跑过」完全同色 —— 而它是【有产物】的，只是闸红之后没重做。文字用 #8a5a12
+     （白底 ≈6.4:1）而不是 --amber 本色（≈2.5:1，读不清）。 */
+  .fstep.stale .n { background: var(--amber-soft, rgba(217,148,48,.12));
+    border-color: var(--amber, #d99430); color: #8a5a12; }
+  .fstep.stale .ft { color: #8a5a12; }
+  /* 「上一轮被中断，这一步没跑完」：中性灰蓝 + ⏸。终止 / 超时 / 卡死 / 额度 / 越权 / 报错六种收场
+     此前在条子上是同一张脸（蓝色进行中），而轮末同步补齐之后它们还会按半成品文件打绿勾 ——
+     一个只写了引言就被掐断的 review.md 显示成「综述成文 ✓已完成」。这一态必须盖过 done。
+     不用红：它不是"做错了"，是"没做完"；红留给闸判不通过。 */
+  .fstep.halted .n { background: var(--bg); border-color: #6b7585; border-style: dashed; color: #4a5361; }
+  .fstep.halted .ft { color: #4a5361; }
+  .fstep.halted.cur .n { box-shadow: 0 0 0 4px rgba(107,117,133,.14); }
+  /* 状态角标：序号留在圈里当定位锚，状态挤到右上角。圈本身是 30px，角标 14px 悬在边上。 */
+  .fstep .n { position: relative; }
+  .fstep .n .sb { position: absolute; right: -5px; top: -5px; width: 15px; height: 15px; border-radius: 50%;
+    display: grid; place-items: center; font-size: 10px; font-weight: 700; font-style: normal;
+    line-height: 1; background: var(--card); border: 1px solid currentColor; }
+  .fstep.failed .n .sb { background: #b03a34; color: #fff; border-color: #fff; }
+  .fstep.stale .n .sb { background: var(--amber, #d99430); color: #fff; border-color: #fff; }
+  .fstep.implied .n .sb { background: #1f7a52; color: #fff; border-color: #fff; }
+  .fstep.halted .n .sb { background: #4a5361; color: #fff; border-color: #fff; }
+  /* 闸红 / 已过期的格子也可能同时是"当前步"（兜底取第一个未完成步，闸红时正是它）。
+     .fstep.cur .n 的蓝光环不会被上面这些规则覆盖（box-shadow 是另一个属性），红圈外面套一圈
+     蓝光晕等于把"出事了"和"正常推进中"两种配色叠在同一格 —— 光环改成同色系。 */
+  .fstep.failed.cur .n { box-shadow: 0 0 0 4px rgba(176,58,52,.16); }
+  .fstep.stale.cur .n { box-shadow: 0 0 0 4px var(--amber-soft, rgba(217,148,48,.12)); }
+  .fstep.implied.cur .n { box-shadow: 0 0 0 4px var(--green-soft, rgba(43,182,115,.12)); }
   /* ★ 「未启用」不能用 opacity 压。整格 .5 透明度下，那行副标题（"按当前设定不跑这一步"）
      对比度只有 1.67:1、步骤名 2.23:1 —— 而那句话正是唯一解释"它为什么是灰的"的文字，
      压到看不清等于把解释删了。改成显式的中性色：删除线表达"不跑"，文字仍然读得清。 */
@@ -700,6 +747,9 @@
      "这一步不跑"由删除线和空心圆点表达，不靠把字调淡。 */
   .fstep.off .n { background: var(--bg); color: var(--faint); border-color: var(--line); }
   .fstep.off .ft { color: var(--faint); text-decoration: line-through; }
+  /* text-decoration 会穿透到 ::after 生成内容 —— 不挡的话「把关」角标会被一起划掉。
+     paper 的「源数据完整性自查」在没上传原始数据时正是 off + gate，实测就是这一格。 */
+  .fstep.off .ft::after { text-decoration: none; }
   .fstep.off .fsub { color: var(--faint); }
   .fstep.gate .ft::after { content: "把关"; margin-left: 6px; font-size: 10px; font-weight: 600;
     color: var(--faint); border: 1px solid var(--line-hi); border-radius: 3px; padding: 0 3px; vertical-align: 1px; }
@@ -868,6 +918,8 @@
   /* 重复关键字被静默吞掉的话，用户以为没敲上去 —— 闪一下告诉他"这个已经有了" */
   .wftag.dup { animation: wftagdup 1s var(--ease); }
   @keyframes wftagdup { 0%, 40% { background: var(--amber-soft); border-color: var(--amber); color: #8a6d1f; } }
+  /* 同理：敲的全是分隔符（"，，，"）时一个标签都拆不出来，抖一下输入框，别静默吞掉 */
+  .wftags input.dup { animation: wftagdup 1s var(--ease); }
 
   /* ---- 关键词候选（schema 的 suggest）---- */
   .wftagwrap { position: relative; }
@@ -1939,8 +1991,13 @@ function mdImgSrc(u) {
   // 所以正文里引用子目录里的图同样要能渲染。上面的 outputs|uploads 分支先跑，不会被这条抢走；
   // 两段都不含 / ? # :，所以拼不出协议、也拼不出上跳（../ 里的 . 允许但 ".." 段会被服务端的
   // safeUnder 做包含性校验挡掉，前端这里只负责不把外链当成同源产物）。
-  m = u.match(/^(?:\.\/)?([^\/?#:]+)\/([^\/?#:]+)$/)
-  if (m && m[1] !== ".." && MDIMG_EXT.test(m[2])) return "api/raw?name=" + encodeURIComponent(m[1] + "/" + m[2]) + sidQ()
+  // ★ 放开到【两层】。侧栏只递归一层，于是 agent 把图写进 figures/panel/fig1.png 时用户有三条
+  //   线索：侧栏、正文嵌图、步骤条 —— 实测三条同时失效，图等于凭空消失。侧栏那条按约定不改，
+  //   但正文里既然写了 ![](figures/panel/fig1.png)，就该把图显示出来（/api/raw 本来就取得到，
+  //   服务端 safeUnder 做包含性校验，多一层不放宽安全边界）。
+  m = u.match(/^(?:\.\/)?([^\/?#:]+)\/(?:([^\/?#:]+)\/)?([^\/?#:]+)$/)
+  if (m && m[1] !== ".." && m[2] !== ".." && MDIMG_EXT.test(m[3]))
+    return "api/raw?name=" + encodeURIComponent([m[1], m[2], m[3]].filter(Boolean).join("/")) + sidQ()
   // 已是本站接口的相对路径（& 在转义文本里成对出现为 &amp;，作为 HTML 属性值恰好正确）
   if (/^api\/(raw|download)\?/i.test(u) && /\.(png|jpe?g|gif|webp|svg|bmp)($|[&#])/i.test(u.replace(/&amp;/g, "&"))) return u.replace(/"/g, "%22")
   return null
@@ -2075,7 +2132,7 @@ let turnStepFixed = false  // 本轮是否已认过步骤（"第一个说了算"
 
 /** 往对话流里追加内容的统一入口：有当前分组就进分组，没有就照旧挂 #log */
 function logAppend(node) { (wfCurGroup ? wfCurGroup.body : log).appendChild(node); return node }
-function wfResetGroups() { wfGroups = []; wfCurGroup = null; liveTurn = null; turnStepFixed = false }
+function wfResetGroups() { wfGroups = []; wfCurGroup = null; liveTurn = null; turnStepFixed = false; flowScroll.clear() }
 const wfFirstGroup = (id) => wfGroups.find((g) => g.step === id)
 
 /** 分组头：第几步 + 名称（+ 把关角标 / 返工次数）。
@@ -2283,7 +2340,18 @@ function renderFiles(list) {
     row.appendChild(a)
     filesEl.appendChild(row)
   }
+  // ★ 更深层的产物按约定不列（侧栏只递归一层），但【不能让它们无声消失】。实测：agent 把图写进
+  //   figures/panel/fig1.png 时，侧栏、正文嵌图、步骤条三条线索同时失效，用户零线索去哪找。
+  //   这里挂一行灰字告诉他有、以及怎么拿到。
+  if (deeperFiles > 0) {
+    const h = document.createElement("div"); h.className = "hint"; h.style.marginTop = "6px"
+    h.textContent = `另有 ${deeperFiles} 个文件在更深的子目录里，这里不列出——让助手把它们移到一层目录（如 figures/）就会出现。`
+    filesEl.appendChild(h)
+  }
 }
+// 被"只列一层"挡在侧栏外的文件数（/api/outputs 的 X-Deeper-Files 响应头）。
+// 放模块变量而不是 renderFiles 的参数：SSE 的 files 事件也会调 renderFiles，它拿不到这个数。
+let deeperFiles = 0
 const IMG = /\.(png|jpe?g|gif|webp|svg|bmp)$/i
 const MDX = /\.(md|markdown)$/i
 const PDFX = /\.pdf$/i
@@ -2335,7 +2403,10 @@ function addProducts(list) {
     }
     wrap.appendChild(card)
   }
-  logAppend(wrap); log.scrollTop = log.scrollHeight
+  // ★ 不无条件拽底。产物卡是【轮末 files 事件】贴的，而那时用户很可能正往上翻看前几步 ——
+  //   一把把他弹回底部，和 scrollFollow 头注里"别把用户拽回来"的口径自相矛盾。
+  //   无人值守连续续跑时每轮命中一次，翻历史根本翻不成。
+  withFollow(() => logAppend(wrap))
 }
 // ---- 图片灯箱 ----
 const lb = document.createElement("div"); lb.className = "lightbox"; lb.innerHTML = '<img alt="">'; document.body.appendChild(lb)
@@ -2412,7 +2483,8 @@ function csvTable(text, delim) {
   const [head, ...body] = all.slice(0, MAX + 1)
   const tr = (cells, tag) => "<tr>" + cells.map((c) => "<" + tag + ">" + mdEscape(c) + "</" + tag + ">").join("") + "</tr>"
   return "<table><thead>" + tr(head, "th") + "</thead><tbody>" + body.map((r) => tr(r, "td")).join("") + "</tbody></table>"
-    + (all.length > MAX + 1 ? '<div class="hint">共 ' + all.length + ' 行，仅预览前 ' + MAX + ' 行，完整内容请下载</div>' : "")
+    // 分子是【数据行】，分母别把表头算进去（原来写 all.length，于是 301 行数据说成"共 302 行"）
+    + (all.length > MAX + 1 ? '<div class="hint">共 ' + (all.length - 1) + ' 行数据，仅预览前 ' + MAX + ' 行，完整内容请下载</div>' : "")
 }
 
 // ---- Markdown 半屏预览（左半屏文件 / 右半屏对话）----
@@ -2482,7 +2554,15 @@ document.addEventListener("keydown", (e) => { if (e.key === "Escape") { if (lb.c
 // 【会话永久保留】过去非项目会话 7 天无活动就被自动删（配套到期徽标 / 临期提醒 / 续期），已整体去掉：
 // 会话只在用户自己删时才消失。要清理就进「批量选择」勾几条一次删。
 const sessionsEl = document.getElementById("sessions")
-const fmtTime = (ms) => { const d = new Date(ms), p = (n) => String(n).padStart(2, "0"); return `${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}` }
+// ★ 两个坑：① 没有时间戳时（server 那边 `updated: s.time?.updated || 0`）原样 new Date(0) 会显示成
+//   「01-01 08:00」—— 看起来像"今年元旦建的会话"，而事实是"不知道什么时候"；
+//   ② 只有 MM-DD，去年今日与今天同格式。旁边公告的 ntFmt 做了跨年补年份，这里对齐它。
+const fmtTime = (ms) => {
+  if (!ms) return "时间未知"
+  const d = new Date(ms), p = (n) => String(n).padStart(2, "0")
+  const y = d.getFullYear() !== new Date().getFullYear() ? d.getFullYear() + "-" : ""
+  return `${y}${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`
+}
 let META_STATE = { projects: [], sessions: [] }          // 最近一次 /api/sessions 结果
 const collapsedProjects = new Set(JSON.parse(localStorage.getItem("nm_collapsed") || "[]"))
 const saveCollapsed = () => localStorage.setItem("nm_collapsed", JSON.stringify([...collapsedProjects]))
@@ -2734,12 +2814,16 @@ async function deleteSelected() {
 // 对象塞进 sessList，下游三处 sessList.find(...) 全是 TypeError——resumeSession 在 find 处同步
 // 抛错，点左侧会话「毫无反应」（打包版实测复现）。对象只交给 renderSessions，缓存只存数组。
 const loadSessions = () => fetch("api/sessions").then(r => r.json()).then((l) => { sessList = (l && l.sessions) || []; renderSessions(l); if (sessionId) setModBadge(sessList.find((s) => s.id === sessionId)?.module || "chat") }).catch(() => {})
+/* 有专用界面壳的模块 → 该去哪个页面。ui 由服务端下发（workflows.mjs 的 ui 字段）。
+   ★ 查表，不拿 ui 直接拼文件名：那等于把服务端字符串当 URL 用，是一条开放跳转。
+   ★ 认不出的 ui 留在通用壳：新旧界面包错配时，用户至少还打得开这个会话。 */
+const SHELL = { reader: "reader.html", figure: "figure.html" }
 async function resumeSession(id) {                 // 载入历史 → 设为当前会话 →（后台还在生成则续流）
   // 有专用界面的模块（文献研读的 reader.html）：会话本身在这里也打得开，但用户看到的会是一条
   // 没有原文、没有模式条的裸对话流 —— 前面几轮还全是【文献导读】这类内部标记开头的长消息。
   // 把它送回它自己的壳里，而不是让人在通用页面里对着半个功能发愣。
   const modUi = modById(sessList.find((s) => s.id === id)?.module || "")?.ui
-  if (modUi === "reader") { location.href = "./reader.html?sid=" + encodeURIComponent(id); return }
+  if (SHELL[modUi]) { location.href = "./" + SHELL[modUi] + "?sid=" + encodeURIComponent(id); return }
   pendingProjectId = null                          // 打开的是已有会话 → 不是「立刻新建对话」，解除项目归入
   detachStream()                                   // 只退订原会话的流，后台生成不受影响
   sessionId = id; localStorage.setItem("nm_sid", id)
@@ -2751,7 +2835,11 @@ async function resumeSession(id) {                 // 载入历史 → 设为当
   let histFailed = false
   const [hist, outs, job] = await Promise.all([
     fetch("api/history?id=" + encodeURIComponent(id)).then(r => { if (!r.ok) { histFailed = true; return [] } return r.json() }).catch(() => { histFailed = true; return [] }),
-    fetch("api/outputs?sid=" + encodeURIComponent(id)).then(r => r.ok ? r.json() : []).catch(() => []),
+    fetch("api/outputs?sid=" + encodeURIComponent(id)).then(r => {
+      if (!r.ok) return []
+      deeperFiles = Number(r.headers.get("X-Deeper-Files")) || 0   // 更深层没列出来的文件数，见 renderFiles 尾部
+      return r.json()
+    }).catch(() => []),
     fetch("api/job?sid=" + encodeURIComponent(id)).then(r => r.ok ? r.json() : { running: false }).catch(() => ({ running: false })),
   ])
   if (sessionId !== id) return                     // 等待期间用户又切走了 → 放弃本次渲染
@@ -2763,7 +2851,7 @@ async function resumeSession(id) {                 // 载入历史 → 设为当
   //   step 开分组、分组头要拿 liveSteps 里的步骤名与序号 —— 清理排在后面的话，整段历史会用
   //   【上一个会话】的步骤集来标号（切会话看到的是另一个模块的步骤名）。
   liveSteps = null; liveDone = []; liveCur = null; liveFailed = []  // 步骤集/进度随会话走
-  liveImplied = []; liveStale = []
+  liveImplied = []; liveStale = []; liveStaleUp = []; liveHalted = null
   wfResetGroups()                                   // 分组索引也随会话清掉，别把上一个会话的框认成本会话的
   stepsHost = null; stepsHostEl.replaceChildren()   // 步骤条也随会话清掉
   if (histFailed) addNote("⚠ 这个会话的历史没能载入（网络或服务异常）。请刷新重试——你的对话没有丢失，只是这次没读到。")
@@ -2886,7 +2974,24 @@ const wfCardRedraws = new Set()
 // 贴到底部时才跟随滚动（用户往上翻看历史就别把他拽回来）。
 // attachStream 里另有一个同名的局部 follow —— 那个只在流式回调链里可见，
 // 结构化产物是在它之外异步贴进来的，必须用这份模块级的，否则 ReferenceError。
-const scrollFollow = () => { if (log.scrollHeight - log.scrollTop - log.clientHeight < 60) log.scrollTop = log.scrollHeight }
+const atBottomNow = () => log.scrollHeight - log.scrollTop - log.clientHeight < 60
+/** 改 DOM 并保持"贴底跟随"。
+ *
+ * ★ 判据必须在【改之前】量。原来一律是"先画后判"（paintStreamMd(...); follow()），而 atBottom
+ *   是在 DOM 已经长高之后才算的 —— 一次重绘涨了 D 像素，gap 当场变成 D，D≥60 就被判成
+ *   "用户不在底部"，此后 gap 只增不减，【本轮再也不会跟随】，屏幕定格而正文在视口下方继续长。
+ *   用户以为模型卡住了，去点终止或刷新，或者干脆没看见后半段结论。
+ *   D≥60 在这个产品里是常态，实测：表格整张落地 +120px、图片解码完 +300px、
+ *   收尾补画 + 选项卡 +220px、排队提示条 +62px（第 1 帧就脱钩）。
+ *   ——「一次性放出整张表」还正是 mdStreamSafe 有意为之的设计，等于自己踩自己。
+ */
+const withFollow = (fn) => {
+  const was = atBottomNow()
+  const r = fn()
+  if (was) log.scrollTop = log.scrollHeight
+  return r
+}
+const scrollFollow = () => { if (atBottomNow()) log.scrollTop = log.scrollHeight }
 const wfCache = new Map()          // 模块 id → workflow 定义（/api/modules/<id>/workflow 的结果）
 const HDR_CACHE = new Map()        // 上传文件名 → 表头查询结果（见 fieldEl 的 columns 分支）
 let pendingWfCard = ""             // 待随下一条消息发出的任务卡文本（用法同 zScopePrefix）
@@ -2989,6 +3094,9 @@ function buildFormCard({ title, sub, notice, fields, footnote, steps, intakeSub,
   //   （lang / hasPHI / figs…），按「非空即已填」判断会一进来就当成已填，
   //   流程条随即被裁成残缺链条 —— 实测「数据统计与分析」只剩一步「统计分析」。
   let touched = false
+  // 条件字段被隐藏时清掉的值，存一份在这儿；字段重新可见时优先从这里恢复（见 redraw 里的说明）。
+  // 跨 redraw 保留（在闭包里），innerHTML="" 冲不掉。
+  const shadow = {}
   const body = document.createElement("div")   // 步骤条画在 body 里（随 redraw 一起重画，见下）
   box.appendChild(body)
   const collapsed = new Map()   // 区块名 → 是否折叠。跨 redraw 保留，否则改一个字段所有区块自己弹开
@@ -3041,7 +3149,12 @@ function buildFormCard({ title, sub, notice, fields, footnote, steps, intakeSub,
   }
   const buildRail = () => {
     killRail()
-    const named = secBoxes.filter((s) => s.name)
+    // ★ 无名前导组也要进导航。它没写 section，但【全部必填项几乎都在它里面】——
+    //   paper/review 是 3 块只给 2 个点，跳过的正是装着必填的那一块；
+    //   litread/stats/refcheck/humanize/figure 更是因为 named<2 直接不建导航。
+    //   于是圆点把用户往【选填的块】引，而他要找的必填项在一个没有落点的块里。
+    const named = secBoxes.filter((s) => s.name || s.fields.some((f) => fieldRequired(f, values)))
+      .map((s) => ({ ...s, name: s.name || "基本信息" }))
     if (named.length < 2 || !chatEl) return    // 一两块不值得给导航，纯占地方
     rail = document.createElement("nav"); rail.className = "wfrail"
     rail.setAttribute("aria-label", "表单区块导航")
@@ -3083,10 +3196,16 @@ function buildFormCard({ title, sub, notice, fields, footnote, steps, intakeSub,
     // 诊断准确性研究没有基线表）。只在建卡时画一次的话，用户看到的流程和实际要跑的流程是两回事，
     // 而且会跟它上方那句"会跳过基线表那步"的帮助文字当面打架。
     if (steps?.length) {
-      const on = new Set(trimSteps(steps, values).map((x) => x.id))
+      // ★ 这里【故意】恒传 values，不看 touched（trimSteps 头注说"没动过就显示完整流程"，
+      //   那句话是针对【删掉步骤】的调用方说的）。预览条不删格子、只把裁掉的标成 off 标灰，
+      //   所以不存在它担心的"残缺链条"；反过来，不按默认值裁的话，用户一个字不改直接点「开始」时，
+      //   预览条上的步数与编号和真正跑起来的那条对不上（实测 paper 预览 13 格 → 开跑 9 格）。
+      //   touched 目前没有读者，保留它是因为将来若有真要"删格子"的显示才用得上。
+      //   normValues：按服务端 withDefaults 的同一口径归一化（空数组也算"没填"→回填默认值），
+      //   否则用户把某个必填多选清空时，预览条会说"一步都不跑"，而服务端照样跑（见 normValues 头注）。
+      const pv = previewSteps(steps, normValues(fields, values))
       // 第 1 格「基础信息录入」= 用户此刻正在填的这张表，所以它就是【当前步】。
-      body.appendChild(stepsBar(withIntake(steps, intakeSub), [], INTAKE_STEP.id, null,
-        steps.filter((x) => !on.has(x.id)).map((x) => x.id)))
+      body.appendChild(stepsBar(withIntake(pv.ordered, intakeSub), [], INTAKE_STEP.id, null, pv.off))
     }
     // 必须包一层箭头函数：syncGo 是下面的 const，而首次 redraw() 是同步跑的 ——
     // 直接写 setTimeout(syncGo,0) 会在这里就去取 syncGo，撞上暂时性死区抛 ReferenceError，
@@ -3098,8 +3217,22 @@ function buildFormCard({ title, sub, notice, fields, footnote, steps, intakeSub,
     // ★ 这条继承不能省：JOURNAL_FILTER 里只有第一项（影响力档位）写了 section，其余靠继承留在同一组；
     //   改成"没写就另起一组"会把「只要 OA」从「检索到的文献要满足什么条件」里踢出去，
     //   而那个分组存在的唯一理由就是别让它们被读成"我想投的刊的影响因子"。
-    const secOf = new Map()
-    { let c = ""; for (const f of shown) { if (f.section) c = f.section; secOf.set(f.id, c) } }
+    // ★ 区块归属要在【全部 fields】上算继承，不能在 shown（已按 when 过滤）上算。
+    //   section 是 schema 的静态结构，不该随字段可见性变。承载 section 标记的那个字段一旦被隐藏，
+    //   在 shown 上算的话后面的字段就继承【上一个】区块名 —— 实测 stats：groupCol 承载
+    //   「把分析用到的变量对到你表里的列」且带 whenAny(组间比较/基线表)，用户只勾生存分析或 ROC 时
+    //   整个区块卡连同 sectionSub 一起消失，随访时间列/终点事件列/待评价指标列被并进最上面那个
+    //   无名块，和"数据文件/含不含患者信息"混排 —— 失去"这是在对你表里的列名"这层框定，
+    //   而列名对不上正是这个控件要根治的头号失败模式。（右侧圆点也会从 2 个掉到 0 个。）
+    const secOf = new Map(), secMeta = new Map()
+    { let c = ""
+      for (const f of fields) {
+        // 说明与图标也记在【区块名】上，不能等 openSection 时从"该块第一个可见字段"上取 ——
+        // 声明 section 的那个字段被隐藏时，接手的字段身上没有 sectionSub/sectionIcon，
+        // 于是标题在、说明没了（stats 那一块的说明恰恰是"要和你表里的列名完全一致"这层框定）。
+        if (f.section) { c = f.section; if (!secMeta.has(c)) secMeta.set(c, { sub: f.sectionSub, icon: f.sectionIcon }) }
+        secOf.set(f.id, c)
+      } }
     secBoxes = []                                  // 本次重画的区块，供 pill / 标红 / 右侧圆点用
     let grid = null, curSection = null
     const openSection = (f, name) => {
@@ -3114,10 +3247,12 @@ function buildFormCard({ title, sub, notice, fields, footnote, steps, intakeSub,
       if (name) {
         const hd2 = document.createElement("div"); hd2.className = "shd"
         const icoBox = document.createElement("div"); icoBox.className = "sico"
-        icoBox.innerHTML = ic(f.sectionIcon || "lines")
+        const meta = secMeta.get(name) || {}
+        icoBox.innerHTML = ic(meta.icon || f.sectionIcon || "lines")
         const txt = document.createElement("div")
         txt.appendChild(Object.assign(document.createElement("div"), { className: "stitle", textContent: name }))
-        if (f.sectionSub) txt.appendChild(Object.assign(document.createElement("div"), { className: "ssub", textContent: f.sectionSub }))
+        const ssub = meta.sub || f.sectionSub
+        if (ssub) txt.appendChild(Object.assign(document.createElement("div"), { className: "ssub", textContent: ssub }))
         hd2.appendChild(icoBox); hd2.appendChild(txt)
         // ★ v3 把原来的「区块 N / M」角标换成【必填完成计数】。顺带修掉一个 bug：
         //   区块序号是按"含无名前导组"的下标算的，而无名组不画卡片也不画角标 ——
@@ -3144,11 +3279,20 @@ function buildFormCard({ title, sub, notice, fields, footnote, steps, intakeSub,
       secBoxes.push({ name, el: secBox, fields: mine })
     }
     for (const f of fields) {
-      if (!fieldVisible(f, values)) { delete values[f.id]; continue }   // 条件不成立 → 连值一起清掉，别把隐藏项拼进任务卡
-      // 重新出现的条件字段要把默认值补回来：上面那行清值是对的（隐藏项不该进任务卡），
-      // 但清完就再也不补的话，字段重新可见时值是 undefined —— 服务端据此裁剪步骤会走错分支
-      //（实测：勾上"有原始数据"后"已脱敏"开关显示为「否」，而传出去的是 undefined）。
-      if (values[f.id] === undefined && f.default !== undefined) values[f.id] = Array.isArray(f.default) ? [...f.default] : f.default
+      // 条件不成立 → 值不能进任务卡，但【先存一份影子】再删。
+      // ★ 原来是直接 delete、不留痕：用户勾了"有原始数据"、传好文件、声明"已脱敏＝是"，
+      //   取消勾选再勾回来，dataFiles 静默丢失、deidDone 从 true 被打回默认的 false ——
+      //   而完成度全程 100%（丢的不是必填项），用户完全无从察觉。stats 改选分析类型时
+      //   填好的随访时间列/终点事件列同样蒸发，humanize 的目标期刊也是。
+      if (!fieldVisible(f, values)) {
+        if (values[f.id] !== undefined) shadow[f.id] = values[f.id]
+        delete values[f.id]
+        continue
+      }
+      // 重新出现的条件字段：优先还用户自己填过的那份（影子），没有才回落默认值。
+      // 只回落默认值的话，等于把用户的选择悄悄换成系统的选择（deidDone 的 true→false 就是这么来的）。
+      if (values[f.id] === undefined && shadow[f.id] !== undefined) values[f.id] = shadow[f.id]
+      else if (values[f.id] === undefined && f.default !== undefined) values[f.id] = Array.isArray(f.default) ? [...f.default] : f.default
       // 分组小标题：把"检索到的文献要满足什么条件"这类字段和上面的"你想投哪本刊"隔开。
       // 实测不隔开的话，紧跟在目标期刊后面的"影响力"会被百分之百读成"我想投的刊的影响因子"。
       const sec = secOf.get(f.id) || ""
@@ -3203,7 +3347,11 @@ function buildFormCard({ title, sub, notice, fields, footnote, steps, intakeSub,
       }
       // ★ 标红只在【这一块动过、但还没填完】时亮。一进来就整屏红边，是把"还没开始"
       //   说成"你填错了"——用户没做错任何事。判据用本块内有没有任何字段已有值。
-      const edited = s.fields.some((f) => !blank(f))
+      // ★ 必须叠一个 touched。`some(f => !blank(f))` 会把【建卡时播下的默认值】也算成"用户动过"，
+      //   于是含默认值的区块【一进来就红边】—— 8 个模块全中招，而这正是上面那句注释要避免的
+      //   "把还没开始说成你填错了"。最刺眼的是 grant：「项目基本信息」（有 yearStart 默认值）红、
+      //   「申请人信息」（无默认值）不红，两块同样是 0 项已填，用户会以为红的那块另有问题。
+      const edited = touched && s.fields.some((f) => !blank(f))
       s.el.classList.toggle("invalid", req.length > 0 && ok < req.length && edited)
     }
     // 已经补上的字段要撤掉行内红态，否则用户照着提示填完了，红框还挂着
@@ -3235,6 +3383,17 @@ function buildFormCard({ title, sub, notice, fields, footnote, steps, intakeSub,
         el.classList.toggle("invalid", bad)
         if (bad && !first) first = el
       })
+      // ★ 缺项落在折叠起来的区块里时，先把它展开再滚。折叠态是 .sbody{max-height:0;opacity:0}，
+      //   不展开的话用户看到的是"红字点名了 X，屏幕上一处红色都没有"，只能自己一块块去点开。
+      //   区块的默认折叠态按【建卡那一刻】的必填数算、之后不重算，所以任何一个 requiredWhen
+      //   落进选填块都会踩中 —— 当前 schema 侥幸没有这种组合，但那是 schema 的运气不是代码防住了。
+      const sec = first?.closest(".wfsec2")
+      if (sec?.classList.contains("collapsed")) {
+        sec.classList.remove("collapsed")
+        const nm = sec.querySelector(".stitle")?.textContent || "__lead"
+        collapsed.set(nm, false)
+        sec.querySelector(".scollapse")?.setAttribute("aria-expanded", "true")
+      }
       first?.scrollIntoView({ behavior: "smooth", block: "center" })
       err.textContent = missText(m)
       err.style.display = ""
@@ -3388,6 +3547,16 @@ function fieldEl(f, values, onChange, allFields) {
       opts.appendChild(b)
     }
     wrap.appendChild(opts)
+    // ★ 必填多选被清空时，说清"没选会怎样"。这类字段（refcheck 的「核查项」、humanize 的
+    //   「润色目标」）带数组默认值，而服务端的 withDefaults 把空数组当"没填"→ 回填默认值，
+    //   stepsFor 内部也照跑一遍 —— 也就是说用户取消全部勾选，系统仍然按默认那几项办。
+    //   不说的话，界面三处各说各话：红字说"还没填"、任务卡里连这行都没有、实际却按四项全查跑了，
+    //   而用户明确表达过"这些我都不要"。把后果写在【他做决定的那一刻】，而不是跑完才发现。
+    if (multi && f.required && Array.isArray(f.default) && f.default.length && !(values[f.id] || []).length) {
+      const names = f.default.map((v) => (f.options || []).find((o) => o.v === v)?.t || v)
+      wrap.appendChild(mk("div", { className: "wfhelp", style: "color:#8a5a12",
+        textContent: `一项都没选：会按默认的「${names.join("、")}」处理。` }))
+    }
   } else if (f.type === "select") {
     const sel = mk("select", {})
     // 必填项的占位不能写「不限」——那是"随便，都行"的意思，与"必须选一个"直接打架。
@@ -3520,6 +3689,17 @@ function fieldEl(f, values, onChange, allFields) {
     const commit = (raw, opt) => {
       // 一次粘进来一串也要拆开：中英文逗号、顿号、分号都当分隔符
       const parts = String(raw).split(/[,，、;；]/).map((s) => s.trim()).filter(Boolean)
+      // ★ 全是分隔符 / 空白（"，，，"、几个空格）时：一个标签都拆不出来。此前照样把输入框清空 ——
+      //   敲的东西没了、标签没多出来、也没有任何反馈，和下面"重复词不能静默吞掉"是同一类问题，
+      //   只是漏了这一支。抖一下输入框、把内容留着，让用户看见发生了什么。
+      if (!parts.length) {
+        if (String(raw).trim()) {
+          inp.classList.remove("dup"); void inp.offsetWidth; inp.classList.add("dup")
+          setTimeout(() => inp.classList.remove("dup"), 1100)
+        }
+        if (opt?.keepFocus) inp.focus()
+        return
+      }
       const dups = []
       for (const p of parts) values[f.id].includes(p) ? dups.push(p) : values[f.id].push(p)
       inp.value = ""
@@ -3612,17 +3792,27 @@ function fieldEl(f, values, onChange, allFields) {
         const opts = document.createElement("div"); opts.className = "wfopts"
         const multi = !!f.multiple
         if (multi && !Array.isArray(values[f.id])) values[f.id] = []
-        for (const h of j.headers) {
-          const on = multi ? (values[f.id] || []).includes(h) : values[f.id] === h
+        // ★ 按钮上显示【消歧后的名字】，存进 values 的必须是【真列名】。
+        //   "（重名 2）""（第 2 列·无列名）"这些后缀在真实 CSV 里根本不存在，此前 label 与 value
+        //   是同一个字符串 —— 用户从下拉里点一下，一个不存在的列名就原样进任务卡交给模型，
+        //   脚本按它取列必然取不到。而这个控件存在的唯一理由就是"列名一定对"。
+        //   无列名的列存成「第 N 列」：它不像列名、模型也读得懂，比一个假名字诚实。
+        const VALS = j.headers.map((h, i) => (j.raw?.[i] || "").trim() || `第 ${i + 1} 列`)
+        j.headers.forEach((h, i) => {
+          const v = VALS[i]
+          const on = multi ? (values[f.id] || []).includes(v) : values[f.id] === v
           const b = mk("button", { type: "button", className: "wfopt" + (on ? " on" : ""), textContent: h })
           b.addEventListener("click", () => {
-            if (multi) { const arr = values[f.id]; const i = arr.indexOf(h); i >= 0 ? arr.splice(i, 1) : arr.push(h) }
-            else values[f.id] = values[f.id] === h ? undefined : h
+            if (multi) { const arr = values[f.id]; const k = arr.indexOf(v); k >= 0 ? arr.splice(k, 1) : arr.push(v) }
+            else values[f.id] = values[f.id] === v ? undefined : v
             onChange()
           })
           opts.appendChild(b)
-        }
+        })
         host.appendChild(opts)
+        // 真重名（不含仅大小写不同的）要说一句：两列同名时脚本只能取第一列，用户得知道。
+        if (j.dupes?.length) host.appendChild(mk("div", { className: "wfhelp",
+          textContent: `注意：表里有重复的列名（${j.dupes.join("、")}），同名列脚本只会取第一列；要指定另一列请在下面手填「第 N 列」。` }))
         // ★ 成功分支也要留手填入口。此前手填只在"读不出表头"时出现，于是表头读成功但
         //   【读的是错的那张表】（多表时恒取第一个）或列名被解析歪时，用户被逼着从列表里挑一个
         //   —— 而 testCol/goldCol 这类勾了就必填，不挑就提交不了。留个逃生口，成本一行。
@@ -3631,10 +3821,11 @@ function fieldEl(f, values, onChange, allFields) {
         // 多选时手填的是【上面按钮之外的追加项】。此前直接 `values[f.id] = 拆出来的数组`，
         // 是覆盖不是追加 —— 用户点了「年龄」「性别」再补填一个列名，前两个会无声消失，
         // 而旁边的说明写的却是"追加"。这里显式记住"按钮选中的那部分"，每次重算成并集。
-        const picked0 = multi ? (values[f.id] || []).filter((x) => j.headers.includes(x)) : null
+        // 判"是不是按钮选的"要拿 VALS（真列名）比，不能再拿 j.headers（显示名）比 —— 两者已经分开了
+        const picked0 = multi ? (values[f.id] || []).filter((x) => VALS.includes(x)) : null
         const inp = mk("input", { type: "text",
-          value: multi ? (values[f.id] || []).filter((x) => !j.headers.includes(x)).join("，")
-                       : (j.headers.includes(values[f.id]) ? "" : values[f.id] ?? ""),
+          value: multi ? (values[f.id] || []).filter((x) => !VALS.includes(x)).join("，")
+                       : (VALS.includes(values[f.id]) ? "" : values[f.id] ?? ""),
           placeholder: multi ? "上面没有的列名，用逗号分隔（会与上面的选择合并）" : "列名要和数据表里完全一致" })
         inp.addEventListener("input", () => {
           const v = inp.value.trim()
@@ -3669,9 +3860,24 @@ function fieldEl(f, values, onChange, allFields) {
     if (f.min !== undefined) inp.min = f.min
     if (f.max !== undefined) inp.max = f.max
     inp.step = f.step ?? "any"     // 不给 step 的话部分浏览器把 4.5 判成非法（影响因子天然是小数）
-    inp.addEventListener("input", () => { values[f.id] = inp.value === "" ? undefined : Number(inp.value); onChange(true) })
+    // ★ 就地校验越界值。`min`/`max` 只写在 input 属性上是【不起作用】的：这张卡不是 <form>，
+    //   原生校验永远不触发。而服务端那条 warning 是在 startWithForm 里 addNote 之后【紧接着】
+    //   就 sendMessage 开跑 —— 提示和开跑同一瞬间，积分已经烧掉了。这里提前一步说。
+    const nWarn = mk("div", { className: "wfhelp", style: "color:#b03a34" })
+    nWarn.hidden = true
+    const nCheck = () => {
+      const v = values[f.id]
+      let msg = ""
+      if (v !== undefined && Number.isFinite(v)) {
+        if (f.min !== undefined && v < f.min) msg = `不能小于 ${f.min}${f.unit || ""}`
+        else if (f.max !== undefined && v > f.max) msg = `不能大于 ${f.max}${f.unit || ""}`
+      }
+      nWarn.textContent = msg; nWarn.hidden = !msg
+    }
+    inp.addEventListener("input", () => { values[f.id] = inp.value === "" ? undefined : Number(inp.value); nCheck(); onChange(true) })
     if (f.unit) { const row = document.createElement("div"); row.className = "wfrange"; row.appendChild(inp); row.appendChild(mk("span", { textContent: f.unit })); wrap.appendChild(row) }
     else wrap.appendChild(inp)
+    wrap.appendChild(nWarn); nCheck()
   } else if (f.type === "date") {
     const inp = mk("input", { type: "date", value: values[f.id] ?? "" })
     inp.addEventListener("input", () => { values[f.id] = inp.value || undefined; onChange(true) })
@@ -3709,6 +3915,44 @@ function trimSteps(steps, values) {
   const head = [], rest = []
   for (const st of keep) (st.first && condOk(st.first, values) ? head : rest).push(st)
   return [...head, ...rest]
+}
+/** 首屏预览条要画的那份：顺序与 trimSteps 一致（含 first 提前），被裁掉的步骤仍留在原位标成 off。
+ *
+ * ★ 不能直接拿原始 steps 画。预览条原来只用 trimSteps 的【结果集合】算哪几格是灰的，
+ *   却拿【未重排】的原序去排列，于是同一步在填表阶段和开跑之后是两个号，顺序还可能是错的：
+ *   - paper 空表单：撰写正文 9→5、引用核查 10→6、排版出件 13→9（后面 8 格全移位）；
+ *   - paper 前瞻性/RCT：预览条里「新颖性裁定/预注册」排第 7 格、开跑后是第 2 格 ——
+ *     而 first 存在的唯一理由就是"采数前必须先锁预注册"（AGENTS.md §三），
+ *     顺序画错等于把这条铁律说反了。
+ */
+/** 把表单值归一化成【服务端真正会拿去裁剪步骤的那份】。必须与 workflows.mjs 的 withDefaults 同口径。
+ *
+ * ★ 不做这一步就会出现"界面说 0 步、实际跑 2 步"。差别只在一个位置：`withDefaults` 把
+ *   **空数组**也算成"没填"并回填默认值，而前端的 trimSteps 直接拿原值求 when 条件。
+ *   实测 refcheck：用户把「核查项」四个默认勾选全部取消 → 前端算出 0 步、三格全标灰划掉、
+ *   标题写「按当前设定跑 0 步」；而服务端的 stepsFor 内部先过 withDefaults，回填成四项，
+ *   照常跑 2 步、2 道质量闸。用户明确表达"这些都不查"，界面附和他，系统却全查了。
+ *   （服务端那道回填是焊死的护栏——stepsFor 自己就调 withDefaults，防的是流水线退化成零步骤、
+ *   没有任何闸而界面看不出来。所以要对齐的是前端，不是去拆它。）
+ */
+function normValues(fields, values) {
+  if (!values) return values
+  const out = { ...values }
+  for (const f of fields || []) {
+    if (f.default === undefined) continue
+    const v = out[f.id]
+    const blank = v === undefined || v === null || v === "" || (Array.isArray(v) && !v.length)
+    if (blank) out[f.id] = Array.isArray(f.default) ? [...f.default] : f.default
+  }
+  return out
+}
+function previewSteps(steps, values) {
+  const kept = trimSteps(steps, values)
+  const on = new Set(kept.map((s) => s.id))
+  // 与 trimSteps 同一条判据算"提到最前"的那批，别在这里另写一份（两份迟早分叉）
+  const hoist = new Set(values ? kept.filter((s) => s.first && condOk(s.first, values)).map((s) => s.id) : [])
+  const ordered = [...steps.filter((s) => hoist.has(s.id)), ...steps.filter((s) => !hoist.has(s.id))]
+  return { ordered, off: ordered.filter((s) => !on.has(s.id)).map((s) => s.id) }
 }
 // ---- 流程条上的第 0 格：「基础信息录入」----
 // ★ 它【不是服务端的步骤】：没有技能、不产出文件、完不完成只取决于"表单交没交"。所以它只活在
@@ -3771,9 +4015,18 @@ function gateBypassBtn() {
  *   闸没过(failed)、按当前选择不跑(off)、跑了但没产物(implied)、闸红后没重做(stale)。
  *   圆圈里的符号 + 副标题里的说明一起承载它们 —— 只靠颜色，色觉障碍与截图场景都传达不到。
  */
-function stepsBar(steps, done, cur, failed, off, implied, stale) {
+/** 闸的 onFail 指向哪一步（"改完回到这里"）。服务端一直下发，前端此前一个读取点都没有。 */
+const backName = (s, steps) => (s.onFail && (steps || []).find((x) => x.id === s.onFail)?.name) || ""
+/** 上一轮非正常收场的原因 → 格子副标题 / 悬停气泡。六种收场此前在条子上是同一张脸。 */
+const HALT_SUB = { aborted: "你终止了这一步", timeout: "超时被系统中止", loop: "检测到卡死已停下",
+  quota: "额度用尽被中止", denied: "技能不在授权内被拦下", gate: "质量闸拦下了出件", error: "这一轮出错了" }
+const HALT_TIP = { aborted: "你在这一轮中途点了「终止」，这一步没跑完",
+  timeout: "这一轮迟迟没有输出，被看门狗中止了", loop: "同一条命令被反复重调，护栏中止了本轮",
+  quota: "额度用尽，本轮被自动中止", denied: "本轮调用了模块白名单之外的技能，被拦下",
+  gate: "质量闸未过就要出件，本轮被中止", error: "这一轮出错收场了" }
+function stepsBar(steps, done, cur, failed, off, implied, stale, staleUp, halted) {
   const dn = new Set(done || []), fl = new Set(failed || []), of = new Set(off || [])
-  const im = new Set(implied || []), sl = new Set(stale || [])
+  const im = new Set(implied || []), sl = new Set(stale || []), su = new Set(staleUp || [])
   // cur 只有"提交过某一步的表单"才会有值，所以第一轮它一定是空的。空着不补的话整条链全是灰的，
   // 而闸那一步又带着颜色 → 用户把闸读成"当前步骤"（实测发生过，以为 AI 起步就跳到了引用核查）。
   // 兜底：没有明确的当前步就取【第一个未完成的步骤】，这也正是流程实际所处的位置。
@@ -3785,9 +4038,14 @@ function stepsBar(steps, done, cur, failed, off, implied, stale) {
   const box = document.createElement("div"); box.className = "wfflow"
   // 总步数仍要给：一条 12 步的流水线横着滚出屏幕，不写清楚用户数不清有几步（实测反馈）。
   const onCnt = steps.length - steps.filter((x) => of.has(x.id)).length
+  // ★ 出事的格子可能在屏幕外。13 步的条子一屏只看得见 4–5 格，跑到第 11 步时第 9 格那个红叉
+  //   早滚出去了，而两侧渐隐只说"这边还有"、不说"那边有一格是红的"。把异常数汇总到标题上，
+  //   这是唯一一处【不用滚动就能看到】的位置。
+  const alarm = [fl.size ? `${fl.size} 道闸未过` : "", sl.size ? `${sl.size} 步已过期` : "",
+    halted ? "上一轮被中断" : ""].filter(Boolean).join(" · ")
   const titleEl = Object.assign(document.createElement("div"), { className: "ftitle",
-    textContent: onCnt === steps.length ? `流程 · 共 ${steps.length} 步`
-      : `流程 · 共 ${steps.length} 步，按当前设定跑 ${onCnt} 步` })
+    textContent: (onCnt === steps.length ? `流程 · 共 ${steps.length} 步`
+      : `流程 · 共 ${steps.length} 步，按当前设定跑 ${onCnt} 步`) + (alarm ? ` · ${alarm}` : "") })
   // 闸红了（或已放行）才挂「仍要出件」。没红时不挂：一个常驻的"绕过质量闸"按钮等于明示可以绕，
   // 而绝大多数情况下闸是对的，该改稿就得改稿。
   if (sessionId && (fl.size || liveBypass)) titleEl.appendChild(gateBypassBtn())
@@ -3796,6 +4054,11 @@ function stepsBar(steps, done, cur, failed, off, implied, stale) {
   const scroller = document.createElement("div"); scroller.className = "fscroll"
   const track = document.createElement("div"); track.className = "ftrack"
   let curEl = null
+  // ★ 序号只数【会跑的】步骤，被裁掉的那几格不占号（它们只出现在首屏预览条上，off 恒为 null 的
+  //   会话内条子不受影响）。原来用数组下标 i+1，于是同一步在填表阶段和开跑之后是两个号：
+  //   review 默认不下全文时「综述成文」预览第 4 格、开跑后第 3 格，后面每一格都错一位。
+  //   灰格改标「–」——它本来就不参与推进，给它一个序号只会把真正的编号顶掉。
+  let ord = 0
   steps.forEach((s, i) => {
     const isCur = s.id === at, isFail = fl.has(s.id), isOff = of.has(s.id), isDone = dn.has(s.id)
     // implied：由"后面的步骤完成了"反推出来的，本身没有任何产物文件。成因有两种（步骤真跑了但
@@ -3805,25 +4068,58 @@ function stepsBar(steps, done, cur, failed, off, implied, stale) {
     // 不能继续打绿勾：那会让界面同时显示「引用核查 ✗ 未通过」和「排版出件 ✓ 已完成」，
     // 读起来就是"闸红了还是把件出了"。
     const isStale = sl.has(s.id) && !isFail
+    // staleUp：过期的【原因】是"上游改过之后没重做"，而不是"闸红后没重做"。两者都不打绿勾，
+    // 但说法完全不同 —— 说错会把用户推去做一次没必要的重跑，或者相反地让他以为没事。
+    const isStaleUp = isStale && su.has(s.id)
+    // halted：上一轮非正常收场（终止 / 超时 / 卡死 / 额度 / 越权 / 报错）就停在这一步。
+    // 必须盖过 done：被掐断的那一步往往留下了半成品文件，产物反推会把它判成"完成"——
+    // 一个只写了引言就被终止的 review.md，界面会说「综述成文 ✓已完成」。
+    const isHalted = !!halted && halted.step === s.id && !isFail
     const el = document.createElement("div")
-    el.className = "fstep" + (isDone && !isStale ? " done" : "") + (isFail ? " failed" : "")
+    // ★ implied / stale 都要【摘出 done】再各给一个自己的类。少做任何一半都会撒谎：
+    //   · implied 留在 done 里 → 一个"跑了但没产物 / 用户明说跳过"的步骤被涂成和真完成一样的绿，
+    //     正是服务端 wfSyncDone 注释里点名要避免的"告诉用户做过了，而其实没有"。
+    //   · stale 摘出了 done 却没有替代类 → 落回默认灰，与「从没跑过」撞色 —— 一个真出过 docx、
+    //     只是闸红后没重做的步骤，看起来像根本没开始。四态各有各的颜色，别让两态共用一个。
+    el.className = "fstep" + (isDone && !isStale && !isImplied && !isHalted ? " done" : "") + (isFail ? " failed" : "")
+      + (isImplied && !isHalted ? " implied" : "") + (isStale && !isHalted ? " stale" : "")
+      + (isHalted ? " halted" : "")
       + (isCur ? " cur" : "") + (s.gate ? " gate" : "") + (isOff ? " off" : "")
-    // 圆圈里放什么：闸没过打叉、过期打 ⟳、无产物打 ·，其余一律是序号。
-    // 【完成态不换符号】只把圆圈染绿，序号留着 —— 打勾会把"第几步"这个信息抹掉，
-    // 一条 13 步的流程跑到后半程，前面全是勾，用户对不上"现在是第几步/刚才那步是第几步"。
-    // 完成的语义由绿圈 + 绿标题 + 悬停气泡里的"已完成"承担。
-    const mark = isFail ? "✕" : isStale ? "⟳" : isImplied ? "·" : String(i + 1)
-    el.appendChild(Object.assign(document.createElement("span"), { className: "n", textContent: mark }))
+    // ★ 【所有态一律保留序号】，状态符号挪到圆圈右上角的小角标上。
+    //   原来 ×/⟳/·/⏸ 是【顶掉】序号的，而分组头与「下一步」卡照旧报数字 ——
+    //   闸红时用户读到"第 10 步 引用核查"，回到条子上找不到 10（那一格是个 ×）。
+    //   序号是这条横向长条上唯一的定位锚，横着滚出两三屏之后尤其如此，不能被状态挤掉。
+    //   同一个理由早就写在下面「完成态不换符号」那句里了，只是当时只对 done 生效。
+    if (!isOff) ord++
+    const nEl = Object.assign(document.createElement("span"), { className: "n", textContent: isOff ? "–" : String(ord) })
+    // × 用 U+00D7 而不是 U+2715：后者在 Windows 上【只有 Segoe UI Symbol 有】（实测 cmap：
+    // segoeui / msyh / arial / DengXian / SimSun 全都没有），回退过去又没有粗体面，只能合成粗体。
+    // ⟳(U+27F3) 同病但没有通用等价码位，暂留 —— 它至少还有琥珀色和状态副标题兜着。
+    const badge = isFail ? "×" : isHalted ? "⏸" : isStale ? "⟳" : isImplied ? "·" : ""
+    if (badge) nEl.appendChild(Object.assign(document.createElement("i"), { className: "sb", textContent: badge }))
+    el.appendChild(nEl)
+    if (isCur) el.setAttribute("aria-current", "step")
     const meta = document.createElement("div"); meta.className = "fmeta"
     meta.appendChild(Object.assign(document.createElement("div"), { className: "ft", textContent: s.name }))
     // 副标题优先用步骤自带的一句话（服务端 step.sub）；没有就退回把状态说清楚，
     // 绝不留空 —— 空着的话「未启用 / 可选 / 需返工」这些信息就只剩 title 悬停，触屏上看不见。
     const subTxt = isOff ? "按当前设定不跑这一步"
-      : isFail ? (s.failLabel || "需返工")
-      : isStale ? "已过期，闸红后未重做"
+      // ★ 闸红时必须说【改完回到哪一步】。onFail 服务端一直老老实实下发着，而前端从没读过 ——
+      //   条子只写"需返工"、拦截文案只说"重跑那道闸"，都不说改哪；而高亮又恰好落在闸自己身上，
+      //   读起来是"你现在在引用核查，它是红的"，最自然的反应是再点一次重跑闸，而不是回去改稿。
+      : isFail ? (s.failLabel || "需返工") + (backName(s, steps) ? ` · 改完回到「${backName(s, steps)}」` : "")
+      : isHalted ? HALT_SUB[halted.reason] || "上一轮被中断，这一步没跑完"
+      // ★ 放行过就不能再说"未重做"。用户点了「仍要出件」之后件是【刚出的】，而 wfSyncDone
+      //   不知道有放行这回事，照样把它算 stale —— 文案会把人推去做一次没必要的重跑。
+      //   方向（不给绿勾）是对的：闸确实没过；只是原因得说准。
+      : isStale ? (liveBypass ? "闸未过，你已放行——这份件没有过闸"
+        : isStaleUp ? "已过期，上游改过之后没重做" : "已过期，闸红后未重做")
       : isImplied ? "跑过了但没有产物文件"
       : (s.sub || s.hint || "") + (s.optional ? (s.sub || s.hint ? " · 可选" : "可选") : "")
-    if (subTxt) meta.appendChild(Object.assign(document.createElement("div"), { className: "fsub", textContent: subTxt }))
+    // 状态型副标题挂 .st：步骤多时整排收副标题，但这几态的解释【只存在于这里】，收掉就没了（见 .many 的 CSS）
+    const subIsStatus = isOff || isFail || isStale || isImplied || isHalted
+    if (subTxt) meta.appendChild(Object.assign(document.createElement("div"),
+      { className: "fsub" + (subIsStatus ? " st" : ""), textContent: subTxt }))
     el.appendChild(meta)
     // 悬停气泡：把"这是干什么的""现在在哪"和【被省略号截断的完整副标题】一起摊开。
     // ★ 副标题是 nowrap + ellipsis，步骤多时（.many）还整排藏起来 —— 不给气泡的话，
@@ -3837,11 +4133,17 @@ function stepsBar(steps, done, cur, failed, off, implied, stale) {
       [isOff ? "按你当前的选择，这一步不会跑——勾上对应的选项才会启用"
         : isFail ? (s.failLabel
           ? "这一步跑过了，报告里列出了需要你核对的信号——核完原始记录再重跑本步"
-          : "这道闸跑过了，但结论是未通过——报告里列了要改的问题，改完要重跑本闸")
+          : "这道闸跑过了，但结论是未通过——报告里列了要改的问题"
+            + (backName(s, steps) ? `，回到「${backName(s, steps)}」改完再重跑本闸` : "，改完要重跑本闸"))
         // ★ implied / stale 的提示要跟标签说同一件事。dn.has()/isDone 那条恒先命中，
         //   于是标签写着「· 领域扫描·无产物」、鼠标一悬停却说"已完成"，两处自相矛盾。
         //   （feat/intake-v3 独立修了同一处，措辞略异；合并时保留主线这版，语义一致。）
-        : isStale ? "上游的质量闸判了未通过——这一步是在闸红的情况下产出的，没有重做过"
+        : isHalted ? (HALT_TIP[halted.reason] || "上一轮没有正常结束，这一步没跑完") + "——它可能留下了半成品文件，别当成已完成"
+        : isStale ? (liveBypass
+          ? "上游的质量闸判了未通过，而你点过「仍要出件」放行——这份件是在闸红的情况下产出的，闸并没有转绿"
+          : isStaleUp
+          ? "它依赖的上游步骤在这之后又改过——这一步的产物比上游还旧，等于是拿旧稿做的，重跑一次才作数"
+          : "上游的质量闸判了未通过——这一步是在闸红的情况下产出的，没有重做过")
         : isImplied ? "这一步没有留下任何产物文件。可能是它本来就没有产物（比如检索结果为零），也可能是你让它跳过了——按后面的步骤已完成反推出来的，不代表真的做过"
         : isCur ? "当前进行到这一步" : isDone ? "已完成" : "尚未开始",
         s.gate ? "质量把关步骤，不通过会退回上游返工" : ""].filter(Boolean).join(" · "),
@@ -3891,7 +4193,11 @@ function stepsBar(steps, done, cur, failed, off, implied, stale) {
     box.classList.toggle("canL", scroller.scrollLeft > 2)
     box.classList.toggle("canR", max > 2 && scroller.scrollLeft < max - 2)
   }
-  scroller.addEventListener("scroll", () => { syncFade(); flowScroll.set(at || "", scroller.scrollLeft) })
+  // ★ 记忆键要带上会话与模块。step id 在模块之间高度重名（refcheck / write / render / review 都是），
+  //   预览条的键更是所有模块共用的 "__intake" —— 只用 step id 的话，在 paper 里把条子拖到最右，
+  //   换到 review 会话时 at 变成 refcheck 就直接恢复那个位置，用户开页第一眼看到的是最后几格。
+  const skey = `${sessionId || ""}|${currentModule || ""}|${at || ""}`
+  scroller.addEventListener("scroll", () => { syncFade(); flowScroll.set(skey, scroller.scrollLeft) })
   // ③ 进来先把【当前步】摆到视野里：默认停在最左边的话，走到第 9 步的人打开页面
   //    看到的是第 1、2 步，还得自己拖过去。用 requestAnimationFrame 等布局算完再定位。
   // ★ 但【只在当前步变了】的时候才自动居中。这条子在一轮里会被重建好几次
@@ -3901,25 +4207,48 @@ function stepsBar(steps, done, cur, failed, off, implied, stale) {
   //   （后台标签页、窗口最小化都算），于是"自动居中当前步"和下面那个收副标题的判断会一直不执行，
   //   直到用户把窗口切回来。setTimeout 照常跑，而读 scrollWidth 本身会强制同步布局 ——
   //   量得准不依赖有没有出过一帧。（实测：内嵌浏览器面板没显示时，rAF 一次都没回调。）
+  // ★ 容器宽度会在【不重建条子】的情况下变：打开文件半屏预览（#chat 从 848 缩到 568）、
+  //   收展左侧会话栏、平板横竖屏、拖窗口。只在渲染时量一次的话，预览开着时该收的没收
+  //   （副标题溢出、滚动长度翻倍），预览关掉后又白白顶着 .many 空一大片。
+  //   全文件此前没有任何 resize / ResizeObserver / matchMedia 监听。
+  let lastW = 0
+  const remeasure = () => {
+    if (!scroller.isConnected) return
+    // 超出容器 1.8 倍以上，滚起来就没完没了（13 步带副标题要滚两千多像素）→ 收掉描述型副标题。
+    // 【只收描述、留状态】：状态型副标题是那四态唯一的文字解释，见 .wfflow.many 的 CSS。
+    // 判据必须用【收之前】的宽度：收完内容变短，下一次量又判为不 many，两个状态会来回抖。
+    box.classList.remove("many")
+    if (scroller.scrollWidth > scroller.clientWidth * 1.8) box.classList.add("many")
+    syncFade()
+  }
+  if (typeof ResizeObserver === "function") {
+    // ★ 只认【宽度】变化。收副标题会让条子变矮 → 观察到尺寸变化 → 再量一次 → 又变矮…
+    //   不挡的话就是一个自激循环（ResizeObserver 的经典坑）。高度变了与要不要收无关。
+    new ResizeObserver((es) => {
+      const w = Math.round(es[0]?.contentRect?.width ?? scroller.clientWidth)
+      if (w === lastW) return
+      lastW = w
+      remeasure()
+    }).observe(scroller)
+  }
   setTimeout(() => {
     if (!scroller.isConnected) return
-    // ④ 量一次真实宽度再决定要不要收副标题：超出容器 1.8 倍以上，滚起来就没完没了了
-    //    （13 步带副标题要滚两千多像素），这时副标题的信息交给悬停气泡承载。
-    if (scroller.scrollWidth > scroller.clientWidth * 1.8) box.classList.add("many")
-    const key = at || ""
-    const memo = flowScroll.get(key)
+    lastW = Math.round(scroller.clientWidth)
+    remeasure()
+    const memo = flowScroll.get(skey)
     if (memo !== undefined) scroller.scrollLeft = memo
     else if (curEl) {
       const want = curEl.offsetLeft - (scroller.clientWidth - curEl.offsetWidth) / 2
       scroller.scrollLeft = Math.max(0, want)
-      flowScroll.set(key, scroller.scrollLeft)
+      flowScroll.set(skey, scroller.scrollLeft)
     }
     syncFade()
   }, 0)
   return box
 }
-// 当前步 → 用户把流程条横向拖到了哪儿。键用【当前步 id】：进到下一步时自然没有记录，
-// 于是重新居中到新的当前步；同一步内反复重建则沿用用户拖的位置。
+// 「会话|模块|当前步」→ 用户把流程条横向拖到了哪儿。带当前步是因为：进到下一步时自然没有记录，
+// 于是重新居中到新的当前步；同一步内反复重建则沿用用户拖的位置。带会话与模块见 skey 处的注释。
+// 换会话时整个清掉（wfResetGroups）：留着只会让新会话第一眼停在上一个会话拖到的位置。
 const flowScroll = new Map()
 // 表单脚注的极简 markdown：【先转义再处理粗体】。不能复用上面那个 mdInline —— 它假定入参
 // 已经转义过（正文渲染管线在上游做了），拿它直接吃未转义文本会开出 XSS 口子。
@@ -4146,23 +4475,37 @@ function reportCard(name, text, kind) {
     if (OK_MARK.test(t) || OK_LABEL.test(t) || NEG.test(t)) return "green"
     return ""
   }
-  const items = lines.filter((l) => /^([-*•]|\d+[.)]|#{1,6}\s)/.test(l)).slice(0, 120)
+  // ★ 计数在【全量】上做，只对渲染做截断。原来是先 slice(120) 再数 —— 一份 200 条引用的核查报告，
+  //   第 121 条起的 FABRICATED 既不渲染、不计数、也不提示，用户看到「0 严重」就直接出件。
+  //   而这个数在界面上是当结论读的，还决定要不要弹「按这份报告返工」。同文件的 retrievalCard
+  //   截断时会写"另有 N 条"，只有这张卡漏了。
+  const all = lines.filter((l) => /^([-*•]|\d+[.)]|#{1,6}\s)/.test(l))
+  const items = all.slice(0, 120)
   if (items.length < 2) return null            // 不成列表的报告让 markdown 预览去展示，别硬拆
   const counts = { red: 0, amber: 0, green: 0 }
+  for (const l of all) { const s = sev(l); if (s) counts[s]++ }
   const { box, bd } = artShell(name, ART_TITLE[kind] || "报告", "")
   const rpt = document.createElement("div"); rpt.className = "rpt"
   for (const l of items) {
-    const s = sev(l); if (s) counts[s]++
+    const s = sev(l)
     const row = document.createElement("div"); row.className = "rline"
     row.appendChild(Object.assign(document.createElement("span"), { className: "rdot " + s }))
     row.appendChild(Object.assign(document.createElement("span"), { textContent: l.replace(/^([-*•]|\d+[.)]|#{1,6})\s*/, "") }))
     rpt.appendChild(row)
   }
+  // 截断要说出来。不说的话，用户会把这张卡当成整份报告读完了。
+  if (all.length > items.length) {
+    const more = document.createElement("div"); more.className = "rline"
+    more.appendChild(Object.assign(document.createElement("span"), { className: "rdot" }))
+    more.appendChild(Object.assign(document.createElement("span"),
+      { textContent: `…另有 ${all.length - items.length} 条未展开（上面的计数已含它们），见原始报告` }))
+    rpt.appendChild(more)
+  }
   bd.appendChild(rpt)
   const n = box.querySelector(".artn")
   // 只报数得出来的那几类；一条都没标记时说"N 条"而不是"0 严重"——
   // 后者会被读成"这份报告认定没问题"，而实际是"我们没能从文本里判出严重度"。
-  if (n) n.textContent = [counts.red && `${counts.red} 严重`, counts.amber && `${counts.amber} 待核`, counts.green && `${counts.green} 通过`].filter(Boolean).join(" · ") || `${items.length} 条`
+  if (n) n.textContent = [counts.red && `${counts.red} 严重`, counts.amber && `${counts.amber} 待核`, counts.green && `${counts.green} 通过`].filter(Boolean).join(" · ") || `${all.length} 条`
   // 闸不过 → 返工按钮。**只在有明确红/黄标记时才出**：判据保守（见上面 sev 的说明），
   // 宁可少弹一个按钮，也不能把人推去返工一份其实没问题的稿子。
   if (counts.red || counts.amber) {
@@ -4184,6 +4527,8 @@ let liveCur = null     // 实时推断的当前步（技能一开跑就点亮，
 let liveFailed = []    // 闸跑了但【没过】的步骤（报告里写着 Major revision / 未通过 等）
 let liveImplied = []   // 由「后面完成了」反推补齐的步骤：没有产物文件，界面标「无产物」而不是绿勾
 let liveStale = []     // 闸红之后没重做的下游步骤：产物早于闸报告，标「已过期」而不是绿勾
+let liveStaleUp = []   // stale 里"原因是上游改过之后没重做"的那部分（另一半原因是闸红），文案要分开说
+let liveHalted = null  // 上一轮非正常收场停在哪一步：{step, reason}。下一轮开跑即清（服务端 wfClearHalted）
 // 用户是否手动放行了本会话的质量闸拦截（服务端存，见 gateBypassBtn）。切会话/刷新时由
 // /api/workflow/state 下发重置 —— 不重置的话，上一个会话放行过，新会话的按钮会显示成"已放行"。
 let liveBypass = false
@@ -4206,7 +4551,21 @@ function markStepBySkill(skill) {
   // 口径必须与服务端 workflows.mjs 的 stepOfParts 一致。
   const own = (s) => s.skill === skill || (s.skillAlias || []).includes(skill)
   const hit = list.find((s) => own(s) && !liveDone.includes(s.id)) || list.find(own)
-  if (!hit) return
+  // ★ 没有任何一步认领这个技能时，【也要开一个框】，别静默并进上一步的框里。
+  //   会发生是因为技能白名单按【未裁剪】的全量步骤算（skillsOf 用的是 w.steps），
+  //   而条子画的是裁剪后的：review 没勾"下全文"时 fulltext-retrieval 照样放行，
+  //   paper 选诊断准确性时 clinical-stats 照样放行 —— 它们真跑起来时条子上没有对应格子。
+  //   原来直接 return：这一轮的全部内容落进上一步的框、进度条纹丝不动，
+  //   用户看到的是"AI 卡住了"，而它其实正在下全文。
+  //   开的是【流程外】的框：合成 id、labelGroup 找不到下标就不给序号（它本来也不占步骤号）。
+  if (!hit) {
+    if (!turnStepFixed) {
+      turnStepFixed = true
+      if (wfCurGroup?.pinned) wfCurGroup.pinned = false
+      else startGroup("__aux:" + skill, skill + "（流程外）")
+    }
+    return   // 不动 liveCur：它不是流程里的一步，不该让条子上任何一格亮起来
+  }
   // 本轮的步骤分组："第一个说了算"（见 startGroup 头注）。pinned = 用户刚用步骤表单点过名，
   // 那一步已经开好框了，本轮不因为 agent 顺手先调了别的技能就改归属；标记一次性消费。
   if (!turnStepFixed) {
@@ -4218,7 +4577,7 @@ function markStepBySkill(skill) {
   liveCur = hit.id
   updateStepsBar(liveDone, liveCur)
 }
-function updateStepsBar(done, cur, steps, failed, implied, stale) {
+function updateStepsBar(done, cur, steps, failed, implied, stale, staleUp, halted) {
   // 优先用裁剪后的：wfCache 里那份来自 /api/modules/<id>/workflow（不带 values），是未裁剪的全量。
   // 拿它画进度条，勾了"已脱敏"而被剔掉的"数据脱敏"会永远挂在条上、永远打不上勾。
   if (steps?.length) liveSteps = steps
@@ -4229,14 +4588,23 @@ function updateStepsBar(done, cur, steps, failed, implied, stale) {
   // cur 只在服务端明确给出时才覆盖实时推断值；服务端不给（多数情况）就沿用 markStepBySkill 的判断。
   // 反过来写会让"轮次收尾广播 cur:null"把刚点亮的当前步又熄灭掉。
   if (cur) liveCur = cur
-  // 已完成的步骤不该再当"当前"：产物出来了就说明那步过了，此时当前步应交给 stepsBar 的兜底去推
-  if (liveCur && liveDone.includes(liveCur)) liveCur = null
+  // 已完成的步骤不该再当"当前"：产物出来了就说明那步过了，此时当前步应交给 stepsBar 的兜底去推。
+  // 比对的集合要和真正传给 stepsBar 的那份一致（含基础信息录入），否则 cur 恰好是它时漏清。
+  if (liveCur && (liveCur === INTAKE_STEP.id || liveDone.includes(liveCur))) liveCur = null
   if (failed) liveFailed = failed
   if (implied) liveImplied = implied
   if (stale) liveStale = stale
+  if (staleUp) liveStaleUp = staleUp
+  // halted 用 undefined 判空而不是 falsy：null 是"这一轮正常收场，把上一次的中断标记清掉"，
+  // 是个有效值；写成 `if (halted)` 的话中断标记会一直挂着，下一轮跑完也擦不掉。
+  if (halted !== undefined) liveHalted = halted
   // 会话已经开跑 = 基础信息那一格必然过了（表单提交或跳过表单直接打字都算），打绿勾。
+  // ★ 这里必须传 liveCur，不能写 cur || liveCur —— 那样上一行的"完成即退位"就成了死代码
+  //   （cur 是形参、没被改过，cur 非空时恒取 cur）。后果实测得到：用户提交过某步表单后
+  //   服务端的 st.cur 永久钉在那一步，此后每轮收尾广播 / 每次刷新都把它送回来，
+  //   于是那个早已跑完的绿格子同时挂上"当前步"的蓝光环，而真正在跑的那步是灰的。
   const bar = stepsBar(withIntake(list, wfCache.get(currentModule)?.intakeSub), [INTAKE_STEP.id, ...liveDone],
-    cur || liveCur, liveFailed, null, liveImplied, liveStale)
+    liveCur, liveFailed, null, liveImplied, liveStale, liveStaleUp, liveHalted)
   stepsHostEl.replaceChildren(bar)   // 独立容器，一行就是它自己；不再往 #log 里插（会挡正文）
   stepsHost = bar
   // 分组头要的步骤名与序号来自这份 list，而分组可能在 list 下发【之前】就建好了
@@ -4260,7 +4628,7 @@ async function offerStepForm(turn) {
   if (!turn.isConnected || sessionId !== mySid) return false
   if (!st?.state || !st.steps?.length) return false                 // chat 会话 / 没有工作流
   liveBypass = !!st.gateBypass
-  updateStepsBar(st.state.done || [], st.state.cur, st.steps, st.state.failed || [], st.state.implied || [], st.state.stale || [])       // 顺手把步骤条刷到最新（产物反推的进度）
+  updateStepsBar(st.state.done || [], st.state.cur, st.steps, st.state.failed || [], st.state.implied || [], st.state.stale || [], st.state.staleUp || [], st.state.halted || null)       // 顺手把步骤条刷到最新（产物反推的进度）
   const done = new Set(st.state.done || [])
   // 同一步只给一次卡。不然：产物没出现之前这一步一直是"未完成"，之后【每一轮】回复底部都会
   // 再挂一张一模一样的卡；而 paper 有 7 个带表单的步骤 → 整场对话里「下一步建议」几乎不再出现，
@@ -4269,7 +4637,14 @@ async function offerStepForm(turn) {
   //   grant 里只有「标书成文」带表单，于是用户还在第 3 步谈主攻方向，底下就端出第 5 步的卡片，
   //   跟上方进度条显示的位置当面打架（实测）。取第一个未完成步，与进度条 stepsBar 里
   //   推断「当前步」的规则保持一致，两处才不会各说各的；它没有表单就不给卡，退回普通建议。
-  const upcoming = st.steps.find((s) => !done.has(s.id))
+  // ★ 但要跳过【可选且没有表单】的步骤：它没跑就永远不 done，会把指针永久挡在自己身上。
+  //   实测 review：「语言润色」(optional、无表单) 挡在「排版出件」(有 fmt: docx/pdf/both) 前面，
+  //   于是那张选输出格式的卡【永远弹不出来】。只跳这一类——它本来也给不出卡，跳过去不会
+  //   变成"满流程找第一个带表单的未完成步"（那正是上面注释里 grant 端出第 5 步卡的那种错）。
+  //   核过：全部模块里这类步只有三处，另两处（litread 的演示 PPT、humanize 的排版出件）
+  //   后面根本没有带表单的步，改动只影响 review 这一处。
+  const notDone = st.steps.filter((s) => !done.has(s.id))
+  const upcoming = notDone.find((s) => !(s.optional && !s.form?.length)) || notDone[0]
   const next = upcoming && upcoming.form?.length && !offeredSteps.has(upcoming.id) ? upcoming : null
   if (!next) return false
   offeredSteps.add(next.id)
@@ -4295,8 +4670,10 @@ async function submitStepForm(modId, step, values, card) {
     const r = await fetch("api/workflow/form", { method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ module: modId, step: step.id, values, sid: sessionId }) })
     if (r.ok) { const j = await r.json(); text = j.card || ""; (j.warnings || []).forEach((w) => addNote("⚠ " + w)) }
-    // 服务端现在会对缺必填回 400 + 人话文案（与本文件的前端校验同一口径）。把它原样透出来，
-    // 别再笼统说成"后台没响应"——那会让用户去点重试，而真正要做的是补一个字段。
+    // 服务端回 400 时把它的人话文案原样透出来，别笼统说成"后台没响应"（那会让用户去点重试）。
+    // ★ 更正一处旧注释：这里【不包括缺必填】。服务端对缺必填只回 200 + warnings、明令不挡
+    //   （见 /api/workflow/form 里那段说明：必填是提醒不是闸，不阻断是设计铁律）。
+    //   400 只有三种：请求体不是合法 JSON、这个模块没有工作流、未知步骤（未授权是 403）。
     else { const j = await r.json().catch(() => null); if (j && j.err) { addNote("⚠ " + j.err); return } failed = true }
   } catch (_) { failed = true }
   // ★ 失败时【保留卡片】。此前无条件先 card.remove() 再判：网络异常或服务端非 200 时，用户填的
@@ -4324,7 +4701,7 @@ async function loadWorkflowState() {
     liveBypass = !!j.gateBypass   // 放行是会话级的，切会话/刷新都要按服务端的说法重置
     // 第 4 个参数不能漏：漏了 updateStepsBar 会沿用旧的 liveFailed（切会话/刷新时是 []），
     // 于是「需返工」的红标在刷新后凭空消失，那一步显示成"还没做"。服务端是有 failed 的。
-    updateStepsBar(j.state.done || [], j.state.cur, j.steps, j.state.failed || [], j.state.implied || [], j.state.stale || [])
+    updateStepsBar(j.state.done || [], j.state.cur, j.steps, j.state.failed || [], j.state.implied || [], j.state.stale || [], j.state.staleUp || [], j.state.halted || null)
   } catch (_) {}
 }
 
@@ -4358,11 +4735,11 @@ async function loadModules() {
   const allowed = MODULES.filter((m) => m.allowed)
   if (pendingModule) {   // 从工作台点进来的模块：清单到手才知道它是否已开通
     const hit = allowed.find((m) => m.id === pendingModule)
-    // 有专用界面的模块（ui="reader"）：老书签、老工作台（界面包只更新了一半时）仍会把人
-    // 送到 `./#module=litread`。这里兜住，转投它自己的页面 —— 判据用服务端下发的 ui，
-    // 不在前端写死 id。★ 必须把 ?m= 带上（reader.html 是四个模块共用的壳，缺了就兜底成
-    // litread —— 那正是「点数据统计却进了文献研读」的成因）。
-    if (hit && hit.ui === "reader") { location.href = "./reader.html?m=" + encodeURIComponent(hit.id); return }
+    // 有专用界面的模块（ui="reader" 阅读器 / "figure" 生成器）：老书签、老工作台（界面包只更新了
+    // 一半时）仍会把人送到 `./#module=litread`。这里兜住，转投它自己的页面 —— 判据用服务端下发的
+    // ui，不在前端写死 id。★ 必须把 ?m= 带上（那些壳是多模块共用的，缺了就兜底成第一个模块 ——
+    // 那正是「点数据统计却进了文献研读」的成因）。认不出的 ui 照常留在通用壳，别把人卡在半路。
+    if (hit && SHELL[hit.ui]) { location.href = "./" + SHELL[hit.ui] + "?m=" + encodeURIComponent(hit.id); return }
     if (hit) currentModule = hit.id
     else if (MODULES.some((m) => m.id === pendingModule)) addNote("ℹ 你的账号未开通该模块，已回到自由对话")
     pendingModule = ""
@@ -4595,7 +4972,8 @@ function attachStream(sid) { openStream("api/chat/attach?sid=" + encodeURICompon
 function addNote(msg) {
   const d = document.createElement("div"); d.className = "msg bot"
   const n = document.createElement("div"); n.className = "note"; n.textContent = msg
-  d.appendChild(n); logAppend(d); log.scrollTop = log.scrollHeight
+  // 同理不无条件拽底：无人值守每轮都会来一条 addNote，用户在上面翻资料会被反复弹回去
+  d.appendChild(n); withFollow(() => logAppend(d))
   return d
 }
 
@@ -4623,7 +5001,9 @@ function openStream(url) {
   // 本轮开始 → 步骤归属重新认一次（"第一个说了算"只在一轮之内有效）。
   // liveTurn 让 absorbTail 认得出"哪个回合框是可以跟着挪进新分组的"。
   liveTurn = turn; turnStepFixed = false
-  logAppend(turn); log.scrollTop = log.scrollHeight
+  // 用户自己发消息那条路 send() 已经贴过底了；这里再无条件拽一次，只在【无人值守自动续跑】
+  // 那条路上生效 —— 而那正是用户没做任何动作、可能正在上面翻资料的时候。改成有条件。
+  withFollow(() => logAppend(turn))
 
   // 本轮对应的用户提问（给"下一步建议"当上下文）。幽灵气泡要排除：那条根本没发出去，
   // 而这条流放的是【上一轮】的输出，拿它当问题会给出驴唇不对马嘴的建议。
@@ -4633,8 +5013,12 @@ function openStream(url) {
   let qTip = null               // 云端排队提示条（见下面的 queue 事件）
   const seenSkills = new Set()
   const reason = new Map()     // reasoning id -> text
-  const atBottom = () => log.scrollHeight - log.scrollTop - log.clientHeight < 60
+  const atBottom = atBottomNow
+  // ★ 一律"先量后改"：was 在改 DOM 【之前】取，改完再据它决定要不要贴底。
+  //   写成 `改完再 atBottom()` 的话，这一帧涨了 60px 以上就被判成"用户翻走了"，此后永不跟随
+  //   （见模块级 withFollow 的头注）。本轮内每个会往 turn 里塞东西的处理器都照这个来。
   const follow = () => { if (atBottom()) log.scrollTop = log.scrollHeight }
+  const followFrom = (was) => { if (was) log.scrollTop = log.scrollHeight }
 
   const es = new EventSource(url)
   activeES = es
@@ -4646,7 +5030,7 @@ function openStream(url) {
   const paintLive = () => {                       // 流式期间就渲染，表格边流边成形
     liveT = 0
     if (painted || finished || !gotText) return
-    paintStreamMd(answer, rawText); follow()
+    withFollow(() => paintStreamMd(answer, rawText))
   }
   const paintAnswer = () => {                     // 先在原始文本上抠掉 ask 块，再把剩余文本渲染成 markdown
     stopLive()                                    // 收尾要盖掉实时那版，别让排队中的重绘在后面又覆写一次
@@ -4682,10 +5066,11 @@ function openStream(url) {
   es.addEventListener("session", (ev) => { sseFailStreak = 0; const nid = JSON.parse(ev.data).id; streamSid = nid; sessionId = nid; localStorage.setItem("nm_sid", nid); consumePendingProject(nid); loadUploads(); loadZotLib() })   // 连上了 → 清零重连计数
 
   es.addEventListener("tool", (ev) => {
+    const was = atBottomNow()                   // 先量：下面要往 turn 里塞徽章/工具行，塞完再判就晚了
     const d = JSON.parse(ev.data)
     if (d.tool === "skill") {   // 技能：常显徽章，不进折叠列表（名字在 running/completed 才出现）
       if (d.skill) markStepBySkill(d.skill)     // 顺手把步骤条推到对应的那一步（实时，不等本轮结束）
-      if (d.skill && !seenSkills.has(d.skill)) { seenSkills.add(d.skill); const pill = document.createElement("span"); pill.className = "skill-pill"; pill.innerHTML = ic("puzzle"); const s = document.createElement("span"); s.textContent = d.skill; pill.appendChild(s); skillsEl.appendChild(pill); follow() }
+      if (d.skill && !seenSkills.has(d.skill)) { seenSkills.add(d.skill); const pill = document.createElement("span"); pill.className = "skill-pill"; pill.innerHTML = ic("puzzle"); const s = document.createElement("span"); s.textContent = d.skill; pill.appendChild(s); skillsEl.appendChild(pill); followFrom(was) }
       return
     }
     toolsD.hidden = false                       // 其它工具：折叠列表，按 callID 原地更新
@@ -4697,10 +5082,11 @@ function openStream(url) {
     toolsD.querySelector(".cnt").textContent = `(${toolRows.size})`
     const liveTools = [...toolRows.values()].filter(r => r.classList.contains("live")).length
     setGen(liveTools ? `工具运行中（${liveTools}）…` : "等待模型输出…")   // 工具收尾后回到等模型
-    follow()
+    followFrom(was)
   })
 
   es.addEventListener("reasoning", (ev) => {
+    const was = atBottomNow()                   // 先量（思考展开时能一次涨很高）
     const d = JSON.parse(ev.data); reason.set(d.id, d.text)
     thinkD.hidden = false
     const full = [...reason.values()].filter(Boolean).join("\n\n")
@@ -4708,18 +5094,20 @@ function openStream(url) {
     thinkD.querySelector(".rpeek-in").textContent = full   // 折叠态的贴底窗口跟着更新，始终露出最新思考
     thinkD.querySelector(".rlbl").innerHTML = '思考中<span class="live">…</span>'
     setGen("思考中…")
-    follow()
+    followFrom(was)
   })
 
   // text 事件带的是【累计全文】（不是增量），所以直接覆盖 rawText 即可。渲染节流到 110ms：
   // 模型一秒能推几十次事件，每次都重绘长回答既费电又看着发抖。
   es.addEventListener("text", (ev) => { if (!painted) { gotText = true; rawText = JSON.parse(ev.data); setGen("正在输出…"); if (!liveT) liveT = setTimeout(paintLive, 110) } })
-  es.addEventListener("final", (ev) => { const t = JSON.parse(ev.data).text; if (t && !painted) { gotText = true; rawText = t } paintAnswer(); follow() })
+  // 收尾这一下涨得最多（补画的尾行 + askform 选项卡一次 +200px 上下）—— 正是最不能脱钩的一帧：
+  // 脱钩的后果是用户【完全没看见 agent 在问他选 1/2/3】，直接打字问别的，那一轮白跑。
+  es.addEventListener("final", (ev) => { const t = JSON.parse(ev.data).text; if (t && !painted) { gotText = true; rawText = t } withFollow(() => paintAnswer()) })
   es.addEventListener("files", (ev) => { const list = JSON.parse(ev.data); if (list.length) { renderFiles(list); addProducts(list) } })   // 本轮没产物就保留上一轮，不清空
   // 结构化产物：服务端按文件名认出渲染器（文献表→文献卡片、核查报告→红黄绿逐条…）。
   // 这是 files 之外【额外】的一份，不是替代 —— 认不出的产物仍走上面那条，绝不会因此消失。
   es.addEventListener("artifacts", (ev) => { try { renderArtifacts(JSON.parse(ev.data)) } catch (_) {} })
-  es.addEventListener("workflow", (ev) => { try { const w = JSON.parse(ev.data); if (w.gateBypass !== undefined) liveBypass = !!w.gateBypass; updateStepsBar(w.done || [], w.cur, null, w.failed || [], w.implied || [], w.stale || []) } catch (_) {} })
+  es.addEventListener("workflow", (ev) => { try { const w = JSON.parse(ev.data); if (w.gateBypass !== undefined) liveBypass = !!w.gateBypass; updateStepsBar(w.done || [], w.cur, null, w.failed || [], w.implied || [], w.stale || [], w.staleUp || [], w.halted !== undefined ? w.halted : undefined) } catch (_) {} })
   es.addEventListener("auto", (ev) => { try { autoNextInfo = JSON.parse(ev.data) } catch {} })   // 无人值守：done 后服务端已同步起了下一轮
   es.addEventListener("done", () => {
     paintAnswer(); finalize(); refreshStorage()   // 本轮产物落盘后刷新存储用量
@@ -4748,6 +5136,7 @@ function openStream(url) {
       return
     }
     const secs = (ms) => (ms >= 60000 ? Math.round(ms / 60000) + " 分钟" : Math.max(1, Math.round(ms / 1000)) + " 秒")
+    const was = atBottomNow()                   // 先量：排队提示条一插就是 +62px，够把跟随判掉
     genEl.classList.add("queued")
     if (d.rateLimited) setGen("上游限速中，正在等待重试…")
     else setGen("正在云端排队（第 " + (d.position || 1) + " 位" + (d.waiting > 1 ? "，共 " + d.waiting + " 个在等" : "") + "）…")
@@ -4758,7 +5147,7 @@ function openStream(url) {
         (d.limit ? "（平台同时最多跑 " + d.limit + " 个请求，当前 " + (d.running || 0) + " 个在跑）" : "") +
         (d.etaMs ? "，预计还要 " + secs(d.etaMs) : "") +
         "。轮到后会自动开始，无需重发；已等 " + secs(d.waitedMs || 0) + "。"
-    follow()
+    followFrom(was)
   })
   es.addEventListener("idle", () => {   // attach 时后台已无进行中的一轮 → 改走历史回显（把刚完成的最终答案也带出来）
     finished = true; es.close(); if (activeES === es) { activeES = null; setStreamingUI(false) }
@@ -4961,8 +5350,16 @@ function clShow(mode, st) {
       remain: !(limitUsd > 0) ? null : Math.max(0, Math.floor((limitUsd - (usedUsd || 0)) / rate)),
       pct: !(limitUsd > 0) ? 0 : Math.min(100, Math.round((usedUsd || 0) / limitUsd * 100)),
     }
-    const dayL = line(p.quota && p.quota.daily, use.today, lim.daily)
-    const monL = line(p.quota && p.quota.monthly, use.month, lim.monthly)
+    // ★ 这份 quota 是 cloud-state.json 里【持久化的快照】，只在登录 / 点「刷新」时更新 ——
+    //   过了 UTC 零点它就是个骗人的旧数：面板照写「今日剩 119 / 共 150（已用 30.4，20%）」，
+    //   而真值是 150/150、0%；同一屏左下角那条 30 秒轮询的实时值却是对的，两处数字打架。
+    //   判过期需要的时间戳 (`dayResetAt` / `monthResetAt`) 就在同一个对象里，此前从没被看过。
+    //   过期就当"这条线还没用过"渲染（服务端到点也确实是清零），别把旧数当真。
+    const nowMs = Date.now()
+    const expired = (iso) => { const t = iso ? Date.parse(iso) : NaN; return Number.isFinite(t) && nowMs >= t }
+    const q = p.quota || {}
+    const dayL = line(expired(q.dayResetAt) ? null : q.daily, expired(q.dayResetAt) ? 0 : use.today, lim.daily)
+    const monL = line(expired(q.monthResetAt) ? null : q.monthly, expired(q.monthResetAt) ? 0 : use.month, lim.monthly)
     const bar = (l) => l.unlimited
       ? '不限 <span class="mm-faint">（已用 ' + fmtCredits(l.used) + " 积分）</span>"
       : "剩 " + fmtCredits(l.remain) + ' 积分 <span class="mm-faint">/ 共 ' + fmtCredits(l.limit)
@@ -5320,7 +5717,7 @@ async function openFeedback(sid, title) {
     document.getElementById("fbHead").textContent = (p && p.err) || "读不到这个会话，无法反馈"
     return
   }
-  const kb = Math.max(1, Math.round(p.chars / 1024))
+  const kb = Math.max(1, Math.round(p.chars / 1024))   // p.chars 服务端已改成 UTF-8 真实字节，与下方文件大小同口径
   document.getElementById("fbHead").innerHTML = "会话：<b>" + esc(p.title || title || "未命名") + "</b><br>" +
     "将附上 <b>" + p.msgs + " 条消息</b>（约 " + kb + " KB 文字）的完整对话。"
   // 产出文件：默认不勾。这里是整个功能里最需要用户自己判断的一步（可能含患者数据）
@@ -5411,7 +5808,9 @@ function renderNoticePanel(list, err) {
   head.className = "nthead"
   const t = document.createElement("b"); t.textContent = "平台公告"
   const sub = document.createElement("span")
-  sub.textContent = err ? "（暂时拉不到，显示的是上次的）" : `保留最近 ${Math.round(ntKeepDays / 30)} 个月`
+  // 不到一个月时别说「0 个月」（Math.round(14/30) = 0，读起来像"一条都不留"）；45 天也别抹成 2 个月
+  sub.textContent = err ? "（暂时拉不到，显示的是上次的）"
+    : ntKeepDays < 30 ? `保留最近 ${ntKeepDays} 天` : `保留最近 ${Math.floor(ntKeepDays / 30)} 个月`
   head.append(t, sub)
   p.append(head)
   if (!list || !list.length) {
