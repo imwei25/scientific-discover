@@ -15,6 +15,15 @@ cd desktop\launcher
 cargo tauri build
 ```
 
+> **别往 `tauri.conf.json` 里加 `"//"` 注释键。** 那份配置是强校验的（未知字段直接拒），
+> 加了之后 `cargo tauri build` 第一步就报
+> `error on 'bundle > windows > nsis': ... is not valid under any of the schemas listed in the 'anyOf' keyword`，
+> 而这个错误只在真正打包时才暴露 —— 改配置的那次提交看不出任何异常。要写说明就写在这里。
+>
+> 已经栽过的一处：`bundle.windows.nsis.installerIcon`。它配的是**安装包自己**的图标；
+> 上面 `bundle.icon` 只管【应用】的图标，是另一个键。不配的话 NSIS 用自带的通用安装图标，
+> 用户下到手的 setup.exe 顶着一个跟产品毫无关系的图标。
+
 ## 架构与关键决策
 
 - **进程链**：安装器装到 `%LOCALAPPDATA%\Programs\SciAgent`（per-user，免管理员）。
