@@ -281,7 +281,25 @@ if [[ -n "$INFERCW" ]]; then
 fi
 
 echo "[render_docx] in=$INPUT out=$OUTPUT journal='${JOURNAL:-none}' ref='${REF:-none}' csl='${CSL:-none}' figsatend='${FIGSATEND:-0}' infercw='${INFERCW:-0}' tabletune='${TABLETUNE:-0}'" >&2
-pandoc "${ARGS[@]}" ${EXTRA[@]+"${EXTRA[@]}"} "$SRCMD" || { echo "ERROR: pandoc failed" >&2; exit 4; }
+if [[ -z "${TMPD:-}" ]]; then TMPD="$(mktemp -d)"; trap 'rm -rf "$TMPD"' EXIT; fi
+PERR="$TMPD/pandoc.err"
+pandoc "${ARGS[@]}" ${EXTRA[@]+"${EXTRA[@]}"} "$SRCMD" 2>"$PERR" \
+  || { cat "$PERR" >&2; echo "ERROR: pandoc failed" >&2; exit 4; }
+[[ -s "$PERR" ]] && cat "$PERR" >&2
+# ★ 图片取不到时 pandoc【只警告、照样退 0】，产出的 docx 里一张图都没有 —— 这正是
+#   "润色完图没了"那条链路上最后一道、也是最沉默的一环。必须把它升级成硬错误：
+#   稿子里写着图、出件里没有图，是不能交付的产物，宁可红着停下让人补图。
+if grep -q "Could not fetch resource" "$PERR" 2>/dev/null; then
+  echo "ERROR: 稿件引用的图片找不到，pandoc 已把它们替换成文字说明——**产出的 .docx 里没有这些图**。" >&2
+  grep "Could not fetch resource" "$PERR" | sed 's/^/       /' >&2
+  echo "       修法：把图片文件放到稿件同级目录（或改成正确的相对路径）后重跑；" >&2
+  echo "       原稿是 Word/PDF 的，用 humanize-academic/scripts/ingest_doc.py 重新读入即可把图抽出来。" >&2
+  # 缺图的 .docx 已删除：留着它比没有更糟 —— 用户会当成成品直接投出去，
+  # 而流水线只看"产物文件在不在"，留着还会把这一步判成绿的。
+  rm -f "$OUTPUT"
+  echo "       （缺图的 $OUTPUT 已删除，避免被当成可投稿的成品）" >&2
+  exit 6
+fi
 
 # ---- post-process: bake font / size / margin / spacing / line numbers / tables into the docx ----
 FMTARGS="$FONT$CJKFONT$FONTSIZE$MARGIN$LINESPACING$LINENUMBERS$HEADCJKFONT$HEADFONTSIZE$PAGENUMBERS$INDENTCHARS$CAPTIONFONTSIZE$TABLEFONTSIZE$TITLEFONTSIZE$H1FONTSIZE$AUTHORFONTSIZE"

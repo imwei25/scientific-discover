@@ -537,6 +537,21 @@ else
 fi
 
 echo "[render_pdf] in=$INPUT out=$OUTPUT cjk_kind=$CJK_KIND mode=[$RENDER_MODE] journal='${JOURNAL:-none}' margin='${MARGIN:-def}' fontsize='${FONTSIZE:-def}' linestretch='${LINESTRETCH:-def}' lineno='${LINENUMBERS:-0}' fm_font=${FM_HAS_MAINFONT}/${FM_HAS_CJKFONT} infer=$INFER_COLWIDTHS" >&2
-pandoc "${ARGS[@]}" ${EXTRA[@]+"${EXTRA[@]}"} "$WORK"
+mktmp
+PERR="$TMPDIR/pandoc.err"
+pandoc "${ARGS[@]}" ${EXTRA[@]+"${EXTRA[@]}"} "$WORK" 2>"$PERR" \
+  || { cat "$PERR" >&2; echo "ERROR: pandoc failed" >&2; exit 4; }
+[[ -s "$PERR" ]] && cat "$PERR" >&2
+# ★ 与 render_docx.sh 同一道闸：图片取不到时 pandoc 只警告、照样退 0，出来的 PDF 里没有图。
+#   稿子里写着图、出件里没有图，不是可交付的产物。
+if grep -q "Could not fetch resource" "$PERR" 2>/dev/null; then
+  echo "ERROR: 稿件引用的图片找不到，pandoc 已把它们替换成文字说明——**产出的 PDF 里没有这些图**。" >&2
+  grep "Could not fetch resource" "$PERR" | sed 's/^/       /' >&2
+  echo "       修法：把图片文件放到稿件同级目录（或改成正确的相对路径）后重跑；" >&2
+  echo "       原稿是 Word/PDF 的，用 humanize-academic/scripts/ingest_doc.py 重新读入即可把图抽出来。" >&2
+  rm -f "$OUTPUT"
+  echo "       （缺图的 $OUTPUT 已删除，避免被当成可投稿的成品）" >&2
+  exit 6
+fi
 [[ -n "$PRESET_NOTE" ]] && echo "[render_pdf] 预设提示: $PRESET_NOTE" >&2
 echo "[render_pdf] ok → $OUTPUT" >&2
