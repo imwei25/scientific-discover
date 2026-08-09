@@ -4018,6 +4018,14 @@ export const server = http.createServer(async (req, res) => {
         } else if (f.type === "number" && v !== undefined && v !== "" && Number.isFinite(Number(v))) {
           if (f.min !== undefined && Number(v) < f.min) warnings.push(`「${f.label}」填的 ${v} 小于允许的最小值 ${f.min}`)
           if (f.max !== undefined && Number(v) > f.max) warnings.push(`「${f.label}」填的 ${v} 超过允许的最大值 ${f.max}`)
+          // 两格独立数字构成的区间（研究起止年就是这样）没有 range 那条倒挂检查兜着 ——
+          // 声明 gteField 就补上：`终止年 < 起始年` 属于填反了，同样只提示不挡。
+          if (f.gteField) {
+            const lo = vals[f.gteField]
+            const loF = (fields || []).find((x) => x.id === f.gteField)
+            if (lo !== undefined && lo !== "" && Number.isFinite(Number(lo)) && Number(v) < Number(lo))
+              warnings.push(`「${f.label}」填的 ${v} 早于「${loF?.label || f.gteField}」的 ${lo}，是不是填反了`)
+          }
         }
       }
       // ★ 这里【只能】判 sid，不能再加 `sessionModule(sid) === modId`。

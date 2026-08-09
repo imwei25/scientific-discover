@@ -673,12 +673,16 @@ export const WORKFLOWS = {
       { id: "amount", label: "申请金额（万元）", type: "number", required: true, min: 0, step: 1,
         col2: false, placeholder: "例如：60", help: "该额度将作为预算合计的上限。",
         errMsg: "请填写有效的申请金额" },
-      // 起止年给默认值：设计稿里这两个下拉是预选好的，而本产品的可选下拉默认停在
-      //「（不限 / 未选）」—— 研究周期留空对标书没有任何意义，反而多两次点击。
-      { id: "yearStart", label: "研究起始年", type: "select", dropdown: true, col2: false, default: "2026",
-        options: [{ v: "2026", t: "2026" }, { v: "2027", t: "2027" }] },
-      { id: "yearEnd", label: "研究终止年", type: "select", dropdown: true, col2: false, default: "2029",
-        options: [{ v: "2029", t: "2029" }, { v: "2030", t: "2030" }, { v: "2031", t: "2031" }] },
+      // 起止年【手填】，不用下拉：可选年份是随申报年度滚动的，写死成 2026/2027 这种候选表
+      // 一到下一年就全错，而用户又没法选表外的年份（延续项目、跨年度周期都超出这几项）。
+      // 仍给默认值：设计稿里这两格是预选好的，研究周期留空对标书没有任何意义。
+      // 默认值写成【数字】而非字符串 —— number 控件回写的是 Number，写成 "2026" 的话用户原样
+      // 重敲一遍 2026 就会和初始快照对不上，被判成"动过表单"，切走时白弹一次清空确认。
+      { id: "yearStart", label: "研究起始年", type: "number", col2: false, default: 2026,
+        min: 2000, max: 2100, step: 1, placeholder: "例如：2026" },
+      { id: "yearEnd", label: "研究终止年", type: "number", col2: false, default: 2029,
+        min: 2000, max: 2100, step: 1, placeholder: "例如：2029", gteField: "yearStart",
+        help: "填不早于起始年的年份；起止年之差即研究周期（国自然面上一般 4 年、青年 3 年）。" },
 
       // ---- 区块 2：申请人信息 ----
       // ⚠️ 姓名 / 单位会随任务卡交给模型（封面与研究基础一节要用），而【邮箱和电话它一个字都用不上】
