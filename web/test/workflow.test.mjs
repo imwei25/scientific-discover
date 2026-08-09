@@ -745,14 +745,32 @@ test("读入原文这一步要点名 ingest_doc.py——裸 pandoc / python-docx
   assert.ok(WF.skillsOf("humanize").includes("humanize-academic"))
 })
 
-test("润色模块的前言与首个模式必须写明『图表原样搬运』，否则整篇重写时会漏掉", () => {
+test("润色模块的前言必须按格式分流，且两条路各自的图表处理都要写明", () => {
+  // 【为什么改过】原来这条只查"前言有没有说搬图表"，因为当时只有 markdown 一条路。
+  // 现在 .docx 走就地改写，根本不搬图表（图和表从没离开过原文件），继续只查搬运措辞
+  // 会逼着前言写一句对 A 路来说是错的话。改成两条路分别守。
   const flow = WF.WORKFLOWS.humanize.flow
-  assert.match(flow, /图和表/, "前言没提图表 = 模型不知道要搬")
+  // A 路：必须点名就地改写的入口脚本，并说清"不重建文件"——这是它保住格式的全部理由
+  assert.match(flow, /docx_extract\.py/, "前言没给 A 路的入口 = Word 稿还是会被抽成 markdown")
+  assert.match(flow, /不重建文件|只改文字/, "不说清 A 路为什么保得住格式，模型会退回重排")
+  // B 路：图表要原样搬 + 校验闸要跑，一条都不能少（这是"润色完图没了"的正面修复）
   assert.match(flow, /ingest_doc\.py/)
+  assert.match(flow, /图/, "B 路没提图 = 模型不知道要搬")
   assert.match(flow, /check_invariants/, "前言要把校验闸也说出来，否则模型不会去跑")
   const polish = WF.WORKFLOWS.humanize.reader.modes.find((m) => m.id === "polish")
+  assert.match(polish.prompt, /docx_extract\.py/)
   assert.match(polish.prompt, /ingest_doc\.py/)
   assert.match(polish.prompt, /整行照抄|原样搬/, "prompt 要给出具体动作，只说『保留图表』模型会自行发挥")
+})
+
+test("润色步与排版步不能抢同一个产物——A 路的 *_humanized.docx 属于润色", () => {
+  // 踩过：A 路产物是 docx，而润色步的 emits 只写了 .md，于是它不变绿，
+  // 反倒被排版步（emits 含 *_humanized.docx）认走 —— 界面显示成"润色没做、排版做了"。
+  const steps = WF.WORKFLOWS.humanize.steps
+  const hum = steps.find((s) => s.id === "humanize")
+  assert.ok(hum.emits.includes("*_humanized.docx"), "润色步必须认领 A 路的 docx 产物")
+  const ingest = steps.find((s) => s.id === "ingest")
+  assert.ok(ingest.emits.some((g) => /_para\.md$/.test(g)), "读入原文这一步要认 A 路的 *_para.md")
 })
 
 test("表单里不许出现内部文档编号（AGENTS.md §X 对医生用户是天书）", () => {

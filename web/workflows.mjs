@@ -1290,18 +1290,25 @@ export const WORKFLOWS = {
       //   而它手边每条现成的路都丢图：裸 pandoc 不带 --extract-media（链接留着、文件没落盘）、
       //   pdf_to_md.py 写死 ignore_images=True、python-docx 的 paragraphs 里既没图也没表。
       //   丢了之后全链路无声：排版时 pandoc 只打一句 WARNING 就退 0，用户打开 Word 才发现图没了。
+      // ★ emits 必须同时认两条路的产物：A 路（docx 就地改写）出 <原名>_para.md，
+      //   B 路（pdf/md）才出 <原名>_src.md。只写 *_src.md 的话，Word 稿走 A 路时这一步
+      //   永远不变绿 —— 用户看到"读入原文"一直是灰的，会以为它根本没读稿子。
       { id: "ingest", name: "读入原文", skill: "humanize-academic",
-        emits: ["*_src.md"], render: "manuscript",
+        emits: ["*_para.md", "*_src.md"], render: "manuscript",
         // 脚本名要留着（有测试盯着它：不点名 ingest_doc.py，模型就会顺手用裸 pandoc 把图表抽丢）；
         // 但 hint 是【给用户看的】、前端 textContent 渲染，反引号会原样显示成 `xxx`，所以只去反引号。
-        hint: "用 ingest_doc.py 抽，别自己拿 pandoc / python-docx 抽——那几条路会把原稿的图和表丢掉",
-        note: "脚本会报「抽出 图 N 张 / 表 M 张」，**把这个数记住**：它是润色后校验的基准，"
-            + "也是交付时要跟用户对的账。" },
+        hint: "Word 稿用 docx_extract.py 抽成带编号的段落清单（就地改写用）；PDF / md 稿用 ingest_doc.py 抽，"
+            + "别自己拿 pandoc / python-docx 抽——那几条路会把原稿的图和表丢掉",
+        note: "B 路的脚本会报「抽出 图 N 张 / 表 M 张」，**把这个数记住**：它是润色后校验的基准，"
+            + "也是交付时要跟用户对的账。A 路不需要这个数——图和表根本没离开过原文件。" },
+      // ★ 必须含 *_humanized.docx：A 路就地改写的产物【本身就是 docx】，不写的话这一步不变绿，
+      //   而下面的「排版出件」步（emits 里有 *_humanized.docx）会把它认走 ——
+      //   于是界面显示成"润色没做、排版做了"，与事实正好相反。
       { id: "humanize", name: "润色改写", skill: "humanize-academic",
-        emits: ["*_humanized.md", "humanized*.md"], render: "diff",
+        emits: ["*_humanized.md", "humanized*.md", "*_humanized.docx"], render: "diff",
         // 同上：只去反引号，脚本名与动作照留（hint 走 textContent，反引号会原样显示给用户）
-        hint: "图与表原样搬进润色稿（图片整行照抄、pipe 表整块搬），改完跑 check_invariants.py 比对；"
-            + "图表丢失会判 FAIL，没补回去不许进排版出件" },
+        hint: "Word 稿走就地改写：docx_apply.py 落 Word 修订，再跑 docx_verify.py 四道闸，原格式一个字节不动；"
+            + "PDF / md 稿要把图与表原样搬进润色稿，改完跑 check_invariants.py 比对，图表丢失判 FAIL" },
       // ★ 不标 optional：本步只在【用户主动关掉引用保护】时才出现，存在即必做。
       //   标成可选时 pipelineLine 会往模块前言里写"引用兜底核查(可选)"，等于亲口告诉 AI 这步能跳 ——
       //   实测它就跳了：直接出 docx，事后才反问"要不要核查引用"。而这正是那个开关存在的唯一意义。
@@ -1345,17 +1352,28 @@ export const WORKFLOWS = {
       + `\n- **改写的底线，优先级高于任何润色目标**：数字、单位、统计量、样本量、p 值、置信区间一律不动；`
       + `结论的**强度**不许变（「显著低于」↛「低于」，「证实」↛「提示」）；`
       + `带 \`[n]\` 角标的整句按用户的设定处理（默认逐字保留）。`
-      // ★ 这三行是"润色完图表就没了"那个 bug 的正面修复，别删。三层缺一层就会重新静默丢图：
+      // ★ 第一条铁律是【按格式分流】，别再改回"一律先 ingest_doc.py"。
+      //   这里踩过一次：模式提示词已经改成 .docx 走就地改写了，但本前言仍无条件写着
+      //   "第一步先用 ingest_doc.py 读入原文" —— 前言是模块的常驻指令、每轮都注入，
+      //   于是模型照前言执行，Word 稿照旧被抽成 markdown，用户拿回来的还是重排过的文件。
+      //   模式提示词管不住前言，两边必须同时改。
+      + `\n- **第一步先看稿件格式，按格式分流**：`
+      + `\n  · **\`.docx\` → 就地改写（A 路，默认）**：`
+      + `\`.venv/bin/python .opencode/skills/humanize-academic/scripts/docx_extract.py <稿件>\` `
+      + `得到 \`<原名>_para.md\`（每行 \`[[p0007]] 正文\`），逐行改写成 \`<原名>_edited.md\`，`
+      + `再用 \`docx_apply.py <稿件> <原名>_edited.md -o <原名>_humanized.docx --track-changes\` 写回，`
+      + `最后 \`docx_verify.py\` 四道闸。**这条路只改文字、不重建文件**，所以用户的排版、`
+      + `表格合并单元格、EndNote 引文域、页眉页脚、图表全都不会动 —— 也就【不存在】搬运图表这回事。`
+      + `**做完不要再跑 render-docx**，那会把刚保住的格式换掉。`
+      + `\n  · **\`.pdf\` / \`.md\` → markdown（B 路）**：这些格式没有可回填的结构，只能重排。`
+      // ★ 下面这几行是"润色完图表就没了"那个 bug 的正面修复，别删。B 路三层缺一层就会重新静默丢图：
       //   ①入口不抽媒体 → ②整篇重写时漏掉那几行 → ③排版时 pandoc 只警告不报错。
-      + `\n- **原稿的图和表必须原样出现在润色稿里**（用户最痛的一条：交回一篇没有图表的稿子，`
-      + `等于把人家的结果部分删了）。**第一步先用 \`ingest_doc.py\` 读入原文**——`
-      + `\`.venv/bin/python .opencode/skills/humanize-academic/scripts/ingest_doc.py <稿件>\`，`
-      + `它会把图抽到 \`<稿件名>_files/\`、把表转成 pipe 表，并报出「图 N 张 / 表 M 张」。`
-      + `**别自己拿 pandoc 或 python-docx 抽文本**：不带 \`--extract-media\` 的 pandoc 会留下`
-      + `指向空气的图片链接，python-docx 则连表都取不到。`
-      + `\n- 改写时 \`![alt](路径)\` 整行照抄（连 \`{width=... height=...}\` 都不要动）、pipe 表整块照抄；`
-      + `图题表题的措辞可以润色，但**序号不许动**。改完必须跑 \`check_invariants.py\` 比对原稿与润色稿，`
-      + `**它对图表丢失打 \`[FAIL]\`——没补回去不许进排版出件**。`
+      + `走 \`ingest_doc.py <稿件>\`，它会把图抽到 \`<稿件名>_files/\`、把表转成 pipe 表，`
+      + `并报出「图 N 张 / 表 M 张」。**别自己拿 pandoc 或 python-docx 抽文本**：`
+      + `不带 \`--extract-media\` 的 pandoc 会留下指向空气的图片链接，python-docx 则连表都取不到。`
+      + `\n- **B 路改写时**，\`![alt](路径)\` 整行照抄（连 \`{width=... height=...}\` 都不要动）、`
+      + `pipe 表整块照抄；图题表题的措辞可以润色，但**序号不许动**。改完必须跑 \`check_invariants.py\` `
+      + `比对原稿与润色稿，**它对图表丢失打 \`[FAIL]\`——没补回去不许进排版出件**。`
       + readerModeLines(HUMANIZE_MODES)
       + `\n- **改了什么必须能说清楚**：用户会点「改动对照」逐条看。凡是你动了数字 / 单位 / 结论强度的地方，`
       + `主动拎到最前面标出来 —— 那本来就不该发生，藏起来比改错本身更糟。`
