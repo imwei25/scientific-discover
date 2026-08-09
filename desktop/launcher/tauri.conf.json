@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Niuma Science",
-  "version": "0.1.12",
+  "version": "0.1.14",
   "identifier": "com.sciagent.desktop",
   "build": {
     "frontendDist": "ui"
@@ -37,6 +37,9 @@
     "windows": {
       "nsis": {
         "installMode": "currentUser",
+        "//": "安装包自己的图标。上面 bundle.icon 只管【应用】的图标，安装包这半边是另一个键——",
+        "//2": "不配的话 NSIS 用它自带的通用安装图标，于是用户下到手的 setup.exe 顶着一个跟产品毫无关系的图标。",
+        "installerIcon": "icons/icon.ico",
         "languages": [
           "SimpChinese"
         ],

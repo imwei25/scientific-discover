@@ -9,10 +9,23 @@
 ; 别处跑的 node 一起干掉，那是不能接受的。
 ; 覆盖三类：sciagent-desktop.exe（壳）、runtime\node\node.exe（网关）、
 ; runtime\opencode\opencode.exe，以及 git 拉起的一切子进程。
+;
+; ★★ 比对前必须先剥掉 \\?\ 前缀，否则 opencode.exe 永远杀不掉 ★★
+; 真机实测（2026-08-09）：同一次运行里三个进程的 Win32_Process.ExecutablePath 是
+;   壳       C:\...\Niuma Science\sciagent-desktop.exe
+;   网关     C:\...\Niuma Science\bundle\runtime\node\node.exe
+;   opencode \\?\C:\...\Niuma Science\bundle\runtime\opencode\opencode.exe   ← 带前缀
+; opencode 是 bun 编译的单文件二进制，起来后报的是 Win32 长路径形式。裸 StartsWith("$INSTDIR")
+; 对它必然不成立 —— 于是壳和网关都杀掉了，唯独它活着攥住自己的 exe，NSIS 覆盖不了，
+; 报「无法打开要写入的文件 …\runtime\opencode\opencode.exe」。现场看着像是"随机某些机器装不上"，
+; 实则只取决于装之前有没有留下 opencode 孤儿进程（它是 detached 起的，关窗口的
+; taskkill /T 带不走它，只有壳正常退出时的按端口兜底才清得掉）。
+; TrimStart 用 [char]92 / [char]63（\ 与 ?）而不是字面量：这串要穿过 NSIS 单引号 + cmd + PowerShell
+; 三层转义，少一个反斜杠就整条静默失效，而失效了没人看得出来（nsExec 的返回码这里从来没人查）。
 
 !macro NSIS_HOOK_PREINSTALL
   DetailPrint "检查是否有正在运行的实例…"
-  nsExec::ExecToLog 'powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "$$ErrorActionPreference=\"SilentlyContinue\"; Get-CimInstance Win32_Process | Where-Object { $$_.ExecutablePath -and $$_.ExecutablePath.StartsWith(\"$INSTDIR\", [StringComparison]::OrdinalIgnoreCase) } | ForEach-Object { Stop-Process -Id $$_.ProcessId -Force }"'
+  nsExec::ExecToLog 'powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "$$ErrorActionPreference=\"SilentlyContinue\"; Get-CimInstance Win32_Process | Where-Object { $$_.ExecutablePath -and $$_.ExecutablePath.TrimStart([char]92,[char]63).StartsWith(\"$INSTDIR\", [StringComparison]::OrdinalIgnoreCase) } | ForEach-Object { Stop-Process -Id $$_.ProcessId -Force }"'
   Pop $0
   ; 给句柄释放留点时间：进程退出到文件锁真正解除之间有延迟，紧接着解压仍可能撞上
   Sleep 1500
@@ -65,7 +78,7 @@
   DetailPrint "发现旧版 SciAgent（$R9），正在接管数据…"
   ; 旧版可能正开着（用户边装边用），先结束【旧安装目录下】的进程。同上：只按路径前缀，
   ; 绝不按镜像名杀，否则会连累用户自己别处跑的 node。
-  nsExec::ExecToLog 'powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "$$ErrorActionPreference=\"SilentlyContinue\"; Get-CimInstance Win32_Process | Where-Object { $$_.ExecutablePath -and $$_.ExecutablePath.StartsWith(\"$R9\", [StringComparison]::OrdinalIgnoreCase) } | ForEach-Object { Stop-Process -Id $$_.ProcessId -Force }"'
+  nsExec::ExecToLog 'powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "$$ErrorActionPreference=\"SilentlyContinue\"; Get-CimInstance Win32_Process | Where-Object { $$_.ExecutablePath -and $$_.ExecutablePath.TrimStart([char]92,[char]63).StartsWith(\"$R9\", [StringComparison]::OrdinalIgnoreCase) } | ForEach-Object { Stop-Process -Id $$_.ProcessId -Force }"'
   Pop $0
   Sleep 1500
 
@@ -120,7 +133,7 @@ nm_migrate_done:
 
 !macro NSIS_HOOK_PREUNINSTALL
   DetailPrint "正在结束运行中的实例…"
-  nsExec::ExecToLog 'powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "$$ErrorActionPreference=\"SilentlyContinue\"; Get-CimInstance Win32_Process | Where-Object { $$_.ExecutablePath -and $$_.ExecutablePath.StartsWith(\"$INSTDIR\", [StringComparison]::OrdinalIgnoreCase) } | ForEach-Object { Stop-Process -Id $$_.ProcessId -Force }"'
+  nsExec::ExecToLog 'powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "$$ErrorActionPreference=\"SilentlyContinue\"; Get-CimInstance Win32_Process | Where-Object { $$_.ExecutablePath -and $$_.ExecutablePath.TrimStart([char]92,[char]63).StartsWith(\"$INSTDIR\", [StringComparison]::OrdinalIgnoreCase) } | ForEach-Object { Stop-Process -Id $$_.ProcessId -Force }"'
   Pop $0
   Sleep 1500
 !macroend
