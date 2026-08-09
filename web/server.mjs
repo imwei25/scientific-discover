@@ -455,59 +455,105 @@ async function pruneOrphanMeta() {
     if (dirty) saveMeta()
   } catch (e) { console.warn("[meta] 整理失败:", String(e).slice(0, 200)) }
 }
-// 某目录里顶层文件的 name -> mtime 快照（跳过隐藏项和子目录）
-// 递归【一层】：键是相对 dir 的路径，顶层文件仍是裸文件名（"a.png"），子目录里的是 "pdfs/a.pdf"。
+// 某目录里的 name -> mtime 快照。键是相对 dir 的路径：顶层文件是裸文件名（"a.png"），
+// 子目录里的带路径（"pdfs/a.pdf"、"figures/panel/fig1.png"）。
 // 为什么要递归：好几个技能天然产出子目录（fulltext-retrieval 的 pdfs/、data-integrity 的 audit/、
 // systematic-review 的 counts/）。此前只列顶层 → 这些产物在界面"产出"侧栏里【一个都看不到】，
 // agent 报告"已下载 4 篇文献"而用户什么也拿不到（生产上真实发生过）。
-// 为什么只一层：够覆盖已知的技能产出结构，同时把列表规模与前端展示复杂度控制住；
-// 更深的层级仍读得到（下载接口按包含性校验，不限深度），只是不主动列出来。
-const DIRSTATE_DEPTH = 1
+// ★ 为什么现在【整棵树都列】（原来只列一层）：更深的文件当时只在侧栏尾部换来一句
+//   "另有 N 个文件在更深的子目录里——让助手把它们移到一层目录（如 figures/）就会出现"。
+//   这句话要求用户先懂"会话产物目录只递归一层"这个纯内部约定，而用户既看不见目录、也不知道
+//   "让助手移文件"是什么操作 —— 实测他只会读成"我的文件丢了，而且得去求 AI 才拿得回来"。
+//   现在整棵树都进列表，前端按目录折叠展示（默认收起，不淹没顶层交付物）。
+// 两道闸防"某个技能把一整棵缓存树/git 仓库写进产物目录"：层数上限 + 条目上限。越界的【只数个数】，
+// 交给前端提示"用打包下载一次取回"（/api/download-all 走的是更宽的上限），绝不静默丢弃。
+const DIRSTATE_DEPTH = 8
+const DIRSTATE_MAX = 3000
 const WIN_RESERVED = /^(nul|con|prn|aux|com[1-9]|lpt[1-9])(\.|$)/i
-const dirState = (dir, depth = DIRSTATE_DEPTH, prefix = "") => {
-  if (!fs.existsSync(dir)) return {}
+// 一个目录项要不要进产物列表。【列出与打包共用这一份判据】——两边各写一套的话，
+// "打包下载"迟早会成为绕过下面那条 PHI 过滤的后门。
+const skipEntry = (name) => {
+  if (name.startsWith(".")) return true          // .preview 等派生缓存、.private/ 不进列表
+  if (name === "_workflow.json" || name === "_lasterror.json") return true   // 网关自己的簿子，不是用户产物
+  // Windows 保留名。agent 偶尔会写出 `... 2>nul` 这种 cmd 习惯的重定向，而 Git Bash 不认
+  // `nul` 这个设备名，直接当普通文件建了出来 —— 于是一个 172 字节的垃圾文件出现在用户的
+  // "产出"侧栏里（实测见过）。Linux 生产不会有（那边是 /dev/null），但桌面版就是 Windows。
+  if (WIN_RESERVED.test(name)) return true
+  // ★ 脱敏还原表绝不进"产出"侧栏、也绝不进打包。deidentify 现在已经写进 .private/（点号目录
+  //   本就被上面跳过），这条是纵深防御：兜住旧会话里已经落在产物目录的、以及别的技能日后可能
+  //   写出的同类文件。它第一列就是真实姓名 / 住院号 / 身份证 / 手机号，和成果并排摆着，
+  //   一次误转发就是真实泄露。
+  // ★ 判据引 workflows.mjs 的唯一定义（WF.isSecretName）。原来这里只写了 `*_mapping.csv`，
+  //   而渲染器与前端 isSecret 收的是一整组 —— deid_crosswalk.csv / 姓名对照表.csv /
+  //   patient_keyfile.csv 三类真 PHI 表照常列在侧栏、可一键下载，"纵深防御"只挡住了六分之一。
+  //   代价：gene_mapping.csv 这类良性表也会被挡（判据宁可宽，泄露不可逆、找不到文件可补救）。
+  if (WF.isSecretName(name)) return true
+  return false
+}
+const dirState = (dir) => { deeperCount.n = 0; return walkOutputs(dir, DIRSTATE_DEPTH, "", { n: 0 }) }
+function walkOutputs(dir, depth, prefix, budget) {
   const m = {}
+  if (!fs.existsSync(dir)) return m
   let ents; try { ents = fs.readdirSync(dir, { withFileTypes: true }) } catch { return m }
   for (const e of ents) {
-    if (e.name.startsWith(".")) continue          // .preview 等派生缓存不进列表
-    if (e.name === "_workflow.json" || e.name === "_lasterror.json") continue   // 网关自己的簿子，不是用户产物
-    // Windows 保留名。agent 偶尔会写出 `... 2>nul` 这种 cmd 习惯的重定向，而 Git Bash 不认
-    // `nul` 这个设备名，直接当普通文件建了出来 —— 于是一个 172 字节的垃圾文件出现在用户的
-    // "产出"侧栏里（实测见过）。Linux 生产不会有（那边是 /dev/null），但桌面版就是 Windows。
-    if (WIN_RESERVED.test(e.name)) continue
-    // ★ 脱敏还原表绝不进"产出"侧栏。deidentify 现在已经写进 .private/（点号目录本就被上面跳过），
-    //   这条是纵深防御：兜住旧会话里已经落在产物目录的、以及别的技能日后可能写出的同类文件。
-    //   它第一列就是真实姓名 / 住院号 / 身份证 / 手机号，和成果并排摆着，一次误转发就是真实泄露。
-    // ★ 判据引 workflows.mjs 的唯一定义（WF.isSecretName）。原来这里只写了 `*_mapping.csv`，
-    //   而渲染器与前端 isSecret 收的是一整组 —— deid_crosswalk.csv / 姓名对照表.csv /
-    //   patient_keyfile.csv 三类真 PHI 表照常列在侧栏、可一键下载，"纵深防御"只挡住了六分之一。
-    //   代价：gene_mapping.csv 这类良性表也会被挡（判据宁可宽，泄露不可逆、找不到文件可补救）。
-    if (WF.isSecretName(e.name)) continue
+    if (skipEntry(e.name)) continue
     const p = path.join(dir, e.name)
     const rel = prefix ? prefix + "/" + e.name : e.name
     let st; try { st = fs.statSync(p) } catch { continue }
-    if (st.isFile()) m[rel] = st.mtimeMs
-    else if (st.isDirectory() && depth > 0) Object.assign(m, dirState(p, depth - 1, rel))
-    // ★ 再深一层就不列了（约定如此：侧栏只递归一层）。但【必须让用户知道它存在】——
-    //   实测 agent 把图写进 figures/panel/fig1.png 时，侧栏、正文嵌图、步骤条三条线索同时失效，
-    //   图等于凭空消失，用户零线索。这里只数个数，交给 /api/outputs 挂一行灰字提示。
-    else if (st.isDirectory()) deeperCount.n += countFilesDeep(p)
+    if (st.isFile()) {
+      if (budget.n >= DIRSTATE_MAX) { deeperCount.n++; continue }   // 超上限的只数个数，见 deeperCount
+      budget.n++
+      m[rel] = st.mtimeMs
+    } else if (st.isDirectory()) {
+      if (depth > 0) Object.assign(m, walkOutputs(p, depth - 1, rel, budget))
+      else deeperCount.n += countFilesDeep(p)
+    }
   }
   return m
 }
-// dirState 递归到底层时，被"只列一层"挡在外面的文件有多少个。用对象是为了在递归里累加。
+// 本次遍历里【没能列出来】的文件数（层数超过 DIRSTATE_DEPTH、或条目超过 DIRSTATE_MAX）。
+// 用对象是为了在递归里累加。正常会话恒为 0；非 0 时前端会挂一行灰字指向"打包下载"。
 const deeperCount = { n: 0 }
 const countFilesDeep = (dir) => {
   let n = 0
   let ents; try { ents = fs.readdirSync(dir, { withFileTypes: true }) } catch { return 0 }
   for (const e of ents) {
-    if (e.name.startsWith(".")) continue
+    if (skipEntry(e.name)) continue
     try { n += e.isDirectory() ? countFilesDeep(path.join(dir, e.name)) : 1 } catch { /* 读不到就不数 */ }
   }
   return n
 }
-/** 跑一次 dirState 并顺带拿到"更深层还有几个文件没列出来" */
-const dirStateDeep = (dir) => { deeperCount.n = 0; const m = dirState(dir); return { map: m, deeper: deeperCount.n } }
+/** 跑一次 dirState 并顺带拿到"还有几个文件没列出来" */
+const dirStateDeep = (dir) => { const m = dirState(dir); return { map: m, deeper: deeperCount.n } }
+// 「打包下载」的上限。zipPack 全程在内存里拼（读一份 + 压一份），所以上限是按内存峰值定的，
+// 不是按"用户能不能等"。超了就明说并让他分别下载，绝不给一个截断的 zip（那比报错更坏：
+// 用户以为拿全了，缺的那几份要投稿前才发现）。
+const ZIP_MAX_BYTES = 200 * 1024 * 1024
+const ZIP_MAX_FILES = 4000
+const ZIP_DEPTH = 16          // 比 DIRSTATE_DEPTH 深得多：列表可以有上限，"取回全部"不该有
+/**
+ * 收集一个产物目录里能打进 zip 的全部文件（相对路径 + 绝对路径 + 总字节）。
+ * 判据与侧栏列表【共用 skipEntry】，见 /api/download-all 的头注。
+ */
+function collectForZip(dir, depth = ZIP_DEPTH, prefix = "", acc = { files: [], bytes: 0 }) {
+  let ents; try { ents = fs.readdirSync(dir, { withFileTypes: true }) } catch { return acc }
+  for (const e of ents) {
+    if (skipEntry(e.name)) continue
+    const abs = path.join(dir, e.name)
+    const rel = prefix ? prefix + "/" + e.name : e.name
+    let st; try { st = fs.statSync(abs) } catch { continue }
+    if (st.isFile()) {
+      acc.files.push({ rel, abs, size: st.size })
+      acc.bytes += st.size
+      // 早退：目录大得离谱时没必要把整棵树走完（调用方只需要知道"超了"）
+      if (acc.bytes > ZIP_MAX_BYTES || acc.files.length > ZIP_MAX_FILES) return acc
+    } else if (st.isDirectory() && depth > 0) {
+      collectForZip(abs, depth - 1, rel, acc)
+      if (acc.bytes > ZIP_MAX_BYTES || acc.files.length > ZIP_MAX_FILES) return acc
+    }
+  }
+  return acc
+}
 // 相对某个快照，哪些文件是本轮新建或被改动的（最新在前）
 const changedSince = (dir, before) => {
   const now = dirState(dir)
@@ -2717,9 +2763,9 @@ function startJob(sid, sentText, modId) {
     const syncTail = async () => {
       const changed = changedSince(outDir, before)
       broadcast("files", changed)
-      // ★ 更深层文件数也要【直播时】给。原来它只在 /api/outputs 里回，SSE 这条路上前端拿的是
-      //   上一次的值（默认 0）—— 而 agent 把图写进 figures/panel/fig1.png 的那一刻，正是用户
-      //   盯着屏幕的时候：侧栏既不列它、也不挂那句"另有 N 个更深层文件"，要刷新才知道有。
+      // ★ "没能列出来的文件数"也要【直播时】给，否则 SSE 这条路上前端拿的是上一次的值（默认 0）。
+      //   子目录现在整棵树都列了，这个数正常恒为 0；它只在层数/条目撞上 dirState 那两道闸时非 0，
+      //   前端据此挂一行灰字指向"打包下载"。留着它就是为了那种极端目录不会无声消失。
       //   单发一个事件而不是改 files 的载荷形状：files 一直是裸字符串数组，老界面包直接吃它。
       try { broadcast("filesmeta", { deeper: dirStateDeep(outDir).deeper }) } catch { /* 数不出来就不发，不影响正文 */ }
       const rendered = changed.map((n) => ({ name: n, render: WF.rendererFor(n) })).filter((x) => x.render)
@@ -4476,7 +4522,7 @@ export const server = http.createServer(async (req, res) => {
       const sid = u.searchParams.get("sid") || ""
       const dir = sid ? await sessionOut(sid) : OUTPUTS
       if (!fs.existsSync(dir)) return send(res, 200, "application/json", "[]")
-      // 【必须与 dirState 同样递归一层】这条接口是 resumeSession 回显侧栏的唯一来源。
+      // 【必须与 dirState 走同一套遍历】这条接口是 resumeSession 回显侧栏的唯一来源。
       // 只改 dirState 而漏了这里的话：本轮 SSE 推的 files 事件能列出 pdfs/a.pdf，
       // 但用户一刷新页面 / 切走再切回，子目录里的产物又全部消失 —— 症状与改动前一模一样，
       // 等于这次改造只在"当前这一轮"有效。（上面的 /api/uploads 不需要改：写入接口只收
@@ -4486,10 +4532,48 @@ export const server = http.createServer(async (req, res) => {
         .map(([rel, mtime]) => { try { return { name: rel, size: fs.statSync(path.join(dir, rel)).size, mtime } } catch { return null } })
         .filter(Boolean)
         .sort((a, b) => b.mtime - a.mtime)
-      // ★ 更深层的文件数走响应头，不动数组结构（这条接口的返回值是【裸数组】，改成对象会
-      //   把所有既有调用方一起打翻）。前端据此在侧栏尾部挂一行灰字，别让它们无声消失。
+      // ★ 没能列出来的文件数走响应头，不动数组结构（这条接口的返回值是【裸数组】，改成对象会
+      //   把所有既有调用方一起打翻）。正常会话恒为 0；非 0 时前端挂一行灰字指向"打包下载"。
       res.writeHead(200, { "Content-Type": "application/json", "X-Deeper-Files": String(deeper) })
       return res.end(JSON.stringify(list))
+    }
+
+    // 一键把本会话的【全部】产出打成一个 zip 下载。
+    //
+    // 为什么要有它：侧栏是一份一份下的，而一次综述/成稿动辄十几个文件外加 pdfs/ 几十篇全文；
+    // 用户真正想要的是"把这次做出来的东西整个拿走"。它同时是列表两道上限（层数/条目）的兜底 ——
+    // 侧栏没列全的文件在这里【一个不少】，所以那行灰字才敢让用户"点打包下载取回"。
+    //
+    // 【与侧栏共用 skipEntry】PHI 对照表、.private/、网关自己的簿子一律不进包：
+    // 打包不是"把目录原样打出去"，它必须和界面上看得见的那份口径完全一致，否则就是绕过脱敏的后门。
+    if (req.method === "GET" && u.pathname === "/api/download-all") {
+      const sid = u.searchParams.get("sid") || ""
+      const dir = sid ? await sessionOut(sid) : OUTPUTS
+      if (!fs.existsSync(dir)) return send(res, 404, TEXT_UTF8, "这个会话还没有产出文件。")
+      let picked
+      try { picked = collectForZip(dir) } catch (e) {
+        return send(res, 500, TEXT_UTF8, "打包失败：" + (e.message || String(e)))
+      }
+      if (!picked.files.length) return send(res, 404, TEXT_UTF8, "这个会话还没有产出文件。")
+      // 超限直说，并给出下一步（逐个下载 / 让助手清理中间文件），别给一个坏掉的 zip。
+      // 上限的真实成因是【内存】：zipPack 全程在内存里拼，读一份 + 压一份，200MB 的产出
+      // 在容器里就是 400MB+ 的瞬时峰值，再大会把网关连同正在跑的轮一起 OOM 掉。
+      if (picked.bytes > ZIP_MAX_BYTES) {
+        return send(res, 413, TEXT_UTF8, `本会话产出共 ${(picked.bytes / 1048576).toFixed(0)}MB，超过一次打包的上限 ${ZIP_MAX_BYTES / 1048576}MB。`
+          + "请在右侧列表里分别下载需要的文件（文献全文那一堆通常占了大头），或让助手先清理掉中间文件再打包。")
+      }
+      if (picked.files.length > ZIP_MAX_FILES) {
+        return send(res, 413, TEXT_UTF8, `本会话产出共 ${picked.files.length} 个文件，超过一次打包的上限 ${ZIP_MAX_FILES} 个。请在右侧列表里分别下载。`)
+      }
+      let buf
+      try { buf = zipPack(picked.files.map((f) => ({ name: f.rel, data: fs.readFileSync(f.abs) }))) }
+      catch (e) { return send(res, 500, TEXT_UTF8, "打包失败：" + (e.message || String(e))) }
+      const d = new Date(), p2 = (n) => String(n).padStart(2, "0")
+      // 文件名保持纯 ASCII：它要过 Content-Disposition，中文名虽有 RFC 5987 兜底（见
+      // contentDisposition），但这个名字会直接落到用户的下载目录，纯 ASCII 在哪都不会变成问号。
+      const fname = `outputs-${d.getFullYear()}${p2(d.getMonth() + 1)}${p2(d.getDate())}-${p2(d.getHours())}${p2(d.getMinutes())}.zip`
+      res.writeHead(200, { "Content-Type": "application/zip", "Content-Length": buf.length, "Content-Disposition": contentDisposition(fname) })
+      return res.end(buf)
     }
 
     // ==== 云端账号（桌面版）====================================================

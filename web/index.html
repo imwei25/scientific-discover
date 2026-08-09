@@ -446,8 +446,15 @@
      再撞上 word-break:break-all，文件名就竖成一列一个字母（实测 manuscript.docx 竖排 15 行）。 */
   .pcard.file { display: flex; flex-wrap: wrap; align-items: center; gap: 11px; max-width: none; }
   .fbulk { border: 1px solid var(--line-hi); border-radius: var(--r-sm); padding: 4px 8px; margin-bottom: 6px; }
-  .fbulk > summary { cursor: pointer; font-size: 12px; color: var(--faint); padding: 2px 0; }
+  /* word-break 不能少：目录名可以长到 systematic_review_project_2026/exports/，
+     不断行的话它会把整个侧栏撑出一条横向滚动条（下面的文件行跟着一起左右晃）。 */
+  .fbulk > summary { cursor: pointer; font-size: 12px; color: var(--faint); padding: 2px 0; word-break: break-all; }
   .fbulk > summary:hover { color: var(--cyan); }
+  .fbulk > summary .fdirn { color: #334153; }          /* 目录名比"N 个文件"显眼一点，一眼能扫到 figures/ */
+  /* 「打包下载」：在「本轮产出」标题右侧，只在真的有产出时显示（JS 控 hidden） */
+  .zipbtn { font-size: 11px; font-weight: 500; color: var(--cyan); background: #f3f6fb; border: 1px solid var(--line-hi); border-radius: var(--r-sm); padding: 3px 8px; cursor: pointer; transition: border-color .15s, background .15s; }
+  .zipbtn:hover:not(:disabled) { border-color: var(--cyan); background: rgba(59,111,212,.08); }
+  .zipbtn:disabled { color: var(--faint); cursor: default; }
   /* 整行警示条：占满卡片一整行（靠上面的 flex-wrap 换行），行距由容器 gap 给，别再叠 margin */
   .pwarn { flex-basis: 100%; font-size: 11px; line-height: 1.5; color: #b4553f; background: rgba(224,86,79,.07); border: 1px solid rgba(224,86,79,.28); border-radius: var(--r-sm); padding: 5px 8px; }
   .picon { position: relative; width: 30px; height: 30px; flex: none; color: var(--muted); }
@@ -1530,7 +1537,9 @@
       <div id="uplist"></div>
     </div>
     <div class="panel" id="outpanel">
-      <h3><span class="h3l"><span id="icOut"></span>本轮产出</span></h3>
+      <!-- 打包下载：把本会话【全部】产出（含所有子目录里的）打成一个 zip。
+           一次综述十几个文件外加几十篇全文，逐个点下载是不现实的。没有产出时整个按钮不显示。 -->
+      <h3><span class="h3l"><span id="icOut"></span>本轮产出</span><button type="button" id="zipall" class="zipbtn" hidden title="把这个会话的全部产出（含子目录里的文件）打成一个 zip 下载">打包下载</button></h3>
       <div id="files"><span class="hint">对话生成的文件会显示在这里</span></div>
     </div>
     <div class="panel" id="zpanel">
@@ -2345,58 +2354,99 @@ const SCRATCHY = /\.(py|log|sh|ps1|ipynb|json)$/i
 const isScratch = (n) => { const b = n.split("/").pop(); return SCRATCHY.test(b) && !/^(retrieval_report|manual_needed)/i.test(b) }
 // 批量下载来的文献全文：一个方向下 40~60 篇是常态。它们确实是本轮产物，但不是"结果"——
 // 平铺出来会把成稿彻底淹掉（实测侧栏 73 条里 65 条是 pdfs/*，交付物混在里面找不着）。
-// 折叠成一行，点开才展开。
-const isBulkPdf = (n) => /^(pdfs|zotero_lib)\//i.test(String(n))
+const isBulkDir = (d) => /^(pdfs|zotero_lib)$/i.test(d)
+const dirOf = (n) => { const i = String(n).lastIndexOf("/"); return i < 0 ? "" : n.slice(0, i) }
 let lastFilesList = []            // 上一次渲染的产物名单，供 filesmeta 到达时原样重画一遍
+const zipAllBtn = document.getElementById("zipall")   // 声明必须在 renderFiles 之前：它一进来就要改这个按钮的显隐
+/** 侧栏里的一行文件：文件名（可点预览）+ 预览/下载两个按钮。顶层与目录里共用同一份。 */
+function fileRow(name, short) {
+  const row = document.createElement("div"); row.className = "frow"
+  const s = document.createElement("span"); s.className = "fname"     // 文件名在左、撑满宽度
+  s.textContent = short ? name.split("/").pop() : name                // 折叠块里只显示文件名（目录名已在标题上）
+  const raw = "api/raw?name=" + encodeURIComponent(name) + sidQ()
+  const doPv = isSecret(name) ? null                                   // 还原表不给预览（含真实姓名）
+    : IMG.test(name) ? () => openLightbox(raw) : CANPV(name) ? () => openPreview(name) : null   // 图片开灯箱，其余走半屏预览
+  s.title = isSecret(name) ? "含可还原到个人的对照信息，不在界面内预览；如需查看请下载后在本机打开"
+    : name + (doPv ? "（点击预览）" : "")
+  if (isSecret(name)) s.style.color = "#b4553f"
+  if (doPv) { s.classList.add("pv"); s.addEventListener("click", doPv) }
+  row.appendChild(s)
+  if (doPv) { const pv = document.createElement("button"); pv.type = "button"; pv.className = "fbtn"; pv.title = "预览"; pv.innerHTML = ic("eye"); pv.addEventListener("click", doPv); row.appendChild(pv) }
+  // name 可能带子目录（"pdfs/a.pdf"、"figures/panel/fig1.png"）：请求要带完整相对路径，
+  // 但 download 属性只给最后一段 —— 带斜杠的话浏览器会把它当路径分隔并清洗成怪名字。
+  const a = document.createElement("a"); a.href = "api/download?name=" + encodeURIComponent(name) + sidQ(); a.download = name.split("/").pop(); a.title = "下载 " + name; a.className = "fbtn"; a.innerHTML = ic("download")
+  row.appendChild(a)
+  return row
+}
 function renderFiles(list) {
   lastFilesList = list || []
   pvTabCount.textContent = list && list.length ? String(list.length) : ""   // 预览态切换条上的产出条数
+  zipAllBtn.hidden = !(list && list.length)      // 没产出就别摆一个点了会报错的按钮
   if (!list || !list.length) { filesEl.innerHTML = '<span class="hint">对话生成的文件会显示在这里</span>'; return }
   filesEl.innerHTML = ""
   list = [...list].sort((a, b) => (isScratch(a) ? 1 : 0) - (isScratch(b) ? 1 : 0))   // 结果在前、中间文件在后
-  const bulk = list.filter(isBulkPdf)
-  list = list.filter((n) => !isBulkPdf(n))
-  if (bulk.length) {
-    const d = document.createElement("details"); d.className = "fbulk"
-    const sm = document.createElement("summary"); sm.textContent = `已下载文献全文 ${bulk.length} 篇`
-    d.appendChild(sm)
-    for (const name of bulk) {
-      const row = document.createElement("div"); row.className = "frow"
-      const nm = document.createElement("span"); nm.className = "fname"; nm.textContent = name.split("/").pop(); nm.title = name
-      const a = document.createElement("a"); a.href = "api/download?name=" + encodeURIComponent(name) + sidQ()
-      a.download = name.split("/").pop(); a.className = "fbtn"; a.title = "下载"; a.innerHTML = ic("download")
-      row.appendChild(nm); row.appendChild(a); d.appendChild(row)
-    }
-    filesEl.appendChild(d)
+  // 子目录里的产物按目录归堆，每堆一个默认收起的折叠块。
+  // 【为什么不平铺】pdfs/ 一个方向就是 40~60 篇，平铺会把成稿彻底淹掉（实测 73 条里 65 条是
+  // pdfs/*）；【为什么不像以前那样干脆不列】更深的目录当年是直接不显示的，界面只留一句
+  // "让助手把它们移到一层目录就会出现" —— 用户看不见目录、也不知道那是什么操作，只会以为文件丢了。
+  const groups = new Map()                       // 目录相对路径 -> 该目录下的文件名
+  const top = []
+  for (const name of list) { const d = dirOf(name); if (!d) top.push(name); else (groups.get(d) || groups.set(d, []).get(d)).push(name) }
+  // 目录块排在顶层文件之前：收起状态下每个只占一行，而顶层那些通常才是交付物，别让它们被推到看不见的地方。
+  // 文献全文那两个目录排最后 —— 它们是素材，不是成果。
+  const dirs = [...groups.keys()].sort((a, b) => (isBulkDir(a) ? 1 : 0) - (isBulkDir(b) ? 1 : 0) || a.localeCompare(b))
+  for (const d of dirs) {
+    const names = groups.get(d)
+    const det = document.createElement("details"); det.className = "fbulk"
+    const sm = document.createElement("summary")
+    if (isBulkDir(d)) sm.textContent = `已下载文献全文 ${names.length} 篇`
+    else { sm.innerHTML = '<span class="fdirn"></span>'; sm.firstChild.textContent = d + "/"; sm.append(` · ${names.length} 个文件`) }
+    sm.title = d + "/"
+    det.appendChild(sm)
+    for (const name of names) det.appendChild(fileRow(name, true))
+    filesEl.appendChild(det)
   }
-  for (const name of list) {
-    const row = document.createElement("div"); row.className = "frow"
-    const s = document.createElement("span"); s.className = "fname"; s.textContent = name   // 文件名在左、撑满宽度
-    const raw = "api/raw?name=" + encodeURIComponent(name) + sidQ()
-    const doPv = isSecret(name) ? null                                   // 还原表不给预览（含真实姓名）
-      : IMG.test(name) ? () => openLightbox(raw) : CANPV(name) ? () => openPreview(name) : null   // 图片开灯箱，其余走半屏预览
-    if (isSecret(name)) { s.title = "含可还原到个人的对照信息，不在界面内预览；如需查看请下载后在本机打开"; s.style.color = "#b4553f" }
-    if (doPv) { s.classList.add("pv"); s.title = "点击预览"; s.addEventListener("click", doPv) }
-    row.appendChild(s)
-    if (doPv) { const pv = document.createElement("button"); pv.type = "button"; pv.className = "fbtn"; pv.title = "预览"; pv.innerHTML = ic("eye"); pv.addEventListener("click", doPv); row.appendChild(pv) }
-    // name 现在可能带一层子目录（如 "pdfs/a.pdf"）：完整相对路径照常显示（用户能看出它在哪），
-    // 但 download 属性只给最后一段 —— 带斜杠的话浏览器会把它当路径分隔并清洗成怪名字。
-    const a = document.createElement("a"); a.href = "api/download?name=" + encodeURIComponent(name) + sidQ(); a.download = name.split("/").pop(); a.title = "下载 " + name; a.className = "fbtn"; a.innerHTML = ic("download")
-    row.appendChild(a)
-    filesEl.appendChild(row)
-  }
-  // ★ 更深层的产物按约定不列（侧栏只递归一层），但【不能让它们无声消失】。实测：agent 把图写进
-  //   figures/panel/fig1.png 时，侧栏、正文嵌图、步骤条三条线索同时失效，用户零线索去哪找。
-  //   这里挂一行灰字告诉他有、以及怎么拿到。
+  for (const name of top) filesEl.appendChild(fileRow(name, false))
+  // ★ 兜底：层数/条目超过服务端上限而没能列出来的文件（正常会话恒为 0）。绝不让它们无声消失，
+  //   也别再让用户去"求助手把文件移出来" —— 直接告诉他打包下载里是全的。
   if (deeperFiles > 0) {
     const h = document.createElement("div"); h.className = "hint"; h.style.marginTop = "6px"
-    h.textContent = `另有 ${deeperFiles} 个文件在更深的子目录里，这里不列出——让助手把它们移到一层目录（如 figures/）就会出现。`
+    h.textContent = `另有 ${deeperFiles} 个文件因层级太深/数量过多没有列在这里，点上方「打包下载」可以一次全部取回。`
     filesEl.appendChild(h)
   }
 }
-// 被"只列一层"挡在侧栏外的文件数（/api/outputs 的 X-Deeper-Files 响应头）。
+// 没能列进侧栏的文件数（/api/outputs 的 X-Deeper-Files 响应头）。
 // 放模块变量而不是 renderFiles 的参数：SSE 的 files 事件也会调 renderFiles，它拿不到这个数。
 let deeperFiles = 0
+// 打包下载：整个会话的产出（含所有子目录）打成一个 zip。
+// 【为什么不用 <a href> 直接导航】服务端在超限/无产物时回的是【中文报错正文】，
+// 用 a[download] 的话浏览器会把那段话原样存成一个 .zip 文件，用户双击得到一个坏包 ——
+// 比什么都不发生更糟。所以走 fetch：200 才存盘，非 200 把服务端那句话原样弹出来。
+zipAllBtn.addEventListener("click", async () => {
+  const btn = zipAllBtn, old = btn.textContent
+  btn.disabled = true; btn.textContent = "打包中…"
+  try {
+    const r = await fetch("api/download-all?t=" + Date.now() + sidQ())
+    if (!r.ok) {
+      const body = (await r.text().catch(() => "")).trim()
+      // 界面包是可以【单独】热更新的（见 web-update.mjs：包里永不含 .mjs），所以「新前端 + 旧后台」
+      // 是真实存在的组合 —— 那种情况下这个接口还不存在，网关回的是通用 404 "not found"。
+      // 报错用 alert 不用 toast：服务端这几句是【带下一步动作】的（超了多少、该怎么办），
+      // 而 toast 是 2.2 秒就消失的单行胶囊，长句会横穿整屏还没读完就没了。
+      alert(r.status === 404 && /^not found$/i.test(body) ? "当前后台版本还不支持打包下载，请更新应用后再试（右侧列表里可以逐个下载）"
+        : (body || "打包失败（" + r.status + "）"))
+      return
+    }
+    const blob = await r.blob()
+    const cd = r.headers.get("Content-Disposition") || ""
+    const m = /filename="([^"]+)"/.exec(cd)
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement("a"); a.href = url; a.download = m ? m[1] : "outputs.zip"
+    document.body.appendChild(a); a.click(); a.remove()
+    setTimeout(() => URL.revokeObjectURL(url), 30000)   // 立刻 revoke 会让慢一步的保存拿到空文件
+  } catch (e) { toast("打包下载失败：" + (e.message || e)) }
+  finally { btn.disabled = false; btn.textContent = old }
+})
 const IMG = /\.(png|jpe?g|gif|webp|svg|bmp)$/i
 const MDX = /\.(md|markdown)$/i
 const PDFX = /\.pdf$/i

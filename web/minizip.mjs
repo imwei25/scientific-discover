@@ -83,6 +83,10 @@ export function unzip(buf, { maxTotal = 256 * 1024 * 1024 } = {}) {
 // DOS 时间戳：固定成一个常量（打包时间已在 pack.json 里，条目时间戳只会破坏"同内容出同包"）
 const DOS_TIME = 0, DOS_DATE = (2026 - 1980) << 9 | (1 << 5) | 1   // 2026-01-01 00:00
 
+// 已经是压缩格式的（图片、PDF、以及本身就是 zip 的 Office 文档）——deflate 一遍省不下几个百分点，
+// 却要实打实地烧 CPU。这一条不是省空间，是【省时间】：网关是单进程的，deflateRawSync 会把事件循环
+// 整个卡住，一次"打包下载"里几十篇 PDF 足以让正在直播的那一轮停在半路（SSE 一起卡）。直接存原样。
+const PRECOMPRESSED = /\.(pdf|png|jpe?g|gif|webp|zip|gz|xz|bz2|7z|rar|docx|xlsx|pptx|odt|ods|odp|mp4|mov|mp3|woff2?)$/i
 /** 打包 [{ name, data }] → zip Buffer。名字统一正斜杠 + UTF-8 标志位。 */
 export function zip(entries) {
   const locals = [], centrals = []
@@ -90,9 +94,12 @@ export function zip(entries) {
   for (const e of entries) {
     const name = Buffer.from(cleanName(e.name), "utf8")
     const data = Buffer.isBuffer(e.data) ? e.data : Buffer.from(String(e.data), "utf8")
-    const deflated = zlib.deflateRawSync(data, { level: 9 })
+    // 大文件降到 level 6：9 档在几十 MB 的文本上要多花好几倍时间，换来的体积差是个位数百分比，
+    // 而这几秒是整个进程停摆（同上）。
+    const deflated = PRECOMPRESSED.test(e.name) ? null
+      : zlib.deflateRawSync(data, { level: data.length > 8 * 1024 * 1024 ? 6 : 9 })
     // 压不动的（已压缩的图片等）存原样，省得解压端白做功
-    const method = deflated.length < data.length ? 8 : 0
+    const method = deflated && deflated.length < data.length ? 8 : 0
     const body = method === 8 ? deflated : data
     const crc = zlib.crc32(data)
     const lh = Buffer.alloc(30)

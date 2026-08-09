@@ -215,9 +215,9 @@ const LITREAD_MODES = withAsk([
   { id: "ppt", label: "演示 PPT", icon: "ppt", mark: "【演示 PPT】", badge: "分两步 · 先审大纲再出片",
     file: "(^|/)ppt_outline.*\\.md$",
     // ppt-master 把导出的 .pptx 放在 <项目名>/exports/ 下，所以要允许一层子目录。
-    // ★ 但【只靠这条契约救不了】：/api/outputs 只递归一层，<项目名>/exports/x.pptx 是两层，
-    //   列不出来 —— 文件真在磁盘上，界面上一行都没有。所以 stage2.prompt 里硬性要求
-    //   "把最终 .pptx 复制一份到会话根目录"。这条契约留着兜住万一它就落在一层里的情形。
+    // ★ /api/outputs 现在整棵树都列（按目录折叠），<项目名>/exports/x.pptx 也看得见了；
+    //   但 stage2.prompt 里"把最终 .pptx 复制一份到会话根目录"那条要求仍然留着 ——
+    //   折叠块要点开才展开，而这是本格的【交付物】，它该在最外层第一眼就看到，不该藏在两层目录里。
     out: "(^|/)(ppt_outline[^/]*\\.md|[^/]*\\.pptx)$",
     empty: ["还没有 PPT", "点上方的「开始」——先出一份大纲与出片方向（一两分钟）；你确认之后再生成 .pptx（那一步慢，十分钟上下）。"],
     tell: "**分两步走，这一轮只做第一步**：只出大纲与出片方向、写进 `ppt_outline.md`"
