@@ -254,6 +254,8 @@ def apply_paragraph(p, new_text, opt, stats, pid):
         if kind == "freeze":
             g += 1
         else:
+            if gaps[g] is None:           # 同一空档被两个可改片争用：切片逻辑出了问题，
+                return False, "段落切片异常（同一空档对应多个可改片），已跳过不动它"
             plan.append((val, gaps[g]))
             gaps[g] = None                # 这个空档已有归属
     for k, leftover in enumerate(gaps):

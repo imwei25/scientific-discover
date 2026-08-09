@@ -125,8 +125,14 @@ def segments(p):
             if typ == "begin":
                 depth += 1
             if in_field or not is_splittable(child):
-                flush()
-                freeze(run_text(child))
+                # ★ 只有【真的有文字】时才切断可改片。域的 fldChar/instrText 这几个 run
+                #   本身不带 w:t，冻结片会是空串、在给模型的文本里也不占位置；若照样切，
+                #   一个可改片就被劈成两半，而两半共用同一个"空档"——第二半永远领不到
+                #   译文/改写文本。实测 t2 就崩在这里（t1 没暴露，因为它的域都有结果文字）。
+                txt = run_text(child)
+                if txt:
+                    flush()
+                    freeze(txt)
             else:
                 cur.append(child)
             if typ == "end":
