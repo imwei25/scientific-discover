@@ -102,6 +102,16 @@
     flex: 1; display: flex; flex-direction: column; gap: 12px; overflow-y: auto;
     width: 100%; max-width: var(--colw); margin: 0 auto; padding: 4px 0 8px;
   }
+  /* 「回到最新」：贴着输入框上沿浮在对话区右下。默认低调，有未看到的新内容时才变实心。 */
+  #toBottom { position: absolute; right: 18px; bottom: 96px; z-index: 6; cursor: pointer;
+    display: flex; align-items: center; gap: 6px; padding: 6px 12px; border-radius: 999px;
+    border: 1px solid var(--line-hi); background: var(--card); color: var(--muted);
+    font-size: 12px; box-shadow: var(--shadow-sm); transition: opacity .15s, transform .15s; }
+  #toBottom::before { content: "↓"; font-weight: 700; }
+  #toBottom:hover { color: var(--accent); border-color: var(--accent); }
+  #toBottom.fresh { background: var(--accent); border-color: var(--accent); color: #fff; }
+  #toBottom[hidden] { display: none; }
+  @media (max-width: 520px) { #toBottom { right: 12px; bottom: 88px; } }
   /* welcome / empty state = 主视觉：衬线大标题 + 副标题 + 模块卡 + 示例 chip，整体垂直居中 */
   .welcome { margin: auto; max-width: 720px; text-align: center; padding: 8px 16px 24px; }
   /* 模块入口装的是整张表单，不是一段说明文字：吃满整列宽，且【不再自带左右内边距】——
@@ -470,6 +480,15 @@
   details.act .tbody, details.act .rbody { padding: 3px 12px 9px 24px; }
   .trow { font-size: 12px; color: #334153; font-family: ui-monospace, "Cascadia Code", monospace; padding: 3px 0; display: flex; gap: 8px; align-items: baseline; }
   .trow .st { width: 14px; flex: none; text-align: center; color: #16a34a; }
+  /* ★ 失败与被中断不能也是绿的。这一列原来只有上面这一条颜色规则，于是 error 的 ✕ 是【绿色】、
+     和成功的 ✓ 挤在同一列；被终止时 .live 一摘，停在 running 的工具变成【绿色 ○】，
+     读起来像"正常结束"。用户扫一眼折叠列表以为全绿，把失败当成功往下走。 */
+  /* 重连中：内容留着（别让用户以为回答丢了），只压暗一档表示"这一段可能还会变" */
+  .turn.reconnecting { opacity: .72; }
+  .trow.err .st { color: #b03a34; }
+  .trow.err { color: #8a3b34; }
+  .trow.halt .st { color: #8a5a12; }
+  .trow.halt { color: #7a6430; }
   .trow.live { color: var(--cyan); }
   .trow.live .st { color: transparent; position: relative; }
   .trow.live .st::before { content: ""; position: absolute; left: 1px; top: 2px; width: 10px; height: 10px; border-radius: 50%; border: 1.5px solid rgba(59,111,212,.25); border-top-color: var(--cyan); animation: spin .7s linear infinite; }
@@ -1465,6 +1484,11 @@
          这个行为。放到外面，它自己占一行、对话区相应变矮，永远不会与正文重叠。 -->
     <div id="stepsHost"></div>
     <div id="log"></div>
+    <!-- 上翻之后回到底部的入口。没有它的话，用户一往上翻就"下不来"，而且不知道下面还在长新内容
+         （自动跟随本来就不该把他拽回来，所以更需要一个他自己点的路）。有新内容时会变成实心提示。 -->
+    <button id="toBottom" type="button" hidden aria-label="回到最新">
+      <span class="tbtxt">回到最新</span>
+    </button>
     <form id="f" class="composer">
       <div class="input-box">
         <div class="composer-toolbar">
@@ -2106,6 +2130,12 @@ function mdStreamSafe(src) {
     lines.pop()
   }
   s = lines.join("\n")
+  // ★ 一行都没剩就别扣了。上面那个 pop 循环【没有下限】：当目前全文就只有管道行时会把它 pop 光，
+  //   s 变成空串 → 气泡整个空白，而第一帧已经把打字点冲掉了。本产品的回答几乎每轮都以表格开头
+  //   （Table 1 / 证据表 / 森林图数据表），所以这不是边角料 —— 实测 "| 指标 | 数值 |\n|-" 这种
+  //   中间帧、以及整条消息只有一行含竖线（"方案 A | 方案 B 都行"）时全程空白。
+  //   宁可让那半张表抖一帧，也别给用户一个"模型没在写"的空气泡。
+  if (!s.trim() && (src || "").trim()) return src
   if ((s.match(/^\s*```/gm) || []).length % 2) s += "\n```"
   return s
 }
@@ -2992,8 +3022,26 @@ const withFollow = (fn) => {
   const was = atBottomNow()
   const r = fn()
   if (was) log.scrollTop = log.scrollHeight
+  else markUnseen()          // 用户在上面看东西，而下面又长了 —— 告诉他一声，别让他错过结论
+  syncToBottomBtn()
   return r
 }
+// ---- 「回到最新」按钮 ----
+// 自动跟随【不该】把上翻的用户拽回来（那是另一个 bug，见 withFollow 头注），但也不能就这么把他
+// 扔在半路：他既回不去，也不知道下面还在长新内容。给一个他自己点的入口，有新内容时染成实心。
+const toBottomEl = document.getElementById("toBottom")
+let unseenBelow = false
+const markUnseen = () => { unseenBelow = true }
+const syncToBottomBtn = () => {
+  if (!toBottomEl) return
+  const bottom = atBottomNow()
+  if (bottom) unseenBelow = false
+  toBottomEl.hidden = bottom
+  toBottomEl.classList.toggle("fresh", unseenBelow && !bottom)
+  toBottomEl.querySelector(".tbtxt").textContent = unseenBelow && !bottom ? "有新内容" : "回到最新"
+}
+log.addEventListener("scroll", syncToBottomBtn, { passive: true })
+toBottomEl?.addEventListener("click", () => { log.scrollTop = log.scrollHeight; unseenBelow = false; syncToBottomBtn() })
 const scrollFollow = () => { if (atBottomNow()) log.scrollTop = log.scrollHeight }
 const wfCache = new Map()          // 模块 id → workflow 定义（/api/modules/<id>/workflow 的结果）
 const HDR_CACHE = new Map()        // 上传文件名 → 表头查询结果（见 fieldEl 的 columns 分支）
@@ -4879,7 +4927,7 @@ async function requestSugs(turn, userText, answerText) {
   if (!(userText || "").trim() && !(answerText || "").trim()) return
   const box = document.createElement("div"); box.className = "sugs loading"
   box.innerHTML = '<span class="sglbl">' + ic("sparkle") + "正在想下一步…</span>"
-  turn.appendChild(box)
+  withFollow(() => turn.appendChild(box))   // 贴完要跟一下，否则建议落在视口外，用户根本不知道有
   let list = []
   try {
     const r = await fetch("api/suggest", {
@@ -5051,8 +5099,12 @@ function openStream(url) {
   // ★ 一律"先量后改"：was 在改 DOM 【之前】取，改完再据它决定要不要贴底。
   //   写成 `改完再 atBottom()` 的话，这一帧涨了 60px 以上就被判成"用户翻走了"，此后永不跟随
   //   （见模块级 withFollow 的头注）。本轮内每个会往 turn 里塞东西的处理器都照这个来。
-  const follow = () => { if (atBottom()) log.scrollTop = log.scrollHeight }
-  const followFrom = (was) => { if (was) log.scrollTop = log.scrollHeight }
+  const follow = () => { if (atBottom()) log.scrollTop = log.scrollHeight; syncToBottomBtn() }
+  const followFrom = (was) => {
+    if (was) log.scrollTop = log.scrollHeight
+    else markUnseen()          // 用户在上面看东西、下面又长了 → 「回到最新」变成「有新内容」
+    syncToBottomBtn()
+  }
 
   const es = new EventSource(url)
   activeES = es
@@ -5070,7 +5122,15 @@ function openStream(url) {
     stopLive()                                    // 收尾要盖掉实时那版，别让排队中的重绘在后面又覆写一次
     rawText = renderAsk(answer, turn, rawText)
     if (painted || !gotText) return
-    answer.innerHTML = renderMarkdown(rawText); answer.classList.add("md"); enhanceCode(answer); painted = true
+    // ★ 和 paintStreamMd 一样先把 .note 摘出来、画完再贴回。这里原来是直接 innerHTML= ——
+    //   于是流式期间挂上去的提示【在本轮结束的瞬间被连根抹掉】。最不能丢的正是这一条：
+    //   用户手动放行过质量闸、这一轮照常出了 docx，网关明确说"闸没有转绿，报告里的问题仍然在"，
+    //   而它显示几十秒后消失，用户最后看到的是干干净净的回答 + 一个 Word 产物卡 ——
+    //   然后拿着这份没过闸的稿子去投稿。
+    const notes = [...answer.children].filter((c) => c.classList && c.classList.contains("note"))
+    answer.innerHTML = renderMarkdown(rawText); answer.classList.add("md"); enhanceCode(answer)
+    notes.forEach((x) => answer.appendChild(x))
+    painted = true
   }
   const finalize = (note) => {                    // 收尾：关流、复原按钮、清 live 态；note 作为附注追加
     if (finished) return; finished = true
@@ -5081,9 +5141,21 @@ function openStream(url) {
     genEl.remove()   // 本轮结束、轮到用户输入 → 转圈消失
     if (qTip) { qTip.remove(); qTip = null }   // 排队提示条是 genEl 的兄弟节点，得自己收
     if (!thinkD.hidden) thinkD.querySelector(".rlbl").textContent = "思考过程"   // 收尾去掉“思考中…”的 live 态，peek 保留最后思考
-    toolRows.forEach(r => r.classList.remove("live"))
+    // ★ 停在 running 的工具要标成【被中断】，不能只把转圈摘掉。只摘 live 的话 .st 恢复可见，
+    //   那个 ○ 变成绿色，读起来像"正常结束"——而它其实是被终止/超时掐断的，产物可能只写了一半。
+    toolRows.forEach((r) => {
+      if (!r.classList.contains("live")) return
+      r.classList.remove("live"); r.classList.add("halt")
+      r.querySelector(".st").textContent = "⏸"
+      r.title = "本轮被中断，这个工具没跑完——它的产物可能只写了一半"
+    })
     if (note) { if (!gotText && !painted) answer.textContent = ""; const n = document.createElement("div"); n.className = "note"; n.textContent = note; answer.appendChild(n) }
-    else if (!gotText) answer.textContent = "(无文本输出)"
+    // ★ 已经有 .note 了就别覆盖。textContent= 会清空全部子节点 —— 实测的事件序列是
+    //   final(空) → notice("模型这一轮没有返回任何文本。若反复如此，多半是上游模型服务异常，
+    //   请换个模型或联系管理员。") → done，而 done 里这一行把刚贴上的解释删掉，只剩
+    //   "(无文本输出)"。用户拿到的信息量从"去换模型/找管理员"退化成一句什么也没说的话，
+    //   于是反复重发同一条、白烧额度。
+    else if (!gotText && !answer.querySelector(".note")) answer.textContent = "(无文本输出)"
     loadSessions()   // 刷新会话列表（新会话入列 / 更新时间与高亮）
     refreshQuota(true)   // 本轮成本已入账 → 绕过缓存问一次云端，顶栏立刻反映这轮扣掉的积分
     // 正常收尾（没出错、确有回答）才去要"下一步"建议：出错/被终止的轮次建议不出下一步，
@@ -5112,7 +5184,10 @@ function openStream(url) {
     if (!row) { row = document.createElement("div"); row.className = "trow"; row.innerHTML = '<span class="st"></span><span class="lbl"></span>'; toolsD.querySelector(".tbody").appendChild(row); toolRows.set(d.callID, row) }
     row.querySelector(".st").textContent = STI[d.status] || "•"
     row.classList.toggle("live", d.status === "running" || d.status === "pending")
+    row.classList.toggle("err", d.status === "error")     // 红：失败。原来它和成功的 ✓ 同为绿色
+    row.classList.remove("halt")                           // 又跑起来了 → 摘掉上一轮留下的中断态
     row.querySelector(".lbl").textContent = d.title ? `${d.tool} · ${d.title}` : d.tool
+    if (d.status === "error") row.title = "这个工具报错了；展开看正文里模型是怎么处理的"
     toolsD.querySelector(".cnt").textContent = `(${toolRows.size})`
     const liveTools = [...toolRows.values()].filter(r => r.classList.contains("live")).length
     setGen(liveTools ? `工具运行中（${liveTools}）…` : "等待模型输出…")   // 工具收尾后回到等模型
@@ -5166,7 +5241,8 @@ function openStream(url) {
     if (!d || !d.queued) {   // 轮到了 / 限速解除 → 收掉提示，回到普通等待态
       genEl.classList.remove("queued")
       if (qTip) { qTip.remove(); qTip = null }
-      if (!gotText) setGen("等待模型输出…")
+      // 别把标签倒退：模型可能正在 reasoning（此时 gotText 仍为假），写"等待模型输出"是退了一档。
+      if (!gotText) setGen(reason.size ? "思考中…" : "等待模型输出…")
       return
     }
     const secs = (ms) => (ms >= 60000 ? Math.round(ms / 60000) + " 分钟" : Math.max(1, Math.round(ms / 1000)) + " 秒")
@@ -5204,8 +5280,20 @@ function openStream(url) {
     try { status = (await fetch("api/job?sid=" + encodeURIComponent(sid), { signal: AbortSignal.timeout(5000) })).status } catch {}
     if (status === 401) { location.href = "./login"; return }
     if (++sseFailStreak >= 6) { turn.querySelector(".answer").innerHTML = ""; const n = document.createElement("div"); n.className = "note"; n.textContent = "⚠ 连接反复失败，请刷新页面重试"; turn.querySelector(".answer").appendChild(n); genEl.remove(); setStreamingUI(false); return }
-    turn.remove()   // 丢弃本回合 DOM，续流会重放快照完整重建
-    setTimeout(() => { if (sid === sessionId && !activeES) attachStream(sid) }, 2500)
+    // ★ 【别先删】。原来是当场 turn.remove()、2.5 秒后才重连重建 —— 这 2.5 秒里已经流出来的
+    //   几千字【可见地蒸发】，屏幕上只剩用户自己那条提问和一片空白，而「终止」按钮还亮着。
+    //   用户的第一反应是"回答丢了"→ 重发，而服务端那一轮其实还在跑，重发只会排得更后面。
+    //   服务端的 text 事件是【累计全文】、attach 是覆盖语义（job.text 整段重放），
+    //   所以根本不需要先删：留着旧内容，等新流真的接上了再换掉。
+    turn.classList.add("reconnecting")
+    const rc = document.createElement("div"); rc.className = "note"
+    rc.textContent = "连接中断，正在重连…（后台还在跑，不用重发）"
+    turn.appendChild(rc)
+    setTimeout(() => {
+      if (sid !== sessionId || activeES) return
+      turn.remove()          // 到这一刻才丢：下面立刻重建，中间没有空窗
+      attachStream(sid)
+    }, 2500)
   }
 }
 // ---- 模型 API 设置弹窗：聊天框输入 api-config 唤起（桌面版/单机版没有别的入口）----

@@ -2349,6 +2349,10 @@ function startJob(sid, sentText, modId) {
     sentUser: stripPreamble(sentText).trim(),
     // 增量快照：text 是累积全文、reasoning 按 id、tool 按 callID 各存最新一条，attach 时按序重放即可还原界面
     text: "", reasoning: new Map(), tools: new Map(), skills: new Map(),
+    // notice 也要进快照。它是本轮唯一的"非致命但必须知道"的通道，最典型的一条是
+    //「你已手动放行质量闸：闸仍判未通过，这次出件不再拦截」—— 不重放的话，用户刷新一下
+    // 或断线重连，这句警告就没了，最后看到的是一份干净的回答 + 一个没过闸的 Word。
+    notices: [],
   }
   jobs.set(sid, job)
   // 事件流的取消句柄：每轮都会 client.event.subscribe() 新开一条到 opencode 的长连接，
@@ -2364,6 +2368,7 @@ function startJob(sid, sentText, modId) {
     //   下面这行 for 循环只写【当下挂着的】订阅者：页面关了、网断了、切走了会话，这条报错就永远
     //   消失了 —— 用户回来只看到自己那条消息，没有任何解释。落一份，/api/history 会补回末尾。
     else if (ev === "failed" && data?.message) noteError(sid, data.message)
+    else if (ev === "notice" && data?.message) job.notices.push(data)   // 进快照，attach 时重放（见 job.notices）
     if (ev === "done" || ev === "failed" || ev === "aborted") job.ended = true   // 本轮已有结论，finish 不必再补
     for (const r of job.subs) sseWrite(r, ev, data)
   }
@@ -2791,6 +2796,7 @@ function attachJob(job, req, res) {
   for (const d of job.tools.values()) sseWrite(res, "tool", d)
   for (const d of job.reasoning.values()) sseWrite(res, "reasoning", d)
   if (job.text) sseWrite(res, "text", job.text)
+  for (const d of job.notices || []) sseWrite(res, "notice", d)   // 见 job.notices：放行警告这类不能因为刷新就没
   job.subs.add(res)
   req.on("close", () => job.subs.delete(res))
 }
@@ -3780,6 +3786,17 @@ export const server = http.createServer(async (req, res) => {
         ".csv": "text/csv; charset=utf-8", ".tsv": "text/tab-separated-values; charset=utf-8" }
       const ext = path.extname(name).toLowerCase()
       const head = { "Content-Type": MIME[ext] || "application/octet-stream" }
+      // ★ 给个验证器 + 短缓存。正文里嵌的图走这条路，而流式渲染是【整块重绘】的：
+      //   每 250ms 一帧都会生成一个全新的 <img>，一个响应头都不发的话浏览器启发式新鲜度为 0，
+      //   一张 300dpi 的出版图（2–5MB）在一段还要再写一分钟的回答里可能被重取上百次。
+      //   max-age 取 60 秒：产物会被 agent 覆盖重写，缓存久了用户看到的是旧图；
+      //   带 ETag（mtime+size）让重新验证走 304，改了立刻生效。private：产物是会话私有的。
+      try {
+        const st = fs.statSync(f)
+        head["Cache-Control"] = "private, max-age=60, must-revalidate"
+        head["ETag"] = `W/"${st.mtimeMs.toString(36)}-${st.size.toString(36)}"`
+        if (req.headers["if-none-match"] === head.ETag) { res.writeHead(304, head); return res.end() }
+      } catch { /* stat 不到就不给缓存头，照常整发 */ }
       // 产物 HTML/SVG 可能含脚本：无论 iframe 内嵌还是直开新标签，都沙箱化、不接触本站源（cookie/localStorage）
       if (ext === ".html" || ext === ".htm" || ext === ".svg") head["Content-Security-Policy"] = "sandbox allow-scripts"
       res.writeHead(200, head)
