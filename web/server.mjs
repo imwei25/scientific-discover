@@ -1722,6 +1722,60 @@ const runPy = async (args, timeout = 180_000) => {
 // 脚本没吐 stdout（没装 python / 脚本被删 / 超时被杀）也要回一个合法 JSON，别让前端 r.json() 炸掉
 const zotJson = (r) => (r.stdout || "").trim() || JSON.stringify({ ok: false, error: "no_output", detail: (r.stderr || "").slice(0, 300) })
 
+// ---- 数据表速览：前 N 行 + 逐列画像（表头下拉、变量自动对应都吃它）----
+//
+// 【为什么值得起一个 Python 进程】此前 /api/data/headers 只用 JS 读 csv，xlsx 一律回
+// "读不了，请手动填列名"——而医院里导出的表【绝大多数是 xlsx】。于是本套件最要紧的那个控件
+// （六个列名下拉）对多数用户直接降级成六个空输入框，让他手打列名，比不做还糟。
+// 更要紧的是：只有表头认不出「哪一列是分组、哪一列是终点事件」，那需要看见【取值】。
+// 一次进程（~1–2s，且按文件缓存）换来"机器先认列、用户只核对"，这笔账很划算。
+//
+// 缓存键带 mtime+size：用户传了同名新表（很常见——改完再传一次）必须重读，否则他会对着
+// 上一版的列名做对应，而界面上一个字都不会提示。
+const TABLE_PREVIEW_PY = path.join(ROOT, ".opencode/skills/data-analysis/scripts/table_preview.py")
+const _tpCache = new Map()
+const TP_CACHE_MAX = 64
+async function tablePreview(file, { rows = 5 } = {}) {
+  let key = file
+  try { const st = fs.statSync(file); key = `${file}|${st.mtimeMs}|${st.size}|${rows}` } catch {}
+  if (_tpCache.has(key)) return _tpCache.get(key)
+  const r = await _tablePreviewRaw(file, rows)
+  if (_tpCache.size >= TP_CACHE_MAX) _tpCache.delete(_tpCache.keys().next().value)
+  _tpCache.set(key, r)
+  return r
+}
+async function _tablePreviewRaw(file, rows) {
+  const ext = path.extname(file).toLowerCase()
+  // ① 首选 Python（pandas）：只有它能读 xlsx，也只有它给得出列画像
+  if (fs.existsSync(TABLE_PREVIEW_PY)) {
+    const r = await runPy([TABLE_PREVIEW_PY, "--input", file, "--rows", String(rows)], 45_000)
+    let j = null
+    try { j = JSON.parse((r.stdout || "").trim()) } catch {}
+    if (j && j.ok) return { ...j, via: "python" }
+    // 脚本明确说"这张表读不出来"（编码坏、0 列）时，它的话比 JS 那条降级路径更准，直接如实回
+    if (j && j.error && [".xlsx", ".xlsm", ".xls", ".xlsb", ".ods"].includes(ext))
+      return { ok: false, headers: null, reason: j.error, via: "python" }
+    // 其余情况（没装 pandas / 没建 .venv / 超时）落到 ② —— csv 仍然能靠纯 JS 读出表头
+  }
+  // ② 纯 JS 兜底：只认文本表，只给表头（没有取值就没有列画像，automap 会自动降级成"只按列名认"）
+  if (![".csv", ".tsv", ".txt"].includes(ext))
+    return { ok: false, headers: null, via: "js",
+      reason: `${ext || "该格式"} 需要 pandas 才能读（本机还没建 .venv 或缺 pandas），这里先手动填列名即可` }
+  try {
+    const fd = fs.openSync(file, "r")
+    const buf = Buffer.alloc(64 * 1024)                   // 只读头部：表可能很大，不整读进内存
+    const n = fs.readSync(fd, buf, 0, buf.length, 0)
+    fs.closeSync(fd)
+    const h = WF.parseHeaders(buf.slice(0, n), ext, { partial: n === buf.length })
+    if (!h.headers) return { ok: false, headers: null, reason: h.reason, via: "js" }
+    // raw/dupes 一并带上：headers 是消歧后的【显示名】，界面存进 values 的必须是真列名，
+    // 丢了它前端就只能退回"第 N 列"。python 那条路（table_preview.py）同样回这两项。
+    return { ok: true, headers: h.headers, raw: h.raw, dupes: h.dupes, rows: [], cols: [], sheets: [], note: "", via: "js" }
+  } catch (e) {
+    return { ok: false, headers: null, via: "js", reason: `读表头失败：${String(e.message || e).slice(0, 120)}` }
+  }
+}
+
 // UserInstallation profile 用【固定持久目录】，不再每次新建又删掉。
 // 为什么改：空 profile 会让 LibreOffice 走一遍"首次运行"初始化，实测冷启一次 153 秒——比原先
 // 写死的 90 秒超时还长。而"每次新建 profile"等于每次都是冷启，于是 pptx 预览稳定超时
@@ -2711,6 +2765,12 @@ function startJob(sid, sentText, modId) {
     // 产物侧栏（只推本轮新建/改动的）+ 结构化渲染器 + 步骤进度（产物出现 = 该步完成，不问 agent）。
     // 放在正文广播之后，别让簿子出问题拖累正文。异常收场那几条分支在上面已经调过同一个函数。
     await syncTail()
+    // ★ 复检一次「用户是不是刚点了终止」。上面那些早退判定是在 await 之【前】做的，而 syncTail
+    //   现在是 async（原来那段轮末同步是同步代码，中间没有让出事件循环的机会）—— 这一个 await
+    //   就给终止开了一道缝：判定通过 → 让出 → 用户点终止 → 回来照样往下走，于是【终止之后
+    //   又自动续了一轮】。autoStates.delete 拦不住它，因为 autoDecide 已经在下面一行了。
+    //   实测：autopilot 的「循环中终止：立即停且不再自动续跑」间歇性失败（终止后多注入 1 条）。
+    if (job.aborting || job.finished) return finish()
     // ---- 无人值守：只有走到这里的轮（正常收尾）才考虑续跑；出错/终止/越权/封顶都在上面 return 了 ----
     const av = autoDecide(sid, finalText)
     if (av && !av.go && av.note) broadcast("notice", { message: av.note })
@@ -3116,6 +3176,110 @@ async function suggestNext({ q, a, modName }) {
     return { list, err: list.length ? "" : (content.trim() ? "unparsable-content" : "empty-content") }
   } catch (e) {
     return { list: [], err: e?.name === "TimeoutError" ? "timeout" : (e?.message || "fetch-failed") }
+  }
+}
+
+// ---- 变量对应：模型修正那一段（规则版在 workflows.mjs 的 guessVarMap，那是先验也是兜底）----
+//
+// 【它比规则强在哪】规则只认列名字面 + 取值形状，认不出【语义】：
+//   · 「术后1年状态」= 终点事件（规则的关键词表里没有"术后1年"）；
+//   · 「T1/T2/T3/T4」那一列是分期而不是分组；
+//   · 一张表里同时有「入院日期」「出院日期」「随访月数」时，谁是随访时长。
+// 【它必须被关住的地方】模型很容易顺手"造一个更合理的列名"。所以这里【只收列名，不收自由发挥】，
+// 收回来还要逐个对着真表头核，越界的一律丢弃 —— 一个编出来的列名会一路灌进任务卡，
+// 而"列名对不上"正是这整套控件要根治的失败模式本身。
+const PREVIEW_ROWS = Number(process.env.PREVIEW_ROWS || 5)      // 抽几行给用户看 / 给模型看
+const AUTOMAP_TIMEOUT_MS = Number(process.env.AUTOMAP_TIMEOUT_MS || 25000)
+const AUTOMAP_ENABLED = process.env.AUTOMAP_ENABLED !== "0"     // 关掉就只剩离线规则（照样能用）
+const AUTOMAP_ROLES = [
+  ["groupCol", "分组列：区分组别的那一列（治疗组/对照组、术式…）。不是性别、不是分期，除非表里真的拿它当分组"],
+  ["outcomeCol", "结局列：要解释或预测的那个结果（是否复发、住院天数）"],
+  ["timeCol", "随访时间列：从起点到终点事件或末次随访的【时长】。日期列不算——那是某一天，不是多久"],
+  ["eventCol", "终点事件列：1=事件发生（死亡/复发），0=删失。必须是两值列"],
+  ["testCol", "待评价指标列（ROC 用）：要评价诊断效能的那个连续检测值"],
+  ["goldCol", "金标准列（ROC 用）：公认的确诊依据（病理结果…），两值列"],
+  ["covars", "需要校正的协变量（数组）：年龄、性别、分期这类要放进模型的因素"],
+].map(([k, d]) => `- ${k} —— ${d}`).join("\n")
+const AUTOMAP_SYS = [
+  "你在帮一位不熟悉统计术语的临床医生，把他表格里的列对应到分析要用的角色上。",
+  "你会看到每一列的画像（类型、取值个数、实际取值与例数）和表的前几行原样。",
+  "要对应的角色：",
+  AUTOMAP_ROLES,
+  "铁律：",
+  "1) 只能填【给定表头里原样出现过的列名】，一个字都不能改，更不许编一个表里没有的列名。",
+  "2) 认不准就【不要填这个角色】（留空或省略），空着比填错好得多——填错不会报错，只会产出一份看着很正常的错结果。",
+  "3) 标识列（住院号/编号/ID）不能充当任何角色。",
+  "4) why 里写你的依据，一句话，要引用【看得见的证据】（列名、取值与例数），不要写“通常”“一般来说”。",
+  "5) conf 只能是 high 或 med：列名与取值形状都对上了才是 high。",
+  '6) 只输出一个 JSON 对象，形如 {"map":{"groupCol":"组别","covars":["年龄","性别"]},"why":{"groupCol":"..."},"conf":{"groupCol":"high"},"notes":["..."]}；不要解释、不要代码块。',
+].join("\n")
+
+// 模型那一版的结果缓存（键 = 文件身份 + 勾了哪些分析）。**只缓存成功的那次**：
+// 超时 / 网关 429 / 解析不出都不入缓存，否则一次抖动就把"只有规则版"钉死到进程结束，
+// 而用户唯一能做的补救是重传文件 —— 与 index.html 表头缓存那处踩过的是同一个坑。
+const _amCache = new Map()
+const AM_CACHE_MAX = 64
+async function automapCached(file, analyses, run) {
+  let key = file
+  try { const st = fs.statSync(file); key = `${file}|${st.mtimeMs}|${st.size}` } catch {}
+  key += "|" + (Array.isArray(analyses) ? analyses.join(",") : "")
+  if (_amCache.has(key)) return _amCache.get(key)
+  const r = await run()
+  if (r?.used) {
+    if (_amCache.size >= AM_CACHE_MAX) _amCache.delete(_amCache.keys().next().value)
+    _amCache.set(key, r)
+  }
+  return r
+}
+
+/** 让模型看同一份画像去修正规则版。返回 { map, why, conf, notes, used, err }；失败一律静默回退到规则版。 */
+async function automapLLM(pv, base, analyses) {
+  if (!AUTOMAP_ENABLED) return { used: false, err: "disabled" }
+  const p = suggestProvider()
+  if (!p) return { used: false, err: "no-provider" }
+  const want = Array.isArray(analyses) && analyses.length ? `\n\n【用户勾了这些分析】${analyses.join("、")}——和它们无关的角色可以不填。` : ""
+  const user = [
+    WF.describeCols(pv.cols, pv.rows || [], pv.headers),
+    `\n【合法列名（只能从这里面选，原样照抄）】\n${pv.headers.join(" | ")}`,
+    `\n【规则先验（按列名与取值形状粗判的，你可以推翻）】\n${JSON.stringify(base.map)}`,
+    want,
+    "\n请给出你的对应结果（JSON）。",
+  ].join("\n")
+  const url = p.baseURL.replace(/\/+$/, "") + "/chat/completions"
+  // 关思考：与 suggestNext 同一个坑——火山那几档是思考模型，推理会吃满 max_tokens 让 content 空着
+  // 回来（finish=length），前端解析出空对象、还什么日志都不留。不认这个字段的上游会 400，去掉重试一次。
+  const attempt = (noThink) => fetch(url, {
+    method: "POST", redirect: "manual",
+    signal: AbortSignal.timeout(AUTOMAP_TIMEOUT_MS),
+    headers: { "Content-Type": "application/json", Authorization: "Bearer " + p.apiKey },
+    body: JSON.stringify({
+      model: p.modelID, stream: false, temperature: 0, max_tokens: 900,
+      ...(noThink ? {} : { thinking: { type: "disabled" } }),
+      messages: [{ role: "system", content: AUTOMAP_SYS }, { role: "user", content: user }],
+    }),
+  })
+  try {
+    let r = await attempt(false)
+    if (r.status === 400 || r.status === 422) r = await attempt(true)
+    if (!r.ok) return { used: false, err: "http-" + r.status }
+    const j = await r.json().catch(() => null)
+    const content = j?.choices?.[0]?.message?.content || ""
+    // 入账：与 suggestNext 同一条计费通道，漏记等于给这个接口开了个不花钱的口子
+    try {
+      const price = (p.route === "cloud" ? costOfModel(p.modelID) : null) || _modelCost()
+      const inTok = Number(j?.usage?.prompt_tokens) || 0, outTok = Number(j?.usage?.completion_tokens) || 0
+      const cost = inTok / 1e6 * (price.input || 0) + outTok / 1e6 * (price.output || 0)
+      if (cost > 0) addCost(cost)
+    } catch {}
+    let obj = null
+    const s = content.replace(/^\s*```(?:json)?\s*|\s*```\s*$/g, "").trim()
+    const i = s.indexOf("{"), k = s.lastIndexOf("}")
+    if (i >= 0 && k > i) { try { obj = JSON.parse(s.slice(i, k + 1)) } catch {} }
+    if (!obj || typeof obj !== "object") return { used: false, err: content.trim() ? "unparsable" : "empty-content" }
+    const notes = Array.isArray(obj.notes) ? obj.notes.map(String).filter((x) => x && x.length < 200).slice(0, 4) : []
+    return { used: true, map: obj.map || {}, why: obj.why || {}, conf: obj.conf || {}, notes, err: "" }
+  } catch (e) {
+    return { used: false, err: e?.name === "TimeoutError" ? "timeout" : (e?.message || "fetch-failed") }
   }
 }
 
@@ -3877,24 +4041,72 @@ export const server = http.createServer(async (req, res) => {
       const dir = sid ? await sessionUp(sid) : UPLOADS
       const f = safeUnder(dir, name)
       if (!f || !fs.existsSync(f) || !fs.statSync(f).isFile()) return send(res, 404, "application/json", JSON.stringify({ err: "文件不存在" }))
-      const ext = path.extname(name).toLowerCase()
-      if (![".csv", ".tsv", ".txt"].includes(ext))
-        // xlsx 要解析二进制，网关不背这个依赖（Python 侧有 pandas，但为一个下拉框起进程不值）。
-        // 如实回"读不了"，前端把 columns 字段降级成手填输入框，而不是给一个空下拉让用户以为没列。
-        return send(res, 200, "application/json", JSON.stringify({ headers: null, reason: `${ext || "该格式"} 需要 AI 在分析时读取，这里先手动填列名即可` }))
-      try {
-        const fd = fs.openSync(f, "r")
-        const buf = Buffer.alloc(64 * 1024)                 // 只读头部：表可能很大，不整读进内存
-        const n = fs.readSync(fd, buf, 0, buf.length, 0)
-        fs.closeSync(fd)
-        // 解析逻辑抽到 workflows.mjs（纯函数、可单测）——这一段的判据全是踩出来的，没有回归测试
-        // 迟早会被"顺手简化"掉。
-        // partial：缓冲区被读满 = 文件还有后续，末尾必然停在一行（很可能是一个多字节字符）的中间。
-        // parseHeaders 会据此先切到最后一个换行再解码，否则中文宽表会被误判成 GBK 返回整排乱码列名。
-        return send(res, 200, "application/json", JSON.stringify(WF.parseHeaders(buf.slice(0, n), ext, { partial: n === buf.length })))
-      } catch (e) {
-        return send(res, 200, "application/json", JSON.stringify({ headers: null, reason: `读表头失败：${String(e.message || e).slice(0, 120)}` }))
+      // xlsx 也要能读：医院导出的表【绝大多数是 xlsx】，此前它一律降级成"手动填列名"，
+      // 等于本套件最要紧的控件对多数用户根本没生效。走 tablePreview（pandas 优先、JS 兜底）。
+      // rows 与 /api/data/preview 保持一致，两条路才共用同一份缓存（否则同一张表要起两次 python）
+      const pv = await tablePreview(f, { rows: PREVIEW_ROWS })
+      // raw/dupes 必须透出去：前端按钮上显示 headers（消歧后的名字），存进 values 的是 raw（真列名）。
+      // 只回 headers 的话，界面会把"（重名 2）""（第 3 列·无列名）"这种表里不存在的名字送给模型。
+      return send(res, 200, "application/json", JSON.stringify(
+        pv.ok ? { headers: pv.headers, raw: pv.raw || null, dupes: pv.dupes || [], note: pv.note || "" }
+              : { headers: null, reason: pv.reason }))
+    }
+    // 前 N 行 + 逐列画像。「变量对应」面板用它把真表摆给用户看（对着 5 行真数据核对列，
+    // 比对着六个光秃秃的下拉靠谱得多），automap 也复用同一份结果。
+    if (req.method === "GET" && u.pathname === "/api/data/preview") {
+      const sid = u.searchParams.get("sid") || ""
+      const name = u.searchParams.get("name") || ""
+      const dir = sid ? await sessionUp(sid) : UPLOADS
+      const f = safeUnder(dir, name)
+      if (!f || !fs.existsSync(f) || !fs.statSync(f).isFile()) return send(res, 404, "application/json", JSON.stringify({ err: "文件不存在" }))
+      const pv = await tablePreview(f, { rows: PREVIEW_ROWS })
+      return send(res, 200, "application/json", JSON.stringify(pv))
+    }
+    // ---- 变量对应自动填：机器先认列，用户只核对 ----
+    // 【这个接口在解决什么】「分组列 / 结局列 / 随访时间列 / 终点事件列…」这一排下拉，是本套件里
+    // 用户最不知所云的地方——医生看到「终点事件列」四个字第一反应是"这是啥"，而填错不会报错，
+    // 只会安静地产出一条看着很正常的错 KM 曲线。所以顺序要反过来：先抽 5 行让机器认，用户只确认。
+    // 【两段式，且规则在前】先跑离线规则（guessVarMap，不花钱、不联网、结论稳定），再让模型看
+    // 同一份画像去修正。模型这一段【只允许改成表里真有的列名】，越界的一律丢弃回退到规则版 ——
+    // 一个编出来的列名会一路灌进任务卡，而"列名对不上"恰恰是这整套控件要根治的失败模式本身。
+    if (req.method === "POST" && u.pathname === "/api/data/automap") {
+      const chunks = []; for await (const c of req) chunks.push(c)
+      let body = {}
+      try { body = JSON.parse(Buffer.concat(chunks).toString() || "{}") } catch {}
+      const sid = String(body.sid || "")
+      const name = String(body.name || "")
+      const dir = sid ? await sessionUp(sid) : UPLOADS
+      const f = safeUnder(dir, name)
+      if (!f || !fs.existsSync(f) || !fs.statSync(f).isFile())
+        return send(res, 200, "application/json", JSON.stringify({ ok: false, reason: "文件不存在" }))
+      const pv = await tablePreview(f, { rows: PREVIEW_ROWS })
+      if (!pv.ok || !pv.headers?.length)
+        return send(res, 200, "application/json", JSON.stringify({ ok: false, reason: pv.reason || "这张表读不出结构" }))
+      const base = WF.guessVarMap(pv.cols, { headers: pv.headers })
+      // 【模型那一段必须缓存】前端每次装载「变量对应」面板都会打这个接口：进模块一次、切一次表一次、
+      // 刷新页面一次、恢复会话又一次。不缓存的话同一张表会被反复送去问模型 —— 每次都花钱，
+      // 而答案必然一样（输入完全相同）。缓存键含 mtime+size：重传同名新表会重算。
+      const ai = await automapCached(f, body.analyses, () => automapLLM(pv, base, body.analyses))
+      // 合并：模型给的、且列名在真表头里的才采纳；其余保留规则版。by 记下每一项是谁填的，
+      // 前端要把它显示出来——用户有权知道这一格是"照列名规则填的"还是"模型看了数据填的"。
+      const map = { ...base.map }, why = { ...base.why }, conf = { ...base.conf }
+      const by = {}
+      for (const k of Object.keys(map)) by[k] = "rule"
+      for (const [k, v] of Object.entries(ai.map || {})) {
+        const ok = Array.isArray(v) ? v.every((x) => pv.headers.includes(x)) : pv.headers.includes(v)
+        if (!ok || (Array.isArray(v) && !v.length)) continue
+        map[k] = v; by[k] = "ai"
+        if (ai.why?.[k]) why[k] = ai.why[k]
+        conf[k] = ai.conf?.[k] || conf[k] || "med"
       }
+      return send(res, 200, "application/json", JSON.stringify({
+        ok: true, map, why, conf, by,
+        notes: [...(base.notes || []), ...(ai.notes || [])],
+        source: ai.used ? "ai+rule" : "rule",
+        aiErr: ai.err || "",
+        headers: pv.headers, rows: pv.rows || [], cols: pv.cols || [],
+        note: pv.note || "", sheets: pv.sheets || [], scanned: pv.scanned || 0, truncated: !!pv.truncated,
+      }))
     }
     // 前端顶栏的额度显示。两种形态各有各的权威账本，一个口子同时回：
     //   · used/limit：本机 env 额度（容器部署 / 单机自用），美元，含在跑轮的实时成本；

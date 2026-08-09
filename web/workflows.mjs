@@ -1022,7 +1022,14 @@ export const WORKFLOWS = {
       + readerModeLines(STATS_MODES)
       + `\n- **用户在界面上指定了哪一列是什么，就以他指定的为准**（消息里会带一段「变量对应」）。`
       + `他没指的列你可以推断，但**必须在回答里写清你把哪一列当成了什么**，让他能一眼发现认错了。`
-      // xlsx 的列名是用户【手打】的（网关读不了 xlsx 表头，那几个下拉会降级成输入框），打错是常态。
+      // 「自动认列」：界面会读表的前几行，先把分组/终点事件/随访时间这些替用户填好（他多半答不上
+      // 这些词，见 data-analysis 技能「第零步」）。但【自动填 ≠ 用户确认】—— 没核对过的那几列
+      // 会单独成一段发过来，模型必须自己再核一遍，不能当成用户的指令照做。
+      + `\n- **消息里若出现「这几列是系统读了表的前几行自动认出来的，我还没核对」那一段**：`
+      + `那不是用户的指令，是机器的猜测。**动手前自己核一遍取值形状**——终点事件该是两值、`
+      + `随访时间该是非负时长而不是日期、金标准该是两值、分组列该只有少数几个水平。`
+      + `对不上就**停下来**告诉他是哪一列、表里还有哪几列可选，别将就着算；核对结论写进回答。`
+      // xlsx 的列名此前是用户【手打】的（读不了 xlsx 表头时下拉会降级成输入框），打错是常态。
       // 静默挑一个近似列替上去 → 一份看起来完全正常、实际分错了组的表，用户和审稿人都看不出来。
       + `\n- **他指定的列名在表里找不到 → 停下来告诉他实际列名，让他改**（列名相近的两列并存极常见，`
       + `如「手术方式」与「组别」）。**绝不许自己挑一个像的替上去**——哪怕在回答里写了，`
@@ -1182,14 +1189,16 @@ export const WORKFLOWS = {
       //   丢了之后全链路无声：排版时 pandoc 只打一句 WARNING 就退 0，用户打开 Word 才发现图没了。
       { id: "ingest", name: "读入原文", skill: "humanize-academic",
         emits: ["*_src.md"], render: "manuscript",
-        hint: "用 `humanize-academic/scripts/ingest_doc.py` 抽，别自己拿 pandoc / python-docx 抽——"
-            + "那几条路会把原稿的图和表丢掉",
+        // 脚本名要留着（有测试盯着它：不点名 ingest_doc.py，模型就会顺手用裸 pandoc 把图表抽丢）；
+        // 但 hint 是【给用户看的】、前端 textContent 渲染，反引号会原样显示成 `xxx`，所以只去反引号。
+        hint: "用 ingest_doc.py 抽，别自己拿 pandoc / python-docx 抽——那几条路会把原稿的图和表丢掉",
         note: "脚本会报「抽出 图 N 张 / 表 M 张」，**把这个数记住**：它是润色后校验的基准，"
             + "也是交付时要跟用户对的账。" },
       { id: "humanize", name: "润色改写", skill: "humanize-academic",
         emits: ["*_humanized.md", "humanized*.md"], render: "diff",
-        hint: "图与表原样搬进润色稿（`![](路径)` 整行、pipe 表整块），改完跑 check_invariants.py 比对；"
-            + "它对图表丢失打 [FAIL]，没补回去不许进排版出件" },
+        // 同上：只去反引号，脚本名与动作照留（hint 走 textContent，反引号会原样显示给用户）
+        hint: "图与表原样搬进润色稿（图片整行照抄、pipe 表整块搬），改完跑 check_invariants.py 比对；"
+            + "图表丢失会判 FAIL，没补回去不许进排版出件" },
       // ★ 不标 optional：本步只在【用户主动关掉引用保护】时才出现，存在即必做。
       //   标成可选时 pipelineLine 会往模块前言里写"引用兜底核查(可选)"，等于亲口告诉 AI 这步能跳 ——
       //   实测它就跳了：直接出 docx，事后才反问"要不要核查引用"。而这正是那个开关存在的唯一意义。
@@ -1808,6 +1817,168 @@ export function parseHeaders(buf, ext = ".csv", opts = {}) {
   for (const h of raw) if (h) cnt.set(h, (cnt.get(h) || 0) + 1)
   const dupes = [...cnt].filter(([, n]) => n > 1).map(([h]) => h)
   return { headers, raw, dupes, sep, encoding: enc }
+}
+
+// ---- 变量对应：机器先认列，用户只做核对（/api/data/automap 用；纯函数，便于测试）----
+//
+// 【为什么要有这一步】「分组列 / 结局列 / 随访时间列 / 终点事件列 / 待评价指标列 / 金标准列」
+// 这一排下拉是本套件里用户最不知所云的地方——医生看到「终点事件列」四个字，第一反应是"这是啥"。
+// 而它填错【不会报错】，只会安静地产出一条看着很正常的错 KM 曲线。
+// 让人从二十几个列名里挑出六个，很难；请他核对一句
+// 「分组列＝组别（全表只有 试验组 58 例 / 对照组 62 例两种取值）」，很容易。
+// 所以顺序要反过来：**先让机器看一眼数据把列认出来，用户只负责确认与纠正**。
+//
+// 本函数是那一步的【确定性底座】：不联网、不花钱、离线可用，同时充当模型那一版的先验与兜底。
+// 判据只有两样：**列名的字面** 与 **这一列的实际取值形状**（来自 table_preview.py 的列画像）。
+// 两样都命中才敢给高置信度——
+//   · 只看列名，会栽在医生表里「随访时间」和「入院时间」并排的那种表上；
+//   · 只看形状，根本分不开「是否死亡」与「是否吸烟」（都是清一色的 0/1 两值列）。
+//
+// 【宁可留空，也不硬填】分数不到门槛就不填。填错一个列比留空危险得多：留空只是让用户多点一下，
+// 填错会被他当成"系统已经认出来了"照单全收——这正是本文件里 parseHeaders 那段注释反复说的
+// "一旦解析歪了却仍回一个看着像模像样的结果，比不做这个控件更危险"。
+const VAR_ROLES = [
+  { id: "groupCol", label: "分组列", pri: 1,
+    // 「组」这个字在中文列名里太泛：血型、组织类型、组学都带它，先排掉再匹配
+    deny: /血型|组织|组学|组分|同组|世组/i,
+    name: /组别|分组|^组$|治疗组|对照|试验组|实验组|干预|队列|术式|手术方式|分型|亚型|\barm\b|group|cohort|treat(ment)?_?(group|arm)?|regimen/i,
+    // 分组列必然是"少数几个水平"。ID、纯文本、日期、空列一律不可能是它
+    shape: (c) => c.nunique >= 2 && c.nunique <= 6 && !["id", "empty", "datetime", "text", "constant"].includes(c.kind),
+    shapeWhy: (c) => `全表只有 ${c.nunique} 种取值（${vals(c)}）`,
+    // 性别确实能当分组，但十有八九是协变量。压一点分，让真正的组别列赢过它
+    demote: /性别|sex|gender/i },
+  { id: "timeCol", label: "随访时间列", pri: 2,
+    name: /随访|生存时间|生存期|观察时间|时长|时间.*(月|天|年|日)|(月|天|年|日)数|followup|follow_?up|survival_?time|\btime\b|\bos\b|\bpfs\b|\bdfs\b|\brfs\b|duration|months?|days?/i,
+    // 时长必须是非负的连续/整数值。日期列不算——那是"某一天"，不是"多久"（见下面的 note）
+    shape: (c) => ["numeric", "integer"].includes(c.kind) && c.nunique > 6 && c.all_nonneg !== false,
+    shapeWhy: (c) => `非负数值，范围 ${num(c.min)}–${num(c.max)}`,
+    // 日期列命中列名时不填，但要把话说出来：由日期相减派生随访时间是最常见的正确做法
+    noteWhen: (c) => c.kind === "datetime"
+      ? `「${c.name}」看着像日期而不是时长——随访时间通常要由两个日期相减派生，这一步得你或分析时来做`
+      : "" },
+  { id: "eventCol", label: "终点事件列", pri: 3,
+    name: /终点|事件|结局事件|死亡|生存状态|存活|复发|转移|进展|再入院|censor|删失|\bevent\b|\bstatus\b|\bdeath\b|died|recur|relapse|progress/i,
+    // 必须是两值。0/1 编码是它的典型形状，也是 lifelines 直接能吃的形状
+    shape: (c) => c.nunique === 2,
+    bonus: (c) => (c.kind === "binary01" ? 1.5 : 0),
+    shapeWhy: (c) => `两值列（${vals(c)}）${c.kind === "binary01" ? "，正是 1=事件 / 0=删失 的编码" : ""}` },
+  { id: "goldCol", label: "金标准列", pri: 4,
+    name: /金标准|gold|参考方法|reference|病理|活检|确诊|最终诊断|诊断结果|真实(状态|标签)|label|阳性/i,
+    shape: (c) => c.nunique === 2,
+    shapeWhy: (c) => `两值列（${vals(c)}），可以当 1=有病 / 0=无病` },
+  { id: "testCol", label: "待评价指标列", pri: 5,
+    name: /浓度|水平|含量|滴度|评分|积分|指数|比值|标志物|\bscore\b|\blevel\b|\bindex\b|\bratio\b|marker|d-?dimer|crp|psa|afp|ca\d{2,3}|nlr|plr/i,
+    // 要评价诊断效能的是一个连续指标，取值太少（≤6 种）画不出像样的 ROC
+    shape: (c) => ["numeric", "integer"].includes(c.kind) && c.nunique > 6,
+    shapeWhy: (c) => `连续数值（${c.nunique} 种取值，${num(c.min)}–${num(c.max)}）`,
+    // 年龄/BMI 也是连续数值，但它们几乎总是协变量而不是待评价指标
+    demote: /年龄|age|bmi|身高|体重|height|weight/i },
+  { id: "outcomeCol", label: "结局列", pri: 6,
+    name: /结局|结果|转归|预后|疗效|有效|缓解|痊愈|好转|outcome|response|prognosis|住院(天|日)数|\blos\b/i,
+    shape: (c) => !["id", "empty", "constant"].includes(c.kind),
+    shapeWhy: (c) => `${kindCN(c.kind)}列` },
+]
+// 协变量单独一套：它是"多选"，判据也不同（人口学与合并症，而不是某个唯一角色）
+const COVAR_RE = /年龄|性别|身高|体重|bmi|吸烟|饮酒|分期|分级|stage|grade|病程|高血压|糖尿病|冠心病|合并症|既往史|\bage\b|\bsex\b|gender|smok|drink|comorbid|hypertens|diabet/i
+const COVAR_MAX = 8
+const ID_RE = /住院号|门诊号|病案号|就诊号|样本号|标本号|编号|序号|患者(id|编号)|\bid\b|\bno\.?\b|number|subject|patient_?id/i
+
+const num = (x) => (x === undefined || x === null ? "?" : (Math.round(x * 100) / 100))
+const kindCN = (k) => ({ numeric: "连续数值", integer: "整数", binary01: "0/1 两值", binary: "两值",
+  categorical: "分类", datetime: "日期", text: "文本", id: "标识", empty: "空", constant: "常量" }[k] || k)
+// 取值少的列把取值连例数一起摆出来——这是"这一列到底是什么"最硬的证据，比任何列名都可靠
+const vals = (c) => (c.values || []).length
+  ? c.values.slice(0, 4).map((v) => `${v.v || "(空)"} ${v.n} 例`).join(" / ") + ((c.values.length > 4) ? " …" : "")
+  : (c.examples || []).slice(0, 4).join(" / ")
+
+/**
+ * 从列画像里认出各个角色的列。
+ * @param cols  table_preview.py 的 cols（至少要有 name；有 kind/nunique/values 时判得准得多）
+ * @param opt   { headers } —— 只拿得到表头、读不出取值时的降级入口（把 headers 包成 cols 即可）
+ * @returns { map, why, conf, notes }
+ *          map  角色 → 列名（covars 是数组）。**认不准的角色不出现在 map 里**（宁可留空）
+ *          why  角色 → 一句人话依据，直接摆给用户看（"列名含「组别」，且全表只有两种取值…"）
+ *          conf 角色 → "high" | "med"（名+形都中 = high；只中一样 = med）
+ *          notes 认不出但值得说的事（如"随访时间那列是日期，得相减派生"）
+ */
+export function guessVarMap(cols, opt = {}) {
+  const list = (cols && cols.length ? cols : (opt.headers || []).map((h) => ({ name: String(h) })))
+    .filter((c) => c && c.name)
+  const map = {}, why = {}, conf = {}, notes = []
+  const taken = new Set()
+  // 标识列不参与任何角色（住院号当分组列跑出来的 Table 1 会有 120 个"组"）
+  for (const c of list) if (ID_RE.test(c.name) || c.kind === "id") taken.add(c.name)
+
+  for (const role of [...VAR_ROLES].sort((a, b) => a.pri - b.pri)) {
+    let best = null
+    for (const c of list) {
+      if (taken.has(c.name)) continue
+      if (role.deny && role.deny.test(c.name)) continue
+      const hasShape = c.kind !== undefined
+      const nameHit = role.name.test(c.name)
+      // 形状未知（只读到表头）时不判形，只按列名认，并在 why 里说清这是怎么认的
+      const shapeHit = hasShape ? !!role.shape(c) : null
+      if (hasShape && !shapeHit) {
+        const n = role.noteWhen ? role.noteWhen(c) : ""
+        if (nameHit && n) notes.push(n)
+        continue                                   // 形状对不上就一票否决，列名再像也不填
+      }
+      let s = (nameHit ? 3 : 0) + (shapeHit ? 1.5 : 0) + (role.bonus && hasShape ? role.bonus(c) : 0)
+      if (role.demote && role.demote.test(c.name)) s -= 2.5
+      if (s <= 0) continue
+      if (!best || s > best.s) best = { c, s, nameHit, shapeHit }
+    }
+    // 门槛 3：等于"至少列名对上了"。只有形状对（1.5 分）绝不够——表里非负连续列一抓一把，
+    // 挑一个填进「随访时间」纯属瞎猜，而用户会把它当成系统的判断。
+    if (!best || best.s < 3) continue
+    const c = best.c
+    taken.add(c.name)
+    map[role.id] = c.name
+    conf[role.id] = best.nameHit && best.shapeHit ? "high" : "med"
+    why[role.id] = best.nameHit && best.shapeHit ? `列名像「${role.label}」，且${role.shapeWhy(c)}`
+      : best.nameHit ? `列名像「${role.label}」${c.kind === undefined ? "（这张表只读到了表头，没能核对取值，请务必自己看一眼）" : ""}`
+        : role.shapeWhy(c)
+  }
+  // 结局列没有独立候选时，允许复用终点事件列：「是否死亡」既是终点事件也是结局，这很常见，
+  // 而留空会让"组间比较"这类模式白白缺一个必需项。复用要在 why 里说明，别让用户以为是两列。
+  if (!map.outcomeCol && map.eventCol) {
+    map.outcomeCol = map.eventCol
+    conf.outcomeCol = "med"
+    why.outcomeCol = `与终点事件同一列（「${map.eventCol}」既是终点事件也是要分析的结局，这种表很常见）`
+  }
+  const cov = []
+  for (const c of list) {
+    if (taken.has(c.name) || cov.length >= COVAR_MAX) continue
+    if (!COVAR_RE.test(c.name)) continue
+    if (["empty", "constant", "id", "text"].includes(c.kind)) continue
+    cov.push(c.name)
+  }
+  if (cov.length) {
+    map.covars = cov
+    conf.covars = "med"
+    why.covars = `看着像人口学 / 合并症变量（${cov.join("、")}），常作为校正因素；**要不要校正得你按临床来定**`
+  }
+  return { map, why, conf, notes }
+}
+
+/** 列画像 → 给模型看的一段紧凑文本（放进 automap 提示词；抽出来是为了能单测、也能打日志核对） */
+export function describeCols(cols, rows = [], headers = []) {
+  const lines = []
+  for (const c of (cols || [])) {
+    const bits = [kindCN(c.kind)]
+    if (c.nunique !== undefined) bits.push(`${c.nunique} 种取值`)
+    if (c.missing_pct) bits.push(`缺失 ${c.missing_pct}%`)
+    if (c.min !== undefined) bits.push(`范围 ${num(c.min)}–${num(c.max)}`)
+    const v = vals(c)
+    lines.push(`- ${c.name}｜${bits.join("，")}${v ? `｜取值：${v}` : ""}`)
+  }
+  if (!lines.length) for (const h of headers) lines.push(`- ${h}`)
+  const head = headers.length ? headers : (cols || []).map((c) => c.name)
+  const sample = rows.length
+    ? "\n\n【前 " + rows.length + " 行原样】\n" + head.join(" | ") + "\n"
+      + rows.map((r) => r.map((x) => (x === "" ? "(空)" : x)).join(" | ")).join("\n")
+    : ""
+  return "【每列画像】\n" + lines.join("\n") + sample
 }
 
 // ---- 模块/技能闸的判据（纯函数，便于测试）----

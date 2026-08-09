@@ -544,6 +544,9 @@
   /* 帮助文字：所有"这不是影响因子""未脱敏不得进统计"之类的反误导说明都写在这里。
      原来 11px + --faint（白底对比度约 2.9:1，低于 WCAG AA 的 4.5:1）等于写了没人看得见。 */
   .wff .wfhelp { font-size: 12px; color: #55657a; line-height: 1.6; margin-top: 5px; }
+  /* 自动认列的依据：用户核对的就是这句话，颜色要比普通帮助文字显眼一点 */
+  .wff .wfhelp.wfauto { color: #2d61b5; background: #f2f7ff; border: 1px solid #d8e6fb;
+    border-radius: 7px; padding: 5px 8px; }
   /* 说明「？」：静态只是个小圆点，不抢标题的视线 */
   .wfdot { position: relative; display: inline-flex; align-items: center; justify-content: center;
     width: 14px; height: 14px; margin-left: 5px; border-radius: 50%; vertical-align: 1px;
@@ -3771,13 +3774,22 @@ function fieldEl(f, values, onChange, allFields) {
       // 【键要带 sid】只按文件名缓存的话，会话 A 的 data.csv（列 A/B/C）会被会话 B 的同名
       // data.csv（列 X/Y）复用 —— 而这个下拉的全部价值就是"列名一定对"。切会话时也会整体清空。
       const ck = (sessionId || "-") + "|" + src
-      host.appendChild(mk("div", { className: "wfhelp", textContent: HDR_CACHE.has(ck) ? "" : "正在读取表头…" }))
+      host.appendChild(mk("div", { className: "wfhelp", textContent: HDR_CACHE.has(ck) ? "" : "正在读表、自动认列…" }))
       // 缓存的是【Promise 而非结果】：同一张卡里通常有好几个 columns 字段（分组列/结局列/协变量），
       // 它们同时发起、都还没回来，只缓存结果的话这一批仍会各打一次。缓存 Promise 后合并成一次。
       // 【失败不入缓存】否则一次网络抖动之后永远停在"读表头失败"，连重试的机会都没有 ——
       // 这与 loadWorkflow 那处是同一类错误，别在两个地方各犯一次。
+      // ★ 走 automap 而不是只读表头：它一次回【表头 + 前几行 + 机器认好的列对应】。
+      //   「分组列 / 结局列 / 随访时间列…」这一排下拉是本表单里用户最不知所云的地方 ——
+      //   医生看到「终点事件列」四个字第一反应是"这是啥"，而填错不会报错，只会产出一份
+      //   看着很正常的错结果。让机器先认、把依据摆出来、用户改错的那一个再提交，
+      //   比让他从二十几个列名里挑六个靠谱得多。
+      //   这里【不需要】额外的确认按钮：这张卡本来就是用户看完再点「提交」的，提交即确认。
       if (!HDR_CACHE.has(ck))
-        HDR_CACHE.set(ck, fetch("api/data/headers?name=" + encodeURIComponent(src) + sidQ())
+        HDR_CACHE.set(ck, fetch("api/data/automap", {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ sid: sessionId || "", name: src, analyses: values.analyses }),
+        })
           .then((r) => r.json())
           .catch((e) => { HDR_CACHE.delete(ck); throw e }))
       HDR_CACHE.get(ck).then((j) => {
@@ -3797,7 +3809,23 @@ function fieldEl(f, values, onChange, allFields) {
         //   是同一个字符串 —— 用户从下拉里点一下，一个不存在的列名就原样进任务卡交给模型，
         //   脚本按它取列必然取不到。而这个控件存在的唯一理由就是"列名一定对"。
         //   无列名的列存成「第 N 列」：它不像列名、模型也读得懂，比一个假名字诚实。
-        const VALS = j.headers.map((h, i) => (j.raw?.[i] || "").trim() || `第 ${i + 1} 列`)
+        //   兜底到 j.headers[i]：万一某条取表头的路径没回 raw（合并时就踩过一次——/api/data/headers
+        //   换成 tablePreview 后一度把 raw 丢了），也只是退回旧行为，而不是把每一列都叫成「第 N 列」。
+        const VALS = j.headers.map((h, i) => String(j.raw?.[i] ?? h ?? "").trim() || `第 ${i + 1} 列`)
+        // 这一格还空着、而机器认出了一列 → 先替他填上，并把依据写在下面让他核对。
+        // 只填空格：用户已经指过的列不许被机器改掉（两个值长得一模一样，被覆盖了他也发现不了）。
+        // ★ 合并时调整了两处：① 挪到 VALS 之后 —— 校验要拿【真列名】比，拿显示名比的话，
+        //   重名列的 guess（真名）会被判成"不在表里"而白白放弃自动填；且 values 里存的必须是真名。
+        //   ② 原来它排在 `if (!j.headers?.length)` 之前，而 j.headers 为 null（xlsx 读不出表头）时
+        //   `j.headers.includes(...)` 直接抛 TypeError，整个 .then 挂掉、连"手动填列名"都画不出来。
+        const guess = j.ok && j.map ? j.map[f.id] : undefined
+        const empty = f.multiple ? !(values[f.id] || []).length : (values[f.id] === undefined || values[f.id] === "")
+        let autoWhy = ""
+        if (empty && guess !== undefined && guess !== "" && !(Array.isArray(guess) && !guess.length)
+            && (Array.isArray(guess) ? guess.every((x) => VALS.includes(x)) : VALS.includes(guess))) {
+          values[f.id] = Array.isArray(guess) ? guess.slice() : guess
+          autoWhy = (j.by?.[f.id] === "ai" ? "AI 认的：" : "自动认的：") + (j.why?.[f.id] || "")
+        }
         j.headers.forEach((h, i) => {
           const v = VALS[i]
           const on = multi ? (values[f.id] || []).includes(v) : values[f.id] === v
@@ -3813,6 +3841,12 @@ function fieldEl(f, values, onChange, allFields) {
         // 真重名（不含仅大小写不同的）要说一句：两列同名时脚本只能取第一列，用户得知道。
         if (j.dupes?.length) host.appendChild(mk("div", { className: "wfhelp",
           textContent: `注意：表里有重复的列名（${j.dupes.join("、")}），同名列脚本只会取第一列；要指定另一列请在下面手填「第 N 列」。` }))
+        // 自动填的那一格要把【凭什么这么认】写出来，否则用户看到一个已经选中的按钮，
+        // 只会以为"这是我刚才选的"，核都不会核 —— 而核对正是这一步唯一的作用。
+        if (autoWhy) {
+          host.appendChild(mk("div", { className: "wfhelp wfauto", textContent: "✎ " + autoWhy + "　不对就点别的列改掉。" }))
+          onChange(true)   // 轻量通知：让「必填完成度」把这一格算进去（不重建 DOM，不抢焦点）
+        }
         // ★ 成功分支也要留手填入口。此前手填只在"读不出表头"时出现，于是表头读成功但
         //   【读的是错的那张表】（多表时恒取第一个）或列名被解析歪时，用户被逼着从列表里挑一个
         //   —— 而 testCol/goldCol 这类勾了就必填，不挑就提交不了。留个逃生口，成本一行。
