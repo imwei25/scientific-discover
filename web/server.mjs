@@ -1409,7 +1409,22 @@ const saveQuota = (q) => { try { fs.mkdirSync(path.dirname(QUOTA_FILE), { recurs
 // 未配 QUOTA_API_URL（单机 / 本地 / 老容器）完全保持原来的本地文件行为。
 const QUOTA_API = (process.env.QUOTA_API_URL || "").replace(/\/+$/, "")
 const QUOTA_TOKEN = process.env.QUOTA_TOKEN || ""
-const QUOTA_USER = (process.env.BASE_PATH || "").replace(/^\//, "").split("/")[0]
+// ★ 用【归一化后】的 BASE_PATH 推用户名，并把"推不出来"当成配置错误响亮报出来。
+//   原来是 `process.env.BASE_PATH.replace(/^\//,"").split("/")[0]` —— 只剥一个前导斜杠，
+//   于是 BASE_PATH 写成 `//alice`（多写一道斜杠、或上游拼接时多带一个）会算出【空串】，
+//   REMOTE_QUOTA 静默变成 false，额度记账悄悄退回容器内的 quota.json ——
+//   而那个文件在 agent 的可写目录里、它有 shell。整条"宿主权威账本防篡改"就此失效，
+//   且界面上一点异常都看不出来。这是本仓库里唯一一条配置写错就有真实安全后果的路径，
+//   所以不静默降级：能推出来就用，推不出来但明显是多用户形态（设了 QUOTA_API/TOKEN）就拒绝启动。
+const QUOTA_USER = BASE_PATH.replace(/^\/+/, "").split("/")[0]
+if (BASE_PATH && !QUOTA_USER) {
+  console.error(`[quota] BASE_PATH=${JSON.stringify(process.env.BASE_PATH)} 推不出用户名（归一化后为「${BASE_PATH}」）。`
+    + `多用户部署下这会让宿主账本静默失效、退回容器内可被 agent 改写的 quota.json。请写成 /用户名 的形式。`)
+  if (QUOTA_API && QUOTA_TOKEN) {
+    console.error("[quota] 已配置宿主账本（QUOTA_API/QUOTA_TOKEN）却推不出用户名 —— 拒绝以降级方式启动。")
+    process.exit(1)
+  }
+}
 const REMOTE_QUOTA = !!(QUOTA_API && QUOTA_TOKEN && QUOTA_USER)
 const rq = { day: todayKey(), cost: 0, pending: 0, seeded: false, flushing: false }
 // 跨日：已入账部分清零；尚未上报出去的增量（pending）是真实花费，顺延计入新的一天
