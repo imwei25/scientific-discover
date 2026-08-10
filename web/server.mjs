@@ -792,25 +792,22 @@ const skillHome = (skill, curMod) => {
   if (!hits.length) return ""
   return `「${name}」属于${hits.map((h) => `「${h}」`).join(" / ")}模块，请到那里新开会话继续。`
 }
-/** 模块是否可用 = 模块本身获授权 且 主技能未被技能白名单收权 */
-const moduleUsable = (id) => !MODULE_DEFS[id]?.broken && ALLOWED_MODULES.includes(id) && (!modPrimarySkill(id) || skillAllowed(modPrimarySkill(id)))
-// 每用户授权（ALLOWED_MODULES=chat,grant,...，由 deploy 的 users/<名>.env 注入）。
-// 空/未设 = 全部模块（单机部署与老容器的兼容默认）。非空但没有一个合法 id = 配置错误 →
-// fail-closed 回落到仅 chat 并响亮告警（别把乱码静默当"全开"）。
-const ALLOWED_MODULES = (() => {
-  const raw = String(process.env.ALLOWED_MODULES || "").trim()
-  if (!raw) return Object.keys(MODULE_DEFS)
-  const ids = raw.split(",").map((s) => s.trim()).filter((s) => MODULE_DEFS[s])
-  if (!ids.length) { console.warn(`[modules] ALLOWED_MODULES 配置非法：${JSON.stringify(raw)} → 回落到仅 chat，请修正 users/<名>.env 的 MODULES`); return ["chat"] }
-  return ids
-})()
-// ---- 每用户技能白名单（比模块更细的授权粒度）----
-// ALLOWED_SKILLS=（逗号分隔，deploy 的 users/<名>.env 经 SKILLS= 注入）；空/未设 = 全部技能。
+/** 模块是否可用 = 模块本身没坏 且 主技能未被技能白名单收权 */
+const moduleUsable = (id) => !MODULE_DEFS[id]?.broken && (!modPrimarySkill(id) || skillAllowed(modPrimarySkill(id)))
+// 【曾经有过一层 ALLOWED_MODULES】：每用户一个容器时，由 deploy 的 users/<名>.env 注入
+// "这个用户开通了哪几个模块"。那套部署已经整体下线（见 ee11e9b1），env 里再也没人写它。
+// 模块授权现在【只】来自云端账号的档案（运营后台改完，客户端靠 /api/me 同步过来）——
+// 落点是下面的 cloudSkillSet：模块的主技能被收权，该模块整体不可用（见 moduleUsable）。
+// 单一来源，别再留一层永远为空的 env 让人以为还有第二个开关。
+const ALL_MODULE_IDS = () => Object.keys(MODULE_DEFS)
+// ---- 技能白名单（比模块更细的授权粒度）----
 // 生效范围：自由对话(chat)会话——注入"未开通技能"前言 + 事件流强制（调未开通技能即中止本轮，
 // 与模块闸同一机制）；受限模块的绑定技能被收权时，该模块整体不可用（/api/modules 置 false、start 拒绝）。
 // env-setup 恒许可（基础设施：各技能都依赖它建的 .venv，禁它只会让一切技能坏得莫名其妙）。
 // 已知逃逸面（与模块闸一致的取舍）：chat 会话不禁 task 子代理（禁了会破坏正常流水线），子会话里的
 // 技能调用不经本闸；且 agent 有 shell，理论上可绕过 skill 工具直接跑技能脚本——本闸是产品分权，不是对抗边界。
+// 【曾经还有一层 ALLOWED_SKILLS env】（每用户容器由 users/<名>.env 的 SKILLS= 注入）：
+// 那套部署已下线，白名单现在只有云端账号档案这一个来源，见下面的 cloudSkillSet。
 const SKILL_IDS = (() => {   // 以技能目录为唯一事实来源（含 SKILL.md 的子目录才算技能）
   try {
     return fs.readdirSync(path.join(ROOT, ".opencode", "skills"), { withFileTypes: true })
@@ -828,17 +825,6 @@ if (SKILL_IDS.length) {
     if (missing.length) console.warn(`[modules] 模块 ${id} 的工作流引用了本环境不存在的技能：${missing.join("、")}（该步骤会被技能闸挡下，请核对 workflows.mjs 与技能目录）`)
   }
 }
-const ALLOWED_SKILLS_SET = (() => {   // null = 不设限（全部技能）
-  const raw = String(process.env.ALLOWED_SKILLS || "").trim()
-  if (!raw) return null
-  const ids = raw.split(",").map((s) => s.trim()).filter(Boolean)
-  const valid = ids.filter((s) => SKILL_IDS.includes(s))
-  const dropped = ids.filter((s) => !SKILL_IDS.includes(s))
-  if (dropped.length) console.warn(`[skills] ALLOWED_SKILLS 含未知技能（已忽略）：${dropped.join(",")}`)
-  // 非空但全非法 = 配置错误：fail-closed 成"一个都不许"（响亮告警），而不是静默放开全部
-  if (!valid.length) console.warn(`[skills] ALLOWED_SKILLS 无一合法：${JSON.stringify(raw)} → 按全部禁用处理，请修正 users/<名>.env 的 SKILLS`)
-  return new Set([...valid, "env-setup"])
-})()
 // ---- 云端账号的技能授权（运营后台改完，客户端要跟着变）----
 //
 // 【为什么必须在客户端这边落地】技能是"软管控"：技能在客户端执行，云端网关只看得到
@@ -851,18 +837,13 @@ const ALLOWED_SKILLS_SET = (() => {   // null = 不设限（全部技能）
 // ③ /api/cloud/notice 那条 5 分钟轮询顺带同步（见 syncProfileSoon）刷新。
 // 最坏情况也就是"下次登录必然生效"，正常情况几分钟内自己就变了。
 const cloudSkillSet = () => {
-  if (!cloudLoggedIn()) return null                     // 没走云端账号（容器/自设 API）→ 只看 env
+  if (!cloudLoggedIn()) return null                     // 没走云端账号（自设 API key）→ 不设限
   const list = Cloud.loadState()?.profile?.skills
   if (!Array.isArray(list) || !list.length) return null // [] = 档位不限技能
   return new Set([...list.map(String), "env-setup"])     // env-setup 恒许可（各技能都靠它建 .venv）
 }
-/** env 白名单 ∩ 云端白名单；null = 两层都不限 */
-const effectiveSkillSet = () => {
-  const env = ALLOWED_SKILLS_SET, cloud = cloudSkillSet()
-  if (!env) return cloud
-  if (!cloud) return env
-  return new Set([...env].filter((s) => cloud.has(s)))
-}
+/** 生效的技能白名单；null = 不设限。现在只有云端账号这一个来源（env 那层已随多用户容器删除）。 */
+const effectiveSkillSet = () => cloudSkillSet()
 const skillAllowed = (name) => { const s = effectiveSkillSet(); return !s || s.has(name) }
 // chat 会话的技能限制前言（受限模块会话不用它——那边本就锁死单技能）。
 // 注意：受限容器的技能目录已被 deploy 侧过滤挂载（未开通技能物理不存在，见 render-compose.sh），
@@ -946,7 +927,7 @@ const entRev = () => {
     tier: p.tier || "", model: p.model || "",
     models: (p.models || []).map((m) => (m && m.model) || m).sort(),
     skills: set ? [...set].sort() : null,
-    modules: ALLOWED_MODULES.filter(moduleUsable),
+    modules: ALL_MODULE_IDS().filter(moduleUsable),
   }
   return crypto.createHash("sha1").update(JSON.stringify(payload)).digest("hex").slice(0, 12)
 }
@@ -1482,8 +1463,8 @@ function wfSyncDone(outDir, modId) {
  *   · 在「文稿核查与审校」里要求去 AI 味 → 被指去「自由对话」，而正确答案是「文章润色」。
  * 用户照做，等于放弃了专为这件事做的模块（连同它的表单与流程）。
  *
- * 另外只列 `moduleUsable()` 为真的模块：多用户部署里 `ALLOWED_MODULES` 可以不含 chat，
- * 那时"请到自由对话"是条死路 —— 指一个用户根本打不开的地方，比不指还糟。
+ * 另外只列 `moduleUsable()` 为真的模块：云端账号的档位可以不开通 chat，那时"请到自由对话"
+ * 是条死路 —— 指一个用户根本打不开的地方，比不指还糟。
  */
 const moduleMapLine = (curMod) => {
   const rows = Object.entries(MODULE_DEFS)

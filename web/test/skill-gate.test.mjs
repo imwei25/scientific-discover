@@ -120,14 +120,10 @@ test("白名单为空 = 不限：所有模块都开", async (t) => {
   assert.deepEqual(map, { chat: true, review: true, grant: true, paper: true, stats: true, litread: true, refcheck: true, humanize: true, figure: true })
 })
 
-test("容器 env 白名单与云端白名单取交集（两层都得放行）", async (t) => {
-  const gw = await gateway({ profile: prof(["grant-proposal", "reference-check"]), env: { ALLOWED_SKILLS: "reference-check,humanize-academic" } })
-  t.after(() => gw.close())
-  const { map } = await gw.modules()
-  assert.equal(map.refcheck, true, "两边都有 → 放行")
-  assert.equal(map.grant, false, "env 没给 → 拦")
-  assert.equal(map.humanize, false, "云端没给 → 拦")
-})
+// 【这里原本还有一条"容器 env 白名单与云端白名单取交集"】：每用户一个容器的年代，
+// users/<名>.env 的 SKILLS= 是第二层白名单，两层都放行才算放行。那套部署已整体下线
+// （见 ee11e9b1），env 那层也随之删掉 —— 白名单现在只有云端账号档案一个来源。
+// 这条测试跟着删，不是"忘了测"：它测的行为是被有意去掉的。
 
 test("被收权的模块：起轮直接 403 说人话，不是默默降级成自由对话", async (t) => {
   const gw = await gateway({ profile: prof(["grant-proposal"]) })
