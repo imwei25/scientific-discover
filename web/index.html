@@ -307,6 +307,71 @@
   .auto-lbl { display: flex; align-items: center; gap: 5px; font-size: 12px; color: var(--faint); white-space: nowrap; cursor: pointer; user-select: none; }
   .auto-lbl input { accent-color: var(--accent); cursor: pointer; margin: 0; }
   .auto-lbl.on { color: var(--accent); }
+  /* 工作目录小胶囊（输入框下方）。三态：未选(灰,可点) / 已选(蓝,可点) / 锁定(会话已开始,只读)。
+     最大宽度写死并省略号，否则一个长目录名会把「自动推进」和右边那行提示整个挤出去。 */
+  .dir-chip { display: inline-flex; align-items: center; gap: 5px; max-width: 190px; padding: 2px 9px 2px 7px;
+    font: inherit; font-size: 12px; line-height: 1.7; color: var(--faint); background: transparent;
+    border: 1px solid var(--line-hi); border-radius: 999px; cursor: pointer; white-space: nowrap;
+    transition: color .12s, border-color .12s, background .12s; }
+  .dir-chip .dc-ic { display: inline-flex; flex: none; }
+  .dir-chip .dc-ic .ic { width: 13px; height: 13px; }
+  .dir-chip .dc-t { overflow: hidden; text-overflow: ellipsis; }
+  .dir-chip:hover { color: var(--cyan); border-color: var(--cyan); }
+  .dir-chip.set { color: var(--cyan); border-color: rgba(59,111,212,.5); background: var(--accent-soft); }
+  .dir-chip.locked { cursor: default; opacity: .7; }
+  .dir-chip.locked:hover { color: var(--faint); border-color: var(--line-hi); }
+  .dir-chip.locked.set:hover { color: var(--cyan); border-color: rgba(59,111,212,.5); }
+
+  /* 选目录弹窗 */
+  .dir-recent { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-bottom: 10px; }
+  .dir-recent .dr-lbl { font-size: 11.5px; color: var(--faint); }
+  .dr-chip { display: inline-flex; align-items: center; gap: 5px; max-width: 190px; padding: 3px 10px;
+    font: inherit; font-size: 12px; color: var(--muted); background: #f4f7fb; border: 1px solid var(--line);
+    border-radius: 999px; cursor: pointer; white-space: nowrap; }
+  .dr-chip span { overflow: hidden; text-overflow: ellipsis; }
+  .dr-chip .ic { width: 13px; height: 13px; flex: none; color: var(--faint); }
+  .dr-chip:hover { color: var(--cyan); border-color: var(--cyan); background: var(--accent-soft); }
+  .dr-chip.gone { opacity: .5; text-decoration: line-through; }
+  .dir-bar { display: flex; align-items: center; gap: 6px; }
+  .dir-bar .dir-path { flex: 1; min-width: 0; font-size: 12.5px; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+  .dir-up { width: 32px; height: 32px; flex: none; display: grid; place-items: center; cursor: pointer;
+    color: var(--muted); background: #fff; border: 1px solid var(--line-hi); border-radius: 8px; }
+  .dir-up::before { content: ""; width: 8px; height: 8px; border-left: 1.8px solid currentColor; border-top: 1.8px solid currentColor; transform: rotate(45deg) translate(1px, 1px); }
+  .dir-up:hover:not(:disabled) { color: var(--cyan); border-color: var(--cyan); }
+  .dir-up:disabled { opacity: .4; cursor: default; }
+  /* 目录列表：固定高度 + 自己滚。不固定的话，进到一个有两百个子目录的地方，弹窗会长到屏幕外，
+     底下那排「使用当前目录」直接够不着；写成 max-height 又会让弹窗高度随每次进出目录忽长忽短。
+     overscroll-behavior:contain —— 滚到底继续滚不要带着后面整页一起动。 */
+  .dir-list { height: 240px; overflow-y: auto; overscroll-behavior: contain; margin: 10px 0; padding: 4px;
+    border: 1px solid var(--line); border-radius: var(--r-sm); background: #fbfcfe; }
+  .dir-list > .hint { padding: 10px; }
+  .dir-item { display: flex; align-items: center; gap: 9px; padding: 7px 8px; border-radius: 6px; cursor: pointer;
+    font-size: 12.5px; color: var(--text); transition: background .12s, color .12s; }
+  .dir-item:hover { background: var(--accent-soft); color: var(--accent-deep); }
+  .dir-item .di-ic { display: inline-flex; flex: none; color: var(--faint); }
+  .dir-item:hover .di-ic { color: var(--cyan); }
+  .dir-item .di-ic .ic { width: 14px; height: 14px; }
+  .dir-item .di-n { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  /* 「选它」平时不占位（opacity:0 而非 display:none），否则一 hover 出来就把目录名挤短一截、
+     整列文字跟着抖。名字那一栏 min-width:0 已经保证长名字自己打省略号，让位是够的。 */
+  .dir-item .di-use { flex: none; padding: 2px 9px; font: inherit; font-size: 11px; font-weight: 500; color: var(--cyan);
+    background: #fff; border: 1px solid rgba(59,111,212,.45); border-radius: 999px; cursor: pointer; opacity: 0;
+    transition: opacity .12s, background .12s, color .12s; }
+  .dir-item:hover .di-use { opacity: 1; }
+  .dir-item .di-use:hover { background: var(--cyan); color: #fff; }
+  /* 弹窗本身：目录列表固定 240px，加上顶部说明和底下两排按钮，整张卡片高约 550px。
+     笔记本上把浏览器拉成半屏（可视高 ~600px）就会把「使用当前目录」顶出屏幕外，而 .modal-card
+     是 overflow:hidden 的——顶出去就是彻底够不着。给这一个弹窗封顶并让内容区自己滚。
+     ★ min-height:0 不能省：column flex 里子项默认 min-height:auto，不写它 .modal-body 就压不下去，
+     overflow-y:auto 形同虚设，卡片照样被内容顶穿。 */
+  #dirModal .modal-card { max-height: calc(100vh - 48px); display: flex; flex-direction: column; }
+  #dirModal .modal-head { flex: none; }
+  #dirModal .modal-body { flex: 1 1 auto; min-height: 0; overflow-y: auto; }
+  /* 底部三个按钮（左「在此新建文件夹」／右「不指定」「使用当前目录」）必须一行排下：
+     换行的话"取消"和"确定"会上下错开，用户很容易点错那个不可逆的。560px 宽下实测三个共 421px，
+     余量够；nowrap 是防某天有人把文案改长。 */
+  #dirModal .mm-actions { flex-wrap: nowrap; }
+  #dirModal .mm-actions .mm-btn { white-space: nowrap; }
 
   /* Aside：右侧贴边的白色工具列（上传 / 本轮产出 / Zotero） */
   aside { display: flex; flex-direction: column; gap: 12px; min-height: 0; overflow-y: auto;
@@ -372,31 +437,116 @@
   .sess.picked { background: var(--accent-soft); box-shadow: inset 0 0 0 1px rgba(59,111,212,.35); }
   .sess.picked .ck { background: var(--cyan); border-color: var(--cyan); }
   .sess.picked .ck .ic { opacity: 1; }
-  /* 项目分组 */
-  .pgroup { margin-bottom: 4px; }
-  .pghead { display: flex; align-items: center; gap: 7px; padding: 8px 9px; border-radius: var(--r-sm); cursor: pointer; color: var(--muted); font-size: 13px; font-weight: 400; }
+  /* 顶层分类（「项目」「文件夹」）：默认折叠的一整段。三层的区分【靠字重和颜色，不靠字号】——
+     侧栏只有 200~240px，字号一层比一层大的话最外层会占掉太多宽度；而且中文小字放大到 13px 以上
+     并不会更好认。所以 L1 用最深的字色 + 600 字重，L2 同字号但只有 400 且是灰的，L3 回到正文色，
+     扫视时是"深-灰-黑"三段，一眼分得开。（此前 L1 是 12.5px/500、L2 反而 13px，父层比子层还轻，
+     层级读起来是反的。） */
+  .msect { margin-bottom: 2px; flex: none; }   /* 同 .droparea：#sessions 是 column flex，别让它被压扁 */
+  /* padding-right 常驻 32px：右上角那个动作按钮是绝对定位浮上来的，不预留位置的话它会盖住分类名。
+     和 .sess 行留 46px 给三个图标是同一套做法，见下面 .pghead 的长注释。 */
+  .mshead { position: relative; display: flex; align-items: center; gap: 7px; padding: 7px 32px 7px 9px; border-radius: var(--r-sm); cursor: pointer;
+    color: #334153; font-size: 12.5px; font-weight: 600; letter-spacing: .2px; user-select: none; }
+  .mshead:hover { background: var(--panel-soft); color: var(--text); }
+  .mshead .caret { width: 13px; height: 13px; flex: none; color: var(--faint); transition: transform .15s; }
+  .msect.collapsed > .mshead .caret { transform: rotate(-90deg); }
+  .mshead .gico .ic { width: 14px; height: 14px; color: #334153; }
+  .mshead .gico { display: inline-flex; flex: none; }
+  .mshead .mst { flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  /* 计数徽标挪进右侧那块预留区（绝对定位），和动作按钮同一个位置轮流出现：
+     留在文档流里的话，"预留 32px + 徽标 26px" 会平白吃掉近 60px 分类名宽度。 */
+  .mshead .msc { position: absolute; right: 6px; top: 50%; transform: translateY(-50%);
+    color: var(--faint); font-weight: 500; font-variant-numeric: tabular-nums; font-size: 11px;
+    min-width: 16px; text-align: center; padding: 0 5px; border-radius: 9px; background: var(--panel-soft); }
+  .mshead:hover .msc { background: #e3e9f3; }
+  /* 分类头右侧的动作按钮（新建项目 / 选工作目录）：同 .pg-act，浮在行上、hover 才出现 */
+  .ms-act { position: absolute; right: 5px; top: 50%; transform: translateY(-50%);
+    width: 21px; height: 21px; display: grid; place-items: center; padding: 0; cursor: pointer;
+    color: var(--faint); background: transparent; border: 0; border-radius: 5px; opacity: 0; transition: opacity .12s, color .12s, background .12s; }
+  .mshead:hover .ms-act { opacity: 1; z-index: 1; }
+  .mshead:hover .msc { opacity: 0; }
+  .ms-act .ic { width: 13px; height: 13px; }
+  .ms-act:hover { color: var(--cyan); background: rgba(59,111,212,.12); }
+  .msect.collapsed > .msbody { display: none; }
+  .msbody { padding: 2px 0 8px 6px; display: flex; flex-direction: column; gap: 3px; }
+  .msbody > .pgroup { flex: none; }
+  /* 空分类/空分组的说明。字号压到 11px、行高放宽——它是"教你怎么用"的旁注，不该和会话行抢注意力。
+     左内边距对齐分组名的起笔（9px），别让它比会话行还往外凸。 */
+  .grp-empty { color: var(--faint); font-size: 11px; line-height: 1.65; padding: 2px 10px 6px 9px; }
+  /* 项目 / 文件夹分组 */
+  .pgroup { margin-bottom: 2px; }
+  /* padding-right 常驻 48px：右边两个动作图标是绝对定位浮上来的（最左那个的左边缘在 right:47px 处），
+     留 48 而不是 47 是为了让文字框和图标之间还有 1px 不相接，见下面 .pg-act 那段长注释 */
+  .pghead { position: relative; display: flex; align-items: center; gap: 7px; padding: 7px 48px 7px 9px; border-radius: var(--r-sm); cursor: pointer; color: var(--muted); font-size: 12.5px; font-weight: 400; }
   .pghead:hover { background: var(--panel-soft); color: var(--text); }
-  .pghead .ic { width: 14px; height: 14px; color: var(--muted); flex: none; }
+  /* ★ 只给【分组自己的】图标定色，别写成 .pghead .ic —— 那样会连右侧动作图标的 svg 一起钉死，
+     .pg-act:hover 把按钮 color 改成蓝色也传不进去，图标永远是灰的（只有底色在变）。 */
+  .pghead .ic { width: 14px; height: 14px; flex: none; }
+  .pghead > .gico .ic { color: var(--faint); }
   .pghead .caret { width: 13px; height: 13px; transition: transform .15s; color: var(--faint); }
   .pgroup.collapsed .caret { transform: rotate(-90deg); }
   .pgroup.collapsed .pgbody { display: none; }
-  .pghead .pgname { flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .pghead .pgcount { color: var(--faint); font-weight: 500; font-variant-numeric: tabular-nums; }
-  .pghead .pg-act { width: 20px; height: 20px; display: grid; place-items: center; color: var(--faint); border-radius: 5px; opacity: 0; }
-  .pghead:hover .pg-act { opacity: 1; }
+  .pghead .gico { display: inline-flex; flex: none; }
+  /* 名字 + 路径副标题竖排。min-width:0 是关键：不写它，里面的长路径会把整个 flex 行撑爆，
+     省略号永远不出现，右边的计数和动作图标被挤出侧栏。 */
+  .pghead .pgtext { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+  .pghead .pgname { display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  /* 文件夹的完整路径：从【左边】省略（dir=rtl + text-align:left），因为尾段才是认得出的那一头。
+     …\某某课题\data 比 D:\Users\tj\Doc… 有用得多。 */
+  .pghead .pgsub { display: block; font-size: 10.5px; color: var(--faint); white-space: nowrap; overflow: hidden;
+    text-overflow: ellipsis; text-align: left; font-variant-numeric: tabular-nums; }
+  /* 计数徽标绝对定位到右边那块预留区里，和动作图标轮流占用同一格（hover 时它让位）。
+     ★ 不能留在文档流里：留着的话它 flex:none 又永远占 26px，而右侧还得再为浮上来的图标
+     预留 46px —— 两笔加起来 72px，从 227px 的行里割走三分之一，路径就没地方显示了。 */
+  .pghead .pgcount { position: absolute; right: 5px; top: 50%; transform: translateY(-50%);
+    color: var(--faint); font-weight: 500; font-variant-numeric: tabular-nums;
+    font-size: 11px; min-width: 16px; text-align: center; padding: 0 5px; border-radius: 9px; background: var(--panel-soft); }
+  /* 动作图标【浮在行上】而不是占一格，但行的 padding-right 常驻 46px 把这块地方空出来。
+     ★ 此前是"不 hover 时文字可以铺满整行、hover 时拿一层渐变把图标底下的字盖掉"——
+     省下的 46px 全给了路径，代价却是一 hover 就把路径的【尾巴】糊掉，而尾段恰恰是
+     "…\某某课题\data" 里唯一认得出目录的那一头（240px 侧栏下被盖掉约 33px，1024 窄屏下
+     盖掉的比例接近六成）。现在改成常驻预留：文字少 13px，但任何时候都读得全，
+     且与会话行 padding-right:46px 的做法一致。 */
+  .pghead .pg-act { position: absolute; top: 50%; transform: translateY(-50%); width: 20px; height: 20px;
+    display: grid; place-items: center; color: var(--faint); border-radius: 5px; opacity: 0; transition: opacity .12s; }
+  .pghead .pg-act:nth-last-child(2) { right: 27px; }
+  .pghead .pg-act:last-child { right: 5px; }
+  .pghead:hover .pg-act { opacity: 1; z-index: 1; }
+  .pghead:hover .pgcount { opacity: 0; }        /* 计数和图标同一块地方，hover 时让位 */
   .pghead .pg-act .ic { width: 13px; height: 13px; }
   .pghead .pg-act:hover { color: var(--cyan); background: rgba(59,111,212,.12); }
   .pghead .pg-act.del:hover { color: var(--rose); background: rgba(239,68,68,.12); }
-  /* 空分组/空分区不再放"拖会话到此"的占位文案，但仍要留出一块可落点，否则高度塌成 0 就拖不进去了 */
-  .pgbody { display: flex; flex-direction: column; gap: 2px; padding: 2px 0 4px 8px; min-height: 18px; }
+  /* 空分组/空分区不再放"拖会话到此"的占位文案，但仍要留出一块可落点，否则高度塌成 0 就拖不进去了。
+     左边那根浅色竖线是"这几条属于上面那个组"的唯一视觉纽带：同时展开两三个组时，光靠 8px 缩进
+     根本分不出某一行归谁（会话行本身还比组头矮一档、字也小一号，缩进量在视觉上被稀释了）。
+     线画在 margin-left:5px 处、贴着折叠箭头那一列往下走，只花 4px 宽度。 */
+  .pgbody { display: flex; flex-direction: column; gap: 2px; padding: 2px 0 4px 7px; min-height: 18px;
+    margin-left: 5px; border-left: 1px solid var(--line); }
   /* 置顶 / 最近会话不挂在 .pgbody 下（没有项目分组），但同样是一叠会话行——
      漏了 display:flex 就是普通块级堆叠，行与行之间没有 .pgbody 那份 2px 间距，挤成一坨。 */
-  .droparea { display: flex; flex-direction: column; gap: 2px; min-height: 18px; }
+  /* ★ flex:none 不能省。#sessions 是 column flex 容器，而这里显式写了 min-height ——
+     显式 min-height 会顶掉 flex item 默认的 `min-height:auto`，于是这一块被允许收缩到 18px，
+     里面的会话行整整齐齐地【溢出】到框外：看着没事（还是那几行），但它的 getBoundingClientRect()
+     只有 18px 高。拖放的插入位置正是按容器/行的矩形算的 —— 松手永远落在第 0 位，
+     而且 drop-hint 的虚线框只框住顶上一条缝。 */
+  .droparea { display: flex; flex-direction: column; gap: 2px; min-height: 18px; flex: none; }
   .pgroup.drop-hint > .pghead, .droparea.drop-hint { outline: 2px dashed var(--cyan); outline-offset: -2px; background: rgba(59,111,212,.08); border-radius: var(--r-sm); }
-  .sect-label { display: flex; align-items: center; gap: 7px; margin: 10px 0 2px; padding: 0 9px; font-size: 12px; font-weight: 400; color: var(--faint); text-transform: none; }
-  .sect-label .ic { width: 13px; height: 13px; }
-  .sect-label .sl-t { flex: 1; }
-  .sect-label .sl-c { font-variant-numeric: tabular-nums; }
+  /* 拖动排序的插入位置指示线。没有它的话，用户只能凭感觉猜"松手会落到第几条"，
+     而这正是拖拽排序唯一需要的反馈。两端的小圆点让它在密排的列表里也一眼看得见。 */
+  .dropline { position: relative; height: 0; margin: -1px 0; border-top: 2px solid var(--cyan); border-radius: 2px; pointer-events: none; }
+  .dropline::before, .dropline::after { content: ""; position: absolute; top: -3px; width: 5px; height: 5px; border-radius: 50%; background: var(--cyan); }
+  .dropline::before { left: -1px; } .dropline::after { right: -1px; }
+  /* 不能落进来的列表（文件夹组只允许组内排序）：整块压暗并划出禁止感，别让用户白拖一趟 */
+  .pgbody.drop-no, .droparea.drop-no { outline: 2px dashed rgba(148,163,184,.7); outline-offset: -2px; background: rgba(148,163,184,.1); border-radius: var(--r-sm); cursor: not-allowed; }
+  /* 「最近会话」和上面两个分类是【同一层】的东西（只是不可折叠、所以没有箭头），
+     排版就得跟 .mshead 对齐：一样的 12.5px/600/#334153、一样的内边距、计数一样做成灰底徽标。
+     此前它是 12px/400 的浅灰小字，看着比它下面的会话行还轻，像个可有可无的分隔符。 */
+  .sect-label { display: flex; align-items: center; gap: 7px; margin: 8px 0 2px; padding: 7px 9px;
+    font-size: 12.5px; font-weight: 600; letter-spacing: .2px; color: #334153; text-transform: none; flex: none; }
+  .sect-label .ic { width: 14px; height: 14px; flex: none; }
+  .sect-label .sl-t { flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .sect-label .sl-c { flex: none; font-size: 11px; font-weight: 500; color: var(--faint); font-variant-numeric: tabular-nums;
+    min-width: 16px; text-align: center; padding: 0 5px; border-radius: 9px; background: var(--panel-soft); }
   /* 内联改名输入 */
   .rename-inp { width: 100%; font: inherit; font-size: 12px; padding: 4px 8px; border: 1px solid var(--cyan); border-radius: var(--r-sm); background: #fff; color: var(--text); outline: none; }
   /* 新建项目按钮 */
@@ -1432,7 +1582,7 @@
     <button id="newProject" type="button"></button>
     <div class="sb-top">
       <button id="sessToggle" class="sb-toggle" type="button" title="最近会话"></button>
-      <span class="sb-title">会话与项目</span>
+      <span class="sb-title">会话与分组</span>
       <button id="newProjBtn" class="mini" type="button" title="新建项目"></button>
       <button id="selModeBtn" class="mini" type="button" title="批量选择（勾选多个会话一次删除）"></button>
       <button id="refreshSess" class="mini" type="button" title="刷新列表"></button>
@@ -1519,6 +1669,9 @@
         <textarea id="q" rows="1" placeholder="给 Niuma Science 发消息…" autocomplete="off"></textarea>
         <div class="composer-footer">
           <div id="modelSel" class="msel" hidden></div>
+          <!-- 工作目录：只在【新对话且还没发过消息/传过文件】时可改（opencode 的 session.directory
+               建后不可改，这不是懒得做，是真的没有第二次机会）。已开始的会话上它是一块只读信息。 -->
+          <button type="button" id="dirChip" class="dir-chip"><span class="dc-ic"></span><span class="dc-t">工作目录</span></button>
           <label id="autoLbl" class="auto-lbl" title="勾选后 AI 不再停下向你提问：所有选择自动采用推荐项，连续推进直到给出最终产出（或达到轮数/额度上限）才停。随时可点「终止」。"><input type="checkbox" id="autoChk" />自动推进</label>
           <span class="spacer"></span>
           <span class="hint">Enter 发送 · Shift + Enter 换行</span>
@@ -1600,6 +1753,34 @@
       <div class="mm-msg info" id="uiVerMsg">正在读取…</div>
       <div id="uiVerList"></div>
       <div class="mm-hint">换的只是界面文件，不重启后台、不打断正在生成的任务；换完页面会自动刷新一次。</div>
+    </div>
+  </div>
+</div>
+<!-- 选工作目录：只在新对话（还没发消息、没传文件）时可用。选定后这次对话的产物直接写进那个目录，
+     用同一个目录的会话在左侧归到同一个「文件夹」下。 -->
+<div id="dirModal" class="modal">
+  <div class="modal-card" style="max-width:560px">
+    <div class="modal-head">
+      <span class="modal-title">选择工作目录</span>
+      <button class="modal-x" id="dirClose" type="button" title="关闭"></button>
+    </div>
+    <div class="modal-body">
+      <div class="mm-msg info" id="dirScopeMsg"></div>
+      <div class="dir-recent" id="dirRecent" hidden></div>
+      <div class="dir-bar">
+        <button type="button" class="dir-up" id="dirUp" title="上一级"></button>
+        <input id="dirPath" class="mm-input dir-path" placeholder="也可以直接粘贴一个路径，回车打开" spellcheck="false" />
+        <button type="button" class="mm-btn ghost" id="dirGo">打开</button>
+      </div>
+      <div class="dir-list" id="dirList"></div>
+      <div class="mm-msg" id="dirMsg" hidden></div>
+      <div class="mm-actions">
+        <button id="dirNewSub" class="mm-btn ghost" type="button">在此新建文件夹</button>
+        <span style="flex:1"></span>
+        <button id="dirClear" class="mm-btn ghost" type="button">不指定（用会话专属目录）</button>
+        <button id="dirUse" class="mm-btn primary" type="button">使用当前目录</button>
+      </div>
+      <div class="mm-hint" id="dirHint">选定后，这次对话里 AI 读写的文件都在这个目录；删除会话<b>不会</b>删这个目录里的任何文件。目录只能在对话开始前定，开始之后要换请新建对话。</div>
     </div>
   </div>
 </div>
@@ -2671,9 +2852,17 @@ const fmtTime = (ms) => {
   const y = d.getFullYear() !== new Date().getFullYear() ? d.getFullYear() + "-" : ""
   return `${y}${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`
 }
-let META_STATE = { projects: [], sessions: [] }          // 最近一次 /api/sessions 结果
+let META_STATE = { projects: [], folders: [], sessions: [] }          // 最近一次 /api/sessions 结果
 const collapsedProjects = new Set(JSON.parse(localStorage.getItem("nm_collapsed") || "[]"))
 const saveCollapsed = () => localStorage.setItem("nm_collapsed", JSON.stringify([...collapsedProjects]))
+const collapsedFolders = new Set(JSON.parse(localStorage.getItem("nm_collapsed_f") || "[]"))
+const saveCollapsedF = () => localStorage.setItem("nm_collapsed_f", JSON.stringify([...collapsedFolders]))
+// 两个顶层分类（项目 / 文件夹）的开合。【默认都是折叠的】—— 侧栏第一眼应该是干净的两行加一列最近会话，
+// 而不是把所有分组一次性摊开。localStorage 里没有记录时取默认值 true(折叠)，不能写成 `|| false`。
+const SECT_KEY = "nm_sect_open"
+const sectOpen = (() => { try { return JSON.parse(localStorage.getItem(SECT_KEY)) || {} } catch { return {} } })()
+const isSectOpen = (k) => sectOpen[k] === true
+const setSectOpen = (k, v) => { sectOpen[k] = !!v; localStorage.setItem(SECT_KEY, JSON.stringify(sectOpen)) }
 
 // 判断标题是不是没法看：替换字符 / 私用区 / 看不见的控制符占比过半，就当它是乱码。
 // 只在【显示】时兜底，不动服务端存的原标题 —— 用户自己重命名过的一定原样显示。
@@ -2709,76 +2898,155 @@ function sessRow(s) {
   d.appendChild(document.createTextNode(fmtTime(s.updated)))
   b.appendChild(t); b.appendChild(d)
   b.addEventListener("click", () => { if (selMode) togglePick(s.id, b); else resumeSession(s.id) })
-  // 拖拽：记录被拖会话 id
-  b.addEventListener("dragstart", (e) => { e.dataTransfer.setData("text/plain", s.id); e.dataTransfer.effectAllowed = "move"; b.classList.add("dragging") })
-  b.addEventListener("dragend", () => b.classList.remove("dragging"))
-  // 操作区：改名 / 钉 / 删
-  const acts = document.createElement("span"); acts.className = "sess-acts" + (s.pinned ? " keep" : "")
+  // 拖拽：记录被拖会话 id。dragover 里【拿不到】dataTransfer 的数据（规范只在 drop 时才允许读），
+  // 而"这一条能不能落进那个组"要在 dragover 就判出来（决定光标与高亮），所以另存一份模块级的 dragSid。
+  b.addEventListener("dragstart", (e) => { e.dataTransfer.setData("text/plain", s.id); e.dataTransfer.effectAllowed = "move"; dragSid = s.id; b.classList.add("dragging") })
+  b.addEventListener("dragend", () => { dragSid = null; b.classList.remove("dragging"); clearDropLine() })
+  // 操作区：改名 / 反馈 / 删（置顶已整体去掉——会话可以直接拖着排序，"排到最前"不再需要一档专门的标记）
+  const acts = document.createElement("span"); acts.className = "sess-acts"
   const mk = (icon, cls, title, fn) => { const a = document.createElement("span"); a.className = "sess-act" + (cls ? " " + cls : ""); a.title = title; a.innerHTML = ic(icon); a.addEventListener("click", (e) => { e.stopPropagation(); fn() }); return a }
   acts.appendChild(mk("edit", "", "重命名", () => renameSession(s.id, s.title, t)))
   acts.appendChild(mk("feedback", "", "把这次会话反馈给管理员", () => openFeedback(s.id, s.title)))
-  acts.appendChild(mk("pin", s.pinned ? "on" : "", s.pinned ? "取消置顶" : "置顶（放到「置顶」分组）", () => togglePin(s.id, !s.pinned)))
   acts.appendChild(mk("trash", "del", "删除会话", () => deleteSession(s.id, s.title)))
   b.appendChild(acts)
   return b
 }
 
-// 项目分组头（可折叠、可作拖放目标、可改名/删除）
-function projectHead(p, count) {
+// 分组头（项目 / 文件夹共用）：折叠箭头 + 图标 + 名字 +（可选副标题）+ 计数 + 右侧动作
+function groupHead({ icon, name, sub, count, acts }) {
   const h = document.createElement("div"); h.className = "pghead"
   const caret = document.createElement("span"); caret.className = "caret"; caret.innerHTML = ic("chevronD")
-  const fico = document.createElement("span"); fico.innerHTML = ic("folder")
-  const name = document.createElement("span"); name.className = "pgname"; name.textContent = p.name
+  const fico = document.createElement("span"); fico.className = "gico"; fico.innerHTML = ic(icon)
+  const txt = document.createElement("span"); txt.className = "pgtext"
+  const nm = document.createElement("span"); nm.className = "pgname"; nm.textContent = name
+  txt.appendChild(nm)
+  // 副标题（文件夹的完整路径）：同一个名字的目录可能有好几个（D:\论文\data 与 E:\旧\data），
+  // 只显示末段的话用户分不清哪个是哪个。用 dir 属性让路径从【左边】省略——尾段才是有信息量的一头。
+  if (sub) { const sb = document.createElement("span"); sb.className = "pgsub"; sb.textContent = sub; sb.title = sub; sb.dir = "rtl"; txt.appendChild(sb) }
   const cnt = document.createElement("span"); cnt.className = "pgcount"; cnt.textContent = count
-  const ren = document.createElement("span"); ren.className = "pg-act"; ren.title = "重命名项目"; ren.innerHTML = ic("edit")
-  const del = document.createElement("span"); del.className = "pg-act del"; del.title = "删除项目（会话不删，变回普通会话）"; del.innerHTML = ic("trash")
-  h.append(caret, fico, name, cnt, ren, del)
-  ren.addEventListener("click", (e) => { e.stopPropagation(); renameProject(p.id, p.name, name) })
-  del.addEventListener("click", (e) => { e.stopPropagation(); deleteProject(p.id, p.name) })
-  return { h, caret, fico }
+  h.append(caret, fico, txt, cnt)
+  for (const a of acts || []) {
+    const el = document.createElement("span"); el.className = "pg-act" + (a.danger ? " del" : ""); el.title = a.title; el.innerHTML = ic(a.icon)
+    el.addEventListener("click", (e) => { e.stopPropagation(); a.fn(nm) })
+    h.appendChild(el)
+  }
+  return h
+}
+
+// 顶层分类（「项目」「文件夹」）：默认折叠的一整段，点标题行展开
+function sectionBlock(key, icon, title, count, acts) {
+  const wrap = document.createElement("div"); wrap.className = "msect" + (isSectOpen(key) ? "" : " collapsed")
+  const head = document.createElement("div"); head.className = "mshead"
+  const caret = document.createElement("span"); caret.className = "caret"; caret.innerHTML = ic("chevronD")
+  const fico = document.createElement("span"); fico.className = "gico"; fico.innerHTML = ic(icon)
+  const t = document.createElement("span"); t.className = "mst"; t.textContent = title
+  const c = document.createElement("span"); c.className = "msc"; c.textContent = count
+  head.append(caret, fico, t, c)
+  for (const a of acts || []) {
+    const el = document.createElement("button"); el.type = "button"; el.className = "ms-act"; el.title = a.title; el.innerHTML = ic(a.icon)
+    el.addEventListener("click", (e) => { e.stopPropagation(); a.fn() })
+    head.appendChild(el)
+  }
+  const body = document.createElement("div"); body.className = "msbody"
+  head.addEventListener("click", () => { const open = wrap.classList.toggle("collapsed") === false; setSectOpen(key, open) })
+  wrap.append(head, body)
+  return { wrap, body }
+}
+
+// 一条列表的排序：用户手工拖过的（orders[bucket] 有数）按那个顺序排在后面，
+// 没排过的按更新时间倒序【排在最前】。为什么没排过的在前：用户排完一遍之后新开的会话是最新的那条，
+// 沉到底下等于"新建的对话找不到了"。
+function sortBucket(list, bucket) {
+  const ord = (s) => { const v = s.orders && s.orders[bucket]; return typeof v === "number" ? v : null }
+  return list.slice().sort((a, b) => {
+    const oa = ord(a), ob = ord(b)
+    if (oa === null && ob === null) return (b.updated || 0) - (a.updated || 0)
+    if (oa === null) return -1
+    if (ob === null) return 1
+    return oa - ob
+  })
 }
 
 function renderSessions(data) {
-  META_STATE = data && data.sessions ? data : { projects: [], sessions: [] }
-  const { projects, sessions } = META_STATE
+  META_STATE = data && data.sessions ? { projects: data.projects || [], folders: data.folders || [], sessions: data.sessions } : { projects: [], folders: [], sessions: [] }
+  const { projects, folders, sessions } = META_STATE
   sessionsEl.innerHTML = ""
   // 列表刷新后，勾选集里已不存在的会话（别处删了 / 被别的窗口删了）要跟着掉，否则"已选 N"会虚高
   for (const id of [...selected]) if (!sessions.some((s) => s.id === id)) selected.delete(id)
-  if (!sessions.length && !projects.length) { sessionsEl.innerHTML = '<span class="hint">还没有会话</span>'; updateSelBar(); return }
+  if (!sessions.length && !projects.length && !folders.length) { sessionsEl.innerHTML = '<span class="hint">还没有会话</span>'; updateSelBar(); return }
   const byProject = new Map(projects.map((p) => [p.id, []]))
-  const pinned = [], loose = []
+  const byFolder = new Map(folders.map((f) => [f.id, []]))
+  const loose = []
   for (const s of sessions) {
-    if (s.projectId && byProject.has(s.projectId)) byProject.get(s.projectId).push(s)
-    else if (s.pinned) pinned.push(s)
-    else loose.push(s)
+    let filed = false
+    if (s.projectId && byProject.has(s.projectId)) { byProject.get(s.projectId).push(s); filed = true }
+    // 一个会话可以【同时】属于某项目和某文件夹：两边都列出来，两处各记各的顺序。
+    if (s.folderId && byFolder.has(s.folderId)) { byFolder.get(s.folderId).push(s); filed = true }
+    if (!filed) loose.push(s)
   }
-  // 1) 项目分组
-  for (const p of projects) {
-    const list = byProject.get(p.id) || []
-    const group = document.createElement("div"); group.className = "pgroup" + (collapsedProjects.has(p.id) ? " collapsed" : "")
-    const { h } = projectHead(p, list.length)
-    const body = document.createElement("div"); body.className = "pgbody"
-    for (const s of list) body.appendChild(sessRow(s))
-    h.addEventListener("click", () => { group.classList.toggle("collapsed"); collapsedProjects.has(p.id) ? collapsedProjects.delete(p.id) : collapsedProjects.add(p.id); saveCollapsed() })
-    makeDropTarget(group, p.id)                       // 拖到本项目（整组都可接收）
-    group.append(h, body); sessionsEl.appendChild(group)
-  }
-  // 2) 置顶（无项目）—— 拖会话到此即置顶
+
+  // 1) 项目（顶层分类，默认折叠）
   {
-    sessionsEl.appendChild(sectLabel("pin", "置顶", pinned.length))
-    const area = document.createElement("div"); area.className = "droparea"; area.style.minHeight = "20px"; makeDropTarget(area, "pin")
-    for (const s of pinned) area.appendChild(sessRow(s))
-    sessionsEl.appendChild(area)
+    const { wrap, body } = sectionBlock("projects", "box", "项目", projects.length,
+      [{ icon: "plus", title: "新建项目", fn: createProject }])
+    if (!projects.length) body.appendChild(emptyLine("还没有项目。新建一个，再把左边的会话拖进来。"))
+    for (const p of projects) {
+      const list = sortBucket(byProject.get(p.id) || [], "p:" + p.id)
+      const group = document.createElement("div"); group.className = "pgroup" + (collapsedProjects.has(p.id) ? " collapsed" : "")
+      const h = groupHead({ icon: "folder", name: p.name, count: list.length, acts: [
+        { icon: "edit", title: "重命名项目", fn: (nameEl) => renameProject(p.id, p.name, nameEl) },
+        { icon: "trash", title: "删除项目（会话不删，变回普通会话）", danger: true, fn: () => deleteProject(p.id, p.name) },
+      ] })
+      const b = document.createElement("div"); b.className = "pgbody"
+      for (const s of list) b.appendChild(sessRow(s))
+      h.addEventListener("click", () => { group.classList.toggle("collapsed"); collapsedProjects.has(p.id) ? collapsedProjects.delete(p.id) : collapsedProjects.add(p.id); saveCollapsed() })
+      makeSortableList(b, "p:" + p.id, { kind: "project", id: p.id })
+      makeGroupDrop(group, { kind: "project", id: p.id })     // 组头/整组也接收（收起状态下也能拖进来）
+      group.append(h, b); body.appendChild(group)
+    }
+    sessionsEl.appendChild(wrap)
   }
-  // 3) 最近会话（普通，永久保留）—— 也是「移出项目」的拖放目标
+
+  // 2) 文件夹（顶层分类，默认折叠）—— 按会话的工作目录归类
+  {
+    const { wrap, body } = sectionBlock("folders", "folder", "文件夹", folders.length,
+      [{ icon: "folderPlus", title: "新对话选一个工作目录", fn: () => openDirPicker() }])
+    if (!folders.length) body.appendChild(emptyLine("新建对话后、发第一条消息之前，在输入框下方点「工作目录」挑一个电脑上的目录，用同一个目录的会话就会归到一起。"))
+    for (const f of folders) {
+      const list = sortBucket(byFolder.get(f.id) || [], "f:" + f.id)
+      const group = document.createElement("div"); group.className = "pgroup fgroup" + (collapsedFolders.has(f.id) ? " collapsed" : "")
+      const h = groupHead({ icon: "folder", name: f.name, sub: f.path, count: list.length, acts: [
+        { icon: "edit", title: "改这个文件夹在列表里显示的名字（不动磁盘上的目录）", fn: (nameEl) => renameFolder(f.id, f.name, nameEl) },
+        { icon: "x", title: "不再按这个目录分组（会话和目录里的文件都不动）", fn: () => forgetFolder(f.id, f.name) },
+      ] })
+      const b = document.createElement("div"); b.className = "pgbody"
+      for (const s of list) b.appendChild(sessRow(s))
+      h.addEventListener("click", () => { group.classList.toggle("collapsed"); collapsedFolders.has(f.id) ? collapsedFolders.delete(f.id) : collapsedFolders.add(f.id); saveCollapsedF() })
+      // 文件夹组【只能内部排序，不接受从别处拖进来】：会话的工作目录是建会话时定死的
+      //（opencode 的 session.directory 建后不可改），拖一下就换目录是做不到的事，
+      // 与其假装接受再悄悄失败，不如在 dragover 就把光标变成"禁止"。
+      makeSortableList(b, "f:" + f.id, { kind: "folder", id: f.id })
+      group.append(h, b); body.appendChild(group)
+    }
+    sessionsEl.appendChild(wrap)
+  }
+
+  // 3) 最近会话（既不在项目也不在文件夹里的）—— 也是「移出项目」的拖放目标
   sessionsEl.appendChild(sectLabel("history", "最近会话", loose.length))
-  const area = document.createElement("div"); area.className = "droparea"; area.style.minHeight = "20px"; makeDropTarget(area, "none")
-  for (const s of loose) area.appendChild(sessRow(s))
+  const area = document.createElement("div"); area.className = "droparea"
+  for (const s of sortBucket(loose, "recent")) area.appendChild(sessRow(s))
+  makeSortableList(area, "recent", { kind: "none" })
   sessionsEl.appendChild(area)
   updateSelBar()
+  updateDirChip()   // 列表回来了才知道当前会话挂在哪个文件夹下，输入框下面那块要跟着变
 }
 
-// 分区标签：图标 + 名称 + 条数（"最近会话 12"）。项目分组头本来就有计数，这两个分区没有，
+// 分组/分类里的空态说明。空分组不写点什么的话就是一条 18px 的空白，用户不知道自己该干嘛。
+function emptyLine(text) {
+  const d = document.createElement("div"); d.className = "grp-empty"; d.textContent = text; return d
+}
+
+// 分区标签：图标 + 名称 + 条数（"最近会话 12"）。分组头本来就有计数，这个分区没有，
 // 看着像少了点东西，且用户也想知道"散着的会话到底有多少条"。
 function sectLabel(icon, text, count) {
   const lbl = document.createElement("div"); lbl.className = "sect-label"
@@ -2788,25 +3056,99 @@ function sectLabel(icon, text, count) {
   lbl.append(t, c); return lbl
 }
 
-// 让某元素成为拖放目标：target = 项目 id（归入项目）/ "none"（移出项目）/ "pin"（钉住置顶）
-function makeDropTarget(el, target) {
-  el.addEventListener("dragover", (e) => { e.preventDefault(); e.dataTransfer.dropEffect = "move"; el.classList.add("drop-hint") })
-  el.addEventListener("dragleave", (e) => { if (!el.contains(e.relatedTarget)) el.classList.remove("drop-hint") })
-  el.addEventListener("drop", async (e) => {
-    e.preventDefault(); el.classList.remove("drop-hint")
-    const sid = e.dataTransfer.getData("text/plain"); if (!sid) return
-    const cur = META_STATE.sessions.find((s) => s.id === sid)
-    if (target === "pin") {
-      if (cur && cur.pinned && !cur.projectId) return             // 已在「置顶」里
-      if (cur && cur.projectId) await fetch("api/session/project?id=" + encodeURIComponent(sid) + "&projectId=none", { method: "POST" }).catch(() => {})
-      await fetch("api/session/pin?id=" + encodeURIComponent(sid) + "&pinned=1", { method: "POST" }).catch(() => {})
-    } else {
-      if (cur && (cur.projectId || "none") === target && !(target === "none" && cur.pinned)) return   // 没变化
-      if (target === "none" && cur && cur.pinned) await fetch("api/session/pin?id=" + encodeURIComponent(sid) + "&pinned=0", { method: "POST" }).catch(() => {})
-      await fetch("api/session/project?id=" + encodeURIComponent(sid) + "&projectId=" + encodeURIComponent(target), { method: "POST" }).catch(() => {})
-    }
-    loadSessions()
+// ---- 拖拽：同一列表内改顺序 + 跨列表归入/移出项目 ----
+//
+// 一次拖放同时可能做两件事：换归属（拖进项目 / 拖回最近会话）与定位置（插到第几条）。
+// 两件事共用一个落点：落在哪个列表 = 归属，落在列表里的第几个缝 = 位置。
+let dragSid = null            // 正在被拖的会话 id（dragover 里读不到 dataTransfer，只能自己记）
+let dropLine = null           // 插入位置指示线
+function clearDropLine() { if (dropLine) { dropLine.remove(); dropLine = null } document.querySelectorAll(".drop-hint,.drop-no").forEach((el) => el.classList.remove("drop-hint", "drop-no")) }
+// 指针落在这个列表的第几条之前
+function insertIndexFor(container, y) {
+  const rows = [...container.children].filter((el) => el.classList.contains("sess") && !el.classList.contains("dragging"))
+  for (let i = 0; i < rows.length; i++) {
+    const r = rows[i].getBoundingClientRect()
+    if (y < r.top + r.height / 2) return i
+  }
+  return rows.length
+}
+function showDropLine(container, idx) {
+  if (!dropLine) { dropLine = document.createElement("div"); dropLine.className = "dropline" }
+  const rows = [...container.children].filter((el) => el.classList.contains("sess") && !el.classList.contains("dragging"))
+  if (idx >= rows.length) container.appendChild(dropLine)
+  else container.insertBefore(dropLine, rows[idx])
+}
+// 这条会话能不能落进这个列表
+function canDropInto(sid, owner) {
+  const cur = META_STATE.sessions.find((s) => s.id === sid)
+  if (!cur) return false
+  if (owner.kind === "folder") return cur.folderId === owner.id   // 文件夹只允许组内排序，见上面的说明
+  return true
+}
+// 落地后这条会话在这个列表里的目标顺序（DOM 顺序不可信：拖动过程中我们没有真的挪 DOM）
+function bucketIdsAfterDrop(bucket, owner, sid, idx) {
+  const inList = META_STATE.sessions.filter((s) => {
+    if (owner.kind === "project") return s.projectId === owner.id
+    if (owner.kind === "folder") return s.folderId === owner.id
+    return !s.projectId && !s.folderId
   })
+  const ids = sortBucket(inList, bucket).map((s) => s.id).filter((x) => x !== sid)
+  ids.splice(Math.min(idx, ids.length), 0, sid)
+  return ids
+}
+// 让一个列表容器既能排序、又能接收从别处拖来的会话
+function makeSortableList(container, bucket, owner) {
+  container.dataset.bucket = bucket
+  container.addEventListener("dragover", (e) => {
+    if (!dragSid) return
+    e.preventDefault(); e.stopPropagation()
+    if (!canDropInto(dragSid, owner)) { e.dataTransfer.dropEffect = "none"; container.classList.add("drop-no"); return }
+    container.classList.remove("drop-no")
+    e.dataTransfer.dropEffect = "move"
+    showDropLine(container, insertIndexFor(container, e.clientY))
+  })
+  container.addEventListener("dragleave", (e) => { if (!container.contains(e.relatedTarget)) { container.classList.remove("drop-no"); if (dropLine && dropLine.parentNode === container) { dropLine.remove(); dropLine = null } } })
+  container.addEventListener("drop", async (e) => {
+    if (!dragSid) return
+    e.preventDefault(); e.stopPropagation()
+    const sid = e.dataTransfer.getData("text/plain") || dragSid
+    const idx = insertIndexFor(container, e.clientY)
+    clearDropLine()
+    if (!canDropInto(sid, owner)) {
+      toast("会话的工作目录在建会话时就定死了，没法拖到别的文件夹。要换目录请新建对话再选。")
+      return
+    }
+    await applyDrop(sid, bucket, owner, idx)
+  })
+}
+// 组【收起】时整组也是落点：收起状态下 .pgbody 是 display:none，里面那个可排序列表根本收不到事件，
+// 而"把会话拖进一个收着的项目"恰恰是最省事的用法（不用先展开一堆组）。展开时不接管，交给里面的列表。
+function makeGroupDrop(group, owner) {
+  const armed = () => dragSid && group.classList.contains("collapsed") && canDropInto(dragSid, owner)
+  group.addEventListener("dragover", (e) => {
+    if (!armed()) return
+    e.preventDefault(); e.dataTransfer.dropEffect = "move"; group.classList.add("drop-hint")
+  })
+  group.addEventListener("dragleave", (e) => { if (!group.contains(e.relatedTarget)) group.classList.remove("drop-hint") })
+  group.addEventListener("drop", async (e) => {
+    if (!armed()) return
+    e.preventDefault(); group.classList.remove("drop-hint")
+    const sid = e.dataTransfer.getData("text/plain") || dragSid
+    clearDropLine()
+    await applyDrop(sid, "p:" + owner.id, owner, 0)
+  })
+}
+// 真正落地：先改归属（有变化才发请求），再回写整段顺序，最后刷新列表
+async function applyDrop(sid, bucket, owner, idx) {
+  const cur = META_STATE.sessions.find((s) => s.id === sid)
+  const wantProject = owner.kind === "project" ? owner.id : (owner.kind === "none" ? "none" : null)
+  if (wantProject !== null && (cur?.projectId || "none") !== wantProject) {
+    await fetch("api/session/project?id=" + encodeURIComponent(sid) + "&projectId=" + encodeURIComponent(wantProject), { method: "POST" }).catch(() => {})
+    if (cur) cur.projectId = wantProject === "none" ? null : wantProject   // 本地先改，好让 bucketIdsAfterDrop 算对
+  }
+  const ids = bucketIdsAfterDrop(bucket, owner, sid, idx)
+  await fetch("api/sessions/order", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ bucket, ids }) }).catch(() => {})
+  loadSessions()
 }
 
 // 会话列表自己是 overflow-y:auto 的子容器（不是整页滚动），原生 HTML5 拖放不会替它自动滚动——
@@ -2857,10 +3199,135 @@ async function renameSession(id, cur, titleEl) {
 async function renameProject(id, cur, nameEl) {
   inlineRename(nameEl, cur, async (v) => { await fetch("api/project/rename?id=" + encodeURIComponent(id) + "&name=" + encodeURIComponent(v), { method: "POST" }).catch(() => {}); loadSessions() })
 }
-async function togglePin(id, pinned) {
-  await fetch("api/session/pin?id=" + encodeURIComponent(id) + "&pinned=" + (pinned ? "1" : "0"), { method: "POST" }).catch(() => {})
+async function renameFolder(id, cur, nameEl) {
+  inlineRename(nameEl, cur, async (v) => { await fetch("api/folder/rename?id=" + encodeURIComponent(id) + "&name=" + encodeURIComponent(v), { method: "POST" }).catch(() => {}); loadSessions() })
+}
+// 「不再按这个目录分组」。要把话说全：会话还在、目录里的文件一个不动、工作目录也还是那个目录——
+// 用户看到一个 × 号，最怕的就是"点下去我硬盘上的文件夹没了"。
+async function forgetFolder(id, name) {
+  if (!confirm("不再按「" + name + "」这个目录分组？\n\n会话不会被删，目录里的文件也一个都不动，只是左侧不再单独列这一组（组内会话回到「最近会话」）。")) return
+  await fetch("api/folder/forget?id=" + encodeURIComponent(id), { method: "POST" }).catch(() => {})
   loadSessions()
 }
+// ---- 工作目录（文件夹）----
+//
+// 「新建对话 → 还没发消息、也没传文件」这一小段时间，是唯一能给会话指定工作目录的窗口：
+// opencode 的 session.directory 只能在建会话时设、之后不可改，而会话恰恰是在第一条消息
+// （或第一个上传）时才真正建出来的。所以这里存一个待落地的选择，等建会话那一刻随请求捎过去。
+let pendingFolder = null        // {id,name,path} —— 选好了、还没落地
+let lastAppliedFolder = null    // 刚落地到本会话的那个（列表还没刷新回来时先拿它显示，免得闪一下"会话专属目录"）
+let FS_SCOPE = ""               // local = 能选整台机器；workspace = 只能在自己的工作区里选
+const folderQ = () => (!sessionId && pendingFolder ? "&folderId=" + encodeURIComponent(pendingFolder.id) : "")
+function consumePendingFolder() { if (pendingFolder) { lastAppliedFolder = pendingFolder; pendingFolder = null } updateDirChip() }
+const dirChip = document.getElementById("dirChip")
+function updateDirChip() {
+  if (!dirChip) return
+  const editable = !sessionId
+  let f = null
+  if (editable) f = pendingFolder
+  else {
+    const s = (META_STATE.sessions || []).find((x) => x.id === sessionId)
+    f = (s && s.folderId && (META_STATE.folders || []).find((x) => x.id === s.folderId)) || lastAppliedFolder || null
+  }
+  dirChip.classList.toggle("locked", !editable)
+  dirChip.classList.toggle("set", !!f)
+  dirChip.querySelector(".dc-ic").innerHTML = ic("folder")
+  dirChip.querySelector(".dc-t").textContent = f ? f.name : (editable ? "工作目录" : "会话专属目录")
+  dirChip.title = f
+    ? "工作目录：" + f.path + (editable ? "（点一下可以换）" : "（对话开始后不能改，要换请新建对话）")
+    : (editable ? "给这次对话选一个电脑上的目录当工作目录；用同一个目录的对话会在左侧归到一起"
+                : "本会话用的是系统分配的专属目录")
+}
+
+const dirModal = document.getElementById("dirModal")
+const dirListEl = document.getElementById("dirList"), dirPathEl = document.getElementById("dirPath")
+const dirMsgEl = document.getElementById("dirMsg"), dirUpBtn = document.getElementById("dirUp")
+let dirCur = ""      // 正在浏览的目录（"" = 还在根列表）
+let dirCanUse = false
+function dirErr(msg, ok) { dirMsgEl.hidden = !msg; dirMsgEl.textContent = msg || ""; dirMsgEl.className = "mm-msg " + (ok ? "info" : "err") }
+async function openDirPicker() {
+  // 已经开始的会话：目录定死了。这里不能只把按钮禁掉了事——用户点了没反应会以为界面坏了，
+  // 得把"为什么不能改、怎么才能改"一次说清。
+  if (sessionId) { toast("这次对话已经开始了，工作目录不能再改。点输入框上方的「新建对话」开一个新的就能重新选。"); return }
+  dirModal.classList.add("on"); dirErr("")
+  loadRecentDirs()
+  await dirBrowse(pendingFolder ? pendingFolder.path : "")
+}
+function closeDirPicker() { dirModal.classList.remove("on") }
+async function loadRecentDirs() {
+  const box = document.getElementById("dirRecent")
+  let j = null
+  try { j = await fetch("api/folders").then((r) => r.json()) } catch {}
+  const list = (j && j.folders) || []
+  if (!list.length) { box.hidden = true; box.innerHTML = ""; return }
+  box.hidden = false; box.innerHTML = '<span class="dr-lbl">最近用过</span>'
+  for (const f of list.slice(0, 8)) {
+    const b = document.createElement("button"); b.type = "button"; b.className = "dr-chip" + (f.exists ? "" : " gone")
+    b.innerHTML = ic("folder"); const t = document.createElement("span"); t.textContent = f.name; b.appendChild(t)
+    b.title = f.exists ? f.path : f.path + "（这个目录已经不在了）"
+    b.addEventListener("click", () => { f.exists ? pickFolder(f) : dirErr("这个目录已经不在了：" + f.path) })
+    box.appendChild(b)
+  }
+}
+async function dirBrowse(p) {
+  dirListEl.innerHTML = '<div class="hint">读取中…</div>'
+  let j = null
+  try { j = await fetch("api/fs/list?path=" + encodeURIComponent(p || "")).then((r) => r.json()) } catch {}
+  if (!j || j.ok === false) { dirListEl.innerHTML = ""; dirErr((j && j.err) || "读不到这个目录"); return }
+  FS_SCOPE = j.mode
+  document.getElementById("dirScopeMsg").textContent = j.mode === "workspace"
+    ? "这台服务器是多人共用的，所以只能在你自己的工作区里选目录（可以新建子目录来分门别类）。"
+    : "可以选这台电脑上的任意目录。选定后，这次对话里 AI 读写的文件就都在那儿。"
+  dirCur = j.path || ""
+  dirPathEl.value = dirCur
+  dirUpBtn.disabled = !j.parent; dirUpBtn.dataset.p = j.parent || ""
+  dirCanUse = !!dirCur && j.canUse !== false
+  document.getElementById("dirUse").disabled = !dirCanUse
+  document.getElementById("dirNewSub").disabled = !dirCanUse
+  if (j.err) dirErr(j.err)
+  else if (dirCur && !dirCanUse) dirErr("这个目录不能写，产物存不进去——挑一个你自己的目录（比如文档或桌面底下的）。")
+  else dirErr("")
+  dirListEl.innerHTML = ""
+  if (!j.entries.length) { dirListEl.innerHTML = '<div class="hint">这里面没有子目录。可以直接「使用当前目录」，或者「在此新建文件夹」。</div>'; return }
+  for (const e of j.entries) {
+    const row = document.createElement("div"); row.className = "dir-item"
+    const ico = document.createElement("span"); ico.className = "di-ic"; ico.innerHTML = ic(e.quick ? "star" : "folder")
+    const nm = document.createElement("span"); nm.className = "di-n"; nm.textContent = e.name
+    const use = document.createElement("button"); use.type = "button"; use.className = "di-use"; use.textContent = "选它"
+    row.append(ico, nm, use)
+    row.addEventListener("click", () => dirBrowse(e.path))
+    use.addEventListener("click", (ev) => { ev.stopPropagation(); useDir(e.path) })
+    dirListEl.appendChild(row)
+  }
+}
+// 认领一个目录：服务端登记（不存在则建），成功后作为本次对话的工作目录
+async function useDir(p) {
+  let j = null
+  try { j = await fetch("api/folder/create?path=" + encodeURIComponent(p), { method: "POST" }).then((r) => r.json()) } catch {}
+  if (!j || !j.ok) { dirErr((j && j.err) || "这个目录用不了"); return }
+  pickFolder(j.folder)
+}
+function pickFolder(f) {
+  pendingFolder = { id: f.id, name: f.name, path: f.path }
+  updateDirChip(); closeDirPicker()
+  toast("工作目录已设为「" + f.path + "」，发出第一条消息后生效。")
+}
+dirChip && dirChip.addEventListener("click", openDirPicker)
+document.getElementById("dirClose").addEventListener("click", closeDirPicker)
+dirModal.addEventListener("click", (e) => { if (e.target === dirModal) closeDirPicker() })
+dirUpBtn.addEventListener("click", () => dirBrowse(dirUpBtn.dataset.p || ""))
+document.getElementById("dirGo").addEventListener("click", () => dirBrowse(dirPathEl.value.trim()))
+dirPathEl.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); dirBrowse(dirPathEl.value.trim()) } })
+document.getElementById("dirUse").addEventListener("click", () => dirCur && useDir(dirCur))
+document.getElementById("dirClear").addEventListener("click", () => { pendingFolder = null; updateDirChip(); closeDirPicker(); toast("这次对话用系统分配的会话专属目录。") })
+document.getElementById("dirNewSub").addEventListener("click", async () => {
+  if (!dirCur) return
+  const name = prompt("新文件夹的名字：", "新建文件夹"); if (name === null) return
+  const n = name.trim(); if (!n) return
+  if (/[\\/:*?"<>|]/.test(n)) { dirErr("名字里不能有 \\ / : * ? \" < > | 这些字符"); return }
+  await useDir(dirCur.replace(/[\\/]+$/, "") + "/" + n)
+})
+
 // 新建项目后「立刻新建对话」→ 归入该项目：createProject 时装填，紧接着建的新会话消费掉；
 // 若中途去续问/打开已有会话（不是立刻新建对话），则解除，落回「最近会话」。
 let pendingProjectId = null
@@ -2997,8 +3464,10 @@ async function resumeSession(id) {                 // 载入历史 → 设为当
   const modUi = modById(sessList.find((s) => s.id === id)?.module || "")?.ui
   if (SHELL[modUi]) { location.href = "./" + SHELL[modUi] + "?sid=" + encodeURIComponent(id); return }
   pendingProjectId = null                          // 打开的是已有会话 → 不是「立刻新建对话」，解除项目归入
+  pendingFolder = null; lastAppliedFolder = null   // 同理：切进已有会话，刚才选的目录不该跟着过来
   detachStream()                                   // 只退订原会话的流，后台生成不受影响
   sessionId = id; localStorage.setItem("nm_sid", id)
+  updateDirChip()
   zScopeReset()                                    // 检索范围是页面级状态，切会话必须重置，别把 A 会话选的范围带进 B
   // 徽标【和 currentModule】都随会话绑定走；列表未载入时 loadSessions / loadWorkflowState 回来会再校正
   const boundMod = sessList.find((s) => s.id === id)?.module || "chat"
@@ -3069,8 +3538,14 @@ function clearCurrentSession() {
 async function deleteSession(id, title) {           // 删除会话（不可撤销，先确认；进行中的生成由后端一并终止）
   // 说全三样：对话、产物、上传的原始文件。原来只说"此操作不可撤销"，既不提产物也不提上传 ——
   // 而上传的往往就是那份从科室机器拷来的原始病例表。
+  // 挑了工作目录的会话要换一套说法：产物就落在【用户自己的目录】里，我们一个字节都不会删。
+  // 照抄那句"生成的产物文件会被删除"会把人吓住 —— 他会以为删个会话把整个课题文件夹端了。
+  const s = (META_STATE.sessions || []).find((x) => x.id === id)
+  const fd = s && s.folderId && (META_STATE.folders || []).find((x) => x.id === s.folderId)
   if (!confirm("删除会话「" + String(title || id).replace(/\s+/g, " ").slice(0, 24) + "」？\n\n"
-    + "对话记录、生成的产物文件、以及你上传到这个会话的原始文件都会被删除，无法恢复。")) return
+    + (fd
+      ? "对话记录和你上传到这个会话的原始文件会被删除，无法恢复。\n工作目录「" + fd.path + "」里的文件不会被动，一个都不删。"
+      : "对话记录、生成的产物文件、以及你上传到这个会话的原始文件都会被删除，无法恢复。"))) return
   const j = await fetch("api/session/delete?id=" + encodeURIComponent(id), { method: "POST" })
     .then((r) => (r.ok ? r.json().catch(() => ({ ok: true })) : { ok: false, err: "请求失败（" + r.status + "）" }))
     .catch(() => ({ ok: false, err: "网络不通" }))
@@ -5087,6 +5562,7 @@ document.getElementById("new").addEventListener("click", () => {
   if (!confirmLeaveIntake()) return
   detachStream()   // 只退订不终止：原会话若在生成会继续跑，从左侧列表随时切回来看
   sessionId = null; localStorage.removeItem("nm_sid"); log.innerHTML = ""; wfResetGroups(); renderFiles([]); loadUploads(); loadSessions(); zScopeReset(); loadZotLib(); stepsHost = null; stepsHostEl.replaceChildren()
+  pendingFolder = null; lastAppliedFolder = null; updateDirChip()   // 新对话 = 重新可以选工作目录，上一个会话的选择不留到这里
   sessionStarted = false; pendingWfCard = ""; pendingWfForm = null; lastCardText = ""   // 任务卡是一次性的，绝不能漏进下一个会话
   offeredSteps.clear(); HDR_CACHE.clear()
   liveSteps = null; liveDone = []; liveCur = null; liveFailed = []; liveImplied = []; liveStale = []   // 步骤集随会话走，新对话别沿用上一个的
@@ -5238,7 +5714,9 @@ async function sendMessage(text) {
       // /api/upload 已经替他建好了会话（sessionId 有值了）却没有任何模块绑定，此时不带 module
       // 就会被服务端判成自由对话，模块前言/技能闸/表单值全部失效而界面毫无异样（哑失败）。
       // 服务端只对"从未绑定过"的会话认这个字段，续会话照旧忽略（防伪造请求把受限会话升级成 chat）。
-      body: JSON.stringify({ q: zScopePrefix() + myCard + text, sid: sessionId, module: sessionStarted ? undefined : currentModule, auto: autoChk.checked, wfForm: myForm }),   // auto=无人值守勾选态
+      // folderId：新对话选好的工作目录。只有建会话那一次能设（opencode 的 directory 建后不可改），
+      // 所以它必须跟着【第一条消息】走；续会话时 folderQ 恒空，服务端也不会理会。
+      body: JSON.stringify({ q: zScopePrefix() + myCard + text, sid: sessionId, module: sessionStarted ? undefined : currentModule, auto: autoChk.checked, wfForm: myForm, folderId: !sessionId && pendingFolder ? pendingFolder.id : undefined }),   // auto=无人值守勾选态
     })
     // 登录已过期 → 去登录页。先复位 sending/streaming 再跳：万一跳转被拦或很慢，
     // 按钮不至于永久禁用（否则用户只能刷新页面才能再发消息）。
@@ -5261,7 +5739,7 @@ async function sendMessage(text) {
     return false
   }
   if (r.sid) {
-    sessionId = r.sid; localStorage.setItem("nm_sid", sessionId); loadUploads()
+    sessionId = r.sid; localStorage.setItem("nm_sid", sessionId); loadUploads(); consumePendingFolder()
     // 受限模块：会话一建立就把步骤条画出来。此前要等第一轮【跑完】（可能十几分钟）才出现，
     // 而那恰恰是用户最想知道"这条流程有哪几步、现在在哪"的时候。
     if (currentModule !== "chat" && !stepsHost) loadWorkflowState()
@@ -5411,7 +5889,7 @@ function openStream(url) {
   }
   let streamSid = null      // 本条流服务的会话（区别于全局 sessionId：用户中途可能切走会话）
   let autoNextInfo = null   // 服务端宣告"done 之后还有自动续跑的下一轮"（auto 事件），done 时据此接流
-  es.addEventListener("session", (ev) => { sseFailStreak = 0; const nid = JSON.parse(ev.data).id; streamSid = nid; sessionId = nid; localStorage.setItem("nm_sid", nid); consumePendingProject(nid); loadUploads(); loadZotLib() })   // 连上了 → 清零重连计数
+  es.addEventListener("session", (ev) => { sseFailStreak = 0; const nid = JSON.parse(ev.data).id; streamSid = nid; sessionId = nid; localStorage.setItem("nm_sid", nid); consumePendingProject(nid); consumePendingFolder(); loadUploads(); loadZotLib() })   // 连上了 → 清零重连计数
 
   es.addEventListener("tool", (ev) => {
     const was = atBottomNow()                   // 先量：下面要往 turn 里塞徽章/工具行，塞完再判就晚了
@@ -6582,10 +7060,12 @@ async function uploadFiles(files) {
   for (const file of arr) {
     setUpMsg(`上传中… ${done + 1}/${arr.length}：${file.name}`)
     try {
-      const r = await fetch("api/upload?name=" + encodeURIComponent(file.name) + sidQ(), { method: "POST", body: file })
+      // folderQ()：会话还没建时把选好的工作目录带上——上传【也会】现建会话，而目录只能在建会话时定，
+      // 漏在这里的话，"先选目录再拖个文件进来"这条路会悄悄建出一个普通会话，选的目录白选了。
+      const r = await fetch("api/upload?name=" + encodeURIComponent(file.name) + sidQ() + folderQ(), { method: "POST", body: file })
       const j = await r.json()
       if (!r.ok || j.ok === false) { failed++; if (j.err) lastErr = j.err; continue }   // 存储超限(413)等
-      if (j.sid) { const isNew = !sessionId; sessionId = j.sid; localStorage.setItem("nm_sid", j.sid); if (isNew) consumePendingProject(j.sid) }   // 上传先于对话时，用网关现建的会话 id；若是刚建项目后的第一条新会话则归入该项目
+      if (j.sid) { const isNew = !sessionId; sessionId = j.sid; localStorage.setItem("nm_sid", j.sid); if (isNew) { consumePendingProject(j.sid); consumePendingFolder() } }   // 上传先于对话时，用网关现建的会话 id；若是刚建项目后的第一条新会话则归入该项目
       done++
     } catch { failed++ }
   }

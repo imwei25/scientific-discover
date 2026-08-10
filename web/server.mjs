@@ -373,38 +373,72 @@ const PY_BIN = (() => {
   return null   // 没建过 .venv：前言里如实说，让它先跑 env-setup
 })()
 // uploads 与 outputs 同名配对：outputs/<ws> ←→ uploads/<ws>（老会话则同为 <sid>）
-const sessionUp = async (sid) => path.join(UPLOADS, path.basename(await sessionOut(sid)))
+//
+// ★「文件夹会话」（用户自己挑了电脑上某个目录当工作目录）打破了这条同名配对：它的 outputs 侧
+//   是用户自己的目录（可能是 D:\论文\甲状腺），basename 拿到的是「甲状腺」——两个不同盘下的
+//   同名目录会撞进同一个 uploads/甲状腺，把两个会话的上传混在一起。所以建会话时把 ws id 记进
+//   元数据，uploads 一律按它走；只有元数据里没有 ws 的老会话才回落到 basename 那套。
+const sessionUp = async (sid) => {
+  const ws = META.sessions[sid]?.ws
+  if (ws) return path.join(UPLOADS, safeSid(ws))
+  return path.join(UPLOADS, path.basename(await sessionOut(sid)))
+}
 const ensureWsAt = (outDir, upDir) => { fs.mkdirSync(outDir, { recursive: true }); fs.mkdirSync(upDir, { recursive: true }) }
 async function ensureWs(sid) {
   const o = await sessionOut(sid), u = await sessionUp(sid)
   ensureWsAt(o, u); return { out: o, up: u }
 }
-// 新建会话：先定目录名，再用它建 opencode 会话（directory 只有这一次机会能设）
-async function createSession(title) {
+// 新建会话：先定目录名，再用它建 opencode 会话（directory 只有这一次机会能设）。
+// folderId 非空 = 用户在「新对话还没发过消息」时挑了电脑上的一个目录当工作目录（见 §文件夹）；
+// 此时 directory 指到那个目录，产物直接落在用户自己的项目文件夹里。
+// 【directory 只能在 create 时设】正是"只有全新空会话才能挑目录"这条产品规则的由来，不是随便定的。
+async function createSession(title, folderId) {
   const ws = newWsId()
-  const outDir = path.join(OUTPUTS, ws), upDir = path.join(UPLOADS, ws)
+  const f = folderId ? META.folders.find((x) => x.id === folderId) : null
+  const outDir = f ? f.path : path.join(OUTPUTS, ws)
+  const upDir = path.join(UPLOADS, ws)
   ensureWsAt(outDir, upDir)
   const s = un(await client.session.create({ body: { title }, query: { directory: outDir } }))
   dirCache.set(safeSid(s.id), outDir)
+  const m = sessMeta(s.id); m.ws = ws; if (f) m.folderId = f.id
+  saveMeta()
   return s.id
 }
 
 // ---- 会话/项目元数据（网关级，opencode 不管这些）----
 // 【会话永久保留】曾经有过"非项目会话 7 天无活动自动删"的 TTL 档位（配套钉住/续期/临期提醒），
 // 已整体移除：用户的会话与产物只在用户自己动手删时才消失，系统不再替他做保留期判断。
-// 钉（pinned）保留下来，但语义只剩"置顶分组"，不再影响存活。要清理请用界面上的批量勾选删除。
-// opencode 只存会话本体；项目分组 / 钉标记存这里，随磁盘持久（已 gitignore）。
+// 【置顶（pinned）已整体去掉】它只是"排在最前"的一个特例，而会话现在可以直接拖着排序，
+// 一个能拖到第一位的列表不再需要一档专门的"排在最前"标记。接口保留为空操作（见 /api/session/pin）。
+// opencode 只存会话本体；项目分组 / 文件夹归属 / 排序存这里，随磁盘持久（已 gitignore）。
+//
+// ---- 文件夹（folders）----
+// 文件夹 = 用户在电脑上挑的一个真实目录。挑了之后，该会话的 opencode session.directory 就指到它，
+// agent 的 cwd、产物、脚本全落在那儿；共用同一个目录的会话在左侧归到同一个文件夹下。
+// 与「项目」是两套【互不影响】的分类：一个会话可以同时属于某项目和某文件夹，两边都会列出它。
+// 三条要记住的性质：
+//   ① 目录只能在建会话时定（opencode 的 directory 不可改）→ 只有"新对话且还没发过消息/传过文件"能挑；
+//   ② 文件夹是【用户自己的目录】→ 删会话【绝不】删它（见 hardDeleteSession），只删本会话的 uploads；
+//   ③ 它在 outputs/ 之外 → 不计入存储配额（storageUsed 只数 uploads+outputs），这是对的：
+//      用户自己硬盘上的项目目录不该被我们的配额管。
 // 路径可用 SESSIONS_META_PATH 覆盖：测试/隔离实例必须能把它重定向到临时文件，
 // 否则任何在本仓库里起的第二个网关实例都会读写【开发机真实的】会话元数据并互相覆盖
 // （cloud-state/model-config/opencode.json 早就有同款覆盖开关，唯独这个漏了）。
 const META_PATH = process.env.SESSIONS_META_PATH || path.join(__dirname, "sessions-meta.json")
-let META = { version: 1, projects: [], sessions: {} }
-try { const m = JSON.parse(fs.readFileSync(META_PATH, "utf8")); META = { version: 1, projects: m.projects || [], sessions: m.sessions || {} } } catch {}
+let META = { version: 1, projects: [], folders: [], sessions: {} }
+try { const m = JSON.parse(fs.readFileSync(META_PATH, "utf8")); META = { version: 1, projects: m.projects || [], folders: m.folders || [], sessions: m.sessions || {} } } catch {}
 let _metaSaveTimer = null
 const saveMeta = () => { try { clearTimeout(_metaSaveTimer) } catch {}; _metaSaveTimer = setTimeout(() => { try { fs.writeFileSync(META_PATH, JSON.stringify(META, null, 2)) } catch {} }, 50) }
 const sessMeta = (sid) => (META.sessions[sid] ||= {})   // 取（不存在则建空）某会话的元数据
 const projectOf = (sid) => { const p = META.sessions[sid]?.projectId; return p && META.projects.some((x) => x.id === p) ? p : null }
+const folderOf = (sid) => { const f = META.sessions[sid]?.folderId; return f && META.folders.some((x) => x.id === f) ? f : null }
 const newId = (p) => p + crypto.randomBytes(6).toString("hex")
+// 归一化目录路径：大小写与斜杠在 Windows 上都不是身份的一部分，同一个目录写成 d:/x 和 D:\X
+// 必须认成同一个文件夹，否则用户挑两次就多出两个重名分组。
+const normDir = (p) => { const r = path.resolve(p); return process.platform === "win32" ? r.replace(/[\\/]+$/, "").toLowerCase() : r.replace(/\/+$/, "") || "/" }
+const folderByPath = (p) => { const k = normDir(p); return META.folders.find((f) => normDir(f.path) === k) || null }
+// 目录的显示名：末段目录名；根目录（C:\ 或 /）没有末段，就用整条路径。
+const dirLabel = (p) => path.basename(p) || p.replace(/[\\/]+$/, "") || p
 // 彻底删除一个会话：终止在跑的轮 → 删 opencode 会话 → 删产物/上传目录 → 清元数据
 async function hardDeleteSession(id) {
   try { await jobs.get(id)?.abort() } catch {}   // 会话还在生成中 → 先终止再删
@@ -423,18 +457,27 @@ async function hardDeleteSession(id) {
   //   所以调用之后缓存里有没有它，就等于"这次解析成没成"。
   const delOut = await sessionOut(id), delUp = await sessionUp(id)
   const resolved = dirCache.has(safeSid(id))
+  // ★★ 文件夹会话：产物目录【就是用户自己电脑上的目录】（可能是 D:\论文，甚至是他的文档根目录）。
+  //    对它 rmSync(recursive) 等于"删一个会话把用户整个项目文件夹连锅端了"—— 这是本功能唯一的
+  //    灾难性失误可能，所以判据放在删除之前、独立于 resolved：只要这个会话挂着 folderId，
+  //    产物侧一个字节都不许动，只删本会话自己的 uploads。
+  const keepOut = !!folderOf(id)
   let ocOk = true
   try { await client.session.delete({ path: { id } }) } catch (e) { ocOk = false; console.warn(`[session] 删除 ${id} 失败：${e.message}`) }
   let dirOk = true
   // 解析不到真实目录就【不要删】：对着一个猜出来的路径 force 空转，只会把"没删干净"伪装成成功。
-  if (!resolved) dirOk = false
-  else try { fs.rmSync(delUp, { recursive: true, force: true }); fs.rmSync(delOut, { recursive: true, force: true }); dirCache.delete(safeSid(id)) }
+  if (!resolved && !keepOut) dirOk = false
+  else try {
+    fs.rmSync(delUp, { recursive: true, force: true })
+    if (!keepOut) fs.rmSync(delOut, { recursive: true, force: true })
+    dirCache.delete(safeSid(id))
+  }
   catch (e) { dirOk = false; console.warn(`[session] 删除 ${id} 的目录失败：${e.message}`) }
   pendingReverts.delete(id)   // 已删会话的待提交登记没人再消费，别驻留到进程重启
   unbindSessionModule(id)     // 模块绑定同样随会话删除，别在持久表里越积越多
   clearGateBypass(id)         // 手动放行的标记同理：会话没了就不该在放行表里留着
   // ★ 元数据只在 opencode 那侧真删掉之后才清。否则："删除失败 → 会话回到列表 → 但项目归属与
-  //   置顶被抹掉了"，用户再点一次删，还得先把它重新归类。
+  //   文件夹归属被抹掉了"，用户再点一次删，还得先把它重新归类。
   if (ocOk && META.sessions[id]) { delete META.sessions[id]; saveMeta() }
   return { ok: ocOk && dirOk, ocOk, dirOk }
 }
@@ -615,6 +658,62 @@ const BASE_PATH = (process.env.BASE_PATH || "").replace(/\/+$/, "")   // 归一�
 //   "/" 在 manager 那层（不带用户名前缀），故此处【不能】加 BASE_PATH。
 // - 单机/局域网部署（BASE_PATH 为空、前面没有 manager）→ 没有验证码这回事，照旧用容器自带的 /login。
 const LOGIN_URL = BASE_PATH ? "/" : "/login"
+
+// ---- 「选工作目录」能看到多大范围（文件夹功能的安全边界）----
+//
+// 本功能的原始需求是桌面版："让我把这次对话的工作目录设成我电脑上的某个项目文件夹"。
+// 桌面版里 server.mjs 就跑在用户自己的机器上、只服务他一个人，浏览整台机器没有任何问题。
+// 但同一份 server.mjs 也跑在【云端多用户容器】里。那里再开放整机浏览，等于把镜像里的部署脚本、
+// 环境变量文件、别人的挂载点全都摆进任意一个登录用户的界面。所以按部署形态分成两档：
+//   local     —— BASE_PATH 为空（桌面版 / 自建单机 / 局域网）：整台机器都能挑。
+//   workspace —— 设了 BASE_PATH（前面有 manager 按 /用户名/ 反代 = 多用户容器）：只能在
+//                自己的产物根 outputs/ 里面挑目录。功能仍然可用（还是能按目录把会话归类），
+//                只是范围收在自己的工作区内。
+// 可用 SCI_FS_SCOPE=local|workspace 显式覆盖（自建部署若把容器暴露给多人，应手动设 workspace）。
+const fsMode = () => {
+  const forced = (process.env.SCI_FS_SCOPE || "").trim()
+  if (forced === "local" || forced === "workspace") return forced
+  return BASE_PATH ? "workspace" : "local"
+}
+// 允许浏览/使用的根。workspace 档只有 outputs 一个根。
+const fsRootDirs = (mode) => {
+  if (mode === "workspace") return [OUTPUTS]
+  if (process.platform === "win32") {
+    const drives = []
+    for (const L of "ABCDEFGHIJKLMNOPQRSTUVWXYZ") { try { if (fs.existsSync(L + ":\\")) drives.push(L + ":\\") } catch {} }
+    return drives.length ? drives : ["C:\\"]
+  }
+  return ["/"]
+}
+// 根列表（给选择器的第一屏）：盘符 + 常用去处。家目录/桌面/文档放前面——用户要挑的目录九成在那底下，
+// 让他从 C:\ 一层层点进去是纯粹的折磨。
+const fsRoots = (mode) => {
+  if (mode === "workspace") return [{ name: "我的工作区", path: OUTPUTS }]
+  const out = []
+  const home = os.homedir()
+  const quick = [[home, "主目录"], [path.join(home, "Desktop"), "桌面"], [path.join(home, "Documents"), "文档"],
+    [path.join(home, "桌面"), "桌面"], [path.join(home, "文档"), "文档"]]
+  const seen = new Set()
+  for (const [p, label] of quick) {
+    try { if (p && fs.existsSync(p) && !seen.has(normDir(p))) { seen.add(normDir(p)); out.push({ name: label, path: p, quick: true }) } } catch {}
+  }
+  for (const d of fsRootDirs(mode)) out.push({ name: d, path: d })
+  return out
+}
+// 路径是否在允许范围内。workspace 档必须落在 outputs 之内（含 outputs 本身）。
+const fsAllowed = (abs, mode) => {
+  if (mode !== "workspace") return true
+  const r = path.resolve(OUTPUTS), p = path.resolve(abs)
+  return p === r || p.startsWith(r + path.sep)
+}
+// 上一级；已经到根（或 workspace 档的 outputs）就没有上一级了
+const fsParent = (abs, mode) => {
+  const p = path.resolve(abs), up = path.dirname(p)
+  if (up === p) return null                       // 已经是盘符/文件系统根
+  if (!fsAllowed(up, mode)) return null           // workspace 档：不许退到 outputs 之外
+  return up
+}
+const fsWritable = (abs) => { try { fs.accessSync(abs, fs.constants.W_OK); return true } catch { return false } }
 
 // ---- 功能模块（封装的技能入口 + 每用户授权）----
 // 每个"模块"= 一种会话形态：chat 是不设限的自由对话（走 AGENTS.md 的完整路由）；
@@ -3515,7 +3614,9 @@ export const server = http.createServer(async (req, res) => {
 
     if (req.method === "POST" && u.pathname === "/api/upload") {
       let sid = u.searchParams.get("sid") || null
-      if (!sid) sid = await createSession("web")   // 上传先于对话则现建会话（createSession 会把 directory 定到会话产物目录）
+      // 上传先于对话则现建会话（createSession 会把 directory 定到会话产物目录）。
+      // 带了 folderId = 用户在传第一个文件之前就挑好了工作目录 → 直接定到那个目录。
+      if (!sid) sid = await createSession("web", u.searchParams.get("folderId") || "")
       const ws = await ensureWs(sid)
       // ★ 点号开头的名字要改掉，不能原样存。/api/uploads 列表会 filter 掉 `.` 开头的文件
       //   （那条是给 .preview 这类派生缓存用的），于是拖一个 .DS_Store / .env 进来的结果是：
@@ -3606,7 +3707,7 @@ export const server = http.createServer(async (req, res) => {
       return send(res, 200, "application/json", JSON.stringify({ ok: true }))
     }
 
-    // 会话列表 + 项目分组（排除子 agent 会话，按更新时间倒序）。前端据此分组渲染、算临期提醒。
+    // 会话列表 + 项目分组 + 文件夹分组（排除子 agent 会话，按更新时间倒序）。前端据此分组渲染。
     if (req.method === "GET" && u.pathname === "/api/sessions") {
       const all = un(await client.session.list()) || []
       const sessions = all
@@ -3616,16 +3717,24 @@ export const server = http.createServer(async (req, res) => {
           const mod = sessionModule(s.id)
           const m = META.sessions[s.id] || {}
           const projectId = projectOf(s.id)
-          // 模块徽标（HEAD 原有）与 项目/钉（会话管理）两组信息都要，前端各用各的。
+          // 模块徽标（HEAD 原有）与 项目/文件夹（会话管理）两组信息都要，前端各用各的。
           // permanent/expiresAt 是 TTL 时代的字段：本身已无意义，但仍固定回「永久」——
           // 界面包可单独热更新，老 index.html 配新 server.mjs 是真实组合，它读这两个字段
           // 决定徽标与临期提醒条；给 true/null 让它显示"永久"、提醒条恒空，不会吓唬用户。
+          // pinned 恒 false 同理：置顶已删，但老界面包读它分组，给 false 让「置顶」组恒空。
           return { id: s.id, title: s.title || "(未命名)", updated: s.time?.updated || 0, running: !!jobs.get(s.id)?.running,
             module: mod, moduleName: MODULE_DEFS[mod]?.name || mod,
-            projectId, pinned: !!m.pinned, permanent: true, expiresAt: null }
+            projectId, folderId: folderOf(s.id), orders: m.orders || {},
+            pinned: false, permanent: true, expiresAt: null }
         })
       const projects = [...META.projects].sort((a, b) => (a.order ?? 0) - (b.order ?? 0)).map((p) => ({ id: p.id, name: p.name, order: p.order ?? 0 }))
-      return send(res, 200, "application/json", JSON.stringify({ projects, sessions }))
+      // 文件夹只列【还有会话挂着的】。空文件夹留在 META 里（/api/folders 会给选择器当"最近用过的目录"），
+      // 但不该在侧栏里堆成一排点开全是空的分组。
+      const used = new Set(sessions.map((s) => s.folderId).filter(Boolean))
+      const folders = META.folders.filter((f) => used.has(f.id))
+        .sort((a, b) => (a.order ?? 0) - (b.order ?? 0))
+        .map((f) => ({ id: f.id, name: f.name, path: f.path, order: f.order ?? 0 }))
+      return send(res, 200, "application/json", JSON.stringify({ projects, folders, sessions }))
     }
 
     // 会话重命名：写回 opencode（title 非 ""/"web" 时自动补名逻辑不会再覆盖它）
@@ -3638,14 +3747,10 @@ export const server = http.createServer(async (req, res) => {
       return send(res, 200, "application/json", JSON.stringify({ ok: true }))
     }
 
-    // 钉/取消钉：置顶分组标记（会话永久保留，钉与存活期无关）
+    // 置顶：已整体移除（会话现在可以直接拖着排序，"排到最前"不再需要一档专门的标记）。
+    // 保留为空操作，只为老界面包（可单独热更新，新 server 配老 index.html 是真实组合）调用时不报错。
     if (req.method === "POST" && u.pathname === "/api/session/pin") {
-      const id = u.searchParams.get("id") || ""
-      const pinned = u.searchParams.get("pinned") !== "0"
-      if (!id) return send(res, 400, "application/json", JSON.stringify({ ok: false }))
-      sessMeta(id).pinned = pinned
-      saveMeta()
-      return send(res, 200, "application/json", JSON.stringify({ ok: true, pinned }))
+      return send(res, 200, "application/json", JSON.stringify({ ok: true, noop: true, pinned: false }))
     }
 
     // 续期：TTL 时代的接口，会话已永久保留 → 保留为空操作，只为老界面包（可单独热更新）调用时不报错
@@ -3694,6 +3799,100 @@ export const server = http.createServer(async (req, res) => {
       return send(res, 200, "application/json", JSON.stringify({ ok: true }))
     }
 
+    // ---- 文件夹（用户自己电脑上的目录当工作目录）----
+
+    // 目录浏览。前端的「选择工作目录」弹窗靠它一层层点进去。
+    // 【两种模式】见 fsMode()：本机/自建部署能浏览整台机器；多用户容器只让浏览自己的产物根，
+    // 因为那台机器上还有别人的东西和部署密钥，不该被任何一个用户的界面翻出来。
+    if (req.method === "GET" && u.pathname === "/api/fs/list") {
+      const mode = fsMode()
+      let p = u.searchParams.get("path") || ""
+      // 空 path = 要根：本机模式给盘符/根 + 家目录；容器模式只有产物根一个。
+      if (!p) {
+        const roots = fsRoots(mode)
+        return send(res, 200, "application/json", JSON.stringify({ ok: true, mode, path: "", parent: null, roots, entries: roots, canUse: false }))
+      }
+      let abs
+      try { abs = path.resolve(p) } catch { return send(res, 400, "application/json", JSON.stringify({ ok: false, err: "路径无效" })) }
+      if (!fsAllowed(abs, mode)) return send(res, 403, "application/json", JSON.stringify({ ok: false, err: "该目录不在允许浏览的范围内" }))
+      let st; try { st = fs.statSync(abs) } catch { return send(res, 404, "application/json", JSON.stringify({ ok: false, err: "目录不存在" })) }
+      if (!st.isDirectory()) return send(res, 400, "application/json", JSON.stringify({ ok: false, err: "不是目录" }))
+      let entries = []
+      // 读目录会 EPERM/EACCES（Windows 的 System Volume Information、Linux 的 /root 等）。
+      // 这不是"没有子目录"，得让用户看见原因，否则他会以为自己点错了地方。
+      try {
+        entries = fs.readdirSync(abs, { withFileTypes: true })
+          .filter((d) => d.isDirectory() && !d.name.startsWith("."))
+          .map((d) => ({ name: d.name, path: path.join(abs, d.name) }))
+          .sort((a, b) => a.name.localeCompare(b.name, "zh"))
+          .slice(0, 500)
+      } catch (e) {
+        return send(res, 200, "application/json", JSON.stringify({ ok: true, mode, path: abs, parent: fsParent(abs, mode), entries: [], canUse: false, err: "没有权限读取这个目录：" + String(e.code || e.message) }))
+      }
+      return send(res, 200, "application/json", JSON.stringify({ ok: true, mode, path: abs, parent: fsParent(abs, mode), entries, canUse: fsWritable(abs) }))
+    }
+
+    // 最近用过的目录（含当前没有会话挂着的），给选择器当快捷入口
+    if (req.method === "GET" && u.pathname === "/api/folders") {
+      const list = [...META.folders].sort((a, b) => (b.used || b.created || 0) - (a.used || a.created || 0))
+        .slice(0, 20).map((f) => ({ id: f.id, name: f.name, path: f.path, exists: fs.existsSync(f.path) }))
+      return send(res, 200, "application/json", JSON.stringify({ ok: true, mode: fsMode(), folders: list }))
+    }
+
+    // 认领一个目录当文件夹。同一个目录重复挑 → 返回已有的那条（不新建重名分组）。
+    // 目录不存在时【只在父目录已存在的前提下】替用户建出来：用户在选择器里点「在此新建文件夹」是常规操作，
+    // 但递归造出一整条不存在的路径（typo 的必然结果）只会在他硬盘上留下垃圾。
+    if (req.method === "POST" && u.pathname === "/api/folder/create") {
+      const mode = fsMode()
+      const raw = u.searchParams.get("path") || ""
+      if (!raw.trim()) return send(res, 400, "application/json", JSON.stringify({ ok: false, err: "没有给目录" }))
+      let abs; try { abs = path.resolve(raw.trim()) } catch { return send(res, 400, "application/json", JSON.stringify({ ok: false, err: "路径无效" })) }
+      if (!fsAllowed(abs, mode)) return send(res, 403, "application/json", JSON.stringify({ ok: false, err: "该目录不在允许使用的范围内" }))
+      if (!fs.existsSync(abs)) {
+        if (!fs.existsSync(path.dirname(abs))) return send(res, 400, "application/json", JSON.stringify({ ok: false, err: "目录不存在，上一级也不存在——请检查路径是否写错" }))
+        try { fs.mkdirSync(abs) } catch (e) { return send(res, 400, "application/json", JSON.stringify({ ok: false, err: "无法创建目录：" + String(e.code || e.message) }) ) }
+      }
+      try { if (!fs.statSync(abs).isDirectory()) return send(res, 400, "application/json", JSON.stringify({ ok: false, err: "这是一个文件，不是目录" })) } catch {}
+      if (!fsWritable(abs)) return send(res, 400, "application/json", JSON.stringify({ ok: false, err: "这个目录不可写，产物没法存进去，请换一个" }))
+      let f = folderByPath(abs)
+      if (!f) { f = { id: newId("f_"), path: abs, name: dirLabel(abs), created: Date.now(), order: META.folders.length }; META.folders.push(f) }
+      f.used = Date.now(); saveMeta()
+      return send(res, 200, "application/json", JSON.stringify({ ok: true, folder: { id: f.id, name: f.name, path: f.path } }))
+    }
+
+    // 文件夹改名：只改左侧显示的名字，不动磁盘上的目录（那是用户自己的目录，我们无权重命名）
+    if (req.method === "POST" && u.pathname === "/api/folder/rename") {
+      const id = u.searchParams.get("id") || ""
+      const name = (u.searchParams.get("name") || "").slice(0, 60).trim()
+      const f = META.folders.find((x) => x.id === id)
+      if (!f || !name) return send(res, 400, "application/json", JSON.stringify({ ok: false }))
+      f.name = name; saveMeta()
+      return send(res, 200, "application/json", JSON.stringify({ ok: true }))
+    }
+
+    // 取消分组：只把这条文件夹记录去掉，会话与目录里的文件一个都不动。
+    // 组内会话的工作目录仍然是那个目录（opencode 的 directory 建后不可改），只是不再单独成组。
+    if (req.method === "POST" && u.pathname === "/api/folder/forget") {
+      const id = u.searchParams.get("id") || ""
+      const idx = META.folders.findIndex((x) => x.id === id)
+      if (idx < 0) return send(res, 404, "application/json", JSON.stringify({ ok: false }))
+      META.folders.splice(idx, 1)
+      for (const sid of Object.keys(META.sessions)) { const m = META.sessions[sid]; if (m.folderId === id) delete m.folderId }
+      saveMeta()
+      return send(res, 200, "application/json", JSON.stringify({ ok: true }))
+    }
+
+    // 手工排序：整段列表一次性回写。bucket = 这条列表的身份（p:<项目id> / f:<文件夹id> / recent），
+    // 同一个会话可以同时出现在项目列表和文件夹列表里，两处顺序各记各的，互不干扰。
+    if (req.method === "POST" && u.pathname === "/api/sessions/order") {
+      let body; try { body = await readJson(req) } catch { return send(res, 400, "application/json", JSON.stringify({ ok: false, err: "请求体无效" })) }
+      const bucket = String(body?.bucket || "")
+      const ids = Array.isArray(body?.ids) ? body.ids.map(String).slice(0, 2000) : null
+      if (!bucket || !ids) return send(res, 400, "application/json", JSON.stringify({ ok: false, err: "缺少 bucket / ids" }))
+      ids.forEach((id, i) => { const m = sessMeta(id); (m.orders ||= {})[bucket] = i })
+      saveMeta()
+      return send(res, 200, "application/json", JSON.stringify({ ok: true, n: ids.length }))
+    }
 
     // 某会话的历史消息（user/assistant 正文），用于断点续问时回显上下文
     if (req.method === "GET" && u.pathname === "/api/history") {
@@ -4378,10 +4577,10 @@ export const server = http.createServer(async (req, res) => {
         if (total > 4_000_000) return sendClose(res, 413, "application/json", JSON.stringify({ ok: false, sent: false, err: "消息过长（超过 4MB）" }))   // 从 for-await 里提前 return → body 未读完，必须关连接
         chunks.push(c)
       }
-      let q = "", sid = null, reqMod = "", autoReq, wfSeed = null
+      let q = "", sid = null, reqMod = "", autoReq, wfSeed = null, folderId = ""
       // wfSeed：首屏表单的值。表单是在【会话还不存在】的时候填的（用户还没发第一条消息），
       // 所以那份值没法在 /api/workflow/form 里落盘，只能随第一条消息捎进来，建完会话再写。
-      try { const b = JSON.parse(Buffer.concat(chunks).toString() || "{}"); q = String(b.q ?? ""); sid = b.sid ? String(b.sid) : null; reqMod = String(b.module || ""); if (typeof b.auto === "boolean") autoReq = b.auto; if (b.wfForm && typeof b.wfForm === "object") wfSeed = b.wfForm } catch {}
+      try { const b = JSON.parse(Buffer.concat(chunks).toString() || "{}"); q = String(b.q ?? ""); sid = b.sid ? String(b.sid) : null; reqMod = String(b.module || ""); if (typeof b.auto === "boolean") autoReq = b.auto; if (b.wfForm && typeof b.wfForm === "object") wfSeed = b.wfForm; folderId = b.folderId ? String(b.folderId) : "" } catch {}
       if (!q.trim()) return send(res, 400, "application/json", JSON.stringify({ ok: false, sent: false, err: "消息为空" }))
       // ---- 模块裁定 ----
       // 续会话：绑定在创建时已定死，忽略前端传值（防伪造请求把受限会话"升级"成 chat）。
@@ -4404,7 +4603,9 @@ export const server = http.createServer(async (req, res) => {
       // 上传接口提前建出来的会话：在这里补登记绑定（见上面 unbound 的说明）
       if (unbound && modId !== "chat") bindSessionModule(sid, modId)
       if (!sid) {
-        try { sid = await createSession(q.slice(0, 40)); titledSessions.add(sid); if (modId !== "chat") bindSessionModule(sid, modId) }
+        // folderId：用户在发第一条消息之前挑了工作目录 → 会话的 cwd 直接定到那个目录。
+        // 只有这一次机会（opencode 的 directory 建后不可改），所以它必须随第一条消息捎进来。
+        try { sid = await createSession(q.slice(0, 40), folderId); titledSessions.add(sid); if (modId !== "chat") bindSessionModule(sid, modId) }
         catch {
           const ocOk = await ocHealthy()
           return send(res, 503, "application/json", JSON.stringify({ ok: false, sent: false,

@@ -56,6 +56,15 @@
       "port": 3003
     },
     {
+      "//": "「文件夹分类 + 拖拽排序」的 worktree（分支 feat/session-folders），自测用。",
+      "//2": "挂假 opencode（dev-folders.mjs 自带），演示会话/项目/文件夹一次摆好，不烧额度。",
+      "name": "web-folders",
+      "runtimeExecutable": "node",
+      "runtimeArgs": ["--no-warnings", "D:/projects/sci-folders-wt/web/dev-folders.mjs"],
+      "port": 3011,
+      "autoPort": true
+    },
+    {
       "//": "intake-v3 合并结果的 worktree（分支 merge/intake-v3），只为验合并后的表单画对没有。",
       "//2": "MANAGE_OC=0 由 dev-merge.mjs 设死——主检出同时在用同一个 opencode，别去 kill 它。",
       "name": "web-merge",
