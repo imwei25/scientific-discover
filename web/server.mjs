@@ -647,17 +647,12 @@ async function readJson(req) {
 const LAN_USER = process.env.LAN_USER || "tellgen"             // 单用户账号，可用环境变量覆盖
 const LAN_PASSWORD = process.env.LAN_PASSWORD || "123"         // 单用户密码，可用环境变量覆盖
 const AUTH_ENABLED = process.env.LAN_AUTH !== "0"             // LAN_AUTH=0 可整体关闭登录
-// 路径路由前缀：多用户单域名部署时每容器设 BASE_PATH=/用户名（如 /alice）。前面的 manager 会剥掉该前缀再转进来，
-// 所以容器内部仍按根路径处理；这里只在"发给浏览器"的东西上补回前缀——跳转 Location 与 Cookie 的 Path。
-// 尤其 Cookie 的 Path=/用户名/ 是隔离关键：保证 alice 的登录 token 只发往 /alice/，不会泄露给别的用户容器。
-const BASE_PATH = (process.env.BASE_PATH || "").replace(/\/+$/, "")   // 归一化，去掉结尾斜杠；根部署留空
-// 未登录时把浏览器送去哪个登录页：
-// - 多用户部署（设了 BASE_PATH，前面有 manager 按 /用户名/ 反代并剥前缀）→ 必须送到 manager 根 "/" 的
-//   验证码登录门户。容器自带的 login.html 没有验证码输入框，而 manager 对 POST /<用户名>/api/login
-//   强制校验图形验证码（verifyCaptcha 不过直接 401「验证码错误」，压根不转进容器）→ 在容器登录页永远登不进来。
-//   "/" 在 manager 那层（不带用户名前缀），故此处【不能】加 BASE_PATH。
-// - 单机/局域网部署（BASE_PATH 为空、前面没有 manager）→ 没有验证码这回事，照旧用容器自带的 /login。
-const LOGIN_URL = BASE_PATH ? "/" : "/login"
+// 【曾经有过一个 BASE_PATH 路径前缀】：多用户单域名部署时每个容器设 BASE_PATH=/用户名，
+// 跳转 Location 与 Cookie 的 Path 都要补回这个前缀（Cookie 的 Path=/alice/ 是用户间隔离的关键），
+// 未登录还要送去 manager 根上那个带验证码的门户，而不是本进程自带的 /login。
+// 那套部署已经整体下线（见 ee11e9b1），本进程只跑在用户自己的机器上、只服务他一个人 ——
+// 前面没有反代、没有前缀、也没有第二个用户要隔离，所以一律按根路径处理。
+const LOGIN_URL = "/login"
 
 // ---- 「选工作目录」能看到多大范围（文件夹功能的安全边界）----
 //
@@ -1522,8 +1517,7 @@ const contentDisposition = (name) => {
 
 // ---- 每日成本额度（USD）----
 // 用 opencode 的 session.cost（已含 DeepSeek 缓存折扣）累计每轮增量；跨日自动清零。
-// 持久化分两种形态：多用户部署记到【宿主账本】（见下方 REMOTE_QUOTA，防容器内 agent 篡改），
-// 单机/本地部署记到 ocdata 卷的 quota.json（重启不丢，与旧行为一致）。
+// 持久化到 quota.json（重启不丢）。
 // DAILY_COST_LIMIT=0 或空 = 不限额。达上限即拦截新对话；进行中的轮到限也会被中途掐断（见 startJob 的 updateRunning）。
 // 被 abort / 被掐断的那一步 opencode 记 cost=0，由估算兜底补账（见下方"轮内实时成本估算"），否则可无限重试绕过额度。
 // 额度解析（fail-closed，与 manager.mjs parseLimit 同款策略）：空/未设/合法 0 → 0（=故意不限额，行为不变）；
@@ -1544,81 +1538,17 @@ const QUOTA_FILE = path.join(os.homedir(), ".local", "share", "opencode", "quota
 const todayKey = () => new Date().toISOString().slice(0, 10)   // UTC 日期
 const loadQuota = () => { try { const q = JSON.parse(fs.readFileSync(QUOTA_FILE, "utf8")); if (q && q.day === todayKey()) return q } catch {} return { day: todayKey(), cost: 0 } }
 const saveQuota = (q) => { try { fs.mkdirSync(path.dirname(QUOTA_FILE), { recursive: true }); fs.writeFileSync(QUOTA_FILE, JSON.stringify(q)) } catch {} }
-// ---- 权威账本放宿主（防篡改）----
-// 容器里跑的是能执行任意命令的 agent（与网关同 uid、同容器），QUOTA_FILE 对它就是一个可写文件——
-// "把 quota.json 里今天的数清零"一句话就能绕过每日额度。配了 QUOTA_API_URL（多用户部署由
-// render-compose.sh 注入，指向宿主 manager 的记账端点）时：权威账本在宿主文件系统上，本进程
-// 只在内存记账 + 异步上报增量；QUOTA_FILE 降级为镜像缓存，仅在「启动后尚未从宿主播种到读数」
-// 的窗口期作回退。上报凭据 QUOTA_TOKEN 虽然 agent 同样读得到（env 对它不设防），但宿主端
-// 只接受【正增量】——拿它伪造只能给自己多记账，减不了、清不了。
-// 未配 QUOTA_API_URL（单机 / 本地 / 老容器）完全保持原来的本地文件行为。
-const QUOTA_API = (process.env.QUOTA_API_URL || "").replace(/\/+$/, "")
-const QUOTA_TOKEN = process.env.QUOTA_TOKEN || ""
-// ★ 用【归一化后】的 BASE_PATH 推用户名，并把"推不出来"当成配置错误响亮报出来。
-//   原来是 `process.env.BASE_PATH.replace(/^\//,"").split("/")[0]` —— 只剥一个前导斜杠，
-//   于是 BASE_PATH 写成 `//alice`（多写一道斜杠、或上游拼接时多带一个）会算出【空串】，
-//   REMOTE_QUOTA 静默变成 false，额度记账悄悄退回容器内的 quota.json ——
-//   而那个文件在 agent 的可写目录里、它有 shell。整条"宿主权威账本防篡改"就此失效，
-//   且界面上一点异常都看不出来。这是本仓库里唯一一条配置写错就有真实安全后果的路径，
-//   所以不静默降级：能推出来就用，推不出来但明显是多用户形态（设了 QUOTA_API/TOKEN）就拒绝启动。
-const QUOTA_USER = BASE_PATH.replace(/^\/+/, "").split("/")[0]
-if (BASE_PATH && !QUOTA_USER) {
-  console.error(`[quota] BASE_PATH=${JSON.stringify(process.env.BASE_PATH)} 推不出用户名（归一化后为「${BASE_PATH}」）。`
-    + `多用户部署下这会让宿主账本静默失效、退回容器内可被 agent 改写的 quota.json。请写成 /用户名 的形式。`)
-  if (QUOTA_API && QUOTA_TOKEN) {
-    console.error("[quota] 已配置宿主账本（QUOTA_API/QUOTA_TOKEN）却推不出用户名 —— 拒绝以降级方式启动。")
-    process.exit(1)
-  }
-}
-const REMOTE_QUOTA = !!(QUOTA_API && QUOTA_TOKEN && QUOTA_USER)
-const rq = { day: todayKey(), cost: 0, pending: 0, seeded: false, flushing: false }
-// 跨日：已入账部分清零；尚未上报出去的增量（pending）是真实花费，顺延计入新的一天
-const rqRoll = () => { if (rq.day !== todayKey()) { rq.day = todayKey(); rq.cost = rq.pending } }
-const rqFetch = (p, opt) => fetch(QUOTA_API + p, { ...opt, headers: { "x-quota-token": QUOTA_TOKEN, ...(opt?.headers || {}) }, signal: AbortSignal.timeout(5000) })
-// 把累计未上报的增量推给宿主账本。失败不丢：pending 保留，10s 定时器兜底重试；
-// 唯独 400（宿主明确拒收，如金额不合法）放弃该笔并响亮记日志，否则会无限重试卡死队列。
-async function rqFlush() {
-  if (rq.flushing || !(rq.pending > 0)) return
-  rq.flushing = true
-  const amt = rq.pending
-  try {
-    const r = await rqFetch("/report", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ user: QUOTA_USER, add: amt }) })
-    if (r.ok) rq.pending = Math.max(0, rq.pending - amt)
-    else if (r.status === 400) { rq.pending = Math.max(0, rq.pending - amt); console.warn(`[quota] 宿主拒收上报 $${amt.toFixed(4)}（HTTP 400），该笔放弃：${await r.text().catch(() => "")}`) }
-  } catch { /* 宿主暂不可达：pending 留待定时器重试 */ } finally { rq.flushing = false }
-}
-// 向宿主要权威读数：启动播种 + 周期校准（宿主端管理员手工调账也会被吸收进来）。
-// 叠加 pending 是因为宿主读数不含尚未上报的部分；flush 在途的短暂窗口可能小幅高估，方向安全（宁多算不少算）。
-async function rqSync() {
-  try {
-    const r = await rqFetch(`/today?user=${encodeURIComponent(QUOTA_USER)}`)
-    if (!r.ok) return
-    const j = await r.json()
-    rqRoll()
-    rq.cost = (j && j.day === todayKey() ? Number(j.cost) || 0 : 0) + rq.pending
-    rq.seeded = true
-    saveQuota({ day: rq.day, cost: rq.cost })   // 镜像到本地缓存：下次启动若宿主不可达，作回退读数
-  } catch { /* 播种定时器会再试；期间 quotaUsed 用本地缓存回退 */ }
-}
-if (REMOTE_QUOTA) {
-  rqSync()
-  setInterval(() => { if (!rq.seeded) rqSync() }, 15_000).unref()          // 没播种成功就一直试
-  setInterval(() => { rqSync() }, 5 * 60_000).unref()                      // 周期校准
-  setInterval(() => { if (rq.pending > 0) rqFlush() }, 10_000).unref()     // 上报兜底重试
-}
+// 【曾经有过一套"权威账本放宿主"的远程记账】（QUOTA_API_URL / QUOTA_TOKEN / REMOTE_QUOTA）：
+// 每用户一个容器的形态下，agent 与网关同容器同 uid，quota.json 对它就是个可写文件，
+// "把今天的数清零"一句话就能绕过每日额度，所以账本得放到容器外的宿主上。
+// 那套部署已经整体下线（见 ee11e9b1），本进程现在只跑在【用户自己的机器】上：
+// 本机额度是给用户自己看的用量提醒，不是防他自己的风控——真正的钱在云端账号那边扣
+// （见 Cloud.* 的积分），那才是防篡改的一侧。所以这里回到最简单的本地文件记账。
 const addCost = (delta) => {
   if (!(delta > 0)) return
-  if (!REMOTE_QUOTA) { const q = loadQuota(); q.cost += delta; saveQuota(q); return }
-  rqRoll(); rq.cost += delta; rq.pending += delta
-  saveQuota({ day: rq.day, cost: rq.cost })   // 本地镜像仅作回退缓存，权威在宿主
-  rqFlush()
+  const q = loadQuota(); q.cost += delta; saveQuota(q)
 }
-const quotaUsed = () => {
-  if (!REMOTE_QUOTA) return loadQuota().cost
-  rqRoll()
-  // 播种前用本地镜像回退，取较大者：镜像里可能有上次进程已入账、宿主也已收到的花费——宁多算不少算
-  return rq.seeded ? rq.cost : Math.max(rq.cost, loadQuota().cost)
-}
+const quotaUsed = () => loadQuota().cost
 // 正在跑的各轮实时成本（sid -> 本轮已花）。轮内成本要到收尾才 addCost 进持久额度，
 // 若判断额度时不算上它们，两轮并发会各自以为额度还够、最坏花到上限的约 2 倍；
 // 算上后合计一到顶各轮就中止，超支收敛到「一条消息」的粒度。
@@ -1784,10 +1714,10 @@ const isHttps = (req) =>
   req.socket?.encrypted === true ||
   String(req.headers["x-forwarded-proto"] || "").split(",")[0].trim().toLowerCase() === "https"
 const setAuthCookie = (req) =>
-  `lan_auth=${makeAuthCookie()}; Path=${BASE_PATH}/; HttpOnly; ${isHttps(req) ? "Secure; " : ""}SameSite=Lax; Max-Age=${AUTH_TTL_MS / 1000}`
+  `lan_auth=${makeAuthCookie()}; Path=/; HttpOnly; ${isHttps(req) ? "Secure; " : ""}SameSite=Lax; Max-Age=${AUTH_TTL_MS / 1000}`
 // 清 cookie 时属性要和下发时一致，否则浏览器认为是另一个 cookie、删不掉（登出等于没登出）
 const clearAuthCookie = (req) =>
-  `lan_auth=; Path=${BASE_PATH}/; HttpOnly; ${isHttps(req) ? "Secure; " : ""}SameSite=Lax; Max-Age=0`
+  `lan_auth=; Path=/; HttpOnly; ${isHttps(req) ? "Secure; " : ""}SameSite=Lax; Max-Age=0`
 
 // ---- 后台生成任务：一轮生成 = 一个挂在 sid 上的 job，SSE 连接只是"订阅者" ----
 // 切会话/关页面 → 只是退订，生成继续跑；回来用 /api/chat/attach 先重放快照再续直播。
@@ -3493,12 +3423,7 @@ export const server = http.createServer(async (req, res) => {
   try {
     // 登录页：未登录的局域网访客看到它；已登录/本机则直接跳回主页
     if (req.method === "GET" && u.pathname === "/login") {
-      if (authed(req)) { res.writeHead(302, { Location: BASE_PATH + "/" }); return res.end() }
-      // 多用户部署（BASE_PATH 非空 = 前面有 manager）：容器自带的登录页是条死路——
-      // manager 的 POST /<user>/api/login 强制校验图形验证码，而本容器的 login.html 根本不发验证码，
-      // 从这里提交必然「验证码错误」。故送去 manager 的验证码门户（LOGIN_URL 已按 BASE_PATH 取好）。
-      // 单机/局域网部署（BASE_PATH 为空、无 manager）仍用本地 login.html。
-      if (BASE_PATH) { res.writeHead(302, { Location: LOGIN_URL, "Cache-Control": "no-store" }); return res.end() }
+      if (authed(req)) { res.writeHead(302, { Location: "/" }); return res.end() }
       res.writeHead(200, { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" })
       return res.end(fs.readFileSync(path.join(__dirname, "login.html")))
     }
@@ -4501,13 +4426,14 @@ export const server = http.createServer(async (req, res) => {
     // 所以这里一律回 200 + 结构化结果：Zotero 没开也只是 {ok:false}，不该把前端整块面板打成红叉。
     // 探测本机 Zotero 是否在跑
     if (req.method === "GET" && u.pathname === "/api/zotero/status") {
-      // 带上部署形态：Zotero 只在【用户自己那台机器】上跑，而本进程探的是【自己的】127.0.0.1。
-      // 多用户部署时网关在服务器上，永远探不到用户笔记本上的 Zotero —— 此时前端必须换一套说法，
-      // 否则就是让用户反复去开一个根本不会被看见的 Zotero（这条提示原本一直是误导的）。
+      // deployment 恒为 local：本进程只跑在用户自己的机器上，探的 127.0.0.1 就是他那台。
+      // （曾经还有一档 "multiuser"：网关在服务器上时永远探不到用户笔记本上的 Zotero，前端要换
+      //   一套说法，否则就是让用户反复去开一个根本不会被看见的 Zotero。那种部署已经下线，
+      //   但字段保留 —— 前端读它分流文案，界面包可单独热更新，老界面配新网关是真实组合。）
       const raw = zotJson(await runPy([ZOT_READ, "probe"], 8_000))
       let obj = {}
       try { obj = JSON.parse(raw) } catch { obj = { ok: false, error: "probe_failed" } }
-      obj.deployment = BASE_PATH ? "multiuser" : "local"
+      obj.deployment = "local"
       return send(res, 200, "application/json", JSON.stringify(obj))
     }
     // 列出 Zotero 分类（供前端下拉选导入范围）
@@ -5456,16 +5382,9 @@ async function gracefulExit(sig) {
   const deadline = Date.now() + 3000
   while (runningRounds() > 0 && Date.now() < deadline) await sleep(200)
   if (runningRounds() > 0) exitLog(`[exit] 仍有 ${runningRounds()} 轮未收尾，不再等待`)
-  // 宿主账本模式：上面 addCost 只把增量放进 pending（上报是异步的），停机前必须冲刷一次，
-  // 否则「manager 空闲回收容器」这条最常见的停机路径每次都会丢掉最后一轮的上报。限时别拖过宽限期。
-  if (REMOTE_QUOTA && rq.pending > 0) {
-    // 用小循环而非单次调用：结算路径的 addCost 可能已触发一次在途 flush（rqFlush 对并发调用直接返回），
-    // 这里要等的是「pending 清零」这个结果，不是某一次调用返回。
-    const fDeadline = Date.now() + 2000
-    while (rq.pending > 0 && Date.now() < fDeadline) { try { await rqFlush() } catch {}; if (rq.pending > 0) await sleep(150) }
-    if (rq.pending > 0) exitLog(`[exit] 仍有 $${rq.pending.toFixed(4)} 未上报到宿主账本（宿主不可达？），该笔将丢失`)
-  }
-  // opencode 是 detached+unref 的子进程，不主动收会变成孤儿（容器销毁时才被清掉）。
+  // （这里原本还要把未上报的额度增量冲刷给宿主账本。远程记账已随多用户容器一起下线，
+  //   addCost 现在是同步写本地 quota.json，没有"在途未落盘"的东西要等。）
+  // opencode 是 detached+unref 的子进程，不主动收会变成孤儿。
   // 复用 restartOpencode 用的同一把刀：killPort(OC_PORT)（本进程没有留着 child 句柄可用）
   if (OC_MANAGED) { try { killPort(OC_PORT) } catch {} }
   exitLog("[exit] 完成")
