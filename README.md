@@ -46,7 +46,7 @@
 powershell -ExecutionPolicy Bypass -File scripts\setup.ps1
 ```
 ```bash
-# Linux 服务器（非 Docker）
+# Linux 服务器
 bash scripts/setup.sh        # 之后 source .venv/bin/activate 再起服务
 ```
 
