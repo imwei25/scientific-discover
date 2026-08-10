@@ -2901,7 +2901,7 @@ function sessRow(s) {
   // 拖拽：记录被拖会话 id。dragover 里【拿不到】dataTransfer 的数据（规范只在 drop 时才允许读），
   // 而"这一条能不能落进那个组"要在 dragover 就判出来（决定光标与高亮），所以另存一份模块级的 dragSid。
   b.addEventListener("dragstart", (e) => { e.dataTransfer.setData("text/plain", s.id); e.dataTransfer.effectAllowed = "move"; dragSid = s.id; b.classList.add("dragging") })
-  b.addEventListener("dragend", () => { dragSid = null; b.classList.remove("dragging"); clearDropLine() })
+  b.addEventListener("dragend", () => { dragSid = null; b.classList.remove("dragging"); endDrag() })
   // 操作区：改名 / 反馈 / 删（置顶已整体去掉——会话可以直接拖着排序，"排到最前"不再需要一档专门的标记）
   const acts = document.createElement("span"); acts.className = "sess-acts"
   const mk = (icon, cls, title, fn) => { const a = document.createElement("span"); a.className = "sess-act" + (cls ? " " + cls : ""); a.title = title; a.innerHTML = ic(icon); a.addEventListener("click", (e) => { e.stopPropagation(); fn() }); return a }
@@ -2948,10 +2948,35 @@ function sectionBlock(key, icon, title, count, acts) {
     head.appendChild(el)
   }
   const body = document.createElement("div"); body.className = "msbody"
-  head.addEventListener("click", () => { const open = wrap.classList.toggle("collapsed") === false; setSectOpen(key, open) })
+  const toggle = (open) => { wrap.classList.toggle("collapsed", !open); setSectOpen(key, open) }
+  head.addEventListener("click", () => toggle(wrap.classList.contains("collapsed")))
+  // 拖着会话悬停在收起的分类标题上一会儿 → 自动展开。
+  // ★ 这不是锦上添花：两个分类【默认都是折叠的】，也就是说用户第一次想把会话拖进项目时，
+  //   项目根本不在屏幕上。没有这个的话他必须先松手、点开分类、再重新拖一次 —— 而多数人
+  //   在"拖上去没反应"的那一刻就已经得出"拖不进去"的结论了。
+  head.addEventListener("dragover", () => springHover(head, () => wrap.classList.contains("collapsed"), () => toggle(true)))
+  head.addEventListener("dragleave", (e) => { if (!head.contains(e.relatedTarget)) clearSpring(head) })
   wrap.append(head, body)
   return { wrap, body }
 }
+
+// 「弹簧式」展开：拖拽途中在一个收起的分类/分组上停留一小会儿，就替用户把它打开。
+// 停留门槛不能太短，否则从上面路过都会炸开一片；600ms 是"我确实想进这里"与"只是路过"的分界。
+let springTimer = null, springEl = null
+function clearSpring(only) {
+  if (only && springEl !== only) return
+  if (springTimer) clearTimeout(springTimer)
+  springTimer = null; springEl = null
+}
+function springHover(el, isCollapsed, open) {
+  if (!dragSid || !isCollapsed()) { clearSpring(el); return }
+  if (springEl === el) return          // 已经在计时了，别每次 dragover 都重置成永远不触发
+  clearSpring()
+  springEl = el
+  springTimer = setTimeout(() => { if (dragSid && isCollapsed()) open(); clearSpring() }, 600)
+}
+document.addEventListener("dragend", () => endDrag())
+document.addEventListener("drop", () => endDrag())
 
 // 一条列表的排序：用户手工拖过的（orders[bucket] 有数）按那个顺序排在后面，
 // 没排过的按更新时间倒序【排在最前】。为什么没排过的在前：用户排完一遍之后新开的会话是最新的那条，
@@ -3001,7 +3026,7 @@ function renderSessions(data) {
       for (const s of list) b.appendChild(sessRow(s))
       h.addEventListener("click", () => { group.classList.toggle("collapsed"); collapsedProjects.has(p.id) ? collapsedProjects.delete(p.id) : collapsedProjects.add(p.id); saveCollapsed() })
       makeSortableList(b, "p:" + p.id, { kind: "project", id: p.id })
-      makeGroupDrop(group, { kind: "project", id: p.id })     // 组头/整组也接收（收起状态下也能拖进来）
+      makeGroupDrop(group, h, "p:" + p.id, { kind: "project", id: p.id })   // 组头始终接收；收起时整组接收
       group.append(h, b); body.appendChild(group)
     }
     sessionsEl.appendChild(wrap)
@@ -3025,7 +3050,9 @@ function renderSessions(data) {
       // 文件夹组【只能内部排序，不接受从别处拖进来】：会话的工作目录是建会话时定死的
       //（opencode 的 session.directory 建后不可改），拖一下就换目录是做不到的事，
       // 与其假装接受再悄悄失败，不如在 dragover 就把光标变成"禁止"。
+      // 组头同样挂上：本组自己的会话拖到组头 = 排到最前（canDropInto 会挡住外来的那些）。
       makeSortableList(b, "f:" + f.id, { kind: "folder", id: f.id })
+      makeGroupDrop(group, h, "f:" + f.id, { kind: "folder", id: f.id })
       group.append(h, b); body.appendChild(group)
     }
     sessionsEl.appendChild(wrap)
@@ -3062,7 +3089,12 @@ function sectLabel(icon, text, count) {
 // 两件事共用一个落点：落在哪个列表 = 归属，落在列表里的第几个缝 = 位置。
 let dragSid = null            // 正在被拖的会话 id（dragover 里读不到 dataTransfer，只能自己记）
 let dropLine = null           // 插入位置指示线
-function clearDropLine() { if (dropLine) { dropLine.remove(); dropLine = null } document.querySelectorAll(".drop-hint,.drop-no").forEach((el) => el.classList.remove("drop-hint", "drop-no")) }
+// ★ 这两件事必须分开。原来 clearDropLine 顺手把所有 .drop-hint 也清了，而"拖到组头上"那条路
+//   正是【先 add("drop-hint") 再 clearDropLine()】——刚点亮的高亮被自己下一行抹掉，于是拖到
+//   项目名字上时一点反馈都没有，用户看到的是"这里不能放"。清线归清线，清高亮只在收尾时做。
+function clearDropLine() { if (dropLine) { dropLine.remove(); dropLine = null } }
+function clearDropHints() { document.querySelectorAll(".drop-hint,.drop-no").forEach((el) => el.classList.remove("drop-hint", "drop-no")) }
+function endDrag() { clearDropLine(); clearDropHints(); clearSpring() }
 // 指针落在这个列表的第几条之前
 function insertIndexFor(container, y) {
   const rows = [...container.children].filter((el) => el.classList.contains("sess") && !el.classList.contains("dragging"))
@@ -3113,7 +3145,7 @@ function makeSortableList(container, bucket, owner) {
     e.preventDefault(); e.stopPropagation()
     const sid = e.dataTransfer.getData("text/plain") || dragSid
     const idx = insertIndexFor(container, e.clientY)
-    clearDropLine()
+    endDrag()   // 这里 stopPropagation 了，document 上那个收尾监听收不到，得自己收干净
     if (!canDropInto(sid, owner)) {
       toast("会话的工作目录在建会话时就定死了，没法拖到别的文件夹。要换目录请新建对话再选。")
       return
@@ -3121,21 +3153,31 @@ function makeSortableList(container, bucket, owner) {
     await applyDrop(sid, bucket, owner, idx)
   })
 }
-// 组【收起】时整组也是落点：收起状态下 .pgbody 是 display:none，里面那个可排序列表根本收不到事件，
-// 而"把会话拖进一个收着的项目"恰恰是最省事的用法（不用先展开一堆组）。展开时不接管，交给里面的列表。
-function makeGroupDrop(group, owner) {
-  const armed = () => dragSid && group.classList.contains("collapsed") && canDropInto(dragSid, owner)
+// 分组【整体】也是落点，两种情形：
+//   ① 组收起时 —— .pgbody 是 display:none，里面那个可排序列表根本收不到事件，而"把会话拖进一个
+//      收着的项目"恰恰是最省事的用法（不用先展开一堆组）。
+//   ② 不管收起还是展开，指针落在【组头】上时 —— "把会话拖到项目名字上"是最自然的归类动作，
+//      多数人根本不会去瞄下面那条列表。★ 这条一度是死的：改成"列表负责排序"之后，组头既不在
+//      .pgbody 里、makeGroupDrop 又只在收起时才武装，于是展开的项目其标题行成了一块死区 ——
+//      拖上去毫无反应，用户的结论只会是"会话拖不进项目"。
+// 展开时的组【体】不在这里接管，交给里面的可排序列表（那边才算得出插在第几条）。
+function makeGroupDrop(group, head, bucket, owner) {
+  const armed = (e) => dragSid && canDropInto(dragSid, owner) &&
+    (group.classList.contains("collapsed") || (e && head.contains(e.target)))
   group.addEventListener("dragover", (e) => {
-    if (!armed()) return
+    if (!armed(e)) return
     e.preventDefault(); e.dataTransfer.dropEffect = "move"; group.classList.add("drop-hint")
+    clearDropLine()   // 落在组头 = 整组归类，不是插到某两条之间，别让插入线留在那儿误导
+    // 收着的组悬停一会儿就展开，好让用户看清里面有什么、要插在第几条（直接松手也照样归进来）
+    springHover(head, () => group.classList.contains("collapsed"), () => head.click())
   })
-  group.addEventListener("dragleave", (e) => { if (!group.contains(e.relatedTarget)) group.classList.remove("drop-hint") })
+  group.addEventListener("dragleave", (e) => { if (!group.contains(e.relatedTarget)) { group.classList.remove("drop-hint"); clearSpring(head) } })
   group.addEventListener("drop", async (e) => {
-    if (!armed()) return
-    e.preventDefault(); group.classList.remove("drop-hint")
+    if (!armed(e)) return
+    e.preventDefault(); e.stopPropagation()
     const sid = e.dataTransfer.getData("text/plain") || dragSid
-    clearDropLine()
-    await applyDrop(sid, "p:" + owner.id, owner, 0)
+    endDrag()   // 同上：stopPropagation 之后 document 的收尾监听不会跑
+    await applyDrop(sid, bucket, owner, 0)   // 拖到组头 = 归进来并排到最前
   })
 }
 // 真正落地：先改归属（有变化才发请求），再回写整段顺序，最后刷新列表
@@ -3155,6 +3197,14 @@ async function applyDrop(sid, bucket, owner, idx) {
 // 拖一条排在很下面的会话去归到顶部的项目时，项目分组头压根没在视口里，怎么拖都够不到。
 // 手动补上边缘自动滚动：悬停在列表上/下边缘一小段区域时按距边缘远近匀速滚。
 // 用户原话："左侧历史聊天中，太靠下方的记录，没法拖放到上方的项目中。"
+//
+// ★★ 三个监听全部走【捕获阶段】(capture:true)，不能用默认的冒泡阶段。
+//    各个可排序列表（.pgbody / .droparea）的 dragover 里有 stopPropagation ——它是必要的，
+//    嵌套的列表之间要靠它划清"这一下算谁的"。但那些列表几乎铺满了整个侧栏，事件到不了
+//    sessionsEl，自动滚动就整个失效：拖着一条排在很下面的会话，怎么往上顶列表都不滚，
+//    上面的项目永远够不到 —— 症状与当初加这段代码要治的那个 bug 一模一样，而且更隐蔽，
+//    因为"拖到看得见的项目上"是好的，只有"要滚动才够得着"的那些不行。
+//    捕获阶段在目标元素的处理器【之前】跑，stopPropagation 拦不住它。
 ;(function () {
   const EDGE = 56, MAX_SPEED = 16
   let pointerY = null, raf = null
@@ -3170,10 +3220,10 @@ async function applyDrop(sid, bucket, owner, idx) {
   sessionsEl.addEventListener("dragover", (e) => {
     pointerY = e.clientY
     if (!raf) raf = requestAnimationFrame(loop)
-  })
+  }, true)
   const stop = () => { pointerY = null; if (raf) { cancelAnimationFrame(raf); raf = null } }
-  sessionsEl.addEventListener("drop", stop)
-  sessionsEl.addEventListener("dragleave", (e) => { if (!sessionsEl.contains(e.relatedTarget)) stop() })
+  sessionsEl.addEventListener("drop", stop, true)
+  sessionsEl.addEventListener("dragleave", (e) => { if (!sessionsEl.contains(e.relatedTarget)) stop() }, true)
   document.addEventListener("dragend", stop)
 })()
 
