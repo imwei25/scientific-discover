@@ -195,10 +195,13 @@ test("置顶已经去掉：接口还在但是空操作，列表里 pinned 恒为
   assert.equal(list.json.sessions.find((s) => s.id === sid).pinned, false, "钉过之后也必须是 false")
 })
 
-test("多人共用的部署：只能在自己的产物根里挑目录，翻不到机器上别的地方", async (t) => {
+// 局域网共用（一台机器当小组服务器，别人带密码登进来）：目录浏览必须收在自己的产物根里，
+// 否则等于把整台机器的文件系统摆进任何一个登录者的界面。靠显式的 SCI_FS_SCOPE 打开
+//（原先是"设了 BASE_PATH 就自动收窄"，那套多用户容器部署已下线，判据没了）。
+test("局域网共用时收窄：只能在自己的产物根里挑目录，翻不到机器上别的地方", async (t) => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "fold-"))
   const oc = await fakeOpencode(path.join(dir, "out"))
-  const gw = await gateway(oc.url, dir, { BASE_PATH: "/alice" })
+  const gw = await gateway(oc.url, dir, { SCI_FS_SCOPE: "workspace" })
   t.after(async () => { await gw.close(); await oc.close(); try { fs.rmSync(dir, { recursive: true, force: true }) } catch {} })
 
   const roots = await gw.get("/api/fs/list")

@@ -656,20 +656,23 @@ const LOGIN_URL = "/login"
 
 // ---- 「选工作目录」能看到多大范围（文件夹功能的安全边界）----
 //
-// 本功能的原始需求是桌面版："让我把这次对话的工作目录设成我电脑上的某个项目文件夹"。
-// 桌面版里 server.mjs 就跑在用户自己的机器上、只服务他一个人，浏览整台机器没有任何问题。
-// 但同一份 server.mjs 也跑在【云端多用户容器】里。那里再开放整机浏览，等于把镜像里的部署脚本、
-// 环境变量文件、别人的挂载点全都摆进任意一个登录用户的界面。所以按部署形态分成两档：
-//   local     —— BASE_PATH 为空（桌面版 / 自建单机 / 局域网）：整台机器都能挑。
-//   workspace —— 设了 BASE_PATH（前面有 manager 按 /用户名/ 反代 = 多用户容器）：只能在
-//                自己的产物根 outputs/ 里面挑目录。功能仍然可用（还是能按目录把会话归类），
-//                只是范围收在自己的工作区内。
-// 可用 SCI_FS_SCOPE=local|workspace 显式覆盖（自建部署若把容器暴露给多人，应手动设 workspace）。
-const fsMode = () => {
-  const forced = (process.env.SCI_FS_SCOPE || "").trim()
-  if (forced === "local" || forced === "workspace") return forced
-  return BASE_PATH ? "workspace" : "local"
-}
+// 本功能的原始需求就是桌面版："把这次对话的工作目录设成我电脑上的某个项目文件夹"。
+// 网关跑在用户自己的机器上、只服务他一个人，所以【默认整台机器都能挑】。
+//
+// 唯一还需要收窄的情形是【局域网访问】：本进程仍支持从局域网 IP 带密码登录进来
+//（见上面的 LAN_USER/LAN_PASSWORD），把一台机器当小组共用的服务器用。那种用法下，
+// 目录浏览等于把这台机器的整个文件系统摆进任何一个登录者的界面。所以留一个显式开关：
+//   SCI_FS_SCOPE=workspace —— 只能在自己的产物根 outputs/ 里挑目录（功能照常可用，
+//                             还是能按目录把会话归类，只是范围收在工作区内）。
+// 【不再自动判断】：原来是"设了 BASE_PATH（= 每用户一个容器的多用户部署）就自动收窄"，
+// 那套部署已经整体下线（见 ee11e9b1），判据本身没了。要收窄就得有人明确写这个环境变量
+// —— 与其留一个永远推不出真值的自动判断，不如让它变成一个看得见的决定。
+// ★ 启动时读一次定死，别每次请求现读 process.env：部署形态是进程启动那一刻就确定的东西，
+//   而"安全边界能被运行期改动"本身就是个坏性质。（原来的 BASE_PATH 也是启动时捕获成 const 的，
+//   改成惰性读之后，隔离测试里"起完网关就把 env 复原"这一手直接把这条判据读空了 ——
+//   测试先撞上，但真要有人在运行期改 env，线上一样会悄悄从 workspace 掉回 local。）
+const FS_SCOPE = (process.env.SCI_FS_SCOPE || "").trim() === "workspace" ? "workspace" : "local"
+const fsMode = () => FS_SCOPE
 // 允许浏览/使用的根。workspace 档只有 outputs 一个根。
 const fsRootDirs = (mode) => {
   if (mode === "workspace") return [OUTPUTS]
