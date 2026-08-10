@@ -87,6 +87,7 @@ button,textarea,input{font:inherit}
 
 .stage{position:fixed;inset:0;z-index:0;pointer-events:none;background:radial-gradient(ellipse 80% 50% at 50% 0%,rgba(59,111,212,.06) 0%,transparent 60%)}
 .nav{position:fixed;top:14px;right:18px;z-index:5;display:flex;align-items:center;gap:6px}
+.nav[hidden]{display:none}
 
 /* ---------- 首屏：生成器 ---------- */
 .intro[hidden]{display:none}
@@ -254,7 +255,7 @@ input[type=text]:focus{outline:none;border-color:var(--accent);background:#fff;b
 
 <div class="stage"></div>
 
-<div class="nav">
+<div class="nav" id="nav">
   <button class="ibtn" id="navRecent" data-tip="最近做过的"></button>
   <button class="ibtn" id="navWs" data-tip="回工作台"></button>
 </div>
@@ -742,8 +743,10 @@ async function refreshOutputs() {
 /* ============================================================
    结果页渲染
    ============================================================ */
-function toWork() { $("intro").hidden = true; $("work").hidden = false; $("workTitle").textContent = (CFG.intro && CFG.intro.title) || "" }
-function toIntro() { $("work").hidden = true; $("intro").hidden = false }
+// ★ 结果页 .wtop 自带一套 wRecent/wWs，跟这颗常驻 .nav 是同一对按钮、同一个位置——
+//   不隐掉 .nav 的话，切到结果页后两套图标会在右上角原地叠在一起（钟表叠钟表、宫格叠宫格）。
+function toWork() { $("intro").hidden = true; $("work").hidden = false; $("nav").hidden = true; $("workTitle").textContent = (CFG.intro && CFG.intro.title) || "" }
+function toIntro() { $("work").hidden = true; $("intro").hidden = false; $("nav").hidden = false }
 
 function render() {
   // ---- 图 ----
