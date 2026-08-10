@@ -389,7 +389,9 @@
   .pghead .pg-act.del:hover { color: var(--rose); background: rgba(239,68,68,.12); }
   /* 空分组/空分区不再放"拖会话到此"的占位文案，但仍要留出一块可落点，否则高度塌成 0 就拖不进去了 */
   .pgbody { display: flex; flex-direction: column; gap: 2px; padding: 2px 0 4px 8px; min-height: 18px; }
-  .droparea { min-height: 18px; }
+  /* 置顶 / 最近会话不挂在 .pgbody 下（没有项目分组），但同样是一叠会话行——
+     漏了 display:flex 就是普通块级堆叠，行与行之间没有 .pgbody 那份 2px 间距，挤成一坨。 */
+  .droparea { display: flex; flex-direction: column; gap: 2px; min-height: 18px; }
   .pgroup.drop-hint > .pghead, .droparea.drop-hint { outline: 2px dashed var(--cyan); outline-offset: -2px; background: rgba(59,111,212,.08); border-radius: var(--r-sm); }
   .sect-label { display: flex; align-items: center; gap: 7px; margin: 10px 0 2px; padding: 0 9px; font-size: 12px; font-weight: 400; color: var(--faint); text-transform: none; }
   .sect-label .ic { width: 13px; height: 13px; }
