@@ -890,12 +890,14 @@ function paneTiers(){
         (msHtml?'<div class="mut" style="font-size:12.5px">可选：'+msHtml+'</div>':'<div class="mut" style="font-size:12.5px">不可切换</div>')+'</td>'+
       '<td class="mut" style="font-size:12.5px">'+(t.skills?esc(t.skills):'全部技能')+'</td>'+
       '<td>'+(t.max_conc?t.max_conc+' 路':'<span class="mut">跟随全局</span>')+'</td>'+
+      '<td class="mut" style="font-size:12.5px">'+({off:'不开放',preset:'仅模板',full:'自由'}[t.tasks_mode||'off'])+
+        (t.tasks_model?'<div>'+esc(t.tasks_model)+'</div>':'')+'</td>'+
       '<td>'+n+' 人</td><td><button class="btn sm" data-a="ed">编辑</button> '+
       '<button class="btn sm danger" data-a="rm">删除</button></td></tr>'}).join('');
   $('#pane').innerHTML='<section><div class="row"><h2 style="margin:0">档位</h2><span class="sp"></span>'+
     '<button class="btn primary" id="t-add">+ 新增档位</button></div>'+
     '<div class="hint" style="margin:8px 0 12px">改动档位会立刻吊销该档位下所有用户的 key，他们需重新登录后按新权限生效。</div>'+
-    '<table><thead><tr><th>档位</th><th>日额度</th><th>月额度</th><th>模型</th><th>技能</th><th>并发</th><th>用户</th><th></th></tr></thead>'+
+    '<table><thead><tr><th>档位</th><th>日额度</th><th>月额度</th><th>模型</th><th>技能</th><th>并发</th><th>定时任务</th><th>用户</th><th></th></tr></thead>'+
     '<tbody>'+rows+'</tbody></table></section>';
   $('#t-add').onclick=function(){dlgTier(null)};
   Array.prototype.forEach.call(document.querySelectorAll('#pane tbody button'),function(b){
@@ -922,7 +924,7 @@ function modelChips(selected){
         (m.providerName?' <span class="mut">·'+esc(m.providerName)+'</span>':''))+'</span>'}).join('')+'</div>'}
 
 function dlgTier(t){
-  t=t||{key:'',daily_usd:0,monthly_usd:0,model:'',models:'',skills:'',note:'',sort:5};
+  t=t||{key:'',daily_usd:0,monthly_usd:0,model:'',models:'',skills:'',note:'',sort:5,tasks_mode:'off',tasks_model:''};
   // 默认模型给一个下拉（目录里的）+ 一个手填框：目录外的模型名（如只由 env 上游提供的那个）
   // 必须还能填，否则升级上来的老档位一进这个框就被清空。
   var catOpts='<option value="">（手填）</option>'+S.catalog.map(function(m){
@@ -941,7 +943,20 @@ function dlgTier(t){
     '<label>默认模型</label><select id="t-mosel">'+catOpts+'</select>'+
     '<label></label><input id="t-mo" value="'+esc(t.model)+'" placeholder="模型名（上面选一个会自动填到这里）">'+
     '<label>说明</label><input id="t-n" value="'+esc(t.note)+'">'+
-    '<label>排序</label><input id="t-s" value="'+t.sort+'"></div>'+
+    '<label>排序</label><input id="t-s" value="'+t.sort+'">'+
+    // 定时任务：客户端到点自动跑一轮（用户不在场时花钱），所以放开到什么程度按档决定。
+    '<label>定时任务</label><select id="t-tm">'+
+      ['off','preset','full'].map(function(m){
+        var label={off:'不开放（客户端不显示）',preset:'只能用模板（用户只填参数）',full:'自由指令'}[m]
+        return '<option value="'+m+'"'+((t.tasks_mode||'off')===m?' selected':'')+'>'+label+'</option>'}).join('')+
+    '</select>'+
+    '<label>任务用模型</label><select id="t-tmo">'+
+      '<option value="">（用该档默认模型）</option>'+
+      S.catalog.map(function(m){return '<option value="'+esc(m.model)+'"'+(m.model===t.tasks_model?' selected':'')+'>'+
+        esc(m.label||m.model)+'</option>'}).join('')+
+    '</select>'+
+    '<label></label><div class="hint">定时任务【强制】用这个模型，用户改不了。它不会出现在用户的模型下拉里，'+
+      '只对定时任务生效——所以给 preset 档钉一个便宜模型是安全的。</div></div>'+
     '<div style="margin-top:14px"><label class="mut">允许用户切换的模型</label>'+
     '<div class="hint">默认模型<b>永远可用</b>，不用在这里重复勾。全不选 = 该档位<b>不能换模型</b>（升级上来的老档位就是这个状态）。'+
     '客户端只能在这份清单里选，点了清单外的模型会被网关静默打回默认模型。</div>'+
@@ -972,7 +987,7 @@ function dlgTier(t){
     post('tier',{key:$('#t-k').value.trim(),dailyUSD:d,
       monthlyUSD:m,model:$('#t-mo').value.trim(),models:mpicked.join(','),
       skills:picked.join(','),note:$('#t-n').value.trim(),sort:Number($('#t-s').value)||0,
-      maxConc:c}).then(function(j){
+      maxConc:c,tasksMode:$('#t-tm').value,tasksModel:$('#t-tmo').value}).then(function(j){
       if(!j.ok)return toast(j.err||'保存失败',false);
       $('#dlg').close();toast('已保存'+(j.affected?'（已吊销 '+j.affected+' 个用户的 key）':''),true);load()})}
 }

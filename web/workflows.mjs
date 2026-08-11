@@ -97,7 +97,7 @@ const JOURNAL_FILTER = [
         + "⚠️ 档位取自 OpenAlex，需要该服务的可用额度；取不到时「本项不生效」"
         + "（结果不会按它过滤），届时报告里会注明。" },
   { id: "jOA", label: "只保留开放获取（OA）的文献", type: "bool", default: false,
-    help: "OA = 不用订阅就能下全文。勾上能明显提高「全文获取」成功率。" },
+    help: "OA = 不用订阅就能看全文。勾上能明显提高后续拿到原文的成功率（需要原文的模块才走这一步）。" },
 ]
 
 // ============================================================
@@ -594,6 +594,23 @@ export const WORKFLOWS = {
         when: { field: "materials", has: "rawdata" },
         emits: ["integrity_report.md", "audit/*"], render: "integrity", onFail: "stats",
         hint: "投稿前主动核对补说明，只出待核信号、不下造假结论" },
+      // ★ 2026-08-11：故事线锻打（idea-forge，可选）插在图表之前，novelty 格随之上移与它相邻 ——
+      //   编排是「锻打先行、裁定押后」（理由见 AGENTS.md §三 表下注），且图该画哪几张本来就该由
+      //   定稿的故事线决定（design_brief 里带图表清单）。三种情况才做：没想好讲什么故事 / 投哪、
+      //   核心主张明显 overclaim、用户主动要求被拷问；无人值守（AUTO）时整步跳过（optional，不卡条）。
+      { id: "forge", name: "故事线锻打", skill: "idea-forge", optional: true,
+        sub: "对话锻定主张梯度 / 目标刊 / 故事线",
+        emits: ["design_brief.md"], render: "report",
+        hint: "主张压到数据撑得住的级别、定目标刊三梯队；产出 design_brief.md，作图 / 综述 / 成文照单干" },
+      { id: "novelty", name: "新颖性裁定 / 预注册", skill: "novelty-check",
+        // 回顾性研究里这步可选（已有数据，无法再"采数前预注册"）；前瞻性 / RCT 里它是【必做】的
+        // 预注册锁 —— 既然把它提到了最前，就不能同时标"可选"，那等于说这步可以跳。
+        optionalUnless: { field: "studyType", in: ["prospective", "rct"] },
+        // 前瞻性与 RCT：必须在采数前把假设与主分析计划冻住 → 提到最前；回顾性研究已有数据，
+        // 无法再"采数前预注册"，这步降级为可选的新颖性裁定（AGENTS.md §三 表下注），
+        // 且做了故事线锻打的，对 design_brief 定稿的主张裁定（锻打在前、裁定在后）。
+        first: { field: "studyType", in: ["prospective", "rct"] },
+        emits: ["novelty_report.md", "novelty_*.md", "preregistration.md", "analysis_plan.md"], render: "report" },
       { id: "figure", name: "出版级图表", skill: "nature-figure",
         form: [
           { id: "figTypes", label: "要出的图", type: "multi", options: [
@@ -603,14 +620,6 @@ export const WORKFLOWS = {
             { v: "300", t: "300 dpi（多数期刊最低要求）" }, { v: "600", t: "600 dpi（线条图）" }] },
         ],
         emits: ["fig*.png", "fig*.pdf", "fig*.svg", "figures/*"], render: "figure" },
-      { id: "novelty", name: "新颖性裁定 / 预注册", skill: "novelty-check",
-        // 回顾性研究里这步可选（已有数据，无法再"采数前预注册"）；前瞻性 / RCT 里它是【必做】的
-        // 预注册锁 —— 既然把它提到了最前，就不能同时标"可选"，那等于说这步可以跳。
-        optionalUnless: { field: "studyType", in: ["prospective", "rct"] },
-        // 前瞻性与 RCT：必须在采数前把假设与主分析计划冻住 → 提到最前；回顾性研究已有数据，
-        // 无法再"采数前预注册"，这步降级为可选的新颖性裁定（AGENTS.md §三 表下注）。
-        first: { field: "studyType", in: ["prospective", "rct"] },
-        emits: ["novelty_report.md", "novelty_*.md", "preregistration.md", "analysis_plan.md"], render: "report" },
       { id: "litreview", name: "文献综述", skill: "literature-review",
         form: [
           { id: "query", label: "检索式 / 关键词", type: "textarea",
@@ -635,6 +644,9 @@ export const WORKFLOWS = {
         emits: ["manuscript.md", "manuscript_*.md"], emitsNot: ["*_humanized.*"], render: "manuscript" },
       { id: "refcheck", name: "引用核查", skill: "reference-check", gate: true,
         emits: ["refcheck_report.md", "reference_check*.md", "reference_check*.csv"],
+        // 裁定只认 md 报告：csv 是机器结果表（不进措辞判定），单列出来是让"csv 先落盘、md 未写出"
+        // 的窗口里闸停在未开始等报告，而不是拿一份读不了的文件谈通过（emits 照收 csv 供渲染与判完成）。
+        gateReport: ["refcheck_report.md", "reference_check*.md"],
         render: "refcheck", onFail: "write",
         hint: "查假引用 / 核 DOI，全绿才往下排版" },
       { id: "humanize", name: "语言润色", skill: "humanize-academic",
@@ -689,7 +701,11 @@ export const WORKFLOWS = {
       { id: "pico", label: "研究问题的四要素（填了检索会精准很多）", type: "textarea",
         placeholder: "人群：晚期肝细胞癌初治患者　干预：PD-1 抑制剂联合靶向　对照：单药靶向　结局：总生存期",
         help: "不确定就留空，照样能检索。" },
-      { id: "years", label: "时间范围", type: "select", default: "10", options: [
+      // 标签写全称「参考文献时间范围」：孤零零一个"时间范围"在综述语境里有歧义
+      // （医生会读成"综述要覆盖的研究年代"），而它实际管的是【检索这批参考文献】的发表年限。
+      // 默认收到近 3 年：综述的常态是"讲这个方向最近的进展"，近 10 年会把一堆已被推翻的旧结论
+      // 拉进池子，用户再一篇篇剔。要回溯经典文献的选「近 10 年 / 不限」即可。
+      { id: "years", label: "参考文献时间范围", type: "select", default: "3", options: [
         { v: "3", t: "近 3 年" }, { v: "5", t: "近 5 年" }, { v: "10", t: "近 10 年" }, { v: "0", t: "不限" }] },
       { id: "designs", label: "纳入的研究设计", type: "multi", options: [
         { v: "rct", t: "随机对照试验" }, { v: "cohort", t: "队列研究" }, { v: "casecontrol", t: "病例对照" },
@@ -697,11 +713,12 @@ export const WORKFLOWS = {
       // 【2026-08-08 删了 limit】同 paper 模块：综述的召回不设条数上限（见 JOURNAL_FILTER 上方说明）。
       // 收窄范围靠时间范围 / 研究设计 / 下面这组期刊条件，不靠"最多多少篇"这个数字。
       ...JOURNAL_FILTER,
-      { id: "length", label: "目标篇幅", type: "select", default: "4000", section: "成稿与输出", options: [
-        { v: "2000", t: "约 2000 字（短综述）" }, { v: "4000", t: "约 4000 字（推荐）" },
-        { v: "8000", t: "约 8000 字（长篇）" }] },
-      { id: "fulltext", label: "尝试下载开放获取全文", type: "bool", default: false,
-        help: "只下 OA 渠道能拿到的；下不到的会如实列出原因，不会假装拿到了。" },
+      // 【2026-08-11 从三档下拉改成自由输入】篇幅是投稿方/导师给死的数字（"不超过 5000 字"
+      // "3500 字左右"），三个档位覆盖不了；用户以前只能挑一个最接近的，再在对话里补一句改口。
+      // 直接给输入框，min/max 只兜住明显填错的量级（脚本 nCheck 会就地提示，不拦提交）。
+      { id: "length", label: "目标篇幅", type: "number", default: 4000, unit: "字",
+        section: "成稿与输出", min: 800, max: 30000, step: 100, placeholder: "例如：4000",
+        help: "常见量级：2000 字（短综述）· 4000 字（推荐）· 8000 字（长篇）。留空则由 AI 按主题体量自定。" },
       LANG,
     ],
     steps: [
@@ -714,10 +731,9 @@ export const WORKFLOWS = {
       //   稿子都成文了，勾了也没有意义（那张卡是"下一步未完成的带表单步骤"才给的，见
       //   index.html 的 offerStepForm）。叙述性综述的取舍本来就在 write 那步由检索范围
       //   （时间 / 研究设计 / 期刊条件）与成文时的论证决定，不必再让用户逐篇点一遍。
-      { id: "fulltext", name: "全文获取", skill: "fulltext-retrieval", optional: true,
-        when: { field: "fulltext", eq: true },
-        emits: ["pdfs/*.pdf", "retrieval_report.json", "manual_needed.txt"], render: "retrieval",
-        hint: "如实区分哪些下到了、哪些没下到及原因" },
+      // 【2026-08-11 删了「全文获取」这一步】它挂在首屏那个「尝试下载开放获取全文」勾选上，
+      //   而那一项已随本次改动去掉 —— 条件永远不成立，留着就是一个永不点亮的灰格子。
+      //   叙述性综述靠检索得到的题录 + 摘要成文；确实要原文 PDF 的，去「文献研读」模块。
       { id: "write", name: "综述成文", skill: "literature-review",
         emits: ["review.md", "literature_review.md", "*_review.md"], render: "manuscript" },
       { id: "refcheck", name: "引用核查", skill: "reference-check", gate: true,
@@ -728,7 +744,11 @@ export const WORKFLOWS = {
       { id: "render", name: "排版出件", skill: "render-pdf-doc", skillAlias: ["render-docx"],
         form: [{ id: "fmt", label: "输出格式", type: "select", default: "docx", options: [
           { v: "docx", t: "Word（.docx）" }, { v: "pdf", t: "PDF" }, { v: "both", t: "两种都要" }] }],
-        emits: ["manuscript*.docx", "manuscript*.pdf", "review*.docx", "review*.pdf", "proposal*.docx", "proposal*.pdf"], render: "doc" },
+        // ★ emitsNot：review*.docx 会把【评审/核查报告转的 docx】也收走（review_report.docx、
+        //   refcheck_report.docx），agent 顺手把报告排成 Word 给用户看，「排版出件」就凭空绿了 ——
+        //   而真正的综述成稿一个字还没排。终稿在（review.docx / manuscript.docx），报告不算。
+        emits: ["manuscript*.docx", "manuscript*.pdf", "review*.docx", "review*.pdf", "proposal*.docx", "proposal*.pdf"],
+        emitsNot: ["review_report*", "refcheck_report*"], render: "doc" },
     ],
     extra: ["render-docx"],
   },
@@ -855,22 +875,31 @@ export const WORKFLOWS = {
         sub: "AI 依据信息初拟若干研究方向",
         emits: ["research_scan*.md", "landscape*.csv"], render: "report",
         hint: "没搜到 ≠ 研究空白，四象限采样后再下判断" },
-      // ★「选题收敛」与「新颖性裁定与预注册」2026-08-07 按用户要求并成一格「选题遴选」。这两步在
-      //   真实使用里本来就是一件事的两半：先列候选、再判"这个题还新不新、能不能锁住"，判不过就换个
-      //   候选重来 —— 拆成两格只是把一次来回切开数两遍。
-      //   【合并要守住的东西】
-      //   ① 它【仍然是闸】：新颖性不过不许硬着头皮往下写。onFail 改指 scan（原来指 topic，
-      //      而 topic 现在就是本步自己，指向自己等于原地打转）。
-      //   ② emits【不收】topic_candidates：判完成靠"约定产物出现了没有"（server.mjs 的 wfSyncDone），
-      //      候选表一落盘这格就绿了，而新颖性还没判、预注册还没写。只收最后那批产物才对。
-      //      候选选题卡照样渲染 —— RENDER_RULES 按文件名认 topic_candidates*.csv，不走 step.emits。
-      //   ③ 流程条上不再单列"新颖性裁定"这一格 → 用户失去了"动笔前先看裁定结论"的提醒点，
-      //      改由 note 强制它把裁定结论与预注册在回话里点名说清。
-      { id: "topic", name: "选题遴选确认", skill: "topic-selection", skillAlias: ["novelty-check"], gate: true,
+      // ★ 2026-08-07 曾把「选题收敛」与「新颖性裁定」并成本格；2026-08-11 编排改为「锻打先行、
+      //   裁定押后」（A/B 实验实测：先裁后锻会因立意转向而过期、漏掉在研竞争试验，见 AGENTS.md
+      //   §三 表下注），novelty-check 移去下一格跟随 idea-forge —— 裁定对象从"选定的题"
+      //   变成"锻定的那句科学问题"。本格只管把候选列出来、让用户挑定一个。
+      { id: "topic", name: "选题遴选确认", skill: "topic-selection",
         sub: "用户校订并确认最终选题",
+        emits: ["topic_candidates*.csv", "topics.md"], render: "report",
+        hint: "候选选题列成卡片让你挑定一个；新颖性裁定移到下一格，对锻定的科学问题做",
+        note: "候选选题必须写成 `topic_candidates*.csv` **真的落盘**，不能只在回话里列几条就算选过题 —— 界面靠这个文件把候选渲染成卡片；用户挑定一个再进下一格。本格**不再做**新颖性裁定：裁定在「立意锻打」格里对锻定的科学问题做。" },
+      // ★「立意锻打」+「新颖性裁定」两半并一格（沿用本文件"连贯两半并一格"的原则，配对按
+      //   2026-08 A/B 实验换了）：idea-forge 多轮对话把立意/创新点/方案锻定 → 对定稿的那句
+      //   科学问题跑 novelty-check 严格裁定 + 预注册锁。
+      //   【守住的东西】① 它是闸：裁定"已被回答"→ onFail 回 scan 换题；② emits 只收裁定产物 ——
+      //   design_brief.md 一落盘锻打才到一半，收它这格就提前绿了（design_brief / closest_work
+      //   照常进产物侧栏）；③ 科学问题在锻打中转向 → 旧裁定作废、对新问题重跑（AGENTS.md
+      //   「裁定过期护栏」）。
+      { id: "forge", name: "立意锻打", skill: "idea-forge", skillAlias: ["novelty-check"], gate: true,
+        sub: "多轮对话磨立意，锻定后做新颖性裁定",
         emits: ["novelty_report.md", "novelty_*.md", "preregistration.md", "analysis_plan.md"], render: "report", onFail: "scan",
-        hint: "先把候选选题列成卡片让你挑；选定的那个当场做新颖性裁定与预注册，不过就退回领域扫描重挑",
-        note: "这一格是【两件事连着做完】，顺序不能颠倒：先用 topic-selection 把候选选题写成 `topic_candidates*.csv` 落盘、让用户挑定一个，**再**对挑定的那个题跑 novelty-check 出 `novelty_report.md` 与 `preregistration.md`。**候选表必须真的落盘**，不能只在回话里列几条就算选过题 —— 界面靠这个文件把候选渲染成卡片。裁定完**在回话里点名说清结论属于哪一档（真新 / 增量 / 已被回答）以及依据**：流程条上不再单列「新颖性裁定」这一格，用户只能从你这句话和产出侧栏里的报告去核对。裁定为「已被回答」的，退回「领域扫描」重新采样换题，不许带着一个已被回答的题去写标书。" },
+        // ★ gateReport：闸的裁定只读裁定书。emits 里的 preregistration.md / analysis_plan.md 是
+        //   同步产物不是裁定 —— 拿它们当报告读有两种翻车（都实测过）：裁定书还没写出来的窗口里
+        //   闸提前变绿；预注册文件里的假设句（"缺氧不通过甲基化…"）被措辞正则误读成"未通过"。
+        gateReport: ["novelty_report.md", "novelty_*.md"],
+        hint: "空白节点先检索后发散、未验证主张拿证据拷问；锻定的科学问题当场做严格裁定，不过退回领域扫描",
+        note: "两件事连着做完，顺序不能颠倒：先用 idea-forge 按其 SKILL.md 跑锻打对话（一轮只问一个问题、编号候选、每轮落盘 `forge_log.md`，产出 `design_brief.md` + `closest_work.md`），**再**对 design_brief 里定稿的那句关键科学问题跑 novelty-check（以 closest_work.md 为最接近文献表起点补严，不重做）。裁定完**在回话里点名说清档位（真新 / 增量 / 已被回答）与依据**；判「已被回答」退回「研究方向生成」换题，不许带着已被回答的题写标书。**无人值守（AUTO）时跳过锻打对话**，直接对用户选定的题做裁定 —— 本格靠裁定产物判完成，不会卡死。" },
       // ★「摸清申报要求」原本是独立的一步，2026-08-07 按用户要求并进本步 —— 基金申报的流程条
       //   本来就有 6~7 格，而这两步同属 grant-proposal 技能、在同一轮里连着做完是常态，
       //   拆成两格只是把一条本来连贯的工作切开数。
@@ -905,7 +934,9 @@ export const WORKFLOWS = {
         sub: "语言润色与定稿输出",
         form: [{ id: "fmt", label: "输出格式", type: "select", default: "docx", options: [
           { v: "docx", t: "Word（.docx）" }, { v: "pdf", t: "PDF" }, { v: "both", t: "两种都要" }] }],
-        emits: ["manuscript*.docx", "manuscript*.pdf", "review*.docx", "review*.pdf", "proposal*.docx", "proposal*.pdf"], render: "doc" },
+        // ★ 不收 review*：标书的终稿是 proposal / manuscript，review_report.docx 是评审报告转的 Word
+        //   （agent 常顺手排一份给用户看），收进来会让「标书最终成稿」在正文一字未排时就打绿勾。
+        emits: ["manuscript*.docx", "manuscript*.pdf", "proposal*.docx", "proposal*.pdf"], render: "doc" },
     ],
     // ★ research-scan（领域扫描）与 novelty-check（新颖性裁定）本质上都要【检索文献】——
     //   白名单里不给检索技能，它们一动手就撞模块闸、整轮作废（实测在另一会话里复现过：
@@ -1870,6 +1901,9 @@ const fmtVal = (f, v, upDir) => {
       + "（在上传目录下，绝对路径见前言）"
   }
   if (f.type === "select") return label(v)
+  // number 型带单位的，任务卡里要把单位一起写上：光一个 "4000" 落在「目标篇幅」后面，
+  // 模型得自己猜是字数还是词数（中英文稿差着一倍）。unit 界面上已经画在输入框右边了。
+  if (f.type === "number" && f.unit) return `${v} ${f.unit}`
   return String(v)
 }
 

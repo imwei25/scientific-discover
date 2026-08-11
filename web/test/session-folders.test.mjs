@@ -5,7 +5,7 @@
 // 变成了可能"把用户的整个项目文件夹连锅端"。这是本功能唯一的灾难性失误可能，必须钉死在测试里。
 // 顺带钉住另外三条：
 //   · 目录只能在建会话时定（opencode 的 session.directory 建后不可改）→ 建会话时必须真的传过去；
-//   · 多人共用的部署（设了 BASE_PATH）不许浏览整台机器，只能在自己的产物根里挑；
+//   · 局域网共用（SCI_FS_SCOPE=workspace）不许浏览整台机器，只能在自己的产物根里挑；
 //   · 排序按"列表"各记各的：同一个会话同时在项目列表和文件夹列表里，两处顺序互不干扰。
 import test from "node:test"
 import assert from "node:assert/strict"

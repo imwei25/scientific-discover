@@ -246,7 +246,7 @@ Step "应用本体：web 网关 + 技能 + AGENTS.md"
 # 排除三类：运行时状态与密钥、开发用启动器、自动化测试。
 # 测试目录里有 "sk-mine" 这种假 key，混进包既是无谓体积，也会让密钥扫描工具误报。
 Copy-Tree "$Root\web" "$App\web" `
-  -ExcludeFiles @("model-config.json", "cloud-state.json", "sessions-meta.json", "dev-test.mjs", "dev-gateway.mjs") `
+  -ExcludeFiles @("model-config.json", "cloud-state.json", "sessions-meta.json", "dev-test.mjs", "dev-gateway.mjs", "headless-env.json") `
   -ExcludeDirs  @("test", "Microsoft")
 # ↑ Microsoft/：PowerShell 在 HOME/LOCALAPPDATA 被改向时会往当前目录拉一棵
 #   Microsoft\Windows\PowerShell\ModuleAnalysisCache 出来。开发机上是垃圾，跟着进包更没意义。
@@ -311,9 +311,14 @@ $dirty = @("$App\web\model-config.json", "$App\web\sessions-meta.json",
            # cloud-state.json 是开发机登录云端账号后留下的 refresh token（等价于口令），
            # 混进安装器 = 把你的账号发给客户。
            "$App\web\cloud-state.json",
+           # headless-env.json 是壳每次启动写的环境快照，里面【原样带着 OC_GATEWAY_KEY】——
+           # 开发机跑过一次就会生成，混进安装器等于把 key 发给客户（与 model-config.json 同类）。
+           # 客户机上它由壳首次启动时自己生成，包里不需要也不能有。
+           "$App\web\headless-env.json",
+           "$App\headless-gateway.log",
            "$App\serve.out", "$App\serve.err", "$App\server.log")
 foreach ($f in $dirty) { if (Test-Path $f) { Remove-Item $f -Force; Write-Host "  删除 $f" -ForegroundColor Yellow } }
-foreach ($d in @("$App\outputs", "$App\uploads")) {
+foreach ($d in @("$App\outputs", "$App\uploads", "$App\tasks")) {
   if (Test-Path $d) { Get-ChildItem $d -Force | Remove-Item -Recurse -Force -Confirm:$false }
 }
 # 技能包 / 界面包的本机换版记录：打进安装器会让新装的客户端一上来就"已经装过某个在线版本"，

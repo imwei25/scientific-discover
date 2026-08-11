@@ -358,6 +358,38 @@ fn main() {
                 }
             }
 
+            // ★ 无头运行器的环境快照：定时任务在【软件关着】时要自己起一套网关，而上面这一大堆
+            //   env（PATH 前插 runtime、OC_BIN、SCI_PYTHON、MATPLOTLIBRC、PIP 镜像…）只有这里算得出来。
+            //   让 node 那边自己重算一遍必然漂移，症状是"定时跑出来的图没有中文字体""agent 找不到
+            //   python"——而这些只在无人值守时发生，最难查。所以每次启动都把这份 env 原样存下来，
+            //   web/headless-run.mjs 直接加载（见该文件 loadEnvSnapshot）。
+            //   写失败不该挡启动：定时任务退化成"用当前环境跑"，主功能不受影响。
+            {
+                let mut env_map = serde_json::Map::new();
+                for (k, v) in cmd.get_envs() {
+                    if let (Some(k), Some(v)) = (k.to_str(), v.and_then(|x| x.to_str())) {
+                        env_map.insert(k.to_string(), serde_json::Value::String(v.to_string()));
+                    }
+                }
+                let at = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_secs())
+                    .unwrap_or(0);
+                let snap = serde_json::json!({
+                    "writtenAt": at,
+                    "appVersion": env!("CARGO_PKG_VERSION"),
+                    // 计划任务的 <Command> 就用这个 node：打包版的 node 在 bundle\runtime 下，
+                    // 与开发机的 process.execPath 完全不是一回事。
+                    "nodeExe": rt.join("node").join("node.exe").to_string_lossy(),
+                    "appDir": appdir.to_string_lossy(),
+                    "env": env_map,
+                });
+                let _ = std::fs::write(
+                    appdir.join("web").join("headless-env.json"),
+                    serde_json::to_string_pretty(&snap).unwrap_or_default(),
+                );
+            }
+
             let mut child = cmd.spawn()?;
             *app.state::<Backend>().0.lock().unwrap() = Some(child.id());
 

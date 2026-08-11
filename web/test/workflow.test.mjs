@@ -980,7 +980,7 @@ test("表单提交换任务卡：服务端只负责把勾选变成文本，发�
   assert.equal(r.status, 200)
   assert.match(r.json.card, /【任务卡 · 综述撰写/)
   assert.match(r.json.card, /综述主题：PD-1 在肝癌一线治疗/)
-  assert.match(r.json.card, /时间范围：近 5 年/)
+  assert.match(r.json.card, /参考文献时间范围：近 5 年/)
   // limit 字段已删除：老前端/接口调用方仍可能带着它，服务端只遍历现有字段，所以它该被丢掉，
   // 绝不能又以"最多 30 篇"的形式回到任务卡里（那等于偷偷把上限还给了模型）
   assert.doesNotMatch(r.json.card, /30/, "已删除的召回上限不该再出现在任务卡里")

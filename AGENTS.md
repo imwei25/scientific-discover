@@ -27,16 +27,18 @@
 |---|---|---|
 | 叙述性综述 | `review` | search-lit / literature-review → reference-check → humanize-academic(可选) → render-pdf-doc |
 | 系统综述 / Meta | `systematic` | systematic-review(方法学八步，含 PRISMA/RoB 出图) → write-paper → reference-check → render-docx |
-| 基金标书 | `grant` | research-scan → topic-selection → **novelty-check**(新颖性裁定+预注册) → **idea-forge**(立意锻打对话，默认做、可跳过，见表下注) → grant-proposal → peer-review(自查) → render-pdf-doc |
-| 原创研究论文 | `paper` | deidentify(如含患者数据) → clinical-stats + data-analysis → data-integrity(可选，源数据自查，见表下注) → **novelty-check**(可选，见表下注) → **idea-forge**(可选，故事线对话，见表下注) → nature-figure → **literature-review**(成文综述) → write-paper(基于综述) → reference-check → humanize-academic → peer-review → render-docx |
+| 基金标书 | `grant` | research-scan → topic-selection → **idea-forge**(立意锻打对话，默认做、可跳过，见表下注) → **novelty-check**(对锻打定稿的科学问题做新颖性裁定+预注册锁，见表下注) → grant-proposal → peer-review(自查) → render-pdf-doc |
+| 原创研究论文 | `paper` | deidentify(如含患者数据) → clinical-stats + data-analysis → data-integrity(可选，源数据自查，见表下注) → **idea-forge**(可选，故事线对话，见表下注) → **novelty-check**(可选，对定稿主张做新颖性裁定，见表下注) → nature-figure → **literature-review**(成文综述) → write-paper(基于综述) → reference-check → humanize-academic → peer-review → render-docx |
 | 深度研究一个问题 | `research` | deep-research → reference-check(查报告引用真伪) → render-pdf-doc |
 
 - 拿不准归哪条 → 用编号选项问（见 §六）："**1)** 叙述性综述　**2)** 系统综述 / Meta　**3)** 原创研究论文　**4)** 基金标书　**5)** 深挖一个问题"，用户回一个数字即定 pipeline。
 - **综述体裁判别（信号词优先）**：出现 **双人筛选 / PRISMA / RoB / 偏倚风险 / GRADE / Meta / 森林图合并** 任一 → `systematic`；只说"写篇综述 / 讲讲某方向进展"、**未提**这些方法学词 → 默认 `review`，但开工前用编号选项确认（见 §六）："**1)** 叙述性综述就够（推荐，按你所述）　**2)** 做到系统综述强度（双人筛选/PRISMA/RoB）"。
 - 表内 `/` `+` 为并列展示：review 首步 search-lit 与 literature-review 按需二选一或并用；paper 的 `clinical-stats + data-analysis` 为两个并列步，先后皆可。
-- **paper 里 `novelty-check` 的位置随数据来源变**：前瞻性研究 / 尚未采数（假设待冻结）→ 放**最前**先做预注册锁（把假设与主分析计划冻结在采数前）；用户**已提供数据**（回顾性）→ 这步**可选**，置 `data-analysis` 之后做新颖性裁定即可（已有数据无法再"采数前预注册"）。**无论哪种，`write-paper` 前先跑 `literature-review` 成文综述**，`write-paper` 据此综述撰写引言与讨论的文献部分；综述不足属回退触发点（见 §二）。
+- **paper 里 `novelty-check` 的位置随数据来源变**：前瞻性研究 / 尚未采数（假设待冻结）→ 放**最前**先做预注册锁（把假设与主分析计划冻结在采数前）；用户**已提供数据**（回顾性）→ 这步**可选**，置 `data-analysis` 之后、且**做了 idea-forge 就排在它后面**对定稿主张做新颖性裁定（已有数据无法再"采数前预注册"；先裁后锻会因故事线转向而过期，见 grant 行同理）。**无论哪种，`write-paper` 前先跑 `literature-review` 成文综述**，`write-paper` 据此综述撰写引言与讨论的文献部分；综述不足属回退触发点（见 §二）。
 - **grant / paper 里的 `idea-forge`（立意锻打对话）**：成文前用多轮对话把立意/创新点/方案（标书）或故事线/主张/目标刊（论文）锻硬——空白节点先检索后发散给带引文的候选，未验证的主张先检索后拷问；产出 `design_brief.md`（+标书场景的 `closest_work.md`），是 grant-proposal 第 3.5 步 / write-paper 引言与讨论的直接输入。**grant 里默认做**（标书空洞的根因就是论证没锻过），两种情况可跳：目录里已有完整 `design_brief.md`；或用户赶时间明说跳过（此时 grant-proposal 第 3.5 步自行补检索）。**paper 里可选**，三种情况才做：用户没想好讲什么故事/投哪；write-paper 发现核心主张含糊或明显 overclaim；用户主动要求被拷问。它是对话式技能，用户不在线（无人值守）时整步跳过。
-- **grant 里 `novelty-check` → `grant-proposal` 是硬接口，别跳**：novelty-check 产出的 `novelty_verdict.md`（最接近文献表**含"它在什么条件下失效"一列** + gap 归因四选一 + 差异点陈述）就是 grant-proposal 第 3.5 步「论证内核」的直接输入——立项依据的主体段与创新点都从它长出来。**跳过这一步，立项依据必然写成文献罗列**（"A 报道了…然而机制尚不清楚"），这是标书最常见的死法。用户直呼 grant-proposal 时，该技能会自己补一轮针对性检索，但成本更高、覆盖更窄。
+- **为什么 idea-forge 在前、novelty-check 在后（2026-08 A/B 实验定的，别改回去）**：锻打中方向常因用户资源现实转向，先做的裁定会**过期**——实测先裁定臂 75 分钟扫描后方向一转，最终设计对 n=1050 的在研竞争试验全盲；先锻打臂 25 分钟收敛，裁定对定稿问题做、当场抓到该试验。分工：**锻打内嵌快筛负责早杀与定向**（"最接近工作"节点必检文献+注册库快查），**novelty-check 负责对定稿科学问题做严格裁定（诚实性清单+注册库全查）+ 预注册锁**——预注册锁本来就必须在问题冻结后做。锻打被跳过时 novelty-check 仍按旧位置直接跟在 topic-selection 后。
+- **grant 里 `novelty-check` → `grant-proposal` 是硬接口，别跳**：novelty-check 产出的 `novelty_verdict.md`（最接近文献表**含"它在什么条件下失效"一列** + gap 归因四选一 + 差异点陈述）就是 grant-proposal 第 3.5 步「论证内核」的直接输入——立项依据的主体段与创新点都从它长出来。**跳过这一步，立项依据必然写成文献罗列**（"A 报道了…然而机制尚不清楚"），这是标书最常见的死法。用户直呼 grant-proposal 时，该技能会自己补一轮针对性检索，但成本更高、覆盖更窄。上游做过 idea-forge 时，novelty-check 以 `design_brief.md` 的关键科学问题为裁定对象、以 `closest_work.md` 为最接近文献表的起点（补严不重做）。
+- **裁定过期护栏（任何路径都适用）**：手头已有 `novelty_verdict.md`、但之后立意/科学问题发生了转向（换人群/换干预/换主结局/换机制层）→ 该裁定视为**过期**，必须对新问题重跑 novelty-check 再进 grant-proposal——旧裁定的注册库结论对新问题不成立（撞车风险恰恰藏在这）。
 - **paper 里 `data-integrity`（可选自查闸）**：用户**提供了原始数值表**（xlsx/csv）时，可在 `data-analysis` 后对源数据跑一遍数值完整性自查，抓复制粘贴错误 / 常数偏移 / 跨表复用 / GRIM 不自洽等——**目的是投稿前主动核对补说明，非指控**（signal not verdict，见技能内铁律）。默认 `review` 档假阳性低；纯理论/无数值原始表的稿件跳过。发现需核对的项属回退触发点：回 `data-analysis`／让用户核原始记录后再往下。
 
 ## 四、单步直派：请求 → 技能
@@ -54,6 +56,7 @@
 - **数据自查**：`data-integrity`（源数据数值完整性 sanity check：查复制粘贴错误 / 常数偏移 / 跨表复用 / GRIM 不自洽等；投稿前自查或审他人数据，**只出待核信号、不下造假结论**；只看结构化数值表，不看图像篡改）
 - **评审**：`peer-review`（投稿前自查 / 对抗红队）
 - **头脑风暴 / 拷问想法**：`idea-forge`（"头脑风暴""拷问我 / 挑战我的想法""帮我想清楚""立意磨一磨""创新点站不住""这批数据能讲什么故事"——多轮对话把想法锻硬，产出设计定案；场景通用：标书 / 论文 / 选题 / 实验设计 / 任意科研决策，**只出设计不写正文**）
+- **定时 / 自动跑**：`scheduled-task`（"每周一早上帮我扫一遍新文献""每天定时跑""设个定时任务""关了软件它还能跑吗"——把请求写成**无人值守能跑完的自足 prompt** 并注册进 Windows 任务计划，到点后台自己跑完、产物落进新会话、下次开软件提示用户；**仅 Windows 桌面版**，且用户须在本机登录过一次。**注册前必须摆任务卡让用户按编号确认，绝不擅自建**——它会自己花钱）
 - **基础设施**：`env-setup`（缺 `.venv` 时先跑）
 - 其余按各技能 `SKILL.md` 的 description 触发。产物写 `outputs/`；**Web 网关注入了会话专属目录（`outputs/<会话id>/`）时以它为准，连临时脚本也别写仓库根**（多用户共享，会串数据）。
 

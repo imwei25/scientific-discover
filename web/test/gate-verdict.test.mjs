@@ -15,41 +15,10 @@
 // 所以本文件两个方向都要守住。
 import test from "node:test"
 import assert from "node:assert/strict"
-import fs from "node:fs"
-import path from "node:path"
-import { fileURLToPath } from "node:url"
-
-const HERE = path.dirname(fileURLToPath(import.meta.url))
-const SRC = fs.readFileSync(path.join(HERE, "..", "server.mjs"), "utf8")
-
-// 直接从 server.mjs 抠出判据与判定逻辑：保证测的就是跑的那一份，
-// 手抄一遍正则的话，转义一错就变成测了个假的（这个坑本轮踩过）。
-function loadGate() {
-  const grab = (name) => {
-    const i = SRC.indexOf(`const ${name} =`)
-    assert.ok(i >= 0, `server.mjs 里找不到 ${name}`)
-    const rest = SRC.slice(i)
-    const end = rest.indexOf("\nconst ", 1)
-    return rest.slice(0, end > 0 ? end : 400)
-  }
-  // ★ 判定段落里新引用了哪个常量，就要在这里登记，否则求值时 ReferenceError。
-  //   （加 GATE_SELF_WARN 时当场被这条测试抓住——这正是它的用处。）
-  const decls = ["NEG_PREFIX", "GATE_FAIL_SURE", "SURE_TAIL_NEG", "sureFailed", "GATE_FAIL_CTX", "NEG_NEAR", "GATE_PASS_SURE",
-                 "GATE_FAIL_COUNT", "GATE_FAIL_COUNT_CAPS", "GATE_FAIL_CELL", "GATE_SELF_WARN",
-                 "VERDICT_LINE"].map(grab).join("\n")
-  const fnStart = SRC.indexOf("function gateFailed(")
-  assert.ok(fnStart >= 0, "找不到 gateFailed")
-  const body = SRC.slice(fnStart, SRC.indexOf("\n}", fnStart))
-  const from = body.indexOf("if (sureFailed(t)")
-  const to = body.indexOf("      } catch")
-  assert.ok(from >= 0 && to > from, "gateFailed 的判定段落抠不出来（函数结构变了？入口从 GATE_FAIL_SURE.test 换成 sureFailed 了）")
-  const decide = body.slice(from, to).split("\n").map((l) => l.replace(/^ {8}/, "  ")).join("\n")
-  const ctx = {}
-  new Function("ctx", decls + "\nctx.failed = (t) => {\n" + decide + "\n  return false\n}")(ctx)
-  return ctx.failed
-}
-
-const failed = loadGate()
+// 状态机抽成 wf-state.mjs 之后，文本判定层（gateTextFailed）是导出的具名函数，
+// 直接 import —— 测的就是跑的那一份，不必再从 server.mjs 源码里抠字符串重新求值
+// （那套抠法对函数结构的每次重排都很脆，改判据先改测试胶水的日子到此为止）。
+import { gateTextFailed as failed } from "../wf-state.mjs"
 
 test("闸判据：真实的『通过』措辞一条都不许判红", () => {
   const PASS = [

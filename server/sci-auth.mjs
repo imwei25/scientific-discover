@@ -283,6 +283,11 @@ function profileOf(user, ent = DB.resolveEntitlement(db, user)) {
     model: ent.model,                      // 默认模型
     models: DB.modelInfo(db, ent.models),  // 可选模型（含中文名/供应商/单价），客户端下拉就用它
     skills: ent.skills,                    // [] = 不限（全部技能）
+    // 定时任务：这个档能到什么程度（off 不显示 / preset 只能用模板 / full 自由指令），
+    // 以及跑任务时【强制】用哪个模型（'' = 用该档默认模型）。客户端据此决定按钮出不出、
+    // 编辑界面给填空表单还是自由输入框。
+    tasksMode: ent.tasksMode,
+    tasksModel: ent.tasksModel,
     limits: { daily: ent.daily, monthly: ent.monthly },
     usage: { today: DB.todayCost(db, user.id), month: DB.monthCost(db, user.id) },
     // 同一份数字的【积分视图】。美元那两行留着不动：后台、审计、对账都在用，
@@ -1210,11 +1215,16 @@ async function handleAdminApi(req, res, pathname) {
       if (!Number.isFinite(n) || n < 0 || Math.floor(n) !== n)
         return json(res, 400, { ok: false, err: "每日图片识字次数须是 ≥0 的整数（0 = 不限）" })
     }
+    // 定时任务：三态。认不出的值直接拒，别静默存进去——存错成 full 就是"用户不在场时能自由花钱"。
+    if (b.tasksMode !== undefined && b.tasksMode !== null && b.tasksMode !== ""
+      && !["off", "preset", "full"].includes(String(b.tasksMode)))
+      return json(res, 400, { ok: false, err: "定时任务模式只能是 off / preset / full" })
     const before = DB.getTier(db, key)
     DB.upsertTier(db, {
       key, daily_usd: b.dailyUSD, monthly_usd: b.monthlyUSD,
       model: b.model, models: b.models, skills: b.skills, note: b.note, sort: b.sort,
       max_conc: b.maxConc, img_daily: b.imgDaily, ocr_daily: b.ocrDaily,
+      tasks_mode: b.tasksMode, tasks_model: b.tasksModel,
     })
     const after = DB.getTier(db, key)
     // 改档位定义影响该档全体用户的额度/默认模型/技能 → 全部吊销 key，下次登录按新权限走。
