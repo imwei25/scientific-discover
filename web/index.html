@@ -2023,18 +2023,24 @@ function mdLink(url, txt) { if (!/^(https?:|mailto:|\/|api\/)/i.test(url)) retur
 // （映射到本站 api/raw），或本就指向 api/raw / api/download 的相对路径；其余（任意外链等）返回 null，
 // 调用方降级为原来的「🖼 链接」。绝不给任意 URL 开 <img>：防外链探测/追踪，也把 XSS 面收在同源接口上。
 const MDIMG_EXT = /\.(png|jpe?g|gif|webp|svg|bmp)$/i
+// 产物名 → 版本戳（切会话时取 mtime，本轮内取 files 事件到达的时刻）。
+// ★ 用途只有一个：让 <img> 的 URL 在文件被【原地覆盖】时跟着变。追问改图时 agent 常把
+//   fig1.png 重画成同名文件，URL 一模一样 → 浏览器（/api/raw 带 max-age=60，同一文档里
+//   同名图还走内存缓存）把旧图摆出来，用户以为追问没生效。
+const rawVer = new Map()
+const verQ = (name) => { const v = rawVer.get(name); return v ? "&v=" + Math.round(v) : "" }
 function mdImgSrc(u) {
   let m = u.match(/^(?:\.\/)?(outputs|uploads)\/([A-Za-z0-9_-]+)\/([^\/?#]+)$/)   // outputs/<sid>/x.png（会话专属目录）
-  if (m && MDIMG_EXT.test(m[3])) return "api/raw?name=" + encodeURIComponent(m[3]) + (m[1] === "uploads" ? "&dir=up" : "") + "&sid=" + encodeURIComponent(m[2])
+  if (m && MDIMG_EXT.test(m[3])) return "api/raw?name=" + encodeURIComponent(m[3]) + (m[1] === "uploads" ? "&dir=up" : "") + "&sid=" + encodeURIComponent(m[2]) + verQ(m[3])
   m = u.match(/^(?:\.\/)?(outputs|uploads)\/([^\/?#]+)$/)                          // 无会话段的老路径 → 按当前会话取
-  if (m && MDIMG_EXT.test(m[2])) return "api/raw?name=" + encodeURIComponent(m[2]) + (m[1] === "uploads" ? "&dir=up" : "") + sidQ()
+  if (m && MDIMG_EXT.test(m[2])) return "api/raw?name=" + encodeURIComponent(m[2]) + (m[1] === "uploads" ? "&dir=up" : "") + sidQ() + verQ(m[2])
   // 【裸文件名】——这才是主场景：网关每轮注入的 preamble 明确要求 agent「正文里嵌入图片直接用
   // 文件名：![图注](fig1.png)」，因为会话的工作目录就是该会话的产物目录。此前三条分支都不匹配它，
   // 于是降级走 mdLink，而 mdLink 的白名单同样不收裸文件名 → 最终渲染成一行纯文字，
   // 图片一张都出不来。等于这个特性覆盖了被告知【不要】用的写法，漏了被告知【要】用的写法。
   // 安全性与上面一致：不含 / 与 : 的纯文件名，只能映射到本会话的同源 api/raw，开不出外链。
   m = u.match(/^(?:\.\/)?([^\/?#:]+)$/)
-  if (m && MDIMG_EXT.test(m[1])) return "api/raw?name=" + encodeURIComponent(m[1]) + sidQ()
+  if (m && MDIMG_EXT.test(m[1])) return "api/raw?name=" + encodeURIComponent(m[1]) + sidQ() + verQ(m[1])
   // 会话产物目录下的【一层子目录】（如 figures/fig1.png）。dirState 现在递归一层、侧栏也会列出它们，
   // 所以正文里引用子目录里的图同样要能渲染。上面的 outputs|uploads 分支先跑，不会被这条抢走；
   // 两段都不含 / ? # :，所以拼不出协议、也拼不出上跳（../ 里的 . 允许但 ".." 段会被服务端的
@@ -2046,6 +2052,7 @@ function mdImgSrc(u) {
   m = u.match(/^(?:\.\/)?([^\/?#:]+)\/(?:([^\/?#:]+)\/)?([^\/?#:]+)$/)
   if (m && m[1] !== ".." && m[2] !== ".." && MDIMG_EXT.test(m[3]))
     return "api/raw?name=" + encodeURIComponent([m[1], m[2], m[3]].filter(Boolean).join("/")) + sidQ()
+      + verQ([m[1], m[2], m[3]].filter(Boolean).join("/"))
   // 已是本站接口的相对路径（& 在转义文本里成对出现为 &amp;，作为 HTML 属性值恰好正确）
   if (/^api\/(raw|download)\?/i.test(u) && /\.(png|jpe?g|gif|webp|svg|bmp)($|[&#])/i.test(u.replace(/&amp;/g, "&"))) return u.replace(/"/g, "%22")
   return null
@@ -2365,7 +2372,7 @@ function fileRow(name, short) {
   const row = document.createElement("div"); row.className = "frow"
   const s = document.createElement("span"); s.className = "fname"     // 文件名在左、撑满宽度
   s.textContent = short ? name.split("/").pop() : name                // 折叠块里只显示文件名（目录名已在标题上）
-  const raw = "api/raw?name=" + encodeURIComponent(name) + sidQ()
+  const raw = "api/raw?name=" + encodeURIComponent(name) + sidQ() + verQ(name)   // 带版本戳：同名被重写后，预览/灯箱不会摆出缓存里的上一版
   const doPv = isSecret(name) ? null                                   // 还原表不给预览（含真实姓名）
     : IMG.test(name) ? () => openLightbox(raw) : CANPV(name) ? () => openPreview(name) : null   // 图片开灯箱，其余走半屏预览
   s.title = isSecret(name) ? "含可还原到个人的对照信息，不在界面内预览；如需查看请下载后在本机打开"
@@ -2463,7 +2470,7 @@ function addProducts(list) {
   const wrap = document.createElement("div"); wrap.className = "products"
   for (const name of list) {
     const dlUrl = "api/download?name=" + encodeURIComponent(name) + sidQ()
-    const raw = "api/raw?name=" + encodeURIComponent(name) + sidQ()
+    const raw = "api/raw?name=" + encodeURIComponent(name) + sidQ() + verQ(name)   // 同上：版本戳防旧图
     // 与侧栏同理：download 属性只给最后一段，带斜杠会被浏览器清洗成 "pdfs_a.pdf" 之类怪名
     const dlBtn = () => { const a = document.createElement("a"); a.href = dlUrl; a.download = name.split("/").pop(); a.className = "pbtn"; a.innerHTML = ic("download") + "下载"; return a }
     const card = document.createElement("div"); card.className = "pcard"
@@ -2620,7 +2627,7 @@ async function openPreview(name) {
   if (!wasOpen) requestAnimationFrame(() => { log.scrollTop = log.scrollHeight })
   if (pvObjUrl) { URL.revokeObjectURL(pvObjUrl); pvObjUrl = null }
   const ext = (name.split(".").pop() || "").toLowerCase()
-  const raw = "api/raw?name=" + encodeURIComponent(name) + sidQ()
+  const raw = "api/raw?name=" + encodeURIComponent(name) + sidQ() + verQ(name)   // 带版本戳：同名被重写后，预览/灯箱不会摆出缓存里的上一版
   const prev = "api/preview?name=" + encodeURIComponent(name) + sidQ()
   try {
     if (ext === "md" || ext === "markdown") {                 // markdown：前端渲染
@@ -3040,6 +3047,8 @@ async function resumeSession(id) {                 // 载入历史 → 设为当
   // step 由服务端按 tool part 里的技能重放得出（见 /api/history）：与直播同口径，
   // 刷新前后同一段对话分组一致。chat 会话不带 step，这里就一个分组都不会开。
   for (const m of hist) { if (m.step) startGroup(m.step, m.stepName); add(m.role === "user" ? "user" : "bot", m.text) }
+  rawVer.clear()
+  for (const o of outs || []) rawVer.set(o.name, o.mtime || 0)   // 版本戳随会话重建，见 mdImgSrc
   renderFiles((outs || []).map(o => o.name))       // 产物随会话持久回显
   // 有历史 = 这个会话已经开始过，别再带 module 去补绑。
   // ★ histFailed 时 hist 是空数组，但那【不代表】会话是空的 —— 它代表"不知道"。判成"没开始过"的话：
@@ -5454,7 +5463,14 @@ function openStream(url) {
   // 收尾这一下涨得最多（补画的尾行 + askform 选项卡一次 +200px 上下）—— 正是最不能脱钩的一帧：
   // 脱钩的后果是用户【完全没看见 agent 在问他选 1/2/3】，直接打字问别的，那一轮白跑。
   es.addEventListener("final", (ev) => { const t = JSON.parse(ev.data).text; if (t && !painted) { gotText = true; rawText = t } withFollow(() => paintAnswer()) })
-  es.addEventListener("files", (ev) => { const list = JSON.parse(ev.data); if (list.length) { renderFiles(list); addProducts(list) } })   // 本轮没产物就保留上一轮，不清空
+  // 服务端推的是本轮【新建 or 改动】的产物名（changedSince 也比 mtime），所以这里逐个盖上新版本戳：
+  // 同名被重画的图，正文里的 <img> URL 才会跟着变，不然显示的还是缓存里的上一版（见 mdImgSrc）。
+  es.addEventListener("files", (ev) => {
+    const list = JSON.parse(ev.data)
+    const now = Date.now()
+    for (const n of list) rawVer.set(n, now)
+    if (list.length) { renderFiles(list); addProducts(list) }   // 本轮没产物就保留上一轮，不清空
+  })
   // 更深层没列出来的文件数（服务端与 files 同时发）。不接的话，直播中侧栏那句"另有 N 个"永远是 0，
   // 用户要刷新才知道 agent 把图写进了更深的目录。
   es.addEventListener("filesmeta", (ev) => {
