@@ -20,6 +20,7 @@
 import argparse
 import csv
 import io
+import json
 import os
 import re
 import sys
@@ -1070,6 +1071,27 @@ def main():
     # "可疑/存疑 0 条"——而这正是这道闸此前放行重复编号的原因。
     dup_extra = sum(len(g) - 1 for g in dup_groups)
     bad += dup_extra
+    # ---- 结构化裁定（.gate/reference-check.json）----
+    # 网关的质量闸【优先读它】（web/wf-state.mjs 的 gateVerdict），措辞正则退为兜底 ——
+    # 本脚本自己把每一类都数清楚了，没有理由让"报告转述时的措辞"再被正则猜一遍
+    # （猜错的两个方向都真实发生过：通过措辞被判红让用户白跑返工、重复编号的报告被判绿放行）。
+    # fail 的口径与上面 stdout 的警告完全一致：可疑/存疑（含重复编号）、只验存在性(UNVERIFIED)、
+    # 查失败(ERROR) 任一非零都不许当通过。写不进去就算了（点目录建不了等），网关自动退回措辞判定。
+    try:
+        gate_dir = os.path.join(args.outdir, ".gate")
+        os.makedirs(gate_dir, exist_ok=True)
+        err_n = dist.get("ERROR", 0)
+        with open(os.path.join(gate_dir, "reference-check.json"), "w", encoding="utf-8") as gf:
+            json.dump({
+                "skill": "reference-check",
+                "verdict": "fail" if (bad or unver or err_n) else "pass",
+                "counts": dict(dist),
+                "duplicates": len(dup_groups),
+                "unverified": unver,
+                "note": "由 verify_refs.py 生成的机器裁定；signal 口径与报告统计行一致",
+            }, gf, ensure_ascii=False, indent=1)
+    except OSError:
+        pass
     print("-" * 50)
     print(f"结果：{dict(dist)}")
     print(f"可疑/存疑 {bad} 条。报告见 {args.outdir}/reference_check.md / .csv")

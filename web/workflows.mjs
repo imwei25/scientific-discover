@@ -644,6 +644,9 @@ export const WORKFLOWS = {
         emits: ["manuscript.md", "manuscript_*.md"], emitsNot: ["*_humanized.*"], render: "manuscript" },
       { id: "refcheck", name: "引用核查", skill: "reference-check", gate: true,
         emits: ["refcheck_report.md", "reference_check*.md", "reference_check*.csv"],
+        // 裁定只认 md 报告：csv 是机器结果表（不进措辞判定），单列出来是让"csv 先落盘、md 未写出"
+        // 的窗口里闸停在未开始等报告，而不是拿一份读不了的文件谈通过（emits 照收 csv 供渲染与判完成）。
+        gateReport: ["refcheck_report.md", "reference_check*.md"],
         render: "refcheck", onFail: "write",
         hint: "查假引用 / 核 DOI，全绿才往下排版" },
       { id: "humanize", name: "语言润色", skill: "humanize-academic",
@@ -741,7 +744,11 @@ export const WORKFLOWS = {
       { id: "render", name: "排版出件", skill: "render-pdf-doc", skillAlias: ["render-docx"],
         form: [{ id: "fmt", label: "输出格式", type: "select", default: "docx", options: [
           { v: "docx", t: "Word（.docx）" }, { v: "pdf", t: "PDF" }, { v: "both", t: "两种都要" }] }],
-        emits: ["manuscript*.docx", "manuscript*.pdf", "review*.docx", "review*.pdf", "proposal*.docx", "proposal*.pdf"], render: "doc" },
+        // ★ emitsNot：review*.docx 会把【评审/核查报告转的 docx】也收走（review_report.docx、
+        //   refcheck_report.docx），agent 顺手把报告排成 Word 给用户看，「排版出件」就凭空绿了 ——
+        //   而真正的综述成稿一个字还没排。终稿在（review.docx / manuscript.docx），报告不算。
+        emits: ["manuscript*.docx", "manuscript*.pdf", "review*.docx", "review*.pdf", "proposal*.docx", "proposal*.pdf"],
+        emitsNot: ["review_report*", "refcheck_report*"], render: "doc" },
     ],
     extra: ["render-docx"],
   },
@@ -887,6 +894,10 @@ export const WORKFLOWS = {
       { id: "forge", name: "立意锻打", skill: "idea-forge", skillAlias: ["novelty-check"], gate: true,
         sub: "多轮对话磨立意，锻定后做新颖性裁定",
         emits: ["novelty_report.md", "novelty_*.md", "preregistration.md", "analysis_plan.md"], render: "report", onFail: "scan",
+        // ★ gateReport：闸的裁定只读裁定书。emits 里的 preregistration.md / analysis_plan.md 是
+        //   同步产物不是裁定 —— 拿它们当报告读有两种翻车（都实测过）：裁定书还没写出来的窗口里
+        //   闸提前变绿；预注册文件里的假设句（"缺氧不通过甲基化…"）被措辞正则误读成"未通过"。
+        gateReport: ["novelty_report.md", "novelty_*.md"],
         hint: "空白节点先检索后发散、未验证主张拿证据拷问；锻定的科学问题当场做严格裁定，不过退回领域扫描",
         note: "两件事连着做完，顺序不能颠倒：先用 idea-forge 按其 SKILL.md 跑锻打对话（一轮只问一个问题、编号候选、每轮落盘 `forge_log.md`，产出 `design_brief.md` + `closest_work.md`），**再**对 design_brief 里定稿的那句关键科学问题跑 novelty-check（以 closest_work.md 为最接近文献表起点补严，不重做）。裁定完**在回话里点名说清档位（真新 / 增量 / 已被回答）与依据**；判「已被回答」退回「研究方向生成」换题，不许带着已被回答的题写标书。**无人值守（AUTO）时跳过锻打对话**，直接对用户选定的题做裁定 —— 本格靠裁定产物判完成，不会卡死。" },
       // ★「摸清申报要求」原本是独立的一步，2026-08-07 按用户要求并进本步 —— 基金申报的流程条
@@ -923,7 +934,9 @@ export const WORKFLOWS = {
         sub: "语言润色与定稿输出",
         form: [{ id: "fmt", label: "输出格式", type: "select", default: "docx", options: [
           { v: "docx", t: "Word（.docx）" }, { v: "pdf", t: "PDF" }, { v: "both", t: "两种都要" }] }],
-        emits: ["manuscript*.docx", "manuscript*.pdf", "review*.docx", "review*.pdf", "proposal*.docx", "proposal*.pdf"], render: "doc" },
+        // ★ 不收 review*：标书的终稿是 proposal / manuscript，review_report.docx 是评审报告转的 Word
+        //   （agent 常顺手排一份给用户看），收进来会让「标书最终成稿」在正文一字未排时就打绿勾。
+        emits: ["manuscript*.docx", "manuscript*.pdf", "proposal*.docx", "proposal*.pdf"], render: "doc" },
     ],
     // ★ research-scan（领域扫描）与 novelty-check（新颖性裁定）本质上都要【检索文献】——
     //   白名单里不给检索技能，它们一动手就撞模块闸、整轮作废（实测在另一会话里复现过：

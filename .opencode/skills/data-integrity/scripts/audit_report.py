@@ -215,7 +215,28 @@ def main():
     extra = summary_consistency(a.data_dir) if a.data_dir else []
     out = a.out or os.path.join(os.path.dirname(a.scan_json) or ".", "REPORT.md")
     open(out, "w", encoding="utf-8").write(render(scan, extra))
-    n = len(collect_findings(scan)) + len(extra)
+    findings = collect_findings(scan) + extra
+    n = len(findings)
+    # ---- 结构化裁定（.gate/data-integrity.json）----
+    # 网关的质量闸优先读它（web/wf-state.mjs 的 gateVerdict）。注意：这是【信号型】闸，
+    # 网关只认这里的 "fail"（High/Medium 信号非零）——"pass" 不豁免模型在 integrity_report.md
+    # 里人工列出的信号（本 json 只描述机器扫描那一半，不能替整道闸作保）。
+    # .gate 放会话根目录：REPORT.md 常在 audit/ 子目录里，往上提一层。
+    try:
+        root = os.path.dirname(os.path.abspath(out))
+        if os.path.basename(root).lower() == "audit":
+            root = os.path.dirname(root)
+        gate_dir = os.path.join(root, ".gate")
+        os.makedirs(gate_dir, exist_ok=True)
+        hm = sum(1 for f in findings if f.get("severity") in ("high", "medium"))
+        with open(os.path.join(gate_dir, "data-integrity.json"), "w", encoding="utf-8") as gf:
+            json.dump({"skill": "data-integrity",
+                       "verdict": "fail" if hm else "pass",
+                       "signals": {"high_medium": hm, "total": n},
+                       "note": "由 audit_report.py 生成；仅描述机器扫描信号，signal not verdict"},
+                      gf, ensure_ascii=False, indent=1)
+    except OSError:
+        pass
     print(f"REPORT.md 已生成（{n} 条信号，含汇总一致性自查 {len(extra)} 条）→ {out}")
 
 

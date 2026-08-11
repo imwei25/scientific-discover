@@ -4404,7 +4404,13 @@ function stepsBar(steps, done, cur, failed, off, implied, stale, staleUp, halted
   // cur 只有"提交过某一步的表单"才会有值，所以第一轮它一定是空的。空着不补的话整条链全是灰的，
   // 而闸那一步又带着颜色 → 用户把闸读成"当前步骤"（实测发生过，以为 AI 起步就跳到了引用核查）。
   // 兜底：没有明确的当前步就取【第一个未完成的步骤】，这也正是流程实际所处的位置。
-  const at = cur || (steps.find((s) => !dn.has(s.id) && !of.has(s.id)) || {}).id
+  // ★ 但要跳过【可选】的未完成步：它没做就永远不 done，会把"当前步"的高亮永久钉在自己身上 ——
+  //   实际在跑文献综述，高亮却停在「故事线锻打(可选)」。与 offerStepForm 的指针口径对齐。
+  //   闸红的可选步不跳（红着的闸正是用户该看的地方）；全部剩余步骤都是可选时退回第一个未完成步。
+  //   optional 由服务端按本会话表单值解析后下发（workflowFor 的 isOptional），前端直接用。
+  const notDone = (s) => !dn.has(s.id) && !of.has(s.id)
+  const at = cur || (steps.find((s) => notDone(s) && (!s.optional || fl.has(s.id)))
+    || steps.find(notDone) || {}).id
   // many = 整排收掉副标题，把长度还回来。
   // ★ 别按步数拍脑袋定阈值。原来写的是 steps.length > 7，注释还说"基金/综述都留得住"——
   //   实测综述是 8 格（7 步 + 基础信息录入），正好越线，副标题全没了。步数不等于长度：

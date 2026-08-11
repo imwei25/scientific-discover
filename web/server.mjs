@@ -14,6 +14,7 @@ import * as WebUp from "./web-update.mjs"
 import { shouldOfferUpdate } from "./pack-freshness.mjs"
 import { zip as zipPack } from "./minizip.mjs"
 import * as WF from "./workflows.mjs"
+import * as WFS from "./wf-state.mjs"
 import { scrubShare, renderShareHtml } from "./share-export.mjs"
 import * as Tasks from "./tasks.mjs"
 import * as Sched from "./schtasks.mjs"
@@ -899,288 +900,11 @@ const clearGateBypass = (sid) => { const s = safeSid(sid); if (gbMap()[s]) { del
 const sessionModule = (sid) => moduleMap()[safeSid(sid)] || "chat"   // 未登记的老会话一律按 chat
 const bindSessionModule = (sid, modId) => { moduleMap()[safeSid(sid)] = modId; saveModuleMap() }
 const unbindSessionModule = (sid) => { if (moduleMap()[safeSid(sid)]) { delete moduleMap()[safeSid(sid)]; saveModuleMap() } }
-// ---- 会话的工作流状态（表单值 + 步骤进度）----
-// 落在【会话产物目录】而不是全局表：它天然随会话建、随会话删（删会话会整目录清掉），
-// 也跟着产物一起被打包/迁移。下划线前缀 → dirState 不过滤下划线，所以这里额外在产物列表里排掉它，
-// 免得用户在"产出"侧栏看到一个莫名其妙的 json。
-// 【谁写】服务端。进度由"产物文件出现了没有"反推（见 wfSyncDone），不依赖模型自觉汇报。
-// 【不是防篡改边界】这个文件就在会话产物目录里，agent 有 shell、对该目录有写权，它想改就能改
-// （把 done 全填上、或把 form.deidDone 置真把脱敏步从自己的剧本里剔掉）。这不构成提权——技能白名单
-// 来自 MODULE_DEFS，压根不看这个文件——但别把它当权威账本用。真正的强制在事件流那道闸上。
-// 故 wfLoad 对形状做基本校验：坏数据（如 done 写成字符串）会被 new Set("abc") 拆成 ["a","b","c"] 写回。
-const WF_STATE = "_workflow.json"
-const wfLoad = (outDir) => {
-  try {
-    const st = JSON.parse(fs.readFileSync(path.join(outDir, WF_STATE), "utf8"))
-    if (!st || typeof st !== "object" || Array.isArray(st)) return null
-    if (typeof st.module !== "string") return null
-    if (!Array.isArray(st.done)) st.done = []
-    else st.done = st.done.filter((x) => typeof x === "string")
-    if (!st.form || typeof st.form !== "object" || Array.isArray(st.form)) st.form = {}
-    return st
-  } catch { return null }
-}
-const wfSave = (outDir, st) => {
-  try { fs.mkdirSync(outDir, { recursive: true }); fs.writeFileSync(path.join(outDir, WF_STATE), JSON.stringify(st, null, 2)) }
-  catch (e) { console.warn(`[workflow] 状态写入失败：${e.message}`) }
-}
-/**
- * 表单值（intake + 各步 form 合并成一张平表，供 when 条件判定与跨步继承）。
- * 【要求传 modId 并核对】这个文件落在会话产物目录里，而 agent 对该目录有读写权（它有 shell）。
- * 不核对的话，一份 module 对不上的簿子会被拿去裁剪【另一个模块】的步骤链，前言就成了胡话。
- * 这不是权限问题（技能白名单来自 MODULE_DEFS，不看这个文件），但足以让剧本失效且极难排查。
- */
-// 表单值（含 intake 里声明的默认值）。★ 必须过 withDefaults：跳过表单直接打字这条路
-// 服务端拿到的是 {}，而所有 when 条件按"字段未填"求值 —— refcheck 会因此退化成【零步骤】
-// （没有任何闸），humanize 则丢掉"带角标整句不动"的默认保护。两处都是界面看不出来的哑失败。
-const wfValues = (outDir, modId) => {
-  const st = wfLoad(outDir)
-  return WF.withDefaults(modId, (st && st.module === modId && st.form) ? st.form : {})
-}
-/**
- * 质量闸的报告到底判没判过。
- * 只认【明确写出的否定结论】，其余一律当通过 —— 宁可漏判也不能误判：把一份其实通过了的稿子
- * 标成"需返工"，用户会白白多跑一轮。所以这里的词表是各技能报告里真实用的定论措辞，不做泛化匹配。
- */
-// 判据分两层，都是踩出来的：
-// ① 单看关键词会【反向误报】—— peer-review 的报告哪怕结论是通过，也照样有一节标题叫
-//    "### Critical（不改会被拒/结论不成立）"。拿裸 critical 判失败，等于每份评审报告都标"需返工"。
-// ② 只列书面词又会【漏判】—— 模型实际写的是「裁定：**闸不过（回退 #1）**」「条件性通过（需返工）」，
-//    这两句都不含"不通过"三个字。
-// 所以：无歧义的定论词全文匹配；容易误伤的词（reject / 不通过 / critical）只在【结论行】上算数，
-// 而"结论行"要排除 markdown 标题 —— 小节标题里出现"结论"二字太常见（上面那个 Critical 标题就是）。
-// 否定前缀：这些词一旦被否定，含义就反过来了 —— 「无需返工」「未发现假引用」「无未通过项」
-// 都是【通过】的意思。纯子串匹配会把它们全判成红（实测 7 条真实通过措辞全中招）。
-// 用变长负向后顾把它们挡掉。宁可漏判也不能误判：假红会让用户白跑一轮，还会把交付物警示变成狼来了。
-// ★ 英文同样要挡，而且【不能只挡紧挨着的那个词】。实测（判据直接从本文件抠出来跑）：
-//   `Decision: Accept as is. No major revision required.` 被判红 —— "major revision" 前面那个
-//   英文 No 不在词表里，一个字都挡不住。11 条"其实通过"的英文写法里 6 条中招。
-//   而真实写法还有 `does not require major revision` 这种否定词与裁定语之间隔着动词的，
-//   所以英文这一支允许中间夹最多 24 个【非句末】字符（句号/分号/问号/换行不跨，免得把上一句的
-//   否定算到下一句头上）。
-// ★ 中文那一支保持"紧邻"不变：中文里"不/未"与裁定语之间基本不插词，放宽反而会把
-//   "未做敏感性分析，需返工"这类【否定在前、裁定在后】的句子误放行 —— 那是两件事，不是否定。
-const NEG_PREFIX = "(?<!无|不|未|毋|没|没有|未见|未发现|不存在|未出现|无任何|不含|零" +
-  "|\\b(?:no|not|none|without|free of)\\b[^.;!?\\n]{0,24})"
-const GATE_FAIL_SURE = new RegExp(NEG_PREFIX +
-  // ★ 「不通过」后面必须跟句读或行尾。医学写作里它极常见地当【普通动宾】用 ——
-  //   "不通过血脑屏障""不通过静脉给药"，实测踩到的原句是预注册文件里的假设：
-  //   "缺氧**不通过**甲基化改变促进复发"。而 GATE_FAIL_SURE 是全文匹配、不限行，
-  //   于是新颖性闸被判红、界面显示「✕ 需返工」，而报告裁定明明是"进入标书起草"、
-  //   模型也在对话里说"闸1 通过" —— 界面与对话直接打架，还是往最吓人的方向打。
-  //   裁定语本来就有 未通过 / 不予通过 / 闸不过 覆盖，这一条只需堵住动宾用法。
-  //   收尾字符里【必须带上 markdown 标记】：真实写法是「本闸判定 **不通过**」，
-  //   `不通过` 后面紧跟的是 `**` 而不是句读 —— 漏了它就会把一条真裁定放过去（既有测试当场抓住）。
-  "(闸不过|闸未过|不予通过|未通过|不通过(?=[\\s，。；、）)\\]】*_`~]|$)|需返工|需要返工|退回返工|条件性通过|major\\s*revision|需要?重大修改" +
-  "|假引用|伪造引用|编造的?引用|查无此文|未能核实|该文献不存在)", "i")
-// 否定写在裁定语【后面】的写法：`Major revision: none` / `Major revision — N/A` /
-// `Major revision is not necessary.` / `需返工：无`。GATE_FAIL_SURE 是纯前缀否定（NEG_PREFIX），
-// 这四句实测【全判红】，而它们全是通过。所以再加一道后缀否定，由 sureFailed 逐行配合使用。
-// 距离限制 16 字符且不跨句读（`;`/`。`/`.` 都在排除集里）—— 不限的话，
-// `Major revision required; none of the analyses account for clustering` 会被后半句的 none 放行。
-const SURE_TAIL_NEG = /^[^。.;!?\n]{0,16}(无|没有|none|n\/?a|unnecessary|not\s+(required|necessary|needed|warranted|recommended)|0\s*[条项个]?\s*$)/i
-// GATE_FAIL_SURE 的实际用法：【逐行】判，并放过后缀被否定掉的那一行。
-// 为什么改成逐行：原来是整篇 test 一次，于是"哪一行命中的"这个信息拿不到，也就无从判断
-// 后面跟的是不是否定。裁定语不会跨行，所以逐行与整篇在检出侧等价，只是多了否定的判断余地。
-const sureFailed = (t) => {
-  for (const ln of t.split(/\r?\n/)) {
-    const m = ln.match(GATE_FAIL_SURE)
-    if (!m) continue
-    if (SURE_TAIL_NEG.test(ln.slice(m.index + m[0].length))) continue
-    return true
-  }
-  return false
-}
-// g 标志是给下面【逐个匹配、逐个查否定】用的（见 gateFailed 末尾那段）：整行 test 一下就返回红，
-// 会把 `Recommendation: Accept. No critical issues.` 这类【否定过的】判成未通过。用前必须归零 lastIndex。
-const GATE_FAIL_CTX = /(reject|critical|严重问题|硬伤)/gi
-// 「这个词是不是被否定掉了」：只看它【前面】那一小段。中英都收；`[^。.;!?\n]{0,24}` 限制作用距离，
-// 且不跨句 —— 不限距离的话，"未做敏感性分析。结论：存在硬伤"会被上一句的"未"放行。
-const NEG_NEAR = /(无|没有|未见|未发现|不存在|未出现|不含|零|\b(?:no|not|none|without|free of)\b)[^。.;!?\n]{0,24}$/i
-// reference-check / data-integrity 的裁定是结构化词，不是散文。两种真实写法：
-//   统计行  `RETRACTED 1，FABRICATED 2，NOT_FOUND 1，MISMATCH 1`（全绿时是 0，不能裸匹配）
-//   表格行  `| [7] | … | **FABRICATED** | 高 |`
-// ★ CHECK 必须在列表里。verify_refs.py 现在对「没有 DOI/PMID 且按标题没查到」的条目
-//   判 CHECK 而不是 NOT_FOUND —— 因为中文期刊 / 老文献 / 会议摘要大量不在检索库里，
-//   一口咬定"疑似虚构"是误报，代价是用户去删一条真实存在的文献。但**闸照样要红**：
-//   一条没人能确认真假的引用，正是最该让作者自己去核的东西。漏了 CHECK 就等于把这个改动
-//   变成"把假引用悄悄放行"。（_verdict_with_meta 因年份/首作者不符降级出的 CHECK 同理。）
-// ★ UNVERIFIED 必须在列表里，且不能只认"UNVERIFIED n"这一种写法。实测踩过：
-//   报告统计行写的是 `统计：UNVERIFIED 3`，正文里技能自己还加了一句
-//   「⚠️ 本次有 3/3 条只验证了标识符存在、没有比对标题…**不要据此宣布「引用核查全绿 / 质量闸通过」**」，
-//   而闸照样判绿 —— 技能作者已经把警告写进报告了，网关却把它读成绿灯，正是这套代码
-//   在别处反复防的 fail-open。
-// ★ 按词分成两条，是因为大小写敏感性不能一刀切：
-//   · 这几个词不会在散文里当普通词用，保留 i —— 模型转述统计行时写成 `unverified 3` 也要认。
-const GATE_FAIL_COUNT = /(FABRICATED|RETRACTED|MISMATCH|NOT[_\s]?FOUND|UNVERIFIED)\s*[:：=]?\s*[1-9]/i
-//   · CHECK / ERROR 则是英文散文里的日常词，带 i 就会把 `Check 1: sample size reported`
-//     （英文报告里再普通不过的编号清单）读成"有 1 条待核引用"→ 整份报告判红（实测中招）。
-//     它们在真报告里只以【全大写机器裁定词】出现（verify_refs.py 吐的），所以限定大写。
-const GATE_FAIL_COUNT_CAPS = /\b(CHECK|ERROR)\s*[:：=]?\s*[1-9]/
-// 技能在报告里主动写的"别据此宣布通过"——它比任何计数都更明确，直接认。
-const GATE_SELF_WARN = /不要据此宣布|不能据此宣布|不应据此宣布|别据此宣布/
-const GATE_FAIL_CELL = /\|\s*\*{0,2}(FABRICATED|RETRACTED|MISMATCH|NOT[_\s]?FOUND|CHECK)\*{0,2}\s*\|/i
-const VERDICT_LINE = /(判定|裁定|结论|总体评价|总评|倾向|建议|verdict|recommendation|decision)/i
-// 报告里【明确写出的通过裁定】。出现它时，正文里的 Major/Critical 条目不再单独把闸判红。
-//
-// 【为什么让位】评审报告里的 Major 有相当一部分根本不是稿件的方法学缺陷，而是"用户还没交的材料"
-// —— 伦理批号、注册号、原始记录、代表作清单。这类条目的措辞五花八门，靠词表（待补充 / to be
-// provided by…）永远补不全，补不到的那些就把用户锁死在出不了件的状态里。既然报告自己已经把
-// 总裁定写成"通过"，那就以裁定为准。
-// 【让位的边界，三条都要】
-//   ① 只有【明确的通过裁定】才让位。总评被写软（实测「Minor to moderate revision」而正文 4 条
-//      **Major**）不算通过，照旧按条目判红 —— 那正是"只认总评就被绕过"的原始教训。
-//   ② 只让位给【条目计数】这一条。sureFailed（未通过/需返工/假引用…）、机器统计行、
-//      GATE_SELF_WARN、结论行的 reject 一律照旧 —— 报告同时写"已通过"和"需返工"时，否定的那句说了算。
-//   ③ 「通过」前面不能是 未/不。`(?<![未不])` 就为此 —— 否则「评审闸未通过」会被读成通过裁定，
-//      直接把闸变成永远绿的摆设。
-const GATE_PASS_SURE = new RegExp(
-  "(闸\\s*(?:已|均|全部)?\\s*(?<![未不])通过" +
-  "|(?:判定|裁定|结论|总评|总体评价)\\s*[:：]?\\s*\\**\\s*(?:已|均)?\\s*(?<![未不])通过" +
-  "|(?:verdict|recommendation|decision)\\s*[:：]\\s*\\**\\s*(?:accept|pass)\\b)", "i")
-// 「信号型」闸的判据。data-integrity 是唯一一个【被铁律明令禁止写裁定语】的闸
-// （signal not verdict：只出待核信号、不下造假结论）。而上面那四条判据全都在找裁定语
-// （未通过 / 需返工 / major revision / FABRICATED n / 结论行+硬伤）—— 两个设计天然互斥，
-// 结果不是"偶尔漏判"，是【这道闸永远判不了红】。
-// 实测：模型自己在对话里说"三道全红，不建议在现状下排版出件"，报告里列了 6 条硬性不自洽
-// （含生理不可能的 eGFR=1220、3 对完全相同的生物标志物行、死亡数 8 vs 9），
-// 而步骤条上「数据完整性」照打绿勾，导出的 Word 上也不会提到"你的原始数据有 6 处对不上"。
-// 所以按【信号条数】判，不按措辞判：
-//   · audit/REPORT.md 的机器统计行 `信号统计：🟡 Medium 2，🔵 Low 1`（High/Medium 才算）
-//   · integrity_report.md 的人工核对条目 `★1 …`
-// Low 单独出现不拦：那一档大量是良性提示（实测 paperconan 对二分类结局列报"值重复"）。
-const SIGNAL_MED_HIGH = /(High|Medium|高|中)\s*[:：]?\s*([1-9]\d*)/g
-// ★ 条目锚点必须写宽。原来是 /^\s*★\s*\d+/m，只认【裸行开头】的 `★1` —— 实测模型真实写出来的
-//   两版报告一次都没命中过：一版是 `### ★1. 死亡例数：…`（★ 前面有 "### "），另一版压根没用 ★，
-//   写的是 `## 🔴 重大信号（5 项，须作者核实原始记录）` + `### 1. …`。
-//   于是那两轮判红全靠另外两条【偶然】命中（audit 的 Medium 计数行、模型碰巧写了"未通过"），
-//   把偶然去掉就还原成绿 —— 等于这道闸仍然是靠运气。
-// 两条锚点并列，别只留一条：
-//   ① 条目符号（★/⭐），允许前面有 markdown 标题号、列表符、加粗；
-//   ② 小节计数短语（"重大信号（5 项）" / "需核对 3 条" / "待核信号：2 项"）——
-//      不依赖模型这次挑了哪个符号，比 ① 稳。
-const SIGNAL_ITEM = /(^|\n)\s*(?:#{1,6}\s*)?(?:[-*•]\s*)?(?:\*\*\s*)?[★⭐]\s*\d+/
-// 分隔符要连空格一起收：模型写的既有"重大信号（5 项）"也有"需核对 3 条"。
-// 数字只认 1-9 开头 → "0 项"天然不算。再挡一次否定式（"无需核对…"/"未发现需核对…"）。
-const SIGNAL_COUNT_PHRASE = /(?<![无未没])(重大信号|严重信号|待核信号|需核对|需要核对|待核对|人工核对)[^\n]{0,12}?[（(：:\s]\s*([1-9]\d*)\s*[项条个]/
-function signalGateFailed(t) {
-  if (SIGNAL_ITEM.test(t) || SIGNAL_COUNT_PHRASE.test(t)) return true
-  let m
-  SIGNAL_MED_HIGH.lastIndex = 0
-  while ((m = SIGNAL_MED_HIGH.exec(t))) {
-    // 只在"信号统计"这类计数行上算数，避免把正文里的"中位数 3"之类误读成信号数
-    const line = t.slice(t.lastIndexOf("\n", m.index) + 1, t.indexOf("\n", m.index) < 0 ? undefined : t.indexOf("\n", m.index))
-    if (/信号|signal|统计|统计：/i.test(line)) return true
-  }
-  return false
-}
-function gateFailed(outDir, step, files, fstate) {
-  for (const g of step.emits || []) {
-    // ★ 一个通配 emits（如 reference_check*.md）下有多份报告时，【只认最新的那一份】。
-    //   原来是逐个读、任一判红就整体判红 —— 而模型第二轮换个文件名写新报告
-    //   （reference_check_round2.md）是完全合规的，第一轮那份红报告就永远躺在目录里：
-    //   闸永久卡红、重跑不管用，而拦截文案明说"重跑那道闸才算通过"。界面又没有删单个产物的入口，
-    //   唯一出路是「仍要出件」—— 一个明说"闸没转绿"的降级出口。这正是本函数注释里
-    //   反复要避免的"把人带进死胡同"。
-    //   ★ 只在【同一个 pattern 内】取最新，不跨 pattern：像 novelty 那样 emits 里并列着
-    //     novelty_report.md（裁定书）与 preregistration.md（另一份文档）的，跨组取最新会读到
-    //     不含裁定的那份 → 闸静默变绿，那是 fail-open，比卡红严重得多。
-    //     精确文件名各成一组、永远单独评判，塌缩只发生在通配组里。
-    let cand = files.filter((f) => WF.globMatch(g, f) && /\.(md|txt)$/i.test(f))
-    if (cand.length > 1 && /[*?]/.test(g)) {
-      const newest = cand.reduce((a, b) => ((fstate?.[b] || 0) > (fstate?.[a] || 0) ? b : a))
-      const dropped = cand.filter((f) => f !== newest)
-      if (dropped.length) console.warn(`[workflow] 闸 ${step.id}：${g} 命中多份报告，以最新的 ${newest} 为准（忽略 ${dropped.join("、")}）`)
-      cand = [newest]
-    }
-    for (const f of cand) {
-      if (!/\.(md|txt)$/i.test(f)) continue   // 只读文本报告
-      try {
-        // ★ 实测 kimi 把 reference_check_report.md 写成了同名【目录】，里面才是真报告。
-        //   直接 readFileSync 会抛 EISDIR → 落进下面的 catch → "读不到就按通过处理" → 闸静默变绿。
-        //   命中目录就往里找一层文本报告，找不到再放弃。
-        let fp = path.join(outDir, f)
-        if (fs.statSync(fp).isDirectory()) {
-          const inner = fs.readdirSync(fp).filter((x) => /\.(md|txt)$/i.test(x))
-          if (!inner.length) { console.warn(`[workflow] 闸产物 ${f} 是个空目录，无法裁定`); continue }
-          fp = path.join(fp, inner[0])
-        }
-        const t = fs.readFileSync(fp, "utf8").slice(0, 20000)
-        // 信号型闸（data-integrity）：它被铁律禁止写裁定语，只能按信号条数判 —— 见 signalGateFailed。
-        // 仍然把下面几条通用判据一并跑一遍：万一模型确实写了"未通过"，没有理由放过。
-        if (step.gateBy === "signals" && signalGateFailed(t)) return true
-        if (sureFailed(t) || GATE_FAIL_COUNT.test(t) || GATE_FAIL_COUNT_CAPS.test(t)
-            || GATE_FAIL_CELL.test(t) || GATE_SELF_WARN.test(t)) return true
-        // 正文里的严重条目：结论行的措辞可能被模型写软（实测正文 4 条 **Major**，总评却是
-        // "Minor to moderate revision"），只认总评就被绕过。只数【条目行】，标题行不算。
-        // 带否定的条目（"无 Major 问题"）不计 —— 同 P0 的教训。
-        let sev = 0
-        for (const ln of t.split(/\r?\n/)) {
-          if (/^\s*#/.test(ln)) continue
-          if (!/^\s*([-*•]|\d+[.)]|\|)/.test(ln)) continue
-          // ★ 严重度标记不能要求"这个词【单独】被加粗"。实测 peer-review 真实写出来的是
-          //   **整行加粗的表头式条目**：`**M1 | Critical | H18 改革试点段第②部分 | 缺乏申请人自己的科学证据**`
-          //   —— `**Critical**` 这种形态一次都没出现，于是一份含 2 条 Critical + 4 条 Major 的报告
-          //   被判成通过，标书七步全打绿勾，而医生正是靠这条进度条判断"能不能交稿"。
-          //   收两种形态：① 行内任一加粗段里出现该词；② 表格单元格 `| Critical |`。
-          if (!/\*\*[^*\n]*\b(major|critical)\b[^*\n]*\*\*/i.test(ln)
-              && !/\*\*[^*\n]*严重[^*\n]*\*\*/.test(ln)
-              && !/\|\s*\**\s*(major|critical|严重)\s*\**\s*\|/i.test(ln)) continue
-          // ★ 放宽检出侧之后，【否定侧必须同步放宽】，否则就是不对称的误报机器。
-          //   实测一份总评 A、闸结论写"✅ 通过"的报告被判红，触发句是这几类：
-          //     · `- 未发现 **Major** 问题`      ← 否定词与严重度词之间隔了一个 `**` 就失配
-          //     · `- 无 **Critical** 问题，仅 4 条 Minor`
-          //   同一句话加不加粗结果相反，这种不对称最难被发现。允许中间夹 markdown 标记。
-          if (/(无|没有|未发现|未见|不存在|none|no|not|without)\s*[*_`]*\s*(major|critical|严重)/i.test(ln)) continue
-          // 否定词也可能在标记【之后】：`- 本节 **Major** 问题：无` / `Critical: none` / `严重问题：0`
-          if (/[:：]\s*[*_`]*\s*(无|没有|none|n\/?a|0)\s*[条项个]?\s*$/i.test(ln)) continue
-          // ★ 分级说明 / 图例行不是条目。三级并列出现（Critical、Major、Minor 同在一行）
-          //   就是在解释severity 分级，不是在报告一条问题。peer-review 的技能文档本身就要求
-          //   "每条按五元组写：**严重度（Critical / Major / Minor）| 位置 | …**"，
-          //   模型复述这句模板就会踩中，而那一行恰恰说明它【还没开始】列问题。
-          if (/critical/i.test(ln) && /major/i.test(ln) && /minor/i.test(ln)) continue
-          // ★★ 「等用户补事实」不是稿件缺陷，不能计入。这条是加了服务端硬拦【之后】才致命的：
-          //   AGENTS.md §五 明令不许编造伦理批号，所以 AI 协助写的稿子【几乎必然】以
-          //   "伦理批号待补充"收尾；而一个称职的投稿前评审【必然】把"缺伦理批准"标成 Critical。
-          //   于是这条链稳定复现：不编造(对) → 评审标 Critical(对) → 闸判红(按规则也对)
-          //   → render 被硬拦 → **用户永远拿不到 Word**。实测：模型完整照做了解锁流程
-          //   （改稿 → 重跑引用核查 3/3 OK → 重跑自审并写出新报告、总评"修订后可投"），
-          //   仍然出不了件，而被拦时的文案还在说"重跑那道闸即可"—— 把人带进死胡同。
-          //   闸该量的是【稿件本身的方法学缺陷】，不是【用户还没交的材料】。后者拦不出质量，
-          //   只会把交付卡死；它照样留在报告里，用户看得到、也知道投稿前必须补。
-          if (/(待补充|待填|需你|只能由你|无法代为编造|不能代填|由你(方|们)?提供|需(用户|作者|申请人)提供|投稿前(必办|补齐|填入))/.test(ln)) continue
-          // ★ 同一条豁免的英文写法。少了它，这条豁免在英文报告里【整个失效】：实测
-          //   `- **Critical** — IRB approval number to be provided by the applicant` 照样计入严重度，
-          //   于是"不编造伦理批号 → 评审标 Critical → 闸判红 → 出不了件"这条死链在英文稿上原样复现，
-          //   而中文稿早就修好了。闸量的是稿件的方法学缺陷，不是用户还没交的材料 —— 与语言无关。
-          if (/\b(to be (provided|supplied|filled|completed|confirmed|obtained|added)|pending (irb|ethic|approval|registration|submission)|awaiting (irb|ethic|approval)|not yet (provided|obtained|available)|tbd|to be determined|only you can provide)\b/i.test(ln)) continue
-          // ★ 计数为零的表格行放行：`| Critical | 不改则拒 | 0 |`、`| Major | … | 无 |`
-          //   这是严重度图例表，在评审报告里非常常见，命中数写的就是 0。
-          if (/^\s*\|/.test(ln) && /\|\s*\**\s*(0|无|未使用|未命中|none)\s*[条项个]?\s*\**\s*\|?\s*$/i.test(ln)) continue
-          sev++
-        }
-        // ★ 报告已经明确写了"通过"裁定 → 条目计数让位（见 GATE_PASS_SURE 的三条边界）。
-        //   Major 里混着"用户还没交的材料"是常态，而那类条目的措辞穷举不完。
-        if (sev && !GATE_PASS_SURE.test(t)) return true
-        for (const ln of t.split(/\r?\n/)) {
-          if (/^\s*#/.test(ln)) continue                       // markdown 标题不是结论行
-          if (!VERDICT_LINE.test(ln)) continue
-          // ★★ 否定必须在这里也认。这条判据原来是裸的"结论行里出现 reject/critical 就红"——
-          //   而结论行恰恰是最爱写否定式的地方，实测四句【全是通过】的话全被判红：
-          //     `Recommendation: Accept. No critical issues were identified.`
-          //     `Verdict: Pass. No rejection grounds found.`（reject 是 rejection 的子串）
-          //     `结论：未发现严重问题，可以出件。`  `建议：接收，不存在严重问题。`
-          //   逐个匹配、逐个查它前面有没有否定词；全被否定掉才算这行没问题。
-          GATE_FAIL_CTX.lastIndex = 0
-          let m
-          while ((m = GATE_FAIL_CTX.exec(ln))) if (!NEG_NEAR.test(ln.slice(0, m.index))) return true
-        }
-      } catch { /* 读不到就别拦，按通过处理 */ }
-    }
-  }
-  return false
-}
-/** 按"产物文件是否已出现"反推已完成的步骤（权威判据，不问 agent）*/
+// ---- 会话的工作流状态与步骤进度 ----
+// 整台状态机（wfLoad/wfSave/wfValues/闸判据/gateFailed/wfSyncDone/批次记账/兜底归因）在
+// web/wf-state.mjs —— 抽出去是为了 test/wf-state.test.mjs 能直接 import、对临时目录跑真用例
+// （原来埋在本文件里零测试覆盖，每一类误报都要等线上实测才发现）。本文件只留 HTTP/会话粘合。
+
 // 「送审件」类技能：出 Word/PDF 的那两个。闸红着时只拦它们，不拦 markdown ——
 // 用户永远拿得到稿件内容，所以闸误判也不会把人锁死，重跑那道闸即可解锁。
 const DELIVERY_SKILLS = new Set(["render-docx", "render-pdf-doc"])
@@ -1194,7 +918,7 @@ const DELIVERY_SKILLS = new Set(["render-docx", "render-pdf-doc"])
 async function failedGatesFor(sid, modId) {
   try {
     const out = await sessionOut(sid)
-    return wfSyncDone(out, modId)?.failed || []
+    return WFS.wfSyncDone(out, modId, dirState(out))?.failed || []
   } catch { return [] }
 }
 
@@ -1208,7 +932,7 @@ async function failedGatesFor(sid, modId) {
  */
 async function gateNames(sid, modId, ids) {
   let form = {}
-  try { form = (wfLoad(await sessionOut(sid)) || {}).form || {} } catch { /* 读不到就退回空表单，至少不比原来差 */ }
+  try { form = (WFS.wfLoad(await sessionOut(sid)) || {}).form || {} } catch { /* 读不到就退回空表单，至少不比原来差 */ }
   const steps = WF.stepsFor(modId, form) || []
   return ids.map((id) => steps.find((s) => s.id === id)?.name || id)
 }
@@ -1217,7 +941,7 @@ async function gateNames(sid, modId, ids) {
  *    不说改哪 —— 而重跑闸并不会让红字消失，用户最自然的反应恰恰是又点一次重跑。 */
 async function gateBackNames(sid, modId, ids) {
   let form = {}
-  try { form = (wfLoad(await sessionOut(sid)) || {}).form || {} } catch {}
+  try { form = (WFS.wfLoad(await sessionOut(sid)) || {}).form || {} } catch {}
   const steps = WF.stepsFor(modId, form) || []
   const out = []
   for (const id of ids) {
@@ -1228,150 +952,7 @@ async function gateBackNames(sid, modId, ids) {
   return out
 }
 
-function wfSyncDone(outDir, modId) {
-  let st = wfLoad(outDir)
-  // ★ 状态簿不存在就地建一份。它此前只在两条路上被写出来：用户填了首屏表单、或提交了某步表单。
-  //   而【直接在输入框打字】是最常见的路径（表单本来就设计成可跳过），那条路下这个文件永远不存在
-  //   → 本函数直接返回 null → 进度永远是空的 → 步骤条从第一步纹丝不动。
-  //   实测后果：综述跑完了检索、筛选、成文，screening_log.md / included.csv / review.md 全都在，
-  //   而用户看到条还停在"文献检索"，以为 AI 把中间几步全跳了。
-  //   "产物反推进度、不依赖 agent 自觉"这条设计，不 seed 就只对填了表单的人生效，等于废了一半。
-  if (!st) { st = { module: modId, form: {}, done: [] }; wfSave(outDir, st) }
-  if (st.module !== modId) return st   // 簿子记的是别的模块（agent 乱写过）→ 不拿它算，也不覆盖
-  const fstate = dirState(outDir)
-  const files = Object.keys(fstate)
-  const done = new Set(st.done || [])
-  const failed = new Set()
-  // ★ 一份文件算不算某一步的产物：emits 命中【且】不在 emitsNot 里。
-  //   加 emitsNot 是因为 emits 的通配互相重叠，一份文件会被算给排在前面的那一步、让它凭空变绿。
-  //   最真实的一例：用户自带初稿只想润色，产物只有 manuscript_humanized.md —— 它同时命中
-  //   润色步的 `*_humanized.md` 和撰写步的 `manuscript_*.md`，于是 AI 一个字没写，
-  //   「撰写正文 ✓已完成」。（globMatch 对不含 / 的 glob 是按 basename 比的，所以躲不开。）
-  const emitHit = (s, f) => (s.emits || []).some((g) => WF.globMatch(g, f))
-    && !(s.emitsNot || []).some((g) => WF.globMatch(g, f))
-  for (const s of WF.stepsFor(modId, st.form || {})) {
-    // ★ 闸【每次都重新裁定】，不能吃 done 的缓存。
-    //   闸的 emits 里往往既有中间机器产物、也有最终裁定报告，两者可能差好几分钟；用户在这中间
-    //   刷新一次页面（切会话 / F5 都会打 /api/workflow/state），这一步就被写进 done 并落盘，
-    //   而后 agent 才写出「本闸判定 不通过」—— 闸再也不看了，进度条永远是绿的。实测踩到过两次。
-    //   非闸步骤仍吃缓存：它们没有"结论"可翻，重算只是白读文件。
-    if (done.has(s.id) && !s.gate) continue
-    if (!files.some((f) => emitHit(s, f))) continue
-    // ★ 质量闸不能"有文件就算过"。实测：peer-review 报告白纸黑字写着「倾向 Major revision」
-    //   并列了一条 Critical，步骤条照样打绿勾 —— 而医生正是靠这条进度条判断"能不能交稿"。
-    //   读一眼报告结论：判为未通过的标成 failed（界面显示"需返工"），不计入 done。
-    if (s.gate) {
-      // ★ 闸还得【有一份可裁定的文本报告】才谈得上"过"。gateFailed 只读 md/txt，一份候选都没有时
-      //   它返回 false —— 于是闸只要落下任何一个机器产物就被记成 done、打绿勾。实测两条真实路径：
-      //   ① data-integrity 先出 audit/scan.json、之后才写 audit/REPORT.md：REPORT 还没写出来
-      //      （或写失败）的窗口里，`audit/*` 已匹配 → 「源数据完整性自查 ✓已完成」；
-      //   ② verify_refs.py 先写 reference_check.csv 再写 .md，而 paper 的 emits 收了 csv →
-      //      CSV 里明明写着 3 条 FABRICATED，闸照样绿。
-      //   这和本函数反复防的 fail-open 是同一类，只是从"措辞"维度换到了"文件类型"维度。
-      //   没有报告就【不记 done】（停在未开始，等报告），绝不记成通过。
-      //   注：这只修显示。出件硬拦看的是 failed（红），灰着的闸本来就不拦 —— 那条策略不动，
-      //   因为"闸还没跑就把人拦死"正是这套代码一直在避免的死胡同。
-      const hasReport = files.some((f) => emitHit(s, f) && /\.(md|txt)$/i.test(f))
-      if (!hasReport) continue
-      if (gateFailed(outDir, s, files, fstate)) { failed.add(s.id); done.delete(s.id); continue }
-    }
-    done.add(s.id)
-  }
-  // ★ 单调补齐：后面的步骤已完成 ⇒ 它前面的非闸步骤也一定跑过了。
-  //   【为什么必须补】进度是靠"产物文件出现没有"反推的，而有些步骤**成功时也可能不产出文件**：
-  //   实测零结果那轮 —— 检索认真跑了 10 轮、逐级放宽、正确得出"确实一篇都没有"的结论，
-  //   但 evidence_table.csv / refs.bib 天然不会有，于是「文献检索」停在未完成，
-  //   而后面的「研读综述」（有 research_scan.md）打了绿勾。用户看到的是
-  //   "第一步没做、第三步做完了"，会以为结论是凭空来的。零结果是**成功**，不是未完成。
-  //   同理适用于可选步在无对象时（如没有全文可下）。
-  //   **闸不补**：闸的结论只能由它自己写出的报告得出，凭"后面做完了"推断闸通过，
-  //   正是这套代码在别处反复防的那种 fail-open。
-  // ★ 补齐的步骤单独记进 implied，界面上与"真有产物"的步骤区分显示。
-  //   【为什么不能都打绿勾】补齐的成因有两种，服务端分不清：① 步骤真跑了但成功时没有产物
-  //   （零结果检索）；② 用户明说"这两步别做了"，它确实没做。实测后者：用户要求跳过领域扫描与
-  //   选题收敛，产物目录里也确实没有这两步的文件，界面却把它们打成绿勾 —— 那是在告诉用户
-  //   "做过了"，而其实没有。两种都标成中性的"无产物"，比一律绿勾诚实。
-  const implied = new Set()
-  const ordered = WF.stepsFor(modId, st.form || {})
-  // ★ 闸红之后，排在它后面、产物却【早于闸报告】的步骤要标成"已过期"，不能继续打绿勾。
-  //   实测：一份综述先干净跑完出了 review.docx（22:46），随后用户加进两条假引用、闸转红
-  //   （reference_check.md 23:00）。模型行为是对的 —— 它拒绝重新出件；但界面同时显示
-  //   「引用核查 ✗ 未通过」和「排版出件 ✓ 已完成」，读起来就是"闸红了还是出了件"。
-  //   done 纯靠"产物文件在不在"反推，不比时间戳，旧 docx 还躺在那儿就恒判完成。
-  //   这与本函数注释里反复防的 fail-open 是同一类问题，只是换了个时间维度。
-  const stale = new Set()
-  const newestOf = (s) => {
-    let t = 0
-    for (const f of files) if (emitHit(s, f)) t = Math.max(t, fstate[f] || 0)
-    return t
-  }
-  // ★ 判据是"这道闸【现在】红着"，而不是"下游产物比闸报告旧"。
-  //   只判旧的那一半漏掉了更危险的另一半：闸已经红了、下游【之后】还是跑了。
-  //   实测：闸报告 09:40:49 判红，review.docx 09:41:38 生成（晚于闸报告），
-  //   步骤条照样是「引用核查 ✕ 需返工」+「✓ 排版出件」，与改动前观感一模一样，
-  //   只是这次 Word 是新的 —— 而"闸红着还把件出了"恰恰比"拿旧件充数"更要命。
-  //   闸红着的时候，它下游的任何产物都不能算数，不论先后。
-  ordered.forEach((g, gi) => {
-    if (!failed.has(g.id)) return
-    for (let i = gi + 1; i < ordered.length; i++) {
-      const s = ordered[i]
-      if (!done.has(s.id)) continue
-      if (!newestOf(s)) continue          // 这一步压根没有产物 → 交给下面的 implied 处理
-      done.delete(s.id); stale.add(s.id)
-    }
-  })
-  // ★ 另一半：【上游改过之后没重做】。上面那条只在"闸现在红着"时生效，闸一转绿，时间维度的信息
-  //   就全丢了。实测两个假绿：
-  //   ① 出了 docx(t400) → 改稿(t500) → 重跑闸转绿(t600)：步骤条整排绿，而用户拿到的 Word
-  //      是【含假引用的那一版】；
-  //   ② 闸绿(t300) 之后稿子又改了(t500)：「引用核查 ✓」纹丝不动 —— 闸绿的是另一份稿子。
-  //   newestOf 早就算好了时间戳，却只被当布尔用过一次。按流水线顺序累计"上游最新产物时间"，
-  //   某步的产物比它旧 = 这一步是拿旧输入做的 → 标过期（不打绿勾，但也不算红：闸没判它不合格）。
-  //   单独记进 staleUp，好让界面把原因说准（"闸红后未重做" vs "上游改过之后没重做"是两回事）。
-  const staleUp = new Set()
-  let upstreamNewest = 0
-  for (const s of ordered) {
-    const t = newestOf(s)
-    if (!t) continue                                  // 无产物的步骤不参与（implied 那条线管它）
-    if (done.has(s.id) && upstreamNewest && t < upstreamNewest) {
-      done.delete(s.id); stale.add(s.id); staleUp.add(s.id)
-    }
-    if (t > upstreamNewest) upstreamNewest = t
-  }
-  // ★ 判据必须是"这一步有没有产物"，【不能】写成"它还不在 done 里"。
-  //   done 在函数开头就用上一次落盘的 st.done 播种，补齐过的步骤第二次进来已经在 done 里，
-  //   于是永远进不了 implied；接着空的 implied 被覆盖写回文件，标记就被永久擦除了。
-  //   实测：用户开会话、刷页面各触发一次 state 读取，所以「·无产物」几乎没人看得到 ——
-  //   连查三次，第一次有、后两次恒为 []。按产物判则是幂等的，与"进度靠产物反推"的原设计一致。
-  const hasArtifact = (s) => files.some((f) => emitHit(s, f))
-  let lastDone = -1
-  ordered.forEach((s, i) => { if (done.has(s.id)) lastDone = i })
-  for (let i = 0; i < lastDone; i++) {
-    const s = ordered[i]
-    // 排除 stale：那一步刚被上面从 done 里摘出去（闸红着），这里再原样加回来还打上「·无产物」，
-    // 会把一个明明有 22KB 产物的步骤标成"没有产物"，同时把"已过期"的提示挤掉。
-    if (!s.gate && !failed.has(s.id) && !stale.has(s.id) && !hasArtifact(s)) { done.add(s.id); implied.add(s.id) }
-  }
-  const arr = [...done], farr = [...failed], iarr = [...implied], sarr = [...stale], uarr = [...staleUp]
-  // ★ 完成即退位。st.cur 只有 /api/workflow/form 提交表单时写入，全仓库【没有任何清除点】——
-  //   那一步跑完之后 cur 仍然钉在它身上，此后每轮收尾广播、每次刷新、每次切回会话都把它送回前端，
-  //   于是一个早已跑完的格子被同时画成"当前步"，而真正在跑的那步是灰的（进度条还会自动滚回去）。
-  //   产物出来了就说明那步过了，当前位置交给前端的兜底（第一个未完成步）去推，比一个陈旧的值准。
-  const curStale = !!st.cur && done.has(st.cur)
-  if (curStale || arr.length !== (st.done || []).length || farr.join() !== (st.failed || []).join()
-      || iarr.join() !== (st.implied || []).join() || sarr.join() !== (st.stale || []).join()
-      || uarr.join() !== (st.staleUp || []).join()) {
-    // 落盘前重读一次再只覆盖 done：本函数在【轮次收尾】跑，而用户可能正好在同一时刻提交下一步表单
-    //（/api/workflow/form 也写这个文件）。拿本函数开头那份旧快照整体写回，会把刚提交的表单值抹掉。
-    const fresh = wfLoad(outDir) || st
-    fresh.done = arr; fresh.failed = farr; fresh.implied = iarr; fresh.stale = sarr; fresh.staleUp = uarr
-    // 重读之后再判一次：中间用户可能刚提交了下一步的表单，此时 fresh.cur 是新的、不该清
-    if (fresh.cur && done.has(fresh.cur)) fresh.cur = null
-    wfSave(outDir, fresh)
-    return fresh
-  }
-  return st
-}
+
 
 // 受限模块的会话前言：与工作区前言同一个块注入（中间不能有空行——stripPreamble 按"第一个空行"剥离）
 // 【三段】① 技能白名单（硬边界，网关强制）② 步骤链剧本 ③ 产物文件名契约。
@@ -1405,7 +986,7 @@ const modulePreamble = (modId, outDir) => {
   const m = MODULE_DEFS[modId]
   if (!m || !m.skills) return ""
   const list = m.skills.map((s) => `\`${s}\``).join("、")
-  const vals = outDir ? wfValues(outDir, modId) : {}
+  const vals = outDir ? WFS.wfValues(outDir, modId) : {}
   return `\n- **【模块限制，最高优先级，覆盖 AGENTS.md 的一切路由规则】本会话是「${m.name}」专用模块**：你【只允许】调用这些技能——${list}（其中 \`${m.primary}\` 是主技能，其余按需配套），禁止调用任何其它技能。\n- **本会话【没有】子代理 / task 工具**（不只是"禁止拿它调技能"——是整个工具不可用，调了本轮会被立即中止）。技能文档里凡是写"派调研子代理""并行分头查"的地方，一律改走它给的**串行兜底**：主流程自己顺序查完（web 搜索/抓取，或 \`.venv\` 的 requests/beautifulsoup4）。别先试一次再说，那一轮会白白作废。\n- 只在本模块职责范围内推进，不越界做别的模块的事；缺信息就直接向用户要。\n- 用户的需求超出「${m.name}」范围时，明确告知本模块做不了，并**按下面这张表把他指到对的模块**去新开会话，不要自己徒手代替其它技能去做${moduleMapLine(modId)}\n- 网关会强制校验技能调用：一旦调用上述清单之外的技能，本轮会被立即中止。${WF.settingsLine(modId, vals)}${WF.pipelineLine(modId, vals)}${WF.artifactLine(modId, vals)}`
 }
 
@@ -2479,17 +2060,17 @@ const autoContinueText = (round) => `【无人值守·自动续跑 第 ${round} 
 const wfMarkHalted = async (sid, stepId, reason) => {
   try {
     const dir = await sessionOut(sid)
-    const st = wfLoad(dir); if (!st) return
+    const st = WFS.wfLoad(dir); if (!st) return
     st.halted = { step: stepId || null, reason: reason || "error", at: Date.now() }
-    wfSave(dir, st)
+    WFS.wfSave(dir, st)
   } catch (e) { console.warn(`[workflow] 中断标记写不进去（不影响本轮报错）：${e.message}`) }
 }
 const wfClearHalted = async (sid) => {
   try {
     const dir = await sessionOut(sid)
-    const st = wfLoad(dir); if (!st || !st.halted) return
+    const st = WFS.wfLoad(dir); if (!st || !st.halted) return
     delete st.halted
-    wfSave(dir, st)
+    WFS.wfSave(dir, st)
   } catch { /* 没有簿子就没什么可清 */ }
 }
 
@@ -2549,6 +2130,8 @@ function startJob(sid, sentText, modId, forceModel) {
   // （正常完成 / 用户终止 / 出错收场都走 finish，一处清理覆盖全部路径，绝不留悬空定时器）。
   // noteModelOutput() 只在【确认是模型真的产出了东西】时调用，别拿消息壳子当活证据（见 FIRST_EVENT_TIMEOUT_MS 注释）。
   let sawOutput = false, watchdog = null
+  // 轮中进度定时器句柄（启动在 before 快照之后）；定义在 finish 之前，finish 无条件清
+  let wfTick = null
   const clearWatchdog = () => { if (watchdog) { clearTimeout(watchdog); watchdog = null } }
   const noteModelOutput = () => { if (sawOutput) return; sawOutput = true; clearWatchdog() }
   const finish = () => {
@@ -2566,6 +2149,7 @@ function startJob(sid, sentText, modId, forceModel) {
     }
     job.finished = true; job.running = false; jobs.delete(sid); runningCost.delete(sid)   // 本轮成本已由 addCost 入账，撤掉实时占位
     clearWatchdog()
+    if (wfTick) { clearInterval(wfTick); wfTick = null }   // 轮中进度定时器与看门狗同路清理，绝不留悬空
     try { evAbort.abort() } catch {}   // 立刻掐掉本轮的 opencode 事件流，别留着空转到下一个事件
     for (const r of job.subs) { try { r.end() } catch {} }
     job.subs.clear()
@@ -2811,6 +2395,16 @@ function startJob(sid, sentText, modId, forceModel) {
     })
     const outDir = await sessionOut(sid)                 // 本会话的绝对产物目录（= agent 的工作目录）
     const before = dirState(outDir)   // 记录本轮开始前本会话产物状态，用于算增量
+    // ★ 轮中周期刷新步骤条。完成集原来只在轮末广播一次 —— 一轮十几分钟里 ✓/红/琥珀全冻着，
+    //   「当前步」只能靠技能调用事件推动，agent 不调技能直接干活时条子纹丝不动，用户看到的
+    //   与实际运行必然不符。25s 重算一次产物反推并广播；前端 updateStepsBar 幂等，多推无害。
+    //   本轮进行中的新文件还没记批次，wf-state 把它们按"当前批次"算，不会被误标"已过期"。
+    if (modId !== "chat") wfTick = setInterval(() => {
+      try {
+        const st = WFS.wfSyncDone(outDir, modId, dirState(outDir))
+        if (st) broadcast("workflow", { cur: st.cur || null, done: st.done || [], failed: st.failed || [], implied: st.implied || [], stale: st.stale || [], staleUp: st.staleUp || [], halted: st.halted || null, gateBypass: gateBypassed(sid) })
+      } catch { /* 单次失败无所谓，下个周期再试 */ }
+    }, 25000)
     let cost0 = 0; try { cost0 = un(await client.session.get({ path: { id: sid } }))?.cost || 0 } catch {}   // 本轮前累计成本，用于算增量
     job.cost0 = cost0   // 挂到 job 上：容器停机时 gracefulExit 要用它把本轮已花的钱结算掉（见文件末尾）
     let result, promptErr = null
@@ -2866,7 +2460,13 @@ function startJob(sid, sentText, modId, forceModel) {
       if (rendered.length) broadcast("artifacts", rendered)
       if (modId !== "chat") {
         try {
-          const st = wfSyncDone(outDir, modId)
+          const fstate = dirState(outDir)
+          // 轮末顺序要紧：先把本轮产物统一记成一个批次（staleUp 按批次比新旧，同一轮里
+          // 乱序写文件不再被误标"已过期"），再做兜底归因（正常收场、调过技能、却只写出
+          // 不合契约名的产物 → 按技能把那一步补记完成，别让条子永远灰着），最后重算进度。
+          WFS.wfNoteBatch(outDir, modId, changed, fstate)
+          if (!haltReason) WFS.wfAttribute(outDir, modId, [...job.skills.keys()], changed, fstate)
+          const st = WFS.wfSyncDone(outDir, modId, fstate)
           if (st) broadcast("workflow", { cur: st.cur || null, done: st.done || [], failed: st.failed || [], implied: st.implied || [], stale: st.stale || [], staleUp: st.staleUp || [], halted: st.halted || null, gateBypass: gateBypassed(sid) })
         } catch (e) { console.warn(`[workflow] 进度同步失败：${e.message}`) }
       }
@@ -2885,7 +2485,7 @@ function startJob(sid, sentText, modId, forceModel) {
       try {
         const first = [...job.skills.keys()][0]
         if (first && modId !== "chat") {
-          const form = (wfLoad(await sessionOut(sid)) || {}).form || {}
+          const form = (WFS.wfLoad(await sessionOut(sid)) || {}).form || {}
           const own = (s) => s.skill === first || (s.skillAlias || []).includes(first)
           hitId = (WF.stepsFor(modId, form) || []).find(own)?.id || null
         }
@@ -3812,7 +3412,7 @@ export const server = http.createServer(async (req, res) => {
       let hSteps = []
       try {
         const hMod = sessionModule(id)
-        if (hMod && hMod !== "chat") hSteps = WF.stepsFor(hMod, (wfLoad(await sessionOut(id)) || {}).form || {})
+        if (hMod && hMod !== "chat") hSteps = WF.stepsFor(hMod, (WFS.wfLoad(await sessionOut(id)) || {}).form || {})
       } catch { hSteps = [] }
       const stepSeen = new Set()
       let curStep = null
@@ -3909,7 +3509,8 @@ export const server = http.createServer(async (req, res) => {
       try {
         const fmod = sessionModule(id)
         if (fmod && fmod !== "chat") {
-          const fst = wfSyncDone(await sessionOut(id), fmod)
+          const fdir = await sessionOut(id)
+          const fst = WFS.wfSyncDone(fdir, fmod, dirState(fdir))
           if (fst) flow = { steps: WF.workflowFor(fmod, fst.form || {})?.steps || [],
             done: fst.done || [], failed: fst.failed || [], implied: fst.implied || [], stale: fst.stale || [],
             bypass: gateBypassed(id) }
@@ -4099,7 +3700,7 @@ export const server = http.createServer(async (req, res) => {
       if (!moduleUsable(modId))
         return send(res, 403, "application/json", JSON.stringify({ err: `本会话绑定的「${MODULE_DEFS[modId]?.name || modId}」模块当前不可用（可能是授权被调整）。请联系管理员，或到「自由对话」新开会话。` }))
       const out = await sessionOut(sid)
-      const st = wfSyncDone(out, modId) || { module: modId, form: {}, done: [] }
+      const st = WFS.wfSyncDone(out, modId, dirState(out)) || { module: modId, form: {}, done: [] }
       // steps 按已填表单值裁剪后回：条件不成立的步骤（如"数据已脱敏"→不需要脱敏步）不该出现在进度条上
       return send(res, 200, "application/json", JSON.stringify({
         state: st, module: modId, name: MODULE_DEFS[modId]?.name || modId,
@@ -4260,7 +3861,7 @@ export const server = http.createServer(async (req, res) => {
       // /api/chat/start 建完会话后补写，见那里的 wfSeed）
       if (sid && sessionModule(sid) === modId) {
         const out = await sessionOut(sid)
-        const st = wfLoad(out) || { module: modId, form: {}, done: [] }
+        const st = WFS.wfLoad(out) || { module: modId, form: {}, done: [] }
         st.module = modId
         // 跨步继承：立项卡填的目标期刊，后面各步直接复用。
         // ★ 但 `__src_<字段id>`（多表时列名读自哪张表）是【纯前端的界面状态】、不是表单值：
@@ -4275,7 +3876,7 @@ export const server = http.createServer(async (req, res) => {
         const persist = Object.fromEntries(Object.entries(values).filter(([k]) => !k.startsWith("__") || KEEP.test(k)))
         st.form = { ...(st.form || {}), ...persist }
         if (stepId) st.cur = stepId
-        wfSave(out, st)
+        WFS.wfSave(out, st)
       }
       return send(res, 200, "application/json", JSON.stringify({ ok: true, card, warnings }))
     }
@@ -4620,12 +4221,12 @@ export const server = http.createServer(async (req, res) => {
       // 首屏表单值落盘。必须在下面拼 preamble 之前 —— modulePreamble 要读它来裁剪步骤链
       //（例如"数据已脱敏"会把脱敏那步整个剔掉，剧本里就不该再出现它）。
       if (wfSeed && modId !== "chat" && WF.WORKFLOWS[modId]) {
-        const st = wfLoad(ws.out) || { module: modId, form: {}, done: [] }
+        const st = WFS.wfLoad(ws.out) || { module: modId, form: {}, done: [] }
         st.module = modId
         // 与 /api/workflow/form 同一口径：`__src_*`（纯界面状态）不落盘，`__vars*`（谁填的 / 核过没）要落。
         // 两条写盘路径此前口径相反 —— 表单口剥掉全部 `__`，这条一个都不剥。
         st.form = { ...(st.form || {}), ...Object.fromEntries(Object.entries(wfSeed).filter(([k]) => !k.startsWith("__") || /^__vars/.test(k))) }
-        wfSave(ws.out, st)
+        WFS.wfSave(ws.out, st)
       }
       // ensureSessionTitle 里有 await（打 opencode 网络）——必须放在“检查 running → startJob”这段【全同步】区之前。
       // 否则同 sid 的两个并发请求会在这个 await 处双双让出、都看到没有 running job、各自 startJob，
