@@ -56,6 +56,15 @@ test("闸判据：真实的『通过』措辞一条都不许判红", () => {
     ["Verdict: Accept. Major revision is not necessary.", "否定与裁定语之间隔着 is"],
     ["建议：接收，不存在严重问题。", "中文结论行的否定式"],
     ["总体评价：无硬伤。", "中文结论行的否定式"],
+    // ---- 复审报告的历史回顾。实测原文（grant 会话 ws_msobe2n26dfdf10d，2026-08-11）：
+    //      模型完整照做了"返工→重跑闸→写新报告"，新报告结论「✅ 评审自查闸通过」，
+    //      却因回顾初评的那半句「（初评 Major revision → 返工 → 复审）」被判红、出件被拦 ——
+    //      复审报告【必然】要转述上一轮裁定，回顾语不是本轮结论。
+    ["**复审日期：** 2026-08-11（初评 Major revision → 返工 → 复审）\n\n" +
+     "**当前无 Critical / Major 项**（方法学硬伤已清除）。\n\n## 闸判\n**✅ 评审自查闸通过**（Major 硬伤已修复；残留项均为 Minor 待补事实，不阻塞）。",
+     "复审报告回顾初评裁定——历史转述不是本轮结论"],
+    ["上一轮判定为需返工；本轮复核：问题已全部解决，判定：通过。", "中文回顾语+新裁定"],
+    ["The initial review recommended major revision. All issues were addressed. Decision: Accept.", "英文回顾语+新裁定"],
   ]
   for (const [t, why] of PASS)
     assert.equal(failed(t), false, `误判红：${why}\n  原文：${t.slice(0, 60)}`)
