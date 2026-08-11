@@ -4840,8 +4840,8 @@ function markStepBySkill(skill) {
   const hit = list.find((s) => own(s) && !liveDone.includes(s.id)) || list.find(own)
   // ★ 没有任何一步认领这个技能时，【也要开一个框】，别静默并进上一步的框里。
   //   会发生是因为技能白名单按【未裁剪】的全量步骤算（skillsOf 用的是 w.steps），
-  //   而条子画的是裁剪后的：review 没勾"下全文"时 fulltext-retrieval 照样放行，
-  //   paper 选诊断准确性时 clinical-stats 照样放行 —— 它们真跑起来时条子上没有对应格子。
+  //   而条子画的是裁剪后的：paper 选诊断准确性时 clinical-stats 照样放行、
+  //   前瞻性研究里被条件剔掉的步骤同理 —— 它们真跑起来时条子上没有对应格子。
   //   原来直接 return：这一轮的全部内容落进上一步的框、进度条纹丝不动，
   //   用户看到的是"AI 卡住了"，而它其实正在下全文。
   //   开的是【流程外】的框：合成 id、labelGroup 找不到下标就不给序号（它本来也不占步骤号）。

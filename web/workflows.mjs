@@ -97,7 +97,7 @@ const JOURNAL_FILTER = [
         + "⚠️ 档位取自 OpenAlex，需要该服务的可用额度；取不到时「本项不生效」"
         + "（结果不会按它过滤），届时报告里会注明。" },
   { id: "jOA", label: "只保留开放获取（OA）的文献", type: "bool", default: false,
-    help: "OA = 不用订阅就能下全文。勾上能明显提高「全文获取」成功率。" },
+    help: "OA = 不用订阅就能看全文。勾上能明显提高后续拿到原文的成功率（需要原文的模块才走这一步）。" },
 ]
 
 // ============================================================
@@ -689,7 +689,11 @@ export const WORKFLOWS = {
       { id: "pico", label: "研究问题的四要素（填了检索会精准很多）", type: "textarea",
         placeholder: "人群：晚期肝细胞癌初治患者　干预：PD-1 抑制剂联合靶向　对照：单药靶向　结局：总生存期",
         help: "不确定就留空，照样能检索。" },
-      { id: "years", label: "时间范围", type: "select", default: "10", options: [
+      // 标签写全称「参考文献时间范围」：孤零零一个"时间范围"在综述语境里有歧义
+      // （医生会读成"综述要覆盖的研究年代"），而它实际管的是【检索这批参考文献】的发表年限。
+      // 默认收到近 3 年：综述的常态是"讲这个方向最近的进展"，近 10 年会把一堆已被推翻的旧结论
+      // 拉进池子，用户再一篇篇剔。要回溯经典文献的选「近 10 年 / 不限」即可。
+      { id: "years", label: "参考文献时间范围", type: "select", default: "3", options: [
         { v: "3", t: "近 3 年" }, { v: "5", t: "近 5 年" }, { v: "10", t: "近 10 年" }, { v: "0", t: "不限" }] },
       { id: "designs", label: "纳入的研究设计", type: "multi", options: [
         { v: "rct", t: "随机对照试验" }, { v: "cohort", t: "队列研究" }, { v: "casecontrol", t: "病例对照" },
@@ -697,11 +701,12 @@ export const WORKFLOWS = {
       // 【2026-08-08 删了 limit】同 paper 模块：综述的召回不设条数上限（见 JOURNAL_FILTER 上方说明）。
       // 收窄范围靠时间范围 / 研究设计 / 下面这组期刊条件，不靠"最多多少篇"这个数字。
       ...JOURNAL_FILTER,
-      { id: "length", label: "目标篇幅", type: "select", default: "4000", section: "成稿与输出", options: [
-        { v: "2000", t: "约 2000 字（短综述）" }, { v: "4000", t: "约 4000 字（推荐）" },
-        { v: "8000", t: "约 8000 字（长篇）" }] },
-      { id: "fulltext", label: "尝试下载开放获取全文", type: "bool", default: false,
-        help: "只下 OA 渠道能拿到的；下不到的会如实列出原因，不会假装拿到了。" },
+      // 【2026-08-11 从三档下拉改成自由输入】篇幅是投稿方/导师给死的数字（"不超过 5000 字"
+      // "3500 字左右"），三个档位覆盖不了；用户以前只能挑一个最接近的，再在对话里补一句改口。
+      // 直接给输入框，min/max 只兜住明显填错的量级（脚本 nCheck 会就地提示，不拦提交）。
+      { id: "length", label: "目标篇幅", type: "number", default: 4000, unit: "字",
+        section: "成稿与输出", min: 800, max: 30000, step: 100, placeholder: "例如：4000",
+        help: "常见量级：2000 字（短综述）· 4000 字（推荐）· 8000 字（长篇）。留空则由 AI 按主题体量自定。" },
       LANG,
     ],
     steps: [
@@ -714,10 +719,9 @@ export const WORKFLOWS = {
       //   稿子都成文了，勾了也没有意义（那张卡是"下一步未完成的带表单步骤"才给的，见
       //   index.html 的 offerStepForm）。叙述性综述的取舍本来就在 write 那步由检索范围
       //   （时间 / 研究设计 / 期刊条件）与成文时的论证决定，不必再让用户逐篇点一遍。
-      { id: "fulltext", name: "全文获取", skill: "fulltext-retrieval", optional: true,
-        when: { field: "fulltext", eq: true },
-        emits: ["pdfs/*.pdf", "retrieval_report.json", "manual_needed.txt"], render: "retrieval",
-        hint: "如实区分哪些下到了、哪些没下到及原因" },
+      // 【2026-08-11 删了「全文获取」这一步】它挂在首屏那个「尝试下载开放获取全文」勾选上，
+      //   而那一项已随本次改动去掉 —— 条件永远不成立，留着就是一个永不点亮的灰格子。
+      //   叙述性综述靠检索得到的题录 + 摘要成文；确实要原文 PDF 的，去「文献研读」模块。
       { id: "write", name: "综述成文", skill: "literature-review",
         emits: ["review.md", "literature_review.md", "*_review.md"], render: "manuscript" },
       { id: "refcheck", name: "引用核查", skill: "reference-check", gate: true,
@@ -1870,6 +1874,9 @@ const fmtVal = (f, v, upDir) => {
       + "（在上传目录下，绝对路径见前言）"
   }
   if (f.type === "select") return label(v)
+  // number 型带单位的，任务卡里要把单位一起写上：光一个 "4000" 落在「目标篇幅」后面，
+  // 模型得自己猜是字数还是词数（中英文稿差着一倍）。unit 界面上已经画在输入框右边了。
+  if (f.type === "number" && f.unit) return `${v} ${f.unit}`
   return String(v)
 }
 
