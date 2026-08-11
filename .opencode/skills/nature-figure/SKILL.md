@@ -14,6 +14,8 @@ author: Community contribution (nature-skills); repo-adapted backend/default pol
 >
 > **R 未装，且【禁止在容器里现装】**：不要执行 `install.packages()`、`apt install r-base`、conda 装 R 或任何等效操作——装进的是容器可写层，**每次上线重建容器就全部消失**，只会制造"上周还能跑、今天又不行"的幻觉，还会挤占共享宿主的内存与磁盘。用户明确要 R 时按优先级处理：**①** 用已装的 Python 栈复刻同等图形并说明等价性；**②** 把写好的 R 脚本作为产物交付（含 `install.packages()` 注释），由用户在自己机器上运行；**③** 如用户坚持容器内直接跑 R，如实告知本部署不含 R、需平台管理员改镜像。`r-workflow.md` 里"may provide install.packages() commands"在本仓库理解为【写进交付脚本的注释】，不是在容器里执行。
 
+> **上游故事线定案（有就照单干）**：开工先扫当前工作目录有无 `design_brief.md`（idea-forge 故事线锻打的出件，paper 流水线在本技能之前）——有，其「下游任务清单 · nature-figure 该画」一节就是本次的图表清单：**按清单画、图与核心主张一一对应，别自作主张多画或漏画**；主张梯度（如"独立关联、不声称因果"）同时约束图注措辞。没有该文件则照常按用户请求与数据判断。
+
 # Nature Figure Making — Router
 
 This skill is split into two layers:
