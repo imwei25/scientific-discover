@@ -1,6 +1,6 @@
 ---
 name: novelty-check
-description: 选题前置把关——对选定的候选课题做**严格新颖性裁定**（真新/增量/已被回答/有争议，含试验与系统综述注册库检索，能"早杀"已被做透的题）+ **预注册锁**（写数据之前冻结假设与主分析计划，防 HARKing / 结果导向地改假设）。在 grant 流水线里位于 topic-selection 之后、grant-proposal 之前（采数前做预注册锁）；在 paper 流水线里，若用户**已提供数据**则本步**可选**，置于 data-analysis 之后、literature-review/write-paper 之前，只做新颖性裁定（数据已采，预注册锁不再适用）。当用户说"这个题到底新不新""是不是已经有人做过了""帮我做预注册/研究注册""锁定研究方案""设计一下这个研究怎么做"时使用。只是发散提候选、打分排序用 topic-selection；只是摸领域背景用 research-scan。
+description: 选题前置把关——对选定的候选课题做**严格新颖性裁定**（真新/增量/已被回答/有争议，含试验与系统综述注册库检索，能"早杀"已被做透的题）+ **预注册锁**（写数据之前冻结假设与主分析计划，防 HARKing / 结果导向地改假设）。在 grant 流水线里位于 **idea-forge（立意锻打）之后**、grant-proposal 之前——对锻打**定稿**的科学问题做裁定+预注册锁（锻打被跳过时直接跟在 topic-selection 后）；在 paper 流水线里，若用户**已提供数据**则本步**可选**，置于 data-analysis 之后（做了 idea-forge 就排在它后面、对定稿主张裁定）、literature-review/write-paper 之前，只做新颖性裁定（数据已采，预注册锁不再适用）。当用户说"这个题到底新不新""是不是已经有人做过了""帮我做预注册/研究注册""锁定研究方案""设计一下这个研究怎么做"时使用。只是发散提候选、打分排序用 topic-selection；只是摸领域背景用 research-scan。
 ---
 
 # 选题前置把关：新颖性裁定 + 预注册锁
@@ -23,7 +23,8 @@ ${REPO_ROOT:-/app}/.venv/bin/python
 ```
 
 ## 何时用、何时跳过
-- **用**：topic-selection 选出 1–2 个主攻方向后，正式写标书/开题/建库前；或用户直接问"这题新不新 / 帮我做研究注册"。
+- **用**：idea-forge 把立意锻定之后（grant 流水线标准位置）、正式写标书/开题/建库前；锻打被跳过时，topic-selection 选出 1–2 个主攻方向后直接用；或用户直接问"这题新不新 / 帮我做研究注册"。
+- **消费上游锻打产物（cwd 有就必用，别重做）**：`design_brief.md` 在 → **裁定对象就是它的关键科学问题**（一字不改地裁那句话，别退回宽泛方向）；`closest_work.md` 在 → 作为最接近文献表的**起点**，补严补全（注册库、诚实性清单、中文库）而不是从零重查。**为什么这个顺序**（2026-08 A/B 实验）：先裁后锻会因锻打中方向转向而过期——旧裁定的注册库结论对新问题不成立，实测漏掉过 n=1050 的在研竞争试验。**若发现 design_brief 的科学问题与手头旧 verdict 不一致，以 design_brief 为准重新裁定。**
 - **用（paper 流水线，数据已备）**：用户已提供数据、走原创研究论文流程时，本步**可选**放在 `data-analysis` 之后、`literature-review`/`write-paper` 之前，只做**新颖性裁定**（判本发现是否已被回答、差异点在哪）——预注册锁此时不适用（数据已采）。
 - **跳过**：还在发散提候选（用 `topic-selection`）；只想摸领域背景（用 `research-scan`）；纯回顾性、数据早已存在且不涉及预设假设检验的探索（新颖性仍建议查，预注册可略）。
 
@@ -80,7 +81,7 @@ ${REPO_ROOT:-/app}/.venv/bin/python
 **产出**：预注册草案写到工作区（模板见 [references/preregistration.md](references/preregistration.md)），提示用户去对应平台正式提交、回填真实注册号。**注册前后设计如有变更，记入"偏离日志"**，投稿时如实披露。
 
 ## 衔接
-- 上游：`topic-selection`（拿到选定候选与其引用）、`research-scan`（邻近工作地图）。
+- 上游：`idea-forge`（design_brief.md 的定稿科学问题 + closest_work.md 起点表，见「何时用」）、`topic-selection`（拿到选定候选与其引用）、`research-scan`（邻近工作地图）。
 - 下游：裁定为**真新颖/增量/有争议**且（前瞻时）预注册锁定后 → grant 流水线接 `grant-proposal`（写标书，Methods 引用预注册的主假设与分析计划）；paper 流水线（数据已备的可选位）接 `nature-figure` → `literature-review`（成文综述）→ `write-paper`。深挖 prior-art 用 `deep-research`。
 
 ## 产出与交付

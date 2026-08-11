@@ -57,8 +57,9 @@ description: 交互式"立意锻打"对话引擎——动手写/做之前，先�
 1. 按 `references/design-brief-template.md` 生成 `design_brief.md`（场景对应的变体，见模板）。
 2. **分节呈现给用户确认**（每节末尾问"这节定稿？**1)** 定 **2)** 改哪里"），全部过完才算定稿。
 3. 定稿时向用户交代三件事：**已确认的决策**（含证据）、**被否决的备选及理由**（标书场景这是答辩弹药，务必保留）、**遗留开放项与待补事实清单**（Minor，不阻塞下游）。
-4. 指路下一步（编号选项）：标书 → grant-proposal（它会自动消费 design_brief.md 与 closest_work.md）；论文 → write-paper / nature-figure / literature-review；选题 → novelty-check。
-5. **证据台账回收**：对话中查到的文献按 `closest_work.md` 的五列格式落一份（标书/选题场景必做），检索花的成本一分不丢地变成下游原料。
+4. **裁定过期护栏**：出件前查 cwd 有无 `novelty_verdict*.md`——有、且定稿的科学问题相对它已**转向**（换人群/换干预/换主结局/换机制层）→ 在出件说明里**显式标注"该裁定已过期，须对新问题重跑 novelty-check"**，绝不让下游拿旧裁定背书新问题（旧注册库结论对新问题不成立，撞车风险恰恰藏在这——A/B 实验实测过）。
+5. 指路下一步（编号选项）：**标书 → novelty-check**（对定稿科学问题做严格裁定+预注册锁；已有裁定且未转向可跳）→ grant-proposal（自动消费 design_brief / closest_work / novelty_verdict）；论文 → （新颖性主张要紧时先 novelty-check）→ nature-figure / literature-review / write-paper；选题 → novelty-check。
+6. **证据台账回收**：对话中查到的文献按 `closest_work.md` 的五列格式落一份（标书/选题场景必做），检索花的成本一分不丢地变成下游原料——novelty-check 会以它为最接近文献表的起点补严，不重做。
 
 ## 场景包（`references/question-banks.md`）
 
@@ -67,6 +68,7 @@ description: 交互式"立意锻打"对话引擎——动手写/做之前，先�
 ## 检索工具的取用
 
 - 文献：优先 `search-lit`（PubMed 系）/ `literature-review` 的 `search.py`（Europe PMC）；要读全文用 `fulltext-retrieval`。
+- **注册库快查（标书/选题场景的"最接近工作/前人覆盖"必检节点，与文献检索一起做）**：ClinicalTrials.gov API + ChiCTR 各打 1–2 条定向查询，专查"**有没有在研试验正在回答同一问题**"——发表文献查不出在研撞车，这是 A/B 实验里先裁定臂漏掉 n=1050 竞争试验的直接教训。查到 → 当反例呈给用户；查不通（ChiCTR 常要浏览器）→ 如实标"注册库未核实，留给 novelty-check 补全"，别装查过。这是**快筛**：一两条查询封顶，严格全查是 novelty-check 的活。
 - 政策/指南/期刊信息：WebSearch / WebFetch。
 - 草稿体检：`grant-proposal/scripts/hollowness_check.py`。
 - **检索是为对话服务的**：每次查询目标单一（验证一个主张 / 给一个节点找候选），别在对话中途跑成全面综述——那是 literature-review 的活，需要时建议用户会后做。
@@ -78,7 +80,7 @@ description: 交互式"立意锻打"对话引擎——动手写/做之前，先�
 ## 与其他技能的边界
 
 - **topic-selection**：它管"做什么"（收敛漏斗到 PICO），本技能管"想清楚为什么值得做、凭什么是你、方案凭什么立得住"，假设方向已大致有了。它的"对抗式研究"是 agent 对文献单方面证伪；本技能的 grill 是 agent 拿着文献**和用户对话**。互补不互替。
-- **novelty-check**：一次性新颖性裁定；本技能消费其 verdict，把"裁定为新"锻成"表述得硬"。
+- **novelty-check**：严格裁定+预注册锁。**标准顺序是本技能在前、它在后**（A/B 实验定的）：本技能的快筛负责早杀与定向，它对锻打**定稿**的科学问题做一次严格裁定（以 `closest_work.md` 为起点补严，不重做）并锁预注册。上游已有 verdict（用户先跑了它、或旧会话带来）→ 照阶段 0 消费；但科学问题在锻打中转向后旧 verdict 即过期，出件时按阶段 3 护栏提示重跑。
 - **peer-review / grant-proposal 评审模式**：只评不改的单向输出；本技能是与用户共决的双向对话。接力关系：评审报告里的方向性弱点（立意空、创新虚）正好构成本技能的现成议程。
 - **grant-proposal / write-paper**：成文本体。本技能是它们的前置设计环节，产物经 `design_brief.md` 硬接口交付。
 
