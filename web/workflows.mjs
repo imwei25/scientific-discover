@@ -594,6 +594,23 @@ export const WORKFLOWS = {
         when: { field: "materials", has: "rawdata" },
         emits: ["integrity_report.md", "audit/*"], render: "integrity", onFail: "stats",
         hint: "投稿前主动核对补说明，只出待核信号、不下造假结论" },
+      // ★ 2026-08-11：故事线锻打（idea-forge，可选）插在图表之前，novelty 格随之上移与它相邻 ——
+      //   编排是「锻打先行、裁定押后」（理由见 AGENTS.md §三 表下注），且图该画哪几张本来就该由
+      //   定稿的故事线决定（design_brief 里带图表清单）。三种情况才做：没想好讲什么故事 / 投哪、
+      //   核心主张明显 overclaim、用户主动要求被拷问；无人值守（AUTO）时整步跳过（optional，不卡条）。
+      { id: "forge", name: "故事线锻打", skill: "idea-forge", optional: true,
+        sub: "对话锻定主张梯度 / 目标刊 / 故事线",
+        emits: ["design_brief.md"], render: "report",
+        hint: "主张压到数据撑得住的级别、定目标刊三梯队；产出 design_brief.md，作图 / 综述 / 成文照单干" },
+      { id: "novelty", name: "新颖性裁定 / 预注册", skill: "novelty-check",
+        // 回顾性研究里这步可选（已有数据，无法再"采数前预注册"）；前瞻性 / RCT 里它是【必做】的
+        // 预注册锁 —— 既然把它提到了最前，就不能同时标"可选"，那等于说这步可以跳。
+        optionalUnless: { field: "studyType", in: ["prospective", "rct"] },
+        // 前瞻性与 RCT：必须在采数前把假设与主分析计划冻住 → 提到最前；回顾性研究已有数据，
+        // 无法再"采数前预注册"，这步降级为可选的新颖性裁定（AGENTS.md §三 表下注），
+        // 且做了故事线锻打的，对 design_brief 定稿的主张裁定（锻打在前、裁定在后）。
+        first: { field: "studyType", in: ["prospective", "rct"] },
+        emits: ["novelty_report.md", "novelty_*.md", "preregistration.md", "analysis_plan.md"], render: "report" },
       { id: "figure", name: "出版级图表", skill: "nature-figure",
         form: [
           { id: "figTypes", label: "要出的图", type: "multi", options: [
@@ -603,14 +620,6 @@ export const WORKFLOWS = {
             { v: "300", t: "300 dpi（多数期刊最低要求）" }, { v: "600", t: "600 dpi（线条图）" }] },
         ],
         emits: ["fig*.png", "fig*.pdf", "fig*.svg", "figures/*"], render: "figure" },
-      { id: "novelty", name: "新颖性裁定 / 预注册", skill: "novelty-check",
-        // 回顾性研究里这步可选（已有数据，无法再"采数前预注册"）；前瞻性 / RCT 里它是【必做】的
-        // 预注册锁 —— 既然把它提到了最前，就不能同时标"可选"，那等于说这步可以跳。
-        optionalUnless: { field: "studyType", in: ["prospective", "rct"] },
-        // 前瞻性与 RCT：必须在采数前把假设与主分析计划冻住 → 提到最前；回顾性研究已有数据，
-        // 无法再"采数前预注册"，这步降级为可选的新颖性裁定（AGENTS.md §三 表下注）。
-        first: { field: "studyType", in: ["prospective", "rct"] },
-        emits: ["novelty_report.md", "novelty_*.md", "preregistration.md", "analysis_plan.md"], render: "report" },
       { id: "litreview", name: "文献综述", skill: "literature-review",
         form: [
           { id: "query", label: "检索式 / 关键词", type: "textarea",
@@ -855,22 +864,27 @@ export const WORKFLOWS = {
         sub: "AI 依据信息初拟若干研究方向",
         emits: ["research_scan*.md", "landscape*.csv"], render: "report",
         hint: "没搜到 ≠ 研究空白，四象限采样后再下判断" },
-      // ★「选题收敛」与「新颖性裁定与预注册」2026-08-07 按用户要求并成一格「选题遴选」。这两步在
-      //   真实使用里本来就是一件事的两半：先列候选、再判"这个题还新不新、能不能锁住"，判不过就换个
-      //   候选重来 —— 拆成两格只是把一次来回切开数两遍。
-      //   【合并要守住的东西】
-      //   ① 它【仍然是闸】：新颖性不过不许硬着头皮往下写。onFail 改指 scan（原来指 topic，
-      //      而 topic 现在就是本步自己，指向自己等于原地打转）。
-      //   ② emits【不收】topic_candidates：判完成靠"约定产物出现了没有"（server.mjs 的 wfSyncDone），
-      //      候选表一落盘这格就绿了，而新颖性还没判、预注册还没写。只收最后那批产物才对。
-      //      候选选题卡照样渲染 —— RENDER_RULES 按文件名认 topic_candidates*.csv，不走 step.emits。
-      //   ③ 流程条上不再单列"新颖性裁定"这一格 → 用户失去了"动笔前先看裁定结论"的提醒点，
-      //      改由 note 强制它把裁定结论与预注册在回话里点名说清。
-      { id: "topic", name: "选题遴选确认", skill: "topic-selection", skillAlias: ["novelty-check"], gate: true,
+      // ★ 2026-08-07 曾把「选题收敛」与「新颖性裁定」并成本格；2026-08-11 编排改为「锻打先行、
+      //   裁定押后」（A/B 实验实测：先裁后锻会因立意转向而过期、漏掉在研竞争试验，见 AGENTS.md
+      //   §三 表下注），novelty-check 移去下一格跟随 idea-forge —— 裁定对象从"选定的题"
+      //   变成"锻定的那句科学问题"。本格只管把候选列出来、让用户挑定一个。
+      { id: "topic", name: "选题遴选确认", skill: "topic-selection",
         sub: "用户校订并确认最终选题",
+        emits: ["topic_candidates*.csv", "topics.md"], render: "report",
+        hint: "候选选题列成卡片让你挑定一个；新颖性裁定移到下一格，对锻定的科学问题做",
+        note: "候选选题必须写成 `topic_candidates*.csv` **真的落盘**，不能只在回话里列几条就算选过题 —— 界面靠这个文件把候选渲染成卡片；用户挑定一个再进下一格。本格**不再做**新颖性裁定：裁定在「立意锻打」格里对锻定的科学问题做。" },
+      // ★「立意锻打」+「新颖性裁定」两半并一格（沿用本文件"连贯两半并一格"的原则，配对按
+      //   2026-08 A/B 实验换了）：idea-forge 多轮对话把立意/创新点/方案锻定 → 对定稿的那句
+      //   科学问题跑 novelty-check 严格裁定 + 预注册锁。
+      //   【守住的东西】① 它是闸：裁定"已被回答"→ onFail 回 scan 换题；② emits 只收裁定产物 ——
+      //   design_brief.md 一落盘锻打才到一半，收它这格就提前绿了（design_brief / closest_work
+      //   照常进产物侧栏）；③ 科学问题在锻打中转向 → 旧裁定作废、对新问题重跑（AGENTS.md
+      //   「裁定过期护栏」）。
+      { id: "forge", name: "立意锻打", skill: "idea-forge", skillAlias: ["novelty-check"], gate: true,
+        sub: "多轮对话磨立意，锻定后做新颖性裁定",
         emits: ["novelty_report.md", "novelty_*.md", "preregistration.md", "analysis_plan.md"], render: "report", onFail: "scan",
-        hint: "先把候选选题列成卡片让你挑；选定的那个当场做新颖性裁定与预注册，不过就退回领域扫描重挑",
-        note: "这一格是【两件事连着做完】，顺序不能颠倒：先用 topic-selection 把候选选题写成 `topic_candidates*.csv` 落盘、让用户挑定一个，**再**对挑定的那个题跑 novelty-check 出 `novelty_report.md` 与 `preregistration.md`。**候选表必须真的落盘**，不能只在回话里列几条就算选过题 —— 界面靠这个文件把候选渲染成卡片。裁定完**在回话里点名说清结论属于哪一档（真新 / 增量 / 已被回答）以及依据**：流程条上不再单列「新颖性裁定」这一格，用户只能从你这句话和产出侧栏里的报告去核对。裁定为「已被回答」的，退回「领域扫描」重新采样换题，不许带着一个已被回答的题去写标书。" },
+        hint: "空白节点先检索后发散、未验证主张拿证据拷问；锻定的科学问题当场做严格裁定，不过退回领域扫描",
+        note: "两件事连着做完，顺序不能颠倒：先用 idea-forge 按其 SKILL.md 跑锻打对话（一轮只问一个问题、编号候选、每轮落盘 `forge_log.md`，产出 `design_brief.md` + `closest_work.md`），**再**对 design_brief 里定稿的那句关键科学问题跑 novelty-check（以 closest_work.md 为最接近文献表起点补严，不重做）。裁定完**在回话里点名说清档位（真新 / 增量 / 已被回答）与依据**；判「已被回答」退回「研究方向生成」换题，不许带着已被回答的题写标书。**无人值守（AUTO）时跳过锻打对话**，直接对用户选定的题做裁定 —— 本格靠裁定产物判完成，不会卡死。" },
       // ★「摸清申报要求」原本是独立的一步，2026-08-07 按用户要求并进本步 —— 基金申报的流程条
       //   本来就有 6~7 格，而这两步同属 grant-proposal 技能、在同一轮里连着做完是常态，
       //   拆成两格只是把一条本来连贯的工作切开数。
