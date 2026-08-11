@@ -52,6 +52,11 @@ cloud.json
 # 会话/项目元数据（项目分组、持久化标记、到期时间；运行时生成）
 web/sessions-meta.json
 
+# 定时任务：无头运行器的环境快照（壳每次启动写，【原样带着 OC_GATEWAY_KEY】，与 model-config.json 同类）
+web/headless-env.json
+# 用户自己建的定时任务定义与运行记录（运行时生成）
+/tasks/
+
 # PowerShell 模块分析缓存：本机运行时产物，被 `git add -A` 扫进来过一次
 Microsoft/
 

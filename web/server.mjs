@@ -15,6 +15,9 @@ import { shouldOfferUpdate } from "./pack-freshness.mjs"
 import { zip as zipPack } from "./minizip.mjs"
 import * as WF from "./workflows.mjs"
 import { scrubShare, renderShareHtml } from "./share-export.mjs"
+import * as Tasks from "./tasks.mjs"
+import * as Sched from "./schtasks.mjs"
+import * as Presets from "./task-presets.mjs"
 
 // opencode 的完整流水线（标书/论文/系统综述）单轮可跑十几分钟，而 session.prompt 是“等整轮结束才返回”的请求；
 // undici 默认 5 分钟 headers/body 超时会让这类长轮假性抛错。关掉这两个超时（0=不限），连接超时保留。
@@ -2307,6 +2310,73 @@ function autoDecide(sid, finalText) {
   console.log(`[auto] 会话 ${sid}：未见完成哨兵，自动续跑第 ${st.rounds}/${AUTO_MAX_ROUNDS} 轮`)
   return { go: true, round: st.rounds }
 }
+// ==== 定时任务：「你不在的时候跑完了这些」====================================
+//
+// 定时任务是在软件关着的时候跑的，产物静静躺在某个会话里。不主动说一声，用户根本不知道
+// 该去哪儿看 —— 那这个功能对他就等于不存在。所以记一个"上次看到哪儿了"的水位线，
+// 每次界面打开时把水位线之后完成的运行捞出来提示。
+//
+// 【水位线单独存一个小文件，不塞进 sessions-meta】它每次开界面都要写，而 sessions-meta 里是
+// 会话标题与项目归类那种"丢了要命"的东西，没必要为这么个提示状态增加写它的频次。
+// ---- 档位授权：这个账号的定时任务能到什么程度 ----
+//
+// 服务端下发（见 sci-auth 的 profileOf）：off 不显示 / preset 只能用模板 / full 自由指令。
+// 【取不到就按 off】未登录、离线、老服务端都走这一支——付费能力宁可少给也不能漏给。
+// 【本机自建路由（用户填了自己的 API key）例外】那时候花的是用户自己的钱，与平台档位无关，
+// 按 full 放行；判据与 /api/model 的 isCustom 同源。
+const tierTasks = () => {
+  const p = (cloudLoggedIn() && Cloud.loadState()?.profile) || null
+  if (!p) return MODEL.providerID === CUSTOM_PROVIDER_ID && !Cloud.cloudBase() ? "full" : "off"
+  return ["preset", "full"].includes(p.tasksMode) ? p.tasksMode : "off"
+}
+/** 该档定时任务强制用的模型（'' = 不强制，用当前默认模型）。 */
+const tierTasksModel = () => {
+  const p = (cloudLoggedIn() && Cloud.loadState()?.profile) || null
+  return p && p.tasksModel ? String(p.tasksModel) : ""
+}
+
+// ---- 用户自己设的保护线：剩余积分低于它就不跑定时任务 ----
+//
+// 【为什么需要】定时任务是在用户不在场时花钱的。没有这条线，一个跑飞的任务能把当天额度吃光，
+// 用户早上坐下来想干活时发现"额度没了"，而且完全不知道是被谁吃掉的。有了它，用户可以说
+// "给我自己留 50 积分"。0 = 不设防（默认）。
+const TASK_SETTINGS_PATH = process.env.SCI_TASK_SETTINGS_PATH || path.join(Tasks.TASKS_DIR, ".settings.json")
+export function taskSettings() {
+  try {
+    const j = JSON.parse(fs.readFileSync(TASK_SETTINGS_PATH, "utf8"))
+    return { minCredits: Math.max(0, Number(j.minCredits) || 0) }
+  } catch { return { minCredits: 0 } }
+}
+function saveTaskSettings(s) {
+  const v = { minCredits: Math.max(0, Math.floor(Number(s?.minCredits) || 0)) }
+  fs.mkdirSync(path.dirname(TASK_SETTINGS_PATH), { recursive: true })
+  fs.writeFileSync(TASK_SETTINGS_PATH, JSON.stringify(v))
+  return v
+}
+
+const TASK_SEEN_PATH = process.env.SCI_TASK_SEEN_PATH || path.join(Tasks.TASKS_DIR, ".news-seen.json")
+const taskSeenAt = () => { try { return Number(JSON.parse(fs.readFileSync(TASK_SEEN_PATH, "utf8")).at) || 0 } catch { return 0 } }
+function taskNewsSeen() {
+  try {
+    fs.mkdirSync(path.dirname(TASK_SEEN_PATH), { recursive: true })
+    fs.writeFileSync(TASK_SEEN_PATH, JSON.stringify({ at: Date.now() }))
+  } catch {}
+}
+/** 水位线之后完成的运行（最多 20 条，新的在前）。第一次用（没有水位线）不提示历史。 */
+function taskNews() {
+  const seen = taskSeenAt()
+  if (!seen) { taskNewsSeen(); return [] }   // 首次：把水位线放到"现在"，别把攒了一周的记录一次性砸给用户
+  const out = []
+  for (const t of Tasks.listTasks())
+    for (const r of Tasks.listRuns(t.id, 20)) {
+      const at = Date.parse(r.endedAt || r.startedAt || 0)
+      // quota：积分耗尽 / 低于用户设的保护线而没跑。这一类要单独提示——用户看到"失败"
+      // 会以为是软件坏了，而实际上他要做的是充值或调低保护线，是完全不同的动作。
+      if (at > seen) out.push({ taskId: t.id, title: t.title, at: r.endedAt || r.startedAt, ok: !!r.ok, quota: !!r.quota, reason: r.reason || "", sid: r.sid || "", outputs: (r.outputs || []).length })
+    }
+  return out.sort((a, b) => String(b.at).localeCompare(String(a.at))).slice(0, 20)
+}
+
 // ---- 分享：把整个会话导出成一个自包含 HTML ----
 //
 // 【★ 别拿前端 DOM 去序列化 ★】这是本功能唯一一个致命坑，踩了看不出来：
@@ -2408,7 +2478,14 @@ const wfClearHalted = async (sid) => {
   } catch { /* 没有簿子就没什么可清 */ }
 }
 
-function startJob(sid, sentText, modId) {
+/**
+ * @param forceModel 只给【定时任务】用：本轮强制走这个模型 id，不动全局 MODEL。
+ *   管理员给某档钉死了任务模型（如基础档只能用 flash）时由 /api/chat/start 传进来。
+ *   【为什么不切全局模型】切全局要重启 opencode，会把用户此刻正在跑的那一轮连根拔掉；
+ *   而定时任务恰恰可能在用户正用着的时候被触发（手动「立即跑一次」就是）。
+ *   opencode 的 session.prompt 本来就收 body.model，按轮指定是天然支持的。
+ */
+function startJob(sid, sentText, modId, forceModel) {
   clearError(sid)   // 新一轮开跑 → 上一次的失败记录作废，别让它一直挂在历史末尾
   wfClearHalted(sid)   // 同理：上一轮的「中断」标记作废（它描述的是最近一次非正常收场）
   // 新一轮 prompt 就是回退的提交动作（opencode 收到新消息会把 revert 标记清成 null），
@@ -2724,7 +2801,9 @@ function startJob(sid, sentText, modId) {
     let result, promptErr = null
     try {
       // 受限模块：从工具层面禁掉 task 子代理（子会话里的技能调用逃逸出上面的模块闸，索性不让开子代理）
-      result = un(await client.session.prompt({ path: { id: sid }, body: { model: MODEL, parts: [{ type: "text", text: sentText }], ...(modSkills ? { tools: { task: false } } : {}) } }))
+      // forceModel 只换 modelID，providerID 仍是当前路由那个（云端网关 / 用户自设 API 都靠它）
+      const roundModel = forceModel ? { providerID: MODEL.providerID, modelID: forceModel } : MODEL
+      result = un(await client.session.prompt({ path: { id: sid }, body: { model: roundModel, parts: [{ type: "text", text: sentText }], ...(modSkills ? { tools: { task: false } } : {}) } }))
     } catch (err) { promptErr = err }
     // 无论正常结束 / 被额度中止 / 被用户终止，都把本轮成本记进今日额度——否则中止的轮不计费，用户可无限重试绕过额度。
     // 真实增量（session.cost 只含完成步）+ 估算兜底（cost=0 的消息 = 被 abort 的那一步，opencode 对它记
@@ -2870,7 +2949,9 @@ function startJob(sid, sentText, modId) {
     finish()
     // finish() 已把本轮从 jobs 表摘除；同一 tick 里同步起下一轮 —— /api/busy 与前端 attach 都无空窗，
     // 也不给并发的 /api/chat/start 留下双开同会话的缝（那边的 running 检查到 startJob 是全同步区）。
-    if (av?.go && !jobs.get(sid)?.running) startJob(sid, autoContinueText(av.round), modId)
+    // 自动续跑的轮次要沿用同一个强制模型：只钉第一轮的话，定时任务从第 2 轮起就偷偷换回
+    // 默认模型（贵的那个），而这正是无人值守、没人看得见的时候。
+    if (av?.go && !jobs.get(sid)?.running) startJob(sid, autoContinueText(av.round), modId, forceModel)
   })().catch(() => { try { broadcast("failed", { message: "本轮出错（网关内部异常）" }) } catch {} finish() })
   return job
 }
@@ -4365,6 +4446,113 @@ export const server = http.createServer(async (req, res) => {
       const tmp = path.join(ws.out, ".push_refs.json"); fs.writeFileSync(tmp, JSON.stringify(refs))
       return send(res, 200, "application/json", zotJson(await runPy([ZOT_READ, "push", "--refs", tmp], 12_000)))
     }
+    // ---- 定时任务：软件关着也能到点自己跑（Windows 计划任务 + web/headless-run.mjs）----
+    //
+    // 【为什么整块只在 Windows 上开】执行体是 Windows 任务计划。多用户容器部署（Linux）里
+    // 这些接口若照常受理，用户能建出一堆【永远不会跑】的任务，而界面上看着一切正常 ——
+    // 那比没有这个功能糟得多。所以非 Windows 一律回 supported:false，写操作直接拒。
+    if (u.pathname === "/api/tasks" || u.pathname.startsWith("/api/tasks/")) {
+      // 两道门叠加：平台形态（只有 Windows 有任务计划）× 账号档位（off/preset/full）。
+      const mode = tierTasks()
+      const supported = Sched.isWindows() && mode !== "off"
+      const withMeta = (t) => ({
+        ...t,
+        nextRun: t.enabled === false ? null : (Tasks.nextRunAt(t)?.toISOString() || null),
+        lastSummary: Tasks.runSummary(t.lastRun),
+      })
+      if (req.method === "GET" && u.pathname === "/api/tasks") {
+        const tasks = Tasks.listTasks()
+        // registered：定义在、但系统里没有对应计划任务 → 它不会自己跑。界面要把这条标出来，
+        // 否则用户建完任务、界面显示"下次周一 07:00"，而那一刻什么都不会发生。
+        const reg = supported ? new Set(Sched.listRegistered()) : new Set()
+        return send(res, 200, "application/json", JSON.stringify({
+          ok: true, supported, mode,
+          // 界面按 mode 决定给填空表单还是自由编辑器；模板清单一并下发，加模板不用改前端。
+          presets: mode === "preset" ? Presets.presetList() : [],
+          taskModel: tierTasksModel(),
+          settings: taskSettings(),
+          reason: supported ? ""
+            : (!Sched.isWindows() ? "定时任务需要 Windows 任务计划，当前部署不支持"
+              : "你的账号档位未开通定时任务"),
+          tasks: tasks.map((t) => ({ ...withMeta(t), registered: reg.has(Sched.taskName(t.id)) })),
+        }))
+      }
+      if (!supported && req.method === "POST")
+        return send(res, 400, "application/json", JSON.stringify({
+          ok: false, err: Sched.isWindows() ? "你的账号档位未开通定时任务" : "当前部署不支持定时任务（需要 Windows）",
+        }))
+
+      if (req.method === "POST" && u.pathname === "/api/tasks/settings") {
+        let b = {}; try { b = await readJson(req) } catch {}
+        return send(res, 200, "application/json", JSON.stringify({ ok: true, settings: saveTaskSettings(b) }))
+      }
+
+      if (req.method === "POST" && u.pathname === "/api/tasks/save") {
+        let b = {}; try { b = await readJson(req) } catch { return send(res, 400, "application/json", JSON.stringify({ ok: false, err: "请求体不合法" })) }
+        // 改已有任务：以磁盘上那份为底再覆盖，别让前端漏传一个字段就把 createdAt/lastRun 冲掉
+        const old = b.id ? Tasks.readTask(b.id) : null
+        // ★ 模板档（preset）：**只收模板 id 与参数，prompt 一律由服务端拼**。
+        //   界面上给填空表单只是"看起来受限"——这是个普通 HTTP 接口，改一行 JSON 就能塞自由指令。
+        //   所以 b.prompt 在这一支里被彻底丢弃，任务标题也用模板生成的那一句，免得用标题夹带。
+        if (mode === "preset") {
+          const built = Presets.buildPreset(b.preset || old?.preset, b.params || old?.params)
+          if (!built.ok) return send(res, 400, "application/json", JSON.stringify({ ok: false, err: built.err }))
+          b = {
+            ...b, prompt: built.prompt, preset: String(b.preset || old?.preset), params: built.params,
+            title: String(b.title || "").trim() || built.title,
+            module: "chat",   // 模板任务不绑模块：模块前言会把它带进整条流水线，不是模板该干的事
+          }
+        }
+        const { ok, task, errors } = Tasks.normalizeTask({ ...(old || {}), ...b })
+        if (!ok) return send(res, 400, "application/json", JSON.stringify({ ok: false, err: errors.join("；") }))
+        Tasks.saveTask(task)
+        const r = Sched.register(task)
+        // 注册失败【不回滚保存】：定义留着，界面把它标成"未注册"，用户点一下"重新注册"就能修好。
+        // 回滚的话用户刚写的一大段任务内容就没了，而失败原因往往是临时的（权限/组策略）。
+        return send(res, 200, "application/json", JSON.stringify({ ok: true, task: withMeta(task), ...(r.ok ? {} : { warn: r.err }) }))
+      }
+      if (req.method === "POST" && u.pathname === "/api/tasks/delete") {
+        let b = {}; try { b = await readJson(req) } catch {}
+        const t = Tasks.readTask(String(b.id || ""))
+        if (!t) return send(res, 404, "application/json", JSON.stringify({ ok: false, err: "找不到这个任务" }))
+        // 先撤计划任务再删定义：反过来出错就会留下一条到点空跑的孤儿任务（见 task-cli 同款注释）
+        const r = Sched.unregister(t.id)
+        if (!r.ok) return send(res, 500, "application/json", JSON.stringify({ ok: false, err: "没能撤销系统里的计划任务：" + r.err }))
+        Tasks.deleteTask(t.id)
+        return send(res, 200, "application/json", JSON.stringify({ ok: true }))
+      }
+      if (req.method === "POST" && u.pathname === "/api/tasks/run") {
+        let b = {}; try { b = await readJson(req) } catch {}
+        const t = Tasks.readTask(String(b.id || ""))
+        if (!t) return send(res, 404, "application/json", JSON.stringify({ ok: false, err: "找不到这个任务" }))
+        // 立刻跑一次：detached 起一个运行器进程，它会【复用本网关】（探测 27821/本机端口），
+        // 所以用户能在会话列表里实时看到它在干活。不等它结束，前端靠会话列表/任务历史看结果。
+        const child = spawn(process.execPath, [path.join(__dirname, "headless-run.mjs"), "--task", t.id, "--force"],
+          { cwd: ROOT, detached: true, stdio: "ignore", windowsHide: true })
+        child.unref()
+        return send(res, 200, "application/json", JSON.stringify({ ok: true }))
+      }
+      if (req.method === "POST" && u.pathname === "/api/tasks/sync") {
+        // 用户明确点了「重新注册」→ 才允许清孤儿（prune）。理由见 schtasks.mjs 的 sync 注释。
+        const r = Sched.sync(Tasks.listTasks(), { prune: true })
+        return send(res, 200, "application/json", JSON.stringify({ ok: r.ok, added: r.added, removed: r.removed, ...(r.err ? { err: r.err } : {}) }))
+      }
+      if (req.method === "GET" && u.pathname === "/api/tasks/runs") {
+        const id = u.searchParams.get("id") || ""
+        if (!Tasks.readTask(id)) return send(res, 404, "application/json", JSON.stringify({ ok: false, err: "找不到这个任务" }))
+        return send(res, 200, "application/json", JSON.stringify({ ok: true, runs: Tasks.listRuns(id) }))
+      }
+      // 「你不在的时候跑完了这些」——用户下次打开软件时的提示。
+      // 没有它，定时任务的产物就静静躺在某个会话里，用户根本不知道该去看。
+      if (req.method === "GET" && u.pathname === "/api/tasks/news")
+        return send(res, 200, "application/json", JSON.stringify({ ok: true, news: taskNews() }))
+      if (req.method === "POST" && u.pathname === "/api/tasks/news/seen") {
+        taskNewsSeen()
+        return send(res, 200, "application/json", JSON.stringify({ ok: true }))
+      }
+      return send(res, 404, "application/json", JSON.stringify({ ok: false, err: "没有这个接口" }))
+    }
+
     // 发起一轮生成。【POST，正文在 body】——原先是 GET /api/chat?q=...，两个毛病：
     //   ① GET 带副作用（发消息 + 扣额度），而 cookie 是 SameSite=Lax：跨站顶层 GET 导航会带上凭据，
     //      诱导点一个链接就能替用户跑一轮长生成、烧掉当天额度（浏览器/代理的链接预取也可能误触发）。
@@ -4378,10 +4566,10 @@ export const server = http.createServer(async (req, res) => {
         if (total > 4_000_000) return sendClose(res, 413, "application/json", JSON.stringify({ ok: false, sent: false, err: "消息过长（超过 4MB）" }))   // 从 for-await 里提前 return → body 未读完，必须关连接
         chunks.push(c)
       }
-      let q = "", sid = null, reqMod = "", autoReq, wfSeed = null
+      let q = "", sid = null, reqMod = "", autoReq, wfSeed = null, reqTaskModel = ""
       // wfSeed：首屏表单的值。表单是在【会话还不存在】的时候填的（用户还没发第一条消息），
       // 所以那份值没法在 /api/workflow/form 里落盘，只能随第一条消息捎进来，建完会话再写。
-      try { const b = JSON.parse(Buffer.concat(chunks).toString() || "{}"); q = String(b.q ?? ""); sid = b.sid ? String(b.sid) : null; reqMod = String(b.module || ""); if (typeof b.auto === "boolean") autoReq = b.auto; if (b.wfForm && typeof b.wfForm === "object") wfSeed = b.wfForm } catch {}
+      try { const b = JSON.parse(Buffer.concat(chunks).toString() || "{}"); q = String(b.q ?? ""); sid = b.sid ? String(b.sid) : null; reqMod = String(b.module || ""); if (typeof b.auto === "boolean") autoReq = b.auto; if (b.wfForm && typeof b.wfForm === "object") wfSeed = b.wfForm; reqTaskModel = String(b.taskModel || "") } catch {}
       if (!q.trim()) return send(res, 400, "application/json", JSON.stringify({ ok: false, sent: false, err: "消息为空" }))
       // ---- 模块裁定 ----
       // 续会话：绑定在创建时已定死，忽略前端传值（防伪造请求把受限会话"升级"成 chat）。
@@ -4459,7 +4647,12 @@ export const server = http.createServer(async (req, res) => {
       // 注意：本会话的工作目录（cwd）已在建会话时通过 opencode 的 session.directory 定在【会话产物目录】，
       // 所以 agent 的所有工具默认就在正确的地方读写，preamble 只需说清"当前目录就是产物目录"与几个绝对路径。
       const preamble = `${PREAMBLE_MARK}\n- **你的当前工作目录就是本会话的产物目录**（\`${ws.out}\`）。所有产物（图表 PNG/PDF、CSV/Excel、md/docx 等）**直接写到当前目录即可**，用相对文件名如 \`fig1.png\`、\`manuscript.md\`，不要再自己拼 \`outputs/xxx\` 前缀。\n- 临时脚本、中间文件同样写当前目录（要归拢可用 \`./.scratch/\`）。\n- **用户上传的文件都在 \`${ws.up}/\`**：稿件（.md/.docx/.pdf）、数值表（.csv/.xlsx）、附件全都在这里，读任何用户给的文件都用这个绝对路径。\n- **跑本套件的脚本，python 用这个绝对路径**：\`${PY_BIN || "（本机还没建 .venv，先跑 env-setup 技能）"}\`，技能脚本在 \`${ROOT}/.opencode/skills/<技能>/\` 下。**照抄这两个路径，不要自己拼 \`\${REPO_ROOT:-/app}\`，也不要用 \`python\`/\`python3\`裸命令**——本机 PATH 里的 python 可能是个不能用的占位程序（跑起来没有任何输出），你会看不出它坏了。当前目录不是仓库根，写 \`.venv/...\` 这种相对路径同样找不到。\n- 正文里嵌入图片直接用文件名：\`![图注](fig1.png)\`（图和稿件都在当前目录，渲染也从当前目录跑）。\n- **不要把产物写到仓库根或 \`\${REPO_ROOT:-/app}\` 下**：那是所有会话共享的，会互相覆盖，也不会出现在界面的"产出"侧栏。\n- **上面这些路径与文件名是给你用的，不要说给用户**：他用的是图形界面，看不到也进不去 \`uploads/ws_.../\`、\`outputs/\`、\`.venv\`、\`AGENTS.md\` 这些东西。要他传文件就说"点输入框旁边的上传按钮"；提产物就只说文件名（\`table1.csv\`），别带目录。让用户照抄一个他根本打不开的路径，等于把他卡在那里。\n- **答复用用户说话的语言**（他用中文你就用中文），并且**只写最终结论**：查了什么、下一步打算干什么这类过程叙述不要写进答复正文——界面已经把工具调用一条条显示出来了，正文里再复述一遍，用户要在一堆过程碎片里翻找真正的结论。${modId === "chat" ? skillsPreamble() : modulePreamble(modId, ws.out)}${zoteroPreamble(ws.out)}${autoOn ? autoPreamble() : ""}\n\n`
-      startJob(sid, preamble + q, modId)   // 同步建 job（jobs.set 在函数首行）→ 返回后前端 attach 必能接上
+      // taskModel：只有【定时任务的运行器】会带它，且必须是管理员在档位里钉死的那个模型。
+      // 【必须在服务端核对，不能信请求里的值】否则任何人都能用它点名一个贵模型跑一轮——
+      // 云端网关的 pickModel 虽然也会拦（不在可调用集合里就静默打回默认），但那是最后一道，
+      // 不该指望它替我们兜住一个本地就能判的越权。
+      const forceModel = reqTaskModel && reqTaskModel === tierTasksModel() ? reqTaskModel : ""
+      startJob(sid, preamble + q, modId, forceModel)   // 同步建 job（jobs.set 在函数首行）→ 返回后前端 attach 必能接上
       return send(res, 200, "application/json", JSON.stringify({ ok: true, sid, sent: true, module: modId }))
     }
 
@@ -5198,6 +5391,22 @@ server.listen(PORT, "0.0.0.0", () => {
   // 网关关掉后事件循环仍被这个每小时的 interval 挂住，测试进程永远退不出去。
   setTimeout(pruneOrphanMeta, 15_000).unref?.()
   setInterval(pruneOrphanMeta, 60 * 60 * 1000).unref?.()
+  // 定时任务对账：磁盘上的定义 ↔ Windows 计划任务。
+  // 【为什么每次启动都对一遍】任务定义是文件，会被拷贝、从备份恢复、跟着升级迁移；系统里的
+  // 计划任务也可能被清理工具或用户手删。只在增删时注册的话，两边一旦跑偏就再也回不来，
+  // 而症状是"任务在界面里好好的，就是不跑"——没有比这更难自查的故障了。
+  // 【自动对账只补注册、不删】删除的判据是"我这份任务目录里没有它"，而任何把 SCI_TASKS_DIR
+  // 指到别处的实例（测试、临时起的第二个网关）看到的都是空目录 —— 让它自动删，等于给
+  // "用户真实任务被悄悄清空"留了一条路。清孤儿只在用户明确点「重新注册」时做。
+  // 无头运行器自起的那套网关整个跳过（SCI_HEADLESS=1）：它是任务【自己】拉起来的，
+  // 没必要在一次运行中途重写自己的注册表项。SCI_TASK_SYNC=0 是给自动化测试的总开关。
+  if (Sched.isWindows() && process.env.SCI_HEADLESS !== "1" && process.env.SCI_TASK_SYNC !== "0") setTimeout(() => {
+    try {
+      const r = Sched.sync(Tasks.listTasks())
+      if (r.added) console.log(`[task] 计划任务对账：注册/更新 ${r.added} 条${r.orphans ? `（另有 ${r.orphans} 条系统里多出来的，点界面「重新注册」可清）` : ""}`)
+      if (r.err) console.warn(`[task] 计划任务对账有失败项：${r.err}`)
+    } catch (e) { console.warn("[task] 计划任务对账异常：" + (e?.message || e)) }
+  }, 5000).unref?.()
 })
 
 // ---- 优雅退出 ----

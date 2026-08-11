@@ -132,6 +132,16 @@ nm_migrate_done:
 !macroend
 
 !macro NSIS_HOOK_PREUNINSTALL
+  ; ★ 先撤定时任务，再动文件。
+  ;   Windows 任务计划里的条目是【安装器没登记过】的东西（由应用自己注册，见 web/schtasks.mjs），
+  ;   NSIS 不会碰它。留着的话：卸载之后到了设定的时刻，任务计划照样去启动
+  ;   $INSTDIR\bundle\runtime\node\node.exe —— 一个已经不存在的程序。用户看到的是
+  ;   "软件都卸了还天天弹一下错"，而且在任务计划程序里永远躺着一串找不到来源的条目。
+  ;   两条路都走：ScheduledTasks 模块（Win8+，能连同文件夹一起清掉），失败再退回 schtasks 通配删除。
+  DetailPrint "撤销定时任务…"
+  nsExec::ExecToLog 'powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "$$ErrorActionPreference=\"SilentlyContinue\"; Get-ScheduledTask -TaskPath \"\NiumaScience\\\" | Unregister-ScheduledTask -Confirm:$$false; schtasks.exe /Delete /TN \"\NiumaScience\*\" /F"'
+  Pop $0
+
   DetailPrint "正在结束运行中的实例…"
   nsExec::ExecToLog 'powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "$$ErrorActionPreference=\"SilentlyContinue\"; Get-CimInstance Win32_Process | Where-Object { $$_.ExecutablePath -and $$_.ExecutablePath.TrimStart([char]92,[char]63).StartsWith(\"$INSTDIR\", [StringComparison]::OrdinalIgnoreCase) } | ForEach-Object { Stop-Process -Id $$_.ProcessId -Force }"'
   Pop $0
@@ -162,6 +172,10 @@ nm_migrate_done:
   RMDir /r "$INSTDIR\bundle\app\web-packs"
   RMDir /r "$INSTDIR\bundle\app\.venv"
   RMDir /r "$INSTDIR\bundle\runtime"
+  ; 定时任务的定义与运行记录：程序自己产生的配置（计划任务已在 PREUNINSTALL 撤掉），
+  ; 留着既没用又会挡住目录删除。用户的产出仍在 app\outputs，不受影响。
+  RMDir /r "$INSTDIR\bundle\app\tasks"
+  Delete "$INSTDIR\bundle\app\headless-gateway.log"
   Delete "$INSTDIR\bundle\app\gateway.log"
   Delete "$INSTDIR\bundle\app\serve.out"
   Delete "$INSTDIR\bundle\app\serve.err"

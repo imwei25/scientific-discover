@@ -1286,6 +1286,23 @@
   .uvnew { flex: none; font-size: 11px; font-weight: 600; color: #15803d; border: 1px solid #15803d; border-radius: 4px; padding: 0 5px; }
   .uvrow .mm-btn { flex: none; padding: 6px 12px; font-size: 12.5px; }
   .mm-hint { font-size: 11.5px; color: var(--faint); line-height: 1.65; margin-top: 12px; }
+  /* ---- 定时任务弹窗 ---- */
+  .tf-row { display: flex; gap: 10px; align-items: flex-end; }
+  .tf-days { display: flex; gap: 6px; flex-wrap: wrap; }
+  .tf-days button { width: 34px; height: 30px; border-radius: 7px; border: 1px solid var(--line); background: var(--panel);
+    color: var(--muted); cursor: pointer; font-size: 12.5px; }
+  .tf-days button.on { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .tk-item { border: 1px solid var(--line); border-radius: 9px; padding: 10px 12px; margin-bottom: 8px; }
+  .tk-item.off { opacity: .6; }
+  .tk-top { display: flex; align-items: center; gap: 8px; }
+  .tk-name { font-size: 13.5px; font-weight: 600; flex: 1; word-break: break-word; }
+  .tk-meta { font-size: 11.5px; color: var(--muted); margin-top: 4px; line-height: 1.7; }
+  /* 「有定义没注册」必须显眼：这种任务在界面上看着一切正常，实际到点什么都不会发生 */
+  .tk-warn { color: #b45309; }
+  .tk-bad { color: #dc2626; }
+  .tk-acts { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px; }
+  .tk-acts .mm-btn { padding: 4px 10px; font-size: 12px; }
+  .tk-empty { font-size: 12.5px; color: var(--muted); padding: 18px 2px; }
   /* 当前走哪条路：网关 vs 用户自设。放在弹窗最上面，打开就知道自己在哪。 */
   .mm-route { font-size: 12.5px; line-height: 1.6; padding: 9px 11px; border-radius: 8px; margin-bottom: 14px;
               border: 1px solid var(--line); background: rgba(127,127,127,.06); }
@@ -1458,6 +1475,9 @@
       </div>
       <!-- 分享：把当前会话导出成一个自包含 HTML（含思考与工具调用，默认折叠；不含任何产出文件） -->
       <button id="shareBtn" class="hbtn" type="button" title="分享：把本次会话导出成一个 HTML 文件"></button>
+      <!-- 定时任务：到点自动跑，软件关着也照跑（Windows）。不支持的部署形态下整个按钮隐藏，
+           而不是点开告诉用户"你用不了"——那只会让人以为是自己哪儿没设对。 -->
+      <button id="taskBtn" class="hbtn" type="button" title="定时任务：到点自动跑，软件关着也照跑" hidden></button>
       <button id="wsBtn" class="hbtn" type="button" title="返回模块工作台（换个功能开新会话）"></button>
     </div>
     <!-- 左下角「用户」：账户相关的功能都在这里（剩余积分 / 云端账号 / 修改密码 / 退出登录）。
@@ -1623,6 +1643,73 @@
       <div class="mm-msg info" id="fbMsg"></div>
       <div class="mm-actions"><button id="fbSend" class="mm-btn primary" type="button">提交</button></div>
       <div class="mm-hint">提交后管理员能看到<b>这次会话的完整对话</b>与你勾选的产出文件。涉及患者信息时请先确认已脱敏。</div>
+    </div>
+  </div>
+</div>
+<!-- 定时任务：列表 ⇄ 编辑 两屏共用一个弹窗（同时开两个面板只会让人不知道自己在哪一屏） -->
+<div id="taskModal" class="modal">
+  <div class="modal-card" style="max-width:620px">
+    <div class="modal-head">
+      <span class="modal-title" id="taskTitle">定时任务</span>
+      <button class="modal-x" id="taskClose" type="button" title="关闭"></button>
+    </div>
+    <div class="modal-body">
+      <div id="taskListView">
+        <div class="mm-msg info" id="taskMsg"></div>
+        <div id="taskList"></div>
+        <!-- 保护线：定时任务是在用户不在场时花钱的，得让他能给自己留一手 -->
+        <label class="mm-field" style="margin-top:12px"><span>剩余积分低于多少时不跑定时任务（0 = 不设防）</span>
+          <input id="tkMinCredits" class="mm-input" type="number" min="0" step="10" value="0" /></label>
+        <div class="mm-actions">
+          <button id="taskNew" class="mm-btn primary" type="button">＋ 新建任务</button>
+          <span style="flex:1"></span>
+          <button id="taskSync" class="mm-btn ghost" type="button" title="让软件里的任务和 Windows 任务计划对上">重新注册</button>
+        </div>
+        <div class="mm-hint">
+          到点时会像你自己发了一条消息那样跑完整轮，产物落在新会话里，下次打开软件会提示你。<br>
+          <b>软件关着照跑；但机器关机或睡眠时不跑</b>（开机后会尽快补跑一次），<b>注销或切换 Windows 账户时也不跑</b>。<br>
+          无人值守遇到要拍板的地方会自己选推荐项，所以产物请过目再用。
+        </div>
+      </div>
+      <div id="taskEditView" hidden>
+        <label class="mm-field"><span>任务名称</span>
+          <input id="tfTitle" class="mm-input" type="text" placeholder="例：每周文献扫描" autocomplete="off" /></label>
+        <!-- 自由指令：只有档位开到 full 的账号看得到 -->
+        <label class="mm-field" id="tfPromptWrap"><span>要它做什么（就像你平时发消息一样写清楚，包括产物文件名）</span>
+          <textarea id="tfPrompt" class="mm-input" rows="5" placeholder="例：检索最近一周 PubMed 上关于 XXX 的新文献，筛出与我课题相关的，写成 weekly.md，并列出每篇的一句话要点与 DOI。"></textarea></label>
+        <!-- 模板：基础档只能挑模板填参数，表单按服务端下发的 fields 自动生成 -->
+        <div id="tfPresetWrap" hidden>
+          <label class="mm-field"><span>任务类型</span>
+            <select id="tfPreset" class="mm-input mm-select"></select></label>
+          <div class="mm-hint" id="tfPresetDesc" style="margin:-6px 0 10px"></div>
+          <div id="tfPresetFields"></div>
+        </div>
+        <div class="tf-row">
+          <label class="mm-field" style="flex:1"><span>频率</span>
+            <select id="tfKind" class="mm-input mm-select">
+              <option value="daily">每天</option>
+              <option value="weekly">每周</option>
+              <option value="once">只跑一次</option>
+            </select></label>
+          <label class="mm-field" style="width:120px"><span>时间</span>
+            <input id="tfTime" class="mm-input" type="time" value="07:30" /></label>
+          <label class="mm-field" id="tfDateWrap" style="width:160px" hidden><span>日期</span>
+            <input id="tfDate" class="mm-input" type="date" /></label>
+        </div>
+        <div class="mm-field" id="tfDaysWrap" hidden><span>星期几</span>
+          <div class="tf-days" id="tfDays"></div>
+        </div>
+        <label class="mm-field"><span>这一次最多花多少积分（到了就停下，0 = 不额外限制）</span>
+          <input id="tfCredits" class="mm-input" type="number" min="0" step="10" value="0" /></label>
+        <div class="mm-hint" id="tfModelNote" hidden></div>
+        <div class="mm-msg info" id="taskEditMsg"></div>
+        <div class="mm-actions">
+          <button id="tfCancel" class="mm-btn ghost" type="button">返回</button>
+          <span style="flex:1"></span>
+          <button id="tfSave" class="mm-btn primary" type="button">保存</button>
+        </div>
+        <div class="mm-hint">建议写明产物文件名，并把话说完整——到点跑的时候没人能替你补充信息。</div>
+      </div>
     </div>
   </div>
 </div>
@@ -6851,6 +6938,281 @@ document.addEventListener("visibilitychange", () => { if (!document.hidden) refr
     if (idle >= WARN_MS) { txt.textContent = "你已闲置较久，将在 " + fmt(LOGOUT_MS - idle) + " 后自动锁定，届时需重新输入口令。移动鼠标或点“继续使用”即可保持。"; ov.style.display = "flex" }
     else if (ov.style.display !== "none") ov.style.display = "none"
   }, 1000)
+})()
+
+// ==== 定时任务：到点自动跑，软件关着也照跑 ===================================
+//
+// 后端见 web/tasks.mjs（定义）、web/schtasks.mjs（Windows 任务计划）、
+// web/headless-run.mjs（到点真去跑的那个无头进程）。这里只管两件事：让用户能把任务说清楚，
+// 以及让他知道"你不在的时候跑完了什么"——后者没有的话，产物就只是静静躺在某个会话里，
+// 用户压根不知道要去看，这功能对他等于不存在。
+//
+// 【所有请求都用相对路径】多用户部署是 /alice/ 这样的前缀，写成 /api/... 会跳出本容器。
+//
+// 【开头这个分号删不得】上面那段登出/闲置锁屏也是 `})()` 结尾且不带分号，两个 IIFE 挨在一起时
+// JS 会把它读成"调用上一个 IIFE 的返回值"，整段脚本当场 TypeError 挂掉（实测：界面全白）。
+;(function () {
+  var modal = document.getElementById("taskModal")
+  if (!modal) return
+  var listView = document.getElementById("taskListView"), editView = document.getElementById("taskEditView")
+  var listEl = document.getElementById("taskList"), msgEl = document.getElementById("taskMsg")
+  var editing = null   // 正在编辑的任务（新建时是 {}）
+  // 账号档位给到什么程度：preset = 只能挑模板填参数，full = 自由指令。由服务端下发，别在前端猜。
+  var mode = "full", presets = [], forcedModel = ""
+
+  var setMsg = function (el, kind, t) { el.className = "mm-msg " + kind; el.textContent = t || "" }
+  var jget = function (p) { return fetch(p, { signal: AbortSignal.timeout(20000) }).then(function (r) { return r.json() }) }
+  var jpost = function (p, b) {
+    return fetch(p, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(b || {}), signal: AbortSignal.timeout(30000) })
+      .then(function (r) { return r.json() })
+  }
+  var esc = function (s) { return String(s == null ? "" : s).replace(/[&<>"]/g, function (c) { return ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c] }) }
+  var WEEK = ["日", "一", "二", "三", "四", "五", "六"]
+  var fmtNext = function (iso) {
+    if (!iso) return "不再触发"
+    var d = new Date(iso), p = function (n) { return String(n).padStart(2, "0") }
+    return (d.getMonth() + 1) + "月" + d.getDate() + "日 " + p(d.getHours()) + ":" + p(d.getMinutes())
+  }
+  var fmtSchedule = function (s) {
+    if (!s) return ""
+    if (s.kind === "daily") return "每天 " + s.time
+    if (s.kind === "weekly") return "每周" + (s.days || []).map(function (d) { return WEEK[d] }).join("、") + " " + s.time
+    return s.date + " " + s.time + "（一次）"
+  }
+
+  // ---- 列表 ----
+  function renderList(data) {
+    var ts = data.tasks || []
+    if (!ts.length) { listEl.innerHTML = '<div class="tk-empty">还没有定时任务。点下面「新建任务」，它就会在你设定的时间自动跑——软件关着也一样。</div>'; return }
+    listEl.innerHTML = ts.map(function (t) {
+      // 「有定义但没注册到系统」要显眼标出来：这种任务界面上看着一切正常（下次运行时间都算好了），
+      // 到点却什么都不会发生。不标的话用户要等到第二天没产物才发现，还查不出原因。
+      var warn = t.registered === false ? '<div class="tk-meta tk-warn">⚠ 没有注册到 Windows 任务计划，到点不会自己跑 —— 点下面「重新注册」修复</div>' : ""
+      var last = t.lastRun
+        ? '<span class="' + (t.lastRun.ok ? "" : "tk-bad") + '">上次：' + esc(t.lastSummary) + "</span>"
+        : "上次：从未运行"
+      return '<div class="tk-item' + (t.enabled === false ? " off" : "") + '" data-id="' + esc(t.id) + '">'
+        + '<div class="tk-top"><span class="tk-name">' + esc(t.title) + "</span>"
+        + (t.enabled === false ? '<span class="tk-meta">已停用</span>' : "") + "</div>"
+        + '<div class="tk-meta">' + esc(fmtSchedule(t.schedule)) + "　·　下次：" + esc(t.enabled === false ? "—" : fmtNext(t.nextRun)) + "</div>"
+        + '<div class="tk-meta">' + last + "</div>" + warn
+        + '<div class="tk-acts">'
+        + '<button class="mm-btn ghost" data-act="run">立即跑一次</button>'
+        + '<button class="mm-btn ghost" data-act="edit">编辑</button>'
+        + '<button class="mm-btn ghost" data-act="toggle">' + (t.enabled === false ? "启用" : "停用") + "</button>"
+        + '<button class="mm-btn ghost" data-act="runs">运行记录</button>'
+        + '<button class="mm-btn ghost" data-act="del">删除</button>'
+        + "</div></div>"
+    }).join("")
+  }
+
+  function refresh() {
+    setMsg(msgEl, "info", "载入中…")
+    return jget("api/tasks").then(function (d) {
+      if (!d || !d.ok) throw new Error((d && d.err) || "读取失败")
+      window.__tasks = d.tasks || []
+      mode = d.mode || "full"; presets = d.presets || []; forcedModel = d.taskModel || ""
+      var mc = document.getElementById("tkMinCredits")
+      if (mc && document.activeElement !== mc) mc.value = (d.settings && d.settings.minCredits) || 0
+      renderList(d)
+      setMsg(msgEl, "info", "")
+    }).catch(function (e) { setMsg(msgEl, "err", "读取定时任务失败：" + (e.message || e)) })
+  }
+
+  // ---- 编辑 ----
+  var f = {
+    title: document.getElementById("tfTitle"), prompt: document.getElementById("tfPrompt"),
+    kind: document.getElementById("tfKind"), time: document.getElementById("tfTime"),
+    date: document.getElementById("tfDate"), credits: document.getElementById("tfCredits"),
+    daysWrap: document.getElementById("tfDaysWrap"), days: document.getElementById("tfDays"),
+    dateWrap: document.getElementById("tfDateWrap"), msg: document.getElementById("taskEditMsg"),
+  }
+  f.days.innerHTML = WEEK.map(function (w, i) { return '<button type="button" data-d="' + i + '">' + w + "</button>" }).join("")
+  f.days.addEventListener("click", function (e) {
+    var b = e.target.closest("button[data-d]"); if (b) b.classList.toggle("on")
+  })
+  function syncKind() {
+    var k = f.kind.value
+    f.daysWrap.hidden = k !== "weekly"
+    f.dateWrap.hidden = k !== "once"
+  }
+  f.kind.addEventListener("change", syncKind)
+
+  // ---- 模板表单（基础档）----
+  // 字段由服务端下发（web/task-presets.mjs 的 fields），这里照着渲染 —— 以后加模板不用改前端。
+  function renderPresetFields(presetId, values) {
+    var def = presets.filter(function (p) { return p.id === presetId })[0]
+    var wrap = document.getElementById("tfPresetFields")
+    document.getElementById("tfPresetDesc").textContent = def ? def.desc : ""
+    if (!def) { wrap.innerHTML = ""; return }
+    wrap.innerHTML = def.fields.map(function (fd) {
+      var v = (values || {})[fd.key]
+      if (v === undefined || v === null) v = fd.default === undefined ? "" : fd.default
+      var attrs = 'id="tp-' + esc(fd.key) + '" class="mm-input" value="' + esc(v) + '"'
+      var input = fd.type === "number"
+        ? '<input type="number" ' + attrs + ' min="' + (fd.min || 0) + '" max="' + (fd.max || 9999) + '" />'
+        : '<input type="text" ' + attrs + ' placeholder="' + esc(fd.placeholder || "") + '" />'
+      return '<label class="mm-field"><span>' + esc(fd.label) + (fd.required ? " *" : "") + "</span>" + input + "</label>"
+        + (fd.hint ? '<div class="mm-hint" style="margin:-8px 0 10px">' + esc(fd.hint) + "</div>" : "")
+    }).join("")
+  }
+
+  function showEdit(t) {
+    editing = t || {}
+    document.getElementById("taskTitle").textContent = t && t.id ? "编辑定时任务" : "新建定时任务"
+    f.title.value = editing.title || ""
+    f.prompt.value = editing.prompt || ""
+    // 档位决定给哪种编辑器。【服务端也会照 mode 校验】——这里只是界面，不是防线。
+    var isPreset = mode === "preset"
+    document.getElementById("tfPromptWrap").hidden = isPreset
+    document.getElementById("tfPresetWrap").hidden = !isPreset
+    if (isPreset) {
+      var sel = document.getElementById("tfPreset")
+      sel.innerHTML = presets.map(function (p) {
+        return '<option value="' + esc(p.id) + '"' + (editing.preset === p.id ? " selected" : "") + ">" + esc(p.name) + "</option>"
+      }).join("")
+      renderPresetFields(sel.value, editing.params)
+      sel.onchange = function () { renderPresetFields(sel.value, {}) }
+      // 模板档的任务名可以不填（服务端会用"文献推送：xxx"兜底），别拿它卡住用户
+      f.title.placeholder = "不填的话自动按你选的内容命名"
+    }
+    var note = document.getElementById("tfModelNote")
+    note.hidden = !forcedModel
+    if (forcedModel) note.textContent = "这个任务会用 " + forcedModel + " 运行（由你的账号档位决定，不可更改）。"
+    var s = editing.schedule || { kind: "weekly", time: "07:30", days: [1] }
+    f.kind.value = s.kind || "weekly"
+    f.time.value = s.time || "07:30"
+    f.date.value = s.date || ""
+    f.credits.value = editing.maxCredits || 0
+    Array.prototype.forEach.call(f.days.querySelectorAll("button"), function (b) {
+      b.classList.toggle("on", (s.days || []).indexOf(Number(b.dataset.d)) >= 0)
+    })
+    syncKind()
+    setMsg(f.msg, "info", "")
+    listView.hidden = true; editView.hidden = false
+  }
+  function showList() {
+    document.getElementById("taskTitle").textContent = "定时任务"
+    editView.hidden = true; listView.hidden = false
+    refresh()
+  }
+
+  document.getElementById("taskNew").addEventListener("click", function () { showEdit(null) })
+  document.getElementById("tfCancel").addEventListener("click", showList)
+  document.getElementById("tfSave").addEventListener("click", function () {
+    var days = Array.prototype.filter.call(f.days.querySelectorAll("button.on"), function () { return true })
+      .map(function (b) { return Number(b.dataset.d) })
+    var body = {
+      id: editing && editing.id, title: f.title.value, prompt: f.prompt.value,
+      maxCredits: Number(f.credits.value) || 0,
+      schedule: { kind: f.kind.value, time: f.time.value, days: days, date: f.date.value },
+    }
+    if (mode === "preset") {
+      // 模板档只送模板 id 与参数；prompt 由服务端拼（送上去的那份会被丢弃，这里干脆不送）
+      var pid = document.getElementById("tfPreset").value
+      var def = presets.filter(function (p) { return p.id === pid })[0]
+      body.preset = pid; body.prompt = ""; body.params = {}
+      if (def) def.fields.forEach(function (fd) {
+        var el = document.getElementById("tp-" + fd.key)
+        if (el) body.params[fd.key] = el.value
+      })
+    }
+    setMsg(f.msg, "info", "保存中…")
+    jpost("api/tasks/save", body).then(function (d) {
+      if (!d || !d.ok) { setMsg(f.msg, "err", (d && d.err) || "保存失败"); return }
+      // 注册失败【不算保存失败】：定义已经存下了，任务会被标成"未注册"，用户点重新注册即可修复。
+      // 这里必须把原因原样说出来——它通常是权限/组策略这类只有用户自己能解决的事。
+      if (d.warn) { toast("已保存，但没能注册到系统"); setMsg(f.msg, "err", "已保存，但没能注册到 Windows 任务计划：" + d.warn) ; refresh(); return }
+      toast("已保存：" + (d.task && d.task.title ? d.task.title : ""))
+      showList()
+    }).catch(function (e) { setMsg(f.msg, "err", "保存失败：" + (e.message || e)) })
+  })
+
+  // ---- 列表上的动作 ----
+  listEl.addEventListener("click", function (e) {
+    var btn = e.target.closest("button[data-act]"); if (!btn) return
+    var id = e.target.closest(".tk-item").dataset.id
+    var t = (window.__tasks || []).filter(function (x) { return x.id === id })[0]
+    var act = btn.dataset.act
+    if (act === "edit") return showEdit(t)
+    if (act === "toggle") {
+      return jpost("api/tasks/save", { id: id, enabled: !(t.enabled !== false) }).then(function (d) {
+        if (!d || !d.ok) return setMsg(msgEl, "err", (d && d.err) || "操作失败")
+        refresh()
+      })
+    }
+    if (act === "run") {
+      return jpost("api/tasks/run", { id: id }).then(function (d) {
+        if (!d || !d.ok) return setMsg(msgEl, "err", (d && d.err) || "启动失败")
+        // 手动跑会复用当前这个网关，所以它就出现在左边的会话列表里，能实时看着它干活
+        setMsg(msgEl, "ok", "已开始跑「" + (t ? t.title : id) + "」，稍后在左侧会话列表里能看到它。")
+      })
+    }
+    if (act === "runs") {
+      return jget("api/tasks/runs?id=" + encodeURIComponent(id)).then(function (d) {
+        var runs = (d && d.runs) || []
+        if (!runs.length) return setMsg(msgEl, "info", "这个任务还没有运行记录。")
+        setMsg(msgEl, "info", runs.slice(0, 8).map(function (r) {
+          return (r.ok ? "✔ " : "✘ ") + String(r.startedAt || "").slice(0, 16).replace("T", " ")
+            + "　" + r.reason + "　产物 " + ((r.outputs || []).length) + " 个"
+            + (r.credits != null ? "　约 " + r.credits + " 积分" : "")
+        }).join("\n"))
+      })
+    }
+    if (act === "del") {
+      if (!confirm("删除「" + (t ? t.title : id) + "」？它的运行记录也会一起删掉（已经产出的文件不受影响，仍在各自的会话里）。")) return
+      return jpost("api/tasks/delete", { id: id }).then(function (d) {
+        if (!d || !d.ok) return setMsg(msgEl, "err", (d && d.err) || "删除失败")
+        refresh()
+      })
+    }
+  })
+
+  // 保护线：失焦即存（一个数字字段没必要专门一个保存按钮，但要给回执，不然用户不知道存没存上）
+  var mcEl = document.getElementById("tkMinCredits")
+  if (mcEl) mcEl.addEventListener("change", function () {
+    var v = Math.max(0, Number(mcEl.value) || 0)
+    jpost("api/tasks/settings", { minCredits: v }).then(function (d) {
+      setMsg(msgEl, d && d.ok ? "ok" : "err",
+        d && d.ok ? (v ? "已设：剩余积分低于 " + v + " 时不跑定时任务" : "已取消积分保护线") : "保存失败")
+    })
+  })
+
+  document.getElementById("taskSync").addEventListener("click", function () {
+    setMsg(msgEl, "info", "对账中…")
+    jpost("api/tasks/sync", {}).then(function (d) {
+      setMsg(msgEl, d && d.ok ? "ok" : "err",
+        d && d.ok ? ("已重新注册 " + d.added + " 条" + (d.removed ? "，清掉多余 " + d.removed + " 条" : "")) : ((d && d.err) || "对账失败"))
+      refresh()
+    })
+  })
+
+  // ---- 入口 ----
+  var btn = document.getElementById("taskBtn")
+  if (btn) {
+    btn.innerHTML = ic("clock")
+    btn.addEventListener("click", function () { modal.classList.add("on"); showList() })
+  }
+  document.getElementById("taskClose").addEventListener("click", function () { modal.classList.remove("on") })
+  modal.addEventListener("click", function (e) { if (e.target === modal) modal.classList.remove("on") })
+
+  // 开机自检：这套部署支持定时任务吗？不支持就整个按钮不出现——让用户点开再告诉他"你用不了"
+  // 只会让人以为是自己哪儿没设对。顺带把"你不在的时候跑完了什么"捞出来提示。
+  jget("api/tasks").then(function (d) {
+    if (!d || !d.ok || !d.supported) return
+    if (btn) btn.hidden = false
+    return jget("api/tasks/news").then(function (n) {
+      var news = (n && n.news) || []
+      if (!news.length) return
+      var okN = news.filter(function (x) { return x.ok }).length
+      var quotaN = news.filter(function (x) { return x.quota }).length
+      // 【积分那一类必须单独说】用户看到笼统的"失败"会以为软件坏了，跑去重试、找客服；
+      // 而他实际要做的是充值或调低保护线——完全不同的动作，说清楚才省得他白折腾。
+      if (quotaN) toast("定时任务：有 " + quotaN + " 个因为积分不足没跑成（点左下角时钟看详情）")
+      else toast("定时任务：你不在时跑完了 " + news.length + " 个" + (okN < news.length ? "（" + (news.length - okN) + " 个没成功）" : "") + "，点左下角时钟查看")
+      return jpost("api/tasks/news/seen", {})
+    })
+  }).catch(function () { /* 老后端没有这些接口：按不支持处理，按钮保持隐藏 */ })
 })()
 </script>
 </body>
