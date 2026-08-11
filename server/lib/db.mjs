@@ -76,6 +76,8 @@ CREATE TABLE IF NOT EXISTS tiers (
   monthly_usd REAL NOT NULL DEFAULT 0,  -- 0 = 不限
   model      TEXT NOT NULL DEFAULT '',  -- 默认模型（客户端没选 / 选了不许的，都用它）
   models     TEXT NOT NULL DEFAULT '',  -- 允许清单，逗号分隔；'' = 只允许上面那个默认模型
+  tasks_mode TEXT NOT NULL DEFAULT 'off',  -- 定时任务：off 不显示 / preset 只能用模板 / full 自由指令
+  tasks_model TEXT NOT NULL DEFAULT '',    -- 定时任务强制用的模型（'' = 用该档默认模型）
   skills     TEXT NOT NULL DEFAULT '',  -- 逗号分隔；'' = 全部技能
   note       TEXT NOT NULL DEFAULT '',
   sort       INTEGER NOT NULL DEFAULT 0,
@@ -269,9 +271,9 @@ CREATE INDEX IF NOT EXISTS ix_audit_ts ON audit(ts);
 
 // 默认档位：首次建库播种。与旧 tiers.env 的三档对齐，外加「可用技能」这一新列。
 const SEED_TIERS = [
-  { key: "free", daily_usd: 0.3, monthly_usd: 5, model: "deepseek-v4-pro", skills: "", note: "基础版", sort: 1 },
-  { key: "plus", daily_usd: 1.5, monthly_usd: 30, model: "deepseek-v4-pro", skills: "", note: "专业版", sort: 2 },
-  { key: "admin", daily_usd: 0, monthly_usd: 0, model: "deepseek-v4-pro", skills: "", note: "内部/不限", sort: 9 },
+  { key: "free", daily_usd: 0.3, monthly_usd: 5, model: "deepseek-v4-pro", skills: "", note: "基础版", sort: 1, tasks_mode: "preset", tasks_model: "deepseek-v4-flash" },
+  { key: "plus", daily_usd: 1.5, monthly_usd: 30, model: "deepseek-v4-pro", skills: "", note: "专业版", sort: 2, tasks_mode: "full", tasks_model: "" },
+  { key: "admin", daily_usd: 0, monthly_usd: 0, model: "deepseek-v4-pro", skills: "", note: "内部/不限", sort: 9, tasks_mode: "full", tasks_model: "" },
 ]
 
 /**
@@ -341,6 +343,30 @@ function ensureColumns(db) {
   // 当天已识别次数：同 images，挂在日汇总上，日切与删用户清理都跟着 usage_daily 走。
   if (!has("usage_daily", "ocr")) db.exec("ALTER TABLE usage_daily ADD COLUMN ocr INTEGER NOT NULL DEFAULT 0")
 
+  // ---- 定时任务（客户端到点自动跑一轮，见 web/tasks.mjs 一线）----
+  // 【为什么是三态不是开关】这个功能对不同档位不是"有/没有"，而是"能到什么程度"：
+  //   off    不显示（客户端连按钮都不出）
+  //   preset 只能用我们给的模板（如"文献推送"），用户只填参数，不能写自由指令
+  //   full   自由指令
+  // 定时任务是【用户不在场时花钱】，所以放开自由指令这件事必须由管理员按档决定。
+  // 【列默认值取 off】与 img_daily 的理由一致：新建档位忘了填，默认必须是最保守的那个，
+  // 不能默认成"能自由指令"——那是一个直接烧钱的洞。
+  if (!has("tiers", "tasks_mode")) {
+    db.exec("ALTER TABLE tiers ADD COLUMN tasks_mode TEXT NOT NULL DEFAULT 'off'")
+    // 老库升上来铺一次运营定的初值：free 只能用模板，plus/admin 自由。
+    // 【只动这三个已知档位】管理员自建的档位保持 off，由他自己去后台决定——
+    // 猜错方向的代价是"某档用户莫名其妙能让 AI 在夜里自由跑"，宁可少给。
+    for (const [k, m] of [["free", "preset"], ["plus", "full"], ["admin", "full"]]) {
+      try { db.prepare("UPDATE tiers SET tasks_mode=? WHERE key=?").run(m, k) } catch {}
+    }
+  }
+  // 该档的定时任务【强制】用哪个模型（'' = 用该档默认模型）。preset 档尤其要钉死：
+  // 模板任务本来就简单，没必要用贵模型，而用户又不在场，跑贵了他第二天才知道。
+  if (!has("tiers", "tasks_model")) {
+    db.exec("ALTER TABLE tiers ADD COLUMN tasks_model TEXT NOT NULL DEFAULT ''")
+    try { db.prepare("UPDATE tiers SET tasks_model=? WHERE key=?").run("deepseek-v4-flash", "free") } catch {}
+  }
+
   // 【必须在补完 provider 列之后】供应侧的预算闸按 (provider, ts) 聚合（见 providerSpend），
   // 没索引就要全表扫 usage_log —— 那是只增不减的明细表，上线几个月后每一单请求都会被它拖慢。
   // 放在 SCHEMA 里会崩：SCHEMA 跑在本函数之前，那时老库还没有 provider 这一列。
@@ -363,8 +389,8 @@ export function openDb(file) {
   const cur = db.prepare("SELECT v FROM meta WHERE k='schema_version'").get()
   if (!cur) {
     db.prepare("INSERT INTO meta(k,v) VALUES('schema_version',?)").run(String(SCHEMA_VERSION))
-    const ins = db.prepare("INSERT OR IGNORE INTO tiers(key,daily_usd,monthly_usd,model,skills,note,sort) VALUES(?,?,?,?,?,?,?)")
-    for (const t of SEED_TIERS) ins.run(t.key, t.daily_usd, t.monthly_usd, t.model, t.skills, t.note, t.sort)
+    const ins = db.prepare("INSERT OR IGNORE INTO tiers(key,daily_usd,monthly_usd,model,skills,note,sort,tasks_mode,tasks_model) VALUES(?,?,?,?,?,?,?,?,?)")
+    for (const t of SEED_TIERS) ins.run(t.key, t.daily_usd, t.monthly_usd, t.model, t.skills, t.note, t.sort, t.tasks_mode, t.tasks_model)
   } else if (Number(cur.v) > SCHEMA_VERSION) {
     throw new Error(`库的 schema 版本 ${cur.v} 高于本程序支持的 ${SCHEMA_VERSION}——别用旧版程序开新库，会写坏数据`)
   } else if (Number(cur.v) < SCHEMA_VERSION) {
@@ -525,16 +551,26 @@ export function upsertTier(db, t) {
   const ocr = t.ocr_daily === undefined || t.ocr_daily === null || t.ocr_daily === ""
     ? (prev ? Number(prev.ocr_daily) || 0 : 20)
     : Math.max(0, Math.floor(Number(t.ocr_daily) || 0))
-  db.prepare(`INSERT INTO tiers(key,daily_usd,monthly_usd,model,models,skills,note,sort,max_conc,img_daily,ocr_daily)
-              VALUES(?,?,?,?,?,?,?,?,?,?,?)
+  // 定时任务的两列同理【缺省保留原值】：老版本管理台/脚本的表单不带它们，落成默认就等于
+  // 把管理员配好的"free 只能用模板、且只能用 flash"悄悄改回 off —— 用户会突然发现按钮没了。
+  const tmode = t.tasks_mode === undefined || t.tasks_mode === null || t.tasks_mode === ""
+    ? (prev ? String(prev.tasks_mode || "off") : "off")
+    : String(t.tasks_mode)
+  const tmodel = t.tasks_model === undefined || t.tasks_model === null
+    ? (prev ? String(prev.tasks_model || "") : "")
+    : String(t.tasks_model)
+  db.prepare(`INSERT INTO tiers(key,daily_usd,monthly_usd,model,models,skills,note,sort,max_conc,img_daily,ocr_daily,tasks_mode,tasks_model)
+              VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)
               ON CONFLICT(key) DO UPDATE SET
                 daily_usd=excluded.daily_usd, monthly_usd=excluded.monthly_usd,
                 model=excluded.model, models=excluded.models, skills=excluded.skills,
                 note=excluded.note, sort=excluded.sort, max_conc=excluded.max_conc,
-                img_daily=excluded.img_daily, ocr_daily=excluded.ocr_daily`).run(
+                img_daily=excluded.img_daily, ocr_daily=excluded.ocr_daily,
+                tasks_mode=excluded.tasks_mode, tasks_model=excluded.tasks_model`).run(
     String(t.key), Number(t.daily_usd) || 0, Number(t.monthly_usd) || 0,
     String(t.model || ""), String(t.models || ""), String(t.skills || ""),
-    String(t.note || ""), Number(t.sort) || 0, Math.max(0, Math.floor(Number(t.max_conc) || 0)), img, ocr)
+    String(t.note || ""), Number(t.sort) || 0, Math.max(0, Math.floor(Number(t.max_conc) || 0)), img, ocr,
+    tmode, tmodel)
   return getTier(db, t.key)
 }
 export function deleteTier(db, key) {
@@ -725,6 +761,9 @@ export function resolveEntitlement(db, user) {
     if (m !== model && !cat.has(m)) continue
     allowed.push(m)
   }
+  // 定时任务专用模型：只要目录里有（或它就是该档默认模型）就认，理由见下面 tasksModel 那行
+  const tm = String(t?.tasks_model || "")
+  const tasksModel = tm && (tm === model || cat.has(tm)) ? tm : ""
   return {
     tier: user.tier,
     daily: num(user.daily_override, t?.daily_usd),
@@ -740,6 +779,19 @@ export function resolveEntitlement(db, user) {
     imgDaily: t ? Math.max(0, Math.floor(Number(t.img_daily) || 0)) : 0,
     // 每天可识别几次图片（0 = 不限）。档位被删时给 0 的理由同 imgDaily。
     ocrDaily: t ? Math.max(0, Math.floor(Number(t.ocr_daily) || 0)) : 0,
+    // 定时任务能到什么程度：off / preset / full。档位被删或值不认识 → off。
+    // 【认不出就 off，不是 full】这条链路的失败方向必须是"少给"：多给的代价是用户不在场时烧钱。
+    tasksMode: ["preset", "full"].includes(String(t?.tasks_mode)) ? String(t.tasks_mode) : "off",
+    // 定时任务强制用的模型（'' = 用该档默认模型）。只要目录里有它就算数 ——
+    // **刻意不要求它在 models 允许清单里**：那份清单是"用户能在界面上切的模型"，
+    // 而这个是"管理员替定时任务钉死的模型"，两件事。要求它在清单里的话，管理员想让
+    // free 用 flash 就必须同时把 flash 放进 free 的可选清单，等于顺手改了聊天的行为。
+    tasksModel,
+    // 网关放行时用的【可调用集合】= 界面可选清单 ∪ 定时任务专用模型。
+    // 【为什么必须单列一个】pickModel 对不在集合里的模型是**静默打回默认模型**（见 gateway.mjs），
+    // 于是"强制 free 走 flash"会悄悄变成"照样跑贵的 pro"，而且没有任何报错——
+    // 只有月底对账时才看得出来。
+    callable: tasksModel && !allowed.includes(tasksModel) ? [...allowed, tasksModel] : allowed,
   }
 }
 
