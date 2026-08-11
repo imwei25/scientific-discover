@@ -133,7 +133,10 @@ export function requestedModel(raw) {
  */
 export function pickModel(requested, ent) {
   const req = String(requested || "").trim()
-  const allowed = Array.isArray(ent.models) && ent.models.length ? ent.models : (ent.model ? [ent.model] : [])
+  // callable = 界面可选清单 ∪ 定时任务专用模型（见 db.mjs resolveEntitlement）。
+  // 老的调用方只给 models 时照旧走 models，行为不变。
+  const pool = Array.isArray(ent.callable) && ent.callable.length ? ent.callable : ent.models
+  const allowed = Array.isArray(pool) && pool.length ? pool : (ent.model ? [ent.model] : [])
   if (req && allowed.includes(req)) return { model: req, coerced: false }
   return { model: ent.model || req, coerced: !!req && req !== ent.model }
 }
