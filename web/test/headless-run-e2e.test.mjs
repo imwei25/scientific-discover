@@ -105,6 +105,9 @@ test("定时任务无头运行（壳没开）", { skip: hasOpencode ? false : "�
     SCI_CLOUD_URL: "", OC_GATEWAY_URL: "", OC_GATEWAY_KEY: "",
     ALLOWED_SKILLS: "", ALLOWED_MODULES: "", SUGGEST_ENABLED: "0",
     OC_AUTO_MAX_ROUNDS: "5", DAILY_COST_LIMIT: "0",
+    // mock 模型一个工具都不调 → 每轮在网关眼里都是"只说话没动手"，不放宽的话本剧本会被
+    // 空转闸在第 2 轮截停，测不到第 3 轮的哨兵收官。空转闸本身在 autopilot 那两个文件里测。
+    OC_AUTO_IDLE_MAX: "999",
   }
   // 【顺序要紧】tasks.mjs 在【模块求值时】读 SCI_TASKS_DIR，import 之后再设就晚了——
   // 那样测试端会去读开发机真实的 tasks/，而子进程写的是临时目录，永远对不上（首版就栽在这）。

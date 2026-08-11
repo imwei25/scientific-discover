@@ -2264,10 +2264,13 @@ export function describeModelError(err, route) {
 // 护栏（缺一不可，ralph-loop 最大的坑是原地打转烧钱）：
 //   · 连续轮数上限 OC_AUTO_MAX_ROUNDS（默认 15）；
 //   · 停滞检测：连续两轮文本归一化后一模一样 → 停；
+//   · 空转检测：连续两轮【一个工具/技能都没调】→ 停（见 autoVerdict 的 worked 参数）；
 //   · 每轮续跑前查当日额度（quotaOver），进行中的额度中途封顶照常生效；
 //   · abort / 删会话即清态（见 job.abort 与 /api/session/delete）。
 // 状态只在内存：进程重启后自然熄火，用户重发一条勾选消息即从第 1 轮重计——不值得持久化。
 const AUTO_MAX_ROUNDS = Math.max(1, Number(process.env.OC_AUTO_MAX_ROUNDS || 15))
+// 允许连续几轮"只说话不动手"。默认 1 = 第二轮还是空转就停。调大即放宽（测试里用它把这道闸让开）。
+const AUTO_IDLE_MAX = (() => { const v = Number(process.env.OC_AUTO_IDLE_MAX); return Number.isFinite(v) && v >= 0 ? v : 1 })()
 const AUTO_SENTINEL = "[FINAL]"
 const autoStates = new Map()   // sid -> { rounds, lastText }
 
@@ -2277,13 +2280,23 @@ export const autoHasSentinel = (t) => /\[FINAL\]$/.test(String(t || "").trimEnd(
 export const autoStripSentinel = (t) => String(t || "").replace(/\n?[ \t]*\[FINAL\]\s*$/, "")
 const _autoNorm = (t) => String(t || "").replace(/\s+/g, " ").trim()
 
-/** 纯判定（导出供测试）：收下这轮文本后要不要续跑。不改状态、不看额度。 */
-export function autoVerdict(finalText, st) {
+/** 纯判定（导出供测试）：收下这轮文本后要不要续跑。不改状态、不看额度。
+ *
+ * worked = 这一轮到底动没动手（调过工具或技能）。为什么需要它：哨兵协议是 fail-open 到
+ * "继续"的——模型没打哨兵就当没干完。这对「从零到成稿」是对的，对**单步任务**（画一张图、
+ * 查一个 DOI）正好最坏：模型一轮就交付完了、很自然没想起来补那行标记，网关于是推着它
+ * 继续，它只好找活干（改配色、再出一版），每轮文本都不同，停滞检测（要求两轮一模一样）
+ * 根本兜不住，一路空转到轮数上限。空转检测就是补这个洞：**连续两轮一个工具都没调**，说明
+ * 它只是在说话不是在干活，停。不用"单轮就停"是怕误伤——有一轮只宣布决定（"已自动采用
+ * 方案 1，下一步做 X"）不动手是正常的，连着两轮都这样才是真没事干了。
+ */
+export function autoVerdict(finalText, st, worked = true) {
   const t = String(finalText || "")
   if (autoHasSentinel(t)) return { go: false, why: "final" }
   if (!t.trim()) return { go: false, why: "empty" }          // 空文本多半是上游异常，别拿它续跑烧钱
   if ((st?.rounds || 0) >= AUTO_MAX_ROUNDS) return { go: false, why: "cap" }
   if (st?.lastText && _autoNorm(t) === st.lastText) return { go: false, why: "stalled" }
+  if (!worked && (st?.idle || 0) >= AUTO_IDLE_MAX) return { go: false, why: "idle" }
   return { go: true, why: "continue" }
 }
 const AUTO_STOP_NOTES = {
@@ -2291,22 +2304,24 @@ const AUTO_STOP_NOTES = {
   stalled: () => "无人值守：连续两轮输出几乎相同（疑似原地打转），已停止自动推进。请检查产物后手动继续。",
   quota: () => "无人值守：额度/积分已用尽，自动推进停止；恢复后可手动继续（日额度每日 0 点(UTC) 重置）。",
   empty: () => "无人值守：本轮没有文本输出（多半是上游异常），自动推进停止。",
+  idle: () => "无人值守：连续两轮没有再动手做事，视为已经做完，自动推进停止。若还有没做完的，直接说一句就能接着来。",
 }
-/** 一轮正常收尾后调用：要续跑则推进状态并返回 {go:true, round}；停下返回 {go:false, note?}；未开无人值守返回 null */
-function autoDecide(sid, finalText) {
+/** 一轮正常收尾后调用：要续跑则推进状态并返回 {go:true, round}；停下返回 {go:false, note?}；未开无人值守返回 null
+ *  worked：这一轮调过工具/技能没有（见 autoVerdict 的空转检测）。 */
+function autoDecide(sid, finalText, worked = true) {
   const st = autoStates.get(sid)
   if (!st) return null
-  const v = autoVerdict(finalText, st)
+  const v = autoVerdict(finalText, st, worked)
   // 两条额度线都要看：本机 env 额度（容器部署）与云端账号积分（打包版）。少看一条就会在触顶后
   // 继续自动续跑，每轮都撞回 429 —— 无人值守正好没人在旁边看着，能空转到轮数上限。
   if (v.go && (quotaOver() || cloudQuotaBlocked())) { v.go = false; v.why = "quota" }
   if (!v.go) {
-    st.rounds = 0; st.lastText = ""   // 开关本身保留：用户下一条勾选消息从第 1 轮重新计
+    st.rounds = 0; st.lastText = ""; st.idle = 0   // 开关本身保留：用户下一条勾选消息从第 1 轮重新计
     if (v.why === "final") console.log(`[auto] 会话 ${sid}：检测到完成哨兵，自动推进收官`)
     else console.warn(`[auto] 会话 ${sid}：自动推进停止（${v.why}）`)
     return { go: false, note: AUTO_STOP_NOTES[v.why]?.() }
   }
-  st.rounds++; st.lastText = _autoNorm(finalText)
+  st.rounds++; st.lastText = _autoNorm(finalText); st.idle = worked ? 0 : (st.idle || 0) + 1
   console.log(`[auto] 会话 ${sid}：未见完成哨兵，自动续跑第 ${st.rounds}/${AUTO_MAX_ROUNDS} 轮`)
   return { go: true, round: st.rounds }
 }
@@ -2448,9 +2463,9 @@ const shareFileName = (title) => {
 
 // 注入进首轮 preamble 的自主指令。与【本会话工作区】同一块注入，故同样【不得含空行】
 // （stripPreamble 按第一个空行剥离，见 skillsPreamble 处的同款约束）。
-const autoPreamble = () => `\n- 【无人值守模式已开启】用户不在电脑前：全程不要向用户提问、不要停下等确认。遇到要选择的地方（单步还是完整流程、选哪条 pipeline、选题、方案、期刊……），直接采用你本要推荐的那一项（相当于用户回了「1」），并在正文用一行说明「已自动采用：xxx」。缺少无法自行获得的事实性信息（数据文件、伦理批号、作者名单等）就标「待补充」，继续完成其余部分，别停下来要。\n- 【完成哨兵】只有当本次目标已全部交付（成稿/成品文件已写盘、该跑的质量闸已跑完）时，才在回复最后单独一行输出 ${AUTO_SENTINEL} 。尚未完成时绝不能输出它（提前输出=任务被腰斩）；反之只要不输出它，系统就会自动让你继续下一轮，所以也不必问"是否继续"。`
+const autoPreamble = () => `\n- 【无人值守模式已开启】用户不在电脑前：全程不要向用户提问、不要停下等确认。遇到要选择的地方（单步还是完整流程、选哪条 pipeline、选题、方案、期刊……），直接采用你本要推荐的那一项（相当于用户回了「1」），并在正文用一行说明「已自动采用：xxx」。缺少无法自行获得的事实性信息（数据文件、伦理批号、作者名单等）就标「待补充」，继续完成其余部分，别停下来要。\n- 【完成哨兵】只有当本次目标已全部交付（成稿/成品文件已写盘、该跑的质量闸已跑完）时，才在回复最后单独一行输出 ${AUTO_SENTINEL} 。尚未完成时绝不能输出它（提前输出=任务被腰斩）；反之只要不输出它，系统就会自动让你继续下一轮，所以也不必问"是否继续"。\n- 【单步任务当轮就打哨兵】用户要的若本来就是一个单步产物（画一张图、查一个 DOI、一次统计、一次脱敏、一次排版），做完它就是全部交付：**在这一轮的末尾直接输出 ${AUTO_SENTINEL}**。漏了这一行，系统会以为你还没做完并推着你继续，于是你被迫给一个已经交付的东西继续加工。`
 /** 自动续跑轮发给模型的用户消息 */
-const autoContinueText = (round) => `【无人值守·自动续跑 第 ${round} 轮】继续按你的推荐方向推进：上一轮若列了编号选项，视为用户选了第 1 项（推荐项）；若在等待确认，视为已确认。缺的事实性信息标「待补充」继续。全部交付完成时在回复末尾单独一行输出 ${AUTO_SENTINEL}；未完成就继续干活，不要输出该标记。`
+const autoContinueText = (round) => `【无人值守·自动续跑 第 ${round} 轮】继续按你的推荐方向推进：上一轮若列了编号选项，视为用户选了第 1 项（推荐项）；若在等待确认，视为已确认。缺的事实性信息标「待补充」继续。全部交付完成时在回复末尾单独一行输出 ${AUTO_SENTINEL}；未完成就继续干活，不要输出该标记。**若用户要的东西其实上一轮已经交付完了（例如他只要一张图、一次查询），就不要再加工，直接只回一行 ${AUTO_SENTINEL}。**`
 
 /** 上一轮"非正常收场"停在哪一步、为什么停 —— 写进状态簿，供步骤条画成「中断」态。
  *
@@ -2942,7 +2957,9 @@ function startJob(sid, sentText, modId, forceModel) {
     //   实测：autopilot 的「循环中终止：立即停且不再自动续跑」间歇性失败（终止后多注入 1 条）。
     if (job.aborting || job.finished) return finish()
     // ---- 无人值守：只有走到这里的轮（正常收尾）才考虑续跑；出错/终止/越权/封顶都在上面 return 了 ----
-    const av = autoDecide(sid, finalText)
+    // worked：本轮动没动手。job.tools / job.skills 是本轮的增量快照（每轮一个新 job），
+    // 两个都空 = 这一轮从头到尾只在说话 —— 空转检测据此收敛（见 autoVerdict）。
+    const av = autoDecide(sid, finalText, job.tools.size > 0 || job.skills.size > 0)
     if (av && !av.go && av.note) broadcast("notice", { message: av.note })
     if (av?.go) broadcast("auto", { round: av.round, max: AUTO_MAX_ROUNDS })   // 前端据此在 done 后自动接流下一轮
     broadcast("done", {})
@@ -4640,7 +4657,7 @@ export const server = http.createServer(async (req, res) => {
       // ---- 无人值守开关：以每条消息带来的勾选态为准 ----
       // 勾着 → （重）置状态、连续轮数从 0 重计；没勾 → 清态熄火。老前端不带 auto 字段 → 不动现状。
       // 放在 running/quota 检查之后：消息被拒收时不该动开关状态。
-      if (autoReq === true) autoStates.set(sid, { rounds: 0, lastText: "" })
+      if (autoReq === true) autoStates.set(sid, { rounds: 0, lastText: "", idle: 0 })
       else if (autoReq === false) autoStates.delete(sid)
       const autoOn = autoStates.has(sid)
       // 给 agent 注入本会话专属目录，覆盖技能默认的 outputs/，实现多用户/多会话隔离

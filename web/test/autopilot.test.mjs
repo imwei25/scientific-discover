@@ -67,6 +67,15 @@ test("verdict：达到轮数上限 → 停（cap）", () => {
   assert.deepEqual(autoVerdict("还没完", { rounds: 3, lastText: "" }), { go: false, why: "cap" })
 })
 
+// 空转检测：模型漏打哨兵时的兜底。单步任务（画一张图）最容易漏，漏了就会被推着反复加工。
+test("verdict：连续两轮一个工具都没调 → 停（idle）", () => {
+  const st = { rounds: 1, lastText: "", idle: 0 }
+  assert.equal(autoVerdict("图已生成 fig1.png。", st, false).go, true, "只空转一轮不停（可能只是在宣布决定）")
+  st.idle = 1
+  assert.deepEqual(autoVerdict("我再确认一下，没有别的要做了。", st, false), { go: false, why: "idle" })
+  assert.equal(autoVerdict("已重新出图 fig2.png。", st, true).go, true, "这一轮动了手 → 照常续跑")
+})
+
 test("verdict：连续两轮归一化后相同 → 停（stalled）；空白差异不影响判定", () => {
   const norm = "我已经把能做的都做完了。"
   const st = { rounds: 1, lastText: norm }

@@ -6,7 +6,7 @@
 //   ① 模型停下问编号问题 → 网关自动续跑（auto 事件、第 N 轮）直到 [FINAL] 哨兵收官；
 //   ② 首轮即 [FINAL] → 不续跑；未勾选 auto → 问题就停在那，不续跑；
 //   ③ 永不完成 → 轮数上限兜底停（OC_AUTO_MAX_ROUNDS=3）；
-//   ④ 连续两轮输出相同 → 停滞检测停；
+//   ④ 连续两轮输出相同 → 停滞检测停；连续两轮没调任何工具 → 空转检测停；
 //   ⑤ 循环中用户 abort → 立即停且不再续；
 //   ⑥ [FINAL] 不出现在直播 final 文本与 /api/history 回显里。
 //
@@ -141,6 +141,15 @@ async function setup() {
   }
   // 网关：路由=custom（model-config 指向 mock），OC 不接管，额度不设限，轮数上限 3
   fs.writeFileSync(path.join(tmp, "model-config.json"), JSON.stringify({ route: "custom", baseURL: mock.url, apiKey: "x", modelID: "mock-m" }))
+  gw = await startGateway("autopilot-e2e", {
+    // 【空转闸在这里让开】mock 模型永远不调工具，也就是每一轮在网关眼里都是"只说话没动手"。
+    // 不放宽的话下面所有剧本都会在第 2 轮被空转闸截停，问编号/轮数上限/终止这些用例就测不成了。
+    // 空转闸自己另起一个默认配置的网关实例单测（见「空转闸」子测试）。
+    OC_AUTO_IDLE_MAX: "999",
+  })
+}
+/** 起一个网关实例（同一个 opencode + mock 模型）；extra 覆盖 env，用来测不同护栏配置 */
+async function startGateway(tag, extra = {}) {
   const over = {
     MANAGE_OC: "0", PORT: "0",
     OC_URL: `http://127.0.0.1:${ocPort}`,
@@ -153,17 +162,18 @@ async function setup() {
     SCI_CLOUD_URL: "", OC_GATEWAY_URL: "", OC_GATEWAY_KEY: "",
     ALLOWED_SKILLS: "", ALLOWED_MODULES: "", SUGGEST_ENABLED: "0",
     OC_AUTO_MAX_ROUNDS: "3", DAILY_COST_LIMIT: "0",
+    ...extra,
   }
   const savedEnv = {}
   for (const [k, v] of Object.entries(over)) { savedEnv[k] = process.env[k]; process.env[k] = v }
   let mod
-  try { mod = await import("../server.mjs?autopilot-e2e") } finally {
+  try { mod = await import(`../server.mjs?${tag}`) } finally {
     for (const [k, v] of Object.entries(savedEnv)) { if (v === undefined) delete process.env[k]; else process.env[k] = v }
   }
   let port
   for (let i = 0; i < 200; i++) { port = mod.server?.address()?.port; if (port) break; await new Promise((r) => setTimeout(r, 50)) }
   if (!port) throw new Error("网关没起来")
-  gw = { mod, base: `http://127.0.0.1:${port}` }
+  return { mod, base: `http://127.0.0.1:${port}` }
 }
 async function teardown() {
   try { await new Promise((r) => (gw?.mod?.server ? gw.mod.server.close(r) : r())) } catch {}
@@ -228,6 +238,20 @@ test("无人值守端到端", { skip: hasOpencode ? false : "本机没有 openco
     assert.equal(rounds.length, 2, "第 2 轮与第 1 轮输出相同即停")
     const notes = evOf(rounds[1], "notice").map((e) => e.data.message).join("|")
     assert.match(notes, /原地打转/)
+  })
+
+  await t.test("空转闸：连续两轮没动手 → 停（默认配置，单起一个网关实例）", async () => {
+    // 这道闸是给"模型漏打哨兵"兜底的：单步任务（画一张图）做完就交付了，模型常常忘了那行标记，
+    // 于是被推着一轮轮给已经交付的东西继续加工。NEVER 剧本正是这个形状——每轮说得热闹、
+    // 一个工具都不调。上限 3 轮的闸要到第 4 轮才停，空转闸应当在第 2 轮就收住。
+    const g2 = await startGateway("autopilot-e2e-idle")   // 不放宽 OC_AUTO_IDLE_MAX
+    try {
+      const { rounds } = await runConversation(g2.base, { q: "SCENARIO_NEVER 只说不做的任务", auto: true })
+      assert.equal(rounds.length, 2, `空转闸应在第 2 轮收住（轮数上限 3 要到第 4 轮），实际 ${rounds.length} 轮`)
+      assert.equal(evOf(rounds[1], "auto").length, 0)
+      const notes = evOf(rounds[1], "notice").map((e) => e.data.message).join("|")
+      assert.match(notes, /没有再动手做事/)
+    } finally { await new Promise((r) => (g2.mod?.server ? g2.mod.server.close(r) : r())) }
   })
 
   await t.test("循环中终止：立即停且不再自动续跑", async () => {
