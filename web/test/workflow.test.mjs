@@ -361,6 +361,69 @@ test("步骤按表单值裁剪：已脱敏就不再插脱敏步，前瞻性研�
     "回顾性研究已有数据，无法再'采数前预注册'，不该前置")
 })
 
+test("起点分叉：标书「打磨已有 idea」从锻打起步，论文「打磨已有初稿」以稿为底本", () => {
+  // ---- 标书：idea 路线裁掉方向生成与选题遴选，第一步就是立意锻打 ----
+  const gids = (v) => WF.stepsFor("grant", v).map((s) => s.id)
+  // intake（标的确认）在 idea 路线【保留】：已有设想也得先确认按哪份申报通知写——
+  // 定标卡正是锻打的输入（评审评价维定议程、指南方向对表）。裁掉的只有 scan/topic。
+  assert.deepEqual(gids({ entry: "idea" }), ["intake", "forge", "write", "review", "render"],
+    "idea 路线：scan/topic 整格裁掉，标的确认保留，随后即立意锻打")
+  assert.ok(gids({ entry: "scratch" }).includes("scan") && gids({ entry: "scratch" }).includes("topic"),
+    "从零路线维持完整流程")
+  // fail-safe：跳过表单直接打字（entry 未填）→ 走完整流程，不许悄悄少两步
+  assert.ok(gids({}).includes("scan") && gids({}).includes("topic"))
+  // idea 路线的设想是锻打的底子：必显示、必填；从零路线连显示都不显示
+  const idea = WF.WORKFLOWS.grant.intake.find((f) => f.id === "ideaDesc")
+  assert.ok(WF.visible(idea, { entry: "idea" }) && WF.isRequired(idea, { entry: "idea" }))
+  assert.ok(!WF.visible(idea, { entry: "scratch" }))
+  // 「打磨已有」路线：项目基本信息与申请人信息每一条都转选填；从零 / 跳过表单仍必填（fail-safe）
+  for (const id of ["funder", "keywords", "amount", "applicantName", "applicant", "org"]) {
+    const f = WF.WORKFLOWS.grant.intake.find((x) => x.id === id)
+    assert.ok(!WF.isRequired(f, { entry: "idea" }), `${id} 在打磨已有路线不该必填`)
+    assert.ok(WF.isRequired(f, { entry: "scratch" }) && WF.isRequired(f, {}), `${id} 从零/跳过表单仍必填`)
+  }
+  // 「打磨已有」路线：已有工作基础与上传材料二选一至少填一个（对方空我必填、对方填了我转选填）
+  const base = WF.WORKFLOWS.grant.intake.find((f) => f.id === "baseDesc")
+  const att = WF.WORKFLOWS.grant.intake.find((f) => f.id === "attachFiles")
+  assert.ok(WF.isRequired(base, { entry: "idea" }) && WF.isRequired(att, { entry: "idea" }),
+    "两个都空 → 两个都标必填")
+  assert.ok(!WF.isRequired(base, { entry: "idea", attachFiles: ["a.pdf"] }), "传了附件 → 工作基础转选填")
+  assert.ok(!WF.isRequired(att, { entry: "idea", baseDesc: "有预实验数据" }), "填了基础 → 附件转选填")
+  assert.ok(WF.isRequired(base, { entry: "idea", attachFiles: [] }),
+    "空数组要按没填算（files 建卡时会补成 []），否则互免判定永远不成立")
+  assert.ok(!WF.isRequired(base, { entry: "scratch" }) && !WF.isRequired(att, {}), "从零路线两项都是选填")
+  // 三个字段的区块提前只在 idea 路线生效（first 条件；顺序由前端按它重排）
+  for (const f of [WF.WORKFLOWS.grant.intake.find((x) => x.id === "reqDesc"), base, att])
+    assert.ok(f.first && WF.condOk(f.first, { entry: "idea" }) && !WF.condOk(f.first, { entry: "scratch" }),
+      `${f.id} 的 first 条件该只在打磨已有路线成立`)
+  // forge 的 deps 指向被裁掉的 topic —— stepsFor/staleUp 都要能就地跳过，不许炸
+  const line = WF.pipelineLine("grant", { entry: "idea" })
+  assert.match(line, /立意锻打\(闸\)/)
+  assert.doesNotMatch(line, /研究方向生成 →/, "前言的流程链不该再出现被裁掉的步骤")
+
+  // ---- 论文：draft 路线初稿必传、综述降可选、write 带底本改写的交代 ----
+  const df = WF.WORKFLOWS.paper.intake.find((f) => f.id === "draftFiles")
+  assert.ok(WF.visible(df, { entry: "draft" }) && WF.isRequired(df, { entry: "draft" }),
+    "打磨已有初稿路线：没有稿子无从打磨，初稿必传")
+  assert.ok(!WF.isRequired(df, { entry: "scratch", materials: ["draft"] }),
+    "从零路线勾了初稿也只是可选补充，不逼传")
+  // 初稿路线：研究类型 / 研究主题不再逼填（稿子里都有）；从零与跳过表单仍必填（fail-safe）
+  for (const id of ["studyType", "topic"]) {
+    const f = WF.WORKFLOWS.paper.intake.find((x) => x.id === id)
+    assert.ok(!WF.isRequired(f, { entry: "draft" }), `${id} 在初稿路线不该必填`)
+    assert.ok(WF.isRequired(f, { entry: "scratch" }) && WF.isRequired(f, {}), `${id} 从零/跳过表单仍必填`)
+  }
+  const lit = WF.WORKFLOWS.paper.steps.find((s) => s.id === "litreview")
+  assert.ok(WF.isOptional(lit, { entry: "draft" }), "初稿路线综述是可选补强")
+  assert.ok(!WF.isOptional(lit, { entry: "scratch" }) && !WF.isOptional(lit, {}),
+    "从零路线（含跳过表单）综述照常必做——它是引言与讨论的地基")
+  // 两个模块的起点选择都不设默认值：替用户预选等于没问
+  for (const mod of ["grant", "paper"]) {
+    const e = WF.WORKFLOWS[mod].intake.find((f) => f.id === "entry")
+    assert.ok(e?.required && e.default === undefined, `${mod} 的起点选择该必选且无默认`)
+  }
+})
+
 test("任务卡：只拼可见字段，标签用中文选项文案，末尾必须带反幻觉那句", () => {
   const f = WF.WORKFLOWS.paper.intake
   const card = WF.taskCard("SCI 论文", "立项确认", f, {

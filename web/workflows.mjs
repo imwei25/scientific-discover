@@ -33,7 +33,9 @@ export function condOk(cond, values) {
   // 用 hasNot 表达"只勾了样本量就不用传数据"是错的：那会变成"只要勾了样本量，
   // 哪怕同时勾了生存分析也不用传数据"，一个没有数据的 KM/Cox 请求就这么放行了。
   if ("hasOther" in cond) return Array.isArray(v) && v.some((x) => !cond.hasOther.includes(x))
-  if ("truthy" in cond) return cond.truthy ? !!v : !v
+  // 空数组按"没填"算（与 withDefaults 同口径）：files/multi/tags 的值是数组，且前端建卡时
+  // 会把它们补成 []——不折算的话「传了附件就不必填工作基础」这类互免判定永远不成立。
+  if ("truthy" in cond) { const t = Array.isArray(v) ? v.length > 0 : !!v; return cond.truthy ? t : !t }
   return true
 }
 
@@ -504,7 +506,20 @@ export const WORKFLOWS = {
     primary: "write-paper",
     intakeTitle: "立项确认",
     intake: [
-      { id: "studyType", label: "研究类型", type: "select", required: true, options: [
+      // ---- 起点分叉（2026-08-11 加）：从零成稿 vs 打磨已有初稿 ----
+      // 【为什么要分】手里已有初稿的用户以前也被按"从零"那条线带着走，填完一屏表单得到的
+      // 第一步却是"帮你从头成稿"。裁剪机制现成（when / requiredWhen），分叉只是表单 + 条件。
+      // 不设 default：这一下选择正是本字段存在的意义，替用户预选等于没问。
+      // 跳过表单直接打字时 entry 为 undefined → 各处 ne/eq 条件按"未填"求值 → 走完整流程，fail-safe。
+      // 选项文案与 grant 同款走短标签；help 一并砍掉（"看着密密麻麻全是字"），行为即说明。
+      { id: "entry", label: "从哪里开始", type: "select", required: true, chips: true, seg: true, col2: true,
+        options: [
+          { v: "scratch", t: "从零成稿" },
+          { v: "draft", t: "打磨已有初稿" }],
+        errMsg: "请先选从哪里开始" },
+      // ★ 必填只对从零路线：打磨已有初稿时这些信息稿子里多半都有，逼用户重填一遍毫无意义
+      //   （requiredWhen ne:"draft" —— 跳过表单 entry 为 undefined 时仍按必填算，方向 fail-safe）。
+      { id: "studyType", label: "研究类型", type: "select", requiredWhen: { field: "entry", ne: "draft" }, options: [
         { v: "retrospective", t: "回顾性队列" }, { v: "prospective", t: "前瞻性队列" },
         { v: "rct", t: "随机对照试验（RCT）" }, { v: "diagnostic", t: "诊断准确性研究" },
         { v: "casecontrol", t: "病例对照" }, { v: "crosssection", t: "横断面" },
@@ -514,7 +529,7 @@ export const WORKFLOWS = {
         // 加中文：临床医生未必都对得上这几个英文体裁名（评审反馈）
         { v: "original", t: "原著（Original Article）" }, { v: "brief", t: "简报（Brief Report）" },
         { v: "case", t: "个案报道（Case Report）" }, { v: "letter", t: "通讯（Letter）" }] },
-      { id: "topic", label: "研究主题一句话", type: "textarea", required: true,
+      { id: "topic", label: "研究主题一句话", type: "textarea", requiredWhen: { field: "entry", ne: "draft" },
         placeholder: "例：术前中性粒细胞/淋巴细胞比值对胃癌根治术后 3 年生存的预测价值" },
       { id: "materials", label: "已有材料", type: "multi", options: [
         { v: "rawdata", t: "原始数据表（xlsx/csv）" }, { v: "draft", t: "已有初稿" },
@@ -532,10 +547,13 @@ export const WORKFLOWS = {
         when: { field: "materials", has: "rawdata" },
         help: "勾「是」= 这份表你已经处理过（姓名/住院号/身份证/电话都去掉了），会【跳过脱敏步】直接分析；"
             + "没处理过就留「否」，系统先脱敏再统计。拿不准就留「否」——未脱敏的患者数据不得进入统计。" },
+      // 「打磨已有初稿」路线没有稿子就无从打磨 —— 该路线下必显示、必填；从零路线维持原条件
       { id: "draftFiles", label: "已有的初稿 / 图表 / 文献库文件", type: "files",
         uploadText: "上传初稿 / 图表 / 文献库", accept: ".docx / .pdf / 图片 / .bib",
-        whenAny: [{ field: "materials", has: "draft" }, { field: "materials", has: "figures" }, { field: "materials", has: "refs" }],
-        help: "上面勾了已有初稿 / 图表 / 文献库的，把对应文件传上来。" },
+        whenAny: [{ field: "entry", eq: "draft" }, { field: "materials", has: "draft" }, { field: "materials", has: "figures" }, { field: "materials", has: "refs" }],
+        requiredWhen: { field: "entry", eq: "draft" },
+        help: "上面勾了已有初稿 / 图表 / 文献库的，把对应文件传上来。",
+        errMsg: "「打磨已有初稿」路线要先把初稿传上来" },
       { id: "ethicsNo", label: "伦理批件号", type: "text", when: { field: "materials", has: "ethics" },
         placeholder: "原样填写，没有就留空（会标『待补充』，不会编造）" },
       { id: "registryNo", label: "临床试验注册号", type: "text", when: { field: "materials", has: "registry" },
@@ -636,6 +654,9 @@ export const WORKFLOWS = {
       { id: "litreview", name: "文献综述", skill: "literature-review",
         // 综述吃的是检索与（可选的）故事线，与统计/作图无依赖 —— 后一轮补张图不许把它标过期
         deps: ["forge"],
+        // 打磨已有初稿时，引言与讨论的文献底子多半已经在稿里 —— 综述降级为可选的补强步。
+        // （综述单薄仍是回退触发点：refcheck / review 发现引用撑不住主张时照样回来补做。）
+        optionalUnless: { field: "entry", ne: "draft" },
         form: [
           { id: "query", label: "检索式 / 关键词", type: "textarea",
             placeholder: "留空则由 AI 依据研究主题自拟检索式" },
@@ -657,7 +678,8 @@ export const WORKFLOWS = {
         // ★ emitsNot：`manuscript_*.md` 会把润色步的产物 manuscript_humanized.md 一起收走
         //   （globMatch 对不含 / 的 glob 按 basename 比，躲不开）。实测后果：用户自带初稿、
         //   只想润色，产物只有 manuscript_humanized.md —— AI 一个字没写，「撰写正文 ✓已完成」。
-        emits: ["manuscript.md", "manuscript_*.md"], emitsNot: ["*_humanized.*"], render: "manuscript" },
+        emits: ["manuscript.md", "manuscript_*.md"], emitsNot: ["*_humanized.*"], render: "manuscript",
+        note: "用户从「打磨已有初稿」进来时（任务卡里「从哪里开始＝打磨已有初稿」并附了初稿文件），这一步是**以他的初稿为底本逐节补强改写**：先通读初稿，站得住的结构与内容尽量保留，缺的章节才新写，数字与结论一律以本会话统计结果为准逐处核对；改了什么要能对得回原稿（交付时给一份按章节的改动说明），**不许把初稿扔掉另起炉灶重写**。从零路线照常基于综述与统计结果成文，本条不适用。" },
       { id: "refcheck", name: "引用核查", skill: "reference-check", gate: true,
         deps: ["write"],
         emits: ["refcheck_report.md", "reference_check*.md", "reference_check*.csv"],
@@ -786,6 +808,27 @@ export const WORKFLOWS = {
     // ★ 本表按设计稿「基金申报页面_单列流程版.html」重排：三张区块卡（项目基本信息 / 申请人信息 /
     //   撰写要求与工作基础），字段两列。section / sectionSub / sectionIcon 三项只影响前端画法。
     intake: [
+      // ---- 区块 0：从哪里开始（2026-08-11 加）：从零选题 vs 打磨已有 idea ----
+      // 已有大致想法的申请人以前只能陪跑「研究方向生成 → 选题遴选」两步 —— 那两步的产出他早有了，
+      // 整个模块读起来就是"从零开始"。选「打磨已有 idea」= 这两步整格裁掉，流程从「立意锻打」
+      // 起步，锻打对象就是下面那段设想。不设 default（替用户预选等于没问）；跳过表单直接打字时
+      // entry 为 undefined → scan/topic 的 ne 条件成立 → 走完整流程，fail-safe。
+      // 2026-08-11 按用户要求砍掉了本组的 help 与 sectionSub（"看着密密麻麻全是字"）：
+      // 选「打磨立意」会当场弹出设想输入框、流程条前两格变灰，行为本身就是说明。
+      // seg：两个选项画成等宽大按钮占满整行（index.html 的 .wfseg），比两粒小 chip 醒目。
+      // first: {} —— 恒真，把本组钉在最顶上（「打磨已有」路线会把「撰写要求与工作基础」
+      // 整块提前，见那三个字段的 first；不钉住的话本组会被挤下去）。
+      { id: "entry", label: "从哪里开始", type: "select", required: true, chips: true, seg: true, col2: true,
+        section: "从哪里开始", sectionIcon: "lines", first: {},
+        options: [
+          { v: "scratch", t: "定选题" },
+          { v: "idea", t: "打磨已有" }],
+        errMsg: "请先选从哪里开始" },
+      { id: "ideaDesc", label: "你的研究设想", type: "textarea", first: {},
+        when: { field: "entry", eq: "idea" }, requiredWhen: { field: "entry", eq: "idea" },
+        placeholder: "例：想用本院 XX 队列做 XX 对 XX 结局的预测；预实验发现 XX……科学问题 / 假设 / 打算怎么做，写到哪算哪",
+        errMsg: "「打磨已有」路线要先把你的设想写几句" },
+
       // ---- 区块 1：项目基本信息 ----
       // ★★ 这一项【直接决定成稿对不对】，所以选项必须覆盖 grant-proposal 有内置要求卡的渠道。
       //   技能第 1 步就是"定渠道 → Read 对应要求卡"，结构提纲、逐节字数硬限、格式规定、
@@ -796,8 +839,12 @@ export const WORKFLOWS = {
       //   要求卡，不凭常识硬写），是表外渠道唯一正确的出口。
       // chips:true —— 11 个选项本会掉进原生下拉，而这是全表最要紧的一项，收起来等于把
       //   "有哪些渠道可选"藏了。摊开占两行，值这个地方。
-      { id: "funder", label: "申请类型", type: "select", required: true, chips: true, col2: true,
-        section: "项目基本信息", sectionSub: "确定申报类别、关键要素与研究周期", sectionIcon: "lines",
+      // ★ 2026-08-11「打磨已有」路线（entry=idea）下，本区块与「申请人信息」的每一项都转选填
+      //   （requiredWhen ne:"idea"）——已有材料里多半都写着这些；缺的会标"待补充"问用户要。
+      //   entry 未填（跳过表单）时 ne 条件成立 → 仍按必填算，方向 fail-safe。
+      // dropdown：2026-08-11 按用户要求从摊开的 chips 改回原生下拉（11 个选项占两行太吵）。
+      { id: "funder", label: "申请类型", type: "select", requiredWhen: { field: "entry", ne: "idea" }, dropdown: true, col2: false,
+        section: "项目基本信息", sectionIcon: "lines",
         options: [
           { v: "nsfc-general", t: "国家自然科学基金·面上项目" }, { v: "nsfc-young", t: "青年科学基金" },
           { v: "nsfc-region", t: "地区科学基金" }, { v: "nsfc-key", t: "重点项目" },
@@ -805,25 +852,24 @@ export const WORKFLOWS = {
           { v: "hospital", t: "院级 / 校级课题" }, { v: "postdoc", t: "博士后基金" },
           { v: "society", t: "学会临床基金" }, { v: "industry", t: "企业横向合作" },
           { v: "other", t: "其它" }],
-        // help 是纯文本渲染，别写 **粗体**（会原样显示成星号）—— 强调一律用「」
-        help: "「决定按哪一份官方要求起草」（结构提纲、逐节字数硬限、形式审查清单都按它对齐），选错会导致整篇返工。不在表里就选「其它」并写清渠道名。" },
+        // 2026-08-11 按用户要求删光了本表全部 help（"看着密密麻麻全是字"）。其中承载的硬约束
+        // （渠道决定要求卡、选错整篇返工；邮箱电话 noCard 不进提示词……）都在代码注释与技能文档里，
+        // 别因为界面上没字了就把机制也删了。
+      },
       { id: "funderOther", label: "具体是哪个资助渠道", type: "text", when: { field: "funder", eq: "other" },
-        required: true, col2: true,
-        placeholder: "例：中华医学会临床医学科研专项 / 某某市卫健委面上项目 / 国家重点研发计划某专项",
-        help: "没有内置要求卡的渠道，会先请你提供当年的申报通知 / 模板，拿不到再联网把要求查清楚才动笔。" },
+        requiredWhen: { field: "entry", ne: "idea" }, col2: true,
+        placeholder: "例：中华医学会临床医学科研专项 / 某某市卫健委面上项目 / 国家重点研发计划某专项" },
       // ★ 关键字取代了原来的「研究方向」长文本：流程第 2 步就是「研究方向生成」——
       //   方向由 AI 依据关键字初拟，用户不必在第一屏就把方向想好（那正是他来找工具的原因）。
-      { id: "keywords", label: "项目关键字", type: "tags", required: true,
+      { id: "keywords", label: "项目关键字", type: "tags", requiredWhen: { field: "entry", ne: "idea" },
         placeholder: "输入后回车添加，如：单细胞测序、生物标志物",
-        help: "用于匹配研究领域、生成研究方向与摘要，建议 3–6 个。",
         errMsg: "请至少添加一个项目关键字" },
       { id: "discipline", label: "领域分类", type: "select", dropdown: true, options: [
         { v: "肿瘤学", t: "肿瘤学" }, { v: "免疫学", t: "免疫学" }, { v: "神经科学", t: "神经科学" },
         { v: "心血管", t: "心血管" }, { v: "代谢与内分泌", t: "代谢与内分泌" },
         { v: "感染与微生物", t: "感染与微生物" }, { v: "基础医学", t: "基础医学" },
         { v: "临床医学", t: "临床医学" }, { v: "预防医学", t: "预防医学" },
-        { v: "药学", t: "药学" }, { v: "生物信息学", t: "生物信息学" }],
-        help: "如暂不确定可留空，会依据项目关键字推断研究方向。" },
+        { v: "药学", t: "药学" }, { v: "生物信息学", t: "生物信息学" }] },
       // ★ 申请代码单独留一格，别指望上面那个 11 项的粗分类顶替它。
       //   grant-proposal 的硬闸里有一条是「研究方向属该渠道受理范围（NSFC 代码分流）」，
       //   而 references/nsfc-medical-h.md 是一整张 H01–H35 代码表 + 分流规则 ——
@@ -831,10 +877,9 @@ export const WORKFLOWS = {
       //   示范值必须用【2026 新码表】里真实存在的组合：H16 现在是急重症医学，消化系统是 H03，
       //   肿瘤一律 H18（旧表的"H16 肿瘤学"已失效）。示范值是最容易被照抄的东西，给错比不给更糟。
       { id: "applyCode", label: "申请代码 / 学部方向", type: "text", col2: false,
-        placeholder: "例：H18 肿瘤学 / H03 消化系统",
-        help: "国自然系渠道填了能少一轮返工；不确定可留空，会按你的方向给建议。" },
-      { id: "amount", label: "申请金额（万元）", type: "number", required: true, min: 0, step: 1,
-        col2: false, placeholder: "例如：60", help: "该额度将作为预算合计的上限。",
+        placeholder: "例：H18 肿瘤学 / H03 消化系统" },
+      { id: "amount", label: "申请金额（万元）", type: "number", requiredWhen: { field: "entry", ne: "idea" }, min: 0, step: 1,
+        col2: false, placeholder: "例如：60",
         errMsg: "请填写有效的申请金额" },
       // 起止年【手填】，不用下拉：可选年份是随申报年度滚动的，写死成 2026/2027 这种候选表
       // 一到下一年就全错，而用户又没法选表外的年份（延续项目、跨年度周期都超出这几项）。
@@ -844,54 +889,59 @@ export const WORKFLOWS = {
       { id: "yearStart", label: "研究起始年", type: "number", col2: false, default: 2026,
         min: 2000, max: 2100, step: 1, placeholder: "例如：2026" },
       { id: "yearEnd", label: "研究终止年", type: "number", col2: false, default: 2029,
-        min: 2000, max: 2100, step: 1, placeholder: "例如：2029", gteField: "yearStart",
-        help: "填不早于起始年的年份；起止年之差即研究周期（国自然面上一般 4 年、青年 3 年）。" },
+        min: 2000, max: 2100, step: 1, placeholder: "例如：2029", gteField: "yearStart" },
 
       // ---- 区块 2：申请人信息 ----
       // ⚠️ 姓名 / 单位会随任务卡交给模型（封面与研究基础一节要用），而【邮箱和电话它一个字都用不上】
       //   —— 标了 noCard，只留在本地表单里，不进提示词。个人联系方式没有任何理由送进模型上下文。
-      { id: "applicantName", label: "申请人姓名", type: "text", required: true, col2: false,
-        section: "申请人信息", sectionSub: "负责人与依托单位", sectionIcon: "user",
+      { id: "applicantName", label: "申请人姓名", type: "text", requiredWhen: { field: "entry", ne: "idea" }, col2: false,
+        section: "申请人信息", sectionIcon: "user",
         placeholder: "请输入真实姓名", errMsg: "请填写申请人姓名" },
       // ★ 在读研究生 / 博士后必须留着。topic-selection 第 3.5 步是【按申请人类型分流可行路径】，
       //   原话"同一方向，不同身份能做的设计天差地别，别给临床医生推需湿实验室的机制题"——
       //   身份直接改变选题，而选题是后面每一节的地基。博士后另有独立要求卡（references/postdoc.md）。
       //   标签写「职称 / 身份」：在读研究生没有职称，只叫"职称"会让人不知道该选哪个。
-      { id: "applicant", label: "职称 / 身份", type: "select", dropdown: true, required: true, col2: false,
+      { id: "applicant", label: "职称 / 身份", type: "select", dropdown: true, requiredWhen: { field: "entry", ne: "idea" }, col2: false,
         options: [
           { v: "student", t: "在读研究生" }, { v: "postdoc", t: "博士后" },
           { v: "lecturer", t: "主治医师 / 助理研究员" }, { v: "associate", t: "副研究员 / 副教授" },
           { v: "professor", t: "研究员 / 教授" }, { v: "other", t: "其他" }],
-        help: "决定选题的体量与风险偏好 —— 青年基金和面上项目的选题策略完全不同。",
         errMsg: "请选择职称 / 身份" },
-      { id: "org", label: "依托单位", type: "text", required: true, col2: true,
+      // col2:false —— 与联系邮箱同宽（2026-08-11 用户要求两者输入框长度一致）
+      { id: "org", label: "依托单位", type: "text", requiredWhen: { field: "entry", ne: "idea" }, col2: false,
         placeholder: "例如：某某大学附属医院", errMsg: "请填写依托单位" },
       // ★ 这两项【不设必填】。它们标了 noCard、一个字都不进提示词，对成稿没有任何贡献；
       //   而设成必填就成了硬门槛（前端缺必填不放行提交）——用一份永远不会被用到的数据，
       //   挡住用户拿到稿子，怎么算都不合算。设计稿标的是必填，这里是有意不照抄。
       { id: "email", label: "联系邮箱", type: "text", col2: false, noCard: true,
-        placeholder: "name@hospital.com",
-        help: "只留在本机表单里，不会随任务交给 AI；填了方便你自己回看申报信息。" },
+        placeholder: "name@hospital.com" },
       { id: "phone", label: "联系电话", type: "text", col2: false, noCard: true,
-        placeholder: "11 位手机号",
-        help: "只留在本机表单里，不会随任务交给 AI。" },
+        placeholder: "11 位手机号" },
 
       // ---- 区块 3：撰写要求与工作基础（均选填）----
       // ★ 这一项在技能里是【优先级最高】的输入（grant-proposal SKILL.md 第 1.5 步①、第 2 步）：
       //   拿到当年官方文件就不必联网调研，且其结构提纲/字数硬限【压过】内置要求卡。
       //   省市级、卫健委、院级这些渠道的模板常年锁在申报平台内、网上根本查不到，只有申请人手里有。
+      // ★「打磨已有」路线（entry=idea）下这一块整体提前成第一个区块（first，三个字段一起挪，
+      //   区块继承才不断），且「已有工作基础」与「上传材料」二选一至少填一个：
+      //   requiredWhen 互相盯着对方 —— 对方空着我就必填，对方填了我就转选填（truthy 已把
+      //   空数组折算成"没填"，files 建卡补的 [] 不会误判成"已传"）。定选题路线维持全选填。
       { id: "reqDesc", label: "基金申请书撰写要求", type: "textarea",
-        section: "撰写要求与工作基础", sectionSub: "基金撰写要求、已有工作基础与材料（均选填）", sectionIcon: "fileText",
-        placeholder: "例如：正文不超过 4000 字，需含立项依据、研究内容、研究方案、创新点、预期成果、研究基础；参考文献限 30 篇以内……",
-        help: "可粘贴基金委 / 单位申报通知里的核心格式要求；填了就以它为准，没填会按该渠道的通行要求控制篇幅。" },
+        section: "撰写要求与工作基础", sectionIcon: "fileText",
+        first: { field: "entry", eq: "idea" },
+        placeholder: "例如：正文不超过 4000 字，需含立项依据、研究内容、研究方案、创新点、预期成果、研究基础；参考文献限 30 篇以内……" },
       { id: "baseDesc", label: "已有工作基础", type: "textarea",
-        placeholder: "可填写已有工作基础，例如：代表作 / 已发表论文、预试验数据、平台 / 设备条件、已有样本库 / 队列等",
-        help: "提示：代表作 / 已发表论文 · 预试验数据 · 平台 / 设备条件 · 已有样本库 / 队列。没有就留空，缺的会在对应步骤问你要，绝不替你编。" },
+        first: { field: "entry", eq: "idea" },
+        requiredWhen: [{ field: "entry", eq: "idea" }, { field: "attachFiles", truthy: false }],
+        errMsg: "「打磨已有」路线：已有工作基础与上传材料至少填一个",
+        placeholder: "可填写已有工作基础，例如：代表作 / 已发表论文、预试验数据、平台 / 设备条件、已有样本库 / 队列等" },
       // divider：上传区前面加一条分隔线（设计稿 v3 在「上传参考资料」之前有一条 <hr>）——
       // 上面两项是"你自己写点什么"，这一项是"你交点什么给我"，两件事该断开
       { id: "attachFiles", label: "申请课题要求文件 / 代表作 / 预实验数据", type: "files", divider: true,
-        uploadText: "上传材料", accept: ".pdf / .docx / .xlsx / .png，单个 ≤ 20MB",
-        help: "可上传申报指南、申请书模板、代表性论文、预实验数据表等；传了官方通知 / 模板就以它为准。" },
+        first: { field: "entry", eq: "idea" },
+        requiredWhen: [{ field: "entry", eq: "idea" }, { field: "baseDesc", truthy: false }],
+        errMsg: "「打磨已有」路线：已有工作基础与上传材料至少填一个",
+        uploadText: "上传材料", accept: ".pdf / .docx / .xlsx / .png，单个 ≤ 20MB" },
     ],
     steps: [
       // ★ 步骤名与 sub 按设计稿「基金申报页面_单列流程版.html」的六格流程改写。
@@ -909,6 +959,7 @@ export const WORKFLOWS = {
         note: "本格走 grant-proposal 的【定标模式】，产出只有 `requirement_card.md`，落盘即停 —— 不选题、不起草。用户上传了申报通知/模板（或表单填了撰写要求）→ 摄入即视同确认；**没有 → 联网查当年申报通知/指南（内置渠道也要查），把查到的候选文件编号列出（文件名/发布机构/年份/URL），让用户回数字确认按哪份写，问完本轮结束**。查到的只有往年版本要如实说明并标注风险。**无人值守（AUTO）时不等确认**：选最可信官方来源落卡，卡头显著标注「自动选定、未经用户确认」。后续所有格都读这张卡：方向生成限定在受理范围内、选题打 funder-fit、锻打按评审评价维定议程。" },
       { id: "scan", name: "研究方向生成", skill: "research-scan",
         deps: [],
+        when: { field: "entry", ne: "idea" },   // 打磨已有 idea：方向他已经有了，整格裁掉
         sub: "AI 依据信息初拟若干研究方向",
         emits: ["research_scan*.md", "landscape*.csv"], render: "report",
         hint: "没搜到 ≠ 研究空白，四象限采样后再下判断" },
@@ -918,6 +969,7 @@ export const WORKFLOWS = {
       //   变成"锻定的那句科学问题"。本格只管把候选列出来、让用户挑定一个。
       { id: "topic", name: "选题遴选确认", skill: "topic-selection",
         deps: ["scan"],
+        when: { field: "entry", ne: "idea" },   // 同上：题是用户带来的，不用再遴选
         sub: "用户校订并确认最终选题",
         emits: ["topic_candidates*.csv", "topics.md"], render: "report",
         hint: "候选选题列成卡片让你挑定一个；新颖性裁定移到下一格，对锻定的科学问题做",
@@ -938,7 +990,7 @@ export const WORKFLOWS = {
         //   闸提前变绿；预注册文件里的假设句（"缺氧不通过甲基化…"）被措辞正则误读成"未通过"。
         gateReport: ["novelty_report.md", "novelty_*.md"],
         hint: "空白节点先检索后发散、未验证主张拿证据拷问；锻定的科学问题当场做严格裁定，不过退回领域扫描",
-        note: "两件事连着做完，顺序不能颠倒：先用 idea-forge 按其 SKILL.md 跑锻打对话（一轮只问一个问题、编号候选、每轮落盘 `forge_log.md`，产出 `design_brief.md` + `closest_work.md`），**再**对 design_brief 里定稿的那句关键科学问题跑 novelty-check（以 closest_work.md 为最接近文献表起点补严，不重做）。裁定完**在回话里点名说清档位（真新 / 增量 / 已被回答）与依据**；判「已被回答」退回「研究方向生成」换题，不许带着已被回答的题写标书。**无人值守（AUTO）时跳过锻打对话**，直接对用户选定的题做裁定 —— 本格靠裁定产物判完成，不会卡死。" },
+        note: "两件事连着做完，顺序不能颠倒：先用 idea-forge 按其 SKILL.md 跑锻打对话（一轮只问一个问题、编号候选、每轮落盘 `forge_log.md`，产出 `design_brief.md` + `closest_work.md`），**再**对 design_brief 里定稿的那句关键科学问题跑 novelty-check（以 closest_work.md 为最接近文献表起点补严，不重做）。裁定完**在回话里点名说清档位（真新 / 增量 / 已被回答）与依据**；判「已被回答」退回「研究方向生成」换题，不许带着已被回答的题写标书。**无人值守（AUTO）时跳过锻打对话**，直接对用户选定的题做裁定 —— 本格靠裁定产物判完成，不会卡死。用户从「打磨已有」进来时（任务卡里「从哪里开始＝打磨已有」，设想在「你的研究设想」/「已有工作基础」/上传材料里），流程里没有前两格：锻打对象就是那段设想；判「已被回答」时没有「研究方向生成」可退 —— 当场给 2–3 个带引文的转向候选（换人群 / 换机制层 / 换结局），按编号让用户挑定再继续锻打，同样不许带着已被回答的题往下写。" },
       // ★「摸清申报要求」原本是独立的一步，2026-08-07 按用户要求并进本步 —— 基金申报的流程条
       //   本来就有 6~7 格，而这两步同属 grant-proposal 技能、在同一轮里连着做完是常态，
       //   拆成两格只是把一条本来连贯的工作切开数。

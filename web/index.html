@@ -774,6 +774,10 @@
     padding: 5px 11px; font-size: 12px; color: #46586e; cursor: pointer; transition: border-color .15s, background .15s, color .15s; }
   .wfopt:hover { border-color: var(--cyan); }
   .wfopt.on { border-color: var(--cyan); background: rgba(59,111,212,.1); color: var(--cyan); font-weight: 600; }
+  /* seg：少数「二选一定路线」的字段（schema 里标 seg:true）画成等宽大按钮铺满整行，
+     比两粒小 chip 醒目 —— 它是表单的第一个决定，不该长得和普通选项一样小。 */
+  .wff.wfseg .wfopts { display: grid; grid-template-columns: repeat(auto-fit, minmax(0, 1fr)); gap: 8px; }
+  .wff.wfseg .wfopt { justify-content: center; padding: 9px 12px; font-size: 13px; border-radius: 10px; }
   .wfrange { display: flex; align-items: center; gap: 8px; }
   .wfrange input { flex: 0 1 110px; }
   .wfrange span { font-size: 12px; color: var(--faint); flex: none; }
@@ -4075,7 +4079,13 @@ function buildFormCard({ title, sub, notice, fields, footnote, steps, intakeSub,
     // 整个 redraw 当场中断，表单一个字段都画不出来。
     setTimeout(() => syncGo(), 0)   // 字段重画后同步「开始」按钮的可用态与缺项提示
     // ---- 按 section 切成若干张区块卡，卡内两列栅格（设计稿的 .section + .fields）----
-    const shown = fields.filter((f) => fieldVisible(f, values))
+    // 字段级 first（语义同 steps 的 first）：条件成立的字段连同其 section 提到最前，
+    // 原有相对顺序保留。grant「打磨已有」把「撰写要求与工作基础」挪成第一个区块靠的就是它；
+    // 「从哪里开始」那组自带恒真 first（{}）钉在最顶上，不然会被挤到后面。
+    // 只影响显示顺序 —— 任务卡与服务端必填体检都不吃字段顺序。
+    const hoist = fields.filter((f) => f.first && condOk(f.first, values))
+    const flds = hoist.length ? [...hoist, ...fields.filter((f) => !hoist.includes(f))] : fields
+    const shown = flds.filter((f) => fieldVisible(f, values))
     // 每个字段【实际】归哪个区块：没写 section 的跟着上一个走。
     // ★ 这条继承不能省：JOURNAL_FILTER 里只有第一项（影响力档位）写了 section，其余靠继承留在同一组；
     //   改成"没写就另起一组"会把「只要 OA」从「检索到的文献要满足什么条件」里踢出去，
@@ -4089,7 +4099,7 @@ function buildFormCard({ title, sub, notice, fields, footnote, steps, intakeSub,
     //   而列名对不上正是这个控件要根治的头号失败模式。（右侧圆点也会从 2 个掉到 0 个。）
     const secOf = new Map(), secMeta = new Map()
     { let c = ""
-      for (const f of fields) {
+      for (const f of flds) {
         // 说明与图标也记在【区块名】上，不能等 openSection 时从"该块第一个可见字段"上取 ——
         // 声明 section 的那个字段被隐藏时，接手的字段身上没有 sectionSub/sectionIcon，
         // 于是标题在、说明没了（stats 那一块的说明恰恰是"要和你表里的列名完全一致"这层框定）。
@@ -4141,7 +4151,7 @@ function buildFormCard({ title, sub, notice, fields, footnote, steps, intakeSub,
       bodyWrap.appendChild(grid); secBox.appendChild(bodyWrap); body.appendChild(secBox)
       secBoxes.push({ name, el: secBox, fields: mine })
     }
-    for (const f of fields) {
+    for (const f of flds) {
       // 条件不成立 → 值不能进任务卡，但【先存一份影子】再删。
       // ★ 原来是直接 delete、不留痕：用户勾了"有原始数据"、传好文件、声明"已脱敏＝是"，
       //   取消勾选再勾回来，dataFiles 静默丢失、deidDone 从 true 被打回默认的 false ——
@@ -4217,6 +4227,17 @@ function buildFormCard({ title, sub, notice, fields, footnote, steps, intakeSub,
       //   「申请人信息」（无默认值）不红，两块同样是 0 项已填，用户会以为红的那块另有问题。
       const edited = touched && s.fields.some((f) => !blank(f))
       s.el.classList.toggle("invalid", req.length > 0 && ok < req.length && edited)
+      // ★ 必填星号 /「选填」角标也要就地刷新。文本输入走轻量通知、不重建 DOM，而
+      //   「已有工作基础 ↔ 上传材料」二选一是互相盯着对方的 requiredWhen —— 填了一个，
+      //   另一个的星号该当场变「选填」，否则用户看到的还是两颗星，读不出"至少一个"的语义。
+      for (const f of s.fields) {
+        const w = body.querySelector(`.wff[data-fid="${f.id}"]`); const lab = w?.querySelector("label")
+        if (!lab) continue
+        const need = fieldRequired(f, values)
+        const star = lab.querySelector(".req"), opt2 = lab.querySelector(".opt")
+        if (need && !star) { opt2?.remove(); lab.appendChild(Object.assign(document.createElement("span"), { className: "req", textContent: "*" })) }
+        else if (!need && star) { star.remove(); if (!opt2) lab.appendChild(Object.assign(document.createElement("span"), { className: "opt", textContent: "选填" })) }
+      }
     }
     // 已经补上的字段要撤掉行内红态，否则用户照着提示填完了，红框还挂着
     body.querySelectorAll(".wff.invalid").forEach((el) => {
@@ -4289,7 +4310,8 @@ function condOk(cond, values) {
   if ("has" in cond) return Array.isArray(v) && v.includes(cond.has)
   if ("hasNot" in cond) return !Array.isArray(v) || !v.includes(cond.hasNot)
   if ("hasOther" in cond) return Array.isArray(v) && v.some((x) => !cond.hasOther.includes(x))
-  if ("truthy" in cond) return cond.truthy ? !!v : !v
+  // 空数组按"没填"算 —— 与 workflows.mjs 的 condOk 逐行一致（files/multi/tags 建卡时补成 []）
+  if ("truthy" in cond) { const t = Array.isArray(v) ? v.length > 0 : !!v; return cond.truthy ? t : !t }
   return true
 }
 // 与 workflows.mjs 的 visible / isRequired 保持逐行一致 —— 不一致会导致"表单上显示的"
@@ -4358,7 +4380,7 @@ const asChips = (f) => f.type === "multi"
 const isWideField = (f) => f.col2 !== undefined ? !!f.col2
   : WIDE_TYPES.has(f.type) || (f.type === "select" && asChips(f) && (f.options || []).length > 4)
 function fieldEl(f, values, onChange, allFields) {
-  const wrap = document.createElement("div"); wrap.className = "wff" + (isWideField(f) ? " col2" : "")
+  const wrap = document.createElement("div"); wrap.className = "wff" + (isWideField(f) ? " col2" : "") + (f.seg ? " wfseg" : "")
   wrap.dataset.fid = f.id                     // 校验不过时按 id 找到它标红（见 buildFormCard 的 go 点击）
   const lab = document.createElement("label"); lab.textContent = f.label
   if (f.type === "multi" || f.type === "files") lab.appendChild(Object.assign(document.createElement("span"),
