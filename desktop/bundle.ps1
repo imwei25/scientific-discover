@@ -246,8 +246,12 @@ Step "应用本体：web 网关 + 技能 + AGENTS.md"
 # 排除三类：运行时状态与密钥、开发用启动器、自动化测试。
 # 测试目录里有 "sk-mine" 这种假 key，混进包既是无谓体积，也会让密钥扫描工具误报。
 Copy-Tree "$Root\web" "$App\web" `
-  -ExcludeFiles @("model-config.json", "cloud-state.json", "sessions-meta.json", "dev-test.mjs", "dev-gateway.mjs", "headless-env.json") `
+  -ExcludeFiles @("model-config.json", "cloud-state.json", "sessions-meta.json", "headless-env.json",
+                  "dev-test.mjs", "dev-gateway.mjs", "dev-lan.mjs", "dev-skillmods.mjs", "dev-folders.mjs") `
   -ExcludeDirs  @("test", "Microsoft")
+# ↑ dev-*.mjs 一个都别漏：这几个都是开发用启动器，有的会自带假 opencode / 固定口令，
+#   进了客户包既是无谓体积，也多一份没人维护的入口。原来只排了前两个，后加的三个
+#   （lan / skillmods / folders）一直跟着进包 —— 按上面那句注释的本意，它们本就该在这。
 # ↑ Microsoft/：PowerShell 在 HOME/LOCALAPPDATA 被改向时会往当前目录拉一棵
 #   Microsoft\Windows\PowerShell\ModuleAnalysisCache 出来。开发机上是垃圾，跟着进包更没意义。
 # .opencode：技能 + opencode 插件依赖
