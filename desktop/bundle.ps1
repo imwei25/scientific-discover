@@ -71,6 +71,13 @@ function Copy-Tree {
   if ($ExcludeDirs.Count)  { $args += "/XD"; $args += $ExcludeDirs }
   robocopy @args | Out-Null
   if ($LASTEXITCODE -ge 8) { throw "robocopy $Src -> $Dst 失败 rc=$LASTEXITCODE" }
+  # ★ 排除项要在目标里【补删】一遍：staging 是累积的（不加 -Clean 就直接复用上一版），
+  #   robocopy 的 /XF /XU只是"这次不拷"，上一版拷进去的那份原地不动。所以往排除名单里
+  #   新加一条，或从仓库删掉一个文件，包里都还留着旧的 —— 实测 0.1.20：598f66f2 刚把
+  #   dev-lan.mjs / dev-skillmods.mjs 加进排除名单，重跑一次组装它俩照样躺在包里。
+  #   这类残留从外表完全看不出来（体积、自检、版本号都正常）。
+  foreach ($f in $ExcludeFiles) { Get-ChildItem -Path $Dst -Filter $f -Recurse -File -Force -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue }
+  foreach ($d in $ExcludeDirs)  { Get-ChildItem -Path $Dst -Filter $d -Recurse -Directory -Force -ErrorAction SilentlyContinue | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue }
 }
 
 if ($Clean -and (Test-Path $Staging)) { Step "清理旧 staging"; Remove-Item -Recurse -Force $Staging }
@@ -252,6 +259,7 @@ Copy-Tree "$Root\web" "$App\web" `
 # ↑ dev-*.mjs 一个都别漏：这几个都是开发用启动器，有的会自带假 opencode / 固定口令，
 #   进了客户包既是无谓体积，也多一份没人维护的入口。原来只排了前两个，后加的三个
 #   （lan / skillmods / folders）一直跟着进包 —— 按上面那句注释的本意，它们本就该在这。
+#   加进名单还不够：staging 是累积的，上一版拷进去的那两份得靠 Copy-Tree 里的补删清掉。
 # ↑ Microsoft/：PowerShell 在 HOME/LOCALAPPDATA 被改向时会往当前目录拉一棵
 #   Microsoft\Windows\PowerShell\ModuleAnalysisCache 出来。开发机上是垃圾，跟着进包更没意义。
 # .opencode：技能 + opencode 插件依赖
