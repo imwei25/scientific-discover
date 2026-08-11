@@ -191,6 +191,46 @@ test("产物名不合契约时按本轮调过的技能补记完成，条子不�
   assert.ok(st.done.includes("write"))
 })
 
+// ---- 以下两条来自模拟用户测试（sonnet agent）抓到的两个 Major ----
+test("并行分支不连坐：后一轮重跑统计，不许把毫无依赖的基线表标「已过期」", () => {
+  const dir = tmp()
+  // paper 模块：table1 与 stats 是并行分支（都只吃原始数据），staleUp 必须沿 deps 判，不按数组下标。
+  // ★ 表单必须给 materials/studyType：stats 与 table1 都挂着 when 条件，空表单时整步被裁掉，
+  //   断言会对着一条不存在的步骤空转（第一版就踩了这个坑）。
+  touch(dir, "table1.csv"); touch(dir, "stats_extra.csv"); touch(dir, "fig1.png")
+  seed(dir, { module: "paper", form: { materials: ["rawdata"], studyType: "retrospective" },
+    done: [], batchN: 2,
+    batches: { "table1.csv": 1, "stats_extra.csv": 2, "fig1.png": 2 } })   // 第 2 轮重跑了统计+画图
+  const st = WFS.wfSyncDone(dir, "paper",
+    { "table1.csv": 1, "stats_extra.csv": 2, "fig1.png": 2 })
+  assert.ok(!(st.stale || []).includes("table1"), "基线表不消费统计产物，不许被连坐标过期")
+  assert.ok((st.done || []).includes("table1"))
+  // 真实依赖链照抓：figure deps 含 stats，图(第2轮)不比统计(第2轮)旧 → figure 也不过期
+  assert.ok(!(st.stale || []).includes("figure"))
+})
+
+test("deps 链上的真过期仍然抓：改了稿（write），下游 refcheck/render 照标", () => {
+  const dir = tmp()
+  touch(dir, "evidence_table.csv"); touch(dir, "review.md")
+  touch(dir, "refcheck_report.md", "核查结论：全部通过。"); touch(dir, "review.docx")
+  seed(dir, { module: "review", form: {}, done: [], batchN: 3,
+    batches: { "evidence_table.csv": 1, "review.md": 3,          // 第 3 轮改了稿
+      "refcheck_report.md": 2, "review.docx": 2 } })              // 闸和 docx 停在第 2 轮
+  const st = WFS.wfSyncDone(dir, "review",
+    { "evidence_table.csv": 1, "review.md": 3, "refcheck_report.md": 2, "review.docx": 2 })
+  assert.ok(st.stale.includes("refcheck"), "闸绿的是旧稿 → 过期")
+  assert.ok(st.stale.includes("render"), "docx 排的是旧稿 → 过期")
+})
+
+test("归因不连坐：多技能轮里的孤儿文件不许把没产出的步骤补绿", () => {
+  const dir = tmp()
+  seed(dir, { module: "review", form: {}, done: [] })
+  // 一轮同时调了排版(正常出件)与润色(什么都没写)，外加一份无主杂文件 —— 谁都不许被归因
+  WFS.wfAttribute(dir, "review", ["render-pdf-doc", "humanize-academic"],
+    ["review.docx", "random_notes.md"], { "review.docx": 1, "random_notes.md": 1 })
+  assert.ok(!(WFS.wfLoad(dir).attributed || []).length, "孤儿文件是谁写的无从判定，多技能轮不归因")
+})
+
 test("有合约产物就不归因；闸永不归因", () => {
   const dir = tmp()
   seed(dir, { module: "review", form: {}, done: [] })

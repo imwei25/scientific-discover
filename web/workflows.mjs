@@ -547,6 +547,12 @@ export const WORKFLOWS = {
     ],
     steps: [
       { id: "deid", name: "数据脱敏", skill: "deidentify",
+        // ★ deps：本步【直接消费谁的产物】（step id 列表）。staleUp 只沿这条真实依赖链判"过期"，
+        //   不按数组下标 —— 并行分支（基线表 vs 统计分析、作图 vs 综述）互不消费对方产物，
+        //   按下标比会把"后一轮重跑了统计"连坐成"基线表已过期"（模拟用户测试抓到的 Major）。
+        //   规矩：凡是有 steps 的模块【每一步都要显式标 deps】（根步骤标 []）——留空不标会退回
+        //   "所有在前步骤都算上游"的旧行为，而 first/when 会重排、裁剪步骤，下标顺序靠不住。
+        deps: [],
         // ★ 用 truthy:false 而不是 eq:false —— 它同时覆盖 undefined。
         //   用户没碰过"已脱敏"这个开关时值是 undefined，若写 eq:false 就判不成立、脱敏步被整个剔掉，
         //   而这恰恰是最该插脱敏的情形（含患者信息且未声明脱敏）。方向必须 fail-safe：
@@ -558,6 +564,7 @@ export const WORKFLOWS = {
         emits: ["deid_report.md"], render: "report",
         hint: "含患者信息的数据未脱敏不得进入统计" },
       { id: "stats", name: "数据体检与统计分析", skill: "data-analysis",
+        deps: ["deid"],
         when: { field: "materials", has: "rawdata" },
         form: [
           { id: "analyses", label: "要做的分析", type: "multi", options: [
@@ -582,6 +589,8 @@ export const WORKFLOWS = {
         ],
         emits: ["data_profile.md", "cleaning_log.md", "stats_*.csv", "*_results.csv"], render: "table" },
       { id: "table1", name: "基线表 Table 1", skill: "clinical-stats",
+        // 与 stats 并行：都只吃（脱敏后的）原始数据，互不消费对方产物 —— 所以 deps 是 deid 不是 stats
+        deps: ["deid"],
         // AGENTS.md §三 表下注：诊断准确性 / 方法比对 / 纯实验室验证类研究常无人口学基线协变量，
         // 此时 Table 1 无对应数据，整步跳过，别把检测值硬塞成"基线表"制造误导。
         when: [{ field: "materials", has: "rawdata" }, { field: "studyType", in: ["retrospective", "prospective", "rct", "casecontrol", "crosssection"] }],
@@ -590,6 +599,7 @@ export const WORKFLOWS = {
       // 禁止写裁定语，通用判据（server.mjs 的 GATE_FAIL_*）永远命中不了，不写 gateBy 这道闸恒绿。
       // 三处 data-integrity 步骤必须一起带上，此前只有 refcheck 有 —— stats 与本步都漏了。
       { id: "integrity", name: "源数据完整性自查", skill: "data-integrity", optional: true, gate: true,
+        deps: ["deid"],
         gateBy: "signals", failLabel: "有待核信号",
         when: { field: "materials", has: "rawdata" },
         emits: ["integrity_report.md", "audit/*"], render: "integrity", onFail: "stats",
@@ -599,10 +609,12 @@ export const WORKFLOWS = {
       //   定稿的故事线决定（design_brief 里带图表清单）。三种情况才做：没想好讲什么故事 / 投哪、
       //   核心主张明显 overclaim、用户主动要求被拷问；无人值守（AUTO）时整步跳过（optional，不卡条）。
       { id: "forge", name: "故事线锻打", skill: "idea-forge", optional: true,
+        deps: ["stats"],
         sub: "对话锻定主张梯度 / 目标刊 / 故事线",
         emits: ["design_brief.md"], render: "report",
         hint: "主张压到数据撑得住的级别、定目标刊三梯队；产出 design_brief.md，作图 / 综述 / 成文照单干" },
       { id: "novelty", name: "新颖性裁定 / 预注册", skill: "novelty-check",
+        deps: ["forge"],
         // 回顾性研究里这步可选（已有数据，无法再"采数前预注册"）；前瞻性 / RCT 里它是【必做】的
         // 预注册锁 —— 既然把它提到了最前，就不能同时标"可选"，那等于说这步可以跳。
         optionalUnless: { field: "studyType", in: ["prospective", "rct"] },
@@ -612,6 +624,7 @@ export const WORKFLOWS = {
         first: { field: "studyType", in: ["prospective", "rct"] },
         emits: ["novelty_report.md", "novelty_*.md", "preregistration.md", "analysis_plan.md"], render: "report" },
       { id: "figure", name: "出版级图表", skill: "nature-figure",
+        deps: ["stats", "forge"],
         form: [
           { id: "figTypes", label: "要出的图", type: "multi", options: [
             { v: "forest", t: "森林图" }, { v: "km", t: "生存曲线 KM" }, { v: "volcano", t: "火山图" },
@@ -621,6 +634,8 @@ export const WORKFLOWS = {
         ],
         emits: ["fig*.png", "fig*.pdf", "fig*.svg", "figures/*"], render: "figure" },
       { id: "litreview", name: "文献综述", skill: "literature-review",
+        // 综述吃的是检索与（可选的）故事线，与统计/作图无依赖 —— 后一轮补张图不许把它标过期
+        deps: ["forge"],
         form: [
           { id: "query", label: "检索式 / 关键词", type: "textarea",
             placeholder: "留空则由 AI 依据研究主题自拟检索式" },
@@ -633,6 +648,7 @@ export const WORKFLOWS = {
         emits: ["evidence_table.csv", "evidence.md", "refs.bib"], render: "evidence",
         hint: "引言与讨论的文献部分基于本步综述撰写；综述单薄是回退触发点" },
       { id: "write", name: "撰写正文", skill: "write-paper",
+        deps: ["stats", "table1", "figure", "litreview", "forge", "novelty"],
         form: [{ id: "sections", label: "要写的章节", type: "multi",
           default: ["title", "abstract", "intro", "methods", "results", "discussion"],
           options: [{ v: "title", t: "标题" }, { v: "abstract", t: "摘要" }, { v: "intro", t: "引言" },
@@ -643,6 +659,7 @@ export const WORKFLOWS = {
         //   只想润色，产物只有 manuscript_humanized.md —— AI 一个字没写，「撰写正文 ✓已完成」。
         emits: ["manuscript.md", "manuscript_*.md"], emitsNot: ["*_humanized.*"], render: "manuscript" },
       { id: "refcheck", name: "引用核查", skill: "reference-check", gate: true,
+        deps: ["write"],
         emits: ["refcheck_report.md", "reference_check*.md", "reference_check*.csv"],
         // 裁定只认 md 报告：csv 是机器结果表（不进措辞判定），单列出来是让"csv 先落盘、md 未写出"
         // 的窗口里闸停在未开始等报告，而不是拿一份读不了的文件谈通过（emits 照收 csv 供渲染与判完成）。
@@ -650,6 +667,7 @@ export const WORKFLOWS = {
         render: "refcheck", onFail: "write",
         hint: "查假引用 / 核 DOI，全绿才往下排版" },
       { id: "humanize", name: "语言润色", skill: "humanize-academic",
+        deps: ["write"],
         form: [
           { id: "strength", label: "润色强度", type: "select", default: "standard", options: [
             { v: "light", t: "保守（只动明显 AI 腔）" }, { v: "standard", t: "标准（推荐）" },
@@ -659,6 +677,7 @@ export const WORKFLOWS = {
         ],
         emits: ["manuscript_humanized.md", "*_humanized.md"], render: "diff" },
       { id: "review", name: "投稿前自审", skill: "peer-review", gate: true,
+        deps: ["write", "humanize"],
         form: [{ id: "roles", label: "审稿视角", type: "multi",
           default: ["method", "stats"], options: [
             { v: "method", t: "方法学审稿人" }, { v: "stats", t: "统计审稿人" },
@@ -675,6 +694,7 @@ export const WORKFLOWS = {
       //   都找不到认领者：这一轮不开分组、进度条不动，最后产物把格子涂绿了却点不动
       //   （canJump 靠"这一步开过框没有"判定），整条流水线只有最后一格点了没反应。
       { id: "render", name: "排版出件", skill: "render-docx", skillAlias: ["render-pdf-doc"],
+        deps: ["write", "humanize"],
         form: [{ id: "fmt", label: "输出格式", type: "select", default: "docx", options: [
           { v: "docx", t: "Word（.docx）" }, { v: "pdf", t: "PDF" }, { v: "both", t: "两种都要" }] }],
         emits: ["manuscript*.docx", "manuscript*.pdf"], render: "doc",
@@ -723,6 +743,7 @@ export const WORKFLOWS = {
     ],
     steps: [
       { id: "search", name: "文献检索", skill: "search-lit",
+        deps: [],
         emits: ["evidence_table.csv", "evidence.md", "refs.bib"], render: "evidence",
         hint: "每条引用都经 API 核实，不凭记忆造引用" },
       // 【2026-08-08 删了「纳入 / 排除筛选」这一步】它做的是系统综述那套双人筛选的形，
@@ -735,13 +756,17 @@ export const WORKFLOWS = {
       //   而那一项已随本次改动去掉 —— 条件永远不成立，留着就是一个永不点亮的灰格子。
       //   叙述性综述靠检索得到的题录 + 摘要成文；确实要原文 PDF 的，去「文献研读」模块。
       { id: "write", name: "综述成文", skill: "literature-review",
+        deps: ["search"],
         emits: ["review.md", "literature_review.md", "*_review.md"], render: "manuscript" },
       { id: "refcheck", name: "引用核查", skill: "reference-check", gate: true,
+        deps: ["write"],
         emits: ["refcheck_report.md", "reference_check*.md"], render: "refcheck", onFail: "write" },
       { id: "humanize", name: "语言润色", skill: "humanize-academic", optional: true,
+        deps: ["write"],
         emits: ["*_humanized.md"], render: "diff" },
       // 同上：fmt 默认就是 docx，走 render-docx 的次数比 pdf 还多，两个都要认（见 paper 那格的说明）
       { id: "render", name: "排版出件", skill: "render-pdf-doc", skillAlias: ["render-docx"],
+        deps: ["write", "humanize"],
         form: [{ id: "fmt", label: "输出格式", type: "select", default: "docx", options: [
           { v: "docx", t: "Word（.docx）" }, { v: "pdf", t: "PDF" }, { v: "both", t: "两种都要" }] }],
         // ★ emitsNot：review*.docx 会把【评审/核查报告转的 docx】也收走（review_report.docx、
@@ -872,6 +897,7 @@ export const WORKFLOWS = {
       // ★ 步骤名与 sub 按设计稿「基金申报页面_单列流程版.html」的六格流程改写。
       //   sub 是流程条上那行小字，只给界面用，不进给 agent 的流程线（那条线要的是步骤名与闸）。
       { id: "scan", name: "研究方向生成", skill: "research-scan",
+        deps: [],
         sub: "AI 依据信息初拟若干研究方向",
         emits: ["research_scan*.md", "landscape*.csv"], render: "report",
         hint: "没搜到 ≠ 研究空白，四象限采样后再下判断" },
@@ -880,6 +906,7 @@ export const WORKFLOWS = {
       //   §三 表下注），novelty-check 移去下一格跟随 idea-forge —— 裁定对象从"选定的题"
       //   变成"锻定的那句科学问题"。本格只管把候选列出来、让用户挑定一个。
       { id: "topic", name: "选题遴选确认", skill: "topic-selection",
+        deps: ["scan"],
         sub: "用户校订并确认最终选题",
         emits: ["topic_candidates*.csv", "topics.md"], render: "report",
         hint: "候选选题列成卡片让你挑定一个；新颖性裁定移到下一格，对锻定的科学问题做",
@@ -892,6 +919,7 @@ export const WORKFLOWS = {
       //   照常进产物侧栏）；③ 科学问题在锻打中转向 → 旧裁定作废、对新问题重跑（AGENTS.md
       //   「裁定过期护栏」）。
       { id: "forge", name: "立意锻打", skill: "idea-forge", skillAlias: ["novelty-check"], gate: true,
+        deps: ["topic"],
         sub: "多轮对话磨立意，锻定后做新颖性裁定",
         emits: ["novelty_report.md", "novelty_*.md", "preregistration.md", "analysis_plan.md"], render: "report", onFail: "scan",
         // ★ gateReport：闸的裁定只读裁定书。emits 里的 preregistration.md / analysis_plan.md 是
@@ -911,6 +939,7 @@ export const WORKFLOWS = {
       //   把 `要求卡*.md` 也列进来的话，要求卡一落盘这一步就打绿勾 —— 而正文还没写。
       //   要求卡的结构化卡片渲染改由 RENDER_RULES 的 report 组兜住，不走 step.emits。
       { id: "write", name: "标书初稿生成", skill: "grant-proposal",
+        deps: ["topic", "forge"],
         sub: "产出立项依据 / 研究内容 / 方案等",
         form: [{ id: "sections", label: "要写的章节", type: "multi",
           default: ["basis", "content", "route", "feature", "foundation", "condition"],
@@ -922,6 +951,7 @@ export const WORKFLOWS = {
         hint: "先定渠道、取当年结构提纲与逐节字数硬限，再按它逐节动笔；传了官方模板就以它为准",
         note: "**动笔写正文之前，先把本次实际采用的要求写成 `要求卡-<渠道>.md` 落盘**，然后才逐节起草 —— 两件事在同一步里做完，但顺序不能颠倒。要求卡**用内置卡的渠道也要写**，不能因为「卡在 references/ 里读过了」就跳过；至少包含：章节结构提纲（标题原文）、逐节字数/页数硬限、格式规定、形式审查与附件清单、以及每一项的来源与年份口径（内置卡写明卡的年份，联网查的附 URL，没查到的写「未找到官方来源」）。用户传了当年官方模板 / 申报通知的，以用户文件为准，并把它与内置卡的差异逐条列出来 —— 那正是发现「今年又改版了」的地方。落盘之后**在回话里点名说清本次按的是哪个渠道、哪一年的口径**：流程条上不再单列这一步，用户只能从你这句话和产出侧栏里的要求卡去核对，含糊过去他就只能等成稿之后才发现按错了版本。" },
       { id: "review", name: "评审自查校验", skill: "peer-review", gate: true,
+        deps: ["write"],
         sub: "完整性、格式与逻辑核查",
         emits: ["review_report*.md"], render: "review", onFail: "write" },   // 通配理由见 paper 的同名步
       // ★ 设计稿把最后一格写作「标书最终成稿 · 语言润色与定稿输出」——既然界面上承诺了"润色"，
@@ -930,6 +960,7 @@ export const WORKFLOWS = {
       // 这一格实际会调三个技能：润色 + 两个渲染器（fmt 默认 docx 走 render-docx）。
       // 只认一个的话，另外两个跑起来时进度条熄灭、那一轮掉出所有分组（见 paper 那格的说明）。
       { id: "render", name: "标书最终成稿", skill: "render-pdf-doc",
+        deps: ["write"],
         skillAlias: ["render-docx", "humanize-academic"],
         sub: "语言润色与定稿输出",
         form: [{ id: "fmt", label: "输出格式", type: "select", default: "docx", options: [
@@ -987,6 +1018,7 @@ export const WORKFLOWS = {
     ],
     steps: [
       { id: "ingest", name: "读入原文", skill: "fulltext-retrieval",
+        deps: [],
         // 后三个不是这一步产的（导读 / 翻译两种模式没有对应的技能，也就没有对应的 step），
         // 但 artifactLine 只从 steps[].emits 收集"产物用约定名"那句话。挂在这里，是为了让
         // 这三个名字每一轮都随前言到模型手上 —— reader.html 正是按这几个名字去把正文捞回来渲染的
@@ -997,6 +1029,7 @@ export const WORKFLOWS = {
         note: "抽出来的正文必须落成 `fulltext.md`——后面导读、翻译、做 PPT 全都读它，"
             + "别每种模式各抽一遍（既慢又可能三份内容不一致）。" },
       { id: "ppt", name: "演示 PPT", skill: "ppt-master", optional: true,
+        deps: ["ingest"],
         emits: ["ppt_outline.md", "*.pptx", "exports/*.pptx"], render: "doc" },
     ],
     // ocr：图片型扫描件（pdf_to_md 抽出来是空的）唯一的出路。
@@ -1114,8 +1147,10 @@ export const WORKFLOWS = {
     ],
     steps: [
       { id: "deid", name: "数据脱敏", skill: "deidentify", when: { field: "hasPHI", eq: true },
+        deps: [],
         emits: ["deid_report.md"], render: "report" },   // 同上：还原表不进产物契约
       { id: "profile", name: "数据体检", skill: "data-analysis",
+        deps: ["deid"],
         // 只算样本量（做研究之前）时没有任何数据，这几步永不可能完成 —— 留在条上等于让进度
         // 永远停在第一步。判据用 hasOther：勾了样本量【之外】的分析才需要真数据。
         // ★ 第二条 whenAny 是给【跳过表单直接打字】那条路的：`analyses` 此时为空，hasOther 恒假，
@@ -1126,15 +1161,20 @@ export const WORKFLOWS = {
         emits: ["data_profile.md", "cleaning_log.md"], render: "report",
         hint: "重复 ID / 分类水平不一致 / 分组缺失必须先清，否则后面每个 p 都是错的" },
       { id: "table1", name: "基线表 Table 1", skill: "clinical-stats",
+        // 体检只是软提醒（模式条随点随跑），table1/analyze 都不依赖它的产物 —— 重跑体检不许把它们标过期
+        deps: ["deid"],
         when: { field: "analyses", has: "table1" },
         emits: ["table1.csv"], render: "table" },
       { id: "analyze", name: "统计分析", skill: "data-analysis",
+        deps: ["deid"],
         // 样本量/把握度也归这一步做（它就是 clinical-stats/data-analysis 的活），所以无条件保留
         emits: ["stats_*.csv", "*_results.csv", "analysis*.md", "sample_size*.md"], render: "table" },
       { id: "figure", name: "出版级图表", skill: "nature-figure", when: { field: "figs", eq: true },
+        deps: ["analyze"],
         emits: ["fig*.png", "fig*.pdf", "fig*.svg", "figures/*"], render: "figure" },
       // gateBy:"signals"：同 refcheck / paper 两处，缺了它这道闸永远判不了红（见那边的长注释）
       { id: "integrity", name: "源数据完整性自查", skill: "data-integrity", optional: true, gate: true,
+        deps: ["deid"],
         gateBy: "signals", failLabel: "有待核信号",
         when: { field: "analyses", hasOther: ["power"] },   // 没有源数据就无从自查
         emits: ["integrity_report.md", "audit/*"], render: "integrity", onFail: "analyze" },
@@ -1239,6 +1279,7 @@ export const WORKFLOWS = {
       //   而取消勾选「假引用」，整条流水线就退化成零步骤 —— 没有闸、没有流程线、没有产物契约，
       //   而界面上什么异常都看不出来。
       { id: "refcheck", name: "引用核查", skill: "reference-check", gate: true,
+        deps: [],
         whenAny: [{ field: "checks", has: "refs" }, { field: "checks", has: "doi" },
                   { field: "checks", has: "retracted" }],
         // ★ 本模块【故意不写 onFail】：它核的是用户自带的稿件，闸红时要改的是那份稿子本身，
@@ -1246,6 +1287,7 @@ export const WORKFLOWS = {
         //   —— 硬指一个步骤名反而误导（指回自己就成了循环）。
         emits: ["refcheck_report.md", "reference_check*.md", "reference_check*.csv"], render: "refcheck" },
       { id: "review", name: "方法与统计审校", skill: "peer-review", gate: true,
+        deps: [],
         // 格式与体例也由这一步顺带查（peer-review 的清单里本就含体例）—— 别让选项勾了却没有任何一步走它
         whenAny: [{ field: "checks", has: "stats" }, { field: "checks", has: "format" }],
         emits: ["review_report*.md"], render: "review" },   // 通配理由见 paper 的同名步
@@ -1254,6 +1296,7 @@ export const WORKFLOWS = {
       //   实测：报告里 6 条硬性不自洽（含生理不可能的 eGFR=1220），步骤条照打绿勾。改按信号条数判。
       //   failLabel：界面上别写"需返工"——那等于替它下了"数据有问题"的结论，与 signal-not-verdict 打架。
       { id: "integrity", name: "数据完整性自查", skill: "data-integrity", gate: true, gateBy: "signals",
+        deps: [],
         failLabel: "有待核信号",
         when: { field: "checks", has: "integrity" },
         emits: ["integrity_report.md", "audit/*"], render: "integrity",
@@ -1356,6 +1399,7 @@ export const WORKFLOWS = {
       //   B 路（pdf/md）才出 <原名>_src.md。只写 *_src.md 的话，Word 稿走 A 路时这一步
       //   永远不变绿 —— 用户看到"读入原文"一直是灰的，会以为它根本没读稿子。
       { id: "ingest", name: "读入原文", skill: "humanize-academic",
+        deps: [],
         emits: ["*_para.md", "*_src.md"], render: "manuscript",
         // 脚本名要留着（有测试盯着它：不点名 ingest_doc.py，模型就会顺手用裸 pandoc 把图表抽丢）；
         // 但 hint 是【给用户看的】、前端 textContent 渲染，反引号会原样显示成 `xxx`，所以只去反引号。
@@ -1367,6 +1411,7 @@ export const WORKFLOWS = {
       //   而下面的「排版出件」步（emits 里有 *_humanized.docx）会把它认走 ——
       //   于是界面显示成"润色没做、排版做了"，与事实正好相反。
       { id: "humanize", name: "润色改写", skill: "humanize-academic",
+        deps: ["ingest"],
         emits: ["*_humanized.md", "humanized*.md", "*_humanized.docx"], render: "diff",
         // 同上：只去反引号，脚本名与动作照留（hint 走 textContent，反引号会原样显示给用户）
         hint: "Word 稿走就地改写：docx_apply.py 落 Word 修订，再跑 docx_verify.py 四道闸，原格式一个字节不动；"
@@ -1375,11 +1420,13 @@ export const WORKFLOWS = {
       //   标成可选时 pipelineLine 会往模块前言里写"引用兜底核查(可选)"，等于亲口告诉 AI 这步能跳 ——
       //   实测它就跳了：直接出 docx，事后才反问"要不要核查引用"。而这正是那个开关存在的唯一意义。
       { id: "refcheck", name: "引用兜底核查", skill: "reference-check", gate: true,
+        deps: ["humanize"],
         when: { field: "protectRefs", eq: false },
         emits: ["refcheck_report.md", "reference_check*.md"], render: "refcheck", onFail: "humanize",
         hint: "必须核【润色后的稿件】而不是原稿——润色引入的引用漂移只有核新稿才看得出来；"
             + "本步没跑完不许进排版出件" },
       { id: "render", name: "排版出件", skill: "render-docx", skillAlias: ["render-pdf-doc"],
+        deps: ["humanize"],
         optional: true, when: { field: "outFmt", ne: "md" },
         // ★ 必须含 *_humanized.*：render-docx 的输出名是「输入名.docx」，而本模块的输入叫
         //   humanized.md / draft_humanized.md → 输出 humanized.docx / draft_humanized.docx。
@@ -1517,6 +1564,7 @@ export const WORKFLOWS = {
     ],
     steps: [
       { id: "spec", name: "作图方案", skill: "mechanism-figure",
+        deps: [],
         emits: ["*.spec.json", "*.prompt.txt"], render: "report",
         hint: "栏数按机制的真实步数来（1–6 栏），每栏 ≤ 8 个标签、全图 ≤ 24",
         note: "spec 由你自己读懂用户的描述来填，**不要再去调一个「提示词改写模型」** —— 那一步只会顺手"
@@ -1526,6 +1574,7 @@ export const WORKFLOWS = {
             + "**用户传了材料就必须带 `--source` 过反编造闸**，被拦下来照报错改 spec（中文全称对国际缩写"
             + "用 `--allow` 显式声明；确实没测的分子直接删掉），不要绕开它。" },
       { id: "draw", name: "生成图", skill: "mechanism-figure",
+        deps: ["spec"],
         // *.built.json 也收：技能约定它是「明天重跑用同一份」的关键中间件（同一份 spec 复现出图），
         // 不收的话它只作为无名附件出现，用户不知道那是能拿来复现的东西。.meta.json 都收了，它更该收。
         emits: ["figures/*.png", "fig*.png", "figures/*.meta.json", "*.built.json", "figures/*.built.json"], render: "figure",
@@ -1537,6 +1586,7 @@ export const WORKFLOWS = {
             + "遇到 `今天的生图张数已用完（N/M 张）`：**那不是故障，不要重试**，按档位每天 0 点(UTC) 重置，"
             + "提示词已经做好了，如实告诉用户明天拿同一份 `.built.json` 重跑即可。" },
       { id: "check", name: "标签核对", skill: "mechanism-figure",
+        deps: ["draw"],
         emits: ["figure_check.md"], render: "report",
         hint: "生图模型必然拼错一部分标签，逐个核是必做步骤，不是可选建议",
         note: "照脚本输出的必核清单**逐条核对**，把哪些标签画对了、哪些画错 / 画糊 / 画漏如实写进"

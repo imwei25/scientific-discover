@@ -349,12 +349,18 @@ const DELIVER_EXT = /\.(md|csv|tsv|xlsx|docx|pdf|pptx|png|jpe?g|svg|webp|bib|ris
  * 是高频事件 —— 那一步永远灰，若收尾步骤也不合名，整条全灰，用户看到的是
  * "AI 明明干完了，条子还停在第一步"。
  * 【边界】① 只归因本轮真调过的技能；② 只在确有"无主"交付物时归因（有合约产物的照常走
- * emits 那条路）；③ 闸永不归因 —— 闸的结论只能由报告得出；④ 该步已有合约产物的不归因。
- * 归因是"调了技能 + 轮子正常收场 + 有无主产物"三个旁证的合取，弱于 emits 命中，
+ * emits 那条路）；③ 闸永不归因 —— 闸的结论只能由报告得出；④ 该步已有合约产物的不归因；
+ * ⑤ **只在本轮恰好调了一个技能时归因**。孤儿文件是谁写的无从判定 —— 多技能轮里把它算给
+ * 每个调过的技能，等于一份无关杂散文件把"这一轮什么都没产出的步骤"也连坐补绿
+ * （模拟用户测试抓到的 Major：render 正常出件 + humanize 一字未动 + 一份 random_notes.md，
+ * 「语言润色」被打了绿勾——假绿比假灰危险得多，用户不会去检查一个显示"已完成"的东西）。
+ * 单技能轮里"孤儿是它写的"这条推断才站得住；多技能轮宁可不归因，靠 implied 与用户自己判断。
+ * 归因是"整轮只干这一件事 + 正常收场 + 有无主产物"三个旁证的合取，弱于 emits 命中，
  * 但比"永远灰着"诚实 —— 它错的时候错在"提前打勾"，emits 缺席时错的是"永远不打勾"。
  */
 export function wfAttribute(outDir, modId, skills, changed, fstate) {
   if (!skills?.length || !changed?.length) return
+  if (skills.length !== 1) return   // 边界⑤：多技能轮无法判定孤儿产物归谁，一律不归因
   try {
     const st = wfLoad(outDir)
     if (!st || st.module !== modId) return
@@ -433,25 +439,48 @@ export function wfSyncDone(outDir, modId, fstate) {
   //   同一轮里 agent 乱序写文件是常态（出完 table1 又补一份 stats_extra.csv），按 mtime 比
   //   会把整段下游误标"已过期"（本次抽出模块时修的头号误报源，见文件头注 ①）。
   //   批次由 wfNoteBatch 在每轮收尾统一记；未记批次的文件（本轮进行中 / 老会话）按当前批次算。
-  //   某步的产物批次比上游小 = 这一步是拿旧输入做的 → 标过期（不打绿勾，但也不算红）。
+  //   某步的产物批次比它【真实依赖的上游】小 = 这一步是拿旧输入做的 → 标过期（不打绿勾，但也不算红）。
   //   实测覆盖的两个假绿：① 出了 docx → 改稿 → 重跑闸转绿：整排绿而 Word 是旧版；
   //   ② 闸绿之后稿子又改了：「引用核查 ✓」纹丝不动 —— 闸绿的是另一份稿子。
+  // ★★ "上游"按 step.deps 声明的【真实数据依赖】算，不按数组下标。模拟用户测试抓到的 Major：
+  //   paper 的「基线表」与「统计分析」只是先后写在数组里，实际是并行分支（都只吃原始数据、
+  //   互不消费对方产物）——按下标比的话，后一轮补写一份 stats csv 会把毫无关系的基线表连带
+  //   标成"已过期"，前端当前步兜底还会让进度条倒退到那个假过期的格子上。
+  //   deps 是【直接上游】的 step id 列表；比较沿依赖链传递（上游的上游改了同样算旧）。
+  //   引用了被 when 剔掉的步骤就地跳过；【没声明 deps 的步骤退回旧行为】（所有在前步骤都算上游）
+  //   —— 对真正线性的流水线两者等价，所以未标注的模块不会因此变糟。
   const staleUp = new Set()
   const curBatch = (st.batchN || 0) + 1
   const batchesMap = st.batches || {}
+  const batchMemo = new Map()
   const batchOf = (s) => {
+    if (batchMemo.has(s.id)) return batchMemo.get(s.id)
     let b = -1
     for (const f of files) if (emitHit(s, f)) b = Math.max(b, batchesMap[f] ?? curBatch)
+    batchMemo.set(s.id, b)
     return b   // -1 = 没有产物
   }
-  let upstreamNewest = -1
+  const byId = new Map(ordered.map((s) => [s.id, s]))
+  const posOf = new Map(ordered.map((s, i) => [s.id, i]))
+  const effUp = new Map()
+  const upBatchOf = (s, guard) => {          // 该步全部上游（传递闭包）里最新的产物批次
+    if (effUp.has(s.id)) return effUp.get(s.id)
+    guard = guard || new Set()
+    if (guard.has(s.id)) return -1           // 环是声明错误，断开比栈溢出好
+    guard.add(s.id)
+    const list = Array.isArray(s.deps)
+      ? s.deps.map((id) => byId.get(id)).filter(Boolean)
+      : ordered.slice(0, posOf.get(s.id))
+    let u = -1
+    for (const d of list) u = Math.max(u, batchOf(d), upBatchOf(d, guard))
+    effUp.set(s.id, u)
+    return u
+  }
   for (const s of ordered) {
-    const b = batchOf(s)
-    if (b < 0) continue                               // 无产物的步骤不参与（implied 那条线管它）
-    if (done.has(s.id) && upstreamNewest >= 0 && b < upstreamNewest) {
-      done.delete(s.id); stale.add(s.id); staleUp.add(s.id)
-    }
-    if (b > upstreamNewest) upstreamNewest = b
+    if (batchOf(s) < 0) continue                      // 无产物的步骤不参与（implied 那条线管它）
+    if (!done.has(s.id)) continue
+    const u = upBatchOf(s)
+    if (u >= 0 && batchOf(s) < u) { done.delete(s.id); stale.add(s.id); staleUp.add(s.id) }
   }
   // ★ 单调补齐：后面的步骤已完成 ⇒ 它前面的非闸步骤也一定跑过了。
   //   有些步骤**成功时也可能不产出文件**（零结果检索是成功，不是未完成）。
