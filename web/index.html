@@ -2982,9 +2982,6 @@ const fmtTime = (ms) => {
   return `${y}${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`
 }
 let META_STATE = { projects: [], folders: [], sessions: [] }          // 最近一次 /api/sessions 结果
-// 汇率随会话列表一起下发（权威在服务端，见 server.mjs 的 creditRate）。这里的缺省值只在
-// 【老网关配新界面包】时用得上——界面包能单独热更新，那种组合是真实存在的。
-let SESS_CREDIT_USD = 0.01
 const collapsedProjects = new Set(JSON.parse(localStorage.getItem("nm_collapsed") || "[]"))
 const saveCollapsed = () => localStorage.setItem("nm_collapsed", JSON.stringify([...collapsedProjects]))
 const collapsedFolders = new Set(JSON.parse(localStorage.getItem("nm_collapsed_f") || "[]"))
@@ -3012,19 +3009,12 @@ function sessTitle(s) {
   return raw
 }
 // 悬停提示：这条会话累计消耗了多少积分。
-// 口径写明白三件事，否则用户第一反应就是"这数跟顶栏的额度对不上"：
-//   ① 含子任务（子代理另开子会话，花费记在那边）；② 正在跑的这一轮要等本轮结束才计入
-//   （opencode 只在每一步完成时才记 cost）；③ 是估算 —— 权威账目在服务端按上游 usage 记，
-//   这里用的是本机按单价算出来的数，量级一致但不该当账单看。
-function sessCostTitle(s) {
+// 【就一句话】口径上还有几件事本可以说（含子任务、在跑的这轮要等结算、是按单价估算的数），
+// 但那是三行小字换一个多数人只想扫一眼的数字 —— 悬停提示不是说明书。数字本身已经含子任务，
+// 需要解释的时候再解释。
+const sessCostTitle = (s) => {
   const c = Number(s.credits) || 0
-  const head = c > 0
-    ? `本会话累计消耗约 ${fmtCreditsFine(c)} 积分（含子任务）`
-    : "本会话尚未产生模型消耗"
-  const parts = [head]
-  if (s.running) parts.push("正在生成的这一轮要等本轮结束后才计入")
-  if (c > 0) parts.push(`1 积分 = $${SESS_CREDIT_USD}；为按单价估算，权威账目以服务端为准`)
-  return parts.join("\n")
+  return c > 0 ? `本会话累计消耗约 ${fmtCreditsFine(c)} 积分` : "本会话累计消耗 0 积分"
 }
 // 单个会话行
 function sessRow(s) {
@@ -3654,7 +3644,7 @@ const apiGet = (url) => fetch(url).then((r) => {
   if (r.status === 401) { onUnauthorized(); return null }
   return r.ok ? r.json() : null
 }).catch(() => null)
-const loadSessions = () => apiGet("api/sessions").then((l) => { if (!l) return; sessList = (l && l.sessions) || []; if (Number(l.creditUsd) > 0) SESS_CREDIT_USD = Number(l.creditUsd); renderSessions(l); if (sessionId) setModBadge(sessList.find((s) => s.id === sessionId)?.module || "chat") })
+const loadSessions = () => apiGet("api/sessions").then((l) => { if (!l) return; sessList = (l && l.sessions) || []; renderSessions(l); if (sessionId) setModBadge(sessList.find((s) => s.id === sessionId)?.module || "chat") })
 /* 有专用界面壳的模块 → 该去哪个页面。ui 由服务端下发（workflows.mjs 的 ui 字段）。
    ★ 查表，不拿 ui 直接拼文件名：那等于把服务端字符串当 URL 用，是一条开放跳转。
    ★ 认不出的 ui 留在通用壳：新旧界面包错配时，用户至少还打得开这个会话。 */
