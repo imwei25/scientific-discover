@@ -3008,6 +3008,14 @@ function sessTitle(s) {
   }
   return raw
 }
+// 悬停提示：这条会话累计消耗了多少积分。
+// 【就一句话】口径上还有几件事本可以说（含子任务、在跑的这轮要等结算、是按单价估算的数），
+// 但那是三行小字换一个多数人只想扫一眼的数字 —— 悬停提示不是说明书。数字本身已经含子任务，
+// 需要解释的时候再解释。
+const sessCostTitle = (s) => {
+  const c = Number(s.credits) || 0
+  return c > 0 ? `本会话累计消耗约 ${fmtCreditsFine(c)} 积分` : "本会话累计消耗 0 积分"
+}
 // 单个会话行
 function sessRow(s) {
   const b = document.createElement("div"); b.className = "sess" + (s.id === sessionId ? " active" : "") + (selected.has(s.id) ? " picked" : "")
@@ -3026,6 +3034,12 @@ function sessRow(s) {
   }
   d.appendChild(document.createTextNode(fmtTime(s.updated)))
   b.appendChild(t); b.appendChild(d)
+  // 悬停显示「这条会话一共花了多少积分」。
+  // 【为什么只做成 tooltip 而不摆在行里】列表一屏十几条，每条都挂个数字会把标题挤掉，而这个数
+  //   多数时候没人看——想看的人是"哪次跑贵了"，那正是鼠标停在某一条上的时刻。
+  // 【为什么可能是 undefined】老网关（.mjs 只随安装包走）配新界面包（可单独热更新）是真实组合，
+  //   那时没有这个字段：宁可不挂 tooltip，也别显示一个恒为 0 的"消耗"，那比没有更误导。
+  if (typeof s.credits === "number") b.title = sessCostTitle(s)
   b.addEventListener("click", () => { if (selMode) togglePick(s.id, b); else resumeSession(s.id) })
   // 拖拽：记录被拖会话 id。dragover 里【拿不到】dataTransfer 的数据（规范只在 drop 时才允许读），
   // 而"这一条能不能落进那个组"要在 dragover 就判出来（决定光标与高亮），所以另存一份模块级的 dragSid。
