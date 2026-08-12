@@ -272,6 +272,74 @@ Copy-Item "$Root\AGENTS.md" $App -Force
 New-Item -ItemType Directory -Force "$App\release-notes" | Out-Null
 Get-ChildItem "$PSScriptRoot\发布说明-*.md" -File | Copy-Item -Destination "$App\release-notes" -Force
 Write-Host ("  更新说明 {0} 份" -f @(Get-ChildItem "$App\release-notes\*.md" -File).Count) -ForegroundColor Green
+
+# ---- opencode 插件运行时（预置，别让用户的第一条消息去下 52MB）----
+#
+# 网关把 opencode 的配置目录圈在 app\.ocglobal（XDG_CONFIG_HOME，见 server.mjs 那段长注释）：
+# 技能只对本应用可见、不污染用户自己的 opencode、卸载即消失。代价是那个目录是全新的，而
+# opencode 会在【第一轮会话】时往配置目录里装一套插件运行时 —— 实测 52.4 MB / 3667 个文件，
+# 恰好卡在"用户点了发送、等第一个回复"那一刻。所以随包发出去。
+#
+# 【怎么拿到这份运行时】没有 npm 可用（包里只有 node.exe），而它的触发条件是"跑一轮会话"。
+# 所以这里就照它的脾气来：起一个临时 opencode，配一个【打不通的 provider】发一轮，
+# 它会先把插件运行时装好、再去连那个不存在的地址失败 —— 我们要的正是前半段。
+# 产物按 opencode 版本缓存，重跑不重下。
+Step "opencode 插件运行时（预置，省掉用户第一条消息时的 52MB 下载）"
+$seedCache = Join-Path $Cache "ocplugin-$OcVer"
+if (-not (Test-Path "$seedCache\opencode\node_modules")) {
+  $tmpCfgHome = Join-Path $Cache "ocplugin-tmp"
+  if (Test-Path $tmpCfgHome) { Remove-Item -LiteralPath $tmpCfgHome -Recurse -Force }
+  New-Item -ItemType Directory -Force "$tmpCfgHome\opencode" | Out-Null
+  $deadCfg = Join-Path $tmpCfgHome "seed-opencode.json"
+  @"
+{
+  "`$schema": "https://opencode.ai/config.json",
+  "provider": {
+    "custom": {
+      "npm": "@ai-sdk/openai-compatible",
+      "name": "seed-only",
+      "options": { "baseURL": "http://127.0.0.1:9/none", "apiKey": "seed-only" },
+      "models": { "seed": { "name": "seed" } }
+    }
+  }
+}
+"@ | Write-Utf8NoBom $deadCfg
+  $prevXdg = $env:XDG_CONFIG_HOME; $prevCfg = $env:OPENCODE_CONFIG
+  $env:XDG_CONFIG_HOME = $tmpCfgHome; $env:OPENCODE_CONFIG = $deadCfg
+  $seedPort = 4177
+  $proc = Start-Process "$ocDir\opencode.exe" -ArgumentList "serve","--port","$seedPort" -PassThru -WindowStyle Hidden
+  try {
+    # 等它起来
+    $ready = $false
+    foreach ($i in 1..120) { try { Invoke-WebRequest "http://127.0.0.1:$seedPort/config" -UseBasicParsing -TimeoutSec 3 | Out-Null; $ready = $true; break } catch { Start-Sleep -Milliseconds 500 } }
+    if (-not $ready) { throw "临时 opencode 没起来" }
+    $dirQ = [uri]::EscapeDataString(($tmpCfgHome -replace '\\','/'))
+    $ses = Invoke-RestMethod -Method Post -Uri "http://127.0.0.1:$seedPort/session?directory=$dirQ" -ContentType "application/json" -Body '{"title":"seed"}'
+    $body = '{"model":{"providerID":"custom","modelID":"seed"},"parts":[{"type":"text","text":"seed"}]}'
+    try { Invoke-RestMethod -Method Post -Uri "http://127.0.0.1:$seedPort/session/$($ses.id)/message" -ContentType "application/json" -Body $body -TimeoutSec 90 | Out-Null } catch { }  # 连不上那个地址是预期的
+    # 装好没有：等 node_modules 落地
+    foreach ($i in 1..60) { if (Test-Path "$tmpCfgHome\opencode\node_modules") { break }; Start-Sleep -Milliseconds 500 }
+  } finally {
+    Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
+    $env:XDG_CONFIG_HOME = $prevXdg; $env:OPENCODE_CONFIG = $prevCfg
+  }
+  if (Test-Path "$tmpCfgHome\opencode\node_modules") {
+    New-Item -ItemType Directory -Force "$seedCache\opencode" | Out-Null
+    Copy-Tree "$tmpCfgHome\opencode\node_modules" "$seedCache\opencode\node_modules"
+    foreach ($f in @("package.json","package-lock.json")) { if (Test-Path "$tmpCfgHome\opencode\$f") { Copy-Item "$tmpCfgHome\opencode\$f" "$seedCache\opencode\" -Force } }
+  }
+  Remove-Item -LiteralPath $tmpCfgHome -Recurse -Force -ErrorAction SilentlyContinue
+}
+# ★ 拿不到就【继续打包】，只响亮告警：缺了它不影响功能，只是用户第一条消息要等一次下载。
+#   为这个中断整次打包不值当（它依赖网络 + opencode 的内部行为，是最容易出意外的一步）。
+if (Test-Path "$seedCache\opencode\node_modules") {
+  New-Item -ItemType Directory -Force "$App\.ocglobal\opencode" | Out-Null
+  Copy-Tree "$seedCache\opencode" "$App\.ocglobal\opencode"
+  $n = @(Get-ChildItem "$App\.ocglobal\opencode\node_modules" -Directory).Count
+  Write-Host "  已预置插件运行时：$n 个顶层包" -ForegroundColor Green
+} else {
+  Write-Warning "  没能预置 opencode 插件运行时 —— 包仍可用，但用户【第一条消息】会先等一次 ~52MB 下载。"
+}
 # opencode.json 干净基线（server.mjs 启动时会自己补 question:false 等；不带任何 key）
 @"
 {

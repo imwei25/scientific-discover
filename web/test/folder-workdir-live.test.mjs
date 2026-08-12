@@ -51,8 +51,8 @@ test("外部工作目录下，provider / 技能 / AGENTS.md 都还在", { skip: 
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "fwd-"))
   const outside = path.join(dir, "用户自己的课题文件夹")     // 应用之外、且不是 git 仓库
   fs.mkdirSync(outside, { recursive: true })
-  // 把 opencode 的"全局配置目录"引到临时目录：实现里的 ocGlobalSkillDir() 认这个变量，
-  // 于是技能联接建在这儿，不去动开发机上用户自己的 ~/.config/opencode。
+  // 正常部署下 opencode 的配置目录被圈在【应用内】的 .ocglobal；这里用 SCI_OC_CONFIG_HOME
+  // 把它重定向到临时目录，免得测试往开发机的检出里塞东西。
   const xdg = path.join(dir, "xdg")
   fs.mkdirSync(xdg, { recursive: true })
 
@@ -75,7 +75,7 @@ test("外部工作目录下，provider / 技能 / AGENTS.md 都还在", { skip: 
   const saved = {}
   const over = {
     MANAGE_OC: "1", OC_BIN: OC, OC_URL: `http://127.0.0.1:${port}`, PORT: "0",
-    XDG_CONFIG_HOME: xdg,                                  // 技能联接落到临时目录，不碰用户自己的 ~/.config
+    SCI_OC_CONFIG_HOME: xdg,                              // 把应用内的 .ocglobal 重定向到临时目录
     OC_CONFIG_PATH: cfg,
     HOME: dir, USERPROFILE: dir,
     SESSIONS_META_PATH: path.join(dir, "sessions-meta.json"),
@@ -130,7 +130,7 @@ test("旧联接指错地方要能自愈；用户自己的真技能目录绝不�
   // 这一条只测联接的自愈逻辑，不需要真 opencode。但 import server.mjs 会把整个网关带起来，
   // 所以先按"最轻形态"设好环境：不接管 opencode、端口随机、状态全落临时目录。
   const over = {
-    MANAGE_OC: "0", PORT: "0", OC_URL: "http://127.0.0.1:1", XDG_CONFIG_HOME: xdg,
+    MANAGE_OC: "0", PORT: "0", OC_URL: "http://127.0.0.1:1", SCI_OC_CONFIG_HOME: xdg,
     HOME: dir, USERPROFILE: dir,
     SESSIONS_META_PATH: path.join(dir, "sessions-meta.json"),
     MODEL_CFG_PATH: path.join(dir, "model-config.json"),

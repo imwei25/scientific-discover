@@ -81,3 +81,8 @@ zotero_evidence.csv
 # git status 长期是脏的。文件本身留在磁盘上，需要的人照旧能翻。
 projects/
 scratchpad/
+
+# opencode 的配置目录（XDG_CONFIG_HOME），由网关圈在应用内：一个指向 .opencode/skills 的
+# 联接 + 随包预置的插件运行时（见 server.mjs 的 OC_GLOBAL_CFG 与 desktop/bundle.ps1）。
+# 纯本机产物、且含 junction 与几万个依赖文件，跟着仓库走没有意义。
+.ocglobal/

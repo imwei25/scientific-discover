@@ -5083,13 +5083,22 @@ export function resolveOcBin(env = process.env) {
 //      于是任何目录下都看得到全部技能，且技能包在线更新后立刻生效（联接是活的，不是拷贝）
 //   ③ opencode.json 的 instructions 指到 AGENTS.md 绝对路径（见 enforceOcTools）
 //
-// 【为什么不用 XDG_CONFIG_HOME 把整个配置目录隔离到应用内】那样更干净（卸载即消失、不碰用户
-// 自己的 opencode 配置），我一开始就是这么写的。但 opencode 会把 provider 的 npm 包装在它的
-// 配置目录里 —— 实测 52.4 MB / 3667 个文件。换配置目录 = 让【每一个老用户】升级后重装一遍，
-// 而且正好卡在"点了发送、等第一个回复"的那一刻；国内 npm 时快时慢，这一下比要修的 bug 还伤。
-// 所以只在用户原本的全局配置目录里加一个 skills 联接，其余一概不动。
-const ocGlobalSkillDir = () =>
-  path.join(process.env.XDG_CONFIG_HOME || path.join(os.homedir(), ".config"), "opencode", "skills")
+// 【配置目录整个隔离进应用内，不碰用户自己的 ~/.config/opencode】
+// 曾经的做法是"只在用户原本的全局配置目录里加一个 skills 联接"，代价是：用户自己用 opencode
+// 时，在【任何目录】下都会看到本套件的 28 个技能（实测确认）；那个位置还被我们占住了；
+// 卸载后留一个悬空联接。对不碰 opencode 的普通用户不可见，但对自己用 opencode 的人是实打实的污染。
+//
+// 改成 XDG_CONFIG_HOME 指向应用内的 .ocglobal 就全干净了：技能只对本应用可见，卸载即消失。
+// 当初否掉它的理由是"opencode 会把 52.4 MB / 3667 个文件的插件运行时装进配置目录，换目录 =
+// 每个老用户重装一遍" —— 那个顾虑是对的，但触发时机我认错了：不是启动时，是【第一轮会话】时
+//（实测：空配置目录起网关只有 skills 联接、0 个包；跑完一轮立刻出现 26 个顶层包）。也就是说
+// 它恰好卡在"点了发送、等第一个回复"那一刻，比启动时更难受。
+// 解法是把这份运行时【随安装包发出去】预置好（压缩后 11.6 MB）：实测预置目录会被原样复用，
+// 不重装（放了哨兵文件，跑完一轮还在）。见 desktop/bundle.ps1 的「opencode 插件运行时」一段。
+//
+// SCI_OC_CONFIG_HOME 只为测试留的重定向口子，正常部署不设。
+const OC_GLOBAL_CFG = process.env.SCI_OC_CONFIG_HOME || path.join(ROOT, ".ocglobal")
+const ocGlobalSkillDir = () => path.join(OC_GLOBAL_CFG, "opencode", "skills")
 export function ensureOcSkillLink() {
   const link = ocGlobalSkillDir()
   const target = path.join(ROOT, ".opencode", "skills")
@@ -5105,7 +5114,9 @@ export function ensureOcSkillLink() {
     let st = null
     try { st = fs.lstatSync(link) } catch {}
     if (st && !st.isSymbolicLink()) {             // Windows 的 junction 在 Node 里也报 isSymbolicLink
-      console.warn(`[oc] ${link} 是一个真实目录（多半是你自己的 opencode 技能）—— 不动它。\n` +
+      // 现在这个位置在应用自己的 .ocglobal 下，正常不该有真目录；真出现了多半是上一版的残留
+      // 或有人手动放了东西。仍然不删 —— 删目录这种事没有"多半"，宁可少一档功能。
+      console.warn(`[oc] ${link} 是一个真实目录而不是联接 —— 不动它。\n` +
         `    后果：指定了外部工作目录的会话看不到本套件的技能（其它会话不受影响）。`)
       return false
     }
@@ -5150,9 +5161,12 @@ function spawnOc() {
     // 技能会回退到读本机 QWEN_API_KEY，老用法不受影响。
     env: {
       ...process.env, PYTHONUTF8: "1", PYTHONIOENCODING: "utf-8",
-      // 见上面 ensureOcSkillLink 那段：「工作目录选到应用之外」时，opencode 会换一个 project，
-      // 本应用的 provider 配置就找不着了。OPENCODE_CONFIG 是把它带过去的唯一依靠。
+      // 见上面那段长注释：「工作目录选到应用之外」时 opencode 会换一个 project，本应用的
+      // provider 配置与技能就都找不着了。这两个变量是把它们带过去的唯一依靠。
+      // XDG_CONFIG_HOME 同时也把 opencode 的配置目录整个圈进应用内 —— 技能只对本应用可见，
+      // 不污染用户自己的 opencode，卸载即消失。
       OPENCODE_CONFIG: OC_CONFIG_PATH,
+      XDG_CONFIG_HOME: OC_GLOBAL_CFG,
       // SCI_IMAGE_TOKEN 必须一起给：/cloud/* 那道闸【要求带本进程本次启动生成的转发令牌】
       // （见下方 CLOUD_PROXY_PREFIX 的两道闸），少给这一个就是 401「本机转发令牌不正确」。
       // 不能为了省事把 /cloud/img 从闸里放行 —— 那会让同机任何程序都能白嫖云端生图额度。
