@@ -101,6 +101,10 @@ const customProviderCfg = ({ baseURL, apiKey, modelID, cost }) => ({
 // deploy 侧（render-compose.sh 的 :ro 卷 / 或只读根文件系统）。故此处不再写任何 edit/read 规则。
 const enforceOcTools = (oc) => {
   oc.tools = { ...(oc.tools || {}), question: false }
+  // ★ instructions 必须显式指到 AGENTS.md 的【绝对路径】，不能靠 opencode 自己在项目根找。
+  //   它默认只在 worktree 里找 AGENTS.md，而「工作目录」功能会把会话的 directory 指到
+  //   用户自己的文件夹 —— 那里没有 AGENTS.md，顶层路由指令就整个不加载了（见 spawnOc 头注）。
+  oc.instructions = [path.join(ROOT, "AGENTS.md")]
   // ★ external_directory 必须 allow，否则「上传文件→让 agent 分析」这条最常用的路径 100% 卡死。
   // 起因是会话工作目录改造：cwd 从 /app 变成了 /app/outputs/<会话id>/，于是用户上传所在的
   // /app/uploads/<会话id>/ 对 opencode 而言成了【外部目录】，默认策略是 ask →
@@ -5024,6 +5028,58 @@ export function resolveOcBin(env = process.env) {
   // 这两种都必须说人话，不能让现场只看到"命令找不到"这种把人引向 PATH 的误导信息。
   return { cmd: bin, shell: false, missing: !fs.existsSync(bin) }
 }
+// ---- 让 opencode 的配置与技能【不再依赖会话工作目录】----
+//
+// 【踩过的坑，别再退回去】opencode 的 provider 配置、技能、AGENTS.md 全部按 **project /
+// worktree** 解析，而 project 是从会话的 `directory` 推出来的。「工作目录」功能会把
+// directory 指到用户自己的文件夹，于是（2026-08-12 用打包好的 opencode 逐项实测）：
+//   · directory = 应用目录 或 outputs/ws_xxx  → project=<应用>，custom provider 在，技能 28 个
+//   · directory = 用户挑的目录（非本仓库）    → project=global、worktree=/，
+//                                              custom provider【消失】，技能【只剩 1 个】
+// 后果是两层：① 模型名 custom/… 在那个 project 里不存在 → 整轮零文本，界面报"模型没有返回
+// 任何文本"；② 就算修好模型，28 个科研技能也全不可见 —— 而这一层不报错，只会安静地把所有
+// 模块退化成裸对话。这是本功能上线后用户第一时间撞上的问题。
+//
+// 修法是把这三样从"按项目找"改成"全局可见"，全部用打包好的 opencode 实测验证过：
+//   ① OPENCODE_CONFIG=<应用>/opencode.json  → provider / permission / tools 在任何目录都生效
+//   ② 在 opencode 的【全局技能目录】里建一个指向 .opencode/skills 的目录联接（junction），
+//      于是任何目录下都看得到全部技能，且技能包在线更新后立刻生效（联接是活的，不是拷贝）
+//   ③ opencode.json 的 instructions 指到 AGENTS.md 绝对路径（见 enforceOcTools）
+//
+// 【为什么不用 XDG_CONFIG_HOME 把整个配置目录隔离到应用内】那样更干净（卸载即消失、不碰用户
+// 自己的 opencode 配置），我一开始就是这么写的。但 opencode 会把 provider 的 npm 包装在它的
+// 配置目录里 —— 实测 52.4 MB / 3667 个文件。换配置目录 = 让【每一个老用户】升级后重装一遍，
+// 而且正好卡在"点了发送、等第一个回复"的那一刻；国内 npm 时快时慢，这一下比要修的 bug 还伤。
+// 所以只在用户原本的全局配置目录里加一个 skills 联接，其余一概不动。
+const ocGlobalSkillDir = () =>
+  path.join(process.env.XDG_CONFIG_HOME || path.join(os.homedir(), ".config"), "opencode", "skills")
+function ensureOcSkillLink() {
+  const link = ocGlobalSkillDir()
+  const target = path.join(ROOT, ".opencode", "skills")
+  try {
+    if (!fs.existsSync(target)) return false      // 没有技能目录（极简部署）→ 不必建
+    // 已经是指向我们的联接 → 什么都不做
+    try { if (path.resolve(fs.readlinkSync(link)) === path.resolve(target)) return true } catch {}
+    // ★ 那里已经有【别的东西】→ 绝不动它。那是用户自己的 opencode 技能目录，可能是他手写的。
+    //   宁可让"选了外部工作目录的会话看不到本套件技能"，也不能删用户的东西。
+    if (fs.existsSync(link) || fs.lstatSync(link, { throwIfNoEntry: false })) {
+      console.warn(`[oc] ${link} 已存在且不是本应用建的联接 —— 不动它。\n` +
+        `    后果：指定了外部工作目录的会话看不到本套件的技能（其它会话不受影响）。`)
+      return false
+    }
+    fs.mkdirSync(path.dirname(link), { recursive: true })
+    // junction：Windows 上建目录联接不需要管理员权限（symlink 需要）；POSIX 上该参数被忽略，等同 'dir'
+    fs.symlinkSync(target, link, "junction")
+    console.log(`[oc] 已建立全局技能联接：${link} -> ${target}`)
+    return true
+  } catch (e) {
+    // 建不出来不是致命的：工作目录在应用内的会话一切照旧，只有「选了外部工作目录」的会缺技能。
+    // 但必须响亮说出来，否则现场只会看到"这个会话怎么什么都不会做"。
+    console.warn(`[oc] 无法建立全局技能联接（${link}）：${e.message}\n` +
+      `    后果：指定了外部工作目录的会话看不到本套件的技能。其它会话不受影响。`)
+    return false
+  }
+}
 function spawnOc() {
   const oc = resolveOcBin()
   if (oc.missing) {
@@ -5033,6 +5089,7 @@ function spawnOc() {
       `    2) 被杀毒软件当成可疑程序隔离了——去杀软的隔离区恢复它，并把安装目录加入信任。`)
     return
   }
+  ensureOcSkillLink()   // 每次起 opencode 前确保联接在（换安装位置、用户手动删过，都能自愈）
   const out = fs.openSync(path.join(ROOT, "serve.out"), "a")
   const err = fs.openSync(path.join(ROOT, "serve.err"), "a")
   const child = spawn(oc.cmd, ["serve", "--port", String(OC_PORT)], {
@@ -5047,6 +5104,9 @@ function spawnOc() {
     // 技能会回退到读本机 QWEN_API_KEY，老用法不受影响。
     env: {
       ...process.env, PYTHONUTF8: "1", PYTHONIOENCODING: "utf-8",
+      // 见上面 ensureOcSkillLink 那段：「工作目录选到应用之外」时，opencode 会换一个 project，
+      // 本应用的 provider 配置就找不着了。OPENCODE_CONFIG 是把它带过去的唯一依靠。
+      OPENCODE_CONFIG: OC_CONFIG_PATH,
       // SCI_IMAGE_TOKEN 必须一起给：/cloud/* 那道闸【要求带本进程本次启动生成的转发令牌】
       // （见下方 CLOUD_PROXY_PREFIX 的两道闸），少给这一个就是 401「本机转发令牌不正确」。
       // 不能为了省事把 /cloud/img 从闸里放行 —— 那会让同机任何程序都能白嫖云端生图额度。
