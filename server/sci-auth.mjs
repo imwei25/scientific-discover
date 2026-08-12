@@ -1300,6 +1300,19 @@ async function handleAdminApi(req, res, pathname) {
       return json(res, 200, r.ok ? { ok: true, ...r } : { ok: false, err: r.err })
     }
 
+    // 整家批改模型优先级。决定出流量给谁的是 models.sort，不是 providers.sort（后者只排
+    // 后台列表的显示顺序）—— 界面上两个字段都像"优先度"，这个接口就是让"把这家整体降为备用"
+    // 变成一次点击，而不是逐行去改十几个模型条目（改漏一行就是主备只换了一半）。
+    if (b.action === "priority") {
+      if (!DB.getProvider(db, key)) return json(res, 404, { ok: false, err: "供应商不存在" })
+      const sort = Number(b.sort)
+      if (!Number.isInteger(sort) || sort < 0 || sort > 999)
+        return json(res, 400, { ok: false, err: "优先级要填 0-999 的整数（数字小的先用）" })
+      const updated = DB.setProviderModelSort(db, key, sort)
+      audit("provider.priority", { actor: "admin", target: key, ip, detail: `sort=${sort} models=${updated}` })
+      return json(res, 200, { ok: true, updated, sort })
+    }
+
     if (b.remove) {
       if (!DB.getProvider(db, key)) return json(res, 404, { ok: false, err: "供应商不存在" })
       const r = DB.deleteProvider(db, key)

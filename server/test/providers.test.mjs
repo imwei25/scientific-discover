@@ -292,6 +292,52 @@ test("网关：主供应商余额耗尽（402）→ 切备用，而不是把 402
   assert.equal(r.rows().at(-1).provider, "rich")
 })
 
+test("后台：整家批改优先级 —— 一次点击就把主备换过来（供应商的 sort 不参与路由）", async (t) => {
+  // 2026-08-12 线上踩的：管理员改了【供应商】那个 sort，以为主备换了，实际路由只看
+  // models.sort，一动没动 —— 于是每一单都还先撞额度耗尽的那家。这条同时钉住两件事：
+  // ① 供应商 sort 改了不影响出流量；② priority 接口把这家名下【所有】模型行一起改掉。
+  const a = recorder((_q, res) => {
+    res.writeHead(200, { "content-type": "application/json" })
+    res.end(JSON.stringify({ usage: { prompt_tokens: 1, completion_tokens: 1 } }))
+  })
+  const b = await startFakeUpstream((_q, res) => {
+    res.writeHead(200, { "content-type": "application/json" })
+    res.end(JSON.stringify({ usage: { prompt_tokens: 1, completion_tokens: 1 } }))
+  })
+  const r = await rig({ upstream: a, tier: { key: "plus", dailyUSD: 0, model: "std" } })
+  t.after(async () => { await r.close(); await b.close() })
+  await r.admin("/admin/api/provider", { method: "POST", body: { key: "a", baseURL: r.up.url + "/v1", apiKey: "ka", sort: 0 } })
+  await r.admin("/admin/api/provider", { method: "POST", body: { key: "b", baseURL: b.url + "/v1", apiKey: "kb", sort: 9 } })
+  await r.admin("/admin/api/model", { method: "POST", body: { items: [
+    { model: "std", provider: "a", sort: 0 }, { model: "x2", provider: "a", sort: 0 },
+    { model: "std", provider: "b", sort: 1 }, { model: "x2", provider: "b", sort: 1 },
+  ] } })
+
+  await r.call({ model: "std", messages: [] })
+  assert.equal(r.rows().at(-1).provider, "a", "优先级 0 的 a 先出流量")
+
+  // 只改供应商的 sort：路由必须【纹丝不动】
+  await r.admin("/admin/api/provider", { method: "POST", body: { key: "b", baseURL: b.url + "/v1", sort: -1 } })
+  await r.call({ model: "std", messages: [] })
+  assert.equal(r.rows().at(-1).provider, "a", "供应商 sort 只排后台显示顺序，不该影响出流量")
+
+  // 整家批改：a 名下两个模型行一起降为备用
+  const x = await r.admin("/admin/api/provider", { method: "POST", body: { key: "a", action: "priority", sort: 5 } })
+  assert.equal(x.status, 200)
+  assert.equal(x.json.updated, 2, "这家名下两行都要改到，改漏一行就是主备只换了一半")
+  await r.call({ model: "std", messages: [] })
+  assert.equal(r.rows().at(-1).provider, "b", "批改后主备真的换了")
+  const seenBefore = a.seen.length
+  await r.call({ model: "x2", messages: [] })
+  assert.equal(a.seen.length, seenBefore, "同一家的另一个模型也跟着换了，没有漏行")
+
+  // 越界与非整数要挡住，别把路由写成 NaN
+  for (const bad of [-1, 1000, 1.5, "abc"])
+    assert.equal((await r.admin("/admin/api/provider", { method: "POST", body: { key: "a", action: "priority", sort: bad } })).status,
+      400, `优先级 ${bad} 应当被拒`)
+  assert.equal((await r.admin("/admin/api/provider", { method: "POST", body: { key: "nope", action: "priority", sort: 0 } })).status, 404)
+})
+
 test("网关：请求本身的问题（400/404）不切家，原样透传给客户端诊断", async (t) => {
   const bad = await startFakeUpstream((_q, res) => {
     res.writeHead(404, { "content-type": "application/json" })
