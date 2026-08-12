@@ -701,6 +701,19 @@ export function deleteModel(db, id) {
 }
 
 /**
+ * 把这家名下【所有】模型行的优先级一次设成同一个值，返回改了几行。
+ *
+ * 【为什么要有这个】决定出流量给谁的是 models.sort（见下面的 modelRoutes），而 providers.sort
+ * 只排后台列表的显示顺序 —— 两个字段在界面上都长得像"优先度"，管理员改了后者以为主备换了，
+ * 实际路由一动没动（2026-08-12 线上就是这么踩的：两家都在，主力那家额度耗尽，改了供应商排序
+ * 却仍旧每单先撞它一次）。一家挂十来个模型时逐行去改既烦又必漏，所以给一个整家批改。
+ */
+export function setProviderModelSort(db, provider, sort) {
+  const r = db.prepare("UPDATE models SET sort=? WHERE provider=?").run(Number(sort) || 0, String(provider))
+  return Number(r.changes) || 0
+}
+
+/**
  * 某个对外模型名的候选路由，按 sort、id 排序。
  * 多行 = 多家供应商都能提供这个模型名 → 前面那家连不上/5xx 时网关自动落到下一家。
  * 只取【模型条目与供应商都启用】的行：停用任一层都应立刻不再出流量。

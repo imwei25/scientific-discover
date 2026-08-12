@@ -1036,18 +1036,28 @@ function paneProviders(){
     if(!out.length)return '<span class="mut" style="font-size:12.5px">未设额度</span>';
     return out.join('')}
 
+  // 这家名下所有模型行的优先级（决定出流量给谁的就是它，不是供应商那个「列表排序」）。
+  // 各行不一致时把值都列出来 —— 逐行改优先级最常见的事故就是改漏一两行，主备只换了一半。
+  function prioOf(k){
+    var ss=models.filter(function(m){return m.provider===k}).map(function(m){return m.sort});
+    if(!ss.length)return null;
+    var uniq=ss.filter(function(v,i){return ss.indexOf(v)===i}).sort(function(a,b){return a-b});
+    return {vals:uniq,mixed:uniq.length>1}}
+
   var prows=provs.map(function(p){
-    var s=sup[p.key]||{},cooling=(s.health||{}).cooling;
+    var s=sup[p.key]||{},cooling=(s.health||{}).cooling,pr=prioOf(p.key);
     return '<tr data-k="'+esc(p.key)+'">'+
       '<td><b>'+esc(p.name||p.key)+'</b><div class="mut" style="font-size:12.5px">'+esc(p.key)+
         (p.note?' · '+esc(p.note):'')+'</div></td>'+
       '<td class="mut" style="font-size:12.5px">'+esc(p.baseUrl)+'</td>'+
       '<td>'+(p.status==='active'?'<span class="tag ok">启用</span>':'<span class="tag bad">已停用</span>')+
         (p.hasKey?'':' <span class="tag warn">缺 Key</span>')+'</td>'+
-      '<td>'+p.models+' 个</td>'+
+      '<td>'+p.models+' 个'+(pr?'<div class="mut" style="font-size:12.5px">优先级 '+pr.vals.join(' / ')+
+        (pr.mixed?' <span class="tag warn">各行不一致</span>':'')+'</div>':'')+'</td>'+
       '<td>'+supCell(p.key)+'</td>'+
       '<td class="row" style="gap:5px;flex-wrap:nowrap">'+
         '<button class="btn sm" data-a="ed">编辑</button>'+
+        '<button class="btn sm" data-a="prio" title="一次改掉这家名下所有模型的优先级（主备就是靠它定的）">优先级</button>'+
         '<button class="btn sm" data-a="budget">额度</button>'+
         (cooling?'<button class="btn sm" data-a="clear" title="充完值不想等冷却到期就点它">解除</button>':'')+
         '<button class="btn sm" data-a="add-models">+ 模型</button>'+
@@ -1107,6 +1117,7 @@ function paneProviders(){
       if(tr.dataset.k!==undefined&&tr.dataset.k!==''){
         var p=provs.filter(function(x){return x.key===tr.dataset.k})[0];
         if(a==='ed')return dlgProvider(p);
+        if(a==='prio')return dlgPriority(p,models.filter(function(m){return m.provider===p.key}));
         if(a==='budget')return dlgBudget(p,sup[p.key]);
         if(a==='clear')return post('supply',{provider:p.key,action:'clear'}).then(function(j){
           toast(j.ok?'已解除摘除标记，下一单就会试这家':(j.err||'失败'),j.ok);loadProviders()});
@@ -1154,9 +1165,14 @@ function dlgProvider(p){
       (p.hasKey?'已配置（留空 = 不改）':'sk-...')+'">'+
     '<label>状态</label><select id="p-st"><option value="active"'+(p.status==='active'?' selected':'')+'>启用</option>'+
       '<option value="disabled"'+(p.status!=='active'?' selected':'')+'>停用</option></select>'+
-    '<label>排序</label><input id="p-s" value="'+p.sort+'">'+
+    // 【别再叫"排序"】它只排后台这张表的显示顺序。叫"排序/优先度"会被读成"主备顺序"，
+    // 于是管理员改完它以为流量换家了，实际路由（models.sort）一动没动。名字与下面那句提示
+    // 都是为这个踩过的坑留的，别改回去。
+    '<label>列表排序</label><input id="p-s" value="'+p.sort+'">'+
     '<label>备注</label><input id="p-note" value="'+esc(p.note)+'"></div>'+
-    '<div class="hint" style="margin-top:12px">地址填到 <code>/v1</code>（没写会自动补）。存好后用「+ 模型」从这家拉模型列表勾选接入。</div>'+
+    '<div class="hint" style="margin-top:12px">地址填到 <code>/v1</code>（没写会自动补）。存好后用「+ 模型」从这家拉模型列表勾选接入。<br>'+
+    '「列表排序」<b>只管这家在上面表格里显示的先后，不决定出流量给谁</b>——主备顺序看每个模型行的'+
+    '<b>优先级</b>，要整家一起调就用列表里那个「优先级」按钮。</div>'+
     '<div class="msg" id="p-msg" style="position:static;max-width:none;margin-top:10px"></div>',
     '<button class="btn" id="p-test" value="">测试连通</button><button class="btn primary" id="ok" value="default">保存</button>');
   // 【display 要显式打开】.msg 默认 display:none，只有 .ok/.err 两个修饰类才显示；
@@ -1173,6 +1189,40 @@ function dlgProvider(p){
     post('provider',body()).then(function(j){
       if(!j.ok)return pmsg('err',j.err||'保存失败');
       $('#dlg').close();toast('已保存供应商',true);loadProviders()})}
+}
+
+/**
+ * 整家批改模型优先级。
+ *
+ * 【为什么单开一个入口】决定出流量给谁的是【每个模型行】的优先级（models.sort），而供应商
+ * 编辑框里那个是「列表排序」，只排显示顺序。要把一家整体降成备用，本来得把它名下十几个模型
+ * 逐行点开改一遍 —— 烦，且改漏一行就是主备只换了一半，而这种半吊子状态在界面上看不出来
+ * （所以列表那格会把不一致的优先级都列出来并标红）。
+ */
+function dlgPriority(p,ms){
+  var cur=ms.map(function(m){return m.sort}),
+      uniq=cur.filter(function(v,i){return cur.indexOf(v)===i}),
+      def=uniq.length===1?uniq[0]:'';
+  dlg('优先级 · '+(p.name||p.key),
+    '<div class="grid"><label>优先级</label>'+
+    '<input id="pr-s" value="'+def+'" placeholder="0-999，数字小的先用；这家名下 '+ms.length+' 个模型全设成它">'+
+    '</div>'+
+    '<div class="hint" style="margin-top:12px"><b>同一个对外模型名下，优先级数字小的那家先出流量</b>，'+
+    '它伺候不了（连不上 / 5xx / 401 / 402 / 429…）时自动落到下一家。所以：主力填 <code>0</code>，'+
+    '备用填 <code>1</code>。<br>供应商编辑框里的「列表排序」跟这个<b>没有关系</b>，那个只排后台表格的显示顺序。</div>'+
+    (ms.length?'<table style="margin-top:12px"><thead><tr><th>模型</th><th>当前优先级</th></tr></thead><tbody>'+
+      ms.map(function(m){return '<tr><td>'+esc(m.model)+'</td><td>'+m.sort+'</td></tr>'}).join('')+
+      '</tbody></table>':'<div class="hint" style="margin-top:12px">这家名下还没有模型条目。</div>')+
+    '<div class="msg" id="pr-msg" style="position:static;max-width:none;margin-top:10px"></div>',
+    '<button class="btn primary" id="ok" value="default">保存</button>');
+  var prmsg=function(cls,t){var e=$('#pr-msg');e.className='msg '+cls;e.style.display='block';e.textContent=t};
+  $('#ok').onclick=function(e){e.preventDefault();
+    if(!ms.length){$('#dlg').close();return}
+    var v=$('#pr-s').value.trim(),n=Number(v);
+    if(v===''||!Number.isInteger(n)||n<0||n>999)return prmsg('err','填 0-999 的整数（数字小的先用）');
+    post('provider',{key:p.key,action:'priority',sort:n}).then(function(j){
+      if(!j.ok)return prmsg('err',j.err||'保存失败');
+      $('#dlg').close();toast('已把 '+(p.name||p.key)+' 名下 '+j.updated+' 个模型的优先级设为 '+n,true);loadProviders()})}
 }
 
 /**
