@@ -102,6 +102,7 @@ test("外部工作目录下，provider / 技能 / AGENTS.md 都还在", { skip: 
   // 联接必须是【网关】建出来的，不是测试自己建的
   const link = path.join(xdg, "opencode", "skills")
   assert.ok(fs.existsSync(link), "网关没有建立全局技能联接（ensureOcSkillLink 没跑或失败了）")
+  assert.equal(path.resolve(fs.readlinkSync(link)), path.resolve(ROOT, ".opencode", "skills"), "联接指错了地方")
 
   const api = async (p) => (await fetch(`http://127.0.0.1:${port}${p}`)).json()
   let up = false
@@ -117,4 +118,48 @@ test("外部工作目录下，provider / 技能 / AGENTS.md 都还在", { skip: 
       `${label}：看不到本套件的技能（只有 ${skills.length} 个）—— 所有模块会安静退化成裸对话`)
     assert.match(String(cfgOut.instructions?.[0] || ""), /AGENTS\.md$/i, `${label}：AGENTS.md 没被加载`)
   }
+})
+
+// 指向【别处】的旧联接必须能被拆掉重建（换安装位置 / 重装到别的盘 / 换个检出跑都会留下它）。
+// 反过来，那儿要是用户【自己的真目录】，一个字节都不许动。
+test("旧联接指错地方要能自愈；用户自己的真技能目录绝不动", async (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "fwd2-"))
+  t.after(() => { try { fs.rmSync(dir, { recursive: true, force: true }) } catch {} })
+  const xdg = path.join(dir, "xdg")
+  const link = path.join(xdg, "opencode", "skills")
+  // 这一条只测联接的自愈逻辑，不需要真 opencode。但 import server.mjs 会把整个网关带起来，
+  // 所以先按"最轻形态"设好环境：不接管 opencode、端口随机、状态全落临时目录。
+  const over = {
+    MANAGE_OC: "0", PORT: "0", OC_URL: "http://127.0.0.1:1", XDG_CONFIG_HOME: xdg,
+    HOME: dir, USERPROFILE: dir,
+    SESSIONS_META_PATH: path.join(dir, "sessions-meta.json"),
+    MODEL_CFG_PATH: path.join(dir, "model-config.json"),
+    OC_CONFIG_PATH: path.join(dir, "opencode.json"),
+    CLOUD_STATE_PATH: path.join(dir, "cloud-state.json"),
+    CLOUD_CFG_PATH: path.join(dir, "no-such-cloud.json"),
+    SCI_CLOUD_URL: "", OC_GATEWAY_URL: "", OC_GATEWAY_KEY: "", SUGGEST_ENABLED: "0",
+  }
+  const saved = {}
+  for (const [k, v] of Object.entries(over)) { saved[k] = process.env[k]; process.env[k] = v }
+  const mod = await import(`../server.mjs?linkonly=${process.pid}`)
+  const { ensureOcSkillLink } = mod
+  t.after(() => {
+    try { mod?.server?.close() } catch {}
+    for (const [k, v] of Object.entries(saved)) { if (v === undefined) delete process.env[k]; else process.env[k] = v }
+  })
+  fs.rmSync(link, { recursive: true, force: true })   // 网关启动时已经建过一次，这里从零开始摆
+
+  // ① 指向别处的旧联接 → 重建到正确目标
+  const stale = path.join(dir, "老的安装位置"); fs.mkdirSync(stale, { recursive: true })
+  fs.mkdirSync(path.dirname(link), { recursive: true })
+  fs.symlinkSync(stale, link, "junction")
+  assert.equal(ensureOcSkillLink(), true, "旧联接应被重建")
+  assert.equal(path.resolve(fs.readlinkSync(link)), path.resolve(ROOT, ".opencode", "skills"))
+
+  // ② 用户自己的真目录 → 不动，且明确返回 false
+  fs.rmSync(link, { recursive: true, force: true })
+  fs.mkdirSync(link, { recursive: true })
+  fs.writeFileSync(path.join(link, "我自己写的.md"), "别删我")
+  assert.equal(ensureOcSkillLink(), false, "真目录不该被当成联接处理")
+  assert.ok(fs.existsSync(path.join(link, "我自己写的.md")), "★ 用户自己的技能被删了")
 })

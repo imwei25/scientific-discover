@@ -5090,19 +5090,28 @@ export function resolveOcBin(env = process.env) {
 // 所以只在用户原本的全局配置目录里加一个 skills 联接，其余一概不动。
 const ocGlobalSkillDir = () =>
   path.join(process.env.XDG_CONFIG_HOME || path.join(os.homedir(), ".config"), "opencode", "skills")
-function ensureOcSkillLink() {
+export function ensureOcSkillLink() {
   const link = ocGlobalSkillDir()
   const target = path.join(ROOT, ".opencode", "skills")
   try {
     if (!fs.existsSync(target)) return false      // 没有技能目录（极简部署）→ 不必建
-    // 已经是指向我们的联接 → 什么都不做
-    try { if (path.resolve(fs.readlinkSync(link)) === path.resolve(target)) return true } catch {}
-    // ★ 那里已经有【别的东西】→ 绝不动它。那是用户自己的 opencode 技能目录，可能是他手写的。
+    // ★ 判据是【它是不是一个联接】，不是【它指向哪儿】。
+    //   指向别处的联接必须能被拆掉重建：换安装位置、重装到别的盘、开发机上换个检出跑，
+    //   都会留下一个指向老路径的联接；不重建的话它会一直指着一个可能已经不存在的目录，
+    //   而症状是"技能又没了"——和这次修的 bug 一模一样，只是更难查。
+    //   （最早那版写成"只要那儿有东西就不碰"，注释里却说"换安装位置能自愈"，说到没做到。）
+    //   反过来，真目录 / 真文件 = 用户自己的 opencode 技能，一个字节都不许动：
     //   宁可让"选了外部工作目录的会话看不到本套件技能"，也不能删用户的东西。
-    if (fs.existsSync(link) || fs.lstatSync(link, { throwIfNoEntry: false })) {
-      console.warn(`[oc] ${link} 已存在且不是本应用建的联接 —— 不动它。\n` +
+    let st = null
+    try { st = fs.lstatSync(link) } catch {}
+    if (st && !st.isSymbolicLink()) {             // Windows 的 junction 在 Node 里也报 isSymbolicLink
+      console.warn(`[oc] ${link} 是一个真实目录（多半是你自己的 opencode 技能）—— 不动它。\n` +
         `    后果：指定了外部工作目录的会话看不到本套件的技能（其它会话不受影响）。`)
       return false
+    }
+    if (st) {
+      try { if (path.resolve(fs.readlinkSync(link)) === path.resolve(target)) return true } catch {}
+      try { fs.rmSync(link, { recursive: true, force: true }) } catch {}   // 指向别处的旧联接 → 重建
     }
     fs.mkdirSync(path.dirname(link), { recursive: true })
     // junction：Windows 上建目录联接不需要管理员权限（symlink 需要）；POSIX 上该参数被忽略，等同 'dir'
