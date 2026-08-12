@@ -4621,6 +4621,43 @@ export const server = http.createServer(async (req, res) => {
       return send(res, 200, "application/json", JSON.stringify({ ok: true, ...noticeCache.data, entRev: entRev(), skillUpdate, webUpdate }))
     }
 
+    // 版本更新说明：每个版本改了什么。左下角那个「更新说明」按钮读它。
+    //
+    // 【为什么是本地文件而不是找云端要】更新说明讲的是【你手上这个版本】及之前各版的变化，
+    // 它随包一起发出去，本来就该跟着包走：断网也看得到，也不会出现"客户端 0.1.19、
+    // 云端却把 0.1.30 的说明推给你"这种对不上号的情形（公告是平台级的，那条才该走云端）。
+    //
+    // 文件来源：打包时把 desktop/发布说明-*.md 拷进 app/release-notes/（见 desktop/bundle.ps1）；
+    // 开发机上没有那份拷贝，回落到仓库里的 desktop/，省得改一次说明还要先打一次包才能看效果。
+    if (req.method === "GET" && u.pathname === "/api/release-notes") {
+      const dirs = [path.join(ROOT, "release-notes"), path.join(ROOT, "desktop")]
+      const notes = []
+      for (const dir of dirs) {
+        let names = []
+        try { names = fs.readdirSync(dir) } catch { continue }
+        for (const n of names) {
+          // 只认这一种命名，且版本号必须是纯数字点分 —— readdir 出来的名字直接拼路径，
+          // 这道正则同时也是"别把目录里别的东西读出去"的闸。
+          const m = /^发布说明-(\d+(?:\.\d+)*)\.md$/.exec(n)
+          if (!m) continue
+          if (notes.some((x) => x.version === m[1])) continue   // 前一个目录（打包产物）优先
+          try {
+            const body = fs.readFileSync(path.join(dir, n), "utf8")
+            if (body.length <= 200_000) notes.push({ version: m[1], body })
+          } catch {}
+        }
+        if (notes.length) break     // 找到一处就够，别把开发机的 desktop/ 和包里的混在一起
+      }
+      // 版本号按段比大小排（字符串排序会把 0.1.9 排在 0.1.20 后面）
+      const cmp = (a, b) => {
+        const x = a.split(".").map(Number), y = b.split(".").map(Number)
+        for (let i = 0; i < Math.max(x.length, y.length); i++) { const d = (y[i] || 0) - (x[i] || 0); if (d) return d }
+        return 0
+      }
+      notes.sort((a, b) => cmp(a.version, b.version))
+      return send(res, 200, "application/json", JSON.stringify({ ok: true, current: process.env.APP_VERSION || "", notes }))
+    }
+
     // 公告列表（带正文，近半年）。前端点开「公告」面板时才拉，所以缓存可以长一点。
     //
     // 【为什么不塞进上面那条轮询】那条 5 分钟一次、每个标签页都在打；正文每条最多 2000 字、

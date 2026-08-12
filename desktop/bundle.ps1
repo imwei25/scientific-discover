@@ -266,6 +266,12 @@ Copy-Tree "$Root\web" "$App\web" `
 # 排除 __pycache__：开发机跑过技能脚本就会生成，进包纯属无谓体积（本次实测 18 个目录）
 Copy-Tree "$Root\.opencode" "$App\.opencode" -ExcludeDirs @("__pycache__")
 Copy-Item "$Root\AGENTS.md" $App -Force
+# 更新说明：左下角那个「更新说明」按钮读的就是这些（见 server.mjs 的 /api/release-notes）。
+# 随包走而不是找云端要 —— 断网也看得到，也不会出现"装的是老版本、读到的却是新版说明"。
+# 只拿 desktop\发布说明-*.md，别把 desktop\ 下的需求文档、验收清单一起塞进客户包。
+New-Item -ItemType Directory -Force "$App\release-notes" | Out-Null
+Get-ChildItem "$PSScriptRoot\发布说明-*.md" -File | Copy-Item -Destination "$App\release-notes" -Force
+Write-Host ("  更新说明 {0} 份" -f @(Get-ChildItem "$App\release-notes\*.md" -File).Count) -ForegroundColor Green
 # opencode.json 干净基线（server.mjs 启动时会自己补 question:false 等；不带任何 key）
 @"
 {

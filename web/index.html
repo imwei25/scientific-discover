@@ -1305,6 +1305,31 @@
   .ntitem .ntup { margin-top: 6px; font-size: 12px; color: #a3261a; }
   .ntitem .ntup a { color: inherit; }
   .ntempty { padding: 22px 12px; text-align: center; color: var(--faint); font-size: 12.5px; }
+  /* 更新说明面板：复用公告那套壳（.ntpanel/.nthead），只加"按版本折叠"这一层。
+     默认只展开最新一版——用户点开是想看"这次更新了什么"，不是想看编年史；
+     更早的版本收起来，想翻再点。 */
+  .relver { border-bottom: 1px solid var(--line); }
+  .relver:last-child { border-bottom: 0; }
+  .relver > summary { display: flex; align-items: center; gap: 8px; padding: 10px 12px; cursor: pointer;
+    font-size: 13px; color: var(--text); list-style: none; user-select: none; }
+  .relver > summary::-webkit-details-marker { display: none; }
+  .relver > summary::before { content: ""; width: 6px; height: 6px; flex: none; transform: rotate(45deg);
+    border-right: 1.6px solid var(--faint); border-bottom: 1.6px solid var(--faint); transition: transform .15s; }
+  .relver[open] > summary::before { transform: rotate(-135deg); }
+  .relver > summary:hover { background: var(--panel-soft); }
+  .relver .relv { font-weight: 600; font-variant-numeric: tabular-nums; }
+  /* 「当前版本」徽标：面板里最要紧的一条信息是"我现在装的是哪一版"，没有它，
+     一列版本号看下来根本不知道自己站在哪儿。 */
+  .relver .relnow { padding: 1px 6px; border-radius: 4px; font-size: 11px; font-weight: 600;
+    background: #e8f1fd; color: #14508f; }
+  .relbody { padding: 2px 14px 14px; font-size: 12.5px; line-height: 1.7; color: var(--text); }
+  .relbody h1 { display: none; }               /* 正文首行就是「0.1.20 发布说明」，与 summary 重复 */
+  .relbody h2 { font-size: 13px; margin: 12px 0 6px; color: var(--muted); }
+  .relbody h3 { font-size: 12.5px; margin: 10px 0 4px; }
+  .relbody p, .relbody li { margin: 4px 0; }
+  .relbody ul, .relbody ol { padding-left: 20px; margin: 4px 0; }
+  .relbody code { background: var(--panel-soft); padding: 1px 4px; border-radius: 4px; font-size: 11.5px; }
+  .relbody a { color: var(--cyan); }
   /* 反馈弹窗 */
   .fb-votes { display: flex; gap: 10px; margin: 4px 0 12px; }
   .fb-vote { flex: 1; padding: 9px; border-radius: var(--r-sm); border: 1px solid var(--line-hi); background: #fff; cursor: pointer; font-size: 13px; color: var(--muted); }
@@ -1626,6 +1651,12 @@
         <button id="ntBtn" class="hbtn" type="button" title="系统消息 / 平台公告"></button>
         <span id="ntDot" class="dotmark" hidden></span>
         <div id="ntPanel" class="ntpanel"></div>
+      </div>
+      <!-- 更新说明：这个版本、以及之前每个版本各改了什么。随包走（不问云端要）——
+           断网也看得到，也不会出现"客户端还是老版本、却读到新版说明"这种对不上号的情形。 -->
+      <div id="relWrap" class="ntwrap">
+        <button id="relBtn" class="hbtn" type="button" title="更新说明：每个版本改了哪些东西"></button>
+        <div id="relPanel" class="ntpanel"></div>
       </div>
       <!-- 分享：把当前会话导出成一个自包含 HTML（含思考与工具调用，默认折叠；不含任何产出文件） -->
       <button id="shareBtn" class="hbtn" type="button" title="分享：把本次会话导出成一个 HTML 文件"></button>
@@ -6900,6 +6931,7 @@ async function openNoticePanel() {
   const p = document.getElementById("ntPanel")
   if (!p) return
   if (p.classList.contains("on")) { p.classList.remove("on"); return }
+  document.getElementById("relPanel")?.classList.remove("on")   // 两个面板同一个角，别叠在一起
   p.classList.add("on")
   renderNoticePanel(ntListCache || [])          // 先画上次的，避免点开是一片空白
   let err = false
@@ -6915,6 +6947,67 @@ async function openNoticePanel() {
   if (Number.isFinite(maxId)) { try { localStorage.setItem(NT_KEY, String(maxId)) } catch {} }
   renderNoticeDot()
 }
+
+// ---- 更新说明面板 ----
+// 与公告的区别：公告是平台级的、随时可能新增，所以走云端 + 未读红点；更新说明讲的是
+// 【你手上这个版本】改了什么，随包发出来就固定了，所以读本地、也不做未读标记。
+let relCache = null
+function renderReleasePanel(data, err) {
+  const p = document.getElementById("relPanel")
+  if (!p) return
+  p.textContent = ""
+  const head = document.createElement("div"); head.className = "nthead"
+  const t = document.createElement("b"); t.textContent = "更新说明"
+  const sub = document.createElement("span")
+  sub.textContent = data?.current ? "当前版本 " + data.current : ""
+  head.append(t, sub); p.append(head)
+  const notes = data?.notes || []
+  if (!notes.length) {
+    const e = document.createElement("div"); e.className = "ntempty"
+    e.textContent = err ? "读不到更新说明" : "这个版本还没有更新说明"
+    p.append(e); return
+  }
+  notes.forEach((n, i) => {
+    const d = document.createElement("details"); d.className = "relver"
+    if (i === 0) d.open = true                       // 只展开最新一版，见 CSS 注释
+    const s = document.createElement("summary")
+    const v = document.createElement("span"); v.className = "relv"; v.textContent = n.version
+    s.append(v)
+    if (data.current && n.version === data.current) {
+      const now = document.createElement("span"); now.className = "relnow"; now.textContent = "当前版本"
+      s.append(now)
+    }
+    const body = document.createElement("div"); body.className = "relbody"
+    // 正文是我们自己随包发的 md，不是用户或云端给的；renderMarkdown 与助手气泡同一套（已转义）
+    body.innerHTML = renderMarkdown(n.body || "")
+    // 说明里指向别的发布说明的相对链接（如 [发布说明-0.1.19.md](...)）在这里点不开，
+    // 而且会把整个应用导航走 —— 面板里本来就按版本列全了，直接退化成普通文字。
+    body.querySelectorAll("a").forEach((a) => {
+      if (!/^https?:\/\//i.test(a.getAttribute("href") || "")) a.replaceWith(document.createTextNode(a.textContent))
+      else { a.target = "_blank"; a.rel = "noopener noreferrer" }
+    })
+    d.append(s, body); p.append(d)
+  })
+}
+async function openReleasePanel() {
+  const p = document.getElementById("relPanel")
+  if (!p) return
+  if (p.classList.contains("on")) { p.classList.remove("on"); return }
+  document.getElementById("ntPanel")?.classList.remove("on")   // 两个面板同一个角，别叠在一起
+  p.classList.add("on")
+  if (relCache) { renderReleasePanel(relCache); return }        // 随包固定，取一次就够
+  let err = false
+  try {
+    const j = await (await fetch("api/release-notes", { signal: AbortSignal.timeout(8000) })).json()
+    if (j && j.ok) relCache = j; else err = true
+  } catch { err = true }
+  renderReleasePanel(relCache, err)
+}
+document.getElementById("relBtn").innerHTML = ic("sparkle")
+document.getElementById("relBtn").addEventListener("click", (e) => { e.stopPropagation(); openReleasePanel() })
+document.getElementById("relPanel").addEventListener("click", (e) => e.stopPropagation())
+document.addEventListener("click", () => document.getElementById("relPanel")?.classList.remove("on"))
+document.addEventListener("keydown", (e) => { if (e.key === "Escape") document.getElementById("relPanel")?.classList.remove("on") })
 
 document.getElementById("ntBtn").innerHTML = ic("feedback")
 document.getElementById("ntBtn").addEventListener("click", (e) => { e.stopPropagation(); openNoticePanel() })
