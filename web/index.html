@@ -6462,8 +6462,7 @@ function clShow(mode, st) {
       '<div class="mm-kv"><span>可用技能</span><b>' + ((p.skills && p.skills.length) ? p.skills.map(esc).join("、") : "全部") + "</b></div>" +
       '<div id="clSkills"></div>' +
       '<div class="mm-hint" style="margin-top:12px">积分按每轮对话的实际消耗扣减：日积分每天 0 点(UTC)重置，'
-      + "月积分每月 1 日(UTC)重置，两条线哪条用尽都会暂停调用。<br>积分、可选模型与技能由管理员在后台调整；"
-      + "点上面的「刷新」即可拉到最新，换模型在顶部的 🧠 里选。</div>"
+      + "月积分每月 1 日(UTC)重置，两条线哪条用尽都会暂停调用。</div>"
     loadClSkills()
   }
 }
