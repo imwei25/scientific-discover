@@ -910,6 +910,10 @@ async function syncProfileSoon() {
 let cloudQuotaCache = null
 const CLOUD_QUOTA_TTL = 20_000
 const clearCloudQuotaCache = () => { cloudQuotaCache = null }
+// 当前积分汇率（1 积分 = ? 美元）。只读上面那份缓存，【绝不】为它发网络请求 ——
+// 用它的地方（会话列表的"本会话消耗"）是每次刷侧栏都跑的高频路径，为一个几乎不变的
+// 运营参数每次去问云端不值当。没登云端账号 / 还没问过 → 退回与前端同一个缺省 0.01。
+const creditRate = () => Number(cloudQuotaCache?.data?.creditUsd) || CREDIT_USD_SRV
 async function cloudQuota(fresh = false) {
   if (!cloudLoggedIn()) return null           // 容器/自设 API 形态：没有云端积分这回事
   const now = Date.now()
@@ -1127,6 +1131,51 @@ const quotaUsed = () => loadQuota().cost
 const runningCost = new Map()
 const runningTotal = () => { let t = 0; for (const v of runningCost.values()) t += v; return t }
 const quotaUsedLive = () => quotaUsed() + runningTotal()   // 今日已入账 + 各在跑轮的实时成本
+
+// ---- 会话真实成本 = 自己 + 所有子会话 ----------------------------------------
+//
+// 【为什么不能只看父会话的 cost】子代理（task 工具）跑在【子会话】里，opencode 把它的花费记在
+// 那个子会话的 cost 上，【不会】滚进父会话。实测一条父会话 $0.2713、它的子会话另有 $0.1338 ——
+// 只读父会话就漏掉了三分之一，而且漏的方向永远是"少记"：越是重活（一轮开好几个子代理）漏得越多，
+// 额度闸就越拦不住。没有任何人会来报这个错，只会月底对账时发现账对不上。
+//
+// 【口径要与结算的两端一致】开轮前的 cost0 与轮末的 c1 必须用同一个函数算，否则差值毫无意义。
+const childIndex = (all) => {
+  const m = new Map()
+  for (const s of all || []) if (s?.parentID) {
+    if (!m.has(s.parentID)) m.set(s.parentID, [])
+    m.get(s.parentID).push(s)
+  }
+  return m
+}
+// 一棵子树的成本合计（含自己）。depth 只是防环/防病态深度的护栏：正常最多两三层。
+const subtreeCost = (kids, s, depth = 0) => {
+  let sum = Number(s?.cost) || 0
+  if (depth >= 6) return sum
+  for (const k of kids.get(s?.id) || []) sum += subtreeCost(kids, k, depth + 1)
+  return sum
+}
+/** 后代成本合计（不含 sid 自己）。给"自己那份已经拿到了"的结算路径用。 */
+const descendantCost = (all, sid) => {
+  const kids = childIndex(all)
+  let sum = 0
+  for (const k of kids.get(sid) || []) sum += subtreeCost(kids, k, 1)
+  return sum
+}
+/**
+ * 会话真实累计成本（自己 + 所有后代）。
+ * 自己那份的语义与改动前的 `?.cost || 0` 完全一致：SDK 把 4xx/5xx 当数据回（不抛），算 0；
+ * 只有网络层真抛时才抛给调用方，让它走估算兜底。列不出全表则降级成"只算自己"——
+ * 已经拿到的那份不能跟着一起丢。
+ * race：停机路径用的超时包装（docker 宽限期只有 10 秒，那里不能无限等）。
+ */
+export async function sessionCostTotal(sid, race = (p) => p) {
+  const self = Number(un(await race(client.session.get({ path: { id: sid } })))?.cost) || 0
+  try {
+    const all = un(await race(client.session.list()))
+    return self + descendantCost(Array.isArray(all) ? all : [], sid)
+  } catch { return self }
+}
 // 面向用户的额度文案一律换算成积分（1 积分 = $0.01）。前端 index.html 明写"用户面前【不出现美元】"，
 // 而额度用尽时弹出的这两条恰恰是容器形态用户唯一一次看到真实上限的地方 —— 顶栏写着
 // "今日已用 42 / 150 积分"，撞限时却弹 "$0.42 / $1.50"，当面打架。取整方向与前端一致（少显示不多显示）。
@@ -2422,7 +2471,8 @@ function startJob(sid, sentText, modId, forceModel) {
         if (st) broadcast("workflow", { cur: st.cur || null, done: st.done || [], failed: st.failed || [], implied: st.implied || [], stale: st.stale || [], staleUp: st.staleUp || [], halted: st.halted || null, gateBypass: gateBypassed(sid) })
       } catch { /* 单次失败无所谓，下个周期再试 */ }
     }, 25000)
-    let cost0 = 0; try { cost0 = un(await client.session.get({ path: { id: sid } }))?.cost || 0 } catch {}   // 本轮前累计成本，用于算增量
+    // 本轮前累计成本（含子会话，见 sessionCostTotal），用于算增量
+    let cost0 = 0; try { cost0 = await sessionCostTotal(sid) } catch {}
     job.cost0 = cost0   // 挂到 job 上：容器停机时 gracefulExit 要用它把本轮已花的钱结算掉（见文件末尾）
     let result, promptErr = null
     try {
@@ -2450,7 +2500,7 @@ function startJob(sid, sentText, modId, forceModel) {
     if (!job.settled) {   // 容器停机时 gracefulExit 可能已替本轮结算过（它随后 abort 会让上面的 prompt 立刻返回、走到这里）——别结第二次
       job.settled = true
       try {
-        const c1 = un(await client.session.get({ path: { id: sid } }))?.cost || 0
+        const c1 = await sessionCostTotal(sid)   // 含本轮子代理跑掉的钱（它记在子会话上）
         addCost(c1 - cost0 + (await settleEstimate()))
       } catch {
         // session.get 都失败时真实增量拿不到了，至少把内存里的估算记上（比整轮漏账好；settled 已占坑，不会双记）
@@ -3321,6 +3371,18 @@ export const server = http.createServer(async (req, res) => {
     // 会话列表 + 项目分组 + 文件夹分组（排除子 agent 会话，按更新时间倒序）。前端据此分组渲染。
     if (req.method === "GET" && u.pathname === "/api/sessions") {
       const all = un(await client.session.list()) || []
+      // ---- 每条会话「一共花了多少」----
+      // opencode 逐会话记着累计 cost（美元，已含缓存折扣），列表里本来就带着，白拿不用可惜。
+      // 子会话必须加进来（子代理的花费记在子会话上，不滚进父会话）—— 口径与每日额度结算共用
+      // 同一组函数（childIndex / subtreeCost），两处永远一致。这里一次建索引给全表用，
+      // 别每条会话各建一遍（那是 O(n²)，几百条会话的侧栏每次刷新都要付一遍）。
+      const byParent = childIndex(all)
+      // 【老 opencode 没有 cost 字段】那时全站会算出 0，前端会照着说"尚未产生模型消耗"——
+      // 对一条跑了两小时的会话这么说，比不显示糟得多。所以一个数字都没有时干脆不给这两个字段，
+      // 前端见 undefined 就不挂提示（typeof 判的就是这个）。注意 cost 为 0 是【合法数字】，
+      // 新装的机器上人人都是 0，不能用真值判断。
+      const hasCost = all.some((s) => typeof s?.cost === "number")
+      const rate = creditRate()
       const sessions = all
         .filter((s) => !s.parentID)
         .sort((a, b) => (b.time?.updated || 0) - (a.time?.updated || 0))
@@ -3333,7 +3395,12 @@ export const server = http.createServer(async (req, res) => {
           // 界面包可单独热更新，老 index.html 配新 server.mjs 是真实组合，它读这两个字段
           // 决定徽标与临期提醒条；给 true/null 让它显示"永久"、提醒条恒空，不会吓唬用户。
           // pinned 恒 false 同理：置顶已删，但老界面包读它分组，给 false 让「置顶」组恒空。
+          const usd = subtreeCost(byParent, s)
           return { id: s.id, title: s.title || "(未命名)", updated: s.time?.updated || 0, running: !!jobs.get(s.id)?.running,
+            // 美元与积分都给：前端只显示积分（用户面前不出现美元，见 index.html 的说明），
+            // costUsd 留着排障与将来对账用。credits 不取整 —— 一轮往往不到 1 积分，
+            // 在这里 floor 会让绝大多数会话显示成 0，取整口径交给前端的 fmtCreditsFine。
+            ...(hasCost ? { costUsd: Math.round(usd * 1e6) / 1e6, credits: usd / rate } : {}),
             module: mod, moduleName: MODULE_DEFS[mod]?.name || mod,
             projectId, folderId: folderOf(s.id), orders: m.orders || {},
             pinned: false, permanent: true, expiresAt: null }
@@ -3345,7 +3412,7 @@ export const server = http.createServer(async (req, res) => {
       const folders = META.folders.filter((f) => used.has(f.id))
         .sort((a, b) => (a.order ?? 0) - (b.order ?? 0))
         .map((f) => ({ id: f.id, name: f.name, path: f.path, order: f.order ?? 0 }))
-      return send(res, 200, "application/json", JSON.stringify({ projects, folders, sessions }))
+      return send(res, 200, "application/json", JSON.stringify({ creditUsd: rate, projects, folders, sessions }))
     }
 
     // 会话重命名：写回 opencode（title 非 ""/"web" 时自动补名逻辑不会再覆盖它）
@@ -5279,12 +5346,16 @@ async function gracefulExit(sig) {
     try {
       // 给每次查询单独设超时：opencode 若已卡死，这里不能一直等 —— docker 的宽限期只有 10 秒，
       // 拖过去就是 SIGKILL，下面的 killPort 也执行不到，反而留下孤儿 opencode 进程。
-      const left = Math.max(500, settleDeadline - Date.now())
-      const info = await Promise.race([
-        client.session.get({ path: { id: job.sid } }).then(un),
-        new Promise((_, rej) => setTimeout(() => rej(new Error("settle timeout")), left)),
+      // 【超时按剩余预算现算】sessionCostTotal 内部要打两次 opencode（自己 + 全表），
+      // 各自都得受同一条 deadline 管；写死一个固定值的话两次相加就可能冲出宽限期。
+      // 【别在这儿顺手 un()】sessionCostTotal 自己会 un，包两层的话 {data:[...]} 会被剥成
+      // 数组之后又被当成"没有 data 的普通值"——两次剥离对数组恰好无害，但对将来任何一层返回
+      // 带 data 字段的对象就会静默拿错东西。race 只管超时，形状原样传回去。
+      const race = (p) => Promise.race([
+        p,
+        new Promise((_, rej) => setTimeout(() => rej(new Error("settle timeout")), Math.max(500, settleDeadline - Date.now()))),
       ])
-      const c1 = info?.cost || 0
+      const c1 = await sessionCostTotal(job.sid, race)
       // 真实增量之外，把"正在流式、还没被真实计费"的那一步按估算补上（job.estExtra 只算 real=0 的消息）。
       // 停机路径没时间逐条问权威状态，竞态窗口里可能极小幅高估——比整步漏账好。
       let est = 0; try { est = job.estExtra?.() || 0 } catch {}
