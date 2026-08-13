@@ -21,6 +21,7 @@
 import fs from "node:fs"
 import path from "node:path"
 import os from "node:os"
+import crypto from "node:crypto"
 import { spawn, execFileSync } from "node:child_process"
 
 const BLOCK_START = "<!-- sci-chat-bridge:start 由「聊天接入」自动注入，解绑时自动移除，请勿手工编辑 -->"
@@ -64,21 +65,29 @@ function saveState(s) {
 // launcher 传进来的 env 路径常带 \\?\ 前缀（长路径语法），子进程/TOML 里都别用它
 const stripLP = (p) => String(p || "").replace(/^\\\\\?\\/, "").replace(/^\/\/\?\//, "")
 // cc-connect 把 cmd 按【空格】拆分（实测），所以 cmd 里的每段路径都不能含空格。
-// 短路径（8.3）是最省事的解法；拿不到（卷禁用了 8.3）就在无空格处建 junction 兜底。
-function spaceFree(p) {
+// 短路径（8.3）是最省事的解法；拿不到（卷禁用了 8.3、或 cmd 引号被转义搅坏）就在
+// 无空格处建 junction 兜底。（导出仅为单测。）
+export function spaceFree(p) {
   p = stripLP(p)
   if (!p.includes(" ")) return p
   try {
     const out = execFileSync("cmd.exe", ["/c", `for %A in ("${p}") do @echo %~sA`], { windowsHide: true }).toString().trim()
     if (out && !out.includes(" ") && fs.existsSync(out)) return out
   } catch {}
-  // junction 兜底：建在 ProgramData（路径固定无空格）；只对目录建，文件用 目录junction+文件名
+  // junction 兜底：建在 ProgramData（路径固定无空格）；只对目录建，文件用 目录junction+文件名。
+  // 【名字必须用整个路径的哈希】曾用"路径前 12 字符的 hex"当名字——node 目录和包装器目录
+  // 都在 c:\users\<u>\ 下，前缀相同 → 两个目标撞进同一个 junction，包装器路径指进 node
+  // 目录找不到文件（真机踩过：Cannot find module ...\j_xxx\oc-wrap.mjs）。
   const st = fs.statSync(p)
   const targetDir = st.isDirectory() ? p : path.dirname(p)
   const juncRoot = path.join(process.env.ProgramData || "C:\\ProgramData", "niuma-chat-bridge")
   fs.mkdirSync(juncRoot, { recursive: true })
-  const name = "j_" + Buffer.from(targetDir.toLowerCase()).toString("hex").slice(0, 24)
+  const name = "j_" + crypto.createHash("sha1").update(targetDir.toLowerCase()).digest("hex").slice(0, 16)
   const junc = path.join(juncRoot, name)
+  // 已存在的 junction 要核对指向：同名但目标不对（旧版撞车的残留）就重建
+  try {
+    if (fs.existsSync(junc) && path.resolve(fs.readlinkSync(junc)).toLowerCase() !== path.resolve(targetDir).toLowerCase()) fs.rmSync(junc)
+  } catch {}
   if (!fs.existsSync(junc)) fs.symlinkSync(targetDir, junc, "junction")
   return st.isDirectory() ? junc : path.join(junc, path.basename(p))
 }

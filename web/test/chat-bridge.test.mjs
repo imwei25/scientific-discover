@@ -88,3 +88,17 @@ test("bind：找不到会话目录时报错不炸", async () => {
   const r = await B.bind("ses_missing")
   assert.equal(r.ok, false)
 })
+
+test("spaceFree：含空格的不同路径绝不能撞进同一个 junction（真机踩过的回归）", () => {
+  if (process.platform !== "win32") return
+  // 两个目录：共享长前缀（模拟 node 目录与包装器目录都在 c:\users\<u>\... 下）、都含空格
+  const d1 = path.join(tmp, "with space", "runtime", "node"); fs.mkdirSync(d1, { recursive: true })
+  const d2 = path.join(tmp, "with space", "app", "web", "chat-bridge"); fs.mkdirSync(d2, { recursive: true })
+  const f1 = path.join(d1, "node.exe"); fs.writeFileSync(f1, "x")
+  const f2 = path.join(d2, "oc-wrap.mjs"); fs.writeFileSync(f2, "y")
+  const r1 = B.spaceFree(f1), r2 = B.spaceFree(f2)
+  assert.ok(!r1.includes(" ") && !r2.includes(" "), "结果无空格")
+  assert.ok(fs.existsSync(r1) && fs.existsSync(r2), "两个结果都真实存在")
+  assert.equal(fs.readFileSync(r2, "utf8"), "y", "r2 指向的是包装器本尊，不是别的目录")
+  assert.notEqual(path.dirname(r1), path.dirname(r2), "不同目标目录不共用 junction")
+})
