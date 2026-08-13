@@ -719,7 +719,10 @@ export const WORKFLOWS = {
         deps: ["write", "humanize"],
         form: [{ id: "fmt", label: "输出格式", type: "select", default: "docx", options: [
           { v: "docx", t: "Word（.docx）" }, { v: "pdf", t: "PDF" }, { v: "both", t: "两种都要" }] }],
-        emits: ["manuscript*.docx", "manuscript*.pdf"], render: "doc",
+        // ★ *_humanized：render_docx.sh 不带 -o 时输出=输入名换后缀，润色稿走 *_humanized.md 契约
+        //   （humanize 步的通配允许非 manuscript 前缀），排出来的 <名>_humanized.docx 不收的话
+        //   这一格永远灰（2026-08-13 综述模块同类缺口实测，见 wf-state.test.mjs 出件契约组）。
+        emits: ["manuscript*.docx", "manuscript*.pdf", "*_humanized.docx", "*_humanized.pdf"], render: "doc",
         hint: "没指定期刊就用通用送审格式，交付时附查重工具推荐" },
     ],
     // mechanism-figure：论文常要一张图形摘要 / 机制示意图，它不是流程里的固定步骤（可选配图），
@@ -794,7 +797,16 @@ export const WORKFLOWS = {
         // ★ emitsNot：review*.docx 会把【评审/核查报告转的 docx】也收走（review_report.docx、
         //   refcheck_report.docx），agent 顺手把报告排成 Word 给用户看，「排版出件」就凭空绿了 ——
         //   而真正的综述成稿一个字还没排。终稿在（review.docx / manuscript.docx），报告不算。
-        emits: ["manuscript*.docx", "manuscript*.pdf", "review*.docx", "review*.pdf", "proposal*.docx", "proposal*.pdf"],
+        // ★ 通配要覆盖【成文步契约的全部命名系】换后缀的结果：render_docx.sh 不带 -o 时输出=
+        //   输入名换后缀，成文步允许 literature_review.md / *_review.md、润色步允许 *_humanized.md，
+        //   于是 literature_review.docx / PD1_review.docx / literature_review_humanized.docx 都是
+        //   合规出件 —— 原来只收 review* 开头，这些全灰、前端当前步永远钉在「排版出件」
+        //   （2026-08-13 模拟实测：单轮全流程 + literature_review 命名 = 全部做完条子说还没出件）。
+        //   *_review.docx 不会误收报告：review_report / refcheck_report 都不以 _review 结尾，
+        //   emitsNot 再兜一层。
+        emits: ["manuscript*.docx", "manuscript*.pdf", "review*.docx", "review*.pdf", "proposal*.docx", "proposal*.pdf",
+          "literature_review*.docx", "literature_review*.pdf", "*_review.docx", "*_review.pdf",
+          "*_humanized.docx", "*_humanized.pdf"],
         emitsNot: ["review_report*", "refcheck_report*"], render: "doc" },
     ],
     extra: ["render-docx"],
@@ -1030,7 +1042,11 @@ export const WORKFLOWS = {
           { v: "docx", t: "Word（.docx）" }, { v: "pdf", t: "PDF" }, { v: "both", t: "两种都要" }] }],
         // ★ 不收 review*：标书的终稿是 proposal / manuscript，review_report.docx 是评审报告转的 Word
         //   （agent 常顺手排一份给用户看），收进来会让「标书最终成稿」在正文一字未排时就打绿勾。
-        emits: ["manuscript*.docx", "manuscript*.pdf", "proposal*.docx", "proposal*.pdf"], render: "doc" },
+        // ★ grant_proposal*：写作步的契约明确允许 grant_proposal*.md，而 render_docx.sh 不带 -o 时
+        //   输出=输入名换后缀 → grant_proposal.docx 不中 proposal*.docx（glob 从头匹配），
+        //   这一格在最常见命名下永远灰（2026-08-13 实测，综述模块同类缺口一并修）。
+        emits: ["manuscript*.docx", "manuscript*.pdf", "proposal*.docx", "proposal*.pdf",
+          "grant_proposal*.docx", "grant_proposal*.pdf"], render: "doc" },
     ],
     // ★ research-scan（领域扫描）与 novelty-check（新颖性裁定）本质上都要【检索文献】——
     //   白名单里不给检索技能，它们一动手就撞模块闸、整轮作废（实测在另一会话里复现过：

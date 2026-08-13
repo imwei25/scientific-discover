@@ -231,6 +231,76 @@ test("归因不连坐：多技能轮里的孤儿文件不许把没产出的步�
   assert.ok(!(WFS.wfLoad(dir).attributed || []).length, "孤儿文件是谁写的无从判定，多技能轮不归因")
 })
 
+// ---- 以下一组来自 2026-08-13 综述模块实测（用户反馈「全部做完了，条子说还没出件/还在润色」）----
+test("出件契约覆盖成文步全部命名系：literature_review / *_review / *_humanized 的 docx 都算出件", () => {
+  // render_docx.sh 不带 -o 时输出=输入名换后缀，成文契约允许的每一种 .md 命名都会产生对应 .docx
+  for (const name of ["literature_review.docx", "PD1_review.docx", "literature_review_humanized.docx"]) {
+    const dir = tmp()
+    touch(dir, "literature_review.md")
+    touch(dir, "refcheck_report.md", "核查结论：全部通过。")
+    touch(dir, name)
+    seed(dir, { module: "review", form: {}, done: [] })
+    const st = WFS.wfSyncDone(dir, "review",
+      { "literature_review.md": 1, "refcheck_report.md": 2, [name]: 3 })
+    assert.ok(st.done.includes("render"), `${name} 应点亮「排版出件」`)
+  }
+})
+
+test("grant：grant_proposal.docx 算「标书最终成稿」的产物（proposal* 从头匹配收不到它）", () => {
+  const dir = tmp()
+  touch(dir, "grant_proposal.md"); touch(dir, "grant_proposal.docx")
+  seed(dir, { module: "grant", form: {}, done: [] })
+  const st = WFS.wfSyncDone(dir, "grant", { "grant_proposal.md": 1, "grant_proposal.docx": 2 })
+  assert.ok((st.done || []).includes("write"))
+  assert.ok((st.done || []).includes("render"))
+})
+
+test("多技能轮扩展名唯一归因：单轮全流程 + 自由命名 docx，出件步不再永远灰", () => {
+  const dir = tmp()
+  seed(dir, { module: "review", form: {}, done: [] })
+  // 综述最常见跑法：一轮跑完全流程。出件取了自由名（中文），.docx 只有出件步契约收 → 唯一 → 归因
+  const fstate = { "evidence_table.csv": 1, "PD-1综述.md": 2, "refcheck_report.md": 3, "PD-1综述.docx": 4 }
+  WFS.wfAttribute(dir, "review", ["search-lit", "literature-review", "reference-check", "render-docx"],
+    ["evidence_table.csv", "PD-1综述.md", "refcheck_report.md", "PD-1综述.docx"], fstate)
+  assert.deepEqual(WFS.wfLoad(dir).attributed, ["render"], ".docx 唯一映射到出件步；.md 人人都写，歧义不归因")
+  const st = WFS.wfSyncDone(dir, "review", fstate)
+  assert.ok(st.done.includes("render"))
+})
+
+test("多技能轮里同一扩展名有两个候选步 → 歧义不归因（唯一性是硬条件）", () => {
+  const dir = tmp()
+  seed(dir, { module: "paper", form: { materials: ["rawdata"], studyType: "retrospective" }, done: [] })
+  // paper 的作图步（fig*.pdf）与出件步（manuscript*.pdf）都收 .pdf → 一份无主 pdf 谁也不许认领
+  WFS.wfAttribute(dir, "paper", ["nature-figure", "render-docx"],
+    ["extra_chart.pdf"], { "extra_chart.pdf": 1 })
+  assert.ok(!(WFS.wfLoad(dir).attributed || []).length)
+})
+
+test("emitsNot 黑名单不走归因侧门：报告转 docx 不许归因给出件步", () => {
+  const dir = tmp()
+  seed(dir, { module: "review", form: {}, done: [] })
+  // refcheck_report.docx 被出件步的 emitsNot 点名排除 —— emits 那条路挡住了，归因这条侧门也必须挡
+  WFS.wfAttribute(dir, "review", ["reference-check", "render-docx"],
+    ["refcheck_report.md", "refcheck_report.docx"],
+    { "review.md": 1, "refcheck_report.md": 2, "refcheck_report.docx": 2 })
+  assert.ok(!(WFS.wfLoad(dir).attributed || []).length)
+})
+
+test("被跳过的可选步不补 implied：综述跳过润色直接出件，「语言润色」保持灰而不是谎称跑过", () => {
+  const dir = tmp()
+  touch(dir, "review.md")
+  touch(dir, "refcheck_report.md", "核查结论：全部通过。")
+  touch(dir, "review.docx")
+  seed(dir, { module: "review", form: {}, done: [] })
+  const st = WFS.wfSyncDone(dir, "review",
+    { "review.md": 1, "refcheck_report.md": 2, "review.docx": 3 })
+  assert.ok(st.done.includes("render"))
+  assert.ok(!st.done.includes("humanize"), "可选步没跑就是没跑，不进 done")
+  assert.ok(!st.implied.includes("humanize"), "更不许标「跑过了但没有产物」")
+  // 非可选步的单调补齐不受影响（search 无产物仍标 implied）
+  assert.ok(st.done.includes("search") && st.implied.includes("search"))
+})
+
 test("有合约产物就不归因；闸永不归因", () => {
   const dir = tmp()
   seed(dir, { module: "review", form: {}, done: [] })

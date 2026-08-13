@@ -359,33 +359,53 @@ const DELIVER_EXT = /\.(md|csv|tsv|xlsx|docx|pdf|pptx|png|jpe?g|svg|webp|bib|ris
  * "AI 明明干完了，条子还停在第一步"。
  * 【边界】① 只归因本轮真调过的技能；② 只在确有"无主"交付物时归因（有合约产物的照常走
  * emits 那条路）；③ 闸永不归因 —— 闸的结论只能由报告得出；④ 该步已有合约产物的不归因；
- * ⑤ **只在本轮恰好调了一个技能时归因**。孤儿文件是谁写的无从判定 —— 多技能轮里把它算给
- * 每个调过的技能，等于一份无关杂散文件把"这一轮什么都没产出的步骤"也连坐补绿
- * （模拟用户测试抓到的 Major：render 正常出件 + humanize 一字未动 + 一份 random_notes.md，
- * 「语言润色」被打了绿勾——假绿比假灰危险得多，用户不会去检查一个显示"已完成"的东西）。
- * 单技能轮里"孤儿是它写的"这条推断才站得住；多技能轮宁可不归因，靠 implied 与用户自己判断。
- * 归因是"整轮只干这一件事 + 正常收场 + 有无主产物"三个旁证的合取，弱于 emits 命中，
- * 但比"永远灰着"诚实 —— 它错的时候错在"提前打勾"，emits 缺席时错的是"永远不打勾"。
+ * ⑤ **单技能轮任意交付体裁都可归因；多技能轮只做「扩展名唯一映射」归因**。
+ * 多技能轮里把孤儿算给每个调过的技能是连坐（模拟用户测试抓到的 Major：render 正常出件 +
+ * humanize 一字未动 + 一份 random_notes.md，「语言润色」被打了绿勾——假绿比假灰危险得多）。
+ * 但一刀切不归因又把【最常见的跑法】漏了：综述/标书常常一轮跑完全流程（检索+成文+核查+出件
+ * 四技能同轮），模型给出件取个自由名（PD-1综述.docx），出件步就永远灰（2026-08-13 实测）。
+ * 折中：多技能轮只对 docx/pdf/pptx 这三种【重交付体裁】归因，且要求"本轮调过的技能里，
+ * 契约声明收这个扩展名的候选步恰好一个"——.md 人人都写，永远歧义、永远不归因，
+ * random_notes.md 那类连坐照旧被挡住；而 .docx 在一条流水线里几乎只有出件步收。
+ * 归因是弱于 emits 命中的旁证推断 —— 它错的时候错在"提前打勾"，emits 缺席时错的是"永远不打勾"。
  */
 export function wfAttribute(outDir, modId, skills, changed, fstate) {
   if (!skills?.length || !changed?.length) return
-  if (skills.length !== 1) return   // 边界⑤：多技能轮无法判定孤儿产物归谁，一律不归因
   try {
     const st = wfLoad(outDir)
     if (!st || st.module !== modId) return
     const steps = WF.stepsFor(modId, st.form || {})
     if (!steps.length) return
     const claimed = (f) => steps.some((s) => emitHit(s, f))
-    const orphan = changed.some((f) => DELIVER_EXT.test(f) && !claimed(f))
-    if (!orphan) return
+    // ★ 被【任何一步】的 emitsNot 点名的文件不是"自由命名的孤儿"，是契约里明写【不算产物】
+    //   的东西（refcheck_report.docx = 核查报告转的 Word）。不剔掉的话，归因会从侧门把 emitsNot
+    //   防住的假绿原样放回来：报告一转 docx，「排版出件」就凭空绿了（2026-08-13 场景 8 实测）。
+    //   注意判据是 emitsNot 单独命中即拉黑，不要求同一步的 emits 也命中 —— refcheck_report* 这类
+    //   条目本来就是纯黑名单（它不命中该步任何 emits，纯防御地点名"这名字不是成稿"）。
+    const blocked = (f) => steps.some((s) => (s.emitsNot || []).some((g) => emitMatch(g, f)))
+    const orphans = changed.filter((f) => DELIVER_EXT.test(f) && !claimed(f) && !blocked(f))
+    if (!orphans.length) return
     const files = Object.keys(fstate || {})
     const attributed = new Set(st.attributed || [])
     let added = false
-    for (const sk of skills) {
-      const own = (s) => s.skill === sk || (s.skillAlias || []).includes(sk)
-      const hit = steps.find((s) => own(s) && !s.gate && !attributed.has(s.id)
-        && !files.some((f) => emitHit(s, f)))
+    const ownedBy = (s) => skills.some((sk) => s.skill === sk || (s.skillAlias || []).includes(sk))
+    // 候选步四条件：本轮调过它的技能、不是闸、没归因过、还没有任何合约产物（边界①③④）
+    const open = (s) => ownedBy(s) && !s.gate && !attributed.has(s.id) && !files.some((f) => emitHit(s, f))
+    if (skills.length === 1) {
+      // 单技能轮："孤儿是它写的"这条推断站得住（原边界⑤），保持旧行为
+      const hit = steps.find(open)
       if (hit) { attributed.add(hit.id); added = true }
+    } else {
+      // 多技能轮：扩展名唯一映射。ext 取孤儿文件后缀；候选步的 emits 里必须显式声明过该后缀
+      //（"figures/*" 这类无后缀通配不算声明 —— 宁可少归因，别把歧义当唯一）。
+      const declares = (s, ext) => (s.emits || []).some((g) => g.toLowerCase().endsWith("." + ext))
+      for (const f of orphans) {
+        const m = /\.(docx|pdf|pptx)$/i.exec(f)
+        if (!m) continue
+        const ext = m[1].toLowerCase()
+        const cands = steps.filter((s) => open(s) && declares(s, ext))
+        if (cands.length === 1) { attributed.add(cands[0].id); added = true }
+      }
     }
     if (added) { st.attributed = [...attributed]; wfSave(outDir, st) }
   } catch (e) { console.warn(`[workflow] 兜底归因失败：${e.message}`) }
@@ -496,14 +516,19 @@ export function wfSyncDone(outDir, modId, fstate) {
   //   补齐的步骤单独记进 implied，界面标"无产物"而不是绿勾 —— 成因可能是"真跑了但没产物"，
   //   也可能是"用户明说跳过"，服务端分不清，两种都标中性的"无产物"比一律绿勾诚实。
   //   **闸不补**：凭"后面做完了"推断闸通过是 fail-open。
+  //   **可选步不补**：可选步的常态是【被跳过】，"后面做完了"推不出"它跑过了"——综述的
+  //   「语言润色(可选)」被跳过后照补 implied，界面那句"跑过了但没有产物文件"就是在撒谎
+  //   （2026-08-13 实测：每一次跳过润色直接出件都触发）。不补 = 保持灰 +「可选」，诚实。
   //   判据必须是"这一步有没有产物"而不是"它在不在 done 里"（幂等，防补齐标记被擦除）。
+  const vals = WF.withDefaults(modId, st.form || {})
   const implied = new Set()
   let lastDone = -1
   ordered.forEach((s, i) => { if (done.has(s.id)) lastDone = i })
   for (let i = 0; i < lastDone; i++) {
     const s = ordered[i]
     // 排除 stale：那一步刚被上面从 done 里摘出去，这里再加回来会把"已过期"的提示挤掉。
-    if (!s.gate && !failed.has(s.id) && !stale.has(s.id) && !hasArtifact(s) && !done.has(s.id)) {
+    if (!s.gate && !failed.has(s.id) && !stale.has(s.id) && !hasArtifact(s) && !done.has(s.id)
+        && !WF.isOptional(s, vals)) {
       done.add(s.id); implied.add(s.id)
     }
   }
