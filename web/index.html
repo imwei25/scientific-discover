@@ -8137,11 +8137,12 @@ document.addEventListener("visibilitychange", () => { if (!document.hidden) refr
         }))
         mSel.innerHTML = opts.join("")
       }).catch(function () { /* 拿不到清单就只留「跟随界面」一项 */ })
-      // 会话下拉。默认选中：已绑定就显示当前绑定的那个（让用户看清绑的是谁）；
-      // 还没绑定时，默认选中【当前正在看的这个会话】——最常见的操作就是"把眼前这个接进去"。
+      // 会话下拉。默认选中【当前正在看的这个会话】——最常见的操作就是"把眼前这个接进去/换绑过去"。
+      // 当前绑定的是谁看下面 cbBoundHint 那行提示即可，不必占用下拉的默认选中。
+      // 只有停在首页、没有打开任何会话时（sessionId 为空）才退回显示当前绑定的会话。
       return jget("api/sessions").then(function (d) {
         var ss = (d && d.sessions) || []
-        var pick = st.boundSid || (typeof sessionId !== "undefined" ? sessionId : "") || ""
+        var pick = (typeof sessionId !== "undefined" && sessionId ? sessionId : "") || st.boundSid || ""
         var inList = ss.some(function (s) { return s.id === pick })
         selEl.innerHTML = ss.slice(0, 50).map(function (s) {
           return '<option value="' + esc(s.id) + '"' + (s.id === pick ? " selected" : "") + ">" + esc(s.title || s.id) + "</option>"
