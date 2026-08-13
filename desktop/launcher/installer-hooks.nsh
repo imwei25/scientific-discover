@@ -36,7 +36,8 @@
   ; 而覆盖安装会把技能与前端换成本安装包自带的那套 —— 状态文件却还写着"我在用
   ; 2026.7.30 那版"，于是客户端认为自己已是最新、不再提示更新，回退列表里的"出厂版"
   ; 指的也是上一个安装包的内容。清掉它们，装完就是干净的出厂状态。
-  ; 【不动 outputs / uploads / cloud-state.json】用户的产出、上传与登录态要跨升级留着。
+  ; 【不动 outputs / uploads / cloud-state.json / chat-bridge\】用户的产出、上传、登录态
+  ; 与聊天接入的绑定状态（企微凭证 + 绑定的会话）要跨升级留着。
   DetailPrint "清理上一版的在线更新状态…"
   RMDir /r "$INSTDIR\bundle\app\skill-packs"
   RMDir /r "$INSTDIR\bundle\app\web-packs"
@@ -167,6 +168,11 @@ nm_migrate_done:
   Delete "$INSTDIR\bundle\app\web\cloud-state.json"
   Delete "$INSTDIR\bundle\app\web\model-config.json"
   Delete "$INSTDIR\bundle\app\web\sessions-meta.json"
+  ; 聊天接入的运行期状态也是凭证：state.json 存企微 bot_id/bot_secret，config.toml 是
+  ; 由它生成的 cc-connect 配置（同样含 secret），bridge.log/wrap.log 是日志。整目录都是
+  ; 运行期产物（安装器没登记过），走"有用户数据时只留 outputs/uploads"的分支必然被留下，
+  ; 所以和 cloud-state.json 同待遇，在这里显式删。
+  RMDir /r "$INSTDIR\bundle\app\chat-bridge"
   RMDir /r "$INSTDIR\bundle\app\.opencode"
   RMDir /r "$INSTDIR\bundle\app\skill-packs"
   RMDir /r "$INSTDIR\bundle\app\web-packs"

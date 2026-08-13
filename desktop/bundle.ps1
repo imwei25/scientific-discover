@@ -424,6 +424,10 @@ $dirty = @("$App\web\model-config.json", "$App\web\sessions-meta.json",
            "$App\headless-gateway.log",
            "$App\serve.out", "$App\serve.err", "$App\server.log")
 foreach ($f in $dirty) { if (Test-Path $f) { Remove-Item $f -Force; Write-Host "  删除 $f" -ForegroundColor Yellow } }
+# 聊天接入的运行期状态：state.json 存企微 bot_id/bot_secret（开发机联调过一次就有），
+# config.toml 是含 secret 的生成物，其余是日志。整目录都是运行期产物，包里不该有——
+# 混进安装器等于把开发机的测试机器人发给客户（与 cloud-state.json 同类）。
+if (Test-Path "$App\chat-bridge") { Remove-Item "$App\chat-bridge" -Recurse -Force -Confirm:$false; Write-Host "  删除 $App\chat-bridge" -ForegroundColor Yellow }
 foreach ($d in @("$App\outputs", "$App\uploads", "$App\tasks")) {
   if (Test-Path $d) { Get-ChildItem $d -Force | Remove-Item -Recurse -Force -Confirm:$false }
 }
@@ -451,6 +455,9 @@ Write-Host "  写入出厂时间戳 factoryAt=$factoryAt（$([DateTimeOffset]::F
 # 收尾自检：整个 staging 里绝不能再有任何 apiKey 字样的 json（opencode.json 由上面写的干净基线覆盖）
 $leak = Get-ChildItem $App -Recurse -Include "model-config.json","cloud-state.json" -ErrorAction SilentlyContinue
 if ($leak) { throw "打包中止：仍存在 model-config.json —— $($leak.FullName -join '; ')" }
+# chat-bridge\ 按目录查而不是按文件名查：它的文件叫 state.json / config.toml，名字太通用，
+# 全树按名扫会误伤 .venv 里第三方包自带的同名文件。
+if (Test-Path "$App\chat-bridge") { throw "打包中止：仍存在 chat-bridge\（含企微 bot 凭证）—— $App\chat-bridge" }
 
 # ================= 7. 汇总自检 =================
 Step "汇总自检"
