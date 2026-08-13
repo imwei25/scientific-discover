@@ -64,7 +64,9 @@ export function listLocal() {
   let names = []
   try { names = fs.readdirSync(STORE(), { withFileTypes: true }).filter((e) => e.isDirectory()).map((e) => e.name) } catch {}
   return names
-    .filter((n) => !n.startsWith(".") && fs.existsSync(path.join(STORE(), n, "skills")))
+    // 金库模式下归档以 archive.pak 加密留存（明文 skills\ 被删），两者有其一即可回退
+    .filter((n) => !n.startsWith(".") &&
+      (fs.existsSync(path.join(STORE(), n, "skills")) || fs.existsSync(path.join(STORE(), n, "archive.pak"))))
     .map((n) => {
       let at = 0
       try { at = fs.statSync(path.join(STORE(), n)).mtimeMs } catch {}

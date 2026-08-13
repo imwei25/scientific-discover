@@ -10,6 +10,7 @@ import { setGlobalDispatcher, Agent } from "undici"
 import { createOpencodeClient } from "@opencode-ai/sdk"
 import * as Cloud from "./cloud-account.mjs"
 import * as SkillUp from "./skill-update.mjs"
+import * as SkillVault from "./skill-vault.mjs"
 import * as WebUp from "./web-update.mjs"
 import { shouldOfferUpdate } from "./pack-freshness.mjs"
 import { zip as zipPack } from "./minizip.mjs"
@@ -31,6 +32,27 @@ const UPLOADS = path.join(ROOT, "uploads")
 const OUTPUTS = path.join(ROOT, "outputs")
 fs.mkdirSync(UPLOADS, { recursive: true })
 fs.mkdirSync(OUTPUTS, { recursive: true })
+
+// ---- 技能金库：打包版把 26 个技能封成加密的 .opencode/skills.pak，此处解密还原 ----
+// 【必须在任何读技能目录的代码之前跑】下面的 SKILL_IDS 会 readdirSync 这个目录、opencode 也靠
+// 它（经全局联接）扫技能——两者都得先看到明文。源码检出/开发机没有 pak → 全程 no-op，行为不变。
+// 先擦上一次运行的还原态残留（崩溃/被 taskkill 时优雅退出没跑到，明文会留在盘上），再从 pak 解密。
+const SKILLS_DIR = path.join(ROOT, ".opencode", "skills")
+const SKILL_PACK_STORE = path.join(ROOT, "skill-packs")
+try {
+  if (SkillVault.hasVault(SKILLS_DIR)) {
+    const wiped = SkillVault.wipeMaterializedSkills(SKILLS_DIR)
+    const n = SkillVault.materializeSkills(SKILLS_DIR)
+    console.log(`[vault] 技能已从 skills.pak 解密还原：${n} 文件${wiped ? `（先清理上次残留 ${wiped} 项）` : ""}`)
+    // 兜底：若上次在"换版后重封归档"的瞬间被强杀，可能残留一份明文归档（skill-packs\<版本>\skills\）。
+    // 启动时把还带明文的归档补封一遍（opencode 只读主技能、不读归档，删归档明文安全）——幂等，无明文则 no-op。
+    try { const s = SkillVault.sealArchives(SKILL_PACK_STORE); if (s) console.log(`[vault] 补封残留明文归档 ${s} 个`) } catch {}
+  }
+} catch (e) {
+  // 解密失败是致命的：后台会没有任何科研技能。响亮报错，别静默退化成裸对话。
+  console.error(`[vault] 技能解密还原失败：${e?.message || e}\n` +
+    `    后台将没有科研技能可用。多半是 skills.pak 损坏或被杀软改动 —— 请重新安装。`)
+}
 
 const OC_URL = process.env.OC_URL || "http://127.0.0.1:4098"
 const client = createOpencodeClient({ baseUrl: OC_URL })
@@ -4824,7 +4846,16 @@ export const server = http.createServer(async (req, res) => {
           const version = String(b.version || "").trim()
           if (!version) return send(res, 400, "application/json", JSON.stringify({ ok: false, err: "缺 version" }))
           if (OC_MANAGED) killPort(OC_PORT)
+          // 金库模式下归档是加密的：回退要读 <版本>\skills\，先把它从 archive.pak 解回明文
+          if (SkillVault.hasVault(SKILLS_DIR)) SkillVault.materializeArchive(SKILL_PACK_STORE, version)
           SkillUp.rollback(version)
+        }
+        // 金库模式：换版/回退后立刻重封，保证"关闭态不落明文"——
+        //   · 主现用目录 → skills.pak（现用明文【不删】，opencode 重启后还要读）
+        //   · 新产生的旧版归档（swapIn 刚归档的那份是明文）→ <版本>\archive.pak 并删明文
+        if (SkillVault.hasVault(SKILLS_DIR)) {
+          try { SkillVault.sealSkills(SKILLS_DIR); SkillVault.sealArchives(SKILL_PACK_STORE) }
+          catch (e) { console.warn(`[vault] 换版后重封失败（关闭态可能残留明文，下次启动会覆盖）：${e?.message || e}`) }
         }
       } catch (e) {
         try { restarted = await restartOpencode() } catch {}   // 失败也要把 opencode 拉回来
@@ -5439,6 +5470,9 @@ async function gracefulExit(sig) {
   // opencode 是 detached+unref 的子进程，不主动收会变成孤儿。
   // 复用 restartOpencode 用的同一把刀：killPort(OC_PORT)（本进程没有留着 child 句柄可用）
   if (OC_MANAGED) { try { killPort(OC_PORT) } catch {} }
+  // 技能金库：opencode 停了、文件不再被占用，best-effort 擦掉还原态明文技能，让【关闭态】不落明文。
+  // 只在优雅退出这条路上跑；被 taskkill 强杀时跑不到，靠下次启动的 wipe 兜底（见顶部 vault 段）。
+  try { const w = SkillVault.wipeMaterializedSkills(SKILLS_DIR); if (w) exitLog(`[vault] 已擦除还原态明文技能 ${w} 项`) } catch {}
   exitLog("[exit] 完成")
   process.exit(0)
 }
