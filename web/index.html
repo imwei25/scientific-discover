@@ -7704,6 +7704,16 @@ document.addEventListener("visibilitychange", () => { if (!document.hidden) refr
   var txt = ov.querySelector("#idleTxt")
   ov.querySelector("#idleStay").addEventListener("click", bump)
   function fmt(ms) { var s = Math.max(0, Math.ceil(ms / 1000)); return Math.floor(s / 60) + ":" + ("0" + (s % 60)).slice(-2) }
+  // 退出登录要连着打好几个网络请求（cloud/status、api/logout、云端 logout），慢的时候一点反应都没有，
+  // 用户以为卡死了。真登出时盖一个「正在退出…」的遮罩，点了取消/失败就撤掉。
+  var loOv = document.createElement("div")
+  loOv.style.cssText = "position:fixed;inset:0;z-index:10000;display:none;align-items:center;justify-content:center;background:#0009"
+  loOv.innerHTML = '<div style="display:flex;align-items:center;gap:12px;padding:18px 26px;background:#111827;border:1px solid #ffffff22;border-radius:14px;color:#e2e8f0;font:15px/1.5 system-ui,sans-serif;box-shadow:0 20px 60px #0008">'
+    + '<span style="width:18px;height:18px;border:2px solid #ffffff40;border-top-color:#3b82f6;border-radius:50%;display:inline-block;animation:loSpin .7s linear infinite"></span>'
+    + '<span>正在退出…</span></div>'
+  document.body.appendChild(loOv)
+  ;(function () { var s = document.createElement("style"); s.textContent = "@keyframes loSpin{to{transform:rotate(360deg)}}"; document.head.appendChild(s) })()
+  function showLogoutOverlay(on) { loOv.style.display = on ? "flex" : "none" }
   // 顶栏「退出登录」与闲置超时共用。auto=true 表示是计时器触发的：屏幕前没有人。
   //
   // 【为什么不只是清 lan_auth cookie】那道门禁对 127.0.0.1 的请求一律免登录（server.mjs 的
@@ -7725,12 +7735,13 @@ document.addEventListener("visibilitychange", () => { if (!document.hidden) refr
       out = false; bump()          // 解锁后还要能再次触发锁屏，闲置计时也从此刻重新算
       return
     }
+    showLogoutOverlay(true)   // 到这里才是真登出（排除了闲置锁屏），慢在后面几个请求上，先把遮罩亮出来
     try { await fetch("api/logout", { method: "POST" }) } catch (e) {}   // 相对：多用户 /alice/ 部署下别跳出本容器前缀
     if (st && st.configured && st.loggedIn) {
       try {
         var r = await cloudPost("logout", {})   // 有轮在跑时它会二次确认，用户点了确定才带 force 重发
-        if (!r) { out = false; return }         // 用户在二次确认里点了取消 → 不登出
-        if (r.ok === false) { out = false; alert("退出登录失败：" + (r.err || "未知错误")); return }
+        if (!r) { out = false; showLogoutOverlay(false); return }         // 用户在二次确认里点了取消 → 不登出
+        if (r.ok === false) { out = false; showLogoutOverlay(false); alert("退出登录失败：" + (r.err || "未知错误")); return }
       } catch (e) { /* 网络异常：照样跳回去，首启那道闸会按"未登录"兜底 */ }
     }
     setCloudLocked(false)   // 真登出了就没有"锁屏待解锁"这回事，别留个标记下次误挡
@@ -8126,12 +8137,20 @@ document.addEventListener("visibilitychange", () => { if (!document.hidden) refr
         }))
         mSel.innerHTML = opts.join("")
       }).catch(function () { /* 拿不到清单就只留「跟随界面」一项 */ })
-      // 会话下拉
+      // 会话下拉。默认选中：已绑定就显示当前绑定的那个（让用户看清绑的是谁）；
+      // 还没绑定时，默认选中【当前正在看的这个会话】——最常见的操作就是"把眼前这个接进去"。
       return jget("api/sessions").then(function (d) {
         var ss = (d && d.sessions) || []
+        var pick = st.boundSid || (typeof sessionId !== "undefined" ? sessionId : "") || ""
+        var inList = ss.some(function (s) { return s.id === pick })
         selEl.innerHTML = ss.slice(0, 50).map(function (s) {
-          return '<option value="' + esc(s.id) + '"' + (s.id === st.boundSid ? " selected" : "") + ">" + esc(s.title || s.id) + "</option>"
+          return '<option value="' + esc(s.id) + '"' + (s.id === pick ? " selected" : "") + ">" + esc(s.title || s.id) + "</option>"
         }).join("") || '<option value="">（还没有会话，先去主界面开一个）</option>'
+        // 当前会话若排在 50 名之外没进下拉，补一条到最前并选中，别让"默认选当前会话"落空
+        if (pick && !ss.slice(0, 50).some(function (s) { return s.id === pick }) && inList) {
+          var cur = ss.find(function (s) { return s.id === pick })
+          selEl.insertAdjacentHTML("afterbegin", '<option value="' + esc(cur.id) + '" selected>' + esc(cur.title || cur.id) + "</option>")
+        }
       })
     }).catch(function (e) { setMsg(msgEl, "err", "读取状态失败：" + (e.message || e)) })
   }
