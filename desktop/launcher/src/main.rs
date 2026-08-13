@@ -24,8 +24,11 @@ use std::net::TcpStream;
 use std::os::windows::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 use std::time::Duration;
+use tauri::menu::{Menu, MenuItem};
+use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::webview::{DownloadEvent, NewWindowResponse};
 use tauri::{Manager, RunEvent, WebviewUrl, WebviewWindowBuilder};
 
@@ -33,7 +36,23 @@ const PORT: u16 = 27821; // 网关端口（避开常见 3000/8080，降低撞车
 const OC_PORT: u16 = 27822; // opencode 端口
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
+// 点 X 只把窗口缩到托盘、不退出；只有托盘右键「完全关闭」把它置 true 再退出。
+// 用全局 AtomicBool 而不是 app state：CloseRequested 处理器里要读它，全局最省事。
+static ALLOW_EXIT: AtomicBool = AtomicBool::new(false);
+
 struct Backend(Mutex<Option<u32>>); // node 网关的 pid
+
+/// 把主窗口从托盘唤回前台（app 窗口还没建出来时退回 splash）。
+fn show_main(app: &tauri::AppHandle) {
+    if let Some(w) = app
+        .get_webview_window("app")
+        .or_else(|| app.get_webview_window("splash"))
+    {
+        let _ = w.show();
+        let _ = w.unminimize();
+        let _ = w.set_focus();
+    }
+}
 
 /// 取日志末尾若干行，供启动失败时直接显示在启动页上。
 /// 现场诊断最缺的就是"到底为什么起不来"，把它摆到用户眼前比让他去翻文件强得多。
@@ -242,6 +261,18 @@ fn kill_port(port: u16) {
 
 fn main() {
     tauri::Builder::default()
+        // 点 X = 缩到托盘，不退出（除非托盘「完全关闭」已把 ALLOW_EXIT 置 true）。
+        // 只拦 app 主窗口；splash 启动期点 X 仍按退出处理（那时用户就是想放弃启动）。
+        .on_window_event(|window, event| {
+            if window.label() == "app" {
+                if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                    if !ALLOW_EXIT.load(Ordering::SeqCst) {
+                        api.prevent_close();
+                        let _ = window.hide();
+                    }
+                }
+            }
+        })
         // 必须是第一个注册的插件（官方要求）：它在插件初始化阶段就让第二实例退出，
         // 从而赶在下面 setup 里 spawn node 之前——第二实例根本不会碰后台和端口。
         .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
@@ -258,6 +289,35 @@ fn main() {
         }))
         .manage(Backend(Mutex::new(None)))
         .setup(|app| {
+            // ---- 系统托盘：点 X 缩到这里，右键「完全关闭」才真正退出 ----
+            let open_i = MenuItem::with_id(app, "tray_open", "打开主界面", true, None::<&str>)?;
+            let quit_i = MenuItem::with_id(app, "tray_quit", "完全关闭", true, None::<&str>)?;
+            let tray_menu = Menu::with_items(app, &[&open_i, &quit_i])?;
+            let _tray = TrayIconBuilder::with_id("main")
+                .icon(app.default_window_icon().unwrap().clone())
+                .tooltip("Niuma Science（点开图标唤回窗口，右键可完全关闭）")
+                .menu(&tray_menu)
+                .show_menu_on_left_click(false)   // 左键=唤回窗口，右键才弹菜单
+                .on_menu_event(|app, event| match event.id.as_ref() {
+                    "tray_open" => show_main(app),
+                    "tray_quit" => {
+                        ALLOW_EXIT.store(true, Ordering::SeqCst); // 放行真正退出，随后 RunEvent::Exit 收后台
+                        app.exit(0);
+                    }
+                    _ => {}
+                })
+                .on_tray_icon_event(|tray, event| {
+                    if let TrayIconEvent::Click {
+                        button: MouseButton::Left,
+                        button_state: MouseButtonState::Up,
+                        ..
+                    } = event
+                    {
+                        show_main(tray.app_handle());
+                    }
+                })
+                .build(app)?;
+
             let bundle = app.path().resource_dir()?.join("bundle");
             let appdir = bundle.join("app");
             let rt = bundle.join("runtime");

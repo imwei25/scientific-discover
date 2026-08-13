@@ -377,6 +377,24 @@ async function main() {
     else if (rec.outputs.length || acc.finalText.trim()) { rec.ok = true; rec.reason = acc.notices.length ? "完成（有提示，见 notices）" : "完成" }
     else { rec.ok = false; rec.reason = "跑完了但既没有产物也没有正文（多半是上游异常）" }
     log(`[run] ${rec.ok ? "✔" : "✘"} ${rec.reason}；${rec.rounds} 轮、产物 ${rec.outputs.length} 个、约 ${rec.credits ?? "?"} 积分`)
+
+    // ④ 推送到「聊天接入」绑定的微信/企微（可选，task.pushChat）。
+    // 【只在复用壳网关时推】桥由壳网关(27821)托管；自起网关(27831)时软件是关着的、桥必然不在，
+    // 推了也没有对象——这正是"软件关着能跑但推不了"的技术根因，如实跳过并记一句。
+    if (task.pushChat && !args.dryRun) {
+      if (!reused) {
+        log("[push] 跳过推送：软件没开着（定时任务自起了网关），聊天接入不在运行")
+      } else {
+        try {
+          const head = acc.finalText.trim().replace(/\s+/g, " ").slice(0, 300)
+          const txt = `【定时任务·${task.title}】${rec.ok ? "已完成" : "未完成：" + rec.reason}` +
+            (head ? "\n" + head : "") +
+            (rec.outputs.length ? `\n（产物 ${rec.outputs.length} 个，打开软件查看/下载）` : "")
+          const pr = await jpost(base, "/api/chat-bridge/push", { text: txt }, 30_000)
+          log(`[push] ${pr?.body?.ok ? "已推送到聊天接入" : "未推送（" + (pr?.body?.err || "?") + "）"}`)
+        } catch (e) { log("[push] 推送异常：" + (e?.message || e)) }
+      }
+    }
   } catch (e) {
     if (!rec.reason) rec.reason = String(e?.message || e)
     log(`[run] ✘ ${rec.reason}`)

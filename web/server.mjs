@@ -4413,6 +4413,13 @@ export const server = http.createServer(async (req, res) => {
       }
       if (req.method === "POST" && u.pathname === "/api/chat-bridge/weixin/reset")
         return send(res, 200, "application/json", JSON.stringify(await Bridge.weixinReset()))
+      // 主动推送（定时任务跑完调它，把结果发到绑定的微信/企微对话）。只允许本机调用。
+      if (req.method === "POST" && u.pathname === "/api/chat-bridge/push") {
+        if (!isLocal(req)) return send(res, 403, "application/json", JSON.stringify({ ok: false, err: "仅限本机" }))
+        let b = {}; try { b = await readJson(req) } catch {}
+        const r = await Bridge.pushToChat({ text: b.text, files: Array.isArray(b.files) ? b.files : [] })
+        return send(res, r.ok ? 200 : 400, "application/json", JSON.stringify(r))
+      }
       return send(res, 404, "application/json", JSON.stringify({ ok: false, err: "没有这个接口" }))
     }
 

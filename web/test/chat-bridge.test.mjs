@@ -84,6 +84,14 @@ test("bind 换绑：自动脱离前一个（收回注入）、凭证沿用、bou
   assert.equal(B.loadState().boundSid, "")
 })
 
+test("lastSessionKey：从桥日志取最近一条 message received 的 session（推送对象）", () => {
+  const bdir = path.join(root, "chat-bridge"); fs.mkdirSync(bdir, { recursive: true })
+  fs.writeFileSync(path.join(bdir, "bridge.log"),
+    'noise\nlevel=INFO msg="message received" session=weixin:dm:aaa@im.wechat user=aaa\n' +
+    'level=INFO msg="message received" session=weixin:dm:bbb@im.wechat user=bbb\nmore noise\n')
+  assert.equal(B.lastSessionKey(), "weixin:dm:bbb@im.wechat")   // 取最后一条
+})
+
 test("bind：找不到会话目录时报错不炸", async () => {
   const r = await B.bind("ses_missing")
   assert.equal(r.ok, false)

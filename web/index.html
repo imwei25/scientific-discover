@@ -2030,6 +2030,9 @@
         </div>
         <label class="mm-field"><span>这一次最多花多少积分（到了就停下，0 = 不额外限制）</span>
           <input id="tfCredits" class="mm-input" type="number" min="0" step="10" value="0" /></label>
+        <label class="mm-check" style="display:flex;align-items:center;gap:8px;margin:4px 0">
+          <input id="tfPushChat" type="checkbox" />
+          <span>跑完把结果推送到我的微信/企业微信（需先在「聊天接入」里连好，且<b>软件保持开着</b>——关着能跑但推不了）</span></label>
         <div class="mm-hint" id="tfModelNote" hidden></div>
         <div class="mm-msg info" id="taskEditMsg"></div>
         <div class="mm-actions">
@@ -7862,6 +7865,7 @@ document.addEventListener("visibilitychange", () => { if (!document.hidden) refr
     f.time.value = s.time || "07:30"
     f.date.value = s.date || ""
     f.credits.value = editing.maxCredits || 0
+    document.getElementById("tfPushChat").checked = editing.pushChat === true
     Array.prototype.forEach.call(f.days.querySelectorAll("button"), function (b) {
       b.classList.toggle("on", (s.days || []).indexOf(Number(b.dataset.d)) >= 0)
     })
@@ -7883,6 +7887,7 @@ document.addEventListener("visibilitychange", () => { if (!document.hidden) refr
     var body = {
       id: editing && editing.id, title: f.title.value, prompt: f.prompt.value,
       maxCredits: Number(f.credits.value) || 0,
+      pushChat: document.getElementById("tfPushChat").checked,
       schedule: { kind: f.kind.value, time: f.time.value, days: days, date: f.date.value },
     }
     if (mode === "preset") {

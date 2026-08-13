@@ -22,7 +22,7 @@ import fs from "node:fs"
 import path from "node:path"
 import os from "node:os"
 import crypto from "node:crypto"
-import { spawn, execFileSync } from "node:child_process"
+import { spawn, execFileSync, execFile } from "node:child_process"
 
 const BLOCK_START = "<!-- sci-chat-bridge:start 由「聊天接入」自动注入，解绑时自动移除，请勿手工编辑 -->"
 const BLOCK_END = "<!-- sci-chat-bridge:end -->"
@@ -402,6 +402,40 @@ export function status() {
     seenUsers: seenUsers.slice(-10), lastError: lastErrLine,
     lastExit, weixinSetup: weixinSetup(),
   }
+}
+
+// ---- 主动推送（定时任务跑完把结果发到绑定的微信/企微对话）----
+// 定时任务是独立进程、不在 cc-connect 的 session 上下文里，所以 send 必须【显式指定
+// project + session】（不指定时 cc-connect 报 "no active session"，实测）。
+// project 名由 boundSid 推出；session key 从桥日志里最近一条 "message received" 提取
+// ——即"用户最后一次跟机器人说话的那个对话"，推给它最符合直觉。
+const IMG_EXT = new Set([".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp"])
+export function lastSessionKey() {
+  try {
+    const tail = fs.readFileSync(logPath(), "utf8").split(/\r?\n/).slice(-800)
+    let key = ""
+    for (const ln of tail) { const m = ln.match(/msg="message received".*?\bsession=(\S+)/); if (m) key = m[1] }
+    return key
+  } catch { return "" }
+}
+export async function pushToChat({ text, files } = {}) {
+  const s = loadState()
+  if (!running()) return { ok: false, err: "聊天接入未运行（软件需开着并已连接）" }
+  if (!status().subscribed) return { ok: false, err: "聊天接入未连接，无法推送" }
+  const session = lastSessionKey()
+  if (!session) return { ok: false, err: "还没有对话记录，无法确定推送对象（先在微信/企微里跟机器人说句话）" }
+  const args = ["send", "-p", projectName(s.boundSid), "-s", session]
+  if (text) args.push("-m", String(text))
+  for (const f of (files || [])) {
+    try { if (fs.existsSync(f)) args.push(IMG_EXT.has(path.extname(f).toLowerCase()) ? "--image" : "--file", f) } catch {}
+  }
+  if (args.length <= 6 && !text) return { ok: false, err: "没有可推送的内容" }
+  return await new Promise((resolve) => {
+    execFile(ccBin(), args, { windowsHide: true }, (err, _out, stderr) => {
+      if (err) resolve({ ok: false, err: (String(stderr) || err.message || "").slice(0, 200) })
+      else resolve({ ok: true, session })
+    })
+  })
 }
 
 export function init(ctx) {

@@ -130,6 +130,9 @@ export function normalizeTask(input, { now = new Date() } = {}) {
     ...(src.preset ? { preset: String(src.preset), params: src.params && typeof src.params === "object" ? src.params : {} } : {}),
     module: String(src.module || "chat"),
     enabled: src.enabled !== false,
+    // 跑完把结果推到「聊天接入」绑定的微信/企微对话（前提：软件开着、桥在跑；关着照跑但不推，
+    // 见 headless-run 的 pushToChatBridge）。默认关——不是每个定时任务都想往微信刷消息。
+    pushChat: src.pushChat === true,
     schedule: { kind, time, ...(days ? { days } : {}), ...(date ? { date } : {}) },
     maxRounds,
     maxCredits,
