@@ -19,6 +19,7 @@ import { scrubShare, renderShareHtml } from "./share-export.mjs"
 import * as Tasks from "./tasks.mjs"
 import * as Sched from "./schtasks.mjs"
 import * as Presets from "./task-presets.mjs"
+import * as Bridge from "./chat-bridge.mjs"
 
 // opencode 的完整流水线（标书/论文/系统综述）单轮可跑十几分钟，而 session.prompt 是“等整轮结束才返回”的请求；
 // undici 默认 5 分钟 headers/body 超时会让这类长轮假性抛错。关掉这两个超时（0=不限），连接超时保留。
@@ -4351,6 +4352,38 @@ export const server = http.createServer(async (req, res) => {
       return send(res, 404, "application/json", JSON.stringify({ ok: false, err: "没有这个接口" }))
     }
 
+    // ---- 聊天接入（把某个会话接到企微/微信；托管 cc-connect，详见 web/chat-bridge.mjs 顶部注释）----
+    if (u.pathname.startsWith("/api/chat-bridge/")) {
+      if (req.method === "GET" && u.pathname === "/api/chat-bridge/status") {
+        const st = Bridge.status()
+        let boundTitle = ""
+        if (st.boundSid) { try { boundTitle = un(await client.session.get({ path: { id: st.boundSid } }))?.title || "" } catch {} }
+        return send(res, 200, "application/json", JSON.stringify({ ok: true, ...st, boundTitle }))
+      }
+      if (!Bridge.supported() && req.method === "POST")
+        return send(res, 400, "application/json", JSON.stringify({ ok: false, err: "聊天接入需要 Windows 桌面版（且带 cc-connect 组件）" }))
+      if (req.method === "POST" && u.pathname === "/api/chat-bridge/config") {
+        let b = {}; try { b = await readJson(req) } catch { return send(res, 400, "application/json", JSON.stringify({ ok: false, err: "请求体不合法" })) }
+        const r = await Bridge.setConfig(b)
+        return send(res, r.ok ? 200 : 400, "application/json", JSON.stringify(r))
+      }
+      if (req.method === "POST" && u.pathname === "/api/chat-bridge/bind") {
+        let b = {}; try { b = await readJson(req) } catch {}
+        const sid = String(b.sid || "")
+        if (!sid) return send(res, 400, "application/json", JSON.stringify({ ok: false, err: "缺 sid" }))
+        const r = await Bridge.bind(sid)
+        return send(res, r.ok ? 200 : 400, "application/json", JSON.stringify(r))
+      }
+      if (req.method === "POST" && u.pathname === "/api/chat-bridge/unbind")
+        return send(res, 200, "application/json", JSON.stringify(await Bridge.unbind()))
+      if (req.method === "POST" && u.pathname === "/api/chat-bridge/restart") {
+        await Bridge.stop()
+        const r = Bridge.start()
+        return send(res, r.ok ? 200 : 400, "application/json", JSON.stringify(r))
+      }
+      return send(res, 404, "application/json", JSON.stringify({ ok: false, err: "没有这个接口" }))
+    }
+
     // 发起一轮生成。【POST，正文在 body】——原先是 GET /api/chat?q=...，两个毛病：
     //   ① GET 带副作用（发消息 + 扣额度），而 cookie 是 SameSite=Lax：跨站顶层 GET 导航会带上凭据，
     //      诱导点一个链接就能替用户跑一轮长生成、烧掉当天额度（浏览器/代理的链接预取也可能误触发）。
@@ -5324,6 +5357,10 @@ server.listen(PORT, "0.0.0.0", () => {
       if (r.err) console.warn(`[task] 计划任务对账有失败项：${r.err}`)
     } catch (e) { console.warn("[task] 计划任务对账异常：" + (e?.message || e)) }
   }, 5000).unref?.()
+  // 聊天接入桥自启（上次开着就拉起）。无头运行器自起的网关跳过：cc-connect 的实例锁按配置文件算，
+  // 第二个实例带 --force 会把用户正在用的那条桥杀掉。SCI_CHAT_BRIDGE=0 是测试总开关。
+  if (process.env.SCI_HEADLESS !== "1" && process.env.SCI_CHAT_BRIDGE !== "0")
+    Bridge.init({ root: ROOT, webDir: __dirname, sessionOut, getModel: () => MODEL, log: (m) => console.log("[chat-bridge] " + m) })
 })
 
 // ---- 优雅退出 ----
@@ -5387,6 +5424,8 @@ async function gracefulExit(sig) {
   if (runningRounds() > 0) exitLog(`[exit] 仍有 ${runningRounds()} 轮未收尾，不再等待`)
   // （这里原本还要把未上报的额度增量冲刷给宿主账本。远程记账已随多用户容器一起下线，
   //   addCost 现在是同步写本地 quota.json，没有"在途未落盘"的东西要等。）
+  // 聊天接入桥（cc-connect）跟着一起收：非 detached，进程树被杀也会带走，这里是优雅路径
+  try { await Bridge.stop() } catch {}
   // opencode 是 detached+unref 的子进程，不主动收会变成孤儿。
   // 复用 restartOpencode 用的同一把刀：killPort(OC_PORT)（本进程没有留着 child 句柄可用）
   if (OC_MANAGED) { try { killPort(OC_PORT) } catch {} }

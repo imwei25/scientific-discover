@@ -32,6 +32,7 @@ $PyVerNoDot= "312"
 $OcVer     = "1.17.14"
 $GitVer    = "2.47.1"
 $PandocVer = "3.6.3"
+$CcVer     = "1.4.1"    # cc-connect（聊天接入桥）：换版本必跑 web/test/chat-bridge.test.mjs + 真机冒烟（cmd 空格拆分/事件 schema 都可能变）
 
 function Step($m) { Write-Host "==> $m" -ForegroundColor Cyan }
 function Get-Cached {
@@ -127,6 +128,25 @@ if (-not (Test-Path "$ocDir\opencode.exe")) {
 }
 $ocv = & "$ocDir\opencode.exe" --version 2>&1
 if ("$ocv" -notmatch [regex]::Escape($OcVer)) { throw "opencode.exe 版本不对：$ocv（要 $OcVer）" }
+
+# ================= 2.5 cc-connect（聊天接入桥：企微/微信 ←→ 本机 agent）=================
+# 预置二进制：npm 包首跑要现场从 GitHub 拉 exe，国内用户十有八九 ECONNRESET —— 必须随包发。
+Step "cc-connect $CcVer"
+$ccDir = Join-Path $Rt "cc-connect"
+if (-not (Test-Path "$ccDir\cc-connect.exe")) {
+  New-Item -ItemType Directory -Force $ccDir | Out-Null
+  $zip = Get-Cached "cc-connect-v$CcVer-windows-amd64.zip" @(
+    "https://gitee.com/cg33/cc-connect/releases/download/v$CcVer/cc-connect-v$CcVer-windows-amd64.zip",
+    "https://github.com/chenhg5/cc-connect/releases/download/v$CcVer/cc-connect-v$CcVer-windows-amd64.zip")
+  $tmp = Join-Path $Cache "cc-tmp"
+  if (Test-Path $tmp) { Remove-Item -Recurse -Force $tmp }
+  Expand-Archive -Path $zip -DestinationPath $tmp -Force
+  $exe = Get-ChildItem $tmp -Recurse -Filter "cc-connect*.exe" | Select-Object -First 1
+  if (-not $exe) { throw "cc-connect 压缩包里没找到 exe" }
+  Copy-Item $exe.FullName "$ccDir\cc-connect.exe"
+}
+$ccv = & "$ccDir\cc-connect.exe" --version 2>&1
+if ("$ccv" -notmatch [regex]::Escape($CcVer)) { throw "cc-connect.exe 版本不对：$ccv（要 $CcVer）" }
 
 # ================= 3. PortableGit（bash + git）=================
 Step "PortableGit $GitVer（bash/heredoc/管道 + opencode 会话快照都靠它）"

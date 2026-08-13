@@ -54,6 +54,9 @@ web/sessions-meta.json
 
 # 定时任务：无头运行器的环境快照（壳每次启动写，【原样带着 OC_GATEWAY_KEY】，与 model-config.json 同类）
 web/headless-env.json
+
+# 聊天接入桥的运行期状态（state.json 含企微 bot 凭证、config.toml 是生成物、bridge.log 是日志）
+/chat-bridge/
 # 用户自己建的定时任务定义与运行记录（运行时生成）
 /tasks/
 

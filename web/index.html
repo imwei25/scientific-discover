@@ -1465,6 +1465,14 @@
   .uvnew { flex: none; font-size: 11px; font-weight: 600; color: #15803d; border: 1px solid #15803d; border-radius: 4px; padding: 0 5px; }
   .uvrow .mm-btn { flex: none; padding: 6px 12px; font-size: 12.5px; }
   .mm-hint { font-size: 11.5px; color: var(--faint); line-height: 1.65; margin-top: 12px; }
+  /* ---- 聊天接入弹窗 ---- */
+  .cb-details { margin: 10px 0; border: 1px solid var(--line, #e5e5e5); border-radius: 8px; padding: 8px 12px; }
+  .cb-details summary { cursor: pointer; font-weight: 600; font-size: 13px; }
+  .cb-steps { margin: 8px 0 4px; padding-left: 20px; font-size: 13px; line-height: 1.8; }
+  .cb-steps code { background: var(--bg2, #f4f4f4); padding: 1px 5px; border-radius: 4px; }
+  .cb-dot { width: 9px; height: 9px; border-radius: 50%; background: #bbb; display: inline-block; }
+  .cb-dot.ok { background: #2fb35f; } .cb-dot.warn { background: #e6a23c; } .cb-dot.bad { background: #d9534f; }
+  .cb-state { font-size: 12.5px; color: var(--muted, #888); }
   /* ---- 定时任务弹窗 ---- */
   .tf-row { display: flex; gap: 10px; align-items: flex-end; }
   .tf-days { display: flex; gap: 6px; flex-wrap: wrap; }
@@ -1663,6 +1671,8 @@
       <!-- 定时任务：到点自动跑，软件关着也照跑（Windows）。不支持的部署形态下整个按钮隐藏，
            而不是点开告诉用户"你用不了"——那只会让人以为是自己哪儿没设对。 -->
       <button id="taskBtn" class="hbtn" type="button" title="定时任务：到点自动跑，软件关着也照跑" hidden></button>
+      <!-- 聊天接入：把某个会话接到企业微信/微信，在手机上使唤它。仅 Windows 桌面版（带 cc-connect 组件）出现 -->
+      <button id="bridgeBtn" class="hbtn" type="button" title="聊天接入：把会话接到企业微信，在手机上继续干活" hidden></button>
       <button id="wsBtn" class="hbtn" type="button" title="返回模块工作台（换个功能开新会话）"></button>
     </div>
     <!-- 左下角「用户」：账户相关的功能都在这里（剩余积分 / 云端账号 / 修改密码 / 退出登录）。
@@ -1862,6 +1872,73 @@
     </div>
   </div>
 </div>
+<!-- 聊天接入：把某个会话接到企业微信。后端见 web/chat-bridge.mjs（托管 cc-connect） -->
+<div id="bridgeModal" class="modal">
+  <div class="modal-card" style="max-width:640px">
+    <div class="modal-head">
+      <span class="modal-title">聊天接入（企业微信）</span>
+      <button class="modal-x" id="cbClose" type="button" title="关闭"></button>
+    </div>
+    <div class="modal-body">
+      <div class="mm-msg info" id="cbMsg"></div>
+
+      <!-- 第 1 步：凭证。教程默认展开到用户配完为止（wecomConfigured 后自动折叠） -->
+      <details id="cbTut1" class="cb-details">
+        <summary>第 1 步 · 在企业微信后台创建「智能机器人」（只需做一次，约 3 分钟）</summary>
+        <ol class="cb-steps">
+          <li>用管理员账号打开 <b>work.weixin.qq.com</b>（企业微信管理后台）并登录。</li>
+          <li>顶部选 <b>应用管理</b> → 左侧 <b>应用</b> → 找到 <b>智能机器人</b>（部分版本叫「机器人」）→ <b>创建智能机器人</b>。</li>
+          <li>名字随意（比如「科研助手」），头像随意，创建完成后进入机器人详情页。</li>
+          <li>在详情页找到 <b>Bot ID</b> 和 <b>Secret</b>（Secret 需点「查看」或「重置」获得），分别复制。</li>
+          <li>回到这里，把两个值粘进下面的输入框，点「保存并连接」。<b>其余全部由软件自动完成</b>：不需要配置回调地址、不需要公网 IP、不需要 IP 白名单。</li>
+        </ol>
+      </details>
+      <div class="tf-row">
+        <label class="mm-field" style="flex:1"><span>Bot ID</span>
+          <input id="cbBotId" class="mm-input" type="text" placeholder="aibxxxxxxxx" autocomplete="off" /></label>
+        <label class="mm-field" style="flex:1"><span>Secret</span>
+          <input id="cbBotSecret" class="mm-input" type="password" placeholder="已保存过则留空表示不改" autocomplete="off" /></label>
+      </div>
+
+      <!-- 第 2 步：绑定会话 -->
+      <label class="mm-field"><span>第 2 步 · 选择接到微信的会话（微信里的对话将在这个会话的工作台里干活，文件互通）</span>
+        <select id="cbSess" class="mm-input mm-select"></select></label>
+      <div class="mm-hint" id="cbBoundHint"></div>
+      <div class="mm-actions">
+        <button id="cbSave" class="mm-btn primary" type="button">保存并连接</button>
+        <button id="cbUnbind" class="mm-btn ghost" type="button" hidden>断开接入</button>
+        <span style="flex:1"></span>
+        <span id="cbDot" class="cb-dot"></span><span id="cbState" class="cb-state">未配置</span>
+      </div>
+
+      <!-- 使用教程 -->
+      <details class="cb-details">
+        <summary>怎么用（配置完成后看这里）</summary>
+        <ul class="cb-steps">
+          <li><b>在哪聊</b>：手机或电脑的企业微信里，找到你创建的机器人，像同事一样给它发消息即可。</li>
+          <li><b>它能干嘛</b>：与软件里一样——查文献、跑统计、画图、写稿。生成的图片和文档会直接发到聊天里；所有文件也同步出现在绑定会话的「产出」侧栏。</li>
+          <li><b>换个话题</b>：发 <code>/new</code> 开一段新对话（清空微信侧上下文）；发 <code>/stop</code> 中断正在跑的任务。</li>
+          <li><b>耐心一点</b>：复杂任务要跑几分钟，期间它每隔一会儿会汇报一次进度，跑完一次性给结果。</li>
+          <li><b>前提</b>：这台电脑上的本软件<b>保持开着</b>（可以最小化）；机器人一次只服务这一台电脑。</li>
+          <li><b>换绑</b>：在上面选另一个会话再点「保存并连接」即可——旧会话自动脱离，机器人凭证不用重填。</li>
+        </ul>
+      </details>
+
+      <!-- 谁可以用：默认不限制，引导锁定 -->
+      <details class="cb-details" id="cbWhoWrap">
+        <summary>谁可以使唤它（建议锁定，防止同事误用）</summary>
+        <div class="mm-hint" style="margin:8px 0 6px">
+          机器人在你的企业里对所有同事可见。<b>不锁定时，任何同事给它发消息都会在你这台电脑上干活、花你的积分。</b>
+          从企业微信给它发过一条消息后，下面会出现成员编号，点「只允许 TA」即可锁定。
+        </div>
+        <div id="cbSeen" class="mm-hint">（还没有人给机器人发过消息）</div>
+        <label class="mm-field"><span>允许的成员编号（逗号分隔，留空 = 不限制）</span>
+          <input id="cbAllow" class="mm-input" type="text" placeholder="留空 = 企业内所有人可用" autocomplete="off" /></label>
+      </details>
+      <div class="mm-hint" id="cbErrLine" style="color:var(--bad,#c00)"></div>
+    </div>
+  </div>
+</div>
 <!-- 定时任务：列表 ⇄ 编辑 两屏共用一个弹窗（同时开两个面板只会让人不知道自己在哪一屏） -->
 <div id="taskModal" class="modal">
   <div class="modal-card" style="max-width:620px">
@@ -2043,6 +2120,7 @@ stopBtn.addEventListener("click", async () => {
 // ---- 内联单色描边图标（自包含，无外部依赖）----
 const ICONS = {
   flask: '<path d="M9 3v6l-5 8.5A1.7 1.7 0 0 0 5.5 20h13a1.7 1.7 0 0 0 1.5-2.5L15 9V3"/><path d="M8 3h8"/><path d="M8.5 14h7"/>',
+  msg: '<path d="M21 11.5a8.4 8.4 0 0 1-8.5 8.3 8.9 8.9 0 0 1-3.8-.8L3 20l1.1-4.2a8 8 0 0 1-1.1-4.3A8.4 8.4 0 0 1 12.5 3.2 8.4 8.4 0 0 1 21 11.5z"/>',
   history: '<path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 4v4h4"/><path d="M12 8v4l3 2"/>',
   upload: '<path d="M12 15V4"/><path d="m7 9 5-5 5 5"/><path d="M5 16v2a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-2"/>',
   cloudUp: '<path d="M7 18.5a4.5 4.5 0 0 1 .8-8.93 6 6 0 0 1 11.4 1.6A3.9 3.9 0 0 1 18.4 18.5"/><path d="M12 21v-9"/><path d="m9 15 3-3 3 3"/>',
@@ -7877,6 +7955,115 @@ document.addEventListener("visibilitychange", () => { if (!document.hidden) refr
       return jpost("api/tasks/news/seen", {})
     })
   }).catch(function () { /* 老后端没有这些接口：按不支持处理，按钮保持隐藏 */ })
+})()
+
+// ==== 聊天接入：把某个会话接到企业微信 ========================================
+// 后端见 web/chat-bridge.mjs。这里只做四件事：读状态、存凭证、绑会话、给教程。
+// 【所有请求都用相对路径】理由同定时任务面板。
+;(function () {
+  var modal = document.getElementById("bridgeModal")
+  if (!modal) return
+  var btn = document.getElementById("bridgeBtn")
+  var msgEl = document.getElementById("cbMsg"), dot = document.getElementById("cbDot"), state = document.getElementById("cbState")
+  var selEl = document.getElementById("cbSess")
+  var setMsg = function (el, kind, t) { el.className = "mm-msg " + kind; el.textContent = t || "" }
+  var jget = function (p) { return fetch(p, { signal: AbortSignal.timeout(20000) }).then(function (r) { return r.json() }) }
+  var jpost = function (p, b) {
+    return fetch(p, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(b || {}), signal: AbortSignal.timeout(30000) })
+      .then(function (r) { return r.json() })
+  }
+  var esc = function (s) { return String(s == null ? "" : s).replace(/[&<>"]/g, function (c) { return ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c] }) }
+  var cur = null   // 最近一次 status
+  var pollT = null
+
+  function paintState(st) {
+    var k = "", t = ""
+    if (!st.wecomConfigured) { k = ""; t = "未配置" }
+    else if (!st.boundSid) { k = "warn"; t = "已存凭证，还没绑定会话" }
+    else if (st.running && st.subscribed) { k = "ok"; t = "已连接（可以在企业微信里发消息了）" }
+    else if (st.running) { k = "warn"; t = "连接中…" }
+    else { k = "bad"; t = st.lastExit ? "已断开（点「保存并连接」重启）" : "未启动" }
+    dot.className = "cb-dot " + k; state.textContent = t
+    document.getElementById("cbErrLine").textContent = st.lastError && !st.subscribed ? "最近错误：" + st.lastError.slice(0, 180) : ""
+  }
+  function paintSeen(st) {
+    var box = document.getElementById("cbSeen")
+    if (!st.seenUsers || !st.seenUsers.length) { box.textContent = "（还没有人给机器人发过消息）"; return }
+    box.innerHTML = "最近来信的成员：" + st.seenUsers.map(function (uid) {
+      return '<code>' + esc(uid) + '</code> <button class="mm-btn ghost" style="padding:0 6px" data-uid="' + esc(uid) + '">只允许 TA</button>'
+    }).join("　")
+    box.querySelectorAll("button[data-uid]").forEach(function (b) {
+      b.addEventListener("click", function () {
+        document.getElementById("cbAllow").value = b.getAttribute("data-uid")
+        save()   // 一键锁定：填入即保存
+      })
+    })
+  }
+  function refresh() {
+    return jget("api/chat-bridge/status").then(function (st) {
+      if (!st || !st.ok) throw new Error((st && st.err) || "读取失败")
+      cur = st
+      document.getElementById("cbBotId").value = st.bot_id || ""
+      if (document.activeElement !== document.getElementById("cbAllow")) document.getElementById("cbAllow").value = st.allowFrom || ""
+      document.getElementById("cbTut1").open = !st.wecomConfigured   // 没配完就摊开教程
+      document.getElementById("cbUnbind").hidden = !st.boundSid
+      document.getElementById("cbBoundHint").innerHTML = st.boundSid
+        ? "当前接入：<b>" + esc(st.boundTitle || st.boundSid) + "</b>　（选择其他会话并保存即可换绑，旧会话自动脱离）"
+        : "尚未绑定。新会话也行——先在主界面开好会话，再回这里选它。"
+      paintState(st); paintSeen(st)
+      // 会话下拉
+      return jget("api/sessions").then(function (d) {
+        var ss = (d && d.sessions) || []
+        selEl.innerHTML = ss.slice(0, 50).map(function (s) {
+          return '<option value="' + esc(s.id) + '"' + (s.id === st.boundSid ? " selected" : "") + ">" + esc(s.title || s.id) + "</option>"
+        }).join("") || '<option value="">（还没有会话，先去主界面开一个）</option>'
+      })
+    }).catch(function (e) { setMsg(msgEl, "err", "读取状态失败：" + (e.message || e)) })
+  }
+  function save() {
+    var body = {
+      enabled: true,
+      allowFrom: document.getElementById("cbAllow").value.trim(),
+      wecom: { bot_id: document.getElementById("cbBotId").value.trim() },
+    }
+    var sec = document.getElementById("cbBotSecret").value.trim()
+    if (sec) body.wecom.bot_secret = sec         // 留空 = 不改已存的
+    if (!body.wecom.bot_id) { setMsg(msgEl, "err", "请先填 Bot ID（见上方教程）"); return }
+    setMsg(msgEl, "info", "保存中…")
+    var sid = selEl.value
+    jpost("api/chat-bridge/config", body).then(function (r) {
+      if (!r || r.ok === false) throw new Error((r && r.err) || "保存失败")
+      // 凭证 OK 后再绑会话（换绑走同一条路：后端自动脱离旧会话并收回注入）
+      if (sid && sid !== (cur && cur.boundSid)) return jpost("api/chat-bridge/bind", { sid: sid })
+      return r
+    }).then(function (r) {
+      if (r && r.ok === false) throw new Error(r.err || "绑定失败")
+      document.getElementById("cbBotSecret").value = ""
+      setMsg(msgEl, "ok", "已保存。正在连接企业微信…（几秒后状态变绿即成功）")
+      setTimeout(refresh, 3000); setTimeout(refresh, 8000)
+      return refresh()
+    }).catch(function (e) { setMsg(msgEl, "err", (e.message || e)) })
+  }
+  document.getElementById("cbSave").addEventListener("click", save)
+  document.getElementById("cbUnbind").addEventListener("click", function () {
+    if (!confirm("断开聊天接入？机器人将不再响应，绑定会话中注入的说明也会移除（凭证保留，下次一点即连）。")) return
+    jpost("api/chat-bridge/unbind", {}).then(function () { return jpost("api/chat-bridge/config", { enabled: false }) }).then(function () {
+      setMsg(msgEl, "ok", "已断开。"); return refresh()
+    })
+  })
+  document.getElementById("cbClose").addEventListener("click", function () { modal.classList.remove("on"); if (pollT) { clearInterval(pollT); pollT = null } })
+  modal.addEventListener("click", function (e) { if (e.target === modal) { modal.classList.remove("on"); if (pollT) { clearInterval(pollT); pollT = null } } })
+  if (btn) {
+    btn.innerHTML = ic("msg")
+    btn.addEventListener("click", function () {
+      modal.classList.add("on"); setMsg(msgEl, "info", "载入中…")
+      refresh().then(function () { setMsg(msgEl, "info", cur && cur.subscribed ? "运行中。" : "按下面两步配置即可。") })
+      if (!pollT) pollT = setInterval(refresh, 10000)   // 面板开着时轮询状态（连接是异步完成的）
+    })
+  }
+  // 开机自检：支持才露按钮（与定时任务同款逻辑）
+  jget("api/chat-bridge/status").then(function (st) { if (st && st.ok && st.supported && btn) btn.hidden = false })
+    .catch(function () { /* 老后端：保持隐藏 */ })
 })()
 </script>
 </body>
