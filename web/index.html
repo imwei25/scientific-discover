@@ -1473,6 +1473,8 @@
   .cb-dot { width: 9px; height: 9px; border-radius: 50%; background: #bbb; display: inline-block; }
   .cb-dot.ok { background: #2fb35f; } .cb-dot.warn { background: #e6a23c; } .cb-dot.bad { background: #d9534f; }
   .cb-state { font-size: 12.5px; color: var(--muted, #888); }
+  .cb-plat { display: flex; gap: 18px; padding: 6px 2px; font-size: 13.5px; }
+  .cb-plat label { display: flex; align-items: center; gap: 6px; cursor: pointer; }
   /* ---- 定时任务弹窗 ---- */
   .tf-row { display: flex; gap: 10px; align-items: flex-end; }
   .tf-days { display: flex; gap: 6px; flex-wrap: wrap; }
@@ -1882,6 +1884,16 @@
     <div class="modal-body">
       <div class="mm-msg info" id="cbMsg"></div>
 
+      <!-- 平台切换：企业微信（bot 凭证）/ 微信个人号（扫码） -->
+      <div class="mm-field"><span>接到哪个平台</span>
+        <div class="cb-plat">
+          <label><input type="radio" name="cbPlat" value="wecom" checked /> 企业微信</label>
+          <label><input type="radio" name="cbPlat" value="weixin" /> 微信（个人号）</label>
+        </div>
+      </div>
+
+      <!-- ==== 企业微信配置区 ==== -->
+      <div id="cbWecomSec">
       <!-- 第 1 步：凭证。教程默认展开到用户配完为止（wecomConfigured 后自动折叠） -->
       <details id="cbTut1" class="cb-details">
         <summary>第 1 步 · 在企业微信后台创建「智能机器人」（只需做一次，约 3 分钟）</summary>
@@ -1899,6 +1911,28 @@
         <label class="mm-field" style="flex:1"><span>Secret</span>
           <input id="cbBotSecret" class="mm-input" type="password" placeholder="已保存过则留空表示不改" autocomplete="off" /></label>
       </div>
+      </div>
+
+      <!-- ==== 微信个人号配置区（腾讯官方 ilink 机器人：扫码即绑，无需任何后台配置） ==== -->
+      <div id="cbWeixinSec" hidden>
+        <details class="cb-details" open>
+          <summary>第 1 步 · 用手机微信扫码绑定（只需做一次，约 1 分钟）</summary>
+          <ol class="cb-steps">
+            <li>点下面「扫码绑定微信」，稍等几秒会出现二维码。</li>
+            <li>用<b>手机微信</b>扫一扫并确认——这是腾讯官方的「智能机器人」接口，不是第三方外挂。</li>
+            <li>绑定成功后，你的微信里会出现一个机器人对话入口，跟它聊天即可；<b>默认只有你自己（扫码的微信号）能使唤它</b>。</li>
+          </ol>
+        </details>
+        <div class="mm-actions" style="margin:6px 0">
+          <button id="cbWxScan" class="mm-btn primary" type="button">扫码绑定微信</button>
+          <button id="cbWxReset" class="mm-btn ghost" type="button" hidden>解除微信绑定</button>
+          <span class="mm-hint" id="cbWxState"></span>
+        </div>
+        <div id="cbWxQrWrap" style="text-align:center; margin:8px 0" hidden>
+          <img id="cbWxQr" alt="微信扫码" style="width:220px; height:220px; background:#fff; padding:8px; border-radius:8px" />
+          <div class="mm-hint">用手机微信扫一扫（二维码 5 分钟内有效，过期重点一次按钮）</div>
+        </div>
+      </div>
 
       <!-- 第 2 步：绑定会话 -->
       <label class="mm-field"><span>第 2 步 · 选择接到微信的会话（微信里的对话将在这个会话的工作台里干活，文件互通）</span>
@@ -1915,7 +1949,7 @@
       <details class="cb-details">
         <summary>怎么用（配置完成后看这里）</summary>
         <ul class="cb-steps">
-          <li><b>在哪聊</b>：手机或电脑的企业微信里，找到你创建的机器人，像同事一样给它发消息即可。</li>
+          <li><b>在哪聊</b>：企业微信 → 找到你创建的智能机器人；微信个人号 → 扫码后微信里出现的机器人入口。像聊天一样给它发消息即可。</li>
           <li><b>它能干嘛</b>：与软件里一样——查文献、跑统计、画图、写稿。生成的图片和文档会直接发到聊天里；所有文件也同步出现在绑定会话的「产出」侧栏。</li>
           <li><b>换个话题</b>：发 <code>/new</code> 开一段新对话（清空微信侧上下文）；发 <code>/stop</code> 中断正在跑的任务。</li>
           <li><b>耐心一点</b>：复杂任务要跑几分钟，期间它每隔一会儿会汇报一次进度，跑完一次性给结果。</li>
@@ -7975,16 +8009,43 @@ document.addEventListener("visibilitychange", () => { if (!document.hidden) refr
   var esc = function (s) { return String(s == null ? "" : s).replace(/[&<>"]/g, function (c) { return ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c] }) }
   var cur = null   // 最近一次 status
   var pollT = null
+  var wxPollT = null   // 扫码期间的快轮询（2.5s，扫完自动停）
 
+  var plat = function () { return (document.querySelector('input[name="cbPlat"]:checked') || {}).value || "wecom" }
+  function paintPlat() {
+    var p = plat()
+    document.getElementById("cbWecomSec").hidden = p !== "wecom"
+    document.getElementById("cbWeixinSec").hidden = p !== "weixin"
+  }
+  var modalDirtyPlat = false   // 用户手动切过平台：refresh 别把单选又拽回后端状态
+  document.querySelectorAll('input[name="cbPlat"]').forEach(function (r) { r.addEventListener("change", function () { modalDirtyPlat = true; paintPlat() }) })
   function paintState(st) {
     var k = "", t = ""
-    if (!st.wecomConfigured) { k = ""; t = "未配置" }
-    else if (!st.boundSid) { k = "warn"; t = "已存凭证，还没绑定会话" }
-    else if (st.running && st.subscribed) { k = "ok"; t = "已连接（可以在企业微信里发消息了）" }
+    var configured = st.platform === "weixin" ? st.weixinConfigured : st.wecomConfigured
+    var where = st.platform === "weixin" ? "微信" : "企业微信"
+    if (!configured) { k = ""; t = "未配置" }
+    else if (!st.boundSid) { k = "warn"; t = "凭证已就绪，还没绑定会话" }
+    else if (st.running && st.subscribed) { k = "ok"; t = "已连接（可以在" + where + "里发消息了）" }
     else if (st.running) { k = "warn"; t = "连接中…" }
     else { k = "bad"; t = st.lastExit ? "已断开（点「保存并连接」重启）" : "未启动" }
     dot.className = "cb-dot " + k; state.textContent = t
     document.getElementById("cbErrLine").textContent = st.lastError && !st.subscribed ? "最近错误：" + st.lastError.slice(0, 180) : ""
+    // 微信区状态
+    document.getElementById("cbWxReset").hidden = !st.weixinConfigured
+    var wx = st.weixinSetup || {}
+    var wxState = document.getElementById("cbWxState")
+    if (wx.state === "running") wxState.textContent = wx.qrReady ? "等待扫码…" : "正在生成二维码…"
+    else if (wx.state === "failed") wxState.textContent = "上次扫码没成功：" + (wx.err || "").slice(0, 120)
+    else wxState.textContent = st.weixinConfigured ? "已绑定微信 ✓" : ""
+    // 二维码展示与轮询：running + qrReady 才亮图
+    var qrWrap = document.getElementById("cbWxQrWrap")
+    if (wx.state === "running" && wx.qrReady) {
+      qrWrap.hidden = false
+      // 【每次轮询都刷新】setup 会滚动换码，只加载一次会让用户扫到过期码
+      document.getElementById("cbWxQr").src = "api/chat-bridge/weixin/qr?ts=" + Date.now()
+    } else qrWrap.hidden = true
+    if (wx.state === "running" && !wxPollT) wxPollT = setInterval(refresh, 2500)
+    if (wx.state !== "running" && wxPollT) { clearInterval(wxPollT); wxPollT = null }
   }
   function paintSeen(st) {
     var box = document.getElementById("cbSeen")
@@ -8006,6 +8067,12 @@ document.addEventListener("visibilitychange", () => { if (!document.hidden) refr
       document.getElementById("cbBotId").value = st.bot_id || ""
       if (document.activeElement !== document.getElementById("cbAllow")) document.getElementById("cbAllow").value = st.allowFrom || ""
       document.getElementById("cbTut1").open = !st.wecomConfigured   // 没配完就摊开教程
+      // 平台单选跟随后端状态（用户没正在改的时候）
+      var checked = document.querySelector('input[name="cbPlat"]:checked')
+      if (checked && checked.value !== st.platform && !modalDirtyPlat) {
+        var r = document.querySelector('input[name="cbPlat"][value="' + st.platform + '"]')
+        if (r) { r.checked = true; paintPlat() }
+      }
       document.getElementById("cbUnbind").hidden = !st.boundSid
       document.getElementById("cbBoundHint").innerHTML = st.boundSid
         ? "当前接入：<b>" + esc(st.boundTitle || st.boundSid) + "</b>　（选择其他会话并保存即可换绑，旧会话自动脱离）"
@@ -8021,15 +8088,16 @@ document.addEventListener("visibilitychange", () => { if (!document.hidden) refr
     }).catch(function (e) { setMsg(msgEl, "err", "读取状态失败：" + (e.message || e)) })
   }
   function save() {
-    var body = {
-      enabled: true,
-      allowFrom: document.getElementById("cbAllow").value.trim(),
-      wecom: { bot_id: document.getElementById("cbBotId").value.trim() },
-    }
-    var sec = document.getElementById("cbBotSecret").value.trim()
-    if (sec) body.wecom.bot_secret = sec         // 留空 = 不改已存的
-    if (!body.wecom.bot_id) { setMsg(msgEl, "err", "请先填 Bot ID（见上方教程）"); return }
+    var p = plat()
+    var body = { enabled: true, platform: p, allowFrom: document.getElementById("cbAllow").value.trim() }
+    if (p === "wecom") {
+      body.wecom = { bot_id: document.getElementById("cbBotId").value.trim() }
+      var sec = document.getElementById("cbBotSecret").value.trim()
+      if (sec) body.wecom.bot_secret = sec       // 留空 = 不改已存的
+      if (!body.wecom.bot_id) { setMsg(msgEl, "err", "请先填 Bot ID（见上方教程）"); return }
+    } else if (!(cur && cur.weixinConfigured)) { setMsg(msgEl, "err", "请先点「扫码绑定微信」完成扫码"); return }
     setMsg(msgEl, "info", "保存中…")
+    modalDirtyPlat = false
     var sid = selEl.value
     jpost("api/chat-bridge/config", body).then(function (r) {
       if (!r || r.ok === false) throw new Error((r && r.err) || "保存失败")
@@ -8045,6 +8113,17 @@ document.addEventListener("visibilitychange", () => { if (!document.hidden) refr
     }).catch(function (e) { setMsg(msgEl, "err", (e.message || e)) })
   }
   document.getElementById("cbSave").addEventListener("click", save)
+  document.getElementById("cbWxScan").addEventListener("click", function () {
+    setMsg(msgEl, "info", "正在生成二维码，请稍候…")
+    jpost("api/chat-bridge/weixin/setup", {}).then(function (r) {
+      if (!r || r.ok === false) throw new Error((r && r.err) || "发起扫码失败")
+      return refresh()
+    }).catch(function (e) { setMsg(msgEl, "err", e.message || e) })
+  })
+  document.getElementById("cbWxReset").addEventListener("click", function () {
+    if (!confirm("解除微信绑定？之后要重新扫码才能用。")) return
+    jpost("api/chat-bridge/weixin/reset", {}).then(function () { setMsg(msgEl, "ok", "已解除微信绑定。"); return refresh() })
+  })
   document.getElementById("cbUnbind").addEventListener("click", function () {
     if (!confirm("断开聊天接入？机器人将不再响应，绑定会话中注入的说明也会移除（凭证保留，下次一点即连）。")) return
     jpost("api/chat-bridge/unbind", {}).then(function () { return jpost("api/chat-bridge/config", { enabled: false }) }).then(function () {
@@ -8056,7 +8135,7 @@ document.addEventListener("visibilitychange", () => { if (!document.hidden) refr
   if (btn) {
     btn.innerHTML = ic("msg")
     btn.addEventListener("click", function () {
-      modal.classList.add("on"); setMsg(msgEl, "info", "载入中…")
+      modal.classList.add("on"); modalDirtyPlat = false; setMsg(msgEl, "info", "载入中…")
       refresh().then(function () { setMsg(msgEl, "info", cur && cur.subscribed ? "运行中。" : "按下面两步配置即可。") })
       if (!pollT) pollT = setInterval(refresh, 10000)   // 面板开着时轮询状态（连接是异步完成的）
     })

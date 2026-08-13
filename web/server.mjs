@@ -4381,6 +4381,16 @@ export const server = http.createServer(async (req, res) => {
         const r = Bridge.start()
         return send(res, r.ok ? 200 : 400, "application/json", JSON.stringify(r))
       }
+      // 微信个人号扫码三件套：发起 → 轮询状态（在 /status 里）+ 取二维码图 → 解绑重置
+      if (req.method === "POST" && u.pathname === "/api/chat-bridge/weixin/setup")
+        return send(res, 200, "application/json", JSON.stringify(await Bridge.weixinSetupStart()))
+      if (req.method === "GET" && u.pathname === "/api/chat-bridge/weixin/qr") {
+        const f = Bridge.qrFile()
+        if (!f) return send(res, 404, "application/json", JSON.stringify({ ok: false }))
+        return send(res, 200, "image/png", fs.readFileSync(f))
+      }
+      if (req.method === "POST" && u.pathname === "/api/chat-bridge/weixin/reset")
+        return send(res, 200, "application/json", JSON.stringify(await Bridge.weixinReset()))
       return send(res, 404, "application/json", JSON.stringify({ ok: false, err: "没有这个接口" }))
     }
 

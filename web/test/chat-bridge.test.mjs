@@ -25,7 +25,7 @@ B.init({ root, webDir, sessionOut: async (sid) => sessDirs.get(sid), getModel: (
 const readAgents = (d) => { try { return fs.readFileSync(path.join(d, "AGENTS.md"), "utf8") } catch { return null } }
 
 test("renderConfig：cmd 无空格、env 齐全、allow_from 只在设置时出现、project 名随会话变", () => {
-  const s = { ...B.loadState(), boundSid: "ses_abc12345", boundDir: path.join(tmp, "out", "x"), wecom: { bot_id: "bid", bot_secret: "sec" }, allowFrom: "" }
+  const s = { ...B.loadState(), boundSid: "ses_abc12345", boundDir: path.join(tmp, "out", "x"), wecom: { bot_id: "bid", bot_secret: "sec", allow_from: "" } }
   const toml = B.renderConfig(s)
   const cmd = toml.match(/^cmd = '(.+)'$/m)?.[1]
   assert.ok(cmd, "有 cmd 行")
@@ -37,7 +37,7 @@ test("renderConfig：cmd 无空格、env 齐全、allow_from 只在设置时出�
   assert.match(toml, /name = 'sci-abc12345'/)
   assert.ok(!toml.includes("allow_from"), "没设 allowFrom 就不写")
   assert.ok(!toml.includes("admin_from"), "admin_from 永远不写")
-  const toml2 = B.renderConfig({ ...s, allowFrom: "u1,u2", boundSid: "ses_zzz99999" })
+  const toml2 = B.renderConfig({ ...s, wecom: { ...s.wecom, allow_from: "u1,u2" }, boundSid: "ses_zzz99999" })
   assert.match(toml2, /allow_from = 'u1,u2'/)
   assert.match(toml2, /name = 'sci-zzz99999'/)
 })
@@ -78,7 +78,7 @@ test("bind 换绑：自动脱离前一个（收回注入）、凭证沿用、bou
   const s = B.loadState()
   assert.equal(s.boundSid, "ses_B")
   assert.equal(s.wecom.bot_id, "bid", "凭证沿用前一个的配置")
-  assert.equal(s.allowFrom, "boss")
+  assert.equal(s.wecom.allow_from, "boss", "白名单存在当前平台（wecom）名下")
   await B.unbind()
   assert.equal(readAgents(dB), null, "解绑收回 B")
   assert.equal(B.loadState().boundSid, "")
@@ -87,6 +87,23 @@ test("bind 换绑：自动脱离前一个（收回注入）、凭证沿用、bou
 test("bind：找不到会话目录时报错不炸", async () => {
   const r = await B.bind("ses_missing")
   assert.equal(r.ok, false)
+})
+
+test("renderConfig：weixin 平台出 token 块、不出企微凭证", () => {
+  const s = {
+    ...B.loadState(), platform: "weixin", boundSid: "ses_wx1", boundDir: path.join(tmp, "out", "wx"),
+    weixin: { token: "tok123", account_id: "acc1", base_url: "", allow_from: "u@im.wechat" },
+    wecom: { bot_id: "shouldnotappear", bot_secret: "nope", allow_from: "woWECOMID" },
+  }
+  const toml = B.renderConfig(s)
+  assert.match(toml, /type = 'weixin'/)
+  assert.match(toml, /allow_from = 'u@im.wechat'/)
+  assert.ok(!toml.includes("woWECOMID"), "企微白名单绝不能混进微信配置（真机踩过：机主被自己拦在门外）")
+  assert.match(toml, /token = 'tok123'/)
+  assert.match(toml, /account_id = 'acc1'/)
+  assert.ok(!toml.includes("base_url"), "空 base_url 不写")
+  assert.ok(!toml.includes("bot_id") && !toml.includes("bot_secret"), "企微凭证不进 weixin 配置")
+  assert.ok(!toml.includes("websocket"), "weixin 不带企微的 mode")
 })
 
 test("spaceFree：含空格的不同路径绝不能撞进同一个 junction（真机踩过的回归）", () => {

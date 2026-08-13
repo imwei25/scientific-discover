@@ -41,9 +41,13 @@ const logPath = () => path.join(dir(), "bridge.log")
 // ---- 状态文件（含 bot 凭证，纳入卸载清理；与 cloud-state.json 同待遇）----
 const defState = () => ({
   enabled: false,
-  platform: "wecom",                    // 目前只做企微；weixin 留位
-  wecom: { bot_id: "", bot_secret: "" },
-  allowFrom: "",                        // 逗号分隔的成员 id；空 = 不限制（教程里引导一键锁定）
+  platform: "wecom",                    // "wecom" | "weixin"
+  // 白名单【按平台分开存】：两边的成员 id 体系完全不同（企微 woXXXX vs 微信 xxx@im.wechat），
+  // 共用一个字段的话切平台就会拿错体系的 id 把机主自己拦在门外（真机踩过：微信消息被静默丢弃）
+  wecom: { bot_id: "", bot_secret: "", allow_from: "" },
+  // weixin（个人号，腾讯官方 ilink 机器人网关）：token 来自扫码（weixinSetup 驱动
+  // `cc-connect weixin setup --qr-image` 拿的），account_id/base_url 也是 setup 写回的
+  weixin: { token: "", account_id: "", base_url: "", allow_from: "" },
   boundSid: "",
   boundDir: "",                         // 绑定时的绝对目录快照：会话之后被删也要能收回注入块
   progress: true,                       // 长任务进度提示（oc-wrap 里实现）
@@ -51,9 +55,20 @@ const defState = () => ({
 export function loadState() {
   try {
     const raw = JSON.parse(fs.readFileSync(statePath(), "utf8").replace(/^\uFEFF/, ""))
-    return { ...defState(), ...raw, wecom: { ...defState().wecom, ...(raw.wecom || {}) } }
+    const s = {
+      ...defState(), ...raw,
+      wecom: { ...defState().wecom, ...(raw.wecom || {}) },
+      weixin: { ...defState().weixin, ...(raw.weixin || {}) },
+    }
+    // \u8FC1\u79FB\u65E7\u5B57\u6BB5\uFF1A\u65E9\u671F\u7248\u672C\u7684\u9876\u5C42 allowFrom \u662F\u4F01\u5FAE\u65F6\u4EE3\u8BBE\u7684\uFF0C\u5F52\u5165 wecom
+    if (raw.allowFrom && !s.wecom.allow_from) s.wecom.allow_from = String(raw.allowFrom)
+    delete s.allowFrom
+    return s
   } catch { return defState() }
 }
+// \u5F53\u524D\u5E73\u53F0\u7684\u767D\u540D\u5355\uFF08\u8BFB\u5199\u90FD\u8D70\u8FD9\u4E24\u4E2A\uFF0C\u522B\u76F4\u63A5\u6478\u5B57\u6BB5\uFF09
+const curAllow = (s) => (s.platform === "weixin" ? s.weixin.allow_from : s.wecom.allow_from) || ""
+const setCurAllow = (s, v) => { if (s.platform === "weixin") s.weixin.allow_from = v; else s.wecom.allow_from = v }
 function saveState(s) {
   fs.mkdirSync(dir(), { recursive: true })
   const tmp = statePath() + ".tmp"
@@ -164,7 +179,7 @@ export function renderConfig(s) {
     "[[projects]]",
     `name = ${tq(projectName(s.boundSid))}`,
     // admin_from 永远不写：/shell /dir 等特权命令在产品形态没有存在理由
-    ...(s.allowFrom.trim() ? [`allow_from = ${tq(s.allowFrom.trim())}`] : []),
+    ...(curAllow(s).trim() ? [`allow_from = ${tq(curAllow(s).trim())}`] : []),
     "",
     "[projects.agent]",
     `type = "opencode"`,
@@ -179,12 +194,21 @@ export function renderConfig(s) {
     ...Object.entries(env).map(([k, v]) => `${k} = ${tq(v)}`),
     "",
     "[[projects.platforms]]",
-    `type = "wecom"`,
+    `type = ${tq(s.platform)}`,
     "",
     "[projects.platforms.options]",
-    `mode = "websocket"`,
-    `bot_id = ${tq(s.wecom.bot_id)}`,
-    `bot_secret = ${tq(s.wecom.bot_secret)}`,
+    ...(s.platform === "weixin"
+      ? [
+        `token = ${tq(s.weixin.token)}`,
+        ...(s.weixin.account_id ? [`account_id = ${tq(s.weixin.account_id)}`] : []),
+        ...(s.weixin.base_url ? [`base_url = ${tq(s.weixin.base_url)}`] : []),
+        ...(s.weixin.allow_from.trim() ? [`allow_from = ${tq(s.weixin.allow_from.trim())}`] : []),
+      ]
+      : [
+        `mode = "websocket"`,
+        `bot_id = ${tq(s.wecom.bot_id)}`,
+        `bot_secret = ${tq(s.wecom.bot_secret)}`,
+      ]),
     "",
   ]
   return lines.join("\n")
@@ -204,7 +228,11 @@ export function start() {
   const s = loadState()
   if (!s.enabled || !supported()) return { ok: false, err: !s.enabled ? "未开启" : "缺 cc-connect 或 opencode 二进制" }
   if (running()) return { ok: true, already: true }
-  if (!s.wecom.bot_id || !s.wecom.bot_secret) return { ok: false, err: "尚未填写企微机器人凭证" }
+  if (s.platform === "weixin") {
+    if (!s.weixin.token) return { ok: false, err: "微信尚未扫码绑定" }
+  } else {
+    if (!s.wecom.bot_id || !s.wecom.bot_secret) return { ok: false, err: "尚未填写企微机器人凭证" }
+  }
   if (!s.boundSid || !s.boundDir) return { ok: false, err: "尚未绑定会话" }
   fs.mkdirSync(dir(), { recursive: true })
   fs.writeFileSync(configPath(), renderConfig(s))
@@ -231,6 +259,73 @@ export function start() {
   return { ok: true }
 }
 
+// ---- 微信个人号扫码（腾讯官方 ilink 机器人网关）----
+// 流程：spawn `cc-connect weixin setup --config <临时toml> --qr-image <png>` → UI 轮询到
+// 二维码就展示 → 用户手机微信扫码 → setup 成功退出并把 token/account_id/base_url/allow_from
+// 写进临时 toml → 抽出来存 state（我们每次启动都重写 config.toml，token 必须自己持久化）→
+// 临时文件即删（含 token）。扫码期间停桥：ilink 单会话，旧 token 的长轮询会跟新登录打架。
+let setupProc = null
+let setupInfo = { state: "idle", err: "" }   // idle | running | done | failed
+const qrPath = () => path.join(dir(), "weixin-qr.png")
+const setupCfgPath = () => path.join(dir(), "weixin-setup.toml")
+const platformReady = (s) => (s.platform === "weixin" ? !!s.weixin.token : !!(s.wecom.bot_id && s.wecom.bot_secret))
+
+export async function weixinSetupStart() {
+  if (!supported()) return { ok: false, err: "缺 cc-connect 组件" }
+  if (setupProc && setupProc.exitCode === null) return { ok: true, already: true }
+  fs.mkdirSync(dir(), { recursive: true })
+  for (const f of [qrPath(), setupCfgPath()]) { try { fs.rmSync(f) } catch {} }
+  await stop()
+  // 预写一个带 weixin 平台块的最小配置：setup 是"往既有配置里填 token"的语义，
+  // 不依赖它能否从零建文件
+  fs.writeFileSync(setupCfgPath(), [
+    "[[projects]]", `name = 'setup'`,
+    "[projects.agent]", `type = "opencode"`,
+    "[[projects.platforms]]", `type = "weixin"`,
+    "[projects.platforms.options]", `token = ""`, "",
+  ].join("\n"))
+  const out = fs.openSync(path.join(dir(), "setup.log"), "w")
+  setupInfo = { state: "running", err: "" }
+  setupProc = spawn(ccBin(), ["weixin", "setup", "--config", setupCfgPath(), "--project", "setup",
+    "--qr-image", qrPath(), "--timeout", "300"], { cwd: dir(), stdio: ["ignore", out, out], windowsHide: true })
+  setupProc.once("exit", (code) => {
+    try { fs.closeSync(out) } catch {}
+    setupProc = null
+    try {
+      const t = fs.existsSync(setupCfgPath()) ? fs.readFileSync(setupCfgPath(), "utf8") : ""
+      const pick = (k) => t.match(new RegExp(`^\\s*${k}\\s*=\\s*['"]([^'"]*)['"]`, "m"))?.[1] || ""
+      const token = pick("token")
+      if (code === 0 && token) {
+        const s = loadState()
+        s.weixin = { token, account_id: pick("account_id"), base_url: pick("base_url") }
+        const af = pick("allow_from")
+        if (af) s.weixin.allow_from = af   // setup 若回填扫码者 id——正好实现"只允许机主"（实测不一定回填，靠面板一键锁兜底）
+        s.platform = "weixin"
+        saveState(s)
+        setupInfo = { state: "done", err: "" }
+        if (s.enabled && s.boundSid) start()
+      } else {
+        let tail = ""; try { tail = fs.readFileSync(path.join(dir(), "setup.log"), "utf8").trim().split(/\r?\n/).slice(-3).join(" | ") } catch {}
+        setupInfo = { state: "failed", err: "扫码未完成（超时/取消）" + (tail ? "：" + tail.slice(0, 200) : "") }
+        // 扫码没成 → 桥要回到原平台继续服务（扫码前 stop() 过；不补这一下，企微就一直断着）
+        const s = loadState()
+        if (s.enabled && s.boundSid && platformReady(s)) start()
+      }
+    } catch (e) { setupInfo = { state: "failed", err: e.message } }
+    for (const f of [setupCfgPath(), qrPath()]) { try { fs.rmSync(f) } catch {} }   // 临时 toml 含 token，用完即删
+  })
+  return { ok: true }
+}
+export function weixinSetup() { return { ...setupInfo, qrReady: fs.existsSync(qrPath()) } }
+export function qrFile() { return fs.existsSync(qrPath()) ? qrPath() : "" }
+export async function weixinReset() {
+  await stop()
+  const s = loadState()
+  s.weixin = { token: "", account_id: "", base_url: "" }
+  saveState(s)
+  return { ok: true }
+}
+
 // ---- 绑定 / 换绑 / 解绑 ----
 export async function bind(sid) {
   const dirAbs = stripLP(await CTX.sessionOut(sid))
@@ -244,7 +339,7 @@ export async function bind(sid) {
   s.boundSid = sid; s.boundDir = dirAbs                    // 凭证/allowFrom/开关全部沿用 —— 这就是"默认沿用前一个的配置"
   saveState(s)
   restartCount = 0
-  const r = s.enabled && s.wecom.bot_id ? start() : { ok: true, idle: true }
+  const r = s.enabled && platformReady(s) ? start() : { ok: true, idle: true }
   return { ...r, boundSid: sid, boundDir: dirAbs }
 }
 export async function unbind() {
@@ -257,8 +352,9 @@ export async function unbind() {
 }
 export async function setConfig(patch) {
   const s = loadState()
+  if (patch.platform === "wecom" || patch.platform === "weixin") s.platform = patch.platform
   if (patch.wecom) s.wecom = { bot_id: String(patch.wecom.bot_id ?? s.wecom.bot_id).trim(), bot_secret: String(patch.wecom.bot_secret ?? s.wecom.bot_secret).trim() }
-  if (patch.allowFrom !== undefined) s.allowFrom = String(patch.allowFrom).trim()
+  if (patch.allowFrom !== undefined) setCurAllow(s, String(patch.allowFrom).trim())   // 写的是【当前平台】的白名单
   if (patch.progress !== undefined) s.progress = !!patch.progress
   if (patch.enabled !== undefined) s.enabled = !!patch.enabled
   saveState(s)
@@ -278,9 +374,11 @@ export function status() {
   try {
     const tail = fs.readFileSync(logPath(), "utf8").split(/\r?\n/).slice(-400)
     for (const ln of tail) {
-      if (ln.includes("wecom-ws: subscribed successfully")) subscribed = true
       if (ln.includes("wecom-ws: connecting")) subscribed = false     // 以最后状态为准，重连中=未订阅
       if (ln.includes("wecom-ws: subscribed successfully")) subscribed = true
+      // weixin 是 HTTP 长轮询没有"订阅成功"事件：platform ready + engine started 即视为在线
+      if (s.platform === "weixin" && /msg="platform ready".*platform=weixin/.test(ln)) subscribed = true
+      if (/weixin.*(polling stopped|login expired|unauthorized)/i.test(ln)) subscribed = false
       const m = ln.match(/msg="message received".*?\buser=(\S+)/)
       if (m && !seenUsers.includes(m[1])) seenUsers.push(m[1])
       if (/level=ERROR/.test(ln)) lastErrLine = ln.slice(0, 400)
@@ -290,11 +388,13 @@ export function status() {
     supported: supported(), ccBin: ccBin() ? true : false,
     enabled: s.enabled, running: running(), subscribed,
     boundSid: s.boundSid, boundDir: s.boundDir,
+    platform: s.platform,
     wecomConfigured: !!(s.wecom.bot_id && s.wecom.bot_secret),
-    bot_id: s.wecom.bot_id,                                  // secret 永远不回给前端
-    allowFrom: s.allowFrom, progress: s.progress,
+    weixinConfigured: !!s.weixin.token,
+    bot_id: s.wecom.bot_id,                                  // secret/token 永远不回给前端
+    allowFrom: curAllow(s), progress: s.progress,
     seenUsers: seenUsers.slice(-10), lastError: lastErrLine,
-    lastExit,
+    lastExit, weixinSetup: weixinSetup(),
   }
 }
 
