@@ -4417,7 +4417,14 @@ export const server = http.createServer(async (req, res) => {
       if (req.method === "POST" && u.pathname === "/api/chat-bridge/push") {
         if (!isLocal(req)) return send(res, 403, "application/json", JSON.stringify({ ok: false, err: "仅限本机" }))
         let b = {}; try { b = await readJson(req) } catch {}
-        const r = await Bridge.pushToChat({ text: b.text, files: Array.isArray(b.files) ? b.files : [] })
+        // 产物文件：定时任务传的是【会话内文件名】，在这里解析成绝对路径（safeUnder 防目录穿越）；
+        // 直接传绝对路径的调用方（少见）也兼容。
+        let files = []
+        if (Array.isArray(b.files) && b.files.length) {
+          if (b.sid) { const dir = await sessionOut(String(b.sid)); files = b.files.map((n) => safeUnder(dir, String(n))).filter(Boolean) }
+          else files = b.files.map(String)
+        }
+        const r = await Bridge.pushToChat({ text: b.text, files })
         return send(res, r.ok ? 200 : 400, "application/json", JSON.stringify(r))
       }
       return send(res, 404, "application/json", JSON.stringify({ ok: false, err: "没有这个接口" }))

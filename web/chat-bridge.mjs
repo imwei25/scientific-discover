@@ -426,10 +426,15 @@ export async function pushToChat({ text, files } = {}) {
   if (!session) return { ok: false, err: "还没有对话记录，无法确定推送对象（先在微信/企微里跟机器人说句话）" }
   const args = ["send", "-p", projectName(s.boundSid), "-s", session]
   if (text) args.push("-m", String(text))
-  for (const f of (files || [])) {
-    try { if (fs.existsSync(f)) args.push(IMG_EXT.has(path.extname(f).toLowerCase()) ? "--image" : "--file", f) } catch {}
-  }
-  if (args.length <= 6 && !text) return { ok: false, err: "没有可推送的内容" }
+  // 产物：图片直接内联发，其余作附件。限制单文件 ≤20MB、最多 5 个，跳过脚本/日志/临时文件
+  //（那是过程不是交付物）。太大的走软件端下载，别硬塞进聊天。
+  const MAX_FILES = 5, MAX_BYTES = 20 * 1024 * 1024
+  const picked = (files || []).filter((f) => {
+    try { const st = fs.statSync(f); if (!(st.size > 0 && st.size <= MAX_BYTES)) return false } catch { return false }
+    return ![".py", ".log", ".tmp"].includes(path.extname(f).toLowerCase())
+  }).slice(0, MAX_FILES)
+  for (const f of picked) args.push(IMG_EXT.has(path.extname(f).toLowerCase()) ? "--image" : "--file", f)
+  if (!text && !picked.length) return { ok: false, err: "没有可推送的内容" }
   return await new Promise((resolve) => {
     execFile(ccBin(), args, { windowsHide: true }, (err, _out, stderr) => {
       if (err) resolve({ ok: false, err: (String(stderr) || err.message || "").slice(0, 200) })

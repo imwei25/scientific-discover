@@ -388,9 +388,10 @@ async function main() {
         try {
           const head = acc.finalText.trim().replace(/\s+/g, " ").slice(0, 300)
           const txt = `【定时任务·${task.title}】${rec.ok ? "已完成" : "未完成：" + rec.reason}` +
-            (head ? "\n" + head : "") +
-            (rec.outputs.length ? `\n（产物 ${rec.outputs.length} 个，打开软件查看/下载）` : "")
-          const pr = await jpost(base, "/api/chat-bridge/push", { text: txt }, 30_000)
+            (head ? "\n" + head : "")
+          // 带上产物：文件名 + 本轮会话 id，由网关侧解析成绝对路径再发（图片内联、文档附件，
+          // 服务端限大小/数量）。没能发的大文件仍留在软件里可下载。
+          const pr = await jpost(base, "/api/chat-bridge/push", { text: txt, sid: rec.sid, files: rec.outputs }, 60_000)
           log(`[push] ${pr?.body?.ok ? "已推送到聊天接入" : "未推送（" + (pr?.body?.err || "?") + "）"}`)
         } catch (e) { log("[push] 推送异常：" + (e?.message || e)) }
       }
