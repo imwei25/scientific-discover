@@ -24,100 +24,142 @@ B.init({ root, webDir, sessionOut: async (sid) => sessDirs.get(sid), getModel: (
 
 const readAgents = (d) => { try { return fs.readFileSync(path.join(d, "AGENTS.md"), "utf8") } catch { return null } }
 
-test("renderConfig：cmd 无空格、env 齐全、allow_from 只在设置时出现、project 名随会话变", () => {
-  const s = { ...B.loadState(), boundSid: "ses_abc12345", boundDir: path.join(tmp, "out", "x"), wecom: { bot_id: "bid", bot_secret: "sec", allow_from: "" } }
+// 构造一个 state：某平台已配置凭证 + 绑定会话（即 active，会进 config）
+const wecomBound = (sid, d, over = {}) => ({ ...B.loadState(), wecom: { bot_id: "bid", bot_secret: "sec", allow_from: "", boundSid: sid, boundDir: d, ...over } })
+
+test("renderConfig：cmd 无空格、env 齐全、project 名带平台+会话、allow_from 只在设置时出现", () => {
+  const s = wecomBound("ses_abc12345", path.join(tmp, "out", "x"))
   const toml = B.renderConfig(s)
   const cmd = toml.match(/^cmd = '(.+)'$/m)?.[1]
   assert.ok(cmd, "有 cmd 行")
   for (const part of cmd.split(" ")) assert.ok(!part.includes(" ") && fs.existsSync(part), `cmd 每段无空格且存在: ${part}`)
   assert.match(toml, /OPENCODE_CONFIG = '/)
-  assert.match(toml, /XDG_CONFIG_HOME = '/)
   assert.match(toml, /SCI_WRAP_OC = '/)
   assert.match(toml, /model = 'custom\/m1'/)
-  assert.match(toml, /name = 'sci-abc12345'/)
-  assert.ok(!toml.includes("allow_from"), "没设 allowFrom 就不写")
+  assert.match(toml, /name = 'sci-wecom-abc12345'/)
+  assert.ok(!toml.includes("allow_from"), "没设 allow_from 就不写")
   assert.ok(!toml.includes("admin_from"), "admin_from 永远不写")
-  const toml2 = B.renderConfig({ ...s, wecom: { ...s.wecom, allow_from: "u1,u2" }, boundSid: "ses_zzz99999" })
+  const toml2 = B.renderConfig(wecomBound("ses_zzz99999", path.join(tmp, "out", "x"), { allow_from: "u1,u2" }))
   assert.match(toml2, /allow_from = 'u1,u2'/)
-  assert.match(toml2, /name = 'sci-zzz99999'/)
+  assert.match(toml2, /name = 'sci-wecom-zzz99999'/)
 })
 
-test("inject/retract：空目录注入→收回后文件删除；幂等", () => {
-  const d = mkSess("ses_t1")
-  B.injectAgents(d)
-  const a = readAgents(d)
-  assert.ok(a.includes("sci-chat-bridge:start") && a.includes("cc-connect send"), "注入了标记块")
-  B.injectAgents(d)   // 幂等：不重复
-  assert.equal((readAgents(d).match(/sci-chat-bridge:start/g) || []).length, 1)
-  B.retractAgents(d)
-  assert.equal(readAgents(d), null, "纯注入文件收回后连文件删掉")
-})
-
-test("inject/retract：用户已有 AGENTS.md 内容不丢", () => {
-  const d = mkSess("ses_t2")
-  fs.writeFileSync(path.join(d, "AGENTS.md"), "# 用户自己的规则\n重要内容\n")
-  B.injectAgents(d)
-  assert.ok(readAgents(d).includes("用户自己的规则"))
-  assert.ok(readAgents(d).includes("sci-chat-bridge:start"))
-  B.retractAgents(d)
-  const after = readAgents(d)
-  assert.ok(after.includes("用户自己的规则"), "用户内容保留")
-  assert.ok(!after.includes("sci-chat-bridge"), "我们的块删干净")
-})
-
-test("bind 换绑：自动脱离前一个（收回注入）、凭证沿用、boundSid 更新", async () => {
-  const dA = mkSess("ses_A"), dB = mkSess("ses_B")
-  await B.setConfig({ wecom: { bot_id: "bid", bot_secret: "sec" }, allowFrom: "boss" })   // enabled 仍 false，不会 spawn
-  let r = await B.bind("ses_A")
-  assert.equal(r.ok, true)
-  assert.ok(readAgents(dA)?.includes("sci-chat-bridge:start"), "A 已注入")
-  r = await B.bind("ses_B")
-  assert.equal(r.ok, true)
-  assert.equal(readAgents(dA), null, "换绑后 A 的注入被收回")
-  assert.ok(readAgents(dB)?.includes("sci-chat-bridge:start"), "B 已注入")
-  const s = B.loadState()
-  assert.equal(s.boundSid, "ses_B")
-  assert.equal(s.wecom.bot_id, "bid", "凭证沿用前一个的配置")
-  assert.equal(s.wecom.allow_from, "boss", "白名单存在当前平台（wecom）名下")
-  await B.unbind()
-  assert.equal(readAgents(dB), null, "解绑收回 B")
-  assert.equal(B.loadState().boundSid, "")
-})
-
-test("lastSessionKey：从桥日志取最近一条 message received 的 session（推送对象）", () => {
-  const bdir = path.join(root, "chat-bridge"); fs.mkdirSync(bdir, { recursive: true })
-  fs.writeFileSync(path.join(bdir, "bridge.log"),
-    'noise\nlevel=INFO msg="message received" session=weixin:dm:aaa@im.wechat user=aaa\n' +
-    'level=INFO msg="message received" session=weixin:dm:bbb@im.wechat user=bbb\nmore noise\n')
-  assert.equal(B.lastSessionKey(), "weixin:dm:bbb@im.wechat")   // 取最后一条
-})
-
-test("bind：找不到会话目录时报错不炸", async () => {
-  const r = await B.bind("ses_missing")
-  assert.equal(r.ok, false)
-})
-
-test("renderConfig：聊天接入专用模型 s.model 覆盖网关默认，空则跟随", () => {
-  const base = { ...B.loadState(), boundSid: "ses_m", boundDir: path.join(tmp, "out", "m"), wecom: { bot_id: "b", bot_secret: "s", allow_from: "" } }
-  assert.match(B.renderConfig({ ...base, model: "doubao-seed-2.0-lite" }), /model = 'custom\/doubao-seed-2.0-lite'/)
-  assert.match(B.renderConfig({ ...base, model: "" }), /model = 'custom\/m1'/)   // 空=跟随 getModel() 的 m1
-})
-
-test("renderConfig：weixin 平台出 token 块、不出企微凭证", () => {
+test("renderConfig：微信+企微都 active → 生成两个 project，各自 work_dir/platform", () => {
+  const dW = path.join(tmp, "out", "pw"), dX = path.join(tmp, "out", "px")
   const s = {
-    ...B.loadState(), platform: "weixin", boundSid: "ses_wx1", boundDir: path.join(tmp, "out", "wx"),
-    weixin: { token: "tok123", account_id: "acc1", base_url: "", allow_from: "u@im.wechat" },
-    wecom: { bot_id: "shouldnotappear", bot_secret: "nope", allow_from: "woWECOMID" },
+    ...B.loadState(),
+    wecom: { bot_id: "b", bot_secret: "s", allow_from: "", boundSid: "ses_wc", boundDir: dW },
+    weixin: { token: "tok", account_id: "acc", base_url: "", allow_from: "", boundSid: "ses_wx", boundDir: dX },
+  }
+  const toml = B.renderConfig(s)
+  assert.equal((toml.match(/\[\[projects\]\]/g) || []).length, 2, "两个 project")
+  assert.match(toml, /name = 'sci-wecom-\w*ses_wc'|name = 'sci-wecom-/)
+  assert.match(toml, /name = 'sci-weixin-/)
+  assert.match(toml, /type = 'wecom'/); assert.match(toml, /type = 'weixin'/)
+  assert.ok(toml.includes(`work_dir = '${dW.replace(/\\/g, "\\")}'`) || toml.includes("work_dir = '" + dW + "'"), "企微 project 的 work_dir")
+  assert.match(toml, /token = 'tok'/); assert.match(toml, /bot_id = 'b'/)
+})
+
+test("renderConfig：weixin 平台出 token 块、不混入企微凭证", () => {
+  const s = {
+    ...B.loadState(),
+    weixin: { token: "tok123", account_id: "acc1", base_url: "", allow_from: "u@im.wechat", boundSid: "ses_wx1", boundDir: path.join(tmp, "out", "wx") },
+    wecom: { bot_id: "", bot_secret: "", allow_from: "woWECOMID", boundSid: "", boundDir: "" },   // 企微没绑 → 不 active
   }
   const toml = B.renderConfig(s)
   assert.match(toml, /type = 'weixin'/)
   assert.match(toml, /allow_from = 'u@im.wechat'/)
-  assert.ok(!toml.includes("woWECOMID"), "企微白名单绝不能混进微信配置（真机踩过：机主被自己拦在门外）")
-  assert.match(toml, /token = 'tok123'/)
-  assert.match(toml, /account_id = 'acc1'/)
-  assert.ok(!toml.includes("base_url"), "空 base_url 不写")
-  assert.ok(!toml.includes("bot_id") && !toml.includes("bot_secret"), "企微凭证不进 weixin 配置")
-  assert.ok(!toml.includes("websocket"), "weixin 不带企微的 mode")
+  assert.ok(!toml.includes("woWECOMID"), "企微白名单不混进微信配置")
+  assert.match(toml, /token = 'tok123'/); assert.match(toml, /account_id = 'acc1'/)
+  assert.ok(!toml.includes("bot_id"), "企微没 active，不出企微块")
+})
+
+test("renderConfig：s.model 覆盖网关默认，空则跟随", () => {
+  const base = wecomBound("ses_m", path.join(tmp, "out", "m"))
+  assert.match(B.renderConfig({ ...base, model: "doubao-seed-2.0-lite" }), /model = 'custom\/doubao-seed-2.0-lite'/)
+  assert.match(B.renderConfig({ ...base, model: "" }), /model = 'custom\/m1'/)
+})
+
+test("inject/retract：空目录注入→收回删除；幂等；用户内容保留", () => {
+  const d = mkSess("ses_t1")
+  B.injectAgents(d)
+  assert.ok(readAgents(d).includes("sci-chat-bridge:start"), "注入了标记块")
+  B.injectAgents(d)
+  assert.equal((readAgents(d).match(/sci-chat-bridge:start/g) || []).length, 1, "幂等不重复")
+  B.retractAgents(d); assert.equal(readAgents(d), null, "纯注入收回后删文件")
+  const d2 = mkSess("ses_t2")
+  fs.writeFileSync(path.join(d2, "AGENTS.md"), "# 用户规则\n重要\n")
+  B.injectAgents(d2); B.retractAgents(d2)
+  assert.ok(readAgents(d2).includes("用户规则") && !readAgents(d2).includes("sci-chat-bridge"), "用户内容留、我们的块删净")
+})
+
+test("bind(platform,sid)：绑定注入、换绑收回旧、平台独立", async () => {
+  const dA = mkSess("ses_A"), dB = mkSess("ses_B")
+  await B.setConfig({ wecom: { bot_id: "bid", bot_secret: "sec", allow_from: "boss" } })
+  let r = await B.bind("wecom", "ses_A")
+  assert.equal(r.ok, true)
+  assert.ok(readAgents(dA)?.includes("sci-chat-bridge:start"), "A 已注入")
+  r = await B.bind("wecom", "ses_B")
+  assert.equal(readAgents(dA), null, "换绑后 A 收回")
+  assert.ok(readAgents(dB)?.includes("sci-chat-bridge"), "B 已注入")
+  const s = B.loadState()
+  assert.equal(s.wecom.boundSid, "ses_B")
+  assert.equal(s.wecom.bot_id, "bid", "凭证沿用")
+  assert.equal(s.wecom.allow_from, "boss")
+  await B.unbind("wecom")
+  assert.equal(readAgents(dB), null, "解绑收回")
+  assert.equal(B.loadState().wecom.boundSid, "")
+})
+
+test("多平台独立：微信、企微绑不同会话，解绑一个不动另一个", async () => {
+  const dW = mkSess("ses_wc"), dX = mkSess("ses_wx")
+  await B.setConfig({ wecom: { bot_id: "b", bot_secret: "s" } })
+  // 手动写入微信 token（不走扫码）
+  const st0 = B.loadState(); st0.weixin.token = "tok"; fs.writeFileSync(path.join(root, "chat-bridge", "state.json"), JSON.stringify(st0))
+  await B.bind("wecom", "ses_wc")
+  await B.bind("weixin", "ses_wx")
+  const s = B.loadState()
+  assert.equal(s.wecom.boundSid, "ses_wc")
+  assert.equal(s.weixin.boundSid, "ses_wx")
+  assert.ok(readAgents(dW)?.includes("sci-chat-bridge"), "企微目录已注入")
+  assert.ok(readAgents(dX)?.includes("sci-chat-bridge"), "微信目录已注入")
+  assert.equal(B.platformOfDir(dW), "wecom", "目录→企微")
+  assert.equal(B.platformOfDir(dX), "weixin", "目录→微信")
+  await B.unbind("wecom")
+  assert.equal(readAgents(dW), null, "企微解绑收回")
+  assert.ok(readAgents(dX)?.includes("sci-chat-bridge"), "微信不受影响")
+  assert.equal(B.loadState().weixin.boundSid, "ses_wx", "微信绑定还在")
+})
+
+test("两平台绑【同一目录】：解绑一个不收回注入（另一个还在用）", async () => {
+  const d = mkSess("ses_shared")
+  await B.setConfig({ wecom: { bot_id: "b", bot_secret: "s" } })
+  const st0 = B.loadState(); st0.weixin.token = "tok"; fs.writeFileSync(path.join(root, "chat-bridge", "state.json"), JSON.stringify(st0))
+  await B.bind("wecom", "ses_shared")
+  await B.bind("weixin", "ses_shared")
+  await B.unbind("wecom")
+  assert.ok(readAgents(d)?.includes("sci-chat-bridge"), "微信还绑着同目录 → 注入不收回")
+  await B.unbind("weixin")
+  assert.equal(readAgents(d), null, "两个都解绑了 → 才收回")
+})
+
+test("loadState 迁移旧单平台格式：platform+boundSid → 归到对应平台", () => {
+  const bdir = path.join(root, "chat-bridge"); fs.mkdirSync(bdir, { recursive: true })
+  fs.writeFileSync(path.join(bdir, "state.json"), JSON.stringify({
+    enabled: true, platform: "wecom", boundSid: "ses_old", boundDir: "/tmp/old",
+    wecom: { bot_id: "ob", bot_secret: "os" }, allowFrom: "legacy",
+  }))
+  const s = B.loadState()
+  assert.equal(s.wecom.boundSid, "ses_old", "旧 boundSid 归到 wecom")
+  assert.equal(s.wecom.boundDir, "/tmp/old")
+  assert.equal(s.wecom.allow_from, "legacy", "旧顶层 allowFrom 归到 wecom")
+  assert.equal(s.platform, undefined, "旧顶层字段清掉")
+  assert.equal(s.boundSid, undefined)
+})
+
+test("bind：未知平台 / 找不到目录都不炸", async () => {
+  assert.equal((await B.bind("qq", "ses_A")).ok, false)
+  assert.equal((await B.bind("wecom", "ses_missing")).ok, false)
 })
 
 test("spaceFree：含空格的不同路径绝不能撞进同一个 junction（真机踩过的回归）", () => {

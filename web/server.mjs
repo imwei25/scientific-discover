@@ -3406,6 +3406,19 @@ export const server = http.createServer(async (req, res) => {
       // 新装的机器上人人都是 0，不能用真值判断。
       const hasCost = all.some((s) => typeof s?.cost === "number")
       const rate = creditRate()
+      // ---- 聊天接入认领 ----
+      // cc-connect 在"绑定会话的目录"里每次对话起新会话，这些会话游离在会话管理外。
+      // 这里按 directory 匹配某平台的绑定目录：给它们挂平台标记（前端据此显示微信/企微图标）、
+      // 并继承绑定会话的文件夹（新会话自动归到同一个文件夹，不再散落在"最近会话"）。
+      const cbDirPlat = {}, cbClaimFolder = {}
+      const Rp = (x) => { try { return path.resolve(x).toLowerCase() } catch { return "" } }
+      try {
+        const bi = Bridge.boundInfo()
+        for (const p of ["wecom", "weixin"]) {
+          if (bi[p]?.dir) cbDirPlat[Rp(bi[p].dir)] = p
+          if (bi[p]?.sid) cbClaimFolder[p] = folderOf(bi[p].sid)
+        }
+      } catch {}
       const sessions = all
         .filter((s) => !s.parentID)
         .sort((a, b) => (b.time?.updated || 0) - (a.time?.updated || 0))
@@ -3419,13 +3432,18 @@ export const server = http.createServer(async (req, res) => {
           // 决定徽标与临期提醒条；给 true/null 让它显示"永久"、提醒条恒空，不会吓唬用户。
           // pinned 恒 false 同理：置顶已删，但老界面包读它分组，给 false 让「置顶」组恒空。
           const usd = subtreeCost(byParent, s)
+          // 认领：directory 匹配某平台绑定目录 → 挂平台标记；无自有文件夹时继承绑定会话的文件夹
+          const cbPlat = s.directory ? cbDirPlat[Rp(s.directory)] : null
+          let folderId = folderOf(s.id)
+          if (!folderId && cbPlat && cbClaimFolder[cbPlat]) folderId = cbClaimFolder[cbPlat]
           return { id: s.id, title: s.title || "(未命名)", updated: s.time?.updated || 0, running: !!jobs.get(s.id)?.running,
             // 美元与积分都给：前端只显示积分（用户面前不出现美元，见 index.html 的说明），
             // costUsd 留着排障与将来对账用。credits 不取整 —— 一轮往往不到 1 积分，
             // 在这里 floor 会让绝大多数会话显示成 0，取整口径交给前端的 fmtCreditsFine。
             ...(hasCost ? { costUsd: Math.round(usd * 1e6) / 1e6, credits: usd / rate } : {}),
             module: mod, moduleName: MODULE_DEFS[mod]?.name || mod,
-            projectId, folderId: folderOf(s.id), orders: m.orders || {},
+            projectId, folderId, orders: m.orders || {},
+            ...(cbPlat ? { chatBridge: cbPlat } : {}),
             pinned: false, permanent: true, expiresAt: null }
         })
       const projects = [...META.projects].sort((a, b) => (a.order ?? 0) - (b.order ?? 0)).map((p) => ({ id: p.id, name: p.name, order: p.order ?? 0 }))
@@ -4378,9 +4396,11 @@ export const server = http.createServer(async (req, res) => {
     if (u.pathname.startsWith("/api/chat-bridge/")) {
       if (req.method === "GET" && u.pathname === "/api/chat-bridge/status") {
         const st = Bridge.status()
-        let boundTitle = ""
-        if (st.boundSid) { try { boundTitle = un(await client.session.get({ path: { id: st.boundSid } }))?.title || "" } catch {} }
-        return send(res, 200, "application/json", JSON.stringify({ ok: true, ...st, boundTitle }))
+        // 每平台绑定会话的标题（前端各区显示"当前接入：xxx"）
+        const titleOf = async (sid) => { if (!sid) return ""; try { return un(await client.session.get({ path: { id: sid } }))?.title || "" } catch { return "" } }
+        st.wecom.boundTitle = await titleOf(st.wecom.boundSid)
+        st.weixin.boundTitle = await titleOf(st.weixin.boundSid)
+        return send(res, 200, "application/json", JSON.stringify({ ok: true, ...st }))
       }
       if (!Bridge.supported() && req.method === "POST")
         return send(res, 400, "application/json", JSON.stringify({ ok: false, err: "聊天接入需要 Windows 桌面版（且带 cc-connect 组件）" }))
@@ -4391,13 +4411,16 @@ export const server = http.createServer(async (req, res) => {
       }
       if (req.method === "POST" && u.pathname === "/api/chat-bridge/bind") {
         let b = {}; try { b = await readJson(req) } catch {}
-        const sid = String(b.sid || "")
+        const sid = String(b.sid || ""), platform = String(b.platform || "")
         if (!sid) return send(res, 400, "application/json", JSON.stringify({ ok: false, err: "缺 sid" }))
-        const r = await Bridge.bind(sid)
+        if (!platform) return send(res, 400, "application/json", JSON.stringify({ ok: false, err: "缺 platform" }))
+        const r = await Bridge.bind(platform, sid)
         return send(res, r.ok ? 200 : 400, "application/json", JSON.stringify(r))
       }
-      if (req.method === "POST" && u.pathname === "/api/chat-bridge/unbind")
-        return send(res, 200, "application/json", JSON.stringify(await Bridge.unbind()))
+      if (req.method === "POST" && u.pathname === "/api/chat-bridge/unbind") {
+        let b = {}; try { b = await readJson(req) } catch {}
+        return send(res, 200, "application/json", JSON.stringify(await Bridge.unbind(String(b.platform || ""))))
+      }
       if (req.method === "POST" && u.pathname === "/api/chat-bridge/restart") {
         await Bridge.stop()
         const r = Bridge.start()
@@ -4419,12 +4442,13 @@ export const server = http.createServer(async (req, res) => {
         let b = {}; try { b = await readJson(req) } catch {}
         // 产物文件：定时任务传的是【会话内文件名】，在这里解析成绝对路径（safeUnder 防目录穿越）；
         // 直接传绝对路径的调用方（少见）也兼容。
-        let files = []
+        let files = [], workDir = ""
+        if (b.sid) { workDir = await sessionOut(String(b.sid)) }   // 定时任务产物所在会话目录 → 推给绑了这个目录的平台
         if (Array.isArray(b.files) && b.files.length) {
-          if (b.sid) { const dir = await sessionOut(String(b.sid)); files = b.files.map((n) => safeUnder(dir, String(n))).filter(Boolean) }
+          if (workDir) files = b.files.map((n) => safeUnder(workDir, String(n))).filter(Boolean)
           else files = b.files.map(String)
         }
-        const r = await Bridge.pushToChat({ text: b.text, files })
+        const r = await Bridge.pushToChat({ text: b.text, files, dir: workDir })
         return send(res, r.ok ? 200 : 400, "application/json", JSON.stringify(r))
       }
       return send(res, 404, "application/json", JSON.stringify({ ok: false, err: "没有这个接口" }))
