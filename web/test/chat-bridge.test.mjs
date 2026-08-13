@@ -74,6 +74,27 @@ test("renderConfig：weixin 平台出 token 块、不混入企微凭证", () => 
   assert.ok(!toml.includes("bot_id"), "企微没 active，不出企微块")
 })
 
+test("renderConfig：thinking / uploadFirst → 注入 SCI_WRAP_* env（默认 0，开了变 1）", () => {
+  const base = wecomBound("ses_env", path.join(tmp, "out", "env"))
+  const off = B.renderConfig(base)
+  assert.match(off, /SCI_WRAP_THINKING = '0'/)
+  assert.match(off, /SCI_WRAP_UPLOAD_FIRST = '0'/)
+  const on = B.renderConfig({ ...base, thinking: true, uploadFirst: true })
+  assert.match(on, /SCI_WRAP_THINKING = '1'/)
+  assert.match(on, /SCI_WRAP_UPLOAD_FIRST = '1'/)
+})
+
+test("setConfig：thinking / uploadFirst 落盘并回 status", async () => {
+  await B.setConfig({ thinking: true, uploadFirst: true })
+  let s = B.loadState()
+  assert.equal(s.thinking, true); assert.equal(s.uploadFirst, true)
+  const st = B.status()
+  assert.equal(st.thinking, true); assert.equal(st.uploadFirst, true)
+  await B.setConfig({ thinking: false, uploadFirst: false })
+  s = B.loadState()
+  assert.equal(s.thinking, false); assert.equal(s.uploadFirst, false)
+})
+
 test("renderConfig：s.model 覆盖网关默认，空则跟随", () => {
   const base = wecomBound("ses_m", path.join(tmp, "out", "m"))
   assert.match(B.renderConfig({ ...base, model: "doubao-seed-2.0-lite" }), /model = 'custom\/doubao-seed-2.0-lite'/)

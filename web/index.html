@@ -1969,9 +1969,15 @@
         </details>
       </div>
 
-      <!-- 通用：模型 + 使用教程 -->
+      <!-- 通用：模型 + 高级选项 + 使用教程（微信/企微共用） -->
       <label class="mm-field"><span>使用的模型（微信/企微共用；「跟随界面」= 你当前在软件里选的那个）</span>
         <select id="cbModel" class="mm-input mm-select"><option value="">跟随界面当前模型</option></select></label>
+      <label class="mm-check" style="display:flex;align-items:flex-start;gap:8px;margin:2px 0">
+        <input id="cbThinking" type="checkbox" style="margin-top:3px" />
+        <span>输出思考过程<b class="mm-hint" style="font-weight:400">（把模型的思考聚合成一条，在正文前发给你；工具调用过程始终不显示）</b></span></label>
+      <label class="mm-check" style="display:flex;align-items:flex-start;gap:8px;margin:2px 0">
+        <input id="cbUploadFirst" type="checkbox" style="margin-top:3px" />
+        <span>先上传后提问<b class="mm-hint" style="font-weight:400">（只发文件时先暂存不作答，等你发问题时再一并读取；关掉则发文件即当场分析）</b></span></label>
       <details class="cb-details">
         <summary>怎么用</summary>
         <ul class="cb-steps">
@@ -8099,6 +8105,8 @@ document.addEventListener("visibilitychange", () => { if (!document.hidden) refr
       if (!st || !st.ok) throw new Error((st && st.err) || "读取失败")
       cur = st
       $("cbEnabled").checked = !!st.enabled
+      $("cbThinking").checked = !!st.thinking
+      $("cbUploadFirst").checked = !!st.uploadFirst
       $("cbBotId").value = st.wecom.bot_id || ""
       if (document.activeElement !== $("cbwAllow")) $("cbwAllow").value = st.wecom.allowFrom || ""
       if (document.activeElement !== $("cbxAllow")) $("cbxAllow").value = st.weixin.allowFrom || ""
@@ -8188,6 +8196,15 @@ document.addEventListener("visibilitychange", () => { if (!document.hidden) refr
   $("cbxAllow").addEventListener("change", function () { jpost("api/chat-bridge/config", { weixin: { allow_from: $("cbxAllow").value.trim() } }).then(function () { setMsg(msgEl, "ok", "微信白名单已更新。") }) })
   // 模型改变即存（两平台共用）
   $("cbModel").addEventListener("change", function () { jpost("api/chat-bridge/config", { model: $("cbModel").value }).then(function () { setMsg(msgEl, "ok", "模型已更新。"); setTimeout(refresh, 1500) }) })
+  // 高级选项：输出思考 / 先上传后提问（改动会重启桥使其对新对话生效）
+  $("cbThinking").addEventListener("change", function () {
+    var on = $("cbThinking").checked
+    jpost("api/chat-bridge/config", { thinking: on }).then(function () { setMsg(msgEl, "ok", on ? "已开启输出思考过程。" : "已关闭输出思考过程。"); setTimeout(refresh, 1500) })
+  })
+  $("cbUploadFirst").addEventListener("change", function () {
+    var on = $("cbUploadFirst").checked
+    jpost("api/chat-bridge/config", { uploadFirst: on }).then(function () { setMsg(msgEl, "ok", on ? "已开启先上传后提问。" : "已关闭先上传后提问。"); setTimeout(refresh, 1500) })
+  })
   // 总开关
   $("cbEnabled").addEventListener("change", function () {
     var on = $("cbEnabled").checked

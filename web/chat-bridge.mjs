@@ -44,6 +44,8 @@ const logPath = () => path.join(dir(), "bridge.log")
 const defState = () => ({
   enabled: false,
   progress: true,                       // 长任务进度提示（oc-wrap 里实现）
+  thinking: false,                      // 「输出思考」：把 reasoning 聚合成一条推给聊天（默认关，工具过程仍不外发）
+  uploadFirst: false,                   // 「先上传后提问」：只发文件不触发会话，先暂存、提问时并入（默认关）
   model: "",                            // 聊天接入专用模型（modelID，空=跟随界面/网关当前模型）
   wecom: { bot_id: "", bot_secret: "", allow_from: "", boundSid: "", boundDir: "" },
   weixin: { token: "", account_id: "", base_url: "", allow_from: "", boundSid: "", boundDir: "" },
@@ -170,6 +172,8 @@ function commonEnv(s) {
     SCI_WRAP_OC: ocBin(),
     SCI_WRAP_CC: cc,
     SCI_WRAP_PROGRESS: s.progress ? "1" : "0",
+    SCI_WRAP_THINKING: s.thinking ? "1" : "0",
+    SCI_WRAP_UPLOAD_FIRST: s.uploadFirst ? "1" : "0",
     SCI_WRAP_LOG: path.join(dir(), "wrap.log"),
     PYTHONUTF8: "1", PYTHONIOENCODING: "utf-8",
   }
@@ -374,6 +378,8 @@ export async function setConfig(patch) {
   }
   if (patch.weixin && patch.weixin.allow_from !== undefined) s.weixin.allow_from = String(patch.weixin.allow_from).trim()
   if (patch.progress !== undefined) s.progress = !!patch.progress
+  if (patch.thinking !== undefined) s.thinking = !!patch.thinking
+  if (patch.uploadFirst !== undefined) s.uploadFirst = !!patch.uploadFirst
   if (patch.model !== undefined) s.model = String(patch.model).trim()
   if (patch.enabled !== undefined) s.enabled = !!patch.enabled
   saveState(s)
@@ -420,7 +426,8 @@ export function status() {
   })
   return {
     supported: supported(), ccBin: !!ccBin(),
-    enabled: s.enabled, running: running(), progress: s.progress, model: s.model,
+    enabled: s.enabled, running: running(), progress: s.progress,
+    thinking: s.thinking, uploadFirst: s.uploadFirst, model: s.model,
     wecom: { ...plat("wecom"), bot_id: s.wecom.bot_id },   // secret/token 永不回前端
     weixin: { ...plat("weixin") },
     // 认领用：每平台绑定目录 → 前端/网关据此给同目录会话挂图标、归文件夹
