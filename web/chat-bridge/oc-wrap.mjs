@@ -21,6 +21,23 @@ const CC = process.env.SCI_WRAP_CC || "cc-connect"
 const PROGRESS = process.env.SCI_WRAP_PROGRESS !== "0"
 const args = process.argv.slice(2)
 
+// opencode 把上游/网络错误统一包成 {"type":"error",...,"error":{"name":"UnknownError",
+// "data":{"message":"Unexpected server error. Check server logs..."}}}，cc-connect 会原样
+// 拼成「❌ 错误: UnknownError: Unexpected server error…」发进聊天——用户看不懂也不知道该干嘛。
+// 这里按关键词把它翻成中文、给出该怎么办。ref 保留（技术支持排云端日志时要用）。
+function friendlyError(raw, name) {
+  const s = ((raw || "") + " " + (name || "")).toLowerCase()
+  if (/timeout|timed out|deadline|etimedout/.test(s))
+    return { t: "模型响应超时", m: "长任务本来就慢，多半是这次上游特别久或网络不稳。重发一次通常就好；若反复如此，换个模型或把任务拆成几步。" }
+  if (/econnreset|econnrefused|socket|connection|network|dns|enotfound|fetch failed|unreachable|aborted/.test(s))
+    return { t: "网络连接中断", m: "跟模型服务的连接断了，多半是网络抖了一下，重发一次即可；若每次都在同一处断，多半是这一轮太长，拆成几步试试。" }
+  if (/\b429\b/.test(s) || /quota|rate.?limit|too many|额度|限流|余额|balance|insufficient/.test(s))
+    return { t: "额度用尽或被限流", m: "请稍后再试；若是积分用尽，在软件里查看剩余积分。" }
+  if (/unexpected server error|internal server|server error|\b50[0234]\b|bad gateway|unavailable/.test(s))
+    return { t: "模型服务暂时不可用", m: "当前模型的云端通道可能出故障了。在软件的「聊天接入」里换一个模型（比如 doubao）或过一会儿再试；若一直这样，把这条连同下面的编号告诉管理员。" }
+  return { t: "出错了", m: (raw || "未知错误").slice(0, 300) }
+}
+
 if (!REAL_OC || !fs.existsSync(REAL_OC)) {
   console.error("oc-wrap: SCI_WRAP_OC 未设置或不存在: " + REAL_OC)
   process.exit(1)
@@ -88,6 +105,16 @@ if (args[0] !== "run") {
             }
           }
           return   // 思考与工具进度：不给 cc-connect 看见
+        }
+        // 错误事件：把 opencode 的技术话术翻成中文再放行（cc-connect 从这条事件取文案发进聊天）
+        if (type === "error" && evt?.error) {
+          const e = evt.error
+          const raw = String(e?.data?.message || e?.message || e?.name || "")
+          const ref = e?.data?.ref
+          const f = friendlyError(raw, e?.name)
+          evt.error = { name: f.t, data: { message: f.m + (ref ? `（编号 ${ref}）` : ""), ref } }
+          process.stdout.write(JSON.stringify(evt) + "\n")
+          return
         }
       } catch { /* 非 JSON 行原样放行 */ }
     }
