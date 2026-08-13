@@ -89,6 +89,12 @@ test("bind：找不到会话目录时报错不炸", async () => {
   assert.equal(r.ok, false)
 })
 
+test("renderConfig：聊天接入专用模型 s.model 覆盖网关默认，空则跟随", () => {
+  const base = { ...B.loadState(), boundSid: "ses_m", boundDir: path.join(tmp, "out", "m"), wecom: { bot_id: "b", bot_secret: "s", allow_from: "" } }
+  assert.match(B.renderConfig({ ...base, model: "doubao-seed-2.0-lite" }), /model = 'custom\/doubao-seed-2.0-lite'/)
+  assert.match(B.renderConfig({ ...base, model: "" }), /model = 'custom\/m1'/)   // 空=跟随 getModel() 的 m1
+})
+
 test("renderConfig：weixin 平台出 token 块、不出企微凭证", () => {
   const s = {
     ...B.loadState(), platform: "weixin", boundSid: "ses_wx1", boundDir: path.join(tmp, "out", "wx"),

@@ -1938,6 +1938,8 @@
       <label class="mm-field"><span>第 2 步 · 选择接到微信的会话（微信里的对话将在这个会话的工作台里干活，文件互通）</span>
         <select id="cbSess" class="mm-input mm-select"></select></label>
       <div class="mm-hint" id="cbBoundHint"></div>
+      <label class="mm-field"><span>使用的模型（可与电脑端界面用不同模型；「跟随界面」= 用你当前在软件里选的那个）</span>
+        <select id="cbModel" class="mm-input mm-select"><option value="">跟随界面当前模型</option></select></label>
       <div class="mm-actions">
         <button id="cbSave" class="mm-btn primary" type="button">保存并连接</button>
         <button id="cbUnbind" class="mm-btn ghost" type="button" hidden>断开接入</button>
@@ -8078,6 +8080,16 @@ document.addEventListener("visibilitychange", () => { if (!document.hidden) refr
         ? "当前接入：<b>" + esc(st.boundTitle || st.boundSid) + "</b>　（选择其他会话并保存即可换绑，旧会话自动脱离）"
         : "尚未绑定。新会话也行——先在主界面开好会话，再回这里选它。"
       paintState(st); paintSeen(st)
+      // 模型下拉：跟随界面 + 云端档位允许的模型清单
+      jget("api/models").then(function (md) {
+        var ms = (md && md.models) || []
+        var mSel = document.getElementById("cbModel")
+        var opts = ['<option value="">跟随界面当前模型' + (md && md.current ? "（现为 " + esc(md.current) + "）" : "") + "</option>"]
+        opts = opts.concat(ms.map(function (m) {
+          return '<option value="' + esc(m.model) + '"' + (m.model === st.model ? " selected" : "") + ">" + esc(m.label || m.model) + "</option>"
+        }))
+        mSel.innerHTML = opts.join("")
+      }).catch(function () { /* 拿不到清单就只留「跟随界面」一项 */ })
       // 会话下拉
       return jget("api/sessions").then(function (d) {
         var ss = (d && d.sessions) || []
@@ -8089,7 +8101,7 @@ document.addEventListener("visibilitychange", () => { if (!document.hidden) refr
   }
   function save() {
     var p = plat()
-    var body = { enabled: true, platform: p, allowFrom: document.getElementById("cbAllow").value.trim() }
+    var body = { enabled: true, platform: p, allowFrom: document.getElementById("cbAllow").value.trim(), model: document.getElementById("cbModel").value }
     if (p === "wecom") {
       body.wecom = { bot_id: document.getElementById("cbBotId").value.trim() }
       var sec = document.getElementById("cbBotSecret").value.trim()

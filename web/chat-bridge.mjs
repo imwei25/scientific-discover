@@ -51,6 +51,7 @@ const defState = () => ({
   boundSid: "",
   boundDir: "",                         // 绑定时的绝对目录快照：会话之后被删也要能收回注入块
   progress: true,                       // 长任务进度提示（oc-wrap 里实现）
+  model: "",                            // 聊天接入专用模型（modelID，空=跟随界面/网关当前模型）
 })
 export function loadState() {
   try {
@@ -155,7 +156,11 @@ export function renderConfig(s) {
   const nodeExe = spaceFree(process.execPath)
   const wrap = spaceFree(path.join(CTX.webDir, "chat-bridge", "oc-wrap.mjs"))
   const cc = ccBin()
-  const model = CTX.getModel()   // { providerID, modelID }
+  // 模型：聊天接入可单独指定一个（s.model 存 modelID，空=跟随界面/网关当前模型）。
+  // provider 恒用网关当前的（云端账号形态下就是 custom，指向本机 /cloud 转发）——聊天接入的
+  // opencode 与界面主 opencode 共用同一份 opencode.json 的 provider，只是模型名可以不同。
+  const gm = CTX.getModel()   // { providerID, modelID }
+  const model = { providerID: gm.providerID, modelID: (s.model || gm.modelID) }
   const env = {
     OPENCODE_CONFIG: stripLP(path.join(CTX.root, "opencode.json")),
     XDG_CONFIG_HOME: stripLP(path.join(CTX.root, ".ocglobal")),
@@ -356,6 +361,7 @@ export async function setConfig(patch) {
   if (patch.wecom) s.wecom = { bot_id: String(patch.wecom.bot_id ?? s.wecom.bot_id).trim(), bot_secret: String(patch.wecom.bot_secret ?? s.wecom.bot_secret).trim() }
   if (patch.allowFrom !== undefined) setCurAllow(s, String(patch.allowFrom).trim())   // 写的是【当前平台】的白名单
   if (patch.progress !== undefined) s.progress = !!patch.progress
+  if (patch.model !== undefined) s.model = String(patch.model).trim()   // 空串=跟随网关默认
   if (patch.enabled !== undefined) s.enabled = !!patch.enabled
   saveState(s)
   const wasRunning = running()
@@ -392,7 +398,7 @@ export function status() {
     wecomConfigured: !!(s.wecom.bot_id && s.wecom.bot_secret),
     weixinConfigured: !!s.weixin.token,
     bot_id: s.wecom.bot_id,                                  // secret/token 永远不回给前端
-    allowFrom: curAllow(s), progress: s.progress,
+    allowFrom: curAllow(s), progress: s.progress, model: s.model,
     seenUsers: seenUsers.slice(-10), lastError: lastErrLine,
     lastExit, weixinSetup: weixinSetup(),
   }
