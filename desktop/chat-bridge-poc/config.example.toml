@@ -1,0 +1,42 @@
+﻿# cc-connect PoC锛氫紒涓氬井淇?鈫愨啋 鎵撳寘鐗堝唴缃?OpenCode
+# 鐢熸垚浜?2026-08-13锛岄厤濂楄皟鐮旀枃妗ｈ浠撳簱 desktop/璋冪爺-鎵撳寘鐗堟帴鍏ュ井淇′紒寰亰澶╁伐鍏?md
+# 鍓嶆彁锛氭闈?app锛圢iuma Science锛夊繀椤诲湪杩愯鈥斺€擫LM 璧板畠鐨?127.0.0.1:27821/cloud/v1 杞彂銆?
+language = "en"
+
+[[projects]]
+name = "sci-poc"
+# 鐗规潈鍛戒护锛?dir /shell /restart 绛夛級鐧藉悕鍗曪細浼佸井閲屾満涓昏嚜宸辩殑鐢ㄦ埛 ID锛堜粠 message received 鏃ュ織鍙栧緱锛?admin_from = "REPLACE_ME  # 企微用户ID，从 message received 日志的 user= 字段取"
+
+[projects.agent]
+type = "opencode"
+
+[projects.agent.options]
+# cmd 鎸夌┖鏍兼媶鍒嗭紙鎵€浠ュ悇璺緞閮戒笉鑳藉惈绌烘牸锛涙墦鍖呯増瑁呭湪 "Niuma Science" 涓嬶紝缁忔棤绌烘牸
+# junction C:\Users\tj\.cc-connect\oc-bin 鎸囪繃鍘伙級銆傝繖閲屾晠鎰忓埄鐢ㄦ媶鍒嗚涓烘寕涓€灞傚寘瑁呭櫒锛?# oc-wrap.mjs 杩囨护 opencode 鐨?JSONL 浜嬩欢娴侊紝鎺愭帀 reasoning锛堟€濊€冭繃绋嬶級涓?tool锛堝伐鍏疯繘搴︼級
+# 浜嬩欢鈥斺€攃c-connect 浼氭妸杩欎袱绫绘棤鏉′欢鎺ㄥ埌鑱婂ぉ骞冲彴锛屾棦娉勯湶鎬濊€冨張鍒风垎浼佸井闄愰€熴€?cmd = 'C:\nvm4w\nodejs\node.exe C:\Users\tj\.cc-connect\oc-wrap.mjs'
+work_dir = 'C:\Users\tj\AppData\Local\Niuma Science\bundle\app\outputs\wechat-poc'
+model = "custom/doubao-seed-2.0-lite"
+mode = "default"
+
+[projects.agent.options.env]
+OPENCODE_CONFIG = 'C:\Users\tj\AppData\Local\Niuma Science\bundle\app\opencode.json'
+XDG_CONFIG_HOME = 'C:\Users\tj\AppData\Local\Niuma Science\bundle\app\.ocglobal'
+# 鏈熬鐨?C:\nvm4w\nodejs 鏄?npm 鍏ㄥ眬鐩綍鈥斺€攁gent 瑕佽兘璋冨埌 `cc-connect send` 鎵嶈兘鎶婃枃浠跺彂鍥炶亰澶?PATH = 'C:\Users\tj\AppData\Local\Niuma Science\bundle\runtime\node;C:\Users\tj\AppData\Local\Niuma Science\bundle\runtime\opencode;C:\Users\tj\AppData\Local\Niuma Science\bundle\runtime\git\cmd;C:\Users\tj\AppData\Local\Niuma Science\bundle\runtime\git\bin;C:\Users\tj\AppData\Local\Niuma Science\bundle\runtime\git\usr\bin;C:\Users\tj\AppData\Local\Niuma Science\bundle\runtime\git\mingw64\bin;C:\Users\tj\AppData\Local\Niuma Science\bundle\runtime\pandoc;C:\Users\tj\AppData\Local\Niuma Science\bundle\app\.venv\Scripts;C:\Windows\system32;C:\Windows;C:\Windows\System32\Wbem;C:\Windows\System32\WindowsPowerShell\v1.0\;C:\Windows\System32\OpenSSH\;C:\nvm4w\nodejs'
+REPO_ROOT = 'C:/Users/tj/AppData/Local/Niuma Science/bundle/app'
+SCI_PYTHON = 'C:\Users\tj\AppData\Local\Niuma Science\bundle\app\.venv\Scripts\python.exe'
+SKILL_DIR = 'C:/Users/tj/AppData/Local/Niuma Science/bundle/app/.opencode/skills/ppt-master'
+MPLBACKEND = "Agg"
+MATPLOTLIBRC = 'C:\Users\tj\AppData\Local\Niuma Science\bundle\app\matplotlibrc'
+PIP_INDEX_URL = "https://pypi.tuna.tsinghua.edu.cn/simple"
+PIP_EXTRA_INDEX_URL = "https://pypi.org/simple"
+PIP_DISABLE_PIP_VERSION_CHECK = "1"
+PYTHONUTF8 = "1"
+PYTHONIOENCODING = "utf-8"
+
+[[projects.platforms]]
+type = "wecom"
+
+[projects.platforms.options]
+mode = "websocket"
+bot_id = "REPLACE_ME"
+bot_secret = "REPLACE_ME"
