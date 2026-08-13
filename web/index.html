@@ -406,6 +406,12 @@
   #sessions .sess.active::before { content: ""; position: absolute; left: 0; top: 9px; bottom: 9px; width: 2px; border-radius: 2px; background: var(--green); }
   #sessions .sess .t { display: block; color: var(--text); font-weight: 400; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   #sessions .sess .d { color: var(--faint); font-size: 10px; margin-top: 3px; font-variant-numeric: tabular-nums; }
+  /* 聊天接入标记：绑定微信/企微的会话在时间行前挂个小气泡图标 */
+  #sessions .sess .sbridge { display: inline-flex; align-items: center; margin-right: 5px; vertical-align: -2px; }
+  #sessions .sess .sbridge .ic { width: 12px; height: 12px; stroke-width: 2; }
+  #sessions .sess .sbridge.wx { color: #07c160; }      /* 微信绿 */
+  #sessions .sess .sbridge.wecom { color: #2f7dd1; }    /* 企业微信蓝 */
+  #sessions .sess .sbridge.off { color: var(--faint); opacity: .6; }  /* 未连接：灰 */
   #sessions .sess .run { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--green); margin-right: 6px; vertical-align: 1px; animation: pulse 2.4s infinite; }
   /* 原来定义在顶栏「在线」那个小绿点旁边；顶栏删了，动画挪到唯一还在用它的这条规则边上 */
   @keyframes pulse { 0% { box-shadow: 0 0 0 0 rgba(43,182,115,.5); } 70% { box-shadow: 0 0 0 7px rgba(43,182,115,0); } 100% { box-shadow: 0 0 0 0 rgba(43,182,115,0); } }
@@ -3099,6 +3105,9 @@ const fmtTime = (ms) => {
   return `${y}${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`
 }
 let META_STATE = { projects: [], folders: [], sessions: [] }          // 最近一次 /api/sessions 结果
+// 聊天接入当前绑定的会话（用于在列表里给它挂一个微信/企微图标）。只在 Windows 桌面版有值；
+// 云端/多用户部署没有聊天接入，status 会 supported=false → 这里恒为空、列表不挂图标。
+let bridgeBound = { sid: "", platform: "", subscribed: false }
 const collapsedProjects = new Set(JSON.parse(localStorage.getItem("nm_collapsed") || "[]"))
 const saveCollapsed = () => localStorage.setItem("nm_collapsed", JSON.stringify([...collapsedProjects]))
 const collapsedFolders = new Set(JSON.parse(localStorage.getItem("nm_collapsed_f") || "[]"))
@@ -3148,6 +3157,15 @@ function sessRow(s) {
   if (s.module && s.module !== "chat") {
     const mt = document.createElement("span"); mt.className = "mtag"; mt.textContent = s.moduleName || s.module
     d.appendChild(mt)
+  }
+  // 聊天接入标记：这条会话接到了微信/企微 → 时间行前挂个图标，hover 提示连接状态。
+  if (bridgeBound.sid && s.id === bridgeBound.sid) {
+    const isWx = bridgeBound.platform === "weixin"
+    const bi = document.createElement("span")
+    bi.className = "sbridge " + (isWx ? "wx" : "wecom") + (bridgeBound.subscribed ? "" : " off")
+    bi.innerHTML = ic("msg")
+    bi.title = (isWx ? "微信" : "企业微信") + (bridgeBound.subscribed ? "已连接" : "未连接（点右上角「聊天接入」查看）")
+    d.appendChild(bi)
   }
   d.appendChild(document.createTextNode(fmtTime(s.updated)))
   b.appendChild(t); b.appendChild(d)
@@ -3761,7 +3779,17 @@ const apiGet = (url) => fetch(url).then((r) => {
   if (r.status === 401) { onUnauthorized(); return null }
   return r.ok ? r.json() : null
 }).catch(() => null)
-const loadSessions = () => apiGet("api/sessions").then((l) => { if (!l) return; sessList = (l && l.sessions) || []; renderSessions(l); if (sessionId) setModBadge(sessList.find((s) => s.id === sessionId)?.module || "chat") })
+const loadSessions = () => Promise.all([
+  apiGet("api/sessions"),
+  // 聊天接入绑定状态（拿哪条会话该挂图标）。老网关/云端部署没这接口 → catch 成 null，不挂图标。
+  apiGet("api/chat-bridge/status").catch(() => null),
+]).then(([l, st]) => {
+  if (!l) return
+  bridgeBound = (st && st.ok && st.supported && st.boundSid)
+    ? { sid: st.boundSid, platform: st.platform || "wecom", subscribed: !!st.subscribed }
+    : { sid: "", platform: "", subscribed: false }
+  sessList = (l && l.sessions) || []; renderSessions(l); if (sessionId) setModBadge(sessList.find((s) => s.id === sessionId)?.module || "chat")
+})
 /* 有专用界面壳的模块 → 该去哪个页面。ui 由服务端下发（workflows.mjs 的 ui 字段）。
    ★ 查表，不拿 ui 直接拼文件名：那等于把服务端字符串当 URL 用，是一条开放跳转。
    ★ 认不出的 ui 留在通用壳：新旧界面包错配时，用户至少还打得开这个会话。 */
