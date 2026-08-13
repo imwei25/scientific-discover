@@ -266,6 +266,24 @@ Copy-Tree "$Root\web" "$App\web" `
 # 排除 __pycache__：开发机跑过技能脚本就会生成，进包纯属无谓体积（本次实测 18 个目录）
 Copy-Tree "$Root\.opencode" "$App\.opencode" -ExcludeDirs @("__pycache__")
 Copy-Item "$Root\AGENTS.md" $App -Force
+
+# ---- 技能金库：把技能封成加密的 skills.pak，删掉明文技能，安装器里不再含可读技能 ----
+# 【为什么在这里】web\ 与 .opencode\ 都已拷进 staging，此刻 $App\web\skill-vault.mjs（客户端运行时
+#   用的同一份加解密逻辑与密钥）与 $App\.opencode\skills\ 都在位，直接用包内 node 就地封存。
+# 【只封真 IP】ppt-master 那 ~59MB vendored 第三方库是明文保留的（PLAINTEXT_SKILLS）——它不是本方
+#   IP，且体量大到加密会把客户端启动拖到 40 秒以上（实测）。归档在客户机首次在线更新时才产生，
+#   由 server.mjs 换版后即时封成 archive.pak，安装器里本来就没有归档。
+# 【staging 是累积的】重跑打包时 Copy-Tree 会把明文技能重新铺回来，本步每次重新封 + 删，幂等。
+# 客户端行为：server.mjs 启动时见到 skills.pak 就解密还原到原路径、退出时擦除（见 skill-vault.mjs 头注）。
+Step "技能金库：封存 skills.pak（安装器不含明文技能）"
+& "$nodeDir\node.exe" "$Root\packaging\seal-skills.mjs" "$App\web\skill-vault.mjs" "$App\.opencode\skills"
+if ($LASTEXITCODE -ne 0) { throw "技能封存失败（seal-skills.mjs rc=$LASTEXITCODE）——不能发一个明文技能没删干净、或 pak 损坏的包" }
+if (-not (Test-Path "$App\.opencode\skills.pak")) { throw "技能封存后没有生成 skills.pak" }
+# 硬自检：封存后 skills\ 下【绝不能】再有除 PLAINTEXT_SKILLS 之外的 SKILL.md（那就是没删干净的明文技能）
+$leakSkill = Get-ChildItem "$App\.opencode\skills" -Directory -ErrorAction SilentlyContinue |
+  Where-Object { $_.Name -ne "ppt-master" } |
+  Where-Object { Test-Path (Join-Path $_.FullName "SKILL.md") }
+if ($leakSkill) { throw "打包中止：封存后仍有明文技能 —— $($leakSkill.Name -join '、')" }
 # 更新说明：左下角那个「更新说明」按钮读的就是这些（见 server.mjs 的 /api/release-notes）。
 # 随包走而不是找云端要 —— 断网也看得到，也不会出现"装的是老版本、读到的却是新版说明"。
 # 只拿 desktop\发布说明-*.md，别把 desktop\ 下的需求文档、验收清单一起塞进客户包。
