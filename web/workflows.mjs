@@ -996,7 +996,11 @@ export const WORKFLOWS = {
       { id: "forge", name: "立意锻打", skill: "idea-forge", skillAlias: ["novelty-check"], gate: true,
         deps: ["topic"],
         sub: "多轮对话磨立意，锻定后做新颖性裁定",
-        emits: ["novelty_report.md", "novelty_*.md", "preregistration.md", "analysis_plan.md"], render: "report", onFail: "scan",
+        // design_brief.md / closest_work.md 是锻打这半步的正经产物（note 里点名要求它们落盘），
+        // 此前没写进 emits —— 于是产物分级把标书里最值钱的那份设计定案判成"中间文件"折起来。
+        // 加进来对步骤条无害：本步的完成判定另有 gateReport（只读裁定书），不看这两个。
+        emits: ["novelty_report.md", "novelty_*.md", "preregistration.md", "analysis_plan.md",
+                "design_brief.md", "closest_work.md"], render: "report", onFail: "scan",
         // ★ gateReport：闸的裁定只读裁定书。emits 里的 preregistration.md / analysis_plan.md 是
         //   同步产物不是裁定 —— 拿它们当报告读有两种翻车（都实测过）：裁定书还没写出来的窗口里
         //   闸提前变绿；预注册文件里的假设句（"缺氧不通过甲基化…"）被措辞正则误读成"未通过"。
@@ -1159,6 +1163,68 @@ export const WORKFLOWS = {
       + `原文没写的就写「原文未报告」，**不许拿你的背景知识补齐，也不许引入原文没有的参考文献**。`
       + `引用具体数据时带上出处（第几节 / 哪张图表）。`
       + `\n- 用户想让你去检索别的文献、写综述、查引用真伪 → 那不是本模块的事，按下面那张表指路。`,
+  },
+
+  // ============ 文献管理 ============
+  // 输入不是"一份文件"而是【用户电脑上的一个文件夹】：靠既有的「工作目录」机制拿到它 ——
+  // 用户在 intake 里选目录 → 会话的 cwd 就是那个目录 → 技能脚本原地读原文件、原地出 Excel、
+  // 原地建分类子文件夹。不复制、不上传，几百篇也是秒选。
+  //（曾考虑过用浏览器的「上传整个文件夹」兜住多用户网页版，2026-08-14 用户明确那一档已废弃，不做。）
+  litmanage: {
+    primary: "literature-manage",
+    intakeTitle: "选择文献文件夹",
+    intake: [
+      // type:"dir" 是本模块引入的新控件：点开就是既有的「选择工作目录」弹窗（/api/fs/list），
+      // 选定后既填进表单、又成为本会话的工作目录。所以它【必须在发第一条消息前选好】——
+      // opencode 的 directory 建会话时定死，之后改不了（见 server.mjs createSession 的注释）。
+      { id: "libDir", label: "文献所在文件夹", type: "dir", required: true,
+        help: "选你电脑上放这批文献的那个文件夹。AI 直接读里面的原文件，不会复制、不会上传；"
+            + "生成的 Excel 台账也写在这个文件夹里。",
+        errMsg: "先选一个文献文件夹——这是本模块唯一的输入" },
+      { id: "recursive", label: "连子文件夹一起读", type: "bool", default: false,
+        help: "默认只读你选的这一层。文献分散在若干子文件夹里才勾——注意勾了之后再做「按分类归档」，"
+            + "会把它们从原来的子文件夹搬到分类子文件夹里。" },
+      { id: "classify", label: "对文献分类", type: "bool", default: true,
+        help: "分类后一类占 Excel 的一个 sheet（sheet 名 = 类名）。不分类就全部放在一个 sheet 里。" },
+      { id: "rule", label: "分类标准", type: "textarea", when: { field: "classify", eq: true },
+        placeholder: "例：按研究类型分（RCT / 队列 / 病例对照 / 综述 / 基础研究）；留空则由 AI 读完后自定口径",
+        help: "留空 = AI 读完这批文献后自己定一个一致的分法，并在交付时说明按什么分的。" },
+      LANG,
+    ],
+    steps: [
+      { id: "scan", name: "读取文献", skill: "literature-manage",
+        deps: [],
+        emits: ["library_index.json", "library_texts/*"], render: "report",
+        hint: "只抽每篇开头几页（默认 3 页 / 4000 字），够填台账即可；图片型扫描件会被标出来" },
+      { id: "table", name: "台账与分类", skill: "literature-manage",
+        deps: ["scan"],
+        emits: ["library.json", "library.xlsx"], render: "table",
+        hint: "一类一个 sheet；抽不到的字段写「原文未标注」，不猜年份 / 期刊" },
+      // 归档会动用户硬盘上的原始文件 —— 永远可选、永远先预演再执行（见 flow 与技能里的铁律）
+      { id: "archive", name: "按分类归档", skill: "literature-manage", optional: true,
+        deps: ["table"],
+        emits: ["archive_log.json"], render: "report",
+        hint: "把原文件移进以类名命名的子文件夹；执行前必须先给用户看预演清单" },
+    ],
+    // 扫描件抽不出字时的唯一出路（篇数不多时值得补，否则如实标注）
+    extra: ["ocr"],
+    flow: `\n- **本模块 = 把【用户选的那个文件夹】里的 PDF / Word 整理成一张多 sheet 的 Excel 台账**。`
+      + `不检索、不下载、不写综述，也不读这个文件夹之外的任何文件。`
+      + `\n- **当前工作目录就是用户选的那个文献文件夹**：脚本一律不带 \`--dir\`（默认就是当前目录），`
+      + `产物 \`library_index.json\` / \`library.json\` / \`library.xlsx\` 也都写在这里。`
+      + `\n- **第一步跑 \`scan_library.py\` 抽正文，之后只读 \`library_texts/*.txt\`**，`
+      + `不要再去打开原始 PDF（正文已经抽好，重复读只是烧钱又慢）。`
+      + `\n- **年份 / 作者 / 杂志抽不到就写「原文未标注」**：文件名叫 \`Nature_2021.pdf\` 既不证明它发在 Nature、`
+      + `也不证明是 2021 年。核心观点写"做了什么 + 结论是什么"，不许写"本文研究了 XX 的相关问题"这种空话。`
+      + `\n- **台账写成 \`library.json\` 再跑 \`build_workbook.py\` 出 \`library.xlsx\`**，`
+      + `不要自己写临时脚本拼 Excel —— 界面上的「改分类」「按分类归档」都按这两个文件的约定读写，`
+      + `名字或字段一漂，那两个功能当场失效。`
+      + `\n- **「按分类归档」会移动用户硬盘上的原始文献**：一律先跑不带 \`--apply\` 的预演，`
+      + `把"哪些文件移到哪个子文件夹、共几个"给用户看，**等他明确说执行**再加 \`--apply\`。`
+      + `他担心动原件就给 \`--copy\`（复制过去、原件留原地）这个选项。`
+      + `\n- 出完 Excel 告诉用户：产出栏点开 \`library.xlsx\` 可以按 sheet 预览，`
+      + `并直接在预览里把某一篇改到别的分类、或一键按分类归档。`
+      + `\n- 用户想读透其中某一篇 → 指路「文献研读」模块；想据此写综述 → 指路「综述撰写」模块。`,
   },
 
   // ============ 数据统计与分析 ============
@@ -1872,7 +1938,14 @@ export function fillUserSteps(msgs) {
 // ---- 产物 → 渲染器 ----
 // 认产物文件名，不要求 agent 输出 JSON（模型格式会漂，脆）。认不出的返回 null，
 // 由前端按既有逻辑当普通产物展示 —— 绝不能因为"没匹配上渲染器"就把文件藏起来。
-const globRe = (g) => new RegExp("^" + g.split("*").map((s) => s.replace(/[.+?^${}()|[\]\\]/g, "\\$&")).join("[^/]*") + "$", "i")
+// 编译结果缓存：产物分级会拿每个文件去比一遍全部 emits（一次打包可能是几千个文件 × 几十条
+// glob），不缓存就是十万次 RegExp 编译。glob 集合是有限且固定的，缓存永远不会涨。
+const _globCache = new Map()
+const globRe = (g) => {
+  let re = _globCache.get(g)
+  if (!re) { re = new RegExp("^" + g.split("*").map((s) => s.replace(/[.+?^${}()|[\]\\]/g, "\\$&")).join("[^/]*") + "$", "i"); _globCache.set(g, re) }
+  return re
+}
 /**
  * emits 里的 glob 是否匹配某个产物路径。
  * 产物路径可能带一层子目录（"pdfs/a.pdf"、"figures/fig1.png"），而 emits 里既有裸名（"table1.csv"）
@@ -1895,6 +1968,51 @@ export function globMatch(glob, name) {
  */
 export const SECRET_GLOBS = ["*mapping*.csv", "*_map.csv", "*crosswalk*.csv", "*对照表*.csv", "*还原表*.csv", "*keyfile*.csv"]
 export const isSecretName = (name) => SECRET_GLOBS.some((g) => globMatch(g, String(name)))
+
+// ---- 产物分级：主产物 / 中间文件 ----
+//
+// 【要解决的问题】产出侧栏此前是把工作目录整棵树平铺出来，没有任何"主/副"之分：一次成稿
+// 十几个中间 md、几个临时 py、一堆抽出来的正文 txt，和真正要交付的 docx 摆在同一个平面上，
+// 交付物被淹掉。（用户原话：副产物太多、界面也不区分。）
+//
+// 【判据为什么用 emits】每个 step 的 `emits` 本来就是"这一步该交出什么"的契约，已经喂着
+// 任务卡、步骤条、产物渲染器三处 —— 侧栏再用它，就是同一份事实第四次复用：以后加模块只要
+// 把 emits 写对，侧栏自动就对，不需要再维护第二张"什么算主产物"的表（那种表必然漂）。
+//
+// 【兜底与取舍】emits 不可能写全（模型常写出契约之外的合理产物），所以两条兜底：
+//   · 成品扩展名（docx/pdf/xlsx/pptx/图）即使没命中 emits 也算主产物 —— 宁可多留一个在主区，
+//     也不要把用户真正要的 Word 折叠起来；
+//   · 反过来，脚本 / 日志 / json 这类【确定的中间态】即使命中了 emits 也算副产物。
+// 代价：契约之外的 .md / .csv 会被折进"中间文件"。这是有意的取舍 —— 折叠块带着计数、点一下
+// 就展开，没有任何东西被隐藏；而不折的话，侧栏就还是今天这个样子。
+//
+// 【chat 没有契约】自由对话没有 steps，用它兜底会把一切 .md 都判成副产物 —— 那是最不该收窄的
+// 模块。所以无契约时只把"确定的中间态"判为副，其余一律主（≈ 保持它今天的样子）。
+const BULK_DIRS = /^(pdfs|zotero_lib|library_texts|audit|figures_src|tmp|temp)$/i
+const DELIVERABLE_EXT = /\.(docx?|pdf|xlsx?|xlsm|pptx?|png|jpe?g|svg|tiff?|eps|zip)$/i
+const SCRATCH_EXT = /\.(py|log|sh|ps1|bat|cmd|ipynb|json|tmp|bak|lock)$/i
+/**
+ * 一个产物该进主区还是"中间文件"折叠块。
+ * @param modId  会话绑定的模块（chat / 未知 = 无契约）
+ * @param values 该会话的表单值（决定哪些步骤在场；拿不到就按全部步骤算，宁可宽）
+ * @param name   相对产物目录的路径，可含子目录（"figures/fig1.png"）
+ * @returns "main" | "aux"
+ */
+export function artifactKind(modId, values, name) {
+  const s = String(name || "")
+  if (!s) return "aux"
+  const base = s.split("/").pop()
+  const top = s.includes("/") ? s.split("/")[0] : ""
+  // 成批素材目录（下载来的全文、抽出来的正文、自查中间件）永远是副产物，
+  // 哪怕某一步把它写进了 emits（library_texts/* 与 audit/* 正是这种情况）。
+  if (top && BULK_DIRS.test(top)) return "aux"
+  if (SCRATCH_EXT.test(base)) return "aux"
+  const w = WORKFLOWS[modId]
+  if (!w) return DELIVERABLE_EXT.test(base) || !/\.(txt|tsv)$/i.test(base) ? "main" : "aux"
+  const steps = values ? stepsFor(modId, values) : w.steps
+  for (const st of steps) for (const g of st.emits || []) if (globMatch(g, s)) return "main"
+  return DELIVERABLE_EXT.test(base) ? "main" : "aux"
+}
 const RENDER_RULES = [
   // ⚠️ 必须放在最前：脱敏的【还原表】（真实姓名/住院号 ↔ 假名）。绝不能落进 table 渲染器——
   //    那会把病人真名直接铺在对话框里。给它专用渲染器，界面只显示警示、不预览内容。

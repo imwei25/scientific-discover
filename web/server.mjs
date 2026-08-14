@@ -22,6 +22,8 @@ import * as Sched from "./schtasks.mjs"
 import * as Presets from "./task-presets.mjs"
 import * as Bridge from "./chat-bridge.mjs"
 import * as SkillGuard from "./skill-guard.mjs"
+import { readXlsx } from "./xlsx-lite.mjs"
+import * as Lib from "./library.mjs"
 
 // opencode 的完整流水线（标书/论文/系统综述）单轮可跑十几分钟，而 session.prompt 是“等整轮结束才返回”的请求；
 // undici 默认 5 分钟 headers/body 超时会让这类长轮假性抛错。关掉这两个超时（0=不限），连接超时保留。
@@ -463,7 +465,17 @@ async function createSession(title, folderId) {
   ensureWsAt(outDir, upDir)
   const s = un(await client.session.create({ body: { title }, query: { directory: outDir } }))
   dirCache.set(safeSid(s.id), outDir)
-  const m = sessMeta(s.id); m.ws = ws; if (f) m.folderId = f.id
+  // startedAt = 产物分级里"文件夹里原有的"那一档的判据（见 artifactKinds 的头注）。
+  // 必须在【建会话这一刻】记：文件夹会话的工作目录就是用户自己的目录，里面本来就躺着他的
+  // 几百篇 PDF —— 没有这个时刻，侧栏分不出"他本来就有的"和"这次做出来的"。
+  const m = sessMeta(s.id); m.ws = ws; m.startedAt = Date.now()
+  if (f) {
+    m.folderId = f.id
+    // dir = 这个会话到底落在哪个目录。**必须单独记，不能靠 folderId 反查**：
+    // opencode 的会话列表按 directory 分域，要把文件夹会话列出来就得拿着目录去查（见 listSessionsAll），
+    // 而用户「忘掉这个文件夹」之后 folderId 那条记录就没了 —— 只有这个字段能让会话继续被找到。
+    m.dir = outDir
+  }
   saveMeta()
   return s.id
 }
@@ -544,11 +556,54 @@ async function hardDeleteSession(id) {
   if (ocOk && META.sessions[id]) { delete META.sessions[id]; saveMeta() }
   return { ok: ocOk && dirOk, ocOk, dirOk }
 }
+/**
+ * 列出【全部】会话 —— 注意 opencode 的 /session 列表是**按 directory 分域**的。
+ *
+ * 【这是踩出来的坑，别再退回 client.session.list()】网关的会话落在两种目录：
+ *   ① 默认域：产物目录 outputs/ws_xxx 在仓库内，opencode 把它们归到仓库那个 project；
+ *   ② 文件夹会话：用户自己挑的工作目录（D:\论文\甲状腺、桌面\参考材料…）多在仓库外，
+ *      opencode 归到另一个 project（常是 "global"）—— **默认列表里一条都没有**。
+ * 实测后果（2026-08-14）：文件夹会话在侧栏里彻底隐身（连带「文件夹」分组恒空，因为分组
+ * 只列"还有会话挂着的"），而 pruneOrphanMeta 更会把它们的元数据当孤儿删掉（ws 一丢，
+ * 上传目录配对就断了）。文献管理模块必选文件夹，等于每次都撞上。
+ *
+ * @returns {{ list: any[], partial: boolean }} partial=true 表示有目录没查成 ——
+ *          调用方凡是要做【删除类】判断的（prune），必须见 partial 就整体跳过。
+ */
+async function listSessionsAll() {
+  const dirs = []
+  const add = (p) => {
+    // 目录已经不在了就别查（用户可能把它删了 / 拔了 U 盘）：查不到不代表会话没了
+    try { if (p && !dirs.some((x) => x.toLowerCase() === String(p).toLowerCase()) && fs.existsSync(p)) dirs.push(p) } catch {}
+  }
+  // ① 会话自己记着的工作目录 —— **这个是主来源，不能只靠 META.folders**：用户「忘掉这个文件夹」
+  //    之后文件夹记录就没了，而会话还在那个目录里；只查 folders 的话它会从列表里整个消失
+  //    （测试「不再按目录分组」正好钉住这一条）。
+  for (const m of Object.values(META.sessions)) add(m?.dir)
+  // ② 还没挂上会话的文件夹（刚认领、第一条消息还没发）
+  for (const f of META.folders) add(f.path)
+  // ③ 聊天接入（微信/企微）的绑定目录：cc-connect 在那里另起会话，同样是别的域
+  try { const bi = Bridge.boundInfo(); for (const p of ["wecom", "weixin"]) add(bi?.[p]?.dir) } catch {}
+  let partial = false
+  const one = async (dir) => {
+    try {
+      const r = un(await client.session.list(dir ? { query: { directory: dir } } : {}))
+      if (!Array.isArray(r)) { partial = true; return [] }
+      return r
+    } catch { partial = true; return [] }
+  }
+  const lists = await Promise.all([one(null), ...dirs.map(one)])
+  const byId = new Map()
+  for (const l of lists) for (const s of l) if (s?.id && !byId.has(s.id)) byId.set(s.id, s)
+  return { list: [...byId.values()], partial }
+}
 // 元数据整理：只清掉「元数据里还挂着、但 opencode 里已经没有」的会话残留。
 // 【不会删任何会话】按会话年龄自动删除的机制已整体移除，会话永久保留，删只由用户主动发起。
 async function pruneOrphanMeta() {
   try {
-    const all = un(await client.session.list()) || []
+    const { list: all, partial } = await listSessionsAll()
+    // 有任何一个目录没查成 → 这一轮什么都别删。少清几条陈旧残留无害，误删要用户重新归类。
+    if (partial) return
     // 清掉元数据里已不存在的会话残留。
     // 【空列表不算数】opencode 返回空数组既可能是"真的一条会话都没有"，也可能是它刚起来还没
     // 加载完 / 连到了另一个数据目录 / 降级返回空——后几种情况下按"全都不存在"去删，会把用户
@@ -557,7 +612,14 @@ async function pruneOrphanMeta() {
     if (!all.length) return
     const live = new Set(all.map((s) => s.id))
     let dirty = false
-    for (const id of Object.keys(META.sessions)) if (!live.has(id)) { delete META.sessions[id]; dirty = true }
+    for (const id of Object.keys(META.sessions)) {
+      if (live.has(id)) continue
+      // ★ 挂着文件夹的会话【永不清】：它的 folderId / ws 是不可再生的（ws 一丢，uploads 与
+      //   outputs 的配对就断了），而"没在列表里"的成因除了真被删，还包括目录被移走 / 改名 /
+      //   opencode 换了数据目录。代价不对等，宁可留残留。
+      if (META.sessions[id]?.folderId) continue
+      delete META.sessions[id]; dirty = true
+    }
     if (dirty) saveMeta()
   } catch (e) { console.warn("[meta] 整理失败:", String(e).slice(0, 200)) }
 }
@@ -595,6 +657,36 @@ const skipEntry = (name) => {
   //   代价：gene_mapping.csv 这类良性表也会被挡（判据宁可宽，泄露不可逆、找不到文件可补救）。
   if (WF.isSecretName(name)) return true
   return false
+}
+// ---- 产物分级：main（主产物）/ aux（中间文件）/ pre（会话开始前就在目录里的）----
+//
+// 【为什么要有】侧栏此前把工作目录整棵树平铺，没有主副之分，交付物被一堆中间 md/py/txt 淹掉；
+// 而【文件夹会话】更极端 —— 工作目录就是用户自己的文献文件夹，他那 200 篇原始 PDF 会一篇不落
+// 地列进"产出"，那既不是产物也不是中间文件，是他本来就有的东西。
+//
+// 判据分两层，各有唯一来源：
+//   · main / aux —— WF.artifactKind()，以各步的 emits 契约为准（见那边的长注释）；
+//   · pre        —— 文件 mtime 早于会话创建时刻（m.startedAt）。
+//
+// 【为什么 pre 用 mtime 而不是建会话时存一份文件名快照】快照对"会话开始后用户又往文件夹里
+// 拖进几篇"这种情况反而是错的（它会把新拖进来的判成产物之外的东西），而且要为每个文件夹会话
+// 在元数据里存几百个文件名。mtime 截点便宜且语义直白："这次会话之后被写过的才算这次的"。
+// 已知偏差：会话开始后被 agent 改写过的原有文件会升级成产物（正确）；用户把带着旧 mtime 的
+// 文件复制进来会被判成 pre（少见，且方向安全 —— 只是折叠起来，没有丢）。
+// 老会话没有 startedAt（本功能之前建的）→ 一律不判 pre，行为与改动前完全一致。
+function artifactClassifier(sid, dir) {
+  const mod = sid ? sessionModule(sid) : ""
+  let vals = null
+  try { vals = (WFS.wfLoad(dir) || {}).form || null } catch { /* 没有表单就按全部步骤算 */ }
+  const cut = Number(META.sessions[sid]?.startedAt || 0)
+  // 模块与表单每次分级只读一次：打包时会逐个文件调它，放在闭包外才不会把 wfLoad 打几千遍
+  return (name, mtime) => (cut && mtime && mtime < cut) ? "pre" : WF.artifactKind(mod, vals, name)
+}
+function artifactKinds(sid, dir, entries) {
+  const kind = artifactClassifier(sid, dir)
+  const out = {}
+  for (const e of entries) out[e.name] = kind(e.name, e.mtime)
+  return out
 }
 const dirState = (dir) => { deeperCount.n = 0; return walkOutputs(dir, DIRSTATE_DEPTH, "", { n: 0 }) }
 function walkOutputs(dir, depth, prefix, budget) {
@@ -641,7 +733,7 @@ const ZIP_DEPTH = 16          // 比 DIRSTATE_DEPTH 深得多：列表可以有�
  * 收集一个产物目录里能打进 zip 的全部文件（相对路径 + 绝对路径 + 总字节）。
  * 判据与侧栏列表【共用 skipEntry】，见 /api/download-all 的头注。
  */
-function collectForZip(dir, depth = ZIP_DEPTH, prefix = "", acc = { files: [], bytes: 0 }) {
+function collectForZip(dir, accept = null, depth = ZIP_DEPTH, prefix = "", acc = { files: [], bytes: 0 }) {
   let ents; try { ents = fs.readdirSync(dir, { withFileTypes: true }) } catch { return acc }
   for (const e of ents) {
     if (skipEntry(e.name)) continue
@@ -649,12 +741,16 @@ function collectForZip(dir, depth = ZIP_DEPTH, prefix = "", acc = { files: [], b
     const rel = prefix ? prefix + "/" + e.name : e.name
     let st; try { st = fs.statSync(abs) } catch { continue }
     if (st.isFile()) {
+      // ★ 过滤必须发生在【走目录的过程中】，不能等收完再筛：本函数在超过上限时会早退，
+      //   而 folder 会话里用户自己那几个 GB 的 PDF 会在早退前就把预算吃光 —— 收完再筛
+      //   会得到一个"只有半包产物却不报错"的 zip（比报错坏得多）。
+      if (accept && !accept(rel, st)) continue
       acc.files.push({ rel, abs, size: st.size })
       acc.bytes += st.size
       // 早退：目录大得离谱时没必要把整棵树走完（调用方只需要知道"超了"）
       if (acc.bytes > ZIP_MAX_BYTES || acc.files.length > ZIP_MAX_FILES) return acc
     } else if (st.isDirectory() && depth > 0) {
-      collectForZip(abs, depth - 1, rel, acc)
+      collectForZip(abs, accept, depth - 1, rel, acc)
       if (acc.bytes > ZIP_MAX_BYTES || acc.files.length > ZIP_MAX_FILES) return acc
     }
   }
@@ -808,6 +904,10 @@ const MODULE_DEFS = {
   // 变的是它做什么：从"检索一个方向的文献"改成"把用户上传的这一篇读透"（专用界面 web/reader.html）。
   litread:  { name: "文献研读",       group: "skills",
               desc: "上传一篇 PDF / Word 文献，逐篇读透：自动导读理清核心与论证逻辑，可全文翻译、生成汇报 PPT，也能对着原文随时追问。" },
+  // 输入是【一个本机文件夹】而不是上传的文件：靠既有的「工作目录」机制（会话 cwd = 用户选的目录），
+  // 所以这个模块不需要用户上传任何东西，也不占会话存储。
+  litmanage: { name: "文献管理",       group: "skills",
+              desc: "选一个存放文献的文件夹，自动读完里面的 PDF / Word，按你给的标准（或 AI 自定口径）分类，出一张多 sheet 的 Excel 台账：每篇一行，含年份、作者、杂志与核心观点；可随时改分类，并一键把原文件按类归到子文件夹。" },
   refcheck: { name: "文稿核查与审校", group: "skills",
               // ⚠️ 别写成"识别伪造、篡改" —— data-integrity 技能的铁律是「只出待核信号、不下造假结论」
               // （signal not verdict）。首屏承诺"查得出造假"而实际只给待核清单，既让用户失望，本身也有风险。
@@ -1138,6 +1238,7 @@ const modulePreamble = (modId, outDir) => {
 // 直接导航 —— 浏览器对没有 charset 的 text/plain 默认按 windows-1252 解码，
 // 于是这句精心写的中文提示在用户眼里就是一串乱码，等于白写。
 const TEXT_UTF8 = "text/plain; charset=utf-8"
+const JSON_UTF8 = "application/json; charset=utf-8"
 // 产物/上传取不到时的统一文案（下载、原文、预览三处共用）
 const FILE_GONE = "这个文件不在本会话的产出或上传里——可能还没生成、名字对不上，或这个会话已被清理过。回到对话里让它重新生成一次即可。"
 
@@ -1225,9 +1326,14 @@ const descendantCost = (all, sid) => {
  * race：停机路径用的超时包装（docker 宽限期只有 10 秒，那里不能无限等）。
  */
 export async function sessionCostTotal(sid, race = (p) => p) {
-  const self = Number(un(await race(client.session.get({ path: { id: sid } })))?.cost) || 0
+  const info = un(await race(client.session.get({ path: { id: sid } })))
+  const self = Number(info?.cost) || 0
   try {
-    const all = un(await race(client.session.list()))
+    // ★ 列表必须带上【本会话所在的目录】：opencode 的 /session 按 directory 分域，
+    //   文件夹会话（工作目录在仓库外）的子会话不在默认域里 —— 不带它就等于把子代理的
+    //   花费整段漏计，额度结算会系统性偏低。子会话与父会话同目录，所以取父会话的 directory 即可。
+    const dir = info?.directory
+    const all = un(await race(client.session.list(dir ? { query: { directory: dir } } : {})))
     return self + descendantCost(Array.isArray(all) ? all : [], sid)
   } catch { return self }
 }
@@ -2603,12 +2709,23 @@ function startJob(sid, sentText, modId, forceModel) {
     //      而那个按钮只在 liveFailed 非空时才挂 —— 不广播 workflow，它此刻根本不存在。
     const syncTail = async () => {
       const changed = changedSince(outDir, before)
+      // ★ 顺序要紧：kinds 必须在 files 【之前】到，前端贴对话流里的产物卡时才知道哪些是中间
+      //   文件（否则第一眼仍是十几张卡糊满屏，等 kinds 到了才收起来，闪一下）。
+      //   本轮写过的文件不可能是"会话开始前就有的"，所以这里只会出 main / aux 两档。
+      try {
+        broadcast("filesmeta", {
+          deeper: dirStateDeep(outDir).deeper,
+          kinds: artifactKinds(sid, outDir, changed.map((n) => ({ name: n, mtime: 0 }))),
+        })
+      } catch { /* 算不出来就不发，产物照常推 */ }
       broadcast("files", changed)
-      // ★ "没能列出来的文件数"也要【直播时】给，否则 SSE 这条路上前端拿的是上一次的值（默认 0）。
-      //   子目录现在整棵树都列了，这个数正常恒为 0；它只在层数/条目撞上 dirState 那两道闸时非 0，
-      //   前端据此挂一行灰字指向"打包下载"。留着它就是为了那种极端目录不会无声消失。
+      // ↑ filesmeta 带两样东西，都在 files 【之前】发（见上面那段"顺序要紧"）：
+      //   · deeper —— "没能列出来的文件数"，直播时也要给，否则前端拿的是上一次的值（默认 0）。
+      //     子目录现在整棵树都列了，正常恒为 0；只在层数/条目撞上 dirState 那两道闸时非 0，
+      //     前端据此挂一行灰字指向"打包下载"，那种极端目录才不会无声消失。
+      //   · kinds  —— 本轮这批文件各自是主产物还是中间文件（口径与 /api/outputs 完全一致，
+      //     否则直播时清爽、一刷新又全摊平，等于白做）。
       //   单发一个事件而不是改 files 的载荷形状：files 一直是裸字符串数组，老界面包直接吃它。
-      try { broadcast("filesmeta", { deeper: dirStateDeep(outDir).deeper }) } catch { /* 数不出来就不发，不影响正文 */ }
       const rendered = changed.map((n) => ({ name: n, render: WF.rendererFor(n) })).filter((x) => x.render)
       if (rendered.length) broadcast("artifacts", rendered)
       if (modId !== "chat") {
@@ -3460,7 +3577,9 @@ export const server = http.createServer(async (req, res) => {
 
     // 会话列表 + 项目分组 + 文件夹分组（排除子 agent 会话，按更新时间倒序）。前端据此分组渲染。
     if (req.method === "GET" && u.pathname === "/api/sessions") {
-      const all = un(await client.session.list()) || []
+      // ★ 必须走 listSessionsAll（跨目录合并）：opencode 的列表按 directory 分域，
+      //   直接 client.session.list() 看不到任何【文件夹会话】—— 见该函数头注。
+      const { list: all } = await listSessionsAll()
       // ---- 每条会话「一共花了多少」----
       // opencode 逐会话记着累计 cost（美元，已含缓存折扣），列表里本来就带着，白拿不用可惜。
       // 子会话必须加进来（子代理的花费记在子会话上，不滚进父会话）—— 口径与每日额度结算共用
@@ -3908,6 +4027,64 @@ export const server = http.createServer(async (req, res) => {
       if (ext === ".html" || ext === ".htm" || ext === ".svg") head["Content-Security-Policy"] = "sandbox allow-scripts"
       res.writeHead(200, head)
       return pipeFile(f, res)
+    }
+
+    // ---- Excel 预览：xlsx → 各 sheet 的二维数组（前端画成"页签 + 表格"）----
+    // 【为什么不走 LibreOffice 转 PDF】那条通用路（下面的 /api/preview）会把一个多 sheet 的
+    // 工作簿压成一串页、列宽全按打印排版走样，而文献台账恰恰是"按类分 sheet"才有意义。
+    // 这里用 xlsx-lite.mjs 直接解 zip+XML，零依赖、即时返回。
+    if (req.method === "GET" && u.pathname === "/api/sheets") {
+      const sid = u.searchParams.get("sid") || ""
+      const name = u.searchParams.get("name") || ""
+      const root = sid ? await sessionOut(sid) : OUTPUTS
+      const f = safeUnder(root, name)
+      if (!f || !fs.existsSync(f) || !fs.statSync(f).isFile()) return send(res, 404, JSON_UTF8, JSON.stringify({ ok: false, err: "文件不在了" }))
+      if (SkillGuard.scanOutputFile(f)) return send(res, 403, JSON_UTF8, JSON.stringify({ ok: false, err: SkillGuard.LEAK_FILE_MSG(name) }))
+      try {
+        const { sheets, truncated } = readXlsx(fs.readFileSync(f))
+        return send(res, 200, JSON_UTF8, JSON.stringify({ ok: true, sheets, truncated }))
+      } catch (e) {
+        return send(res, 400, JSON_UTF8, JSON.stringify({ ok: false, err: "读不了这个 Excel：" + String(e.message || e).slice(0, 200) }))
+      }
+    }
+
+    // ---- 文献台账（文献管理模块）----
+    // 台账真值源是会话工作目录里的 library.json；Excel 是它的呈现。改分类 / 归档都改 json 再重出 Excel。
+    // 这两件事是确定性操作，走接口直接做完（不绕对话），所以点一下就生效、不花额度。
+    if (req.method === "GET" && u.pathname === "/api/library") {
+      const dir = await sessionOut(u.searchParams.get("sid") || "")
+      try {
+        const lib = Lib.loadLibrary(dir)
+        if (!lib) return send(res, 200, JSON_UTF8, JSON.stringify({ ok: true, has: false }))
+        return send(res, 200, JSON_UTF8, JSON.stringify({ ok: true, has: true,
+          classified: lib.classified !== false, rule: lib.rule || "",
+          categories: Lib.categoriesOf(lib), columns: lib.columns || null,
+          records: lib.records.map((r) => ({ file: r.file, category: r.category || "" })),
+          canUndo: fs.existsSync(path.join(dir, Lib.ARCHIVE_LOG)) }))
+      } catch (e) { return send(res, 400, JSON_UTF8, JSON.stringify({ ok: false, err: String(e.message || e).slice(0, 200) })) }
+    }
+
+    // 把某一篇改到别的分类（可以是一个新类）：改 library.json + 重出 library.xlsx
+    if (req.method === "POST" && u.pathname === "/api/library/move") {
+      const dir = await sessionOut(u.searchParams.get("sid") || "")
+      let b = {}; try { b = await readJson(req) } catch { return send(res, 400, JSON_UTF8, JSON.stringify({ ok: false, err: "请求体读不了" })) }
+      try {
+        const r = Lib.moveRecord(dir, b.file, b.to)
+        return send(res, 200, JSON_UTF8, JSON.stringify({ ok: true, ...r }))
+      } catch (e) { return send(res, 400, JSON_UTF8, JSON.stringify({ ok: false, err: String(e.message || e).slice(0, 200) })) }
+    }
+
+    // 按分类归档到子文件夹。★ 这会动用户硬盘上的原始文献 —— 所以接口分三档，
+    // 界面必须先 plan（预演，不动文件）把清单给用户看，他点确认才 apply；apply 后可 undo。
+    if (req.method === "POST" && u.pathname === "/api/library/archive") {
+      const dir = await sessionOut(u.searchParams.get("sid") || "")
+      const mode = u.searchParams.get("mode") || "plan"
+      const copy = u.searchParams.get("copy") === "1"
+      try {
+        if (mode === "apply") return send(res, 200, JSON_UTF8, JSON.stringify({ ok: true, ...Lib.archiveApply(dir, { copy }) }))
+        if (mode === "undo") return send(res, 200, JSON_UTF8, JSON.stringify({ ok: true, ...Lib.archiveUndo(dir) }))
+        return send(res, 200, JSON_UTF8, JSON.stringify({ ok: true, ...Lib.archivePlan(dir) }))
+      } catch (e) { return send(res, 400, JSON_UTF8, JSON.stringify({ ok: false, err: String(e.message || e).slice(0, 200) })) }
     }
 
     // 文档预览转换：docx→HTML、pptx/ppt/odp/doc/odt→PDF；缓存到 <产物目录>/.preview/（与后台预热共用 ensurePreviewCache）
@@ -4715,6 +4892,9 @@ export const server = http.createServer(async (req, res) => {
         .map(([rel, mtime]) => { try { return { name: rel, size: fs.statSync(path.join(dir, rel)).size, mtime } } catch { return null } })
         .filter(Boolean)
         .sort((a, b) => b.mtime - a.mtime)
+      // 产物分级随列表一起下发（新增字段，老界面包忽略它即可 —— 数组结构没变）
+      const kinds = artifactKinds(sid, dir, list)
+      for (const it of list) it.kind = kinds[it.name] || "main"
       // ★ 没能列出来的文件数走响应头，不动数组结构（这条接口的返回值是【裸数组】，改成对象会
       //   把所有既有调用方一起打翻）。正常会话恒为 0；非 0 时前端挂一行灰字指向"打包下载"。
       res.writeHead(200, { "Content-Type": "application/json", "X-Deeper-Files": String(deeper) })
@@ -4733,11 +4913,22 @@ export const server = http.createServer(async (req, res) => {
       const sid = u.searchParams.get("sid") || ""
       const dir = sid ? await sessionOut(sid) : OUTPUTS
       if (!fs.existsSync(dir)) return send(res, 404, TEXT_UTF8, "这个会话还没有产出文件。")
+      // ---- 范围：scope=main 只打主产物；默认打"本次会话产出的全部"----
+      // ★「会话开始前就在目录里的」（folder 会话里用户自己的几百篇 PDF）【永远不进包】：
+      //   这个按钮叫"打包下载本次产出"，把用户自己的原始资料原样打回给他既没意义，
+      //   又能轻易把包撑过 200MB 上限，让真正的产出一份都拿不到。
+      const scope = u.searchParams.get("scope") === "main" ? "main" : "all"
+      const kindOf = artifactClassifier(sid, dir)
+      const accept = (rel, st) => {
+        const k = kindOf(rel, st.mtimeMs)
+        return k !== "pre" && (scope === "all" || k === "main")
+      }
       let picked
-      try { picked = collectForZip(dir) } catch (e) {
+      try { picked = collectForZip(dir, accept) } catch (e) {
         return send(res, 500, TEXT_UTF8, "打包失败：" + (e.message || String(e)))
       }
-      if (!picked.files.length) return send(res, 404, TEXT_UTF8, "这个会话还没有产出文件。")
+      if (!picked.files.length) return send(res, 404, TEXT_UTF8,
+        scope === "main" ? "这个会话还没有主产物可打包（中间文件请在右侧列表里单独下载）。" : "这个会话还没有产出文件。")
       // 超限直说，并给出下一步（逐个下载 / 让助手清理中间文件），别给一个坏掉的 zip。
       // 上限的真实成因是【内存】：zipPack 全程在内存里拼，读一份 + 压一份，200MB 的产出
       // 在容器里就是 400MB+ 的瞬时峰值，再大会把网关连同正在跑的轮一起 OOM 掉。

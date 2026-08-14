@@ -117,7 +117,7 @@ test("白名单为空 = 不限：所有模块都开", async (t) => {
   const gw = await gateway({ profile: prof([]) })
   t.after(() => gw.close())
   const { map } = await gw.modules()
-  assert.deepEqual(map, { chat: true, review: true, grant: true, paper: true, stats: true, litread: true, refcheck: true, humanize: true, figure: true })
+  assert.deepEqual(map, { chat: true, review: true, grant: true, paper: true, stats: true, litread: true, litmanage: true, refcheck: true, humanize: true, figure: true })
 })
 
 // 【这里原本还有一条"容器 env 白名单与云端白名单取交集"】：每用户一个容器的年代，
@@ -192,5 +192,5 @@ test("没登录云端账号时这条闸完全不生效（容器/自设 API 形�
     for (const [k, v] of Object.entries(saved)) { if (v === undefined) delete process.env[k]; else process.env[k] = v }
   })
   const { map } = await gw.modules()
-  assert.deepEqual(map, { chat: true, review: true, grant: true, paper: true, stats: true, litread: true, refcheck: true, humanize: true, figure: true })
+  assert.deepEqual(map, { chat: true, review: true, grant: true, paper: true, stats: true, litread: true, litmanage: true, refcheck: true, humanize: true, figure: true })
 })

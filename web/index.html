@@ -293,6 +293,35 @@
   .answer.md img { display: block; max-width: min(100%, 520px); height: auto; margin: .5em 0; border: 1px solid var(--line-hi); border-radius: var(--r-sm); background: #fff; cursor: zoom-in; }
   .note { color: var(--faint); font-size: 12px; margin-top: 8px; }
 
+  /* ---- 多 sheet Excel 预览（页签 + 表格；文献台账还多一条工具条）---- */
+  /* 页签横排可滚：文献台账常有 5–8 个类，类名还可能挺长，硬折行会把表格顶下去 */
+  .shtabs { display: flex; gap: 6px; overflow-x: auto; padding-bottom: 6px; margin-bottom: 10px;
+    border-bottom: 1px solid var(--line); }
+  .shtab { flex: none; display: flex; align-items: center; gap: 6px; padding: 6px 12px; cursor: pointer;
+    border: 1px solid var(--line-hi); border-radius: 999px; background: #fff; font-size: 13px; color: var(--muted); }
+  .shtab:hover { border-color: var(--accent); color: var(--accent); }
+  .shtab.on { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .shtab .n { font-size: 11px; opacity: .75; font-variant-numeric: tabular-nums; }
+  .shwrap { max-width: 100%; overflow-x: auto; }
+  .shwrap td { max-width: 52ch; white-space: pre-wrap; }   /* 核心观点那列要能整段读，不截断 */
+  .shmove { white-space: nowrap; }
+  .shsel { max-width: 15ch; font-size: 12px; padding: 3px 6px; border: 1px solid var(--line-hi);
+    border-radius: var(--r-sm); background: #fff; color: var(--text); }
+  .shbar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 10px;
+    padding: 10px 12px; background: var(--panel-soft); border: 1px solid var(--line); border-radius: var(--r-sm); }
+  .shbar-i { flex: 1; min-width: 0; font-size: 12.5px; color: var(--muted); }
+  .shbtn { flex: none; border: 1px solid var(--accent); background: var(--accent); color: #fff;
+    border-radius: var(--r-sm); padding: 6px 12px; font-size: 12.5px; cursor: pointer; }
+  .shbtn.ghost { background: #fff; color: var(--accent); }
+  .shbtn:disabled { opacity: .5; cursor: not-allowed; }
+  /* 归档预演清单：动原始文件之前必须先摊开给用户看（见 archiveFlow） */
+  .shplan { margin-bottom: 12px; padding: 12px; border: 1px solid var(--line-hi); border-radius: var(--r-sm); background: #fff; }
+  .shplan-h { font-size: 13px; font-weight: 600; color: var(--text); margin-bottom: 8px; }
+  .shplan-l { max-height: 220px; overflow: auto; border: 1px solid var(--line); border-radius: var(--r-sm); padding: 8px; background: var(--panel-soft); }
+  .shplan-r { font-size: 12px; color: var(--muted); font-family: ui-monospace, "Cascadia Code", monospace;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .shplan-a { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 10px; }
+
   /* ---- Composer（输入区）----
      结构：一张白卡片，自上而下 = 工具行（模块徽标 / 新建对话 / 附件 / 发送·终止）→ 输入框
      → 底行（模型选择 · 自动推进 · 快捷键提示）。 */
@@ -661,6 +690,28 @@
   .fbulk > summary { cursor: pointer; font-size: 12px; color: var(--faint); padding: 2px 0; word-break: break-all; }
   .fbulk > summary:hover { color: var(--cyan); }
   .fbulk > summary .fdirn { color: #334153; }          /* 目录名比"N 个文件"显眼一点，一眼能扫到 figures/ */
+  /* ---- 产出侧栏的分区（中间文件 / 文件夹里原有的）----
+     比目录堆(.fbulk)重一档：它是"这一整类东西"的开关，收起时要一眼看得见、点得中；
+     展开后里面还能再有 .fbulk 目录堆，所以给一点左内缩表示层级。 */
+  .fsec { margin-top: 10px; border-top: 1px solid var(--line); padding-top: 8px; }
+  .fsec > summary { cursor: pointer; font-size: 12px; color: var(--muted); padding: 3px 0; display: flex; align-items: center; gap: 6px; }
+  .fsec > summary:hover { color: var(--cyan); }
+  .fsec > summary .fsec-t { font-weight: 600; }
+  .fsec > summary .fsec-n { font-size: 11px; color: var(--faint); background: var(--panel-soft);
+    border: 1px solid var(--line); border-radius: 999px; padding: 0 6px; font-variant-numeric: tabular-nums; }
+  .fsec > .frow, .fsec > .fbulk, .fsec > .hint { margin-left: 4px; }
+  .fsec > .hint { margin-bottom: 6px; }
+  /* 打包范围的小菜单（只在有中间文件时弹） */
+  .zmenu { position: absolute; right: 0; top: 100%; z-index: 30; margin-top: 4px; min-width: 168px;
+    background: var(--card); border: 1px solid var(--line-hi); border-radius: var(--r-sm); box-shadow: var(--shadow-sm); padding: 4px; }
+  .zmenu button { display: block; width: 100%; text-align: left; font-size: 12px; color: var(--text);
+    background: none; border: 0; border-radius: var(--r-sm); padding: 6px 8px; cursor: pointer; }
+  .zmenu button:hover { background: var(--panel-soft); color: var(--cyan); }
+  /* 对话流里的「本轮还生成了 N 个中间文件」：收起时只占一行，展开后仍是同样的产物卡 */
+  .paux { flex-basis: 100%; margin-top: 2px; }
+  .paux > summary { cursor: pointer; font-size: 12px; color: var(--faint); padding: 3px 0; }
+  .paux > summary:hover { color: var(--cyan); }
+  .paux > .pcard { margin-top: 6px; }
   /* 「打包下载」：在「本轮产出」标题右侧，只在真的有产出时显示（JS 控 hidden） */
   .zipbtn { font-size: 11px; font-weight: 500; color: var(--cyan); background: #f3f6fb; border: 1px solid var(--line-hi); border-radius: var(--r-sm); padding: 3px 8px; cursor: pointer; transition: border-color .15s, background .15s; }
   .zipbtn:hover:not(:disabled) { border-color: var(--cyan); background: rgba(59,111,212,.08); }
@@ -1073,6 +1124,19 @@
   .wfdrop .ic { width: 26px; height: 26px; margin-bottom: 8px; color: var(--accent); }
   .wfdrop b { color: var(--text); font-weight: 600; }
   .wfdrop .wfhelp2 { margin-top: 4px; }
+  /* ---- 选本机文件夹（type:"dir"，文献管理模块）---- */
+  .wfdir { display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+    border: 1.5px solid var(--line-hi); border-radius: var(--r-md); background: #fff; padding: 12px 14px; }
+  .wfdir-info { display: flex; align-items: center; gap: 8px; min-width: 0; flex: 1; }
+  .wfdir-info .ic { width: 18px; height: 18px; color: var(--accent); flex: none; }
+  /* 路径要能截断：绝对路径动辄七八十字符，不截会把按钮挤出卡片 */
+  .wfdir-p { font-size: 13px; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .wfdir-p.none { color: var(--faint); }
+  .wfdir-btn { flex: none; border: 1px solid var(--accent); background: var(--accent); color: #fff;
+    border-radius: var(--r-sm); padding: 7px 14px; font-size: 13px; cursor: pointer; }
+  .wfdir-btn.ghost { background: #fff; color: var(--accent); }
+  .wfdir-btn:disabled { opacity: .5; cursor: not-allowed; }
+  .wff.invalid .wfdir { border-color: var(--rose); background: rgba(224,86,79,.08); }
   .wffiles { margin-top: 12px; display: flex; flex-direction: column; gap: 8px; }
   .wffile { display: flex; align-items: center; gap: 10px; background: var(--panel); border: 1px solid var(--line-hi);
     border-radius: var(--r-sm); padding: 9px 11px; cursor: pointer; transition: .15s; }
@@ -2863,9 +2927,18 @@ const SCRATCHY = /\.(py|log|sh|ps1|ipynb|json)$/i
 const isScratch = (n) => { const b = n.split("/").pop(); return SCRATCHY.test(b) && !/^(retrieval_report|manual_needed)/i.test(b) }
 // 批量下载来的文献全文：一个方向下 40~60 篇是常态。它们确实是本轮产物，但不是"结果"——
 // 平铺出来会把成稿彻底淹掉（实测侧栏 73 条里 65 条是 pdfs/*，交付物混在里面找不着）。
-const isBulkDir = (d) => /^(pdfs|zotero_lib)$/i.test(d)
+const isBulkDir = (d) => /^(pdfs|zotero_lib|library_texts)$/i.test(d)
 const dirOf = (n) => { const i = String(n).lastIndexOf("/"); return i < 0 ? "" : n.slice(0, i) }
 let lastFilesList = []            // 上一次渲染的产物名单，供 filesmeta 到达时原样重画一遍
+// ---- 产物分级（服务端下发，判据见 workflows.mjs 的 artifactKind）----
+// main = 主产物（命中该模块各步的 emits 契约，或成品扩展名）
+// aux  = 中间文件（脚本 / 日志 / 契约外的中间 md、csv、抽出来的正文…）
+// pre  = 会话开始前就在这个目录里的（文件夹会话里用户自己的原始资料）
+// 拿不到分级时一律按 main 处理：宁可摊平，也不要把用户要的东西默默折起来
+//（老 server 配新界面包就是这种组合 —— 那时的表现与改动前一致，不会坏）。
+const FILE_KIND = new Map()
+const kindOf = (n) => FILE_KIND.get(n) || "main"
+function setFileKinds(map) { if (map) for (const [k, v] of Object.entries(map)) FILE_KIND.set(k, v) }
 const zipAllBtn = document.getElementById("zipall")   // 声明必须在 renderFiles 之前：它一进来就要改这个按钮的显隐
 /** 侧栏里的一行文件：文件名（可点预览）+ 预览/下载两个按钮。顶层与目录里共用同一份。 */
 function fileRow(name, short) {
@@ -2887,13 +2960,8 @@ function fileRow(name, short) {
   row.appendChild(a)
   return row
 }
-function renderFiles(list) {
-  lastFilesList = list || []
-  pvTabCount.textContent = list && list.length ? String(list.length) : ""   // 预览态切换条上的产出条数
-  zipAllBtn.hidden = !(list && list.length)      // 没产出就别摆一个点了会报错的按钮
-  if (!list || !list.length) { filesEl.innerHTML = '<span class="hint">对话生成的文件会显示在这里</span>'; return }
-  filesEl.innerHTML = ""
-  list = [...list].sort((a, b) => (isScratch(a) ? 1 : 0) - (isScratch(b) ? 1 : 0))   // 结果在前、中间文件在后
+/** 把一批文件画进某个容器：顶层文件平铺，子目录归堆成默认收起的折叠块。三个分区共用。 */
+function renderFileGroup(box, list) {
   // 子目录里的产物按目录归堆，每堆一个默认收起的折叠块。
   // 【为什么不平铺】pdfs/ 一个方向就是 40~60 篇，平铺会把成稿彻底淹掉（实测 73 条里 65 条是
   // pdfs/*）；【为什么不像以前那样干脆不列】更深的目录当年是直接不显示的，界面只留一句
@@ -2913,9 +2981,42 @@ function renderFiles(list) {
     sm.title = d + "/"
     det.appendChild(sm)
     for (const name of names) det.appendChild(fileRow(name, true))
-    filesEl.appendChild(det)
+    box.appendChild(det)
   }
-  for (const name of top) filesEl.appendChild(fileRow(name, false))
+  for (const name of top) box.appendChild(fileRow(name, false))
+}
+/** 一个默认收起的分区（中间文件 / 文件夹里原有的） */
+function renderFileSection(title, note, list) {
+  const det = document.createElement("details"); det.className = "fsec"
+  const sm = document.createElement("summary")
+  sm.innerHTML = '<span class="fsec-t"></span><span class="fsec-n"></span>'
+  sm.querySelector(".fsec-t").textContent = title
+  sm.querySelector(".fsec-n").textContent = list.length
+  det.appendChild(sm)
+  if (note) { const h = document.createElement("div"); h.className = "hint"; h.textContent = note; det.appendChild(h) }
+  renderFileGroup(det, list)
+  return det
+}
+function renderFiles(list) {
+  lastFilesList = list || []
+  pvTabCount.textContent = list && list.length ? String(list.length) : ""   // 预览态切换条上的产出条数
+  zipAllBtn.hidden = !(list && list.length)      // 没产出就别摆一个点了会报错的按钮
+  if (!list || !list.length) { filesEl.innerHTML = '<span class="hint">对话生成的文件会显示在这里</span>'; return }
+  filesEl.innerHTML = ""
+  // ---- 三段式：主产物平铺 → 中间文件折叠 → 文件夹里原有的折叠 ----
+  // 【为什么要分】一次成稿十几个中间 md、几个临时 py、一堆抽出来的正文，和真正要交付的 docx
+  // 摆在同一个平面上，交付物就被淹掉了（用户反馈）。分级判据在服务端，见 workflows.mjs 的
+  // artifactKind —— 它以各步 emits 契约为准，与步骤条、任务卡、渲染器同一份事实来源。
+  // 【什么都没被藏起来】两个折叠块都带计数、点一下就全在，且分级拿不到时一律落回主区。
+  const main = [], aux = [], pre = []
+  for (const n of list) (kindOf(n) === "pre" ? pre : kindOf(n) === "aux" ? aux : main).push(n)
+  // 主区内部仍按老规矩把脚本类排后面（分级拿不到时这条是唯一的整理手段，得留着）
+  main.sort((a, b) => (isScratch(a) ? 1 : 0) - (isScratch(b) ? 1 : 0))
+  renderFileGroup(filesEl, main)
+  if (!main.length) filesEl.appendChild(Object.assign(document.createElement("div"),
+    { className: "hint", textContent: "本次还没有主产物（下面是过程文件）" }))
+  if (aux.length) filesEl.appendChild(renderFileSection("中间文件", "", aux))
+  if (pre.length) filesEl.appendChild(renderFileSection("文件夹里原有的", "这些是你选的文件夹里本来就有的文件，不是这次生成的；「打包下载」不会包含它们。", pre))
   // ★ 兜底：层数/条目超过服务端上限而没能列出来的文件（正常会话恒为 0）。绝不让它们无声消失，
   //   也别再让用户去"求助手把文件移出来" —— 直接告诉他打包下载里是全的。
   if (deeperFiles > 0) {
@@ -2931,11 +3032,14 @@ let deeperFiles = 0
 // 【为什么不用 <a href> 直接导航】服务端在超限/无产物时回的是【中文报错正文】，
 // 用 a[download] 的话浏览器会把那段话原样存成一个 .zip 文件，用户双击得到一个坏包 ——
 // 比什么都不发生更糟。所以走 fetch：200 才存盘，非 200 把服务端那句话原样弹出来。
-zipAllBtn.addEventListener("click", async () => {
+// 【范围】scope=all（默认）= 本次会话产出的全部；scope=main = 只要主产物。
+// 两者都【不含】"文件夹里原有的"那一档 —— 把用户自己的原始资料原样打回给他没有意义，
+// 而且能轻易把包顶过 200MB 上限，让真正的产出一份都拿不到（服务端同一口径，见 /api/download-all）。
+async function doZip(scope) {
   const btn = zipAllBtn, old = btn.textContent
   btn.disabled = true; btn.textContent = "打包中…"
   try {
-    const r = await fetch("api/download-all?t=" + Date.now() + sidQ())
+    const r = await fetch("api/download-all?t=" + Date.now() + (scope === "main" ? "&scope=main" : "") + sidQ())
     if (!r.ok) {
       const body = (await r.text().catch(() => "")).trim()
       // 界面包是可以【单独】热更新的（见 web-update.mjs：包里永不含 .mjs），所以「新前端 + 旧后台」
@@ -2955,6 +3059,24 @@ zipAllBtn.addEventListener("click", async () => {
     setTimeout(() => URL.revokeObjectURL(url), 30000)   // 立刻 revoke 会让慢一步的保存拿到空文件
   } catch (e) { toast("打包下载失败：" + (e.message || e)) }
   finally { btn.disabled = false; btn.textContent = old }
+}
+// 有中间文件时才多问一句要哪一份；没有中间文件时两个选项等价，直接打包别让人多点一下。
+zipAllBtn.addEventListener("click", (e) => {
+  const hasAux = lastFilesList.some((n) => kindOf(n) === "aux")
+  if (!hasAux) return doZip("all")
+  const old = document.querySelector(".zmenu"); if (old) { old.remove(); return }
+  e.stopPropagation()
+  const menu = document.createElement("div"); menu.className = "zmenu"
+  for (const [label, scope] of [["只要主产物", "main"], ["全部（含中间文件）", "all"]]) {
+    const b = document.createElement("button"); b.type = "button"; b.textContent = label
+    b.addEventListener("click", () => { menu.remove(); doZip(scope) })
+    menu.appendChild(b)
+  }
+  zipAllBtn.parentNode.style.position = "relative"   // 菜单靠它定位（标题行本身没有定位上下文）
+  zipAllBtn.parentNode.appendChild(menu)
+  setTimeout(() => document.addEventListener("click", function off() {
+    menu.remove(); document.removeEventListener("click", off)
+  }, { once: true }), 0)
 })
 const IMG = /\.(png|jpe?g|gif|webp|svg|bmp)$/i
 const MDX = /\.(md|markdown)$/i
@@ -2964,11 +3086,27 @@ const PPTX = /\.(pptx?|odp|odt)$/i  // ppt / pptx / odp / odt（经 LibreOffice 
 const HTMX = /\.html?$/i            // html：沙箱 iframe 内嵌
 const CSVX = /\.[ct]sv$/i           // csv / tsv：前端解析成表格
 const TXTX = /\.(txt|log)$/i
-const CANPV = (n) => MDX.test(n) || PDFX.test(n) || DOCX.test(n) || PPTX.test(n) || HTMX.test(n) || CSVX.test(n) || TXTX.test(n)
+// xlsx / xlsm：走 /api/sheets 解出各 sheet，画成"页签 + 表格"。
+// ★ 不能让它落到 PPTX 那条 LibreOffice 转 PDF 的通用路：多 sheet 工作簿会被压成一串页、
+//   列宽按打印排版走样，而"一类一个 sheet"恰恰是文献台账的全部意义。
+const XLSX = /\.xls[xm]$/i
+const CANPV = (n) => MDX.test(n) || PDFX.test(n) || DOCX.test(n) || PPTX.test(n) || HTMX.test(n) || CSVX.test(n) || TXTX.test(n) || XLSX.test(n)
 // 把本轮产物以卡片形式插进聊天流：图片给缩略图（点击放大），md/pdf/office/html/csv/txt 给预览，其余给下载
 function addProducts(list) {
   const wrap = document.createElement("div"); wrap.className = "products"
-  for (const name of list) {
+  // 对话流里同样只把【主产物】摆成卡片：一轮写出十几个中间 md/py 时，成稿那张卡会被挤到
+  // 屏幕外面去（侧栏三段式解决了侧栏，这里不做就等于只修了一半）。中间文件收进一行折叠，
+  // 展开后仍是同样的卡片，一个都没少。
+  // 分级由服务端下发（filesmeta 先于 files 广播，所以这里拿得到）；拿不到时一律按主产物走。
+  const main = list.filter((n) => kindOf(n) !== "aux")
+  const aux = list.filter((n) => kindOf(n) === "aux")
+  let auxBox = null
+  if (aux.length) {
+    auxBox = document.createElement("details"); auxBox.className = "paux"
+    const sm = document.createElement("summary"); sm.textContent = `本轮还生成了 ${aux.length} 个中间文件`
+    auxBox.appendChild(sm)
+  }
+  for (const name of [...main, ...aux]) {
     const dlUrl = "api/download?name=" + encodeURIComponent(name) + sidQ()
     const raw = "api/raw?name=" + encodeURIComponent(name) + sidQ() + verQ(name)   // 同上：版本戳防旧图
     // 与侧栏同理：download 属性只给最后一段，带斜杠会被浏览器清洗成 "pdfs_a.pdf" 之类怪名
@@ -3009,8 +3147,9 @@ function addProducts(list) {
       card.appendChild(icon); card.appendChild(nm); card.appendChild(acts)
       for (const w of warns) card.appendChild(w)
     }
-    wrap.appendChild(card)
+    ;(auxBox && kindOf(name) === "aux" ? auxBox : wrap).appendChild(card)
   }
+  if (auxBox) wrap.appendChild(auxBox)
   // ★ 不无条件拽底。产物卡是【轮末 files 事件】贴的，而那时用户很可能正往上翻看前几步 ——
   //   一把把他弹回底部，和 scrollFollow 头注里"别把用户拽回来"的口径自相矛盾。
   //   无人值守连续续跑时每轮命中一次，翻历史根本翻不成。
@@ -3150,6 +3289,21 @@ async function openPreview(name) {
     } else if (ext === "csv" || ext === "tsv") {              // csv/tsv：前端解析成表格
       const txt = await fetch(raw).then(r => r.text())
       pvBody.innerHTML = csvTable(txt, ext === "tsv" ? "\t" : ",")
+    } else if (XLSX.test(name)) {                             // xlsx：多 sheet 页签 + 表格
+      const r = await fetch("api/sheets?name=" + encodeURIComponent(name) + sidQ() + verQ(name))
+      const j = await r.json()
+      if (!j.ok) throw new Error(j.err || "读不了这个 Excel")
+      PVX = { name, sheets: j.sheets || [], truncated: !!j.truncated, at: 0, lib: null }
+      // 文献台账模式：产物叫 library.xlsx 且会话目录里有配套的 library.json（分类过的）→
+      // 表格里多一列「移到…」，工具条多出「按分类归档」。拿不到就静默退回普通只读预览
+      //（用户可能只是自己传了个同名 Excel，那当然不该出现台账操作）。
+      if (/^library\.xlsx$/i.test(name)) {
+        try {
+          const l = await fetch("api/library?v=1" + sidQ()).then((x) => x.json())
+          if (l && l.ok && l.has && l.classified) PVX.lib = l
+        } catch { /* 没有台账就是普通 Excel */ }
+      }
+      renderSheets()
     } else if (ext === "txt" || ext === "log") {              // txt/log：纯文本
       let txt = await fetch(raw).then(r => r.text())
       const cut = txt.length > 200_000; if (cut) txt = txt.slice(0, 200_000)
@@ -3161,6 +3315,187 @@ async function openPreview(name) {
       pvBody.classList.add("frame"); pvBody.innerHTML = '<iframe title="预览" src="' + pvObjUrl + '"></iframe>'
     }
   } catch (e) { pvBody.classList.remove("frame"); pvBody.innerHTML = '<div class="hint">预览失败：' + String(e.message || e).slice(0, 160) + '</div>' }
+}
+// ---- 多 sheet Excel 预览（+ 文献台账的改分类 / 归档）----
+// PVX 是当前预览的工作簿状态：sheets 来自 /api/sheets，lib 非空表示这是文献台账
+//（library.xlsx + library.json），此时表格可改分类、工具条可归档。
+let PVX = null
+const PV_MAXROWS = 300
+function renderSheets() {
+  if (!PVX) return
+  pvBody.classList.remove("frame")
+  pvBody.innerHTML = ""
+  if (!PVX.sheets.length) { pvBody.innerHTML = '<div class="hint">这个工作簿里没有 sheet。</div>'; return }
+  if (PVX.at >= PVX.sheets.length) PVX.at = 0
+  // 台账工具条（只有 library.xlsx + library.json 才有）
+  if (PVX.lib) pvBody.appendChild(libToolbar())
+  // sheet 页签
+  const tabs = document.createElement("div"); tabs.className = "shtabs"
+  PVX.sheets.forEach((s, i) => {
+    const b = document.createElement("button"); b.type = "button"
+    b.className = "shtab" + (i === PVX.at ? " on" : "")
+    const n = Math.max(0, (s.rows?.length || 0) - 1)          // 减掉表头行才是"几篇"
+    b.innerHTML = '<span class="t"></span><span class="n">' + n + "</span>"
+    b.querySelector(".t").textContent = s.name
+    b.addEventListener("click", () => { PVX.at = i; renderSheets() })
+    tabs.appendChild(b)
+  })
+  pvBody.appendChild(tabs)
+  // 当前 sheet 的表格
+  const sh = PVX.sheets[PVX.at]
+  const rows = sh.rows || []
+  if (!rows.length) { pvBody.appendChild(Object.assign(document.createElement("div"), { className: "hint", textContent: "（这个 sheet 是空的）" })); return }
+  const head = rows[0], body = rows.slice(1, PV_MAXROWS + 1)
+  const fileCol = Math.max(0, head.findIndex((h) => String(h).trim() === "文件名"))
+  const box = document.createElement("div"); box.className = "shwrap"
+  const table = document.createElement("table")
+  const thead = document.createElement("thead"), htr = document.createElement("tr")
+  head.forEach((h) => { const th = document.createElement("th"); th.textContent = h; htr.appendChild(th) })
+  if (PVX.lib) { const th = document.createElement("th"); th.className = "shmove"; th.textContent = "分类"; htr.appendChild(th) }
+  thead.appendChild(htr); table.appendChild(thead)
+  const tbody = document.createElement("tbody")
+  body.forEach((cells) => {
+    const tr = document.createElement("tr")
+    head.forEach((_, c) => { const td = document.createElement("td"); td.textContent = cells[c] || ""; tr.appendChild(td) })
+    if (PVX.lib) tr.appendChild(moveCell(String(cells[fileCol] || ""), sh.name))
+    tbody.appendChild(tr)
+  })
+  table.appendChild(tbody); box.appendChild(table); pvBody.appendChild(box)
+  const more = rows.length - 1 - body.length
+  if (more > 0) pvBody.appendChild(Object.assign(document.createElement("div"),
+    { className: "hint", textContent: `本 sheet 共 ${rows.length - 1} 行，仅预览前 ${PV_MAXROWS} 行，完整内容请下载` }))
+  if (PVX.truncated) pvBody.appendChild(Object.assign(document.createElement("div"),
+    { className: "hint", textContent: "这个工作簿超出了预览上限，部分行 / 列 / sheet 未显示，完整内容请下载" }))
+}
+/** 一行末尾的「改分类」下拉：选中别的类 → 立刻改 library.json 并重出 Excel（不经过对话，不花额度） */
+function moveCell(file, curCat) {
+  const td = document.createElement("td"); td.className = "shmove"
+  const known = PVX.lib.records.find((r) => r.file === file)
+  if (!known) {                       // 表里这一行在台账里找不到（用户手工改过 Excel）——如实说明，不假装能改
+    td.innerHTML = '<span class="hint">台账里没有这一篇</span>'
+    return td
+  }
+  const sel = document.createElement("select"); sel.className = "shsel"
+  for (const c of PVX.lib.categories) {
+    const o = document.createElement("option"); o.value = c; o.textContent = c
+    if (c === curCat) o.selected = true
+    sel.appendChild(o)
+  }
+  const NEW = " new"
+  sel.appendChild(Object.assign(document.createElement("option"), { value: NEW, textContent: "＋ 新建分类…" }))
+  sel.addEventListener("change", async () => {
+    let to = sel.value
+    if (to === NEW) {
+      const n = prompt("新分类的名字：", "")
+      if (n === null || !n.trim()) { renderSheets(); return }
+      to = n.trim()
+    }
+    if (to === curCat) return
+    sel.disabled = true
+    try {
+      const j = await fetch("api/library/move?v=1" + sidQ(), { method: "POST",
+        headers: { "Content-Type": "application/json" }, body: JSON.stringify({ file, to }) }).then((r) => r.json())
+      if (!j.ok) throw new Error(j.err || "改不了")
+      toast(`已把「${file}」移到「${to}」，Excel 已重新生成`)
+      await reopenLibrary()
+    } catch (e) { toast("改分类失败：" + (e.message || e)); sel.disabled = false; renderSheets() }
+  })
+  td.appendChild(sel)
+  return td
+}
+/** 改完之后重新拉一遍工作簿与台账（Excel 已被服务端原地重写，缓存里的旧版不能再用） */
+async function reopenLibrary() {
+  const name = PVX.name
+  rawVer.set(name, Date.now())         // 换版本戳，绕开 /api/raw 的 max-age 与内存缓存（同 mdImgSrc 的理由）
+  await openPreview(name)
+  // 产出栏：归档之后原文件挪进了子目录，列表结构变了，重拉一次
+  try {
+    const outs = await fetch("api/outputs?sid=" + encodeURIComponent(sessionId || "")).then((r) => r.ok ? r.json() : [])
+    if (Array.isArray(outs) && outs.length) {
+      for (const o of outs) if (o.kind) FILE_KIND.set(o.name, o.kind)
+      renderFiles(outs.map((o) => o.name))
+    }
+  } catch { /* 侧栏刷不出来不影响预览本身 */ }
+}
+/** 台账工具条：按分类归档 / 撤销 */
+function libToolbar() {
+  const bar = document.createElement("div"); bar.className = "shbar"
+  const info = document.createElement("div"); info.className = "shbar-i"
+  info.textContent = PVX.lib.rule ? "分类口径：" + PVX.lib.rule : "共 " + PVX.lib.records.length + " 篇"
+  bar.appendChild(info)
+  const arc = document.createElement("button"); arc.type = "button"; arc.className = "shbtn"
+  arc.textContent = "按分类归档到子文件夹"
+  arc.addEventListener("click", () => archiveFlow(bar))
+  bar.appendChild(arc)
+  if (PVX.lib.canUndo) {
+    const un = document.createElement("button"); un.type = "button"; un.className = "shbtn ghost"
+    un.textContent = "撤销上一次归档"
+    un.addEventListener("click", async () => {
+      if (!confirm("把上一次归档移走的文件全部搬回原位？")) return
+      try {
+        const j = await fetch("api/library/archive?mode=undo" + sidQ(), { method: "POST" }).then((r) => r.json())
+        if (!j.ok) throw new Error(j.err || "撤销失败")
+        toast(`已搬回 ${j.restored} 个文件` + (j.missing ? `，${j.missing} 个在归档位置找不到` : ""))
+        await reopenLibrary()
+      } catch (e) { toast("撤销失败：" + (e.message || e)) }
+    })
+    bar.appendChild(un)
+  }
+  return bar
+}
+/**
+ * 归档流程：先【预演】（一个字节都不动）把清单摊给用户，他点「移动」或「复制」才真执行。
+ * 这是会动用户硬盘上原始文献的操作 —— 绝不允许点一下就直接搬。
+ */
+async function archiveFlow(bar) {
+  let plan
+  try {
+    plan = await fetch("api/library/archive?mode=plan" + sidQ(), { method: "POST" }).then((r) => r.json())
+    if (!plan.ok) throw new Error(plan.err || "算不出归档方案")
+  } catch (e) { toast("归档失败：" + (e.message || e)); return }
+  const old = bar.parentNode.querySelector(".shplan"); if (old) old.remove()
+  const box = document.createElement("div"); box.className = "shplan"
+  if (!plan.plan.length) {
+    box.innerHTML = '<div class="hint">没有需要移动的文件'
+      + (plan.stay ? "（" + plan.stay + " 篇已经在对应的子文件夹里）" : "") + "。</div>"
+    bar.after(box); return
+  }
+  const h = document.createElement("div"); h.className = "shplan-h"
+  h.textContent = `将把 ${plan.plan.length} 个文件移进以类名命名的子文件夹`
+    + (plan.stay ? `（另有 ${plan.stay} 个已在位）` : "")
+    + (plan.missing.length ? `；${plan.missing.length} 个在原位置找不到，会跳过` : "")
+  box.appendChild(h)
+  const list = document.createElement("div"); list.className = "shplan-l"
+  plan.plan.slice(0, 50).forEach((p) => {
+    const row = document.createElement("div"); row.className = "shplan-r"
+    row.textContent = p.from + "  →  " + p.to
+    list.appendChild(row)
+  })
+  if (plan.plan.length > 50) list.appendChild(Object.assign(document.createElement("div"),
+    { className: "hint", textContent: `…… 另有 ${plan.plan.length - 50} 个` }))
+  box.appendChild(list)
+  const acts = document.createElement("div"); acts.className = "shplan-a"
+  const run = async (copy) => {
+    acts.querySelectorAll("button").forEach((b) => { b.disabled = true })
+    try {
+      const j = await fetch("api/library/archive?mode=apply" + (copy ? "&copy=1" : "") + sidQ(), { method: "POST" }).then((r) => r.json())
+      if (!j.ok) throw new Error(j.err || "归档失败")
+      toast(`已${copy ? "复制" : "移动"} ${j.moved} 个文件到 ${j.cats.length} 个子文件夹`
+        + (j.failed.length ? `；${j.failed.length} 个失败` : ""))
+      await reopenLibrary()
+    } catch (e) { toast("归档失败：" + (e.message || e)); acts.querySelectorAll("button").forEach((b) => { b.disabled = false }) }
+  }
+  const bMove = Object.assign(document.createElement("button"), { type: "button", className: "shbtn", textContent: "移动过去" })
+  bMove.addEventListener("click", () => run(false))
+  const bCopy = Object.assign(document.createElement("button"), { type: "button", className: "shbtn ghost", textContent: "复制过去（原件留在原地）" })
+  bCopy.addEventListener("click", () => run(true))
+  const bNo = Object.assign(document.createElement("button"), { type: "button", className: "shbtn ghost", textContent: "取消" })
+  bNo.addEventListener("click", () => box.remove())
+  acts.append(bMove, bCopy, bNo)
+  box.appendChild(acts)
+  box.appendChild(Object.assign(document.createElement("div"), { className: "hint",
+    textContent: "移动会改动你文件夹里的原始文献（可以撤销）；不确定就先用「复制过去」。" }))
+  bar.after(box)
 }
 document.getElementById("pvClose").addEventListener("click", closePreview)
 document.addEventListener("keydown", (e) => { if (e.key === "Escape") { if (lb.classList.contains("on")) lb.classList.remove("on"); else if (preview.classList.contains("on")) closePreview() } })
@@ -3706,9 +4041,13 @@ async function useDir(p) {
   if (!j || !j.ok) { dirErr((j && j.err) || "这个目录用不了"); return }
   pickFolder(j.folder)
 }
+// 表单里的 type:"dir" 控件注册的同步回调（文献管理模块）：目录是在这个弹窗里选的，
+// 而表单卡不认识弹窗——选完/清空后靠它把值填回表单并重画。没有该控件时为 null。
+let DIR_FIELD_SYNC = null
 function pickFolder(f) {
   pendingFolder = { id: f.id, name: f.name, path: f.path }
   updateDirChip(); closeDirPicker()
+  if (DIR_FIELD_SYNC) { DIR_FIELD_SYNC(); toast("文献文件夹已选定：" + f.path); return }
   toast("工作目录已设为「" + f.path + "」，发出第一条消息后生效。")
 }
 dirChip && dirChip.addEventListener("click", openDirPicker)
@@ -3718,7 +4057,7 @@ dirUpBtn.addEventListener("click", () => dirBrowse(dirUpBtn.dataset.p || ""))
 document.getElementById("dirGo").addEventListener("click", () => dirBrowse(dirPathEl.value.trim()))
 dirPathEl.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); dirBrowse(dirPathEl.value.trim()) } })
 document.getElementById("dirUse").addEventListener("click", () => dirCur && useDir(dirCur))
-document.getElementById("dirClear").addEventListener("click", () => { pendingFolder = null; updateDirChip(); closeDirPicker(); toast("这次对话用系统分配的会话专属目录。") })
+document.getElementById("dirClear").addEventListener("click", () => { pendingFolder = null; updateDirChip(); closeDirPicker(); if (DIR_FIELD_SYNC) DIR_FIELD_SYNC(); toast("这次对话用系统分配的会话专属目录。") })
 document.getElementById("dirNewSub").addEventListener("click", async () => {
   if (!dirCur) return
   const name = prompt("新文件夹的名字：", "新建文件夹"); if (name === null) return
@@ -3915,8 +4254,8 @@ async function resumeSession(id) {                 // 载入历史 → 设为当
   // step 由服务端按 tool part 里的技能重放得出（见 /api/history）：与直播同口径，
   // 刷新前后同一段对话分组一致。chat 会话不带 step，这里就一个分组都不会开。
   for (const m of hist) { if (m.step) startGroup(m.step, m.stepName); add(m.role === "user" ? "user" : "bot", m.text) }
-  rawVer.clear()
-  for (const o of outs || []) rawVer.set(o.name, o.mtime || 0)   // 版本戳随会话重建，见 mdImgSrc
+  rawVer.clear(); FILE_KIND.clear()
+  for (const o of outs || []) { rawVer.set(o.name, o.mtime || 0); if (o.kind) FILE_KIND.set(o.name, o.kind) }   // 版本戳随会话重建，见 mdImgSrc；kind = 产物分级
   renderFiles((outs || []).map(o => o.name))       // 产物随会话持久回显
   // 有历史 = 这个会话已经开始过，别再带 module 去补绑。
   // ★ histFailed 时 hist 是空数组，但那【不代表】会话是空的 —— 它代表"不知道"。判成"没开始过"的话：
@@ -3941,7 +4280,7 @@ function clearCurrentSession() {
   sessionStarted = false; pendingWfCard = ""; pendingWfForm = null; lastCardText = ""
   offeredSteps.clear(); HDR_CACHE.clear()
   toPickerState()   // 会话没了 = 回到"还没选模块"的空态，别停在上一个会话的模块上
-  log.innerHTML = ""; wfResetGroups(); renderFiles([]); renderUploads([]); renderWelcome(); zScopeReset(); loadZotLib()
+  log.innerHTML = ""; wfResetGroups(); FILE_KIND.clear(); renderFiles([]); renderUploads([]); renderWelcome(); zScopeReset(); loadZotLib()
   stepsHost = null; stepsHostEl.replaceChildren()  // 步骤条在 #log 之外，清 log 不会连带清它
 }
 async function deleteSession(id, title) {           // 删除会话（不可撤销，先确认；进行中的生成由后端一并终止）
@@ -4012,6 +4351,8 @@ const MODICON = {
   refine: '<svg viewBox="0 0 24 24"><path d="M4 20l4-1 11-11-3-3L5 16z"/><path d="M14 6l3 3"/></svg>',
   stat: '<svg viewBox="0 0 24 24"><path d="M4 20V12M9 20V6M14 20V14M19 20V8"/><path d="M3 20h18"/></svg>',
   figure: '<svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="8.5" cy="9.5" r="1.5"/><path d="M21 16l-5-5-4 4-2-2-5 5"/></svg>',
+  // 文献管理：文件夹 + 里面的层叠卡片（"一个夹子装着一批文献"），与 lit（翻开的书 = 读一篇）区分开
+  libmgr: '<svg viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><path d="M7 11h10M7 14h6"/></svg>',
   dot: '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/></svg>',
 }
 const MODLOOK = {
@@ -4020,6 +4361,7 @@ const MODLOOK = {
   paper: { ic: "paper", en: "SCI Paper" },
   chat: { ic: "chat", en: "Free Chat" },
   litread: { ic: "lit", en: "Close Reading" },
+  litmanage: { ic: "libmgr", en: "Library Manager" },
   refcheck: { ic: "proof", en: "Manuscript Check" },
   humanize: { ic: "refine", en: "Language Polishing" },
   stats: { ic: "stat", en: "Statistic & Analysis" },
@@ -4746,7 +5088,7 @@ function helpDot(text) {
 }
 // 两列栅格里，哪些控件天生要占满整行：多行文本、成排的 chip、标签输入、上传区、
 // 真实表头下拉（列名多时一行放不下）。schema 里显式写 col2 可以覆盖这个判断。
-const WIDE_TYPES = new Set(["textarea", "multi", "files", "tags", "columns", "range"])
+const WIDE_TYPES = new Set(["textarea", "multi", "files", "tags", "columns", "range", "dir"])
 // 单选题摊成一排 chip 还是收成原生下拉：
 //   chips:true    → 强制摊开（选项再多也摊）
 //   dropdown:true → 强制收起
@@ -4911,6 +5253,33 @@ function fieldEl(f, values, onChange, allFields) {
       }
       wrap.appendChild(list)
     }
+  } else if (f.type === "dir") {
+    // 「选一个本机文件夹」控件（文献管理模块用）。它并【不是】另起一套目录选择——点开就是
+    // 顶栏那个「选择工作目录」弹窗（/api/fs/list），选定后既填进表单，又成为本会话的工作目录，
+    // 于是 AI 的 cwd 就是用户那个文献文件夹：原地读原文件、原地出 Excel、原地建分类子文件夹，
+    // 不复制、不上传、不占会话存储。
+    // ★ 因此它只能在【会话开始前】选：opencode 的 directory 建会话时定死（见 server.mjs createSession）。
+    //   会话已开始时 openDirPicker 会自己 toast 说明原因，这里同步把控件标成只读态。
+    values[f.id] = pendingFolder ? pendingFolder.path : ""
+    const box = document.createElement("div"); box.className = "wfdir"
+    const picked = !!pendingFolder
+    const info = document.createElement("div"); info.className = "wfdir-info"
+    info.innerHTML = ic("folder")
+    const pt = mk("span", { className: "wfdir-p" + (picked ? "" : " none"), textContent: picked ? pendingFolder.path : "还没选" })
+    if (picked) attachTip(pt, pendingFolder.path)          // 长路径是常态，截断了要能看全名
+    info.appendChild(pt)
+    box.appendChild(info)
+    const btn = mk("button", { type: "button", className: "wfdir-btn" + (picked ? " ghost" : ""),
+      textContent: picked ? "换一个文件夹" : "选择文件夹" })
+    btn.addEventListener("click", () => openDirPicker())
+    box.appendChild(btn)
+    if (sessionId) {
+      btn.disabled = true
+      box.appendChild(mk("div", { className: "wfhelp2", textContent: "这次对话已经开始，工作目录不能再改；要换文件夹请新建对话。" }))
+    }
+    // 弹窗里选完之后把值同步回表单并重画（弹窗自己不认识表单，靠这个回调搭桥）
+    DIR_FIELD_SYNC = () => { values[f.id] = pendingFolder ? pendingFolder.path : ""; onChange() }
+    wrap.appendChild(box)
   } else if (f.type === "tags") {
     // 关键字标签输入：回车 / 逗号 添加，× 删除。值是字符串数组。
     //
@@ -6126,7 +6495,9 @@ function confirmLeaveIntake() {
 function newConversation() {
   if (!confirmLeaveIntake()) return
   detachStream()   // 只退订不终止：原会话若在生成会继续跑，从左侧列表随时切回来看
-  sessionId = null; localStorage.removeItem("nm_sid"); log.innerHTML = ""; wfResetGroups(); renderFiles([]); loadUploads(); loadSessions(); zScopeReset(); loadZotLib(); stepsHost = null; stepsHostEl.replaceChildren()
+  // FILE_KIND 必须跟着会话清：换会话后同名文件（manuscript.md 这种到处都有）会沿用上一个
+  // 会话的分级，而两个会话的模块可能不同 —— 分级就错了，且从界面上完全看不出来。
+  sessionId = null; localStorage.removeItem("nm_sid"); log.innerHTML = ""; wfResetGroups(); FILE_KIND.clear(); renderFiles([]); loadUploads(); loadSessions(); zScopeReset(); loadZotLib(); stepsHost = null; stepsHostEl.replaceChildren()
   pendingFolder = null; lastAppliedFolder = null; updateDirChip()   // 新对话 = 重新可以选工作目录，上一个会话的选择不留到这里
   sessionStarted = false; pendingWfCard = ""; pendingWfForm = null; lastCardText = ""   // 任务卡是一次性的，绝不能漏进下一个会话
   offeredSteps.clear(); HDR_CACHE.clear()
@@ -6504,7 +6875,15 @@ function openStream(url) {
   // 更深层没列出来的文件数（服务端与 files 同时发）。不接的话，直播中侧栏那句"另有 N 个"永远是 0，
   // 用户要刷新才知道 agent 把图写进了更深的目录。
   es.addEventListener("filesmeta", (ev) => {
-    try { const m = JSON.parse(ev.data); if (typeof m.deeper === "number" && m.deeper !== deeperFiles) { deeperFiles = m.deeper; renderFiles(lastFilesList) } } catch (_) {}
+    // kinds 也走这条（与 deeper 同一个事件）：files 事件只送裸文件名，分级紧随其后到达再重画一次，
+    // 直播时的分区就与刷新后完全一致。
+    try {
+      const m = JSON.parse(ev.data)
+      let dirty = false
+      if (typeof m.deeper === "number" && m.deeper !== deeperFiles) { deeperFiles = m.deeper; dirty = true }
+      if (m.kinds && Object.keys(m.kinds).length) { setFileKinds(m.kinds); dirty = true }
+      if (dirty) renderFiles(lastFilesList)
+    } catch (_) {}
   })
   // 结构化产物：服务端按文件名认出渲染器（文献表→文献卡片、核查报告→红黄绿逐条…）。
   // 这是 files 之外【额外】的一份，不是替代 —— 认不出的产物仍走上面那条，绝不会因此消失。

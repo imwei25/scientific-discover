@@ -24,7 +24,21 @@ async function fakeOpencode(outRoot) {
     const u = new URL(req.url, "http://x")
     res.setHeader("content-type", "application/json")
     const m = /^\/session\/([^/]+)$/.exec(u.pathname)
-    if (u.pathname === "/session" && req.method === "GET") return res.end(JSON.stringify(state.sessions))
+    // ★ 真 opencode 的 /session 列表是【按 directory 分域】的：不带参数只回"默认那一域"
+    //   （网关 cwd 那个 project，产物目录 outputs/ws_xxx 在它里面），带 directory 才回那个目录的。
+    //   这里必须照样分域 —— 假服务从前无差别回全部，于是"文件夹会话在侧栏里彻底隐身"这个
+    //   实打实的线上缺陷，测试一路全绿（2026-08-14 由文献管理模块暴露）。
+    if (u.pathname === "/session" && req.method === "GET") {
+      const q = u.searchParams.get("directory") || ""
+      const norm = (p) => { try { return path.resolve(p).toLowerCase() } catch { return "" } }
+      // 默认域 = 网关自己造的产物目录（outputs/ws_xxx，在仓库内 → 与网关同一个 project）；
+      // 用户自己挑的目录在仓库外，只有带上它的 directory 才查得到。
+      const inDefault = (s) => !s.directory || /[\\/]outputs[\\/]ws_/i.test(s.directory)
+      const list = q
+        ? state.sessions.filter((s) => s.directory && norm(s.directory) === norm(q))
+        : state.sessions.filter(inDefault)
+      return res.end(JSON.stringify(list))
+    }
     if (u.pathname === "/session" && req.method === "POST") {
       const dir = u.searchParams.get("directory") || ""
       const s = { id: "ses_new" + ++n, title: "t" + n, time: { updated: Date.now() }, directory: dir }
@@ -267,4 +281,35 @@ test("不再按目录分组：只去掉分组，会话和目录里的文件都�
   assert.ok(s, "会话还在")
   assert.equal(s.folderId, null, "会话回到未归类")
   assert.ok(fs.existsSync(path.join(mine, "数据.csv")), "目录里的文件一个都不动")
+})
+
+// 【2026-08-14 线上缺陷的回归】opencode 的 /session 列表按 directory 分域，网关从前直接调
+// client.session.list()（不带 directory）→ 凡是挑了工作目录的会话【一条都不在列表里】：
+// 侧栏看不到、文件夹分组恒空（分组只列"还有会话挂着的"），而 pruneOrphanMeta 更会把它们的
+// 元数据当孤儿删掉（ws 一丢，uploads 与 outputs 的配对就断了）。
+// 文献管理模块必选文件夹，等于每次都撞上——用户报"会话不见了"就是这条。
+test("文件夹会话必须出现在列表里：opencode 的会话列表按目录分域，得逐个目录查过来", async (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "fold-"))
+  const mine = path.join(dir, "文献库")
+  fs.mkdirSync(mine, { recursive: true })
+  const oc = await fakeOpencode(path.join(dir, "out"))
+  const gw = await gateway(oc.url, dir)
+  t.after(async () => { await gw.close(); await oc.close(); try { fs.rmSync(dir, { recursive: true, force: true }) } catch {} })
+
+  const fid = (await gw.post("/api/folder/create?path=" + encodeURIComponent(mine))).json.folder.id
+  const folderSid = await gw.newSession(fid)
+  const plainSid = await gw.newSession()                 // 没挑目录的，落在默认域
+
+  const list = await gw.get("/api/sessions")
+  const ids = list.json.sessions.map((s) => s.id)
+  assert.ok(ids.includes(plainSid), "默认域的会话本来就在")
+  assert.ok(ids.includes(folderSid), "★ 挑了工作目录的会话必须一起列出来（别退回 session.list() 不带 directory）")
+  assert.deepEqual(list.json.folders.map((f) => f.id), [fid], "有会话挂着，文件夹分组才出得来")
+
+  // 元数据整理不许把它清掉：ws / folderId 是不可再生的
+  await new Promise((r) => setTimeout(r, 300))       // saveMeta 是防抖写盘（50ms），别抢在它前面读
+  const metaPath = path.join(dir, "sessions-meta.json")
+  const meta = () => JSON.parse(fs.readFileSync(metaPath, "utf8"))
+  assert.ok(meta().sessions[folderSid]?.ws, "建会话时该记下 ws")
+  assert.equal(meta().sessions[folderSid]?.dir, path.resolve(mine), "还要记下工作目录本身——忘掉文件夹之后就靠它把会话找回来")
 })

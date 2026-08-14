@@ -173,6 +173,8 @@
     /* 科研作图：画框 + 山影 + 一轮日 —— 与 stat 的柱状图刻意拉开距离，两张卡都叫"图"，
        图标再撞就真分不出哪张是统计图、哪张是示意图了 */
     figure: '<svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="8.5" cy="9.5" r="1.5"/><path d="M21 16l-5-5-4 4-2-2-5 5"/></svg>',
+    /* 文献管理：文件夹 + 内页 —— 与 lit（翻开的书 = 读透一篇）刻意区分：这张卡管的是"一批" */
+    libmgr: '<svg viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><path d="M7 11h10M7 14h6"/></svg>',
     dot:    '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/></svg>'
   };
   const ARROW = '<svg viewBox="0 0 24 24"><path d="M5 12h14M13 6l6 6-6 6"/></svg>';
@@ -186,6 +188,7 @@
     paper:    { ic: "paper",  en: "SCI Paper" },
     chat:     { ic: "chat",   en: "Free Chat" },
     litread:  { ic: "lit",    en: "Close Reading" },
+    litmanage:{ ic: "libmgr", en: "Library Manager" },
     refcheck: { ic: "proof",  en: "Manuscript Check" },
     humanize: { ic: "refine", en: "Language Polishing" },
     stats:    { ic: "stat",   en: "Statistic & Analysis" },

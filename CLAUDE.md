@@ -49,6 +49,7 @@
 - **数据图 vs 示意图（避免误派）**：**图上形状由数字决定 → `nature-figure`**（森林图/KM/火山图/ROC/箱线图…，可直接投稿）；**由生物学关系决定、没有数据 → `mechanism-figure`**（多栏通路图、药物阻断、结构示意、graphical abstract）。`mechanism-figure` 出的是 **AI 生成位图**：交付时必须说清三件事——不是矢量、多数期刊（Nature 系基本禁用 / Cell Press 需披露）不接受 AI 生成图入稿、标签必然有拼错要逐个核。**最适合标书插图与组会汇报**；投稿终稿走"按 spec 在 BioRender 重绘"的路径。用户同时要机制图与数据图 → 分别派这两个技能，别混一次做。
 - **临床推断统计的归属（避免误派）**：方法比对（Bland-Altman / Passing-Bablok / 一致性 LoA）、生存分析（KM / Cox）、ROC / 诊断效能、组间检验 / 相关 / 回归等**分析**一律走 `data-analysis`，要投稿级图再叠 `nature-figure`；`clinical-stats` **只**管 Table 1 基线表与样本量 / 把握度，别拿它做上述分析。**且诊断准确性 / 方法比对 / 纯实验室验证类研究常无人口学基线协变量（年龄 / 性别 / 分期等）→ 此时 Table 1 无对应数据，`clinical-stats` 可整步跳过、全走 `data-analysis`，别把检测值 / 生存时间硬塞成"基线表"制造误导。**
 - **检索 / 全文**：`search-lit`（PubMed 系）、`literature-review`（Europe PMC / 叙述性综述成文）、`fulltext-retrieval`（下 PDF：OA 渠道 + 机构通道（挂本机已登录 CARSI 的 Chrome，仅同机可用、服务器优雅降级）、PDF 转 md）
+- **整理一个文献文件夹**：`literature-manage`（"把这个文件夹里的文献整理成表 / 分门别类 / 出个台账 / 按类归档"——读该目录下的 PDF 与 Word，逐篇抽年份·作者·杂志·核心观点，按用户给的标准（或 AI 自定口径）分类，出**多 sheet 的 `library.xlsx`**（一类一个 sheet），并可按分类把原文件归到子文件夹。**只读用户指定的那个本机文件夹，不检索、不下载**；要读透其中某一篇走 `fulltext-retrieval`/文献研读，要成文综述走 `literature-review`）
 - **本地文献库**：`zotero-library`（读用户**本机 Zotero** 题录 + 对其中 PDF 做全文证据检索，“基于我自己的文献库回答”；默认只读，导出回写用 `push`（写操作）。**仅在 opencode 与 Zotero 同机运行时可用**，中心服务器多用户下探测失败会优雅回退，改用 `search-lit`/`fulltext-retrieval`）
 - **把综述检索到的文献导入 Zotero / 会话小库**（做完 `search-lit`/`literature-review` 后，用户说“把这批文献存进 Zotero / 存成小库问答”）：
   - → **Zotero**：`zotero-library` 的 `push --csv evidence_table.csv`（或 `--bib refs.bib`）把题录写进 Zotero 当前选中分类（**只有题录、无 PDF 附件**）。
@@ -66,7 +67,9 @@
 ## 五、硬规矩（单步、完整目标都适用）
 - **不虚构**数据 / 结果 / 统计量 / 参考文献 / 伦理批号 / 注册号；缺的标"待补充"向用户要。
 - **数据含患者信息且未脱敏 → 先 `deidentify`**，再做任何统计 / 建库 / 分析。
-- 写完综述 / 论文**自动跑 `reference-check`** 查假引用，全绿再排版。
+- 写完综述 / 论文**自动跑 `reference-check`** 查假引用，全绿再排版。**手上有正文就把正文一并传给它**
+  （`--manuscript 稿件.md`）：多出「正文引用位置」一列，并抓出**正文从没引过的文献**与悬空编号——
+  这类条目逐条查全是真文献、报告全绿，只喂参考文献列表永远查不出来。
 - **论文成稿 / 润色完交付时，向用户附查重工具推荐**（中文：PaperPass / PaperYY 免费初查，知网定稿；英文：Scribbr 免费版 / Plagly 免费初查，iThenticate 定稿；详表见 `write-paper`「查重工具推荐」节）。仅论文 / 投稿稿件适用（标书、PPT 等不附）；查重站均为网页端需用户**自行上传**，不代查。
 - **论文 / 润色稿排版出件：没指定期刊就用默认送审格式，别再问格式细节**——`render-docx`（或 `render-pdf-doc`）加 `--journal generic-submission` 一键落齐（Times New Roman 12pt、1.5 倍行距、不加行号、页码、首行缩进 4 字符、图表题 10.5pt 居中且序号加粗、表内 10pt 三线表且表宽拉满版心、标题 16/14/12pt 加粗、作者机构 10.5pt 居中、1in 边距；目标刊明确要双倍行距+连续行号时才补 `--line-spacing double --line-numbers` 或用该刊预设）。**用户指定了期刊** → 先看 `--journal list` 有无现成预设，没有就 **WebFetch 该刊 Instructions for Authors** 摘出要求再落参数；查不到如实说明并退回默认预设，**不凭印象编该刊格式**。细则见 `write-paper`「排版交付格式」。
 - Python 统一走项目根 `.venv`（用 `${REPO_ROOT:-/app}/.venv/bin/python`；缺则先跑 `env-setup`）。
