@@ -7,7 +7,7 @@ import path from "node:path"
 import crypto from "node:crypto"
 import { startApp, adminLogin, asAdmin } from "./helper.mjs"
 import { zip, unzip } from "../lib/minizip.mjs"
-import { parsePack, pyImports, lintImports } from "../lib/skillpacks.mjs"
+import { parsePack, pyImports, lintImports, collectSkillEntries } from "../lib/skillpacks.mjs"
 
 const STRONG = "Aa1!aaaa9"
 
@@ -208,4 +208,34 @@ test("relevant：变更技能与用户白名单无交集就不提示", async () 
     const access2 = await r.login()
     assert.equal((await r.app.req("/api/skills/latest", { headers: { authorization: "Bearer " + access2 } })).json.latest.relevant, true)
   } finally { await r.close() }
+})
+
+// drop：与 exclude 的区别就在"平移还是删除"。搞混了后果相反——拿 exclude 删 env-setup
+// 会让它被 preserved 永久平移，正是我们要根除的那个技能。
+test("collectSkillEntries：drop 的技能既不进包也不进 preserved（= 客户端删除）", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "sci-drop-"))
+  try {
+    for (const s of ["search-lit", "ppt-master", "env-setup"]) {
+      fs.mkdirSync(path.join(dir, s), { recursive: true })
+      fs.writeFileSync(path.join(dir, s, "SKILL.md"), `# ${s}`)
+    }
+    const c = collectSkillEntries(dir, { exclude: new Set(["ppt-master"]), drop: new Set(["env-setup"]) })
+    assert.deepEqual(c.packed, ["search-lit"])
+    assert.deepEqual(c.preserved, ["ppt-master"])          // 平移：客户端留着旧的
+    assert.deepEqual(c.dropped, ["env-setup"])             // 删除：两个名单都不进
+    assert.ok(!c.entries.some((e) => e.name.includes("env-setup")), "被 drop 的技能不该出现在 zip 条目里")
+    assert.ok(c.warnings.some((w) => w.includes("env-setup")), "该在预览里明说客户端会删掉什么")
+  } finally { fs.rmSync(dir, { recursive: true, force: true }) }
+})
+
+// 同时出现在 exclude 与 drop 里时以 drop 为准，否则会被 preserved 平移、删不掉
+test("collectSkillEntries：drop 优先于 exclude", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "sci-drop2-"))
+  try {
+    fs.mkdirSync(path.join(dir, "env-setup"), { recursive: true })
+    fs.writeFileSync(path.join(dir, "env-setup", "SKILL.md"), "# env-setup")
+    const c = collectSkillEntries(dir, { exclude: new Set(["env-setup"]), drop: new Set(["env-setup"]) })
+    assert.deepEqual(c.preserved, [])
+    assert.deepEqual(c.dropped, ["env-setup"])
+  } finally { fs.rmSync(dir, { recursive: true, force: true }) }
 })

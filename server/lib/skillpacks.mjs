@@ -184,10 +184,15 @@ export function parsePack(buf) {
 const JUNK = new Set(["__pycache__", "node_modules", ".DS_Store", "outputs", ".pytest_cache"])
 
 /**
- * 走一遍技能目录，收成 zip 条目。exclude = 不随包分发的技能（写进 preserved）。
+ * 走一遍技能目录，收成 zip 条目。
+ *   exclude = 不随包分发、但客户端【自留平移】的技能（写进 preserved），如 85MB 的 ppt-master
+ *   drop    = 不随包分发、且客户端【删掉】的技能。两者的区别就在"平移还是删除"：
+ *             按 web/skill-update.mjs 的 swapIn 语义，包里没有、preserved 里也没有 = 已删除。
+ *             默认 env-setup——打包版的 .venv 是随安装包装好的，留着这个技能只会让 agent 在
+ *             "路径带空格 → 命令被 bash 切断"时误判成缺环境，去重建 .venv 重装 requirements。
  * 顺手就地剥 SKILL.md 的 BOM（opencode 不认，发布闸也会拒——在源头治）。
  */
-export function collectSkillEntries(skillsDir, { exclude = new Set() } = {}) {
+export function collectSkillEntries(skillsDir, { exclude = new Set(), drop = new Set() } = {}) {
   const entries = [], warnings = [], bigFiles = []
   let totalBytes = 0
   const walk = (dir, rel) => {
@@ -210,19 +215,21 @@ export function collectSkillEntries(skillsDir, { exclude = new Set() } = {}) {
   const names = fs.readdirSync(skillsDir, { withFileTypes: true })
     .filter((e) => e.isDirectory() && fs.existsSync(path.join(skillsDir, e.name, "SKILL.md")))
     .map((e) => e.name).sort()
-  const packed = names.filter((s) => !exclude.has(s))
-  const preserved = names.filter((s) => exclude.has(s))
+  const packed = names.filter((s) => !exclude.has(s) && !drop.has(s))
+  const preserved = names.filter((s) => exclude.has(s) && !drop.has(s))
+  const dropped = names.filter((s) => drop.has(s))
   for (const s of packed) walk(path.join(skillsDir, s), `skills/${s}`)
   if (bigFiles.length) warnings.push(`包里有大文件（考虑加进排除清单？）：${bigFiles.join("、")}`)
-  return { entries, packed, preserved, totalBytes, warnings }
+  if (dropped.length) warnings.push(`客户端将删除这些技能（不随包分发也不平移）：${dropped.join("、")}`)
+  return { entries, packed, preserved, dropped, totalBytes, warnings }
 }
 
 /**
  * 从磁盘上的技能树拼出一个完整技能包 zip。
  * rootDir 下若有 AGENTS.md 一并带上（路由表随包走）。
  */
-export function buildPack({ skillsDir, rootDir, version, changelog = "", changedSkills = [], exclude = new Set(), venvPackages = [] }) {
-  const c = collectSkillEntries(skillsDir, { exclude })
+export function buildPack({ skillsDir, rootDir, version, changelog = "", changedSkills = [], exclude = new Set(), drop = new Set(), venvPackages = [] }) {
+  const c = collectSkillEntries(skillsDir, { exclude, drop })
   const entries = [{
     name: "pack.json",
     data: Buffer.from(JSON.stringify({
@@ -232,5 +239,5 @@ export function buildPack({ skillsDir, rootDir, version, changelog = "", changed
   const agents = rootDir && path.join(rootDir, "AGENTS.md")
   if (agents && fs.existsSync(agents)) entries.push({ name: "AGENTS.md", data: fs.readFileSync(agents) })
   else c.warnings.push("源树里没有 AGENTS.md——包里不带路由表，客户端沿用旧的")
-  return { buf: zip(entries), skills: c.packed, preserved: c.preserved, warnings: c.warnings, totalBytes: c.totalBytes }
+  return { buf: zip(entries), skills: c.packed, preserved: c.preserved, dropped: c.dropped, warnings: c.warnings, totalBytes: c.totalBytes }
 }

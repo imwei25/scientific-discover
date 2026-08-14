@@ -1539,6 +1539,7 @@ function loadPacks(){
         $('#sr-preview').innerHTML=
           '<div class="hint" style="margin:10px 0 8px">源 <code>'+esc(pv.shortSha||'（非 git 检出）')+'</code> · '+
             pv.skills+' 个技能，'+fmtSize(pv.sizeBytes)+(pv.preserved&&pv.preserved.length?' · 包外保留：'+esc(pv.preserved.join('、')):'')+
+            (pv.dropped&&pv.dropped.length?' · <b style="color:#c62828">客户端将删除：'+esc(pv.dropped.join('、'))+'</b>':'')+
             ' · 将发布为 <b>'+esc(pv.nextVersion)+'</b></div>'+
           (pv.upToDate?'<div class="msg ok" style="display:block">已是最新：源与上次发布的 commit 相同，没有要发的东西。</div>':
             ((pv.warnings||[]).length?'<div class="msg" style="display:block">'+pv.warnings.map(esc).join('<br>')+'</div>':'')+

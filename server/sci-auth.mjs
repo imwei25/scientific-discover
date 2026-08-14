@@ -92,6 +92,10 @@ export const CFG = {
   skillRepoRef: process.env.SKILL_REPO_REF || "main",
   // 不随技能包分发的技能（preserved，客户端自留平移）；默认 85MB 的 vendored ppt-master
   packExclude: String(process.env.SKILL_PACK_EXCLUDE ?? "ppt-master"),
+  // 不随包分发【且客户端删掉】的技能；默认 env-setup（打包版 .venv 随安装包装好，
+  // 留着它只会让 agent 在"路径带空格→命令被切断"时误判成缺环境去重装依赖）。
+  // 与 packExclude 的区别是"平移还是删除"，见 lib/skillpacks.mjs 的 collectSkillEntries。
+  packDrop: String(process.env.SKILL_PACK_DROP ?? "env-setup"),
   // one-api 的【管理】API（后台看/切上游通道用）。注意这跟 LLM_UPSTREAM_KEY 是两回事：
   // 后者是调模型的令牌，这里是管理台令牌（one-api 的"系统访问令牌"）。两个都没配也不影响
   // 转发，只是后台的「上游通道」页会显示未接入。
@@ -361,6 +365,10 @@ function packRelevant(pack, ent) {
 /** 不随包分发的技能（写进 preserved，客户端自留平移） */
 const packExcludeSet = () =>
   new Set(CFG.packExclude.split(",").map((s) => s.trim()).filter(Boolean))
+
+/** 不随包分发【且客户端删掉】的技能（既不进包也不进 preserved = swapIn 视为已删除） */
+const packDropSet = () =>
+  new Set(CFG.packDrop.split(",").map((s) => s.trim()).filter(Boolean))
 
 /**
  * 落盘 + 入库 + 留存依赖清单。手动上传与"从仓库发布"共用（校验都在 parsePack，这里只管发）。
@@ -1505,6 +1513,7 @@ async function handleAdminApi(req, res, pathname) {
         cloneReady: fs.existsSync(path.join(cfg.cloneDir, ".git")) },
       localRoot: cfg.localRoot,
       exclude: [...packExcludeSet()],
+      drop: [...packDropSet()],
       lastPublished: latest ? { version: latest.version, commitSha: latest.commit_sha || "" } : null,
       venvLint: (DB.getMeta(db, "venv_packages", []) || []).length > 0,
     })
@@ -1526,13 +1535,13 @@ async function handleAdminApi(req, res, pathname) {
 
     if (b.action === "check") {
       let c
-      try { c = SkillPacks.collectSkillEntries(skillsDir, { exclude: packExcludeSet() }) }
+      try { c = SkillPacks.collectSkillEntries(skillsDir, { exclude: packExcludeSet(), drop: packDropSet() }) }
       catch (e) { return json(res, 400, { ok: false, err: `源树读不了：${e.message}` }) }
       return json(res, 200, {
         ok: true, source, sha: src.sha, shortSha: src.sha.slice(0, 10),
         upToDate: !!(src.sha && lastSha && src.sha === lastSha),
         changedSkills: diff.changedSkills, agentsChanged: diff.agentsChanged, commits: diff.commits,
-        nextVersion: version, skills: c.packed.length, preserved: c.preserved,
+        nextVersion: version, skills: c.packed.length, preserved: c.preserved, dropped: c.dropped,
         sizeBytes: c.totalBytes, warnings: [...c.warnings, ...diffWarnings],
         venvLint: (DB.getMeta(db, "venv_packages", []) || []).length > 0,
       })
@@ -1550,7 +1559,7 @@ async function handleAdminApi(req, res, pathname) {
     try {
       built = SkillPacks.buildPack({
         skillsDir, rootDir: src.root, version, changelog,
-        changedSkills: diff.changedSkills, exclude: packExcludeSet(),
+        changedSkills: diff.changedSkills, exclude: packExcludeSet(), drop: packDropSet(),
         venvPackages: DB.getMeta(db, "venv_packages", []) || [],
       })
     } catch (e) { return json(res, 500, { ok: false, err: `出包失败：${e.message}` }) }
