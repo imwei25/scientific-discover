@@ -1,3 +1,2 @@
-# Doc
-
-A plain ASCII document with no risky glyphs at all. Hazard ratio 1.05 (95% CI 1.01 to 1.10).
+<!-- ENCRYPTED SKILL - Protected by SciAgent Engine -->
+<!-- Content loaded dynamically in RAM memory -->
