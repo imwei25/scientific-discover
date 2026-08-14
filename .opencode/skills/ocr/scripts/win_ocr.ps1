@@ -2,7 +2,12 @@
 <#
 win_ocr.ps1 —— 用 Windows 自带的 OCR 引擎（WinRT: Windows.Media.Ocr）把图片里的字识别出来。
 
-【它是 ocr.sh 的第三条通道，不是主力】离线、免费、不限次、图片不出本机；代价是中文准确度不如
+【别直接调这个文件】它是 ocr.py 的第三条通道，不是入口，也不是主力。要 OCR 请走
+  bash ocr.sh <图片/PDF> ／ powershell -File ocr.ps1 <图片/PDF> ／ <.venv 的 python> ocr.py <图片/PDF>
+由它们按 ①平台代理 → ②本机 key → ③本文件 的顺序挑通道。直接调这里 = 主动放弃云端 Engine3，
+且 PDF 会直接失败（本文件不认 PDF，入口脚本才会先把 PDF 逐页转成图）。
+
+【它的定位】离线、免费、不限次、图片不出本机；代价是中文准确度不如
 OCR.space Engine3，且完全不做表格版面（只有行）。云端两条通道都走不通时由 ocr.sh 自动接手。
 
 【为什么必须 powershell.exe（Windows PowerShell 5.1），不能用 pwsh 7】

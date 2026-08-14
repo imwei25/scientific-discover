@@ -36,23 +36,42 @@ OCR 是**辅助提取**，不是权威原件。Engine3 中文准确度很高，�
 > **别自己发明兜底**：不用去查 tesseract、paddleocr、easyocr 装没装，也不用自己写 PowerShell 调 WinRT——`ocr.sh` 已经把这条路做完并测过了。云端一报错就手写替代方案，只会把一次排查拖成十几轮。**看到 `[换道]` 就是正常工作**，照常往下读结果。
 
 ### 其它依赖与额度
-- **Python**：项目根 `.venv`（脚本自动解析；缺则先跑 `env-setup`）。`requests` 必需，`Pillow` 用于压缩 >1MB 的图（**只有云端两条通道需要压缩**，③ 用原图）。
+- **Python**：项目根 `.venv`（脚本自动解析；缺则先跑 `env-setup`）。`requests` 必需，`Pillow` 用于压缩 >1MB 的图（**只有云端两条通道需要压缩**，③ 用原图），`PyMuPDF` 用于把 PDF 逐页渲染成图（喂 PDF 时才用到）。
 - **免费额度**（云端两条，**全平台共用同一把 key 的配额**，注意别刷爆）：Engine3 **2500 次/月**、Engine1/2 25000/月、500 次/天/IP、**单图 ≤1MB**（脚本自动压缩超标图）。走平台代理时还有两层闸：每人每天若干次（档位定）、全平台每天/每月上限（`OCR_DAILY_CAP` / `OCR_MONTHLY_CAP`）。撞到闸时脚本**说清是哪一层**（自己的次数用完 vs 全平台池子满了 vs 平台没配），不会把剩下的图一张张再撞一遍。
 
 ## 用法
-```bash
-# 单张（URL 或本地路径都行）
-bash ${REPO_ROOT:-/app}/.opencode/skills/ocr/scripts/ocr.sh 图片URL或路径
 
-# 多张按顺序识别，输出间以 "===== FILE: <名> =====" 分隔
-bash ${REPO_ROOT:-/app}/.opencode/skills/ocr/scripts/ocr.sh a.jpg b.png c.jpg > out.txt
+**入口有三个，等价，挑你手上能跑的那个**（逻辑都在 `ocr.py`，两个壳只负责找 `.venv` 的 python）：
+
+```bash
+# 有 bash（Linux / macOS / Git Bash）
+bash ${REPO_ROOT:-/app}/.opencode/skills/ocr/scripts/ocr.sh 图片URL或路径
+```
+```powershell
+# 只有 PowerShell（Windows 桌面版常见）
+powershell -NoProfile -ExecutionPolicy Bypass -File .opencode\skills\ocr\scripts\ocr.ps1 图片路径
+```
+```bash
+# 手上已经有 .venv 的 python，最省事
+${REPO_ROOT:-/app}/.venv/bin/python .opencode/skills/ocr/scripts/ocr.py 图片路径   # Windows: .venv\Scripts\python.exe
+```
+
+```bash
+# 多个按顺序识别，输出间以 "===== FILE: <名> =====" 分隔；PDF 直接喂，不用自己拆页
+bash .../ocr.sh a.jpg scan.pdf c.png > out.txt
 
 # 只用某一条通道（排查时用；proxy | key | win）
-OCR_FORCE_CHANNEL=win bash ${REPO_ROOT:-/app}/.opencode/skills/ocr/scripts/ocr.sh a.jpg
+OCR_FORCE_CHANNEL=win bash .../ocr.sh a.jpg
 
 # 官方页面里的图先解析出真实图片 URL 再喂进来（页面常是 <img src=...jpg>）
 ```
-脚本做的事：取图（URL 下载 / 本地读）→ 云端通道先用 Pillow 把 >1MB 的图压到 1MB 内 → 按 ①②③ 顺序挑一条能用的通道（云端 `language=chs, OCREngine=3, isTable=true`）→ 识别文本走 **stdout**，通道/换道/额度/失败信息走 **stderr**（所以 `> out.txt` 拿到的是干净文本）。
+
+> **⚠ 别直接调 `win_ocr.ps1`**。它不是入口，是三条通道里**最差的那条**（本机离线兜底：不做表格版面、
+> **不认 PDF**、错字率高于云端 Engine3）。绕过 `ocr.py` 直接调它 = 主动放弃云端 Engine3，还会在
+> PDF 上直接失败。**"看到 `.sh` 跑不了 → 自己找别的脚本"是个已知的踩坑路径**：正确做法是换成上面
+> 的 `ocr.ps1` 或 `ocr.py`，通道选择交给它。
+
+脚本做的事：取图（URL 下载 / 本地读）→ **PDF 在需要时用 PyMuPDF 逐页渲染成 PNG**（本地通道必转，云端在 >1MB 时转）→ 云端通道用 Pillow 把 >1MB 的图压到 1MB 内 → 按 ①②③ 顺序挑一条能用的通道（云端 `language=chs, OCREngine=3, isTable=true`）→ 识别文本走 **stdout**（多页 PDF 以 `----- PAGE n -----` 分页），通道/换道/额度/失败信息走 **stderr**（所以 `> out.txt` 拿到的是干净文本）。
 
 ## 典型流程（官方图片文件 → 可用文本）
 1. 目标是网页里的图 → 先用 `.venv` 的 requests+bs4 解析页面 `<img>` 的 src，拿到真实图片 URL（NSFC 等站点直接抓页面可能 412，加 User-Agent）。
@@ -67,7 +86,7 @@ OCR_FORCE_CHANNEL=win bash ${REPO_ROOT:-/app}/.opencode/skills/ocr/scripts/ocr.s
 - 免费额度共享，大批量扫描前先估算张数；不够时降 Engine1/2 或换其他后端。
 - **Windows 兜底通道（③）额外的三条**，用了就得说：
   - **完全不做表格版面**（云端有 `isTable`，它没有）——多栏表格会被拍平成行，列的对应关系要人工还原。
-  - **不认 PDF**（云端可以）——图片版 PDF 得先导出成 PNG/JPG 再喂。
+  - **引擎本身不认 PDF**（云端可以）——但脚本会替你用 PyMuPDF 把 PDF 逐页渲染成 PNG 再识别（200dpi），所以**你照常把 .pdf 喂给 `ocr.sh` / `ocr.ps1` 即可**；只有 `.venv` 里没装 PyMuPDF 时才需要用户自己导图片。
   - 错字率高于 Engine3，尤其是小数点、密排数字与生僻字；脚本已把小图放大 2 倍来补一点，但**关键字段务必逐个核对**。
 
 ## 衔接
