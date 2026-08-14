@@ -21,6 +21,7 @@ import * as Tasks from "./tasks.mjs"
 import * as Sched from "./schtasks.mjs"
 import * as Presets from "./task-presets.mjs"
 import * as Bridge from "./chat-bridge.mjs"
+import * as SkillGuard from "./skill-guard.mjs"
 
 // opencode 的完整流水线（标书/论文/系统综述）单轮可跑十几分钟，而 session.prompt 是“等整轮结束才返回”的请求；
 // undici 默认 5 分钟 headers/body 超时会让这类长轮假性抛错。关掉这两个超时（0=不限），连接超时保留。
@@ -52,6 +53,16 @@ try {
   // 解密失败是致命的：后台会没有任何科研技能。响亮报错，别静默退化成裸对话。
   console.error(`[vault] 技能解密还原失败：${e?.message || e}\n` +
     `    后台将没有科研技能可用。多半是 skills.pak 损坏或被杀软改动 —— 请重新安装。`)
+}
+
+// ---- 技能出流指纹闸：防止技能文件内容整段流出（聊天正文/思考、下载、打包、历史、分享）----
+// 【必须在金库还原之后建库】打包版此刻技能才是明文。建不起来（源码检出无技能目录、SKILL_GUARD=0）
+// 就整体停用，所有扫描点都成 no-op —— 行为与没有这道闸完全一致。详见 skill-guard.mjs 头注。
+{
+  const g = SkillGuard.initSkillGuard(SKILLS_DIR)
+  console.log(g.enabled
+    ? `[guard] 技能出流指纹闸已启用：${g.files} 个技能文件 / ${g.fps} 枚指纹`
+    : `[guard] 技能出流指纹闸未启用（${g.reason}）`)
 }
 
 const OC_URL = process.env.OC_URL || "http://127.0.0.1:4098"
@@ -2204,6 +2215,37 @@ function startJob(sid, sentText, modId, forceModel) {
   // createSseClient → fetch(url,{signal})，abort 后重试循环顶部的 `if (signal.aborted) break` 会终止它。
   const evAbort = new AbortController()
   const broadcast = (ev, data) => {
+    // ---- 技能出流闸：正文 / 收尾全文 / 思考流在进快照与订阅者之前先过指纹 ----
+    // 命中 = 输出里有连续几百字符与技能文件近乎逐字一致（阈值见 skill-guard.mjs）。处置与
+    // 越权/闸拦同一套路：当场截断、立即 abort，prompt 返回后由 skillLeak 分支统一报错收场。
+    // 已触发后本轮再来的 text/final 一律丢弃 —— job.text 里冻结的是净化版，别让后续事件把
+    // 泄露内容又推回去（final 是全文快照，必带已截掉的那段）。
+    if (job.skillLeak && (ev === "text" || ev === "final")) return
+    if (ev === "text" && typeof data === "string") {
+      const r = SkillGuard.scanText(data)
+      if (r) {
+        data = data.slice(0, r.rawStart) + SkillGuard.LEAK_NOTE
+        job.skillLeak = r
+        console.warn(`[guard] 会话 ${sid}：正文命中技能指纹（${r.file}，跨度 ${r.span}），已截断并中止本轮`)
+        client.session.abort({ path: { id: sid } }).catch(() => {})
+      }
+    } else if (ev === "final" && typeof data?.text === "string") {
+      const r = SkillGuard.scanText(data.text)
+      if (r) {
+        data = { text: data.text.slice(0, r.rawStart) + SkillGuard.LEAK_NOTE }
+        job.skillLeak = r
+        console.warn(`[guard] 会话 ${sid}：收尾全文命中技能指纹（${r.file}），已截断`)
+      }
+    } else if (ev === "reasoning" && typeof data?.text === "string") {
+      // 思考流同样外显给用户，模型读过技能文件后在思考里整段复述一样是泄露
+      const r = SkillGuard.scanText(data.text)
+      if (r) {
+        data = { ...data, text: data.text.slice(0, r.rawStart) + "\n……（后续思考包含内部技能文件内容，已截断）" }
+        job.skillLeak = r
+        console.warn(`[guard] 会话 ${sid}：思考流命中技能指纹（${r.file}），已截断并中止本轮`)
+        client.session.abort({ path: { id: sid } }).catch(() => {})
+      }
+    }
     if (ev === "text") job.text = data
     else if (ev === "reasoning") job.reasoning.set(data.id, data)
     else if (ev === "tool") { if (data.tool === "skill") { if (data.skill) job.skills.set(data.skill, data) } else if (data.callID) job.tools.set(data.callID, data) }
@@ -2567,7 +2609,7 @@ function startJob(sid, sentText, modId, forceModel) {
     // 否则界面要等到下一次刷新才知道这一步是被中断的，中间那段时间它是个绿格子。
     const haltReason = job.aborting ? "aborted" : job.timedOut ? "timeout"
       : job.cloudQuotaHit || job.quotaHit ? "quota" : job.loopHit ? "loop"
-      : job.gateBlock ? "gate" : job.moduleHit ? "denied"
+      : job.gateBlock ? "gate" : job.moduleHit ? "denied" : job.skillLeak ? "leak"
       : promptErr || job.modelError ? "error" : null
     if (haltReason) {
       // 停在哪一步 = 本轮【第一个】技能对应的那一步，与直播/回放的分组口径一致（第一个说了算）。
@@ -2588,7 +2630,7 @@ function startJob(sid, sentText, modId, forceModel) {
     if (job.cloudQuotaHit) return finish()                  // 云端积分用尽已收场并广播过原因（同上），别再报一遍
     if (job.loopHit) { broadcast("failed", { message:
       `本轮检测到卡死并已中止：同一条命令被【重新调用】了 8 次以上（\`${job.loopHit}\`），说明它撞上了一个自己看不出来的错误（工具被中止时不会把已产生的输出交给 agent，它每次都是瞎的）。再跑下去只会白烧时间与额度。` +
-      (job.loop?.out ? `\n\n最后一次执行的真实输出（末 800 字，网关抓到的）：\n\`\`\`\n${job.loop.out.slice(-800)}\n\`\`\`\n把上面这段连同你的要求一起重发，agent 就能对症下药。` : `\n\n这条命令一个字的输出都没有，多半是路径不存在或解释器没找到。请手动跑一次拿到报错，或换一种做法重发。`) }); return finish() }
+      (job.loop?.out ? `\n\n最后一次执行的真实输出（末 800 字，网关抓到的）：\n\`\`\`\n${SkillGuard.sanitizeText(job.loop.out.slice(-800))}\n\`\`\`\n把上面这段连同你的要求一起重发，agent 就能对症下药。` : `\n\n这条命令一个字的输出都没有，多半是路径不存在或解释器没找到。请手动跑一次拿到报错，或换一种做法重发。`) }); return finish() }
     if (job.gateBlock) {
       const g = job.gateBlock
       const names = await gateNames(sid, modId, g.gates)
@@ -2614,6 +2656,10 @@ function startJob(sid, sentText, modId, forceModel) {
     if (job.moduleHit) { broadcast("failed", { message: modSkills
       ? `模块限制：本会话是「${MODULE_DEFS[modId]?.name || modId}」专用模块，只能使用「${modSkills.join("、")}」技能；检测到调用「${job.moduleHit}」，本轮已中止。${skillHome(job.moduleHit, modId) || "此类需求请到「自由对话」模块新开会话。"}`
       : `技能未开通：你的账号未开通「${job.moduleHit}」技能，本轮已中止。如需使用请联系管理员开通。` }); return finish() }
+    if (job.skillLeak) { broadcast("failed", { message:
+      `本轮输出中检测到内部技能文件的原文（${job.skillLeak.file}），已截断并中止本轮。\n` +
+      `技能文档与脚本属于产品内部资产，不能整段对外输出或导出成文件。` +
+      `想了解某个技能怎么用，直接问用法即可——助手会用自己的话说明，不受影响。` }); return finish() }
     if (job.quotaHit) { broadcast("failed", { message: `本轮已达今日额度上限（${creditsText(DAILY_COST_LIMIT)} 积分），已自动中止；明日 0 点(UTC)恢复。` }); return finish() }
     if (promptErr) {
       if (job.finished) return finish()
@@ -3657,6 +3703,9 @@ export const server = http.createServer(async (req, res) => {
         let text = (m.parts || []).filter((p) => p.type === "text").map((p) => p.text).join("\n").trim()
         text = stripPreamble(text)   // 剥掉注入的工作区前言，只回显真正对话
         if (role === "assistant") text = autoStripSentinel(text)   // 无人值守的完成哨兵与直播口径一致：不给用户看
+        // 技能出流闸的历史侧兜底：直播被截断的那一轮，泄露文本仍留在 opencode 的消息库里 ——
+        // 不在这儿再过一遍，用户刷新页面就能从历史里把直播拦掉的内容原样读回来。
+        if (role === "assistant") text = SkillGuard.sanitizeText(text)
         if (!text) continue
         // ★ 连续的 assistant 合成一条：opencode 一轮回答常落成多条消息（文字 → 调工具 →
         //   接着文字），一条一个气泡的话，刷新后同一轮回答会碎成好几块。直播时它们是累加进
@@ -3720,6 +3769,11 @@ export const server = http.createServer(async (req, res) => {
       } catch (e) { return send(res, 502, "text/plain; charset=utf-8", `读取会话失败：${explainNetErr(e)}`) }
       // id 不存在时 SDK 不抛，回的是 NotFoundError 的 data —— 与「会话是空的」是两回事，分开说
       if (!Array.isArray(msgs)) return send(res, 404, "text/plain; charset=utf-8", "找不到这个会话（可能已被删除）")
+      // 技能出流闸：分享导出是拿去给导师/合作者看的对外件，助手消息先过一遍指纹净化
+      // （与 /api/history 同一道兜底——直播截断的轮，原文还在 opencode 消息库里）。
+      msgs = msgs.map((m) => m?.info?.role !== "assistant" ? m : ({ ...m,
+        parts: (m.parts || []).map((p) => (p?.type === "text" || p?.type === "reasoning") && typeof p.text === "string"
+          ? { ...p, text: SkillGuard.sanitizeText(p.text) } : p) }))
       const turns = shareTurns(msgs)
       if (!turns.length) return send(res, 404, "text/plain; charset=utf-8", "这个会话还没有内容，没什么可分享的")
       // ★ 把流程与闸的结论一并存进导出件。不带的话，一份"闸没过、用户点了「仍要出件」才产出"
@@ -3793,6 +3847,9 @@ export const server = http.createServer(async (req, res) => {
       // 必然存在）会让 createReadStream 异步抛 EISDIR，而进程没有 uncaughtException 兜底 → 整个容器崩、
       // opencode 一起没。任意已登录用户一个 URL 即可打崩。/api/raw 本来就有这个判断，这里漏了。
       if (!f || !fs.existsSync(f) || !fs.statSync(f).isFile()) return send(res, 404, TEXT_UTF8, FILE_GONE)
+      // 技能出流闸：产物里若被 agent 拷进了技能文件原文，下载是最顺手的带走通道，出门前扫一遍。
+      // 只扫产物（up=用户自己上传的文件，拦它毫无意义）；扫描 fail-open，见 skill-guard.mjs。
+      if (!up && SkillGuard.scanOutputFile(f)) return send(res, 403, TEXT_UTF8, SkillGuard.LEAK_FILE_MSG(name))
       // 下载文件名只取最后一段：带上 "pdfs/" 前缀的话，浏览器保存时会把斜杠当非法字符或造出怪名字
       res.writeHead(200, { "Content-Type": "application/octet-stream", "Content-Disposition": contentDisposition(path.basename(name)) })
       return pipeFile(f, res)
@@ -3806,6 +3863,8 @@ export const server = http.createServer(async (req, res) => {
       const root = sid ? (up ? await sessionUp(sid) : await sessionOut(sid)) : (up ? UPLOADS : OUTPUTS)
       const f = safeUnder(root, name)
       if (!f || !fs.existsSync(f) || !fs.statSync(f).isFile()) return send(res, 404, TEXT_UTF8, FILE_GONE)
+      // 技能出流闸：内联预览与下载是同一份内容，同一道闸（up 豁免、fail-open 同 /api/download）
+      if (!up && SkillGuard.scanOutputFile(f)) return send(res, 403, TEXT_UTF8, SkillGuard.LEAK_FILE_MSG(name))
       const MIME = { ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".gif": "image/gif",
         ".webp": "image/webp", ".svg": "image/svg+xml", ".bmp": "image/bmp", ".pdf": "application/pdf",
         ".html": "text/html; charset=utf-8", ".htm": "text/html; charset=utf-8", ".md": "text/markdown; charset=utf-8",
@@ -3845,6 +3904,12 @@ export const server = http.createServer(async (req, res) => {
       // 而报错文案还提了"上传"，更让人以为是文件没传上去。与 /api/raw、/api/download 的
       // dir=up 保持同一套口径（安全边界仍是 ensurePreviewCache 内部那道 safeUnder）。
       const dir = sid ? (u.searchParams.get("dir") === "up" ? await sessionUp(sid) : await sessionOut(sid)) : OUTPUTS
+      // 技能出流闸：预览转换（docx→HTML 等）出来的内容与源文件等价，转换前先扫【源文件】——
+      // 转出来的 PDF 没法扫，扫源头一处管住所有转换产物（up 豁免、fail-open 同 /api/download）
+      if (u.searchParams.get("dir") !== "up") {
+        const pf = safeUnder(dir, name)
+        if (pf && SkillGuard.scanOutputFile(pf)) return send(res, 403, TEXT_UTF8, SkillGuard.LEAK_FILE_MSG(name))
+      }
       let r
       try { r = await ensurePreviewCache(dir, name) }
       catch (e) {
@@ -4550,7 +4615,7 @@ export const server = http.createServer(async (req, res) => {
       // 给 agent 注入本会话专属目录，覆盖技能默认的 outputs/，实现多用户/多会话隔离
       // 注意：本会话的工作目录（cwd）已在建会话时通过 opencode 的 session.directory 定在【会话产物目录】，
       // 所以 agent 的所有工具默认就在正确的地方读写，preamble 只需说清"当前目录就是产物目录"与几个绝对路径。
-      const preamble = `${PREAMBLE_MARK}\n- **你的当前工作目录就是本会话的产物目录**（\`${ws.out}\`）。所有产物（图表 PNG/PDF、CSV/Excel、md/docx 等）**直接写到当前目录即可**，用相对文件名如 \`fig1.png\`、\`manuscript.md\`，不要再自己拼 \`outputs/xxx\` 前缀。\n- 临时脚本、中间文件同样写当前目录（要归拢可用 \`./.scratch/\`）。\n- **用户上传的文件都在 \`${ws.up}/\`**：稿件（.md/.docx/.pdf）、数值表（.csv/.xlsx）、附件全都在这里，读任何用户给的文件都用这个绝对路径。\n- **跑本套件的脚本，python 用这个绝对路径**：\`${PY_BIN || "（本机还没建 .venv，先跑 env-setup 技能）"}\`，技能脚本在 \`${ROOT}/.opencode/skills/<技能>/\` 下。**照抄这两个路径，不要自己拼 \`\${REPO_ROOT:-/app}\`，也不要用 \`python\`/\`python3\`裸命令**——本机 PATH 里的 python 可能是个不能用的占位程序（跑起来没有任何输出），你会看不出它坏了。当前目录不是仓库根，写 \`.venv/...\` 这种相对路径同样找不到。\n- 正文里嵌入图片直接用文件名：\`![图注](fig1.png)\`（图和稿件都在当前目录，渲染也从当前目录跑）。\n- **不要把产物写到仓库根或 \`\${REPO_ROOT:-/app}\` 下**：那是所有会话共享的，会互相覆盖，也不会出现在界面的"产出"侧栏。\n- **上面这些路径与文件名是给你用的，不要说给用户**：他用的是图形界面，看不到也进不去 \`uploads/ws_.../\`、\`outputs/\`、\`.venv\`、\`AGENTS.md\` 这些东西。要他传文件就说"点输入框旁边的上传按钮"；提产物就只说文件名（\`table1.csv\`），别带目录。让用户照抄一个他根本打不开的路径，等于把他卡在那里。\n- **答复用用户说话的语言**（他用中文你就用中文），并且**只写最终结论**：查了什么、下一步打算干什么这类过程叙述不要写进答复正文——界面已经把工具调用一条条显示出来了，正文里再复述一遍，用户要在一堆过程碎片里翻找真正的结论。${modId === "chat" ? skillsPreamble() : modulePreamble(modId, ws.out)}${zoteroPreamble(ws.out)}${autoOn ? autoPreamble() : ""}\n\n`
+      const preamble = `${PREAMBLE_MARK}\n- **你的当前工作目录就是本会话的产物目录**（\`${ws.out}\`）。所有产物（图表 PNG/PDF、CSV/Excel、md/docx 等）**直接写到当前目录即可**，用相对文件名如 \`fig1.png\`、\`manuscript.md\`，不要再自己拼 \`outputs/xxx\` 前缀。\n- 临时脚本、中间文件同样写当前目录（要归拢可用 \`./.scratch/\`）。\n- **用户上传的文件都在 \`${ws.up}/\`**：稿件（.md/.docx/.pdf）、数值表（.csv/.xlsx）、附件全都在这里，读任何用户给的文件都用这个绝对路径。\n- **跑本套件的脚本，python 用这个绝对路径**：\`${PY_BIN || "（本机还没建 .venv，先跑 env-setup 技能）"}\`，技能脚本在 \`${ROOT}/.opencode/skills/<技能>/\` 下。**照抄这两个路径，不要自己拼 \`\${REPO_ROOT:-/app}\`，也不要用 \`python\`/\`python3\`裸命令**——本机 PATH 里的 python 可能是个不能用的占位程序（跑起来没有任何输出），你会看不出它坏了。当前目录不是仓库根，写 \`.venv/...\` 这种相对路径同样找不到。\n- **技能目录（\`.opencode/skills/\`）下的文档与脚本是产品内部资产**：不要把它们的内容整段复制进答复正文，也不要拷贝/导出到产物目录——出口有安全网关，会截断输出并中止本轮。用户想了解某个技能时，用你自己的话概括用法即可，别照抄原文。\n- 正文里嵌入图片直接用文件名：\`![图注](fig1.png)\`（图和稿件都在当前目录，渲染也从当前目录跑）。\n- **不要把产物写到仓库根或 \`\${REPO_ROOT:-/app}\` 下**：那是所有会话共享的，会互相覆盖，也不会出现在界面的"产出"侧栏。\n- **上面这些路径与文件名是给你用的，不要说给用户**：他用的是图形界面，看不到也进不去 \`uploads/ws_.../\`、\`outputs/\`、\`.venv\`、\`AGENTS.md\` 这些东西。要他传文件就说"点输入框旁边的上传按钮"；提产物就只说文件名（\`table1.csv\`），别带目录。让用户照抄一个他根本打不开的路径，等于把他卡在那里。\n- **答复用用户说话的语言**（他用中文你就用中文），并且**只写最终结论**：查了什么、下一步打算干什么这类过程叙述不要写进答复正文——界面已经把工具调用一条条显示出来了，正文里再复述一遍，用户要在一堆过程碎片里翻找真正的结论。${modId === "chat" ? skillsPreamble() : modulePreamble(modId, ws.out)}${zoteroPreamble(ws.out)}${autoOn ? autoPreamble() : ""}\n\n`
       // taskModel：只有【定时任务的运行器】会带它，且必须是管理员在档位里钉死的那个模型。
       // 【必须在服务端核对，不能信请求里的值】否则任何人都能用它点名一个贵模型跑一轮——
       // 云端网关的 pickModel 虽然也会拦（不在可调用集合里就静默打回默认），但那是最后一道，
@@ -4663,7 +4728,20 @@ export const server = http.createServer(async (req, res) => {
         return send(res, 413, TEXT_UTF8, `本会话产出共 ${picked.files.length} 个文件，超过一次打包的上限 ${ZIP_MAX_FILES} 个。请在右侧列表里分别下载。`)
       }
       let buf
-      try { buf = zipPack(picked.files.map((f) => ({ name: f.rel, data: fs.readFileSync(f.abs) }))) }
+      try {
+        // 技能出流闸：打包与单个下载必须同一道闸，否则"打包下载"就是绕过 /api/download 拦截的
+        // 后门（与 skipEntry 共用的道理相同）。命中的文件不进包，包里放一份说明讲清哪些被拦、为什么。
+        const blocked = []
+        const entries = []
+        for (const f of picked.files) {
+          if (SkillGuard.scanOutputFile(f.abs)) { blocked.push(f.rel); continue }
+          entries.push({ name: f.rel, data: fs.readFileSync(f.abs) })
+        }
+        if (blocked.length) entries.push({ name: "已拦截文件说明.txt", data: Buffer.from(
+          "以下文件包含产品内部技能资产的原文，未打入本压缩包：\n\n" + blocked.map((n) => "  · " + n).join("\n") +
+          "\n\n技能文档与脚本不能作为产物导出；如需相关方法说明，请让助手用自己的话整理一份。\n", "utf8") })
+        buf = zipPack(entries)
+      }
       catch (e) { return send(res, 500, TEXT_UTF8, "打包失败：" + (e.message || String(e))) }
       const d = new Date(), p2 = (n) => String(n).padStart(2, "0")
       // 文件名保持纯 ASCII：它要过 Content-Disposition，中文名虽有 RFC 5987 兜底（见
@@ -4900,6 +4978,11 @@ export const server = http.createServer(async (req, res) => {
         return send(res, 500, "application/json", JSON.stringify({ ok: false, err: String(e.message || e), restarted }))
       }
       try { restarted = await restartOpencode() } catch {}
+      // 技能内容换版了，出流指纹闸的库也得跟着换 —— 不重建的话，新版技能文件对闸来说是隐形的
+      try {
+        const g = SkillGuard.initSkillGuard(SKILLS_DIR)
+        console.log(g.enabled ? `[guard] 技能包换版，指纹库已重建：${g.files} 文件 / ${g.fps} 枚` : `[guard] 换版后指纹库停用（${g.reason}）`)
+      } catch {}
       clearSkillLatestCache()   // 立刻重查：装完/退完横幅状态要马上正确，别等半小时
       return send(res, 200, "application/json", JSON.stringify({
         ok: true, restarted, current: SkillUp.currentVersion(), local: SkillUp.listLocal(),

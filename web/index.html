@@ -5131,11 +5131,13 @@ function gateBypassBtn() {
 const backName = (s, steps) => (s.onFail && (steps || []).find((x) => x.id === s.onFail)?.name) || ""
 /** 上一轮非正常收场的原因 → 格子副标题 / 悬停气泡。六种收场此前在条子上是同一张脸。 */
 const HALT_SUB = { aborted: "你终止了这一步", timeout: "超时被系统中止", loop: "检测到卡死已停下",
-  quota: "额度用尽被中止", denied: "技能不在授权内被拦下", gate: "质量闸拦下了出件", error: "这一轮出错了" }
+  quota: "额度用尽被中止", denied: "技能不在授权内被拦下", gate: "质量闸拦下了出件", error: "这一轮出错了",
+  leak: "输出含内部技能资产被拦下" }
 const HALT_TIP = { aborted: "你在这一轮中途点了「终止」，这一步没跑完",
   timeout: "这一轮迟迟没有输出，被看门狗中止了", loop: "同一条命令被反复重调，护栏中止了本轮",
   quota: "额度用尽，本轮被自动中止", denied: "本轮调用了模块白名单之外的技能，被拦下",
-  gate: "质量闸未过就要出件，本轮被中止", error: "这一轮出错收场了" }
+  gate: "质量闸未过就要出件，本轮被中止", error: "这一轮出错收场了",
+  leak: "本轮输出中检测到内部技能文件的原文，被安全网关截断并中止；问技能用法不受影响" }
 function stepsBar(steps, done, cur, failed, off, implied, stale, staleUp, halted) {
   const dn = new Set(done || []), fl = new Set(failed || []), of = new Set(off || [])
   const im = new Set(implied || []), sl = new Set(stale || []), su = new Set(staleUp || [])
