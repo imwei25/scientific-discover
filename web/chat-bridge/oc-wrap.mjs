@@ -22,12 +22,17 @@
 
 import { spawn, execFile } from "node:child_process"
 import { createInterface } from "node:readline"
-import { pathToFileURL } from "node:url"
+import { fileURLToPath } from "node:url"
 import fs from "node:fs"
 import path from "node:path"
 
 // 直接被 node 跑起来才执行入口分发；被单测 import 时只暴露纯函数，不碰 stdin/进程。
-const isMain = import.meta.url === pathToFileURL(process.argv[1] || "").href
+// 【不能只比字符串】cc-connect 经【无空格 junction】调 oc-wrap（见 chat-bridge 的 spaceFree），
+// argv[1] 是 junction 路径、import.meta.url 却是解析后的真实路径，两者永不相等 → main() 不执行、
+// 聊天返回空响应（0.1.24 真机踩过）。所以两边都 realpath 到规范路径、小写化再比，吃掉
+// junction / 8.3 短路径 / 盘符大小写的差异。
+const canon = (p) => { try { return fs.realpathSync(p).toLowerCase() } catch { return String(p || "").toLowerCase() } }
+const isMain = !!process.argv[1] && canon(fileURLToPath(import.meta.url)) === canon(process.argv[1])
 
 const REAL_OC = process.env.SCI_WRAP_OC
 const CC = process.env.SCI_WRAP_CC || "cc-connect"
