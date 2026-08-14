@@ -15,6 +15,12 @@ library.json 的形状（本技能全流程的真值源，界面上的"改分类
   ]
 }
 
+columns/fields 是【每次自己定的】，不是写死的六列：整理的不是文献（笔记、报告、会议记录、
+草稿、说明文档……）时，作者 / 杂志 / 核心观点没有对应物，应改成
+  "columns": ["文件名","标题","日期","主要内容"], "fields": ["file","title","date","summary"]
+文献与非文献混在一个文件夹里，就在文献六列后面补一列「主要内容」，各行填自己有的那一列
+（另一边留空或写「不适用」）。
+
 铁律：抽不到的字段一律写「原文未标注」，**不许猜、不许用背景知识补**（年份、杂志尤其容易被脑补）。
 
 用法：
@@ -42,8 +48,11 @@ except ImportError:
 DEFAULT_COLUMNS = ["文件名", "标题", "年份", "作者", "杂志", "核心观点"]
 DEFAULT_FIELDS = ["file", "title", "year", "authors", "journal", "point"]
 UNCLASSIFIED = "未分类"
-# 每列宽度（字符）。核心观点最宽并自动换行——这一列才是用户真正要读的东西
-WIDTHS = {"文件名": 34, "标题": 42, "年份": 8, "作者": 22, "杂志": 22, "核心观点": 72}
+# 每列宽度（字符）。核心观点 / 主要内容最宽并自动换行——这一列才是用户真正要读的东西。
+# 「主要内容」是【非文献】文件（笔记、报告、记录、说明……）那一列：它们没有作者与杂志可写，
+# 强行留着那两列只会得到一整列「原文未标注」。
+WIDTHS = {"文件名": 34, "标题": 42, "年份": 8, "作者": 22, "杂志": 22, "核心观点": 72,
+          "主要内容": 72, "类型": 12, "日期": 12, "备注": 30}
 
 
 def sheet_name(raw, used):
@@ -77,13 +86,13 @@ def main():
         sys.exit("library.json 里 columns 与 fields 长度对不上（一个表头对一个字段名）")
     records = lib.get("records") or []
     if not records:
-        sys.exit("library.json 里 records 是空的——没有文献可写")
+        sys.exit("library.json 里 records 是空的——没有文件可写")
     classified = lib.get("classified", True)
 
     # 分组。不分类时统一落到一个 sheet；分类时缺 category 的落到「未分类」而不是被悄悄丢掉
     groups, order = {}, []
     for r in records:
-        cat = "全部文献" if not classified else (str(r.get("category") or "").strip() or UNCLASSIFIED)
+        cat = "全部文件" if not classified else (str(r.get("category") or "").strip() or UNCLASSIFIED)
         if cat not in groups:
             groups[cat] = []
             order.append(cat)
@@ -115,9 +124,9 @@ def main():
         ws.freeze_panes = "A2"                 # 表头钉住：几十行往下翻还看得见列名
     wb.save(a.out)
 
-    print(f"已生成 {a.out}：{len(order)} 个 sheet / {len(records)} 篇")
+    print(f"已生成 {a.out}：{len(order)} 个 sheet / {len(records)} 份")
     for cat in order:
-        print(f"  · {cat}：{len(groups[cat])} 篇")
+        print(f"  · {cat}：{len(groups[cat])} 份")
     if not classified:
         print("  （本次未分类，全部放在一个 sheet）")
     print("提醒用户：在产出栏点开 library.xlsx 可以按 sheet 预览，"

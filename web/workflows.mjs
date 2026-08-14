@@ -1172,30 +1172,47 @@ export const WORKFLOWS = {
   //（曾考虑过用浏览器的「上传整个文件夹」兜住多用户网页版，2026-08-14 用户明确那一档已废弃，不做。）
   litmanage: {
     primary: "literature-manage",
-    intakeTitle: "选择文献文件夹",
+    intakeTitle: "选择要整理的文件夹",
     intake: [
       // type:"dir" 是本模块引入的新控件：点开就是既有的「选择工作目录」弹窗（/api/fs/list），
       // 选定后既填进表单、又成为本会话的工作目录。所以它【必须在发第一条消息前选好】——
       // opencode 的 directory 建会话时定死，之后改不了（见 server.mjs createSession 的注释）。
-      { id: "libDir", label: "文献所在文件夹", type: "dir", required: true,
-        help: "选你电脑上放这批文献的那个文件夹。AI 直接读里面的原文件，不会复制、不会上传；"
-            + "生成的 Excel 台账也写在这个文件夹里。",
-        errMsg: "先选一个文献文件夹——这是本模块唯一的输入" },
+      { id: "libDir", label: "要整理的文件夹", type: "dir", required: true,
+        help: "选你电脑上放这批文件的那个文件夹（文献，或笔记 / 报告 / 记录这类文档都行）。"
+            + "AI 直接读里面的原文件，不会复制、不会上传；生成的 Excel 台账也写在这个文件夹里。",
+        errMsg: "先选一个文件夹——这是本模块唯一的输入" },
+      // 要整理哪些格式。默认只勾 PDF / Word —— 一个文献文件夹里常年躺着 readme.txt、笔记.md
+      // 这类东西，默认全收会把它们混进台账。md / txt 摆成可勾项、再给一个自定义框，
+      // 让"整理的不是文献"（笔记库、报告、字幕、导出的记录……）这类用法也走得通。
+      { id: "formats", label: "要整理的文件格式", type: "multi",
+        default: ["pdf", "docx"],
+        options: [
+          { v: "pdf", t: "PDF (.pdf)" },
+          { v: "docx", t: "Word (.docx/.doc)" },
+          { v: "md", t: "Markdown (.md)" },
+          { v: "txt", t: "纯文本 (.txt)" },
+        ],
+        help: "默认只整理 PDF 与 Word。勾上 Markdown / 纯文本后，笔记、报告这类非文献文件也会被读入——"
+            + "它们没有作者与杂志，台账里改用「主要内容」一列。" },
+      { id: "formatsCustom", label: "其他格式（自己填）", placeholder: "例：rtf, html, csv, srt",
+        help: "上面没列到的扩展名填这里，逗号分隔，AI 会按【文本文件】读它的开头若干行。"
+            + "xlsx / pptx / 图片等二进制格式读不了内容，会如实标出来，不会替你编。" },
       { id: "recursive", label: "连子文件夹一起读", type: "bool", default: false,
-        help: "默认只读你选的这一层。文献分散在若干子文件夹里才勾——注意勾了之后再做「按分类归档」，"
+        help: "默认只读你选的这一层。文件分散在若干子文件夹里才勾——注意勾了之后再做「按分类归档」，"
             + "会把它们从原来的子文件夹搬到分类子文件夹里。" },
-      { id: "classify", label: "对文献分类", type: "bool", default: true,
+      { id: "classify", label: "分类", type: "bool", default: true,
         help: "分类后一类占 Excel 的一个 sheet（sheet 名 = 类名）。不分类就全部放在一个 sheet 里。" },
       { id: "rule", label: "分类标准", type: "textarea", when: { field: "classify", eq: true },
         placeholder: "例：按研究类型分（RCT / 队列 / 病例对照 / 综述 / 基础研究）；留空则由 AI 读完后自定口径",
-        help: "留空 = AI 读完这批文献后自己定一个一致的分法，并在交付时说明按什么分的。" },
+        help: "留空 = AI 读完这批文件后自己定一个一致的分法，并在交付时说明按什么分的。" },
       LANG,
     ],
     steps: [
-      { id: "scan", name: "读取文献", skill: "literature-manage",
+      { id: "scan", name: "读取文件", skill: "literature-manage",
         deps: [],
         emits: ["library_index.json", "library_texts/*"], render: "report",
-        hint: "只抽每篇开头几页（默认 3 页 / 4000 字），够填台账即可；图片型扫描件会被标出来" },
+        hint: "只按勾选的格式扫，每份抽开头几页 / 几行（默认 3 页 · 200 行 · 4000 字），"
+            + "够填台账即可；图片型扫描件与读不了的格式会被标出来" },
       { id: "table", name: "台账与分类", skill: "literature-manage",
         deps: ["scan"],
         emits: ["library.json", "library.xlsx"], render: "table",
@@ -1208,12 +1225,25 @@ export const WORKFLOWS = {
     ],
     // 扫描件抽不出字时的唯一出路（篇数不多时值得补，否则如实标注）
     extra: ["ocr"],
-    flow: `\n- **本模块 = 把【用户选的那个文件夹】里的 PDF / Word 整理成一张多 sheet 的 Excel 台账**。`
+    flow: `\n- **本模块 = 把【用户选的那个文件夹】里的文件整理成一张多 sheet 的 Excel 台账**。`
       + `不检索、不下载、不写综述，也不读这个文件夹之外的任何文件。`
-      + `\n- **当前工作目录就是用户选的那个文献文件夹**：脚本一律不带 \`--dir\`（默认就是当前目录），`
+      + `\n- **当前工作目录就是用户选的那个文件夹**：脚本一律不带 \`--dir\`（默认就是当前目录），`
       + `产物 \`library_index.json\` / \`library.json\` / \`library.xlsx\` 也都写在这里。`
-      + `\n- **第一步跑 \`scan_library.py\` 抽正文，之后只读 \`library_texts/*.txt\`**，`
-      + `不要再去打开原始 PDF（正文已经抽好，重复读只是烧钱又慢）。`
+      + `\n- **只整理用户在表单里勾的格式**：把「要整理的文件格式」与「其他格式」合起来传给`
+      + ` \`scan_library.py --ext\`（例：\`--ext pdf,docx,md,txt\`；自定义框里填的扩展名原样追加）。`
+      + `**没勾的格式不许自作主张扫进来**——用户只要 PDF 时，目录里的 readme.txt 不该出现在台账里。`
+      + `md / txt 及任何自定义文本格式按【前若干行】读（\`--lines\`，默认 200），道理与 PDF 只读前几页一样。`
+      + `xlsx / pptx / 图片这类二进制格式脚本会标 err：先如实告诉用户读不了，**不许按文件名编内容**；`
+      + `他确实要整理这类文件，再按技能文档自己写一小段读取脚本补进 \`library_texts/\`（仍只取开头一小段）。`
+      + `\n- **第一步跑 \`scan_library.py\` 抽内容，之后只读 \`library_texts/*.txt\`**，`
+      + `不要再去打开原始文件（内容已经抽好，重复读只是烧钱又慢）。`
+      + `\n- **列不是写死的六列，按这批文件是什么定**（写进 \`library.json\` 的 \`columns\`/\`fields\`）：`
+      + `\n  · 全是文献 → 文件名 / 标题 / 年份 / 作者 / 杂志 / 核心观点（\`file,title,year,authors,journal,point\`）。`
+      + `\n  · **不是文献**（笔记、报告、会议记录、草稿、说明文档、字幕……）→ 别硬凑作者与杂志，`
+      + `那只会得到一整列「原文未标注」。用 文件名 / 标题 / 日期 / **主要内容**`
+      + `（\`file,title,date,summary\`），主要内容写"这份文件讲的是什么、有什么结论或待办"，两三句。`
+      + `\n  · **两者混在一个文件夹** → 文献六列后面补一列「主要内容」，各行填自己有的那一列，`
+      + `另一边留空（别写"不适用"以外的编造内容）。`
       + `\n- **年份 / 作者 / 杂志抽不到就写「原文未标注」**：文件名叫 \`Nature_2021.pdf\` 既不证明它发在 Nature、`
       + `也不证明是 2021 年。核心观点写"做了什么 + 结论是什么"，不许写"本文研究了 XX 的相关问题"这种空话。`
       + `\n- **台账写成 \`library.json\` 再跑 \`build_workbook.py\` 出 \`library.xlsx\`**，`

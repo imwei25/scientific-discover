@@ -25,8 +25,9 @@ export const ARCHIVE_LOG = "archive_log.json"
 const UNCLASSIFIED = "未分类"
 const DEFAULT_COLUMNS = ["文件名", "标题", "年份", "作者", "杂志", "核心观点"]
 const DEFAULT_FIELDS = ["file", "title", "year", "authors", "journal", "point"]
-// 与 build_workbook.py 的 WIDTHS 一一对应
-const WIDTHS = { "文件名": 34, "标题": 42, "年份": 8, "作者": 22, "杂志": 22, "核心观点": 72 }
+// 与 build_workbook.py 的 WIDTHS 一一对应（含非文献文件用的「主要内容」等列）
+const WIDTHS = { "文件名": 34, "标题": 42, "年份": 8, "作者": 22, "杂志": 22, "核心观点": 72,
+  "主要内容": 72, "类型": 12, "日期": 12, "备注": 30 }
 
 /** 目录内安全路径：拒绝绝对路径、盘符、.. 与空字节（台账里的 file 来自模型，按不可信输入处理） */
 export function inDir(root, rel) {
@@ -75,7 +76,7 @@ export function rebuildWorkbook(dir, lib) {
   const classified = lib.classified !== false
   const groups = new Map()
   for (const r of lib.records) {
-    const cat = classified ? (String(r.category || "").trim() || UNCLASSIFIED) : "全部文献"
+    const cat = classified ? (String(r.category || "").trim() || UNCLASSIFIED) : "全部文件"
     if (!groups.has(cat)) groups.set(cat, [])
     groups.get(cat).push(r)
   }
