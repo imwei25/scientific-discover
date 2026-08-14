@@ -1,6 +1,6 @@
 ---
 name: reference-check
-description: 文献真实性核查 / 查假引用。把稿件或参考文献列表里的每条引用去 Crossref、doi.org、PubMed/Europe PMC 对一遍，揪出 AI 常编的假引用——不存在的 DOI/PMID、张冠李戴（DOI 真但标题对不上）、纯属虚构的标题、已撤稿文献。中英文标题都能比对。当用户说"核对参考文献""这些引用是真的吗""查假引用""验证 DOI""AI 会不会编文献""引用真实性""查重引用来源"时使用。
+description: 文献真实性核查 / 查假引用。把稿件或参考文献列表里的每条引用去 Crossref、doi.org、PubMed/Europe PMC 对一遍，揪出 AI 常编的假引用——不存在的 DOI/PMID、张冠李戴（DOI 真但标题对不上）、纯属虚构的标题、已撤稿文献。中英文标题都能比对。给了稿件正文（`--manuscript`）还会标出每条文献**在正文哪一段被引用**，并揪出正文从没引过的文献与悬空编号。当用户说"核对参考文献""这些引用是真的吗""查假引用""验证 DOI""AI 会不会编文献""引用真实性""查重引用来源"时使用。
 ---
 
 > **产物位置**：所有产物一律写到主控注入的**会话专属目录** 当前工作目录（每轮开头会给出确切前缀，照抄即可）。
@@ -27,7 +27,16 @@ ${REPO_ROOT:-/app}/.venv/bin/python ${REPO_ROOT:-/app}/.opencode/skills/referenc
 
 # 或直接给几个 DOI / PMID / 标题
 ${REPO_ROOT:-/app}/.venv/bin/python ${REPO_ROOT:-/app}/.opencode/skills/reference-check/verify_refs.py "10.1038/xxx" "PMID:12345678" "某篇论文标题"
+
+# 手上有稿件正文时【务必】一并给：多出「正文引用位置」一列，并抓出正文从没引过的文献
+${REPO_ROOT:-/app}/.venv/bin/python ${REPO_ROOT:-/app}/.opencode/skills/reference-check/verify_refs.py \
+    --input refs.txt --manuscript manuscript.md
 ```
+
+> **`--manuscript` 什么时候必给**：只要被核查的内容**包含正文**（稿件全文、write-paper/literature-review 的成稿），
+> 就把正文文件（`.md`/`.txt`/`.docx`）一并传进来——**参考文献列表单独喂进来时，"这一条正文引没引"是查不出来的**。
+> 一份 md 里正文和参考文献连在一起时：把参考文献那一节单独抽成 `refs.txt` 给 `--input`（形态体检要求），
+> 同一份整稿给 `--manuscript`（脚本自己会切掉参考文献节，不会自我命中）。
 
 ## 判定结果（按风险从高到低）
 | 结论 | 含义 | 该怎么办 |
@@ -46,8 +55,8 @@ ${REPO_ROOT:-/app}/.venv/bin/python ${REPO_ROOT:-/app}/.opencode/skills/referenc
 > **数据源**：DOI 依次查 Crossref → **doi.org 内容协商（CSL-JSON）** → Europe PMC。doi.org 兜底能覆盖 DataCite/mEDRA 的 DOI，并区分"号根本不存在"与"真 DOI 但库暂未索引"（刚见刊的真文献不会被误判 FABRICATED）。
 
 ## 产出（outputs/）
-- `reference_check.csv`：逐条结论 + 相似度 + 编号(`cite_no`) + 重复标记(`dup_of`) + 实际匹配到的标题。
-- `reference_check.md`：按风险分组的人读报告；开头是「重复引用」「疑似重复」两节，其后才是逐条结论。
+- `reference_check.csv`：逐条结论 + 相似度 + 编号(`cite_no`) + 重复标记(`dup_of`) + **正文引用位置(`cited_in`)** + 实际匹配到的标题。
+- `reference_check.md`：按风险分组的人读报告；开头是「重复引用」「疑似重复」「未被正文引用」「正文引用了不存在的编号」几节，其后才是逐条结论（每条都带正文引用位置）。
 - **出 PDF（需要留档/交付时）**：把 `reference_check.md` 交给 `render-pdf-doc` 技能渲染成 `reference_check.pdf`。中文报告务必指定中文字体（`--cjk-font`：本地 `Microsoft YaHei`，服务器 `Noto Sans CJK SC`），否则会漏字。
 
 ## 重复引用检测（默认开启，跨条目）
@@ -71,6 +80,30 @@ ${REPO_ROOT:-/app}/.venv/bin/python ${REPO_ROOT:-/app}/.opencode/skills/referenc
   （重排编号很容易引入新的错位——悬空编号、串号）。
 - 回归测试：`tests/test_duplicates.py`（纯离线）。
 
+## 正文引用定位 + 未被引用检测（给了 `--manuscript` 才做）
+报告与 CSV 多出 **`cited_in`（正文引用位置）** 一列，形如 `引言¶1、讨论¶3`（节名 + 该节内第几段）；
+三条都没命中的条目单列一节「⚠️ 未被正文引用」。
+
+- **为什么算硬伤**：参考文献表就是正文引用的映射。改稿删段落时把正文引用删了、题录留在表里，
+  或模型为了凑数多列几条——这类条目逐条查都是**真文献、全判 OK**，查重也不报，
+  报告全绿。而 Vancouver 体系下多出来的条目编辑部一眼可见，还会让"本文共引 N 篇"撑不住。
+  **上面那些闸都只看参考文献列表自身，拦不住这一类。**
+- **怎么定位的**（命中任一即算被引用）：① 编号标记 `[3]` / `[3,5]` / `[3-6]` / `【3】` / 上标数字；
+  ② 正文里直接写出的 DOI / PMID；③ 第一作者姓 + 年份同段出现（作者-年份体系）。
+  **圆括号数字 `(1)` 不认**——正文里绝大多数是分点编号，认了会满篇假命中。
+- **参考文献那一节会被自动切掉**（认 `References`/`参考文献`/`Bibliography` 等标题）。
+  不切的话列表里逐字提到了每一条，每条都"被引用"，这道闸等于没做。
+- **反向的错顺手也抓**：正文引了 `[7]`、表里没有第 7 条 → 「正文引用了不存在的编号」节（悬空引用，
+  多半是删改参考文献后没重排编号）。编号没抽全时只报**超出条目总数**的编号，避免假警报。
+- **识别不到引用标记时【不下判定】**：命中率 <30%（EndNote/Zotero 域代码没去域、上标是图片、
+  非常规作者-年份写法都会这样）→ 报告明写"本列不可信"，**不判任何一条"未被引用"**、不计入闸。
+  给一张"全部未被引用"的表比不给更糟——用户会照着删掉整份参考文献。
+- **计入闸**：未被引用条目数与悬空编号数都算进"可疑/存疑"计数，stdout 各响一行。
+  逐条全 `OK` 但有未被引用的条目时，**不要宣布"引用核查通过"**。
+- **修法**：把它在正文该出现的地方引上，或从表里删掉；**删了要重排编号并重跑本技能**。
+  仍建议人工扫一眼再删（作者-年份写法千变万化，定位是辅助信号）。
+- 回归测试：`tests/test_cited_in.py`（纯离线）。
+
 ## 撤稿检测（默认开启）
 每条**确认存在**的文献会再去 Europe PMC 查撤稿状态：`pubTypeList` 含 `Retracted Publication` → 判 `RETRACTED`；被标 `Expression of Concern`（表达关注）→ 在 note 里提示、不改判。撤稿通知的出处会一并写进报告。**引到撤稿文献是 AI 辅助写作的高频隐患**（模型的知识截点常早于撤稿日期），故列为最高风险档。
 - **兜底（防漏）**：EPMC 撤稿标注有滞后/漏收时，还会看 Crossref/doi.org 元数据信号——标题带 `RETRACTED:`/`WITHDRAWN` 前缀、或 `update-to` 含撤稿关系 → 仍判 `RETRACTED`。这层信号是解析 DOI 时顺带拿到的，零额外网络开销。
@@ -82,6 +115,8 @@ ${REPO_ROOT:-/app}/.venv/bin/python ${REPO_ROOT:-/app}/.opencode/skills/referenc
 - 报告时**重点先讲 RETRACTED / FABRICATED / ID_FAKE / NOT_FOUND / MISMATCH 这几条**，给出建议（撤稿则换来源／删除/替换正确号/更正/重找）。
 - **报告里有「重复引用」节就必须一并讲**，别因为逐条结论全绿就跳过——那正是这一类漏掉的方式。
   报告已给出"保留哪个号、正文改哪个号"，照着说即可；改完提醒重跑。
+- **手上有正文就一定要传 `--manuscript`**（pipeline 里 `write-paper`/`literature-review` 的成稿必然有），
+  否则「这一条正文引没引」这道闸整个关掉。有「未被正文引用」「正文引用了不存在的编号」节时同样必须讲。
 - **`ID_FAKE` 是最常见也最好修的**：论文真实存在、只是 DOI 被 AI 编造——直接换成报告里给出的正确 DOI 即可，别当整条假的删掉。
 - 这是**辅助**核查：`NOT_FOUND` / `CHECK` 不等于一定假（可能库里没收录），提示用户人工复核，别武断下结论。
 - **人工推翻了脚本的判定，必须把更正写回 `reference_check.md`**，不能只在对话里说。

@@ -919,6 +919,222 @@ def _looks_like_citation(line):
     return has_year and has_struct
 
 
+# --------------------------------------------------------------------------- #
+# 正文引用定位（--manuscript）：这条引用在正文哪一段被提到？没被提到的标出来
+#
+# ★ 为什么值得单独做一道：上面所有闸都只看【参考文献列表自身】——每条真不真、有没有重复。
+#   但"列表里躺着一条正文从没引过的文献"是另一类硬伤，且是 AI 写作的高发形态：
+#   改稿删段落时把正文里的引用删了、参考文献却留在表里；或模型为了凑参考文献数直接多列几条。
+#   Vancouver 体系下参考文献表就是正文引用的映射，多出来的条目编辑部一眼能看到，
+#   还会让"本文共引 N 篇"这类表述站不住。
+#   反向的错（正文引了 [23]，参考文献表只有 20 条）同样在这里顺手抓，成本为零。
+# ★ 铁律：识别不到引用标记时【绝不】把所有条目判成"未被引用"。EndNote 域代码、
+#   上标图片、非常规作者-年份写法都会让标记扫不出来 —— 那时给出一张"全部未被引用"的表
+#   比不给更糟（用户会去删掉整份参考文献）。所以命中率过低时本列整体降级为"不可信"，
+#   不下未引用判定、也不计入闸（见 CITE_DETECT_MIN）。
+# --------------------------------------------------------------------------- #
+
+# 参考文献那一节【必须排除】：正文文件里通常连着参考文献列表，而列表里当然逐字提到了每条文献，
+# 不排除的话每条都会"被引用"，这道闸等于没做。
+_REF_SECTION_RE = re.compile(
+    r"^\s*(?:#{1,6}\s*)?(?:\d+(?:\.\d+)*[.、)]?\s*|[一二三四五六七八九十]+\s*[、.．)]\s*)?"
+    r"[\*_\s]*(references?|reference\s+list|bibliography|works\s+cited|literature\s+cited|"
+    r"参考文献|参考书目|引用文献)[\*_\s]*[:：]?\s*$", re.I)
+
+_MD_HEAD_RE = re.compile(r"^\s*(#{1,6})\s+(.+?)\s*#*\s*$")
+_BOLD_HEAD_RE = re.compile(r"^\s*[\*_]{2}(.{1,30}?)[\*_]{2}\s*[:：]?\s*$")
+# `3. 讨论` / `一、引言` / `2.1 患者入选` 这类无 markdown 标记的小标题（中文稿常见）。
+# 收得很紧（短、不带句末标点、不带引用标记），认错了最多是段落的节名标签不准，不影响判定。
+_NUM_HEAD_RE = re.compile(
+    r"^\s*(?:\d+(?:\.\d+)*[.、．]?|[一二三四五六七八九十]+\s*[、.．])\s*"
+    r"([^\s\[\]【】。；;]{1,20})\s*$")
+
+# 方括号型引用标记：`[3]` `[3,5]` `[3-6]` `[3，5；7]` `【3】`。
+# 只认方括号与全角方括号，【不认】圆括号——`(1)` 在正文里绝大多数是分点编号，认了会满篇假命中。
+_CITE_MARK_RE = re.compile(r"[\[【]\s*([\d\s,，;；、\-–—~至]+?)\s*[\]】]")
+_SUP_MAP = {"⁰": "0", "¹": "1", "²": "2", "³": "3", "⁴": "4",
+            "⁵": "5", "⁶": "6", "⁷": "7", "⁸": "8", "⁹": "9"}
+_SUP_RUN_RE = re.compile(r"[⁰¹²³⁴⁵⁶⁷⁸⁹]+(?:\s*[,，\-–]\s*[⁰¹²³⁴⁵⁶⁷⁸⁹]+)*")
+
+# 命中率低于此值就认为"引用标记没识别出来"，本列整体降级、不下未引用判定。
+CITE_DETECT_MIN = 0.3
+
+
+def parse_cite_marks(text):
+    """从一段正文里抽出所有被引编号（含区间展开）。返回 set[int]。"""
+    nums = set()
+    chunks = [m.group(1) for m in _CITE_MARK_RE.finditer(text or "")]
+    for m in _SUP_RUN_RE.finditer(text or ""):
+        chunks.append("".join(_SUP_MAP.get(ch, ch) for ch in m.group(0)))
+    for chunk in chunks:
+        # 纯分隔符或空块跳过；`[见图1]` 这类带非数字字符的整块已被正则挡在外面
+        for tok in re.split(r"[,，;；、]", chunk):
+            tok = tok.strip()
+            if not tok:
+                continue
+            rng = re.fullmatch(r"(\d{1,3})\s*[\-–—~至]\s*(\d{1,3})", tok)
+            if rng:
+                a, b = int(rng.group(1)), int(rng.group(2))
+                if a <= b and b - a <= 60:      # 区间过大不像引用（多半是页码/年份范围）
+                    nums.update(range(a, b + 1))
+                continue
+            if re.fullmatch(r"\d{1,3}", tok):
+                nums.add(int(tok))
+    return nums
+
+
+def load_manuscript(path):
+    """读正文，切成段落并标出所属小节；**参考文献那一节及其后的内容一律丢弃**。
+
+    返回 [{'no': 全篇 1-based 段号, 'sno': 本节内 1-based 段号, 'section': 节名, 'text': ...}, ...]
+    支持 .md/.txt/.markdown（空行分段）与 .docx（按 Word 段落，标题靠样式名认）。
+    """
+    ext = os.path.splitext(path)[1].lower()
+    blocks = []          # (is_heading, text)
+    if ext == ".docx":
+        try:
+            import docx
+        except ImportError:
+            sys.exit("读 .docx 正文需要 python-docx：请让 agent 运行 env-setup 技能，或把正文另存为 .md/.txt")
+        for p in docx.Document(path).paragraphs:
+            t = (p.text or "").strip()
+            if not t:
+                continue
+            style = (getattr(p.style, "name", "") or "").lower()
+            blocks.append((style.startswith("heading") or style.startswith("title"), t))
+    else:
+        with io.open(path, encoding="utf-8", errors="ignore") as fh:
+            raw = fh.read()
+        raw = raw.replace("\r\n", "\n")
+        for blk in re.split(r"\n\s*\n+", raw):
+            blk = blk.strip()
+            if not blk:
+                continue
+            # markdown 里连续几行小标题可能挤在同一块里，按行再看一遍
+            lines = [l for l in blk.split("\n") if l.strip()]
+            if len(lines) > 1 and any(_MD_HEAD_RE.match(l) for l in lines):
+                for l in lines:
+                    blocks.append((bool(_MD_HEAD_RE.match(l)), l.strip()))
+            else:
+                blocks.append((bool(_MD_HEAD_RE.match(blk)), blk))
+
+    paras = []
+    section = ""
+    sec_n = 0
+    for is_head, text in blocks:
+        head_text = None
+        m = _MD_HEAD_RE.match(text)
+        if m:
+            head_text = m.group(2).strip()
+        elif is_head:
+            head_text = text
+        else:
+            m2 = _BOLD_HEAD_RE.match(text) or _NUM_HEAD_RE.match(text)
+            if m2:
+                head_text = m2.group(1).strip()
+        if head_text is not None:
+            if _REF_SECTION_RE.match(text) or _REF_SECTION_RE.match(head_text):
+                break            # 到参考文献节为止，后面的不再算正文
+            section = re.sub(r"[\*_#]+", "", head_text).strip()
+            sec_n = 0
+            continue
+        if _REF_SECTION_RE.match(text):
+            break
+        sec_n += 1
+        paras.append({"no": len(paras) + 1, "sno": sec_n, "section": section, "text": text})
+    return paras
+
+
+def _ref_surname(r):
+    """这条引用的第一作者姓：优先用结构化字段，.txt 著录则从开头那一段猜。"""
+    s = _first_surname(r.get("claimed_authors") or "")
+    if s:
+        return s
+    raw = (r.get("raw") or r.get("claimed_title") or "").strip()
+    raw = re.sub(r"^\s*[\[\(【]?\d{1,3}[\]\)】.、]\s*", "", raw)
+    head = re.split(r"(?<=[.．。])\s+", raw)[0]
+    return _first_surname(head)
+
+
+def _para_label(p):
+    """一段正文的位置说法。有节名就用【节内】段号（"讨论¶2" 才读得通"讨论第2段"），
+    没识别到节名才退回全篇段号。"""
+    sec = p.get("section") or ""
+    return f"{sec}¶{p.get('sno', p.get('no'))}" if sec else f"¶{p.get('no')}"
+
+
+def _fmt_locs(locs, cap=5):
+    """位置（段落 dict）列表 → 报告/CSV 里的一列文字。过长就截断并说明还有几处。"""
+    labels = []
+    for p in locs:
+        lab = _para_label(p)
+        if lab not in labels:
+            labels.append(lab)
+    if len(labels) > cap:
+        return "、".join(labels[:cap]) + f"…等 {len(labels)} 处"
+    return "、".join(labels)
+
+
+def locate_in_manuscript(results, paras):
+    """给每条结果算出它在正文被提到的位置，就地写入 `cited_in`。
+
+    三种线索并用（任一命中即算被引用）：
+      ① 编号标记 `[3]`（只在著录里抽到了方括号号 cite_no 时才可用）；
+      ② 正文里直接写了这条的 DOI / PMID；
+      ③ 第一作者姓 + 年份同段出现（作者-年份体系，如 `(Packer et al., 2020)`）。
+    返回 (dangling, coverage, cite_no_available)：
+      dangling — 正文引了、但参考文献表里没有这个编号的 [(编号, 位置串)]
+      coverage — 有位置的条目占比，供调用方判断标记是否真的识别出来了
+    """
+    for r in results:
+        r["cited_in"] = ""
+    if not paras:
+        return [], 0.0, False
+
+    num_locs = {}
+    for p in paras:
+        for n in parse_cite_marks(p["text"]):
+            num_locs.setdefault(n, []).append(p)
+
+    have_no = set()
+    for r in results:
+        locs = []
+        n = str(r.get("cite_no") or "").strip()
+        if n.isdigit():
+            have_no.add(int(n))
+            locs.extend(num_locs.get(int(n), []))
+        ident = [x for x in (norm_doi(r.get("doi")), norm_doi(r.get("_match_doi"))) if x]
+        pm = [re.sub(r"\D", "", str(x or "")) for x in (r.get("pmid"), r.get("_match_pmid"))]
+        pm = [x for x in pm if len(x) >= 5]
+        surname = _casefold_cmp(_ref_surname(r))
+        year = str(r.get("claimed_year") or "").strip()
+        for p in paras:
+            body = _casefold_cmp(p["text"])
+            hit = any(d in body for d in ident) or any(("pmid" in body and x in body) for x in pm)
+            if not hit and surname and len(surname) > 2 and year and year in body:
+                hit = re.search(r"(?<![a-z])" + re.escape(surname) + r"(?![a-z])", body) is not None
+            if hit:
+                locs.append(p)
+        r["cited_in"] = _fmt_locs(locs)
+
+    cited = sum(1 for r in results if r.get("cited_in"))
+    coverage = cited / max(1, len(results))
+    dangling = []
+    if have_no:
+        # 只有【每条著录都抽到了方括号号】时才敢说"正文这个编号在表里没有"：
+        # 部分条目没抽到号时，表里其实有那一篇、只是号没解析出来，报悬空是假警报
+        # （用户会去正文里删掉一条真实的引用）。这种情况只报【超出条目总数】的编号——
+        # 那种编号无论怎么排都不可能有对应条目（正文引 [23]、表里只有 20 条），零假阳性。
+        all_numbered = all(str(r.get("cite_no") or "").strip().isdigit() for r in results)
+        top = max(max(have_no), len(results))
+        for n in sorted(num_locs):
+            if n in have_no:
+                continue
+            if all_numbered or n > top:
+                dangling.append((n, _fmt_locs(num_locs[n], cap=3)))
+    return dangling, coverage, bool(have_no)
+
+
 def check_input_shape(entries, raw_lines):
     """输入体检：像稿件正文而不是参考文献列表时，拒跑并说清楚该喂什么。
 
@@ -951,6 +1167,9 @@ def main():
     ap.add_argument("--no-shape-check", action="store_true",
                     help="跳过输入形态体检（确实要拿整篇稿子硬跑时用）")
     ap.add_argument("--outdir", default=None)
+    ap.add_argument("--manuscript", "--body", dest="manuscript", default=None,
+                    help="稿件正文（.md/.txt/.docx）。给了它就多出一列「正文引用位置」，"
+                         "并标出【正文从没引过】的文献与【正文引了但表里没有】的悬空编号")
     ap.add_argument("--no-retraction", action="store_true",
                     help="跳过撤稿检测（离线/赶时间；默认开启）")
     args = ap.parse_args()
@@ -997,8 +1216,29 @@ def main():
     # 而"保留最先出现的那个编号"要靠原始顺序才认得出谁是首现。
     dup_groups, dup_suspects = mark_duplicates(results)
 
+    # 正文引用定位（只在给了 --manuscript 时做）
+    uncited, dangling, cite_weak, paras = [], [], False, []
+    if args.manuscript:
+        paras = load_manuscript(args.manuscript)
+        dangling, coverage, _has_no = locate_in_manuscript(results, paras)
+        cite_weak = coverage < CITE_DETECT_MIN
+        print(f"正文 {len(paras)} 段（已排除参考文献节），"
+              f"{sum(1 for r in results if r.get('cited_in'))}/{len(results)} 条在正文中定位到引用位置")
+        if cite_weak:
+            # ★ 命中率过低 = 大概率是标记没识别出来（EndNote 域代码 / 上标图片 / 非常规写法），
+            #   不是"真的都没被引用"。此时只保留已定位的那些位置，不下未引用判定、不计入闸。
+            print("!! 正文里几乎没识别出引用标记（域代码/上标图片/非常规格式常见）——"
+                  "「正文引用位置」一列仅供参考，本次【不】判定谁未被引用。")
+            dangling = []
+        else:
+            for r in results:
+                if not r.get("cited_in"):
+                    r["note"] = (r.get("note") or "") + "；⚠️ 未在正文中找到引用位置（正文没引这一篇）"
+                    uncited.append(r)
+
     # CSV
-    cols = ["verdict", "sim", "cite_no", "dup_of", "claimed_title", "found_title", "id", "note", "raw"]
+    cols = ["verdict", "sim", "cite_no", "dup_of", "cited_in",
+            "claimed_title", "found_title", "id", "note", "raw"]
     with open(os.path.join(args.outdir, "reference_check.csv"), "w",
               encoding="utf-8", newline="") as f:
         w = csv.DictWriter(f, fieldnames=cols, extrasaction="ignore")
@@ -1055,11 +1295,43 @@ def main():
                 f.write(f"  - {cite_label(a)}：{a.get('claimed_title') or a.get('raw')}\n")
                 f.write(f"  - {cite_label(b)}：{b.get('claimed_title') or b.get('raw')}\n")
             f.write("\n")
-        if dup_groups or dup_suspects:
+        if args.manuscript and cite_weak:
+            f.write("## 正文引用位置：本次不可信\n\n"
+                    "已读入正文，但几乎没识别出引用标记（常见原因：EndNote/Zotero 域代码尚未去域、"
+                    "上标编号是图片、作者-年份写法非常规）。因此**没有对任何一条下"
+                    "「未被正文引用」的判定**——那样只会给出一张全错的表。\n"
+                    "要用这一列，请把正文另存为已去域的纯文本（.md/.txt），或确认正文里的编号是"
+                    "`[3]`／上标数字这类可见标记。\n\n")
+        if uncited:
+            f.write(f"## ⚠️ 未被正文引用（{len(uncited)} 条）\n\n")
+            f.write("下列文献**在正文里找不到任何引用位置**。参考文献表是正文引用的映射，"
+                    "多出来的条目是投稿硬伤（编辑部一眼可见），还会虚高参考文献数。\n"
+                    "两种改法：把它在正文该出现的地方引上，或从参考文献表里删掉"
+                    "（**删了要重排编号并重跑本技能**）。\n"
+                    "定位用了三条线索：编号标记 `[3]`、正文直接写出的 DOI/PMID、"
+                    "第一作者姓+年份同段。三条都没命中才列到这里；仍建议人工扫一眼再删。\n\n")
+            for r in uncited:
+                # 著录本身通常以 "[2] " 开头，cite_label 又给出 [2] —— 去掉重复的那个前缀
+                desc = re.sub(r"^\s*[\[\(【]?\d{1,3}[\]\)】.、]\s*", "",
+                              str(r.get("claimed_title") or r.get("raw") or ""))
+                f.write(f"- {cite_label(r)} {desc[:200]}\n")
+            f.write("\n")
+        if dangling:
+            f.write(f"## ⚠️ 正文引用了不存在的编号（{len(dangling)} 个）\n\n")
+            f.write("正文里出现了这些编号，但参考文献表里没有对应条目——悬空引用，"
+                    "多半是删改参考文献后没重排编号。\n\n")
+            for n, where in dangling:
+                f.write(f"- `[{n}]` — 出现在 {where}\n")
+            f.write("\n")
+        if dup_groups or dup_suspects or uncited or dangling or (args.manuscript and cite_weak):
             f.write("## 逐条结论\n\n")
         for r in results:
             f.write(f"- **{r['verdict']}** — {r['claimed_title'] or r['id']}\n")
             f.write(f"  - {r['note']}\n")
+            if args.manuscript and not cite_weak:
+                f.write(f"  - 正文引用位置：{r.get('cited_in') or '**未找到（正文没引这一篇）**'}\n")
+            elif r.get("cited_in"):
+                f.write(f"  - 正文引用位置：{r['cited_in']}\n")
             if r["found_title"] and r["found_title"] != r["claimed_title"]:
                 f.write(f"  - 实际匹配到：{r['found_title']}\n")
 
@@ -1071,6 +1343,10 @@ def main():
     # "可疑/存疑 0 条"——而这正是这道闸此前放行重复编号的原因。
     dup_extra = sum(len(g) - 1 for g in dup_groups)
     bad += dup_extra
+    # 未被正文引用 / 悬空编号也计入。它们逐条查都是真文献（全 OK），不计的话又是一份
+    # "可疑 0 条"的绿报告放行一批正文根本没引的文献 —— 与重复编号同一类漏法。
+    # 仅在引用标记确实识别出来时才计（cite_weak 时 uncited/dangling 已被清空）。
+    bad += len(uncited) + len(dangling)
     # ---- 结构化裁定（.gate/reference-check.json）----
     # 网关的质量闸【优先读它】（web/wf-state.mjs 的 gateVerdict），措辞正则退为兜底 ——
     # 本脚本自己把每一类都数清楚了，没有理由让"报告转述时的措辞"再被正则猜一遍
@@ -1088,6 +1364,10 @@ def main():
                 "counts": dict(dist),
                 "duplicates": len(dup_groups),
                 "unverified": unver,
+                "uncited_in_body": len(uncited),
+                "dangling_cite_nos": [n for n, _ in dangling],
+                "body_scanned": bool(args.manuscript),
+                "cite_detection_weak": bool(cite_weak),
                 "note": "由 verify_refs.py 生成的机器裁定；signal 口径与报告统计行一致",
             }, gf, ensure_ascii=False, indent=1)
     except OSError:
@@ -1103,6 +1383,15 @@ def main():
                 "按报告「重复引用」节合并编号后重跑。")
     if dup_suspects:
         print(f"!! 另有 {len(dup_suspects)} 组【标题高度相似】待人工确认是否同一篇（见报告）。")
+    if uncited:
+        print(f"!! 有 {len(uncited)} 条【未被正文引用】："
+              + "、".join(cite_label(x) for x in uncited[:8])
+              + ("…" if len(uncited) > 8 else "")
+              + " —— 这些文献本身是真的，但正文里找不到引用位置，"
+                "**不要当成核查通过**；在正文引上或从表里删掉（删了要重排编号并重跑）。")
+    if dangling:
+        print(f"!! 正文引用了 {len(dangling)} 个【表里不存在的编号】："
+              + "、".join(f"[{n}]" for n, _ in dangling) + " —— 悬空引用，按报告修。")
     if unver:
         print(f"!! 注意：{unver}/{len(results)} 条【只验了存在性、没比对标题】（输入没给引用标题）。"
               "这查不出「真 DOI 配错标题」，不要当成核查通过。")
