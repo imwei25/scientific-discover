@@ -187,8 +187,8 @@ function runOpencode(stdinText, extraFiles = []) {
   const sentLen = new Map()  // partId → 已推出的字符数（流式水位）
   const THINK_INTERVAL = 30_000
   let lastThink = Date.now()
-  const flushNewThinking = () => {   // 只发"上次之后新增"的思考；返回是否真发了一条
-    if (!THINKING) return false
+  const flushNewThinking = (cb) => {   // 只发"上次之后新增"的思考；cb 在这条 send 真正发出后回调；返回是否真发了一条
+    if (!THINKING) { cb && cb(); return false }
     const parts = []
     for (const id of order) {
       const full = reason.get(id) || ""
@@ -196,20 +196,35 @@ function runOpencode(stdinText, extraFiles = []) {
       if (full.length > sent) { parts.push(full.slice(sent)); sentLen.set(id, full.length) }
     }
     let piece = parts.join("\n").trim()
-    if (!piece) return false
+    if (!piece) { cb && cb(); return false }
     const MAX = 1800   // 单条别太长（企微限速 + 可读）；真超了只保留最新一段
     if (piece.length > MAX) piece = "…" + piece.slice(-MAX)
-    execFile(CC, ["send", "-m", "💭 " + piece], { windowsHide: true }, () => {})
+    execFile(CC, ["send", "-m", "💭 " + piece], { windowsHide: true }, () => { cb && cb() })
     return true
   }
 
-  // 进度/思考推送：5s 一查。开了「输出思考」→ 每约 30s 把新增思考推一条（思考本身就是进度）；
-  // 进度提示则沿用"有工具活动就每 45s 报一条"。两者独立，覆盖"在想"与"在干活"两种阶段。
+  // 「思考在前、答案在后」的保序：思考走 `cc-connect send`、答案走 stdout，两条通道不保序，答案常抢先。
+  // 所以正文一开始就【扣住 stdout】，等"正文前那条思考"真正发出（send 回调 / 5s 兜底）再放行答案。
+  let holding = false, released = false, answerGated = false, releasedAnswer = false
+  const held = []
+  let onReleased = null
+  const out = (s) => { if (holding) held.push(s); else process.stdout.write(s) }
+  const releaseHold = () => {
+    if (released) return
+    released = true; holding = false
+    if (held.length) { releasedAnswer = true; for (const s of held) process.stdout.write(s); held.length = 0 }
+    if (onReleased) { const f = onReleased; onReleased = null; f() }
+  }
+
+  // 进度/思考推送：5s 一查。开了「输出思考」→ 每约 30s 把新增思考推一条（思考本身就是进度）。
+  // 「仍在处理中」进度提示【很少发】：思考已经 30s 一条了，这条只为长时间【纯干活无思考】兜底，
+  // 所以调到【5 分钟】才报一轮、且期间真有工具活动才报——不刷屏。
+  const PROGRESS_INTERVAL = 5 * 60_000
   let lastPing = Date.now(), pingedTools = 0
   const ticker = (PROGRESS || THINKING) ? setInterval(() => {
     const now = Date.now()
     if (THINKING && now - lastThink >= THINK_INTERVAL) { lastThink = now; flushNewThinking() }
-    if (PROGRESS && toolCount > pingedTools && now - lastPing >= 45_000) {
+    if (PROGRESS && toolCount > pingedTools && now - lastPing >= PROGRESS_INTERVAL) {
       pingedTools = toolCount; lastPing = now
       const label = lastToolLabel ? `（最近步骤：${lastToolLabel}）` : ""
       execFile(CC, ["send", "-m", `⏳ 仍在处理中，已执行 ${toolCount} 个步骤${label}`], { windowsHide: true }, () => {})
@@ -248,8 +263,14 @@ function runOpencode(stdinText, extraFiles = []) {
           }
           return   // 工具进度：不给 cc-connect 看见
         }
-        // 正文开始：把剩余未发的思考先补一条，保证顺序是「思考 → 回答」
-        if (type === "text") flushNewThinking()
+        // 正文开始：先把剩余未发的思考发出去，并【扣住答案】直到它发出，保证「思考 → 答案」
+        if (type === "text" && !answerGated) {
+          answerGated = true
+          if (THINKING) {
+            const sent = flushNewThinking(releaseHold)
+            if (sent) { holding = true; setTimeout(releaseHold, 5000) }   // send 卡住也别永久扣着
+          }
+        }
         // 错误事件：把 opencode 的技术话术翻成中文再放行（cc-connect 从这条事件取文案发进聊天）
         if (type === "error" && evt?.error) {
           const e = evt.error
@@ -257,17 +278,19 @@ function runOpencode(stdinText, extraFiles = []) {
           const ref = e?.data?.ref
           const f = friendlyError(raw, e?.name)
           evt.error = { name: f.t, data: { message: f.m + (ref ? `（编号 ${ref}）` : ""), ref } }
-          process.stdout.write(JSON.stringify(evt) + "\n")
+          out(JSON.stringify(evt) + "\n")
           return
         }
       } catch { /* 非 JSON 行原样放行 */ }
     }
-    process.stdout.write(line + "\n")
+    out(line + "\n")
   })
 
   const IMG = new Set([".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp"])
   const MAX_SEND = 5, MAX_BYTES = 50 * 1024 * 1024
   const finishAndExit = (exitCode) => {
+    // 还扣着答案没放行（短任务：思考的 send 还没回调）→ 等放行后再收尾，别让答案抢在思考前落 stdout。
+    if (holding && !released) { onReleased = () => finishAndExit(exitCode); return }
     if (ticker) clearInterval(ticker)
     // 收尾把剩余未发的思考补齐（短任务没到 30s、或思考在正文后还有尾巴）；现发的话留点送达时间再退。
     const flushedNow = flushNewThinking()
@@ -292,7 +315,7 @@ function runOpencode(stdinText, extraFiles = []) {
       .filter((f) => f.size > 0 && f.size <= MAX_BYTES)
       .filter((f) => ![".py", ".log", ".tmp"].includes(path.extname(f.p).toLowerCase()))  // 脚本/日志是过程不是交付物
       .slice(0, MAX_SEND)
-    if (!toSend.length) { setTimeout(() => process.exit(exitCode), flushedNow ? 1500 : 0); return }
+    if (!toSend.length) { setTimeout(() => process.exit(exitCode), (flushedNow || releasedAnswer) ? 1500 : 0); return }
     const sendArgs = ["send"]
     for (const f of toSend) sendArgs.push(IMG.has(path.extname(f.p).toLowerCase()) ? "--image" : "--file", f.p)
     // 排障日志走独立文件（SCI_WRAP_LOG 由 chat-bridge 注入）。【不能写 stderr】：run 结束后的
