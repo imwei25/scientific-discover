@@ -62,6 +62,17 @@ test("动作指向快照里的 node 与运行器，参数带任务 id", () => {
   assert.match(xml, /<Arguments>"C:\\app\\web\\headless-run\.mjs" --task/)
 })
 
+// 【黑框回归】任务计划直接跑 node.exe（控制台程序）会在用户桌面弹一个黑窗口。
+// 有隐藏启动器（headless-launch.vbs）时必须改由 wscript（GUI 子系统、无窗口）转一手；
+// 没有它（老版本包）退回直接跑 node —— 上面那条测试钉的就是退回路径。
+test("有隐藏启动器时经 wscript 拉起，node/脚本/启动器路径全部带引号", () => {
+  const t = mk({ schedule: { kind: "daily", time: "07:00" } })
+  const xml = S.buildXml(t, { now, spec: { ...spec, launcher: "C:\\app\\web\\headless-launch.vbs", wscript: "C:\\Windows\\System32\\wscript.exe" } })
+  assert.match(xml, /<Command>C:\\Windows\\System32\\wscript\.exe<\/Command>/)
+  assert.match(xml, /\/\/B \/\/Nologo "C:\\app\\web\\headless-launch\.vbs" "C:\\app\\runtime\\node\\node\.exe" "C:\\app\\web\\headless-run\.mjs" --task /)
+  assert.match(xml, new RegExp(`--task ${t.id}<`))
+})
+
 test("停用的任务照样注册，但 XML 里 Enabled=false（软件里和任务计划里看到的是同一份清单）", () => {
   const xml = S.buildXml(mk({ schedule: { kind: "daily", time: "07:00" }, enabled: false }), { now, spec })
   assert.match(xml, /<Enabled>false<\/Enabled>/)

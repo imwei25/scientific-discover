@@ -284,7 +284,7 @@ async function main() {
   if (!task.enabled && !args.force) { log(`任务「${task.title}」已停用，跳过`); process.exit(0) }
 
   const startedAt = new Date().toISOString()
-  const rec = { taskId: task.id, title: task.title, startedAt, endedAt: null, ok: false, reason: "", sid: "", rounds: 0, outputs: [], credits: null, notices: [], quota: false }
+  const rec = { taskId: task.id, title: task.title, startedAt, endedAt: null, ok: false, reason: "", sid: "", rounds: 0, outputs: [], mainOutputs: [], credits: null, notices: [], quota: false }
   // 只有【真的跑起来】才写记录：dry-run 与"锁被别人占着"都不该在历史里留下一条失败
   let writeRecord = false
   let child = null
@@ -366,6 +366,11 @@ async function main() {
     rec.notices = acc.notices.filter(Boolean).slice(-5)
     const outs = (await jget(base, `/api/outputs?sid=${encodeURIComponent(rec.sid)}`, 20_000)).body
     rec.outputs = Array.isArray(outs) ? outs.map((f) => (typeof f === "string" ? f : f?.name || f?.path || "")).filter(Boolean) : []
+    // 推送用的是【主产物】那一档（/api/outputs 随列表下发 kind），不是整张清单：中间文件与
+    // 文件夹会话里用户原有的资料不该被推到手机上。老网关没有 kind → 退回整张清单（桥那边还有一道同样的闸）。
+    rec.mainOutputs = Array.isArray(outs) && outs.some((f) => f && f.kind)
+      ? outs.filter((f) => f && f.kind === "main").map((f) => f.name).filter(Boolean)
+      : rec.outputs
 
     // 成败口径：网关报错 / 超时 / 撞了积分闸 → 失败；否则以"有没有产物 + 有没有正文"为准。
     // 【不拿哨兵当唯一判据】哨兵是模型自报完成，它撞了轮数上限也可能已经交付了大部分东西；
@@ -381,9 +386,12 @@ async function main() {
     // ④ 推送到「聊天接入」绑定的微信/企微（可选，task.pushChat）。
     // 【只在复用壳网关时推】桥由壳网关(27821)托管；自起网关(27831)时软件是关着的、桥必然不在，
     // 推了也没有对象——这正是"软件关着能跑但推不了"的技术根因，如实跳过并记一句。
+    // 推送结果要写进 rec.notices：推没推到手机，用户在软件的运行记录里要能看到原因
+    //（个人微信的会话令牌会过期 —— 太久没跟机器人说话时推送必失败，这不是软件坏了）。
     if (task.pushChat && !args.dryRun) {
       if (!reused) {
         log("[push] 跳过推送：软件没开着（定时任务自起了网关），聊天接入不在运行")
+        rec.notices.push("没推送到微信/企微：跑的时候软件没开着（聊天接入随软件运行）")
       } else {
         try {
           const head = acc.finalText.trim().replace(/\s+/g, " ").slice(0, 300)
@@ -391,9 +399,10 @@ async function main() {
             (head ? "\n" + head : "")
           // 带上产物：文件名 + 本轮会话 id，由网关侧解析成绝对路径再发（图片内联、文档附件，
           // 服务端限大小/数量）。没能发的大文件仍留在软件里可下载。
-          const pr = await jpost(base, "/api/chat-bridge/push", { text: txt, sid: rec.sid, files: rec.outputs }, 60_000)
+          const pr = await jpost(base, "/api/chat-bridge/push", { text: txt, sid: rec.sid, files: rec.mainOutputs }, 60_000)
           log(`[push] ${pr?.body?.ok ? "已推送到聊天接入" : "未推送（" + (pr?.body?.err || "?") + "）"}`)
-        } catch (e) { log("[push] 推送异常：" + (e?.message || e)) }
+          if (!pr?.body?.ok) rec.notices.push("没推送到微信/企微：" + (pr?.body?.err || "推送失败（个人微信长时间没对话时会话令牌会过期，先给机器人发条消息再试）"))
+        } catch (e) { log("[push] 推送异常：" + (e?.message || e)); rec.notices.push("推送微信/企微时出错：" + String(e?.message || e).slice(0, 120)) }
       }
     }
   } catch (e) {
@@ -408,6 +417,16 @@ async function main() {
   process.exit(rec.ok ? 0 : 1)
 }
 
-// 只有被【直接执行】时才跑（被测试 import 时不能自动开跑，那会真去连网关）
-if (process.argv[1] && path.resolve(process.argv[1]) === path.resolve(fileURLToPath(import.meta.url)))
+// 只有被【直接执行】时才跑（被测试 import 时不能自动开跑，那会真去连网关）。
+// 【不能只比 path.resolve】壳写的快照路径带 \\?\ 长路径前缀，任务计划照它执行时
+// argv[1] 是 "\\?\C:\...\headless-run.mjs"，而 import.meta.url 转出来是不带前缀的
+// 规范路径 —— 两者永不相等 → main() 不执行、进程静默退出 0。症状是【定时任务到点
+// "跑了"（LastTaskResult=0）但没有任何记录和会话】，真机 2026-08-14 22:30 踩过。
+// 与 oc-wrap 的 junction 路径坑（0.1.24）同类：realpath + 小写化再比，吃掉
+// \\?\ / junction / 8.3 短路径 / 盘符大小写的全部差异。
+const canon = (p) => {
+  const s = String(p || "").replace(/^\\\\\?\\/, "").replace(/^\/\/\?\//, "")
+  try { return fs.realpathSync(s).toLowerCase() } catch { return path.resolve(s).toLowerCase() }
+}
+if (process.argv[1] && canon(process.argv[1]) === canon(fileURLToPath(import.meta.url)))
   main().catch((e) => { console.error(e); process.exit(1) })

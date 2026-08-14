@@ -213,3 +213,44 @@ test("renderConfig：getCloudEnv 的生图/OCR 代理变量要进 env（微信�
   B.init(ctx)              // 还原（不带 getCloudEnv 的旧签名也得能跑），别影响后续用例
   assert.ok(!B.renderConfig(wecomBound("ses_img3", path.join(tmp, "out", "img"))).includes("SCI_IMAGE_URL"))
 })
+
+// ---- 推给聊天的产物挑选（用户反馈：微信/企微把副产出也一并发过来了）----
+// 判据复用界面侧栏那一份（workflows.mjs 的 artifactKind），这里守的是"聊天特有的三条排除
+// + 成品优先 + 报个数"。这类错在手机上表现为一次刷十几条附件，回归价值很高。
+const WFm = await import("../workflows.mjs")
+const OC = await import("../chat-bridge/oc-wrap.mjs")
+
+test("pickChatFiles：只发主产物，中间文件只报个数", () => {
+  const names = ["manuscript.docx", "fig1.png", "analysis.py", "run.log", "scratch.md", "pdfs/a.pdf"]
+  const { send, held } = WFm.pickChatFiles(names, { mod: "paper" })
+  assert.deepEqual(send.sort(), ["fig1.png", "manuscript.docx"])
+  assert.equal(held, 4, "没发出去的要报数，好让文案里说一句")
+})
+
+test("pickChatFiles：脱敏还原表、用户上传、网关簿子绝不推出微信", () => {
+  const names = ["deid_cohort_mapping.csv", "姓名对照表.csv", "patient_keyfile.csv",
+    "uploads/用户传的.docx", "_workflow.json", "AGENTS.md", ".cc-connect/x.docx"]
+  const { send } = WFm.pickChatFiles(names, { mod: "paper" })
+  assert.deepEqual(send, [], "这几类一个都不能发（还原表外泄不可逆）")
+})
+
+test("pickChatFiles：成品排前面 + 限条数（手机上每个文件都是一条通知）", () => {
+  const names = ["a.md", "b.md", "c.md", "final.docx", "d.md", "e.md"]
+  const { send, held } = WFm.pickChatFiles(names, { mod: "chat", max: 3 })
+  assert.equal(send[0], "final.docx", "成品必须排在被截断的前面")
+  assert.equal(send.length, 3)
+  assert.equal(held, 3)
+})
+
+test("oc-wrap pickOutputs：与侧栏同一份判据；WF 加载不了时退回保守口径", () => {
+  const { send, held } = OC.pickOutputs(["manuscript.docx", "notes.md", "tmp.py"], "paper", null)
+  assert.deepEqual(send, ["manuscript.docx"])
+  assert.equal(held, 2)
+  // 兜底口径（模拟 workflows.mjs 没加载成功）：宁可只发成品，也不轰一堆中间文件
+  assert.ok(OC.pickOutputs(["x.py", "y.log", "z.docx"], "paper", null).send.includes("z.docx"))
+})
+
+test("pushToChat：桥没在跑时不炸、也不会把中间文件算成可推内容", async () => {
+  const r = await B.pushToChat({ text: "", files: [], dir: "" })
+  assert.equal(r.ok, false)
+})

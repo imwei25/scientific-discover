@@ -4,6 +4,7 @@
 //   node web/task-cli.mjs list
 //   node web/task-cli.mjs add --title "每周文献扫描" --prompt "..." --daily 07:00
 //   node web/task-cli.mjs add --title "周一汇总" --prompt-file plan.md --weekly 1,4 --time 08:30 --max-credits 50
+//   （加 --push-chat：跑完把结果+主产物推到「聊天接入」绑定的微信/企微；前提见 headless-run 的推送注释）
 //   node web/task-cli.mjs add --title "临时" --prompt "..." --once 2026-08-20 --time 09:00
 //   node web/task-cli.mjs enable <id> / disable <id> / rm <id>
 //   node web/task-cli.mjs run <id>          # 立刻跑一次（前台，能看到日志）
@@ -103,6 +104,9 @@ function cmdAdd(m) {
     title: m.title, prompt, module: mode === "preset" ? "chat" : (m.module || "chat"),
     schedule: scheduleFrom(m),
     maxCredits: m["max-credits"], maxRounds: m["max-rounds"],
+    // 跑完推送到聊天接入（微信/企微）。默认关（tasks.mjs 的 normalizeTask 只认显式 true）：
+    // 不是每个定时任务都想往手机上刷消息，从聊天里建的任务才建议开（技能会带上这个开关）。
+    pushChat: m["push-chat"] === "true",
     ...(params ? { preset, params } : {}),
   })
   if (!ok) { console.error("任务定义有问题：\n  - " + errors.join("\n  - ")); process.exit(2) }
@@ -155,6 +159,7 @@ function cmdDoctor() {
   console.log(`环境快照：${spec.fromSnapshot ? "有（壳写的）" : "无 —— 打包版出现这条要查壳有没有写 headless-env.json；开发机正常"}`)
   console.log(`node：${spec.nodeExe}  ${fs.existsSync(spec.nodeExe) ? "" : "⚠ 文件不存在"}`)
   console.log(`运行器：${spec.script}  ${fs.existsSync(spec.script) ? "" : "⚠ 文件不存在"}`)
+  console.log(`隐藏启动器：${spec.launcher ? "有（到点后台跑，不弹黑窗口）" : "无 —— 到点会弹出控制台窗口（老版本包；跑一次 sync 前先确认 web/headless-launch.vbs 在不在）"}`)
   console.log(`工作目录：${spec.workDir}`)
   const tasks = T.listTasks()
   const reg = S.listRegistered()

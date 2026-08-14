@@ -39,15 +39,25 @@ const localIso = (d) =>
  * 打包版里 node 在 bundle\runtime\node\node.exe，与开发机的 process.execPath 不是一回事——
  * 所以优先信壳写的快照（headless-env.json），它才知道自己被装到哪儿了。
  */
+// 剥掉 \\?\ 长路径前缀（壳写的快照里带着它）。直接当 Command 跑 node 时它无害，
+// 但现在路径要经 wscript → WScript.Shell.Run 再转一手，别指望每一层都认它。
+const stripLP = (p) => String(p || "").replace(/^\\\\\?\\/, "")
+
 export function runnerSpec() {
   let snap = null
   try { snap = JSON.parse(fs.readFileSync(path.join(__dirname, "headless-env.json"), "utf8")) } catch {}
-  const appDir = snap?.appDir || ROOT
+  const appDir = stripLP(snap?.appDir || ROOT)
+  // 隐藏启动器（见该文件头注释）：node.exe 是控制台程序，任务计划直接跑它会在用户桌面
+  // 弹一个黑窗口；有 launcher 就改由 wscript（GUI 子系统、无窗口）转一手。文件不在
+  // （老版本包）→ 退回直接跑 node，功能不受影响、只是有窗口。
+  const launcher = path.join(appDir, "web", "headless-launch.vbs")
   return {
-    nodeExe: snap?.nodeExe || process.execPath,
+    nodeExe: stripLP(snap?.nodeExe || process.execPath),
     script: path.join(appDir, "web", "headless-run.mjs"),
     workDir: appDir,
     fromSnapshot: !!snap,
+    launcher: fs.existsSync(launcher) ? launcher : "",
+    wscript: path.join(process.env.SystemRoot || "C:\\Windows", "System32", "wscript.exe"),
   }
 }
 
@@ -133,8 +143,10 @@ ${trigger}
   </Settings>
   <Actions Context="Author">
     <Exec>
-      <Command>${xmlEsc(spec.nodeExe)}</Command>
-      <Arguments>"${xmlEsc(spec.script)}" --task ${xmlEsc(task.id)}</Arguments>
+      <Command>${xmlEsc(spec.launcher ? spec.wscript : spec.nodeExe)}</Command>
+      <Arguments>${spec.launcher
+        ? `//B //Nologo "${xmlEsc(spec.launcher)}" "${xmlEsc(spec.nodeExe)}" "${xmlEsc(spec.script)}" --task ${xmlEsc(task.id)}`
+        : `"${xmlEsc(spec.script)}" --task ${xmlEsc(task.id)}`}</Arguments>
       <WorkingDirectory>${xmlEsc(spec.workDir)}</WorkingDirectory>
     </Exec>
   </Actions>

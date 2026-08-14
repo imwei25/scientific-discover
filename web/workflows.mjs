@@ -2043,6 +2043,42 @@ export function artifactKind(modId, values, name) {
   for (const st of steps) for (const g of st.emits || []) if (globMatch(g, s)) return "main"
   return DELIVERABLE_EXT.test(base) ? "main" : "aux"
 }
+
+// ---- 聊天接入（微信 / 企微）该把哪些产物真的推给用户 ----
+//
+// 【为什么要单独一层】界面侧栏是"列出来"，聊天是"推过去"：侧栏把中间文件折叠起来即可，
+// 聊天里每一个文件都是一条到手机上的消息。此前 oc-wrap 的兜底补发只按扩展名排掉 py/log/tmp，
+// 于是一次成稿会把十几个中间 md、抽出来的 txt、下载的全文 PDF 一并轰给用户（用户反馈的正是这个），
+// 还会把脱敏还原表（真名 ↔ 假名）推出微信——那是不可逆的泄露。
+//
+// 【判据不另立一套】主/副仍以 artifactKind（各步 emits 契约）为准，这里只加聊天特有的三条排除：
+// 用户自己刚上传的 uploads\、网关簿子、PHI 还原表；再按"成品优先"排个序、限个条数。
+const CHAT_SKIP_NAMES = new Set(["_workflow.json", "_lasterror.json", "AGENTS.md", "OPENCODE.md"])
+/** 这个产物能不能推进聊天。name = 相对会话目录的路径（可含子目录），大小/条数上限由调用方管。 */
+export function chatSendable(modId, values, name) {
+  const rel = String(name || "").replace(/\\/g, "/").replace(/^\.\//, "")
+  if (!rel || rel.startsWith("../")) return false
+  const segs = rel.split("/")
+  if (segs.some((s) => s.startsWith("."))) return false      // .cc-connect\ .private\ .preview\ 等
+  if (segs[0].toLowerCase() === "uploads") return false        // 用户自己刚发来的文件，不回发给他
+  const base = segs[segs.length - 1]
+  if (CHAT_SKIP_NAMES.has(base)) return false
+  if (isSecretName(base)) return false                         // 脱敏还原表：绝不出微信
+  return artifactKind(modId, values, rel) === "main"
+}
+/**
+ * 从一批候选产物里挑出真正要发的，成品（docx/pdf/xlsx/图…）排在前面、限 max 条。
+ * @returns {{ send: string[], held: number }} held = 没发出去的条数（中间文件 + 超限的），
+ *          调用方把它写进随附文案（"另有 N 个中间文件留在会话里"），别再单发一条消息。
+ */
+export function pickChatFiles(names, { mod = "", values = null, max = 5 } = {}) {
+  const ok = (names || []).filter((n) => chatSendable(mod, values, n))
+  // 稳定排序（Node 的 sort 是稳定的）：成品在前，其余保持调用方给的顺序（通常是 mtime 倒序）
+  ok.sort((a, b) => (DELIVERABLE_EXT.test(a) ? 0 : 1) - (DELIVERABLE_EXT.test(b) ? 0 : 1))
+  const send = ok.slice(0, max)
+  return { send, held: (names || []).length - send.length }
+}
+
 const RENDER_RULES = [
   // ⚠️ 必须放在最前：脱敏的【还原表】（真实姓名/住院号 ↔ 假名）。绝不能落进 table 渲染器——
   //    那会把病人真名直接铺在对话框里。给它专用渲染器，界面只显示警示、不预览内容。

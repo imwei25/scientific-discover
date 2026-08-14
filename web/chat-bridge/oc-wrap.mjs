@@ -14,7 +14,9 @@
 //     等用户真正提问时，把这些暂存文件的路径并进 prompt 一起交给模型。关掉则保持原样：
 //     发文件即当场分析。
 //  4) 产物兜底：run 结束后扫描工作目录新文件，模型忘了调 cc-connect send 也自动补发
-//     （已在事件流里看见模型自己 send 过的路径会跳过，不重复发）。
+//     （已在事件流里看见模型自己 send 过的路径会跳过，不重复发）。**只补发主产物**——
+//     判据复用界面侧栏那一份（workflows.mjs 的 chatSendable / pickChatFiles），中间文件只
+//     在随附文案里报个数，不往手机上轰（见那边的长注释）。
 //
 // 真 opencode 路径来自 env SCI_WRAP_OC，cc-connect 路径来自 SCI_WRAP_CC —— 都由
 // chat-bridge.mjs 生成 config.toml 时注入，本文件不写死任何路径。
@@ -34,8 +36,115 @@ import path from "node:path"
 const canon = (p) => { try { return fs.realpathSync(p).toLowerCase() } catch { return String(p || "").toLowerCase() } }
 const isMain = !!process.argv[1] && canon(fileURLToPath(import.meta.url)) === canon(process.argv[1])
 
+// 产物分级判据与界面侧栏共用一份（web/workflows.mjs）。动态 import + 兜底：这份文件万一
+// 加载不了（老界面包、打包漏文件），聊天不能整个哑掉 —— 退回"只发成品扩展名"的保守口径。
+let WF = null
+try { WF = await import("../workflows.mjs") } catch { WF = null }
+const FALLBACK_DELIVERABLE = /\.(docx?|pdf|xlsx?|xlsm|pptx?|png|jpe?g|svg|tiff?|eps|zip|md|csv)$/i
+const FALLBACK_SECRET = /(mapping|_map|crosswalk|对照表|还原表|keyfile).*\.csv$/i
+/** 相对路径数组 → { send, held }。WF 在就用它，不在就用上面两条保守规则。（导出仅为单测。） */
+export function pickOutputs(rels, mod, values, max = 5) {
+  if (WF?.pickChatFiles) return WF.pickChatFiles(rels, { mod, values, max })
+  const ok = rels.filter((r) => {
+    const segs = r.split("/")
+    if (segs.some((s) => s.startsWith("."))) return false
+    if (segs[0].toLowerCase() === "uploads") return false
+    const base = segs[segs.length - 1]
+    return FALLBACK_DELIVERABLE.test(base) && !FALLBACK_SECRET.test(base)
+  })
+  const send = ok.slice(0, max)
+  return { send, held: rels.length - send.length }
+}
+/** 会话目录里的 _workflow.json（网关写的簿子）→ 这个会话属于哪个模块、表单填了什么。 */
+function workflowOf(d) {
+  try {
+    const st = JSON.parse(fs.readFileSync(path.join(d, "_workflow.json"), "utf8"))
+    if (!st || typeof st.module !== "string") return { mod: "", values: null }
+    return { mod: st.module, values: st.form && typeof st.form === "object" ? st.form : null }
+  } catch { return { mod: "", values: null } }
+}
+
 const REAL_OC = process.env.SCI_WRAP_OC
 const CC = process.env.SCI_WRAP_CC || "cc-connect"
+
+// ---- 投递看门狗（个人微信丢消息的补发）--------------------------------------
+// 个人微信（ilink）**没有长连接**：收消息靠长轮询，发消息必须凭随每条来信刷新的
+// 会话令牌（context_token），令牌几分钟就过期。于是长任务跑完时回复常被平台拒收
+// （bridge.log：`sendMessage ret=-2 "prepare failed" (expired context_token)`），用户看到
+// 的就是"空响应/没收到"，而正文在软件端完好——丢在 cc-connect 往微信投递的最后一步，
+// 且 cc-connect 只记日志、不补发。企微是 websocket 长连接，没有这个问题。
+// 补法利用一个必然成立的时机：**用户下一条消息进来的瞬间令牌刚刷新**。所以：
+//   · 每轮结束把最终答案 + 兜底补发的文件暂存进 .cc-connect\last-reply.json；
+//   · 下一轮开跑前查 bridge.log 里暂存时刻之后有没有投递失败，有 → 先补发暂存内容再答新问题。
+// 定时任务的推送（chat-bridge 的 pushToChat）也写同一个暂存文件，同样在下次对话时兜底。
+const lastReplyFile = () => path.join(process.cwd(), ".cc-connect", "last-reply.json")
+// bridge.log 与 wrap.log 同目录（都由 chat-bridge.mjs 定在 <root>\chat-bridge\ 下）
+const bridgeLogPath = () =>
+  process.env.SCI_WRAP_LOG ? path.join(path.dirname(process.env.SCI_WRAP_LOG), "bridge.log") : ""
+const RESEND_TTL = 24 * 3600_000   // 隔天再来问别的，还补发昨天的旧答案就很怪了
+const IMG_EXTS = new Set([".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp"])
+
+/**
+ * bridge.log 文本里、sinceMs 之后有没有【微信】投递失败。（纯函数，导出仅为单测。）
+ * text = 正文没送出去（ERROR：platform send failed / chunk send failed, message incomplete）；
+ * media = 图片/文件没送出去（WARN：ret=-2 for media）。留 5s 时钟余量。
+ * 只认 weixin 相关行：企微（websocket）不丢，别把无关失败当成补发信号。
+ */
+export function deliveryFailedSince(logText, sinceMs) {
+  const out = { text: false, media: false }
+  for (const ln of String(logText || "").split(/\r?\n/)) {
+    const m = /^time=(\S+)/.exec(ln)
+    if (!m) continue
+    const t = Date.parse(m[1])
+    if (!Number.isFinite(t) || t < Number(sinceMs) - 5000) continue
+    if (!/weixin/i.test(ln)) continue
+    if (/level=ERROR/.test(ln) && /(platform send failed|chunk send failed)/.test(ln)) out.text = true
+    if (/ret=-2 for media/.test(ln)) out.media = true
+  }
+  return out
+}
+
+/** 每轮收尾暂存（text/files 都空就不写——没东西可补）。 */
+function saveLastReply(text, files) {
+  try {
+    const t = String(text || "").trim()
+    const fl = (files || []).filter(Boolean)
+    if (!t && !fl.length) return
+    fs.mkdirSync(path.dirname(lastReplyFile()), { recursive: true })
+    fs.writeFileSync(lastReplyFile(), JSON.stringify({ at: Date.now(), text: t, files: fl }))
+  } catch {}
+}
+
+/** 新一轮开跑前调用：上一轮的投递失败了就补发。一次性（读完即删，绝不重复补）。 */
+function resendLostReply() {
+  try {
+    const f = lastReplyFile()
+    if (!fs.existsSync(f)) return
+    const j = JSON.parse(fs.readFileSync(f, "utf8"))
+    fs.rmSync(f)
+    if (!j || !Number.isFinite(j.at) || Date.now() - j.at > RESEND_TTL) return
+    const logF = bridgeLogPath()
+    if (!logF || !fs.existsSync(logF)) return
+    // 只读日志尾部 256KB：够覆盖一天的量，也不怕日志长了拖慢每轮启动
+    const st = fs.statSync(logF)
+    const size = Math.min(st.size, 256 * 1024)
+    const buf = Buffer.alloc(size)
+    const fd = fs.openSync(logF, "r")
+    try { fs.readSync(fd, buf, 0, size, st.size - size) } finally { fs.closeSync(fd) }
+    const fail = deliveryFailedSince(buf.toString("utf8"), j.at)
+    if (!fail.text && !fail.media) return
+    const args2 = ["send"]
+    let txt = fail.text ? String(j.text || "") : ""
+    if (txt.length > 1800) txt = txt.slice(0, 1800) + "…（太长截断，全文在软件的会话里）"
+    if (txt) args2.push("-m", "📮 上一条回复当时没送到（微信的会话令牌过期了，刚才你发消息把它刷新了），补发：\n" + txt)
+    const files = fail.media ? (Array.isArray(j.files) ? j.files : []).filter((p) => { try { return fs.existsSync(p) } catch { return false } }).slice(0, 5) : []
+    for (const p of files) args2.push(IMG_EXTS.has(path.extname(p).toLowerCase()) ? "--image" : "--file", p)
+    if (args2.length <= 1) return
+    execFile(CC, args2, { windowsHide: true }, () => {})
+    if (process.env.SCI_WRAP_LOG)
+      try { fs.appendFileSync(process.env.SCI_WRAP_LOG, new Date().toISOString() + ` 补发上轮丢失投递 text=${!!txt} files=${files.length}\n`) } catch {}
+  } catch {}
+}
 const PROGRESS = process.env.SCI_WRAP_PROGRESS !== "0"
 const THINKING = process.env.SCI_WRAP_THINKING === "1"       // 「输出思考」：聚合 reasoning 推一条
 const UPLOAD_FIRST = process.env.SCI_WRAP_UPLOAD_FIRST === "1" // 「先上传后提问」：只发文件不触发会话
@@ -184,6 +293,9 @@ function runOpencode(stdinText, extraFiles = []) {
   // 发送走 cc-connect（不进事件流、不受工具过滤影响）。
   const reason = new Map()   // partId → 最新全文
   const order = []           // partId 出现顺序
+  // 投递看门狗要的"最终答案"：正文（text）各段按出现顺序攒起来（增量事件取最新全文），
+  // 收尾时暂存到 last-reply.json —— cc-connect 投递失败时下一轮据此补发。
+  const answer = new Map(), answerOrder = []
   const sentLen = new Map()  // partId → 已推出的字符数（流式水位）
   const THINK_INTERVAL = 30_000
   let lastThink = Date.now()
@@ -263,6 +375,11 @@ function runOpencode(stdinText, extraFiles = []) {
           }
           return   // 工具进度：不给 cc-connect 看见
         }
+        if (type === "text") {
+          const id = evt?.part?.id || "t0"
+          const txt = String(evt?.part?.text ?? evt?.text ?? "")
+          if (txt) { if (!answer.has(id)) answerOrder.push(id); answer.set(id, txt) }
+        }
         // 正文开始：先把剩余未发的思考发出去，并【扣住答案】直到它发出，保证「思考 → 答案」
         if (type === "text" && !answerGated) {
           answerGated = true
@@ -310,18 +427,29 @@ function runOpencode(stdinText, extraFiles = []) {
       }
     }
     rescan(workDir, 0)
-    const toSend = fresh
+    // 候选：本轮新出现/被改写、模型没自己发过、大小合规的。
+    // 【只发主产物】中间文件（脚本/日志/契约之外的中间 md、下载的全文、抽出来的 txt…）不推手机，
+    // 只在文案里报个数——它们都在会话目录里，用户在软件端随时能看、能打包下载。
+    const cand = fresh
       .filter((f) => !modelSent.has(path.resolve(f.p).toLowerCase()))
       .filter((f) => f.size > 0 && f.size <= MAX_BYTES)
-      .filter((f) => ![".py", ".log", ".tmp"].includes(path.extname(f.p).toLowerCase()))  // 脚本/日志是过程不是交付物
-      .slice(0, MAX_SEND)
+    const byRel = new Map()
+    for (const f of cand) byRel.set(path.relative(workDir, f.p).replace(/\\/g, "/"), f.p)
+    const { mod, values } = workflowOf(workDir)
+    const { send: rels, held } = pickOutputs([...byRel.keys()], mod, values, MAX_SEND)
+    const toSend = rels.map((r) => byRel.get(r))
+    // 投递看门狗的暂存：正文 + 本轮兜底要发的文件。cc-connect 是在本进程退出【之后】才投递的，
+    // 成败此刻不可知——先存，下一轮开跑时对着 bridge.log 判断要不要补发。
+    saveLastReply(answerOrder.map((id) => answer.get(id) || "").join("\n"), toSend)
     if (!toSend.length) { setTimeout(() => process.exit(exitCode), (flushedNow || releasedAnswer) ? 1500 : 0); return }
     const sendArgs = ["send"]
-    for (const f of toSend) sendArgs.push(IMG.has(path.extname(f.p).toLowerCase()) ? "--image" : "--file", f.p)
+    // 被折下的中间文件不单发一条消息（企微 30 条/分的限速经不起），搭在这条附件上说一句就够。
+    if (held > 0) sendArgs.push("-m", `📎 本轮的交付物在下面；另有 ${held} 个中间文件留在软件的会话目录里，可在软件端查看或打包下载。`)
+    for (const f of toSend) sendArgs.push(IMG.has(path.extname(f).toLowerCase()) ? "--image" : "--file", f)
     // 排障日志走独立文件（SCI_WRAP_LOG 由 chat-bridge 注入）。【不能写 stderr】：run 结束后的
     // stderr 会被 cc-connect 当成 "unsolicited agent error" 记 ERROR，吓人且污染真实错误的检索。
     if (process.env.SCI_WRAP_LOG) {
-      try { fs.appendFileSync(process.env.SCI_WRAP_LOG, new Date().toISOString() + " 兜底补发 " + toSend.map((f) => path.basename(f.p)).join(", ") + "\n") } catch {}
+      try { fs.appendFileSync(process.env.SCI_WRAP_LOG, new Date().toISOString() + ` 兜底补发[mod=${mod || "chat"}] ` + toSend.map((f) => path.basename(f)).join(", ") + (held ? `（另折下 ${held} 个）` : "") + "\n") } catch {}
     }
     execFile(CC, sendArgs, { windowsHide: true }, () => process.exit(exitCode))
     setTimeout(() => process.exit(exitCode), 30_000)   // send 卡死也不拖着不退
@@ -341,7 +469,11 @@ function main() {
     const child = spawn(REAL_OC, args, { stdio: "inherit" })
     child.on("exit", (code, sig) => process.exit(sig ? 1 : (code ?? 1)))
     child.on("error", (e) => { console.error(e.message); process.exit(1) })
-  } else if (!UPLOAD_FIRST) {
+    return
+  }
+  // 每条来信都是补发窗口：此刻微信的会话令牌刚被这条消息刷新，上一轮丢失的投递现在必能发出。
+  resendLostReply()
+  if (!UPLOAD_FIRST) {
     runOpencode(null)   // 关了「先上传后提问」：原样透传 stdin，行为不变
   } else {
     // 开了「先上传后提问」：先读走 cc-connect 从 stdin 喂进来的 prompt 再决定跑不跑模型。

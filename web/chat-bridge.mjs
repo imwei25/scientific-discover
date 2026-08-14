@@ -22,6 +22,7 @@ import path from "node:path"
 import os from "node:os"
 import crypto from "node:crypto"
 import { spawn, execFileSync, execFile } from "node:child_process"
+import * as WF from "./workflows.mjs"
 
 const BLOCK_START = "<!-- sci-chat-bridge:start 由「聊天接入」自动注入，解绑时自动移除，请勿手工编辑 -->"
 const BLOCK_END = "<!-- sci-chat-bridge:end -->"
@@ -473,6 +474,15 @@ export function boundInfo() {
 
 // ---- 主动推送（定时任务跑完发到绑定的微信/企微对话）----
 const IMG_EXT = new Set([".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp"])
+// 会话目录里的 _workflow.json（网关写的簿子）→ 模块 + 表单值，供产物分级判主/副。
+// 不 import wf-state 只为读两个字段：那边还带着写入/记账逻辑，这里只要读。
+function workflowOf(d) {
+  try {
+    const st = JSON.parse(fs.readFileSync(path.join(d, "_workflow.json"), "utf8"))
+    if (!st || typeof st.module !== "string") return { mod: "", values: null }
+    return { mod: st.module, values: st.form && typeof st.form === "object" ? st.form : null }
+  } catch { return { mod: "", values: null } }
+}
 // 定时任务的产物在某会话目录里 → 推给"绑了这个目录的那个平台"。目录没被任何平台绑就不推。
 export async function pushToChat({ text, files, dir: workDir } = {}) {
   const s = loadState()
@@ -486,12 +496,34 @@ export async function pushToChat({ text, files, dir: workDir } = {}) {
   targets = targets.filter((p) => per[p].subscribed && per[p].lastSession)
   if (!targets.length) return { ok: false, err: "没有可推送的已连接对话（先在微信/企微里跟机器人说句话）" }
 
+  // 【只推主产物】定时任务传来的是 /api/outputs 的整张清单（含中间文件，文件夹会话里还含
+  // 用户自己原有的资料）。原来只按扩展名排掉 py/log/tmp，于是一次跑完能把十几个中间文件
+  // 轰到手机上——判据改成与界面侧栏同一份（WF.pickChatFiles），中间文件只在文案里报个数。
   const MAX_FILES = 5, MAX_BYTES = 20 * 1024 * 1024
-  const picked = (files || []).filter((f) => {
-    try { const st = fs.statSync(f); if (!(st.size > 0 && st.size <= MAX_BYTES)) return false } catch { return false }
-    return ![".py", ".log", ".tmp"].includes(path.extname(f).toLowerCase())
-  }).slice(0, MAX_FILES)
+  const sized = (files || []).filter((f) => {
+    try { const st = fs.statSync(f); return st.size > 0 && st.size <= MAX_BYTES } catch { return false }
+  })
+  const wf = workflowOf(workDir)
+  const byRel = new Map()
+  for (const f of sized) byRel.set(workDir ? path.relative(workDir, f).replace(/\\/g, "/") : path.basename(f), f)
+  const { send: rels, held } = WF.pickChatFiles([...byRel.keys()], { mod: wf.mod, values: wf.values, max: MAX_FILES })
+  const picked = rels.map((r) => byRel.get(r))
+  if (held > 0) text = (text ? text + "\n" : "") + `（另有 ${held} 个中间文件留在软件的会话目录里，可在软件端查看或打包下载）`
   if (!text && !picked.length) return { ok: false, err: "没有可推送的内容" }
+
+  // 投递看门狗的暂存（与 oc-wrap 同一份 .cc-connect\last-reply.json）：个人微信没有长连接，
+  // 定时任务到点推送时用户往往几小时没跟机器人说过话，会话令牌必然过期、推送大概率被拒——
+  // 先存下来，用户下次一说话（令牌刷新），oc-wrap 开跑前查到失败日志就补发。
+  // 【写到目标平台的绑定目录，不是 workDir】workDir 是定时任务自己的新会话目录，
+  // 而 oc-wrap 每轮的 cwd 是聊天接入的绑定目录——写错地方它永远看不到。
+  for (const p of targets) {
+    try {
+      const d = path.join(s[p].boundDir, ".cc-connect")
+      fs.mkdirSync(d, { recursive: true })
+      fs.writeFileSync(path.join(d, "last-reply.json"),
+        JSON.stringify({ at: Date.now(), text: String(text || ""), files: picked }))
+    } catch {}
+  }
 
   const sendOne = (p) => new Promise((resolve) => {
     const args = ["send", "-p", projectName(p, s[p].boundSid), "-s", per[p].lastSession]

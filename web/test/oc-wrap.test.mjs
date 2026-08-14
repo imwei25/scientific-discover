@@ -92,3 +92,43 @@ test("stageFiles：把文件剪切进会话 uploads\\、登记台账；consumePe
     try { fs.rmSync(work, { recursive: true, force: true }) } catch {}
   }
 })
+
+// ---- 投递看门狗：bridge.log 里认哪些行算"微信投递失败"（行样式取自真机日志）----
+test("deliveryFailedSince：只认 sinceMs 之后的微信失败行", async () => {
+  const { deliveryFailedSince } = await import("../chat-bridge/oc-wrap.mjs")
+  const LOG = [
+    `time=2026-08-14T20:54:51.832+08:00 level=ERROR msg="weixin: chunk send failed, message incomplete" peer=o9@im.wechat failed_chunk=1/1 error="weixin: sendMessage ret=-2 (expired context_token)"`,
+    `time=2026-08-14T20:54:52.014+08:00 level=ERROR msg="platform send failed" platform=weixin error="weixin: send chunk 1/1: ..." content_len=334`,
+    `time=2026-08-14T20:54:52.681+08:00 level=WARN msg="weixin: sendMessage ret=-2 for media, no fresh context_token" attempt=1 peer=o9@im.wechat`,
+    `time=2026-08-14T20:55:00.000+08:00 level=INFO msg="message received" platform=weixin content_len=4`,
+  ].join("\n")
+  const t0 = Date.parse("2026-08-14T20:54:00+08:00")
+  const r = deliveryFailedSince(LOG, t0)
+  assert.equal(r.text, true); assert.equal(r.media, true)
+  // sinceMs 在失败之后 → 全都是旧账，不算（防止一次失败被反复补发）
+  const r2 = deliveryFailedSince(LOG, Date.parse("2026-08-14T21:00:00+08:00"))
+  assert.equal(r2.text, false); assert.equal(r2.media, false)
+})
+
+test("deliveryFailedSince：企微失败/普通日志不触发（企微不丢，别乱补发）", async () => {
+  const { deliveryFailedSince } = await import("../chat-bridge/oc-wrap.mjs")
+  const LOG = [
+    `time=2026-08-14T20:54:52.014+08:00 level=ERROR msg="platform send failed" platform=wecom error="..." content_len=10`,
+    `time=2026-08-14T20:54:53.000+08:00 level=ERROR msg="failed to send prompt" error="opencodeSession: start: chdir ..."`,
+    `time=2026-08-14T20:54:54.000+08:00 level=WARN msg="slow agent send" elapsed=45s session=weixin:dm:o9@im.wechat content_len=74`,
+  ].join("\n")
+  const r = deliveryFailedSince(LOG, 0)
+  assert.equal(r.text, false); assert.equal(r.media, false)
+})
+
+// ---- 产物兜底补发只发主产物（用户反馈：微信把副产出也一并发过来了）----
+test("pickOutputs：与界面侧栏同一份判据，中间文件只报个数不外发", async () => {
+  const { pickOutputs } = await import("../chat-bridge/oc-wrap.mjs")
+  const { send, held } = pickOutputs(["manuscript.docx", "notes.md", "tmp.py", "pdfs/a.pdf"], "paper", null)
+  assert.deepEqual(send, ["manuscript.docx"])
+  assert.equal(held, 3)
+  // 用户刚上传的、脱敏还原表：一个都不许回发
+  assert.deepEqual(pickOutputs(["uploads/他传的.docx", "deid_mapping.csv"], "paper", null).send, [])
+  // workflows.mjs 万一加载不了 → 保守兜底：只发成品扩展名，绝不因此哑掉或反过来全发
+  assert.ok(pickOutputs(["x.py", "y.log", "z.docx"], "paper", null).send.includes("z.docx"))
+})
