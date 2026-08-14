@@ -3548,8 +3548,9 @@ const sessCostTitle = (s) => {
   const c = Number(s.credits) || 0
   return c > 0 ? `本会话累计消耗约 ${fmtCreditsFine(c)} 积分` : "本会话累计消耗 0 积分"
 }
-// 单个会话行
-function sessRow(s) {
+// 单个会话行。ctx = 这一行渲染在哪条列表里（{kind:"project"|"folder", id, name}，最近会话不传）：
+// 同一个会话可以同时列在项目和文件夹里，"删除"的语义随落点走（见 deleteSession 的超链接式删除）。
+function sessRow(s, ctx) {
   const b = document.createElement("div"); b.className = "sess" + (s.id === sessionId ? " active" : "") + (selected.has(s.id) ? " picked" : "")
   b.setAttribute("role", "button"); b.draggable = !selMode          // 选择模式下禁拖，免得勾选时误拖进项目
   const ck = document.createElement("span"); ck.className = "ck"; ck.innerHTML = ic("check"); b.appendChild(ck)
@@ -3591,7 +3592,12 @@ function sessRow(s) {
   const mk = (icon, cls, title, fn) => { const a = document.createElement("span"); a.className = "sess-act" + (cls ? " " + cls : ""); a.title = title; a.innerHTML = ic(icon); a.addEventListener("click", (e) => { e.stopPropagation(); fn() }); return a }
   acts.appendChild(mk("edit", "", "重命名", () => renameSession(s.id, s.title, t)))
   acts.appendChild(mk("feedback", "", "把这次会话反馈给管理员", () => openFeedback(s.id, s.title)))
-  acts.appendChild(mk("trash", "del", "删除会话", () => deleteSession(s.id, s.title)))
+  // 同时挂着项目和文件夹的会话，在其中一处点删除只解除这一处的归属（另一处原样保留）——
+  // 图标提示要跟着语义变，别让用户以为点下去整条会话就没了。
+  const unlink = ctx && s.projectId && s.folderId && (ctx.kind === "project" || ctx.kind === "folder")
+  acts.appendChild(mk("trash", "del",
+    unlink ? (ctx.kind === "project" ? "从项目移除（会话保留，文件夹里还在）" : "移出文件夹分组（会话保留，项目里还在）") : "删除会话",
+    () => deleteSession(s.id, s.title, ctx)))
   b.appendChild(acts)
   return b
 }
@@ -3707,7 +3713,7 @@ function renderSessions(data) {
         { icon: "trash", title: "删除项目（会话不删，变回普通会话）", danger: true, fn: () => deleteProject(p.id, p.name) },
       ] })
       const b = document.createElement("div"); b.className = "pgbody"
-      for (const s of list) b.appendChild(sessRow(s))
+      for (const s of list) b.appendChild(sessRow(s, { kind: "project", id: p.id, name: p.name }))
       h.addEventListener("click", () => { group.classList.toggle("collapsed"); collapsedProjects.has(p.id) ? collapsedProjects.delete(p.id) : collapsedProjects.add(p.id); saveCollapsed() })
       makeSortableList(b, "p:" + p.id, { kind: "project", id: p.id })
       makeGroupDrop(group, h, "p:" + p.id, { kind: "project", id: p.id })   // 组头始终接收；收起时整组接收
@@ -3729,7 +3735,7 @@ function renderSessions(data) {
         { icon: "x", title: "不再按这个目录分组（会话和目录里的文件都不动）", fn: () => forgetFolder(f.id, f.name) },
       ] })
       const b = document.createElement("div"); b.className = "pgbody"
-      for (const s of list) b.appendChild(sessRow(s))
+      for (const s of list) b.appendChild(sessRow(s, { kind: "folder", id: f.id, name: f.name }))
       h.addEventListener("click", () => { group.classList.toggle("collapsed"); collapsedFolders.has(f.id) ? collapsedFolders.delete(f.id) : collapsedFolders.add(f.id); saveCollapsedF() })
       // 文件夹组【只能内部排序，不接受从别处拖进来】：会话的工作目录是建会话时定死的
       //（opencode 的 session.directory 建后不可改），拖一下就换目录是做不到的事，
@@ -4132,9 +4138,13 @@ async function deleteSelected() {
   //   在这个框里却是一串方块，用户没法把框里的名字对回列表里的那一条。
   const one = (s) => sessTitle(s).replace(/\s+/g, " ").slice(0, 24)
   const names = (META_STATE.sessions || []).filter((s) => selected.has(s.id)).map(one)
+  // 挑了工作目录的会话产物在【用户自己的目录】里，一个字节都不会删——单删的弹窗早已区分，
+  // 批删照抄"产物都会被删除"会把人吓住，这里补一句。
+  const nFold = (META_STATE.sessions || []).filter((s) => selected.has(s.id) && s.folderId).length
   if (!confirm("删除选中的 " + ids.length + " 个会话？\n" + names.slice(0, 5).join("、")
     + (names.length > 5 ? ` 等 ${names.length} 个` : "") +
-    "\n\n对话记录、生成的产物文件、以及你上传到这些会话的原始文件都会被删除，无法恢复。")) return
+    "\n\n对话记录、生成的产物文件、以及你上传到这些会话的原始文件都会被删除，无法恢复。"
+    + (nFold ? `\n（其中 ${nFold} 个挑了工作目录的会话：工作目录里的文件不会被动。）` : ""))) return
   const hadCurrent = !!sessionId && selected.has(sessionId)
   selDelBtn.disabled = true; selAllBtn.disabled = true
   const queue = ids.slice()
@@ -4283,12 +4293,31 @@ function clearCurrentSession() {
   log.innerHTML = ""; wfResetGroups(); FILE_KIND.clear(); renderFiles([]); renderUploads([]); renderWelcome(); zScopeReset(); loadZotLib()
   stepsHost = null; stepsHostEl.replaceChildren()  // 步骤条在 #log 之外，清 log 不会连带清它
 }
-async function deleteSession(id, title) {           // 删除会话（不可撤销，先确认；进行中的生成由后端一并终止）
+async function deleteSession(id, title, ctx) {      // 删除会话（不可撤销，先确认；进行中的生成由后端一并终止）
+  const s = (META_STATE.sessions || []).find((x) => x.id === id)
+  const t24 = String(title || id).replace(/\s+/g, " ").slice(0, 24)
+  // 超链接式删除：会话同时挂着项目和文件夹时，在其中一处点删除只解除【这一处】的归属，
+  // 会话本体、对话记录、文件全都不动——另一处照常列它；两处都删过，最后一次才走下面的硬删。
+  // 只挂一处（或没挂）的会话没有"另一份"可保，照旧直接硬删。
+  if (s && ctx && s.projectId && s.folderId && (ctx.kind === "project" || ctx.kind === "folder")) {
+    const other = ctx.kind === "project"
+      ? "文件夹「" + ((META_STATE.folders || []).find((x) => x.id === s.folderId)?.name || "") + "」"
+      : "项目「" + ((META_STATE.projects || []).find((x) => x.id === s.projectId)?.name || "") + "」"
+    if (!confirm((ctx.kind === "project" ? "把「" + t24 + "」从这个项目里移除？" : "把「" + t24 + "」移出这个文件夹分组？")
+      + "\n\n只解除这一处的归属，会话和文件都不删——它仍在" + other + "里。\n（在那边也删除后，会话才会被真正清掉。）")) return
+    const url = ctx.kind === "project"
+      ? "api/session/project?id=" + encodeURIComponent(id) + "&projectId=none"
+      : "api/session/folder?id=" + encodeURIComponent(id) + "&folderId=none"
+    const okd = await fetch(url, { method: "POST" }).then((r) => r.ok).catch(() => false)
+    // 移出文件夹走的是新端点：老网关（.mjs 只随安装包走，界面包可单独热更新）没有它，404 要说人话
+    if (!okd) addNote("⚠ 移出没有成功" + (ctx.kind === "folder" ? "（服务端版本较旧的话，需要更新安装包才支持单独移出文件夹分组）" : "，请重试"))
+    loadSessions()
+    return
+  }
   // 说全三样：对话、产物、上传的原始文件。原来只说"此操作不可撤销"，既不提产物也不提上传 ——
   // 而上传的往往就是那份从科室机器拷来的原始病例表。
   // 挑了工作目录的会话要换一套说法：产物就落在【用户自己的目录】里，我们一个字节都不会删。
   // 照抄那句"生成的产物文件会被删除"会把人吓住 —— 他会以为删个会话把整个课题文件夹端了。
-  const s = (META_STATE.sessions || []).find((x) => x.id === id)
   const fd = s && s.folderId && (META_STATE.folders || []).find((x) => x.id === s.folderId)
   if (!confirm("删除会话「" + String(title || id).replace(/\s+/g, " ").slice(0, 24) + "」？\n\n"
     + (fd

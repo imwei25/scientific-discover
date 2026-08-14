@@ -514,6 +514,19 @@ const normDir = (p) => { const r = path.resolve(p); return process.platform === 
 const folderByPath = (p) => { const k = normDir(p); return META.folders.find((f) => normDir(f.path) === k) || null }
 // 目录的显示名：末段目录名；根目录（C:\ 或 /）没有末段，就用整条路径。
 const dirLabel = (p) => path.basename(p) || p.replace(/[\\/]+$/, "") || p
+// 某个目录在不在网关自己的产物根（outputs/）之内。删除会话时只许 rm 我们自己造的目录，
+// 这个判据必须落在【路径本身】上：folderId 只是软标记，有两条已知的绕过路径——
+//   ① 「不再按这个目录分组」（/api/folder/forget）会把组内会话的 folderId 清掉，会话的
+//      工作目录却还是用户自己的目录；② 聊天桥接（cc-connect）在绑定目录里另起的会话
+//      压根没写过网关元数据。两条路上只看 folderId 都会把 rmSync 对准用户的真实目录。
+// rel === "" 即 outputs 根本身（sessionOut 对非法 sid 的回落值）——同样不许删。
+const insideOutputs = (p) => {
+  try {
+    const fold = (x) => (process.platform === "win32" ? path.resolve(x).toLowerCase() : path.resolve(x))
+    const rel = path.relative(fold(OUTPUTS), fold(p))
+    return !!rel && !rel.startsWith("..") && !path.isAbsolute(rel)
+  } catch { return false }
+}
 // 彻底删除一个会话：终止在跑的轮 → 删 opencode 会话 → 删产物/上传目录 → 清元数据
 async function hardDeleteSession(id) {
   try { await jobs.get(id)?.abort() } catch {}   // 会话还在生成中 → 先终止再删
@@ -534,9 +547,11 @@ async function hardDeleteSession(id) {
   const resolved = dirCache.has(safeSid(id))
   // ★★ 文件夹会话：产物目录【就是用户自己电脑上的目录】（可能是 D:\论文，甚至是他的文档根目录）。
   //    对它 rmSync(recursive) 等于"删一个会话把用户整个项目文件夹连锅端了"—— 这是本功能唯一的
-  //    灾难性失误可能，所以判据放在删除之前、独立于 resolved：只要这个会话挂着 folderId，
-  //    产物侧一个字节都不许动，只删本会话自己的 uploads。
-  const keepOut = !!folderOf(id)
+  //    灾难性失误可能，所以判据放在删除之前、独立于 resolved。三个信号任取其一就保：
+  //    folderId（正挂着文件夹）、m.dir（建会话时记下的用户目录，「忘掉文件夹」之后只剩它）、
+  //    解析出的目录不在 outputs/ 根之内（兜住元数据整个缺失的会话，如聊天桥接另起的）。
+  //    只要命中，产物侧一个字节都不许动，只删本会话自己的 uploads。
+  const keepOut = !!folderOf(id) || !!META.sessions[id]?.dir || (resolved && !insideOutputs(delOut))
   let ocOk = true
   try { await client.session.delete({ path: { id } }) } catch (e) { ocOk = false; console.warn(`[session] 删除 ${id} 失败：${e.message}`) }
   let dirOk = true
@@ -3674,6 +3689,21 @@ export const server = http.createServer(async (req, res) => {
       if (!pid || pid === "none") delete m.projectId
       else { if (!META.projects.some((p) => p.id === pid)) return send(res, 404, "application/json", JSON.stringify({ ok: false, err: "no such project" })); m.projectId = pid }
       saveMeta()
+      return send(res, 200, "application/json", JSON.stringify({ ok: true }))
+    }
+
+    // 会话移出文件夹分组（超链接式删除的文件夹半边）：只支持 folderId=none/空。
+    // 不支持"挂进另一个文件夹"——opencode 的 directory 建后不可改，换分组不等于换目录，
+    // 假装接受只会造出"分在 A 组、文件却写进 B 目录"的会话。
+    // 只清 folderId、【绝不动 m.dir】：dir 是「忘掉文件夹之后还能把会话找回来」的唯一线索，
+    // 也是删会话时保护用户目录的判据之一（见 hardDeleteSession 的 keepOut）。
+    if (req.method === "POST" && u.pathname === "/api/session/folder") {
+      const id = u.searchParams.get("id") || ""
+      const fid = u.searchParams.get("folderId") || ""
+      if (!id) return send(res, 400, "application/json", JSON.stringify({ ok: false }))
+      if (fid && fid !== "none") return send(res, 400, "application/json", JSON.stringify({ ok: false, err: "工作目录在建会话时定死，只能移出分组，不能改挂到别的文件夹" }))
+      const m = META.sessions[id]
+      if (m) { delete m.folderId; saveMeta() }
       return send(res, 200, "application/json", JSON.stringify({ ok: true }))
     }
 

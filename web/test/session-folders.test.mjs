@@ -158,6 +158,66 @@ test("删除文件夹会话：用户目录里的文件一个都不能少（本�
   assert.ok(fs.existsSync(mine), "★ 目录本身也得在")
 })
 
+// 【Bug 回归】「不再按这个目录分组」会把组内会话的 folderId 清掉，而删会话时保护用户目录的
+// 判据若只看 folderId，这条链就是灾难：forget → delete → rmSync 把用户的真实目录连锅端。
+// 判据必须落在路径本身（delOut 在不在我们的 outputs/ 根之内），folderId 只是软标记。
+test("忘掉文件夹之后再删会话：用户目录仍然一个文件都不能少", async (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "fold-"))
+  const mine = path.join(dir, "毕业课题")
+  fs.mkdirSync(mine, { recursive: true })
+  fs.writeFileSync(path.join(mine, "稿子.docx"), "三年的心血")
+  const oc = await fakeOpencode(path.join(dir, "out"))
+  const gw = await gateway(oc.url, dir)
+  t.after(async () => { await gw.close(); await oc.close(); try { fs.rmSync(dir, { recursive: true, force: true }) } catch {} })
+
+  const fid = (await gw.post("/api/folder/create?path=" + encodeURIComponent(mine))).json.folder.id
+  const sid = await gw.newSession(fid)
+  assert.equal((await gw.post("/api/folder/forget?id=" + fid)).json.ok, true)
+
+  const del = await gw.post("/api/session/delete?id=" + sid)
+  assert.equal(del.json.ok, true, "删除本身要成功")
+  assert.ok(fs.existsSync(path.join(mine, "稿子.docx")), "★ forget 清掉 folderId 之后，用户的文件也绝不能被删")
+  assert.ok(fs.existsSync(mine), "★ 目录本身也得在")
+})
+
+// 【超链接式删除的服务端半边】同一个会话同时挂项目和文件夹时，"删除"应是逐条解除归属：
+// 移出项目（已有 /api/session/project?projectId=none）、移出文件夹分组（/api/session/folder，
+// 只许清不许改——opencode 的 directory 建后不可改，"挂进另一个文件夹"是做不到的事）。
+test("会话同时在项目和文件夹：移出只删链接不动会话，folderId 只能清不能改", async (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "fold-"))
+  const mine = path.join(dir, "数据目录")
+  fs.mkdirSync(mine, { recursive: true })
+  fs.writeFileSync(path.join(mine, "数据.csv"), "x")
+  const oc = await fakeOpencode(path.join(dir, "out"))
+  const gw = await gateway(oc.url, dir)
+  t.after(async () => { await gw.close(); await oc.close(); try { fs.rmSync(dir, { recursive: true, force: true }) } catch {} })
+
+  const fid = (await gw.post("/api/folder/create?path=" + encodeURIComponent(mine))).json.folder.id
+  const sid = await gw.newSession(fid)
+  const pid = (await gw.post("/api/project/create?name=P")).json.project.id
+  assert.equal((await gw.post(`/api/session/project?id=${sid}&projectId=${pid}`)).json.ok, true)
+
+  let s = (await gw.get("/api/sessions")).json.sessions.find((x) => x.id === sid)
+  assert.equal(s.projectId, pid); assert.equal(s.folderId, fid, "两个归属该同时成立")
+
+  // 改挂到别的文件夹：目录建后不可改，必须拒绝
+  assert.equal((await gw.post(`/api/session/folder?id=${sid}&folderId=f_xxx`)).status, 400)
+
+  // 移出文件夹分组：只删这条链接，会话、项目归属、目录里的文件全都不动
+  assert.equal((await gw.post(`/api/session/folder?id=${sid}&folderId=none`)).json.ok, true)
+  s = (await gw.get("/api/sessions")).json.sessions.find((x) => x.id === sid)
+  assert.ok(s, "会话还在")
+  assert.equal(s.folderId, null, "文件夹链接解除了")
+  assert.equal(s.projectId, pid, "项目链接不受影响")
+  assert.ok(fs.existsSync(path.join(mine, "数据.csv")), "目录里的文件不动")
+
+  // 最后一条归属也没了之后真删：会话消失，但用户目录仍受路径判据保护
+  assert.equal((await gw.post(`/api/session/project?id=${sid}&projectId=none`)).json.ok, true)
+  assert.equal((await gw.post("/api/session/delete?id=" + sid)).json.ok, true)
+  assert.ok(!(await gw.get("/api/sessions")).json.sessions.some((x) => x.id === sid), "这回才是真删")
+  assert.ok(fs.existsSync(path.join(mine, "数据.csv")), "★ 真删也只删我们自己的东西，用户目录不动")
+})
+
 test("没挑目录的会话照旧：产物目录是网关自己造的，删会话时连目录一起删", async (t) => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "fold-"))
   const oc = await fakeOpencode(path.join(dir, "out"))
