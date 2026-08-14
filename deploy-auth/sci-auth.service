@@ -1,0 +1,42 @@
+[Unit]
+Description=sci-auth（鉴权 + LLM 网关 + 运营后台）
+# 文档：docs/部署-鉴权网关.md
+# （不写 Documentation=file://… ：路径含中文，systemd 会判为 Invalid URL 并每次启动都告警）
+After=network-online.target
+Wants=network-online.target
+# StartLimit* 属于 [Unit]，写在 [Service] 里会被 systemd 忽略（并打 Unknown key 告警），
+# 崩溃循环保护就等于没配。
+StartLimitIntervalSec=60
+StartLimitBurst=10
+
+[Service]
+Type=simple
+WorkingDirectory=/root/sci-agent
+# 所有机密都在这个文件里（chmod 600），不要写进本单元的 Environment=
+# —— 单元文件会被 systemctl cat 打印出来，机密进去就等于公开。
+EnvironmentFile=/etc/sci-auth.env
+ExecStart=/usr/bin/node --no-warnings /root/sci-agent/server/sci-auth.mjs
+Restart=always
+RestartSec=3s
+
+# ---- 加固：这个进程只需要读代码、读写 /var/lib/sci-auth ----
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/var/lib/sci-auth
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+RestrictRealtime=yes
+LockPersonality=yes
+# 只需要 IPv4/IPv6 socket
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=sci-auth
+
+[Install]
+WantedBy=multi-user.target

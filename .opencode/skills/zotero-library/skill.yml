@@ -1,0 +1,56 @@
+schema_version: 2
+name: zotero-library
+layer: A
+owner_domain: literature_discovery
+maturity: beta
+when_to_use:
+  - User wants to use their own local Zotero library / saved PDFs as the evidence source
+  - Answering a question grounded in the user's local full-text papers ("ask my papers")
+  - Importing a Zotero collection into the working reference pool as unified References
+when_NOT_to_use:
+  - Searching public literature databases (use search-lit / literature-review)
+  - Verifying citations already in a manuscript (use reference-check)
+  - Central multi-user server deployment where the server cannot reach each user's local Zotero (needs a browser-side path, out of scope here)
+inputs:
+  - zotero_collection_key_or_item_keys
+  - optional_question_for_fulltext_retrieval
+outputs:
+  - outputs/zotero_refs.csv         # imported collection as unified References
+  - outputs/zotero_evidence.md      # ranked full-text passages with page-level citations
+  - outputs/zotero_evidence.csv
+deterministic_scripts:
+  - references/zotero_read.py        # probe / collections / items / attachments / fulltext (stdlib, read-only)
+  - references/zotero_rag.py         # PaperQA2-lite: chunk + TF-IDF rank full text into cited evidence
+side_effects:
+  - reads_local_zotero_http_api_127_0_0_1_23119
+  - reads_local_pdf_files_from_zotero_storage
+  - copies_pdfs_into_a_session_library_dir_on_materialize
+  - writes_back_to_zotero_via_connector_saveItems_only_on_explicit_push
+downstream_consumers:
+  - literature-review   # can synthesize using the local evidence table
+  - write-paper         # can cite the user's local library
+  - reference-check     # verifies any references before submission
+forbidden_actions:
+  - auto_push_to_zotero_without_explicit_user_request   # push 是唯一写操作，只在用户明确要导出时才跑
+  - fabricate_library_contents_when_zotero_is_unreachable
+  - claim_llm_reranking_when_only_retrieval_is_done   # embed 是稠密召回，非 PaperQA2 的 RCS 精排
+
+# v2.1 quality card
+purpose: "Ground answers in the user's own local Zotero library — read collections/items and rank PDF full text into page-cited evidence (PaperQA2-lite), read-only."
+safety_boundaries:
+  - "Read-only: never pushes to or edits the user's Zotero library."
+  - "Local-only: all requests hit 127.0.0.1:23119; user library data never leaves the machine."
+  - "If Zotero is unreachable, reports it honestly and never fabricates library contents."
+known_limitations:
+  - "Requires the skill to run on the same machine as Zotero (local/desktop deployment); a central server cannot reach users' local Zotero."
+  - "Retrieval backends: tfidf (default, zero-dep, offline, weak cross-lingual) and embed (local BCE bilingual dense embedding via ModelScope, cross Chinese-English, no remote endpoint). Optional --rerank adds a local BCE cross-encoder rerank stage (two-stage retrieve-then-rerank). Rerank is a discriminative cross-encoder, NOT a generative LLM and NOT PaperQA2 RCS."
+  - "Scanned image-only PDFs without a text layer yield no full text unless Zotero has an OCR index."
+optional_dependencies:
+  - "embed backend: modelscope + sentence-transformers (torch CPU) + model maidalun/bce-embedding-base_v1 (~1.1GB, cached in ~/.cache/modelscope). tfidf backend needs none of these."
+  - "--rerank: model maidalun/bce-reranker-base_v1 (~1.1GB, ModelScope). Local cross-encoder; no remote endpoint, no generative model."
+validation_commands:
+  - "python references/zotero_read.py probe"
+  - "python references/zotero_rag.py --question test --pdf-dir <dir-with-pdfs> --top-k 3            # tfidf"
+  - "python references/zotero_rag.py --backend embed --question 测试 --pdf-dir <dir> --top-k 3      # local BCE embedding"
+  - "python references/zotero_rag.py --backend embed --rerank --question 测试 --pdf-dir <dir>       # + local cross-encoder rerank"
+evidence_surface: bundled_script

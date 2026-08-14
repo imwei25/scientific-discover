@@ -1,0 +1,339 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>研究工作台 · Niuma Science</title>
+<meta name="theme-color" content="#010101" />
+<!-- 字体与 login.html 同源（断网时回退系统字体，页面照常可用） -->
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@300;400;500&display=swap" rel="stylesheet" />
+<link rel="stylesheet" href="https://db.onlinewebfonts.com/c/2bf40ab72ea4897a3fd9b6e48b233a19?family=Garamond" />
+<style>
+  :root {
+    --sans: 'Geist', -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei", sans-serif;
+    --serif: 'Garamond', 'Times New Roman', serif;
+    /* 单一克制强调色，仅用于焦点环 / hover，其余保持与登录页一致的纯白单色 */
+    --accent: #6ea8fe;
+    --accent-soft: rgba(110,168,254,.16);
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body {
+    background: #010101; color: #fff; min-height: 100vh; overflow-x: hidden;
+    font-family: var(--sans); -webkit-font-smoothing: antialiased; text-rendering: optimizeLegibility;
+  }
+
+  /* ---- 背景：与登录页同款视频 + 径向压暗 ---- */
+  .stage { position: fixed; inset: 0; overflow: hidden; background: #010101; z-index: 0; }
+  .stage video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; object-position: center; }
+  .stage .veil { position: absolute; inset: 0;
+    background:
+      radial-gradient(ellipse 90% 70% at 50% 0%, rgba(1,1,1,.15) 0%, rgba(1,1,1,.6) 100%),
+      linear-gradient(180deg, rgba(1,1,1,.55) 0%, rgba(1,1,1,.78) 60%, rgba(1,1,1,.92) 100%);
+  }
+  .wrap { position: relative; z-index: 10; display: flex; flex-direction: column; min-height: 100vh; }
+
+  /* ---- 顶栏：品牌 + 账户。原来那排 Research/Database/Skills/About 是死链，已删 ---- */
+  nav { display: flex; align-items: center; justify-content: space-between; padding: 28px 40px; z-index: 20; gap: 16px; }
+  .brand { font-weight: 300; font-size: 12px; letter-spacing: .3em; text-transform: uppercase; color: #fff; white-space: nowrap; }
+
+  /* 账户胶囊 */
+  .account { display: flex; align-items: center; gap: 10px; padding: 6px 8px 6px 14px; border-radius: 999px;
+    background: rgba(4,7,10,.6); backdrop-filter: blur(16px) saturate(1.2); -webkit-backdrop-filter: blur(16px) saturate(1.2);
+    border: 1px solid rgba(255,255,255,.1); }
+  .account .who { display: flex; flex-direction: column; line-height: 1.25; text-align: right; }
+  .account .who b { font-weight: 400; font-size: 12px; letter-spacing: .02em; }
+  .account .who span { font-size: 9.5px; letter-spacing: .14em; text-transform: uppercase; color: rgba(255,255,255,.45); }
+  .account .ava { width: 30px; height: 30px; border-radius: 50%; display: grid; place-items: center;
+    background: rgba(255,255,255,.08); border: 1px solid rgba(255,255,255,.16); font-size: 12px; }
+  .account .signout { background: none; border: none; color: rgba(255,255,255,.5); cursor: pointer; font-family: var(--sans);
+    font-size: 10px; letter-spacing: .12em; text-transform: uppercase; padding: 0 6px; transition: color .2s; }
+  .account .signout:hover { color: #fff; }
+
+  /* ---- 主体 ---- */
+  main { flex: 1; width: 100%; max-width: 1180px; margin: 0 auto; padding: 24px 40px 72px; }
+
+  .eyebrow { font-weight: 300; font-size: 11px; letter-spacing: .34em; text-transform: uppercase; color: rgba(255,255,255,.55); margin: 0 0 14px; }
+  .headline { font-family: var(--serif); font-weight: 400; font-size: clamp(34px, 5.4vw, 60px); line-height: 1.05; letter-spacing: -.01em; margin: 0; }
+  .subhead { margin: 16px 0 0; font-weight: 300; font-size: 15px; color: rgba(255,255,255,.58); line-height: 1.7; max-width: 620px; }
+
+  /* ---- 分区（工作台 / 核心能力）---- */
+  .section { margin-top: 64px; }
+  .section:first-of-type { margin-top: 44px; }
+  .sec-head { display: flex; align-items: baseline; gap: 14px; margin: 0 0 22px; }
+  .sec-head .t { font-weight: 500; font-size: clamp(20px, 2.6vw, 28px); letter-spacing: .02em; }
+  .sec-head .e { font-size: 10px; letter-spacing: .26em; text-transform: uppercase; color: rgba(255,255,255,.4); white-space: nowrap; }
+  .sec-head .ln { flex: 1; height: 1px; align-self: center;
+    background: linear-gradient(90deg, rgba(255,255,255,.16), transparent); }
+
+  /* ---- 模块网格 ---- */
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(255px, 1fr)); gap: 18px; }
+
+  .card { position: relative; display: flex; flex-direction: column; gap: 14px; padding: 26px 24px 22px;
+    border-radius: 18px; background: rgba(255,255,255,.04); border: 1px solid rgba(255,255,255,.08);
+    backdrop-filter: blur(14px) saturate(1.15); -webkit-backdrop-filter: blur(14px) saturate(1.15);
+    box-shadow: 0 2px 18px rgba(0,0,0,.32); cursor: pointer; overflow: hidden;
+    opacity: 0; transform: translateY(18px); animation: rise .7s cubic-bezier(.2,.7,.2,1) forwards;
+    transition: border-color .25s ease, background .25s ease, transform .25s ease, box-shadow .25s ease; }
+  .card::before { content: ""; position: absolute; inset: 0; border-radius: inherit; pointer-events: none;
+    background: radial-gradient(120% 80% at 50% -10%, var(--accent-soft), transparent 60%); opacity: 0; transition: opacity .3s ease; }
+  .card:hover { border-color: rgba(255,255,255,.18); background: rgba(255,255,255,.055);
+    transform: translateY(-4px); box-shadow: 0 18px 40px rgba(0,0,0,.45); }
+  .card:hover::before { opacity: 1; }
+  .card:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+
+  .card .ic { width: 46px; height: 46px; border-radius: 12px; display: grid; place-items: center;
+    background: rgba(255,255,255,.06); border: 1px solid rgba(255,255,255,.12); color: #fff; }
+  .card .ic svg { width: 24px; height: 24px; stroke: currentColor; stroke-width: 1.5; fill: none; stroke-linecap: round; stroke-linejoin: round; }
+  .card .tt { display: flex; flex-direction: column; gap: 4px; }
+  .card .tt b { font-weight: 500; font-size: 17px; letter-spacing: .02em; }
+  .card .tt span { font-size: 10px; letter-spacing: .2em; text-transform: uppercase; color: rgba(255,255,255,.42); }
+  .card .ds { font-weight: 300; font-size: 13px; line-height: 1.7; color: rgba(255,255,255,.56); margin: 2px 0 4px; flex: 1; }
+  .card .enter { align-self: flex-start; display: inline-flex; align-items: center; gap: 7px; margin-top: 4px;
+    font-size: 11px; letter-spacing: .16em; text-transform: uppercase; color: rgba(255,255,255,.72);
+    padding: 9px 16px; border-radius: 999px; border: 1px solid rgba(255,255,255,.14);
+    background: rgba(4,7,10,.5); transition: all .22s ease; }
+  .card:hover .enter { color: #fff; border-color: rgba(255,255,255,.28); background: rgba(4,7,10,.8); }
+  .card .enter svg { width: 14px; height: 14px; stroke: currentColor; stroke-width: 1.6; fill: none; }
+
+  @keyframes rise { to { opacity: 1; transform: none; } }
+
+  /* 清单取不到时的兜底：说清楚发生了什么，并给一条能走的路（直接进对话），别只留一片空白 */
+  .fallback { margin-top: 44px; border: 1px solid rgba(255,255,255,.12); border-radius: 16px; padding: 22px 24px;
+    background: rgba(255,255,255,.03); color: rgba(255,255,255,.62); font-size: 13.5px; line-height: 1.8; }
+  .fallback a { color: #fff; }
+
+  footer { text-align: center; padding: 28px 20px 40px; font-size: 10px; letter-spacing: .22em; text-transform: uppercase; color: rgba(255,255,255,.28); }
+
+  @media (max-width: 767px) {
+    nav { padding: 22px 24px; }
+    .account .who { display: none; }
+    main { padding: 20px 24px 60px; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .card { animation: none; opacity: 1; transform: none; }
+    * { transition: none !important; }
+  }
+</style>
+</head>
+<body>
+  <div class="stage">
+    <video autoplay muted loop playsinline
+      src="https://oss-crm-test-tellgen.oss-cn-shanghai.aliyuncs.com/videos/hf_20260619_191346_9d19d66e-86a4-47f7-8dc6-712c1788c3b2_1783489695679.mp4"></video>
+    <div class="veil"></div>
+  </div>
+
+  <div class="wrap">
+    <nav>
+      <span class="brand">Niuma Science</span>
+      <!-- 剩余积分挂在档位那一行：这是登录后的第一屏，用户第一眼就该知道自己还剩多少，
+           不用先进对话页看顶栏。不限额或拉不到时什么都不加（宁可不显示，也别显示个假数）。 -->
+      <div class="account" title="账户">
+        <div class="who"><b id="accName">…</b><span id="accRole">已登录</span></div>
+        <div class="ava" id="accAva">·</div>
+        <button class="signout" id="signout" type="button">退出</button>
+      </div>
+    </nav>
+
+    <main>
+      <p class="eyebrow">Niuma Science · Workspace</p>
+      <h1 class="headline">Your Research Workspace</h1>
+      <p class="subhead">一站式医学科研赋能，贯穿科研全链条，助力课题攻坚克难，赋能学术成果落地。<br>选择下方研究工具，开启专属工作流；如需灵活交流，可选择自由对话模式。</p>
+
+      <!-- 两栏都由 /api/modules 下发的 group 字段填充；某一栏没有已开通模块时整栏隐藏（见 render） -->
+      <section class="section" id="secWorkbench" hidden>
+        <div class="sec-head"><span class="t">工作台</span><span class="e">Research Tools</span><span class="ln"></span></div>
+        <div class="grid" id="gridWorkbench"></div>
+      </section>
+
+      <section class="section" id="secSkills" hidden>
+        <div class="sec-head"><span class="t">核心能力</span><span class="e">Skills</span><span class="ln"></span></div>
+        <div class="grid" id="gridSkills"></div>
+      </section>
+
+      <div id="fallbackSlot"></div>
+    </main>
+
+    <footer>© Niuma Science · AI-Powered Medical Research Platform</footer>
+  </div>
+
+<script>
+  /* 图标（细描边线性，与登录页极简语言一致） */
+  const ICON = {
+    review: '<svg viewBox="0 0 24 24"><path d="M5 3h11l3 3v15H5z"/><path d="M14 3v5h5"/><path d="M9 12l2 2 4-4"/></svg>',
+    grant:  '<svg viewBox="0 0 24 24"><path d="M6 3h9l4 4v14H6z"/><path d="M14 3v5h5"/><path d="M9 13h7M9 17h5"/><path d="M9 9h2"/></svg>',
+    paper:  '<svg viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="16" rx="2"/><path d="M8 9h8M8 13h8M8 17h5"/></svg>',
+    chat:   '<svg viewBox="0 0 24 24"><path d="M4 5h16v11H9l-5 4z"/><path d="M8 10h8M8 13h5"/></svg>',
+    lit:    '<svg viewBox="0 0 24 24"><path d="M4 5a2 2 0 0 1 2-2h6v18H6a2 2 0 0 1-2-2z"/><path d="M20 5a2 2 0 0 0-2-2h-6v18h6a2 2 0 0 0 2-2z"/></svg>',
+    proof:  '<svg viewBox="0 0 24 24"><rect x="5" y="3" width="14" height="18" rx="2"/><path d="M9 8l2 2 4-4M9 14h6"/></svg>',
+    refine: '<svg viewBox="0 0 24 24"><path d="M4 20l4-1 11-11-3-3L5 16z"/><path d="M14 6l3 3"/></svg>',
+    stat:   '<svg viewBox="0 0 24 24"><path d="M4 20V12M9 20V6M14 20V14M19 20V8"/><path d="M3 20h18"/></svg>',
+    /* 科研作图：画框 + 山影 + 一轮日 —— 与 stat 的柱状图刻意拉开距离，两张卡都叫"图"，
+       图标再撞就真分不出哪张是统计图、哪张是示意图了 */
+    figure: '<svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="8.5" cy="9.5" r="1.5"/><path d="M21 16l-5-5-4 4-2-2-5 5"/></svg>',
+    dot:    '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/></svg>'
+  };
+  const ARROW = '<svg viewBox="0 0 24 24"><path d="M5 12h14M13 6l6 6-6 6"/></svg>';
+
+  /* 【模块名称、简述与分组由服务端 /api/modules 下发】= web/server.mjs 的 MODULE_DEFS，与会话闸、
+     每用户授权同一份定义。这里只补两样纯展示的东西：图标与英文小标题，按模块 id 取；
+     服务端将来加了新模块，这里没配也不会漏掉它（回落到圆点图标、不显示英文行）。 */
+  const LOOK = {
+    review:   { ic: "review", en: "Literature Review" },
+    grant:    { ic: "grant",  en: "Grant Proposal" },
+    paper:    { ic: "paper",  en: "SCI Paper" },
+    chat:     { ic: "chat",   en: "Free Chat" },
+    litread:  { ic: "lit",    en: "Close Reading" },
+    refcheck: { ic: "proof",  en: "Manuscript Check" },
+    humanize: { ic: "refine", en: "Language Polishing" },
+    stats:    { ic: "stat",   en: "Statistic & Analysis" },
+    figure:   { ic: "figure", en: "Scientific Illustration" },
+  };
+
+  const esc = (s) => String(s == null ? "" : s).replace(/[&<>"']/g, (c) =>
+    ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+
+  function card(m, i) {
+    const look = LOOK[m.id] || { ic: "dot", en: "" };
+    const el = document.createElement("div");
+    el.className = "card";
+    el.style.animationDelay = (0.06 * Math.min(i, 8) + 0.1) + "s";   // 卡片多时后排别等太久才浮现
+    el.tabIndex = 0;
+    el.setAttribute("role", "button");
+    el.setAttribute("aria-label", m.name);
+    el.innerHTML =
+      '<div class="ic">' + ICON[look.ic] + "</div>" +
+      '<div class="tt"><b>' + esc(m.name) + "</b>" + (look.en ? "<span>" + esc(look.en) + "</span>" : "") + "</div>" +
+      '<div class="ds">' + esc(m.desc || "") + "</div>" +
+      '<span class="enter">进入' + ARROW + "</span>";
+    el.addEventListener("click", () => enter(m));
+    el.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); enter(m); } });
+    return el;
+  }
+
+  /* 分两栏铺卡：group 由服务端下发（workbench / skills），没给或给了没见过的值就归到「核心能力」，
+     这样将来服务端加模块，界面上不会有卡片凭空消失。整栏没卡片时把区块连标题一起隐藏。 */
+  function render(list) {
+    const bins = { workbench: [], skills: [] };
+    list.forEach((m) => bins[m.group === "workbench" ? "workbench" : "skills"].push(m));
+    for (const [key, cap] of [["workbench", "Workbench"], ["skills", "Skills"]]) {
+      const grid = document.getElementById("grid" + cap);
+      grid.innerHTML = "";
+      bins[key].forEach((m, i) => grid.appendChild(card(m, i)));
+      document.getElementById("sec" + cap).hidden = !bins[key].length;
+    }
+  }
+
+  /* 进模块 = 回聊天页并把模块挂在 hash 上（index.html 读它，把这一次的新会话绑定到该模块）。
+     例外：服务端下发 ui 的模块有自己的界面壳（reader=阅读器、figure=生成器），直接送去那一页。
+     判据用服务端下发的 ui 字段而不是在这里写死 id —— 将来再加同形态的模块，这里不用改。
+     ★ 必须把 ?m= 带上：这些壳都是"多个模块共用一份"的设计，取不到 m 就只能回落到兜底模块，
+       于是点「数据统计与分析 / 引用核查 / 润色改写」全都落进文献研读。
+     ★ 必须查表，不能拿 ui 直接拼文件名：那是一条把服务端字符串当 URL 用的开放跳转。
+     ★ 认不出的 ui 回落到通用壳而不是报错：新客户端配老服务端（或反过来）时，用户至少还进得去。 */
+  const SHELL = { reader: "reader.html", figure: "figure.html" };
+  function enter(m) {
+    const shell = SHELL[m.ui];
+    if (shell) { location.href = "./" + shell + "?m=" + encodeURIComponent(m.id); return; }
+    // chat 也要带 #module=chat：不带的话 index.html 分不清"从工作台点进自由对话"与
+    // "刷新页面"，会盲目 resume 全局 nm_sid（可能停在别的模块会话上），而不是自由对话自己的最近会话。
+    location.href = "./#module=" + encodeURIComponent(m.id);
+  }
+
+  function fallback(msg) {
+    document.getElementById("fallbackSlot").innerHTML =
+      '<div class="fallback">' + esc(msg) + '<br><a href="./">直接进入对话 →</a></div>';
+  }
+
+  /* 模块清单只列【本账号已开通】的：没开通的不展示（与聊天页欢迎区同一口径），
+     所以这个页面上不存在"看着能点却点不动"的卡片。 */
+  (async () => {
+    /* 重试三次再放弃：网关同时跑着几轮生成时这个接口会变慢（实测并发三轮即触发），
+       一次超时就放弃 → 用户看到"取不到模块清单"，而此刻 curl /api/modules 是 200、内容完整。
+       他得知道要按 F5 才进得去。超时也放宽到 20 秒，并把文案改成不撒谎的版本。 */
+    let j = null;
+    for (let i = 0; i < 3 && !j; i++) {
+      if (i) await new Promise((r) => setTimeout(r, 1200 * i));
+      try { j = await (await fetch("api/modules", { signal: AbortSignal.timeout(20000) })).json(); } catch (_) {}
+      if (j && !Array.isArray(j.modules)) j = null;
+    }
+    if (!j || !Array.isArray(j.modules)) return fallback("模块清单暂时取不到（网关可能正忙或还在启动）。稍等片刻刷新本页即可。");
+    const allowed = j.modules.filter((m) => m.allowed);
+    if (!allowed.length) return fallback("你的账号当前没有开通任何模块，请联系管理员开通。");
+    render(allowed);
+  })();
+
+  /* 账户信息尽力而为：接了云端账号时显示用户名/档位；局域网部署没有此接口则保持默认文案 */
+  let cloudLoggedIn = false;
+  (async () => {
+    try {
+      const st = await (await fetch("api/cloud/status", { signal: AbortSignal.timeout(5000) })).json();
+      cloudLoggedIn = !!(st && st.loggedIn);
+      const name = st && (st.username || (st.profile && st.profile.displayName));
+      if (name) {
+        document.getElementById("accName").textContent = name;
+        document.getElementById("accAva").textContent = name[0].toUpperCase();
+        const tier = st.profile && (st.profile.tierName || st.profile.tier);
+        if (tier) document.getElementById("accRole").textContent = tier;
+      }
+    } catch (_) {}
+    if (cloudLoggedIn) showQuota();
+  })();
+
+  /* 剩余积分（1 积分 = $0.01，换算在服务端做）。日、月两条线哪条限额就显示哪条；
+     两条都不限、或云端一时拉不到，就保持原样不动——档位那行本来就有内容，不会空着。 */
+  async function showQuota() {
+    let c = null;
+    try {
+      const s = await (await fetch("api/quota", { signal: AbortSignal.timeout(8000) })).json();
+      c = s.cloud;
+      // 老网关（安装包里的 .mjs 还没这个字段）走通用转发口自己问一次 —— 这条回退让本功能
+      // 能作为纯界面包推给已装好的用户，不必等重装。大家都升过安装包后可以删。
+      if (c === undefined) {
+        const r = await (await fetch("api/cloud/call", {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ path: "/api/quota" }), signal: AbortSignal.timeout(8000),
+        })).json();
+        c = (r && r.ok && r.data && r.data.quota) || null;
+      }
+    } catch (_) { return; }
+    if (!c || (c.daily.unlimited && c.monthly.unlimited)) return;
+    const parts = [];
+    if (!c.daily.unlimited) parts.push("日剩 " + c.daily.remain);
+    if (!c.monthly.unlimited) parts.push("月剩 " + c.monthly.remain);
+    const el = document.getElementById("accRole");
+    el.textContent = (el.textContent === "已登录" ? "" : el.textContent + " · ") + parts.join(" / ") + " 积分";
+    el.parentElement.parentElement.title = "剩余积分（1 积分 = $" + (c.creditUsd || 0.01) + "）"
+      + "\n今日：" + (c.daily.unlimited ? "不限" : "剩 " + c.daily.remain + " / 共 " + c.daily.limit + "，每日 0 点(UTC)重置")
+      + "\n本月：" + (c.monthly.unlimited ? "不限" : "剩 " + c.monthly.remain + " / 共 " + c.monthly.limit + "，每月 1 日(UTC)重置");
+  }
+
+  /* 退出：两种形态各退各的。
+     - 云端账号（打包版常态）：退云端账号，回聊天页会停在登录闸上。
+     - 局域网/多用户容器：清 lan_auth cookie，回登录页（走 /login 路由，别写 login.html——没有这条路由）。 */
+  async function signout() {
+    if (!confirm("确定退出登录？")) return;
+    if (cloudLoggedIn) {
+      try {
+        const r = await (await fetch("api/cloud/logout", {
+          method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ force: false }),
+        })).json();
+        if (!r.ok && r.needForce) {
+          if (!confirm("有 " + (r.busy || "若干") + " 轮正在生成中，退出会中断它们且无法恢复。确定继续吗？")) return;
+          await fetch("api/cloud/logout", {
+            method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ force: true }),
+          });
+        } else if (!r.ok) { alert(r.err || "退出失败"); return; }
+      } catch (_) { alert("网络异常，请重试"); return; }
+      location.href = "./";
+      return;
+    }
+    try { await fetch("api/logout", { method: "POST" }); } catch (_) {}
+    location.href = "login";
+  }
+  document.getElementById("signout").addEventListener("click", signout);
+</script>
+</body>
+</html>

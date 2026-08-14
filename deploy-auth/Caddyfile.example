@@ -1,0 +1,96 @@
+# /etc/caddy/Caddyfile —— 唯一对公网开放的东西。
+# 把 example.com 换成你的域名；Caddy 会自动签发/续期证书。
+#
+# 【别用免费动态 DNS 域名】duckdns.org / no-ip / 3322 / f3322 这一类在运营商与单位网络里
+# 是【按域名整片封禁】的。2026-08-04 实测（scripts/net-diagnose/probe-sni.ps1）：
+#   · 打本机 IP 的 80 端口，Host 写 weigu.duckdns.org → 立刻 RST；写别的域名 → 正常 308
+#   · 大小写、带尾点、换个二级域名（x.duckdns.org）照样 RST → 匹配的是 duckdns.org 后缀
+#   · 把同样的 Host 打到一台【无关服务器】也 RST → 拦的是域名字符串，与我们的 IP 无关
+# 严的网络（带审计的单位网）连 TLS 的 SNI 一起匹配，表现就是 443 能连上、ClientHello 一发就被
+# 掐断。换二级域名没用，必须彻底离开这类免费动态 DNS；也别挑 .top/.xyz/.tk 这种低信誉 TLD。
+#
+# 【换域名过渡期：两个域名并存】站点地址写成逗号分隔即可，Caddy 会各签一张证书，
+# 老客户端（cloud.json 里写死旧地址的桌面版）不断线，等都迁完再把旧的删掉：
+#     旧域名, 新域名 {
+# setup.sh 的 DOMAIN 也支持逗号分隔：DOMAIN="旧域名, 新域名" sudo -E deploy-auth/setup.sh
+
+example.com {
+	encode zstd gzip
+
+	# 上传体积上限：默认留小（桌面客户端平时不往服务器传大文件），只有确实要传大件的
+	# 那几条路排除在外，在各自的 handle 里另设上限 —— 别为了它们把全站都开成几十 MB。
+	#
+	# 【必须用"排除"而不是在 handle 里覆盖】站点级的 request_body 是一道独立的处理器，
+	# 对所有请求先跑一遍；在 handle 里再写一个大的【盖不掉它】，表现是上传照旧 413，
+	# 而日志里只有 Caddy 自己的错误页，看不出是谁拦的。（部署当天实测踩到。）
+	@small not path /api/feedback /admin/api/skill-pack-upload /admin/api/web-pack-upload
+	request_body @small {
+		max_size 2MB
+	}
+
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		X-Frame-Options "DENY"
+		-Server
+	}
+
+	# LLM 转发：推理首字节可以很慢、响应是长流 —— 必须关掉缓冲，否则流式输出会被攒住。
+	handle /llm/* {
+		reverse_proxy 127.0.0.1:8090 {
+			flush_interval -1
+			transport http {
+				# 别给长推理设读超时，误杀比挂着更糟。
+				#
+				# ⚠ 这个值必须【明显大于】后台「并发与排队」里的「最长等待」（默认 5 分钟）：
+				#   并发满时请求先在 sci-auth 里排队，那段时间响应头还没发出 —— 两者相加都算在
+				#   这个超时里。配小了就会出现"排队快轮到了，却被 Caddy 以 504 掐掉"。
+				response_header_timeout 15m
+			}
+		}
+	}
+
+	# 用户反馈上传：一次会话的完整对话 + 用户勾选的产出文件（图/表/docx）。
+	# 【必须单独放宽】全站默认的 2MB 对它太小 —— 用户随手带一张森林图就被 Caddy 以 413 打回，
+	# 而且那是 Caddy 自己的错误页，客户端拿不到我们的结构化提示，用户只看到"提交失败"。
+	# 服务端另有自己的两道闸（单次 32MB、单附件 8MB），这里留点余量给 zip 头与多附件。
+	handle /api/feedback {
+		request_body {
+			max_size 40MB
+		}
+		reverse_proxy 127.0.0.1:8090 {
+			flush_interval -1
+		}
+	}
+
+	# 管理台手动上传技能包 / 界面包（zip）。技能包整包可以到几十 MB。
+	# 【多个路径要用命名匹配器】handle 只收一个参数，写两个路径会在 caddy validate 时报
+	# "wrong argument count" —— 这条改完必须 validate 过了再 reload。
+	@packupload path /admin/api/skill-pack-upload /admin/api/web-pack-upload
+	handle @packupload {
+		request_body {
+			max_size 80MB
+		}
+		reverse_proxy 127.0.0.1:8090 {
+			flush_interval -1
+		}
+	}
+
+	handle {
+		reverse_proxy 127.0.0.1:8090 {
+			flush_interval -1
+		}
+	}
+
+	log {
+		output file /var/log/caddy/access.log
+		format json
+	}
+}
+
+# fail2ban 的 caddy-login jail 认的是 access.log 里 /admin/api/login 与
+# /api/auth/login 的 401。改路径要同步改 /etc/fail2ban/filter.d/caddy-login.conf。
+#
+# 改完必须先 `caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile` 再
+# `systemctl reload caddy`；加了新域名后头几十秒是在签证书，此时访问新域名会短暂报错，属正常。

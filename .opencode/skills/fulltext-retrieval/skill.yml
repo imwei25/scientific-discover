@@ -1,0 +1,56 @@
+schema_version: 2
+name: fulltext-retrieval
+layer: A
+owner_domain: literature_discovery
+maturity: official
+
+when_to_use: "Batch-download full-text PDFs from a DOI list: tier 1 via open-access APIs; tier 2 (institutional channel) via the user's own logged-in Chrome/CARSI session for subscribed-but-paywalled papers. Optionally convert PDFs to Markdown for token-efficient analysis."
+when_NOT_to_use: "Finding or verifying citations (use search-lit / reference-check). Retrieving content the user's institution has not licensed — that fails by design in both tiers."
+
+inputs:
+  - path: "DOI worklist (.txt one-per-line, or .tsv/.csv/.md with a DOI column; optional PMID, Title); fetch_institutional.py additionally accepts fetch_oa's manual_needed.txt"
+    schema: csv
+    required: true
+outputs:
+  - path: "downloaded full-text PDFs (pdfs/)"
+  - path: "pdfs/retrieval_report.json (per-DOI status/source/title_match; both tiers merge into the same file, institutional hits counted separately)"
+  - path: "optional PDF-to-Markdown conversions"
+  - path: "references/find_available_pdf.js (user-run Zotero 'Find Available PDF' batch snippet)"
+
+deterministic_scripts:
+  - fetch_oa.py
+  - fetch_institutional.py
+  - pdf_to_md.py
+side_effects:
+  - downloads_files
+  - network_access_oa_apis
+  - attaches_to_local_browser_session  # fetch_institutional.py only, CDP on same machine
+downstream_consumers:
+  - literature-review  # full text feeds evidence extraction
+  - reference-check  # downloaded metadata cross-checks citations
+forbidden_actions:
+  - download_content_without_user_entitlement  # OA or the user's own institutional subscription only
+  - bypass_publisher_access_controls  # no paywall circumvention, no shadow-library mirrors
+  - handle_user_credentials  # never read/store/fill passwords, OTP; login walls wait for the user
+  - automate_captcha_or_bot_checks
+  - bulk_systematic_downloading  # batch cap + per-record delay are hard gates
+
+# v2.1 quality card
+purpose: "Resolve a DOI list to full-text PDFs — legitimate OA APIs first, then the user's own institutional access via their logged-in browser — with optional Markdown conversion."
+safety_boundaries:
+  - "Tier 1 uses legitimate open-access sources only (Unpaywall, PMC / Europe PMC, OpenAlex, Crossref)."
+  - "Tier 2 (fetch_institutional.py) only reuses the user's own logged-in Chrome session (CDP attach, same machine) and therefore only their institution's real entitlements; it never fills credentials, never automates CAPTCHAs, and hands every login wall back to the user."
+  - "Anti-abuse hard gates in tier 2: ≤20 records per run by default, ≥3 s between records — publisher bulk-download heuristics can suspend access for the whole institution."
+  - "Validates each download (>=10 KB and a %PDF- header) before accepting it."
+known_limitations:
+  - "Content the user's institution has not licensed fails in both tiers by design; no unauthorized sources are ever used."
+  - "The institutional tier needs a same-machine Chrome started with a dedicated profile dir + CDP port (Chrome 136+ blocks CDP on the default profile) and one interactive CARSI/SSO login; on the multi-user server it degrades gracefully (exit 2 with instructions), mirroring zotero-library's same-machine policy."
+  - "The institutional tier is interactive (login walls wait for the user) and depends on the optional playwright package (attach-only; no browser download needed)."
+  - "Higher-yield in-library retrieval (find_available_pdf.js) is user-initiated inside Zotero and uses the user's own proxy/OpenURL config; it is not reproducible CI evidence."
+  - "Title cross-check is best-effort: it needs a Title column plus PyMuPDF (installed) or pdftotext; otherwise title_match is 'unavailable'. A mismatch is flagged, never auto-rejected."
+  - "PDF-to-Markdown conversion requires the optional pymupdf4llm dependency (AGPL-3.0 or commercial license)."
+validation_commands:
+  - "python fetch_oa.py dois.txt -o pdfs/ -e <email> --report pdfs/retrieval_report.json --verbose   # per-DOI source trace"
+  - "python fetch_institutional.py pdfs/manual_needed.txt -o pdfs/ --verbose   # needs a CDP-attached logged-in Chrome; exits 2 with instructions otherwise"
+  - "verify each output begins with %PDF- and is at least 10 KB"
+evidence_surface: bundled_script

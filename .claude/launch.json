@@ -1,0 +1,77 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "web",
+      "runtimeExecutable": "node",
+      "runtimeArgs": ["web/server.mjs"],
+      "port": 3000,
+      "autoPort": true
+    },
+    {
+      "name": "web-smoke",
+      "runtimeExecutable": "node",
+      "runtimeArgs": ["web/dev-test.mjs"],
+      "port": 3299,
+      "//": "autoPort：几个会话同时在这个检出里冒烟测试时 3299 会被先来的占住，让后来者自己换个口。",
+      "//2": "dev-test.mjs 读 PORT 环境变量（默认才是 3299），所以换口不用改代码。",
+      "autoPort": true
+    },
+    {
+      "//": "局域网联测：专用网关 3010 + 专用 opencode 4099，不碰别的会话那套（详见 web/dev-lan.mjs 头注）。",
+      "//2": "口令每次启动随机生成并打印在日志里；要固定就传 LAN_PASSWORD。",
+      "name": "web-lan",
+      "runtimeExecutable": "node",
+      "runtimeArgs": ["--no-warnings", "web/dev-lan.mjs"],
+      "port": 3010,
+      "autoPort": true
+    },
+    {
+      "name": "sci-auth",
+      "runtimeExecutable": "node",
+      "runtimeArgs": ["--no-warnings", "server/dev-server.mjs"],
+      "port": 8099,
+      "autoPort": true
+    },
+    {
+      "name": "web-gateway",
+      "runtimeExecutable": "node",
+      "runtimeArgs": ["--no-warnings", "web/dev-gateway.mjs"],
+      "port": 3001
+    },
+    {
+      "//": "核心能力四模块阅读器化的 worktree（分支 feat/skill-modules），自测用。",
+      "//2": "MANAGE_OC=0 由 dev-skillmods.mjs 设死——主检出同时在用同一个 opencode，别去 kill 它。",
+      "name": "web-skillmods",
+      "runtimeExecutable": "node",
+      "runtimeArgs": ["--no-warnings", "D:/projects/sci-skillmods-wt/web/dev-skillmods.mjs"],
+      "port": 3007
+    },
+    {
+      "//": "v3 表单改版的 worktree（分支 feat/intake-v3），自测用。绝对路径指过去，",
+      "//2": "server.mjs 全部路径都基于 __dirname、不读 cwd，所以产物/状态都落在 worktree 里，不会污染主检出。",
+      "name": "web-v3",
+      "runtimeExecutable": "node",
+      "runtimeArgs": ["--no-warnings", "D:/projects/sci-v3-wt/web/dev-gateway.mjs"],
+      "port": 3003
+    },
+    {
+      "//": "「文件夹分类 + 拖拽排序」的 worktree（分支 feat/session-folders），自测用。",
+      "//2": "挂假 opencode（dev-folders.mjs 自带），演示会话/项目/文件夹一次摆好，不烧额度。",
+      "name": "web-folders",
+      "runtimeExecutable": "node",
+      "runtimeArgs": ["--no-warnings", "D:/projects/sci-folders-wt/web/dev-folders.mjs"],
+      "port": 3011,
+      "autoPort": true
+    },
+    {
+      "//": "intake-v3 合并结果的 worktree（分支 merge/intake-v3），只为验合并后的表单画对没有。",
+      "//2": "MANAGE_OC=0 由 dev-merge.mjs 设死——主检出同时在用同一个 opencode，别去 kill 它。",
+      "name": "web-merge",
+      "runtimeExecutable": "node",
+      "runtimeArgs": ["--no-warnings", "D:/projects/sci-merge-wt/web/dev-merge.mjs"],
+      "port": 3009,
+      "autoPort": true
+    }
+  ]
+}

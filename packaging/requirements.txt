@@ -1,0 +1,77 @@
+# 科研 Python 技能所需的包（与本地 backend/.venv 对齐）
+pandas==2.2.3
+numpy==2.2.1
+scipy==1.15.0
+matplotlib==3.10.0
+scikit-learn==1.7.2
+seaborn==0.13.2
+statsmodels==0.14.4
+openpyxl==3.1.5
+
+# ---- Skill 套件新增（文献/文档/作图）----
+requests==2.34.2
+httpx==0.28.1
+metapub==0.7.4
+pymed==0.8.9
+biopython==1.87
+habanero==2.9.2
+pyalex==0.21
+bibtexparser==1.4.4
+rispy==0.10.0
+python-docx==1.1.2
+mammoth==1.12.0
+reportlab==5.0.0
+lxml==6.1.1
+beautifulsoup4==4.15.0
+tqdm==4.68.3
+lifelines==0.30.0
+adjustText==1.4.0
+pymupdf==1.28.0
+pymupdf4llm==1.28.0
+
+# ---- 网关自身需要（别删）----
+# mammoth：web/server.mjs 的 docx 预览就是调它（MAMMOTH_PY）。此前漏装 → 任何 render-docx 产物
+#          点预览必报 "DOCX 预览转换失败"。
+mammoth==1.12.0
+
+# ---- data-integrity 技能 ----
+# 该技能整个是 paperconan CLI 的封装（SKILL.md 明说"已装在 .venv 里"），此前任何 requirements 都没有它。
+# 必须带 [all] extra：裸包只能吃 xlsx/csv，而本技能的声明范围含「pdf/docx 里的表格」——
+# pdfplumber 挂在 pdf extra、python-docx 挂在 docx extra，不写 extra 遇到 PDF 附表就报缺依赖。
+paperconan[all]==0.8.2
+
+# ---- ppt-master 技能（原先自带 requirements.txt，但没有任何构建步骤安装它）----
+# 只装【核心产出路径】用得上的：svg→pptx 导出、以及各种源文件转 markdown。
+python-pptx==1.0.2      # svg_to_pptx 的核心，缺了这个技能第一步就 ModuleNotFoundError
+XlsxWriter==3.2.9       # 同上（表格导出）
+Pillow==12.3.0          # 图片宽高比修正等
+svglib==2.0.2           # SVG→PNG 后备图（配合已有的 reportlab；比 cairosvg 轻，无需系统 cairo）
+markdownify==1.2.3      # html/epub → md
+EbookLib==0.20          # epub → md
+#
+# ---- 刻意不装 flask / playwright / chromium（ppt-master 的三条网页路径，已实测定论）----
+# ppt-master 有三处依赖 flask：Step 4 确认页、Step 6 网页 SVG 编辑器、以及 visual_review.py
+# （AI 逐页看图自查）。这三条在本部署里全部不装，理由是实测出来的，不是猜的：
+#   ① 前两条面向【用户】，但服务绑的是【容器内】127.0.0.1:5050，而容器只对外发布 3000 端口，
+#      用户浏览器里的 localhost:5050 指向的是用户自己的电脑 —— 永远打不开。
+#      更坏的是 Step 4 确认页若真能启动，AI 会去等一个没人点得到的按钮：每次 --wait 约 590s，
+#      三段确认累计最坏 ≈30 分钟纯空等才降级到聊天确认。
+#   ② visual_review.py 除 flask 外还需 playwright + chromium（ppt-master 自己的
+#      requirements.txt 漏列了 playwright，只在报错信息里提了一句）。轻量的 cairosvg 后端
+#      被作者明确否决过，理由是 CJK 渲染成豆腐块 —— 所以 chromium 省不掉。
+#      实测体积代价：+1.00 GB（镜像 du -sx / 从 3.16 GB 涨到 4.16 GB）。
+#   ③ 而视觉自查是 opt-in：workflows/visual-review.md 原文写明"主流程 Step 1–7 不调用它，
+#      只在用户明确要求视觉回看时触发"。为一个用户几乎不会主动要的能力涨 1 GB、并给
+#      1400m 的容器再引入一个 300–500MB 级的 OOM 面（已因 LibreOffice 加过串行锁），不划算。
+# 对应地，SKILL.md 与 workflows/live-preview.md 里已用「本部署覆盖规则」停用这三条路径，
+# 并禁止 AI 向用户播报任何 5050 地址（否则就是给用户一个永远打不开的链接）。
+# 将来若要启用：把 flask + playwright 加回本文件，Dockerfile 里补
+# `python3 -m playwright install --with-deps chromium`，并给 chromium 加一道类似
+# web/server.mjs 里 withSoffice() 的全局串行锁防 OOM，同时撤掉那几处覆盖规则。
+# 刻意【不装】 nbconvert（ipynb → md）：它会拖进整个 jupyter 生态
+# （nbclient/nbformat/jupyter-core/jupyter-client/pyzmq/bleach/mistune… 十几个传递依赖），
+# 而这些传递依赖全都不钉版本——正好和上面给 npm 加 lockfile 追求的可重复构建相反，镜像还要涨几百 MB。
+# 镜像里已有 pandoc，`pandoc x.ipynb -o x.md` 同样能转，够用。
+# 刻意【不装】的可选项（都不在核心产出路径上，装了平白增大镜像）：
+#   edge-tts(旁白配音) / curl_cffi(TLS 指纹绕过) / google-genai(AI 配图) / cairosvg(需系统 cairo)
+# 若将来要启用，把对应包加回来即可（ppt-master/requirements.txt 里有完整清单与说明）。

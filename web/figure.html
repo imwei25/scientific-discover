@@ -1,0 +1,1042 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>科研作图 · Niuma Science</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+/* ============================================================
+   生成器壳 —— 目前只有「科研作图」一个模块用它
+   ------------------------------------------------------------
+   【为什么不复用另外两个壳】
+     · 通用壳（index.html）：填一张表 → 一条对话流。而出图是「写一句 → 看一张图 → 改一句
+       再来一版」，最该占版面的是图本身，而不是对话。
+     · 阅读器壳（reader.html）：左边常驻【用户传上来的】那份东西。这个模块根本不要求上传，
+       套进去首屏就是一个传不了也跳不过的上传区。
+   所以给它一个自己的两栏生成器：左边写要画什么，右边调出图设置，出完在同一页看图、追问、
+   再来一版。
+
+   【本文件不认识任何一句具体文案】提示词框的措辞、几档画幅、三条限制、发给模型的那段话，
+   全部来自 GET /api/modules/<id>/workflow 的 gen 段（定义在 workflows.mjs）。这里只负责
+   照着画、照着发、照着把图摆回来。
+   ★ 推论：本文件里不该出现模块 id 的字面量（兜底默认值与注释除外）—— 与 reader.html 同一条
+     规矩，那边写死过两次，两次都是"别的模块被当成文献研读"。
+
+   【与后端一个字都没多加】全走现成接口：
+     GET  api/modules/<id>/workflow → 本页配置
+     POST api/upload                → 传核对材料（没有 sid 时它会现建一个会话）
+     POST api/chat/start            → 起一轮（body 带 module，服务端据此绑定会话并注入前言）
+     GET  api/chat/attach           → SSE 直播
+     GET  api/outputs / api/raw     → 产物列表与取文件（图就是从这里取的）
+   ============================================================ */
+:root{
+  --bg:#eef1f5;
+  --panel:#ffffff;
+  --panel-soft:#f5f7fa;
+  --text:#1f2329;
+  --muted:#5b6573;
+  --faint:#8a93a0;
+  --accent:#3b6fd4;
+  --accent-deep:#2f5bb8;
+  --accent-soft:rgba(59,111,212,.10);
+  --green:#2bb673;
+  --amber:#d98324;
+  --red:#c0392b;
+  --line:rgba(20,24,30,.10);
+  --line-hi:rgba(20,24,30,.16);
+  --r-lg:16px; --r-md:12px; --r-sm:10px;
+  --shadow-sm:0 2px 8px rgba(20,24,30,.06);
+  --shadow-md:0 6px 22px rgba(20,24,30,.10);
+  --sans:'Space Grotesk',system-ui,-apple-system,"Segoe UI","Microsoft YaHei","PingFang SC",sans-serif;
+}
+*{box-sizing:border-box}
+html,body{height:100%}
+body{margin:0;background:var(--bg);color:var(--text);font-family:var(--sans);font-size:14px;line-height:1.6;-webkit-font-smoothing:antialiased}
+button,textarea,input{font:inherit}
+
+/* 带文字的按钮：只留给【表单里的动作】（上传材料）。工具条一律用下面的 .ibtn。 */
+.hbtn{display:inline-flex;align-items:center;gap:6px;height:28px;padding:0 10px;border-radius:8px;border:1px solid var(--line-hi);background:#fff;color:var(--muted);cursor:pointer;font-size:12.5px;transition:.15s;flex:none}
+.hbtn:hover{border-color:var(--accent);color:var(--accent)}
+.hbtn svg{width:14px;height:14px}
+.hbtn[disabled]{opacity:.45;cursor:not-allowed}
+
+/* ---- 图标按钮 + 悬停浮出的文字（与阅读器壳同一套，别再发明第二种）----
+   工具条上的动作全是图标。原生 title 要悬停约一秒才出，图标按钮上等于没有提示，
+   所以自己画一个即时浮层：写在 data-tip 上。
+   ★ 改成图标还有一个实打实的理由：打包版窗口比浏览器窄，四个文字按钮在顶栏上会互相压住
+     （实测「最近做过的」和「再来一版」叠在一起）。图标是定宽的，窄窗口下也排得开。 */
+.ibtn{position:relative;width:32px;height:32px;flex:none;display:grid;place-items:center;border:1px solid var(--line);border-radius:9px;background:#fff;color:var(--muted);cursor:pointer;transition:color .15s,background .15s,border-color .15s}
+.ibtn:hover:not([disabled]){color:var(--accent);border-color:var(--line-hi);background:var(--panel-soft)}
+.ibtn[disabled]{opacity:.45;cursor:not-allowed}
+.ibtn svg{width:15px;height:15px}
+[data-tip]{position:relative}
+[data-tip]:hover::after{content:attr(data-tip);position:absolute;top:calc(100% + 7px);right:0;z-index:400;padding:5px 9px;border-radius:7px;background:rgba(20,24,30,.92);color:#fff;font-size:11.5px;line-height:1.45;white-space:nowrap;pointer-events:none;box-shadow:var(--shadow-sm)}
+/* 屏幕左半边的按钮把浮层挂到左边，否则贴着窗口右缘会被裁掉 */
+[data-tip].tipL:hover::after{right:auto;left:0}
+
+/* 「最近」下拉：与阅读器壳同一套（position:fixed + 按触发按钮算坐标） */
+.menu{position:fixed;min-width:270px;max-width:min(380px,92vw);max-height:60vh;overflow:auto;background:#fff;border:1px solid var(--line-hi);border-radius:var(--r-md);box-shadow:var(--shadow-md);padding:6px;display:none;z-index:200}
+.menu.on{display:block}
+.menu .mi{display:block;width:100%;text-align:left;border:none;background:none;padding:8px 10px;border-radius:8px;cursor:pointer;color:var(--text);font-size:13px}
+.menu .mi:hover{background:var(--panel-soft)}
+.menu .mi small{display:block;color:var(--faint);font-size:11px;margin-top:2px}
+.menu .empty{padding:12px 10px;color:var(--faint);font-size:12.5px}
+
+.stage{position:fixed;inset:0;z-index:0;pointer-events:none;background:radial-gradient(ellipse 80% 50% at 50% 0%,rgba(59,111,212,.06) 0%,transparent 60%)}
+.nav{position:fixed;top:14px;right:18px;z-index:5;display:flex;align-items:center;gap:6px}
+.nav[hidden]{display:none}
+
+/* ---------- 首屏：生成器 ---------- */
+.intro[hidden]{display:none}
+.intro{position:relative;z-index:1;min-height:100vh;overflow:auto;padding:52px 20px 48px}
+.wrap{width:min(1080px,100%);margin:0 auto}
+.hdr{text-align:center;margin-bottom:30px}
+.eyebrow{display:inline-flex;align-items:center;gap:7px;padding:5px 12px;background:#fff;border:1px solid var(--line-hi);border-radius:999px;font-size:12px;color:var(--muted);margin-bottom:16px;box-shadow:var(--shadow-sm)}
+.eyebrow .dot{width:6px;height:6px;border-radius:50%;background:var(--accent)}
+.hdr h1{margin:0 0 10px;font-size:30px;font-weight:700;letter-spacing:.01em}
+.hdr p{margin:0 auto;max-width:640px;color:var(--muted);font-size:14px}
+
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:16px;align-items:start}
+@media (max-width:880px){.grid2{grid-template-columns:1fr}.hdr h1{font-size:25px}.intro{padding:34px 14px 40px}}
+/* ★ 面板卡叫 .gcard，不叫 .card —— .card 在阅读器壳里是【markdown 正文卡】，本文件下面也照抄了
+   那一份。同名两用会让人以为是同一个东西。 */
+.gcard{background:var(--panel);border:1px solid var(--line-hi);border-radius:var(--r-lg);box-shadow:var(--shadow-sm);padding:20px}
+.gcard-h{display:flex;align-items:center;gap:9px;margin-bottom:16px;font-size:13.5px;font-weight:600}
+.gcard-h .ic{width:24px;height:24px;border-radius:7px;background:var(--accent-soft);color:var(--accent);display:grid;place-items:center;flex:none}
+.gcard-h .ic svg{width:14px;height:14px}
+
+.fld{margin-bottom:18px}
+.fld:last-child{margin-bottom:0}
+.fld > label{display:block;font-size:12.5px;font-weight:600;margin-bottom:8px}
+.fld .req{color:var(--red);margin-left:3px}
+.fld .sh{margin-top:7px;font-size:11.5px;color:var(--faint);line-height:1.7}
+textarea{width:100%;min-height:190px;padding:13px;border:1px solid var(--line-hi);border-radius:var(--r-md);background:var(--panel-soft);color:var(--text);font-size:13.5px;line-height:1.7;resize:vertical;transition:.15s}
+textarea::placeholder{color:var(--faint)}
+textarea:focus{outline:none;border-color:var(--accent);background:#fff;box-shadow:0 0 0 3px var(--accent-soft)}
+input[type=text]{width:100%;height:36px;padding:0 11px;border:1px solid var(--line-hi);border-radius:var(--r-sm);background:var(--panel-soft);color:var(--text);font-size:13px}
+input[type=text]:focus{outline:none;border-color:var(--accent);background:#fff;box-shadow:0 0 0 3px var(--accent-soft)}
+
+/* pill 组（画幅 / 画风 / 张数 / 用途）—— 一律按钮式，不用下拉：
+   四组加起来十几个选项，全做成下拉要点四次才看得全，而它们本来就该一眼扫完。 */
+.opts{display:flex;flex-wrap:wrap;gap:7px}
+.opt{padding:7px 13px;border:1px solid var(--line-hi);border-radius:999px;background:#fff;color:var(--muted);font-size:12.5px;cursor:pointer;transition:.15s}
+.opt:hover{border-color:var(--accent);color:var(--accent)}
+.opt.on{background:var(--accent);border-color:var(--accent);color:#fff}
+
+/* 核对材料：一行式上传，不做大拖拽区 —— 它是选填项，占一屏三分之一会喧宾夺主 */
+.uprow{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.upfiles{display:flex;flex-wrap:wrap;gap:6px}
+.upchip{display:inline-flex;align-items:center;gap:6px;max-width:230px;padding:4px 8px;border:1px solid var(--line-hi);border-radius:999px;background:var(--panel-soft);font-size:12px;color:var(--muted)}
+.upchip span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.upchip button{border:none;background:none;color:var(--faint);cursor:pointer;padding:0;line-height:1;display:grid;place-items:center}
+.upchip button:hover{color:var(--red)}
+.upchip button svg{width:12px;height:12px}
+
+.genbar{margin-top:16px;display:flex;align-items:center;justify-content:space-between;gap:16px;padding:14px 18px;background:var(--panel);border:1px solid var(--line-hi);border-radius:var(--r-lg);box-shadow:var(--shadow-sm);flex-wrap:wrap}
+.genbar .cost{font-size:12.5px;color:var(--muted)}
+.genbar .cost b{color:var(--text);font-weight:600}
+/* 主按钮：与阅读器壳首屏的「开始研读」同一颗（.gobtn），连 margin-top 都一样 —— 四个核心能力
+   的"开工"按钮长同一个样，用户换模块不用重新找。这里在生成条里，去掉那条 margin。 */
+.gobtn{display:inline-flex;align-items:center;justify-content:center;gap:7px;border:none;cursor:pointer;font:inherit;font-size:13px;font-weight:600;padding:11px 22px;border-radius:var(--r-sm);transition:.15s;background:var(--accent);color:#fff;box-shadow:0 4px 12px rgba(59,111,212,.26)}
+.gobtn:hover:not([disabled]){background:var(--accent-deep)}
+.gobtn[disabled]{background:#c3ccd8;box-shadow:none;cursor:not-allowed}
+.gobtn svg{width:16px;height:16px}
+.gobtn .spin2{width:14px;height:14px;border:2px solid rgba(255,255,255,.35);border-top-color:#fff;border-radius:50%;animation:sp .8s linear infinite;display:none}
+.gobtn.busy .spin2{display:inline-block}
+.gobtn.busy .play{display:none}
+/* 错误提示统一走 .notebox（与阅读器壳同款），不再自造一条红色小字 */
+.notebox{padding:11px 13px;border-radius:var(--r-sm);font-size:12.5px;line-height:1.8;margin-bottom:14px}
+.notebox.err{background:#fdecea;border:1px solid #f5c2bd;color:var(--red)}
+.notebox.info{background:#fff;border:1px solid var(--line);color:var(--muted)}
+#err{margin:12px 0 0;display:none}
+#err.on{display:block}
+
+/* ---------- 结果页 ---------- */
+.work[hidden]{display:none}
+.work{position:relative;z-index:1;height:100vh;display:flex;flex-direction:column}
+.wtop{display:flex;align-items:center;gap:10px;padding:10px 16px;background:var(--panel);border-bottom:1px solid var(--line);flex:none}
+.wtop .t{font-weight:600;font-size:13.5px;margin-right:auto;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.wbody{flex:1;min-height:0;display:grid;grid-template-columns:1.35fr 1fr;gap:14px;padding:14px;overflow:hidden}
+@media (max-width:980px){.wbody{grid-template-columns:1fr;overflow:auto}}
+.pane{background:var(--panel);border:1px solid var(--line-hi);border-radius:var(--r-lg);display:flex;flex-direction:column;min-height:0;overflow:hidden}
+.pane-h{display:flex;align-items:center;gap:8px;padding:11px 14px;border-bottom:1px solid var(--line);font-size:13px;font-weight:600;flex:none}
+.pane-h .sp{margin-left:auto;display:flex;gap:6px}
+.pane-b{flex:1;min-height:0;overflow:auto;padding:14px}
+
+.figwrap{display:grid;place-items:center;min-height:220px}
+.figwrap img{max-width:100%;max-height:58vh;border-radius:var(--r-md);border:1px solid var(--line);background:#fff;cursor:zoom-in}
+.thumbs{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px}
+.thumbs img{width:74px;height:74px;object-fit:cover;border-radius:8px;border:2px solid transparent;cursor:pointer;background:#fff}
+.thumbs img.on{border-color:var(--accent)}
+/* 空态：与阅读器壳的 .empty-hint 同款 */
+.empty-hint{padding:38px 18px;text-align:center;color:var(--faint);font-size:13px;line-height:2}
+.empty-hint .big{display:block;font-size:14px;color:var(--muted);font-weight:600;margin-bottom:6px}
+
+/* 产物行：.files / .frow / .fbtn 三件套原样搬自阅读器壳，连图标（眼睛 / 下箭头）都是同两颗 */
+.outs{border-top:1px solid var(--line);padding:12px 14px;flex:none;max-height:34%;overflow:auto}
+.files .ft{font-size:11.5px;color:var(--faint);margin-bottom:7px}
+.frow{display:flex;align-items:center;gap:10px;padding:9px 11px;border:1px solid var(--line);border-radius:var(--r-sm);background:#fff;margin-bottom:6px}
+.frow svg{width:15px;height:15px;color:var(--accent);flex:none}
+.frow b{flex:1;min-width:0;font-size:12.5px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.frow .fbtn{flex:none;display:flex;align-items:center;padding:2px;border:none;background:none;cursor:pointer;color:var(--muted);text-decoration:none;border-radius:6px;transition:color .15s,background .15s}
+.frow .fbtn:hover{color:var(--accent);background:var(--panel-soft)}
+.frow .fbtn svg{color:inherit}   /* 否则被上面 .frow svg 的 accent 焊死，悬停不会变色 */
+
+/* 对话气泡：.msg / .bubble 三态与阅读器壳完全一致（用户=蓝底右对齐、助手=白卡带「助手」抬头、
+   tag=虚线框）。此前这里自造了一套 .bub，同一个产品里两种气泡长相。 */
+.msg{margin-bottom:16px}
+.msg.user{display:flex;justify-content:flex-end}
+.msg.user .bubble{background:var(--accent);color:#fff;border-radius:14px 14px 4px 14px;padding:9px 13px;font-size:13px;line-height:1.65;max-width:88%;white-space:pre-wrap;word-break:break-word}
+.msg.ai .bubble{background:#fff;border:1px solid var(--line);border-radius:4px 14px 14px 14px;padding:14px 16px;box-shadow:var(--shadow-sm)}
+.msg.ai .who{display:flex;align-items:center;gap:7px;color:var(--accent);font-weight:600;font-size:12px;margin-bottom:9px}
+.msg.ai .who svg{width:14px;height:14px}
+.msg.tag .bubble{background:#fff;border:1px dashed var(--line-hi);border-radius:12px;padding:9px 13px;font-size:12.5px;color:var(--muted)}
+
+/* 运行状态条 + 转圈：同阅读器壳的 .runbox / .spin（连动画名 sp 都一致） */
+.runbox{background:#fff;border:1px solid var(--line);border-radius:var(--r-md);padding:12px 14px;margin-bottom:14px;box-shadow:var(--shadow-sm)}
+.runbox .rh{display:flex;align-items:center;gap:9px;font-size:12.5px;color:var(--muted)}
+.spin{width:13px;height:13px;border-radius:50%;border:2px solid var(--line-hi);border-top-color:var(--accent);animation:sp .8s linear infinite;flex:none}
+@keyframes sp{to{transform:rotate(360deg)}}
+
+/* markdown 正文：整段照搬阅读器壳，助手的回答在两个模块里排版一致 */
+.card{background:#fff;border:1px solid var(--line);border-radius:var(--r-md);padding:16px 18px;box-shadow:var(--shadow-sm)}
+.md{font-size:13.5px;line-height:1.85;color:var(--text);word-wrap:break-word;overflow-wrap:anywhere}
+.md h1{font-size:18px;margin:18px 0 10px}
+.md h2{font-size:16px;margin:16px 0 9px}
+.md h3{font-size:14.5px;margin:14px 0 8px}
+.md h1:first-child,.md h2:first-child,.md h3:first-child{margin-top:0}
+.md p{margin:0 0 10px}
+.md ul,.md ol{margin:0 0 10px;padding-left:20px}
+.md li{margin-bottom:5px}
+.md strong{font-weight:600}
+.md code{background:var(--panel-soft);border:1px solid var(--line);border-radius:4px;padding:1px 4px;font-size:12px;font-family:ui-monospace,Consolas,monospace}
+.md pre{background:#f7f8fa;border:1px solid var(--line);border-radius:var(--r-sm);padding:11px 13px;overflow:auto}
+.md pre code{background:none;border:none;padding:0}
+.md img{max-width:100%;border-radius:8px;border:1px solid var(--line);cursor:zoom-in}
+.md a{color:var(--accent)}
+.tblw{overflow-x:auto;margin:0 0 10px}
+.md table{border-collapse:collapse;font-size:12.5px;min-width:100%}
+.md th,.md td{border:1px solid var(--line);padding:6px 9px;text-align:left}
+.md th{background:var(--panel-soft);font-weight:600}
+
+/* 输入框 + 发送 / 终止：与阅读器壳、工作台聊天同一套。
+   32px 圆钮只露图标，悬停展开成胶囊把文字滑出来；两颗占同一个位置、互斥显示。 */
+.composer{flex:none;border-top:1px solid var(--line);padding:12px 16px 14px;background:#fff}
+.composer .wrap{display:flex;align-items:flex-end;gap:9px;background:var(--panel-soft);border:1px solid var(--line-hi);border-radius:var(--r-md);padding:9px 11px;transition:.15s}
+.composer .wrap:focus-within{border-color:var(--accent);background:#fff;box-shadow:0 0 0 3px var(--accent-soft)}
+.composer textarea{flex:1;border:none;background:none;outline:none;resize:none;font:inherit;font-size:13px;line-height:1.55;color:var(--text);max-height:130px;min-height:22px}
+.composer textarea::placeholder{color:var(--faint)}
+.composer .foot{margin-top:7px;font-size:11px;color:var(--faint);display:flex;justify-content:space-between;gap:10px}
+.composer .foot .kbd{flex:none;white-space:nowrap}
+.pill{display:inline-flex;align-items:center;justify-content:center;height:32px;min-width:32px;padding:0;border:none;border-radius:999px;color:#fff;cursor:pointer;flex:none;overflow:hidden;transition:background .18s ease,padding .2s ease,filter .15s}
+.pill[hidden]{display:none}                 /* 别让上面的 display 盖过 hidden 属性 */
+.pill svg{width:15px;height:15px;flex:none}
+.pill .lbl{max-width:0;opacity:0;overflow:hidden;white-space:nowrap;font-size:13px;font-weight:500;letter-spacing:.04em;margin-left:0;transition:max-width .22s ease,opacity .18s ease,margin-left .22s ease}
+.pill:hover:not([disabled]){padding:0 15px}
+.pill:hover:not([disabled]) .lbl{max-width:52px;opacity:1;margin-left:6px}
+.pill:active{transform:translateY(1px)}
+.pill.go{background:var(--accent)}
+.pill.go:hover:not([disabled]){background:var(--accent-deep)}
+.pill.go[disabled]{background:#c3ccd8;cursor:not-allowed}
+.pill.halt{background:var(--red)}
+.pill.halt:hover{background:var(--red-deep)}
+
+.lb{position:fixed;inset:0;background:rgba(15,18,22,.82);display:none;place-items:center;z-index:400;padding:24px}
+.lb.on{display:grid}
+.lb img{max-width:94vw;max-height:92vh;border-radius:10px}
+.toast{position:fixed;left:50%;bottom:26px;transform:translateX(-50%) translateY(14px);background:#1f2329;color:#fff;padding:10px 16px;border-radius:10px;font-size:13px;opacity:0;pointer-events:none;transition:.25s;z-index:500;box-shadow:var(--shadow-md)}
+.toast.on{opacity:1;transform:translateX(-50%) translateY(0)}
+</style>
+</head>
+<body>
+
+<div class="stage"></div>
+
+<div class="nav" id="nav">
+  <button class="ibtn" id="navRecent" data-tip="最近做过的"></button>
+  <button class="ibtn" id="navWs" data-tip="回工作台"></button>
+</div>
+
+<!-- ================= 首屏：生成器 ================= -->
+<section class="intro" id="intro">
+  <div class="wrap">
+    <div class="hdr">
+      <span class="eyebrow"><span class="dot"></span><span id="eyebrow"></span></span>
+      <h1 id="title">科研作图</h1>
+      <p id="lead"></p>
+    </div>
+
+    <div class="grid2">
+      <!-- ★ 是 .gcard 不是 .card：.card 在本文件里是【markdown 正文卡】。写错过一次，后果不是
+           "少个边框"这么轻 —— .gcard-h .ic svg{width:14px} 跟着失配，那颗图标 SVG 只有 viewBox、
+           没有宽高，浏览器按默认的 300×150 渲染，卡片顶上就出现一张巨大的、看着像加载失败的图。
+           这一格【刻意不设卡头】：紧接着就是「要画什么」，再顶一行标题等于把同一句话说两遍。 -->
+      <div class="gcard">
+        <div class="fld">
+          <label id="promptLabel">要画什么<span class="req">*</span></label>
+          <textarea id="prompt"></textarea>
+          <div class="sh" id="promptHelp"></div>
+        </div>
+        <div class="fld" id="upField">
+          <label id="upLabel"></label>
+          <div class="uprow">
+            <button class="hbtn" id="btnUp"></button>
+            <div class="upfiles" id="upFiles"></div>
+          </div>
+          <div class="sh" id="upHelp"></div>
+          <input type="file" id="upInput" multiple hidden>
+        </div>
+      </div>
+
+      <div class="gcard">
+        <div class="gcard-h"><span class="ic" id="icRight"></span><span>出图设置</span></div>
+        <div id="settings"></div>
+      </div>
+    </div>
+
+    <div class="genbar">
+      <div class="cost" id="cost"></div>
+      <button class="gobtn" id="btnGo">
+        <span class="spin2"></span>
+        <span class="play"></span>
+        <span id="goTxt">生成机制图</span>
+      </button>
+    </div>
+    <div class="notebox err" id="err"></div>
+  </div>
+</section>
+
+<!-- ================= 结果页 ================= -->
+<section class="work" id="work" hidden>
+  <div class="wtop">
+    <button class="ibtn tipL" id="btnBack" data-tip="回去改提示词"></button>
+    <div class="t" id="workTitle"></div>
+    <button class="ibtn" id="btnAgain" data-tip="再来一版（同一份 spec 重出）"></button>
+    <button class="ibtn" id="wRecent" data-tip="最近做过的"></button>
+    <button class="ibtn" id="wWs" data-tip="回工作台"></button>
+  </div>
+  <div class="wbody">
+    <div class="pane">
+      <div class="pane-h"><span>图</span><span class="sp"><button class="ibtn" id="btnDl" data-tip="下载当前这张图" disabled></button></span></div>
+      <div class="pane-b" id="figBody"></div>
+      <div class="outs" id="outs" hidden></div>
+    </div>
+    <div class="pane">
+      <div class="pane-h"><span>助手</span></div>
+      <div class="pane-b"><div id="msgs"></div></div>
+      <div class="composer">
+        <div class="wrap">
+          <textarea id="follow" rows="1"></textarea>
+          <!-- 发送 / 终止占同一个位置、互斥显示（同阅读器壳）：一开跑，「发送」让位给「终止」 -->
+          <button class="pill go" id="btnSend"><span class="lbl">发送</span></button>
+          <button class="pill halt" id="btnStop" hidden><span class="lbl">终止</span></button>
+        </div>
+        <div class="foot"><span id="footHint"></span><span class="kbd">Enter 发送 · Shift+Enter 换行</span></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<div class="menu" id="menu"></div>
+<div class="lb" id="lb"><img alt=""></div>
+<div class="toast" id="toast"></div>
+
+<script>
+"use strict"
+const $ = (id) => document.getElementById(id)
+const esc = (s) => String(s == null ? "" : s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]))
+
+const ICON = {
+  gear: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 00.3 1.9 2 2 0 11-2.8 2.8 1.7 1.7 0 00-1.9-.3 1.7 1.7 0 00-1 1.5 2 2 0 11-4 0 1.7 1.7 0 00-1-1.5 1.7 1.7 0 00-1.9.3 2 2 0 11-2.8-2.8 1.7 1.7 0 00.3-1.9 1.7 1.7 0 00-1.5-1 2 2 0 110-4 1.7 1.7 0 001.5-1 1.7 1.7 0 00-.3-1.9 2 2 0 112.8-2.8 1.7 1.7 0 001.9.3 1.7 1.7 0 001-1.5 2 2 0 114 0 1.7 1.7 0 001 1.5 1.7 1.7 0 001.9-.3 2 2 0 112.8 2.8 1.7 1.7 0 00-.3 1.9 1.7 1.7 0 001.5 1 2 2 0 110 4 1.7 1.7 0 00-1.5 1z"/></svg>',
+  play: '<svg viewBox="0 0 24 24" fill="currentColor" stroke="none"><path d="M8 5.5v13a1 1 0 001.53.85l10-6.5a1 1 0 000-1.7l-10-6.5A1 1 0 008 5.5z"/></svg>',
+  stop: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>',
+  send: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12h15M13 6l6 6-6 6"/></svg>',
+  x: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6L6 18M6 6l12 12"/></svg>',
+  eye: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/></svg>',
+  download: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v11"/><path d="m7 11 5 4 5-4"/><path d="M5 20h14"/></svg>',
+  up: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 16V4M12 4l-4 4M12 4l4 4"/><path d="M4 16v2a2 2 0 002 2h12a2 2 0 002-2v-2"/></svg>',
+  // 工具条那几个：与阅读器壳同名同形（clock=最近、grid=工作台、back=返回、refresh=再来一版），
+  // 同一个动作在两个界面长同一个样，用户不用重新认。
+  clock: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5.5l3.5 2"/></svg>',
+  grid: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7.5" height="7.5" rx="1.6"/><rect x="13.5" y="3" width="7.5" height="7.5" rx="1.6"/><rect x="3" y="13.5" width="7.5" height="7.5" rx="1.6"/><rect x="13.5" y="13.5" width="7.5" height="7.5" rx="1.6"/></svg>',
+  back: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 12H5M11 18l-6-6 6-6"/></svg>',
+  refresh: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M20 11a8 8 0 10-2.3 6.3"/><path d="M20 4v7h-7"/></svg>',
+  bot: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2a10 10 0 100 20 10 10 0 000-20z"/><path d="M12 6v6l4 2"/></svg>',
+  doc: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><path d="M14 2v6h6"/></svg>',
+}
+
+/* ---- 会话与配置 ---- */
+// 模块 id 从 ?m= 取；取不到才回落。★ 这个回落值是本文件里唯一允许出现的模块 id 字面量，
+// 且它只在"链接被人手改坏了"时才用得上 —— 别再往下面的逻辑里写第二个。
+const QS = new URLSearchParams(location.search)
+const MOD = (QS.get("m") || "figure").replace(/[^A-Za-z0-9_-]/g, "")
+let sid = QS.get("sid") || ""
+let CFG = null            // gen 段
+let FIELDS = {}           // id → 字段定义（gen.intake 下发）
+let vals = {}             // 表单值
+let upNames = []          // 已传的核对材料文件名
+let turns = 0             // 本会话已经发过几轮（决定要不要带 module / 要不要加追问前缀）
+let RUN = null            // 本轮直播状态
+let msgs = []             // 结果页的对话
+let figs = []             // 当前的图（产物文件名）
+let curFig = ""
+let outputs = []
+// 产物名 → mtime。既当"这张图变没变"的判据，也当 <img> URL 上的版本戳。
+// ★ 没有它的后果就是【追问改图后界面还是上一版】：agent 重画时多半把 figures/fig1.png
+//   原地覆盖，文件名一个字都不变 → 下面的 img.src 完全相同 → 浏览器（/api/raw 给了
+//   max-age=60，再加上同一文档里同名图走内存缓存）直接把旧图摆出来。用户以为"追问没生效"，
+//   而实际上新图早就写好躺在会话目录里了。
+const figVer = new Map()
+const sidQ = () => (sid ? "&sid=" + encodeURIComponent(sid) : "")
+// 取产物的 URL；带上版本戳，文件一被重写 URL 就变，缓存自然失效（服务端忽略 v，只认 name/sid）
+const rawSrc = (name) => {
+  const v = figVer.get(name)
+  return "api/raw?name=" + encodeURIComponent(name) + sidQ() + (v ? "&v=" + Math.round(v) : "")
+}
+async function jget(url, opt) {
+  const r = await fetch(url, opt)
+  if (r.status === 401) { location.href = "./login"; throw new Error("unauthorized") }
+  return r
+}
+function toast(msg) { const t = $("toast"); t.textContent = msg; t.classList.add("on"); setTimeout(() => t.classList.remove("on"), 2400) }
+function showErr(m) { const e = $("err"); e.textContent = m || ""; e.className = "notebox err" + (m ? " on" : "") }
+
+/* ---- 极简 markdown（够渲染助手的回答；口径抄阅读器壳，只少不多）---- */
+function mdImg(u) {
+  if (!/\.(png|jpe?g|gif|webp|svg|bmp)$/i.test(u)) return null
+  if (/^https?:/i.test(u)) return null                     // 外链图片一概不加载
+  const m = u.replace(/^\.\//, "").match(/^([^\/?#:]+(?:\/[^\/?#:]+)?)$/)   // 允许一层子目录（figures/fig1.png）
+  return m ? rawSrc(m[1]) : null      // 带版本戳：正文里嵌的 ![](figures/fig1.png) 被覆盖后同样要换新的
+}
+function mdInline(s) {
+  const codes = []
+  s = s.replace(/`([^`]+)`/g, (m, c) => { codes.push(c); return "@@C" + (codes.length - 1) + "@@" })
+  s = s.replace(/!\[([^\]]*)\]\(([^)\s]+)[^)]*\)/g, (m, a, u) => {
+    const src = mdImg(u)
+    return src ? '<img src="' + src + '" alt="' + a.replace(/"/g, "&quot;") + '">' : esc(a || u)
+  })
+  s = s.replace(/\[([^\]]+)\]\(([^)\s]+)[^)]*\)/g, (m, t, u) => /^(https?:\/\/|api\/)/i.test(u) ? '<a href="' + u.replace(/"/g, "%22") + '" target="_blank" rel="noopener">' + t + "</a>" : t)
+  s = s.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
+  s = s.replace(/~~([^~]+)~~/g, "<del>$1</del>")
+  return s.replace(/@@C(\d+)@@/g, (m, i) => "<code>" + codes[+i] + "</code>")
+}
+const splitRow = (l) => l.trim().replace(/^\|/, "").replace(/\|$/, "").split("|").map((c) => c.trim())
+function renderMd(src) {
+  src = (src || "").replace(/\r\n/g, "\n")
+  const blocks = []
+  src = src.replace(/```[\w-]*\n?([\s\S]*?)```/g, (m, code) => { blocks.push("<pre><code>" + esc(code.replace(/\n$/, "")) + "</code></pre>"); return "@@B" + (blocks.length - 1) + "@@" })
+  const lines = esc(src).split("\n"), out = []
+  let i = 0
+  const blank = (l) => /^\s*$/.test(l)
+  while (i < lines.length) {
+    const l = lines[i]
+    const pm = l.match(/^@@B(\d+)@@\s*$/); if (pm) { out.push(blocks[+pm[1]]); i++; continue }
+    if (blank(l)) { i++; continue }
+    const h = l.match(/^(#{1,6})\s+(.*)$/)
+    if (h) { const n = Math.min(3, h[1].length); out.push("<h" + n + ">" + mdInline(h[2].trim()) + "</h" + n + ">"); i++; continue }
+    if (/\|/.test(l) && i + 1 < lines.length && /^\s*\|?[\s:|-]*$/.test(lines[i + 1]) && /-/.test(lines[i + 1])) {
+      const head = splitRow(l); i += 2; const rows = []
+      while (i < lines.length && /\|/.test(lines[i]) && !blank(lines[i])) { const r = splitRow(lines[i]); while (r.length < head.length) r.push(""); rows.push(r.slice(0, head.length)); i++ }
+      out.push("<table><thead><tr>" + head.map((c) => "<th>" + mdInline(c) + "</th>").join("") + "</tr></thead><tbody>"
+        + rows.map((r) => "<tr>" + r.map((c) => "<td>" + mdInline(c) + "</td>").join("") + "</tr>").join("") + "</tbody></table>")
+      continue
+    }
+    if (/^\s*([-*+]|\d+[.)])\s+/.test(l)) {
+      const ordered = /^\s*\d+[.)]\s+/.test(l), items = []
+      while (i < lines.length && /^\s*([-*+]|\d+[.)])\s+/.test(lines[i])) { items.push(lines[i].replace(/^\s*([-*+]|\d+[.)])\s+/, "")); i++ }
+      out.push((ordered ? "<ol>" : "<ul>") + items.map((t) => "<li>" + mdInline(t) + "</li>").join("") + (ordered ? "</ol>" : "</ul>"))
+      continue
+    }
+    const buf = [l]; i++
+    while (i < lines.length && !blank(lines[i]) && !/^\s*(#{1,6}\s|([-*+]|\d+[.)])\s|@@B\d+@@)/.test(lines[i])) { buf.push(lines[i]); i++ }
+    out.push("<p>" + mdInline(buf.join("<br>")) + "</p>")
+  }
+  return out.join("\n").replace(/@@B(\d+)@@/g, (m, x) => blocks[+x] || "")
+}
+
+/* ============================================================
+   首屏渲染：全部照 gen 配置画
+   ============================================================ */
+function renderIntro() {
+  const I = CFG.intro || {}
+  $("eyebrow").textContent = I.eyebrow || ""
+  $("title").textContent = I.title || ""
+  document.title = (I.title || "科研作图") + " · Niuma Science"
+  $("lead").textContent = I.lead || ""
+  $("icRight").innerHTML = ICON.gear
+  // ★ 这两颗按钮的 HTML 里是空的，而 JS 只赋 disabled/hidden，从来没人填过图标 ——
+  //   实测渲染出来就是一个 38×38 的纯蓝空方块（发送，.iconbtn.send 有实心蓝底）和一个纯白空方块
+  //   （终止）。ICON.send / ICON.stop 在本文件的引用次数都是 0。
+  // 工具条那几个同理（它们的 HTML 里也是空的）。全集中在这里挂，别散成一堆 innerHTML 字面量。
+  for (const [id, ic] of [["navRecent", "clock"], ["navWs", "grid"], ["btnBack", "back"],
+    ["btnAgain", "refresh"], ["wRecent", "clock"], ["wWs", "grid"], ["btnDl", "download"]])
+    $(id).innerHTML = ICON[ic]
+  // ★ 发送 / 终止要用 insertAdjacentHTML 往前插：它们里面已经有一个 .lbl（悬停滑出的文字），
+  //   innerHTML= 会把那个 span 一起抹掉，按钮就永远只有图标、展不开了。
+  for (const [id, ic] of [["btnSend", "send"], ["btnStop", "stop"]])
+    $(id).insertAdjacentHTML("afterbegin", ICON[ic])
+  $("footHint").textContent = (CFG.intro && CFG.intro.footHint) || ""
+
+  const pf = FIELDS[CFG.promptField]
+  if (pf) {
+    $("promptLabel").innerHTML = esc(pf.label) + '<span class="req">*</span>'
+    $("prompt").placeholder = pf.placeholder || ""
+    $("promptHelp").textContent = pf.help || ""
+    // ★ 这一行漏过一次：不把输入框接回 vals，点「生成」永远只会说"先说说你要画什么"——
+    //   而框里明明写满了字。renderIntro 只跑一次，绑在这里不会重复挂监听。
+    $("prompt").addEventListener("input", () => { vals[CFG.promptField] = $("prompt").value; showErr("") })
+  }
+  const uf = FIELDS[CFG.uploadField]
+  if (uf) {
+    $("upLabel").textContent = uf.label + "（选填）"
+    $("btnUp").innerHTML = ICON.up + "<span>" + esc(uf.uploadText || "上传") + "</span>"
+    $("upHelp").textContent = uf.help || ""
+    $("upInput").setAttribute("accept", (uf.accept || "").replace(/\s/g, "").replace(/\//g, ","))
+  } else $("upField").hidden = true
+
+  renderSettings()
+  renderCost()
+}
+
+/** 右卡：把 gen.pills 里点名的字段挨个画成一排 pill；条件字段（extraFields）按 when 显隐 */
+function renderSettings() {
+  const box = $("settings")
+  box.innerHTML = ""
+  for (const id of CFG.pills || []) {
+    const f = FIELDS[id]
+    if (!f) continue
+    const fld = document.createElement("div"); fld.className = "fld"
+    const lab = document.createElement("label"); lab.textContent = f.label
+    const row = document.createElement("div"); row.className = "opts"
+    for (const o of f.options || []) {
+      const b = document.createElement("button")
+      b.type = "button"; b.className = "opt" + (vals[id] === o.v ? " on" : ""); b.textContent = o.t
+      b.addEventListener("click", () => { vals[id] = o.v; renderSettings(); renderCost() })
+      row.appendChild(b)
+    }
+    fld.append(lab, row)
+    if (f.help) { const h = document.createElement("div"); h.className = "sh"; h.textContent = f.help; fld.appendChild(h) }
+    box.appendChild(fld)
+  }
+  for (const id of CFG.extraFields || []) {
+    const f = FIELDS[id]
+    if (!f || !condOk(f.when)) continue
+    const fld = document.createElement("div"); fld.className = "fld"
+    const lab = document.createElement("label"); lab.textContent = f.label
+    const inp = document.createElement("input")
+    inp.type = "text"; inp.value = vals[id] || ""; inp.placeholder = f.placeholder || ""
+    inp.addEventListener("input", () => { vals[id] = inp.value })
+    fld.append(lab, inp)
+    box.appendChild(fld)
+  }
+}
+/** 只实现 eq —— 本模块的条件字段只用得到它。将来要更多条件请把 workflows.mjs 的 condOk 抄过来，
+ *  别在这里发明第二套语义（两套判据不一致时，界面显示的与服务端算的会不是同一份表单）。 */
+const condOk = (c) => !c || (("eq" in c) ? vals[c.field] === c.eq : true)
+
+/** 生成条左边那句话。★ 只说【真实存在】的代价：出几张图、计入当天生图张数。
+ *  不编"本次消耗 N 积分"——生图张数与模型积分是两套账，把它们混成一个数字是在骗用户。 */
+function renderCost() {
+  const n = Number(vals.n || 1) || 1
+  $("cost").innerHTML = "本次出 <b>" + n + "</b> 张候选图，计入你今天的生图张数（按账号档位限量，每天 0 点 UTC 重置）。"
+  $("goTxt").textContent = "生成机制图"
+  $("btnGo").querySelector(".play").innerHTML = ICON.play
+}
+
+/* ---- 核对材料上传 ---- */
+$("btnUp").addEventListener("click", () => $("upInput").click())
+$("upInput").addEventListener("change", async (e) => {
+  const files = [...(e.target.files || [])]
+  e.target.value = ""
+  for (const f of files) {
+    try {
+      const r = await jget("api/upload?name=" + encodeURIComponent(f.name) + (sid ? "&sid=" + encodeURIComponent(sid) : ""), { method: "POST", body: f })
+      const j = await r.json().catch(() => null)
+      if (!r.ok || !j || !j.ok) throw new Error((j && j.err) || "HTTP " + r.status)
+      sid = j.sid || sid
+      keepUrl()
+      if (!upNames.includes(f.name)) upNames.push(f.name)
+    } catch (err) {
+      if (String((err && err.message) || err) === "unauthorized") return
+      showErr("「" + f.name + "」没传上去：" + ((err && err.message) || err))
+    }
+  }
+  renderUpFiles()
+})
+function renderUpFiles() {
+  const box = $("upFiles"); box.innerHTML = ""
+  upNames.forEach((n, i) => {
+    const c = document.createElement("span"); c.className = "upchip"
+    const t = document.createElement("span"); t.textContent = n
+    const x = document.createElement("button"); x.title = "移除"; x.innerHTML = ICON.x
+    // 只从"这次要带给模型的清单"里移除，不删服务器上的文件：删文件是不可逆的，
+    // 而用户在这里的意图多半只是"这一版先不带它"。
+    x.addEventListener("click", () => { upNames.splice(i, 1); renderUpFiles() })
+    c.append(t, x); box.appendChild(c)
+  })
+}
+const keepUrl = () => { try { history.replaceState(null, "", location.pathname + "?m=" + encodeURIComponent(MOD) + (sid ? "&sid=" + encodeURIComponent(sid) : "")) } catch (_) {} }
+
+/* ============================================================
+   生成
+   ============================================================ */
+function composePrompt() {
+  const lab = (id) => (FIELDS[id]?.options || []).find((o) => o.v === vals[id])?.t || vals[id] || ""
+  const src = upNames.length && CFG.srcLine
+    ? CFG.srcLine.replace("{files}", upNames.map((n) => "`" + n + "`").join("、"))
+    : ""
+  return (CFG.prompt || "")
+    .replace("{desc}", vals[CFG.promptField] || "")
+    .replace(/\{ratio\}/g, vals.ratio || "1:1")
+    .replace(/\{style\}/g, lab("style"))
+    .replace(/\{n\}/g, String(vals.n || 1))
+    .replace("{src}", src)
+    .trim()
+}
+
+$("btnGo").addEventListener("click", () => start(composePrompt(), "生成机制图"))
+
+async function start(q, bubbleText) {
+  if (!q || RUN) return
+  const isFirst = !turns
+  if (isFirst && !String(vals[CFG.promptField] || "").trim()) {
+    showErr("先说说你要画什么——这段描述是唯一的依据，空着它没法开工。")
+    $("prompt").focus()
+    return
+  }
+  showErr("")
+  $("btnGo").classList.add("busy"); $("btnGo").disabled = true
+  $("goTxt").textContent = "正在准备…"
+  RUN = { label: "正在提交…", tools: 0, es: null }
+  msgs.push({ role: "me", text: bubbleText })
+  toWork(); render()
+
+  let j = null, why = "网络异常"
+  try {
+    const resp = await jget("api/chat/start", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      // module 只在会话还没发过消息时起作用；上传接口可能已经把会话建出来了，不带的话
+      // 它会被判成自由对话——没有模块前言、没有技能闸，而界面上一点异样都看不出来。
+      // wfForm 每轮都带：服务端那侧是 merge，重复发无害，而漏发会让 pin 字段退回默认值。
+      body: JSON.stringify({ q, sid, module: turns ? undefined : MOD, wfForm: formValues() }),
+    })
+    if (resp.status === 429) why = "请求过于频繁，请稍后再试"
+    try { j = await resp.json() } catch (_) { if (resp.status !== 429) why = "服务端错误（HTTP " + resp.status + "）" }
+  } catch (e) {
+    if (String((e && e.message) || e) === "unauthorized") return
+  }
+  resetGo()
+
+  if (!j) { failRun(why); return }
+  if (j.sid) { sid = j.sid; keepUrl() }
+  if (!j.sent) {
+    // ★ 顺序不能反：failRun 会往 msgs 里【追加】一条错误，写成「failRun(...) 然后 msgs.pop()」
+    //   等于把刚追加的错误自己弹掉 —— 症状是服务端明明回了「opencode 尚未就绪」，
+    //   界面上却只剩用户那句话，什么都没说，看着像点了没反应（实测复现）。
+    //   先撤用户气泡（这条没发出去，不该留在对话里），再报错。
+    msgs.pop()
+    failRun((j.running ? "上一轮还在进行中，这一条没有发出去。" : "") + (j.err || j.notice || "发送失败"))
+    return
+  }
+  turns++
+  attach()
+}
+function resetGo() { $("btnGo").classList.remove("busy"); $("btnGo").disabled = false; $("goTxt").textContent = "生成机制图" }
+function failRun(msg) { RUN = null; msgs.push({ role: "err", text: msg }); render() }
+
+/** 表单值：只交服务端认得的字段（gen.intake 就是从 intake 里挑出来的那几个） */
+function formValues() {
+  const v = {}
+  for (const id of Object.keys(FIELDS)) if (vals[id] !== undefined && vals[id] !== "") v[id] = vals[id]
+  if (upNames.length && CFG.uploadField) v[CFG.uploadField] = [...upNames]
+  return v
+}
+
+function attach() {
+  const es = new EventSource("api/chat/attach?sid=" + encodeURIComponent(sid))
+  if (!RUN) RUN = { label: "正在生成…", tools: 0, es: null }
+  RUN.es = es
+  RUN.label = "等待模型输出…"
+  let aiMsg = null, finished = false, paintT = 0
+  const schedule = () => { if (!paintT) paintT = setTimeout(() => { paintT = 0; render() }, 120) }
+  const close = async (note, isErr) => {
+    if (finished) return
+    finished = true
+    if (paintT) { clearTimeout(paintT); paintT = 0 }
+    es.close(); RUN = null
+    if (note) msgs.push({ role: isErr ? "err" : "tag", text: note })
+    await refreshOutputs()
+    // 一轮结束了，却既没有助手的回答、也没有任何错误 —— 这时候界面上只剩用户自己那句话，
+    // 看着和"点了没反应"一模一样。宁可说一句"这一轮没有输出"，也别让人对着空白猜。
+    if (!aiMsg && !note && !figs.length) msgs.push({ role: "tag", text: "这一轮没有产生任何输出。可以再说一次，或换个说法。" })
+    render()
+  }
+  es.addEventListener("tool", (ev) => {
+    let d; try { d = JSON.parse(ev.data) } catch (_) { return }
+    if (d.tool === "skill") { RUN.label = "正在跑技能 " + (d.skill || "") + "…"; schedule(); return }
+    RUN.label = d.title ? d.tool + " · " + String(d.title).slice(0, 40) : "工具运行中…"
+    schedule()
+  })
+  es.addEventListener("reasoning", () => { if (RUN) { RUN.label = "思考中…"; schedule() } })
+  const onText = (ev) => {
+    let t = ""
+    try { t = typeof JSON.parse(ev.data) === "string" ? JSON.parse(ev.data) : (JSON.parse(ev.data).text || "") } catch (_) { return }
+    if (!t) return
+    if (RUN) RUN.label = "正在输出…"
+    if (!aiMsg) { aiMsg = { role: "ai", text: "" }; msgs.push(aiMsg) }
+    aiMsg.text = t
+    schedule()
+  }
+  es.addEventListener("text", onText)
+  es.addEventListener("final", onText)
+  // 服务端推的是【本轮新建 / 改动的】产物文件名数组。图一出来就先摆上，不等整轮结束 ——
+  // 出图往往在一轮的中段，让用户多等两分钟才看到图是没道理的。
+  es.addEventListener("files", async () => { await refreshOutputs(); render() })
+  es.addEventListener("done", () => close(""))
+  es.addEventListener("aborted", () => close("本轮已终止。", true))
+  // ★ 这三个事件不订阅的后果是【把所有真实失败谎报成断线】。服务端有 8 处 broadcast("failed")
+  //   ——今日额度用尽、云端积分触顶、首输出看门狗超时、质量闸拦出件、越权调技能、上游模型出错、
+  //   卡死护栏、网关内部异常 —— 广播完立刻 finish() 关掉 SSE，浏览器于是触发【原生】error
+  //   （没有 .data）→ 落进下面那条兜底 → 弹「连接中断了，这一轮可能还在后台跑，刷新本页可以续上」。
+  //   真实原因一个字都不显示，而"后台还在跑"是假的：那一轮已经收场了，用户会反复刷新等一个
+  //   永远不会来的结果。reader.html 与 index.html 都订阅了这几个，只有本页漏了。
+  es.addEventListener("failed", (ev) => {
+    let m = "本轮出错"
+    try { m = JSON.parse(ev.data).message || m } catch (_) {}
+    close(m, true)
+  })
+  es.addEventListener("idle", () => close(""))          // 服务端说这轮已经不在跑了：正常收场，别报错
+  es.addEventListener("notice", (ev) => {               // 非致命提示（如"模型这一轮没返回任何文本"）
+    let m = ""
+    try { m = JSON.parse(ev.data).message || "" } catch (_) {}
+    if (m) { msgs.push({ role: "tag", text: m }); schedule() }
+  })
+  es.addEventListener("queue", (ev) => {                // 云端排队：不说的话界面看起来就是卡死
+    let d; try { d = JSON.parse(ev.data) } catch (_) { return }
+    if (!RUN) return
+    RUN.label = !d || !d.queued ? "等待模型输出…"
+      : d.rateLimited ? "上游限速中，正在等待重试…"
+      : "正在云端排队（第 " + (d.position || 1) + " 位）…"
+    schedule()
+  })
+  es.addEventListener("error", (ev) => {
+    let m = ""
+    try { m = JSON.parse(ev.data).message } catch (_) {}
+    // EventSource 断线也会触发 error（没有 data）。这时不当成失败：轮可能还在后台跑，
+    // 刷新页面能续上；直接报错会让用户以为白跑了。
+    if (m) close(m, true)
+    else if (!finished) { finished = true; es.close(); RUN = null; msgs.push({ role: "tag", text: "连接中断了。这一轮可能还在后台跑，刷新本页可以续上。" }); render() }
+  })
+}
+
+$("btnStop").addEventListener("click", async () => {
+  if (!sid) return
+  try { await jget("api/chat/abort?sid=" + encodeURIComponent(sid), { method: "POST" }) } catch (_) {}
+})
+
+/* ---- 产物 ---- */
+const IMG_RE = /\.(png|jpe?g|webp)$/i
+async function refreshOutputs() {
+  try { outputs = await jget("api/outputs?sid=" + encodeURIComponent(sid)).then((r) => (r.ok ? r.json() : [])) } catch (_) { outputs = [] }
+  const next = outputs.map((f) => f.name).filter((n) => IMG_RE.test(n))
+  const mt = new Map(outputs.map((f) => [f.name, f.mtime || 0]))
+  // 新出的图自动切成当前图：用户点了"再来一版"就是想看新的那张，还得自己去缩略图里点一下很怪。
+  // ★ 判据是【名字新 或 mtime 变新】，不能只比名字：追问改图时 agent 常原地覆盖同名文件
+  //   （figures/fig1.png），只比名字的话这轮被当成"什么都没发生"，界面停在旧图上。
+  const fresh = next.find((n) => !figs.includes(n) || (mt.get(n) || 0) > (figVer.get(n) || 0))
+  for (const f of outputs) figVer.set(f.name, f.mtime || 0)   // 版本戳更新必须排在 fresh 判定【之后】
+  figs = next
+  // 回落取 figs[0] 而不是 figs[length-1]：/api/outputs 是【按 mtime 倒序】返回的，
+  // 末位是最旧那张 —— 原来在"当前图被删/换会话"时会把最早的一版摆出来当最新。
+  if (fresh || !figs.includes(curFig)) curFig = fresh || figs[0] || ""
+}
+
+/* ============================================================
+   结果页渲染
+   ============================================================ */
+// ★ 结果页 .wtop 自带一套 wRecent/wWs，跟这颗常驻 .nav 是同一对按钮、同一个位置——
+//   不隐掉 .nav 的话，切到结果页后两套图标会在右上角原地叠在一起（钟表叠钟表、宫格叠宫格）。
+function toWork() { $("intro").hidden = true; $("work").hidden = false; $("nav").hidden = true; $("workTitle").textContent = (CFG.intro && CFG.intro.title) || "" }
+function toIntro() { $("work").hidden = true; $("intro").hidden = false; $("nav").hidden = false }
+
+function render() {
+  // ---- 图 ----
+  const fb = $("figBody")
+  fb.innerHTML = ""
+  if (curFig) {
+    const w = document.createElement("div"); w.className = "figwrap"
+    const img = document.createElement("img")
+    img.src = rawSrc(curFig)
+    img.alt = curFig
+    img.addEventListener("click", () => lightbox(img.src))
+    w.appendChild(img); fb.appendChild(w)
+    if (figs.length > 1) {
+      const th = document.createElement("div"); th.className = "thumbs"
+      for (const n of figs) {
+        const t = document.createElement("img")
+        t.src = rawSrc(n)
+        t.className = n === curFig ? "on" : ""
+        t.title = n
+        t.addEventListener("click", () => { curFig = n; render() })
+        th.appendChild(t)
+      }
+      fb.appendChild(th)
+    }
+    $("btnDl").disabled = false
+  } else {
+    const e = document.createElement("div"); e.className = "empty-hint"
+    e.innerHTML = RUN
+      ? '<span class="big">正在出图…</span>先编译提示词并过反编造闸，再送去生图。整个过程通常一到三分钟。'
+      : '<span class="big">还没有图</span>右边说一句就能开始。出来的图会摆在这里，可以点开看大图、直接下载。'
+    fb.appendChild(e)
+    $("btnDl").disabled = true
+  }
+
+  // ---- 产物条（.files / .frow / .fbtn 与阅读器壳、聊天页产出侧栏同款）----
+  const nonImg = outputs.filter((f) => !IMG_RE.test(f.name))
+  const ob = $("outs")
+  ob.hidden = !nonImg.length
+  if (nonImg.length) {
+    ob.innerHTML = ""
+    const box = document.createElement("div"); box.className = "files"
+    const t = document.createElement("div"); t.className = "ft"; t.textContent = "配套产物"
+    box.appendChild(t)
+    for (const f of nonImg.slice(0, 12)) {
+      const row = document.createElement("div"); row.className = "frow"
+      row.insertAdjacentHTML("beforeend", ICON.doc)
+      const nm = document.createElement("b"); nm.textContent = f.name
+      const dl = document.createElement("a")
+      dl.className = "fbtn"; dl.href = "api/download?name=" + encodeURIComponent(f.name) + sidQ()
+      dl.title = "下载"; dl.innerHTML = ICON.download
+      row.append(nm, dl); box.appendChild(row)
+    }
+    ob.appendChild(box)
+  }
+
+  // ---- 对话（.msg 三态与阅读器壳一致）----
+  const mb = $("msgs")
+  mb.innerHTML = ""
+  for (const m of msgs) {
+    const d = document.createElement("div")
+    if (m.role === "me") { d.className = "msg user"; d.innerHTML = '<div class="bubble"></div>'; d.firstChild.textContent = m.text }
+    else if (m.role === "ai") {
+      d.className = "msg ai"
+      d.innerHTML = '<div class="bubble"><div class="who">' + ICON.bot + "助手</div><div class=\"md\">" + renderMd(m.text) + "</div></div>"
+    } else if (m.role === "err") { d.className = "notebox err"; d.textContent = "⚠ " + m.text }
+    else { d.className = "msg tag"; d.innerHTML = '<div class="bubble"></div>'; d.firstChild.textContent = m.text }
+    mb.appendChild(d)
+  }
+  if (RUN) {
+    const r = document.createElement("div"); r.className = "runbox"
+    r.innerHTML = '<div class="rh"><span class="spin"></span><span></span></div>'
+    r.querySelector(".rh span:last-child").textContent = RUN.label
+    mb.appendChild(r)
+  }
+  // 两颗钮占同一个位置、互斥显示：一开跑，「发送」让位给「终止」
+  $("btnStop").hidden = !RUN
+  $("btnSend").hidden = !!RUN
+  mb.parentElement.scrollTop = mb.parentElement.scrollHeight
+}
+
+function lightbox(src) { const lb = $("lb"); lb.querySelector("img").src = src; lb.classList.add("on") }
+$("lb").addEventListener("click", () => $("lb").classList.remove("on"))
+document.addEventListener("click", (e) => {
+  const t = e.target
+  if (t && t.tagName === "IMG" && t.closest(".msg.ai")) lightbox(t.src)
+})
+
+// 下载同样带版本戳：同名覆盖后不带 v 的话，浏览器可能把上一版从缓存里存成文件（看到的是新图、
+// 下到的是旧图，比界面不刷新更难发现）。
+$("btnDl").addEventListener("click", () => {
+  if (!curFig) return
+  const v = figVer.get(curFig)
+  location.href = "api/download?name=" + encodeURIComponent(curFig) + sidQ() + (v ? "&v=" + Math.round(v) : "")
+})
+$("btnBack").addEventListener("click", toIntro)
+$("btnAgain").addEventListener("click", () => {
+  // 「再来一版」= 沿用同一份 spec 重出，不是从头再走三步。这句前缀就是告诉模型这件事的。
+  start((CFG.followPrefix || "") + "再出一版，构图与内容不变，换一次随机构图。", "再来一版")
+})
+
+/* ---- 追问 ---- */
+const fu = $("follow")
+fu.addEventListener("input", () => { fu.style.height = "auto"; fu.style.height = Math.min(150, fu.scrollHeight) + "px" })
+fu.addEventListener("keydown", (e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendFollow() } })
+$("btnSend").addEventListener("click", sendFollow)
+function sendFollow() {
+  const t = fu.value.trim()
+  if (!t || RUN) return
+  fu.value = ""; fu.style.height = "auto"
+  start((turns ? (CFG.followPrefix || "") : "") + t, t)
+}
+
+/* ---- 顶部导航：最近做过的 / 回工作台 ---- */
+const goWs = () => { location.href = "./workspace.html" }
+$("navWs").addEventListener("click", goWs)
+$("wWs").addEventListener("click", goWs)
+$("navRecent").addEventListener("click", (e) => openRecent(e.currentTarget))
+$("wRecent").addEventListener("click", (e) => openRecent(e.currentTarget))
+async function openRecent(anchor) {
+  const menu = $("menu")
+  if (menu.classList.contains("on")) { menu.classList.remove("on"); return }
+  const r = anchor.getBoundingClientRect()
+  menu.style.top = (r.bottom + 6) + "px"
+  menu.style.left = Math.max(8, Math.min(r.left, window.innerWidth - 290)) + "px"
+  menu.innerHTML = '<div class="empty">正在读…</div>'
+  menu.classList.add("on")
+  let list = []
+  try {
+    const j = await jget("api/sessions").then((x) => x.json())
+    // 只列本模块的会话：混进别的模块的会话，点进来会是一条没有图、没有设置的裸对话
+    list = ((j && j.sessions) || []).filter((s) => s.module === MOD).slice(0, 20)
+  } catch (_) {}
+  if (!list.length) { menu.innerHTML = '<div class="empty">还没有本模块的会话</div>'; return }
+  menu.innerHTML = ""
+  for (const s of list) {
+    const b = document.createElement("button"); b.className = "mi"
+    // /api/sessions 回的 updated 是 epoch 毫秒【数字】（而且没有 created 字段）——原样 esc 出来
+    // 就是一串 13 位数字「1754712345678」。reader.html 同一处走的是 toLocaleString，这里对齐。
+    b.innerHTML = esc((s.title || "未命名").slice(0, 40)) + "<small>" + (s.running ? "生成中 · " : "")
+      + esc(new Date(s.updated || Date.now()).toLocaleString("zh-CN", { hour12: false })) + "</small>"
+    b.addEventListener("click", () => { location.href = location.pathname + "?m=" + encodeURIComponent(MOD) + "&sid=" + encodeURIComponent(s.id) })
+    menu.appendChild(b)
+  }
+}
+document.addEventListener("click", (e) => { if (!e.target.closest("#menu") && !e.target.closest(".hbtn")) $("menu").classList.remove("on") })
+
+/* ============================================================
+   启动
+   ============================================================ */
+;(async () => {
+  // ★ 先拉模块清单核一遍，别把三种完全不同的失败都说成"网关可能正忙，稍等刷新"。
+  //   本页此前只打 /api/modules/<id>/workflow，而该接口对【未开通】的模块回 403 → r.ok 为假
+  //   → wf=null → 落进那句兜底，于是被回收权限的用户被指着去无限刷新一个永远不会好的页面。
+  //   reader.html 那侧做对了（先 meta 存在性、再 meta.allowed、最后才是配置），这里照抄。
+  const bail = (title, msg) => {
+    document.body.innerHTML = '<div style="padding:60px;text-align:center;color:#5b6573">'
+      + '<div style="font-size:17px;color:#1f2329;margin-bottom:10px">' + esc(title) + "</div>" + esc(msg)
+      + '<br><br><a href="./workspace.html" style="color:#3b6fd4">回工作台 →</a></div>'
+  }
+  let mods = null
+  try { mods = ((await jget("api/modules").then((r) => (r.ok ? r.json() : null))) || {}).modules } catch (e) {
+    if (String((e && e.message) || e) === "unauthorized") return
+  }
+  if (Array.isArray(mods)) {
+    const meta = mods.find((x) => x.id === MOD)
+    if (!meta) return bail("打不开这个模块", "服务端没有「" + MOD + "」这个模块。可能是链接过期了，回工作台重新进一次。")
+    if (!meta.allowed) return bail(meta.name || MOD, "你的账号还没有开通这个模块，请联系管理员。刷新本页不会有变化。")
+    if (meta.ui && meta.ui !== "figure") { location.href = "./" + (meta.ui === "reader" ? "reader.html" : "") + "?m=" + encodeURIComponent(MOD); return }
+  }
+  let wf = null
+  // ★ 接口回的是 {workflow:{...}}，要剥一层。直接把整个响应当配置用的话，页面会静默退化成
+  //   「取不到配置」那条兜底 —— 而 F12 里那次请求是 200、内容完整，很难往这儿想。
+  try { wf = ((await jget("api/modules/" + encodeURIComponent(MOD) + "/workflow").then((r) => (r.ok ? r.json() : null))) || {}).workflow } catch (e) {
+    if (String((e && e.message) || e) === "unauthorized") return
+  }
+  if (!wf || !wf.gen) return bail("取不到本模块的配置", "服务端版本可能比界面包旧，或网关还在启动。稍等片刻刷新本页试试。")
+  CFG = wf.gen
+  FIELDS = {}
+  for (const f of CFG.intake || []) FIELDS[f.id] = f
+  for (const f of CFG.intake || []) if (f.default !== undefined) vals[f.id] = f.default
+  renderIntro()
+
+  // 带 ?sid= 打开（从「最近」进来、或刷新页面）→ 直接进结果页，把这个会话的图和对话捞回来
+  if (sid) {
+    toWork()
+    let hist = [], job = { running: false }
+    try {
+      ;[hist, job] = await Promise.all([
+        jget("api/history?id=" + encodeURIComponent(sid)).then((r) => (r.ok ? r.json() : [])).catch(() => []),
+        jget("api/job?sid=" + encodeURIComponent(sid)).then((r) => (r.ok ? r.json() : { running: false })).catch(() => ({ running: false })),
+      ])
+    } catch (_) {}
+    for (const h of hist || []) {
+      if (!h || !h.text) continue
+      // 第一条用户消息是拼出来的长提示词，原样贴回去会占满半屏。只留一句可读的。
+      msgs.push({ role: h.role === "user" ? "me" : "ai", text: h.role === "user" && !turns ? "生成机制图" : h.text })
+      if (h.role === "user") turns++
+    }
+    await refreshOutputs()
+    render()
+    if (job && job.running) { RUN = { label: "这一轮还在后台跑，正在续上…", tools: 0, es: null }; attach() }
+  }
+})()
+
+/* ============================================================
+   专用壳的三件公共事：公告 / 更新提示 / 闲置锁
+   ------------------------------------------------------------
+   ★ 为什么这里要单独写一遍：这两个壳（reader / figure）是自包含页面，不引外部 js，
+     而聊天页那套公告面板 + 更新横幅 + 登录弹窗有几百行，整体搬过来既臃肿又要维护两份。
+     所以这里【只做察觉，不做处置】：发现有事就挂一条一行的提示、把用户交回主页去办。
+     用户在文献研读里泡一整天，至少不会对维护通知、界面更新、锁屏一无所知。
+   ★ 闲置锁与聊天页共用同一套 localStorage 键（nm_locked / nm_last_active）：
+     - 活跃时间写全局，别让"用户在别的标签干活"被本页算成闲置；
+     - 别的标签锁了 → 本页也立刻交回主页（那边有登录闸）。不跟的话这道闸换个标签就绕过去了。
+   ============================================================ */
+;(function () {
+  var LOCK_KEY = "nm_locked", ACT_KEY = "nm_last_active"
+  var LOGOUT_MS = 24 * 60 * 60 * 1000
+  var last = Date.now(), wrote = 0
+  function bump() {
+    last = Date.now()
+    if (last - wrote > 5000) { wrote = last; try { localStorage.setItem(ACT_KEY, String(last)) } catch (_) {} }
+  }
+  ;["mousemove", "mousedown", "keydown", "wheel", "touchstart", "visibilitychange"].forEach(function (e) {
+    window.addEventListener(e, bump, { passive: true })
+  })
+  function toHome(why) { try { sessionStorage.setItem("nm_shell_back", why || "") } catch (_) {} location.href = "./" }
+  window.addEventListener("storage", function (e) {
+    if (e.key === ACT_KEY) { var t = Number(e.newValue) || 0; if (t > last) last = t }
+    if (e.key === LOCK_KEY && e.newValue === "1") toHome("locked")
+  })
+  setInterval(function () {
+    var act = 0; try { act = Number(localStorage.getItem(ACT_KEY)) || 0 } catch (_) {}
+    if (act > last) last = act
+    try { if (localStorage.getItem(LOCK_KEY) === "1") return toHome("locked") } catch (_) {}
+    // 到点了就把全局锁一置、交回主页：锁屏弹窗归主页管，这里不重实现一套
+    if (Date.now() - last >= LOGOUT_MS) { try { localStorage.setItem(LOCK_KEY, "1") } catch (_) {} toHome("idle") }
+  }, 30000)
+
+  /* ---- 一行提示条：公告 / 界面包 / 技能包 / 登录态失效 ---- */
+  var bar = null
+  function showBar(text, act) {
+    if (!bar) {
+      bar = document.createElement("div")
+      bar.style.cssText = "position:fixed;left:0;right:0;top:0;z-index:9999;display:flex;gap:10px;"
+        + "align-items:center;justify-content:center;padding:7px 14px;font-size:13px;"
+        + "background:#fff8e6;border-bottom:1px solid #f0d7ae;color:#8a5a12"
+      document.body.appendChild(bar)
+    }
+    bar.textContent = ""
+    bar.appendChild(document.createTextNode(text))
+    var a = document.createElement("a")
+    a.href = "./"; a.textContent = act || "回主页处理 →"
+    a.style.cssText = "color:#3b6fd4;text-decoration:none;white-space:nowrap"
+    bar.appendChild(a)
+    var x = document.createElement("button")
+    x.type = "button"; x.textContent = "×"; x.title = "本次不再提示"
+    x.style.cssText = "border:0;background:transparent;color:inherit;cursor:pointer;font-size:15px;line-height:1"
+    x.addEventListener("click", function () { bar.remove(); bar = null })
+    bar.appendChild(x)
+  }
+  var seenNotice = 0
+  async function poll() {
+    var j = null
+    try { j = await (await fetch("api/cloud/notice", { signal: AbortSignal.timeout(8000) })).json() } catch (_) { return }
+    if (!j) return
+    // 登录态在后台被作废：主页有登录闸，交回去
+    if (j.loggedOut) return toHome("loggedOut")
+    if (j.webUpdate) return showBar("界面有新版本可用。", "回主页更新 →")
+    if (j.skillUpdate) return showBar("技能包有新版本可用。", "回主页更新 →")
+    var unread = Array.isArray(j.digest) ? j.digest.length : 0
+    if (unread && unread !== seenNotice) { seenNotice = unread; showBar("平台有新公告。", "回主页查看 →") }
+  }
+  poll(); setInterval(poll, 5 * 60 * 1000)
+  window.addEventListener("focus", poll)
+})()
+</script>
+</body>
+</html>

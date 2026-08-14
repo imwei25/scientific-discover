@@ -1,0 +1,18 @@
+[package]
+name = "sciagent-desktop"
+version = "0.1.21"
+description = "Niuma Science 桌面版启动器"
+edition = "2021"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-single-instance = "2"
+serde_json = "1"
+dirs = "6" # 取系统「下载」已知文件夹（用户可能挪过位置，不能硬拼 %USERPROFILE%\Downloads）
+
+[profile.release]
+opt-level = "s"
+lto = true

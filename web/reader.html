@@ -1,0 +1,3591 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>文献研读 · Niuma Science</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+/* ============================================================
+   阅读器壳 —— 四个「核心能力」模块共用（文献研读 / 文稿核查与审校 / 文章润色 / 数据统计与分析）
+   ------------------------------------------------------------
+   【本文件不认识任何一个具体模块】模式清单、每个模式发什么话、首屏文案、设置字段、变量对应
+   面板，全部来自 GET /api/modules/<id>/workflow 的 reader 段（定义在 workflows.mjs）。
+   这里只负责照着画、照着发、照着把结果摆回对应的面板。所以加一个模式、改一句提示词，
+   只动 workflows.mjs，走「界面包」热更新即可，不用重发安装包。
+   ★ 推论：本文件里【不该出现任何模块 id 的字面量】（兜底默认值与注释除外）。写死过两次，
+     两次都是同一种后果——别的模块被当成文献研读：会话绑错模块（前言与技能闸全是别人的）、
+     「最近」列表列出别的模块的会话，而界面照常显示本模块的样子，从外面完全看不出来。
+
+   【为什么这四个模块该用它】它们的输入都是【一份东西】（一篇文献 / 一份稿件 / 一张数据表），
+   想对它做的事有好几种、彼此没有先后、随时来回切。套进通用壳（首屏表单 → 步骤条 → 一条
+   对话流）时，步骤条永远停在"共 N 步、已完成 1 步"，而那份东西本身没地方摆。
+
+   【与后端的关系：一个字都没多加】会话、模块闸、前言注入、额度、产物目录全走原有接口：
+     POST api/chat/start  → 起一轮（body 带 module=<当前模块>，服务端据此绑定会话并注入前言）
+     GET  api/chat/attach → SSE 直播
+     POST api/upload      → 上传（没有 sid 时它会现建一个会话，此时会话【还没有模块绑定】）
+     GET  api/raw/preview → 左栏渲染那份东西；api/outputs 列产物
+   模式之间的区别只在【发过去的那句话】：消息开头的方括号标记（modes[].mark）就是模式信号，
+   workflows.mjs 的 flow 里把这些标记教给了 agent，刷新页面后也靠它把每一轮认回对应面板。
+
+   【一份东西 = 一个会话】各模式共享同一个 opencode 会话，所以原文只抽一次；切到"智能助手"
+   时前面几轮的上下文原样都在，接着问就行。换一份 = 新开会话。
+   ============================================================ */
+:root{
+  --bg:#eef1f5;
+  --panel:#ffffff;
+  --panel-soft:#f5f7fa;
+  --text:#1f2329;
+  --muted:#5b6573;
+  --faint:#8a93a0;
+  --accent:#3b6fd4;
+  --accent-deep:#2f5bb8;
+  --accent-soft:rgba(59,111,212,.10);
+  --green:#2bb673;
+  --amber:#d98324;
+  --red:#c0392b;
+  --red-deep:#9e2f22;
+  --line:rgba(20,24,30,.10);
+  --line-hi:rgba(20,24,30,.16);
+  --r-lg:16px; --r-md:12px; --r-sm:10px;
+  --shadow-sm:0 2px 8px rgba(20,24,30,.06);
+  --shadow-md:0 6px 22px rgba(20,24,30,.10);
+  /* Space Grotesk 与工作台 / 登录页同源。它没有汉字，中文自然落到后面的 雅黑 / 苹方 ——
+     设计稿要的就是这个"拉丁字母是它、汉字是系统字"的混排。字体拉不下来（离线 / 被墙）时
+     整条回落到系统字，页面照常可用，所以不必为它做任何兜底。 */
+  --sans:'Space Grotesk',system-ui,-apple-system,"Segoe UI","Microsoft YaHei","PingFang SC",sans-serif;
+}
+*{box-sizing:border-box}
+html,body{height:100%}
+body{margin:0;background:var(--bg);color:var(--text);font-family:var(--sans);font-size:14px;line-height:1.6;-webkit-font-smoothing:antialiased}
+button{font:inherit}
+
+/* ---------- 通用小按钮 ----------
+   顶栏整条撤掉了：首屏那一行（品牌 + 模块徽标 + 已就绪 + 最近 + 工作台）说的每一件事，
+   卡片里都已经说过一遍（书本图标、大标题「文献研读」、副标题），三处重复只是在占地方；
+   进了阅读器之后左栏顶上就是文件名，也不需要再有一条横幅告诉你在哪。
+   原来挂在顶栏上的三个动作各自找到了更该待的地方：
+     · 首屏 → 右上角（最近做过的 / 回工作台）
+     · 阅读器 → 左栏文件工具条的右端（换一篇 / 最近 / 工作台），与「原文」按钮并排 */
+.hbtn{display:inline-flex;align-items:center;gap:6px;height:28px;padding:0 10px;border-radius:8px;border:1px solid var(--line-hi);background:#fff;color:var(--muted);cursor:pointer;font-size:12.5px;transition:.15s;flex:none}
+.hbtn:hover{border-color:var(--accent);color:var(--accent)}
+.hbtn svg{width:14px;height:14px}
+.hbtn[disabled]{opacity:.45;cursor:not-allowed}
+/* 首屏右上角那两个链接（最近做过的 / 回工作台）。
+   原来摆在卡片正下方、「开始」按钮底下——那是全屏视线落点，两个"离开这一屏"的动作放那里
+   等于跟主操作抢注意力。挪到右上角这个惯常的次要导航位。
+   用 fixed 不用 absolute：.intro 自己是可滚动的整屏容器（内容长了会滚），absolute 会让它
+   跟着内容滚走。.intro[hidden] 时整屏 display:none，子元素连它一起不渲染，不会漏到阅读器上。 */
+.intronav{position:fixed;top:14px;right:18px;z-index:3;display:flex;align-items:center;gap:6px;margin:0}
+/* 里面那两个按钮用全局的 .ibtn（见「图标按钮 + 悬停浮出的文字」那一节）。
+   原来的 .linkbtn 文字链已经没有使用者，删掉，别留一条没人用的样式让人以为还有第三种按钮。 */
+
+/* 「最近」下拉。position:fixed + 打开时按触发按钮算坐标 —— 因为这个菜单要被两个位置的按钮
+   共用（首屏卡片下方、阅读器的文件工具条），绝对定位就得跟着各自的定位父级走，坐标会打架。 */
+.menu{position:fixed;min-width:270px;max-width:min(380px,92vw);max-height:60vh;overflow:auto;background:#fff;border:1px solid var(--line-hi);border-radius:var(--r-md);box-shadow:var(--shadow-md);padding:6px;display:none;z-index:200}
+.menu.on{display:block}
+.menu .mi{display:block;width:100%;text-align:left;border:none;background:none;padding:8px 10px;border-radius:8px;cursor:pointer;color:var(--text);font-size:13px}
+.menu .mi:hover{background:var(--panel-soft)}
+.menu .mi small{display:block;color:var(--faint);font-size:11px;margin-top:2px}
+.menu .empty{padding:12px 10px;color:var(--faint);font-size:12.5px}
+
+/* ---------- 上传首屏（居中大卡片，与基金申报 / 综述撰写的首屏同源）---------- */
+.stage{position:fixed;inset:0;z-index:0;pointer-events:none;background:radial-gradient(ellipse 80% 50% at 50% 0%,rgba(59,111,212,.06) 0%,transparent 60%)}
+/* ★ [hidden] 必须显式写死。作者样式里的 display:flex 优先级高过浏览器给 [hidden] 的
+   display:none —— 少了这一行，点「开始研读」之后首屏【根本不会消失】，它和阅读器上下叠成
+   两屏，用户得用滚轮往下拉才看得到阅读器，看上去就像"点了没跳转"。下面 .reader[hidden] 是同一回事。 */
+.intro[hidden]{display:none}
+.intro{position:relative;z-index:1;height:100vh;overflow:auto;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:40px 20px 56px}
+.introcard{width:min(760px,100%);background:var(--panel);border:1px solid var(--line-hi);border-radius:var(--r-lg);box-shadow:var(--shadow-md);padding:44px 38px 34px;text-align:center}
+.introcard .hero-ic{width:56px;height:56px;margin:0 auto 22px;border-radius:14px;background:var(--accent-soft);color:var(--accent);display:grid;place-items:center;box-shadow:0 6px 18px -6px rgba(59,111,212,.4)}
+.introcard .hero-ic svg{width:28px;height:28px}
+.introcard h1{margin:0 0 12px;font-size:30px;font-weight:700;letter-spacing:.01em}
+.introcard .lead{font-size:15px;color:var(--muted);line-height:1.78;margin:0 auto;max-width:560px}
+.divider{height:1px;background:var(--line);margin:30px auto;max-width:500px}
+
+.drop{border:1.5px dashed var(--line-hi);border-radius:var(--r-md);background:var(--panel-soft);padding:26px 20px;text-align:center;color:var(--muted);cursor:pointer;transition:.15s}
+.drop:hover,.drop.over{border-color:var(--accent);background:var(--accent-soft);color:var(--accent)}
+.drop svg{width:26px;height:26px;color:var(--accent);margin-bottom:8px}
+.drop .d1{font-size:14px;font-weight:600;color:var(--text)}
+.drop .d2{font-size:12.5px;color:var(--muted);margin-top:6px}
+
+/* 选中的文件：扩展名徽标 + 名字 + 大小 + 移除。左对齐（卡片整体居中，唯独这一行是数据，
+   居中会让长文件名的省略号跑到两头，读起来别扭）。 */
+.picked{display:flex;align-items:center;gap:10px;margin-top:12px;padding:9px 11px;border:1px solid var(--line-hi);border-radius:var(--r-sm);background:var(--panel);text-align:left}
+.picked .fic{width:30px;height:30px;flex:none;border-radius:8px;background:var(--accent-soft);color:var(--accent);display:grid;place-items:center;font-size:11px;font-weight:700}
+.picked .fn{flex:1;min-width:0}
+.picked .fn b{display:block;font-size:13px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.picked .fn span{font-size:11.5px;color:var(--faint)}
+.picked .rm{border:none;background:none;color:var(--faint);cursor:pointer;width:26px;height:26px;border-radius:6px;font-size:15px;line-height:1;flex:none}
+.picked .rm:hover{color:#e0564f;background:rgba(224,86,79,.10)}
+
+.gobtn{display:inline-flex;align-items:center;justify-content:center;gap:7px;border:none;cursor:pointer;font:inherit;font-size:13px;font-weight:600;padding:11px 22px;border-radius:var(--r-sm);margin-top:20px;transition:.15s;background:var(--accent);color:#fff;box-shadow:0 4px 12px rgba(59,111,212,.26)}
+.gobtn:hover{background:var(--accent-deep)}
+.gobtn[disabled]{background:#c3ccd8;box-shadow:none;cursor:not-allowed}
+.gobtn svg{width:16px;height:16px}
+
+/* 底部这排 chip 写的是本模块真能做的四件事，不是装饰性形容词 —— 用户第一眼要看到的是
+   "传进来之后能干嘛"，而不是五个漂亮的四字词。 */
+.chips{display:flex;flex-wrap:wrap;gap:8px;justify-content:center;margin-top:28px}
+.chip{display:inline-flex;align-items:center;gap:6px;background:var(--panel-soft);border:1px solid var(--line-hi);border-radius:999px;padding:7px 14px;font-size:12.5px;color:#46586e;transition:.15s}
+.chip:hover{border-color:var(--accent);color:var(--accent)}
+.chip svg{width:14px;height:14px}
+
+/* 首屏必答题（stats 的「含不含患者身份信息」）。它不是设置、是安全闸，所以摆在按钮上方、
+   没答之前「开始」是灰的 —— 默认「否」等于替用户声明「本表不含身份信息」，而他表里就摆着
+   300 个姓名和住院号。 */
+.askbox{margin-top:14px;padding:12px 14px;border:1px solid var(--line-hi);border-radius:var(--r-sm);background:var(--panel-soft);text-align:left}
+.askbox .asklbl{font-size:13px;font-weight:600}
+.askbox .asklbl .req{color:var(--red);font-size:11px;margin-left:4px}
+.askbox .askhelp{font-size:11.5px;color:var(--faint);margin-top:3px;line-height:1.7}
+.askbox .askopts{display:flex;gap:8px;margin-top:9px}
+.askbtn{flex:1;height:34px;border:1px solid var(--line-hi);background:#fff;border-radius:8px;color:var(--muted);cursor:pointer;font-size:13px;transition:.15s}
+.askbtn:hover{border-color:var(--accent);color:var(--accent)}
+.askbtn.on{background:var(--accent);border-color:var(--accent);color:#fff;font-weight:600}
+
+/* 设置弹层：复用 .menu 的 fixed 定位，只是内容是一组控件 */
+.setmenu{min-width:320px;max-width:min(420px,92vw);padding:12px 14px}
+.setmenu .sf{margin-bottom:12px}
+.setmenu .sf:last-child{margin-bottom:0}
+.setmenu .sf > label{display:block;font-size:12.5px;font-weight:600;margin-bottom:5px}
+.setmenu .sf .sh{font-size:11px;color:var(--faint);line-height:1.7;margin-bottom:5px}
+.setmenu select,.setmenu input[type=text]{width:100%;height:32px;border:1px solid var(--line-hi);border-radius:8px;padding:0 9px;font:inherit;font-size:12.5px;background:#fff;color:var(--text)}
+.setmenu .schk{display:flex;align-items:center;gap:7px;font-size:12.5px;color:var(--muted);margin-bottom:4px;cursor:pointer}
+/* 「切到没跑过的模式 → 自动摊开设置」那条路，底部这枚按钮就是"填完了，开跑" */
+.setmenu .sfoot{margin-top:13px;padding-top:12px;border-top:1px solid var(--line)}
+.setmenu .sfoot .st{font-size:11px;color:var(--faint);line-height:1.7;margin-bottom:8px}
+.setmenu .gostart{display:flex;align-items:center;justify-content:center;gap:7px;width:100%;height:34px;border:none;border-radius:9px;background:var(--accent);color:#fff;font:inherit;font-size:13px;font-weight:500;cursor:pointer;transition:background .15s}
+.setmenu .gostart:hover{background:var(--accent-deep)}
+.setmenu .gostart svg{width:13px;height:13px}
+
+/* 变量对应面板（只有 stats）：默认折叠的一条，展开是两列下拉 */
+.varsbox{flex:none;border-bottom:1px solid var(--line);background:#fff}
+.varsbox > summary{cursor:pointer;padding:9px 16px;font-size:12.5px;font-weight:600;display:flex;align-items:center;gap:8px;list-style:none}
+.varsbox > summary::-webkit-details-marker{display:none}
+.varsbox > summary::before{content:"▸";color:var(--faint);font-size:11px}
+.varsbox[open] > summary::before{content:"▾"}
+.varsbox .varssum{font-weight:400;color:var(--faint);font-size:11.5px}
+.varsbox .varssub{padding:0 16px 8px;font-size:11.5px;color:var(--faint);line-height:1.7}
+.varsgrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:9px;padding:0 16px 14px}
+.varsgrid .vf label{display:block;font-size:11.5px;color:var(--muted);margin-bottom:4px}
+.varsgrid .vf select,.varsgrid .vf input{width:100%;height:30px;border:1px solid var(--line-hi);border-radius:7px;padding:0 8px;font:inherit;font-size:12px;background:#fff;color:var(--text)}
+.varsgrid .vf.miss label{color:var(--red);font-weight:600}
+.varsgrid .vf.miss select,.varsgrid .vf.miss input{border-color:var(--red)}
+/* 多选的 columns（协变量）：一排可点的列名，选中高亮。单选那几个仍是下拉。 */
+.varsgrid .vf .vchips{display:flex;flex-wrap:wrap;gap:4px}
+.varsgrid .vf .vchip{padding:3px 8px;border:1px solid var(--line-hi);border-radius:6px;background:#fff;
+  color:var(--muted);font:inherit;font-size:11.5px;line-height:1.5;cursor:pointer}
+.varsgrid .vf .vchip:hover{border-color:var(--accent)}
+.varsgrid .vf .vchip.on{background:var(--accent);border-color:var(--accent);color:#fff}
+/* 自动认列：每格底下一行「凭什么这么认」。用户核对的是这句话，不是那个下拉本身 —— 所以它
+   必须始终在场，不能收进 title 提示里（悬停才看得见 = 没人看得见）。 */
+.varsgrid .vf .vwhy{margin-top:4px;font-size:11px;line-height:1.6;color:var(--faint)}
+.varsgrid .vf .vwhy b{font-weight:600;color:var(--muted)}
+.varsgrid .vf.auto select{border-color:#bcd4f5;background:#f7fbff}
+.varsgrid .vf .vtag{display:inline-block;margin-left:5px;padding:0 5px;border-radius:5px;font-size:10px;
+  font-weight:600;vertical-align:1px;background:#eaf2fe;color:#2d61b5}
+.varsgrid .vf .vtag.low{background:#fdf3e6;color:#8a5a12}
+/* 确认条：整个改动的落点。自动填完【不算数】，用户点了这里才算「以我指定的为准」 */
+.varsconfirm{margin:0 16px 12px;padding:10px 12px;border:1px solid #cfe0f8;background:#f5f9ff;
+  border-radius:var(--r-sm);font-size:12px;line-height:1.75;color:#28456f}
+.varsconfirm.done{border-color:#cfe8d4;background:#f4faf5;color:#2c6136}
+.varsconfirm .row{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:8px}
+.varsconfirm button{height:28px;padding:0 12px;border-radius:7px;border:1px solid var(--line-hi);
+  background:#fff;color:var(--text);font:inherit;font-size:12px;cursor:pointer}
+.varsconfirm button.pri{background:var(--accent);border-color:var(--accent);color:#fff;font-weight:500}
+.varsconfirm button.pri:hover{background:var(--accent-deep)}
+.varsconfirm .lnk{background:none;border:none;padding:0;color:var(--accent);text-decoration:underline;height:auto}
+/* 前 5 行原样：认列认得对不对，看一眼真数据最快 */
+.varspeek{margin:0 16px 12px}
+.varspeek > summary{cursor:pointer;font-size:11.5px;color:var(--faint);list-style:none}
+.varspeek > summary::-webkit-details-marker{display:none}
+.varspeek .tw{overflow-x:auto;margin-top:7px;border:1px solid var(--line);border-radius:var(--r-sm)}
+.varspeek table{border-collapse:collapse;font-size:11.5px;white-space:nowrap}
+.varspeek th,.varspeek td{padding:4px 9px;border-bottom:1px solid var(--line);text-align:left}
+.varspeek th{background:var(--bg-soft, #f6f7f9);font-weight:600;position:sticky;top:0}
+.varspeek td{color:var(--muted)}
+.varspeek tr:last-child td{border-bottom:none}
+.varspeek th.hit{color:#2d61b5}
+
+/* 多文件条（source.multi 的模块）：已传的每一份一枚 chip，点着切换，× 删除，末尾一个「+ 再传一张」 */
+.filestrip{flex:none;display:flex;align-items:center;gap:6px;padding:7px 12px;overflow-x:auto;
+  border-bottom:1px solid var(--line);background:rgba(231,234,239,.96)}
+.filestrip[hidden]{display:none}
+.filestrip .fchip{display:inline-flex;align-items:center;gap:6px;flex:none;max-width:230px;height:27px;padding:0 4px 0 9px;
+  border:1px solid var(--line);border-radius:8px;background:#fff;color:var(--muted);font-size:12px;cursor:pointer}
+.filestrip .fchip:hover{border-color:var(--line-hi)}
+.filestrip .fchip.on{border-color:var(--accent);color:var(--accent);background:var(--accent-soft);font-weight:600}
+.filestrip .fchip .nm{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.filestrip .fchip .x{width:18px;height:18px;flex:none;border:none;background:none;border-radius:5px;color:var(--faint);
+  cursor:pointer;display:grid;place-items:center;font-size:14px;line-height:1}
+.filestrip .fchip .x:hover{background:#fdecea;color:var(--red)}
+.filestrip .fchip .x:disabled{opacity:.4;cursor:default}
+.filestrip .addf{flex:none;height:27px;padding:0 10px;border:1px dashed var(--line-hi);border-radius:8px;background:none;
+  color:var(--muted);font:inherit;font-size:12px;cursor:pointer}
+.filestrip .addf:hover{border-color:var(--accent);color:var(--accent)}
+.filestrip .addf:disabled{opacity:.5;cursor:default}
+.filestrip .fnote{flex:none;font-size:11.5px;color:var(--faint);margin-left:2px}
+
+/* 数据表预览（stats 左栏）：csv/tsv 直接渲染；xlsx 在前端解压解析后同样渲染成表 */
+.tablewrap{position:absolute;inset:0;overflow:auto;padding:14px 16px;background:#fff}
+.tablewrap .sheetbar{display:flex;align-items:center;gap:8px;margin-bottom:10px;font-size:11.5px;color:var(--muted)}
+.tablewrap .sheetbar select{height:26px;border:1px solid var(--line-hi);border-radius:7px;background:#fff;font:inherit;font-size:12px;padding:0 6px}
+.tablewrap table{border-collapse:collapse;font-size:12px;white-space:nowrap}
+.tablewrap th,.tablewrap td{border:1px solid var(--line);padding:5px 9px;text-align:left}
+.tablewrap th{background:var(--panel-soft);font-weight:600;position:sticky;top:0;z-index:1}
+.tablewrap tbody tr:nth-child(even){background:#fafbfc}
+.tablewrap .more{margin-top:10px;font-size:11.5px;color:var(--faint)}
+
+.introcard .tip{margin-top:22px;font-size:11.5px;color:var(--faint);line-height:1.8}
+.introcard .err{margin-top:14px;padding:10px 12px;border-radius:var(--r-sm);background:#fdecea;border:1px solid #f5c2bd;color:var(--red);font-size:12.5px;display:none;text-align:left;line-height:1.75}
+.introcard .err.on{display:block}
+/* 不是错、只是要交代一句（例如点开的是旧版留下的、没有原文的会话）——别用红色吓人 */
+.introcard .err.info{background:var(--panel-soft);border-color:var(--line-hi);color:var(--muted)}
+.bar{height:4px;border-radius:999px;background:var(--line);overflow:hidden;margin-top:14px;display:none}
+.bar.on{display:block}
+.bar i{display:block;height:100%;width:30%;background:var(--accent);border-radius:999px;animation:slide 1.1s ease-in-out infinite}
+@keyframes slide{0%{margin-left:-30%}100%{margin-left:100%}}
+@media (max-width:520px){
+  .introcard{padding:32px 22px 26px}
+  .introcard h1{font-size:26px}
+}
+
+/* ---------- 阅读器三栏 ---------- */
+.reader{display:flex;height:100vh;overflow:hidden}
+.reader[hidden]{display:none}
+
+/* 左：原文 */
+.doc-pane{flex:1 1 0;min-width:0;background:#e7eaef;display:flex;flex-direction:column}
+.docbar{height:48px;flex:none;display:flex;align-items:center;gap:12px;padding:0 14px;border-bottom:1px solid var(--line);background:rgba(231,234,239,.96)}
+.docbar .ficon{width:28px;height:28px;border-radius:8px;background:#fff;border:1px solid var(--line);display:grid;place-items:center;color:var(--accent);flex:none}
+.docbar .ficon svg{width:15px;height:15px}
+.docbar .fmeta{flex:1;min-width:0}
+.docbar .fname{font-size:13px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.docbar .fsub{font-size:11px;color:var(--faint);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.barsep{width:1px;height:18px;background:var(--line-hi);flex:none;margin:0 2px}
+.zoom{display:flex;align-items:center;gap:2px;flex:none;background:#fff;border:1px solid var(--line);border-radius:9px;padding:3px}
+.zoom button{width:26px;height:24px;border:none;background:none;border-radius:6px;color:var(--muted);cursor:pointer;display:grid;place-items:center}
+.zoom button:hover{background:var(--accent-soft);color:var(--accent)}
+.zoom button svg{width:14px;height:14px}
+.zoom .zval{min-width:40px;text-align:center;font-size:11.5px;color:var(--muted);font-variant-numeric:tabular-nums}
+.docview{flex:1;position:relative;overflow:hidden;background:#e7eaef}
+.docview iframe{position:absolute;left:0;top:0;border:0;background:#fff;transform-origin:top left}
+.docmsg{position:absolute;inset:0;display:grid;place-items:center;padding:30px;text-align:center;color:var(--muted);font-size:13px;line-height:1.9}
+
+/* 中：助手 */
+.ai-pane{width:clamp(440px,42%,660px);min-width:400px;flex:none;background:var(--panel);border-left:1px solid var(--line);display:flex;flex-direction:column;z-index:20}
+.ai-head{height:48px;flex:none;border-bottom:1px solid var(--line);display:flex;align-items:center;justify-content:space-between;gap:10px;padding:0 16px;background:#fff}
+.ai-head .title{display:flex;align-items:center;gap:8px;font-size:14px;font-weight:600}
+.ai-head .title svg{width:17px;height:17px;color:var(--accent)}
+.ai-head .badge{font-size:11px;color:var(--faint);background:var(--panel-soft);border:1px solid var(--line);padding:3px 9px;border-radius:999px;white-space:nowrap}
+.ai-head .acts{display:flex;align-items:center;gap:6px}
+.ai-body{flex:1;overflow:auto;padding:18px 18px 22px;background:var(--panel-soft)}
+.pane{display:none}
+.pane.on{display:block}
+
+/* 运行状态条 */
+.runbox{background:#fff;border:1px solid var(--line);border-radius:var(--r-md);padding:12px 14px;margin-bottom:14px;box-shadow:var(--shadow-sm)}
+.runbox .rh{display:flex;align-items:center;gap:9px;font-size:12.5px;color:var(--muted)}
+.spin{width:13px;height:13px;border-radius:50%;border:2px solid var(--line-hi);border-top-color:var(--accent);animation:sp .8s linear infinite;flex:none}
+@keyframes sp{to{transform:rotate(360deg)}}
+.pills{display:flex;flex-wrap:wrap;gap:5px;margin-top:9px}
+/* ★ 选择器必须带 .pills：下面「发送 / 终止」那组按钮也叫 .pill，两条同名规则里后写的赢，
+   技能小标签会被套上按钮样式（32px 高、白字白底 = 看不见字）。加一层限定就各归各。 */
+.pills .pill{display:inline-flex;align-items:center;gap:5px;height:auto;min-width:0;font-size:11px;padding:3px 8px;border-radius:999px;background:var(--accent-soft);color:var(--accent);border:1px solid rgba(59,111,212,.25)}
+.runbox details{margin-top:9px}
+.runbox summary{cursor:pointer;font-size:11.5px;color:var(--faint)}
+.runbox .trow{font-size:11.5px;color:var(--muted);padding:3px 0;display:flex;gap:7px}
+.runbox .trow .st{width:12px;flex:none;color:var(--faint)}
+
+.notebox{padding:11px 13px;border-radius:var(--r-sm);font-size:12.5px;line-height:1.8;margin-bottom:14px}
+.notebox.warn{background:#fdf3e6;border:1px solid #f0d7ae;color:#8a5a12}
+.notebox.err{background:#fdecea;border:1px solid #f5c2bd;color:var(--red)}
+.notebox.info{background:#fff;border:1px solid var(--line);color:var(--muted)}
+/* 闸红横幅里的「仍要出件 / 恢复拦截」。做成次要按钮：它是逃生口，不该比"去改稿"更显眼。 */
+.notebox .gbypass{margin-left:8px;padding:3px 10px;border-radius:6px;border:1px solid currentColor;
+  background:transparent;color:inherit;font-size:12px;cursor:pointer;white-space:nowrap}
+.notebox .gbypass:hover{background:rgba(0,0,0,.05)}
+.notebox .gbypass:disabled{opacity:.5;cursor:default}
+
+/* ---- 两阶段模式的阶段卡（目前只有「演示 PPT」：先出大纲，用户确认后才出片）----
+   【为什么必须有这张卡】第一步跑完时，面板里躺着的是一篇大纲，而用户点的按钮叫「演示 PPT」，
+   头部按钮还变成了「重新生成」——看上去就是"我要片子，它给了我一篇文字，然后说做完了"。
+   真正的下一步（让它照这份大纲出片）此前在界面上【没有任何入口】：唯一能想到的办法是在
+   输入框回一句"确认，出片"，而那会被打上追问标记，追问的规矩恰恰是"不要重跑、不要产出文件"。
+   这张卡把"现在到哪一步 / 下一步点哪里 / 想改先说话"三件事写在正文最上面，按钮直接发第二阶段。 */
+.stagecard{border:1px solid var(--line);border-left:3px solid var(--accent);border-radius:var(--r-sm);
+  background:var(--panel-soft);padding:12px 14px;margin-bottom:14px}
+.stagecard.ok{border-left-color:var(--green)}
+.stagecard .sc-step{font-size:11.5px;font-weight:700;color:var(--accent);margin-bottom:5px}
+.stagecard.ok .sc-step{color:var(--green)}
+.stagecard .sc-md{font-size:12.5px;line-height:1.85;color:var(--muted)}
+.stagecard .sc-md p{margin:0}
+.stagecard .sc-md p+p{margin-top:6px}
+.stagecard .sc-act{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin-top:11px}
+.stagecard .sc-go{display:inline-flex;align-items:center;gap:6px;height:30px;padding:0 14px;border:none;border-radius:8px;
+  background:var(--accent);color:#fff;font:inherit;font-size:12.5px;font-weight:600;cursor:pointer;transition:.15s}
+.stagecard .sc-go:hover{background:var(--accent-deep)}
+.stagecard .sc-go[disabled]{background:#c3ccd8;cursor:not-allowed}
+.stagecard .sc-go svg{width:14px;height:14px}
+.stagecard .sc-hint{font-size:11.5px;color:var(--faint)}
+/* 已出片之后，大纲折进来（它已经不是这一格的主角了，但也不能消失：用户会回来核对讲稿） */
+.foldbody{margin-bottom:14px}
+.foldbody>summary{cursor:pointer;font-size:12.5px;color:var(--muted);padding:5px 0}
+.foldbody>summary:hover{color:var(--accent)}
+
+/* ---- 图标按钮 + 悬停浮出的文字 ----
+   工具条上的动作全是图标（换一份 / 最近 / 工作台 / 设置 / 重新生成）。原生 title 要悬停约
+   一秒才出，图标按钮上等于没有提示 —— 用户只能靠猜，猜错的代价是「换一份」把当前会话换掉。
+   所以自己画一个即时浮层：写在 data-tip 上，谁都能用。 */
+.ibtn{position:relative;width:32px;height:32px;flex:none;display:grid;place-items:center;border:1px solid var(--line);border-radius:9px;background:#fff;color:var(--muted);cursor:pointer;transition:color .15s,background .15s,border-color .15s}
+.ibtn:hover:not([disabled]){color:var(--accent);border-color:var(--line-hi);background:var(--panel-soft)}
+.ibtn[disabled]{opacity:.45;cursor:not-allowed}
+.ibtn svg{width:15px;height:15px}
+.ibtn.danger:hover:not([disabled]){color:var(--red);border-color:#f0c4bf;background:#fdecea}
+[data-tip]{position:relative}
+[data-tip]:hover::after{content:attr(data-tip);position:absolute;top:calc(100% + 7px);right:0;z-index:400;padding:5px 9px;border-radius:7px;background:rgba(20,24,30,.92);color:#fff;font-size:11.5px;line-height:1.45;white-space:nowrap;pointer-events:none;box-shadow:var(--shadow-sm)}
+/* 屏幕左半边的按钮把浮层挂到左边，否则贴着窗口右缘会被裁掉 */
+[data-tip].tipL:hover::after{right:auto;left:0}
+
+/* ---- 配套数值表（refcheck 的「数据完整性」）----
+   此前这里只有一个按钮、传完什么都不显示：用户不知道传上去没有、传了几份、传的是不是刚才
+   那一份，更没有办法删掉传错的。改成一张常驻的清单卡：传了什么一目了然，可加可删。 */
+.datacard{background:#fff;border:1px solid var(--line);border-radius:var(--r-md);padding:12px 13px 13px;margin-bottom:14px;box-shadow:var(--shadow-sm)}
+.datacard .dh{display:flex;align-items:baseline;gap:8px;margin-bottom:9px}
+.datacard .dh .t{font-size:12.5px;font-weight:600;color:var(--text)}
+.datacard .dh .n{font-size:11.5px;color:var(--faint)}
+.datacard .dempty{font-size:12px;color:var(--faint);line-height:1.8;padding:2px 0 4px}
+.datacard .drow{display:flex;align-items:center;gap:9px;padding:7px 9px;border:1px solid var(--line);border-radius:var(--r-sm);background:var(--panel-soft);margin-bottom:6px}
+.datacard .drow .fic{width:26px;height:26px;flex:none;border-radius:7px;background:var(--accent-soft);color:var(--accent);display:grid;place-items:center;font-size:9.5px;font-weight:700;letter-spacing:.02em}
+.datacard .drow b{flex:1;min-width:0;font-size:12.5px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.datacard .drow .sz{font-size:11px;color:var(--faint);flex:none;font-variant-numeric:tabular-nums}
+.datacard .drow .del{flex:none;width:26px;height:26px;display:grid;place-items:center;border:none;background:none;border-radius:7px;color:var(--faint);cursor:pointer;transition:.15s}
+.datacard .drow .del:hover{color:var(--red);background:#fdecea}
+.datacard .drow .del[disabled]{opacity:.4;cursor:not-allowed}
+.datacard .drow .del svg{width:14px;height:14px}
+/* 「添加」做成整行的虚线投放位，一眼看得出这里还能再加 —— 比一个灰扑扑的小按钮好认得多 */
+.addbtn{display:flex;align-items:center;justify-content:center;gap:7px;width:100%;padding:9px;border:1px dashed var(--line-hi);border-radius:var(--r-sm);background:none;color:var(--muted);font-size:12.5px;cursor:pointer;transition:.15s}
+.addbtn:hover:not([disabled]){border-color:var(--accent);color:var(--accent);background:var(--accent-soft)}
+.addbtn[disabled]{opacity:.5;cursor:not-allowed}
+.addbtn svg{width:14px;height:14px}
+
+.empty-hint{padding:38px 18px;text-align:center;color:var(--faint);font-size:13px;line-height:2}
+.empty-hint .big{display:block;font-size:14px;color:var(--muted);font-weight:600;margin-bottom:6px}
+
+/* markdown 正文 */
+.card{background:#fff;border:1px solid var(--line);border-radius:var(--r-md);padding:16px 18px;box-shadow:var(--shadow-sm)}
+.md{font-size:13.5px;line-height:1.85;color:var(--text);word-wrap:break-word;overflow-wrap:anywhere}
+.md h1{font-size:18px;margin:18px 0 10px}
+.md h2{font-size:16px;margin:16px 0 9px}
+.md h3{font-size:14.5px;margin:14px 0 8px}
+.md h4,.md h5,.md h6{font-size:13.5px;margin:12px 0 7px}
+.md h1:first-child,.md h2:first-child,.md h3:first-child{margin-top:0}
+.md p{margin:0 0 10px}
+.md ul,.md ol{margin:0 0 10px;padding-left:20px}
+.md li{margin-bottom:5px}
+.md strong{font-weight:600}
+.md code{background:var(--panel-soft);border:1px solid var(--line);border-radius:4px;padding:1px 4px;font-size:12px;font-family:ui-monospace,Consolas,monospace}
+.md pre{background:#f7f8fa;border:1px solid var(--line);border-radius:var(--r-sm);padding:11px 13px;overflow:auto}
+.md pre code{background:none;border:none;padding:0}
+.md blockquote{margin:0 0 10px;padding:6px 12px;border-left:3px solid var(--line-hi);color:var(--muted);background:var(--panel-soft);border-radius:0 6px 6px 0}
+.md hr{border:none;border-top:1px solid var(--line);margin:14px 0}
+.md img{max-width:100%;border-radius:8px;border:1px solid var(--line)}
+.md a{color:var(--accent)}
+.tblw{overflow-x:auto;margin:0 0 10px}
+.md table{border-collapse:collapse;font-size:12.5px;min-width:100%}
+.md th,.md td{border:1px solid var(--line);padding:6px 9px;text-align:left}
+.md th{background:var(--panel-soft);font-weight:600}
+.md td.num{text-align:right;font-variant-numeric:tabular-nums}
+
+/* 产物 */
+.files{margin-top:14px}
+.files .ft{font-size:11.5px;color:var(--faint);margin-bottom:7px}
+.frow{display:flex;align-items:center;gap:10px;padding:9px 11px;border:1px solid var(--line);border-radius:var(--r-sm);background:#fff;margin-bottom:6px}
+.frow svg{width:15px;height:15px;color:var(--accent);flex:none}
+.frow b{flex:1;min-width:0;font-size:12.5px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+/* 「预览」与「下载」都是图标（眼睛 / 下箭头），与聊天页（index.html）产出侧栏那两颗一模一样
+   —— 同一个动作在两个界面长同一个样，用户不用重新认。悬停才变色，静止时不跟文件名抢注意力。
+   一个是 <button>、一个是 <a>，所以要显式压掉链接的下划线与继承色。 */
+.frow .fbtn{flex:none;display:flex;align-items:center;padding:2px;border:none;background:none;cursor:pointer;color:var(--muted);text-decoration:none;border-radius:6px;transition:color .15s,background .15s}
+.frow .fbtn:hover{color:var(--accent);background:var(--panel-soft)}
+.frow .fbtn svg{color:inherit}   /* 否则被上面 .frow svg 的 accent 焊死，悬停不会变色 */
+.frow .fnote{font-size:11.5px;color:var(--faint);flex:none}
+
+/* 产物预览浮层。
+   【为什么必须有】原先产物那一行只给了一个 target=_blank 的链接。而 .md / .csv / .json / .py
+   这些类型浏览器【不会显示、只会下载】——点下去新标签一闪就没，用户看到的就是"点了没反应"。
+   所以就地渲染：文本/表格/图片/PDF 自己画，Word 与 PPT 走服务端 /api/preview 转换。 */
+.pvmask{position:fixed;inset:0;z-index:300;background:rgba(17,24,39,.42);display:none;padding:30px 22px}
+.pvmask.on{display:grid;place-items:center}
+.pvbox{width:min(1080px,94vw);height:min(86vh,920px);background:#fff;border:1px solid var(--line-hi);border-radius:var(--r-md);box-shadow:var(--shadow-md);display:flex;flex-direction:column;overflow:hidden}
+.pvhead{flex:none;display:flex;align-items:center;gap:10px;padding:10px 12px;border-bottom:1px solid var(--line);background:var(--panel-soft)}
+.pvhead svg{width:15px;height:15px;color:var(--accent);flex:none}
+.pvhead .nm{flex:1;min-width:0;font-size:13px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.pvhead .x{border:none;background:none;cursor:pointer;color:var(--muted);display:grid;place-items:center;padding:2px;border-radius:6px}
+.pvhead .x:hover{background:#fff;color:var(--text)}
+.pvbody{flex:1;position:relative;overflow:auto;background:#fff}
+.pvbody.pad{padding:16px 18px}
+.pvbody iframe{position:absolute;left:0;top:0;width:100%;height:100%;border:0;background:#fff}
+.pvbody pre.txt{margin:0;font-family:ui-monospace,Consolas,monospace;font-size:12px;line-height:1.75;white-space:pre-wrap;word-break:break-word;color:var(--text)}
+/* 面板正文里内嵌的 Word/PPT 预览。给死高度（而不是随内容撑开）：面板本身是滚动容器，
+   iframe 高度撑到内容全长会把外层滚动条搞成两层，用户滚半天不知道自己在滚哪一层。 */
+.card.docpv{padding:0;overflow:hidden}
+.card.docpv iframe{display:block;width:100%;height:62vh;min-height:360px;border:0;background:#fff}
+.pvbody img.shot{display:block;max-width:100%;margin:0 auto;border:1px solid var(--line);border-radius:8px}
+/* renderCsv 是给左栏写的：.tablewrap 用 position:absolute 铺满那一栏。放进浮层要还原成正常流，
+   否则它会盖住后面追加的"内容被截断"提示（提示看不见 = 用户以为看到的就是全部）。 */
+.pvbody .tablewrap{position:static;padding:14px 16px 0}
+.pvmsg{padding:34px 26px;text-align:center;color:var(--muted);font-size:13px;line-height:1.95}
+.pvcut{margin-top:12px;font-size:11.5px;color:var(--faint)}
+
+/* 聊天 */
+.msg{margin-bottom:16px}
+.msg.user{display:flex;justify-content:flex-end}
+.msg.user .bubble{background:var(--accent);color:#fff;border-radius:14px 14px 4px 14px;padding:9px 13px;font-size:13px;line-height:1.65;max-width:88%;white-space:pre-wrap;word-break:break-word}
+.msg.ai .bubble{background:#fff;border:1px solid var(--line);border-radius:4px 14px 14px 14px;padding:14px 16px;box-shadow:var(--shadow-sm)}
+.msg.ai .who{display:flex;align-items:center;gap:7px;color:var(--accent);font-weight:600;font-size:12px;margin-bottom:9px}
+.msg.ai .who svg{width:14px;height:14px}
+.msg.tag .bubble{background:#fff;border:1px dashed var(--line-hi);border-radius:12px;padding:9px 13px;font-size:12.5px;color:var(--muted)}
+
+/* 追问区：挂在某一格结果【下面】的那串问答（见 askHtml）。
+   用一条虚线把它和结果正文分开 —— 不分的话，追问的回答看着像是结果的一部分，
+   而它俩的来源完全不同（一个是跑出来的产物，一个是随口问的）。 */
+.askwrap{margin-top:22px;padding-top:16px;border-top:1px dashed var(--line-hi)}
+.askwrap .askt{display:flex;align-items:center;gap:7px;font-size:11.5px;color:var(--faint);margin-bottom:12px}
+.askwrap .askt svg{width:13px;height:13px}
+
+.composer{flex:none;border-top:1px solid var(--line);padding:12px 16px 14px;background:#fff}
+.composer .wrap{display:flex;align-items:flex-end;gap:9px;background:var(--panel-soft);border:1px solid var(--line-hi);border-radius:var(--r-md);padding:9px 11px;transition:.15s}
+.composer .wrap:focus-within{border-color:var(--accent);background:#fff;box-shadow:0 0 0 3px var(--accent-soft)}
+.composer textarea{flex:1;border:none;background:none;outline:none;resize:none;font:inherit;font-size:13px;line-height:1.55;color:var(--text);max-height:130px;min-height:22px}
+.composer textarea::placeholder{color:var(--faint)}
+.composer .foot{margin-top:7px;font-size:11px;color:var(--faint);display:flex;justify-content:space-between;gap:10px}
+.composer .foot .kbd{flex:none;white-space:nowrap}
+/* 交接卡：从别的模式「转交」过来的那份结果，挂在输入框上方等着随下一句话一起发出。
+   摆在这里而不是对话流里，是因为它【还没发出去】—— 画成一条消息的话，用户会以为已经发了。 */
+.composer .hoff{display:flex;align-items:flex-start;gap:8px;margin-bottom:9px;padding:8px 10px;border:1px dashed rgba(59,111,212,.45);border-radius:10px;background:var(--accent-soft)}
+.composer .hoff svg{width:14px;height:14px;flex:none;margin-top:2px;color:var(--accent)}
+.composer .hoff .t{flex:1;min-width:0;font-size:12px;line-height:1.6;color:#3a4a63}
+.composer .hoff .t b{color:var(--accent)}
+.composer .hoff .x{flex:none;width:22px;height:22px;display:grid;place-items:center;border:none;background:none;border-radius:6px;color:var(--faint);cursor:pointer}
+.composer .hoff .x:hover{background:#fff;color:var(--red)}
+.composer .hoff .x svg{width:12px;height:12px;margin:0;color:inherit}
+
+/* 发送 / 终止 —— 与工作台聊天（index.html 的 #send / #stop）同一套设计：
+   默认是 32px 的圆钮、只露一个图标；悬停时展开成胶囊并把文字滑出来。
+   两个钮占【同一个位置】、互斥显示：一开跑，「发送」让位给「终止」。
+   此前这里是"方块蓝发送钮 + 底栏一个红字小方框「终止本轮」"，两个动作分居两行、长相也各是各的，
+   跟工作台完全对不上；正在跑的时候用户还得往底栏找那个小字才能停下来。
+   modefoot（非聊天模式的状态底栏）里的终止钮共用这套样式，免得同一个动作在同一个界面有两种长相。 */
+.pill{display:inline-flex;align-items:center;justify-content:center;height:32px;min-width:32px;padding:0;border:none;border-radius:999px;color:#fff;cursor:pointer;flex:none;overflow:hidden;transition:background .18s ease,padding .2s ease,filter .15s}
+.pill[hidden]{display:none}                     /* 别让上面的 display 盖过 hidden 属性 */
+.pill svg{width:15px;height:15px;flex:none}
+.pill .lbl{max-width:0;opacity:0;overflow:hidden;white-space:nowrap;font-size:13px;font-weight:500;letter-spacing:.04em;margin-left:0;transition:max-width .22s ease,opacity .18s ease,margin-left .22s ease}
+.pill:hover:not([disabled]){padding:0 15px}
+.pill:hover:not([disabled]) .lbl{max-width:52px;opacity:1;margin-left:6px}
+.pill:active{transform:translateY(1px)}
+.pill.go{background:var(--accent)}
+.pill.go:hover:not([disabled]){background:var(--accent-deep)}
+.pill.go[disabled]{background:#c3ccd8;cursor:not-allowed}
+.pill.halt{background:var(--red)}
+.pill.halt:hover{background:var(--red-deep)}
+
+/* 非聊天模式的底栏 */
+.modefoot{flex:none;border-top:1px solid var(--line);padding:10px 16px;background:#fff;display:flex;align-items:center;gap:9px;font-size:12px;color:var(--faint)}
+.modefoot .grow{flex:1;min-width:0}
+
+/* 右：模式条 */
+.tools{width:64px;flex:none;background:#fff;border-left:1px solid var(--line);display:flex;flex-direction:column;align-items:center;padding:12px 0;gap:6px;z-index:30}
+.tool-btn{width:52px;display:flex;flex-direction:column;align-items:center;gap:5px;padding:9px 3px;border-radius:10px;border:1px solid transparent;background:none;cursor:pointer;color:var(--faint);transition:.15s;position:relative}
+.tool-btn:hover{background:var(--panel-soft);color:var(--accent);border-color:var(--line)}
+.tool-btn.active{background:var(--accent-soft);color:var(--accent);border-color:rgba(59,111,212,.35)}
+.tool-btn svg{width:18px;height:18px}
+.tool-btn span{font-size:10px;line-height:1.25;text-align:center}
+.tool-btn .dot{position:absolute;top:6px;right:7px;width:6px;height:6px;border-radius:50%}
+.tool-btn .dot.run{background:var(--accent);animation:blink 1s ease-in-out infinite}
+.tool-btn .dot.done{background:var(--green)}
+.tool-btn .dot.err{background:var(--red)}
+@keyframes blink{50%{opacity:.25}}
+
+/* 窄窗口：三栏改上下堆叠。
+   ★ 两处必须显式覆写，否则这个布局是坏的：
+     ① .doc-pane 的 flex:1 1 0 —— 列方向下 flex-basis:0 管的就是【高度】，它压过 height，
+        原文栏会塌成一条 48px 的工具条（只剩文件名，文献本身完全看不见）；
+     ② .reader 若用 height:auto，两栏加起来必然超过一屏 → 整页出现纵向滚动，
+        又回到"要用滚轮往下拉才看得到下半截"那种观感。这里改成整体钉死一屏、内部分配。 */
+@media (max-width:1080px){
+  .reader{flex-direction:column;height:100vh;overflow:hidden}
+  .doc-pane{flex:0 0 45%;height:auto;min-height:0}
+  .ai-pane{width:100%;min-width:auto;flex:1 1 auto;height:auto;min-height:0;border-left:none;border-top:1px solid var(--line)}
+  .tools{flex-direction:row;width:100%;flex:none;border-left:none;border-top:1px solid var(--line);padding:8px;justify-content:center;flex-wrap:wrap;gap:8px}
+  .tool-btn{flex-direction:row;width:auto;padding:7px 12px;gap:7px}
+}
+</style>
+</head>
+<body>
+
+<div class="stage"></div>
+
+<!-- 「最近」下拉。两个位置的按钮共用同一个菜单（见 .menu 的说明），所以它挂在 body 上，
+     打开时按触发按钮算坐标。 -->
+<div class="menu" id="recentMenu"></div>
+<div class="menu setmenu" id="setMenu"></div>
+<!-- 「转交给智能助手」时选覆盖 / 续写 / 取消。同样挂在 body 上、按触发按钮算坐标（见 placeMenu）。 -->
+<div class="menu" id="hoffMenu"></div>
+
+<!-- ============ 首屏：上传 ============
+     文案、拖拽区提示、chips、必答题、按钮文字全部由 renderIntro() 按模块配置填进去，
+     这里只留骨架。硬编码任何一句都会让另外三个模块说错话。 -->
+<div class="intro" id="intro" hidden>
+  <div class="introcard">
+    <div class="hero-ic" id="introIcon"></div>
+
+    <h1 id="introTitle"></h1>
+    <p class="lead" id="introLead"></p>
+
+    <div class="divider"></div>
+
+    <div class="drop" id="drop">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 16V4M12 4l-4 4M12 4l4 4"/><path d="M4 16v2a2 2 0 002 2h12a2 2 0 002-2v-2"/></svg>
+      <div class="d1" id="dropTitle"></div>
+      <div class="d2" id="dropHint"></div>
+    </div>
+    <input type="file" id="file" hidden>
+
+    <div id="pickedSlot"></div>
+    <div id="introAsk"></div>
+    <div class="bar" id="upbar"><i></i></div>
+    <div class="err" id="introErr"></div>
+
+    <!-- 这枚按钮只负责【上传并进入】：传完不再自动开跑，所以图标用上传箭头而不是那枚三角。
+         全站的实心三角只留给"真的会开跑"的按钮（头部「开始」、面板里的大按钮、设置弹层里那枚），
+         免得用户按下三角却什么都没发生。 -->
+    <button class="gobtn" id="btnStart" type="button" disabled>
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 16V4M12 4l-4 4M12 4l4 4"/><path d="M4 16v2a2 2 0 002 2h12a2 2 0 002-2v-2"/></svg>
+      <span id="btnStartTxt">开始</span>
+    </button>
+
+    <div class="chips" id="introChips"></div>
+    <div class="tip" id="introTip"></div>
+  </div>
+
+  <!-- 与阅读器工具条同一套图标 + 悬停浮出文字（.ibtn / [data-tip]）：同一个动作在两屏长同一个样。
+       首屏这两个贴在窗口右上角，浮层照默认往右对齐即可（不会出界）。 -->
+  <div class="intronav">
+    <button class="ibtn" type="button" data-act="recent" data-tip="最近做过的" aria-label="最近做过的">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5.5l3.5 2"/></svg>
+    </button>
+    <button class="ibtn" type="button" data-act="ws" data-tip="回工作台" aria-label="回工作台">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7.5" height="7.5" rx="1.6"/><rect x="13.5" y="3" width="7.5" height="7.5" rx="1.6"/><rect x="3" y="13.5" width="7.5" height="7.5" rx="1.6"/><rect x="13.5" y="13.5" width="7.5" height="7.5" rx="1.6"/></svg>
+    </button>
+  </div>
+</div>
+
+<!-- ============ 阅读器 ============ -->
+<div class="reader" id="reader" hidden>
+
+  <!-- 左：原文 -->
+  <div class="doc-pane">
+    <div class="docbar">
+      <div class="ficon">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><path d="M14 2v6h6"/></svg>
+      </div>
+      <div class="fmeta">
+        <div class="fname" id="docName">—</div>
+        <div class="fsub" id="docSub"></div>
+      </div>
+      <div class="zoom" id="zoomBox" hidden>
+        <button id="zoomOut" title="缩小" type="button"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M8 11h6M21 21l-4.3-4.3"/></svg></button>
+        <div class="zval" id="zval">100%</div>
+        <button id="zoomIn" title="放大" type="button"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M11 8v6M8 11h6M21 21l-4.3-4.3"/></svg></button>
+      </div>
+      <span class="barsep"></span>
+      <!-- 三个导航动作都是图标 + 悬停浮出文字（见 .ibtn / [data-tip]）。
+           aria-label 不能省：图标按钮没有可读文本，读屏软件只会念出 "button"。 -->
+      <button class="ibtn" type="button" data-act="new" data-tip="换一份（新开一个会话）" aria-label="换一份">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 8h13l-3-3M20 16H7l3 3"/></svg>
+      </button>
+      <button class="ibtn" type="button" data-act="recent" data-tip="最近做过的" aria-label="最近做过的">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5.5l3.5 2"/></svg>
+      </button>
+      <button class="ibtn" type="button" data-act="ws" data-tip="回工作台" aria-label="回工作台">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7.5" height="7.5" rx="1.6"/><rect x="13.5" y="3" width="7.5" height="7.5" rx="1.6"/><rect x="3" y="13.5" width="7.5" height="7.5" rx="1.6"/><rect x="13.5" y="13.5" width="7.5" height="7.5" rx="1.6"/></svg>
+      </button>
+    </div>
+    <!-- 多文件模块（source.multi）才出现：已传的每一份都在这条上，点一下换着看，× 删掉传错的。
+         单文件模块（导读/润色/核查）保持原样，这条整条不画。 -->
+    <div class="filestrip" id="fileStrip" hidden></div>
+    <div class="docview" id="docView"><div class="docmsg">正在载入…</div></div>
+  </div>
+
+  <!-- 中：助手 -->
+  <div class="ai-pane">
+    <div class="ai-head">
+      <div class="title" id="paneTitle"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2a10 10 0 100 20 10 10 0 000-20z"/><path d="M12 6v6l4 2"/></svg><span>文献导读</span></div>
+      <div class="acts">
+        <span class="badge">基于本文</span>
+        <!-- 开始 / 终止占同一个位置、互斥显示（与聊天输入框旁那一对同一套图标）。
+             点模式条【不再自动开跑】，这里就是那个"开跑"的入口，data-tip 会写清在跑哪一个。 -->
+        <button class="pill go" id="btnGo" type="button" aria-label="开始" hidden>
+          <svg viewBox="0 0 24 24" fill="currentColor" stroke="none"><path d="M8 5.5v13a1 1 0 001.53.85l10-6.5a1 1 0 000-1.7l-10-6.5A1 1 0 008 5.5z"/></svg><span class="lbl">开始</span>
+        </button>
+        <button class="pill halt" id="btnHalt" type="button" aria-label="终止" hidden>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="6" y="6" width="12" height="12" rx="2"/></svg><span class="lbl">终止</span>
+        </button>
+        <!-- 「继续」：只在【订阅断了、而后台那一轮已经跑完】时出现。它不是重跑 ——
+             那一轮的结果早就在服务端了（产物落了盘、回复进了历史），断的只是浏览器这条 SSE。
+             此前这里只给「重新生成」，用户照着提示点下去，等于把已经做好的东西再花十分钟做一遍
+             （PPT 那一格最狠）。图标用"向右取回"，与「重新生成」的回环箭头刻意不同形。 -->
+        <button class="ibtn" id="btnResume" type="button" data-tip="继续" aria-label="继续" hidden>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M10 8.5l4.5 3.5-4.5 3.5z"/></svg>
+        </button>
+        <button class="ibtn" id="btnRerun" type="button" data-tip="重新生成" aria-label="重新生成" hidden>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M20 11a8 8 0 10-2.3 6.3"/><path d="M20 4v7h-7"/></svg>
+        </button>
+        <!-- 转交给智能助手：把【本面板这一轮的结果】做成一张交接卡，挂到智能助手的输入框上，
+             随用户下一句话一起发出（见 doHoff / renderHoff）。data-act 而不是只绑 id ——
+             不然 document 上那个"点空白处收起弹层"的监听会在本次点击冒泡时把刚开的弹层当场收掉。 -->
+        <button class="ibtn" id="btnHoff" type="button" data-act="hoff" data-tip="转交给智能助手" aria-label="转交给智能助手" hidden>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M13 4h6a2 2 0 012 2v9a2 2 0 01-2 2h-3l-4 3v-3"/><path d="M2 10h7M6.5 7l3 3-3 3"/></svg>
+        </button>
+        <button class="ibtn" id="btnSettings" type="button" data-tip="本模块的设置" aria-label="设置" hidden>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 00.3 1.9l.1.1a2 2 0 11-2.8 2.8l-.1-.1a1.7 1.7 0 00-1.9-.3 1.7 1.7 0 00-1 1.5V21a2 2 0 11-4 0v-.1A1.7 1.7 0 008.9 19a1.7 1.7 0 00-1.9.3l-.1.1a2 2 0 11-2.8-2.8l.1-.1a1.7 1.7 0 00.3-1.9 1.7 1.7 0 00-1.5-1H3a2 2 0 110-4h.1A1.7 1.7 0 004.6 8.9a1.7 1.7 0 00-.3-1.9l-.1-.1a2 2 0 112.8-2.8l.1.1a1.7 1.7 0 001.9.3H9a1.7 1.7 0 001-1.5V3a2 2 0 114 0v.1a1.7 1.7 0 001 1.5 1.7 1.7 0 001.9-.3l.1-.1a2 2 0 112.8 2.8l-.1.1a1.7 1.7 0 00-.3 1.9V9a1.7 1.7 0 001.5 1H21a2 2 0 110 4h-.1a1.7 1.7 0 00-1.5 1z"/></svg>
+        </button>
+      </div>
+    </div>
+
+    <!-- 变量对应（只有 stats 有）。默认折叠：不做生存分析的人根本不用展开它；
+         点某个模式时若缺了它必需的列，会自动展开并把缺的那几个标红。 -->
+    <details class="varsbox" id="varsBox" hidden>
+      <summary><span id="varsTitle">变量对应</span><span class="varssum" id="varsSum"></span></summary>
+      <div class="varssub" id="varsSub"></div>
+      <!-- 自动认列的确认条。【为什么必须有】自动填的值再准也只是机器的判断；不经用户点头就
+           当成"用户指定的"发给模型，等于把一个错列名披上用户的权威 —— 而列名认错不会报错，
+           只会产出一条看着很正常的错 KM 曲线（这正是这整块面板存在的理由）。
+           所以：自动填 = 省掉用户找列的力气；确认 = 仍然由用户负责。两件事都不能省。 -->
+      <div class="varsconfirm" id="varsConfirm" hidden></div>
+      <div class="varsgrid" id="varsGrid"></div>
+      <!-- 前 N 行原样：核对"这一列到底是什么"，看一眼真数据比读六个下拉快得多 -->
+      <details class="varspeek" id="varsPeek" hidden>
+        <summary id="varsPeekSum">看看表的前几行</summary>
+        <div class="tw" id="varsPeekBody"></div>
+      </details>
+      <!-- 服务端对「填的列名在真实表头里存不存在」的体检结论落在这里。CSV 能读表头时才有；
+           xlsx 读不出表头，那一路由模块前言要求模型自己核对列名后停下报错。 -->
+      <div class="notebox warn" id="varsWarn" hidden></div>
+    </details>
+
+    <!-- 面板由 installConfig 按模式清单生成（每个模式一个 .pane），这里留空 -->
+    <div class="ai-body" id="aiBody"></div>
+
+    <!-- 智能助手模式：输入框 -->
+    <div class="composer" id="composer" hidden>
+      <!-- 待发出的交接卡（从别的模式转交过来的那份结果）。空的时候整条收起来。 -->
+      <div class="hoff" id="hoffChip" hidden></div>
+      <div class="wrap">
+        <textarea id="q" rows="1" placeholder="对着左边这篇文献随便问，例如：第 3 组的样本量是多少？"></textarea>
+        <!-- 发送 / 终止占同一个位置，互斥显示（与工作台一致）。文字包在 .lbl 里，悬停展开才露出来。 -->
+        <button class="pill go" id="btnSend" type="button" aria-label="发送" title="发送">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 2L11 13M22 2l-7 20-4-9-9-4 20-7z"/></svg><span class="lbl">发送</span>
+        </button>
+        <button class="pill halt" id="btnStop" type="button" aria-label="终止" title="终止本次输出" hidden>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="6" y="6" width="12" height="12" rx="2"/></svg><span class="lbl">终止</span>
+        </button>
+      </div>
+      <div class="foot">
+        <span id="chatFoot">回答只依据这篇原文；原文没写的会标「原文未报告」。</span>
+        <span class="kbd">Enter 发送 · Shift + Enter 换行</span>
+      </div>
+    </div>
+
+    <!-- 其它模式：状态底栏。★ 只说状态、不再放第二个「终止」——终止统一在上方那一对里，
+         同一个动作在同一屏出现两次时，用户会以为它们不是一回事。没话可说时整条收起来。 -->
+    <div class="modefoot" id="modeFoot" hidden>
+      <span class="grow" id="modeFootTxt"></span>
+    </div>
+  </div>
+
+  <!-- 右：模式条 -->
+  <div class="tools" id="rail"></div>
+</div>
+
+<!-- ============ 产物预览浮层（点产物行上的眼睛就地看，见 openPv） ============ -->
+<div class="pvmask" id="pvMask">
+  <div class="pvbox" role="dialog" aria-modal="true" aria-label="产物预览">
+    <div class="pvhead">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><path d="M14 2v6h6"/></svg>
+      <span class="nm" id="pvName"></span>
+      <a class="hbtn" id="pvDl">下载</a>
+      <button class="x" id="pvClose" type="button" aria-label="关闭">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6L6 18M6 6l12 12"/></svg>
+      </button>
+    </div>
+    <div class="pvbody" id="pvBody"></div>
+  </div>
+</div>
+
+<script>
+"use strict"
+/* ============================================================
+   0. 小工具
+   ============================================================ */
+const $ = (id) => document.getElementById(id)
+const esc = (s) => String(s == null ? "" : s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]))
+const fmtSize = (n) => n == null ? "" : (n < 1024 ? n + " B" : n < 1048576 ? (n / 1024).toFixed(0) + " KB" : (n / 1048576).toFixed(1) + " MB")
+const extOf = (n) => (String(n).match(/\.([^.]+)$/) || [, ""])[1].toLowerCase()
+
+const ICON = {
+  guide: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 6.25v13m0-13C10.83 5.48 9.25 5 7.5 5S4.17 5.48 3 6.25v13C4.17 18.48 5.75 18 7.5 18s3.33.48 4.5 1.25m0-13C13.17 5.48 14.75 5 16.5 5s3.33.48 4.5 1.25v13C19.83 18.48 18.25 18 16.5 18s-3.33.48-4.5 1.25"/></svg>',
+  chat: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 11.5a8.4 8.4 0 01-9 8.4 8.9 8.9 0 01-4-.9L3 21l1.9-4.5A8.4 8.4 0 013 11.5 8.4 8.4 0 0112 3a8.4 8.4 0 019 8.5z"/></svg>',
+  translate: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 8l6 6M4 14l6-6 2-3M2 5h12M7 2h1M21 12a9 9 0 01-9 9m9-9h-6m6 0v6"/></svg>',
+  ppt: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8 20h8M12 16v4"/></svg>',
+  file: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><path d="M14 2v6h6"/></svg>',
+  bot: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2a10 10 0 100 20 10 10 0 000-20z"/><path d="M12 6v6l4 2"/></svg>',
+  x: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6L6 18M6 6l12 12"/></svg>',
+  // 下面这些给另外三个模块的模式用。图标名由 workflows.mjs 的 modes[].icon 指定；
+  // 认不出的名字回落到 dot，绝不因为少配一个图标就让按钮渲染不出来。
+  check: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2h11"/></svg>',
+  review: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3M8.5 11h5M11 8.5v5"/></svg>',
+  table: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 10h18M9 10v10M15 10v10"/></svg>',
+  wand: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M15 4V2M15 10V8M12 6h-2M20 6h-2M17.8 8.8l1.4 1.4M17.8 3.2l1.4-1.4M12.2 3.2l-1.4-1.4M3 21l9-9"/></svg>',
+  diff: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3v18M5 8H2m3 8H2M22 8h-3m3 8h-3"/><rect x="5" y="5" width="6" height="14" rx="1"/><rect x="13" y="5" width="6" height="14" rx="1"/></svg>',
+  doc: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><path d="M14 2v6h6M8 13h8M8 17h5"/></svg>',
+  stethoscope: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 3v6a5 5 0 0010 0V3"/><path d="M4 3h3M15 3h3M11 14v2a5 5 0 0010 0v-1"/><circle cx="21" cy="13" r="2"/></svg>',
+  chart: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 3v18h18"/><path d="M7 15l4-5 3 3 5-7"/></svg>',
+  image: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="8.5" cy="9.5" r="1.5"/><path d="M21 16l-5-5-4 4-2-2-5 5"/></svg>',
+  shield: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><path d="M9 12l2 2 4-4"/></svg>',
+  gear: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 00.3 1.9l.1.1a2 2 0 11-2.8 2.8l-.1-.1a1.7 1.7 0 00-1.9-.3 1.7 1.7 0 00-1 1.5V21a2 2 0 11-4 0v-.1A1.7 1.7 0 008.9 19a1.7 1.7 0 00-1.9.3l-.1.1a2 2 0 11-2.8-2.8l.1-.1a1.7 1.7 0 00.3-1.9 1.7 1.7 0 00-1.5-1H3a2 2 0 110-4h.1A1.7 1.7 0 004.6 8.9a1.7 1.7 0 00-.3-1.9l-.1-.1a2 2 0 112.8-2.8l.1.1a1.7 1.7 0 001.9.3H9a1.7 1.7 0 001-1.5V3a2 2 0 114 0v.1a1.7 1.7 0 001 1.5 1.7 1.7 0 001.9-.3l.1-.1a2 2 0 112.8 2.8l-.1.1a1.7 1.7 0 00-.3 1.9V9a1.7 1.7 0 001.5 1H21a2 2 0 110 4h-.1a1.7 1.7 0 00-1.5 1z"/></svg>',
+  dot: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="4"/></svg>',
+  up: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 16V4M12 4l-4 4M12 4l4 4"/><path d="M4 16v2a2 2 0 002 2h12a2 2 0 002-2v-2"/></svg>',
+  // 产物行的「预览 / 下载」。与聊天页（index.html）产出侧栏同一副图标，同一个动作在两个界面
+  // 长同一个样，用户不用重新认。
+  eye: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/></svg>',
+  download: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v11"/><path d="m7 11 5 4 5-4"/><path d="M5 20h14"/></svg>',
+  // ★ 全站【唯一】的一对开始 / 终止图标：实心三角 + 圆角方块。首屏的「开始」、面板头部的
+  //   开始·终止、聊天输入框旁的终止，全部用这两个，别再各画各的 —— 同一个动作长三种样子时，
+  //   用户每换一个位置都要重新认一遍。
+  play: '<svg viewBox="0 0 24 24" fill="currentColor" stroke="none"><path d="M8 5.5v13a1 1 0 001.53.85l10-6.5a1 1 0 000-1.7l-10-6.5A1 1 0 008 5.5z"/></svg>',
+  stop: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>',
+  swap: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 8h13l-3-3M20 16H7l3 3"/></svg>',
+  clock: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5.5l3.5 2"/></svg>',
+  grid: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7.5" height="7.5" rx="1.6"/><rect x="13.5" y="3" width="7.5" height="7.5" rx="1.6"/><rect x="3" y="13.5" width="7.5" height="7.5" rx="1.6"/><rect x="13.5" y="13.5" width="7.5" height="7.5" rx="1.6"/></svg>',
+  refresh: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M20 11a8 8 0 10-2.3 6.3"/><path d="M20 4v7h-7"/></svg>',
+  trash: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 7h16M9 7V5a1 1 0 011-1h4a1 1 0 011 1v2M6 7l1 13a1 1 0 001 1h8a1 1 0 001-1l1-13"/></svg>',
+  plus: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>',
+}
+const ic = (n) => ICON[n] || ICON.dot
+
+/* ---- 极简 markdown 渲染 ----
+   【为什么不复用 index.html 那份】那一份缠着灯箱、产物侧栏、ask 选项卡与会话态（sidQ / mdImgSrc），
+   拆出来要动 5000 行的主页面，风险远大于收益。这里只留本页面真正会遇到的语法：
+   标题 / 列表 / 表格 / 代码 / 引用 / 粗斜体 / 链接 / 同源图片。行为对不齐的地方只会是"少渲染一种花样"，
+   不会渲染错。 */
+function mdImg(u) {
+  if (!/\.(png|jpe?g|gif|webp|svg|bmp)$/i.test(u)) return null
+  if (/^https?:/i.test(u)) return null                            // 外链图片一概不加载（同 index.html 的口径）
+  const m = u.replace(/^\.\//, "").match(/^([^\/?#:]+(?:\/[^\/?#:]+)?)$/)
+  return m ? "api/raw?name=" + encodeURIComponent(m[1]) + sidQ() : null
+}
+function mdInline(s) {
+  const codes = []
+  s = s.replace(/`([^`]+)`/g, (m, c) => { codes.push(c); return "@@C" + (codes.length - 1) + "@@" })
+  s = s.replace(/!\[([^\]]*)\]\(([^)\s]+)[^)]*\)/g, (m, a, u) => {
+    const src = mdImg(u)
+    return src ? '<img src="' + src + '" alt="' + a.replace(/"/g, "&quot;") + '">' : esc(a || u)
+  })
+  s = s.replace(/\[([^\]]+)\]\(([^)\s]+)[^)]*\)/g, (m, t, u) =>
+    /^(https?:\/\/|api\/)/i.test(u) ? '<a href="' + u.replace(/"/g, "%22") + '" target="_blank" rel="noopener">' + t + "</a>" : t)
+  s = s.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>").replace(/__([^_]+)__/g, "<strong>$1</strong>")
+  s = s.replace(/(^|[^*\w])\*([^*\n]+)\*/g, "$1<em>$2</em>")
+  s = s.replace(/~~([^~]+)~~/g, "<del>$1</del>")
+  return s.replace(/@@C(\d+)@@/g, (m, i) => "<code>" + codes[+i] + "</code>")
+}
+const splitRow = (l) => l.trim().replace(/^\|/, "").replace(/\|$/, "").split("|").map((c) => c.trim())
+function renderMd(src) {
+  src = (src || "").replace(/\r\n/g, "\n")
+  const blocks = []
+  src = src.replace(/```[\w-]*\n?([\s\S]*?)```/g, (m, code) => { blocks.push("<pre><code>" + esc(code.replace(/\n$/, "")) + "</code></pre>"); return "@@B" + (blocks.length - 1) + "@@" })
+  const lines = esc(src).split("\n"), out = []
+  let i = 0
+  const blank = (l) => /^\s*$/.test(l)
+  while (i < lines.length) {
+    const l = lines[i]
+    const pm = l.match(/^@@B(\d+)@@\s*$/); if (pm) { out.push(blocks[+pm[1]]); i++; continue }
+    if (blank(l)) { i++; continue }
+    if (/^\s*([-*_])(\s*\1){2,}\s*$/.test(l)) { out.push("<hr>"); i++; continue }
+    const h = l.match(/^(#{1,6})\s+(.*)$/)
+    if (h) { const n = h[1].length; out.push("<h" + n + ">" + mdInline(h[2].trim()) + "</h" + n + ">"); i++; continue }
+    if (/^\s*&gt;\s?/.test(l)) { const b = []; while (i < lines.length && /^\s*&gt;\s?/.test(lines[i])) { b.push(lines[i].replace(/^\s*&gt;\s?/, "")); i++ } out.push("<blockquote>" + mdInline(b.join("<br>")) + "</blockquote>"); continue }
+    if (/\|/.test(l) && i + 1 < lines.length && /-/.test(lines[i + 1]) && /^\s*\|?[\s:|-]*$/.test(lines[i + 1])) {
+      const head = splitRow(l); i += 2; const rows = []
+      while (i < lines.length && /\|/.test(lines[i]) && !blank(lines[i])) { const r = splitRow(lines[i]); while (r.length < head.length) r.push(""); rows.push(r.slice(0, head.length)); i++ }
+      const isNum = (x) => /^[+-]?[\d,]*\.?\d+(\s*[%‰])?$/.test(x.replace(/[\s*]/g, ""))
+      const cls = head.map((_, c) => { const v = rows.map((r) => (r[c] || "").trim()).filter(Boolean); return v.length && v.every(isNum) ? " class=\"num\"" : "" })
+      out.push('<div class="tblw"><table><thead><tr>' + head.map((c) => "<th>" + mdInline(c) + "</th>").join("")
+        + "</tr></thead><tbody>" + rows.map((r) => "<tr>" + r.map((c, x) => "<td" + cls[x] + ">" + mdInline(c) + "</td>").join("") + "</tr>").join("") + "</tbody></table></div>")
+      continue
+    }
+    if (/^\s*([-*+]|\d+[.)])\s+/.test(l)) {
+      const ordered = /^\s*\d+[.)]\s+/.test(l), items = []
+      while (i < lines.length && /^\s*([-*+]|\d+[.)])\s+/.test(lines[i])) { items.push(lines[i].replace(/^\s*([-*+]|\d+[.)])\s+/, "")); i++ }
+      out.push((ordered ? "<ol>" : "<ul>") + items.map((t) => "<li>" + mdInline(t) + "</li>").join("") + (ordered ? "</ol>" : "</ul>"))
+      continue
+    }
+    const buf = [l]; i++
+    while (i < lines.length && !blank(lines[i]) && !/^\s*(#{1,6}\s|&gt;|([-*+]|\d+[.)])\s|@@B\d+@@)/.test(lines[i])) { buf.push(lines[i]); i++ }
+    out.push("<p>" + mdInline(buf.join("<br>")) + "</p>")
+  }
+  return out.join("\n").replace(/@@B(\d+)@@/g, (m, x) => blocks[+x] || "")
+}
+
+/* ============================================================
+   1. 模块配置：本页面【不认识任何一个具体模块】
+   ------------------------------------------------------------
+   模式清单、每个模式发什么话、首屏文案、设置字段、变量对应面板 —— 全部来自
+   GET /api/modules/<id>/workflow 的 reader 段（定义在 workflows.mjs）。
+   本文件只负责照着画、照着发、照着把结果摆回对应的面板。
+   所以「加一个模式」「改一句提示词」只动 workflows.mjs，走界面包热更新即可。
+
+   MODES / ORDER 在 boot() 里由配置填好，之后与原来的用法完全一致。
+   ============================================================ */
+let MOD = "litread"        // 当前模块 id
+let CFG = null             // reader 配置（workflows.mjs 的 reader 段）
+let MODES = {}             // id → 模式定义（含由 file/out 字符串编译出来的正则）
+let ORDER = []             // 模式在右侧条上的顺序
+// 智能助手那一格的输入框提示与脚注。输入框是【共用】的（追问也用它），切模式时两句话都要换，
+// 所以原文得留一份，否则从追问切回智能助手时提示词就永远停在"对着这份「文献导读」的结果追问"。
+let CHAT_PH = ""
+let CHAT_FOOT = ""
+
+/** 把下发的配置装进 MODES / ORDER。正则以字符串下发（要能 JSON 序列化），这里编译。 */
+function installConfig(cfg) {
+  CFG = cfg
+  // 智能助手那一格的文案也归模块管。写死过一次："对着左边这篇文献随便问" 在数据模块里指着
+  // 一张 Excel 说"这篇文献"，在核查模块里指着一份稿件说同样的话 —— 本文件不该认识任何一个
+  // 具体模块（见文件头），文案同理。缺配置时的兜底措辞要【中性】，不许再提"文献"。
+  CHAT_PH = (cfg.chat && cfg.chat.placeholder) || "对着左边这份文件随便问"
+  CHAT_FOOT = $("chatFoot").textContent    // HTML 里写着的那句默认脚注，切回智能助手时还原它
+  $("q").placeholder = CHAT_PH
+  // ★ 把 intake 的默认值【播种进 SETTINGS】。不播种的后果不只是"显示不准"，而是会丢数据：
+  //   settingsBlock() 发给模型时用的是 `SETTINGS[id] ?? f.default`（拿得到默认值），
+  //   而设置弹层的 fieldControl 用 `String(SETTINGS[id])===String(o.v)` 选中项 —— undefined
+  //   谁都不匹配，于是有默认值的字段一律显示成「（不指定）」。实测 humanize 八个字段里五个中招。
+  //   最狠的是 multi 型的「润色目标」（默认 ["deai"]、必填）：弹层里一个勾都没有，用户想"再加一项
+  //   语言润色"勾了 language，multi 分支从空数组起算 → SETTINGS.goals = ["language"]，
+  //   **"去 AI 味"被静默丢掉**，而那正是这个模块存在的理由。
+  //   服务端两条落盘路径都不做 withDefaults，所以这个错位刷新之后依然在，不是首屏一次性的。
+  for (const f of cfg.intake || [])
+    if (f.default !== undefined && SETTINGS[f.id] === undefined)
+      SETTINGS[f.id] = Array.isArray(f.default) ? [...f.default] : f.default
+  MODES = {}; ORDER = []
+  const re = (x) => { try { return x ? new RegExp(x, "i") : null } catch (_) { return null } }
+  for (const m of cfg.modes || []) {
+    MODES[m.id] = { ...m, icon: ic(m.icon), file: re(m.file), out: re(m.out) }
+    // 两阶段模式（「演示 PPT」：先大纲、用户确认后才出片）。stage2.done 也是字符串下发的正则，
+    // 一并编译 —— 漏了它 stageFinals() 会拿 undefined 去 .test()，整格面板直接报错空白。
+    if (m.stage2) MODES[m.id].stage2 = { ...m.stage2, done: re(m.stage2.done) }
+    ORDER.push(m.id)
+  }
+}
+
+/**
+ * 某个模式发出去的那段话 = mark + prompt（占位符替换后）。
+ *  {doc}  左栏那份文件名        {data} 配套数值表 / 数据表        {vars} 变量对应面板填了什么
+ * 取不到值的占位符【整句删掉】，不能留下一个字面的 "{data}" 发给模型。
+ *
+ * @param stage2 true = 发第二阶段那段话（两阶段模式的「按这份大纲出片」）。
+ *   ★ 前缀仍用【同一个 mark】：服务端与刷新后的前端都靠 mark 认这一轮归哪一格，
+ *     换个标记就会被当成自由对话，产物落回聊天格、这一格照旧空着。也【不能】用 askMark ——
+ *     追问的规矩明写着"不要重跑、不要产出文件"，用它发出去等于让模型不许出片。
+ */
+function promptFor(id, stage2) {
+  const M = MODES[id]
+  const tpl = stage2 ? (M && M.stage2 && M.stage2.prompt) : (M && M.prompt)
+  if (!tpl) return ""
+  const bq = (n) => "`" + n + "`"
+  // {data}：stats 那种"上传的就是表"的模块用左栏那份；refcheck 用另传的配套数值表 ——
+  // 可以有好几份，全都列出来（只发第一份的话，模型会把其余几份当不存在，用户完全看不出来）。
+  // 多文件模块要把【全部】文件都列出来：只发当前在看的那张，模型会把其余几张当不存在，
+  // 而用户在界面上明明看见传了三张 —— 这种"各说各话"最难被发现。
+  const map = {
+    doc: docName ? bq(docName) : "",
+    data: docListStr(),
+    vars: varsBlock(),
+  }
+  let t = tpl
+  for (const [k, v] of Object.entries(map)) {
+    const ph = "{" + k + "}"
+    if (!t.includes(ph)) continue
+    // 有值就替换；没值就把它所在的那一句整句去掉（句号/换行为界），免得留下半截话
+    t = v ? t.split(ph).join(v) : t.replace(new RegExp("[^。\n]*" + ph + "[^。\n]*。?", "g"), "")
+  }
+  return M.mark + t + settingsBlock()
+}
+
+/** {data} 的取值：本会话【全部】数据表 / 配套数值表，反引号包好用顿号连起来 */
+function docListStr() {
+  const names = CFG.source.kind === "table"
+    ? (docFiles.length ? docFiles.map((f) => f.name) : (docName ? [docName] : []))
+    : dataFiles.map((f) => f.name)
+  return names.map((n) => "`" + n + "`").join("、")
+}
+
+/**
+ * 齿轮弹层里的设定 → 每一轮都跟着发出去。
+ * 【为什么必须发】阅读器壳每个模式发的是一句【写死的】提示词，设定值一个字都不在里面；
+ * 后端只把 `pin:true` 的字段钉进模块前言（stats 里只有 hasPHI 是 pin）。于是把「输出语言」
+ * 改成 English、把「顺便出投稿级图」勾上之后，模型那边【什么都没收到】——界面上摆着一个开关，
+ * 拨了却毫无变化，而用户没有任何办法看出是没传到。
+ */
+function settingsBlock() {
+  const parts = []
+  for (const id of (CFG && CFG.settings) || []) {
+    const f = fieldDef(id); if (!f) continue
+    const v = SETTINGS[id] !== undefined ? SETTINGS[id] : f.default
+    const s = fmtSetting(f, v)
+    if (s) parts.push(f.label + "＝" + s)
+  }
+  return parts.length ? "\n\n【本次设定，以此为准】" + parts.join("；") + "。" : ""
+}
+
+/** 设定值 → 人话（选项取它的中文标签，别把 "zh" / "true" 这种内部值发给模型） */
+function fmtSetting(f, v) {
+  if (v === undefined || v === null || v === "") return ""
+  const lab = (x) => { const o = (f.options || []).find((o2) => String(o2.v) === String(x)); return o ? o.t : String(x) }
+  if (f.type === "bool") return v === true || v === "true" ? "是" : "否"
+  if (Array.isArray(v)) return v.length ? v.map(lab).join("、") : ""
+  return lab(v)
+}
+
+/**
+ * stats 的「变量对应」：把列对应拼成一段话，跟在 prompt 里的 {vars} 位置。
+ *
+ * ★ 分两栏发，不能混成一栏。自动认列（见 loadHeaders）让用户不必再从二十几个列名里挑六个，
+ *   但机器认的和用户指的【权威完全不同】：
+ *     · 用户点过「对，就按这个来」→ 以他指定的为准，模型照做；
+ *     · 还没核对 → 必须原样告诉模型"这是机器认的、人还没看"，让它自己再核一遍取值形状。
+ *   把后者也写成"以我指定的为准"，等于给一个可能认错的列名披上用户的权威 ——
+ *   而列名认错不会报错，只会产出一条看着很正常的错 KM 曲线。
+ */
+function varsBlock() {
+  if (!CFG || !CFG.vars) return ""
+  const by = SETTINGS.__varsBy || {}
+  const mine = [], auto = []
+  for (const f of CFG.vars.fields || []) {
+    const fld = fieldDef(f); const v = SETTINGS[f]
+    if (!fld || v === undefined || v === null || v === "" || (Array.isArray(v) && !v.length)) continue
+    const s = fld.label + "＝" + (Array.isArray(v) ? v.join("、") : v)
+    if (!SETTINGS.__varsOK && (by[f] === "ai" || by[f] === "rule")) auto.push(s)
+    else mine.push(s)
+  }
+  if (!mine.length && !auto.length) return ""
+  let out = ""
+  if (mine.length) {
+    out += "\n\n【变量对应，以我指定的为准】" + mine.join("；")
+      + "。我没指定的列你可以推断，但**必须在回答里写清你把哪一列当成了什么**。"
+  }
+  if (auto.length) {
+    out += "\n\n【下面这几列是系统读了表的前几行自动认出来的，我还没核对】" + auto.join("；")
+      + "。**动手之前先自己核一遍**：每一列的取值形状对不对得上它的角色"
+      + "（终点事件该是两值、随访时间该是非负的时长而不是日期、金标准该是两值…）。"
+      + "对不上就停下来告诉我是哪一列、表里还有哪几列可选，**别将就着算**；"
+      + "核对结论和你实际用的列都要写在回答里。"
+  }
+  return out
+}
+
+/** 按 id 找 intake 字段定义（设置弹层 / 变量面板都用它渲染控件） */
+const fieldDef = (id) => (CFG && CFG.intake || []).find((f) => f.id === id) || null
+
+/* ============================================================
+   2. 状态
+   ============================================================ */
+const QS = new URLSearchParams(location.search)
+let sid = QS.get("sid") || null
+let docName = ""          // 左栏当前在看的那份文件名（会话上传目录里的裸文件名）
+let docSize = null
+// 多文件模块（CFG.source.multi，目前是数据分析那类）：本会话里【本模块能处理的全部文件】。
+// 单文件模块这数组恒为 [当前那一份]，界面上那条 chip 条也不画。
+// 【为什么要有它】一份研究的数据常常分散在好几张表里（主表 + 随访表 + 检验表），
+// 只收一张的话用户只能反复覆盖；而传错一张却删不掉，就只能整个会话重来。
+let docFiles = []
+const isMulti = () => !!(CFG && CFG.source && CFG.source.multi)
+// 配套数值表（只有 refcheck 的「数据完整性」用得上，见 CFG.extraUpload）。
+// 是【一组】而不是一份：一篇稿子的数据常常分散在好几张表里（主表 + 附表 + 随访表），
+// 只收一份的话用户只能反复覆盖，最后核的还是残缺的数据。元素形如 { name, size }。
+let dataFiles = []
+let mode = ""
+let turns = 0             // 本会话已经发出过几轮（决定要不要给自由问答补一句上下文）
+let pendingFiles = []     // 首屏选中、尚未上传的 File（多文件模块可以有好几个）
+let outputs = []          // /api/outputs 的最近一次结果
+// 设置弹层 + 变量对应面板的值。它们【就是 intake 的字段值】，改完立刻回写 _workflow.json，
+// 于是 pin:true 的字段（humanize 的 protectRefs、stats 的 hasPHI）每一轮都会被 settingsLine
+// 钉进模块前言 —— 这条路是踩出来的（默认值传达不到 → 模型替别人的论文改了统计学结论），
+// 别改成只在前端存着。
+let SETTINGS = {}
+// 质量闸状态（服务端 /api/workflow/state）。本壳不画流程条，但【闸必须看得见】：
+// 出件拦截是模块无关的，闸红时用户在这儿一样出不了 Word/PDF，而此前本页对此只字不提。
+let GATES = []        // 判红的闸 step-id
+let GATE_STEPS = []   // 步骤定义，用来把 id 换成中文名
+let BYPASS = false    // 用户是否手动放行了本会话的拦截
+
+// 每个面板的内容。raw = 该模式最近一轮的对话正文；doc = 从产物文件读回来的正文（译文/报告/大纲）。
+// qa  = 挂在这份结果下面的【追问问答】（与 chat 的 msgs 同一种元素：{role,text,files}）。
+//       它是结果的附属物 —— 主结果重跑一次，旧追问就作废（问的是上一版），见 run()。
+// 模式是配置来的，所以这张表要等 installConfig 之后才建得出来。
+let S = {}
+function initState() {
+  S = {}
+  for (const id of ORDER) {
+    S[id] = id === "chat"
+      ? { msgs: [], status: "idle", err: "", files: [] }
+      // docPv：产物是 Word / PPT 这类二进制时，正文改走服务端预览（见 loadDocFor 的注释）
+      : { raw: "", doc: null, docName: "", docPv: "", docPvErr: "", status: "idle", err: "", files: [], qa: [] }
+  }
+}
+// 正在跑的那一轮
+let RUN = null            // { mode, label, skills:[], tools:Map, es }
+let starting = false      // POST /api/chat/start 往返期间（此时还没有 es，靠它防连点）
+
+const sidQ = () => (sid ? "&sid=" + encodeURIComponent(sid) : "")
+const busy = () => starting || !!RUN
+
+/**
+ * 这一格现在能不能【追问】。
+ * 判据 = 真的有一份跑出来的结果（与「转交」同一条：跑到一半 / 出错的面板上没什么可追问的），
+ * 或者已经问过了（追问那一轮正在跑时 status 是 running，输入框不能因此消失）。
+ * ★ 用函数声明而不是 const 箭头：updateFoot 在它上面，靠 hoist 才调得到。
+ */
+function askReady(m) {
+  const s = S[m]
+  if (m === "chat" || !s || !MODES[m] || !MODES[m].askMark) return false
+  return (s.qa || []).length > 0
+    || (s.status === "done" && (!!s.docPv || !!((s.doc || "") + (s.raw || "")).trim()))
+}
+/** 这一格问过几条（转交时要说清带过去了几条追问） */
+const askCount = (m) => ((S[m] && S[m].qa) || []).filter((x) => x.role === "user").length
+
+async function jget(url, opt) {
+  const r = await fetch(url, opt)
+  if (r.status === 401) { location.href = "./login"; throw new Error("unauthorized") }
+  return r
+}
+
+/* ============================================================
+   3. 首屏：选文件 → 上传 → 开始
+   ============================================================ */
+const okExt = () => (CFG && CFG.source.exts) || []
+
+// 真错误一律红色。必须显式去掉 info —— 启动时那条"旧会话没有原文"的灰色提示用的是同一个框，
+// 不清掉的话，用户接着传错格式时会看到一条【灰色的】报错，读起来像句无关紧要的说明。
+function showIntroErr(msg) { const e = $("introErr"); e.textContent = msg; e.className = "err" + (msg ? " on" : "") }
+
+/** 首屏：整块按配置画出来（标题 / 引导语 / 拖拽区文案 / chips / 必答题 / 按钮文字都来自 workflows.mjs） */
+function renderIntro() {
+  const I = CFG.intro
+  $("introTitle").textContent = I.title
+  $("introLead").textContent = I.lead
+  $("dropTitle").textContent = I.dropTitle
+  $("dropHint").textContent = I.dropHint
+  $("btnStartTxt").textContent = I.startText
+  $("file").setAttribute("accept", CFG.source.accept)
+  // 多文件模块首屏就允许一次挑好几张（数据常常分散在主表 + 随访表 + 检验表里）
+  if (isMulti()) $("file").setAttribute("multiple", "multiple"); else $("file").removeAttribute("multiple")
+  $("introTip").innerHTML = I.tip || ""
+  // chips 支持两种写法：字符串（图标按位置取第 i 个模式，历史写法）或 {t,i}（文字 + 明确的图标名）。
+  // 【为什么要有后者】按位置取图标把首屏文案和右侧模式条的【顺序】焊死了 —— 模式条一调顺序，
+  // 首屏这几个小标签的图标就集体错位，而这两处本来毫不相干。新写法把图标写死在文案旁边。
+  $("introChips").innerHTML = (I.chips || []).map((c, i) => {
+    const txt = typeof c === "string" ? c : c.t
+    const icon = typeof c === "string" ? (MODES[ORDER[i]] ? MODES[ORDER[i]].icon : "") : ic(c.i)
+    return '<span class="chip">' + icon + esc(txt) + "</span>"
+  }).join("")
+  // 首屏必答题（目前只有 stats 的 hasPHI）。它不是"设置"，是安全闸：
+  // 未脱敏的患者数据不得进入统计，所以没答之前「开始」按钮是灰的。
+  const askHost = $("introAsk"); askHost.innerHTML = ""
+  for (const id of I.ask || []) {
+    const f = fieldDef(id); if (!f) continue
+    const box = document.createElement("div"); box.className = "askbox"
+    box.innerHTML = '<div class="asklbl">' + esc(f.label) + (f.required ? ' <b class="req">必答</b>' : "") + "</div>"
+      + (f.help ? '<div class="askhelp">' + esc(f.help) + "</div>" : "")
+    const opts = document.createElement("div"); opts.className = "askopts"
+    for (const o of (f.type === "bool" ? [{ v: true, t: "是" }, { v: false, t: "否" }] : f.options || [])) {
+      const b = document.createElement("button")
+      b.type = "button"; b.className = "askbtn"; b.textContent = o.t
+      b.addEventListener("click", () => {
+        SETTINGS[id] = o.v
+        opts.querySelectorAll(".askbtn").forEach((x) => x.classList.remove("on"))
+        b.classList.add("on"); syncStart()
+      })
+      opts.appendChild(b)
+    }
+    box.appendChild(opts); askHost.appendChild(box)
+  }
+  syncStart()
+}
+
+/** 「开始」按钮什么时候能点：文件选了 + 首屏必答题都答了 */
+function syncStart() {
+  const asked = (CFG.intro.ask || []).every((id) => SETTINGS[id] !== undefined && SETTINGS[id] !== null && SETTINGS[id] !== "")
+  $("btnStart").disabled = !pendingFiles.length || !asked || busy()
+}
+
+/** 已选待传的文件列表（单文件模块永远只有一行；多文件模块可以有好几行，每行都能移除） */
+function renderPicked() {
+  $("pickedSlot").innerHTML = pendingFiles.map((f, i) =>
+    // 徽标里放扩展名（PDF / DOCX / XLSX），比一个通用文件图标信息量大：用户一眼能看出传的是不是自己想传的那种
+    '<div class="picked"><div class="fic">' + esc(extOf(f.name).toUpperCase().slice(0, 4)) + "</div>"
+    + '<div class="fn"><b>' + esc(f.name) + "</b><span>" + fmtSize(f.size) + "</span></div>"
+    + '<button class="rm" type="button" data-rmpick="' + i + '" title="移除">×</button></div>').join("")
+  $("pickedSlot").querySelectorAll("[data-rmpick]").forEach((b) => b.addEventListener("click", () => {
+    pendingFiles.splice(Number(b.dataset.rmpick), 1)
+    $("file").value = ""          // 同一个文件移除后还要能再选一次（input 的 value 不清就不会触发 change）
+    renderPicked(); syncStart()
+  }))
+}
+
+/** 选中一批文件（单文件模块只取第一个；多文件模块累加，同名的按后来的覆盖） */
+function pickFiles(list) {
+  const files = [...(list || [])]
+  if (!files.length) return
+  const ok = okExt()
+  const bad = files.filter((f) => !ok.includes(extOf(f.name)))
+  const good = files.filter((f) => ok.includes(extOf(f.name)))
+  showIntroErr(bad.length
+    ? "这个模块只收 " + ok.map((x) => "." + x).join(" / ") + "，已跳过：" + bad.map((f) => f.name).join("、")
+    : "")
+  if (!good.length) return
+  pendingFiles = isMulti()
+    ? [...pendingFiles.filter((x) => !good.some((g) => g.name === x.name)), ...good]
+    : [good[0]]
+  renderPicked()
+  syncStart()
+}
+
+$("drop").addEventListener("click", () => $("file").click())
+$("file").addEventListener("change", (e) => pickFiles(e.target.files))
+;["dragenter", "dragover"].forEach((t) => $("drop").addEventListener(t, (e) => { e.preventDefault(); $("drop").classList.add("over") }))
+;["dragleave", "drop"].forEach((t) => $("drop").addEventListener(t, (e) => { e.preventDefault(); $("drop").classList.remove("over") }))
+$("drop").addEventListener("drop", (e) => pickFiles(e.dataTransfer && e.dataTransfer.files))
+
+/** 上传一个文件到本会话（没有 sid 时服务端会现建一个会话并把 id 回给我们，与聊天页同一条路） */
+async function upload(file) {
+  const r = await jget("api/upload?name=" + encodeURIComponent(file.name) + (sid ? "&sid=" + encodeURIComponent(sid) : ""),
+    { method: "POST", body: file })
+  const j = await r.json().catch(() => null)
+  if (!r.ok || !j || !j.ok) throw new Error((j && j.err) || "上传失败（HTTP " + r.status + "）")
+  sid = j.sid || sid
+  try { history.replaceState(null, "", location.pathname + "?m=" + encodeURIComponent(MOD) + "&sid=" + encodeURIComponent(sid)) } catch (_) {}
+  return j
+}
+
+$("btnStart").addEventListener("click", async () => {
+  if (!pendingFiles.length || busy()) return
+  $("btnStart").disabled = true
+  $("upbar").classList.add("on")
+  showIntroErr("")
+  // ★ 这一步可能要几十秒：文件本身传得很快，慢的是【建会话】——服务端要向 opencode 要一个新
+  //   session，机器忙的时候实测等过 25 秒。此前这段时间界面上只有一条无字的进度条，
+  //   看着就是"点了没反应"，用户会去反复点或刷新。所以把按钮文字改成实时的状态。
+  const startTxt = $("btnStartTxt").textContent
+  $("btnStartTxt").textContent = "正在上传…"
+  const slow = setTimeout(() => { $("btnStartTxt").textContent = "正在准备会话…（首次会慢一些）" }, 1500)
+  try {
+    // 多份就逐个传，并把进度写在按钮上（几十 MB 的表一份份传，用户得知道卡在第几份）
+    for (let i = 0; i < pendingFiles.length; i++) {
+      if (pendingFiles.length > 1) $("btnStartTxt").textContent = `正在上传 ${i + 1}/${pendingFiles.length}…`
+      await upload(pendingFiles[i])
+    }
+    clearTimeout(slow); $("btnStartTxt").textContent = startTxt
+    docFiles = pendingFiles.map((f) => ({ name: f.name, size: f.size }))
+    docName = docFiles[0].name
+    docSize = docFiles[0].size
+    enterReader()
+    // 会话标题：不改名的话它会被自动取成第一条消息的前 40 字，也就是那句长提示词
+    // ——「最近」列表里每一条都长一个样，认不出是哪一份。改成文件名。
+    // ★ 必须 await：服务端的 ensureSessionTitle 只在标题还是占位值时才补名，且【每会话只尝试一次】。
+    //   不等它落地就发第一条消息，两者会撞在一起——补名先跑赢，标题被钉成那句提示词，之后再也改不回来。
+    const title = docName.slice(0, 60) + (docFiles.length > 1 ? ` 等 ${docFiles.length} 份` : "")
+    await fetch("api/session/rename?id=" + encodeURIComponent(sid) + "&title=" + encodeURIComponent(title), { method: "POST" }).catch(() => {})
+    if (CFG.source.kind === "table") loadHeaders()   // 读真表头，喂「变量对应」面板的下拉
+    setMode(CFG.first)
+    // ★ 传完【不自动开跑】。这里原来是 run(CFG.first)：文件一传上去，第一个模式立刻发出去，
+    //   用户既没机会看一眼严格度 / 输出语言 / 保护引用，也来不及先去补配套数值表 —— 想拦只能
+    //   现找终止，而那一轮的额度已经花掉了。现在全站只有一种开跑方式：用户自己点「开始」。
+    //   （设置摊开来让他先确认口径，但摊开 ≠ 开跑，得点弹层里的那枚「开始」才走。）
+    if ((CFG.settings || []).length && !settingsSeen()) openSettings(true)
+  } catch (e) {
+    clearTimeout(slow); $("btnStartTxt").textContent = startTxt
+    showIntroErr(String((e && e.message) || e))
+    syncStart()
+  } finally {
+    $("upbar").classList.remove("on")
+  }
+})
+
+/* ============================================================
+   4. 阅读器外壳
+   ============================================================ */
+function enterReader() {
+  $("intro").hidden = true
+  $("reader").hidden = false
+  $("docName").textContent = docName || "—"
+  $("docSub").textContent = [extOf(docName).toUpperCase(), fmtSize(docSize)].filter(Boolean).join(" · ")
+  $("btnSettings").hidden = !(CFG.settings || []).length
+  $("varsBox").hidden = !CFG.vars
+  if (CFG.vars) { $("varsTitle").textContent = CFG.vars.title; $("varsSub").textContent = CFG.vars.sub; renderVars() }
+  renderStrip()
+  renderDoc()
+  renderRail()
+}
+
+/* ---- 多文件条：切换 / 删除 / 再添加 ----
+   只有 CFG.source.multi 的模块画它。三件事都在这一条上，因为它们是同一件事的三个面：
+   用户手里有好几张表，要能看清传了哪几张、点开任意一张、把传错的那张删掉。 */
+function renderStrip() {
+  const strip = $("fileStrip")
+  if (!isMulti()) { strip.hidden = true; return }
+  strip.hidden = false
+  const busyNow = busy()
+  strip.innerHTML = docFiles.map((f) =>
+    '<span class="fchip' + (f.name === docName ? " on" : "") + '" data-pick="' + esc(f.name) + '" title="' + esc(f.name) + '">'
+    + '<span class="nm">' + esc(f.name) + "</span>"
+    + '<button type="button" class="x" data-del="' + esc(f.name) + '" aria-label="删除 ' + esc(f.name) + '"'
+    + (busyNow ? " disabled" : "") + ">×</button></span>").join("")
+    + '<button type="button" class="addf" id="addFile"' + (busyNow ? ' disabled title="这一轮还在跑，跑完再加"' : "")
+    + ">＋ 再传一张</button>"
+    + (busyNow ? '<span class="fnote">这一轮跑完才能加/删文件</span>'
+      : docFiles.length > 1 ? '<span class="fnote">共 ' + docFiles.length + " 张，都会交给分析；点一张在左边看它</span>" : "")
+  strip.querySelectorAll("[data-pick]").forEach((el) => el.addEventListener("click", (e) => {
+    if (e.target.closest("[data-del]")) return
+    switchDoc(el.dataset.pick)
+  }))
+  strip.querySelectorAll("[data-del]").forEach((b) => b.addEventListener("click", () => removeDocFile(b.dataset.del)))
+  const add = $("addFile"); if (add) add.addEventListener("click", pickMoreDocs)
+}
+
+/** 换一张看（只影响左栏与「变量对应」读哪张表的表头；发给模型的仍是全部） */
+function switchDoc(name) {
+  const f = docFiles.find((x) => x.name === name)
+  if (!f || f.name === docName) return
+  docName = f.name; docSize = f.size
+  $("docName").textContent = docName
+  $("docSub").textContent = [extOf(docName).toUpperCase(), fmtSize(docSize)].filter(Boolean).join(" · ")
+  renderStrip(); renderDoc()
+  if (CFG.source.kind === "table") loadHeaders()
+  saveSettings()
+}
+
+/**
+ * 造一个选文件框并弹出来。
+ *
+ * ★ 必须先 appendChild 再 click，用完再摘掉。浏览器里游离的 <input> 点了也能弹框，
+ *   但桌面壳跑的是 WebView2 —— 这个壳已经因为"宿主不接钩子就静默吞掉"栽过两次
+ *   （<a download> 要 on_download、target=_blank 要 on_new_window，见 launcher/src/main.rs），
+ *   现场表现都是同一句"点了没反应"。首屏那个 <input id="file"> 是【挂在 DOM 里】的、
+ *   在壳里一直好使，游离的这条路和它唯一的差别就在这儿。挂上去不花任何代价，
+ *   就别把这个差别留着当变量。
+ */
+function openPicker(accept, multiple, onChange) {
+  const inp = document.createElement("input")
+  inp.type = "file"; inp.accept = accept; inp.multiple = !!multiple
+  inp.style.cssText = "position:fixed;left:-9999px;width:1px;height:1px;opacity:0"
+  document.body.appendChild(inp)
+  inp.addEventListener("change", () => {
+    const files = [...(inp.files || [])]
+    inp.remove()
+    onChange(files)
+  })
+  inp.click()
+}
+
+/** 再传一张（可多选）。传完自动切到最后一张，让用户立刻看见自己传上来的是什么。 */
+function pickMoreDocs() {
+  // ★ 别静默 return。这颗按钮的灰/不灰是 renderStrip 那一刻的 busy() 快照，快照会过期
+  //（刷新页面接回一轮还在跑的会话就是），于是按钮亮着、点下去什么都不发生 = 用户眼里的"坏了"。
+  //   重画一次文件条：状态立刻自我纠正成灰的，旁边那句话也说清了为什么。
+  if (busy()) { renderStrip(); return }
+  openPicker(CFG.source.accept, true, async (files) => {
+    if (!files.length) return
+    const ok = okExt()
+    const bad = files.filter((f) => !ok.includes(extOf(f.name)))
+    const good = files.filter((f) => ok.includes(extOf(f.name)))
+    if (bad.length) docMsg("只收 " + ok.map((x) => "." + x).join(" / ") + "；已跳过：" + bad.map((f) => f.name).join("、"))
+    let last = ""
+    for (let i = 0; i < good.length; i++) {
+      const f = good[i]
+      docMsg("正在上传 " + f.name + (good.length > 1 ? "（" + (i + 1) + "/" + good.length + "）" : "") + "…")
+      try {
+        await upload(f)
+        // 同名重传 = 覆盖（服务端按名字落盘），列表里也只留一条，别出现两行同名
+        docFiles = [...docFiles.filter((x) => x.name !== f.name), { name: f.name, size: f.size }]
+        last = f.name
+      } catch (e) {
+        docMsg("上传失败：" + String((e && e.message) || e))
+        renderStrip()
+        return
+      }
+    }
+    saveSettings()
+    if (last) { docName = ""; switchDoc(last) } else { renderStrip(); renderDoc() }
+  })
+}
+
+/** 删掉一张（服务端也真删，否则刷新一下它又回来了） */
+async function removeDocFile(name) {
+  if (busy()) { renderStrip(); return }          // 同 pickMoreDocs：快照过期时自我纠正，别静默吞掉
+  const keep = docFiles.slice()
+  docFiles = docFiles.filter((f) => f.name !== name)
+  const wasCurrent = name === docName
+  if (wasCurrent) {
+    docName = docFiles.length ? docFiles[0].name : ""
+    docSize = docFiles.length ? docFiles[0].size : null
+    $("docName").textContent = docName || "—"
+    $("docSub").textContent = [extOf(docName).toUpperCase(), fmtSize(docSize)].filter(Boolean).join(" · ")
+  }
+  renderStrip(); renderDoc()
+  try {
+    const r = await jget("api/upload/delete?name=" + encodeURIComponent(name) + sidQ(), { method: "POST" })
+    if (!r.ok) throw new Error("HTTP " + r.status)
+    saveSettings()
+    if (wasCurrent && docName && CFG.source.kind === "table") loadHeaders()
+  } catch (e) {
+    docFiles = keep                                   // 删不掉就放回去，别让界面和磁盘对不上
+    if (wasCurrent) { docName = name; docSize = (keep.find((f) => f.name === name) || {}).size }
+    renderStrip(); renderDoc()
+    docMsg("没能删掉 " + name + "（" + String((e && e.message) || e) + "）")
+  }
+}
+
+/** 左栏那块区域里说一句话（上传进度 / 删除失败这类过程消息） */
+function docMsg(t) { $("docView").innerHTML = '<div class="docmsg">' + esc(t) + "</div>" }
+
+/* ---- 左栏：那份东西 ----
+   kind=doc   ：pdf 走 api/raw（浏览器自带阅读器）、Word 走 api/preview（服务端转 HTML/PDF）
+   kind=table ：csv/tsv 前端直接渲染成表格；xlsx 前端解析不了，如实说明并给下载 */
+let zoom = 1
+function docUrl() {
+  const e = extOf(docName)
+  const base = (e === "pdf" || CFG.source.kind === "table") ? "api/raw" : "api/preview"
+  return base + "?name=" + encodeURIComponent(docName) + "&dir=up" + sidQ()
+}
+
+/* ---- xlsx 就地预览（不引任何库）----------------------------------------
+   xlsx/xlsm 是一个 zip：里面 xl/worksheets/sheetN.xml 是单元格，xl/sharedStrings.xml 是字符串池。
+   解压用浏览器自带的 DecompressionStream('deflate-raw')（Chromium / WebView2 / 新 Safari 都有），
+   所以不需要 SheetJS 那几百 KB。解析不了就退回一句人话 —— 绝不画一张空表让人以为数据是空的。
+   ⚠ 只做【只读预览】：不求还原公式、样式、合并单元格。日期做了转换（Excel 存的是序列号，
+     不转的话满屏 45123 更看不懂），其余一律按字面显示。 */
+const XLSX_MAX_ROWS = 200
+let XLSX_VIEW = null      // { file, sheets:[{name,rows,total}], cur }
+
+async function inflateRaw(bytes) {
+  if (typeof DecompressionStream === "undefined") throw new Error("这个浏览器不支持内置解压")
+  const s = new Blob([bytes]).stream().pipeThrough(new DecompressionStream("deflate-raw"))
+  return new Uint8Array(await new Response(s).arrayBuffer())
+}
+
+/** zip → Map(路径 → Uint8Array)。只认标准 zip（不处理 zip64；碰上了就抛错走降级文案）。 */
+async function unzip(buf) {
+  const u8 = new Uint8Array(buf), dv = new DataView(buf)
+  let eocd = -1
+  for (let i = u8.length - 22; i >= Math.max(0, u8.length - 66000); i--)
+    if (dv.getUint32(i, true) === 0x06054b50) { eocd = i; break }
+  if (eocd < 0) throw new Error("文件不是有效的 xlsx（找不到 zip 结构）")
+  const count = dv.getUint16(eocd + 10, true)
+  let p = dv.getUint32(eocd + 16, true)
+  if (p === 0xffffffff) throw new Error("这是 zip64 格式的大文件，浏览器这边读不了")
+  const out = new Map(), td = new TextDecoder()
+  for (let i = 0; i < count && p + 46 <= u8.length; i++) {
+    if (dv.getUint32(p, true) !== 0x02014b50) break
+    const method = dv.getUint16(p + 10, true)
+    const csize = dv.getUint32(p + 20, true)
+    const nlen = dv.getUint16(p + 28, true), elen = dv.getUint16(p + 30, true), clen = dv.getUint16(p + 32, true)
+    const lho = dv.getUint32(p + 42, true)
+    const name = td.decode(u8.subarray(p + 46, p + 46 + nlen))
+    p += 46 + nlen + elen + clen
+    // 本地头里的名字/扩展字段长度可能与中央目录不同，数据偏移必须照本地头重算
+    const lnlen = dv.getUint16(lho + 26, true), lelen = dv.getUint16(lho + 28, true)
+    const start = lho + 30 + lnlen + lelen
+    const raw = u8.subarray(start, start + csize)
+    // 只解我们要用的那几个文件：整本解压在几十 MB 的表上是白花几秒
+    if (!/^xl\/(worksheets\/|sharedStrings|styles|workbook)/.test(name) && name !== "xl/_rels/workbook.xml.rels") continue
+    out.set(name, method === 0 ? raw.slice() : await inflateRaw(raw))
+  }
+  return out
+}
+
+const A1COL = (ref) => {              // "BC12" → 列序号（0 基）
+  let n = 0
+  for (const ch of String(ref)) {
+    const c = ch.charCodeAt(0)
+    if (c >= 65 && c <= 90) n = n * 26 + (c - 64); else break
+  }
+  return Math.max(0, n - 1)
+}
+
+/** Excel 序列号 → YYYY-MM-DD[ HH:MM]（1900 历，含它那个著名的 1900-02-29 假闰日） */
+function excelDate(v) {
+  const d = new Date(Math.round((v - 25569) * 86400 * 1000))
+  if (isNaN(d.getTime())) return String(v)
+  const p = (x) => String(x).padStart(2, "0")
+  const ymd = d.getUTCFullYear() + "-" + p(d.getUTCMonth() + 1) + "-" + p(d.getUTCDate())
+  const frac = v - Math.floor(v)
+  return frac > 1e-6 ? ymd + " " + p(d.getUTCHours()) + ":" + p(d.getUTCMinutes()) : ymd
+}
+
+/** 解析出每个工作表的前 XLSX_MAX_ROWS 行（rows 为二维数组，total 为该表的总行数） */
+async function xlsxSheets(buf) {
+  const files = await unzip(buf)
+  const td = new TextDecoder()
+  const xml = (n) => (files.has(n) ? td.decode(files.get(n)) : "")
+  const dom = (s) => new DOMParser().parseFromString(s, "application/xml")
+  const tag = (node, n) => [...node.getElementsByTagName(n)]
+
+  // 字符串池：富文本会被切成多个 <r><t>，拼起来才是完整一格
+  const shared = []
+  const ss = xml("xl/sharedStrings.xml")
+  if (ss) for (const si of tag(dom(ss), "si")) shared.push(tag(si, "t").map((t) => t.textContent).join(""))
+
+  // 哪些 style 是日期格式：内置 14–22 / 45–47，外加自定义格式里带 y-m-d 的
+  const dateStyles = new Set()
+  const st = xml("xl/styles.xml")
+  if (st) {
+    const sdoc = dom(st)
+    const custom = new Map()
+    for (const f of tag(sdoc, "numFmt")) {
+      const code = f.getAttribute("formatCode") || ""
+      if (/[ymdhs]/i.test(code.replace(/\[[^\]]*\]|"[^"]*"/g, "")) && !/^[#0.,%]+$/.test(code))
+        custom.set(f.getAttribute("numFmtId"), true)
+    }
+    const cellXfs = sdoc.getElementsByTagName("cellXfs")[0]
+    if (cellXfs) tag(cellXfs, "xf").forEach((xf, i) => {
+      const id = xf.getAttribute("numFmtId") || "0"
+      const n = Number(id)
+      if ((n >= 14 && n <= 22) || (n >= 45 && n <= 47) || custom.has(id)) dateStyles.add(i)
+    })
+  }
+
+  // 工作表清单与顺序：workbook.xml 的 <sheet r:id> → rels 里的 Target
+  const rels = new Map()
+  const rl = xml("xl/_rels/workbook.xml.rels")
+  if (rl) for (const r of tag(dom(rl), "Relationship"))
+    rels.set(r.getAttribute("Id"), (r.getAttribute("Target") || "").replace(/^\/?xl\//, "").replace(/^\.\//, ""))
+  let entries = []
+  const wb = xml("xl/workbook.xml")
+  if (wb) for (const s of tag(dom(wb), "sheet")) {
+    const rid = s.getAttribute("r:id") || s.getAttributeNS("http://schemas.openxmlformats.org/officeDocument/2006/relationships", "id")
+    const target = rels.get(rid)
+    if (target) entries.push({ name: s.getAttribute("name") || target, path: "xl/" + target })
+  }
+  if (!entries.length)   // workbook.xml 读不出来就按文件名兜底
+    entries = [...files.keys()].filter((k) => /^xl\/worksheets\/sheet\d+\.xml$/.test(k)).sort()
+      .map((k, i) => ({ name: "工作表 " + (i + 1), path: k }))
+
+  const sheets = []
+  for (const en of entries) {
+    const body = xml(en.path)
+    if (!body) continue
+    const rowsXml = tag(dom(body), "row")
+    const rows = []
+    for (const r of rowsXml) {
+      if (rows.length >= XLSX_MAX_ROWS) break
+      const line = []
+      for (const c of tag(r, "c")) {
+        const ref = c.getAttribute("r") || ""
+        const idx = ref ? A1COL(ref) : line.length
+        const t = c.getAttribute("t") || ""
+        const sIdx = Number(c.getAttribute("s") || "-1")
+        let val = ""
+        if (t === "inlineStr") val = tag(c, "t").map((x) => x.textContent).join("")
+        else {
+          const v = c.getElementsByTagName("v")[0]
+          const raw = v ? v.textContent : ""
+          if (t === "s") val = shared[Number(raw)] ?? ""
+          else if (t === "b") val = raw === "1" ? "TRUE" : "FALSE"
+          else if (t === "e") val = raw                     // 错误值（#DIV/0! 等）原样显示
+          else if (raw !== "" && dateStyles.has(sIdx) && !isNaN(Number(raw))) val = excelDate(Number(raw))
+          else val = raw
+        }
+        while (line.length < idx) line.push("")
+        line[idx] = val
+      }
+      rows.push(line)
+    }
+    sheets.push({ name: en.name, rows, total: rowsXml.length })
+  }
+  return sheets
+}
+
+/** 把当前选中的工作表画出来（多表时上面带一个切换下拉） */
+function renderXlsxSheet() {
+  const V = XLSX_VIEW
+  if (!V) return
+  const sh = V.sheets[V.cur] || V.sheets[0]
+  const rows = sh.rows.filter((r) => r.some((c) => String(c || "").trim() !== ""))
+  const width = rows.reduce((m, r) => Math.max(m, r.length), 0)
+  let h = '<div class="tablewrap">'
+  if (V.sheets.length > 1) {
+    h += '<div class="sheetbar"><span>工作表</span><select id="xlsxSheet">'
+      + V.sheets.map((s, i) => '<option value="' + i + '"' + (i === V.cur ? " selected" : "") + ">" + esc(s.name) + "</option>").join("")
+      + "</select><span>共 " + V.sheets.length + " 个</span></div>"
+  }
+  if (!rows.length) h += '<div class="docmsg">这个工作表是空的</div>'
+  else {
+    const head = rows[0], body = rows.slice(1)
+    const cell = (r, i) => esc(r[i] == null ? "" : String(r[i]))
+    h += "<table><thead><tr>"
+      + Array.from({ length: width }, (_, i) => "<th>" + cell(head, i) + "</th>").join("")
+      + "</tr></thead><tbody>"
+      + body.map((r) => "<tr>" + Array.from({ length: width }, (_, i) => "<td>" + cell(r, i) + "</td>").join("") + "</tr>").join("")
+      + "</tbody></table>"
+    if (sh.total > XLSX_MAX_ROWS)
+      h += '<div class="more">只显示前 ' + XLSX_MAX_ROWS + " 行（这张表共 " + sh.total + " 行）——完整的表交给分析那边读，不受这里影响。</div>"
+  }
+  $("docView").innerHTML = h + "</div>"
+  const sel = $("xlsxSheet")
+  if (sel) sel.addEventListener("change", () => { XLSX_VIEW.cur = Number(sel.value); renderXlsxSheet() })
+}
+
+/** csv/tsv → 表格。只画前 200 行：几万行的表全塞进 DOM 会把页面卡死，而左栏是用来"对着看"的。 */
+/**
+ * CSV/TSV 切行切格。**必须认引号**：裸按分隔符切的话，`table1.csv` 的效应量列
+ * （`"均值差 1.00 (-2.02, 4.02)"`）会被劈成两格，那一行往右错一列而表头还在原位 ——
+ * 看起来就像统计算错了。医生自己的表里"备注"列带逗号同样常见。
+ */
+function splitDelim(text, sep, maxRows) {
+  const t = String(text).replace(/^﻿/, "").replace(/\r\n?/g, "\n")
+  const rows = []
+  let row = [], cell = "", inQ = false
+  for (let i = 0; i < t.length; i++) {
+    const c = t[i]
+    if (inQ) {
+      if (c !== '"') { cell += c; continue }
+      if (t[i + 1] === '"') { cell += '"'; i++; continue }   // "" = 一个字面引号
+      inQ = false
+    } else if (c === '"' && !cell) inQ = true
+    else if (c === sep) { row.push(cell); cell = "" }
+    else if (c === "\n") {
+      row.push(cell); cell = ""
+      if (row.length > 1 || row[0].trim()) rows.push(row)    // 空行跳过
+      row = []
+      if (maxRows && rows.length >= maxRows) return rows
+    } else cell += c
+  }
+  if (cell || row.length) { row.push(cell); rows.push(row) }
+  return rows
+}
+
+function renderCsv(text, sep) {
+  const rows = splitDelim(text, sep, 201).map((r) => r.map((c) => c.trim()))
+  if (!rows.length) return '<div class="docmsg">这个文件是空的</div>'
+  const head = rows[0], body = rows.slice(1, 201)
+  return '<div class="tablewrap"><table><thead><tr>'
+    + head.map((c) => "<th>" + esc(c) + "</th>").join("")
+    + "</tr></thead><tbody>"
+    + body.map((r) => "<tr>" + head.map((_, i) => "<td>" + esc(r[i] == null ? "" : r[i]) + "</td>").join("") + "</tr>").join("")
+    + "</tbody></table>"
+    + (rows.length > 200 ? '<div class="more">只显示前 200 行——完整的表交给分析那边读，不受这里影响。</div>' : "")
+    + "</div>"
+}
+
+async function renderDoc() {
+  const view = $("docView")
+  if (!docName) {
+    view.innerHTML = '<div class="docmsg">' + (isMulti() ? "还没有文件——点上面的「＋ 再传一张」传一份进来。" : "还没有文件") + "</div>"
+    return
+  }
+  const e = extOf(docName)
+
+  if (CFG.source.kind === "table") {
+    $("zoomBox").hidden = true
+    if (["csv", "tsv", "txt"].includes(e)) {
+      view.innerHTML = '<div class="docmsg">正在读表…</div>'
+      try {
+        const r = await jget(docUrl())
+        if (!r.ok) throw new Error("HTTP " + r.status)
+        view.innerHTML = renderCsv(await r.text(), e === "tsv" ? "	" : ",")
+      } catch (err) {
+        if (String((err && err.message) || err) === "unauthorized") return
+        view.innerHTML = '<div class="docmsg">这张表读不出来（' + esc(String((err && err.message) || err)) + '）。<br>不影响右边的分析——那边读的是文件本身。</div>'
+      }
+      return
+    }
+    // xlsx/xlsm：就地解析、渲染成表。xlsx 本身是个 zip，解压用浏览器自带的
+    // DecompressionStream('deflate-raw')，所以【不引任何前端库】也能读（见 xlsxSheets）。
+    // 旧版在这里只放一句"没法预览"，于是用户传了 xlsx 之后左边整片是灰的 —— 而这个模块的
+    // 全部价值就是"左边摆着你的原表，算出来的数能对回去"。老的 .xls（BIFF 二进制，不是 zip）
+    // 仍然读不了，那种情况照旧如实说明。
+    if (["xlsx", "xlsm"].includes(e)) {
+      view.innerHTML = '<div class="docmsg">正在读表…</div>'
+      try {
+        const r = await jget(docUrl())
+        if (!r.ok) throw new Error("HTTP " + r.status)
+        const sheets = await xlsxSheets(await r.arrayBuffer())
+        if (!sheets.length) throw new Error("这个工作簿里没有工作表")
+        XLSX_VIEW = { file: docName, sheets, cur: 0 }
+        renderXlsxSheet()
+        // 顺便把真表头喂给「变量对应」的下拉：服务端读不了 xlsx（不背二进制解析依赖），
+        // 此前 xlsx 一律降级成手填列名 —— 而"列名写错"正是这个模块最高频的失败模式。
+        const head = (sheets[0].rows[0] || []).map((x) => String(x == null ? "" : x).trim()).filter(Boolean)
+        // 浏览器自己解析出来的表头：没有消歧处理，显示名与真列名同一份
+        if (head.length && CFG.vars) { HEADERS = head; HEADER_VALS = head.slice(); HEADER_DUPES = []; HEADERS_WHY = ""; renderVars() }
+      } catch (err) {
+        if (String((err && err.message) || err) === "unauthorized") return
+        view.innerHTML = '<div class="docmsg">这个 Excel 表在浏览器里没能解析（' + esc(String((err && err.message) || err)) + '）。<br><br>'
+          + '<b>不影响分析</b>——右边每个模式读的都是文件本身。<br>'
+          + '想核对内容可以点右上角「原文」下载，或先跑一次「数据体检」，它会把每一列的类型、缺失与分布都列出来。</div>'
+      }
+      return
+    }
+    // 老的 .xls（BIFF 二进制，不是 zip）：如实讲，别装作能预览
+    view.innerHTML = '<div class="docmsg">老格式的 Excel（.' + esc(e) + '）在这里没法直接预览。<br><br>'
+      + '<b>不影响分析</b>——右边每个模式读的都是文件本身。<br>'
+      + '想在左栏直接看表，用 Excel 另存为 .xlsx 或 .csv 再传一次即可。</div>'
+    return
+  }
+
+  const scalable = e !== "pdf"                       // PDF 用浏览器自带阅读器，缩放归它管
+  $("zoomBox").hidden = !scalable
+  const url = docUrl()
+  // Word 走 /api/preview（服务端转 HTML/PDF），这一路是会失败的：没装 LibreOffice、
+  // 转换超时、mammoth 抛错……iframe 的 error 事件【对 HTTP 错误不触发】，直接塞进去的话
+  // 用户看到的是一框服务端返回的纯文本报错，还以为是正文。所以先探一次，失败就自己说人话。
+  if (scalable) {
+    view.innerHTML = '<div class="docmsg">正在转换以便预览…</div>'
+    let msg = ""
+    try {
+      const r = await jget(url)
+      if (!r.ok) msg = (await r.text().catch(() => "")) || "预览转换失败（HTTP " + r.status + "）"
+    } catch (err) {
+      if (String((err && err.message) || err) === "unauthorized") return
+      msg = "预览请求没发出去（网络异常）"
+    }
+    if (msg) {
+      view.innerHTML = '<div class="docmsg">' + esc(msg.slice(0, 300))
+        + '<br><br>左栏只是预览——<b>不影响右边的各个模式</b>，那些读的是文件本身。'
+        + '<br>想看原件可以点右上角「原文」下载到本地。</div>'
+      return
+    }
+  }
+  view.innerHTML = ""
+  const f = document.createElement("iframe")
+  f.id = "docFrame"
+  // docx 预览是服务端 mammoth 直出的 HTML，响应头带 CSP sandbox（不许脚本、不接触本站源）；
+  // PDF 走浏览器内置阅读器。两种都只读。
+  f.src = url
+  view.appendChild(f)
+  applyZoom()
+}
+function applyZoom() {
+  const f = $("docFrame"); if (!f) return
+  const z = extOf(docName) !== "pdf" ? zoom : 1
+  f.style.width = (100 / z) + "%"
+  f.style.height = (100 / z) + "%"
+  f.style.transform = "scale(" + z + ")"
+  $("zval").textContent = Math.round(z * 100) + "%"
+}
+$("zoomIn").addEventListener("click", () => { zoom = Math.min(2, +(zoom + 0.1).toFixed(2)); applyZoom() })
+$("zoomOut").addEventListener("click", () => { zoom = Math.max(0.6, +(zoom - 0.1).toFixed(2)); applyZoom() })
+// （原来这里还有一个「原文」按钮，用 window.open 把原件开到新标签。已按要求撤掉：
+//   左栏本来就在显示这份原文，而在桌面壳里 target=_blank 那条路未必通。）
+
+/* ---- 右栏：模式条 ---- */
+function renderRail() {
+  // 跑起来 / 跑完时按钮的可点状态会变（跑的过程中不许删文件），顺手把文件条也重画一遍
+  renderStrip()
+  const rail = $("rail")
+  rail.innerHTML = ""
+  ORDER.forEach((k) => {
+    const M = MODES[k]
+    const b = document.createElement("button")
+    b.type = "button"
+    b.className = "tool-btn" + (k === mode ? " active" : "")
+    b.title = M.label
+    // chat 也走同一套 status。原来它只判 msgs.length，于是聊天轮一开跑右条上就是【绿点（已完成）】，
+    // 失败了还是绿点 —— 而 S.chat.status 本来就在 run()/close()/failRun 里被正常维护着。
+    const st = S[k].status === "running" ? "run" : S[k].status === "error" ? "err"
+      : S[k].status === "done" ? "done" : (k === "chat" && S.chat.msgs.length ? "done" : "")
+    b.innerHTML = M.icon + "<span>" + esc(M.label) + "</span>" + (st ? '<i class="dot ' + st + '"></i>' : "")
+    b.addEventListener("click", () => onRail(k))
+    rail.appendChild(b)
+  })
+}
+
+/**
+ * 这个模式现在跑得了吗？跑不了要说清缺什么，而不是发出去让模型自己发现。
+ * need 的三种写法（定义在 workflows.mjs 的 modes[].need）：
+ *   "data"        需要配套数值表（refcheck 的数据完整性）
+ *   "var:xxx"     需要「变量对应」里指定某一列（stats 的基线表要分组列）
+ *   "after:yyy"   需要先跑过另一个模式（humanize 的改动对照要先有润色稿）
+ */
+function blockedBy(k) {
+  const M = MODES[k]
+  const miss = []
+  for (const n of M.need || []) {
+    if (n === "data" && !dataFiles.length) miss.push({ kind: "data" })
+    else if (n.startsWith("var:")) { const f = n.slice(4); const v = SETTINGS[f]; if (v === undefined || v === null || v === "" || (Array.isArray(v) && !v.length)) miss.push({ kind: "var", field: f }) }
+    else if (n.startsWith("after:")) { const m2 = n.slice(6); if (!S[m2] || S[m2].status === "idle") miss.push({ kind: "after", mode: m2 }) }
+  }
+  return miss.length ? miss : null
+}
+
+/**
+ * 点模式按钮：【只切过去看，不开跑】。
+ * ★ 这里原来是"没跑过就顺手跑一轮"。改掉的原因：点一下模式条就直接开始，等于用户还没看清
+ *   这个模式要干什么、也还没来得及改设置/补数值表，一轮就已经发出去了（花掉额度，且要停下来
+ *   得再找终止按钮）。现在切过去只看到空面板 + 上方的「开始」，什么时候跑由用户说了算。
+ *   面板中央那个大按钮和上方的「开始」是同一件事，都走 tryRun。
+ */
+function onRail(k) {
+  const fresh = S[k] && S[k].status === "idle"     // 这个模式还一轮都没跑过
+  setMode(k)
+  if (k === "chat") { $("q").focus(); return }
+  // 没跑过 → 把设置摊开：这些口径（严格程度 / 语言 / 是否保护引用）跑完再改就得整轮重来，
+  // 所以先问一遍，用户填完点弹层里的「开始」就直接开跑。
+  // ★ 只在这里做。setMode 还会被恢复会话、首次进入调用，那两处弹出来纯属打扰。
+  // 模块没有任何设置项时不弹空弹层，用户照常点头部的「开始」。
+  // ★ 必须延到本次点击【冒泡完】再弹：document 上那个"点空白处收起菜单"的监听会在本函数
+  //   返回之后才跑（模式条按钮身上没有 data-act），同步打开的话会被它当场关掉 —— 表现就是
+  //   "点了模式条，设置闪一下就没了"。
+  //   settingsSeen() 也必须在延迟【之后】判：从一个开着设置的模式切过来时，"用户已看过"这件事
+  //   正是由那个 document 监听记下的，同步判会读到旧值，于是一模一样的设置又弹一遍。
+  if (fresh && !busy() && (CFG.settings || []).length) {
+    setTimeout(() => { if (!settingsSeen()) openSettings(true) }, 0)
+  }
+}
+
+/** 缺前置条件：就地说清缺什么、并把用户送到能补上它的地方（展开变量面板 / 亮出上传按钮） */
+/** 闸红横幅 + 「仍要出件」。只在闸红（或已放行）时出现 —— 常驻一个"绕过质量闸"的按钮
+ *  等于明示可以绕，而绝大多数情况下闸是对的，该改稿就得改稿。与聊天页 gateBypassBtn 同一个接口。 */
+function gateBannerHtml() {
+  if (!GATES.length && !BYPASS) return ""
+  const names = GATES.map((id) => GATE_STEPS.find((s) => s.id === id)?.name || id)
+  const body = BYPASS
+    ? "你已放行本会话的拦截：闸未过也能出件。" + (names.length ? `「${names.join("、")}」仍判定为未通过——出的件没有过闸。` : "")
+    : `质量闸未过：「${names.join("、")}」。Markdown 稿件照常产出，但 Word / PDF 送审件会被拦下，`
+      + "直到改完稿子并重新跑一遍那道闸。若你判断是误判（报告通篇英文、或结论其实是「通过」却被读成红），可以放行。"
+  return '<div class="notebox ' + (BYPASS ? "info" : "err") + '" id="gateBanner">' + esc(body)
+    + ' <button class="gbypass" data-on="' + (BYPASS ? "1" : "0") + '">' + (BYPASS ? "恢复拦截" : "仍要出件") + "</button></div>"
+}
+// 事件委托：横幅是 innerHTML 拼出来的，每次 render 都换新节点，挂不住直接绑定的监听
+document.addEventListener("click", async (e) => {
+  const b = e.target.closest(".gbypass"); if (!b || !sid) return
+  const on = b.dataset.on !== "1"
+  b.disabled = true
+  try {
+    const r = await jget("api/workflow/gate-bypass", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ sid, on }) }).then((x) => x.json())
+    BYPASS = !!r.on
+  } catch (_) { b.disabled = false; return }
+  render(mode)
+})
+function showBlocked(k, miss) {
+  const M = MODES[k]
+  S[k].err = ""
+  const parts = miss.map((x) => {
+    if (x.kind === "data") return "还没有配套的数值表"
+    if (x.kind === "var") { const f = fieldDef(x.field); return "还没指定「" + (f ? f.label : x.field) + "」" }
+    if (x.kind === "after") return "得先跑一次「" + (MODES[x.mode] ? MODES[x.mode].label : x.mode) + "」"
+    return ""
+  }).filter(Boolean)
+  S[k].block = parts.join("；") + "。" + (M.needHint || "")
+  // 缺的是什么【种类】要留着：render 据此决定要不要在提示下面摆一个上传按钮。
+  // 只留文字的话，用户看到"请先上传配套的数值表"却没有任何地方能传 —— 死路一条。
+  S[k].blockMiss = miss
+  if (miss.some((x) => x.kind === "var")) {
+    $("varsBox").open = true
+    renderVars(miss.filter((x) => x.kind === "var").map((x) => x.field))
+  }
+  render(k)
+}
+
+function setMode(k) {
+  mode = k
+  ORDER.forEach((x) => { const el = $("pane-" + x); if (el) el.classList.toggle("on", x === k) })
+  const M = MODES[k]
+  $("paneTitle").innerHTML = M.icon + "<span>" + esc(M.label) + "</span>"
+  document.querySelector(".ai-head .badge").textContent = M.badge
+  // 输入框（智能助手 + 有结果的模式的追问入口）、头部那几个按钮（开始 / 终止 / 重新生成）
+  // 与底栏的显隐都由 updateFoot 一处决定，
+  // 别在这里再写一遍：两处各判一次，迟早会出现"切模式时对、跑完又不对"的错位。
+  renderRail()
+  render(k)
+  $("aiBody").scrollTop = 0
+}
+
+/**
+ * 起一轮的【唯一入口】——先过前置条件闸，再决定发不发。
+ *
+ * ★ 这里踩过一次：闸只接在了模式条那一个入口上，而面板中央那个按钮和「重新生成」都直接调
+ *   run()。于是 refcheck 里点面板里的「数据完整性」，没有数值表也照发；stats 的「基线表」
+ *   没指分组列也照发 —— 右边条子拦得住、面板里拦不住，同一件事两种行为。
+ *   凡是"起一轮"都必须走这里。
+ */
+function tryRun(k, force, stage2) {
+  if (busy()) return
+  const miss = blockedBy(k)
+  if (miss) { setMode(k); showBlocked(k, miss); return }
+  run(k, force, undefined, false, stage2)
+}
+$("btnResume").addEventListener("click", () => resumeDropped(mode))
+$("btnRerun").addEventListener("click", () => tryRun(mode, true))
+$("btnGo").addEventListener("click", () => tryRun(mode))
+$("btnHalt").addEventListener("click", abortRun)
+// 面板里那些按钮每次重画都会换一个新的 DOM 节点，所以一律走委托，别逐个绑
+$("aiBody").addEventListener("click", (e) => {
+  const b = e.target.closest("[data-run]")
+  if (b) { tryRun(b.dataset.run); return }
+  const s2 = e.target.closest("[data-stage2]")       // 阶段卡上的「按这份大纲出片」
+  if (s2) { tryRun(s2.dataset.stage2, false, true); return }
+  const rs = e.target.closest("[data-resume]")       // 断线后那条提示里的「继续」（与头部那颗同一个动作）
+  if (rs) { resumeDropped(rs.dataset.resume); return }
+  const p = e.target.closest("[data-pv]")            // 产物那一行的「预览」
+  if (p) { openPv(p.dataset.pv); return }
+  const add = e.target.closest("[data-dataadd]")     // 配套数值表：添加
+  if (add) { pickDataFiles(); return }
+  const del = e.target.closest("[data-datadel]")     // 配套数值表：移除某一份
+  if (del) removeDataFile(del.dataset.datadel)
+})
+
+/* ============================================================
+   5. 面板渲染
+   ============================================================ */
+function runHtml(m) {
+  if (!RUN || RUN.mode !== m) return ""
+  const tools = [...RUN.tools.values()]
+  const live = tools.filter((t) => t.status === "running" || t.status === "pending").length
+  return '<div class="runbox"><div class="rh"><span class="spin"></span><span>' + esc(RUN.label) + "</span></div>"
+    + (RUN.skills.length ? '<div class="pills">' + RUN.skills.map((s) => '<span class="pill">' + esc(s) + "</span>").join("") + "</div>" : "")
+    + (tools.length ? '<details><summary>工具调用（' + tools.length + (live ? "，" + live + " 个在跑" : "") + "）</summary>"
+        + tools.map((t) => '<div class="trow"><span class="st">' + (t.status === "completed" ? "✓" : t.status === "error" ? "✕" : "○") + "</span><span>" + esc(t.label) + "</span></div>").join("")
+        + "</details>" : "")
+    + "</div>"
+}
+function filesHtml(list, title) {
+  if (!list || !list.length) return ""
+  return '<div class="files"><div class="ft">' + esc(title || "本轮产物") + "</div>" + list.map((n) => {
+    // download 属性只给最后一段：带 "pdfs/" 前缀的话浏览器保存时会把斜杠清洗成怪名字
+    const dl = '<a class="fbtn" href="api/download?name=' + encodeURIComponent(n) + sidQ()
+      + '" download="' + esc(String(n).split("/").pop()) + '" title="下载" aria-label="下载 ' + esc(n) + '">' + ICON.download + "</a>"
+    // 预览不再是 target=_blank 的链接：.md/.csv/.json/.py 这些浏览器只会下载不会显示，
+    // 点下去新标签一闪就没 —— 症状正是"点了没反应"。改成就地开预览浮层（眼睛按钮）。
+    const act = isSecret(n) ? '<span class="fnote" title="含可还原到个人的对照信息，不在界面内展示">不在界面内预览</span>'
+      : canPv(n) ? '<button type="button" class="fbtn" title="预览" aria-label="预览 ' + esc(n) + '" data-pv="' + esc(n) + '">' + ICON.eye + "</button>"
+      : ""   // 预览不了的类型（xlsx/zip…）不给假按钮，只留下载
+    return '<div class="frow">' + ICON.file + "<b>" + esc(n) + "</b>" + act + dl + "</div>"
+  }).join("") + "</div>"
+}
+
+/* ---- 产物预览浮层 ----
+   能力对齐聊天页（index.html）的半屏预览，但这里是居中浮层：阅读器已经是"左原文 / 中助手 /
+   右模式条"三列，再劈一半会把两边都挤没。
+   分工与左栏 renderDoc 一致：pdf/html/图片/纯文本/表格前端自己渲染，Word/PPT 交服务端
+   /api/preview 转换（那一路会失败——没装 LibreOffice、转换超时——所以先探一次再塞 iframe）。 */
+const PV_IMG = /\.(png|jpe?g|gif|webp|svg|bmp)$/i
+const PV_MD = /\.(md|markdown)$/i
+const PV_CSV = /\.[ct]sv$/i
+const PV_TXT = /\.(txt|log|json|ya?ml|py|r|sh|ps1|sql|bib|tex|js|mjs|css|ini|toml)$/i
+const PV_PDF = /\.pdf$/i
+const PV_HTML = /\.html?$/i
+const PV_OFFICE = /\.(docx?|pptx?|odt|odp)$/i
+const canPv = (n) => PV_IMG.test(n) || PV_MD.test(n) || PV_CSV.test(n) || PV_TXT.test(n) || PV_PDF.test(n) || PV_HTML.test(n) || PV_OFFICE.test(n)
+// 脱敏还原表（真名/住院号 ↔ 假名）绝不内联预览：那等于把病人真名铺在界面上。判据与
+// index.html 的 SECRET_RE、workflows.mjs 的 secret 组保持一致；下载保留（用户在自己机器上看）。
+const SECRET_RE = /(mapping|_map|crosswalk|keyfile|对照表|还原表)[^/]*\.csv$/i
+const isSecret = (n) => SECRET_RE.test(String(n).split("/").pop())
+const PV_MAXTXT = 400000   // 文本/表格最多读这么多字节，几十 MB 的日志会把页面卡死
+
+function closePv() { $("pvMask").classList.remove("on"); $("pvBody").innerHTML = "" }
+$("pvClose").addEventListener("click", closePv)
+$("pvMask").addEventListener("click", (e) => { if (e.target === $("pvMask")) closePv() })
+document.addEventListener("keydown", (e) => { if (e.key === "Escape" && $("pvMask").classList.contains("on")) closePv() })
+
+async function openPv(name) {
+  const body = $("pvBody")
+  const q = "?name=" + encodeURIComponent(name) + sidQ()
+  $("pvName").textContent = name
+  $("pvDl").href = "api/download" + q
+  const e = extOf(name)
+  $("pvMask").classList.add("on")
+  body.className = "pvbody"
+  body.innerHTML = '<div class="pvmsg">正在打开…</div>'
+
+  const fail = (msg) => { body.className = "pvbody"; body.innerHTML = '<div class="pvmsg">' + esc(msg) + "<br><br>可以点右上角「下载」，在本机打开。</div>" }
+  const frame = (url) => { body.className = "pvbody"; body.innerHTML = ""; const f = document.createElement("iframe"); f.src = url; body.appendChild(f) }
+
+  try {
+    if (PV_IMG.test(name)) {
+      body.className = "pvbody pad"
+      body.innerHTML = '<img class="shot" alt="' + esc(name) + '" src="api/raw' + q + '">'
+      return
+    }
+    if (PV_PDF.test(name) || PV_HTML.test(name)) { frame("api/raw" + q); return }   // html 由服务端带 CSP sandbox
+    if (PV_OFFICE.test(name)) {
+      // 先探一次：iframe 的 error 事件对 HTTP 错误不触发，直接塞进去用户会看到一框英文报错当成正文
+      const r = await jget("api/preview" + q)
+      if (!r.ok) { fail((await r.text().catch(() => "")) || "预览转换失败（HTTP " + r.status + "）"); return }
+      frame("api/preview" + q)
+      return
+    }
+    const r = await jget("api/raw" + q)
+    if (!r.ok) { fail((await r.text().catch(() => "")) || "打不开这个文件（HTTP " + r.status + "）"); return }
+    let t = await r.text()
+    const cut = t.length > PV_MAXTXT
+    if (cut) t = t.slice(0, PV_MAXTXT)
+    body.className = "pvbody" + (PV_CSV.test(name) ? "" : " pad")
+    if (PV_CSV.test(name)) body.innerHTML = renderCsv(t, e === "tsv" ? "\t" : ",")
+    else if (PV_MD.test(name)) body.innerHTML = '<div class="md">' + renderMd(t) + "</div>"
+    else body.innerHTML = '<pre class="txt">' + esc(t) + "</pre>"
+    if (cut) body.insertAdjacentHTML("beforeend", '<div class="pvcut">文件较大，这里只显示了前 ' + Math.round(PV_MAXTXT / 1000) + ' 千字符；完整内容请下载。</div>')
+  } catch (err) {
+    if (String((err && err.message) || err) === "unauthorized") return
+    fail("打不开这个文件（" + String((err && err.message) || err) + "）")
+  }
+}
+function emptyHtml(m) {
+  const [big, sub] = MODES[m].empty
+  // 空面板里必须有个能直接点的按钮：上一轮还在跑的时候，点右边模式条只会把你切过来看
+  //（同一时刻只能跑一轮），此时若面板里只有一句提示，用户会以为"点了没反应"而反复点。
+  // 这个按钮在忙的时候是禁用态并写明在等谁，忙完点它就能开跑。
+  const btn = m === "chat" ? ""
+    : '<div style="margin-top:16px"><button class="hbtn" data-run="' + m + '"' + (busy() ? " disabled" : "") + ">"
+      // 带上与头部「开始」同一枚三角：这两个按钮做的是同一件事，别让人以为是两个入口。
+      // 按钮文字直接用模式名。别拼成"开始"+模式名——「开始基线表」「开始数据完整性」都不是人话，
+      // 而这几个名字本身就是动宾结构，单独摆着就是一个动作。忙的时候写明在等谁。
+      + (busy() ? "" : ICON.play)
+      + (busy() ? "等「" + esc(MODES[RUN ? RUN.mode : CFG.first].label) + "」跑完" : esc(MODES[m].label)) + "</button></div>"
+  return '<div class="empty-hint"><span class="big">' + esc(big) + "</span>" + esc(sub) + btn + "</div>"
+}
+
+/** 一串问答 → 气泡。智能助手那一格与各模式的追问区共用（同一种消息，就该长同一个样）。 */
+function bubblesHtml(list) {
+  return (list || []).map((m) => {
+    if (m.role === "user") return '<div class="msg user"><div class="bubble">' + esc(m.text) + "</div></div>"
+    if (m.role === "tag") return '<div class="msg tag"><div class="bubble">' + esc(m.text) + "</div></div>"
+    return '<div class="msg ai"><div class="bubble"><div class="who">' + ICON.bot + "助手</div>"
+      + '<div class="md">' + renderMd(m.text) + "</div>" + filesHtml(m.files) + "</div></div>"
+  }).join("")
+}
+
+/** 结果下面那串追问。没问过就整块不画 —— 空的标题栏只会让人以为这里少了点什么。 */
+function askHtml(m) {
+  const qa = (S[m] && S[m].qa) || []
+  if (!qa.length) return ""
+  const n = askCount(m)
+  return '<div class="askwrap"><div class="askt">' + ICON.chat + "追问（" + n + " 条）·"
+    + " 转交给智能助手时会一起带过去</div>" + bubblesHtml(qa) + "</div>"
+}
+
+/* ---- 两阶段模式（「演示 PPT」）：现在到哪一步、下一步点哪里 ----
+   判据全落在【产物】上，不靠任何前端状态：
+     没有大纲                → 还没开跑（空态自己会说话，不画卡）
+     有大纲、没有 .pptx      → 第 1 步已完成，等用户点「按这份大纲出片」
+     有 .pptx                → 第 2 步已完成，卡里给"预览幻灯片 / 下载"
+   这样刷新页面、换台机器打开都还原得出来 —— 阶段不是记在内存里的一个变量。 */
+function stageFinals(m) {
+  const st = MODES[m] && MODES[m].stage2
+  if (!st || !st.done) return []
+  return outputs.map((f) => f.name).filter((n) => st.done.test(n))
+}
+function stageCardHtml(m) {
+  const st = MODES[m] && MODES[m].stage2
+  if (!st) return ""
+  const s = S[m]
+  // 第二阶段正在跑。★ 判据不能只看 RUN.stage2：页面刷新后是 attach() 直接把 RUN 设起来的
+  //   （没走 run()，那面旗子丢了）。"这一格的主结果轮正在跑、而大纲已经在手" ⇒ 只能是在出片
+  //   （重跑第一步走的是 force，force 会先把 doc 清掉）。
+  if (RUN && RUN.mode === m && !RUN.ask && (RUN.stage2 || s.doc != null))
+    return '<div class="stagecard"><div class="sc-step">第 2 步 / 2 · 出片中</div>'
+      + '<div class="sc-md md">' + renderMd(st.running) + "</div></div>"
+  // 断线且后台已跑完：产物目录还没重新读过（afterRun 没跑），所以 stageFinals 此刻看到的是
+  // 【旧的】—— 片子可能早就出好了，卡片却会显示成"第 1 步、请出片"。那颗按钮一点就是
+  // 白跑十分钟出第二份一模一样的片子。所以这一态既不给出片按钮，也不下"到第几步"的结论。
+  if (s.dropped && !s.dropped.ask)
+    return '<div class="stagecard"><div class="sc-step">上一轮的结果还没取回来</div>'
+      + '<div class="sc-md md">连接中断了，而后台那一轮已经跑完 —— 现在看到的进度可能是旧的（片子也许已经出好了）。'
+      + '先把结果取回来再决定下一步，<b>别直接点出片</b>，那会白跑一遍十分钟。</div>'
+      + '<div class="sc-act"><button type="button" class="sc-go" data-resume="' + esc(m) + '">' + ICON.play + "继续</button></div></div>"
+  const finals = stageFinals(m)
+  if (finals.length) {
+    const f = finals[0]
+    return '<div class="stagecard ok"><div class="sc-step">第 2 步 / 2 · 已完成</div>'
+      + '<div class="sc-md md">' + renderMd(st.doneNote) + "</div>"
+      + '<div class="sc-act">'
+      + (canPv(f) ? '<button type="button" class="sc-go" data-pv="' + esc(f) + '">' + ICON.eye + "预览幻灯片</button>" : "")
+      + '<a class="hbtn" href="api/download?name=' + encodeURIComponent(f) + sidQ()
+        + '" download="' + esc(String(f).split("/").pop()) + '">' + ICON.download + "下载 .pptx</a>"
+      + '<span class="sc-hint">' + esc(String(f).split("/").pop()) + "</span></div></div>"
+  }
+  // 还没跑过第一步 → 不画卡（空态里那颗「演示 PPT」就是入口，两处按钮反而让人不知道点哪个）
+  if (s.doc == null && !(s.raw || "").trim()) return ""
+  return '<div class="stagecard"><div class="sc-step">第 1 步 / 2 · 大纲已出</div>'
+    + '<div class="sc-md md">' + renderMd(st.note) + "</div>"
+    + '<div class="sc-act"><button type="button" class="sc-go" data-stage2="' + esc(m) + '"'
+      + (busy() ? " disabled" : "") + ">" + (busy() ? "" : ICON.play) + esc(st.btn) + "</button>"
+    + '<span class="sc-hint">' + (busy() ? "等上一轮跑完" : "约十分钟") + "</span></div></div>"
+}
+
+function render(m) {
+  const el = $("pane-" + m)
+  if (m === "chat") return renderChat()
+  const s = S[m]
+  // 追问那一轮的直播条要挂在【问答串末尾】（那是它正在说话的地方），不能顶在结果上面 ——
+  // 顶在上面看着像"整份结果在重跑"，而它恰恰是"不重跑"的那条路。
+  const asking = !!RUN && RUN.mode === m && RUN.ask
+  let h = asking ? "" : runHtml(m)
+  // ★ 缺前置条件的提示必须【真的画出来】。此前 showBlocked 只把它写进 S[k].block 就完了，
+  //   没有任何渲染代码读它 —— 于是用户点了按钮，界面纹丝不动、只剩一句通用空态文案，
+  //   完全不知道是缺了分组列还是缺了数值表。（我自己也差点漏过：当时是从 S[k].block
+  //   这个状态确认"闸生效"的，而屏幕上根本没有这句话。看状态不等于看见。）
+  if (s.block) h += '<div class="notebox warn">' + esc(s.block) + "</div>"
+  h += gateBannerHtml()
+  // 配套数值表的清单卡：需要它的模式一直摆在最上面（不是"缺了才出现"），
+  // 传了哪几份、还能不能再加、想删哪一份，全在这张卡里，用户不必读完警告再去找地方传。
+  h += dataCardHtml(m)
+  const drop = dropNoteHtml(m)
+  if (drop) h += drop                        // 断线提示【顶替】报错条：它俩说的是同一件事
+  else if (s.err) h += '<div class="notebox err">⚠ ' + esc(s.err) + "</div>"
+  // 阶段卡（两阶段模式才有）摆在正文最上面：用户第一眼要知道的是"这只是大纲、下一步点这里"，
+  // 而不是先读完一整篇大纲再自己琢磨"片子在哪"。
+  h += stageCardHtml(m)
+  const stg = MODES[m].stage2
+  const staged = !!stg && !!stageFinals(m).length     // 两阶段模式且已出片 → 大纲让位给成品
+  // 产物是 Word / PPT 时，正文嵌服务端预览（二进制读成文本就是满屏乱码，见 loadDocFor）
+  if (s.docPv) {
+    h += '<div class="notebox info">正文来自产物文件 <b>' + esc(s.docName)
+      + "</b>（Word 文件，这里是转换出来的预览，样式与真实排版会有出入）。"
+      + "<b>如果这份稿子带修订，预览显示的是「接受全部修订后」的样子</b>——"
+      + "删掉的原文不会出现在这里；要逐条看改动、逐条接受或拒绝，请下载后在 Word 的「审阅」里看。</div>"
+      + '<div class="card docpv"><iframe title="' + esc(s.docName) + '" src="api/preview?name='
+      + encodeURIComponent(s.docPv) + sidQ() + '"></iframe></div>'
+  } else if (s.docPvErr) {
+    h += '<div class="notebox warn">产物 <b>' + esc(s.docName) + "</b> 是 Word / PPT 文件，"
+      + "预览转换没成功（" + esc(s.docPvErr) + "）。可以在下方下载，用本机的 Word 打开。</div>"
+  }
+  // 正文优先用产物文件（翻译/大纲是写进文件的，对话里只有一句"已完成"），没有就用对话正文
+  const body = s.doc != null ? s.doc : s.raw
+  if (body && body.trim()) {
+    if (s.doc != null && s.docName && !stg) h += '<div class="notebox info">正文来自产物文件 <b>' + esc(s.docName) + "</b>，可在下方下载。</div>"
+    // 产物本身就是一张表（基线表就是 table1.csv）时按【表】渲染。markdown 渲染器眼里 csv 只是
+    // 一段普通文字：逗号、引号原样铺开，表头和数据糊成一坨 —— 用户点开「基线表」看到的
+    // 不是一张三线表，而是一段乱码似的文本，第一反应是"它算错了"。
+    const bodyHtml = (s.doc != null && PV_CSV.test(s.docName))
+      ? '<div class="card">' + renderCsv(s.doc, /\.tsv$/i.test(s.docName) ? "\t" : ",") + "</div>"
+      : '<div class="card md">' + renderMd(body) + "</div>"
+    h += staged
+      ? '<details class="foldbody"><summary>这套片子的大纲（' + esc(s.docName || "ppt_outline.md") + "）</summary>" + bodyHtml + "</details>"
+      : bodyHtml
+    // ★ 两阶段模式必须把模型那一轮【说的话】也留一份出口。正文一律优先画产物文件，于是
+    //   模型说的（"第 7 页缺原文数据，我写了「原文未报告」"、"共 16 页、封面用了…"）整段被顶掉 ——
+    //   这正是"点了 PPT 只看见大纲"里最难自查的一环：屏幕上没有任何线索表明它还说过话。
+    //   折起来放，不与正文抢位置，但谁都找得到。
+    if (stg && s.doc != null && (s.raw || "").trim() && s.raw.trim() !== s.doc.trim())
+      h += '<details class="foldbody"><summary>助手这一轮说的话</summary><div class="card md">' + renderMd(s.raw) + "</div></details>"
+  } else if (s.status === "running") {
+    if (!RUN || RUN.mode !== m) h += '<div class="notebox info">正在生成…</div>'
+  } else if (s.status !== "idle" && !s.err && !s.dropped && !s.pulling) {
+    // ★ dropped / pulling 时不许再说这句：那时上面已经画了"点「继续」取回来"，
+    //   两条并排（一条说重跑、一条说取回）用户只会照着更显眼的那条去重跑。
+    h += '<div class="notebox warn">这一轮没有产出可显示的正文。可以点右上角「重新生成」再来一次。</div>'
+  } else if (s.status === "idle") {
+    h += emptyHtml(m)   // 空态摆在数值表清单【之后】：先看到"要传什么/传了什么"，再看到"点这里开始"
+  }
+  h += filesHtml(s.files)
+  h += askHtml(m)
+  if (asking) h += runHtml(m)
+  el.innerHTML = h
+  updateFoot()
+}
+
+/* 断线之后那条提示：文案 + 【就地】一颗「继续」。头部那颗图标虽然也在，但报错就在眼前时
+   手会往报错上点 —— 同一个动作给两个入口。追问那一路不画这条（它的通知已经在追问串里了，
+   同一句话说两遍反而让人以为断了两次）。 */
+function dropNoteHtml(m) {
+  const s = S[m]
+  if (!s) return ""
+  if (s.pulling) return '<div class="notebox info">正在把那一轮的结果取回来…</div>'
+  if (!s.dropped || s.dropped.ask) return ""
+  return '<div class="notebox warn">⚠ 连接中断了，而后台这一轮已经跑完了。结果还在服务端 —— 点「继续」取回来，不用重跑。'
+    + '<button type="button" class="gbypass" data-resume="' + esc(m) + '">继续</button></div>'
+}
+
+function renderChat() {
+  const el = $("pane-chat")
+  const s = S.chat
+  // 还没聊过 → 空态。但产物栏要留着：用户可能是跑完几个模式后切过来找那份 Word 的。
+  // ★ 判据要看"在跑的是不是【本格】"。原来写的是 !RUN —— 别的模式在跑时 RUN 非空但 msgs 为空，
+  //   于是既不走空态、下面又什么都拼不出来（bubblesHtml([])=""、RUN.mode!=="chat" 不加 runbox），
+  //   最终 innerHTML = ""：用户点进「智能助手」看到的是一整列纯白 + 一个禁用的发送钮，零解释。
+  if (!s.msgs.length && !(RUN && RUN.mode === "chat")) { el.innerHTML = emptyHtml("chat") + filesHtml(s.files, "本会话产物"); updateFoot(); return }
+  let h = bubblesHtml(s.msgs)
+  if (RUN && RUN.mode === "chat") h += runHtml("chat")
+  const drop = dropNoteHtml("chat")
+  if (drop) h += drop                        // 断线提示【顶替】报错条：它俩说的是同一件事
+  else if (s.err) h += '<div class="notebox err">⚠ ' + esc(s.err) + "</div>"
+  // 没被任何模式认领的产物挂在这一格底部。两种来源：① 在这里让它"导成 Word"生成的 docx；
+  // ② 模式跑出来但文件名不合该模式 out 契约的。阅读器【没有】工作台那样的全局产出侧栏，
+  // 不在这兜住的话，文件确实生成了、会话目录里也在，而界面上没有任何一处能点开或下载。
+  h += filesHtml(s.files, "本会话产物")
+  el.innerHTML = h
+  updateFoot()
+}
+
+/**
+ * 头部按钮 + 底栏 + 输入框的显隐【只在这里判一次】。规则：
+ *   智能助手：头部三个按钮全收起（它的开跑入口是输入框旁边的发送）。
+ *   其它模式：还没跑过 → 只有「开始」；正在跑这一个 → 只有「终止」；跑完 / 出错 → 只有「重新生成」。
+ *            别的模式在跑时，「开始」留着但置灰，并在提示里写清在等谁 —— 直接藏掉的话，
+ *            用户会以为这个模式坏了。
+ *   输入框：智能助手一直有；其它模式【跑出结果之后】也有（那是追问入口，见 askReady）。
+ *          ★ 输入框只有这一个、且在面板【外面】—— 画进面板里的话，每次 SSE 重绘（120ms 一次）
+ *            都会把用户正在打的字和光标冲掉。
+ */
+function updateFoot() {
+  const running = !!RUN
+  // 聊天：发送与终止共用同一个位置，互斥显示（与工作台的 setStreamingUI 同一套规矩）
+  $("btnSend").hidden = running
+  $("btnStop").hidden = !running
+  $("btnSend").disabled = busy()
+
+  const mine = !!RUN && RUN.mode === mode                 // 正在跑的就是当前这个模式
+  const s = mode === "chat" ? null : S[mode]
+  $("btnHalt").hidden = mode === "chat" || !mine
+  $("btnGo").hidden = mode === "chat" || mine || (s && s.status !== "idle")
+  // 别的模式在跑 → 置灰。此时 .pill 的悬停展开是不生效的（:hover:not([disabled])），
+  // 所以"在等谁"这句话必须由下面的底栏说出来，不能只指望这个按钮。
+  $("btnGo").disabled = busy()
+  $("btnRerun").hidden = mode === "chat" || !s || s.status === "idle" || busy()
+  // 「继续」：只在这一格【断线且后台已跑完】时露出来（聊天格同样会遇到，所以不排除它）。
+  // 与「重新生成」并排放、不互相顶掉：取回失败时用户还得有重跑那条退路。
+  const dropped = !!(S[mode] && S[mode].dropped)
+  $("btnResume").hidden = !dropped || busy() || !!(S[mode] && S[mode].pulling)
+  // 转交：这一格真的跑出东西了才给。跑到一半 / 出错的面板上摆一颗"转交"，转过去的是半截结果。
+  $("btnHoff").hidden = !hoffReady(mode)
+
+  // 追问入口：这一格有结果了就把输入框放出来（智能助手那一格一直有）
+  const canAsk = mode !== "chat" && askReady(mode)
+  const showComposer = mode === "chat" || canAsk
+  $("composer").hidden = !showComposer
+  // 交接卡只属于智能助手那一格。不加这一句的话，转交完切回某个有结果的模式，卡片还挂在
+  // 输入框上写着"随你下一条消息一起发出"，而这里打的字是【追问】，根本带不上它。
+  $("hoffChip").hidden = !handoff || mode !== "chat"
+  if (canAsk) {
+    qEl.placeholder = "对着这份「" + MODES[mode].label + "」的结果追问，例如：第 2 条能不能再说细一点？"
+  } else if (mode === "chat") {
+    qEl.placeholder = CHAT_PH
+  }
+
+  let foot = ""
+  if (mode !== "chat") {
+    // 两阶段模式停在"大纲已出、还没出片"时，底栏那句话必须跟着改。原来这里会说
+    // "已完成。想接着这份结果聊…"或"追问只针对这份结果" —— 两句都在暗示"事儿办完了"，
+    // 而真正的成品（.pptx）还没生成，用户正是在这一步以为它做完了。
+    const stg = MODES[mode].stage2
+    const pend = !!stg && s && s.status === "done" && s.doc != null && !stageFinals(mode).length
+    foot = mine ? RUN.label
+      : RUN ? "「" + MODES[RUN.mode].label + "」正在跑，跑完才能开下一轮"
+      // 断线态排在 pend / canAsk 之前：此刻面板上显示的东西可能整个是旧的，
+      // 先别跟用户聊"下一步做什么"，先让他把结果取回来。
+      : S[mode] && S[mode].pulling ? "正在把那一轮的结果取回来…"
+      : dropped ? "连接断了，而后台那一轮已经跑完。点上方的「继续」把结果取回来，不用重跑。"
+      : pend ? "这还只是大纲。点面板里的「" + stg.btn + "」才会生成 .pptx；想先改风格 / 页数 / 配图，在下方输入框说一句。"
+      : canAsk ? "追问只针对这份结果，不会重跑「" + MODES[mode].label + "」；转交给智能助手时会连追问一起带过去。"
+      : s.status === "done" ? "已完成。想接着这份结果聊，点上方的「转交给智能助手」。"
+      : s.status === "error" ? "上一轮没有正常结束。"
+      : ""
+  }
+  // 有输入框时这句话挂在输入框下面那一行，别再单独摆一条状态栏 —— 同一屏两条底栏，
+  // 用户会以为下面那条是另一个东西的状态。
+  $("chatFoot").textContent = mode === "chat" ? CHAT_FOOT : foot
+  $("modeFootTxt").textContent = showComposer ? "" : foot
+  // 没话可说时整条收起来：还没开跑的空面板底下挂一条空白栏，只会让人以为这里少了点什么
+  $("modeFoot").hidden = mode === "chat" || showComposer || !foot
+}
+
+/** 滚到底（用户往上翻看内容时不要把他拽回来） */
+function follow() {
+  const b = $("aiBody")
+  if (b.scrollHeight - b.scrollTop - b.clientHeight < 90) b.scrollTop = b.scrollHeight
+}
+
+/* ============================================================
+   6. 发起一轮 + SSE 直播
+   ============================================================ */
+/**
+ * @param m       模式
+ * @param force   true = 用户点了「重新生成」（已有内容时先清掉，免得新旧混在一起）
+ * @param userTxt 用户打的那句话（智能助手的提问，或某一格结果下面的追问）
+ * @param ask     true = 这是【追问】：不重跑这个模式，问答落在该格的追问区（S[m].qa）
+ * @param stage2  true = 两阶段模式的第二步（「按这份大纲出片」）：仍是这一格的【主结果】，
+ *                但不是重跑第一步 —— 大纲要留着（成品出来后折进正文里给用户核对讲稿），
+ *                大纲下面那串追问也要留着（它们问的还是这一版大纲，没有作废）。
+ */
+async function run(m, force, userTxt, ask, stage2) {
+  if (busy()) return
+  if (!sid || !docName) return
+  const s = S[m]
+  s.block = ""; s.blockMiss = null      // 真开跑了就把"缺前置条件"的提示撤掉
+  // 上一轮断线没取回来、这一轮又开跑了 → 那面旗子作废（否则「继续」会一直挂着，
+  // 点下去取回的是【上一轮】的回复，把这一轮的结果盖掉）。
+  s.dropped = null; s.pulling = false
+  if (m !== "chat" && !ask) {
+    if (force) { s.raw = ""; s.doc = null; s.docName = ""; s.docPv = ""; s.docPvErr = ""; s.files = [] }
+    // 主结果重跑一次，旧追问就作废——它们问的是【上一版】结果，留着只会让人对着新结果
+    // 读到一串答非所问的问答，而看不出这是上一版留下的。（第二阶段不算重跑，见上面 @param）
+    if (!stage2) s.qa = []
+  }
+
+  let q = ""
+  let myHoff = null                     // 本轮带出去的交接卡（发送失败时要还回去）
+  if (ask) {
+    q = String(userTxt || "").trim()
+    if (!q) return
+    // 追问标记来自配置（MODES[m].askMark），与主结果的 mark 是两个不同的标记：模型据此
+    // 知道"别重跑"，刷新页面后前端也据此把这一轮认回追问区而不是当成又一次主结果。
+    // ★ 不拼 settingsBlock()：那段话里有「顺便出投稿级图」这类【动作型】设定，
+    //   跟在一句"这条为什么判黄"后面发出去，很可能真的又画一张图。语言口径在同一个会话的
+    //   上文里已经生效，不必每条追问都重申。
+    q = MODES[m].askMark + q
+    s.qa.push({ role: "user", text: userTxt })
+  } else if (m === "chat") {
+    q = String(userTxt || "").trim()
+    if (!q) return
+    // 会话里还没跑过任何一轮 → agent 手上没有原文，先补一句上下文（正常路径是导读先跑，
+    // 只有导读失败 / 用户一进来就直接提问才会走到这里）
+    // 文案同样来自配置：数据模块里"我上传了一篇文献 `队列.xlsx`"会把模型往"读文献"上带一步，
+    // 而它手里是一张表。{doc} 展开成本会话的【全部】文件（数据常常分散在主表 + 随访表里）。
+    if (!turns) {
+      const tpl = (CFG.chat && CFG.chat.firstTurn) || "我上传了 {doc}，请先读它再回答。我的问题是："
+      // 数据模块的"那份东西"是一组表（docListStr 就是它）；文献 / 稿件模块只有左栏这一份。
+      // 别在这里用 docListStr 兜底：对那几个模块它返回的是【配套数值表】，不是正文那份。
+      const src = CFG.source.kind === "table" ? docListStr() : ""
+      q = tpl.replace("{doc}", src || "`" + docName + "`") + q
+    }
+    // 待发的交接卡拼在最前面（取走即清，与工作台的 wfCardPrefix 同一套规矩）。面板里对应地
+    // 留一条转交记录 —— 卡片本身不进气泡，气泡里只有用户自己打的那句话。
+    if (handoff) { myHoff = handoff; handoff = null; renderHoff(); q = myHoff.card + "\n\n" + q; s.msgs.push({ role: "tag", text: myHoff.tag }) }
+    s.msgs.push({ role: "user", text: userTxt })
+  } else {
+    q = promptFor(m, stage2)
+    if (!q) return
+  }
+
+  s.status = "running"; s.err = ""
+  RUN = { mode: m, ask: !!ask, stage2: !!stage2, label: "正在提交…", skills: [], tools: new Map(), es: null }
+  starting = true
+  renderRail(); render(m)
+
+  let j = null, why = "网络异常"
+  try {
+    const resp = await jget("api/chat/start", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        q, sid,
+        // module 只在会话【还没发过消息】时起作用（服务端对已绑定的会话忽略它）。
+        // 必须带：上传接口已经把会话建出来了，不带的话它会被判成自由对话——没有模块前言、
+        // 没有技能闸，而界面上一点异样都看不出来。
+        // ★ 必须是 MOD，不能写死。写死成 "litread" 时，核查 / 润色 / 统计的会话全都被绑成
+        //   文献研读：前言是别人的、技能闸是别人的，而界面照常显示本模块的样子。
+        module: turns ? undefined : MOD,
+        // ★ 每一轮都带上，不是只带第一轮。服务端这一侧是 merge 而不是覆盖，重复发无害；
+        //   而只发第一轮会漏掉一整类情况：会话由 /api/upload 先建出来、此时还【没有模块绑定】，
+        //   用户在第一轮跑之前（或第一轮失败之后）改设置，saveSettings 走的 /api/workflow/form
+        //   有个 `sessionModule(sid) === modId` 的条件，不满足就【静默不写】还回 ok:true。
+        //   于是 protectRefs / hasPHI 这些 pin 字段悄悄退回默认值——正是它们存在的意义所在。
+        wfForm: wfFormValues(),
+      }),
+    })
+    if (resp.status === 429) why = "请求过于频繁，请稍后再试"
+    try { j = await resp.json() } catch (_) { if (resp.status !== 429) why = "服务端错误（HTTP " + resp.status + "）" }
+  } catch (e) {
+    if (String((e && e.message) || e) === "unauthorized") return
+  }
+  starting = false
+
+  if (!j) { failRun(m, why, ask); return }
+  if (j.sid) { sid = j.sid; try { history.replaceState(null, "", location.pathname + "?sid=" + encodeURIComponent(sid)) } catch (_) {} }
+  if (!j.sent) {
+    // 服务端没收下这条：上一轮还在跑、额度用尽、模块未开通…… 一律如实说，别让转圈一直转
+    failRun(m, (j.running ? "上一轮还在进行中，本条没有发出去。" : "") + (j.err || j.notice || "发送失败"), ask)
+    if (ask) {
+      // 这条追问没发出去 → 气泡撤掉，并把用户打的那句话【放回输入框】。
+      // 只撤气泡不还字的话，他得对着一句"发送失败"重新把问题打一遍。
+      s.qa.pop()                       // 刚 push 进去的就是它（这期间 busy() 拦着，不会有别的）
+      qEl.value = userTxt
+      qEl.dispatchEvent(new Event("input"))
+      render(m)
+    } else if (m === "chat") {
+      S.chat.msgs.pop()                                                   // 用户气泡
+      // 交接卡也得还回去（连同那条转交记录一起撤掉）：不还的话用户按提示重发一次，
+      // 这一次就【不带】交接卡了 —— 模型不知道在谈哪一轮，而用户完全看不出少了什么。
+      if (myHoff) { S.chat.msgs.pop(); handoff = myHoff; renderHoff() }
+      renderChat()
+    }
+    return
+  }
+  turns++
+  attach(m, ask)
+}
+
+/**
+ * 一轮没起来 / 中途挂了。
+ * ★ 追问失败【不能】把这一格判成 error：主结果好好地摆在那儿，把面板标红、把「重新生成」
+ *   亮出来，等于诱导用户为了一句问不出来的追问，把整份结果重跑一遍（十几分钟 + 一轮额度）。
+ *   所以失败只作为一条记录落在追问串里，这一格仍然是「已完成」。
+ */
+function failRun(m, msg, ask) {
+  RUN = null
+  if (ask) { S[m].status = "done"; S[m].qa.push({ role: "tag", text: "⚠ 这条追问没成功：" + msg }) }
+  else { S[m].status = "error"; S[m].err = msg }
+  renderRail(); render(m); updateFoot()
+}
+
+/**
+ * @param m    模式
+ * @param ask  这一轮是不是追问（决定正文往哪儿落：追问区 / 主结果）
+ */
+function attach(m, ask) {
+  const es = new EventSource("api/chat/attach?sid=" + encodeURIComponent(sid))
+  if (!RUN) RUN = { mode: m, ask: !!ask, label: "正在生成…", skills: [], tools: new Map(), es: null }
+  RUN.es = es
+  RUN.label = "等待模型输出…"
+  // 起轮成功了，先把"正在提交…"换掉——第一个 SSE 事件可能要等十几秒才来。
+  // ★ 必须连 renderRail（它会顺手重画文件条）一起。attach 是【RUN 被设上却没走 run()】的唯一入口：
+  //   restore() 里刷新页面接回一轮还在跑的会话时，enterReader() 已经按"不忙"把文件条画完了，
+  //   紧接着 attach 把 RUN 设上——文件条却停在旧快照上：「＋ 再传一张」和「×」看着完全可点，
+  //   点下去被 busy() 挡掉，一点反应都没有。用户报的"点了没反应"就是这条路。
+  renderRail(); render(m); updateFoot()
+  let raw = ""
+  let aiMsg = null                       // 这一轮的助手气泡（聊天 / 追问才有）
+  let finished = false
+  let paintT = 0
+  // 正文往哪儿落：智能助手 → 那一格的对话；追问 → 该模式结果下面的追问串；
+  // 主结果 → S[m].raw（那不是对话，是这一格的正文）。三条路只在这里分一次。
+  const thread = m === "chat" ? S.chat.msgs : ask ? S[m].qa : null
+  const bubble = () => { if (!aiMsg) { aiMsg = { role: "ai", text: "" }; thread.push(aiMsg) } return aiMsg }
+  const repaint = () => { paintT = 0; render(m); follow() }
+  const schedule = () => { if (!paintT) paintT = setTimeout(repaint, 120) }
+
+  const close = (note, isErr) => {
+    if (finished) return
+    finished = true
+    if (paintT) { clearTimeout(paintT); paintT = 0 }
+    es.close()
+    RUN = null
+    const s = S[m]
+    // 追问出错不动这一格的状态（主结果还好好地在那儿），错误作为一条记录落进追问串。见 failRun。
+    s.status = isErr && !ask ? "error" : "done"
+    if (note) {
+      if (isErr && !ask) s.err = note
+      else if (thread) thread.push({ role: "tag", text: (isErr ? "⚠ " : "") + note })
+    }
+    if (!thread) s.raw = raw
+    // 一个字都没收到、也没有任何收尾说明 → 十有八九是【我们接上来之前那一轮就已经跑完了】：
+    // api/job 报 running 与 attach 真正接上之间有时间差，服务端此时只回一个 idle 事件。
+    // 这与断线是同一种局面（结果在服务端、只是这条订阅没赶上），所以同样给「继续」——
+    // 原来这里会落到"这一轮没有产出可显示的正文，点「重新生成」"，而重跑要再花一遍时间和额度。
+    if (!thread && !note && !String(raw || "").trim()) s.dropped = { ask: false }
+    // ★ 除了重画跑完的那一格，【当前可见的那一格也得重画】。空态里那颗中央大按钮是按 busy()
+    //   渲染的：用户在 A 跑的时候切到没跑过的 B，B 的按钮是灰的、写着"等「A」跑完"；A 跑完只重画
+    //   A，B 就永远停在那句话上——而头部的「开始」倒是恢复了，同屏出现"上面能点、中间灰着且在等
+    //   一个早就跑完的模式"。同一个 busy() 快照也卡住了配套数值表卡的添加/删除按钮。
+    afterRun(m).then(() => { renderRail(); render(m); if (mode !== m) render(mode); updateFoot(); follow() })
+  }
+
+  es.addEventListener("tool", (ev) => {
+    let d; try { d = JSON.parse(ev.data) } catch (_) { return }
+    if (d.tool === "skill") { if (d.skill && !RUN.skills.includes(d.skill)) RUN.skills.push(d.skill); schedule(); return }
+    RUN.tools.set(d.callID, { status: d.status, label: d.title ? d.tool + " · " + d.title : d.tool })
+    const live = [...RUN.tools.values()].filter((t) => t.status === "running" || t.status === "pending").length
+    RUN.label = live ? "工具运行中（" + live + "）…" : "等待模型输出…"
+    schedule()
+  })
+  es.addEventListener("reasoning", () => { if (RUN) { RUN.label = "思考中…"; schedule() } })
+  es.addEventListener("text", (ev) => {
+    try { raw = JSON.parse(ev.data) } catch (_) { return }
+    if (RUN) RUN.label = "正在输出…"
+    if (thread) bubble().text = raw
+    else S[m].raw = raw
+    schedule()
+  })
+  es.addEventListener("final", (ev) => {
+    try { const t = JSON.parse(ev.data).text; if (t) raw = t } catch (_) {}
+    if (thread) bubble().text = raw
+    else S[m].raw = raw
+    schedule()
+  })
+  // 服务端推的是【本轮新建/改动的产物】文件名数组（字符串）。
+  // 聊天模式【也要列】，但挂在当轮那条回复下面（不是单独一栏），这样既不打断对话，
+  // 又不会出现"文件生成了却无处可取"——数据模块里「导成 Word」正是发生在这一格。
+  // 追问同理挂在当条回答下面：虽然前言里让它"别为一句追问再产出文件"，真产出了也得能点到。
+  es.addEventListener("files", (ev) => {
+    let l; try { l = JSON.parse(ev.data) } catch (_) { return }
+    const names = Array.isArray(l) ? l.filter((x) => typeof x === "string") : []
+    if (!names.length) return
+    if (thread) bubble().files = names
+    else S[m].files = names
+    schedule()
+  })
+  es.addEventListener("queue", (ev) => {
+    let d; try { d = JSON.parse(ev.data) } catch (_) { return }
+    if (!RUN) return
+    RUN.label = !d || !d.queued ? "等待模型输出…"
+      : d.rateLimited ? "上游限速中，正在等待重试…"
+      : "正在云端排队（第 " + (d.position || 1) + " 位）…"
+    schedule()
+  })
+  // 闸状态：轮末服务端会广播一次。不订阅的话，闸刚判红时本页毫无表示，
+  // 用户要等下一次刷新才知道自己的 Word 为什么出不来。
+  es.addEventListener("workflow", (ev) => {
+    try {
+      const w = JSON.parse(ev.data)
+      GATES = w.failed || []
+      if (w.gateBypass !== undefined) BYPASS = !!w.gateBypass
+      render(mode)
+    } catch (_) {}
+  })
+  es.addEventListener("done", () => close(""))
+  es.addEventListener("aborted", () => close("已终止本轮。", false))
+  es.addEventListener("failed", (ev) => { let msg = "本轮出错"; try { msg = JSON.parse(ev.data).message } catch (_) {} close(msg, true) })
+  es.addEventListener("idle", () => close(""))      // 接上去时后台已经没有进行中的一轮
+  es.onerror = () => {
+    if (finished) return
+    // 后台还在跑，只是这条订阅断了（网络抖动 / 网关重启）。等一下再接一次，别把用户吓成"失败了"。
+    finished = true
+    es.close(); RUN = null
+    render(m)
+    setTimeout(async () => {
+      if (RUN || !sid) return
+      let running = false
+      try { running = (await jget("api/job?sid=" + encodeURIComponent(sid)).then((r) => r.json())).running } catch (_) {}
+      if (running) { finished = false; attach(m, ask) }
+      // 后台那一轮【已经跑完了】：结果就在服务端（产物落了盘、回复进了历史），断的只是这条订阅。
+      // 所以这里不是"失败"，而是"没收到"—— 出路是把它取回来（见 resumeDropped），不是重跑。
+      // ★ 原来这两句写的是"点「重新生成」可以再来一次"/"可以再问一次"：用户照着做，等于把已经
+      //   做好的东西再花一遍时间和额度做一次（PPT 那一格是十分钟起）。dropped 这面旗子让
+      //   「继续」按钮、阶段卡、底栏三处都知道现在缺的只是一次取回。
+      else if (ask) {
+        S[m].status = "done"; S[m].dropped = { ask: true }
+        // drop:true 标记这条记录是"断线通知"而不是真实问答 —— 取回成功后要把它删掉
+        S[m].qa.push({ role: "tag", text: "⚠ 连接中断了，而后台这一轮已经答完了。点上方的「继续」把回答取回来，不用再问一遍。", drop: true })
+        renderRail(); render(m); updateFoot()
+      }
+      else {
+        S[m].status = "error"; S[m].dropped = { ask: false }
+        S[m].err = "连接中断了，而后台这一轮已经跑完了。点「继续」把结果取回来——不用重跑。"
+        renderRail(); render(m); updateFoot()
+      }
+    }, 2500)
+  }
+}
+
+/**
+ * 「继续」：订阅断了、而后台那一轮已经跑完 —— 把结果从服务端取回来，【不重跑】。
+ *
+ * 取的东西与刷新页面时 restore() 用的是同一批（api/history + api/outputs），只是范围收到这一格：
+ * 历史里属于本格最后一轮的那条回复 + 产物目录 + 该模式的正文文件。
+ * 所以能取回来的前提也一样：那一轮真的跑完了（这条路径进来之前刚问过 api/job，running=false）。
+ *
+ * ★ 取不到就【如实说】并把「重新生成」交回给用户。假装成功（status=done 而面板空着）
+ *   比报错难查得多：用户看到"已完成"却什么都没有，只会以为模型这一轮什么都没做。
+ */
+async function resumeDropped(m) {
+  const s = S[m], d = s && s.dropped
+  if (!d || !sid || busy() || s.pulling) return
+  s.pulling = true; s.err = ""; render(m); updateFoot()
+  let hist = []
+  try { hist = await jget("api/history?sid=" + encodeURIComponent(sid)).then((r) => (r.ok ? r.json() : [])) } catch (_) {}
+  // 走一遍历史认轮次归属（与 restore 同一套判据：靠 user 消息开头的模式标记），
+  // 留【最后一条】命中的回复 —— 同一格可能跑过好几轮，用户要的是最近那一版。
+  let cur = null, curAsk = false, hit = null
+  for (const msg of Array.isArray(hist) ? hist : []) {
+    if (msg.role === "user") { const r = routeOf(msg.text || ""); cur = r.m; curAsk = r.ask; continue }
+    if (cur === m && curAsk === !!d.ask) hit = msg
+  }
+  s.pulling = false
+  if (!hit || !String(hit.text || "").trim()) {
+    s.err = "没能把那一轮的结果取回来（历史里找不到这一格的回复）。点「重新生成」再跑一次。"
+    if (!d.ask && m !== "chat") s.status = "error"
+    s.dropped = null; renderRail(); render(m); updateFoot(); return
+  }
+  if (m === "chat") s.msgs.push({ role: hit.isError ? "tag" : "ai", text: hit.text })
+  else if (d.ask) {
+    s.qa = (s.qa || []).filter((x) => !x.drop)     // 那条"连接中断"的记录不留：结果已经在下面了
+    s.qa.push({ role: hit.isError ? "tag" : "ai", text: hit.text })
+    s.status = "done"
+  } else {
+    s.raw = hit.text
+    s.status = hit.isError ? "error" : "done"
+    s.err = hit.isError ? hit.text : ""
+  }
+  s.dropped = null
+  await afterRun(m)      // 产物与正文文件一起刷新 —— 两阶段模式的阶段卡也靠它翻页
+  renderRail(); render(m); updateFoot()
+}
+
+/** 一轮跑完：把该模式对应的产物文件读回来（翻译 / 大纲的正文在文件里，不在对话里） */
+async function afterRun(m) {
+  await refreshOutputs()
+  collectOrphanFiles()          // 聊天格底部那一栏：谁都不认领的产物
+  if (m === "chat") return
+  await loadDocFor(m)
+  collectFiles(m)
+}
+async function refreshOutputs() {
+  try { outputs = await jget("api/outputs?sid=" + encodeURIComponent(sid)).then((r) => (r.ok ? r.json() : [])) } catch (_) { outputs = [] }
+}
+/**
+ * 该模式要在自己面板下方列哪些产物。
+ * 两个来源合并：① SSE 的 files 事件（本轮真正新建/改动的，最准）；② 产物目录里按约定名匹配的
+ * （刷新页面后 ① 已经没了，且子目录产物 ① 有时给不全）。
+ * ★ 必须按模式过滤：一股脑列全部产物的话，翻译面板下面会挂着导读的 md、PPT 的 pptx，
+ *   用户点开发现不是自己要的东西。
+ */
+function collectFiles(m) {
+  if (m === "chat" || !MODES[m].out) return
+  const named = outputs.map((f) => f.name).filter((n) => MODES[m].out.test(n))
+  S[m].files = [...new Set([...(S[m].files || []), ...named])].slice(0, 12)
+}
+
+/**
+ * 谁都不认领的产物 → 挂到智能助手那一格底部。
+ * 【为什么需要】各模式只列自己 out 契约认得的文件名，而真实产物经常落在契约之外：在聊天里让它
+ * 「导成 Word」生成的 docx、模型给报告起了个契约没覆盖的名字（fig1.tiff、km_results.csv…）。
+ * 阅读器没有工作台那样的全局产出侧栏，这些文件就成了"生成了但界面上摸不着"。刷新页面后
+ * SSE 的 files 事件也没了，所以这一栏必须从 outputs 现算，不能只靠当轮推送。
+ */
+function collectOrphanFiles() {
+  // 已经挂在某条回复下面的不再重复列一遍（同一格里同一个文件出现两次，看着像生成了两份）。
+  // 追问那几条回复下面挂的也算 —— 它们同样是"用户已经在界面上看得见的文件"。
+  const shown = new Set([
+    ...S.chat.msgs.flatMap((m) => m.files || []),
+    ...ORDER.flatMap((k) => ((S[k] && S[k].qa) || []).flatMap((x) => x.files || [])),
+  ])
+  const claimed = (n) => shown.has(n) || ORDER.some((k) => k !== "chat" && MODES[k].out && MODES[k].out.test(n))
+  S.chat.files = outputs.map((f) => f.name).filter((n) => !claimed(n)).slice(0, 12)
+}
+
+async function loadDocFor(m) {
+  const re = MODES[m].file
+  if (!re) return
+  // ★ 别 sort()。/api/outputs 已经【按 mtime 倒序】返回，再字典序排一遍就把"最新"丢了：
+  //   返工出的 reading_guide_v2.md 会被 reading_guide.md 盖过；润色分段产出多份 *_humanized.md 时
+  //   取到的是 abstract_humanized.md 而不是最新那份。用户看到的正文是旧的，而他刚跑完新的。
+  const hit = outputs.map((f) => f.name).filter((n) => re.test(n))[0]
+  if (!hit) return
+  // ★ Word / PPT 这类二进制产物【不能】当文本读。原来这里一律 r.text()，于是就地改写
+  //   出来的 manuscript_humanized.docx 被整篇塞进正文 —— 屏幕上是一大片 PK…ÿØÿà 的乱码，
+  //   用户第一反应是"它把我的稿子写坏了"。走服务端 /api/preview（docx 由 mammoth 转 HTML），
+  //   面板里嵌 iframe 显示。先探一次再嵌：iframe 的 error 事件对 HTTP 错误不触发，
+  //   转换失败的话用户看到的会是一框英文报错，还以为那就是正文（openPv 同款做法）。
+  if (PV_OFFICE.test(hit)) {
+    S[m].docName = hit; S[m].doc = null; S[m].docPv = ""; S[m].docPvErr = ""
+    try {
+      const r = await jget("api/preview?name=" + encodeURIComponent(hit) + sidQ())
+      if (r.ok) S[m].docPv = hit
+      else S[m].docPvErr = (await r.text().catch(() => "")) || "预览转换失败（HTTP " + r.status + "）"
+    } catch (_) { S[m].docPvErr = "预览转换失败" }
+    return
+  }
+  try {
+    const r = await jget("api/raw?name=" + encodeURIComponent(hit) + sidQ())
+    if (!r.ok) return
+    const t = await r.text()
+    if (t && t.trim()) { S[m].doc = t; S[m].docName = hit }
+  } catch (_) {}
+}
+
+/* ============================================================
+   6.5 转交给智能助手
+   ------------------------------------------------------------
+   【它解决的是什么】四个模式共用同一个会话，所以切到智能助手时【模型手上】的上下文本来就全在。
+   但用户看到的是一格空白面板 —— 刚看完的那份译文 / 核查报告在这一格里连个影子都没有，
+   于是他要么以为"切过来就断片了"，要么把整段结果复制粘贴一遍再问。这颗按钮把那份结果
+   明确地"交"过去：面板里留一条转交记录，模型那边收到一张交接卡（说清转交的是哪一轮、
+   产物在哪个文件、不要重跑）。
+
+   【不自动发送】交接卡只是挂到输入框上，随用户下一句话一起发出去。点一下就自动发一轮的话，
+   得到的只会是一句"好的我看到了"—— 白烧一轮额度。这与聊天页「下一步」气泡的规矩是同一条。
+
+   【覆盖 / 续写】智能助手那一格已经聊过东西时才问：
+     覆盖 = 那些问答用户不要了 → 面板清空，交接卡里明写"别再接前面的话头"；
+     续写 = 接着聊 → 面板保留，交接卡挂在末尾。
+   ★ 一句实话：会话是共用的，opencode 那边【删不掉】已经发生过的对话，所以"覆盖"能做到的是
+     「界面上不再显示 + 明确告诉模型翻篇」，不是把它从模型记忆里抹掉。别在文案里把它说成
+     "清空会话"，那是承诺一件做不到的事。
+   ============================================================ */
+let handoff = null            // 待随下一条聊天消息发出的交接卡：{mode,label,replace,asks,card,tag,snapshot}
+const HOFF_END = "【以上为界面转交的上下文，不是用户输入】"
+// 交接卡在【历史里是留着的】（不像工作台的任务卡由服务端剥掉）：刷新页面后靠它才认得出
+// "这一轮是转交过来的、当时选的是覆盖还是续写、连带了几条追问"，否则覆盖掉的那几轮会在
+// 刷新后原样长回来。显示时由前端剥掉（stripHoff），用户气泡里只留他自己打的那句话。
+// ★ 追问条数写进标题里，是因为刷新后【只有这一行】还能告诉界面"当时带过去的不止主结果"——
+//   追问本身留在那一格里，转交记录这边看不见它们。
+const HOFF_ASK = "(?: · 含 \\d+ 条追问)?"
+const HOFF_HEAD_RE = /^【转交 · 「([^」]*)」 · (覆盖|续写)(?: · 含 (\d+) 条追问)?】/
+const HOFF_RE = new RegExp("^【转交 · 「[^」]*」 · (?:覆盖|续写)" + HOFF_ASK + "】[\\s\\S]*?" + HOFF_END + "\\n*")
+const hoffOf = (t) => { const m = HOFF_HEAD_RE.exec(String(t || "")); return m ? { label: m[1], replace: m[2] === "覆盖", asks: +(m[3] || 0) } : null }
+const stripHoff = (t) => String(t || "").replace(HOFF_RE, "").trim()
+const hoffTag = (label, replace, asks) => "已把「" + label + "」的结果"
+  + (asks ? "连同 " + asks + " 条追问" : "") + "转交过来" + (replace ? "（此前的问答已按你的选择清掉）" : "")
+
+/** 交接卡正文。只给【指路】不搬正文：同一个会话里模型已经有那一轮的内容，再贴一遍是白花 token。 */
+function hoffCard(m, replace) {
+  const M = MODES[m], s = S[m]
+  const files = (s.files || []).slice(0, 8)
+  const asks = (s.qa || []).filter((x) => x.role === "user").map((x) => x.text)
+  const L = ["【转交 · 「" + M.label + "」 · " + (replace ? "覆盖" : "续写")
+    + (asks.length ? " · 含 " + asks.length + " 条追问" : "") + "】"]
+  L.push("用户在界面上把「" + M.label + "」那一轮的结果转交到了智能助手这一格，下面这句话就是基于它问的。")
+  if (s.docName) L.push("- 那一轮的正文落在 `" + s.docName + "`，要引用具体内容直接读这个文件，别凭印象复述。")
+  if (files.length) L.push("- 那一轮的产物：" + files.map((n) => "`" + n + "`").join("、") + "。")
+  // 追问也一并转交：那几轮问答同样是"这份结果"的一部分，用户接着谈的往往正是它们。
+  // 只列问题不搬回答 —— 同一个会话里两边都在上文，列出来是为了【指明范围】，不是复述内容。
+  if (asks.length) {
+    L.push("- 那一轮的结果下面用户还追问过 " + asks.length + " 条，**这些问答也一并算在本次转交里**"
+      + "（原文都在本会话上文，直接接着谈，别重问也别重答）：")
+    asks.slice(0, 8).forEach((t) => L.push("  · " + String(t).replace(/\s+/g, " ").slice(0, 60)))
+    if (asks.length > 8) L.push("  · …（还有 " + (asks.length - 8) + " 条，同样在上文里）")
+  }
+  L.push("- **不要重跑「" + M.label + "」**：结果已经有了，用户要的是基于它接着谈。")
+  if (replace) L.push("- 此前在这一格里的自由问答用户已经不要了，别再接那边的话头，从这份结果重新开始。")
+  L.push(HOFF_END)
+  return L.join("\n")
+}
+
+/** 这一格现在有没有东西可转交（跑完了、且面板上真有正文） */
+function hoffReady(m) {
+  const s = S[m]
+  return m !== "chat" && !!s && s.status === "done"
+    && (!!s.docPv || !!((s.doc || "") + (s.raw || "")).trim())
+}
+
+const hoffMenu = $("hoffMenu")
+function askHoff(btn) {
+  const m = mode
+  if (!hoffReady(m)) return
+  if (hoffMenu.classList.contains("on")) return closeMenu()
+  // 那一格还是空的 → 没有"覆盖谁"可言，直接转交，别为难用户做一道没有内容的选择题
+  if (!S.chat.msgs.length) return doHoff(m, false)
+  hoffMenu.innerHTML = ""
+  const item = (title, sub, fn) => {
+    const b = document.createElement("button")
+    b.type = "button"; b.className = "mi"
+    b.innerHTML = esc(title) + "<small>" + esc(sub) + "</small>"
+    b.addEventListener("click", fn)
+    hoffMenu.appendChild(b)
+  }
+  const what = "这份「" + MODES[m].label + "」" + (askCount(m) ? "（连同 " + askCount(m) + " 条追问）" : "")
+  item("覆盖已有的对话", "智能助手里现有的问答不再显示，从" + what + "重新开始", () => doHoff(m, true))
+  item("续写已有的对话", "保留现有问答，把" + what + "接在后面", () => doHoff(m, false))
+  item("取消", "什么都不做", () => closeMenu())
+  placeMenu(hoffMenu, btn)
+}
+
+function doHoff(m, replace) {
+  closeMenu()
+  const M = MODES[m]
+  // 覆盖是"还没发出去"的动作：把清掉的这几条留一份，用户撤掉交接卡时要原样放回去
+  const snapshot = replace ? S.chat.msgs.slice() : null
+  if (replace) S.chat.msgs = []
+  const asks = askCount(m)
+  handoff = { mode: m, label: M.label, replace, asks, snapshot,
+    card: hoffCard(m, replace), tag: hoffTag(M.label, replace, asks) }
+  setMode("chat")
+  renderHoff()
+  qEl.focus()
+}
+
+function renderHoff() {
+  const el = $("hoffChip")
+  if (!handoff) { el.hidden = true; el.innerHTML = ""; return }
+  el.hidden = mode !== "chat"    // 追问时输入框是共用的，这张卡只属于智能助手那一格（见 updateFoot）
+  el.innerHTML = ICON.chat
+    + '<div class="t">已带上<b>「' + esc(handoff.label) + '」</b>的结果'
+    + (handoff.asks ? "与 <b>" + handoff.asks + " 条追问</b>" : "")
+    + (handoff.replace ? "（覆盖此前的对话）" : "") + "，随你下一条消息一起发出。</div>"
+    + '<button class="x" type="button" id="hoffX" aria-label="撤掉这张交接卡" title="撤掉">' + ICON.x + "</button>"
+  $("hoffX").addEventListener("click", cancelHoff)
+}
+
+function cancelHoff() {
+  if (!handoff) return
+  if (handoff.snapshot) S.chat.msgs = handoff.snapshot    // 覆盖还没生效，撤掉就得把对话放回来
+  handoff = null
+  renderHoff(); renderChat()
+}
+
+/* ---- 终止 ---- */
+async function abortRun() {
+  if (!sid || !RUN) return
+  try { await jget("api/chat/abort?sid=" + encodeURIComponent(sid), { method: "POST" }) } catch (_) {}
+}
+$("btnStop").addEventListener("click", abortRun)   // 聊天输入框旁那一个（头部那个在 btnHalt 上绑）
+
+/* ---- 发消息 ----
+   同一个输入框两种用途，由当前在哪一格决定：
+     智能助手 → 一轮自由问答（可能带着交接卡）
+     其它模式 → 对这一格【已有结果】的追问（run 的 ask 分支），答在原地
+   ★ 只有一个输入框，是因为它必须活在面板【外面】：面板每 120ms 重绘一次，
+     画在里面的 textarea 会被连字带光标一起冲掉。 */
+const qEl = $("q")
+qEl.addEventListener("input", () => { qEl.style.height = "auto"; qEl.style.height = Math.min(130, qEl.scrollHeight) + "px" })
+qEl.addEventListener("keydown", (e) => { if (e.key === "Enter" && !e.shiftKey && !e.isComposing) { e.preventDefault(); sendMsg() } })
+$("btnSend").addEventListener("click", sendMsg)
+function sendMsg() {
+  const t = qEl.value.trim()
+  if (!t) return
+  if (busy()) return
+  const ask = mode !== "chat"
+  if (ask && !askReady(mode)) return          // 这一格还没有结果，追问无从谈起
+  qEl.value = ""; qEl.style.height = "auto"
+  run(ask ? mode : "chat", false, t, ask)
+  render(mode); follow()
+}
+
+/* ============================================================
+   7. 恢复：带 ?sid= 打开 / 刷新页面
+   ------------------------------------------------------------
+   四个面板的内容不落在任何自定义存储里，全部从服务端已有的三样东西重建：
+     api/uploads  → 左栏那篇原文是哪个文件
+     api/history  → 每一轮属于哪个模式（靠消息开头的 MODES.mark 标记认）
+     api/outputs  → 翻译 / 大纲 / pptx 等产物
+   好处是换台机器、换个浏览器打开同一个会话，看到的东西完全一样。
+   ============================================================ */
+/**
+ * 一条 user 消息属于哪一格、是不是追问。返回 { m, ask }。
+ * ★ 先认追问标记：`【文献导读 · 追问】` 与 `【文献导读】` 谁都不是谁的前缀（收尾的 `】` 位置不同），
+ *   本来就不会误认；先判一遍是为了将来有人改标记时不至于悄悄退化成"追问全落进主结果"。
+ */
+function routeOf(t) {
+  const s = String(t || "")
+  for (const k of ORDER) { const a = MODES[k].askMark; if (a && s.startsWith(a)) return { m: k, ask: true } }
+  for (const k of ORDER) { const mk = MODES[k].mark; if (mk && s.startsWith(mk)) return { m: k, ask: false } }
+  return { m: "chat", ask: false }
+}
+
+async function restore() {
+  if (!sid) return false
+  let ups = [], hist = [], job = { running: false }
+  try {
+    [ups, hist, job] = await Promise.all([
+      jget("api/uploads?sid=" + encodeURIComponent(sid)).then((r) => (r.ok ? r.json() : [])).catch(() => []),
+      jget("api/history?sid=" + encodeURIComponent(sid)).then((r) => (r.ok ? r.json() : [])).catch(() => []),
+      jget("api/job?sid=" + encodeURIComponent(sid)).then((r) => (r.ok ? r.json() : { running: false })).catch(() => ({ running: false })),
+    ])
+  } catch (e) { return false }
+
+  const list = Array.isArray(ups) ? ups : []
+  const mine = list.filter((f) => okExt().includes(extOf(f.name)))
+  if (!mine.length) return false               // 这个会话里没有本模块能处理的文件 → 回首屏让他传一份
+  // 多文件模块：本模块能处理的【全部】文件都要回来。只认第一个的话，刷新一次页面其余几张
+  // 既不显示、也不会随提示词发给模型，而用户完全看不出少了东西。
+  docFiles = (isMulti() ? mine : mine.slice(0, 1)).map((f) => ({ name: f.name, size: f.size }))
+  docName = docFiles[0].name; docSize = docFiles[0].size
+  // 配套数值表（refcheck）：上传目录里除原文之外、扩展名对得上的【全部】文件。
+  // 只找第一个的话，刷新一次页面就只剩一份，另外几份既不显示也不会发给模型。
+  if (CFG.extraUpload) {
+    dataFiles = list.filter((f) => f.name !== docName && CFG.extraUpload.exts.includes(extOf(f.name)))
+      .map((f) => ({ name: f.name, size: f.size }))
+  }
+
+  // 已落盘的表单值（设置 / 必答题 / 变量对应）。刷新页面、换台机器打开同一个会话，
+  // 勾选都得原样回来 —— 否则 pin 的那几项会在下一轮悄悄变回默认值。
+  try {
+    const st = await jget("api/workflow/state?sid=" + encodeURIComponent(sid)).then((r) => (r.ok ? r.json() : null))
+    // 【叠在默认值之上】而不是整个替换：落盘的 form 只含用户真正动过的字段（服务端两条写入路径
+    // 都不做 withDefaults），整份替换会把 installConfig 播下去的默认值又冲掉，
+    // 于是刷新一次，弹层里那五个字段重新变回「（不指定）」。
+    if (st && st.state && st.state.form) SETTINGS = { ...SETTINGS, ...st.state.form }
+    // ★ 闸状态也要取。本壳服务的四个模块（文稿核查 / 语言润色 / 数据统计 / 文献导读）加起来有
+    //   5 道质量闸，而服务端的【出件拦截是模块无关的】：用户在这儿说"导成 PDF"，闸红就中止本轮。
+    //   此前本页对闸一无所知——既不显示哪道红了，也没有聊天页那个「仍要出件」的逃生口，
+    //   用户面前就是一堵没有尽头的墙（改完重跑闸也不一定能过，判据是关键词匹配、必有误判）。
+    //   不画完整流程条：本模块是"四种模式随时切"、没有先后，硬塞进度条只会一直显示"共 N 步已完成 1 步"。
+    if (st && st.state) { GATES = st.state.failed || []; GATE_STEPS = st.steps || []; BYPASS = !!st.gateBypass }
+  } catch (_) {}
+
+  // 历史 → 各个面板。同一模式跑过多轮时【后面的覆盖前面的】：用户看到的应该是最近那一版。
+  const auto = ORDER.filter((k) => k !== "chat")
+  if (Array.isArray(hist)) {
+    let cur = null, curAsk = false
+    hist.forEach((msg) => {
+      if (msg.role === "user") {
+        const r = routeOf(msg.text || "")
+        cur = r.m; curAsk = r.ask
+        turns++
+        if (cur === "chat") {
+          // 转交过来的那一轮：卡片不进气泡（只留用户自己那句话），但"当时选的是覆盖、带了几条追问"
+          // 这件事要认出来 —— 不认的话，被覆盖掉的那几轮会在刷新页面后原样长回来，
+          // 用户会以为覆盖根本没生效。
+          const h = hoffOf(msg.text)
+          if (h) {
+            if (h.replace) S.chat.msgs.length = 0
+            S.chat.msgs.push({ role: "tag", text: hoffTag(h.label, h.replace, h.asks) })
+          }
+          const t = h ? stripHoff(msg.text) : msg.text
+          if (t) S.chat.msgs.push({ role: "user", text: t })
+        }
+        else if (curAsk) {
+          // 追问：落回那一格的追问区，标记剥掉（气泡里只留用户自己打的那句话）。
+          // 主结果那一轮可能已经被历史截断了，但这一格确实跑过 —— 别显示成"还没跑过"。
+          if (S[cur].status === "idle") S[cur].status = "done"
+          S[cur].qa.push({ role: "user", text: String(msg.text || "").slice(MODES[cur].askMark.length) })
+        }
+        // 主结果重跑：正文清空、旧追问一并作废（与 run() 里那条同一个道理）
+        else { S[cur].raw = ""; S[cur].status = "done"; S[cur].qa = [] }
+      } else {
+        if (cur === "chat" || cur == null) S.chat.msgs.push({ role: "ai", text: msg.text })
+        else if (curAsk) S[cur].qa.push({ role: msg.isError ? "tag" : "ai", text: msg.text })
+        else { S[cur].raw = msg.text; S[cur].status = msg.isError ? "error" : "done" }
+        if (cur && cur !== "chat" && !curAsk && msg.isError) S[cur].err = msg.text
+      }
+    })
+  }
+
+  await refreshOutputs()
+  await Promise.all(auto.map((m) => loadDocFor(m)))
+  auto.forEach((m) => { if (S[m].status !== "idle") collectFiles(m) })
+  collectOrphanFiles()          // 刷新后 SSE 那份 files 已经没了，聊天格的产物只能从这里现算
+
+  enterReader()
+  if (CFG.source.kind === "table") loadHeaders()
+  // 进来先看哪个面板：最近跑过的那个（按模式条倒序找），都没跑过就看配置指定的首个模式
+  const done = auto.slice().reverse().find((m) => S[m].status !== "idle")
+  setMode(done || (S.chat.msgs.length ? "chat" : CFG.first))
+
+  // 后台还在跑：接上去。属于哪个模式、是不是追问，都看最后一条 user 消息的标记。
+  if (job && job.running) {
+    const lastUser = [...(hist || [])].reverse().find((x) => x.role === "user")
+    const r = lastUser ? routeOf(lastUser.text || "") : { m: CFG.first, ask: false }
+    S[r.m].status = "running"
+    setMode(r.m)
+    attach(r.m, r.ask)
+  }
+  return true
+}
+
+/* ============================================================
+   8. 导航（换一篇 / 最近 / 工作台）
+   ------------------------------------------------------------
+   顶栏撤掉后这三个动作出现在两个地方（首屏卡片下方、阅读器的文件工具条），同一个动作有两个
+   按钮。所以【不能再按 id 绑】—— 一个页面里两个同 id 是无效 HTML，而且 $() 只会拿到第一个，
+   另一个点了没反应。改成 data-act + 事件委托：将来再往哪儿放一个，写个属性就通了。
+   ============================================================ */
+const menu = $("recentMenu")
+// 两个弹层（最近 / 设置）共用一套定位与关闭：它们都可能被不同位置的按钮触发，
+// 所以都是 body 级 position:fixed，打开时按触发按钮算坐标。
+const closeMenu = () => { menu.classList.remove("on"); for (const id of ["setMenu", "hoffMenu"]) { const el = $(id); if (el) el.classList.remove("on") } }
+
+/** 把弹层摆到触发按钮下面（position:fixed，坐标自己算），并且不许越出视口右/下边 */
+function placeMenu(el, btn) {
+  el.classList.add("on")                         // 先显示再量，否则 offsetWidth/Height 都是 0
+  const r = btn.getBoundingClientRect()
+  const w = el.offsetWidth, h = el.offsetHeight
+  let left = Math.min(r.right - w, innerWidth - w - 10)
+  let top = r.bottom + 6
+  if (top + h > innerHeight - 10) top = Math.max(10, r.top - h - 6)   // 下面放不下就翻到按钮上方
+  // ★ 坐标要写回【传进来的那个 el】。这里原本写死 menu.style —— 于是设置弹层永远拿不到
+  //   left/top，position:fixed 退回静态位置，飘到页面左上角；顺带还把「最近」挪了一次。
+  el.style.left = Math.max(10, left) + "px"
+  el.style.top = top + "px"
+}
+
+async function showRecent(btn) {
+  if (menu.classList.contains("on")) return closeMenu()
+  menu.innerHTML = '<div class="empty">正在读取…</div>'
+  placeMenu(menu, btn)
+  let j = null
+  try { j = await jget("api/sessions").then((r) => r.json()) } catch (_) {}
+  // 只列本模块的会话。别的模块的会话在这个页面里打不开（没有原文、没有模式），列出来只会误导。
+  // ★ 只列【当前模块】的会话，不能写死 litread：别的模块的会话在这个页面里打不开
+  //（没有它认得的文件、没有对应的模式），列出来只会让人点进去撞一鼻子灰。
+  const list = ((j && j.sessions) || []).filter((s) => s.module === MOD).slice(0, 20)
+  if (!list.length) { menu.innerHTML = '<div class="empty">还没有做过的记录</div>'; return placeMenu(menu, btn) }
+  menu.innerHTML = ""
+  list.forEach((s) => {
+    const b = document.createElement("button")
+    b.type = "button"; b.className = "mi"
+    b.innerHTML = esc(s.title || "(未命名)") + "<small>" + (s.running ? "生成中 · " : "") + new Date(s.updated || Date.now()).toLocaleString("zh-CN", { hour12: false }) + "</small>"
+    b.addEventListener("click", () => { location.href = location.pathname + "?sid=" + encodeURIComponent(s.id) })
+    menu.appendChild(b)
+  })
+  // 内容换完宽高都变了，重新摆一次。【这里原本写的是 openMenuAt()——没有这个函数】，
+  // 于是每次列表非空都抛 ReferenceError，重新定位从来没跑过：弹层沿用「正在读取…」那一刻
+  // 按窄内容算的坐标，撑开之后就贴死在屏幕右边缘（按钮在右上角时尤其明显）。
+  placeMenu(menu, btn)
+}
+
+document.addEventListener("click", (e) => {
+  // 弹层【内部】的点击不算「点空白处」。设置弹层里全是 select / checkbox / 输入框，
+  // 它们身上没有 data-act —— 不先放行的话，点开下拉的那一下就把整个弹层收了，
+  // 用户永远选不中任何一项。
+  if (e.target.closest && e.target.closest(".menu")) return
+  const btn = e.target.closest("[data-act]")
+  // 点空白处收起菜单。设置弹层是被这样收掉的，也算"他看过这套设置了"——
+  // 自动弹出来的那次多半就是这么关掉的，不记的话每切一个模式都会再弹一遍同样的东西。
+  if (!btn) { if (setMenu.classList.contains("on")) markSettingsSeen(); closeMenu(); return }
+  e.stopPropagation()
+  if (btn.dataset.act === "ws") { location.href = "./workspace.html"; return }
+  if (btn.dataset.act === "new") {
+    if (RUN && !confirm("这一轮还在跑，换一篇会让你看不到它的结果（后台仍会跑完，可以从「最近」再进来）。确定？")) return
+    location.href = location.pathname
+    return
+  }
+  if (btn.dataset.act === "recent") showRecent(btn)
+  if (btn.dataset.act === "hoff") askHoff(btn)
+})
+addEventListener("resize", closeMenu)             // fixed 定位的菜单不会跟着按钮走，改窗口就收起来
+
+/* ============================================================
+   9. 设置弹层 / 变量对应 / 附加上传
+   ============================================================ */
+/** 本会话要落盘的表单值 = 设置弹层 + 首屏必答题 + 变量对应，再加上左栏那份文件 */
+function wfFormValues() {
+  const v = { ...SETTINGS }
+  // 多文件模块把全部文件写进去（服务端的列名体检、任务卡都读这个字段）；
+  // 并用 __src_<字段id> 告诉服务端"变量对应里的列名读的是哪一张表"——它认这个键（见 server.mjs）。
+  if (CFG.source.field && docFiles.length) {
+    v[CFG.source.field] = docFiles.map((f) => f.name)
+    if (isMulti() && docName) for (const f of (CFG.vars && CFG.vars.fields) || []) v["__src_" + f] = docName
+  } else if (CFG.source.field && docName) v[CFG.source.field] = [docName]
+  if (CFG.extraUpload && dataFiles.length) v[CFG.extraUpload.field] = dataFiles.map((f) => f.name)
+  return v
+}
+
+/** 设置改了就立刻回写 _workflow.json —— pin:true 的字段靠它进入【下一轮】的模块前言 */
+let saveT = 0
+function saveSettings() {
+  if (!sid) return
+  clearTimeout(saveT)
+  saveT = setTimeout(async () => {
+    let j = null
+    try {
+      const r = await fetch("api/workflow/form", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ module: MOD, sid, values: wfFormValues() }),
+      })
+      j = r.ok ? await r.json() : null
+    } catch (_) { return }
+    // ★ 响应体【必须】读回来：服务端就在这个接口里做「你填的列名在真实表头里存不存在」的体检，
+    //   结论只出现在 j.warnings 里。此前这里是 fetch(...).catch(()=>{})，响应从来没被读过 ——
+    //   分组列打错字（表里叫「组别」，用户填了「手术方式」）在界面上没有任何反馈，模型自行推断
+    //   一列跑完全程，产出一份【看起来完全正常、实际分错了组】的 Table 1。服务端那段注释写着
+    //   这道体检"成本几乎为零"，而它的产出在阅读器里被 100% 丢弃了。
+    showVarsWarn(j && Array.isArray(j.warnings) ? j.warnings : [])
+  }, 400)
+}
+
+/** 列名体检的结论摊在「变量对应」面板里（只 warning 不挡：表头读不出来的情况太多，硬拦会误伤） */
+function showVarsWarn(list) {
+  if (!CFG || !CFG.vars) return
+  const el = $("varsWarn"); if (!el) return
+  el.hidden = !list.length
+  el.textContent = list.length ? "⚠ " + list.join("；") : ""
+  if (list.length) $("varsBox").open = true      // 折叠着的话等于没说
+}
+
+let HEADERS = []          // 表头的【显示名】（含"（重名 2）""（第 N 列·无列名）"这些消歧后缀）
+let HEADER_VALS = []      // 与 HEADERS 一一对应的【真列名】：存进 SETTINGS、交给脚本的是它
+let HEADER_DUPES = []     // 表里真的重名的列（仅大小写不同的不算）——同名列脚本只取第一列，要说一声
+let HEADERS_WHY = ""      // 读不出来时的原因（xlsx 要 AI 在分析时读，服务端如实回这一句）
+// 显示名 ↔ 真列名 的互查。表头没解析出来时退化成恒等，调用方不必到处判空。
+const valOfHead = (h) => { const i = HEADERS.indexOf(h); return i >= 0 ? HEADER_VALS[i] : h }
+const headOfVal = (v) => { const i = HEADER_VALS.indexOf(v); return i >= 0 ? HEADERS[i] : v }
+
+/** 通用控件：select / bool / text / multi / columns（columns 的候选来自真实表头） */
+function fieldControl(f, onChange) {
+  const wrap = document.createElement("div")
+  const v = SETTINGS[f.id]
+  if (f.type === "multi") {
+    for (const o of f.options || []) {
+      const l = document.createElement("label"); l.className = "schk"
+      const cb = document.createElement("input"); cb.type = "checkbox"
+      cb.checked = Array.isArray(v) && v.includes(o.v)
+      cb.addEventListener("change", () => {
+        const cur = Array.isArray(SETTINGS[f.id]) ? SETTINGS[f.id].slice() : []
+        SETTINGS[f.id] = cb.checked ? [...new Set([...cur, o.v])] : cur.filter((x) => x !== o.v)
+        onChange()
+      })
+      l.appendChild(cb); l.appendChild(document.createTextNode(o.t)); wrap.appendChild(l)
+    }
+    return wrap
+  }
+  if (f.type === "text") {
+    const i = document.createElement("input"); i.type = "text"; i.value = v == null ? "" : v
+    if (f.placeholder) i.placeholder = f.placeholder
+    i.addEventListener("input", () => { SETTINGS[f.id] = i.value; onChange() })
+    wrap.appendChild(i); return wrap
+  }
+  // ★ 多选的 columns（协变量）必须有自己的控件。此前它和单选共用一个 <select>：
+  //   界面上最多只能指一列，而值里真放了一个数组时（自动认列会一次给出年龄/性别/BMI），
+  //   <select> 匹配不上任何 option → 显示「（不指定）」，可发给模型的却是三列 ——
+  //   界面与提示词各说各话，且从产物上完全看不出来。
+  if (f.type === "columns" && f.multiple && HEADERS.length) {
+    const cur = new Set(Array.isArray(v) ? v : (v ? [v] : []))
+    const row = document.createElement("div"); row.className = "vchips"
+    // chip 上显示消歧名、选中态与存进 SETTINGS 的都用真列名（见 HEADER_VALS 的说明）
+    HEADERS.forEach((h, i) => {
+      const val = HEADER_VALS[i] ?? h
+      const b = document.createElement("button")
+      b.type = "button"; b.className = "vchip" + (cur.has(val) ? " on" : ""); b.textContent = h
+      b.addEventListener("click", () => {
+        cur.has(val) ? cur.delete(val) : cur.add(val)
+        SETTINGS[f.id] = HEADER_VALS.filter((x) => cur.has(x))     // 按表里的列序存，顺序稳定
+        onChange()
+      })
+      row.appendChild(b)
+    })
+    wrap.appendChild(row); return wrap
+  }
+  // columns 读不出表头（xlsx）时降级成手填输入框，而不是给一个空下拉让人以为这张表没有列
+  if (f.type === "columns" && !HEADERS.length) {
+    const i = document.createElement("input"); i.type = "text"
+    i.value = Array.isArray(v) ? v.join("，") : (v == null ? "" : v)
+    i.placeholder = HEADERS_WHY || (f.multiple ? "手动填列名，多个用逗号分隔" : "手动填列名")
+    i.addEventListener("input", () => {
+      // 多选字段哪怕降级成输入框也得存成数组，否则下游（varsBlock / 任务卡）拿到的是一整串文字
+      SETTINGS[f.id] = f.multiple
+        ? i.value.split(/[,，、]/).map((s) => s.trim()).filter(Boolean)
+        : i.value
+      onChange()
+    })
+    wrap.appendChild(i); return wrap
+  }
+  const sel = document.createElement("select")
+  const opts = f.type === "bool" ? [{ v: true, t: "是" }, { v: false, t: "否" }]
+    // 同理：option 的 value 是真列名，显示文字才是消歧后的名字
+    : f.type === "columns" ? [{ v: "", t: "（不指定）" }].concat(HEADERS.map((h, i) => ({ v: HEADER_VALS[i] ?? h, t: h })))
+    : (f.options || []).slice()
+  if (f.type !== "columns" && f.type !== "bool" && !f.required) opts.unshift({ v: "", t: "（不指定）" })
+  for (const o of opts) {
+    const op = document.createElement("option")
+    op.value = String(o.v); op.textContent = o.t
+    if (String(v) === String(o.v)) op.selected = true
+    sel.appendChild(op)
+  }
+  sel.addEventListener("change", () => {
+    SETTINGS[f.id] = f.type === "bool" ? sel.value === "true" : sel.value
+    onChange()
+  })
+  wrap.appendChild(sel); return wrap
+}
+
+let PEEK = null           // 前 N 行 + 列画像（{headers,rows,cols,note,scanned,truncated,sheets}）
+let SHEET = ""            // 当前读的是第几张工作簿（多表 xlsx；空 = 第一张）。切表时带给 automap
+let SHEET_FOR = ""        // 上面那个选择属于哪个文件 —— 换文件要清掉，别拿旧序号去读新表
+let AUTOMAP = null        // 自动认列的结果（{file,map,why,conf,by,notes,source}）
+let AUTOMAP_LOADING = false
+let AUTOMAP_SEQ = 0       // 竞态号：读表期间用户切了表，旧结果一律作废
+
+/* ============================================================
+   自动认列：抽前几行 → 机器先把列认出来 → 用户只做核对
+   ============================================================
+   【为什么这么做】「分组列 / 结局列 / 随访时间列 / 终点事件列 / 待评价指标列 / 金标准列」
+   这一排下拉，是整套界面里用户最不知所云的地方 —— 医生看到「终点事件列」四个字，
+   第一反应是"这是啥"。而它填错【不会报错】，只会安静地产出一条看着很正常的错 KM 曲线。
+   让人从二十几个列名里挑出六个很难；请他核对一句
+   「分组列＝组别（全表只有 试验组 58 例 / 对照组 62 例）」很容易。所以把顺序反过来。
+
+   【自动填 ≠ 已确认】自动填只省掉"找列"的力气，责任不转移：没点确认之前，
+   发给模型的那段话会明说"这是机器认的、用户还没核对"，让它自己再核一遍并把用到的列写出来。
+   点了确认才升级成「以我指定的为准」。这条边界不能省——省掉它等于给一个错列名披上用户的权威。 */
+async function loadHeaders() {
+  if (!CFG.vars || !docName || !sid) return
+  const seq = ++AUTOMAP_SEQ
+  const forFile = docName
+  // 换了文件就把工作簿选择清掉：留着上一个文件的表序号，会去读新文件里根本不对应的那张表
+  if (SHEET_FOR !== forFile) { SHEET = ""; SHEET_FOR = forFile }
+  const headsBefore = HEADERS.slice(), valsBefore = HEADER_VALS.slice()   // automap 挂了要回落到它（见下）
+  HEADERS = []; HEADER_VALS = []; HEADER_DUPES = []; HEADERS_WHY = ""; PEEK = null; AUTOMAP = null
+  AUTOMAP_LOADING = true
+  renderVars()
+  let j = null
+  try {
+    j = await jget("api/data/automap", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ sid, name: forFile, analyses: SETTINGS.analyses, sheet: SHEET }),
+    }).then((r) => r.json())
+  } catch (_) { j = null }
+  if (seq !== AUTOMAP_SEQ) return          // 等待期间用户切了表：这份结果是上一张表的，丢掉
+  AUTOMAP_LOADING = false
+  if (!j || !j.ok) {
+    // ★ 回落到之前已经解析出来的表头，别清空。浏览器那侧（xlsx 预览，见 1586 行）可能早就把
+    //   这张表的列名解出来并渲染成表格了 —— automap 一失败就 HEADERS=[]，于是【左栏摆着整张表、
+    //   右边的变量对应却降级成手填输入框】，用户对着看得见的列名手敲一遍。
+    HEADERS = headsBefore; HEADER_VALS = valsBefore.length === headsBefore.length ? valsBefore : headsBefore.slice()
+    HEADERS_WHY = (j && j.reason) || "这张表读不出结构（网关可能正忙），列名请手动填。"
+    renderVars(); return
+  }
+  // ★ 显示名与真列名分开。HEADERS 用来【显示】（带"（重名 2）""（第 N 列·无列名）"这些消歧后缀），
+  //   HEADER_VALS 才是存进 SETTINGS、最终交给脚本的【真列名】—— 后缀在真实表里根本不存在，
+  //   拿它去取列必然取不到，而这个面板存在的唯一理由就是"列名一定对"。
+  //   （index.html 那侧已经这么做了；这里是同一个坑的另一份实现，别只修一半。）
+  HEADERS = Array.isArray(j.headers) ? j.headers : []
+  HEADER_VALS = HEADERS.map((h, i) => String(j.raw?.[i] ?? h ?? "").trim() || `第 ${i + 1} 列`)
+  HEADER_DUPES = Array.isArray(j.dupes) ? j.dupes : []
+  HEADERS_WHY = j.note || ""
+  PEEK = { headers: j.headers || [], rows: j.rows || [], cols: j.cols || [],
+    note: j.note || "", scanned: j.scanned || 0, truncated: !!j.truncated,
+    sheets: j.sheets || [] }   // 多工作簿：切表 chip 靠它（见 renderVarsPeek）
+  AUTOMAP = { file: forFile, map: j.map || {}, why: j.why || {}, conf: j.conf || {},
+    notes: j.notes || [], source: j.source || "rule" }
+  // 【谁填的】记在 SETTINGS.__varsBy 里而不是 AUTOMAP 里：它要跟着 _workflow.json 落盘，
+  //   刷新页面 / 换台机器打开同一个会话时，"这一格是机器认的、还没人核对"这件事必须还在 ——
+  //   丢了它，界面上那几个下拉看起来就跟用户亲手指定的一模一样，而它们并不是。
+  const by = SETTINGS.__varsBy = { ...(SETTINGS.__varsBy || {}) }
+  // 只填【用户还没填过】的格子。他上一轮已经指过的列不许被机器改掉 —— 那是明确的用户输入，
+  // 而且一旦被静默覆盖，他根本不会发现（这两个值长得一模一样，都只是一个列名）。
+  let touched = false
+  for (const id of CFG.vars.fields) {
+    const cur = SETTINGS[id]
+    const has = cur !== undefined && cur !== null && cur !== "" && !(Array.isArray(cur) && !cur.length)
+    if (has) { by[id] = by[id] || "user"; continue }      // 已有值：保住它原来的出处，别一律改判成 user
+    const v = AUTOMAP.map[id]
+    if (v === undefined || v === null || v === "" || (Array.isArray(v) && !v.length)) continue
+    SETTINGS[id] = v; by[id] = j.by?.[id] === "ai" ? "ai" : "rule"; touched = true
+  }
+  if (touched) {
+    SETTINGS.__varsOK = false          // 换了表就得重新核对一次：上一张表确认过不代表这张也对
+    saveSettings()
+    $("varsBox").open = true           // 折叠着等于没填：用户必须看见这几项才谈得上核对
+  }
+  renderVars()
+}
+
+/** 这一格是自动填进去的（出处记在 __varsBy，落盘随会话走） */
+function autoFilled(id) {
+  const b = (SETTINGS.__varsBy || {})[id]
+  if (b !== "ai" && b !== "rule") return false
+  const v = SETTINGS[id]
+  return v !== undefined && v !== null && v !== "" && !(Array.isArray(v) && !v.length)
+}
+/** 面板里这个值还是不是「这次认出来的那一个」（协变量是数组，要按内容比） */
+const sameVal = (a, b) => (Array.isArray(a) || Array.isArray(b))
+  ? JSON.stringify(Array.isArray(a) ? a : [a]) === JSON.stringify(Array.isArray(b) ? b : [b])
+  : a === b
+/** 面板里有没有"待用户核对"的自动填项 */
+const varsNeedConfirm = () => !SETTINGS.__varsOK && (CFG?.vars?.fields || []).some(autoFilled)
+
+function renderVars(missing) {
+  if (!CFG || !CFG.vars) return
+  const grid = $("varsGrid"); grid.innerHTML = ""
+  const miss = new Set(missing || [])
+  let filled = 0
+  for (const id of CFG.vars.fields) {
+    const f = fieldDef(id); if (!f) continue
+    const v = SETTINGS[id]
+    if (v !== undefined && v !== null && v !== "" && !(Array.isArray(v) && !v.length)) filled++
+    const box = document.createElement("div")
+    const auto = autoFilled(id)
+    // .auto 的淡蓝底 = "这是机器填的、等你过目"；确认之后就该收掉，否则一直像没办完
+    box.className = "vf" + (miss.has(id) ? " miss" : "") + (auto && !SETTINGS.__varsOK ? " auto" : "")
+    const l = document.createElement("label"); l.textContent = f.label
+    if (f.help) l.title = f.help
+    // 依据 / 把握度只在【面板里这个值就是这次认出来的那个】时才显示：用户手动改成了别的列，
+    // 却还挂着机器给那一列写的理由，是彻头彻尾的误导。
+    const same = auto && AUTOMAP && sameVal(AUTOMAP.map[id], v)
+    // 确认之后不再挂「自动认的·待核」：那时它已经是用户的选择了，还标着"待核"只会让人以为
+    // 自己没点过确认，又回去点一遍。依据（下面那行 why）保留——它随时能再核对。
+    if (auto && !SETTINGS.__varsOK) {
+      const conf = same ? AUTOMAP.conf[id] : ""
+      const t = document.createElement("span")
+      t.className = "vtag" + (conf === "high" ? "" : " low")
+      // 谁填的、有多确信，都摆在明面上：用户有权知道这一格是机器认的，以及它有多大把握
+      t.textContent = ((SETTINGS.__varsBy || {})[id] === "ai" ? "AI 认的" : "自动认的") + (conf === "high" ? "" : "·待核")
+      l.appendChild(t)
+    }
+    box.appendChild(l)
+    box.appendChild(fieldControl(f, () => {
+      // 用户一旦动手改，这一格就归他了，确认态也要清掉（改完得重新过一眼）
+      SETTINGS.__varsBy = { ...(SETTINGS.__varsBy || {}), [id]: "user" }
+      SETTINGS.__varsOK = false
+      saveSettings(); renderVars()
+    }))
+    // 依据必须常驻，不能收进 title：悬停才看得见 = 没人看得见，而用户核对的正是这句话
+    const w = same ? AUTOMAP.why[id] : ""
+    if (w) {
+      const d = document.createElement("div"); d.className = "vwhy"
+      d.innerHTML = mdLite(w)
+      box.appendChild(d)
+    }
+    grid.appendChild(box)
+  }
+  // 表里真有重名列时说一句：同名列脚本只会取第一列，用户得知道自己选的是哪一个
+  const dupNote = HEADER_DUPES.length ? "　⚠ 表里有重复的列名（" + HEADER_DUPES.join("、") + "），同名列只会取第一列" : ""
+  $("varsSum").textContent = (AUTOMAP_LOADING ? "（正在读表、自动认列…）"
+    : HEADERS.length
+      ? (varsNeedConfirm() ? "（已自动填 " + filled + " 项，等你核对）"
+        : "（已指定 " + filled + " / " + CFG.vars.fields.length + " 项，列名读自你的表）")
+      : (HEADERS_WHY ? "（" + HEADERS_WHY + "）" : "（已指定 " + filled + " 项）")) + dupNote
+  renderVarsConfirm()
+  renderVarsPeek()
+}
+
+/** 只把 **加粗** 与「」保留下来的极简 markdown（依据里偶尔要强调一句，不值得引整个渲染器） */
+const mdLite = (s) => esc(s).replace(/\*\*(.+?)\*\*/g, "<b>$1</b>")
+
+function renderVarsConfirm() {
+  const el = $("varsConfirm"); if (!el) return
+  if (AUTOMAP_LOADING) {
+    el.hidden = false; el.className = "varsconfirm"
+    el.textContent = "正在读你这张表的前几行，自动认一下哪列是分组、哪列是终点事件…"
+    return
+  }
+  if (!AUTOMAP) { el.hidden = true; return }
+  const anyAuto = (CFG.vars.fields || []).some(autoFilled)
+  if (!anyAuto && !AUTOMAP.notes.length) { el.hidden = true; return }
+  el.hidden = false
+  el.innerHTML = ""
+  const div = (html, style) => {
+    const d = document.createElement("div")
+    if (style) d.setAttribute("style", style)
+    d.innerHTML = html
+    el.appendChild(d); return d
+  }
+  if (SETTINGS.__varsOK) {
+    el.className = "varsconfirm done"
+    div("✓ 变量对应已由你确认，后面每一轮都按这个来。改了任何一项要再确认一次。")
+    return
+  }
+  el.className = "varsconfirm"
+  const n = (CFG.vars.fields || []).filter(autoFilled).length
+  div("<b>已看过 " + esc(AUTOMAP.file) + " 的前几行，替你填好了 " + n + " 项。</b>"
+    + "请核对一遍——每一项下面写了是凭什么认出来的，不对就直接改。"
+    + "<br>没确认之前也能开跑，但发给它的话里会写明「这几列是机器认的、用户还没核对」，它会自己再核一次。")
+  for (const t of AUTOMAP.notes || []) div("· " + mdLite(t), "margin-top:6px")
+  // 多工作簿的提示不能只藏在折叠的「看看前几行」里：认列只认了其中一张表，
+  // 而用户要的数据在第二张表里是很常见的事，这句话必须摊在他眼前。
+  if (PEEK && PEEK.note) div("· " + esc(PEEK.note), "margin-top:6px")
+  const row = document.createElement("div"); row.className = "row"
+  const ok = document.createElement("button")
+  ok.type = "button"; ok.className = "pri"; ok.textContent = "对，就按这个来"
+  ok.addEventListener("click", () => { SETTINGS.__varsOK = true; saveSettings(); renderVars() })
+  row.appendChild(ok)
+  const clr = document.createElement("button")
+  clr.type = "button"; clr.className = "lnk"; clr.textContent = "全部清空，我自己填"
+  clr.addEventListener("click", () => {
+    const by = { ...(SETTINGS.__varsBy || {}) }
+    for (const id of CFG.vars.fields) { delete SETTINGS[id]; by[id] = "user" }
+    SETTINGS.__varsBy = by
+    SETTINGS.__varsOK = false
+    saveSettings(); renderVars()
+  })
+  row.appendChild(clr)
+  el.appendChild(row)
+}
+
+function renderVarsPeek() {
+  const box = $("varsPeek"), body = $("varsPeekBody")
+  if (!box || !body) return
+  if (!PEEK || !PEEK.rows.length) { box.hidden = true; return }
+  box.hidden = false
+  $("varsPeekSum").textContent = "看看表的前 " + PEEK.rows.length + " 行"
+    + (PEEK.scanned ? "（这张表读到 " + PEEK.scanned + " 行" + (PEEK.truncated ? "+，只扫了前一段" : "") + "）" : "")
+    + (PEEK.note ? "　" + PEEK.note : "")
+  // ★ 多工作簿要能切。python 侧一直支持 --sheet，只是上面三层没接 —— 界面告诉用户
+  //   "这个工作簿有 3 张表"，却只认第一张、也给不了切换，而用户的数据在第二张里很常见。
+  body.innerHTML = ""
+  if ((PEEK.sheets || []).length > 1) {
+    const bar = document.createElement("div"); bar.className = "vchips"; bar.style.marginBottom = "8px"
+    bar.appendChild(Object.assign(document.createElement("span"),
+      { className: "vwhy", textContent: "这个工作簿有 " + PEEK.sheets.length + " 张表，当前读的是：" }))
+    PEEK.sheets.forEach((nm, i) => {
+      const b = document.createElement("button")
+      b.type = "button"; b.className = "vchip" + (String(SHEET) === String(i) || SHEET === nm || (!SHEET && i === 0) ? " on" : "")
+      b.textContent = nm
+      b.addEventListener("click", () => { if (String(SHEET) === String(i)) return; SHEET = i; loadHeaders() })
+      bar.appendChild(b)
+    })
+    body.appendChild(bar)
+  }
+  // 被认走的列在表头里标一下颜色：用户一眼就能对上"机器说的那列"到底是表里的哪一列
+  const used = new Set()
+  if (AUTOMAP) for (const id of CFG.vars.fields) {
+    const v = SETTINGS[id]
+    if (Array.isArray(v)) v.forEach((x) => used.add(x)); else if (v) used.add(v)
+  }
+  const th = PEEK.headers.map((h) => '<th class="' + (used.has(h) ? "hit" : "") + '">' + esc(h) + "</th>").join("")
+  const tr = PEEK.rows.map((r) => "<tr>" + r.map((c) => "<td>" + (c === "" ? "<span style=\"opacity:.4\">(空)</span>" : esc(c)) + "</td>").join("") + "</tr>").join("")
+  // 追加而不是赋值：上面的切表 chip 已经写进 body 了，innerHTML= 会把它冲掉
+  body.insertAdjacentHTML("beforeend", "<table><thead><tr>" + th + "</tr></thead><tbody>" + tr + "</tbody></table>")
+}
+
+const setMenu = $("setMenu")
+
+/* ---- 「这套设置我已经确认过了」的记忆 ----
+   设置是【模块级】的：refcheck 的严格度 / 语言，四个模式共用同一份。所以第一次摊开、用户看过
+   之后，再切到别的模式不该把一模一样的东西再问一遍 —— 那不是"确认"，是骚扰，而且会训练用户
+   闭着眼把弹层点掉，真正需要他看一眼的那次也就跟着被点掉了。
+   记的是【字段 + 取值】的指纹，不是模块 id：于是换个模块只要这套设置完全一样（比如同样只有一个
+   「输出语言＝中文」），也照样不再打扰；而只要有一项取值不同，指纹就变了，会重新问一次。
+   落在 localStorage：换会话、明天再来都算数（"已经在别处填过"本来就是跨会话的记忆）。 */
+const SEEN_KEY = "reader.settingsSeen"
+function settingsSig() {
+  const ids = CFG.settings || []
+  if (!ids.length) return ""
+  return ids.map((id) => id + "=" + JSON.stringify(SETTINGS[id] === undefined ? null : SETTINGS[id])).join("|")
+}
+function seenSet() { try { return new Set(JSON.parse(localStorage.getItem(SEEN_KEY) || "[]")) } catch (_) { return new Set() } }
+function settingsSeen() { const s = settingsSig(); return !!s && seenSet().has(s) }
+/** 用户看过这套设置了（点了里面的「开始」，或者看完把它收起来）——下次别再自动弹同一套 */
+function markSettingsSeen() {
+  const s = settingsSig(); if (!s) return
+  try {
+    const set = seenSet(); set.add(s)
+    localStorage.setItem(SEEN_KEY, JSON.stringify([...set].slice(-40)))   // 只留最近 40 条，别无限长
+  } catch (_) { /* 隐私模式下写不了 localStorage：那就每次都问一遍，不影响功能 */ }
+}
+
+/**
+ * 打开设置弹层。
+ * @param withStart true = 底部多一枚「开始」。这是"切到还没跑过的模式 → 自动摊开设置"那条路：
+ *   这些设置（严格程度 / 输出语言 / 保护引用…）决定这一轮按什么口径跑，跑完再改就得重跑一遍。
+ *   所以先问、填完就地开跑，不用再回头去头部找按钮。
+ */
+function openSettings(withStart) {
+  setMenu.innerHTML = ""
+  for (const id of CFG.settings || []) {
+    const f = fieldDef(id); if (!f) continue
+    const box = document.createElement("div"); box.className = "sf"
+    const l = document.createElement("label"); l.textContent = f.label; box.appendChild(l)
+    if (f.help) { const h = document.createElement("div"); h.className = "sh"; h.textContent = f.help; box.appendChild(h) }
+    box.appendChild(fieldControl(f, saveSettings))
+    setMenu.appendChild(box)
+  }
+  if (withStart) {
+    const foot = document.createElement("div"); foot.className = "sfoot"
+    const tip = document.createElement("div"); tip.className = "st"
+    tip.textContent = "这些是这一轮的口径，确认后就可以开始。"
+    const b = document.createElement("button")
+    b.type = "button"; b.className = "gostart"
+    b.innerHTML = ICON.play + "<span>" + esc(MODES[mode].label) + "</span>"
+    // 弹层内部的点击被 document 那个监听放行了（见 .menu 分支），这里自己收起来再开跑
+    b.addEventListener("click", (e) => { e.stopPropagation(); markSettingsSeen(); closeMenu(); tryRun(mode) })
+    foot.appendChild(tip); foot.appendChild(b); setMenu.appendChild(foot)
+  }
+  closeMenu()
+  setMenu.classList.add("on")
+  placeMenu(setMenu, $("btnSettings"))
+}
+$("btnSettings").addEventListener("click", (e) => {
+  e.stopPropagation()
+  // 自己点开、自己收起 = 他已经看过这套设置了，之后切模式不用再替他弹一次
+  if (setMenu.classList.contains("on")) { markSettingsSeen(); setMenu.classList.remove("on"); return }
+  openSettings(false)
+})
+
+/* ---- 附加上传：配套数值表（目前只有 refcheck 的「数据完整性」用）----
+   摆在首屏会挡住所有人的路（另外三个模式根本不需要它），所以只在需要它的那个模式面板里常驻。
+   ★ 常驻，不是"缺了才出现"：用户得随时看得见【已经传了哪几份】，也得能删掉传错的那一份。 */
+
+/** 需要配套数值表的模式，面板顶上那张清单卡 */
+function dataCardHtml(m) {
+  const X = CFG.extraUpload
+  if (!X || !(MODES[m].need || []).includes("data")) return ""
+  const busyNow = busy()
+  const rows = dataFiles.map((f) =>
+    '<div class="drow"><span class="fic">' + esc(extOf(f.name).toUpperCase().slice(0, 4)) + "</span>"
+    + "<b>" + esc(f.name) + "</b>"
+    + (f.size == null ? "" : '<span class="sz">' + esc(fmtSize(f.size)) + "</span>")
+    + '<button type="button" class="del" data-datadel="' + esc(f.name) + '" aria-label="移除 ' + esc(f.name) + '"'
+    + (busyNow ? " disabled" : "") + ">" + ICON.trash + "</button></div>").join("")
+  return '<div class="datacard"><div class="dh"><span class="t">' + esc(X.label) + "</span>"
+    + '<span class="n">' + (dataFiles.length ? "已上传 " + dataFiles.length + " 份" : "还没有上传") + "</span></div>"
+    + (rows || '<div class="dempty">这一步要读你的原始数值表（' + X.exts.map((x) => "." + x).join(" / ") + "），可以一次传多份。</div>")
+    + '<button type="button" class="addbtn" data-dataadd="1" aria-label="添加' + esc(X.label) + '"' + (busyNow ? " disabled" : "") + ">"
+    + ICON.plus + "<span>" + (dataFiles.length ? "再添加一份" : "添加" + esc(X.label)) + "</span></button></div>"
+}
+
+/** 选文件 → 逐个传上去（可多选）。过程写在面板上，别让用户对着一个没反应的按钮等。 */
+function pickDataFiles() {
+  const X = CFG.extraUpload
+  if (!X || busy()) { if (X) render(mode); return }   // 同 pickMoreDocs：快照过期时重画自纠，别静默吞掉
+  openPicker(X.accept, true, async (files) => {
+    if (!files.length) return
+    const cur = mode
+    const bad = files.filter((f) => !X.exts.includes(extOf(f.name)))
+    const good = files.filter((f) => X.exts.includes(extOf(f.name)))
+    S[cur].err = bad.length
+      ? "只收 " + X.exts.map((x) => "." + x).join(" / ") + "；已跳过：" + bad.map((f) => f.name).join("、")
+      : ""
+    for (let i = 0; i < good.length; i++) {
+      const f = good[i]
+      S[cur].block = "正在上传 " + f.name + (good.length > 1 ? "（" + (i + 1) + "/" + good.length + "）" : "") + "…"
+      S[cur].blockMiss = null
+      render(cur)
+      try {
+        await upload(f)
+        // 同名重传 = 覆盖（服务端就是按名字落盘的），列表里也只留一条，别出现两行同名
+        dataFiles = [...dataFiles.filter((x) => x.name !== f.name), { name: f.name, size: f.size }]
+      } catch (e) {
+        S[cur].err = String((e && e.message) || e)
+        break
+      }
+    }
+    S[cur].block = ""; S[cur].blockMiss = null
+    saveSettings(); render(cur)
+  })
+}
+
+/** 删掉一份已传的数值表（服务端也真删，不然下次刷新它又回来了） */
+async function removeDataFile(name) {
+  if (busy()) return
+  const cur = mode
+  const keep = dataFiles.slice()
+  dataFiles = dataFiles.filter((f) => f.name !== name)   // 先让界面响应，失败再放回去
+  render(cur)
+  try {
+    const r = await jget("api/upload/delete?name=" + encodeURIComponent(name) + sidQ(), { method: "POST" })
+    if (!r.ok) throw new Error("HTTP " + r.status)
+    saveSettings()
+  } catch (e) {
+    dataFiles = keep
+    S[cur].err = "没能删掉 " + name + "（" + String((e && e.message) || e) + "）"
+  }
+  render(cur)
+}
+
+/**
+ * 启动：确定是哪个模块 → 取它的 reader 配置 → 按配置把界面搭出来。
+ * 模块来自三处，优先级从高到低：
+ *   ?m=<id>        工作台点卡片进来时带的（见 workspace.html 的 enter）
+ *   ?sid= 的会话   会话在创建那一刻就绑定了模块，服务端说了算
+ *   litread        兜底（老书签直接开 /reader.html）
+ */
+;(async () => {
+  const fail = (title, msg) => {
+    document.body.innerHTML = '<div class="intro" style="display:flex"><div class="introcard"><h1>' + esc(title) + "</h1>"
+      + '<div class="lead">' + esc(msg) + "</div>"
+      + '<div style="margin-top:22px"><button class="gobtn" data-act="ws">回工作台</button></div></div></div>'
+    document.body.addEventListener("click", (e) => { if (e.target.closest('[data-act="ws"]')) location.href = "./workspace.html" })
+  }
+
+  MOD = QS.get("m") || ""
+  let mods = []
+  try { mods = ((await jget("api/modules").then((r) => r.json())) || {}).modules || [] } catch (_) { return }
+
+  // 带了 sid 却没带 m：会话绑的模块以服务端为准（用户可能是从「最近」或聊天页跳过来的）
+  if (!MOD && sid) {
+    try {
+      const j = await jget("api/sessions").then((r) => r.json())
+      const hit = ((j && j.sessions) || []).find((x) => x.id === sid)
+      if (hit && hit.module) MOD = hit.module
+    } catch (_) {}
+  }
+  if (!MOD) MOD = "litread"
+
+  const meta = mods.find((x) => x.id === MOD)
+  if (!meta) return fail("打不开这个模块", "服务端没有「" + MOD + "」这个模块。可能是链接过期了，回工作台重新进一次。")
+  if (meta.ui !== "reader") { location.href = "./#module=" + encodeURIComponent(MOD); return }
+  if (!meta.allowed) return fail(meta.name, "你的账号还没有开通这个模块，请联系管理员。")
+
+  let wf = null
+  try { wf = ((await jget("api/modules/" + encodeURIComponent(MOD) + "/workflow").then((r) => r.json())) || {}).workflow } catch (_) {}
+  if (!wf || !wf.reader) return fail(meta.name, "取不到这个模块的界面配置（服务端版本可能比界面包旧）。刷新一次；还不行就回工作台，从对话里也能用这些能力。")
+
+  document.title = meta.name + " · Niuma Science"
+  installConfig(wf.reader)
+  initState()
+  mode = CFG.first
+  // 面板容器按模式清单生成（每个模式一个），HTML 里不再写死任何一个模块的面板
+  $("aiBody").innerHTML = ORDER.map((id) => '<div class="pane" id="pane-' + id + '"></div>').join("")
+  // 首屏那个大图标用「首个模式」的图标：它就是这个模块最主要在干的事
+  $("introIcon").innerHTML = MODES[CFG.first] ? MODES[CFG.first].icon : ic("dot")
+  renderIntro()
+
+  if (sid) {
+    const ok = await restore()
+    if (ok) return
+    // 这个会话里没有本模块能处理的文件 → 回首屏当新的一份。
+    // ★ 必须说一句为什么。最常见的来源是【这个模块改版前留下的会话】——那时它是表单+流程条那一套，
+    //   未必有上传件，而「最近」列表里新旧长得一模一样。静默弹回上传页的话，用户会以为自己点错了，
+    //   而且会反复再点一次。
+    sid = null
+    try { history.replaceState(null, "", location.pathname + "?m=" + encodeURIComponent(MOD)) } catch (_) {}
+    $("introErr").className = "err on info"
+    $("introErr").textContent = "刚才那个会话里没有这个模块能处理的文件——多半是改版前留下的老会话，"
+      + "那时候不需要先上传。它的对话记录还在，从「自由对话」那边照常能翻到；要开始新的一份，在上面传上来即可。"
+  }
+  $("intro").hidden = false
+})()
+
+/* ============================================================
+   专用壳的三件公共事：公告 / 更新提示 / 闲置锁
+   ------------------------------------------------------------
+   ★ 为什么这里要单独写一遍：这两个壳（reader / figure）是自包含页面，不引外部 js，
+     而聊天页那套公告面板 + 更新横幅 + 登录弹窗有几百行，整体搬过来既臃肿又要维护两份。
+     所以这里【只做察觉，不做处置】：发现有事就挂一条一行的提示、把用户交回主页去办。
+     用户在文献研读里泡一整天，至少不会对维护通知、界面更新、锁屏一无所知。
+   ★ 闲置锁与聊天页共用同一套 localStorage 键（nm_locked / nm_last_active）：
+     - 活跃时间写全局，别让"用户在别的标签干活"被本页算成闲置；
+     - 别的标签锁了 → 本页也立刻交回主页（那边有登录闸）。不跟的话这道闸换个标签就绕过去了。
+   ============================================================ */
+;(function () {
+  var LOCK_KEY = "nm_locked", ACT_KEY = "nm_last_active"
+  var LOGOUT_MS = 24 * 60 * 60 * 1000
+  var last = Date.now(), wrote = 0
+  function bump() {
+    last = Date.now()
+    if (last - wrote > 5000) { wrote = last; try { localStorage.setItem(ACT_KEY, String(last)) } catch (_) {} }
+  }
+  ;["mousemove", "mousedown", "keydown", "wheel", "touchstart", "visibilitychange"].forEach(function (e) {
+    window.addEventListener(e, bump, { passive: true })
+  })
+  function toHome(why) { try { sessionStorage.setItem("nm_shell_back", why || "") } catch (_) {} location.href = "./" }
+  window.addEventListener("storage", function (e) {
+    if (e.key === ACT_KEY) { var t = Number(e.newValue) || 0; if (t > last) last = t }
+    if (e.key === LOCK_KEY && e.newValue === "1") toHome("locked")
+  })
+  setInterval(function () {
+    var act = 0; try { act = Number(localStorage.getItem(ACT_KEY)) || 0 } catch (_) {}
+    if (act > last) last = act
+    try { if (localStorage.getItem(LOCK_KEY) === "1") return toHome("locked") } catch (_) {}
+    // 到点了就把全局锁一置、交回主页：锁屏弹窗归主页管，这里不重实现一套
+    if (Date.now() - last >= LOGOUT_MS) { try { localStorage.setItem(LOCK_KEY, "1") } catch (_) {} toHome("idle") }
+  }, 30000)
+
+  /* ---- 一行提示条：公告 / 界面包 / 技能包 / 登录态失效 ---- */
+  var bar = null
+  function showBar(text, act) {
+    if (!bar) {
+      bar = document.createElement("div")
+      bar.style.cssText = "position:fixed;left:0;right:0;top:0;z-index:9999;display:flex;gap:10px;"
+        + "align-items:center;justify-content:center;padding:7px 14px;font-size:13px;"
+        + "background:#fff8e6;border-bottom:1px solid #f0d7ae;color:#8a5a12"
+      document.body.appendChild(bar)
+    }
+    bar.textContent = ""
+    bar.appendChild(document.createTextNode(text))
+    var a = document.createElement("a")
+    a.href = "./"; a.textContent = act || "回主页处理 →"
+    a.style.cssText = "color:#3b6fd4;text-decoration:none;white-space:nowrap"
+    bar.appendChild(a)
+    var x = document.createElement("button")
+    x.type = "button"; x.textContent = "×"; x.title = "本次不再提示"
+    x.style.cssText = "border:0;background:transparent;color:inherit;cursor:pointer;font-size:15px;line-height:1"
+    x.addEventListener("click", function () { bar.remove(); bar = null })
+    bar.appendChild(x)
+  }
+  var seenNotice = 0
+  async function poll() {
+    var j = null
+    try { j = await (await fetch("api/cloud/notice", { signal: AbortSignal.timeout(8000) })).json() } catch (_) { return }
+    if (!j) return
+    // 登录态在后台被作废：主页有登录闸，交回去
+    if (j.loggedOut) return toHome("loggedOut")
+    if (j.webUpdate) return showBar("界面有新版本可用。", "回主页更新 →")
+    if (j.skillUpdate) return showBar("技能包有新版本可用。", "回主页更新 →")
+    var unread = Array.isArray(j.digest) ? j.digest.length : 0
+    if (unread && unread !== seenNotice) { seenNotice = unread; showBar("平台有新公告。", "回主页查看 →") }
+  }
+  poll(); setInterval(poll, 5 * 60 * 1000)
+  window.addEventListener("focus", poll)
+})()
+</script>
+</body>
+</html>

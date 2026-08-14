@@ -1,0 +1,8 @@
+[caddy-login]
+enabled  = true
+port     = http,https
+filter   = caddy-login
+logpath  = /var/log/caddy/access.log
+maxretry = 5
+findtime = 600
+bantime  = 3600

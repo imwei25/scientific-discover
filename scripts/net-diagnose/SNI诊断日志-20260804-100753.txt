@@ -1,0 +1,39 @@
+﻿════════ SNI 归因诊断  2026-08-04 10:07:53 ════════
+目标：47.86.27.60:443   域名：weigu.duckdns.org
+⚠ 系统代理已开启（127.0.0.1:7897）——本脚本用裸 socket、不走代理，结论仍有效，但浏览器的表现可能不同
+
+[A] 连 47.86.27.60:443，只把 ClientHello 里的域名(SNI)换掉：
+    本域名  weigu.duckdns.org                         → 握手成功  225ms
+    无关域名 www.microsoft.com                         → 服务器正常应答(TLS警报/证书不符)  119ms
+        The Local Security Authority cannot be contacted
+    变形域名 aweigu.duckdns.org（只多一个字母）                → 服务器正常应答(TLS警报/证书不符)  87ms
+        The Local Security Authority cannot be contacted
+    不带域名（SNI 用 IP，等于不发 SNI）                        → 服务器正常应答(TLS警报/证书不符)  76ms
+        The Local Security Authority cannot be contacted
+
+[B] 本域名重复 3 次（看是不是每次必掐）：
+    第 1 次 → 握手成功  80ms
+    第 2 次 → 握手成功  80ms
+    第 3 次 → 握手成功  1105ms
+
+[C] 对照组（证明本网络的 HTTPS 本身是好的）：
+    www.baidu.com:443                              → 握手成功  67ms
+
+[D] 明文 HTTP 80（Host 头带域名，看黑名单是不是按域名匹配）：
+    Host: weigu.duckdns.org                        → 被强行掐断(RST)
+    Host: www.microsoft.com                        → HTTP 308
+
+[E] 同样的 Host 打到一台无关服务器（排除是我们服务器自己的问题）：
+    对照服务器：104.20.23.154（example.com）
+    Host: weigu.duckdns.org                        → 被强行掐断(RST)
+    Host: example.com                              → 被强行掐断(RST)
+
+──────── 结论 ────────
+拦的是【域名】：拦截依据是 weigu.duckdns.org 这串字符，跟服务器 IP 无关。
+  · 明文 HTTP(80) 层按域名匹配：带本域名的 Host 被掐，别的 Host 正常 308。
+  · 注意：本网络【只】在明文层执行，TLS 还放行 —— 所以你这台机器现在可能还能正常用。
+    更严的网络（带审计的单位网）会连 SNI 一起匹配，那边就彻底打不开。
+  · 变形域名 aweigu.duckdns.org 服务器正常应答(TLS警报/证书不符)（多一个字母就放行 = 精确匹配这一个域名）
+→ 解法：换一个自有域名（DNS A 记录 + Caddyfile + 客户端接入地址），服务器不用动。
+→ 过渡期让新旧域名并存：Caddyfile 站点地址写成「旧域名, 新域名 {」，老客户端不断线。
+

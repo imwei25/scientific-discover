@@ -1,0 +1,52 @@
+schema_version: 2
+name: render-pdf-doc
+layer: A
+owner_domain: document_layout
+maturity: official
+when_to_use:
+  - Render a non-bibliography Korean/English academic markdown to publication-quality PDF
+  - Research proposals, IRB cover letters, briefing handouts, anchor docs, reference tables
+  - Auto-infer pipe-table column widths for content-proportional layout
+  - CJK-font-aware PDF on macOS (Apple SD Gothic Neo) or Linux (Noto Sans CJK KR)
+when_NOT_to_use:
+  - Verifying citations in the document (use the reference-check skill)
+  - Figures, plots, or scientific charts (use the nature-figure skill)
+  - Hand-typing CSV data into tables (forbidden — read numbers from the source CSV)
+inputs:
+  - markdown_file (non-bibliography academic doc — proposal, briefing, anchor doc, IRB cover, reference table)
+  - frontmatter (optional; mainfont, CJKmainfont, geometry, fontsize, linestretch)
+outputs:
+  - pdf_file (default: same dir, same stem, .pdf)
+  - intermediate.colwidths.md (optional, when --infer-colwidths is run as separate step)
+deterministic_scripts:
+  - scripts/render_pdf.sh
+  - scripts/infer_colwidths.py
+  - scripts/check_deps.sh
+side_effects:
+  - writes_pdf_artifacts
+  - reads_os_font_table  # for CJK font detection (Apple SD Gothic Neo / Noto Sans CJK KR)
+downstream_consumers:
+  - grant-proposal  # renders the finished proposal to PDF
+  - literature-review  # renders the finished review to PDF
+  - deep-research  # renders the research report to PDF
+forbidden_actions:
+  - citation_verification  # delegate to the reference-check skill
+  - figure_generation  # delegate to the nature-figure skill
+  - hand_typing_csv_data_into_tables  # read numbers from the source CSV, never retype
+quality_gates:
+  - check_deps.sh: hard exit if pandoc + xelatex + CJK-font dependencies are not installed
+  - infer_colwidths.py: enforce content-proportional dashes unless the equal-split (--equal) option is specified
+
+# v2.1 quality card
+purpose: "Render an academic Markdown document to a styled PDF (CJK fonts, table column widths, dependencies checked)."
+safety_boundaries:
+  - "Delegates citation verification to reference-check and figures to nature-figure; does not modify citation keys."
+  - "Does not hand-type CSV data into tables; reads numbers from the source CSV."
+known_limitations:
+  - "Output fidelity depends on installed render dependencies (checked by check_deps.sh)."
+  - "Chinese text needs --cjk-font \"Microsoft YaHei\" (Windows) / \"Noto Sans CJK SC\" (Linux) — see F6 default-font fix."
+validation_commands:
+  - "bash scripts/check_deps.sh"
+  - "bash scripts/render_pdf.sh <manuscript.md>"
+  - "bash tests/test_glyph_coverage.sh"
+evidence_surface: bundled_script
