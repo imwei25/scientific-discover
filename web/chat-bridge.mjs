@@ -27,7 +27,7 @@ const BLOCK_START = "<!-- sci-chat-bridge:start 由「聊天接入」自动注�
 const BLOCK_END = "<!-- sci-chat-bridge:end -->"
 const PLATFORMS = ["wecom", "weixin"]
 
-let CTX = null            // { root, webDir, sessionOut, getModel, log }
+let CTX = null            // { root, webDir, sessionOut, getModel, getCloudEnv, log }
 let proc = null           // cc-connect 子进程
 let restartCount = 0      // 崩溃退避计数（成功存活 60s 后清零）
 let lastExit = null       // { code, at } 最近一次异常退出
@@ -181,6 +181,11 @@ function commonEnv(s) {
     "PIP_INDEX_URL", "PIP_EXTRA_INDEX_URL", "PIP_DISABLE_PIP_VERSION_CHECK",
     "SCI_IMAGE_URL", "SCI_IMAGE_TOKEN", "SCI_OCR_URL", "SCI_OCR_TOKEN"])
     if (process.env[k]) env[k] = stripLP(process.env[k])
+  // 生图/OCR 的平台代理变量（SCI_IMAGE_URL/TOKEN、SCI_OCR_URL/TOKEN）：桌面版这四个值是
+  // server.mjs 按本机端口 + 每进程随机令牌算出来的，只注入过 opencode serve 那个子进程，
+  // 主进程 process.env 里【没有】—— 上面那条透传只在容器版（render-compose 注入）才有值。
+  // 桌面版走 init 传进来的 getCloudEnv 取实时值，并覆盖透传（登录态以它为准）。
+  Object.assign(env, CTX.getCloudEnv?.() || {})
   return env
 }
 function renderProject(s, platform) {
@@ -238,6 +243,10 @@ export function renderConfig(s) {
 
 // ---- 生命周期 ----
 export function running() { return !!(proc && proc.exitCode === null) }
+// getCloudEnv 输出的快照（起桥写 config.toml 那一刻）。env 是烘进 config 的，之后
+// 登录态再变，跑着的桥不会自己知道 —— syncCloudEnv 拿当前值与快照比对来决定要不要重启。
+let bakedCloudSig = ""
+const cloudSig = () => JSON.stringify(CTX?.getCloudEnv?.() || {})
 export async function stop() {
   if (!running()) { proc = null; return }
   const p = proc; proc = null
@@ -253,6 +262,7 @@ export function start() {
   if (!active.length) return { ok: false, err: "没有已配置且绑定会话的平台" }
   fs.mkdirSync(dir(), { recursive: true })
   fs.writeFileSync(configPath(), renderConfig(s))
+  bakedCloudSig = cloudSig()
   const out = fs.openSync(logPath(), "a")
   startingAt = Date.now()
   proc = spawn(ccBin(), ["--config", configPath(), "--force"], {
@@ -274,6 +284,17 @@ export function start() {
     }
   })
   return { ok: true }
+}
+
+// 云端登录态翻转（首次登录 / 改密完成 / 登出）后由 server.mjs 调用：变了才重启桥、
+// 让 config.toml 重写出新的生图/OCR 代理变量。【只在真的变了才动】—— 解锁（同号重登）
+// 每天都会发生，而 stop() 是 taskkill /T，会把微信端正在跑的任务连根拔掉，不能白折腾。
+export async function syncCloudEnv() {
+  if (!running() || cloudSig() === bakedCloudSig) return
+  CTX.log?.("chat-bridge: 云端登录态变化，重启桥以刷新生图/OCR 代理变量")
+  await stop()
+  const r = start()
+  if (!r.ok) CTX.log?.("chat-bridge: 重启未成功：" + r.err)
 }
 
 // ---- 微信个人号扫码（腾讯官方 ilink 机器人网关）----

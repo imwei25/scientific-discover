@@ -196,3 +196,20 @@ test("spaceFree：含空格的不同路径绝不能撞进同一个 junction（�
   assert.equal(fs.readFileSync(r2, "utf8"), "y", "r2 指向的是包装器本尊，不是别的目录")
   assert.notEqual(path.dirname(r1), path.dirname(r2), "不同目标目录不共用 junction")
 })
+
+test("renderConfig：getCloudEnv 的生图/OCR 代理变量要进 env（微信画图报缺 key 的回归）", async () => {
+  // 桌面版主进程 process.env 里没有这四个变量（server.mjs 只注入过 opencode serve 子进程），
+  // 透传兜不住 —— 必须走 init 传入的 getCloudEnv 实时取值。
+  delete process.env.SCI_IMAGE_URL; delete process.env.SCI_IMAGE_TOKEN
+  const ctx = { root, webDir, sessionOut: async (sid) => sessDirs.get(sid), getModel: () => ({ providerID: "custom", modelID: "m1" }), log: () => {} }
+  B.init({ ...ctx, getCloudEnv: () => ({ SCI_IMAGE_URL: "http://127.0.0.1:1234/cloud/img/generate", SCI_IMAGE_TOKEN: "local-t" }) })
+  const toml = B.renderConfig(wecomBound("ses_img", path.join(tmp, "out", "img")))
+  assert.match(toml, /SCI_IMAGE_URL = 'http:\/\/127\.0\.0\.1:1234\/cloud\/img\/generate'/)
+  assert.match(toml, /SCI_IMAGE_TOKEN = 'local-t'/)
+  B.init({ ...ctx, getCloudEnv: () => ({}) })
+  const toml2 = B.renderConfig(wecomBound("ses_img2", path.join(tmp, "out", "img")))
+  assert.ok(!toml2.includes("SCI_IMAGE_URL"), "未登录云端（getCloudEnv 回 {}）→ 不注入")
+  await B.syncCloudEnv()   // 桥没在跑时是空转，不该抛
+  B.init(ctx)              // 还原（不带 getCloudEnv 的旧签名也得能跑），别影响后续用例
+  assert.ok(!B.renderConfig(wecomBound("ses_img3", path.join(tmp, "out", "img"))).includes("SCI_IMAGE_URL"))
+})

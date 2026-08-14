@@ -195,6 +195,27 @@ const sameEndpoint = (a, b) => String(a || "").replace(/\/+$/, "") === String(b 
 // 云端账号形态下 opencode 要指的地址：本机自己，转发由本进程做（见 CLOUD_PROXY_PREFIX 的说明）
 const cloudProxyBase = () => `http://127.0.0.1:${PORT}${CLOUD_PROXY_PREFIX}v1`
 const cloudLoggedIn = () => !!Cloud.loadState()
+// 云端账号形态下给技能用的代理变量（生图 mechanism-figure / 图片识字 ocr）：都指向本机这一跳，
+// 由 cloudForward 贴上 access key 转给云端 —— 上游 key 只在服务器上，客户端一个字节都拿不到
+// （与 LLM key 同一条原则；张数/次数限额与审计也都在服务端做）。
+// TOKEN 必须与 URL 一起给：/cloud/* 那道闸【要求带本进程本次启动生成的转发令牌】
+// （见 CLOUD_PROXY_PREFIX 的两道闸），少给就是 401「本机转发令牌不正确」。不能为了省事把
+// /cloud/img 从闸里放行 —— 那会让同机任何程序都能白嫖云端生图额度。令牌本就随 provider
+// 配置交给了 opencode（apiKey: local-…），给技能用是同一层信任。
+// 【两条起 opencode 的链路都要用同一份】opencode serve（界面会话）与 chat-bridge（微信/企微）。
+// 后者经 cc-connect → oc-wrap 另起 opencode，拿不到 serve 子进程的 env —— 此前 chat-bridge
+// 只从 process.env 透传这四个变量（那是容器版 render-compose 注入的路径），桌面版主进程
+// 环境里根本没有它们，于是微信里一画图就报「未配置通义万相 API key」。现在由 init 时传入的
+// getCloudEnv 取本函数的实时值。
+// 没登录云端（自设 API / 容器形态）回 {}，技能回退读本机 QWEN_API_KEY，老用法不受影响。
+function cloudSkillEnv() {
+  return cloudLoggedIn() ? {
+    SCI_IMAGE_URL: `http://127.0.0.1:${PORT}${CLOUD_PROXY_PREFIX}img/generate`,
+    SCI_IMAGE_TOKEN: CLOUD_LOCAL_TOKEN,
+    SCI_OCR_URL: `http://127.0.0.1:${PORT}${CLOUD_PROXY_PREFIX}ocr/parse`,
+    SCI_OCR_TOKEN: CLOUD_LOCAL_TOKEN,
+  } : {}
+}
 // 平台公告的本机短缓存（见 /api/cloud/notice）。两种失效方式，别混用：
 //   · expire：只把它标成过期，【留着上一份数据】。用户手点「刷新」走这条 —— 万一这次
 //     正好连不上云端，还能继续显示上一份，而不是把维护通知凭空抹掉。
@@ -4801,6 +4822,9 @@ export const server = http.createServer(async (req, res) => {
       // 重配路由：登录/改密后走云端账号；登出后回落静态网关 key，都没有就清掉 provider
       if (platformAvailable()) useGatewayRoute()
       else { try { fs.unlinkSync(MODEL_CFG_PATH) } catch {}; removeOcProvider(); MODEL = { providerID: PID, modelID: MID } }
+      // 聊天接入桥把生图/OCR 代理变量烘在 cc-connect 的 config.toml 里，登录态翻转后要
+      // 重写才生效（没翻转它自己会判空转，解锁重登不折腾桥）。详见 Bridge.syncCloudEnv。
+      try { await Bridge.syncCloudEnv() } catch (e) { console.warn("[chat-bridge] 登录态变化后同步失败：" + (e?.message || e)) }
       // 写出来的 provider 与 opencode 正在跑的那份一致 → 重启没有任何意义，只会拔掉在跑的轮。
       // 这正是解锁（同账号重登）的常态。ocLiveProvider 为 null（没接管 opencode / 还没成功重启过）
       // 时两边不会相等，行为与改动前一致。
@@ -5417,10 +5441,6 @@ function spawnOc() {
     // 绕路（"我把详细信息 dump 到 UTF-8 文件再读"、"写个 wrapper 直接调它的 main"），
     // 一轮白烧 2–4 次 bash 调用，日志里的"乱码"字样还会让用户以为出错了。
     // 桌面版就是 Windows，这两个变量一劳永逸。Linux 上本来就是 UTF-8，设了无副作用。
-    // SCI_IMAGE_URL：生图技能（mechanism-figure）该往哪儿打。指向本机这一跳，由 cloudForward
-    // 贴上 access key 转给云端 /img —— 生图 key 只在服务器上，客户端一个字节都拿不到
-    // （与 LLM 同一条原则）。没走云端账号（自设 API / 容器形态）时不设这个变量，
-    // 技能会回退到读本机 QWEN_API_KEY，老用法不受影响。
     env: {
       ...process.env, PYTHONUTF8: "1", PYTHONIOENCODING: "utf-8",
       // 见上面那段长注释：「工作目录选到应用之外」时 opencode 会换一个 project，本应用的
@@ -5429,20 +5449,8 @@ function spawnOc() {
       // 不污染用户自己的 opencode，卸载即消失。
       OPENCODE_CONFIG: OC_CONFIG_PATH,
       XDG_CONFIG_HOME: OC_GLOBAL_CFG,
-      // SCI_IMAGE_TOKEN 必须一起给：/cloud/* 那道闸【要求带本进程本次启动生成的转发令牌】
-      // （见下方 CLOUD_PROXY_PREFIX 的两道闸），少给这一个就是 401「本机转发令牌不正确」。
-      // 不能为了省事把 /cloud/img 从闸里放行 —— 那会让同机任何程序都能白嫖云端生图额度。
-      // 令牌本就随 provider 配置交给了 opencode（apiKey: local-…），给技能用是同一层信任。
-      // SCI_OCR_URL 同理：ocr 技能（图片识字）也是一把【全体用户共用】的上游 key，
-      // 桌面版此前没有任何一处给它赋值 —— 技能一跑就报「缺 OCR_SPACE_API_KEY」，
-      // 而容器版靠 render-compose 注入、看不出问题。走代理后 key 只留在服务器，
-      // 每人每天的次数与全平台的池子都在服务端算（见 server/lib/ocrspace.mjs）。
-      ...(cloudLoggedIn() ? {
-        SCI_IMAGE_URL: `http://127.0.0.1:${PORT}${CLOUD_PROXY_PREFIX}img/generate`,
-        SCI_IMAGE_TOKEN: CLOUD_LOCAL_TOKEN,
-        SCI_OCR_URL: `http://127.0.0.1:${PORT}${CLOUD_PROXY_PREFIX}ocr/parse`,
-        SCI_OCR_TOKEN: CLOUD_LOCAL_TOKEN,
-      } : {}),
+      // 生图/OCR 的平台代理变量（SCI_IMAGE_URL/TOKEN、SCI_OCR_URL/TOKEN），来龙去脉见 cloudSkillEnv。
+      ...cloudSkillEnv(),
     },
     // 【Windows 必须给】detached + shell 会让 cmd.exe 另开一个控制台窗口，
     // opencode 的启动横幅就直接糊在用户脸上（桌面版尤其突兀：主窗口旁边跳出个黑框）。
@@ -5522,7 +5530,7 @@ server.listen(PORT, "0.0.0.0", () => {
   // 聊天接入桥自启（上次开着就拉起）。无头运行器自起的网关跳过：cc-connect 的实例锁按配置文件算，
   // 第二个实例带 --force 会把用户正在用的那条桥杀掉。SCI_CHAT_BRIDGE=0 是测试总开关。
   if (process.env.SCI_HEADLESS !== "1" && process.env.SCI_CHAT_BRIDGE !== "0")
-    Bridge.init({ root: ROOT, webDir: __dirname, sessionOut, getModel: () => MODEL, log: (m) => console.log("[chat-bridge] " + m) })
+    Bridge.init({ root: ROOT, webDir: __dirname, sessionOut, getModel: () => MODEL, getCloudEnv: cloudSkillEnv, log: (m) => console.log("[chat-bridge] " + m) })
 })
 
 // ---- 优雅退出 ----
