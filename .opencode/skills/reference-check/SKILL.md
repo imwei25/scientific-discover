@@ -13,23 +13,23 @@ description: 文献真实性核查 / 查假引用。把稿件或参考文献列�
 **AI 写作最大的坑就是编引用**。本技能用脚本把每条引用对到真实数据库，标出可疑的。参考 CiteMe / Scholar Sidekick / Citely 的核查思路。
 
 ## Python 环境
-> 没有项目根 `.venv`？先运行 `env-setup` 技能建好并装依赖。
+> **报「找不到 `.venv` / 缺 Python」先查命令里的引号**：安装目录含空格（`.../Niuma Science/bundle/app`），路径不加引号会被 bash 从空格处切断、报 `No such file or directory`——**那不是缺环境**。Python 环境随安装包/镜像装好，**不要重建 `.venv`、也不要重装依赖**（白烧十几分钟还可能弄坏包版本）；确认解释器真的不存在时，才在仓库根跑 `install.ps1`（Windows）/ `install.sh`。
 ```
-${REPO_ROOT:-/app}/.venv/bin/python   # Windows（正斜杠写法，bash 与 PowerShell 都能用）
-${REPO_ROOT:-/app}/.venv/bin/python
+"${REPO_ROOT:-/app}/.venv/bin/python"   # Windows（正斜杠写法，bash 与 PowerShell 都能用）
+"${REPO_ROOT:-/app}/.venv/bin/python"
 ```
 已装 requests / bibtexparser / rispy。
 
 ## 用法
 ```
 # 核查参考文献文件（.bib / .ris / 每行一条的 .txt 都行）
-${REPO_ROOT:-/app}/.venv/bin/python ${REPO_ROOT:-/app}/.opencode/skills/reference-check/verify_refs.py --input refs.bib
+"${REPO_ROOT:-/app}/.venv/bin/python" "${REPO_ROOT:-/app}/.opencode/skills/reference-check/verify_refs.py" --input refs.bib
 
 # 或直接给几个 DOI / PMID / 标题
-${REPO_ROOT:-/app}/.venv/bin/python ${REPO_ROOT:-/app}/.opencode/skills/reference-check/verify_refs.py "10.1038/xxx" "PMID:12345678" "某篇论文标题"
+"${REPO_ROOT:-/app}/.venv/bin/python" "${REPO_ROOT:-/app}/.opencode/skills/reference-check/verify_refs.py" "10.1038/xxx" "PMID:12345678" "某篇论文标题"
 
 # 手上有稿件正文时【务必】一并给：多出「正文引用位置」一列，并抓出正文从没引过的文献
-${REPO_ROOT:-/app}/.venv/bin/python ${REPO_ROOT:-/app}/.opencode/skills/reference-check/verify_refs.py \
+"${REPO_ROOT:-/app}/.venv/bin/python" "${REPO_ROOT:-/app}/.opencode/skills/reference-check/verify_refs.py" \
     --input refs.txt --manuscript manuscript.md
 ```
 

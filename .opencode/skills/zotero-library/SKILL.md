@@ -6,7 +6,7 @@ tools: Read, Write, Edit, Bash, Grep, Glob
 model: inherit
 ---
 
-> **本仓库运行环境（先读）**：Python 用 `.venv/Scripts/python.exe`（Windows）/ `.venv/bin/python`（Linux/macOS）（项目根 `.venv`；缺则先跑 `env-setup`）。本技能脚本在 `.opencode/skills/zotero-library/references/` 下，运行时用全路径或先 `cd`。产出直接写**当前工作目录**、用裸文件名（网关已把 cwd 指到本会话的产物目录）；别拼 `outputs/` 前缀，也别写仓库根固定名。依赖 `fitz`(pymupdf)/`scikit-learn`，均已装。
+> **本仓库运行环境（先读）**：Python 用 `.venv/Scripts/python.exe`（Windows）/ `.venv/bin/python`（Linux/macOS）（项目根 `.venv`，随包装好；报错先查路径引号，别重建）。本技能脚本在 `.opencode/skills/zotero-library/references/` 下，运行时用全路径或先 `cd`。产出直接写**当前工作目录**、用裸文件名（网关已把 cwd 指到本会话的产物目录）；别拼 `outputs/` 前缀，也别写仓库根固定名。依赖 `fitz`(pymupdf)/`scikit-learn`，均已装。
 
 > **决策规约（照 AGENTS.md §六）**：任何要用户拍板的抉择——用哪个分类、按哪几篇、要不要补检索等——一律**在正文里列 2–4 个编号候选**（推荐项放第 1 个并写明“推荐 X，因为……”），让用户**回一个数字即推进**；别用开放式提问，也别弹交互选项卡。
 

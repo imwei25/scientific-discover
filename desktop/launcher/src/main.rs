@@ -119,6 +119,51 @@ fn fwd(p: &Path) -> String {
     p.to_string_lossy().replace('\\', "/")
 }
 
+// 【安装目录带空格 → 技能全线找不到 .venv】默认装到 %LOCALAPPDATA%\Niuma Science\bundle\app，
+// 于是 REPO_ROOT 里带一个空格。而 33 个 SKILL.md 里那 120 处命令写的都是**不加引号**的
+//   ${REPO_ROOT:-/app}/.venv/bin/python xxx.py
+// bash 展开后按空格切词 → 「C:\Users\x\AppData\Local/Niuma: No such file or directory」。
+// agent 看到的现象是"没有 .venv"，于是转头去跑 env-setup、重装 requirements——真机上就这么烧掉的。
+// ppt-master 那 60 余处 ${SKILL_DIR} 是 vendored 上游正文，我们不改它，更只能从根上给一个无空格的路径。
+//
+// 解法：取 8.3 短名（GetShortPathNameW）。它不落盘、不需要管理员、对整条路径生效
+// （C:\Users\tj\AppData\Local\NIUMAS~1\bundle\app）。8.3 生成被策略关掉的卷上会原样返回长名，
+// 那就退回原路径——此时靠 SKILL.md 里已经补上的引号兜底（两道防线各自独立）。
+#[cfg(windows)]
+fn space_free(p: &Path) -> PathBuf {
+    use std::os::windows::ffi::{OsStrExt, OsStringExt};
+    if !p.to_string_lossy().contains(' ') {
+        return p.to_path_buf();
+    }
+    let wide: Vec<u16> = p.as_os_str().encode_wide().chain(std::iter::once(0)).collect();
+    unsafe {
+        let n = windows_sys::Win32::Storage::FileSystem::GetShortPathNameW(
+            wide.as_ptr(),
+            std::ptr::null_mut(),
+            0,
+        );
+        if n == 0 {
+            return p.to_path_buf();
+        }
+        let mut buf = vec![0u16; n as usize];
+        let n2 = windows_sys::Win32::Storage::FileSystem::GetShortPathNameW(
+            wide.as_ptr(),
+            buf.as_mut_ptr(),
+            n,
+        );
+        if n2 == 0 || n2 >= n {
+            return p.to_path_buf();
+        }
+        let short = PathBuf::from(std::ffi::OsString::from_wide(&buf[..n2 as usize]));
+        // 短名里仍有空格（8.3 被禁用）就没意义了，用回长名
+        if short.to_string_lossy().contains(' ') { p.to_path_buf() } else { short }
+    }
+}
+#[cfg(not(windows))]
+fn space_free(p: &Path) -> PathBuf {
+    p.to_path_buf()
+}
+
 // 下载落点：优先系统「下载」已知文件夹（用户可能把它挪到别的盘，硬拼 %USERPROFILE%\Downloads 会写错地方），
 // 取不到再退回 <家目录>\Downloads。
 fn downloads_dir() -> PathBuf {
@@ -321,6 +366,9 @@ fn main() {
             let bundle = app.path().resource_dir()?.join("bundle");
             let appdir = bundle.join("app");
             let rt = bundle.join("runtime");
+            // 交给技能/agent 的路径一律用无空格等价物（8.3 短名）：默认安装目录含空格，
+            // 而技能正文里的 ${REPO_ROOT}/${SKILL_DIR} 是不加引号展开的。见 space_free 头注。
+            let shortdir = space_free(&appdir);
 
             // PATH 前插：node/opencode/git(bash)/pandoc/python 都要能被裸名字找到
             // （server.mjs spawn("opencode")、技能里裸 python3、render_docx.sh 找 pandoc 全靠这个）
@@ -357,15 +405,16 @@ fn main() {
                 .env("PORT", PORT.to_string())
                 .env("OC_URL", format!("http://127.0.0.1:{OC_PORT}"))
                 .env("MANAGE_OC", "1")
-                .env("REPO_ROOT", fwd(&appdir))
+                // 【务必是 space_free 的】技能正文里 ${REPO_ROOT} 不加引号，带空格就整条崩，见 space_free 头注
+                .env("REPO_ROOT", fwd(&shortdir))
                 // ppt-master 是 vendored 上游技能，它的 60 余处命令全用 ${SKILL_DIR} 拼路径，
                 // 全仓没有别处给它赋值（容器版靠 Dockerfile 的 ENV 补）。桌面版漏了它就展开成空串，
                 // 用户说"做个 PPT"第一步就 ENOENT。正斜杠，理由同 REPO_ROOT。
                 .env(
                     "SKILL_DIR",
-                    fwd(&appdir.join(".opencode").join("skills").join("ppt-master")),
+                    fwd(&shortdir.join(".opencode").join("skills").join("ppt-master")),
                 )
-                .env("SCI_PYTHON", appdir.join(".venv").join("Scripts").join("python.exe"))
+                .env("SCI_PYTHON", shortdir.join(".venv").join("Scripts").join("python.exe"))
                 // pip 默认走 pypi.org，国内实测冷装 icecream（4 个包、1.4MB）要 25.6s，清华源 7.3s。
                 // 25s 这个量级正好卡在 bash 工具超时（默认 60s）与"输出分段太多"的射程里，用户看到的
                 // 就是"让 agent 装个包，每次都失败"。索性在这儿把镜像钉死：网关 spawn opencode 时不传

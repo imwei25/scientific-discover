@@ -287,6 +287,22 @@ Copy-Tree "$Root\web" "$App\web" `
 Copy-Tree "$Root\.opencode" "$App\.opencode" -ExcludeDirs @("__pycache__")
 Copy-Item "$Root\AGENTS.md" $App -Force
 
+# ---- env-setup 不进包 ----
+# 打包版的 .venv 是本脚本第 5 节亲手装好并自检过的，不可能缺。留着这个技能只有坏处：
+# 安装目录 %LOCALAPPDATA%\Niuma Science\... 带空格，命令漏了引号就报
+# 「.../Local/Niuma: No such file or directory」，agent 会把它读成"没有 .venv"→ 调 env-setup
+# → 重建虚拟环境、重装 requirements，真机上白烧十几分钟还可能把包版本弄坏。
+# 根因已在三处修掉（launcher 的 space_free / 技能正文加引号 / 网关前言），这里再断掉最后一条退路。
+# 仓库里保留该技能：自建部署、换机器、开发机初始化仍要用它（走 install.ps1 也行）。
+# AGENTS.md 与各技能正文里已经没有任何指向 env-setup 的指引（改成"报错先查引号 + install.ps1"），
+# 所以这里只需删目录，不用再后处理文案。
+$envSetup = "$App\.opencode\skills\env-setup"
+if (Test-Path $envSetup) { Remove-Item $envSetup -Recurse -Force }
+if (Select-String -Path "$App\AGENTS.md" -Pattern 'env-setup' -Quiet) {
+  throw "AGENTS.md 还提到 env-setup——包里会留下一条指向不存在技能的指引，先改仓库根的 AGENTS.md"
+}
+Step "env-setup 已剔除（打包版环境随包装好，见上方注释）"
+
 # ---- 技能金库：把技能封成加密的 skills.pak，删掉明文技能，安装器里不再含可读技能 ----
 # 【为什么在这里】web\ 与 .opencode\ 都已拷进 staging，此刻 $App\web\skill-vault.mjs（客户端运行时
 #   用的同一份加解密逻辑与密钥）与 $App\.opencode\skills\ 都在位，直接用包内 node 就地封存。

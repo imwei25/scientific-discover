@@ -4,8 +4,8 @@ description: 机制示意图/通路图/图形摘要的 AI 生图工作流（文�
 ---
 
 > **本仓库运行环境（先读）**
-> - Python 用项目根 `.venv`：Linux `${REPO_ROOT:-/app}/.venv/bin/python`，Windows `.venv\Scripts\python.exe`。没有先跑 `env-setup` 技能。依赖只用已装的 `requests`（+ 可选 `Pillow`），**无新增依赖**。
-> - 本技能脚本在 `${REPO_ROOT:-/app}/.opencode/skills/mechanism-figure/` 下。
+> - Python 用项目根 `.venv`：Linux `"${REPO_ROOT:-/app}/.venv/bin/python"`，Windows `.venv\Scripts\python.exe`。环境随包装好；报错先查路径引号，别重建。依赖只用已装的 `requests`（+ 可选 `Pillow`），**无新增依赖**。
+> - 本技能脚本在 `"${REPO_ROOT:-/app}/.opencode/skills/mechanism-figure/"` 下。
 > - 产物**直接写当前工作目录、用裸文件名**（当前目录就是本会话的产物目录）。图放一层子目录 `figures/` 也会被界面"产出"侧栏列出；**别拼任何 `outputs/` 前缀**——脚本会响亮报错。
 > - **生图通道**：**登录了平台账号就什么都不用配**——网关把生图请求转给平台的 `/img`，生图 key 只在服务器上，客户端一个字节都拿不到（与 LLM key 同一条原则）。平台按档位限**每天几张**，超了会明确说 `今天的生图张数已用完（N/M 张）`，那不是报错、也不用重试，明天 0 点(UTC) 重置。
 >   **没走平台时**（自设 API / 本机自用）才要本机 key：`QWEN_API_KEY`（或 `DASHSCOPE_API_KEY`，**与 `ppt-master` 同名**，配过一次两边都能用）。三个来源，优先级从高到低：**① 进程环境变量** → **② `~/.sci-agent/image.env`** → **③ `~/.ppt-master/.env`**。全在**仓库之外**——key 文件若放在仓库里，脚本会直接中止（key 一进 git 历史就只能换 key）。
@@ -54,7 +54,7 @@ description: 机制示意图/通路图/图形摘要的 AI 生图工作流（文�
 拷模板改内容：
 
 ```bash
-cp ${REPO_ROOT:-/app}/.opencode/skills/mechanism-figure/templates/spec.example.json fig1.spec.json
+cp "${REPO_ROOT:-/app}/.opencode/skills/mechanism-figure/templates/spec.example.json" fig1.spec.json
 ```
 
 spec 的字段（完整例子见模板，一份可直接跑通的真实案例见 [references/worked-example.md](references/worked-example.md)）：
@@ -77,8 +77,8 @@ spec 的字段（完整例子见模板，一份可直接跑通的真实案例见
 ### 第 ② 步：编译 + 过闸（离线，不花钱）
 
 ```bash
-${REPO_ROOT:-/app}/.venv/bin/python \
-  ${REPO_ROOT:-/app}/.opencode/skills/mechanism-figure/scripts/build_prompt.py \
+"${REPO_ROOT:-/app}/.venv/bin/python" \
+  "${REPO_ROOT:-/app}/.opencode/skills/mechanism-figure/scripts/build_prompt.py" \
   --spec fig1.spec.json --source manuscript.md --json fig1.built.json
 ```
 
@@ -92,13 +92,13 @@ ${REPO_ROOT:-/app}/.venv/bin/python \
 
 ```bash
 # 先空跑看要发什么（不需要 key、不花钱）
-${REPO_ROOT:-/app}/.venv/bin/python \
-  ${REPO_ROOT:-/app}/.opencode/skills/mechanism-figure/scripts/render_figure.py \
+"${REPO_ROOT:-/app}/.venv/bin/python" \
+  "${REPO_ROOT:-/app}/.opencode/skills/mechanism-figure/scripts/render_figure.py" \
   --built fig1.built.json --dry-run
 
 # 真出图；构图不稳时出 2–3 张挑一张
-${REPO_ROOT:-/app}/.venv/bin/python \
-  ${REPO_ROOT:-/app}/.opencode/skills/mechanism-figure/scripts/render_figure.py \
+"${REPO_ROOT:-/app}/.venv/bin/python" \
+  "${REPO_ROOT:-/app}/.opencode/skills/mechanism-figure/scripts/render_figure.py" \
   --built fig1.built.json --name fig1 --outdir figures --n 2
 ```
 

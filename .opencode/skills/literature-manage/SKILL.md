@@ -6,7 +6,7 @@ tools: Read, Write, Edit, Bash, Grep, Glob
 model: inherit
 ---
 
-> **本仓库运行环境（先读）**：Python 用项目根 `.venv` 的解释器（没建过先跑 `env-setup` 技能）；本技能脚本在
+> **本仓库运行环境（先读）**：Python 用项目根 `.venv` 的解释器（随包装好；报错先查路径引号，别重建）；本技能脚本在
 > `.opencode/skills/literature-manage/scripts/` 下，用全路径调用。**产物一律写当前工作目录、用裸文件名**
 > （本模块的当前工作目录就是用户选的那个文献文件夹），别拼任何 `outputs/` 前缀。
 

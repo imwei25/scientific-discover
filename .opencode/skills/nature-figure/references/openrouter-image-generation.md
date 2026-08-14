@@ -48,7 +48,7 @@ Use the bundled script for reproducible calls:
 
 ```bash
 export OPENROUTER_API_KEY="sk-or-..."
-${REPO_ROOT:-/app}/.venv/bin/python ${REPO_ROOT:-/app}/.opencode/skills/nature-figure/scripts/generate_openrouter_schematic.py \
+"${REPO_ROOT:-/app}/.venv/bin/python" "${REPO_ROOT:-/app}/.opencode/skills/nature-figure/scripts/generate_openrouter_schematic.py" \
   --title "Paper title" \
   --abstract-file abstract.txt \
   --panel-map "left: problem; center: proposed mechanism; right: validated outcome" \
@@ -62,7 +62,7 @@ ${REPO_ROOT:-/app}/.venv/bin/python ${REPO_ROOT:-/app}/.opencode/skills/nature-f
 Dry-run without network or API key:
 
 ```bash
-${REPO_ROOT:-/app}/.venv/bin/python ${REPO_ROOT:-/app}/.opencode/skills/nature-figure/scripts/generate_openrouter_schematic.py \
+"${REPO_ROOT:-/app}/.venv/bin/python" "${REPO_ROOT:-/app}/.opencode/skills/nature-figure/scripts/generate_openrouter_schematic.py" \
   --title "Self-healing cementitious sensor" \
   --abstract "A composite sensor couples chloride ingress with recoverable piezoresistive response." \
   --panel-map "left: marine exposure; center: ion transport and microcrack healing; right: signal recovery curve" \
@@ -72,7 +72,7 @@ ${REPO_ROOT:-/app}/.venv/bin/python ${REPO_ROOT:-/app}/.opencode/skills/nature-f
 Use a fully custom prompt:
 
 ```bash
-${REPO_ROOT:-/app}/.venv/bin/python ${REPO_ROOT:-/app}/.opencode/skills/nature-figure/scripts/generate_openrouter_schematic.py \
+"${REPO_ROOT:-/app}/.venv/bin/python" "${REPO_ROOT:-/app}/.opencode/skills/nature-figure/scripts/generate_openrouter_schematic.py" \
   --prompt-file schematic_prompt.md \
   --raw \
   --outdir schematic
@@ -81,7 +81,7 @@ ${REPO_ROOT:-/app}/.venv/bin/python ${REPO_ROOT:-/app}/.opencode/skills/nature-f
 Use one or more reference images:
 
 ```bash
-${REPO_ROOT:-/app}/.venv/bin/python ${REPO_ROOT:-/app}/.opencode/skills/nature-figure/scripts/generate_openrouter_schematic.py \
+"${REPO_ROOT:-/app}/.venv/bin/python" "${REPO_ROOT:-/app}/.opencode/skills/nature-figure/scripts/generate_openrouter_schematic.py" \
   --prompt-file schematic_prompt.md \
   --reference-image draft_layout.png \
   --reference-image https://example.com/style-reference.png

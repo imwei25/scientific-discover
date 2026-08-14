@@ -13,9 +13,9 @@ description: 临床数据脱敏/去标识化。含患者信息的数据（CSV/�
 顶层主控（AGENTS.md 常驻指令）负责判意图、定范围、派发；派到本技能就**直接做，别回绕**。产物直接写**当前工作目录**——网关已把本会话的 cwd 指到该会话的产物目录，用裸文件名即可（如 `table1.csv`），别再拼 `outputs/…` 前缀，也别写到仓库根。
 
 ## Python 环境
-> 没有项目根 `.venv`？先运行 `env-setup` 技能。
+> **报「找不到 `.venv` / 缺 Python」先查命令里的引号**：安装目录含空格（`.../Niuma Science/bundle/app`），路径不加引号会被 bash 从空格处切断、报 `No such file or directory`——**那不是缺环境**。Python 环境随安装包/镜像装好，**不要重建 `.venv`、也不要重装依赖**（白烧十几分钟还可能弄坏包版本）；确认解释器真的不存在时，才在仓库根跑 `install.ps1`（Windows）/ `install.sh`。
 ```
-${REPO_ROOT:-/app}/.venv/bin/python
+"${REPO_ROOT:-/app}/.venv/bin/python"
 ```
 
 ## 覆盖的可识别信息
@@ -29,21 +29,21 @@ ${REPO_ROOT:-/app}/.venv/bin/python
 IP 与设备序列号、生物特征描述、面部照片、港澳台通行证、无称谓的孤立人名、罕见地址写法——务必人工核对。
 
 ## 用法
-脚本在 `/app/.opencode/skills/deidentify/scripts/`（容器内的实际路径；命令行里写 `${REPO_ROOT:-/app}/...` 由 shell 展开，但**散文里的路径要能直接拿去 Read/ls**，所以这里写实路径）：
+脚本在 `/app/.opencode/skills/deidentify/scripts/`（容器内的实际路径；命令行里写 `"${REPO_ROOT:-/app}/..."` 由 shell 展开，但**散文里的路径要能直接拿去 Read/ls**，所以这里写实路径）：
 ```bash
 # 先扫描看看有哪些 PII、不改数据
-${REPO_ROOT:-/app}/.venv/bin/python ${REPO_ROOT:-/app}/.opencode/skills/deidentify/scripts/deidentify.py --input uploads/patients.csv --scan-only
+"${REPO_ROOT:-/app}/.venv/bin/python" "${REPO_ROOT:-/app}/.opencode/skills/deidentify/scripts/deidentify.py" --input uploads/patients.csv --scan-only
 
 # CSV 脱敏：自动扫每个单元格；姓名列、标识号列显式指定按列假名化
-${REPO_ROOT:-/app}/.venv/bin/python ${REPO_ROOT:-/app}/.opencode/skills/deidentify/scripts/deidentify.py \
+"${REPO_ROOT:-/app}/.venv/bin/python" "${REPO_ROOT:-/app}/.opencode/skills/deidentify/scripts/deidentify.py" \
   --input uploads/patients.csv --out patients_deid.csv \
   --name-cols 姓名,患者姓名 --id-cols 住院号,身份证号
 
 # 病历/自由文本
-${REPO_ROOT:-/app}/.venv/bin/python ${REPO_ROOT:-/app}/.opencode/skills/deidentify/scripts/deidentify.py --input uploads/notes.txt --out notes_deid.txt
+"${REPO_ROOT:-/app}/.venv/bin/python" "${REPO_ROOT:-/app}/.opencode/skills/deidentify/scripts/deidentify.py" --input uploads/notes.txt --out notes_deid.txt
 
 # 同时脱敏具体日期（默认不脱，因日期常是分析变量）
-${REPO_ROOT:-/app}/.venv/bin/python ${REPO_ROOT:-/app}/.opencode/skills/deidentify/scripts/deidentify.py --input uploads/notes.txt --out notes_deid.txt --dates
+"${REPO_ROOT:-/app}/.venv/bin/python" "${REPO_ROOT:-/app}/.opencode/skills/deidentify/scripts/deidentify.py" --input uploads/notes.txt --out notes_deid.txt --dates
 ```
 > Excel(.xlsx)：先用 `data-analysis` 把工作表另存成 CSV 再脱敏，或在脚本里用 pandas 读入后按列处理。
 

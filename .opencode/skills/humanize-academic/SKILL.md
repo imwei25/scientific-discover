@@ -32,8 +32,8 @@ EndNote / Zotero 引文域变成死文本（用户再也没法更新文献表）
 批注 / 他人修订痕迹一并丢失。A 路不生成新文件，这些问题**从根上不存在**。
 
 ```bash
-V=${REPO_ROOT:-/app}/.venv/bin/python
-S=${REPO_ROOT:-/app}/.opencode/skills/humanize-academic/scripts
+V="${REPO_ROOT:-/app}/.venv/bin/python"
+S="${REPO_ROOT:-/app}/.opencode/skills/humanize-academic/scripts"
 
 # ① 抽出带编号的段落清单（正文 + 页眉页脚 + 脚注尾注一并覆盖）
 $V $S/docx_extract.py manuscript.docx
@@ -81,8 +81,8 @@ $V $S/docx_verify.py manuscript.docx manuscript_humanized.docx --auto-terms
 统一走这个脚本（它会抽媒体、把表转成 pipe 表、并**报出图与表各多少**）：
 
 ```bash
-${REPO_ROOT:-/app}/.venv/bin/python \
-  ${REPO_ROOT:-/app}/.opencode/skills/humanize-academic/scripts/ingest_doc.py manuscript.pdf
+"${REPO_ROOT:-/app}/.venv/bin/python" \
+  "${REPO_ROOT:-/app}/.opencode/skills/humanize-academic/scripts/ingest_doc.py" manuscript.pdf
 # → manuscript_src.md + manuscript_files/fig_001.png ...
 # → [ingest] 抽出 图 N 张 / 表 M 张
 ```
@@ -197,8 +197,8 @@ $V $S/docx_verify.py manuscript.docx manuscript_translated.docx \
 
 **A 路（docx 就地改写）跑 `docx_verify.py`**（四道闸见第零步）：
 ```bash
-${REPO_ROOT:-/app}/.venv/bin/python \
-  ${REPO_ROOT:-/app}/.opencode/skills/humanize-academic/scripts/docx_verify.py \
+"${REPO_ROOT:-/app}/.venv/bin/python" \
+  "${REPO_ROOT:-/app}/.opencode/skills/humanize-academic/scripts/docx_verify.py" \
   manuscript.docx manuscript_humanized.docx --auto-terms
 ```
 它比 B 路的校验强在**闸 C**：修订模式下"拒绝全部修订"必须逐字还原成原文——
@@ -206,8 +206,8 @@ ${REPO_ROOT:-/app}/.venv/bin/python \
 
 **B 路（markdown）跑 `check_invariants.py`**，确认数字 / 引用 / **图 / 表** / 术语没被动过：
 ```
-# Windows: ${REPO_ROOT:-/app}/.venv/bin/python ; Linux/macOS: ${REPO_ROOT:-/app}/.venv/bin/python
-${REPO_ROOT:-/app}/.venv/bin/python ${REPO_ROOT:-/app}/.opencode/skills/humanize-academic/scripts/check_invariants.py \
+# Windows: "${REPO_ROOT:-/app}/.venv/bin/python" ; Linux/macOS: "${REPO_ROOT:-/app}/.venv/bin/python"
+"${REPO_ROOT:-/app}/.venv/bin/python" "${REPO_ROOT:-/app}/.opencode/skills/humanize-academic/scripts/check_invariants.py" \
   --before manuscript_src.md --after manuscript_humanized.md \
   --terms "HFpEF,SGLT2i,eGFR"     # 可选：逐个核对关键术语计数
 ```
@@ -234,7 +234,7 @@ ${REPO_ROOT:-/app}/.venv/bin/python ${REPO_ROOT:-/app}/.opencode/skills/humanize
    **A 路不要做这一步**——产物本身就是保留原格式的 Word，再排一次等于把原格式换掉：
    - 用户**没指定期刊** → 直接用默认送审格式出 Word（要 PDF 同理换 `render-pdf-doc`）：
      ```bash
-     bash ${REPO_ROOT:-/app}/.opencode/skills/render-docx/scripts/render_docx.sh -i humanized.md --journal generic-submission
+     bash "${REPO_ROOT:-/app}/.opencode/skills/render-docx/scripts/render_docx.sh" -i humanized.md --journal generic-submission
      ```
      该预设 = Times New Roman 12pt、双倍行距、连续行号、页码、首行缩进 4 字符、图题表题 10.5pt 居中（序号加粗）、表内 10pt、三线表、标题 16/14/12pt 加粗、作者与机构 10.5pt 居中、1in 边距。
    - 用户**指定了期刊** → 先看 `--journal list` 有无预设，没有就 WebFetch 该刊 Instructions for Authors 按其要求给参数；查不到如实说明并退回默认预设，别编该刊要求。

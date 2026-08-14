@@ -14,10 +14,10 @@ description: 领域调研 / 背景摸底。快速摸清一个科研或临床方�
 **cwd 有 `requirement_card.md`（grant 流水线定标模式的出件）→ 扫描范围限定在该渠道的受理方向/指南方向内**；出界但有价值的方向可以提，但显著标注"该渠道不受理"，别让它混进主推荐。
 
 ## Python 环境（可选，用于取真实文献）
-> 没有项目根 `.venv`？先运行 `env-setup` 技能建好并装依赖。
+> **报「找不到 `.venv` / 缺 Python」先查命令里的引号**：安装目录含空格（`.../Niuma Science/bundle/app`），路径不加引号会被 bash 从空格处切断、报 `No such file or directory`——**那不是缺环境**。Python 环境随安装包/镜像装好，**不要重建 `.venv`、也不要重装依赖**（白烧十几分钟还可能弄坏包版本）；确认解释器真的不存在时，才在仓库根跑 `install.ps1`（Windows）/ `install.sh`。
 ```
-${REPO_ROOT:-/app}/.venv/bin/python   # Windows（正斜杠写法，bash 与 PowerShell 都能用）
-${REPO_ROOT:-/app}/.venv/bin/python
+"${REPO_ROOT:-/app}/.venv/bin/python"   # Windows（正斜杠写法，bash 与 PowerShell 都能用）
+"${REPO_ROOT:-/app}/.venv/bin/python"
 ```
 
 ## 方法

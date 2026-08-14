@@ -17,10 +17,10 @@ description: 深度研究：对一个具体问题做多源检索→抓取→交�
 > **与顶层同名 `deep-research` skill 的关系**：部分框架（如 Claude Code harness）另带一个顶层 `deep-research`，走 **web fan-out + 对抗式核验**、覆盖通用网络问题。**本项目技能走学术检索源**（Europe PMC 国内可达、search-lit/literature-review 引擎），二者**互补**：**医学 / 文献 / 需要 DOI 可核引用的问题优先本技能**；纯通用网络类问题可用顶层 skill，或两者叠用（web 找线索、本技能到学术库坐实 + reference-check 查真伪）。
 
 ## Python 环境（用于抓文献/网页）
-> 没有项目根 `.venv`？先运行 `env-setup` 技能建好并装依赖。
+> **报「找不到 `.venv` / 缺 Python」先查命令里的引号**：安装目录含空格（`.../Niuma Science/bundle/app`），路径不加引号会被 bash 从空格处切断、报 `No such file or directory`——**那不是缺环境**。Python 环境随安装包/镜像装好，**不要重建 `.venv`、也不要重装依赖**（白烧十几分钟还可能弄坏包版本）；确认解释器真的不存在时，才在仓库根跑 `install.ps1`（Windows）/ `install.sh`。
 ```
-${REPO_ROOT:-/app}/.venv/bin/python   # Windows（正斜杠写法，bash 与 PowerShell 都能用）
-${REPO_ROOT:-/app}/.venv/bin/python
+"${REPO_ROOT:-/app}/.venv/bin/python"   # Windows（正斜杠写法，bash 与 PowerShell 都能用）
+"${REPO_ROOT:-/app}/.venv/bin/python"
 ```
 可用 `requests` / `beautifulsoup4` 抓取解析。
 

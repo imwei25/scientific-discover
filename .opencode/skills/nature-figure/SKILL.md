@@ -6,7 +6,7 @@ version: 2.1.0
 author: Community contribution (nature-skills); repo-adapted backend/default policy
 ---
 
-> **本仓库运行环境（先读）**：Python 用 `${REPO_ROOT:-/app}/.venv/bin/python`（项目根 `.venv`；没有先跑 `env-setup` 技能）；本技能脚本在 `${REPO_ROOT:-/app}/.opencode/skills/nature-figure/` 下，运行时先 `cd` 到该目录或用全路径；产出写 `outputs/`（有会话专属目录时以它为准、勿写仓库根固定名）。
+> **本仓库运行环境（先读）**：Python 用 `"${REPO_ROOT:-/app}/.venv/bin/python"`（项目根 `.venv`，随包装好；报错先查路径引号，别重建）；本技能脚本在 `"${REPO_ROOT:-/app}/.opencode/skills/nature-figure/"` 下，运行时先 `cd` 到该目录或用全路径；产出写 `outputs/`（有会话专属目录时以它为准、勿写仓库根固定名）。
 >
 > **本技能只管【数据图】（本仓库的分工）**：图上形状由数字决定的（森林图/KM/火山图/ROC/箱线图/热图…）走这里；**没有数据的机制图 / 通路示意图 / 图形摘要走 `mechanism-figure` 技能**（文生图，带反编造闸与标签必核清单）。上游正文里的 OpenRouter 图像示意图路线在本仓库**保持关闭**（需自备 key，且能力已由 `mechanism-figure` 覆盖）。
 >

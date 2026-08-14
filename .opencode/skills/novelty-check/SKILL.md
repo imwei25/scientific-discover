@@ -17,9 +17,9 @@ description: 选题前置把关——对选定课题做**严格新颖性裁定**
 顶层主控（AGENTS.md 常驻指令）负责判意图、定范围、派发；派到本技能就**直接做，别回绕**。产物直接写**当前工作目录**——网关已把本会话的 cwd 指到该会话的产物目录，用裸文件名即可（如 `table1.csv`），别再拼 `outputs/…` 前缀，也别写到仓库根。
 
 ## Python 环境（检索脚本用）
-> 没有项目根 `.venv`？先运行 `env-setup` 技能。
+> **报「找不到 `.venv` / 缺 Python」先查命令里的引号**：安装目录含空格（`.../Niuma Science/bundle/app`），路径不加引号会被 bash 从空格处切断、报 `No such file or directory`——**那不是缺环境**。Python 环境随安装包/镜像装好，**不要重建 `.venv`、也不要重装依赖**（白烧十几分钟还可能弄坏包版本）；确认解释器真的不存在时，才在仓库根跑 `install.ps1`（Windows）/ `install.sh`。
 ```
-${REPO_ROOT:-/app}/.venv/bin/python
+"${REPO_ROOT:-/app}/.venv/bin/python"
 ```
 
 ## 何时用、何时跳过

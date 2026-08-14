@@ -6,7 +6,7 @@ tools: Read, Write, Edit, Bash, Grep, Glob
 model: inherit
 ---
 
-> **本仓库运行环境（先读）**：Python 用 `${REPO_ROOT:-/app}/.venv/bin/python`（项目根 `.venv`；没有先跑 `env-setup` 技能）；本技能脚本在 `${REPO_ROOT:-/app}/.opencode/skills/search-lit/` 下，运行时先 `cd` 到该目录或用全路径；产出写 `outputs/`（有会话专属目录时以它为准、勿写仓库根固定名）。每条引用须经 API 核实（勿凭记忆造引用）。**注意：PubMed 走 NCBI E-utilities，从中国大陆网络常被阻断（curl/requests 都会 SSL 失败）；服务器在境外或配代理才稳。国内拿不到时改用 `fulltext-retrieval`/`reference-check`（走 Europe PMC/Crossref，国内可达）。** 以下为上游技能原文（vendored，未改方法论）。
+> **本仓库运行环境（先读）**：Python 用 `"${REPO_ROOT:-/app}/.venv/bin/python"`（项目根 `.venv`，随包装好；报错先查路径引号，别重建）；本技能脚本在 `"${REPO_ROOT:-/app}/.opencode/skills/search-lit/"` 下，运行时先 `cd` 到该目录或用全路径；产出写 `outputs/`（有会话专属目录时以它为准、勿写仓库根固定名）。每条引用须经 API 核实（勿凭记忆造引用）。**注意：PubMed 走 NCBI E-utilities，从中国大陆网络常被阻断（curl/requests 都会 SSL 失败）；服务器在境外或配代理才稳。国内拿不到时改用 `fulltext-retrieval`/`reference-check`（走 Europe PMC/Crossref，国内可达）。** 以下为上游技能原文（vendored，未改方法论）。
 
 # Literature Search Skill
 
@@ -59,8 +59,8 @@ Cureus ×2、Frontiers ×3 —— 一个都不像 Q1，而汇报里只有一句�
    `evidence.md`，多一列 `sources` 标每篇命中的源）。
 
    ```bash
-   PY=${REPO_ROOT:-/app}/.venv/bin/python   # Linux/macOS: ${REPO_ROOT:-/app}/.venv/bin/python
-   S=${REPO_ROOT:-/app}/.opencode/skills/search-lit/references/enhanced_search.py
+   PY="${REPO_ROOT:-/app}/.venv/bin/python"   # Linux/macOS: "${REPO_ROOT:-/app}/.venv/bin/python"
+   S="${REPO_ROOT:-/app}/.opencode/skills/search-lit/references/enhanced_search.py"
    # 默认四源全开、跨源去重，**条数不限**（命中多少取多少）
    "$PY" "$S" "graph neural network drug discovery" --since 2021 --email you@example.com
    # 只要预印本+跨学科（跳过 PubMed 系）
@@ -88,8 +88,8 @@ Cureus ×2、Frontiers ×3 —— 一个都不像 Q1，而汇报里只有一句�
    `is_oa` 列，并可直接按条件筛掉。
 
    ```bash
-   PY=${REPO_ROOT:-/app}/.venv/bin/python
-   S=${REPO_ROOT:-/app}/.opencode/skills/search-lit/references/journal_metrics.py
+   PY="${REPO_ROOT:-/app}/.venv/bin/python"
+   S="${REPO_ROOT:-/app}/.opencode/skills/search-lit/references/journal_metrics.py"
    "$PY" "$S" evidence_table.csv --email you@example.com            # 只补列
    "$PY" "$S" evidence_table.csv --min-impact 3 --quartile Q1,Q2    # 补列 + 筛选
    "$PY" "$S" evidence_table.csv --table /path/中科院分区表.csv      # 用机构分区表覆盖成官方真值
@@ -129,7 +129,7 @@ or "No such tool available" error), fall back to NCBI E-utilities via bundled sc
 PubMed calls in this session to E-utilities. Do not retry MCP after a disconnect — it
 will not recover within the same conversation.
 
-**Scripts** (in `${REPO_ROOT:-/app}/.opencode/skills/search-lit/references/` — run from repo root or use the full path):
+**Scripts** (in `"${REPO_ROOT:-/app}/.opencode/skills/search-lit/references/"` — run from repo root or use the full path):
 - `pubmed_eutils.sh` — Bash wrapper for NCBI E-utilities **and** Europe PMC (`epmc_*` commands)
 - `parse_pubmed.py` — Python parser for E-utilities responses
 

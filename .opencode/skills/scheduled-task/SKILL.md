@@ -64,7 +64,7 @@ description: 把"以后每周/每天自动帮我做某件事"变成真正会自�
 
 ### 第 3 步 · 注册
 
-用 `${REPO_ROOT:-/app}/web/task-cli.mjs`（node 直接跑，无需 .venv）：
+用 `"${REPO_ROOT:-/app}/web/task-cli.mjs"`（node 直接跑，无需 .venv）：
 
 ```bash
 node "${REPO_ROOT:-/app}/web/task-cli.mjs" add \

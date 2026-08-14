@@ -12,8 +12,8 @@ description: 用于任何数据分析、统计计算、探索性画图、读写 
 
 ## 解释器
 ```
-${REPO_ROOT:-/app}/.venv/bin/python   # Windows（正斜杠写法，bash 与 PowerShell 都能用）
-${REPO_ROOT:-/app}/.venv/bin/python
+"${REPO_ROOT:-/app}/.venv/bin/python"   # Windows（正斜杠写法，bash 与 PowerShell 都能用）
+"${REPO_ROOT:-/app}/.venv/bin/python"
 ```
 已安装：pandas、numpy、scipy、matplotlib、scikit-learn、seaborn、statsmodels、openpyxl，另有 lifelines（生存分析）等。
 
@@ -22,7 +22,7 @@ ${REPO_ROOT:-/app}/.venv/bin/python
 ## 运行方式
 把代码写到一个 `.py` 文件，再用 bash 执行：
 ```
-${REPO_ROOT:-/app}/.venv/bin/python analysis.py
+"${REPO_ROOT:-/app}/.venv/bin/python" analysis.py
 ```
 
 ## 第零步：先认列，再问用户确认（别一上来就要他填一堆列名）
@@ -32,7 +32,7 @@ ${REPO_ROOT:-/app}/.venv/bin/python analysis.py
 正确顺序是**你先看，他再核**：
 
 ```
-${REPO_ROOT:-/app}/.venv/bin/python ${REPO_ROOT:-/app}/.opencode/skills/data-analysis/scripts/table_preview.py \
+"${REPO_ROOT:-/app}/.venv/bin/python" "${REPO_ROOT:-/app}/.opencode/skills/data-analysis/scripts/table_preview.py" \
   --input <数据文件> --rows 5
 ```
 它只读不改，输出 JSON：`headers`（真实列名，与 Excel 里逐字一致）、`rows`（前 5 行原样）、`cols`（**逐列画像**：类型、取值个数、实际取值与各自例数、缺失率、数值范围）。Excel（.xlsx/.xlsm/.xls）与 GBK 的 CSV 都能读。
@@ -59,7 +59,7 @@ ${REPO_ROOT:-/app}/.venv/bin/python ${REPO_ROOT:-/app}/.opencode/skills/data-ana
 ## 第一步：数据体检（拿到数据文件先跑，强制）
 **别读进来就 groupby / 画图 / 做检验。** 先跑体检脚本——它专查你最容易漏、且一漏就全盘错的那几件事：
 ```
-${REPO_ROOT:-/app}/.venv/bin/python ${REPO_ROOT:-/app}/.opencode/skills/data-analysis/scripts/data_profile.py \
+"${REPO_ROOT:-/app}/.venv/bin/python" "${REPO_ROOT:-/app}/.opencode/skills/data-analysis/scripts/data_profile.py" \
   --input <数据文件> --group <分组变量列名> --id-col <患者/标本标识列> --out data_profile.md
 ```
 产出 `data_profile.md`（人读，分 **必须处置 / 建议核对 / 记录备查** 三级 + "必须回答的问题"清单）与 `data_profile.json`（机读）。**报告名就用 `data_profile.md`（脚本默认值），别改**——界面按这个名字认体检报告，改了名脚本照样跑完，但面板里什么都不显示。它查：

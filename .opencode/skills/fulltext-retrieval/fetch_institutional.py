@@ -86,7 +86,7 @@ CDP_HELP = """\
 PW_HELP = """\
 缺依赖 playwright（仅本机构通道需要；OA 主管线 fetch_oa.py 仍是零依赖）。
 安装（挂接现有 Chrome，**不需要** `playwright install` 下载浏览器内核）：
-    ${REPO_ROOT:-/app}/.venv/bin/python -m pip install playwright
+    "${REPO_ROOT:-/app}/.venv/bin/python" -m pip install playwright
 """
 
 

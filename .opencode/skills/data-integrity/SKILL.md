@@ -24,9 +24,9 @@ Python 用项目根 `.venv`（系统没装 Python）。paperconan 已装在 `.ve
 **两步走：paperconan 出 scan.json → 本技能 `audit_report.py` 出人读报告（别用 paperconan 的 `--md`，见下）**：
 ```
 # 1) 扫描（只出 scan.json + report.html，别加 --md）
-${REPO_ROOT:-/app}/.venv/bin/python -X utf8 -m paperconan <数据目录> --out audit
+"${REPO_ROOT:-/app}/.venv/bin/python" -X utf8 -m paperconan <数据目录> --out audit
 # 2) 生成人读 REPORT.md（顺带做汇总一致性自查）
-${REPO_ROOT:-/app}/.venv/bin/python ${REPO_ROOT:-/app}/.opencode/skills/data-integrity/scripts/audit_report.py \
+"${REPO_ROOT:-/app}/.venv/bin/python" "${REPO_ROOT:-/app}/.opencode/skills/data-integrity/scripts/audit_report.py" \
     audit/scan.json --data-dir <数据目录> --out audit/REPORT.md
 ```
 
@@ -41,7 +41,7 @@ ${REPO_ROOT:-/app}/.venv/bin/python ${REPO_ROOT:-/app}/.opencode/skills/data-int
 - `--doi <DOI>` / `--title <标题>`：把出处记进 scan.json（做 provenance / PubPeer 时用）。
 
 ## 工作流程
-1. **确认 CLI**：`${REPO_ROOT:-/app}/.venv/bin/python -m paperconan --version`（应回 `paperconan 0.x`）。缺了就 `${REPO_ROOT:-/app}/.venv/bin/python -m pip install "paperconan[all]"`。
+1. **确认 CLI**：`"${REPO_ROOT:-/app}/.venv/bin/python" -m paperconan --version`（应回 `paperconan 0.x`）。缺了就 `"${REPO_ROOT:-/app}/.venv/bin/python" -m pip install "paperconan[all]"`。
 2. **备数据目录**：把用户要查的表格文件集中到 **`.pc-in/`**（点号开头，**必须**）；含患者信息的先脱敏。
    > 点号不是随手写的：这个目录装的是**用户自己刚上传的表的副本**，而界面的"产出"侧栏会列出
    > 当前目录下的文件。写成 `pc-in/` 的话，医生会在"产出"里看到自己的输入文件（实测发生过），
@@ -89,9 +89,9 @@ paperconan 查**源数据表**的数值模式；`pcheck.py` 查**稿件正文里
 
 ```
 # 扫一篇稿件（Methods/Results 里的检验报告）
-${REPO_ROOT:-/app}/.venv/bin/python ${REPO_ROOT:-/app}/.opencode/skills/data-integrity/pcheck.py manuscript.md --outdir audit
+"${REPO_ROOT:-/app}/.venv/bin/python" "${REPO_ROOT:-/app}/.opencode/skills/data-integrity/pcheck.py" manuscript.md --outdir audit
 # 或直接给一段文本
-${REPO_ROOT:-/app}/.venv/bin/python ${REPO_ROOT:-/app}/.opencode/skills/data-integrity/pcheck.py --text "t(28)=2.05, p=.02"
+"${REPO_ROOT:-/app}/.venv/bin/python" "${REPO_ROOT:-/app}/.opencode/skills/data-integrity/pcheck.py" --text "t(28)=2.05, p=.02"
 ```
 - 只认**统计量+自由度+p 三者齐全**的句子（如 `t(28)=2.05, p=.048`、`F(2,57)=3.11, p=.05`、`χ²(1)=4.10, p=.04`）；缺自由度的裸统计量无法重算、自动跳过。
 - 产出 `pcheck.md` / `pcheck.csv`，三档：**🔴 DECISION_ERROR**（重算跨过 .05 而报告没跨，或反之——显著性判断相反，最需核对）、**🟡 INCONSISTENT**（数值不符但同侧于 .05，多为笔误/四舍五入）、**🔵 ONE_TAILED**（两尾对不上但≈重算/2，可能按单尾报告）。

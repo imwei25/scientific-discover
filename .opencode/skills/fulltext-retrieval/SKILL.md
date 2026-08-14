@@ -6,7 +6,7 @@ tools: Read, Write, Edit, Bash, Grep, Glob
 model: inherit
 ---
 
-> **本仓库运行环境（先读）**：Python 用 `${REPO_ROOT:-/app}/.venv/bin/python`（项目根 `.venv`；没有先跑 `env-setup` 技能）；本技能脚本在 `${REPO_ROOT:-/app}/.opencode/skills/fulltext-retrieval/` 下，运行时先 `cd` 到该目录或用全路径；产出写 `outputs/`（有会话专属目录时以它为准、勿写仓库根固定名）。`--email` 必须填**真实邮箱**（Unpaywall 会拒掉 example.com，报 HTTP 422）；DOI 列表可来自 `search-lit` 或用户；已装 pymupdf/pymupdf4llm。以下为上游技能原文（vendored，未改方法论）。
+> **本仓库运行环境（先读）**：Python 用 `"${REPO_ROOT:-/app}/.venv/bin/python"`（项目根 `.venv`，随包装好；报错先查路径引号，别重建）；本技能脚本在 `"${REPO_ROOT:-/app}/.opencode/skills/fulltext-retrieval/"` 下，运行时先 `cd` 到该目录或用全路径；产出写 `outputs/`（有会话专属目录时以它为准、勿写仓库根固定名）。`--email` 必须填**真实邮箱**（Unpaywall 会拒掉 example.com，报 HTTP 422）；DOI 列表可来自 `search-lit` 或用户；已装 pymupdf/pymupdf4llm。以下为上游技能原文（vendored，未改方法论）。
 
 # Fulltext Retrieval Skill
 
@@ -142,7 +142,7 @@ OA 渠道天然拿不到「付费墙内但**机构已订购**」的文献。第�
 #    Linux/macOS 命令见脚本 --help / CDP_HELP；没有 Chrome 用 Edge（msedge）也行。
 # 2. 在该窗口经图书馆 / CARSI（www.carsi.edu.cn）登录一次——会话存在专用资料目录，之后直接复用
 # 3. 装可选依赖（只挂接现有 Chrome，不需要 playwright install 下载浏览器内核）
-${REPO_ROOT:-/app}/.venv/bin/python -m pip install playwright
+"${REPO_ROOT:-/app}/.venv/bin/python" -m pip install playwright
 ```
 
 ### 用法

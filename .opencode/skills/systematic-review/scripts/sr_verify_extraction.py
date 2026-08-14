@@ -27,8 +27,8 @@
 
 用法
 ----
-    PY=${REPO_ROOT:-/app}/.venv/bin/python
-    S=${REPO_ROOT:-/app}/.opencode/skills/systematic-review/scripts/sr_verify_extraction.py
+    PY="${REPO_ROOT:-/app}/.venv/bin/python"
+    S="${REPO_ROOT:-/app}/.opencode/skills/systematic-review/scripts/sr_verify_extraction.py"
 
     # 只有摘要时（没下全文）——最常见，也最需要查
     "$PY" "$S" --extraction extraction_table.csv --records 01_deduplicated.csv

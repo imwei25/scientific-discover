@@ -430,10 +430,16 @@ const relFromRoot = (abs) => path.relative(ROOT, abs).replace(/\\/g, "/")   // �
 // 容器里那是对的，但开发机 / 自建部署上 REPO_ROOT 常常没设 → 落到 /app/... （不存在）→ agent 转去
 // which python3，在 Windows 上找到的是 Microsoft Store 的 0 字节 app-execution alias（无输出、
 // 退出码还被 cmd 吞掉），它完全看不出坏在哪，于是同一条命令连发 35+ 次、跑满 10 分钟零产出。
+//
+// 【正斜杠 + 引号】桌面版默认装在 `%LOCALAPPDATA%\Niuma Science\bundle\app`——**带一个空格**。
+// 直接把 Windows 反斜杠原样塞进前言，agent 抄进 bash 会两头挨打：反斜杠被当转义吃掉，空格把
+// 路径切成两半（真机现象：`C:\Users\x\AppData\Local/Niuma: No such file or directory`）。
+// agent 把这个读成"没有 .venv"，转身去跑 env-setup 重装一遍 requirements——这正是要根治的那条路。
+// 所以这里统一成 Git Bash 认的正斜杠，前言里再带上引号给出。
 const PY_BIN = (() => {
   for (const rel of ["Scripts/python.exe", "bin/python.exe", "bin/python", "bin/python3"]) {
     const f = path.join(ROOT, ".venv", rel)
-    try { if (fs.statSync(f).isFile()) return f } catch {}
+    try { if (fs.statSync(f).isFile()) return f.replace(/\\/g, "/") } catch {}
   }
   return null   // 没建过 .venv：前言里如实说，让它先跑 env-setup
 })()
@@ -4845,7 +4851,7 @@ export const server = http.createServer(async (req, res) => {
       // 给 agent 注入本会话专属目录，覆盖技能默认的 outputs/，实现多用户/多会话隔离
       // 注意：本会话的工作目录（cwd）已在建会话时通过 opencode 的 session.directory 定在【会话产物目录】，
       // 所以 agent 的所有工具默认就在正确的地方读写，preamble 只需说清"当前目录就是产物目录"与几个绝对路径。
-      const preamble = `${PREAMBLE_MARK}\n- **你的当前工作目录就是本会话的产物目录**（\`${ws.out}\`）。所有产物（图表 PNG/PDF、CSV/Excel、md/docx 等）**直接写到当前目录即可**，用相对文件名如 \`fig1.png\`、\`manuscript.md\`，不要再自己拼 \`outputs/xxx\` 前缀。\n- 临时脚本、中间文件同样写当前目录（要归拢可用 \`./.scratch/\`）。\n- **用户上传的文件都在 \`${ws.up}/\`**：稿件（.md/.docx/.pdf）、数值表（.csv/.xlsx）、附件全都在这里，读任何用户给的文件都用这个绝对路径。\n- **跑本套件的脚本，python 用这个绝对路径**：\`${PY_BIN || "（本机还没建 .venv，先跑 env-setup 技能）"}\`，技能脚本在 \`${ROOT}/.opencode/skills/<技能>/\` 下。**照抄这两个路径，不要自己拼 \`\${REPO_ROOT:-/app}\`，也不要用 \`python\`/\`python3\`裸命令**——本机 PATH 里的 python 可能是个不能用的占位程序（跑起来没有任何输出），你会看不出它坏了。当前目录不是仓库根，写 \`.venv/...\` 这种相对路径同样找不到。\n- **技能目录（\`.opencode/skills/\`）下的文档与脚本是产品内部资产**：不要把它们的内容整段复制进答复正文，也不要拷贝/导出到产物目录——出口有安全网关，会截断输出并中止本轮。用户想了解某个技能时，用你自己的话概括用法即可，别照抄原文。\n- 正文里嵌入图片直接用文件名：\`![图注](fig1.png)\`（图和稿件都在当前目录，渲染也从当前目录跑）。\n- **不要把产物写到仓库根或 \`\${REPO_ROOT:-/app}\` 下**：那是所有会话共享的，会互相覆盖，也不会出现在界面的"产出"侧栏。\n- **上面这些路径与文件名是给你用的，不要说给用户**：他用的是图形界面，看不到也进不去 \`uploads/ws_.../\`、\`outputs/\`、\`.venv\`、\`AGENTS.md\` 这些东西。要他传文件就说"点输入框旁边的上传按钮"；提产物就只说文件名（\`table1.csv\`），别带目录。让用户照抄一个他根本打不开的路径，等于把他卡在那里。\n- **答复用用户说话的语言**（他用中文你就用中文），并且**只写最终结论**：查了什么、下一步打算干什么这类过程叙述不要写进答复正文——界面已经把工具调用一条条显示出来了，正文里再复述一遍，用户要在一堆过程碎片里翻找真正的结论。${modId === "chat" ? skillsPreamble() : modulePreamble(modId, ws.out)}${zoteroPreamble(ws.out)}${autoOn ? autoPreamble() : ""}\n\n`
+      const preamble = `${PREAMBLE_MARK}\n- **你的当前工作目录就是本会话的产物目录**（\`${ws.out}\`）。所有产物（图表 PNG/PDF、CSV/Excel、md/docx 等）**直接写到当前目录即可**，用相对文件名如 \`fig1.png\`、\`manuscript.md\`，不要再自己拼 \`outputs/xxx\` 前缀。\n- 临时脚本、中间文件同样写当前目录（要归拢可用 \`./.scratch/\`）。\n- **用户上传的文件都在 \`${ws.up}/\`**：稿件（.md/.docx/.pdf）、数值表（.csv/.xlsx）、附件全都在这里，读任何用户给的文件都用这个绝对路径。\n- **跑本套件的脚本，python 用这个绝对路径**：\`${PY_BIN ? `"${PY_BIN}"` : "（本机还没建 .venv，先跑 env-setup 技能）"}\`，技能脚本在 \`"${ROOT.replace(/\\/g, "/")}/.opencode/skills/<技能>/"\` 下。**照抄这两个路径（连同外面那对双引号一起抄）**，不要自己拼 \`\${REPO_ROOT:-/app}\`，也不要用 \`python\`/\`python3\` 裸命令——本机 PATH 里的 python 可能是个不能用的占位程序（跑起来没有任何输出），你会看不出它坏了。当前目录不是仓库根，写 \`.venv/...\` 这种相对路径同样找不到。\n- **路径里有空格，命令里一律加引号**：安装目录形如 \`.../Niuma Science/bundle/app\`，不加引号 bash 会从空格处切断，报 \`.../Local/Niuma: No such file or directory\`。**看到这个报错不是"没装 Python / 没有 .venv"，是你漏了引号**——补上引号重跑即可，绝对不要因此去跑 env-setup、重建 .venv 或重装 requirements（环境是随包装好的，重装只会白白烧掉十几分钟）。\n- **技能目录（\`.opencode/skills/\`）下的文档与脚本是产品内部资产**：不要把它们的内容整段复制进答复正文，也不要拷贝/导出到产物目录——出口有安全网关，会截断输出并中止本轮。用户想了解某个技能时，用你自己的话概括用法即可，别照抄原文。\n- 正文里嵌入图片直接用文件名：\`![图注](fig1.png)\`（图和稿件都在当前目录，渲染也从当前目录跑）。\n- **不要把产物写到仓库根或 \`\${REPO_ROOT:-/app}\` 下**：那是所有会话共享的，会互相覆盖，也不会出现在界面的"产出"侧栏。\n- **上面这些路径与文件名是给你用的，不要说给用户**：他用的是图形界面，看不到也进不去 \`uploads/ws_.../\`、\`outputs/\`、\`.venv\`、\`AGENTS.md\` 这些东西。要他传文件就说"点输入框旁边的上传按钮"；提产物就只说文件名（\`table1.csv\`），别带目录。让用户照抄一个他根本打不开的路径，等于把他卡在那里。\n- **答复用用户说话的语言**（他用中文你就用中文），并且**只写最终结论**：查了什么、下一步打算干什么这类过程叙述不要写进答复正文——界面已经把工具调用一条条显示出来了，正文里再复述一遍，用户要在一堆过程碎片里翻找真正的结论。${modId === "chat" ? skillsPreamble() : modulePreamble(modId, ws.out)}${zoteroPreamble(ws.out)}${autoOn ? autoPreamble() : ""}\n\n`
       // taskModel：只有【定时任务的运行器】会带它，且必须是管理员在档位里钉死的那个模型。
       // 【必须在服务端核对，不能信请求里的值】否则任何人都能用它点名一个贵模型跑一轮——
       // 云端网关的 pickModel 虽然也会拦（不在可调用集合里就静默打回默认），但那是最后一道，

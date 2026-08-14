@@ -7,6 +7,24 @@ description: 一键准备 / 自举运行环境。首次使用本套科研技能�
 
 本套技能的 Python 一律跑在**项目根的 `.venv`** 里——不依赖系统 Python，也不写死任何机器绝对路径，所以能跨机器、跨框架直接搬。第一步先把它建好，之后所有技能都用它。
 
+## 第零步：先确认它是不是真的坏了（**必做，不许跳**）
+
+**打包版（桌面客户端）的 `.venv` 是随安装包装好的，不可能缺。** 绝大多数"找不到 .venv / 缺包"其实是**命令写错**，最常见的一条：
+
+> 安装目录形如 `.../Niuma Science/bundle/app`，**里面有一个空格**。不加引号时 bash 会从空格处把路径切成两半，报
+> `.../Local/Niuma: No such file or directory`。**这不是环境坏了，是漏了引号。**
+
+所以进本技能后**先跑这一条自检**（路径务必带引号）：
+
+```bash
+"${SCI_PYTHON:-${REPO_ROOT:-/app}/.venv/bin/python}" -c "import sys, pandas, numpy, scipy, matplotlib; print('venv OK', sys.version, sys.executable)"
+```
+
+- **打印出 `venv OK` → 环境本来就是好的**：**立刻停止，什么都别装**。把 `sys.executable` 这个路径回报给用户/调用方，告诉他之前那条命令的正确写法是给路径加引号，然后**退出本技能**。
+  - 禁止在这种情况下执行 `python -m venv`、`pip install -r requirements`、重装依赖或跑 `install.ps1`——环境已经就绪，重装只会白烧十几分钟，还可能把包版本弄坏。
+- **报 `No such file or directory` 且路径在空格处断掉** → 同上，是引号问题，不是环境问题；补引号重试。
+- **只有解释器确实不存在、或 `import` 真的报 ModuleNotFoundError**，才继续往下走安装流程；且此时**只补缺的那个包**，别整包重装。
+
 ## 一键（优先）
 仓库里若有安装脚本，直接调它（下面所有步骤它都做了）。脚本在**仓库根目录**，要排版 PDF 加 `-WithPdf`（Windows）/ `--with-pdf`（Linux/macOS）：
 - Windows：`powershell -ExecutionPolicy Bypass -File install.ps1`
@@ -23,14 +41,14 @@ description: 一键准备 / 自举运行环境。首次使用本套科研技能�
    - Windows：`winget install -e --id Python.Python.3.12`
    - Ubuntu/Debian：`sudo apt-get install -y python3 python3-venv python3-pip`
    - macOS：`brew install python@3.12`
-2. **建虚拟环境**（已存在 `${REPO_ROOT:-/app}/.venv` 就跳过）：
-   `python -m venv ${REPO_ROOT:-/app}/.venv`（`python` 不存在就用 `python3` 或 `py -3`）
-   > ⚠️ **路径必须带 `${REPO_ROOT:-/app}/` 前缀**：会话的当前工作目录是**该会话的产物目录**
+2. **建虚拟环境**（已存在 `"${REPO_ROOT:-/app}/.venv"` 就跳过）：
+   `python -m venv "${REPO_ROOT:-/app}/.venv"`（`python` 不存在就用 `python3` 或 `py -3`）
+   > ⚠️ **路径必须带 `"${REPO_ROOT:-/app}/"` 前缀**：会话的当前工作目录是**该会话的产物目录**
    > （`outputs/<会话id>/`），写 `python -m venv .venv` 会把整个虚拟环境建到**用户的产物目录里**——
    > 既计入该用户的存储配额、又会出现在界面"产出"侧栏，而第 3 步要用的
-   > `${REPO_ROOT:-/app}/.venv/bin/python` 依然不存在 → 整个引导流程死在这里。
+   > `"${REPO_ROOT:-/app}/.venv/bin/python"` 依然不存在 → 整个引导流程死在这里。
 3. **用 venv 的解释器装依赖**（从这步起就写死用 `.venv`，不再碰系统 Python）：
-   `${REPO_ROOT:-/app}/.venv/bin/python -m pip install -U pip -r ${REPO_ROOT:-/app}/scripts/requirements-skills.txt`
+   `"${REPO_ROOT:-/app}/.venv/bin/python" -m pip install -U pip -r "${REPO_ROOT:-/app}/scripts/requirements-skills.txt"`
    > `-r` 后面的路径同样要带前缀：requirements 文件在**仓库**的 `scripts/` 下，
    > 相对当前工作目录（会话产物目录）找不到，会直接 FileNotFoundError。
    - 没有 requirements 文件时，至少装：
@@ -41,13 +59,13 @@ description: 一键准备 / 自举运行环境。首次使用本套科研技能�
 
 ## 之后所有技能怎么调 Python
 统一用项目根 `.venv` 的解释器：
-- **Windows**：`${REPO_ROOT:-/app}/.venv/bin/python 脚本.py`
-- **Linux / macOS**：`${REPO_ROOT:-/app}/.venv/bin/python 脚本.py`
+- **Windows**：`"${REPO_ROOT:-/app}/.venv/bin/python" 脚本.py`
+- **Linux / macOS**：`"${REPO_ROOT:-/app}/.venv/bin/python" 脚本.py`
 
 各技能的「Python 环境」段都按这个来；不要用系统 `python` / `python3` 直接装包或跑。
 
 ## 验证
-`${REPO_ROOT:-/app}/.venv/bin/python ${REPO_ROOT:-/app}/scripts/validate_skills.py`
+`"${REPO_ROOT:-/app}/.venv/bin/python" "${REPO_ROOT:-/app}/scripts/validate_skills.py"`
 （脚本在**仓库**的 `scripts/` 下，不带前缀会因当前工作目录是会话产物目录而找不到）
 
 装完向用户汇报：Python 版本、`.venv` 路径、装了多少包、pandoc/xelatex 是否就绪。

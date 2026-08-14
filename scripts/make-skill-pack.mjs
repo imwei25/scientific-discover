@@ -9,8 +9,13 @@
 //   --changelog 更新说明（显示在客户端横幅与后台列表）
 //   --changed   本次实际变更的技能，逗号分隔（决定"提示谁"：与用户技能授权无交集就不打扰）
 //   --since     git 引用（如上次发包的 commit/tag）——自动从 git diff 算 --changed，二选一
-//   --exclude   不随包分发的技能，逗号分隔。默认 ppt-master（85MB 的 vendored 上游技能，
-//               基本不变；写进 pack.json.preserved，客户端换版时自留平移，见 web/skill-update.mjs）
+//   --exclude   不随包分发、但客户端【自留平移】的技能，逗号分隔。默认 ppt-master（85MB 的
+//               vendored 上游技能，基本不变；写进 pack.json.preserved，见 web/skill-update.mjs）
+//   --drop      不随包分发、且客户端【删掉】的技能，逗号分隔。默认 env-setup。
+//               与 --exclude 的区别就在"平移还是删除"：包里没有、preserved 里也没有的技能，
+//               客户端一律视为已删除（swapIn 的语义）。打包版的 .venv 是随安装包装好的，
+//               env-setup 留着只会让 agent 在"路径带空格 → 命令被切断"时误判成缺环境、
+//               去重建 .venv 重装 requirements——真机上就这么白烧过十几分钟。
 //   --out       输出目录（默认 dist/）
 //
 // pack.json 里还嵌了 venvPackages（打包机 .venv 的 pip 包清单）：服务端上传时据此 lint
@@ -36,6 +41,7 @@ const version = String(args.version || `${today.getFullYear()}.${today.getMonth(
 if (!/^\d+(\.\d+)*$/.test(version)) { console.error(`✗ 版本号要是点分数字：${version}`); process.exit(1) }
 const changelog = String(args.changelog || "")
 const exclude = new Set(String(args.exclude ?? "ppt-master").split(",").map((s) => s.trim()).filter(Boolean))
+const drop = new Set(String(args.drop ?? "env-setup").split(",").map((s) => s.trim()).filter(Boolean))
 const outDir = path.resolve(ROOT, String(args.out || "dist"))
 
 // ---- changedSkills：--changed 优先，其次 --since 从 git 算 ----
@@ -89,8 +95,10 @@ function walk(dir, rel) {
 const skillNames = fs.readdirSync(SKILLS, { withFileTypes: true })
   .filter((e) => e.isDirectory() && fs.existsSync(path.join(SKILLS, e.name, "SKILL.md")))
   .map((e) => e.name).sort()
-const packed = skillNames.filter((s) => !exclude.has(s))
-const preserved = skillNames.filter((s) => exclude.has(s))
+// packed = 随包发；preserved = 客户端自留平移；drop 里的两边都不进 → 客户端删掉
+const packed = skillNames.filter((s) => !exclude.has(s) && !drop.has(s))
+const preserved = skillNames.filter((s) => exclude.has(s) && !drop.has(s))
+const dropped = skillNames.filter((s) => drop.has(s))
 for (const s of packed) walk(path.join(SKILLS, s), `skills/${s}`)
 
 if (fs.existsSync(path.join(ROOT, "AGENTS.md"))) {
@@ -112,6 +120,7 @@ const outFile = path.join(outDir, `sci-skillpack-${version}.zip`)
 fs.writeFileSync(outFile, buf)
 console.log(`\n✅ ${outFile}`)
 console.log(`   版本 ${version} · ${packed.length} 个技能（${(totalBytes / 1048576).toFixed(1)}MB → 压后 ${(buf.length / 1048576).toFixed(1)}MB）` +
-  (preserved.length ? ` · 包外保留：${preserved.join(", ")}` : ""))
+  (preserved.length ? ` · 包外保留：${preserved.join(", ")}` : "") +
+  (dropped.length ? ` · 客户端将删除：${dropped.join(", ")}` : ""))
 console.log(`   变更技能：${changedSkills.join(", ") || "（未标注 = 所有人都会收到提示）"}`)
 console.log(`\n下一步：打开运营后台 →「技能包」页 → 上传这个 zip 即发布。`)

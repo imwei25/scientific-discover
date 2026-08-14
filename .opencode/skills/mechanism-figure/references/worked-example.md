@@ -27,8 +27,8 @@
 ## 第 ② 步：编译过闸
 
 ```bash
-${REPO_ROOT:-/app}/.venv/bin/python \
-  ${REPO_ROOT:-/app}/.opencode/skills/mechanism-figure/scripts/build_prompt.py \
+"${REPO_ROOT:-/app}/.venv/bin/python" \
+  "${REPO_ROOT:-/app}/.opencode/skills/mechanism-figure/scripts/build_prompt.py" \
   --spec fig1.spec.json --source ms.txt --json fig1.built.json
 ```
 
@@ -47,8 +47,8 @@ ${REPO_ROOT:-/app}/.venv/bin/python \
 **如果材料里写的是"草酸钙"而不是 `CaOx`**，闸会拦下来，这时用：
 
 ```bash
-${REPO_ROOT:-/app}/.venv/bin/python \
-  ${REPO_ROOT:-/app}/.opencode/skills/mechanism-figure/scripts/build_prompt.py \
+"${REPO_ROOT:-/app}/.venv/bin/python" \
+  "${REPO_ROOT:-/app}/.opencode/skills/mechanism-figure/scripts/build_prompt.py" \
   --spec fig1.spec.json --source ms.txt --allow 'CaOx,CaOx crystal deposition'
 ```
 
@@ -58,8 +58,8 @@ ${REPO_ROOT:-/app}/.venv/bin/python \
 ## 第 ③ 步：出图
 
 ```bash
-${REPO_ROOT:-/app}/.venv/bin/python \
-  ${REPO_ROOT:-/app}/.opencode/skills/mechanism-figure/scripts/render_figure.py \
+"${REPO_ROOT:-/app}/.venv/bin/python" \
+  "${REPO_ROOT:-/app}/.opencode/skills/mechanism-figure/scripts/render_figure.py" \
   --built fig1.built.json --name fig1 --outdir figures --n 2
 ```
 

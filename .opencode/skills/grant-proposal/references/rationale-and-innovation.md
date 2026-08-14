@@ -200,7 +200,7 @@ grant 流水线（research-scan → topic-selection → novelty-check → 本技
 ## 9. 自查（起草完必跑）
 
 ```bash
-${REPO_ROOT:-/app}/.venv/bin/python <技能目录>/scripts/hollowness_check.py proposal.md --sections
+"${REPO_ROOT:-/app}/.venv/bin/python" <技能目录>/scripts/hollowness_check.py proposal.md --sections
 ```
 
 脚本查五件事：空话词密度｜**引文承载率**（引用是否落在失效点语境）｜段落落点率｜创新点对照率｜无引用强断言。

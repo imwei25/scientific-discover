@@ -20,8 +20,8 @@
 
 用法
 ----
-    PY=${REPO_ROOT:-/app}/.venv/bin/python
-    S=${REPO_ROOT:-/app}/.opencode/skills/search-lit/references/journal_metrics.py
+    PY="${REPO_ROOT:-/app}/.venv/bin/python"
+    S="${REPO_ROOT:-/app}/.opencode/skills/search-lit/references/journal_metrics.py"
 
     # 给证据表补列（就地写回，另存 --out 也行）
     "$PY" "$S" evidence_table.csv --email you@example.com

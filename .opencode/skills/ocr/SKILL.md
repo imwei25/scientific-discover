@@ -36,7 +36,7 @@ OCR 是**辅助提取**，不是权威原件。Engine3 中文准确度很高，�
 > **别自己发明兜底**：不用去查 tesseract、paddleocr、easyocr 装没装，也不用自己写 PowerShell 调 WinRT——`ocr.sh` 已经把这条路做完并测过了。云端一报错就手写替代方案，只会把一次排查拖成十几轮。**看到 `[换道]` 就是正常工作**，照常往下读结果。
 
 ### 其它依赖与额度
-- **Python**：项目根 `.venv`（脚本自动解析；缺则先跑 `env-setup`）。`requests` 必需，`Pillow` 用于压缩 >1MB 的图（**只有云端两条通道需要压缩**，③ 用原图），`PyMuPDF` 用于把 PDF 逐页渲染成图（喂 PDF 时才用到）。
+- **Python**：项目根 `.venv`（脚本自动解析，随包装好；报错先查路径引号，别重建）。`requests` 必需，`Pillow` 用于压缩 >1MB 的图（**只有云端两条通道需要压缩**，③ 用原图），`PyMuPDF` 用于把 PDF 逐页渲染成图（喂 PDF 时才用到）。
 - **免费额度**（云端两条，**全平台共用同一把 key 的配额**，注意别刷爆）：Engine3 **2500 次/月**、Engine1/2 25000/月、500 次/天/IP、**单图 ≤1MB**（脚本自动压缩超标图）。走平台代理时还有两层闸：每人每天若干次（档位定）、全平台每天/每月上限（`OCR_DAILY_CAP` / `OCR_MONTHLY_CAP`）。撞到闸时脚本**说清是哪一层**（自己的次数用完 vs 全平台池子满了 vs 平台没配），不会把剩下的图一张张再撞一遍。
 
 ## 用法
@@ -45,7 +45,7 @@ OCR 是**辅助提取**，不是权威原件。Engine3 中文准确度很高，�
 
 ```bash
 # 有 bash（Linux / macOS / Git Bash）
-bash ${REPO_ROOT:-/app}/.opencode/skills/ocr/scripts/ocr.sh 图片URL或路径
+bash "${REPO_ROOT:-/app}/.opencode/skills/ocr/scripts/ocr.sh" 图片URL或路径
 ```
 ```powershell
 # 只有 PowerShell（Windows 桌面版常见）
@@ -53,7 +53,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .opencode\skills\ocr\scripts
 ```
 ```bash
 # 手上已经有 .venv 的 python，最省事
-${REPO_ROOT:-/app}/.venv/bin/python .opencode/skills/ocr/scripts/ocr.py 图片路径   # Windows: .venv\Scripts\python.exe
+"${REPO_ROOT:-/app}/.venv/bin/python" .opencode/skills/ocr/scripts/ocr.py 图片路径   # Windows: .venv\Scripts\python.exe
 ```
 
 ```bash

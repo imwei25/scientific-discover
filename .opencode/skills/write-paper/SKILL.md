@@ -10,9 +10,9 @@ description: 写原创研究论文（IMRaD 全流程）：把用户的真实数�
 把用户**真实的**研究数据、方法与结果，写成一篇逻辑闭环、可投稿的研究型论文。**绝不虚构数据、结果、样本量、统计数字或参考文献**——缺的向用户要、标"待补充"。本技能是本套件"写作本体"，负责把前面各环节的产物组织成成稿。
 
 ## Python 环境（可选，用于配套脚本/排版）
-> 没有项目根 `.venv`？先运行 `env-setup` 技能。
+> **报「找不到 `.venv` / 缺 Python」先查命令里的引号**：安装目录含空格（`.../Niuma Science/bundle/app`），路径不加引号会被 bash 从空格处切断、报 `No such file or directory`——**那不是缺环境**。Python 环境随安装包/镜像装好，**不要重建 `.venv`、也不要重装依赖**（白烧十几分钟还可能弄坏包版本）；确认解释器真的不存在时，才在仓库根跑 `install.ps1`（Windows）/ `install.sh`。
 ```
-${REPO_ROOT:-/app}/.venv/bin/python
+"${REPO_ROOT:-/app}/.venv/bin/python"
 ```
 
 ## 定位（本技能在套件中的位置）
@@ -178,7 +178,7 @@ AI 写论文最危险的是**悄悄编一个 p 值/样本数/效应量**。成�
 
 **A. 没指定 / 说"不知道投哪" → 直接用默认送审格式出件**，别追问格式细节：
 ```bash
-bash ${REPO_ROOT:-/app}/.opencode/skills/render-docx/scripts/render_docx.sh -i manuscript.md --journal generic-submission
+bash "${REPO_ROOT:-/app}/.opencode/skills/render-docx/scripts/render_docx.sh" -i manuscript.md --journal generic-submission
 ```
 （要 PDF 就把同一个 `--journal generic-submission` 给 `render-pdf-doc/scripts/render_pdf.sh`。）
 该预设 = 下面这套默认要求，一个参数全落齐，**不必再手敲字体字号**：

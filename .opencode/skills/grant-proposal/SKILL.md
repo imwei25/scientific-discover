@@ -147,7 +147,7 @@ description: 写基金标书/研究计划书。按渠道加载"要求卡"（内�
 ### 第 5 步 · 按卡自查 + 空洞度闸 + 排版衔接
 - **① 空洞度闸（起草完必跑，形式审查之前）**——形式合规不等于内容不空，旧版本正是只查前者才让空洞稿一路通关：
   ```bash
-  ${REPO_ROOT:-/app}/.venv/bin/python <本技能目录>/scripts/hollowness_check.py proposal.md --sections
+  "${REPO_ROOT:-/app}/.venv/bin/python" <本技能目录>/scripts/hollowness_check.py proposal.md --sections
   ```
   查五项：**空话词密度｜引文承载率（最硬的一条：引用是否落在失效点语境）｜段落落点率｜创新点对照率｜无引用强断言**，`--sections` 附章节字数占比用于核对笔墨预算；只体检某一节用 `--section 立项依据`。
   **signal not verdict**：脚本查的是论证的**形状**不是对错，命中项要回读原文确认（正常背景引用也可能被点名）。不达标 → **回 `references/rationale-and-innovation.md` 对应节重写论证**，别只替换词面——把"亟待阐明"换成"尚需探索"过不了引文承载率这一关。**同一项连续两轮仍不过 → 停下找用户**（多半是缺真实前期数据或临床观察，照 §六 给编号选项要），别无限自我返工。
@@ -181,7 +181,7 @@ description: 写基金标书/研究计划书。按渠道加载"要求卡"（内�
 1. **判渠道 → 加载对应要求卡**（尤其"评审在乎什么"评价维节）；渠道不确定就按 §六 编号选项问。
 2. **先跑空洞度闸拿客观信号**（比人肉扫读稳）：
    ```bash
-   ${REPO_ROOT:-/app}/.venv/bin/python <本技能目录>/scripts/hollowness_check.py 用户的稿.md --sections
+   "${REPO_ROOT:-/app}/.venv/bin/python" <本技能目录>/scripts/hollowness_check.py 用户的稿.md --sections
    ```
    引文承载率低 = 文献被当背景板堆着；创新点对照率为 0 = 创新点是不可证伪的断言；章节占比里失效分析远不足 35% = 立项依据写成了综述。**把这几个数字连同原句一起摆给用户看**，比"感觉有点空"有说服力得多。改法指向 `references/rationale-and-innovation.md` 的对应节。
 3. **对着评价维 + 评审心理 + funder-fit 七维，逐维审这份稿**：
@@ -200,9 +200,9 @@ description: 写基金标书/研究计划书。按渠道加载"要求卡"（内�
 6. **只评不改**；用户要按意见改稿时，转起草模式——**先补第 3.5 步的对照表与 gap 归因**（稿子空洞多半是这两样从没做过），再按第 4 步定向重写、第 5 步跑闸。
 
 ## Python 环境（可选，用于成品排版）
-> 没有项目根 `.venv`？先运行 `env-setup` 技能建好并装依赖。
+> **报「找不到 `.venv` / 缺 Python」先查命令里的引号**：安装目录含空格（`.../Niuma Science/bundle/app`），路径不加引号会被 bash 从空格处切断、报 `No such file or directory`——**那不是缺环境**。Python 环境随安装包/镜像装好，**不要重建 `.venv`、也不要重装依赖**（白烧十几分钟还可能弄坏包版本）；确认解释器真的不存在时，才在仓库根跑 `install.ps1`（Windows）/ `install.sh`。
 ```
-${REPO_ROOT:-/app}/.venv/bin/python
+"${REPO_ROOT:-/app}/.venv/bin/python"
 ```
 
 ## 约定
