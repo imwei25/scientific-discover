@@ -178,27 +178,39 @@ function runOpencode(stdinText, extraFiles = []) {
   let toolCount = 0
   let lastToolLabel = ""
 
-  // 「输出思考」：把 reasoning 各段按出现顺序攒起来（同一段的增量事件取最新全文），
-  // 到正文开始（或收尾）时【聚合成一条】推给聊天平台，绕过事件流，不受工具过滤影响。
+  // 「输出思考」：把 reasoning 各段按出现顺序攒起来（同一段的增量事件取最新全文）。
+  // 【流式推送】reasoning 是随生成【逐字增长】的，所以每约 30s 把"上次之后新增的思考"推一条，
+  // 而不是全跑完才一口气发；正文开始前与收尾时再把剩余未发的补一条，保证「思考…→ 回答」的顺序。
+  // 发送走 cc-connect（不进事件流、不受工具过滤影响）。
   const reason = new Map()   // partId → 最新全文
   const order = []           // partId 出现顺序
-  let thinkFlushed = false
-  const flushThinking = () => {   // 返回是否真发了一条（收尾兜底时据此决定要不要留出送达时间）
-    if (!THINKING || thinkFlushed) return false
-    thinkFlushed = true
-    let txt = order.map((id) => reason.get(id)).filter(Boolean).join("\n\n").trim()
-    if (!txt) return false
-    const MAX = 3000
-    if (txt.length > MAX) txt = txt.slice(0, MAX) + "\n…（思考较长，已截断）"
-    execFile(CC, ["send", "-m", "💭 思考过程\n" + txt], { windowsHide: true }, () => {})
+  const sentLen = new Map()  // partId → 已推出的字符数（流式水位）
+  const THINK_INTERVAL = 30_000
+  let lastThink = Date.now()
+  const flushNewThinking = () => {   // 只发"上次之后新增"的思考；返回是否真发了一条
+    if (!THINKING) return false
+    const parts = []
+    for (const id of order) {
+      const full = reason.get(id) || ""
+      const sent = sentLen.get(id) || 0
+      if (full.length > sent) { parts.push(full.slice(sent)); sentLen.set(id, full.length) }
+    }
+    let piece = parts.join("\n").trim()
+    if (!piece) return false
+    const MAX = 1800   // 单条别太长（企微限速 + 可读）；真超了只保留最新一段
+    if (piece.length > MAX) piece = "…" + piece.slice(-MAX)
+    execFile(CC, ["send", "-m", "💭 " + piece], { windowsHide: true }, () => {})
     return true
   }
 
-  // 进度提示：45s 一查，期间有工具活动才发；发送本身也走 cc-connect（不进事件流，不受过滤影响）
+  // 进度/思考推送：5s 一查。开了「输出思考」→ 每约 30s 把新增思考推一条（思考本身就是进度）；
+  // 进度提示则沿用"有工具活动就每 45s 报一条"。两者独立，覆盖"在想"与"在干活"两种阶段。
   let lastPing = Date.now(), pingedTools = 0
-  const ticker = PROGRESS ? setInterval(() => {
-    if (toolCount > pingedTools && Date.now() - lastPing >= 45_000) {
-      pingedTools = toolCount; lastPing = Date.now()
+  const ticker = (PROGRESS || THINKING) ? setInterval(() => {
+    const now = Date.now()
+    if (THINKING && now - lastThink >= THINK_INTERVAL) { lastThink = now; flushNewThinking() }
+    if (PROGRESS && toolCount > pingedTools && now - lastPing >= 45_000) {
+      pingedTools = toolCount; lastPing = now
       const label = lastToolLabel ? `（最近步骤：${lastToolLabel}）` : ""
       execFile(CC, ["send", "-m", `⏳ 仍在处理中，已执行 ${toolCount} 个步骤${label}`], { windowsHide: true }, () => {})
     }
@@ -236,8 +248,8 @@ function runOpencode(stdinText, extraFiles = []) {
           }
           return   // 工具进度：不给 cc-connect 看见
         }
-        // 正文开始：把攒好的思考先推一条，保证顺序是「思考 → 回答」
-        if (type === "text") flushThinking()
+        // 正文开始：把剩余未发的思考先补一条，保证顺序是「思考 → 回答」
+        if (type === "text") flushNewThinking()
         // 错误事件：把 opencode 的技术话术翻成中文再放行（cc-connect 从这条事件取文案发进聊天）
         if (type === "error" && evt?.error) {
           const e = evt.error
@@ -257,8 +269,8 @@ function runOpencode(stdinText, extraFiles = []) {
   const MAX_SEND = 5, MAX_BYTES = 50 * 1024 * 1024
   const finishAndExit = (exitCode) => {
     if (ticker) clearInterval(ticker)
-    // 全程没冒出正文（比如只调了工具就结束）也别把思考漏掉；这里现发的话要留点送达时间再退。
-    const flushedNow = flushThinking()
+    // 收尾把剩余未发的思考补齐（短任务没到 30s、或思考在正文后还有尾巴）；现发的话留点送达时间再退。
+    const flushedNow = flushNewThinking()
     // 产物兜底：新出现/被改写、且模型没自己发过的文件，补一条 send
     const fresh = []
     const rescan = (d, depth) => {
