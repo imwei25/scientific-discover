@@ -257,7 +257,7 @@ input[type=text]:focus{outline:none;border-color:var(--accent);background:#fff;b
 
 <div class="nav" id="nav">
   <button class="ibtn" id="navRecent" data-tip="最近做过的"></button>
-  <button class="ibtn" id="navWs" data-tip="回工作台"></button>
+  <button class="ibtn" id="navWs" data-tip="新建会话（换个模块）"></button>
 </div>
 
 <!-- ================= 首屏：生成器 ================= -->
@@ -316,7 +316,7 @@ input[type=text]:focus{outline:none;border-color:var(--accent);background:#fff;b
     <div class="t" id="workTitle"></div>
     <button class="ibtn" id="btnAgain" data-tip="再来一版（同一份 spec 重出）"></button>
     <button class="ibtn" id="wRecent" data-tip="最近做过的"></button>
-    <button class="ibtn" id="wWs" data-tip="回工作台"></button>
+    <button class="ibtn" id="wWs" data-tip="新建会话（换个模块）"></button>
   </div>
   <div class="wbody">
     <div class="pane">
@@ -873,8 +873,9 @@ function sendFollow() {
   start((turns ? (CFG.followPrefix || "") : "") + t, t)
 }
 
-/* ---- 顶部导航：最近做过的 / 回工作台 ---- */
-const goWs = () => { location.href = "./workspace.html" }
+/* ---- 顶部导航：最近做过的 / 新建会话 ---- */
+// 「工作台」那一整页已经撤了：模块选择现在就是主页新会话的空态，带 #new 回去即可
+const goWs = () => { location.href = "./#new" }
 $("navWs").addEventListener("click", goWs)
 $("wWs").addEventListener("click", goWs)
 $("navRecent").addEventListener("click", (e) => openRecent(e.currentTarget))
@@ -918,7 +919,7 @@ document.addEventListener("click", (e) => { if (!e.target.closest("#menu") && !e
   const bail = (title, msg) => {
     document.body.innerHTML = '<div style="padding:60px;text-align:center;color:#5b6573">'
       + '<div style="font-size:17px;color:#1f2329;margin-bottom:10px">' + esc(title) + "</div>" + esc(msg)
-      + '<br><br><a href="./workspace.html" style="color:#3b6fd4">回工作台 →</a></div>'
+      + '<br><br><a href="./#new" style="color:#3b6fd4">新建会话 →</a></div>'
   }
   let mods = null
   try { mods = ((await jget("api/modules").then((r) => (r.ok ? r.json() : null))) || {}).modules } catch (e) {
@@ -926,7 +927,7 @@ document.addEventListener("click", (e) => { if (!e.target.closest("#menu") && !e
   }
   if (Array.isArray(mods)) {
     const meta = mods.find((x) => x.id === MOD)
-    if (!meta) return bail("打不开这个模块", "服务端没有「" + MOD + "」这个模块。可能是链接过期了，回工作台重新进一次。")
+    if (!meta) return bail("打不开这个模块", "服务端没有「" + MOD + "」这个模块。可能是链接过期了，新建一个会话重新进一次。")
     if (!meta.allowed) return bail(meta.name || MOD, "你的账号还没有开通这个模块，请联系管理员。刷新本页不会有变化。")
     if (meta.ui && meta.ui !== "figure") { location.href = "./" + (meta.ui === "reader" ? "reader.html" : "") + "?m=" + encodeURIComponent(MOD); return }
   }

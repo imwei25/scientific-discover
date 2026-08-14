@@ -578,7 +578,7 @@ button{font:inherit}
     <button class="ibtn" type="button" data-act="recent" data-tip="最近做过的" aria-label="最近做过的">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5.5l3.5 2"/></svg>
     </button>
-    <button class="ibtn" type="button" data-act="ws" data-tip="回工作台" aria-label="回工作台">
+    <button class="ibtn" type="button" data-act="ws" data-tip="新建会话（换个模块）" aria-label="新建会话">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7.5" height="7.5" rx="1.6"/><rect x="13.5" y="3" width="7.5" height="7.5" rx="1.6"/><rect x="3" y="13.5" width="7.5" height="7.5" rx="1.6"/><rect x="13.5" y="13.5" width="7.5" height="7.5" rx="1.6"/></svg>
     </button>
   </div>
@@ -611,7 +611,7 @@ button{font:inherit}
       <button class="ibtn" type="button" data-act="recent" data-tip="最近做过的" aria-label="最近做过的">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5.5l3.5 2"/></svg>
       </button>
-      <button class="ibtn" type="button" data-act="ws" data-tip="回工作台" aria-label="回工作台">
+      <button class="ibtn" type="button" data-act="ws" data-tip="新建会话（换个模块）" aria-label="新建会话">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7.5" height="7.5" rx="1.6"/><rect x="13.5" y="3" width="7.5" height="7.5" rx="1.6"/><rect x="3" y="13.5" width="7.5" height="7.5" rx="1.6"/><rect x="13.5" y="13.5" width="7.5" height="7.5" rx="1.6"/></svg>
       </button>
     </div>
@@ -2930,7 +2930,8 @@ document.addEventListener("click", (e) => {
   // 自动弹出来的那次多半就是这么关掉的，不记的话每切一个模式都会再弹一遍同样的东西。
   if (!btn) { if (setMenu.classList.contains("on")) markSettingsSeen(); closeMenu(); return }
   e.stopPropagation()
-  if (btn.dataset.act === "ws") { location.href = "./workspace.html"; return }
+  // 「工作台」那一整页已经撤了：模块选择现在就是主页新会话的空态，带 #new 回去即可
+  if (btn.dataset.act === "ws") { location.href = "./#new"; return }
   if (btn.dataset.act === "new") {
     if (RUN && !confirm("这一轮还在跑，换一篇会让你看不到它的结果（后台仍会跑完，可以从「最近」再进来）。确定？")) return
     location.href = location.pathname
@@ -3453,7 +3454,7 @@ async function removeDataFile(name) {
 /**
  * 启动：确定是哪个模块 → 取它的 reader 配置 → 按配置把界面搭出来。
  * 模块来自三处，优先级从高到低：
- *   ?m=<id>        工作台点卡片进来时带的（见 workspace.html 的 enter）
+ *   ?m=<id>        在主页新会话的模块选择区点卡片进来时带的（见 index.html 的 enterModule）
  *   ?sid= 的会话   会话在创建那一刻就绑定了模块，服务端说了算
  *   litread        兜底（老书签直接开 /reader.html）
  */
@@ -3461,8 +3462,8 @@ async function removeDataFile(name) {
   const fail = (title, msg) => {
     document.body.innerHTML = '<div class="intro" style="display:flex"><div class="introcard"><h1>' + esc(title) + "</h1>"
       + '<div class="lead">' + esc(msg) + "</div>"
-      + '<div style="margin-top:22px"><button class="gobtn" data-act="ws">回工作台</button></div></div></div>'
-    document.body.addEventListener("click", (e) => { if (e.target.closest('[data-act="ws"]')) location.href = "./workspace.html" })
+      + '<div style="margin-top:22px"><button class="gobtn" data-act="ws">新建会话</button></div></div></div>'
+    document.body.addEventListener("click", (e) => { if (e.target.closest('[data-act="ws"]')) location.href = "./#new" })
   }
 
   MOD = QS.get("m") || ""
@@ -3480,13 +3481,13 @@ async function removeDataFile(name) {
   if (!MOD) MOD = "litread"
 
   const meta = mods.find((x) => x.id === MOD)
-  if (!meta) return fail("打不开这个模块", "服务端没有「" + MOD + "」这个模块。可能是链接过期了，回工作台重新进一次。")
+  if (!meta) return fail("打不开这个模块", "服务端没有「" + MOD + "」这个模块。可能是链接过期了，新建一个会话重新进一次。")
   if (meta.ui !== "reader") { location.href = "./#module=" + encodeURIComponent(MOD); return }
   if (!meta.allowed) return fail(meta.name, "你的账号还没有开通这个模块，请联系管理员。")
 
   let wf = null
   try { wf = ((await jget("api/modules/" + encodeURIComponent(MOD) + "/workflow").then((r) => r.json())) || {}).workflow } catch (_) {}
-  if (!wf || !wf.reader) return fail(meta.name, "取不到这个模块的界面配置（服务端版本可能比界面包旧）。刷新一次；还不行就回工作台，从对话里也能用这些能力。")
+  if (!wf || !wf.reader) return fail(meta.name, "取不到这个模块的界面配置（服务端版本可能比界面包旧）。刷新一次；还不行就新建一个会话，从对话里也能用这些能力。")
 
   document.title = meta.name + " · Niuma Science"
   installConfig(wf.reader)

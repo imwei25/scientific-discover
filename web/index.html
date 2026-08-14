@@ -147,6 +147,38 @@
   .modcard.sel { border-color: var(--cyan); background: rgba(59,111,212,.08); box-shadow: 0 0 0 2px rgba(59,111,212,.12); }
   .modcard .mn { display: block; color: var(--text); font-size: 13px; font-weight: 600; }
   .modcard .md { display: block; color: var(--faint); font-size: 11.5px; margin-top: 3px; line-height: 1.5; }
+  /* ---- 新会话的模块选择区（原独立的「工作台」页搬进空态，不再跳走一整页）----
+     结构照搬工作台：两个分区（工作台 / 核心能力）× 卡片网格，卡上有图标、中英标题、简述、「进入」。
+     配色换成聊天页这套浅色系统变量，不再是工作台那张深色视频底页。 */
+  .welcome.picker { max-width: 1060px; }
+  .welcome.picker .wtitle { font-size: clamp(26px, 3.6vw, 40px); }
+  .welcome.picker .wsub { max-width: 620px; margin-left: auto; margin-right: auto; }
+  .modsec { margin-top: 28px; text-align: left; }
+  .modsec-head { display: flex; align-items: baseline; gap: 12px; margin: 0 0 13px; }
+  .modsec-head .t { font-size: 15px; font-weight: 600; color: var(--text); letter-spacing: .02em; }
+  .modsec-head .e { font-size: 10px; letter-spacing: .22em; text-transform: uppercase; color: var(--faint); white-space: nowrap; }
+  .modsec-head .ln { flex: 1; height: 1px; align-self: center; background: linear-gradient(90deg, var(--line-hi), transparent); }
+  .modgrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(228px, 1fr)); gap: 14px; }
+  .modtile { display: flex; flex-direction: column; gap: 10px; padding: 16px 16px 14px; font: inherit; text-align: left;
+    background: var(--card); border: 1px solid var(--line); border-radius: var(--r-md); box-shadow: var(--shadow-sm);
+    cursor: pointer; transition: border-color .18s, box-shadow .18s, transform .18s; }
+  .modtile:hover { border-color: var(--cyan); box-shadow: 0 8px 22px rgba(15,32,60,.10); transform: translateY(-2px); }
+  .modtile:focus-visible { outline: 2px solid var(--cyan); outline-offset: 2px; }
+  .modtile .mt-ic { width: 38px; height: 38px; border-radius: 10px; display: grid; place-items: center;
+    color: var(--cyan); background: rgba(59,111,212,.10); border: 1px solid rgba(59,111,212,.22); }
+  .modtile .mt-ic svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
+  .modtile .mt-tt b { display: block; font-size: 14.5px; font-weight: 600; color: var(--text); }
+  .modtile .mt-tt span { display: block; margin-top: 2px; font-size: 9.5px; letter-spacing: .18em; text-transform: uppercase; color: var(--faint); }
+  .modtile .mt-ds { margin: 0; flex: 1; font-size: 12px; line-height: 1.65; color: var(--muted); }
+  .modtile .mt-go { align-self: flex-start; display: inline-flex; align-items: center; gap: 6px; margin-top: 2px;
+    padding: 6px 13px; border-radius: 999px; border: 1px solid var(--line-hi); background: transparent;
+    color: var(--cyan); font: inherit; font-size: 12px; cursor: pointer; transition: background .18s, border-color .18s, color .18s; }
+  .modtile:hover .mt-go, .modtile .mt-go:hover { background: var(--cyan); border-color: var(--cyan); color: #fff; }
+  .modtile .mt-go svg { width: 13px; height: 13px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+  /* 清单一时取不到时的兜底条：说清楚发生了什么并给一条能走的路，别只留一片空白 */
+  .modempty { margin-top: 24px; padding: 16px 18px; border: 1px solid var(--line); border-radius: var(--r-md);
+    background: var(--card); color: var(--muted); font-size: 12.5px; line-height: 1.8; text-align: left; }
+  @media (max-width: 640px) { .modgrid { grid-template-columns: 1fr; } }
   #modBadge { display: none; align-items: center; gap: 4px; margin-left: 6px; padding: 4px 10px; border-radius: 999px; font-size: 12px; white-space: nowrap; color: #0369a1; background: rgba(59,111,212,.12); border: 1px solid rgba(59,111,212,.4); }
   #modBadge.on { display: inline-flex; }
   #sessions .sess .mtag { display: inline-block; margin-right: 5px; padding: 0 5px; border-radius: 5px; font-size: 10.5px; color: #0369a1; background: rgba(59,111,212,.12); border: 1px solid rgba(59,111,212,.35); vertical-align: 1px; }
@@ -2282,11 +2314,13 @@ document.getElementById("shareBtn").addEventListener("click", async () => {
 // 在对话框输入 api-config 即可唤起同一个窗口（见下面 f 的 submit 处理）。
 
 document.getElementById("logoutBtn").innerHTML = ic("logout") + "<span>退出登录</span>"
-// 顶栏「模块工作台」：登录后的模块选择页（workspace.html），随时能回去换个功能开新会话
+// 左下角「新建会话」：原先是「返回模块工作台」——那是一整页跳转，回来还要再进一次会话。
+// 现在模块选择就摆在新会话的空态里（renderWelcome 的 picker），所以这个按钮直接开新会话即可。
 ;(function () {
   const b = document.getElementById("wsBtn"); if (!b) return
-  b.innerHTML = ic("backSquare")
-  b.addEventListener("click", () => { location.href = "workspace.html" })
+  b.innerHTML = ic("plus")
+  b.title = "新建会话（在空白页上选一个功能模块开始）"
+  b.addEventListener("click", () => newConversation())
 })()
 // ---- 模型切换器：显示 当前供应商·模型，可在同供应商下切换（仅接入网关时出现）----
 ;(function () {
@@ -3830,6 +3864,8 @@ async function resumeSession(id) {                 // 载入历史 → 设为当
   //      综述会话 —— 界面上没有解绑入口；③ 之后点「新对话」也继续开在综述里。
   //   用户原话："切到写综述的会话再切回来，原本的自由对话也变成综述了。"
   currentModule = boundMod
+  // 打开的是【已存在】的会话：模块早已绑定，空态该摆它自己的首屏而不是模块选择区
+  modulePicked = true
   // 【必须看 r.ok】历史接口失败时服务端回的是 400 + 空数组体，直接 .json() 会得到一个合法的 []，
   // 于是"载入失败"被渲染成"这个会话本来就是空的" —— 用户以为几十轮对话没了，而实际只是没读到。
   // 宁可显示一条明确的错误，也不要用空白冒充成功。
@@ -3884,6 +3920,7 @@ function clearCurrentSession() {
   detachStream(); sessionId = null; localStorage.removeItem("nm_sid")
   sessionStarted = false; pendingWfCard = ""; pendingWfForm = null; lastCardText = ""
   offeredSteps.clear(); HDR_CACHE.clear()
+  toPickerState()   // 会话没了 = 回到"还没选模块"的空态，别停在上一个会话的模块上
   log.innerHTML = ""; wfResetGroups(); renderFiles([]); renderUploads([]); renderWelcome(); zScopeReset(); loadZotLib()
   stepsHost = null; stepsHostEl.replaceChildren()  // 步骤条在 #log 之外，清 log 不会连带清它
 }
@@ -3935,14 +3972,123 @@ loadModules()
 const composerEl = document.getElementById("f")
 function setComposer(on) { composerEl.classList.toggle("intake-hidden", !on) }
 const CHIPS = ["分析 uploads 里的 CSV 数据", "帮我查一个 DOI 是否真实", "写一份研究计划书", "把这段数据脱敏"]
+
+/* ==== 新会话的模块选择（原 workspace.html「工作台」页搬进空态）====
+   原来选模块要跳去一整页 workspace.html，选完再跳回来；现在新建会话的空白页上直接摆卡片，
+   点「进入」当场绑定模块、就地展开该模块的首屏表单。少一次整页往返，也不会再出现
+   "在工作台和聊天页之间来回找入口"。
+
+   ★ 模块仍然只在【建会话那一刻】绑定、之后不可改（服务端强制）——所以卡片只在【空会话】的
+     空态出现；一旦开聊，欢迎页就没了，也就没有"看着能换其实换不了"的误导。 */
+// 图标与英文小标题只是展示层，按模块 id 取；服务端将来加了新模块这里没配也不会漏掉它
+//（回落到圆点图标、不显示英文行）。这两张表与 workspace.html 里的同源，改一处最好两处一起改。
+const MODICON = {
+  review: '<svg viewBox="0 0 24 24"><path d="M5 3h11l3 3v15H5z"/><path d="M14 3v5h5"/><path d="M9 12l2 2 4-4"/></svg>',
+  grant: '<svg viewBox="0 0 24 24"><path d="M6 3h9l4 4v14H6z"/><path d="M14 3v5h5"/><path d="M9 13h7M9 17h5"/><path d="M9 9h2"/></svg>',
+  paper: '<svg viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="16" rx="2"/><path d="M8 9h8M8 13h8M8 17h5"/></svg>',
+  chat: '<svg viewBox="0 0 24 24"><path d="M4 5h16v11H9l-5 4z"/><path d="M8 10h8M8 13h5"/></svg>',
+  lit: '<svg viewBox="0 0 24 24"><path d="M4 5a2 2 0 0 1 2-2h6v18H6a2 2 0 0 1-2-2z"/><path d="M20 5a2 2 0 0 0-2-2h-6v18h6a2 2 0 0 0 2-2z"/></svg>',
+  proof: '<svg viewBox="0 0 24 24"><rect x="5" y="3" width="14" height="18" rx="2"/><path d="M9 8l2 2 4-4M9 14h6"/></svg>',
+  refine: '<svg viewBox="0 0 24 24"><path d="M4 20l4-1 11-11-3-3L5 16z"/><path d="M14 6l3 3"/></svg>',
+  stat: '<svg viewBox="0 0 24 24"><path d="M4 20V12M9 20V6M14 20V14M19 20V8"/><path d="M3 20h18"/></svg>',
+  figure: '<svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="8.5" cy="9.5" r="1.5"/><path d="M21 16l-5-5-4 4-2-2-5 5"/></svg>',
+  dot: '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/></svg>',
+}
+const MODLOOK = {
+  review: { ic: "review", en: "Literature Review" },
+  grant: { ic: "grant", en: "Grant Proposal" },
+  paper: { ic: "paper", en: "SCI Paper" },
+  chat: { ic: "chat", en: "Free Chat" },
+  litread: { ic: "lit", en: "Close Reading" },
+  refcheck: { ic: "proof", en: "Manuscript Check" },
+  humanize: { ic: "refine", en: "Language Polishing" },
+  stats: { ic: "stat", en: "Statistic & Analysis" },
+  figure: { ic: "figure", en: "Scientific Illustration" },
+}
+const MODARROW = '<svg viewBox="0 0 24 24"><path d="M5 12h14M13 6l6 6-6 6"/></svg>'
+// 本次新会话是否已经选定模块。false = 空态摆模块选择网格；true = 摆该模块的首屏（标题 + 表单）。
+// 打开一个【已存在】的会话时一律为 true —— 它的模块早已绑定，没什么可选的。
+let modulePicked = false
+/** 回到"还没选模块"的状态（新建会话、点「换个模块」都走这里）。
+ *  currentModule 一并落回自由对话：选择区里输入框是留着的，用户不选卡片直接打字时
+ *  应当落进自由对话，而不是继承上一个会话的受限模块（那会把消息永久绑进去）。 */
+function toPickerState() {
+  const allowed = MODULES.filter((m) => m.allowed)
+  currentModule = allowed.some((m) => m.id === "chat") ? "chat" : (allowed[0]?.id || "chat")
+  modulePicked = false
+  setModBadge(currentModule)
+}
+/** 「换个模块 / 选个模块」= 把这一屏退回模块选择区（不再跳去另一个页面）。
+ *  首屏表单填了一半时先问一声：表单值只活在 DOM 里，重画就没了（同 confirmLeaveIntake）。 */
+function backToPicker() {
+  if (!confirmLeaveIntake()) return
+  toPickerState()
+  const w = log.querySelector(".welcome"); if (w) w.remove()
+  renderWelcome()
+  log.scrollTop = 0
+}
+/** 点某张卡的「进入」= 原来在工作台点卡片。有专用界面壳的模块照旧送去它自己那一页。 */
+function enterModule(m) {
+  if (!m) return
+  if (SHELL[m.ui]) { location.href = "./" + SHELL[m.ui] + "?m=" + encodeURIComponent(m.id); return }
+  currentModule = m.id
+  modulePicked = true
+  setModBadge(currentModule)
+  const w = log.querySelector(".welcome"); if (w) w.remove()
+  renderWelcome()
+  if (m.id === "chat") q.focus()
+  log.scrollTop = 0
+}
+function moduleTile(m) {
+  const look = MODLOOK[m.id] || { ic: "dot", en: "" }
+  const el = document.createElement("div")
+  el.className = "modtile"; el.tabIndex = 0; el.setAttribute("role", "button"); el.setAttribute("aria-label", m.name)
+  el.innerHTML = '<div class="mt-ic">' + (MODICON[look.ic] || MODICON.dot) + "</div>"
+    + '<div class="mt-tt"><b>' + esc(m.name) + "</b>" + (look.en ? "<span>" + esc(look.en) + "</span>" : "") + "</div>"
+    + '<p class="mt-ds">' + esc(m.desc || "") + "</p>"
+    + '<button class="mt-go" type="button">进入' + MODARROW + "</button>"
+  // 整张卡可点（键盘可达），卡上的「进入」按钮也可点 —— 别让两者互相吞事件
+  el.addEventListener("click", () => enterModule(m))
+  el.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); enterModule(m) } })
+  return el
+}
+/** 把模块卡铺进欢迎页。分区（工作台 / 核心能力）由服务端下发的 group 决定，
+ *  没给或给了没见过的值就归到「核心能力」——将来服务端加模块，界面上不会有卡片凭空消失。 */
+function renderModulePicker(w) {
+  w.classList.add("picker")
+  w.innerHTML = '<div class="wtitle">Niuma Science</div>'
+    + '<div class="wsub">选一个功能模块开始这次会话；也可以什么都不选，直接在下面打字自由对话。</div>'
+  const allowed = MODULES.filter((m) => m.allowed)
+  if (!allowed.length) {
+    const box = document.createElement("div"); box.className = "modempty"
+    box.textContent = MODULES.length
+      ? "你的账号当前没有开通任何模块，请联系管理员开通。下面的输入框仍可用于自由对话。"
+      : "模块清单还没取到（网关可能正忙或还在启动）。稍等片刻会自动补上；也可以直接在下面打字自由对话。"
+    w.appendChild(box)
+    return
+  }
+  const bins = { workbench: [], skills: [] }
+  allowed.forEach((m) => bins[m.group === "workbench" ? "workbench" : "skills"].push(m))
+  for (const [key, title, en] of [["workbench", "工作台", "Research Tools"], ["skills", "核心能力", "Skills"]]) {
+    if (!bins[key].length) continue          // 整栏没卡片时连标题一起不画
+    const sec = document.createElement("section"); sec.className = "modsec"
+    sec.innerHTML = '<div class="modsec-head"><span class="t">' + esc(title) + '</span>'
+      + '<span class="e">' + esc(en) + '</span><span class="ln"></span></div>'
+    const grid = document.createElement("div"); grid.className = "modgrid"
+    bins[key].forEach((m) => grid.appendChild(moduleTile(m)))
+    sec.appendChild(grid); w.appendChild(sec)
+  }
+}
+
 function renderWelcome() {
   setComposer(true)
   const w = document.createElement("div"); w.className = "welcome"
+  // 还没选模块（新建会话的第一屏）→ 摆模块选择区，别的什么都不画
+  if (!modulePicked) { renderModulePicker(w); log.appendChild(w); return }
   const cur = modById(currentModule)
-  // ★ 聊天页【不再选模块】。模块在建会话那一刻绑定、之后不可改（服务端强制），
-  //   把模块卡摆在这儿等于暗示"在这能换"——实际只对还没发第一条消息的空会话有效，
-  //   一开聊就换不了了。两个入口讲同一件事、语义还不一致，用户很容易以为自己换成功了。
-  //   现在这里只回答"我在哪个模块、怎么换"，选择权收回工作台一处。
+  // 已选定模块 → 这里只回答"我在哪个模块、怎么换"。模块在建会话那一刻绑定、之后不可改
+  //（服务端强制），所以「换个模块」只对还没发第一条消息的空会话有效 —— 它做的事就是
+  //   把这一屏退回上面那个选择区，不再是跳去另一个页面。
   if (cur && cur.id !== "chat") {
     w.classList.add("modentry")
     w.innerHTML = '<div class="wtitle">' + esc(cur.name) + '</div>'
@@ -3952,17 +4098,17 @@ function renderWelcome() {
     txt.innerHTML = '当前在 <b>' + esc(cur.name) + '</b> 模块'
     const go = document.createElement("button"); go.type = "button"; go.className = "modswitch"
     go.textContent = "换个模块"
-    go.title = "回到工作台重新选功能（模块在新建会话时绑定，开聊后不可更改）"
-    go.addEventListener("click", () => { location.href = "./workspace.html" })
+    go.title = "退回模块选择（模块在新建会话时绑定，开聊后不可更改）"
+    go.addEventListener("click", backToPicker)
     bar.appendChild(txt); bar.appendChild(go)
     w.appendChild(bar)
   } else {
     w.innerHTML = '<div class="wtitle">Niuma Science</div><div class="wsub">一站式科研平台，文献综述、选题立项、基金申报、论文撰写全链路，<br>科研需求一键直达！</div>'
     const bar = document.createElement("div"); bar.className = "modhint"
-    const txt = document.createElement("span"); txt.textContent = "当前是自由对话，随问随答。想走结构化流程（综述 / 论文 / 标书…）请到工作台选模块。"
+    const txt = document.createElement("span"); txt.textContent = "当前是自由对话，随问随答。想走结构化流程（综述 / 论文 / 标书…）可以选个模块。"
     const go = document.createElement("button"); go.type = "button"; go.className = "modswitch"
-    go.textContent = "去工作台"
-    go.addEventListener("click", () => { location.href = "./workspace.html" })
+    go.textContent = "选个模块"
+    go.addEventListener("click", backToPicker)
     bar.appendChild(txt); bar.appendChild(go)
     w.appendChild(bar)
   }
@@ -5859,11 +6005,14 @@ let sessionId = null   // reused across messages so the agent keeps context
 let sessionStarted = false
 // ---- 功能模块：新会话在创建时绑定所选模块，受限模块只能用对应技能（服务端强制）----
 let MODULES = []              // /api/modules 清单：[{id,name,desc,skill,allowed}]
-let currentModule = "chat"    // 新会话将绑定的模块（欢迎页 / 工作台选择）
-// 工作台（workspace.html）点模块卡片进来时带着 #module=<id>：这一次的新会话就绑定它。
+let currentModule = "chat"    // 新会话将绑定的模块（空态的模块选择区里点「进入」定下来）
+// 带 #module=<id> 进来时（专用界面壳的「换个模块」、老书签、老界面包的工作台页）：这一次的新会话就绑定它。
 // 只认一次并当场把 hash 消费掉（否则用户刷新页面会被反复拽回同一个模块），之后在欢迎页照常可改选。
 let pendingModule = (() => { const m = /^#module=([A-Za-z0-9_-]+)$/.exec(location.hash || ""); return m ? m[1] : "" })()
-if (pendingModule) { try { history.replaceState(null, "", location.pathname + location.search) } catch (_) {} }
+// #new = 明确要开一轮新的、停在模块选择页（阅读器 / 生成器壳里的「新建会话」跳回来时带它）。
+// 不带它就照旧恢复上次会话 —— 刷新页面不该把人从正在写的会话里踢出去。
+const wantNewSession = /^#new$/.test(location.hash || "")
+if (pendingModule || wantNewSession) { try { history.replaceState(null, "", location.pathname + location.search) } catch (_) {} }
 let sessList = []             // 最近会话缓存（含各会话绑定的模块，切会话时用）
 const modById = (id) => MODULES.find((m) => m.id === id)
 const modBadge = document.getElementById("modBadge")
@@ -5887,7 +6036,7 @@ async function loadModules() {
     // ui，不在前端写死 id。★ 必须把 ?m= 带上（那些壳是多模块共用的，缺了就兜底成第一个模块 ——
     // 那正是「点数据统计却进了文献研读」的成因）。认不出的 ui 照常留在通用壳，别把人卡在半路。
     if (hit && SHELL[hit.ui]) { location.href = "./" + SHELL[hit.ui] + "?m=" + encodeURIComponent(hit.id); return }
-    if (hit) currentModule = hit.id
+    if (hit) { currentModule = hit.id; modulePicked = true }   // 带着模块进来的 = 已经选过了，直接摆它的首屏
     else if (MODULES.some((m) => m.id === pendingModule)) addNote("ℹ 你的账号未开通该模块，已回到自由对话")
     pendingModule = ""
   }
@@ -5939,7 +6088,9 @@ function confirmLeaveIntake() {
   // 不写死"首屏"：逐步表单卡同样只活在 DOM 里，切走一样清空，这句话对两者都要成立
   return confirm("表单还没提交，切走会清空已经填的内容。要继续吗？")
 }
-document.getElementById("new").addEventListener("click", () => {
+/** 开一个新会话：清空当前会话状态，停在"选模块"的空白页上。
+ *  两个入口共用它 —— 输入框上的「新建对话」与左下角工具条里的「新建会话」（原「返回工作台」）。*/
+function newConversation() {
   if (!confirmLeaveIntake()) return
   detachStream()   // 只退订不终止：原会话若在生成会继续跑，从左侧列表随时切回来看
   sessionId = null; localStorage.removeItem("nm_sid"); log.innerHTML = ""; wfResetGroups(); renderFiles([]); loadUploads(); loadSessions(); zScopeReset(); loadZotLib(); stepsHost = null; stepsHostEl.replaceChildren()
@@ -5947,16 +6098,12 @@ document.getElementById("new").addEventListener("click", () => {
   sessionStarted = false; pendingWfCard = ""; pendingWfForm = null; lastCardText = ""   // 任务卡是一次性的，绝不能漏进下一个会话
   offeredSteps.clear(); HDR_CACHE.clear()
   liveSteps = null; liveDone = []; liveCur = null; liveFailed = []; liveImplied = []; liveStale = []   // 步骤集随会话走，新对话别沿用上一个的
-  // ★「新对话」= 在【当前模块】下再开一个，不再弹回自由对话。
-  //   医生在「SCI 论文」里连开三个会话是常态，每次被踢回自由对话、再自己走一趟工作台点回来，
-  //   是纯粹的白折腾。要换模块请点欢迎页那个「换个模块」（回工作台）。
-  //   只在当前模块已被收权时才回落，避免停在一个点了会 403 的模块上。
-  const allowed = MODULES.filter((m) => m.allowed)
-  if (!allowed.some((m) => m.id === currentModule))
-    currentModule = allowed.some((m) => m.id === "chat") ? "chat" : (allowed[0]?.id || "chat")
-  setModBadge(currentModule)
+  // ★「新会话」= 回到模块选择页（模块卡就摆在这一屏上，不再跳去工作台那一整页）。
+  //   连开三个「SCI 论文」会话的人只多点一次「进入」，而想换个功能的人省掉一趟整页往返。
+  toPickerState()
   renderWelcome(); q.focus()
-})
+}
+document.getElementById("new").addEventListener("click", () => newConversation())
 
 // 约定式选项卡：助手文本里若含 ```ask {json}``` 块，渲染成可点选表单，提交后拼成文本回发
 // srcText：markdown 原文，由调用方传入。流式实时渲染上线后气泡里装的是 HTML，textContent 里
@@ -6714,10 +6861,11 @@ document.addEventListener("visibilitychange", () => { if (!document.hidden) reas
 // 锁上后应用壳是不渲染的：万一登录窗被什么路径关掉，用户面对的就是一片空白，且窗口没失焦、
 // 上面两个事件都不会来。低频自检一次，成本只是一个 DOM 判断。
 setInterval(reassertCloudGate, 3000)
-// 登录/改密成功后进模块选择页。老网关没有 /workspace.html 这条路由（界面包可能先于安装包
-// 更新）→ 探测一下，404 就照旧刷新回聊天页，新旧客户端都不会卡在一个 404 上。
+// 登录/改密成功后进模块选择页 —— 它现在就是本页新会话的空态，所以带上 #new 重载即可
+//（不再跳去独立的 workspace.html，也就不用探测那条路由了）。
+// 必须 reload：只改 hash 不会重新执行启动那段恢复逻辑，人会停在登录前那个会话上。
 async function gotoWorkspace() {
-  try { if ((await fetch("workspace.html", { cache: "no-store" })).ok) { location.href = "workspace.html"; return } } catch (_) {}
+  try { location.hash = "#new" } catch (_) {}
   location.reload()
 }
 async function cloudPost(path, body, retryForce) {
@@ -7648,16 +7796,19 @@ loadZoteroStatus()
 //   指针、记的是"最近碰过的任意会话"，从综述会话回工作台再点自由对话时它仍指着综述会话。
 //   这里改成：显式按 module 找最近一条【自由对话】会话来 resume，找不到才落回欢迎页。
 const savedSid = localStorage.getItem("nm_sid")
-if (pendingModule === "chat") {
+if (wantNewSession) {
+  renderWelcome()                                   // 停在模块选择页（modulePicked 初值就是 false）
+} else if (pendingModule === "chat") {
   loadSessions().then(() => {
     const lastChat = sessList.find((s) => (s.module || "chat") === "chat")
-    if (lastChat) resumeSession(lastChat.id)
-    else renderWelcome()
+    if (lastChat) return resumeSession(lastChat.id)
+    modulePicked = true; currentModule = "chat"   // 明确点了「自由对话」进来 → 直接开聊，别再让他选一次
+    renderWelcome()
   })
 } else if (savedSid && !pendingModule) {
   resumeSession(savedSid)
 } else {
-  renderWelcome()
+  renderWelcome()   // 没有可恢复的会话（新用户 / 刚清过）→ 模块选择页
 }
 refreshStorage(); refreshQuota(); refreshUserBox()   // 左下角用户行：名字/档位/剩余积分
 // 公告：进来先拉一次，之后 5 分钟一次；窗口重新聚焦时补一次（节流 60s）。
