@@ -1577,7 +1577,10 @@
   .mm-btn.ghost:hover:not(:disabled) { color: var(--accent-deep); border-color: var(--cyan); }
   .mm-btn.reset { margin-left: auto; }
   .mm-btn:disabled { opacity: .55; cursor: default; }
-  /* 界面版本弹窗里的版本行 */
+  /* 版本管理弹窗：某类包在这个部署形态下换不了时整个选项卡藏掉。
+     .cb-tab 是 display:flex，会盖掉 hidden 属性自带的 display:none，必须显式补这一条 */
+  .cb-tab[hidden] { display: none; }
+  /* 版本管理弹窗里的版本行 */
   .uvrow { display: flex; align-items: center; gap: 10px; padding: 9px 2px; border-bottom: 1px solid var(--line); }
   .uvrow:last-child { border-bottom: 0; }
   .uvmeta { flex: 1; min-width: 0; }
@@ -1832,9 +1835,10 @@
              两种形态都有意义——云端账号形态下也可以改填自己的 API 走自己的路由。 -->
         <button class="umitem" id="apiCfgBtn" type="button">API 配置</button>
         <button class="umitem" id="pwBtn" type="button">修改密码</button>
-        <!-- 界面版本：换/退这一层前端静态资源。放这里而不是顶部提示条里 —— 提示条只在"有新版"时
-             才出现，出了问题想退回去的时候它恰恰不在。JS 会在没有回退能力时整项隐藏。 -->
-        <button class="umitem" id="uiVerBtn" type="button" hidden>界面版本</button>
+        <!-- 版本管理：界面版本 / 技能版本两个选项卡，都能更新与回退。放这里而不是顶部提示条里 ——
+             提示条只在"有新版"时才出现，出了问题想退回去的时候它恰恰不在。
+             JS 会在两种包都换不了的形态下（中心多用户部署）整项隐藏。 -->
+        <button class="umitem" id="uiVerBtn" type="button" hidden>版本管理</button>
         <button class="umitem danger" id="logoutBtn" type="button">退出登录</button>
       </div>
     </div>
@@ -1938,19 +1942,25 @@
     </div>
   </div>
 </div>
-<!-- 界面版本：当前用的哪一版前端、能退回哪几版、云端有没有更新。
-     只换 web/ 下的静态资源（永不含 .mjs），所以退/更新都【不重启后台】，正在跑的轮不受影响。 -->
+<!-- 版本管理：两类可在线换的包合在一个弹窗里，用选项卡分开——
+     · 界面版本：只换 web/ 下的静态资源（永不含 .mjs），【不重启后台】，正在跑的轮不受影响，刷新即生效；
+     · 技能版本：换 .opencode/skills 目录，【要重启后台 opencode】，正在生成的轮会被中断（换前会问）。
+     两者代价差得远，所以每个选项卡下面的提示语各说各的，别写成一句笼统的话。 -->
 <div id="uiVerModal" class="modal">
   <div class="modal-card" style="max-width:460px">
     <div class="modal-head">
       <!-- 「?」由 helpDot() 填进来（复用既有的 .wfdot + 气泡那一套，别再造一份） -->
-      <span class="modal-title">界面版本<span id="uiVerQ"></span></span>
+      <span class="modal-title">版本管理<span id="uiVerQ"></span></span>
       <button class="modal-x" id="uiVerClose" type="button" title="关闭"></button>
     </div>
     <div class="modal-body">
+      <div class="cb-tabs" id="uiVerTabs">
+        <button class="cb-tab on" type="button" data-vk="web">界面版本</button>
+        <button class="cb-tab" type="button" data-vk="skill">技能版本</button>
+      </div>
       <div class="mm-msg info" id="uiVerMsg">正在读取…</div>
       <div id="uiVerList"></div>
-      <div class="mm-hint">换的只是界面文件，不重启后台、不打断正在生成的任务；换完页面会自动刷新一次。</div>
+      <div class="mm-hint" id="uiVerHint"></div>
     </div>
   </div>
 </div>
@@ -2528,9 +2538,9 @@ document.getElementById("logoutBtn").innerHTML = ic("logout") + "<span>退出登
   apiCfgBtn.addEventListener("click", () => { closeMenu(); openApiCfg() })
   document.getElementById("pwBtn").addEventListener("click", closeMenu)
   document.getElementById("logoutBtn").addEventListener("click", closeMenu)
-  // 界面版本（桌面版才露出来，见下面 uiVerBtn 那段的探测）
+  // 版本管理（桌面版才露出来，见下面 uiVerBtn 那段的探测）
   const uv = document.getElementById("uiVerBtn")
-  uv.innerHTML = ic("history") + "<span>界面版本</span>"
+  uv.innerHTML = ic("history") + "<span>版本管理</span>"
   uv.addEventListener("click", closeMenu)
 })()
 // 用户信息（名字 / 档位）来自云端账号档案；没接云端（局域网/单机形态）就如实显示"本机模式"。
@@ -7210,52 +7220,12 @@ function clShow(mode, st) {
       '<div class="mm-kv"><span>今日积分</span><b>' + bar(dayL) + "</b></div>" +
       '<div class="mm-kv"><span>本月积分</span><b>' + bar(monL) + "</b></div>" +
       '<div class="mm-kv"><span>可用技能</span><b>' + ((p.skills && p.skills.length) ? p.skills.map(esc).join("、") : "全部") + "</b></div>" +
-      '<div id="clSkills"></div>' +
       '<div class="mm-hint" style="margin-top:12px">积分按每轮对话的实际消耗扣减：日积分每天 0 点(UTC)重置，'
       + "月积分每月 1 日(UTC)重置，两条线哪条用尽都会暂停调用。</div>"
-    loadClSkills()
   }
 }
-// 账号面板里的技能版本区：当前版本 / 有更新就给按钮 / 本机留存版本可回退。
-// 横幅点了「本版忽略」的用户从这里也能更新——忽略只是不弹，不是拒绝。
-async function loadClSkills() {
-  const box = document.getElementById("clSkills")
-  if (!box) return
-  try {
-    const s = await (await fetch("api/skillpacks/status", { signal: AbortSignal.timeout(10000) })).json()
-    if (!s.ok || !s.available) { box.innerHTML = ""; return }
-    const curName = s.current ? "v" + esc(s.current) : "出厂版"
-    const upd = s.update
-    const locals = (s.local || [])
-    box.innerHTML =
-      '<div class="mm-kv"><span>技能版本</span><b>' + curName +
-        (upd ? ' <button class="mm-btn ghost" id="clSkUp" style="padding:3px 10px;font-size:12px">更新到 v' + esc(upd.version) + "</button>"
-             : ' <span class="mm-faint">' + (s.latest ? "（已是最新）" : "") + "</span>") + "</b></div>" +
-      (locals.length
-        ? '<div class="mm-kv"><span>回退技能</span><b><select id="clSkVer" class="mm-input" style="width:auto;padding:3px 8px;font-size:12px">' +
-          locals.map(function (v) { return '<option value="' + esc(v.version) + '">' + (v.factory ? "出厂版" : "v" + esc(v.version)) + "</option>" }).join("") +
-          '</select> <button class="mm-btn ghost" id="clSkBack" style="padding:3px 10px;font-size:12px">回退</button></b></div>'
-        : "")
-    const busyRun = async (btn, path, body, doing) => {
-      const old = btn.textContent; btn.disabled = true; btn.textContent = doing
-      try {
-        const r = await skillPost(path, body)
-        if (!r) { btn.disabled = false; btn.textContent = old; return }
-        if (!r.ok) { clMsg("err", r.err || "操作失败"); btn.disabled = false; btn.textContent = old; return }
-        clMsg("ok", "技能已切到 " + (r.current ? "v" + r.current : "出厂版") + (r.restarted ? "（后台已重启）" : "（后台重启中…）"))
-        loadClSkills()
-      } catch { clMsg("err", "网络错误"); btn.disabled = false; btn.textContent = old }
-    }
-    const up = document.getElementById("clSkUp")
-    if (up) up.onclick = () => busyRun(up, "update", {}, "更新中…")
-    const back = document.getElementById("clSkBack")
-    if (back) back.onclick = () => {
-      const v = document.getElementById("clSkVer").value
-      if (!confirm("回退到 " + (v === "factory" ? "出厂版" : "v" + v) + "？\n技能目录会整体换回该版本并重启后台。")) return
-      busyRun(back, "rollback", { version: v }, "回退中…")
-    }
-  } catch { box.innerHTML = "" }
-}
+// 技能版本的更新 / 回退入口不在这个面板里 —— 已与「界面版本」合并进左下角用户菜单的
+// 「版本管理」弹窗（uiVerModal，两个选项卡）。这里只保留账号档案里的「可用技能」授权清单。
 // 这台机是不是"要登录才能用"的形态（= 接了云端账号）。首启探测失败时用它兜底，见下面那段 IIFE。
 const GATED_KEY = "nm_cloud_gated"
 const cloudGatedHint = () => { try { return localStorage.getItem(GATED_KEY) === "1" } catch { return false } }
@@ -7822,7 +7792,7 @@ function renderSkillBanner(su) {
   }
   const x = document.createElement("button")
   x.className = "nbx"; x.type = "button"; x.textContent = "本版忽略"
-  x.title = "这一版不再提示；之后在「云端账号」面板里随时可以手动更新或回退"
+  x.title = "这一版不再提示；之后在左下角用户菜单的「版本管理 → 技能版本」里随时可以手动更新或回退"
   x.onclick = () => { try { localStorage.setItem(SK_KEY, su.version) } catch {}; el.hidden = true }
   el.append(msg, go, x)
   el.hidden = false
@@ -7856,50 +7826,105 @@ function renderWebBanner(wu) {
   }
   const x = document.createElement("button")
   x.className = "nbx"; x.type = "button"; x.textContent = "本版忽略"
-  x.title = "这一版不再提示；之后在左下角用户菜单的「界面版本」里随时可以手动更新或回退"
+  x.title = "这一版不再提示；之后在左下角用户菜单的「版本管理 → 界面版本」里随时可以手动更新或回退"
   x.onclick = () => { try { localStorage.setItem(WB_KEY, wu.version) } catch {}; el.hidden = true }
   el.append(msg, go, x)
   el.hidden = false
 }
 
-// ---- 界面版本：看当前用的哪一版、退回旧版、手动更新（桌面版；详见 web-update.mjs 头注）----
+// ---- 版本管理：界面版本 / 技能版本，各自看当前用哪一版、退回旧版、手动更新 -------------
+// （桌面版；详见 web-update.mjs / skill-update.mjs 头注）
+//
 // 【为什么非要有回退入口】更新提示条只在"云端有更高版本"时才冒出来，而人想退回去的那一刻，
 // 恰恰是新版出了问题、提示条早已消失的时刻——那时界面上没有任何地方够得着 rollback 接口。
-// 后端的回退能力一直是齐的（web-update.mjs 留 5 版归档），缺的只是这个入口。
+// 后端两边的回退能力一直是齐的（各留 5 版归档 + 出厂版），缺的只是这个入口。
+//
+// 【两类包合一个弹窗、但绝不合并代价说明】界面包换完刷新页面就好；技能包要重启后台 opencode，
+// 正在生成的轮会被中断（服务端 409 needForce，由 skillPost 弹确认）。所以按钮文案、成功提示、
+// 底部说明都按 kind 分开写——一句"换完就好了"会让人在跑着任务时误点技能回退。
 const uiVerModal = document.getElementById("uiVerModal")
 const uiVerList = document.getElementById("uiVerList")
 const uiVerMsg = document.getElementById("uiVerMsg")
+const uiVerHint = document.getElementById("uiVerHint")
 const uiVerBtn = document.getElementById("uiVerBtn")
 document.getElementById("uiVerQ").appendChild(helpDot(
-  "「界面版本」指的是这台机器上正在用的那套前端页面（web/ 下的静态文件），不含后台代码。\n" +
-  "因此更新和回退都不重启后台、不打断正在生成的任务，换完刷新一次页面就生效。\n\n" +
-  "新版界面不对劲时，可以退回本机留存的任一旧版（自动留最近 5 版，外加「出厂版」= 安装包自带的那套）。\n" +
-  "退回去之后云端那一版仍然在，随时能再更新回来——回退前会先把现在这套存档，两个方向都不会丢。"))
+  "这里管的是这台机器上两类【能在线换】的东西，都能更新到云端最新、也都能退回本机留存的旧版：\n" +
+  "· 界面版本 = 正在用的那套前端页面（web/ 下的静态文件，不含后台代码）。换完不重启后台、\n" +
+  "  不打断正在生成的任务，刷新一次页面就生效。\n" +
+  "· 技能版本 = .opencode/skills 里的那套技能（含顶层路由 AGENTS.md）。换完要重启后台 opencode，\n" +
+  "  正在生成的轮会被中断——有轮在跑时会先问你。\n\n" +
+  "两边各自自动留最近 5 版，外加「出厂版」= 安装包自带的那套。退回去之后云端那一版仍然在，\n" +
+  "随时能再更新回来——回退前会先把现在这套存档，两个方向都不会丢。"))
+
+// 两类包的差异全都收在这张表里，其余逻辑共用；再加第三类包时只需往这里添一行
+const VKINDS = {
+  web: {
+    api: "webpacks", what: "界面",
+    latestSub: "云端已发布的新界面",
+    curSub: "当前这台机器加载的就是这一版",
+    factorySub: "安装包自带的那套界面",
+    emptySub: "本机还没有可回退的旧版——第一次更新界面之后，被换下来的那一版就会留在这里。",
+    hint: "换的只是界面文件，不重启后台、不打断正在生成的任务；换完页面会自动刷新一次。",
+    off: "这个部署形态下不能在线换界面——界面由服务器统一提供，只有桌面版才有本机版本可换。",
+    reload: true,
+  },
+  skill: {
+    api: "skillpacks", what: "技能",
+    latestSub: "云端已发布的新技能包",
+    curSub: "当前后台加载的就是这一版技能",
+    factorySub: "安装包自带的那套技能",
+    emptySub: "本机还没有可回退的旧版——第一次更新技能之后，被换下来的那一版就会留在这里。",
+    hint: "换技能要重启后台（约半分钟），正在生成的任务会被中断；有轮在跑时会先问你再动手。",
+    off: "这个部署形态下不能在线换技能——未登录云端账号，或技能由服务器统一提供。",
+    reload: false,
+  },
+}
+let uvKind = "web"
+
 function closeUiVer() { uiVerModal.classList.remove("on") }
 function uvSay(kind, text) { uiVerMsg.className = "mm-msg " + kind; uiVerMsg.textContent = text }
 const uvWhen = (ms) => { try { return new Date(ms).toLocaleString("zh-CN", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" }) } catch { return "" } }
 const uvLabel = (v) => (v === "factory" || !v ? "出厂版（安装包自带）" : "v" + v)
 
-/** 换版：更新走 update（装云端最新），回退走 rollback（装本机留存的某一版）。两者都不重启后台。 */
-async function uvSwitch(kind, version, btn) {
+/**
+ * 换版：更新走 update（装云端最新），回退走 rollback（装本机留存的某一版）。
+ * 界面包换完刷新页面；技能包换完后台已重启，就地重画一次列表。
+ */
+async function uvSwitch(act, version, btn) {
+  const K = VKINDS[uvKind]
   const all = [...uiVerList.querySelectorAll("button")]
   all.forEach((b) => { b.disabled = true })
-  btn.textContent = kind === "update" ? "更新中…" : "回退中…"
+  btn.textContent = act === "update" ? "更新中…" : "回退中…"
+  // 技能回退会重启后台，代价比界面大，动手前再确认一次（更新那条由横幅之外的 skillPost 兜 busy）
+  if (uvKind === "skill" && act === "rollback" &&
+      !confirm("回退到 " + uvLabel(version) + "？\n技能目录会整体换回该版本并重启后台。")) {
+    all.forEach((b) => { b.disabled = false }); btn.textContent = "回退到此版"; return
+  }
   try {
-    const r = await (await fetch("api/webpacks/" + kind, {
-      method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(kind === "rollback" ? { version } : {}),
-    })).json()
-    if (!r.ok) { uvSay("err", (kind === "update" ? "更新失败：" : "回退失败：") + (r.err || "未知错误")); all.forEach((b) => { b.disabled = false }); renderUiVer(null); return }
-    uvSay("ok", "✅ 已切换到 " + uvLabel(r.current) + "，正在刷新页面…")
-    // 【刷新即生效】新文件已经在磁盘上，重新拉一次页面就是那一版；带时间戳绕开缓存
-    setTimeout(() => { location.href = "./?v=" + encodeURIComponent(r.current || "factory") }, 900)
+    const body = act === "rollback" ? { version } : {}
+    // 技能包走 skillPost：它会处理服务端 409（有轮在跑 → 弹确认后带 force 重发）
+    const r = uvKind === "skill"
+      ? await skillPost(act, body)
+      : await (await fetch("api/" + K.api + "/" + act, {
+          method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
+        })).json()
+    if (!r) { all.forEach((b) => { b.disabled = false }); btn.textContent = act === "update" ? "更新" : "回退到此版"; return }  // 用户在确认框里点了取消
+    if (!r.ok) { uvSay("err", (act === "update" ? "更新失败：" : "回退失败：") + (r.err || "未知错误")); loadUiVer(); return }
+    if (K.reload) {
+      uvSay("ok", "✅ 已切换到 " + uvLabel(r.current) + "，正在刷新页面…")
+      // 【刷新即生效】新文件已经在磁盘上，重新拉一次页面就是那一版；带时间戳绕开缓存
+      setTimeout(() => { location.href = "./?v=" + encodeURIComponent(r.current || "factory") }, 900)
+    } else {
+      uvSay("ok", "✅ 技能已切换到 " + uvLabel(r.current) + (r.restarted ? "（后台已重启）" : "（后台重启中…）"))
+      loadUiVer(true)   // 保留上面这句提示，只重画列表
+    }
   } catch {
     uvSay("err", "网络错误，没有换版"); all.forEach((b) => { b.disabled = false })
   }
 }
 
 function renderUiVer(s) {
+  const K = VKINDS[uvKind]
   uiVerList.innerHTML = ""
   if (!s) return
   const cur = s.current || "factory"
@@ -7922,44 +7947,63 @@ function renderUiVer(s) {
     const b = document.createElement("button"); b.className = "mm-btn primary"; b.type = "button"; b.textContent = "更新"
     b.onclick = () => uvSwitch("update", "", b)
     row({ title: "v" + s.update.version, tag: "云端最新", tagCls: "uvnew", btn: b,
-      sub: (s.update.changelog || "").slice(0, 90) || "云端已发布的新界面" })
+      sub: (s.update.changelog || "").slice(0, 90) || K.latestSub })
   }
-  row({ title: uvLabel(cur), tag: "正在用", tagCls: "uvcur", sub: "当前这台机器加载的就是这一版" })
+  row({ title: uvLabel(cur), tag: "正在用", tagCls: "uvcur", sub: K.curSub })
   // 可回退的留存版本：排掉当前版（它的快照在转正时就被消耗掉了，本来就不在归档里）
   const olds = (s.local || []).filter((v) => v.version !== cur)
   for (const v of olds.sort((a, b) => (b.at || 0) - (a.at || 0))) {
     const b = document.createElement("button"); b.className = "mm-btn ghost"; b.type = "button"; b.textContent = "回退到此版"
     b.onclick = () => uvSwitch("rollback", v.version, b)
-    row({ title: uvLabel(v.version), btn: b, sub: (v.factory ? "安装包自带的那套界面" : "本机留存") + (v.at ? " · 存于 " + uvWhen(v.at) : "") })
+    row({ title: uvLabel(v.version), btn: b, sub: (v.factory ? K.factorySub : "本机留存") + (v.at ? " · 存于 " + uvWhen(v.at) : "") })
   }
   if (!olds.length) uiVerList.appendChild(Object.assign(document.createElement("div"),
-    { className: "uvsub", textContent: "本机还没有可回退的旧版——第一次更新界面之后，被换下来的那一版就会留在这里。" }))
+    { className: "uvsub", textContent: K.emptySub }))
 }
 
-async function openUiVer() {
-  uiVerModal.classList.add("on")
+/** 读当前选项卡那类包的状态并重画。keepMsg = 别把刚写的成功提示冲掉。 */
+async function loadUiVer(keepMsg) {
+  const K = VKINDS[uvKind]
   uiVerList.innerHTML = ""
-  uvSay("info", "正在读取…")
+  uiVerHint.textContent = K.hint
+  if (!keepMsg) uvSay("info", "正在读取…")
   let s = null
-  try { s = await (await fetch("api/webpacks/status?fresh=1", { signal: AbortSignal.timeout(20000) })).json() } catch {}
-  if (!s || !s.ok || !s.available) {
-    uvSay("info", "这个部署形态下不能在线换界面——界面由服务器统一提供，只有桌面版才有本机版本可换。")
-    return
-  }
-  uvSay("info", "")
+  try { s = await (await fetch("api/" + K.api + "/status?fresh=1", { signal: AbortSignal.timeout(20000) })).json() } catch {}
+  if (!s || !s.ok || !s.available) { uvSay("info", K.off); uiVerHint.textContent = ""; return }
+  if (!keepMsg) uvSay("info", "")
   renderUiVer(s)
+}
+
+function uvTab(kind) {
+  uvKind = kind
+  for (const t of uiVerModal.querySelectorAll(".cb-tab")) t.classList.toggle("on", t.dataset.vk === kind)
+  loadUiVer()
+}
+for (const t of uiVerModal.querySelectorAll(".cb-tab")) t.addEventListener("click", () => uvTab(t.dataset.vk))
+
+function openUiVer() {
+  uiVerModal.classList.add("on")
+  // 默认停在【能换的那个】选项卡：只登录了云端但界面由服务器提供时，开门先看到一句"换不了"很劝退
+  uvTab(uvAvail.web === false && uvAvail.skill ? "skill" : "web")
 }
 // 菜单的收起由上面那段统一处理（document 上的 click 也会关它），这里只管开弹窗
 uiVerBtn.addEventListener("click", openUiVer)
 document.getElementById("uiVerClose").addEventListener("click", closeUiVer)
 uiVerModal.addEventListener("click", (e) => { if (e.target === uiVerModal) closeUiVer() })
 document.addEventListener("keydown", (e) => { if (e.key === "Escape" && uiVerModal.classList.contains("on")) closeUiVer() })
-// 入口只在【真能换】的形态下露出来：中心多用户部署里网关是服务器的，本机没有可换的界面。
+// 入口只在【真能换点什么】的形态下露出来：中心多用户部署里网关与技能都是服务器的，本机没有可换的。
+const uvAvail = { web: null, skill: null }
 ;(async () => {
-  try {
-    const s = await (await fetch("api/webpacks/status", { signal: AbortSignal.timeout(10000) })).json()
-    if (s && s.ok && s.available) uiVerBtn.hidden = false
-  } catch { /* 探不到就保持隐藏：宁可少一个入口，也别给一个点了报错的按钮 */ }
+  const probe = async (kind) => {
+    try {
+      const s = await (await fetch("api/" + VKINDS[kind].api + "/status", { signal: AbortSignal.timeout(10000) })).json()
+      uvAvail[kind] = !!(s && s.ok && s.available)
+    } catch { uvAvail[kind] = false }   // 探不到就当不能换：宁可少一个入口，也别给一个点了报错的按钮
+  }
+  await Promise.all([probe("web"), probe("skill")])
+  // 技能包这类的选项卡：换不了就整个藏掉，别留一个点进去只说"你这儿不行"的空壳
+  for (const t of uiVerModal.querySelectorAll(".cb-tab")) t.hidden = !uvAvail[t.dataset.vk]
+  if (uvAvail.web || uvAvail.skill) uiVerBtn.hidden = false
 })()
 let noticeLastFetch = 0
 async function refreshNotice(force) {
