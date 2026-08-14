@@ -1712,6 +1712,9 @@
           <span>本地数据</span><b id="storagebar">—</b>
         </div>
         <button class="umitem" id="acctBtn" type="button">云端账号</button>
+        <!-- API 配置：原先只能在对话框输 api-config 唤起（没人猜得到），现在在菜单里常驻一条。
+             两种形态都有意义——云端账号形态下也可以改填自己的 API 走自己的路由。 -->
+        <button class="umitem" id="apiCfgBtn" type="button">API 配置</button>
         <button class="umitem" id="pwBtn" type="button">修改密码</button>
         <!-- 界面版本：换/退这一层前端静态资源。放这里而不是顶部提示条里 —— 提示条只在"有新版"时
              才出现，出了问题想退回去的时候它恰恰不在。JS 会在没有回退能力时整项隐藏。 -->
@@ -2373,6 +2376,10 @@ document.getElementById("logoutBtn").innerHTML = ic("logout") + "<span>退出登
   const toggleMenu = (e) => {
     e.stopPropagation()
     const on = !menu.classList.contains("on")
+    // 会话栏收起时（56px 窄列）菜单会被那一列裁掉，条目一条都看不见 —— 先把会话栏展开再开菜单。
+    // 与 selModeBtn 同一套做法；不写 localStorage：这是"为了让菜单能显示"的临时展开，
+    // 不该把用户"我要收起"的偏好改掉，他下次开应用还是收起的。
+    if (on && !document.body.classList.contains("sessbar-open")) setSessbar(true)
     menu.classList.toggle("on", on); box.classList.toggle("open", on)
     if (on) refreshUserBox()                     // 打开时顺手校正一次（改完密码/换了档位都在这看得到）
   }
@@ -2397,6 +2404,10 @@ document.getElementById("logoutBtn").innerHTML = ic("logout") + "<span>退出登
     if (!gated) { toast("本机未接入云端账号（当前为本机 / 局域网模式）"); return }
     openCloud()
   })
+  // API 配置：与对话框输 api-config 同一个弹窗（openApiCfg 自己会探形态、渲染当前路由）
+  const apiCfgBtn = document.getElementById("apiCfgBtn")
+  apiCfgBtn.innerHTML = ic("key") + "<span>API 配置</span>"
+  apiCfgBtn.addEventListener("click", () => { closeMenu(); openApiCfg() })
   document.getElementById("pwBtn").addEventListener("click", closeMenu)
   document.getElementById("logoutBtn").addEventListener("click", closeMenu)
   // 界面版本（桌面版才露出来，见下面 uiVerBtn 那段的探测）
