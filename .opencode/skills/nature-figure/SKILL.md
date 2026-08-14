@@ -1,7 +1,7 @@
 ---
 name: nature-figure
 description: >-
-  Submission-grade Nature/high-impact journal figure workflow for DATA-DRIVEN plots (Python matplotlib/seaborn or R ggplot2). Use whenever the user asks to create, revise, audit, or polish manuscript figures, multi-panel scientific plots, forest/KM/volcano/ROC plots, or journal-ready SVG/PDF/TIFF outputs. Before plotting, define the figure's conclusion, evidence logic, export needs, and review risks. Backend defaults to Python (installed); only use R when the user explicitly asks. Not for dashboards or Illustrator/Figma infographics. NOT for data-free schematics: mechanism/pathway diagrams and graphical abstracts go to the `mechanism-figure` skill instead (this repo keeps the upstream OpenRouter image route disabled). Also triggers on general academic figure needs without the word "Nature", including Chinese phrasings: 论文配图、科研绘图、科研作图、画图、作图、出图、论文图表、可视化、森林图、生存曲线、KM 曲线、火山图、箱线图、热图.
+  Submission-grade journal figure workflow for DATA-DRIVEN plots (Python matplotlib/seaborn; R ggplot2 only when explicitly requested). Use when the user asks to create, revise, audit, or polish manuscript figures — forest/KM/volcano/ROC, multi-panel, journal-ready SVG/PDF/TIFF. NOT for data-free schematics or graphical abstracts (use mechanism-figure) and not for dashboards/infographics. Chinese triggers: 论文配图、科研绘图、画图、出图、森林图、生存曲线、火山图、箱线图、热图.
 version: 2.1.0
 author: Community contribution (nature-skills); repo-adapted backend/default policy
 ---

@@ -1,6 +1,6 @@
 ---
 name: systematic-review
-description: 系统综述 / Meta 分析的**方法学全流程**（区别于叙述性综述）：预注册(PROSPERO) → 系统检索(PICO 概念表 + PRESS 自查) → 去重 → **双人独立筛选 + κ 一致性** → 偏倚风险评估(RoB2/ROBINS-I/NOS/QUADAS-2/JBI) → 数据提取(含效应量换算) → **GRADE 证据分级** → PRISMA 2020 流程图计数。带审计链、量化质控、确定性脚本。当用户说"做系统综述""系统评价""Meta 分析""PRISMA""双人筛选""偏倚风险/RoB""GRADE 分级""PROSPERO 注册""森林图合并"时使用。边界：**叙述性综述**（不需双人筛选/RoB/GRADE）用 literature-review；把 SR 结果**写成投稿稿**用 write-paper（其报告规范自检含 PRISMA 2020）；只做一次统计合并用 data-analysis。
+description: 系统综述/Meta 分析的**方法学全流程**（区别于叙述性综述）：预注册(PROSPERO)→系统检索(PICO+PRESS)→去重→双人独立筛选+κ→偏倚风险评估(RoB2/ROBINS-I/NOS 等按设计选)→数据提取(含效应量换算)→GRADE 分级→PRISMA 2020 流程图计数；带审计链与确定性脚本。当用户说"做系统综述""Meta 分析""PRISMA""偏倚风险/RoB""GRADE""PROSPERO"时使用。边界：叙述性综述用 literature-review；把 SR 结果写成投稿稿用 write-paper；只做一次统计合并用 data-analysis。
 ---
 
 # 系统综述 / Meta 分析（方法学流程）

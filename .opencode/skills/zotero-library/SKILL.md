@@ -1,6 +1,6 @@
 ---
 name: zotero-library
-description: 读取用户本机 Zotero 文献库并对其中 PDF 做全文证据检索（PaperQA2-lite）。探测本地 Zotero、列分类、把某分类文献导入为统一 Reference、解析 PDF 附件全文、按问题排出带页码引用的证据段供撰写带引用回答。当用户说“用我的 Zotero / 我本地的文献库 / 我收藏的 PDF / 我库里那几篇 / 就基于我导入的文献回答 / 问我 Zotero 里的文献”时使用。只读，从不改写用户文献库。
+description: 读取用户本机 Zotero 文献库并对其中 PDF 做全文证据检索（PaperQA2-lite，带页码引用），供撰写带引用回答。当用户说“用我的 Zotero”“我本地的文献库”“就基于我导入的文献回答”时使用。默认只读；唯一写操作是 push 子命令（把题录写入 Zotero 当前选中分类）。仅 opencode 与 Zotero 同机时可用，探测失败优雅回退 search-lit / fulltext-retrieval。
 triggers: Zotero, 我的文献库, 本地文献库, 我收藏的PDF, 我库里的文献, 用我导入的文献, zotero library, my PDFs, ask my papers, local reference library
 tools: Read, Write, Edit, Bash, Grep, Glob
 model: inherit

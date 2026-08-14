@@ -1,14 +1,7 @@
 ---
 name: render-pdf-doc
 description: >
-  Render academic Markdown documents (Chinese, English, or Korean) to publication-quality PDF via pandoc + xelatex.
-  Targets non-bibliography artifacts: research proposals (含 NSFC 标书), IRB cover letters, briefing
-  handouts, anchor docs (Q&A grids), and reference tables. Auto-infers pipe-table column
-  widths from content (label column shrinks to fit, data columns share remaining width).
-  CJK-aware: Chinese renders through the ctex document class (ctexart — 宋体 body / 黑体 headings, Times Latin)
-  for true Chinese academic typesetting; Korean uses Apple SD Gothic Neo / Noto Sans CJK KR (article class).
-  NOT for: verifying citations (use the reference-check skill) or figures/plots (use the nature-figure skill).
-  For Word (.docx) submission use render-docx; if the user just says "排版/typeset" without a format, ask PDF vs Word first.
+  Render academic Markdown (Chinese/English/Korean) to publication-quality PDF via pandoc + xelatex. Targets non-bibliography artifacts: research proposals (含 NSFC 标书), IRB cover letters, briefing handouts, anchor docs, reference tables. CJK-aware (Chinese via ctex for true academic typesetting; Korean supported); auto-infers pipe-table column widths. NOT for citation checking (use reference-check) or figures/plots (use nature-figure). For Word (.docx) submission use render-docx; if the user just says "排版/typeset" without a format, ask PDF vs Word first.
 triggers: render PDF, PDF 렌더, korean PDF, 한글 PDF, anchor doc PDF, briefing PDF, proposal PDF, 연구계획서 PDF, 표 정렬 PDF, 표 폭 자동, tbl-colwidths, 학술 PDF
 tools: Read, Write, Edit, Bash, Grep, Glob
 model: inherit

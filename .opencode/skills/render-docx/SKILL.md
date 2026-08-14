@@ -1,6 +1,6 @@
 ---
 name: render-docx
-description: 把 Markdown 稿件渲染成 Word (.docx) 投稿版。医学期刊投稿绝大多数要 Word（不是 PDF），国自然正文、中文核心期刊也多用 .docx 模板。内置期刊格式预设（--journal nejm/lancet/jama/bmj/cmj/generic-submission：字体、字号、边距、行距、行号、参考文献 CSL 一键落齐；默认预设 generic-submission 为 1.5 倍行距、不加行号），也可单独指定 --font/--fontsize/--margin/--line-spacing/--line-numbers，或套用期刊 Word 模板（--reference-doc）；可按 GB/T 7714 等 CSL 渲染参考文献（仅当稿件用 pandoc `[@key]` 引用+.bib 时生效，本套件默认的 `[n]` 文本引用不适用）。用 pandoc，中文比 xelatex PDF 路线更不容易漏字。当用户说"出 Word""转 docx""投稿要 Word 版""按 XX 期刊格式排版""双倍行距加行号""生成 .docx"时使用。要出 PDF 用 render-pdf-doc；要查引用真实性用 reference-check。用户只说"排版"没指明格式时，先问要 PDF 还是投稿系统要的 Word。
+description: 把 Markdown 稿件渲染成 Word (.docx) 投稿版——医学期刊投稿绝大多数要 Word，国自然正文、中文核心也多用 .docx。内置期刊格式预设（--journal nejm/lancet/jama/bmj/cmj/generic-submission，一键落齐字体/字号/边距/行距/行号/CSL；默认 generic-submission），也可单独指定各排版参数或套期刊 Word 模板，细节见正文。当用户说"出 Word""转 docx""投稿要 Word 版""按 XX 期刊格式排版""双倍行距加行号"时使用。出 PDF 用 render-pdf-doc；用户只说"排版"没指明格式时，先问要 PDF 还是 Word。
 ---
 
 # Markdown → Word (.docx) 投稿排版技能

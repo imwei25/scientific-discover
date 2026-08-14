@@ -1,6 +1,6 @@
 ---
 name: data-analysis
-description: 用于任何数据分析、统计计算、画图、读写 CSV/Excel 的任务。**别开口就要用户填「分组列/结局列/随访时间列」——先用 scripts/table_preview.py 抽 5 行把列认出来，再给编号选项让他确认（见「第零步」）**。**拿到数据先跑本技能的数据体检（scripts/data_profile.py）**——查重复ID/数值列混字符串/编码不一致/不可能值/单位混用/缺失率/日期颠倒，"必须处置"项清完才做检验与建模。使用项目自带的 Python 虚拟环境（内含 pandas / numpy / scipy / matplotlib / scikit-learn / seaborn / statsmodels）。当用户上传数据文件或要求分析、统计、探索性可视化时使用。边界：**探索性看数与 150dpi 预览图**用本技能；要**投稿级出版图**（森林图/KM/火山图，300dpi+矢量）用 nature-figure。
+description: 用于任何数据分析、统计计算、探索性画图、读写 CSV/Excel 的任务；用户上传数据文件或要求分析、统计、探索性可视化时使用。使用项目根 .venv（pandas / scipy / statsmodels / sklearn / matplotlib 等）。内置「第零步认列」与「数据体检」流程，进入技能后先照正文执行再做检验建模。边界：探索性看数与 150dpi 预览图用本技能；投稿级出版图（森林图/KM/火山图，300dpi+矢量）用 nature-figure；Table 1 与样本量用 clinical-stats。
 ---
 
 # 数据分析技能

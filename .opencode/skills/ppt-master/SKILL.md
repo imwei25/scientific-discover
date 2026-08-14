@@ -1,10 +1,7 @@
 ---
 name: ppt-master
 description: >
-  AI-driven multi-format SVG content generation system. Converts source documents
-  (PDF/DOCX/URL/Markdown) into high-quality SVG pages and exports to PPTX through
-  multi-role collaboration. Use when user asks to "create PPT", "make presentation",
-  "生成PPT", "做PPT", "制作演示文稿", or mentions "ppt-master".
+  Converts source documents (PDF/DOCX/URL/Markdown) into SVG slide pages and exports to PPTX. Use when user asks to "create PPT", "make presentation", "生成PPT", "做PPT", "制作演示文稿", or mentions "ppt-master".
 ---
 
 > **`<project_path>` 取在哪里（本部署的硬约定）**：**当前工作目录就是本会话的产物目录**

@@ -1,6 +1,6 @@
 ---
 name: write-paper
-description: 写原创研究论文（IMRaD 全流程）。把用户的真实数据与结果写成一篇结构完整的研究型论文：标题、摘要、引言、方法、结果、讨论、参考文献，并可生成投稿信(cover letter)与审稿意见回复(response to reviewers)。串起本套件的检索、分析、作图、查引用、去 AI 味、排版技能。也支持**病例报告(CARE)**写作分支（结构非 IMRaD）。当用户说"写论文""写一篇原创研究""把我的数据/结果写成论文""IMRaD""写病例报告""case report""写投稿信""回复审稿意见""改投另一个期刊"时使用。叙述性综述用 literature-review、**系统综述/Meta 的方法学流程用 systematic-review**、标书用 grant-proposal、只评审用 peer-review。本技能聚焦**写稿这一步**；从数据到成稿的完整流程按 AGENTS.md 的 paper 流水线顺序走。
+description: 写原创研究论文（IMRaD 全流程）：把用户的真实数据与结果写成结构完整的研究型论文（标题/摘要/引言/方法/结果/讨论/参考文献），并可生成投稿信与审稿意见回复；也支持病例报告(CARE)分支。当用户说"写论文""把我的数据写成论文""写病例报告""写投稿信""回复审稿意见""改投另一个期刊"时使用。叙述性综述用 literature-review、系统综述方法学用 systematic-review、标书用 grant-proposal、只评审用 peer-review。本技能聚焦写稿这一步；完整流程按 AGENTS.md 的 paper 流水线走。
 ---
 
 # 原创研究论文写作技能（IMRaD）
