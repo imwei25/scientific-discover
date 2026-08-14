@@ -72,6 +72,20 @@ function cmdList() {
   }
 }
 
+// 当前工作目录是不是「聊天接入」的绑定目录。聊天（微信/企微）里的对话就跑在绑定目录里，
+// 所以"在聊天里建任务"时 cwd 必然命中；定时任务的无头会话 cwd 是自己的会话目录，不会误判。
+// 用它给 pushChat 定默认值：在聊天里建的任务默认推送回聊天——用户在手机上建任务就是想在
+// 手机上收结果，这不能指望模型每次记得加 --push-chat（提示词会被旧会话上下文/旧技能版本
+// 盖过，真机 2026-08-14 建出来的任务就漏了）。--no-push-chat 可显式关掉。
+function cwdBoundToChat() {
+  try {
+    const s = JSON.parse(fs.readFileSync(path.join(__dirname, "..", "chat-bridge", "state.json"), "utf8").replace(/^﻿/, ""))
+    const R = (p) => { try { return fs.realpathSync(p).toLowerCase() } catch { try { return path.resolve(p).toLowerCase() } catch { return "" } } }
+    const cwd = R(process.cwd())
+    return !!cwd && ["wecom", "weixin"].some((p) => s?.[p]?.boundDir && R(s[p].boundDir) === cwd)
+  } catch { return false }
+}
+
 function scheduleFrom(m) {
   if (m.daily) return { kind: "daily", time: m.daily === "true" ? m.time : m.daily }
   if (m.weekly) return { kind: "weekly", time: m.time, days: String(m.weekly).split(",").map(Number) }
@@ -104,15 +118,15 @@ function cmdAdd(m) {
     title: m.title, prompt, module: mode === "preset" ? "chat" : (m.module || "chat"),
     schedule: scheduleFrom(m),
     maxCredits: m["max-credits"], maxRounds: m["max-rounds"],
-    // 跑完推送到聊天接入（微信/企微）。默认关（tasks.mjs 的 normalizeTask 只认显式 true）：
-    // 不是每个定时任务都想往手机上刷消息，从聊天里建的任务才建议开（技能会带上这个开关）。
-    pushChat: m["push-chat"] === "true",
+    // 跑完推送到聊天接入（微信/企微）。界面/命令行建的默认关（不是每个任务都想往手机上刷消息）；
+    // 【聊天里建的默认开】判据见 cwdBoundToChat 的注释——这是确定性兜底，不依赖模型记得传参。
+    pushChat: m["no-push-chat"] === "true" ? false : (m["push-chat"] === "true" || cwdBoundToChat()),
     ...(params ? { preset, params } : {}),
   })
   if (!ok) { console.error("任务定义有问题：\n  - " + errors.join("\n  - ")); process.exit(2) }
   T.saveTask(task)
   const r = S.register(task)
-  console.log(`已建任务 ${task.id}「${task.title}」，下次 ${fmtNext(task)}`)
+  console.log(`已建任务 ${task.id}「${task.title}」，下次 ${fmtNext(task)}${task.pushChat ? "；跑完会推送到聊天（软件开着才推得了；个人微信不实时、下次说话自动补发）" : ""}`)
   if (!r.ok) console.error(`⚠ 但没能注册到 Windows 计划任务：${r.err}\n  → 它不会自动跑。修好后执行：node web/task-cli.mjs sync`)
 }
 
