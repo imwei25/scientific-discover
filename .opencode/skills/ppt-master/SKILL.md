@@ -250,95 +250,11 @@ There is no slug matching, no name lookup, no fuzzy resolution. A name without a
 
 > To create a new layout or deck, read [`workflows/create-template.md`](workflows/create-template.md). To create a new brand, read [`workflows/create-brand.md`](workflows/create-brand.md).
 
-#### Three template kinds
-
-The architecture has three independent reference bundles. Full schema in [`docs/zh/templates-architecture.md`](../../docs/zh/templates-architecture.md). Summary:
-
-| Kind | Physical dir | Contains | Frontmatter |
-|---|---|---|---|
-| **brand** | `templates/brands/<id>/` | identity-only segment: color / typography / logo / voice / icon style | `kind: brand` |
-| **layout** | `templates/layouts/<id>/` | structure-only segment: canvas / page structure / page types / SVG roster | `kind: layout` |
-| **deck** | `templates/decks/<id>/` | full replica: identity + structure + middle (template overview) segments | `kind: deck` |
-
-**Segment ownership** (governs fusion override priority):
-
-| Segment | Sections | Owner kind on fusion |
-|---|---|---|
-| Identity | Color Scheme / Typography / Logo / Voice & Tone / Icon Style | brand |
-| Structure | Canvas / Page Structure / Page Types / SVG Roster | layout |
-| Middle | Template Overview (use cases / design intent) | deck (no other kind writes this) |
-
-#### Single-path dispatch
-
-| User path's `kind` | Step 3 action |
-|---|---|
-| `kind: brand` | `design_spec.md` + non-image assets → `<project>/templates/`; logo / illustration / icon **bitmaps** → `<project>/images/`. Strategist locks identity segment as truth; structure stays free. |
-| `kind: layout` | `design_spec.md` + SVG roster → `<project>/templates/`; any **bitmap** assets → `<project>/images/`. Strategist locks structure; identity decided in Strategist confirmation stage e–g. |
-| `kind: deck` | `design_spec.md` + template SVGs → `<project>/templates/`; logos / backgrounds / other **bitmaps** → `<project>/images/`. Strategist locks all segments; Strategist confirmation stage narrows to deck-content fields (audience / page count / outline / tone tweaks). |
-
-```bash
-TEMPLATE_DIR=<user-supplied path>
-# Bitmaps join the project's single runtime image pool (images/, referenced as
-# ../images/); the spec + template SVGs + other non-image assets stay in
-# templates/ as design reference the Strategist/Executor read but never render.
-cp -r ${TEMPLATE_DIR}/* <project_path>/templates/
-find <project_path>/templates -type f \( -iname '*.png' -o -iname '*.jpg' -o -iname '*.jpeg' -o -iname '*.gif' -o -iname '*.webp' -o -iname '*.bmp' \) -exec mv {} <project_path>/images/ \;
-```
-
-The same split applies to all three kinds — bitmaps always land in `images/`, the rest in `templates/`. The spec's `kind` field tells Strategist how to read the `templates/` side; downstream code doesn't distinguish. (Template SVGs in `templates/` are reference material only — the rendered pages live in `svg_output/` and reference images via `../images/`.)
-
-#### Multi-path fusion
-
-When the user gives two or more paths of **different kinds**, Step 3 fuses them into a single `<project>/templates/design_spec.md`. **Default granularity is segment-level integer replacement** — entire identity / structure / middle segments are taken from the highest-priority source for that segment, no implicit field-level mixing.
-
-Override priority by segment:
-
-| Combination | Identity from | Structure from | Middle from |
-|---|---|---|---|
-| brand only | brand | (free design) | (none) |
-| layout only | (free design) | layout | (none) |
-| deck only | deck | deck | deck |
-| brand + layout | brand | layout | (none) |
-| brand + deck | brand (overrides deck) | deck | deck |
-| layout + deck | deck | layout (overrides deck) | deck |
-| brand + layout + deck | brand | layout | deck |
-
-Field-level micro-adjustment (e.g. "use anthropic brand but primary changed to #FF0000") is **not** part of Step 3 fusion — it flows into Strategist confirmation stage e–g as a normal user request.
-
-#### Same-kind multiple paths — conflict resolution
-
-When the user gives two paths of the **same kind** (e.g. `brands/anthropic` + `brands/google`), Step 3 surfaces a conflict prompt before fusing — like resolving a git merge conflict:
-
-```
-AI: 你给了两个 brand，检测到段级冲突：
-    - Color Scheme（Anthropic 橙红 vs Google 多色）
-    - Typography（Styrene/AnthropicSans vs GoogleSans/Roboto）
-    - Logo（Anthropic 标 vs Google 标）
-    - Voice & Tone（restrained vs friendly）
-    - Icon Style（stroke vs filled）
-
-    要 (a) 全部按 Anthropic / (b) 全部按 Google / (c) 逐段挑？
-```
-
-Rules:
-- Default: no implicit ordering — every cross-source segment difference is reported as a conflict
-- Only when the user picks `(c)` does AI walk through each segment one by one
-- Field-level conflicts are out of scope — segment-level only
-- Three or more same-kind paths are not supported — ask the user to converge to at most two
-
-#### Fused spec provenance
-
-When fusion happens (any multi-path case), the resulting `<project>/templates/design_spec.md` carries a provenance block immediately under its H1:
-
-```markdown
-> **Fused from:**
-> - deck: `templates/decks/招商银行/` （base）
-> - brand: `templates/brands/anthropic/` （identity override）
-> - layout: `templates/layouts/academic_defense/` （structure override）
-> - conflicts resolved: Color Scheme from anthropic（user picked a）
-```
-
-Single-path Step 3 does **not** add provenance (the source is self-evident from the copied files).
+**Dispatch & fusion detail** — the three template kinds, segment ownership, single-path
+dispatch (with the copy/split commands), multi-path fusion priority, same-kind conflict
+resolution, and fused-spec provenance are in
+[`workflows/template-dispatch.md`](workflows/template-dispatch.md). Read it **only** when the
+trigger above fired; the default free-design path never opens it.
 
 **✅ Checkpoint — Default path proceeds to Step 4 without user interaction. If the user supplied one or more explicit template paths, those have been dispatched (or fused) into `<project_path>/templates/` before advancing.**
 
@@ -374,56 +290,14 @@ Read references/strategist.md
 7. Typography plan, including formula rendering policy
 8. Image usage approach
 
-**Confirm UI Auto-Launch (Mandatory — default visual confirmation surface)**: by default the Strategist confirmation stage is presented through an interactive local page in **three stages within one browser session** — Stage 1 confirms the direction anchors; the AI then re-derives the design-system layer from the **user's actual** anchors; Stage 2 confirms that layer; the AI then re-derives image and execution choices from the confirmed direction + design system; Stage 3 confirms the final operational layer. Color swatches, live font previews, icon samples, image-style reference previews, and candidate picks appear where they help judgment; the chat path is the always-valid fallback. [`scripts/docs/confirm_ui.md`](scripts/docs/confirm_ui.md) owns the schema, server lifecycle, port strategy, and fallback details; this section keeps the orchestration contract. The split:
+**Confirmation mechanics** — the Confirm UI launch/wait commands, per-stage authoring
+contract, deployment override, opt-out, and the upstream-override re-derivation rule live in
+[`workflows/confirm-stages.md`](workflows/confirm-stages.md). Read it when entering Step 4.
 
-| Stage | Confirms | Driven by |
-|---|---|---|
-| **1 — direction anchors** | canvas · audience + core message + `content_divergence` + `delivery_purpose` *(PPT only — omitted on non-PPT canvases)* (all §c key info) · `mode` + `visual_style` | the source + user intent |
-| **2 — design system** (re-derived from Stage 1) | page count · color · typography (font + size) · icons · formula policy | the confirmed Stage 1 |
-| **3 — images / execution** (re-derived from Stage 1 + Stage 2) | image usage · generated-image style · AI-image generation path · generation mode · refine-spec toggle | the confirmed direction + design system |
-
-> **Why three stages.** Design-system fields are anchored by the same few choices (`visual_style` anchors color / icon / typography; `delivery_purpose` sets the body size, page density, **and** the page-count recommendation). Image strategy depends on both the confirmed visual direction and the confirmed color system — its palette is color behavior only, while final HEX values follow Stage 2. Confirming direction first, then design system, then image / execution choices means each downstream stage fits the user's *real* choices instead of the AI's original assumptions. Page count is a **derived** field (content volume × `delivery_purpose`), which is why it lives in Stage 2, not up front.
-
-> 🛑 **本部署（Web 容器）覆盖规则 —— 确认页不可用，直接走聊天确认。**
-> 下面第 2/3/4 步描述的浏览器确认页（`confirm_ui/server.py`）在本部署里**用户打不开**：
-> 它绑定的是**容器内**的 `127.0.0.1:5050`，而容器只对外发布 3000 端口，用户浏览器里的
-> `localhost:5050` 指向的是用户自己的电脑。服务能正常启动，但没有任何人能点到那个"确认"按钮，
-> 每次 `--wait` 会空等约 590 秒才超时，三段确认累计最坏 **≈30 分钟纯等待**。
-> 因此在本部署里：**不要启动 `confirm_ui/server.py`，不要执行第 2/3/4 步里的那三条命令，
-> 也不要向用户播报任何 5050 地址**。改为直接使用下方原文已定义的 **chat-fallback 路径**：
-> 在对话里逐段呈现 Stage 1 / Stage 2 / Stage 3 的候选并等待用户回复。
-> 三段确认的**内容与顺序完全不变**，变的只是承载方式（网页 → 聊天）。
-> ⛔ BLOCKING 的语义同样保留：最终确认仍必须拿到用户明确答复才能进入 Step 5。
-> （本部署未安装 flask，该脚本即使被调用也会立刻 ModuleNotFoundError —— 这是兜底，不是依据：
-> 依据是上面这条规则，不要靠"反正它会失败"来省事。Step 6 的编辑器同样停用，见该步的覆盖规则。）
-
-Steps:
-
-> ⛔ **Steps 2 → 3 → 4 are ONE uninterrupted run — do NOT yield to the user mid-flow.** When an intermediate `--wait` returns, the AI **immediately and autonomously** re-derives and writes the next stage in the **same turn**: do **not** summarize, ask a question, report progress, or end the turn in between. The browser is sitting on a "deriving…" spinner polling for the next stage you must write — stopping here strands the page and the user must prod you in chat to finish (a bug, not the intended flow). **Stage-1 and Stage-2 confirmations are intermediate machine handoffs, not stopping points.** The single ⛔ BLOCKING wait is the **final** confirmation at the end of step 4. (Chat-fallback path — only when the page never opened — is the exception: there you do present each stage in chat and wait for a reply.)
-
-1. **Write Stage 1** to `<project_path>/confirm_ui/recommendations.json` with `"stage": "stage1"` and only the anchor fields. New recommendations MUST use the canonical `stage` selector. Enumerable anchors (`canvas` / `mode` / `visual_style` / `delivery_purpose`) name a recommended canonical `id` in a `recommend` block (the page lists common options from `confirm_ui/static/catalogs.json`); `visual_style` also carries the ≥3-style `visual_style_spectrum` (safe / shifted / bold — same hard rule as h.5). `audience` and `content_divergence` are plain `{ "value": "<free text>" }`. `content_divergence` is the **free-text** field shown under audience in §c — how closely to follow the source vs how freely to reshape it (blank = balanced; facts stay sourced at every level); it is consumed by Strategist when authoring `§IX`, recorded in `design_spec.md §I`, carries no page-count coupling, and is **not** written to `spec_lock.md`. Set `lang` to the page language (`zh` / `en` / `ja`); visible text matches `lang`, or provide multilingual `name_zh` / `name_en` / `name_ja` + `note_zh` / `note_en` / `note_ja` — when the user's language is Japanese, set `lang: "ja"` and always include the `_ja` variants (labels resolve in the page language first — a `ja` page falls back ja → en → zh, so missing `_ja` labels silently render in English; zh/en pages keep their zh↔en fallback and only try `_ja` last).
-2. **Launch + wait for Stage 1.** Background launch; the parent returns when the page writes the stage-1 `result.json`. **Long tool timeout — 600000 ms** (the `--wait` ≈590 s budget):
-   ```bash
-   python3 ${SKILL_DIR}/scripts/confirm_ui/server.py <project_path> --daemon --wait
-   ```
-   Page opens at `http://localhost:5050` — the **same port as the Step 6 live preview** (they never run at once: this page shuts down at the end of Step 4). If 5050 is held, the launcher **auto-advances** (5051, …) — read the actual URL from the launch log and report it. The page does **not** close after Stage 1: it shows a "deriving…" state and polls for Stage 2. **Launch or wait failure is non-fatal**: if it fails or times out (flask missing, port blocked, no GUI / remote / web host), do **NOT** troubleshoot — **on any non-zero exit, re-check `result.json` once** for a fresh `status: stage1-confirmed` before dropping to the chat fallback. **On success (exit 0 with a stage-1 result), do not pause or report — go straight to step 3 in the same turn.**
-3. **Re-derive Stage 2 from the confirmed anchors, write it, then wait for the design-system handoff — immediately, same turn (the page is polling for it).** Read the stage-1 `result.json` (`status: stage1-confirmed`). Using the user's **actual** confirmed anchors (not your originals), author the design-system candidates and **overwrite** `recommendations.json` with `"stage": "stage2"`: page count (content volume × `delivery_purpose`); color and typography as **generative ≥3-candidate** fields (creative recommendations always offer real choice; fewer than 3 only on the honest-shortfall exception, with a stated reason; color: core `palette` with background/secondary_bg/primary/accent/secondary_accent/body_text; typography: CJK + Latin for `heading` and `body` with `css` preview stacks + `body_size` as the body baseline in **px** (every canvas) — **one fixed value per confirmed `delivery_purpose`** (`text` 20 / `balanced` 24 / `presentation` 32), not a range; each typography candidate must include topic-matched `sample_heading` / `sample_heading_latin` / `sample_body` / `sample_body_latin` preview text, never a fixed unrelated industry sample); enumerable `icons` / `formula_policy` (recommended `id`). The still-open page polls, renders Stage 2, and preserves the user's Stage 1 picks. Then attach to the already-running page, do **not** relaunch:
-   ```bash
-   python3 ${SKILL_DIR}/scripts/confirm_ui/server.py <project_path> --wait-only --wait-stage stage2
-   ```
-   This returns when the page writes the stage-2 `result.json` (`status: stage2-confirmed`). On a non-zero exit, re-check `result.json` once before falling back to chat.
-4. **Re-derive Stage 3 from the confirmed anchors + design system, then wait for the final confirmation.** Read the stage-2 `result.json`. Author the image and execution recommendations and **overwrite** `recommendations.json` with `"stage": "stage3"`: `image_usage` as one or more source ids (`["ai"]`, `["ai","provided"]`, `["web","placeholder"]`, or `["none"]`; `none` is exclusive); `image_strategy.candidates` as **exactly three non-custom** rendering × palette recommendations from h.5 when `image_usage` includes `ai` (the page adds the fourth Custom card itself); enumerable `image_ai_path` / `generation_mode` and `refine_spec` (recommended `id` / boolean). If the recommendation involves several image sources, keep the source list structured in `recommend.image_usage` and write the usage rationale / page-role guidance into `image_notes` (for example, "封面和章节页用 AI 主视觉，产品页优先用户素材，行业背景页可用网络参考"). Write `image_ai_path` only when `image_usage` includes `ai`. Spot-illustration lean is **not** a candidate field here: it derives from the locked `visual_style`'s illustration propensity and is expressed only in the recommendation rationale / `image_notes`, never as a new confirmation field. Generated-image style palettes are **color behavior only**; final image colors follow the confirmed Stage-2 `color`. Custom image-strategy dimensions are handled by the built-in Custom card, are prose-only, and should not promise a gallery reference image. Then attach to the already-running page, do **not** relaunch (same 600000 ms budget):
-   ```bash
-   python3 ${SKILL_DIR}/scripts/confirm_ui/server.py <project_path> --wait-only
-   ```
-   This is the ⛔ BLOCKING completion: returns when the page writes the final `result.json` (`status: confirmed`, `stage: final`, carrying Stage 1 + Stage 2 + Stage 3 fields). On a non-zero exit, re-check `result.json` once. Confirmed sizes are **already px** (the system is px-only — no pt anywhere, no conversion): write `result.json` `typography.body_size` / `sizes` into `design_spec.md` / `spec_lock.md` / SVG verbatim. `generation_mode: "split"` / `refine_spec: true` are explicit user choices.
-5. **Close the confirm page (Mandatory cleanup — every path).** Shut the server down before leaving Step 4 so it cannot keep holding port 5050 (which Step 6 live preview reuses):
-   ```bash
-   python3 ${SKILL_DIR}/scripts/confirm_ui/server.py <project_path> --shutdown
-   ```
-   **Idempotent and required regardless of whether Confirm was clicked**: clicking the final Confirm already shuts the page down (then a no-op); the chat-fallback path leaves it running. Run it after reading the confirmation, before Step 5.
-
-**Always also print each stage's recommendations + URL in chat** as the always-valid fallback. **The chat fallback is staged too**: if the page never opens or a wait times out with no fresh result, present Stage 1 in chat → get confirmation → re-derive → present Stage 2 → get confirmation → re-derive → present Stage 3 → get confirmation → take those values. Either path converges.
+> 🛑 **本部署：确认页不可用（未装 flask），直接走聊天确认。** 不要启动 `confirm_ui/server.py`、
+> 不要向用户播报任何 5050 地址。三段确认的**内容与顺序完全不变**，变的只是承载方式（网页 → 聊天）：
+> 在对话里逐段呈现 Stage 1 / Stage 2 / Stage 3 的候选并等待用户回复。⛔ BLOCKING 语义保留 ——
+> 最终确认仍必须拿到用户明确答复才能进入 Step 5。细节见上面的 workflow 文件。
 
 **Honoring the confirmation (result.json is authoritative — Mandatory)**: the confirmed values **override your own recommendations** when you write `design_spec.md` / `spec_lock.md`. A user who changed any field changed it on purpose. In particular, map `image_usage` to §VIII `Acquire Via` (its value names differ from §h options — translate). `image_usage` may be either a legacy single string or a Confirm UI multi-select array; for arrays, apply every selected source. `image_notes`, when present, is a user-authored image intent note that Strategist must honor while assigning per-page §VIII rows:
 
@@ -440,21 +314,6 @@ When the confirmed `image_usage` does not include `ai` (and no legacy custom pro
 
 **Small spot illustrations are a Strategist judgment, not a confirmation field.** The user chooses image *source* through `image_usage`; whether the deck leans into decorative illustrations is anchored by the locked `visual_style`'s **illustration propensity** (`core` / `supportive` / `sparse`), expressed only in the `image_notes` rationale — never a new confirmation control. An explicit user request to use or skip illustrations overrides that default either way; `image_usage: none` still wins (write no illustration rows); and source still comes from `image_usage` — a `core` style does not silently generate AI spots when the user did not pick AI. They are ordinary §VIII image rows (`Type: Illustration` / `Illustration Sheet`) using normal `Acquire Via` values. If the plan needs ≥3 same-family AI spot illustrations, use the `ai` Illustration Sheet + `slice` workflow by default; do not generate one AI image per spot. Full rule + precedence: [`references/strategist.md`](references/strategist.md) §h. Use them on suitable pages and omit them where they would weaken clarity.
 
-**Upstream override → re-derive untouched downstream (Mandatory — chat-fallback / single-pass path).** On the **three-stage page path this is already handled** (Step 3 re-derives Stage 2 from the user's actual anchors; Step 4 re-derives Stage 3 from the confirmed anchors + design system). It still applies whenever anchors and downstream fields are confirmed **together** — the staged chat fallback collapsed into one bundle, or a legacy single-pass `result.json`. "Confirmed value wins" governs each field's *own* value — never recompute a value the user set (a size, canvas, or palette they edited stays verbatim). But a single-pass `result.json` can carry a changed **anchor** beside downstream fields still holding your original — now incoherent — recommendation (e.g. switched to `dark-tech` while the light palette you proposed is untouched). Before writing the spec, reconcile: when the user changed an anchor, re-derive the downstream fields the user did **not** themselves edit so they realize the new anchor; fields the user pinned stay as confirmed.
-
-| Anchor the user changed | Re-derive (only the downstream fields the user left at your recommendation) |
-|---|---|
-| `visual_style` (§d Layer 2 — anchors e–h) | color neutral tiers (§e), icon library / stroke (§f), typography character (§g), image rendering (§h.5) |
-| `mode` (§d Layer 1) | outline structure + register (§IX) |
-| `delivery_purpose` (§g) | body baseline + per-page density / rhythm (§6.1) |
-| `audience` / core message (§c) | tone across e–h, outline emphasis (§IX) |
-| `color` HEX (§e) | h.5 palette (re-filter for the new HEX) |
-
-Reconcile **without a new blocking wait** — fold the coherent values into `design_spec.md` / `spec_lock.md` and state the adjustment in the §8 next-step handoff (e.g. "you switched to `dark-tech`; the light palette you had left no longer fit, so background / accent were re-derived — tell me if you wanted the original"). Canvas is the explicit exception: font sizes are deliberately **not** rescaled on a canvas change (see strategist §g).
-
-**Opt-out**: if the user has said they don't want the page (e.g. "不要网页" / "just confirm in chat" / "纯聊天确认"), skip the launch entirely (step 2) and present the Strategist confirmation stage in chat as before — steps 1, 3, 4 still apply (recommendations summary in chat; wait; take chat values).
-
-The page is a **confirmation surface only** — Strategist still authors every recommendation; the page never generates content.
 
 **Mandatory — split-mode note** (not a separate confirmation): after listing the Strategist confirmation stage details, you MUST append exactly one short line (rendered in the user's language, prefixed with 💡) about generation mode. Pick the variant by qualitative read of upstream-load signals — recommended page count, source-material bulk, whether `topic-research` ran with substantial web-fetch accumulation:
 
@@ -597,34 +456,12 @@ Read references/visual-styles/<locked-style>.md   # aesthetic (spec_lock.md `vis
 
 **Design Parameter Confirmation (Mandatory)**: before the first SVG, output key design parameters from the spec (canvas dimensions, color scheme, font plan, body font size). See executor-base.md §2.
 
-**Live Preview Auto-Startup (Mandatory)**: before the first SVG, automatically start the browser editor in live mode and keep it running continuously through Executor + Step 7 export:
-```bash
-python3 ${SKILL_DIR}/scripts/svg_editor/server.py <project_path> --live --daemon
-```
-> 🛑 **本部署（Web 容器）覆盖规则 —— 本小节整体停用：不要执行上面这条命令。**
-> 该编辑器绑定的是**容器内**的 `127.0.0.1:5050`，而容器只对外发布 3000 端口 ——
-> 用户浏览器里的 `localhost:5050` 指向的是用户自己的电脑，**没有任何人能打开它**。
-> 唯一还能用到这个服务的是 `visual_review.py`（AI 逐页看图自查），但它另需
-> playwright + chromium（实测 +1.00 GB 镜像体积），本部署也未安装，故整条链路停用。
-> 因此在本部署里：
-> - **不要**启动 `svg_editor/server.py`（本部署未装 flask，启动也只会 ModuleNotFoundError）；
-> - **不要**向用户播报任何 `localhost:5050` 地址或"实时预览已就绪 / 可以在浏览器里编辑"之类的话
->   —— 那是个永远打不开的链接，只会让用户以为是自己网络有问题；
-> - **不要**因为预览缺失就停下来问用户或反复排查 —— 直接继续生成 SVG，这不是错误状态。
->
-> **替代做法**：用户想看效果 → 引导其在界面"产出"侧栏下载 Step 7 导出的 `.pptx`；
-> 用户想改 → 让其在**对话里**直接描述（"第 3 页标题改成 X"），你直接编辑 `svg_output/`
-> 下对应的 SVG 后重新导出。下面关于"保持服务运行 / 应用注解"的条目在本部署里一并失效。
-
-下面四条在本部署【全部不适用】，保留仅为说明其它部署的原始行为——尤其前两条与上面的覆盖规则
-直接冲突（它们要求"把 URL 报给用户"和"把 URL 当检查点、否则明确报告启动失败"），**以覆盖规则为准**：
-
-- ~~Start it immediately when Executor begins; `svg_output/` may be empty. Editor opens at `http://localhost:5050`; if another project already holds it, the launcher **auto-advances to the next free port** — read the actual URL from the launch log and report that.~~ ← **本部署不适用：不启动、不播报**
-- ~~Treat the launch URL as a checkpoint value: before writing the first SVG, either report the actual URL from the launcher or state the launch failure explicitly. Do not silently continue while claiming preview is available.~~ ← **本部署不适用：预览缺失是预期状态，不是需要报告的失败，直接继续生成**
-- ~~Run it as a long-running side process/session; do not wait for it to exit before generating SVG pages. Do not wait for user confirmation after startup.~~
-- ~~**Service must keep running** until one of: (a) the user clicks **Exit preview** in the browser, or (b) the user explicitly asks in chat to stop it. Generation continues even if the user closes the editor.~~
-- **Do NOT read or apply submitted annotations during generation.** Users may annotate at any time, but Executor proceeds without touching them. The window to apply annotations opens only after Step 7 completes — see [`workflows/live-preview.md`](workflows/live-preview.md).
-- The editor also supports **staged direct edits** (text content + SVG element attributes previewed immediately, then written to `svg_output/` only when the user clicks **Apply changes**; `Ctrl+Z` / Undo drops staged edits) alongside annotation; re-export stays chat-driven. Full scope and editor details: see [`workflows/live-preview.md`](workflows/live-preview.md) Notes.
+**Live preview** — 🛑 **本部署整体停用**：不要启动 `svg_editor/server.py`，不要向用户播报任何
+`localhost:5050` 地址（那是个永远打不开的链接），也不要因为预览缺失就停下来问用户或反复排查 ——
+直接继续生成 SVG，这不是错误状态。用户想看效果 → 引导其下载 Step 7 导出的 `.pptx`；想改 →
+让其在对话里描述，你直接编辑 `svg_output/` 下的 SVG 后重新导出。
+**生成期间不要读取或应用任何已提交的注解**（应用注解的窗口只在 Step 7 之后开启）。
+其它部署的原始启动流程见 [`workflows/live-preview-startup.md`](workflows/live-preview-startup.md)。
 
 **Pre-generation Batch Read (Mandatory)**: before the first SVG, batch-read every distinct layout SVG referenced in `spec_lock.page_layouts` and every distinct chart SVG referenced in `spec_lock.page_charts` (plus any §VII backup charts). One read per file, up front — do not re-read these during page generation. See executor-base.md §1.0.
 
@@ -705,69 +542,17 @@ python3 ${SKILL_DIR}/scripts/svg_to_pptx.py <project_path>
 #   exports/<project_name>_<timestamp>_narrated.pptx  ← narrated pptx (embedded audio + auto-advance timings)
 ```
 
-> The native pptx consumes `svg_output/` directly so the converter can preserve
-> high-fidelity primitives (icon `<use>` placeholders, image `preserveAspectRatio`
-> → native picture crop metadata, rounded rect `rx/ry` → `prstGeom roundRect`).
-> Native raster images are optimized by default before writing `ppt/media`
-> (`--image-sizing cap`, `--image-max-dimension 2560`, `--image-quality 85`).
-> This optimization downscales only oversized full source images; it does not
-> crop pixels out of embedded PPTX media, and it does not reduce a small
-> placement image merely because it is currently displayed small. Display
-> cropping remains editable PPT picture-crop metadata. Add `--no-image-optimize`
-> only when the deck must retain original image bytes. Use
-> `--image-sizing display --image-scale 2` only for aggressive size reduction.
-> The `svg_output/`
-> snapshot in `backup/<timestamp>/` is always written so the project can be
-> re-exported from frozen SVG sources without re-running the LLM. The SVG-rendered
-> preview pptx is opt-in via `--svg-snapshot` — live preview already provides the
-> SVG visual reference, so it's only needed when you want a self-contained file
-> to share. Pass `-s output` or `-s final` to force a single source if you need it.
+**Optional flags & post-export windows** — native-pptx fidelity notes, raster / merge /
+`--native-objects` flags, animation (`-t` / `-a` / `--animation-*`) and recorded-narration
+options, plus the post-export annotation / direct-edit / preview windows are in
+[`workflows/export-options.md`](workflows/export-options.md). The three commands above are the
+default path and need none of them.
 
-> **Paragraph editability vs line fidelity** — by default, mergeable dy-stacked
-> paragraph blocks collapse into one editable PowerPoint text frame with multiple
-> `<a:p>`, improving body-text editing and resize/reflow behavior. Add `--no-merge`
-> only when the user explicitly asks for strict line-layout fidelity or when a
-> layout-tight page must keep every dy-stacked line as its own text frame. The
-> merge detector is conservative; mixed-layout text falls back to per-line frames.
-
-> **Native table/chart objects** — supported data charts and pure text-grid
-> tables carry `data-pptx-native` markers by default (Executor transcribes
-> them at draw time; see `references/executor-base.md` §3.2) and the markers
-> stay dormant.
-> Add `--native-objects` only when the user explicitly wants
-> PowerPoint-editable native tables/charts and accepts that those objects may
-> render differently across PowerPoint / Keynote / LibreOffice / WPS. Without
-> the flag, marked groups export through their SVG fallback children like
-> ordinary SVG content.
-
-**Optional animation flags** (page transitions are on by default; per-element entrance is off by default — turn it on only when the user asks for it):
-- `-t <effect>` — page transition. Default `fade`. Options: `fade` / `push` / `wipe` / `split` / `strips` / `cover` / `random` / `none`.
-- `-a <effect>` — per-element entrance animation. **Default `none`** — pages appear as a whole, no auto-firing element builds (the unsolicited cascade reads as the "AI deck" tell). Opt in with `auto` (map effect from group id: chart→wipe, card-/step-/pillar-→fly, title/takeaway→fade; image-like ids `hero` / `figure-` / `image` / `img-` / `kpi` cycle a richer pool — zoom / dissolve / circle / box / diamond / wheel — so multiple images vary across the deck), a specific effect like `fade`, or `mixed` for the legacy 16-effect cycle. Requires top-level `<g id="...">` groups (already required by Executor).
-- `--animation-trigger {on-click,with-previous,after-previous}` — Start mode (matches PowerPoint's animation-pane Start dropdown). Default `after-previous` (click-free cascade; pace via `--animation-stagger`). Use `on-click` for presenter-paced reveals, or `with-previous` for all-at-once.
-- `--animation-config <path>` — optional object-level sidecar. Default: `<project_path>/animations.json` when present.
-- `--auto-advance <seconds>` — kiosk-style auto-play.
-
-**Optional custom animations** (only when the user asks to tune animation order/effects/timing for specific objects):
-
-Run the standalone [`customize-animations`](workflows/customize-animations.md) workflow. Default export applies page transitions but no per-element entrance animation; create `animations.json` (or pass `-a auto`) only when the user asks for element animation or object-level customization.
-
-**Optional recorded narration** (only when the user asks for narrated/video export):
-
-Run the standalone [`generate-audio`](workflows/generate-audio.md) workflow. The AI picks a narration backend (`edge` by default, or a configured cloud provider such as ElevenLabs / MiniMax / Qwen / CosyVoice for high-quality or cloned voices), asks the user once (backend + voice + rate/settings + embed-or-not, all with recommended values), then executes `notes_to_audio.py` and (if chosen) re-exports the PPTX with `--recorded-narration audio`.
-
-Do NOT call `notes_to_audio.py` directly without going through the workflow — `--voice` / `--voice-id` is required and the workflow produces the locale/provider-aware recommendation that makes the choice meaningful.
-
-Full effect list, anchor logic, and limits: [`references/animations.md`](references/animations.md).
 
 > ❌ **NEVER** substitute `cp` for `finalize_svg.py` — finalize performs multiple critical processing steps
 > ❌ **NEVER** force `-s output` for the legacy/preview pptx (PowerPoint's internal SVG parser drops icons and rounded corners). The default auto-split already gives native the high-fidelity source it needs without touching legacy.
 > ❌ **NEVER** use `--only` (it suppresses one of the two output files)
 
-> **Post-export annotation window**: the preview service from Step 6 typically remains running after export. If the user submitted annotations in the browser (during Executor or after export) and now asks to apply them — they may quote the browser prompt (`Changes saved to svg_output...` / `修改已保存到 svg_output...`), say "apply my annotations" / "应用注解" / equivalent — run [`live-preview`](workflows/live-preview.md) Step 2 to apply and re-export. Annotations submitted during generation are also handled here, not earlier.
-
-> **Direct edits in the browser**: the user may also stage text / SVG attribute edits in the preview. These land in `svg_output/` only after the user clicks **Apply changes**. If they ask to "re-export" / "重新导出" after applying such edits, just re-run Step 7.2–7.3 (finalize + export); no annotation-application step is needed unless they also saved AI-needed annotations.
-
-> **Preview not running?** Any time the user mentions "live preview", "preview", "看效果", or wants to select/click a slide element and the service is not running, run [`live-preview`](workflows/live-preview.md) Step 1 to start it. If the service is already running, just point them at the URL — do not restart.
 
 ---
 

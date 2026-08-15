@@ -35,10 +35,15 @@ const PLAT_CN = { wecom: "企业微信", weixin: "个人微信" }
 // 两处差了四个数量级；联网查证也没找到腾讯公开过任何频率数字，第三方实测指向的都是
 // 秒~小时级短窗口节流。默认值太严：2026-08-15 真机上 4 条提示就把当天额度烧光，
 // 之后所有真实回复全被它自己挡下，用户什么都收不到。
-// 所以按"短窗口"口径设：100 条/小时；到 80 条时在回复末尾提醒用户（不单独发，那又要花一格）。
-const WEIXIN_BURST_LIMIT = 100
+// 【别再往上调，这个数是实测出来的】2026-08-15 先按"短窗口"口径试过 100/小时，另一台机器
+// 实测【发到第 20 条就被限流】——所以平台的真实阈值比短窗口口径低得多，也比作者注释的
+// "4 条/24h"高。取 15/小时：明显低于观测到的 20，留出安全余量；正常聊天一轮一条回复，
+// 15 条足够，真撞上也会在回复末尾提前告知（见 oc-wrap 的 budgetNotice）。
+// 配套的保守策略见 oc-wrap：微信上不发任何过程消息（思考只在最后随答案发一次）、
+// 产物超过 5 个打成压缩包发（每个文件各计一条配额，见 cc-connect 的 media_outbound.go）。
+const WEIXIN_BURST_LIMIT = 15
 const WEIXIN_BURST_WINDOW_SECS = 3600
-const WEIXIN_BURST_WARN = 80
+const WEIXIN_BURST_WARN = 10
 
 let CTX = null            // { root, webDir, sessionOut, getModel, getCloudEnv, log }
 let proc = null           // cc-connect 子进程

@@ -92,6 +92,9 @@ process.on("exit", (code) => {
 // 加载不了（老界面包、打包漏文件），聊天不能整个哑掉 —— 退回"只发成品扩展名"的保守口径。
 let WF = null
 try { WF = await import("../workflows.mjs") } catch { WF = null }
+// 零依赖 zip（与界面「打包下载」同一份实现）。加载不了就不打包、退回逐个发。
+let ZIPPER = null
+try { ZIPPER = await import("../minizip.mjs") } catch { ZIPPER = null }
 const FALLBACK_DELIVERABLE = /\.(docx?|pdf|xlsx?|xlsm|pptx?|png|jpe?g|svg|tiff?|eps|zip|md|csv)$/i
 const FALLBACK_SECRET = /(mapping|_map|crosswalk|对照表|还原表|keyfile).*\.csv$/i
 /** 相对路径数组 → { send, held }。WF 在就用它，不在就用上面两条保守规则。（导出仅为单测。） */
@@ -330,6 +333,28 @@ export function budgetNotice(used, limit, warnAt = Math.floor(limit * 0.8)) {
   }
   return `\n\n———\n📮 提示：微信一小时内能发的消息数量快到上限了（已用 ${used}/${limit}）。` +
     "如果接下来有回复没收到，等一会儿会自动恢复，不用重发。"
+}
+
+// 产物多于这个数就打包（仅微信）。与 pickOutputs 的 MAX_SEND 同口径：到了这个量级，
+// 逐个发既吃配额（每个文件各计一条）又刷屏。
+export const ZIP_THRESHOLD = 5
+
+/**
+ * 把多个产物压成一个 zip，返回压缩包路径；失败返回 ""（调用方退回逐个发，绝不因此丢交付）。
+ * 复用仓库里那份零依赖的 minizip —— 与界面「打包下载」同一套实现。
+ */
+function zipFiles(files, workDir) {
+  try {
+    if (!ZIPPER?.zip) return ""
+    const entries = files.map((f) => ({
+      name: (workDir ? path.relative(workDir, f).replace(/\\/g, "/") : "") || path.basename(f),
+      data: fs.readFileSync(f),
+    }))
+    const stamp = new Date().toISOString().slice(0, 16).replace(/[-:T]/g, "")
+    const out = path.join(workDir || process.cwd(), `交付物_${stamp}.zip`)
+    fs.writeFileSync(out, ZIPPER.zip(entries))
+    return out
+  } catch (e) { wlog("打包产物失败（退回逐个发）：" + (e?.message || e)); return "" }
 }
 
 /** 这个平台的发送预算紧不紧（纯函数，导出仅为单测）。 */
@@ -812,9 +837,11 @@ function runOpencode(stdinText, extraFiles = []) {
     const usedAfter = noteSend()
     const notice = BUDGET_TIGHT ? budgetNotice(usedAfter, SEND_LIMIT, SEND_WARN_AT) : ""
     if (notice) { out(notice); wlog(`额度提示：本小时已用 ${usedAfter}/${SEND_LIMIT}`) }
-    if (BUDGET_TIGHT && THINKING && !thinkingEverSent) {
+    // 微信上思考【从不中途发】（见 ticker 里的 BUDGET_TIGHT 判断），收尾时若有内容就并进答案——
+    // 一条消息里带走，零额外开销。thinkingEverSent 在微信上恒为 false，留着只为企微路径的语义完整。
+    if (BUDGET_TIGHT && THINKING) {
       const tail = pendingThinkingText()
-      if (tail) { out("\n\n———\n💭 " + tail + "\n") ; wlog("短任务：思考并入答案，省一条额度") }
+      if (tail) { out("\n\n———\n💭 " + tail + "\n"); wlog("思考并入答案（微信保守策略）") }
     }
     saveLastReply(answerText, toSend)
 
@@ -848,12 +875,27 @@ function runOpencode(stdinText, extraFiles = []) {
     }
 
     if (!toSend.length) { setTimeout(() => liveExit(exitCode), (flushedNow || releasedAnswer) ? 1500 : 0); return }
+
+    // 【微信：产物多就打包】cc-connect 的 media_outbound.go 里【每个文件各计一次发送配额】，
+    // 所以 6 个文件 = 6 条，而实测发到第 20 条就被限流——一次交付就能吃掉三分之一额度。
+    // 超过阈值就压成一个 zip 发出去：1 条搞定，用户在手机上也更好收。企微没有配额，保持原样
+    // （逐个发更方便直接预览）。压缩失败不阻断交付，退回逐个发。
+    let zipNote = ""
+    if (BUDGET_TIGHT && toSend.length > ZIP_THRESHOLD) {
+      const packed = zipFiles(toSend, workDir)
+      if (packed) {
+        zipNote = `📦 本轮有 ${toSend.length} 个交付物，已打成一个压缩包发给你（微信对机器人发消息的条数有限制，分开发容易被拦）。`
+        wlog(`产物打包：${toSend.length} 个 → ${path.basename(packed)}`)
+        toSend.length = 0
+        toSend.push(packed)
+      }
+    }
     const sendArgs = ["send"]
     // 被折下的中间文件不单发一条消息（企微 30 条/分的限速经不起），搭在这条附件上说一句就够。
     // 【只能有一个 -m】抢救文案与"中间文件"提示要拼成一段，push 两次 -m 会被后一个覆盖，
     // 抢救文案（也就是本轮真正的答案）就又丢了。
     const heldNote = held > 0 ? `📎 本轮的交付物在下面；另有 ${held} 个中间文件留在软件的会话目录里，可在软件端查看或打包下载。` : ""
-    const oneMsg = [rescueMsg, heldNote].filter(Boolean).join("\n\n")
+    const oneMsg = [rescueMsg, zipNote, heldNote].filter(Boolean).join("\n\n")
     if (oneMsg) sendArgs.push("-m", oneMsg)
     for (const f of toSend) sendArgs.push(IMG.has(path.extname(f).toLowerCase()) ? "--image" : "--file", f)
     // 排障日志走独立文件（SCI_WRAP_LOG 由 chat-bridge 注入）。【不能写 stderr】：run 结束后的

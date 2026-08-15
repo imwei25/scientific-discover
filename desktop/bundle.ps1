@@ -304,7 +304,13 @@ Copy-Tree "$Root\web" "$App\web" `
 #   Microsoft\Windows\PowerShell\ModuleAnalysisCache 出来。开发机上是垃圾，跟着进包更没意义。
 # .opencode：技能 + opencode 插件依赖
 # 排除 __pycache__：开发机跑过技能脚本就会生成，进包纯属无谓体积（本次实测 18 个目录）
-Copy-Tree "$Root\.opencode" "$App\.opencode" -ExcludeDirs @("__pycache__")
+# 排除 ai-image-comparison：ppt-master 的 AI 配图风格对照图库（~30 MB PNG），
+#   唯一消费方是 scripts/confirm_ui/server.py 的 /api/ai-image-comparison 网页画廊。
+#   本包刻意不装 flask（见 packaging/requirements.txt 第 52-68 行的实测结论），确认页起不来，
+#   这些图在包里永远没人看。模型侧也用不到 —— SKILL.md 明令禁止直接读图片文件。
+#   ⚠️ 将来若把 flask 加回 requirements 启用确认页，必须同时把这一项从排除清单里去掉，
+#      否则画廊会静默空白（只有本地仓库跑得出图，安装包跑不出）。
+Copy-Tree "$Root\.opencode" "$App\.opencode" -ExcludeDirs @("__pycache__", "ai-image-comparison")
 Copy-Item "$Root\AGENTS.md" $App -Force
 
 # ---- env-setup 不进包 ----
