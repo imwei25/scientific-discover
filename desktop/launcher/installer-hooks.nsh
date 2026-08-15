@@ -65,6 +65,29 @@
   Push $0
   Push $R8
   Push $R9
+
+  ; ---- 先清掉「上一版有、这一版没有」的残留 ----
+  ;
+  ; 【为什么必须有】NSIS 把新文件**覆盖**到旧树上，只删自己登记过的东西。凡是上一版随包、
+  ; 这一版不再随包的文件，既不被覆盖也不被删除，永远留着。实测 0.1.29 → 0.1.30：
+  ; ppt-master 的 AI 配图对照图库从包里移除后，用户机器上那 55 个文件 / 43.2 MB 原样躺着 ——
+  ; 安装器瘦了 33.5 MB，老用户一个字节没省回来。
+  ; 下面那串 POSTUNINSTALL 的 Delete/RMDir 已经证明「逐个点名」会漏（0.1.4 漏 web-packs、
+  ; 0.1.5/0.1.6 漏 workspace.html），所以这里反着做：打包时生成 bundle\manifest.txt 记下
+  ; 随包有什么，装完按清单把「包拥有的目录里、不在清单上的」删掉。以后增删随包内容不用改这里。
+  ;
+  ; 【为什么放 POSTINSTALL 而不是 PREINSTALL】和下面接管旧版数据同一个道理：要等新文件都解压
+  ; 成功了再动手。装前就清，万一解压中途失败，用户手上就是一套被掏空的应用。
+  ;
+  ; 【安全性由脚本自己兜】清单缺失 / 读不出 / 条目数低于 2000 时它什么都不做并打印原因；
+  ; 打包时刻意排除的用户状态文件（登录态、会话标题、模型路由）在它的白名单里。
+  ; 旧安装包不带 manifest.txt 与该脚本，IfFileExists 直接跳过，属正常。
+  IfFileExists "$INSTDIR\bundle\cleanup-stale.ps1" 0 nm_no_cleanup
+    DetailPrint "清理上一版残留文件…"
+    nsExec::ExecToLog 'powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$INSTDIR\bundle\cleanup-stale.ps1" -BundleDir "$INSTDIR\bundle"'
+    Pop $0
+  nm_no_cleanup:
+
   StrCpy $R8 ""   ; 迁移出错标记：非空 = 别删旧目录
 
   ; 旧版装在哪：先读它自己写的键（用户可能装到了别处），读不到再退回默认的 per-user 目录

@@ -519,6 +519,26 @@ if ($leak) { throw "打包中止：仍存在 model-config.json —— $($leak.Fu
 # 全树按名扫会误伤 .venv 里第三方包自带的同名文件。
 if (Test-Path "$App\chat-bridge") { throw "打包中止：仍存在 chat-bridge\（含企微 bot 凭证）—— $App\chat-bridge" }
 
+# ================= 6.9 随包清单（升级时据此清掉上一版残留）=================
+#
+# 【为什么要有】NSIS 把新文件**覆盖**到旧目录树上，只管自己登记过的文件 —— 上一版装过、
+# 这一版不再随包的东西会永远留在磁盘上。实测 0.1.29 → 0.1.30：对照图库从包里移除后，
+# 用户机器上那 43.2 MB 原样留着，安装器瘦了 33.5 MB 而老用户一个字节没省回来。
+# 装完后由 cleanup-stale.ps1 按这份清单把「包拥有的目录里、不在清单上的」文件删掉。
+# 用清单而不是在 installer-hooks.nsh 里逐个点名：那种清单天生会漏（那文件自己的注释里
+# 记着 0.1.4 漏 web-packs、0.1.5/0.1.6 漏 workspace.html 的账），以后增删随包内容也不用改它。
+#
+# ★ 必须放在这里：所有内容都已就位（技能已封存、运行时状态已清、出厂时间戳已写），
+#   再往后就只剩自检了。提前生成会漏掉后面才写的文件，而漏掉 = 装完被当成残留删掉。
+Step "随包清单 manifest.txt"
+Copy-Item "$PSScriptRoot\cleanup-stale.ps1" "$Staging\cleanup-stale.ps1" -Force
+$manifestLines = Get-ChildItem $Staging -Recurse -File -Force |
+  ForEach-Object { $_.FullName.Substring($Staging.Length).TrimStart([char]92) }
+Write-Utf8NoBom "$Staging\manifest.txt" ($manifestLines -join "`n")
+Write-Host "  清单已写入：$($manifestLines.Count) 个文件" -ForegroundColor Green
+# 防呆：清单条目数远低于常态说明枚举出了问题，此时发包会让客户端把刚装好的程序当残留删掉。
+if ($manifestLines.Count -lt 2000) { throw "打包中止：清单只有 $($manifestLines.Count) 条，明显不完整（cleanup-stale.ps1 的安全下限也是 2000）" }
+
 # ================= 7. 汇总自检 =================
 Step "汇总自检"
 & "$nodeDir\node.exe" --version | ForEach-Object { Write-Host "  node $_" }
