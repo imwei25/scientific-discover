@@ -2018,7 +2018,14 @@ export const isSecretName = (name) => SECRET_GLOBS.some((g) => globMatch(g, Stri
 //
 // 【chat 没有契约】自由对话没有 steps，用它兜底会把一切 .md 都判成副产物 —— 那是最不该收窄的
 // 模块。所以无契约时只把"确定的中间态"判为副，其余一律主（≈ 保持它今天的样子）。
-const BULK_DIRS = /^(pdfs|zotero_lib|library_texts|audit|figures_src|tmp|temp)$/i
+//
+// 【为什么按目录降级、而不是按扩展名】ppt-master 一次 8 页 PPT 会写出 24 个 SVG
+//（svg_output/ 草稿、svg_final/ 定稿、backup/<时间戳>/ 整份副本），外加素材 png。
+// 它们全都命中"成品扩展名"兜底，于是 24 个中间 SVG 和唯一那份 .pptx 并排站在主区。
+// 但 svg/png **不能**从 DELIVERABLE_EXT 里删——figure 模块的交付物本来就是 svg/png。
+// 所以降级判据放在目录上：svg_output / svg_final / backup / … 这些名字本身就说明了
+// "这里面装的是中间态"，而 figure 模块的图落在 figures/ 与根目录，不受影响。
+const BULK_DIRS = /^(pdfs|zotero_lib|library_texts|audit|figures_src|tmp|temp|svg_output|svg_final|backup|analysis|sources|templates|icons|images|notes)$/i
 const DELIVERABLE_EXT = /\.(docx?|pdf|xlsx?|xlsm|pptx?|png|jpe?g|svg|tiff?|eps|zip)$/i
 const SCRATCH_EXT = /\.(py|log|sh|ps1|bat|cmd|ipynb|json|tmp|bak|lock)$/i
 /**
@@ -2029,16 +2036,27 @@ const SCRATCH_EXT = /\.(py|log|sh|ps1|bat|cmd|ipynb|json|tmp|bak|lock)$/i
  * @returns "main" | "aux"
  */
 export function artifactKind(modId, values, name) {
-  const s = String(name || "")
+  const s = String(name || "").replace(/\\/g, "/")
   if (!s) return "aux"
-  const base = s.split("/").pop()
-  const top = s.includes("/") ? s.split("/")[0] : ""
+  const segs = s.split("/")
+  const base = segs[segs.length - 1]
   // 成批素材目录（下载来的全文、抽出来的正文、自查中间件）永远是副产物，
   // 哪怕某一步把它写进了 emits（library_texts/* 与 audit/* 正是这种情况）。
-  if (top && BULK_DIRS.test(top)) return "aux"
+  //
+  // ★ 判**任意一段**，不是只判第一段。原来只看 s.split("/")[0]，而 ppt-master 把一切都放在
+  //   `<项目名>/` 底下（`稿件/svg_output/page-01.svg`），于是这些目录名一个都匹配不到，
+  //   降级规则整个失效。backup/<时间戳>/svg_output/ 这种嵌套副本同理，只有逐段比才拦得住。
+  if (segs.slice(0, -1).some((d) => BULK_DIRS.test(d))) return "aux"
   if (SCRATCH_EXT.test(base)) return "aux"
   const w = WORKFLOWS[modId]
-  if (!w) return DELIVERABLE_EXT.test(base) || !/\.(txt|tsv)$/i.test(base) ? "main" : "aux"
+  if (!w) {
+    if (DELIVERABLE_EXT.test(base)) return "main"
+    if (/\.(txt|tsv)$/i.test(base)) return "aux"
+    // 无契约时"其余一律主"只对【根目录】成立。技能自己开的工作目录（ppt-master 的
+    // `<项目名>/design_spec.md`、`spec_lock.md`）是它的施工现场，不是交到用户手上的东西——
+    // 而根目录那一层才是它主动摆出来的成果。仍是按目录判，没有第二张"什么算主产物"的名字表。
+    return segs.length > 1 ? "aux" : "main"
+  }
   const steps = values ? stepsFor(modId, values) : w.steps
   for (const st of steps) for (const g of st.emits || []) if (globMatch(g, s)) return "main"
   return DELIVERABLE_EXT.test(base) ? "main" : "aux"

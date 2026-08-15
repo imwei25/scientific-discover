@@ -58,6 +58,51 @@ test("自由对话没有契约：只折确定的中间态，其余一律主区�
   assert.equal(kind("", "whatever.md"), "main", "模块认不出时也不许收窄")
 })
 
+// ---- ppt-master 的产物树 ----
+// 一次 8 页 PPT 会写出 24 个 SVG（svg_output/ 草稿、svg_final/ 定稿、backup/<时间戳>/ 整份副本）
+// 外加素材 png。它们全命中"成品扩展名"兜底，而 ppt-master 把一切都放在 `<项目名>/` 底下、
+// 老的 BULK_DIRS 只看路径第一段——两者叠起来，主区就是 30 个文件里躺着唯一那份 .pptx。
+const PPT_TREE = [
+  "汇报.pptx", "ppt_outline.md",
+  "bench/exports/bench_20260815.pptx", "bench/design_spec.md", "bench/spec_lock.md",
+  "bench/notes/total.md", "bench/sources/source.md", "bench/images/hero.png",
+  ...Array.from({ length: 8 }, (_, i) => `bench/svg_output/page-0${i + 1}.svg`),
+  ...Array.from({ length: 8 }, (_, i) => `bench/svg_final/page-0${i + 1}.svg`),
+  ...Array.from({ length: 8 }, (_, i) => `bench/backup/20260815/svg_output/page-0${i + 1}.svg`),
+]
+const DELIVERED = ["汇报.pptx", "ppt_outline.md", "bench/exports/bench_20260815.pptx"]
+
+for (const mod of ["litread", "chat"]) {
+  test(`PPT 会话（${mod}）主区只留交付物，24 个中间 SVG 不许挤进来`, () => {
+    const main = PPT_TREE.filter((f) => kind(mod, f) === "main")
+    assert.deepEqual(main, DELIVERED)
+  })
+}
+
+test("按目录降级不能误伤 figure —— 它的交付物本来就是 svg/png", () => {
+  // 所以修法是把 svg_output/ svg_final/ backup/ 判成中间目录，
+  // 而【不是】把 svg/png 从成品扩展名里删掉。
+  for (const n of ["figures/fig1.png", "fig2.svg", "figures/fig3.svg", "fig4.png"])
+    assert.equal(kind("figure", n), "main", n)
+  for (const n of ["fig1.png", "figures/fig2.svg", "路线图.svg"])
+    assert.equal(kind("paper", n), "main", n)
+})
+
+test("backup/<时间戳>/ 底下一律副产物：那是重复副本，不是第二份交付", () => {
+  assert.equal(kind("litread", "稿件/backup/20260815/svg_output/page-01.svg"), "aux")
+  // 连交付扩展名也一样——备份出来的 pptx 不该和正本并排
+  assert.equal(kind("figure", "proj/backup/20260815/figures/fig1.png"), "aux")
+})
+
+test("PPT 会话推进微信的是 .pptx，不是一堆 SVG", () => {
+  for (const mod of ["litread", "chat"]) {
+    const { send, held } = WF.pickChatFiles(PPT_TREE, { mod })
+    assert.ok(send.every((f) => !f.endsWith(".svg")), `${mod} 不许把 SVG 推给用户：${send}`)
+    assert.equal(send[0], "汇报.pptx", `${mod} 交付物要排在最前`)
+    assert.equal(held, PPT_TREE.length - send.length)
+  }
+})
+
 // ---- /api/outputs 的 kind 字段（含 pre 那一档）----
 // pre = 会话开始前就在目录里的文件。文件夹会话的工作目录就是用户自己的目录，
 // 他那几百篇原始 PDF 必须能和"这次做出来的"分开，否则侧栏永远是一片噪声。
