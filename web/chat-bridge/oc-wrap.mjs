@@ -132,6 +132,37 @@ const lastReplyFile = () => path.join(process.cwd(), ".cc-connect", "last-reply.
 // bridge.log 与 wrap.log 同目录（都由 chat-bridge.mjs 定在 <root>\chat-bridge\ 下）
 const bridgeLogPath = () =>
   process.env.SCI_WRAP_LOG ? path.join(path.dirname(process.env.SCI_WRAP_LOG), "bridge.log") : ""
+// 网关日志在应用根：<app>\gateway.log，即 chat-bridge 目录的上一级。
+// 用它来回答"为什么半天没动静"——云端排队/上游限速只写在这里（网关只把它 SSE 广播给网页界面，
+// 聊天这条链路收不到，2026-08-15 真机：用户问美股，10 分钟零反馈，gateway.log 里 6 条「上游限速中」）。
+const gatewayLogPath = () =>
+  process.env.SCI_WRAP_LOG ? path.join(path.dirname(path.dirname(process.env.SCI_WRAP_LOG)), "gateway.log") : ""
+
+/**
+ * 从 gateway.log 【本轮新增的部分】里认出"为什么卡着"。（纯函数，导出仅为单测。）
+ * 【只看新增部分】gateway.log 里的行没有时间戳，无法判断新旧；用起跑时记下的字节偏移当分界，
+ * 是这里唯一站得住的"最近"判据。
+ */
+/**
+ * 该不该发一条「还没动静」的播报？（纯函数，导出仅为单测。）
+ * 两个都得满足：距最后一次事件够久（quiet），且距上一次播报也够久（别刷屏）。
+ * 首次门槛比后续短——此刻用户屏幕上什么都没有，等太久他就以为软件死了、开始反复重发。
+ */
+export function silenceDue({ now, lastEventAt, lastSilenceAt, notices, first, repeat, max }) {
+  if (notices >= max) return false
+  const due = notices === 0 ? first : repeat
+  return now - lastEventAt >= due && now - lastSilenceAt >= due
+}
+
+export function stallReason(tailText) {
+  const s = String(tailText || "")
+  if (/上游限速中/.test(s)) return "云端上游正在限速（大家都在用，得排队）"
+  if (/排队第\s*\d+\s*位/.test(s)) {
+    const m = /排队第\s*(\d+)\s*位/.exec(s)
+    return `云端排队中（当前第 ${m[1]} 位）`
+  }
+  return ""
+}
 const RESEND_TTL = 24 * 3600_000   // 隔天再来问别的，还补发昨天的旧答案就很怪了
 const IMG_EXTS = new Set([".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp"])
 
@@ -445,17 +476,60 @@ function runOpencode(stdinText, extraFiles = []) {
   // 所以调到【5 分钟】才报一轮、且期间真有工具活动才报——不刷屏。
   const PROGRESS_INTERVAL = 5 * 60_000
   let lastPing = Date.now(), pingedTools = 0
+
+  // ---- 「一点动静都没有」也要播报 ----------------------------------------
+  // 上面那条进度提示的触发条件是 toolCount > pingedTools（**必须有工具活动**）。可最需要
+  // 反馈的恰恰是【一个事件都没有】的情况：云端排队 / 上游限速时 opencode 一行都不输出，
+  // toolCount 恒为 0 → 永远不报 → 用户面对无限沉默，还会以为软件死了而反复重发（那几条又
+  // 全堵在队列里）。2026-08-15 真机：问"查一下昨天美股走势"，10 分钟零反馈，
+  // 而 gateway.log 里已经写了 6 条「上游限速中」——信息一直有，只是没人告诉用户。
+  // SCI_WRAP_SILENCE_MS 可调（也是单测用来把等待缩短的开关）；给个下限免得被调成刷屏。
+  const SILENCE_FIRST = Math.max(3000, Number(process.env.SCI_WRAP_SILENCE_MS) || 90_000)
+  const SILENCE_REPEAT = 5 * 60_000   // 之后每隔这么久再报，别刷屏
+  const SILENCE_MAX = 4               // 报满这些次就闭嘴，剩下的交给用户自己判断
+  let lastEventAt = Date.now(), silenceNotices = 0, lastSilenceAt = 0
+  const gwOffset = (() => { try { return fs.statSync(gatewayLogPath()).size } catch { return 0 } })()
+  const readStallReason = () => {
+    try {
+      const f = gatewayLogPath()
+      if (!f) return ""
+      const size = fs.statSync(f).size
+      if (size <= gwOffset) return ""            // 网关这轮没写过新东西 → 说不出原因，别瞎猜
+      const fd = fs.openSync(f, "r")
+      try {
+        const buf = Buffer.alloc(Math.min(size - gwOffset, 64 * 1024))
+        fs.readSync(fd, buf, 0, buf.length, gwOffset)
+        return stallReason(buf.toString("utf8"))
+      } finally { fs.closeSync(fd) }
+    } catch { return "" }
+  }
+
   const ticker = (PROGRESS || THINKING) ? setInterval(() => {
     const now = Date.now()
     if (THINKING && now - lastThink >= THINK_INTERVAL) { lastThink = now; flushNewThinking() }
     if (PROGRESS && toolCount > pingedTools && now - lastPing >= PROGRESS_INTERVAL) {
       pingedTools = toolCount; lastPing = now
+      lastSilenceAt = now   // 刚报过进度就别紧接着再报"没动静"
       const label = lastToolLabel ? `（最近步骤：${lastToolLabel}）` : ""
       execFile(CC, ["send", "-m", `⏳ 仍在处理中，已执行 ${toolCount} 个步骤${label}`], { windowsHide: true }, () => {})
+    }
+    if (PROGRESS) {
+      const quietFor = now - lastEventAt
+      if (silenceDue({ now, lastEventAt, lastSilenceAt, notices: silenceNotices, first: SILENCE_FIRST, repeat: SILENCE_REPEAT, max: SILENCE_MAX })) {
+        silenceNotices++; lastSilenceAt = now
+        const why = readStallReason()
+        const mins = Math.round(quietFor / 60_000)
+        const msg = why
+          ? `⏳ ${why}，已等 ${mins > 0 ? mins + " 分钟" : "一会儿"}。任务没丢，轮到就会继续——不用重发（重发会排在这条后面，更慢）。`
+          : `⏳ 还在等模型响应（已等 ${mins > 0 ? mins + " 分钟" : "一会儿"}，暂时没有任何输出）。任务没丢，不用重发。`
+        wlog(`静默播报第 ${silenceNotices} 次：${why || "原因未知"}（已静默 ${quietFor}ms）`)
+        execFile(CC, ["send", "-m", msg], { windowsHide: true }, () => {})
+      }
     }
   }, 5000) : null
 
   rl.on("line", (line) => {
+    lastEventAt = Date.now()   // 有任何一行输出就算"有动静"，静默播报据此计时
     const t = line.trim()
     if (t.startsWith("{")) {
       try {

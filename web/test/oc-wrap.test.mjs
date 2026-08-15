@@ -5,7 +5,7 @@ import assert from "node:assert/strict"
 import fs from "node:fs"
 import os from "node:os"
 import path from "node:path"
-import { classifyRun, attachPaths, stripRefs, imageArgs, stageFiles, consumePending, stdoutAbandoned, agentSessionOf } from "../chat-bridge/oc-wrap.mjs"
+import { classifyRun, attachPaths, stripRefs, imageArgs, stageFiles, consumePending, stdoutAbandoned, agentSessionOf, stallReason, silenceDue } from "../chat-bridge/oc-wrap.mjs"
 
 const A = ["run", "--format", "json"]   // cc-connect 固定前缀
 const ATT = "C:\\Users\\u\\Niuma Science\\out\\.cc-connect\\attachments\\m1"
@@ -177,4 +177,44 @@ test("agentSessionOf：从 argv 取 --session；没有就空串", () => {
   assert.equal(agentSessionOf(["run", "--format", "json"]), "")
   assert.equal(agentSessionOf(["run", "--session"]), "")   // 末尾缺值别读出 undefined
   assert.equal(agentSessionOf(undefined), "")
+})
+
+// ── 卡住时的原因识别 ────────────────────────────────────────────────────────
+// 云端排队/限速只写进 gateway.log（网关把它 SSE 广播给网页界面，聊天这条链路收不到）。
+// 真机 2026-08-15：用户问美股，10 分钟零反馈，而 gateway.log 里已有 6 条「上游限速中」。
+test("stallReason：认出上游限速", () => {
+  assert.equal(stallReason("[cloud] 云端正忙：上游限速中\n"), "云端上游正在限速（大家都在用，得排队）")
+})
+
+test("stallReason：认出排队并带上位次", () => {
+  assert.equal(stallReason("[cloud] 云端正忙：排队第 3 位（共 5 个在等，2 个在跑）"), "云端排队中（当前第 3 位）")
+})
+
+test("stallReason：无关日志不瞎猜原因", () => {
+  // 说不出原因就返回空串，让调用方退回"还在等模型响应"的中性说法——
+  // 编一个原因比不说更糟：用户会照着那个错误的原因去做无用功。
+  for (const s of ["gateway on http://localhost:27821", "[oc] 就绪", "", null, undefined])
+    assert.equal(stallReason(s), "")
+})
+
+// 静默播报的节流：首次门槛短（用户屏幕上什么都没有，等太久他会以为软件死了、反复重发），
+// 之后拉长；报够次数就闭嘴。两个条件都要满足：距最后事件够久 且 距上次播报够久。
+test("silenceDue：首次用短门槛，未到不报", () => {
+  const base = { lastEventAt: 0, lastSilenceAt: 0, notices: 0, first: 90_000, repeat: 300_000, max: 4 }
+  assert.equal(silenceDue({ ...base, now: 89_000 }), false)
+  assert.equal(silenceDue({ ...base, now: 90_000 }), true)
+})
+
+test("silenceDue：报过一次后改用长间隔", () => {
+  const base = { lastEventAt: 0, notices: 1, first: 90_000, repeat: 300_000, max: 4 }
+  assert.equal(silenceDue({ ...base, now: 200_000, lastSilenceAt: 90_000 }), false)
+  assert.equal(silenceDue({ ...base, now: 400_000, lastSilenceAt: 90_000 }), true)
+})
+
+test("silenceDue：刚有过事件就不该报（哪怕上次播报很久以前）", () => {
+  assert.equal(silenceDue({ now: 600_000, lastEventAt: 599_000, lastSilenceAt: 0, notices: 1, first: 90_000, repeat: 300_000, max: 4 }), false)
+})
+
+test("silenceDue：报满上限就闭嘴，剩下交给用户判断", () => {
+  assert.equal(silenceDue({ now: 1e9, lastEventAt: 0, lastSilenceAt: 0, notices: 4, first: 90_000, repeat: 300_000, max: 4 }), false)
 })
