@@ -92,7 +92,7 @@ test("任务名统一挂在自己的文件夹下（卸载时能整个删掉）",
 // 那段输出是 GBK 字节，正则永远匹配不上 → 删除接口返回失败 → 按设计"撤销失败就不删定义" →
 // 用户面对一条既不会跑、也删不掉的僵尸任务。现在改成比对任务名清单，与编码和系统语言无关。
 test("撤销一个不存在的任务算成功（否则计划任务被手删过的任务就永远删不掉）",
-  { skip: process.platform !== "win32" ? "非 Windows" : false }, () => {
-    const r = S.unregister("nosuchtask_" + Math.floor(Math.random() * 1e6))
+  { skip: process.platform !== "win32" ? "非 Windows" : false }, async () => {
+    const r = await S.unregister("nosuchtask_" + Math.floor(Math.random() * 1e6))
     assert.equal(r.ok, true, `应幂等成功，实际：${r.err}`)
   })

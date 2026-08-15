@@ -16,7 +16,9 @@
 import fs from "node:fs"
 import os from "node:os"
 import path from "node:path"
-import { execFileSync } from "node:child_process"
+import { execFile } from "node:child_process"
+import { promisify } from "node:util"
+const pexec = promisify(execFile)
 import { fileURLToPath } from "node:url"
 import { nextRunAt } from "./tasks.mjs"
 
@@ -169,45 +171,53 @@ const decodeOut = (buf) => {
   try { return new TextDecoder("gbk").decode(buf) } catch { return buf.toString("utf8") }
 }
 
-function sh(args) {
+/**
+ * 调 schtasks。【必须异步】此前用的是 execFileSync —— 而 `/Query` 在真机（271 条计划任务）实测
+ * 要 1.2 秒，同步调用会把整个 Node 事件循环钉死那么久：打开一次定时任务面板，聊天、产物列表、
+ * 所有请求跟着一起卡。首启时再叠上技能解密还原 + 指纹闸 + opencode 重扫 + 启动对账，前端 20 秒
+ * 超时被顶穿，用户看到「读取定时任务失败：signal timed out」，点删除也像没反应（其实请求已排队，
+ * 后台缓过来才执行，任务是真被删了）——2026-08-15 真机踩到。
+ * encoding: "buffer" 是为了拿原始字节交给 decodeOut 按 GBK 解（中文 Windows 的 schtasks 输出不是 UTF-8）。
+ */
+async function sh(args) {
   try {
-    const out = execFileSync("schtasks.exe", args, { windowsHide: true, stdio: ["ignore", "pipe", "pipe"] })
-    return { ok: true, out: decodeOut(out) }
+    const { stdout } = await pexec("schtasks.exe", args, { windowsHide: true, encoding: "buffer", maxBuffer: 64 * 1024 * 1024 })
+    return { ok: true, out: decodeOut(stdout) }
   } catch (e) {
     const txt = [e?.stdout, e?.stderr].filter(Boolean).map(decodeOut).join(" ").trim()
-    return { ok: false, code: e?.status ?? -1, out: txt || String(e?.message || e) }
+    return { ok: false, code: e?.code ?? -1, out: txt || String(e?.message || e) }
   }
 }
 
 /** 注册（已存在则覆盖）。返回 {ok, err?}。 */
-export function register(task, opts = {}) {
+export async function register(task, opts = {}) {
   if (!isWindows()) return { ok: false, err: "定时任务目前只支持 Windows" }
   const xml = buildXml(task, opts)
   const f = path.join(os.tmpdir(), `sci-task-${task.id}-${process.pid}.xml`)
   // UTF-16LE + BOM：schtasks /XML 只认这个，见文件头说明
   fs.writeFileSync(f, "﻿" + xml, "utf16le")
   try {
-    const r = sh(["/Create", "/TN", taskName(task.id), "/XML", f, "/F"])
+    const r = await sh(["/Create", "/TN", taskName(task.id), "/XML", f, "/F"])
     return r.ok ? { ok: true } : { ok: false, err: `注册计划任务失败：${r.out}` }
   } finally { try { fs.rmSync(f) } catch {} }
 }
 
-export function unregister(id) {
+export async function unregister(id) {
   if (!isWindows()) return { ok: true }
   // 【幂等判据用"名字在不在清单里"，不是匹配报错文案】
   // 第一版是匹配 /找不到|does not exist/ —— 在中文 Windows 上永远匹配不上（输出是 GBK 字节），
   // 于是"计划任务早就被手动删掉了"的任务【在界面里永远删不掉】：撤销失败 → 按设计不删定义 →
   // 用户面对一条既不会跑、也删不掉的僵尸任务。实测踩到过。
   // 名字比对与编码、系统语言全都无关，这才是能一直站得住的判据。
-  if (!listRegistered().includes(taskName(id))) return { ok: true }
-  const r = sh(["/Delete", "/TN", taskName(id), "/F"])
+  if (!(await listRegistered()).includes(taskName(id))) return { ok: true }
+  const r = await sh(["/Delete", "/TN", taskName(id), "/F"])
   return r.ok ? { ok: true } : { ok: false, err: r.out }
 }
 
 /** 列出本产品注册过的任务名（卸载清理与"对账"用）。 */
-export function listRegistered() {
+export async function listRegistered() {
   if (!isWindows()) return []
-  const r = sh(["/Query", "/FO", "CSV", "/NH"])
+  const r = await sh(["/Query", "/FO", "CSV", "/NH"])
   if (!r.ok) return []
   const names = []
   for (const line of r.out.split(/\r?\n/)) {
@@ -218,11 +228,11 @@ export function listRegistered() {
 }
 
 /** 卸载 / 重装时把整个文件夹清干净——留着的话它会到点去启动一个已经不存在的 exe。 */
-export function unregisterAll() {
+export async function unregisterAll() {
   if (!isWindows()) return { ok: true, removed: 0 }
   let removed = 0
-  for (const n of listRegistered()) {
-    const r = sh(["/Delete", "/TN", n, "/F"])
+  for (const n of await listRegistered()) {
+    const r = await sh(["/Delete", "/TN", n, "/F"])
     if (r.ok) removed++
   }
   return { ok: true, removed }
@@ -241,10 +251,10 @@ export function unregisterAll() {
  *   所以：自动跑的对账（网关启动）只补注册、不删；删除只在用户明确点「重新注册」/ 跑 `task-cli sync`
  *   时才做——那时他自己知道自己在对哪一份清单。
  */
-export function sync(tasks, { prune = false } = {}) {
+export async function sync(tasks, { prune = false } = {}) {
   if (!isWindows()) return { ok: false, err: "非 Windows，跳过", added: 0, removed: 0 }
   const want = new Map(tasks.map((t) => [taskName(t.id), t]))
-  const have = new Set(listRegistered())
+  const have = new Set(await listRegistered())
   let added = 0, removed = 0
   const errs = []
   for (const [, t] of want) {
@@ -253,10 +263,10 @@ export function sync(tasks, { prune = false } = {}) {
     //   /F 覆盖是幂等的，几个任务的开销可以忽略。
     // 停用的任务也注册（XML 里 Enabled=false），让 Windows 任务计划程序里看到的和软件里
     // 看到的是同一份清单，用户不会以为"停用 = 被删了"。
-    const r = register(t)
+    const r = await register(t)
     if (r.ok) added++; else errs.push(r.err)
   }
   const orphans = [...have].filter((n) => !want.has(n))
-  if (prune) for (const name of orphans) { const r = unregister(name.split("\\").pop()); if (r.ok) removed++ }
+  if (prune) for (const name of orphans) { const r = await unregister(name.split("\\").pop()); if (r.ok) removed++ }
   return { ok: errs.length === 0, added, removed, orphans: orphans.length, ...(errs.length ? { err: errs.join("；") } : {}) }
 }

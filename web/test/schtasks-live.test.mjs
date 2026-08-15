@@ -49,10 +49,10 @@ test("真机：计划任务到点自己拉起运行器", { skip }, async () => {
   // ★ 故意不把定义写盘：运行器读不到就在花钱之前退出（码 2）
   const name = S.taskName(t.id)
 
-  const r = S.register(t)
+  const r = await S.register(t)
   assert.equal(r.ok, true, `注册应成功：${r.err}`)
   try {
-    assert.ok(S.listRegistered().includes(name), "注册完应能在自己的文件夹下列出来")
+    assert.ok((await S.listRegistered()).includes(name), "注册完应能在自己的文件夹下列出来")
 
     // 等它跑。267011 = 任务从未运行过（Task Scheduler 的常量）
     const deadline = Date.now() + 240_000
@@ -66,8 +66,8 @@ test("真机：计划任务到点自己拉起运行器", { skip }, async () => {
     assert.equal(info.last, 2, `运行器应以"找不到任务"退出（码 2），实际 ${info.last}——` +
       "非 0 非 2 说明 Windows 启动它的方式有问题（路径被空格拆开 / node 找不到 / 权限）")
   } finally {
-    const u = S.unregister(t.id)
+    const u = await S.unregister(t.id)
     assert.equal(u.ok, true, `撤销应成功：${u.err}`)
-    assert.ok(!S.listRegistered().includes(name), "撤销后不该再列出来")
+    assert.ok(!(await S.listRegistered()).includes(name), "撤销后不该再列出来")
   }
 })

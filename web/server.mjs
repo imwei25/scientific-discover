@@ -4604,7 +4604,7 @@ export const server = http.createServer(async (req, res) => {
         const tasks = Tasks.listTasks()
         // registered：定义在、但系统里没有对应计划任务 → 它不会自己跑。界面要把这条标出来，
         // 否则用户建完任务、界面显示"下次周一 07:00"，而那一刻什么都不会发生。
-        const reg = supported ? new Set(Sched.listRegistered()) : new Set()
+        const reg = supported ? new Set(await Sched.listRegistered()) : new Set()
         return send(res, 200, "application/json", JSON.stringify({
           ok: true, supported, mode,
           // 界面按 mode 决定给填空表单还是自由编辑器；模板清单一并下发，加模板不用改前端。
@@ -4646,7 +4646,7 @@ export const server = http.createServer(async (req, res) => {
         const { ok, task, errors } = Tasks.normalizeTask({ ...(old || {}), ...b })
         if (!ok) return send(res, 400, "application/json", JSON.stringify({ ok: false, err: errors.join("；") }))
         Tasks.saveTask(task)
-        const r = Sched.register(task)
+        const r = await Sched.register(task)
         // 注册失败【不回滚保存】：定义留着，界面把它标成"未注册"，用户点一下"重新注册"就能修好。
         // 回滚的话用户刚写的一大段任务内容就没了，而失败原因往往是临时的（权限/组策略）。
         return send(res, 200, "application/json", JSON.stringify({ ok: true, task: withMeta(task), ...(r.ok ? {} : { warn: r.err }) }))
@@ -4656,7 +4656,7 @@ export const server = http.createServer(async (req, res) => {
         const t = Tasks.readTask(String(b.id || ""))
         if (!t) return send(res, 404, "application/json", JSON.stringify({ ok: false, err: "找不到这个任务" }))
         // 先撤计划任务再删定义：反过来出错就会留下一条到点空跑的孤儿任务（见 task-cli 同款注释）
-        const r = Sched.unregister(t.id)
+        const r = await Sched.unregister(t.id)
         if (!r.ok) return send(res, 500, "application/json", JSON.stringify({ ok: false, err: "没能撤销系统里的计划任务：" + r.err }))
         Tasks.deleteTask(t.id)
         return send(res, 200, "application/json", JSON.stringify({ ok: true }))
@@ -4674,7 +4674,7 @@ export const server = http.createServer(async (req, res) => {
       }
       if (req.method === "POST" && u.pathname === "/api/tasks/sync") {
         // 用户明确点了「重新注册」→ 才允许清孤儿（prune）。理由见 schtasks.mjs 的 sync 注释。
-        const r = Sched.sync(Tasks.listTasks(), { prune: true })
+        const r = await Sched.sync(Tasks.listTasks(), { prune: true })
         return send(res, 200, "application/json", JSON.stringify({ ok: r.ok, added: r.added, removed: r.removed, ...(r.err ? { err: r.err } : {}) }))
       }
       if (req.method === "GET" && u.pathname === "/api/tasks/runs") {
@@ -5751,9 +5751,9 @@ server.listen(PORT, "0.0.0.0", () => {
   // "用户真实任务被悄悄清空"留了一条路。清孤儿只在用户明确点「重新注册」时做。
   // 无头运行器自起的那套网关整个跳过（SCI_HEADLESS=1）：它是任务【自己】拉起来的，
   // 没必要在一次运行中途重写自己的注册表项。SCI_TASK_SYNC=0 是给自动化测试的总开关。
-  if (Sched.isWindows() && process.env.SCI_HEADLESS !== "1" && process.env.SCI_TASK_SYNC !== "0") setTimeout(() => {
+  if (Sched.isWindows() && process.env.SCI_HEADLESS !== "1" && process.env.SCI_TASK_SYNC !== "0") setTimeout(async () => {
     try {
-      const r = Sched.sync(Tasks.listTasks())
+      const r = await Sched.sync(Tasks.listTasks())
       if (r.added) console.log(`[task] 计划任务对账：注册/更新 ${r.added} 条${r.orphans ? `（另有 ${r.orphans} 条系统里多出来的，点界面「重新注册」可清）` : ""}`)
       if (r.err) console.warn(`[task] 计划任务对账有失败项：${r.err}`)
     } catch (e) { console.warn("[task] 计划任务对账异常：" + (e?.message || e)) }

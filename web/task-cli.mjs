@@ -61,10 +61,10 @@ const fmtNext = (t) => {
   return `${n.getMonth() + 1}月${n.getDate()}日 ${p(n.getHours())}:${p(n.getMinutes())}`
 }
 
-function cmdList() {
+async function cmdList() {
   const tasks = T.listTasks()
   if (!tasks.length) return console.log("还没有定时任务。用 add 建一个。")
-  const registered = new Set(S.listRegistered())
+  const registered = new Set(await S.listRegistered())
   for (const t of tasks) {
     const reg = registered.has(S.taskName(t.id)) ? "" : "  ⚠ 未注册到系统（跑一次 sync）"
     console.log(`${t.id}  ${t.title}`)
@@ -98,7 +98,7 @@ function scheduleFrom(m) {
   return {}
 }
 
-function cmdAdd(m) {
+async function cmdAdd(m) {
   const mode = tierMode()
   if (mode === "off") {
     console.error("你的账号档位没有开通定时任务。（如果你确实需要，请联系管理员调整档位。）")
@@ -133,7 +133,7 @@ function cmdAdd(m) {
   })
   if (!ok) { console.error("任务定义有问题：\n  - " + errors.join("\n  - ")); process.exit(2) }
   T.saveTask(task)
-  const r = S.register(task)
+  const r = await S.register(task)
   const PLAT_CN = { wecom: "企业微信", weixin: "个人微信" }
   const pushNote = !task.pushChat ? ""
     : `；跑完会推送到${task.pushTo ? PLAT_CN[task.pushTo] : "所有已连接的微信/企微"}` +
@@ -142,22 +142,22 @@ function cmdAdd(m) {
   if (!r.ok) console.error(`⚠ 但没能注册到 Windows 计划任务：${r.err}\n  → 它不会自动跑。修好后执行：node web/task-cli.mjs sync`)
 }
 
-function cmdToggle(id, enabled) {
+async function cmdToggle(id, enabled) {
   const t = T.readTask(id)
   if (!t) { console.error(`找不到任务 ${id}`); process.exit(2) }
   t.enabled = enabled
   t.updatedAt = new Date().toISOString()
   T.saveTask(t)
-  const r = S.register(t)
+  const r = await S.register(t)
   console.log(`${enabled ? "已启用" : "已停用"} ${id}「${t.title}」${r.ok ? "" : "（计划任务同步失败：" + r.err + "）"}`)
 }
 
-function cmdRm(id) {
+async function cmdRm(id) {
   const t = T.readTask(id)
   if (!t) { console.error(`找不到任务 ${id}`); process.exit(2) }
   // 【先撤计划任务再删定义】反过来的话，中间若失败就留下一条"孤儿计划任务"——
   // 它到点仍会启动运行器，而运行器找不到定义只能报错退出，用户看不见也查不着。
-  const r = S.unregister(id)
+  const r = await S.unregister(id)
   if (!r.ok) { console.error(`没能撤掉系统里的计划任务：${r.err}\n  为免留下会空跑的孤儿任务，本次不删定义。`); process.exit(1) }
   T.deleteTask(id)
   console.log(`已删除 ${id}「${t.title}」（含运行记录）`)
@@ -170,14 +170,14 @@ function cmdRun(id, extra = []) {
   child.on("exit", (c) => process.exit(c ?? 1))
 }
 
-function cmdSync() {
+async function cmdSync() {
   // 用户明确跑了 sync → 允许清孤儿（见 schtasks.mjs sync 的注释：自动对账不删）
-  const r = S.sync(T.listTasks(), { prune: true })
+  const r = await S.sync(T.listTasks(), { prune: true })
   console.log(`对账完成：注册/更新 ${r.added} 条，清掉多余 ${r.removed} 条${r.err ? "\n⚠ " + r.err : ""}`)
   if (!r.ok) process.exit(1)
 }
 
-function cmdDoctor() {
+async function cmdDoctor() {
   const spec = S.runnerSpec()
   const mode = tierMode()
   console.log(`账号档位：定时任务 = ${({ off: "未开通", preset: "只能用模板", full: "自由指令" })[mode]}`)
@@ -188,7 +188,7 @@ function cmdDoctor() {
   console.log(`隐藏启动器：${spec.launcher ? "有（到点后台跑，不弹黑窗口）" : "无 —— 到点会弹出控制台窗口（老版本包；跑一次 sync 前先确认 web/headless-launch.vbs 在不在）"}`)
   console.log(`工作目录：${spec.workDir}`)
   const tasks = T.listTasks()
-  const reg = S.listRegistered()
+  const reg = await S.listRegistered()
   console.log(`任务定义 ${tasks.length} 条；系统里注册了 ${reg.length} 条`)
   const missing = tasks.filter((t) => !reg.includes(S.taskName(t.id)))
   if (missing.length) console.log(`⚠ 有定义但没注册（不会自动跑）：${missing.map((t) => t.id).join(", ")} → 跑 sync`)
@@ -200,15 +200,18 @@ function cmdDoctor() {
 
 const { m, rest } = argMap(process.argv.slice(2))
 const cmd = rest[0]
+// 【要 await】这些命令自从 schtasks 改成异步就都是 async 了。不 await 的话它们抛出的错会变成
+// 静默的 unhandledRejection：技能在对话里调 CLI 建任务，失败却退出码 0，上层以为建成功了。
+// 顶层 await 在 ESM 里可用（本文件有 import，就是 ESM）。
 switch (cmd) {
-  case "list": cmdList(); break
-  case "add": cmdAdd(m); break
-  case "enable": cmdToggle(rest[1], true); break
-  case "disable": cmdToggle(rest[1], false); break
-  case "rm": case "remove": case "delete": cmdRm(rest[1]); break
+  case "list": await cmdList(); break
+  case "add": await cmdAdd(m); break
+  case "enable": await cmdToggle(rest[1], true); break
+  case "disable": await cmdToggle(rest[1], false); break
+  case "rm": case "remove": case "delete": await cmdRm(rest[1]); break
   case "run": cmdRun(rest[1], m["dry-run"] ? ["--dry-run"] : []); break
-  case "sync": cmdSync(); break
-  case "doctor": cmdDoctor(); break
+  case "sync": await cmdSync(); break
+  case "doctor": await cmdDoctor(); break
   default:
     console.log(fs.readFileSync(fileURLToPath(import.meta.url), "utf8").split("\n").slice(2, 16).map((l) => l.replace(/^\/\/ ?/, "")).join("\n"))
 }
