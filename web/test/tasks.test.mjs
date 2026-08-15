@@ -153,3 +153,20 @@ test("onEvent：final/auto/done/failed 各归各位", () => {
   H.onEvent("failed", { message: "上游炸了" }, acc)
   assert.equal(acc.failed, "上游炸了")
 })
+
+// pushTo：定时任务跑在自己的新会话目录里，桥认不出平台会回落到"推所有在线平台"（双发）。
+// 留空必须保持这个老行为——老任务的 json 里根本没有这个字段，读出来就是 ""，不能因此改变它们的推送去向。
+test("normalizeTask：pushTo 缺省为空（= 全部已连接平台，与升级前一致）", () => {
+  const { task } = T.normalizeTask(baseTask())
+  assert.equal(task.pushTo, "")
+})
+
+test("normalizeTask：pushTo 只收 wecom / weixin，别的一律当空", () => {
+  for (const v of ["wecom", "weixin"]) {
+    assert.equal(T.normalizeTask({ ...baseTask(), pushTo: v }).task.pushTo, v)
+  }
+  // 乱值不能原样存进去——它会被 headless-run 当平台名发给网关
+  for (const v of ["qq", "WECOM", 1, null, undefined, {}]) {
+    assert.equal(T.normalizeTask({ ...baseTask(), pushTo: v }).task.pushTo, "")
+  }
+})

@@ -72,18 +72,23 @@ function cmdList() {
   }
 }
 
-// 当前工作目录是不是「聊天接入」的绑定目录。聊天（微信/企微）里的对话就跑在绑定目录里，
-// 所以"在聊天里建任务"时 cwd 必然命中；定时任务的无头会话 cwd 是自己的会话目录，不会误判。
-// 用它给 pushChat 定默认值：在聊天里建的任务默认推送回聊天——用户在手机上建任务就是想在
-// 手机上收结果，这不能指望模型每次记得加 --push-chat（提示词会被旧会话上下文/旧技能版本
-// 盖过，真机 2026-08-14 建出来的任务就漏了）。--no-push-chat 可显式关掉。
-function cwdBoundToChat() {
+// 当前工作目录是哪个「聊天接入」平台的绑定目录，返回 "wecom" / "weixin" / ""。
+// 聊天（微信/企微）里的对话就跑在绑定目录里，所以"在聊天里建任务"时 cwd 必然命中；
+// 定时任务的无头会话 cwd 是自己的会话目录，不会误判。两个用途：
+//   ① pushChat 的默认值——在聊天里建的任务默认推送回聊天。用户在手机上建任务就是想在手机上
+//      收结果，这不能指望模型每次记得加 --push-chat（提示词会被旧会话上下文/旧技能版本盖过，
+//      真机 2026-08-14 建出来的任务就漏了）。--no-push-chat 可显式关掉。
+//   ② pushTo 的默认值——【从哪个平台建的就只推回哪个平台】。以前这里只返回 true/false，
+//      pushTo 无从得知平台，跑完就落到"推所有在线平台"：用户在企微里建的任务，个人微信那头
+//      也收一份。既然建任务时就知道是谁，没有理由再去双发。
+function cwdBoundPlatform() {
   try {
     const s = JSON.parse(fs.readFileSync(path.join(__dirname, "..", "chat-bridge", "state.json"), "utf8").replace(/^﻿/, ""))
     const R = (p) => { try { return fs.realpathSync(p).toLowerCase() } catch { try { return path.resolve(p).toLowerCase() } catch { return "" } } }
     const cwd = R(process.cwd())
-    return !!cwd && ["wecom", "weixin"].some((p) => s?.[p]?.boundDir && R(s[p].boundDir) === cwd)
-  } catch { return false }
+    if (!cwd) return ""
+    return ["wecom", "weixin"].find((p) => s?.[p]?.boundDir && R(s[p].boundDir) === cwd) || ""
+  } catch { return "" }
 }
 
 function scheduleFrom(m) {
@@ -114,19 +119,26 @@ function cmdAdd(m) {
     prompt = built.prompt; params = built.params
     if (!m.title) m.title = built.title
   }
+  const boundPlat = cwdBoundPlatform()   // 在聊天里建任务时 = 建它的那个平台，否则 ""
   const { ok, task, errors } = T.normalizeTask({
     title: m.title, prompt, module: mode === "preset" ? "chat" : (m.module || "chat"),
     schedule: scheduleFrom(m),
     maxCredits: m["max-credits"], maxRounds: m["max-rounds"],
     // 跑完推送到聊天接入（微信/企微）。界面/命令行建的默认关（不是每个任务都想往手机上刷消息）；
-    // 【聊天里建的默认开】判据见 cwdBoundToChat 的注释——这是确定性兜底，不依赖模型记得传参。
-    pushChat: m["no-push-chat"] === "true" ? false : (m["push-chat"] === "true" || cwdBoundToChat()),
+    // 【聊天里建的默认开，且只推回建它的那个平台】判据见 cwdBoundPlatform 的注释。
+    pushChat: m["no-push-chat"] === "true" ? false : (m["push-chat"] === "true" || !!boundPlat),
+    // --push-to 显式指定优先；否则聊天里建的就回推那个平台，界面/命令行建的留空 = 全部已连接的
+    pushTo: ["wecom", "weixin"].includes(String(m["push-to"] || "")) ? String(m["push-to"]) : boundPlat,
     ...(params ? { preset, params } : {}),
   })
   if (!ok) { console.error("任务定义有问题：\n  - " + errors.join("\n  - ")); process.exit(2) }
   T.saveTask(task)
   const r = S.register(task)
-  console.log(`已建任务 ${task.id}「${task.title}」，下次 ${fmtNext(task)}${task.pushChat ? "；跑完会推送到聊天（软件开着才推得了；个人微信不实时、下次说话自动补发）" : ""}`)
+  const PLAT_CN = { wecom: "企业微信", weixin: "个人微信" }
+  const pushNote = !task.pushChat ? ""
+    : `；跑完会推送到${task.pushTo ? PLAT_CN[task.pushTo] : "所有已连接的微信/企微"}` +
+      "（软件开着才推得了；个人微信无法主动推送，消息会随下一次你询问时补发）"
+  console.log(`已建任务 ${task.id}「${task.title}」，下次 ${fmtNext(task)}${pushNote}`)
   if (!r.ok) console.error(`⚠ 但没能注册到 Windows 计划任务：${r.err}\n  → 它不会自动跑。修好后执行：node web/task-cli.mjs sync`)
 }
 

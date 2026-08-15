@@ -2177,6 +2177,12 @@
         <label class="mm-check" style="display:flex;align-items:center;gap:8px;margin:4px 0">
           <input id="tfPushChat" type="checkbox" />
           <span>跑完把结果推送到我的微信/企业微信（需先在「聊天接入」里连好，且<b>软件保持开着</b>——关着能跑但推不了）</span></label>
+        <label class="mm-field" id="tfPushToWrap" hidden><span>推送到哪个</span>
+          <select id="tfPushTo" class="mm-input">
+            <option value="">全部已连接的（企业微信 + 个人微信都收到）</option>
+            <option value="wecom">只推企业微信</option>
+            <option value="weixin">只推个人微信</option>
+          </select></label>
         <div class="mm-hint" id="tfModelNote" hidden></div>
         <div class="mm-msg info" id="taskEditMsg"></div>
         <div class="mm-actions">
@@ -8511,6 +8517,29 @@ document.addEventListener("visibilitychange", () => { if (!document.hidden) refr
   }
   f.kind.addEventListener("change", syncKind)
 
+  // ---- 推送目标 ----
+  // 定时任务跑在自己的新会话目录里，桥的 platformOfDir() 认不出它属于哪个平台，于是回落到
+  // "推给所有在线平台"——企微和个人微信都连着时两边各收一份，而界面上只有一个勾选框，
+  // 用户看不出会双发。这个下拉就是让他点名推给谁；留空 = 全部（保持老行为）。
+  var pushPlatsLoaded = false
+  function syncPushTo() {
+    document.getElementById("tfPushToWrap").hidden = !document.getElementById("tfPushChat").checked
+    if (pushPlatsLoaded) return
+    pushPlatsLoaded = true
+    // 标出当前哪个平台真连着：让用户知道"只推个人微信"到底推不推得出去，
+    // 别等任务半夜跑完了才在运行记录里看到"没连上"。
+    jget("api/chat-bridge/status").then(function (st) {
+      if (!st || !st.ok) return
+      var sel = document.getElementById("tfPushTo")
+      var on = { wecom: st.wecom && st.wecom.subscribed, weixin: st.weixin && st.weixin.subscribed }
+      Array.prototype.forEach.call(sel.options, function (o) {
+        if (!o.value) return
+        o.textContent = o.textContent.replace(/（[^）]*）$/, "") + (on[o.value] ? "（已连接）" : "（未连接）")
+      })
+    }).catch(function () {})
+  }
+  document.getElementById("tfPushChat").addEventListener("change", syncPushTo)
+
   // ---- 模板表单（基础档）----
   // 字段由服务端下发（web/task-presets.mjs 的 fields），这里照着渲染 —— 以后加模板不用改前端。
   function renderPresetFields(presetId, values) {
@@ -8558,6 +8587,8 @@ document.addEventListener("visibilitychange", () => { if (!document.hidden) refr
     f.date.value = s.date || ""
     f.credits.value = editing.maxCredits || 0
     document.getElementById("tfPushChat").checked = editing.pushChat === true
+    document.getElementById("tfPushTo").value = editing.pushTo || ""
+    syncPushTo()
     Array.prototype.forEach.call(f.days.querySelectorAll("button"), function (b) {
       b.classList.toggle("on", (s.days || []).indexOf(Number(b.dataset.d)) >= 0)
     })
@@ -8580,6 +8611,8 @@ document.addEventListener("visibilitychange", () => { if (!document.hidden) refr
       id: editing && editing.id, title: f.title.value, prompt: f.prompt.value,
       maxCredits: Number(f.credits.value) || 0,
       pushChat: document.getElementById("tfPushChat").checked,
+      // 没勾推送时把目标清空：留着一个"只推企业微信"却没勾推送，下次编辑看着自相矛盾
+      pushTo: document.getElementById("tfPushChat").checked ? document.getElementById("tfPushTo").value : "",
       schedule: { kind: f.kind.value, time: f.time.value, days: days, date: f.date.value },
     }
     if (mode === "preset") {

@@ -30,6 +30,9 @@ export const KEEP_RUNS = Math.max(1, Number(process.env.SCI_TASK_KEEP_RUNS || 30
 const LOCK_STALE_MS = Math.max(60_000, Number(process.env.SCI_TASK_LOCK_STALE_MS || 6 * 3600_000))
 
 const WEEK_DAYS = [0, 1, 2, 3, 4, 5, 6]   // 0 = 周日，与 Date.getDay() 同口径
+// pushTo 的合法取值。"" = 全部已连接平台（默认，也是老任务的行为）。
+// 平台名与 chat-bridge.mjs 的 PLATFORMS 同一套，别各写各的。
+export const PUSH_TARGETS = new Set(["", "wecom", "weixin"])
 
 // ---- 存取 ----------------------------------------------------------------
 
@@ -133,6 +136,12 @@ export function normalizeTask(input, { now = new Date() } = {}) {
     // 跑完把结果推到「聊天接入」绑定的微信/企微对话（前提：软件开着、桥在跑；关着照跑但不推，
     // 见 headless-run 的 pushToChatBridge）。默认关——不是每个定时任务都想往微信刷消息。
     pushChat: src.pushChat === true,
+    // 推给哪个平台："" = 全部已连接的（历史行为，也是默认值）／"wecom" 企微／"weixin" 个人微信。
+    // 【为什么要这个字段】定时任务跑在自己的新会话目录里，chat-bridge 的 platformOfDir() 认不出
+    // 它属于哪个平台，于是回落到"推给所有在线平台"——企微和个人微信都连着时两边各收一份，
+    // 而界面上只有一个「推送到我的微信/企业微信」勾选框，用户根本看不出来会双发。
+    // 留空是刻意的：老任务没有这个字段，读出来就是 ""，行为与升级前完全一致，不用迁移。
+    pushTo: PUSH_TARGETS.has(String(src.pushTo || "")) ? String(src.pushTo || "") : "",
     schedule: { kind, time, ...(days ? { days } : {}), ...(date ? { date } : {}) },
     maxRounds,
     maxCredits,

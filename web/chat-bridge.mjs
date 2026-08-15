@@ -27,6 +27,8 @@ import * as WF from "./workflows.mjs"
 const BLOCK_START = "<!-- sci-chat-bridge:start 由「聊天接入」自动注入，解绑时自动移除，请勿手工编辑 -->"
 const BLOCK_END = "<!-- sci-chat-bridge:end -->"
 const PLATFORMS = ["wecom", "weixin"]
+// 给用户看的名字（报错文案用）。别在别处再各写一遍中文名。
+const PLAT_CN = { wecom: "企业微信", weixin: "个人微信" }
 
 let CTX = null            // { root, webDir, sessionOut, getModel, getCloudEnv, log }
 let proc = null           // cc-connect 子进程
@@ -484,17 +486,30 @@ function workflowOf(d) {
   } catch { return { mod: "", values: null } }
 }
 // 定时任务的产物在某会话目录里 → 推给"绑了这个目录的那个平台"。目录没被任何平台绑就不推。
-export async function pushToChat({ text, files, dir: workDir } = {}) {
+export async function pushToChat({ text, files, dir: workDir, only } = {}) {
   const s = loadState()
   if (!running()) return { ok: false, err: "聊天接入未运行（软件需开着并已连接）" }
   const { per } = parseLog()
-  // 目标平台：优先推"绑了这个产物目录"的平台；拿不到目录就推所有在线平台
+  // 目标平台，优先级从高到低：
+  //   ① only —— 调用方点名的平台（定时任务的 pushTo 字段）。定时任务跑在自己的新会话目录里，
+  //      ② 的 platformOfDir 必然认不出来，于是会落到 ③ 双发；用户只勾了一个「推送到微信/企微」
+  //      却两边各收一份，这个参数就是让他能指定推给谁。
+  //   ② 绑了这个产物目录的平台（聊天里直接对话的场景，目录就是绑定目录）。
+  //   ③ 都认不出来 → 推所有在线平台（历史行为，pushTo 留空时保持不变）。
   let targets = []
-  const byDir = workDir ? platformOfDir(workDir) : null
-  if (byDir) targets = [byDir]
-  else targets = activePlats(s).filter((p) => per[p].subscribed)
+  if (only && PLATFORMS.includes(only)) targets = [only]
+  else {
+    const byDir = workDir ? platformOfDir(workDir) : null
+    targets = byDir ? [byDir] : activePlats(s).filter((p) => per[p].subscribed)
+  }
   targets = targets.filter((p) => per[p].subscribed && per[p].lastSession)
-  if (!targets.length) return { ok: false, err: "没有可推送的已连接对话（先在微信/企微里跟机器人说句话）" }
+  if (!targets.length) {
+    // 点名了却推不出去，要说清是"这个平台没连上"，不能笼统说"没有已连接的对话"——
+    // 用户明明在另一个平台上聊着天，那句话只会让他以为是软件坏了。
+    return { ok: false, err: only
+      ? `${PLAT_CN[only] || only}没有可推送的对话（没连上，或还没跟机器人说过话）`
+      : "没有可推送的已连接对话（先在微信/企微里跟机器人说句话）" }
+  }
 
   // 【只推主产物】定时任务传来的是 /api/outputs 的整张清单（含中间文件，文件夹会话里还含
   // 用户自己原有的资料）。原来只按扩展名排掉 py/log/tmp，于是一次跑完能把十几个中间文件

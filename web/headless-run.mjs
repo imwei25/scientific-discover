@@ -399,7 +399,9 @@ async function main() {
             (head ? "\n" + head : "")
           // 带上产物：文件名 + 本轮会话 id，由网关侧解析成绝对路径再发（图片内联、文档附件，
           // 服务端限大小/数量）。没能发的大文件仍留在软件里可下载。
-          const pr = await jpost(base, "/api/chat-bridge/push", { text: txt, sid: rec.sid, files: rec.mainOutputs }, 60_000)
+          // only：任务里选的推送目标（""=全部已连接平台）。不传的话网关会回落到"推所有在线平台"，
+          // 企微和个人微信都连着时两边各收一份 —— 那正是加 pushTo 要解决的问题。
+          const pr = await jpost(base, "/api/chat-bridge/push", { text: txt, sid: rec.sid, files: rec.mainOutputs, only: task.pushTo || "" }, 60_000)
           log(`[push] ${pr?.body?.ok ? "已推送到聊天接入" : "未推送（" + (pr?.body?.err || "?") + "）"}`)
           if (!pr?.body?.ok) rec.notices.push("没推送到微信/企微：" + (pr?.body?.err || "推送失败（个人微信长时间没对话时会话令牌会过期，先给机器人发条消息再试）"))
         } catch (e) { log("[push] 推送异常：" + (e?.message || e)); rec.notices.push("推送微信/企微时出错：" + String(e?.message || e).slice(0, 120)) }
