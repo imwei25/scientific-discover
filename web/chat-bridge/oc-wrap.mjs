@@ -129,6 +129,31 @@ const CC = process.env.SCI_WRAP_CC || "cc-connect"
 //   · 下一轮开跑前查 bridge.log 里暂存时刻之后有没有投递失败，有 → 先补发暂存内容再答新问题。
 // 定时任务的推送（chat-bridge 的 pushToChat）也写同一个暂存文件，同样在下次对话时兜底。
 const lastReplyFile = () => path.join(process.cwd(), ".cc-connect", "last-reply.json")
+// 发送记账：窗口内每条独立消息的时间戳。cc-connect 侧的配额是进程内存、我们看不见，
+// 所以自己记一份用来【提前告诉用户】——只用于提示，不做任何拦截（拦截交给 cc-connect）。
+const sendLogFile = () => path.join(process.cwd(), ".cc-connect", "send-log.json")
+const SEND_WINDOW_MS = 3600_000
+function noteSend(n = 1) {
+  try {
+    const f = sendLogFile()
+    let times = []
+    try { times = JSON.parse(fs.readFileSync(f, "utf8")) } catch {}
+    if (!Array.isArray(times)) times = []
+    const now = Date.now()
+    times = times.filter((t) => Number.isFinite(t) && now - t < SEND_WINDOW_MS)
+    for (let i = 0; i < n; i++) times.push(now)
+    fs.mkdirSync(path.dirname(f), { recursive: true })
+    fs.writeFileSync(f, JSON.stringify(times))
+    return times.length
+  } catch { return 0 }
+}
+function usedSends() {
+  try { return countRecentSends(JSON.parse(fs.readFileSync(sendLogFile(), "utf8")), Date.now(), SEND_WINDOW_MS) }
+  catch { return 0 }
+}
+// 与 chat-bridge.mjs 写进 config.toml 的 burst_limit 保持一致；由 env 传入避免两处写死。
+const SEND_LIMIT = Number(process.env.SCI_WRAP_SEND_LIMIT) || 0
+const SEND_WARN_AT = Number(process.env.SCI_WRAP_SEND_WARN) || 0
 // bridge.log 与 wrap.log 同目录（都由 chat-bridge.mjs 定在 <root>\chat-bridge\ 下）
 const bridgeLogPath = () =>
   process.env.SCI_WRAP_LOG ? path.join(path.dirname(process.env.SCI_WRAP_LOG), "bridge.log") : ""
@@ -282,12 +307,39 @@ function resendLostReply() {
 // 用户在微信里什么都收不到——附加提示把它本要保护的东西挤掉了。
 // 所以微信上：进度提示、思考推送、静默播报一律关，每轮只留【一条正式回复】。
 // 企微是 websocket 长连接、没有这个配额，一切照旧。
+/**
+ * 一小时窗口内已经发了多少条独立消息 —— 用来在临近平台上限时提前告诉用户。（纯函数，导出仅为单测。）
+ * 记录存在会话目录的 .cc-connect/send-log.json 里（跨轮次累计；oc-wrap 每条消息都是新进程，
+ * 内存里存不住）。窗口滑动，过期的自动淘汰。
+ */
+export function countRecentSends(times, now, windowMs) {
+  return (times || []).filter((t) => Number.isFinite(t) && now - t < windowMs).length
+}
+
+/**
+ * 临近上限时给用户的提示，用普通人能懂的话。（纯函数，导出仅为单测。）
+ * 不单独发一条——由调用方【搭在正常回复末尾】，否则提醒自己又吃掉一格，正是要避免的事。
+ * 还很宽裕就返回空串（别没事吓唬人）。
+ */
+export function budgetNotice(used, limit, warnAt = Math.floor(limit * 0.8)) {
+  if (!limit || used < warnAt) return ""
+  if (used >= limit) {
+    return "\n\n———\n📵 微信这边一小时内能发的消息数量已经到顶了，接下来的回复可能收不到。" +
+      "过一会儿会自动恢复（大约一小时内逐步放开），不用做任何操作；急着看结果可以打开电脑上的软件。"
+  }
+  return `\n\n———\n📮 提示：微信一小时内能发的消息数量快到上限了（已用 ${used}/${limit}）。` +
+    "如果接下来有回复没收到，等一会儿会自动恢复，不用重发。"
+}
+
 /** 这个平台的发送预算紧不紧（纯函数，导出仅为单测）。 */
 export const budgetTightFor = (p) => p === "weixin"
 const PLATFORM = process.env.SCI_WRAP_PLATFORM || ""
 const BUDGET_TIGHT = budgetTightFor(PLATFORM)
+// 微信上【彻底不发】进度提示与静默播报——它们最不值钱，却和真正的回复抢同一格额度。
+// 企微是 websocket、无此配额，照常。
 const PROGRESS = process.env.SCI_WRAP_PROGRESS !== "0" && !BUDGET_TIGHT
-const THINKING = process.env.SCI_WRAP_THINKING === "1" && !BUDGET_TIGHT   // 「输出思考」：聚合 reasoning 推一条
+// 思考在两个平台都保留（它是长任务里唯一能让人知道"还活着"的东西），但微信上放慢到 1 分钟一条。
+const THINKING = process.env.SCI_WRAP_THINKING === "1"
 const UPLOAD_FIRST = process.env.SCI_WRAP_UPLOAD_FIRST === "1" // 「先上传后提问」：只发文件不触发会话
 const args = process.argv.slice(2)
 
@@ -439,8 +491,22 @@ function runOpencode(stdinText, extraFiles = []) {
   // 收尾时暂存到 last-reply.json —— cc-connect 投递失败时下一轮据此补发。
   const answer = new Map(), answerOrder = []
   const sentLen = new Map()  // partId → 已推出的字符数（流式水位）
-  const THINK_INTERVAL = 30_000
+  // 微信 1 分钟、企微 30 秒：微信每条都吃发送额度，节奏放慢一半；企微没有这个约束。
+  const THINK_INTERVAL = BUDGET_TIGHT ? 60_000 : 30_000
   let lastThink = Date.now()
+  let thinkingEverSent = false   // 本轮有没有真的发出过思考（短任务合并的判据）
+  /** 还没发出去的思考文本（收尾合并用；不改水位，调用方负责决定发不发）。 */
+  const pendingThinkingText = () => {
+    const parts = []
+    for (const id of order) {
+      const full = reason.get(id) || ""
+      const sent = sentLen.get(id) || 0
+      if (full.length > sent) parts.push(full.slice(sent))
+    }
+    let t = parts.join("\n").trim()
+    if (t.length > 1800) t = "…" + t.slice(-1800)
+    return t
+  }
   const flushNewThinking = (cb) => {   // 只发"上次之后新增"的思考；cb 在这条 send 真正发出后回调；返回是否真发了一条
     if (!THINKING) { cb && cb(); return false }
     const parts = []
@@ -453,6 +519,8 @@ function runOpencode(stdinText, extraFiles = []) {
     if (!piece) { cb && cb(); return false }
     const MAX = 1800   // 单条别太长（企微限速 + 可读）；真超了只保留最新一段
     if (piece.length > MAX) piece = "…" + piece.slice(-MAX)
+    thinkingEverSent = true
+    noteSend()
     execFile(CC, ["send", "-m", "💭 " + piece], { windowsHide: true }, () => { cb && cb() })
     return true
   }
@@ -523,6 +591,7 @@ function runOpencode(stdinText, extraFiles = []) {
       pingedTools = toolCount; lastPing = now
       lastSilenceAt = now   // 刚报过进度就别紧接着再报"没动静"
       const label = lastToolLabel ? `（最近步骤：${lastToolLabel}）` : ""
+      noteSend()
       execFile(CC, ["send", "-m", `⏳ 仍在处理中，已执行 ${toolCount} 个步骤${label}`], { windowsHide: true }, () => {})
     }
     if (PROGRESS) {
@@ -534,6 +603,7 @@ function runOpencode(stdinText, extraFiles = []) {
         const msg = why
           ? `⏳ ${why}，已等 ${mins > 0 ? mins + " 分钟" : "一会儿"}。任务没丢，轮到就会继续——不用重发（重发会排在这条后面，更慢）。`
           : `⏳ 还在等模型响应（已等 ${mins > 0 ? mins + " 分钟" : "一会儿"}，暂时没有任何输出）。任务没丢，不用重发。`
+        noteSend()
         wlog(`静默播报第 ${silenceNotices} 次：${why || "原因未知"}（已静默 ${quietFor}ms）`)
         execFile(CC, ["send", "-m", msg], { windowsHide: true }, () => {})
       }
@@ -639,6 +709,18 @@ function runOpencode(stdinText, extraFiles = []) {
     // 投递看门狗的暂存：正文 + 本轮兜底要发的文件。cc-connect 是在本进程退出【之后】才投递的，
     // 成败此刻不可知——先存，下一轮开跑时对着 bridge.log 判断要不要补发。
     const answerText = answerOrder.map((id) => answer.get(id) || "").join("\n")
+    // 【短任务把思考并进答案，省一条额度】思考走 send、答案走 stdout，本来是两条独立消息。
+    // 可一轮只跑了几十秒时，两条内容紧挨着到达，分开发纯属浪费——而微信每条都吃额度。
+    // 分块不额外计费（一条逻辑消息切几块都算 1 条，maxWeixinChunk=3800），所以合并几乎是纯赚。
+    // 只在【一条思考都没发过】时合并：中途已经发过的话，收尾再重复一遍反而啰嗦。
+    // 答案本身也是一条独立消息（cc-connect 读 stdout 后发出），记一笔再算提示
+    const usedAfter = noteSend()
+    const notice = BUDGET_TIGHT ? budgetNotice(usedAfter, SEND_LIMIT, SEND_WARN_AT) : ""
+    if (notice) { out(notice); wlog(`额度提示：本小时已用 ${usedAfter}/${SEND_LIMIT}`) }
+    if (BUDGET_TIGHT && THINKING && !thinkingEverSent) {
+      const tail = pendingThinkingText()
+      if (tail) { out("\n\n———\n💭 " + tail + "\n") ; wlog("短任务：思考并入答案，省一条额度") }
+    }
     saveLastReply(answerText, toSend)
 
     // ---- 抢救被抛弃的回复 ----------------------------------------------------

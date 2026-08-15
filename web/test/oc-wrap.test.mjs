@@ -5,7 +5,7 @@ import assert from "node:assert/strict"
 import fs from "node:fs"
 import os from "node:os"
 import path from "node:path"
-import { classifyRun, attachPaths, stripRefs, imageArgs, stageFiles, consumePending, stdoutAbandoned, agentSessionOf, stallReason, silenceDue, budgetTightFor } from "../chat-bridge/oc-wrap.mjs"
+import { classifyRun, attachPaths, stripRefs, imageArgs, stageFiles, consumePending, stdoutAbandoned, agentSessionOf, stallReason, silenceDue, budgetTightFor, countRecentSends, budgetNotice } from "../chat-bridge/oc-wrap.mjs"
 
 const A = ["run", "--format", "json"]   // cc-connect 固定前缀
 const ATT = "C:\\Users\\u\\Niuma Science\\out\\.cc-connect\\attachments\\m1"
@@ -228,4 +228,37 @@ test("budgetTight：只有个人微信算紧预算", () => {
   assert.equal(budgetTightFor("wecom"), false)   // 企微是 websocket，无此配额
   assert.equal(budgetTightFor(""), false)        // 认不出平台时不误关（宁可多发也别哑巴）
   assert.equal(budgetTightFor(undefined), false)
+})
+
+// ── 发送额度的提示（不是拦截：拦截归 cc-connect，这里只负责提前说人话）──────────
+test("countRecentSends：只算窗口内的，过期的自动淘汰", () => {
+  const now = 1_000_000
+  assert.equal(countRecentSends([now - 100, now - 500, now - 7_200_000], now, 3600_000), 2)
+  assert.equal(countRecentSends([], now, 3600_000), 0)
+  assert.equal(countRecentSends(null, now, 3600_000), 0)
+  assert.equal(countRecentSends([NaN, "x", now], now, 3600_000), 1)   // 脏数据不算数
+})
+
+test("budgetNotice：没到阈值不吓唬人", () => {
+  assert.equal(budgetNotice(10, 100, 80), "")
+  assert.equal(budgetNotice(79, 100, 80), "")
+})
+
+test("budgetNotice：到阈值给普通人能懂的提醒，且说明会自动恢复", () => {
+  const m = budgetNotice(85, 100, 80)
+  assert.match(m, /微信/)
+  assert.match(m, /85\/100/)
+  assert.match(m, /自动恢复|不用重发/)
+  assert.ok(!/burst_limit|quota|窗口滑动/.test(m), "不该出现技术黑话")
+})
+
+test("budgetNotice：到顶了要说清后果和替代方案", () => {
+  const m = budgetNotice(100, 100, 80)
+  assert.match(m, /收不到|到顶/)
+  assert.match(m, /自动恢复/)
+  assert.match(m, /软件/, "该告诉用户可以去电脑上看")
+})
+
+test("budgetNotice：没配上限就不提示（企微等无配额平台）", () => {
+  assert.equal(budgetNotice(999, 0, 0), "")
 })

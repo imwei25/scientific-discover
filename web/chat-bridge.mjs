@@ -29,6 +29,16 @@ const BLOCK_END = "<!-- sci-chat-bridge:end -->"
 const PLATFORMS = ["wecom", "weixin"]
 // 给用户看的名字（报错文案用）。别在别处再各写一遍中文名。
 const PLAT_CN = { wecom: "企业微信", weixin: "个人微信" }
+// 个人微信的发送配额（cc-connect 的 platform/weixin 用 burst_limit / burst_window_secs 读）。
+// 【为什么不用它的默认值】它默认 4 条/24 小时，依据只是作者源码注释里的一次黑盒实测
+// （"ilink 约 5-6 条/天"）——而同一个仓库的 config.example.toml 却写着"0.5 条/秒、罚约一小时"，
+// 两处差了四个数量级；联网查证也没找到腾讯公开过任何频率数字，第三方实测指向的都是
+// 秒~小时级短窗口节流。默认值太严：2026-08-15 真机上 4 条提示就把当天额度烧光，
+// 之后所有真实回复全被它自己挡下，用户什么都收不到。
+// 所以按"短窗口"口径设：100 条/小时；到 80 条时在回复末尾提醒用户（不单独发，那又要花一格）。
+const WEIXIN_BURST_LIMIT = 100
+const WEIXIN_BURST_WINDOW_SECS = 3600
+const WEIXIN_BURST_WARN = 80
 
 let CTX = null            // { root, webDir, sessionOut, getModel, getCloudEnv, log }
 let proc = null           // cc-connect 子进程
@@ -180,6 +190,9 @@ function commonEnv(s, platform) {
     // 在一轮限速里连发 4 条，把当天额度烧光，之后所有真实回复全被配额闸挡下，用户什么都收不到。
     // 企微是 websocket 长连接，没有这个限制，照常。
     SCI_WRAP_PLATFORM: platform,
+    // 与下面写进 config.toml 的 burst_limit 同源，别两处各写一个数
+    SCI_WRAP_SEND_LIMIT: String(WEIXIN_BURST_LIMIT),
+    SCI_WRAP_SEND_WARN: String(WEIXIN_BURST_WARN),
     SCI_WRAP_PROGRESS: s.progress ? "1" : "0",
     SCI_WRAP_THINKING: s.thinking ? "1" : "0",
     SCI_WRAP_UPLOAD_FIRST: s.uploadFirst ? "1" : "0",
@@ -206,6 +219,8 @@ function renderProject(s, platform) {
   const env = commonEnv(s, platform)
   const platOpts = platform === "weixin"
     ? [
+      `burst_limit = ${WEIXIN_BURST_LIMIT}`,
+      `burst_window_secs = ${WEIXIN_BURST_WINDOW_SECS}`,
       `token = ${tq(b.token)}`,
       ...(b.account_id ? [`account_id = ${tq(b.account_id)}`] : []),
       ...(b.base_url ? [`base_url = ${tq(b.base_url)}`] : []),
