@@ -5,7 +5,7 @@ import assert from "node:assert/strict"
 import fs from "node:fs"
 import os from "node:os"
 import path from "node:path"
-import { classifyRun, attachPaths, stripRefs, imageArgs, stageFiles, consumePending } from "../chat-bridge/oc-wrap.mjs"
+import { classifyRun, attachPaths, stripRefs, imageArgs, stageFiles, consumePending, stdoutAbandoned, agentSessionOf } from "../chat-bridge/oc-wrap.mjs"
 
 const A = ["run", "--format", "json"]   // cc-connect 固定前缀
 const ATT = "C:\\Users\\u\\Niuma Science\\out\\.cc-connect\\attachments\\m1"
@@ -131,4 +131,50 @@ test("pickOutputs：与界面侧栏同一份判据，中间文件只报个数不
   assert.deepEqual(pickOutputs(["uploads/他传的.docx", "deid_mapping.csv"], "paper", null).send, [])
   // workflows.mjs 万一加载不了 → 保守兜底：只发成品扩展名，绝不因此哑掉或反过来全发
   assert.ok(pickOutputs(["x.py", "y.log", "z.docx"], "paper", null).send.includes("z.docx"))
+})
+
+// ── stdout 被抛弃的判定 ──────────────────────────────────────────────────────
+// cc-connect 对"出队的第一条消息"不读 agent 的 stdout，几百毫秒就宣告 turn complete 并发出
+// 占位符「(空响应)」。判据：属于本 agent_session 的 turn complete，落在【我们启动之后、
+// 我们吐出第一个字节之前】。最要紧的是别误判——误判会让正常轮次把答案重复推一遍。
+const SID = "ses_abc123"
+const line = (t, extra = "") => `time=${t} level=INFO msg="turn complete" session=s3 agent_session=${SID} ${extra}`
+
+test("stdoutAbandoned：出队首条被抛弃 → 判定成立", () => {
+  // 我们 10:00:00.500 起跑，还没输出过（Infinity）；10:00:00.900 就冒出一条 turn complete
+  const log = line("2026-08-15T10:00:00.900+08:00", "response_len=11")
+  assert.equal(stdoutAbandoned(log, SID, Date.parse("2026-08-15T10:00:00.500+08:00"), Infinity), true)
+})
+
+test("stdoutAbandoned：正常轮次（turn complete 在我们输出之后）→ 不判定", () => {
+  // 这是同一份日志里【上一轮】的完成记录：它发生在我们首个字节【之后】，不是冲我们来的。
+  // 上一轮的 wrapper 此刻可能还在做收尾（送文件、等 send 回调），绝不能让它也去补推一遍。
+  const log = line("2026-08-15T10:00:20.000+08:00", "response_len=405")
+  const start = Date.parse("2026-08-15T10:00:00.500+08:00")
+  const firstOut = Date.parse("2026-08-15T10:00:19.000+08:00")
+  assert.equal(stdoutAbandoned(log, SID, start, firstOut), false)
+})
+
+test("stdoutAbandoned：我们起跑之前的记录一律不算", () => {
+  const log = line("2026-08-15T09:59:59.000+08:00", "response_len=11")
+  assert.equal(stdoutAbandoned(log, SID, Date.parse("2026-08-15T10:00:00.500+08:00"), Infinity), false)
+})
+
+test("stdoutAbandoned：别的会话的 turn complete 不算（多平台并存时会混在同一份日志里）", () => {
+  const log = `time=2026-08-15T10:00:00.900+08:00 level=INFO msg="turn complete" agent_session=ses_OTHER response_len=11`
+  assert.equal(stdoutAbandoned(log, SID, Date.parse("2026-08-15T10:00:00.500+08:00"), Infinity), false)
+})
+
+test("stdoutAbandoned：拿不到 session / 日志为空 → 保守不判定", () => {
+  const log = line("2026-08-15T10:00:00.900+08:00")
+  assert.equal(stdoutAbandoned(log, "", Date.parse("2026-08-15T10:00:00.500+08:00"), Infinity), false)
+  assert.equal(stdoutAbandoned("", SID, Date.parse("2026-08-15T10:00:00.500+08:00"), Infinity), false)
+  assert.equal(stdoutAbandoned(null, SID, 0, Infinity), false)
+})
+
+test("agentSessionOf：从 argv 取 --session；没有就空串", () => {
+  assert.equal(agentSessionOf(["run", "--format", "json", "--session", SID, "--thinking"]), SID)
+  assert.equal(agentSessionOf(["run", "--format", "json"]), "")
+  assert.equal(agentSessionOf(["run", "--session"]), "")   // 末尾缺值别读出 undefined
+  assert.equal(agentSessionOf(undefined), "")
 })

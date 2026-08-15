@@ -72,6 +72,13 @@ process.on("exit", (code) => {
   } catch { /* stdout 都写不了就真没辙了，日志已留 */ }
 })
 
+// 【已证伪，别再试】曾怀疑 cc-connect 对排队轮次是"1 秒内没等到第一个字节就放弃"，于是在这里
+// 抢在慢 import 之前吐一个字节试图"点亮"管道。真机实测（2026-08-15 13:10）：首字节在
+// cc-connect 开始处理后 68ms 就写出去了，它仍在 460ms 之后判定为空、发出「(空响应)」占位符；
+// 三次观测的放弃时长 528ms / 704ms / 1090ms 也毫无规律。结论：**cc-connect 处理排队消息时
+// 根本不读 agent 的 stdout**，写什么、写多快都没用。修法必须绕开 stdout 这条通道（见下方
+// deliverOutOfBand 的注释）。
+
 // 产物分级判据与界面侧栏共用一份（web/workflows.mjs）。动态 import + 兜底：这份文件万一
 // 加载不了（老界面包、打包漏文件），聊天不能整个哑掉 —— 退回"只发成品扩展名"的保守口径。
 let WF = null
@@ -138,6 +145,50 @@ export function deliveryFailedSince(logText, sinceMs) {
     if (/ret=-2 for media/.test(ln)) out.media = true
   }
   return out
+}
+
+/**
+ * 本轮的 stdout 是不是已经被 cc-connect 抛弃了？（纯函数，导出仅为单测。）
+ *
+ * 【背景】cc-connect v1.4.1 处理【排队消息】时不读 agent 的 stdout：它在 spawn 我们之后几百毫秒
+ * 就宣告 `turn complete` 并把占位符「(空响应)」发给用户，之后我们写什么都没人接。真机三次实测
+ * （2026-08-15 12:51/13:04/13:10）放弃时长 704/1090/528ms 毫无规律，且**抢在 68ms 就吐首字节
+ * 也照样被判空**——所以不是等得不够，是根本没读。opencode 那一轮其实跑完了、活也干对了
+ * （用户的定时任务确实被改掉），丢的只有回复。
+ *
+ * 【判据】bridge.log 里出现一条属于**我们这个 agent_session**、时间落在
+ *   (我们启动之后, 我们吐出第一个字节之前)
+ * 的 `turn complete` —— 那一定是 cc-connect 在我们还没产出任何东西时就替我们"完成"了本轮。
+ * 用「首个字节之前」而不是「本进程还活着」来卡，是为了排掉上一轮的 wrapper：它此刻可能仍在
+ * 做收尾（送文件、等 send 回调），但它的答案早就写出去了，first-out 时刻远在这条记录之前，
+ * 不会被误判成"被抛弃"，也就不会重复推送一遍。
+ *
+ * @param logText  bridge.log 全文
+ * @param agentSession  argv 里 `--session` 的值
+ * @param startMs  本进程起跑时刻
+ * @param firstOutMs  首个 stdout 字节的时刻；还没输出过传 Infinity
+ */
+export function stdoutAbandoned(logText, agentSession, startMs, firstOutMs) {
+  if (!agentSession) return false
+  for (const ln of String(logText || "").split(/\r?\n/)) {
+    if (!ln.includes("turn complete")) continue
+    if (!ln.includes(`agent_session=${agentSession}`)) continue
+    const m = /^time=(\S+)/.exec(ln)
+    if (!m) continue
+    const t = Date.parse(m[1])
+    if (!Number.isFinite(t)) continue
+    if (t > Number(startMs) && t < Number(firstOutMs)) return true
+  }
+  return false
+}
+
+/**
+ * argv 里 `--session <id>` 的值 —— 与 bridge.log 里 `agent_session=<id>` 是同一个东西，
+ * 用它把日志行圈到本次对话，别去匹配别人的 turn。（纯函数，导出仅为单测。）
+ */
+export function agentSessionOf(argv) {
+  const i = (argv || []).indexOf("--session")
+  return i >= 0 && argv[i + 1] ? String(argv[i + 1]) : ""
 }
 
 /** 每轮收尾暂存（text/files 都空就不写——没东西可补）。 */
@@ -357,11 +408,24 @@ function runOpencode(stdinText, extraFiles = []) {
   let holding = false, released = false, answerGated = false, releasedAnswer = false
   const held = []
   let onReleased = null
-  const out = (s) => { if (holding) held.push(s); else { producedStdout = true; process.stdout.write(s) } }
+  // firstOutMs：首个真正落到 stdout 的字节的时刻，stdoutAbandoned() 的判据之一（见那边的注释）。
+  // 【记在真正 write 的那一刻，不是入队的那一刻】被 holding 扣住期间还没人看得见，不算产出。
+  let firstOutMs = Infinity
+  const out = (s) => {
+    if (holding) { held.push(s); return }
+    if (firstOutMs === Infinity) firstOutMs = Date.now()
+    producedStdout = true
+    process.stdout.write(s)
+  }
   const releaseHold = () => {
     if (released) return
     released = true; holding = false
-    if (held.length) { releasedAnswer = true; producedStdout = true; for (const s of held) process.stdout.write(s); held.length = 0 }
+    if (held.length) {
+      releasedAnswer = true; producedStdout = true
+      if (firstOutMs === Infinity) firstOutMs = Date.now()   // 扣住的内容在此刻才真正见人
+      for (const s of held) process.stdout.write(s)
+      held.length = 0
+    }
     if (onReleased) { const f = onReleased; onReleased = null; f() }
   }
 
@@ -477,11 +541,46 @@ function runOpencode(stdinText, extraFiles = []) {
     const toSend = rels.map((r) => byRel.get(r))
     // 投递看门狗的暂存：正文 + 本轮兜底要发的文件。cc-connect 是在本进程退出【之后】才投递的，
     // 成败此刻不可知——先存，下一轮开跑时对着 bridge.log 判断要不要补发。
-    saveLastReply(answerOrder.map((id) => answer.get(id) || "").join("\n"), toSend)
+    const answerText = answerOrder.map((id) => answer.get(id) || "").join("\n")
+    saveLastReply(answerText, toSend)
+
+    // ---- 抢救被抛弃的回复 ----------------------------------------------------
+    // cc-connect 对"出队的第一条消息"不读我们的 stdout（见 stdoutAbandoned 的头注：三次真机
+    // 实测，抢在 68ms 吐首字节也没用）。此时活其实干完了、答案也在手上，只是没人接——那就改走
+    // `cc-connect send` 这条【已验证一直可用】的主动推送通道（今天 A/B/C 三组实验：桥连续运行
+    // 277 分钟、用户 14 小时没说话，文本和文件都照送）。
+    // 只在判定成立且【确实有答案】时才推：没答案就推一句空话，比不推更糟。
+    let rescueMsg = ""
+    if (answerText.trim()) {
+      let abandoned = false
+      try {
+        const lf = bridgeLogPath()
+        if (lf && fs.existsSync(lf)) {
+          abandoned = stdoutAbandoned(fs.readFileSync(lf, "utf8"), agentSessionOf(args), startedAt, firstOutMs)
+        }
+      } catch (e) { wlog("判定 stdout 是否被抛弃时出错（按未抛弃处理）：" + (e?.message || e)) }
+      if (abandoned) {
+        wlog(`⚠ 本轮 stdout 被 cc-connect 抛弃（出队首条），改用 send 补推答案 ${answerText.length} 字`)
+        rescueMsg = "📮 刚才那条「(空响应)」是软件的问题：你连着发消息时，前一条还没答完，这一轮的回复被弄丢了。\n" +
+          "**你的指令已经执行**，下面是完整回复：\n\n" + answerText
+      }
+    }
+    // 【和文件补发合并成一条 send，别各发各的】两条 send 并发时，先回调的那条会 process.exit()，
+    // 把另一条连同它的内容一起带走——那正是我们要修的"回复丢失"，不能在修复代码里再犯一次。
+    if (rescueMsg && !toSend.length) {
+      execFile(CC, ["send", "-m", rescueMsg], { windowsHide: true }, () => process.exit(exitCode))
+      setTimeout(() => process.exit(exitCode), 30_000)
+      return
+    }
+
     if (!toSend.length) { setTimeout(() => process.exit(exitCode), (flushedNow || releasedAnswer) ? 1500 : 0); return }
     const sendArgs = ["send"]
     // 被折下的中间文件不单发一条消息（企微 30 条/分的限速经不起），搭在这条附件上说一句就够。
-    if (held > 0) sendArgs.push("-m", `📎 本轮的交付物在下面；另有 ${held} 个中间文件留在软件的会话目录里，可在软件端查看或打包下载。`)
+    // 【只能有一个 -m】抢救文案与"中间文件"提示要拼成一段，push 两次 -m 会被后一个覆盖，
+    // 抢救文案（也就是本轮真正的答案）就又丢了。
+    const heldNote = held > 0 ? `📎 本轮的交付物在下面；另有 ${held} 个中间文件留在软件的会话目录里，可在软件端查看或打包下载。` : ""
+    const oneMsg = [rescueMsg, heldNote].filter(Boolean).join("\n\n")
+    if (oneMsg) sendArgs.push("-m", oneMsg)
     for (const f of toSend) sendArgs.push(IMG.has(path.extname(f).toLowerCase()) ? "--image" : "--file", f)
     // 排障日志走独立文件（SCI_WRAP_LOG 由 chat-bridge 注入）。【不能写 stderr】：run 结束后的
     // stderr 会被 cc-connect 当成 "unsolicited agent error" 记 ERROR，吓人且污染真实错误的检索。
