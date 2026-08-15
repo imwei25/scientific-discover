@@ -36,6 +36,42 @@ import path from "node:path"
 const canon = (p) => { try { return fs.realpathSync(p).toLowerCase() } catch { return String(p || "").toLowerCase() } }
 const isMain = !!process.argv[1] && canon(fileURLToPath(import.meta.url)) === canon(process.argv[1])
 
+// ---- 死也要留话（诊断）------------------------------------------------------
+// 【为什么必须有这一层】本包装器【绝不能写 stderr】——cc-connect 会把 stderr 当错误消息发进
+// 聊天。代价是它一旦异常退出就【完全静默】：cc-connect 拿不到 stdout，替换成占位符「(空响应)」
+// 发给用户，而日志里什么都没有，根本无从查起。
+// 真机 2026-08-15 12:51 就撞上：用户在 agent 忙时追发消息 → 排队 → 排队那轮 707ms 结束、
+// opencode 连实例都没创建（opencode.log 里那个时段没有任何 run），用户只看到「(空响应)」。
+// 所以：所有诊断信息一律写 SCI_WRAP_LOG（wrap.log），并在【确实一个字都没输出】时往 stdout
+// 兜一句人话，别让用户对着「(空响应)」干瞪眼、也不知道该不该重发。
+const wlog = (s) => {
+  try {
+    if (process.env.SCI_WRAP_LOG) {
+      fs.appendFileSync(process.env.SCI_WRAP_LOG, `${new Date().toISOString()} [pid ${process.pid}] ${s}\n`)
+    }
+  } catch { /* 日志失败绝不能反过来搞挂本轮 */ }
+}
+let producedStdout = false        // 本轮有没有真的往 stdout 吐过东西（= 用户能看到内容）
+let spawnedOpencode = false       // 有没有走到"起 opencode"这一步（用来区分死在包装器还是死在模型侧）
+let exitReason = ""               // 已知的退出原因，供 exit 钩子写进日志
+export function markStdout() { producedStdout = true }
+
+process.on("uncaughtException", (e) => { exitReason = "uncaughtException: " + (e?.stack || e?.message || e); process.exit(1) })
+process.on("unhandledRejection", (e) => { exitReason = "unhandledRejection: " + (e?.stack || e?.message || e) })
+process.on("exit", (code) => {
+  // 【用 process.argv 而不是下面那个 args】args 定义在本文件靠后，若进程在模块求值阶段就退出，
+  // 这里读它会撞 TDZ 抛 ReferenceError，把仅有的诊断也一起弄没了。
+  if (!isMain || process.argv[2] !== "run") return
+  if (producedStdout) { if (exitReason) wlog(`本轮有输出但记到异常：${exitReason}`); return }
+  // 一个字都没输出 —— 这正是用户看到「(空响应)」的那一刻，务必留下现场
+  wlog(`⚠ 本轮零输出 exit=${code} 起过opencode=${spawnedOpencode} 原因=${exitReason || "（未知，无异常抛出）"} cwd=${process.cwd()}`)
+  try {
+    process.stdout.write(spawnedOpencode
+      ? "⚠️ 这一轮模型没有返回内容（可能是上一条还在跑时被打断）。请把刚才那句话再发一次。"
+      : "⚠️ 这一轮没能启动起来（常见于上一条还在处理时又追发了消息）。请等上一条回复完，再把刚才那句话发一次。")
+  } catch { /* stdout 都写不了就真没辙了，日志已留 */ }
+})
+
 // 产物分级判据与界面侧栏共用一份（web/workflows.mjs）。动态 import + 兜底：这份文件万一
 // 加载不了（老界面包、打包漏文件），聊天不能整个哑掉 —— 退回"只发成品扩展名"的保守口径。
 let WF = null
@@ -280,6 +316,7 @@ function runOpencode(stdinText, extraFiles = []) {
   scan(workDir, 0)
 
   const child = spawn(REAL_OC, runArgs, { stdio: [stdinText == null ? "inherit" : "pipe", "pipe", "inherit"] })
+  spawnedOpencode = true   // 走到这儿说明包装器本身没死，往后再出问题就是模型/事件流侧的事
   if (stdinText != null) { try { child.stdin.write(stdinText); child.stdin.end() } catch {} }
   const rl = createInterface({ input: child.stdout, crlfDelay: Infinity })
   const DROP = new Set(["tool", "tool_use", "tool_result"])   // 工具事件永远不外发
@@ -320,11 +357,11 @@ function runOpencode(stdinText, extraFiles = []) {
   let holding = false, released = false, answerGated = false, releasedAnswer = false
   const held = []
   let onReleased = null
-  const out = (s) => { if (holding) held.push(s); else process.stdout.write(s) }
+  const out = (s) => { if (holding) held.push(s); else { producedStdout = true; process.stdout.write(s) } }
   const releaseHold = () => {
     if (released) return
     released = true; holding = false
-    if (held.length) { releasedAnswer = true; for (const s of held) process.stdout.write(s); held.length = 0 }
+    if (held.length) { releasedAnswer = true; producedStdout = true; for (const s of held) process.stdout.write(s); held.length = 0 }
     if (onReleased) { const f = onReleased; onReleased = null; f() }
   }
 
@@ -472,7 +509,10 @@ function main() {
     return
   }
   // 每条来信都是补发窗口：此刻微信的会话令牌刚被这条消息刷新，上一轮丢失的投递现在必能发出。
-  resendLostReply()
+  // 【必须兜住】它读 bridge.log / last-reply.json / 调 cc-connect，任何一处抛出来都会让本轮
+  // 在起 opencode 之前就静默死掉 —— 用户看到的就是「(空响应)」，而补发本身只是锦上添花，
+  // 绝不该因为它失败就把用户真正要问的这句话吞掉。
+  try { resendLostReply() } catch (e) { wlog("resendLostReply 异常（已忽略，继续本轮）：" + (e?.message || e)) }
   if (!UPLOAD_FIRST) {
     runOpencode(null)   // 关了「先上传后提问」：原样透传 stdin，行为不变
   } else {
@@ -509,4 +549,13 @@ function main() {
   }
 }
 
-if (isMain) main()
+if (isMain) {
+  wlog(`▶ 起跑 argv=${JSON.stringify(process.argv.slice(2)).slice(0, 300)} cwd=${process.cwd()}`)
+  // main() 里同步抛出的任何东西都会让本轮零输出静默死掉。兜住 → 记日志 → 让 exit 钩子
+  // 去给用户吐那句人话（这里不直接写 stdout，免得和钩子重复输出两遍）。
+  try { main() } catch (e) { exitReason = "main() 抛出: " + (e?.stack || e?.message || e); process.exitCode = 1 }
+} else {
+  // isMain 判错过一次（0.1.24：junction 路径比字符串恒 false → 每条消息空响应）。它一旦再错，
+  // 现象还是"全部空响应"，但这行日志能立刻把嫌疑锁死，不用再猜。
+  wlog(`（未作为入口执行：argv[1]=${process.argv[1]} 解析后=${canon(process.argv[1] || "")} 本文件=${canon(fileURLToPath(import.meta.url))}）`)
+}
