@@ -5,7 +5,7 @@ import assert from "node:assert/strict"
 import fs from "node:fs"
 import os from "node:os"
 import path from "node:path"
-import { classifyRun, attachPaths, stripRefs, imageArgs, stageFiles, consumePending, stdoutAbandoned, agentSessionOf, stallReason, silenceDue } from "../chat-bridge/oc-wrap.mjs"
+import { classifyRun, attachPaths, stripRefs, imageArgs, stageFiles, consumePending, stdoutAbandoned, agentSessionOf, stallReason, silenceDue, budgetTightFor } from "../chat-bridge/oc-wrap.mjs"
 
 const A = ["run", "--format", "json"]   // cc-connect 固定前缀
 const ATT = "C:\\Users\\u\\Niuma Science\\out\\.cc-connect\\attachments\\m1"
@@ -217,4 +217,15 @@ test("silenceDue：刚有过事件就不该报（哪怕上次播报很久以前�
 
 test("silenceDue：报满上限就闭嘴，剩下交给用户判断", () => {
   assert.equal(silenceDue({ now: 1e9, lastEventAt: 0, lastSilenceAt: 0, notices: 4, first: 90_000, repeat: 300_000, max: 4 }), false)
+})
+
+// ── 个人微信的发送预算 ────────────────────────────────────────────────────────
+// cc-connect 实测 ilink 约 5-6 条/天就限流，它自己卡在 4 条 fail fast。
+// 2026-08-15：静默播报在一轮限速里连发 4 条烧光额度，之后所有真实回复被配额闸挡下。
+// 所以微信上附加消息必须全关——这条判据错了就会再犯一次同样的事故。
+test("budgetTight：只有个人微信算紧预算", () => {
+  assert.equal(budgetTightFor("weixin"), true)
+  assert.equal(budgetTightFor("wecom"), false)   // 企微是 websocket，无此配额
+  assert.equal(budgetTightFor(""), false)        // 认不出平台时不误关（宁可多发也别哑巴）
+  assert.equal(budgetTightFor(undefined), false)
 })

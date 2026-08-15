@@ -274,8 +274,20 @@ function resendLostReply() {
       try { fs.appendFileSync(process.env.SCI_WRAP_LOG, new Date().toISOString() + ` 补发上轮丢失投递 text=${!!txt} files=${files.length}\n`) } catch {}
   } catch {}
 }
-const PROGRESS = process.env.SCI_WRAP_PROGRESS !== "0"
-const THINKING = process.env.SCI_WRAP_THINKING === "1"       // 「输出思考」：聚合 reasoning 推一条
+// 【个人微信每天只有 ~4 条独立消息的预算，附加消息是奢侈品】
+// cc-connect 的 platform/weixin 实测：ilink 对机器人约 5-6 条/天就开始限流（ret=-2），且惩罚期内
+// 继续发会加重，所以它自己卡在 4 条就 fail fast（defaultBurstLimit=4 / 24h）。
+// 2026-08-15 真机血的教训：我加的「静默播报」在一轮云端限速里连发 4 条，把当天额度一次烧光，
+// 之后【所有真实回复】全被配额闸挡下（bridge.log 连续 4 条 send budget exhausted），
+// 用户在微信里什么都收不到——附加提示把它本要保护的东西挤掉了。
+// 所以微信上：进度提示、思考推送、静默播报一律关，每轮只留【一条正式回复】。
+// 企微是 websocket 长连接、没有这个配额，一切照旧。
+/** 这个平台的发送预算紧不紧（纯函数，导出仅为单测）。 */
+export const budgetTightFor = (p) => p === "weixin"
+const PLATFORM = process.env.SCI_WRAP_PLATFORM || ""
+const BUDGET_TIGHT = budgetTightFor(PLATFORM)
+const PROGRESS = process.env.SCI_WRAP_PROGRESS !== "0" && !BUDGET_TIGHT
+const THINKING = process.env.SCI_WRAP_THINKING === "1" && !BUDGET_TIGHT   // 「输出思考」：聚合 reasoning 推一条
 const UPLOAD_FIRST = process.env.SCI_WRAP_UPLOAD_FIRST === "1" // 「先上传后提问」：只发文件不触发会话
 const args = process.argv.slice(2)
 

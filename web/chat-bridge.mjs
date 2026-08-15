@@ -166,7 +166,7 @@ export function retractAgents(dirAbs) {
 const tq = (s) => `'${String(s)}'`
 const sid8 = (sid) => String(sid || "unbound").replace(/[^a-zA-Z0-9]/g, "").slice(-8)
 export const projectName = (platform, sid) => `sci-${platform}-${sid8(sid)}`
-function commonEnv(s) {
+function commonEnv(s, platform) {
   const cc = ccBin()
   const env = {
     OPENCODE_CONFIG: stripLP(path.join(CTX.root, "opencode.json")),
@@ -174,6 +174,12 @@ function commonEnv(s) {
     PATH: [path.dirname(cc), stripLP(process.env.PATH || "")].join(";"),
     SCI_WRAP_OC: ocBin(),
     SCI_WRAP_CC: cc,
+    // 【个人微信每天只有 ~4 条独立消息的预算】cc-connect 的 platform/weixin 里实测得出：
+    // ilink 对机器人约 5-6 条/天就开始限流（ret=-2），它自己卡在 4 条快速失败。所以进度提示、
+    // 思考推送、静默播报这类"附加消息"在微信上是【奢侈品】——2026-08-15 真机：我加的静默播报
+    // 在一轮限速里连发 4 条，把当天额度烧光，之后所有真实回复全被配额闸挡下，用户什么都收不到。
+    // 企微是 websocket 长连接，没有这个限制，照常。
+    SCI_WRAP_PLATFORM: platform,
     SCI_WRAP_PROGRESS: s.progress ? "1" : "0",
     SCI_WRAP_THINKING: s.thinking ? "1" : "0",
     SCI_WRAP_UPLOAD_FIRST: s.uploadFirst ? "1" : "0",
@@ -197,7 +203,7 @@ function renderProject(s, platform) {
   const wrap = spaceFree(path.join(CTX.webDir, "chat-bridge", "oc-wrap.mjs"))
   const gm = CTX.getModel()
   const modelStr = gm.providerID + "/" + (s.model || gm.modelID)
-  const env = commonEnv(s)
+  const env = commonEnv(s, platform)
   const platOpts = platform === "weixin"
     ? [
       `token = ${tq(b.token)}`,
@@ -214,6 +220,13 @@ function renderProject(s, platform) {
     "[[projects]]",
     `name = ${tq(projectName(platform, b.boundSid))}`,
     ...(b.allow_from.trim() ? [`allow_from = ${tq(b.allow_from.trim())}`] : []),
+    // 用户连着发几条时，把堆在队列里的消息折成一轮再交给模型。
+    // 【为什么开】不合并的话每条各起一轮：既多烧一次上游调用（限速时尤其疼），模型每轮又只
+    // 看到半截意图——「改成 12:55」「改成 13:00」分开跑会先白改一次。合并后它一次看到完整意图。
+    // 命令（/new 等）、不同发送者、纯附件消息都不会被折进来，见 cc-connect 的 mergeQueuedMessages。
+    // 【需要 fix.2 及以上的 cc-connect】官方 v1.4.1 不认这个键；TOML 里多一个不认识的键是安全的
+    // （被忽略），所以退回官方版也不会起不来，只是不合并而已。
+    `merge_queued_messages = true`,
     "",
     "[projects.agent]",
     `type = "opencode"`,
