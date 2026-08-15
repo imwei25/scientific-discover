@@ -273,9 +273,7 @@ Read references/strategist.md
 
 **Artifact ownership**: fact-channel and source/derived artifact boundaries are defined in [`references/artifact-ownership.md`](references/artifact-ownership.md). This Step uses those ownership rules; it does not redefine them.
 
-**`<project_path>/analysis/` is the project's intermediate-analysis folder: the canonical home for machine-extracted source/asset facts — the PPTX intake bundle (`source_profile.json` index + per-deck `<stem>.identity.json` / `<stem>.slide_library.json`) and `image_analysis.csv`. It holds facts, not design contracts — `design_spec.md` / `spec_lock.md` stay at the project root.** The MUST-read contract covers only the **compact structured data files (`.json` / `.csv`)**; other artifacts that may live under `analysis/` (e.g. a beautify `source_svg_import/` vector reference package) are NOT bulk-read — they are read selectively only when a specific workflow step calls for them. Before the Strategist confirmation stage, Strategist MUST read the auto-extracted fact files already in `analysis/` — currently `source_profile.json` (PPTX intake), when present. This file is the multi-deck index: read it once for the `decks[]` digests (canvas / chart / table entries per source deck), then open a specific deck's `<stem>.identity.json` / `<stem>.slide_library.json` only if you need its full raw facts. Use these entries as **factual source context** (format default + content facts); when several decks are present, synthesize across all of them. The source's **palette / typography / visual identity are a reference, not a constraint**: the main pipeline may inherit them where they fit the content and the confirmed style, or design fresh where they don't — the Strategist's judgment, never an obligation to either keep or discard. (Template-fill preserves the native source design by editing cloned slides directly; beautify defaults to the source identity but still follows the confirmed values; the main pipeline treats source identity as reference only and defaults to fresh design.) (`image_analysis.csv` lands later, at the image-analysis step below, and is the authoritative regenerated image-fact view there — re-derived from the live `images/` folder, not a durable store.)
-
-**Channel ownership — read each fact once from its owning channel.** In the main pipeline the **content contract is the content-type files in `sources/`** — primarily `<stem>.md`, but also any user-supplied content the import archived there: `.md` / `.markdown` / `.txt` / `.csv` / `.tsv` / `.json` / `.jsonl` / `.yaml` / `.yml` (a `metrics.json` or `data.csv` may carry core content — judge by what the file holds). Text, tables, and chart data values come from these (`ppt_to_md` now transcribes native chart data into Markdown tables). **Do NOT read pipeline sidecars in `sources/` as content**: `*.conversion_profile.json` (conversion audit) and `*_files/image_manifest.json` (asset index) are process metadata — open them only to audit a conversion or resolve assets, never as slide content. Converted-source originals archived in `sources/` (`.pdf` / `.pptx` / `.docx` / `.xlsx` / `.html` / `.epub` / `.tex` / `.rst` / `.ipynb` / `.typ`, etc.) are read via their converted `<stem>.md`, not scanned directly in the main pipeline. The `analysis/` chart / table entries are a **structural digest** for outline decisions (which slides carried charts, type, series names) — not a second copy of the values; do NOT also pull chart values from `<stem>.slide_library.json` in the main pipeline. The `<stem>.slide_library.json` full structured data is owned by the direct-PPTX workflows: template-fill uses it as the native fill contract; beautify uses it for native chart / table data while keeping slide text from the Markdown.
+**Fact channels** — `<project_path>/analysis/` 的事实文件归属（`source_profile.json` 等 MUST-read 契约、多 deck 索引读法、源 deck 的配色/字体只是参考而非约束），以及 **channel ownership**（`sources/` 里哪些算内容、哪些是流程 sidecar 不许当内容读、图表数值该从哪一路取）——正文在 [`references/artifact-ownership.md`](references/artifact-ownership.md)，进入 Step 4 前读它。
 
 **Strategist confirmation stage** (full template: `templates/design_spec_reference.md`):
 
@@ -312,7 +310,7 @@ contract, deployment override, opt-out, and the upstream-override re-derivation 
 
 When the confirmed `image_usage` does not include `ai` (and no legacy custom prose includes AI), do **NOT** run h.5, do **NOT** write `ai` rows, and do **NOT** generate images in Step 5 — regardless of what you recommended. `none` is exclusive: if confirmed, write no §VIII image rows. The same "confirmed value wins" rule applies to every field (color → §III, typography → §IV, etc.).
 
-**Small spot illustrations are a Strategist judgment, not a confirmation field.** The user chooses image *source* through `image_usage`; whether the deck leans into decorative illustrations is anchored by the locked `visual_style`'s **illustration propensity** (`core` / `supportive` / `sparse`), expressed only in the `image_notes` rationale — never a new confirmation control. An explicit user request to use or skip illustrations overrides that default either way; `image_usage: none` still wins (write no illustration rows); and source still comes from `image_usage` — a `core` style does not silently generate AI spots when the user did not pick AI. They are ordinary §VIII image rows (`Type: Illustration` / `Illustration Sheet`) using normal `Acquire Via` values. If the plan needs ≥3 same-family AI spot illustrations, use the `ai` Illustration Sheet + `slice` workflow by default; do not generate one AI image per spot. Full rule + precedence: [`references/strategist.md`](references/strategist.md) §h. Use them on suitable pages and omit them where they would weaken clarity.
+**Small spot illustrations are a Strategist judgment, not a confirmation field.** 用户只通过 `image_usage` 选图像**来源**；是否走装饰性插图由锁定的 `visual_style` 的 illustration propensity 决定，只体现在 `image_notes` 的理由里，**绝不新增确认项**。用户明确要或明确不要则覆盖该默认；`image_usage: none` 仍然优先（不写任何插图行）。需要 ≥3 张同族 AI 插图时默认走 Illustration Sheet + `slice`，不要一张一张生成。完整规则与优先级：[`references/strategist-images.md`](references/strategist-images.md)。
 
 
 **Mandatory — split-mode note** (not a separate confirmation): after listing the Strategist confirmation stage details, you MUST append exactly one short line (rendered in the user's language, prefixed with 💡) about generation mode. Pick the variant by qualitative read of upstream-load signals — recommended page count, source-material bulk, whether `topic-research` ran with substantial web-fetch accumulation:
@@ -351,7 +349,7 @@ If the user provided images or formula PNGs were rendered, run analysis **before
 python3 ${SKILL_DIR}/scripts/analyze_images.py <project_path>/images
 ```
 
-> 🔁 **Image facts are regenerated on demand, never a durable store.** `images/` is a live working folder — pictures are extracted from the source at import, the user may drop or replace files at any time, and Step 5 writes web/AI images into it. The single source of truth is therefore the **current contents of `images/`**, and `analysis/image_analysis.csv` is a *regenerated view* of it, not a fact to keep in sync. Re-run `analyze_images.py <project_path>/images` immediately **before any step that reads image facts** so the view reflects the live folder: before the §h image-usage recommendation (see [strategist.md](references/strategist.md) §h), here before authoring §VIII, after Step 5 acquisition (so web/AI files join the view), and again any time the user says they added or replaced images. This is the staleness strategy — re-derive on use, no cache to invalidate.
+> 🔁 **图像事实按需重算，不是持久存储**：`images/` 是活动目录（导入时抽图、用户随时增删、Step 5 写入 web/AI 图），唯一真相是它**当前的内容**；`analysis/image_analysis.csv` 只是它的**重新生成视图**。因此在任何要读图像事实的步骤前先重跑 `analyze_images.py <project_path>/images`（§h 推荐前、写 §VIII 前、Step 5 取图后、以及用户说换过图之后）。不设缓存、不做失效管理。
 
 > ⚠️ **Image handling**: NEVER directly read / open / view image files (`.jpg`, `.png`, etc.). All image info comes from `analyze_images.py` output (`analysis/image_analysis.csv`) or the Design Spec's Image Resource List.
 
@@ -398,13 +396,7 @@ Then **lazy-load the path-specific reference** for each row that actually needs 
 
 A deck with only `ai` rows never loads `image-searcher.md`; a deck with only `web` rows never loads `image-generator.md`. A mixed deck loads both, processes each row through its own path, and writes both `image_prompts.json` and `image_sources.json`.
 
-> ⚠️ **In-pipeline ai rows MUST use the manifest contract** — even when only 1 ai row exists. Always write `images/image_prompts.json` first and render `image_prompts.md` with `image_gen.py --render-md`. Then execute the confirmed path from `image-generator.md §7`: `image_gen.py --manifest` is **Path A only**; `host-native` is **Path B** and MUST skip `--manifest`; `manual` writes the prompts and stops for external generation. The positional form (`image_gen.py "prompt" ...`) is reserved for **out-of-pipeline one-off testing / single-image fixups** — it skips manifest + sidecar, leaving no audit trail.
-
-> ⚠️ **web path — batch multiple rows**: when ≥2 rows are `Acquire Via: web`, write all queries into `images/image_queries.json` and run `image_search.py --batch` once (concurrent acquisition, status written back), instead of one CLI call per row. A single web row may use the positional single-query form. See [image-searcher.md](references/image-searcher.md) §5.
-
-> 💡 **ai path — spot illustrations as one sheet**: when the §VIII image resource plan needs ≥3 same-family spot illustrations as decorative accessories, generate **one grid sheet** (a single `ai` sheet row) instead of one row per element, then slice it (workflow step 2.5 below). Choose sheet geometry from intended placement: `1xN` / `Nx1` are useful for extreme portrait / landscape cells, and a designed `MxN` grid is valid when its cell ratio fits the planned elements. The sheet row is generated but not placed; each cut **element row** (`Acquire Via: slice`) is placed and must appear in `spec_lock.md images`. One generation = one coherent style across all pieces. Resource contract + the geometry rules: [image-generator.md](references/image-generator.md) §4.3.
-
-> ⚠️ **Honor the confirmed image source before running any generation command**: the `ai` generation path (Path A = `image_gen.py` API / Path B = host-native tool / Offline Manual) is **not** auto-only — a confirmed choice other than `auto` wins, whether it came from chat (canonical) or, when the page was used, `result.json.image_ai_path`. `host-native` forces Path B even when `IMAGE_BACKEND` is configured; `api` forces Path A; `manual` forces offline. Never run `image_gen.py --manifest` when the confirmed value is `host-native` or `manual`. Full selection rule: [image-generator.md](references/image-generator.md) §7 Path Selection.
+> ⚠️ **Step 5 的四条硬规矩**（manifest 契约必走、web 多行必须 `--batch`、≥3 张同族插图走 sheet + slice、确认过的 `image_ai_path` 优先于 `IMAGE_BACKEND`）正文在 [`image-base.md`](references/image-base.md) 与 [`image-generator.md`](references/image-generator.md) §4.3 / §7。本步真的有 `ai` / `web` / `slice` 行时按上表 lazy-load 它们，规矩随正文一起到手。
 
 Workflow:
 
@@ -568,16 +560,6 @@ Before switching roles, **MUST first read** the corresponding reference file. Ou
 
 ---
 
-## Reference Resources
-
-| Resource | Path |
-|----------|------|
-| Shared technical constraints | `references/shared-standards.md` |
-| Canvas format specification | `references/canvas-formats.md` |
-| Image-text layout patterns (Primary structures + Modifier layers — combine freely) | `references/image-layout-patterns.md` |
-| Image layout sizing (math for side-by-side container dimensions) | `references/image-layout-spec.md` |
-| SVG image embedding | `references/svg-image-embedding.md` |
-| Icon library | `templates/icons/README.md` |
 
 ---
 
