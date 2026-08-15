@@ -6747,6 +6747,32 @@ async function sendMessage(text) {
   return true               // 供 submitEdit 判断：revert 已把后续对话砍掉，这一步失败必须如实告知
 }
 function attachStream(sid) { openStream("api/chat/attach?sid=" + encodeURIComponent(sid)) }   // 续流：先重放快照再直播
+// 聊天接入（微信/企微）那一轮的【提问是在手机上发的】，直播流里没有它 —— 屏幕上只会长出一段
+// 没有问题的回答。从历史里把它取回来，插在本回合上方。
+// 【为什么不等收尾再整段重载历史】/api/history 只回正文 part，重载会把刚刚看着长出来的
+// 思考与工具执行一起抹掉 —— 用户眼睁睁看着过程消失，正是这次要修的毛病的另一种版本。
+// opencode 那边落盘有延迟，所以退避着问几次；一次都没问到就算了，不打扰。
+async function askFromHistory(turnEl, sid) {
+  try {
+    for (const wait of [0, 1200, 3000]) {
+      if (wait) await new Promise((r) => setTimeout(r, wait))
+      if (!turnEl.isConnected || sessionId !== sid) return
+      const r = await fetch("api/history?id=" + encodeURIComponent(sid))
+      if (!r.ok) continue
+      const h = await r.json()
+      const last = Array.isArray(h) ? h[h.length - 1] : null
+      if (!last || last.role !== "user" || !last.text) continue
+      const us = log.querySelectorAll(".msg.user")
+      if (us.length && (us[us.length - 1].dataset.text || "") === last.text) return   // 已经画过了，别画第二遍
+      const d = document.createElement("div"); d.className = "msg user"
+      d.dataset.text = last.text
+      const span = document.createElement("span"); span.className = "utext"; span.textContent = "📱 " + last.text
+      d.appendChild(span)   // 不挂「编辑」按钮：这条是微信那边发的，在这里改写重生成没有意义
+      turnEl.before(d)
+      return
+    }
+  } catch {}
+}
 // 往对话流里追加一条纯提示（不属于任何一轮生成，如"额度已用尽""上一轮仍在进行"）
 function addNote(msg) {
   const d = document.createElement("div"); d.className = "msg bot"
@@ -6865,9 +6891,9 @@ function openStream(url) {
     })
   }
   let streamSid = null      // 本条流服务的会话（区别于全局 sessionId：用户中途可能切走会话）
-  let streamBridge = false  // 这一轮是微信/企微那边发起的（本页只是旁观，见 done 事件里的重载）
+  let streamBridge = false  // 这一轮是微信/企微那边发起的（本页只是旁观，提问在手机上，见 askFromHistory）
   let autoNextInfo = null   // 服务端宣告"done 之后还有自动续跑的下一轮"（auto 事件），done 时据此接流
-  es.addEventListener("session", (ev) => { sseFailStreak = 0; const d = JSON.parse(ev.data); const nid = d.id; streamBridge = !!d.bridge; streamSid = nid; sessionId = nid; localStorage.setItem("nm_sid", nid); consumePendingProject(nid); consumePendingFolder(); loadUploads(); loadZotLib() })   // 连上了 → 清零重连计数
+  es.addEventListener("session", (ev) => { sseFailStreak = 0; const d = JSON.parse(ev.data); const nid = d.id; streamBridge = !!d.bridge; streamSid = nid; sessionId = nid; localStorage.setItem("nm_sid", nid); consumePendingProject(nid); consumePendingFolder(); loadUploads(); loadZotLib(); if (streamBridge) askFromHistory(turn, nid) })   // 连上了 → 清零重连计数
 
   es.addEventListener("tool", (ev) => {
     const was = atBottomNow()                   // 先量：下面要往 turn 里塞徽章/工具行，塞完再判就晚了
@@ -6938,9 +6964,9 @@ function openStream(url) {
   es.addEventListener("auto", (ev) => { try { autoNextInfo = JSON.parse(ev.data) } catch {} })   // 无人值守：done 后服务端已同步起了下一轮
   es.addEventListener("done", () => {
     paintAnswer(); finalize(); refreshStorage()   // 本轮产物落盘后刷新存储用量
-    // 聊天接入那一轮：提问是在微信里发的，直播流里没有它 —— 这里只画出了一段没有问题的回答。
-    // 收尾后重载一次历史，把那条提问补上（顺带让这一轮与刷新后的长相一致）。
-    if (streamBridge && sessionId === streamSid) { setTimeout(() => resumeSession(streamSid), 600); return }
+    // 聊天接入那一轮不会有"无人值守自动续跑"（那是软件这侧的机制），到此为止；
+    // 只刷新一下列表里的更新时间与排序。提问那条已由 askFromHistory 在开头补进来了。
+    if (streamBridge) { loadSessions(); return }
     // 无人值守续跑：服务端在 done 前广播过 auto 事件，且用户没切走会话 → 自动接流下一轮。
     // 用户切走了就不接（免得把 A 会话的输出流进 B 的界面）；服务端照跑，切回来时 resumeSession 会续上。
     if (autoNextInfo && sessionId === streamSid) {
