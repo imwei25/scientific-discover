@@ -23,6 +23,7 @@
 // 非 run 子命令（session list/delete、models…）原样透传。
 
 import { spawn, execFile } from "node:child_process"
+import http from "node:http"
 import { createInterface } from "node:readline"
 import { fileURLToPath } from "node:url"
 import fs from "node:fs"
@@ -343,6 +344,82 @@ const THINKING = process.env.SCI_WRAP_THINKING === "1"
 const UPLOAD_FIRST = process.env.SCI_WRAP_UPLOAD_FIRST === "1" // 「先上传后提问」：只发文件不触发会话
 const args = process.argv.slice(2)
 
+// ---- 软件侧直播中继（把本轮的思考/工具/正文回传给网关）------------------------
+// 【要解决什么】cc-connect 起的这个 opencode 进程【不经过网关的 opencode serve】，网关的事件
+// 订阅一个事件都收不到 —— 于是微信那边正跑得热火朝天，用户打开软件却看不到"在跑"，更没有
+// 思考与工具执行，只能干等整轮结束后在历史里读一段正文。我们这里本来就在逐行解析事件流
+// （为了过滤思考、聚合进度），顺手转发一份给网关，它造个影子 job 广播给界面（见 server.mjs
+// 的 bridgeIngest）。
+// 【铁律：绝不能影响微信这一条主链路】发送全是 fire-and-forget，任何失败只吞掉；地址/令牌没注入
+// （老版网关、单测）就整块静默关闭；队列有上限，网关挂了也不会把内存撑爆。
+const LIVE_URL = process.env.SCI_WRAP_LIVE_URL || ""
+const LIVE_TOKEN = process.env.SCI_WRAP_LIVE_TOKEN || ""
+const LIVE_MAX_Q = 400          // 网关不通时最多攒这么多条，超了丢最老的（直播丢帧无所谓，内存不能涨）
+const LIVE_FLUSH_MS = 300       // 攒一小会儿再发：思考/正文一秒能来几十条，一条一个请求纯属浪费
+// 会话 id：cc-connect 每轮都带 --session，只有【它自己新起会话】的第一条没有 —— 那时先留空，
+// 由网关按"工作目录 + 本轮起跑时刻"认领（bridgeResolveSid），认出来后回传给我们记住。
+let liveSid = agentSessionOf(args)
+const liveStartedAt = Date.now()
+const liveQ = []
+let liveTimer = null, liveSending = false
+export function liveNote(ev) {
+  if (!LIVE_URL) return
+  liveQ.push(ev)
+  while (liveQ.length > LIVE_MAX_Q) liveQ.shift()
+  if (!liveTimer) { liveTimer = setTimeout(() => liveFlush(), LIVE_FLUSH_MS); liveTimer.unref?.() }
+}
+/** 把队列里的事件发一次；cb 在这次请求收尾（成功/失败/超时）后必被调用一次。（导出仅为单测。） */
+export function liveFlush(cb) {
+  if (liveTimer) { clearTimeout(liveTimer); liveTimer = null }
+  const done = (() => {
+    let called = false
+    return () => {
+      if (called) return
+      called = true; liveSending = false
+      // 这次请求期间又攒下了新事件 → 立刻排下一班，别等下一条 liveNote 来推
+      if (liveQ.length && !liveTimer) { liveTimer = setTimeout(() => liveFlush(), LIVE_FLUSH_MS); liveTimer.unref?.() }
+      cb && cb()
+    }
+  })()
+  // 已有一发在路上：留着队列等它回来时自然接上（done 里会排下一班）。cb 交给调用方的兜底超时。
+  if (liveSending) return
+  if (!LIVE_URL || !liveQ.length) { done(); return }
+  liveSending = true
+  // 正文事件带的是【累计全文】，一批里只有最后一条有意义（前面的都是它的前缀）
+  const evs = liveQ.splice(0, liveQ.length)
+  const lastText = evs.map((e, i) => (e.k === "text" ? i : -1)).filter((i) => i >= 0).pop()
+  const payload = evs.filter((e, i) => e.k !== "text" || i === lastText)
+  const body = JSON.stringify({ sid: liveSid, dir: process.cwd(), startedAt: liveStartedAt, events: payload })
+  try {
+    const u = new URL(LIVE_URL)
+    const req = http.request({
+      hostname: u.hostname, port: u.port || 80, path: u.pathname, method: "POST",
+      headers: { "Content-Type": "application/json", "Content-Length": Buffer.byteLength(body), Authorization: "Bearer " + LIVE_TOKEN },
+    }, (res) => {
+      let buf = ""
+      res.setEncoding("utf8")
+      res.on("data", (d) => { buf += d.length > 4096 ? "" : d })
+      res.on("end", () => {
+        // 网关认领出会话 id 了 → 记住，后面几轮不必再让它猜
+        try { const j = JSON.parse(buf); if (!liveSid && j?.sid) liveSid = String(j.sid) } catch {}
+        done()
+      })
+      res.on("error", done)
+    })
+    req.on("error", done)
+    req.setTimeout(3000, () => { try { req.destroy() } catch {} ; done() })
+    req.end(body)
+  } catch { done() }
+}
+/** 收尾：把最后一批（含 done）发出去再退出，最多等 1 秒 —— 退出比直播重要。 */
+function liveExit(code) {
+  if (!LIVE_URL) { process.exit(code); return }
+  let gone = false
+  const bye = () => { if (!gone) { gone = true; process.exit(code) } }
+  setTimeout(bye, 1000).unref?.()
+  liveFlush(bye)
+}
+
 // opencode 把上游/网络错误统一包成 {"type":"error",...,"error":{"name":"UnknownError",
 // "data":{"message":"Unexpected server error. Check server logs..."}}}，cc-connect 会原样
 // 拼成「❌ 错误: UnknownError: Unexpected server error…」发进聊天——用户看不懂也不知道该干嘛。
@@ -473,7 +550,9 @@ function runOpencode(stdinText, extraFiles = []) {
   scan(workDir, 0)
 
   const child = spawn(REAL_OC, runArgs, { stdio: [stdinText == null ? "inherit" : "pipe", "pipe", "inherit"] })
-  spawnedOpencode = true   // 走到这儿说明包装器本身没死，往后再出问题就是模型/事件流侧的事
+  // 软件侧立刻显示"这条会话正在跑"，不必等第一个字（云端排队时那可能是好几分钟的空白）
+  liveNote({ k: "start" })
+  spawnedOpencode = true  // 走到这儿说明包装器本身没死，往后再出问题就是模型/事件流侧的事
   if (stdinText != null) { try { child.stdin.write(stdinText); child.stdin.end() } catch {} }
   const rl = createInterface({ input: child.stdout, crlfDelay: Infinity })
   const DROP = new Set(["tool", "tool_use", "tool_result"])   // 工具事件永远不外发
@@ -617,19 +696,27 @@ function runOpencode(stdinText, extraFiles = []) {
       try {
         const evt = JSON.parse(t)
         const type = evt?.type ?? evt?.part?.type
-        // 思考：开了就聚合、没开就丢；两种情况都【不逐条外发】
+        const part = evt?.part || evt
+        // 会话 id 认领：--session 没传时（cc-connect 新起会话的第一条）从事件里捡一个
+        if (!liveSid && part?.sessionID) liveSid = String(part.sessionID)
+        // 思考：开了就聚合、没开就丢；两种情况都【不逐条外发到聊天】。
+        // 【但软件侧照发】—— SCI_WRAP_THINKING 管的是"要不要把思考推到微信"（那边每条都吃发送
+        // 额度，默认关），软件界面本来就有折叠好的「思考过程」块，没有任何理由跟着一起关掉。
         if (type === "reasoning") {
-          if (THINKING) {
-            const id = evt?.part?.id || "r0"
-            const txt = String(evt?.part?.text ?? evt?.text ?? "")
-            if (txt) { if (!reason.has(id)) order.push(id); reason.set(id, txt) }
-          }
+          const id = evt?.part?.id || "r0"
+          const txt = String(evt?.part?.text ?? evt?.text ?? "")
+          if (txt) liveNote({ k: "reasoning", id, text: txt })
+          if (THINKING && txt) { if (!reason.has(id)) order.push(id); reason.set(id, txt) }
           return
         }
         if (DROP.has(type)) {
           toolCount++
           const inp = evt?.part?.state?.input || {}
           lastToolLabel = String(evt?.part?.tool || "") + (inp.description ? `: ${inp.description}` : "")
+          // 工具事件同样不进聊天（防泄露 + 防刷爆限速），但软件侧要看得见"它正在干什么"
+          if (part?.callID) liveNote({ k: "tool", callID: String(part.callID), tool: String(part.tool || ""),
+            status: String(part.state?.status || ""), title: String(part.state?.title || ""),
+            skill: part.tool === "skill" ? (inp.name || null) : null })
           // 模型自己调了 cc-connect send？记下路径免得兜底重发
           const cmd = String(inp.command || "")
           if (/cc-connect(\.\w+)?["']?\s+send/.test(cmd)) {
@@ -646,7 +733,11 @@ function runOpencode(stdinText, extraFiles = []) {
         if (type === "text") {
           const id = evt?.part?.id || "t0"
           const txt = String(evt?.part?.text ?? evt?.text ?? "")
-          if (txt) { if (!answer.has(id)) answerOrder.push(id); answer.set(id, txt) }
+          if (txt) {
+            if (!answer.has(id)) answerOrder.push(id); answer.set(id, txt)
+            // 软件侧的 text 事件按【累计全文】语义（与网关直播同口径），所以这里也发全文
+            liveNote({ k: "text", text: answerOrder.map((x) => answer.get(x) || "").join("\n") })
+          }
         }
         // 正文开始：先把剩余未发的思考发出去，并【扣住答案】直到它发出，保证「思考 → 答案」
         if (type === "text" && !answerGated) {
@@ -663,6 +754,7 @@ function runOpencode(stdinText, extraFiles = []) {
           const ref = e?.data?.ref
           const f = friendlyError(raw, e?.name)
           evt.error = { name: f.t, data: { message: f.m + (ref ? `（编号 ${ref}）` : ""), ref } }
+          liveNote({ k: "error", message: f.t + "：" + f.m })   // 软件侧也要看到这一轮是怎么收场的
           out(JSON.stringify(evt) + "\n")
           return
         }
@@ -709,6 +801,9 @@ function runOpencode(stdinText, extraFiles = []) {
     // 投递看门狗的暂存：正文 + 本轮兜底要发的文件。cc-connect 是在本进程退出【之后】才投递的，
     // 成败此刻不可知——先存，下一轮开跑时对着 bridge.log 判断要不要补发。
     const answerText = answerOrder.map((id) => answer.get(id) || "").join("\n")
+    // 软件侧收尾：把最终答案一并带上（网关据此推 final + done，界面才会停转圈并定稿渲染）。
+    // 发送在下面的 liveExit 里做（它会等这一批真的送出去再退，最多 1 秒）。
+    liveNote({ k: "done", text: answerText })
     // 【短任务把思考并进答案，省一条额度】思考走 send、答案走 stdout，本来是两条独立消息。
     // 可一轮只跑了几十秒时，两条内容紧挨着到达，分开发纯属浪费——而微信每条都吃额度。
     // 分块不额外计费（一条逻辑消息切几块都算 1 条，maxWeixinChunk=3800），所以合并几乎是纯赚。
@@ -747,12 +842,12 @@ function runOpencode(stdinText, extraFiles = []) {
     // 【和文件补发合并成一条 send，别各发各的】两条 send 并发时，先回调的那条会 process.exit()，
     // 把另一条连同它的内容一起带走——那正是我们要修的"回复丢失"，不能在修复代码里再犯一次。
     if (rescueMsg && !toSend.length) {
-      execFile(CC, ["send", "-m", rescueMsg], { windowsHide: true }, () => process.exit(exitCode))
-      setTimeout(() => process.exit(exitCode), 30_000)
+      execFile(CC, ["send", "-m", rescueMsg], { windowsHide: true }, () => liveExit(exitCode))
+      setTimeout(() => liveExit(exitCode), 30_000)
       return
     }
 
-    if (!toSend.length) { setTimeout(() => process.exit(exitCode), (flushedNow || releasedAnswer) ? 1500 : 0); return }
+    if (!toSend.length) { setTimeout(() => liveExit(exitCode), (flushedNow || releasedAnswer) ? 1500 : 0); return }
     const sendArgs = ["send"]
     // 被折下的中间文件不单发一条消息（企微 30 条/分的限速经不起），搭在这条附件上说一句就够。
     // 【只能有一个 -m】抢救文案与"中间文件"提示要拼成一段，push 两次 -m 会被后一个覆盖，
@@ -766,8 +861,8 @@ function runOpencode(stdinText, extraFiles = []) {
     if (process.env.SCI_WRAP_LOG) {
       try { fs.appendFileSync(process.env.SCI_WRAP_LOG, new Date().toISOString() + ` 兜底补发[mod=${mod || "chat"}] ` + toSend.map((f) => path.basename(f)).join(", ") + (held ? `（另折下 ${held} 个）` : "") + "\n") } catch {}
     }
-    execFile(CC, sendArgs, { windowsHide: true }, () => process.exit(exitCode))
-    setTimeout(() => process.exit(exitCode), 30_000)   // send 卡死也不拖着不退
+    execFile(CC, sendArgs, { windowsHide: true }, () => liveExit(exitCode))
+    setTimeout(() => liveExit(exitCode), 30_000)   // send 卡死也不拖着不退
   }
   child.on("exit", (code, sig) => { rl.close(); finishAndExit(sig ? 1 : (code ?? 1)) })
   child.on("error", (e) => { console.error(e.message); process.exit(1) })

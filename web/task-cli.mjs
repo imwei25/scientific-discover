@@ -137,7 +137,7 @@ async function cmdAdd(m) {
   const PLAT_CN = { wecom: "企业微信", weixin: "个人微信" }
   const pushNote = !task.pushChat ? ""
     : `；跑完会推送到${task.pushTo ? PLAT_CN[task.pushTo] : "所有已连接的微信/企微"}` +
-      "（软件开着才推得了；个人微信无法主动推送，消息会随下一次你询问时补发）"
+      "（软件开着才推得了；个人微信偶尔会漏推，漏掉的会在你下次说话时补上）"
   console.log(`已建任务 ${task.id}「${task.title}」，下次 ${fmtNext(task)}${pushNote}`)
   if (!r.ok) console.error(`⚠ 但没能注册到 Windows 计划任务：${r.err}\n  → 它不会自动跑。修好后执行：node web/task-cli.mjs sync`)
 }

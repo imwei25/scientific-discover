@@ -6865,8 +6865,9 @@ function openStream(url) {
     })
   }
   let streamSid = null      // 本条流服务的会话（区别于全局 sessionId：用户中途可能切走会话）
+  let streamBridge = false  // 这一轮是微信/企微那边发起的（本页只是旁观，见 done 事件里的重载）
   let autoNextInfo = null   // 服务端宣告"done 之后还有自动续跑的下一轮"（auto 事件），done 时据此接流
-  es.addEventListener("session", (ev) => { sseFailStreak = 0; const nid = JSON.parse(ev.data).id; streamSid = nid; sessionId = nid; localStorage.setItem("nm_sid", nid); consumePendingProject(nid); consumePendingFolder(); loadUploads(); loadZotLib() })   // 连上了 → 清零重连计数
+  es.addEventListener("session", (ev) => { sseFailStreak = 0; const d = JSON.parse(ev.data); const nid = d.id; streamBridge = !!d.bridge; streamSid = nid; sessionId = nid; localStorage.setItem("nm_sid", nid); consumePendingProject(nid); consumePendingFolder(); loadUploads(); loadZotLib() })   // 连上了 → 清零重连计数
 
   es.addEventListener("tool", (ev) => {
     const was = atBottomNow()                   // 先量：下面要往 turn 里塞徽章/工具行，塞完再判就晚了
@@ -6937,6 +6938,9 @@ function openStream(url) {
   es.addEventListener("auto", (ev) => { try { autoNextInfo = JSON.parse(ev.data) } catch {} })   // 无人值守：done 后服务端已同步起了下一轮
   es.addEventListener("done", () => {
     paintAnswer(); finalize(); refreshStorage()   // 本轮产物落盘后刷新存储用量
+    // 聊天接入那一轮：提问是在微信里发的，直播流里没有它 —— 这里只画出了一段没有问题的回答。
+    // 收尾后重载一次历史，把那条提问补上（顺带让这一轮与刷新后的长相一致）。
+    if (streamBridge && sessionId === streamSid) { setTimeout(() => resumeSession(streamSid), 600); return }
     // 无人值守续跑：服务端在 done 前广播过 auto 事件，且用户没切走会话 → 自动接流下一轮。
     // 用户切走了就不接（免得把 A 会话的输出流进 B 的界面）；服务端照跑，切回来时 resumeSession 会续上。
     if (autoNextInfo && sessionId === streamSid) {
@@ -8140,6 +8144,30 @@ async function refreshQuota(fresh = false) {
   } catch { el.hidden = true; setQuotaMini("") }
 }
 setInterval(refreshQuota, 30_000)   // 生成中成本在涨（/api/quota 含在跑轮的实时成本），低频轮询保持大致新鲜
+
+// ---- 微信/企微那边开跑了 → 这边自动接上直播 ----
+// 从软件里发消息时，是 sendMessage 主动 attach 的；而聊天接入那一轮是【别人】发起的，
+// 页面这侧没有任何触发点 —— 不轮询的话，用户开着这条会话干等，屏幕上什么都不会长出来。
+// 只在【当前没有订阅】时问一句，代价是本机一个 200 字节的请求，5 秒一次。
+// bridge 列表回的是"正在被聊天接入直播的会话 id"：微信可能开在一条【新】会话里，
+// 那条会话此刻还不在左侧列表里，只看自己这条的 running 是发现不了的。
+let bridgeSeen = ""
+setInterval(async () => {
+  if (activeES || document.hidden) return
+  try {
+    const r = await fetch("api/job?sid=" + encodeURIComponent(sessionId || ""), { signal: AbortSignal.timeout(4000) })
+    if (!r.ok) return
+    const j = await r.json()
+    const sids = Array.isArray(j.bridge) ? j.bridge : []
+    // 出现了没见过的聊天接入会话 → 刷新列表，让它带着微信图标出现在侧栏（不抢当前会话）
+    const key = sids.join(",")
+    if (key !== bridgeSeen) {
+      bridgeSeen = key
+      if (sids.some((s) => !sessList.some((x) => x.id === s))) loadSessions()
+    }
+    if (j.running && sessionId && !activeES) attachStream(sessionId)
+  } catch {}
+}, 5000)
 async function uploadFiles(files) {
   const arr = Array.from(files || []).filter(Boolean)
   if (!arr.length) return

@@ -218,6 +218,16 @@ function cloudSkillEnv() {
     SCI_OCR_TOKEN: CLOUD_LOCAL_TOKEN,
   } : {}
 }
+// 聊天接入（微信/企微）里 oc-wrap 把思考/工具/正文回传给本网关的地址与令牌，让软件侧能【实时】
+// 看到微信那一轮在干什么（详见 bridgeIngest 上方那段）。与生图/OCR 代理同一层信任：只收回环
+// 来源 + 本进程本次启动的令牌。**与云端登录态无关**（没登录、用自设 API 时一样要能看见），
+// 所以不能塞进 cloudSkillEnv —— 那个没登录就回 {}。
+function bridgeLiveEnv() {
+  return {
+    SCI_WRAP_LIVE_URL: `http://127.0.0.1:${PORT}/api/chat-bridge/live`,
+    SCI_WRAP_LIVE_TOKEN: CLOUD_LOCAL_TOKEN,
+  }
+}
 // 平台公告的本机短缓存（见 /api/cloud/notice）。两种失效方式，别混用：
 //   · expire：只把它标成过期，【留着上一份数据】。用户手点「刷新」走这条 —— 万一这次
 //     正好连不上云端，还能继续显示上一份，而不是把维护通知凭空抹掉。
@@ -2872,7 +2882,9 @@ function startJob(sid, sentText, modId, forceModel) {
 // 给一个 SSE 连接订阅 job：先重放快照（技能/工具/思考/已生成文本），再接后续直播；断开只退订
 function attachJob(job, req, res) {
   res.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-cache", Connection: "keep-alive" })
-  sseWrite(res, "session", { id: job.sid })
+  // bridge：这一轮是微信/企微那边发起的（本页只是旁观）。前端据此在收尾时重载历史——
+  // 提问是在微信里发的，直播流里没有它，不重载的话软件端只看得到一段没有问题的回答。
+  sseWrite(res, "session", { id: job.sid, ...(job.bridge ? { bridge: true } : {}) })
   for (const d of job.skills.values()) sseWrite(res, "tool", d)
   for (const d of job.tools.values()) sseWrite(res, "tool", d)
   for (const d of job.reasoning.values()) sseWrite(res, "reasoning", d)
@@ -2881,6 +2893,107 @@ function attachJob(job, req, res) {
   job.subs.add(res)
   req.on("close", () => job.subs.delete(res))
 }
+
+// ==== 聊天接入（微信/企微）的「软件侧直播」中继 ==============================
+//
+// 【为什么需要】cc-connect 每收到一条消息就 spawn 一次 oc-wrap，由它另起一个 `opencode run`
+// 进程 —— 那是【本网关的 opencode serve 之外】的另一个 opencode 实例，所以本进程的
+// client.event.subscribe() 一个事件都收不到：软件侧既看不出"正在跑"，也没有思考与工具执行，
+// 用户在微信里等着、打开软件想看它在干嘛，只有一片空白，直到整轮结束才在历史里读到一段正文。
+// （历史本来也只回 text part，思考/工具连事后都看不到 —— 见 /api/history 里的取 part 那行。）
+//
+// 【修法】oc-wrap 本来就在逐行解析 opencode 的 JSON 事件流（它靠这个过滤思考、聚合进度），
+// 顺手把 reasoning / tool / text 转发到本接口即可。这里按会话造一个【影子 job】塞进 jobs 表，
+// 于是 /api/job、/api/chat/attach、attachJob 的快照重放、前端那套 SSE 渲染【全部原样复用】，
+// 两侧都不必认识新概念。影子 job 与真 job 的区别只有 bridge 标记与 abort 的语义（见下）。
+// 这么久没收到新事件 → 认定那轮已经结束或死了，收摊。为什么必须有：oc-wrap 正常收尾会送
+// 一条 done，但它若被 taskkill / 崩在 uncaughtException 里，就没有人来关这盏灯，而影子 job
+// running 着会挡住用户从软件端往同一条会话发消息（见 /api/chat/start 的 running 分支）。
+// 5 分钟是折中：真实的长静默（云端排队十几分钟）会被提前判完成，代价只是界面停了转圈，
+// 后续事件一来又会把 job 重新点亮；而卡死的残留最多挡 5 分钟。
+const BRIDGE_IDLE_MS = 5 * 60_000
+/** 取/建这条会话的影子 job；界面自己有一轮在跑就返回 null（让位，绝不覆盖真 job）。 */
+function bridgeJob(sid) {
+  const cur = jobs.get(sid)
+  if (cur) return cur.bridge ? cur : null
+  const job = {
+    sid, bridge: true, running: true, finished: false, subs: new Set(),
+    text: "", reasoning: new Map(), tools: new Map(), skills: new Map(), notices: [],
+    // 界面上的「终止」只能解开本地这条订阅：真正在跑的是 cc-connect 那边的另一个进程，
+    // 本进程没有它的句柄，掐不掉也不该假装掐掉（假装的代价是用户以为停了、微信里却还在动）。
+    abort: async () => bridgeFinish(sid, "aborted", {}),
+  }
+  jobs.set(sid, job)
+  return job
+}
+function bridgeTouch(job) {
+  if (job.idleT) clearTimeout(job.idleT)
+  job.idleT = setTimeout(() => bridgeFinish(job.sid, "done", {}), BRIDGE_IDLE_MS)
+  job.idleT.unref?.()
+}
+function bridgeFinish(sid, ev, data) {
+  const job = jobs.get(sid)
+  if (!job?.bridge || job.finished) return
+  job.finished = true; job.running = false
+  if (job.idleT) clearTimeout(job.idleT)
+  for (const r of job.subs) sseWrite(r, ev, data || {})
+  jobs.delete(sid)
+}
+// cc-connect 每轮都带 --session，只有【它自己新起一个会话】的第一条消息没有 —— 那一轮
+// oc-wrap 事先不知道会话 id，只能报上工作目录 + 起跑时刻，由这里认领：同目录、且是本轮
+// 起跑之后【新建】的那条会话。认不出就先丢着（下一次 flush 再试），绝不猜一个旧会话
+// —— 猜错的后果是把微信那轮的思考流进用户正在看的另一条对话里。
+let bridgeResolveAt = 0
+async function bridgeResolveSid(body) {
+  const sid = String(body.sid || "").trim()
+  if (sid) return sid
+  const dir = String(body.dir || ""), since = Number(body.startedAt) || 0
+  if (!dir || !since) return ""
+  const now = Date.now()
+  if (now - bridgeResolveAt < 2000) return ""   // 认不出时别每次 flush 都去列一遍会话
+  bridgeResolveAt = now
+  try {
+    const l = un(await client.session.list({ query: { directory: dir } }))
+    if (!Array.isArray(l)) return ""
+    return l.filter((s) => s && !s.parentID && (s.time?.created || 0) >= since - 5000)
+      .sort((a, b) => (b.time?.created || 0) - (a.time?.created || 0))[0]?.id || ""
+  } catch { return "" }
+}
+/** oc-wrap 送来的一批事件 → 影子 job 快照 + 广播给订阅者。回 sid 让对方记住，下次不必再认领。 */
+async function bridgeIngest(body) {
+  const sid = await bridgeResolveSid(body)
+  if (!sid) return { ok: false, err: "no-session" }
+  for (const e of Array.isArray(body.events) ? body.events : []) {
+    const job = bridgeJob(sid)   // 每条都取一次：中途可能已被 done / 空转超时收掉
+    if (!job) return { ok: false, err: "owned", sid }   // 界面自己那轮占着这条会话
+    bridgeTouch(job)
+    const push = (ev, d) => { for (const r of job.subs) sseWrite(r, ev, d) }
+    // k === "start"：不带内容，作用就是上面那行 bridgeJob —— 让"这条会话正在跑"立刻可见，
+    // 不必等模型吐出第一个字（云端排队时那可能是好几分钟）。
+    if (e.k === "reasoning" && e.id) {
+      // 思考同样外显给用户 → 与真 job 一样过技能出流闸（这里只净化，不中止：那轮在别的进程里，掐不掉）
+      const d = { id: String(e.id), text: SkillGuard.sanitizeText(String(e.text || "")) }
+      job.reasoning.set(d.id, d); push("reasoning", d)
+    } else if (e.k === "tool" && e.callID) {
+      const d = { callID: String(e.callID), tool: String(e.tool || ""), status: String(e.status || ""),
+        title: String(e.title || ""), skill: e.skill ? String(e.skill) : null }
+      if (d.tool === "skill") { if (d.skill) job.skills.set(d.skill, d) } else job.tools.set(d.callID, d)
+      push("tool", d)
+    } else if (e.k === "text") {
+      job.text = SkillGuard.sanitizeText(String(e.text || ""))
+      push("text", job.text)
+    } else if (e.k === "done") {
+      const t = SkillGuard.sanitizeText(String(e.text || job.text || ""))
+      if (t) { job.text = t; push("final", { text: t }) }
+      bridgeFinish(sid, "done", {})
+    } else if (e.k === "error") {
+      bridgeFinish(sid, "failed", { message: String(e.message || "微信/企微那一轮出错了") })
+    }
+  }
+  return { ok: true, sid }
+}
+/** 正在被聊天接入直播的会话（前端拿它决定要不要刷新列表：微信可能开在一条【新】会话里）。 */
+const bridgeLiveSids = () => [...jobs.values()].filter((j) => j.bridge && j.running).map((j) => j.sid)
 
 // ==== 云端积分用尽：让"额度触顶"看得见 =======================================
 //
@@ -3430,6 +3543,29 @@ export const server = http.createServer(async (req, res) => {
       const bearer = String(req.headers.authorization || "").replace(/^Bearer\s*/i, "").trim()
       if (bearer !== CLOUD_LOCAL_TOKEN) return send(res, 401, "application/json", JSON.stringify({ error: { message: "本机转发令牌不正确" } }))
       return cloudForward(req, res, u)
+    }
+
+    // ---- 聊天接入的直播中继入口（oc-wrap → 这里 → 界面的 SSE）----
+    // 必须在门禁【之前】：调用方是 cc-connect 起的 oc-wrap 进程，它没有 lan_auth cookie。
+    // 两道闸与 /cloud/* 同款：① 只收回环来源；② 必须带本进程本次启动生成的 CLOUD_LOCAL_TOKEN
+    // （随 config.toml 注入给 oc-wrap，见 bridgeLiveEnv）。否则同机任何程序都能往用户的会话里
+    // 伪造思考与工具事件。
+    if (req.method === "POST" && u.pathname === "/api/chat-bridge/live") {
+      if (!isLocal(req)) return send(res, 403, "application/json", JSON.stringify({ ok: false, err: "仅限本机" }))
+      const bearer = String(req.headers.authorization || "").replace(/^Bearer\s*/i, "").trim()
+      if (bearer !== CLOUD_LOCAL_TOKEN) return send(res, 401, "application/json", JSON.stringify({ ok: false, err: "本机转发令牌不正确" }))
+      const chunks = []; let total = 0
+      for await (const c of req) {
+        total += c.length
+        if (total > 4_000_000) return sendClose(res, 413, "application/json", JSON.stringify({ ok: false, err: "too-large" }))
+        chunks.push(c)
+      }
+      let body = null
+      try { body = JSON.parse(Buffer.concat(chunks).toString() || "null") } catch {}
+      if (!body || typeof body !== "object") return send(res, 400, "application/json", JSON.stringify({ ok: false, err: "bad-json" }))
+      // 中继是【锦上添花】：任何异常都只回一个失败码，绝不能反过来影响微信那一轮
+      try { return send(res, 200, "application/json", JSON.stringify(await bridgeIngest(body))) }
+      catch (e) { return send(res, 200, "application/json", JSON.stringify({ ok: false, err: String(e?.message || e) })) }
     }
 
     // 门禁：其余路径若未登录 → 页面跳登录页、接口回 401
@@ -4822,7 +4958,12 @@ export const server = http.createServer(async (req, res) => {
       // 后者 jobs.set 覆盖前者 → 两轮 prompt 并发打同一会话、先收尾的把另一轮从表里删成无法 attach/abort 的孤儿。
       await ensureSessionTitle(sid, q)
       if (jobs.get(sid)?.running)   // 该会话已有进行中的一轮（双开页面/连点）→ 不重复发起，让前端去续流
-        return send(res, 200, "application/json", JSON.stringify({ ok: true, sid, sent: false, running: true, notice: "上一轮仍在进行中，本条消息未发送；请等本轮结束后重发。" }))
+        return send(res, 200, "application/json", JSON.stringify({ ok: true, sid, sent: false, running: true,
+          // 这一轮是微信/企微那边发起的（影子 job，见 bridgeIngest）→ 说清是谁在占着，
+          // 否则用户对着一条"自己没发过"的进行中轮次完全不知道发生了什么。
+          notice: jobs.get(sid).bridge
+            ? "这条会话正在处理一条来自微信/企微的消息，本条未发送；等它结束后再发（那一轮的思考与工具执行就显示在上面）。"
+            : "上一轮仍在进行中，本条消息未发送；请等本轮结束后重发。" }))
       if (quotaOver())
         return send(res, 200, "application/json", JSON.stringify({ ok: false, sid, sent: false, err: `今日额度已用尽（已用 ${creditsText(quotaUsedLive())} / 上限 ${creditsText(DAILY_COST_LIMIT)} 积分），明天恢复。` }))
       // 云端积分已被判定用尽 → 别再起一轮白转圈（打包版的额度就是这条线，本机那条通常没设）。
@@ -4914,7 +5055,10 @@ export const server = http.createServer(async (req, res) => {
 
     // 某会话是否有进行中的一轮（切会话/重开页面时决定要不要续流）
     if (req.method === "GET" && u.pathname === "/api/job") {
-      return send(res, 200, "application/json", JSON.stringify({ running: !!jobs.get(u.searchParams.get("sid") || "")?.running }))
+      // bridge：正在被微信/企微直播的会话 id。前端据此发现"微信刚开了一条【新】会话"并刷新列表——
+      // 只看自己这条会话的 running 是发现不了的（cc-connect 每起一个新会话就换一个 sid）。
+      return send(res, 200, "application/json", JSON.stringify({
+        running: !!jobs.get(u.searchParams.get("sid") || "")?.running, bridge: bridgeLiveSids() }))
     }
 
     // 列出本会话 outputs/ 里的产物文件（重开页面/切会话时回显"产出"侧栏，产物随会话持久）
@@ -5761,7 +5905,7 @@ server.listen(PORT, "0.0.0.0", () => {
   // 聊天接入桥自启（上次开着就拉起）。无头运行器自起的网关跳过：cc-connect 的实例锁按配置文件算，
   // 第二个实例带 --force 会把用户正在用的那条桥杀掉。SCI_CHAT_BRIDGE=0 是测试总开关。
   if (process.env.SCI_HEADLESS !== "1" && process.env.SCI_CHAT_BRIDGE !== "0")
-    Bridge.init({ root: ROOT, webDir: __dirname, sessionOut, getModel: () => MODEL, getCloudEnv: cloudSkillEnv, log: (m) => console.log("[chat-bridge] " + m) })
+    Bridge.init({ root: ROOT, webDir: __dirname, sessionOut, getModel: () => MODEL, getCloudEnv: cloudSkillEnv, getLiveEnv: bridgeLiveEnv, log: (m) => console.log("[chat-bridge] " + m) })
 })
 
 // ---- 优雅退出 ----

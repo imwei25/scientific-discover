@@ -208,6 +208,9 @@ function commonEnv(s, platform) {
   // 主进程 process.env 里【没有】—— 上面那条透传只在容器版（render-compose 注入）才有值。
   // 桌面版走 init 传进来的 getCloudEnv 取实时值，并覆盖透传（登录态以它为准）。
   Object.assign(env, CTX.getCloudEnv?.() || {})
+  // 直播中继（软件侧实时看到微信这一轮的思考与工具执行）：地址+令牌都是网关本进程算出来的，
+  // 与生图/OCR 同理，主进程 env 里没有，只能由 init 传进来的 getLiveEnv 取实时值。
+  Object.assign(env, CTX.getLiveEnv?.() || {})
   return env
 }
 function renderProject(s, platform) {
@@ -280,7 +283,8 @@ export function running() { return !!(proc && proc.exitCode === null) }
 // getCloudEnv 输出的快照（起桥写 config.toml 那一刻）。env 是烘进 config 的，之后
 // 登录态再变，跑着的桥不会自己知道 —— syncCloudEnv 拿当前值与快照比对来决定要不要重启。
 let bakedCloudSig = ""
-const cloudSig = () => JSON.stringify(CTX?.getCloudEnv?.() || {})
+// 直播中继的地址/令牌也烘在 config.toml 里（端口与令牌都随网关进程走），一并纳入快照比对
+const cloudSig = () => JSON.stringify([CTX?.getCloudEnv?.() || {}, CTX?.getLiveEnv?.() || {}])
 export async function stop() {
   if (!running()) { proc = null; return }
   const p = proc; proc = null
