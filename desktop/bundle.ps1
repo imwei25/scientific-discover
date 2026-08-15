@@ -534,7 +534,7 @@ Step "随包清单 manifest.txt"
 Copy-Item "$PSScriptRoot\cleanup-stale.ps1" "$Staging\cleanup-stale.ps1" -Force
 $manifestLines = Get-ChildItem $Staging -Recurse -File -Force |
   ForEach-Object { $_.FullName.Substring($Staging.Length).TrimStart([char]92) }
-Write-Utf8NoBom "$Staging\manifest.txt" ($manifestLines -join "`n")
+($manifestLines -join "`n") | Write-Utf8NoBom "$Staging\manifest.txt"
 Write-Host "  清单已写入：$($manifestLines.Count) 个文件" -ForegroundColor Green
 # 防呆：清单条目数远低于常态说明枚举出了问题，此时发包会让客户端把刚装好的程序当残留删掉。
 if ($manifestLines.Count -lt 2000) { throw "打包中止：清单只有 $($manifestLines.Count) 条，明显不完整（cleanup-stale.ps1 的安全下限也是 2000）" }
