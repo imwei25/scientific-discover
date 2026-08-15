@@ -219,6 +219,9 @@ function renderProject(s, platform) {
   const env = commonEnv(s, platform)
   const platOpts = platform === "weixin"
     ? [
+      // 排队时那句「消息已收到，将在当前任务完成后处理」不发：它每条都是一条独立消息，
+      // 和真正的回复抢同一格额度，而且合并开着时这些消息本来就会并成一轮，说了也没意义。
+      `notify_queued = false`,
       `burst_limit = ${WEIXIN_BURST_LIMIT}`,
       `burst_window_secs = ${WEIXIN_BURST_WINDOW_SECS}`,
       `token = ${tq(b.token)}`,

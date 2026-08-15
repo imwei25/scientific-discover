@@ -143,13 +143,13 @@ $ccDir = Join-Path $Rt "cc-connect"
 #
 # 【这是临时措施，上游合并发版后就删掉这一段、把 $CcVer 抬到官方新版】自建产物不在 git 里
 # （desktop/dist/ 被忽略），所以换台机器打包会走下面的官方下载分支——那样打出来的包【不含修复】。
-$ccFix = Join-Path $Root "desktop\dist\vendor\cc-connect-v1.4.1-fix.1-windows-amd64.exe"
-$ccFixVer = "1.4.1-fix.1"
+$ccFix = Join-Path $Root "desktop\dist\vendor\cc-connect-v1.4.1-fix.3-windows-amd64.exe"
+$ccFixVer = "1.4.1-fix.3"
 if (Test-Path $ccFix) {
   New-Item -ItemType Directory -Force $ccDir | Out-Null
   Copy-Item $ccFix "$ccDir\cc-connect.exe" -Force
   $CcVer = $ccFixVer
-  Write-Host "  ⚠ 用的是自建修复版 $ccFixVer（排队消息空响应的竞态修复），不是官方 release" -ForegroundColor Yellow
+  Write-Host "  ⚠ 用的是自建修复版 $ccFixVer（空响应竞态修复 + 排队合并 + 发送配额放宽），不是官方 release" -ForegroundColor Yellow
 } else {
   Write-Host "  ⚠ 没找到自建修复版（$ccFix）——将回退官方 $CcVer，打出的包【不含】排队空响应修复" -ForegroundColor Yellow
 }
