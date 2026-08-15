@@ -133,6 +133,26 @@ if ("$ocv" -notmatch [regex]::Escape($OcVer)) { throw "opencode.exe 版本不对
 # 预置二进制：npm 包首跑要现场从 GitHub 拉 exe，国内用户十有八九 ECONNRESET —— 必须随包发。
 Step "cc-connect $CcVer"
 $ccDir = Join-Path $Rt "cc-connect"
+# ---- 【临时】自建修复版优先 --------------------------------------------------
+# 官方 v1.4.1 有个竞态：上一轮 opencode 进程打完 step_finish 后还要拖几百毫秒才退出，它的
+# readLoop 在 EOF 触发兜底 sendEventResult()，而去重标志 resultSent 已被下一次 Send() 重置 →
+# 这个【过期的完成事件】把刚出队的新一轮提前判成"完成"，用户收到「(空响应)」、真实回复丢失。
+# 只有"出队的第一条"会踩。修法是给每次 Send() 加 turnGen 代次守卫，丢弃过期 readLoop 的终结事件。
+# 2026-08-15 本机实测：修复版下 bridge.log 会打印 "suppressing stale EventResult"（说明过期事件
+# 真的来了、被拦住了），排队那轮拿到 response_len=114 的正常回复，不再是 11（= "(空响应)" 的字节数）。
+#
+# 【这是临时措施，上游合并发版后就删掉这一段、把 $CcVer 抬到官方新版】自建产物不在 git 里
+# （desktop/dist/ 被忽略），所以换台机器打包会走下面的官方下载分支——那样打出来的包【不含修复】。
+$ccFix = Join-Path $Root "desktop\dist\vendor\cc-connect-v1.4.1-fix.1-windows-amd64.exe"
+$ccFixVer = "1.4.1-fix.1"
+if (Test-Path $ccFix) {
+  New-Item -ItemType Directory -Force $ccDir | Out-Null
+  Copy-Item $ccFix "$ccDir\cc-connect.exe" -Force
+  $CcVer = $ccFixVer
+  Write-Host "  ⚠ 用的是自建修复版 $ccFixVer（排队消息空响应的竞态修复），不是官方 release" -ForegroundColor Yellow
+} else {
+  Write-Host "  ⚠ 没找到自建修复版（$ccFix）——将回退官方 $CcVer，打出的包【不含】排队空响应修复" -ForegroundColor Yellow
+}
 if (-not (Test-Path "$ccDir\cc-connect.exe")) {
   New-Item -ItemType Directory -Force $ccDir | Out-Null
   $zip = Get-Cached "cc-connect-v$CcVer-windows-amd64.zip" @(
