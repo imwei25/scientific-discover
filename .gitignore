@@ -55,6 +55,11 @@ web/sessions-meta.json
 # 定时任务：无头运行器的环境快照（壳每次启动写，【原样带着 OC_GATEWAY_KEY】，与 model-config.json 同类）
 web/headless-env.json
 
+# 桌面版本机开关（关闭时完全退出；开机自启动现查注册表不存这儿）。用户在设置里勾出来的，
+# 开发机跑一次 dev-gateway 也会生成。打包侧同样排除（bundle.ps1 的 ExcludeFiles），
+# 升级清理侧则明确保留（cleanup-stale.ps1 的 keepAlways）——它是用户设置，不是随包文件。
+web/desktop-settings.json
+
 # 聊天接入桥的运行期状态（state.json 含企微 bot 凭证、config.toml 是生成物、bridge.log 是日志）
 /chat-bridge/
 # 用户自己建的定时任务定义与运行记录（运行时生成）

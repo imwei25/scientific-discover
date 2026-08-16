@@ -1634,6 +1634,16 @@
   .mm-kv:last-of-type { border-bottom: none; }
   .mm-kv > span { color: var(--faint); flex: none; }
   .mm-kv > b { font-weight: 600; text-align: right; word-break: break-all; }
+  /* 设置弹窗的开关行：整行可点（label 包住 checkbox），别让用户去瞄那个小方块 */
+  .dsrow { display: flex; gap: 10px; align-items: flex-start; padding: 12px 2px; cursor: pointer; }
+  .dsrow + .dsrow { border-top: 1px solid var(--line); }
+  .dsrow input { margin-top: 2px; width: 16px; height: 16px; flex: none; cursor: pointer; }
+  .dsrow .dstxt { display: flex; flex-direction: column; gap: 3px; }
+  .dsrow .dstxt b { font-weight: 600; }
+  .dsrow .dstxt em { font-style: normal; color: var(--faint); font-size: .86em; line-height: 1.5; }
+  .dsrow input:disabled { cursor: default; }
+  .dsrow:has(input:disabled) { cursor: default; opacity: .6; }
+
   .mm-faint { color: var(--faint); font-weight: 400; }
   .mm-hint code { background: #f3f6fb; border: 1px solid var(--line); border-radius: 4px; padding: 0 4px; font-size: .92em; }
 
@@ -1839,6 +1849,9 @@
              提示条只在"有新版"时才出现，出了问题想退回去的时候它恰恰不在。
              JS 会在两种包都换不了的形态下（中心多用户部署）整项隐藏。 -->
         <button class="umitem" id="uiVerBtn" type="button" hidden>版本管理</button>
+        <!-- 设置：本机行为开关（开机自启动 / 关闭时完全退出）。桌面版才有外壳，
+             中心部署里探测不到就整项隐藏（同 uiVerBtn 的做法）。 -->
+        <button class="umitem" id="deskSetBtn" type="button" hidden>设置</button>
         <button class="umitem danger" id="logoutBtn" type="button">退出登录</button>
       </div>
     </div>
@@ -1946,6 +1959,32 @@
      · 界面版本：只换 web/ 下的静态资源（永不含 .mjs），【不重启后台】，正在跑的轮不受影响，刷新即生效；
      · 技能版本：换 .opencode/skills 目录，【要重启后台 opencode】，正在生成的轮会被中断（换前会问）。
      两者代价差得远，所以每个选项卡下面的提示语各说各的，别写成一句笼统的话。 -->
+<!-- 设置：本机行为开关。只在桌面版露出（探测见 deskSetBtn 那段）。 -->
+<div id="deskSetModal" class="modal">
+  <div class="modal-card" style="max-width:460px">
+    <div class="modal-head">
+      <span class="modal-title">设置</span>
+      <button class="modal-x" id="deskSetClose" type="button" title="关闭"></button>
+    </div>
+    <div class="modal-body">
+      <label class="dsrow">
+        <input type="checkbox" id="dsAutostart">
+        <span class="dstxt">
+          <b>开机时自动启动</b>
+          <em>登录 Windows 后自动在后台把它拉起来，托盘常驻。定时任务要在关着软件时也能跑，靠的就是它。</em>
+        </span>
+      </label>
+      <label class="dsrow">
+        <input type="checkbox" id="dsExitOnClose">
+        <span class="dstxt">
+          <b>关闭窗口时完全退出</b>
+          <em>默认点 X 只把窗口收进托盘、后台继续跑（正在生成的任务不会断）。勾上后点 X 就是彻底退出，正在跑的任务会一并停掉。</em>
+        </span>
+      </label>
+      <div class="mm-msg" id="deskSetMsg" hidden></div>
+    </div>
+  </div>
+</div>
 <div id="uiVerModal" class="modal">
   <div class="modal-card" style="max-width:460px">
     <div class="modal-head">
@@ -2548,6 +2587,10 @@ document.getElementById("logoutBtn").innerHTML = ic("logout") + "<span>退出登
   const uv = document.getElementById("uiVerBtn")
   uv.innerHTML = ic("history") + "<span>版本管理</span>"
   uv.addEventListener("click", closeMenu)
+  // 设置（同上，桌面版才露出来）
+  const ds = document.getElementById("deskSetBtn")
+  ds.innerHTML = ic("cog") + "<span>设置</span>"
+  ds.addEventListener("click", closeMenu)
 })()
 // 用户信息（名字 / 档位）来自云端账号档案；没接云端（局域网/单机形态）就如实显示"本机模式"。
 async function refreshUserBox() {
@@ -8027,6 +8070,66 @@ uiVerBtn.addEventListener("click", openUiVer)
 document.getElementById("uiVerClose").addEventListener("click", closeUiVer)
 uiVerModal.addEventListener("click", (e) => { if (e.target === uiVerModal) closeUiVer() })
 document.addEventListener("keydown", (e) => { if (e.key === "Escape" && uiVerModal.classList.contains("on")) closeUiVer() })
+// ---- 设置：开机自启动 / 关闭时完全退出 ----
+// 两个开关都是【立即生效】的：勾上就写注册表 / 写设置文件，没有"保存"按钮。
+// 所以每次改动都要把服务端返回的真实状态回填——写失败时勾会自己弹回去，用户看到的
+// 永远是机器上的事实，而不是他刚点过的那一下。
+;(function () {
+  const modal = document.getElementById("deskSetModal")
+  const cbAuto = document.getElementById("dsAutostart")
+  const cbExit = document.getElementById("dsExitOnClose")
+  const msg = document.getElementById("deskSetMsg")
+  const btn = document.getElementById("deskSetBtn")
+  const open = () => { modal.classList.add("on"); load() }
+  const close = () => modal.classList.remove("on")
+  const say = (t, cls) => {
+    if (!t) { msg.hidden = true; return }
+    msg.hidden = false; msg.textContent = t
+    msg.className = "mm-msg" + (cls ? " " + cls : "")
+  }
+  const fill = (s) => {
+    cbAuto.checked = !!s.autostart
+    cbExit.checked = !!s.exitOnClose
+    // 键还在但指向旧安装位置（升级/搬过目录）：开机拉起来的是个不存在的程序，等于没开。
+    // 如实说明并让用户重勾一次，别显示成"已开"。
+    if (s.autostartStale) say("检测到旧的自启动登记指向的不是当前安装位置（多半是升级前留下的），已按「未开启」显示；重新勾选即可修正。", "warn")
+    else say("")
+  }
+  async function load() {
+    cbAuto.disabled = cbExit.disabled = true
+    try {
+      const s = await (await fetch("api/desktop-settings/status", { signal: AbortSignal.timeout(8000) })).json()
+      if (!s.ok || !s.available) { say("当前形态不支持这两个开关。", "warn"); return }
+      fill(s)
+      cbAuto.disabled = cbExit.disabled = false
+    } catch { say("读取设置失败。", "err") }
+  }
+  async function save(patch) {
+    cbAuto.disabled = cbExit.disabled = true
+    try {
+      const r = await (await fetch("api/desktop-settings", {
+        method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(patch),
+      })).json()
+      if (!r.ok) { say(r.err || "保存失败。", "err"); await load(); return }
+      fill(r)
+    } catch { say("保存失败（网关无响应）。", "err"); await load() } finally {
+      cbAuto.disabled = cbExit.disabled = false
+    }
+  }
+  cbAuto.addEventListener("change", () => save({ autostart: cbAuto.checked }))
+  cbExit.addEventListener("change", () => save({ exitOnClose: cbExit.checked }))
+  btn.addEventListener("click", open)
+  document.getElementById("deskSetClose").addEventListener("click", close)
+  modal.addEventListener("click", (e) => { if (e.target === modal) close() })
+  document.addEventListener("keydown", (e) => { if (e.key === "Escape" && modal.classList.contains("on")) close() })
+  // 入口探测：同 uiVerBtn —— 探不到就不露出来，宁可少个入口也别给个点了报错的按钮
+  ;(async () => {
+    try {
+      const s = await (await fetch("api/desktop-settings/status", { signal: AbortSignal.timeout(10000) })).json()
+      if (s && s.ok && s.available) btn.hidden = false
+    } catch {}
+  })()
+})()
 // 入口只在【真能换点什么】的形态下露出来：中心多用户部署里网关与技能都是服务器的，本机没有可换的。
 const uvAvail = { web: null, skill: null }
 ;(async () => {

@@ -42,6 +42,33 @@ static ALLOW_EXIT: AtomicBool = AtomicBool::new(false);
 
 struct Backend(Mutex<Option<u32>>); // node 网关的 pid
 
+/// 用户是否勾了「关闭时完全退出」。
+///
+/// 【为什么每次点 X 都现读文件，而不是缓存进内存】这个值由**网关**（node）写，外壳（Rust）读；
+/// 两个进程之间没有回调通道。缓存就得再造一条"设置变了通知外壳"的链路，而点 X 是个低频动作，
+/// 读一个几十字节的 json 完全不值得为它加一层同步。现读还顺带保证了：用户刚在设置里改完、
+/// 立刻点 X，行为就是新的，不需要重启。
+///
+/// 读不到 / 解析失败一律当 false（= 缩到托盘）。这是保守的那一侧：把窗口收起来最多让用户
+/// 再去托盘点一下，而误退出会连带把正在跑的生成任务一起杀掉。
+fn exit_on_close(app: &tauri::AppHandle) -> bool {
+    let Ok(res) = app.path().resource_dir() else {
+        return false;
+    };
+    let p = res
+        .join("bundle")
+        .join("app")
+        .join("web")
+        .join("desktop-settings.json");
+    let Ok(txt) = std::fs::read_to_string(p) else {
+        return false;
+    };
+    serde_json::from_str::<serde_json::Value>(&txt)
+        .ok()
+        .and_then(|v| v.get("exitOnClose").and_then(|b| b.as_bool()))
+        .unwrap_or(false)
+}
+
 /// 把主窗口从托盘唤回前台（app 窗口还没建出来时退回 splash）。
 fn show_main(app: &tauri::AppHandle) {
     if let Some(w) = app
@@ -311,10 +338,20 @@ fn main() {
         .on_window_event(|window, event| {
             if window.label() == "app" {
                 if let tauri::WindowEvent::CloseRequested { api, .. } = event {
-                    if !ALLOW_EXIT.load(Ordering::SeqCst) {
-                        api.prevent_close();
-                        let _ = window.hide();
+                    if ALLOW_EXIT.load(Ordering::SeqCst) {
+                        return; // 托盘「完全关闭」已放行，照常退出
                     }
+                    // 用户在设置里勾了「关闭时完全退出」→ 点 X 等同于托盘的「完全关闭」：
+                    // 同样要先置 ALLOW_EXIT 再 app.exit(0)，才能走到 RunEvent::Exit 去收后台
+                    // （node 网关 + opencode）。只是 return 不 prevent_close 是不够的：
+                    // 那样窗口关了、后台还在，用户下次启动会撞上"端口被占"。
+                    if exit_on_close(window.app_handle()) {
+                        ALLOW_EXIT.store(true, Ordering::SeqCst);
+                        window.app_handle().exit(0);
+                        return;
+                    }
+                    api.prevent_close();
+                    let _ = window.hide();
                 }
             }
         })
@@ -437,6 +474,16 @@ fn main() {
                 // 想催升级也无从下手。用 Cargo 包版本（= tauri.conf.json 里那个）钉住，
                 // 发版时改一处即可。
                 .env("APP_VERSION", env!("CARGO_PKG_VERSION"))
+                // 桌面外壳自己的 exe 路径。两个用途，缺了都做不成：
+                //   ① 网关据此判断"我跑在桌面版里"，决定要不要露出「设置」入口
+                //      （中心多用户部署没有外壳，那两个开关也无从谈起）；
+                //   ② 开机自启动要往注册表 Run 键写的就是这个路径。
+                // 不让网关自己去猜（从 bundle\app 往上退三级）：用户可以装到任意目录，
+                // 而且将来目录层级一变，猜法就默默失效——写进来的是唯一可靠来源。
+                .env(
+                    "DESKTOP_EXE",
+                    std::env::current_exe().unwrap_or_default(),
+                )
                 .creation_flags(CREATE_NO_WINDOW);
 
             // 网关日志：node 的 stdout/stderr 原先直接丢弃，客户现场出问题什么都拿不到

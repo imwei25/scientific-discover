@@ -18,6 +18,7 @@ import * as WF from "./workflows.mjs"
 import * as WFS from "./wf-state.mjs"
 import { scrubShare, renderShareHtml } from "./share-export.mjs"
 import * as Tasks from "./tasks.mjs"
+import * as DeskSet from "./desktop-settings.mjs"
 import * as Sched from "./schtasks.mjs"
 import * as Presets from "./task-presets.mjs"
 import * as Bridge from "./chat-bridge.mjs"
@@ -4830,6 +4831,20 @@ export const server = http.createServer(async (req, res) => {
     }
 
     // ---- 聊天接入（把某个会话接到企微/微信；托管 cc-connect，详见 web/chat-bridge.mjs 顶部注释）----
+    // ---- 桌面版本机开关：开机自启动 / 关闭时完全退出 ----
+    // /status 的 available 决定前端要不要露出「设置」入口：中心多用户部署里没有外壳
+    // （DESKTOP_EXE 没人传），这两个开关无从谈起，入口整个不出现。
+    if (u.pathname.startsWith("/api/desktop-settings")) {
+      if (req.method === "GET" && u.pathname === "/api/desktop-settings/status")
+        return send(res, 200, "application/json", JSON.stringify(await DeskSet.status()))
+      if (req.method === "POST" && u.pathname === "/api/desktop-settings") {
+        let b = {}
+        try { b = await readJson(req) } catch { return send(res, 400, "application/json", JSON.stringify({ ok: false, err: "请求体不合法" })) }
+        const r = await DeskSet.setConfig(b)
+        return send(res, r.ok ? 200 : 400, "application/json", JSON.stringify(r))
+      }
+      return send(res, 404, "application/json", JSON.stringify({ ok: false, err: "未知接口" }))
+    }
     if (u.pathname.startsWith("/api/chat-bridge/")) {
       if (req.method === "GET" && u.pathname === "/api/chat-bridge/status") {
         const st = Bridge.status()

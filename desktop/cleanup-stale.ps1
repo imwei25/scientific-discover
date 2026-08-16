@@ -62,7 +62,8 @@ $keepAlways = @(
   "app\web\model-config.json",
   "app\web\cloud-state.json",
   "app\web\sessions-meta.json",
-  "app\web\headless-env.json"
+  "app\web\headless-env.json",
+  "app\web\desktop-settings.json"   # 开机自启动 / 关闭时完全退出（外壳 main.rs 也读它）
 )
 foreach ($k in $keepAlways) { [void]$keep.Add($k) }
 

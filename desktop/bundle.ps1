@@ -294,6 +294,7 @@ Step "应用本体：web 网关 + 技能 + AGENTS.md"
 # 测试目录里有 "sk-mine" 这种假 key，混进包既是无谓体积，也会让密钥扫描工具误报。
 Copy-Tree "$Root\web" "$App\web" `
   -ExcludeFiles @("model-config.json", "cloud-state.json", "sessions-meta.json", "headless-env.json",
+                  "desktop-settings.json",
                   "dev-test.mjs", "dev-gateway.mjs", "dev-lan.mjs", "dev-skillmods.mjs", "dev-folders.mjs") `
   -ExcludeDirs  @("test", "Microsoft")
 # ↑ dev-*.mjs 一个都别漏：这几个都是开发用启动器，有的会自带假 opencode / 固定口令，
