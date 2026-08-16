@@ -274,3 +274,67 @@ test("pushToChat：桥没在跑时不炸、也不会把中间文件算成可推�
   const r = await B.pushToChat({ text: "", files: [], dir: "" })
   assert.equal(r.ok, false)
 })
+
+// 【Bug 回归】0.1.31 把 cc-connect 的 data_dir 换成私有目录，顺手把【可跨重启复用】的
+// context_token 落在了旧目录里。读 cc-connect 源码（platform/weixin）确认：token 只能从入站
+// 消息拿到（长轮询与心跳都不带）、落盘时不记过期时间、启动原样读回，而发送强制要它 ——
+// 所以 token 表一空，升级后第一次主动推送（定时任务、产物补发）必然失败，直到用户先发一条
+// 消息。起因是把 context_token 误判成"分钟级过期的易失数据"（那是 ret=-2，属 ilink 发送限流）。
+test("context_token 迁移：从旧 data_dir 搬进私有目录，不覆盖已有、且只搬一次", () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "cchome-"))
+  const local = fs.mkdtempSync(path.join(os.tmpdir(), "cclocal-"))
+  const savedHome = process.env.USERPROFILE, savedLocal = process.env.LOCALAPPDATA
+  process.env.USERPROFILE = home
+  process.env.LOCALAPPDATA = local
+  try {
+    const oldBot = path.join(home, ".cc-connect", "weixin", "sci-weixin-OLDSID11", "bot@im.bot")
+    fs.mkdirSync(oldBot, { recursive: true })
+    fs.writeFileSync(path.join(oldBot, "context_tokens.json"), '{"peer@im.wechat":"TOK-OLD"}')
+    // 长轮询游标【不该】被搬（搬了可能重收/漏收消息，而它本来会自愈）
+    fs.writeFileSync(path.join(oldBot, "get_updates.buf"), "cursor")
+
+    const r = B.migrateContextTokens("sci-weixin-NEWSID22")
+    assert.deepEqual(r.migrated, ["bot@im.bot"], "该搬运一份 token")
+    const dst = path.join(local, "niuma-cc", "weixin", "sci-weixin-NEWSID22", "bot@im.bot")
+    assert.equal(fs.readFileSync(path.join(dst, "context_tokens.json"), "utf8"), '{"peer@im.wechat":"TOK-OLD"}',
+      "★ token 内容要原样搬过去 —— 少了它，升级后第一次主动推送必然发不出去")
+    assert.ok(!fs.existsSync(path.join(dst, "get_updates.buf")), "长轮询游标不该跟着搬")
+
+    // 只搬一次：把新的改掉再跑，不许被旧的覆盖回去
+    fs.writeFileSync(path.join(dst, "context_tokens.json"), '{"peer@im.wechat":"TOK-NEW"}')
+    const again = B.migrateContextTokens("sci-weixin-NEWSID22")
+    assert.equal(again.skipped, "已迁移过", "有标记文件就该整段跳过")
+    assert.equal(fs.readFileSync(path.join(dst, "context_tokens.json"), "utf8"), '{"peer@im.wechat":"TOK-NEW"}',
+      "★ 绝不能把用户后来刷新出来的新 token 覆盖成旧的")
+
+    // ★ 上面那条其实是被【标记文件】短路保护的，测不到 existsSync 那道闸（变异验证发现的）。
+    //   这里单独造一次"首次迁移、但目标已经有 token"的局面：用户在第一次主动推送之前就先发了
+    //   消息，cc-connect 已经写下【更新】的 token —— 此时绝不能拿旧目录那份把它盖掉。
+    const local2 = fs.mkdtempSync(path.join(os.tmpdir(), "cclocal2-"))
+    process.env.LOCALAPPDATA = local2
+    const dst2 = path.join(local2, "niuma-cc", "weixin", "sci-weixin-NEWSID22", "bot@im.bot")
+    fs.mkdirSync(dst2, { recursive: true })
+    fs.writeFileSync(path.join(dst2, "context_tokens.json"), '{"peer@im.wechat":"TOK-FRESH"}')
+    const r2 = B.migrateContextTokens("sci-weixin-NEWSID22")
+    assert.deepEqual(r2.migrated, [], "目标已有 token → 不该搬任何东西")
+    assert.equal(fs.readFileSync(path.join(dst2, "context_tokens.json"), "utf8"), '{"peer@im.wechat":"TOK-FRESH"}',
+      "★ 首次迁移也不许覆盖目标已有的（更新的）token")
+    try { fs.rmSync(local2, { recursive: true, force: true }) } catch {}
+  } finally {
+    if (savedHome === undefined) delete process.env.USERPROFILE; else process.env.USERPROFILE = savedHome
+    if (savedLocal === undefined) delete process.env.LOCALAPPDATA; else process.env.LOCALAPPDATA = savedLocal
+    for (const d of [home, local]) { try { fs.rmSync(d, { recursive: true, force: true }) } catch {} }
+  }
+})
+
+// 起桥路径上必须【真的调用】迁移。上面那条只测了函数本身：把 start() 里的调用整行删掉，
+// 函数照样自测通过，而线上行为完全失效（变异验证发现的）。start() 会 spawn 真进程、不适合
+// 在单测里跑，所以退一步用源码断言 —— 它证明不了调用时机对，但能挡住"整行被删/被注释掉"。
+test("起桥时必须调用 context_token 迁移（源码级：挡住调用点被删）", () => {
+  const src = fs.readFileSync(new URL("../chat-bridge.mjs", import.meta.url), "utf8")
+  const body = src.slice(src.indexOf("export function start()"))
+  const stop = body.indexOf("export async function syncCloudEnv")
+  const startFn = stop > 0 ? body.slice(0, stop) : body
+  assert.match(startFn, /migrateContextTokens\(/,
+    "start() 里没有调用 migrateContextTokens —— 升级后第一次主动推送会因为缺 context_token 而失败")
+})

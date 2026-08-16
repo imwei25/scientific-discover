@@ -80,6 +80,59 @@ function clearStaleSock() {
   try { fs.rmSync(ccSockPath(), { force: true }) }
   catch (e) { CTX.log?.("chat-bridge: 清理残留 api.sock 失败（不阻塞起桥）: " + e.message) }
 }
+// ---- 一次性迁移：把旧 data_dir 的个人微信 context_token 搬进私有目录 ----
+//
+// 【为什么必须搬】读 cc-connect 源码（platform/weixin）确认的机制：
+//   · context_token 【只能从入站消息里拿到】—— 长轮询与心跳都不带它，没有任何主动刷新途径；
+//   · 拿到即落盘到 <data_dir>/weixin/<project>/<bot>/context_tokens.json，且【不记过期时间】，
+//     启动时原样读回（loadTokens），所以它是【可跨重启复用的持久凭据】；
+//   · 发送【强制】要它：没有就直接报 "context_token is required for send"，主动推送根本发不出去。
+// 于是换 data_dir 会让 token 表从空开始：升级后第一次主动推送（定时任务、产物补发）必然失败，
+// 直到用户先在微信里发一条消息。这是 0.1.31 换私有目录带来的一次性回归 —— 起因是我先前把
+// context_token 误判成"分钟级过期的易失数据"（那其实是 ret=-2，属 ilink 的发送限流，不是过期）。
+//
+// 【只搬 token，不搬 get_updates.buf】后者是长轮询游标，搬过去可能重收或漏收消息，而它本来就
+// 会自己重新同步 —— 拿"可能丢消息"换"少一次同步"，不划算。
+// 【只在目标缺失时搬 + 标记文件】两重幂等：别把用户后来刷新出来的新 token 覆盖成旧的。
+const oldCcDir = () => path.join(process.env.USERPROFILE || os.homedir(), ".cc-connect")
+export function migrateContextTokens(projectDirName) {   // 导出仅为单测
+  const marker = path.join(ccDataDir(), ".tokens-migrated")
+  if (fs.existsSync(marker)) return { ok: true, skipped: "已迁移过" }
+  const srcRoot = path.join(oldCcDir(), "weixin")
+  const dstRoot = path.join(ccDataDir(), "weixin")
+  const done = []
+  try {
+    if (fs.existsSync(srcRoot) && projectDirName) {
+      // 旧目录按 project 分层，而 project 名带着当时绑定的会话 id（换绑就换名）。token 本身是
+      // 【按对话方(peer)】存的、与 project 无关，所以跨 project 取最新的那份即可。
+      const byBot = new Map()   // bot 目录名 → { file, mtime }
+      for (const proj of fs.readdirSync(srcRoot)) {
+        const pd = path.join(srcRoot, proj)
+        let bots = []; try { bots = fs.readdirSync(pd) } catch { continue }
+        for (const bot of bots) {
+          const f = path.join(pd, bot, "context_tokens.json")
+          let st; try { st = fs.statSync(f) } catch { continue }
+          const cur = byBot.get(bot)
+          if (!cur || st.mtimeMs > cur.mtime) byBot.set(bot, { file: f, mtime: st.mtimeMs })
+        }
+      }
+      for (const [bot, { file }] of byBot) {
+        const dst = path.join(dstRoot, projectDirName, bot, "context_tokens.json")
+        if (fs.existsSync(dst)) continue          // 新的已经有了，别覆盖
+        fs.mkdirSync(path.dirname(dst), { recursive: true })
+        fs.copyFileSync(file, dst)
+        done.push(bot)
+      }
+    }
+    fs.mkdirSync(ccDataDir(), { recursive: true })
+    fs.writeFileSync(marker, new Date().toISOString() + " " + (done.join(",") || "(无可搬运的 token)") + "\n")
+    if (done.length) CTX?.log?.(`chat-bridge: 已从旧 data_dir 迁移 ${done.length} 份 context_token（升级后首次主动推送不必再等用户先发消息）`)
+    return { ok: true, migrated: done }
+  } catch (e) {
+    CTX?.log?.("chat-bridge: 迁移 context_token 失败（不阻塞起桥，最坏情况是首次推送前需用户先发一条）: " + e.message)
+    return { ok: false, err: e.message }
+  }
+}
 
 // ---- 状态文件（含 bot 凭证，纳入卸载清理；与 cloud-state.json 同待遇）----
 // 每平台独立一套绑定：boundSid/boundDir（各自锚点会话）、凭证、白名单。
@@ -343,6 +396,9 @@ export function start() {
   clearStaleSock()
   // 长度闸：见 ccDataDir 上面那段。bind 失败只有一条 WARN，排查起来要跨机器折腾半天，
   // 这里先吼一声。留 8 字节余量（108 上限，含结尾 NUL）。
+  // 见 migrateContextTokens 的头注：换私有 data_dir 会把【可跨重启复用】的 context_token 落在
+  // 旧目录里，导致升级后第一次主动推送必然失败。只在微信绑着时有意义（企微是长连接、不用它）。
+  if (s.weixin.boundSid) migrateContextTokens(projectName("weixin", s.weixin.boundSid))
   const sockLen = Buffer.byteLength(ccSockPath())
   if (sockLen > 100) CTX.log?.(`chat-bridge: ⚠ api socket 路径过长（${sockLen}B > 100B），` +
     `cc-connect 可能 bind 失败 → 发文件/思考/进度全部失效（正文仍正常）。路径：${ccSockPath()}`)
