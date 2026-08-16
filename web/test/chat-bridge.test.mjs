@@ -338,3 +338,31 @@ test("起桥时必须调用 context_token 迁移（源码级：挡住调用点�
   assert.match(startFn, /migrateContextTokens\(/,
     "start() 里没有调用 migrateContextTokens —— 升级后第一次主动推送会因为缺 context_token 而失败")
 })
+
+// 【排查路标】data_dir 搬进私有目录后，手敲 cc-connect 会【静默指向空位置】：默认路径那边
+// 没人监听，报错只说"这条路径连不上"，不会说服务端在别处；机器上通常还有第二份 cc-connect
+// （npm 全局的老版本，连 CC_DATA_DIR 都不认），而 --data-dir 又只有 send 收。三件事叠起来，
+// 2026-08-16 两台机器各绕了十几轮才找对。所以起桥时把事实写死在手边，并钉住两条最易错的：
+//   ① exe 与 data_dir 路径【必须加引号】—— 安装目录是 "...\Niuma Science\..."，含空格，
+//      不加引号 cmd 会从空格处把路径切两半（这个坑在本仓库反复出现，见 spaceFree 的注释）；
+//   ② 包装脚本【只包 send】—— --data-dir 是 send 专属参数，做成万能转发会让 --version 之类报错。
+test("排查路标：起桥生成 cc-send.cmd 与备忘，路径带引号且只包 send", () => {
+  B.writeDebugHelp()
+  const cmd = fs.readFileSync(path.join(root, "chat-bridge", "cc-send.cmd"), "utf8")
+  const exe = process.env.SCI_CC_BIN
+  assert.ok(cmd.includes(`"${exe}" send --data-dir "`), "★ exe 与 --data-dir 都要加引号 —— 安装目录含空格，不加引号必然被切断")
+  assert.ok(cmd.includes(" send "), "包装脚本要固定带 send 子命令")
+  assert.ok(!/%\*[\s\S]*\n.*"%~1"/.test(cmd), "不做万能转发：--data-dir 只有 send 收")
+  assert.ok(cmd.includes("%*"), "其余参数原样透传（-p / -s / --image 等）")
+
+  const help = fs.readFileSync(path.join(root, "chat-bridge", "如何手动排查.txt"), "utf8")
+  for (const must of [
+    "data_dir",                       // 服务端在哪
+    "no active session",              // 探活：看到它就是通了
+    "project is required",            // 同上
+    "-s ",                            // 会话 key 这一步实测卡过两台机器
+    "api server unavailable",         // 真没通时该搜的日志
+    "budget exhausted",               // 发送失败最常见的其实是额度
+  ]) assert.ok(help.includes(must), `备忘里该写到「${must}」`)
+  assert.ok(help.includes(process.env.LOCALAPPDATA ? "niuma-cc" : "niuma-cc"), "要写明真实 data_dir")
+})

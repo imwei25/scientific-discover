@@ -80,6 +80,68 @@ function clearStaleSock() {
   try { fs.rmSync(ccSockPath(), { force: true }) }
   catch (e) { CTX.log?.("chat-bridge: 清理残留 api.sock 失败（不阻塞起桥）: " + e.message) }
 }
+// ---- 排查路标：把"服务端在哪、该用哪个 exe、命令怎么敲"写在手边 ----
+//
+// 【为什么需要】data_dir 搬进私有目录之后，手敲 `cc-connect send` 会【静默指向空位置】：
+// 默认路径 ~\.cc-connect 那边没人监听，报错只说"这条路径连不上"，【不会说服务端其实在别处】。
+// 机器上通常还有第二份 cc-connect（npm 全局装的，往往是更老的版本，连 CC_DATA_DIR 都不认），
+// 而 `--data-dir` 又【只有 send 子命令接受】—— 三件事叠在一起，排查一次要绕很多圈（2026-08-16
+// 真机上就绕了十几轮）。所以起桥时把这些事实写死在 chat-bridge\ 目录里，别让人再去猜。
+export function writeDebugHelp() {   // 导出仅为单测
+  const exe = ccBin(), dd = ccDataDir()
+  try {
+    // 只包 send：--data-dir 是 send 专属，做成万能转发反而会让 --version 之类报错。
+    fs.writeFileSync(path.join(dir(), "cc-send.cmd"),
+      "@echo off\r\n" +
+      "rem 手动给聊天接入发消息/发文件。exe 与 data_dir 已预置，直接：cc-send.cmd -m \"hello\"\r\n" +
+      "rem 【注意】真发出去会占用个人微信的发送额度（每天只有几条），别拿它当探活手段。\r\n" +
+      `"${exe}" send --data-dir "${dd}" %*\r\n`)
+    fs.writeFileSync(path.join(dir(), "如何手动排查.txt"), [
+      "聊天接入 手动排查备忘（每次起桥自动重写，改了也会被覆盖）",
+      "",
+      "【服务端在哪】",
+      `  data_dir : ${dd}`,
+      `  socket   : ${ccSockPath()}`,
+      `  可执行档 : ${exe}`,
+      "",
+      "【最常见的坑】直接敲 cc-connect 多半是错的",
+      "  PATH 里那个 cc-connect 往往是 npm 全局装的另一份（版本可能老很多），",
+      "  它默认连 ~\\.cc-connect\\run\\api.sock —— 那里【没有人监听】，必然报",
+      "    dial unix ...: connect: No connection could be made ...",
+      "  这【不代表坏了】，只代表你敲的那份客户端找错了地方。",
+      "  老版本连 CC_DATA_DIR 环境变量都不认，必须显式传 --data-dir（且只有 send 收这个参数）。",
+      "",
+      "【正确的敲法】",
+      `  "${exe}" send --data-dir "${dd}" -m "hello"`,
+      "  或直接用同目录下预置好的： cc-send.cmd -m \"hello\"",
+      "",
+      "【还会卡住的两个参数】（2026-08-16 实测，两台机器都在这里绕了很久）",
+      "  · 绑了两个平台时必须指定 project，否则回 project is required：",
+      "      cc-send.cmd -p <project 名>  ← 名字在同目录 config.toml 的 name = '...' 里",
+      "  · 当前没有进行中的对话时，还要显式给会话 key，否则回 no active session：",
+      "      cc-send.cmd -p <project> -s <会话key>",
+      "    会话 key 从 bridge.log 里捞： 搜 session=weixin:dm:  （企微是 session=wecom:...）",
+      "  两个都给齐了才会真发出去（回 Message sent successfully.）。",
+      "  发文件/图片：把 -m 换成或加上 --image <路径> / --file <路径>。",
+      "",
+      "【怎么确认通不通，又不烧额度】",
+      "  跑上面的命令但【当前没有进行中的对话】时，会回：",
+      "    no active session   或   project is required (multiple projects configured)",
+      "  这两种都是【连上之后】的应用层回复 —— 看到它们就说明 socket 是好的，消息并没有发出去。",
+      "  反之只有 connect: refused / socket not found 才是真没通。",
+      "",
+      "【真没通时看这两处】",
+      "  bridge.log 里搜 \"api server started\"，确认它绑的就是上面那个 socket 路径；",
+      "  搜 \"api server unavailable\" —— 出现它说明 bind 失败了（多半是路径太长，见 AF_UNIX 108 字节上限）。",
+      "",
+      "【发送失败最常见的原因不是 socket，是额度】",
+      "  个人微信对机器人的发送条数掐得很紧（上游注释：约 5-6 条/天）。",
+      "  日志里 \"send budget exhausted\" 或 ilink 的 ret=-2 都属于限流，不是连不上，",
+      "  而且限流期间每次重试都会加重惩罚 —— 遇到就停手等，别重试。",
+      "",
+    ].join("\r\n"))
+  } catch (e) { CTX.log?.("chat-bridge: 写排查备忘失败（不阻塞起桥）: " + e.message) }
+}
 // ---- 一次性迁移：把旧 data_dir 的个人微信 context_token 搬进私有目录 ----
 //
 // 【为什么必须搬】读 cc-connect 源码（platform/weixin）确认的机制：
@@ -399,6 +461,8 @@ export function start() {
   // 见 migrateContextTokens 的头注：换私有 data_dir 会把【可跨重启复用】的 context_token 落在
   // 旧目录里，导致升级后第一次主动推送必然失败。只在微信绑着时有意义（企微是长连接、不用它）。
   if (s.weixin.boundSid) migrateContextTokens(projectName("weixin", s.weixin.boundSid))
+  writeDebugHelp()   // 排查路标：见该函数头注（手敲 cc-connect 会静默找错地方，这是最省时间的一步）
+  CTX.log?.(`chat-bridge: data_dir=${ccDataDir()}（手动排查见 chat-bridge\\如何手动排查.txt，或用同目录 cc-send.cmd）`)
   const sockLen = Buffer.byteLength(ccSockPath())
   if (sockLen > 100) CTX.log?.(`chat-bridge: ⚠ api socket 路径过长（${sockLen}B > 100B），` +
     `cc-connect 可能 bind 失败 → 发文件/思考/进度全部失效（正文仍正常）。路径：${ccSockPath()}`)
