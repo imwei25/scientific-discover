@@ -568,7 +568,15 @@ async function hardDeleteSession(id) {
   //    folderId（正挂着文件夹）、m.dir（建会话时记下的用户目录，「忘掉文件夹」之后只剩它）、
   //    解析出的目录不在 outputs/ 根之内（兜住元数据整个缺失的会话，如聊天桥接另起的）。
   //    只要命中，产物侧一个字节都不许动，只删本会话自己的 uploads。
-  const keepOut = !!folderOf(id) || !!META.sessions[id]?.dir || (resolved && !insideOutputs(delOut))
+  //    ★★★ 第四个信号：聊天接入的绑定目录。桥的语义是「目录锚点」—— cc-connect 每轮对话在
+  //    boundDir 里【另起一个新会话】，所以锚点会话和手机端建的 N 个会话【共用同一个目录】，
+  //    而本函数其余部分都按"一个会话独占一个目录"写的。少了这条判据，用户在侧栏删掉任意一个
+  //    手机端会话（它们确实会被列出来，见 listSessionsAll 的第 ③ 条来源），就会把整个绑定目录
+  //    连锅端：锚点与所有兄弟会话的产物、注入的 AGENTS.md 发文件说明书、.cc-connect\ 里的投递
+  //    看门狗暂存与配额台账，一起没。前三个信号对这类会话【逐个落空】——没 folderId、没写过
+  //    网关元数据、目录又恰在 outputs\ 之内（"新会话直接绑微信"的默认形态）。
+  const boundDirHit = (() => { try { return !!Bridge.platformOfDir(delOut) } catch { return false } })()
+  const keepOut = !!folderOf(id) || !!META.sessions[id]?.dir || (resolved && !insideOutputs(delOut)) || boundDirHit
   let ocOk = true
   try { await client.session.delete({ path: { id } }) } catch (e) { ocOk = false; console.warn(`[session] 删除 ${id} 失败：${e.message}`) }
   let dirOk = true
@@ -586,7 +594,19 @@ async function hardDeleteSession(id) {
   // ★ 元数据只在 opencode 那侧真删掉之后才清。否则："删除失败 → 会话回到列表 → 但项目归属与
   //   文件夹归属被抹掉了"，用户再点一次删，还得先把它重新归类。
   if (ocOk && META.sessions[id]) { delete META.sessions[id]; saveMeta() }
-  return { ok: ocOk && dirOk, ocOk, dirOk }
+  // 删掉的正是聊天接入的锚点会话 → 同步解绑。platActive 只看 boundSid/boundDir 非空，不校验
+  // 会话还在不在，所以不解绑的话桥会挂着一个已删会话继续跑、界面还显示"已绑定"，而下一条
+  // 微信消息落到一个没人管的目录里。只在 opencode 那侧真删掉了才动（ocOk），与元数据同口径。
+  const unbound = []
+  if (ocOk) {
+    try {
+      const bi = Bridge.boundInfo()
+      for (const p of ["wecom", "weixin"]) if (bi?.[p]?.sid === id) { await Bridge.unbind(p); unbound.push(p) }
+    } catch (e) { console.warn(`[session] 删除 ${id} 后解绑聊天接入失败：${e.message}`) }
+  }
+  // keptDir：绑定目录被保住了、且删的就是锚点会话时回给前端。这块空间不随删会话释放，
+  // 而目录里装的是手机端各轮的产物 —— 不说的话用户既不知道文件还在，也不知道为什么没腾出空间。
+  return { ok: ocOk && dirOk, ocOk, dirOk, unbound, keptDir: unbound.length && boundDirHit ? delOut : "" }
 }
 /**
  * 列出【全部】会话 —— 注意 opencode 的 /session 列表是**按 directory 分域**的。
@@ -4144,7 +4164,9 @@ export const server = http.createServer(async (req, res) => {
       //   界面收到"成功"，而会话原样回到列表 —— 用户看到"没删掉"就再点一次，
       //   可十天的稿子在第一次点的时候就已经没了。
       const r = await hardDeleteSession(id)   // 目录解析次序等要紧逻辑已并入该函数
-      if (r.ok) return send(res, 200, "application/json", JSON.stringify({ ok: true }))
+      // unbound 一并回给前端：删的是聊天接入的锚点会话时，界面要告诉用户"微信/企微已解绑"，
+      // 否则他只会在下次手机端发消息没反应时才发现（那时已经没法从现象倒推到这次删除）。
+      if (r.ok) return send(res, 200, "application/json", JSON.stringify({ ok: true, unbound: r.unbound || [], keptDir: r.keptDir || "" }))
       return send(res, 200, "application/json", JSON.stringify({ ok: false, ...r,
         err: !r.ocOk ? "后台没能删掉这个会话（它还会留在列表里）；产物文件已经清掉了，请稍后重试。"
                      : "会话已删除，但它的产物目录没能清掉（后台暂时不可用），空间稍后才会释放。" }))

@@ -4209,6 +4209,7 @@ async function deleteSelected() {
   const queue = ids.slice()
   let done = 0, failed = 0
   const failedList = []      // 没删成的会话名 + 原因，收齐了一次性告诉用户（见下面的 alert）
+  const unboundAll = new Set()   // 这批里若删掉了聊天接入的锚点会话，收齐平台名最后提示一次
   // 并发 3：一条条串行删几十个太慢，全量并发又会把后端的 opencode 删除+目录回收打满
   const worker = async () => {
     while (queue.length) {
@@ -4218,7 +4219,7 @@ async function deleteSelected() {
       const j = await fetch("api/session/delete?id=" + encodeURIComponent(id), { method: "POST" })
         .then((r) => (r.ok ? r.json().catch(() => ({ ok: true })) : { ok: false, err: "请求失败（" + r.status + "）" }))
         .catch(() => ({ ok: false, err: "网络不通" }))
-      if (j.ok) done++
+      if (j.ok) { done++; for (const p of j.unbound || []) unboundAll.add(p) }
       else { failed++; failedList.push(one((META_STATE.sessions || []).find((s) => s.id === id) || { title: id }) + "（" + (j.err || "未知原因") + "）") }
       selNEl.textContent = "删除中… " + (done + failed) + "/" + ids.length
     }
@@ -4227,6 +4228,7 @@ async function deleteSelected() {
   selAllBtn.disabled = false
   if (hadCurrent) clearCurrentSession()          // 把当前打开的会话也删了 → 回到空态
   loadSessions(); refreshStorage()               // 删会话已释放其存储 → 刷新用量
+  noteUnbound([...unboundAll])                   // 批删里混着锚点会话时同样要说，别让手机端悄悄失联
   // ★ 失败要报【是哪几个】。原来只说"有 N 个没能删除"，而且 setSelMode(false) 排在 alert 之前
   //   把勾选先清空了 —— 用户既不知道哪些没删掉，也没法直接重试那几个。
   if (failed) {
@@ -4388,6 +4390,18 @@ async function deleteSession(id, title, ctx) {      // 删除会话（不可撤�
   if (id === sessionId) clearCurrentSession()       // 删的是当前会话 → 回到空态
   loadSessions(); refreshStorage()   // 删会话已释放其存储 → 刷新用量
   if (!j.ok) addNote("⚠ 删除没有完成：" + (j.err || "未知原因"))   // 服务端会分段回报，别把半途失败说成成功
+  else noteUnbound(j.unbound, j.keptDir)
+}
+// 删掉的是聊天接入的锚点会话 → 服务端已同步解绑，这里必须说出来。不说的话用户下一次是在
+// 「手机端发消息没反应」时才发现的，那时他已经没法把现象倒推回这次删除。
+const PLAT_CN = { weixin: "微信", wecom: "企业微信" }
+function noteUnbound(list, keptDir) {
+  if (!list || !list.length) return
+  addNote("ℹ️ 这是" + list.map((p) => PLAT_CN[p] || p).join(" / ") + "的绑定会话，已同步解绑。"
+    + "要继续在手机上用，请到「设置 → 聊天接入」重新绑定一个会话。"
+    // 绑定目录是手机端每轮对话共用的，里面还装着其它会话的产物 → 不删。得说清楚，否则用户
+    // 会以为"删了会话怎么没腾出空间"，或者以为文件已经跟着没了。
+    + (keptDir ? "\n这个会话的目录里还有手机端各轮生成的文件，没有删除：" + keptDir : ""))
 }
 // 左侧会话栏折叠/展开（默认折叠）
 const sessToggle = document.getElementById("sessToggle")
