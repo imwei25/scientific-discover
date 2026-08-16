@@ -55,6 +55,31 @@ const dir = () => path.join(CTX.root, "chat-bridge")
 const statePath = () => path.join(dir(), "state.json")
 const configPath = () => path.join(dir(), "config.toml")
 const logPath = () => path.join(dir(), "bridge.log")
+// 【私有 data_dir】cc-connect 默认把内部 API 的 socket 放 ~\.cc-connect\run\api.sock —— 一条
+// 【全机唯一】的路径。而 --force 的语义是"杀掉 config 相同的实例"，管不住用户自己装的那份
+// （配置在 ~\.cc-connect\config.toml，我们的在 bundle 里）。两个实例轮流 unlink-rebind 同一个
+// socket，谁后退出谁留下一个没人监听的孤儿文件：进程活着、日志照写 "api server started"、
+// 客户端却 ECONNREFUSED。症状是【文字正常、发文件全哑】—— 正文走 oc-wrap 的 stdout 管道不碰
+// socket，而附件/思考/进度全靠 `cc-connect send` 连这个 socket（2026-08-16 另一台机器实测）。
+// 把 data_dir 整个挪到我们私有的目录，从根上不与任何别的 cc-connect 共用这条路径。
+// 【服务端和客户端各认各的开关，两边都要设】2026-08-16 实测（vendor 的 fix.3）：
+//   · 服务端只认 config.toml 的 `data_dir`（见 renderConfig），给它 CC_DATA_DIR 完全无效；
+//   · 客户端 `cc-connect send` 只认 CC_DATA_DIR（见 commonEnv）—— 它是 oc-wrap 起的新进程，
+//     不带 --config，不设就回落到 ~\.cc-connect。
+// 只改一边比不改更糟：服务端和客户端分处两个目录，发文件从"偶尔坏"变成"必然坏"。
+// 【必须放短路径】Windows 的 AF_UNIX 同样吃 108 字节的 sockaddr_un 限制，而装机路径
+// ...\Niuma Science\bundle\app\chat-bridge\ 再挂 data\run\api.sock 已经 90 字节，用户名长一点
+// 就直接 bind 失败 —— 所以放 LOCALAPPDATA 下的短目录，不跟着 dir() 走。实测超长时 cc-connect
+// 只记一条 WARN "api server unavailable" 就照常跑下去，日志一点都不刺眼（故有下面的长度闸）。
+const ccDataDir = () => path.join(process.env.LOCALAPPDATA || os.homedir(), "niuma-cc")
+const ccSockPath = () => path.join(ccDataDir(), "run", "api.sock")
+// 起桥前清掉上一轮的 socket 残留：我们自己崩掉 / 被 taskkill /T 收走时它不会被清理，而残留
+// 文件会让客户端"连得上路径、连不上人"。此刻我们没有在跑的实例（running() 已在 start() 里
+// 挡掉），私有 data_dir 下也不会有别人的实例，所以删它是安全的。
+function clearStaleSock() {
+  try { fs.rmSync(ccSockPath(), { force: true }) }
+  catch (e) { CTX.log?.("chat-bridge: 清理残留 api.sock 失败（不阻塞起桥）: " + e.message) }
+}
 
 // ---- 状态文件（含 bot 凭证，纳入卸载清理；与 cloud-state.json 同待遇）----
 // 每平台独立一套绑定：boundSid/boundDir（各自锚点会话）、凭证、白名单。
@@ -189,6 +214,11 @@ function commonEnv(s, platform) {
     PATH: [path.dirname(cc), stripLP(process.env.PATH || "")].join(";"),
     SCI_WRAP_OC: ocBin(),
     SCI_WRAP_CC: cc,
+    // 【服务端与客户端必须同一个 data_dir】oc-wrap 里每一条 `cc-connect send`（附件、思考、
+    // 进度、抢救补推）都是【新进程】，它自己按 CC_DATA_DIR 找 socket。桥进程的环境变量不
+    // 一定原样传到这一层，所以这里显式再写一遍，别只靠继承。少了它 = 服务端在私有目录、
+    // 客户端还去 ~\.cc-connect 找，症状与本次修的 bug 一模一样（文字通、文件全哑）。
+    CC_DATA_DIR: ccDataDir(),
     // 【个人微信每天只有 ~4 条独立消息的预算】cc-connect 的 platform/weixin 里实测得出：
     // ilink 对机器人约 5-6 条/天就开始限流（ret=-2），它自己卡在 4 条快速失败。所以进度提示、
     // 思考推送、静默播报这类"附加消息"在微信上是【奢侈品】——2026-08-15 真机：我加的静默播报
@@ -278,6 +308,11 @@ export function renderConfig(s) {
   const head = [
     "# 本文件由打包版「聊天接入」自动生成，每次启动/换绑都会重写 —— 手工修改会被覆盖。",
     `language = "zh"`,
+    // 【服务端的 data_dir 只认这个键，不认 CC_DATA_DIR】2026-08-16 实测：环境变量只有客户端
+    // （`cc-connect send`）认，服务端照样绑 ~\.cc-connect\run\api.sock。所以两边【各用各的
+    // 机制】才能对齐 —— 服务端写这里，客户端在 commonEnv 里给 CC_DATA_DIR，两者同一个值。
+    // 只改一边比不改更糟：服务端与客户端分处两个目录，发文件 100% 哑掉。
+    `data_dir = ${tq(ccDataDir())}`,
     "",
   ].join("\n")
   return head + activePlats(s).map((p) => renderProject(s, p)).join("\n")
@@ -304,12 +339,20 @@ export function start() {
   const active = activePlats(s)
   if (!active.length) return { ok: false, err: "没有已配置且绑定会话的平台" }
   fs.mkdirSync(dir(), { recursive: true })
+  fs.mkdirSync(path.join(ccDataDir(), "run"), { recursive: true })
+  clearStaleSock()
+  // 长度闸：见 ccDataDir 上面那段。bind 失败只有一条 WARN，排查起来要跨机器折腾半天，
+  // 这里先吼一声。留 8 字节余量（108 上限，含结尾 NUL）。
+  const sockLen = Buffer.byteLength(ccSockPath())
+  if (sockLen > 100) CTX.log?.(`chat-bridge: ⚠ api socket 路径过长（${sockLen}B > 100B），` +
+    `cc-connect 可能 bind 失败 → 发文件/思考/进度全部失效（正文仍正常）。路径：${ccSockPath()}`)
   fs.writeFileSync(configPath(), renderConfig(s))
   bakedCloudSig = cloudSig()
   const out = fs.openSync(logPath(), "a")
   startingAt = Date.now()
   proc = spawn(ccBin(), ["--config", configPath(), "--force"], {
     cwd: dir(), stdio: ["ignore", out, out], windowsHide: true,
+    env: { ...process.env, CC_DATA_DIR: ccDataDir() },
   })
   proc.once("exit", (code) => {
     fs.closeSync(out)
@@ -353,6 +396,9 @@ export async function weixinSetupStart() {
   for (const f of [qrPath(), setupCfgPath()]) { try { fs.rmSync(f) } catch {} }
   await stop()   // 扫码期间停桥：ilink 单会话，旧 token 长轮询会跟新登录打架
   fs.writeFileSync(setupCfgPath(), [
+    // 与起桥同一个 data_dir：扫码进程也会起一个 api server，让它跟桥共用私有目录，
+    // 别去 ~\.cc-connect 跟别人抢那条全机唯一的 socket（抢完退出就留下孤儿文件）。
+    `data_dir = ${tq(ccDataDir())}`,
     "[[projects]]", `name = 'setup'`,
     "[projects.agent]", `type = "opencode"`,
     "[[projects.platforms]]", `type = "weixin"`,
@@ -361,7 +407,8 @@ export async function weixinSetupStart() {
   const out = fs.openSync(path.join(dir(), "setup.log"), "w")
   setupInfo = { state: "running", err: "" }
   setupProc = spawn(ccBin(), ["weixin", "setup", "--config", setupCfgPath(), "--project", "setup",
-    "--qr-image", qrPath(), "--timeout", "300"], { cwd: dir(), stdio: ["ignore", out, out], windowsHide: true })
+    "--qr-image", qrPath(), "--timeout", "300"], { cwd: dir(), stdio: ["ignore", out, out], windowsHide: true,
+    env: { ...process.env, CC_DATA_DIR: ccDataDir() } })   // 客户端侧的开关，与上面的 data_dir 配套
   setupProc.once("exit", (code) => {
     try { fs.closeSync(out) } catch {}
     setupProc = null
