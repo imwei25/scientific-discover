@@ -27,6 +27,26 @@ const readAgents = (d) => { try { return fs.readFileSync(path.join(d, "AGENTS.md
 // 构造一个 state：某平台已配置凭证 + 绑定会话（即 active，会进 config）
 const wecomBound = (sid, d, over = {}) => ({ ...B.loadState(), wecom: { bot_id: "bid", bot_secret: "sec", allow_from: "", boundSid: sid, boundDir: d, ...over } })
 
+// 【Bug 回归】发文件报 `dial unix ...\.cc-connect\run\api.sock: connect: ...refused`。
+// 根因：默认 data_dir（~\.cc-connect）是全机唯一的一条路径，而 --force 只杀"config 相同"的实例，
+// 管不住用户自己装的那份 cc-connect；两个实例轮流 unlink-rebind 同一条路径，谁后退出谁留下一个
+// 没人监听的孤儿文件。正文走 oc-wrap 的 stdout 不碰 socket，所以症状是"文字通、发文件全哑"。
+// 这里钉两条实测得出的约束（改错任一条，发文件都会 100% 失效，而日志上几乎看不出来）：
+test("data_dir：服务端(config)与客户端(CC_DATA_DIR)必须指同一个私有目录，且路径短于 AF_UNIX 上限", () => {
+  const toml = B.renderConfig(wecomBound("ses_abc12345", path.join(tmp, "out", "x")))
+  const server = toml.match(/^data_dir = '(.+)'$/m)?.[1]
+  const client = toml.match(/^CC_DATA_DIR = '(.+)'$/m)?.[1]
+  assert.ok(server, "config 顶层要有 data_dir —— 服务端【只】认这个键，给它 CC_DATA_DIR 无效")
+  assert.ok(client, "project env 里要有 CC_DATA_DIR —— `cc-connect send` 是新进程、不带 --config，【只】认环境变量")
+  // ★ 这条是核心：只改一边比不改更糟 —— 服务端和客户端分处两个目录，发文件必然失败。
+  assert.equal(client, server, "服务端与客户端的 data_dir 必须【完全一致】")
+  assert.ok(!/[\\/]\.cc-connect$/.test(server), "不能再回落到全机唯一的 ~\\.cc-connect，那正是被抢的那条路径")
+  // ★ Windows 的 AF_UNIX 同样吃 108 字节 sockaddr_un 限制；超了 cc-connect 只记一条
+  //   WARN "api server unavailable" 就照常跑（实测），症状与上面那个 bug 一模一样。
+  const sock = Buffer.byteLength(path.join(server, "run", "api.sock"))
+  assert.ok(sock <= 100, `socket 路径 ${sock}B，超过 100B 余量就有 bind 失败的风险：${server}`)
+})
+
 test("renderConfig：cmd 无空格、env 齐全、project 名带平台+会话、allow_from 只在设置时出现", () => {
   const s = wecomBound("ses_abc12345", path.join(tmp, "out", "x"))
   const toml = B.renderConfig(s)

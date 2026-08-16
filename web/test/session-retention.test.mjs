@@ -14,8 +14,18 @@ import fs from "node:fs"
 import os from "node:os"
 import path from "node:path"
 import http from "node:http"
+import { fileURLToPath } from "node:url"
 
 let seq = 0
+
+// ★ 会假会话的产物目录必须落在【真实的 outputs/ 根】之内。
+// 删会话时保护用户目录的判据是【路径本身】（server.mjs 的 insideOutputs）：outputs/ 之外的
+// 目录一律当成"用户自己的目录"保下来，一个字节都不删。这个文件早先把假目录建在 os.tmpdir()
+// 下，2026-08-14 加上该守卫（9ea03a3f）之后批删用例就一直红——不是产品坏了，是假目录压根
+// 不在我们的产物根里，现实中普通会话不会长在那儿（挑了工作目录的会话才在外面，而那种就是
+// 该保住不删的，另见 session-folders 的用例）。OUTPUTS 在 server.mjs 里是按 __dirname 定死的、
+// 没有环境变量口子，所以这里只能跟着用真实路径，测完自己清干净。
+const REPO_OUTPUTS = path.join(path.resolve(fileURLToPath(import.meta.url), "..", "..", ".."), "outputs")
 
 /**
  * 假 opencode：只实现网关会打的几个会话口。
@@ -111,12 +121,18 @@ test("会话永久保留：早就过了老 7 天 TTL 的会话，启动清理跑
 
 test("批量删除：逐条调 /api/session/delete，条条真删（界面批量勾选走的就是这条路）", async (t) => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "sessret-"))
-  const outRoot = path.join(dir, "out")
+  // 见文件头 REPO_OUTPUTS 的注释：普通会话的产物目录得在真实的 outputs/ 里，否则会被
+  // "保护用户目录"的判据保下来，这条用例就永远验不到"该删的真删了"。
+  fs.mkdirSync(REPO_OUTPUTS, { recursive: true })
+  const outRoot = fs.mkdtempSync(path.join(REPO_OUTPUTS, "sessret-"))
   const ids = ["ses_b1", "ses_b2", "ses_b3"]
   for (const id of ids) { fs.mkdirSync(path.join(outRoot, id), { recursive: true }); fs.writeFileSync(path.join(outRoot, id, "图.png"), "x") }
   const oc = await fakeOpencode(ids.map((id) => ({ id, title: id, time: { updated: Date.now() } })), outRoot)
   const gw = await gateway(oc.url, dir)
-  t.after(async () => { await gw.close(); await oc.close(); try { fs.rmSync(dir, { recursive: true, force: true }) } catch {} })
+  t.after(async () => {
+    await gw.close(); await oc.close()
+    for (const p of [dir, outRoot]) { try { fs.rmSync(p, { recursive: true, force: true }) } catch {} }
+  })
 
   // 前两条并发删（界面里是 3 个 worker 并发消费队列），第三条留着验证"只删勾中的"
   const rs = await Promise.all([gw.post("/api/session/delete?id=ses_b1"), gw.post("/api/session/delete?id=ses_b2")])

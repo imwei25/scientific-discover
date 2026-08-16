@@ -13,8 +13,16 @@ import fs from "node:fs"
 import os from "node:os"
 import path from "node:path"
 import http from "node:http"
+import { fileURLToPath } from "node:url"
 
 let seq = 0
+
+// 真实的产物根与聊天接入状态文件。删会话的保护判据落在【路径本身】上（insideOutputs），
+// 而 OUTPUTS / Bridge 的 root 在 server.mjs 里都是按 __dirname 定死的、没有环境变量口子，
+// 所以要测"目录在 outputs/ 之内"的那几档，只能用真实路径，测完自己清干净。
+const REPO_ROOT = path.resolve(fileURLToPath(import.meta.url), "..", "..", "..")
+const REPO_OUTPUTS = path.join(REPO_ROOT, "outputs")
+const BRIDGE_STATE = path.join(REPO_ROOT, "chat-bridge", "state.json")
 
 /** 假 opencode：只实现网关会打的几个会话口，并记下建会话时收到的 directory。 */
 async function fakeOpencode(outRoot) {
@@ -372,4 +380,60 @@ test("文件夹会话必须出现在列表里：opencode 的会话列表按目�
   const meta = () => JSON.parse(fs.readFileSync(metaPath, "utf8"))
   assert.ok(meta().sessions[folderSid]?.ws, "建会话时该记下 ws")
   assert.equal(meta().sessions[folderSid]?.dir, path.resolve(mine), "还要记下工作目录本身——忘掉文件夹之后就靠它把会话找回来")
+})
+
+// 【Bug 回归】聊天接入的绑定语义是「目录锚点」：cc-connect 每轮对话在 boundDir 里【另起一个新
+// 会话】，于是锚点会话与手机端建的 N 个会话【共用同一个目录】，而删除路径整段是按"一个会话独占
+// 一个目录"写的。少了针对绑定目录的判据，用户在侧栏删掉任意一个手机端会话（它们确实会被列出来，
+// 见 listSessionsAll 的第 ③ 条来源），就会把整个绑定目录连锅端 —— 锚点与所有兄弟会话的产物、
+// 注入的 AGENTS.md 发文件说明书、.cc-connect\ 里的投递看门狗暂存与配额台账，一起没。
+//
+// ★ 绑定目录必须造在 outputs/ 【之内】：那正是"新会话直接绑微信"的默认形态，也是既有三个信号
+//   （folderId / META.dir / 不在 outputs 内）【全部落空】、只剩这条新判据能救的情形。造在仓库外
+//   的话第三个信号就把它保下来了，等于什么都没测到。
+test("聊天接入的绑定目录：删手机端另起的会话不许动共用目录；删锚点会话则同步解绑", async (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "fold-"))
+  fs.mkdirSync(REPO_OUTPUTS, { recursive: true })
+  const bound = fs.mkdtempSync(path.join(REPO_OUTPUTS, "ws_bridge-"))
+  const keep = path.join(bound, "手机端出的图.png")
+  fs.writeFileSync(keep, "x")
+  // 真实的绑定状态：Bridge 的 root 是仓库根，没有环境变量口子 → 只能写真文件。开发机上可能
+  // 已经有一份（里面是真微信凭证）→ 先备份、测完原样放回去，绝不能把人家的绑定冲掉。
+  const hadState = fs.existsSync(BRIDGE_STATE)
+  const backup = hadState ? fs.readFileSync(BRIDGE_STATE) : null
+  fs.mkdirSync(path.dirname(BRIDGE_STATE), { recursive: true })
+  fs.writeFileSync(BRIDGE_STATE, JSON.stringify({
+    enabled: false,   // 别让 unbind 里的 start() 真去拉进程（supported() 也会挡，双保险）
+    weixin: { token: "tk", account_id: "acc", base_url: "", allow_from: "", boundSid: "ses_anchor", boundDir: bound },
+  }))
+  const oc = await fakeOpencode(path.join(dir, "out"))
+  // 锚点会话 + 手机端另起的一条，两者 directory 都是绑定目录（这就是真实形态）
+  oc.state.sessions.push(
+    { id: "ses_anchor", title: "微信绑定的会话", time: { updated: Date.now() }, directory: bound },
+    { id: "ses_phone", title: "手机端那轮", time: { updated: Date.now() }, directory: bound })
+  const gw = await gateway(oc.url, dir)
+  t.after(async () => {
+    await gw.close(); await oc.close()
+    if (backup) fs.writeFileSync(BRIDGE_STATE, backup)
+    else { try { fs.rmSync(path.dirname(BRIDGE_STATE), { recursive: true, force: true }) } catch {} }
+    for (const p of [dir, bound]) { try { fs.rmSync(p, { recursive: true, force: true }) } catch {} }
+  })
+
+  // ① 删手机端那条：会话本身该删掉，共用目录一个字节都不许动
+  const d1 = await gw.post("/api/session/delete?id=ses_phone")
+  assert.equal(d1.json.ok, true, "删除本身要成功")
+  assert.ok(oc.state.deleted.includes("ses_phone"), "会话该真的下到 opencode")
+  assert.ok(fs.existsSync(keep), "★ 手机端会话被删，共用的绑定目录里的产物绝不能跟着没")
+  assert.deepEqual(d1.json.unbound || [], [], "删的不是锚点会话，不该解绑")
+
+  // ② 删锚点会话：目录照样保住（里面还有兄弟会话的产物），但要同步解绑并如实告诉前端
+  const d2 = await gw.post("/api/session/delete?id=ses_anchor")
+  assert.equal(d2.json.ok, true)
+  assert.ok(fs.existsSync(keep), "★ 锚点会话被删，目录里手机端各轮的产物同样不能删")
+  assert.deepEqual(d2.json.unbound, ["weixin"], "★ 锚点会话被删 → 必须同步解绑，否则桥挂着一个已删会话空转、界面还显示已绑定")
+  assert.equal(path.resolve(d2.json.keptDir || ""), path.resolve(bound), "要把保留下来的目录回给前端，好让界面说清文件还在哪")
+  const after = JSON.parse(fs.readFileSync(BRIDGE_STATE, "utf8"))
+  assert.equal(after.weixin.boundSid, "", "状态文件里的绑定要真的清掉")
+  assert.equal(after.weixin.boundDir, "", "绑定目录同理")
+  assert.equal(after.weixin.token, "tk", "凭证不该被顺手抹掉——解绑只解会话，不是重置账号")
 })
