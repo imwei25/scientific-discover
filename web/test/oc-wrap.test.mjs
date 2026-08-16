@@ -262,3 +262,34 @@ test("budgetNotice：到顶了要说清后果和替代方案", () => {
 test("budgetNotice：没配上限就不提示（企微等无配额平台）", () => {
   assert.equal(budgetNotice(999, 0, 0), "")
 })
+
+// 【Bug 回归 · 源码级不变量】微信上「思考」不许单独发一条。
+//
+// 为什么用读源码这种笨办法：这条约束住在 run() 内部的事件循环里，要端到端验证得同时假冒
+// opencode（按固定 argv 起的真二进制）和 cc-connect，Windows 上还卡在 spawn .cmd 必须 shell
+// 这一条上，代价远大于收益。而这次的缺陷形态恰恰是【注释声称有守卫、代码里没有】——
+// 2026-08-16 之前 oc-wrap 里白纸黑字写着"微信上思考从不中途发（见 ticker 里的 BUDGET_TIGHT
+// 判断）"，而 ticker 里【并没有】那个判断：微信照样 60s 一条，一个 5 分钟的任务能吃掉五六格
+// 额度（每小时总共才 15 格，还得跟真正的回复抢）。读源码正好能钉死这种"说一套做一套"。
+//
+// 微信的每条 `cc-connect send` 都是一格额度；思考必须 inline 并进答案那一条（走 stdout，
+// 整条只算 1 条、分块不计费）。所以 flushNewThinking 的【每一个调用点】都必须被 BUDGET_TIGHT
+// 挡住 —— 将来谁加了第四个调用点却忘了加守卫，这条会立刻红。
+test("微信上思考不许单发：flushNewThinking 的每个调用点都要被 BUDGET_TIGHT 挡住", () => {
+  const src = fs.readFileSync(new URL("../chat-bridge/oc-wrap.mjs", import.meta.url), "utf8")
+  const lines = src.split(/\r?\n/)
+  const defRe = /const flushNewThinking\s*=/
+  const callSites = lines
+    .map((text, i) => ({ text, no: i + 1 }))
+    .filter((l) => l.text.includes("flushNewThinking(") && !defRe.test(l.text) && !/^\s*(\/\/|\*)/.test(l.text))
+  assert.ok(callSites.length >= 2, `至少该有 ticker 与收尾两个调用点，实际 ${callSites.length} 个`)
+  // 守卫可能写在调用那一行，也可能写在紧邻的 if/else if 上（如企微分支），所以看"本行 + 前 3 行"
+  // 这个窗口。窗口再大就会把无关的 BUDGET_TIGHT 也算进来，失去意义。
+  for (const l of callSites) {
+    const win = lines.slice(Math.max(0, l.no - 4), l.no).join("\n")
+    assert.ok(win.includes("BUDGET_TIGHT"),
+      `第 ${l.no} 行调用了 flushNewThinking，但本行与前 3 行都没有 BUDGET_TIGHT 守卫 —— 微信上会多烧一格额度：\n  ${l.text.trim()}`)
+  }
+  // 正文开始处走的是 inline 分支（写进同一条消息），它必须推进水位，否则收尾会把同一段思考再并一遍
+  assert.match(src, /markThinkingSent\(\)/, "inline 写入后要调 markThinkingSent 推进水位")
+})

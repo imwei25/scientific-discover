@@ -364,7 +364,9 @@ const BUDGET_TIGHT = budgetTightFor(PLATFORM)
 // 微信上【彻底不发】进度提示与静默播报——它们最不值钱，却和真正的回复抢同一格额度。
 // 企微是 websocket、无此配额，照常。
 const PROGRESS = process.env.SCI_WRAP_PROGRESS !== "0" && !BUDGET_TIGHT
-// 思考在两个平台都保留（它是长任务里唯一能让人知道"还活着"的东西），但微信上放慢到 1 分钟一条。
+// 思考在两个平台都保留，但【发法完全不同】：企微 30s 一条独立消息（长连接、无配额）；
+// 微信【一条都不单发】，全部 inline 并进答案那一条（走 stdout，整体只算 1 条，分块不计费）。
+// 代价：微信上长任务期间彻底安静（进度提示本来也是关的），换的是不跟真正的回复抢那 15 格额度。
 const THINKING = process.env.SCI_WRAP_THINKING === "1"
 const UPLOAD_FIRST = process.env.SCI_WRAP_UPLOAD_FIRST === "1" // 「先上传后提问」：只发文件不触发会话
 const args = process.argv.slice(2)
@@ -595,8 +597,8 @@ function runOpencode(stdinText, extraFiles = []) {
   // 收尾时暂存到 last-reply.json —— cc-connect 投递失败时下一轮据此补发。
   const answer = new Map(), answerOrder = []
   const sentLen = new Map()  // partId → 已推出的字符数（流式水位）
-  // 微信 1 分钟、企微 30 秒：微信每条都吃发送额度，节奏放慢一半；企微没有这个约束。
-  const THINK_INTERVAL = BUDGET_TIGHT ? 60_000 : 30_000
+  // 只对企微有意义：微信上思考不走定时器（一条都不单发，见 ticker 里的 BUDGET_TIGHT 判断）。
+  const THINK_INTERVAL = 30_000
   let lastThink = Date.now()
   let thinkingEverSent = false   // 本轮有没有真的发出过思考（短任务合并的判据）
   /** 还没发出去的思考文本（收尾合并用；不改水位，调用方负责决定发不发）。 */
@@ -611,6 +613,8 @@ function runOpencode(stdinText, extraFiles = []) {
     if (t.length > 1800) t = "…" + t.slice(-1800)
     return t
   }
+  /** 把水位推到"全部已发"，但不真发 —— 供"思考已 inline 写进正文"的路径推进水位。 */
+  const markThinkingSent = () => { for (const id of order) sentLen.set(id, (reason.get(id) || "").length) }
   const flushNewThinking = (cb) => {   // 只发"上次之后新增"的思考；cb 在这条 send 真正发出后回调；返回是否真发了一条
     if (!THINKING) { cb && cb(); return false }
     const parts = []
@@ -690,7 +694,10 @@ function runOpencode(stdinText, extraFiles = []) {
 
   const ticker = (PROGRESS || THINKING) ? setInterval(() => {
     const now = Date.now()
-    if (THINKING && now - lastThink >= THINK_INTERVAL) { lastThink = now; flushNewThinking() }
+    // 【微信上一条都不中途发】每条 send 各吃一格额度，而每小时只有 15 格，长任务能吃掉五六格。
+    // 思考改为 inline 并进答案那一条（见正文开始处与收尾处），代价是长任务期间手机端会安静
+    // ——微信上进度提示本来也是关的，这是为省额度自觉付的代价。企微是长连接、无配额，照常。
+    if (THINKING && !BUDGET_TIGHT && now - lastThink >= THINK_INTERVAL) { lastThink = now; flushNewThinking() }
     if (PROGRESS && toolCount > pingedTools && now - lastPing >= PROGRESS_INTERVAL) {
       pingedTools = toolCount; lastPing = now
       lastSilenceAt = now   // 刚报过进度就别紧接着再报"没动静"
@@ -767,7 +774,20 @@ function runOpencode(stdinText, extraFiles = []) {
         // 正文开始：先把剩余未发的思考发出去，并【扣住答案】直到它发出，保证「思考 → 答案」
         if (type === "text" && !answerGated) {
           answerGated = true
-          if (THINKING) {
+          // 【微信：思考不另发一条，直接写进正文前面】走 stdout 的内容整体只算【一条】消息
+          // （分块不计费，maxWeixinChunk=3800），而 `cc-connect send` 每条各吃一格额度。
+          // 微信每小时只有 15 格，长任务按 60s 一条思考能吃掉五六格 —— 那是真正的回复在抢的格子。
+          // 所以这里把思考【inline 写进同一条消息】：既省掉全部额外开销，又天然保证"思考在前、
+          // 答案在后"（stdout 是顺序写的，不像 send 与 stdout 那样两条通道不保序）。
+          // 也因此不需要 holding/releaseHold 那套扣答案的保序机制 —— 没有异步 send 要等。
+          if (THINKING && BUDGET_TIGHT) {
+            const head = pendingThinkingText()
+            if (head) {
+              markThinkingSent()          // 推进水位，免得收尾又并一遍
+              out("💭 " + head + "\n\n———\n\n")
+              wlog(`思考写入正文前（微信合并策略）${head.length} 字`)
+            }
+          } else if (THINKING && !BUDGET_TIGHT) {   // 守卫写明：企微才走"另发一条 + 扣住答案保序"
             const sent = flushNewThinking(releaseHold)
             if (sent) { holding = true; setTimeout(releaseHold, 5000) }   // send 卡住也别永久扣着
           }
@@ -795,7 +815,8 @@ function runOpencode(stdinText, extraFiles = []) {
     if (holding && !released) { onReleased = () => finishAndExit(exitCode); return }
     if (ticker) clearInterval(ticker)
     // 收尾把剩余未发的思考补齐（短任务没到 30s、或思考在正文后还有尾巴）；现发的话留点送达时间再退。
-    const flushedNow = flushNewThinking()
+    // 【微信不在这里发】它一条 send 就是一格额度；剩下的尾巴由下面的合并写进答案那一条里。
+    const flushedNow = BUDGET_TIGHT ? false : flushNewThinking()
     // 产物兜底：新出现/被改写、且模型没自己发过的文件，补一条 send
     const fresh = []
     const rescan = (d, depth) => {
@@ -837,11 +858,15 @@ function runOpencode(stdinText, extraFiles = []) {
     const usedAfter = noteSend()
     const notice = BUDGET_TIGHT ? budgetNotice(usedAfter, SEND_LIMIT, SEND_WARN_AT) : ""
     if (notice) { out(notice); wlog(`额度提示：本小时已用 ${usedAfter}/${SEND_LIMIT}`) }
-    // 微信上思考【从不中途发】（见 ticker 里的 BUDGET_TIGHT 判断），收尾时若有内容就并进答案——
-    // 一条消息里带走，零额外开销。thinkingEverSent 在微信上恒为 false，留着只为企微路径的语义完整。
+    // 微信上思考【从不中途发】——三处发送点都按 BUDGET_TIGHT 挡掉了（ticker、正文开始、这里的
+    // 收尾 flush），主体在正文开始时已 inline 写进这条消息的【最前面】。这里只兜"正文之后才产生
+    // 的尾巴"（少见），追加在末尾——它本来就发生在答案之后，顺序如实。零额外开销：都在同一条。
+    // 【2026-08-16 修】此前这段注释就是这么写的，但 ticker 里【并没有】那个判断：微信上思考照样
+    // 60s 一条、每条各吃一格额度，一个 5 分钟的任务能烧掉五六格（每小时只有 15 格）。注释先于
+    // 实现写下、之后没人回来补，于是"已经处理好了"的错觉维持了很久。
     if (BUDGET_TIGHT && THINKING) {
       const tail = pendingThinkingText()
-      if (tail) { out("\n\n———\n💭 " + tail + "\n"); wlog("思考并入答案（微信保守策略）") }
+      if (tail) { out("\n\n———\n💭 " + tail + "\n"); wlog("思考尾巴并入答案（微信合并策略）") }
     }
     saveLastReply(answerText, toSend)
 
