@@ -3812,6 +3812,32 @@ export const server = http.createServer(async (req, res) => {
       return send(res, 200, "application/json", JSON.stringify({ ok: true }))
     }
 
+    // 显式建会话。正常路径下会话是在【第一条消息】那一刻才建出来的（见 createSession 头注），
+    // 但有些动作在发消息之前就需要一个真实存在的会话 —— 目前是「绑定聊天接入」：它要拿会话的
+    // 产物目录去注入 AGENTS.md，没有会话就绑不了，用户被迫先随便发一句话。
+    //
+    // folderId 必须在这里就带上：opencode 的 session.directory 只能在 create 时设、之后不可改。
+    // 漏了它，用户在新对话里挑的工作目录就会被这次提前创建【永久吃掉】，产物落回默认目录，
+    // 而界面上那个目录选择器已经变成锁定态、他再也改不回来。
+    // modId 同理随手绑上（与首条消息那条路径 4953 行的做法一致），否则这个会话会停在
+    // "有 id 却没有模块绑定"的中间态，只能靠下一条消息补绑。
+    if (req.method === "POST" && u.pathname === "/api/session/create") {
+      let b = {}; try { b = await readJson(req) } catch {}
+      const title = String(b.title || "新对话").slice(0, 40)
+      const folderId = String(b.folderId || "")
+      const modId = String(b.module || "chat")
+      try {
+        const sid = await createSession(title, folderId)
+        titledSessions.add(sid)
+        if (modId && modId !== "chat") bindSessionModule(sid, modId)
+        return send(res, 200, "application/json", JSON.stringify({ ok: true, sid }))
+      } catch (e) {
+        const ocOk = await ocHealthy()
+        return send(res, 503, "application/json", JSON.stringify({ ok: false,
+          err: ocOk ? "无法创建会话，请稍后重试" : "后台模型服务（opencode）尚未就绪，请稍等几十秒后重试" , detail: String(e).slice(0, 200) }))
+      }
+    }
+
     // 置顶：已整体移除（会话现在可以直接拖着排序，"排到最前"不再需要一档专门的标记）。
     // 保留为空操作，只为老界面包（可单独热更新，新 server 配老 index.html 是真实组合）调用时不报错。
     if (req.method === "POST" && u.pathname === "/api/session/pin") {

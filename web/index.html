@@ -8896,17 +8896,51 @@ document.addEventListener("visibilitychange", () => { if (!document.hidden) refr
   var cur = null, pollT = null, wxPollT = null
 
   // 会话下拉填充：默认选中当前正在看的会话（把眼前这个接进去/换绑）；没有则该平台已绑的会话。
+  //
+  // 【眼前是个还没发过消息的新对话时】会话在服务端根本还不存在（它是第一条消息那一刻才建的），
+  // 下拉里自然没有它 —— 用户"新建对话 → 选好工具目录 → 来绑微信"，却发现只能绑别的旧会话，
+  // 只好先随便发一句话把会话催生出来。这里给它一个占位项 __new__，绑定时再当场创建（见 ensureSid）。
   function fillSess(selId, boundSid, sessions) {
     var sel = $(selId)
+    var isFresh = typeof sessionId !== "undefined" && !sessionId
     var pick = (typeof sessionId !== "undefined" && sessionId ? sessionId : "") || boundSid || ""
     var top = sessions.slice(0, 50)
     sel.innerHTML = top.map(function (s) {
       return '<option value="' + esc(s.id) + '"' + (s.id === pick ? " selected" : "") + ">" + esc(s.title || s.id) + "</option>"
     }).join("") || '<option value="">（还没有会话，先去主界面开一个）</option>'
+    // 占位项排在最前并默认选中：用户开这个面板的意图，绝大多数就是"把我眼前这个接出去"
+    if (isFresh) {
+      var f = (typeof pendingFolder !== "undefined" && pendingFolder) ? "，工作目录 " + esc(pendingFolder.path) : ""
+      sel.insertAdjacentHTML("afterbegin", '<option value="__new__" selected>当前新对话（绑定时自动创建' + f + "）</option>")
+      return
+    }
     if (pick && !top.some(function (s) { return s.id === pick })) {
       var c = sessions.find(function (s) { return s.id === pick })
       if (c) sel.insertAdjacentHTML("afterbegin", '<option value="' + esc(c.id) + '" selected>' + esc(c.title || c.id) + "</option>")
     }
+  }
+  // 把下拉里的选择换成一个【真实存在的】会话 id。
+  // 选中的是占位项 __new__ 时当场把会话建出来，并把用户挑好的工作目录 / 模块一并带过去 ——
+  // directory 只有 create 这一次机会能设（服务端 createSession 头注），漏了它用户挑的目录就永久丢了。
+  // 建完要同步前端状态：sessionId 一有值，目录选择器就会正确变成锁定态，
+  // 不然用户回到主界面还以为目录能改，改了却不生效。
+  function ensureSid(sel) {
+    var v = sel.value
+    if (v !== "__new__") return Promise.resolve(v)
+    return jpost("api/session/create", {
+      title: "新对话",
+      folderId: (typeof pendingFolder !== "undefined" && pendingFolder) ? pendingFolder.id : "",
+      module: typeof currentModule !== "undefined" ? currentModule : "chat",
+    }).then(function (r) {
+      if (!r || r.ok === false || !r.sid) throw new Error((r && r.err) || "会话创建失败")
+      if (typeof sessionId !== "undefined") {
+        sessionId = r.sid
+        try { localStorage.setItem("nm_sid", r.sid) } catch (e) {}
+      }
+      if (typeof consumePendingFolder === "function") consumePendingFolder()
+      if (typeof loadSessions === "function") loadSessions()
+      return r.sid
+    })
   }
   // 平台卡片状态灯 + 绑定提示（prefix = cbw / cbx）
   function paintCard(prefix, pd, running) {
@@ -8995,13 +9029,14 @@ document.addEventListener("visibilitychange", () => { if (!document.hidden) refr
   $("cbwSave").addEventListener("click", function () {
     var bot_id = $("cbBotId").value.trim()
     if (!bot_id) { setMsg(msgEl, "err", "请先填 Bot ID（见上方教程）"); return }
-    var sid = $("cbwSess").value
-    if (!sid) { setMsg(msgEl, "err", "请先选一个会话"); return }
+    if (!$("cbwSess").value) { setMsg(msgEl, "err", "请先选一个会话"); return }
     var wecom = { bot_id: bot_id }
     var sec = $("cbBotSecret").value.trim(); if (sec) wecom.bot_secret = sec
     setMsg(msgEl, "info", "保存中…")
     jpost("api/chat-bridge/config", { enabled: true, wecom: wecom, model: $("cbModel").value }).then(function (r) {
       if (r && r.ok === false) throw new Error(r.err || "保存凭证失败")
+      return ensureSid($("cbwSess"))   // 选的是"当前新对话"时在这里才真正把会话建出来
+    }).then(function (sid) {
       return jpost("api/chat-bridge/bind", { platform: "wecom", sid: sid })
     }).then(function (r) {
       if (r && r.ok === false) throw new Error(r.err || "绑定失败")
@@ -9012,11 +9047,12 @@ document.addEventListener("visibilitychange", () => { if (!document.hidden) refr
   })
   // 微信：扫码后点绑定（凭证是扫码来的）
   $("cbxBind").addEventListener("click", function () {
-    var sid = $("cbxSess").value
-    if (!sid) { setMsg(msgEl, "err", "请先选一个会话"); return }
+    if (!$("cbxSess").value) { setMsg(msgEl, "err", "请先选一个会话"); return }
     if (!(cur && cur.weixin && cur.weixin.configured)) { setMsg(msgEl, "err", "请先点「扫码绑定微信」完成扫码"); return }
     setMsg(msgEl, "info", "绑定中…")
     jpost("api/chat-bridge/config", { enabled: true, model: $("cbModel").value }).then(function () {
+      return ensureSid($("cbxSess"))   // 选的是"当前新对话"时在这里才真正把会话建出来
+    }).then(function (sid) {
       return jpost("api/chat-bridge/bind", { platform: "weixin", sid: sid })
     }).then(function (r) {
       if (r && r.ok === false) throw new Error(r.err || "绑定失败")
