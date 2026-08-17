@@ -231,12 +231,23 @@ nm_migrate_done:
   RMDir "$INSTDIR\bundle\app\outputs"
   RMDir "$INSTDIR\bundle\app\uploads"
 
-  ; 【最后一道，别再逐个点名】上面那串 Delete/RMDir 是"把已知会产生的东西一个个列出来"，
-  ; 这类清单天生会漏：0.1.4 漏了整个 web-packs，0.1.5/0.1.6 漏了热更新增的 workspace.html，
-  ; 每漏一个，$INSTDIR 就删不掉、用户就看到"卸载不掉"。技能脚本还会随手往 app\ 根写临时文件
-  ; （xlsx_tail_*.txt 之类），清单永远追不上。
-  ; 所以：**用户没有数据时，整棵树直接删**，不再依赖清单的完整性；
-  ; 有数据（outputs/uploads 还在）才退回保守路径，只留那两个目录并告诉用户位置。
+  ; 【最后一道：白名单式清扫，别再逐个点名】上面那串 Delete/RMDir 是"把已知会产生的东西一个个
+  ; 列出来"，这类清单天生会漏：0.1.4 漏了整个 web-packs，0.1.5/0.1.6 漏了热更新增的
+  ; workspace.html，2026-08-17 实测又漏了 .ocglobal（opencode 的全局配置：技能 + node 依赖 +
+  ; .venv，约 5800 个文件）—— 它随包发布、NSIS 本该删掉，但在线更新技能包与 __pycache__ 往里
+  ; 新增了没登记过的文件，于是整个目录删不掉。技能脚本还会随手往 app\ 根写临时文件
+  ; （xlsx_tail_*.txt 之类），清单永远追不上。每漏一个，用户看到的就是"卸载不掉、文件夹还在"。
+  ;
+  ; 所以反过来做：**只保 outputs / uploads，bundle 下其余一律删**，不再依赖清单的完整性；
+  ; 以后新增任何运行期目录都不用再改这里。
+  ; 【为什么只对 $INSTDIR\bundle 下手】bundle 是我们自己造的目录，边界明确；绝不对 $INSTDIR
+  ; 整体做递归删除（用户可能把安装目录指到了别处，万一 $INSTDIR 异常，代价是删掉他自己的东西）。
+  ; $INSTDIR 本身只用 RMDir 尝试删空目录 —— 删不掉就说明还有东西，那是安全的失败方向。
+  ; uninstall.exe 在 $INSTDIR 根、不在 bundle 下，不受影响（`_?=` 就地运行时它还锁着自己）。
+  DetailPrint "清扫安装目录（保留 outputs / uploads）…"
+  nsExec::ExecToLog 'powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "$$ErrorActionPreference=\"SilentlyContinue\"; $$r=\"$INSTDIR\bundle\"; if (Test-Path $$r) { Get-ChildItem $$r -Force | Where-Object { $$_.Name -ne \"app\" } | Remove-Item -Recurse -Force; $$a=Join-Path $$r \"app\"; if (Test-Path $$a) { Get-ChildItem $$a -Force | Where-Object { $$_.Name -ne \"outputs\" -and $$_.Name -ne \"uploads\" } | Remove-Item -Recurse -Force } }"'
+  Pop $0
+
   IfFileExists "$INSTDIR\bundle\app\outputs\*.*" keepdata 0
   IfFileExists "$INSTDIR\bundle\app\uploads\*.*" keepdata 0
     RMDir /r "$INSTDIR"
