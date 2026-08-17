@@ -1,4 +1,4 @@
-﻿<#
+<#
   桌面版打包脚本（路线2：原生 Windows 移植）
   产出：desktop\dist\bundle\  —— 自包含目录，结构：
     app\                 应用本体（web 网关 + 技能 + AGENTS.md + .venv 嵌入式 Python）
@@ -43,7 +43,7 @@ function Get-Cached {
       Write-Host "    下载 $u"
       # BITS/IE 引擎不稳，直接 .NET 下载；大文件用 curl.exe（Win10+ 自带）更稳
       $curl = Get-Command curl.exe -ErrorAction SilentlyContinue
-      if ($curl) { & $curl.Source -sSLf --retry 3 -o "$dst.part" $u; if ($LASTEXITCODE -ne 0) { throw "curl rc=$LASTEXITCODE" } }
+      if ($curl) { & $curl.Source -sSLfk --retry 3 -o "$dst.part" $u; if ($LASTEXITCODE -ne 0) { throw "curl rc=$LASTEXITCODE" } }
       else { Invoke-WebRequest -Uri $u -OutFile "$dst.part" -UseBasicParsing }
       Move-Item "$dst.part" $dst -Force
       return $dst
@@ -166,6 +166,7 @@ Step "pandoc $PandocVer（render-docx 硬依赖）"
 $pdDir = Join-Path $Rt "pandoc"
 if (-not (Test-Path "$pdDir\pandoc.exe")) {
   $zip = Get-Cached "pandoc-$PandocVer-windows-x86_64.zip" @(
+    "https://ghfast.top/https://github.com/jgm/pandoc/releases/download/$PandocVer/pandoc-$PandocVer-windows-x86_64.zip",
     "https://github.com/jgm/pandoc/releases/download/$PandocVer/pandoc-$PandocVer-windows-x86_64.zip",
     "https://mirror.ghproxy.com/https://github.com/jgm/pandoc/releases/download/$PandocVer/pandoc-$PandocVer-windows-x86_64.zip")
   $tmp = Join-Path $Cache "pandoc-tmp"
