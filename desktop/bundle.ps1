@@ -1,4 +1,4 @@
-<#
+﻿<#
   桌面版打包脚本（路线2：原生 Windows 移植）
   产出：desktop\dist\bundle\  —— 自包含目录，结构：
     app\                 应用本体（web 网关 + 技能 + AGENTS.md + .venv 嵌入式 Python）
@@ -192,12 +192,7 @@ if (-not (Test-Path "$vs\python.exe")) {
   Expand-Archive $zip $vs -Force
 }
 # _pth：打开 site + 挂上 site-packages（嵌入式默认锁死 sys.path，不改这行 pip 装了也 import 不到）
-@"
-python$PyVerNoDot.zip
-.
-Lib\site-packages
-import site
-"@ | Out-File "$vs\python$PyVerNoDot._pth" -Encoding ascii
+"python$PyVerNoDot.zip`r`n.`r`nLib\site-packages`r`nimport site`r`n" | Out-File "$vs\python$PyVerNoDot._pth" -Encoding ascii
 # python3.exe：ppt-master 等技能里大量裸 `python3` 调用（launcher 会把 Scripts 挂进 PATH）
 Copy-Item "$vs\python.exe" "$vs\python3.exe" -Force
 # VC 运行库 app-local：目标机可能没装 VC++ redist，numpy/scipy import 会缺 msvcp140.dll
@@ -238,12 +233,7 @@ foreach ($f in "python.exe", "python3.exe", "python$PyVerNoDot.dll", "python3.dl
   if (Test-Path "$vs\$f") { Copy-Item "$vs\$f" $vb -Force }
 }
 # bin 侧 _pth 全部改向 ..\Scripts（_pth 里的相对路径以 _pth 文件所在目录为基准）
-@"
-..\Scripts\python$PyVerNoDot.zip
-..\Scripts
-..\Scripts\Lib\site-packages
-import site
-"@ | Out-File "$vb\python$PyVerNoDot._pth" -Encoding ascii
+"..\Scripts\python$PyVerNoDot.zip`r`n..\Scripts`r`n..\Scripts\Lib\site-packages`r`nimport site`r`n" | Out-File "$vb\python$PyVerNoDot._pth" -Encoding ascii
 & "$vb\python.exe" -c "import pandas; print('  .venv\bin 自检通过')"
 if ($LASTEXITCODE -ne 0) { throw ".venv\bin 自检失败" }
 

@@ -21,6 +21,9 @@ __pycache__/
 
 # 部署密钥与密码文件（绝不入库）
 .env
+*.env
+deploy-auth/*.env
+!deploy-auth/*.env.example
 serve.out
 serve.err
 # 自定义大模型配置（含 API key，运行时由前端「模型设置」写入）
