@@ -1417,6 +1417,22 @@
   .pv-body.frame iframe { width: 100%; height: 100%; border: 0; display: block; }
   .pv-body img { max-width: 100%; height: auto; }                            /* docx 里的内联图片自适应 */
 
+  /* 文献预览（右半屏）：在左半屏的台账 Excel 里点某一篇 → 右半屏的【对话】整块换成这篇文献。
+     【为什么是盖上去而不是把 #chat display:none】对话流的滚动位置、正在生成的流式内容、
+     输入框里没发出去的草稿都得原样留着 —— 藏一次再显示，这三样全丢。这层关掉就回到原处。
+     它必须压在 #preview(z-index:40) 之上：窄屏时预览是铺满整屏的，压不住就等于看不见。 */
+  #pvDoc { position: fixed; top: var(--hdr-h); left: 50vw; width: 50vw; height: calc(100vh - var(--hdr-h));
+    z-index: 41; display: none; flex-direction: column; background: #fff; border-left: 1px solid var(--line-hi); }
+  body.pvdoc-open #pvDoc { display: flex; }
+  .pv-head .pv-dl { flex: none; display: inline-flex; align-items: center; gap: 5px; padding: 6px 12px; font-size: 12px;
+    color: var(--muted); background: transparent; border: 1px solid var(--line-hi); border-radius: var(--r-sm); text-decoration: none; }
+  .pv-head .pv-dl:hover { color: var(--accent); border-color: var(--accent); }
+  .pv-head .pv-dl .ic { width: 13px; height: 13px; }
+  /* 台账表格里那一列「查看」 */
+  .shview { white-space: nowrap; }
+  .shview .shbtn { padding: 3px 10px; font-size: 12px; }
+  .shview a.shdl { font-size: 12px; color: var(--muted); }
+
   /* 左下角工具条（原顶栏的三个入口：公告 / 分享 / 返回工作台）+ 模型设置弹窗 */
   /* margin-top:auto 挂在这儿而不是 .user-info 上：两块都要贴底，空白得留在【这一条之前】。
      挂在 .user-info 上的话空白会落在两块中间，工具条被顶到会话列表底下去。 */
@@ -1744,6 +1760,8 @@
     #log { min-height: 55vh; }
     aside { order: -1; border-left: 0; border-bottom: 1px solid var(--line); }
     #preview { width: 100vw; box-shadow: none; }   /* 铺满时投影全打在屏幕外，白合成一层 */
+    /* 窄屏没有右半屏可占：文献预览铺满整屏盖住台账，「返回台账」退回去。层级必须高于 #preview。 */
+    #pvDoc { left: 0; width: 100vw; z-index: 45; border-left: 0; }
     /* 预览盖满整屏 → 底下那条页签条 100% 被 z-index:40 的预览挡住、点不到，
        是块看不见也用不了的死 DOM。窄屏索性不给页签，关掉预览再换文件。 */
     body.preview-open #pvTabs { display: none; }
@@ -1972,6 +1990,17 @@
     <button class="pv-close" id="pvClose" type="button">关闭</button>
   </div>
   <div class="pv-body" id="pvBody"></div>
+</div>
+<!-- 文献预览：台账 Excel 的「查看」把这一层叠在右半屏（对话）之上。
+     它开着时先关它才能关左边的台账预览（见 closePreview）—— 否则一次点击既退出文献
+     又退出台账，用户想回表里点下一篇得从头再来一遍。 -->
+<div id="pvDoc">
+  <div class="pv-head">
+    <span class="pv-title" id="pvDocTitle"></span>
+    <a class="pv-dl" id="pvDocDl" href="#" download>下载</a>
+    <button class="pv-close" id="pvDocClose" type="button">返回台账</button>
+  </div>
+  <div class="pv-body" id="pvDocBody"></div>
 </div>
 <div id="pwModal" class="modal">
   <div class="modal-card" style="max-width:380px">
@@ -3346,11 +3375,94 @@ function setPvTab(tab) {
 pvTabChat.addEventListener("click", () => setPvTab("chat"))
 pvTabFiles.addEventListener("click", () => setPvTab("files"))
 function closePreview() {
+  // 文献预览开着时，这一下只退文献、把台账留在左边（用户下一步几乎总是回表里点下一篇）。
+  // 一次点击连台账一起关掉的话，想看第二篇得从产出列表重新把 Excel 打开一遍。
+  if (document.body.classList.contains("pvdoc-open")) { closeDocPreview(); return }
   preview.classList.remove("on"); document.body.classList.remove("preview-open")
   setPvTab("chat")                      // 退出预览还原成原始界面：三列布局 + 对话页
   if (pvObjUrl) { URL.revokeObjectURL(pvObjUrl); pvObjUrl = null }
 }
 let pvObjUrl = null   // 上一次 pptx/docx 预览的 blob URL，切换/关闭时回收
+/**
+ * 把一个文件渲染进指定容器。左半屏预览与右半屏的文献预览【共用这一份】分支表：
+ * 两处各写一遍的话，加一种格式或修一个安全问题（如 docx 必须走 iframe）总会漏掉一边。
+ * xlsx 不走这里 —— 它带着台账状态（PVX / 改分类 / 归档），只在左半屏出现。
+ * 返回本次创建的 blob URL（仅 ppt/odp 那条转换路有），由调用方负责回收。
+ */
+async function fillPreview(name, body) {
+  const ext = (name.split(".").pop() || "").toLowerCase()
+  const raw = "api/raw?name=" + encodeURIComponent(name) + sidQ() + verQ(name)   // 带版本戳：同名被重写后，预览/灯箱不会摆出缓存里的上一版
+  const prev = "api/preview?name=" + encodeURIComponent(name) + sidQ()
+  let objUrl = null
+  if (ext === "md" || ext === "markdown") {                 // markdown：前端渲染
+    const txt = await fetch(raw).then(r => r.text())
+    body.innerHTML = renderMarkdown(txt); enhanceCode(body)
+  } else if (ext === "docx") {
+    // ★ 走 iframe，不要 innerHTML 注入。服务端给这条响应加了
+    //   `Content-Security-Policy: sandbox; default-src 'none'`（注释写明 mammoth 不过滤
+    //   `javascript:` 协议），而 innerHTML 是把响应体当【字符串】塞进父页 —— 响应头对它
+    //   完全无效，那道 CSP 等于死代码。`<script>` 虽不执行，但 `javascript:` 超链接与
+    //   `<img onerror>` 会在本站源上跑（能读到本站 cookie/localStorage）。
+    //   而产物 docx 的内容来自模型与用户上传的稿件，不是可信输入。
+    //   reader.html 那侧本来就是 iframe（frame("api/preview…")），两个壳口径对齐。
+    const r = await fetch(prev); if (!r.ok) throw new Error(await r.text())
+    body.classList.add("frame"); body.innerHTML = '<iframe title="预览" src="' + prev.replace(/"/g, "%22") + '"></iframe>'
+  } else if (ext === "pdf") {                               // pdf：浏览器原生内嵌
+    body.classList.add("frame"); body.innerHTML = '<iframe title="预览" src="' + raw + '"></iframe>'
+  } else if (ext === "html" || ext === "htm") {             // html：沙箱 iframe（脚本可跑，隔离站点源）
+    body.classList.add("frame"); body.innerHTML = '<iframe title="预览" sandbox="allow-scripts" src="' + raw + '"></iframe>'
+  } else if (ext === "csv" || ext === "tsv") {              // csv/tsv：前端解析成表格
+    const txt = await fetch(raw).then(r => r.text())
+    body.innerHTML = csvTable(txt, ext === "tsv" ? "\t" : ",")
+  } else if (ext === "txt" || ext === "log") {              // txt/log：纯文本
+    let txt = await fetch(raw).then(r => r.text())
+    const cut = txt.length > 200_000; if (cut) txt = txt.slice(0, 200_000)
+    body.innerHTML = "<pre>" + mdEscape(txt) + "</pre>" + (cut ? '<div class="hint">内容过长，仅显示前 200KB，完整内容请下载</div>' : "")
+  } else {                                                  // ppt/pptx/odp/odt/doc：服务端 LibreOffice 转 PDF 再内嵌
+    body.innerHTML = '<div class="hint">转换中，请稍候…（首次较慢）</div>'
+    const r = await fetch(prev); if (!r.ok) throw new Error(await r.text())
+    objUrl = URL.createObjectURL(await r.blob())
+    body.classList.add("frame"); body.innerHTML = '<iframe title="预览" src="' + objUrl + '"></iframe>'
+  }
+  return objUrl
+}
+// ---- 文献预览（右半屏）：台账表格里点「查看」→ 对话被这一层盖住，换成这篇文献 ----
+const pvDoc = document.getElementById("pvDoc")
+const pvDocBody = document.getElementById("pvDocBody")
+const pvDocTitle = document.getElementById("pvDocTitle")
+const pvDocDl = document.getElementById("pvDocDl")
+let pvDocObjUrl = null
+async function openDocPreview(name) {
+  pvDocTitle.innerHTML = ic("fileText")
+  const s = document.createElement("span"); s.textContent = name; pvDocTitle.appendChild(s)
+  pvDocDl.href = "api/download?name=" + encodeURIComponent(name) + sidQ()
+  pvDocDl.setAttribute("download", name.split("/").pop())   // 带斜杠会被浏览器洗成 "pdfs_a.pdf" 这种怪名
+  pvDocBody.classList.remove("frame"); pvDocBody.innerHTML = '<div class="hint">加载中…</div>'
+  document.body.classList.add("pvdoc-open")
+  if (pvDocObjUrl) { URL.revokeObjectURL(pvDocObjUrl); pvDocObjUrl = null }
+  try {
+    // 先按侧栏那份文件清单判一下在不在。【为什么不发 HEAD 探】/api/raw 只认 GET，HEAD 一律
+    // 回 404 —— 拿它当判据会把好端端的文件说成"不见了"。而清单是现成的，一个请求都不用发。
+    // 只在清单确实完整时（拉到过、且没有因层数/条数超限被截断）才敢下"不在"的结论；
+    // 拿不准就照常打开，让预览自己去报错，绝不凭猜测告诉用户文件没了。
+    // 不判的话 pdf 走的是 iframe 直连，文件没了只会在框里显示 /api/raw 那句通用文案
+    //（"回到对话里让它重新生成一次"）—— 而台账里的文献是用户自己文件夹里的东西，不是生成的。
+    if (lastFilesList.length && !deeperFiles && !lastFilesList.includes(name)) throw new Error("这个文件夹里现在没有「" + name + "」")
+    pvDocObjUrl = await fillPreview(name, pvDocBody)
+  }
+  catch (e) {
+    pvDocBody.classList.remove("frame")
+    pvDocBody.innerHTML = '<div class="hint">这一篇打不开：' + mdEscape(String(e.message || e).slice(0, 160))
+      + '<br>可能是文件被移走 / 改名了（台账里记的还是老路径），也可能这种格式转换不了。'
+      + '<br>右上角「下载」仍然可以试一下。</div>'
+  }
+}
+function closeDocPreview() {
+  document.body.classList.remove("pvdoc-open")
+  pvDocBody.classList.remove("frame"); pvDocBody.innerHTML = ""   // 清空：iframe 留着会在后台继续放 PDF/脚本
+  if (pvDocObjUrl) { URL.revokeObjectURL(pvDocObjUrl); pvDocObjUrl = null }
+}
+document.getElementById("pvDocClose").addEventListener("click", closeDocPreview)
 async function openPreview(name) {
   pvTitle.innerHTML = ic("file"); const s = document.createElement("span"); s.textContent = name; pvTitle.appendChild(s)
   pvBody.classList.remove("frame"); pvBody.innerHTML = '<div class="hint">加载中…</div>'
@@ -3359,31 +3471,8 @@ async function openPreview(name) {
   // 首次打开时右半屏顶上多出 40px 的页签条，对话区相应变矮 —— 不补一下，最后几条消息会往上跳出视野。
   if (!wasOpen) requestAnimationFrame(() => { log.scrollTop = log.scrollHeight })
   if (pvObjUrl) { URL.revokeObjectURL(pvObjUrl); pvObjUrl = null }
-  const ext = (name.split(".").pop() || "").toLowerCase()
-  const raw = "api/raw?name=" + encodeURIComponent(name) + sidQ() + verQ(name)   // 带版本戳：同名被重写后，预览/灯箱不会摆出缓存里的上一版
-  const prev = "api/preview?name=" + encodeURIComponent(name) + sidQ()
   try {
-    if (ext === "md" || ext === "markdown") {                 // markdown：前端渲染
-      const txt = await fetch(raw).then(r => r.text())
-      pvBody.innerHTML = renderMarkdown(txt); enhanceCode(pvBody)
-    } else if (ext === "docx") {
-      // ★ 走 iframe，不要 innerHTML 注入。服务端给这条响应加了
-      //   `Content-Security-Policy: sandbox; default-src 'none'`（注释写明 mammoth 不过滤
-      //   `javascript:` 协议），而 innerHTML 是把响应体当【字符串】塞进父页 —— 响应头对它
-      //   完全无效，那道 CSP 等于死代码。`<script>` 虽不执行，但 `javascript:` 超链接与
-      //   `<img onerror>` 会在本站源上跑（能读到本站 cookie/localStorage）。
-      //   而产物 docx 的内容来自模型与用户上传的稿件，不是可信输入。
-      //   reader.html 那侧本来就是 iframe（frame("api/preview…")），两个壳口径对齐。
-      const r = await fetch(prev); if (!r.ok) throw new Error(await r.text())
-      pvBody.classList.add("frame"); pvBody.innerHTML = '<iframe title="预览" src="' + prev.replace(/"/g, "%22") + '"></iframe>'
-    } else if (ext === "pdf") {                               // pdf：浏览器原生内嵌
-      pvBody.classList.add("frame"); pvBody.innerHTML = '<iframe title="预览" src="' + raw + '"></iframe>'
-    } else if (ext === "html" || ext === "htm") {             // html：沙箱 iframe（脚本可跑，隔离站点源）
-      pvBody.classList.add("frame"); pvBody.innerHTML = '<iframe title="预览" sandbox="allow-scripts" src="' + raw + '"></iframe>'
-    } else if (ext === "csv" || ext === "tsv") {              // csv/tsv：前端解析成表格
-      const txt = await fetch(raw).then(r => r.text())
-      pvBody.innerHTML = csvTable(txt, ext === "tsv" ? "\t" : ",")
-    } else if (XLSX.test(name)) {                             // xlsx：多 sheet 页签 + 表格
+    if (XLSX.test(name)) {                                    // xlsx：多 sheet 页签 + 表格（其余格式见 fillPreview）
       const r = await fetch("api/sheets?name=" + encodeURIComponent(name) + sidQ() + verQ(name))
       const j = await r.json()
       if (!j.ok) throw new Error(j.err || "读不了这个 Excel")
@@ -3398,15 +3487,8 @@ async function openPreview(name) {
         } catch { /* 没有台账就是普通 Excel */ }
       }
       renderSheets()
-    } else if (ext === "txt" || ext === "log") {              // txt/log：纯文本
-      let txt = await fetch(raw).then(r => r.text())
-      const cut = txt.length > 200_000; if (cut) txt = txt.slice(0, 200_000)
-      pvBody.innerHTML = "<pre>" + mdEscape(txt) + "</pre>" + (cut ? '<div class="hint">内容过长，仅显示前 200KB，完整内容请下载</div>' : "")
-    } else {                                                  // ppt/pptx/odp/odt：服务端 LibreOffice 转 PDF 再内嵌
-      pvBody.innerHTML = '<div class="hint">转换中，请稍候…（首次较慢）</div>'
-      const r = await fetch(prev); if (!r.ok) throw new Error(await r.text())
-      pvObjUrl = URL.createObjectURL(await r.blob())
-      pvBody.classList.add("frame"); pvBody.innerHTML = '<iframe title="预览" src="' + pvObjUrl + '"></iframe>'
+    } else {
+      pvObjUrl = await fillPreview(name, pvBody)
     }
   } catch (e) { pvBody.classList.remove("frame"); pvBody.innerHTML = '<div class="hint">预览失败：' + String(e.message || e).slice(0, 160) + '</div>' }
 }
@@ -3445,13 +3527,19 @@ function renderSheets() {
   const table = document.createElement("table")
   const thead = document.createElement("thead"), htr = document.createElement("tr")
   head.forEach((h) => { const th = document.createElement("th"); th.textContent = h; htr.appendChild(th) })
-  if (PVX.lib) { const th = document.createElement("th"); th.className = "shmove"; th.textContent = "分类"; htr.appendChild(th) }
+  if (PVX.lib) {
+    const tv = document.createElement("th"); tv.className = "shview"; tv.textContent = "查看"; htr.appendChild(tv)
+    const th = document.createElement("th"); th.className = "shmove"; th.textContent = "分类"; htr.appendChild(th)
+  }
   thead.appendChild(htr); table.appendChild(thead)
   const tbody = document.createElement("tbody")
   body.forEach((cells) => {
     const tr = document.createElement("tr")
     head.forEach((_, c) => { const td = document.createElement("td"); td.textContent = cells[c] || ""; tr.appendChild(td) })
-    if (PVX.lib) tr.appendChild(moveCell(String(cells[fileCol] || ""), sh.name))
+    if (PVX.lib) {
+      tr.appendChild(viewCell(String(cells[fileCol] || "")))
+      tr.appendChild(moveCell(String(cells[fileCol] || ""), sh.name))
+    }
     tbody.appendChild(tr)
   })
   table.appendChild(tbody); box.appendChild(table); pvBody.appendChild(box)
@@ -3460,6 +3548,27 @@ function renderSheets() {
     { className: "hint", textContent: `本 sheet 共 ${rows.length - 1} 行，仅预览前 ${PV_MAXROWS} 行，完整内容请下载` }))
   if (PVX.truncated) pvBody.appendChild(Object.assign(document.createElement("div"),
     { className: "hint", textContent: "这个工作簿超出了预览上限，部分行 / 列 / sheet 未显示，完整内容请下载" }))
+}
+/**
+ * 一行的「查看」：把这一篇文献开在右半屏（盖住对话），台账留在左边随时点下一篇。
+ * 不认识的格式（.caj / .nh 之类国内库导出的东西）不摆一个点了没反应的按钮 —— 给下载链接，
+ * 并说清为什么：假装能预览再弹一句"预览失败"，用户只会以为文件坏了。
+ */
+function viewCell(file) {
+  const td = document.createElement("td"); td.className = "shview"
+  if (!file) { td.innerHTML = '<span class="hint">—</span>'; return td }
+  if (!CANPV(file) || isSecret(file)) {
+    const a = document.createElement("a"); a.className = "shdl"
+    a.href = "api/download?name=" + encodeURIComponent(file) + sidQ()
+    a.setAttribute("download", file.split("/").pop())
+    a.textContent = "下载"; a.title = "这种格式不支持在线预览，下载后用本地软件打开"
+    td.appendChild(a); return td
+  }
+  const b = document.createElement("button"); b.type = "button"; b.className = "shbtn ghost"
+  b.textContent = "预览"; b.title = "在右侧打开这篇文献"
+  b.addEventListener("click", () => openDocPreview(file))
+  td.appendChild(b)
+  return td
 }
 /** 一行末尾的「改分类」下拉：选中别的类 → 立刻改 library.json 并重出 Excel（不经过对话，不花额度） */
 function moveCell(file, curCat) {
