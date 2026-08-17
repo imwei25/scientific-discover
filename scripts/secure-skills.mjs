@@ -7,21 +7,23 @@ import {
 } from './skill-security.mjs'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
-const SKILLS_DIR = path.resolve(__dirname, '..', '.opencode', 'skills')
-const ENC_FILE = path.resolve(__dirname, '..', '.opencode', 'skills.enc')
+const SKILLS_DIR = process.argv[3] ? path.resolve(process.argv[3]) : path.resolve(__dirname, '..', '.opencode', 'skills')
+const ENC_FILE = process.argv[4] ? path.resolve(process.argv[4]) : path.resolve(__dirname, '..', '.opencode', 'skills.enc')
+const AGENTS_MD = process.argv[5] ? path.resolve(process.argv[5]) : path.resolve(__dirname, '..', 'AGENTS.md')
+const PYTHON_BIN = process.argv[6] ? path.resolve(process.argv[6]) : (process.platform === 'win32' ? path.resolve(__dirname, '..', '.venv', 'Scripts', 'python.exe') : path.resolve(__dirname, '..', '.venv', 'bin', 'python'))
 
 const cmd = process.argv[2] || 'status'
 
 try {
   if (cmd === 'encrypt') {
     console.log(`[CLI] Starting AES-256 encryption for: ${SKILLS_DIR}`)
-    const count = encryptSkills(SKILLS_DIR, ENC_FILE)
-    console.log(`[CLI] Successfully encrypted ${count} skill files into ${ENC_FILE}`)
-    console.log(`[CLI] Local SKILL.md plain text files have been replaced with security placeholders.`)
+    const count = encryptSkills(SKILLS_DIR, ENC_FILE, AGENTS_MD, PYTHON_BIN)
+    console.log(`[CLI] Successfully encrypted ${count} assets into ${ENC_FILE}`)
+    console.log(`[CLI] Target files have been compiled and replaced with security placeholders.`)
   } else if (cmd === 'decrypt' || cmd === 'restore') {
     console.log(`[CLI] Restoring skill files from: ${ENC_FILE}`)
-    const count = restoreSkills(ENC_FILE, SKILLS_DIR)
-    console.log(`[CLI] Successfully restored ${count} skill files to ${SKILLS_DIR}`)
+    const count = restoreSkills(ENC_FILE, SKILLS_DIR, AGENTS_MD)
+    console.log(`[CLI] Successfully restored ${count} asset files to ${SKILLS_DIR}`)
   } else if (cmd === 'test') {
     console.log(`\n=== Running Guardrail Security Tests ===\n`)
     const testCases = [
@@ -42,7 +44,7 @@ try {
       }
     }
   } else {
-    console.log(`Usage: node secure-skills.mjs <encrypt|decrypt|test>`)
+    console.log(`Usage: node secure-skills.mjs <encrypt|decrypt|test> [skillsDir] [encFile] [agentsMd] [pythonBin]`)
   }
 } catch (err) {
   console.error(`[CLI Error]:`, err.message)

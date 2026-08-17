@@ -1,4 +1,4 @@
-﻿<#
+<#
   桌面版打包脚本（路线2：原生 Windows 移植）
   产出：desktop\dist\bundle\  —— 自包含目录，结构：
     app\                 应用本体（web 网关 + 技能 + AGENTS.md + .venv 嵌入式 Python）
@@ -266,6 +266,19 @@ Copy-Tree "$Root\web" "$App\web" `
 # 排除 __pycache__：开发机跑过技能脚本就会生成，进包纯属无谓体积（本次实测 18 个目录）
 Copy-Tree "$Root\.opencode" "$App\.opencode" -ExcludeDirs @("__pycache__")
 Copy-Item "$Root\AGENTS.md" $App -Force
+
+# ---- 自动化加密防护（全量扫描新旧技能 + AGENTS.md + .py/.sh 工具脚本）----
+Step "安全防护：全自动加密（AGENTS.md + 所有技能 + .py/.sh 脚本）"
+$nodeExe = Join-Path $Rt "node\node.exe"
+if (-not (Test-Path $nodeExe)) { $nodeExe = "node" }
+$appPy = Join-Path $App ".venv\Scripts\python.exe"
+if (-not (Test-Path $appPy)) { $appPy = "python" }
+$stagingSkills = Join-Path $App ".opencode\skills"
+$stagingEnc = Join-Path $App ".opencode\skills.enc"
+$stagingAgents = Join-Path $App "AGENTS.md"
+& $nodeExe "$App\web\skill-security.mjs" encrypt "$stagingSkills" "$stagingEnc" "$stagingAgents" "$appPy"
+if ($LASTEXITCODE -ne 0) { throw "自动化技能与脚本加密失败，退出代码: $LASTEXITCODE" }
+
 # 更新说明：左下角那个「更新说明」按钮读的就是这些（见 server.mjs 的 /api/release-notes）。
 # 随包走而不是找云端要 —— 断网也看得到，也不会出现"装的是老版本、读到的却是新版说明"。
 # 只拿 desktop\发布说明-*.md，别把 desktop\ 下的需求文档、验收清单一起塞进客户包。

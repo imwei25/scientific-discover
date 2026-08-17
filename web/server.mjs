@@ -19,7 +19,7 @@ import { scrubShare, renderShareHtml } from "./share-export.mjs"
 import * as Tasks from "./tasks.mjs"
 import * as Sched from "./schtasks.mjs"
 import * as Presets from "./task-presets.mjs"
-import { checkInputSecurity } from "./skill-security.mjs"
+import { checkInputSecurity, loadSkillsInMemory, getAssetContent } from "./skill-security.mjs"
 
 // opencode 的完整流水线（标书/论文/系统综述）单轮可跑十几分钟，而 session.prompt 是“等整轮结束才返回”的请求；
 // undici 默认 5 分钟 headers/body 超时会让这类长轮假性抛错。关掉这两个超时（0=不限），连接超时保留。
@@ -31,6 +31,9 @@ const UPLOADS = path.join(ROOT, "uploads")
 const OUTPUTS = path.join(ROOT, "outputs")
 fs.mkdirSync(UPLOADS, { recursive: true })
 fs.mkdirSync(OUTPUTS, { recursive: true })
+
+// 自动装载加密的 Skill / AGENTS.md / 脚本包（内存解密，若存在 skills.enc）
+loadSkillsInMemory(path.join(ROOT, ".opencode", "skills.enc"))
 
 const OC_URL = process.env.OC_URL || "http://127.0.0.1:4098"
 const client = createOpencodeClient({ baseUrl: OC_URL })
