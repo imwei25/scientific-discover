@@ -4757,12 +4757,22 @@ const syncToBottomBtn = () => {
 log.addEventListener("scroll", syncToBottomBtn, { passive: true })
 toBottomEl?.addEventListener("click", () => { log.scrollTop = log.scrollHeight; unseenBelow = false; syncToBottomBtn() })
 const scrollFollow = () => { if (atBottomNow()) log.scrollTop = log.scrollHeight }
-const wfCache = new Map()          // 模块 id → workflow 定义（/api/modules/<id>/workflow 的结果）
+// 模块 id → workflow 定义。两个来源，【完整度不一样】，务必分清：
+//   ① loadWorkflow（/api/modules/<id>/workflow）：完整定义，含 intake / intakeSub / footnote，打 full 标记
+//   ② loadWorkflowState（/api/workflow/state）：只有 name + steps，【没有 intake】——它是给流程条用的
+const wfCache = new Map()
 const HDR_CACHE = new Map()        // 上传文件名 → 表头查询结果（见 fieldEl 的 columns 分支）
 let pendingWfCard = ""             // 待随下一条消息发出的任务卡文本（用法同 zScopePrefix）
 let pendingWfForm = null           // 待随下一条消息落盘的表单值（服务端建完会话后写进 _workflow.json）
 async function loadWorkflow(modId) {
-  if (wfCache.has(modId)) return wfCache.get(modId)
+  // ★ 命中判据是「完整定义(full) 或 明确的 null」，【不能只看 has】。
+  //   loadWorkflowState 会往同一张表里塞一份只有 name/steps 的半成品（流程条要用它），
+  //   只看 has 就会把它当成"已取过"直接返回 —— 没有 intake，showIntake 静默退化成"没有表单"，
+  //   这一屏只剩"当前在 X 模块"那条提示，且不报任何错。
+  //   实测触发路径：冷启动后【先打开一个该模块的旧会话】(resumeSession → loadWorkflowState 写下半成品)
+  //   → 再「新建项目」选同一个模块 → 首屏表单永远不出现，直到重启软件（2026-08-17）。
+  const cached = wfCache.get(modId)
+  if (cached === null || cached?.full) return cached
   let wf = null
   try {
     const r = await fetch("api/modules/" + encodeURIComponent(modId) + "/workflow", { signal: AbortSignal.timeout(8000) })
@@ -4771,6 +4781,8 @@ async function loadWorkflow(modId) {
   } catch (_) { /* 拿不到就退化成"没有表单"，用户照常打字 —— 绝不因此挡住发消息 */ }
   // ★ 只在【服务端明确回答了】的时候写缓存。网络失败/超时也钉进去的话，容器冷启动那 8 秒
   //   超时会让这个模块在本页面生命周期内【再也不显示表单】，且和别的模块表现不一致，无从判断。
+  // 与半成品合并（steps 用完整定义这份未裁剪的，name 两边一致），并打上 full 标记
+  if (wf) wf = { ...(wfCache.get(modId) || {}), ...wf, full: true }
   if (wf) wfCache.set(modId, wf)
   return wf
 }
