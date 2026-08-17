@@ -868,7 +868,7 @@ export const WORKFLOWS = {
         // （渠道决定要求卡、选错整篇返工；邮箱电话 noCard 不进提示词……）都在代码注释与技能文档里，
         // 别因为界面上没字了就把机制也删了。
       },
-      { id: "funderOther", label: "具体是哪个资助渠道", type: "text", when: { field: "funder", eq: "other" },
+      { id: "funderOther", label: "申请类型", type: "text", when: { field: "funder", eq: "other" },
         requiredWhen: { field: "entry", ne: "idea" }, col2: true,
         placeholder: "例：中华医学会临床医学科研专项 / 某某市卫健委面上项目 / 国家重点研发计划某专项" },
       // ★ 关键字取代了原来的「研究方向」长文本：流程第 2 步就是「研究方向生成」——
