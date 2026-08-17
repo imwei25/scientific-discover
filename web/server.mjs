@@ -19,6 +19,7 @@ import { scrubShare, renderShareHtml } from "./share-export.mjs"
 import * as Tasks from "./tasks.mjs"
 import * as Sched from "./schtasks.mjs"
 import * as Presets from "./task-presets.mjs"
+import { checkInputSecurity } from "../scripts/skill-security.mjs"
 
 // opencode 的完整流水线（标书/论文/系统综述）单轮可跑十几分钟，而 session.prompt 是“等整轮结束才返回”的请求；
 // undici 默认 5 分钟 headers/body 超时会让这类长轮假性抛错。关掉这两个超时（0=不限），连接超时保留。
@@ -4370,6 +4371,8 @@ export const server = http.createServer(async (req, res) => {
       // folderId 同理：工作目录只能在建会话那一刻定（opencode 的 directory 建后不可改）。
       try { const b = JSON.parse(Buffer.concat(chunks).toString() || "{}"); q = String(b.q ?? ""); sid = b.sid ? String(b.sid) : null; reqMod = String(b.module || ""); if (typeof b.auto === "boolean") autoReq = b.auto; if (b.wfForm && typeof b.wfForm === "object") wfSeed = b.wfForm; reqTaskModel = String(b.taskModel || ""); folderId = b.folderId ? String(b.folderId) : "" } catch {}
       if (!q.trim()) return send(res, 400, "application/json", JSON.stringify({ ok: false, sent: false, err: "消息为空" }))
+      const secCheck = checkInputSecurity([{ role: "user", content: q }])
+      if (!secCheck.isSafe) return send(res, 400, "application/json", JSON.stringify({ ok: false, sent: false, err: secCheck.reply }))
       // ---- 模块裁定 ----
       // 续会话：绑定在创建时已定死，忽略前端传值（防伪造请求把受限会话"升级"成 chat）。
       // 新会话：用请求的模块（缺省 chat），必须是已知且授权的模块。
