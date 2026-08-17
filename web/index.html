@@ -6602,6 +6602,8 @@ async function loadWorkflowState() {
       if (w && !intakeDirty()) { w.remove(); renderWelcome() }
     }
     if (!j?.state || !j.steps?.length) return
+    // 半成品：这条接口不回 intake，所以【不打 full 标记】——loadWorkflow 看到没 full 会照常去取
+    // 完整定义再合并。别在这里补 full，那正是"新建项目选同一模块、首屏表单不出现"的成因。
     wfCache.set(j.module, { ...(wfCache.get(j.module) || {}), name: j.name, steps: j.steps })
     liveBypass = !!j.gateBypass   // 放行是会话级的，切会话/刷新都要按服务端的说法重置
     // 第 4 个参数不能漏：漏了 updateStepsBar 会沿用旧的 liveFailed（切会话/刷新时是 []），
