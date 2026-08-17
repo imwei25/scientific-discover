@@ -166,8 +166,21 @@ nm_migrate_done:
   nsExec::ExecToLog 'powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "$$ErrorActionPreference=\"SilentlyContinue\"; Get-ScheduledTask -TaskPath \"\NiumaScience\\\" | Unregister-ScheduledTask -Confirm:$$false; schtasks.exe /Delete /TN \"\NiumaScience\*\" /F"'
   Pop $0
 
+  ; ★★★ 排除 uninstall.exe 自己，否则【卸载器会把自己杀掉】★★★
+  ;
+  ; 这条按 ExecutablePath 前缀匹配 $INSTDIR，而 uninstall.exe 就住在 $INSTDIR 里。要命的是
+  ; 两条卸载路径的运行位置不同：
+  ;   · 控制面板卸载 → NSIS 先把 uninstall.exe 【复制到 %TEMP%】再运行，路径不在 $INSTDIR 下，
+  ;     匹配不到自己 → 一直正常，所以这个 bug 藏了很久；
+  ;   · 安装新版时选「先卸载再安装」→ 安装器用 `_?=<目录>` 调它，该参数的语义正是
+  ;     【就地运行、不复制到临时目录】→ 路径就在 $INSTDIR 下 → 自杀。
+  ; 自杀发生在 Section Uninstall 的第一行（本钩子），而删主程序的
+  ; Delete "$INSTDIR\${MAINBINARYNAME}.exe" 排在它【后面】，于是一个文件都没删就结束了。
+  ; 安装器随后检查 `$0 <> 0 或 主程序仍存在`，两个条件同时成立 → 弹「无法卸载」并 Abort。
+  ; 2026-08-17 本机实测：按安装器原样的命令行跑 uninstall.exe /S _?=<目录>，
+  ; 退出码 -1、59739 项残留、sciagent-desktop.exe 原封不动；加上本排除后退出码 0、清理正常。
   DetailPrint "正在结束运行中的实例…"
-  nsExec::ExecToLog 'powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "$$ErrorActionPreference=\"SilentlyContinue\"; Get-CimInstance Win32_Process | Where-Object { $$_.ExecutablePath -and $$_.ExecutablePath.TrimStart([char]92,[char]63).StartsWith(\"$INSTDIR\", [StringComparison]::OrdinalIgnoreCase) } | ForEach-Object { Stop-Process -Id $$_.ProcessId -Force }"'
+  nsExec::ExecToLog 'powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "$$ErrorActionPreference=\"SilentlyContinue\"; Get-CimInstance Win32_Process | Where-Object { $$_.ExecutablePath -and $$_.ExecutablePath.TrimStart([char]92,[char]63).StartsWith(\"$INSTDIR\", [StringComparison]::OrdinalIgnoreCase) -and -not $$_.ExecutablePath.EndsWith(\"uninstall.exe\", [StringComparison]::OrdinalIgnoreCase) } | ForEach-Object { Stop-Process -Id $$_.ProcessId -Force }"'
   Pop $0
   Sleep 1500
 !macroend
