@@ -84,7 +84,8 @@
   .sb-toggle .ic { width: 16px; height: 16px; }
   .sb-title { flex: 1; font-size: 13px; font-weight: 600; color: #334153; white-space: nowrap; overflow: hidden; }
   body:not(.sessbar-open) .sb-title, body:not(.sessbar-open) #refreshSess, body:not(.sessbar-open) #selModeBtn, body:not(.sessbar-open) #sessions,
-  body:not(.sessbar-open) #newProject, body:not(.sessbar-open) #newProjBtn, body:not(.sessbar-open) .u-meta, body:not(.sessbar-open) #userMenuBtn { display: none; }
+  body:not(.sessbar-open) #newProject, body:not(.sessbar-open) #newProjBtn, body:not(.sessbar-open) #fltWrap,
+  body:not(.sessbar-open) .u-meta, body:not(.sessbar-open) #userMenuBtn { display: none; }
   body:not(.sessbar-open) #sessbar { padding: 14px 8px 10px; align-items: center; }
   body:not(.sessbar-open) .user-info { justify-content: center; padding: 12px 0 2px; }
   .sess-del { position: absolute; right: 6px; top: 50%; transform: translateY(-50%); width: 22px; height: 22px; display: grid; place-items: center; color: var(--faint); border-radius: 5px; opacity: 0; transition: opacity .12s, color .12s, background .12s; }
@@ -473,6 +474,33 @@
   .mini .ic { width: 14px; height: 14px; }
   .mini:hover { color: var(--cyan); border-color: var(--cyan); }
   .mini.on { color: #fff; background: var(--cyan); border-color: var(--cyan); }
+  /* 按模块筛选会话：紧挨「新建项目」的漏斗。点开是模块清单（每条带该模块的会话数），
+     选一个就只显示该模块的会话——项目/文件夹/最近会话三处一起过滤，别只滤一半。 */
+  /* ★ 面板挂在整行 .sb-top 上、左右拉满，不挂那个 26px 宽的按钮上：按钮离侧栏右边只有几十像素，
+     以它为锚点右对齐时 208px 的面板会整块甩出侧栏左边（实测 x=-34，前两项直接看不见）。 */
+  .sb-top { position: relative; }
+  .fltwrap { display: inline-flex; }
+  .fltpanel { position: absolute; left: 0; right: 0; top: calc(100% + 6px); z-index: 90; display: none;
+    max-height: 340px; overflow-y: auto; background: #fff; border: 1px solid var(--line);
+    border-radius: var(--r-md); box-shadow: 0 12px 40px rgba(30,50,90,.18); padding: 6px; }
+  .fltpanel.on { display: block; }
+  .fltitem { display: flex; align-items: center; gap: 8px; width: 100%; padding: 7px 9px; border-radius: 8px;
+    background: transparent; border: 0; color: var(--text); font-size: 13px; text-align: left; cursor: pointer; }
+  .fltitem:hover { background: var(--panel-soft); }
+  .fltitem .ic { width: 14px; height: 14px; flex: none; color: var(--cyan); opacity: 0; }
+  .fltitem.on .ic { opacity: 1; }
+  .fltitem.on .n { font-weight: 600; }
+  .fltitem .n { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .fltitem .c { color: var(--faint); font-size: 11.5px; font-variant-numeric: tabular-nums; }
+  .fltsep { height: 1px; margin: 5px 3px; background: var(--line); }
+  /* 筛选中：列表顶部常驻一条"正在只看 X"，否则用户换会话后会忘了自己开着筛选，
+     以为会话丢了。点它就能清掉。 */
+  .fltbar { display: flex; align-items: center; gap: 6px; padding: 6px 8px; margin-bottom: 2px;
+    border-radius: 8px; background: rgba(6,182,212,.09); border: 1px solid rgba(6,182,212,.28);
+    color: #0e7490; font-size: 12px; cursor: pointer; }
+  .fltbar .ic { width: 13px; height: 13px; flex: none; }
+  .fltbar .n { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .fltbar:hover { background: rgba(6,182,212,.16); }
 
   /* recent sessions */
   #sessions { display: flex; flex-direction: column; gap: 2px; flex: 1; min-height: 0; overflow-y: auto; }
@@ -1781,6 +1809,12 @@
       <button id="sessToggle" class="sb-toggle" type="button" title="最近会话"></button>
       <span class="sb-title">会话与分组</span>
       <button id="newProjBtn" class="mini" type="button" title="新建项目"></button>
+      <!-- 按模块筛选：只看某一类会话（自由对话 / 综述撰写 / …）。清单按实际有会话的模块生成，
+           不是把所有模块都摆出来——列一堆 0 条的模块只会让人多翻几遍。 -->
+      <div class="fltwrap" id="fltWrap">
+        <button id="fltBtn" class="mini" type="button" title="按模块筛选会话"></button>
+        <div id="fltPanel" class="fltpanel"></div>
+      </div>
       <button id="selModeBtn" class="mini" type="button" title="批量选择（勾选多个会话一次删除）"></button>
       <button id="refreshSess" class="mini" type="button" title="刷新列表"></button>
     </div>
@@ -2391,7 +2425,8 @@ const ICONS = {
   lines: '<path d="M4 7h16"/><path d="M4 12h16"/><path d="M4 17h10"/>',
   fileText: '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Z"/><path d="M14 2v6h6"/><path d="M16 13H8"/><path d="M16 17H8"/><path d="M10 9H8"/>',
   star: '<path d="m12 2 3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01Z"/>',
-  uploadBox: '<path d="M12 16V4"/><path d="m8 8 4-4 4 4"/><path d="M4 16v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"/>'
+  uploadBox: '<path d="M12 16V4"/><path d="m8 8 4-4 4 4"/><path d="M4 16v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"/>',
+  filter: '<path d="M4 5h16l-6.3 7.4v5.3L10.3 20v-7.6Z"/>'
 }
 function ic(name, cls) { return '<svg class="ic' + (cls ? " " + cls : "") + '" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">' + (ICONS[name] || "") + "</svg>" }
 const setIc = (id, name) => { const el = document.getElementById(id); if (el) el.innerHTML = ic(name) }
@@ -3741,13 +3776,86 @@ function sortBucket(list, bucket) {
   })
 }
 
+// ---- 按模块筛选（「新建项目」旁边那个漏斗）----
+// 只影响【显示】：META_STATE 始终是全量，拖拽排序、批量选择、删除都照旧按全量算 ——
+// 否则筛选一开，拖动一条会话就会按"看得见的这几条"重写整桶顺序，把看不见的那些洗掉。
+const MODF_KEY = "nm_modfilter"
+let moduleFilter = localStorage.getItem(MODF_KEY) || ""     // "" = 全部
+const sessMod = (s) => s.module || "chat"                   // 老会话没存 module，按自由对话算
+// 模块显示名：优先 /api/modules 的清单，其次服务端随会话下发的 moduleName（模块没开通时
+// 清单里查不到它，但会话上带着名字），最后才退到裸 id。
+const modName = (id) => (modById(id) || {}).name
+  || (META_STATE.sessions.find((s) => sessMod(s) === id && s.moduleName) || {}).moduleName
+  || (id === "chat" ? "自由对话" : id)
+const fltBtn = document.getElementById("fltBtn")
+const fltPanel = document.getElementById("fltPanel")
+const passFilter = (s) => !moduleFilter || sessMod(s) === moduleFilter
+
+function setModuleFilter(id) {
+  moduleFilter = id || ""
+  moduleFilter ? localStorage.setItem(MODF_KEY, moduleFilter) : localStorage.removeItem(MODF_KEY)
+  fltPanel.classList.remove("on")
+  renderSessions(META_STATE)
+}
+// 按钮态：筛选中亮起并把模块名写进 title，免得用户看着变短的列表以为会话没了
+function syncFltBtn() {
+  fltBtn.classList.toggle("on", !!moduleFilter)
+  fltBtn.title = moduleFilter ? "正在只看「" + modName(moduleFilter) + "」的会话（点这里换或清除）" : "按模块筛选会话"
+}
+// 清单只列【真的有会话】的模块，按 MODULES 的顺序；清单外的（模块被停用/改名）排在后面，
+// 用原始 id 显示 —— 总比这些会话在筛选清单里彻底找不到强。
+function buildFltPanel() {
+  const counts = new Map()
+  for (const s of META_STATE.sessions) { const k = sessMod(s); counts.set(k, (counts.get(k) || 0) + 1) }
+  const ids = [...MODULES.map((m) => m.id).filter((id) => counts.has(id)),
+    ...[...counts.keys()].filter((id) => !MODULES.some((m) => m.id === id))]
+  fltPanel.innerHTML = ""
+  const row = (id, label, n) => {
+    const b = document.createElement("button"); b.type = "button"
+    b.className = "fltitem" + ((moduleFilter || "") === id ? " on" : "")
+    b.innerHTML = ic("check")
+    const t = document.createElement("span"); t.className = "n"; t.textContent = label
+    const c = document.createElement("span"); c.className = "c"; c.textContent = n
+    b.append(t, c)
+    b.addEventListener("click", () => setModuleFilter(id))
+    fltPanel.appendChild(b)
+  }
+  row("", "全部会话", META_STATE.sessions.length)
+  if (ids.length) fltPanel.appendChild(Object.assign(document.createElement("div"), { className: "fltsep" }))
+  for (const id of ids) row(id, modName(id), counts.get(id))
+  if (!ids.length) fltPanel.appendChild(emptyLine("还没有会话可筛选。"))
+}
+fltBtn.innerHTML = ic("filter")
+fltBtn.addEventListener("click", (e) => {
+  e.stopPropagation()
+  if (!document.body.classList.contains("sessbar-open")) setSessbar(true)
+  const open = !fltPanel.classList.contains("on")
+  if (open) buildFltPanel()
+  fltPanel.classList.toggle("on", open)
+})
+document.addEventListener("click", (e) => { if (!fltPanel.contains(e.target)) fltPanel.classList.remove("on") })
+document.addEventListener("keydown", (e) => { if (e.key === "Escape") fltPanel.classList.remove("on") })
+
 function renderSessions(data) {
   META_STATE = data && data.sessions ? { projects: data.projects || [], folders: data.folders || [], sessions: data.sessions } : { projects: [], folders: [], sessions: [] }
-  const { projects, folders, sessions } = META_STATE
+  const { projects, folders } = META_STATE
+  const sessions = META_STATE.sessions.filter(passFilter)
   sessionsEl.innerHTML = ""
-  // 列表刷新后，勾选集里已不存在的会话（别处删了 / 被别的窗口删了）要跟着掉，否则"已选 N"会虚高
-  for (const id of [...selected]) if (!sessions.some((s) => s.id === id)) selected.delete(id)
-  if (!sessions.length && !projects.length && !folders.length) { sessionsEl.innerHTML = '<span class="hint">还没有会话</span>'; updateSelBar(); return }
+  syncFltBtn()
+  // 列表刷新后，勾选集里已不存在的会话（别处删了 / 被别的窗口删了）要跟着掉，否则"已选 N"会虚高。
+  // ★ 判据用全量 META_STATE.sessions，不是过滤后的 sessions —— 否则一开筛选就把勾好的选择清空了。
+  for (const id of [...selected]) if (!META_STATE.sessions.some((s) => s.id === id)) selected.delete(id)
+  if (!META_STATE.sessions.length && !projects.length && !folders.length) { sessionsEl.innerHTML = '<span class="hint">还没有会话</span>'; updateSelBar(); return }
+  if (moduleFilter) {
+    const bar = document.createElement("div"); bar.className = "fltbar"; bar.title = "点一下看回全部会话"
+    bar.innerHTML = ic("filter")
+    const n = document.createElement("span"); n.className = "n"; n.textContent = "只看「" + modName(moduleFilter) + "」 " + sessions.length + " 条"
+    const x = document.createElement("span"); x.innerHTML = ic("x")
+    bar.append(n, x)
+    bar.addEventListener("click", () => setModuleFilter(""))
+    sessionsEl.appendChild(bar)
+    if (!sessions.length) { sessionsEl.appendChild(emptyLine("这个模块下还没有会话。点上面那条看回全部。")); updateSelBar(); return }
+  }
   const byProject = new Map(projects.map((p) => [p.id, []]))
   const byFolder = new Map(folders.map((f) => [f.id, []]))
   const loose = []
