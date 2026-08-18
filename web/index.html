@@ -174,7 +174,7 @@
      一行放不下就横向滚（滚轮也能滑，见 renderModulePicker）；放得下时 overflow:auto 不出滚动条。
      padding-bottom 给滚动条留位，上下再各留 4px —— 卡片 hover 会上浮 2px，贴边会被容器裁掉。
      ★ 不要 scroll-snap：它会把滚轮那点位移【吸回】最近的卡片边缘，实测滚轮完全推不动这一行。 */
-  .modgrid { display: flex; flex-wrap: nowrap; gap: 10px; overflow-x: auto; overflow-y: hidden;
+  .modgrid { display: flex; flex-wrap: nowrap; gap: 8px; overflow-x: auto; overflow-y: hidden;
     padding: 4px 2px 8px; overscroll-behavior-x: contain; }
   /* 两端渐隐：一行放不下时，被切掉的那一侧淡出去，用户一眼看出"这边还有，能滑"。
      方向由 JS 按 scrollLeft 挂 can-l / can-r（见 renderModulePicker 的 edges()）——
@@ -195,24 +195,27 @@
   .modgrid:hover::-webkit-scrollbar-thumb { background: #b6c2d6; background-clip: content-box; }
   .modgrid::-webkit-scrollbar-thumb:hover, .modgrid::-webkit-scrollbar-thumb:active { background: var(--cyan); background-clip: content-box; }
   /* 卡片【一律等宽】：长短不一的一排卡看着像没对齐的抽屉，而模块名从 3 字到 7 字都有。
-     flex: 1 1 176px + max-width 一起用 —— 卡少的那一行（工作台只有两三张）不会被拉成大长条，
+     flex-basis + min-width + max-width 一起用 —— 卡少的那一行（工作台只有两三张）不会被拉成大长条，
      卡多的那一行则一起等比收窄到 min-width 为止，收不下才开始横向滚。三个值都在的效果是：
      不管哪一行、屏幕多宽，同一行里每张卡的宽度都相同。 */
-  .modtile { flex: 1 1 176px; min-width: 148px; max-width: 200px;
-    display: flex; align-items: center; gap: 10px; padding: 10px 11px; font: inherit; text-align: left;
+  /* ★ min-width 168 是量出来的，不是拍的：最长的模块名是 7 个字（「文稿核查与审校」
+     「数据统计与分析」），13px 下正好 91px；加上左右内边距 9×2、图标 26、两处间距 8×2、
+     箭头 15、边框 2 = 168。再窄下去这两张卡的名字就会被省略号截掉（英文那行去掉之前
+     就是这个状况），而一个截断的模块名对"挑哪个模块"毫无帮助。
+     5 张卡 × 168 + 4 道 8px 间距 = 872 < 880 的列宽 —— 两行都不必横向滚。 */
+  .modtile { flex: 1 1 168px; min-width: 168px; max-width: 200px;
+    display: flex; align-items: center; gap: 8px; padding: 10px 9px; font: inherit; text-align: left;
     background: var(--card); border: 1px solid var(--line); border-radius: var(--r-md); box-shadow: var(--shadow-sm);
     cursor: pointer; transition: border-color .18s, box-shadow .18s, transform .18s; }
   .modtile:hover { border-color: var(--cyan); box-shadow: 0 6px 16px rgba(15,32,60,.10); transform: translateY(-2px); }
   .modtile:focus-visible { outline: 2px solid var(--cyan); outline-offset: 2px; }
-  .modtile .mt-ic { flex: none; width: 30px; height: 30px; border-radius: 9px; display: grid; place-items: center;
+  .modtile .mt-ic { flex: none; width: 26px; height: 26px; border-radius: 8px; display: grid; place-items: center;
     color: var(--cyan); background: rgba(59,111,212,.10); border: 1px solid rgba(59,111,212,.22); }
-  .modtile .mt-ic svg { width: 17px; height: 17px; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
+  .modtile .mt-ic svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
   /* 卡等宽之后，标题这块要【吃掉剩余宽度】：不写 flex:1 的话名字有多宽就多宽，
      箭头被 margin-left:auto 推到最右，中间空出一段无谓的缝，看着像没排版好。 */
   .modtile .mt-tt { flex: 1 1 auto; min-width: 0; }
   .modtile .mt-tt b { display: block; font-size: 13px; font-weight: 600; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .modtile .mt-tt span { display: block; margin-top: 1px; font-size: 9px; letter-spacing: .14em; text-transform: uppercase; color: var(--faint);
-    white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   /* 「进入」按钮收成一个箭头：整张卡本来就可点，小卡里再摆个胶囊按钮只剩挤 */
   .modtile .mt-go { flex: none; margin-left: auto; display: inline-flex; align-items: center; padding: 0; border: 0;
     background: transparent; color: var(--faint); cursor: pointer; transition: color .18s, transform .18s; }
@@ -5086,16 +5089,16 @@ const MODICON = {
   dot: '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/></svg>',
 }
 const MODLOOK = {
-  review: { ic: "review", en: "Literature Review" },
-  grant: { ic: "grant", en: "Grant Proposal" },
-  paper: { ic: "paper", en: "SCI Paper" },
-  chat: { ic: "chat", en: "Free Chat" },
-  litread: { ic: "lit", en: "Close Reading" },
-  litmanage: { ic: "libmgr", en: "Library Manager" },
-  refcheck: { ic: "proof", en: "Manuscript Check" },
-  humanize: { ic: "refine", en: "Language Polishing" },
-  stats: { ic: "stat", en: "Statistic & Analysis" },
-  figure: { ic: "figure", en: "Scientific Illustration" },
+  review: { ic: "review" },
+  grant: { ic: "grant" },
+  paper: { ic: "paper" },
+  chat: { ic: "chat" },
+  litread: { ic: "lit" },
+  litmanage: { ic: "libmgr" },
+  refcheck: { ic: "proof" },
+  humanize: { ic: "refine" },
+  stats: { ic: "stat" },
+  figure: { ic: "figure" },
 }
 const MODARROW = '<svg viewBox="0 0 24 24"><path d="M5 12h14M13 6l6 6-6 6"/></svg>'
 // 本次新会话是否已经选定模块。false = 空态摆模块选择网格；true = 摆该模块的首屏（标题 + 表单）。
@@ -5132,11 +5135,11 @@ function enterModule(m) {
   log.scrollTop = 0
 }
 function moduleTile(m) {
-  const look = MODLOOK[m.id] || { ic: "dot", en: "" }
+  const look = MODLOOK[m.id] || { ic: "dot" }
   const el = document.createElement("div")
   el.className = "modtile"; el.tabIndex = 0; el.setAttribute("role", "button"); el.setAttribute("aria-label", m.name)
   el.innerHTML = '<div class="mt-ic">' + (MODICON[look.ic] || MODICON.dot) + "</div>"
-    + '<div class="mt-tt"><b>' + esc(m.name) + "</b>" + (look.en ? "<span>" + esc(look.en) + "</span>" : "") + "</div>"
+    + '<div class="mt-tt"><b>' + esc(m.name) + "</b></div>"
     + '<button class="mt-go" type="button" tabindex="-1" aria-hidden="true">' + MODARROW + "</button>"
   // 整张卡可点（键盘可达），卡上的「进入」按钮也可点 —— 别让两者互相吞事件
   el.addEventListener("click", () => enterModule(m))
