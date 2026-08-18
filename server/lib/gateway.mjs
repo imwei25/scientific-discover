@@ -344,6 +344,10 @@ export async function llmForward({ req, res, pathname, ctx }) {
   if (picked.coerced)
     log(`[llm] ${user.username} 点名的模型不在档位允许清单内，已打回 ${model}（档位 ${ent.tier}）`)
 
+  // ---- ④.2 调试抓包（管理员按用户点名开启；见 capture.mjs 头注）----
+  // 抓的是重写前的原始 body —— 那才是客户端（opencode）真实发出的 messages 全文。
+  try { ctx.capture?.record(user.username, { path: pathname, model, skill }, raw) } catch { /* 抓包绝不影响转发 */ }
+
   const routes = ctx.modelRoutes ? ctx.modelRoutes(model) : []
   let attempts = buildAttempts(model, routes, CFG)
   // 没有任何可用凭证就别白跑一趟：目录里那家没填 key、或压根没建目录而 env 也是空的

@@ -27,6 +27,7 @@ import { imageForward, IMAGE_PATH_PREFIX } from "./lib/imagegen.mjs"
 import { ocrForward, OCR_PATH_PREFIX } from "./lib/ocrspace.mjs"
 import { createQueue, sanitizeLimits, LIMIT_DEFAULTS } from "./lib/queue.mjs"
 import { createSupply, WINDOWS, WINDOW_LABELS, isWindow } from "./lib/supply.mjs"
+import { initCapture } from "./lib/capture.mjs"
 import * as Credits from "./lib/credits.mjs"
 import { ADMIN_HTML } from "./lib/admin-ui.mjs"
 import * as SkillPacks from "./lib/skillpacks.mjs"
@@ -208,6 +209,9 @@ const audit = (ev, fields = {}) => {
 // 供应侧闸：谁的预算见底了、谁刚被上游打回来，转发前据此跳过那家（见 lib/supply.mjs）。
 // 【必须在 audit 之后建】它启动时要读库、跳闸时要写审计，audit 还没定义就会 TDZ 崩在启动路径上。
 export const supply = createSupply({ db, log, audit })
+
+// 按用户抓 LLM 请求（调试开关，见 lib/capture.mjs 头注）
+export const capture = initCapture(CFG.dataDir, log)
 
 // 技能清单以仓库技能目录为唯一事实来源（新增技能不用重启）
 const SKILL_LABELS = {
@@ -1942,6 +1946,43 @@ async function handleAdminApi(req, res, pathname) {
     return json(res, 200, { ok: true, rows: r.rows, total: r.total, events: DB.auditEvents(db) })
   }
 
+  // ---- 调试抓包：按用户抓取每一条 LLM 请求（见 lib/capture.mjs 头注）----
+  if (req.method === "GET" && pathname === "/admin/api/capture") {
+    return json(res, 200, { ok: true, ...capture.status() })
+  }
+  if (req.method === "POST" && pathname === "/admin/api/capture") {
+    const b = await readBody(req)
+    const username = String(b.username || "").trim()
+    const on = !!b.on
+    if (!username) return json(res, 400, { ok: false, err: "缺 username" })
+    // 开的时候核对用户存在（防手误抓了个不存在的名字然后干等）；关不必核——档案已删的用户也要能关掉
+    if (on && !DB.getUserByName(db, username)) return json(res, 404, { ok: false, err: "没有这个用户" })
+    const r = capture.toggle(username, on)
+    if (!r.ok) return json(res, 500, r)
+    audit("capture.toggle", { actor: "admin", ip, detail: `${username}=${on ? "on" : "off"}` })
+    return json(res, 200, { ok: true, ...capture.status() })
+  }
+  if (req.method === "GET" && pathname === "/admin/api/capture-file") {
+    const name = new URL(req.url, "http://x").searchParams.get("name") || ""
+    const buf = capture.readFile(name)
+    if (!buf) return json(res, 404, { ok: false, err: "抓包文件不存在" })
+    res.writeHead(200, {
+      "content-type": "application/json; charset=utf-8",
+      "content-disposition": `attachment; filename="${name.replace(/[^\w.@-]/g, "_")}"`,
+      "cache-control": "no-store",
+    })
+    return res.end(buf)
+  }
+  if (req.method === "POST" && pathname === "/admin/api/capture-clear") {
+    const b = await readBody(req)
+    const username = String(b.username || "").trim()
+    if (!username) return json(res, 400, { ok: false, err: "缺 username" })
+    const r = capture.clearUser(username)
+    if (!r.ok) return json(res, 500, r)
+    audit("capture.clear", { actor: "admin", ip, detail: username })
+    return json(res, 200, { ok: true, ...capture.status() })
+  }
+
   return json(res, 404, { ok: false, err: "没有这个接口" })
 }
 
@@ -1989,7 +2030,7 @@ export const server = http.createServer(async (req, res) => {
 const ctx = {
   db, CFG, log, audit, clientIp,
   authClient, json, fail,
-  queue, supply,
+  queue, supply, capture,
   resolveEntitlement: (u) => DB.resolveEntitlement(db, u),
   modelRoutes: (m) => DB.modelRoutes(db, m),
   recordUsage: (uid, rec) => DB.recordUsage(db, uid, rec),

@@ -175,7 +175,7 @@ function render(){
   $('#sub').textContent='共 '+S.total+' 个账号';
   $('#app').innerHTML=
     '<div class="tabs">'+
-      tabBtn('users','用户')+tabBtn('board','看板')+tabBtn('bill','对账')+tabBtn('tiers','档位')+tabBtn('prov','模型供应商')+tabBtn('chan','上游通道')+tabBtn('packs','技能包')+tabBtn('webpacks','界面包')+tabBtn('feedback','用户反馈')+tabBtn('audit','审计')+
+      tabBtn('users','用户')+tabBtn('board','看板')+tabBtn('bill','对账')+tabBtn('tiers','档位')+tabBtn('prov','模型供应商')+tabBtn('chan','上游通道')+tabBtn('packs','技能包')+tabBtn('webpacks','界面包')+tabBtn('feedback','用户反馈')+tabBtn('capture','抓包')+tabBtn('audit','审计')+
     '</div><div id="pane"></div>';
   Array.prototype.forEach.call(document.querySelectorAll('.tabs button'),function(b){
     b.onclick=function(){S.tab=b.dataset.k;
@@ -186,6 +186,7 @@ function render(){
       else if(S.tab==='packs')loadPacks();
       else if(S.tab==='webpacks')loadWebPacks();
       else if(S.tab==='feedback')loadFeedback();
+      else if(S.tab==='capture')loadCapture();
       else render()}});
   if(S.tab==='users')paneUsers();
   else if(S.tab==='board')paneBoard();
@@ -1772,6 +1773,38 @@ function loadAudit(){
     $('#a-go').onclick=function(){S.auEvent=$('#a-ev').value;S.auActor=$('#a-ac').value.trim();S.auOffset=0;loadAudit()};
     $('#a-prev').onclick=function(){S.auOffset=Math.max(0,S.auOffset-200);loadAudit()};
     $('#a-next').onclick=function(){S.auOffset=S.auOffset+200;loadAudit()};
+  })
+}
+
+// ---- 请求抓包：按用户抓打到 /llm 的完整请求体，验证模型实际吃到了什么 ----
+function loadCapture(){
+  $('#pane').innerHTML='<section><h2>请求抓包</h2><p class="mut">加载中…</p></section>';
+  api('capture').then(function(j){
+    if(!j.ok){if(!j.unauth)$('#pane').innerHTML='<section><div class="msg err" style="display:block">'+esc(j.err||'加载失败')+'</div></section>';return}
+    var us=(j.users||[]).map(function(u){
+      return '<span class="tag ok">'+esc(u)+'　<a href="#" class="cap-off" data-u="'+esc(u)+'" style="color:var(--bad)">停</a></span>'}).join(' ')||'<span class="mut">当前没有在抓的用户</span>';
+    var rows=(j.files||[]).map(function(f){
+      return '<tr><td class="mut" style="white-space:nowrap;font-size:12.5px">'+dt(f.ts)+'</td><td>'+esc(f.user)+'</td>'+
+        '<td><a href="/admin/api/capture-file?name='+encodeURIComponent(f.name)+'" style="color:var(--acc)">'+esc(f.name)+'</a></td>'+
+        '<td class="mut" style="white-space:nowrap">'+(f.size>1048576?(f.size/1048576).toFixed(1)+' MB':Math.max(1,Math.round(f.size/1024))+' KB')+'</td></tr>'}).join('');
+    $('#pane').innerHTML='<section><h2>请求抓包 <span class="mut">调试用：抓该用户打到模型的每一条完整请求（含系统提示、技能内容、工具结果）</span></h2>'+
+      '<div class="row"><input id="cap-u" placeholder="登录名" style="width:170px">'+
+      '<button class="btn primary" id="cap-on">开始抓</button><span class="sp"></span>'+us+'</div>'+
+      '<div class="hint" style="margin:9px 0 12px">抓到的是用户会话明文（可能含敏感数据），核完就停掉并清空；每用户最多留 300 条、超出自动删最旧的，且抓包文件满 10 天自动清除。</div>'+
+      '<table><thead><tr><th>时间</th><th>用户</th><th>文件（点击下载）</th><th>大小</th></tr></thead>'+
+      '<tbody>'+(rows||'<tr><td colspan="4" class="mut">还没抓到任何请求</td></tr>')+'</tbody></table>'+
+      '<div class="row" style="margin-top:12px"><input id="cap-cu" placeholder="要清空的登录名" style="width:170px">'+
+      '<button class="btn danger sm" id="cap-clear">清空该用户的抓包文件</button><span class="sp"></span>'+
+      '<button class="btn sm" id="cap-rf">刷新</button></div></section>';
+    $('#cap-on').onclick=function(){var u=$('#cap-u').value.trim();if(!u)return;
+      post('capture',{username:u,on:true}).then(function(r){toast(r.ok?'已开始抓 '+u+' 的请求':(r.err||'失败'),r.ok);if(r.ok)loadCapture()})};
+    Array.prototype.forEach.call(document.querySelectorAll('.cap-off'),function(a){
+      a.onclick=function(ev){ev.preventDefault();
+        post('capture',{username:a.dataset.u,on:false}).then(function(r){toast(r.ok?'已停止抓 '+a.dataset.u:(r.err||'失败'),r.ok);if(r.ok)loadCapture()})}});
+    $('#cap-clear').onclick=function(){var u=$('#cap-cu').value.trim();if(!u)return;
+      if(!confirm('删除 '+u+' 的全部抓包文件？'))return;
+      post('capture-clear',{username:u}).then(function(r){toast(r.ok?'已清空':(r.err||'失败'),r.ok);if(r.ok)loadCapture()})};
+    $('#cap-rf').onclick=loadCapture;
   })
 }
 
