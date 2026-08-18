@@ -83,8 +83,13 @@
   .sb-toggle:hover { color: var(--cyan); border-color: var(--cyan); }
   .sb-toggle .ic { width: 16px; height: 16px; }
   .sb-title { flex: 1; font-size: 13px; font-weight: 600; color: #334153; white-space: nowrap; overflow: hidden; }
+  /* 列表工具条（筛选 / 批量选择 / 刷新）：左对齐、贴在「新建项目」上沿。
+     不给它边框/底色 —— 三个小图标而已，再加一层框会把侧栏切成四段，反而看不出哪块是主内容。 */
+  /* padding-left 9px 不是随手写的：让这排小胶囊的左边缘与导航行图标的左边缘（9px 内边距）
+     对齐成一条竖线，否则它会比上下两行各差 1~2px，看着像没对齐。 */
+  #listbar { display: flex; align-items: center; justify-content: flex-start; gap: 4px; flex: none; padding: 4px 0 4px 9px; }
   body:not(.sessbar-open) .sb-title, body:not(.sessbar-open) #refreshSess, body:not(.sessbar-open) #selModeBtn, body:not(.sessbar-open) #sessions,
-  body:not(.sessbar-open) #sbnav, body:not(.sessbar-open) #newProjBtn, body:not(.sessbar-open) #fltWrap,
+  body:not(.sessbar-open) #sbnav, body:not(.sessbar-open) #listbar,
   body:not(.sessbar-open) .u-meta, body:not(.sessbar-open) #userMenuBtn { display: none; }
   body:not(.sessbar-open) #sessbar { padding: 14px 8px 10px; align-items: center; }
   body:not(.sessbar-open) .user-info { justify-content: center; padding: 12px 0 2px; }
@@ -516,11 +521,11 @@
   .mini .ic { width: 14px; height: 14px; }
   .mini:hover { color: var(--cyan); border-color: var(--cyan); }
   .mini.on { color: #fff; background: var(--cyan); border-color: var(--cyan); }
-  /* 按模块筛选会话：紧挨「新建项目」的漏斗。点开是模块清单（每条带该模块的会话数），
-     选一个就只显示该模块的会话——项目/文件夹/最近会话三处一起过滤，别只滤一半。 */
-  /* ★ 面板挂在整行 .sb-top 上、左右拉满，不挂那个 26px 宽的按钮上：按钮离侧栏右边只有几十像素，
+  /* 按模块筛选会话：列表工具条上的那个漏斗。点开是模块清单（每条带该模块的会话数），
+     选一个就只显示该模块的会话——项目/会话/空间三处一起过滤，别只滤一半。 */
+  /* ★ 面板挂在整行 #listbar 上、左右拉满，不挂那个 26px 宽的按钮上：按钮离侧栏右边只有几十像素，
      以它为锚点右对齐时 208px 的面板会整块甩出侧栏左边（实测 x=-34，前两项直接看不见）。 */
-  .sb-top { position: relative; }
+  #listbar { position: relative; }
   .fltwrap { display: inline-flex; }
   .fltpanel { position: absolute; left: 0; right: 0; top: calc(100% + 6px); z-index: 90; display: none;
     max-height: 340px; overflow-y: auto; background: #fff; border: 1px solid var(--line);
@@ -605,8 +610,6 @@
   .mshead { position: relative; display: flex; align-items: center; gap: 7px; padding: 7px 32px 7px 9px; border-radius: var(--r-sm); cursor: pointer;
     color: #334153; font-size: 12.5px; font-weight: 600; letter-spacing: .2px; user-select: none; }
   .mshead:hover { background: var(--panel-soft); color: var(--text); }
-  /* 从导航「项目」跳过来时闪一下：分区本来就在屏幕上时，展开这个动作太小，看不出发生了什么 */
-  .mshead.flash { background: var(--accent-soft); box-shadow: inset 2px 0 0 var(--cyan); }
   .mshead .caret { width: 13px; height: 13px; flex: none; color: var(--faint); transition: transform .15s; }
   .msect.collapsed > .mshead .caret { transform: rotate(-90deg); }
   .mshead .gico .ic { width: 14px; height: 14px; color: #334153; }
@@ -1926,15 +1929,6 @@
     <div class="sb-top">
       <button id="sessToggle" class="sb-toggle" type="button" title="展开会话栏"></button>
       <span class="sb-title">会话与分组</span>
-      <button id="newProjBtn" class="mini" type="button" title="新建项目"></button>
-      <!-- 按模块筛选：只看某一类会话（自由对话 / 综述撰写 / …）。清单按实际有会话的模块生成，
-           不是把所有模块都摆出来——列一堆 0 条的模块只会让人多翻几遍。 -->
-      <div class="fltwrap" id="fltWrap">
-        <button id="fltBtn" class="mini" type="button" title="按模块筛选会话"></button>
-        <div id="fltPanel" class="fltpanel"></div>
-      </div>
-      <button id="selModeBtn" class="mini" type="button" title="批量选择（勾选多个会话一次删除）"></button>
-      <button id="refreshSess" class="mini" type="button" title="刷新列表"></button>
     </div>
     <!-- ---- 主导航：入口在上、内容（项目/会话/空间）在下 ----
          「助理」= 接到微信 / 企微的那条会话；右侧两个平台图标最多亮一个，亮的那个就是点「助理」
@@ -1951,7 +1945,18 @@
           <span class="asst-ic wecom" id="asstWecom" role="button" tabindex="0" data-p="wecom"></span>
         </span>
       </div>
-      <button class="navitem" id="navProj" type="button" title="项目：把会话归到一起"><span class="ni-ic"></span><span class="ni-t">项目</span></button>
+      <!-- 列表工具条：筛选 / 批量选择 / 刷新。左对齐、贴在「新建项目」正上方。 -->
+      <div id="listbar">
+        <!-- 按模块筛选：只看某一类会话（自由对话 / 综述撰写 / …）。清单按实际有会话的模块生成，
+             不是把所有模块都摆出来——列一堆 0 条的模块只会让人多翻几遍。 -->
+        <div class="fltwrap" id="fltWrap">
+          <button id="fltBtn" class="mini" type="button" title="按模块筛选会话"></button>
+          <div id="fltPanel" class="fltpanel"></div>
+        </div>
+        <button id="selModeBtn" class="mini" type="button" title="批量选择（勾选多个会话一次删除）"></button>
+        <button id="refreshSess" class="mini" type="button" title="刷新列表"></button>
+      </div>
+      <button class="navitem" id="navProj" type="button" title="新建项目：建一个组，把会话归到一起"><span class="ni-ic"></span><span class="ni-t">新建项目</span></button>
       <button class="navitem" id="navAuto" type="button" hidden title="定时任务：到点自动跑，软件关着也照跑"><span class="ni-ic"></span><span class="ni-t">自动化</span></button>
       <button class="navitem" id="navMore" type="button" aria-expanded="false"><span class="ni-ic"></span><span class="ni-t">更多</span><span class="ni-hint">公告·分享·接入</span><span class="ni-dot" aria-hidden="true"></span></button>
     </nav>
@@ -4901,28 +4906,17 @@ sessToggle.addEventListener("click", () => {
 })
 setSessbar(localStorage.getItem("nm_sessbar") !== "0")   // 默认展开（会话列表是主导航），显式收起过才保持收起
 document.getElementById("refreshSess").addEventListener("click", loadSessions)
-document.getElementById("newProjBtn").innerHTML = ic("folderPlus")
-document.getElementById("newProjBtn").addEventListener("click", createProject)
 // ---- 侧栏主导航 ----
 // 「新建会话」「项目」「更多」在这里接线；「助理」「自动化」两条各自有可用性探测
 //（分别在聊天接入、定时任务那两段里把 hidden 摘掉），所以只在这里挂点击。
 ;(function () {
   const setNavIc = (id, name) => { const b = document.getElementById(id); if (b) b.querySelector(".ni-ic").innerHTML = ic(name) }
-  setNavIc("navNew", "plus"); setNavIc("navAsst", "sparkle"); setNavIc("navProj", "box")
+  setNavIc("navNew", "plus"); setNavIc("navAsst", "sparkle"); setNavIc("navProj", "folderPlus")
   setNavIc("navAuto", "clock"); setNavIc("navMore", "grid")
   document.getElementById("navNew").addEventListener("click", () => newConversation())
   // 「项目」不是另一个页面：点它 = 把下面那个「项目」分区展开并滚到眼前。
   // 分区默认是折叠的，没有这一步的话，用户点了导航却看不出任何变化。
-  document.getElementById("navProj").addEventListener("click", () => {
-    // 模块筛选开着且一条都没命中时，renderSessions 会早返回、根本不画分区 —— 先把筛选摘掉，
-    // 否则用户点「项目」看到的是"只看某模块 0 条"原地不动，以为按钮坏了。
-    if (moduleFilter) setModuleFilter("")
-    setSectOpen("projects", true)
-    renderSessions(META_STATE)
-    const h = sessionsEl.querySelector(".msect .mshead")
-    if (h) { h.scrollIntoView({ block: "nearest" }); h.classList.add("flash"); setTimeout(() => h.classList.remove("flash"), 900) }
-    else createProject()      // 全新账号：一条会话一个项目都没有，此时"点项目"要做的就是建一个
-  })
+  document.getElementById("navProj").addEventListener("click", () => createProject())
   // 【别把 #taskBtn 删了】它在展开态是 display:none 的，但定时任务那一整套逻辑（弹窗、
   // 可用性探测、跑完的提示）都挂在它身上；这里靠程序化 click 转发过去（隐藏元素照样派发）。
   document.getElementById("navAuto").addEventListener("click", () => document.getElementById("taskBtn").click())
