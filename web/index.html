@@ -1943,6 +1943,8 @@
          两行都在不支持的部署形态下整行不出现（同 #taskBtn 的做法）。 -->
     <nav id="sbnav">
       <button class="navitem" id="navNew" type="button" title="新建会话（在空白页上选一个功能模块开始）"><span class="ni-ic"></span><span class="ni-t">新建会话</span></button>
+      <button class="navitem" id="navProj" type="button" title="新建项目：建一个组，把会话归到一起"><span class="ni-ic"></span><span class="ni-t">新建项目</span></button>
+      <button class="navitem" id="navAuto" type="button" hidden title="新建一个定时任务：到点自动跑，软件关着也照跑"><span class="ni-ic"></span><span class="ni-t">新建定时任务</span></button>
       <!-- 【不是 <button>】这一行自己要点（开设置），右边还嵌着两个平台按钮 ——
            button 里套 button 是无效 HTML。所以是 div[role=button] + 自己接键盘。 -->
       <div class="navitem" id="navAsst" role="button" tabindex="0" hidden>
@@ -1952,8 +1954,6 @@
           <span class="asst-ic wecom" id="asstWecom" role="button" tabindex="0" data-p="wecom"></span>
         </span>
       </div>
-      <button class="navitem" id="navProj" type="button" title="新建项目：建一个组，把会话归到一起"><span class="ni-ic"></span><span class="ni-t">新建项目</span></button>
-      <button class="navitem" id="navAuto" type="button" hidden title="新建一个定时任务：到点自动跑，软件关着也照跑"><span class="ni-ic"></span><span class="ni-t">新建定时任务</span></button>
       <button class="navitem" id="navMore" type="button" aria-expanded="false"><span class="ni-ic"></span><span class="ni-t">更多</span><span class="ni-hint">公告·分享</span><span class="ni-dot" aria-hidden="true"></span></button>
     </nav>
     <!-- 原顶栏那三个「平台级」入口整体搬到这里：公告 / 分享 / 返回工作台。
