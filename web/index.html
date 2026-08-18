@@ -2806,6 +2806,16 @@ async function refreshUserBox() {
   refreshQuota()      // 骨架重建后把积分补回去（不然刚刷新完这块会空一拍）
   refreshStorage()    // 「本地数据」也在这个菜单里，打开时给个新鲜数
 }
+// ---- 点遮罩关弹窗的统一绑定 ----
+// 不能只在 click 里看 e.target === 遮罩：在输入框里按下鼠标选中文字、松手时滑出到遮罩上，
+// 浏览器会把这次 click 派发到按下/松开两点的【共同祖先】——正是遮罩本身，弹窗就被误关了
+// （实测：定时任务弹窗里选中积分数字直接关窗）。所以必须要求按下与松开都落在遮罩上才算"点了遮罩"。
+function onOverlayClick(modal, handler) {
+  let downOnOverlay = false
+  modal.addEventListener("pointerdown", (e) => { downOnOverlay = (e.target === modal) })
+  modal.addEventListener("click", (e) => { if (downOnOverlay && e.target === modal) handler(e); downOnOverlay = false })
+}
+
 // ---- 修改密码 ----
 document.getElementById("pwBtn").innerHTML = ic("key") + "<span>修改密码</span>"
 const pwModal = document.getElementById("pwModal")
@@ -2815,7 +2825,7 @@ function openPw() { ["pwCur", "pwNew", "pwNew2"].forEach(id => document.getEleme
 function closePw() { pwModal.classList.remove("on") }
 document.getElementById("pwBtn").addEventListener("click", openPw)
 document.getElementById("pwClose").addEventListener("click", closePw)
-pwModal.addEventListener("click", (e) => { if (e.target === pwModal) closePw() })
+onOverlayClick(pwModal, closePw)
 document.addEventListener("keydown", (e) => { if (e.key === "Escape" && pwModal.classList.contains("on")) closePw() })
 document.getElementById("pwSave").addEventListener("click", async () => {
   const cur = document.getElementById("pwCur").value, nw = document.getElementById("pwNew").value, nw2 = document.getElementById("pwNew2").value
@@ -4593,7 +4603,7 @@ function pickFolder(f) {
 }
 dirChip && dirChip.addEventListener("click", openDirPicker)
 document.getElementById("dirClose").addEventListener("click", closeDirPicker)
-dirModal.addEventListener("click", (e) => { if (e.target === dirModal) closeDirPicker() })
+onOverlayClick(dirModal, closeDirPicker)
 dirUpBtn.addEventListener("click", () => dirBrowse(dirUpBtn.dataset.p || ""))
 document.getElementById("dirGo").addEventListener("click", () => dirBrowse(dirPathEl.value.trim()))
 dirPathEl.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); dirBrowse(dirPathEl.value.trim()) } })
@@ -7846,7 +7856,7 @@ async function resetToGateway(force) {
 document.getElementById("apiReset").addEventListener("click", () => resetToGateway(false))
 function closeApiCfg() { apiModal.classList.remove("on") }
 document.getElementById("apiClose").addEventListener("click", closeApiCfg)
-apiModal.addEventListener("click", (e) => { if (e.target === apiModal) closeApiCfg() })
+onOverlayClick(apiModal, closeApiCfg)
 document.addEventListener("keydown", (e) => { if (e.key === "Escape" && apiModal.classList.contains("on")) closeApiCfg() })
 const apiFields = () => ({
   baseURL: document.getElementById("apiUrl").value.trim(),
@@ -7999,7 +8009,7 @@ function closeCloud(force) {
   document.body.classList.remove("locked")
 }
 document.getElementById("cloudClose").addEventListener("click", () => closeCloud())
-cloudModal.addEventListener("click", (e) => { if (e.target === cloudModal) closeCloud() })
+onOverlayClick(cloudModal, closeCloud)
 // 兜底：窗口被切走再切回来（或页面重新可见）时，若仍处于必须登录状态却没显示登录窗，就补回来。
 // 不管是什么把它关掉的，这一步都能把用户从"空界面"里捞回来。
 function reassertCloudGate() {
@@ -8245,7 +8255,7 @@ let fbSid = "", fbVote = 0, fbBusy = false
 const fbSetMsg = (t, m) => { const e = document.getElementById("fbMsg"); e.className = "mm-msg " + t; e.textContent = m }
 const closeFeedback = () => { fbModal.classList.remove("on"); fbBusy = false }
 document.getElementById("fbClose").addEventListener("click", closeFeedback)
-fbModal.addEventListener("click", (e) => { if (e.target === fbModal && !fbBusy) closeFeedback() })
+onOverlayClick(fbModal, () => { if (!fbBusy) closeFeedback() })
 document.addEventListener("keydown", (e) => { if (e.key === "Escape" && fbModal.classList.contains("on") && !fbBusy) closeFeedback() })
 for (const b of fbModal.querySelectorAll(".fb-vote")) {
   b.addEventListener("click", () => {
@@ -8742,7 +8752,7 @@ function openUiVer() {
 // 菜单的收起由上面那段统一处理（document 上的 click 也会关它），这里只管开弹窗
 uiVerBtn.addEventListener("click", openUiVer)
 document.getElementById("uiVerClose").addEventListener("click", closeUiVer)
-uiVerModal.addEventListener("click", (e) => { if (e.target === uiVerModal) closeUiVer() })
+onOverlayClick(uiVerModal, closeUiVer)
 document.addEventListener("keydown", (e) => { if (e.key === "Escape" && uiVerModal.classList.contains("on")) closeUiVer() })
 // ---- 设置：开机自启动 / 关闭时完全退出 ----
 // 两个开关都是【立即生效】的：勾上就写注册表 / 写设置文件，没有"保存"按钮。
@@ -8794,7 +8804,7 @@ document.addEventListener("keydown", (e) => { if (e.key === "Escape" && uiVerMod
   cbExit.addEventListener("change", () => save({ exitOnClose: cbExit.checked }))
   btn.addEventListener("click", open)
   document.getElementById("deskSetClose").addEventListener("click", close)
-  modal.addEventListener("click", (e) => { if (e.target === modal) close() })
+  onOverlayClick(modal, close)
   document.addEventListener("keydown", (e) => { if (e.key === "Escape" && modal.classList.contains("on")) close() })
   // 入口探测：同 uiVerBtn —— 探不到就不露出来，宁可少个入口也别给个点了报错的按钮
   ;(async () => {
@@ -9533,7 +9543,7 @@ document.addEventListener("visibilitychange", () => { if (!document.hidden) refr
     btn.addEventListener("click", function () { modal.classList.add("on"); showList() })
   }
   document.getElementById("taskClose").addEventListener("click", function () { modal.classList.remove("on") })
-  modal.addEventListener("click", function (e) { if (e.target === modal) modal.classList.remove("on") })
+  onOverlayClick(modal, function () { modal.classList.remove("on") })
 
   // 开机自检：这套部署支持定时任务吗？不支持就整个按钮不出现——让用户点开再告诉他"你用不了"
   // 只会让人以为是自己哪儿没设对。顺带把"你不在的时候跑完了什么"捞出来提示。
@@ -9771,7 +9781,7 @@ document.addEventListener("visibilitychange", () => { if (!document.hidden) refr
     jpost("api/chat-bridge/weixin/reset", {}).then(function () { setMsg(msgEl, "ok", "已解除微信绑定。"); return refresh() })
   })
   $("cbClose").addEventListener("click", function () { modal.classList.remove("on"); if (pollT) { clearInterval(pollT); pollT = null } })
-  modal.addEventListener("click", function (e) { if (e.target === modal) { modal.classList.remove("on"); if (pollT) { clearInterval(pollT); pollT = null } } })
+  onOverlayClick(modal, function () { modal.classList.remove("on"); if (pollT) { clearInterval(pollT); pollT = null } })
   if (btn) {
     btn.innerHTML = ic("msg")
     btn.addEventListener("click", function () {

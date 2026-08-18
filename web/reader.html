@@ -1901,7 +1901,10 @@ const PV_MAXTXT = 400000   // 文本/表格最多读这么多字节，几十 MB 
 
 function closePv() { $("pvMask").classList.remove("on"); $("pvBody").innerHTML = "" }
 $("pvClose").addEventListener("click", closePv)
-$("pvMask").addEventListener("click", (e) => { if (e.target === $("pvMask")) closePv() })
+// 按下与松开都在遮罩上才关：预览里拖选文字、松手滑出到遮罩时，click 会落到共同祖先（遮罩）上，误关预览
+let pvDownOnMask = false
+$("pvMask").addEventListener("pointerdown", (e) => { pvDownOnMask = (e.target === $("pvMask")) })
+$("pvMask").addEventListener("click", (e) => { if (pvDownOnMask && e.target === $("pvMask")) closePv(); pvDownOnMask = false })
 document.addEventListener("keydown", (e) => { if (e.key === "Escape" && $("pvMask").classList.contains("on")) closePv() })
 
 async function openPv(name) {
