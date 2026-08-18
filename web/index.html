@@ -657,6 +657,16 @@
   .pghead .pg-act .ic { width: 13px; height: 13px; }
   .pghead .pg-act:hover { color: var(--cyan); background: rgba(59,111,212,.12); }
   .pghead .pg-act.del:hover { color: var(--rose); background: rgba(239,68,68,.12); }
+  /* 【选中的项目】选中后新建的会话都归到它下面（点组头选中，再点一次取消）。
+     选中态不能只靠一层浅底 —— 侧栏里 hover 也是浅底，两者会糊成一样。所以是三重信号：
+     左边一条 2px 的蓝竖条 + 名字加粗 + 图标转蓝，收起状态下扫一眼也认得出是哪个组被选中。 */
+  .pgroup.selected > .pghead { background: var(--accent-soft); color: var(--cyan); box-shadow: inset 2px 0 0 var(--cyan); }
+  .pgroup.selected > .pghead .pgname { font-weight: 600; }
+  .pgroup.selected > .pghead > .gico .ic { color: var(--cyan); }
+  /* 项目组头的点击让给了「选中」，展开/收起改由折叠箭头单独承担 —— 于是箭头必须自己看起来
+     像个按钮（hover 有底色），否则用户会以为项目组不能收起来了。 */
+  .pghead .caret.hit { border-radius: 4px; padding: 2px; margin: -2px; cursor: pointer; }
+  .pghead .caret.hit:hover { background: rgba(59,111,212,.14); color: var(--cyan); }
   /* 空分组/空分区不再放"拖会话到此"的占位文案，但仍要留出一块可落点，否则高度塌成 0 就拖不进去了。
      左边那根浅色竖线是"这几条属于上面那个组"的唯一视觉纽带：同时展开两三个组时，光靠 8px 缩进
      根本分不出某一行归谁（会话行本身还比组头矮一档、字也小一号，缩进量在视觉上被稀释了）。
@@ -688,6 +698,11 @@
   .sect-label .sl-t { flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .sect-label .sl-c { flex: none; font-size: 11px; font-weight: 500; color: var(--faint); font-variant-numeric: tabular-nums;
     min-width: 16px; text-align: center; padding: 0 5px; border-radius: 9px; background: var(--panel-soft); }
+  /* 「取消选中」：只在有项目被选中时挂到「最近会话」这一行上 —— 取消之后新建的会话正是落回这里，
+     把出口放在落点旁边，用户不用去猜"怎么才能不归项目"。 */
+  .sect-label .sl-clear { flex: none; font-size: 11px; font-weight: 500; color: var(--cyan); background: rgba(59,111,212,.12);
+    border-radius: 9px; padding: 2px 7px; cursor: pointer; }
+  .sect-label .sl-clear:hover { background: rgba(59,111,212,.22); }
   /* 内联改名输入 */
   .rename-inp { width: 100%; font: inherit; font-size: 12px; padding: 4px 8px; border: 1px solid var(--cyan); border-radius: var(--r-sm); background: #fff; color: var(--text); outline: none; }
   /* 新建项目按钮 */
@@ -3831,6 +3846,24 @@ const sectOpen = (() => { try { return JSON.parse(localStorage.getItem(SECT_KEY)
 const isSectOpen = (k) => sectOpen[k] === true
 const setSectOpen = (k, v) => { sectOpen[k] = !!v; localStorage.setItem(SECT_KEY, JSON.stringify(sectOpen)) }
 
+// ---- 「选中的项目」：选中之后新建的会话自动归入它 ----
+// 【和 pendingProjectId 的分工】pendingProjectId 是一次性的（刚新建完项目，紧接着那一个新会话用掉就没了）；
+// 这个是【粘性】的 —— 选中项目 A 之后建的每一个新会话都落进 A，直到选别的项目或点「取消选中」。
+// 【为什么要持久化】它是粘性状态，刷新页面/重开软件后理应还在。不存的话，用户在一个项目里连着开
+// 三个会话，中途刷新一次，后面的会话就悄悄落回「最近会话」，而界面上没有任何东西提示他这事发生了。
+let activeProjectId = localStorage.getItem("nm_active_proj") || ""
+function setActiveProject(id) {
+  activeProjectId = id || ""
+  if (activeProjectId) localStorage.setItem("nm_active_proj", activeProjectId)
+  else localStorage.removeItem("nm_active_proj")
+  // 选中一个收起来的项目 → 顺手展开它（连同「项目」这个顶层分类）：选中的直接后果是
+  // "新会话会出现在这个组里"，组却是关着的话，用户看不到那条新会话去了哪。
+  if (activeProjectId) { collapsedProjects.delete(activeProjectId); saveCollapsed(); setSectOpen("projects", true) }
+  const p = (META_STATE.projects || []).find((x) => x.id === activeProjectId)
+  renderSessions(META_STATE)
+  toast(p ? "已选中项目「" + p.name + "」，之后新建的会话都会归到这里" : "已取消选中项目，之后新建的会话落在「最近会话」")
+}
+
 // 判断标题是不是没法看：替换字符 / 私用区 / 看不见的控制符占比过半，就当它是乱码。
 // 只在【显示】时兜底，不动服务端存的原标题 —— 用户自己重命名过的一定原样显示。
 const GARBLED = /[\uFFFD\u0000-\u0008\u000E-\u001F\uE000-\uF8FF]/g
@@ -4051,6 +4084,9 @@ document.addEventListener("keydown", (e) => { if (e.key === "Escape") fltPanel.c
 function renderSessions(data) {
   META_STATE = data && data.sessions ? { projects: data.projects || [], folders: data.folders || [], sessions: data.sessions } : { projects: [], folders: [], sessions: [] }
   const { projects, folders } = META_STATE
+  // 选中的项目被删了（或换了账号/换了机器）→ 这个 id 已经不指向任何东西。不清掉的话，新会话会去
+  // 认领一个不存在的项目：服务端要么报错要么真的写进去，而侧栏里永远看不到它。
+  if (activeProjectId && !projects.some((p) => p.id === activeProjectId)) { activeProjectId = ""; localStorage.removeItem("nm_active_proj") }
   const sessions = META_STATE.sessions.filter(passFilter)
   sessionsEl.innerHTML = ""
   syncFltBtn()
@@ -4086,14 +4122,21 @@ function renderSessions(data) {
     if (!projects.length) body.appendChild(emptyLine("还没有项目。新建一个，再把左边的会话拖进来。"))
     for (const p of projects) {
       const list = sortBucket(byProject.get(p.id) || [], "p:" + p.id)
-      const group = document.createElement("div"); group.className = "pgroup" + (collapsedProjects.has(p.id) ? " collapsed" : "")
+      const sel = p.id === activeProjectId
+      const group = document.createElement("div"); group.className = "pgroup" + (collapsedProjects.has(p.id) ? " collapsed" : "") + (sel ? " selected" : "")
       const h = groupHead({ icon: "folder", name: p.name, count: list.length, acts: [
         { icon: "edit", title: "重命名项目", fn: (nameEl) => renameProject(p.id, p.name, nameEl) },
         { icon: "trash", title: "删除项目（会话不删，变回普通会话）", danger: true, fn: () => deleteProject(p.id, p.name) },
       ] })
       const b = document.createElement("div"); b.className = "pgbody"
       for (const s of list) b.appendChild(sessRow(s, { kind: "project", id: p.id, name: p.name }))
-      h.addEventListener("click", () => { group.classList.toggle("collapsed"); collapsedProjects.has(p.id) ? collapsedProjects.delete(p.id) : collapsedProjects.add(p.id); saveCollapsed() })
+      // 组头的点击 =【选中这个项目】（再点一次取消）；展开/收起挪给左边的折叠箭头单独承担。
+      // 文件夹组不动 —— 会话的工作目录建后不可改，"选中一个文件夹再新建会话"没有对应的语义。
+      h.title = sel ? "已选中：新建的会话会归到这个项目（再点一次取消选中）" : "点一下选中这个项目——之后新建的会话都归到它下面"
+      h.addEventListener("click", () => setActiveProject(sel ? "" : p.id))
+      const caret = h.querySelector(".caret")
+      caret.classList.add("hit"); caret.title = collapsedProjects.has(p.id) ? "展开" : "收起"
+      caret.addEventListener("click", (e) => { e.stopPropagation(); group.classList.toggle("collapsed"); collapsedProjects.has(p.id) ? collapsedProjects.delete(p.id) : collapsedProjects.add(p.id); saveCollapsed(); caret.title = collapsedProjects.has(p.id) ? "展开" : "收起" })
       makeSortableList(b, "p:" + p.id, { kind: "project", id: p.id })
       makeGroupDrop(group, h, "p:" + p.id, { kind: "project", id: p.id })   // 组头始终接收；收起时整组接收
       group.append(h, b); body.appendChild(group)
@@ -4128,7 +4171,15 @@ function renderSessions(data) {
   }
 
   // 3) 最近会话（既不在项目也不在文件夹里的）—— 也是「移出项目」的拖放目标
-  sessionsEl.appendChild(sectLabel("history", "最近会话", loose.length))
+  const recentLbl = sectLabel("history", "最近会话", loose.length)
+  // 有项目被选中时，这一行多出一个「取消选中」——取消之后新建的会话正落回这里
+  if (activeProjectId) {
+    const clr = document.createElement("span"); clr.className = "sl-clear"; clr.textContent = "取消选中"
+    clr.title = "取消选中项目：之后新建的会话回到「最近会话」"
+    clr.addEventListener("click", (e) => { e.stopPropagation(); setActiveProject("") })
+    recentLbl.insertBefore(clr, recentLbl.querySelector(".sl-c"))
+  }
+  sessionsEl.appendChild(recentLbl)
   const area = document.createElement("div"); area.className = "droparea"
   for (const s of sortBucket(loose, "recent")) area.appendChild(sessRow(s))
   makeSortableList(area, "recent", { kind: "none" })
@@ -4454,16 +4505,29 @@ document.getElementById("dirNewSub").addEventListener("click", async () => {
 // 新建项目后「立刻新建对话」→ 归入该项目：createProject 时装填，紧接着建的新会话消费掉；
 // 若中途去续问/打开已有会话（不是立刻新建对话），则解除，落回「最近会话」。
 let pendingProjectId = null
+// 新会话拿到 id 的那一刻调用（SSE 的 session 事件 / 上传先建会话两条路都会调）。
+// 归属来源两个，一次性的优先：① pendingProjectId —— 刚建完项目紧接着开的这一个会话；
+// ② activeProjectId —— 侧栏里【选中】的项目，粘性的，选中期间建的每个新会话都归它。
 function consumePendingProject(newSid) {
-  if (!pendingProjectId || !newSid) return
-  const pid = pendingProjectId; pendingProjectId = null
+  const pid = pendingProjectId || activeProjectId
+  pendingProjectId = null
+  if (!pid || !newSid) return
   fetch("api/session/project?id=" + encodeURIComponent(newSid) + "&projectId=" + encodeURIComponent(pid), { method: "POST" })
-    .then(() => loadSessions()).catch(() => {})
+    .then(() => {
+      const p = (META_STATE.projects || []).find((x) => x.id === pid)
+      if (p) toast("这个新会话已归入项目「" + p.name + "」")
+      loadSessions()
+    }).catch(() => {})
 }
 async function createProject() {
   const name = prompt("项目名称：", "新项目"); if (name === null) return
   const r = await fetch("api/project/create?name=" + encodeURIComponent(name.trim() || "新项目"), { method: "POST" }).then((x) => x.json()).catch(() => null)
-  if (r?.project?.id) pendingProjectId = r.project.id     // 装填：紧接着「新建对话」的第一条新会话归入此项目
+  if (r?.project?.id) {
+    pendingProjectId = r.project.id     // 装填：紧接着「新建对话」的第一条新会话归入此项目
+    // 刚建出来的项目直接成为「选中项目」：新建项目的人下一步就是往里放会话。
+    //（这里直接改状态、不走 setActiveProject —— 列表还没刷新，那边的存在性校验会把它当成野 id 清掉。）
+    activeProjectId = r.project.id; localStorage.setItem("nm_active_proj", activeProjectId); setSectOpen("projects", true)
+  }
   loadSessions()
 }
 async function deleteProject(id, name) {
@@ -7108,6 +7172,10 @@ async function sendMessage(text) {
   }
   if (r.sid) {
     sessionId = r.sid; localStorage.setItem("nm_sid", sessionId); loadUploads(); consumePendingFolder()
+    // 会话是这一轮【现建】的 → 认领项目归属（刚建完项目的一次性归入 / 侧栏里选中的项目）。
+    // ★ 这里必须做，不能只靠 SSE 的 session 事件：/api/chat/start 的回包才是新会话 id 最早、
+    //   也最可靠的到达点；桥接续流等路径下那个事件根本不会来，会话就静悄悄落进了「最近会话」。
+    if (!mySid) consumePendingProject(r.sid)
     // 受限模块：会话一建立就把步骤条画出来。此前要等第一轮【跑完】（可能十几分钟）才出现，
     // 而那恰恰是用户最想知道"这条流程有哪几步、现在在哪"的时候。
     if (currentModule !== "chat" && !stepsHost) loadWorkflowState()
