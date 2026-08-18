@@ -5,7 +5,7 @@ import assert from "node:assert/strict"
 import fs from "node:fs"
 import os from "node:os"
 import path from "node:path"
-import { classifyRun, attachPaths, stripRefs, imageArgs, stageFiles, consumePending, stdoutAbandoned, agentSessionOf, stallReason, silenceDue, budgetTightFor, countRecentSends, budgetNotice } from "../chat-bridge/oc-wrap.mjs"
+import { classifyRun, attachPaths, stripRefs, imageArgs, stageFiles, consumePending, stdoutAbandoned, agentSessionOf, stallReason, silenceDue, budgetTightFor, countRecentSends, budgetNotice, scrubPaths, SIGNATURE } from "../chat-bridge/oc-wrap.mjs"
 
 const A = ["run", "--format", "json"]   // cc-connect 固定前缀
 const ATT = "C:\\Users\\u\\Niuma Science\\out\\.cc-connect\\attachments\\m1"
@@ -292,4 +292,31 @@ test("微信上思考不许单发：flushNewThinking 的每个调用点都要被
   }
   // 正文开始处走的是 inline 分支（写进同一条消息），它必须推进水位，否则收尾会把同一段思考再并一遍
   assert.match(src, /markThinkingSent\(\)/, "inline 写入后要调 markThinkingSent 推进水位")
+})
+
+
+// ---- 聊天里不报路径 + 结尾落款 ------------------------------------------------
+test("scrubPaths：绝对路径压成文件名，纯目录压成「会话目录」", () => {
+  assert.equal(scrubPaths("产物在 D:\\projects\\outputs\\s1\\fig.png，请查收"), "产物在 fig.png，请查收")
+  assert.equal(scrubPaths("中间文件都在 D:\\projects\\outputs\\s1 里"), "中间文件都在 会话目录 里")
+  assert.equal(scrubPaths("保存到 /app/outputs/abc/report.docx"), "保存到 report.docx")
+  assert.equal(scrubPaths("见 \\\\nas\\share\\a.pdf"), "见 a.pdf")
+})
+
+test("scrubPaths：装机目录带空格也能整段吃掉，但不吞后半句", () => {
+  assert.equal(scrubPaths("已存到 C:\\Users\\tj\\Niuma Science\\outputs\\s1\\table1.xlsx 请查收"),
+    "已存到 table1.xlsx 请查收")
+})
+
+test("scrubPaths：URL、相对文件名、纯文本一律不动", () => {
+  const keep = "详见 https://pubmed.ncbi.nlm.nih.gov/12345/ 与 report.docx，共 3 张图"
+  assert.equal(scrubPaths(keep), keep)
+  assert.equal(scrubPaths(""), "")
+  assert.equal(scrubPaths(null), "")
+})
+
+test("SIGNATURE：以换行开头、末尾无多余空行", () => {
+  assert.ok(SIGNATURE.startsWith("\n"))
+  assert.ok(SIGNATURE.includes("-----"))
+  assert.ok(SIGNATURE.trim().endsWith("来自Niuma Science科研小助手"))
 })

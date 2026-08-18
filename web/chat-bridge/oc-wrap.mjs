@@ -294,7 +294,7 @@ function resendLostReply() {
     const args2 = ["send"]
     let txt = fail.text ? String(j.text || "") : ""
     if (txt.length > 1800) txt = txt.slice(0, 1800) + "…（太长截断，全文在软件的会话里）"
-    if (txt) args2.push("-m", "📮 上一条回复当时没送到（微信的会话令牌过期了，刚才你发消息把它刷新了），补发：\n" + txt)
+    if (txt) args2.push("-m", "📮 上一条回复当时没送到（微信的会话令牌过期了，刚才你发消息把它刷新了），补发：\n" + txt + SIGNATURE)
     const files = fail.media ? (Array.isArray(j.files) ? j.files : []).filter((p) => { try { return fs.existsSync(p) } catch { return false } }).slice(0, 5) : []
     for (const p of files) args2.push(IMG_EXTS.has(path.extname(p).toLowerCase()) ? "--image" : "--file", p)
     if (args2.length <= 1) return
@@ -356,6 +356,31 @@ function zipFiles(files, workDir) {
     return out
   } catch (e) { wlog("打包产物失败（退回逐个发）：" + (e?.message || e)); return "" }
 }
+
+/**
+ * 聊天里【不报路径】：把消息里的绝对路径压成文件名，纯目录压成「会话目录」。（纯函数，导出仅为单测。）
+ * 【为什么在代码里做而不只靠提示词】用户在手机上，`D:\projects\...\outputs\<会话id>\fig.png` 这种串
+ * 既占屏又点不开——他要的是文件本身（走 cc-connect send 发过去），不是路径。提示词管不住每一次
+ * （模型顺手就写出来了），所以在出口处兜一道。软件端仍能在会话目录里看到全部文件，信息没丢，
+ * 只是不往聊天里堆。只动【绝对路径】：相对文件名（report.docx）与 URL 都不碰。
+ */
+// 路径的终止字符：空白、引号、括号、竖线，以及中文标点（否则 "…\fig.png，" 会把逗号一起吞掉）
+// （?<![\w:] 挡住 URL：https://a.cn/x 里的 "s:/" 否则会被当成盘符路径）
+// 路径里【允许空格】（装机目录就叫 "Niuma Science"），但只在这个空格后面还有分隔符时才吃进来，
+// 否则 "…\table1.xlsx 请查收" 会把后半句一起吞掉。
+const WIN_ABS = /(?<![\w:])(?:[A-Za-z]:|\\\\[^\s"'`<>|*?\n)\]\\/，。、；：！？」）】]+)[\\/](?:[^\s"'`<>|*?\n)\]，。、；：！？」）】]| (?=[^ ]*[\\/]))*/g
+const NIX_ABS = /(?<![\w.:/])\/(?:home|root|app|mnt|srv|opt|Users|tmp|var|outputs)\/(?:[^\s"'`<>|*?\n)\]，。、；：！？」）】]| (?=[^ ]*\/))*/g
+export function scrubPaths(text) {
+  const one = (m) => {
+    const clean = m.replace(/[\\/]+$/, "").replace(/[.,;:]+$/, "")
+    const seg = clean.split(/[\\/]/).pop() || ""
+    return /\.[A-Za-z0-9]{1,8}$/.test(seg) ? seg : "会话目录"
+  }
+  return String(text ?? "").replace(WIN_ABS, one).replace(NIX_ABS, one)
+}
+
+// 每轮回复末尾的落款（一轮只加一次：优先加在正文那条，没有正文才加在附件那条）。
+export const SIGNATURE = "\n\n-----\n来自Niuma Science科研小助手"
 
 /** 这个平台的发送预算紧不紧（纯函数，导出仅为单测）。 */
 export const budgetTightFor = (p) => p === "weixin"
@@ -723,6 +748,8 @@ function runOpencode(stdinText, extraFiles = []) {
 
   rl.on("line", (line) => {
     lastEventAt = Date.now()   // 有任何一行输出就算"有动静"，静默播报据此计时
+    // 默认原样放行；正文事件里若把路径抹掉了，就改发重新序列化的那一行（见 type === "text"）
+    let emit = line
     const t = line.trim()
     if (t.startsWith("{")) {
       try {
@@ -764,7 +791,15 @@ function runOpencode(stdinText, extraFiles = []) {
         }
         if (type === "text") {
           const id = evt?.part?.id || "t0"
-          const txt = String(evt?.part?.text ?? evt?.text ?? "")
+          const raw0 = String(evt?.part?.text ?? evt?.text ?? "")
+          // 【出口处抹掉绝对路径】手机上路径既点不开又占屏，用户要的是文件本身（走 send 发过去）。
+          // 改写事件后必须重新序列化整行——下面兜底的 out(emit) 发的是这一行的字面量。
+          const txt = scrubPaths(raw0)
+          if (txt !== raw0) {
+            if (evt?.part && "text" in evt.part) evt.part.text = txt
+            if ("text" in evt) evt.text = txt
+            emit = JSON.stringify(evt)
+          }
           if (txt) {
             if (!answer.has(id)) answerOrder.push(id); answer.set(id, txt)
             // 软件侧的 text 事件按【累计全文】语义（与网关直播同口径），所以这里也发全文
@@ -805,7 +840,7 @@ function runOpencode(stdinText, extraFiles = []) {
         }
       } catch { /* 非 JSON 行原样放行 */ }
     }
-    out(line + "\n")
+    out(emit + "\n")
   })
 
   const IMG = new Set([".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp"])
@@ -868,6 +903,10 @@ function runOpencode(stdinText, extraFiles = []) {
       const tail = pendingThinkingText()
       if (tail) { out("\n\n———\n💭 " + tail + "\n"); wlog("思考尾巴并入答案（微信合并策略）") }
     }
+    // 落款：【一轮只加一次，且加在整条消息的最后】。首选正文这条（走 stdout，不额外吃额度）；
+    // 没有正文的轮次（只发文件）落到下面的附件消息上。
+    let signed = false
+    if (answerText.trim()) { out(SIGNATURE + "\n"); signed = true }
     saveLastReply(answerText, toSend)
 
     // ---- 抢救被抛弃的回复 ----------------------------------------------------
@@ -889,6 +928,8 @@ function runOpencode(stdinText, extraFiles = []) {
         wlog(`⚠ 本轮 stdout 被 cc-connect 抛弃（出队首条），改用 send 补推答案 ${answerText.length} 字`)
         rescueMsg = "📮 刚才那条「(空响应)」是软件的问题：你连着发消息时，前一条还没答完，这一轮的回复被弄丢了。\n" +
           "**你的指令已经执行**，下面是完整回复：\n\n" + answerText
+        // 这条 send 才是用户真正看到的那一条（stdout 那份没人接），落款跟着它走
+        if (!signed) { rescueMsg += SIGNATURE; signed = true }
       }
     }
     // 【和文件补发合并成一条 send，别各发各的】两条 send 并发时，先回调的那条会 process.exit()，
@@ -920,8 +961,9 @@ function runOpencode(stdinText, extraFiles = []) {
     // 【只能有一个 -m】抢救文案与"中间文件"提示要拼成一段，push 两次 -m 会被后一个覆盖，
     // 抢救文案（也就是本轮真正的答案）就又丢了。
     const heldNote = held > 0 ? `📎 本轮的交付物在下面；另有 ${held} 个中间文件留在软件的会话目录里，可在软件端查看或打包下载。` : ""
-    const oneMsg = [rescueMsg, zipNote, heldNote].filter(Boolean).join("\n\n")
-    if (oneMsg) sendArgs.push("-m", oneMsg)
+    // 没有正文的轮次（只发文件）：落款补在这条附件消息上，保证每轮都有且只有一个落款。
+    const oneMsg = [rescueMsg, zipNote, heldNote].filter(Boolean).join("\n\n") + (signed ? "" : SIGNATURE)
+    if (oneMsg.trim()) sendArgs.push("-m", oneMsg.replace(/^\n+/, ""))
     for (const f of toSend) sendArgs.push(IMG.has(path.extname(f).toLowerCase()) ? "--image" : "--file", f)
     // 排障日志走独立文件（SCI_WRAP_LOG 由 chat-bridge 注入）。【不能写 stderr】：run 结束后的
     // stderr 会被 cc-connect 当成 "unsolicited agent error" 记 ERROR，吓人且污染真实错误的检索。
