@@ -405,10 +405,12 @@ async function main() {
           // 【别吞 per-platform 的真错误】pushToChat 走到发送层后失败时顶层没有 err，
           // 具体原因在 results[].err 里；此前只看顶层，界面上永远是兜底的"令牌过期"文案，
           // 真因（如漏 --data-dir 连错 socket）被完全遮住，排查空转了一整轮。
-          const realErr = pr?.body?.err ||
-            (Array.isArray(pr?.body?.results) ? pr.body.results.filter((r) => r && !r.ok).map((r) => r.err).filter(Boolean).join("；") : "")
-          log(`[push] ${pr?.body?.ok ? "已推送到聊天接入" : "未推送（" + (realErr || "?") + "）"}`)
+          const failedErrs = (Array.isArray(pr?.body?.results) ? pr.body.results.filter((r) => r && !r.ok).map((r) => r.err).filter(Boolean) : []).join("；")
+          const realErr = pr?.body?.err || failedErrs
+          log(`[push] ${pr?.body?.ok ? "已推送到聊天接入" + (failedErrs ? "（部分平台失败）" : "") : "未推送（" + (realErr || "?") + "）"}`)
           if (!pr?.body?.ok) rec.notices.push("没推送到微信/企微：" + (realErr || "推送失败（未拿到具体原因，可查 chat-bridge\\bridge.log）"))
+          // 整体 ok 但有平台没推到（勾"全部"时企微/微信一边成一边败）也要说，不然那半份就静默丢了
+          else if (failedErrs) rec.notices.push("部分平台没推送到：" + failedErrs)
         } catch (e) { log("[push] 推送异常：" + (e?.message || e)); rec.notices.push("推送微信/企微时出错：" + String(e?.message || e).slice(0, 120)) }
       }
     }

@@ -23,6 +23,8 @@ import os from "node:os"
 import crypto from "node:crypto"
 import { spawn, execFileSync, execFile } from "node:child_process"
 import * as WF from "./workflows.mjs"
+// 落款常量与交互式回复共用一份（oc-wrap 有 isMain 守卫，import 无副作用）
+import { SIGNATURE } from "./chat-bridge/oc-wrap.mjs"
 
 const BLOCK_START = "<!-- sci-chat-bridge:start 由「聊天接入」自动注入，解绑时自动移除，请勿手工编辑 -->"
 const BLOCK_END = "<!-- sci-chat-bridge:end -->"
@@ -626,7 +628,10 @@ function parseLog() {
   const per = { wecom: { subscribed: false, seenUsers: [], lastSession: "" }, weixin: { subscribed: false, seenUsers: [], lastSession: "" } }
   let lastErr = ""
   try {
-    const tail = fs.readFileSync(logPath(), "utf8").split(/\r?\n/).slice(-600)
+    // 窗口别太小：思考流式推送一轮就能写几百行日志，600 行会把几小时前的 message received
+    // 挤出窗外 → lastSession 丢失、明明说过话的平台推不出去。整个文件反正已经读进来了，
+    // 多扫几千行没有额外 IO；2 万行足够覆盖一整天的高频使用。
+    const tail = fs.readFileSync(logPath(), "utf8").split(/\r?\n/).slice(-20000)
     for (const ln of tail) {
       if (ln.includes("wecom-ws: connecting")) per.wecom.subscribed = false
       if (ln.includes("wecom-ws: subscribed successfully")) per.wecom.subscribed = true
@@ -703,19 +708,28 @@ export async function pushToChat({ text, files, dir: workDir, only } = {}) {
   //      却两边各收一份，这个参数就是让他能指定推给谁。
   //   ② 绑了这个产物目录的平台（聊天里直接对话的场景，目录就是绑定目录）。
   //   ③ 都认不出来 → 推所有在线平台（历史行为，pushTo 留空时保持不变）。
-  let targets = []
-  if (only && PLATFORMS.includes(only)) targets = [only]
+  let wanted = []
+  if (only && PLATFORMS.includes(only)) wanted = [only]
   else {
     const byDir = workDir ? platformOfDir(workDir) : null
-    targets = byDir ? [byDir] : activePlats(s).filter((p) => per[p].subscribed)
+    // ③ 的口径是【已配置绑定的平台】而不是"此刻碰巧 subscribed 的"：用户勾"全部"时心里想的
+    //   是他配过的两个平台；哪个推不出去要【落一条失败说清原因】，不能悄悄从名单里划掉——
+    //   2026-08-18 真机：企微自桥重启后没收过消息、拿不到会话 key，被静默跳过，用户只看到
+    //   "微信推到了"，完全不知道企微那份丢在了哪。
+    wanted = byDir ? [byDir] : activePlats(s)
   }
-  targets = targets.filter((p) => per[p].subscribed && per[p].lastSession)
+  // 发送必须有会话 key（cc-connect send -s；key 只能从日志的来信里提取，桥重启后要用户先说一句话）。
+  // 不够格的平台不丢弃，转成 results 里的失败条目，让运行记录 notices 能给出确切原因。
+  const skipped = wanted.filter((p) => !(per[p].subscribed && per[p].lastSession)).map((p) => ({
+    ok: false, platform: p,
+    err: `${PLAT_CN[p] || p}${!per[p].subscribed ? "当前没连上" : "还没有可推送的对话（桥启动后没跟机器人说过话，会话 key 未知）"}——在${PLAT_CN[p] || p}里给机器人发条消息后即可推送`,
+  }))
+  const targets = wanted.filter((p) => per[p].subscribed && per[p].lastSession)
   if (!targets.length) {
-    // 点名了却推不出去，要说清是"这个平台没连上"，不能笼统说"没有已连接的对话"——
+    // 一个都推不出去，要说清是"这个平台没连上"，不能笼统说"没有已连接的对话"——
     // 用户明明在另一个平台上聊着天，那句话只会让他以为是软件坏了。
-    return { ok: false, err: only
-      ? `${PLAT_CN[only] || only}没有可推送的对话（没连上，或还没跟机器人说过话）`
-      : "没有可推送的已连接对话（先在微信/企微里跟机器人说句话）" }
+    return { ok: false, err: skipped.length ? skipped.map((r) => r.err).join("；")
+      : "没有可推送的已连接对话（先在微信/企微里跟机器人说句话）", results: skipped }
   }
 
   // 【只推主产物】定时任务传来的是 /api/outputs 的整张清单（含中间文件，文件夹会话里还含
@@ -732,6 +746,10 @@ export async function pushToChat({ text, files, dir: workDir, only } = {}) {
   const picked = rels.map((r) => byRel.get(r))
   if (held > 0) text = (text ? text + "\n" : "") + `（另有 ${held} 个中间文件留在软件的会话目录里，可在软件端查看或打包下载）`
   if (!text && !picked.length) return { ok: false, err: "没有可推送的内容" }
+  // 落款与交互式回复同一份（oc-wrap 的 SIGNATURE）：用户要求推到微信/企微的每条消息都带
+  // 「来自Niuma Science科研小助手」。主动推送一轮就一条消息，直接缀在正文尾；
+  // 纯文件无正文时单独作为文案带上（与 oc-wrap 附件轮的做法一致）。
+  text = text ? text + SIGNATURE : SIGNATURE.replace(/^\s+/, "")
 
   // 投递看门狗的暂存（与 oc-wrap 同一份 .cc-connect\last-reply.json）：个人微信没有长连接，
   // 定时任务到点推送时用户往往几小时没跟机器人说过话，会话令牌必然过期、推送大概率被拒——
@@ -759,7 +777,7 @@ export async function pushToChat({ text, files, dir: workDir, only } = {}) {
     execFile(ccBin(), args, { windowsHide: true, env: { ...process.env, CC_DATA_DIR: ccDataDir() } },
       (err, _o, se) => resolve(err ? { ok: false, platform: p, err: (String(se) || err.message || "").slice(0, 150) } : { ok: true, platform: p, session: per[p].lastSession }))
   })
-  const results = await Promise.all(targets.map(sendOne))
+  const results = [...await Promise.all(targets.map(sendOne)), ...skipped]
   const ok = results.some((r) => r.ok)
   return { ok, results }
 }
