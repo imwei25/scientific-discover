@@ -22,7 +22,6 @@ import path from "node:path"
 import os from "node:os"
 import crypto from "node:crypto"
 import { spawn, execFileSync, execFile } from "node:child_process"
-import * as WF from "./workflows.mjs"
 // 落款常量与交互式回复共用一份（oc-wrap 有 isMain 守卫，import 无副作用）
 import { SIGNATURE } from "./chat-bridge/oc-wrap.mjs"
 
@@ -688,15 +687,6 @@ export function boundInfo() {
 
 // ---- 主动推送（定时任务跑完发到绑定的微信/企微对话）----
 const IMG_EXT = new Set([".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp"])
-// 会话目录里的 _workflow.json（网关写的簿子）→ 模块 + 表单值，供产物分级判主/副。
-// 不 import wf-state 只为读两个字段：那边还带着写入/记账逻辑，这里只要读。
-function workflowOf(d) {
-  try {
-    const st = JSON.parse(fs.readFileSync(path.join(d, "_workflow.json"), "utf8"))
-    if (!st || typeof st.module !== "string") return { mod: "", values: null }
-    return { mod: st.module, values: st.form && typeof st.form === "object" ? st.form : null }
-  } catch { return { mod: "", values: null } }
-}
 // 定时任务的产物在某会话目录里 → 推给"绑了这个目录的那个平台"。目录没被任何平台绑就不推。
 export async function pushToChat({ text, files, dir: workDir, only } = {}) {
   const s = loadState()
@@ -732,19 +722,24 @@ export async function pushToChat({ text, files, dir: workDir, only } = {}) {
       : "没有可推送的已连接对话（先在微信/企微里跟机器人说句话）", results: skipped }
   }
 
-  // 【只推主产物】定时任务传来的是 /api/outputs 的整张清单（含中间文件，文件夹会话里还含
-  // 用户自己原有的资料）。原来只按扩展名排掉 py/log/tmp，于是一次跑完能把十几个中间文件
-  // 轰到手机上——判据改成与界面侧栏同一份（WF.pickChatFiles），中间文件只在文案里报个数。
-  const MAX_FILES = 5, MAX_BYTES = 20 * 1024 * 1024
-  const sized = (files || []).filter((f) => {
-    try { const st = fs.statSync(f); return st.size > 0 && st.size <= MAX_BYTES } catch { return false }
-  })
-  const wf = workflowOf(workDir)
-  const byRel = new Map()
-  for (const f of sized) byRel.set(workDir ? path.relative(workDir, f).replace(/\\/g, "/") : path.basename(f), f)
-  const { send: rels, held } = WF.pickChatFiles([...byRel.keys()], { mod: wf.mod, values: wf.values, max: MAX_FILES })
-  const picked = rels.map((r) => byRel.get(r))
-  if (held > 0) text = (text ? text + "\n" : "") + `（另有 ${held} 个中间文件留在软件的会话目录里，可在软件端查看或打包下载）`
+  // 【尺寸是唯一门槛（2026-08-18 用户定的规则）】≤15MB 一律直接当附件推；超过 15MB 才落
+  // "在软件端查看或打包下载"的告知——且要**点名**是哪个文件，不能悄悄丢。
+  // 主/中间产物的筛选是【调用方】的事（定时任务传 mainOutputs、push-chat 技能传用户点名的
+  // 文件）；这里原来再过一道 pickChatFiles，结果把用户明确要推的文件当"中间文件"扣下了。
+  const MAX_FILES = 5, MAX_BYTES = 15 * 1024 * 1024
+  const notes = [], oversize = [], sendable = []
+  for (const f of files || []) {
+    try {
+      const st = fs.statSync(f)
+      if (!st.size) continue                                    // 空文件推过去也打不开，静默跳过
+      if (st.size > MAX_BYTES) oversize.push(path.basename(f))
+      else sendable.push(f)
+    } catch { notes.push(`${path.basename(f)} 读取失败，未随消息发送`) }
+  }
+  const picked = sendable.slice(0, MAX_FILES)
+  if (sendable.length > MAX_FILES) notes.push(`另有 ${sendable.length - MAX_FILES} 个文件未随消息发送（一次最多 ${MAX_FILES} 个），可在软件端查看或打包下载`)
+  if (oversize.length) notes.push(`${oversize.join("、")} 超过 15MB，请在软件端查看或打包下载`)
+  if (notes.length) text = (text ? text + "\n" : "") + "（" + notes.join("；") + "）"
   if (!text && !picked.length) return { ok: false, err: "没有可推送的内容" }
   // 落款与交互式回复同一份（oc-wrap 的 SIGNATURE）：用户要求推到微信/企微的每条消息都带
   // 「来自Niuma Science科研小助手」。主动推送一轮就一条消息，直接缀在正文尾；

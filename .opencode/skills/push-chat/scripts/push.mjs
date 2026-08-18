@@ -35,7 +35,7 @@ for (const f of files) {
   const p = path.resolve(f)
   if (!fs.existsSync(p)) { console.log(`FAIL 文件不存在：${f}（解析为 ${p}）——检查路径后重试`); process.exit(1) }
   const sz = fs.statSync(p).size
-  if (sz > 20 * 1024 * 1024) { console.log(`FAIL ${f} 有 ${(sz / 1048576).toFixed(1)}MB，超过单文件 20MB 上限——换成更小的文件（如推 md 而不是 pdf），或压缩后再推`); process.exit(1) }
+  if (sz > 15 * 1024 * 1024) { console.log(`FAIL ${f} 有 ${(sz / 1048576).toFixed(1)}MB，超过单文件 15MB 上限——超限文件请用户在软件端查看或打包下载；也可换更小的产物（如推 md 而不是 pdf）或压缩后再推`); process.exit(1) }
   abs.push(p)
 }
 if (abs.length > 5) console.log(`INFO 一次最多 5 个文件，只推前 5 个：${abs.slice(0, 5).map((p) => path.basename(p)).join("、")}`)
