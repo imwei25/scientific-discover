@@ -635,6 +635,13 @@
   /* 空分类/空分组的说明。字号压到 11px、行高放宽——它是"教你怎么用"的旁注，不该和会话行抢注意力。
      左内边距对齐分组名的起笔（9px），别让它比会话行还往外凸。 */
   .grp-empty { color: var(--faint); font-size: 11px; line-height: 1.65; padding: 2px 10px 6px 9px; }
+  /* 侧栏「定时任务」分区里的任务行：一行名字 + 一行频率，整行可点进编辑 */
+  .tksrow { padding: 5px 9px 6px; border-radius: 8px; cursor: pointer; }
+  .tksrow:hover { background: var(--panel-soft); }
+  .tksrow:focus-visible { outline: 2px solid var(--cyan); outline-offset: -2px; }
+  .tksrow .tks-name { font-size: 12.5px; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .tksrow.off .tks-name { color: var(--muted); text-decoration: line-through; }
+  .tksrow .tks-meta { margin-top: 1px; font-size: 11px; color: var(--faint); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   /* 项目 / 文件夹分组 */
   .pgroup { margin-bottom: 2px; }
   /* padding-right 常驻 48px：右边两个动作图标是绝对定位浮上来的（最左那个的左边缘在 right:47px 处），
@@ -749,8 +756,8 @@
   /* 「新建会话」是主动作：给它一层描边，与下面几条导航区分开 */
   #navNew { border: 1px solid var(--line); background: var(--panel); margin-bottom: 5px; }
   #navNew:hover { border-color: var(--cyan); background: var(--panel-soft); }
-  /* 助理行右侧的两个平台图标：微信 / 企微。最多一个是「亮」的（= 点「助理」进的是它那条会话）；
-     没配置的那个是灰的、点它直接开「聊天接入」设置，而不是假装能切过去。 */
+  /* 「手机接入」行右侧的两个平台图标：微信 / 企微。接好的都亮，点谁就跳到谁最新的那条会话；
+     没配置的是灰的、点它直接开「聊天接入」设置，而不是假装能跳。 */
   .asst-ics { flex: none; display: inline-flex; align-items: center; gap: 2px; }
   .asst-ic { width: 22px; height: 22px; display: grid; place-items: center; padding: 0; border: 0; border-radius: 6px;
     background: transparent; color: var(--faint); opacity: .45; cursor: pointer; transition: opacity .12s, background .12s, color .12s; }
@@ -761,16 +768,12 @@
   /* 接过、但这一刻桥没连上（登录过期 / cc-connect 没起来）：颜色还在，加一圈虚线并压一档，
      配合 tooltip 说明。全绿会让人以为手机上发消息一定收得到。 */
   .asst-ic.stale { box-shadow: inset 0 0 0 1px currentColor; opacity: .6; }
-  /* 已配置但没亮（另一个亮着）：比未配置的清楚一档，让用户看得出"这个也能点" */
-  .asst-ic.ready { opacity: .75; }
-  .asst-ic.wx.ready { color: #07c160; }
-  .asst-ic.wecom.ready { color: #2f7dd1; }
 
-  /* 「更多」里那排图标（公告 / 更新说明 / 分享 / 聊天接入）：默认收着，点「更多」才出现。
+  /* 「更多」里那排图标（公告 / 更新说明 / 分享）：默认收着，点「更多」才出现。
      它们都不是高频动作，常驻一行只会把导航压长。 */
   body.sessbar-open:not(.more-open) #sbtools { display: none; }
   /* 展开态下这两个由「自动化」「新建会话」两条导航承担，收起态（没有导航）必须还给竖条 */
-  body.sessbar-open #sbtools #taskBtn, body.sessbar-open #sbtools #wsBtn { display: none; }
+  body.sessbar-open #sbtools #taskBtn, body.sessbar-open #sbtools #wsBtn, body.sessbar-open #sbtools #bridgeBtn { display: none; }
 
   /* upload dropzone */
   #up { display: none; }
@@ -1930,24 +1933,25 @@
       <button id="sessToggle" class="sb-toggle" type="button" title="展开会话栏"></button>
       <span class="sb-title">会话与分组</span>
     </div>
-    <!-- ---- 主导航：入口在上、内容（项目/会话/空间）在下 ----
-         「助理」= 接到微信 / 企微的那条会话；右侧两个平台图标最多亮一个，亮的那个就是点「助理」
-         会进去的地方。没配置的平台亮不起来（点它直接开「聊天接入」设置，而不是假装能切）。
-         「自动化」= 定时任务；不支持的部署形态下整行不出现（同 #taskBtn 的做法）。 -->
+    <!-- ---- 主导航：入口在上、内容（项目/会话/空间/定时任务）在下 ----
+         「手机接入」行本身 = 打开聊天接入设置；右侧微信/企微图标 = 各自跳到该平台最新的那条会话
+         （没接入的平台是灰的，点它也进设置——别假装能跳）。
+         「新建定时任务」直接开新建表单；已有任务的列表在下方「定时任务」分区。
+         两行都在不支持的部署形态下整行不出现（同 #taskBtn 的做法）。 -->
     <nav id="sbnav">
       <button class="navitem" id="navNew" type="button" title="新建会话（在空白页上选一个功能模块开始）"><span class="ni-ic"></span><span class="ni-t">新建会话</span></button>
-      <!-- 【不是 <button>】这一行自己要点（进会话），右边还嵌着两个平台按钮 ——
+      <!-- 【不是 <button>】这一行自己要点（开设置），右边还嵌着两个平台按钮 ——
            button 里套 button 是无效 HTML。所以是 div[role=button] + 自己接键盘。 -->
       <div class="navitem" id="navAsst" role="button" tabindex="0" hidden>
-        <span class="ni-ic"></span><span class="ni-t">助理</span>
+        <span class="ni-ic"></span><span class="ni-t">手机接入</span>
         <span class="asst-ics">
           <span class="asst-ic wx" id="asstWx" role="button" tabindex="0" data-p="weixin"></span>
           <span class="asst-ic wecom" id="asstWecom" role="button" tabindex="0" data-p="wecom"></span>
         </span>
       </div>
       <button class="navitem" id="navProj" type="button" title="新建项目：建一个组，把会话归到一起"><span class="ni-ic"></span><span class="ni-t">新建项目</span></button>
-      <button class="navitem" id="navAuto" type="button" hidden title="定时任务：到点自动跑，软件关着也照跑"><span class="ni-ic"></span><span class="ni-t">自动化</span></button>
-      <button class="navitem" id="navMore" type="button" aria-expanded="false"><span class="ni-ic"></span><span class="ni-t">更多</span><span class="ni-hint">公告·分享·接入</span><span class="ni-dot" aria-hidden="true"></span></button>
+      <button class="navitem" id="navAuto" type="button" hidden title="新建一个定时任务：到点自动跑，软件关着也照跑"><span class="ni-ic"></span><span class="ni-t">新建定时任务</span></button>
+      <button class="navitem" id="navMore" type="button" aria-expanded="false"><span class="ni-ic"></span><span class="ni-t">更多</span><span class="ni-hint">公告·分享</span><span class="ni-dot" aria-hidden="true"></span></button>
     </nav>
     <!-- 原顶栏那三个「平台级」入口整体搬到这里：公告 / 分享 / 返回工作台。
          都不是会话内容，跟上面的会话列表不是一类，所以贴着用户块单独一行；
@@ -1971,7 +1975,9 @@
       <!-- 定时任务：到点自动跑，软件关着也照跑（Windows）。不支持的部署形态下整个按钮隐藏，
            而不是点开告诉用户"你用不了"——那只会让人以为是自己哪儿没设对。 -->
       <button id="taskBtn" class="hbtn" type="button" title="定时任务：到点自动跑，软件关着也照跑" hidden></button>
-      <!-- 聊天接入：把某个会话接到企业微信/微信，在手机上使唤它。仅 Windows 桌面版（带 cc-connect 组件）出现 -->
+      <!-- 聊天接入：【别删】设置入口已上移到导航「手机接入」行（openBridgeSetup 靠程序化 click
+           转发到它），所以展开态它从「更多」那排里 display:none 掉；收起态（没有导航行）仍以
+           竖条图标出现，不然收着栏的用户就没有任何入口了。 -->
       <button id="bridgeBtn" class="hbtn" type="button" title="聊天接入：把会话接到企业微信，在手机上继续干活" hidden></button>
       <button id="wsBtn" class="hbtn" type="button" title="返回模块工作台（换个功能开新会话）"></button>
     </div>
@@ -2569,6 +2575,7 @@ const ICONS = {
   logout: '<path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/>',
   key: '<circle cx="7.5" cy="15.5" r="4.5"/><path d="m21 2-9.6 9.6"/><path d="m15.5 7.5 3 3L22 7l-3-3"/>',
   sparkle: '<path d="M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9Z"/><path d="M18.5 15.5l.7 1.8 1.8.7-1.8.7-.7 1.8-.7-1.8-1.8-.7 1.8-.7Z"/>',
+  phone: '<rect x="7" y="2.5" width="10" height="19" rx="2.5"/><path d="M11 18.5h2"/>',
   plus: '<path d="M12 5v14"/><path d="M5 12h14"/>',
   megaphone: '<path d="M3 11v2a1 1 0 0 0 1 1h2l6 4V6L6 10H4a1 1 0 0 0-1 1Z"/><path d="M16 8.5a4 4 0 0 1 0 7"/><path d="M8 15v4"/>',
   feedback: '<path d="M21 15a2 2 0 0 1-2 2H8l-4 3V6a2 2 0 0 1 2-2h13a2 2 0 0 1 2 2Z"/><path d="M9 10h7"/><path d="M9 13.5h4"/>',
@@ -4306,12 +4313,42 @@ function renderSessions(data) {
     sessionsEl.appendChild(wrap)
   }
 
-  // 助理那条要跟着会话列表走：微信侧另开的新会话，它取的正是这份列表里最近的一条。
+  // 4) 定时任务（默认折叠；仅支持定时任务的部署形态出现）—— 已建任务的常驻入口。
+  //    数据由定时任务那段维护（开机探测一次 + 每次增删改后回调），这里只管画：
+  //    点一条 = 进编辑；右上角 ＋ = 新建（与导航「新建定时任务」同路）。
+  if (window.__tasksSupported) {
+    const ts = window.__tasks || []
+    const { wrap, body } = sectionBlock("tasks", "clock", "定时任务", ts.length,
+      [{ icon: "plus", title: "新建定时任务", fn: () => window.__openTaskNew && window.__openTaskNew() }])
+    if (!ts.length) body.appendChild(emptyLine("还没有定时任务。点上面的 ＋ 新建一个，到点自动跑，软件关着也照跑。"))
+    for (const t of ts) {
+      const row = document.createElement("div")
+      row.className = "tksrow" + (t.enabled === false ? " off" : "")
+      row.setAttribute("role", "button"); row.tabIndex = 0
+      const name = document.createElement("div"); name.className = "tks-name"; name.textContent = t.title || "（未命名任务）"
+      const meta = document.createElement("div"); meta.className = "tks-meta"
+      meta.textContent = (window.__fmtTaskSchedule ? window.__fmtTaskSchedule(t.schedule) : "")
+        + (t.enabled === false ? "　·　已停用" : "")
+        + (t.registered === false ? "　⚠ 未注册" : "")
+      row.title = "点一下编辑这个任务"
+      row.append(name, meta)
+      const open = () => window.__openTaskEdit && window.__openTaskEdit(t.id)
+      row.addEventListener("click", open)
+      row.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); open() } })
+      body.appendChild(row)
+    }
+    sessionsEl.appendChild(wrap)
+  }
+
+  // 手机接入那条要跟着会话列表走：微信侧另开的新会话，平台图标跳的正是这份列表里最近的一条。
   // try 是给"首屏渲染早于 asstBridge 初始化"那一瞬兜底的（let 有暂时性死区），不是在吞错。
   try { paintAsst() } catch (e) {}
   updateSelBar()
   updateDirChip()   // 列表回来了才知道当前会话挂在哪个文件夹下，输入框下面那块要跟着变
 }
+
+// 定时任务那段在数据变化（探测就绪、增删改、启停）时喊一声：重画侧栏，让分区数字和任务行跟上
+window.__onTasksChanged = () => { try { renderSessions(META_STATE) } catch (e) {} }
 
 // 分组/分类里的空态说明。空分组不写点什么的话就是一条 18px 的空白，用户不知道自己该干嘛。
 function emptyLine(text) {
@@ -4918,20 +4955,21 @@ sessToggle.addEventListener("click", () => {
 setSessbar(localStorage.getItem("nm_sessbar") !== "0")   // 默认展开（会话列表是主导航），显式收起过才保持收起
 document.getElementById("refreshSess").addEventListener("click", loadSessions)
 // ---- 侧栏主导航 ----
-// 「新建会话」「项目」「更多」在这里接线；「助理」「自动化」两条各自有可用性探测
+// 「新建会话」「项目」「更多」在这里接线；「手机接入」「新建定时任务」两条各自有可用性探测
 //（分别在聊天接入、定时任务那两段里把 hidden 摘掉），所以只在这里挂点击。
 ;(function () {
   const setNavIc = (id, name) => { const b = document.getElementById(id); if (b) b.querySelector(".ni-ic").innerHTML = ic(name) }
-  setNavIc("navNew", "plus"); setNavIc("navAsst", "sparkle"); setNavIc("navProj", "folderPlus")
+  setNavIc("navNew", "plus"); setNavIc("navAsst", "phone"); setNavIc("navProj", "folderPlus")
   setNavIc("navAuto", "clock"); setNavIc("navMore", "grid")
   document.getElementById("navNew").addEventListener("click", () => newConversation())
   // 「项目」不是另一个页面：点它 = 把下面那个「项目」分区展开并滚到眼前。
   // 分区默认是折叠的，没有这一步的话，用户点了导航却看不出任何变化。
   document.getElementById("navProj").addEventListener("click", () => createProject())
   // 【别把 #taskBtn 删了】它在展开态是 display:none 的，但定时任务那一整套逻辑（弹窗、
-  // 可用性探测、跑完的提示）都挂在它身上；这里靠程序化 click 转发过去（隐藏元素照样派发）。
-  document.getElementById("navAuto").addEventListener("click", () => document.getElementById("taskBtn").click())
-  // 「更多」= 展开公告 / 更新说明 / 分享 / 聊天接入那一排图标（低频动作，不常驻）
+  // 可用性探测、跑完的提示）都挂在它身上。「新建定时任务」直接开新建表单（__openTaskNew
+  // 由定时任务那段暴露）；已有任务的查看/编辑走下方「定时任务」分区。
+  document.getElementById("navAuto").addEventListener("click", () => { if (window.__openTaskNew) window.__openTaskNew(); else document.getElementById("taskBtn").click() })
+  // 「更多」= 展开公告 / 更新说明 / 分享那一排图标（低频动作，不常驻）
   const more = document.getElementById("navMore")
   more.addEventListener("click", () => {
     const on = !document.body.classList.contains("more-open")
@@ -4942,17 +4980,12 @@ document.getElementById("refreshSess").addEventListener("click", loadSessions)
   if (localStorage.getItem("nm_more") === "1") { document.body.classList.add("more-open"); more.classList.add("on"); more.setAttribute("aria-expanded", "true") }
 })()
 
-// ---- 侧栏「助理」：接到微信 / 企微的那条会话 ----
-// 【为什么最多只亮一个】"助理"在用户心里是一个东西：点它就该进那条正在手机上聊的会话。
-// 两个都亮的话，点「助理」进哪条就成了猜谜。所以两个平台图标是【单选】：亮的那个 = 点「助理」的去处。
-// 【为什么没配置就亮不起来】没配过的平台既没有凭证也没有绑定的会话，"切过去"是空的。
-// 点灰的那个直接开「聊天接入」设置——那正是他要去的地方。
+// ---- 侧栏「手机接入」：行 = 打开聊天接入设置；平台图标 = 跳到该平台最新的那条会话 ----
+// 【为什么行点开的是设置】"手机接入"在用户心里是一个开关面板：接没接、接到哪、怎么换绑。
+// 【为什么图标是去处】接好之后用户高频要做的只有一件事——"看看手机上聊到哪了"；
+// 微信和企微各自有各自的会话，所以两个图标各跳各的，接好的都亮，不再单选。
+// 没接入的平台是灰的，点它进设置——那正是他要去的地方，别假装能跳。
 let asstBridge = { supported: false, weixin: { ready: false, sid: "" }, wecom: { ready: false, sid: "" } }
-// 【偏好与生效值分开存】asstPref 是用户点过的那个平台，只有他再点一次才会变；
-// asstPlatform 是这一刻实际生效的。合成一个变量的话，"总开关关一下 / boundSid 短暂为空"
-// 这类瞬时状态会把他的选择永久冲成另一个平台，点「助理」进错会话（且刷新后还会再翻一次）。
-let asstPref = localStorage.getItem("nm_asst") || ""
-let asstPlatform = ""
 const ASST_LABEL = { weixin: "微信", wecom: "企业微信" }
 // 「最新会话」不等于设置里绑的那条：微信侧可能另开新会话（见 bridge 轮询那段）。
 // 所以优先按会话列表里标了 chatBridge 的那些取最近更新的一条，取不到才退回绑定的 sid。
@@ -4965,29 +4998,29 @@ function paintAsst() {
   const row = document.getElementById("navAsst"); if (!row) return
   row.hidden = !asstBridge.supported
   if (!asstBridge.supported) return
-  const ready = { weixin: !!asstBridge.weixin.ready, wecom: !!asstBridge.wecom.ready }
-  // 偏好可用就用偏好；暂时不可用就临时落到另一个（偏好本身不动，它一恢复就自己回去）
-  asstPlatform = ready[asstPref] ? asstPref : (ready.weixin ? "weixin" : (ready.wecom ? "wecom" : ""))
   for (const [id, p] of [["asstWx", "weixin"], ["asstWecom", "wecom"]]) {
     const b = document.getElementById(id); if (!b) continue
+    const ready = !!asstBridge[p].ready
     b.innerHTML = ic("msg")
-    b.classList.toggle("on", ready[p] && asstPlatform === p)
-    b.classList.toggle("ready", ready[p] && asstPlatform !== p)
+    b.classList.toggle("on", ready)
+    b.classList.remove("ready")   // 旧的"待切换"半亮态已无意义：现在接好的都亮
     // 【亮 != 通】configured + 绑了会话就算"接过"，但消息真要能来回还得桥在跑且已订阅上
     //（登录过期、cc-connect 没起来都会断）。不把这一层写进 tooltip 的话，用户会盯着一个
     // 绿图标纳闷"为什么手机上发了没反应"。
     const live = asstBridge[p].live
-    b.title = !ready[p] ? (ASST_LABEL[p] + "还没接入：点一下去设置")
-      : (asstPlatform === p ? ("助理现在接的是" + ASST_LABEL[p] + (live ? "，点「助理」进这条会话" : "（当前未连通：手机上发消息可能收不到，去「更多 -> 聊天接入」看看）")) : ("切到" + ASST_LABEL[p]))
-    b.classList.toggle("stale", ready[p] && !live)
+    b.title = !ready ? (ASST_LABEL[p] + "还没接入：点一下去设置")
+      : ("进" + ASST_LABEL[p] + "上最新的那条会话" + (live ? "" : "（当前未连通：手机上发消息可能收不到，点「手机接入」行检查设置）"))
+    b.classList.toggle("stale", ready && !live)
   }
-  row.title = asstPlatform ? ("助理：进" + ASST_LABEL[asstPlatform] + "上正在聊的那条会话") : "还没把会话接到微信 / 企业微信，点一下去设置"
+  row.title = "手机接入：设置微信 / 企业微信聊天接入"
 }
 function openBridgeSetup() { const b = document.getElementById("bridgeBtn"); if (b) b.click() }
 function pickAsst(p) {
+  // 点平台图标 = 跳到该平台最新的那条会话；没接入（或接了还没会话）→ 进设置
   if (!asstBridge[p] || !asstBridge[p].ready) { openBridgeSetup(); return }
-  asstPref = p; try { localStorage.setItem("nm_asst", p) } catch {}
-  paintAsst()
+  const sid = asstSid(p)
+  if (sid) resumeSession(sid)
+  else openBridgeSetup()
 }
 // 供聊天接入那段在读到状态后回调（首次探测、以及面板里每次刷新）
 function applyBridgeStatus(st) {
@@ -5014,11 +5047,7 @@ function applyBridgeStatus(st) {
     b.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); e.stopPropagation(); pickAsst(b.getAttribute("data-p")) } })
   }
   row.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); row.click() } })
-  row.addEventListener("click", () => {
-    const sid = asstPlatform ? asstSid(asstPlatform) : ""
-    if (sid) resumeSession(sid)
-    else openBridgeSetup()          // 没接入 / 接了却还没有会话 → 去设置那一屏，别让人点了没反应
-  })
+  row.addEventListener("click", () => openBridgeSetup())   // 行本身 = 设置聊天接入；跳会话在两个平台图标上
 })()
 loadSessions()
 loadModules()
@@ -9336,6 +9365,8 @@ document.addEventListener("visibilitychange", () => { if (!document.hidden) refr
       if (mc && document.activeElement !== mc) mc.value = (d.settings && d.settings.minCredits) || 0
       renderList(d)
       setMsg(msgEl, "info", "")
+      // 侧栏「定时任务」分区要跟着最新列表走（增删改、启停都会走到这里）
+      if (window.__onTasksChanged) window.__onTasksChanged()
     }).catch(function (e) { setMsg(msgEl, "err", "读取定时任务失败：" + (e.message || e)) })
   }
 
@@ -9542,6 +9573,20 @@ document.addEventListener("visibilitychange", () => { if (!document.hidden) refr
     btn.innerHTML = ic("clock")
     btn.addEventListener("click", function () { modal.classList.add("on"); showList() })
   }
+  // 供侧栏使用的两个入口：「新建定时任务」导航直接进新建表单；「定时任务」分区点某条进编辑。
+  // 都先 refresh：mode/presets 由服务端下发，没刷过就 showEdit 会给错编辑器（自由指令 vs 模板）。
+  window.__openTaskNew = function () {
+    modal.classList.add("on"); listView.hidden = true; editView.hidden = true
+    refresh().then(function () { showEdit(null) })
+  }
+  window.__openTaskEdit = function (id) {
+    modal.classList.add("on"); listView.hidden = true; editView.hidden = true
+    refresh().then(function () {
+      var t = (window.__tasks || []).filter(function (x) { return x.id === id })[0]
+      t ? showEdit(t) : showList()   // 任务刚被删了 → 回列表，别白屏
+    })
+  }
+  window.__fmtTaskSchedule = fmtSchedule
   document.getElementById("taskClose").addEventListener("click", function () { modal.classList.remove("on") })
   onOverlayClick(modal, function () { modal.classList.remove("on") })
 
@@ -9551,6 +9596,10 @@ document.addEventListener("visibilitychange", () => { if (!document.hidden) refr
     if (!d || !d.ok || !d.supported) return
     if (btn) btn.hidden = false
     var nav = document.getElementById("navAuto"); if (nav) nav.hidden = false
+    // 侧栏「定时任务」分区的可用性与首份数据：探测这一次就有列表了，别等用户开一次弹窗才出现
+    window.__tasksSupported = true
+    window.__tasks = d.tasks || []
+    if (window.__onTasksChanged) window.__onTasksChanged()
     return jget("api/tasks/news").then(function (n) {
       var news = (n && n.news) || []
       if (!news.length) return
@@ -9791,6 +9840,8 @@ document.addEventListener("visibilitychange", () => { if (!document.hidden) refr
     })
   }
   jget("api/chat-bridge/status").then(function (st) {
+    // 展开态的「更多」里不再出现（CSS display:none，入口在导航「手机接入」行）；
+    // 这里照旧摘 hidden，是给【收起态】的竖条留图标——收着栏时没有导航行。
     if (st && st.ok && st.supported && btn) btn.hidden = false
     try { applyBridgeStatus(st) } catch (e) {}
   }).catch(function () {})
