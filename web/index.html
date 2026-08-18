@@ -1767,6 +1767,13 @@
   .tf-days button { width: 34px; height: 30px; border-radius: 7px; border: 1px solid var(--line); background: var(--panel);
     color: var(--muted); cursor: pointer; font-size: 12.5px; }
   .tf-days button.on { background: var(--accent); border-color: var(--accent); color: #fff; }
+  /* 编辑定时任务页的文字：字号统一 12.5px，层级只靠字重与颜色分——
+     此前标签 12 / 输入 13 / 勾选行 13 / 提示 11.5 四种字号挤在一屏，看着像没对齐。
+     标签加粗压深色、提示常规淡色，输入框内容与标签同号。 */
+  #taskEditView, #taskEditView .mm-input, #taskEditView .mm-msg, #taskEditView .tf-days button { font-size: 12.5px; }
+  #taskEditView .mm-field > span { font-size: 12.5px; font-weight: 600; color: var(--text); }
+  #taskEditView .mm-check span { font-size: 12.5px; }
+  #taskEditView .mm-hint { font-size: 12.5px; font-weight: 400; }
   .tk-item { border: 1px solid var(--line); border-radius: 9px; padding: 10px 12px; margin-bottom: 8px; }
   .tk-item.off { opacity: .6; }
   .tk-top { display: flex; align-items: center; gap: 8px; }
@@ -2426,6 +2433,9 @@
         <div class="mm-actions">
           <button id="tfCancel" class="mm-btn ghost" type="button">返回</button>
           <span style="flex:1"></span>
+          <!-- 先存后跑：跑的是【存下来的】任务定义（headless-run 读盘上的 task，推送与否也看它），
+               不存直接跑等于跑旧版——用户改了勾选却推没推上，查都没处查。 -->
+          <button id="tfSaveRun" class="mm-btn ghost" type="button" title="先保存这里的内容（含推送设置），随即立刻跑一次；勾了推送就会推到微信/企微">保存并跑一次</button>
           <button id="tfSave" class="mm-btn primary" type="button">保存</button>
         </div>
         <div class="mm-hint">建议写明产物文件名，并把话说完整——到点跑的时候没人能替你补充信息。</div>
@@ -9479,7 +9489,9 @@ document.addEventListener("visibilitychange", () => { if (!document.hidden) refr
 
   document.getElementById("taskNew").addEventListener("click", function () { showEdit(null) })
   document.getElementById("tfCancel").addEventListener("click", showList)
-  document.getElementById("tfSave").addEventListener("click", function () {
+  // 保存的公共段：收表单 → 提交 → 回 {ok, task?, warn?}。「保存」与「保存并跑一次」共用，
+  // 两个按钮只在保存成功后的去向上不同。
+  function saveTask() {
     var days = Array.prototype.filter.call(f.days.querySelectorAll("button.on"), function () { return true })
       .map(function (b) { return Number(b.dataset.d) })
     var body = {
@@ -9501,14 +9513,39 @@ document.addEventListener("visibilitychange", () => { if (!document.hidden) refr
       })
     }
     setMsg(f.msg, "info", "保存中…")
-    jpost("api/tasks/save", body).then(function (d) {
-      if (!d || !d.ok) { setMsg(f.msg, "err", (d && d.err) || "保存失败"); return }
+    return jpost("api/tasks/save", body).then(function (d) {
+      if (!d || !d.ok) { setMsg(f.msg, "err", (d && d.err) || "保存失败"); return { ok: false } }
       // 注册失败【不算保存失败】：定义已经存下了，任务会被标成"未注册"，用户点重新注册即可修复。
       // 这里必须把原因原样说出来——它通常是权限/组策略这类只有用户自己能解决的事。
-      if (d.warn) { toast("已保存，但没能注册到系统"); setMsg(f.msg, "err", "已保存，但没能注册到 Windows 任务计划：" + d.warn) ; refresh(); return }
+      if (d.warn) { toast("已保存，但没能注册到系统"); setMsg(f.msg, "err", "已保存，但没能注册到 Windows 任务计划：" + d.warn); refresh() }
+      // 让 editing 带上服务端 id：新建任务保存后紧接着「跑一次」要用它
+      if (d.task && d.task.id) editing = d.task
+      return d
+    }).catch(function (e) { setMsg(f.msg, "err", "保存失败：" + (e.message || e)); return { ok: false } })
+  }
+  document.getElementById("tfSave").addEventListener("click", function () {
+    saveTask().then(function (d) {
+      if (!d.ok || d.warn) return          // 有 warn 时留在编辑页看原因（saveTask 已提示）
       toast("已保存：" + (d.task && d.task.title ? d.task.title : ""))
       showList()
-    }).catch(function (e) { setMsg(f.msg, "err", "保存失败：" + (e.message || e)) })
+    })
+  })
+  // 保存并跑一次：跑的是刚存下的任务定义，勾了「推送到微信/企微」跑完就会推
+  //（手动跑与到点跑走同一个 headless-run，推送逻辑共用；「未注册到系统」不影响手动跑）。
+  document.getElementById("tfSaveRun").addEventListener("click", function () {
+    saveTask().then(function (d) {
+      if (!d.ok) return
+      var t = d.task || editing
+      if (!t || !t.id) { setMsg(f.msg, "err", "保存成功但没拿到任务 id，请从列表里点「立即跑一次」"); return }
+      return jpost("api/tasks/run", { id: t.id }).then(function (r) {
+        if (!r || !r.ok) { setMsg(f.msg, "err", (r && r.err) || "启动失败"); return }
+        toast("已保存并开始跑：" + (t.title || ""))
+        var note = t.pushChat ? "跑完会按推送设置发到你的微信/企业微信（需软件保持开着）。" : ""
+        if (d.warn) { setMsg(f.msg, "info", "已开始跑（未注册不影响手动跑）。" + note); return }   // 保留注册警告的上下文
+        showList()
+        setMsg(msgEl, "ok", "已开始跑「" + (t.title || t.id) + "」，稍后在左侧会话列表里能看到它。" + note)
+      })
+    })
   })
 
   // ---- 列表上的动作 ----
