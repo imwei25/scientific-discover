@@ -294,6 +294,19 @@
   .answer.md img { display: block; max-width: min(100%, 520px); height: auto; margin: .5em 0; border: 1px solid var(--line-hi); border-radius: var(--r-sm); background: #fff; cursor: zoom-in; }
   .note { color: var(--faint); font-size: 12px; margin-top: 8px; }
 
+  /* 产出栏顶上的「文献台账」横幅：产物里出现 library.xlsx 时才有（见 libBanner） */
+  .libcard { display: flex; align-items: center; gap: 10px; width: 100%; margin: 0 0 10px; padding: 10px 12px;
+    text-align: left; cursor: pointer; border: 1px solid var(--accent); border-radius: var(--r-sm);
+    background: rgba(59,111,212,.06); color: var(--text); font: inherit; }
+  .libcard:hover { background: rgba(59,111,212,.12); }
+  .libcard-ic { flex: none; display: grid; place-items: center; width: 28px; height: 28px; border-radius: var(--r-sm);
+    background: var(--accent); color: #fff; }
+  .libcard-ic .ic { width: 16px; height: 16px; }
+  .libcard-x { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+  .libcard-t { font-size: 13px; font-weight: 600; }
+  .libcard-s { font-size: 11.5px; color: var(--muted); }
+  .libcard-go { flex: none; font-size: 12px; color: var(--accent); font-weight: 600; }
+
   /* ---- 多 sheet Excel 预览（页签 + 表格；文献台账还多一条工具条）---- */
   /* 页签横排可滚：文献台账常有 5–8 个类，类名还可能挺长，硬折行会把表格顶下去 */
   .shtabs { display: flex; gap: 6px; overflow-x: auto; padding-bottom: 6px; margin-bottom: 10px;
@@ -303,8 +316,21 @@
   .shtab:hover { border-color: var(--accent); color: var(--accent); }
   .shtab.on { background: var(--accent); border-color: var(--accent); color: #fff; }
   .shtab .n { font-size: 11px; opacity: .75; font-variant-numeric: tabular-nums; }
-  .shwrap { max-width: 100%; overflow-x: auto; }
+  /* 表格自己滚，不跟着整页滚：横向滚动条与表头都固定在这一框里。
+     交给 .pv-body 滚的话，横向滚动条会挂在整张表的最底下 —— 条目一多，
+     想左右挪一下得先滚到几百行之外的表尾去够那根条。 */
+  .shwrap { max-width: 100%; max-height: calc(100vh - var(--hdr-h) - 210px); min-height: 180px; overflow: auto; }
+  .shwrap thead th { position: sticky; top: 0; z-index: 2; }
   .shwrap td { max-width: 52ch; white-space: pre-wrap; }   /* 核心观点那列要能整段读，不截断 */
+  /* 序号 + 眼镜：贴在一起当一格用，别被表格默认的 46ch 撑开 */
+  .shwrap th.shidx, .shwrap td.shidx { width: 1%; white-space: nowrap; padding-right: 6px; }
+  .shidx-w { display: flex; align-items: center; gap: 4px; }
+  .shidx-n { font-variant-numeric: tabular-nums; color: var(--muted); font-size: 12.5px; }
+  .shpv { display: inline-grid; place-items: center; width: 22px; height: 22px; padding: 0; cursor: pointer;
+    border: 1px solid transparent; border-radius: var(--r-sm); background: transparent; color: var(--muted); }
+  .shpv:hover { color: var(--accent); border-color: var(--accent); }
+  .shpv .ic { width: 14px; height: 14px; }
+  .shwrap th.shfile, .shwrap td.shfile { white-space: nowrap; max-width: 17ch; color: var(--muted); }
   .shmove { white-space: nowrap; }
   .shsel { max-width: 15ch; font-size: 12px; padding: 3px 6px; border: 1px solid var(--line-hi);
     border-radius: var(--r-sm); background: #fff; color: var(--text); }
@@ -1428,10 +1454,6 @@
     color: var(--muted); background: transparent; border: 1px solid var(--line-hi); border-radius: var(--r-sm); text-decoration: none; }
   .pv-head .pv-dl:hover { color: var(--accent); border-color: var(--accent); }
   .pv-head .pv-dl .ic { width: 13px; height: 13px; }
-  /* 台账表格里那一列「查看」 */
-  .shview { white-space: nowrap; }
-  .shview .shbtn { padding: 3px 10px; font-size: 12px; }
-  .shview a.shdl { font-size: 12px; color: var(--muted); }
 
   /* 左下角工具条（原顶栏的三个入口：公告 / 分享 / 返回工作台）+ 模型设置弹窗 */
   /* margin-top:auto 挂在这儿而不是 .user-info 上：两块都要贴底，空白得留在【这一条之前】。
@@ -3052,6 +3074,7 @@ const isScratch = (n) => { const b = n.split("/").pop(); return SCRATCHY.test(b)
 // 平铺出来会把成稿彻底淹掉（实测侧栏 73 条里 65 条是 pdfs/*，交付物混在里面找不着）。
 const isBulkDir = (d) => /^(pdfs|zotero_lib|library_texts)$/i.test(d)
 const dirOf = (n) => { const i = String(n).lastIndexOf("/"); return i < 0 ? "" : n.slice(0, i) }
+const LIB_XLSX = "library.xlsx"   // 台账文件名：与 library.mjs / build_workbook.py 两端写死的契约同一个值
 let lastFilesList = []            // 上一次渲染的产物名单，供 filesmeta 到达时原样重画一遍
 // ---- 产物分级（服务端下发，判据见 workflows.mjs 的 artifactKind）----
 // main = 主产物（命中该模块各步的 emits 契约，或成品扩展名）
@@ -3126,6 +3149,7 @@ function renderFiles(list) {
   zipAllBtn.hidden = !(list && list.length)      // 没产出就别摆一个点了会报错的按钮
   if (!list || !list.length) { filesEl.innerHTML = '<span class="hint">对话生成的文件会显示在这里</span>'; return }
   filesEl.innerHTML = ""
+  libBanner(list)                                // 文献台账横幅（有 library.xlsx 时才出现，见下）
   // ---- 三段式：主产物平铺 → 中间文件折叠 → 文件夹里原有的折叠 ----
   // 【为什么要分】一次成稿十几个中间 md、几个临时 py、一堆抽出来的正文，和真正要交付的 docx
   // 摆在同一个平面上，交付物就被淹掉了（用户反馈）。分级判据在服务端，见 workflows.mjs 的
@@ -3147,6 +3171,46 @@ function renderFiles(list) {
     h.textContent = `另有 ${deeperFiles} 个文件因层级太深/数量过多没有列在这里，点上方「打包下载」可以一次全部取回。`
     filesEl.appendChild(h)
   }
+}
+/**
+ * 文献台账横幅：文献整理跑完后，产出栏里只是多了一个 library.xlsx —— 用户看不出
+ * 「点开它能改分类、能按类归档、能就地看原文」，多半只当是个 Excel 下载了事（本条即为此加）。
+ * 所以在产出栏顶上摆一条说清能干什么的横幅，点一下直接进台账预览。
+ *
+ * 【判据为什么不是"目录里最新的那个 xlsx"】那是会误判的启发式：会话里常有 Table1.xlsx、
+ * 用户自己传的原始数据.xlsx、统计脚本出的表，随时比台账新，横幅就会指到一个没有台账功能的表上。
+ * 台账的文件名是写死的契约（build_workbook.py 与 library.mjs 两端都固定 library.json + library.xlsx），
+ * 且 /api/library 一个请求就能既确认"这确实是台账"又拿到篇数 / 类数。
+ * 【开销】只有产出列表里真的出现 library.xlsx 才发这一个请求，其余会话零开销。
+ * 【不闪】同一会话内先用上一次的结果立刻画出来，再拿新结果对一遍，变了才重画。
+ */
+let LIBCARD = { sid: null, info: null }
+function libBanner(list) {
+  if (!list.includes(LIB_XLSX)) { LIBCARD = { sid: null, info: null }; return }
+  const sid = sessionId || ""
+  if (LIBCARD.sid === sid && LIBCARD.info) paintLibBanner(LIBCARD.info)
+  fetch("api/library?v=1" + sidQ()).then((r) => r.json()).then((j) => {
+    const info = j && j.ok && j.has ? j : null
+    const same = JSON.stringify(info) === JSON.stringify(LIBCARD.info) && LIBCARD.sid === sid
+    LIBCARD = { sid, info }
+    if (!same) { filesEl.querySelector(".libcard")?.remove(); if (info) paintLibBanner(info) }
+  }).catch(() => { /* 拿不到就当没有台账：横幅缺一次总好过指到一个打不开的东西上 */ })
+}
+function paintLibBanner(info) {
+  if (filesEl.querySelector(".libcard")) return
+  const n = info.records.length
+  const cats = (info.categories || []).length
+  const card = document.createElement("button"); card.type = "button"; card.className = "libcard"
+  card.innerHTML = '<span class="libcard-ic">' + ic("lines") + '</span><span class="libcard-x">'
+    + '<span class="libcard-t"></span><span class="libcard-s"></span></span>'
+    + '<span class="libcard-go">打开</span>'
+  card.querySelector(".libcard-t").textContent = info.classified
+    ? `文献台账 · ${n} 篇 / ${cats} 类` : `文献台账 · ${n} 篇（未分类）`
+  card.querySelector(".libcard-s").textContent = info.classified
+    ? "点开可改分类、按类归档，每篇还能就地看原文" : "点开可逐篇查看，也可以让助手先按你的标准分类"
+  card.title = "打开 " + LIB_XLSX
+  card.addEventListener("click", () => openPreview(LIB_XLSX))
+  filesEl.prepend(card)
 }
 // 没能列进侧栏的文件数（/api/outputs 的 X-Deeper-Files 响应头）。
 // 放模块变量而不是 renderFiles 的参数：SSE 的 files 事件也会调 renderFiles，它拿不到这个数。
@@ -3521,25 +3585,50 @@ function renderSheets() {
   const sh = PVX.sheets[PVX.at]
   const rows = sh.rows || []
   if (!rows.length) { pvBody.appendChild(Object.assign(document.createElement("div"), { className: "hint", textContent: "（这个 sheet 是空的）" })); return }
-  const head = rows[0], body = rows.slice(1, PV_MAXROWS + 1)
-  const fileCol = Math.max(0, head.findIndex((h) => String(h).trim() === "文件名"))
+  const head = rows[0]
+  let body = rows.slice(1, PV_MAXROWS + 1)
+  const colOf = (n) => head.findIndex((h) => String(h).trim() === n)
+  const fileCol = colOf("文件名")
+  const isLib = fileCol >= 0 && colOf("标题") >= 0        // 长得像文献台账（有文件名 + 标题）才动列序
+  // 这一类里一篇文献都没有 → 连表头一起撤掉。只剩一排空列头，用户读不出"这个分类是空的"。
+  if (isLib && !body.length) {
+    pvBody.appendChild(Object.assign(document.createElement("div"), { className: "hint", textContent: "（这个分类下还没有文献）" })); return
+  }
+  // 列序按人读表的顺序重排：序号 → 标题 → 年份 → 核心观点 → 作者 → 杂志 → 文件名。
+  // 文件名排到最末并缩窄显示（见 fileCellText）：它最长、也最不需要逐字读。
+  // 表里没有的列自动跳过；用户自定义的额外列按原顺序缀在后面，一列都不丢。
+  const ORDER = ["标题", "年份", "核心观点", "作者", "杂志", "文件名"]
+  let cols = head.map((_, i) => i)
+  if (isLib) {
+    const want = ORDER.map(colOf).filter((i) => i >= 0)
+    cols = want.concat(cols.filter((i) => !want.includes(i)))
+    body = body.slice().sort((a, b) => String(a[fileCol] || "").localeCompare(String(b[fileCol] || ""), "zh"))
+  }
   const box = document.createElement("div"); box.className = "shwrap"
   const table = document.createElement("table")
   const thead = document.createElement("thead"), htr = document.createElement("tr")
-  head.forEach((h) => { const th = document.createElement("th"); th.textContent = h; htr.appendChild(th) })
+  if (isLib) { const ti = document.createElement("th"); ti.className = "shidx"; ti.textContent = "序号"; htr.appendChild(ti) }
+  cols.forEach((c) => {
+    const th = document.createElement("th"); th.textContent = head[c]
+    if (c === fileCol && isLib) th.className = "shfile"
+    htr.appendChild(th)
+  })
   if (PVX.lib) {
-    const tv = document.createElement("th"); tv.className = "shview"; tv.textContent = "查看"; htr.appendChild(tv)
-    const th = document.createElement("th"); th.className = "shmove"; th.textContent = "分类"; htr.appendChild(th)
+    const th = document.createElement("th"); th.className = "shmove"; th.textContent = "手动调整分类"; htr.appendChild(th)
   }
   thead.appendChild(htr); table.appendChild(thead)
   const tbody = document.createElement("tbody")
-  body.forEach((cells) => {
+  body.forEach((cells, i) => {
+    const file = fileCol >= 0 ? String(cells[fileCol] || "") : ""
     const tr = document.createElement("tr")
-    head.forEach((_, c) => { const td = document.createElement("td"); td.textContent = cells[c] || ""; tr.appendChild(td) })
-    if (PVX.lib) {
-      tr.appendChild(viewCell(String(cells[fileCol] || "")))
-      tr.appendChild(moveCell(String(cells[fileCol] || ""), sh.name))
-    }
+    if (isLib) tr.appendChild(idxCell(i + 1, file))
+    cols.forEach((c) => {
+      const td = document.createElement("td")
+      if (c === fileCol && isLib) { td.className = "shfile"; fileCellText(td, file) }
+      else td.textContent = cells[c] || ""
+      tr.appendChild(td)
+    })
+    if (PVX.lib) tr.appendChild(moveCell(file, sh.name))
     tbody.appendChild(tr)
   })
   table.appendChild(tbody); box.appendChild(table); pvBody.appendChild(box)
@@ -3550,24 +3639,38 @@ function renderSheets() {
     { className: "hint", textContent: "这个工作簿超出了预览上限，部分行 / 列 / sheet 未显示，完整内容请下载" }))
 }
 /**
- * 一行的「查看」：把这一篇文献开在右半屏（盖住对话），台账留在左边随时点下一篇。
- * 不认识的格式（.caj / .nh 之类国内库导出的东西）不摆一个点了没反应的按钮 —— 给下载链接，
+ * 文件名单元格：最多显示 15 个字，超出部分省略，鼠标停上去看全名。
+ * 不截的话这一列动辄五六十字（作者+年份+标题拼出来的下载名），把标题和核心观点全挤扁。
+ */
+const FILE_MAXCH = 15
+function fileCellText(td, file) {
+  const short = file.length > FILE_MAXCH ? file.slice(0, FILE_MAXCH) + "…" : file
+  td.textContent = short
+  if (short !== file) td.title = file      // 截了才挂 title：没截还弹一个一模一样的浮层是噪音
+}
+/**
+ * 序号格：行号 + 一个「眼镜」按钮，点了在右半屏就地看这一篇（台账仍留在左边，可以接着点下一篇）。
+ * 不认识的格式（.caj / .nh 之类国内库导出的东西）不摆一个点了没反应的眼镜 —— 换成下载图标，
  * 并说清为什么：假装能预览再弹一句"预览失败"，用户只会以为文件坏了。
  */
-function viewCell(file) {
-  const td = document.createElement("td"); td.className = "shview"
-  if (!file) { td.innerHTML = '<span class="hint">—</span>'; return td }
-  if (!CANPV(file) || isSecret(file)) {
-    const a = document.createElement("a"); a.className = "shdl"
+function idxCell(n, file) {
+  const td = document.createElement("td"); td.className = "shidx"
+  const wrap = document.createElement("div"); wrap.className = "shidx-w"
+  const num = document.createElement("span"); num.className = "shidx-n"; num.textContent = String(n)
+  wrap.appendChild(num)
+  if (file && CANPV(file) && !isSecret(file)) {
+    const b = document.createElement("button"); b.type = "button"; b.className = "shpv"
+    b.title = "在右侧看这一篇"; b.setAttribute("aria-label", "预览 " + file); b.innerHTML = ic("eye")
+    b.addEventListener("click", () => openDocPreview(file))
+    wrap.appendChild(b)
+  } else if (file) {
+    const a = document.createElement("a"); a.className = "shpv"
     a.href = "api/download?name=" + encodeURIComponent(file) + sidQ()
     a.setAttribute("download", file.split("/").pop())
-    a.textContent = "下载"; a.title = "这种格式不支持在线预览，下载后用本地软件打开"
-    td.appendChild(a); return td
+    a.title = "这种格式不支持在线预览，下载后用本地软件打开"; a.innerHTML = ic("download")
+    wrap.appendChild(a)
   }
-  const b = document.createElement("button"); b.type = "button"; b.className = "shbtn ghost"
-  b.textContent = "预览"; b.title = "在右侧打开这篇文献"
-  b.addEventListener("click", () => openDocPreview(file))
-  td.appendChild(b)
+  td.appendChild(wrap)
   return td
 }
 /** 一行末尾的「改分类」下拉：选中别的类 → 立刻改 library.json 并重出 Excel（不经过对话，不花额度） */
