@@ -91,7 +91,14 @@ export function encryptSkills(skillsDir, encFilePath, agentsMdPath = null, pytho
         if (ext === '.md' || item === 'SKILL.md') {
           const content = fs.readFileSync(fullPath, 'utf8')
           assetMap[`skills/${subRel}`] = content
-          mdFilesToPlaceholder.push(fullPath)
+          let frontmatter = null
+          if (item === 'SKILL.md' && content.startsWith('---')) {
+            const endIdx = content.indexOf('\n---', 3)
+            if (endIdx !== -1) {
+              frontmatter = content.slice(0, endIdx + 4).trim()
+            }
+          }
+          mdFilesToPlaceholder.push({ fullPath, isSkillMd: item === 'SKILL.md', frontmatter })
           fileCount++
         } else if (ext === '.py') {
           const content = fs.readFileSync(fullPath, 'utf8')
@@ -139,9 +146,13 @@ export function encryptSkills(skillsDir, encFilePath, agentsMdPath = null, pytho
     }
   }
 
-  // 4. Overwrite .md files with placeholders
-  for (const mdPath of mdFilesToPlaceholder) {
-    fs.writeFileSync(mdPath, MD_PLACEHOLDER, 'utf8')
+  // 4. Overwrite .md files with placeholders (preserve YAML frontmatter for SKILL.md so OpenCode registers project skills)
+  for (const { fullPath, isSkillMd, frontmatter } of mdFilesToPlaceholder) {
+    if (isSkillMd && frontmatter) {
+      fs.writeFileSync(fullPath, `${frontmatter}\n\n<!-- ENCRYPTED SKILL BODY - Protected by SciAgent Engine -->\n<!-- Detailed instructions and prompts loaded dynamically in RAM memory -->\n`, 'utf8')
+    } else {
+      fs.writeFileSync(fullPath, MD_PLACEHOLDER, 'utf8')
+    }
   }
 
   // 5. Overwrite .sh files with placeholders
