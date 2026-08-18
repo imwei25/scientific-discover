@@ -580,8 +580,19 @@ function dlgMore(u){
     '<div class="hint">生成新的强随机口令，旧口令与已签发 key 立即失效，用户下次登录须再次改密。</div>'+
     '<button class="btn" id="m-key">重置 key</button>'+
     '<div class="hint">只吊销已签发的 key（口令不变）。怀疑 key 外借/泄露时用。</div>'+
+    '<button class="btn" id="m-cap"><span id="m-cap-t">调试抓包…</span></button>'+
+    '<div class="hint">抓取该用户打到模型的每一条请求（含系统提示、技能内容），到「抓包」页可读展开，用来核模型实际吃到什么。抓的是会话明文，用完记得停并清空。</div>'+
     '<button class="btn danger" id="m-del">删除账号</button>'+
     '<div class="hint">连同用量记录一并删除，不可恢复。</div></div>');
+  // 抓包开关：打开弹窗时查一次当前状态，据此显示「开始/停止」
+  api('capture').then(function(cs){
+    var on=cs&&cs.users&&cs.users.indexOf(u.username)>=0;
+    var btn=$('#m-cap-t');if(!btn)return;
+    btn.textContent=on?'● 正在抓包 —— 点此停止':'○ 开始抓包';
+    btn.parentNode.className='btn'+(on?' danger':'');
+    $('#m-cap').onclick=function(e){e.preventDefault();
+      post('capture',{username:u.username,on:!on}).then(function(r){
+        $('#dlg').close();toast(r.ok?(on?'已停止抓 '+u.displayName:'已开始抓 '+u.displayName+'（到「抓包」页看）'):(r.err||'失败'),r.ok)})}});
   $('#m-add').onclick=function(e){e.preventDefault();
     var inc=Number($('#m-amt').value.trim());
     if(!Number.isFinite(inc)||inc<=0)return toast('增量要是大于 0 的数字',false);
@@ -1785,7 +1796,8 @@ function loadCapture(){
       return '<span class="tag ok">'+esc(u)+'　<a href="#" class="cap-off" data-u="'+esc(u)+'" style="color:var(--bad)">停</a></span>'}).join(' ')||'<span class="mut">当前没有在抓的用户</span>';
     var rows=(j.files||[]).map(function(f){
       return '<tr><td class="mut" style="white-space:nowrap;font-size:12.5px">'+dt(f.ts)+'</td><td>'+esc(f.user)+'</td>'+
-        '<td><a href="/admin/api/capture-file?name='+encodeURIComponent(f.name)+'" style="color:var(--acc)">'+esc(f.name)+'</a></td>'+
+        '<td><a href="#" class="cap-view" data-name="'+esc(f.name)+'" style="color:var(--acc)">'+esc(f.name)+'</a>'+
+        ' <a href="/admin/api/capture-file?name='+encodeURIComponent(f.name)+'" class="mut" style="font-size:12px;margin-left:6px">↓原始JSON</a></td>'+
         '<td class="mut" style="white-space:nowrap">'+(f.size>1048576?(f.size/1048576).toFixed(1)+' MB':Math.max(1,Math.round(f.size/1024))+' KB')+'</td></tr>'}).join('');
     $('#pane').innerHTML='<section><h2>请求抓包 <span class="mut">调试用：抓该用户打到模型的每一条完整请求（含系统提示、技能内容、工具结果）</span></h2>'+
       '<div class="row"><input id="cap-u" placeholder="登录名" style="width:170px">'+
@@ -1795,7 +1807,10 @@ function loadCapture(){
       '<tbody>'+(rows||'<tr><td colspan="4" class="mut">还没抓到任何请求</td></tr>')+'</tbody></table>'+
       '<div class="row" style="margin-top:12px"><input id="cap-cu" placeholder="要清空的登录名" style="width:170px">'+
       '<button class="btn danger sm" id="cap-clear">清空该用户的抓包文件</button><span class="sp"></span>'+
-      '<button class="btn sm" id="cap-rf">刷新</button></div></section>';
+      '<button class="btn sm" id="cap-rf">刷新</button></div>'+
+      '<div id="cap-detail" style="margin-top:14px"></div></section>';
+    Array.prototype.forEach.call(document.querySelectorAll('.cap-view'),function(a){
+      a.onclick=function(ev){ev.preventDefault();viewCapture(a.dataset.name)}});
     $('#cap-on').onclick=function(){var u=$('#cap-u').value.trim();if(!u)return;
       post('capture',{username:u,on:true}).then(function(r){toast(r.ok?'已开始抓 '+u+' 的请求':(r.err||'失败'),r.ok);if(r.ok)loadCapture()})};
     Array.prototype.forEach.call(document.querySelectorAll('.cap-off'),function(a){
@@ -1807,6 +1822,60 @@ function loadCapture(){
     $('#cap-rf').onclick=loadCapture;
   })
 }
+// 把一条抓包（opencode 发给模型的完整请求）渲染成可读的消息时间线
+function viewCapture(name){
+  var box=$('#cap-detail');if(!box)return;
+  box.innerHTML='<section><p class="mut">加载中…</p></section>';
+  api('capture-file?name='+encodeURIComponent(name)).then(function(rec){
+    if(!rec||rec.ok===false){box.innerHTML='<section><div class="msg err" style="display:block">'+esc((rec&&rec.err)||'读取失败')+'</div></section>';return}
+    var b=rec.body||{};var msgs=Array.isArray(b.messages)?b.messages:[];
+    var meta='<div class="mut" style="font-size:12.5px;margin-bottom:10px">'+
+      '时间 '+dt(new Date(rec.ts).getTime())+' · 模型 <b>'+esc(rec.model||'?')+'</b>'+
+      (rec.skill?' · 技能头 <b>'+esc(rec.skill)+'</b>':' · 无技能头')+
+      ' · 共 '+msgs.length+' 条消息 · '+(rec.bytes||0)+' 字节'+
+      (b.model&&b.model!==rec.model?' · 客户端点名 '+esc(b.model):'')+'</div>';
+    // 顶部小结：system 里 opencode 列出的技能清单（这才是"模型看得见哪些技能"的直接证据）
+    var sysAll=msgs.filter(function(m){return m.role==='system'}).map(mtext).join('\\n');
+    var skillList=[];var re=/<name>([A-Za-z0-9_-]+)<\\/name>/g,mm;
+    while((mm=re.exec(sysAll))){if(skillList.indexOf(mm[1])<0)skillList.push(mm[1])}
+    var skillBox=skillList.length
+      ? '<div style="margin-bottom:12px;padding:9px 12px;background:var(--p2);border:1px solid var(--line);border-radius:8px;font-size:12.5px">'+
+        '<b>system 里模型可见的技能（'+skillList.length+'）：</b> '+skillList.map(esc).join('、')+'</div>'
+      : '<div style="margin-bottom:12px" class="mut">system 里未列出任何技能</div>';
+    var body=msgs.map(function(m,i){return capMsg(m,i)}).join('');
+    box.innerHTML='<section><div class="row"><h2 style="margin:0">抓包详情 <span class="mut">'+esc(name)+'</span></h2>'+
+      '<span class="sp"></span><button class="btn sm" id="cap-close">收起</button></div>'+
+      meta+skillBox+'<div class="cap-tl">'+body+'</div></section>';
+    $('#cap-close').onclick=function(){box.innerHTML=''};
+    Array.prototype.forEach.call(box.querySelectorAll('.cap-tog'),function(t){
+      t.onclick=function(){var pre=t.parentNode.parentNode.querySelector('.cap-body');if(!pre)return;
+        if(pre.style.maxHeight){pre.style.maxHeight='';t.textContent='收起'}else{pre.style.maxHeight='260px';t.textContent='展开全部'}}});
+  })
+}
+// 单条消息 → 一块
+function mtext(m){var c=m.content;
+  if(typeof c==='string')return c;
+  if(Array.isArray(c))return c.map(function(p){return p&&p.text?p.text:(typeof p==='string'?p:JSON.stringify(p))}).join('\\n');
+  return c==null?'':JSON.stringify(c)}
+function capMsg(m,i){
+  var col={system:'#93a1b0',user:'var(--acc)',assistant:'var(--ok)',tool:'var(--warn)'}[m.role]||'#888';
+  var t=mtext(m);
+  // assistant 的工具调用单独列出来（真正的"这一步干了什么"）
+  var calls='';var tc=m.tool_calls||(m.content&&m.content.filter&&m.content.filter(function(p){return p&&p.type==='tool-call'}));
+  if(Array.isArray(tc)&&tc.length){
+    calls='<div style="margin-top:6px">'+tc.map(function(c){
+      var fn=(c.function&&c.function.name)||c.name||c.tool||'?';
+      var args=(c.function&&c.function.arguments)||c.args||c.input||'';
+      if(typeof args!=='string')args=JSON.stringify(args);
+      return '<div style="font-size:12.5px"><span class="tag warn">tool_call</span> <b>'+esc(fn)+'</b> '+
+        '<span class="mut">'+esc(String(args).slice(0,300))+'</span></div>'}).join('')+'</div>'}
+  var long=t.length>600;
+  var pre=t?'<pre class="cap-body" style="'+(long?'max-height:260px;':'')+'overflow:auto;white-space:pre-wrap;word-break:break-word;margin:6px 0 0;padding:8px;background:var(--bg);border-radius:6px;font-size:12.5px;line-height:1.5">'+esc(t)+'</pre>':'';
+  var tog=long?'<span class="cap-tog mut" style="font-size:12px;cursor:pointer;text-decoration:underline">展开全部</span>':'';
+  return '<div style="border-left:3px solid '+col+';padding:4px 0 4px 10px;margin-bottom:10px">'+
+    '<div class="row" style="gap:8px"><span class="tag" style="color:'+col+'">['+i+'] '+esc(m.role)+'</span>'+
+    '<span class="mut" style="font-size:12px">'+t.length+' 字</span><span class="sp"></span>'+tog+'</div>'+
+    pre+calls+'</div>'}
 
 $('#logout').onclick=function(){post('logout').then(function(){renderLogin('')})};
 load();
