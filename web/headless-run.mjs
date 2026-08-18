@@ -402,8 +402,13 @@ async function main() {
           // only：任务里选的推送目标（""=全部已连接平台）。不传的话网关会回落到"推所有在线平台"，
           // 企微和个人微信都连着时两边各收一份 —— 那正是加 pushTo 要解决的问题。
           const pr = await jpost(base, "/api/chat-bridge/push", { text: txt, sid: rec.sid, files: rec.mainOutputs, only: task.pushTo || "" }, 60_000)
-          log(`[push] ${pr?.body?.ok ? "已推送到聊天接入" : "未推送（" + (pr?.body?.err || "?") + "）"}`)
-          if (!pr?.body?.ok) rec.notices.push("没推送到微信/企微：" + (pr?.body?.err || "推送失败（个人微信长时间没对话时会话令牌会过期，先给机器人发条消息再试）"))
+          // 【别吞 per-platform 的真错误】pushToChat 走到发送层后失败时顶层没有 err，
+          // 具体原因在 results[].err 里；此前只看顶层，界面上永远是兜底的"令牌过期"文案，
+          // 真因（如漏 --data-dir 连错 socket）被完全遮住，排查空转了一整轮。
+          const realErr = pr?.body?.err ||
+            (Array.isArray(pr?.body?.results) ? pr.body.results.filter((r) => r && !r.ok).map((r) => r.err).filter(Boolean).join("；") : "")
+          log(`[push] ${pr?.body?.ok ? "已推送到聊天接入" : "未推送（" + (realErr || "?") + "）"}`)
+          if (!pr?.body?.ok) rec.notices.push("没推送到微信/企微：" + (realErr || "推送失败（未拿到具体原因，可查 chat-bridge\\bridge.log）"))
         } catch (e) { log("[push] 推送异常：" + (e?.message || e)); rec.notices.push("推送微信/企微时出错：" + String(e?.message || e).slice(0, 120)) }
       }
     }

@@ -748,10 +748,16 @@ export async function pushToChat({ text, files, dir: workDir, only } = {}) {
   }
 
   const sendOne = (p) => new Promise((resolve) => {
-    const args = ["send", "-p", projectName(p, s[p].boundSid), "-s", per[p].lastSession]
+    // 【--data-dir 不能省】data_dir 已私有化到 %LOCALAPPDATA%\niuma-cc（见文件头注），send 客户端
+    // 不显式指过去就回落 ~\.cc-connect —— 那里没人监听，必报 dial unix ... connect refused。
+    // oc-wrap 靠 commonEnv 的 CC_DATA_DIR 解决；这里是独立 execFile，两个口径都给上（--data-dir
+    // 是 send 专属参数、老版本也认；CC_DATA_DIR 兜 vendored fix.3）。2026-08-18 真机踩过：漏了它，
+    // 定时任务/保存并跑一次的推送全部失败，界面上只看到兜底的"令牌过期"文案。
+    const args = ["send", "--data-dir", ccDataDir(), "-p", projectName(p, s[p].boundSid), "-s", per[p].lastSession]
     if (text) args.push("-m", String(text))
     for (const f of picked) args.push(IMG_EXT.has(path.extname(f).toLowerCase()) ? "--image" : "--file", f)
-    execFile(ccBin(), args, { windowsHide: true }, (err, _o, se) => resolve(err ? { ok: false, platform: p, err: (String(se) || err.message || "").slice(0, 150) } : { ok: true, platform: p, session: per[p].lastSession }))
+    execFile(ccBin(), args, { windowsHide: true, env: { ...process.env, CC_DATA_DIR: ccDataDir() } },
+      (err, _o, se) => resolve(err ? { ok: false, platform: p, err: (String(se) || err.message || "").slice(0, 150) } : { ok: true, platform: p, session: per[p].lastSession }))
   })
   const results = await Promise.all(targets.map(sendOne))
   const ok = results.some((r) => r.ok)
