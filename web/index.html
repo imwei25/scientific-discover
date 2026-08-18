@@ -83,10 +83,10 @@
   .sb-toggle:hover { color: var(--cyan); border-color: var(--cyan); }
   .sb-toggle .ic { width: 16px; height: 16px; }
   .sb-title { flex: 1; font-size: 13px; font-weight: 600; color: #334153; white-space: nowrap; overflow: hidden; }
-  /* 列表工具条（筛选 / 批量选择 / 刷新）：左对齐、贴在「新建项目」上沿。
+  /* 列表工具条（筛选 / 批量选择 / 刷新）：左对齐、贴在「项目」分区上沿。
      不给它边框/底色 —— 三个小图标而已，再加一层框会把侧栏切成四段，反而看不出哪块是主内容。 */
-  /* padding-left 9px 不是随手写的：让这排小胶囊的左边缘与导航行图标的左边缘（9px 内边距）
-     对齐成一条竖线，否则它会比上下两行各差 1~2px，看着像没对齐。 */
+  /* padding-left 9px 不是随手写的：让这排小胶囊的左边缘与下面「项目 / 会话 / 空间」三个
+     分区标题的起笔（.mshead 的 9px 内边距）对齐成一条竖线。 */
   #listbar { display: flex; align-items: center; justify-content: flex-start; gap: 4px; flex: none; padding: 4px 0 4px 9px; }
   body:not(.sessbar-open) .sb-title, body:not(.sessbar-open) #refreshSess, body:not(.sessbar-open) #selModeBtn, body:not(.sessbar-open) #sessions,
   body:not(.sessbar-open) #sbnav, body:not(.sessbar-open) #listbar,
@@ -1945,17 +1945,6 @@
           <span class="asst-ic wecom" id="asstWecom" role="button" tabindex="0" data-p="wecom"></span>
         </span>
       </div>
-      <!-- 列表工具条：筛选 / 批量选择 / 刷新。左对齐、贴在「新建项目」正上方。 -->
-      <div id="listbar">
-        <!-- 按模块筛选：只看某一类会话（自由对话 / 综述撰写 / …）。清单按实际有会话的模块生成，
-             不是把所有模块都摆出来——列一堆 0 条的模块只会让人多翻几遍。 -->
-        <div class="fltwrap" id="fltWrap">
-          <button id="fltBtn" class="mini" type="button" title="按模块筛选会话"></button>
-          <div id="fltPanel" class="fltpanel"></div>
-        </div>
-        <button id="selModeBtn" class="mini" type="button" title="批量选择（勾选多个会话一次删除）"></button>
-        <button id="refreshSess" class="mini" type="button" title="刷新列表"></button>
-      </div>
       <button class="navitem" id="navProj" type="button" title="新建项目：建一个组，把会话归到一起"><span class="ni-ic"></span><span class="ni-t">新建项目</span></button>
       <button class="navitem" id="navAuto" type="button" hidden title="定时任务：到点自动跑，软件关着也照跑"><span class="ni-ic"></span><span class="ni-t">自动化</span></button>
       <button class="navitem" id="navMore" type="button" aria-expanded="false"><span class="ni-ic"></span><span class="ni-t">更多</span><span class="ni-hint">公告·分享·接入</span><span class="ni-dot" aria-hidden="true"></span></button>
@@ -1985,6 +1974,18 @@
       <!-- 聊天接入：把某个会话接到企业微信/微信，在手机上使唤它。仅 Windows 桌面版（带 cc-connect 组件）出现 -->
       <button id="bridgeBtn" class="hbtn" type="button" title="聊天接入：把会话接到企业微信，在手机上继续干活" hidden></button>
       <button id="wsBtn" class="hbtn" type="button" title="返回模块工作台（换个功能开新会话）"></button>
+    </div>
+    <!-- 列表工具条：筛选 / 批量选择 / 刷新。左对齐、贴在「项目」分区正上方 ——
+         它们操作的是下面这份列表（项目 / 会话 / 空间），不是上面的导航；离作用对象越近越不用猜。 -->
+    <div id="listbar">
+      <!-- 按模块筛选：只看某一类会话（自由对话 / 综述撰写 / …）。清单按实际有会话的模块生成，
+           不是把所有模块都摆出来——列一堆 0 条的模块只会让人多翻几遍。 -->
+      <div class="fltwrap" id="fltWrap">
+        <button id="fltBtn" class="mini" type="button" title="按模块筛选会话"></button>
+        <div id="fltPanel" class="fltpanel"></div>
+      </div>
+      <button id="selModeBtn" class="mini" type="button" title="批量选择（勾选多个会话一次删除）"></button>
+      <button id="refreshSess" class="mini" type="button" title="刷新列表"></button>
     </div>
     <!-- 批量删除操作条：只在批量选择模式下出现 -->
     <div id="selBar">
