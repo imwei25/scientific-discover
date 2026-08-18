@@ -84,7 +84,7 @@
   .sb-toggle .ic { width: 16px; height: 16px; }
   .sb-title { flex: 1; font-size: 13px; font-weight: 600; color: #334153; white-space: nowrap; overflow: hidden; }
   body:not(.sessbar-open) .sb-title, body:not(.sessbar-open) #refreshSess, body:not(.sessbar-open) #selModeBtn, body:not(.sessbar-open) #sessions,
-  body:not(.sessbar-open) #newProject, body:not(.sessbar-open) #newProjBtn, body:not(.sessbar-open) #fltWrap,
+  body:not(.sessbar-open) #sbnav, body:not(.sessbar-open) #newProjBtn, body:not(.sessbar-open) #fltWrap,
   body:not(.sessbar-open) .u-meta, body:not(.sessbar-open) #userMenuBtn { display: none; }
   body:not(.sessbar-open) #sessbar { padding: 14px 8px 10px; align-items: center; }
   body:not(.sessbar-open) .user-info { justify-content: center; padding: 12px 0 2px; }
@@ -589,6 +589,8 @@
   .mshead { position: relative; display: flex; align-items: center; gap: 7px; padding: 7px 32px 7px 9px; border-radius: var(--r-sm); cursor: pointer;
     color: #334153; font-size: 12.5px; font-weight: 600; letter-spacing: .2px; user-select: none; }
   .mshead:hover { background: var(--panel-soft); color: var(--text); }
+  /* 从导航「项目」跳过来时闪一下：分区本来就在屏幕上时，展开这个动作太小，看不出发生了什么 */
+  .mshead.flash { background: var(--accent-soft); box-shadow: inset 2px 0 0 var(--cyan); }
   .mshead .caret { width: 13px; height: 13px; flex: none; color: var(--faint); transition: transform .15s; }
   .msect.collapsed > .mshead .caret { transform: rotate(-90deg); }
   .mshead .gico .ic { width: 14px; height: 14px; color: #334153; }
@@ -650,8 +652,12 @@
      且与会话行 padding-right:46px 的做法一致。 */
   .pghead .pg-act { position: absolute; top: 50%; transform: translateY(-50%); width: 20px; height: 20px;
     display: grid; place-items: center; color: var(--faint); border-radius: 5px; opacity: 0; transition: opacity .12s; }
+  .pghead .pg-act:nth-last-child(3) { right: 49px; }
   .pghead .pg-act:nth-last-child(2) { right: 27px; }
   .pghead .pg-act:last-child { right: 5px; }
+  /* 三个动作图标的那一行（空间：打开 / 改名 / 不再分组）要多留一格，
+     否则最左那个会压在路径的尾巴上 —— 而尾段正是认得出这是哪个目录的那一头。 */
+  .pghead.acts3 { padding-right: 70px; }
   .pghead:hover .pg-act { opacity: 1; z-index: 1; }
   .pghead:hover .pgcount { opacity: 0; }        /* 计数和图标同一块地方，hover 时让位 */
   .pghead .pg-act .ic { width: 13px; height: 13px; }
@@ -689,28 +695,63 @@
   .dropline::before { left: -1px; } .dropline::after { right: -1px; }
   /* 不能落进来的列表（文件夹组只允许组内排序）：整块压暗并划出禁止感，别让用户白拖一趟 */
   .pgbody.drop-no, .droparea.drop-no { outline: 2px dashed rgba(148,163,184,.7); outline-offset: -2px; background: rgba(148,163,184,.1); border-radius: var(--r-sm); cursor: not-allowed; }
-  /* 「最近会话」和上面两个分类是【同一层】的东西（只是不可折叠、所以没有箭头），
-     排版就得跟 .mshead 对齐：一样的 12.5px/600/#334153、一样的内边距、计数一样做成灰底徽标。
-     此前它是 12px/400 的浅灰小字，看着比它下面的会话行还轻，像个可有可无的分隔符。 */
-  .sect-label { display: flex; align-items: center; gap: 7px; margin: 8px 0 2px; padding: 7px 9px;
-    font-size: 12.5px; font-weight: 600; letter-spacing: .2px; color: #334153; text-transform: none; flex: none; }
-  .sect-label .ic { width: 14px; height: 14px; flex: none; }
-  .sect-label .sl-t { flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .sect-label .sl-c { flex: none; font-size: 11px; font-weight: 500; color: var(--faint); font-variant-numeric: tabular-nums;
-    min-width: 16px; text-align: center; padding: 0 5px; border-radius: 9px; background: var(--panel-soft); }
-  /* 「取消选中」：只在有项目被选中时挂到「最近会话」这一行上 —— 取消之后新建的会话正是落回这里，
-     把出口放在落点旁边，用户不用去猜"怎么才能不归项目"。 */
-  .sect-label .sl-clear { flex: none; font-size: 11px; font-weight: 500; color: var(--cyan); background: rgba(59,111,212,.12);
+  /* 「取消选中」：只在有项目被选中时挂到「会话」这一行上 —— 取消之后新建的会话正是落回这里，
+     把出口放在落点旁边，用户不用去猜"怎么才能不归项目"。
+     ★ 选择器写 .mshead .sl-clear（不是早先的 .sect-label）：那一行现在是可折叠分区的头，
+       套错的话它会继承 .mshead 的粗体深色标题样式，读起来像标题的一部分而不是个能点的东西。 */
+  .mshead .sl-clear { flex: none; position: absolute; right: 30px; top: 50%; transform: translateY(-50%);
+    font-size: 11px; font-weight: 500; color: var(--cyan); background: rgba(59,111,212,.12);
     border-radius: 9px; padding: 2px 7px; cursor: pointer; }
-  .sect-label .sl-clear:hover { background: rgba(59,111,212,.22); }
+  .mshead .sl-clear:hover { background: rgba(59,111,212,.22); }
   /* 内联改名输入 */
   .rename-inp { width: 100%; font: inherit; font-size: 12px; padding: 4px 8px; border: 1px solid var(--cyan); border-radius: var(--r-sm); background: #fff; color: var(--text); outline: none; }
-  /* 新建项目按钮 */
-  #newProject { display: none; align-items: center; justify-content: center; gap: 6px; font-size: 12px; color: var(--text); background: var(--panel); border: 1px solid var(--line); border-radius: var(--r-sm); padding: 10px 12px; margin-bottom: 4px; cursor: pointer; transition: .15s; }
-  #newProject:hover { border-color: var(--line-hi); background: var(--panel-soft); }
-  body.sessbar-open #newProject { display: flex; }
-  #newProject:hover { color: var(--cyan); border-color: var(--cyan); }
-  #newProject .ic { width: 14px; height: 14px; }
+  /* ---- 侧栏主导航（新建会话 / 助理 / 项目 / 自动化 / 更多）----
+     这一段是「入口」，下面的 #sessions 是「内容」。两者靠一条分隔线断开，别让导航行和
+     分区标题看起来是同一列表里的东西——它们的点击语义完全不同（导航跳走 / 分区展开）。 */
+  #sbnav { display: flex; flex-direction: column; gap: 1px; flex: none; padding-bottom: 8px; border-bottom: 1px solid var(--line); }
+  body.more-open #sbnav { border-bottom: 0; }   /* 「更多」展开时下面紧跟着 #sbtools 自己的那条线，别画两条 */
+  .navitem { position: relative; display: flex; align-items: center; gap: 9px; width: 100%; padding: 8px 9px; border: 0;
+    background: transparent; border-radius: var(--r-sm); cursor: pointer; text-align: left;
+    font-size: 13px; font-weight: 500; color: var(--text); font-family: inherit; transition: background .12s, color .12s; }
+  .navitem:hover { background: var(--panel-soft); color: var(--cyan); }
+  .navitem.on { background: var(--accent-soft); color: var(--cyan); }
+  .navitem .ni-ic { display: inline-flex; flex: none; color: var(--muted); }
+  .navitem:hover .ni-ic, .navitem.on .ni-ic { color: var(--cyan); }
+  .navitem .ni-ic .ic { width: 17px; height: 17px; stroke-width: 1.7; }
+  .navitem .ni-t { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  /* 「更多」右边那行灰字：告诉用户里面装了什么，省得为了看一眼就点开 */
+  .navitem .ni-hint { flex: none; font-size: 11px; font-weight: 400; color: var(--faint); }
+  /* 未读公告的红点挂到「更多」上：公告按钮本体收在「更多」里，红点留在里面等于没人看得见，
+     而"有紧急公告"恰恰是必须在收着的时候也传达出去的一件事。 */
+  #navMore .ni-dot { flex: none; width: 7px; height: 7px; border-radius: 50%; background: var(--rose); display: none; }
+  body.has-notice #navMore .ni-dot { display: block; }
+  body.has-notice.more-open #navMore .ni-dot { display: none; }   /* 已经展开就不必再催 */
+  .navitem[hidden] { display: none; }
+  /* 「新建会话」是主动作：给它一层描边，与下面几条导航区分开 */
+  #navNew { border: 1px solid var(--line); background: var(--panel); margin-bottom: 5px; }
+  #navNew:hover { border-color: var(--cyan); background: var(--panel-soft); }
+  /* 助理行右侧的两个平台图标：微信 / 企微。最多一个是「亮」的（= 点「助理」进的是它那条会话）；
+     没配置的那个是灰的、点它直接开「聊天接入」设置，而不是假装能切过去。 */
+  .asst-ics { flex: none; display: inline-flex; align-items: center; gap: 2px; }
+  .asst-ic { width: 22px; height: 22px; display: grid; place-items: center; padding: 0; border: 0; border-radius: 6px;
+    background: transparent; color: var(--faint); opacity: .45; cursor: pointer; transition: opacity .12s, background .12s, color .12s; }
+  .asst-ic .ic { width: 14px; height: 14px; }
+  .asst-ic:hover { opacity: .9; background: rgba(148,163,184,.18); }
+  .asst-ic.wx.on { color: #07c160; opacity: 1; background: rgba(7,193,96,.14); }
+  .asst-ic.wecom.on { color: #2f7dd1; opacity: 1; background: rgba(47,125,209,.14); }
+  /* 接过、但这一刻桥没连上（登录过期 / cc-connect 没起来）：颜色还在，加一圈虚线并压一档，
+     配合 tooltip 说明。全绿会让人以为手机上发消息一定收得到。 */
+  .asst-ic.stale { box-shadow: inset 0 0 0 1px currentColor; opacity: .6; }
+  /* 已配置但没亮（另一个亮着）：比未配置的清楚一档，让用户看得出"这个也能点" */
+  .asst-ic.ready { opacity: .75; }
+  .asst-ic.wx.ready { color: #07c160; }
+  .asst-ic.wecom.ready { color: #2f7dd1; }
+
+  /* 「更多」里那排图标（公告 / 更新说明 / 分享 / 聊天接入）：默认收着，点「更多」才出现。
+     它们都不是高频动作，常驻一行只会把导航压长。 */
+  body.sessbar-open:not(.more-open) #sbtools { display: none; }
+  /* 展开态下这两个由「自动化」「新建会话」两条导航承担，收起态（没有导航）必须还给竖条 */
+  body.sessbar-open #sbtools #taskBtn, body.sessbar-open #sbtools #wsBtn { display: none; }
 
   /* upload dropzone */
   #up { display: none; }
@@ -1473,9 +1514,12 @@
   /* 左下角工具条（原顶栏的三个入口：公告 / 分享 / 返回工作台）+ 模型设置弹窗 */
   /* margin-top:auto 挂在这儿而不是 .user-info 上：两块都要贴底，空白得留在【这一条之前】。
      挂在 .user-info 上的话空白会落在两块中间，工具条被顶到会话列表底下去。 */
-  #sbtools { margin-top: auto; flex: none; display: flex; align-items: center; gap: 4px;
-    padding: 6px 2px 0; border-top: 1px solid var(--line); }
-  body:not(.sessbar-open) #sbtools { flex-direction: column; gap: 2px; padding: 6px 0 0; }
+  /* 【别再写 margin-top:auto】它已经从"贴底的一条"变成「更多」展开后紧跟在导航下面的一排；
+     贴底的活儿交给 flex:1 的 #sessions 吃掉剩余空白即可。 */
+  #sbtools { flex: none; display: flex; align-items: center; gap: 4px; flex-wrap: wrap;
+    padding: 6px 2px; border-bottom: 1px solid var(--line); }
+  /* 收起成 56px 竖条时：没有导航可点，这排图标改竖排常驻（不受「更多」开合影响） */
+  body:not(.sessbar-open) #sbtools { display: flex; flex-direction: column; gap: 2px; padding: 6px 0; border-bottom: 0; }
   .hbtn { width: 30px; height: 30px; display: grid; place-items: center; border-radius: 50%; background: transparent;
     border: 1px solid transparent; color: var(--muted); cursor: pointer; transition: .15s; }
   /* 底色已是白面板，原来那个半透明白 hover 等于没有反馈 —— 换成浅灰 */
@@ -1490,7 +1534,7 @@
   .ntwrap .dotmark.urgent { background: #dc2626; }
   /* 面板改从左下角【向上】弹。position 必须是 fixed 不能是 absolute：会话栏是 overflow:hidden
      的窄列（收起时才 56px），absolute 的 380px 面板会被整块裁掉，只剩一条缝。 */
-  .ntpanel { position: fixed; bottom: 74px; left: 10px; z-index: 80; width: 380px; max-width: calc(100vw - 32px); max-height: 66vh; overflow: auto;
+  .ntpanel { position: fixed; top: 120px; left: 10px;   /* top 由 placeNtPanel() 按触发按钮的实际位置改写 */ z-index: 80; width: 380px; max-width: calc(100vw - 32px); max-height: 66vh; overflow: auto;
     background: #fff; border: 1px solid var(--line); border-radius: var(--r-sm); box-shadow: 0 12px 40px rgba(30,50,90,.18); display: none; }
   .ntpanel.on { display: block; }
   .ntpanel .nthead { display: flex; align-items: center; gap: 8px; padding: 10px 12px; border-bottom: 1px solid var(--line); font-size: 12.5px; color: var(--muted); }
@@ -1858,10 +1902,8 @@
     <button type="button" class="pvtab" id="pvTabFiles" role="tab" aria-selected="false">本轮产出<span class="count" id="pvTabCount"></span></button>
   </div>
   <div id="sessbar">
-    <!-- 「新建项目」顶在最上面（设计稿如此）；收起会话栏时它连同下面这排图标一起隐藏，只留折叠按钮 -->
-    <button id="newProject" type="button"></button>
     <div class="sb-top">
-      <button id="sessToggle" class="sb-toggle" type="button" title="最近会话"></button>
+      <button id="sessToggle" class="sb-toggle" type="button" title="展开会话栏"></button>
       <span class="sb-title">会话与分组</span>
       <button id="newProjBtn" class="mini" type="button" title="新建项目"></button>
       <!-- 按模块筛选：只看某一类会话（自由对话 / 综述撰写 / …）。清单按实际有会话的模块生成，
@@ -1873,14 +1915,25 @@
       <button id="selModeBtn" class="mini" type="button" title="批量选择（勾选多个会话一次删除）"></button>
       <button id="refreshSess" class="mini" type="button" title="刷新列表"></button>
     </div>
-    <!-- 批量删除操作条：只在批量选择模式下出现 -->
-    <div id="selBar">
-      <span class="sel-n">已选 0 个</span>
-      <button id="selAll" type="button">全选</button>
-      <button id="selDel" class="danger" type="button">删除</button>
-      <button id="selExit" type="button">退出</button>
-    </div>
-    <div id="sessions"><span class="hint">加载中…</span></div>
+    <!-- ---- 主导航：入口在上、内容（项目/会话/空间）在下 ----
+         「助理」= 接到微信 / 企微的那条会话；右侧两个平台图标最多亮一个，亮的那个就是点「助理」
+         会进去的地方。没配置的平台亮不起来（点它直接开「聊天接入」设置，而不是假装能切）。
+         「自动化」= 定时任务；不支持的部署形态下整行不出现（同 #taskBtn 的做法）。 -->
+    <nav id="sbnav">
+      <button class="navitem" id="navNew" type="button" title="新建会话（在空白页上选一个功能模块开始）"><span class="ni-ic"></span><span class="ni-t">新建会话</span></button>
+      <!-- 【不是 <button>】这一行自己要点（进会话），右边还嵌着两个平台按钮 ——
+           button 里套 button 是无效 HTML。所以是 div[role=button] + 自己接键盘。 -->
+      <div class="navitem" id="navAsst" role="button" tabindex="0" hidden>
+        <span class="ni-ic"></span><span class="ni-t">助理</span>
+        <span class="asst-ics">
+          <span class="asst-ic wx" id="asstWx" role="button" tabindex="0" data-p="weixin"></span>
+          <span class="asst-ic wecom" id="asstWecom" role="button" tabindex="0" data-p="wecom"></span>
+        </span>
+      </div>
+      <button class="navitem" id="navProj" type="button" title="项目：把会话归到一起"><span class="ni-ic"></span><span class="ni-t">项目</span></button>
+      <button class="navitem" id="navAuto" type="button" hidden title="定时任务：到点自动跑，软件关着也照跑"><span class="ni-ic"></span><span class="ni-t">自动化</span></button>
+      <button class="navitem" id="navMore" type="button" aria-expanded="false"><span class="ni-ic"></span><span class="ni-t">更多</span><span class="ni-hint">公告·分享·接入</span><span class="ni-dot" aria-hidden="true"></span></button>
+    </nav>
     <!-- 原顶栏那三个「平台级」入口整体搬到这里：公告 / 分享 / 返回工作台。
          都不是会话内容，跟上面的会话列表不是一类，所以贴着用户块单独一行；
          会话栏收起（56px）时改成竖排，图标仍在、位置不跳。 -->
@@ -1907,6 +1960,14 @@
       <button id="bridgeBtn" class="hbtn" type="button" title="聊天接入：把会话接到企业微信，在手机上继续干活" hidden></button>
       <button id="wsBtn" class="hbtn" type="button" title="返回模块工作台（换个功能开新会话）"></button>
     </div>
+    <!-- 批量删除操作条：只在批量选择模式下出现 -->
+    <div id="selBar">
+      <span class="sel-n">已选 0 个</span>
+      <button id="selAll" type="button">全选</button>
+      <button id="selDel" class="danger" type="button">删除</button>
+      <button id="selExit" type="button">退出</button>
+    </div>
+    <div id="sessions"><span class="hint">加载中…</span></div>
     <!-- 左下角「用户」：账户相关的功能都在这里（剩余积分 / 云端账号 / 修改密码 / 退出登录）。
          头像、名字、整块 meta 都可点，点哪都能开菜单——别让用户去瞄那个小小的「⋯」。 -->
     <div class="user-info" id="userBox">
@@ -2472,6 +2533,7 @@ const ICONS = {
   trash: '<path d="M4 7h16"/><path d="M9 7V5a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/><path d="M6 7l1 12a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-12"/>',
   pin: '<path d="M12 17v5"/><path d="M9 3h6l-1 7 3 3H7l3-3-1-7Z"/>',
   folder: '<path d="M4 7a2 2 0 0 1 2-2h3l2 2h7a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2Z"/>',
+  folderOpen: '<path d="M3 8V6a1.5 1.5 0 0 1 1.5-1.5h4L11 7h6.5A1.5 1.5 0 0 1 19 8.5V10"/><path d="M3.4 11h17.1a1 1 0 0 1 .96 1.27l-1.7 6A1.5 1.5 0 0 1 18.2 19.5H4.6A1.5 1.5 0 0 1 3.1 18.2V12a1 1 0 0 1 1-1z"/>',
   folderPlus: '<path d="M4 7a2 2 0 0 1 2-2h3l2 2h7a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2Z"/><path d="M12 11v4"/><path d="M10 13h4"/>',
   clock: '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>',
   cog: '<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1Z"/>',
@@ -3843,7 +3905,8 @@ const saveCollapsedF = () => localStorage.setItem("nm_collapsed_f", JSON.stringi
 // 而不是把所有分组一次性摊开。localStorage 里没有记录时取默认值 true(折叠)，不能写成 `|| false`。
 const SECT_KEY = "nm_sect_open"
 const sectOpen = (() => { try { return JSON.parse(localStorage.getItem(SECT_KEY)) || {} } catch { return {} } })()
-const isSectOpen = (k) => sectOpen[k] === true
+const SECT_DEFAULT = { recent: true }
+const isSectOpen = (k) => (sectOpen[k] === undefined ? !!SECT_DEFAULT[k] : sectOpen[k] === true)
 const setSectOpen = (k, v) => { sectOpen[k] = !!v; localStorage.setItem(SECT_KEY, JSON.stringify(sectOpen)) }
 
 // ---- 「选中的项目」：选中之后新建的会话自动归入它 ----
@@ -3861,7 +3924,7 @@ function setActiveProject(id) {
   if (activeProjectId) { collapsedProjects.delete(activeProjectId); saveCollapsed(); setSectOpen("projects", true) }
   const p = (META_STATE.projects || []).find((x) => x.id === activeProjectId)
   renderSessions(META_STATE)
-  toast(p ? "已选中项目「" + p.name + "」，之后新建的会话都会归到这里" : "已取消选中项目，之后新建的会话落在「最近会话」")
+  toast(p ? "已选中项目「" + p.name + "」，之后新建的会话都会归到这里" : "已取消选中项目，之后新建的会话落在「会话」")
 }
 
 // 判断标题是不是没法看：替换字符 / 私用区 / 看不见的控制符占比过半，就当它是乱码。
@@ -3954,6 +4017,7 @@ function groupHead({ icon, name, sub, count, acts }) {
   if (sub) { const sb = document.createElement("span"); sb.className = "pgsub"; sb.textContent = sub; sb.title = sub; sb.dir = "rtl"; txt.appendChild(sb) }
   const cnt = document.createElement("span"); cnt.className = "pgcount"; cnt.textContent = count
   h.append(caret, fico, txt, cnt)
+  if ((acts || []).length > 2) h.classList.add("acts3")
   for (const a of acts || []) {
     const el = document.createElement("span"); el.className = "pg-act" + (a.danger ? " del" : ""); el.title = a.title; el.innerHTML = ic(a.icon)
     el.addEventListener("click", (e) => { e.stopPropagation(); a.fn(nm) })
@@ -3986,7 +4050,7 @@ function sectionBlock(key, icon, title, count, acts) {
   head.addEventListener("dragover", () => springHover(head, () => wrap.classList.contains("collapsed"), () => toggle(true)))
   head.addEventListener("dragleave", (e) => { if (!head.contains(e.relatedTarget)) clearSpring(head) })
   wrap.append(head, body)
-  return { wrap, body }
+  return { wrap, body, head }
 }
 
 // 「弹簧式」展开：拖拽途中在一个收起的分类/分组上停留一小会儿，就替用户把它打开。
@@ -4081,7 +4145,15 @@ fltBtn.addEventListener("click", (e) => {
 document.addEventListener("click", (e) => { if (!fltPanel.contains(e.target)) fltPanel.classList.remove("on") })
 document.addEventListener("keydown", (e) => { if (e.key === "Escape") fltPanel.classList.remove("on") })
 
+let canRevealFs = false      // 网关与浏览器同机（能在文件管理器里打开目录）——由 /api/sessions 给
+function revealFolder(dir) {
+  fetch("api/fs/reveal?path=" + encodeURIComponent(dir), { method: "POST" })
+    .then((r) => r.json())
+    .then((j) => { if (!j || !j.ok) toast("打不开：" + ((j && j.err) || "未知原因")) })
+    .catch(() => toast("打不开这个目录（网关没响应）"))
+}
 function renderSessions(data) {
+  if (data && typeof data.canReveal === "boolean") canRevealFs = data.canReveal
   META_STATE = data && data.sessions ? { projects: data.projects || [], folders: data.folders || [], sessions: data.sessions } : { projects: [], folders: [], sessions: [] }
   const { projects, folders } = META_STATE
   // 选中的项目被删了（或换了账号/换了机器）→ 这个 id 已经不指向任何东西。不清掉的话，新会话会去
@@ -4144,22 +4216,47 @@ function renderSessions(data) {
     sessionsEl.appendChild(wrap)
   }
 
-  // 2) 文件夹（顶层分类，默认折叠）—— 按会话的工作目录归类
+  // 2) 会话（既不在项目也不在空间里的）—— 也是「移出项目」的拖放目标。
+  //    它是侧栏的主列表，所以【默认展开】（见 SECT_DEFAULT），与上下两个分区默认折叠不同。
   {
-    const { wrap, body } = sectionBlock("folders", "folder", "文件夹", folders.length,
+    const { wrap, body, head } = sectionBlock("recent", "history", "会话", loose.length)
+    // 有项目被选中时，这一行多出一个「取消选中」——取消之后新建的会话正落回这里
+    if (activeProjectId) {
+      const clr = document.createElement("span"); clr.className = "sl-clear"; clr.textContent = "取消选中"
+      clr.title = "取消选中项目：之后新建的会话回到「会话」"
+      clr.addEventListener("click", (e) => { e.stopPropagation(); setActiveProject("") })
+      head.insertBefore(clr, head.querySelector(".msc"))
+    }
+    const area = document.createElement("div"); area.className = "droparea"
+    for (const x of sortBucket(loose, "recent")) area.appendChild(sessRow(x))
+    if (!loose.length) body.appendChild(emptyLine("不在任何项目、也没挑工作目录的会话都落在这里。"))
+    makeSortableList(area, "recent", { kind: "none" })
+    body.appendChild(area)
+    // ★ 组头也当落点：这一分区可以被折叠，折叠后 .droparea 高度为 0，"把会话拖出项目"
+    //   就没有任何地方可落了（弹簧展开要按住 600ms，不该是唯一的路）。同项目组的做法。
+    makeGroupDrop(wrap, head, "recent", { kind: "none" })
+    sessionsEl.appendChild(wrap)
+  }
+
+  // 3) 空间（顶层分类，默认折叠）—— 按会话的工作目录归类
+  {
+    const { wrap, body } = sectionBlock("folders", "folder", "空间", folders.length,
       [{ icon: "folderPlus", title: "新对话选一个工作目录", fn: () => openDirPicker() }])
-    if (!folders.length) body.appendChild(emptyLine("新建对话后、发第一条消息之前，在输入框下方点「工作目录」挑一个电脑上的目录，用同一个目录的会话就会归到一起。"))
+    if (!folders.length) body.appendChild(emptyLine("新建对话后、发第一条消息之前，在输入框下方点「工作目录」挑一个电脑上的目录，用同一个目录的会话就会归到一个空间里。"))
     for (const f of folders) {
       const list = sortBucket(byFolder.get(f.id) || [], "f:" + f.id)
       const group = document.createElement("div"); group.className = "pgroup fgroup" + (collapsedFolders.has(f.id) ? " collapsed" : "")
       const h = groupHead({ icon: "folder", name: f.name, sub: f.path, count: list.length, acts: [
-        { icon: "edit", title: "改这个文件夹在列表里显示的名字（不动磁盘上的目录）", fn: (nameEl) => renameFolder(f.id, f.name, nameEl) },
+        // 「打开」只在网关与浏览器同机时才画：否则 explorer 是在服务器那台机器上弹窗，
+        // 用户这边毫无反应（能力位由 /api/sessions 的 canReveal 给，见 server.mjs）。
+        ...(canRevealFs ? [{ icon: "folderOpen", title: "在文件管理器里打开这个目录", fn: () => revealFolder(f.path) }] : []),
+        { icon: "edit", title: "改这个空间在列表里显示的名字（不动磁盘上的目录）", fn: (nameEl) => renameFolder(f.id, f.name, nameEl) },
         { icon: "x", title: "不再按这个目录分组（会话和目录里的文件都不动）", fn: () => forgetFolder(f.id, f.name) },
       ] })
       const b = document.createElement("div"); b.className = "pgbody"
-      for (const s of list) b.appendChild(sessRow(s, { kind: "folder", id: f.id, name: f.name }))
+      for (const x of list) b.appendChild(sessRow(x, { kind: "folder", id: f.id, name: f.name }))
       h.addEventListener("click", () => { group.classList.toggle("collapsed"); collapsedFolders.has(f.id) ? collapsedFolders.delete(f.id) : collapsedFolders.add(f.id); saveCollapsedF() })
-      // 文件夹组【只能内部排序，不接受从别处拖进来】：会话的工作目录是建会话时定死的
+      // 空间组【只能内部排序，不接受从别处拖进来】：会话的工作目录是建会话时定死的
       //（opencode 的 session.directory 建后不可改），拖一下就换目录是做不到的事，
       // 与其假装接受再悄悄失败，不如在 dragover 就把光标变成"禁止"。
       // 组头同样挂上：本组自己的会话拖到组头 = 排到最前（canDropInto 会挡住外来的那些）。
@@ -4170,20 +4267,9 @@ function renderSessions(data) {
     sessionsEl.appendChild(wrap)
   }
 
-  // 3) 最近会话（既不在项目也不在文件夹里的）—— 也是「移出项目」的拖放目标
-  const recentLbl = sectLabel("history", "最近会话", loose.length)
-  // 有项目被选中时，这一行多出一个「取消选中」——取消之后新建的会话正落回这里
-  if (activeProjectId) {
-    const clr = document.createElement("span"); clr.className = "sl-clear"; clr.textContent = "取消选中"
-    clr.title = "取消选中项目：之后新建的会话回到「最近会话」"
-    clr.addEventListener("click", (e) => { e.stopPropagation(); setActiveProject("") })
-    recentLbl.insertBefore(clr, recentLbl.querySelector(".sl-c"))
-  }
-  sessionsEl.appendChild(recentLbl)
-  const area = document.createElement("div"); area.className = "droparea"
-  for (const s of sortBucket(loose, "recent")) area.appendChild(sessRow(s))
-  makeSortableList(area, "recent", { kind: "none" })
-  sessionsEl.appendChild(area)
+  // 助理那条要跟着会话列表走：微信侧另开的新会话，它取的正是这份列表里最近的一条。
+  // try 是给"首屏渲染早于 asstBridge 初始化"那一瞬兜底的（let 有暂时性死区），不是在吞错。
+  try { paintAsst() } catch (e) {}
   updateSelBar()
   updateDirChip()   // 列表回来了才知道当前会话挂在哪个文件夹下，输入框下面那块要跟着变
 }
@@ -4191,16 +4277,6 @@ function renderSessions(data) {
 // 分组/分类里的空态说明。空分组不写点什么的话就是一条 18px 的空白，用户不知道自己该干嘛。
 function emptyLine(text) {
   const d = document.createElement("div"); d.className = "grp-empty"; d.textContent = text; return d
-}
-
-// 分区标签：图标 + 名称 + 条数（"最近会话 12"）。分组头本来就有计数，这个分区没有，
-// 看着像少了点东西，且用户也想知道"散着的会话到底有多少条"。
-function sectLabel(icon, text, count) {
-  const lbl = document.createElement("div"); lbl.className = "sect-label"
-  lbl.innerHTML = ic(icon)
-  const t = document.createElement("span"); t.className = "sl-t"; t.textContent = text
-  const c = document.createElement("span"); c.className = "sl-c"; c.textContent = count || 0
-  lbl.append(t, c); return lbl
 }
 
 // ---- 拖拽：同一列表内改顺序 + 跨列表归入/移出项目 ----
@@ -4375,7 +4451,7 @@ async function renameFolder(id, cur, nameEl) {
 // 「不再按这个目录分组」。要把话说全：会话还在、目录里的文件一个不动、工作目录也还是那个目录——
 // 用户看到一个 × 号，最怕的就是"点下去我硬盘上的文件夹没了"。
 async function forgetFolder(id, name) {
-  if (!confirm("不再按「" + name + "」这个目录分组？\n\n会话不会被删，目录里的文件也一个都不动，只是左侧不再单独列这一组（组内会话回到「最近会话」）。")) return
+  if (!confirm("不再按「" + name + "」这个目录分组？\n\n会话不会被删，目录里的文件也一个都不动，只是左侧不再单独列这一组（组内会话回到「会话」）。")) return
   await fetch("api/folder/forget?id=" + encodeURIComponent(id), { method: "POST" }).catch(() => {})
   loadSessions()
 }
@@ -4793,7 +4869,7 @@ function setSessbar(open) {
   if (!open && selMode) setSelMode(false)      // 收起会话栏时退出批量选择，别留一个看不见的勾选状态
   document.body.classList.toggle("sessbar-open", open)
   sessToggle.innerHTML = ic(open ? "chevronL" : "history")
-  sessToggle.title = open ? "收起会话" : "最近会话"
+  sessToggle.title = open ? "收起会话栏" : "展开会话栏"
 }
 sessToggle.addEventListener("click", () => {
   const open = !document.body.classList.contains("sessbar-open")
@@ -4804,7 +4880,118 @@ setSessbar(localStorage.getItem("nm_sessbar") !== "0")   // 默认展开（会�
 document.getElementById("refreshSess").addEventListener("click", loadSessions)
 document.getElementById("newProjBtn").innerHTML = ic("folderPlus")
 document.getElementById("newProjBtn").addEventListener("click", createProject)
-{ const np = document.getElementById("newProject"); np.innerHTML = ic("folderPlus"); np.appendChild(document.createTextNode("新建项目")); np.addEventListener("click", createProject) }
+// ---- 侧栏主导航 ----
+// 「新建会话」「项目」「更多」在这里接线；「助理」「自动化」两条各自有可用性探测
+//（分别在聊天接入、定时任务那两段里把 hidden 摘掉），所以只在这里挂点击。
+;(function () {
+  const setNavIc = (id, name) => { const b = document.getElementById(id); if (b) b.querySelector(".ni-ic").innerHTML = ic(name) }
+  setNavIc("navNew", "plus"); setNavIc("navAsst", "sparkle"); setNavIc("navProj", "box")
+  setNavIc("navAuto", "clock"); setNavIc("navMore", "grid")
+  document.getElementById("navNew").addEventListener("click", () => newConversation())
+  // 「项目」不是另一个页面：点它 = 把下面那个「项目」分区展开并滚到眼前。
+  // 分区默认是折叠的，没有这一步的话，用户点了导航却看不出任何变化。
+  document.getElementById("navProj").addEventListener("click", () => {
+    // 模块筛选开着且一条都没命中时，renderSessions 会早返回、根本不画分区 —— 先把筛选摘掉，
+    // 否则用户点「项目」看到的是"只看某模块 0 条"原地不动，以为按钮坏了。
+    if (moduleFilter) setModuleFilter("")
+    setSectOpen("projects", true)
+    renderSessions(META_STATE)
+    const h = sessionsEl.querySelector(".msect .mshead")
+    if (h) { h.scrollIntoView({ block: "nearest" }); h.classList.add("flash"); setTimeout(() => h.classList.remove("flash"), 900) }
+    else createProject()      // 全新账号：一条会话一个项目都没有，此时"点项目"要做的就是建一个
+  })
+  // 【别把 #taskBtn 删了】它在展开态是 display:none 的，但定时任务那一整套逻辑（弹窗、
+  // 可用性探测、跑完的提示）都挂在它身上；这里靠程序化 click 转发过去（隐藏元素照样派发）。
+  document.getElementById("navAuto").addEventListener("click", () => document.getElementById("taskBtn").click())
+  // 「更多」= 展开公告 / 更新说明 / 分享 / 聊天接入那一排图标（低频动作，不常驻）
+  const more = document.getElementById("navMore")
+  more.addEventListener("click", () => {
+    const on = !document.body.classList.contains("more-open")
+    document.body.classList.toggle("more-open", on); more.classList.toggle("on", on)
+    more.setAttribute("aria-expanded", on ? "true" : "false")
+    try { localStorage.setItem("nm_more", on ? "1" : "0") } catch {}
+  })
+  if (localStorage.getItem("nm_more") === "1") { document.body.classList.add("more-open"); more.classList.add("on"); more.setAttribute("aria-expanded", "true") }
+})()
+
+// ---- 侧栏「助理」：接到微信 / 企微的那条会话 ----
+// 【为什么最多只亮一个】"助理"在用户心里是一个东西：点它就该进那条正在手机上聊的会话。
+// 两个都亮的话，点「助理」进哪条就成了猜谜。所以两个平台图标是【单选】：亮的那个 = 点「助理」的去处。
+// 【为什么没配置就亮不起来】没配过的平台既没有凭证也没有绑定的会话，"切过去"是空的。
+// 点灰的那个直接开「聊天接入」设置——那正是他要去的地方。
+let asstBridge = { supported: false, weixin: { ready: false, sid: "" }, wecom: { ready: false, sid: "" } }
+// 【偏好与生效值分开存】asstPref 是用户点过的那个平台，只有他再点一次才会变；
+// asstPlatform 是这一刻实际生效的。合成一个变量的话，"总开关关一下 / boundSid 短暂为空"
+// 这类瞬时状态会把他的选择永久冲成另一个平台，点「助理」进错会话（且刷新后还会再翻一次）。
+let asstPref = localStorage.getItem("nm_asst") || ""
+let asstPlatform = ""
+const ASST_LABEL = { weixin: "微信", wecom: "企业微信" }
+// 「最新会话」不等于设置里绑的那条：微信侧可能另开新会话（见 bridge 轮询那段）。
+// 所以优先按会话列表里标了 chatBridge 的那些取最近更新的一条，取不到才退回绑定的 sid。
+function asstSid(p) {
+  let best = null
+  for (const x of sessList) if (x.chatBridge === p && (!best || (x.updated || 0) > (best.updated || 0))) best = x
+  return best ? best.id : (asstBridge[p] && asstBridge[p].sid) || ""
+}
+function paintAsst() {
+  const row = document.getElementById("navAsst"); if (!row) return
+  row.hidden = !asstBridge.supported
+  if (!asstBridge.supported) return
+  const ready = { weixin: !!asstBridge.weixin.ready, wecom: !!asstBridge.wecom.ready }
+  // 偏好可用就用偏好；暂时不可用就临时落到另一个（偏好本身不动，它一恢复就自己回去）
+  asstPlatform = ready[asstPref] ? asstPref : (ready.weixin ? "weixin" : (ready.wecom ? "wecom" : ""))
+  for (const [id, p] of [["asstWx", "weixin"], ["asstWecom", "wecom"]]) {
+    const b = document.getElementById(id); if (!b) continue
+    b.innerHTML = ic("msg")
+    b.classList.toggle("on", ready[p] && asstPlatform === p)
+    b.classList.toggle("ready", ready[p] && asstPlatform !== p)
+    // 【亮 != 通】configured + 绑了会话就算"接过"，但消息真要能来回还得桥在跑且已订阅上
+    //（登录过期、cc-connect 没起来都会断）。不把这一层写进 tooltip 的话，用户会盯着一个
+    // 绿图标纳闷"为什么手机上发了没反应"。
+    const live = asstBridge[p].live
+    b.title = !ready[p] ? (ASST_LABEL[p] + "还没接入：点一下去设置")
+      : (asstPlatform === p ? ("助理现在接的是" + ASST_LABEL[p] + (live ? "，点「助理」进这条会话" : "（当前未连通：手机上发消息可能收不到，去「更多 -> 聊天接入」看看）")) : ("切到" + ASST_LABEL[p]))
+    b.classList.toggle("stale", ready[p] && !live)
+  }
+  row.title = asstPlatform ? ("助理：进" + ASST_LABEL[asstPlatform] + "上正在聊的那条会话") : "还没把会话接到微信 / 企业微信，点一下去设置"
+}
+function openBridgeSetup() { const b = document.getElementById("bridgeBtn"); if (b) b.click() }
+function pickAsst(p) {
+  if (!asstBridge[p] || !asstBridge[p].ready) { openBridgeSetup(); return }
+  asstPref = p; try { localStorage.setItem("nm_asst", p) } catch {}
+  paintAsst()
+}
+// 供聊天接入那段在读到状态后回调（首次探测、以及面板里每次刷新）
+function applyBridgeStatus(st) {
+  // ready = 接过（configured + 绑了会话 + 有绑定目录，与 chat-bridge.mjs 的 platActive 同口径）
+  // live  = 这一刻真的通（桥在跑且该平台已订阅上）—— 只影响提示语，不影响亮不亮
+  const plat = (k) => {
+    const x = (st && st[k]) || {}
+    return { ready: !!(x.configured && x.boundSid && x.boundDir), live: !!x.subscribed, sid: x.boundSid || "" }
+  }
+  asstBridge = { supported: !!(st && st.ok && st.supported), weixin: plat("weixin"), wecom: plat("wecom") }
+  // 总开关关掉时两个平台都不该亮：会话还绑着，但消息根本不通
+  if (st && st.ok && st.enabled === false) { asstBridge.weixin.ready = false; asstBridge.wecom.ready = false }
+  // 兼容老网关：那时 status 还不回 boundDir（字段是后加的）——有 boundSid 就算接过，别整行变灰
+  if (st && st.ok && st.boundDirs === undefined) {
+    for (const k of ["weixin", "wecom"]) { const x = (st && st[k]) || {}; if (x.configured && x.boundSid) asstBridge[k].ready = true }
+  }
+  paintAsst()
+}
+;(function () {
+  const row = document.getElementById("navAsst"); if (!row) return
+  for (const id of ["asstWx", "asstWecom"]) {
+    const b = document.getElementById(id); if (!b) continue
+    b.addEventListener("click", (e) => { e.stopPropagation(); pickAsst(b.getAttribute("data-p")) })
+    b.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); e.stopPropagation(); pickAsst(b.getAttribute("data-p")) } })
+  }
+  row.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); row.click() } })
+  row.addEventListener("click", () => {
+    const sid = asstPlatform ? asstSid(asstPlatform) : ""
+    if (sid) resumeSession(sid)
+    else openBridgeSetup()          // 没接入 / 接了却还没有会话 → 去设置那一屏，别让人点了没反应
+  })
+})()
 loadSessions()
 loadModules()
 
@@ -8097,6 +8284,9 @@ function renderNoticeDot() {
   wrap.hidden = false
   const un = ntUnread()
   dot.hidden = !un.length
+  // 公告按钮本身收在「更多」里（默认收着）：未读必须同时在「更多」那一行点个红点，
+  // 否则紧急公告对一个从没展开过「更多」的用户等于不存在。
+  document.body.classList.toggle("has-notice", un.length > 0)
   dot.textContent = un.length > 99 ? "99+" : String(un.length)
   dot.className = "dotmark" + (un.some((n) => n.level === "urgent") ? " urgent" : "")
   const btn = document.getElementById("ntBtn")
@@ -8156,11 +8346,22 @@ function renderNoticePanel(list, err) {
   }
 }
 
+// 面板贴着【触发它的那个按钮】下沿弹出。
+// ★ 别写死 top：这排按钮收在「更多」里，而它上面的导航行数是变的（助理 / 自动化时有时无），
+//   写死的话总有一档会把面板压在导航上——面板自己 stopPropagation，底下那几行从此点不动。
+function placeNtPanel(panel, btn) {
+  if (!panel || !btn) return
+  const r = btn.getBoundingClientRect()
+  const top = Math.min(r.bottom + 6, Math.max(8, window.innerHeight - 120))
+  panel.style.top = top + "px"
+  panel.style.maxHeight = Math.max(160, window.innerHeight - top - 12) + "px"
+}
 async function openNoticePanel() {
   const p = document.getElementById("ntPanel")
   if (!p) return
   if (p.classList.contains("on")) { p.classList.remove("on"); return }
   document.getElementById("relPanel")?.classList.remove("on")   // 两个面板同一个角，别叠在一起
+  placeNtPanel(p, document.getElementById("ntBtn"))
   p.classList.add("on")
   renderNoticePanel(ntListCache || [])          // 先画上次的，避免点开是一片空白
   let err = false
@@ -8223,6 +8424,7 @@ async function openReleasePanel() {
   if (!p) return
   if (p.classList.contains("on")) { p.classList.remove("on"); return }
   document.getElementById("ntPanel")?.classList.remove("on")   // 两个面板同一个角，别叠在一起
+  placeNtPanel(p, document.getElementById("relBtn"))
   p.classList.add("on")
   if (relCache) { renderReleasePanel(relCache); return }        // 随包固定，取一次就够
   let err = false
@@ -9282,6 +9484,7 @@ document.addEventListener("visibilitychange", () => { if (!document.hidden) refr
   jget("api/tasks").then(function (d) {
     if (!d || !d.ok || !d.supported) return
     if (btn) btn.hidden = false
+    var nav = document.getElementById("navAuto"); if (nav) nav.hidden = false
     return jget("api/tasks/news").then(function (n) {
       var news = (n && n.news) || []
       if (!news.length) return
@@ -9393,6 +9596,7 @@ document.addEventListener("visibilitychange", () => { if (!document.hidden) refr
     return jget("api/chat-bridge/status").then(function (st) {
       if (!st || !st.ok) throw new Error((st && st.err) || "读取失败")
       cur = st
+      try { applyBridgeStatus(st) } catch (e) {}
       $("cbEnabled").checked = !!st.enabled
       $("cbThinking").checked = !!st.thinking
       $("cbUploadFirst").checked = !!st.uploadFirst
@@ -9520,7 +9724,10 @@ document.addEventListener("visibilitychange", () => { if (!document.hidden) refr
       if (!pollT) pollT = setInterval(refresh, 10000)
     })
   }
-  jget("api/chat-bridge/status").then(function (st) { if (st && st.ok && st.supported && btn) btn.hidden = false }).catch(function () {})
+  jget("api/chat-bridge/status").then(function (st) {
+    if (st && st.ok && st.supported && btn) btn.hidden = false
+    try { applyBridgeStatus(st) } catch (e) {}
+  }).catch(function () {})
 })()
 </script>
 </body>

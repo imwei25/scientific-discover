@@ -923,6 +923,17 @@ const fsParent = (abs, mode) => {
   return up
 }
 const fsWritable = (abs) => { try { fs.accessSync(abs, fs.constants.W_OK); return true } catch { return false } }
+// 「在文件管理器里打开这个目录」能不能给：两个条件缺一不可 ——
+//   ① 不是 workspace 收窄档（那档下用户根本不该看见这台机器的目录结构）；
+//   ② 请求来自本机回环（桌面版的 webview、以及本机浏览器都是）。
+// 【为什么必须卡 ②】explorer/open/xdg-open 是在【跑网关的那台机器】上弹窗。局域网联测或
+// 自建服务器上有人点这个按钮，屏幕上不会有任何反应，而服务器那边悄悄开了个窗口 ——
+// 与其让它"看起来能用其实没用"，不如在能力位上就报 false，前端连按钮都不画。
+const isLoopback = (req) => {
+  const a = String(req.socket?.remoteAddress || "")
+  return a === "127.0.0.1" || a === "::1" || a === "::ffff:127.0.0.1" || a === ""
+}
+const canReveal = (req) => FS_SCOPE === "local" && isLoopback(req)
 
 // ---- 功能模块（封装的技能入口 + 每用户授权）----
 // 每个"模块"= 一种会话形态：chat 是不设限的自由对话（走 AGENTS.md 的完整路由）；
@@ -3819,7 +3830,7 @@ export const server = http.createServer(async (req, res) => {
       const folders = META.folders.filter((f) => used.has(f.id))
         .sort((a, b) => (a.order ?? 0) - (b.order ?? 0))
         .map((f) => ({ id: f.id, name: f.name, path: f.path, order: f.order ?? 0 }))
-      return send(res, 200, "application/json", JSON.stringify({ creditUsd: rate, projects, folders, sessions }))
+      return send(res, 200, "application/json", JSON.stringify({ creditUsd: rate, canReveal: canReveal(req), projects, folders, sessions }))
     }
 
     // 会话重命名：写回 opencode（title 非 ""/"web" 时自动补名逻辑不会再覆盖它）
@@ -3956,6 +3967,28 @@ export const server = http.createServer(async (req, res) => {
         return send(res, 200, "application/json", JSON.stringify({ ok: true, mode, path: abs, parent: fsParent(abs, mode), entries: [], canUse: false, err: "没有权限读取这个目录：" + String(e.code || e.message) }))
       }
       return send(res, 200, "application/json", JSON.stringify({ ok: true, mode, path: abs, parent: fsParent(abs, mode), entries, canUse: fsWritable(abs) }))
+    }
+
+    // 在系统的文件管理器里打开一个目录（侧栏「空间」那一行的「打开」按钮）。
+    // 【为什么不用 shell】路径直接进 argv，不经 cmd 解析 —— 目录名里的 & | " 等字符
+    // 在 shell 里会被当成语法，既可能打不开，也可能被拼成别的命令。
+    if (req.method === "POST" && u.pathname === "/api/fs/reveal") {
+      if (!canReveal(req)) return send(res, 403, "application/json", JSON.stringify({ ok: false, err: "这台机器上的目录只能在本机打开" }))
+      const raw = u.searchParams.get("path") || ""
+      let abs; try { abs = path.resolve(raw.trim()) } catch { return send(res, 400, "application/json", JSON.stringify({ ok: false, err: "路径无效" })) }
+      if (!raw.trim()) return send(res, 400, "application/json", JSON.stringify({ ok: false, err: "没有给目录" }))
+      if (!fsAllowed(abs, fsMode())) return send(res, 403, "application/json", JSON.stringify({ ok: false, err: "该目录不在允许使用的范围内" }))
+      let st; try { st = fs.statSync(abs) } catch { return send(res, 404, "application/json", JSON.stringify({ ok: false, err: "目录不存在（可能已被移走或删掉）" })) }
+      if (!st.isDirectory()) return send(res, 400, "application/json", JSON.stringify({ ok: false, err: "不是目录" }))
+      // explorer.exe 打开成功【也返回退出码 1】（这是它的老毛病，不是失败），所以一律不等退出码：
+      // 起进程没抛错就当成功，真打不开用户自己看得见。detached + unref，别让它挂在网关进程下面。
+      try {
+        const cmd = process.platform === "win32" ? "explorer.exe" : (process.platform === "darwin" ? "open" : "xdg-open")
+        const ch = spawn(cmd, [abs], { detached: true, stdio: "ignore" })
+        ch.on("error", () => {})
+        ch.unref()
+      } catch (e) { return send(res, 500, "application/json", JSON.stringify({ ok: false, err: "打不开：" + String(e.code || e.message) })) }
+      return send(res, 200, "application/json", JSON.stringify({ ok: true, path: abs }))
     }
 
     // 最近用过的目录（含当前没有会话挂着的），给选择器当快捷入口
