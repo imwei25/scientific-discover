@@ -367,7 +367,7 @@
 
   /* ---- Composer（输入区）----
      结构：一张白卡片，自上而下 = 工具行（模块徽标 / 新建对话 / 附件 / 发送·终止）→ 输入框
-     → 底行（模型选择 · 自动推进 · 快捷键提示）。 */
+     → 底行（模型选择 · 全程托管 · 快捷键提示）。 */
   button { border: 0; border-radius: var(--r-sm); cursor: pointer; font-size: 14px; font-weight: 600; transition: filter .15s, background .15s, transform .05s; }
   button:active { transform: translateY(1px); }
   button:disabled { opacity: .5; cursor: default; }
@@ -432,7 +432,7 @@
   .auto-lbl input { accent-color: var(--accent); cursor: pointer; margin: 0; }
   .auto-lbl.on { color: var(--accent); }
   /* 工作目录小胶囊（输入框下方）。三态：未选(灰,可点) / 已选(蓝,可点) / 锁定(会话已开始,只读)。
-     最大宽度写死并省略号，否则一个长目录名会把「自动推进」和右边那行提示整个挤出去。 */
+     最大宽度写死并省略号，否则一个长目录名会把「全程托管」和右边那行提示整个挤出去。 */
   .dir-chip { display: inline-flex; align-items: center; gap: 5px; max-width: 190px; padding: 2px 9px 2px 7px;
     font: inherit; font-size: 12px; line-height: 1.7; color: var(--faint); background: transparent;
     border: 1px solid var(--line-hi); border-radius: 999px; cursor: pointer; white-space: nowrap;
@@ -1033,6 +1033,11 @@
   .wfgo:hover { filter: brightness(1.06); }
   /* 必填没填满：置灰但仍可点（不阻断），悬停有 title 说明还差什么 */
   .wfgo.dim { background: #9fb4d8; box-shadow: none; }
+  /* 「全程托管跑完」：次要位描边款 —— 主按钮仍是「校验并提交」（逐步确认是默认路径，
+     托管是给懒得盯的人的快捷路），两个实心蓝并排会让人分不清该点哪个 */
+  .wfgo.hands-off { color: var(--accent); background: var(--card); border: 1.5px solid var(--accent);
+    box-shadow: none; padding: 7.5px 16px; }
+  .wfgo.hands-off:hover { background: rgba(59,111,212,.08); filter: none; }
   /* 醒目但不做成报错红：用户只是还没填完，不是做错了事 */
   .wfneed { font-size: 12px; color: #8a6d1f; line-height: 1.5; }
   .wfsteps .gatelegend { flex-basis: 100%; margin-top: 5px; font-size: 11px; color: var(--faint); line-height: 1.6; }
@@ -2053,7 +2058,9 @@
           <!-- 工作目录：只在【新对话且还没发过消息/传过文件】时可改（opencode 的 session.directory
                建后不可改，这不是懒得做，是真的没有第二次机会）。已开始的会话上它是一块只读信息。 -->
           <button type="button" id="dirChip" class="dir-chip"><span class="dc-ic"></span><span class="dc-t">工作目录</span></button>
-          <label id="autoLbl" class="auto-lbl" title="勾选后 AI 不再停下向你提问：所有选择自动采用推荐项，连续推进直到给出最终产出才停（做完就停，单步小任务不会被反复加工；也会在连续空转、原地打转、达到轮数/额度上限时停）。随时可点「终止」。"><input type="checkbox" id="autoChk" />自动推进</label>
+          <!-- 2026-08-18 改名：「自动推进」→「全程托管」。旧名读不出"是谁在推进、推进到哪算完"，
+               "托管"是外卖/打车都在用的日常词：把这件事整个交给 AI 一路做完，中途不来问你。 -->
+          <label id="autoLbl" class="auto-lbl" title="勾选后这件事整个交给 AI 一路做完：不再停下向你提问，所有选择自动采用推荐项，直到给出最终产出才停（做完就停，单步小任务不会被反复加工；也会在连续空转、原地打转、达到轮数/额度上限时停）。随时可点「终止」。"><input type="checkbox" id="autoChk" />全程托管</label>
           <span class="spacer"></span>
           <span class="hint">Enter 发送 · Shift + Enter 换行</span>
         </div>
@@ -5294,6 +5301,11 @@ async function showIntake(host, modId) {
     fields: wf.intake, footnote: wf.footnote, notice: wf.notice, steps: wf.steps, intakeSub: wf.intakeSub,
     onSubmit: (values) => startWithForm(modId, values),
     onSkip: () => { host.querySelectorAll(".wfcard").forEach((x) => x.remove()); setComposer(true); q.focus() },
+    // 首屏的「全程托管跑完」：除文献管理外都给（2026-08-18 用户定的边界 —— 文献管理是"整理
+    // 我这个文件夹"，本来就一步到底，没有可托管的中途拍板；其余模块流程长、拍板点多，托管才有意义）。
+    // 回调只负责把输入框旁的 autoChk 勾上：走 change 事件让持久化与点亮逻辑只有一份。
+    onAuto: modId === "litmanage" ? undefined
+      : () => { if (!autoChk.checked) { autoChk.checked = true; autoChk.dispatchEvent(new Event("change")) } },
   })
   // ★ host 还在不在文档里必须现查。loadWorkflow 是个带 8 秒超时的 fetch，这期间用户完全
   //   可能已经打了字发出去（sendMessage 会把 .welcome 整个移除）或切去了同模块的别的会话。
@@ -5347,7 +5359,7 @@ function formSummary(modId, values) {
   return "开始「" + wf.name + "」：" + (parts.join(" · ") || "按默认设定")
 }
 /** 通用表单卡渲染器。schema 全部来自服务端，这里只管画 —— 改流程不用动前端 */
-function buildFormCard({ title, sub, notice, fields, footnote, steps, intakeSub, onSubmit, onSkip, submitText, seed }) {
+function buildFormCard({ title, sub, notice, fields, footnote, steps, intakeSub, onSubmit, onSkip, onAuto, submitText, seed }) {
   // seed = 之前各步已填过的值（服务端 _workflow.json 里那张平表）。
   // 【必须有】步骤表单里的 columns 字段 source 指向的是【首屏】选的数据文件，不在本卡的 fields 里；
   // 不把旧值带进来，"分组列"就会永远停在"先在上面选好数据文件"，这个下拉等于废了。
@@ -5696,7 +5708,10 @@ function buildFormCard({ title, sub, notice, fields, footnote, steps, intakeSub,
   const missText = (m) => "还没填：" + m.map((f) => f.label).join("、")
     + "（已在上面标红；也可以点「跳过表单」直接在输入框里说）"
   const err = document.createElement("div"); err.className = "wferr"; err.style.display = "none"
-  go.addEventListener("click", () => {
+  // 「校验并提交」与「全程托管跑完」共用同一条提交路：区别只在提交前要不要把托管开关勾上。
+  // viaAuto 那支先调 onAuto（把输入框旁的 autoChk 勾上并持久化）再 onSubmit —— sendMessage
+  // 读的是 autoChk.checked，顺序反了这一轮就不是托管跑。
+  const trySubmit = (viaAuto) => {
     const m = miss()
     // 必填项只是提醒，不是闸：用户执意跳过仍可点「跳过表单」直接打字（设计铁律：不阻断）
     if (m.length) {
@@ -5726,15 +5741,29 @@ function buildFormCard({ title, sub, notice, fields, footnote, steps, intakeSub,
     }
     body.querySelectorAll(".wff.invalid").forEach((el) => el.classList.remove("invalid"))
     err.style.display = "none"
+    if (viaAuto && onAuto) onAuto()
     go.disabled = true; go.textContent = "提交中…"
+    if (autoBtn) autoBtn.disabled = true
     // 提交失败要能重来：不复原的话按钮永久停在禁用态，用户填了一整页只能刷新（勾选全丢）
     Promise.resolve(onSubmit(values)).catch(() => {}).finally(() => {
-      if (box.isConnected) { go.disabled = false; goLabel() }
+      if (box.isConnected) { go.disabled = false; goLabel(); if (autoBtn) autoBtn.disabled = false }
     })
-  })
+  }
+  go.addEventListener("click", () => trySubmit(false))
+  // 「全程托管跑完」（2026-08-18 加）：给懒得多填的用户一条一键出件的路 —— 提交表单的同时把
+  // 输入框旁的「全程托管」勾上，后面每个要拍板的地方 AI 自选推荐项、一路做到最终产出。
+  // 校验与「校验并提交」完全同一条路：必填照样提醒（托管≠免填，表填得越少产物越浮于表面）。
+  let autoBtn = null
+  if (onAuto) {
+    autoBtn = document.createElement("button"); autoBtn.type = "button"; autoBtn.className = "wfgo hands-off"
+    autoBtn.innerHTML = ic("sparkle"); autoBtn.appendChild(document.createTextNode("全程托管跑完"))
+    autoBtn.title = "提交后整件事交给 AI 一路做完：要拍板的地方自动采用推荐项，直到给出最终产出才停（同输入框旁的「全程托管」开关，随时可点「终止」）。"
+    autoBtn.addEventListener("click", () => trySubmit(true))
+  }
   acts.appendChild(prog)
   // 「跳过表单，直接打字」占设计稿里「保存草稿」那个次要按钮位（草稿没有后端可落，不做假按钮）
   if (onSkip) { const sk = document.createElement("button"); sk.type = "button"; sk.className = "wfskip"; sk.textContent = "跳过表单，直接打字"; sk.addEventListener("click", onSkip); acts.appendChild(sk) }
+  if (autoBtn) acts.appendChild(autoBtn)
   acts.appendChild(go)
   box.appendChild(acts); box.appendChild(err)
   return box
