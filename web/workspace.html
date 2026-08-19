@@ -45,7 +45,7 @@
     border: 1px solid rgba(255,255,255,.1); }
   .account .who { display: flex; flex-direction: column; line-height: 1.25; text-align: right; }
   .account .who b { font-weight: 400; font-size: 12px; letter-spacing: .02em; }
-  .account .who span { font-size: 9.5px; letter-spacing: .14em; text-transform: uppercase; color: rgba(255,255,255,.45); }
+  .account .who span { font-size: 10px; letter-spacing: .14em; text-transform: uppercase; color: rgba(255,255,255,.45); }
   .account .ava { width: 30px; height: 30px; border-radius: 50%; display: grid; place-items: center;
     background: rgba(255,255,255,.08); border: 1px solid rgba(255,255,255,.16); font-size: 12px; }
   .account .signout { background: none; border: none; color: rgba(255,255,255,.5); cursor: pointer; font-family: var(--sans);
@@ -90,7 +90,11 @@
   .card .tt { display: flex; flex-direction: column; gap: 4px; }
   .card .tt b { font-weight: 500; font-size: 17px; letter-spacing: .02em; }
   .card .tt span { font-size: 10px; letter-spacing: .2em; text-transform: uppercase; color: rgba(255,255,255,.42); }
-  .card .ds { font-weight: 300; font-size: 13px; line-height: 1.7; color: rgba(255,255,255,.56); margin: 2px 0 4px; flex: 1; }
+  /* 简述【最多五行】：模块简介长短差得很远（「文献管理」那条有十一行），一张卡把整行
+     撑到两倍高，同排另外三张卡就空出一大片，读起来像没排版。截到五行，各排卡高度齐平；
+     真要看全在卡片里点进去就是。 */
+  .card .ds { font-weight: 300; font-size: 13px; line-height: 1.7; color: rgba(255,255,255,.56); margin: 2px 0 4px; flex: 1;
+    display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 5; overflow: hidden; }
   .card .enter { align-self: flex-start; display: inline-flex; align-items: center; gap: 7px; margin-top: 4px;
     font-size: 11px; letter-spacing: .16em; text-transform: uppercase; color: rgba(255,255,255,.72);
     padding: 9px 16px; border-radius: 999px; border: 1px solid rgba(255,255,255,.14);
@@ -102,7 +106,7 @@
 
   /* 清单取不到时的兜底：说清楚发生了什么，并给一条能走的路（直接进对话），别只留一片空白 */
   .fallback { margin-top: 44px; border: 1px solid rgba(255,255,255,.12); border-radius: 16px; padding: 22px 24px;
-    background: rgba(255,255,255,.03); color: rgba(255,255,255,.62); font-size: 13.5px; line-height: 1.8; }
+    background: rgba(255,255,255,.03); color: rgba(255,255,255,.62); font-size: 13px; line-height: 1.8; }
   .fallback a { color: #fff; }
 
   footer { text-align: center; padding: 28px 20px 40px; font-size: 10px; letter-spacing: .22em; text-transform: uppercase; color: rgba(255,255,255,.28); }

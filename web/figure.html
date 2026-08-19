@@ -58,7 +58,7 @@ body{margin:0;background:var(--bg);color:var(--text);font-family:var(--sans);fon
 button,textarea,input{font:inherit}
 
 /* 带文字的按钮：只留给【表单里的动作】（上传材料）。工具条一律用下面的 .ibtn。 */
-.hbtn{display:inline-flex;align-items:center;gap:6px;height:28px;padding:0 10px;border-radius:8px;border:1px solid var(--line-hi);background:#fff;color:var(--muted);cursor:pointer;font-size:12.5px;transition:.15s;flex:none}
+.hbtn{display:inline-flex;align-items:center;gap:6px;height:28px;padding:0 10px;border-radius:8px;border:1px solid var(--line-hi);background:#fff;color:var(--muted);cursor:pointer;font-size:12px;transition:.15s;flex:none}
 .hbtn:hover{border-color:var(--accent);color:var(--accent)}
 .hbtn svg{width:14px;height:14px}
 .hbtn[disabled]{opacity:.45;cursor:not-allowed}
@@ -73,7 +73,7 @@ button,textarea,input{font:inherit}
 .ibtn[disabled]{opacity:.45;cursor:not-allowed}
 .ibtn svg{width:15px;height:15px}
 [data-tip]{position:relative}
-[data-tip]:hover::after{content:attr(data-tip);position:absolute;top:calc(100% + 7px);right:0;z-index:400;padding:5px 9px;border-radius:7px;background:rgba(20,24,30,.92);color:#fff;font-size:11.5px;line-height:1.45;white-space:nowrap;pointer-events:none;box-shadow:var(--shadow-sm)}
+[data-tip]:hover::after{content:attr(data-tip);position:absolute;top:calc(100% + 7px);right:0;z-index:400;padding:5px 9px;border-radius:7px;background:rgba(20,24,30,.92);color:#fff;font-size:11px;line-height:1.45;white-space:nowrap;pointer-events:none;box-shadow:var(--shadow-sm)}
 /* 屏幕左半边的按钮把浮层挂到左边，否则贴着窗口右缘会被裁掉 */
 [data-tip].tipL:hover::after{right:auto;left:0}
 
@@ -83,7 +83,7 @@ button,textarea,input{font:inherit}
 .menu .mi{display:block;width:100%;text-align:left;border:none;background:none;padding:8px 10px;border-radius:8px;cursor:pointer;color:var(--text);font-size:13px}
 .menu .mi:hover{background:var(--panel-soft)}
 .menu .mi small{display:block;color:var(--faint);font-size:11px;margin-top:2px}
-.menu .empty{padding:12px 10px;color:var(--faint);font-size:12.5px}
+.menu .empty{padding:12px 10px;color:var(--faint);font-size:12px}
 
 .stage{position:fixed;inset:0;z-index:0;pointer-events:none;background:radial-gradient(ellipse 80% 50% at 50% 0%,rgba(59,111,212,.06) 0%,transparent 60%)}
 .nav{position:fixed;top:14px;right:18px;z-index:5;display:flex;align-items:center;gap:6px}
@@ -96,24 +96,24 @@ button,textarea,input{font:inherit}
 .hdr{text-align:center;margin-bottom:30px}
 .eyebrow{display:inline-flex;align-items:center;gap:7px;padding:5px 12px;background:#fff;border:1px solid var(--line-hi);border-radius:999px;font-size:12px;color:var(--muted);margin-bottom:16px;box-shadow:var(--shadow-sm)}
 .eyebrow .dot{width:6px;height:6px;border-radius:50%;background:var(--accent)}
-.hdr h1{margin:0 0 10px;font-size:30px;font-weight:700;letter-spacing:.01em}
+.hdr h1{margin:0 0 10px;font-size:26px;font-weight:600;letter-spacing:.01em}
 .hdr p{margin:0 auto;max-width:640px;color:var(--muted);font-size:14px}
 
 .grid2{display:grid;grid-template-columns:1fr 1fr;gap:16px;align-items:start}
-@media (max-width:880px){.grid2{grid-template-columns:1fr}.hdr h1{font-size:25px}.intro{padding:34px 14px 40px}}
+@media (max-width:880px){.grid2{grid-template-columns:1fr}.hdr h1{font-size:22px}.intro{padding:34px 14px 40px}}
 /* ★ 面板卡叫 .gcard，不叫 .card —— .card 在阅读器壳里是【markdown 正文卡】，本文件下面也照抄了
    那一份。同名两用会让人以为是同一个东西。 */
 .gcard{background:var(--panel);border:1px solid var(--line-hi);border-radius:var(--r-lg);box-shadow:var(--shadow-sm);padding:20px}
-.gcard-h{display:flex;align-items:center;gap:9px;margin-bottom:16px;font-size:13.5px;font-weight:600}
+.gcard-h{display:flex;align-items:center;gap:9px;margin-bottom:16px;font-size:13px;font-weight:600}
 .gcard-h .ic{width:24px;height:24px;border-radius:7px;background:var(--accent-soft);color:var(--accent);display:grid;place-items:center;flex:none}
 .gcard-h .ic svg{width:14px;height:14px}
 
 .fld{margin-bottom:18px}
 .fld:last-child{margin-bottom:0}
-.fld > label{display:block;font-size:12.5px;font-weight:600;margin-bottom:8px}
+.fld > label{display:block;font-size:12px;font-weight:600;margin-bottom:8px}
 .fld .req{color:var(--red);margin-left:3px}
-.fld .sh{margin-top:7px;font-size:11.5px;color:var(--faint);line-height:1.7}
-textarea{width:100%;min-height:190px;padding:13px;border:1px solid var(--line-hi);border-radius:var(--r-md);background:var(--panel-soft);color:var(--text);font-size:13.5px;line-height:1.7;resize:vertical;transition:.15s}
+.fld .sh{margin-top:7px;font-size:11px;color:var(--faint);line-height:1.7}
+textarea{width:100%;min-height:190px;padding:13px;border:1px solid var(--line-hi);border-radius:var(--r-md);background:var(--panel-soft);color:var(--text);font-size:13px;line-height:1.7;resize:vertical;transition:.15s}
 textarea::placeholder{color:var(--faint)}
 textarea:focus{outline:none;border-color:var(--accent);background:#fff;box-shadow:0 0 0 3px var(--accent-soft)}
 input[type=text]{width:100%;height:36px;padding:0 11px;border:1px solid var(--line-hi);border-radius:var(--r-sm);background:var(--panel-soft);color:var(--text);font-size:13px}
@@ -122,7 +122,7 @@ input[type=text]:focus{outline:none;border-color:var(--accent);background:#fff;b
 /* pill 组（画幅 / 画风 / 张数 / 用途）—— 一律按钮式，不用下拉：
    四组加起来十几个选项，全做成下拉要点四次才看得全，而它们本来就该一眼扫完。 */
 .opts{display:flex;flex-wrap:wrap;gap:7px}
-.opt{padding:7px 13px;border:1px solid var(--line-hi);border-radius:999px;background:#fff;color:var(--muted);font-size:12.5px;cursor:pointer;transition:.15s}
+.opt{padding:7px 13px;border:1px solid var(--line-hi);border-radius:999px;background:#fff;color:var(--muted);font-size:12px;cursor:pointer;transition:.15s}
 .opt:hover{border-color:var(--accent);color:var(--accent)}
 .opt.on{background:var(--accent);border-color:var(--accent);color:#fff}
 
@@ -136,7 +136,7 @@ input[type=text]:focus{outline:none;border-color:var(--accent);background:#fff;b
 .upchip button svg{width:12px;height:12px}
 
 .genbar{margin-top:16px;display:flex;align-items:center;justify-content:space-between;gap:16px;padding:14px 18px;background:var(--panel);border:1px solid var(--line-hi);border-radius:var(--r-lg);box-shadow:var(--shadow-sm);flex-wrap:wrap}
-.genbar .cost{font-size:12.5px;color:var(--muted)}
+.genbar .cost{font-size:12px;color:var(--muted)}
 .genbar .cost b{color:var(--text);font-weight:600}
 /* 主按钮：与阅读器壳首屏的「开始研读」同一颗（.gobtn），连 margin-top 都一样 —— 四个核心能力
    的"开工"按钮长同一个样，用户换模块不用重新找。这里在生成条里，去掉那条 margin。 */
@@ -148,7 +148,7 @@ input[type=text]:focus{outline:none;border-color:var(--accent);background:#fff;b
 .gobtn.busy .spin2{display:inline-block}
 .gobtn.busy .play{display:none}
 /* 错误提示统一走 .notebox（与阅读器壳同款），不再自造一条红色小字 */
-.notebox{padding:11px 13px;border-radius:var(--r-sm);font-size:12.5px;line-height:1.8;margin-bottom:14px}
+.notebox{padding:11px 13px;border-radius:var(--r-sm);font-size:12px;line-height:1.8;margin-bottom:14px}
 .notebox.err{background:#fdecea;border:1px solid #f5c2bd;color:var(--red)}
 .notebox.info{background:#fff;border:1px solid var(--line);color:var(--muted)}
 #err{margin:12px 0 0;display:none}
@@ -158,7 +158,7 @@ input[type=text]:focus{outline:none;border-color:var(--accent);background:#fff;b
 .work[hidden]{display:none}
 .work{position:relative;z-index:1;height:100vh;display:flex;flex-direction:column}
 .wtop{display:flex;align-items:center;gap:10px;padding:10px 16px;background:var(--panel);border-bottom:1px solid var(--line);flex:none}
-.wtop .t{font-weight:600;font-size:13.5px;margin-right:auto;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.wtop .t{font-weight:600;font-size:13px;margin-right:auto;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .wbody{flex:1;min-height:0;display:grid;grid-template-columns:1.35fr 1fr;gap:14px;padding:14px;overflow:hidden}
 @media (max-width:980px){.wbody{grid-template-columns:1fr;overflow:auto}}
 .pane{background:var(--panel);border:1px solid var(--line-hi);border-radius:var(--r-lg);display:flex;flex-direction:column;min-height:0;overflow:hidden}
@@ -177,10 +177,10 @@ input[type=text]:focus{outline:none;border-color:var(--accent);background:#fff;b
 
 /* 产物行：.files / .frow / .fbtn 三件套原样搬自阅读器壳，连图标（眼睛 / 下箭头）都是同两颗 */
 .outs{border-top:1px solid var(--line);padding:12px 14px;flex:none;max-height:34%;overflow:auto}
-.files .ft{font-size:11.5px;color:var(--faint);margin-bottom:7px}
+.files .ft{font-size:11px;color:var(--faint);margin-bottom:7px}
 .frow{display:flex;align-items:center;gap:10px;padding:9px 11px;border:1px solid var(--line);border-radius:var(--r-sm);background:#fff;margin-bottom:6px}
 .frow svg{width:15px;height:15px;color:var(--accent);flex:none}
-.frow b{flex:1;min-width:0;font-size:12.5px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.frow b{flex:1;min-width:0;font-size:12px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .frow .fbtn{flex:none;display:flex;align-items:center;padding:2px;border:none;background:none;cursor:pointer;color:var(--muted);text-decoration:none;border-radius:6px;transition:color .15s,background .15s}
 .frow .fbtn:hover{color:var(--accent);background:var(--panel-soft)}
 .frow .fbtn svg{color:inherit}   /* 否则被上面 .frow svg 的 accent 焊死，悬停不会变色 */
@@ -193,20 +193,20 @@ input[type=text]:focus{outline:none;border-color:var(--accent);background:#fff;b
 .msg.ai .bubble{background:#fff;border:1px solid var(--line);border-radius:4px 14px 14px 14px;padding:14px 16px;box-shadow:var(--shadow-sm)}
 .msg.ai .who{display:flex;align-items:center;gap:7px;color:var(--accent);font-weight:600;font-size:12px;margin-bottom:9px}
 .msg.ai .who svg{width:14px;height:14px}
-.msg.tag .bubble{background:#fff;border:1px dashed var(--line-hi);border-radius:12px;padding:9px 13px;font-size:12.5px;color:var(--muted)}
+.msg.tag .bubble{background:#fff;border:1px dashed var(--line-hi);border-radius:12px;padding:9px 13px;font-size:12px;color:var(--muted)}
 
 /* 运行状态条 + 转圈：同阅读器壳的 .runbox / .spin（连动画名 sp 都一致） */
 .runbox{background:#fff;border:1px solid var(--line);border-radius:var(--r-md);padding:12px 14px;margin-bottom:14px;box-shadow:var(--shadow-sm)}
-.runbox .rh{display:flex;align-items:center;gap:9px;font-size:12.5px;color:var(--muted)}
+.runbox .rh{display:flex;align-items:center;gap:9px;font-size:12px;color:var(--muted)}
 .spin{width:13px;height:13px;border-radius:50%;border:2px solid var(--line-hi);border-top-color:var(--accent);animation:sp .8s linear infinite;flex:none}
 @keyframes sp{to{transform:rotate(360deg)}}
 
 /* markdown 正文：整段照搬阅读器壳，助手的回答在两个模块里排版一致 */
 .card{background:#fff;border:1px solid var(--line);border-radius:var(--r-md);padding:16px 18px;box-shadow:var(--shadow-sm)}
-.md{font-size:13.5px;line-height:1.85;color:var(--text);word-wrap:break-word;overflow-wrap:anywhere}
+.md{font-size:13px;line-height:1.85;color:var(--text);word-wrap:break-word;overflow-wrap:anywhere}
 .md h1{font-size:18px;margin:18px 0 10px}
 .md h2{font-size:16px;margin:16px 0 9px}
-.md h3{font-size:14.5px;margin:14px 0 8px}
+.md h3{font-size:14px;margin:14px 0 8px}
 .md h1:first-child,.md h2:first-child,.md h3:first-child{margin-top:0}
 .md p{margin:0 0 10px}
 .md ul,.md ol{margin:0 0 10px;padding-left:20px}
@@ -218,7 +218,7 @@ input[type=text]:focus{outline:none;border-color:var(--accent);background:#fff;b
 .md img{max-width:100%;border-radius:8px;border:1px solid var(--line);cursor:zoom-in}
 .md a{color:var(--accent)}
 .tblw{overflow-x:auto;margin:0 0 10px}
-.md table{border-collapse:collapse;font-size:12.5px;min-width:100%}
+.md table{border-collapse:collapse;font-size:12px;min-width:100%}
 .md th,.md td{border:1px solid var(--line);padding:6px 9px;text-align:left}
 .md th{background:var(--panel-soft);font-weight:600}
 
@@ -918,7 +918,7 @@ document.addEventListener("click", (e) => { if (!e.target.closest("#menu") && !e
   //   reader.html 那侧做对了（先 meta 存在性、再 meta.allowed、最后才是配置），这里照抄。
   const bail = (title, msg) => {
     document.body.innerHTML = '<div style="padding:60px;text-align:center;color:#5b6573">'
-      + '<div style="font-size:17px;color:#1f2329;margin-bottom:10px">' + esc(title) + "</div>" + esc(msg)
+      + '<div style="font-size:16px;color:#1f2329;margin-bottom:10px">' + esc(title) + "</div>" + esc(msg)
       + '<br><br><a href="./#new" style="color:#3b6fd4">新建会话 →</a></div>'
   }
   let mods = null

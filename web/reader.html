@@ -70,7 +70,7 @@ button{font:inherit}
    原来挂在顶栏上的三个动作各自找到了更该待的地方：
      · 首屏 → 右上角（最近做过的 / 回工作台）
      · 阅读器 → 左栏文件工具条的右端（换一篇 / 最近 / 工作台），与「原文」按钮并排 */
-.hbtn{display:inline-flex;align-items:center;gap:6px;height:28px;padding:0 10px;border-radius:8px;border:1px solid var(--line-hi);background:#fff;color:var(--muted);cursor:pointer;font-size:12.5px;transition:.15s;flex:none}
+.hbtn{display:inline-flex;align-items:center;gap:6px;height:28px;padding:0 10px;border-radius:8px;border:1px solid var(--line-hi);background:#fff;color:var(--muted);cursor:pointer;font-size:12px;transition:.15s;flex:none}
 .hbtn:hover{border-color:var(--accent);color:var(--accent)}
 .hbtn svg{width:14px;height:14px}
 .hbtn[disabled]{opacity:.45;cursor:not-allowed}
@@ -90,7 +90,7 @@ button{font:inherit}
 .menu .mi{display:block;width:100%;text-align:left;border:none;background:none;padding:8px 10px;border-radius:8px;cursor:pointer;color:var(--text);font-size:13px}
 .menu .mi:hover{background:var(--panel-soft)}
 .menu .mi small{display:block;color:var(--faint);font-size:11px;margin-top:2px}
-.menu .empty{padding:12px 10px;color:var(--faint);font-size:12.5px}
+.menu .empty{padding:12px 10px;color:var(--faint);font-size:12px}
 
 /* ---------- 上传首屏（居中大卡片，与基金申报 / 综述撰写的首屏同源）---------- */
 .stage{position:fixed;inset:0;z-index:0;pointer-events:none;background:radial-gradient(ellipse 80% 50% at 50% 0%,rgba(59,111,212,.06) 0%,transparent 60%)}
@@ -102,15 +102,15 @@ button{font:inherit}
 .introcard{width:min(760px,100%);background:var(--panel);border:1px solid var(--line-hi);border-radius:var(--r-lg);box-shadow:var(--shadow-md);padding:44px 38px 34px;text-align:center}
 .introcard .hero-ic{width:56px;height:56px;margin:0 auto 22px;border-radius:14px;background:var(--accent-soft);color:var(--accent);display:grid;place-items:center;box-shadow:0 6px 18px -6px rgba(59,111,212,.4)}
 .introcard .hero-ic svg{width:28px;height:28px}
-.introcard h1{margin:0 0 12px;font-size:30px;font-weight:700;letter-spacing:.01em}
+.introcard h1{margin:0 0 12px;font-size:26px;font-weight:600;letter-spacing:.01em}
 .introcard .lead{font-size:15px;color:var(--muted);line-height:1.78;margin:0 auto;max-width:560px}
-.divider{height:1px;background:var(--line);margin:30px auto;max-width:500px}
+.divider{height:1px;background:var(--line);margin:30px auto;max-width:none}
 
 .drop{border:1.5px dashed var(--line-hi);border-radius:var(--r-md);background:var(--panel-soft);padding:26px 20px;text-align:center;color:var(--muted);cursor:pointer;transition:.15s}
 .drop:hover,.drop.over{border-color:var(--accent);background:var(--accent-soft);color:var(--accent)}
 .drop svg{width:26px;height:26px;color:var(--accent);margin-bottom:8px}
 .drop .d1{font-size:14px;font-weight:600;color:var(--text)}
-.drop .d2{font-size:12.5px;color:var(--muted);margin-top:6px}
+.drop .d2{font-size:12px;color:var(--muted);margin-top:6px}
 
 /* 选中的文件：扩展名徽标 + 名字 + 大小 + 移除。左对齐（卡片整体居中，唯独这一行是数据，
    居中会让长文件名的省略号跑到两头，读起来别扭）。 */
@@ -118,7 +118,7 @@ button{font:inherit}
 .picked .fic{width:30px;height:30px;flex:none;border-radius:8px;background:var(--accent-soft);color:var(--accent);display:grid;place-items:center;font-size:11px;font-weight:700}
 .picked .fn{flex:1;min-width:0}
 .picked .fn b{display:block;font-size:13px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.picked .fn span{font-size:11.5px;color:var(--faint)}
+.picked .fn span{font-size:11px;color:var(--faint)}
 .picked .rm{border:none;background:none;color:var(--faint);cursor:pointer;width:26px;height:26px;border-radius:6px;font-size:15px;line-height:1;flex:none}
 .picked .rm:hover{color:#e0564f;background:rgba(224,86,79,.10)}
 
@@ -130,7 +130,7 @@ button{font:inherit}
 /* 底部这排 chip 写的是本模块真能做的四件事，不是装饰性形容词 —— 用户第一眼要看到的是
    "传进来之后能干嘛"，而不是五个漂亮的四字词。 */
 .chips{display:flex;flex-wrap:wrap;gap:8px;justify-content:center;margin-top:28px}
-.chip{display:inline-flex;align-items:center;gap:6px;background:var(--panel-soft);border:1px solid var(--line-hi);border-radius:999px;padding:7px 14px;font-size:12.5px;color:#46586e;transition:.15s}
+.chip{display:inline-flex;align-items:center;gap:6px;background:var(--panel-soft);border:1px solid var(--line-hi);border-radius:999px;padding:7px 14px;font-size:12px;color:#46586e;transition:.15s}
 .chip:hover{border-color:var(--accent);color:var(--accent)}
 .chip svg{width:14px;height:14px}
 
@@ -140,7 +140,7 @@ button{font:inherit}
 .askbox{margin-top:14px;padding:12px 14px;border:1px solid var(--line-hi);border-radius:var(--r-sm);background:var(--panel-soft);text-align:left}
 .askbox .asklbl{font-size:13px;font-weight:600}
 .askbox .asklbl .req{color:var(--red);font-size:11px;margin-left:4px}
-.askbox .askhelp{font-size:11.5px;color:var(--faint);margin-top:3px;line-height:1.7}
+.askbox .askhelp{font-size:11px;color:var(--faint);margin-top:3px;line-height:1.7}
 .askbox .askopts{display:flex;gap:8px;margin-top:9px}
 .askbtn{flex:1;height:34px;border:1px solid var(--line-hi);background:#fff;border-radius:8px;color:var(--muted);cursor:pointer;font-size:13px;transition:.15s}
 .askbtn:hover{border-color:var(--accent);color:var(--accent)}
@@ -150,10 +150,10 @@ button{font:inherit}
 .setmenu{min-width:320px;max-width:min(420px,92vw);padding:12px 14px}
 .setmenu .sf{margin-bottom:12px}
 .setmenu .sf:last-child{margin-bottom:0}
-.setmenu .sf > label{display:block;font-size:12.5px;font-weight:600;margin-bottom:5px}
+.setmenu .sf > label{display:block;font-size:12px;font-weight:600;margin-bottom:5px}
 .setmenu .sf .sh{font-size:11px;color:var(--faint);line-height:1.7;margin-bottom:5px}
-.setmenu select,.setmenu input[type=text]{width:100%;height:32px;border:1px solid var(--line-hi);border-radius:8px;padding:0 9px;font:inherit;font-size:12.5px;background:#fff;color:var(--text)}
-.setmenu .schk{display:flex;align-items:center;gap:7px;font-size:12.5px;color:var(--muted);margin-bottom:4px;cursor:pointer}
+.setmenu select,.setmenu input[type=text]{width:100%;height:32px;border:1px solid var(--line-hi);border-radius:8px;padding:0 9px;font:inherit;font-size:12px;background:#fff;color:var(--text)}
+.setmenu .schk{display:flex;align-items:center;gap:7px;font-size:12px;color:var(--muted);margin-bottom:4px;cursor:pointer}
 /* 「切到没跑过的模式 → 自动摊开设置」那条路，底部这枚按钮就是"填完了，开跑" */
 .setmenu .sfoot{margin-top:13px;padding-top:12px;border-top:1px solid var(--line)}
 .setmenu .sfoot .st{font-size:11px;color:var(--faint);line-height:1.7;margin-bottom:8px}
@@ -163,21 +163,21 @@ button{font:inherit}
 
 /* 变量对应面板（只有 stats）：默认折叠的一条，展开是两列下拉 */
 .varsbox{flex:none;border-bottom:1px solid var(--line);background:#fff}
-.varsbox > summary{cursor:pointer;padding:9px 16px;font-size:12.5px;font-weight:600;display:flex;align-items:center;gap:8px;list-style:none}
+.varsbox > summary{cursor:pointer;padding:9px 16px;font-size:12px;font-weight:600;display:flex;align-items:center;gap:8px;list-style:none}
 .varsbox > summary::-webkit-details-marker{display:none}
 .varsbox > summary::before{content:"▸";color:var(--faint);font-size:11px}
 .varsbox[open] > summary::before{content:"▾"}
-.varsbox .varssum{font-weight:400;color:var(--faint);font-size:11.5px}
-.varsbox .varssub{padding:0 16px 8px;font-size:11.5px;color:var(--faint);line-height:1.7}
+.varsbox .varssum{font-weight:400;color:var(--faint);font-size:11px}
+.varsbox .varssub{padding:0 16px 8px;font-size:11px;color:var(--faint);line-height:1.7}
 .varsgrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:9px;padding:0 16px 14px}
-.varsgrid .vf label{display:block;font-size:11.5px;color:var(--muted);margin-bottom:4px}
+.varsgrid .vf label{display:block;font-size:11px;color:var(--muted);margin-bottom:4px}
 .varsgrid .vf select,.varsgrid .vf input{width:100%;height:30px;border:1px solid var(--line-hi);border-radius:7px;padding:0 8px;font:inherit;font-size:12px;background:#fff;color:var(--text)}
 .varsgrid .vf.miss label{color:var(--red);font-weight:600}
 .varsgrid .vf.miss select,.varsgrid .vf.miss input{border-color:var(--red)}
 /* 多选的 columns（协变量）：一排可点的列名，选中高亮。单选那几个仍是下拉。 */
 .varsgrid .vf .vchips{display:flex;flex-wrap:wrap;gap:4px}
 .varsgrid .vf .vchip{padding:3px 8px;border:1px solid var(--line-hi);border-radius:6px;background:#fff;
-  color:var(--muted);font:inherit;font-size:11.5px;line-height:1.5;cursor:pointer}
+  color:var(--muted);font:inherit;font-size:11px;line-height:1.5;cursor:pointer}
 .varsgrid .vf .vchip:hover{border-color:var(--accent)}
 .varsgrid .vf .vchip.on{background:var(--accent);border-color:var(--accent);color:#fff}
 /* 自动认列：每格底下一行「凭什么这么认」。用户核对的是这句话，不是那个下拉本身 —— 所以它
@@ -200,10 +200,10 @@ button{font:inherit}
 .varsconfirm .lnk{background:none;border:none;padding:0;color:var(--accent);text-decoration:underline;height:auto}
 /* 前 5 行原样：认列认得对不对，看一眼真数据最快 */
 .varspeek{margin:0 16px 12px}
-.varspeek > summary{cursor:pointer;font-size:11.5px;color:var(--faint);list-style:none}
+.varspeek > summary{cursor:pointer;font-size:11px;color:var(--faint);list-style:none}
 .varspeek > summary::-webkit-details-marker{display:none}
 .varspeek .tw{overflow-x:auto;margin-top:7px;border:1px solid var(--line);border-radius:var(--r-sm)}
-.varspeek table{border-collapse:collapse;font-size:11.5px;white-space:nowrap}
+.varspeek table{border-collapse:collapse;font-size:11px;white-space:nowrap}
 .varspeek th,.varspeek td{padding:4px 9px;border-bottom:1px solid var(--line);text-align:left}
 .varspeek th{background:var(--bg-soft, #f6f7f9);font-weight:600;position:sticky;top:0}
 .varspeek td{color:var(--muted)}
@@ -227,20 +227,20 @@ button{font:inherit}
   color:var(--muted);font:inherit;font-size:12px;cursor:pointer}
 .filestrip .addf:hover{border-color:var(--accent);color:var(--accent)}
 .filestrip .addf:disabled{opacity:.5;cursor:default}
-.filestrip .fnote{flex:none;font-size:11.5px;color:var(--faint);margin-left:2px}
+.filestrip .fnote{flex:none;font-size:11px;color:var(--faint);margin-left:2px}
 
 /* 数据表预览（stats 左栏）：csv/tsv 直接渲染；xlsx 在前端解压解析后同样渲染成表 */
 .tablewrap{position:absolute;inset:0;overflow:auto;padding:14px 16px;background:#fff}
-.tablewrap .sheetbar{display:flex;align-items:center;gap:8px;margin-bottom:10px;font-size:11.5px;color:var(--muted)}
+.tablewrap .sheetbar{display:flex;align-items:center;gap:8px;margin-bottom:10px;font-size:11px;color:var(--muted)}
 .tablewrap .sheetbar select{height:26px;border:1px solid var(--line-hi);border-radius:7px;background:#fff;font:inherit;font-size:12px;padding:0 6px}
 .tablewrap table{border-collapse:collapse;font-size:12px;white-space:nowrap}
 .tablewrap th,.tablewrap td{border:1px solid var(--line);padding:5px 9px;text-align:left}
 .tablewrap th{background:var(--panel-soft);font-weight:600;position:sticky;top:0;z-index:1}
 .tablewrap tbody tr:nth-child(even){background:#fafbfc}
-.tablewrap .more{margin-top:10px;font-size:11.5px;color:var(--faint)}
+.tablewrap .more{margin-top:10px;font-size:11px;color:var(--faint)}
 
-.introcard .tip{margin-top:22px;font-size:11.5px;color:var(--faint);line-height:1.8}
-.introcard .err{margin-top:14px;padding:10px 12px;border-radius:var(--r-sm);background:#fdecea;border:1px solid #f5c2bd;color:var(--red);font-size:12.5px;display:none;text-align:left;line-height:1.75}
+.introcard .tip{margin-top:22px;font-size:11px;color:var(--faint);line-height:1.8}
+.introcard .err{margin-top:14px;padding:10px 12px;border-radius:var(--r-sm);background:#fdecea;border:1px solid #f5c2bd;color:var(--red);font-size:12px;display:none;text-align:left;line-height:1.75}
 .introcard .err.on{display:block}
 /* 不是错、只是要交代一句（例如点开的是旧版留下的、没有原文的会话）——别用红色吓人 */
 .introcard .err.info{background:var(--panel-soft);border-color:var(--line-hi);color:var(--muted)}
@@ -250,7 +250,7 @@ button{font:inherit}
 @keyframes slide{0%{margin-left:-30%}100%{margin-left:100%}}
 @media (max-width:520px){
   .introcard{padding:32px 22px 26px}
-  .introcard h1{font-size:26px}
+  .introcard h1{font-size:22px}
 }
 
 /* ---------- 阅读器三栏 ---------- */
@@ -270,7 +270,7 @@ button{font:inherit}
 .zoom button{width:26px;height:24px;border:none;background:none;border-radius:6px;color:var(--muted);cursor:pointer;display:grid;place-items:center}
 .zoom button:hover{background:var(--accent-soft);color:var(--accent)}
 .zoom button svg{width:14px;height:14px}
-.zoom .zval{min-width:40px;text-align:center;font-size:11.5px;color:var(--muted);font-variant-numeric:tabular-nums}
+.zoom .zval{min-width:40px;text-align:center;font-size:11px;color:var(--muted);font-variant-numeric:tabular-nums}
 .docview{flex:1;position:relative;overflow:hidden;background:#e7eaef}
 .docview iframe{position:absolute;left:0;top:0;border:0;background:#fff;transform-origin:top left}
 .docmsg{position:absolute;inset:0;display:grid;place-items:center;padding:30px;text-align:center;color:var(--muted);font-size:13px;line-height:1.9}
@@ -288,7 +288,7 @@ button{font:inherit}
 
 /* 运行状态条 */
 .runbox{background:#fff;border:1px solid var(--line);border-radius:var(--r-md);padding:12px 14px;margin-bottom:14px;box-shadow:var(--shadow-sm)}
-.runbox .rh{display:flex;align-items:center;gap:9px;font-size:12.5px;color:var(--muted)}
+.runbox .rh{display:flex;align-items:center;gap:9px;font-size:12px;color:var(--muted)}
 .spin{width:13px;height:13px;border-radius:50%;border:2px solid var(--line-hi);border-top-color:var(--accent);animation:sp .8s linear infinite;flex:none}
 @keyframes sp{to{transform:rotate(360deg)}}
 .pills{display:flex;flex-wrap:wrap;gap:5px;margin-top:9px}
@@ -296,11 +296,11 @@ button{font:inherit}
    技能小标签会被套上按钮样式（32px 高、白字白底 = 看不见字）。加一层限定就各归各。 */
 .pills .pill{display:inline-flex;align-items:center;gap:5px;height:auto;min-width:0;font-size:11px;padding:3px 8px;border-radius:999px;background:var(--accent-soft);color:var(--accent);border:1px solid rgba(59,111,212,.25)}
 .runbox details{margin-top:9px}
-.runbox summary{cursor:pointer;font-size:11.5px;color:var(--faint)}
-.runbox .trow{font-size:11.5px;color:var(--muted);padding:3px 0;display:flex;gap:7px}
+.runbox summary{cursor:pointer;font-size:11px;color:var(--faint)}
+.runbox .trow{font-size:11px;color:var(--muted);padding:3px 0;display:flex;gap:7px}
 .runbox .trow .st{width:12px;flex:none;color:var(--faint)}
 
-.notebox{padding:11px 13px;border-radius:var(--r-sm);font-size:12.5px;line-height:1.8;margin-bottom:14px}
+.notebox{padding:11px 13px;border-radius:var(--r-sm);font-size:12px;line-height:1.8;margin-bottom:14px}
 .notebox.warn{background:#fdf3e6;border:1px solid #f0d7ae;color:#8a5a12}
 .notebox.err{background:#fdecea;border:1px solid #f5c2bd;color:var(--red)}
 .notebox.info{background:#fff;border:1px solid var(--line);color:var(--muted)}
@@ -319,21 +319,21 @@ button{font:inherit}
 .stagecard{border:1px solid var(--line);border-left:3px solid var(--accent);border-radius:var(--r-sm);
   background:var(--panel-soft);padding:12px 14px;margin-bottom:14px}
 .stagecard.ok{border-left-color:var(--green)}
-.stagecard .sc-step{font-size:11.5px;font-weight:700;color:var(--accent);margin-bottom:5px}
+.stagecard .sc-step{font-size:11px;font-weight:700;color:var(--accent);margin-bottom:5px}
 .stagecard.ok .sc-step{color:var(--green)}
-.stagecard .sc-md{font-size:12.5px;line-height:1.85;color:var(--muted)}
+.stagecard .sc-md{font-size:12px;line-height:1.85;color:var(--muted)}
 .stagecard .sc-md p{margin:0}
 .stagecard .sc-md p+p{margin-top:6px}
 .stagecard .sc-act{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin-top:11px}
 .stagecard .sc-go{display:inline-flex;align-items:center;gap:6px;height:30px;padding:0 14px;border:none;border-radius:8px;
-  background:var(--accent);color:#fff;font:inherit;font-size:12.5px;font-weight:600;cursor:pointer;transition:.15s}
+  background:var(--accent);color:#fff;font:inherit;font-size:12px;font-weight:600;cursor:pointer;transition:.15s}
 .stagecard .sc-go:hover{background:var(--accent-deep)}
 .stagecard .sc-go[disabled]{background:#c3ccd8;cursor:not-allowed}
 .stagecard .sc-go svg{width:14px;height:14px}
-.stagecard .sc-hint{font-size:11.5px;color:var(--faint)}
+.stagecard .sc-hint{font-size:11px;color:var(--faint)}
 /* 已出片之后，大纲折进来（它已经不是这一格的主角了，但也不能消失：用户会回来核对讲稿） */
 .foldbody{margin-bottom:14px}
-.foldbody>summary{cursor:pointer;font-size:12.5px;color:var(--muted);padding:5px 0}
+.foldbody>summary{cursor:pointer;font-size:12px;color:var(--muted);padding:5px 0}
 .foldbody>summary:hover{color:var(--accent)}
 
 /* ---- 图标按钮 + 悬停浮出的文字 ----
@@ -346,7 +346,7 @@ button{font:inherit}
 .ibtn svg{width:15px;height:15px}
 .ibtn.danger:hover:not([disabled]){color:var(--red);border-color:#f0c4bf;background:#fdecea}
 [data-tip]{position:relative}
-[data-tip]:hover::after{content:attr(data-tip);position:absolute;top:calc(100% + 7px);right:0;z-index:400;padding:5px 9px;border-radius:7px;background:rgba(20,24,30,.92);color:#fff;font-size:11.5px;line-height:1.45;white-space:nowrap;pointer-events:none;box-shadow:var(--shadow-sm)}
+[data-tip]:hover::after{content:attr(data-tip);position:absolute;top:calc(100% + 7px);right:0;z-index:400;padding:5px 9px;border-radius:7px;background:rgba(20,24,30,.92);color:#fff;font-size:11px;line-height:1.45;white-space:nowrap;pointer-events:none;box-shadow:var(--shadow-sm)}
 /* 屏幕左半边的按钮把浮层挂到左边，否则贴着窗口右缘会被裁掉 */
 [data-tip].tipL:hover::after{right:auto;left:0}
 
@@ -355,19 +355,19 @@ button{font:inherit}
    那一份，更没有办法删掉传错的。改成一张常驻的清单卡：传了什么一目了然，可加可删。 */
 .datacard{background:#fff;border:1px solid var(--line);border-radius:var(--r-md);padding:12px 13px 13px;margin-bottom:14px;box-shadow:var(--shadow-sm)}
 .datacard .dh{display:flex;align-items:baseline;gap:8px;margin-bottom:9px}
-.datacard .dh .t{font-size:12.5px;font-weight:600;color:var(--text)}
-.datacard .dh .n{font-size:11.5px;color:var(--faint)}
+.datacard .dh .t{font-size:12px;font-weight:600;color:var(--text)}
+.datacard .dh .n{font-size:11px;color:var(--faint)}
 .datacard .dempty{font-size:12px;color:var(--faint);line-height:1.8;padding:2px 0 4px}
 .datacard .drow{display:flex;align-items:center;gap:9px;padding:7px 9px;border:1px solid var(--line);border-radius:var(--r-sm);background:var(--panel-soft);margin-bottom:6px}
-.datacard .drow .fic{width:26px;height:26px;flex:none;border-radius:7px;background:var(--accent-soft);color:var(--accent);display:grid;place-items:center;font-size:9.5px;font-weight:700;letter-spacing:.02em}
-.datacard .drow b{flex:1;min-width:0;font-size:12.5px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.datacard .drow .fic{width:26px;height:26px;flex:none;border-radius:7px;background:var(--accent-soft);color:var(--accent);display:grid;place-items:center;font-size:10px;font-weight:600;letter-spacing:.02em}
+.datacard .drow b{flex:1;min-width:0;font-size:12px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .datacard .drow .sz{font-size:11px;color:var(--faint);flex:none;font-variant-numeric:tabular-nums}
 .datacard .drow .del{flex:none;width:26px;height:26px;display:grid;place-items:center;border:none;background:none;border-radius:7px;color:var(--faint);cursor:pointer;transition:.15s}
 .datacard .drow .del:hover{color:var(--red);background:#fdecea}
 .datacard .drow .del[disabled]{opacity:.4;cursor:not-allowed}
 .datacard .drow .del svg{width:14px;height:14px}
 /* 「添加」做成整行的虚线投放位，一眼看得出这里还能再加 —— 比一个灰扑扑的小按钮好认得多 */
-.addbtn{display:flex;align-items:center;justify-content:center;gap:7px;width:100%;padding:9px;border:1px dashed var(--line-hi);border-radius:var(--r-sm);background:none;color:var(--muted);font-size:12.5px;cursor:pointer;transition:.15s}
+.addbtn{display:flex;align-items:center;justify-content:center;gap:7px;width:100%;padding:9px;border:1px dashed var(--line-hi);border-radius:var(--r-sm);background:none;color:var(--muted);font-size:12px;cursor:pointer;transition:.15s}
 .addbtn:hover:not([disabled]){border-color:var(--accent);color:var(--accent);background:var(--accent-soft)}
 .addbtn[disabled]{opacity:.5;cursor:not-allowed}
 .addbtn svg{width:14px;height:14px}
@@ -377,11 +377,11 @@ button{font:inherit}
 
 /* markdown 正文 */
 .card{background:#fff;border:1px solid var(--line);border-radius:var(--r-md);padding:16px 18px;box-shadow:var(--shadow-sm)}
-.md{font-size:13.5px;line-height:1.85;color:var(--text);word-wrap:break-word;overflow-wrap:anywhere}
+.md{font-size:13px;line-height:1.85;color:var(--text);word-wrap:break-word;overflow-wrap:anywhere}
 .md h1{font-size:18px;margin:18px 0 10px}
 .md h2{font-size:16px;margin:16px 0 9px}
-.md h3{font-size:14.5px;margin:14px 0 8px}
-.md h4,.md h5,.md h6{font-size:13.5px;margin:12px 0 7px}
+.md h3{font-size:14px;margin:14px 0 8px}
+.md h4,.md h5,.md h6{font-size:13px;margin:12px 0 7px}
 .md h1:first-child,.md h2:first-child,.md h3:first-child{margin-top:0}
 .md p{margin:0 0 10px}
 .md ul,.md ol{margin:0 0 10px;padding-left:20px}
@@ -395,24 +395,24 @@ button{font:inherit}
 .md img{max-width:100%;border-radius:8px;border:1px solid var(--line)}
 .md a{color:var(--accent)}
 .tblw{overflow-x:auto;margin:0 0 10px}
-.md table{border-collapse:collapse;font-size:12.5px;min-width:100%}
+.md table{border-collapse:collapse;font-size:12px;min-width:100%}
 .md th,.md td{border:1px solid var(--line);padding:6px 9px;text-align:left}
 .md th{background:var(--panel-soft);font-weight:600}
 .md td.num{text-align:right;font-variant-numeric:tabular-nums}
 
 /* 产物 */
 .files{margin-top:14px}
-.files .ft{font-size:11.5px;color:var(--faint);margin-bottom:7px}
+.files .ft{font-size:11px;color:var(--faint);margin-bottom:7px}
 .frow{display:flex;align-items:center;gap:10px;padding:9px 11px;border:1px solid var(--line);border-radius:var(--r-sm);background:#fff;margin-bottom:6px}
 .frow svg{width:15px;height:15px;color:var(--accent);flex:none}
-.frow b{flex:1;min-width:0;font-size:12.5px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.frow b{flex:1;min-width:0;font-size:12px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 /* 「预览」与「下载」都是图标（眼睛 / 下箭头），与聊天页（index.html）产出侧栏那两颗一模一样
    —— 同一个动作在两个界面长同一个样，用户不用重新认。悬停才变色，静止时不跟文件名抢注意力。
    一个是 <button>、一个是 <a>，所以要显式压掉链接的下划线与继承色。 */
 .frow .fbtn{flex:none;display:flex;align-items:center;padding:2px;border:none;background:none;cursor:pointer;color:var(--muted);text-decoration:none;border-radius:6px;transition:color .15s,background .15s}
 .frow .fbtn:hover{color:var(--accent);background:var(--panel-soft)}
 .frow .fbtn svg{color:inherit}   /* 否则被上面 .frow svg 的 accent 焊死，悬停不会变色 */
-.frow .fnote{font-size:11.5px;color:var(--faint);flex:none}
+.frow .fnote{font-size:11px;color:var(--faint);flex:none}
 
 /* 产物预览浮层。
    【为什么必须有】原先产物那一行只给了一个 target=_blank 的链接。而 .md / .csv / .json / .py
@@ -439,7 +439,7 @@ button{font:inherit}
    否则它会盖住后面追加的"内容被截断"提示（提示看不见 = 用户以为看到的就是全部）。 */
 .pvbody .tablewrap{position:static;padding:14px 16px 0}
 .pvmsg{padding:34px 26px;text-align:center;color:var(--muted);font-size:13px;line-height:1.95}
-.pvcut{margin-top:12px;font-size:11.5px;color:var(--faint)}
+.pvcut{margin-top:12px;font-size:11px;color:var(--faint)}
 
 /* 聊天 */
 .msg{margin-bottom:16px}
@@ -448,13 +448,13 @@ button{font:inherit}
 .msg.ai .bubble{background:#fff;border:1px solid var(--line);border-radius:4px 14px 14px 14px;padding:14px 16px;box-shadow:var(--shadow-sm)}
 .msg.ai .who{display:flex;align-items:center;gap:7px;color:var(--accent);font-weight:600;font-size:12px;margin-bottom:9px}
 .msg.ai .who svg{width:14px;height:14px}
-.msg.tag .bubble{background:#fff;border:1px dashed var(--line-hi);border-radius:12px;padding:9px 13px;font-size:12.5px;color:var(--muted)}
+.msg.tag .bubble{background:#fff;border:1px dashed var(--line-hi);border-radius:12px;padding:9px 13px;font-size:12px;color:var(--muted)}
 
 /* 追问区：挂在某一格结果【下面】的那串问答（见 askHtml）。
    用一条虚线把它和结果正文分开 —— 不分的话，追问的回答看着像是结果的一部分，
    而它俩的来源完全不同（一个是跑出来的产物，一个是随口问的）。 */
 .askwrap{margin-top:22px;padding-top:16px;border-top:1px dashed var(--line-hi)}
-.askwrap .askt{display:flex;align-items:center;gap:7px;font-size:11.5px;color:var(--faint);margin-bottom:12px}
+.askwrap .askt{display:flex;align-items:center;gap:7px;font-size:11px;color:var(--faint);margin-bottom:12px}
 .askwrap .askt svg{width:13px;height:13px}
 
 .composer{flex:none;border-top:1px solid var(--line);padding:12px 16px 14px;background:#fff}
