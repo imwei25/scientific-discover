@@ -62,19 +62,16 @@ export function encryptSkills(skillsDir, encFilePath, agentsMdPath = null, pytho
   const assetMap = {}
   let fileCount = 0
 
-  // 1. Encrypt AGENTS.md if present
+  // 1. Encrypt AGENTS.md if present (preserve file on disk for OpenCode routing)
   if (agentsMdPath && fs.existsSync(agentsMdPath)) {
     const agentsContent = fs.readFileSync(agentsMdPath, 'utf8')
     assetMap['AGENTS.md'] = agentsContent
     fileCount++
-    fs.writeFileSync(agentsMdPath, AGENTS_PLACEHOLDER, 'utf8')
     console.log(`[SkillSecurity] Encrypted AGENTS.md -> ${agentsMdPath}`)
   }
 
   // 2. Scan skills directory recursively
   const pyFilesToCompile = []
-  const mdFilesToPlaceholder = []
-  const shFilesToPlaceholder = []
 
   function scanDir(currentPath, relPath = '') {
     const items = fs.readdirSync(currentPath)
@@ -91,14 +88,6 @@ export function encryptSkills(skillsDir, encFilePath, agentsMdPath = null, pytho
         if (ext === '.md' || item === 'SKILL.md') {
           const content = fs.readFileSync(fullPath, 'utf8')
           assetMap[`skills/${subRel}`] = content
-          let frontmatter = null
-          if (item === 'SKILL.md' && content.startsWith('---')) {
-            const endIdx = content.indexOf('\n---', 3)
-            if (endIdx !== -1) {
-              frontmatter = content.slice(0, endIdx + 4).trim()
-            }
-          }
-          mdFilesToPlaceholder.push({ fullPath, isSkillMd: item === 'SKILL.md', frontmatter })
           fileCount++
         } else if (ext === '.py') {
           const content = fs.readFileSync(fullPath, 'utf8')
@@ -108,7 +97,6 @@ export function encryptSkills(skillsDir, encFilePath, agentsMdPath = null, pytho
         } else if (ext === '.sh') {
           const content = fs.readFileSync(fullPath, 'utf8')
           assetMap[`skills/${subRel}`] = content
-          shFilesToPlaceholder.push(fullPath)
           fileCount++
         }
       }
@@ -117,7 +105,7 @@ export function encryptSkills(skillsDir, encFilePath, agentsMdPath = null, pytho
 
   scanDir(skillsDir)
 
-  // 3. Compile Python files to .pyc and replace .py with loader stub
+  // 3. Compile Python files to .pyc and replace .py with loader stub (protects Python source algorithms)
   for (const pyPath of pyFilesToCompile) {
     const pycPath = pyPath + 'c'
     try {
@@ -144,20 +132,6 @@ export function encryptSkills(skillsDir, encFilePath, agentsMdPath = null, pytho
       console.warn(`[SkillSecurity] Warning: Could not compile ${pyPath} to .pyc: ${err.message}`)
       fs.writeFileSync(pyPath, PY_LOADER_STUB, 'utf8')
     }
-  }
-
-  // 4. Overwrite .md files with placeholders (preserve YAML frontmatter for SKILL.md so OpenCode registers project skills)
-  for (const { fullPath, isSkillMd, frontmatter } of mdFilesToPlaceholder) {
-    if (isSkillMd && frontmatter) {
-      fs.writeFileSync(fullPath, `${frontmatter}\n\n<!-- ENCRYPTED SKILL BODY - Protected by SciAgent Engine -->\n<!-- Detailed instructions and prompts loaded dynamically in RAM memory -->\n`, 'utf8')
-    } else {
-      fs.writeFileSync(fullPath, MD_PLACEHOLDER, 'utf8')
-    }
-  }
-
-  // 5. Overwrite .sh files with placeholders
-  for (const shPath of shFilesToPlaceholder) {
-    fs.writeFileSync(shPath, SH_PLACEHOLDER, 'utf8')
   }
 
   // 6. Encrypt asset payload with AES-256-GCM
