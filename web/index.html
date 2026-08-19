@@ -4486,7 +4486,14 @@ function renderSessions(data) {
   // 2) 会话（既不在项目也不在空间里的）—— 也是「移出项目」的拖放目标。
   //    它是侧栏的主列表，所以【默认展开】（见 SECT_DEFAULT），与上下两个分区默认折叠不同。
   {
-    const { wrap, body, head } = sectionBlock("recent", "history", "会话", loose.length)
+    // 分类头右上角的 ＋：与「项目」「空间」「定时任务」一致 —— 每个分类的 ＋ 建的都是
+    // 【本分类里的那种东西】。所以这里建的是一条落在「会话」里的普通会话：有项目被选中时
+    // 先取消选中，否则点的是「会话」的 ＋、新会话却跑进了项目组里，跟点的地方对不上。
+    const { wrap, body, head } = sectionBlock("recent", "history", "会话", loose.length,
+      [{ icon: "plus", title: "新建会话（落在这里；若有选中的项目会先取消选中）", fn: () => {
+        if (activeProjectId) setActiveProject("")
+        newConversation()
+      } }])
     // 有项目被选中时，这一行多出一个「取消选中」——取消之后新建的会话正落回这里
     if (activeProjectId) {
       const clr = document.createElement("span"); clr.className = "sl-clear"; clr.textContent = "取消选中"
