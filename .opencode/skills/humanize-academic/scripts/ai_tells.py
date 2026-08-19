@@ -192,6 +192,12 @@ def _reflow(lines):
             continue
         if not buf:
             start = i
+        # ★ 跨行拼接时，两端都是拉丁字母/数字就补一个空格。
+        #   PDF 里 "Cancer Genomics\nConsortium" 直接首尾相接会拼成 GenomicsConsortium，
+        #   被下面的"粘连缺空格"闸当成硬伤报出来——这是本脚本自己造的假阳性，实测踩过。
+        #   中文之间不补（中文本来就不用空格），中英之间也不补（那正是要查的夹生写法）。
+        if buf and s and re.match(r"[A-Za-z0-9]", s) and re.search(r"[A-Za-z0-9]$", buf[-1]):
+            buf.append(" ")
         buf.append(s)
         # 段落收尾的长相：以句末标点结束，且这一行明显短于正文行宽（末行不满行）
         if s and s[-1] in SENT_END and len(s) < width * 0.9:
@@ -327,12 +333,19 @@ def detect(text, terms=(), reflow=False):
 
     for m in CYRILLIC_RE.finditer(body):
         charset.append({"kind": "西里尔字母", "char": m.group(), "ctx": ctx(m, body)})
+    notes = []
     for m in GREEK_RE.finditer(body):
-        if m.group() not in GREEK_OK:
-            # U+037E 希腊问号与半角分号**长得一模一样**，肉眼永远看不出来——
-            # 这类同形异码字符正是"AI 生成/多语言 token 混淆"最硬的指纹。
-            kind = "希腊问号（形似分号）" if m.group() == ";" else "罕用希腊字母"
-            charset.append({"kind": kind, "char": m.group(), "ctx": ctx(m, body)})
+        if m.group() in GREEK_OK:
+            continue
+        if m.group() == ";":
+            # U+037E 希腊问号与半角分号不只是长得像——**它们规范等价**（NFC(U+037E)=U+003B）。
+            # 所以从 PDF 抽文本时经常整篇冒出来：实测两份 pandoc→LaTeX→dvipdfmx 出的 PDF，
+            # 半角 ";" 零个、U+037E 三十几个，而源文里其实全是正常分号——是 PDF 取字时
+            # 在两个等价码位里挑错了那一个，不是稿子的毛病。
+            # → 不计入硬伤，只作提示；真要判它，拿 .docx/.md 源文查，别拿 PDF 抽出来的文本。
+            notes.append({"kind": "U+037E（与半角分号规范等价）", "ctx": ctx(m, body)})
+            continue
+        charset.append({"kind": "罕用希腊字母", "char": m.group(), "ctx": ctx(m, body)})
     for m in FULLWIDTH_LATIN_RE.finditer(body):
         charset.append({"kind": "全角拉丁字母", "char": m.group(), "ctx": ctx(m, body)})
     mixed = []
@@ -351,6 +364,7 @@ def detect(text, terms=(), reflow=False):
     R["findings"]["charset"] = {
         "metric": len(charset) + len(mixed) + len(glue),
         "foreign_chars": charset[:20], "mixed_words": mixed[:20], "glued_words": glue[:20],
+        "notes": notes[:5], "notes_total": len(notes),
     }
 
     # ── 空转套话 ───────────────────────────────────────────
@@ -444,6 +458,9 @@ def render(R, title="", show_items=True):
                 L.append(f"        中英夹生 “{it['word']}”  …{it['ctx']}…")
             for it in f.get("glued_words", [])[:6]:
                 L.append(f"        粘连缺空格 “{it['word']}”  …{it['ctx']}…")
+            if f.get("notes_total"):
+                L.append(f"        （另有 {f['notes_total']} 处 U+037E：与半角分号规范等价，"
+                         f"多为 PDF 取字所致，不计入硬伤；要判它请拿 .docx/.md 源文查）")
         elif key == "cliche":
             for it in f.get("items", [])[:6]:
                 L.append(f"        「{it['hit']}」  …{it['ctx']}…")

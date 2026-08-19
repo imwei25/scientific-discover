@@ -190,8 +190,47 @@ def test_para_format():
           str(R["findings"]["uplift_ending"]["at"][:3]))
 
 
+# ── 假阳性回归：这两个坑是在真稿上实测踩出来的，别再犯 ────────
+def test_reflow_join_no_false_glue():
+    """PDF 硬换行把 "Cancer Genomics / Consortium" 断成两行，
+    拼接时不补空格就会造出 GenomicsConsortium，被"粘连缺空格"闸误判成硬伤。"""
+    pdf_text = (
+        "本节讨论室间质评的国际经验与我国现状，重点比较不同体系下的一致性水平。\n"
+        "FISH 仍被公认为检测遗传异常的金标准临床检测方法，但Cancer Genomics\n"
+        "Consortium 的调查显示，不同实验室在判读阈值上存在明显差异[1]。\n"
+        "在多发性骨髓瘤领域，Cancer\n"
+        "Genomics Consortium 浆细胞肿瘤工作组基于102 例样本提出了推荐方案[2]。\n"
+    )
+    R = T.detect(pdf_text, reflow=True)
+    glued = {i["word"] for i in R["findings"]["charset"]["glued_words"]}
+    check("reflow 跨行拼接不造假粘连", glued == set(), str(glued))
+    # 真粘连仍要抓到（原文里就连在一起，不是断行造成的）
+    R2 = T.detect("商业化探针标记的SpectrumOrange 荧光信号在20 年内保持稳定，未见明显衰减[1]。\n",
+                  reflow=True)
+    check("真粘连 SpectrumOrange 仍抓得到",
+          "SpectrumOrange" in {i["word"] for i in R2["findings"]["charset"]["glued_words"]},
+          str(R2["findings"]["charset"]))
+
+
+def test_u037e_is_note_not_finding():
+    """U+037E 与半角分号**规范等价**（NFC 后就是 ;）。从 PDF 抽文本时会整篇冒出来，
+    源文其实是正常分号——实测两份 pandoc→LaTeX 出的 PDF 都这样。所以只作提示、不判硬伤。"""
+    txt = ("FISH 用于检测t(8;21)、inv(16)和del(17p) 等常见异常，"
+           "在急性髓系白血病的分型中具有明确价值[1]。\n")
+    R = T.detect(txt)
+    f = R["findings"]["charset"]
+    check("U+037E 不计入硬伤", m(R, "charset") == 0, str(f))
+    check("U+037E 记为提示", f.get("notes_total", 0) >= 1, str(f))
+    check("NFC(U+037E) 确实是半角分号",
+          __import__("unicodedata").normalize("NFC", ";") == ";")
+    # 真正没有正当用途的异文字（西里尔）仍然判硬伤
+    R2 = T.detect("验证应使用已知阳性и阴性标本，并记录详细的性能参数[1]。\n")
+    check("西里尔字母仍判硬伤", m(R2, "charset") >= 1, str(R2["findings"]["charset"]))
+
+
 if __name__ == "__main__":
-    for fn in (test_B, test_D, test_E, test_F, test_C, test_G, test_gate, test_para_format):
+    for fn in (test_B, test_D, test_E, test_F, test_C, test_G, test_gate, test_para_format,
+               test_reflow_join_no_false_glue, test_u037e_is_note_not_finding):
         print(f"\n── {fn.__name__} ──")
         fn()
     print()
