@@ -302,6 +302,77 @@ export function getAssetContent(assetKey) {
 }
 
 /**
+ * Universal Decrypted Asset Resolver:
+ * Resolves any file path (Windows absolute, relative, or skill key) to its decrypted content from RAM memory.
+ */
+export function resolveDecryptedAsset(p) {
+  if (!p || typeof p !== 'string') return null
+  const norm = p.replace(/\\/g, '/')
+
+  if (norm.endsWith('AGENTS.md')) {
+    return getAssetContent('AGENTS.md')
+  }
+
+  const idx = norm.indexOf('/skills/')
+  if (idx !== -1) {
+    const sub = norm.slice(idx + 8)
+    return getAssetContent(sub) || getAssetContent(`skills/${sub}`)
+  }
+
+  return getAssetContent(norm) || getAssetContent(`skills/${norm}`) || null
+}
+
+/**
+ * Universal In-Flight Request Payload Transparent Decrypter (Route B):
+ * Intercepts outbound LLM payload messages and transparently substitutes any encrypted placeholders
+ * (from read tools, skill tools, or system prompts) with the complete decrypted text from RAM.
+ */
+export function transparentDecryptPayload(payload) {
+  if (!payload || !Array.isArray(payload.messages)) return payload
+
+  for (const msg of payload.messages) {
+    if (!msg) continue
+
+    if (typeof msg.content === 'string') {
+      if (msg.content.includes('<!-- ENCRYPTED')) {
+        // 1. Replace AGENTS.md placeholder
+        if (msg.content.includes('<!-- ENCRYPTED AGENTS.md')) {
+          const agents = resolveDecryptedAsset('AGENTS.md')
+          if (agents) {
+            msg.content = msg.content.replace(/<!-- ENCRYPTED AGENTS\.md[\s\S]*?<!-- Content loaded dynamically in RAM memory -->/g, agents)
+          }
+        }
+
+        // 2. Replace read tool results: <path>...</path> ... <content> ... <!-- ENCRYPTED ... </content>
+        msg.content = msg.content.replace(/<path>([^<]+)<\/path>([\s\S]*?)<content>([\s\S]*?)<\/content>/g, (fullMatch, filePath, mid, contentBody) => {
+          if (contentBody.includes('<!-- ENCRYPTED')) {
+            const decrypted = resolveDecryptedAsset(filePath.trim())
+            if (decrypted) {
+              const formatted = decrypted.split('\n').map((line, i) => `${i + 1}: ${line}`).join('\n')
+              return `<path>${filePath}</path>${mid}<content>\n${formatted}\n</content>`
+            }
+          }
+          return fullMatch
+        })
+
+        // 3. Replace skill tool results: <skill_content name="X"> ... </skill_content>
+        msg.content = msg.content.replace(/<skill_content name="([^"]+)">([\s\S]*?)<\/skill_content>/g, (fullMatch, skillName, body) => {
+          if (body.includes('<!-- ENCRYPTED')) {
+            const rawSkill = resolveDecryptedAsset(`skills/${skillName}/SKILL.md`)
+            if (rawSkill) {
+              return `<skill_content name="${skillName}">\n# Skill: ${skillName}\n\n${rawSkill}\n</skill_content>`
+            }
+          }
+          return fullMatch
+        })
+      }
+    }
+  }
+
+  return payload
+}
+
+/**
  * Input Security Guardrail: Check messages for prompt injection
  */
 export function checkInputSecurity(messages) {

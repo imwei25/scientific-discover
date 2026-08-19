@@ -19,7 +19,7 @@ import { scrubShare, renderShareHtml } from "./share-export.mjs"
 import * as Tasks from "./tasks.mjs"
 import * as Sched from "./schtasks.mjs"
 import * as Presets from "./task-presets.mjs"
-import { checkInputSecurity, loadSkillsInMemory, restoreRuntimeSkills, getAssetContent, DEFENSE_SYSTEM_PROMPT } from "./skill-security.mjs"
+import { checkInputSecurity, loadSkillsInMemory, transparentDecryptPayload, getAssetContent, DEFENSE_SYSTEM_PROMPT } from "./skill-security.mjs"
 
 // opencode 的完整流水线（标书/论文/系统综述）单轮可跑十几分钟，而 session.prompt 是“等整轮结束才返回”的请求；
 // undici 默认 5 分钟 headers/body 超时会让这类长轮假性抛错。关掉这两个超时（0=不限），连接超时保留。
@@ -2870,40 +2870,18 @@ async function cloudForward(req, res, u) {
   const passthru = rest.startsWith("/img/") || rest.startsWith("/ocr/")
   const fwdPath = (passthru ? rest : "/llm" + rest) + u.search
 
-  // 动态透明解密透传：若 opencode 的工具调用读到了磁盘占位符，网关在发往云端 LLM 前从 RAM 替换为完整解密指令
+  // 动态透明解密透传（方案 B）：全量拦截并透明替换所有 read/skill/前言 中的占位符为 RAM 真实解密原文
   if (!passthru && body.length) {
     try {
       const jsonStr = body.toString("utf8")
       if (jsonStr.includes("<!-- ENCRYPTED")) {
         const payload = JSON.parse(jsonStr)
-        if (Array.isArray(payload.messages)) {
-          let modified = false
-          for (const msg of payload.messages) {
-            if (!msg || typeof msg.content !== "string") continue
-            if (msg.content.includes("<!-- ENCRYPTED AGENTS.md")) {
-              const agents = getAssetContent("AGENTS.md")
-              if (agents) {
-                msg.content = msg.content.replace(/<!-- ENCRYPTED AGENTS\.md[\s\S]*?<!-- Content loaded dynamically in RAM memory -->/g, agents)
-                modified = true
-              }
-            }
-            if (msg.content.includes("<!-- ENCRYPTED SKILL")) {
-              msg.content = msg.content.replace(/<skill_content name="([^"]+)">[\s\S]*?<\/skill_content>/g, (fullMatch, skillName) => {
-                const rawSkill = getAssetContent(`${skillName}/SKILL.md`)
-                if (rawSkill) {
-                  return `<skill_content name="${skillName}">\n# Skill: ${skillName}\n\n${rawSkill}\n</skill_content>`
-                }
-                return fullMatch
-              })
-              modified = true
-            }
-          }
-          if (modified) {
-            body = Buffer.from(JSON.stringify(payload), "utf8")
-          }
-        }
+        transparentDecryptPayload(payload)
+        body = Buffer.from(JSON.stringify(payload), "utf8")
       }
-    } catch {}
+    } catch (e) {
+      console.warn("[cloudForward] Transparent decrypt error:", e?.message)
+    }
   }
 
   const once = async (force) => {
