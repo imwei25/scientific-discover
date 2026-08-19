@@ -47,13 +47,13 @@ test("primary 显式声明，且与旧的 skills[0] 语义一致（模块可用�
     assert.ok(WF.skillsOf(m).includes(WF.primaryOf(m)), `${m} 的 primary 不在技能集里`)
 })
 
-// 四个「核心能力」模块共用 web/reader.html 那个壳，而壳里没有任何一个模块的名字 ——
+// 四个「专项技能」模块共用 web/reader.html 那个壳，而壳里没有任何一个模块的名字 ——
 // 模式清单、提示词、首屏文案全部由 workflows.mjs 的 reader 段下发。这里钉住那份契约：
 // 少一样前端就画不出来，而症状往往不是报错，是「某个按钮点了没反应」或「结果落错面板」。
 test("阅读器型模块：reader 配置完整、模式标记与前言逐字一致", () => {
   const readers = Object.entries(WF.WORKFLOWS).filter(([, w]) => w.ui === "reader").map(([id]) => id)
   assert.deepEqual(readers.sort(), ["humanize", "litread", "refcheck", "stats"],
-    "四个核心能力模块都该用阅读器壳")
+    "四个专项技能模块都该用阅读器壳")
 
   for (const id of readers) {
     const w = WF.WORKFLOWS[id]
@@ -376,11 +376,18 @@ test("起点分叉：标书「打磨已有 idea」从锻打起步，论文「打
   const idea = WF.WORKFLOWS.grant.intake.find((f) => f.id === "ideaDesc")
   assert.ok(WF.visible(idea, { entry: "idea" }) && WF.isRequired(idea, { entry: "idea" }))
   assert.ok(!WF.visible(idea, { entry: "scratch" }))
-  // 「打磨已有」路线：项目基本信息与申请人信息每一条都转选填；从零 / 跳过表单仍必填（fail-safe）
-  for (const id of ["funder", "keywords", "amount", "applicantName", "applicant", "org"]) {
+  // 「打磨已有」路线：项目基本信息每一条都转选填；从零 / 跳过表单仍必填（fail-safe）
+  for (const id of ["funder", "keywords", "amount"]) {
     const f = WF.WORKFLOWS.grant.intake.find((x) => x.id === id)
     assert.ok(!WF.isRequired(f, { entry: "idea" }), `${id} 在打磨已有路线不该必填`)
     assert.ok(WF.isRequired(f, { entry: "scratch" }) && WF.isRequired(f, {}), `${id} 从零/跳过表单仍必填`)
+  }
+  // 申请人信息（姓名 / 职称身份 / 依托单位 / 邮箱 / 电话）：2026-08-19 起【哪条路线都选填】。
+  // 个人身份信息不该成为拿到稿子的硬门槛（前端缺必填不放行提交）；缺的按 §五 标"待补充"向用户要。
+  for (const id of ["applicantName", "applicant", "org", "email", "phone"]) {
+    const f = WF.WORKFLOWS.grant.intake.find((x) => x.id === id)
+    for (const v of [{ entry: "idea" }, { entry: "scratch" }, {}])
+      assert.ok(!WF.isRequired(f, v), `${id} 不该必填（个人身份信息一律选填）`)
   }
   // 「打磨已有」路线：已有工作基础与上传材料二选一至少填一个（对方空我必填、对方填了我转选填）
   const base = WF.WORKFLOWS.grant.intake.find((f) => f.id === "baseDesc")
