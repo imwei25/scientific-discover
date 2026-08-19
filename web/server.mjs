@@ -32,11 +32,10 @@ const OUTPUTS = path.join(ROOT, "outputs")
 fs.mkdirSync(UPLOADS, { recursive: true })
 fs.mkdirSync(OUTPUTS, { recursive: true })
 
-// 自动装载加密的 Skill / AGENTS.md（内存解密与运行时透明恢复，若存在 skills.enc）
+// 自动装载加密的 Skill / AGENTS.md 到 RAM 内存（仅内存持有解密映射，磁盘全程保持密文/占位符）
 const encPath = path.join(ROOT, ".opencode", "skills.enc")
 if (fs.existsSync(encPath)) {
   loadSkillsInMemory(encPath)
-  restoreRuntimeSkills(encPath, path.join(ROOT, ".opencode", "skills"), path.join(ROOT, "AGENTS.md"))
 }
 
 const OC_URL = process.env.OC_URL || "http://127.0.0.1:4098"
@@ -2870,6 +2869,42 @@ async function cloudForward(req, res, u) {
   const rest = u.pathname.slice(CLOUD_PROXY_PREFIX.length - 1)
   const passthru = rest.startsWith("/img/") || rest.startsWith("/ocr/")
   const fwdPath = (passthru ? rest : "/llm" + rest) + u.search
+
+  // 动态透明解密透传：若 opencode 的工具调用读到了磁盘占位符，网关在发往云端 LLM 前从 RAM 替换为完整解密指令
+  if (!passthru && body.length) {
+    try {
+      const jsonStr = body.toString("utf8")
+      if (jsonStr.includes("<!-- ENCRYPTED")) {
+        const payload = JSON.parse(jsonStr)
+        if (Array.isArray(payload.messages)) {
+          let modified = false
+          for (const msg of payload.messages) {
+            if (!msg || typeof msg.content !== "string") continue
+            if (msg.content.includes("<!-- ENCRYPTED AGENTS.md")) {
+              const agents = getAssetContent("AGENTS.md")
+              if (agents) {
+                msg.content = msg.content.replace(/<!-- ENCRYPTED AGENTS\.md[\s\S]*?<!-- Content loaded dynamically in RAM memory -->/g, agents)
+                modified = true
+              }
+            }
+            if (msg.content.includes("<!-- ENCRYPTED SKILL")) {
+              msg.content = msg.content.replace(/<skill_content name="([^"]+)">[\s\S]*?<\/skill_content>/g, (fullMatch, skillName) => {
+                const rawSkill = getAssetContent(`${skillName}/SKILL.md`)
+                if (rawSkill) {
+                  return `<skill_content name="${skillName}">\n# Skill: ${skillName}\n\n${rawSkill}\n</skill_content>`
+                }
+                return fullMatch
+              })
+              modified = true
+            }
+          }
+          if (modified) {
+            body = Buffer.from(JSON.stringify(payload), "utf8")
+          }
+        }
+      }
+    } catch {}
+  }
 
   const once = async (force) => {
     const a = await Cloud.currentAccess({ force })
