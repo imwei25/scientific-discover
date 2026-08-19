@@ -135,11 +135,28 @@ export function initCapture(dataDir, log = () => {}) {
     try { return fs.readFileSync(p) } catch { return null }
   }
 
+  /** 按 status() 里的 name 批量删几条（管理台折叠分组的"删除整组"）。返回 {ok, n:删掉几条} */
+  const deleteFiles = (names) => {
+    if (!Array.isArray(names) || !names.length) return { ok: false, err: "没给要删的文件" }
+    let n = 0
+    try {
+      for (const name of names) {
+        const parts = String(name || "").split("/")
+        if (parts.length !== 2) continue                    // 与 readFile 同一套越界防线
+        const p = path.join(root, safeSeg(parts[0]), path.basename(parts[1]))
+        if (!p.endsWith(".json") || path.basename(p) === "config.json") continue
+        if (!fs.existsSync(p)) continue
+        fs.rmSync(p, { force: true }); n++
+      }
+      return { ok: true, n }
+    } catch (e) { return { ok: false, err: e.message, n } }
+  }
+
   /** 删掉某个用户已抓的全部文件（目录整个移除；开关状态不动） */
   const clearUser = (username) => {
     try { fs.rmSync(path.join(root, safeSeg(username)), { recursive: true, force: true }); return { ok: true } }
     catch (e) { return { ok: false, err: e.message } }
   }
 
-  return { isOn, toggle, record, status, readFile, clearUser }
+  return { isOn, toggle, record, status, readFile, deleteFiles, clearUser }
 }

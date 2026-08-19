@@ -83,6 +83,35 @@ test("capture：开关状态持久化（重启后仍在抓）", () => {
   assert.equal(c2.isOn("zhangsan"), true)
 })
 
+test("capture：deleteFiles 只删点名的那几条，路径穿越/config.json 一律不碰", async () => {
+  const dir = tmpDir()
+  const c = initCapture(dir)
+  c.toggle("zhangsan", true)
+  c.toggle("lisi", true)
+  for (let i = 0; i < 3; i++) c.record("zhangsan", { model: "m" }, Buffer.from(`{"i":${i}}`))
+  c.record("lisi", { model: "m" }, Buffer.from('{"x":1}'))
+  const st = await waitFiles(c, 4)
+  const mine = st.files.filter((f) => f.user === "zhangsan").map((f) => f.name)
+  assert.equal(mine.length, 3)
+
+  const r = c.deleteFiles(mine.slice(0, 2))
+  assert.equal(r.ok, true)
+  assert.equal(r.n, 2)
+  const left = c.status().files
+  assert.equal(left.length, 2)                                    // 剩 zhangsan 1 条 + lisi 1 条
+  assert.equal(left.filter((f) => f.user === "lisi").length, 1)    // 别人的没被误删
+  assert.equal(c.isOn("zhangsan"), true)                           // 开关不受影响
+
+  // 越界与非抓包文件：一条都不该删，config.json 还在
+  assert.equal(c.deleteFiles(["../../etc/passwd"]).n, 0)
+  assert.equal(c.deleteFiles(["a/b/c"]).n, 0)
+  assert.equal(c.deleteFiles(["zhangsan/../config.json"]).n, 0)
+  assert.equal(c.deleteFiles(["./config.json"]).n, 0)
+  assert.equal(fs.existsSync(path.join(dir, "captures", "config.json")), true)
+  assert.equal(c.deleteFiles([]).ok, false)
+  assert.equal(c.status().files.length, 2)
+})
+
 test("capture：clearUser 删文件但保留开关", async () => {
   const dir = tmpDir()
   const c = initCapture(dir)

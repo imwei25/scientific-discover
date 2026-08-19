@@ -1973,6 +1973,15 @@ async function handleAdminApi(req, res, pathname) {
     })
     return res.end(buf)
   }
+  if (req.method === "POST" && pathname === "/admin/api/capture-delete") {
+    const b = await readBody(req)
+    const names = Array.isArray(b.names) ? b.names.map(String) : []
+    if (!names.length) return json(res, 400, { ok: false, err: "缺 names" })
+    const r = capture.deleteFiles(names)
+    if (!r.ok) return json(res, 500, r)
+    audit("capture.delete", { actor: "admin", ip, detail: `删除 ${r.n} 条（请求 ${names.length} 条）` })
+    return json(res, 200, { ok: true, n: r.n, ...capture.status() })
+  }
   if (req.method === "POST" && pathname === "/admin/api/capture-clear") {
     const b = await readBody(req)
     const username = String(b.username || "").trim()

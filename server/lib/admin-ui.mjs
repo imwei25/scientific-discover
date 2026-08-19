@@ -98,7 +98,8 @@ var S={users:[],tiers:[],skills:[],catalog:[],tierCounts:{},board:null,q:'',filt
        // 列头筛选条件（列之间 AND、同列多选 OR，与服务端 buildUserPredicate 一一对应）
        f:{tiers:[],status:[],skillMode:[],usage:[],hasSkill:[],hospital:'',idle:false},
        sel:{},                 // 勾选的账号 id（翻页/改筛选都不丢，批量操作按它点名）
-       matchedIds:[],maxBulk:500};
+       matchedIds:[],maxBulk:500,
+       capOpen:{},capG:{}};   // 抓包页：展开着的分组 key / key→分组（整组删除按它点名）
 // 有没有设过任何列筛选（决定要不要把 f 发给服务端、以及"清空"按钮要不要亮）
 function hasF(){var f=S.f;return !!(f.tiers.length||f.status.length||f.skillMode.length||
   f.usage.length||f.hasSkill.length||f.hospital||f.idle)}
@@ -1788,29 +1789,81 @@ function loadAudit(){
 }
 
 // ---- 请求抓包：按用户抓打到 /llm 的完整请求体，验证模型实际吃到了什么 ----
+var CAP_GAP=2*60*1000;   // 折叠间隔：同一用户里相邻两条 ≤2 分钟算同一轮
+var capSize=function(n){return n>1048576?(n/1048576).toFixed(1)+' MB':Math.max(1,Math.round((n||0)/1024))+' KB'};
+// 组标题上的时间：单条就显示那一刻，多条显示"最早 ～ 最新时刻"
+function capSpan(g){var d=dt(g.first);
+  if(g.files.length<2)return d;
+  return dt(g.last)+' ～ '+new Date(g.first).toLocaleTimeString('zh-CN',{timeZone:'Asia/Shanghai',hour12:false})}
+// 文件清单 → 折叠分组：先按用户分桶，桶内按时间新→旧排，相邻间隔 >CAP_GAP 就断成新组。
+// key 用"用户|组内最旧的文件名"——新请求只会加在新的一端，key 不变，刷新后展开状态还对得上。
+function capGroups(files){
+  var by={};(files||[]).forEach(function(f){(by[f.user]=by[f.user]||[]).push(f)});
+  var gs=[];
+  Object.keys(by).forEach(function(u){
+    var cur=null;
+    by[u].slice().sort(function(a,b){return b.ts-a.ts}).forEach(function(f){
+      if(cur&&cur.last-f.ts<=CAP_GAP){cur.files.push(f);cur.last=f.ts}
+      else{cur={user:u,files:[f],first:f.ts,last:f.ts};gs.push(cur)}})});
+  gs.forEach(function(g){
+    g.size=g.files.reduce(function(s,f){return s+(f.size||0)},0);
+    g.key=g.user+'|'+g.files[g.files.length-1].name});
+  gs.sort(function(a,b){return b.first-a.first});
+  return gs}
 function loadCapture(){
   $('#pane').innerHTML='<section><h2>请求抓包</h2><p class="mut">加载中…</p></section>';
   api('capture').then(function(j){
     if(!j.ok){if(!j.unauth)$('#pane').innerHTML='<section><div class="msg err" style="display:block">'+esc(j.err||'加载失败')+'</div></section>';return}
     var us=(j.users||[]).map(function(u){
       return '<span class="tag ok">'+esc(u)+'　<a href="#" class="cap-off" data-u="'+esc(u)+'" style="color:var(--bad)">停</a></span>'}).join(' ')||'<span class="mut">当前没有在抓的用户</span>';
-    var rows=(j.files||[]).map(function(f){
-      return '<tr><td class="mut" style="white-space:nowrap;font-size:12.5px">'+dt(f.ts)+'</td><td>'+esc(f.user)+'</td>'+
-        '<td><a href="#" class="cap-view" data-name="'+esc(f.name)+'" style="color:var(--acc)">'+esc(f.name)+'</a>'+
-        ' <a href="/admin/api/capture-file?name='+encodeURIComponent(f.name)+'" class="mut" style="font-size:12px;margin-left:6px">↓原始JSON</a></td>'+
-        '<td class="mut" style="white-space:nowrap">'+(f.size>1048576?(f.size/1048576).toFixed(1)+' MB':Math.max(1,Math.round(f.size/1024))+' KB')+'</td></tr>'}).join('');
+    var gs=capGroups(j.files);S.capG={};gs.forEach(function(g){S.capG[g.key]=g});
+    var rows=gs.map(function(g){
+      var open=!!S.capOpen[g.key];
+      var items=g.files.map(function(f){
+        return '<tr class="cap-i" data-g="'+esc(g.key)+'"'+(open?'':' style="display:none"')+'>'+
+          '<td class="mut" style="white-space:nowrap;font-size:12.5px;padding-left:22px">'+dt(f.ts)+'</td><td class="mut">'+esc(f.user)+'</td>'+
+          '<td><a href="#" class="cap-view" data-name="'+esc(f.name)+'" style="color:var(--acc)">'+esc(f.name)+'</a>'+
+          ' <a href="/admin/api/capture-file?name='+encodeURIComponent(f.name)+'" class="mut" style="font-size:12px;margin-left:6px">↓原始JSON</a></td>'+
+          '<td class="mut" style="white-space:nowrap">'+capSize(f.size)+'</td></tr>'}).join('');
+      return '<tr class="cap-g" data-k="'+esc(g.key)+'" style="cursor:pointer;background:var(--p2)">'+
+        '<td style="white-space:nowrap;font-size:12.5px"><span class="cap-caret">'+(open?'▾':'▸')+'</span> '+esc(capSpan(g))+'</td>'+
+        '<td><b>'+esc(g.user)+'</b></td>'+
+        '<td><span class="tag">'+g.files.length+' 条</span>'+
+        ' <a href="#" class="cap-del" data-k="'+esc(g.key)+'" style="color:var(--bad);font-size:12px;margin-left:8px">删除整组</a></td>'+
+        '<td class="mut" style="white-space:nowrap">'+capSize(g.size)+'</td></tr>'+items}).join('');
     $('#pane').innerHTML='<section><h2>请求抓包 <span class="mut">调试用：抓该用户打到模型的每一条完整请求（含系统提示、技能内容、工具结果）</span></h2>'+
       '<div class="row"><input id="cap-u" placeholder="登录名" style="width:170px">'+
       '<button class="btn primary" id="cap-on">开始抓</button><span class="sp"></span>'+us+'</div>'+
-      '<div class="hint" style="margin:9px 0 12px">抓到的是用户会话明文（可能含敏感数据），核完就停掉并清空；每用户最多留 300 条、超出自动删最旧的，且抓包文件满 10 天自动清除。</div>'+
-      '<table><thead><tr><th>时间</th><th>用户</th><th>文件（点击下载）</th><th>大小</th></tr></thead>'+
+      '<div class="hint" style="margin:9px 0 12px">抓到的是用户会话明文（可能含敏感数据），核完就停掉并清空；每用户最多留 300 条、超出自动删最旧的，且抓包文件满 10 天自动清除。<br>'+
+      '下表按<b>用户 + 时间</b>折叠：同一用户里相邻两条间隔 ≤2 分钟的归为一组（约等于"一轮任务"），点组标题展开，可整组删除。</div>'+
+      '<table><thead><tr><th>时间</th><th>用户</th><th>分组 / 文件（点击下载）</th><th>大小</th></tr></thead>'+
       '<tbody>'+(rows||'<tr><td colspan="4" class="mut">还没抓到任何请求</td></tr>')+'</tbody></table>'+
       '<div class="row" style="margin-top:12px"><input id="cap-cu" placeholder="要清空的登录名" style="width:170px">'+
       '<button class="btn danger sm" id="cap-clear">清空该用户的抓包文件</button><span class="sp"></span>'+
+      '<button class="btn sm" id="cap-exp">'+(gs.length&&gs.every(function(g){return S.capOpen[g.key]})?'全部收起':'全部展开')+'</button>'+
       '<button class="btn sm" id="cap-rf">刷新</button></div>'+
       '<div id="cap-detail" style="margin-top:14px"></div></section>';
     Array.prototype.forEach.call(document.querySelectorAll('.cap-view'),function(a){
       a.onclick=function(ev){ev.preventDefault();viewCapture(a.dataset.name)}});
+    // 组标题：点一下就地展开/收起（不重拉接口，展开状态记在 S.capOpen，刷新后还在）
+    Array.prototype.forEach.call(document.querySelectorAll('.cap-g'),function(tr){
+      tr.onclick=function(ev){
+        if(ev.target&&ev.target.className&&String(ev.target.className).indexOf('cap-del')>=0)return;
+        var k=tr.dataset.k,open=!S.capOpen[k];S.capOpen[k]=open;
+        var c=tr.querySelector('.cap-caret');if(c)c.textContent=open?'▾':'▸';
+        Array.prototype.forEach.call(document.querySelectorAll('.cap-i'),function(r){
+          if(r.dataset.g===k)r.style.display=open?'':'none'})}});
+    // 整组删除：把该组的文件名一次性交给后端删（组是"一轮任务"，逐条点太慢）
+    Array.prototype.forEach.call(document.querySelectorAll('.cap-del'),function(a){
+      a.onclick=function(ev){ev.preventDefault();ev.stopPropagation();
+        var g=S.capG[a.dataset.k];if(!g)return;
+        if(!confirm('删除 '+g.user+' 这一组共 '+g.files.length+' 条抓包（'+capSpan(g)+'）？'))return;
+        post('capture-delete',{names:g.files.map(function(f){return f.name})}).then(function(r){
+          toast(r.ok?'已删除 '+r.n+' 条':(r.err||'失败'),r.ok);
+          if(r.ok){delete S.capOpen[a.dataset.k];loadCapture()}})}});
+    $('#cap-exp').onclick=function(){
+      var allOpen=gs.length&&gs.every(function(g){return S.capOpen[g.key]});
+      gs.forEach(function(g){if(allOpen)delete S.capOpen[g.key];else S.capOpen[g.key]=true});loadCapture()};
     $('#cap-on').onclick=function(){var u=$('#cap-u').value.trim();if(!u)return;
       post('capture',{username:u,on:true}).then(function(r){toast(r.ok?'已开始抓 '+u+' 的请求':(r.err||'失败'),r.ok);if(r.ok)loadCapture()})};
     Array.prototype.forEach.call(document.querySelectorAll('.cap-off'),function(a){
