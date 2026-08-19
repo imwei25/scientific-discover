@@ -103,7 +103,7 @@ const JOURNAL_FILTER = [
 ]
 
 // ============================================================
-// 阅读器型模块（ui:"reader"）—— 四个「核心能力」模块共用的一套定义
+// 阅读器型模块（ui:"reader"）—— 四个「专项技能」模块共用的一套定义
 // ------------------------------------------------------------
 // 【什么样的模块适合它】输入是【一份东西】（一篇文献 / 一份稿件 / 一张数据表），
 // 用户想对它做的事有好几种、彼此没有先后、随时来回切。这类模块套进通用壳（首屏表单 →
@@ -851,9 +851,10 @@ export const WORKFLOWS = {
       //   要求卡，不凭常识硬写），是表外渠道唯一正确的出口。
       // chips:true —— 11 个选项本会掉进原生下拉，而这是全表最要紧的一项，收起来等于把
       //   "有哪些渠道可选"藏了。摊开占两行，值这个地方。
-      // ★ 2026-08-11「打磨已有」路线（entry=idea）下，本区块与「申请人信息」的每一项都转选填
+      // ★ 2026-08-11「打磨已有」路线（entry=idea）下，本区块的每一项都转选填
       //   （requiredWhen ne:"idea"）——已有材料里多半都写着这些；缺的会标"待补充"问用户要。
       //   entry 未填（跳过表单）时 ne 条件成立 → 仍按必填算，方向 fail-safe。
+      //   （「申请人信息」那一块 2026-08-19 起【无论哪条路线都全选填】，不再受 entry 影响。）
       // dropdown：2026-08-11 按用户要求从摊开的 chips 改回原生下拉（11 个选项占两行太吵）。
       { id: "funder", label: "申请类型", type: "select", requiredWhen: { field: "entry", ne: "idea" }, dropdown: true, col2: false,
         section: "项目基本信息", sectionIcon: "lines",
@@ -912,28 +913,28 @@ export const WORKFLOWS = {
       { id: "yearEnd", label: "研究终止年", type: "number", col2: false, default: 2029,
         min: 2000, max: 2100, step: 1, placeholder: "例如：2029", gteField: "yearStart" },
 
-      // ---- 区块 2：申请人信息 ----
+      // ---- 区块 2：申请人信息（★ 2026-08-19 起【整块选填】）----
       // ⚠️ 姓名 / 单位会随任务卡交给模型（封面与研究基础一节要用），而【邮箱和电话它一个字都用不上】
       //   —— 标了 noCard，只留在本地表单里，不进提示词。个人联系方式没有任何理由送进模型上下文。
-      { id: "applicantName", label: "申请人姓名", type: "text", requiredWhen: { field: "entry", ne: "idea" }, col2: false,
+      // ★ 2026-08-19 按用户要求，本区块的每一项（姓名 / 职称身份 / 依托单位 / 邮箱 / 电话）
+      //   全部转为选填：这些是【个人身份信息】，不该成为拿到稿子的硬门槛（前端缺必填不放行提交），
+      //   而且缺了也不影响正文成稿 —— 封面、研究基础里用得上的部分照 §五 标"待补充"向用户要即可。
+      //   注：职称 / 身份原本参与 topic-selection 第 3.5 步「按申请人类型分流可行路径」，
+      //   现在留空时该步不分流、按通用路径给候选；想要分流建议照旧填一下。
+      { id: "applicantName", label: "申请人姓名", type: "text", col2: false,
         section: "申请人信息", sectionIcon: "user",
-        placeholder: "请输入真实姓名", errMsg: "请填写申请人姓名" },
-      // ★ 在读研究生 / 博士后必须留着。topic-selection 第 3.5 步是【按申请人类型分流可行路径】，
-      //   原话"同一方向，不同身份能做的设计天差地别，别给临床医生推需湿实验室的机制题"——
-      //   身份直接改变选题，而选题是后面每一节的地基。博士后另有独立要求卡（references/postdoc.md）。
+        placeholder: "请输入真实姓名（选填）" },
       //   标签写「职称 / 身份」：在读研究生没有职称，只叫"职称"会让人不知道该选哪个。
-      { id: "applicant", label: "职称 / 身份", type: "select", dropdown: true, requiredWhen: { field: "entry", ne: "idea" }, col2: false,
+      { id: "applicant", label: "职称 / 身份", type: "select", dropdown: true, col2: false,
         options: [
           { v: "student", t: "在读研究生" }, { v: "postdoc", t: "博士后" },
           { v: "lecturer", t: "主治医师 / 助理研究员" }, { v: "associate", t: "副研究员 / 副教授" },
-          { v: "professor", t: "研究员 / 教授" }, { v: "other", t: "其他" }],
-        errMsg: "请选择职称 / 身份" },
+          { v: "professor", t: "研究员 / 教授" }, { v: "other", t: "其他" }] },
       // col2:false —— 与联系邮箱同宽（2026-08-11 用户要求两者输入框长度一致）
-      { id: "org", label: "依托单位", type: "text", requiredWhen: { field: "entry", ne: "idea" }, col2: false,
-        placeholder: "例如：某某大学附属医院", errMsg: "请填写依托单位" },
-      // ★ 这两项【不设必填】。它们标了 noCard、一个字都不进提示词，对成稿没有任何贡献；
-      //   而设成必填就成了硬门槛（前端缺必填不放行提交）——用一份永远不会被用到的数据，
-      //   挡住用户拿到稿子，怎么算都不合算。设计稿标的是必填，这里是有意不照抄。
+      { id: "org", label: "依托单位", type: "text", col2: false,
+        placeholder: "例如：某某大学附属医院（选填）" },
+      // ★ 这两项此前就【不设必填】（标了 noCard、一个字都不进提示词，对成稿没有任何贡献），
+      //   现在整块都跟它们一样了。
       { id: "email", label: "联系邮箱", type: "text", col2: false, noCard: true,
         placeholder: "name@hospital.com" },
       { id: "phone", label: "联系电话", type: "text", col2: false, noCard: true,

@@ -154,7 +154,7 @@
   .modcard .mn { display: block; color: var(--text); font-size: 13px; font-weight: 600; }
   .modcard .md { display: block; color: var(--faint); font-size: 11px; margin-top: 3px; line-height: 1.5; }
   /* ---- 新会话的模块选择区（原独立的「工作台」页搬进空态，不再跳走一整页）----
-     结构照搬工作台：两个分区（工作台 / 核心能力）× 卡片网格，卡上有图标、中英标题、简述、「进入」。
+     结构照搬工作台：两个分区（工作台 / 专项技能）× 卡片网格，卡上有图标、中英标题、简述、「进入」。
      配色换成聊天页这套浅色系统变量，不再是工作台那张深色视频底页。 */
   /* width:100% 不能省：.welcome 靠 margin:auto 居中，而 flex 子项一旦有 auto 外边距就不再被拉伸，
      宽度会退化成"内容有多宽就多宽"——那一横排卡片会把整块撑到 max-width，反把对话列挤出横向滚动条。 */
@@ -543,6 +543,22 @@
   .fltitem .n { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .fltitem .c { color: var(--faint); font-size: 11px; font-variant-numeric: tabular-nums; }
   .fltsep { height: 1px; margin: 5px 3px; background: var(--line); }
+  /* 搜索会话弹窗里的结果列表。高度写死一段可滚区：结果条数从 0 到几十条都有，
+     不定高的话弹窗会随着每次敲键盘上下跳。 */
+  #searchModal .modal-card { max-width: 560px; }
+  .srchlist { margin-top: 10px; max-height: 46vh; min-height: 120px; overflow-y: auto;
+    border: 1px solid var(--line); border-radius: var(--r-sm); padding: 4px; }
+  .srchrow { display: flex; align-items: center; gap: 8px; padding: 7px 9px; border-radius: 7px;
+    cursor: pointer; user-select: none; }
+  .srchrow:hover { background: var(--panel-soft); }
+  .srchrow.on { background: rgba(6,182,212,.12); }
+  .srchrow .t { flex: 1; min-width: 0; font-size: 13px; color: var(--text);
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .srchrow .t mark { background: rgba(250,204,21,.42); color: inherit; border-radius: 3px; padding: 0 1px; }
+  .srchrow .m { flex: none; font-size: 11px; color: var(--muted); background: #eef2f8;
+    border: 1px solid var(--line-hi); border-radius: 6px; padding: 1px 6px; }
+  .srchrow .d { flex: none; font-size: 11px; color: var(--faint); font-variant-numeric: tabular-nums; }
+  .srchempty { padding: 26px 10px; text-align: center; color: var(--faint); font-size: 12px; line-height: 1.7; }
   /* 筛选中：列表顶部常驻一条"正在只看 X"，否则用户换会话后会忘了自己开着筛选，
      以为会话丢了。点它就能清掉。 */
   .fltbar { display: flex; align-items: center; gap: 6px; padding: 6px 8px; margin-bottom: 2px;
@@ -2010,6 +2026,9 @@
         <button id="fltBtn" class="mini" type="button" title="按模块筛选会话"></button>
         <div id="fltPanel" class="fltpanel"></div>
       </div>
+      <!-- 搜索会话：与筛选并排。筛选是"按类别收窄看得见的列表"，搜索是"我记得它叫什么，
+           把它找出来" —— 后者不动列表本身，结果单独开弹窗，双击一条就跳过去。 -->
+      <button id="searchBtn" class="mini" type="button" title="搜索会话（按标题匹配，空格分隔多个关键词）"></button>
       <button id="selModeBtn" class="mini" type="button" title="批量选择（勾选多个会话一次删除）"></button>
       <button id="refreshSess" class="mini" type="button" title="刷新列表"></button>
     </div>
@@ -2154,6 +2173,24 @@
     <button class="pv-close" id="pvDocClose" type="button">返回台账</button>
   </div>
   <div class="pv-body" id="pvDocBody"></div>
+</div>
+<!-- 搜索会话：输入即搜（纯前端，对已载入的会话清单做匹配，不打服务端）。
+     · 多个关键词用空格分隔 → 每个都要命中（AND），顺序不限；
+     · 标题命中的排在最前，其次是靠模块名 / 项目名 / 空间名命中的，同档按最近更新排；
+     · 双击一条 = 关弹窗并跳过去（单击只选中，避免手滑就切走了正在填的表单）。 -->
+<div id="searchModal" class="modal">
+  <div class="modal-card" style="max-width:560px">
+    <div class="modal-head">
+      <span class="modal-title" id="searchTitle">搜索会话</span>
+      <button class="modal-x" id="searchClose" type="button" title="关闭"></button>
+    </div>
+    <div class="modal-body">
+      <input id="searchInput" class="mm-input" type="text" autocomplete="off" spellcheck="false"
+        placeholder="输入关键词搜索会话标题，空格分隔多个关键词（都要命中）" />
+      <div id="searchResults" class="srchlist"></div>
+      <div class="mm-hint">双击一条打开该会话；回车打开第一条，↑↓ 换选中项，Esc 关闭。</div>
+    </div>
+  </div>
 </div>
 <div id="pwModal" class="modal">
   <div class="modal-card" style="max-width:380px">
@@ -2613,7 +2650,8 @@ const ICONS = {
   fileText: '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Z"/><path d="M14 2v6h6"/><path d="M16 13H8"/><path d="M16 17H8"/><path d="M10 9H8"/>',
   star: '<path d="m12 2 3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01Z"/>',
   uploadBox: '<path d="M12 16V4"/><path d="m8 8 4-4 4 4"/><path d="M4 16v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"/>',
-  filter: '<path d="M4 5h16l-6.3 7.4v5.3L10.3 20v-7.6Z"/>'
+  filter: '<path d="M4 5h16l-6.3 7.4v5.3L10.3 20v-7.6Z"/>',
+  search: '<circle cx="11" cy="11" r="7"/><path d="m20.5 20.5-4.2-4.2"/>'
 }
 function ic(name, cls) { return '<svg class="ic' + (cls ? " " + cls : "") + '" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">' + (ICONS[name] || "") + "</svg>" }
 const setIc = (id, name) => { const el = document.getElementById(id); if (el) el.innerHTML = ic(name) }
@@ -4214,6 +4252,120 @@ fltBtn.addEventListener("click", (e) => {
 document.addEventListener("click", (e) => { if (!fltPanel.contains(e.target)) fltPanel.classList.remove("on") })
 document.addEventListener("keydown", (e) => { if (e.key === "Escape") fltPanel.classList.remove("on") })
 
+// ---- 搜索会话（筛选漏斗旁边那个放大镜）----
+// 与筛选是两件事：筛选按模块【收窄左边这份列表】，搜索是"我记得它叫什么，把它翻出来"——
+// 不动列表本身（也不受当前筛选影响：正开着筛选还要求用户先清掉才搜得到，等于让人先猜自己
+// 为什么搜不到），结果单独开一个弹窗，双击一条才跳过去。
+// 【纯前端】匹配对象是 META_STATE.sessions（左侧列表本来就已经载入的那份全量清单），
+//   不打服务端 —— 这里能给的就是标题/模块/项目/空间这些元信息，正文全文检索不在本功能范围内。
+const searchModal = document.getElementById("searchModal")
+const searchInput = document.getElementById("searchInput")
+const searchResults = document.getElementById("searchResults")
+let searchHits = []      // 当前结果（会话对象数组，已排好序）
+let searchCur = -1       // 选中项下标（↑↓ 移动，回车打开）
+
+// 本段自带一份转义（下面云端账号那段另有一个同名的 esc —— 顶层重名会直接 SyntaxError 白屏）
+const srchEsc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]))
+// 关键词高亮：把命中的片段包成 <mark>。先转义再插标签，标题里带 < > & 的不会破坏结构。
+function hilite(text, terms) {
+  let html = srchEsc(text)
+  for (const t of terms) {
+    if (!t) continue
+    const re = new RegExp(t.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "ig")
+    // 只在标签外的文本上替换：先按标签切开，避免把已插入的 <mark> 再匹配一次
+    html = html.split(/(<[^>]*>)/).map((seg) => (seg.startsWith("<") ? seg : seg.replace(re, (m) => "<mark>" + m + "</mark>"))).join("")
+  }
+  return html
+}
+// 一条会话的"副文本"：标题之外还允许命中的东西（模块名 / 项目名 / 空间名）。
+// 它们只算第二档 —— 用户搜"综述"多半是想找标题里有综述的那条，不是把整个综述模块都倒出来。
+function sessAux(s) {
+  const proj = (META_STATE.projects || []).find((p) => p.id === s.projectId)
+  const fold = (META_STATE.folders || []).find((f) => f.id === s.folderId)
+  return [s.moduleName || "", modName(sessMod(s)) || "", proj ? proj.name : "", fold ? fold.name : ""].join(" ")
+}
+// 匹配规则：空格分隔的每个关键词【都要】命中（AND，顺序不限、不分大小写）。
+// 排序：① 标题命中的在前，副文本命中的在后；② 同一档内按最近更新排（越新越靠前）。
+function runSearch(q) {
+  const terms = String(q || "").toLowerCase().split(/\s+/).filter(Boolean)
+  if (!terms.length) return { terms, hits: [] }
+  const ranked = []
+  for (const s of META_STATE.sessions || []) {
+    const title = sessTitle(s).toLowerCase()
+    const aux = sessAux(s).toLowerCase()
+    if (terms.every((t) => title.includes(t))) ranked.push({ s, rank: 0 })
+    else if (terms.every((t) => title.includes(t) || aux.includes(t))) ranked.push({ s, rank: 1 })
+  }
+  ranked.sort((a, b) => a.rank - b.rank || (b.s.updated || 0) - (a.s.updated || 0))
+  return { terms, hits: ranked.map((x) => x.s) }
+}
+function renderSearch() {
+  const { terms, hits } = runSearch(searchInput.value)
+  searchHits = hits; searchCur = hits.length ? 0 : -1
+  searchResults.innerHTML = ""
+  if (!terms.length) {
+    searchResults.innerHTML = '<div class="srchempty">输入关键词开始搜索。<br>多个关键词用空格分隔，例如「结直肠 综述」——两个都命中的会话才会列出来。</div>'
+    return
+  }
+  if (!hits.length) {
+    searchResults.innerHTML = '<div class="srchempty">没有匹配的会话。<br>换个关键词，或少写一个词试试（多个词是"都要命中"）。</div>'
+    return
+  }
+  hits.forEach((s, i) => {
+    const row = document.createElement("div")
+    row.className = "srchrow" + (i === searchCur ? " on" : "")
+    row.title = "双击打开这条会话"
+    const t = document.createElement("span"); t.className = "t"; t.innerHTML = hilite(sessTitle(s), terms)
+    row.appendChild(t)
+    const mod = sessMod(s)
+    if (mod && mod !== "chat") { const m = document.createElement("span"); m.className = "m"; m.textContent = modName(mod); row.appendChild(m) }
+    const d = document.createElement("span"); d.className = "d"; d.textContent = fmtTime(s.updated); row.appendChild(d)
+    row.addEventListener("click", () => { searchCur = i; paintSearchCur() })
+    row.addEventListener("dblclick", () => openSearchHit(i))
+    searchResults.appendChild(row)
+  })
+}
+function paintSearchCur() {
+  const rows = [...searchResults.querySelectorAll(".srchrow")]
+  rows.forEach((el, i) => el.classList.toggle("on", i === searchCur))
+  rows[searchCur]?.scrollIntoView({ block: "nearest" })
+}
+// 打开一条 = 先关弹窗再跳（resumeSession 可能自己弹"表单填了一半确认切走"，
+// 那个确认框不该被压在搜索弹窗底下）。
+function openSearchHit(i) {
+  const s = searchHits[i]; if (!s) return
+  closeSearch()
+  resumeSession(s.id)
+}
+function openSearch() {
+  if (!document.body.classList.contains("sessbar-open")) setSessbar(true)
+  searchModal.classList.add("on")
+  searchInput.value = ""
+  renderSearch()
+  searchInput.focus()
+}
+function closeSearch() { searchModal.classList.remove("on") }
+const searchBtn = document.getElementById("searchBtn")
+searchBtn.innerHTML = ic("search")
+setIc("searchClose", "x")
+searchBtn.addEventListener("click", (e) => { e.stopPropagation(); openSearch() })
+document.getElementById("searchClose").addEventListener("click", closeSearch)
+onOverlayClick(searchModal, closeSearch)
+searchInput.addEventListener("input", renderSearch)
+searchInput.addEventListener("keydown", (e) => {
+  if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+    if (!searchHits.length) return
+    e.preventDefault()
+    searchCur = (searchCur + (e.key === "ArrowDown" ? 1 : -1) + searchHits.length) % searchHits.length
+    paintSearchCur()
+  } else if (e.key === "Enter") {
+    e.preventDefault()
+    openSearchHit(searchCur < 0 ? 0 : searchCur)
+  }
+})
+// Esc 关搜索：写在筛选那条 Esc 监听之外单独一条，两者互不影响。
+document.addEventListener("keydown", (e) => { if (e.key === "Escape" && searchModal.classList.contains("on")) closeSearch() })
+
 let canRevealFs = false      // 网关与浏览器同机（能在文件管理器里打开目录）——由 /api/sessions 给
 function revealFolder(dir) {
   fetch("api/fs/reveal?path=" + encodeURIComponent(dir), { method: "POST" })
@@ -5166,8 +5318,8 @@ function moduleTile(m) {
   el.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); enterModule(m) } })
   return el
 }
-/** 把模块卡铺进欢迎页。分区（工作台 / 核心能力）由服务端下发的 group 决定，
- *  没给或给了没见过的值就归到「核心能力」——将来服务端加模块，界面上不会有卡片凭空消失。 */
+/** 把模块卡铺进欢迎页。分区（工作台 / 专项技能）由服务端下发的 group 决定，
+ *  没给或给了没见过的值就归到「专项技能」——将来服务端加模块，界面上不会有卡片凭空消失。 */
 function renderModulePicker(w) {
   w.classList.add("picker")
   w.innerHTML = '<div class="wtitle">Niuma Science</div>'
@@ -5183,7 +5335,7 @@ function renderModulePicker(w) {
   }
   const bins = { workbench: [], skills: [] }
   allowed.forEach((m) => bins[m.group === "workbench" ? "workbench" : "skills"].push(m))
-  for (const [key, title, en] of [["workbench", "工作台", "Research Tools"], ["skills", "核心能力", "Skills"]]) {
+  for (const [key, title, en] of [["workbench", "工作台", "Research Tools"], ["skills", "专项技能", "Skills"]]) {
     if (!bins[key].length) continue          // 整栏没卡片时连标题一起不画
     const sec = document.createElement("section"); sec.className = "modsec"
     sec.innerHTML = '<div class="modsec-head"><span class="t">' + esc(title) + '</span>'

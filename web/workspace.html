@@ -59,7 +59,7 @@
   .headline { font-family: var(--serif); font-weight: 400; font-size: clamp(34px, 5.4vw, 60px); line-height: 1.05; letter-spacing: -.01em; margin: 0; }
   .subhead { margin: 16px 0 0; font-weight: 300; font-size: 15px; color: rgba(255,255,255,.58); line-height: 1.7; max-width: 620px; }
 
-  /* ---- 分区（工作台 / 核心能力）---- */
+  /* ---- 分区（工作台 / 专项技能）---- */
   .section { margin-top: 64px; }
   .section:first-of-type { margin-top: 44px; }
   .sec-head { display: flex; align-items: baseline; gap: 14px; margin: 0 0 22px; }
@@ -153,7 +153,7 @@
       </section>
 
       <section class="section" id="secSkills" hidden>
-        <div class="sec-head"><span class="t">核心能力</span><span class="e">Skills</span><span class="ln"></span></div>
+        <div class="sec-head"><span class="t">专项技能</span><span class="e">Skills</span><span class="ln"></span></div>
         <div class="grid" id="gridSkills"></div>
       </section>
 
@@ -220,7 +220,7 @@
     return el;
   }
 
-  /* 分两栏铺卡：group 由服务端下发（workbench / skills），没给或给了没见过的值就归到「核心能力」，
+  /* 分两栏铺卡：group 由服务端下发（workbench / skills），没给或给了没见过的值就归到「专项技能」，
      这样将来服务端加模块，界面上不会有卡片凭空消失。整栏没卡片时把区块连标题一起隐藏。 */
   function render(list) {
     const bins = { workbench: [], skills: [] };
