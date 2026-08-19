@@ -110,6 +110,15 @@ test("deliveryFailedSince：只认 sinceMs 之后的微信失败行", async () =
   assert.equal(r2.text, false); assert.equal(r2.media, false)
 })
 
+test("deliveryFailedSince：ilink 限流拒收正文（sendMessage declined）→ text+media 都算失败", async () => {
+  // 2026-08-19 真机漏网：整条正文被 ret=-2 拒收，旧两条判据都不匹配 → 看门狗没补发，
+  // 暂存内容随后被下一轮覆盖丢失。正文被拒后附件不会再发，所以 media 也要算失败。
+  const { deliveryFailedSince } = await import("../chat-bridge/oc-wrap.mjs")
+  const LOG = `time=2026-08-19T07:35:05.206+08:00 level=WARN msg="weixin: sendMessage declined by API" ret=-2 errcode=0 errmsg="prepare failed" content_len=913`
+  const r = deliveryFailedSince(LOG, Date.parse("2026-08-19T07:35:00+08:00"))
+  assert.equal(r.text, true); assert.equal(r.media, true)
+})
+
 test("deliveryFailedSince：企微失败/普通日志不触发（企微不丢，别乱补发）", async () => {
   const { deliveryFailedSince } = await import("../chat-bridge/oc-wrap.mjs")
   const LOG = [

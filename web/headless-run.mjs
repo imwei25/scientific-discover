@@ -394,7 +394,10 @@ async function main() {
         rec.notices.push("没推送到微信/企微：跑的时候软件没开着（聊天接入随软件运行）")
       } else {
         try {
-          const head = acc.finalText.trim().replace(/\s+/g, " ").slice(0, 300)
+          // 摘要头放宽到 1800 字（与 oc-wrap 单条上限同一口径）：原来只留 300 字，在手机上
+          // 明显是半截话（用户 2026-08-19 反馈"内容是截断的"）。超长时明说全文在软件里，别让用户猜。
+          let head = acc.finalText.trim().replace(/\s+/g, " ")
+          if (head.length > 1800) head = head.slice(0, 1800) + "…（太长截断，全文在软件的会话里）"
           const txt = `【定时任务·${task.title}】${rec.ok ? "已完成" : "未完成：" + rec.reason}` +
             (head ? "\n" + head : "")
           // 带上产物：文件名 + 本轮会话 id，由网关侧解析成绝对路径再发（图片内联、文档附件，

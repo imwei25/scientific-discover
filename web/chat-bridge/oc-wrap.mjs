@@ -211,6 +211,11 @@ export function deliveryFailedSince(logText, sinceMs) {
     if (!/weixin/i.test(ln)) continue
     if (/level=ERROR/.test(ln) && /(platform send failed|chunk send failed)/.test(ln)) out.text = true
     if (/ret=-2 for media/.test(ln)) out.media = true
+    // 第三种长相（2026-08-19 真机漏网）：ilink 限流把【正文】整条拒收 ——
+    //   WARN msg="weixin: sendMessage declined by API" ret=-2 errmsg="prepare failed"
+    // 正文被拒后 cc-connect 不再发后面的附件，所以既算 text 失败也算 media 失败，
+    // 补发时把暂存的文件一并带上（只按旧两条判，文件会被当成"已送达"而永久丢失）。
+    if (/sendMessage declined by API/.test(ln) && /ret=-2/.test(ln)) { out.text = true; out.media = true }
   }
   return out
 }
