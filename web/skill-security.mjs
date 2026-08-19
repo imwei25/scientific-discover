@@ -72,6 +72,7 @@ export function encryptSkills(skillsDir, encFilePath, agentsMdPath = null, pytho
 
   // 2. Scan skills directory recursively
   const pyFilesToCompile = []
+  const mdFilesToPlaceholder = []
 
   function scanDir(currentPath, relPath = '') {
     const items = fs.readdirSync(currentPath)
@@ -88,6 +89,14 @@ export function encryptSkills(skillsDir, encFilePath, agentsMdPath = null, pytho
         if (ext === '.md' || item === 'SKILL.md') {
           const content = fs.readFileSync(fullPath, 'utf8')
           assetMap[`skills/${subRel}`] = content
+          let frontmatter = null
+          if (item === 'SKILL.md' && content.startsWith('---')) {
+            const endIdx = content.indexOf('\n---', 3)
+            if (endIdx !== -1) {
+              frontmatter = content.slice(0, endIdx + 4).trim()
+            }
+          }
+          mdFilesToPlaceholder.push({ fullPath, isSkillMd: item === 'SKILL.md', frontmatter })
           fileCount++
         } else if (ext === '.py') {
           const content = fs.readFileSync(fullPath, 'utf8')
@@ -134,7 +143,16 @@ export function encryptSkills(skillsDir, encFilePath, agentsMdPath = null, pytho
     }
   }
 
-  // 6. Encrypt asset payload with AES-256-GCM
+  // 4. Overwrite static .md files with placeholders (preserve YAML frontmatter with skill name & description)
+  for (const { fullPath, isSkillMd, frontmatter } of mdFilesToPlaceholder) {
+    if (isSkillMd && frontmatter) {
+      fs.writeFileSync(fullPath, `${frontmatter}\n\n<!-- ENCRYPTED SKILL BODY - Protected by SciAgent Engine -->\n<!-- Detailed instructions and prompts loaded dynamically in RAM memory -->\n`, 'utf8')
+    } else {
+      fs.writeFileSync(fullPath, MD_PLACEHOLDER, 'utf8')
+    }
+  }
+
+  // 5. Encrypt asset payload with AES-256-GCM
   const plaintext = JSON.stringify(assetMap)
   const iv = crypto.randomBytes(12)
   const cipher = crypto.createCipheriv(ALGORITHM, KEY, iv)
@@ -157,6 +175,50 @@ export function encryptSkills(skillsDir, encFilePath, agentsMdPath = null, pytho
 
   console.log(`[SkillSecurity] Encrypted ${fileCount} assets (.md/.py/.sh/AGENTS.md) -> ${encFilePath}`)
   return fileCount
+}
+
+/**
+ * Restore original .md instructions and AGENTS.md at application startup so OpenCode can read full skill instructions during tool calls
+ */
+export function restoreRuntimeSkills(encFilePath, skillsDir, agentsMdPath = null) {
+  if (!fs.existsSync(encFilePath)) return 0
+
+  try {
+    const raw = fs.readFileSync(encFilePath, 'utf8')
+    const payload = JSON.parse(raw)
+    const iv = Buffer.from(payload.iv, 'hex')
+    const authTag = Buffer.from(payload.authTag, 'hex')
+
+    const decipher = crypto.createDecipheriv(ALGORITHM, KEY, iv)
+    decipher.setAuthTag(authTag)
+
+    let decrypted = decipher.update(payload.data, 'hex', 'utf8')
+    decrypted += decipher.final('utf8')
+
+    const assetMap = JSON.parse(decrypted)
+    let restored = 0
+
+    for (const [relPath, content] of Object.entries(assetMap)) {
+      if (relPath === 'AGENTS.md') {
+        if (agentsMdPath) {
+          fs.writeFileSync(agentsMdPath, content, 'utf8')
+          restored++
+        }
+      } else if (relPath.endsWith('.md') || relPath.includes('SKILL.md')) {
+        const cleanRel = relPath.startsWith('skills/') ? relPath.slice(7) : relPath
+        const fullPath = path.join(skillsDir, cleanRel)
+        fs.mkdirSync(path.dirname(fullPath), { recursive: true })
+        fs.writeFileSync(fullPath, content, 'utf8')
+        restored++
+      }
+    }
+
+    console.log(`[SkillSecurity] Runtime restored ${restored} .md skill instructions to ${skillsDir}`)
+    return restored
+  } catch (err) {
+    console.error(`[SkillSecurity] Failed to restore runtime skills: ${err.message}`)
+    return 0
+  }
 }
 
 /**
