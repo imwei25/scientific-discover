@@ -168,13 +168,16 @@
   .modsec-head .t { font-size: 15px; font-weight: 600; color: var(--text); letter-spacing: .02em; }
   .modsec-head .e { font-size: 10px; letter-spacing: .22em; text-transform: uppercase; color: var(--faint); white-space: nowrap; }
   .modsec-head .ln { flex: 1; height: 1px; align-self: center; background: linear-gradient(90deg, var(--line-hi), transparent); }
-  /* 卡片只留「图标 + 名字」这一口信息，做成一行高的小方块，两个分区各占【一行】、绝不换行。
+  /* 卡片只留「图标 + 名字」这一口信息，两个分区各占【一行】。
      不放简述：这一屏的任务是【挑一个模块】，一句话简述帮不上挑选，却让每张卡高出两倍。
-     不换行也不是为了好看：换行后两排卡要占掉大半屏，把输入框顶到折叠线以下。
-     一行放不下就横向滚（滚轮也能滑，见 renderModulePicker）；放得下时 overflow:auto 不出滚动条。
+     只占一行也不是为了好看：折成两排要占掉大半屏，把输入框顶到折叠线以下。
+     ★ minmax 的下限 96px 是配合竖排卡量出来的（见下面 .modtile 那段）：这一列在桌面版默认
+       窗口 1280 下只有 612px，5 张卡 ×96 + 4 道间距 = 512 < 612，所以 1280 及以上恒为一行；
+       只有把窗口拖到 ~1000 以下才会折行 —— 那时是干净换行，不是把卡片横向切掉半张。
+     ★ auto-fit（不是 auto-fill）：多出来的空轨道会塌成 0，5 张卡把整行铺满、彼此等宽。
      padding-bottom 给滚动条留位，上下再各留 4px —— 卡片 hover 会上浮 2px，贴边会被容器裁掉。
      ★ 不要 scroll-snap：它会把滚轮那点位移【吸回】最近的卡片边缘，实测滚轮完全推不动这一行。 */
-  .modgrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(168px, 1fr)); gap: 8px;
+  .modgrid { display: grid; grid-template-columns: repeat(auto-fit, minmax(96px, 1fr)); gap: 8px;
     overflow-x: auto; overflow-y: hidden; padding: 4px 2px 8px; overscroll-behavior-x: contain; }
   /* 两端渐隐：一行放不下时，被切掉的那一侧淡出去，用户一眼看出"这边还有，能滑"。
      方向由 JS 按 scrollLeft 挂 can-l / can-r（见 renderModulePicker 的 edges()）——
@@ -194,17 +197,15 @@
   .modgrid::-webkit-scrollbar-thumb { background: var(--line-hi); border-radius: 999px; border: 2px solid transparent; background-clip: content-box; transition: background .18s; }
   .modgrid:hover::-webkit-scrollbar-thumb { background: #b6c2d6; background-clip: content-box; }
   .modgrid::-webkit-scrollbar-thumb:hover, .modgrid::-webkit-scrollbar-thumb:active { background: var(--cyan); background-clip: content-box; }
-  /* 卡片【一律等宽】：长短不一的一排卡看着像没对齐的抽屉，而模块名从 3 字到 7 字都有。
-     flex-basis + min-width + max-width 一起用 —— 卡少的那一行（工作台只有两三张）不会被拉成大长条，
-     卡多的那一行则一起等比收窄到 min-width 为止，收不下才开始横向滚。三个值都在的效果是：
-     不管哪一行、屏幕多宽，同一行里每张卡的宽度都相同。 */
-  /* ★ min-width 168 是量出来的，不是拍的：最长的模块名是 7 个字（「文稿核查与审校」
-     「数据统计与分析」），13px 下正好 91px；加上左右内边距 9×2、图标 26、两处间距 8×2、
-     箭头 15、边框 2 = 168。再窄下去这两张卡的名字就会被省略号截掉（英文那行去掉之前
-     就是这个状况），而一个截断的模块名对"挑哪个模块"毫无帮助。
-     5 张卡 × 168 + 4 道 8px 间距 = 872 < 880 的列宽 —— 两行都不必横向滚。 */
+  /* 卡片【竖排】：图标在上、名字在下。不是为了好看，是为了【任何屏宽都只占一行】。
+     横排（图标 + 名字 + 箭头）每张卡至少要 168px：7 字名字 91 + 图标 26 + 箭头 15 + 内边距与间距 36。
+     而这一列的实际宽度是量过的：桌面版默认窗口 1280 下只有 612px（1440 下 772，封顶 848）。
+     612 里摆 5 张 → 每张 116px，横排怎么压都不够 —— 所以之前不是横向被切就是折成两行。
+     竖排后卡宽只需容下【名字】本身：1280 下 116px 够 7 字排一行；再窄就折成两行（不截断）。
+     名字区固定两行高，所以一行名与两行名的卡等高，不会一排高低不齐。
+     箭头去掉：竖排里它无处安放，而整张卡本来就可点（hover 有描边 + 上浮，足够说明）。 */
   .modtile { min-width: 0;
-    display: flex; align-items: center; gap: 8px; padding: 10px 9px; font: inherit; text-align: left;
+    display: flex; flex-direction: column; align-items: center; gap: 7px; padding: 12px 8px; font: inherit; text-align: center;
     background: var(--card); border: 1px solid var(--line); border-radius: var(--r-md); box-shadow: var(--shadow-sm);
     cursor: pointer; transition: border-color .18s, box-shadow .18s, transform .18s; }
   .modtile:hover { border-color: var(--cyan); box-shadow: 0 6px 16px rgba(15,32,60,.10); transform: translateY(-2px); }
@@ -212,15 +213,12 @@
   .modtile .mt-ic { flex: none; width: 26px; height: 26px; border-radius: 8px; display: grid; place-items: center;
     color: var(--cyan); background: rgba(59,111,212,.10); border: 1px solid rgba(59,111,212,.22); }
   .modtile .mt-ic svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
-  /* 卡等宽之后，标题这块要【吃掉剩余宽度】：不写 flex:1 的话名字有多宽就多宽，
-     箭头被 margin-left:auto 推到最右，中间空出一段无谓的缝，看着像没排版好。 */
-  .modtile .mt-tt { flex: 1 1 auto; min-width: 0; }
-  .modtile .mt-tt b { display: block; font-size: 13px; font-weight: 600; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  /* 「进入」按钮收成一个箭头：整张卡本来就可点，小卡里再摆个胶囊按钮只剩挤 */
-  .modtile .mt-go { flex: none; margin-left: auto; display: inline-flex; align-items: center; padding: 0; border: 0;
-    background: transparent; color: var(--faint); cursor: pointer; transition: color .18s, transform .18s; }
-  .modtile:hover .mt-go { color: var(--cyan); transform: translateX(2px); }
-  .modtile .mt-go svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+  .modtile .mt-tt { flex: none; width: 100%; min-width: 0; }
+  /* 两行高的名字区，内容垂直居中：一行名居中，两行名刚好填满，两种卡等高。
+     不再 nowrap+省略号：模块名被截断对"挑哪个模块"毫无帮助，宁可折行。 */
+  .modtile .mt-tt b { display: flex; align-items: center; justify-content: center;
+    min-height: calc(2 * 1.35em); font-size: 13px; font-weight: 600; color: var(--text);
+    line-height: 1.35; word-break: break-word; }
   /* 清单一时取不到时的兜底条：说清楚发生了什么并给一条能走的路，别只留一片空白 */
   .modempty { margin-top: 24px; padding: 16px 18px; border: 1px solid var(--line); border-radius: var(--r-md);
     background: var(--card); color: var(--muted); font-size: 12px; line-height: 1.8; text-align: left; }
@@ -5321,7 +5319,6 @@ const MODLOOK = {
   stats: { ic: "stat" },
   figure: { ic: "figure" },
 }
-const MODARROW = '<svg viewBox="0 0 24 24"><path d="M5 12h14M13 6l6 6-6 6"/></svg>'
 // 本次新会话是否已经选定模块。false = 空态摆模块选择网格；true = 摆该模块的首屏（标题 + 表单）。
 // 打开一个【已存在】的会话时一律为 true —— 它的模块早已绑定，没什么可选的。
 let modulePicked = false
@@ -5361,8 +5358,8 @@ function moduleTile(m) {
   el.className = "modtile"; el.tabIndex = 0; el.setAttribute("role", "button"); el.setAttribute("aria-label", m.name)
   el.innerHTML = '<div class="mt-ic">' + (MODICON[look.ic] || MODICON.dot) + "</div>"
     + '<div class="mt-tt"><b>' + esc(m.name) + "</b></div>"
-    + '<button class="mt-go" type="button" tabindex="-1" aria-hidden="true">' + MODARROW + "</button>"
-  // 整张卡可点（键盘可达），卡上的「进入」按钮也可点 —— 别让两者互相吞事件
+  // 整张卡可点，键盘也可达。卡片竖排之后没有再摆「进入」箭头 ——
+  // 它原本就是 aria-hidden 的装饰，hover 的描边 + 上浮已经说明这是可点的。
   el.addEventListener("click", () => enterModule(m))
   el.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); enterModule(m) } })
   return el
