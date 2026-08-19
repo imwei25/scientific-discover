@@ -9492,6 +9492,23 @@ document.addEventListener("visibilitychange", () => { if (!document.hidden) refr
   // 保存的公共段：收表单 → 提交 → 回 {ok, task?, warn?}。「保存」与「保存并跑一次」共用，
   // 两个按钮只在保存成功后的去向上不同。
   function saveTask() {
+    // 【个人微信推送限制，每次保存都弹】任务勾了推送且目标含个人微信 → 保存前明示平台限制。
+    // 真机实测（2026-08-19 台账）：微信对机器人主动消息按"来信新鲜度"限流——你刚给机器人
+    // 发过消息时推送才容易成功，长时间没对话后大概率被拒收（ret=-2，惩罚期内继续发会加重）。
+    // 这不是软件能修的，只能让用户带着正确预期选择；企微走应用消息通道，无此限制。
+    // 用 confirm（同删除任务的做法）：必须挡在保存前面，弹完即忘的 toast 起不到"告知"的作用。
+    if (document.getElementById("tfPushChat").checked) {
+      var _to = document.getElementById("tfPushTo").value
+      if (_to === "" || _to === "weixin") {
+        var okGo = confirm(
+          "个人微信推送的平台限制（微信官方限流，软件无法绕过）：\n\n" +
+          "· 你最近给机器人发过消息时，推送才容易成功；长时间没对话后，到点推送很可能被微信拒收。\n" +
+          "· 被拒的内容不会丢：软件会暂存，你下次在微信里给机器人发消息时自动补发。\n" +
+          "· 需要准点、可靠的推送，建议目标选「只推企业微信」（企微无此限制）。\n\n" +
+          "了解以上限制，仍按当前设置保存？")
+        if (!okGo) { setMsg(f.msg, "info", "未保存。可把推送目标改成「只推企业微信」后再保存。"); return Promise.resolve({ ok: false }) }
+      }
+    }
     var days = Array.prototype.filter.call(f.days.querySelectorAll("button.on"), function () { return true })
       .map(function (b) { return Number(b.dataset.d) })
     var body = {
