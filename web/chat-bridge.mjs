@@ -399,6 +399,11 @@ function renderProject(s, platform) {
     // 【需要 fix.2 及以上的 cc-connect】官方 v1.4.1 不认这个键；TOML 里多一个不认识的键是安全的
     // （被忽略），所以退回官方版也不会起不来，只是不合并而已。
     `merge_queued_messages = true`,
+    // cc-connect 默认在每条回复末尾贴一行自己的页脚（"<模型> · <工作目录>"，Codex 风格）。
+    // 对我们的用户是纯噪音——他们不关心跑的哪个模型、目录在软件里点两下就看得到，而聊天窗口
+    // 每多一行都在挤走正文。落款用我们自己那句（oc-wrap 的 SIGNATURE，缀在正文事件里）。
+    // 键名与默认值出自 cc-connect 自带的 config 示例：reply_footer 默认 true。
+    `reply_footer = false`,
     "",
     "[projects.agent]",
     `type = "opencode"`,

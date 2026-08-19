@@ -329,3 +329,18 @@ test("SIGNATURE：以换行开头、末尾无多余空行", () => {
   assert.ok(SIGNATURE.includes("-----"))
   assert.ok(SIGNATURE.trim().endsWith("来自Niuma Science科研小助手"))
 })
+
+// 2026-08-19 真机抓流：step_start → reasoning → text → step_finish(reason=stop)。cc-connect 在
+// step_finish 那一刻就定稿发消息，之后写进 stdout 的一切都被记成 unsolicited、进不了正文
+// ——这就是"落款在收尾时才 out(SIGNATURE)、两个平台都收不到"的根因。落款必须随正文事件一起走。
+test("落款必须随正文 text 事件一起发，不能等收尾（step_finish 之后就晚了）", () => {
+  const src = fs.readFileSync(new URL("../chat-bridge/oc-wrap.mjs", import.meta.url), "utf8")
+  assert.match(src, /emit = JSON\.stringify\(withText\(evt, txt \+ SIGNATURE\)\)/,
+    "正文 text 事件出口处就要把落款缀上")
+  // 收尾处不许再出现"直接把落款写进 stdout"的老写法
+  const tail = src.slice(src.indexOf("const finishAndExit"))
+  assert.ok(!/out\(SIGNATURE/.test(tail), "收尾不能再 out(SIGNATURE)：step_finish 之后写的进不了正文")
+  // 多个 text part 时只有最后一个带落款：新 part 出现要把上一个按原文重发覆盖
+  assert.match(src, /if \(lastTextEvt && lastTextId && lastTextId !== id\)/,
+    "换 part 时要把上一个 part 的落款撤掉（按原文重发覆盖）")
+})

@@ -366,3 +366,15 @@ test("排查路标：起桥生成 cc-send.cmd 与备忘，路径带引号且只�
   ]) assert.ok(help.includes(must), `备忘里该写到「${must}」`)
   assert.ok(help.includes(process.env.LOCALAPPDATA ? "niuma-cc" : "niuma-cc"), "要写明真实 data_dir")
 })
+
+// cc-connect 默认在每条回复末尾贴一行 "<模型> · <工作目录>" 的页脚，用户嫌吵（2026-08-19）。
+// 落款用我们自己那句就够（oc-wrap 的 SIGNATURE）。两个平台都要关。
+test("renderConfig：关掉 cc-connect 自带的回复页脚（两个 project 各一条）", () => {
+  const s = {
+    ...B.loadState(),
+    wecom: { bot_id: "b", bot_secret: "s", allow_from: "", boundSid: "ses_wc", boundDir: path.join(tmp, "out", "fw") },
+    weixin: { token: "tok", account_id: "acc", base_url: "", allow_from: "", boundSid: "ses_wx", boundDir: path.join(tmp, "out", "fx") },
+  }
+  const toml = B.renderConfig(s)
+  assert.equal((toml.match(/^reply_footer = false$/gm) || []).length, 2)
+})

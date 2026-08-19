@@ -626,6 +626,9 @@ function runOpencode(stdinText, extraFiles = []) {
   // 投递看门狗要的"最终答案"：正文（text）各段按出现顺序攒起来（增量事件取最新全文），
   // 收尾时暂存到 last-reply.json —— cc-connect 投递失败时下一轮据此补发。
   const answer = new Map(), answerOrder = []
+  // 最近一条 text 事件的原始对象 + 它的 partId：换 part 时要照它的形状把上一个 part 的落款撤掉
+  let lastTextEvt = null, lastTextId = ""
+  let signedInText = false   // 落款已随正文事件发出（收尾就别再补一份）
   const sentLen = new Map()  // partId → 已推出的字符数（流式水位）
   // 只对企微有意义：微信上思考不走定时器（一条都不单发，见 ticker 里的 BUDGET_TIGHT 判断）。
   const THINK_INTERVAL = 30_000
@@ -807,6 +810,18 @@ function runOpencode(stdinText, extraFiles = []) {
           }
           if (txt) {
             if (!answer.has(id)) answerOrder.push(id); answer.set(id, txt)
+            // 【落款钉在最后一个 text part 的正文末尾，不能等收尾再补】2026-08-19 真机抓流：
+            //   step_start → reasoning → text → step_finish(reason=stop) → …
+            // cc-connect 在 step_finish 那一刻就定稿发消息了，之后写进 stdout 的东西一律被记成
+            // "unsolicited events"、进不了这一轮的正文——微信企微都一样（此前"企微丢裸文本"的
+            // 判断是错的：微信同样没有，只是没人注意）。所以落款必须【随正文事件一起】出去。
+            // 多个 text part（多步/工具轮）时只有最后一个该带：新 part 一出现，就把上一个 part
+            // 按原文重发一遍把落款撤掉（text 事件本就是"该 part 的当前全文"，同 id 覆盖，
+            // 上面 answer.set 也是覆盖不是追加）。
+            if (lastTextEvt && lastTextId && lastTextId !== id) out(JSON.stringify(withText(lastTextEvt, answer.get(lastTextId) || "")) + "\n")
+            lastTextEvt = evt; lastTextId = id
+            emit = JSON.stringify(withText(evt, txt + SIGNATURE))
+            signedInText = true
             // 软件侧的 text 事件按【累计全文】语义（与网关直播同口径），所以这里也发全文
             liveNote({ k: "text", text: answerOrder.map((x) => answer.get(x) || "").join("\n") })
           }
@@ -850,6 +865,14 @@ function runOpencode(stdinText, extraFiles = []) {
 
   const IMG = new Set([".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp"])
   const MAX_SEND = 5, MAX_BYTES = 50 * 1024 * 1024
+  /** 复制一条 text 事件、只换正文（原事件对象不动，外壳字段照抄）。 */
+  const withText = (evt, text) => {
+    const e2 = JSON.parse(JSON.stringify(evt))
+    if (e2?.part && "text" in e2.part) e2.part.text = text
+    if ("text" in e2) e2.text = text
+    return e2
+  }
+
   const finishAndExit = (exitCode) => {
     // 还扣着答案没放行（短任务：思考的 send 还没回调）→ 等放行后再收尾，别让答案抢在思考前落 stdout。
     if (holding && !released) { onReleased = () => finishAndExit(exitCode); return }
@@ -911,7 +934,9 @@ function runOpencode(stdinText, extraFiles = []) {
     // 落款：【一轮只加一次，且加在整条消息的最后】。首选正文这条（走 stdout，不额外吃额度）；
     // 没有正文的轮次（只发文件）落到下面的附件消息上。
     let signed = false
-    if (answerText.trim()) { out(SIGNATURE + "\n"); signed = true }
+    // 有正文的轮次：落款已经在正文那条 text 事件里了（见上面的头注），这里只记账。
+    // signedInText 为假 = 一条 text 事件都没有过（只发文件的轮次），落款落到下面的附件消息上。
+    if (signedInText) signed = true
     saveLastReply(answerText, toSend)
 
     // ---- 抢救被抛弃的回复 ----------------------------------------------------
@@ -934,7 +959,9 @@ function runOpencode(stdinText, extraFiles = []) {
         rescueMsg = "📮 刚才那条「(空响应)」是软件的问题：你连着发消息时，前一条还没答完，这一轮的回复被弄丢了。\n" +
           "**你的指令已经执行**，下面是完整回复：\n\n" + answerText
         // 这条 send 才是用户真正看到的那一条（stdout 那份没人接），落款跟着它走
-        if (!signed) { rescueMsg += SIGNATURE; signed = true }
+        // 【无条件补落款】stdout 那份连同它里面的落款一起被丢了，signed 是对着"已经写出去"
+        // 记的账，在这条路径上不作数：用户真正看到的只有眼前这条 send。
+        rescueMsg += SIGNATURE; signed = true
       }
     }
     // 【和文件补发合并成一条 send，别各发各的】两条 send 并发时，先回调的那条会 process.exit()，
