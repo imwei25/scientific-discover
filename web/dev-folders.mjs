@@ -15,7 +15,13 @@ import path from "node:path"
 import { fileURLToPath } from "node:url"
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
-const DEV_DIR = process.env.DEV_DIR || path.join(os.tmpdir(), "sci-folders-dev")
+// ★ 两个会话同时在这个检出里自测是常态（autoPort 会让后来者换个网关口）。所以
+//   【工作目录与假 opencode 的端口都跟着网关口走】：DEV_DIR 起手就 rmSync 整棵删，
+//   两个实例共用同一个默认目录的话，后起的那个会把先来的演示数据连根删掉；
+//   假 oc 的口写死则直接 EADDRINUSE 起不来（换了口的网关照样连不上原来那个）。
+const GW_PORT = Number(process.env.PORT || 3011)
+const FAKE_OC_PORT = Number(process.env.OC_FAKE_PORT || GW_PORT + 1000)
+const DEV_DIR = process.env.DEV_DIR || path.join(os.tmpdir(), "sci-folders-dev-" + GW_PORT)
 fs.rmSync(DEV_DIR, { recursive: true, force: true })
 fs.mkdirSync(DEV_DIR, { recursive: true })
 
@@ -70,7 +76,7 @@ const oc = http.createServer((req, res) => {
   if (/\/message$/.test(u.pathname)) return res.end("[]")
   res.end(u.pathname === "/config" || /^\/session\/[^/]+\//.test(u.pathname) ? "{}" : "[]")
 })
-await new Promise((r) => oc.listen(4097, "127.0.0.1", r))
+await new Promise((r) => oc.listen(FAKE_OC_PORT, "127.0.0.1", r))
 
 // 演示数据必须在【导入 server.mjs 之前】写好：网关启动时读一次 sessions-meta.json 到内存，
 // 之后一切都以内存那份为准并覆盖回磁盘 —— 起来之后再改文件只会被它盖掉。
@@ -95,8 +101,8 @@ const META_FILE = path.join(DEV_DIR, "sessions-meta.json")
 
 Object.assign(process.env, {
   MANAGE_OC: "0",
-  OC_URL: "http://127.0.0.1:4097",
-  PORT: process.env.PORT || "3011",
+  OC_URL: `http://127.0.0.1:${FAKE_OC_PORT}`,
+  PORT: String(GW_PORT),
   LAN_AUTH: "0",
   SESSIONS_META_PATH: META_FILE,
   MODEL_CFG_PATH: path.join(DEV_DIR, "model-config.json"),
@@ -105,7 +111,7 @@ Object.assign(process.env, {
   CLOUD_CFG_PATH: path.join(DEV_DIR, "no-such-cloud.json"),
   SCI_CLOUD_URL: "", OC_GATEWAY_URL: "", OC_GATEWAY_KEY: "", SUGGEST_ENABLED: "0",
 })
-console.log(`[dev] 假 opencode :4097，演示目录在 ${DEMO_ROOT}`)
+console.log(`[dev] 假 opencode :${FAKE_OC_PORT}，演示目录在 ${DEMO_ROOT}`)
 console.log(`[dev] 网关 :${process.env.PORT}（登录已关）`)
 console.log(`[dev] 演示数据就绪：3 个文件夹 / 2 个项目 / ${SESSIONS.length} 个会话`)
 await import("./server.mjs")
