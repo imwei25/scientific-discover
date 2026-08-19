@@ -1083,15 +1083,45 @@ const modulePreamble = (modId, outDir) => {
   return `\n- **【模块限制，最高优先级，覆盖 AGENTS.md 的一切路由规则】本会话是「${m.name}」专用模块**：你【只允许】调用这些技能——${list}（其中 \`${m.primary}\` 是主技能，其余按需配套），禁止调用任何其它技能。\n- **本会话【没有】子代理 / task 工具**（不只是"禁止拿它调技能"——是整个工具不可用，调了本轮会被立即中止）。技能文档里凡是写"派调研子代理""并行分头查"的地方，一律改走它给的**串行兜底**：主流程自己顺序查完（web 搜索/抓取，或 \`.venv\` 的 requests/beautifulsoup4）。别先试一次再说，那一轮会白白作废。\n- 只在本模块职责范围内推进，不越界做别的模块的事；缺信息就直接向用户要。\n- 用户的需求超出「${m.name}」范围时，明确告知本模块做不了，并**按下面这张表把他指到对的模块**去新开会话，不要自己徒手代替其它技能去做${moduleMapLine(modId)}\n- 网关会强制校验技能调用：一旦调用上述清单之外的技能，本轮会被立即中止。${WF.settingsLine(modId, vals)}${WF.pipelineLine(modId, vals)}${WF.artifactLine(modId, vals)}`
 }
 
-/** 从内存解密缓存中动态载入当前模块主技能的完整专业工作流与指令 */
+/** 从内存解密缓存中动态载入当前模块所有技能的完整专业工作流、子参考资料与零磁盘IO铁律 (方案2) */
 const moduleSkillInstructions = (modId) => {
   const m = MODULE_DEFS[modId]
-  if (!m || !m.primary) return ""
-  const raw = getAssetContent(`${m.primary}/SKILL.md`)
-  if (!raw) return ""
-  const body = raw.replace(/^---[\s\S]*?---\s*/, "").trim()
-  if (!body || body.includes("<!-- ENCRYPTED SKILL")) return ""
-  return `\n\n- **【核心业务指令 - 动态装载】以下为「${m.name}（${m.primary}）」技能的完整工作流与专业规范**：\n${body}`
+  if (!m) return ""
+
+  const skillList = m.skills || (m.primary ? [m.primary] : [])
+  const parts = []
+
+  for (const s of skillList) {
+    const raw = getAssetContent(`${s}/SKILL.md`)
+    if (raw) {
+      const body = raw.replace(/^---[\s\S]*?---\s*/, "").trim()
+      if (body && !body.includes("<!-- ENCRYPTED SKILL")) {
+        parts.push(`### 技能【${s}】执行规范：\n${body}`)
+      }
+    }
+    // 自动挂载主技能的核心参考资料（如迭代检索、PRISMA、立项依据等）
+    if (s === m.primary) {
+      const knownRefs = [
+        "references/iterative-retrieval.md",
+        "references/rationale-and-innovation.md",
+        "references/rob-grade.md",
+        "references/prisma-checklist.md",
+        "references/table1-guide.md"
+      ]
+      for (const ref of knownRefs) {
+        const refRaw = getAssetContent(`${s}/${ref}`)
+        if (refRaw && !refRaw.includes("<!-- ENCRYPTED")) {
+          parts.push(`#### 核心参考资料【${s}/${ref}】：\n${refRaw}`)
+        }
+      }
+    }
+  }
+
+  if (!parts.length) return ""
+
+  const zeroIOBanner = `\n\n- **【零磁盘 IO 铁律 - 技能知识库已全部内置】**：\n本会话所需的全部技能指令、工作流、参考规范与参数要求**已全部在下方内置知识库中完整载入（RAM 内存常驻）**。\n你【绝对严禁】调用 \`read\`、\`skill\`、\`cat\`、\`Get-Content\`、\`type\` 等工具去磁盘读取 \`.opencode/skills/\` 下的任何 \`.md\` 文件。\n你已拥有全部操作手册与执行规范，请直接按下方规程推进任务，并直接调用 Python 脚本（\`.venv/bin/python\`）执行计算并交付产物！\n\n`
+
+  return zeroIOBanner + parts.join("\n\n---\n\n")
 }
 
 /** 从内存解密缓存中动态载入主控路由指令 */
