@@ -4351,10 +4351,22 @@ function openSearchHit(i) {
 //   ② 在收起的「项目 / 空间」分区或某个收起的组里（这两个分区默认就是折叠的）；
 //   ③ 在列表里但滚动位置在几十条之外，屏幕上看不到。
 // 三种都要处理：清筛选 / 展开 / 滚过去，最后闪一下告诉用户"就是这一行"。
+//
+// 【gentle 模式：只滚，不动任何持久化状态】开机恢复上次会话、点「自由对话」回到最近那条 ——
+// 这些是【用户没点任何东西】就发生的跳转。在那里清筛选就成了"打开软件，昨天设的『只看综述』
+// 自己没了"：一个持久化设置（nm_modfilter / 分区折叠态都存在 localStorage）被开机悄悄改掉，
+// 而用户没提出过任何要求。所以那两处只做第 ③ 件事：行在列表里就滚过去、闪一下；被筛选或
+// 折叠挡着就什么都不做（静默无反应好过擅自改设置）。
+// 时限也放长到 8 秒：开机那一下要等 /api/sessions 回来才画得出列表，比点一下慢得多。
 let revealSid = null, revealUntil = 0
-function revealSession(id) {
+function revealSession(id, opts) {
+  const gentle = !!(opts && opts.gentle)
+  // 标记先放下：开机时会话列表可能还没回来（META_STATE 是空的），下面查不到 s 就直接 return 的话，
+  // 等列表到了也没人再滚一次。滚动本身不依赖 s，只依赖那一行画出来没有。
+  revealSid = id; revealUntil = Date.now() + (gentle ? 8000 : 3000)
   const s = (META_STATE.sessions || []).find((x) => x.id === id)
   if (!s) return
+  if (gentle) { applyReveal(); return }   // 只滚不改状态；列表已在屏上就当场滚
   // ① 筛选挡住了就把筛选清掉。宁可清掉也不静默：用户要的是"看到这条会话"，
   //    而"我明明搜到了、点开了，左边却没有它"是完全没法自查的状态。
   if (moduleFilter && sessMod(s) !== moduleFilter) {
@@ -4370,8 +4382,7 @@ function revealSession(id) {
   } else setSectOpen("recent", true)
   // ③ 滚过去 + 闪一下。【为什么用一个带时限的标记而不是当场滚】resumeSession 里的
   //    loadSessions() 稍后还会重画一次列表，重画会把 DOM 连同滚动位置一起换掉 ——
-  //    当场滚完就被冲掉了。所以留个 3 秒内有效的标记，让期间的每次重画都照着滚一次。
-  revealSid = id; revealUntil = Date.now() + 3000
+  //    当场滚完就被冲掉了。所以留个几秒内有效的标记（见函数开头），让期间的每次重画都照着滚一次。
   renderSessions(META_STATE)     // 先按本地这份数据画一次，别等网络回来才动
 }
 function applyReveal() {
@@ -9392,12 +9403,14 @@ if (wantNewSession) {
 } else if (pendingModule === "chat") {
   loadSessions().then(() => {
     const lastChat = sessList.find((s) => (s.module || "chat") === "chat")
-    if (lastChat) return resumeSession(lastChat.id)
+    // gentle：只把它滚进视野，不清筛选、不展开分区 —— 这一跳不是用户点出来的（见 revealSession）
+    if (lastChat) { resumeSession(lastChat.id); revealSession(lastChat.id, { gentle: true }); return }
     modulePicked = true; currentModule = "chat"   // 明确点了「自由对话」进来 → 直接开聊，别再让他选一次
     renderWelcome()
   })
 } else if (savedSid && !pendingModule) {
   resumeSession(savedSid)
+  revealSession(savedSid, { gentle: true })   // 同上：开机恢复上次会话，只滚不改任何持久化设置
 } else {
   renderWelcome()   // 没有可恢复的会话（新用户 / 刚清过）→ 模块选择页
 }
