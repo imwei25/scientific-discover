@@ -5248,7 +5248,9 @@ function pickAsst(p) {
   // 点平台图标 = 跳到该平台最新的那条会话；没接入（或接了还没会话）→ 进设置
   if (!asstBridge[p] || !asstBridge[p].ready) { openBridgeSetup(); return }
   const sid = asstSid(p)
-  if (sid) resumeSession(sid)
+  // 与搜索跳转同一件事：resumeSession 只管右边的对话区，左侧列表那一行可能被筛选挡着、
+  // 在收起的分区里、或滚在屏幕外 —— 点完图标看着像没反应。revealSession 负责把它露出来。
+  if (sid) { resumeSession(sid); revealSession(sid) }
   else openBridgeSetup()
 }
 // 供聊天接入那段在读到状态后回调（首次探测、以及面板里每次刷新）
