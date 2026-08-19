@@ -592,6 +592,13 @@
   @keyframes pulse { 0% { box-shadow: 0 0 0 0 rgba(43,182,115,.5); } 70% { box-shadow: 0 0 0 7px rgba(43,182,115,0); } 100% { box-shadow: 0 0 0 0 rgba(43,182,115,0); } }
   #sessions .sess { padding-right: 46px; }                 /* 给右侧多个操作图标留位 */
   #sessions .sess.dragging { opacity: .4; }
+  /* 从搜索跳过来的那一行：滚到可见处后闪两下。选中态（active 的绿竖条 + 浅底）在一屏十几条
+     里并不显眼，尤其列表刚滚动过——闪一下才看得出"就是这条"。 */
+  #sessions .sess.flash { animation: sessflash 1.4s ease-out; }
+  @keyframes sessflash {
+    0%, 55% { background: rgba(6,182,212,.22); box-shadow: inset 0 0 0 1px rgba(6,182,212,.5); }
+    100% { background: transparent; box-shadow: none; }
+  }
   /* 会话行右侧操作区（改名/钉/删）：默认隐藏，hover 显示 */
   .sess-acts { position: absolute; right: 4px; top: 50%; transform: translateY(-50%); display: flex; gap: 1px; opacity: 0; transition: opacity .12s; }
   .sess:hover .sess-acts, .sess-acts.keep { opacity: 1; }
@@ -4062,6 +4069,7 @@ const sessCostTitle = (s) => {
 function sessRow(s, ctx) {
   const b = document.createElement("div"); b.className = "sess" + (s.id === sessionId ? " active" : "") + (selected.has(s.id) ? " picked" : "")
   b.setAttribute("role", "button"); b.draggable = !selMode          // 选择模式下禁拖，免得勾选时误拖进项目
+  b.dataset.sid = s.id                                              // 搜索跳转后要在列表里把这一行找出来滚过去（见 revealSession）
   const ck = document.createElement("span"); ck.className = "ck"; ck.innerHTML = ic("check"); b.appendChild(ck)
   // ★ 标题来自模型首轮输出，模型偶尔吐出乱码或断掉的多字节序列（实测列表里出现过
   //   一整行 ◆◆◆◆Δθ◆◆Π…）。这种标题对用户零信息量、还找不回是哪次会话 ——
@@ -4336,6 +4344,46 @@ function openSearchHit(i) {
   const s = searchHits[i]; if (!s) return
   closeSearch()
   resumeSession(s.id)
+  revealSession(s.id)     // 会话是打开了，但左边列表里那一行可能仍藏着 —— 见下
+}
+// ---- 把某条会话在左侧列表里【露出来】----
+// 【为什么单独做这件事】resumeSession 只负责把会话载进右边的对话区，左边那份列表它不碰。
+// 于是搜到一条会话跳过去之后，列表看着像"什么都没发生"——那一行可能：
+//   ① 被模块筛选挡在外面（正开着「只看综述」，跳过去的却是标书会话 → 列表里根本没有它）；
+//   ② 在收起的「项目 / 空间」分区或某个收起的组里（这两个分区默认就是折叠的）；
+//   ③ 在列表里但滚动位置在几十条之外，屏幕上看不到。
+// 三种都要处理：清筛选 / 展开 / 滚过去，最后闪一下告诉用户"就是这一行"。
+let revealSid = null, revealUntil = 0
+function revealSession(id) {
+  const s = (META_STATE.sessions || []).find((x) => x.id === id)
+  if (!s) return
+  // ① 筛选挡住了就把筛选清掉。宁可清掉也不静默：用户要的是"看到这条会话"，
+  //    而"我明明搜到了、点开了，左边却没有它"是完全没法自查的状态。
+  if (moduleFilter && sessMod(s) !== moduleFilter) {
+    const was = modName(moduleFilter)   // 先取名字：setModuleFilter("") 之后 moduleFilter 就空了，再取只会得到一句"只看「」"
+    setModuleFilter("")
+    toast("已清除「只看" + was + "」的筛选，好让这条会话在列表里露出来")
+  }
+  // ② 展开它所在的分区与分组。同时挂项目和文件夹的会话两处都列，展开项目那一处即可。
+  if (s.projectId && (META_STATE.projects || []).some((p) => p.id === s.projectId)) {
+    setSectOpen("projects", true); collapsedProjects.delete(s.projectId); saveCollapsed()
+  } else if (s.folderId && (META_STATE.folders || []).some((f) => f.id === s.folderId)) {
+    setSectOpen("folders", true); collapsedFolders.delete(s.folderId); saveCollapsedF()
+  } else setSectOpen("recent", true)
+  // ③ 滚过去 + 闪一下。【为什么用一个带时限的标记而不是当场滚】resumeSession 里的
+  //    loadSessions() 稍后还会重画一次列表，重画会把 DOM 连同滚动位置一起换掉 ——
+  //    当场滚完就被冲掉了。所以留个 3 秒内有效的标记，让期间的每次重画都照着滚一次。
+  revealSid = id; revealUntil = Date.now() + 3000
+  renderSessions(META_STATE)     // 先按本地这份数据画一次，别等网络回来才动
+}
+function applyReveal() {
+  if (!revealSid) return
+  if (Date.now() > revealUntil) { revealSid = null; return }
+  const row = sessionsEl.querySelector('.sess[data-sid="' + (window.CSS && CSS.escape ? CSS.escape(revealSid) : revealSid) + '"]')
+  if (!row) return
+  row.scrollIntoView({ block: "center" })
+  row.classList.add("flash")
+  setTimeout(() => row.classList.remove("flash"), 1400)
 }
 function openSearch() {
   if (!document.body.classList.contains("sessbar-open")) setSessbar(true)
@@ -4520,6 +4568,7 @@ function renderSessions(data) {
   try { paintAsst() } catch (e) {}
   updateSelBar()
   updateDirChip()   // 列表回来了才知道当前会话挂在哪个文件夹下，输入框下面那块要跟着变
+  applyReveal()     // 刚从搜索跳过来的那条：滚到可见处并闪一下（每次重画都要补做，见 revealSession ③）
 }
 
 // 定时任务那段在数据变化（探测就绪、增删改、启停）时喊一声：重画侧栏，让分区数字和任务行跟上
