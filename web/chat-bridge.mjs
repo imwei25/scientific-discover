@@ -9,9 +9,12 @@
 // 每个 project 一套 platform + 各自 work_dir，按平台路由（官方明确支持）。所以 state 里
 // wecom / weixin 各有自己的 boundSid/boundDir/凭证/白名单，config.toml 生成多个 [[projects]]。
 //
-// 【绑定的语义】绑定会话 = 微信端的对话在该会话的目录里干活（文件互通、产物进该目录）；
-// cc-connect 每次对话在这个目录起【新的 opencode 会话】，绑定会话本身只是"目录锚点"。
-// 网关侧据此认领同目录会话（挂图标、归文件夹，见 server.mjs /api/sessions）。
+// 【绑定的语义（2026-08-20 起：真续会话，不再只是目录锚点）】绑定会话 = 手机上发的消息
+// 【接着软件里选定的那条会话继续】：oc-wrap 在 cc-connect 新起会话的第一条注入
+// `--session <boundSid>`（经 SCI_WRAP_BOUND_SID 传入，见 oc-wrap 的 adoptBoundSession），
+// 之后 cc-connect 从事件流学走这个 id、每轮自己带上。可行的根据：界面会话 id 就是 opencode
+// 会话 id，且网关的 serve 与这里的 `opencode run` 共用同一份会话存储。手机发 /new 仍可另起
+// 新会话（逃生舱，上下文太重时用）；网关侧照旧按目录认领这类新会话（挂图标、归文件夹）。
 //
 // 【换绑】停桥 → 收回旧目录注入的 AGENTS.md 块（另一平台还绑着同目录就别收）+ 注入新目录 →
 // project 名带平台+会话 id（sci-<platform>-<sid8>）重启，cc-connect 会话状态按 project 落盘，
@@ -23,7 +26,7 @@ import os from "node:os"
 import crypto from "node:crypto"
 import { spawn, execFileSync, execFile } from "node:child_process"
 // 落款常量与交互式回复共用一份（oc-wrap 有 isMain 守卫，import 无副作用）
-import { SIGNATURE } from "./chat-bridge/oc-wrap.mjs"
+import { SIGNATURE, quotaNotice, QUOTA_WARN_AT } from "./chat-bridge/oc-wrap.mjs"
 
 const BLOCK_START = "<!-- sci-chat-bridge:start 由「聊天接入」自动注入，解绑时自动移除，请勿手工编辑 -->"
 const BLOCK_END = "<!-- sci-chat-bridge:end -->"
@@ -341,6 +344,9 @@ function commonEnv(s, platform) {
     // 在一轮限速里连发 4 条，把当天额度烧光，之后所有真实回复全被配额闸挡下，用户什么都收不到。
     // 企微是 websocket 长连接，没有这个限制，照常。
     SCI_WRAP_PLATFORM: platform,
+    // 【续用绑定会话】oc-wrap 据此在 cc-connect 新起会话的第一条注入 --session，让手机消息
+    // 接着软件里选定的那条会话继续（语义与 /new 逃生舱见 oc-wrap 的 adoptBoundSession 头注）。
+    SCI_WRAP_BOUND_SID: s[platform].boundSid || "",
     // 与下面写进 config.toml 的 burst_limit 同源，别两处各写一个数
     SCI_WRAP_SEND_LIMIT: String(WEIXIN_BURST_LIMIT),
     SCI_WRAP_SEND_WARN: String(WEIXIN_BURST_WARN),
@@ -749,11 +755,36 @@ export async function pushToChat({ text, files, dir: workDir, only } = {}) {
   // 落款与交互式回复同一份（oc-wrap 的 SIGNATURE）：用户要求推到微信/企微的每条消息都带
   // 「来自Niuma Science科研小助手」。主动推送一轮就一条消息，直接缀在正文尾；
   // 纯文件无正文时单独作为文案带上（与 oc-wrap 附件轮的做法一致）。
-  text = text ? text + SIGNATURE : SIGNATURE.replace(/^\s+/, "")
+  // 落款与额度提醒【按平台各拼各的】：额度是微信独有的（企微长连接没有），
+  // 而 text 是两个平台共用的底稿，不能把微信的提醒混进企微那条。
+  const baseText = text
+  // 微信主动发送额度：与交互式回复共用绑定目录下的同一份 quota.json（见 oc-wrap 的头注）。
+  // 推送不重置额度——重置只由【用户来信】触发，而定时任务推送恰恰没有来信。
+  const quotaPath = (p) => path.join(s[p].boundDir, ".cc-connect", "quota.json")
+  const bumpQuota = (p, k) => {
+    try {
+      let n = 0
+      try { const j = JSON.parse(fs.readFileSync(quotaPath(p), "utf8")); if (Number.isFinite(j?.n)) n = j.n } catch {}
+      n += k
+      fs.mkdirSync(path.dirname(quotaPath(p)), { recursive: true })
+      fs.writeFileSync(quotaPath(p), JSON.stringify({ n, at: Date.now() }))
+      return n
+    } catch { return 0 }
+  }
+  const textFor = (p) => {
+    // 本条推送占几格：正文 1 条（没有 baseText 时也至少发个落款，仍是一条）+ 每个附件各 1 条
+    // （cc-connect 的 media_outbound.go 逐个计）。本条正文的序号 = 推送前的计数 + 1。
+    const ord = p === "weixin" ? bumpQuota(p, 1 + picked.length) - picked.length : 0
+    const note = p === "weixin" ? quotaNotice(ord) : ""
+    const body = (baseText || "") + note
+    return body ? body + SIGNATURE : SIGNATURE.replace(/^\s+/, "")
+  }
 
-  // 投递看门狗的暂存（与 oc-wrap 同一份 .cc-connect\last-reply.json）：个人微信没有长连接，
-  // 定时任务到点推送时用户往往几小时没跟机器人说过话，会话令牌必然过期、推送大概率被拒——
-  // 先存下来，用户下次一说话（令牌刷新），oc-wrap 开跑前查到失败日志就补发。
+  // 投递看门狗的暂存（与 oc-wrap 同一份 .cc-connect\last-reply.json）：个人微信这条推送
+  // 受 ilink 的限流配额约束（约 5-6 条/天），到点推送时很可能正撞在惩罚期上被拒收——
+  // 先存下来，oc-wrap 在用户下一轮开跑前查到失败日志就补发。
+  // 【与"会话令牌过期"无关】隔几小时没说过话照样能推：context_token 存盘、无 TTL，
+  // 网关对 send 也不校验它（见 oc-wrap 投递看门狗那段的考证）。
   // 【写到目标平台的绑定目录，不是 workDir】workDir 是定时任务自己的新会话目录，
   // 而 oc-wrap 每轮的 cwd 是聊天接入的绑定目录——写错地方它永远看不到。
   for (const p of targets) {
@@ -770,9 +801,10 @@ export async function pushToChat({ text, files, dir: workDir, only } = {}) {
     // 不显式指过去就回落 ~\.cc-connect —— 那里没人监听，必报 dial unix ... connect refused。
     // oc-wrap 靠 commonEnv 的 CC_DATA_DIR 解决；这里是独立 execFile，两个口径都给上（--data-dir
     // 是 send 专属参数、老版本也认；CC_DATA_DIR 兜 vendored fix.3）。2026-08-18 真机踩过：漏了它，
-    // 定时任务/保存并跑一次的推送全部失败，界面上只看到兜底的"令牌过期"文案。
+    // 定时任务/保存并跑一次的推送全部失败，而当时的兜底文案还把它错报成"令牌过期"（已改）。
     const args = ["send", "--data-dir", ccDataDir(), "-p", projectName(p, s[p].boundSid), "-s", per[p].lastSession]
-    if (text) args.push("-m", String(text))
+    const body = textFor(p)
+    if (body) args.push("-m", String(body))
     for (const f of picked) args.push(IMG_EXT.has(path.extname(f).toLowerCase()) ? "--image" : "--file", f)
     execFile(ccBin(), args, { windowsHide: true, env: { ...process.env, CC_DATA_DIR: ccDataDir() } },
       (err, _o, se) => resolve(err ? { ok: false, platform: p, err: (String(se) || err.message || "").slice(0, 150) } : { ok: true, platform: p, session: per[p].lastSession }))

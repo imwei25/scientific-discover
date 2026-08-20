@@ -123,12 +123,21 @@ const REAL_OC = process.env.SCI_WRAP_OC
 const CC = process.env.SCI_WRAP_CC || "cc-connect"
 
 // ---- 投递看门狗（个人微信丢消息的补发）--------------------------------------
-// 个人微信（ilink）**没有长连接**：收消息靠长轮询，发消息必须凭随每条来信刷新的
-// 会话令牌（context_token），令牌几分钟就过期。于是长任务跑完时回复常被平台拒收
-// （bridge.log：`sendMessage ret=-2 "prepare failed" (expired context_token)`），用户看到
-// 的就是"空响应/没收到"，而正文在软件端完好——丢在 cc-connect 往微信投递的最后一步，
-// 且 cc-connect 只记日志、不补发。企微是 websocket 长连接，没有这个问题。
-// 补法利用一个必然成立的时机：**用户下一条消息进来的瞬间令牌刚刷新**。所以：
+// 个人微信（ilink）**没有长连接**：收消息靠长轮询，发消息受 ilink 的**限流配额**约束
+// （约 5-6 条/天就开始拒收，cc-connect 自己卡在 4 条 fail fast）。于是长任务跑完时回复
+// 常被平台拒收（bridge.log：`sendMessage ret=-2 "prepare failed"`），用户看到的就是
+// "空响应/没收到"，而正文在软件端完好——丢在 cc-connect 往微信投递的最后一步，
+// 且 cc-connect 只记日志、不补发。企微是 websocket 长连接、无此配额，没有这个问题。
+//
+// 【别再把 ret=-2 归因成"会话令牌过期"】曾经这么写过，是错的。查 cc-connect 源码
+// （platform/weixin/weixin.go 的 isSendThrottled 上方注释）：ret=-2 "prepare failed" 是
+// **bot 全局的限流惩罚**，"the gateway accepts any (or no) context_token on sends"。
+// context_token 从来信里抓取后按 peer 存盘（context_tokens.json）、跨进程重启存活、
+// **无 TTL 无淘汰**，它只是 cc-connect 侧"这个 peer 得先跟机器人说过话"的准入门槛
+// （外加换 typing ticket）。所以主动推送隔几小时照发不误——真正会拒收的只有配额。
+// 补发时机仍取"用户下一条消息进来时"，理由不是令牌刷新，而是那会儿离上次失败通常
+// 已隔了一段时间、惩罚期多半过了（惩罚期内再发会加重，见 cc-connect sendChunk 注释）。
+// 所以：
 //   · 每轮结束把最终答案 + 兜底补发的文件暂存进 .cc-connect\last-reply.json；
 //   · 下一轮开跑前查 bridge.log 里暂存时刻之后有没有投递失败，有 → 先补发暂存内容再答新问题。
 // 定时任务的推送（chat-bridge 的 pushToChat）也写同一个暂存文件，同样在下次对话时兜底。
@@ -138,6 +147,7 @@ const lastReplyFile = () => path.join(process.cwd(), ".cc-connect", "last-reply.
 const sendLogFile = () => path.join(process.cwd(), ".cc-connect", "send-log.json")
 const SEND_WINDOW_MS = 3600_000
 function noteSend(n = 1) {
+  try { if (BUDGET_TIGHT) bumpQuota(n) } catch {}   // 微信才有额度这回事；企微是长连接
   try {
     const f = sendLogFile()
     let times = []
@@ -158,6 +168,49 @@ function usedSends() {
 // 与 chat-bridge.mjs 写进 config.toml 的 burst_limit 保持一致；由 env 传入避免两处写死。
 const SEND_LIMIT = Number(process.env.SCI_WRAP_SEND_LIMIT) || 0
 const SEND_WARN_AT = Number(process.env.SCI_WRAP_SEND_WARN) || 0
+
+// ---- 微信主动发送额度：距【上次来信】发了几条 --------------------------------
+// 【2026-08-20 实测定案，别再改回时间模型】ilink 给机器人的主动发送额度是
+// **每收到一条用户来信重置一次**，一次约 10 条；用尽后所有发送被 ret=-2 拒。
+//   · 时间【不】解禁：整夜每小时试一次，02:13 起连续 5 次全被拒（详见 memory）；
+//   · 桥重启【不】解禁：那只清 cc-connect 的内存计数，腾讯是按来信记账的；
+//   · 唯一的解禁事件就是【用户再发一条消息】。
+// 所以在第 9 条时把话说明白，让用户回一句把额度续上——这比事后补发有用得多。
+// 计数落在绑定目录（oc-wrap 每条消息都是新进程，内存里存不住），定时任务的
+// pushToChat 也往同一个文件记；oc-wrap 被拉起 = 刚收到来信 = 归零。
+const quotaFile = () => path.join(process.cwd(), ".cc-connect", "quota.json")
+export const QUOTA_WARN_AT = 9
+function readQuota() {
+  try { const j = JSON.parse(fs.readFileSync(quotaFile(), "utf8")); return Number.isFinite(j?.n) ? j.n : 0 }
+  catch { return 0 }
+}
+function writeQuota(n) {
+  try {
+    fs.mkdirSync(path.dirname(quotaFile()), { recursive: true })
+    fs.writeFileSync(quotaFile(), JSON.stringify({ n, at: Date.now() }))
+  } catch {}
+}
+function bumpQuota(k = 1) { const n = readQuota() + k; writeQuota(n); return n }
+function resetQuota() { writeQuota(0) }
+// 本轮答案是"上次来信之后的第几条"。只读一次并记住：微信上进度/思考/播报全关，
+// 跑的过程中不会再有别的发送来改这个数，而 text 事件是逐字流式的、不能每次都读盘。
+let quotaBaseMemo = null
+function answerOrdinal() {
+  if (quotaBaseMemo === null) quotaBaseMemo = readQuota()
+  return quotaBaseMemo + 1
+}
+
+/**
+ * 第 warnAt 条时给用户的额度提醒（纯函数，导出仅为单测）。
+ * 【必须搭在正文那条消息里】自己单发一条会再吃掉一格额度，正是要避免的事；
+ * 而且收尾时写 stdout 已经晚了（cc-connect 在 step_finish 就定稿，见落款那段头注）。
+ */
+export function quotaNotice(ordinal, warnAt = QUOTA_WARN_AT) {
+  if (ordinal !== warnAt) return ""
+  return "\n\n———\n" +
+    `📮 当前已经是您上次发信息之后的第 ${warnAt} 条回复，受微信平台限制，` +
+    `第 ${warnAt + 1} 条将触顶，请您及时向机器人回复任意信息，否则从第 ${warnAt + 2} 条开始信息将无法送达。`
+}
 // bridge.log 与 wrap.log 同目录（都由 chat-bridge.mjs 定在 <root>\chat-bridge\ 下）
 const bridgeLogPath = () =>
   process.env.SCI_WRAP_LOG ? path.join(path.dirname(process.env.SCI_WRAP_LOG), "bridge.log") : ""
@@ -299,10 +352,11 @@ function resendLostReply() {
     const args2 = ["send"]
     let txt = fail.text ? String(j.text || "") : ""
     if (txt.length > 1800) txt = txt.slice(0, 1800) + "…（太长截断，全文在软件的会话里）"
-    if (txt) args2.push("-m", "📮 上一条回复当时没送到（微信的会话令牌过期了，刚才你发消息把它刷新了），补发：\n" + txt + SIGNATURE)
+    if (txt) args2.push("-m", "📮 上一条回复当时没送到（微信那边发消息的次数到限了，过一阵会自动放开），补发：\n" + txt + SIGNATURE)
     const files = fail.media ? (Array.isArray(j.files) ? j.files : []).filter((p) => { try { return fs.existsSync(p) } catch { return false } }).slice(0, 5) : []
     for (const p of files) args2.push(IMG_EXTS.has(path.extname(p).toLowerCase()) ? "--image" : "--file", p)
     if (args2.length <= 1) return
+    noteSend((txt ? 1 : 0) + files.length)   // 补发也吃额度：正文 1 条 + 每个附件各 1 条
     execFile(CC, args2, { windowsHide: true }, () => {})
     if (process.env.SCI_WRAP_LOG)
       try { fs.appendFileSync(process.env.SCI_WRAP_LOG, new Date().toISOString() + ` 补发上轮丢失投递 text=${!!txt} files=${files.length}\n`) } catch {}
@@ -387,6 +441,37 @@ export function scrubPaths(text) {
 // 每轮回复末尾的落款（一轮只加一次：优先加在正文那条，没有正文才加在附件那条）。
 export const SIGNATURE = "\n\n-----\n来自Niuma Science科研小助手"
 
+// ---- 续用绑定会话（手机消息接在软件里选定的那条会话后面）--------------------
+// 【语义（2026-08-20 定）】绑定会话不再只是"目录锚点"：cc-connect 的调用里只有【它自己
+// 新起会话的第一条】不带 --session —— 在那一刻注入 `--session <绑定会话id>`，opencode 就会
+// 续跑软件里选定的那条会话；事件流回带 sessionID 后 cc-connect 自己学走，之后每轮都带对，
+// 注入只发生一次。可行的根据：界面会话 id 就是 opencode 会话 id（server.mjs createSession
+// 直接用 client.session.create 的返回），且网关的 serve 与这里的 `opencode run` 共用同一份
+// 会话存储（同一套 OPENCODE_CONFIG / XDG_CONFIG_HOME——网关能列出并打开 cc-connect 建的
+// 会话，就是这条通路一直在被使用的证据）。
+// 【/new 逃生舱】注入时在绑定目录记"已收编"标记；此后再遇到不带 --session 的调用 = 用户
+// 发了 /new（cc-connect 清掉了自己记的会话），放行让它另起新会话——绑定会话上下文太重时
+// 用户还有退路。换绑到别的会话（boundSid 变了）标记自动失效、重新收编。
+const BOUND_SID = process.env.SCI_WRAP_BOUND_SID || ""
+const adoptFile = () => path.join(process.cwd(), ".cc-connect", "bound-adopted.json")
+function readAdopted() {
+  try { return String(JSON.parse(fs.readFileSync(adoptFile(), "utf8"))?.sid || "") } catch { return "" }
+}
+function writeAdopted(sid) {
+  try { fs.mkdirSync(path.dirname(adoptFile()), { recursive: true }); fs.writeFileSync(adoptFile(), JSON.stringify({ sid, at: Date.now() })) } catch {}
+}
+/** 该注入就返回注入后的新 argv，不该注入返回 null。（纯函数，导出仅为单测。） */
+export function adoptBoundSession(argv, boundSid, adoptedSid) {
+  if (!boundSid) return null                              // 老版 chat-bridge 没传 → 保持原行为
+  if ((argv || []).includes("--session")) return null     // cc-connect 已在续某个会话，别插手
+  if (adoptedSid === boundSid) return null                // 已收编过还不带 --session = /new，放行
+  const i = argv.indexOf("run")
+  if (i < 0) return null
+  const out = argv.slice()
+  out.splice(i + 1, 0, "--session", boundSid)
+  return out
+}
+
 /** 这个平台的发送预算紧不紧（纯函数，导出仅为单测）。 */
 export const budgetTightFor = (p) => p === "weixin"
 const PLATFORM = process.env.SCI_WRAP_PLATFORM || ""
@@ -468,6 +553,33 @@ export function liveFlush(cb) {
     req.end(body)
   } catch { done() }
 }
+/** 绑定会话此刻是不是被软件端的一轮占着？问网关的 /api/chat-bridge/busy（与直播中继同一套
+ *  地址与令牌）。续用绑定会话后，同一条会话可能出现两个写者：软件端在跑（真 job）、手机又来
+ *  一条 —— 两个 opencode 进程并发写同一份会话历史会互相搅，所以起 opencode 前先问一句。
+ *  【一律 fail-open】查不到 / 超时 / 老网关没这个端点，都按"不忙"放行——探针失灵不能瘫掉聊天。 */
+function checkSessionBusy(sid, cb) {
+  if (!LIVE_URL || !LIVE_TOKEN || !sid) return cb(false)
+  let called = false
+  const done = (busy) => { if (!called) { called = true; cb(!!busy) } }
+  try {
+    const u = new URL(LIVE_URL)
+    const req = http.request({
+      hostname: u.hostname, port: u.port || 80,
+      path: "/api/chat-bridge/busy?sid=" + encodeURIComponent(sid), method: "GET",
+      headers: { Authorization: "Bearer " + LIVE_TOKEN },
+    }, (res) => {
+      let buf = ""
+      res.setEncoding("utf8")
+      res.on("data", (d) => { buf += d.length > 4096 ? "" : d })
+      res.on("end", () => { try { done(JSON.parse(buf)?.busy) } catch { done(false) } })
+      res.on("error", () => done(false))
+    })
+    req.on("error", () => done(false))
+    req.setTimeout(1500, () => { try { req.destroy() } catch {} ; done(false) })
+    req.end()
+  } catch { done(false) }
+}
+
 /** 收尾：把最后一批（含 done）发出去再退出，最多等 1 秒 —— 退出比直播重要。 */
 function liveExit(code) {
   if (!LIVE_URL) { process.exit(code); return }
@@ -820,7 +932,9 @@ function runOpencode(stdinText, extraFiles = []) {
             // 上面 answer.set 也是覆盖不是追加）。
             if (lastTextEvt && lastTextId && lastTextId !== id) out(JSON.stringify(withText(lastTextEvt, answer.get(lastTextId) || "")) + "\n")
             lastTextEvt = evt; lastTextId = id
-            emit = JSON.stringify(withText(evt, txt + SIGNATURE))
+            // 额度提醒【插在落款之前】，与落款同走这条 text 事件（自己单发会再吃一格额度，
+            // 收尾再写又赶不上 step_finish）。只有微信有额度，企微恒为空串。
+            emit = JSON.stringify(withText(evt, txt + (BUDGET_TIGHT ? quotaNotice(answerOrdinal()) : "") + SIGNATURE))
             signedInText = true
             // 软件侧的 text 事件按【累计全文】语义（与网关直播同口径），所以这里也发全文
             liveNote({ k: "text", text: answerOrder.map((x) => answer.get(x) || "").join("\n") })
@@ -967,6 +1081,7 @@ function runOpencode(stdinText, extraFiles = []) {
     // 【和文件补发合并成一条 send，别各发各的】两条 send 并发时，先回调的那条会 process.exit()，
     // 把另一条连同它的内容一起带走——那正是我们要修的"回复丢失"，不能在修复代码里再犯一次。
     if (rescueMsg && !toSend.length) {
+      noteSend()
       execFile(CC, ["send", "-m", rescueMsg], { windowsHide: true }, () => liveExit(exitCode))
       setTimeout(() => liveExit(exitCode), 30_000)
       return
@@ -1002,6 +1117,8 @@ function runOpencode(stdinText, extraFiles = []) {
     if (process.env.SCI_WRAP_LOG) {
       try { fs.appendFileSync(process.env.SCI_WRAP_LOG, new Date().toISOString() + ` 兜底补发[mod=${mod || "chat"}] ` + toSend.map((f) => path.basename(f)).join(", ") + (held ? `（另折下 ${held} 个）` : "") + "\n") } catch {}
     }
+    // 【每个文件各计一格】见 cc-connect 的 media_outbound.go；正文（oneMsg）再算一条。
+    noteSend((oneMsg.trim() ? 1 : 0) + toSend.length)
     execFile(CC, sendArgs, { windowsHide: true }, () => liveExit(exitCode))
     setTimeout(() => liveExit(exitCode), 30_000)   // send 卡死也不拖着不退
   }
@@ -1022,13 +1139,48 @@ function main() {
     child.on("error", (e) => { console.error(e.message); process.exit(1) })
     return
   }
-  // 每条来信都是补发窗口：此刻微信的会话令牌刚被这条消息刷新，上一轮丢失的投递现在必能发出。
+  // 【续用绑定会话 + 双端并发防护】runOpencode 的所有调用点都换成走这里：
+  //   ① cc-connect 新起会话的第一条不带 --session —— 注入绑定会话 id，让手机消息接着软件里
+  //      选定的那条会话继续（语义与 /new 逃生舱见 adoptBoundSession 头注）。注入必须在
+  //      runOpencode 之前改掉 args（它和 stdoutAbandoned 都读 args）。
+  //   ② 软件端正在这条会话里跑时别再塞一轮（两个 opencode 进程并发写同一份会话历史会互相搅）。
+  //      反方向早有防护（微信在跑时软件端发消息被影子 job 挡下）。
+  // 【只在真正开跑时才写"已收编"标记】先上传后提问的纯暂存轮、忙碌被拒的轮都没起 opencode，
+  // cc-connect 没机会从事件流学走会话 id —— 此时落了标记，下一条不带 --session 的消息就会被
+  // 误判成 /new 而丢掉续跑。所以标记与 runOpencode 同一时刻落。
+  const runGated = (stdinText, extraFiles = []) => {
+    const adoptedArgs = adoptBoundSession(args, BOUND_SID, readAdopted())
+    if (adoptedArgs) {
+      args.splice(0, args.length, ...adoptedArgs)
+      liveSid = BOUND_SID   // 直播中继不必再等事件认领：本轮就跑在绑定会话里
+      wlog(`续用绑定会话：注入 --session ${BOUND_SID}`)
+    }
+    checkSessionBusy(agentSessionOf(args), (busy) => {
+      if (!busy) {
+        if (adoptedArgs) writeAdopted(BOUND_SID)
+        return runOpencode(stdinText, extraFiles)
+      }
+      wlog("绑定会话正被软件端占用，本条不跑，回执让用户稍后再发")
+      markStdout()
+      noteSend()   // 这句回执经 cc-connect 发出，也占一条消息
+      process.stdout.write(
+        "⏳ 软件（电脑端）正在这条会话里跑任务，为避免两边互相打架，这条消息暂时没有处理。\n" +
+        "等它跑完（软件里能看到进度）再把刚才的话发一次即可。" + SIGNATURE,
+        () => process.exit(0))
+      setTimeout(() => process.exit(0), 3000)
+    })
+  }
+  // 【额度归零】cc-connect 每条来信 spawn 一次 oc-wrap，所以"本进程被拉起"就等于"刚收到一条
+  // 来信"——而来信正是腾讯重置主动发送额度的唯一事件（见 quotaFile 那段头注）。必须放在
+  // resendLostReply 之前：补发本身也是新窗口里的第一条，要计进去。
+  if (BUDGET_TIGHT) { try { resetQuota() } catch {} }
+  // 每条来信都是补发窗口：来信【就是】腾讯给额度解禁的那个事件，所以此刻必定发得出去。
   // 【必须兜住】它读 bridge.log / last-reply.json / 调 cc-connect，任何一处抛出来都会让本轮
   // 在起 opencode 之前就静默死掉 —— 用户看到的就是「(空响应)」，而补发本身只是锦上添花，
   // 绝不该因为它失败就把用户真正要问的这句话吞掉。
   try { resendLostReply() } catch (e) { wlog("resendLostReply 异常（已忽略，继续本轮）：" + (e?.message || e)) }
   if (!UPLOAD_FIRST) {
-    runOpencode(null)   // 关了「先上传后提问」：原样透传 stdin，行为不变
+    runGated(null)   // 关了「先上传后提问」：原样透传 stdin，行为不变
   } else {
     // 开了「先上传后提问」：先读走 cc-connect 从 stdin 喂进来的 prompt 再决定跑不跑模型。
     readStdin().then((prompt) => {
@@ -1054,12 +1206,12 @@ function main() {
           const lines = pending.map((e) => e.path).join("\n")
           eff += `\n\n(用户此前上传了这些文件，请在回答时一并读取参考：\n${lines}\n)`
         }
-        runOpencode(eff, pendImgs)
+        runGated(eff, pendImgs)
       } catch {
         // 分析出岔子就按原样把 prompt 交给模型，绝不吞消息
-        try { runOpencode(prompt) } catch { process.exit(1) }
+        try { runGated(prompt) } catch { process.exit(1) }
       }
-    }, () => runOpencode(null))
+    }, () => runGated(null))
   }
 }
 

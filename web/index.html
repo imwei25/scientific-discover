@@ -2408,8 +2408,9 @@
         <summary>怎么用</summary>
         <ul class="cb-steps">
           <li><b>在哪聊</b>：企微/微信里找到机器人，像聊天一样发消息。</li>
+          <li><b>接着聊</b>：手机上发的消息<b>接着绑定的那条会话</b>继续（记得前面聊过什么），软件里打开它能实时看到进度。</li>
           <li><b>能干嘛</b>：查文献、跑统计、画图、写稿；图片文档直接发到聊天，也进绑定会话的「产出」侧栏。</li>
-          <li><b>换话题</b>：发 <code>/new</code> 开新对话；<code>/stop</code> 中断任务。</li>
+          <li><b>换话题</b>：发 <code>/new</code> 另起一条新会话（不再接着绑定会话，旧话题太长时用）；<code>/stop</code> 中断任务。</li>
         </ul>
       </details>
       <div class="mm-hint" id="cbErrLine" style="color:var(--bad,#c00)"></div>
@@ -10004,7 +10005,7 @@ document.addEventListener("visibilitychange", () => { if (!document.hidden) refr
     $(prefix + "State").textContent = t
     $(prefix + "Unbind").hidden = !pd.boundSid
     $(prefix + "BoundHint").innerHTML = pd.boundSid
-      ? "当前接入：<b>" + esc(pd.boundTitle || pd.boundSid) + "</b>（选别的会话点绑定即可换绑，旧会话自动脱离）"
+      ? "当前接入：<b>" + esc(pd.boundTitle || pd.boundSid) + "</b>（手机上发的消息会<b>接着这条会话</b>继续；选别的会话点绑定即可换绑，旧会话自动脱离）"
       : ""
   }
   // 来信成员 → 一键锁白名单（platform 决定写哪个平台的 allow_from）

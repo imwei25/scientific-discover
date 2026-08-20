@@ -3601,6 +3601,21 @@ export const server = http.createServer(async (req, res) => {
       catch (e) { return send(res, 200, "application/json", JSON.stringify({ ok: false, err: String(e?.message || e) })) }
     }
 
+    // ---- 聊天接入的忙碌探针（oc-wrap 起跑前问：绑定会话此刻是不是软件端占着）----
+    // 手机消息现在【续用绑定会话】（oc-wrap 注入 --session，见 adoptBoundSession），于是同一条
+    // 会话可能出现两个写者：软件端这轮在跑（真 job），手机又来了一条 —— 两个 opencode 进程并发
+    // 写同一份会话历史会互相搅。反方向早有防护（微信在跑时软件端发消息被影子 job 挡下，见
+    // /api/chat/start）；这个端点补正方向：oc-wrap 起 opencode 前来问一句，忙就回执让用户稍后再发。
+    // 门禁/令牌与上面的 live 同款（调用方同样没有 cookie）。只有【非 bridge 的真 job】算忙：
+    // 影子 job 是上一条手机消息自己，cc-connect 本来就按队列串行，不构成并发。
+    if (req.method === "GET" && u.pathname === "/api/chat-bridge/busy") {
+      if (!isLocal(req)) return send(res, 403, "application/json", JSON.stringify({ ok: false, err: "仅限本机" }))
+      const bearer = String(req.headers.authorization || "").replace(/^Bearer\s*/i, "").trim()
+      if (bearer !== CLOUD_LOCAL_TOKEN) return send(res, 401, "application/json", JSON.stringify({ ok: false, err: "本机转发令牌不正确" }))
+      const j = jobs.get(u.searchParams.get("sid") || "")
+      return send(res, 200, "application/json", JSON.stringify({ ok: true, busy: !!(j && j.running && !j.bridge) }))
+    }
+
     // 门禁：其余路径若未登录 → 页面跳登录页、接口回 401
     if (!PUBLIC_PATHS.has(u.pathname) && !authed(req)) {
       if (req.method === "GET" && (req.headers.accept || "").includes("text/html")) {

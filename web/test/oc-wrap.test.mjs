@@ -5,7 +5,7 @@ import assert from "node:assert/strict"
 import fs from "node:fs"
 import os from "node:os"
 import path from "node:path"
-import { classifyRun, attachPaths, stripRefs, imageArgs, stageFiles, consumePending, stdoutAbandoned, agentSessionOf, stallReason, silenceDue, budgetTightFor, countRecentSends, budgetNotice, scrubPaths, SIGNATURE } from "../chat-bridge/oc-wrap.mjs"
+import { classifyRun, attachPaths, stripRefs, imageArgs, stageFiles, consumePending, stdoutAbandoned, agentSessionOf, stallReason, silenceDue, budgetTightFor, countRecentSends, budgetNotice, scrubPaths, SIGNATURE, quotaNotice, QUOTA_WARN_AT, adoptBoundSession } from "../chat-bridge/oc-wrap.mjs"
 
 const A = ["run", "--format", "json"]   // cc-connect 固定前缀
 const ATT = "C:\\Users\\u\\Niuma Science\\out\\.cc-connect\\attachments\\m1"
@@ -91,6 +91,32 @@ test("stageFiles：把文件剪切进会话 uploads\\、登记台账；consumePe
     process.chdir(cwd0)
     try { fs.rmSync(work, { recursive: true, force: true }) } catch {}
   }
+})
+
+// ---- 续用绑定会话：什么时候注入 --session、什么时候放行 ----
+test("adoptBoundSession：新起会话的第一条（无 --session）→ 注入绑定会话 id，紧跟在 run 后", () => {
+  const out = adoptBoundSession(["run", "--format", "json"], "ses_abc", "")
+  assert.deepEqual(out, ["run", "--session", "ses_abc", "--format", "json"])
+})
+
+test("adoptBoundSession：cc-connect 已带 --session（续跑中）→ 不插手", () => {
+  assert.equal(adoptBoundSession(["run", "--session", "ses_abc", "--format", "json"], "ses_abc", "ses_abc"), null)
+  // 它在续别的会话（/new 之后的后续轮）也不许改写——改了会把两条会话搅在一起
+  assert.equal(adoptBoundSession(["run", "--session", "ses_new", "--format", "json"], "ses_abc", "ses_abc"), null)
+})
+
+test("adoptBoundSession：已收编过还不带 --session = 用户发了 /new → 放行新会话", () => {
+  assert.equal(adoptBoundSession(["run", "--format", "json"], "ses_abc", "ses_abc"), null)
+})
+
+test("adoptBoundSession：换绑到别的会话（标记是旧 id）→ 重新收编", () => {
+  const out = adoptBoundSession(["run", "--format", "json"], "ses_new", "ses_old")
+  assert.deepEqual(out, ["run", "--session", "ses_new", "--format", "json"])
+})
+
+test("adoptBoundSession：老版 chat-bridge 没传 boundSid / argv 不是 run → 保持原行为", () => {
+  assert.equal(adoptBoundSession(["run", "--format", "json"], "", ""), null)
+  assert.equal(adoptBoundSession(["models"], "ses_abc", ""), null)
 })
 
 // ---- 投递看门狗：bridge.log 里认哪些行算"微信投递失败"（行样式取自真机日志）----
@@ -335,8 +361,8 @@ test("SIGNATURE：以换行开头、末尾无多余空行", () => {
 // ——这就是"落款在收尾时才 out(SIGNATURE)、两个平台都收不到"的根因。落款必须随正文事件一起走。
 test("落款必须随正文 text 事件一起发，不能等收尾（step_finish 之后就晚了）", () => {
   const src = fs.readFileSync(new URL("../chat-bridge/oc-wrap.mjs", import.meta.url), "utf8")
-  assert.match(src, /emit = JSON\.stringify\(withText\(evt, txt \+ SIGNATURE\)\)/,
-    "正文 text 事件出口处就要把落款缀上")
+  assert.match(src, /emit = JSON\.stringify\(withText\(evt, txt \+ \(BUDGET_TIGHT \? quotaNotice\(answerOrdinal\(\)\) : ""\) \+ SIGNATURE\)\)/,
+    "正文 text 事件出口处就要把额度提醒+落款缀上（提醒在落款之前）")
   // 收尾处不许再出现"直接把落款写进 stdout"的老写法
   const tail = src.slice(src.indexOf("const finishAndExit"))
   assert.ok(!/out\(SIGNATURE/.test(tail), "收尾不能再 out(SIGNATURE)：step_finish 之后写的进不了正文")
@@ -344,3 +370,39 @@ test("落款必须随正文 text 事件一起发，不能等收尾（step_finish
   assert.match(src, /if \(lastTextEvt && lastTextId && lastTextId !== id\)/,
     "换 part 时要把上一个 part 的落款撤掉（按原文重发覆盖）")
 })
+
+// ---- 微信主动发送额度提醒 ----------------------------------------------------
+// 2026-08-20 实测：额度由【用户来信】重置，一次约 10 条；时间与桥重启都不解禁。
+// 所以第 9 条时必须把话说明白，让用户回一句续上，而不是等触顶后事后补发。
+test("quotaNotice：只在第 9 条出现，措辞点明 10 触顶、11 起送不到", () => {
+  assert.equal(QUOTA_WARN_AT, 9)
+  assert.equal(quotaNotice(1), "")
+  assert.equal(quotaNotice(8), "")
+  assert.equal(quotaNotice(10), "")
+  const n = quotaNotice(9)
+  assert.ok(n.includes("第 9 条"), "要说清这是第 9 条")
+  assert.ok(n.includes("第 10 条"), "要预告第 10 条触顶")
+  assert.ok(n.includes("第 11 条"), "要说明第 11 条起送不到")
+  assert.ok(n.includes("回复任意信息"), "要给出可执行的解法：回一句话")
+  assert.ok(n.startsWith(String.fromCharCode(10, 10)), "要与正文隔开")
+})
+
+test("额度提醒必须搭在正文里，且排在落款之前（自己单发会再吃一格额度）", () => {
+  const src = fs.readFileSync(new URL("../chat-bridge/oc-wrap.mjs", import.meta.url), "utf8")
+  const i = src.indexOf("quotaNotice(answerOrdinal())")
+  assert.ok(i > 0, "正文出口要调 quotaNotice")
+  const line = src.slice(i, src.indexOf(String.fromCharCode(10), i))
+  assert.ok(line.indexOf("SIGNATURE") > 0, "提醒要排在落款之前")
+  // 不许出现"为提醒单发一条 send"的写法
+  assert.ok(!/execFile\(CC, \["send", "-m", quotaNotice/.test(src), "提醒绝不能单发一条")
+})
+
+test("来信即重置额度：main() 里 resetQuota 必须排在 resendLostReply 之前", () => {
+  const src = fs.readFileSync(new URL("../chat-bridge/oc-wrap.mjs", import.meta.url), "utf8")
+  const main = src.slice(src.indexOf("function main()"))
+  const iReset = main.indexOf("resetQuota()")
+  const iResend = main.indexOf("resendLostReply()")
+  assert.ok(iReset > 0 && iResend > 0)
+  assert.ok(iReset < iResend, "补发本身也是新窗口里的一条，要计进去")
+})
+
