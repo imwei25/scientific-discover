@@ -45,11 +45,26 @@ OpenAlex 鉴权（对齐 openscience 的做法）
     python enhanced_search.py "sglt2 inhibitor heart failure" --limit 25     # 只要前 25 条
     python enhanced_search.py "graph neural network" "protein design" \
         --sources semantic_scholar,arxiv,openalex --email you@example.com
+
+一个会话里做多轮检索（重要）
+--------------------------
+产物默认是**固定名**，第二次跑会把第一次挤成 .bak。分概念 / 分主题多轮检索时，**每轮都带 `--tag`**：
+
+    python enhanced_search.py "sglt2 inhibitor" --tag drug
+    python enhanced_search.py "heart failure outcome" --tag outcome
+    # → evidence_table__drug.csv / evidence_table__outcome.csv，互不覆盖
+
+不带 --tag 时**也不会覆盖**：同名旧产物先改名成 `evidence_table.csv.bak`（已有 .bak 就 .bak2、
+.bak3……）让位，并在 stderr 报出改名了哪些文件。但下游按固定名读表，只会读到最新这次的结果，
+前几轮躺在 .bak 里没人看——所以多轮检索还是应当带 --tag。要一次检索多条式子并**合并成一张表**，
+直接把多个检索式作为位置参数传给同一次调用（本脚本会跨式跨源去重）。
+
 产出
 ----
-    outputs/evidence_table.csv   title/year/journal/design/cites/doi/pmid/sources/abstract
-    outputs/evidence.md          精简清单（写综述时逐条引用）
-    stderr                       每源命中数、跨源重叠、去重后总数
+    evidence_table.csv   title/year/journal/design/cites/doi/pmid/sources/abstract
+    evidence.md          精简清单（写综述时逐条引用）
+    （带 --tag 时为 evidence_table__<标签>.csv / evidence__<标签>.md）
+    stderr               每源命中数、跨源重叠、去重后总数
 """
 
 import argparse
@@ -224,6 +239,57 @@ def _resolve_out_file(explicit=None, default_name="output"):
             _sys.exit(chr(10).join(_m))
         return _p
     return _resolve_out_dir() / default_name
+
+
+# --------------------------------------------------------------------------- #
+# 证据表落盘路径：同一会话里跑第二次检索，不带 --tag 时旧表会被改名成 .bak 让位（绝不覆盖）
+# --------------------------------------------------------------------------- #
+_TAG_BAD = re.compile(r"[^0-9A-Za-z一-鿿_.-]+")
+
+
+def _slug_tag(tag):
+    s = _TAG_BAD.sub("-", (tag or "").strip()).strip("-._")
+    return s[:40] or "run"
+
+
+def _backup(path):
+    """目标文件已存在就改名让位（<原名>.bak / .bak2 / .bak3 …），绝不覆盖。
+
+    返回 (原名, 备份名) 供调用方告警；文件本来不存在则返回 None。
+    """
+    if not os.path.exists(path):
+        return None
+    cand, n = path + ".bak", 1
+    while os.path.exists(cand):
+        n += 1
+        cand = f"{path}.bak{n}"
+    os.replace(path, cand)
+    return (os.path.basename(path), os.path.basename(cand))
+
+
+def _out_paths(outdir, explicit=None, tag=None):
+    """决定 evidence_table / evidence 的路径；同名旧产物改名成 .bak 让位，绝不覆盖。"""
+    if explicit:
+        p = _resolve_out_file(explicit, "evidence_table.csv")
+        csv_path, md_path = str(p), str(p.with_suffix(".md"))
+    elif tag:
+        s = _slug_tag(tag)
+        csv_path = os.path.join(outdir, f"evidence_table__{s}.csv")
+        md_path = os.path.join(outdir, f"evidence__{s}.md")
+    else:
+        csv_path = os.path.join(outdir, "evidence_table.csv")
+        md_path = os.path.join(outdir, "evidence.md")
+    moved = [b for b in (_backup(csv_path), _backup(md_path)) if b]
+    if moved:
+        sys.stderr.write(
+            "\n!! 目标文件已存在（上一次检索的产物），【没有覆盖】，先改名备份让位：\n"
+            + "".join(f"   {a} → {b}\n" for a, b in moved)
+            + "   同一会话里做第 2 次及以后的检索，建议直接加 --tag <短标签>\n"
+              "   （写成 evidence_table__<标签>.csv / evidence__<标签>.md），"
+              "或用 --out <文件名.csv> 显式指定；\n"
+              "   否则下游（idea-forge / grant-proposal / zotero push）按固定名读表，\n"
+              "   只会读到最后一次检索的结果，前几轮都躺在 .bak 里没人看。\n\n")
+    return csv_path, md_path
 
 
 def classify(text):
@@ -646,6 +712,12 @@ def main():
     ap.add_argument("--email", default=_EMAIL,
                     help="OpenAlex polite pool 联系邮箱（也读 OPENALEX_MAILTO）")
     ap.add_argument("--outdir", default=None)
+    ap.add_argument("--tag", default=None,
+                    help="本次检索的短标签，产物写成 evidence_table__<标签>.csv / "
+                         "evidence__<标签>.md。同一会话里第 2 次及以后的检索务必带上，"
+                         "否则上一次的证据表会被挤成 .bak，手上那张就只剩最后一轮")
+    ap.add_argument("--out", default=None,
+                    help="直接指定证据表 CSV 的文件名（.md 用同一 stem）；与 --tag 二选一")
     args = ap.parse_args()
     args.outdir = str(_resolve_out_dir(args.outdir))
 
@@ -691,7 +763,7 @@ def main():
         r["design"] = classify(f"{r['title']} {r['abstract']}")
     merged.sort(key=lambda x: (_int(x["year"]), _int(x["cites"])), reverse=True)
 
-    csv_path = os.path.join(args.outdir, "evidence_table.csv")
+    csv_path, md_path = _out_paths(args.outdir, args.out, args.tag)
     import csv as _csv
     with open(csv_path, "w", encoding="utf-8-sig", newline="") as f:
         w = _csv.DictWriter(f, fieldnames=["title", "year", "journal", "design",
@@ -705,7 +777,6 @@ def main():
                 "abstract": r["abstract"],
             })
 
-    md_path = os.path.join(args.outdir, "evidence.md")
     with open(md_path, "w", encoding="utf-8") as f:
         f.write(f"# 证据清单（{len(merged)} 篇，跨源去重后）\n\n")
         for i, r in enumerate(merged, 1):

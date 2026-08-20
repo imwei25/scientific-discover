@@ -26,7 +26,7 @@ description: 交互式"立意锻打"对话引擎——动手写/做之前，先�
    - 标书场景 → **先扫 cwd 有无 `requirement_card.md`**（grant 流水线第 0 步定标模式的出件，经用户确认过）：有就以它为准——评审评价维定议程权重、指南方向/考核指标供对表、经费档位供方案匹配拷问。没有 → 复用 `grant-proposal/references/` 的渠道要求卡（直接 Read 兄弟技能目录，不重建卡库）；用户给了当年申报指南/官方通知，以其为准，并提取**指南方向与考核指标**（指标驱动渠道后面要对表）。
    - 论文场景 → 读统计输出、图表、数据描述。
    - 有已成草稿 → 先跑 `grant-proposal/scripts/hollowness_check.py` 拿客观弱点信号（论文草稿也能跑，指标同样适用）。
-3. **扫上游产物**：当前目录的 `novelty_verdict*.md`、`topics.md`、`closest_work.md`、`evidence_table.csv`、统计结果——已有结论直接采信，别重做。
+3. **扫上游产物**：当前目录的 `novelty_verdict*.md`、`topics.md`、`closest_work.md`、`evidence_table.csv`（多轮检索时是 `evidence_table__<标签>.csv`，有几份就都扫）、统计结果——已有结论直接采信，别重做。
 4. **建决策树**：按场景包列出本场景必须敲定的决策节点，逐节点标状态：
    - ✅ **已定**：上游产物或用户输入已给出且有证据 → 跳过；
    - ❓ **有主张未验证**：用户说了但没证据（"没人做过""样本够"）→ 排入 **grill**；

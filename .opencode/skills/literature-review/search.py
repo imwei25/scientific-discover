@@ -7,8 +7,14 @@
   python search.py "concept1" "concept2" --since 2018          # 不限条数，命中多少取多少
   python search.py "concept1" "concept2" --limit 25            # 只要前 25 条时才显式给
 产出：
-  outputs/evidence_table.csv   标题/年份/期刊/研究类型线索/DOI/PMID/摘要
-  outputs/evidence.md          精简清单（模型写综述时读它，逐条引用）
+  evidence_table.csv   标题/年份/期刊/研究类型线索/DOI/PMID/摘要
+  evidence.md          精简清单（模型写综述时读它，逐条引用）
+
+一个会话里做多轮检索（重要）：产物默认是**固定名**，第二次跑会把第一次挤成 .bak。分主题 / 分概念
+多轮检索时**每轮都带 `--tag`**，产物变成 evidence_table__<标签>.csv / evidence__<标签>.md，
+互不覆盖；不带 --tag 时**也不会覆盖**——同名旧产物先改名成 evidence_table.csv.bak（已有 .bak
+就 .bak2、.bak3……）让位并在 stderr 报出，但下游按固定名只读得到最新一次，所以多轮仍应带 --tag。
+要把多个概念合成一次检索（AND 交集）直接把它们作为多个位置参数传给同一次调用即可。
 
 研究类型线索：从标题/摘要里粗粒度识别 RCT / cohort / meta-analysis /
 review / case report 等，方便按证据等级组织综述。不替代人工判读。
@@ -158,6 +164,57 @@ def _resolve_out_file(explicit=None, default_name="output"):
             _sys.exit(chr(10).join(_m))
         return _p
     return _resolve_out_dir() / default_name
+
+
+# --------------------------------------------------------------------------- #
+# 证据表落盘路径：同一会话里跑第二次检索，不带 --tag 时旧表会被改名成 .bak 让位（绝不覆盖）
+# --------------------------------------------------------------------------- #
+_TAG_BAD = re.compile(r"[^0-9A-Za-z一-鿿_.-]+")
+
+
+def _slug_tag(tag):
+    s = _TAG_BAD.sub("-", (tag or "").strip()).strip("-._")
+    return s[:40] or "run"
+
+
+def _backup(path):
+    """目标文件已存在就改名让位（<原名>.bak / .bak2 / .bak3 …），绝不覆盖。
+
+    返回 (原名, 备份名) 供调用方告警；文件本来不存在则返回 None。
+    """
+    if not os.path.exists(path):
+        return None
+    cand, n = path + ".bak", 1
+    while os.path.exists(cand):
+        n += 1
+        cand = f"{path}.bak{n}"
+    os.replace(path, cand)
+    return (os.path.basename(path), os.path.basename(cand))
+
+
+def _out_paths(outdir, explicit=None, tag=None):
+    """决定 evidence_table / evidence 的路径；同名旧产物改名成 .bak 让位，绝不覆盖。"""
+    if explicit:
+        p = _resolve_out_file(explicit, "evidence_table.csv")
+        csv_path, md_path = str(p), str(p.with_suffix(".md"))
+    elif tag:
+        s = _slug_tag(tag)
+        csv_path = os.path.join(outdir, f"evidence_table__{s}.csv")
+        md_path = os.path.join(outdir, f"evidence__{s}.md")
+    else:
+        csv_path = os.path.join(outdir, "evidence_table.csv")
+        md_path = os.path.join(outdir, "evidence.md")
+    moved = [b for b in (_backup(csv_path), _backup(md_path)) if b]
+    if moved:
+        sys.stderr.write(
+            "\n!! 目标文件已存在（上一次检索的产物），【没有覆盖】，先改名备份让位：\n"
+            + "".join(f"   {a} → {b}\n" for a, b in moved)
+            + "   同一会话里做第 2 次及以后的检索，建议直接加 --tag <短标签>\n"
+              "   （写成 evidence_table__<标签>.csv / evidence__<标签>.md），"
+              "或用 --out <文件名.csv> 显式指定；\n"
+              "   否则下游（idea-forge / grant-proposal / zotero push）按固定名读表，\n"
+              "   只会读到最后一次检索的结果，前几轮都躺在 .bak 里没人看。\n\n")
+    return csv_path, md_path
 
 
 def _get(url, **kw):
@@ -312,6 +369,12 @@ def main():
     ap.add_argument("--union", action="store_true",
                     help="把多个参数各自独立检索再并集（旧行为；会掺入只命中单个概念的离题文献）")
     ap.add_argument("--outdir", default=None)
+    ap.add_argument("--tag", default=None,
+                    help="本次检索的短标签，产物写成 evidence_table__<标签>.csv / "
+                         "evidence__<标签>.md。同一会话里第 2 次及以后的检索务必带上，"
+                         "否则上一次的证据表会被挤成 .bak，手上那张就只剩最后一轮")
+    ap.add_argument("--out", default=None,
+                    help="直接指定证据表 CSV 的文件名（.md 用同一 stem）；与 --tag 二选一")
     args = ap.parse_args()
     args.outdir = str(_resolve_out_dir(args.outdir))
     os.makedirs(args.outdir, exist_ok=True)
@@ -363,14 +426,13 @@ def main():
             return 0
     rows.sort(key=lambda x: (_int(x["year"]), _int(x["cites"])), reverse=True)
 
-    csv_path = os.path.join(args.outdir, "evidence_table.csv")
+    csv_path, md_path = _out_paths(args.outdir, args.out, args.tag)
     with open(csv_path, "w", encoding="utf-8", newline="") as f:
         w = csv.DictWriter(f, fieldnames=["title", "year", "journal", "design",
                                           "cites", "doi", "pmid", "abstract"])
         w.writeheader()
         w.writerows(rows)
 
-    md_path = os.path.join(args.outdir, "evidence.md")
     with open(md_path, "w", encoding="utf-8") as f:
         f.write(f"# 证据清单（{len(rows)} 篇，去重后）\n\n")
         for i, r in enumerate(rows, 1):

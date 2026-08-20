@@ -71,7 +71,7 @@ SK=.opencode/skills/zotero-library/references
 
 ### 把综述检索到的文献导入 Zotero / 会话小库
 
-`search-lit` / `literature-review` 产出 `evidence_table.csv`（含 DOI）。基于它：
+`search-lit` / `literature-review` 产出 `evidence_table.csv`（含 DOI；多轮检索时是 `evidence_table__<标签>.csv`，先确认要推的是哪一份/合并表）。基于它：
 
 - **→ Zotero**：`push --csv evidence_table.csv`（或 `--bib refs.bib`）把**题录**写进 Zotero 当前选中分类。**只有题录、无 PDF 附件**（检索阶段本就没下全文）。
 - **→ 会话小库做 RAG**：小库是 PDF 目录，而检索结果**多数无全文**，所以：

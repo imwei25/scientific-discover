@@ -33,8 +33,15 @@ description: 写**叙述性**文献综述：围绕主题多路检索、去重、
 ### 阶段 2 — 缺口驱动的迭代检索（把"检索一次"改成回合制）
 把 `search.py` 当**可反复调用的检索原语**，一回合一回合补：
 ```
-"${REPO_ROOT:-/app}/.venv/bin/python" "${REPO_ROOT:-/app}/.opencode/skills/literature-review/search.py" "概念1" "概念2" --since 2018
+"${REPO_ROOT:-/app}/.venv/bin/python" "${REPO_ROOT:-/app}/.opencode/skills/literature-review/search.py" "概念1" "概念2" --since 2018 --tag r1
 ```
+> ⚠️ **每一回合都必须带 `--tag`（`r1` / `r2` / `机制` / `诊断` …）**。产物默认是**固定名**
+> `evidence_table.csv` / `evidence.md`，脚本**不会追加合并**——回合制检索不带 tag，后一轮就把
+> 前一轮挤走：旧表会被改名成 `evidence_table.csv.bak` / `.bak2` / `.bak3`… 保命（数据不会真丢），
+> 但你手上那张固定名的表只剩最后一轮。带 tag 后写成 `evidence_table__r1.csv` /
+> `evidence__r1.md`，各轮并存、可直接合表（见下）；不带 tag 而文件已存在时脚本会在 stderr
+> 报出把哪些文件改名成了什么。
+>
 > **多个概念默认 AND 合成一条聚焦检索（取交集）**——脚本会打印实际合成的检索式。这样聚焦主题、
 > 不掺入只命中单个概念的离题文献。要各自独立检索再并集（旧行为，会掺离题）显式加 `--union`。
 > 单概念一条式最可控：`"概念1 AND 概念2 AND (同义词1 OR 同义词2)"`。
@@ -48,7 +55,36 @@ description: 写**叙述性**文献综述：围绕主题多路检索、去重、
 > 摘要会把写作空间挤没）。按 `design`/`year`/`cites` 在 `evidence_table.csv` 里先筛出这一轮真正要
 > 用的那部分（如只看 meta-analysis + RCT、或近 5 年被引前 100）再细读；全量表照旧留在产物里备查。
 
-产出/追加 `outputs/evidence_table.csv`（含 design 列 + MeSH 词可作归一化信号）和 `outputs/evidence.md`。**每回合读完摘要后自评缺口**（照共享 doc）：哪个子面证据稀薄→补检；哪条论断只靠单一/弱证据→**沿证据等级爬升**（只有队列就去找 RCT/meta）；冒出的新药名/标志物→单独一轮。**停止判据**：每个子面在相关等级上取到 ≥3–5 篇、或连续两回合无新增、或到回合上限（默认 3–4 轮）。逐轮记 `outputs/search_log.md`。
+每回合产出 `evidence_table__<tag>.csv`（含 design 列 + MeSH 词可作归一化信号）和 `evidence__<tag>.md`
+——**脚本不会自动追加合并**，各轮各一份。**所有回合跑完后合成一张总表**再进阶段 3：
+
+```bash
+"${REPO_ROOT:-/app}/.venv/bin/python" - <<'EOF'
+import csv, glob, pathlib
+rows, seen = [], set()
+for p in sorted(glob.glob("evidence_table__*.csv")):
+    for r in csv.DictReader(open(p, encoding="utf-8-sig")):
+        k = (r.get("doi") or "").lower() or (r.get("title") or "").lower().strip(" .")
+        if k and k in seen:
+            continue
+        seen.add(k); r["source_round"] = pathlib.Path(p).stem.split("__", 1)[1]; rows.append(r)
+cols = list(rows[0].keys())
+with open("evidence_table.csv", "w", encoding="utf-8-sig", newline="") as f:
+    w = csv.DictWriter(f, fieldnames=cols); w.writeheader(); w.writerows(rows)
+with open("evidence.md", "w", encoding="utf-8") as f:
+    f.write(f"# 证据清单（{len(rows)} 篇，各轮合并去重）\n\n")
+    for i, r in enumerate(rows, 1):
+        f.write(f"{i}. **{r['title']}** ({r['year']}, {r['journal']}) — *{r['design']}*, "
+                f"cited {r['cites']}x, round={r['source_round']}. DOI:{r['doi'] or 'NA'}\n")
+        if r.get("abstract"):
+            f.write(f"   > {r['abstract'][:400]}\n")
+        f.write("\n")
+print(f"合并 {len(seen)} 篇 → evidence_table.csv / evidence.md")
+EOF
+```
+合并表多一列 `source_round` 标明这篇来自哪一轮（PRISMA 记数、汇报覆盖面时要用）。下游
+（`ground_claim.py`、`idea-forge`、`zotero push`）读的就是这张合并后的 `evidence_table.csv`。
+**每回合读完摘要后自评缺口**（照共享 doc）：哪个子面证据稀薄→补检；哪条论断只靠单一/弱证据→**沿证据等级爬升**（只有队列就去找 RCT/meta）；冒出的新药名/标志物→单独一轮。**停止判据**：每个子面在相关等级上取到 ≥3–5 篇、或连续两回合无新增、或到回合上限（默认 3–4 轮）。逐轮记 `outputs/search_log.md`。
 
 ### 阶段 3 — 论断台账 + 跨文献矛盾扫描
 1. **建台账**：读 `evidence.md`，逐篇抽 0..N 条结构化论断到 `outputs/claims_ledger.csv`，列：
