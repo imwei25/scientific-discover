@@ -5,7 +5,7 @@ import assert from "node:assert/strict"
 import fs from "node:fs"
 import os from "node:os"
 import path from "node:path"
-import { classifyRun, attachPaths, stripRefs, imageArgs, stageFiles, consumePending, stdoutAbandoned, agentSessionOf, stallReason, silenceDue, budgetTightFor, countRecentSends, budgetNotice, scrubPaths, SIGNATURE, quotaNotice, QUOTA_WARN_AT, adoptBoundSession } from "../chat-bridge/oc-wrap.mjs"
+import { classifyRun, attachPaths, stripRefs, imageArgs, stageFiles, consumePending, stdoutAbandoned, agentSessionOf, stallReason, silenceDue, budgetTightFor, countRecentSends, budgetNotice, scrubPaths, SIGNATURE, quotaNotice, QUOTA_WARN_AT, adoptBoundSession, routeCommandOf, routeArgs, routeSwitch } from "../chat-bridge/oc-wrap.mjs"
 
 const A = ["run", "--format", "json"]   // cc-connect 固定前缀
 const ATT = "C:\\Users\\u\\Niuma Science\\out\\.cc-connect\\attachments\\m1"
@@ -117,6 +117,64 @@ test("adoptBoundSession：换绑到别的会话（标记是旧 id）→ 重新�
 test("adoptBoundSession：老版 chat-bridge 没传 boundSid / argv 不是 run → 保持原行为", () => {
   assert.equal(adoptBoundSession(["run", "--format", "json"], "", ""), null)
   assert.equal(adoptBoundSession(["models"], "ses_abc", ""), null)
+})
+
+// ---- 路线切换：/task //back 的识别、定向与 prev 还原 ----
+test("routeCommandOf：只认剥掉附件引用块后恰为 /task 或 /back 的消息（大小写不敏感）", () => {
+  assert.equal(routeCommandOf("/task"), "task")
+  assert.equal(routeCommandOf("  /Back  "), "back")
+  assert.equal(routeCommandOf("/task 帮我看看"), "", "带了正文就不是纯指令")
+  assert.equal(routeCommandOf("帮我 /task"), "")
+  assert.equal(routeCommandOf(`/task\n\n(Files saved locally, please read them: ${ATT}\\a.xlsx)`), "", "指令配附件不认，别把文件吞了")
+})
+
+const RA = (argv, o) => routeArgs(argv, { boundSid: "ses_bound", adoptedSid: "ses_bound", task: { sid: "ses_task", dir: "D:\\out\\ws_t" }, ...o })
+
+test("routeArgs：task 路线把 --session 改写成任务会话并切 cwd", () => {
+  const r = RA(["run", "--session", "ses_bound", "--format", "json"], { route: { mode: "task" } })
+  assert.deepEqual(r.argv, ["run", "--session", "ses_task", "--format", "json"])
+  assert.equal(r.sid, "ses_task"); assert.equal(r.dir, "D:\\out\\ws_t")
+})
+
+test("routeArgs：task 路线上发 /new（无 --session）→ 放行并迁移 free", () => {
+  const r = RA(["run", "--format", "json"], { route: { mode: "task" } })
+  assert.equal(r.argv, null); assert.deepEqual(r.setRoute, { mode: "free" })
+})
+
+test("routeArgs：task 目标失效（task=null）→ 落回绑定会话", () => {
+  const r = RA(["run", "--session", "ses_task", "--format", "json"], { route: { mode: "task" }, task: null })
+  assert.deepEqual(r.argv, ["run", "--session", "ses_bound", "--format", "json"])
+})
+
+test("routeArgs：pin 路线钉回原会话（cwd 不切）", () => {
+  const r = RA(["run", "--session", "ses_task", "--format", "json"], { route: { mode: "pin", sid: "ses_free1" } })
+  assert.deepEqual(r.argv, ["run", "--session", "ses_free1", "--format", "json"])
+  assert.equal(r.dir, "", "pin 的会话建在绑定目录里，cwd 不动")
+})
+
+test("routeArgs：bound 路线把 /back 后 cc-connect 还记着的任务会话改写回来", () => {
+  const r = RA(["run", "--session", "ses_task", "--format", "json"], { route: { mode: "bound" } })
+  assert.deepEqual(r.argv, ["run", "--session", "ses_bound", "--format", "json"])
+})
+
+test("routeArgs：free 路线不插手", () => {
+  const r = RA(["run", "--session", "ses_new", "--format", "json"], { route: { mode: "free" } })
+  assert.equal(r.argv, null); assert.equal(r.sid, "ses_new")
+})
+
+test("routeSwitch：/task 记住切走前在哪；/back 按 prev 还原", () => {
+  // 从绑定会话切走再切回
+  const t1 = routeSwitch("task", { mode: "bound" }, "ses_bound")
+  assert.deepEqual(t1, { mode: "task", prev: { mode: "bound" } })
+  assert.deepEqual(routeSwitch("back", t1, "ses_task"), { mode: "bound" })
+  // 从 /new 的自由会话切走 → /back 回到那条（pin 钉住，原会话不是绑定会话）
+  const t2 = routeSwitch("task", { mode: "free" }, "ses_free1")
+  assert.deepEqual(t2, { mode: "task", prev: { mode: "free", sid: "ses_free1" } })
+  assert.deepEqual(routeSwitch("back", t2, "ses_task"), { mode: "pin", sid: "ses_free1" })
+  // 连按两次 /task 不把 prev 变成任务自己
+  assert.deepEqual(routeSwitch("task", t2, "ses_task"), t2)
+  // 不在任务路线上按 /back → 兜底回绑定会话
+  assert.deepEqual(routeSwitch("back", { mode: "pin", sid: "ses_free1" }, "ses_free1"), { mode: "bound" })
 })
 
 // ---- 投递看门狗：bridge.log 里认哪些行算"微信投递失败"（行样式取自真机日志）----

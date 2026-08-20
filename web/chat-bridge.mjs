@@ -594,6 +594,9 @@ export async function bind(platform, sid) {
   if (oldDir && path.resolve(oldDir).toLowerCase() !== path.resolve(dirAbs).toLowerCase() && !otherPlatUsesDir(s, platform, oldDir))
     retractAgents(oldDir)
   injectAgents(dirAbs)
+  // 每次新绑定默认走绑定会话路线：把上一轮绑定留下的 /task 切换态清掉（last-task 保留——
+  // 老任务会话还在的话 /task 仍可切过去，只是默认不在那条路线上）。
+  try { fs.rmSync(path.join(dirAbs, ".cc-connect", "route.json"), { force: true }) } catch {}
   saveState(s)
   restartCount = 0
   const r = s.enabled && platReady(s, platform) ? start() : { ok: true, idle: true }
@@ -699,7 +702,8 @@ export function boundInfo() {
 // ---- 主动推送（定时任务跑完发到绑定的微信/企微对话）----
 const IMG_EXT = new Set([".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp"])
 // 定时任务的产物在某会话目录里 → 推给"绑了这个目录的那个平台"。目录没被任何平台绑就不推。
-export async function pushToChat({ text, files, dir: workDir, only } = {}) {
+// sid = 产物所在会话的 id（定时任务传）：有它才能做 /task 路线切换（见下 taskHintFor）。
+export async function pushToChat({ text, files, dir: workDir, only, sid } = {}) {
   const s = loadState()
   if (!running()) return { ok: false, err: "聊天接入未运行（软件需开着并已连接）" }
   const { per } = parseLog()
@@ -771,12 +775,34 @@ export async function pushToChat({ text, files, dir: workDir, only } = {}) {
       return n
     } catch { return 0 }
   }
+  // 【/task 路线提示】这次推送来自某个会话（定时任务自己的新会话），而用户此刻聊着的是
+  // 绑定会话——他就推送内容追问时，绑定会话的 agent 对"刚推送了什么"一无所知。所以把
+  // 任务会话记进绑定目录的 last-task.json（oc-wrap 的 /task 据此切过去），并在推送尾部
+  // 教用户这两条指令。只在"推送源会话 ≠ 该平台绑定会话"时才有意义；写文件失败就不提
+  // 指令（提了也切不过去）。提示与正文同一条消息，不额外吃额度。
+  const srcSid = String(sid || "")
+  const taskHintFor = (p) => {
+    if (!srcSid || !workDir || !s[p].boundSid || srcSid === s[p].boundSid) return ""
+    try {
+      const d = path.join(s[p].boundDir, ".cc-connect")
+      fs.mkdirSync(d, { recursive: true })
+      fs.writeFileSync(path.join(d, "last-task.json"), JSON.stringify({
+        sid: srcSid, dir: workDir,
+        label: String(baseText || "").split(/\r?\n/)[0].replace(/^[⏰📮📌\s]+/, "").slice(0, 40),
+        at: Date.now(),
+      }))
+    } catch { return "" }
+    return "\n\n———\n📌 想就这次结果继续追问？可用指令：\n" +
+      "/task 切到本任务的会话（能看到它的完整过程与产物）\n" +
+      "/back 切回你原来所在的会话（不在任务会话上时，回到绑定的会话）\n" +
+      "/new 开一条全新会话　/stop 中断正在跑的任务"
+  }
   const textFor = (p) => {
     // 本条推送占几格：正文 1 条（没有 baseText 时也至少发个落款，仍是一条）+ 每个附件各 1 条
     // （cc-connect 的 media_outbound.go 逐个计）。本条正文的序号 = 推送前的计数 + 1。
     const ord = p === "weixin" ? bumpQuota(p, 1 + picked.length) - picked.length : 0
     const note = p === "weixin" ? quotaNotice(ord) : ""
-    const body = (baseText || "") + note
+    const body = (baseText || "") + taskHintFor(p) + note
     return body ? body + SIGNATURE : SIGNATURE.replace(/^\s+/, "")
   }
 

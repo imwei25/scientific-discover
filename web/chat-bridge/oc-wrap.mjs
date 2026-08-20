@@ -472,6 +472,125 @@ export function adoptBoundSession(argv, boundSid, adoptedSid) {
   return out
 }
 
+// ---- 路线切换：/task 切到最近一次定时任务的会话，/back 切回绑定会话 ----------
+// 【为什么要有】定时任务的推送产自它自己的会话目录——用户在手机上就推送内容追问时，
+// 绑定会话的 agent 对"刚推送了什么"一无所知，必然答非所问。与其把推送上下文硬塞进
+// 绑定会话，不如让用户自己选路线：/task 后消息真的发进任务那条会话（完整上下文+产物
+// 都在），/back 随时回来。推送尾部会附上这两条指令（见 chat-bridge 的 pushToChat）。
+// 【指令怎么到我们手里】cc-connect 对不认识的斜杠指令有明确行为（core/engine.go:2947
+// 注释原文 "Unrecognized slash command — fall through to agent as normal message"），
+// 内建表里没有 task/back、前缀匹配也不撞（timer/tts/bind 都不以它们开头）——消息会
+// 原样落到 oc-wrap 的 stdin，我们在起 opencode 之前截下来处理，不烧模型。
+// 【四种路线态】route.json 的 { mode, sid?, prev? }：
+//   bound（默认，每次新绑定重置回它）→ 消息定向到绑定会话（--session 强制改写）；
+//   task → 定向到 last-task.json 记的那条任务会话（opencode 子进程 cwd 也切到它的目录，
+//          与续绑定会话同构：cwd = session.directory）。prev 记着切走前在哪（/back 按它还原：
+//          原会话不一定是绑定会话——可能是 /new 出来的自由会话）；
+//   pin  → 钉在指定 sid 的会话上（/back 回到 /new 会话时用：cc-connect 那时已学成任务会话的
+//          id，不强制改写就回不去了。这些会话都建在绑定目录里，cwd 不用切）；
+//   free → 用户发过 /new（cc-connect 自己另起了会话），我们不插手，等 /task 或 /back 归位。
+const routeFile = () => path.join(process.cwd(), ".cc-connect", "route.json")
+const lastTaskFile = () => path.join(process.cwd(), ".cc-connect", "last-task.json")
+function readRoute() {
+  try {
+    const j = JSON.parse(fs.readFileSync(routeFile(), "utf8"))
+    if (j?.mode === "task" || j?.mode === "free") return j
+    if (j?.mode === "pin" && j?.sid) return j
+    return { mode: "bound" }
+  } catch { return { mode: "bound" } }
+}
+function writeRoute(route) {
+  try { fs.mkdirSync(path.dirname(routeFile()), { recursive: true }); fs.writeFileSync(routeFile(), JSON.stringify({ ...route, at: Date.now() })) } catch {}
+}
+function readLastTask() {
+  try {
+    const j = JSON.parse(fs.readFileSync(lastTaskFile(), "utf8"))
+    if (!j?.sid || !j?.dir) return null
+    if (!fs.existsSync(j.dir)) return null   // 任务会话目录已被删 → 没有可切的目标
+    return j
+  } catch { return null }
+}
+/** 这条消息是不是路线指令：整条恰为 /task 或 /back 才算。【故意不剥附件引用块】——
+ *  指令配着文件发时当普通消息落给模型，别把文件悄悄吞了。（纯函数，导出仅为单测。） */
+export function routeCommandOf(prompt) {
+  const t = String(prompt || "").trim().toLowerCase()
+  if (t === "/task") return "task"
+  if (t === "/back") return "back"
+  return ""
+}
+/**
+ * 按当前路线决定本轮的目标会话与 argv。（纯函数，导出仅为单测。）
+ * 返回 { argv, sid, dir, adopt, setRoute }：argv 非 null = 要改写；sid = 目标会话（busy 探针
+ * 与直播用）；dir 非空 = opencode 子进程要切到的工作目录；adopt = 本轮完成了绑定会话的
+ * 首次收编（真正开跑时才落标记）；setRoute 非 null = 路线要迁移（/new → free）。
+ */
+export function routeArgs(argv, { route, boundSid, adoptedSid, task }) {
+  const out = { argv: null, sid: "", dir: "", adopt: false, setRoute: null }
+  if (!argv || argv[0] !== "run") return out
+  const mode = route?.mode || "bound"
+  const i = argv.indexOf("--session")
+  const has = i >= 0 && !!argv[i + 1]
+  // 钉住某条会话（task = 钉任务会话并切 cwd；pin = 钉 /back 回去的原会话，cwd 不动）
+  const pinSid = mode === "task" && task ? task.sid : mode === "pin" ? route.sid : ""
+  if (pinSid) {
+    if (has) {
+      out.sid = pinSid
+      if (mode === "task") out.dir = task.dir
+      if (argv[i + 1] !== pinSid) { const a = argv.slice(); a[i + 1] = pinSid; out.argv = a }
+      return out
+    }
+    out.setRoute = { mode: "free" }   // 钉住期间发了 /new → cc-connect 另起新会话，放行并回自由态
+    return out
+  }
+  if (mode === "free") { out.sid = has ? String(argv[i + 1]) : ""; return out }
+  // bound（默认；mode=task 但任务目标已失效也落到这，等于自动切回绑定会话）
+  if (has) {
+    if (boundSid && argv[i + 1] !== boundSid) {   // /back 之后 cc-connect 还记着任务会话 → 改写回来
+      const a = argv.slice(); a[i + 1] = boundSid; out.argv = a
+    }
+    out.sid = boundSid || String(argv[i + 1])
+    return out
+  }
+  const injected = adoptBoundSession(argv, boundSid, adoptedSid)
+  if (injected) { out.argv = injected; out.sid = boundSid; out.adopt = true; return out }
+  if (boundSid && adoptedSid === boundSid) out.setRoute = { mode: "free" }   // 已收编还不带 --session = /new
+  return out
+}
+/**
+ * /task 与 /back 的路线迁移（纯函数，导出仅为单测）。cur = 当前 route；curSid = 这条指令
+ * argv 里的 --session（= 用户此刻所在的会话，cc-connect 对指令消息照样带它）。
+ * 【/back 回的是"切走前所在的会话"，不一定是绑定会话】用户可能先 /new 到一条自由会话再
+ * /task ——所以 /task 时把"当时在哪"存进 prev，/back 按 prev 还原；回自由会话要用 pin 态
+ * 钉住（cc-connect 那时已学成任务会话的 id，不强制改写就回不去）。连按 /task 保留原 prev。
+ * /back 而当前不在任务路线上 → 兜底回绑定会话（再按一次 /back 的语义就是"回家"）。
+ */
+export function routeSwitch(cmd, cur, curSid) {
+  if (cmd === "task") {
+    const prev = cur.mode === "task" ? (cur.prev || { mode: "bound" })
+      : cur.mode === "bound" ? { mode: "bound" }
+      : cur.mode === "pin" ? { mode: "pin", sid: cur.sid }
+      : { mode: "free", sid: curSid || "" }
+    return { mode: "task", prev }
+  }
+  const prev = cur.mode === "task" ? cur.prev : null
+  if ((prev?.mode === "pin" || prev?.mode === "free") && prev.sid) return { mode: "pin", sid: prev.sid }
+  if (prev?.mode === "free") return { mode: "free" }   // 没能记下原会话 id：至少别把人拽回绑定会话
+  return { mode: "bound" }
+}
+// 任务会话目录里补上聊天接入的 AGENTS.md 块（教 agent 用 cc-connect send 发文件）。
+// 标记串必须与 chat-bridge.mjs 的 BLOCK_START/END 保持一字不差（解绑时靠它收回）。
+function ensureAgentsBlock(dirAbs) {
+  try {
+    const f = path.join(dirAbs, "AGENTS.md")
+    const cur = fs.existsSync(f) ? fs.readFileSync(f, "utf8") : ""
+    if (cur.includes("sci-chat-bridge:start")) return
+    const tpl = fs.readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), "agents-template.md"), "utf8")
+    fs.writeFileSync(f, cur +
+      "\n\n<!-- sci-chat-bridge:start 由「聊天接入」自动注入，解绑时自动移除，请勿手工编辑 -->\n" +
+      tpl.trim() + "\n<!-- sci-chat-bridge:end -->\n")
+  } catch (e) { wlog("任务目录注入 AGENTS.md 失败（不阻塞本轮）：" + (e?.message || e)) }
+}
+
 /** 这个平台的发送预算紧不紧（纯函数，导出仅为单测）。 */
 export const budgetTightFor = (p) => p === "weixin"
 const PLATFORM = process.env.SCI_WRAP_PLATFORM || ""
@@ -697,8 +816,11 @@ function readStdin() {
 
 // ---- 跑一次真 opencode，并做过滤/聚合/进度/兜底。stdinText=null → 继承 stdin（原样透传）；
 //      非 null → 用管道把（可能改写过的）prompt 喂进去（先上传后提问模式要往里塞暂存文件）。
-function runOpencode(stdinText, extraFiles = []) {
-  const workDir = process.cwd()
+//      targetDir 非空 = 本轮定向到别的会话（/task 路线）：opencode 子进程 cwd、产物快照/兜底
+//      都以它为准（cwd 必须 = session.directory，与续绑定会话同构）；而额度/看门狗/路线这些
+//      "聊天通道级"的账本仍按 process.cwd()（绑定目录）走，所以这里不 chdir。
+function runOpencode(stdinText, extraFiles = [], targetDir = "") {
+  const workDir = targetDir || process.cwd()
   const startedAt = Date.now()
   // 暂存的图片经 --file 传给 opencode（走视觉），比让它按路径去 Read 更靠谱
   const runArgs = extraFiles.length ? [...args, ...extraFiles.flatMap((f) => ["--file", f])] : args
@@ -718,7 +840,7 @@ function runOpencode(stdinText, extraFiles = []) {
   }
   scan(workDir, 0)
 
-  const child = spawn(REAL_OC, runArgs, { stdio: [stdinText == null ? "inherit" : "pipe", "pipe", "inherit"] })
+  const child = spawn(REAL_OC, runArgs, { cwd: workDir, stdio: [stdinText == null ? "inherit" : "pipe", "pipe", "inherit"] })
   // 软件侧立刻显示"这条会话正在跑"，不必等第一个字（云端排队时那可能是好几分钟的空白）
   liveNote({ k: "start" })
   spawnedOpencode = true  // 走到这儿说明包装器本身没死，往后再出问题就是模型/事件流侧的事
@@ -1139,36 +1261,60 @@ function main() {
     child.on("error", (e) => { console.error(e.message); process.exit(1) })
     return
   }
-  // 【续用绑定会话 + 双端并发防护】runOpencode 的所有调用点都换成走这里：
-  //   ① cc-connect 新起会话的第一条不带 --session —— 注入绑定会话 id，让手机消息接着软件里
-  //      选定的那条会话继续（语义与 /new 逃生舱见 adoptBoundSession 头注）。注入必须在
-  //      runOpencode 之前改掉 args（它和 stdoutAbandoned 都读 args）。
-  //   ② 软件端正在这条会话里跑时别再塞一轮（两个 opencode 进程并发写同一份会话历史会互相搅）。
+  // 回执并退出（不跑模型）：路线切换的确认、忙碌拒收都走这条。回执经 cc-connect 发出，
+  // 也占一条消息，所以要记账。
+  const replyAndExit = (msg) => {
+    markStdout()
+    noteSend()
+    process.stdout.write(msg + SIGNATURE, () => process.exit(0))
+    setTimeout(() => process.exit(0), 3000)
+  }
+  // 【路线定向 + 续用绑定会话 + 双端并发防护】runOpencode 的所有调用点都换成走这里：
+  //   ① 按 route.json 决定本轮目标会话（绑定会话 / 最近定时任务的会话 / 自由态），必要时改写
+  //      args 里的 --session（routeArgs，纯函数）。改写必须在 runOpencode 之前落到 args
+  //      （它和 stdoutAbandoned 都读 args）。
+  //   ② 目标会话正被软件端占用时别再塞一轮（两个 opencode 进程并发写同一份会话历史会互相搅）。
   //      反方向早有防护（微信在跑时软件端发消息被影子 job 挡下）。
   // 【只在真正开跑时才写"已收编"标记】先上传后提问的纯暂存轮、忙碌被拒的轮都没起 opencode，
   // cc-connect 没机会从事件流学走会话 id —— 此时落了标记，下一条不带 --session 的消息就会被
   // 误判成 /new 而丢掉续跑。所以标记与 runOpencode 同一时刻落。
   const runGated = (stdinText, extraFiles = []) => {
-    const adoptedArgs = adoptBoundSession(args, BOUND_SID, readAdopted())
-    if (adoptedArgs) {
-      args.splice(0, args.length, ...adoptedArgs)
-      liveSid = BOUND_SID   // 直播中继不必再等事件认领：本轮就跑在绑定会话里
-      wlog(`续用绑定会话：注入 --session ${BOUND_SID}`)
+    const r = routeArgs(args, { route: readRoute(), boundSid: BOUND_SID, adoptedSid: readAdopted(), task: readLastTask() })
+    if (r.argv) {
+      args.splice(0, args.length, ...r.argv)
+      wlog(`路线定向：--session → ${r.sid}${r.dir ? `（cwd → ${r.dir}）` : ""}`)
     }
-    checkSessionBusy(agentSessionOf(args), (busy) => {
+    if (r.setRoute) { writeRoute(r.setRoute); wlog(`路线迁移：${r.setRoute.mode}（用户发了 /new）`) }
+    if (r.sid) liveSid = r.sid   // 直播中继不必再等事件认领：本轮就跑在目标会话里
+    if (r.dir) ensureAgentsBlock(r.dir)   // 任务会话目录补上聊天接入说明（幂等）
+    checkSessionBusy(r.sid || agentSessionOf(args), (busy) => {
       if (!busy) {
-        if (adoptedArgs) writeAdopted(BOUND_SID)
-        return runOpencode(stdinText, extraFiles)
+        if (r.adopt) writeAdopted(BOUND_SID)
+        return runOpencode(stdinText, extraFiles, r.dir)
       }
-      wlog("绑定会话正被软件端占用，本条不跑，回执让用户稍后再发")
-      markStdout()
-      noteSend()   // 这句回执经 cc-connect 发出，也占一条消息
-      process.stdout.write(
+      wlog("目标会话正被软件端占用，本条不跑，回执让用户稍后再发")
+      replyAndExit(
         "⏳ 软件（电脑端）正在这条会话里跑任务，为避免两边互相打架，这条消息暂时没有处理。\n" +
-        "等它跑完（软件里能看到进度）再把刚才的话发一次即可。" + SIGNATURE,
-        () => process.exit(0))
-      setTimeout(() => process.exit(0), 3000)
+        "等它跑完（软件里能看到进度）再把刚才的话发一次即可。")
     })
+  }
+  // 路线指令（/task //back）：在起 opencode 之前截下，不烧模型。
+  const handleRouteCommand = (cmd) => {
+    const cur = readRoute()
+    if (cmd === "task" && !readLastTask())
+      return replyAndExit("📂 还没有可切换的定时任务会话（要先有一次定时任务的推送）。当前会话不变。")
+    const next = routeSwitch(cmd, cur, agentSessionOf(args))
+    writeRoute(next)
+    wlog(`路线切换：${cur.mode} → ${next.mode}${next.sid ? `（${next.sid}）` : ""}（用户发了 /${cmd}）`)
+    if (cmd === "task") {
+      const t = readLastTask()
+      return replyAndExit(
+        `📂 已切到定时任务的会话${t.label ? `「${t.label}」` : ""}，接下来的消息都发到那边（我能看到该任务的完整过程与产物）。\n` +
+        "回复 /back 切回你原来所在的会话。")
+    }
+    return replyAndExit(next.mode === "bound"
+      ? "↩️ 已切回你绑定的会话，接下来的消息接着之前的对话。"
+      : "↩️ 已切回你原来所在的会话，接下来的消息接着之前的对话。")
   }
   // 【额度归零】cc-connect 每条来信 spawn 一次 oc-wrap，所以"本进程被拉起"就等于"刚收到一条
   // 来信"——而来信正是腾讯重置主动发送额度的唯一事件（见 quotaFile 那段头注）。必须放在
@@ -1179,40 +1325,42 @@ function main() {
   // 在起 opencode 之前就静默死掉 —— 用户看到的就是「(空响应)」，而补发本身只是锦上添花，
   // 绝不该因为它失败就把用户真正要问的这句话吞掉。
   try { resendLostReply() } catch (e) { wlog("resendLostReply 异常（已忽略，继续本轮）：" + (e?.message || e)) }
-  if (!UPLOAD_FIRST) {
-    runGated(null)   // 关了「先上传后提问」：原样透传 stdin，行为不变
-  } else {
-    // 开了「先上传后提问」：先读走 cc-connect 从 stdin 喂进来的 prompt 再决定跑不跑模型。
-    readStdin().then((prompt) => {
-      try {
-        const { staged, fileOnly } = classifyRun(args, prompt)
-        if (fileOnly) {
-          // 只发了文件、没提问 → 暂存 + 回执，不触发会话
-          const added = stageFiles(staged)
-          const names = added.map((e) => e.name).join("、") || "文件"
-          const ack = `📎 已收到 ${added.length || staged.length} 个文件：${names}，已存进会话的 uploads 目录。\n直接发送你的问题，我会基于这些文件作答。`
-          execFile(CC, ["send", "-m", ack], { windowsHide: true }, () => process.exit(0))
-          setTimeout(() => process.exit(0), 15000)
-          return
-        }
-        // 真正的提问：把此前暂存、尚未消费的文件并进这一轮——图片走 --file（视觉），
-        // 全部文件的路径再以文字附在 prompt 末尾，让模型知道有哪些、去哪读。
-        const pending = consumePending()
-        let eff = prompt
-        let pendImgs = []
-        if (pending.length) {
-          const IMG = new Set([".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp"])
-          pendImgs = pending.filter((e) => IMG.has(path.extname(e.path).toLowerCase())).map((e) => e.path)
-          const lines = pending.map((e) => e.path).join("\n")
-          eff += `\n\n(用户此前上传了这些文件，请在回答时一并读取参考：\n${lines}\n)`
-        }
-        runGated(eff, pendImgs)
-      } catch {
-        // 分析出岔子就按原样把 prompt 交给模型，绝不吞消息
-        try { runGated(prompt) } catch { process.exit(1) }
+  // 【统一先读走 stdin】路线指令（/task //back）必须在起 opencode 之前截下，所以不再按
+  // UPLOAD_FIRST 分"继承 stdin / 读走 stdin"两条路：一律读进来，非指令再按原逻辑喂回给
+  // opencode（管道回喂与继承等价——「先上传后提问」在真机上一直就是这么跑的）。
+  readStdin().then((prompt) => {
+    const rc = routeCommandOf(prompt)
+    if (rc) { try { handleRouteCommand(rc) } catch (e) { wlog("路线指令处理异常：" + (e?.message || e)); replyAndExit("⚠️ 切换没成功，请再发一次。") } ; return }
+    if (!UPLOAD_FIRST) { runGated(prompt); return }   // 关了「先上传后提问」：prompt 原样喂给模型
+    // 开了「先上传后提问」：判断这条是不是"只发文件没提问"再决定跑不跑模型。
+    try {
+      const { staged, fileOnly } = classifyRun(args, prompt)
+      if (fileOnly) {
+        // 只发了文件、没提问 → 暂存 + 回执，不触发会话
+        const added = stageFiles(staged)
+        const names = added.map((e) => e.name).join("、") || "文件"
+        const ack = `📎 已收到 ${added.length || staged.length} 个文件：${names}，已存进会话的 uploads 目录。\n直接发送你的问题，我会基于这些文件作答。`
+        execFile(CC, ["send", "-m", ack], { windowsHide: true }, () => process.exit(0))
+        setTimeout(() => process.exit(0), 15000)
+        return
       }
-    }, () => runGated(null))
-  }
+      // 真正的提问：把此前暂存、尚未消费的文件并进这一轮——图片走 --file（视觉），
+      // 全部文件的路径再以文字附在 prompt 末尾，让模型知道有哪些、去哪读。
+      const pending = consumePending()
+      let eff = prompt
+      let pendImgs = []
+      if (pending.length) {
+        const IMG = new Set([".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp"])
+        pendImgs = pending.filter((e) => IMG.has(path.extname(e.path).toLowerCase())).map((e) => e.path)
+        const lines = pending.map((e) => e.path).join("\n")
+        eff += `\n\n(用户此前上传了这些文件，请在回答时一并读取参考：\n${lines}\n)`
+      }
+      runGated(eff, pendImgs)
+    } catch {
+      // 分析出岔子就按原样把 prompt 交给模型，绝不吞消息
+      try { runGated(prompt) } catch { process.exit(1) }
+    }
+  }, () => runGated(null))
 }
 
 if (isMain) {

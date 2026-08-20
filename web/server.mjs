@@ -4999,7 +4999,7 @@ export const server = http.createServer(async (req, res) => {
         }
         // only：定时任务的 pushTo（"" = 全部已连接平台）。非法值一律当空处理，别把它当平台名传下去。
         const only = ["wecom", "weixin"].includes(String(b.only || "")) ? String(b.only) : ""
-        const r = await Bridge.pushToChat({ text: b.text, files, dir: workDir, only })
+        const r = await Bridge.pushToChat({ text: b.text, files, dir: workDir, only, sid: String(b.sid || "") })
         return send(res, r.ok ? 200 : 400, "application/json", JSON.stringify(r))
       }
       return send(res, 404, "application/json", JSON.stringify({ ok: false, err: "没有这个接口" }))
