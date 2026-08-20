@@ -173,8 +173,11 @@ const LITREAD_MODES = withAsk([
     // out = 面板下方列哪些产物。fulltext.md 归导读：它是"读入原文"的成果，
     // 用户想核对"它到底读到了什么"时找的就是这个文件。
     out: "^(reading_guide|fulltext)[^/]*\\.(md|docx|pdf)$",
-    empty: ["还没有导读", "点上方的「开始」，让它把这篇文章的核心与论证逻辑理一遍。"],
-    tell: "抽取核心重点、梳理论证逻辑，正文写进回答里，同时存一份 `reading_guide.md`",
+    empty: ["还没有导读", "点上方的「开始」，让它把这篇文章的核心与论证逻辑理一遍，并出一份 Word。"],
+    // ★ 导读多一步「出 Word」：md 是界面渲染要用的载体（file 认的就是它），docx 是用户
+    //   拿去传阅 / 存档的交付物。两个都要，别用 docx 顶掉 md —— 顶掉的话面板正文就空了。
+    tell: "抽取核心重点、梳理论证逻辑，正文写进回答里，同时存一份 `reading_guide.md`，"
+      + "并再用 `render-docx` 把它转成 `reading_guide.docx`（默认 `--journal generic-submission`）交付",
     prompt: "请研读我上传的这篇文献 {doc}，做一份**导读**：抽出它的核心重点，把论证逻辑梳理清楚。\n\n"
       + "按这个结构写：\n"
       + "1. **一句话结论** —— 这篇文章做了什么、最重要的发现是什么；\n"
@@ -186,7 +189,14 @@ const LITREAD_MODES = withAsk([
       + "7. **这篇能用在哪** —— 对读者课题的意义。\n\n"
       + "只依据原文：数字与结论一律照抄，原文没写的写「原文未报告」，不许拿背景知识补，也不许引入原文之外的参考文献。"
       + "引用具体数据时带上出处（第几节 / 哪张图表）。\n"
-      + "写完把这份导读同时存一份 `reading_guide.md`。" },
+      + "写完把这份导读同时存一份 `reading_guide.md`。\n\n"
+      + "**最后一步：出 Word。** 用 `render-docx` 技能把它转成 `reading_guide.docx`：\n"
+      + "```bash\n"
+      + "bash \"${REPO_ROOT:-/app}/.opencode/skills/render-docx/scripts/render_docx.sh\" "
+      + "-i reading_guide.md -o reading_guide.docx --journal generic-submission\n"
+      + "```\n"
+      + "两个文件都要留（md 给界面渲染，docx 给我拿走）；转完在回答末尾说一句 Word 已出好。"
+      + "万一 pandoc 不可用导致转换失败，如实说明并把 `reading_guide.md` 照常交付，别假装出了 Word。" },
   // ★ 按【上传文件的格式】分流，别再一律出 markdown。
   //   实测踩到：用户传了一份 .docx 进来点「全文翻译」，拿回的是 translation_zh.md ——
   //   站在他的角度"我传了个 Word 让你翻译，凭什么给我 md"完全合理。而同一个动作在
@@ -1129,8 +1139,8 @@ export const WORKFLOWS = {
         // 但 artifactLine 只从 steps[].emits 收集"产物用约定名"那句话。挂在这里，是为了让
         // 这三个名字每一轮都随前言到模型手上 —— reader.html 正是按这几个名字去把正文捞回来渲染的
         //（见 MODES[*].file），名字漂了界面就只剩一句"已完成"、正文不知去向。
-        emits: ["fulltext.md", "fulltext_*.md", "reading_guide.md", "translation_zh.md",
-                "translation_zh.docx"], render: "report",
+        emits: ["fulltext.md", "fulltext_*.md", "reading_guide.md", "reading_guide.docx",
+                "translation_zh.md", "translation_zh.docx"], render: "report",
         hint: "PDF 走 pdf_to_md.py，Word 走 ingest_doc.py（图和表一起抽出来）；抽不动的扫描件再走 ocr",
         note: "抽出来的正文必须落成 `fulltext.md`——后面导读、翻译、做 PPT 全都读它，"
             + "别每种模式各抽一遍（既慢又可能三份内容不一致）。" },
