@@ -2010,7 +2010,7 @@
            把它找出来" —— 后者不动列表本身，结果单独开弹窗，双击一条就跳过去。 -->
       <button id="searchBtn" class="mini" type="button" title="搜索会话（按标题匹配，空格分隔多个关键词）"></button>
       <button id="selModeBtn" class="mini" type="button" title="批量选择（勾选多个会话一次删除）"></button>
-      <button id="refreshSess" class="mini" type="button" title="刷新列表"></button>
+      <button id="refreshSess" class="mini" type="button" title="刷新（会话列表、当前会话与产出）"></button>
     </div>
     <!-- 批量删除操作条：只在批量选择模式下出现 -->
     <div id="selBar">
@@ -3904,14 +3904,8 @@ async function reopenLibrary() {
   const name = PVX.name
   rawVer.set(name, Date.now())         // 换版本戳，绕开 /api/raw 的 max-age 与内存缓存（同 mdImgSrc 的理由）
   await openPreview(name)
-  // 产出栏：归档之后原文件挪进了子目录，列表结构变了，重拉一次
-  try {
-    const outs = await fetch("api/outputs?sid=" + encodeURIComponent(sessionId || "")).then((r) => r.ok ? r.json() : [])
-    if (Array.isArray(outs) && outs.length) {
-      for (const o of outs) if (o.kind) FILE_KIND.set(o.name, o.kind)
-      renderFiles(outs.map((o) => o.name))
-    }
-  } catch { /* 侧栏刷不出来不影响预览本身 */ }
+  // 产出栏：归档之后原文件挪进了子目录，列表结构变了，重拉一次（侧栏刷不出来不影响预览本身）
+  await refreshOutputs()
 }
 /** 台账工具条：按分类归档 / 撤销 */
 function libToolbar() {
@@ -5043,6 +5037,23 @@ const loadSessions = () => apiGet("api/sessions").then((l) => {
   if (!l) return
   sessList = (l && l.sessions) || []; renderSessions(l); if (sessionId) setModBadge(sessList.find((s) => s.id === sessionId)?.module || "chat")
 })
+/** 手动重拉产出侧栏（不动消息流）。
+ *  产出侧栏平时只有三条更新路径：切会话（resumeSession）、SSE files/filesmeta 事件、台账归档后
+ *  的 reopenLibrary。后台在没人订阅 SSE 时写了文件（微信侧那一轮、attach 之前的产物），侧栏就
+ *  一直停在旧列表 —— 这个函数就是给那种时刻的手动出口。失败时保持原列表不动，别用空白盖掉旧数据。 */
+async function refreshOutputs() {
+  if (!sessionId) return
+  try {
+    const r = await fetch("api/outputs?sid=" + encodeURIComponent(sessionId))
+    if (!r.ok) return
+    deeperFiles = Number(r.headers.get("X-Deeper-Files")) || 0
+    const outs = await r.json()
+    if (!Array.isArray(outs)) return
+    // 版本戳跟着新 mtime 走：文件被服务端重写过的话，预览/下载要绕开 /api/raw 的缓存拿新版
+    for (const o of outs) { rawVer.set(o.name, o.mtime || 0); if (o.kind) FILE_KIND.set(o.name, o.kind) }
+    renderFiles(outs.map((o) => o.name))
+  } catch { /* 网络抖动就算了，下次再点 */ }
+}
 /* 有专用界面壳的模块 → 该去哪个页面。ui 由服务端下发（workflows.mjs 的 ui 字段）。
    ★ 查表，不拿 ui 直接拼文件名：那等于把服务端字符串当 URL 用，是一条开放跳转。
    ★ 认不出的 ui 留在通用壳：新旧界面包错配时，用户至少还打得开这个会话。 */
@@ -5194,7 +5205,15 @@ sessToggle.addEventListener("click", () => {
   try { localStorage.setItem("nm_sessbar", open ? "1" : "0") } catch {}   // 记住用户的选择，别每次开应用都要再点一次
 })
 setSessbar(localStorage.getItem("nm_sessbar") !== "0")   // 默认展开（会话列表是主导航），显式收起过才保持收起
-document.getElementById("refreshSess").addEventListener("click", loadSessions)
+// 刷新按钮：不只刷会话列表 —— 用户点它的时候多半是"当前会话/产出看着不对"。
+// - 没在直播（activeES 空）且表单没填一半 → 整体重载当前会话（resumeSession：历史 + 产出 +
+//   列表都拉一遍，后台还在生成就顺手续上流）。这正好治"后台跑完了但界面停在半截"的僵局。
+// - 直播中消息本来就在实时更新，重建 DOM 反而打断回放；表单值只活在 DOM 里，重建会清空
+//   （见 confirmLeaveIntake 头注）→ 这两种情况只刷会话列表 + 产出侧栏，不动消息流。
+document.getElementById("refreshSess").addEventListener("click", () => {
+  if (sessionId && !activeES && !sending && !intakeDirty()) { resumeSession(sessionId); return }
+  loadSessions(); refreshOutputs()
+})
 // ---- 侧栏主导航 ----
 // 「新建会话」「项目」在这里接线；「手机接入」「新建定时任务」两条各自有可用性探测
 //（分别在聊天接入、定时任务那两段里把 hidden 摘掉），所以只在这里挂点击。
