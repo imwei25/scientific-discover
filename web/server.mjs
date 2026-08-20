@@ -1744,14 +1744,11 @@ function warmPreviews(dir, names) {
 // 他自己发的话显示出来，还带着 /app/outputs/ws_xxx 这种容器绝对路径。因为只在"回看"时才犯，
 // 一直没被发现。改成从同一个常量派生，杜绝再次漂移。
 const PREAMBLE_MARK = "【本会话工作区，务必遵守】"
+const PREAMBLE_END_MARK = "【/本会话工作区，务必遵守】"
 const PREAMBLE_MARK_LEGACY = "【本会话专属目录"   // 老会话里存的是旧文案，回看时同样要剥掉
 const _reEsc = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
-// 结尾用 \n\n+ 贪婪吃掉【连续】空行：前言尾部拼的是
-// `…${chat?skillsPreamble():modulePreamble()}${zoteroPreamble()}${autoOn?…:""}\n\n`，
-// 而不受限的 chat 会话这几个插值全是空串。只要有人给某条 bullet 末尾多留一个 \n，
-// 尾部就变成三个换行，非贪婪的 \n\n 只吃两个，第三个留在用户原话前面 ——
-// 表现为 chat 的用户气泡全部多一个前导空行（实测过，且只有 chat 会中招，很难联想到前言）。
-const PREAMBLE_RE = new RegExp("^(?:" + _reEsc(PREAMBLE_MARK) + "|" + _reEsc(PREAMBLE_MARK_LEGACY) + ")[\\s\\S]*?\\n\\n+")
+// 完美支持多段技能与安全前言的完整剥离
+const PREAMBLE_RE = new RegExp("^(?:" + _reEsc(PREAMBLE_MARK) + "[\\s\\S]*?" + _reEsc(PREAMBLE_END_MARK) + "\\n*|(?:" + _reEsc(PREAMBLE_MARK) + "|" + _reEsc(PREAMBLE_MARK_LEGACY) + ")[\\s\\S]*?\\n\\n+)")
 // Zotero 面板注入的"检索范围"指示：拼在用户原话【最前面】（见前端 zScopePrefix），
 // 与工作区前言是两段独立注入，回看历史时也要一并剥掉，否则用户看见自己"说"了一句没说过的话。
 // 顺序：先剥工作区前言，再剥范围指示（注入时前言在前、范围指示紧跟其后、再是原话）。
@@ -4519,7 +4516,7 @@ export const server = http.createServer(async (req, res) => {
       // 给 agent 注入本会话专属目录，覆盖技能默认的 outputs/，实现多用户/多会话隔离
       // 注意：本会话的工作目录（cwd）已在建会话时通过 opencode 的 session.directory 定在【会话产物目录】，
       // 所以 agent 的所有工具默认就在正确的地方读写，preamble 只需说清"当前目录就是产物目录"与几个绝对路径。
-      const preamble = `${PREAMBLE_MARK}\n- **你的当前工作目录就是本会话的产物目录**（\`${ws.out}\`）。所有产物（图表 PNG/PDF、CSV/Excel、md/docx 等）**直接写到当前目录即可**，用相对文件名如 \`fig1.png\`、\`manuscript.md\`，不要再自己拼 \`outputs/xxx\` 前缀。\n- 临时脚本、中间文件同样写当前目录（要归拢可用 \`./.scratch/\`）。\n- **用户上传的文件都在 \`${ws.up}/\`**：稿件（.md/.docx/.pdf）、数值表（.csv/.xlsx）、附件全都在这里，读任何用户给的文件都用这个绝对路径。\n- **跑本套件的脚本，python 用这个绝对路径**：\`${PY_BIN || "（本机还没建 .venv，先跑 env-setup 技能）"}\`，技能脚本在 \`${ROOT}/.opencode/skills/<技能>/\` 下。**照抄这两个路径，不要自己拼 \`\${REPO_ROOT:-/app}\`，也不要用 \`python\`/\`python3\`裸命令**——本机 PATH 里的 python 可能是个不能用的占位程序（跑起来没有任何输出），你会看不出它坏了。当前目录不是仓库根，写 \`.venv/...\` 这种相对路径同样找不到。\n- 正文里嵌入图片直接用文件名：\`![图注](fig1.png)\`（图和稿件都在当前目录，渲染也从当前目录跑）。\n- **不要把产物写到仓库根或 \`\${REPO_ROOT:-/app}\` 下**：那是所有会话共享的，会互相覆盖，也不会出现在界面的"产出"侧栏。\n- **上面这些路径与文件名是给你用的，不要说给用户**：他用的是图形界面，看不到也进不去 \`uploads/ws_.../\`、\`outputs/\`、\`.venv\`、\`AGENTS.md\` 这些东西。要他传文件就说"点输入框旁边的上传按钮"；提产物就只说文件名（\`table1.csv\`），别带目录。让用户照抄一个他根本打不开的路径，等于把他卡在那里。\n- **答复用用户说话的语言**（他用中文你就用中文），并且**只写最终结论**：查了什么、下一步打算干什么这类过程叙述不要写进答复正文——界面已经把工具调用一条条显示出来了，正文里再复述一遍，用户要在一堆过程碎片里翻找真正的结论。${modId === "chat" ? (skillsPreamble() + chatAgentsInstructions()) : (modulePreamble(modId, ws.out) + moduleSkillInstructions(modId))}${zoteroPreamble(ws.out)}${autoOn ? autoPreamble() : ""}${DEFENSE_SYSTEM_PROMPT}\n\n`
+      const preamble = `${PREAMBLE_MARK}\n- **你的当前工作目录就是本会话的产物目录**（\`${ws.out}\`）。所有产物（图表 PNG/PDF、CSV/Excel、md/docx 等）**直接写到当前目录即可**，用相对文件名如 \`fig1.png\`、\`manuscript.md\`，不要再自己拼 \`outputs/xxx\` 前缀。\n- 临时脚本、中间文件同样写当前目录（要归拢可用 \`./.scratch/\`）。\n- **用户上传的文件都在 \`${ws.up}/\`**：稿件（.md/.docx/.pdf）、数值表（.csv/.xlsx）、附件全都在这里，读任何用户给的文件都用这个绝对路径。\n- **跑本套件的脚本，python 用这个绝对路径**：\`${PY_BIN || "（本机还没建 .venv，先跑 env-setup 技能）"}\`，技能脚本在 \`${ROOT}/.opencode/skills/<技能>/\` 下。**照抄这两个路径，不要自己拼 \`\${REPO_ROOT:-/app}\`，也不要用 \`python\`/\`python3\`裸命令**——本机 PATH 里的 python 可能是个不能用的占位程序（跑起来没有任何输出），你会看不出它坏了。当前目录不是仓库根，写 \`.venv/...\` 这种相对路径同样找不到。\n- 正文里嵌入图片直接用文件名：\`![图注](fig1.png)\`（图和稿件都在当前目录，渲染也从当前目录跑）。\n- **不要把产物写到仓库根或 \`\${REPO_ROOT:-/app}\` 下**：那是所有会话共享的，会互相覆盖，也不会出现在界面的"产出"侧栏。\n- **上面这些路径与文件名是给你用的，不要说给用户**：他用的是图形界面，看不到也进不去 \`uploads/ws_.../\`、\`outputs/\`、\`.venv\`、\`AGENTS.md\` 这些东西。要他传文件就说"点输入框旁边的上传按钮"；提产物就只说文件名（\`table1.csv\`），别带目录。让用户照抄一个他根本打不开的路径，等于把他卡在那里。\n- **答复用用户说话的语言**（他用中文你就用中文），并且**只写最终结论**：查了什么、下一步打算干什么这类过程叙述不要写进答复正文——界面已经把工具调用一条条显示出来了，正文里再复述一遍，用户要在一堆过程碎片里翻找真正的结论。${modId === "chat" ? (skillsPreamble() + chatAgentsInstructions()) : (modulePreamble(modId, ws.out) + moduleSkillInstructions(modId))}${zoteroPreamble(ws.out)}${autoOn ? autoPreamble() : ""}${DEFENSE_SYSTEM_PROMPT}\n${PREAMBLE_END_MARK}\n\n`
       // taskModel：只有【定时任务的运行器】会带它，且必须是管理员在档位里钉死的那个模型。
       // 【必须在服务端核对，不能信请求里的值】否则任何人都能用它点名一个贵模型跑一轮——
       // 云端网关的 pickModel 虽然也会拦（不在可调用集合里就静默打回默认），但那是最后一道，
