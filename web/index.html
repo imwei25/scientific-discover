@@ -79,20 +79,25 @@
   /* 左侧「会话与项目」 */
   #sessbar { grid-column: 1; overflow: hidden; display: flex; flex-direction: column; gap: 10px; background: var(--panel); border-right: 1px solid var(--line); padding: 14px 10px 10px; }
   .sb-top { display: flex; align-items: center; gap: 8px; }
+  /* margin-left 2px：让这枚箭头的图标与下面「新建会话」那一行的图标左缘对成一条竖线
+     （导航行是 9px 内边距 + 图标，箭头是 30px 方框居中 16px 图标，差的就是这 2px）。
+     收起态整栏居中排列，不要这个偏移。 */
+  body.sessbar-open .sb-toggle { margin-left: 2px; }
   .sb-toggle { width: 30px; height: 30px; flex: none; display: grid; place-items: center; color: var(--muted); background: transparent; border: 1px solid var(--line-hi); border-radius: var(--r-sm); cursor: pointer; }
   .sb-toggle:hover { color: var(--cyan); border-color: var(--cyan); }
   .sb-toggle .ic { width: 16px; height: 16px; }
-  .sb-title { flex: 1; font-size: 13px; font-weight: 600; color: #334153; white-space: nowrap; overflow: hidden; }
   /* 列表工具条（筛选 / 批量选择 / 刷新）：左对齐、贴在「项目」分区上沿。
      不给它边框/底色 —— 三个小图标而已，再加一层框会把侧栏切成四段，反而看不出哪块是主内容。 */
   /* padding-left 9px 不是随手写的：让这排小胶囊的左边缘与下面「项目 / 会话 / 空间」三个
      分区标题的起笔（.mshead 的 9px 内边距）对齐成一条竖线。 */
   #listbar { display: flex; align-items: center; justify-content: flex-start; gap: 4px; flex: none; padding: 4px 0 4px 9px; }
-  body:not(.sessbar-open) .sb-title, body:not(.sessbar-open) #refreshSess, body:not(.sessbar-open) #selModeBtn, body:not(.sessbar-open) #sessions,
+  body:not(.sessbar-open) #refreshSess, body:not(.sessbar-open) #selModeBtn, body:not(.sessbar-open) #sessions,
   body:not(.sessbar-open) #sbnav, body:not(.sessbar-open) #listbar,
   body:not(.sessbar-open) .u-meta, body:not(.sessbar-open) #userMenuBtn { display: none; }
   body:not(.sessbar-open) #sessbar { padding: 14px 8px 10px; align-items: center; }
-  body:not(.sessbar-open) .user-info { justify-content: center; padding: 12px 0 2px; }
+  /* 收起态：#sbtools 住在这块里面，所以整块改竖排（图标列在上、头像在下），分隔线交给 #sbtools 画 */
+  body:not(.sessbar-open) .user-info { flex-direction: column; justify-content: center; align-items: center;
+    gap: 8px; padding: 0 0 2px; border-top: 0; }
   .sess-del { position: absolute; right: 6px; top: 50%; transform: translateY(-50%); width: 22px; height: 22px; display: grid; place-items: center; color: var(--faint); border-radius: 5px; opacity: 0; transition: opacity .12s, color .12s, background .12s; }
   .sess:hover .sess-del { opacity: 1; }
   .sess-del:hover { color: var(--rose); background: rgba(251,113,133,.12); }
@@ -759,7 +764,6 @@
      这一段是「入口」，下面的 #sessions 是「内容」。两者靠一条分隔线断开，别让导航行和
      分区标题看起来是同一列表里的东西——它们的点击语义完全不同（导航跳走 / 分区展开）。 */
   #sbnav { display: flex; flex-direction: column; gap: 1px; flex: none; padding-bottom: 8px; border-bottom: 1px solid var(--line); }
-  body.more-open #sbnav { border-bottom: 0; }   /* 「更多」展开时下面紧跟着 #sbtools 自己的那条线，别画两条 */
   .navitem { position: relative; display: flex; align-items: center; gap: 9px; width: 100%; padding: 8px 9px; border: 0;
     background: transparent; border-radius: var(--r-sm); cursor: pointer; text-align: left;
     font-size: 13px; font-weight: 500; color: var(--text); font-family: inherit; transition: background .12s, color .12s; }
@@ -769,17 +773,7 @@
   .navitem:hover .ni-ic, .navitem.on .ni-ic { color: var(--cyan); }
   .navitem .ni-ic .ic { width: 17px; height: 17px; stroke-width: 1.7; }
   .navitem .ni-t { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  /* 「更多」右边那行灰字：告诉用户里面装了什么，省得为了看一眼就点开 */
-  .navitem .ni-hint { flex: none; font-size: 11px; font-weight: 400; color: var(--faint); }
-  /* 未读公告的红点挂到「更多」上：公告按钮本体收在「更多」里，红点留在里面等于没人看得见，
-     而"有紧急公告"恰恰是必须在收着的时候也传达出去的一件事。 */
-  #navMore .ni-dot { flex: none; width: 7px; height: 7px; border-radius: 50%; background: var(--rose); display: none; }
-  body.has-notice #navMore .ni-dot { display: block; }
-  body.has-notice.more-open #navMore .ni-dot { display: none; }   /* 已经展开就不必再催 */
   .navitem[hidden] { display: none; }
-  /* 「新建会话」是主动作：给它一层描边，与下面几条导航区分开 */
-  #navNew { border: 1px solid var(--line); background: var(--panel); margin-bottom: 5px; }
-  #navNew:hover { border-color: var(--cyan); background: var(--panel-soft); }
   /* 「手机接入」行右侧的两个平台图标：微信 / 企微。接好的都亮，点谁就跳到谁最新的那条会话；
      没配置的是灰的、点它直接开「聊天接入」设置，而不是假装能跳。 */
   .asst-ics { flex: none; display: inline-flex; align-items: center; gap: 2px; }
@@ -793,10 +787,7 @@
      配合 tooltip 说明。全绿会让人以为手机上发消息一定收得到。 */
   .asst-ic.stale { box-shadow: inset 0 0 0 1px currentColor; opacity: .6; }
 
-  /* 「更多」里那排图标（公告 / 更新说明 / 分享）：默认收着，点「更多」才出现。
-     它们都不是高频动作，常驻一行只会把导航压长。 */
-  body.sessbar-open:not(.more-open) #sbtools { display: none; }
-  /* 展开态下这两个由「自动化」「新建会话」两条导航承担，收起态（没有导航）必须还给竖条 */
+  /* 展开态下这三个由「新建定时任务」「新建会话」「手机接入」三条导航承担，收起态（没有导航）必须还给竖条 */
   body.sessbar-open #sbtools #taskBtn, body.sessbar-open #sbtools #wsBtn, body.sessbar-open #sbtools #bridgeBtn { display: none; }
 
   /* upload dropzone */
@@ -1420,6 +1411,17 @@
      上传 / Zotero 面板，fixed 会直接盖上去。改成【绝对定位在中间栏内侧】（#chat 设了
      position:relative），中间栏太窄时整个隐藏。 */
   #chat { position: relative; }
+  /* 分享按钮：浮在对话区右上角（#chat 自己的右上内边距那块空地）。给实底 + 描边，
+     窄屏内边距变小、压到正文右边缘时也还看得清。 */
+  /* 描边用 --line-hi（比 --line 深一档）+ 圆角方框：与会话栏顶部那枚收起箭头同一套外观，
+     一眼能认出"这是个按钮"，而不是飘在正文角上的一个图标。 */
+  /* 【选择器必须带 #chat】.hbtn 的规则写在这一段【后面】，同为 0-1-0 的特异性时后来者赢——
+     只写 .chat-share 的话，圆角、描边、底色统统会被 .hbtn 覆盖回去（实测踩过）。 */
+  #chat > .chat-share { position: absolute; top: 4px; right: 6px; z-index: 8;
+    border-radius: var(--r-sm); background: var(--panel); border: 1px solid var(--line-hi); }
+  #chat > .chat-share:hover { color: var(--accent); background: var(--panel-soft); border-color: var(--accent); }
+  /* 步骤条给它让出这块地，别让最后一枚步骤钻到按钮底下 */
+  #stepsHost:not(:empty) { padding-right: 34px; }
   .wfrail { position: absolute; right: 6px; top: 50%; transform: translateY(-50%); z-index: 25;
     display: flex; flex-direction: column; gap: 14px; align-items: center; }
   .wfrail a { position: relative; width: 11px; height: 11px; border-radius: 50%;
@@ -1567,15 +1569,18 @@
   .pv-head .pv-dl:hover { color: var(--accent); border-color: var(--accent); }
   .pv-head .pv-dl .ic { width: 13px; height: 13px; }
 
-  /* 左下角工具条（原顶栏的三个入口：公告 / 分享 / 返回工作台）+ 模型设置弹窗 */
-  /* margin-top:auto 挂在这儿而不是 .user-info 上：两块都要贴底，空白得留在【这一条之前】。
-     挂在 .user-info 上的话空白会落在两块中间，工具条被顶到会话列表底下去。 */
-  /* 【别再写 margin-top:auto】它已经从"贴底的一条"变成「更多」展开后紧跟在导航下面的一排；
-     贴底的活儿交给 flex:1 的 #sessions 吃掉剩余空白即可。 */
-  #sbtools { flex: none; display: flex; align-items: center; gap: 4px; flex-wrap: wrap;
-    padding: 6px 2px; border-bottom: 1px solid var(--line); }
-  /* 收起成 56px 竖条时：没有导航可点，这排图标改竖排常驻（不受「更多」开合影响） */
-  body:not(.sessbar-open) #sbtools { display: flex; flex-direction: column; gap: 2px; padding: 6px 0; border-bottom: 0; }
+  /* 左下角工具条（公告 / 更新说明 / 返回工作台 …）+ 模型设置弹窗。
+     它现在住在 .user-info 里、账户按钮的【左边】：这些都不是会话内容，跟"我这个账号 / 这台机器"
+     是一类，挤进那一行比单独占一排省一整行纵向空间。原来的「更多」抽屉整个删了——
+     低频不等于要藏，藏起来的结果是未读公告得再在导航上点个红点提醒才有人看见。 */
+  #sbtools { flex: none; display: flex; align-items: center; gap: 2px; margin-left: auto; }
+  /* 展开态挤在用户行里，按钮小一号（26px，与账户按钮齐）；收起态的竖条保持原来的 30px 不变 */
+  body.sessbar-open #sbtools .hbtn { width: 26px; height: 26px; }
+  body.sessbar-open #sbtools .hbtn .ic { width: 15px; height: 15px; }
+  /* 收起成 56px 竖条时：没有导航可点，这排图标改竖排、并且排在头像【上面】（order:-1），
+     与改版前的收起态完全一致；那条分隔线也从 .user-info 挪到它自己身上，位置照旧。 */
+  body:not(.sessbar-open) #sbtools { display: flex; flex-direction: column; gap: 2px; margin: 0;
+    order: -1; align-self: stretch; align-items: center; padding: 6px 0 8px; border-bottom: 1px solid var(--line); }
   .hbtn { width: 30px; height: 30px; display: grid; place-items: center; border-radius: 50%; background: transparent;
     border: 1px solid transparent; color: var(--muted); cursor: pointer; transition: .15s; }
   /* 底色已是白面板，原来那个半透明白 hover 等于没有反馈 —— 换成浅灰 */
@@ -1846,7 +1851,7 @@
   /* 【别再给它 margin-top:auto】贴底的活儿交给紧挨在它上面的 #sbtools 一个人干：
      两个都写 auto 的话，剩余空白会在这两处【平分】—— 会话栏收起时列表整块隐藏、空白一大截，
      实测两块一起飘到了半空（工具条 y=392）。 */
-  .user-info { position: relative; display: flex; align-items: center; gap: 10px;
+  .user-info { position: relative; display: flex; align-items: center; gap: 8px;
     padding: 12px 6px 4px; border-top: 1px solid var(--line); }
   .user-info .avatar { width: 34px; height: 34px; border-radius: 50%; flex: none; cursor: pointer;
     background: linear-gradient(135deg, rgba(59,111,212,.95), rgba(43,182,115,.95));
@@ -1972,7 +1977,6 @@
   <div id="sessbar">
     <div class="sb-top">
       <button id="sessToggle" class="sb-toggle" type="button" title="展开会话栏"></button>
-      <span class="sb-title">会话与分组</span>
     </div>
     <!-- ---- 主导航：入口在上、内容（项目/会话/空间/定时任务）在下 ----
          「手机接入」行本身 = 打开聊天接入设置；右侧微信/企微图标 = 各自跳到该平台最新的那条会话
@@ -1992,36 +1996,7 @@
           <span class="asst-ic wecom" id="asstWecom" role="button" tabindex="0" data-p="wecom"></span>
         </span>
       </div>
-      <button class="navitem" id="navMore" type="button" aria-expanded="false"><span class="ni-ic"></span><span class="ni-t">更多</span><span class="ni-hint">公告·分享</span><span class="ni-dot" aria-hidden="true"></span></button>
     </nav>
-    <!-- 原顶栏那三个「平台级」入口整体搬到这里：公告 / 分享 / 返回工作台。
-         都不是会话内容，跟上面的会话列表不是一类，所以贴着用户块单独一行；
-         会话栏收起（56px）时改成竖排，图标仍在、位置不跳。 -->
-    <div id="sbtools">
-      <!-- 公告中心：默认折叠，只在按钮上标未读数；点开是近半年的公告，随时查得回来。
-           老设计是顶部弹横幅、点「知道了」就永远消失，用户想回看只能问管理员。 -->
-      <div id="ntWrap" class="ntwrap">
-        <button id="ntBtn" class="hbtn" type="button" title="系统消息 / 平台公告"></button>
-        <span id="ntDot" class="dotmark" hidden></span>
-        <div id="ntPanel" class="ntpanel"></div>
-      </div>
-      <!-- 更新说明：这个版本、以及之前每个版本各改了什么。随包走（不问云端要）——
-           断网也看得到，也不会出现"客户端还是老版本、却读到新版说明"这种对不上号的情形。 -->
-      <div id="relWrap" class="ntwrap">
-        <button id="relBtn" class="hbtn" type="button" title="更新说明：每个版本改了哪些东西"></button>
-        <div id="relPanel" class="ntpanel"></div>
-      </div>
-      <!-- 分享：把当前会话导出成一个自包含 HTML（含思考与工具调用，默认折叠；不含任何产出文件） -->
-      <button id="shareBtn" class="hbtn" type="button" title="分享：把本次会话导出成一个 HTML 文件"></button>
-      <!-- 定时任务：到点自动跑，软件关着也照跑（Windows）。不支持的部署形态下整个按钮隐藏，
-           而不是点开告诉用户"你用不了"——那只会让人以为是自己哪儿没设对。 -->
-      <button id="taskBtn" class="hbtn" type="button" title="定时任务：到点自动跑，软件关着也照跑" hidden></button>
-      <!-- 聊天接入：【别删】设置入口已上移到导航「手机接入」行（openBridgeSetup 靠程序化 click
-           转发到它），所以展开态它从「更多」那排里 display:none 掉；收起态（没有导航行）仍以
-           竖条图标出现，不然收着栏的用户就没有任何入口了。 -->
-      <button id="bridgeBtn" class="hbtn" type="button" title="聊天接入：把会话接到企业微信，在手机上继续干活" hidden></button>
-      <button id="wsBtn" class="hbtn" type="button" title="返回模块工作台（换个功能开新会话）"></button>
-    </div>
     <!-- 列表工具条：筛选 / 批量选择 / 刷新。左对齐、贴在「项目」分区正上方 ——
          它们操作的是下面这份列表（项目 / 会话 / 空间），不是上面的导航；离作用对象越近越不用猜。 -->
     <div id="listbar">
@@ -2052,6 +2027,27 @@
       <div class="u-meta">
         <div class="u-name" id="userName">未登录</div>
         <div class="u-role" id="userRole">本机模式</div>
+      </div>
+      <!-- 平台级入口（公告 / 更新说明 / 返回工作台 …）：贴在账户按钮左边。
+           【别删 #taskBtn / #bridgeBtn】展开态它们 display:none（入口在导航行），
+           但那两套逻辑都挂在这两个按钮身上，收起态也还要靠它们当竖条图标。 -->
+      <div id="sbtools">
+        <!-- 公告中心：默认折叠，只在按钮上标未读数；点开是近半年的公告，随时查得回来。
+             老设计是顶部弹横幅、点「知道了」就永远消失，用户想回看只能问管理员。 -->
+        <div id="ntWrap" class="ntwrap">
+          <button id="ntBtn" class="hbtn" type="button" title="系统消息 / 平台公告"></button>
+          <span id="ntDot" class="dotmark" hidden></span>
+          <div id="ntPanel" class="ntpanel"></div>
+        </div>
+        <!-- 更新说明：这个版本、以及之前每个版本各改了什么。随包走（不问云端要）——
+             断网也看得到，也不会出现"客户端还是老版本、却读到新版说明"这种对不上号的情形。 -->
+        <div id="relWrap" class="ntwrap">
+          <button id="relBtn" class="hbtn" type="button" title="更新说明：每个版本改了哪些东西"></button>
+          <div id="relPanel" class="ntpanel"></div>
+        </div>
+        <button id="taskBtn" class="hbtn" type="button" title="定时任务：到点自动跑，软件关着也照跑" hidden></button>
+        <button id="bridgeBtn" class="hbtn" type="button" title="聊天接入：把会话接到企业微信，在手机上继续干活" hidden></button>
+        <button id="wsBtn" class="hbtn" type="button" title="返回模块工作台（换个功能开新会话）"></button>
       </div>
       <button id="userMenuBtn" type="button" title="账户"></button>
       <div class="umenu" id="userMenu">
@@ -2084,6 +2080,9 @@
     </div>
   </div>
   <section id="chat">
+    <!-- 分享：把当前会话导出成一个自包含 HTML（含思考与工具调用，默认折叠；不含任何产出文件）。
+         浮在对话区右上角——它导出的就是眼前这段对话，放在会话栏底部那排里离作用对象最远。 -->
+    <button id="shareBtn" class="hbtn chat-share" type="button" title="分享：把本次会话导出成一个 HTML 文件"></button>
     <!-- 步骤条挂在这里（对话区【之上】，不在滚动容器里）。
          曾经用 position:sticky 放在 #log 内部，结果正文会从它底下穿过去被挡住——sticky 本来就是
          这个行为。放到外面，它自己占一行、对话区相应变矮，永远不会与正文重叠。 -->
@@ -2335,7 +2334,7 @@
         <details id="cbwTut" class="cb-details">
           <summary>第 1 步 · 创建智能机器人（约 3 分钟，只需一次）</summary>
           <ol class="cb-steps">
-            <li>管理员打开 <b>work.weixin.qq.com</b> 登录 → <b>应用管理</b> → <b>应用</b> → <b>智能机器人</b> → 创建。</li>
+            <li>打开<b>企业微信</b>（手机或电脑客户端都行）→ <b>工作台</b> → 找到 <b>智能机器人</b> → <b>手动创建机器人</b>。</li>
             <li><b style="color:#b45309">创建时务必选「API 模式」</b>——不要选零代码 / 工作流那类模式。只有 API 模式的机器人才有本软件要用的 <b>Bot ID + Secret</b> 长连接接入；选错了下面填什么都连不上，只能重建一个。</li>
             <li>创建后进详情页，拿到 <b>Bot ID</b> 和 <b>Secret</b>（Secret 需点「查看/重置」）。不需要回调地址/公网 IP/白名单。</li>
           </ol>
@@ -5196,12 +5195,12 @@ sessToggle.addEventListener("click", () => {
 setSessbar(localStorage.getItem("nm_sessbar") !== "0")   // 默认展开（会话列表是主导航），显式收起过才保持收起
 document.getElementById("refreshSess").addEventListener("click", loadSessions)
 // ---- 侧栏主导航 ----
-// 「新建会话」「项目」「更多」在这里接线；「手机接入」「新建定时任务」两条各自有可用性探测
+// 「新建会话」「项目」在这里接线；「手机接入」「新建定时任务」两条各自有可用性探测
 //（分别在聊天接入、定时任务那两段里把 hidden 摘掉），所以只在这里挂点击。
 ;(function () {
   const setNavIc = (id, name) => { const b = document.getElementById(id); if (b) b.querySelector(".ni-ic").innerHTML = ic(name) }
   setNavIc("navNew", "plus"); setNavIc("navAsst", "phone"); setNavIc("navProj", "folderPlus")
-  setNavIc("navAuto", "clock"); setNavIc("navMore", "grid")
+  setNavIc("navAuto", "clock")
   document.getElementById("navNew").addEventListener("click", () => newConversation())
   // 「项目」不是另一个页面：点它 = 把下面那个「项目」分区展开并滚到眼前。
   // 分区默认是折叠的，没有这一步的话，用户点了导航却看不出任何变化。
@@ -5210,15 +5209,6 @@ document.getElementById("refreshSess").addEventListener("click", loadSessions)
   // 可用性探测、跑完的提示）都挂在它身上。「新建定时任务」直接开新建表单（__openTaskNew
   // 由定时任务那段暴露）；已有任务的查看/编辑走下方「定时任务」分区。
   document.getElementById("navAuto").addEventListener("click", () => { if (window.__openTaskNew) window.__openTaskNew(); else document.getElementById("taskBtn").click() })
-  // 「更多」= 展开公告 / 更新说明 / 分享那一排图标（低频动作，不常驻）
-  const more = document.getElementById("navMore")
-  more.addEventListener("click", () => {
-    const on = !document.body.classList.contains("more-open")
-    document.body.classList.toggle("more-open", on); more.classList.toggle("on", on)
-    more.setAttribute("aria-expanded", on ? "true" : "false")
-    try { localStorage.setItem("nm_more", on ? "1" : "0") } catch {}
-  })
-  if (localStorage.getItem("nm_more") === "1") { document.body.classList.add("more-open"); more.classList.add("on"); more.setAttribute("aria-expanded", "true") }
 })()
 
 // ---- 侧栏「手机接入」：行 = 打开聊天接入设置；平台图标 = 跳到该平台最新的那条会话 ----
@@ -8621,9 +8611,6 @@ function renderNoticeDot() {
   wrap.hidden = false
   const un = ntUnread()
   dot.hidden = !un.length
-  // 公告按钮本身收在「更多」里（默认收着）：未读必须同时在「更多」那一行点个红点，
-  // 否则紧急公告对一个从没展开过「更多」的用户等于不存在。
-  document.body.classList.toggle("has-notice", un.length > 0)
   dot.textContent = un.length > 99 ? "99+" : String(un.length)
   dot.className = "dotmark" + (un.some((n) => n.level === "urgent") ? " urgent" : "")
   const btn = document.getElementById("ntBtn")
@@ -8683,15 +8670,22 @@ function renderNoticePanel(list, err) {
   }
 }
 
-// 面板贴着【触发它的那个按钮】下沿弹出。
-// ★ 别写死 top：这排按钮收在「更多」里，而它上面的导航行数是变的（助理 / 自动化时有时无），
-//   写死的话总有一档会把面板压在导航上——面板自己 stopPropagation，底下那几行从此点不动。
+// 面板贴着【触发它的那个按钮】弹出：下面放得下就往下，放不下就往上贴着按钮上沿。
+// ★ 别写死 top：这两个按钮现在在会话栏最底部（账户按钮左边），往下弹必然掉出屏幕；
+//   而收起态它们又在栏顶。位置只能按实测的 getBoundingClientRect 算。
 function placeNtPanel(panel, btn) {
   if (!panel || !btn) return
   const r = btn.getBoundingClientRect()
-  const top = Math.min(r.bottom + 6, Math.max(8, window.innerHeight - 120))
-  panel.style.top = top + "px"
-  panel.style.maxHeight = Math.max(160, window.innerHeight - top - 12) + "px"
+  const below = window.innerHeight - r.bottom - 12, above = r.top - 12
+  if (below >= 240 || below >= above) {          // 往下弹
+    panel.style.bottom = "auto"
+    panel.style.top = Math.max(8, r.bottom + 6) + "px"
+    panel.style.maxHeight = Math.max(160, below) + "px"
+  } else {                                        // 往上弹（贴按钮上沿，别顶出屏幕）
+    panel.style.top = "auto"
+    panel.style.bottom = Math.max(8, window.innerHeight - r.top + 6) + "px"
+    panel.style.maxHeight = Math.max(160, above) + "px"
+  }
 }
 async function openNoticePanel() {
   const p = document.getElementById("ntPanel")
@@ -9916,6 +9910,38 @@ document.addEventListener("visibilitychange", () => { if (!document.hidden) refr
   var esc = function (s) { return String(s == null ? "" : s).replace(/[&<>"]/g, function (c) { return ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c] }) }
   var $ = function (id) { return document.getElementById(id) }
   var cur = null, pollT = null, wxPollT = null
+  // 企微教程的开合：没配过 = 默认展开（他正需要照着做），配过 = 默认折叠（别每次都撑开半屏）。
+  // 【只在刚打开弹窗、或"配没配"这件事真的变了时才动它】refresh() 每 10 秒跑一次，
+  // 无条件赋值会把用户手动折叠/展开的动作在下一次轮询里抹掉。
+  var tutCfgSeen = null
+  // 绑定之后要盯到【真的连上】为止：pendingBind[平台] = 发起绑定的时刻。
+  // 【为什么要有这套】原来点完绑定就写死一句"正在连接…（几秒后状态变绿即成功）"，
+  // 之后谁也不改它——连上了那句"正在连接"还挂在那儿，用户根本分不清成没成功。
+  var pendingBind = { wecom: 0, weixin: 0 }, bindWatchT = null
+  var PLAT_LABEL = { wecom: "企业微信", weixin: "微信" }
+  // 连上之前每 2 秒探一次（10 秒的常规轮询太慢，绑完盯着屏幕的那几秒最需要反馈）
+  function watchBind() {
+    if (bindWatchT) return
+    bindWatchT = setInterval(function () {
+      if (!pendingBind.wecom && !pendingBind.weixin) { clearInterval(bindWatchT); bindWatchT = null; return }
+      refresh()
+    }, 2000)
+  }
+  function checkBindDone(platform, pd, running) {
+    var t0 = pendingBind[platform]
+    if (!t0) return
+    var label = PLAT_LABEL[platform]
+    if (running && pd.subscribed && pd.boundSid) {
+      pendingBind[platform] = 0
+      setMsg(msgEl, "ok", label + "接入成功 ✓ 现在打开" + label + "给机器人发条消息试试，回复会写进「" + (pd.boundTitle || "已绑定的会话") + "」。")
+    } else if (Date.now() - t0 > 40000) {
+      // 【别无限转圈】40 秒还没连上就说清楚下一步，而不是让"正在连接…"永远转下去
+      pendingBind[platform] = 0
+      setMsg(msgEl, "err", label + "的绑定已保存，但 40 秒内没连上。" +
+        (platform === "wecom" ? "多半是 Bot ID / Secret 填错，或机器人不是「API 模式」建的（见上方教程）；" : "多半是扫码的登录态已失效，可以点「重新扫码」；") +
+        "也检查一下上方总开关是否开着。")
+    }
+  }
 
   // 会话下拉填充：默认选中当前正在看的会话（把眼前这个接进去/换绑）；没有则该平台已绑的会话。
   //
@@ -9969,9 +9995,11 @@ document.addEventListener("visibilitychange", () => { if (!document.hidden) refr
     var k = "", t = ""
     if (!pd.configured) { k = ""; t = "未配置" }
     else if (!pd.boundSid) { k = "warn"; t = "凭证已就绪，选个会话点绑定" }
-    else if (running && pd.subscribed) { k = "ok"; t = "已连接" }
-    else if (running) { k = "warn"; t = "连接中…" }
-    else { k = "bad"; t = "未连接" }
+    // 【接上了就把话说完】原来这里只写"已连接"，用户看不出"那我现在能干嘛"；
+    // 而绑定按钮那句"正在连接…"又从不被改写，成功之后屏幕上还挂着"正在…"，看着像卡住了。
+    else if (running && pd.subscribed) { k = "ok"; t = "已接入 ✓ 现在可以在手机上给机器人发消息了" }
+    else if (running) { k = "warn"; t = "正在连接…（通常几秒）" }
+    else { k = "bad"; t = "未连接（总开关关着或桥没起来）" }
     $(prefix + "Dot").className = "cb-dot " + k
     $(prefix + "State").textContent = t
     $(prefix + "Unbind").hidden = !pd.boundSid
@@ -10006,9 +10034,11 @@ document.addEventListener("visibilitychange", () => { if (!document.hidden) refr
       $("cbBotId").value = st.wecom.bot_id || ""
       if (document.activeElement !== $("cbwAllow")) $("cbwAllow").value = st.wecom.allowFrom || ""
       if (document.activeElement !== $("cbxAllow")) $("cbxAllow").value = st.weixin.allowFrom || ""
-      $("cbwTut").open = !st.wecom.configured
+      if (tutCfgSeen !== !!st.wecom.configured) { tutCfgSeen = !!st.wecom.configured; $("cbwTut").open = !tutCfgSeen }
       paintCard("cbw", st.wecom, st.running)
       paintCard("cbx", st.weixin, st.running)
+      checkBindDone("wecom", st.wecom, st.running)
+      checkBindDone("weixin", st.weixin, st.running)
       paintSeen("cbwSeen", "cbwAllow", "wecom", st.wecom.seenUsers)
       paintSeen("cbxSeen", "cbxAllow", "weixin", st.weixin.seenUsers)
       // 微信扫码状态
@@ -10017,7 +10047,12 @@ document.addEventListener("visibilitychange", () => { if (!document.hidden) refr
       var wxState = $("cbWxState")
       if (wx.state === "running") wxState.textContent = wx.qrReady ? "等待扫码…" : "生成二维码中…"
       else if (wx.state === "failed") wxState.textContent = "上次扫码没成功：" + (wx.err || "").slice(0, 100)
-      else wxState.textContent = st.weixin.configured ? "微信已绑定 ✓" : ""
+      // 【区分"扫码完成"和"接入成功"】扫完码只是拿到了登录态，还得选个会话点绑定；
+      // 一律写"微信已绑定 ✓"会让用户以为已经能用了，回头在手机上发消息却没反应。
+      else wxState.textContent = !st.weixin.configured ? ""
+        : !st.weixin.boundSid ? "扫码完成 ✓ 下面选个会话点「绑定到该会话」"
+        : (st.running && st.weixin.subscribed) ? "微信已接入 ✓ 手机上可以发消息了"
+        : "微信已绑定（连接中…）"
       var qrWrap = $("cbWxQrWrap")
       if (wx.state === "running" && wx.qrReady) { qrWrap.hidden = false; $("cbWxQr").src = "api/chat-bridge/weixin/qr?ts=" + Date.now() }
       else qrWrap.hidden = true
@@ -10064,8 +10099,9 @@ document.addEventListener("visibilitychange", () => { if (!document.hidden) refr
     }).then(function (r) {
       if (r && r.ok === false) throw new Error(r.err || "绑定失败")
       $("cbBotSecret").value = ""
-      setMsg(msgEl, "ok", "已保存并接入企业微信，正在连接…（几秒后状态变绿即成功）")
-      setTimeout(refresh, 3000); setTimeout(refresh, 8000); return refresh()
+      setMsg(msgEl, "info", "凭证已保存，正在连接企业微信…")
+      pendingBind.wecom = Date.now(); watchBind()
+      return refresh()
     }).catch(function (e) { setMsg(msgEl, "err", e.message || e) })
   })
   // 微信：扫码后点绑定（凭证是扫码来的）
@@ -10079,12 +10115,14 @@ document.addEventListener("visibilitychange", () => { if (!document.hidden) refr
       return jpost("api/chat-bridge/bind", { platform: "weixin", sid: sid })
     }).then(function (r) {
       if (r && r.ok === false) throw new Error(r.err || "绑定失败")
-      setMsg(msgEl, "ok", "已把微信接到该会话，正在连接…（几秒后状态变绿）")
-      setTimeout(refresh, 3000); setTimeout(refresh, 8000); return refresh()
+      setMsg(msgEl, "info", "已提交，正在连接微信…")
+      pendingBind.weixin = Date.now(); watchBind()
+      return refresh()
     }).catch(function (e) { setMsg(msgEl, "err", e.message || e) })
   })
   function doUnbind(platform, label) {
     if (!confirm("解绑" + label + "？机器人不再响应，注入的说明会移除（凭证保留，重新绑定即可）。")) return
+    pendingBind[platform] = 0   // 正在盯的那次绑定作废，别在解绑之后还蹦出一句"接入成功"
     jpost("api/chat-bridge/unbind", { platform: platform }).then(function () { setMsg(msgEl, "ok", "已解绑" + label + "。"); return refresh() })
   }
   $("cbwUnbind").addEventListener("click", function () { doUnbind("wecom", "企业微信") })
@@ -10117,12 +10155,19 @@ document.addEventListener("visibilitychange", () => { if (!document.hidden) refr
     if (!confirm("解除微信绑定？之后要重新扫码。")) return
     jpost("api/chat-bridge/weixin/reset", {}).then(function () { setMsg(msgEl, "ok", "已解除微信绑定。"); return refresh() })
   })
-  $("cbClose").addEventListener("click", function () { modal.classList.remove("on"); if (pollT) { clearInterval(pollT); pollT = null } })
-  onOverlayClick(modal, function () { modal.classList.remove("on"); if (pollT) { clearInterval(pollT); pollT = null } })
+  var closeModal = function () {
+    modal.classList.remove("on")
+    if (pollT) { clearInterval(pollT); pollT = null }
+    if (bindWatchT) { clearInterval(bindWatchT); bindWatchT = null }
+    pendingBind.wecom = 0; pendingBind.weixin = 0
+  }
+  $("cbClose").addEventListener("click", closeModal)
+  onOverlayClick(modal, closeModal)
   if (btn) {
     btn.innerHTML = ic("msg")
     btn.addEventListener("click", function () {
       modal.classList.add("on"); setMsg(msgEl, "info", "载入中…")
+      tutCfgSeen = null   // 每次打开都按当前"配没配"重新定教程的开合
       refresh().then(function () { setMsg(msgEl, "info", "企业微信、微信可以各自接到不同的会话。") })
       if (!pollT) pollT = setInterval(refresh, 10000)
     })
