@@ -260,6 +260,13 @@ function gateVerdict(outDir, step, files, st) {
       const stat = fs.statSync(fp)
       const j = JSON.parse(fs.readFileSync(fp, "utf8"))
       if (!j || (j.verdict !== "pass" && j.verdict !== "fail")) continue
+      // ★ 旁路核查的裁定一律不认（纵深防御，脚本侧已不再写它）。
+      //   2026-08-21 打包版实测：模型验几篇【候选替换文献】也会调 reference-check
+      //   （`--input .scratch/candidate_refs.txt`、或直接把标题串当位置参数），
+      //   那次运行根本没碰稿件，却把一份红裁定冲成绿的 —— 只要它随后调 render，
+      //   就是"闸其实是红的却顺利出件"。scope 字段缺失（老脚本写的裁定）按 manuscript 处理，
+      //   行为与改动前一致。
+      if (j.scope && j.scope !== "manuscript") continue
       if (!best || stat.mtimeMs > best._mtime) best = { ...j, _mtime: stat.mtimeMs, _name: n + ".json" }
     } catch { /* 没有 / 读不了 / 不是 JSON → 当作没有结构化裁定 */ }
   }
@@ -271,6 +278,49 @@ function gateVerdict(outDir, step, files, st) {
   if (rb > jb) return null                         // 报告比裁定新一轮 → 裁定过期
   return best
 }
+
+// ---- 「正在做哪一步」的实时推断（纯函数部分，供 server.mjs 用、供测试锁住）----
+//
+// ★ 两条都是 2026-08-21 复测实测出来的：
+//   ① 模型整个引用核查阶段【直接跑 verify_refs.py，一次都没加载 reference-check 技能】
+//      → 只认 tool==="skill" 的话，那 20 分钟条子上没有当前步。技能闸那边（gateViolation）
+//        早就认 bash 直呼这种形态了，步骤推断没有理由认不出来。
+//   ② 一个技能名可能对应模块里的多格：综述模块检索用 literature-review/search.py，
+//      模型加载的技能名就叫 literature-review，而这个名字绑的是后面那格「综述成文」
+//      → 条子头 20 分钟一直指着"综述成文"，实际在检索。按【最早未完成】解就对了。
+const SKILL_PATH_RE = /[\/\\]skills[\/\\]([a-z0-9][a-z0-9._-]*)[\/\\]/i
+
+// 实时推断认三种绑定：正式 skill、skillAlias（正式别名，出件那格的 render-docx 就是），
+// 以及 liveAlias —— 只对本推断生效的"实际上是这一步在跑它"，见 workflows.mjs 检索步的说明。
+function stepOwnsSkill(step, skill) {
+  return step.skill === skill
+    || (step.skillAlias || []).includes(skill)
+    || (step.liveAlias || []).includes(skill)
+}
+
+export function skillFromTool(tool, input) {
+  if (tool === "skill") return input?.name || null
+  const cmd = typeof input?.command === "string" ? input.command : ""
+  const m = cmd && SKILL_PATH_RE.exec(cmd)
+  return m ? m[1] : null
+}
+
+// 这个技能此刻算哪一步：模块里【最靠前的、还没做完的】那个绑了它的步骤。
+// 已完成的步骤不该再当"当前"（与前端 updateStepsBar 同一条规矩）；一格都不剩就回 null。
+export function stepForSkill(modId, skill, done) {
+  if (!modId || modId === "chat" || !skill) return null
+  const d = new Set(done || [])
+  const steps = WF.WORKFLOWS[modId]?.steps || []
+  const hit = steps.find((x) => !d.has(x.id) && stepOwnsSkill(x, skill))
+  return hit ? hit.id : null
+}
+
+// 这个技能在本模块里【存不存在】对应的步骤（存不存得进实时推断）
+export function skillInModule(modId, skill) {
+  if (!modId || modId === "chat" || !skill) return false
+  return (WF.WORKFLOWS[modId]?.steps || []).some((x) => stepOwnsSkill(x, skill))
+}
+
 
 export function gateFailed(outDir, step, files, fstate, st) {
   // 结构化裁定优先（见 gateVerdict 头注）。fail 恒生效；pass 只对措辞型闸生效 ——

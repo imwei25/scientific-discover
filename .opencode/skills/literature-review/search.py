@@ -218,17 +218,35 @@ def _out_paths(outdir, explicit=None, tag=None):
 
 
 def _get(url, **kw):
-    """GET with backoff on 429/503 so a transient Europe PMC rate-limit does not
-    silently drop a whole query."""
+    """GET，对 429/503 **和网络层异常**都退避重试。
+
+    ★ 网络层那半是补出来的（2026-08-21 三测）：原来只认状态码，`requests.get` 自己抛
+      SSLError / ConnectionError 时直接往上冒 —— 实测**奠基文献补捞整趟因一次 SSL 握手失败
+      全军覆没**，那一轮证据表 225 条里一篇 NEJM 都没有，前十几名全是纳米颗粒、铁死亡这类
+      无关的高被引泛综述。是模型自己看表觉得不对、又补跑 5 轮才凑齐，光检索多花 20 分钟；
+      要是它没自查，稿子就退回"凭记忆写引用"的老路 —— 那正是这套改动要根除的东西。
+      一次握手失败换掉一趟检索，太贵了；重试三次几乎必然能过去。
+    """
     kw.setdefault("headers", UA)
     kw.setdefault("timeout", TIMEOUT)
     r = None
+    last_exc = None
     for attempt in range(4):
-        r = requests.get(url, **kw)
+        try:
+            r = requests.get(url, **kw)
+        except requests.RequestException as e:      # SSL / 连接重置 / 读超时 / 分块编码错
+            last_exc = e
+            if attempt == 3:
+                raise
+            print(f"    ⚠ 网络异常（{type(e).__name__}），{2 * (attempt + 1)}s 后重试（第 {attempt + 2}/4 次）")
+            time.sleep(2 * (attempt + 1))
+            continue
         if r.status_code in (429, 503):
             time.sleep(2 * (attempt + 1))
             continue
         return r
+    if r is None and last_exc is not None:
+        raise last_exc
     return r
 
 DESIGN = [
@@ -274,12 +292,51 @@ def classify_design(title, abstract):
     return a
 
 
+# ---- 墙钟预算（跑飞护栏之二）----
+# ★ 2026-08-21 打包版实测：首轮两条并行检索【双双超时、零产物】——命中 14410 条的宽检索式
+#   一路翻页，把调用方的 2 分钟超时耗光，进程被杀，那一轮什么都没写下来。
+#   条数护栏（SCI_SEARCH_MAX）管不住这件事：5000 条 = 50 页，本来就要好几分钟。
+#   零产物是最差的结局 —— 用户白等两分钟、模型还得猜发生了什么。有预算就一定有输出：
+#   到点停下、把已取回的写出来、**响亮报告截断**，让下一步是"要不要收窄重跑"而不是"重来一次"。
+DEFAULT_BUDGET_SEC = 90
+_DEADLINE = None          # 当前【阶段】的截止时刻；None = 不限
+_HARD_END = None          # 整次运行的截止时刻（阶段预算再怎么分也不许越过它）
+_TIME_TRUNCATED = False   # 有任何一次分页因为到点而停 → 报告里必须说
+
+
+def _phase(sec):
+    """给接下来这个阶段划一段时间预算。
+
+    ★ 必须分阶段，不能全局一个 deadline：实测（第一版改完就撞上）主检索一口气把 90 秒
+      全吃光，后面【定向补捞】三趟各取回 0 条 —— 而定向补捞正是这次改动要解决的那件事
+      （勾了 RCT 却全是综述、landmark 试验排不上来）。预算不分给它，等于没做。
+    """
+    global _DEADLINE
+    if _HARD_END is None:
+        _DEADLINE = None
+        return
+    _DEADLINE = min(_HARD_END, time.monotonic() + max(5, sec))
+
+
+def _out_of_time():
+    global _TIME_TRUNCATED
+    now = time.monotonic()
+    for d in (_DEADLINE, _HARD_END):
+        if d is not None and now > d:
+            _TIME_TRUNCATED = True
+            return True
+    return False
+
+
 def _one_pass(query, limit, sort=None):
     """按给定排序取一批（limit 可为 math.inf = 翻到源枯竭）。
 
     sort=None 用 EPMC 默认顺序（实测等同按时间倒排）。"""
     out, cursor = [], "*"
     while len(out) < limit:
+        if _out_of_time():
+            print(f"    ⏱ 已达本次检索的时间预算，停在 {len(out)} 条（下面会报告截断）")
+            break
         remaining = limit - len(out)
         params = {"query": query, "format": "json",
                   "pageSize": PAGE if remaining == math.inf else min(PAGE, remaining),
@@ -309,6 +366,140 @@ def _hit_count(query):
                            "pageSize": 1, "resultType": "idlist"})
     r.raise_for_status()
     return int(r.json().get("hitCount") or 0)
+
+
+# 首屏表单勾的「纳入的研究设计」→ Europe PMC 的检索限定。
+# ★ 为什么必须做这件事（2026-08-21 打包版实测）：用户认真勾了「RCT + 队列」，回来的 106 篇里
+#   review 36、other 30、cohort 14、meta 12，**RCT 只有 8 篇** —— 勾选完全没有约束检索，
+#   在用户眼里这个勾选框就是个摆设。
+# ★ 为什么用"补捞"而不是"过滤"：把主检索直接限死在 RCT+队列，会把综述/指南这类
+#   写引言与讨论必需的背景文献全挤掉。所以主检索照旧宽召回，另外【每个勾选的设计各跑一趟
+#   定向检索、按被引降序取】，把该有的那类文献保证捞回来，再合并去重。
+# ★ 顺带治好另一个更严重的毛病：landmark 试验普通检索排不上来（同一次实测里
+#   IMbrave150 / ORIENT-32 / HIMALAYA 等八项Ⅲ期原始论文四轮主题检索一篇都没进表，
+#   模型只好手写脚本逐条精确标题查回来）。定向趟按 CITED desc 取，实测第一页就是
+#   IMbrave150(1345 引)、CheckMate-040、ORIENT-32 —— 领域基石自然回到表里。
+DESIGN_FILTERS = {
+    "rct": ('PUB_TYPE:"Randomized Controlled Trial" OR TITLE:"randomised" OR TITLE:"randomized"'
+            ' OR TITLE:"phase 3" OR TITLE:"phase III"'),
+    "cohort": ('PUB_TYPE:"Observational Study" OR TITLE:"cohort" OR TITLE:"prospective"'),
+    "casecontrol": ('TITLE:"case-control" OR TITLE:"case control"'),
+    "crosssection": ('TITLE:"cross-sectional" OR TITLE:"survey"'),
+    "review": ('PUB_TYPE:"Review" OR PUB_TYPE:"Guideline" OR TITLE:"guideline" OR TITLE:"consensus"'),
+    "meta": ('PUB_TYPE:"Meta-Analysis" OR TITLE:"meta-analysis" OR TITLE:"systematic review"'),
+    "basic": ('TITLE:"in vitro" OR TITLE:"in vivo" OR TITLE:"mice" OR TITLE:"mouse" OR TITLE:"knockout"'),
+}
+# 定向趟捞回来的记录，落到证据表里应该属于哪个 design 桶（用于事后对账，不覆盖 classify_design）
+DESIGN_LABEL = {"rct": "RCT", "cohort": "cohort", "casecontrol": "case-control",
+                "crosssection": "cross-sectional", "review": "review",
+                "meta": "meta-analysis", "basic": "preclinical"}
+
+
+def design_topup(base_query, designs, since, per):
+    """对每个勾选的研究设计各跑一趟【按被引降序】的定向检索，返回记录列表。"""
+    out = []
+    n = max(1, len(designs))
+    for i, d in enumerate(designs):
+        if _HARD_END is not None:                      # 每个设计各分一段，别让第一个吃光
+            _phase(max(0.0, _HARD_END - time.monotonic()) / max(1, n - i))
+        filt = DESIGN_FILTERS.get(d)
+        if not filt:
+            print(f"  ⚠ 不认识的研究设计 {d!r}（可选：{'/'.join(DESIGN_FILTERS)}），跳过")
+            continue
+        q = f"({base_query}) AND ({filt})"
+        if since:
+            q += f" AND (FIRST_PDATE:[{since}-01-01 TO 3000-12-31])"
+        try:
+            hits = _hit_count(q)
+        except Exception:
+            hits = None
+        try:
+            recs = _one_pass(q, per, sort="CITED desc")
+        except Exception as e:
+            print(f"  定向检索（{d}）失败：{e}")
+            continue
+        print(f"  定向检索（{d}）：命中 {hits if hits is not None else '?'} 条，按被引降序取回 {len(recs)} 条")
+        out.extend(recs)
+    return out
+
+
+# ---- 奠基文献补捞（landmark）----
+# ★ 两轮实测都栽在同一件事上：一篇 HCC 一线免疫综述，**最该引的Ⅲ期原始论文普通检索一篇都排不上来**。
+#   首轮八项（IMbrave150 / ORIENT-32 / CARES-310 / HIMALAYA / CheckMate-9DW / LEAP-002 /
+#   COSMIC-312 / RATIONALE-301）四轮主题检索全落空，模型只好手写 5 个脚本逐条精确标题查回来；
+#   复测加了 --design 定向趟之后大部分回来了，**IMbrave150 的 NEJM 2020 原文与 9DW 的
+#   Lancet 2025 原文仍然一张表都没有**，模型是凭记忆写进正文再手动核的（这正是编造 DOI 的温床）。
+# 两个真因，所以要两条腿：
+#   ① **被时间范围卡掉**：IMbrave150 是 2020 年的，用户选「近 5 年」就直接出局 ——
+#      可它是这个方向的地基，综述不引它说不过去。→ 基石趟【不套 --since】。
+#   ② **被 AND 掉**：主检索是 `HCC AND (PD-1 OR PD-L1) AND first-line` 三概念取交集，
+#      而 NEJM 那篇的题录里既没有 "PD-L1" 也没有 "first-line" → 三概念一 AND 就没它了。
+#      → 基石趟只用【第一个概念】（病种/领域），靠 PUB_TYPE 限定 + 被引降序保精度。
+#      实测这一趟第 1-4 名：SHARP(10144)、IMbrave150 NEJM(5854)、Asia-Pacific 索拉非尼(4681)、
+#      REFLECT(4299) —— 正是任何一篇该方向综述都要引的那几篇。
+#   试验名趟补第三种情况：用户/模型已经知道试验叫什么，直接按名字精确捞（9DW、HIMALAYA
+#   都能一击命中原始论文），省掉"凭记忆写 DOI"。
+LANDMARK_TYPES = 'PUB_TYPE:"Randomized Controlled Trial" OR PUB_TYPE:"Meta-Analysis" OR PUB_TYPE:"Guideline"'
+# 试验名的形状：IMbrave150 / ORIENT-32 / LEAP-002 / CARES-310 / CheckMate 9DW / RATIONALE-301
+_TRIAL_RE = re.compile(r"\b([A-Za-z][A-Za-z\-]{2,15}[\-\s]?\d{2,4}[A-Za-z]{0,2})\b")
+
+
+def find_trial_names(queries):
+    """从检索概念里认出试验名（只在用户自己写的检索式里认，不做全网猜测）。"""
+    names, seen = [], set()
+    for q in queries:
+        for m in _TRIAL_RE.finditer(q or ""):
+            n = m.group(1).strip()
+            # PD-1 / PD-L1 / IL-6 这类靶点名不是试验名
+            if len(re.sub(r"[^A-Za-z]", "", n)) < 3:
+                continue
+            if n.lower() in seen:
+                continue
+            seen.add(n.lower())
+            names.append(n)
+    return names
+
+
+def landmark_pass(base_concept, names, per_area, per_trial, failed):
+    """奠基文献补捞。**一律不套 --since**（见头注①）。返回记录列表。
+
+    `failed` 是调用方传进来的列表：哪一趟没跑成就往里记一笔 —— 这一趟失败【必须让用户和
+    模型都看见】，不能只在过程输出里闪一行。见 main() 末尾那段警告的说明。
+    """
+    out = []
+    if base_concept:
+        q = f"({base_concept}) AND ({LANDMARK_TYPES})"
+        try:
+            recs = _one_pass(q, per_area, sort="CITED desc")
+            print(f"  奠基补捞（领域基石，不限年限）：{len(recs)} 篇 —— "
+                  f"只用第一个概念 {base_concept!r} + 试验/指南限定 + 被引降序")
+            if not recs:
+                failed.append(f"领域基石趟（{base_concept}）：一条都没取回")
+            out.extend(recs)
+        except Exception as e:
+            print(f"  ✖ 奠基补捞（领域基石）失败：{type(e).__name__}: {e}")
+            failed.append(f"领域基石趟（{base_concept}）：{type(e).__name__}")
+    for n in names:
+        esc = n.replace('"', "")
+        got = 0
+        errs = []
+        for q in (f'(TITLE:"{esc}" OR ABSTRACT:"{esc}") AND ({LANDMARK_TYPES})',
+                  f'TITLE:"{esc}" OR ABSTRACT:"{esc}"'):
+            try:
+                recs = _one_pass(q, per_trial, sort="CITED desc")
+            except Exception as e:
+                print(f"  ✖ 奠基补捞（试验 {n}）失败：{type(e).__name__}: {e}")
+                errs.append(type(e).__name__)
+                continue
+            got += len(recs)
+            out.extend(recs)
+        if errs:
+            failed.append(f"试验名「{n}」：{'/'.join(errs)}")
+        elif not got:
+            failed.append(f"试验名「{n}」：查无结果（名字是不是拼错了？）")
+        else:
+            print(f"  奠基补捞（试验名 {n}，不限年限）：取回 {got} 条候选")
+    return out
 
 
 def one_query(q, limit, since):
@@ -373,11 +564,34 @@ def main():
                     help="本次检索的短标签，产物写成 evidence_table__<标签>.csv / "
                          "evidence__<标签>.md。同一会话里第 2 次及以后的检索务必带上，"
                          "否则上一次的证据表会被挤成 .bak，手上那张就只剩最后一轮")
+    ap.add_argument("--landmark", nargs="?", const="", default=None, metavar="试验名,试验名",
+                    help="奠基文献补捞（默认开）：按【第一个检索概念】+ 试验/指南限定 + 被引降序"
+                         "捞一趟领域基石，**不受 --since 限制**；可另给逗号分隔的试验名"
+                         "（如 IMbrave150,CheckMate 9DW）逐个精确补捞。检索式里出现的试验名会自动认。")
+    ap.add_argument("--no-landmark", dest="no_landmark", action="store_true",
+                    help="关掉奠基文献补捞（确实只要某个时间窗内的新文时才用）")
+    ap.add_argument("--landmark-topup", type=int, default=15,
+                    help="领域基石那一趟取多少条（默认 15；每个试验名另取 3 条）")
+    ap.add_argument("--design", default="",
+                    help="首屏勾的「纳入的研究设计」，逗号分隔："
+                         + "/".join(DESIGN_FILTERS)
+                         + "。每一类各跑一趟【按被引降序】的定向检索并入结果，"
+                           "保证勾了的类型真的在证据表里（主检索照旧宽召回，不做过滤）")
+    ap.add_argument("--design-topup", type=int, default=60,
+                    help="每个研究设计的定向检索取多少条（默认 60）")
+    ap.add_argument("--budget-sec", type=int, default=DEFAULT_BUDGET_SEC,
+                    help=f"本次检索的墙钟预算秒数（默认 {DEFAULT_BUDGET_SEC}）。到点停止翻页、"
+                         "把已取回的写出来并报告截断 —— 宁可少而有产物，不要超时零产物。0=不限")
     ap.add_argument("--out", default=None,
                     help="直接指定证据表 CSV 的文件名（.md 用同一 stem）；与 --tag 二选一")
     args = ap.parse_args()
     args.outdir = str(_resolve_out_dir(args.outdir))
     os.makedirs(args.outdir, exist_ok=True)
+    designs = [d.strip().lower() for d in (args.design or "").split(",") if d.strip()]
+    lm_names = [n.strip() for n in (args.landmark or "").split(",") if n.strip()]
+    global _HARD_END
+    if args.budget_sec and args.budget_sec > 0:
+        _HARD_END = time.monotonic() + args.budget_sec
 
     # 默认：多个概念用 AND 合成一条聚焦检索（取交集）——否则各自并集会掺入大量只命中单个
     # 概念的离题文献（实测 24 篇里 12 篇是纯 CKD 噪声）。要旧的并集行为显式加 --union。
@@ -389,17 +603,57 @@ def main():
         run_queries = args.queries
 
     seen, rows = set(), []
+    batches = []
+    base = run_queries[0] if len(run_queries) == 1 else " AND ".join(f"({q})" for q in run_queries)
+    # ★ 顺序是【奠基 → 定向 → 主检索】，不是反过来。第一版就是反过来写的，实测代价当场出现：
+    #   宽检索式（命中 27919）把预算吃到只剩零头，排在后面的试验名精确补捞取回 0 条 ——
+    #   而那两趟恰恰是【最便宜、最精确、最不能少】的（各一次查询、十几条结果，
+    #   捞的是 IMbrave150 这种"综述不引说不过去"的地基文献）。
+    #   把它们放前面，被时间预算截掉的就永远是最不精确的那一趟宽召回 —— 这个取舍才是对的。
+    lm_n, lm_failed = 0, []
+    if not args.no_landmark:
+        if _HARD_END is not None:
+            _phase(args.budget_sec * 0.25)
+        names = lm_names + [n for n in find_trial_names(args.queries) if n not in lm_names]
+        if names:
+            print(f"  奠基补捞识别到的试验名：{'、'.join(names)}")
+        lm = landmark_pass(args.queries[0], names, args.landmark_topup, 3, lm_failed)
+        lm_n = len(lm)
+        batches.append(("landmark", lm))
+    if designs:
+        if _HARD_END is not None:
+            _phase(args.budget_sec * 0.25 / max(1, len(designs)))
+        batches.append(("main", design_topup(base, designs, args.since, args.design_topup)))
+    if _HARD_END is not None:
+        _phase(max(0.0, _HARD_END - time.monotonic()))     # 剩下的全给主检索
     for q in run_queries:
         print(f"检索：{q!r}")
         try:
-            recs = one_query(q, args.limit, args.since)
+            batches.append(("main", one_query(q, args.limit, args.since)))
         except Exception as e:
             print(f"  (失败：{e})")
             continue
+    dropped_old = 0
+    for kind, recs in batches:
         for rec in recs:
             key = rec.get("doi") or rec.get("pmid") or rec.get("id")
             if not key or key in seen:
                 continue
+            # ★ 时间范围兜底过滤。检索式里已经带了 FIRST_PDATE 区间，但记录的 pubYear
+            #   与 FIRST_PDATE 并不总是一致（电子预出版、补录），实测放进来 19 篇越界文献，
+            #   而用户在首屏明确选了「近 5 年」。这里按 pubYear 再筛一道并【报告筛掉了几篇】——
+            #   年份读不出来的不筛（宁可多留，不误杀）。
+            # ★ 奠基文献【豁免】时间范围：它们本来就是被时间窗卡在外面的地基文献
+            #   （IMbrave150 是 2020 年的，用户选「近 5 年」就出局）——好不容易捞回来，
+            #   不能再被自己的兜底过滤剔掉。
+            if args.since and kind != "landmark":
+                y = rec.get("pubYear")
+                try:
+                    if y and int(y) < args.since:
+                        dropped_old += 1
+                        continue
+                except (TypeError, ValueError):
+                    pass
             seen.add(key)
             # 剥 HTML 标签（Europe PMC 摘要含 <h4>Background</h4>/<sup> 等，否则污染证据表、
             # 破坏 ground_claim 断句）。先去标签再压空白。
@@ -445,6 +699,69 @@ def main():
     from collections import Counter
     dist = Counter(r["design"] for r in rows)
     print(f"去重后 {len(rows)} 篇。研究类型分布：{dict(dist)}")
+    # ---- 对账：勾了的研究设计真的捞到了吗 ----
+    if designs:
+        want = {DESIGN_LABEL.get(d, d) for d in designs}
+        got = sum(v for k, v in dist.items() if k in want)
+        share = got / max(1, len(rows))
+        print(f"  勾选的研究设计（{'、'.join(sorted(want))}）在表里共 {got} 篇，占 {share:.0%}")
+        thin = [w for w in sorted(want) if dist.get(w, 0) < 5]
+        if thin:
+            print(f"  ⚠ 其中 {'、'.join(thin)} 不足 5 篇 —— 这个方向可能本来就没有那么多该类研究，"
+                  f"**如实告诉用户**，别把综述/其他类当成它们充数。")
+    # ★ 奠基补捞失败必须【顶到最显眼的位置】，而且要说清后果与该怎么办。
+    #   实测（三测）：那一趟因一次 SSL 握手整趟失败，脚本只在过程里闪了一行"失败"就照常
+    #   写表收工 —— 于是产出的是一份**看起来很正常、实则缺了领域基石**的证据表
+    #   （225 条里一篇 NEJM 都没有，前十几名是纳米颗粒、铁死亡这类无关泛综述）。
+    #   那一次是模型自己看表觉得不对才补跑回来的，但**不能把稿子的可信度押在模型自查上**：
+    #   它一旦没自查，就退回"凭记忆写引用"——这套改动要根除的正是这件事。
+    #   所以：既在这里报，也在 stdout 的最末尾再报一次（模型最常只读结尾几行）。
+    if lm_failed:
+        print("\n" + "!" * 66)
+        print("‼ 奠基文献补捞没跑成（" + str(len(lm_failed)) + " 趟）：" + "；".join(lm_failed))
+        print("‼ 后果：这份证据表**很可能缺少本方向的原始Ⅲ期试验与指南**（它们正是靠这一趟捞回来的），"
+              "而表面上看不出来——条数照样很多，只是前排会被高被引泛综述占满。")
+        # 两类失败的处方不一样，别混着说 —— 指错方向的诊断我们已经吃过一次亏了
+        # （refcheck 那句"正文里几乎没识别出引用标记"，真因其实是列表缺 [n] 编号）。
+        if any("查无结果" not in x for x in lm_failed):
+            print("‼ 怎么办（网络类失败）：把这一趟**重跑一遍**。脚本已自动重试 4 次仍不成，"
+                  "多半是网络在抖，隔一会儿重跑通常就好了。")
+        if any("查无结果" in x for x in lm_failed):
+            print("‼ 怎么办（试验名查无结果）：多半是**名字拼错或写法不同**"
+                  "（CheckMate 9DW / CheckMate-9DW、ORIENT-32 / ORIENT32 都试试），"
+                  "也可能这个试验的题录里根本没出现过这个代号 —— 那就改用"
+                  "「药名 + 适应证 + 期别」精确检索。")
+        print("‼ 无论哪种：**绝对不要凭记忆补写这些文献的 DOI/年卷页** —— "
+              "那是假引用最高发的场景（前两轮实测里模型都干过，其中一次自述「编造了 DOI」），"
+              "引用核查那一步会当场把你打回来。")
+        print("!" * 66 + "\n")
+    if lm_n:
+        old_n = sum(1 for r in rows if args.since and _int(r["year"]) and _int(r["year"]) < args.since)
+        print(f"  奠基文献补捞：候选 {lm_n} 条（去重后并入上表）"
+              + (f"，其中 {old_n} 篇早于你选的时间范围 —— **保留**：它们是本方向的原始Ⅲ期试验/"
+                 f"领域基石，综述不引说不过去。成文时照常引用。" if old_n else ""))
+    # ---- 时间范围 ----
+    if args.since and dropped_old:
+        print(f"  时间范围（{args.since} 年起）：另有 {dropped_old} 篇发表年份越界，已剔除。")
+    if not args.since:
+        yrs = [_int(r["year"]) for r in rows if _int(r["year"])]
+        if yrs:
+            newest = max(yrs)
+            share_new = sum(1 for y in yrs if y >= newest) / len(yrs)
+            print(f"  ⚠ 本次没给 --since（不限年限）：{newest} 年的文献占 {share_new:.0%}。"
+                  f"首屏「参考文献时间范围」选了近 N 年的话，这一趟必须带 --since，否则那个选项等于没填。")
+    # ---- 语种覆盖：这套检索源【不含】中文数据库，投中文期刊时必须当面说清 ----
+    # 实测（2026-08-21）：用户明说投中文核心期刊，106 篇里中文文献 0 篇，而系统全程没提过
+    # 一句"我不检索 CNKI/万方"。稿子送审第一条意见就会是"参考文献全是外文"。
+    cjk = sum(1 for r in rows if re.search(r"[一-鿿]", r["title"] or ""))
+    if cjk == 0:
+        print("  ※ 语种：本次 0 篇中文文献。Europe PMC / PubMed **不收录 CNKI / 万方 / 维普**，"
+              "中文期刊文献基本检索不到。若目标刊是中文核心，**必须当面告诉用户**："
+              "中文参考文献需要他自己补（或用 zotero-library 从他本机文献库取），别让他到送审时才发现。")
+    if _TIME_TRUNCATED:
+        print(f"  ⚠ 本次检索**因时间预算被截断**（{args.budget_sec}s）：拿到的是已取回的部分，不是全量。"
+              f"要么收窄检索式（加限定词/加 --since），要么加大 --budget-sec 重跑。"
+              f"**别把这份结果当成'这个方向就这么多文献'**。")
     # 不限条数之后证据表可以是几千篇（evidence.md 上兆）。**别把它整份读进上下文**——
     # 这不是"少读点省钱"，是读了也用不了：几千条摘要会把后面写综述的空间挤没。
     if len(rows) > 300:
@@ -453,6 +770,10 @@ def main():
               f"（如只看 meta-analysis + RCT、或近 5 年被引前 100），再读那一段。"
               f"检索式过宽也是原因之一，必要时收窄后重跑。")
     print(f"已写：{csv_path}\n      {md_path}")
+    if lm_failed:
+        # 结尾再吼一次：长输出里模型往往只读最后几行，而这条比"已写哪两个文件"要紧得多。
+        print(f"‼ 再提醒一次：本次**奠基文献补捞有 {len(lm_failed)} 趟失败**，"
+              f"上表很可能缺领域基石文献。重跑那一趟再成文，别凭记忆补引用。")
 
 
 if __name__ == "__main__":

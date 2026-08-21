@@ -25,6 +25,7 @@ import os
 import re
 import sys
 import time
+import unicodedata
 
 # Windows 控制台默认 GBK；强制 UTF-8，避免中文进度输出变 mojibake（agent 靠 stdout 判成败）。
 if hasattr(sys.stdout, "reconfigure"):
@@ -170,6 +171,76 @@ def _get(url, **kw):
     return r
 
 
+# JATS / HTML 行内标签。Crossref 与 Europe PMC 的 title 字段【原样带着排印标签】——
+# Wiley 系尤其常见：`…in Advanced <scp>HCC</scp>?`（scp = small caps）、`<i>BRAF</i>`、
+# `<sub>2</sub>`。norm_title 只把非字母数字压成空格，于是标签名 `scp` 作为一个真词留在
+# 归一化结果里：`… advanced scp hcc scp` vs 用户写的 `… advanced hcc` —— 相似度被拉到
+# 0.64/0.65，一条【完全真实】的引用被判 CHECK 打红闸。
+# 实测后果（2026-08-21 综述模块打包版实测）：用户被同一个假阳性拦了两次、多花约 27 分钟，
+# 最后只能【把真文献换掉】才出得了件 —— 被工具逼着降低稿件质量，比漏判更糟。
+# 也解 `&lt;scp&gt;` 这类被转义了一层的写法（有的接口回的是转义实体）。
+_MARKUP_TAG_RE = re.compile(
+    r"</?\s*(?:[a-z]+:)?(?:scp|sc|i|b|u|em|strong|italic|bold|underline|overline|monospace|roman|"
+    r"sub|sup|sub-?script|sup-?script|tt|span|p|br|break|title|xref|ext-link|"
+    r"inline-formula|alternatives|mml|math|mi|mo|mn|mrow|msub|msup|named-content|styled-content)"
+    r"\b[^>]*>", re.I)
+
+
+def strip_markup(s):
+    """把著录/记录标题里的 JATS/HTML 行内标签剥掉（内容保留）。
+
+    只剥【白名单内的排印标签】，不做通用的 `<[^>]+>` 清扫 —— 标题里真出现的
+    `a<b` / `T<0.05` 这类数学写法不该被当成标签吃掉半句话。
+    转义实体先还原一层再剥：有的接口回 `&lt;scp&gt;`。
+    """
+    t = s or ""
+    if "&lt;" in t or "&amp;" in t or "&gt;" in t:
+        import html as _html
+        t = _html.unescape(t)
+    if "<" in t:
+        t = _MARKUP_TAG_RE.sub(" ", t)
+    return re.sub(r"\s{2,}", " ", t).strip()
+
+
+_STANDALONE_LATIN = {
+    "ø": "o", "æ": "ae", "œ": "oe", "ð": "d", "þ": "th",
+    "ł": "l", "đ": "d", "ħ": "h", "ı": "i", "ŋ": "n", "ſ": "s",
+}
+
+
+def _fold_diacritics(s):
+    """把【拉丁字母上的变音符】折掉：Núñez → Nunez、Bayés-Genís → Bayes-Genis。
+
+    ★ 为什么必须折（2026-08-21 实测，是加作者校验时【新引进来】的一个假红闸）：
+      中文投稿里西班牙语/北欧/德语姓氏几乎一律写成无重音的 ASCII（`Nunez J`），
+      而 Crossref/EPMC 存的是原拼（`Núñez J`）—— 逐字比对必然判「首作者不符——疑似张冠李戴」，
+      CHECK 打红闸，一份干净稿子过不去。这与 `<scp>` 标签污染是同一类病（比对两侧的
+      排印/拼写惯例不同），处方也一样：**只折比较副本，报告里回显的原文一个字不动。**
+    ★ 为什么【不】直接 NFKD 全剥：那会把日文的浊音符也剥掉（が → か）、把韩文谚文拆开，
+      改变字义。所以逐字判断：**只有当这个字符分解后的基字是 ASCII 拉丁字母时才折**，
+      CJK / 假名 / 谚文 / 西里尔一律原样保留。
+    """
+    if not s or s.isascii():
+        return s or ""
+    out = []
+    # NFD 分解不了的那些【独立字母】要单独映：ø/æ/ð/þ/ł 不是"字母+组合符"，
+    # 而是各自独立的码位，逐字分解拿不到 ASCII 基字。北欧/冰岛/波兰姓氏全靠这张表
+    # （Løvdahl→Lovdahl、Sæther→Saether、Wałęsa→Walesa）。
+    for ch in s:
+        low = ch.lower()
+        if low in _STANDALONE_LATIN:
+            rep = _STANDALONE_LATIN[low]
+            out.append(rep.upper() if ch.isupper() else rep)
+            continue
+        d = unicodedata.normalize("NFD", ch)
+        base = d[0]
+        if "a" <= base.lower() <= "z" and len(d) > 1:
+            out.append(base)          # 拉丁基字 + 组合符 → 只留基字
+        else:
+            out.append(ch)            # 非拉丁（CJK/假名/谚文…）原样留着
+    return "".join(out)
+
+
 def _casefold_cmp(s):
     """比对用的大小写归一化。**只作用于比较副本**——报告里回显给用户的
     claimed_title / found_title 一律保持原文大小写，绝不被这里改动。
@@ -183,7 +254,10 @@ def _casefold_cmp(s):
     所有做标题比对的归一化（norm_title / _norm_for_contain）都从这里过，
     避免两条路径各自 lower 一遍、日后其中一条被改掉而另一条没跟上。
     """
-    return (s or "").casefold()
+    # 先剥排印标签、再折变音符、最后折叠大小写：所有比对路径（norm_title / _norm_for_contain /
+    # 作者比对）都从这里过，于是 `<scp>HCC</scp>` 与 `HCC`、`Núñez` 与 `Nunez`
+    # 在任何一条路径上都是同一个串。
+    return _fold_diacritics(strip_markup(s)).casefold()
 
 
 def norm_doi(s):
@@ -288,7 +362,7 @@ def _epmc_by_doi(doi):
     if not res:
         return None, None
     rec = res[0]
-    return rec.get("title", ""), {"journal": rec.get("journalTitle", ""), "year": rec.get("pubYear", ""),
+    return strip_markup(rec.get("title", "")), {"journal": rec.get("journalTitle", ""), "year": rec.get("pubYear", ""),
                                   "authors": rec.get("authorString", "")}
 
 
@@ -327,7 +401,7 @@ def _doi_org(doi):
             cont = cont[0] if cont else ""
         meta = {"journal": cont, "year": year, "authors": authors,
                 "retracted_hint": _crossref_retracted(j, title)}
-        return (title or ""), meta
+        return strip_markup(title or ""), meta
     except (requests.RequestException, ValueError):
         return None, None
 
@@ -348,7 +422,7 @@ def resolve_doi(doi):
                 "authors": ", ".join(a.get("family", "") for a in msg.get("author", [])[:3]),
                 "retracted_hint": _crossref_retracted(msg, title),
             }
-            return title, meta
+            return strip_markup(title), meta
         # Crossref 404：不轻信（它对慢索引的真 DOI 也会 404）。先 doi.org 确认号是否注册，再 EPMC。
     except requests.RequestException:
         pass  # Crossref 限速/不可达 —— 落到 doi.org / EPMC，而非误报 ERROR/FABRICATED
@@ -371,7 +445,7 @@ def resolve_pmid(pmid):
     rec = next((x for x in res if str(x.get("pmid", "")) == str(pmid)), res[0])
     meta = {"journal": rec.get("journalTitle", ""), "year": rec.get("pubYear", ""),
             "authors": rec.get("authorString", "")}
-    return rec.get("title", ""), meta
+    return strip_markup(rec.get("title", "")), meta
 
 
 def _epmc_title_query(query, probe):
@@ -383,7 +457,7 @@ def _epmc_title_query(query, probe):
     for rec in r.json().get("resultList", {}).get("result", []):
         s = title_sim(probe, rec.get("title", ""))
         if s > best[1]:
-            best = (rec.get("title", ""), s,
+            best = (strip_markup(rec.get("title", "")), s,
                     {"journal": rec.get("journalTitle", ""), "year": rec.get("pubYear", ""),
                      "doi": rec.get("doi", ""), "pmid": rec.get("pmid", ""),
                      # ★ 必须带上作者：title-only 命中后要走 _verdict_with_meta 做首作者/年份交叉核对，
@@ -886,6 +960,51 @@ def guess_year(text):
 _CITE_NO_RE = re.compile(r"^\s*[\[\(【]?(\d{1,3})[\]\)】.、]\s*")
 
 
+def guess_authors(text):
+    """从一条【完整著录】里抽出作者那一段（抽不出回空串 = 不做作者比对，无害）。
+
+    ★ 为什么必须有这个函数：`_author_year_flags` 读的是 `claimed_authors`，而在本次修复前
+      **只有 .bib 输入才带这个字段** —— .txt / 位置参数两条路（正是模块流程的默认路径，
+      literature-review 产出的就是 refs.txt）从来没设过它，于是首作者交叉核对
+      对最常见的输入形态【整个是死代码】。
+      实测后果（2026-08-21 打包版实测）：模型把首作者写成 "Kong H"（真实 Wang X）、
+      "Chen W"（真实 Li Q），标题恰好对得上，两条都以 OK 通过闸 —— 张冠李戴正是这道闸
+      最该抓的东西，却因为一个没赋值的字段静默放行。
+    ★ 判据保守：只认【第一个句段】且它得长得像作者串（`Finn RS, Qin S, et al` /
+      `Finn, Richard S and Qin, Shukui` / 中文 `张三, 李四, 等`）。认不出宁可回空串 ——
+      `_author_year_flags` 对空串是跳过比对，而抽错会直接制造"首作者不符"的假警报，
+      那比不比对糟得多（本文件里已有两次同类事故的记录）。
+    """
+    t = (text or "").strip()
+    if not t:
+        return ""
+    t = re.sub(r"^\s*[\[\(【]?\d{1,3}[\]\)】.、]\s*", "", t)      # 砍掉 "[1]" / "1." 序号
+    seg = re.split(r"(?<=[.．。])\s+", t)[0].strip()
+    seg = seg.rstrip(".．。").strip()
+    if not seg or len(seg) > 300:
+        return ""
+    core = re.sub(r"[,，;；]?\s*(et\s+al|等)\s*$", "", seg, flags=re.I).strip()
+    if not core:
+        return ""
+    parts = [x.strip() for x in re.split(r"[,，;；]|\s+and\s+", core) if x.strip()]
+    # 每一段都要像"人名"：西文 = 姓 + 首字母缩写（Finn RS / Finn, Richard S 拆开后的两半）；
+    # 中文 = 2–4 个汉字。有一段不像就整体放弃（那多半是标题被误当成了作者段）。
+    # 姓名里的字母要认【拉丁扩展区】：Núñez / Bayés-Genís / Løvdahl / Škoda 都是真实姓氏，
+    # 只认 A-Za-z 的话整条著录会被判"不像作者段"→ 返回空串 → 作者比对被静默跳过
+    # （实测 Núñez 那条就是这么漏掉的）。首字母缩写仍只认 ASCII 大写。
+    L = "A-Za-zÀ-ÖØ-öø-ɏ"
+    def _nameish(x):
+        return bool(re.fullmatch(r"[%s][%s'\-]*(?:\s+[%s'\-]+){0,2}\s*[A-Z]{0,3}\.?" % (L, L, L), x)
+                    or re.fullmatch(r"[一-鿿]{2,4}", x))
+    if not parts or not all(_nameish(x) for x in parts):
+        return ""
+    # 单段且不带 et al/等 的，大概率是把标题首句当成了作者 —— 只在它带缩写时才认
+    if len(parts) == 1 and not re.search(r"(et\s+al|等)", seg, re.I) \
+            and not re.search(r"\s[A-Z]{1,3}\.?$", parts[0]):
+        return ""
+    return seg
+
+
 def extract(text):
     """从一行文字里抽 DOI/PMID/标题。"""
     doi = DOI_RE.search(text)
@@ -899,6 +1018,9 @@ def extract(text):
     _no = _CITE_NO_RE.match(text or "")
     return {"raw": text, "claimed_title": claimed,
             "claimed_year": guess_year(text),
+            # 首作者交叉核对要用它。此前只有 .bib 分支设了这个字段 → 纯文本输入的作者比对
+            # 是死代码（见 guess_authors 头注里的实测事故）。
+            "claimed_authors": guess_authors(text),
             "cite_no": _no.group(1) if _no else "",
             "doi": doi.group(0) if doi else None,
             "pmid": pmid.group(1) if pmid else None}
@@ -1160,6 +1282,72 @@ def check_input_shape(entries, raw_lines):
         % (len(raw_lines), good, ratio * 100))
 
 
+def _autonumber_by_body(results, paras):
+    """参考文献列表没有 `[n]` 编号、而正文明明是 `[n]` 体系时，按【列表顺序】补上编号。
+
+    ★ 为什么值得自动做：Vancouver 体系下参考文献表的顺序【就是】正文首次引用的顺序，
+      这是体裁定义的一部分，不是猜测。而"列表里没写方括号号"是 AI 产出的常态
+      （literature-review 出的 refs.txt 就是裸著录）。不补的话，「正文引用位置」整列作废，
+      未被引用 / 悬空编号两类硬伤一个都查不出来 —— 闸少了一半功能，用户还收到一句
+      指错方向的诊断（见 cite_weak 那段）。实测里模型是手工生成了一份 refs_numbered.txt
+      才让这列恢复正常，那本该是脚本自己的事。
+    ★ 守得很紧，条件不满足就【原样不动】：
+      · 已经有任何一条抽到了 cite_no → 不碰（用户自己写了号，以他的为准）；
+      · 正文里根本没有方括号/上标编号 → 不碰（作者-年份体系）；
+      · 正文出现的最大编号 > 条目数 → 不碰（对不上，硬补只会造出一批假的"未被引用"）。
+    返回 True 表示补过号（报告里要如实说明这是按列表顺序推的）。
+    """
+    if not results or not paras:
+        return False
+    if any(str(r.get("cite_no") or "").strip() for r in results):
+        return False
+    nums = set()
+    for p in paras:
+        nums |= parse_cite_marks(p["text"])
+    if not nums or max(nums) > len(results):
+        return False
+    for r in results:
+        seq = r.get("seq")
+        if seq:
+            r["cite_no"] = str(seq)
+    return True
+
+
+class _SkipGate(Exception):
+    """内部信号：本次运行不该写质量闸裁定。"""
+
+
+def _run_scope(args):
+    """这一次运行是【对本稿的正式核查】还是【旁路核查】？
+
+    ★ 为什么必须区分（2026-08-21 打包版实测抓到的 fail-open）：闸的判定读的是
+      `.gate/reference-check.json` + `reference_check.md`，而这两样此前是**任何一次运行**
+      都无条件覆盖的。于是模型顺手验几篇【候选替换文献】——
+      `verify_refs.py --input .scratch/candidate_refs.txt`、或直接把一个标题串当位置参数传
+      —— 就把一份红报告冲成绿的，实测两次假绿（13:19、13:35），闸随之转绿。
+      两次都碰巧在几分钟后被真核查打回红，**但只要模型在假绿窗口内调 render，
+      就是"闸其实是红的却顺利出件"**，是这道闸最不该有的失效方向。
+    判据（保守，宁可判成 manuscript）：
+      · 位置参数直接给 DOI/标题 → 旁路（正式核查一定是喂一份列表文件）；
+      · --input 落在隐藏目录/临时目录（.scratch、.tmp、tmp、temp）→ 旁路；
+      · 其余一律 manuscript，`--scope` 可两个方向强制覆盖。
+    注意【不能】用"给没给 --manuscript"当判据：只有参考文献列表、没有正文的正式核查
+    是合法用法（SKILL.md 明写支持），那样会让这类会话的闸永远绿不了。
+    """
+    if args.scope != "auto":
+        return args.scope
+    if args.ids and not args.input:
+        return "adhoc"
+    inp = (args.input or "").replace("\\", "/")
+    for part in inp.split("/")[:-1]:
+        q = part.strip().lower()
+        if q.startswith(".") and q not in ("", ".", ".."):
+            return "adhoc"
+        if q in ("tmp", "temp", "scratch"):
+            return "adhoc"
+    return "manuscript"
+
+
 def main():
     ap = argparse.ArgumentParser(description="文献真实性核查")
     ap.add_argument("ids", nargs="*", help="直接给 DOI/PMID/标题（可多个）")
@@ -1172,8 +1360,22 @@ def main():
                          "并标出【正文从没引过】的文献与【正文引了但表里没有】的悬空编号")
     ap.add_argument("--no-retraction", action="store_true",
                     help="跳过撤稿检测（离线/赶时间；默认开启）")
+    ap.add_argument("--scope", choices=["auto", "manuscript", "adhoc"], default="auto",
+                    help="manuscript=本稿的正式核查（写 reference_check.md 与质量闸裁定）；"
+                         "adhoc=旁路核查（验几篇候选文献，另存 adhoc_refcheck.md、不碰闸）；"
+                         "auto=按输入自动判（默认）")
     args = ap.parse_args()
     args.outdir = str(_resolve_out_dir(args.outdir))
+    scope = _run_scope(args)
+    # 报告文件名随 scope 走。旁路核查【绝不】占用 reference_check.* 这两个名字 ——
+    # 它们是质量闸认的文件（web/workflows.mjs 的 emits 契约 + wf-state.mjs 的措辞兜底）。
+    rep_md, rep_csv = ("reference_check.md", "reference_check.csv") if scope == "manuscript" \
+        else ("adhoc_refcheck.md", "adhoc_refcheck.csv")
+    if scope == "adhoc":
+        print("※ 本次是【旁路核查】（验候选文献用，不是对本稿参考文献表的正式核查）："
+              f"报告写到 {rep_md}，**不写质量闸裁定、不覆盖 reference_check.md**。\n"
+              "  要把它当作本稿的正式核查，请喂完整的参考文献列表并加 --manuscript 稿件.md"
+              "（或显式 --scope manuscript）。")
 
     global RETRACTION_CHECK
     RETRACTION_CHECK = not args.no_retraction
@@ -1218,17 +1420,26 @@ def main():
 
     # 正文引用定位（只在给了 --manuscript 时做）
     uncited, dangling, cite_weak, paras = [], [], False, []
+    auto_no = False
     if args.manuscript:
         paras = load_manuscript(args.manuscript)
+        auto_no = _autonumber_by_body(results, paras)
         dangling, coverage, _has_no = locate_in_manuscript(results, paras)
         cite_weak = coverage < CITE_DETECT_MIN
         print(f"正文 {len(paras)} 段（已排除参考文献节），"
               f"{sum(1 for r in results if r.get('cited_in'))}/{len(results)} 条在正文中定位到引用位置")
         if cite_weak:
-            # ★ 命中率过低 = 大概率是标记没识别出来（EndNote 域代码 / 上标图片 / 非常规写法），
-            #   不是"真的都没被引用"。此时只保留已定位的那些位置，不下未引用判定、不计入闸。
-            print("!! 正文里几乎没识别出引用标记（域代码/上标图片/非常规格式常见）——"
-                  "「正文引用位置」一列仅供参考，本次【不】判定谁未被引用。")
+            # ★ 命中率过低 = 大概率是"对不上号"，不是"真的都没被引用"。此时只保留已定位的
+            #   那些位置，不下未引用判定、不计入闸。
+            # ★★ 提示文案必须把【最常见的真因排在第一位】：参考文献列表里没有 [n] 编号。
+            #   实测（2026-08-21 打包版）：正文里 `[1] [8-9]` 一个不少，refs.txt 却是没编号的
+            #   裸著录，脚本对不上号 → 报告写"正文里几乎没识别出引用标记"。用户/模型照这句话
+            #   去查正文，查了个空，最后是模型自己读脚本源码才定位到真因。
+            #   一句指错方向的诊断，比不给诊断更贵。
+            print("!! 「正文引用位置」这一列本次不可信 —— 最常见的原因是"
+                  "【参考文献列表里没有 `[n]` 编号】（每行是裸著录，脚本无从把正文的 [3] 对上第几条）；"
+                  "其次才是正文侧的标记没识别出来（EndNote 域代码 / 上标图片 / 非常规写法）。"
+                  "本次【不】判定谁未被引用。")
             dangling = []
         else:
             for r in results:
@@ -1239,7 +1450,7 @@ def main():
     # CSV
     cols = ["verdict", "sim", "cite_no", "dup_of", "cited_in",
             "claimed_title", "found_title", "id", "note", "raw"]
-    with open(os.path.join(args.outdir, "reference_check.csv"), "w",
+    with open(os.path.join(args.outdir, rep_csv), "w",
               encoding="utf-8", newline="") as f:
         w = csv.DictWriter(f, fieldnames=cols, extrasaction="ignore")
         w.writeheader()
@@ -1252,7 +1463,7 @@ def main():
     from collections import Counter
     dist = Counter(r["verdict"] for r in results)
     unver = dist.get("UNVERIFIED", 0)
-    with open(os.path.join(args.outdir, "reference_check.md"), "w", encoding="utf-8") as f:
+    with open(os.path.join(args.outdir, rep_md), "w", encoding="utf-8") as f:
         f.write(f"# 文献真实性核查报告（{len(results)} 条）\n\n")
         f.write("统计：" + "，".join(f"{k} {v}" for k, v in dist.items()) + "\n\n")
         if unver:
@@ -1297,11 +1508,14 @@ def main():
             f.write("\n")
         if args.manuscript and cite_weak:
             f.write("## 正文引用位置：本次不可信\n\n"
-                    "已读入正文，但几乎没识别出引用标记（常见原因：EndNote/Zotero 域代码尚未去域、"
-                    "上标编号是图片、作者-年份写法非常规）。因此**没有对任何一条下"
-                    "「未被正文引用」的判定**——那样只会给出一张全错的表。\n"
-                    "要用这一列，请把正文另存为已去域的纯文本（.md/.txt），或确认正文里的编号是"
-                    "`[3]`／上标数字这类可见标记。\n\n")
+                    "已读入正文，但没能把正文里的引用标记与参考文献表对上号。"
+                    "因此**没有对任何一条下「未被正文引用」的判定**——那样只会给出一张全错的表。\n\n"
+                    "按可能性从高到低排查：\n"
+                    "1. **参考文献列表里没有 `[n]` 编号**（每行是裸著录）——"
+                    "这是最常见的一种，正文里的 `[3]` 无从对应到第几条。"
+                    "把列表改成 `[1] 著录…` 的形式再重跑即可（本技能会自动认）。\n"
+                    "2. 正文侧的标记没识别出来：EndNote/Zotero 域代码尚未去域、上标编号是图片、"
+                    "作者-年份写法非常规 —— 把正文另存为已去域的 .md/.txt 再跑。\n\n")
         if uncited:
             f.write(f"## ⚠️ 未被正文引用（{len(uncited)} 条）\n\n")
             f.write("下列文献**在正文里找不到任何引用位置**。参考文献表是正文引用的映射，"
@@ -1323,6 +1537,10 @@ def main():
             for n, where in dangling:
                 f.write(f"- `[{n}]` — 出现在 {where}\n")
             f.write("\n")
+        if auto_no:
+            f.write("> 说明：参考文献列表里没有 `[n]` 编号，本次**按列表顺序**补成 `[1]…[N]`"
+                    "（Vancouver 体系下列表顺序即正文首次引用顺序），「正文引用位置」一列据此计算。"
+                    "若你的列表不是按引用顺序排的，请自行加上真实编号后重跑。\n\n")
         if dup_groups or dup_suspects or uncited or dangling or (args.manuscript and cite_weak):
             f.write("## 逐条结论\n\n")
         for r in results:
@@ -1354,6 +1572,8 @@ def main():
     # fail 的口径与上面 stdout 的警告完全一致：可疑/存疑（含重复编号）、只验存在性(UNVERIFIED)、
     # 查失败(ERROR) 任一非零都不许当通过。写不进去就算了（点目录建不了等），网关自动退回措辞判定。
     try:
+        if scope != "manuscript":
+            raise _SkipGate                      # 旁路核查不写裁定（见 _run_scope 头注）
         gate_dir = os.path.join(args.outdir, ".gate")
         os.makedirs(gate_dir, exist_ok=True)
         err_n = dist.get("ERROR", 0)
@@ -1366,15 +1586,16 @@ def main():
                 "unverified": unver,
                 "uncited_in_body": len(uncited),
                 "dangling_cite_nos": [n for n, _ in dangling],
+                "scope": scope,
                 "body_scanned": bool(args.manuscript),
                 "cite_detection_weak": bool(cite_weak),
                 "note": "由 verify_refs.py 生成的机器裁定；signal 口径与报告统计行一致",
             }, gf, ensure_ascii=False, indent=1)
-    except OSError:
+    except (OSError, _SkipGate):
         pass
     print("-" * 50)
     print(f"结果：{dict(dist)}")
-    print(f"可疑/存疑 {bad} 条。报告见 {args.outdir}/reference_check.md / .csv")
+    print(f"可疑/存疑 {bad} 条。报告见 {args.outdir}/{rep_md} / {rep_csv}")
     if dup_groups:
         print(f"!! 发现 {len(dup_groups)} 组【重复引用】（同一篇文献占了 {dup_extra + len(dup_groups)} 个编号）："
               + "；".join("=".join(cite_label(x) for x in g) for g in dup_groups[:5])

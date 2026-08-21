@@ -707,7 +707,9 @@ export const WORKFLOWS = {
           { id: "protectRefs", label: "保持引用处的文字原样不动", type: "bool", default: true,
             help: "默认保持。关掉的话，润色后会自动把引用重新核一遍兜底。" },
         ],
-        emits: ["manuscript_humanized.md", "*_humanized.md"], render: "diff" },
+        emits: ["manuscript_humanized.md", "*_humanized.md"], render: "diff",
+        // 与 review 模块同款：markdown 稿必须另存 _humanized 副本，就地改原稿会让这一步"做了不亮"
+        hint: "润色稿必须另存「原名_humanized.md」（如 manuscript_humanized.md），不要就地改原稿" },
       { id: "review", name: "投稿前自审", skill: "peer-review", gate: true,
         deps: ["write", "humanize"],
         form: [{ id: "roles", label: "审稿视角", type: "multi",
@@ -749,7 +751,8 @@ export const WORKFLOWS = {
     //   填完一整屏才发现没有 PRISMA / 双人筛选 / 偏倚风险，那时已经白填了。
     notice: "本模块做的是**叙述性综述**（传统文献综述）。不做双人独立筛选、PRISMA 流程图、偏倚风险评估与 Meta 合并 —— 要那些请回工作台选「自由对话」，在那里说明你要做系统综述 / Meta 分析。",
     // ⚠️ 这一行会显示在表单底部：系统综述不属于任何模块，必须给用户指路，别成哑失败。
-    footnote: "需要双人独立筛选 / PRISMA 流程图 / 偏倚风险 RoB / GRADE 这类方法学强度的**系统综述或 Meta 分析**，请到「自由对话」模块 —— 本模块做的是叙述性综述。",
+    footnote: "需要双人独立筛选 / PRISMA 流程图 / 偏倚风险 RoB / GRADE 这类方法学强度的**系统综述或 Meta 分析**，请到「自由对话」模块 —— 本模块做的是叙述性综述。\n"
+      + "检索源为 Europe PMC / PubMed / Crossref，**不含 CNKI / 万方 / 维普**：中文期刊文献基本检索不到。投中文核心期刊时，中文参考文献需要你自己补充（或让我从你本机的 Zotero 文献库里取）。",
     intake: [
       { id: "topic", label: "综述主题", type: "textarea", required: true,
         placeholder: "例：PD-1 抑制剂在肝细胞癌一线治疗中的进展与争议" },
@@ -778,9 +781,25 @@ export const WORKFLOWS = {
     ],
     steps: [
       { id: "search", name: "文献检索", skill: "search-lit",
+        // ★ literature-review 也算这一步：本模块的检索实际跑的是
+        //   `literature-review/search.py`，模型加载的技能名就叫 literature-review。
+        //   不写这条别名，「正在做哪一步」的推断会把检索期算成后面那格「综述成文」——
+        //   2026-08-21 复测实测：开跑头 20 分钟条子一直指着"综述成文"，而实际在检索。
+        //   （多格共用一个技能名由 wf-state 的 stepForSkill 按"最早未完成"消歧。）
+        // ★ 用 liveAlias 而不是 skillAlias：skillAlias 是【正式绑定】，同时喂着"按技能补记
+        //   完成"（wfAttribute）与"历史消息按技能分组"（stepOfParts）——把 literature-review
+        //   正式绑到检索步，会让"跑了 literature-review 就算检索做完了"这类推断跟着变，
+        //   而那两处的语义本来是对的（成文才是 literature-review 的正主）。
+        //   liveAlias 只被"现在正在做哪一步"的实时推断读，其余一概不看。
+        liveAlias: ["literature-review"],
         deps: [],
         emits: ["evidence_table.csv", "evidence.md", "refs.bib"], render: "evidence",
-        hint: "每条引用都经 API 核实，不凭记忆造引用" },
+        // ★ 这两句都是实测欠账（2026-08-21）：① 用户勾的「研究设计」「时间范围」没被带进检索式，
+        //   106 篇里 RCT 只有 8 篇、19 篇越界，用户会认为这两个表单项是摆设；
+        //   ② 检索源不含中文数据库，而用户明说投中文核心，全程没人告诉他这件事。
+        hint: "每条引用都经 API 核实，不凭记忆造引用；首屏勾的研究设计与时间范围必须落进检索式"
+            + "（literature-review/search.py 的 --design / --since）；本检索源不含 CNKI/万方，"
+            + "投中文期刊时要当面告诉用户中文文献需自行补充" },
       // 【2026-08-08 删了「纳入 / 排除筛选」这一步】它做的是系统综述那套双人筛选的形，
       //   而本模块明写了不做系统综述（见上面的 notice/footnote）。实际跑起来的样子是：
       //   agent 一路把综述写完了，这一步的表单才在回复末尾弹出来让用户勾"排除哪几篇"——
@@ -798,7 +817,11 @@ export const WORKFLOWS = {
         emits: ["refcheck_report.md", "reference_check*.md"], render: "refcheck", onFail: "write" },
       { id: "humanize", name: "语言润色", skill: "humanize-academic", optional: true,
         deps: ["write"],
-        emits: ["*_humanized.md"], render: "diff" },
+        // ★ hint 会随任务卡发给模型。写死这句是因为实测（2026-08-21 综述模块打包版）模型
+        //   把 review.md【就地】改了、没留 `_humanized` 副本 —— 这一步于是"做了不亮"，
+        //   用户以为跳过了润色，会要求重跑一遍白花钱。契约与技能文档本来就写的是另存。
+        emits: ["*_humanized.md"], render: "diff",
+        hint: "润色稿必须另存「原名_humanized.md」（如 review_humanized.md），不要就地改原稿" },
       // 同上：fmt 默认就是 docx，走 render-docx 的次数比 pdf 还多，两个都要认（见 paper 那格的说明）
       { id: "render", name: "排版出件", skill: "render-pdf-doc", skillAlias: ["render-docx"],
         deps: ["write", "humanize"],

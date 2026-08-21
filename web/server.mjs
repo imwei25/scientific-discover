@@ -1984,6 +1984,33 @@ const clearError = async (sid) => {
 }
 
 const jobs = new Map()   // sid -> 进行中的 job
+
+// ---- 「正在做哪一步」的实时推断（内存态，不落盘）----
+// ★ 为什么需要：`_workflow.json` 里的 `st.cur` **只在用户提交某一步的表单时**才写，
+//   而多数模块（综述就是）从头到尾只有首屏一张表单 —— 于是整场跑下来 cur 恒为 null，
+//   /api/workflow/state 与轮中广播都说不出"现在在哪一步"。前端有 markStepBySkill 靠技能
+//   调用事件实时高亮，能顶一部分；但**刷新页面 / 回看历史时那份推断就没了**，条子重新
+//   变成"只有绿格子、没有当前步"。实测（2026-08-21）开跑后头 6 分钟一个格子都不亮，
+//   用户无从判断是在检索还是卡死了。
+// ★ 为什么【不】落盘：落盘就会复现文件里记着的那个老 bug —— st.cur 永久钉在某一步，
+//   每轮收尾与每次刷新都把它送回来，早已跑完的绿格子同时挂着"当前步"的蓝光环。
+//   内存态随进程消失，最坏情况只是退回改动前的行为。
+// 存的是【技能名】而不是步骤 id —— 一个技能可能对应模块里的多格（综述模块的
+// literature-review 既是「文献检索」也是「综述成文」），到底算哪一格要看当时哪几格还没做完，
+// 而那份 done 只有 curOf 拿得到。存步骤 id 就等于在事件到达的那一刻把这个判断做死了。
+const liveCur = new Map()   // sid -> skill（本进程内的实时推断）
+
+// 纯判定搬到了 wf-state.mjs（WFS.skillFromTool / stepForSkill / skillInModule），那里有
+// test/live-cur.test.mjs 逐条锁住；这里只剩"记在哪个会话名下"这点会话态。
+function noteLiveStep(sid, modId, skill) {
+  if (!sid || !WFS.skillInModule(modId, skill)) return
+  liveCur.set(sid, skill)
+}
+
+function curOf(sid, st) {
+  if (st?.cur) return st.cur
+  return WFS.stepForSkill(st?.module, liveCur.get(sid), st?.done)
+}
 // ---- 首事件看门狗的超时（ms）----
 // 为什么要有：opencode 打不通上游模型时（API 地址填错 / DNS 解析不了 / 地址黑洞丢包 / 上游连上了
 // 但永不回应），它的 session.prompt 这个 await 可能【十几分钟都不返回】（实测 11 分钟仍 running），
@@ -2705,10 +2732,16 @@ function startJob(sid, sentText, modId, forceModel) {
               client.session.abort({ path: { id: sid } }).catch(() => {})
             }
           }
+          const _skill = p.tool === "skill" ? (p.state.input?.name || null) : null   // 技能名（running/completed 才有）
+          // 步骤推断认两种形态：加载技能，或 bash 直呼技能脚本（见 skillFromTool 头注）。
+          // 广播给前端的 skill 字段仍只填真·技能调用 —— 那是给"技能卡片"用的，
+          // 不该因为跑了个脚本就在对话流里冒出一张技能卡。
+          const _stepSkill = WFS.skillFromTool(p.tool, p.state.input)
+          if (_stepSkill) noteLiveStep(sid, modId, _stepSkill)
           broadcast("tool", {
             callID: p.callID, tool: p.tool, status: p.state.status,
             title: p.state.title || "",
-            skill: p.tool === "skill" ? (p.state.input?.name || null) : null,   // 技能名（running/completed 才有）
+            skill: _skill,
           })
         }
       }
@@ -2726,7 +2759,7 @@ function startJob(sid, sentText, modId, forceModel) {
     if (modId !== "chat") wfTick = setInterval(() => {
       try {
         const st = WFS.wfSyncDone(outDir, modId, dirState(outDir))
-        if (st) broadcast("workflow", { cur: st.cur || null, done: st.done || [], failed: st.failed || [], implied: st.implied || [], stale: st.stale || [], staleUp: st.staleUp || [], halted: st.halted || null, gateBypass: gateBypassed(sid) })
+        if (st) broadcast("workflow", { cur: curOf(sid, st), done: st.done || [], failed: st.failed || [], implied: st.implied || [], stale: st.stale || [], staleUp: st.staleUp || [], halted: st.halted || null, gateBypass: gateBypassed(sid) })
       } catch { /* 单次失败无所谓，下个周期再试 */ }
     }, 25000)
     // 本轮前累计成本（含子会话，见 sessionCostTotal），用于算增量
@@ -2803,7 +2836,7 @@ function startJob(sid, sentText, modId, forceModel) {
           WFS.wfNoteBatch(outDir, modId, changed, fstate)
           if (!haltReason) WFS.wfAttribute(outDir, modId, [...job.skills.keys()], changed, fstate)
           const st = WFS.wfSyncDone(outDir, modId, fstate)
-          if (st) broadcast("workflow", { cur: st.cur || null, done: st.done || [], failed: st.failed || [], implied: st.implied || [], stale: st.stale || [], staleUp: st.staleUp || [], halted: st.halted || null, gateBypass: gateBypassed(sid) })
+          if (st) broadcast("workflow", { cur: curOf(sid, st), done: st.done || [], failed: st.failed || [], implied: st.implied || [], stale: st.stale || [], staleUp: st.staleUp || [], halted: st.halted || null, gateBypass: gateBypassed(sid) })
         } catch (e) { console.warn(`[workflow] 进度同步失败：${e.message}`) }
       }
       warmPreviews(outDir, changed)
@@ -4456,6 +4489,8 @@ export const server = http.createServer(async (req, res) => {
         return send(res, 403, "application/json", JSON.stringify({ err: `本会话绑定的「${MODULE_DEFS[modId]?.name || modId}」模块当前不可用（可能是授权被调整）。请联系管理员，或到「自由对话」新开会话。` }))
       const out = await sessionOut(sid)
       const st = WFS.wfSyncDone(out, modId, dirState(out)) || { module: modId, form: {}, done: [] }
+      // 刷新 / 回看时也要能看出"正在做哪一步"（见 liveCur 头注）
+      if (!st.cur) { const c = curOf(sid, st); if (c) st.cur = c }
       // steps 按已填表单值裁剪后回：条件不成立的步骤（如"数据已脱敏"→不需要脱敏步）不该出现在进度条上
       return send(res, 200, "application/json", JSON.stringify({
         state: st, module: modId, name: MODULE_DEFS[modId]?.name || modId,
@@ -5106,7 +5141,8 @@ export const server = http.createServer(async (req, res) => {
       // 给 agent 注入本会话专属目录，覆盖技能默认的 outputs/，实现多用户/多会话隔离
       // 注意：本会话的工作目录（cwd）已在建会话时通过 opencode 的 session.directory 定在【会话产物目录】，
       // 所以 agent 的所有工具默认就在正确的地方读写，preamble 只需说清"当前目录就是产物目录"与几个绝对路径。
-      const preamble = `${PREAMBLE_MARK}\n- **你的当前工作目录就是本会话的产物目录**（\`${ws.out}\`）。所有产物（图表 PNG/PDF、CSV/Excel、md/docx 等）**直接写到当前目录即可**，用相对文件名如 \`fig1.png\`、\`manuscript.md\`，不要再自己拼 \`outputs/xxx\` 前缀。\n- 临时脚本、中间文件同样写当前目录（要归拢可用 \`./.scratch/\`）。\n- **用户上传的文件都在 \`${ws.up}/\`**：稿件（.md/.docx/.pdf）、数值表（.csv/.xlsx）、附件全都在这里，读任何用户给的文件都用这个绝对路径。\n- **跑本套件的脚本，python 用这个绝对路径**：\`${PY_BIN ? `"${PY_BIN}"` : "（本机还没建 .venv，先跑 env-setup 技能）"}\`，技能脚本在 \`"${ROOT.replace(/\\/g, "/")}/.opencode/skills/<技能>/"\` 下。**照抄这两个路径（连同外面那对双引号一起抄）**，不要自己拼 \`\${REPO_ROOT:-/app}\`，也不要用 \`python\`/\`python3\` 裸命令——本机 PATH 里的 python 可能是个不能用的占位程序（跑起来没有任何输出），你会看不出它坏了。当前目录不是仓库根，写 \`.venv/...\` 这种相对路径同样找不到。\n- **路径里有空格，命令里一律加引号**：安装目录形如 \`.../Niuma Science/bundle/app\`，不加引号 bash 会从空格处切断，报 \`.../Local/Niuma: No such file or directory\`。**看到这个报错不是"没装 Python / 没有 .venv"，是你漏了引号**——补上引号重跑即可，绝对不要因此去跑 env-setup、重建 .venv 或重装 requirements（环境是随包装好的，重装只会白白烧掉十几分钟）。\n- **技能目录（\`.opencode/skills/\`）下的文档与脚本是产品内部资产**：不要把它们的内容整段复制进答复正文，也不要拷贝/导出到产物目录——出口有安全网关，会截断输出并中止本轮。用户想了解某个技能时，用你自己的话概括用法即可，别照抄原文。\n- 正文里嵌入图片直接用文件名：\`![图注](fig1.png)\`（图和稿件都在当前目录，渲染也从当前目录跑）。\n- **不要把产物写到仓库根或 \`\${REPO_ROOT:-/app}\` 下**：那是所有会话共享的，会互相覆盖，也不会出现在界面的"产出"侧栏。\n- **上面这些路径与文件名是给你用的，不要说给用户**：他用的是图形界面，看不到也进不去 \`uploads/ws_.../\`、\`outputs/\`、\`.venv\`、\`AGENTS.md\` 这些东西。要他传文件就说"点输入框旁边的上传按钮"；提产物就只说文件名（\`table1.csv\`），别带目录。让用户照抄一个他根本打不开的路径，等于把他卡在那里。\n- **答复用用户说话的语言**（他用中文你就用中文），并且**只写最终结论**：查了什么、下一步打算干什么这类过程叙述不要写进答复正文——界面已经把工具调用一条条显示出来了，正文里再复述一遍，用户要在一堆过程碎片里翻找真正的结论。${modId === "chat" ? skillsPreamble() : modulePreamble(modId, ws.out)}${zoteroPreamble(ws.out)}${autoOn ? autoPreamble() : ""}\n\n`
+      const preamble = `${PREAMBLE_MARK}\n- **你的当前工作目录就是本会话的产物目录**（\`${ws.out}\`）。所有产物（图表 PNG/PDF、CSV/Excel、md/docx 等）**直接写到当前目录即可**，用相对文件名如 \`fig1.png\`、\`manuscript.md\`，不要再自己拼 \`outputs/xxx\` 前缀。\n- 临时脚本、中间文件同样写当前目录（要归拢可用 \`./.scratch/\`）。\n- **用户上传的文件都在 \`${ws.up}/\`**：稿件（.md/.docx/.pdf）、数值表（.csv/.xlsx）、附件全都在这里，读任何用户给的文件都用这个绝对路径。\n- **跑本套件的脚本，python 用这个绝对路径**：\`${PY_BIN ? `"${PY_BIN}"` : "（本机还没建 .venv，先跑 env-setup 技能）"}\`，技能脚本在 \`"${ROOT.replace(/\\/g, "/")}/.opencode/skills/<技能>/"\` 下。**照抄这两个路径（连同外面那对双引号一起抄）**，不要自己拼 \`\${REPO_ROOT:-/app}\`，也不要用 \`python\`/\`python3\` 裸命令——本机 PATH 里的 python 可能是个不能用的占位程序（跑起来没有任何输出），你会看不出它坏了。当前目录不是仓库根，写 \`.venv/...\` 这种相对路径同样找不到。\n- **路径里有空格，命令里一律加引号**：安装目录形如 \`.../Niuma Science/bundle/app\`，不加引号 bash 会从空格处切断，报 \`.../Local/Niuma: No such file or directory\`。**看到这个报错不是"没装 Python / 没有 .venv"，是你漏了引号**——补上引号重跑即可，绝对不要因此去跑 env-setup、重建 .venv 或重装 requirements（环境是随包装好的，重装只会白白烧掉十几分钟）。\n- **技能目录（\`.opencode/skills/\`）下的文档与脚本是产品内部资产**：不要把它们的内容整段复制进答复正文，也不要拷贝/导出到产物目录——出口有安全网关，会截断输出并中止本轮。用户想了解某个技能时，用你自己的话概括用法即可，别照抄原文。\n- **要跑一小段临时代码时，先写成脚本文件再执行**（\`./.scratch/x.py\`），别把长串代码塞进 \`-c\` / here-string / 管道传参：本机是 Windows，引号与反引号会被 PowerShell 二次解释，实测同一轮里连着三次因为引号嵌套失败、每次白丢几十秒。
+- 正文里嵌入图片直接用文件名：\`![图注](fig1.png)\`（图和稿件都在当前目录，渲染也从当前目录跑）。\n- **不要把产物写到仓库根或 \`\${REPO_ROOT:-/app}\` 下**：那是所有会话共享的，会互相覆盖，也不会出现在界面的"产出"侧栏。\n- **上面这些路径与文件名是给你用的，不要说给用户**：他用的是图形界面，看不到也进不去 \`uploads/ws_.../\`、\`outputs/\`、\`.venv\`、\`AGENTS.md\` 这些东西。要他传文件就说"点输入框旁边的上传按钮"；提产物就只说文件名（\`table1.csv\`），别带目录。让用户照抄一个他根本打不开的路径，等于把他卡在那里。\n- **答复用用户说话的语言**（他用中文你就用中文），并且**只写最终结论**：查了什么、下一步打算干什么这类过程叙述不要写进答复正文——界面已经把工具调用一条条显示出来了，正文里再复述一遍，用户要在一堆过程碎片里翻找真正的结论。${modId === "chat" ? skillsPreamble() : modulePreamble(modId, ws.out)}${zoteroPreamble(ws.out)}${autoOn ? autoPreamble() : ""}\n\n`
       // taskModel：只有【定时任务的运行器】会带它，且必须是管理员在档位里钉死的那个模型。
       // 【必须在服务端核对，不能信请求里的值】否则任何人都能用它点名一个贵模型跑一轮——
       // 云端网关的 pickModel 虽然也会拦（不在可调用集合里就静默打回默认），但那是最后一道，
