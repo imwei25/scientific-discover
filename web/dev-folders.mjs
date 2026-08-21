@@ -99,7 +99,28 @@ const META_FILE = path.join(DEV_DIR, "sessions-meta.json")
   fs.writeFileSync(META_FILE, JSON.stringify({ version: 1, projects, folders, sessions }, null, 2))
 }
 
+// 定时任务也要隔离 + 摆演示数据：侧栏「定时任务」分区（含行内删除按钮）才有东西可看，
+// 而且删的是这里的假任务，不会碰真检出 tasks/ 里的定义（unregister 幂等，没注册过就直接 ok）。
+const TASKS_DIR = path.join(DEV_DIR, "tasks")
+fs.mkdirSync(TASKS_DIR, { recursive: true })
+const DEMO_TASKS = [
+  { id: "tk_demo0", title: "每周一扫甲状腺新文献", prompt: "扫一遍本周新文献", enabled: true, schedule: { kind: "weekly", days: [1], time: "07:00" }, createdAt: new Date(now - 5 * DAY).toISOString() },
+  { id: "tk_demo1", title: "每天早上跑质控日报", prompt: "跑质控日报", enabled: false, schedule: { kind: "daily", time: "08:30" }, createdAt: new Date(now - 2 * DAY).toISOString() },
+]
+for (const t of DEMO_TASKS) fs.writeFileSync(path.join(TASKS_DIR, t.id + ".json"), JSON.stringify(t, null, 2))
+// 档位闸：tierTasks 只认「已登录账号的 profile.tasksMode」，没登录一律 off、界面整个不出定时任务。
+// 摆一份假登录态（refresh 随便填，云端地址是空的、不会真发请求）把档位放开到 full。
+fs.writeFileSync(path.join(DEV_DIR, "cloud-state.json"),
+  JSON.stringify({ refresh: "dev-fake", profile: { tasksMode: "full" } }, null, 2))
+
 Object.assign(process.env, {
+  SCI_TASKS_DIR: TASKS_DIR,
+  SCI_TASK_SETTINGS_PATH: path.join(TASKS_DIR, ".settings.json"),
+  SCI_TASK_SEEN_PATH: path.join(TASKS_DIR, ".news-seen.json"),
+  // 别把假任务注册进真 Windows 任务计划（启动对账会补注册），也别拉起聊天桥
+  //（第二个实例带 --force 会把用户正在用的那条桥杀掉）。
+  SCI_TASK_SYNC: "0",
+  SCI_CHAT_BRIDGE: "0",
   MANAGE_OC: "0",
   OC_URL: `http://127.0.0.1:${FAKE_OC_PORT}`,
   PORT: String(GW_PORT),
