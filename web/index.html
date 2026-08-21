@@ -2337,7 +2337,7 @@
       <div class="cb-pane" id="paneWecom">
         <div class="cb-state" id="cbwState" style="margin-bottom:8px">未配置</div>
         <details id="cbwTut" class="cb-details">
-          <summary>第 1 步 · 创建智能机器人（约 3 分钟，只需一次）</summary>
+          <summary id="cbwStep1">第 1 步 · 创建智能机器人（约 3 分钟，只需一次）</summary>
           <ol class="cb-steps">
             <li>打开<b>企业微信</b>（手机或电脑客户端都行）→ <b>工作台</b> → 找到 <b>智能机器人</b> → <b>手动创建机器人</b>。</li>
             <li><b style="color:#b45309">创建时务必选「API 模式」</b>——不要选零代码 / 工作流那类模式。只有 API 模式的机器人才有本软件要用的 <b>Bot ID + Secret</b> 长连接接入；选错了下面填什么都连不上，只能重建一个。</li>
@@ -2350,11 +2350,11 @@
           <label class="mm-field" style="flex:1"><span>Secret</span>
             <input id="cbBotSecret" class="mm-input" type="password" placeholder="存过则留空=不改" autocomplete="off" /></label>
         </div>
-        <label class="mm-field"><span>第 2 步 · 接到哪个会话（企微里的对话在这个会话里干活，文件互通）</span>
+        <label class="mm-field"><span id="cbwStep2">第 2 步 · 接到哪个会话（企微里的对话在这个会话里干活，文件互通）</span>
           <select id="cbwSess" class="mm-input mm-select"></select></label>
         <div class="mm-hint" id="cbwBoundHint"></div>
         <div class="mm-actions">
-          <button id="cbwSave" class="mm-btn primary" type="button">保存并连接</button>
+          <button id="cbwSave" class="mm-btn primary" type="button">绑定到该会话</button>
           <button id="cbwUnbind" class="mm-btn ghost" type="button" hidden>断开企微</button>
         </div>
         <details class="cb-details">
@@ -2370,7 +2370,7 @@
       <div class="cb-pane" id="paneWeixin" hidden>
         <div class="cb-state" id="cbxState" style="margin-bottom:8px">未配置</div>
         <details class="cb-details">
-          <summary>第 1 步 · 扫码绑定（腾讯官方 ilink 机器人，非第三方外挂）</summary>
+          <summary id="cbxStep1">第 1 步 · 扫码绑定（腾讯官方 ilink 机器人，非第三方外挂）</summary>
           <ol class="cb-steps">
             <li>点「扫码绑定微信」，几秒后出现二维码，用<b>手机微信</b>扫一扫确认。</li>
             <li>绑定后微信里出现机器人入口，默认只有你自己能用。</li>
@@ -2385,7 +2385,7 @@
           <img id="cbWxQr" alt="微信扫码" style="width:220px; height:220px; background:#fff; padding:8px; border-radius:8px" />
           <div class="mm-hint">用手机微信扫一扫（二维码几分钟有效，过期重点一次）</div>
         </div>
-        <label class="mm-field"><span>第 2 步 · 接到哪个会话</span>
+        <label class="mm-field"><span id="cbxStep2">第 2 步 · 接到哪个会话</span>
           <select id="cbxSess" class="mm-input mm-select"></select></label>
         <div class="mm-hint" id="cbxBoundHint"></div>
         <div class="mm-actions">
@@ -10046,6 +10046,13 @@ document.addEventListener("visibilitychange", () => { if (!document.hidden) refr
     $(prefix + "Dot").className = "cb-dot " + k
     $(prefix + "State").textContent = t
     $(prefix + "Unbind").hidden = !pd.boundSid
+    // 【步骤引导】该做哪步就加粗哪步：第 1 步没完成（凭证没就绪）粗第 1 步，
+    // 完成了就粗第 2 步；两步都完成后不再加粗，按钮改成「切换到该会话」（换绑语义）。
+    var s1 = $(prefix + "Step1"), s2 = $(prefix + "Step2")
+    if (s1) s1.style.fontWeight = !pd.configured ? "700" : ""
+    if (s2) s2.style.fontWeight = (pd.configured && !pd.boundSid) ? "700" : ""
+    var bindBtn = $(prefix === "cbw" ? "cbwSave" : "cbxBind")
+    if (bindBtn) bindBtn.textContent = (pd.configured && pd.boundSid) ? "切换到该会话" : "绑定到该会话"
     $(prefix + "BoundHint").innerHTML = pd.boundSid
       ? "当前接入：<b>" + esc(pd.boundTitle || pd.boundSid) + "</b>（手机上发的消息会<b>接着这条会话</b>继续；选别的会话点绑定即可换绑，旧会话自动脱离）"
       : ""
