@@ -27,6 +27,7 @@ Object.assign(process.env, {
   // 登录态与模型配置都落临时目录，别污染仓库里的 web/cloud-state.json、web/model-config.json
   CLOUD_STATE_PATH: process.env.CLOUD_STATE_PATH || path.join(DEV_DIR, "cloud-state.json"),
   MODEL_CFG_PATH: process.env.MODEL_CFG_PATH || path.join(DEV_DIR, "model-config.json"),
+  API_PROFILES_PATH: process.env.API_PROFILES_PATH || path.join(DEV_DIR, "api-profiles.json"),
   PORT: process.env.PORT || "3001",
 })
 console.log(`[dev] 桌面形态启动：云端=${process.env.SCI_CLOUD_URL || "(取自 cloud.json)"}  端口=${process.env.PORT}`)

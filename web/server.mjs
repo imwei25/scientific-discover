@@ -99,6 +99,40 @@ const stripBom = (s) => (s.charCodeAt(0) === 0xfeff ? s.slice(1) : s)
 const readJsonFile = (p) => JSON.parse(stripBom(fs.readFileSync(p, "utf8")))
 const loadModelCfg = () => { try { return readJsonFile(MODEL_CFG_PATH) } catch { return null } }
 const saveModelCfg = (c) => { try { fs.writeFileSync(MODEL_CFG_PATH, JSON.stringify(c, null, 2)) } catch {} }
+// ---- 直连 API 的凭证档：勾了「记住」才落盘，最多 3 套 ----
+// 【必须与 model-config.json 分开存】后者只记「当前生效的那一套」，切回云端 / reset 时会被整个删掉；
+// 用户存下来备用的另外两套不该跟着陪葬 —— 那正是这个功能要解决的事（来回切别再重输 key）。
+// 文件含明文 key，故与 model-config.json 同等对待：gitignore、打包排除、0600。
+const API_PROFILES_PATH = process.env.API_PROFILES_PATH || path.join(__dirname, "api-profiles.json")
+const MAX_API_PROFILES = 3
+const loadApiProfiles = () => {
+  try {
+    const a = readJsonFile(API_PROFILES_PATH)
+    return Array.isArray(a) ? a.filter((p) => p && p.id && p.baseURL && p.apiKey) : []
+  } catch { return [] }
+}
+const saveApiProfiles = (list) => {
+  try {
+    fs.writeFileSync(API_PROFILES_PATH, JSON.stringify(list.slice(0, MAX_API_PROFILES), null, 2), { mode: 0o600 })
+    try { fs.chmodSync(API_PROFILES_PATH, 0o600) } catch {}   // 文件已存在时 writeFileSync 的 mode 不生效，补一刀
+  } catch {}
+}
+// key 只以掩码形态出前端：这个接口在局域网上也听着，回显等于把凭证送给同网段的人
+const maskKey = (k) => { const s = String(k || ""); return s.length <= 8 ? "••••••" : s.slice(0, 4) + "••••" + s.slice(-4) }
+// 模型 ID 允许一次填多个（换行 / 逗号 / 分号 / 空格分隔）→ 去重后的数组，顺序即用户填写顺序（第一个为默认）
+const parseModelList = (v) => {
+  const arr = Array.isArray(v) ? v : String(v || "").split(/[\n,，;；\s]+/)
+  const out = []
+  for (const s of arr.map((x) => String(x || "").trim()).filter(Boolean)) if (!out.includes(s)) out.push(s)
+  return out
+}
+const hostOf = (u) => { try { return new URL(u).host } catch { return String(u || "") } }
+// 对外的凭证档摘要（绝不含 apiKey）
+const profileBrief = (p) => ({
+  id: p.id, name: p.name || hostOf(p.baseURL), baseURL: p.baseURL,
+  models: Array.isArray(p.models) && p.models.length ? p.models : (p.modelID ? [p.modelID] : []),
+  modelID: p.modelID || "", keyMask: maskKey(p.apiKey), savedAt: p.savedAt || 0,
+})
 // 给自定义/网关模型注入定价（USD / 每百万 token），否则 opencode 不知道价格 → session.cost 恒为 0 →
 // 每日成本额度与中途封顶全部失效。价格由 OC_COST_* 环境变量给（部署时按环境变量配），缺省按 DeepSeek 常见价。
 const _modelCost = () => {
@@ -114,14 +148,21 @@ const _modelCost = () => {
 // 两个字段都发：不同厂商吃不同的那一个，多发一个无害（未识别的参数被忽略）。
 // 【默认不开】思考对方法学推理、统计判断是有价值的；关掉是拿质量换配额，要由使用者显式决定。
 const THINKING_OFF = String(process.env.OC_THINKING || "").toLowerCase() === "off"
-const customProviderCfg = ({ baseURL, apiKey, modelID, cost }) => ({
-  npm: "@ai-sdk/openai-compatible", name: "Custom (OpenAI 兼容)",
-  options: { baseURL, apiKey },
-  models: { [modelID]: {
-    name: modelID, tool_call: true, attachment: true, cost: cost || _modelCost(),   // 开工具调用 + 注入定价（用于算成本额度）
+// models 传了就把【这套凭证下的所有模型】一并注册（modelID 只表示当前选中的那个）。
+// 这不只是好看：opencode 只在启动时读 opencode.json，provider 里声明了哪些模型，运行中就只能用哪些。
+// 全都声明进去之后，换模型只是改本进程的 MODEL.modelID —— 不必重启 opencode，用户正在跑的
+// 半小时的轮不会被拔掉（见 /api/model/pick 里的 needRestart 判断）。
+const customProviderCfg = ({ baseURL, apiKey, modelID, models, cost }) => {
+  const ids = (Array.isArray(models) && models.length ? models : [modelID]).filter(Boolean)
+  const map = {}
+  for (const id of ids) map[id] = {
+    name: id, tool_call: true, attachment: true, cost: cost || _modelCost(),   // 开工具调用 + 注入定价（用于算成本额度）
     ...(THINKING_OFF ? { options: { thinking: { type: "disabled" }, reasoning_effort: "none" } } : {}),
-  } },
-})
+  }
+  return { npm: "@ai-sdk/openai-compatible", name: "Custom (OpenAI 兼容)", options: { baseURL, apiKey }, models: map }
+}
+// 这套配置写进 opencode.json 之后长什么样（用来和 ocLiveProvider 比，判断"这次改动到底用不用重启"）
+const providerJsonFor = (cfg) => JSON.stringify(customProviderCfg(cfg))
 // opencode 的 `question` 工具会弹交互式提问卡片；本部署（web 网关）没有应答它的 UI，
 // 模型一旦调用就整轮 error/卡死（实测卡在“确认方向选择”那步）。各技能与 AGENTS.md §六 已要求
 // “一律用编号文本让用户回数字选、别弹卡片”，但模型会无视提示词照调——故在配置层全局禁用，从根上杜绝。
@@ -382,6 +423,46 @@ function useGatewayRoute() {
   // picked 要一起存下去（跨重启保住用户选的模型）；cost 是算出来的，不入盘免得放着过期数据
   saveModelCfg({ route: p.route, baseURL: p.baseURL, apiKey: p.apiKey, modelID: p.modelID, picked: p.picked || "" })
   MODEL = { providerID: CUSTOM_PROVIDER_ID, modelID: p.modelID }
+}
+
+/**
+ * 切到用户自设的直连 API（POST /api/model 与「用这套凭证」共用同一段，免得两条路行为不一致）。
+ * cfg = { baseURL, apiKey, modelID, models }。返回是否真的重启了 opencode。
+ */
+async function applyCustomRoute(cfg) {
+  const needRestart = providerJsonFor(cfg) !== ocLiveProvider
+  writeOcProvider(cfg)
+  saveModelCfg({ route: "custom", baseURL: cfg.baseURL, apiKey: cfg.apiKey, modelID: cfg.modelID, models: cfg.models || [cfg.modelID], picked: cfg.modelID })
+  MODEL = { providerID: CUSTOM_PROVIDER_ID, modelID: cfg.modelID }
+  if (!needRestart) return false                     // 同一套凭证 + 同一批模型：只是换了选中项，不必重启
+  let restarted = false
+  try { restarted = await restartOpencode() } catch {}
+  if (!restarted) { try { await client.config.update({ body: { provider: { [CUSTOM_PROVIDER_ID]: customProviderCfg(cfg) } } }) } catch {} }
+  return restarted
+}
+/**
+ * 记住一套凭证（最多 MAX_API_PROFILES 套）。同一个 baseURL 视为同一套 → 覆盖（含改 key、加模型），
+ * 不然用户换个 key 就白占一格，三格很快就满。满了则挤掉最久没用过的那套，并把它的名字回给前端说清楚。
+ */
+function rememberApiProfile({ baseURL, apiKey, modelID, models, name }) {
+  const list = loadApiProfiles()
+  const i = list.findIndex((p) => sameEndpoint(p.baseURL, baseURL))
+  const entry = {
+    id: i >= 0 ? list[i].id : crypto.randomBytes(6).toString("hex"),
+    name: (name || (i >= 0 ? list[i].name : "") || hostOf(baseURL)).slice(0, 40),
+    baseURL, apiKey, modelID, models: models && models.length ? models : [modelID], savedAt: Date.now(),
+  }
+  let dropped = ""
+  if (i >= 0) list[i] = entry
+  else {
+    list.push(entry)
+    if (list.length > MAX_API_PROFILES) {
+      list.sort((a, b) => (a.savedAt || 0) - (b.savedAt || 0))
+      dropped = list.shift()?.name || ""
+    }
+  }
+  saveApiProfiles(list)
+  return { saved: profileBrief(entry), dropped }
 }
 
 // 启动时恢复路由：用户自设 > 平台（云端账号 / 静态网关 key）。
@@ -5696,6 +5777,10 @@ export const server = http.createServer(async (req, res) => {
         providerID: MODEL.providerID, modelID: MODEL.modelID,
         isCustom: MODEL.providerID === CUSTOM_PROVIDER_ID,
         baseURL: c?.baseURL || "", hasKey: !!(c && c.apiKey),
+        // 当前这套自定义配置里可选的模型（用户可一次填多个模型 ID，顶部 pill 直接切）
+        customModels: currentRoute() === "custom" ? (Array.isArray(c?.models) && c.models.length ? c.models : (c?.modelID ? [c.modelID] : [])) : [],
+        // 本机存下来的凭证档（只出掩码，绝不回显 key）
+        profiles: loadApiProfiles().map(profileBrief), maxProfiles: MAX_API_PROFILES,
         default: `${PID}/${MID}`, managed: OC_MANAGED,
         gateway: platformAvailable(),   // 有没有平台可走（云端账号 或 静态网关 key）
         route: currentRoute(),          // cloud | gateway | custom | none —— 前端据此显示"当前走哪条路"与切回入口
@@ -5755,21 +5840,38 @@ export const server = http.createServer(async (req, res) => {
     // 切换后台模型：注册自定义 provider → 重启 opencode → 更新当前模型
     if (req.method === "POST" && u.pathname === "/api/model") {
       const chunks = []; for await (const c of req) chunks.push(c)
-      let baseURL = "", apiKey = "", modelID = "", force = false
-      try { const b = JSON.parse(Buffer.concat(chunks).toString() || "{}"); baseURL = (b.baseURL || "").trim(); apiKey = (b.apiKey || "").trim(); modelID = (b.modelID || "").trim(); force = !!b.force } catch {}
-      if (!baseURL || !apiKey || !modelID) return send(res, 400, "application/json", JSON.stringify({ ok: false, err: "请填写 API URL、API Key、模型 ID" }))
+      let baseURL = "", apiKey = "", force = false, remember = false, name = "", models = []
+      try {
+        const b = JSON.parse(Buffer.concat(chunks).toString() || "{}")
+        baseURL = (b.baseURL || "").trim(); apiKey = (b.apiKey || "").trim(); force = !!b.force
+        remember = !!b.remember; name = String(b.name || "").trim()
+        // 模型 ID 一次可填多个（换行/逗号分隔）；老前端只发 modelID，一样能解析
+        models = parseModelList(b.models != null && String(b.models).length ? b.models : b.modelID)
+      } catch {}
+      if (!baseURL || !models.length) return send(res, 400, "application/json", JSON.stringify({ ok: false, err: "请填写 API URL、模型 ID" }))
+      // 【key 可以不重填】密码框从不回显，用户只是想加个模型 ID 却被迫把 key 再粘一遍是纯粹的摩擦。
+      // 同一个 baseURL 下，先用当前生效的那把，再用存下来的凭证档；都没有才要求填。
+      if (!apiKey) {
+        const cur = loadModelCfg()
+        if (cur?.apiKey && sameEndpoint(cur.baseURL, baseURL) && (cur.route || inferLegacyRoute(cur)) === "custom") apiKey = cur.apiKey
+        else apiKey = loadApiProfiles().find((p) => sameEndpoint(p.baseURL, baseURL))?.apiKey || ""
+      }
+      if (!apiKey) return send(res, 400, "application/json", JSON.stringify({ ok: false, err: "请填写 API Key（本机没有这个地址已保存的凭证）" }))
       // SSRF 护栏：与 /api/model/test 用同一条判据。这条才是真正写配置并生效的路径。
       { const bad = modelUrlReject(baseURL); if (bad) return send(res, 400, "application/json", bad) }
+      const modelID = models[0]
       // 切模型要 restartOpencode()，会把所有在跑的轮连根拔掉：用户跑了半小时的综述，切个模型就没了，
       // 且此前没有任何提示。改为先挡住并如实说明，前端确认后带 force:true 重发才真切。
-      { const busy = runningRounds(); if (busy > 0 && !force) return send(res, 409, "application/json", JSON.stringify({ ok: false, busy, needForce: true, err: `有 ${busy} 轮正在生成中，切换模型需重启后台，会中断它们` })) }
-      writeOcProvider({ baseURL, apiKey, modelID })
-      saveModelCfg({ route: "custom", baseURL, apiKey, modelID })
-      MODEL = { providerID: CUSTOM_PROVIDER_ID, modelID }
-      let restarted = false
-      try { restarted = await restartOpencode() } catch {}
-      if (!restarted) { try { await client.config.update({ body: { provider: { [CUSTOM_PROVIDER_ID]: customProviderCfg({ baseURL, apiKey, modelID }) } } }) } catch {} }
-      return send(res, 200, "application/json", JSON.stringify({ ok: true, restarted, providerID: CUSTOM_PROVIDER_ID, modelID }))
+      // （只在这次改动确实需要重启时才拦：仅改个备注 / 顺序不动配置的情况没必要惊动用户。）
+      const willRestart = providerJsonFor({ baseURL, apiKey, modelID, models }) !== ocLiveProvider
+      if (willRestart) { const busy = runningRounds(); if (busy > 0 && !force) return send(res, 409, "application/json", JSON.stringify({ ok: false, busy, needForce: true, err: `有 ${busy} 轮正在生成中，切换模型需重启后台，会中断它们` })) }
+      const restarted = await applyCustomRoute({ baseURL, apiKey, modelID, models })
+      // 勾了「记住」才落盘。没勾就绝不写——凭证留在盘上是用户自己的选择，不能替他做主。
+      const kept = remember ? rememberApiProfile({ baseURL, apiKey, modelID, models, name }) : null
+      return send(res, 200, "application/json", JSON.stringify({
+        ok: true, restarted, providerID: CUSTOM_PROVIDER_ID, modelID, models,
+        ...(kept ? { saved: kept.saved, dropped: kept.dropped } : {}),
+      }))
     }
     // 平台下可选的模型清单（顶部模型 pill 用它画下拉）。
     //
@@ -5777,6 +5879,16 @@ export const server = http.createServer(async (req, res) => {
     // 把它勾进档位的允许清单之后，这里下一次取就有了 —— 打包版不用重装、不用改配置。
     if (req.method === "GET" && u.pathname === "/api/models") {
       const route = currentRoute()
+      // 直连自己 API 的用户也该有这个下拉：他在设置里填了几个模型 ID，这里就列几个。
+      // 服务器不知道也不该猜他那家有什么模型 —— 清单完全由他自己填的那串决定。
+      if (route === "custom") {
+        const c = loadModelCfg() || {}
+        const ids = Array.isArray(c.models) && c.models.length ? c.models : (c.modelID ? [c.modelID] : [])
+        return send(res, 200, "application/json", JSON.stringify({
+          ok: true, route, current: MODEL.modelID, default: ids[0] || "",
+          models: ids.map((m) => ({ model: m, label: m, provider: hostOf(c.baseURL) })),
+        }))
+      }
       const list = route === "cloud" ? cloudModels() : []
       return send(res, 200, "application/json", JSON.stringify({
         ok: true, route,
@@ -5785,15 +5897,50 @@ export const server = http.createServer(async (req, res) => {
         models: list.map((m) => ({ model: m.model, label: m.label || m.model, provider: m.providerName || m.provider || "" })),
       }))
     }
+    // 本机存下来的凭证档：使用 / 删除（列表随 GET /api/model 一起出，不另开一条）
+    if (req.method === "POST" && (u.pathname === "/api/model/profiles/use" || u.pathname === "/api/model/profiles/delete")) {
+      const chunks = []; for await (const c of req) chunks.push(c)
+      let id = "", model = "", force = false
+      try { const b = JSON.parse(Buffer.concat(chunks).toString() || "{}"); id = String(b.id || ""); model = String(b.model || "").trim(); force = !!b.force } catch {}
+      const list = loadApiProfiles()
+      const p = list.find((x) => x.id === id)
+      if (!p) return send(res, 404, "application/json", JSON.stringify({ ok: false, err: "这套凭证已不在本机（可能已被删除）" }))
+      if (u.pathname === "/api/model/profiles/delete") {
+        saveApiProfiles(list.filter((x) => x.id !== id))
+        // 只删存档，不动当前路由：正在用它跑的会话不该因为"整理了一下列表"就被拔掉。
+        return send(res, 200, "application/json", JSON.stringify({ ok: true, profiles: loadApiProfiles().map(profileBrief) }))
+      }
+      { const bad = modelUrlReject(p.baseURL); if (bad) return send(res, 400, "application/json", bad) }
+      const models = Array.isArray(p.models) && p.models.length ? p.models : [p.modelID]
+      const modelID = model && models.includes(model) ? model : (models.includes(p.modelID) ? p.modelID : models[0])
+      if (!modelID) return send(res, 400, "application/json", JSON.stringify({ ok: false, err: "这套凭证没有可用的模型 ID" }))
+      const willRestart = providerJsonFor({ baseURL: p.baseURL, apiKey: p.apiKey, modelID, models }) !== ocLiveProvider
+      if (willRestart) { const busy = runningRounds(); if (busy > 0 && !force) return send(res, 409, "application/json", JSON.stringify({ ok: false, busy, needForce: true, err: `有 ${busy} 轮正在生成中，切换凭证需重启后台，会中断它们` })) }
+      const restarted = await applyCustomRoute({ baseURL: p.baseURL, apiKey: p.apiKey, modelID, models })
+      // 记一次"最近用过"：三格满了要挤人时按它挑，挤掉的才是真正最久没碰的那套
+      p.savedAt = Date.now(); saveApiProfiles(list)
+      return send(res, 200, "application/json", JSON.stringify({ ok: true, restarted, modelID, models, name: p.name || hostOf(p.baseURL) }))
+    }
     // 用户切换平台下的模型：沿用平台的 baseURL/key，只换模型名（持久化 + 重启 opencode 生效）
     if (req.method === "POST" && u.pathname === "/api/model/pick") {
-      // 【两种平台形态都要能切】桌面版走云端账号（本机 /cloud 代理 + 占位 token），
-      // 云端多用户容器走注入的静态网关 key。此前这里只认后者，桌面版点了永远是"未接入网关"。
-      if (!platformAvailable()) return send(res, 400, "application/json", JSON.stringify({ ok: false, err: "未接入平台，无法切换模型" }))
+      // 【三种形态都要能切】桌面版走云端账号（本机 /cloud 代理 + 占位 token）、云端多用户容器走
+      // 注入的静态网关 key、直连用户自己的 API（见下面 custom 分支）。此前这里只认第二种。
       const chunks = []; for await (const c of req) chunks.push(c)
       let modelID = "", force = false
       try { const b = JSON.parse(Buffer.concat(chunks).toString() || "{}"); modelID = (b.model || "").trim(); force = !!b.force } catch {}
       if (!modelID) return send(res, 400, "application/json", JSON.stringify({ ok: false, err: "缺 model" }))
+      // 【直连自己 API 的用户也要能切】他在设置里填的那几个模型 ID 就是清单，沿用同一套 baseURL/key。
+      // 多模型都已注册进 provider（见 customProviderCfg）→ 这一步通常连 opencode 都不用重启。
+      if (currentRoute() === "custom") {
+        const c = loadModelCfg() || {}
+        const models = Array.isArray(c.models) && c.models.length ? c.models : (c.modelID ? [c.modelID] : [])
+        if (!models.includes(modelID)) return send(res, 400, "application/json", JSON.stringify({ ok: false, err: `「${modelID}」不在你填的模型 ID 里，请先到「模型 API 设置」补上` }))
+        const willRestart = providerJsonFor({ baseURL: c.baseURL, apiKey: c.apiKey, modelID, models }) !== ocLiveProvider
+        if (willRestart) { const busy = runningRounds(); if (busy > 0 && !force) return send(res, 409, "application/json", JSON.stringify({ ok: false, busy, needForce: true, err: `有 ${busy} 轮正在生成中，切换模型需重启后台，会中断它们` })) }
+        const restarted = await applyCustomRoute({ baseURL: c.baseURL, apiKey: c.apiKey, modelID, models })
+        return send(res, 200, "application/json", JSON.stringify({ ok: true, restarted, modelID }))
+      }
+      if (!platformAvailable()) return send(res, 400, "application/json", JSON.stringify({ ok: false, err: "未接入平台，无法切换模型" }))
       // 不在档位允许清单里就当场说清楚。网关那边会静默打回默认模型，客户端要是也跟着静默，
       // 用户只会看到"选了却没换"，还以为是 bug。
       if (currentRoute() === "cloud" && !modelAllowed(modelID))

@@ -29,6 +29,7 @@ Object.assign(process.env, {
   MANAGE_OC: process.env.MANAGE_OC || "1",
   CLOUD_STATE_PATH: process.env.CLOUD_STATE_PATH || path.join(DEV_DIR, "cloud-state.json"),
   MODEL_CFG_PATH: process.env.MODEL_CFG_PATH || path.join(DEV_DIR, "model-config.json"),
+  API_PROFILES_PATH: process.env.API_PROFILES_PATH || path.join(DEV_DIR, "api-profiles.json"),
 })
 // ---- 登录态播种 ----
 // 登录态与模型配置落在 DEV_DIR（不污染 worktree 里被 git 跟踪的那两个文件）。但空目录起步

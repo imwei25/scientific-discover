@@ -293,7 +293,7 @@ Step "应用本体：web 网关 + 技能 + AGENTS.md"
 # 排除三类：运行时状态与密钥、开发用启动器、自动化测试。
 # 测试目录里有 "sk-mine" 这种假 key，混进包既是无谓体积，也会让密钥扫描工具误报。
 Copy-Tree "$Root\web" "$App\web" `
-  -ExcludeFiles @("model-config.json", "cloud-state.json", "sessions-meta.json", "headless-env.json",
+  -ExcludeFiles @("model-config.json", "api-profiles.json", "cloud-state.json", "sessions-meta.json", "headless-env.json",
                   "desktop-settings.json",
                   "dev-test.mjs", "dev-gateway.mjs", "dev-lan.mjs", "dev-skillmods.mjs", "dev-folders.mjs") `
   -ExcludeDirs  @("test", "Microsoft")
@@ -475,6 +475,8 @@ Copy-Item "$PSScriptRoot\smoke.sh" $Staging -Force
 #   安装器带上了开发机的 DeepSeek key）。故每次打包收尾都强制清一遍。
 Step "清理运行时状态（防冒烟残留进包）"
 $dirty = @("$App\web\model-config.json", "$App\web\sessions-meta.json",
+           # api-profiles.json 是用户勾了「保存在本机」的直连凭证（明文 key，最多 3 套），与 model-config.json 同类
+           "$App\webpi-profiles.json",
            # cloud-state.json 是开发机登录云端账号后留下的 refresh token（等价于口令），
            # 混进安装器 = 把你的账号发给客户。
            "$App\web\cloud-state.json",
@@ -514,8 +516,8 @@ foreach ($d in @("$App\skill-packs", "$App\web-packs")) {
 }
 Write-Host "  写入出厂时间戳 factoryAt=$factoryAt（$([DateTimeOffset]::FromUnixTimeMilliseconds($factoryAt).ToLocalTime().ToString('yyyy-MM-dd HH:mm')))" -ForegroundColor Green
 # 收尾自检：整个 staging 里绝不能再有任何 apiKey 字样的 json（opencode.json 由上面写的干净基线覆盖）
-$leak = Get-ChildItem $App -Recurse -Include "model-config.json","cloud-state.json" -ErrorAction SilentlyContinue
-if ($leak) { throw "打包中止：仍存在 model-config.json —— $($leak.FullName -join '; ')" }
+$leak = Get-ChildItem $App -Recurse -Include "model-config.json","api-profiles.json","cloud-state.json" -ErrorAction SilentlyContinue
+if ($leak) { throw "打包中止：仍存在含 key 的运行时配置 —— $($leak.FullName -join '; ')" }
 # chat-bridge\ 按目录查而不是按文件名查：它的文件叫 state.json / config.toml，名字太通用，
 # 全树按名扫会误伤 .venv 里第三方包自带的同名文件。
 if (Test-Path "$App\chat-bridge") { throw "打包中止：仍存在 chat-bridge\（含企微 bot 凭证）—— $App\chat-bridge" }

@@ -2510,9 +2510,20 @@
     </div>
     <div class="modal-body">
       <div class="mm-route" id="apiRoute"></div>
+      <!-- 存在本机的凭证档（最多 3 套）：点一下就切过去，不用再翻 key。key 从不回显，只出掩码。 -->
+      <div id="apiProfs" hidden>
+        <div class="mm-hint" style="margin:0 0 6px">本机已保存的凭证（点一下即切换）</div>
+        <div id="apiProfList" style="display:flex;flex-direction:column;gap:6px;margin-bottom:12px"></div>
+      </div>
       <label class="mm-field"><span>API 地址（OpenAI 兼容 baseURL）</span><input id="apiUrl" class="mm-input" type="text" placeholder="如 https://api.deepseek.com" autocomplete="off" spellcheck="false" /></label>
       <label class="mm-field"><span>API Key</span><input id="apiKey" class="mm-input" type="password" autocomplete="off" /></label>
-      <label class="mm-field"><span>模型 ID</span><input id="apiModel" class="mm-input" type="text" placeholder="如 deepseek-chat" autocomplete="off" spellcheck="false" /></label>
+      <label class="mm-field"><span>模型 ID（可填多个，一行一个）</span>
+        <textarea id="apiModel" class="mm-input" rows="3" placeholder="如 deepseek-chat&#10;deepseek-reasoner" autocomplete="off" spellcheck="false" style="resize:vertical;font-family:inherit"></textarea></label>
+      <div class="mm-hint" style="margin:-6px 0 12px">填多个时，<b>第一个是默认模型</b>，其余可在顶部「🧠 模型」菜单里随时切换（同一套 key 内切换不重启后台，不打断在跑的任务）。</div>
+      <label class="mm-check" style="display:flex;align-items:center;gap:8px;margin:0 0 8px">
+        <input id="apiRemember" type="checkbox" />
+        <span>把这套凭证保存在本机，下次切换不用重输（最多 <b>3</b> 套）</span></label>
+      <label class="mm-field" id="apiNameWrap" hidden><span>备注名（便于区分，可留空）</span><input id="apiName" class="mm-input" type="text" maxlength="40" placeholder="如 我的 DeepSeek" autocomplete="off" /></label>
       <div class="mm-msg info" id="apiMsg"></div>
       <div class="mm-actions">
         <!-- 「切回云端」常驻显示（此前只在"已走自定义 API 且接了平台"时才出现）：它是从自建
@@ -2523,7 +2534,7 @@
         <button id="apiTest" class="mm-btn ghost" type="button">测试连通</button>
         <button id="apiSave" class="mm-btn primary" type="button">保存并生效</button>
       </div>
-      <div class="mm-hint">保存会重启后台模型进程（几秒）。以后在对话框输入 <b>api-config</b> 可随时打开本窗口。</div>
+      <div class="mm-hint">保存会重启后台模型进程（几秒）。勾了「保存在本机」的凭证只存在这台电脑上（<code>web/api-profiles.json</code>），不会上传到云端。以后在对话框输入 <b>api-config</b> 可随时打开本窗口。</div>
     </div>
   </div>
 </div>
@@ -2748,7 +2759,11 @@ document.getElementById("logoutBtn").innerHTML = ic("logout") + "<span>退出登
       if (pill) pill.innerHTML = "🧠 " + (cur || "模型") + "（状态未知，稍后自动恢复）"
       return
     }
-    if (!m || !m.gateway) { sel.hidden = true; return }   // 没接平台就不显示切换器
+    // 没接平台【且】自己也没填多个模型时才藏起来：直连自己 API 的用户填了两个以上模型 ID，
+    // 这个 pill 就是他切换模型的地方（切换沿用同一套 key，见 /api/model/pick 的 custom 分支）。
+    const selfMulti = m && m.route === "custom" && (m.customModels || []).length > 1
+    if (!m || (!m.gateway && !selfMulti)) { sel.hidden = true; return }
+    if (m.route === "custom" && !selfMulti) { sel.hidden = true; return }   // 直连但只有一个模型：没什么可切的
     cur = m.modelID || ""
     stale = !!m.modelStale   // 服务端说：这个模型已经不在你的档位里了（见 /api/model 的说明）
     // 先问本机网关要清单：云端账号形态下它来自服务器下发的档案（管理员在后台加了模型、
@@ -8106,6 +8121,65 @@ function renderApiRoute(m) {
       : "当前：<b>尚未配置模型</b>，请填写下面三项后保存"
   }
 }
+// ---- 本机保存的凭证档（最多 3 套）----
+// key 永远不回前端，这里拿到的只有掩码；「使用」是把 id 发回去让网关自己取 key。
+function renderApiProfiles(m) {
+  const wrap = document.getElementById("apiProfs"), box = document.getElementById("apiProfList")
+  const list = (m && m.profiles) || []
+  wrap.hidden = !list.length
+  if (!list.length) { box.innerHTML = ""; return }
+  const curURL = (m && m.baseURL || "").replace(/\/+$/, "")
+  box.innerHTML = list.map(function (p) {
+    const on = m && m.route === "custom" && p.baseURL.replace(/\/+$/, "") === curURL
+    return '<div class="mm-prof" data-id="' + esc(p.id) + '" style="display:flex;align-items:center;gap:8px;padding:8px 10px;border:1px solid var(--line,#e3e3e3);border-radius:8px;' + (on ? 'border-color:#3a7afe;background:rgba(58,122,254,.06)' : '') + '">'
+      + '<div style="flex:1;min-width:0;line-height:1.45">'
+      + '<div style="font-weight:600">' + (on ? '✓ ' : '') + esc(p.name) + '</div>'
+      + '<div style="opacity:.6;font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + esc(p.baseURL) + ' · key ' + esc(p.keyMask) + ' · ' + p.models.length + ' 个模型</div>'
+      + '</div>'
+      + (on ? '' : '<button class="mm-btn ghost pf-use" type="button" style="padding:4px 10px">使用</button>')
+      + '<button class="mm-btn ghost pf-del" type="button" title="从本机删除这套凭证" style="padding:4px 8px">删除</button>'
+      + '</div>'
+  }).join("")
+  box.querySelectorAll(".pf-use").forEach(function (b) {
+    b.onclick = function () { useApiProfile(b.closest(".mm-prof").dataset.id, false) }
+  })
+  box.querySelectorAll(".pf-del").forEach(function (b) {
+    b.onclick = async function () {
+      const id = b.closest(".mm-prof").dataset.id
+      if (!confirm("删除这套已保存的凭证？\n（只删本机存档，不影响当前正在使用的配置）")) return
+      try {
+        const r = await (await fetch("api/model/profiles/delete", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id }) })).json()
+        if (!r.ok) return apiSetMsg("err", "删除失败：" + (r.err || ""))
+        apiSetMsg("info", "已删除")
+        refreshApiProfiles()
+      } catch { apiSetMsg("err", "删除失败：网络错误") }
+    }
+  })
+}
+async function refreshApiProfiles() {
+  try { renderApiProfiles(await (await fetch("api/model", { signal: AbortSignal.timeout(8000) })).json()) } catch {}
+}
+async function useApiProfile(id, force) {
+  apiSetMsg("info", "切换到这套凭证并重启后台中…（约数秒）")
+  try {
+    const r = await (await fetch("api/model/profiles/use", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id, force: !!force }) })).json()
+    if (r.ok) {
+      apiSetMsg("ok", "已切到「" + r.name + "」：" + r.modelID + "。页面即将刷新…")
+      setTimeout(() => location.reload(), 1200)
+      return
+    }
+    if (r.needForce) {
+      const yes = confirm("有 " + (r.busy || "若干") + " 轮正在生成中。\n切换凭证要重启后台，会中断它们且无法恢复。\n\n确定继续吗？")
+      if (yes) return useApiProfile(id, true)
+      apiSetMsg("info", "已取消")
+      return
+    }
+    apiSetMsg("err", "切换失败：" + (r.err || "未知错误"))
+  } catch { apiSetMsg("err", "切换失败：网络错误") }
+}
+document.getElementById("apiRemember").addEventListener("change", function () {
+  document.getElementById("apiNameWrap").hidden = !this.checked
+})
 async function openApiCfg() {
   apiSetMsg("info", "")
   document.getElementById("apiKey").value = ""
@@ -8114,12 +8188,23 @@ async function openApiCfg() {
   try {
     const m = await (await fetch("api/model", { signal: AbortSignal.timeout(8000) })).json()
     renderApiRoute(m)
+    renderApiProfiles(m)
     // 走网关时不要把网关地址/模型名回填进输入框：那会让用户以为"这就是我的配置"，
     // 一按保存就把网关地址连同自己的 key 存成自定义路由，稀里糊涂就脱离了平台调度。
     const onGateway = m && m.gateway && m.route === "gateway"
     document.getElementById("apiUrl").value = onGateway ? "" : (m && m.baseURL ? m.baseURL : "")
-    document.getElementById("apiModel").value = (!onGateway && m && m.isCustom && m.modelID) ? m.modelID : ""
-    document.getElementById("apiKey").placeholder = (!onGateway && m && m.hasKey) ? "已保存（不回显；保存需重新粘贴）" : ""
+    // 多个模型 ID 一行一个回填；老配置只有 modelID 时退回它
+    const mods = (!onGateway && m && m.customModels && m.customModels.length) ? m.customModels : ((!onGateway && m && m.isCustom && m.modelID) ? [m.modelID] : [])
+    document.getElementById("apiModel").value = mods.join("\n")
+    // 【key 不必重新粘贴】同一个地址下 key 留空 = 沿用本机已存的那把（见 POST /api/model）。
+    // 用户常常只是想加一个模型 ID，为此翻出 key 再粘一遍纯属折腾。
+    document.getElementById("apiKey").placeholder = (!onGateway && m && m.hasKey) ? "已保存（不回显；不改就留空）" : ""
+    const full = (m && m.profiles || []).length >= (m && m.maxProfiles || 3)
+    const rem = document.getElementById("apiRemember")
+    rem.checked = false
+    rem.parentElement.title = full ? "已存满 " + (m.maxProfiles || 3) + " 套：再存会挤掉最久没用过的那套" : ""
+    document.getElementById("apiNameWrap").hidden = true
+    document.getElementById("apiName").value = ""
   } catch {}
   document.getElementById("apiUrl").focus()
 }
@@ -8152,30 +8237,43 @@ function closeApiCfg() { apiModal.classList.remove("on") }
 document.getElementById("apiClose").addEventListener("click", closeApiCfg)
 onOverlayClick(apiModal, closeApiCfg)
 document.addEventListener("keydown", (e) => { if (e.key === "Escape" && apiModal.classList.contains("on")) closeApiCfg() })
-const apiFields = () => ({
-  baseURL: document.getElementById("apiUrl").value.trim(),
-  apiKey: document.getElementById("apiKey").value.trim(),
-  modelID: document.getElementById("apiModel").value.trim(),
-})
+// 模型 ID 框现在可填多个（换行/逗号分隔）：拆成数组，第一个当默认；modelID 同时带上，兼容老网关
+const apiModelList = () => document.getElementById("apiModel").value.split(/[\n,，;；\s]+/).map((s) => s.trim()).filter(Boolean)
+  .filter((v, i, a) => a.indexOf(v) === i)
+const apiFields = () => {
+  const models = apiModelList()
+  return {
+    baseURL: document.getElementById("apiUrl").value.trim(),
+    apiKey: document.getElementById("apiKey").value.trim(),
+    modelID: models[0] || "",
+    models,
+    remember: document.getElementById("apiRemember").checked,
+    name: document.getElementById("apiName").value.trim(),
+  }
+}
 document.getElementById("apiTest").addEventListener("click", async () => {
   const b = apiFields()
-  if (!b.baseURL || !b.apiKey || !b.modelID) return apiSetMsg("err", "请填写 API 地址、API Key、模型 ID")
+  // 测试要真发一次请求，没法用"存着的 key"——这里必须当场有 key
+  if (!b.baseURL || !b.apiKey || !b.modelID) return apiSetMsg("err", "请填写 API 地址、API Key、模型 ID（测试连通需要当场填 Key）")
   const btn = document.getElementById("apiTest"); btn.disabled = true; apiSetMsg("info", "测试中…")
   try {
     const r = await (await fetch("api/model/test", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(b) })).json()
-    if (r.ok) apiSetMsg("ok", "连通正常" + (r.ms ? "（" + r.ms + "ms）" : ""))
+    if (r.ok) apiSetMsg("ok", "连通正常：" + b.modelID + (r.ms ? "（" + r.ms + "ms）" : "") + (b.models.length > 1 ? "　（只测了第一个模型）" : ""))
     else apiSetMsg("err", "测试失败：" + (r.err || (r.status ? "HTTP " + r.status : "未知错误")))   // err 已含状态码，别重复拼
   } catch { apiSetMsg("err", "测试失败：网络错误") }
   finally { btn.disabled = false }
 })
 async function saveApiCfg(force) {
   const b = apiFields()
-  if (!b.baseURL || !b.apiKey || !b.modelID) return apiSetMsg("err", "请填写 API 地址、API Key、模型 ID")
+  // key 可以留空 = 沿用本机已存的那把（网关取不到时会回一条明确的错），所以这里只硬性要地址与模型
+  if (!b.baseURL || !b.modelID) return apiSetMsg("err", "请填写 API 地址、模型 ID")
   const btn = document.getElementById("apiSave"); btn.disabled = true; apiSetMsg("info", "保存并重启后台中…（约数秒）")
   try {
     const r = await (await fetch("api/model", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ...b, force: !!force }) })).json()
     if (r.ok) {
-      apiSetMsg("ok", "已保存并生效：" + r.modelID + "。页面即将刷新…")
+      const extra = (r.models && r.models.length > 1 ? "（另 " + (r.models.length - 1) + " 个模型可在顶部 🧠 菜单切换）" : "")
+        + (r.saved ? "，凭证已存本机" : "") + (r.dropped ? "；已挤掉最久没用的「" + r.dropped + "」" : "")
+      apiSetMsg("ok", "已保存并生效：" + r.modelID + extra + "。页面即将刷新…")
       setTimeout(() => location.reload(), 1200)   // 刷新让顶部模型 pill 等状态同步
       return
     }

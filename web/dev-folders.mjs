@@ -127,6 +127,7 @@ Object.assign(process.env, {
   LAN_AUTH: "0",
   SESSIONS_META_PATH: META_FILE,
   MODEL_CFG_PATH: path.join(DEV_DIR, "model-config.json"),
+  API_PROFILES_PATH: path.join(DEV_DIR, "api-profiles.json"),
   OC_CONFIG_PATH: path.join(DEV_DIR, "opencode.json"),
   CLOUD_STATE_PATH: path.join(DEV_DIR, "cloud-state.json"),
   CLOUD_CFG_PATH: path.join(DEV_DIR, "no-such-cloud.json"),
