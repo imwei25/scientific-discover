@@ -476,7 +476,7 @@ Copy-Item "$PSScriptRoot\smoke.sh" $Staging -Force
 Step "清理运行时状态（防冒烟残留进包）"
 $dirty = @("$App\web\model-config.json", "$App\web\sessions-meta.json",
            # api-profiles.json 是用户勾了「保存在本机」的直连凭证（明文 key，最多 3 套），与 model-config.json 同类
-           "$App\webpi-profiles.json",
+           "$App\web\api-profiles.json",
            # cloud-state.json 是开发机登录云端账号后留下的 refresh token（等价于口令），
            # 混进安装器 = 把你的账号发给客户。
            "$App\web\cloud-state.json",
