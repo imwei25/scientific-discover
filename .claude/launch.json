@@ -65,6 +65,15 @@
       "autoPort": true
     },
     {
+      "//": "「编辑技能」面板自测（内部版专属功能）。MANAGE_OC=1 是被测判据、不能关，",
+      "//2": "所以 opencode 指到专用口 4199，killPort 碰不到你正在用的 4096（详见 dev-skilledit.mjs 头注）。",
+      "name": "web-skilledit",
+      "runtimeExecutable": "node",
+      "runtimeArgs": ["--no-warnings", "web/dev-skilledit.mjs"],
+      "port": 3013,
+      "autoPort": true
+    },
+    {
       "//": "本检出的会话栏自测（假 opencode，演示会话/项目/文件夹一次摆好，不烧额度）。",
       "//2": "与 web-folders 同一个脚本，区别只在跑【本检出】而不是 sci-folders-wt 那个 worktree。",
       "name": "web-sessbar",

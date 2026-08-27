@@ -11,6 +11,7 @@ import { createOpencodeClient } from "@opencode-ai/sdk"
 import * as Cloud from "./cloud-account.mjs"
 import * as SkillUp from "./skill-update.mjs"
 import * as SkillVault from "./skill-vault.mjs"
+import * as SkillEdit from "./skill-edit.mjs"
 import * as WebUp from "./web-update.mjs"
 import { shouldOfferUpdate } from "./pack-freshness.mjs"
 import { zip as zipPack } from "./minizip.mjs"
@@ -51,6 +52,11 @@ try {
     // 兜底：若上次在"换版后重封归档"的瞬间被强杀，可能残留一份明文归档（skill-packs\<版本>\skills\）。
     // 启动时把还带明文的归档补封一遍（opencode 只读主技能、不读归档，删归档明文安全）——幂等，无明文则 no-op。
     try { const s = SkillVault.sealArchives(SKILL_PACK_STORE); if (s) console.log(`[vault] 补封残留明文归档 ${s} 个`) } catch {}
+  } else {
+    // 没有 pak：源码检出/开发机，或用 bundle.ps1 -PlainSkills 打的【内部版】。技能是明文、
+    // 用户改了就算数（本模块全程 no-op，不解密也不擦除）。打一行日志，免得内部版用户改完
+    // SKILL.md 却怀疑"是不是被还原覆盖了"。
+    console.log("[vault] 无 skills.pak：明文技能模式，技能目录可直接编辑，退出时不擦除")
   }
 } catch (e) {
   // 解密失败是致命的：后台会没有任何科研技能。响亮报错，别静默退化成裸对话。
@@ -5615,6 +5621,67 @@ export const server = http.createServer(async (req, res) => {
       return send(res, 200, "application/json", JSON.stringify({
         ok: true, restarted, current: SkillUp.currentVersion(), local: SkillUp.listLocal(),
       }))
+    }
+
+    // ==== 技能说明书在线编辑（内部版专属；详见 skill-edit.mjs 头注）====================
+    // 【可用判据】技能目录是明文（没有 skills.pak）+ 本机管着 opencode（改完要重启才生效）。
+    // 对外版技能封在 pak 里、运行期才解密、退出即擦除，"编辑"在那种形态下必然丢改动，故整组隐藏。
+    // SKILL_EDIT=0 可强制关掉（给不想让终端用户碰技能的内部场景留的闸）。
+    if (u.pathname.startsWith("/api/skilledit/")) {
+      const available = !SkillVault.hasVault(SKILLS_DIR) && OC_MANAGED && process.env.SKILL_EDIT !== "0"
+      const packVersion = SkillUp.currentVersion()
+      if (req.method === "GET" && u.pathname === "/api/skilledit/list") {
+        if (!available) return send(res, 200, "application/json", JSON.stringify({ ok: true, available: false }))
+        return send(res, 200, "application/json", JSON.stringify({
+          ok: true, available: true, maxBytes: SkillEdit.MAX_BYTES,
+          skills: SkillEdit.list(SKILLS_DIR, ROOT, packVersion),
+        }))
+      }
+      if (!available)
+        return send(res, 403, "application/json", JSON.stringify({ ok: false, err: "这个版本不支持在线编辑技能" }))
+      // 导出改动：把本机改过的技能（改后 + 出厂原文）打成一个 zip 下载，用户自己发回开发侧。
+      // 【为什么不走产物那条打包下载】那条路上有技能出流闸，技能原文一律不进包（正是它该做的）；
+      // 这里是内部版专属的例外口，见 skill-edit.mjs 的 exportEdited 头注。
+      if (req.method === "GET" && u.pathname === "/api/skilledit/export") {
+        const r = SkillEdit.exportEdited(SKILLS_DIR, ROOT, packVersion)
+        if (!r.ok) return send(res, 400, JSON_UTF8, JSON.stringify(r))
+        let buf
+        try { buf = zipPack(r.entries) }
+        catch (e) { return send(res, 500, TEXT_UTF8, "打包失败：" + (e.message || String(e))) }
+        // 文件名保持纯 ASCII：它要过 Content-Disposition，且会直接落到用户的下载目录
+        const d = new Date(), p2 = (n) => String(n).padStart(2, "0")
+        const fname = `skill-edits-${d.getFullYear()}${p2(d.getMonth() + 1)}${p2(d.getDate())}-${p2(d.getHours())}${p2(d.getMinutes())}.zip`
+        res.writeHead(200, { "Content-Type": "application/zip", "Content-Length": buf.length, "Content-Disposition": contentDisposition(fname) })
+        return res.end(buf)
+      }
+      if (req.method === "GET" && u.pathname === "/api/skilledit/file") {
+        const id = u.searchParams.get("id") || ""
+        if (!SkillEdit.validId(id)) return send(res, 400, "application/json", JSON.stringify({ ok: false, err: "技能名不合法" }))
+        const r = SkillEdit.read(SKILLS_DIR, ROOT, packVersion, id)
+        return send(res, r.ok ? 200 : 404, "application/json", JSON.stringify(r))
+      }
+      if (req.method === "POST" && (u.pathname === "/api/skilledit/save" || u.pathname === "/api/skilledit/revert")) {
+        const chunks = []; for await (const c of req) chunks.push(c)
+        let b = {}; try { b = JSON.parse(Buffer.concat(chunks).toString() || "{}") } catch {}
+        const id = String(b.id || "")
+        if (!SkillEdit.validId(id)) return send(res, 400, "application/json", JSON.stringify({ ok: false, err: "技能名不合法" }))
+        // 与换技能包同一道闸：改完要重启 opencode 才会重扫技能，正在生成的轮会被连根拔掉
+        const busy = runningRounds()
+        if (busy > 0 && !b.force)
+          return send(res, 409, "application/json", JSON.stringify({ ok: false, busy, needForce: true, err: `有 ${busy} 轮正在生成中，保存技能需重启后台，会中断它们` }))
+        const r = u.pathname === "/api/skilledit/save"
+          ? SkillEdit.save(SKILLS_DIR, ROOT, packVersion, id, String(b.text ?? ""))
+          : SkillEdit.revert(SKILLS_DIR, ROOT, packVersion, id)
+        if (!r.ok) return send(res, 400, "application/json", JSON.stringify(r))
+        let restarted = false
+        try { restarted = await restartOpencode() } catch {}
+        // 技能文本变了，出流指纹闸的库也得跟着重建 —— 否则改过的段落对闸来说是隐形的（同换版路径）
+        try {
+          const g = SkillGuard.initSkillGuard(SKILLS_DIR)
+          console.log(g.enabled ? `[guard] 技能被编辑，指纹库已重建：${g.files} 文件 / ${g.fps} 枚` : `[guard] 编辑后指纹库停用（${g.reason}）`)
+        } catch {}
+        return send(res, 200, "application/json", JSON.stringify({ ...r, restarted }))
+      }
     }
 
     // ==== 云端 API 通用转发（给"以后只发界面包"留的口）==============================

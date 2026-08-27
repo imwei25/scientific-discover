@@ -23,6 +23,8 @@ __pycache__/
 .env
 serve.out
 serve.err
+# 「编辑技能」的出厂底稿（内部版运行时产生：用户第一次改某个技能前留的原文，供恢复出厂）
+skill-edits/
 # 自定义大模型配置（含 API key，运行时由前端「模型设置」写入）
 web/model-config.json
 # 直连 API 的凭证档（含 API key，用户勾了「保存在本机」才生成，最多 3 套）

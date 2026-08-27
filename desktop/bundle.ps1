@@ -9,6 +9,7 @@
   之后由 desktop\launcher（Tauri）把整个 bundle 作为 resources 打进 NSIS 安装器。
 
   用法： powershell -ExecutionPolicy Bypass -File desktop\bundle.ps1
+         powershell -ExecutionPolicy Bypass -File desktop\bundle.ps1 -PlainSkills   # 内部版：技能不加密、可改
   说明：
     - 下载源国内镜像优先（npmmirror / tuna），官方源兜底；已下载的缓存在 desktop\dist\cache，重跑不重下。
     - 刻意【不】打包 texlive/xelatex（几个 GB）：render-pdf-doc 在目标机上会明确报缺依赖并提示装 MiKTeX，
@@ -20,7 +21,8 @@ param(
   [string]$Staging = "$PSScriptRoot\dist\bundle",
   [string]$Cache   = "$PSScriptRoot\dist\cache",
   [switch]$Clean,          # 清掉已有 staging 重来（缓存保留）
-  [switch]$SkipPip         # 跳过 pip install（site-packages 已装好时提速）
+  [switch]$SkipPip,        # 跳过 pip install（site-packages 已装好时提速）
+  [switch]$PlainSkills     # 【内部版】技能不加密：明文随包发，用户可直接改 SKILL.md（见下方"技能金库"段）
 )
 $ErrorActionPreference = "Stop"
 $Root = Split-Path -Parent $PSScriptRoot
@@ -295,7 +297,8 @@ Step "应用本体：web 网关 + 技能 + AGENTS.md"
 Copy-Tree "$Root\web" "$App\web" `
   -ExcludeFiles @("model-config.json", "api-profiles.json", "cloud-state.json", "sessions-meta.json", "headless-env.json",
                   "desktop-settings.json",
-                  "dev-test.mjs", "dev-gateway.mjs", "dev-lan.mjs", "dev-skillmods.mjs", "dev-folders.mjs") `
+                  "dev-test.mjs", "dev-gateway.mjs", "dev-lan.mjs", "dev-skillmods.mjs", "dev-folders.mjs",
+                  "dev-skilledit.mjs") `
   -ExcludeDirs  @("test", "Microsoft")
 # ↑ dev-*.mjs 一个都别漏：这几个都是开发用启动器，有的会自带假 opencode / 固定口令，
 #   进了客户包既是无谓体积，也多一份没人维护的入口。原来只排了前两个，后加的三个
@@ -338,6 +341,31 @@ Step "env-setup 已剔除（打包版环境随包装好，见上方注释）"
 #   由 server.mjs 换版后即时封成 archive.pak，安装器里本来就没有归档。
 # 【staging 是累积的】重跑打包时 Copy-Tree 会把明文技能重新铺回来，本步每次重新封 + 删，幂等。
 # 客户端行为：server.mjs 启动时见到 skills.pak 就解密还原到原路径、退出时擦除（见 skill-vault.mjs 头注）。
+#
+# 【-PlainSkills：内部版不加密】给自己人/团队内部用的包加这个开关：技能以明文随包发，用户可以
+#   直接编辑 app\.opencode\skills\<技能>\SKILL.md，改完重启软件即生效、且【不会被擦除】——
+#   因为 skill-vault 的启用判据就是"技能目录旁有没有 skills.pak"，没有 pak 则全程 no-op
+#   （不解密、不擦除，见 skill-vault.mjs 头注与 server.mjs 启动段）。所以这里只要不生成 pak、
+#   并把上一轮可能残留的 pak 删掉即可，客户端一行代码都不用改。
+#   ⚠ 代价（发内部版前想清楚）：安装目录里就是整套明文技能，谁都能拷走；且用户的本地改动会被
+#   【技能包在线更新】整包覆盖（换版是替换整个技能目录，不做三方合并）。
+if ($PlainSkills) {
+  Step "技能明文模式（-PlainSkills / 内部版）：不封存、技能可被用户直接编辑"
+  # staging 是累积的：上一次可能打的是加密包，残留的 skills.pak 会让客户端启动时用 pak 覆盖
+  # 明文技能、退出时再把它们擦掉 —— 那就正好和本开关的意图相反。必须删干净。
+  if (Test-Path "$App\.opencode\skills.pak") {
+    Remove-Item "$App\.opencode\skills.pak" -Force
+    Write-Host "  已删除上一轮残留的 skills.pak（否则明文技能会在客户端被覆盖+擦除）" -ForegroundColor Yellow
+  }
+  # 反向自检：明文模式下 skills\ 里【必须】看得到真技能，否则说明上一轮封存把明文删了、这轮又没拷回来
+  $plainCount = @(Get-ChildItem "$App\.opencode\skills" -Directory -ErrorAction SilentlyContinue |
+    Where-Object { $_.Name -ne "ppt-master" } |
+    Where-Object { Test-Path (Join-Path $_.FullName "SKILL.md") }).Count
+  if ($plainCount -lt 5) {
+    throw "打包中止：明文模式下只找到 $plainCount 个技能 —— staging 里的明文技能多半被上一轮封存删掉了，请加 -Clean 重跑"
+  }
+  Write-Host "  明文技能 $plainCount 个（用户可编辑）" -ForegroundColor Green
+} else {
 Step "技能金库：封存 skills.pak（安装器不含明文技能）"
 & "$nodeDir\node.exe" "$Root\packaging\seal-skills.mjs" "$App\web\skill-vault.mjs" "$App\.opencode\skills"
 if ($LASTEXITCODE -ne 0) { throw "技能封存失败（seal-skills.mjs rc=$LASTEXITCODE）——不能发一个明文技能没删干净、或 pak 损坏的包" }
@@ -347,6 +375,7 @@ $leakSkill = Get-ChildItem "$App\.opencode\skills" -Directory -ErrorAction Silen
   Where-Object { $_.Name -ne "ppt-master" } |
   Where-Object { Test-Path (Join-Path $_.FullName "SKILL.md") }
 if ($leakSkill) { throw "打包中止：封存后仍有明文技能 —— $($leakSkill.Name -join '、')" }
+}
 # 更新说明：左下角那个「更新说明」按钮读的就是这些（见 server.mjs 的 /api/release-notes）。
 # 随包走而不是找云端要 —— 断网也看得到，也不会出现"装的是老版本、读到的却是新版说明"。
 # 只拿 desktop\发布说明-*.md，别把 desktop\ 下的需求文档、验收清单一起塞进客户包。

@@ -479,6 +479,28 @@
      overscroll-behavior:contain —— 滚到底继续滚不要带着后面整页一起动。 */
   .dir-list { height: 240px; overflow-y: auto; overscroll-behavior: contain; margin: 10px 0; padding: 4px;
     border: 1px solid var(--line); border-radius: var(--r-sm); background: #fbfcfe; }
+  /* 编辑技能（内部版）：左列表 + 右编辑器。固定高度而不是随内容撑开——技能说明书从 8KB 到 50KB
+     不等，让弹窗跟着内容变高会在切技能时整个跳一下。 */
+  .sked-wrap { display: flex; gap: 12px; margin: 10px 0 2px; }
+  .sked-list { flex: none; width: 230px; height: 420px; overflow-y: auto; overscroll-behavior: contain;
+    padding: 4px; border: 1px solid var(--line); border-radius: var(--r-sm); background: #fbfcfe; }
+  .sked-item { padding: 7px 8px; border-radius: 6px; cursor: pointer; font-size: 12px; color: var(--text);
+    transition: background .12s, color .12s; }
+  .sked-item:hover { background: var(--accent-soft); color: var(--accent-deep); }
+  .sked-item.on { background: var(--accent-soft); color: var(--accent-deep); font-weight: 600; }
+  .sked-item .si-n { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .sked-item .si-d { display: block; font-size: 11px; color: var(--faint); overflow: hidden;
+    text-overflow: ellipsis; white-space: nowrap; margin-top: 1px; }
+  /* 「改过」标记：让用户一眼看出哪些技能已经不是出厂状态（排查"它怎么不听话了"时最先要看这个） */
+  .sked-item .si-e { font-size: 10px; color: var(--cyan); font-weight: 600; margin-left: 4px; }
+  .sked-pane { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+  .sked-pane-head { display: flex; align-items: baseline; gap: 8px; margin-bottom: 6px; }
+  .sked-pane-head b { font-size: 12px; }
+  .sked-count { font-size: 11px; color: var(--faint); margin-left: auto; }
+  .sked-text { flex: 1; height: 380px; resize: none; padding: 10px; font-size: 12px; line-height: 1.6;
+    font-family: Consolas, "Cascadia Mono", Menlo, monospace; color: var(--text);
+    border: 1px solid var(--line); border-radius: var(--r-sm); background: #fff; }
+  .sked-text:disabled { background: #fbfcfe; color: var(--faint); }
   .dir-list > .hint { padding: 10px; }
   .dir-item { display: flex; align-items: center; gap: 9px; padding: 7px 8px; border-radius: 6px; cursor: pointer;
     font-size: 12px; color: var(--text); transition: background .12s, color .12s; }
@@ -2077,6 +2099,9 @@
              提示条只在"有新版"时才出现，出了问题想退回去的时候它恰恰不在。
              JS 会在两种包都换不了的形态下（中心多用户部署）整项隐藏。 -->
         <button class="umitem" id="uiVerBtn" type="button" hidden>版本管理</button>
+        <!-- 编辑技能：只有【内部版】（技能以明文随包发、没有 skills.pak）才出现。对外版技能是加密的、
+             运行期才解密、退出即擦除，那种形态下让人编辑必然丢改动，所以后端直接报 available:false。 -->
+        <button class="umitem" id="skEditBtn" type="button" hidden>编辑技能</button>
         <!-- 设置：本机行为开关（开机自启动 / 关闭时完全退出）。桌面版才有外壳，
              中心部署里探测不到就整项隐藏（同 uiVerBtn 的做法）。 -->
         <button class="umitem" id="deskSetBtn" type="button" hidden>设置</button>
@@ -2262,6 +2287,39 @@
       <div class="mm-msg info" id="uiVerMsg">正在读取…</div>
       <div id="uiVerList"></div>
       <div class="mm-hint" id="uiVerHint"></div>
+    </div>
+  </div>
+</div>
+<!-- 编辑技能（内部版）：左边挑技能、右边直接改它的说明书，存完后台自动重启即生效。
+     刻意【不】做成文件管理器：只开 SKILL.md 这一层，同目录的 .py/.sh 不在这里露面（改坏了小白救不回来）。 -->
+<div id="skEditModal" class="modal">
+  <div class="modal-card" style="max-width:1000px">
+    <div class="modal-head">
+      <span class="modal-title">编辑技能<span id="skEditQ"></span></span>
+      <button class="modal-x" id="skEditClose" type="button" title="关闭"></button>
+    </div>
+    <div class="modal-body">
+      <div class="mm-msg info" id="skEditMsg">正在读取…</div>
+      <div class="sked-wrap">
+        <div class="sked-list" id="skEditList"></div>
+        <div class="sked-pane">
+          <div class="sked-pane-head">
+            <b id="skEditTitle">← 左边挑一个技能</b>
+            <span class="sked-count" id="skEditCount"></span>
+          </div>
+          <textarea id="skEditText" class="sked-text" spellcheck="false" disabled
+            placeholder="选中技能后，它的说明书会显示在这里。"></textarea>
+          <div class="mm-actions">
+            <button id="skEditRevert" class="mm-btn ghost" type="button" disabled>恢复出厂</button>
+            <!-- 导出改动：把改过的技能连同出厂原文打包下载，用户自己发回开发侧合进主线。
+                 不针对当前选中的技能，而是【全部改过的】——一次导完，别让人一个个来。 -->
+            <button id="skEditExport" class="mm-btn ghost" type="button" disabled>导出改动</button>
+            <span style="flex:1"></span>
+            <button id="skEditSave" class="mm-btn primary" type="button" disabled>保存并重启后台</button>
+          </div>
+        </div>
+      </div>
+      <div class="mm-hint">改动立刻写进技能目录并重启后台（约半分钟），正在生成的任务会被中断——有轮在跑时会先问你。改坏了随时「恢复出厂」。</div>
     </div>
   </div>
 </div>
@@ -9150,6 +9208,157 @@ uiVerBtn.addEventListener("click", openUiVer)
 document.getElementById("uiVerClose").addEventListener("click", closeUiVer)
 onOverlayClick(uiVerModal, closeUiVer)
 document.addEventListener("keydown", (e) => { if (e.key === "Escape" && uiVerModal.classList.contains("on")) closeUiVer() })
+
+// ---- 编辑技能（内部版专属；后端 /api/skilledit/*，详见 web/skill-edit.mjs 头注）----------
+// 【为什么要有它】内部版的技能是明文随包发的，本来就"能改"——但那要求用户会翻安装目录、
+// 认得 SKILL.md、还得知道改完要重启后台。这个面板把这三件事收进界面：挑技能 → 改 → 存，
+// 保存时后端自己重启 opencode 并重建出流指纹库。
+// 【为什么只有内部版看得见】对外版技能封在 skills.pak 里、退出即擦除，改了必丢，
+// 所以后端在那种形态下直接回 available:false，这里整项隐藏（同 uiVerBtn 的做法）。
+;(function () {
+  const modal = document.getElementById("skEditModal")
+  const listEl = document.getElementById("skEditList")
+  const msgEl = document.getElementById("skEditMsg")
+  const textEl = document.getElementById("skEditText")
+  const titleEl = document.getElementById("skEditTitle")
+  const countEl = document.getElementById("skEditCount")
+  const saveBtn = document.getElementById("skEditSave")
+  const revertBtn = document.getElementById("skEditRevert")
+  let cur = null          // 当前打开的技能 id
+  let loaded = ""         // 打开时的原文：用来判断"有没有改动"，避免没改也重启后台
+  let maxBytes = 50000
+
+  document.getElementById("skEditQ").appendChild(helpDot(
+    "这里改的是每个技能的【说明书】（SKILL.md）——也就是「这个技能该怎么干活」的那份指令。\n" +
+    "改完点保存，后台会自动重启（约半分钟），下一轮对话就按你改的来。\n\n" +
+    "· 开头那段 --- 里的 description 是【触发条件】：主控靠它决定什么时候调用这个技能，别删。\n" +
+    "· 技能目录下的 .py / .sh 脚本【不在这里】：那是工具实现，改坏了只会在运行时报错。\n" +
+    "· 改坏了随时点「恢复出厂」，回到这一版技能包最初的样子。"))
+
+  const say = (kind, t) => { msgEl.className = "mm-msg " + kind; msgEl.textContent = t }
+  const dirty = () => cur && textEl.value !== loaded
+
+  function renderList(skills) {
+    listEl.textContent = ""
+    for (const s of skills) {
+      const it = document.createElement("div")
+      it.className = "sked-item" + (s.id === cur ? " on" : "")
+      const n = document.createElement("span"); n.className = "si-n"; n.textContent = s.name || s.id
+      if (s.edited) { const e = document.createElement("span"); e.className = "si-e"; e.textContent = "已改"; n.appendChild(e) }
+      const d = document.createElement("span"); d.className = "si-d"; d.textContent = s.description || s.id
+      it.append(n, d)
+      it.addEventListener("click", () => open(s.id))
+      listEl.appendChild(it)
+    }
+  }
+
+  async function loadList() {
+    let r = null
+    try { r = await (await fetch("api/skilledit/list")).json() } catch {}
+    if (!r || !r.ok || !r.available) { say("info", "这个版本不支持在线编辑技能。"); return }
+    maxBytes = r.maxBytes || maxBytes
+    renderList(r.skills || [])
+    // 导出是「全部改过的」，与当前选中哪个技能无关：一个都没改过时它没有意义，置灰
+    const nEdited = (r.skills || []).filter((s) => s.edited).length
+    const exportBtn = document.getElementById("skEditExport")
+    exportBtn.disabled = !nEdited
+    exportBtn.title = nEdited ? `把改过的 ${nEdited} 个技能打包下载（含出厂原文，便于对方看出改了什么）`
+      : "还没有改过任何技能"
+    if (!cur) say("info", "左边挑一个技能开始改。共 " + (r.skills || []).length + " 个。")
+  }
+
+  async function open(id) {
+    // 【切走前先拦一道】编辑器里的改动没存就切技能，等于白改一场——这类丢失用户根本不会怪自己
+    if (dirty() && !confirm("「" + (titleEl.textContent || cur) + "」改了还没保存，切走就丢了。\n\n确定不保存直接切换吗？")) return
+    let r = null
+    try { r = await (await fetch("api/skilledit/file?id=" + encodeURIComponent(id))).json() } catch {}
+    if (!r || !r.ok) { say("err", (r && r.err) || "读不到这个技能"); return }
+    cur = id; loaded = r.text
+    textEl.value = r.text; textEl.disabled = false
+    titleEl.textContent = id
+    saveBtn.disabled = false; revertBtn.disabled = !r.edited
+    updCount()
+    say("info", r.edited ? "这个技能被改过（可「恢复出厂」回到最初）。" : "")
+    loadList()   // 重画列表：选中态与「已改」标记都由 renderList 按 cur / edited 落，别在这儿手工描
+  }
+
+  // 字节数（不是字符数）：截断线是按字节算的，中文一个字 3 字节，按字符显示会严重低估
+  function updCount() {
+    const b = new TextEncoder().encode(textEl.value).length
+    countEl.textContent = b + " / " + maxBytes + " 字节"
+    countEl.style.color = b > maxBytes ? "var(--danger, #d33)" : b > maxBytes * 0.92 ? "var(--cyan)" : ""
+  }
+  textEl.addEventListener("input", updCount)
+
+  /** 保存 / 恢复都要重启后台，复用技能包那道 409 确认（有轮在跑时先问）。 */
+  async function post(act, body, force) {
+    const r = await (await fetch("api/skilledit/" + act, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ...(body || {}), force: !!force }),
+    })).json()
+    if (!r.ok && r.needForce) {
+      if (!confirm("有 " + (r.busy || "若干") + " 轮正在生成中。\n保存技能要重启后台，会中断它们且无法恢复。\n\n确定继续吗？")) return null
+      return post(act, body, true)
+    }
+    return r
+  }
+
+  saveBtn.addEventListener("click", async () => {
+    if (!cur) return
+    if (!dirty()) { say("info", "没有改动，不用保存。"); return }
+    saveBtn.disabled = true; saveBtn.textContent = "保存中…"
+    const r = await post("save", { id: cur, text: textEl.value })
+    saveBtn.textContent = "保存并重启后台"; saveBtn.disabled = false
+    if (!r) return                                     // 用户在确认框里点了取消
+    if (!r.ok) { say("err", "没保存：" + (r.err || "未知错误")); return }
+    loaded = textEl.value
+    revertBtn.disabled = false
+    say("ok", "✅ 已保存" + (r.restarted ? "，后台已重启" : "，后台重启中…") + (r.warn ? "。⚠ " + r.warn : ""))
+    loadList()
+  })
+
+  revertBtn.addEventListener("click", async () => {
+    if (!cur) return
+    if (!confirm("把「" + cur + "」恢复成这一版技能包最初的样子？\n你在它上面做的改动会全部丢掉。")) return
+    revertBtn.disabled = true; revertBtn.textContent = "恢复中…"
+    const r = await post("revert", { id: cur })
+    revertBtn.textContent = "恢复出厂"; revertBtn.disabled = false
+    if (!r) return
+    if (!r.ok) { say("err", "没恢复：" + (r.err || "未知错误")); return }
+    textEl.value = r.text; loaded = r.text; revertBtn.disabled = true
+    updCount()
+    say("ok", "✅ 已恢复出厂" + (r.restarted ? "，后台已重启" : "，后台重启中…"))
+    loadList()
+  })
+
+  // 导出走浏览器自己的下载（<a download> 直接导航），不用 fetch 接 blob：
+  // 文件名由后端的 Content-Disposition 决定，两边不会各写一份、也不会对不上
+  document.getElementById("skEditExport").addEventListener("click", () => {
+    if (dirty() && !confirm("当前技能改了还没保存，导出的是【已保存】的那些改动。\n\n继续导出吗？")) return
+    location.href = "api/skilledit/export"
+  })
+
+  function close() {
+    if (dirty() && !confirm("改动还没保存，关掉就丢了。\n\n确定关闭吗？")) return
+    modal.classList.remove("on")
+  }
+  document.getElementById("skEditBtn").addEventListener("click", () => {
+    modal.classList.add("on"); cur = null; loaded = ""
+    textEl.value = ""; textEl.disabled = true
+    titleEl.textContent = "← 左边挑一个技能"; countEl.textContent = ""
+    saveBtn.disabled = true; revertBtn.disabled = true
+    say("info", "正在读取…"); loadList()
+  })
+  document.getElementById("skEditClose").addEventListener("click", close)
+  onOverlayClick(modal, close)
+  document.addEventListener("keydown", (e) => { if (e.key === "Escape" && modal.classList.contains("on")) close() })
+
+  // 入口可见性：后端说 available 才露出来（同 uiVerBtn 的做法，别在前端猜部署形态）
+  fetch("api/skilledit/list").then((r) => r.json()).then((r) => {
+    if (r && r.ok && r.available) document.getElementById("skEditBtn").hidden = false
+  }).catch(() => {})
+})()
+
 // ---- 设置：开机自启动 / 关闭时完全退出 ----
 // 两个开关都是【立即生效】的：勾上就写注册表 / 写设置文件，没有"保存"按钮。
 // 所以每次改动都要把服务端返回的真实状态回填——写失败时勾会自己弹回去，用户看到的
