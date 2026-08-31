@@ -516,6 +516,12 @@
     transition: opacity .12s, background .12s, color .12s; }
   .dir-item:hover .di-use { opacity: 1; }
   .dir-item .di-use:hover { background: var(--cyan); color: #fff; }
+  /* 目录里的【文件】：只为让用户认出"这就是我那批文献"，不可选、不可点进去。
+     淡显 + not-allowed + hover 时给一句话说清为什么点不动（光把它画灰，用户只会反复点）。 */
+  .dir-item.is-file { cursor: not-allowed; color: var(--faint); }
+  .dir-item.is-file:hover { background: transparent; color: var(--faint); }
+  .dir-item.is-file:hover .di-ic { color: var(--faint); }
+  .dir-item.is-file .di-sz { flex: none; font-size: 11px; color: var(--faint); opacity: .8; }
   /* 弹窗本身：目录列表固定 240px，加上顶部说明和底下两排按钮，整张卡片高约 550px。
      笔记本上把浏览器拉成半屏（可视高 ~600px）就会把「使用当前目录」顶出屏幕外，而 .modal-card
      是 overflow:hidden 的——顶出去就是彻底够不着。给这一个弹窗封顶并让内容区自己滚。
@@ -4931,7 +4937,9 @@ async function dirBrowse(p) {
   else if (dirCur && !dirCanUse) dirErr("这个目录不能写，产物存不进去——挑一个你自己的目录（比如文档或桌面底下的）。")
   else dirErr("")
   dirListEl.innerHTML = ""
-  if (!j.entries.length) { dirListEl.innerHTML = '<div class="hint">这里面没有子目录。可以直接「使用当前目录」，或者「在此新建文件夹」。</div>'; return }
+  const files = j.files || []
+  if (!j.entries.length && !files.length) { dirListEl.innerHTML = '<div class="hint">这里面是空的。可以直接「使用当前目录」，或者「在此新建文件夹」。</div>'; return }
+  if (!j.entries.length) dirListEl.innerHTML = '<div class="hint">这里面没有子目录。下面是这个文件夹里的文件——确认是它，就点「使用当前目录」。</div>'
   for (const e of j.entries) {
     const row = document.createElement("div"); row.className = "dir-item"
     const ico = document.createElement("span"); ico.className = "di-ic"; ico.innerHTML = ic(e.quick ? "star" : "folder")
@@ -4941,6 +4949,27 @@ async function dirBrowse(p) {
     row.addEventListener("click", () => dirBrowse(e.path))
     use.addEventListener("click", (ev) => { ev.stopPropagation(); useDir(e.path) })
     dirListEl.appendChild(row)
+  }
+  // ---- 文件：列出来【只为辨认】，淡显且点不动 ----
+  // 【为什么要列】文献文件夹十有八九没有子目录，原来这弹窗里就只有一句"这里面没有子目录"，
+  // 用户根本无从确认自己站在哪儿——只能选了再回头看整理结果对不对。
+  // 【为什么不让点】选中的必须是文件夹：点进一个文件没有意义，把文件当工作目录更是直接出错。
+  // 所以不给 click、不给「选它」，并在 hover 时用 title 说清该怎么办（文献管理模块下话说得更贴
+  // 那个场景。判据用 currentModule 而不是 DIR_FIELD_SYNC —— 后者在模块之间切走时不会被清掉，
+  // 拿它当判据会让自由对话的目录弹窗也说"进行整理"）。
+  const fileTip = currentModule === "litmanage" ? "请选择一个文件夹进行整理" : "只能选文件夹；文件列在这里只是帮你确认位置"
+  for (const f of files) {
+    const row = document.createElement("div"); row.className = "dir-item is-file"; row.title = fileTip
+    const ico = document.createElement("span"); ico.className = "di-ic"; ico.innerHTML = ic("file")
+    const nm = document.createElement("span"); nm.className = "di-n"; nm.textContent = f.name
+    const sz = document.createElement("span"); sz.className = "di-sz"; sz.textContent = fmtSize(f.size || 0)
+    row.append(ico, nm, sz)
+    dirListEl.appendChild(row)
+  }
+  if (j.moreFiles > 0) {
+    const h = document.createElement("div"); h.className = "hint"
+    h.textContent = "……另有 " + j.moreFiles + " 个文件没有列出（只影响这里的预览，整理时一个都不会漏）。"
+    dirListEl.appendChild(h)
   }
 }
 // 认领一个目录：服务端登记（不存在则建），成功后作为本次对话的工作目录

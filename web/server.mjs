@@ -4090,19 +4090,36 @@ export const server = http.createServer(async (req, res) => {
       if (!fsAllowed(abs, mode)) return send(res, 403, "application/json", JSON.stringify({ ok: false, err: "该目录不在允许浏览的范围内" }))
       let st; try { st = fs.statSync(abs) } catch { return send(res, 404, "application/json", JSON.stringify({ ok: false, err: "目录不存在" })) }
       if (!st.isDirectory()) return send(res, 400, "application/json", JSON.stringify({ ok: false, err: "不是目录" }))
-      let entries = []
+      let entries = [], files = [], moreFiles = 0
       // 读目录会 EPERM/EACCES（Windows 的 System Volume Information、Linux 的 /root 等）。
       // 这不是"没有子目录"，得让用户看见原因，否则他会以为自己点错了地方。
+      //
+      // 【为什么连文件也一起返回】选文件夹时光看子目录名是认不出"这就是我那批文献"的——
+      // 尤其文献文件夹通常【没有】子目录，界面上就是一句"这里面没有子目录"，用户完全无从确认
+      // 自己站对了地方。所以把文件也列出来【供辨认】，前端淡显且点不动（见 index.html 的
+      // .dir-item.is-file）。
+      // ★ 仍然分成两个字段：entries 只装目录，files 另开一路。既有调用方（老界面包、
+      //   dirBrowse 里 entries.forEach 建的"点进去/选它"两个动作）都假定 entries 里全是目录，
+      //   把文件混进去等于让人能一路点进一个文件、或把文件当工作目录选定。
       try {
-        entries = fs.readdirSync(abs, { withFileTypes: true })
-          .filter((d) => d.isDirectory() && !d.name.startsWith("."))
+        const all = fs.readdirSync(abs, { withFileTypes: true }).filter((d) => !d.name.startsWith("."))
+        entries = all.filter((d) => d.isDirectory())
           .map((d) => ({ name: d.name, path: path.join(abs, d.name) }))
           .sort((a, b) => a.name.localeCompare(b.name, "zh"))
           .slice(0, 500)
+        // 文件只用来"认地方"，不参与任何选定，所以只给名字与大小，且封顶 200 条
+        //（几千张图的目录不该让这个弹窗卡住 / 让响应涨到几百 KB）；截掉多少如实告诉用户。
+        const fl = all.filter((d) => d.isFile()).sort((a, b) => a.name.localeCompare(b.name, "zh"))
+        moreFiles = Math.max(0, fl.length - 200)
+        files = fl.slice(0, 200).map((d) => {
+          let size = 0
+          try { size = fs.statSync(path.join(abs, d.name)).size } catch { /* 读不到大小不影响辨认 */ }
+          return { name: d.name, size }
+        })
       } catch (e) {
-        return send(res, 200, "application/json", JSON.stringify({ ok: true, mode, path: abs, parent: fsParent(abs, mode), entries: [], canUse: false, err: "没有权限读取这个目录：" + String(e.code || e.message) }))
+        return send(res, 200, "application/json", JSON.stringify({ ok: true, mode, path: abs, parent: fsParent(abs, mode), entries: [], files: [], moreFiles: 0, canUse: false, err: "没有权限读取这个目录：" + String(e.code || e.message) }))
       }
-      return send(res, 200, "application/json", JSON.stringify({ ok: true, mode, path: abs, parent: fsParent(abs, mode), entries, canUse: fsWritable(abs) }))
+      return send(res, 200, "application/json", JSON.stringify({ ok: true, mode, path: abs, parent: fsParent(abs, mode), entries, files, moreFiles, canUse: fsWritable(abs) }))
     }
 
     // 在系统的文件管理器里打开一个目录（侧栏「空间」那一行的「打开」按钮）。

@@ -316,6 +316,13 @@ test("本机部署：能浏览整台机器，读不动的目录说清原因而�
   const r = await gw.get("/api/fs/list?path=" + encodeURIComponent(browse))
   assert.equal(r.status, 200)
   assert.deepEqual(r.json.entries.map((e) => e.name).sort(), ["乙", "甲"].sort(), "只列子目录，不列文件")
+  // 文件走【另一路】files：选文件夹时要能看见里面有什么（尤其文献文件夹常常没有子目录，
+  // 只列目录的话界面上是一句"这里面没有子目录"，用户无从确认自己站对了地方）。
+  // ★ 不许把它并进 entries —— 前端拿 entries 建的是"点进去 / 选它"两个动作，
+  //   混进文件等于让人能把一个 PDF 当工作目录选定。
+  assert.deepEqual(r.json.files.map((f) => f.name), ["不是目录.txt"], "文件另开 files 一路")
+  assert.equal(r.json.files[0].size, 1)
+  assert.equal(r.json.moreFiles, 0)
   assert.equal(r.json.canUse, true)
   assert.equal(path.resolve(r.json.parent), path.resolve(dir), "该给得出上一级")
 
