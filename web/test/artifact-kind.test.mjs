@@ -79,6 +79,22 @@ for (const mod of ["litread", "chat"]) {
   })
 }
 
+// ★ 2026-08-31 用户反馈：做 PPT 时"一堆 svg 图片也被归成最终产出"。
+//   根因不是黑名单少了几个名字，而是 SVG 走了"成品扩展名"那条兜底 —— ppt-master 一个工程会往
+//   svg_flat / assets / validation / charts / <它随手起的名> 里都写 SVG，目录黑名单永远追不齐。
+//   所以规则改成：子目录里的 .svg 必须命中 emits（或落在约定的 figures/）才算主产物。
+test("ppt 工程里【任何】目录下的 SVG 都不许进主区，哪怕黑名单不认识那个目录名", () => {
+  const tree = [
+    "bench/svg_flat/page-01.svg", "bench/assets/logo.svg", "bench/validation/v.svg",
+    "bench/charts/chart1.svg", "bench/我随手起的目录/page-01.svg", "bench/page-01.svg",
+  ]
+  for (const mod of ["litread", "chat", "paper"])
+    for (const n of tree) assert.equal(kind(mod, n), "aux", mod + " 的 " + n)
+  // 反向：根目录的 svg 与 figures/ 里的图仍是交付物，别把这条修过头
+  assert.equal(kind("chat", "路线图.svg"), "main")
+  assert.equal(kind("chat", "figures/fig1.svg"), "main")
+})
+
 test("按目录降级不能误伤 figure —— 它的交付物本来就是 svg/png", () => {
   // 所以修法是把 svg_output/ svg_final/ backup/ 判成中间目录，
   // 而【不是】把 svg/png 从成品扩展名里删掉。

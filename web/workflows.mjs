@@ -2081,7 +2081,7 @@ export const isSecretName = (name) => SECRET_GLOBS.some((g) => globMatch(g, Stri
 // 但 svg/png **不能**从 DELIVERABLE_EXT 里删——figure 模块的交付物本来就是 svg/png。
 // 所以降级判据放在目录上：svg_output / svg_final / backup / … 这些名字本身就说明了
 // "这里面装的是中间态"，而 figure 模块的图落在 figures/ 与根目录，不受影响。
-const BULK_DIRS = /^(pdfs|zotero_lib|library_texts|audit|figures_src|tmp|temp|svg_output|svg_final|backup|analysis|sources|templates|icons|images|notes)$/i
+const BULK_DIRS = /^(pdfs|zotero_lib|library_texts|audit|figures_src|tmp|temp|svg_output|svg_final|svg[_-]flat|backup|analysis|sources|templates|icons|images|notes|assets|audio|validation)$/i
 const DELIVERABLE_EXT = /\.(docx?|pdf|xlsx?|xlsm|pptx?|png|jpe?g|svg|tiff?|eps|zip)$/i
 const SCRATCH_EXT = /\.(py|log|sh|ps1|bat|cmd|ipynb|json|tmp|bak|lock)$/i
 /**
@@ -2104,6 +2104,17 @@ export function artifactKind(modId, values, name) {
   //   降级规则整个失效。backup/<时间戳>/svg_output/ 这种嵌套副本同理，只有逐段比才拦得住。
   if (segs.slice(0, -1).some((d) => BULK_DIRS.test(d))) return "aux"
   if (SCRATCH_EXT.test(base)) return "aux"
+  // ★ 子目录里的 .svg 必须【写进 emits 才算主产物】，成品扩展名那条兜底对它不生效。
+  //   起因（用户反馈）：一次 PPT 出片，一堆 SVG 和唯一那份 .pptx 并排站在主区。
+  //   目录黑名单（BULK_DIRS）拦不住这件事 —— ppt-master 一个工程会往 svg_output / svg_flat /
+  //   assets / validation / charts / <随手起的名> 里都写 SVG，黑名单永远追不齐它开的目录；
+  //   而 SVG 在这套流程里【本来就是中间态】：交付物是 exports/*.pptx，SVG 只是画它的底稿。
+  //   为什么只收窄 svg、不动 png/jpg：图片模块在自由对话里把图写进 figures/ 是常事，
+  //   收窄了会把用户真正要的图折起来；而 figure 模块的 svg 交付物有 emits（fig*.svg /
+  //   figures/*）兜着，照旧是主产物。根目录的 svg 也照旧 —— 那一层是技能主动摆出来的成果。
+  //   唯一的例外是【根下的 figures/】："图写进 figures/" 是全套技能提示词里的明文约定，
+  //   自由对话里出的图也照这个约定走（那时没有 emits 可命中）—— 它是交付目录，不是施工现场。
+  if (segs.length > 1 && !(segs.length === 2 && /^figures?$/i.test(segs[0])) && /\.svg$/i.test(base) && !emitsMatch(modId, values, s)) return "aux"
   const w = WORKFLOWS[modId]
   if (!w) {
     if (DELIVERABLE_EXT.test(base)) return "main"
@@ -2113,9 +2124,15 @@ export function artifactKind(modId, values, name) {
     // 而根目录那一层才是它主动摆出来的成果。仍是按目录判，没有第二张"什么算主产物"的名字表。
     return segs.length > 1 ? "aux" : "main"
   }
+  return emitsMatch(modId, values, s) ? "main" : (DELIVERABLE_EXT.test(base) ? "main" : "aux")
+}
+/** 这个路径是否命中该模块某一步的 emits 契约（无契约模块恒 false）。 */
+function emitsMatch(modId, values, rel) {
+  const w = WORKFLOWS[modId]
+  if (!w) return false
   const steps = values ? stepsFor(modId, values) : w.steps
-  for (const st of steps) for (const g of st.emits || []) if (globMatch(g, s)) return "main"
-  return DELIVERABLE_EXT.test(base) ? "main" : "aux"
+  for (const st of steps) for (const g of st.emits || []) if (globMatch(g, rel)) return true
+  return false
 }
 
 // ---- 聊天接入（微信 / 企微）该把哪些产物真的推给用户 ----
