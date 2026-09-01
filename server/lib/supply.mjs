@@ -67,8 +67,13 @@ const RATE_LIMIT_CAP = 10 * 60_000
  * 5xx 仍然会当场切下一家（gateway.mjs 的 shouldRetryStatus），那是**这一单**的补救，
  * 与「这家整体还能不能用」是两回事，别混。
  */
-export function classifyFailure(status, retryAfterMs = 0) {
+export function classifyFailure(status, retryAfterMs = 0, hint = "") {
   const s = Number(status) || 0
+  // hint="billing"：调用方读过错误体，确认这是个计费/订阅问题（有的供应商把它错报成 400，
+  // 见 gateway.mjs 的 isMisreportedBillingError）。按 402 同档处理，但 reason 里保留真实
+  // 状态码 —— 审计日志写"上游回 402"而实际是 400，下次排查会被这句话带偏。
+  if (hint === "billing")
+    return { state: "dry", cooldownMs: COOLDOWN.dry, reason: `上游回 ${s}：账户订阅过期或余额不足（按 402 同档处理）` }
   if (s === 402)
     return { state: "dry", cooldownMs: COOLDOWN.dry, reason: "上游回 402：账户余额不足或欠费" }
   if (s === 401 || s === 403)
@@ -212,10 +217,13 @@ export function createSupply({ db, log = () => {}, audit = () => {}, now = Date.
       return r
     },
 
-    /** 上游打脸了。status 认不出（5xx/网络错误）就什么也不做 —— 见 classifyFailure。 */
-    noteFailure(provider, status, retryAfterMs = 0, ts = now()) {
+    /**
+     * 上游打脸了。status 认不出（5xx/网络错误）就什么也不做 —— 见 classifyFailure。
+     * hint="billing" 用于状态码撒谎的那些家（把订阅过期回成 400），由调用方读体后给出。
+     */
+    noteFailure(provider, status, retryAfterMs = 0, ts = now(), hint = "") {
       if (!provider) return null
-      const c = classifyFailure(status, retryAfterMs)
+      const c = classifyFailure(status, retryAfterMs, hint)
       if (!c) return null
       const prev = health.get(provider)
       const h = {

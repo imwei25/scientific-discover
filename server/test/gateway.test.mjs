@@ -6,7 +6,8 @@ import test from "node:test"
 import assert from "node:assert/strict"
 import zlib from "node:zlib"
 import { startApp, adminLogin, asAdmin, startFakeUpstream, sse } from "./helper.mjs"
-import { normalizeUsage, costOf, joinUpstream, isUpstreamQuotaExhausted, extractResetHint } from "../lib/gateway.mjs"
+import { normalizeUsage, costOf, joinUpstream, isUpstreamQuotaExhausted, extractResetHint,
+  isMisreportedBillingError } from "../lib/gateway.mjs"
 
 const STRONG = "Aa1!aaaa9"
 const CHAT = "/llm/v1/chat/completions"
@@ -662,6 +663,48 @@ test("额度耗尽的分类函数：认机器码、认措辞，不误伤纯限�
   assert.equal(F('{"error":{"message":"concurrency limit exceeded"}}'), false, "并发上限是限速，不是额度")
   assert.equal(F(""), false, "读不到体 → 保守按限速")
   assert.equal(F("<html>502 Bad Gateway</html>"), false)
+})
+
+// 2026-09-01 用户实测：火山方舟把「CodingPlan 订阅过期」回成 HTTP 400，于是既不切家、
+// supply 也不摘家，无人值守的定时任务整轮烂掉。下面三条钉住这个 400 的特殊处理。
+const ARK_SUB_BODY = JSON.stringify({ error: { message:
+  "Your account (2130613591) does not have a valid CodingPlan subscription, or your subscription has expired. Please visit https://console.volcengine.com/ark/region" } })
+
+test("被错报成 400 的计费/订阅错误：认得出，且不误伤真正的参数错", () => {
+  const F = isMisreportedBillingError
+  assert.equal(F(ARK_SUB_BODY), true, "火山 CodingPlan 订阅过期")
+  assert.equal(F('{"error":{"code":"SubscriptionExpired"}}'), true, "机器码")
+  assert.equal(F('{"error":{"message":"Your plan has expired"}}'), true)
+  assert.equal(F('{"error":{"message":"账户订阅已过期，请续订"}}'), true, "中文措辞")
+  assert.equal(F('{"error":{"message":"Insufficient Balance"}}'), true, "欠费也算（复用额度那套判据）")
+  // ★ 下面这些是真正的"请求本身有问题"，认错了就会在每家上都撞一遍，还把错因换成计费话术
+  assert.equal(F('{"error":{"message":"model `gpt-9` not found"}}'), false)
+  assert.equal(F('{"error":{"message":"Invalid value for parameter temperature"}}'), false)
+  assert.equal(F('{"error":{"message":"messages: at least one message is required"}}'), false)
+  assert.equal(F('{"error":{"message":"unsupported subscription_id field"}}'), false, "只出现 subscription 这个词不算")
+  assert.equal(F(""), false, "读不到体 → 保守按参数错，原样透传")
+})
+
+test("上游订阅过期（400）且无备用可切 → 402 UPSTREAM_BILLING_ERROR，别把裸 400 甩给用户", async (t) => {
+  const r = await rig({
+    upstream: (_q, res) => { res.writeHead(400, { "content-type": "application/json" }); res.end(ARK_SUB_BODY) },
+  })
+  t.after(() => r.close())
+  const x = await r.call({ model: "m" })
+  assert.equal(x.status, 402)
+  assert.equal(x.json.error.code, "UPSTREAM_BILLING_ERROR")
+  assert.match(x.json.error.upstreamMessage, /CodingPlan/, "上游原话要带上，否则管理员不知道去哪续订")
+})
+
+test("认不出的 400 仍原样透传（体一个字节都不能少，含多字节汉字）", async (t) => {
+  const body = JSON.stringify({ error: { message: "参数 temperature 非法：必须在 0 到 2 之间" } })
+  const r = await rig({
+    upstream: (_q, res) => { res.writeHead(400, { "content-type": "application/json" }); res.end(body) },
+  })
+  t.after(() => r.close())
+  const x = await r.call({ model: "m" })
+  assert.equal(x.status, 400, "参数错换谁都一样，不该被改写成 402")
+  assert.equal(x.text, body, "错误体必须逐字节原样回去 —— 诊断价值全在这里")
 })
 
 test("恢复时刻抽取：抠不出来就返回空串，别编一个时间", () => {

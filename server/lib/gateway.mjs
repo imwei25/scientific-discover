@@ -37,6 +37,8 @@ const SSE_BUF_CAP = 1 << 20               // 畸形流（一直不换行）时�
 /**
  * 该不该换下一家：所有 5xx，外加这几个"这家伺候不了你"的 4xx。
  * 400/404/413/422 不在内 —— 那是请求本身的问题（模型名错、体过大…），换谁都一样。
+ * 【400 有个例外，但不在这张表里】有的供应商把订阅过期/欠费也回成 400，那种要切家。
+ * 光看状态码分不出来，必须读体，所以单独走 isMisreportedBillingError 那条分支。
  */
 const RETRY_4XX = new Set([401, 402, 403, 408, 409, 429])
 export const shouldRetryStatus = (code) => Number(code) >= 500 || RETRY_4XX.has(Number(code))
@@ -273,6 +275,66 @@ export function isUpstreamQuotaExhausted(bodyText) {
 }
 
 /**
+ * 上游 400 的响应体 → 这其实是不是一个【计费/订阅】问题（也就是被错报成 400 的 402）。
+ *
+ * 【为什么非要挖 400 不可】400 按定义是"请求本身的问题，换谁都一样"，所以 RETRY_4XX 里
+ * 故意没有它。但有的供应商把纯计费状态也塞进 400 —— 实测（2026-09-01 用户报障）火山方舟：
+ *   HTTP 400 {"error":{"message":"Your account (…) does not have a valid CodingPlan
+ *     subscription, or your subscription has expired. Please visit https://console…"}}
+ * 后果是双份的：① 同一模型名下明明挂着备用家，这一单也不会切过去；② supply 不认这个码，
+ * 于是没人手动去后台停用的话，之后每一单都还先撞它一次。无人值守的定时任务就整轮烂在那里。
+ *
+ * 【判据只认明确的计费/订阅措辞】认不出的 400 一律原样透传：400 的诊断价值全在那个体里
+ * （模型名写错、参数不合法…），为了切家把它吞掉是得不偿失。宁可漏判，不可误判 ——
+ * 误判的代价是把一个"换谁都一样"的请求在每家上都撞一遍，还把真正的错因换成一句计费话术。
+ */
+const BILLING_CODES = new Set([
+  "subscriptionexpired", "subscription_expired", "nosubscription", "no_subscription",
+  "invalidsubscription", "accountoverdue", "account_overdue", "accountexpired",
+  "planexpired", "plan_expired",
+])
+const BILLING_WORDS = /(valid|active)\s+\w{0,20}\s*(subscription|plan)\b|\b(subscription|plan)\s+(has\s+)?(expired|is\s+inactive|not\s+active)|\bnot\s+subscribed\b|订阅(已)?(过期|失效|到期|未开通)|未(订阅|开通)(该)?(服务|套餐|计划)/i
+
+export function isMisreportedBillingError(bodyText) {
+  const s = String(bodyText || "")
+  if (!s.trim()) return false
+  try {
+    const e = JSON.parse(s)?.error
+    const code = String(e?.code ?? e?.type ?? "").trim().toLowerCase()
+    if (BILLING_CODES.has(code)) return true
+  } catch { /* 非 JSON：只靠措辞兜 */ }
+  // 欠费/余额不足/额度耗尽同样属于"换一家就能好"，复用已有那套措辞判据，别再抄一份。
+  return BILLING_WORDS.test(s) || isUpstreamQuotaExhausted(s)
+}
+
+/**
+ * 把上游的错误体先攒下来再决定怎么处理 —— 分类要看内容，光看状态码不够（429 是限速还是
+ * 额度耗尽、400 是参数错还是订阅过期，全藏在体里）。错误体就几百字节，读它的代价可忽略。
+ *
+ * cb(buf, overflow)：
+ *   · overflow=false —— 体已读完（或超时/出错中断），upRes 已 destroy，buf 就是全部内容；
+ *   · overflow=true  —— 体超过 cap，**流既没读完也没被销毁**，调用方必须自己收尾
+ *     （继续 pipe 出去，或 destroy）。攒的是 Buffer 不是字符串：多字节汉字被切在两个
+ *     chunk 之间时，逐块 toString 会把它变成两个替换字符，透传出去就是乱码。
+ */
+function readErrorBody(upRes, { cap = 8192, timeoutMs = 3000 } = {}, cb) {
+  const chunks = []
+  let n = 0, done = false
+  const onData = (c) => { chunks.push(c); n += c.length; if (n > cap) finish(true) }
+  function finish(overflow) {
+    if (done) return
+    done = true
+    upRes.removeListener("data", onData)
+    if (!overflow) { try { upRes.destroy() } catch {} }
+    cb(Buffer.concat(chunks), overflow)
+  }
+  upRes.on("data", onData)
+  upRes.on("end", () => finish(false))
+  upRes.on("error", () => finish(false))        // 读不到体 → buf 为空 → 由调用方按保守分支处理
+  setTimeout(() => finish(false), timeoutMs).unref?.()   // 上游挂着不收尾也不能把用户拖在这儿
+}
+
+/**
  * 从上游原话里抠出"什么时候恢复"。这是用户唯一真正需要的信息，而它只存在于上游那句话里
  * —— 丢掉它，用户就只能每隔几分钟试一次直到蒙对。抠不出来就返回空串，由调用方省略这一句。
  */
@@ -493,8 +555,7 @@ export async function llmForward({ req, res, pathname, ctx }) {
         // 只在这条终止路径上读：要切下一家时抓紧切，那几毫秒不值得等。
         if (last && !res.headersSent) {
           settled = true
-          let body = ""
-          const done = () => {
+          const done = (body) => {
             const exhausted = isUpstreamQuotaExhausted(body)
             if (!exhausted) {
               // 真限速：照旧记一段"正在限速"，前端显示"稍等自动重试"是对的建议。
@@ -518,18 +579,54 @@ export async function llmForward({ req, res, pathname, ctx }) {
               + "现在重试不会成功，请联系管理员充值或换一家供应商。",
               { provider: at.provider, model, resetHint: reset, upstreamMessage: upMsg.slice(0, 300) })
           }
-          let n = 0, finished = false
-          const finish = () => { if (!finished) { finished = true; try { upRes.destroy() } catch {}; done() } }
-          upRes.on("data", (c) => { if (n < 8192) { body += c.toString("utf8"); n += c.length } })
-          upRes.on("end", finish)
-          upRes.on("error", finish)          // 读不到体 → body 为空 → 按限速处理（保守，行为同修改前）
-          setTimeout(finish, 3000).unref?.() // 上游挂着不收尾也不能把用户拖在这儿
+          // 读不到体（超时/出错）→ body 为空 → 按限速处理（保守，行为同修改前）
+          readErrorBody(upRes, {}, (buf, overflow) => {
+            if (overflow) { try { upRes.destroy() } catch {} }   // 这条路径不透传，读够就够了
+            done(inflateForUsage(buf, upRes.headers["content-encoding"]).toString("utf8"))
+          })
           return
         }
         // 还有下一家可切（或响应头已发出）：抓紧走下面的切家分支，不为分类等那几毫秒。
         // 这里仍记一段"正在限速"：切家成功的话本轮照常出结果，这个提示只是个短暂的进度说明。
         try { ctx.queue?.noteRateLimit({ model, provider: at.provider, retryAfterMs: ra }) } catch {}
         audit("llm.upstream_rate_limited", { actor: user.username, ip, detail: `${at.providerName} ${model}${ra ? ` retry-after ${ra}ms` : ""}` })
+      }
+      // ---- 400 里也可能藏着「这家伺候不了你」（计费/订阅被错报成 400）---------------
+      // 判据与后果见 isMisreportedBillingError 的注释。认出来就当 402 办：切下一家 + 熔断；
+      // 认不出的 400 原样透传（体已经被读走了，所以要自己把它写回去）。
+      // 【为什么不像 429 那样只在 last 时才读】402 那套切家是在这一层之前就判完的，而 400
+      // 到这里已经被 shouldRetryStatus 判成"不切"，不读体就没有第二次机会了。
+      if (Number(upRes.statusCode) === 400 && !res.headersSent && !clientGone) {
+        settled = true      // 决定权交给下面的回调，本次 attempt 的其它路径不许再插手
+        readErrorBody(upRes, {}, (buf, overflow) => {
+          if (clientGone) { try { upRes.destroy() } catch {}; return }
+          // 体大到一个 cap 都装不下的必然不是计费错误（那种就几百字节）→ 直接走透传
+          const text = overflow ? "" : inflateForUsage(buf, upRes.headers["content-encoding"]).toString("utf8")
+          if (text && isMisreportedBillingError(text)) {
+            // 熔断：按 402 同档摘掉这家，冷却期内不再派单 —— 不记的话每一单都要再撞一次
+            try { ctx.supply?.noteFailure(at.provider, upRes.statusCode, 0, undefined, "billing") }
+            catch (e) { log(`[llm] 供应侧记录失败：${e.message}`) }
+            const upMsg = (() => { try { return String(JSON.parse(text)?.error?.message || "").trim() } catch { return "" } })()
+            audit("llm.upstream_billing_error", { actor: user.username, ip,
+              detail: `${at.providerName} ${model} HTTP 400：${upMsg.slice(0, 120)}` })
+            if (!last) {
+              log(`[llm] ${user.username} ${at.providerName} 计费/订阅问题（被错报成 400）—— 切下一家（${attempts[i + 1].providerName}）`)
+              return tryAttempt(i + 1)
+            }
+            log(`[llm] ${user.username} ${at.providerName} 计费/订阅问题（被错报成 400），无备用可切`)
+            return fail(res, 402, "UPSTREAM_BILLING_ERROR",
+              "上游模型账户的订阅已过期或余额不足，本轮未能生成。现在重试不会成功，"
+              + "请联系管理员续订/充值，或换一家供应商。",
+              { provider: at.provider, model, upstreamMessage: upMsg.slice(0, 300) })
+          }
+          // 不是计费问题 → 原样回给客户端（400 的诊断价值全在这个体里）
+          const h400 = { ...upRes.headers }
+          delete h400["connection"]
+          delete h400["content-length"]   // 体已被读走，长度交给 Node 自己算
+          res.writeHead(upRes.statusCode || 400, h400)
+          if (overflow) { res.write(buf); upRes.pipe(res) } else res.end(buf)
+        })
+        return
       }
       if (shouldRetryStatus(upRes.statusCode) && !last && !res.headersSent) {
         upRes.resume()

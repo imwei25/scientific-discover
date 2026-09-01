@@ -2215,6 +2215,12 @@ export function describeModelError(err, route) {
     return (msg || "平台积分已用尽，本轮未能生成。日积分每天 0 点(UTC)重置，月积分每月 1 日(UTC)重置")
       + "。顶栏的「剩余积分」可随时查看；需要更多请联系管理员调整档位。"
   }
+  // 上游账户的【订阅过期 / 套餐未开通】：网关认出来的会带 UPSTREAM_BILLING_ERROR（走平台
+  // 的路由），而用自己 API 的人是上游原话直达 —— 后者只能靠措辞认。措辞判据要写在余额那条
+  // 之前：火山那句 "does not have a valid CodingPlan subscription" 里没有余额类词，落到
+  // 下面的通用分支就只剩一句英文原话（2026-09-01 用户实测正是这样）。
+  if (/UPSTREAM_BILLING_ERROR/.test(raw) || /valid\s+\w{0,20}\s*(subscription|plan)\b|(subscription|plan)\s+(has\s+)?expired|订阅(已)?(过期|失效|到期|未开通)/i.test(raw))
+    return `上游模型账户的订阅已过期或未开通（不是你的积分），本轮未能生成。现在重试不会成功。${who}${tail}`
   const balance = code === 402 || /insufficient|balance|欠费|余额|arrears|payment|billing/i.test(raw)
   if (balance) return `上游模型账户余额不足或已欠费，本轮未能生成。${who}${tail}`
   // 平台这边的登录票据失效（管理员改了档位/重置了口令/停用又启用 → key_epoch 变了 → KEY_REVOKED；

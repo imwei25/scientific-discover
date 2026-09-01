@@ -289,6 +289,43 @@ test("端到端：主供应商预算用尽 → 这一单直接走备用，不再
   assert.equal(vol.budgets[0].exhausted, true)
 })
 
+test("端到端：订阅过期被错报成 400 → 照样切备用，且这家被摘掉不再挨个撞", async (t) => {
+  // 2026-09-01 用户实测：火山把「CodingPlan 订阅过期」回成 HTTP 400。400 历来"不切家"
+  // （请求本身的问题换谁都一样），于是备用一次没被用上；supply 也不认这个码，没人手动去
+  // 后台停用的话每一单都还先撞它一次 —— 无人值守的定时任务就整轮烂在那里。
+  const seen = []
+  const backup = await startFakeUpstream((req, res) => {
+    seen.push(req.url)
+    res.writeHead(200, { "content-type": "application/json" })
+    res.end(JSON.stringify({ usage: { prompt_tokens: 1, completion_tokens: 0 } }))
+  })
+  const expired = await startFakeUpstream((_q, res) => {
+    res.writeHead(400, { "content-type": "application/json" })
+    res.end(JSON.stringify({ error: { message:
+      "Your account (2130613591) does not have a valid CodingPlan subscription, or your subscription has expired." } }))
+  })
+  const r = await rigApp()
+  t.after(async () => { await r.close(); await backup.close(); await expired.close() })
+
+  await r.admin("/admin/api/provider", { method: "POST", body: { key: "vol", name: "火山", baseURL: expired.url + "/v1", apiKey: "kv" } })
+  await r.admin("/admin/api/provider", { method: "POST", body: { key: "bk", name: "备用", baseURL: backup.url + "/v1", apiKey: "kb" } })
+  await r.admin("/admin/api/model", { method: "POST", body: { items: [
+    { model: "std", provider: "vol", sort: 0 }, { model: "std", provider: "bk", sort: 1 },
+  ] } })
+
+  const x = await r.call({ model: "std", messages: [] })
+  assert.equal(x.status, 200, "订阅过期应当自动落到备用家，而不是把 400 甩给用户")
+  assert.equal(seen.length, 1, "备用家收到了这一单")
+
+  // 熔断：后台那一页要看得见"为什么不再走火山"，且下一单根本不去撞它
+  const list = await r.admin("/admin/api/providers")
+  const vol = list.json.supply.find((s) => s.provider === "vol")
+  assert.equal(vol.blocked, true, "撞过一次就该摘掉，否则每一单都要再白撞一个 RTT")
+  assert.match(vol.blockedWhy || vol.reason || "", /订阅过期|余额/)
+  await r.call({ model: "std", messages: [] })
+  assert.equal(seen.length, 2, "第二单直接走备用")
+})
+
 test("端到端：全部候选都被挡 → 兜底放行，不把全站饿死", async (t) => {
   const seen = []
   const only = await startFakeUpstream((req, res) => {

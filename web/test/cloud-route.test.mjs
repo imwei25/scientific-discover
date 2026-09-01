@@ -559,6 +559,26 @@ test("上游额度耗尽：与限速措辞相反、点明不是用户的积分�
   assert.match(D({ name: "APIError", data: { statusCode: 429, message: "UPSTREAM_QUOTA_EXCEEDED" } }, "cloud"), /上游模型额度已用尽/)
 })
 
+// 上游账户【订阅过期】：火山把它回成 HTTP 400，措辞里一个余额类词都没有 —— 修前落到最末
+// 的通用分支，用户只收到一句读不懂的英文原话（2026-09-01 实测）。
+test("上游订阅过期：说人话、点明不是用户的积分、不指去 api-config", async (t) => {
+  const r = await rig(); t.after(() => r.close())
+  const D = r.gw.mod.describeModelError
+  const ark = "Your account (2130613591) does not have a valid CodingPlan subscription, or your subscription has expired."
+  const m = D({ name: "APIError", data: { statusCode: 400, message: ark } }, "cloud")
+  assert.match(m, /订阅已过期|未开通/)
+  assert.match(m, /不是你的积分/)
+  assert.match(m, /重试不会成功/)
+  assert.match(m, /联系管理员/)
+  assert.match(m, /CodingPlan/, "上游原话要带上，管理员照着去续订")
+  // 网关认出来后回的结构化码同样要认
+  assert.match(D({ name: "APIError", data: { statusCode: 402, message: '{"error":{"code":"UPSTREAM_BILLING_ERROR"}}' } }, "cloud"), /订阅已过期|未开通/)
+  // 用自己 API 的人该被指去 api-config（不是找管理员）
+  assert.match(D({ name: "APIError", data: { statusCode: 400, message: ark } }, "custom"), /api-config/)
+  // ★ 不能误伤真正的参数错：那种要原样把上游的话给出去，别改口说成计费问题
+  assert.doesNotMatch(D({ name: "APIError", data: { statusCode: 400, message: "model `gpt-9` not found" } }, "cloud"), /订阅/)
+})
+
 test("上游额度耗尽：网关记的是 upstream 档封顶态，不会误报成用户积分用尽", async (t) => {
   const r = await rig((_q, res) => {
     // 假上游照火山原样回：429 + AccountQuotaExceeded，且【不带】Retry-After
