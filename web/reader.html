@@ -164,9 +164,14 @@ button{font:inherit}
 .setmenu .gostart:hover{background:var(--accent-deep)}
 .setmenu .gostart svg{width:13px;height:13px}
 
-/* 变量对应面板（只有 stats）：默认折叠的一条，展开是两列下拉 */
-.varsbox{flex:none;border-bottom:1px solid var(--line);background:#fff}
-.varsbox > summary{cursor:pointer;padding:9px 16px;font-size:12px;font-weight:600;display:flex;align-items:center;gap:8px;list-style:none}
+/* 变量对应面板（只有 stats）：默认折叠的一条，展开是两列下拉。
+   ★ flex:0 1 auto + max-height + 自己滚：展开后它有七个下拉、一排协变量 chips、一张前几行预览，
+     自然高度轻松超过整个面板。原来写的是 flex:none —— 于是它把 .ai-body（结果、产物列表、
+     追问入口全在里面）挤成一条一行高的缝，用户看到的就是"对话框只剩一行、产物根本看不到"。
+     现在它最多占面板的 42%，超出部分在自己内部滚；面板再矮时它还能被压缩（.ai-body 有
+     min-height 兜底，见下）。summary 吸顶，滚起来仍知道自己在哪一块里。 */
+.varsbox{flex:0 1 auto;min-height:0;max-height:42%;overflow:auto;overscroll-behavior:contain;border-bottom:1px solid var(--line);background:#fff}
+.varsbox > summary{position:sticky;top:0;z-index:2;background:#fff;cursor:pointer;padding:9px 16px;font-size:12px;font-weight:600;display:flex;align-items:center;gap:8px;list-style:none}
 .varsbox > summary::-webkit-details-marker{display:none}
 .varsbox > summary::before{content:"▸";color:var(--faint);font-size:11px}
 .varsbox[open] > summary::before{content:"▾"}
@@ -285,7 +290,10 @@ button{font:inherit}
 .ai-head .title svg{width:17px;height:17px;color:var(--accent)}
 .ai-head .badge{font-size:11px;color:var(--faint);background:var(--panel-soft);border:1px solid var(--line);padding:3px 9px;border-radius:999px;white-space:nowrap}
 .ai-head .acts{display:flex;align-items:center;gap:6px}
-.ai-body{flex:1;overflow:auto;padding:18px 18px 22px;background:var(--panel-soft)}
+/* ★ min-height 不能省：结果正文、产物列表、追问入口全在这一格里。它上面的「变量对应」展开时
+   自然高度很大，没有下限的话这一格会被压到零点几行（flex 项 overflow:auto 时 min-height:auto
+   解析成 0），屏幕上就只剩一条带滚动条的缝 —— 而那正是"跑完了却什么都看不见"的样子。 */
+.ai-body{flex:1 1 0;min-height:220px;overflow:auto;padding:18px 18px 22px;background:var(--panel-soft)}
 .pane{display:none}
 .pane.on{display:block}
 
@@ -402,6 +410,14 @@ button{font:inherit}
 .md th,.md td{border:1px solid var(--line);padding:6px 9px;text-align:left}
 .md th{background:var(--panel-soft);font-weight:600}
 .md td.num{text-align:right;font-variant-numeric:tabular-nums}
+
+/* 图片产物的缩略图（见 thumbsHtml）。一行两张，窄面板时自动落成一列。
+   白底 + 细边：统计图多半是白底，落在灰底面板上不给边框会糊成一片。 */
+.figs{margin-top:14px;display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:10px}
+.fig{margin:0;border:1px solid var(--line);border-radius:var(--r-sm);background:#fff;overflow:hidden;cursor:zoom-in;transition:border-color .15s,box-shadow .15s}
+.fig:hover{border-color:var(--accent);box-shadow:var(--shadow-sm)}
+.fig img{display:block;width:100%;max-height:260px;object-fit:contain;background:#fff}
+.fig figcaption{padding:6px 9px;border-top:1px solid var(--line);font-size:11px;color:var(--faint);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 
 /* 产物 */
 .files{margin-top:14px}
@@ -1869,9 +1885,22 @@ function runHtml(m) {
         + "</details>" : "")
     + "</div>"
 }
+/* 图片产物直接【铺出来】，不只列一行文件名。
+   【为什么】统计分析 / 出版级图跑完，图就在产物里，但一行 "plot_km.png" + 一颗眼睛按钮，
+   看上去与一份 csv 没有任何区别 —— 用户的原话是"统计分析完没有作图"，实际是图出了、
+   但屏幕上没有任何一个像图的东西。缩略图点一下仍走同一个预览浮层（看大图 / 下载）。
+   脱敏对照表这类 isSecret 的文件不铺（它本来就不许在界面里展示）。 */
+function thumbsHtml(list) {
+  const imgs = (list || []).filter((n) => PV_IMG.test(n) && !isSecret(n)).slice(0, 8)
+  if (!imgs.length) return ""
+  return '<div class="figs">' + imgs.map((n) =>
+    '<figure class="fig" data-pv="' + esc(n) + '" title="点开看大图">'
+    + '<img loading="lazy" alt="' + esc(n) + '" src="api/raw?name=' + encodeURIComponent(n) + sidQ() + '">'
+    + "<figcaption>" + esc(String(n).split("/").pop()) + "</figcaption></figure>").join("") + "</div>"
+}
 function filesHtml(list, title) {
   if (!list || !list.length) return ""
-  return '<div class="files"><div class="ft">' + esc(title || "本轮产物") + "</div>" + list.map((n) => {
+  return thumbsHtml(list) + '<div class="files"><div class="ft">' + esc(title || "本轮产物") + "</div>" + list.map((n) => {
     // download 属性只给最后一段：带 "pdfs/" 前缀的话浏览器保存时会把斜杠清洗成怪名字
     const dl = '<a class="fbtn" href="api/download?name=' + encodeURIComponent(n) + sidQ()
       + '" download="' + esc(String(n).split("/").pop()) + '" title="下载" aria-label="下载 ' + esc(n) + '">' + ICON.download + "</a>"
@@ -2284,6 +2313,10 @@ async function run(m, force, userTxt, ask, stage2) {
   s.status = "running"; s.err = ""
   RUN = { mode: m, ask: !!ask, stage2: !!stage2, label: "正在提交…", skills: [], tools: new Map(), es: null }
   starting = true
+  // 开跑了就把「变量对应」收起来：它的用处是【跑之前】核对列名，这一刻起用户要看的是直播条与结果。
+  // 摊开着的话它占去面板上半屏，结果被挤在下面那条缝里——正是"跑完了什么都看不见"的观感。
+  // 想改回来点一下标题就展开，值一个都没丢（缺列时 showBlocked 会重新把它顶开）。
+  { const vb = $("varsBox"); if (vb && !vb.hidden) vb.open = false }
   renderRail(); render(m)
 
   let j = null, why = "网络异常"

@@ -474,7 +474,13 @@ const STATS_MODES = withAsk([
   { id: "analyze", label: "统计分析", icon: "chart", mark: "【统计分析】", badge: "组间 / 生存 / ROC / 回归",
     // 同上，且 file 不收 .csv：结果表（stats_*.csv）是给下游用的，正文该显示 analysis.md。
     // 面板正文按 markdown 渲染，csv 落进来会被渲染成一坨逗号（表头和数据全糊在一行）。
-    file: "^(analysis|sample_size).*\\.md$", out: "^(analysis|stats_|sample_size)[^/]*\\.(md|csv)$",
+    // out 里必须收 plot_*.png：这一步是【会画图的】（下面的 prompt 要求每个主分析配一张预览图），
+    // 而契约只认 md/csv 时那些图一张都不会出现在本面板下方 —— 用户点完「统计分析」看到的是
+    // 一篇纯文字报告，第一反应就是"它没作图"。（图会掉进智能助手那格的孤儿栏，没人会去那里找。）
+    // 用 plot_ 前缀与「出版级图」的 fig* 分家：一格是 150dpi 预览，一格是 300dpi + 矢量的投稿图，
+    // 同名的话两个面板会互相列对方的产物。
+    file: "^(analysis|sample_size).*\\.md$",
+    out: "^((analysis|stats_|sample_size)[^/]*\\.(md|csv)|plot_[^/]*\\.(png|svg|pdf))$",
     empty: ["还没跑分析", "点上方的「开始」。要做哪些分析、用哪几列，在上面的「变量对应」里指一下。"],
     tell: "用 `data-analysis` 跑推断统计（组间比较 / 生存 / ROC / 回归 / 样本量），结果写成 `analysis.md` + `stats_*.csv`",
     prompt: "请用 `data-analysis` 技能对 {data} 做统计分析。{vars}\n\n"
@@ -486,7 +492,15 @@ const STATS_MODES = withAsk([
       + "然后照常把分析做完。\n"
       + "**我要做的分析缺关键列时（生存分析缺随访时间或终点事件、ROC 缺待评价指标或金标准），"
       + "先告诉我缺哪一列、表里有哪几列可选，别自己挑一列凑上去算。**\n"
-      + "结果写成 `analysis.md`（含方法与解读）+ `stats_*.csv`（可复用的结果表）。" },
+      // 【为什么要显式点名要图】不写这一句，模型跑完就只交一篇 analysis.md：数字全在文字里，
+      // 生存曲线、ROC、分布对比一张都没有。而"统计做完先看图"是这一步最基本的用法——
+      // 用户不该为了看一眼 KM 曲线，先去点「出版级图」等一轮 300dpi 出片。
+      + "**每个主分析都配一张预览图**（组间比较 → 箱线 / 小提琴；生存 → KM 曲线含风险人数表；"
+      + "ROC → 曲线含 AUC 与 95%CI；回归 → 森林图；相关 / 一致性 → 散点或 Bland-Altman），"
+      + "150dpi 即可，文件名用 `plot_km.png` / `plot_roc.png` 这类 **`plot_` 前缀**，"
+      + "并在报告里说明每张图画的是什么。**图上的每个数都必须来自真实算出来的结果。**\n"
+      + "这里出的是**看数用的预览图**；要 300dpi + 矢量的投稿图，点右边的「出版级图」（`nature-figure`）。\n"
+      + "结果写成 `analysis.md`（含方法与解读）+ `stats_*.csv`（可复用的结果表）+ `plot_*.png`（预览图）。" },
   { id: "figure", label: "出版级图", icon: "image", mark: "【出版级图】", badge: "300dpi + 矢量",
     file: null, out: "(^|/)(fig[^/]*|figures/.*)\\.(png|pdf|svg)$",
     empty: ["还没出图", "点上方的「开始」，把结果画成可直接投稿的图（300dpi + 矢量）。"],

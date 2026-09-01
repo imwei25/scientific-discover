@@ -120,15 +120,16 @@ description: 用于任何数据分析、统计计算、探索性画图、读写 
 > **基线特征表 Table 1 与样本量/把握度计算**用 `clinical-stats` 技能（已封装好，按变量类型自动选检验）；本技能做通用/自定义分析与建模。
 
 ## 数据治理（可复现的底线，动分析前先立规矩）
-- **原始数据只读**：`raw/` 里的原始文件**绝不就地修改**；清洗/派生一律写到 `processed/`、分析产物写 `analysis/`（或 `outputs/`）。原始数据进 `.gitignore`（含患者信息更要）。
+- **原始数据只读**：用户传来的原始文件**绝不就地修改**；清洗/派生另存新文件（如 `cleaned_队列.csv`）。原始数据进 `.gitignore`（含患者信息更要）。
 - **数据字典**：给每个变量登记 类型/取值范围或类别/单位/缺失编码，一份 `data_dictionary.md`——防"把分类当连续、把 9 当真值"。
 - **处理日志**：每步清洗/转换记一行（日期、做了什么、输入→输出文件），可回溯。
 - **脚本可复现**：用**相对路径**、**固定随机种子**（`np.random.default_rng(0)` 等）、记录 Python 与关键包版本；别把结果依赖于运行环境或随机性。
 
 ## 约定
 - 输入数据文件在工作目录，或 `uploads/` 目录里。**若数据含患者姓名/身份证/住院号/手机号等可识别信息，先提醒用户脱敏再分析。**
-- **所有产出（图表 PNG、结果 CSV/Excel）写到 `outputs/` 目录**，方便前端用户下载。
-- 画图用无界面后端：脚本开头 `import matplotlib; matplotlib.use("Agg")`，再 `plt.savefig("outputs/xxx.png", dpi=150, bbox_inches="tight")`。
+- **所有产出（图表 PNG、结果 CSV/Excel）写当前工作目录，用裸文件名**（`analysis.md` / `stats_km.csv` / `plot_km.png`）——它就是本会话的产物目录，界面照着它列产物。
+  **别拼 `outputs/` 前缀**：那会写成 `outputs/<会话id>/outputs/…`，界面的产物契约按裸文件名匹配，用户看不到任何东西（见本文件开头第 11 行）。
+- 画图用无界面后端：脚本开头 `import matplotlib; matplotlib.use("Agg")`，再 `plt.savefig("plot_xxx.png", dpi=150, bbox_inches="tight")`（裸文件名，同上）。
 - **中文图别自己乱设字体**：运行环境已配好系统级 matplotlibrc 兜底，默认就能出中文，通常**什么都不用设**。
   确实要在代码里显式设字体时，**只能**用下面这一行（`font.family` 多族列表，逐字一致）：
   ```python
