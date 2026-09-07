@@ -117,9 +117,16 @@ const loadApiProfiles = () => {
     return Array.isArray(a) ? a.filter((p) => p && p.id && p.baseURL && p.apiKey) : []
   } catch { return [] }
 }
+// 【席位凭证不占那 3 格】管理员分配的企业版 coding plan 席位（见 syncSeat）也存在这个文件里，
+// 带 seat 字段。它是平台发的、不是用户自己填的：不计入"最多 3 套"，也永远不会被挤掉——
+// 挤掉了他就得等下一次同步才拿回来，中间那段 opencode 指着一套本机已经没有的凭证。
+const isSeatProfile = (p) => !!(p && p.seat && p.seat.id)
+const seatProfile = () => loadApiProfiles().find(isSeatProfile) || null
 const saveApiProfiles = (list) => {
   try {
-    fs.writeFileSync(API_PROFILES_PATH, JSON.stringify(list.slice(0, MAX_API_PROFILES), null, 2), { mode: 0o600 })
+    const seat = list.filter(isSeatProfile)
+    const own = list.filter((p) => !isSeatProfile(p)).slice(0, MAX_API_PROFILES)
+    fs.writeFileSync(API_PROFILES_PATH, JSON.stringify([...seat, ...own], null, 2), { mode: 0o600 })
     try { fs.chmodSync(API_PROFILES_PATH, 0o600) } catch {}   // 文件已存在时 writeFileSync 的 mode 不生效，补一刀
   } catch {}
 }
@@ -138,6 +145,8 @@ const profileBrief = (p) => ({
   id: p.id, name: p.name || hostOf(p.baseURL), baseURL: p.baseURL,
   models: Array.isArray(p.models) && p.models.length ? p.models : (p.modelID ? [p.modelID] : []),
   modelID: p.modelID || "", keyMask: maskKey(p.apiKey), savedAt: p.savedAt || 0,
+  // 席位凭证：前端据此画"管理员分配"标签、藏掉删除按钮（它不是用户自己存的，删了也会被同步回来）
+  seat: isSeatProfile(p) ? { id: p.seat.id, name: p.seat.name || "", applied: !!p.seat.applied } : null,
 })
 // 给自定义/网关模型注入定价（USD / 每百万 token），否则 opencode 不知道价格 → session.cost 恒为 0 →
 // 每日成本额度与中途封顶全部失效。价格由 OC_COST_* 环境变量给（部署时按环境变量配），缺省按 DeepSeek 常见价。
@@ -379,6 +388,9 @@ function inferLegacyRoute(saved) {
   if (gatewayEnvSet() && sameEndpoint(saved.baseURL, process.env.OC_GATEWAY_URL)) return "gateway"
   return "custom"
 }
+// 直连路由（不经平台）：custom = 用户自己填的 API；seat = 管理员分配的企业版 coding plan 席位。
+// 两者在 opencode 眼里一模一样（都是一套 baseURL + key 直连），差别只在"凭证从哪来、能不能删"。
+const isDirectRoute = (r) => r === "custom" || r === "seat"
 function currentRoute() {
   const saved = loadModelCfg()
   if (!saved?.baseURL) return cloudLoggedIn() ? "cloud" : (gatewayEnvSet() ? "gateway" : "none")
@@ -435,12 +447,19 @@ function useGatewayRoute() {
  * 切到用户自设的直连 API（POST /api/model 与「用这套凭证」共用同一段，免得两条路行为不一致）。
  * cfg = { baseURL, apiKey, modelID, models }。返回是否真的重启了 opencode。
  */
-async function applyCustomRoute(cfg) {
+async function applyCustomRoute(cfg, { restart = true } = {}) {
   const needRestart = providerJsonFor(cfg) !== ocLiveProvider
   writeOcProvider(cfg)
-  saveModelCfg({ route: "custom", baseURL: cfg.baseURL, apiKey: cfg.apiKey, modelID: cfg.modelID, models: cfg.models || [cfg.modelID], picked: cfg.modelID })
+  // cfg.seat = {id,name}：这套凭证是管理员分配的席位 → 路由记成 seat（前端据此显示"直连席位"、
+  // 「切回云端」可用；席位被收回时 syncSeat 靠它判断"当前正跑在被收回的那套上"）
+  saveModelCfg({
+    route: cfg.seat ? "seat" : "custom", baseURL: cfg.baseURL, apiKey: cfg.apiKey, modelID: cfg.modelID,
+    models: cfg.models || [cfg.modelID], picked: cfg.modelID,
+    ...(cfg.seat ? { seatId: cfg.seat.id, seatName: cfg.seat.name || "" } : {}),
+  })
   MODEL = { providerID: CUSTOM_PROVIDER_ID, modelID: cfg.modelID }
   if (!needRestart) return false                     // 同一套凭证 + 同一批模型：只是换了选中项，不必重启
+  if (!restart) return false                         // 调用方稍后自己统一判断要不要重启（登录那条链）
   let restarted = false
   try { restarted = await restartOpencode() } catch {}
   if (!restarted) { try { await client.config.update({ body: { provider: { [CUSTOM_PROVIDER_ID]: customProviderCfg(cfg) } } }) } catch {} }
@@ -452,7 +471,8 @@ async function applyCustomRoute(cfg) {
  */
 function rememberApiProfile({ baseURL, apiKey, modelID, models, name }) {
   const list = loadApiProfiles()
-  const i = list.findIndex((p) => sameEndpoint(p.baseURL, baseURL))
+  // 席位那套不参与"同地址覆盖"：用户手填一个恰好同地址的自定义凭证，不该把管理员发的那套改掉
+  const i = list.findIndex((p) => !isSeatProfile(p) && sameEndpoint(p.baseURL, baseURL))
   const entry = {
     id: i >= 0 ? list[i].id : crypto.randomBytes(6).toString("hex"),
     name: (name || (i >= 0 ? list[i].name : "") || hostOf(baseURL)).slice(0, 40),
@@ -462,13 +482,134 @@ function rememberApiProfile({ baseURL, apiKey, modelID, models, name }) {
   if (i >= 0) list[i] = entry
   else {
     list.push(entry)
-    if (list.length > MAX_API_PROFILES) {
-      list.sort((a, b) => (a.savedAt || 0) - (b.savedAt || 0))
-      dropped = list.shift()?.name || ""
+    // 只在用户自己存的那几套里挤最久没用的；席位凭证不占格也不会被挤（见 saveApiProfiles）
+    const own = list.filter((p) => !isSeatProfile(p))
+    if (own.length > MAX_API_PROFILES) {
+      own.sort((a, b) => (a.savedAt || 0) - (b.savedAt || 0))
+      const victim = own[0]
+      dropped = victim?.name || ""
+      list.splice(list.indexOf(victim), 1)
     }
   }
   saveApiProfiles(list)
   return { saved: profileBrief(entry), dropped }
+}
+
+// ---- 企业版 coding plan 席位：与云端对账、落本机凭证档、切路由 ----
+//
+// 【是什么】管理员在后台把一份企业版 coding plan（一套「地址 + key」）分给这个账号后，
+// 客户端要做三件事：① 到 /api/seat 把凭证拉下来，存进本机凭证档（api-profiles.json，带 seat 字段，
+// 0600、不占用户自己的 3 格）；② 把 opencode 切成【直连】那个地址 —— 此后模型请求不经过云端网关；
+// ③ 席位被收回 / 停用 / 删除时，把本机那套凭证删掉，若正跑在它上面就切回云端网关。
+//
+// 【什么时候对账】登录成功后、用户点「刷新」时、以及 /api/quota 那条 30 秒轮询带回的席位摘要
+// （id + rev）与本机存的不一致时。云端【不会】为分配席位吊销 key（吊销会打断在跑的轮、逼人重登），
+// 所以这条轮询就是"半分钟内自动生效"的全部依靠。
+//
+// 【自动切、但只切一次】首次拿到席位（或换了一份）自动切到直连；之后用户点了「切回云端」，
+// 就尊重他的选择，不再每次对账都把他推回席位 —— 标记记在凭证档的 seat.applied 上，跨重启有效。
+// 凭证有更新（管理员换了 key / 地址 / 模型，rev 变了）且当前正跑在席位上 → 原地更新并重启。
+//
+// 【有轮在跑时不重启】切路由要重启 opencode，会把在跑的轮拔掉。此时只落盘不切，
+// 让下一次对账（≤30 秒后）再试 —— 判据仍是 applied=false / route=seat，天然可重入。
+let seatSyncing = null
+let seatEvent = null   // 给前端的一次性提示：{kind: assigned|updated|revoked|pending|error, name, model, at}
+const seatSummaryLocal = () => { const p = seatProfile(); return p ? { id: p.seat.id, rev: p.seat.rev || 0, applied: !!p.seat.applied } : null }
+/** 云端说的席位摘要与本机存的对不上（或本机还没切过去）→ 该对账了。undefined = 老服务端，不管 */
+function seatNeedsSync(remote) {
+  if (remote === undefined) return false
+  const local = seatSummaryLocal()
+  if (!remote) return !!local || currentRoute() === "seat"
+  if (!local) return true
+  return local.id !== remote.id || (local.rev || 0) !== (remote.rev || 0) || !local.applied
+}
+async function syncSeat({ restart = true } = {}) {
+  if (!cloudLoggedIn()) return { ok: false, change: "none" }
+  if (seatSyncing) return seatSyncing
+  seatSyncing = (async () => {
+    let r
+    try { r = await Cloud.fetchSeat() } catch (e) { r = { ok: false, error: { message: e?.message || "网络错误" } } }
+    if (!r.ok) return { ok: false, change: "none", err: r.error?.message || "拉取席位失败" }
+    const remote = r.seat
+    const list = loadApiProfiles()
+    const local = list.find(isSeatProfile) || null
+    const cfg = loadModelCfg()
+    const onSeat = !!cfg && (cfg.route || inferLegacyRoute(cfg)) === "seat"
+    // ---- 没有席位（从未分配 / 已收回 / 停用 / 删除）----
+    if (!remote) {
+      if (!local && !onSeat) return { ok: true, change: "none" }
+      if (onSeat) {
+        if (runningRounds() > 0) return { ok: true, change: "pending" }   // 下次对账再切，别拔在跑的轮
+        try { fs.unlinkSync(MODEL_CFG_PATH) } catch {}
+        if (platformAvailable()) useGatewayRoute()
+        else { removeOcProvider(); MODEL = { providerID: PID, modelID: MID } }
+        if (restart) { try { await restartOpencode() } catch {} }
+      }
+      if (local) saveApiProfiles(list.filter((p) => !isSeatProfile(p)))
+      patchProfileSeat(null)
+      seatEvent = { kind: "revoked", name: (local?.seat?.name || cfg?.seatName || ""), at: Date.now() }
+      console.log(`[seat] 席位已收回${local?.seat?.name ? "：" + local.seat.name : ""}，已切回平台路由`)
+      return { ok: true, change: "revoked" }
+    }
+    // ---- 有席位：落凭证档 ----
+    const models = Array.isArray(remote.models) && remote.models.length ? remote.models.map(String) : (remote.model ? [String(remote.model)] : [])
+    if (!remote.baseURL || !remote.apiKey || !models.length) return { ok: false, change: "none", err: "云端下发的席位凭证不完整" }
+    { const bad = modelUrlReject(remote.baseURL); if (bad) { seatEvent = { kind: "error", name: remote.name, err: JSON.parse(bad).err, at: Date.now() }; return { ok: false, change: "none", err: JSON.parse(bad).err } } }
+    const same = local && local.seat.id === remote.id
+    const changed = !same || local.baseURL !== remote.baseURL || local.apiKey !== remote.apiKey ||
+      JSON.stringify(local.models || []) !== JSON.stringify(models) || (local.seat.rev || 0) !== (remote.rev || 0)
+    const entry = {
+      id: same ? local.id : "seat-" + crypto.randomBytes(4).toString("hex"),
+      name: String(remote.name || "").slice(0, 40) || hostOf(remote.baseURL),
+      baseURL: remote.baseURL, apiKey: remote.apiKey, modelID: models[0], models,
+      savedAt: same ? (local.savedAt || Date.now()) : Date.now(),
+      seat: { id: remote.id, name: String(remote.name || ""), rev: remote.rev || 0, applied: same ? !!local.seat.applied : false, syncedAt: Date.now() },
+    }
+    const next = [entry, ...list.filter((p) => !isSeatProfile(p))]
+    patchProfileSeat({ id: remote.id, name: remote.name, baseURL: remote.baseURL, models, model: models[0], rev: remote.rev || 0, assignedAt: remote.assignedAt })
+    // ---- 要不要切路由：首次拿到（或换了一份）→ 切；正跑在席位上且凭证变了 → 原地更新 ----
+    const want = !entry.seat.applied || (onSeat && changed)
+    if (!want) { if (changed) saveApiProfiles(next); return { ok: true, change: changed ? "updated" : "none" } }
+    if (runningRounds() > 0) {
+      saveApiProfiles(next)   // 凭证先存下，applied 仍为 false → 下次对账（≤30s）再切
+      seatEvent = seatEvent?.kind === "pending" ? seatEvent : { kind: "pending", name: entry.name, at: Date.now() }
+      return { ok: true, change: "pending" }
+    }
+    // 正跑在同一份席位上且用户选过别的模型 → 保住他的选择；否则用默认（第一个）
+    const keep = onSeat && same && cfg?.modelID && models.includes(cfg.modelID) ? cfg.modelID : models[0]
+    entry.seat.applied = true
+    saveApiProfiles(next)
+    const restarted = await applyCustomRoute({ baseURL: entry.baseURL, apiKey: entry.apiKey, modelID: keep, models, seat: { id: entry.seat.id, name: entry.name } }, { restart })
+    seatEvent = { kind: same && onSeat ? "updated" : "assigned", name: entry.name, model: keep, at: Date.now() }
+    console.log(`[seat] 已切到企业版 coding plan 席位「${entry.name}」直连 ${hostOf(entry.baseURL)}（模型 ${keep}${restarted ? "，已重启 opencode" : ""}）`)
+    return { ok: true, change: same && onSeat ? "updated" : "assigned", restarted }
+  })().catch((e) => ({ ok: false, change: "none", err: e?.message || String(e) }))
+    .finally(() => { seatSyncing = null })
+  return seatSyncing
+}
+/**
+ * 把本地档案快照里的席位摘要（无 key）与刚对完账的事实对齐。档案是登录 / 5 分钟同步时才刷的，
+ * 对账走的是更快的 /api/seat —— 不对齐的话，收回后 seatStatus() 还会从旧档案里"看见"席位。
+ */
+function patchProfileSeat(brief) {
+  try {
+    const st = Cloud.loadState()
+    if (!st?.profile) return
+    if (JSON.stringify(st.profile.seat || null) === JSON.stringify(brief || null)) return
+    Cloud.saveState({ ...st, profile: { ...st.profile, seat: brief || null } })
+  } catch {}
+}
+/** 登出 / 换账号：席位跟账号走，本机那套凭证要清掉（路由由调用方随后重配） */
+function dropSeatLocal() {
+  const list = loadApiProfiles()
+  if (list.some(isSeatProfile)) saveApiProfiles(list.filter((p) => !isSeatProfile(p)))
+}
+/** 给前端的席位摘要（无 key）：有没有、叫什么、本机存没存、现在是不是跑在它上面 */
+function seatStatus() {
+  const p = seatProfile()
+  const remote = (cloudLoggedIn() && Cloud.loadState()?.profile?.seat) || null
+  const s = p ? { id: p.seat.id, name: p.name, applied: !!p.seat.applied, profileId: p.id } : (remote ? { id: remote.id, name: remote.name, applied: false, profileId: "" } : null)
+  return s ? { ...s, active: currentRoute() === "seat" } : null
 }
 
 // 启动时恢复路由：用户自设 > 平台（云端账号 / 静态网关 key）。
@@ -477,7 +618,9 @@ function rememberApiProfile({ baseURL, apiKey, modelID, models, name }) {
 {
   const saved = loadModelCfg()
   const savedRoute = saved?.baseURL ? (saved.route || inferLegacyRoute(saved)) : null
-  if (savedRoute === "custom" && saved.apiKey && saved.modelID) {
+  // seat（管理员分配的席位直连）与 custom 同款恢复：席位若在关机期间被收回，登录态还在，
+  // 第一次 /api/quota 轮询就会发现并切回（见 syncSeat）。
+  if (isDirectRoute(savedRoute) && saved.apiKey && saved.modelID) {
     writeOcProvider(saved)
     MODEL = { providerID: CUSTOM_PROVIDER_ID, modelID: saved.modelID }
   } else if (platformAvailable()) {
@@ -1227,6 +1370,8 @@ async function cloudQuota(fresh = false) {
   if (!fresh && cloudQuotaCache && now - cloudQuotaCache.at < CLOUD_QUOTA_TTL)
     return { ...cloudQuotaCache.data, stale: false }
   const r = await Cloud.fetchQuota().catch(() => ({ ok: false }))
+  // 席位摘要搭这条轮询的便车：与本机对不上就去对账（single-flight、不等它，别拖慢额度显示）
+  if (r.ok && seatNeedsSync(r.seat)) syncSeat().catch(() => {})
   if (r.ok && r.quota) { cloudQuotaCache = { at: now, data: r.quota }; return { ...r.quota, stale: false } }
   // 拉失败：保留上一份并标 stale（前端加一句"未更新"），与公告同一口径 —— 断网时让额度栏
   // 凭空消失，用户会理解成"额度被清零/被停用"，比显示一个几十秒前的旧数糟得多。
@@ -1247,6 +1392,8 @@ const entRev = () => {
     models: (p.models || []).map((m) => (m && m.model) || m).sort(),
     skills: set ? [...set].sort() : null,
     modules: ALL_MODULE_IDS().filter(moduleUsable),
+    // 席位分配/收回也算"看得见的授权变化"：前端据此重取模型清单（直连后清单换成席位的那几个）
+    seat: (p.seat && p.seat.id) || 0, seatRoute: currentRoute() === "seat",
   }
   return crypto.createHash("sha1").update(JSON.stringify(payload)).digest("hex").slice(0, 12)
 }
@@ -2189,7 +2336,9 @@ export function describeModelError(err, route) {
   const code = Number(d.statusCode) || 0
   const who = route === "custom"
     ? "请在对话框输入 api-config 检查你自己的 API 配置。"
-    : "请联系管理员（可在后台「模型供应商」页换一家或充值）。"
+    : route === "seat"
+      ? "你正走管理员分配的 coding plan 席位直连：请联系管理员核对该席位的地址 / key / 订阅状态；急用可在对话框输入 api-config 点「切回云端」先用网关。"
+      : "请联系管理员（可在后台「模型供应商」页换一家或充值）。"
   const tail = raw ? `（上游原话：${raw.slice(0, 160)}）` : ""
   // 云端网关自己的两个"排队排不上"错误码：它们既不是配置问题也不是上游故障，用户该做的
   // 只有"稍后再试"，别把人指去 api-config 白折腾一遍。
@@ -2229,7 +2378,7 @@ export function describeModelError(err, route) {
   // 话去找管理员，而管理员也无从下手，真正该做的那一步（退出重登）反倒一个字都没说。
   // 【为什么连 message 一起认】code 只在结构化错误里有，opencode 转手时常常只剩一句原话。
   // （只对走平台的路由成立：用自己 API 的人压根没有平台票据这回事，别把他指去退出重登。）
-  if (route !== "custom" && (/KEY_REVOKED|REFRESH_INVALID|KEY_EXPIRED|KEY_INVALID|KEY_MISSING/.test(raw) ||
+  if (!isDirectRoute(route) && (/KEY_REVOKED|REFRESH_INVALID|KEY_EXPIRED|KEY_INVALID|KEY_MISSING/.test(raw) ||
       ((code === 401 || code === 403) && /重新登录|重登|登录已(失效|过期)|账号信息已变更/.test(raw))))
     return "你的登录状态已失效（多半是管理员刚调整过你的账号，或这台设备的登录太久了），本轮未能生成。"
       + "请点左下角的「用户」→「退出登录」，再用原来的账号密码登录一次，就能接着用了（会话与产物都不会丢）。"
@@ -3435,7 +3584,7 @@ let suggestInFlight = 0
 function suggestProvider() {
   const route = currentRoute()
   let p = null
-  if (route === "custom") {
+  if (isDirectRoute(route)) {
     const s = loadModelCfg()
     if (!s?.baseURL || !s?.apiKey || !s?.modelID) return null
     p = { route, baseURL: s.baseURL, apiKey: s.apiKey, modelID: s.modelID }
@@ -4890,7 +5039,9 @@ export const server = http.createServer(async (req, res) => {
       // fresh=1：一轮对话刚结束时前端会带上它，跳过缓存直接问云端 —— 用户此刻正想看
       // "这轮花了多少"，给他一个最多 20 秒前的旧数就白刷新了。
       const cloud = await cloudQuota(u.searchParams.get("fresh") === "1")
-      return send(res, 200, "application/json", JSON.stringify({ used: quotaUsedLive(), limit: DAILY_COST_LIMIT, cloud }))
+      // seatEvent：席位刚被分配/收回/更新的一次性提示，前端 toast 一句并刷新模型 pill；取走即清
+      const ev = seatEvent; seatEvent = null
+      return send(res, 200, "application/json", JSON.stringify({ used: quotaUsedLive(), limit: DAILY_COST_LIMIT, cloud, seat: seatStatus(), ...(ev ? { seatEvent: ev } : {}) }))
     }
     if (req.method === "GET" && u.pathname === "/api/storage") {   // 前端显示存储用量（uploads+outputs）
       return send(res, 200, "application/json", JSON.stringify({ used: storageUsed(), limit: storageLimitBytes() }))
@@ -5452,9 +5603,17 @@ export const server = http.createServer(async (req, res) => {
       }
       // 登录/改密成功后先把档案拉一次：模型名要写进 provider 配置
       if (u.pathname !== "/api/cloud/logout") { try { await Cloud.fetchProfile() } catch {} }
-      // 重配路由：登录/改密后走云端账号；登出后回落静态网关 key，都没有就清掉 provider
-      if (platformAvailable()) useGatewayRoute()
+      // 登出：席位跟账号走，本机那套席位凭证一并清掉（换个账号登录不该继承上一个人的席位）
+      if (u.pathname === "/api/cloud/logout") dropSeatLocal()
+      // 重配路由：登录/改密后走云端账号；登出后回落静态网关 key，都没有就清掉 provider。
+      // 【解锁重登且正跑在席位上 → 路由不动】席位直连不依赖登录票据，解锁只是把界面打开；
+      // 若照旧 useGatewayRoute() 会把他悄悄挪回网关（且还要重启），每次锁屏解锁都被挪一次。
+      const keepSeat = relogin && currentRoute() === "seat"
+      if (keepSeat) { /* 保持席位直连 */ }
+      else if (platformAvailable()) useGatewayRoute()
       else { try { fs.unlinkSync(MODEL_CFG_PATH) } catch {}; removeOcProvider(); MODEL = { providerID: PID, modelID: MID } }
+      // 席位对账：有分配就切成直连（首次）/ 更新凭证；重启统一交给下面那段判断，别在这里重启两次
+      if (u.pathname !== "/api/cloud/logout" && !Cloud.status().mustChangePassword) { try { await syncSeat({ restart: false }) } catch {} }
       // 聊天接入桥把生图/OCR 代理变量烘在 cc-connect 的 config.toml 里，登录态翻转后要
       // 重写才生效（没翻转它自己会判空转，解锁重登不折腾桥）。详见 Bridge.syncCloudEnv。
       try { await Bridge.syncCloudEnv() } catch (e) { console.warn("[chat-bridge] 登录态变化后同步失败：" + (e?.message || e)) }
@@ -5490,7 +5649,10 @@ export const server = http.createServer(async (req, res) => {
         useGatewayRoute()
         try { restarted = await restartOpencode() } catch {}
       }
-      return send(res, 200, "application/json", JSON.stringify({ ok: true, restarted, ...Cloud.status(), route: currentRoute() }))
+      // 用户手点「刷新」= 想立刻看到后台的变动，席位也顺手对一次账（分配 / 收回 / 换 key）
+      let seatChange = "none"
+      try { const s = await syncSeat(); seatChange = s.change || "none"; if (s.restarted) restarted = true } catch {}
+      return send(res, 200, "application/json", JSON.stringify({ ok: true, restarted, seatChange, seat: seatStatus(), ...Cloud.status(), route: currentRoute() }))
     }
 
     // 平台公告（站长在云端后台发布）。前端每几分钟问一次这里。
@@ -5868,7 +6030,9 @@ export const server = http.createServer(async (req, res) => {
         isCustom: MODEL.providerID === CUSTOM_PROVIDER_ID,
         baseURL: c?.baseURL || "", hasKey: !!(c && c.apiKey),
         // 当前这套自定义配置里可选的模型（用户可一次填多个模型 ID，顶部 pill 直接切）
-        customModels: currentRoute() === "custom" ? (Array.isArray(c?.models) && c.models.length ? c.models : (c?.modelID ? [c.modelID] : [])) : [],
+        customModels: isDirectRoute(currentRoute()) ? (Array.isArray(c?.models) && c.models.length ? c.models : (c?.modelID ? [c.modelID] : [])) : [],
+        // 企业版 coding plan 席位（无 key）：有没有分配、叫什么、现在是不是跑在它上面
+        seat: seatStatus(),
         // 本机存下来的凭证档（只出掩码，绝不回显 key）
         profiles: loadApiProfiles().map(profileBrief), maxProfiles: MAX_API_PROFILES,
         default: `${PID}/${MID}`, managed: OC_MANAGED,
@@ -5971,12 +6135,14 @@ export const server = http.createServer(async (req, res) => {
       const route = currentRoute()
       // 直连自己 API 的用户也该有这个下拉：他在设置里填了几个模型 ID，这里就列几个。
       // 服务器不知道也不该猜他那家有什么模型 —— 清单完全由他自己填的那串决定。
-      if (route === "custom") {
+      if (isDirectRoute(route)) {
         const c = loadModelCfg() || {}
         const ids = Array.isArray(c.models) && c.models.length ? c.models : (c.modelID ? [c.modelID] : [])
+        // 席位直连：清单是管理员在席位里填的那几个模型；供应商一栏写席位名，用户一眼知道走的是哪份
+        const prov = route === "seat" ? ("席位 " + (c.seatName || hostOf(c.baseURL))) : hostOf(c.baseURL)
         return send(res, 200, "application/json", JSON.stringify({
           ok: true, route, current: MODEL.modelID, default: ids[0] || "",
-          models: ids.map((m) => ({ model: m, label: m, provider: hostOf(c.baseURL) })),
+          models: ids.map((m) => ({ model: m, label: m, provider: prov })),
         }))
       }
       const list = route === "cloud" ? cloudModels() : []
@@ -5996,6 +6162,8 @@ export const server = http.createServer(async (req, res) => {
       const p = list.find((x) => x.id === id)
       if (!p) return send(res, 404, "application/json", JSON.stringify({ ok: false, err: "这套凭证已不在本机（可能已被删除）" }))
       if (u.pathname === "/api/model/profiles/delete") {
+        // 席位凭证是管理员分配的：本机删了下次对账又会同步回来，删除没有意义；要不用它就「切回云端」
+        if (isSeatProfile(p)) return send(res, 400, "application/json", JSON.stringify({ ok: false, err: "这是管理员分配的 coding plan 席位，不能在本机删除；不想用它就点「切回云端」，要彻底收回请联系管理员" }))
         saveApiProfiles(list.filter((x) => x.id !== id))
         // 只删存档，不动当前路由：正在用它跑的会话不该因为"整理了一下列表"就被拔掉。
         return send(res, 200, "application/json", JSON.stringify({ ok: true, profiles: loadApiProfiles().map(profileBrief) }))
@@ -6006,9 +6174,11 @@ export const server = http.createServer(async (req, res) => {
       if (!modelID) return send(res, 400, "application/json", JSON.stringify({ ok: false, err: "这套凭证没有可用的模型 ID" }))
       const willRestart = providerJsonFor({ baseURL: p.baseURL, apiKey: p.apiKey, modelID, models }) !== ocLiveProvider
       if (willRestart) { const busy = runningRounds(); if (busy > 0 && !force) return send(res, 409, "application/json", JSON.stringify({ ok: false, busy, needForce: true, err: `有 ${busy} 轮正在生成中，切换凭证需重启后台，会中断它们` })) }
-      const restarted = await applyCustomRoute({ baseURL: p.baseURL, apiKey: p.apiKey, modelID, models })
+      // 席位凭证：路由记成 seat（而不是 custom），并把 applied 记上——用户主动切回席位，下次对账不必再"首次自动切"
+      const seatMeta = isSeatProfile(p) ? { id: p.seat.id, name: p.name || p.seat.name || "" } : null
+      const restarted = await applyCustomRoute({ baseURL: p.baseURL, apiKey: p.apiKey, modelID, models, ...(seatMeta ? { seat: seatMeta } : {}) })
       // 记一次"最近用过"：三格满了要挤人时按它挑，挤掉的才是真正最久没碰的那套
-      p.savedAt = Date.now(); saveApiProfiles(list)
+      p.savedAt = Date.now(); if (seatMeta) p.seat.applied = true; saveApiProfiles(list)
       return send(res, 200, "application/json", JSON.stringify({ ok: true, restarted, modelID, models, name: p.name || hostOf(p.baseURL) }))
     }
     // 用户切换平台下的模型：沿用平台的 baseURL/key，只换模型名（持久化 + 重启 opencode 生效）
@@ -6021,13 +6191,15 @@ export const server = http.createServer(async (req, res) => {
       if (!modelID) return send(res, 400, "application/json", JSON.stringify({ ok: false, err: "缺 model" }))
       // 【直连自己 API 的用户也要能切】他在设置里填的那几个模型 ID 就是清单，沿用同一套 baseURL/key。
       // 多模型都已注册进 provider（见 customProviderCfg）→ 这一步通常连 opencode 都不用重启。
-      if (currentRoute() === "custom") {
+      if (isDirectRoute(currentRoute())) {
         const c = loadModelCfg() || {}
         const models = Array.isArray(c.models) && c.models.length ? c.models : (c.modelID ? [c.modelID] : [])
-        if (!models.includes(modelID)) return send(res, 400, "application/json", JSON.stringify({ ok: false, err: `「${modelID}」不在你填的模型 ID 里，请先到「模型 API 设置」补上` }))
+        const onSeat = (c.route || inferLegacyRoute(c)) === "seat"
+        if (!models.includes(modelID)) return send(res, 400, "application/json", JSON.stringify({ ok: false, err: onSeat ? `「${modelID}」不在这份席位的模型清单里（由管理员在后台配置）` : `「${modelID}」不在你填的模型 ID 里，请先到「模型 API 设置」补上` }))
         const willRestart = providerJsonFor({ baseURL: c.baseURL, apiKey: c.apiKey, modelID, models }) !== ocLiveProvider
         if (willRestart) { const busy = runningRounds(); if (busy > 0 && !force) return send(res, 409, "application/json", JSON.stringify({ ok: false, busy, needForce: true, err: `有 ${busy} 轮正在生成中，切换模型需重启后台，会中断它们` })) }
-        const restarted = await applyCustomRoute({ baseURL: c.baseURL, apiKey: c.apiKey, modelID, models })
+        // 席位路由切模型要把 seat 元信息带着，否则 saveModelCfg 会把 route 写回 custom
+        const restarted = await applyCustomRoute({ baseURL: c.baseURL, apiKey: c.apiKey, modelID, models, ...(onSeat ? { seat: { id: c.seatId, name: c.seatName || "" } } : {}) })
         return send(res, 200, "application/json", JSON.stringify({ ok: true, restarted, modelID }))
       }
       if (!platformAvailable()) return send(res, 400, "application/json", JSON.stringify({ ok: false, err: "未接入平台，无法切换模型" }))

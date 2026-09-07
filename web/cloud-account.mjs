@@ -179,7 +179,21 @@ export async function fetchQuota() {
   if (!a.ok) return a
   const r = await api("/api/quota", { token: a.token })
   if (!r.ok) return r
-  return { ok: true, quota: r.data.quota || null }
+  // seat：席位摘要（无 key）搭这条轮询的便车下发；老服务端没有这个字段 → undefined（调用方当"不知道"）
+  return { ok: true, quota: r.data.quota || null, seat: r.data.seat === undefined ? undefined : (r.data.seat || null) }
+}
+
+/**
+ * 拉一次企业版 coding plan 席位的【完整凭证】（含 key）。只在 server.mjs 的 syncSeat 里调：
+ * 拿到就写进本机凭证档并把 opencode 切成直连；seat:null = 没分配 / 已收回。
+ * 【不落 cloud-state.json】那份状态会原样回给浏览器前端（/api/cloud/status），key 不能进去。
+ */
+export async function fetchSeat() {
+  const a = await currentAccess()
+  if (!a.ok) return a
+  const r = await api("/api/seat", { token: a.token })
+  if (!r.ok) return r
+  return { ok: true, seat: r.data.seat || null }
 }
 
 /**

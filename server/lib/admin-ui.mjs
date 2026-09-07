@@ -176,13 +176,14 @@ function render(){
   $('#sub').textContent='共 '+S.total+' 个账号';
   $('#app').innerHTML=
     '<div class="tabs">'+
-      tabBtn('users','用户')+tabBtn('board','看板')+tabBtn('bill','对账')+tabBtn('tiers','档位')+tabBtn('prov','模型供应商')+tabBtn('chan','上游通道')+tabBtn('packs','技能包')+tabBtn('webpacks','界面包')+tabBtn('feedback','用户反馈')+tabBtn('capture','抓包')+tabBtn('audit','审计')+
+      tabBtn('users','用户')+tabBtn('board','看板')+tabBtn('bill','对账')+tabBtn('tiers','档位')+tabBtn('prov','模型供应商')+tabBtn('seats','席位')+tabBtn('chan','上游通道')+tabBtn('packs','技能包')+tabBtn('webpacks','界面包')+tabBtn('feedback','用户反馈')+tabBtn('capture','抓包')+tabBtn('audit','审计')+
     '</div><div id="pane"></div>';
   Array.prototype.forEach.call(document.querySelectorAll('.tabs button'),function(b){
     b.onclick=function(){S.tab=b.dataset.k;
       if(S.tab==='audit')loadAudit();
       else if(S.tab==='chan')loadChannels();
       else if(S.tab==='prov')loadProviders();
+      else if(S.tab==='seats')loadSeats();
       else if(S.tab==='bill')loadBill();
       else if(S.tab==='packs')loadPacks();
       else if(S.tab==='webpacks')loadWebPacks();
@@ -298,7 +299,9 @@ function paneUsers(opt){
       '<td class="ck"><input type="checkbox" data-ck="'+u.id+'"'+(S.sel[u.id]?' checked':'')+'></td>'+
       '<td><b>'+esc(u.displayName)+'</b>'+(u.surname?' <span class="rank">姓:'+esc(u.surname)+'</span>':'')+
         '<div class="mut" style="font-size:12.5px">'+esc(u.username)+(u.hospital?' · '+esc(u.hospital):'')+'</div></td>'+
-      '<td><span class="tag">'+esc(u.tier)+'</span></td>'+
+      '<td><span class="tag">'+esc(u.tier)+'</span>'+
+        // 持席者：直连席位、网关额度已压到 free 一半 —— 列表里不标出来，管理员看用量列会以为额度配错了
+        (u.seat?'<div><span class="tag ok" title="企业版 coding plan 席位：客户端直连，网关额度已降到基础档一半">席位 '+esc(u.seat.name)+'</span></div>':'')+'</td>'+
       '<td>'+(u.status==='active'?'<span class="tag ok">正常</span>':'<span class="tag bad">已停用</span>')+
         (u.mustChangePw?' <span class="tag warn">待改密</span>':'')+'</td>'+
       '<td>'+skillCell(u)+'</td>'+
@@ -583,8 +586,33 @@ function dlgMore(u){
     '<div class="hint">只吊销已签发的 key（口令不变）。怀疑 key 外借/泄露时用。</div>'+
     '<button class="btn" id="m-cap"><span id="m-cap-t">调试抓包…</span></button>'+
     '<div class="hint">抓取该用户打到模型的每一条请求（含系统提示、技能内容），到「抓包」页可读展开，用来核模型实际吃到什么。抓的是会话明文，用完记得停并清空。</div>'+
+    // 企业版 coding plan 席位：分配后他的客户端拿到凭证直连上游（不经网关），网关额度压到 free 一半
+    (u.seat
+      ?'<button class="btn danger" id="m-seat-rel">释放席位「'+esc(u.seat.name)+'」</button>'+
+       '<div class="hint">收回这份 coding plan 凭证。他的客户端在半分钟内会自动切回云端网关并删掉本机存的那套凭证，网关额度恢复按档位算。<b>不会</b>踢他下线。</div>'
+      :'<div class="row"><select id="m-seat" style="flex:1"><option value="">（加载席位…）</option></select>'+
+       '<button class="btn" id="m-seat-go">分配 coding plan 席位</button></div>'+
+       '<div class="hint">把一份企业版 coding plan 的「地址 + key」交给他：客户端半分钟内自动拿到并<b>直连</b>上游，请求不再经过网关；持席期间他在网关这边的额度降到<b>基础档（free）的一半</b>（应急兜底用）。他随时可以在客户端切回网关、再切回席位。</div>')+
     '<button class="btn danger" id="m-del">删除账号</button>'+
     '<div class="hint">连同用量记录一并删除，不可恢复。</div></div>');
+  if(u.seat){
+    $('#m-seat-rel').onclick=function(e){e.preventDefault();
+      if(!confirm('释放 '+u.displayName+' 的席位「'+u.seat.name+'」？他的客户端会自动切回云端网关。'))return;
+      post('seat-assign',{seatId:u.seat.id,release:true}).then(function(j){
+        $('#dlg').close();toast(j.ok?'已释放席位，'+u.displayName+' 的客户端将自动切回网关':(j.err||'失败'),j.ok);load()})}
+  }else{
+    api('seats').then(function(d){
+      var sel=$('#m-seat');if(!sel)return;
+      var free=((d&&d.seats)||[]).filter(function(s){return !s.user&&s.status==='active'});
+      sel.innerHTML=free.length?free.map(function(s){return '<option value="'+s.id+'">'+esc(s.name||('席位 #'+s.id))+' · '+esc(s.baseUrl)+'</option>'}).join('')
+        :'<option value="">（没有空闲席位 —— 到「席位」页新增）</option>';
+      $('#m-seat-go').disabled=!free.length});
+    $('#m-seat-go').onclick=function(e){e.preventDefault();
+      var sid=Number($('#m-seat').value);if(!sid)return toast('请先选一份空闲席位',false);
+      post('seat-assign',{seatId:sid,userId:u.id}).then(function(j){
+        if(!j.ok)return toast(j.err||'失败',false);
+        $('#dlg').close();toast('已把席位分给 '+u.displayName+'，他的客户端半分钟内自动切到直连',true);load()})}
+  }
   // 抓包开关：打开弹窗时查一次当前状态，据此显示「开始/停止」
   api('capture').then(function(cs){
     var on=cs&&cs.users&&cs.users.indexOf(u.username)>=0;
@@ -1006,6 +1034,121 @@ function dlgTier(t){
 }
 
 // ---------- 模型供应商 ----------
+// ---------- 企业版 coding plan 席位 ----------
+// 与「模型供应商」的区别：供应商的 key 只在网关转发时贴、绝不下发；席位的 key 是【要交给】
+// 持席用户的（他的客户端拿它直连上游，请求不经网关）。所以这页管的是"几份订阅、各给了谁"。
+function loadSeats(){
+  render();
+  $('#pane').innerHTML='<section><h2>企业版 coding plan 席位</h2><p class="mut">加载中…</p></section>';
+  api('seats').then(function(d){
+    if(!d.ok){if(!d.unauth)$('#pane').innerHTML='<section><div class="msg err" style="display:block">'+esc(d.err||'加载失败')+'</div></section>';return}
+    S.seats=d;paneSeats()})
+}
+function paneSeats(){
+  var d=S.seats;
+  if(!d){$('#pane').innerHTML='<section><h2>企业版 coding plan 席位</h2><p class="mut">加载中…</p></section>';return}
+  var seats=d.seats||[],hf=d.halfFree||{daily:0,monthly:0};
+  var rows=seats.map(function(s){
+    var who=s.user?'<b>'+esc(s.user.displayName||s.user.username)+'</b><div class="mut" style="font-size:12px">'+esc(s.user.username)+' · '+dt(s.user.assignedAt)+'</div>'
+      :'<span class="mut">空闲</span>';
+    return '<tr data-id="'+s.id+'">'+
+      '<td><b>'+esc(s.name||('席位 #'+s.id))+'</b>'+(s.note?'<div class="mut" style="font-size:12px">'+esc(s.note)+'</div>':'')+'</td>'+
+      '<td style="font-size:12.5px">'+esc(s.baseUrl)+'<div class="mut" style="font-size:12px">key '+esc(s.keyMask)+'</div></td>'+
+      '<td style="font-size:12.5px">'+esc(s.models.join('、')||'—')+'</td>'+
+      '<td>'+(s.status==='active'?'<span class="tag ok">启用</span>':'<span class="tag bad">停用</span>')+'</td>'+
+      '<td>'+who+'</td>'+
+      '<td class="row" style="gap:5px;flex-wrap:nowrap">'+
+        '<button class="btn sm" data-a="edit">编辑</button>'+
+        (s.user?'<button class="btn sm danger" data-a="rel">释放</button>':'<button class="btn sm primary" data-a="assign">分配</button>')+
+        '<button class="btn sm" data-a="del">删除</button></td></tr>'}).join('');
+  $('#pane').innerHTML='<section><div class="row"><h2 style="margin:0">企业版 coding plan 席位</h2><span class="sp"></span>'+
+    '<button class="btn primary" id="s-add">+ 新增席位</button></div>'+
+    '<div class="hint" style="margin:8px 0 12px">每份席位 = 一套企业版 coding plan 的「API 地址 + key」。分给某人后，他的客户端半分钟内自动拿到凭证并<b>直连</b>上游（请求不经本网关、不计网关积分）；'+
+    '持席期间他在网关这边的额度降到<b>基础档（free）的一半</b>：日 '+(hf.daily>0?money(hf.daily)+'（'+credits(hf.daily)+' 积分）':'不限')+
+    ' / 月 '+(hf.monthly>0?money(hf.monthly)+'（'+credits(hf.monthly)+' 积分）':'不限')+'。用户在客户端可随时切回网关、再切回席位。</div>'+
+    (seats.length?'<table><thead><tr><th>席位</th><th>地址 / key</th><th>模型</th><th>状态</th><th>持有者</th><th></th></tr></thead><tbody>'+rows+'</tbody></table>'
+      :'<p class="mut">还没有席位。点「+ 新增席位」把一份 coding plan 的地址与 key 存进来。</p>')+'</section>';
+  $('#s-add').onclick=function(){dlgSeat(null)};
+  Array.prototype.forEach.call(document.querySelectorAll('#pane tbody button'),function(b){
+    b.onclick=function(){
+      var id=Number(b.closest('tr').dataset.id);
+      var s=seats.filter(function(x){return x.id===id})[0];
+      if(b.dataset.a==='edit')dlgSeat(s);
+      else if(b.dataset.a==='assign')dlgSeatAssign(s);
+      else if(b.dataset.a==='rel'){
+        if(!confirm('释放「'+(s.name||('席位 #'+s.id))+'」？持有者 '+(s.user.displayName||s.user.username)+' 的客户端会自动切回云端网关。'))return;
+        post('seat-assign',{seatId:s.id,release:true}).then(function(j){toast(j.ok?'已释放':(j.err||'失败'),j.ok);loadSeats()})}
+      else if(b.dataset.a==='del'){
+        if(!confirm('删除「'+(s.name||('席位 #'+s.id))+'」？'+(s.user?'它还分着人，删除后持有者的客户端会自动切回网关。':'')))return;
+        post('seat',{id:s.id,remove:true}).then(function(j){toast(j.ok?'已删除':(j.err||'失败'),j.ok);loadSeats()})}}});
+}
+function dlgSeat(s){
+  var isNew=!s;
+  s=s||{id:0,name:'',baseUrl:'',models:[],status:'active',note:'',hasKey:false};
+  dlg(isNew?'新增席位':('编辑席位 · '+(s.name||('#'+s.id))),
+    '<div class="grid">'+
+    '<label>显示名</label><input id="s-n" value="'+esc(s.name)+'" placeholder="如 火山 coding plan #1">'+
+    // 示例只写域名部分：后台页面有"不许出现外部 URL"的自包含闸，placeholder 里的协议头也会踩响
+    '<label>API 地址 *</label><input id="s-u" value="'+esc(s.baseUrl)+'" placeholder="带 http(s) 前缀，填到 /v1 或 /v3，客户端原样使用">'+
+    '<label>API Key '+(isNew?'*':'')+'</label><input id="s-key" type="password" autocomplete="off" placeholder="'+(s.hasKey?'已配置（留空 = 不改）':'sk-...')+'">'+
+    '<label>模型名 *</label><textarea id="s-m" rows="3" style="width:100%;font-family:inherit" placeholder="一行一个；第一个是默认模型">'+esc(s.models.join('\\n'))+'</textarea>'+
+    '<label>状态</label><select id="s-st"><option value="active"'+(s.status==='active'?' selected':'')+'>启用</option>'+
+      '<option value="disabled"'+(s.status!=='active'?' selected':'')+'>停用（持有者客户端视同未分配，自动切回网关）</option></select>'+
+    '<label>备注</label><input id="s-note" value="'+esc(s.note)+'" placeholder="如 订阅到期 2026-12-31"></div>'+
+    '<div class="hint" style="margin-top:12px">这套凭证会<b>原样下发给持席用户的客户端</b>（存在他本机、直连上游）。地址与模型名请按该 coding plan 的文档填，客户端不会替它补 /v1。改了地址 / key / 模型，持有者的客户端半分钟内自动更新。</div>'+
+    '<div class="msg" id="s-msg" style="position:static;max-width:none;margin-top:10px"></div>',
+    '<button class="btn" id="s-probe" value="">拉模型列表</button><button class="btn" id="s-test" value="">测试连通</button><button class="btn primary" id="ok" value="default">保存</button>');
+  var smsg=function(cls,t){var e=$('#s-msg');e.className='msg '+cls;e.style.display='block';e.textContent=t};
+  var models=function(){return $('#s-m').value.split(/[\\n,，;；\\s]+/).map(function(x){return x.trim()}).filter(Boolean)
+    .filter(function(v,i,a){return a.indexOf(v)===i})};
+  var body=function(){return {id:s.id||0,name:$('#s-n').value.trim(),baseURL:$('#s-u').value.trim(),apiKey:$('#s-key').value,
+    models:models(),status:$('#s-st').value,note:$('#s-note').value.trim()}};
+  $('#s-probe').onclick=function(e){e.preventDefault();
+    var b=body();b.action='probe';smsg('','正在连…');
+    post('seat',b).then(function(j){
+      if(!j.ok)return smsg('err',j.err||'连不上');
+      smsg('ok','通了，这家有 '+j.models.length+' 个模型：'+j.models.slice(0,8).join('、')+(j.models.length>8?' …':''));
+      if(!models().length)$('#s-m').value=j.models.slice(0,3).join('\\n')})};
+  $('#s-test').onclick=function(e){e.preventDefault();
+    var b=body();b.action='test';b.model=models()[0]||'';
+    if(!b.model)return smsg('err','先填一个模型名再测');
+    smsg('','正在打一发 '+b.model+'…');
+    post('seat',b).then(function(j){
+      if(!j.ok)return smsg('err',j.err||'不通');
+      smsg('ok','通了：'+j.model+'（'+j.ms+'ms）'+(j.reply?' 回复「'+j.reply+'」':''))})};
+  $('#ok').onclick=function(e){e.preventDefault();
+    var b=body();
+    if(!b.baseURL)return smsg('err','请填 API 地址');
+    if(!b.models.length)return smsg('err','至少填一个模型名');
+    post('seat',b).then(function(j){
+      if(!j.ok)return smsg('err',j.err||'保存失败');
+      $('#dlg').close();toast(isNew?'已新增席位':'已保存席位',true);loadSeats()})}
+}
+// 从席位页发起分配：按姓名搜人（用 overview 的检索口，优先姓）
+function dlgSeatAssign(s){
+  dlg('分配席位 · '+(s.name||('#'+s.id)),
+    '<div class="row"><input id="sa-q" placeholder="输姓名 / 登录名搜索" style="flex:1" autocomplete="off"><button class="btn" id="sa-find">搜索</button></div>'+
+    '<div id="sa-list" style="margin-top:10px;max-height:300px;overflow:auto"><p class="mut">先搜一下要分给谁。已持有席位的人不会列出（一人一席）。</p></div>');
+  var find=function(){
+    var q=$('#sa-q').value.trim();
+    api('overview?limit=50&q='+encodeURIComponent(q)).then(function(d){
+      if(!d.ok)return;
+      var us=(d.users||[]).filter(function(u){return !u.seat&&u.status==='active'});
+      $('#sa-list').innerHTML=us.length?us.map(function(u){
+        return '<div class="row" style="padding:6px 0;border-bottom:1px solid var(--line)"><div style="flex:1"><b>'+esc(u.displayName)+'</b> <span class="mut" style="font-size:12.5px">'+esc(u.username)+(u.hospital?' · '+esc(u.hospital):'')+' · '+esc(u.tier)+'</span></div>'+
+          '<button class="btn sm primary" data-uid="'+u.id+'">分给他</button></div>'}).join('')
+        :'<p class="mut">没有可分配的人（没搜到，或都已持有席位 / 已停用）。</p>';
+      Array.prototype.forEach.call(document.querySelectorAll('#sa-list button'),function(b){
+        b.onclick=function(){
+          var uid=Number(b.dataset.uid);
+          post('seat-assign',{seatId:s.id,userId:uid}).then(function(j){
+            if(!j.ok)return toast(j.err||'失败',false);
+            $('#dlg').close();toast('已分配，对方客户端半分钟内自动切到直连',true);loadSeats()})}})})};
+  $('#sa-find').onclick=function(e){e.preventDefault();find()};
+  $('#sa-q').onkeydown=function(e){if(e.key==='Enter'){e.preventDefault();find()}};
+  find();
+}
+
 function loadProviders(){
   render();
   $('#pane').innerHTML='<section><h2>模型供应商</h2><p class="mut">加载中…</p></section>';

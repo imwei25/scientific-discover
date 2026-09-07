@@ -119,6 +119,30 @@ CREATE TABLE IF NOT EXISTS models (
 );
 CREATE INDEX IF NOT EXISTS ix_models_model ON models(model);
 
+-- ==== 企业版 coding plan 席位 ==================================================
+-- 【这是什么】管理员买了几份企业版 coding plan（按席位计费的订阅，如火山方舟 coding plan），
+-- 每份是一套「API 地址 + API key」。把一份分给某个 VIP 用户后，【客户端拿到这套凭证直连上游】，
+-- 请求根本不经过本网关 —— 这与 providers 表恰恰相反：那张表的 key 绝不下发客户端，这张表的
+-- key 就是要下发给（且只下发给）被分配的那个用户。
+-- 【一席一人、一人一席】user_id 上的唯一索引钉死"一份席位不会被两个人同时拿着"；
+-- 反向（一个人拿两份）由 assignSeat 拒绝。user_id 为 NULL = 空闲。
+-- 【持席期间网关额度降到 free 档的一半】见 resolveEntitlement：他主要的用量走了席位直连，
+-- 网关这边只留一点兜底（切回网关时应急用）。
+CREATE TABLE IF NOT EXISTS seats (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  name        TEXT NOT NULL DEFAULT '',      -- 显示名，如「火山 coding plan #1」
+  base_url    TEXT NOT NULL,                 -- OpenAI 兼容端点根（客户端原样使用）
+  api_key     TEXT NOT NULL,
+  models      TEXT NOT NULL DEFAULT '',      -- 逗号分隔的模型名；第一个是默认模型
+  status      TEXT NOT NULL DEFAULT 'active',-- active | disabled（停用 = 客户端视同未分配）
+  note        TEXT NOT NULL DEFAULT '',
+  user_id     INTEGER,                       -- NULL = 空闲
+  assigned_at INTEGER,
+  updated_at  INTEGER NOT NULL DEFAULT 0,    -- 凭证/模型任一改动就更新；客户端据此判断要不要重拉
+  created_at  INTEGER NOT NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS ux_seats_user ON seats(user_id) WHERE user_id IS NOT NULL;
+
 -- 明细：一次 LLM 调用一行（后台「单用户用量明细」用）
 CREATE TABLE IF NOT EXISTS usage_log (
   id       INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -455,6 +479,8 @@ export function updateUser(db, id, patch) {
 }
 
 export function deleteUser(db, id) {
+  // 持有的席位释放回池子（席位是买来的资源，不能跟着账号一起"消失"）
+  db.prepare("UPDATE seats SET user_id=NULL, assigned_at=NULL WHERE user_id=?").run(Number(id))
   db.prepare("DELETE FROM refresh_tokens WHERE user_id=?").run(Number(id))
   db.prepare("DELETE FROM usage_log WHERE user_id=?").run(Number(id))
   db.prepare("DELETE FROM usage_daily WHERE user_id=?").run(Number(id))
@@ -777,10 +803,25 @@ export function resolveEntitlement(db, user) {
   // 定时任务专用模型：只要目录里有（或它就是该档默认模型）就认，理由见下面 tasksModel 那行
   const tm = String(t?.tasks_model || "")
   const tasksModel = tm && (tm === model || cat.has(tm)) ? tm : ""
+  // ---- 企业版 coding plan 席位：持席期间网关额度压到 free 档的一半 ----
+  // 【为什么压额度而不是清零】他的主力用量走席位直连（不经网关、不计网关额度），网关这边只留
+  // 一点兜底：席位那家上游偶尔抽风时能切回网关应急，但不该再拿着原档位的整份额度双份用。
+  // 【为什么是 free 的一半而不是本档的一半】产品定的口径（2026-09-07）：持席者不论原档位，
+  // 网关侧一律降到"基础档一半"。free 档 0（不限）时一半仍是 0 = 不限 —— 沿用本仓库
+  // 0=不限的口径；运营要是想封死就把 free 档设个非零数。
+  // 【显式覆盖也压】daily_override 是"给这个人临时加额"，与"他现在有席位"是两个维度；
+  // 席位期间加额没有意义（加了他也不走网关），且不压的话席位用户恰恰是最可能有覆盖值的一批。
+  // 停用（disabled）的席位视同没有：客户端拿不到凭证，额度也不该被压。
+  const seatRow = seatOfUser(db, user.id)
+  const seat = seatRow && seatRow.status === "active" ? seatRow : null
+  const half = (v) => Math.round(((Number(v) || 0) / 2) * 10000) / 10000
+  const freeTier = seat ? getTier(db, "free") : null
   return {
     tier: user.tier,
-    daily: num(user.daily_override, t?.daily_usd),
-    monthly: num(user.monthly_override, t?.monthly_usd),
+    daily: seat ? half(freeTier?.daily_usd) : num(user.daily_override, t?.daily_usd),
+    monthly: seat ? half(freeTier?.monthly_usd) : num(user.monthly_override, t?.monthly_usd),
+    // 持有的席位（不含 key；key 只从 /api/seat 单独下发给本人）。null = 没有
+    seat: seat ? { id: seat.id, name: seat.name || `席位 #${seat.id}`, baseUrl: seat.base_url, models: csv(seat.models), rev: seat.updated_at, assignedAt: seat.assigned_at } : null,
     model,
     models: allowed,
     // '' = 不限（全部技能）；否则是白名单数组
@@ -806,6 +847,67 @@ export function resolveEntitlement(db, user) {
     // 只有月底对账时才看得出来。
     callable: tasksModel && !allowed.includes(tasksModel) ? [...allowed, tasksModel] : allowed,
   }
+}
+
+// ==== 企业版 coding plan 席位 ==================================================
+
+export const listSeats = (db) => db.prepare(`
+  SELECT s.*, u.username, u.display_name
+  FROM seats s LEFT JOIN users u ON u.id = s.user_id
+  ORDER BY s.id`).all()
+export const getSeat = (db, id) => db.prepare("SELECT * FROM seats WHERE id=?").get(Number(id)) || null
+/** 某用户当前持有的席位（不论席位启停；调用方按 status 自己决定要不要认）。 */
+export const seatOfUser = (db, userId) =>
+  db.prepare("SELECT * FROM seats WHERE user_id=?").get(Number(userId)) || null
+
+/**
+ * 新建 / 修改席位。api_key 缺省（undefined / null / ''）= 不改：后台从不回显 key，
+ * 编辑表单里那一栏留空是常态，落成空串等于把凭证抹掉 —— 与 upsertProvider 同一个坑防护。
+ * 凭证或模型清单真变了才推 updated_at：客户端拿它当版本号，没变就不要让客户端白拉一次。
+ */
+export function upsertSeat(db, s) {
+  const now = Date.now()
+  const models = csv(s.models).join(",")
+  if (s.id) {
+    const prev = getSeat(db, s.id)
+    if (!prev) return null
+    const key = s.api_key === undefined || s.api_key === null || String(s.api_key) === "" ? prev.api_key : String(s.api_key)
+    const baseUrl = String(s.base_url || prev.base_url)
+    const status = s.status === undefined ? prev.status : (s.status === "disabled" ? "disabled" : "active")
+    const bumped = key !== prev.api_key || baseUrl !== prev.base_url || models !== prev.models || status !== prev.status
+    db.prepare(`UPDATE seats SET name=?, base_url=?, api_key=?, models=?, status=?, note=?, updated_at=? WHERE id=?`)
+      .run(String(s.name ?? prev.name), baseUrl, key, models, status,
+        String(s.note ?? prev.note), bumped ? now : prev.updated_at, Number(s.id))
+    return getSeat(db, s.id)
+  }
+  const r = db.prepare(`INSERT INTO seats(name,base_url,api_key,models,status,note,updated_at,created_at)
+                        VALUES(?,?,?,?,?,?,?,?)`)
+    .run(String(s.name || ""), String(s.base_url), String(s.api_key || ""), models,
+      s.status === "disabled" ? "disabled" : "active", String(s.note || ""), now, now)
+  return getSeat(db, r.lastInsertRowid)
+}
+export function deleteSeat(db, id) {
+  const r = db.prepare("DELETE FROM seats WHERE id=?").run(Number(id))
+  return Number(r.changes) || 0
+}
+/** 把席位分给某人。返回 {ok} 或 {ok:false, err}；管理员误操作全在这里给出人话。 */
+export function assignSeat(db, seatId, userId) {
+  const seat = getSeat(db, seatId)
+  if (!seat) return { ok: false, err: "席位不存在" }
+  const user = getUserById(db, userId)
+  if (!user) return { ok: false, err: "用户不存在" }
+  if (seat.user_id && seat.user_id !== user.id) return { ok: false, err: `这份席位已分给 ${seat.user_id} 号用户，先释放再分` }
+  const held = seatOfUser(db, user.id)
+  if (held && held.id !== seat.id) return { ok: false, err: `${user.username} 已持有席位「${held.name || held.id}」，一人只能拿一份` }
+  db.prepare("UPDATE seats SET user_id=?, assigned_at=? WHERE id=?").run(user.id, Date.now(), seat.id)
+  return { ok: true, seat: getSeat(db, seat.id) }
+}
+export function releaseSeat(db, seatId) {
+  const seat = getSeat(db, seatId)
+  if (!seat) return { ok: false, err: "席位不存在" }
+  const prevUser = seat.user_id
+  db.prepare("UPDATE seats SET user_id=NULL, assigned_at=NULL WHERE id=?").run(seat.id)
+  return { ok: true, prevUser, seat: getSeat(db, seat.id) }
 }
 
 // ==== 用量 ====================================================================

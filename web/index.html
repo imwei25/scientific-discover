@@ -2825,9 +2825,11 @@ document.getElementById("logoutBtn").innerHTML = ic("logout") + "<span>退出登
     }
     // 没接平台【且】自己也没填多个模型时才藏起来：直连自己 API 的用户填了两个以上模型 ID，
     // 这个 pill 就是他切换模型的地方（切换沿用同一套 key，见 /api/model/pick 的 custom 分支）。
-    const selfMulti = m && m.route === "custom" && (m.customModels || []).length > 1
+    // seat（管理员分配的 coding plan 席位直连）与 custom 同款：清单就是那几个模型 ID
+    const direct = m && (m.route === "custom" || m.route === "seat")
+    const selfMulti = direct && (m.customModels || []).length > 1
     if (!m || (!m.gateway && !selfMulti)) { sel.hidden = true; return }
-    if (m.route === "custom" && !selfMulti) { sel.hidden = true; return }   // 直连但只有一个模型：没什么可切的
+    if (direct && !selfMulti) { sel.hidden = true; return }   // 直连但只有一个模型：没什么可切的
     cur = m.modelID || ""
     stale = !!m.modelStale   // 服务端说：这个模型已经不在你的档位里了（见 /api/model 的说明）
     // 先问本机网关要清单：云端账号形态下它来自服务器下发的档案（管理员在后台加了模型、
@@ -8183,14 +8185,20 @@ function renderApiRoute(m) {
     resetBtn.textContent = "切回" + (c.loggedIn ? "云端账号" : (m && m.gateway ? "云端网关" : "云端"))
     resetBtn.disabled = onPlatform || !(m && m.gateway)
     resetBtn.title = onPlatform ? "当前已经走云端，无需切换"
-      : (m && m.gateway) ? "清掉自设 API，回到平台统一调度"
+      : (m && m.gateway) ? (route === "seat" ? "暂停席位直连，回到平台统一调度（席位凭证仍保存在本机，随时可切回）" : "清掉自设 API，回到平台统一调度")
       : c.configured ? "本机尚未登录云端账号：先在对话框输入 account 登录" : "本机未接入云端"
   }
 
-  if (route === "cloud") {
+  const seat = m && m.seat
+  if (route === "seat") {
+    box.className = "mm-route custom"
+    box.innerHTML = "当前：<b>企业版 coding plan 席位</b>「" + esc((seat && seat.name) || "") + "」（" + esc(m.baseURL || "") + "）—— 管理员分配的凭证，<b>直连上游、不经云端网关</b>，不计平台积分。<br>" +
+      "持席期间你在网关那边只保留基础档一半的积分作应急；点左下「切回云端账号」可暂停直连，在下方凭证列表点「使用」随时切回。"
+  } else if (route === "cloud") {
     box.className = "mm-route gw"
     box.innerHTML = "当前：<b>云端账号</b>（" + esc(c.username || "") + " @ " + esc(gwHost) + "）—— 模型、额度与可用技能由平台统一分配。<br>" +
-      "下面填自己的 API 并保存，即可改走你自己的路由。"
+      (seat ? "你已获分配企业版 coding plan 席位「" + esc(seat.name || "") + "」（此刻未启用）：在下方凭证列表点「使用」即切成直连。"
+            : "下面填自己的 API 并保存，即可改走你自己的路由。")
   } else if (route === "gateway") {
     box.className = "mm-route gw"
     box.innerHTML = "当前：<b>云端网关</b>（" + esc(gwHost || "one-api") + "）—— 默认路由，模型与额度由平台统一调度。<br>" +
@@ -8217,14 +8225,17 @@ function renderApiProfiles(m) {
   if (!list.length) { box.innerHTML = ""; return }
   const curURL = (m && m.baseURL || "").replace(/\/+$/, "")
   box.innerHTML = list.map(function (p) {
-    const on = m && m.route === "custom" && p.baseURL.replace(/\/+$/, "") === curURL
+    // 席位凭证（管理员分配）只在 seat 路由下算"正在用"；用户自己的只在 custom 路由下
+    const on = m && (p.seat ? m.route === "seat" : m.route === "custom") && p.baseURL.replace(/\/+$/, "") === curURL
+    const badge = p.seat ? ' <span style="font-size:11px;padding:1px 6px;border-radius:999px;background:rgba(58,122,254,.12);color:#3a7afe;font-weight:500">coding plan 席位 · 管理员分配</span>' : ''
     return '<div class="mm-prof" data-id="' + esc(p.id) + '" style="display:flex;align-items:center;gap:8px;padding:8px 10px;border:1px solid var(--line,#e3e3e3);border-radius:8px;' + (on ? 'border-color:#3a7afe;background:rgba(58,122,254,.06)' : '') + '">'
       + '<div style="flex:1;min-width:0;line-height:1.45">'
-      + '<div style="font-weight:600">' + (on ? '✓ ' : '') + esc(p.name) + '</div>'
+      + '<div style="font-weight:600">' + (on ? '✓ ' : '') + esc(p.name) + badge + '</div>'
       + '<div style="opacity:.6;font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + esc(p.baseURL) + ' · key ' + esc(p.keyMask) + ' · ' + p.models.length + ' 个模型</div>'
       + '</div>'
       + (on ? '' : '<button class="mm-btn ghost pf-use" type="button" style="padding:4px 10px">使用</button>')
-      + '<button class="mm-btn ghost pf-del" type="button" title="从本机删除这套凭证" style="padding:4px 8px">删除</button>'
+      // 席位凭证不给删：删了下次对账又同步回来；不想用就「切回云端」，要收回找管理员
+      + (p.seat ? '' : '<button class="mm-btn ghost pf-del" type="button" title="从本机删除这套凭证" style="padding:4px 8px">删除</button>')
       + '</div>'
   }).join("")
   box.querySelectorAll(".pf-use").forEach(function (b) {
@@ -8278,7 +8289,8 @@ async function openApiCfg() {
     renderApiProfiles(m)
     // 走网关时不要把网关地址/模型名回填进输入框：那会让用户以为"这就是我的配置"，
     // 一按保存就把网关地址连同自己的 key 存成自定义路由，稀里糊涂就脱离了平台调度。
-    const onGateway = m && m.gateway && m.route === "gateway"
+    // 席位直连同理不回填：那套地址/模型是管理员发的，回填后一按保存就被复制成一套"自定义 API"
+    const onGateway = m && ((m.gateway && m.route === "gateway") || m.route === "seat")
     document.getElementById("apiUrl").value = onGateway ? "" : (m && m.baseURL ? m.baseURL : "")
     // 多个模型 ID 一行一个回填；老配置只有 modelID 时退回它
     const mods = (!onGateway && m && m.customModels && m.customModels.length) ? m.customModels : ((!onGateway && m && m.isCustom && m.modelID) ? [m.modelID] : [])
@@ -8438,6 +8450,8 @@ function clShow(mode, st) {
     document.getElementById("cloudPaneInfo").innerHTML =
       '<div class="mm-kv"><span>账号</span><b>' + esc(st.username) + "</b></div>" +
       '<div class="mm-kv"><span>档位</span><b>' + esc(p.tier || "—") + "</b></div>" +
+      // 企业版 coding plan 席位：有分配就摆出来，并说明网关积分为何比档位少（压到基础档一半）
+      (p.seat ? '<div class="mm-kv"><span>coding plan 席位</span><b>' + esc(p.seat.name || "") + (st.route === "seat" ? ' <span class="mm-faint">（直连中）</span>' : ' <span class="mm-faint">（未启用，输入 api-config 可切换）</span>') + "</b></div>" : "") +
       '<div class="mm-kv"><span>默认模型</span><b>' + esc(p.model || "—") + "</b></div>" +
       // 可选模型随档案下发：管理员在后台加了新模型并勾进本档位，点一次"刷新"就出现在这里
       // 和顶部的模型 pill 里——不用重装客户端。
@@ -9557,6 +9571,18 @@ async function refreshQuota(fresh = false) {
     // 401 → 统一出口跳登录，别 catch 成"额度条消失"（用户会读成额度被清零）
     const s = await apiGet("api/quota" + (fresh ? "?fresh=1" : ""))
     if (!s) return
+    // 企业版 coding plan 席位刚被分配 / 收回 / 更新：网关后台已经切好路由，这里只负责告诉用户一声，
+    // 并让顶部 🧠 模型 pill 重取清单（直连后清单换成席位那几个模型）。
+    if (s.seatEvent) {
+      const ev = s.seatEvent
+      const msg = ev.kind === "assigned" ? "已切到企业版 coding plan 席位「" + (ev.name || "") + "」直连（模型 " + (ev.model || "") + "），请求不再经过云端网关"
+        : ev.kind === "updated" ? "coding plan 席位「" + (ev.name || "") + "」的凭证已更新并生效"
+        : ev.kind === "revoked" ? "管理员已收回 coding plan 席位" + (ev.name ? "「" + ev.name + "」" : "") + "，已切回云端网关"
+        : ev.kind === "pending" ? "管理员分配了 coding plan 席位「" + (ev.name || "") + "」，等当前任务跑完就自动切成直连"
+        : ev.kind === "error" ? "coding plan 席位凭证无法启用：" + (ev.err || "") : ""
+      if (msg) toast(msg)
+      window.dispatchEvent(new Event("sci-models-changed"))
+    }
     const c = await cloudQuotaOf(s)
     if (c && !(c.daily.unlimited && c.monthly.unlimited)) {
       // 【日、月各占一行】此前挤成一行"剩余积分 日 X · 月 Y"，月的那一截太容易被当成没有；

@@ -301,9 +301,22 @@ function profileOf(user, ent = DB.resolveEntitlement(db, user)) {
     // 同一份数字的【积分视图】。美元那两行留着不动：后台、审计、对账都在用，
     // 客户端界面则一律只显示 quota 里的积分（见 web/index.html 的顶栏与账号面板）。
     quota: quotaOf(user, ent),
+    // 企业版 coding plan 席位（管理员分配的直连凭证）。【档案里只有摘要、没有 key】：
+    // 档案会被客户端落盘、再被本机网关原样回给浏览器前端（/api/cloud/status），
+    // key 只走 /api/seat 单独下发，客户端拿到后存进本机凭证档（0600）。
+    seat: seatBrief(ent),
     // 公告随档案一并下发：登录后第一屏就能看到，不用等客户端另外去问一次
     notice: DB.publicNotice(db),
   }
+}
+
+/** 后台列表里 key 只出掩码（与客户端 web/server.mjs 的 maskKey 同款）。 */
+const maskKey = (k) => { const s = String(k || ""); return s.length <= 8 ? "••••••" : s.slice(0, 4) + "••••" + s.slice(-4) }
+
+/** 席位摘要（无 key）：客户端拿 id + rev 判断"我本机存的那套凭证还是不是最新的"。 */
+function seatBrief(ent) {
+  const s = ent.seat
+  return s ? { id: s.id, name: s.name, baseURL: s.baseUrl, models: s.models, model: s.models[0] || "", rev: s.rev, assignedAt: s.assignedAt } : null
 }
 
 /**
@@ -662,7 +675,11 @@ async function handleClientApi(req, res, pathname) {
     const au = authClient(req, { requireFullScope: false })
     if (!au.ok) return fail(res, au.status, au.code, au.message)
     noteClient(au.user, req)
-    return json(res, 200, { ok: true, quota: quotaOf(au.user) })
+    const ent = DB.resolveEntitlement(db, au.user)
+    // 席位摘要（无 key）搭这条 30 秒轮询的便车下发：管理员刚分配/收回/换 key，客户端半分钟内
+    // 就能知道并自己去 /api/seat 拉凭证 —— 不必吊销 key 逼人重登，也不必等 5 分钟的档案同步。
+    // 多一次索引查询（seats.user_id 唯一索引），与这条口"每轮可问"的定位不冲突。
+    return json(res, 200, { ok: true, quota: quotaOf(au.user, ent), seat: seatBrief(ent) })
   }
 
   if (req.method === "GET" && pathname === "/api/me") {
@@ -670,6 +687,22 @@ async function handleClientApi(req, res, pathname) {
     if (!au.ok) return fail(res, au.status, au.code, au.message)
     noteClient(au.user, req)
     return json(res, 200, { ok: true, profile: profileOf(au.user) })
+  }
+
+  /**
+   * 企业版 coding plan 席位的【完整凭证】（含 key）—— 唯一下发 key 的地方，只给持席本人。
+   * 客户端拿到后写进本机凭证档并把 opencode 切成直连该地址；此后他的模型请求不再经过本网关。
+   * 没席位（或席位被停用/收回）回 seat:null，客户端据此把本机那套凭证删掉并切回网关。
+   */
+  if (req.method === "GET" && pathname === "/api/seat") {
+    const au = authClient(req)
+    if (!au.ok) return fail(res, au.status, au.code, au.message)
+    noteClient(au.user, req)
+    const ent = DB.resolveEntitlement(db, au.user)
+    if (!ent.seat) return json(res, 200, { ok: true, seat: null })
+    const row = DB.getSeat(db, ent.seat.id)
+    audit("seat.fetch", { actor: au.user.username, ip, target: String(row.id), detail: row.name })
+    return json(res, 200, { ok: true, seat: { ...seatBrief(ent), apiKey: row.api_key } })
   }
 
   /**
@@ -938,6 +971,8 @@ function userRow(u) {
     overrides: { daily: u.daily_override, monthly: u.monthly_override, skills: u.skills_override },
     skills: ent.skills,
     usage: { today: DB.todayCost(db, u.id), month: DB.monthCost(db, u.id) },
+    // 持有的 coding plan 席位（无 key）。列表里画个标签、「更多操作」里据此显示分配/释放
+    seat: ent.seat ? { id: ent.seat.id, name: ent.seat.name, assignedAt: ent.seat.assignedAt } : null,
   }
 }
 
@@ -1944,6 +1979,88 @@ async function handleAdminApi(req, res, pathname) {
       actor: url.searchParams.get("actor") || "",
     })
     return json(res, 200, { ok: true, rows: r.rows, total: r.total, events: DB.auditEvents(db) })
+  }
+
+  // ---- 企业版 coding plan 席位（见 db.mjs 的 seats 表头注）----
+  //
+  // 与「模型供应商」是两回事：供应商的 key 只在网关转发时贴、绝不下发；席位的 key 就是要交给
+  // 被分配的那个用户，让他的客户端直连。所以后台这页【也不回显 key】（肩窥/截图），
+  // 但 /api/seat 会把它给持席本人。
+  if (req.method === "GET" && pathname === "/admin/api/seats") {
+    const rows = DB.listSeats(db)
+    return json(res, 200, {
+      ok: true,
+      seats: rows.map((s) => ({
+        id: s.id, name: s.name, baseUrl: s.base_url, hasKey: !!s.api_key, keyMask: maskKey(s.api_key),
+        models: String(s.models || "").split(",").map((x) => x.trim()).filter(Boolean),
+        status: s.status, note: s.note, updatedAt: s.updated_at, createdAt: s.created_at,
+        user: s.user_id ? { id: s.user_id, username: s.username, displayName: s.display_name, assignedAt: s.assigned_at } : null,
+      })),
+      // free 档的一半 = 持席者在网关这边剩下的额度；后台要把这个数摆出来，管理员分配时心里有数
+      halfFree: (() => { const f = DB.getTier(db, "free"); return { daily: (Number(f?.daily_usd) || 0) / 2, monthly: (Number(f?.monthly_usd) || 0) / 2 } })(),
+    })
+  }
+  if (req.method === "POST" && pathname === "/admin/api/seat") {
+    const b = await readBody(req)
+    const id = b.id ? Number(b.id) : 0
+    if (b.action === "probe" || b.action === "test") {
+      // 探测用【表单里刚填的】地址/key；编辑时 key 留空则回退到库里存的那把（后台不回显 key）
+      const cur = id ? DB.getSeat(db, id) : null
+      const baseUrl = String(b.baseURL || cur?.base_url || "")
+      const apiKey = String(b.apiKey || "") || cur?.api_key || ""
+      if (!apiKey) return json(res, 400, { ok: false, err: "请先填 API Key" })
+      const r = b.action === "probe"
+        ? await Upstream.listUpstreamModels(baseUrl, apiKey)
+        : await Upstream.pingModel(baseUrl, apiKey, String(b.model || ""))
+      return json(res, 200, r.ok ? { ok: true, ...r } : { ok: false, err: r.err })
+    }
+    if (b.remove) {
+      const s = id ? DB.getSeat(db, id) : null
+      if (!s) return json(res, 404, { ok: false, err: "席位不存在" })
+      // 删的是带人的席位也放行：客户端下一次同步就拿到 seat:null → 自己切回网关。删除本身就是
+      // 管理员明确的意图（比如订阅到期），不必先逼他点一次"释放"。
+      DB.deleteSeat(db, id)
+      audit("seat.del", { actor: "admin", target: String(id), ip, detail: `${s.name}${s.user_id ? " 持有者=" + s.user_id : ""}` })
+      return json(res, 200, { ok: true })
+    }
+    const baseUrl = String(b.baseURL || "").trim()
+    if (!id && !/^https?:\/\//i.test(baseUrl)) return json(res, 400, { ok: false, err: "API 地址要以 http:// 或 https:// 开头" })
+    if (id && baseUrl && !/^https?:\/\//i.test(baseUrl)) return json(res, 400, { ok: false, err: "API 地址要以 http:// 或 https:// 开头" })
+    if (!id && !String(b.apiKey || "").trim()) return json(res, 400, { ok: false, err: "请填 API Key" })
+    // 模型名一次可填多个（数组 / 换行 / 逗号 / 分号分隔），去重后逗号串存库；第一个是默认模型
+    const models = [...new Set((Array.isArray(b.models) ? b.models : String(b.models || "").split(/[\n,，;；\s]+/))
+      .map((x) => String(x || "").trim()).filter(Boolean))].join(",")
+    if (!models && !(id && DB.getSeat(db, id)?.models))
+      return json(res, 400, { ok: false, err: "至少填一个模型名（客户端要知道该请求哪个模型）" })
+    if (id && !DB.getSeat(db, id)) return json(res, 404, { ok: false, err: "席位不存在" })
+    const s = DB.upsertSeat(db, {
+      id, name: b.name, base_url: baseUrl || undefined, api_key: b.apiKey,
+      models: models || (id ? DB.getSeat(db, id).models : ""),
+      status: b.status === undefined ? undefined : (b.status === "disabled" ? "disabled" : "active"),
+      note: b.note,
+    })
+    audit(id ? "seat.update" : "seat.add", { actor: "admin", target: String(s.id), ip, detail: `${s.name} ${s.base_url}` })
+    return json(res, 200, { ok: true, id: s.id })
+  }
+  if (req.method === "POST" && pathname === "/admin/api/seat-assign") {
+    const b = await readBody(req)
+    const seatId = Number(b.seatId)
+    if (!seatId) return json(res, 400, { ok: false, err: "缺 seatId" })
+    if (b.release) {
+      const r = DB.releaseSeat(db, seatId)
+      if (!r.ok) return json(res, 404, r)
+      const pu = r.prevUser ? DB.getUserById(db, r.prevUser) : null
+      audit("seat.release", { actor: "admin", target: pu?.username || String(r.prevUser || ""), ip, detail: `seat=${seatId} ${r.seat.name}` })
+      return json(res, 200, { ok: true })
+    }
+    const u = DB.getUserById(db, b.userId)
+    if (!u) return json(res, 404, { ok: false, err: "用户不存在" })
+    const r = DB.assignSeat(db, seatId, u.id)
+    if (!r.ok) return json(res, 400, r)
+    // 【不吊销 key】席位不在票据里；客户端靠 /api/quota 那条 30 秒轮询带回的席位摘要自己去拉凭证。
+    // 吊销只会把他正在跑的轮打断、逼他重登，对"拿到席位"这件事没有任何必要。
+    audit("seat.assign", { actor: "admin", target: u.username, ip, detail: `seat=${seatId} ${r.seat.name}` })
+    return json(res, 200, { ok: true, user: userRow(DB.getUserById(db, u.id)) })
   }
 
   // ---- 调试抓包：按用户抓取每一条 LLM 请求（见 lib/capture.mjs 头注）----
