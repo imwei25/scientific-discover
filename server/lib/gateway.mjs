@@ -59,7 +59,7 @@ export function normalizeUsage(u) {
   return { prompt, completion, cached: cachedSafe }
 }
 
-/** 成本（USD）。单价是 USD/百万 token，与旧架构 OC_COST_* 同口径。 */
+/** 成本（元）。单价是 元/百万 token（2026-09-07 起全库金额按人民币，列名仍叫 *_usd），与 OC_COST_* 同口径。 */
 export function costOf(usage, cfg) {
   if (!usage) return 0
   const fresh = Math.max(0, usage.prompt - usage.cached)

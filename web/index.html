@@ -9512,7 +9512,7 @@ async function refreshNotice(force) {
 //   · 本机 env 额度（容器/单机自用）→ 服务端记的是美元，界面一律换算成积分再显示
 //     （1 积分 = $0.01，见 CREDIT_USD）。用户面前【不出现美元】：两种形态口径一致，
 //     省得同一个人在云端看积分、在本机看美元，还得自己心算两者的关系。
-const CREDIT_USD = 0.01                                   // 1 积分 = $0.01（与服务端 quota.creditUsd 同口径）
+const CREDIT_USD = 0.01                                   // 1 积分 = ¥0.01（与服务端 quota.creditUsd 同口径；金额单位人民币）
 const fmtCredits = (n) => (Number(n) || 0).toLocaleString("zh-CN")
 // 美元 → 积分。本机 env 额度形态服务端只给美元，界面换算后再显示。
 // 小数位随量级走：几十积分时保留一位（不然一轮几分钱的消耗会被抹成 0，用户以为没扣）。
@@ -9532,7 +9532,7 @@ function quotaTitle(c) {
   return [
     line(c.daily, "今日", "，每日 0 点(UTC)重置"),
     line(c.monthly, "本月", "，每月 1 日(UTC)重置"),
-    `1 积分 = $${Number(c.creditUsd || 0.01)}；每轮对话结束后自动更新`,
+    `1 积分 = ¥${Number(c.creditUsd || 0.01)}；每轮对话结束后自动更新`,
     c.stale ? "⚠ 暂时连不上云端，显示的是上一次的读数" : "",
   ].filter(Boolean).join("\n")
 }
@@ -9608,7 +9608,7 @@ async function refreshQuota(fresh = false) {
     // 所以这里只画今日那行，不编一行空的"本月"出来。云端账号才有日/月两条线。
     const pct = Math.min(100, Math.round(s.used / s.limit * 100))
     el.hidden = false
-    el.title = `今日模型额度：已用 / 上限（每日 0 点 UTC 重置）。1 积分 = $${CREDIT_USD}。本机额度形态没有月度上限。`
+    el.title = `今日模型额度：已用 / 上限（每日 0 点 UTC 重置）。1 积分 = ¥${CREDIT_USD}。本机额度形态没有月度上限。`
     el.textContent = ""
     el.append(quotaRow("今日已用", `${fmtCreditsFine(usdToCredits(s.used))} / ${fmtCreditsFine(usdToCredits(s.limit))} 积分（${pct}%）`),
               quotaRow("本月", "本机额度形态无月上限", true))

@@ -107,10 +107,11 @@ function selIds(){return Object.keys(S.sel).filter(function(k){return S.sel[k]})
 var $=function(s){return document.querySelector(s)};
 var esc=function(s){return String(s==null?'':s).replace(/[&<>"']/g,function(c){
   return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]})};
-var money=function(n){return '$'+(Number(n)||0).toFixed(4).replace(/0+$/,'').replace(/\\.$/,'.00')};
-// 客户端只看积分（1 积分 = S.creditUsd 美元，默认 0.01）。后台仍按美元填写，但每处额度
+var money=function(n){return '¥'+(Number(n)||0).toFixed(4).replace(/0+$/,'').replace(/\\.$/,'.00')};
+// 客户端只看积分（1 积分 = S.creditUsd 元，默认 0.01）。后台按人民币（元）填写，但每处额度
 // 旁边都要跟一句"用户看到的是 N 积分" —— 否则用户来问"我怎么只剩 3 分"，管理员对着
-// 一屏美元根本对不上号。取整方向与客户端一致（上限下取整），显示的数就是用户看到的数。
+// 一屏金额根本对不上号。取整方向与客户端一致（上限下取整），显示的数就是用户看到的数。
+// 【单位是人民币】2026-09-07 起全库金额列（*_usd）存的都是【元】，列名没改只是历史包袱。
 var CREDIT=function(){return Number(S.creditUsd)||0.01};
 var credits=function(n){return Math.floor((Number(n)||0)/CREDIT())};
 var creditNote=function(n){return (Number(n)>0)?'<div class="mut" style="font-size:12.5px">= '+credits(n)+' 积分</div>':''};
@@ -477,7 +478,7 @@ function dlg(title,bodyHtml,footHtml){
 
 function tierOpts(sel){return S.tiers.map(function(t){
   return '<option value="'+esc(t.key)+'"'+(t.key===sel?' selected':'')+'>'+esc(t.key)+
-    (t.daily_usd?' ($'+t.daily_usd+'/天)':' (日不限)')+'</option>'}).join('')}
+    (t.daily_usd?' (¥'+t.daily_usd+'/天)':' (日不限)')+'</option>'}).join('')}
 
 function dlgAdd(){
   dlg('新建账号',
@@ -974,11 +975,11 @@ function dlgTier(t){
   dlg(t.key?('编辑档位 · '+t.key):'新增档位',
     '<div class="grid">'+
     '<label>档位键 *</label><input id="t-k" value="'+esc(t.key)+'"'+(t.key?' readonly':'')+' placeholder="小写字母开头，如 gold">'+
-    // 额度按美元填（与计量、对账同一口径），旁边实时显示客户端会看到的积分数——
+    // 额度按人民币（元）填（与计量、对账同一口径），旁边实时显示客户端会看到的积分数——
     // 边填边看，省得保存完再去客户端核对一遍。
-    '<label>日额度 USD</label><input id="t-d" value="'+t.daily_usd+'" placeholder="0 = 不限">'+
+    '<label>日额度（元）</label><input id="t-d" value="'+t.daily_usd+'" placeholder="0 = 不限">'+
     '<label></label><div class="hint" id="t-dc"></div>'+
-    '<label>月额度 USD</label><input id="t-m" value="'+t.monthly_usd+'" placeholder="0 = 不限">'+
+    '<label>月额度（元）</label><input id="t-m" value="'+t.monthly_usd+'" placeholder="0 = 不限">'+
     '<label></label><div class="hint" id="t-mc"></div>'+
     '<label>单用户并发</label><input id="t-c" value="'+(t.max_conc||0)+'" placeholder="0 = 跟随全局设置">'+
     '<label>默认模型</label><select id="t-mosel">'+catOpts+'</select>'+
@@ -1187,8 +1188,8 @@ function paneProviders(){
     (s.budgets||[]).forEach(function(b){
       var cls=b.exhausted?'bad':(b.pct>=85?'warn':'ok');
       out.push('<div style="font-size:12.5px"><span class="tag '+cls+'">'+esc(b.label)+'</span> '+
-        '$'+b.spentUsd.toFixed(2)+' / $'+b.limitUsd.toFixed(2)+
-        '<span class="mut"> · 剩 $'+b.remainUsd.toFixed(2)+'（'+b.pct+'%）</span></div>')});
+        '¥'+b.spentUsd.toFixed(2)+' / ¥'+b.limitUsd.toFixed(2)+
+        '<span class="mut"> · 剩 ¥'+b.remainUsd.toFixed(2)+'（'+b.pct+'%）</span></div>')});
     if(!out.length)return '<span class="mut" style="font-size:12.5px">未设额度</span>';
     return out.join('')}
 
@@ -1255,7 +1256,7 @@ function paneProviders(){
     '400/404 这类请求本身的问题不切家，原样透传给客户端诊断。'+
     '单价<b>按行独立</b>，换家不会再让账静默偏。<br>'+
     '加完模型别忘了到「档位」页把它勾进对应档位的<b>允许清单</b>，客户端才选得到。</div>'+
-    '<table><thead><tr><th>对外模型名</th><th>供应商</th><th>单价 USD/百万 token</th><th>状态</th><th>哪些档位在用</th><th></th></tr></thead><tbody>'+
+    '<table><thead><tr><th>对外模型名</th><th>供应商</th><th>单价 元/百万 token</th><th>状态</th><th>哪些档位在用</th><th></th></tr></thead><tbody>'+
     (mrows||'<tr><td colspan="6" class="mut" style="padding:18px">还没有模型</td></tr>')+
     '</tbody></table></section>'+
 
@@ -1398,9 +1399,9 @@ function dlgBudget(p,s){
     '<div class="grid">'+wins.map(function(w){
       var b=cur[w.win];
       return '<label>'+esc(w.label)+(w.win==='total'?'<div class="mut" style="font-size:12px;font-weight:400">从充值时刻起算</div>':'')+'</label>'+
-        '<div><input id="b-'+w.win+'" value="'+(b?b.limitUsd:'')+'" placeholder="留空 = 不限，单位美元">'+
-        (b?'<div class="mut" style="font-size:12.5px;margin-top:4px">已用 $'+b.spentUsd.toFixed(2)+
-          '，剩 $'+b.remainUsd.toFixed(2)+'（'+b.pct+'%）</div>':'')+'</div>'}).join('')+'</div>'+
+        '<div><input id="b-'+w.win+'" value="'+(b?b.limitUsd:'')+'" placeholder="留空 = 不限，单位元（人民币）">'+
+        (b?'<div class="mut" style="font-size:12.5px;margin-top:4px">已用 ¥'+b.spentUsd.toFixed(2)+
+          '，剩 ¥'+b.remainUsd.toFixed(2)+'（'+b.pct+'%）</div>':'')+'</div>'}).join('')+'</div>'+
     '<div class="hint" style="margin-top:12px">额度按<b>我们自己的单价表</b>算出来的消费额判定，与对方真实账单必有偏差'+
     '（缓存计价、最小计费单位…）。它是<b>闸不是账本</b>——写宽一点没关系，写到分毫反而会误伤。<br>'+
     '改「累计」额度时会把起算时刻重置为现在，正好对应"又充了一笔"。要对账仍看「对账」页。</div>'+
@@ -1416,7 +1417,7 @@ function dlgBudget(p,s){
       var n=Number(v);
       if(!Number.isFinite(n)||n<0){bad=w.label;return}
       rows.push({win:w.win,limitUSD:n,anchor:w.win==='total'?Date.now():0})});
-    if(bad)return bmsg('err','「'+bad+'」要填 ≥0 的数字（美元），留空表示不限');
+    if(bad)return bmsg('err','「'+bad+'」要填 ≥0 的数字（元），留空表示不限');
     if(!rows.length){$('#dlg').close();return}
     post('supply',{provider:p.key,action:'budget',budgets:rows}).then(function(j){
       if(!j.ok)return bmsg('err',j.err||'保存失败');
@@ -1485,7 +1486,7 @@ function dlgModel(m){
     '<label>状态</label><select id="x-st"><option value="active"'+(m.status==='active'?' selected':'')+'>启用</option>'+
       '<option value="disabled"'+(m.status!=='active'?' selected':'')+'>停用</option></select>'+
     '<label>备注</label><input id="x-n" value="'+esc(m.note)+'"></div>'+
-    '<div class="hint" style="margin-top:12px">单价单位是 <b>USD / 百万 token</b>，必须与这家的真实计费口径一致，否则额度会系统性偏。<br>'+
+    '<div class="hint" style="margin-top:12px">单价单位是 <b>元（人民币）/ 百万 token</b>，必须与这家的真实计费口径一致，否则额度会系统性偏。<br>'+
     '想让两家互为备份：给它们建<b>同一个对外模型名</b>的两行，各填各的上游真实名与单价，用优先级定主备。</div>',
     '<button class="btn primary" id="ok" value="default">保存</button>');
   $('#ok').onclick=function(e){e.preventDefault();
@@ -1559,8 +1560,8 @@ function paneChannels(){
     '<section><h2>通道</h2>'+
     '<table><thead><tr><th>名称</th><th>状态</th><th>模型</th><th>优先级</th><th></th></tr></thead><tbody>'+
     (rows||'<tr><td colspan="5" class="mut">还没有通道</td></tr>')+'</tbody></table>'+
-    '<div class="hint" style="margin-top:12px">⚠ 计量单价是<b>全局一张表</b>（当前 输入 $'+d.priceNote.input+' / 输出 $'+d.priceNote.output+
-    ' / 缓存 $'+d.priceNote.cached+' 每百万 token）。若在同一模型名下挂了<b>不同价</b>的供应商，流量切过去时账会静默偏——切之前先对价。<br>'+
+    '<div class="hint" style="margin-top:12px">⚠ 计量单价是<b>全局一张表</b>（当前 输入 ¥'+d.priceNote.input+' / 输出 ¥'+d.priceNote.output+
+    ' / 缓存 ¥'+d.priceNote.cached+' 每百万 token）。若在同一模型名下挂了<b>不同价</b>的供应商，流量切过去时账会静默偏——切之前先对价。<br>'+
     '新增/删除通道、改 key 与地址请到 one-api 自己的管理台，这里只做「用哪个、谁兜底」。</div></section>';
 
   Array.prototype.forEach.call(document.querySelectorAll('#pane tbody button'),function(b){

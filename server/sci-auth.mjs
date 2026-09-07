@@ -1410,7 +1410,7 @@ async function handleAdminApi(req, res, pathname) {
         const win = String(it.win || "").trim()
         if (!isWindow(win)) return json(res, 400, { ok: false, err: `窗口名不认识：${win}（可用 ${Object.keys(WINDOWS).join("/")}）` })
         const lim = Number(it.limitUSD)
-        if (!Number.isFinite(lim)) return json(res, 400, { ok: false, err: "额度要填数字（美元）" })
+        if (!Number.isFinite(lim)) return json(res, 400, { ok: false, err: "额度要填数字（元）" })
         // anchor 只对 total 有意义；没传就按「此刻起算」——新充的值当然从现在开始算起，
         // 默认 0 的话会把这家历史上所有消费都算进来，一填就显示"已用尽"。
         const anchor = win === "total"
@@ -1940,19 +1940,19 @@ async function handleAdminApi(req, res, pathname) {
     const sheet = (head, rows) => head.join(",") + "\r\n" + rows.map((r) => r.map(cell).join(",")).join("\r\n") + "\r\n"
     let csv, name
     if (by === "model") {
-      csv = sheet(["模型", "调用数", "花费USD", "输入tokens", "输出tokens", "缓存tokens"],
+      csv = sheet(["模型", "调用数", "花费(元)", "输入tokens", "输出tokens", "缓存tokens"],
         DB.usageByModel(db, from, to).map((r) => [r.model || "(空)", r.calls, r.cost, r.tin, r.tout, r.tcached]))
       name = "usage-by-model"
     } else if (by === "provider") {
-      csv = sheet(["供应商", "调用数", "花费USD", "输入tokens", "输出tokens", "缓存tokens"],
+      csv = sheet(["供应商", "调用数", "花费(元)", "输入tokens", "输出tokens", "缓存tokens"],
         DB.usageByProvider(db, from, to).map((r) => [r.provider || "env兜底上游", r.calls, r.cost, r.tin, r.tout, r.tcached]))
       name = "usage-by-provider"
     } else if (by === "user") {
-      csv = sheet(["登录名", "姓名", "档位", "调用数", "花费USD", "输入tokens", "输出tokens", "缓存tokens"],
+      csv = sheet(["登录名", "姓名", "档位", "调用数", "花费(元)", "输入tokens", "输出tokens", "缓存tokens"],
         DB.usageByUser(db, from, to).map((r) => [r.username || "(已删除)", r.display_name || "", r.tier || "", r.calls, r.cost, r.tin, r.tout, r.tcached]))
       name = "usage-by-user"
     } else {
-      csv = sheet(["时间(北京)", "日期(UTC)", "登录名", "姓名", "模型", "供应商", "技能", "输入tokens", "输出tokens", "缓存tokens", "花费USD"],
+      csv = sheet(["时间(北京)", "日期(UTC)", "登录名", "姓名", "模型", "供应商", "技能", "输入tokens", "输出tokens", "缓存tokens", "花费(元)"],
         DB.usageRange(db, from, to).map((r) => [
           new Date(r.ts).toLocaleString("zh-CN", { timeZone: "Asia/Shanghai", hour12: false }),
           r.day, r.username || "(已删除)", r.display_name || "", r.model, r.provider || "env", r.skill,
