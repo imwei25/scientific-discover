@@ -76,7 +76,7 @@ PY="${REPO_ROOT:-/app}/.venv/bin/python"   # Linux/mac: "${REPO_ROOT:-/app}/.ven
 
 ## 产出模板：《新颖性裁定记录》
 
-> **文件名固定为 `novelty_verdict.md`**（当前工作目录、裸文件名）。下游 `grant-proposal` 第 3.5 步会按这个名字来找它，
+> 文件名 `novelty_assessment.md`（当前工作目录、裸文件名）。下游 `grant-proposal` 第 3.5 步以它为论证内核的输入，
 > 直接把「最接近的 5–10 篇」+「差异点陈述」映射成标书的《最接近工作对照表》与创新点——改名它就找不到，等于让下游重做一遍检索。
 
 ```markdown

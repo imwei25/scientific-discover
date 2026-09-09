@@ -1,7 +1,6 @@
 ---
 name: render-pdf-doc
-description: >
-  Render academic Markdown (Chinese/English/Korean) to publication-quality PDF via pandoc + xelatex. Targets non-bibliography artifacts: research proposals (含 NSFC 标书), IRB cover letters, briefing handouts, anchor docs, reference tables. CJK-aware (Chinese via ctex for true academic typesetting; Korean supported); auto-infers pipe-table column widths. NOT for citation checking (use reference-check) or figures/plots (use nature-figure). For Word (.docx) submission use render-docx; if the user just says "排版/typeset" without a format, ask PDF vs Word first.
+description: Render academic Markdown (Chinese/English/Korean) to publication-quality PDF via pandoc + xelatex: proposals (含国自然标书), cover letters, handouts, reference tables; CJK-aware, auto table widths. Not for citation checks or plots. Word output → render-docx; bare "排版" → ask PDF vs Word first.
 triggers: render PDF, PDF 렌더, korean PDF, 한글 PDF, anchor doc PDF, briefing PDF, proposal PDF, 연구계획서 PDF, 표 정렬 PDF, 표 폭 자동, tbl-colwidths, 학술 PDF
 tools: Read, Write, Edit, Bash, Grep, Glob
 model: inherit
@@ -15,13 +14,7 @@ model: inherit
 >
 > **期刊送审格式**：`render_pdf.sh` 支持 `--journal nejm|lancet|jama|bmj|cmj|generic-submission`（预设与 render-docx 共用，`--journal list` 列出）一键落齐边距/字号/行距/行号/参考文献 CSL；也可单项指定 `--margin 1in`、`--fontsize 12`（LaTeX 只认 10/11/12）、`--line-spacing double`（或数字倍数）、`--line-numbers`（lineno 连续行号）、`--figures-at-end`（图表搬到正文末，NEJM/JAMA/Lancet 要求）、`--csl vancouver --bib refs.bib`（稿件须用 `[@key]` 引用；无 `[@key]` 却传 CSL 会 WARN 提示不生效）。优先级：命令行 > 预设 > frontmatter > 默认；**只要用户在 `--` 后透传了同名 `-V geometry/fontsize/linestretch`，脚本一律不再注入同名值（透传最优先），彻底避免重复 `-V` 拼接（`\setstretch{1.42.0}`）导致的编译崩溃**——无论我方值来自默认、命令行还是预设。例：`bash scripts/render_pdf.sh -i ms.md --journal nejm --figures-at-end --bib refs.bib`。
 >
-> **送审细排参数（PDF 侧靠注入 LaTeX 实现，与 render-docx 同名参数对齐）**：
-> `--indent-chars N`（首行缩进，按 0.5em/字符）、`--caption-fontsize PT`（caption 宏包：题注字号、居中、标签加粗）、`--table-fontsize PT`（只钩 longtable）、`--title-fontsize` / `--h1-fontsize` / `--heading-fontsize`（中文走 `\ctexset`、西文走 titlesec）、`--author-fontsize`（titling）。这些参数只在显式给出（或预设含对应字段）时才注入宏包，不影响标书/简报等其它文档。三个已踩过的坑，改这段代码前先看：
-> 1. **表内字号只能钩 `longtable`，不能钩 `tabular`**——LaTeX 的**作者块本身就是 tabular**（`\and` 展开成 `\end{tabular}…\begin{tabular}`），钩了作者名会被缩成表内字号。
-> 2. **不能用 `\AtBeginEnvironment{longtable}` 塞 `\fontsize`**（打断列声明解析 → `Misplaced \crcr` 编译失败），要用 `\BeforeBeginEnvironment` + `\AfterEndEnvironment` 在环境外套 group。
-> 3. **改 `\preauthor` 必须照 titling 默认那样自己开一个 `tabular`**、`\postauthor` 关掉它，否则多作者的 `\and` 一展开就是不配对的 tabular（报错还落在表格行上，很难联想到作者块）。
->
-> **手写表题自动转 pandoc 题注**：给了 `--caption-fontsize` 时，脚本先跑 `scripts/table_caption_to_pandoc.py`，把 write-paper 风格的 `**表1. …**`（写在表格上方的加粗段）改写成表后的 `: **表1.** …`——caption 宏包只作用于真 `\caption{}`，不转的话表题就是一段普通正文、字号和图题对不上。同时若题注自带编号（`![图1. …]`），自动加 `\captionsetup{labelformat=empty}`，避免渲染成 "Figure 1: 图1. …" 双重编号。
+> **送审细排参数**（`--indent-chars`、`--caption-fontsize`、`--table-fontsize`、标题/作者字号等）、改代码前必看的三个 LaTeX 坑，及「手写表题自动转 pandoc 题注」：见 `references/submission-fine-tuning.md`。
 >
 > **PDF 侧做不到、需如实告知用户的**：① 正文基准字号 **LaTeX 只认 10/11/12pt**（10.5pt 这类中文字号做不到，要精确字号出 Word）；② 表注 / 图注段（`表注：`/`Note.`）在 PDF 里保持正文字号——它不是 `\caption`，docx 侧才会按题注字号处理；③ 页数不统计（"≤30 页"要用户自己看）；④ 参考文献的期刊全称与 et al. 规则由写作阶段保证，排版层不重排 `[n]` 文本引用。
 >
@@ -30,14 +23,6 @@ model: inherit
 # Render-PDF-Doc Skill
 
 Markdown + frontmatter → publication-quality academic PDF (English or Korean).
-
-## Why This Skill Exists
-
-In real circulation cycles for academic PDFs, two recurring failure patterns appear:
-1. v1 drafts: change-history, version numbers, and PI attribution leak into the attached PDF, confusing the first recipient.
-2. v2 drafts: pandoc pipe-table dash ratios are misjudged, narrowing the first column and forcing label wrapping that hurts readability.
-
-Manual fixes work but the same pattern recurs across proposals, briefings, IRB covers, exemption applications. This skill focuses on **layout** (CJK fonts + table column widths).
 
 ## Boundary (separation from other skills in this repo)
 
@@ -50,48 +35,16 @@ Manual fixes work but the same pattern recurs across proposals, briefings, IRB c
 
 ## Core Principles
 
-1. **Chinese renders through ctex, not a bare font swap.** When the source contains Han, the script uses `documentclass=ctexart` with an OS-appropriate `fontset` (windows / macnew / fandol) → 宋体 body, 黑体 headings, punctuation kerning, no line-break-before-closing-mark, first-line indent. Latin runs use a Times-compatible serif; a box-drawing-safe monofont (`Consolas` / `Menlo` / `DejaVu Sans Mono`) keeps code-fence `├└│─` from silently dropping. Korean / non-CJK keep the article-class path. **This is the difference between "publication-quality" and "everything in one sans font".**
-2. **Pipe table column widths must be inferred from content.** No equal splitting. Size the first column (label) to the longest label, and distribute the remaining width content-proportionally across the data columns.
-3. **CJK is auto-selected by content** — the script detects Han vs Hangul (via an auto-resolved Python interpreter, `.venv` first) and picks the render path + fonts. Set `CJKmainfont` in frontmatter or pass `--cjk-font` only to override the Chinese font; the ctex fontset governs otherwise.
-4. **Enclosed alphanumerics (① ② ③) route to the CJK font.** xeCJK classes them as Latin by default → they land in the Times serif, which lacks them, and drop. On the Chinese path the script reclassifies U+2460–24FF and U+25A0–25FF as CJK so 宋体 (which has them) renders them.
-5. **For circulation PDFs, remove change history / version numbers / PI attribution** — set frontmatter `redact_internal: true` and the script strips those lines before rendering.
-6. **No Quarto dependency** — raw pandoc + xelatex. Quarto's `tbl-colwidths` has reported PDF regressions (issues 6089/9200).
+Why this skill exists, plus the six principles (ctex for Chinese, inferred column widths, auto CJK detection, ① routing, `redact_internal: true`, no Quarto): see `references/design-rationale.md`.
 
 ## Dependencies
 
-```bash
-# macOS
-brew install pandoc
-brew install --cask mactex-no-gui          # xelatex + xeCJK + ctex (~5 GB)
-
-# Linux — texlive-lang-chinese provides the ctex class (ctexart) used for Chinese;
-# it is NOT in texlive-lang-cjk, so both are required.
-sudo apt-get install pandoc texlive-xetex texlive-lang-cjk texlive-lang-chinese fonts-noto-cjk
-
-# Windows (PowerShell) — run in Git Bash afterwards
-winget install --id JohnMacFarlane.Pandoc
-winget install --id MiKTeX.MiKTeX          # xelatex; auto-installs ctex/xeCJK on first render
-initexmf --set-config-value "[MPM]AutoInstall=1"   # so the first render doesn't hang on a prompt
-# No font download needed: 宋体 SimSun / 黑体 SimHei (ctex, Chinese) + Malgun Gothic (Korean)
-# + Times New Roman (Latin) all ship with Windows.
-```
-
-The repo's one-click installers cover all of this: `install.ps1 -WithPdf` (Windows) /
-`bash install.sh --with-pdf` (Linux/macOS).
+Install commands per OS, the one-click installers (`install.ps1 -WithPdf` / `install.sh --with-pdf`) and the Windows / Git Bash PATH note: see `references/dependencies-install.md`.
 
 Detection:
 ```bash
 bash scripts/check_deps.sh
 ```
-
-**Windows / Git Bash note.** winget-installed binaries frequently land off the Git Bash
-`PATH`: MiKTeX's `xelatex` (`%LOCALAPPDATA%\Programs\MiKTeX\miktex\bin\x64`) and pandoc
-(`%LOCALAPPDATA%\Microsoft\WinGet\...`) can read as `[MISS]` even after a successful install.
-Both `check_deps.sh` and `render_pdf.sh` now auto-probe those locations; if either still
-isn't found, add the directory to your `PATH` (or open a fresh terminal). The Windows
-Chinese fonts come from the ctex `fontset=windows` (宋体 SimSun / 黑体 SimHei, both preinstalled)
-— no font download needed; Korean uses Malgun Gothic. Override the Chinese font per document
-via frontmatter `CJKmainfont` or `--cjk-font`.
 
 ## Workflow
 
@@ -100,20 +53,7 @@ via frontmatter `CJKmainfont` or `--cjk-font`.
 Frontmatter is **optional** — a bare Chinese markdown (no frontmatter at all) renders
 correctly through ctex. Add frontmatter only to override defaults:
 
-```yaml
----
-title: "Paper 2 Calibration Anchor — Q&A Grid"
-author: "<Author Group>"
-date: "2026-05-01"
-# CJKmainfont: "SimSun"        # override the ctex fontset's Chinese font (optional)
-# geometry: "margin=1in"       # script defaults: margin=1in, 12pt, linestretch=1.4
-# colorlinks: true
----
-```
-
-Defaults if omitted: geometry `margin=1in`, `fontsize=12pt`, `linestretch=1.4`,
-`colorlinks=true`. Chinese docs auto-select `ctexart` + the OS fontset (Windows 宋体/黑体,
-macOS Songti/Heiti, Linux Fandol); no font settings needed.
+Example frontmatter and script defaults (`margin=1in`, 12pt, `linestretch=1.4`, `colorlinks=true`): see `references/frontmatter-options.md`.
 
 ### Step 2 — Infer column widths
 
@@ -121,13 +61,7 @@ macOS Songti/Heiti, Linux Fandol); no font settings needed.
 python scripts/infer_colwidths.py input.md > input.colwidths.md
 ```
 
-The script:
-1. Finds every pipe table block.
-2. For each column, computes display width = `max(len(header), max(len(cell)))` (CJK = 2 cells, ASCII = 1).
-3. Generates dash-row separator with proportional dash counts.
-4. Writes a new file with separator rows replaced.
-
-Override per-table via attribute: `{tbl-colwidths="[20,40,40]"}` after caption — passes through unchanged.
+`--help` for options; width algorithm and per-table `{tbl-colwidths}` override: see `references/column-width-inference.md`.
 
 ### Step 3 — Render
 
@@ -142,26 +76,13 @@ bash scripts/render_pdf.sh -i input.md -o output.pdf --infer-colwidths
 
 ### Step 3.5 — Scientific-symbol + CJK glyph scan (before render)
 
-xelatex **silently drops** any character the chosen font does not cover — the PDF
-renders with the glyph simply missing, no error or warning. Academic markdown
-routinely carries glyphs a default Latin font misses: transition arrows (→ ↑ ↓),
-math operators (− ≤ ≥ ± √ ∪ × ≈ ≠), stats Greek (κ μ σ β), bullets/marks (• ★ ✓),
-and CJK. Scan the source first so a silent drop is caught before it ships:
+xelatex **silently drops** any glyph the font lacks — no error, no warning. Scan first (`--help` for the `--font` cmap check):
 
 ```bash
-# use the project venv python on Windows (python3 may not exist): "${REPO_ROOT:-/app}/.venv/bin/python"
 python scripts/scan_glyph_coverage.py input.md --strict
-# real cmap check when you have the font file + fonttools:
-python scripts/scan_glyph_coverage.py input.md --font "/path/to/body.otf" --strict
 ```
 
-It groups the risky glyphs by class (advisory), or — with `--font` + `fonttools`
-— reports which are genuinely absent from the font's cmap. If risky glyphs are
-present, ensure `mainfont`/`CJKmainfont` cover them (a CJK-capable font such as
-*Apple SD Gothic Neo* / *Noto Sans CJK* usually covers arrows + Hangul but can
-still miss the true-minus `−` U+2212 and `★`). **The DOCX is authoritative; the
-PDF is a convenience copy** — never let a PDF render drop a glyph the document
-needs.
+Details: `references/glyph-coverage-scan.md`. **The DOCX is authoritative; the PDF is a convenience copy** — never let a PDF render drop a glyph the document needs.
 
 ### Step 4 — Visual verify
 
@@ -180,24 +101,11 @@ Then open the PDF and check:
 
 ## Templates
 
-Starter markdown in `templates/` (English default; a Korean variant `*_ko.md` ships alongside each):
-- `anchor-doc.md` — Q&A grid
-- `proposal-cover.md` — research-proposal cover page
-- `briefing-handout.md` — meeting brief (1-page)
-- `reference-table.md` — comparison-table format
-
-Each template marks slots with a `<!-- TODO: -->` marker.
+Starter markdown in `templates/` (English + `*_ko.md` Korean variants): list in `references/templates.md`.
 
 ## Anti-Patterns
 
-| Anti-pattern | Consequence |
-|---|---|
-| Rendering Chinese through bare `article` + one sans CJK font | No 宋体/黑体 distinction, no punctuation kerning/indent — looks like a screen dump, not a 标书. Use the ctex path (automatic on Han detection). |
-| Hard-coding `python3` in the detect step | On Windows (no `python3`) CJK detection silently returns none → Chinese falls back to the article path. The script auto-resolves an interpreter instead. |
-| Equal dash split (`\|---\|---\|---\|`) | A column with only a short label gets the same width → cramped data columns |
-| Missing box-drawing chars in a code fence | Default Latin Modern Mono lacks `├└│─`; set a covering monofont (the Chinese path does). |
-| Change history / version (e.g. v3.2.2) / PI attribution exposed in a circulation PDF | Confuses the first recipient; leaks internal information |
-| Quarto `tbl-colwidths` for PDF | PDF regression in Quarto 1.4+ — trust HTML only |
+Symptom → cause table: see `references/anti-patterns.md`.
 
 ## Files
 
@@ -207,6 +115,7 @@ Each template marks slots with a `<!-- TODO: -->` marker.
 - `templates/` — 4 starters (English) + their `*_ko.md` Korean variants
 - `references/pandoc_korean_cheatsheet.md` — collection of frontmatter patterns (Korean-PDF reference)
 - `references/known_pitfalls.md` — em-dash line breaks, smart quotes, etc. (Korean-PDF reference)
+- `references/` — sections moved out of this file: design-rationale, dependencies-install, frontmatter-options, column-width-inference, glyph-coverage-scan, templates, anti-patterns, submission-fine-tuning
 
 ## Anti-Hallucination
 

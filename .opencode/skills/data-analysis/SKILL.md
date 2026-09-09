@@ -1,6 +1,6 @@
 ---
 name: data-analysis
-description: 用于任何数据分析、统计计算、探索性画图、读写 CSV/Excel 的任务；用户上传数据文件或要求分析、统计、探索性可视化时使用。使用项目根 .venv（pandas / scipy / statsmodels / sklearn / matplotlib 等）。内置「第零步认列」与「数据体检」流程，进入技能后先照正文执行再做检验建模。边界：探索性看数与 150dpi 预览图用本技能；投稿级出版图（森林图/KM/火山图，300dpi+矢量）用 nature-figure；Table 1 与样本量用 clinical-stats。
+description: 数据分析、统计检验、探索性作图、读写 CSV/Excel；用户上传数据或要求分析、统计、看图时使用（含方法比对、生存分析、ROC、组间检验、回归等推断统计）。内置"先认列→数据体检→定分析计划"流程。投稿级图用 nature-figure，Table 1/样本量用 clinical-stats。
 ---
 
 # 数据分析技能

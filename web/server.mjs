@@ -211,6 +211,19 @@ const enforceOcTools = (oc) => {
   // 它能 cat 的东西不因这个开关而增减 —— 这不是安全边界，只是交互式场景下的确认提示，
   // 在无头服务里唯一的效果就是把请求挂死。跨用户隔离靠的是「一人一容器」，不是它。
   oc.permission = { ...(oc.permission || {}), external_directory: "allow" }
+  // ★ 用自家精简版系统提示替换 opencode 内置的编程向 default 提示。内置那段（约 3K 字符）讲的是
+  //   跑 lint / 别自动 commit / TodoWrite 这类与科研场景无关的事，每轮白占 token 还会带偏行为。
+  //   agent.prompt 只替换那一段：AGENTS.md（instructions）、技能列表、环境信息照常追加（opencode
+  //   1.17 源码 session/llm/request.ts：`agent.prompt ? [agent.prompt] : SystemPrompt.provider(model)`）。
+  //   {file:} 路径相对 opencode.json 所在目录解析；文件随 .opencode/ 整体打包（bundle.ps1 Copy-Tree）。
+  //   文件不在（极简部署）就不写这一项，退回 opencode 默认提示。
+  const agentPrompt = path.join(ROOT, ".opencode", "agent-prompt.md")
+  if (fs.existsSync(agentPrompt)) {
+    oc.agent = { ...(oc.agent || {}) }
+    oc.agent.build = { ...(oc.agent.build || {}), prompt: "{file:./.opencode/agent-prompt.md}" }
+  } else if (oc.agent?.build?.prompt) {
+    delete oc.agent.build.prompt
+  }
   return oc
 }
 // 把自定义 provider 合并进 ROOT/opencode.json（保留其它配置），opencode 启动时读取它
@@ -6381,6 +6394,11 @@ function spawnOc() {
       // 不污染用户自己的 opencode，卸载即消失。
       OPENCODE_CONFIG: OC_CONFIG_PATH,
       XDG_CONFIG_HOME: OC_GLOBAL_CFG,
+      // 不读用户机器上的 ~/.claude/CLAUDE.md、~/.claude/skills 与项目 .claude/skills（XDG_CONFIG_HOME
+      // 圈不住它们，opencode 按 os.homedir() 直接找）：内容不可控、每轮白占 token，还可能把别人的
+      // 路由规则带进来。本套件的规则只走 instructions 里的 AGENTS.md，技能只走 .opencode/skills 联接。
+      OPENCODE_DISABLE_CLAUDE_CODE_PROMPT: "1",
+      OPENCODE_DISABLE_CLAUDE_CODE_SKILLS: "1",
       // 生图/OCR 的平台代理变量（SCI_IMAGE_URL/TOKEN、SCI_OCR_URL/TOKEN），来龙去脉见 cloudSkillEnv。
       ...cloudSkillEnv(),
     },

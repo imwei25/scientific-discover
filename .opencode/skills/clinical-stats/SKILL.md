@@ -1,6 +1,6 @@
 ---
 name: clinical-stats
-description: 临床研究两个高频刚需——基线特征表(Table 1)与样本量/把握度计算。Table 1 按变量类型自动选呈现与检验（均数±SD / 中位数[IQR] / n(%)，两组并出效应量95%CI 与 SMD）；样本量覆盖两组均数、两组率、生存、单组。当用户说"做个 Table 1""基线特征表""SMD""算样本量""把握度/power""要多少例"时使用。通用统计分析用 data-analysis，出版级图用 nature-figure。
+description: 临床研究基线特征表（Table 1，按变量类型自动选呈现与检验，含效应量 95%CI 与 SMD）与样本量/把握度计算（两组均数、两组率、生存、单组）。触发："做个 Table 1""基线表""算样本量""power""要多少例"。通用统计走 data-analysis。
 ---
 
 # 临床统计技能：Table 1 + 样本量

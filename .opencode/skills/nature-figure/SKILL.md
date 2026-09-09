@@ -1,7 +1,6 @@
 ---
 name: nature-figure
-description: >-
-  Submission-grade journal figure workflow for DATA-DRIVEN plots (Python matplotlib/seaborn; R ggplot2 only when explicitly requested). Use when the user asks to create, revise, audit, or polish manuscript figures — forest/KM/volcano/ROC, multi-panel, journal-ready SVG/PDF/TIFF. NOT for data-free schematics or graphical abstracts (use mechanism-figure) and not for dashboards/infographics. Chinese triggers: 论文配图、科研绘图、画图、出图、森林图、生存曲线、火山图、箱线图、热图.
+description: Submission-grade journal figures from DATA (Python matplotlib/seaborn; R ggplot2 on request): forest/KM/volcano/ROC, multi-panel, SVG/PDF/TIFF at 300dpi+. Not for data-free schematics (use mechanism-figure). Triggers: 论文配图、科研绘图、森林图、生存曲线、火山图、箱线图、热图.
 version: 2.1.0
 author: Community contribution (nature-skills); repo-adapted backend/default policy
 ---

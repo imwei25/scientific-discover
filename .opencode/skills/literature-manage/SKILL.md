@@ -1,6 +1,6 @@
 ---
 name: literature-manage
-description: 把一个文件夹里的文件整理成多 sheet 的 Excel 台账——按指定格式（默认 PDF/Word，可加 md/txt 或任何文本类扩展名）扫描目录抽开头内容，逐份填年份/作者/杂志/核心观点（非文献则填「主要内容」），按用户给的标准（或 AI 自定口径）分类，一类一个 sheet；还能按台账里的分类把原文件归到同名子文件夹。只读用户指定的那个本机文件夹，不检索、不下载。
+description: 把用户指定文件夹里的 PDF/Word（可加 md/txt）整理成多 sheet 的 Excel 台账：逐份抽年份/作者/杂志/核心观点，按给定标准分类，一类一个 sheet，可按分类把原文件归入子文件夹。只读本机目录，不检索不下载。触发："整理这个文件夹的文献""出个台账""分门别类"。
 triggers: 文献管理, 整理文献文件夹, 整理文件夹, 文件台账, 文献台账, 文献分类, 把文件分门别类, 笔记整理成表, 文献目录 Excel, 批量读文件出表, 按分类归档, literature library, organize papers folder, organize files folder
 tools: Read, Write, Edit, Bash, Grep, Glob
 model: inherit

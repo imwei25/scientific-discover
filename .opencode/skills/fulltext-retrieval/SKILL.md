@@ -1,6 +1,6 @@
 ---
 name: fulltext-retrieval
-description: 按 DOI/PMID/标题批量下载全文 PDF。第一级走合法 OA API（Unpaywall/PMC/OpenAlex/Crossref）；第二级挂用户本机已登录 CARSI/机构 SSO 的 Chrome 取订阅全文——不碰凭证，遇登录墙等用户操作。PMID/标题先自动解析成 DOI；逐条崩溃隔离；可选 PDF→Markdown 转换。
+description: 按 DOI/PMID/标题批量下载全文 PDF：先走合法 OA API（Unpaywall/PMC/OpenAlex/Crossref），再挂用户本机已登录机构 SSO 的 Chrome 取订阅全文（不碰凭证，登录墙交用户）；逐条崩溃隔离，可选 PDF→Markdown。触发："下全文""下载 PDF""PDF 转 md"。
 triggers: PDF download, fulltext retrieval, open access PDF, batch download papers, meta-analysis PDF, PDF to markdown, convert PDF, 机构订阅全文, CARSI, 校园网下文献, institutional access PDF
 tools: Read, Write, Edit, Bash, Grep, Glob
 model: inherit

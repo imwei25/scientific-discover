@@ -330,6 +330,9 @@ function commonEnv(s, platform) {
   const env = {
     OPENCODE_CONFIG: stripLP(path.join(CTX.root, "opencode.json")),
     XDG_CONFIG_HOME: stripLP(path.join(CTX.root, ".ocglobal")),
+    // 与 server.mjs spawnOc 同款：不读用户机器上的 ~/.claude/CLAUDE.md 与 .claude/skills
+    OPENCODE_DISABLE_CLAUDE_CODE_PROMPT: "1",
+    OPENCODE_DISABLE_CLAUDE_CODE_SKILLS: "1",
     PATH: [path.dirname(cc), stripLP(process.env.PATH || "")].join(";"),
     SCI_WRAP_OC: ocBin(),
     SCI_WRAP_CC: cc,

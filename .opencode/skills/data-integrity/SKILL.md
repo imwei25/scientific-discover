@@ -1,6 +1,6 @@
 ---
 name: data-integrity
-description: 论文源数据的数值完整性自查（sanity check）：投稿前扫一遍 Excel/CSV/TSV（或 pdf/docx 里的表格），找出审稿人/PubPeer 会盯上的可疑数值模式——复制粘贴错误、常数偏移/固定比例、跨表复用、GRIM/GRIMMER 不自洽、末位数分布异常等，供主动核对或补说明；也可审他人数据。当用户说"数据自查""源数据核查""数据完整性""会不会被质疑造假""PubPeer"时使用。边界：只看结构化数值表，不查图像/western blot 篡改；只出"待核信号"，绝不下"造假"结论。
+description: 论文源数据数值完整性自查（sanity check）：扫 Excel/CSV/TSV 或文档中的表格，找复制粘贴错误、常数偏移、跨表复用、GRIM/GRIMMER 不自洽、末位数异常等可疑模式；只出待核信号，不下造假结论。触发："数据自查""源数据核查""会不会被 PubPeer 质疑"。
 ---
 
 # 数据完整性自查技能（data-integrity）

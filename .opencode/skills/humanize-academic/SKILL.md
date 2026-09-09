@@ -1,6 +1,6 @@
 ---
 name: humanize-academic
-description: 去 AI 味 / 学术润色（科研、医学文本，中英文都支持）。把一段读起来"很 AI"的科研或医学文字改得自然、专业、像真人写的，同时保持原意、术语、数据和引用不变。针对中英文学术写作各自常见的 AI 腔。当用户说"去掉 AI 味""改得像人写的""降 AI 率""降 AIGC""中文论文去 AI 味""让文字更自然""academic polish"时使用（"润色"若明显指科研/医学文本也适用）。
+description: 去 AI 味/学术润色（中英文科研、医学文本）：把"很 AI"的文字改得自然专业，术语、数据、引用不变；.docx 就地改写成 Word 修订。触发："去 AI 味""降 AI 率/AIGC""改得像人写的""academic polish"。
 ---
 
 # 去 AI 味学术写作技能
@@ -11,6 +11,8 @@ description: 去 AI 味 / 学术润色（科研、医学文本，中英文都支
 > 注：`<会话id>` 是**占位符**，执行前替换成主控给出的实际会话 id（原样复制进 shell 会因 `<` `>` 是重定向符而报错）。
 
 对给定文本做**体检定靶 → 改写 → 复跑当闸**三步（见「改写三步」节），去掉机器腔、保留学术严谨。参考 matsuikentaro1/humanizer_academic 与 blader/humanizer（二者均只覆盖英文），**本技能补齐了中文学术 AI 腔清单**，聚焦科研/医学稿件。
+
+> 脚本一律 `$V $S/<脚本>.py`，`V="${REPO_ROOT:-/app}/.venv/bin/python"`、`S="${REPO_ROOT:-/app}/.opencode/skills/humanize-academic/scripts"`；七个脚本（docx_extract / docx_apply / docx_verify / docx_translate / ingest_doc / ai_tells / check_invariants）**参数都以 `--help` 为准**。完整命令序列与细则已搬到 `references/`，按下文指针读。
 
 ## 第零步：先按**稿件格式分流**——`.docx` 走就地改写，其余走 markdown
 
@@ -25,31 +27,8 @@ description: 去 AI 味 / 学术润色（科研、医学文本，中英文都支
 
 ### A 路：就地改写（`.docx` 默认走这条）
 
-B 路（docx → markdown → 改写 → **重新生成** docx）的问题不是"格式没调好"，而是**重新生成**：
-原文件里 markdown 表达不了的东西会全部消失，且一路无声——
-EndNote / Zotero 引文域变成死文本（用户再也没法更新文献表）、合并单元格表头被拍平
-（pipe 表语法上就没有 rowspan/colspan）、页眉页脚 / 分节 / 页码 / 交叉引用 / 题注自动编号 /
-批注 / 他人修订痕迹一并丢失。A 路不生成新文件，这些问题**从根上不存在**。
-
-```bash
-V="${REPO_ROOT:-/app}/.venv/bin/python"
-S="${REPO_ROOT:-/app}/.opencode/skills/humanize-academic/scripts"
-
-# ① 抽出带编号的段落清单（正文 + 页眉页脚 + 脚注尾注一并覆盖）
-$V $S/docx_extract.py manuscript.docx
-# → manuscript_para.md：每行 `[[p0007]] 正文…`
-
-# ② 改写：整行替换 [[id]] 后面的正文，写成 manuscript_edited.md
-#    行首 [[id]] 一个字符都不要动；别增删行、别合并或拆分段落；
-#    ⟦…⟧ 里是域/公式/图内文字（引文、交叉引用、页码），可整体挪位置，里面一个字都不许改。
-
-# ③ 写回原文件，落成 Word 原生修订
-$V $S/docx_apply.py manuscript.docx manuscript_edited.md \
-     -o manuscript_humanized.docx --track-changes --author "AI 润色"
-
-# ④ 校验（四道闸，必跑）
-$V $S/docx_verify.py manuscript.docx manuscript_humanized.docx --auto-terms
-```
+四步骨架：① `docx_extract.py` 抽出带编号的段落清单（正文 + 页眉页脚 + 脚注尾注，每行 `[[p0007]] 正文…`）→ ② 改写：整行替换 `[[id]]` 后面的正文写成 `_edited.md`（行首 `[[id]]` 一个字符都不要动；别增删行、别合并或拆分段落；⟦…⟧ 里是域/公式/图内文字，可整体挪位置，里面一个字都不许改）→ ③ `docx_apply.py … --track-changes` 写回原文件，落成 Word 原生修订 → ④ `docx_verify.py … --auto-terms` 校验（四道闸，必跑）。
+完整命令、为什么不走 B 路重建、`docx_apply.py` 会自己拒绝的事（拒绝即退出码 3；**跨可见格式边界的告警必须转告用户**，或加 `--strict-format`）见 `references/route-a-docx-edit.md`。
 
 **为什么默认 `--track-changes`**：用户要的是"看得见改了什么、能逐条否掉"，不是一份"据说改过"
 的新文件。修订标记由文件自己携带，改到哪一个字都赖不掉。
@@ -60,13 +39,6 @@ $V $S/docx_verify.py manuscript.docx manuscript_humanized.docx --auto-terms
 该不该否掉哪一条。所以**必须另出一份逐条对照表**（写法与防幻觉要求见「用法」第 6 条）。
 过去否掉 `changes.md` 的理由是"事后凭回忆写的清单不可信"——这个顾虑成立，
 解法是**清单由改前 / 改后两份文本逐行比对生成**，不是取消清单。
-
-**`docx_apply.py` 会自己拒绝的事**（拒绝即退出码 3，别忽略）：
-- ⟦⟧ 里的域内文字被改、被删或换了顺序 → 整段拒绝并指出是哪一处；
-- 段落编号在原稿里不存在 → 忽略并告警；
-- 改动**跨越可见格式边界**（颜色 / 高亮 / 粗斜 / 上下标 / 字号）→ 默认告警，因为被合并进来的
-  那截文字会被迫改成前一段的格式（用户会看到"某个词莫名变了颜色"）。**告警必须转告用户**，
-  或加 `--strict-format` 直接拒绝那些段。
 
 **`docx_verify.py` 的四道闸**：A) 除被改部件外，zip 条目**逐字节相同**；B) 表 / 行 / 单元格 /
 合并格 / 图 / 域 / 分节 / 段落数一一相等；C) 修订模式下**拒绝全部修订应还原成原文**
@@ -79,66 +51,18 @@ $V $S/docx_verify.py manuscript.docx manuscript_humanized.docx --auto-terms
 
 ### B 路：markdown（`.pdf` / `.md`）
 
-**不要自己拿 pandoc 或 python-docx 随手抽文本**。那几条路都丢图：
-裸 `pandoc x.docx -o x.md` 不带 `--extract-media`，md 里留下 `![](media/xxx.png)` 但文件没落盘；
-`pdf_to_md.py` 写死 `ignore_images=True`；`python-docx` 的 `doc.paragraphs` 里既没有图也没有表。
-丢了之后一路无声：排版时 pandoc 只打一句 WARNING 就退 0，用户打开 Word 才发现图没了。
+**不要自己拿 pandoc 或 python-docx 随手抽文本**（那几条路都丢图，且一路无声）。统一走 `ingest_doc.py`（它会抽媒体、把表转成 pipe 表、并**报出图与表各多少**）→ `manuscript_src.md` + `manuscript_files/`。它也认 `.docx`，但**拿到 .docx 请走 A 路**。丢图原因与命令见 `references/route-b-markdown.md`。
 
-统一走这个脚本（它会抽媒体、把表转成 pipe 表、并**报出图与表各多少**）：
-
-```bash
-"${REPO_ROOT:-/app}/.venv/bin/python" \
-  "${REPO_ROOT:-/app}/.opencode/skills/humanize-academic/scripts/ingest_doc.py" manuscript.pdf
-# → manuscript_src.md + manuscript_files/fig_001.png ...
-# → [ingest] 抽出 图 N 张 / 表 M 张
-```
-
-（它也认 `.docx`，但**拿到 .docx 请走 A 路**——走这里等于主动把用户的格式扔掉。）
+**把它报的「图 N 张 / 表 M 张」记下来**——那是后面校验的基准，也是交付时要跟用户对的账。
+它若报「图片链接在稿件里但文件没落盘」，**先解决再往下**，别揣着这个问题去润色。
+用户直接给 `.md` 的，脚本会顺带把稿件引用的图片复制到产物目录（不复制的话排版一样找不到）。
 
 ### A2 路：整篇翻译（同一套就地机制，但写回策略不同）
 
 用户要的是"把我这份 Word 稿整篇译成英文/中文，排版别动"时走这条。前后两步与 A 路相同
 （`docx_extract.py` 抽清单、`docx_verify.py` 校验），**中间的写回必须换脚本**：
-
-```bash
-$V $S/docx_extract.py manuscript.docx            # 同 A 路
-# 逐行翻译 → manuscript_trans.md（行首 [[id]] 不动、⟦…⟧ 内不译）
-$V $S/docx_translate.py manuscript.docx manuscript_trans.md \
-     -o manuscript_translated.docx --set-lang en-US --latin-font "Times New Roman"
-$V $S/docx_verify.py manuscript.docx manuscript_translated.docx \
-     --mode translate --expect-lang en
-```
-
-**为什么不能用 `docx_apply.py` 翻译**（这是实测出来的，别图省事）：A 路保住段内格式靠的是
-"没改到的字符留在原 run 里"，而翻译每个字都变，这个前提没了。中译英时原文与译文没有公共
-子串，字符级 diff 退化成一个 replace，**整段译文被塞进最后一个 run**、继承它的格式；实测
-样例那段 324 字 / 22 run / 3 种格式里，末尾 run 的格式恰恰不是主导格式。若原文与译文有偶然
-公共字符（数字、SGLT2、括号、%），译文还会被切成几截塞进不同格式的 run。
-
-`docx_translate.py` 改走**主导格式整段落笔**：取该片里占字数最多的 rPr 承载整段译文，其余
-可改 run 删掉。段落级的一切（样式、缩进、对齐、编号、所在单元格）分毫不动；**段内的局部
-格式会被统一**——译文里那个词落在哪儿机器判断不了，这一条无法回避，脚本会逐段报出来，
-**必须转告用户**。
-
-**`--set-lang` / `--latin-font` 不是可选项**：不设语言标记，Word 拿原语言的词典校对译文，
-全篇红波浪线；不设西文字体，英文会用中文字体渲染（实测两份真稿：一份 429 个 run 的
-`rFonts@ascii` 是宋体，另一份 119 个是 SimSun）。译成中文时用 `--set-lang zh-CN --cjk-font 宋体`。
-
-**翻译档的校验闸与润色档不同**（`--mode translate`）：去掉"拒绝全部修订须还原成原文"与
-±15% 篇幅两条（翻译没有修订、且中译英涨 40–60% 是正常的），换成
-**逐段点名漏译**（判据：译文与原文一字不差 **且** 原文含源语言字符——只看可改文字，
-⟦⟧ 里的域文字本来就该保持原样，不算半译）与**残留源语言**告警；作者-年引用改为**只比条数**
-（「（中泰证券，2025）」译成「(Zhongtai Securities, 2025)」是对的，不是丢引用）。
-数字、`[n]`、DOI/PMID 仍严格守恒。
-
-**交付时必须报四件事**：译了多少段 + 四道闸结果；**图表的账**（校验的结构层会打印
-「图 N → N、表 M → M」，照抄给用户——图和表根本没离开过原文件，媒体是逐字节搬的，
-但用户看不到这句话就无从判断）；多少段段内格式被统一；篇幅涨缩百分比（原表格列宽固定，
-窄列里的长句会把行撑高、页数会变）。
-
-**把它报的「图 N 张 / 表 M 张」记下来**——那是后面校验的基准，也是交付时要跟用户对的账。
-它若报「图片链接在稿件里但文件没落盘」，**先解决再往下**，别揣着这个问题去润色。
-用户直接给 `.md` 的，脚本会顺带把稿件引用的图片复制到产物目录（不复制的话排版一样找不到）。
+`docx_extract.py` → 逐行翻译成 `_trans.md`（行首 `[[id]]` 不动、⟦…⟧ 内不译）→ `docx_translate.py … --set-lang … --latin-font …`（**不是可选项**；译成中文用 `--set-lang zh-CN --cjk-font 宋体`）→ `docx_verify.py … --mode translate --expect-lang …`。
+为什么不能用 `docx_apply.py` 翻译、**段内局部格式会被统一（脚本逐段报出，必须转告用户）**、翻译档的校验闸与润色档的差别（去掉修订还原与 ±15% 篇幅两条，换成逐段点名漏译与残留源语言告警；数字、`[n]`、DOI/PMID 仍严格守恒）、**交付时必须报的四件事**，见 `references/route-a2-docx-translate.md`。
 
 ## 第一步：判定语言，加载对应清单
 - 中文稿件 → 用下面「中文 AI 腔」。
@@ -146,76 +70,18 @@ $V $S/docx_verify.py manuscript.docx manuscript_translated.docx \
 - 中英混排 → 两个都用。
 
 ## 中文 AI 腔（先检出，再改）
-1. **机械三段式过渡**："首先/其次/再次/最后""一方面……另一方面"每段套用——按逻辑真实衔接，别公式化。
-2. **空转套话开头/结尾**："随着……的不断发展""在……的大背景下""众所周知""综上所述""值得注意的是""不难看出"——删掉或换成具体内容。
-3. **空泛大词/口号**："具有重要的理论和现实意义""为……提供了新思路""进一步推动了""赋能/闭环/抓手/双轮驱动/顶层设计"——换成具体做了什么、得到什么。
-4. **排比与四字堆砌**："全面、深入、系统地""科学性、合理性、可行性"式凑数并列——留最相关的。
-5. **"进行/加以/予以"冗余动词**："进行分析" → "分析"；"加以改进" → "改进"。
-6. **过度关联词**：每句"因此/然而/此外/同时/并且"——删大半，靠语义衔接。
-7. **句式与段落单调**：句句等长、段段总-分-总——长短句交错、结构随内容变。
-8. **过度对冲或过度绝对**：一堆"可能/或许"或一堆"必然/毫无疑问"——按证据强度校准。
-9. **标点腔**：滥用破折号"——"制造停顿、滥用加粗强调——按中文书面语习惯收敛。
-10. **段末同构升华句**（最容易漏、也最容易被检测器抓）：几乎每段都以"引文 + 一句推论性点评"收尾，
-    且引导语雷同——"这一发现提示，……""该研究强调，……""这些发现表明，……""值得注意的是，……"。
-    **不是每段都需要一句结论**：叙述完事实直接停住、把推论攒到小节末尾说一次，才是人写的样子。
-    真要点评时，把引导语换掉、或者干脆并进前一句，别再起一个"这一 X 提示"的架子。
-11. **条目化对仗收尾**："第一，……第二，……第三，……第四，……第五，……"或"①②③④"式枚举，
-    且每条都是同构的"[动词短语]，[展开说明][引文]"。**三条以内、长短不一**才像人写；
-    五条整齐排开是 AI 生成中文议论文的标志性结构。改法：合并同类项、把最弱的两条删掉、
-    或改成正常段落叙述。（`首先/其次/最后` 三连是正当中文写法，不必动。）
-12. **异文字与中英夹生残留**（AI 翻译/改写英文文献没洗干净的指纹，**一处都不该留**）：
-    - 混入西里尔字母（`阳性и阴性` 的 `и`）、罕用希腊符号——尤其 **U+037E 希腊问号与半角
-      分号长得一模一样**，肉眼永远看不出来，只能靠脚本；
-    - 英文词直接粘中文：`underlying的染色体重排`、`apparent孤立缺失`、`国际cohorts`、`基因组profiling`；
-    - 漏空格的粘连：`clinicallyrelevantSVs`。
-    改法：该译的译成中文，该保留的专有名词前后补空格并核对大小写。**别只改看得见的那几处**——
-    跑 `ai_tells.py` 把全篇扫一遍。
-13. **段落层结构单调**：句句等长（低突发性）、段段同长、每段都是"总述—举证—升华"三件套。
-    句子层面的清单（条 6、7）治不了这个——要打散的是**段落的骨架**：
-    有的段就两句话把事实说完，有的段展开五句做对比，有的段直接从数据开头不做铺垫。
+13 条细目见 `references/ai-tells-zh.md`，改写前逐条检出。最易漏、也最易被检测器抓的是条 10 段末同构升华句、条 11 条目化对仗收尾、条 12 异文字与中英夹生残留（**一处都不该留**，跑 `ai_tells.py` 全篇扫）、条 13 段落层结构单调。
 
 ## 英文 AI 腔（先检出，再改）
-1. **套话开头/结尾**："In today's rapidly evolving...""It is worth noting that""In conclusion, ..."
-2. **空泛形容**："various aspects""significant potential""a wide range of""plays a crucial role"——换成具体内容。
-3. **过渡词滥用**：每段都 However/Moreover/Furthermore/Additionally——删掉大半，靠逻辑衔接。
-4. **AI 高频词**：delve、robust、pivotal、underscore、testament、landscape、intricate、multifaceted、leverage、realm——多为堆砌，按需替换。
-5. **"not X but Y" / 假坦率式套路**："It's not just A, it's B"——删掉这类制造式金句。
-6. **排比与三连**："efficient, effective, and reliable"式凑数并列——留最相关的。
-7. **em-dash 滥用**：AI 爱用 `—` 制造节奏；学术正文控制在少量，必要时改逗号/分号。
-8. **句长单调**：全是中等长句——长短交错。
-9. **过度对冲/绝对**：一堆 may/might 或一堆 clearly/undoubtedly——按证据强度校准。
-10. **名词化冗余**："the utilization of" → "using"；"in order to" → "to"。
-11. **空转元评论**："This section will discuss..."——直接讲内容。
-12. **段末同构升华句**：每段都以 "These findings suggest that…" / "This underscores…" /
-    "Taken together, these data indicate…" 收尾。同中文条 10：不是每段都需要结论句。
-13. **异文字与拼接残留**（同中文条 12）：机翻/改写留下的非拉丁字符、漏空格粘连词、
-    未译的源语言片段。跑 `ai_tells.py` 全篇扫，别靠肉眼。
+13 条细目见 `references/ai-tells-en.md`，改写前逐条检出（条 12 段末同构升华句、条 13 异文字与拼接残留同中文条 10、12）。
 
 ## 保留清单（别矫枉过正、误删正当学术用语）
 不要为了"去 AI"而删掉这些**正当**表达：按证据强度该有的对冲（"these data suggest""可能提示"）、必要的过渡（转折、因果确实存在时）、领域固定术语与固定搭配、方法学套语（"We performed…""采用……方法"）。目标是自然且严谨，不是把学术语气改成口语。
 
 ## 改写三步：**先体检定靶 → 改 → 复跑当闸**（别再"凭感觉改两遍"）
 
-旧版写的是"第二遍对照清单逐条终检"，实际执行时终检永远退化成"读一遍觉得还行"——
-**模型评自己刚写的东西，看不出同构**。2026-08 一份成稿被外部检测器逐条拆穿，
-点名的四类特征（段末句式雷同 ×8、句长均匀、第一…第五枚举、西里尔字母混入）
-全是**能数出来**的，当时却一个都没被自查发现。所以终检改成跑脚本。
-
-```bash
-V="${REPO_ROOT:-/app}/.venv/bin/python"
-S="${REPO_ROOT:-/app}/.opencode/skills/humanize-academic/scripts"
-
-# ① 改写前定靶——报告会点名"哪几段的哪个特征异常"，改写就照着这份清单下手
-$V $S/ai_tells.py manuscript_src.md --terms "UroVysion,EpiCheck,cfDNA"
-#   A 路（docx）：直接喂 docx_extract.py 的段落清单，报告用 [[pNNNN]] 定位
-$V $S/ai_tells.py manuscript_para.md
-#   PDF 抽出来的硬换行文本要加 --reflow
-
-# ② 按报告 + 清单改写
-
-# ③ 改写后复跑，**当闸用**：任何一项比改写前差就退 3，不许交付
-$V $S/ai_tells.py --before manuscript_src.md --after manuscript_humanized.md
-```
+① 改写前 `ai_tells.py <稿件>` 定靶（A 路直接喂 `docx_extract.py` 的段落清单，报告用 `[[pNNNN]]` 定位；PDF 抽出的硬换行文本加 `--reflow`）→ ② 按报告 + 清单改写 → ③ `ai_tells.py --before <改前> --after <改后>` 复跑**当闸用**：任何一项比改写前差就退 3，不许交付。
+为什么终检改成跑脚本（2026-08 被外部检测器逐条拆穿的教训）与完整命令见 `references/ai-tells-workflow.md`。
 
 - **第一遍**：逐句按对应语言的清单改：删套话、换具体、调句长、砍多余过渡词；
   同时把体检报告点名的段落逐个销项。
@@ -225,7 +91,7 @@ $V $S/ai_tells.py --before manuscript_src.md --after manuscript_humanized.md
   单看改写稿发现不了，只有跟原稿比才看得见"这一项被我改差了"。
 - **`ai_tells.py` 是 signal not verdict**：它不判"这是 AI 写的"（检测器本身就不可靠），
   只告诉你哪几段哪个特征在统计上异常。**别为了把数字压绿而删掉正当表达**——
-  该有的对冲、该有的过渡、领域固定搭配一律保留（见下方保留清单）。
+  该有的对冲、该有的过渡、领域固定搭配一律保留（见上方保留清单）。
 - **字数守恒**：改写后篇幅与原文相差控制在约 ±15% 内，别越改越长或缩水丢信息。
 - **（可选）声纹校准**：若用户能提供本人写的 1–2 段文字，先读它匹配语气与用词习惯，再据此改写，"像本人写的"效果更好。
 
@@ -276,96 +142,16 @@ $V $S/ai_tells.py --before manuscript_src.md --after manuscript_humanized.md
 - **`check_invariants.py` / `docx_verify.py`** 管"改**过头**了没有"——数字、引用、图表、
   格式有没有被动。
 
-**A 路（docx 就地改写）跑 `docx_verify.py`**（四道闸见第零步）：
-```bash
-"${REPO_ROOT:-/app}/.venv/bin/python" \
-  "${REPO_ROOT:-/app}/.opencode/skills/humanize-academic/scripts/docx_verify.py" \
-  manuscript.docx manuscript_humanized.docx --auto-terms
-```
-它比 B 路的校验强在**闸 C**：修订模式下"拒绝全部修订"必须逐字还原成原文——
-只要有一个字被改却没留下修订标记（用户在 Word 里看不见、也没法拒绝），立刻 FAIL。
-
-**B 路（markdown）跑 `check_invariants.py`**，确认数字 / 引用 / **图 / 表** / 术语没被动过：
-```
-# Windows: "${REPO_ROOT:-/app}/.venv/bin/python" ; Linux/macOS: "${REPO_ROOT:-/app}/.venv/bin/python"
-"${REPO_ROOT:-/app}/.venv/bin/python" "${REPO_ROOT:-/app}/.opencode/skills/humanize-academic/scripts/check_invariants.py" \
-  --before manuscript_src.md --after manuscript_humanized.md \
-  --terms "HFpEF,SGLT2i,eGFR"     # 可选：逐个核对关键术语计数
-```
-`--before` 要给**第零步抽出来的 `_src.md`**，不是用户上传的 .docx / .pdf（脚本只读文本）。
-
-脚本抽取改写前后的数字、引用标记（[n]/(作者,年)/DOI/PMID）、**图片链接**、**表格签名**（表头首格｜列数×行数）、指定术语，做集合 diff，报出任何丢失/新增；并额外检查**图片链接指向的文件是不是真的在**（链接还写着、文件没了，是最隐蔽的一种丢图）。
+A 路跑 `docx_verify.py`（四道闸见第零步；它强在**闸 C**：有一个字被改却没留修订标记立刻 FAIL），命令见 `references/route-a-docx-edit.md`。
+B 路跑 `check_invariants.py --before <_src.md> --after <_humanized.md> [--terms …]`，确认数字 / 引用 / **图 / 表** / 术语没被动过；`--before` 要给**第零步抽出来的 `_src.md`**，不是用户上传的 .docx / .pdf。它比对什么、怎么查最隐蔽的丢图，见 `references/route-b-markdown.md`。
 
 - **数字 / 引用 / 术语的差异**：`5% → five percent` 这类等价改写属正常，人工确认即可；但凡涉及数据或引用编号的必须核对原文。
 - **图 / 表丢失是硬伤**，脚本会打 `[FAIL]`：**补回去重跑，不许拿这份稿子去排版出件**，也不许在回答里说成"内容未改"。
 
 ## 用法
-1. 让用户给原文（或指向 `uploads/` 里的文件）。**先按第零步分流**：`.docx` 走 A 路就地改写，
-   `.pdf` / `.md` 走 B 路 `ingest_doc.py`。
-2. **改写前先跑 `ai_tells.py` 定靶**（见「改写三步」），照报告点名的段落下手。
-3. 改完给出：**改写稿** + **逐条改动对照清单**（格式与铁律见第 6 条第一项）。
-4. **markdown 稿一律另存 `<原名>_humanized.md`，绝不就地改原稿。**
-   （原稿 `review.md` / `manuscript.md` 保持不动，润色结果写成 `review_humanized.md`。）
-   两个理由，都不是洁癖：① 用户丢了改前版本就没法对照"你到底改了什么"，
-   而本技能的交付物之一就是改动说明；② 各模块流程条的「语言润色」这一步认的就是
-   `*_humanized.md` 这个文件名（`web/workflows.mjs` 的 emits 契约）——**就地改原稿 = 做了不亮**，
-   实测（2026-08-21 综述模块）用户看到润色格子始终是灰的，以为这一步被跳过了，
-   会要求你重跑一遍，白花一轮钱。
-   只跑 `ai_tells.py` 体检、没有产出改写稿，同样不算做过这一步：要么真改并另存，
-   要么明说"体检全绿、无需改写"并**仍然另存一份 `<原名>_humanized.md`**（内容可与原稿一致）作为该步产物。
-5. 长文：A 路写到 `<原名>_humanized.docx`（带修订），B 路写到 `<原名>_humanized.md`；
-   两条路都**必跑**对应的校验脚本，**外加 `ai_tells.py` 的 `--before/--after` 闸**。
-6. **交付时把账报出来**：
-   - **逐条改动对照表（第一位，不是可选项）**。用户来润色，最想看的就是"你到底动了哪几句"。
-     只报聚合数（改写 N 段 / 插入 X 处 / 体检 5→1）**不算交代**——那是过程指标，
-     不是改动本身；实测（2026-09-01 用户反馈）交付退化成"笼统说改了什么"就是漏了这张表。
-     **表格四列，一条改动一行**：
-
-     | 位置 | 改前 | 改后 | 改的是哪条 AI 腔 |
-     |---|---|---|---|
-     | `[[p0021]]`（或"讨论第 2 段"） | **这一发现提示，**该指标**或可作为潜在的**生物标志物 | 该指标**在本队列中与复发相关（HR 1.8）** | 条 3 空泛断言 + 条 6 段末引导语 |
-
-     - **位置列**：A 路直接用 `docx_extract.py` 的 `[[pNNNN]]` 编号（用户能在 Word 里搜到）；
-       B 路用"章节 + 第几段"。
-     - **改前 / 改后两列里，只把真正动了的那几个字用 `**…**` 加粗**，没动的部分保持原样。
-       用户扫一眼就知道该盯哪里；整句照抄不加粗，等于让他自己逐字找不同——
-       那正是这张表要替他省掉的活。四条规矩：
-       - **加粗的是差异片段，不是整格**。整格加粗（或整格不加粗）都算没做。
-         删掉的内容加粗在「改前」列，新增的加粗在「改后」列，替换则两边各加粗对应片段。
-       - **粒度到词组，别到整句**："这一发现提示，该指标或可作为潜在的生物标志物"
-         → 只加粗 `这一发现提示，` 和 `或可作为潜在的`，中间没动的"该指标""生物标志物"不加粗。
-       - **纯删除 / 纯新增要点明**：改后列没有对应片段时，在「哪条 AI 腔」列写一句
-         "删去段末引导语"，别让用户以为是漏填。
-       - 表格单元格里**不能有换行和裸 `|`**：正文里的 `|` 写成 `\|`，长句直接接排。
-     - **铁律：这张表必须由改前 / 改后两份文本逐行比对生成，不许凭回忆写。**
-       A 路手边就有 `manuscript_para.md`（改前）和 `manuscript_edited.md`（改后），
-       两份文件按 `[[id]]` 对齐，取"两边不一致"的行填表；B 路同理拿原稿与 `_humanized.md` 比。
-       凭印象写的清单会漏改动、会写上根本没改的句子——这正是当初否掉 `changes.md` 的原因，
-       用逐行比对生成就没有这个问题。
-     - **改动多时可截断，但要明说截了**：全表超过 ~25 行时，按"改动幅度从大到小"列前 20 条，
-       并写一句"另有 N 条同类改动（多为删套话 / 合并短句），已含在修订标记里"。
-       **不许不声不响只列几条**。
-   - **AI 味体检的前后对照**：逐项报"改写前 → 改写后"（段末引导语雷同 5→1、
-     句长突发性 0.31→0.48、对仗枚举段 3→0、异文字 4→0…）。这是"改过了"的**证据**，
-     比一句"已去除 AI 腔"可信。**闸报 FAIL 就别交付**，回去再改一轮。
-   - **上报项照实说**：类比外推填充多少处、引文装饰性多少——并说明这两类
-     本技能没改、该怎么处置（回 `literature-review` / 跑 `reference-check --manuscript`）。
-   - A 路：「改写 N 段，落下修订 X 处插入 / Y 处删除；校验四道闸全过——除文字外零改动，
-     表 / 合并单元格 / 图 / 域 / 页眉页脚原样」。**这行数字是对照表的补充，不是它的替代**——
-     `docx_apply.py` 只打印聚合数，别把它照抄一遍就当交代完了。
-     **跨可见格式边界的告警要照实转告**。
-     并告诉用户怎么用：Word →「审阅」→ 可**逐条接受 / 拒绝**，或「全部接受」得到干净稿。
-   - B 路：「原稿 N 张图 / M 张表，改写稿同样 N 张 / M 张，校验通过」。
-     一张都没有的稿子就明说"原稿没有图表"——别不提，用户看不到这句话时无从判断你有没有弄丢。
-7. **B 路且润色对象是整篇论文 / 投稿稿件时，顺手出排版件**（用户要的是能投的稿子，不是一个 md）。
-   **A 路不要做这一步**——产物本身就是保留原格式的 Word，再排一次等于把原格式换掉：
-   - 用户**没指定期刊** → 直接用默认送审格式出 Word（要 PDF 同理换 `render-pdf-doc`）：
-     ```bash
-     bash "${REPO_ROOT:-/app}/.opencode/skills/render-docx/scripts/render_docx.sh" -i humanized.md --journal generic-submission
-     ```
-     该预设 = Times New Roman 12pt、双倍行距、连续行号、页码、首行缩进 4 字符、图题表题 10.5pt 居中（序号加粗）、表内 10pt、三线表、标题 16/14/12pt 加粗、作者与机构 10.5pt 居中、1in 边距。
-   - 用户**指定了期刊** → 先看 `--journal list` 有无预设，没有就 WebFetch 该刊 Instructions for Authors 按其要求给参数；查不到如实说明并退回默认预设，别编该刊要求。
-   - 段落/句子级润色（只改一段话）不必出件，给改写稿即可。
+完整 7 条见 `references/usage-and-delivery.md`——接稿分流、先跑 `ai_tells.py` 定靶、产物命名、交付报账、B 路顺手出排版件（A 路不做）。其中不可省的铁律：
+- **markdown 稿一律另存 `<原名>_humanized.md`，绝不就地改原稿**（`web/workflows.mjs` 的 emits 契约认这个名；体检全绿无需改写时**仍然另存一份**）；A 路写到 `<原名>_humanized.docx`（带修订）。两条路都**必跑**对应校验脚本，**外加 `ai_tells.py` 的 `--before/--after` 闸**。
+- **交付时把账报出来**：**逐条改动对照表第一位，不是可选项**（四列：位置 / 改前 / 改后 / 改的是哪条 AI 腔；只加粗真正动了的片段；**必须由改前 / 改后两份文本逐行比对生成，不许凭回忆写**；超 ~25 行可截断但要明说）；AI 味体检前后对照（**闸报 FAIL 就别交付**）；上报项照实说；A 路报修订插入 / 删除数与四道闸结果并**转告跨可见格式边界的告警**，B 路报「原稿 N 图 M 表 / 改写稿同样 N 图 M 表」（没有图表也要明说）。
 
 ## 提醒
 - "AI 检测器"分数仅供参考、不可靠；本技能目标是**读起来自然且学术严谨**，不是骗检测器。

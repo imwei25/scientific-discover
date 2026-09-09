@@ -1,6 +1,6 @@
 ---
 name: render-docx
-description: 把 Markdown 稿件渲染成 Word (.docx) 投稿版——医学期刊投稿绝大多数要 Word，国自然正文、中文核心也多用 .docx。内置期刊格式预设（--journal nejm/lancet/jama/bmj/cmj/generic-submission，一键落齐字体/字号/边距/行距/行号/CSL；默认 generic-submission），也可单独指定各排版参数或套期刊 Word 模板，细节见正文。当用户说"出 Word""转 docx""投稿要 Word 版""按 XX 期刊格式排版""双倍行距加行号"时使用。出 PDF 用 render-pdf-doc；用户只说"排版"没指明格式时，先问要 PDF 还是 Word。
+description: 把 Markdown 稿件渲染成 Word (.docx) 投稿版：内置期刊预设（--journal nejm/lancet/jama/bmj/cmj/generic-submission）一键落齐字体/行距/行号/CSL，也可单独指定参数或套 Word 模板。触发："出 Word""转 docx""按 XX 期刊排版""双倍行距加行号"。出 PDF 用 render-pdf-doc；只说"排版"先问 PDF 还是 Word。
 ---
 
 # Markdown → Word (.docx) 投稿排版技能
@@ -36,67 +36,15 @@ Instructions for Authors** 取其字体字号/行距/行号/图表位置/参考�
 ## 用法
 脚本在 `/app/.opencode/skills/render-docx/scripts/`（容器内的实际路径；命令行里写 `"${REPO_ROOT:-/app}/..."` 由 shell 展开，但**散文里的路径要能直接拿去 Read/ls**，所以这里写实路径）（Windows 经 Git Bash 跑 .sh）：
 ```bash
-# 最简：Markdown → Word
-bash "${REPO_ROOT:-/app}/.opencode/skills/render-docx/scripts/render_docx.sh" -i manuscript.md -o manuscript.docx
-
-# ★ 按指定期刊格式排版（预设一键落：字体/字号/边距/行距/行号/参考文献样式）
 bash "${REPO_ROOT:-/app}/.opencode/skills/render-docx/scripts/render_docx.sh" -i manuscript.md --journal nejm
-#   可用预设：nejm lancet jama bmj cmj(中华系列) generic-submission(通用送审)；--journal list 列出
-#   预设值可被单项覆盖，如：--journal lancet --line-spacing 1.5
-
-# 手动指定送审格式（不套预设）：双倍行距 + 连续行号 + Times 12pt + 1in 边距（默认预设是 1.5 倍行距、无行号）
-bash "${REPO_ROOT:-/app}/.opencode/skills/render-docx/scripts/render_docx.sh" -i manuscript.md \
-  --font "Times New Roman" --fontsize 12 --margin 1in --line-spacing double --line-numbers
-
-# 细排单项（各自可单独用，也可覆盖预设值）：页码 / 首行缩进 / 图表题与表内字号 / 分级标题字号 / 作者块
-bash "${REPO_ROOT:-/app}/.opencode/skills/render-docx/scripts/render_docx.sh" -i manuscript.md \
-  --page-numbers --indent-chars 4 --caption-fontsize 10.5 --table-fontsize 10 \
-  --title-fontsize 16 --h1-fontsize 14 --heading-fontsize 12 --author-fontsize 10.5
-
-# 图表置于正文末尾（NEJM/JAMA/Lancet 送审稿要求，原位留"见文末"占位）
-bash "${REPO_ROOT:-/app}/.opencode/skills/render-docx/scripts/render_docx.sh" -i manuscript.md \
-  --journal nejm --figures-at-end
-
-# 中文稿指定中文字体（docx 的 eastAsia 字体，如宋体）
-bash "${REPO_ROOT:-/app}/.opencode/skills/render-docx/scripts/render_docx.sh" -i manuscript.md --journal cmj
-#   （cmj 预设已含 宋体正文 + Times 西文 + 1.5 倍行距 + 2.5cm 边距 + GB/T 7714）
-
-# 套用期刊/机构的 Word 模板（继承其样式与字体）；可与格式参数叠加，模板先套、参数后覆盖
-bash "${REPO_ROOT:-/app}/.opencode/skills/render-docx/scripts/render_docx.sh" -i manuscript.md --ref templates/journal_template.docx
-
-# 按 GB/T 7714 渲染参考文献（仅当稿件用 pandoc @citekey 引用、配 .bib 时；见下方限制）
-bash "${REPO_ROOT:-/app}/.opencode/skills/render-docx/scripts/render_docx.sh" -i manuscript.md \
-  --csl china-national-standard-gb-t-7714-2015-numeric --bib refs.bib
 ```
-> **常用 CSL 已内置** 在 `presets/csl/`（vancouver / the-lancet / the-new-england-journal-of-medicine / american-medical-association / bmj / china-national-standard-gb-t-7714-2015-numeric），`--csl` 直接写名字即可（不必带路径和 .csl 后缀）；期刊预设配 `--bib` 时自动选用对应样式。要别的样式：本仓库 `backend/.venv/Lib/site-packages/citeproc_styles/styles/` 内置 5 万+ 官方 CSL 可拷进 `presets/csl/`，或从 `citation-style-language/styles` / `zotero-chinese/styles` 下载后 `--csl` 指绝对路径。
+- `--journal`：可用预设 nejm lancet jama bmj cmj(中华系列) generic-submission(通用送审)，`--journal list` 列出；预设值可被单项覆盖，如 `--journal lancet --line-spacing 1.5`；图表后置加 `--figures-at-end`；套期刊/机构 Word 模板用 `--ref 模板.docx`（模板先套、参数后覆盖）。
+- 全部参数看 `bash scripts/render_docx.sh --help`；辅助脚本参数看 `python scripts/normalize_md.py --help`、`python scripts/postprocess_docx.py --help`、`python scripts/figures_at_end.py --help`。
+- 完整命令示例（最简转换、手动指定送审格式、细排单项、图表置文末、中文字体、模板、GB/T 7714 CSL）与内置 CSL 清单已搬至 `references/command-examples.md`。
 
 ## 说明
-- **期刊/标书预设（`--journal`）**：预设文件在 `presets/*.env`（与 render-pdf-doc 共用），一个参数落齐页面格式 + 参考文献样式；渲染完会打印该预设的 `PRESET_NOTE` 提醒预设覆盖不到的要求（字数、结构式摘要、图表数等）。预设值可被命令行单项覆盖。除期刊外另有标书预设：`most-key-rd`（重点研发）/`municipal-sci`（市科局）/`nih-forms-i`（NIH）/`hospital-fund`（院内基金）。加新预设见 `presets/README.md`。
-- **分级标题字号**：`--heading-fontsize` 管 Heading 1-6（统一值），`--h1-fontsize` 单独覆盖一级标题，`--title-fontsize` 管稿件 YAML `title:` 生成的论文标题。**给了任一标题字号，就顺带把 Title/Heading 1-6 统一改成加粗 + 黑色**——pandoc 默认模板的标题是主题蓝且不加粗，送审稿不能是蓝的。
-- **页码 / 首行缩进 / 题注 / 表内字号 / 作者块**（`--page-numbers` `--indent-chars N` `--caption-fontsize PT` `--table-fontsize PT` `--author-fontsize PT`）：
-  - `--page-numbers` 在页脚居中插 PAGE 域（pandoc 默认模板不带页码，审稿人没法按页提意见）。
-  - `--indent-chars N` 按 0.5em/字符折算首行缩进（4 字符 ≈ 24pt @12pt 正文）。**pandoc 模板里几乎所有样式都 base=Normal**，所以脚本会把标题、题名块、题注、列表、代码块、页眉页脚的首行缩进显式清零——不清就会被继承，标题整体被顶进去 4 个字符。
-  - `--caption-fontsize` 同时作用于 pandoc 题注样式与稿件里手写的 `**表1. …**` 题注段：设字号、单倍行距、**只加粗序号前缀**（说明文字改常规）、图表题居中、去掉 pandoc 默认的斜体；表注 / 图注（`表注：`/`注：`/`Note.` 开头）跟着用同一字号但不居中。表题另加"与下段同页"，否则分页时表题留在上一页页脚、表格甩到下一页。
-    - ⚠️ 手写题注**必须整段加粗**（`**表1. 基线特征**`）才会被认出来——否则以"表2 显示……"开头的正文段会被误判成题注拉去居中。
-  - `--table-fontsize` 显式定表内字号；不给则沿用旧行为（正文 −1.5pt、下限 9pt）。
-- **标题与正文分开设字体字号**：`--heading-cjk-font 黑体 --heading-fontsize 14` 单独控制 Heading 1-6 的中文字体与字号（各级统一；Title/Subtitle 不动）——中式标书"标题黑体四号、正文宋体小四"靠这对参数（标书预设已内置）。仅 docx 侧支持，PDF 侧忽略。
-- **格式参数的实现**：pandoc 本身不管字体/边距/行距，脚本在 pandoc 之后用 python-docx（项目根 `.venv`）后处理落格式——改 Normal/Body Text/标题样式的字体（含 eastAsia 中文字体）、字号、行距，改节属性的边距与 `w:lnNumType` 连续行号。**格式参数后处理失败会报错退出（exit 5）**，不会静默给你一个没格式的产物。
-- **中文字体**：不给 `--journal`/`--cjk-font`/`--reference-doc` 时 pandoc 用内置默认模板，中文能显示但字体是"等线"之类、并非期刊要求的宋体/黑体/仿宋。**中文投稿至少用 `--journal cmj` 或 `--cjk-font 宋体`**；有期刊官方 Word 模板则 `--reference-doc` 更优——参考文献悬挂缩进、表格线型、题注这些更细的格式仍以模板为准。
-- **期刊模板**：多数中华系列/SCI 期刊提供 Word 模板。把模板作为 `--reference-doc` 传入，pandoc 套用其"Normal/标题/表格"等样式——比手动排版稳。用户有目标刊模板就优先用它。
-- **参考文献两种情形（重要，先分清）**：
-  - **稿件里已是写好的 `[n]` 编号引用文本**（本套件 `search-lit`/`write-paper` 的默认产出形态）→ 直接转，`--csl` **用不上**、不要传。想改成 GB/T 7714 格式得手工调或让写作阶段就按国标写。
-  - 稿件用 pandoc 引用键 `[@Smith2024]` + 提供 `.bib` → 加 `--csl`（见上方下载说明）+ `--bib`，pandoc 自动生成文末参考文献表并按国标格式化。
-- **图表**：Markdown 里 `![标题](图片路径)` 的图会嵌入 docx；出版级图先用 `nature-figure` 生成 PNG/TIFF 再引用。注意嵌入的图标题只是普通文字，**不是 Word 自动编号的"题注域"**，增删图后编号要手工核对。
-- **渲染前规范化（默认开，最先跑，`normalize_md.py`）**：关闭用 `--no-normalize`。做两件事，围栏代码块内一律不碰。
-  1. **块级补空行**：pandoc 要求 pipe 表格**前面有空行**。而写作阶段极常见地把表题贴着表格写（`**表1 …**` 下一行直接 `| 列 | 列 |`），此时 pandoc 把整张表当成表题那一段的"懒续行"——**表被摊平成纯文本、docx 里一个 `<w:tbl>` 都没有，且全程不报错**。标题、列表贴着正文写也一样会被吞。
-  2. **Unicode 上下标 → 真上下标**：`FT₃`、`10⁻⁴`、`10⁹` 这类写法**不是格式、是普通字符**，渲染全看字体里有没有那个字形——而**宋体/等线只有 ² ³ ¹，缺 ⁻ ⁴ ⁵ ⁹ 和全部下标 ₀-₉**（微软雅黑也缺 ⁻ ⁹ ₃ ₄）。缺字形时 Word 临时换字体去顶，于是「10」是宋体、「⁻⁴」是另一套字体，字重/大小/基线全对不上。这解释了为什么 `m²` 正常而 `10⁹` 就坏——**症状时有时无，最难排查**。转成 pandoc 的 `^-4^`／`~3~` 后生成 `w:vertAlign` 真上下标，字符是普通 ASCII、任何字体都有，字号随正文自动缩放。
-  > 实测（2026-07-31）：一份 123 行、含 3 张结果表的中文稿，不补空行 → **0 张表、53 段**；补了 → **4 张表、260 段**。注意 `infer_colwidths` 与三线表后处理都以"能认出这是张表"为前提，表没被识别时那两层兜底全部空转——所以这一步必须排在最前面。**交稿前务必核对 docx 里表格数与稿件一致**，这个失败模式是静默的。
-  > **写作阶段就该写对**：正文里请直接用 `FT~3~`、`10^9^/L`、`m^2^`，别用 Unicode 上下标字符，也别平排写成 `FT3`/`10^9/L`（后者连上下标都没有）。
-  > 实测（2026-07-31，一份 123 行、含 3 张结果表的中文稿）：不补 → **0 张表、53 段**；补了 → **4 张表、260 段**。注意后面的 `infer_colwidths` 与三线表后处理都以"能认出这是张表"为前提，表没被识别时那两层兜底全部空转——所以这一步必须排在最前面。**交稿前务必核对 docx 里表格数与稿件一致**，这个失败模式是静默的。
-- **表格自动排版（默认开）**：pandoc 直转的 docx 表格要么 autofit（Word 自动布局、宽度不可预测）要么按分隔行均分列宽，长列名必然排丑。脚本默认做两层兜底：① 渲染前跑 `infer_colwidths.py`（借用 render-pdf-doc 的，CJK 按 2 格计宽）按内容重写 pipe 表分隔行比例；② 渲染后 python-docx 后处理：**三线表**（顶/底 1.5pt、表头下线 0.75pt、去竖线）、按内容分配**固定列宽**（tblLayout fixed + gridCol/tcW 双写，超长列封顶靠换行、短列保底）、表内字号比正文降 1.5pt（下限 9pt）、表头加粗居中、表内单倍行距（不吃正文行距）。**表宽一律拉满版心（满行显示）**：列宽比例仍按内容算，只是整体等比放大到版心宽，两端与正文对齐、右侧不留空白；含合并单元格的表不动列宽，但也会声明表宽 100% 版心，由 Word 自行撑满。**表按内容连保底宽都放不下时打印 WARN**（建议列名改缩写/转置/拆表，见 write-paper 表格排版铁律）——见到这警告别硬交，回稿件改表。关闭用 `--no-infer-colwidths` / `--no-table-tune`（用期刊官方 `--ref` 模板且其表格样式更权威时可关后者）。
-- **跨页表兜底（默认开，随 `--table-tune`）**：期刊接受表格跨页，难看的是**跨页后没表头**、或**某一行被从中间劈成两半**。故每张表默认设首行 `tblHeader`（每页重复表头）+ 各行 `cantSplit`（禁止行内断页）——不改任何内容。表超过 20 行时另打印一条提示，告诉你它必然跨页、若要求单页放下就得拆表或移入补充材料。
-- **宽表转横向（`--landscape-wide-tables`，默认关）**：列太多、纵向版心按内容压不下时，把该表**连同表题与表注**单独放进一个横向节（前后各插一个分节符，只有这一节横向，正文其余部分不受影响）。A4 纵向版心约 470pt，转横向后约 720pt，多出 50%。用法：`--journal cmj --landscape-wide-tables`。
-  > 转横向是排版层的最后一招，**治标不治本**：源头把列名缩短、拆表、或把次要列移进补充材料，才是投稿更稳的做法（见 `write-paper` 表格排版铁律第 1/3 条）。
+- **排版参数细则**（期刊/标书预设 `--journal`、分级标题字号、页码/首行缩进/题注/表内字号/作者块、标题与正文分开设字体字号、格式参数的实现、中文字体、期刊模板、参考文献两种情形、图表）已搬至 `references/layout-parameters.md`。其中硬约束：**中文投稿至少用 `--journal cmj` 或 `--cjk-font 宋体`**；稿件已是写好的 `[n]` 编号引用文本时 `--csl` **用不上、不要传**；格式参数后处理失败会报错退出（exit 5），不会静默给没格式的产物。
+- **渲染前规范化（`normalize_md.py`，默认开）、表格自动排版、跨页表兜底、宽表转横向（`--landscape-wide-tables`）** 已搬至 `references/normalize-and-tables.md`。其中硬约束：**交稿前务必核对 docx 里表格数与稿件一致**（表没被识别时静默丢表、不报错）；**表按内容连保底宽都放不下时打印 WARN——见到这警告别硬交，回稿件改表**。
 
 ## 当前限制（如实告知用户，别假装能做）
 - **页数不统计**：脚本不知道成稿有多少页（分页由 Word 排版时决定）。"正文 ≤30 页"这类要求得让用户打开 Word 自己看，别口头保证。

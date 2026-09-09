@@ -1,6 +1,6 @@
 ---
 name: deep-research
-description: 深度研究：对一个具体问题做多源检索→抓取→交叉核实→带引用的综合报告，适合需要事实准确、跨来源求证的调研。当用户说"深度调研""deep research""把这个问题查透""要有出处的报告"时使用。边界：摸整个领域全貌用 research-scan；写正式文献综述用 literature-review。
+description: 深度研究一个具体问题：多源检索→抓取→交叉核实→带引用的综合报告。触发："深度调研""deep research""把这个问题查透""要有出处的报告"。摸领域全貌用 research-scan，写正式综述用 literature-review。
 ---
 
 # 深度研究技能
