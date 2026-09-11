@@ -3779,8 +3779,8 @@ function closePreview() {
   // 文献预览开着时，这一下只退文献、把台账留在左边（用户下一步几乎总是回表里点下一篇）。
   // 一次点击连台账一起关掉的话，想看第二篇得从产出列表重新把 Excel 打开一遍。
   if (document.body.classList.contains("pvdoc-open")) { closeDocPreview(); return }
-  preview.classList.remove("on"); document.body.classList.remove("preview-open")
   if (PE) { const d = Object.keys(peDirty()).length; if (d && !confirm("有 " + d + " 段改了还没保存，关掉就丢了。确定关闭？")) return; PE = null }
+  preview.classList.remove("on"); document.body.classList.remove("preview-open")
   pvName = ""; pvNativeAt = 0; pvOpen.hidden = true; pvEdit.hidden = true; pvEdited.hidden = true; pvEdit.textContent = "就地编辑"
   setPvTab("chat")                      // 退出预览还原成原始界面：三列布局 + 对话页
   if (pvObjUrl) { URL.revokeObjectURL(pvObjUrl); pvObjUrl = null }
@@ -4061,6 +4061,9 @@ async function syncOpenBtn(name) {
   } catch { pvOpen.disabled = true; pvOpen.title = "问不到本机能不能打开它（网关没应答）" }
 }
 pvEdit.addEventListener("click", () => { if (PE) closeParaEditor(true); else openParaEditor(pvName) })
+// 同一个按钮两态：进编辑器 / 退出编辑。退出走 closeParaEditor，它会先确认未保存的改动。
+pvEdit.addEventListener("click", () => { if (PE) closeParaEditor(true); else openParaEditor(pvName) })
+
 pvOpen.addEventListener("click", async () => {
   const name = pvName; if (!name) return
   pvOpen.disabled = true
