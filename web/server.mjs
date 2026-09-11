@@ -938,6 +938,13 @@ const WIN_RESERVED = /^(nul|con|prn|aux|com[1-9]|lpt[1-9])(\.|$)/i
 const skipEntry = (name) => {
   if (name.startsWith(".")) return true          // .preview 等派生缓存、.private/ 不进列表
   if (name === "_workflow.json" || name === "_lasterror.json") return true   // 网关自己的簿子，不是用户产物
+  // docx 就地改写的中间清单：docx_extract.py 把 <稿件>_para.md / _para.json 写在当前工作目录，
+  // 而 agent 的工作目录就是会话目录 —— 于是用户每让它改一次稿，侧栏就多出两个看不懂的文件
+  //（一个带 [[编号]] 的段落清单、一份同内容的 json）。它们是过程产物，不是交付物。
+  // 【为什么挡在这里而不是让 agent 改写到别处】docx_extract 的 json 输出名是裸文件名、不跟
+  // --out 走，要挪就得让 agent 先 cd 进某个目录再用相对路径回指稿件——那种多步指令它照做的
+  // 概率远不如这一行判据可靠。挡在列出与打包共用的这一层，两边同时干净。
+  if (/_para\.(md|json)$/i.test(name)) return true
   // Word / WPS 打开文档期间会在同目录建一个 `~$稿件.docx` 锁文件（用户一关文档就自己没了）。
   // 它不以点开头，所以上面那条挡不住 —— 自从产物可以"用本机 Word 打开编辑"，用户每改一次稿，
   // 侧栏就会多出一个他看不懂、也下载不了（Word 独占着）的条目。列出与打包共用这一份判据，
