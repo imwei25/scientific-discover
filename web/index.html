@@ -3405,7 +3405,7 @@ function fileRow(name, short) {
   // docx，完全不会想到"让 AI 再改一版"可能把自己改的内容重排掉。
   if (FILE_EDITED.has(name)) {
     const b = document.createElement("span"); b.className = "fedit"; b.textContent = "已被你改过"
-    b.title = "你在本机 Word 里改过这一份。之后让助手改它时，它会在这个文件上就地改、并留下 Word 修订痕迹，不会从 markdown 重新排一份把你的改动盖掉。"
+    b.title = "你在本机 Word 里改过这一份。之后让 Niuma助手 改它时，它会在这个文件上就地改、并留下 Word 修订痕迹，不会从 markdown 重新排一份把你的改动盖掉。"
     row.appendChild(b)
   }
   if (doPv) { const pv = document.createElement("button"); pv.type = "button"; pv.className = "fbtn"; pv.title = "预览"; pv.innerHTML = ic("eye"); pv.addEventListener("click", doPv); row.appendChild(pv) }
@@ -3854,7 +3854,7 @@ let pvRefreshAt = 0      // 上次因回到窗口而重刷的时刻，给下面�
 async function syncOpenBtn(name) {
   pvName = name
   pvEdited.hidden = !FILE_EDITED.has(name)
-  if (!pvEdited.hidden) pvEdited.textContent = "这一份你在本机 Word 里改过，它比助手那份 markdown 新。之后让助手改它时，它会在这个文件上就地改并留下 Word 修订痕迹；要换期刊格式、加章节这类需要重排的事，会先问过你。"
+  if (!pvEdited.hidden) pvEdited.textContent = "这一份你在本机 Word 里改过，它比 Niuma助手 那份 markdown 新。之后让 Niuma助手 改它时，它会在这个文件上就地改并留下 Word 修订痕迹；要换期刊格式、加章节这类需要重排的事，会先问过你。"
   if (!OPENABLE.test(name)) { pvOpen.hidden = true; return }
   pvOpen.hidden = false; pvOpen.disabled = true; pvOpen.title = "正在确认本机能不能打开它…"
   try {
