@@ -325,7 +325,7 @@ input[type=text]:focus{outline:none;border-color:var(--accent);background:#fff;b
       <div class="outs" id="outs" hidden></div>
     </div>
     <div class="pane">
-      <div class="pane-h"><span>助手</span></div>
+      <div class="pane-h"><span>Niuma助手</span></div>
       <div class="pane-b"><div id="msgs"></div></div>
       <div class="composer">
         <div class="wrap">
@@ -824,7 +824,7 @@ function render() {
     if (m.role === "me") { d.className = "msg user"; d.innerHTML = '<div class="bubble"></div>'; d.firstChild.textContent = m.text }
     else if (m.role === "ai") {
       d.className = "msg ai"
-      d.innerHTML = '<div class="bubble"><div class="who">' + ICON.bot + "助手</div><div class=\"md\">" + renderMd(m.text) + "</div></div>"
+      d.innerHTML = '<div class="bubble"><div class="who">' + ICON.bot + "Niuma助手</div><div class=\"md\">" + renderMd(m.text) + "</div></div>"
     } else if (m.role === "err") { d.className = "notebox err"; d.textContent = "⚠ " + m.text }
     else { d.className = "msg tag"; d.innerHTML = '<div class="bubble"></div>'; d.firstChild.textContent = m.text }
     mb.appendChild(d)

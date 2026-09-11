@@ -125,7 +125,7 @@ const JOURNAL_FILTER = [
  *  摆在第一格用户一眼就能找到；排在第二、三格时它看起来像是某条流程中间的一步。
  *  ★ 这只改按钮顺序，不改"点开始跑哪一个"——那个由 reader.first 单独指定（guide / profile / refs / polish）。 */
 const chatMode = (badge, big, sub) => ({
-  id: "chat", label: "智能助手", icon: "chat", badge, empty: [big, sub],
+  id: "chat", label: "Niuma助手", icon: "chat", badge, empty: [big, sub],
 })
 
 /**

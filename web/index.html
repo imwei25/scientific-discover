@@ -3516,7 +3516,7 @@ function paintLibBanner(info) {
   card.querySelector(".libcard-t").textContent = info.classified
     ? `文献台账 · ${n} 篇 / ${cats} 类` : `文献台账 · ${n} 篇（未分类）`
   card.querySelector(".libcard-s").textContent = info.classified
-    ? "点开可改分类、按类归档，每篇还能就地看原文" : "点开可逐篇查看，也可以让助手先按你的标准分类"
+    ? "点开可改分类、按类归档，每篇还能就地看原文" : "点开可逐篇查看，也可以让 Niuma助手 先按你的标准分类"
   card.title = "打开 " + LIB_XLSX
   card.addEventListener("click", () => openPreview(LIB_XLSX))
   filesEl.prepend(card)

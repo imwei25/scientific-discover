@@ -667,7 +667,7 @@ button{font:inherit}
         <!-- 转交给智能助手：把【本面板这一轮的结果】做成一张交接卡，挂到智能助手的输入框上，
              随用户下一句话一起发出（见 doHoff / renderHoff）。data-act 而不是只绑 id ——
              不然 document 上那个"点空白处收起弹层"的监听会在本次点击冒泡时把刚开的弹层当场收掉。 -->
-        <button class="ibtn" id="btnHoff" type="button" data-act="hoff" data-tip="转交给智能助手" aria-label="转交给智能助手" hidden>
+        <button class="ibtn" id="btnHoff" type="button" data-act="hoff" data-tip="转交给 Niuma助手" aria-label="转交给 Niuma助手" hidden>
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M13 4h6a2 2 0 012 2v9a2 2 0 01-2 2h-3l-4 3v-3"/><path d="M2 10h7M6.5 7l3 3-3 3"/></svg>
         </button>
         <button class="ibtn" id="btnSettings" type="button" data-tip="本模块的设置" aria-label="设置" hidden>
@@ -2002,7 +2002,7 @@ function bubblesHtml(list) {
   return (list || []).map((m) => {
     if (m.role === "user") return '<div class="msg user"><div class="bubble">' + esc(m.text) + "</div></div>"
     if (m.role === "tag") return '<div class="msg tag"><div class="bubble">' + esc(m.text) + "</div></div>"
-    return '<div class="msg ai"><div class="bubble"><div class="who">' + ICON.bot + "助手</div>"
+    return '<div class="msg ai"><div class="bubble"><div class="who">' + ICON.bot + "Niuma助手</div>"
       + '<div class="md">' + renderMd(m.text) + "</div>" + filesHtml(m.files) + "</div></div>"
   }).join("")
 }
@@ -2013,7 +2013,7 @@ function askHtml(m) {
   if (!qa.length) return ""
   const n = askCount(m)
   return '<div class="askwrap"><div class="askt">' + ICON.chat + "追问（" + n + " 条）·"
-    + " 转交给智能助手时会一起带过去</div>" + bubblesHtml(qa) + "</div>"
+    + " 转交给 Niuma助手 时会一起带过去</div>" + bubblesHtml(qa) + "</div>"
 }
 
 /* ---- 两阶段模式（「演示 PPT」）：现在到哪一步、下一步点哪里 ----
@@ -2120,7 +2120,7 @@ function render(m) {
     //   这正是"点了 PPT 只看见大纲"里最难自查的一环：屏幕上没有任何线索表明它还说过话。
     //   折起来放，不与正文抢位置，但谁都找得到。
     if (stg && s.doc != null && (s.raw || "").trim() && s.raw.trim() !== s.doc.trim())
-      h += '<details class="foldbody"><summary>助手这一轮说的话</summary><div class="card md">' + renderMd(s.raw) + "</div></details>"
+      h += '<details class="foldbody"><summary>Niuma助手 这一轮说的话</summary><div class="card md">' + renderMd(s.raw) + "</div></details>"
   } else if (s.status === "running") {
     if (!RUN || RUN.mode !== m) h += '<div class="notebox info">正在生成…</div>'
   } else if (s.status !== "idle" && !s.err && !s.dropped && !s.pulling) {
@@ -2229,8 +2229,8 @@ function updateFoot() {
       : S[mode] && S[mode].pulling ? "正在把那一轮的结果取回来…"
       : dropped ? "连接断了，而后台那一轮已经跑完。点上方的「继续」把结果取回来，不用重跑。"
       : pend ? "这还只是大纲。点面板里的「" + stg.btn + "」才会生成 .pptx；想先改风格 / 页数 / 配图，在下方输入框说一句。"
-      : canAsk ? "追问只针对这份结果，不会重跑「" + MODES[mode].label + "」；转交给智能助手时会连追问一起带过去。"
-      : s.status === "done" ? "已完成。想接着这份结果聊，点上方的「转交给智能助手」。"
+      : canAsk ? "追问只针对这份结果，不会重跑「" + MODES[mode].label + "」；转交给 Niuma助手 时会连追问一起带过去。"
+      : s.status === "done" ? "已完成。想接着这份结果聊，点上方的「转交给 Niuma助手」。"
       : s.status === "error" ? "上一轮没有正常结束。"
       : ""
   }
@@ -2680,7 +2680,7 @@ function hoffCard(m, replace) {
   const asks = (s.qa || []).filter((x) => x.role === "user").map((x) => x.text)
   const L = ["【转交 · 「" + M.label + "」 · " + (replace ? "覆盖" : "续写")
     + (asks.length ? " · 含 " + asks.length + " 条追问" : "") + "】"]
-  L.push("用户在界面上把「" + M.label + "」那一轮的结果转交到了智能助手这一格，下面这句话就是基于它问的。")
+  L.push("用户在界面上把「" + M.label + "」那一轮的结果转交到了 Niuma助手 这一格，下面这句话就是基于它问的。")
   if (s.docName) L.push("- 那一轮的正文落在 `" + s.docName + "`，要引用具体内容直接读这个文件，别凭印象复述。")
   if (files.length) L.push("- 那一轮的产物：" + files.map((n) => "`" + n + "`").join("、") + "。")
   // 追问也一并转交：那几轮问答同样是"这份结果"的一部分，用户接着谈的往往正是它们。
@@ -2720,7 +2720,7 @@ function askHoff(btn) {
     hoffMenu.appendChild(b)
   }
   const what = "这份「" + MODES[m].label + "」" + (askCount(m) ? "（连同 " + askCount(m) + " 条追问）" : "")
-  item("覆盖已有的对话", "智能助手里现有的问答不再显示，从" + what + "重新开始", () => doHoff(m, true))
+  item("覆盖已有的对话", "Niuma助手 里现有的问答不再显示，从" + what + "重新开始", () => doHoff(m, true))
   item("续写已有的对话", "保留现有问答，把" + what + "接在后面", () => doHoff(m, false))
   item("取消", "什么都不做", () => closeMenu())
   placeMenu(hoffMenu, btn)
