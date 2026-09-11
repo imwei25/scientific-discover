@@ -123,7 +123,7 @@ def struct(path):
 def main():
     ap = argparse.ArgumentParser(description="docx 就地改写校验")
     ap.add_argument("before"); ap.add_argument("after")
-    ap.add_argument("--mode", choices=["polish", "translate"], default="polish",
+    ap.add_argument("--mode", choices=["polish", "edit", "translate"], default="polish",
                     help="polish=润色档（查修订完整性与篇幅）；translate=翻译档（查漏译与残留）")
     ap.add_argument("--expect-lang", default="en",
                     help="翻译档的目标语言（en / zh），决定拿什么字符判残留")
@@ -171,7 +171,7 @@ def main():
     print(f"  原文 {len(orig)} 字 → 改后 {len(accepted)} 字"
           f"（{(len(accepted) - len(orig)) / max(len(orig), 1) * 100:+.1f}%）")
 
-    if args.mode == "polish":
+    if args.mode in ("polish", "edit"):
         print(f"  产物是否带修订标记：{'是' if tracked else '否（直接覆盖）'}")
         if tracked:
             if rejected == orig:
@@ -179,8 +179,9 @@ def main():
             else:
                 fail.append("拒绝全部修订后与原文不一致——有文字被改却没有留下修订标记，"
                             "用户在 Word 里看不见它，也没法拒绝")
-        # 篇幅这一条只对润色成立：翻译时中译英涨 1.5–2 倍是正常的
-        if abs(len(accepted) - len(orig)) > 0.15 * max(len(orig), 1):
+        # 篇幅这一条只对润色成立：翻译时中译英涨 1.5–2 倍是正常的；
+        # edit 档是用户点名要改内容（补一句、删一段、把结论写实），篇幅本来就会动。
+        if args.mode == "polish" and abs(len(accepted) - len(orig)) > 0.15 * max(len(orig), 1):
             warn.append("篇幅变动超过 ±15%，润色不该改这么多，请核对是否有整段被删或被扩写")
     else:
         missed, resid = check_translation(args.before, args.after, args.expect_lang)
@@ -257,7 +258,15 @@ def main():
         for k, n in list(added.items())[:8]:
             print(f"      + 新增 {k!r} ×{n}")
         if kind in ("数字", "DOI", "PMID", "引用[n]", "引用(作者,年)"):
-            fail.append(f"{kind}在改写前后不一致——润色不许动数据与引用")
+            # 【为什么 edit 档只报不拦】润色的前提是"只动措辞"，数字一变就是事故；
+            # 而 edit 档是用户自己要求改内容（"把置信区间补上""这段数据删掉"），
+            # 那里数字变化正是他要的结果。在 edit 档里判 FAIL，等于每一次正当的改稿
+            # 都以"硬伤、别出件"收场——agent 只会学会无视这道闸，连真正的误改也一起放过。
+            # 所以降级成 WARN 但【照常逐条列出】，由 agent 转告用户核对。
+            (fail if args.mode == "polish" else warn).append(
+                f"{kind}在改写前后不一致"
+                + ("——润色不许动数据与引用" if args.mode == "polish"
+                   else "——请逐条核对是不是你要的改动（编辑档不拦，但数字改错没人替你兜）"))
     if not dirty:
         print("  数字、引用标记、DOI/PMID" + ("、术语" if terms else "") + " 前后一致 ✔"
               + (f"（DOI {len(set(m.group(0) for m in CI.DOI_RE.finditer(orig)))} 个全在）"
@@ -271,7 +280,13 @@ def main():
             print(f"[FAIL] {f}")
         print("\n这些是硬伤：修好再交付，别拿这份文件出件。")
         sys.exit(1)
-    print("[OK] 结构、格式载体、数字与引用均未被改动；改的只有文字本身。")
+    # 【收尾这句必须跟着 warn 走】edit 档把数字变化降成了 WARN，若这里仍旧照念
+    # "数字与引用均未被改动"，就是在一份数字确实变了的稿子上盖章说没变——
+    # agent 会把它当成"核对过了"直接交付，比不做这道闸更糟。
+    if warn:
+        print("[OK] 修订标记完整、结构与格式载体没有被破坏；但上面的 WARN 要逐条看过再交付。")
+    else:
+        print("[OK] 结构、格式载体、数字与引用均未被改动；改的只有文字本身。")
 
 
 if __name__ == "__main__":

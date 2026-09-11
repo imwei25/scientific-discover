@@ -1601,6 +1601,20 @@
     color: var(--muted); background: transparent; border: 1px solid var(--line-hi); border-radius: var(--r-sm); text-decoration: none; }
   .pv-head .pv-dl:hover { color: var(--accent); border-color: var(--accent); }
   .pv-head .pv-dl .ic { width: 13px; height: 13px; }
+  /* 「用 Word 打开」：与下载按钮同一副长相，但它是主动作，hover 给强调色。
+     置灰态（本机没装 Word/WPS/LibreOffice）仍然显示，靠 title 说明原因——
+     直接藏掉的话，用户只会以为这个功能时有时无。 */
+  .pv-head .pv-open { flex: none; display: inline-flex; align-items: center; gap: 5px; padding: 6px 12px; font-size: 12px;
+    color: var(--muted); background: transparent; border: 1px solid var(--line-hi); border-radius: var(--r-sm); cursor: pointer; }
+  .pv-head .pv-open:hover:not(:disabled) { color: var(--accent); border-color: var(--accent); }
+  .pv-head .pv-open:disabled { opacity: .45; cursor: not-allowed; }
+  .pv-head .pv-open .ic { width: 13px; height: 13px; }
+  /* 「你改过这一份」的提示条：钉在预览正文最上方，说明这份稿子的真相源已经不是 AI 那条流水线了 */
+  .pv-edited { margin: 0; padding: 8px 14px; font-size: 12.5px; line-height: 1.6; color: #7a5200;
+    background: #fff7e6; border-bottom: 1px solid #f0d9a8; }
+  /* 产出侧栏里同一件事的小标 */
+  .frow .fedit { flex: none; margin-left: 6px; padding: 1px 6px; font-size: 11px; border-radius: 999px;
+    color: #7a5200; background: #fff3d6; border: 1px solid #f0d9a8; }
 
   /* 左下角工具条（公告 / 更新说明 / 返回工作台 …）+ 模型设置弹窗。
      它现在住在 .user-info 里、账户按钮的【左边】：这些都不是会话内容，跟"我这个账号 / 这台机器"
@@ -2199,8 +2213,14 @@
 <div id="preview">
   <div class="pv-head">
     <span class="pv-title" id="pvTitle"></span>
+    <!-- 只对 Office 文档出现（能力位由 /api/doc/opener 给）：网页预览是只读的，
+         真要改稿就把它交给用户机器上那个真正的 Word / WPS。 -->
+    <button class="pv-open" id="pvOpen" type="button" hidden>用 Word 打开</button>
     <button class="pv-close" id="pvClose" type="button">关闭</button>
   </div>
+  <!-- 「你改过这一份」提示条。放在正文【外面】：docx/pdf 预览时正文是一个撑满高度的 iframe
+       （.pv-body.frame），把条子塞进去会把 iframe 顶出可视区。 -->
+  <div class="pv-edited" id="pvEdited" hidden></div>
   <div class="pv-body" id="pvBody"></div>
 </div>
 <!-- 文献预览：台账 Excel 的「查看」把这一层叠在右半屏（对话）之上。
@@ -3361,6 +3381,10 @@ let lastFilesList = []            // 上一次渲染的产物名单，供 filesm
 //（老 server 配新界面包就是这种组合 —— 那时的表现与改动前一致，不会坏）。
 const FILE_KIND = new Map()
 const kindOf = (n) => FILE_KIND.get(n) || "main"
+// 被用户在本机 Word 里改过的稿件（服务端 /api/outputs 的 edited 字段）。跟 FILE_KIND 一样是
+// 会话级状态，切会话必须一起清 —— 同名的 manuscript.docx 到处都是，串了就会在没改过的稿子上
+// 挂"已被你改过"的标，那比不标更糟。
+const FILE_EDITED = new Set()
 function setFileKinds(map) { if (map) for (const [k, v] of Object.entries(map)) FILE_KIND.set(k, v) }
 const zipAllBtn = document.getElementById("zipall")   // 声明必须在 renderFiles 之前：它一进来就要改这个按钮的显隐
 /** 侧栏里的一行文件：文件名（可点预览）+ 预览/下载两个按钮。顶层与目录里共用同一份。 */
@@ -3376,6 +3400,14 @@ function fileRow(name, short) {
   if (isSecret(name)) s.style.color = "#b4553f"
   if (doPv) { s.classList.add("pv"); s.addEventListener("click", doPv) }
   row.appendChild(s)
+  // 用户在本机 Word 里改过这一份 → 打个标。它同时是"这份稿子的真相源已经不是 AI 那条
+  // markdown 流水线"的唯一可见提示：不标的话，用户看到的是一份和别的产物长得一模一样的
+  // docx，完全不会想到"让 AI 再改一版"可能把自己改的内容重排掉。
+  if (FILE_EDITED.has(name)) {
+    const b = document.createElement("span"); b.className = "fedit"; b.textContent = "已被你改过"
+    b.title = "你在本机 Word 里改过这一份。之后让助手改它时，它会在这个文件上就地改、并留下 Word 修订痕迹，不会从 markdown 重新排一份把你的改动盖掉。"
+    row.appendChild(b)
+  }
   if (doPv) { const pv = document.createElement("button"); pv.type = "button"; pv.className = "fbtn"; pv.title = "预览"; pv.innerHTML = ic("eye"); pv.addEventListener("click", doPv); row.appendChild(pv) }
   // name 可能带子目录（"pdfs/a.pdf"、"figures/panel/fig1.png"）：请求要带完整相对路径，
   // 但 download 属性只给最后一段 —— 带斜杠的话浏览器会把它当路径分隔并清洗成怪名字。
@@ -3720,6 +3752,7 @@ function closePreview() {
   // 一次点击连台账一起关掉的话，想看第二篇得从产出列表重新把 Excel 打开一遍。
   if (document.body.classList.contains("pvdoc-open")) { closeDocPreview(); return }
   preview.classList.remove("on"); document.body.classList.remove("preview-open")
+  pvName = ""; pvNativeAt = 0; pvOpen.hidden = true; pvEdited.hidden = true
   setPvTab("chat")                      // 退出预览还原成原始界面：三列布局 + 对话页
   if (pvObjUrl) { URL.revokeObjectURL(pvObjUrl); pvObjUrl = null }
 }
@@ -3733,7 +3766,7 @@ let pvObjUrl = null   // 上一次 pptx/docx 预览的 blob URL，切换/关闭�
 async function fillPreview(name, body) {
   const ext = (name.split(".").pop() || "").toLowerCase()
   const raw = "api/raw?name=" + encodeURIComponent(name) + sidQ() + verQ(name)   // 带版本戳：同名被重写后，预览/灯箱不会摆出缓存里的上一版
-  const prev = "api/preview?name=" + encodeURIComponent(name) + sidQ()
+  const prev = "api/preview?name=" + encodeURIComponent(name) + sidQ() + verQ(name)   // 同上：改完存盘后别再摆缓存里的上一版
   let objUrl = null
   if (ext === "md" || ext === "markdown") {                 // markdown：前端渲染
     const txt = await fetch(raw).then(r => r.text())
@@ -3804,8 +3837,64 @@ function closeDocPreview() {
   if (pvDocObjUrl) { URL.revokeObjectURL(pvDocObjUrl); pvDocObjUrl = null }
 }
 document.getElementById("pvDocClose").addEventListener("click", closeDocPreview)
+// ---- 「用 Word 打开」：把只读的网页预览接到用户机器上那个真正的编辑器 ----
+//
+// 【为什么不做网页版 Word】预览是服务端用 mammoth 把 docx 转成的一段 HTML，单向、只读，且丢掉了
+// 显示尺寸、EMF/WMF 图、分节、页眉页脚、批注、修订。要在网页里真编辑就得整套换掉（OnlyOffice/
+// SuperDoc 那一档，AGPL + 至少两周集成）。而用户机器上本来就有一个保真度满分的编辑器。
+//
+// 【只在桌面版成立】中心部署时网关和用户不在一台机器上，/api/doc/opener 会直接回 canOpen:false。
+const pvOpen = document.getElementById("pvOpen")
+const pvEdited = document.getElementById("pvEdited")
+const OPENABLE = /.(docx?|rtf|odt|xlsx?|ods|pptx?|odp)$/i
+let pvName = ""          // 当前左半屏预览的文件名（按钮点下去要用它，异步回来也靠它认场）
+let pvNativeAt = 0       // 最近一次用本机程序打开的时刻；0 = 本次预览没往外开过，回到窗口时不必重刷
+let pvRefreshAt = 0      // 上次因回到窗口而重刷的时刻，给下面的节流用
+/** 按当前文件决定「用 Word 打开」这个按钮出不出现、能不能点。 */
+async function syncOpenBtn(name) {
+  pvName = name
+  pvEdited.hidden = !FILE_EDITED.has(name)
+  if (!pvEdited.hidden) pvEdited.textContent = "这一份你在本机 Word 里改过，它比助手那份 markdown 新。之后让助手改它时，它会在这个文件上就地改并留下 Word 修订痕迹；要换期刊格式、加章节这类需要重排的事，会先问过你。"
+  if (!OPENABLE.test(name)) { pvOpen.hidden = true; return }
+  pvOpen.hidden = false; pvOpen.disabled = true; pvOpen.title = "正在确认本机能不能打开它…"
+  try {
+    const j = await fetch("api/doc/opener?name=" + encodeURIComponent(name)).then((r) => r.json())
+    if (pvName !== name) return                      // 等待期间用户已经切到别的文件了，别把答案安到新文件头上
+    pvOpen.disabled = !j.canOpen
+    pvOpen.textContent = j.how === "soffice" ? "用 LibreOffice 打开" : "用 Word 打开"
+    // 【为什么打不开也留着按钮、只置灰】藏掉的话用户只会觉得这个功能时有时无，
+    // 而真正的原因（这台电脑没装 Office）他永远看不到。
+    pvOpen.title = j.canOpen ? "在本机的 Office 里打开；改完保存，切回本软件会自动刷新预览" : (j.err || "本机没找到能打开它的程序")
+  } catch { pvOpen.disabled = true; pvOpen.title = "问不到本机能不能打开它（网关没应答）" }
+}
+pvOpen.addEventListener("click", async () => {
+  const name = pvName; if (!name) return
+  pvOpen.disabled = true
+  try {
+    const j = await fetch("api/doc/open?name=" + encodeURIComponent(name) + sidQ(), { method: "POST" }).then((r) => r.json())
+    if (!j.ok) throw new Error(j.err || "打不开")
+    pvNativeAt = Date.now()
+    toast("已在本机打开。改完【保存并关闭】再切回来，预览会自动更新。")
+  } catch (e) { toast("打不开：" + String(e.message || e).slice(0, 80)) }
+  finally { pvOpen.disabled = false }
+})
+// 用户在 Word 里改完存盘，切回本软件 → 重拉一次产出（拿到新 mtime 与「已被你改过」标），
+// 再按新版本戳重画预览。没往外开过就什么也不做：alt-tab 是高频动作，不该每次都打服务端。
+window.addEventListener("focus", async () => {
+  if (!pvNativeAt || !pvName) return
+  if (!preview.classList.contains("on")) return
+  if (Date.now() - pvRefreshAt < 1500) return        // 有些环境一次切换会连发两三个 focus
+  pvRefreshAt = Date.now()
+  const name = pvName
+  const before = rawVer.get(name)
+  await refreshOutputs()
+  // mtime 没动 = 用户只是切出去看了一眼，没存盘。重画一次没有害处但会让 iframe 闪一下，省掉。
+  if (rawVer.get(name) === before) { pvEdited.hidden = !FILE_EDITED.has(name); return }
+  if (pvName === name && preview.classList.contains("on")) openPreview(name)
+})
 async function openPreview(name) {
   pvTitle.innerHTML = ic("file"); const s = document.createElement("span"); s.textContent = name; pvTitle.appendChild(s)
+  syncOpenBtn(name)                                 // 不 await：能力探测慢一点也不该拖住预览
   pvBody.classList.remove("frame"); pvBody.innerHTML = '<div class="hint">加载中…</div>'
   const wasOpen = preview.classList.contains("on")
   preview.classList.add("on"); document.body.classList.add("preview-open")
@@ -5167,7 +5256,8 @@ async function refreshOutputs() {
     const outs = await r.json()
     if (!Array.isArray(outs)) return
     // 版本戳跟着新 mtime 走：文件被服务端重写过的话，预览/下载要绕开 /api/raw 的缓存拿新版
-    for (const o of outs) { rawVer.set(o.name, o.mtime || 0); if (o.kind) FILE_KIND.set(o.name, o.kind) }
+    FILE_EDITED.clear()
+    for (const o of outs) { rawVer.set(o.name, o.mtime || 0); if (o.kind) FILE_KIND.set(o.name, o.kind); if (o.edited) FILE_EDITED.add(o.name) }
     renderFiles(outs.map((o) => o.name))
   } catch { /* 网络抖动就算了，下次再点 */ }
 }
@@ -5230,8 +5320,8 @@ async function resumeSession(id) {                 // 载入历史 → 设为当
   // step 由服务端按 tool part 里的技能重放得出（见 /api/history）：与直播同口径，
   // 刷新前后同一段对话分组一致。chat 会话不带 step，这里就一个分组都不会开。
   for (const m of hist) { if (m.step) startGroup(m.step, m.stepName); add(m.role === "user" ? "user" : "bot", m.text) }
-  rawVer.clear(); FILE_KIND.clear()
-  for (const o of outs || []) { rawVer.set(o.name, o.mtime || 0); if (o.kind) FILE_KIND.set(o.name, o.kind) }   // 版本戳随会话重建，见 mdImgSrc；kind = 产物分级
+  rawVer.clear(); FILE_KIND.clear(); FILE_EDITED.clear()
+  for (const o of outs || []) { rawVer.set(o.name, o.mtime || 0); if (o.kind) FILE_KIND.set(o.name, o.kind); if (o.edited) FILE_EDITED.add(o.name) }   // 版本戳随会话重建，见 mdImgSrc；kind = 产物分级
   renderFiles((outs || []).map(o => o.name))       // 产物随会话持久回显
   // 有历史 = 这个会话已经开始过，别再带 module 去补绑。
   // ★ histFailed 时 hist 是空数组，但那【不代表】会话是空的 —— 它代表"不知道"。判成"没开始过"的话：
@@ -5256,7 +5346,7 @@ function clearCurrentSession() {
   sessionStarted = false; pendingWfCard = ""; pendingWfForm = null; lastCardText = ""
   offeredSteps.clear(); HDR_CACHE.clear()
   toPickerState()   // 会话没了 = 回到"还没选模块"的空态，别停在上一个会话的模块上
-  log.innerHTML = ""; wfResetGroups(); FILE_KIND.clear(); renderFiles([]); renderUploads([]); renderWelcome(); zScopeReset(); loadZotLib()
+  log.innerHTML = ""; wfResetGroups(); FILE_KIND.clear(); FILE_EDITED.clear(); renderFiles([]); renderUploads([]); renderWelcome(); zScopeReset(); loadZotLib()
   stepsHost = null; stepsHostEl.replaceChildren()  // 步骤条在 #log 之外，清 log 不会连带清它
 }
 async function deleteSession(id, title, ctx) {      // 删除会话（不可撤销，先确认；进行中的生成由后端一并终止）
@@ -7648,7 +7738,7 @@ function newConversation() {
   detachStream()   // 只退订不终止：原会话若在生成会继续跑，从左侧列表随时切回来看
   // FILE_KIND 必须跟着会话清：换会话后同名文件（manuscript.md 这种到处都有）会沿用上一个
   // 会话的分级，而两个会话的模块可能不同 —— 分级就错了，且从界面上完全看不出来。
-  sessionId = null; localStorage.removeItem("nm_sid"); log.innerHTML = ""; wfResetGroups(); FILE_KIND.clear(); renderFiles([]); loadUploads(); loadSessions(); zScopeReset(); loadZotLib(); stepsHost = null; stepsHostEl.replaceChildren()
+  sessionId = null; localStorage.removeItem("nm_sid"); log.innerHTML = ""; wfResetGroups(); FILE_KIND.clear(); FILE_EDITED.clear(); renderFiles([]); loadUploads(); loadSessions(); zScopeReset(); loadZotLib(); stepsHost = null; stepsHostEl.replaceChildren()
   pendingFolder = null; lastAppliedFolder = null; updateDirChip()   // 新对话 = 重新可以选工作目录，上一个会话的选择不留到这里
   sessionStarted = false; pendingWfCard = ""; pendingWfForm = null; lastCardText = ""   // 任务卡是一次性的，绝不能漏进下一个会话
   offeredSteps.clear(); HDR_CACHE.clear()

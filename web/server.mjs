@@ -4,7 +4,7 @@ import path from "node:path"
 import os from "node:os"
 import crypto from "node:crypto"
 import { fileURLToPath } from "node:url"
-import { spawn, execSync, execFile } from "node:child_process"
+import { spawn, execSync, execFileSync, execFile } from "node:child_process"
 import { promisify } from "node:util"
 import { setGlobalDispatcher, Agent } from "undici"
 import { createOpencodeClient } from "@opencode-ai/sdk"
@@ -938,6 +938,11 @@ const WIN_RESERVED = /^(nul|con|prn|aux|com[1-9]|lpt[1-9])(\.|$)/i
 const skipEntry = (name) => {
   if (name.startsWith(".")) return true          // .preview 等派生缓存、.private/ 不进列表
   if (name === "_workflow.json" || name === "_lasterror.json") return true   // 网关自己的簿子，不是用户产物
+  // Word / WPS 打开文档期间会在同目录建一个 `~$稿件.docx` 锁文件（用户一关文档就自己没了）。
+  // 它不以点开头，所以上面那条挡不住 —— 自从产物可以"用本机 Word 打开编辑"，用户每改一次稿，
+  // 侧栏就会多出一个他看不懂、也下载不了（Word 独占着）的条目。列出与打包共用这一份判据，
+  // 所以打包里也不会再混进这种半字节垃圾。
+  if (name.startsWith("~$")) return true
   // Windows 保留名。agent 偶尔会写出 `... 2>nul` 这种 cmd 习惯的重定向，而 Git Bash 不认
   // `nul` 这个设备名，直接当普通文件建了出来 —— 于是一个 172 字节的垃圾文件出现在用户的
   // "产出"侧栏里（实测见过）。Linux 生产不会有（那边是 /dev/null），但桌面版就是 Windows。
@@ -1903,6 +1908,89 @@ const soffice = () => {
   return _soffice
 }
 const execFileAsync = promisify(execFile)
+
+// ---- 用本机的 Word / WPS / LibreOffice 打开产物文档（只在桌面版成立）----
+//
+// 【为什么要有它】网页预览是 mammoth 转的 HTML，单向、只读，且丢掉了 docx 里一多半东西
+//（显示尺寸、EMF/WMF 图、分节、页眉页脚、批注、修订）。用户拿到稿子第一件事就是"我自己改两句"，
+// 而在预览里他一个字也改不了。与其自研一个网页版 Word，不如把他机器上那个真正的 Word 用起来：
+// 保真度天然满分，代价只有下面这几十行。
+//
+// 【与预览的关系：没有关系】预览只依赖 .venv 里的 mammoth，本机装没装 Word 都照常出图。
+// 这里探测失败只意味着"那个按钮点不动"，绝不会牵连预览。
+const OPEN_EXT = new Set([".docx", ".doc", ".rtf", ".odt", ".xlsx", ".xls", ".ods", ".pptx", ".ppt", ".odp"])
+
+// 探测某后缀在本机有没有"打得开它的程序"。结果按后缀缓存 —— 用户不会在用软件的中途装 Office，
+// 而 `assoc` 每次要起一个 cmd（几十毫秒），预览一开就打一次的话是白费。
+// 【为什么不直接 spawn 试试看】Windows 在没有关联程序时不会报错，而是弹一个"你要如何打开此文件"
+// 的系统对话框。用户点开按钮撞上那个框，只会以为软件坏了。宁可提前把按钮置灰并说清原因。
+// 【SCI_DOC_OPEN_DRYRUN=1】只给自动化测试用：一律当成"打得开"，且真到打开那一步时不起进程。
+// 没有它的话，跑一次测试就会在开发机上弹出真的 Word —— 于是这条路只能靠手点，永远没有回归。
+const DOC_OPEN_DRYRUN = process.env.SCI_DOC_OPEN_DRYRUN === "1"
+const _openerCache = new Map()
+const docOpener = (ext) => {
+  if (DOC_OPEN_DRYRUN) return "dryrun"
+  if (_openerCache.has(ext)) return _openerCache.get(ext)
+  let how = null
+  if (process.platform === "win32") {
+    // `assoc .docx` 查的是 HKCR 上的后缀关联：装了 Word 或 WPS 都会在这里登记；
+    // 两个都没有时它以非零码退出（execFileSync 抛），于是落到 LibreOffice 那条兜底。
+    // ext 来自上面的白名单，不是用户输入，不存在拼命令的问题（而且本来就没过 shell）。
+    try { if (execFileSync("cmd", ["/c", "assoc", ext], { stdio: ["ignore", "pipe", "ignore"], windowsHide: true }).toString().includes("=")) how = "assoc" } catch { /* 没关联 */ }
+  } else if (process.platform === "darwin") {
+    how = "assoc"   // macOS 一律有个兜底程序（最差是"文本编辑"），open 不会弹系统选择框
+  }
+  if (!how && soffice()) how = "soffice"   // 装了 LibreOffice 就用它顶上，仍然是真编辑器
+  _openerCache.set(ext, how)
+  return how
+}
+
+// ---- "用户已在 Word 里改过这份稿" 的记账 ----
+//
+// 【这一笔为什么必须记】AI 手里的真相源是 manuscript.md，用户手里的是 docx。用户在 Word 里
+// 改完之后，只要 AI 下一轮还按老规矩"改 md 再重渲染"，用户那几句就被整份覆盖掉，而且无声无息。
+// 所以在用户第一次点"用 Word 打开"时留个基线，之后凡是 mtime 动过的，就认定真相源已经转移到
+// docx，并把这件事写进每轮前言，让 AI 改走就地改写那条路（docx_extract / docx_apply）。
+//
+// 【已知的不精确】这里只比 mtime，分不出"是用户改的"还是"AI 自己就地改写后落的新 mtime"。
+// 误判方向是安全的：一旦进入 docx 模式就一直留在 docx 模式，不会反过来把用户的改动放回给
+// md 重渲染覆盖。文件名以点开头 → 不进产物列表、不进打包（见 skipEntry）。
+const DOCEDIT_FILE = ".docedit.json"
+const readDocEdit = (dir) => {
+  try { const j = JSON.parse(fs.readFileSync(path.join(dir, DOCEDIT_FILE), "utf8")); return (j && typeof j === "object" && j.files) ? j : { version: 1, files: {} } }
+  catch { return { version: 1, files: {} } }
+}
+const writeDocEdit = (dir, j) => { try { fs.writeFileSync(path.join(dir, DOCEDIT_FILE), JSON.stringify(j)) } catch (e) { console.warn(`[docedit] 记账写不进去（不影响打开）：${e.message}`) } }
+/** 用户点了"用本机 Word 打开"：把当下的 mtime 记成基线。 */
+const noteDocOpen = (dir, rel) => {
+  let st; try { st = fs.statSync(path.join(dir, rel)) } catch { return }
+  const j = readDocEdit(dir)
+  // 已经记过基线的不要重记：用户"打开 → 改 → 存 → 再打开看看"是常见动作，
+  // 第二次打开若把基线刷成改后的 mtime，他那几句改动就从记账上凭空消失了。
+  if (!j.files[rel]) { j.files[rel] = { openedAt: Date.now(), mtime: st.mtimeMs }; writeDocEdit(dir, j) }
+}
+/** 本会话里被用户动过的文档（相对名），按名字排序。文件没了的条目顺手清掉。 */
+const userEditedDocs = (dir) => {
+  const j = readDocEdit(dir); const out = []; let dirty = false
+  for (const [rel, rec] of Object.entries(j.files)) {
+    let st; try { st = fs.statSync(path.join(dir, rel)) } catch { delete j.files[rel]; dirty = true; continue }
+    if (st.mtimeMs > (rec.mtime || 0)) out.push(rel)
+  }
+  if (dirty) writeDocEdit(dir, j)
+  return out.sort((a, b) => a.localeCompare(b, "zh"))
+}
+
+// 每轮注入的前言片段：告诉 agent 真相源已经从 md 转到 docx，改稿必须走就地改写。
+// 【格式硬约束】整段不得出现空行 —— 工作区前言的剥离正则按"第一个空行"截断，
+// 这里留一个空行，后面的内容就会在回看历史时当成用户自己说的话显示出来。
+const docxSourcePreamble = (outDir) => {
+  let edited = []
+  try { edited = userEditedDocs(outDir) } catch { return "" }
+  if (!edited.length) return ""
+  const S = `"${ROOT.replace(/\\/g, "/")}/.opencode/skills/humanize-academic/scripts"`
+  const V = PY_BIN ? `"${PY_BIN}"` : "（本机还没建 .venv）"
+  return `\n- **【真相源已转移】用户已经在 Word 里亲手改过这几份稿件：${edited.map((n) => `\`${n}\``).join("、")}。从现在起这些 docx 就是唯一真相源，它们比任何 .md 都新。**要改其中任何一份时：**绝对不许**从 markdown 重新渲染（\`render_docx.sh\`、pandoc、重新 write-paper 出件都算），那会把用户亲手改的每一句无声覆盖掉，这是本会话最严重的一类事故；**只许就地改写**——① \`${V} ${S}/docx_extract.py 稿件.docx\` 抽出带 \`[[编号]]\` 的段落清单，② 整行替换编号后面的正文（编号一个字符不动、不增删行、\`⟦…⟧\` 里的域内文字一个字不许改），③ \`${V} ${S}/docx_apply.py 稿件.docx 改后清单.md -o 稿件_修订.docx --track-changes --author "AI"\`，④ \`${V} ${S}/docx_verify.py 稿件.docx 稿件_修订.docx --mode edit\` 必跑——它核对的是「拒绝全部修订后能否逐字还原成原稿」（漏了这一条，就会有改动绕过修订标记，用户在 Word 里既看不见也拒绝不了），并逐条列出数字与引用的变化；**退出码非 0 就是硬伤、不许出件**，WARN 里的每一条都要原样转告用户请他核对。只做措辞润色、明确一个数字都不许动时才去掉 \`--mode edit\`（那一档把数字变化直接判成硬伤）。改之前先把原件复制一份到 \`./.backup/\`（该目录不进产物列表），改坏了能退回。\n- 就地改写只能改现有段落里的字，**加一节、加一张表、换期刊格式、重排参考文献这些做不到**——用户要这类改动时，如实告诉他"这需要从头重排，而重排会丢掉你在 Word 里改的内容"，让他自己决定，不要擅自重排。\`docx_apply.py\` 以退出码 3 报告"有段落被拒绝"（多半是用户留了未接受的修订痕迹，脚本不会篡改他人修订），遇到就把是哪几段、为什么，原样转告用户，请他在 Word 里先接受或拒绝那些修订，**绝不要跳过后假装改完了**。`
+}
 
 // ---- Zotero 本地库（单机 / 桌面部署：网关与用户 Zotero 同机，脚本打 127.0.0.1:23119）----
 // 中心多用户服务器上探测必然失败（服务器摸不到每个用户机器上的 Zotero），接口照样可达，
@@ -4312,6 +4400,52 @@ export const server = http.createServer(async (req, res) => {
       return send(res, 200, "application/json", JSON.stringify({ ok: true, path: abs }))
     }
 
+    // 「这个文件能不能用本机的 Office 打开」——预览头部那个按钮要不要出现、置不置灰，看它。
+    // 只判能力，不碰文件，所以拿不到会话也能答（前端在打开预览时问一次）。
+    if (req.method === "GET" && u.pathname === "/api/doc/opener") {
+      const ext = path.extname(u.searchParams.get("name") || "").toLowerCase()
+      if (!OPEN_EXT.has(ext)) return send(res, 200, "application/json", JSON.stringify({ ok: true, canOpen: false, how: null }))
+      // 中心部署（网关与用户不在同一台机器）上一律不给：那边"打开"只会在服务器上起一个
+      // 没人看得见的 Word 进程，纯属把用户的文档交给另一台机器上的程序。
+      if (!canReveal(req)) return send(res, 200, "application/json", JSON.stringify({ ok: true, canOpen: false, how: null, err: "这台机器上的文档只能在本机打开" }))
+      const how = docOpener(ext)
+      return send(res, 200, "application/json", JSON.stringify({
+        ok: true, canOpen: !!how, how,
+        err: how ? "" : "这台电脑上没找到能打开它的程序（Word / WPS / LibreOffice 装一个即可）。网页预览不受影响。",
+      }))
+    }
+
+    // 真正打开。同时把"用户要动这份稿了"记进账上（见 noteDocOpen）——从此它就是真相源。
+    if (req.method === "POST" && u.pathname === "/api/doc/open") {
+      if (!canReveal(req)) return send(res, 403, "application/json", JSON.stringify({ ok: false, err: "这台机器上的文档只能在本机打开" }))
+      const sid = u.searchParams.get("sid") || ""
+      const name = u.searchParams.get("name") || ""
+      const ext = path.extname(name).toLowerCase()
+      if (!OPEN_EXT.has(ext)) return send(res, 400, "application/json", JSON.stringify({ ok: false, err: "这种格式不用 Office 打开" }))
+      let dir; try { dir = sid ? await sessionOut(sid) : OUTPUTS } catch { return send(res, 404, "application/json", JSON.stringify({ ok: false, err: "找不到这个会话" })) }
+      // 与下载/预览同一条防线：name 可含子目录，必须做包含性校验，不能拼接了事。
+      const src = safeUnder(dir, name)
+      if (!src || !fs.existsSync(src) || !fs.statSync(src).isFile())
+        return send(res, 404, "application/json", JSON.stringify({ ok: false, err: "这个文件不在了（可能已被移走或改名）" }))
+      const how = docOpener(ext)
+      if (!how) return send(res, 400, "application/json", JSON.stringify({ ok: false, err: "这台电脑上没找到能打开它的程序（Word / WPS / LibreOffice 装一个即可）" }))
+      // 先记账再起进程：进程一起来用户随时可能存盘，记晚了就会把他改后的 mtime 当成基线，
+      // 于是"他改过"这件事从账上消失，AI 下一轮照旧从 md 重渲染，把他的改动覆盖掉。
+      const rel = path.relative(path.resolve(dir), src).split(path.sep).join("/")
+      noteDocOpen(dir, rel)
+      if (DOC_OPEN_DRYRUN) return send(res, 200, "application/json", JSON.stringify({ ok: true, how: "dryrun" }))
+      try {
+        // 与 /api/fs/reveal 同一口径：路径直接进 argv、不经 shell，文件名里的 & | " 不会被当语法。
+        // explorer.exe 带一个文件参数走的就是 ShellExecute（用默认关联程序打开），且它成功时也常回
+        // 非零退出码 —— 所以一律不等退出码，起进程没抛错就当成功。
+        const cmd = how === "soffice" ? soffice() : (process.platform === "win32" ? "explorer.exe" : "open")
+        const ch = spawn(cmd, [src], { detached: true, stdio: "ignore" })
+        ch.on("error", () => {})
+        ch.unref()
+      } catch (e) { return send(res, 500, "application/json", JSON.stringify({ ok: false, err: "打不开：" + String(e.code || e.message) })) }
+      return send(res, 200, "application/json", JSON.stringify({ ok: true, how }))
+    }
+
     // 最近用过的目录（含当前没有会话挂着的），给选择器当快捷入口
     if (req.method === "GET" && u.pathname === "/api/folders") {
       const list = [...META.folders].sort((a, b) => (b.used || b.created || 0) - (a.used || a.created || 0))
@@ -5416,7 +5550,7 @@ export const server = http.createServer(async (req, res) => {
       // 注意：本会话的工作目录（cwd）已在建会话时通过 opencode 的 session.directory 定在【会话产物目录】，
       // 所以 agent 的所有工具默认就在正确的地方读写，preamble 只需说清"当前目录就是产物目录"与几个绝对路径。
       const preamble = `${PREAMBLE_MARK}\n- **你的当前工作目录就是本会话的产物目录**（\`${ws.out}\`）。所有产物（图表 PNG/PDF、CSV/Excel、md/docx 等）**直接写到当前目录即可**，用相对文件名如 \`fig1.png\`、\`manuscript.md\`，不要再自己拼 \`outputs/xxx\` 前缀。\n- 临时脚本、中间文件同样写当前目录（要归拢可用 \`./.scratch/\`）。\n- **用户上传的文件都在 \`${ws.up}/\`**：稿件（.md/.docx/.pdf）、数值表（.csv/.xlsx）、附件全都在这里，读任何用户给的文件都用这个绝对路径。\n- **跑本套件的脚本，python 用这个绝对路径**：\`${PY_BIN ? `"${PY_BIN}"` : "（本机还没建 .venv，先跑 env-setup 技能）"}\`，技能脚本在 \`"${ROOT.replace(/\\/g, "/")}/.opencode/skills/<技能>/"\` 下。**照抄这两个路径（连同外面那对双引号一起抄）**，不要自己拼 \`\${REPO_ROOT:-/app}\`，也不要用 \`python\`/\`python3\` 裸命令——本机 PATH 里的 python 可能是个不能用的占位程序（跑起来没有任何输出），你会看不出它坏了。当前目录不是仓库根，写 \`.venv/...\` 这种相对路径同样找不到。\n- **路径里有空格，命令里一律加引号**：安装目录形如 \`.../Niuma Science/bundle/app\`，不加引号 bash 会从空格处切断，报 \`.../Local/Niuma: No such file or directory\`。**看到这个报错不是"没装 Python / 没有 .venv"，是你漏了引号**——补上引号重跑即可，绝对不要因此去跑 env-setup、重建 .venv 或重装 requirements（环境是随包装好的，重装只会白白烧掉十几分钟）。\n- **技能目录（\`.opencode/skills/\`）下的文档与脚本是产品内部资产**：不要把它们的内容整段复制进答复正文，也不要拷贝/导出到产物目录——出口有安全网关，会截断输出并中止本轮。用户想了解某个技能时，用你自己的话概括用法即可，别照抄原文。\n- **要跑一小段临时代码时，先写成脚本文件再执行**（\`./.scratch/x.py\`），别把长串代码塞进 \`-c\` / here-string / 管道传参：本机是 Windows，引号与反引号会被 PowerShell 二次解释，实测同一轮里连着三次因为引号嵌套失败、每次白丢几十秒。
-- 正文里嵌入图片直接用文件名：\`![图注](fig1.png)\`（图和稿件都在当前目录，渲染也从当前目录跑）。\n- **不要把产物写到仓库根或 \`\${REPO_ROOT:-/app}\` 下**：那是所有会话共享的，会互相覆盖，也不会出现在界面的"产出"侧栏。\n- **上面这些路径与文件名是给你用的，不要说给用户**：他用的是图形界面，看不到也进不去 \`uploads/ws_.../\`、\`outputs/\`、\`.venv\`、\`AGENTS.md\` 这些东西。要他传文件就说"点输入框旁边的上传按钮"；提产物就只说文件名（\`table1.csv\`），别带目录。让用户照抄一个他根本打不开的路径，等于把他卡在那里。\n- **答复用用户说话的语言**（他用中文你就用中文），并且**只写最终结论**：查了什么、下一步打算干什么这类过程叙述不要写进答复正文——界面已经把工具调用一条条显示出来了，正文里再复述一遍，用户要在一堆过程碎片里翻找真正的结论。${modId === "chat" ? skillsPreamble() : modulePreamble(modId, ws.out)}${zoteroPreamble(ws.out)}${autoOn ? autoPreamble() : ""}\n\n`
+- 正文里嵌入图片直接用文件名：\`![图注](fig1.png)\`（图和稿件都在当前目录，渲染也从当前目录跑）。\n- **不要把产物写到仓库根或 \`\${REPO_ROOT:-/app}\` 下**：那是所有会话共享的，会互相覆盖，也不会出现在界面的"产出"侧栏。\n- **上面这些路径与文件名是给你用的，不要说给用户**：他用的是图形界面，看不到也进不去 \`uploads/ws_.../\`、\`outputs/\`、\`.venv\`、\`AGENTS.md\` 这些东西。要他传文件就说"点输入框旁边的上传按钮"；提产物就只说文件名（\`table1.csv\`），别带目录。让用户照抄一个他根本打不开的路径，等于把他卡在那里。\n- **答复用用户说话的语言**（他用中文你就用中文），并且**只写最终结论**：查了什么、下一步打算干什么这类过程叙述不要写进答复正文——界面已经把工具调用一条条显示出来了，正文里再复述一遍，用户要在一堆过程碎片里翻找真正的结论。${modId === "chat" ? skillsPreamble() : modulePreamble(modId, ws.out)}${zoteroPreamble(ws.out)}${docxSourcePreamble(ws.out)}${autoOn ? autoPreamble() : ""}\n\n`
       // taskModel：只有【定时任务的运行器】会带它，且必须是管理员在档位里钉死的那个模型。
       // 【必须在服务端核对，不能信请求里的值】否则任何人都能用它点名一个贵模型跑一轮——
       // 云端网关的 pickModel 虽然也会拦（不在可调用集合里就静默打回默认），但那是最后一道，
@@ -5501,6 +5635,10 @@ export const server = http.createServer(async (req, res) => {
       // 产物分级随列表一起下发（新增字段，老界面包忽略它即可 —— 数组结构没变）
       const kinds = artifactKinds(sid, dir, list)
       for (const it of list) it.kind = kinds[it.name] || "main"
+      // 被用户在 Word 里改过的稿件打个标：侧栏要显示"已被你改过"，用户才知道这一份不再是
+      // AI 那条 md 流水线的产物。同样是新增字段，老界面包忽略即可。
+      const edited = new Set(userEditedDocs(dir))
+      for (const it of list) if (edited.has(it.name)) it.edited = true
       // ★ 没能列出来的文件数走响应头，不动数组结构（这条接口的返回值是【裸数组】，改成对象会
       //   把所有既有调用方一起打翻）。正常会话恒为 0；非 0 时前端挂一行灰字指向"打包下载"。
       res.writeHead(200, { "Content-Type": "application/json", "X-Deeper-Files": String(deeper) })
