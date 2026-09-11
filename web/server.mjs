@@ -938,6 +938,13 @@ const WIN_RESERVED = /^(nul|con|prn|aux|com[1-9]|lpt[1-9])(\.|$)/i
 const skipEntry = (name) => {
   if (name.startsWith(".")) return true          // .preview 等派生缓存、.private/ 不进列表
   if (name === "_workflow.json" || name === "_lasterror.json") return true   // 网关自己的簿子，不是用户产物
+  // docx 就地改写的中间清单：docx_extract.py 把 <稿件>_para.md / _para.json 写在当前工作目录，
+  // 而 agent 的工作目录就是会话目录 —— 于是用户每让它改一次稿，侧栏就多出两个看不懂的文件
+  //（一个带 [[编号]] 的段落清单、一份同内容的 json）。它们是过程产物，不是交付物。
+  // 【为什么挡在这里而不是让 agent 改写到别处】docx_extract 的 json 输出名是裸文件名、不跟
+  // --out 走，要挪就得让 agent 先 cd 进某个目录再用相对路径回指稿件——那种多步指令它照做的
+  // 概率远不如这一行判据可靠。挡在列出与打包共用的这一层，两边同时干净。
+  if (/_para\.(md|json)$/i.test(name)) return true
   // Word / WPS 打开文档期间会在同目录建一个 `~$稿件.docx` 锁文件（用户一关文档就自己没了）。
   // 它不以点开头，所以上面那条挡不住 —— 自从产物可以"用本机 Word 打开编辑"，用户每改一次稿，
   // 侧栏就会多出一个他看不懂、也下载不了（Word 独占着）的条目。列出与打包共用这一份判据，
@@ -1969,6 +1976,14 @@ const noteDocOpen = (dir, rel) => {
   // 第二次打开若把基线刷成改后的 mtime，他那几句改动就从记账上凭空消失了。
   if (!j.files[rel]) { j.files[rel] = { openedAt: Date.now(), mtime: st.mtimeMs }; writeDocEdit(dir, j) }
 }
+/** 用户在界面里就地改完存盘：与 Word 那条路同一个记账，真相源一样要转移过来。
+ *  【为什么不能复用 noteDocOpen】它是"记基线"，而这里文件已经被改了 —— 拿改后的 mtime 当基线，
+ *  等于刚存下去就把"用户改过"这件事抹掉，AI 下一轮照旧从 md 重排覆盖。所以基线钉在 0：
+ *  任何现存 mtime 都大于它，这份稿子从此永远算"用户改过"。 */
+const noteDocEditedHere = (dir, rel) => {
+  const j = readDocEdit(dir)
+  if (!j.files[rel] || j.files[rel].mtime !== 0) { j.files[rel] = { openedAt: Date.now(), mtime: 0, via: "inapp" }; writeDocEdit(dir, j) }
+}
 /** 本会话里被用户动过的文档（相对名），按名字排序。文件没了的条目顺手清掉。 */
 const userEditedDocs = (dir) => {
   const j = readDocEdit(dir); const out = []; let dirty = false
@@ -1980,6 +1995,86 @@ const userEditedDocs = (dir) => {
   return out.sort((a, b) => a.localeCompare(b, "zh"))
 }
 
+// ---- 段落级就地编辑：把 docx 拆成带编号的段落给前端改，改完按编号写回同一个文件 ----
+//
+// 【为什么不是让预览的那段 HTML 变成可编辑】预览是 mammoth 转出来的：它丢掉了显示尺寸、
+// EMF/WMF 图、分节、页眉页脚，还会合并/跳过一些段落。把它做成 contenteditable，就得在
+// "mammoth 的第 n 个 <p>" 与 "OOXML 的第 n 个 w:p" 之间猜一个对应关系 —— 一旦错位，
+// 用户改的是 A 段、落下去的是 B 段，而且【没有任何迹象】。所以编辑视图直接建在
+// docx_extract 的输出上：它和写回用的 docx_apply 是同一套段落编号，不存在对不齐的可能。
+// 代价是编辑态看不到图与版面（只有文字），这正是这条路能做的事的边界，界面上要如实说。
+const PARA_CACHE_DIR = ".docedit"     // 派生缓存，点号开头 → 不进产物列表、不进打包
+const BACKUP_DIR = ".backup"          // 每次写回前的原件副本，同样不进列表
+const HUMAN_SCRIPTS = path.join(ROOT, ".opencode/skills/humanize-academic/scripts")
+
+/** 抽段落。结果按源文件 mtime 缓存 —— 用户在编辑器里反复开合不该每次起一个 Python。 */
+async function docxParagraphs(dir, rel) {
+  const src = safeUnder(dir, rel)
+  if (!src || !fs.existsSync(src)) { const e = new Error("文件不在了"); e.code = "no-src"; throw e }
+  const cacheDir = path.join(dir, PARA_CACHE_DIR); fs.mkdirSync(cacheDir, { recursive: true })
+  const key = crypto.createHash("sha1").update(rel).digest("hex").slice(0, 12)
+  const out = path.join(cacheDir, key + ".json")
+  const srcMtime = fs.statSync(src).mtimeMs
+  if (!(fs.existsSync(out) && fs.statSync(out).mtimeMs >= srcMtime)) {
+    // docx_extract.py 把 json 写到【当前工作目录】（out_json 是裸文件名，不跟 --out 走），
+    // 所以给它一个一次性的空目录当 cwd，两份产物都落在里面，不会污染用户的会话目录。
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "para-"))
+    try {
+      await execFileAsync(PYEXE(), ["-X", "utf8", path.join(HUMAN_SCRIPTS, "docx_extract.py"), src, "--out", path.join(tmp, "p.md")],
+        { cwd: tmp, timeout: 120_000, maxBuffer: 32 * 1024 * 1024, windowsHide: true })
+      const produced = path.join(tmp, path.basename(src).replace(/\.[^.]+$/, "") + "_para.json")
+      if (!fs.existsSync(produced)) { const e = new Error("抽取脚本没吐出段落清单"); e.code = "no-json"; throw e }
+      fs.copyFileSync(produced, out)
+    } catch (err) {
+      console.error(`[docedit] 抽段落失败（${src}）：${err?.message || err}${err?.stderr ? "\n[docedit] stderr: " + String(err.stderr).slice(0, 2000) : ""}`)
+      const tail = String(err?.stderr || "").trim().split(/\r?\n/).filter(Boolean).slice(-2).join("；")
+      const e = new Error(tail ? tail.slice(0, 300) : "抽取失败，详见服务端日志"); e.code = "extract-fail"; throw e
+    } finally { try { fs.rmSync(tmp, { recursive: true, force: true }) } catch {} }
+  }
+  return JSON.parse(fs.readFileSync(out, "utf8"))
+}
+
+/** 写回。先备份原件，再让 docx_apply 落到临时文件，成功了才顶替原件。
+ *  【为什么不直接就地覆盖】apply 中途失败（段落被拒、脚本异常）时，就地覆盖会留下一个
+ *  改了一半的 docx，而用户手上没有任何别的副本。落临时文件 + 原子替换，失败时原件一个字节没动。 */
+async function docxApplyChanges(dir, rel, changes) {
+  const src = safeUnder(dir, rel)
+  if (!src || !fs.existsSync(src)) { const e = new Error("文件不在了"); e.code = "no-src"; throw e }
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "apply-"))
+  const changeFile = path.join(tmp, "changes.json")
+  const outFile = path.join(tmp, "out.docx")
+  fs.writeFileSync(changeFile, JSON.stringify(changes), "utf8")
+  let stdout = "", code = 0
+  try {
+    // 用户改的是【他自己的稿子】，不留修订痕迹（那是给"别人改我的稿"看的）。
+    // AI 改同一份文件时仍然带 --track-changes，见前言里的第 ③ 步。
+    const r = await execFileAsync(PYEXE(), ["-X", "utf8", path.join(HUMAN_SCRIPTS, "docx_apply.py"), src, changeFile, "-o", outFile],
+      { timeout: 180_000, maxBuffer: 32 * 1024 * 1024, windowsHide: true })
+    stdout = (r.stdout || "") + (r.stderr || "")
+  } catch (err) {
+    // 退出码 3 = 有段落被拒绝，但其余的照样写出来了 —— 这不是失败，是"部分落地"，
+    // 产物仍然可用，把被拒的原样告诉用户即可。其余退出码才是真失败。
+    code = err?.code ?? 1
+    stdout = (err?.stdout || "") + (err?.stderr || "")
+    if (code !== 3 || !fs.existsSync(outFile)) {
+      try { fs.rmSync(tmp, { recursive: true, force: true }) } catch {}
+      console.error(`[docedit] 写回失败（${src}）：${err?.message || err}\n${stdout.slice(0, 2000)}`)
+      const e = new Error(stdout.trim().split(/\r?\n/).filter(Boolean).slice(-2).join("；").slice(0, 300) || "写回失败，详见服务端日志")
+      e.code = "apply-fail"; throw e
+    }
+  }
+  try {
+    const bakDir = path.join(dir, BACKUP_DIR); fs.mkdirSync(bakDir, { recursive: true })
+    const ts = new Date().toISOString().replace(/[-:T]/g, "").slice(0, 14)   // 20260911073735；15 会把毫秒前的那个点也切进来
+    fs.copyFileSync(src, path.join(bakDir, path.basename(rel) + "." + ts + ".bak.docx"))
+    fs.copyFileSync(outFile, src)      // copy 而不是 rename：临时目录多半在别的盘，rename 会 EXDEV
+  } finally { try { fs.rmSync(tmp, { recursive: true, force: true }) } catch {} }
+  // 被拒绝的段落号：apply 把它们打在输出里（"拒绝" 那几行），原样带给前端，不自己编。
+  const rejected = stdout.split(/\r?\n/).filter((l) => /拒绝|rejected/i.test(l)).map((l) => l.trim()).slice(0, 20)
+  const warns = stdout.split(/\r?\n/).filter((l) => /⚠|警告|warn/i.test(l)).map((l) => l.trim()).slice(0, 20)
+  return { partial: code === 3, rejected, warns }
+}
+
 // 每轮注入的前言片段：告诉 agent 真相源已经从 md 转到 docx，改稿必须走就地改写。
 // 【格式硬约束】整段不得出现空行 —— 工作区前言的剥离正则按"第一个空行"截断，
 // 这里留一个空行，后面的内容就会在回看历史时当成用户自己说的话显示出来。
@@ -1989,7 +2084,7 @@ const docxSourcePreamble = (outDir) => {
   if (!edited.length) return ""
   const S = `"${ROOT.replace(/\\/g, "/")}/.opencode/skills/humanize-academic/scripts"`
   const V = PY_BIN ? `"${PY_BIN}"` : "（本机还没建 .venv）"
-  return `\n- **【真相源已转移】用户已经在 Word 里亲手改过这几份稿件：${edited.map((n) => `\`${n}\``).join("、")}。从现在起这些 docx 就是唯一真相源，它们比任何 .md 都新。**要改其中任何一份时：**绝对不许**从 markdown 重新渲染（\`render_docx.sh\`、pandoc、重新 write-paper 出件都算），那会把用户亲手改的每一句无声覆盖掉，这是本会话最严重的一类事故；**只许就地改写**——① \`${V} ${S}/docx_extract.py 稿件.docx\` 抽出带 \`[[编号]]\` 的段落清单，② 整行替换编号后面的正文（编号一个字符不动、不增删行、\`⟦…⟧\` 里的域内文字一个字不许改），③ \`${V} ${S}/docx_apply.py 稿件.docx 改后清单.md -o 稿件_修订.docx --track-changes --author "AI"\`，④ \`${V} ${S}/docx_verify.py 稿件.docx 稿件_修订.docx --mode edit\` 必跑——它核对的是「拒绝全部修订后能否逐字还原成原稿」（漏了这一条，就会有改动绕过修订标记，用户在 Word 里既看不见也拒绝不了），并逐条列出数字与引用的变化；**退出码非 0 就是硬伤、不许出件**，WARN 里的每一条都要原样转告用户请他核对。只做措辞润色、明确一个数字都不许动时才去掉 \`--mode edit\`（那一档把数字变化直接判成硬伤）。改之前先把原件复制一份到 \`./.backup/\`（该目录不进产物列表），改坏了能退回。\n- 就地改写只能改现有段落里的字，**加一节、加一张表、换期刊格式、重排参考文献这些做不到**——用户要这类改动时，如实告诉他"这需要从头重排，而重排会丢掉你在 Word 里改的内容"，让他自己决定，不要擅自重排。\`docx_apply.py\` 以退出码 3 报告"有段落被拒绝"（多半是用户留了未接受的修订痕迹，脚本不会篡改他人修订），遇到就把是哪几段、为什么，原样转告用户，请他在 Word 里先接受或拒绝那些修订，**绝不要跳过后假装改完了**。`
+  return `\n- **【真相源已转移】用户已经亲手改过这几份稿件（在本机 Word 里，或直接在界面的段落编辑器里）：${edited.map((n) => `\`${n}\``).join("、")}。从现在起这些 docx 就是唯一真相源，它们比任何 .md 都新。**要改其中任何一份时：**绝对不许**从 markdown 重新渲染（\`render_docx.sh\`、pandoc、重新 write-paper 出件都算），那会把用户亲手改的每一句无声覆盖掉，这是本会话最严重的一类事故；**只许就地改写**——① \`${V} ${S}/docx_extract.py 稿件.docx\` 抽出带 \`[[编号]]\` 的段落清单，② 整行替换编号后面的正文（编号一个字符不动、不增删行、\`⟦…⟧\` 里的域内文字一个字不许改），③ \`${V} ${S}/docx_apply.py 稿件.docx 改后清单.md -o 稿件_修订.docx --track-changes --author "AI"\`，④ \`${V} ${S}/docx_verify.py 稿件.docx 稿件_修订.docx --mode edit\` 必跑——它核对的是「拒绝全部修订后能否逐字还原成原稿」（漏了这一条，就会有改动绕过修订标记，用户在 Word 里既看不见也拒绝不了），并逐条列出数字与引用的变化；**退出码非 0 就是硬伤、不许出件**，WARN 里的每一条都要原样转告用户请他核对。只做措辞润色、明确一个数字都不许动时才去掉 \`--mode edit\`（那一档把数字变化直接判成硬伤）。改之前先把原件复制一份到 \`./.backup/\`（该目录不进产物列表），改坏了能退回。\n- 就地改写只能改现有段落里的字，**加一节、加一张表、换期刊格式、重排参考文献这些做不到**——用户要这类改动时，如实告诉他"这需要从头重排，而重排会丢掉你亲手改的内容"，让他自己决定，不要擅自重排。\`docx_apply.py\` 以退出码 3 报告"有段落被拒绝"（多半是用户留了未接受的修订痕迹，脚本不会篡改他人修订），遇到就把是哪几段、为什么，原样转告用户，请他先在 Word 里接受或拒绝那些修订，**绝不要跳过后假装改完了**。`
 }
 
 // ---- Zotero 本地库（单机 / 桌面部署：网关与用户 Zotero 同机，脚本打 127.0.0.1:23119）----
@@ -4444,6 +4539,54 @@ export const server = http.createServer(async (req, res) => {
         ch.unref()
       } catch (e) { return send(res, 500, "application/json", JSON.stringify({ ok: false, err: "打不开：" + String(e.code || e.message) })) }
       return send(res, 200, "application/json", JSON.stringify({ ok: true, how }))
+    }
+
+    // 段落级就地编辑：抽段落给前端改。
+    if (req.method === "GET" && u.pathname === "/api/docx/paras") {
+      const sid = u.searchParams.get("sid") || ""
+      const name = u.searchParams.get("name") || ""
+      if (path.extname(name).toLowerCase() !== ".docx")
+        return send(res, 400, "application/json", JSON.stringify({ ok: false, err: "只有 .docx 能就地编辑（.doc 要先另存为 .docx）" }))
+      let dir; try { dir = sid ? await sessionOut(sid) : OUTPUTS } catch { return send(res, 404, "application/json", JSON.stringify({ ok: false, err: "找不到这个会话" })) }
+      try {
+        const rows = await docxParagraphs(dir, name)
+        // 只把前端要用的字段给出去：整份 json 还带着 part / index / runs 这些内部量，
+        // 塞进响应只是让报文变大，前端一个都用不上。
+        return send(res, 200, "application/json", JSON.stringify({
+          ok: true,
+          paras: rows.map((r) => ({ id: r.id, text: r.text, style: r.style || "", table: !!r.in_table, frozen: r.frozen_spans || 0, chars: r.editable_chars || 0 })),
+        }))
+      } catch (e) {
+        const code = e.code === "no-src" ? 404 : 500
+        return send(res, code, "application/json", JSON.stringify({ ok: false, err: String(e.message || e).slice(0, 300) }))
+      }
+    }
+
+    // 段落级就地编辑：把改动写回原文件。
+    if (req.method === "POST" && u.pathname === "/api/docx/save") {
+      const sid = u.searchParams.get("sid") || ""
+      const name = u.searchParams.get("name") || ""
+      if (path.extname(name).toLowerCase() !== ".docx")
+        return send(res, 400, "application/json", JSON.stringify({ ok: false, err: "只有 .docx 能就地编辑" }))
+      let dir; try { dir = sid ? await sessionOut(sid) : OUTPUTS } catch { return send(res, 404, "application/json", JSON.stringify({ ok: false, err: "找不到这个会话" })) }
+      let body; try { body = await readJson(req) } catch (e) { return send(res, 400, "application/json", JSON.stringify({ ok: false, err: String(e.message || e) })) }
+      const changes = body && typeof body.changes === "object" && body.changes ? body.changes : null
+      if (!changes || !Object.keys(changes).length)
+        return send(res, 400, "application/json", JSON.stringify({ ok: false, err: "没有要保存的改动" }))
+      // 段落编号来自前端，必须核一遍：它会被当成 json 的键交给 apply，而 apply 对不认识的
+      // 编号只是告警跳过 —— 于是"保存成功但一个字没改"，用户完全看不出来。
+      const bad = Object.keys(changes).filter((k) => !/^[A-Za-z0-9]{1,16}$/.test(k))
+      if (bad.length) return send(res, 400, "application/json", JSON.stringify({ ok: false, err: "段落编号不合法：" + bad.slice(0, 3).join("、") }))
+      try {
+        const r = await docxApplyChanges(dir, name, changes)
+        // 存回去这一刻起，这份 docx 就是真相源：AI 下一轮不许再从 md 重排把它盖掉。
+        const rel = path.relative(path.resolve(dir), safeUnder(dir, name)).split(path.sep).join("/")
+        noteDocEditedHere(dir, rel)
+        return send(res, 200, "application/json", JSON.stringify({ ok: true, saved: Object.keys(changes).length, ...r }))
+      } catch (e) {
+        const code = e.code === "no-src" ? 404 : 500
+        return send(res, code, "application/json", JSON.stringify({ ok: false, err: String(e.message || e).slice(0, 300) }))
+      }
     }
 
     // 最近用过的目录（含当前没有会话挂着的），给选择器当快捷入口

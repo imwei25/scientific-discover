@@ -1609,6 +1609,39 @@
   .pv-head .pv-open:hover:not(:disabled) { color: var(--accent); border-color: var(--accent); }
   .pv-head .pv-open:disabled { opacity: .45; cursor: not-allowed; }
   .pv-head .pv-open .ic { width: 13px; height: 13px; }
+  /* 段落编辑器：编辑态把预览整块换掉（而不是让预览本身可编辑——见 server.mjs 里
+     docxParagraphs 的头注，mammoth 的段落与 OOXML 的段落对不齐，错位了还没有任何迹象）。 */
+  .pe-note { margin: 0; padding: 8px 14px; font-size: 12.5px; line-height: 1.6; color: #4a5568;
+    background: #eef4fb; border-bottom: 1px solid #cfe0f2; }
+  /* 编辑器直接画在 .pv-body 里（它本来就是那块滚动区）——再套一层自己的滚动容器，
+     底部工具条的 sticky 就会粘在内层上，用户往下翻时它会跟着跑出视野。 */
+  .pe-wrap { padding-bottom: 8px; }
+  /* 段落不套框、不显编号：编辑态应当读起来像稿子本身，一段一个方框会把连贯的正文
+     切成一堆表单项，扫一眼看不出哪里是一句话的结束。段落编号仍在 data-pid 上（写回要用），
+     只是不摆到脸上，需要时鼠标悬停有提示。改动与焦点靠左边一道竖线和一点底色表示，
+     竖线常驻但默认透明，所以状态切换时文字不会左右跳。 */
+  .pe-p { position: relative; margin: 0 0 4px; padding: 3px 10px; border-left: 3px solid transparent;
+    font-size: 14px; line-height: 1.95; white-space: pre-wrap; overflow-wrap: break-word;
+    outline: none; border-radius: 3px; transition: background .12s; }
+  .pe-p:hover { background: rgba(15,23,42,.025); }
+  .pe-p:focus { background: rgba(59,111,212,.06); }
+  .pe-p.dirty { border-left-color: var(--accent); background: rgba(59,111,212,.045); }
+  .pe-p.bad { border-left-color: #d9534f; background: rgba(217,83,79,.07); }
+  .pe-p.h { font-weight: 700; font-size: 16px; margin: 16px 0 6px; }
+  .pe-p.h:first-child { margin-top: 0; }
+  /* 表格里的段落：一道虚线提示它不是正文，改字可以、结构动不了 */
+  .pe-p.tbl { border-left-style: dotted; border-left-color: #d6c08a; }
+  /* 域内文字（引文、交叉引用、页码、公式）：写回时一个字都不许变，所以做成不可编辑的块。 */
+  .pe-frz { display: inline; padding: 0 3px; margin: 0 1px; border-radius: 3px;
+    background: #fff4d6; border: 1px solid #ecd9a5; color: #7a5200; cursor: not-allowed; }
+  .pe-bar { position: sticky; bottom: 0; display: flex; align-items: center; gap: 10px;
+    margin: 0 -26px -22px; padding: 10px 26px; background: rgba(255,255,255,.96);
+    border-top: 1px solid var(--line); backdrop-filter: blur(4px); }
+  .pe-bar .grow { flex: 1; font-size: 12.5px; color: var(--muted); }
+  .pe-bar button { padding: 7px 16px; font-size: 13px; border-radius: var(--r-sm); border: 1px solid var(--line-hi);
+    background: #fff; color: var(--text); cursor: pointer; }
+  .pe-bar button.primary { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; }
+  .pe-bar button:disabled { opacity: .5; cursor: not-allowed; }
   /* 「你改过这一份」的提示条：钉在预览正文最上方，说明这份稿子的真相源已经不是 AI 那条流水线了 */
   .pv-edited { margin: 0; padding: 8px 14px; font-size: 12.5px; line-height: 1.6; color: #7a5200;
     background: #fff7e6; border-bottom: 1px solid #f0d9a8; }
@@ -2215,6 +2248,7 @@
     <span class="pv-title" id="pvTitle"></span>
     <!-- 只对 Office 文档出现（能力位由 /api/doc/opener 给）：网页预览是只读的，
          真要改稿就把它交给用户机器上那个真正的 Word / WPS。 -->
+    <button class="pv-open" id="pvEdit" type="button" hidden>就地编辑</button>
     <button class="pv-open" id="pvOpen" type="button" hidden>用 Word 打开</button>
     <button class="pv-close" id="pvClose" type="button">关闭</button>
   </div>
@@ -3405,7 +3439,7 @@ function fileRow(name, short) {
   // docx，完全不会想到"让 AI 再改一版"可能把自己改的内容重排掉。
   if (FILE_EDITED.has(name)) {
     const b = document.createElement("span"); b.className = "fedit"; b.textContent = "已被你改过"
-    b.title = "你在本机 Word 里改过这一份。之后让 Niuma助手 改它时，它会在这个文件上就地改、并留下 Word 修订痕迹，不会从 markdown 重新排一份把你的改动盖掉。"
+    b.title = "这一份你在本机 Word 里改过，之后让 Niuma助手 改它时，它会基于这一份材料接着修改。"
     row.appendChild(b)
   }
   if (doPv) { const pv = document.createElement("button"); pv.type = "button"; pv.className = "fbtn"; pv.title = "预览"; pv.innerHTML = ic("eye"); pv.addEventListener("click", doPv); row.appendChild(pv) }
@@ -3751,8 +3785,9 @@ function closePreview() {
   // 文献预览开着时，这一下只退文献、把台账留在左边（用户下一步几乎总是回表里点下一篇）。
   // 一次点击连台账一起关掉的话，想看第二篇得从产出列表重新把 Excel 打开一遍。
   if (document.body.classList.contains("pvdoc-open")) { closeDocPreview(); return }
+  if (PE) { const d = Object.keys(peDirty()).length; if (d && !confirm("有 " + d + " 段改了还没保存，关掉就丢了。确定关闭？")) return; PE = null }
   preview.classList.remove("on"); document.body.classList.remove("preview-open")
-  pvName = ""; pvNativeAt = 0; pvOpen.hidden = true; pvEdited.hidden = true
+  pvName = ""; pvNativeAt = 0; pvOpen.hidden = true; pvEdit.hidden = true; pvEdited.hidden = true; pvEdit.textContent = "就地编辑"
   setPvTab("chat")                      // 退出预览还原成原始界面：三列布局 + 对话页
   if (pvObjUrl) { URL.revokeObjectURL(pvObjUrl); pvObjUrl = null }
 }
@@ -3844,6 +3879,170 @@ document.getElementById("pvDocClose").addEventListener("click", closeDocPreview)
 // SuperDoc 那一档，AGPL + 至少两周集成）。而用户机器上本来就有一个保真度满分的编辑器。
 //
 // 【只在桌面版成立】中心部署时网关和用户不在一台机器上，/api/doc/opener 会直接回 canOpen:false。
+// ---- 段落级就地编辑：在界面里直接改 docx 的文字，按段落编号写回同一个文件 ----
+//
+// 【为什么不让预览本身可编辑】预览是服务端用 mammoth 转出来的 HTML，它的段落与 docx 里的
+// w:p 并不一一对应（空段被丢、有些被合并、表格结构不同）。在那上面做 contenteditable，就得
+// 猜一个"第 n 个 <p> 对应第 n 个 w:p"的映射 —— 一旦错位，用户改的是 A 段、落下去的是 B 段，
+// 而且界面上没有任何迹象。所以编辑态整块换成这个编辑器：它的每一段都带着服务端给的真实
+// 段落编号，和写回用的是同一套编号，不存在对不齐的可能。
+// 代价：编辑态只有文字，看不见图与版面。这是这条路的边界，界面上如实写出来（见 PE_NOTE）。
+const pvEdit = document.getElementById("pvEdit")
+const FRZ_OPEN = "\u27E6", FRZ_CLOSE = "\u27E7"     // ⟦ ⟧：域内文字（引文/交叉引用/页码/公式）
+const PE_NOTE = "只能改文字，不能加段、删段或改格式。黄色块是引文、交叉引用、页码这类「域」，"
+  + "它们由 Word 自己维护，改了会坏，所以锁住了。图片与版面不显示，但保存时一个都不会丢。"
+let PE = null    // {name, orig:Map(id→text), bad:Set(id)}；非 null = 正在编辑
+
+/** 一段的 DOM → 写回用的文本（域内文字重新套上 ⟦⟧）。 */
+function peText(el) {
+  let out = ""
+  for (const n of el.childNodes) {
+    if (n.nodeType === 3) out += n.nodeValue
+    else if (n.nodeType === 1) {
+      // 编号与「表格内」那两个角标是画上去的装饰，不是正文 —— 漏掉这一句，段落编号会被
+      // 当成正文一起写进稿子里（每一段都以 "p0007" 开头），而且保存成功、毫无提示。
+      if (n.classList && (n.classList.contains("pe-id") || n.classList.contains("pe-tag"))) continue
+      if (n.classList && n.classList.contains("pe-frz")) out += FRZ_OPEN + n.textContent + FRZ_CLOSE
+      else if (n.tagName === "BR") out += ""          // 回车已被拦掉，这里只是兜底
+      else out += n.textContent
+    }
+  }
+  // contenteditable 会塞不间断空格；写回前换成普通空格，否则稿子里会多出看不见的 U+00A0
+  return out.replace(/\u00A0/g, " ")
+}
+/** 原文里的域内文字清单，用来核对用户有没有把某个域删掉或改掉。 */
+const peFrozen = (t) => (String(t).match(new RegExp(FRZ_OPEN + "[^" + FRZ_CLOSE + "]*" + FRZ_CLOSE, "g")) || []).join("\u0001")
+
+function peRenderPara(p, idx) {
+  const el = document.createElement("div")
+  el.className = "pe-p" + (/^Heading|^Title/i.test(p.style || "") ? " h" : "")
+  el.contentEditable = "true"
+  el.spellcheck = false
+  el.dataset.pid = p.id
+  if (p.table) el.classList.add("tbl")
+  // 序号用【屏幕上的次序】，不要从段落 id 推：id 是按 OOXML 里全部 w:p 编的，
+  // 而空段落在上面已经被滤掉了，拿 id 当序号会和用户数到的对不上（越往后差得越多）。
+  el.title = "第 " + (idx + 1) + " 段" + (p.table ? " · 在表格里" : "")
+  // 正文：⟦…⟧ 切成"可改的普通文字"与"锁住的域"两种块
+  const parts = String(p.text || "").split(new RegExp("(" + FRZ_OPEN + "[^" + FRZ_CLOSE + "]*" + FRZ_CLOSE + ")"))
+  for (const seg of parts) {
+    if (!seg) continue
+    if (seg.startsWith(FRZ_OPEN) && seg.endsWith(FRZ_CLOSE)) {
+      const s = document.createElement("span"); s.className = "pe-frz"; s.contentEditable = "false"
+      s.title = "这是 Word 的域（引文 / 交叉引用 / 页码 / 公式），由 Word 自己维护，不能改"
+      s.textContent = seg.slice(1, -1); el.appendChild(s)
+    } else el.appendChild(document.createTextNode(seg))
+  }
+  return el
+}
+
+async function openParaEditor(name) {
+  pvBody.classList.remove("frame")
+  pvBody.innerHTML = '<div class="hint">正在把稿子拆成段落…（第一次稍慢）</div>'
+  let j
+  try {
+    j = await fetch("api/docx/paras?name=" + encodeURIComponent(name) + sidQ()).then((r) => r.json())
+    if (!j.ok) throw new Error(j.err || "抽不出段落")
+  } catch (e) {
+    pvBody.innerHTML = '<div class="hint">打不开编辑器：' + mdEscape(String(e.message || e).slice(0, 200))
+      + '<br>这份稿子仍然可以用「用 Word 打开」在本机改。</div>'
+    return
+  }
+  PE = { name, orig: new Map(), bad: new Set() }
+  pvBody.innerHTML = ""
+  const note = document.createElement("div"); note.className = "pe-note"; note.textContent = PE_NOTE
+  pvBody.appendChild(note)
+  const wrap = document.createElement("div"); wrap.className = "pe-wrap"
+  const paras = (j.paras || []).filter((p) => String(p.text || "").trim())   // 空段落不摆出来，摆了也改不了
+  if (!paras.length) wrap.innerHTML = '<div class="hint">这份稿子里没有可改的文字段落。</div>'
+  paras.forEach((p, i) => { PE.orig.set(p.id, p.text); wrap.appendChild(peRenderPara(p, i)) })
+  pvBody.appendChild(wrap)
+  // 工具条
+  const bar = document.createElement("div"); bar.className = "pe-bar"
+  const info = document.createElement("span"); info.className = "grow"; info.id = "peInfo"
+  info.textContent = paras.length + " 段，还没有改动"
+  const cancel = document.createElement("button"); cancel.type = "button"; cancel.textContent = "退出编辑"
+  const save = document.createElement("button"); save.type = "button"; save.className = "primary"; save.textContent = "保存到原文件"; save.disabled = true; save.id = "peSave"
+  bar.append(info, cancel, save); pvBody.appendChild(bar)
+  cancel.addEventListener("click", () => closeParaEditor(true))
+  save.addEventListener("click", peSave)
+  wrap.addEventListener("input", peOnInput)
+  // 回车会把一段劈成两段，而写回那一路【只能改现有段落的字】，多出来的段落无处可落。
+  // 与其保存时报错，不如当场拦住并说清楚。
+  wrap.addEventListener("keydown", (ev) => {
+    if (ev.key === "Enter") { ev.preventDefault(); toast("就地编辑不能加段或拆段。要调整结构，用「用 Word 打开」在本机改。") }
+  })
+  wrap.addEventListener("paste", (ev) => {      // 粘进来的富文本会带一堆标签，只取纯文字
+    ev.preventDefault()
+    const t = (ev.clipboardData || window.clipboardData).getData("text/plain").replace(/\s*\n\s*/g, " ")
+    document.execCommand("insertText", false, t)
+  })
+  pvEdit.textContent = "退出编辑"
+}
+
+function peOnInput(ev) {
+  const el = ev.target.closest ? ev.target.closest(".pe-p") : null
+  if (!el || !PE) return
+  const pid = el.dataset.pid
+  const now = peText(el), was = PE.orig.get(pid) || ""
+  const changed = now !== was
+  el.classList.toggle("dirty", changed)
+  // 域被删掉/改掉的段落不能保存：写回那一路会整段拒绝，而用户会以为已经存进去了。
+  const broke = peFrozen(now) !== peFrozen(was)
+  if (broke) PE.bad.add(pid); else PE.bad.delete(pid)
+  el.classList.toggle("bad", broke)
+  peUpdateBar()
+}
+function peDirty() {
+  const out = {}
+  for (const el of pvBody.querySelectorAll(".pe-p.dirty")) {
+    const pid = el.dataset.pid
+    if (!PE.bad.has(pid)) out[pid] = peText(el)
+  }
+  return out
+}
+function peUpdateBar() {
+  const info = document.getElementById("peInfo"), save = document.getElementById("peSave")
+  if (!info || !save || !PE) return
+  const n = Object.keys(peDirty()).length, bad = PE.bad.size
+  info.textContent = bad ? bad + " 段把黄色的域改坏了，改回去才能保存（已改 " + n + " 段）"
+    : n ? "已改 " + n + " 段，未保存" : PE.orig.size + " 段，还没有改动"
+  info.style.color = bad ? "#b4553f" : ""
+  save.disabled = !n || !!bad
+}
+async function peSave() {
+  if (!PE) return
+  const changes = peDirty()
+  if (!Object.keys(changes).length) return
+  const save = document.getElementById("peSave"); save.disabled = true; save.textContent = "保存中…"
+  try {
+    const r = await fetch("api/docx/save?name=" + encodeURIComponent(PE.name) + sidQ(),
+      { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ changes }) }).then((x) => x.json())
+    if (!r.ok) throw new Error(r.err || "保存失败")
+    // 被拒绝的段落必须说出来：不说的话用户以为全存进去了，而那几段一个字没变。
+    if (r.partial || (r.rejected || []).length)
+      toast("存了 " + r.saved + " 段，但有几段被拒绝（多半是里面有未接受的修订痕迹），请用 Word 打开看一下。")
+    else toast("已存回原文件。原件备份在会话目录的 .backup 里。")
+    const name = PE.name
+    PE = null
+    await refreshOutputs()              // 取新 mtime + 拿到「已被你改过」的标
+    pvEdit.textContent = "就地编辑"
+    openPreview(name)                   // 回到预览，看到的就是刚存下去的那一版
+  } catch (e) {
+    toast("保存失败：" + String(e.message || e).slice(0, 100))
+    save.disabled = false; save.textContent = "保存到原文件"
+  }
+}
+function closeParaEditor(backToPreview) {
+  if (!PE) return
+  const dirty = Object.keys(peDirty()).length
+  if (dirty && !confirm("有 " + dirty + " 段改了还没保存，退出就丢了。确定退出？")) return
+  const name = PE.name
+  PE = null
+  pvEdit.textContent = "就地编辑"
+  if (backToPreview) openPreview(name)
+}
+
 const pvOpen = document.getElementById("pvOpen")
 const pvEdited = document.getElementById("pvEdited")
 const OPENABLE = /.(docx?|rtf|odt|xlsx?|ods|pptx?|odp)$/i
@@ -3853,8 +4052,10 @@ let pvRefreshAt = 0      // 上次因回到窗口而重刷的时刻，给下面�
 /** 按当前文件决定「用 Word 打开」这个按钮出不出现、能不能点。 */
 async function syncOpenBtn(name) {
   pvName = name
+  pvEdit.hidden = !/.docx$/i.test(name)      // 只有 .docx 能就地编辑（.doc 得先另存）
+  pvEdit.title = "在界面里直接改这份稿子的文字，按段落写回同一个文件"
   pvEdited.hidden = !FILE_EDITED.has(name)
-  if (!pvEdited.hidden) pvEdited.textContent = "这一份你在本机 Word 里改过，它比 Niuma助手 那份 markdown 新。之后让 Niuma助手 改它时，它会在这个文件上就地改并留下 Word 修订痕迹；要换期刊格式、加章节这类需要重排的事，会先问过你。"
+  if (!pvEdited.hidden) pvEdited.textContent = "这一份你在本机 Word 里改过，之后让 Niuma助手 改它时，它会基于这一份材料接着修改。"
   if (!OPENABLE.test(name)) { pvOpen.hidden = true; return }
   pvOpen.hidden = false; pvOpen.disabled = true; pvOpen.title = "正在确认本机能不能打开它…"
   try {
@@ -3867,6 +4068,10 @@ async function syncOpenBtn(name) {
     pvOpen.title = j.canOpen ? "在本机的 Office 里打开；改完保存，切回本软件会自动刷新预览" : (j.err || "本机没找到能打开它的程序")
   } catch { pvOpen.disabled = true; pvOpen.title = "问不到本机能不能打开它（网关没应答）" }
 }
+pvEdit.addEventListener("click", () => { if (PE) closeParaEditor(true); else openParaEditor(pvName) })
+// 同一个按钮两态：进编辑器 / 退出编辑。退出走 closeParaEditor，它会先确认未保存的改动。
+pvEdit.addEventListener("click", () => { if (PE) closeParaEditor(true); else openParaEditor(pvName) })
+
 pvOpen.addEventListener("click", async () => {
   const name = pvName; if (!name) return
   pvOpen.disabled = true
@@ -3893,6 +4098,8 @@ window.addEventListener("focus", async () => {
   if (pvName === name && preview.classList.contains("on")) openPreview(name)
 })
 async function openPreview(name) {
+  // 正编着别的文件就切走 = 丢改动。这里只拦"换文件"，保存后回到自己的预览是正常流程。
+  if (PE && PE.name !== name) { const d = Object.keys(peDirty()).length; if (d && !confirm("有 " + d + " 段改了还没保存，切走就丢了。确定切换？")) return; PE = null; pvEdit.textContent = "就地编辑" }
   pvTitle.innerHTML = ic("file"); const s = document.createElement("span"); s.textContent = name; pvTitle.appendChild(s)
   syncOpenBtn(name)                                 // 不 await：能力探测慢一点也不该拖住预览
   pvBody.classList.remove("frame"); pvBody.innerHTML = '<div class="hint">加载中…</div>'
