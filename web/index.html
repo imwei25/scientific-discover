@@ -1616,15 +1616,21 @@
   /* 编辑器直接画在 .pv-body 里（它本来就是那块滚动区）——再套一层自己的滚动容器，
      底部工具条的 sticky 就会粘在内层上，用户往下翻时它会跟着跑出视野。 */
   .pe-wrap { padding-bottom: 8px; }
-  .pe-p { position: relative; margin: 0 0 10px; padding: 8px 12px 8px 58px; background: #fff;
-    border: 1px solid var(--line); border-radius: var(--r-sm); font-size: 14px; line-height: 1.9;
-    white-space: pre-wrap; overflow-wrap: break-word; outline: none; }
-  .pe-p:focus { border-color: var(--accent); box-shadow: 0 0 0 2px rgba(59,111,212,.12); }
-  .pe-p.dirty { border-left: 3px solid var(--accent); padding-left: 56px; }
-  .pe-p.h { font-weight: 700; font-size: 15.5px; }
-  .pe-id { position: absolute; left: 10px; top: 9px; font: 11px/1.4 ui-monospace, "Cascadia Code", monospace;
-    color: #98a2b3; user-select: none; }
-  .pe-tag { position: absolute; left: 10px; top: 26px; font-size: 10px; color: #b0883a; user-select: none; }
+  /* 段落不套框、不显编号：编辑态应当读起来像稿子本身，一段一个方框会把连贯的正文
+     切成一堆表单项，扫一眼看不出哪里是一句话的结束。段落编号仍在 data-pid 上（写回要用），
+     只是不摆到脸上，需要时鼠标悬停有提示。改动与焦点靠左边一道竖线和一点底色表示，
+     竖线常驻但默认透明，所以状态切换时文字不会左右跳。 */
+  .pe-p { position: relative; margin: 0 0 4px; padding: 3px 10px; border-left: 3px solid transparent;
+    font-size: 14px; line-height: 1.95; white-space: pre-wrap; overflow-wrap: break-word;
+    outline: none; border-radius: 3px; transition: background .12s; }
+  .pe-p:hover { background: rgba(15,23,42,.025); }
+  .pe-p:focus { background: rgba(59,111,212,.06); }
+  .pe-p.dirty { border-left-color: var(--accent); background: rgba(59,111,212,.045); }
+  .pe-p.bad { border-left-color: #d9534f; background: rgba(217,83,79,.07); }
+  .pe-p.h { font-weight: 700; font-size: 16px; margin: 16px 0 6px; }
+  .pe-p.h:first-child { margin-top: 0; }
+  /* 表格里的段落：一道虚线提示它不是正文，改字可以、结构动不了 */
+  .pe-p.tbl { border-left-style: dotted; border-left-color: #d6c08a; }
   /* 域内文字（引文、交叉引用、页码、公式）：写回时一个字都不许变，所以做成不可编辑的块。 */
   .pe-frz { display: inline; padding: 0 3px; margin: 0 1px; border-radius: 3px;
     background: #fff4d6; border: 1px solid #ecd9a5; color: #7a5200; cursor: not-allowed; }
@@ -3433,7 +3439,7 @@ function fileRow(name, short) {
   // docx，完全不会想到"让 AI 再改一版"可能把自己改的内容重排掉。
   if (FILE_EDITED.has(name)) {
     const b = document.createElement("span"); b.className = "fedit"; b.textContent = "已被你改过"
-    b.title = "你在本机 Word 里改过这一份。之后让 Niuma助手 改它时，它会在这个文件上就地改、并留下 Word 修订痕迹，不会从 markdown 重新排一份把你的改动盖掉。"
+    b.title = "这一份你在本机 Word 里改过，之后让 Niuma助手 改它时，它会基于这一份材料接着修改。"
     row.appendChild(b)
   }
   if (doPv) { const pv = document.createElement("button"); pv.type = "button"; pv.className = "fbtn"; pv.title = "预览"; pv.innerHTML = ic("eye"); pv.addEventListener("click", doPv); row.appendChild(pv) }
@@ -3907,15 +3913,16 @@ function peText(el) {
 /** 原文里的域内文字清单，用来核对用户有没有把某个域删掉或改掉。 */
 const peFrozen = (t) => (String(t).match(new RegExp(FRZ_OPEN + "[^" + FRZ_CLOSE + "]*" + FRZ_CLOSE, "g")) || []).join("\u0001")
 
-function peRenderPara(p) {
+function peRenderPara(p, idx) {
   const el = document.createElement("div")
   el.className = "pe-p" + (/^Heading|^Title/i.test(p.style || "") ? " h" : "")
   el.contentEditable = "true"
   el.spellcheck = false
   el.dataset.pid = p.id
-  const idEl = document.createElement("span"); idEl.className = "pe-id"; idEl.contentEditable = "false"; idEl.textContent = p.id
-  el.appendChild(idEl)
-  if (p.table) { const t = document.createElement("span"); t.className = "pe-tag"; t.contentEditable = "false"; t.textContent = "表格内"; el.appendChild(t) }
+  if (p.table) el.classList.add("tbl")
+  // 序号用【屏幕上的次序】，不要从段落 id 推：id 是按 OOXML 里全部 w:p 编的，
+  // 而空段落在上面已经被滤掉了，拿 id 当序号会和用户数到的对不上（越往后差得越多）。
+  el.title = "第 " + (idx + 1) + " 段" + (p.table ? " · 在表格里" : "")
   // 正文：⟦…⟧ 切成"可改的普通文字"与"锁住的域"两种块
   const parts = String(p.text || "").split(new RegExp("(" + FRZ_OPEN + "[^" + FRZ_CLOSE + "]*" + FRZ_CLOSE + ")"))
   for (const seg of parts) {
@@ -3948,7 +3955,7 @@ async function openParaEditor(name) {
   const wrap = document.createElement("div"); wrap.className = "pe-wrap"
   const paras = (j.paras || []).filter((p) => String(p.text || "").trim())   // 空段落不摆出来，摆了也改不了
   if (!paras.length) wrap.innerHTML = '<div class="hint">这份稿子里没有可改的文字段落。</div>'
-  for (const p of paras) { PE.orig.set(p.id, p.text); wrap.appendChild(peRenderPara(p)) }
+  paras.forEach((p, i) => { PE.orig.set(p.id, p.text); wrap.appendChild(peRenderPara(p, i)) })
   pvBody.appendChild(wrap)
   // 工具条
   const bar = document.createElement("div"); bar.className = "pe-bar"
@@ -3981,8 +3988,9 @@ function peOnInput(ev) {
   const changed = now !== was
   el.classList.toggle("dirty", changed)
   // 域被删掉/改掉的段落不能保存：写回那一路会整段拒绝，而用户会以为已经存进去了。
-  if (peFrozen(now) !== peFrozen(was)) { PE.bad.add(pid); el.style.borderColor = "#d9534f" }
-  else { PE.bad.delete(pid); el.style.borderColor = "" }
+  const broke = peFrozen(now) !== peFrozen(was)
+  if (broke) PE.bad.add(pid); else PE.bad.delete(pid)
+  el.classList.toggle("bad", broke)
   peUpdateBar()
 }
 function peDirty() {
@@ -4047,7 +4055,7 @@ async function syncOpenBtn(name) {
   pvEdit.hidden = !/.docx$/i.test(name)      // 只有 .docx 能就地编辑（.doc 得先另存）
   pvEdit.title = "在界面里直接改这份稿子的文字，按段落写回同一个文件"
   pvEdited.hidden = !FILE_EDITED.has(name)
-  if (!pvEdited.hidden) pvEdited.textContent = "这一份你在本机 Word 里改过，它比 Niuma助手 那份 markdown 新。之后让 Niuma助手 改它时，它会在这个文件上就地改并留下 Word 修订痕迹；要换期刊格式、加章节这类需要重排的事，会先问过你。"
+  if (!pvEdited.hidden) pvEdited.textContent = "这一份你在本机 Word 里改过，之后让 Niuma助手 改它时，它会基于这一份材料接着修改。"
   if (!OPENABLE.test(name)) { pvOpen.hidden = true; return }
   pvOpen.hidden = false; pvOpen.disabled = true; pvOpen.title = "正在确认本机能不能打开它…"
   try {
