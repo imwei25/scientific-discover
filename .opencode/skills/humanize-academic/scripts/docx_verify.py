@@ -20,13 +20,16 @@
 退出码：有硬伤=1，全过=0。
 """
 import argparse
+import os
 import re
 import sys
 import zipfile
 from collections import Counter
 
-import check_invariants as CI
-import docx_ooxml as X
+# 同目录模块要自己挂上 sys.path：打包版的嵌入式 Python 带 ._pth，不会自动把脚本目录放进去。
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import check_invariants as CI  # noqa: E402
+import docx_ooxml as X  # noqa: E402
 
 try:
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")

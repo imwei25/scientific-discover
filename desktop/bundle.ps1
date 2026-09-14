@@ -267,6 +267,13 @@ if (-not $SkipPip) {
     if ($LASTEXITCODE -ne 0) { throw "pip install 失败" }
   }
 }
+# sitecustomize：把"脚本所在目录进 sys.path"这条 CPython 标准行为补回来。
+# 嵌入式 Python 只要旁边有 ._pth，就不再把脚本目录放进 sys.path —— 技能里 `import docx_ooxml`、
+# `from console_encoding import …` 这类同目录引用，开发机（普通 venv）上正常，装到用户机器上
+# 一律 ModuleNotFoundError（0.1.50 的就地编辑装上首测即栽在这）。bin 侧 _pth 挂的是同一个
+# site-packages，这一份两个解释器都生效。放在 SkipPip 判断之外：跳过 pip 也必须有它。
+New-Item -ItemType Directory -Force "$vs\Lib\site-packages" | Out-Null
+Copy-Item "$Root\desktop\sitecustomize.py" "$vs\Lib\site-packages\sitecustomize.py" -Force
 # 自检与容器构建期同款：装歪了现在炸，别留到客户机上才发现
 & "$vs\python.exe" -c "import pandas, numpy, scipy, matplotlib, mammoth; print('  .venv 自检通过: pandas', pandas.__version__, '| matplotlib', matplotlib.__version__)"
 if ($LASTEXITCODE -ne 0) { throw ".venv 自检失败" }
@@ -288,6 +295,19 @@ import site
 "@ | Out-File "$vb\python$PyVerNoDot._pth" -Encoding ascii
 & "$vb\python.exe" -c "import pandas; print('  .venv\bin 自检通过')"
 if ($LASTEXITCODE -ne 0) { throw ".venv\bin 自检失败" }
+# 同目录 import 自检：照技能的调用方式复现（绝对路径跑脚本、工作目录不在脚本旁边），两个解释器都测。
+# 上面那两条自检只 import 已装的包，同目录引用坏了它们照样过 —— 0.1.50 就是这么漏到用户机上的。
+$probe = Join-Path $env:TEMP ("sibprobe-" + [guid]::NewGuid().ToString("N"))
+New-Item -ItemType Directory -Force $probe | Out-Null
+"VALUE = 'ok'" | Out-File "$probe\sib.py" -Encoding ascii
+"import sib; print('  sibling-import self-check ' + sib.VALUE)" | Out-File "$probe\main.py" -Encoding ascii
+Push-Location $env:SystemRoot
+try {
+  foreach ($py in "$vs\python.exe", "$vb\python.exe") {
+    & $py "$probe\main.py"
+    if ($LASTEXITCODE -ne 0) { throw "同目录 import 自检失败（$py）：sitecustomize 没生效，装到用户机上技能脚本会 ModuleNotFoundError" }
+  }
+} finally { Pop-Location; Remove-Item -Recurse -Force $probe -ErrorAction SilentlyContinue }
 
 # ================= 6. 应用本体 =================
 Step "应用本体：web 网关 + 技能 + AGENTS.md"

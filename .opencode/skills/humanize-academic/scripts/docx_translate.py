@@ -39,8 +39,10 @@ from pathlib import Path
 
 from lxml import etree
 
-import docx_ooxml as X
-from docx_apply import read_edits
+# 同目录模块要自己挂上 sys.path：打包版的嵌入式 Python 带 ._pth，不会自动把脚本目录放进去。
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import docx_ooxml as X  # noqa: E402
+from docx_apply import read_edits  # noqa: E402
 
 try:
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
