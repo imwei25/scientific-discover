@@ -108,6 +108,7 @@ export const CFG = {
   imageKey: process.env.QWEN_API_KEY || process.env.DASHSCOPE_API_KEY || "",
   imageModel: process.env.QWEN_MODEL || "",
   imageEndpoint: process.env.QWEN_IMAGE_ENDPOINT || "",
+  imageCost: envNum("QWEN_IMAGE_COST", 0, { min: 0 }), // 0 = 按内置 Qwen Image 型号价；>0 = 每张覆盖价
   // 图片识字（/ocr 代理，ocr 技能用）。变量名与容器版注入给技能的那个一致（OCR_SPACE_API_KEY），
   // 一处配置两种形态通用。没配 = /ocr 回 503 并说清是"平台没配"，不冤枉用户的次数。
   // 【这把 key 只留在服务器】客户端永远拿不到它 —— 与 LLM_UPSTREAM_KEY 同一条原则。
@@ -1263,12 +1264,6 @@ async function handleAdminApi(req, res, pathname) {
       if (!Number.isFinite(n) || n < 0 || Math.floor(n) !== n)
         return json(res, 400, { ok: false, err: "单用户并发须是 ≥0 的整数（0 = 跟随全局）" })
     }
-    // 生图张数：与上面几个额度同一套校验口径（负数/乱输入静默变 0 = 静默变不限，是烧钱洞）
-    if (b.imgDaily !== undefined && b.imgDaily !== null && b.imgDaily !== "") {
-      const n = Number(b.imgDaily)
-      if (!Number.isFinite(n) || n < 0 || Math.floor(n) !== n)
-        return json(res, 400, { ok: false, err: "每日生图张数须是 ≥0 的整数（0 = 不限）" })
-    }
     // 图片识字次数：同上（免费档的 OCR 额度是全平台共享的，静默变不限比生图更容易把公共池吃穿）
     if (b.ocrDaily !== undefined && b.ocrDaily !== null && b.ocrDaily !== "") {
       const n = Number(b.ocrDaily)
@@ -1283,7 +1278,7 @@ async function handleAdminApi(req, res, pathname) {
     DB.upsertTier(db, {
       key, daily_usd: b.dailyUSD, monthly_usd: b.monthlyUSD,
       model: b.model, models: b.models, skills: b.skills, note: b.note, sort: b.sort,
-      max_conc: b.maxConc, img_daily: b.imgDaily, ocr_daily: b.ocrDaily,
+      max_conc: b.maxConc, ocr_daily: b.ocrDaily,
       tasks_mode: b.tasksMode, tasks_model: b.tasksModel,
     })
     const after = DB.getTier(db, key)
@@ -2175,8 +2170,6 @@ const ctx = {
   recordUsage: (uid, rec) => DB.recordUsage(db, uid, rec),
   todayCost: (uid) => DB.todayCost(db, uid),
   monthCost: (uid) => DB.monthCost(db, uid),
-  todayImages: (uid) => DB.todayImages(db, uid),
-  recordImage: (uid) => DB.recordImage(db, uid),
   todayOcr: (uid) => DB.todayOcr(db, uid),
   recordOcr: (uid) => DB.recordOcr(db, uid),
   ocrTotals: () => DB.ocrTotals(db),

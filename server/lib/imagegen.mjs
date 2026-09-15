@@ -6,15 +6,14 @@
 // key 的既有原则（"上游 key 绝不下发到客户端，所有调用必走本通道"，见 gateway.mjs）自相矛盾。
 // 所以照 /llm 的样子再开一条 /img：客户端带自己的 access key 打过来，服务器贴生图 key 转发。
 //
-// 【与 /llm 的三点不同，都是刻意的】
-//   ① 计量按【张】不按 token：生图单价比一次对话高一两个量级，混进美元额度里用户会莫名其妙
-//      发现"今天的对话额度没了"。所以独立一条 tiers.img_daily「每天几张」。
-//   ② 不做流式、不做多供应商切换：生图是一次性请求，且目前只有 DashScope 一家。
+// 【与 /llm 的两点不同，都是刻意的】
+//   ① 不做流式、不做多供应商切换：生图是一次性请求，且目前只有 DashScope 一家。
 //   ③ 图片【不经过本服务器中转字节】：DashScope 回的是一个带签名的临时 URL，直接原样透给
 //      客户端去下。省掉一整条大流量转发，而那个 URL 本身不含任何密钥。
 //
-// 【额度在什么时候扣】只扣**成功出图**的那次：上游报错、限速、我们自己拦下的，都不该算在
-// 用户头上——否则一次上游抖动就白吃掉他当天 2 张里的 1 张，而他什么都没拿到。
+// 【计费与额度】每张成功图片按模型固定成本折算为积分，写入与 LLM token 完全相同的 usage_log /
+// usage_daily；日/月上限只看总消费，不再有独立的按张数拦截。上游报错、限速、我们自己拦下的
+// 都不扣费，用户实际拿到图片才记账。
 
 import https from "node:https"
 import http from "node:http"
@@ -24,6 +23,13 @@ export const IMAGE_PATH_PREFIX = "/img/"
 // 默认打阿里云 DashScope 的多模态生图口（与技能脚本 render_figure.py 的默认端点一致）。
 const DEFAULT_ENDPOINT = "https://dashscope.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation"
 const DEFAULT_MODEL = "qwen-image-2.0"
+// 金额单位是人民币元/张。QWEN_IMAGE_COST 若设置为 >0，允许运营在供应商调价后临时覆盖。
+const MODEL_COSTS = Object.freeze({
+  "qwen-image-2.0": 0.2,
+  "qwen-image-2.0-pro": 0.5,
+  "qwen-image-3.0": 0.2,
+  "qwen-image-3.0-pro": 0.5,
+})
 const BODY_LIMIT = 1 << 20        // 生图请求体就是一段提示词，1MB 绰绰有余
 const UPSTREAM_TIMEOUT_MS = 300_000   // 生图本来就慢（实测几十秒），但不能无限挂
 
@@ -96,9 +102,16 @@ export function extractImageUrls(json) {
   return out
 }
 
+/** 一张图的实际入账价（元）。未知型号必须显式配置，绝不默认为 0 让它绕过总额度。 */
+export function imageCost(model, override = 0) {
+  const custom = Number(override)
+  if (Number.isFinite(custom) && custom > 0) return custom
+  return MODEL_COSTS[String(model || "").trim().toLowerCase()] || 0
+}
+
 /**
  * 处理 POST /img/generate。
- * ctx 提供：authClient / noteClient / resolveEntitlement / todayImages / recordImage / audit / fail / json / log / cfg
+ * ctx 提供：authClient / noteClient / resolveEntitlement / todayCost / monthCost / recordUsage / audit / fail / json / log / cfg
  */
 export async function imageForward({ req, res, pathname, ctx }) {
   const { fail, json, audit, log, CFG: cfg } = ctx
@@ -122,15 +135,21 @@ export async function imageForward({ req, res, pathname, ctx }) {
     return fail(res, 503, "IMAGE_UNCONFIGURED",
       "平台还没有配置生图服务，请联系管理员（技能仍可用 --dry-run 做提示词，只是出不了图）")
 
-  // ---- ③ 张数闸（请求前预检）----
+  // ---- ③ 总积分闸（与 /llm 共用日/月上限）----
   const ent = ctx.resolveEntitlement(user)
-  const limit = Math.max(0, Math.floor(Number(ent.imgDaily) || 0))
-  const used = ctx.todayImages(user.id)
-  if (limit > 0 && used >= limit) {
-    audit("img.quota_block", { actor: user.username, ip, detail: `${used}/${limit}` })
-    return fail(res, 429, "IMAGE_QUOTA_EXCEEDED",
-      `今天的生图张数已用完（${used}/${limit} 张），明日 0 点(UTC)恢复。需要更多请联系管理员调整档位`,
-      { used, limit, scope: "daily" })
+  const creditRate = cfg.creditUsd
+  const credits = (cost) => cost / creditRate
+  const today = ctx.todayCost(user.id)
+  if (ent.daily > 0 && today >= ent.daily) {
+    audit("img.quota_block", { actor: user.username, ip, detail: `day ${today.toFixed(4)}/${ent.daily}` })
+    return fail(res, 429, "QUOTA_EXCEEDED", `今日积分已用尽（上限 ${Math.floor(credits(ent.daily))} 积分），明日 0 点(UTC)恢复`,
+      { scope: "daily", used: today, limit: ent.daily, usedCredits: Math.ceil(credits(today)), limitCredits: Math.floor(credits(ent.daily)) })
+  }
+  const month = ctx.monthCost(user.id)
+  if (ent.monthly > 0 && month >= ent.monthly) {
+    audit("img.quota_block", { actor: user.username, ip, detail: `month ${month.toFixed(4)}/${ent.monthly}` })
+    return fail(res, 429, "QUOTA_EXCEEDED", `本月积分已用尽（上限 ${Math.floor(credits(ent.monthly))} 积分），请联系管理员升级`,
+      { scope: "monthly", used: month, limit: ent.monthly, usedCredits: Math.ceil(credits(month)), limitCredits: Math.floor(credits(ent.monthly)) })
   }
 
   // ---- ④ 读请求体 ----
@@ -145,6 +164,9 @@ export async function imageForward({ req, res, pathname, ctx }) {
   // （与 /llm 的 pickModel 同一个理由）。
   const model = String(cfg.imageModel || "").trim() || DEFAULT_MODEL
   const endpoint = String(cfg.imageEndpoint || "").trim() || DEFAULT_ENDPOINT
+  const cost = imageCost(model, cfg.imageCost)
+  if (!(cost > 0))
+    return fail(res, 503, "IMAGE_PRICE_UNCONFIGURED", `模型 ${model} 没有配置生图单价，已拒绝调用以免绕过积分额度`)
 
   const payload = {
     model,
@@ -179,7 +201,7 @@ export async function imageForward({ req, res, pathname, ctx }) {
     return fail(res, quotaish ? 429 : 502,
       quotaish ? "IMAGE_UPSTREAM_QUOTA" : "IMAGE_UPSTREAM_ERROR",
       quotaish
-        ? "平台的生图服务额度已用尽或被限速（不是你的张数），请联系管理员。你今天的张数没有被扣。"
+        ? "平台的生图服务额度已用尽或被限速（不是你的积分），请联系管理员。本次没有扣费。"
         : `生图失败（上游 ${up.status}）。请稍后重试；持续如此请联系管理员。`,
       { upstreamStatus: up.status })
   }
@@ -189,18 +211,20 @@ export async function imageForward({ req, res, pathname, ctx }) {
     log(`[img] ${user.username} 上游 200 但没有图片 URL：${(up.text || "").slice(0, 200)}`)
     audit("img.no_image", { actor: user.username, ip, detail: (up.text || "").slice(0, 200) })
     // 【不扣额度】用户什么都没拿到
-    return fail(res, 502, "IMAGE_NO_RESULT", "生图服务没有返回图片，请重试（本次不计入你的张数）")
+    return fail(res, 502, "IMAGE_NO_RESULT", "生图服务没有返回图片，请重试（本次不扣积分）")
   }
 
-  // ---- ⑥ 成功才计数 ----
-  const usedAfter = ctx.recordImage(user.id)
-  audit("img.generate", { actor: user.username, ip, detail: `${model} ${size} ${usedAfter}/${limit || "∞"} ${Date.now() - t0}ms` })
-  log(`[img] ${user.username} 出图成功 ${model} ${size}（今日 ${usedAfter}/${limit || "不限"}，${Date.now() - t0}ms）`)
+  // ---- ⑥ 成功才入同一笔消费账 ----
+  ctx.recordUsage(user.id, { model, provider: "DashScope image", cost_usd: cost })
+  const usedAfter = ctx.todayCost(user.id)
+  audit("img.generate", { actor: user.username, ip, detail: `${model} ${size} ¥${cost}，今日 ¥${usedAfter.toFixed(4)}，${Date.now() - t0}ms` })
+  log(`[img] ${user.username} 出图成功 ${model} ${size}（¥${cost}；今日 ¥${usedAfter.toFixed(4)}，${Date.now() - t0}ms）`)
 
   return json(res, 200, {
     ok: true,
     images: urls,
     model,
-    quota: { used: usedAfter, limit, remain: limit > 0 ? Math.max(0, limit - usedAfter) : null, unlimited: limit === 0 },
+    cost,
+    credits: Math.ceil(credits(cost) * 10) / 10,
   })
 }

@@ -830,8 +830,8 @@ export function resolveEntitlement(db, user) {
     maxConc: Math.max(0, Math.floor(Number(t?.max_conc) || 0)),
     // 每天可生成几张图（0 = 不限，与 daily 同口径）。没有档位时给 0 而不是默认值：
     // 走到这儿说明 tier 已经被删了，此时"不限"是既有 num() 对所有额度的一致行为，别在这条上搞特例。
-    imgDaily: t ? Math.max(0, Math.floor(Number(t.img_daily) || 0)) : 0,
-    // 每天可识别几次图片（0 = 不限）。档位被删时给 0 的理由同 imgDaily。
+    // img_daily 是旧版按张数限额留下的兼容列；生图现已按金额计入 daily/monthly，总额度是唯一闸。
+    // 每天可识别几次图片（0 = 不限）。
     ocrDaily: t ? Math.max(0, Math.floor(Number(t.ocr_daily) || 0)) : 0,
     // 定时任务能到什么程度：off / preset / full。档位被删或值不认识 → off。
     // 【认不出就 off，不是 full】这条链路的失败方向必须是"少给"：多给的代价是用户不在场时烧钱。
