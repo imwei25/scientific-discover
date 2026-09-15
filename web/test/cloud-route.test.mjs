@@ -354,6 +354,7 @@ test("模型清单来自服务器：后台加了模型 → 刷新档案就能选
   assert.deepEqual(m.json.models.map((x) => x.model), ["tier-model", "fast"])
   assert.equal(m.json.models[1].label, "快模型")
   assert.equal(m.json.models[1].provider, "硅基流动")
+  assert.equal(m.json.models[1].usageMultiplier, null, "没有 GLM-5.3-flash 基准价时不展示估算倍率")
 })
 
 test("切模型：云端账号形态下能切，选中的模型跨重启保住", async (t) => {

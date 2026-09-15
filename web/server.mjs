@@ -6444,7 +6444,8 @@ export const server = http.createServer(async (req, res) => {
         ok: true, route,
         current: MODEL.modelID,
         default: Cloud.loadState()?.profile?.model || "",
-        models: list.map((m) => ({ model: m.model, label: m.label || m.model, provider: m.providerName || m.provider || "" })),
+        // 倍率由服务端用当前价格算好；本机只显示，避免客户端与服务端价格版本不一致。
+        models: list.map((m) => ({ model: m.model, label: m.label || m.model, provider: m.providerName || m.provider || "", usageMultiplier: m.usageMultiplier ?? null })),
       }))
     }
     // 本机存下来的凭证档：使用 / 删除（列表随 GET /api/model 一起出，不另开一条）

@@ -1740,6 +1740,7 @@
   .msel .mitem { display: flex; align-items: center; gap: 6px; padding: 7px 8px; border-radius: 6px; cursor: pointer; font-size: 13px; color: var(--text); }
   .msel .mitem:hover { background: #f3f6fb; }
   .msel .mitem.cur { color: var(--accent-deep); font-weight: 600; }
+  .msel .mmult { margin-left: auto; color: var(--faint); font-size: 11px; font-weight: 500; white-space: nowrap; }
   .modal { position: fixed; inset: 0; z-index: 70; display: none; align-items: center; justify-content: center; background: rgba(20,32,54,.35); backdrop-filter: blur(4px); padding: 24px; }
   .modal.on { display: flex; }
   /* ---- 登录闸：没登录（或没改密）时，聊天界面根本不该露出来 ----
@@ -2896,7 +2897,7 @@ document.getElementById("logoutBtn").innerHTML = ic("logout") + "<span>退出登
     try {
       const s = await (await fetch("api/models")).json()
       if (s && s.models && s.models.length) {
-        models = s.models.map(function (x) { return { id: x.model, label: x.label || x.model, prov: x.provider || "" } })
+        models = s.models.map(function (x) { return { id: x.model, label: x.label || x.model, prov: x.provider || "", multiplier: x.usageMultiplier } })
         prov = models.length && models.every(function (x) { return x.prov === models[0].prov }) ? models[0].prov : ""
       }
     } catch (e) { /* 老服务端没有这条接口，落到下面的 siblings */ }
@@ -2917,8 +2918,14 @@ document.getElementById("logoutBtn").innerHTML = ic("logout") + "<span>退出登
     const warn = stale ? '<span style="color:#b03a34" title="这个模型已不在你的账号档位内，实际每轮会被替换成档位默认模型。点开选一个，或到「云端账号」点刷新">⚠ </span>' : ''
     sel.innerHTML = '<div class="mpill' + (stale ? ' stale' : '') + '" id="mpill" title="点击切换模型">' + warn + '🧠 ' + (prov ? '<span style="opacity:.7">' + prov + '</span> · ' : '') + '<b>' + ((curItem && curItem.label) || cur) + '</b> ▾</div><div class="mmenu" id="mmenu"></div>'
     const menu = sel.querySelector("#mmenu")
+    const multiplierText = function (v) {
+      const n = Number(v)
+      if (!Number.isFinite(n) || n < 0) return ''
+      const shown = n >= 10 ? n.toFixed(0) : (n >= 1 ? n.toFixed(1) : n.toFixed(2)).replace(/0+$/, '').replace(/\.$/, '')
+      return '<span class="mmult" title="按 90% 输入 + 10% 输出价格估算；GLM-5.3-flash = 1×">约 ' + shown + '×</span>'
+    }
     menu.innerHTML = (stale ? '<div class="mprov" style="color:#b03a34">当前模型「' + cur + '」已不在你的档位内，请选一个下面的</div>' : '')
-      + (prov ? '<div class="mprov">' + prov + ' · 可选模型</div>' : '') + (models.length ? models.map(function (m) { return '<div class="mitem' + (m.id === cur ? ' cur' : '') + '" data-m="' + m.id + '">' + (m.id === cur ? '✓ ' : '') + m.label + (m.prov && !prov ? ' <span style="opacity:.6">· ' + m.prov + '</span>' : '') + '</div>' }).join("") : '<div class="mprov">无可选模型</div>')
+      + (prov ? '<div class="mprov">' + prov + ' · 可选模型</div>' : '') + (models.length ? models.map(function (m) { return '<div class="mitem' + (m.id === cur ? ' cur' : '') + '" data-m="' + m.id + '">' + (m.id === cur ? '✓ ' : '') + m.label + (m.prov && !prov ? ' <span style="opacity:.6">· ' + m.prov + '</span>' : '') + multiplierText(m.multiplier) + '</div>' }).join("") : '<div class="mprov">无可选模型</div>')
     sel.querySelector("#mpill").onclick = function (e) { e.stopPropagation(); menu.classList.toggle("on") }
     menu.querySelectorAll(".mitem").forEach(function (it) { it.onclick = async function () { const m = it.dataset.m; menu.classList.remove("on"); if (m !== cur) await pick(m) } })
   }

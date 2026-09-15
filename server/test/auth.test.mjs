@@ -213,6 +213,19 @@ test("/api/me：返回档位、模型、技能与用量", async (t) => {
   assert.equal(me.json.profile.usage.today, 0)
 })
 
+test("/api/me：模型消耗倍率以 GLM-5.3-flash 为 1×，按 90% 输入 + 10% 输出估算", async (t) => {
+  const { app, admin } = await setup(); t.after(() => app.close())
+  await admin("/admin/api/provider", { method: "POST", body: { key: "zhipu", name: "智谱", baseURL: "https://example.test/v1", apiKey: "sk-test" } })
+  await admin("/admin/api/model", { method: "POST", body: { items: [
+    { model: "GLM-5.3-flash", provider: "zhipu", priceIn: 1, priceOut: 3, priceCached: 0 },
+    { model: "premium", provider: "zhipu", priceIn: 3, priceOut: 9, priceCached: 0 },
+  ] } })
+  await admin("/admin/api/tier", { method: "POST", body: { key: "plus", dailyUSD: 1, model: "GLM-5.3-flash", models: "premium" } })
+  const u = await makeReadyUser(app, admin, "multiplier-user", "倍率用户", { tier: "plus" })
+  const me = await app.req("/api/me", { headers: { authorization: "Bearer " + u.access } })
+  assert.deepEqual(me.json.profile.models.map((m) => m.usageMultiplier), [1, 3])
+})
+
 // ---- key 生命周期 ----
 test("key：伪造/篡改/过期 都认不出来", async (t) => {
   const { app, admin } = await setup(); t.after(() => app.close())

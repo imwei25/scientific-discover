@@ -282,6 +282,19 @@ function quotaOf(user, ent = DB.resolveEntitlement(db, user)) {
 }
 
 function profileOf(user, ent = DB.resolveEntitlement(db, user)) {
+  // 模型菜单里的「消耗倍率」不是另一套计费规则，而是帮助用户在切换前横向比较。
+  // 以目录中 GLM-5.3-flash 的现价为 1×，按常见的一轮构成（90% 输入、10% 输出）估算；
+  // 单价仍以每个模型目录条目的实际配置为准，管理员改价后下次刷新档案就会同步更新。
+  const weightedPrice = (price) => price && 0.9 * Number(price.input) + 0.1 * Number(price.output)
+  const baseline = DB.modelInfo(db, ["GLM-5.3-flash"])[0]?.price
+  const baselineWeighted = weightedPrice(baseline)
+  const models = DB.modelInfo(db, ent.models).map((m) => {
+    const weighted = weightedPrice(m.price)
+    const usageMultiplier = baselineWeighted > 0 && Number.isFinite(weighted) && weighted >= 0
+      ? Math.round((weighted / baselineWeighted) * 10000) / 10000
+      : null
+    return { ...m, usageMultiplier }
+  })
   return {
     username: user.username,
     displayName: user.display_name,
@@ -289,7 +302,7 @@ function profileOf(user, ent = DB.resolveEntitlement(db, user)) {
     position: user.position,
     tier: ent.tier,
     model: ent.model,                      // 默认模型
-    models: DB.modelInfo(db, ent.models),  // 可选模型（含中文名/供应商/单价），客户端下拉就用它
+    models,                                // 可选模型（含中文名/供应商/单价/消耗倍率），客户端下拉就用它
     skills: ent.skills,                    // [] = 不限（全部技能）
     // 定时任务：这个档能到什么程度（off 不显示 / preset 只能用模板 / full 自由指令），
     // 以及跑任务时【强制】用哪个模型（'' = 用该档默认模型）。客户端据此决定按钮出不出、
