@@ -1781,12 +1781,12 @@
   body.locked #cloudModal #cloudPaneLogin,
   body.locked #cloudModal #cloudPanePw { display: flex; flex-direction: column; align-items: flex-end; }
   body.locked #cloudModal .mm-field { margin: 0 0 10px; width: 240px; }
-  body.locked #cloudModal .mm-field > span { color: rgba(255,255,255,.4); font-size: 10px; font-weight: 400;
+  body.locked #cloudModal .mm-field > span { color: rgba(255,255,255,.68); font-size: 15px; font-weight: 600;
     letter-spacing: .18em; text-transform: uppercase; margin: 0 0 5px 16px; }
   body.locked #cloudModal .mm-input { width: 240px; padding: 11px 20px; border-radius: 999px;
     background: rgba(4,7,10,.72); backdrop-filter: blur(16px) saturate(1.2); -webkit-backdrop-filter: blur(16px) saturate(1.2);
     border: 1px solid rgba(255,255,255,.1); box-shadow: 0 2px 16px rgba(0,0,0,.4);
-    color: rgba(255,255,255,.9); font-size: 13px; }
+    color: rgba(255,255,255,.96); font-size: 15px; font-weight: 500; }
   body.locked #cloudModal .mm-input:focus { border-color: rgba(255,255,255,.24); box-shadow: 0 2px 16px rgba(0,0,0,.4); }
   body.locked #cloudModal .mm-hint, body.locked #cloudModal .mm-msg { max-width: 300px; text-align: right; }
   body.locked #cloudModal .mm-hint { color: rgba(255,255,255,.42); }
@@ -1797,7 +1797,7 @@
   body.locked #cloudModal .mm-btn.primary { width: 240px; padding: 11px 20px; border-radius: 999px;
     background: rgba(4,7,10,.72); backdrop-filter: blur(16px) saturate(1.2); -webkit-backdrop-filter: blur(16px) saturate(1.2);
     border: 1px solid rgba(255,255,255,.14); color: rgba(255,255,255,.85);
-    font-size: 11px; font-weight: 400; letter-spacing: .22em; text-transform: uppercase; }
+    font-size: 15px; font-weight: 500; letter-spacing: normal; text-transform: none; }
   body.locked #cloudModal .mm-btn.primary:hover:not(:disabled) { background: rgba(4,7,10,.92); border-color: rgba(255,255,255,.28); color: #fff; filter: none; }
   /* 窄屏：胶囊回到底部居中，主视觉整体上移（与 login.html 的窄屏规则一致） */
   @media (max-width: 767px) {
@@ -1831,6 +1831,10 @@
   .mm-field { display: block; margin: 10px 0; }
   .mm-field > span { display: block; font-size: 12px; color: var(--muted); margin-bottom: 5px; font-weight: 500; }
   .mm-input { width: 100%; box-sizing: border-box; padding: 9px 11px; border: 1px solid var(--line-hi); border-radius: var(--r-sm); background: #fff; color: var(--text); font-size: 13px; outline: none; transition: border-color .15s, box-shadow .15s; }
+  /* 云端登录框的字段需要比通用设置项更醒目，避免和辅助信息混在一起。 */
+  #cloudModal .mm-field > span { font-size: 15px; font-weight: 600; color: var(--text); }
+  #cloudModal .mm-input { font-size: 15px; font-weight: 500; }
+  #cloudModal .mm-btn.primary { font-size: 15px; font-weight: 500; letter-spacing: normal; text-transform: none; }
   .mm-input:focus { border-color: var(--cyan); box-shadow: 0 0 0 3px rgba(59,111,212,.14); }
   .mm-select { cursor: pointer; appearance: none; background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%235b6b82' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='m6 9 6 6 6-6'/></svg>"); background-repeat: no-repeat; background-position: right 10px center; padding-right: 32px; }
   .mm-msg { font-size: 12px; line-height: 1.6; margin: 12px 0 2px; min-height: 18px; white-space: pre-wrap; word-break: break-word; }
@@ -2680,13 +2684,13 @@
     <div class="modal-body">
       <div id="cloudPaneLogin">
         <label class="mm-field"><span>账号</span><input id="clUser" class="mm-input" type="text" autocomplete="username" spellcheck="false" /></label>
-        <label class="mm-field"><span>口令</span><input id="clPass" class="mm-input" type="password" autocomplete="current-password" /></label>
+        <label class="mm-field"><span>密码</span><input id="clPass" class="mm-input" type="password" autocomplete="current-password" /></label>
       </div>
       <div id="cloudPanePw" style="display:none">
-        <div class="mm-hint" style="margin:0 0 14px">首次登录必须修改口令后才能使用。新口令要求：至少 8 位，含大小写字母、数字、特殊字符。</div>
-        <label class="mm-field"><span>当前口令</span><input id="clOld" class="mm-input" type="password" autocomplete="current-password" /></label>
-        <label class="mm-field"><span>新口令</span><input id="clNew" class="mm-input" type="password" autocomplete="new-password" /></label>
-        <label class="mm-field"><span>确认新口令</span><input id="clNew2" class="mm-input" type="password" autocomplete="new-password" /></label>
+        <div class="mm-hint" style="margin:0 0 14px">首次登录必须修改密码后才能使用。新密码要求：至少 8 位，含大小写字母、数字、特殊字符。</div>
+        <label class="mm-field"><span>当前密码</span><input id="clOld" class="mm-input" type="password" autocomplete="current-password" /></label>
+        <label class="mm-field"><span>新密码</span><input id="clNew" class="mm-input" type="password" autocomplete="new-password" /></label>
+        <label class="mm-field"><span>确认新密码</span><input id="clNew2" class="mm-input" type="password" autocomplete="new-password" /></label>
       </div>
       <div id="cloudPaneInfo" style="display:none"></div>
       <div class="mm-msg info" id="clMsg"></div>
@@ -8714,7 +8718,7 @@ function clShow(mode, st) {
   document.getElementById("cloudPanePw").style.display = mode === "pw" ? "" : "none"
   document.getElementById("cloudPaneInfo").style.display = mode === "info" ? "" : "none"
   // 登录态不写标题：登录页只留账号/口令两栏，文案一概不要（改动来自用户要求）
-  document.getElementById("cloudTitle").textContent = mode === "login" ? "" : mode === "pw" ? "首次登录请修改口令" : "云端账号"
+  document.getElementById("cloudTitle").textContent = mode === "login" ? "" : mode === "pw" ? "首次登录请修改密码" : "云端账号"
   document.getElementById("clGo").textContent = mode === "login" ? "登录" : mode === "pw" ? "修改并继续" : "刷新"
   document.getElementById("clLogout").style.display = mode === "info" ? "" : "none"
   if (mode === "info" && st) {
@@ -8783,7 +8787,7 @@ async function openCloud(force) {
     const st = await (await fetch("api/cloud/status", { signal: AbortSignal.timeout(8000) })).json()
     if (!st.loggedIn) clShow("login")
     else if (st.mustChangePassword) clShow("pw")
-    else if (cloudLocked()) { clShow("login"); clMsg("info", "闲置超时已锁屏。输入口令解锁——登录态和后台正在跑的任务都还在。") }
+    else if (cloudLocked()) { clShow("login"); clMsg("info", "闲置超时已锁屏。输入密码解锁——登录态和后台正在跑的任务都还在。") }
     else clShow("info", st)
   } catch { clShow("login") }   // 状态问不出来一律按"要登录"处理：宁可多挡一次，也别把人放进聊天界面
 }
@@ -8835,7 +8839,7 @@ document.getElementById("clGo").addEventListener("click", async () => {
     if (clMode === "login") {
       const username = document.getElementById("clUser").value.trim()
       const password = document.getElementById("clPass").value
-      if (!username || !password) return clMsg("err", "请填写账号与口令")
+      if (!username || !password) return clMsg("err", "请填写账号与密码")
       clMsg("info", "登录中…")
       const r = await cloudPost("login", { username, password }); if (!r) return
       if (!r.ok) return clMsg("err", r.err || "登录失败")
@@ -8844,13 +8848,13 @@ document.getElementById("clGo").addEventListener("click", async () => {
       const unlock = cloudLocked()
       setCloudLocked(false)   // 口令对上了 → 解锁（闲置锁屏就是从这里放行的）
       document.getElementById("clPass").value = ""
-      if (r.mustChangePassword) { clShow("pw"); return clMsg("info", "请先修改口令") }
+      if (r.mustChangePassword) { clShow("pw"); return clMsg("info", "请先修改密码") }
       clMsg("ok", unlock ? "已解锁，页面即将刷新…" : "已登录，正在进入…")
       setTimeout(() => (unlock ? location.reload() : gotoWorkspace()), 1000)
     } else if (clMode === "pw") {
       const oldPassword = document.getElementById("clOld").value
       const newPassword = document.getElementById("clNew").value
-      if (newPassword !== document.getElementById("clNew2").value) return clMsg("err", "两次输入的新口令不一致")
+      if (newPassword !== document.getElementById("clNew2").value) return clMsg("err", "两次输入的新密码不一致")
       // 这一步会重配模型并重启后台（几十秒），先把话说在前面，别让用户以为卡死了
       clMsg("info", "提交中…改完要重启后台模型进程，大约需要半分钟，请勿关闭窗口")
       const r = await cloudPost("password", { oldPassword, newPassword }); if (!r) return
@@ -10187,7 +10191,7 @@ document.addEventListener("visibilitychange", () => { if (!document.hidden) refr
       setCloudLocked(true)
       clShow("login")
       cloudModal.classList.add("on")
-      clMsg("info", "闲置超时已锁屏。输入口令解锁——登录态和后台正在跑的任务都还在。")
+      clMsg("info", "闲置超时已锁屏。输入密码解锁——登录态和后台正在跑的任务都还在。")
       out = false; bump()          // 解锁后还要能再次触发锁屏，闲置计时也从此刻重新算
       return
     }
@@ -10214,7 +10218,7 @@ document.addEventListener("visibilitychange", () => { if (!document.hidden) refr
     var idle = Date.now() - last
     if (idle >= LOGOUT_MS) { ov.style.display = "none"; logout(true); return }
     // 措辞对两种形态都成立：桌面/云端账号形态是锁屏（登录态与在跑的轮都留着），局域网形态是真登出
-    if (idle >= WARN_MS) { txt.textContent = "你已闲置较久，将在 " + fmt(LOGOUT_MS - idle) + " 后自动锁定，届时需重新输入口令。移动鼠标或点“继续使用”即可保持。"; ov.style.display = "flex" }
+    if (idle >= WARN_MS) { txt.textContent = "你已闲置较久，将在 " + fmt(LOGOUT_MS - idle) + " 后自动锁定，届时需重新输入密码。移动鼠标或点“继续使用”即可保持。"; ov.style.display = "flex" }
     else if (ov.style.display !== "none") ov.style.display = "none"
   }, 1000)
 })()
