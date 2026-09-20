@@ -23,12 +23,14 @@ from __future__ import annotations
 
 import argparse
 import csv
+import hashlib
 import json
 import os
 import re
 import shutil
 import sys
 import urllib.error
+import urllib.parse
 import urllib.request
 from pathlib import Path
 
@@ -44,6 +46,8 @@ _API = f"{ZOTERO_BASE}/api/users/0"      # 本地库 userID 恒为 0
 _CONNECTOR = f"{ZOTERO_BASE}/connector"
 _PROBE_TIMEOUT = 1.5
 _IO_TIMEOUT = 4.0
+# 附件是整份 PDF（几 MB 起步）+ Zotero 端要落盘建索引，4s 明显不够。
+_ATTACH_TIMEOUT = 60.0
 _UA = "sci-skill-zotero-library/1.0"
 
 # 只当作"文献型"条目导入；附件/笔记/独立标签跳过。
@@ -427,8 +431,27 @@ def _push_key(r: dict) -> str:
     return "t:" + title + "|" + str(r.get("year") or "")
 
 
-def build_push_payload(refs: list[dict]) -> dict:
+def _item_id(r: dict) -> str:
+    """条目在本次 push 里的局部 id。saveAttachment 靠它（parentItemID）认爹，
+    所以必须稳定且在同一 session 内唯一——用去重键的摘要，天然满足这两点。"""
+    return "it" + hashlib.md5(_push_key(r).encode("utf-8")).hexdigest()[:10]
+
+
+def compute_session_id(refs: list[dict]) -> str:
+    """sessionID 由**内容**决定，而不是一个写死的常量。
+
+    Zotero 在一个 session 内会把重复保存的条目认成同一次操作；沿用一个固定串
+    （旧实现的 "sci-skill-zotero"）意味着一个会话里推第二批、第三批不同文献时，
+    Zotero 仍当成"上一次那批又来了"，行为不可预期。按内容取摘要后：
+      · 同一批重复推 → 同一个 session → Zotero 自己去重，幂等；
+      · 不同批 → 不同 session → 互不干扰。"""
+    key = json.dumps([_push_key(r) for r in refs], ensure_ascii=False, sort_keys=True)
+    return "sci-" + hashlib.md5(key.encode("utf-8")).hexdigest()[:12]
+
+
+def build_push_payload(refs: list[dict], session_id: str | None = None) -> dict:
     items = [{
+        "id": _item_id(r),
         # 保留原条目类型：硬写 journalArticle 会把会议论文/书章/预印本全变成期刊论文，
         # 之后在 Zotero 里再也分不出来。缺失才回落 journalArticle。
         "itemType": r.get("itemType") or r.get("item_type") or "journalArticle",
@@ -436,9 +459,92 @@ def build_push_payload(refs: list[dict]) -> dict:
         "creators": _push_creators(r), "date": str(r.get("year") or ""),
         "DOI": r.get("doi") or "", "url": r.get("url") or "",
         "publicationTitle": r.get("journal") or "", "abstractNote": r.get("abstract") or "",
+        # 留空：PDF 由我们用本地文件走 saveAttachment 推，不让 Zotero 自己去联网下
+        # ——它下不到付费墙内的，只会白白留一个失败的附件壳。
+        "attachments": [],
     } for r in refs]
-    return {"sessionID": "sci-skill-zotero", "items": items,
+    return {"sessionID": session_id or compute_session_id(refs), "items": items,
             "uri": "https://sci-skill.local"}
+
+
+# ---------------------------------------------------------------- PDF 附件回写
+def _norm_doi(doi: str) -> str:
+    d = (doi or "").strip().lower()
+    return re.sub(r"^https?://(dx\.)?doi\.org/", "", d)
+
+
+def _safe_doi_name(doi: str) -> str:
+    """与 fulltext-retrieval/fetch_oa.py 的 safe_doi_name 保持一致（它按这个命名落盘）。
+    两处必须同规则，否则配不上号——改一处就要改另一处。"""
+    return re.sub(r"[^\w\-.]", "_", doi)
+
+
+def build_pdf_index(pdf_dir: str | None, report: str | None) -> dict[str, Path]:
+    """DOI（规范化）→ 本地 PDF 路径。两个来源，可叠加：
+
+    · --report retrieval_report.json：fulltext-retrieval 的逐条报告，最准
+      （它自己记了每个 DOI 落到哪个文件，含机构通道下到的）；
+    · --pdf-dir：直接扫目录，按 fetch_oa 的命名规则 {safe_doi_name}.pdf 倒推 DOI。
+    """
+    index: dict[str, Path] = {}
+    if report:
+        rp = Path(report)
+        try:
+            data = json.loads(rp.read_text(encoding="utf-8"))
+        except Exception as e:  # noqa: BLE001
+            raise ValueError(f"读不了 {report}：{e}") from e
+        # 报告里存的是文件名，不是路径。先在报告自己所在目录找（fetch_oa 就是把两者
+        # 写在一起的），再退到 --pdf-dir——这样"报告在 A 目录、PDF 被挪到 B 目录"也配得上。
+        bases = [rp.parent] + ([Path(pdf_dir)] if pdf_dir else [])
+        for it in data.get("items", []):
+            doi, fname = _norm_doi(it.get("doi", "")), (it.get("file") or "")
+            if not doi or not fname:
+                continue
+            for base in bases:
+                p = base / fname
+                if p.is_file():
+                    index[doi] = p
+                    break
+    if pdf_dir:
+        d = Path(pdf_dir)
+        if not d.is_dir():
+            raise ValueError(f"{pdf_dir} 不是目录")
+        for p in d.glob("*.pdf"):
+            stem = p.stem
+            # 反查：拿已知 DOI 算出的 safe name 去对，比从 stem 反解 DOI 可靠
+            index.setdefault(f"__stem__{stem}", p)
+    return index
+
+
+def lookup_pdf(ref: dict, index: dict[str, Path]) -> Path | None:
+    doi = _norm_doi(ref.get("doi", ""))
+    if not doi:
+        return None
+    if doi in index:
+        return index[doi]
+    return index.get(f"__stem__{_safe_doi_name(doi)}")
+
+
+def push_attachment(session_id: str, parent_id: str, title: str,
+                    url: str, pdf: Path) -> None:
+    """把一个本地 PDF 挂到刚 saveItems 进去的条目下。
+
+    走 Zotero connector 的 /connector/saveAttachment：元数据放 X-Metadata 头
+    （JSON），正文是 PDF 原始字节。parentItemID 必须等于 saveItems 里那条的 id，
+    且两次请求用同一个 sessionID，Zotero 才认得出爹是谁。"""
+    meta = {"sessionID": session_id, "parentItemID": parent_id,
+            "title": title or pdf.name, "url": url or "",
+            "contentType": "application/pdf"}
+    data = pdf.read_bytes()
+    req = urllib.request.Request(
+        f"{_CONNECTOR}/saveAttachment?sessionID={urllib.parse.quote(session_id)}",
+        data=data, method="POST",
+        headers={"User-Agent": _UA, "Content-Type": "application/pdf",
+                 "Content-Length": str(len(data)),
+                 "X-Metadata": json.dumps(meta, ensure_ascii=False),
+                 "X-Zotero-Connector-API-Version": "3.0"})
+    with urllib.request.urlopen(req, timeout=_ATTACH_TIMEOUT) as r:  # noqa: S310
+        r.read()
 
 
 def filter_pushable(refs: list[dict]) -> tuple[list[dict], dict]:
@@ -550,19 +656,64 @@ def cmd_push(args) -> None:
                           "hint": "这些条目本来就来自你的 Zotero（或重复/无标题），回写会产生重复条目，已全部跳过",
                           **stats}, ensure_ascii=False))
         sys.exit(0)
+    # PDF 配对：题录进库后，把本地已下到的全文一并挂上去（--pdf-dir / --report）。
+    pdf_index: dict[str, Path] = {}
+    if args.pdf_dir or args.report:
+        try:
+            pdf_index = build_pdf_index(args.pdf_dir, args.report)
+        except ValueError as e:
+            print(json.dumps({"ok": False, "error": "bad_pdf_source",
+                              "detail": str(e)}, ensure_ascii=False))
+            sys.exit(2)
+    paired = [(r, p) for r in pushable if (p := lookup_pdf(r, pdf_index))]
+    stats["with_pdf"] = len(paired)
+    stats["without_pdf"] = len(pushable) - len(paired)
+
     # --dry-run：只报会写什么，不真写。写操作不可回滚，给调用方一个先看后写的机会。
     if getattr(args, "dry_run", False):
         print(json.dumps({"ok": True, "dry_run": True,
-                          "would_push": [r.get("title") for r in pushable], **stats},
+                          "would_push": [r.get("title") for r in pushable],
+                          "would_attach": [str(p) for _, p in paired], **stats},
                          ensure_ascii=False))
         return
+
+    session_id = compute_session_id(pushable)
     try:
-        _post_json(f"{_CONNECTOR}/saveItems", build_push_payload(pushable),
+        _post_json(f"{_CONNECTOR}/saveItems",
+                   build_push_payload(pushable, session_id),
                    timeout=_IO_TIMEOUT + 3,
                    headers={"X-Zotero-Connector-API-Version": "3.0"})
+    except urllib.error.HTTPError as e:
+        if e.code != 409:
+            _zotero_down(f"HTTP {e.code}: {e.reason}")
+        # 409 = 这个 sessionID 已经被用过。因为 sessionID 是按内容算的，这恰恰说明
+        # **同一批文献刚才已经推过了**，Zotero 拒收重复——实测确认库里不会多出条目。
+        # 这是幂等生效，不是故障；旧代码把它当成"Zotero 不可达"报出去，会让用户去
+        # 排查一个根本不存在的连接问题。
+        print(json.dumps({"ok": True, "already_pushed": True, "pushed": 0,
+                          "attached": 0,
+                          "hint": "这批文献此前已推送过（sessionID 按内容计算，Zotero 拒收"
+                                  "重复），库里未重复写入。要重推请先改动条目集合。",
+                          **stats}, ensure_ascii=False))
+        return
     except Exception as e:  # noqa: BLE001
         _zotero_down(str(e))
-    print(json.dumps({"ok": True, "pushed": len(pushable), **stats}, ensure_ascii=False))
+
+    # 附件逐条推，**单条失败不回滚也不中断**：题录已经进库了，回滚不了（本地 API 无删除
+    # 接口）；一条附件挂不上就如实记下来，让用户知道哪几篇只有题录没有全文。
+    attached, attach_failed = 0, []
+    for r, pdf in paired:
+        try:
+            push_attachment(session_id, _item_id(r), r.get("title") or "",
+                            r.get("url") or "", pdf)
+            attached += 1
+        except Exception as e:  # noqa: BLE001
+            attach_failed.append({"title": r.get("title") or "", "pdf": str(pdf),
+                                  "error": f"{type(e).__name__}: {e}"})
+    out = {"ok": True, "pushed": len(pushable), "attached": attached, **stats}
+    if attach_failed:
+        out["attach_failed"] = attach_failed
+    print(json.dumps(out, ensure_ascii=False))
 
 
 # ---------------------------------------------------------------- 输出
@@ -617,6 +768,13 @@ def main() -> None:
     p.add_argument("--refs", default=None, help="统一 Reference 列表 JSON 文件")
     p.add_argument("--csv", default=None, help="综述产出的 evidence_table.csv")
     p.add_argument("--bib", default=None, help="refs.bib（BibTeX，best-effort 解析）")
+    # 全文附件：题录 + PDF 一起进库。PDF 来自 fulltext-retrieval 已经下到本地的那批。
+    p.add_argument("--pdf-dir", default=None,
+                   help="本地 PDF 目录（fulltext-retrieval 的 pdfs/）：按 DOI 配对，"
+                        "配上的连 PDF 一起挂进 Zotero 条目下")
+    p.add_argument("--report", default=None,
+                   help="fulltext-retrieval 的 retrieval_report.json：比扫目录更准，"
+                        "它逐条记了哪个 DOI 落到哪个文件（含机构通道下到的）")
     # Zotero 本地 API 只读、没有删除接口 → 回写不可程序化回滚。先 dry-run 看清楚再真写。
     p.add_argument("--dry-run", action="store_true",
                    help="只报会写入哪些条目，不真写（写操作不可回滚，建议先跑一次）")

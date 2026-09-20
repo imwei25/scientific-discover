@@ -19,6 +19,7 @@ title cross-check (via `pdftotext` if installed) that flags mislabeled PDFs.
 import argparse
 import csv
 import http.client
+import http.cookiejar
 import io
 import json
 import logging
@@ -26,6 +27,7 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 import time
 import urllib.error
 import urllib.parse
@@ -40,6 +42,14 @@ USER_AGENT = "medsci-skills/1.0"
 BROWSER_UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
               "(KHTML, like Gecko) Chrome/124.0 Safari/537.36")
 REPORT_SCHEMA_VERSION = 1
+
+# 全局 cookie jar：出版商落地页常先下发一个会话 cookie（尤其**机构 IP 授权**场景——
+# doi.org → 出版商 → 站点用 cookie 记住"这个访客来自已订购 IP"），随后的 PDF 直链
+# 才认账。裸 urlopen 不带 cookie，等于每次都当陌生访客，IP 授权白白用不上。
+# 只在进程内存活、不落盘；仅 fetch_bytes（网页/PDF 抓取）走它，
+# 各 OA API 的 JSON 调用保持原样（它们不需要也不该带 cookie）。
+_COOKIE_JAR = http.cookiejar.CookieJar()
+_OPENER = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(_COOKIE_JAR))
 TITLE_MATCH_THRESHOLD = 0.6
 RETRIEVED_STATUSES = ("oa", "pmc", "arxiv", "skip")
 
@@ -48,6 +58,14 @@ RETRIEVED_STATUSES = ("oa", "pmc", "arxiv", "skip")
 # 传输被截断时 IncompleteRead 逃逸、拖垮整批下载且不出报告。这里统一纳入。
 TRANSIENT_ERRORS = (urllib.error.URLError, urllib.error.HTTPError,
                     http.client.HTTPException, OSError)
+
+# 同 fetch_institutional.py：Windows 控制台 GBK 编不出进度里的符号，不强制 UTF-8
+# 会在打印时崩掉。
+for _s in (sys.stdout, sys.stderr):
+    try:
+        _s.reconfigure(encoding="utf-8")  # type: ignore[union-attr]
+    except Exception:  # noqa: BLE001
+        pass
 
 log = logging.getLogger("fetch_oa")
 
@@ -115,7 +133,7 @@ def fetch_bytes(url: str, email: str, accept: str = "*/*",
     for attempt in range(retries + 1):
         try:
             req = urllib.request.Request(url, headers=headers)
-            with urllib.request.urlopen(req, timeout=timeout) as resp:
+            with _OPENER.open(req, timeout=timeout) as resp:
                 return resp.read(), resp.geturl(), resp.headers.get("Content-Type", "")
         except http.client.IncompleteRead as e:
             # 截断但已拿到部分字节：若已是合法 PDF 就用它，否则退避重试。
@@ -523,31 +541,52 @@ def scrape_pdf_candidates(html: str) -> list[str]:
     patterns = [
         r'citation_pdf_url"\s+content="([^"]+)"',
         r"name=\"citation_pdf_url\"\s+content=\"([^\"]+)\"",
+        # content 在前、name 在后的写法（部分出版商如此输出，旧正则整条漏掉）
+        r'content="([^"]+)"\s+name="citation_pdf_url"',
         r'href="([^"]+\.pdf[^"]*)"',
+        # 无 .pdf 后缀的全文直链：Wiley /doi/pdfdirect/、/doi/epdf/，
+        # 多数平台的 /article/.../pdf。与机构通道 _COLLECT_JS 的规则保持一致。
+        r'href="([^"]*/(?:pdf|epdf|pdfdirect)/[^"]*)"',
     ]
     found = []
     for pat in patterns:
         for m in re.findall(pat, html, flags=re.IGNORECASE):
             if m not in found:
                 found.append(m)
-    return found
+    return found[:8]
 
 
 def download_from_landing(url: str, outpath: Path, email: str) -> bool:
+    """doi.org → 出版商落地页 → 抓 PDF 直链。
+
+    这是**唯一吃「机构 IP 授权」的一步**：机器的出口 IP 在已订购的机构网段内时，
+    出版商会把订阅 PDF 直接发给我们。所以这里刻意装成普通浏览器访问：
+      ① 浏览器 UA（礼貌 UA 会被 Cloudflare/Akamai 判成机器人，直接吃拦截页）；
+      ② 逐跳带 Referer（落地页 → PDF 直链，缺 Referer 是最常见的 403 原因）；
+      ③ cookie 由全局 jar 接住（见 _OPENER），落地时下发的会话 cookie 在取 PDF 时才认账。
+    即便如此，重 JS 的站点（ScienceDirect/Wiley/T&F/SAGE 等）仍大概率拿不到——
+    那种情况走 fetch_institutional.py 的真实浏览器通道。"""
     try:
-        raw, final_url, ct = fetch_bytes(url, email, accept="text/html,*/*")
+        raw, final_url, ct = fetch_bytes(url, email, accept="text/html,*/*",
+                                         browser_ua=True)
         if "pdf" in ct.lower():
             return save_pdf(raw, outpath)
         html = raw.decode("utf-8", errors="ignore")
+        parsed = urllib.parse.urlparse(final_url)
+        origin = f"{parsed.scheme}://{parsed.netloc}/" if parsed.netloc else url
         for candidate in scrape_pdf_candidates(html):
             absolute = urllib.parse.urljoin(final_url, candidate)
-            try:
-                data, _, _ = fetch_bytes(
-                    absolute, email, accept="application/pdf,*/*")
-                if save_pdf(data, outpath):
-                    return True
-            except TRANSIENT_ERRORS:
-                continue
+            # 先带落地页 Referer（最像真实点击），失败再退回站点根 Referer。
+            referers = [final_url] + ([origin] if origin != final_url else [])
+            for referer in referers:
+                try:
+                    data, _, _ = fetch_bytes(
+                        absolute, email, accept="application/pdf,*/*",
+                        browser_ua=True, referer=referer)
+                    if save_pdf(data, outpath):
+                        return True
+                except TRANSIENT_ERRORS:
+                    continue
     except TRANSIENT_ERRORS as e:
         log.debug("Landing page error for %s: %s", url, e)
     return False

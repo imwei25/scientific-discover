@@ -133,17 +133,32 @@ override with `--report PATH`):
 
 OA 渠道天然拿不到「付费墙内但**机构已订购**」的文献。第二梯队借鉴 nature-downloader 的思路：**不启动新浏览器，而是通过 CDP 挂接用户本机已登录 CARSI / 机构 SSO 的真实 Chrome**，复用其合法授权会话取全文。这是用用户自己的订阅权限，不是绕付费墙。
 
-### 前置（一次性）
+### 前置：什么都不用配，脚本自己起浏览器
+
+**别让用户去敲 `--remote-debugging-port`。** 脚本探测不到调试端口时会**自动**用专用资料目录
+起一个 Chrome（没 Chrome 就用 Edge），用户只会看到弹出一个浏览器窗口。
 
 ```bash
-# 1. 用专用资料目录启动 Chrome 并开 CDP（Chrome 136+ 禁止对默认资料目录开远程调试）
-#    Windows (PowerShell)：
-#    & "C:\Program Files\Google\Chrome\Application\chrome.exe" --remote-debugging-port=9222 --user-data-dir="$env:LOCALAPPDATA\sci-scholar-chrome"
-#    Linux/macOS 命令见脚本 --help / CDP_HELP；没有 Chrome 用 Edge（msedge）也行。
-# 2. 在该窗口经图书馆 / CARSI（www.carsi.edu.cn）登录一次——会话存在专用资料目录，之后直接复用
-# 3. 装可选依赖（只挂接现有 Chrome，不需要 playwright install 下载浏览器内核）
-"${REPO_ROOT:-/app}/.venv/bin/python" -m pip install playwright
+# 想先把浏览器起起来（给用户先登录 / 先确认在校园网里），不下载任何东西：
+python fetch_institutional.py --launch-browser
+# 正常下载时无需任何额外动作——没端口就自动起。要关掉这个行为：--no-auto-launch
 ```
+
+**必须对用户讲清楚的两句话**（否则他会奇怪"怎么又开了个 Chrome、还没我的收藏夹"）：
+
+1. 这是个**独立的浏览器资料目录**（`%LOCALAPPDATA%\sci-scholar-chrome`），和他平时用的
+   Chrome 互不影响。这不是我们想要的，是 **Chrome 136+ 的硬限制**：对默认资料目录开远程
+   调试端口会被直接拒绝，绕不过去。
+2. **IP 授权制（机器就在学校/医院网里）：不用登录任何东西**，空 profile 照样能下。
+   **CARSI / 图书馆账号制**：在这个新窗口里登录一次，会话存在专用目录里，以后一直复用。
+
+自动启动失败的唯一常见原因：**同一个专用资料目录已经有一个没带调试端口的窗口开着**
+（脚本会明说这一条）→ 把那个窗口关掉重跑。找不到浏览器时可用环境变量 `SCI_BROWSER_PATH`
+指定可执行文件路径，或按 `--help` 里的命令手动起。
+
+依赖 playwright：桌面打包版已预装；自建部署若缺则
+`"${REPO_ROOT:-/app}/.venv/bin/python" -m pip install playwright`。
+**不要**跑 `playwright install` 下载浏览器内核——本通道只 attach 用户现有的 Chrome。
 
 ### 用法
 
@@ -153,7 +168,32 @@ python fetch_institutional.py pdfs/manual_needed.txt -o pdfs/
 
 # 也接受 fetch_oa 支持的任何 worklist 格式；限量/限速/CDP 地址可调
 python fetch_institutional.py worklist.tsv -o pdfs/ --max 10 --delay 8 --cdp http://127.0.0.1:9222
+
+# 纯 IP 授权制机构（机器就在校园网/机构网段内）：遇登录墙不等人，直接跳过继续
+python fetch_institutional.py pdfs/manual_needed.txt -o pdfs/ --ip-only
 ```
+
+### 机构是「IP 授权制」时（机器在校园网 / 医院网段内）
+
+这是最省事的一种情形：**出口 IP 在已订购网段内，出版商直接放行，不需要 CARSI、不需要任何登录**。
+要点：
+
+- 仍然要开那个带 CDP 的 Chrome（脚本靠它拿真实浏览器指纹与 cookie），但**不用登录任何东西**，
+  专用资料目录是空的也没关系——IP 授权跟登录态无关。
+- 脚本是**先取 PDF、取不到才判登录墙**（顺序是刻意的）：IP 制下不会出现登录墙，
+  任何"先判认证页"的启发式都只会误判，而一次误判就是白等 `--login-timeout`（默认 240s），
+  20 条能空转一个多小时。
+- 无人值守批量加 `--ip-only`：命中登录墙立刻记 `needs-login` 继续下一条，不停下等人。
+- **失败原因要分开读**（Summary 里有分布，别笼统说"没下到"）：
+  `paywalled` = 落地页还挂着购买入口 → **本机构没订这篇**，走馆际互借；
+  `challenge` = 出版商弹了人机验证（Elsevier/Cell 在非机构网络下最常见）→ **脚本绝不自动过**，
+  让用户去那个 Chrome 窗口手动点一次，同站点之后一般放行，再重跑；
+  `needs-login` = 这家不认 IP、要登录 → 去 Chrome 里经 CARSI/图书馆登录一次，再不带 `--ip-only` 重跑；
+  `no-pdf-link` = 页面上找不到全文直链（多为重 JS 或版式特殊）；
+  带 `-timeout` 后缀的（`challenge-timeout` / `needs-login-timeout`）= 等了用户但超时没处理。
+- `fetch_oa.py` 的最后一步 `landing`（doi.org → 出版商落地页）**也吃 IP 授权**，且它装成普通浏览器访问
+  （浏览器 UA + 逐跳 Referer + 进程内 cookie jar）。所以在机构 IP 上，**OA 主管线本身就会顺带捞回一部分订阅全文**。
+  但重 JS 的站点（ScienceDirect / Wiley / T&F / SAGE 等）它基本拿不到——那些要靠本节的真实浏览器通道。
 
 行为要点：
 
@@ -176,6 +216,10 @@ are hard-coded or leave your Zotero client**. The no-code equivalent is right-cl
 This path is **user-initiated** and depends on your live Zotero session, so its results
 are recorded manually. Run the two routes yourself when needed: disk OA via `fetch_oa.py`
 here, plus the in-library `find_available_pdf.js` snippet inside Zotero.
+
+**已经下到磁盘的 PDF 直接入库**（不必再让 Zotero 联网找一遍）：用 `zotero-library` 的
+`push --report pdfs/retrieval_report.json`，它按 DOI 把本地 PDF 挂成对应条目的附件。
+先 `--dry-run` 看配上几篇；汇报时区分 `pushed`（题录数）与 `attached`（真带全文的数）。
 
 ## Requirements
 
@@ -254,7 +298,7 @@ After conversion, `.md` files sit alongside `.pdf` files. Claude Code can then u
 
 ## Limitations
 
-- `fetch_oa.py` only retrieves **open-access** articles. Paywalled-but-subscribed articles go through `fetch_institutional.py` (requires a same-machine logged-in Chrome; unavailable on the multi-user server — expected, not a bug). Articles the user's institution has **not** licensed fail in both tiers by design.
+- `fetch_oa.py` 主要取 **open-access** 文章；它最后一步的落地页抓取在**机构 IP 授权**下也能捞到一部分订阅全文（见上一节），但对重 JS 的出版商无效。Paywalled-but-subscribed articles go through `fetch_institutional.py` (requires a same-machine logged-in Chrome; unavailable on the multi-user server — expected, not a bug). Articles the user's institution has **not** licensed fail in both tiers by design.
 - The institutional tier is **interactive**: login walls and bot checks are handed to the user, never automated. It is deliberately rate-limited and batch-capped.
 - Landing page scraping may fail on publisher-specific JavaScript-heavy pages.
 - Some recent articles may not yet be indexed by OA sources.

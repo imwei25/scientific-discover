@@ -67,17 +67,32 @@ SK=.opencode/skills/zotero-library/references
 "$PY" "$SK/zotero_read.py" push --refs zotero_lib/zotero_refs.json
 "$PY" "$SK/zotero_read.py" push --csv  evidence_table.csv   # 综述检索结果
 "$PY" "$SK/zotero_read.py" push --bib  refs.bib
+
+# 7b) 连 PDF 一起回写：把 fulltext-retrieval 已下到本地的全文挂到条目下
+"$PY" "$SK/zotero_read.py" push --csv evidence_table.csv \
+    --report pdfs/retrieval_report.json --dry-run     # 先看配上了几篇
+"$PY" "$SK/zotero_read.py" push --csv evidence_table.csv \
+    --report pdfs/retrieval_report.json               # 真写
 ```
 
 ### 把综述检索到的文献导入 Zotero / 会话小库
 
 `search-lit` / `literature-review` 产出 `evidence_table.csv`（含 DOI；多轮检索时是 `evidence_table__<标签>.csv`，先确认要推的是哪一份/合并表）。基于它：
 
-- **→ Zotero**：`push --csv evidence_table.csv`（或 `--bib refs.bib`）把**题录**写进 Zotero 当前选中分类。**只有题录、无 PDF 附件**（检索阶段本就没下全文）。
+- **→ Zotero（只题录）**：`push --csv evidence_table.csv`（或 `--bib refs.bib`）把题录写进 Zotero 当前选中分类。不带 `--report` / `--pdf-dir` 时**只有题录、无 PDF 附件**（检索阶段本就没下全文）。
+- **→ Zotero（题录 + 全文 PDF）**：先跑 `fulltext-retrieval` 把能下的全文下到 `pdfs/`，再
+  `push --csv evidence_table.csv --report pdfs/retrieval_report.json`。它按 DOI 把本地 PDF
+  配到对应条目上，走 Zotero connector 的 `saveAttachment` 挂成附件——**等于"检索 → 下全文 → 带
+  附件入库"一条龙**。也可以用 `--pdf-dir pdfs`（直接扫目录，按 `{DOI 安全名}.pdf` 配对）；两者可叠加，
+  `--report` 更准（它逐条记了哪个 DOI 落到哪个文件，含机构通道下到的）。
+  - **先 `--dry-run`**：输出里的 `with_pdf` / `without_pdf` / `would_attach` 会告诉你到底几篇配上了全文。
+  - **汇报铁律**：结果里 `pushed` 是题录数、`attached` 才是真挂上附件的数，两者**常常不等**。
+    如实说清"N 条进库、其中 M 条带全文、其余只有题录（原因：没下到 OA / 非订阅内）"，
+    `attach_failed` 里的逐条错误也要报出来，**别把"推了 N 条"说成"N 篇全文都进库了"**。
 - **→ 会话小库做 RAG**：小库是 PDF 目录，而检索结果**多数无全文**，所以：
   1. **先用 `fulltext-retrieval` 按 DOI 试下 OA 全文**到 `zotero_lib/`（它的 `retrieval_report.json` / `manual_needed.txt` 会逐条记成功/失败）；
   2. **只把真正下到 PDF 的算入小库**，对该目录 `zotero_rag.py --pdf-dir`；
-  3. **诚实汇报**：哪些下到了全文（已入小库）、哪些没下到（**因此没导入小库**，给原因：非 OA / 无 DOI / OA 源缺失），**绝不假装全部导入**。没全文的仍可 `push` 进 Zotero（只题录）。
+  3. **诚实汇报**：哪些下到了全文（已入小库）、哪些没下到（**因此没导入小库**，给原因：非 OA / 无 DOI / OA 源缺失），**绝不假装全部导入**。没全文的仍可 `push` 进 Zotero（只题录）；下到全文的那批用 `push --report` 连 PDF 一起回写。
 
 ### 会话小库 vs 整库（双 scope）+ Web 面板
 
@@ -154,6 +169,12 @@ SK=.opencode/skills/zotero-library/references
 - **两种条目形态都支持**：既支持"文献条目 + PDF 子附件"，也支持用户**直接拖 PDF 进 Zotero 形成的顶层独立附件**（题名取文件名、无书目元数据，故引用里作者/年可能是 `?`）。
 - **页码锚点**：走 Zotero **预索引全文**时无分页信息（引用页码显示 `?`）；需要精确页码时该段回退 pymupdf 逐页解析才有。
 - **默认只读，回写需显式**：检索/导入全程只读；**唯一的写操作是 `push`（导出回写）**，且只在用户明确要"导出到 Zotero"时才跑，绝不自动回写。push 存进用户当前在 Zotero 里选中的分类。
+- **附件回写不可回滚、且不原子**：题录先进库，附件逐条挂。中途某条附件失败**不会**撤回已进库的题录（Zotero 本地 API 没有删除接口），只会记进 `attach_failed`。所以**带 `--report` 的 push 先跑一次 `--dry-run`**。
+- **sessionID 按内容取摘要 → 重复 push 幂等**（真机实测）：同一批再推一次，Zotero 直接回
+  **HTTP 409** 拒收，库里**不会多出条目**，脚本报 `{"ok":true,"already_pushed":true}`。
+  不同批 → 不同 session → 互不干扰。**注意**：409 是幂等生效、不是故障，别把它读成"Zotero 不可达"。
+  附件靠 `parentItemID`（= 条目在本次 push 里的局部 id）认爹，与 saveItems 同 session 才挂得上。
+- **落点**：push 进用户当前在 Zotero 里选中的分类；一个分类都没有时进 My Library 根层。
 - **检索：两段可选**。召回后端 `tfidf`（默认、零依赖、离线、跨语言弱）/ `embed`（本地 BCE 双语嵌入、跨中英、不触端点）；可选 `--rerank` 加一段本地 **BCE cross-encoder 精排**。全部本地、无远程端点、无生成模型。**精排是判别式 cross-encoder，不是 PaperQA2 的生成式 RCS**——别把它说成 LLM 逐段摘要精排。
 - **导入上限**默认 200 篇/分类，超出截断并提示。
 - **扫描版 PDF**（纯图片、无文本层）取不到全文；Zotero 若已 OCR 索引则可用其预索引文本。

@@ -29,9 +29,12 @@ import json
 import logging
 import os
 import re
+import shutil
+import subprocess
 import sys
 import time
 import urllib.parse
+import urllib.request
 from pathlib import Path
 
 # 同目录的 fetch_oa 提供解析 / 校验 / 报告基建，避免两套实现漂移。
@@ -40,6 +43,15 @@ from fetch_oa import (  # noqa: E402
     CONTACT_EMAIL, classify_title_match, existing_pdf_ok, extract_pdf_text,
     is_valid_pdf, pmid_to_doi, read_doi_file, safe_doi_name, title_to_doi,
 )
+
+# Windows 控制台默认 GBK，而本脚本的提示里有 ✅/❌/⏸/▶/⚠ 这类 GBK 编不出来的字符，
+# 不强制 UTF-8 的话打印到一半直接 UnicodeEncodeError 崩掉（用户看到的是一串 traceback，
+# 而不是"浏览器已启动"）。与 zotero_read.py 同一处理。
+for _s in (sys.stdout, sys.stderr):
+    try:
+        _s.reconfigure(encoding="utf-8")  # type: ignore[union-attr]
+    except Exception:  # noqa: BLE001
+        pass
 
 log = logging.getLogger("fetch_institutional")
 
@@ -60,8 +72,104 @@ AUTH_URL_HINTS = (
 CHALLENGE_TITLE_HINTS = ("just a moment", "attention required", "captcha",
                          "访问验证", "安全验证", "请稍候")
 
+# ============================================================
+# 浏览器自启（让"开一个带调试端口的 Chrome"这件事对普通用户消失）
+# ============================================================
+# 设计取舍：这一步**不能**要求用户去敲命令行。默认行为改成"探测不到 CDP 就自己
+# 用专用资料目录起一个"，用户只会看到弹出一个 Chrome 窗口。两点必须说清楚：
+#   · 用的是**专用资料目录**（不是用户日常那个 profile）——这是 Chrome 136+ 的硬
+#     限制：对默认资料目录开远程调试端口会被直接拒绝，绕不过去；
+#   · 纯 IP 授权制下这无所谓（授权看出口 IP，与登录态无关，空 profile 照样能下）；
+#     要走 CARSI/账号登录制的，则需要在这个新窗口里登录一次，之后一直复用。
+
+def _browser_candidates() -> list[str]:
+    """按平台列出可用的 Chromium 系浏览器可执行文件（Chrome 优先，Edge 兜底）。"""
+    env = os.environ.get("SCI_BROWSER_PATH", "").strip()
+    if env:
+        return [env]
+    if sys.platform == "win32":
+        pf = os.environ.get("ProgramFiles", r"C:\Program Files")
+        pf86 = os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)")
+        local = os.environ.get("LOCALAPPDATA", "")
+        rel_chrome = r"Google\Chrome\Application\chrome.exe"
+        rel_edge = r"Microsoft\Edge\Application\msedge.exe"
+        return [os.path.join(b, r) for r in (rel_chrome, rel_edge)
+                for b in (pf, pf86, local) if b]
+    if sys.platform == "darwin":
+        return ["/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+                "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge"]
+    found = [shutil.which(n) for n in
+             ("google-chrome", "google-chrome-stable", "chromium",
+              "chromium-browser", "microsoft-edge")]
+    return [p for p in found if p]
+
+
+def find_browser() -> str | None:
+    for p in _browser_candidates():
+        if p and Path(p).exists():
+            return p
+    return None
+
+
+def default_profile_dir() -> Path:
+    """专用资料目录：与 SKILL.md 里写的路径一致，换一个就等于让用户重新登录一次。"""
+    if sys.platform == "win32":
+        base = os.environ.get("LOCALAPPDATA") or str(Path.home())
+        return Path(base) / "sci-scholar-chrome"
+    return Path.home() / ".sci-scholar-chrome"
+
+
+def cdp_alive(cdp_url: str, timeout: float = 1.5) -> bool:
+    try:
+        with urllib.request.urlopen(  # noqa: S310（只打本机调试端口）
+                cdp_url.rstrip("/") + "/json/version", timeout=timeout) as r:
+            return r.status == 200
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def launch_browser(cdp_url: str, profile_dir: Path | None = None,
+                   wait_s: int = 25) -> tuple[bool, str]:
+    """起一个带调试端口的浏览器并等它把端口打开。返回 (成功?, 说明)。"""
+    if cdp_alive(cdp_url):
+        return (True, "已有带调试端口的浏览器在跑，直接复用。")
+    exe = find_browser()
+    if not exe:
+        return (False, "本机找不到 Chrome / Edge（可用环境变量 SCI_BROWSER_PATH 指定路径）。")
+    port = urllib.parse.urlparse(cdp_url).port or 9222
+    profile = profile_dir or default_profile_dir()
+    profile.mkdir(parents=True, exist_ok=True)
+    cmd = [exe, f"--remote-debugging-port={port}",
+           f"--user-data-dir={profile}",
+           "--no-first-run", "--no-default-browser-check",
+           "about:blank"]
+    kwargs: dict = {}
+    if sys.platform == "win32":
+        # 脱离本进程：脚本跑完浏览器还在，用户下次直接复用，不用再等一次启动。
+        kwargs["creationflags"] = (subprocess.CREATE_NEW_PROCESS_GROUP  # type: ignore[attr-defined]
+                                   | 0x00000008)  # DETACHED_PROCESS
+    else:
+        kwargs["start_new_session"] = True
+    try:
+        subprocess.Popen(cmd, stdout=subprocess.DEVNULL,  # noqa: S603
+                         stderr=subprocess.DEVNULL, **kwargs)
+    except Exception as e:  # noqa: BLE001
+        return (False, f"启动失败：{type(e).__name__}: {e}")
+    for _ in range(wait_s * 2):
+        time.sleep(0.5)
+        if cdp_alive(cdp_url):
+            return (True, f"已启动 {Path(exe).name}（专用资料目录 {profile}）。")
+    return (False,
+            f"{Path(exe).name} 起来了但 {cdp_url} 没开：多半是**同一个专用资料目录**"
+            f"已经有一个没带调试端口的窗口开着。把那个窗口关掉再试一次。")
+
+
 CDP_HELP = """\
-无法连接 Chrome CDP（{url}）。机构通道需要挂接你本机已登录的 Chrome：
+无法连接 Chrome CDP（{url}），自动启动也没成功。机构通道需要一个带调试端口的浏览器：
+
+0) 先试试让脚本自己起（推荐，什么都不用敲）：
+     python fetch_institutional.py --launch-browser
+   起不来再按下面手动来。
 
 1) 用【专用资料目录】启动 Chrome（Chrome 136+ 禁止对默认资料目录开 CDP）：
    Windows (PowerShell):
@@ -184,6 +292,29 @@ _FETCH_JS = """async url => {
 }"""
 
 
+# 付费墙特征：出版商在未授权时几乎必然给出"购买 / 获取访问权限"入口。
+# 只读 DOM 文本，不点任何东西。命中只用来把 FAIL 的原因标成 paywalled，
+# 好让用户看得出"这篇是本机构没订"而不是"脚本没找着链接"。
+_PAYWALL_JS = """() => {
+  const sel = '.access-options, .get-access, [class*="GetAccess"], ' +
+              '[class*="purchase"], [data-test*="access"], [class*="paywall"]';
+  if (document.querySelector(sel)) return true;
+  const t = (document.body ? document.body.innerText : '').slice(0, 20000);
+  return /get access|purchase pdf|buy article|rent this article|订阅后可见|购买本文/i.test(t);
+}"""
+
+
+# Cloudflare 人机验证页的特征。**只用来把失败原因标准确，绝不自动点它**——
+# 过验证是用户自己在浏览器窗口里做的事（实测：Elsevier/Cell 在非机构网络下
+# 返回的就是这个页，而不是付费墙，标成 no-pdf-link 会让用户误以为是脚本没找着链接）。
+_CHALLENGE_JS = """() => {
+  if (document.querySelector('#challenge-form, #cf-chl-widget, ' +
+      'iframe[src*="challenges.cloudflare.com"], iframe[title*="verification"]')) return true;
+  const t = (document.body ? document.body.innerText : '').slice(0, 3000);
+  return /just a moment|checking your browser|ray id|安全验证|请稍候|正在验证/i.test(t);
+}"""
+
+
 def collect_pdf_candidates(page) -> list[str]:
     cands: list[str] = []
     u = page.url
@@ -222,9 +353,47 @@ def try_download(context, page, url: str, referer: str) -> bytes | None:
     return None
 
 
+def looks_paywalled(page) -> bool:
+    """页面明确挂着"购买 / 获取访问权限"入口 → 本机构大概率**没订**这篇。
+    只用于把失败原因分得更准（paywalled ≠ 没找到链接），不改变任何行为。"""
+    try:
+        return bool(page.evaluate(_PAYWALL_JS))
+    except Exception:
+        return False
+
+
+def looks_like_challenge(page) -> bool:
+    """命中人机验证页。同样只用于给失败原因分类，**不自动通过任何验证**。"""
+    try:
+        return bool(page.evaluate(_CHALLENGE_JS))
+    except Exception:
+        return False
+
+
+def _try_take_pdf(context, page, outpath: Path) -> bool:
+    """在当前页面上找 PDF 直链并下载，成功即写盘。"""
+    candidates = collect_pdf_candidates(page)
+    if not candidates:
+        return False
+    referer = page.url
+    for url in candidates:
+        absolute = urllib.parse.urljoin(referer, url)
+        body = try_download(context, page, absolute, referer)
+        if body:
+            outpath.write_bytes(body)
+            return True
+    return False
+
+
 def process_record(context, rec: dict, outdir: Path, email: str,
-                   login_timeout: int) -> tuple[str, str]:
-    """一条记录：DOI 落实 → 浏览器落地 → （可能）等登录 → 抓 PDF。
+                   login_timeout: int, ip_only: bool = False) -> tuple[str, str]:
+    """一条记录：DOI 落实 → 浏览器落地 → 先直接取 PDF → 取不到再判登录墙。
+
+    **先取后判**是刻意的：机构若是 **IP 授权制**（机器在校园网 / 机构网段内），
+    落地页当场就是已授权状态，根本不会出现登录墙——此时任何"先判认证页"的
+    启发式都只可能**误判**，而一次误判就是白等 login_timeout 秒（默认 240s），
+    20 条能空转一个多小时。所以把认证判断降级成"拿不到 PDF 时才问的兜底"。
+
     返回 (status, source)，status ∈ {institutional, skip, fail}。"""
     doi = resolve_doi(rec, email)
     if not doi:
@@ -239,20 +408,30 @@ def process_record(context, rec: dict, outdir: Path, email: str,
         page.goto(f"https://doi.org/{urllib.parse.quote(doi, safe='/')}",
                   wait_until="domcontentloaded", timeout=NAV_TIMEOUT_MS)
         page.wait_for_timeout(SETTLE_MS)
-        if looks_like_auth_page(page):
+
+        # 第一轮：直接试。IP 授权制下绝大多数在这里就成了。
+        if _try_take_pdf(context, page, outpath):
+            return ("institutional", "browser")
+
+        # 没拿到才问：谁挡着？两种都要人来处理，但**原因必须分开标**——
+        # 人机验证和"要登录"给用户的下一步动作完全不同（前者点一下验证框，
+        # 后者得去 CARSI 登录），混成一个标签只会把人引到错误的方向。
+        # 顺序：先判人机验证，因为 looks_like_auth_page 的标题特征里混着验证页的词。
+        blocker = ("challenge" if looks_like_challenge(page)
+                   else "needs-login" if looks_like_auth_page(page) else "")
+        if blocker:
+            if ip_only:
+                # 纯 IP 制批量（无人值守）：不等人，记下来继续下一条。
+                return ("fail", blocker)
             if not wait_for_user_login(page, login_timeout):
-                return ("fail", "login-timeout")
-        candidates = collect_pdf_candidates(page)
-        if not candidates:
-            return ("fail", "no-pdf-link")
-        referer = page.url
-        for url in candidates:
-            absolute = urllib.parse.urljoin(referer, url)
-            body = try_download(context, page, absolute, referer)
-            if body:
-                outpath.write_bytes(body)
+                return ("fail", f"{blocker}-timeout")
+            # 第二轮：用户处理完再试一次。
+            if _try_take_pdf(context, page, outpath):
                 return ("institutional", "browser")
-        return ("fail", "no-valid-pdf")
+
+        if looks_paywalled(page):
+            return ("fail", "paywalled")
+        return ("fail", "no-pdf-link")
     except Exception as e:  # noqa: BLE001 —— 单条隔离，绝不拖垮整批
         log.debug("record error for %s: %s", doi, e)
         return ("fail", "error")
@@ -347,9 +526,9 @@ def rewrite_manual_list(path: Path, records: list[dict], outdir: Path) -> None:
 def main() -> int:
     parser = argparse.ArgumentParser(
         description="机构通道（CARSI/浏览器登录态）全文获取——OA 管线失败后的第二梯队。")
-    parser.add_argument("input", type=Path,
+    parser.add_argument("input", type=Path, nargs="?",
                         help="worklist：fetch_oa 的 manual_needed.txt，或任何 "
-                             "fetch_oa 支持的 DOI 清单格式")
+                             "fetch_oa 支持的 DOI 清单格式（用 --launch-browser 时可省）")
     parser.add_argument("-o", "--output", type=Path, default=Path("pdfs"),
                         help="输出目录（默认 pdfs/，与 fetch_oa 共用）")
     parser.add_argument("-e", "--email", default=CONTACT_EMAIL,
@@ -357,6 +536,13 @@ def main() -> int:
     parser.add_argument("--cdp", default=DEFAULT_CDP_URL,
                         help=f"Chrome CDP 地址（默认 {DEFAULT_CDP_URL}，"
                              "亦可用环境变量 SCI_CDP_URL）")
+    parser.add_argument("--no-auto-launch", action="store_true",
+                        help="探测不到 CDP 时不要自动启动浏览器（默认会自动起一个带调试"
+                             "端口的 Chrome/Edge，用专用资料目录）")
+    parser.add_argument("--launch-browser", action="store_true",
+                        help="只把带调试端口的浏览器起起来就退出（给用户先登录用），不下载")
+    parser.add_argument("--profile-dir", default=None,
+                        help=f"浏览器专用资料目录（默认 {default_profile_dir()}）")
     parser.add_argument("--delay", type=float, default=DEFAULT_DELAY_S,
                         help=f"逐条间隔秒数（默认 {DEFAULT_DELAY_S}，下限 {MIN_DELAY_S}）")
     parser.add_argument("--max", type=int, default=DEFAULT_MAX_RECORDS,
@@ -365,6 +551,10 @@ def main() -> int:
                              "批量下载风控，超出部分下次再跑）")
     parser.add_argument("--login-timeout", type=int, default=DEFAULT_LOGIN_TIMEOUT_S,
                         help="登录墙等待用户完成登录的秒数上限")
+    parser.add_argument("--ip-only", action="store_true",
+                        help="纯 IP 授权制机构（机器就在校园网/机构网段内，无需 CARSI "
+                             "登录）：遇到登录墙不等用户，直接记 needs-login 继续下一条，"
+                             "适合无人值守批量。默认关闭（会等用户在 Chrome 里登录）")
     parser.add_argument("--report", type=Path, default=None,
                         help="报告路径（默认 <output>/retrieval_report.json，"
                              "与 fetch_oa 同一份、原地合并）")
@@ -374,11 +564,32 @@ def main() -> int:
     logging.basicConfig(level=logging.DEBUG if args.verbose else logging.WARNING,
                         format="%(levelname)s: %(message)s")
 
+    profile_dir = Path(args.profile_dir) if args.profile_dir else None
+
+    # --launch-browser：只把浏览器起起来（给用户先登录 / 先确认在校园网里），不下载。
+    if args.launch_browser:
+        ok, msg = launch_browser(args.cdp, profile_dir)
+        print(("✅ " if ok else "❌ ") + msg)
+        if ok:
+            print("这是一个**独立的浏览器资料目录**，和你平时用的 Chrome 互不影响。\n"
+                  "· 学校/医院是 IP 授权制（机器就在单位网里）：不用登录任何东西，直接开下。\n"
+                  "· 要走 CARSI / 图书馆账号：在这个新窗口里登录一次，以后一直复用。")
+        return 0 if ok else 2
+
+    if args.input is None:
+        parser.error("缺少 worklist（只想起浏览器请用 --launch-browser）")
+
     try:
         from playwright.sync_api import sync_playwright
     except ImportError:
         print(PW_HELP)
         return 2
+
+    # 探测不到调试端口就自己起一个——不让用户去敲 --remote-debugging-port。
+    if not cdp_alive(args.cdp) and not args.no_auto_launch:
+        print("· 没检测到带调试端口的浏览器，正在为你启动 …", flush=True)
+        ok, msg = launch_browser(args.cdp, profile_dir)
+        print(("  ✅ " if ok else "  ❌ ") + msg, flush=True)
 
     records = load_worklist(args.input)
     if not records:
@@ -404,18 +615,22 @@ def main() -> int:
         context = browser.contexts[0] if browser.contexts else browser.new_context()
 
         stats = {"institutional": 0, "skip": 0, "fail": 0}
+        fail_reasons: dict[str, int] = {}
         labels = {"institutional": "OK (机构通道)", "skip": "SKIP", "fail": "FAIL"}
         for i, rec in enumerate(records, 1):
             disp = rec.get("doi") or rec.get("_raw") or "?"
             print(f"  [{i}/{len(records)}] {disp}", end=" … ", flush=True)
             try:
                 status, source = process_record(
-                    context, rec, args.output, args.email, args.login_timeout)
+                    context, rec, args.output, args.email, args.login_timeout,
+                    ip_only=args.ip_only)
             except Exception as e:  # noqa: BLE001
                 status, source = ("fail", "error")
                 log.debug("unhandled error for %s: %s", disp, e)
             rec["_status"], rec["_source"] = status, source
             stats[status] += 1
+            if status == "fail":
+                fail_reasons[source or "unknown"] = fail_reasons.get(source or "unknown", 0) + 1
             suffix = f" ({source})" if status == "fail" and source else ""
             print(labels[status] + suffix, flush=True)
             if i < len(records):
@@ -429,6 +644,20 @@ def main() -> int:
         print(f"  下到:   {stats['institutional']}")
         print(f"  已存在: {stats['skip']}")
         print(f"  失败:   {stats['fail']}  （原因见各行标注；报告里有逐条记录）")
+        if fail_reasons:
+            # 失败原因要分开报：paywalled = 本机构没订这篇（换馆际互借），
+            # needs-login = 不是 IP 制、得先登录，两者的下一步动作完全不同。
+            detail = "、".join(f"{k} {v}" for k, v in sorted(fail_reasons.items()))
+            print(f"          失败原因分布：{detail}")
+            if fail_reasons.get("paywalled"):
+                print("          · paywalled = 落地页仍挂着购买入口 → 本机构大概率"
+                      "未订购这篇，走馆际互借 / 找作者要。")
+            if fail_reasons.get("challenge"):
+                print("          · challenge = 出版商弹了人机验证（脚本绝不自动过）→ 去 Chrome "
+                      "窗口手动点一次验证，同一站点之后一般就放行了，再重跑。")
+            if fail_reasons.get("needs-login"):
+                print("          · needs-login = 出版商要登录（不是纯 IP 授权）→ 去 Chrome "
+                      "窗口经 CARSI/图书馆登录一次，再不带 --ip-only 重跑。")
         print(f"  报告:   {report_path}（counts.institutional="
               f"{report['counts']['institutional']}）")
         return 0

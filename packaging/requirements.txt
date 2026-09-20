@@ -28,6 +28,14 @@ lifelines==0.30.0
 adjustText==1.4.0
 pymupdf==1.28.0
 pymupdf4llm==1.28.0
+# playwright：fulltext-retrieval 的**机构通道** fetch_institutional.py 用它经 CDP
+# 挂接用户本机已登录 / 已在机构 IP 网段内的 Chrome，取 OA 渠道拿不到但机构已订购的全文。
+# 与下面「刻意不装 flask / playwright / chromium」那段**不矛盾**，区别是决定性的：
+#   · 那段说的是 ppt-master 的 visual_review，它需要 playwright **+ chromium 内核**（+1.00 GB）；
+#   · 这里只要 playwright 这个 Python 包本身（约 107 MB，主要是自带的 node driver），
+#     **绝不能**跑 `playwright install`——机构通道只 attach 用户已有的 Chrome，不启动自带内核。
+# 服务器 / 无浏览器环境装着无害：探测不到 CDP 时该通道优雅退出（exit 2），不影响 OA 主管线。
+playwright==1.63.0
 
 # ---- 网关自身需要（别删）----
 # mammoth：web/server.mjs 的 docx 预览就是调它（MAMMOTH_PY）。此前漏装 → 任何 render-docx 产物
@@ -49,7 +57,9 @@ svglib==2.0.2           # SVG→PNG 后备图（配合已有的 reportlab；比 
 markdownify==1.2.3      # html/epub → md
 EbookLib==0.20          # epub → md
 #
-# ---- 刻意不装 flask / playwright / chromium（ppt-master 的三条网页路径，已实测定论）----
+# ---- 刻意不装 flask / chromium 内核（ppt-master 的三条网页路径，已实测定论）----
+# 注：playwright 这个 Python 包现在装了（见上面 fulltext-retrieval 机构通道那条），
+# 但**chromium 内核仍然不装**——下面 ② 里说的 1.00 GB 代价来自内核，不是来自这个包。
 # ppt-master 有三处依赖 flask：Step 4 确认页、Step 6 网页 SVG 编辑器、以及 visual_review.py
 # （AI 逐页看图自查）。这三条在本部署里全部不装，理由是实测出来的，不是猜的：
 #   ① 前两条面向【用户】，但服务绑的是【容器内】127.0.0.1:5050，而容器只对外发布 3000 端口，
@@ -65,7 +75,7 @@ EbookLib==0.20          # epub → md
 #      1400m 的容器再引入一个 300–500MB 级的 OOM 面（已因 LibreOffice 加过串行锁），不划算。
 # 对应地，SKILL.md 与 workflows/live-preview.md 里已用「本部署覆盖规则」停用这三条路径，
 # 并禁止 AI 向用户播报任何 5050 地址（否则就是给用户一个永远打不开的链接）。
-# 将来若要启用：把 flask + playwright 加回本文件，Dockerfile 里补
+# 将来若要启用：把 flask 加回本文件（playwright 已在），Dockerfile 里补
 # `python3 -m playwright install --with-deps chromium`，并给 chromium 加一道类似
 # web/server.mjs 里 withSoffice() 的全局串行锁防 OOM，同时撤掉那几处覆盖规则。
 # 刻意【不装】 nbconvert（ipynb → md）：它会拖进整个 jupyter 生态
