@@ -70,7 +70,8 @@ AUTH_URL_HINTS = (
     "sso", "cas.", "/login", "signin", "sign-in", "authenticat", "authorize",
 )
 CHALLENGE_TITLE_HINTS = ("just a moment", "attention required", "captcha",
-                         "访问验证", "安全验证", "请稍候")
+                         "checking your browser", "访问验证", "安全验证", "请稍候",
+                         "正在验证")
 
 # ============================================================
 # 浏览器自启（让"开一个带调试端口的 Chrome"这件事对普通用户消失）
@@ -162,6 +163,253 @@ def launch_browser(cdp_url: str, profile_dir: Path | None = None,
     return (False,
             f"{Path(exe).name} 起来了但 {cdp_url} 没开：多半是**同一个专用资料目录**"
             f"已经有一个没带调试端口的窗口开着。把那个窗口关掉再试一次。")
+
+
+# ============================================================
+# 机构网络自检（--diagnose）
+# ============================================================
+# 为什么要有这个：真实的机构网络多半不在开发者手上，只能委托别人代跑。而"下不下来"
+# 这一个结果背后至少有五种互不相干的原因（不在机构网段 / 网络不通 / 没订这篇 /
+# 人机验证 / 页面结构特殊），代跑的人口述分不清。所以让脚本自己把证据收齐成一份
+# 报告，对方整份发回来即可定位，不用来回追问。
+#
+# 探针都是**真实存在、且经 Unpaywall 核实为非 OA（真付费墙）**的医学文章，每家主流
+# 出版商一篇；外加一篇确定的 OA 文章做**对照组**——对照组的成败是分水岭：
+#   对照成功 + 订阅篇全败 → 网络通，问题在权限/出版商；
+#   对照也失败            → 是网络/代理问题，跟订阅权限根本无关。
+# 换探针前务必重新核实 is_oa=false，否则对照失效、整份报告的结论都会跑偏。
+PROBES = [
+    {"doi": "10.1371/journal.pone.0000308", "publisher": "PLoS（OA 对照组）",
+     "oa": True},
+    {"doi": "10.1016/j.clnesp.2020.09.303", "publisher": "Elsevier / ScienceDirect"},
+    {"doi": "10.1002/jcu.23131", "publisher": "Wiley"},
+    {"doi": "10.1007/s40520-021-02032-5", "publisher": "Springer"},
+    {"doi": "10.1080/15563650.2018.1546009", "publisher": "Taylor & Francis"},
+    {"doi": "10.1177/17504589211045225", "publisher": "SAGE"},
+    {"doi": "10.1093/tropej/fmz082", "publisher": "Oxford University Press"},
+]
+
+# 查出口 IP 及其归属。多个源互为备份（国内可达性不一）。归属比 IP 本身更有用：
+# 最常见的误判就是"我连了 VPN / 连的是访客 WiFi，以为自己在校园网里"。
+IP_SERVICES = [
+    ("ip-api.com", "http://ip-api.com/json/?fields=query,org,isp,as,country,city"),
+    ("ipinfo.io", "https://ipinfo.io/json"),
+    ("ifconfig.co", "https://ifconfig.co/json"),
+]
+
+
+def probe_egress_ip() -> dict:
+    for name, url in IP_SERVICES:
+        try:
+            with urllib.request.urlopen(url, timeout=8) as r:  # noqa: S310
+                d = json.loads(r.read().decode("utf-8", "replace"))
+            return {"source": name,
+                    "ip": d.get("query") or d.get("ip") or "",
+                    "org": d.get("org") or d.get("asn_org") or d.get("isp") or "",
+                    "asn": d.get("as") or d.get("asn") or "",
+                    "country": d.get("country") or d.get("country_iso") or "",
+                    "city": d.get("city") or ""}
+        except Exception as e:  # noqa: BLE001
+            log.debug("ip service %s failed: %s", name, e)
+    return {"source": "", "error": "所有出口 IP 查询源都不可达（本机可能完全没有外网）"}
+
+
+def probe_environment(cdp_url: str) -> dict:
+    env: dict = {"python": sys.version.split()[0], "platform": sys.platform}
+    try:
+        import importlib.metadata as _md  # noqa: PLC0415
+        env["playwright"] = _md.version("playwright")
+    except Exception:  # noqa: BLE001
+        env["playwright"] = "未安装"
+    env["browser_exe"] = find_browser() or "未找到 Chrome/Edge"
+    env["profile_dir"] = str(default_profile_dir())
+    env["cdp_url"] = cdp_url
+    env["cdp_alive"] = cdp_alive(cdp_url)
+    if env["cdp_alive"]:
+        try:
+            with urllib.request.urlopen(  # noqa: S310
+                    cdp_url.rstrip("/") + "/json/version", timeout=5) as r:
+                env["browser_version"] = json.loads(r.read()).get("Browser", "")
+        except Exception:  # noqa: BLE001
+            pass
+    return env
+
+
+def diagnose_direct(doi: str, email: str) -> dict:
+    """不开浏览器的直连尝试——机构 IP 授权在这条路上也可能直接生效。"""
+    import tempfile  # noqa: PLC0415
+    from fetch_oa import download_from_landing  # noqa: PLC0415
+    rec: dict = {"ok": False}
+    tmp = Path(tempfile.gettempdir()) / f"_diag_{safe_doi_name(doi)}.pdf"
+    try:
+        rec["ok"] = bool(download_from_landing(
+            f"https://doi.org/{urllib.parse.quote(doi, safe='/')}", tmp, email))
+        if rec["ok"]:
+            rec["size_bytes"] = tmp.stat().st_size
+    except Exception as e:  # noqa: BLE001
+        rec["error"] = f"{type(e).__name__}: {e}"
+    finally:
+        tmp.unlink(missing_ok=True)
+    return rec
+
+
+def diagnose_browser(context, doi: str) -> dict:
+    """浏览器通道的**完整轨迹**——只记不留文件。逐步记录是关键：光有成败无法定位。"""
+    rec: dict = {"ok": False}
+    page = context.new_page()
+    try:
+        page.goto(f"https://doi.org/{urllib.parse.quote(doi, safe='/')}",
+                  wait_until="domcontentloaded", timeout=NAV_TIMEOUT_MS)
+        page.wait_for_timeout(SETTLE_MS)
+        rec["landed_url"] = page.url[:200]
+        try:
+            rec["page_title"] = (page.title() or "")[:120]
+        except Exception:  # noqa: BLE001
+            rec["page_title"] = ""
+        rec["challenge"] = looks_like_challenge(page)
+        rec["auth_page"] = looks_like_auth_page(page)
+        rec["paywalled"] = looks_paywalled(page)
+        cands = collect_pdf_candidates(page)
+        rec["pdf_candidates"] = len(cands)
+        rec["first_candidate"] = cands[0][:200] if cands else ""
+        for url in cands:
+            absolute = urllib.parse.urljoin(page.url, url)
+            body = try_download(context, page, absolute, page.url)
+            if body:
+                rec.update(ok=True, size_bytes=len(body),
+                           head=body[:8].decode("latin-1", "replace"))
+                break
+        if not rec["ok"]:
+            rec["verdict"] = ("challenge" if rec["challenge"] else
+                              "needs-login" if rec["auth_page"] else
+                              "paywalled" if rec["paywalled"] else
+                              "no-pdf-link" if not cands else "download-failed")
+    except Exception as e:  # noqa: BLE001
+        rec["error"] = f"{type(e).__name__}: {e}"
+        # 网络层失败要和"访问被拒"分开：前者是这张网到该站点根本不通（DNS 污染、
+        # 连接重置、被墙），跟订阅权限无关；混成一个 "error" 会让人去查错方向。
+        msg = str(e)
+        rec["verdict"] = ("unreachable" if any(
+            k in msg for k in ("ERR_CONNECTION", "ERR_NAME_NOT_RESOLVED",
+                               "ERR_TIMED_OUT", "ERR_SSL", "ERR_ADDRESS",
+                               "ERR_EMPTY_RESPONSE", "Timeout"))
+            else "error")
+    finally:
+        try:
+            page.close()
+        except Exception:  # noqa: BLE001
+            pass
+    return rec
+
+
+_VERDICT_CN = {
+    "challenge": "人机验证页（需人工在浏览器里点一次）",
+    "needs-login": "要登录（该出版商不认 IP）",
+    "paywalled": "页面挂着购买入口 → 本机构未订购",
+    "no-pdf-link": "页面上没有全文直链",
+    "download-failed": "找到了链接但下载失败（多为无权限）",
+    "unreachable": "网络层就不通（连接被重置/解析失败）——与订阅权限无关",
+    "no-browser": "浏览器通道没跑起来（见第二节 cdp_alive）",
+    "error": "该条出错（详见 json）",
+}
+
+
+def render_diagnose_md(report: dict) -> str:
+    ip = report["egress_ip"]
+    env = report["environment"]
+    L = ["# 机构网络自检报告", "",
+         f"生成时间：{report['generated_at']}", ""]
+    L += ["## 一、你在哪张网里（最关键）", "",
+          f"- 出口 IP：**{ip.get('ip', '?')}**（来源 {ip.get('source') or '查询失败'}）",
+          f"- 归属：**{ip.get('org') or '未知'}** {ip.get('asn', '')}",
+          f"- 位置：{ip.get('country', '')} {ip.get('city', '')}", ""]
+    if ip.get("error"):
+        L += [f"- ⚠ {ip['error']}", ""]
+    L += ["> 归属若不是学校 / 医院 / 图书馆，说明这台机器**不在机构网段里**"
+          "（常见：连了 VPN、连的是访客 WiFi），机构订阅本来就不会生效。", ""]
+    L += ["## 二、运行环境", ""]
+    L += [f"- {k}：{v}" for k, v in env.items()]
+    L += ["", "## 三、逐篇探针结果", "",
+          "| 出版商 | 直连 | 浏览器 | 判定 | 大小 |", "|---|---|---|---|---|"]
+    for p in report["probes"]:
+        d, b = p["direct"], p["browser"]
+        size = b.get("size_bytes") or d.get("size_bytes") or 0
+        verdict = ("成功" if (d["ok"] or b["ok"])
+                   else _VERDICT_CN.get(b.get("verdict", ""), b.get("verdict", "?")))
+        L.append(f"| {p['publisher']} | {'✅' if d['ok'] else '❌'} | "
+                 f"{'✅' if b['ok'] else '❌'} | {verdict} | "
+                 f"{size // 1024} KB |")
+    L += ["", "## 四、怎么读这份报告", "",
+          "1. **先看 OA 对照组那一行**：它也失败 → 是网络/代理问题，与订阅权限无关，"
+          "后面几行不用细看；它成功而订阅篇全败 → 网络通，问题在权限或出版商。",
+          "2. 大量「未订购」→ 本机构确实没买这些刊，正常。",
+          "3. 大量「人机验证」→ 让操作的人去那个浏览器窗口手动点一次验证，再重跑。",
+          "4. 大量「要登录」→ 该机构不是 IP 授权制，需要先在浏览器里经 CARSI / 图书馆登录。", "",
+          "完整逐步轨迹（落地 URL、页面标题、找到几个候选链接等）在同名 .json 里。", ""]
+    return "\n".join(L)
+
+
+def run_diagnose(cdp_url: str, email: str, profile_dir: Path | None,
+                 auto_launch: bool, delay: float) -> int:
+    print("机构网络自检：将访问 7 篇探针文献（1 篇 OA 对照 + 6 家主流出版商各 1 篇）。")
+    print("⚠ 报告里会包含这台机器的**出口 IP 与网络归属**（用来判断你是否真的在机构"
+          "网段里）。发给别人前请自行确认可接受。\n")
+    report: dict = {
+        "schema_version": 1,
+        "generated_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+        "egress_ip": probe_egress_ip(),
+    }
+    print(f"· 出口 IP：{report['egress_ip'].get('ip', '?')}"
+          f"（{report['egress_ip'].get('org', '未知')}）", flush=True)
+
+    if not cdp_alive(cdp_url) and auto_launch:
+        ok, msg = launch_browser(cdp_url, profile_dir)
+        print(("· ✅ " if ok else "· ❌ ") + msg, flush=True)
+    report["environment"] = probe_environment(cdp_url)
+
+    try:
+        from playwright.sync_api import sync_playwright  # noqa: PLC0415
+    except ImportError:
+        print(PW_HELP)
+        return 2
+
+    pw = sync_playwright().start()
+    try:
+        context = None
+        if report["environment"]["cdp_alive"]:
+            try:
+                browser = pw.chromium.connect_over_cdp(cdp_url)
+                context = (browser.contexts[0] if browser.contexts
+                           else browser.new_context())
+            except Exception as e:  # noqa: BLE001
+                report["environment"]["cdp_connect_error"] = str(e)[:200]
+        probes = []
+        for i, p in enumerate(PROBES, 1):
+            print(f"  [{i}/{len(PROBES)}] {p['publisher']} …", end=" ", flush=True)
+            rec = {"doi": p["doi"], "publisher": p["publisher"],
+                   "is_oa_control": bool(p.get("oa"))}
+            rec["direct"] = diagnose_direct(p["doi"], email)
+            rec["browser"] = (diagnose_browser(context, p["doi"]) if context
+                              else {"ok": False, "verdict": "no-browser"})
+            probes.append(rec)
+            print("直连 " + ("OK" if rec["direct"]["ok"] else "×")
+                  + " / 浏览器 " + ("OK" if rec["browser"]["ok"] else "×"), flush=True)
+            if i < len(PROBES):
+                time.sleep(delay)
+        report["probes"] = probes
+    finally:
+        pw.stop()
+
+    Path("机构网络自检报告.json").write_text(
+        json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    Path("机构网络自检报告.md").write_text(
+        render_diagnose_md(report), encoding="utf-8")
+    ok_n = sum(1 for p in report["probes"]
+               if p["direct"]["ok"] or p["browser"]["ok"])
+    print(f"\n完成：{ok_n}/{len(report['probes'])} 篇取到全文。")
+    print("报告已写出：机构网络自检报告.md（人看）、机构网络自检报告.json（细节）")
+    print("把这两个文件整个发回来即可定位问题。")
+    return 0
 
 
 CDP_HELP = """\
@@ -363,7 +611,18 @@ def looks_paywalled(page) -> bool:
 
 
 def looks_like_challenge(page) -> bool:
-    """命中人机验证页。同样只用于给失败原因分类，**不自动通过任何验证**。"""
+    """命中人机验证页。同样只用于给失败原因分类，**不自动通过任何验证**。
+
+    标题要单独判：Cloudflare 拦截页刚渲染出来时 body 往往还是空的，只有 <title>
+    已经是 "Just a moment..." / "请稍候"。只看 DOM 和正文会漏判，然后被后面的
+    looks_like_auth_page 按 URL 特征捡走、误报成"要登录"——实测 Elsevier 就是这样，
+    结果把人引去登录 CARSI，方向完全错了。"""
+    try:
+        title = (page.title() or "").lower()
+        if any(h in title for h in CHALLENGE_TITLE_HINTS):
+            return True
+    except Exception:  # noqa: BLE001
+        pass
     try:
         return bool(page.evaluate(_CHALLENGE_JS))
     except Exception:
@@ -541,6 +800,9 @@ def main() -> int:
                              "端口的 Chrome/Edge，用专用资料目录）")
     parser.add_argument("--launch-browser", action="store_true",
                         help="只把带调试端口的浏览器起起来就退出（给用户先登录用），不下载")
+    parser.add_argument("--diagnose", action="store_true",
+                        help="机构网络自检：查出口 IP 归属 + 对 7 篇探针（1 篇 OA 对照 + "
+                             "6 家主流出版商）逐步取证，产出可发回的报告。远程代测必用")
     parser.add_argument("--profile-dir", default=None,
                         help=f"浏览器专用资料目录（默认 {default_profile_dir()}）")
     parser.add_argument("--delay", type=float, default=DEFAULT_DELAY_S,
@@ -576,8 +838,12 @@ def main() -> int:
                   "· 要走 CARSI / 图书馆账号：在这个新窗口里登录一次，以后一直复用。")
         return 0 if ok else 2
 
+    if args.diagnose:
+        return run_diagnose(args.cdp, args.email, profile_dir,
+                            not args.no_auto_launch, max(args.delay, MIN_DELAY_S))
+
     if args.input is None:
-        parser.error("缺少 worklist（只想起浏览器请用 --launch-browser）")
+        parser.error("缺少 worklist（自检用 --diagnose，只起浏览器用 --launch-browser）")
 
     try:
         from playwright.sync_api import sync_playwright
