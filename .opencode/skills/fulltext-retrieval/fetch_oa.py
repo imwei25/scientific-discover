@@ -556,6 +556,27 @@ def scrape_pdf_candidates(html: str) -> list[str]:
     return found[:8]
 
 
+def crossref_landing(doi: str, email: str) -> str:
+    """只取 Crossref 的 `resource.primary.URL`——出版商的**正式落地页**。
+
+    别拿 `crossref_lookup()` 的第一个候选当落地页：它先返回 `message.link[]`，那是
+    text-mining 链接，对 Elsevier 来说是 `api.elsevier.com/content/article/PII:...`
+    这种**需要 API key 的接口地址**，当入口必失败（实测机构通道就栽在这儿）。"""
+    url = (f"https://api.crossref.org/works/{urllib.parse.quote(doi, safe='/')}"
+           f"?mailto={urllib.parse.quote(email)}")
+    try:
+        req = urllib.request.Request(url, headers=_crossref_headers(email))
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            data = json.loads(resp.read())
+        primary = (((data.get("message") or {}).get("resource") or {})
+                   .get("primary") or {}).get("URL") or ""
+        return primary if primary.startswith("http") else ""
+    except (urllib.error.URLError, urllib.error.HTTPError,
+            json.JSONDecodeError) as e:
+        log.debug("Crossref landing lookup failed for %s: %s", doi, e)
+        return ""
+
+
 def download_from_landing(url: str, outpath: Path, email: str) -> bool:
     """doi.org → 出版商落地页 → 抓 PDF 直链。
 

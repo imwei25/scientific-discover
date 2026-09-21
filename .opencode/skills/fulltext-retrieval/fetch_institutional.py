@@ -71,7 +71,10 @@ AUTH_URL_HINTS = (
 )
 CHALLENGE_TITLE_HINTS = ("just a moment", "attention required", "captcha",
                          "checking your browser", "访问验证", "安全验证", "请稍候",
-                         "正在验证")
+                         "正在验证",
+                         # OUP 的机器人闸（实测 academic.oup.com 会跳
+                         # /crawlprevention/governor 并显示这个标题）
+                         "validate user")
 
 # ============================================================
 # 浏览器自启（让"开一个带调试端口的 Chrome"这件事对普通用户消失）
@@ -323,7 +326,11 @@ def detect_webvpn_gateway(context) -> tuple[str, str] | None:
             if has_prefix:   # 带目标前缀 → 协议与端口都可信，直接采用
                 return cand
             best = best or cand
-    return best
+    if best:
+        # 只看到门户页（没有带前缀的样本）→ 它的 scheme/端口**不能直接拿来用**，
+        # 得按改写地址实探一次（见 resolve_origin 里的南医大实测）。
+        return resolve_origin(context, best[1].split(":")[0]) or best
+    return None
 
 
 def _gateway_candidates(url: str) -> list[tuple[tuple[str, str], bool]]:
@@ -366,6 +373,25 @@ def _gateway_candidates(url: str) -> list[tuple[tuple[str, str], bool]]:
     return out
 
 
+def resolve_origin(context, host: str) -> tuple[str, str] | None:
+    """只知道网关主机名时，定出改写地址该用哪个 scheme+端口。
+
+    **必须拿改写后的地址去探，不能探门户根**——南医大实测：门户在 https:443 好好的，
+    而改写主机 `xxx-s.webvpn.njmu.edu.cn` 走 443 直接
+    `ERR_CERT_COMMON_NAME_INVALID`（证书只签了 webvpn.njmu.edu.cn，没覆盖二级前缀），
+    真正能用的是 http:8118。探门户会稳稳地选错那一个。
+    判据是**传输层能不能通**，不是 HTTP 状态码：403 也算通（网关已把请求转出去了），
+    证书错 / 连不上才算不通。"""
+    for scheme, netloc in (("http", f"{host}:8118"), ("https", host), ("http", host)):
+        probe = webvpn_rewrite("https://example.com/", (scheme, netloc))
+        try:
+            context.request.get(probe, timeout=10000, max_redirects=1)
+            return (scheme, netloc)
+        except Exception as e:  # noqa: BLE001
+            log.debug("origin %s://%s 不通：%s", scheme, netloc, str(e)[:80])
+    return None
+
+
 def detect_webvpn_from_cookies(context) -> tuple[str, str] | None:
     """第二条识别路径：看 cookie。
 
@@ -385,15 +411,9 @@ def detect_webvpn_from_cookies(context) -> tuple[str, str] | None:
             if idx >= 0:
                 hosts.add(".".join(labels[idx:]))
     for host in sorted(hosts, key=len):
-        for scheme, netloc in (("https", host), ("http", host),
-                               ("http", f"{host}:8118")):
-            try:
-                r = context.request.get(f"{scheme}://{netloc}/", timeout=8000,
-                                        max_redirects=2)
-                if r.status < 500:
-                    return (scheme, netloc)
-            except Exception:  # noqa: BLE001
-                continue
+        origin = resolve_origin(context, host)
+        if origin:
+            return origin
     return None
 
 
@@ -426,10 +446,14 @@ def entry_url_for(doi: str, email: str, gateway: tuple[str, str] | None) -> str:
     if not gateway:
         return plain
     try:
-        from fetch_oa import crossref_lookup  # noqa: PLC0415
-        for cand in crossref_lookup(doi, email):
-            if cand.startswith("http"):
-                return webvpn_rewrite(cand, gateway)
+        from fetch_oa import crossref_landing  # noqa: PLC0415
+        landing = crossref_landing(doi, email)
+        if landing:
+            # 出版商的落地页普遍是 https；Crossref 里有些条目仍登记着 http，照抄会
+            # 改写成不带 -s 的形式，多走一跳重定向（实测 OUP 即如此）。统一升到 https。
+            if landing.startswith("http://"):
+                landing = "https://" + landing[len("http://"):]
+            return webvpn_rewrite(landing, gateway)
     except Exception as e:  # noqa: BLE001
         log.debug("crossref resolve failed for %s: %s", doi, e)
     return webvpn_rewrite(plain, gateway)
@@ -552,7 +576,11 @@ def diagnose_browser(context, doi: str, email: str = CONTACT_EMAIL,
                            head=body[:8].decode("latin-1", "replace"))
                 break
         if not rec["ok"]:
-            rec["verdict"] = ("challenge" if rec["challenge"] else
+            blocked = publisher_block_info(page)
+            if blocked:
+                rec["blocked"] = blocked      # 含 Reference number 与出口 IP
+            rec["verdict"] = ("blocked-by-publisher" if blocked else
+                              "challenge" if rec["challenge"] else
                               "needs-login" if rec["auth_page"] else
                               "paywalled" if rec["paywalled"] else
                               "no-pdf-link" if not cands else "download-failed")
@@ -581,6 +609,7 @@ _VERDICT_CN = {
     "no-pdf-link": "页面上没有全文直链",
     "download-failed": "找到了链接但下载失败（多为无权限）",
     "unreachable": "网络层就不通（连接被重置/解析失败）——与订阅权限无关",
+    "blocked-by-publisher": "出版商拦掉了这条出口（非权限问题，报告 json 里有工单编号与 IP）",
     "no-browser": "浏览器通道没跑起来（见第二节 cdp_alive）",
     "error": "该条出错（详见 json）",
 }
@@ -914,6 +943,26 @@ def looks_paywalled(page) -> bool:
         return False
 
 
+# 出版商把「这条出口」整个拦掉时给的页面（实测 Elsevier 对南医大 WebVPN 出口即如此：
+# 连 sciencedirect 首页都是这张页，正文里给出 Reference number 与出口 IP）。
+# 这既不是没订购、也不是人机验证——**图书馆拿着这个编号去找出版商开通才是正解**，
+# 所以要单独标出来并把编号带上，不能笼统记成"没找到链接"。
+_BLOCKED_JS = """() => {
+  const t = (document.body ? document.body.innerText : '').slice(0, 3000);
+  if (!/problem providing the content|Reference number/i.test(t)) return null;
+  const ref = (t.match(/Reference number:\\s*([A-Za-z0-9]+)/i) || [])[1] || '';
+  const ip = (t.match(/IP Address:\\s*([0-9a-fA-F:.]+)/i) || [])[1] || '';
+  return {ref, ip};
+}"""
+
+
+def publisher_block_info(page) -> dict | None:
+    try:
+        return page.evaluate(_BLOCKED_JS)
+    except Exception:  # noqa: BLE001
+        return None
+
+
 def looks_like_challenge(page) -> bool:
     """命中人机验证页。同样只用于给失败原因分类，**不自动通过任何验证**。
 
@@ -994,6 +1043,11 @@ def process_record(context, rec: dict, outdir: Path, email: str,
             if _try_take_pdf(context, page, outpath):
                 return ("institutional", "browser")
 
+        blocked = publisher_block_info(page)
+        if blocked:
+            log.warning("出版商拦截了这条出口（Reference %s, IP %s）——拿这个编号找图书馆"
+                        "/出版商，不是权限问题", blocked.get("ref", "?"), blocked.get("ip", "?"))
+            return ("fail", "blocked-by-publisher")
         if looks_paywalled(page):
             return ("fail", "paywalled")
         return ("fail", "no-pdf-link")
