@@ -85,14 +85,20 @@ test("阅读器型模块：reader 配置完整、模式标记与前言逐字一�
       // 【最要紧的一条】前端把 mark 拼在消息前面发出去，模型照前言里教的做，刷新后前端又靠 mark
       // 把每一轮认回对应面板。前言里没教这个标记 = 模型不认识它 = 三处对不上。
       assert.ok(line.includes(m.mark), at("前言里没教 agent 认「" + m.mark + "」"))
-      // prompt 里的占位符只认这三个，写错了前端不会替换，会把 {xxx} 原样发给模型
+      // prompt 里的占位符只认这四个，写错了前端不会替换，会把 {xxx} 原样发给模型
       for (const ph of (m.prompt.match(/\{[a-z]+\}/g) || []))
-        assert.ok(["{doc}", "{data}", "{vars}"].includes(ph), at(m.id + " 用了未知占位符 " + ph))
-      // need 的三种写法必须指向真实存在的东西，否则那个按钮会被永久卡住而没人看得出为什么
+        assert.ok(["{doc}", "{docs}", "{data}", "{vars}"].includes(ph), at(m.id + " 用了未知占位符 " + ph))
+      // need 的几种写法必须指向真实存在的东西，否则那个按钮会被永久卡住而没人看得出为什么
       for (const n of m.need || []) {
         if (n === "data") { assert.ok(r.extraUpload, at(m.id + " 需要 data 但模块没配 extraUpload")); continue }
         if (n.startsWith("var:")) { assert.ok((r.vars?.fields || []).includes(n.slice(4)), at(m.id + " 要的列 " + n + " 不在 vars.fields 里")); continue }
         if (n.startsWith("after:")) { assert.ok(ids.includes(n.slice(6)), at(m.id + " 依赖的模式 " + n + " 不存在")); continue }
+        // docs:N —— 要勾够 N 篇。只有 source.multi + source.pick 的模块才有那个勾选框；
+        // 别的模块写了它，按钮会被一道【界面上根本不存在的闸】永久卡死。
+        if (/^docs:[2-9]$/.test(n)) {
+          assert.ok(r.source.multi && r.source.pick, at(m.id + " 要 " + n + "，但 source 没开 multi+pick"))
+          continue
+        }
         assert.fail(at(m.id + " 的 need 写法认不出来：" + n))
       }
       assert.ok(!m.need || m.needHint, at(m.id + " 有 need 就必须有 needHint——不然用户只看到按钮没反应"))

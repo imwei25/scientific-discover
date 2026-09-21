@@ -227,6 +227,10 @@ button{font:inherit}
 .filestrip .fchip:hover{border-color:var(--line-hi)}
 .filestrip .fchip.on{border-color:var(--accent);color:var(--accent);background:var(--accent-soft);font-weight:600}
 .filestrip .fchip .nm{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+/* 勾选框（source.pick）：这一轮「多篇综合 / 对比」读哪几篇。margin 全清 —— 默认的 3px
+   会把 chip 撑高、整条文件条跟着抖一下 */
+.filestrip .fchip .ck{flex:none;width:13px;height:13px;margin:0;cursor:pointer;accent-color:var(--accent)}
+.filestrip .fchip .ck:disabled{cursor:default}
 .filestrip .fchip .x{width:18px;height:18px;flex:none;border:none;background:none;border-radius:5px;color:var(--faint);
   cursor:pointer;display:grid;place-items:center;font-size:14px;line-height:1}
 .filestrip .fchip .x:hover{background:#fdecea;color:var(--red)}
@@ -932,6 +936,10 @@ function promptFor(id, stage2) {
   // 而用户在界面上明明看见传了三张 —— 这种"各说各话"最难被发现。
   const map = {
     doc: docName ? bq(docName) : "",
+    // {docs} = 文件条上【勾中】的那几份（多篇综合 / 多篇对比读的就是它）。与 {doc} 刻意分开：
+    // {doc} 恒是左栏当前那一篇（导读 / 翻译 / PPT 都只该对着它做），把两者合并成一个占位符的话，
+    // 用户点「导读」会得到一份把三篇混在一起的东西，而他只是在看其中一篇。
+    docs: pickedNames().map(bq).join("、"),
     data: docListStr(),
     vars: varsBlock(),
   }
@@ -943,6 +951,23 @@ function promptFor(id, stage2) {
     t = v ? t.split(ph).join(v) : t.replace(new RegExp("[^。\n]*" + ph + "[^。\n]*。?", "g"), "")
   }
   return M.mark + t + settingsBlock()
+}
+
+/**
+ * {docs} 的取值：文件条上【勾中】的那几份（按文件条的顺序，不按用户勾的先后）。
+ *
+ * 【为什么不直接用 docFiles】勾选是用户对"这一轮读哪几篇"的明确表态。传了五篇、只想比其中两篇
+ * 是常态（另外三篇是同一课题里别的方向）。没有勾选的话，用户唯一的办法是把不想比的那几篇删掉、
+ * 比完再传回来 —— 每次都要重传重抽一遍正文。
+ *
+ * 【没有 pick 的模块】退回"全部"：refcheck / humanize / stats 三个壳里没有这个勾选框，
+ * 它们的 {docs}（如果将来用到）就该是全部文件，而不是空。
+ */
+function pickedNames() {
+  const all = docFiles.map((f) => f.name)
+  if (!CFG || !CFG.source || !CFG.source.pick) return all
+  const on = all.filter((n) => PICKED.has(n))
+  return on.length ? on : all      // 一个都没勾 = 还没表态，按全部算（need 那道闸另外判篇数）
 }
 
 /** {data} 的取值：本会话【全部】数据表 / 配套数值表，反引号包好用顿号连起来 */
@@ -1032,7 +1057,13 @@ let docSize = null
 // 【为什么要有它】一份研究的数据常常分散在好几张表里（主表 + 随访表 + 检验表），
 // 只收一张的话用户只能反复覆盖；而传错一张却删不掉，就只能整个会话重来。
 let docFiles = []
+// 勾选（只有 CFG.source.pick 的模块有，目前是文献研读）：这一轮「多篇综合 / 多篇对比」读哪几篇。
+// 默认全勾 —— 传了三篇就想一起读是最常见的意图，让用户一上来先勾三下是纯粹的手工活。
+// 它随 __picked 落进 _workflow.json，刷新页面、换台机器打开同一个会话都要原样回来
+//（不回来的话，用户勾好两篇、刷新一下就变成全选，而他看不出这一轮读的是五篇还是两篇）。
+let PICKED = new Set()
 const isMulti = () => !!(CFG && CFG.source && CFG.source.multi)
+const canPick = () => !!(CFG && CFG.source && CFG.source.pick)
 // 配套数值表（只有 refcheck 的「数据完整性」用得上，见 CFG.extraUpload）。
 // 是【一组】而不是一份：一篇稿子的数据常常分散在好几张表里（主表 + 附表 + 随访表），
 // 只收一份的话用户只能反复覆盖，最后核的还是残缺的数据。元素形如 { name, size }。
@@ -1221,6 +1252,7 @@ $("btnStart").addEventListener("click", async () => {
     }
     clearTimeout(slow); $("btnStartTxt").textContent = startTxt
     docFiles = pendingFiles.map((f) => ({ name: f.name, size: f.size }))
+    PICKED = new Set(docFiles.map((f) => f.name))     // 默认全勾（见 PICKED 的头注）
     docName = docFiles[0].name
     docSize = docFiles[0].size
     enterReader()
@@ -1270,21 +1302,52 @@ function renderStrip() {
   if (!isMulti()) { strip.hidden = true; return }
   strip.hidden = false
   const busyNow = busy()
+  const pick = canPick()
+  const nPick = pickedNames().length
   strip.innerHTML = docFiles.map((f) =>
     '<span class="fchip' + (f.name === docName ? " on" : "") + '" data-pick="' + esc(f.name) + '" title="' + esc(f.name) + '">'
+    // 勾选框只在 source.pick 的模块出现。用真的 <input type=checkbox>（不是自画的小方块）：
+    // 键盘能 Tab 到、读屏软件能念出勾没勾 —— 这一格决定了这一轮读哪几篇，不能只有视觉。
+    + (pick ? '<input type="checkbox" class="ck" data-ck="' + esc(f.name) + '"'
+      + (PICKED.has(f.name) ? " checked" : "") + (busyNow ? " disabled" : "")
+      + ' aria-label="把 ' + esc(f.name) + ' 纳入多篇综合 / 对比">' : "")
     + '<span class="nm">' + esc(f.name) + "</span>"
     + '<button type="button" class="x" data-del="' + esc(f.name) + '" aria-label="删除 ' + esc(f.name) + '"'
     + (busyNow ? " disabled" : "") + ">×</button></span>").join("")
     + '<button type="button" class="addf" id="addFile"' + (busyNow ? ' disabled title="这一轮还在跑，跑完再加"' : "")
-    + ">＋ 再传一张</button>"
+    + ">＋ 再传一篇</button>"
     + (busyNow ? '<span class="fnote">这一轮跑完才能加/删文件</span>'
-      : docFiles.length > 1 ? '<span class="fnote">共 ' + docFiles.length + " 张，都会交给分析；点一张在左边看它</span>" : "")
+      // 勾选型模块要说清两件事【各自】读什么，否则用户会以为勾选也管着导读那一格：
+      // 勾的是"多篇综合/对比"的范围，导读/翻译/PPT 永远只对着左栏当前这一篇。
+      : pick && docFiles.length > 1
+        ? '<span class="fnote">已勾 ' + nPick + "/" + docFiles.length
+          + " 篇 → 多篇综合 / 多篇对比读这几篇；导读 / 翻译 / PPT 只读左边当前这一篇</span>"
+      : docFiles.length > 1 ? '<span class="fnote">共 ' + docFiles.length + " 份，都会交给分析；点一份在左边看它</span>" : "")
   strip.querySelectorAll("[data-pick]").forEach((el) => el.addEventListener("click", (e) => {
-    if (e.target.closest("[data-del]")) return
+    if (e.target.closest("[data-del]") || e.target.closest("[data-ck]")) return
     switchDoc(el.dataset.pick)
   }))
+  strip.querySelectorAll("[data-ck]").forEach((b) => b.addEventListener("change", () => togglePick(b.dataset.ck, b.checked)))
   strip.querySelectorAll("[data-del]").forEach((b) => b.addEventListener("click", () => removeDocFile(b.dataset.del)))
   const add = $("addFile"); if (add) add.addEventListener("click", pickMoreDocs)
+}
+
+/**
+ * 勾 / 取消勾一份。
+ * ★ 勾选变了要 render(mode) 一次：「多篇综合 / 对比」那两格在篇数不够时是被 need 拦着的，
+ *   用户勾满第二篇之后面板上那句"还没勾满两篇"必须当场消失 —— 否则他会以为勾了没用。
+ */
+function togglePick(name, on) {
+  if (busy()) { renderStrip(); return }
+  if (on) PICKED.add(name); else PICKED.delete(name)
+  renderStrip()
+  saveSettings()
+  // 只撤【因为篇数不够】而挂上的那条提示：别把缺数值表 / 缺分组列的提示也一并抹掉，
+  // 那些条件跟勾选毫无关系，抹了用户就看不见自己还缺什么了。
+  if (mode && S[mode] && (S[mode].blockMiss || []).some((x) => x.kind === "docs") && !blockedBy(mode)) {
+    S[mode].block = ""; S[mode].blockMiss = null
+  }
+  if (mode) render(mode)
 }
 
 /** 换一张看（只影响左栏与「变量对应」读哪张表的表头；发给模型的仍是全部） */
@@ -1342,6 +1405,7 @@ function pickMoreDocs() {
         await upload(f)
         // 同名重传 = 覆盖（服务端按名字落盘），列表里也只留一条，别出现两行同名
         docFiles = [...docFiles.filter((x) => x.name !== f.name), { name: f.name, size: f.size }]
+        PICKED.add(f.name)          // 新传进来的默认勾上：用户刚传它，就是要读它
         last = f.name
       } catch (e) {
         docMsg("上传失败：" + String((e && e.message) || e))
@@ -1358,7 +1422,9 @@ function pickMoreDocs() {
 async function removeDocFile(name) {
   if (busy()) { renderStrip(); return }          // 同 pickMoreDocs：快照过期时自我纠正，别静默吞掉
   const keep = docFiles.slice()
+  const keptPick = new Set(PICKED)
   docFiles = docFiles.filter((f) => f.name !== name)
+  PICKED.delete(name)
   const wasCurrent = name === docName
   if (wasCurrent) {
     docName = docFiles.length ? docFiles[0].name : ""
@@ -1373,7 +1439,7 @@ async function removeDocFile(name) {
     saveSettings()
     if (wasCurrent && docName && CFG.source.kind === "table") loadHeaders()
   } catch (e) {
-    docFiles = keep                                   // 删不掉就放回去，别让界面和磁盘对不上
+    docFiles = keep; PICKED = keptPick                // 删不掉就放回去，别让界面和磁盘对不上
     if (wasCurrent) { docName = name; docSize = (keep.find((f) => f.name === name) || {}).size }
     renderStrip(); renderDoc()
     docMsg("没能删掉 " + name + "（" + String((e && e.message) || e) + "）")
@@ -1737,16 +1803,18 @@ function renderRail() {
 
 /**
  * 这个模式现在跑得了吗？跑不了要说清缺什么，而不是发出去让模型自己发现。
- * need 的三种写法（定义在 workflows.mjs 的 modes[].need）：
+ * need 的几种写法（定义在 workflows.mjs 的 modes[].need）：
  *   "data"        需要配套数值表（refcheck 的数据完整性）
  *   "var:xxx"     需要「变量对应」里指定某一列（stats 的基线表要分组列）
  *   "after:yyy"   需要先跑过另一个模式（humanize 的改动对照要先有润色稿）
+ *   "docs:N"      需要勾上至少 N 篇（文献研读的多篇综合 / 多篇对比）
  */
 function blockedBy(k) {
   const M = MODES[k]
   const miss = []
   for (const n of M.need || []) {
-    if (n === "data" && !dataFiles.length) miss.push({ kind: "data" })
+    if (n.startsWith("docs:")) { const need = Number(n.slice(5)) || 2; const have = pickedNames().length; if (have < need) miss.push({ kind: "docs", need, have }) }
+    else if (n === "data" && !dataFiles.length) miss.push({ kind: "data" })
     else if (n.startsWith("var:")) { const f = n.slice(4); const v = SETTINGS[f]; if (v === undefined || v === null || v === "" || (Array.isArray(v) && !v.length)) miss.push({ kind: "var", field: f }) }
     else if (n.startsWith("after:")) { const m2 = n.slice(6); if (!S[m2] || S[m2].status === "idle") miss.push({ kind: "after", mode: m2 }) }
   }
@@ -1807,6 +1875,11 @@ function showBlocked(k, miss) {
   const M = MODES[k]
   S[k].err = ""
   const parts = miss.map((x) => {
+    // 两种缺法要分开说：文件根本没传够 vs 传够了但没勾。用户的下一步动作完全不同
+    //（去传第二篇 / 去左上角勾一下），混成一句"至少要两篇"他会以为得再传一遍。
+    if (x.kind === "docs") return docFiles.length < x.need
+      ? "本会话只传了 " + docFiles.length + " 篇，这一格至少要 " + x.need + " 篇（用左上角的「＋ 再传一篇」补上）"
+      : "只勾了 " + x.have + " 篇，这一格至少要勾 " + x.need + " 篇"
     if (x.kind === "data") return "还没有配套的数值表"
     if (x.kind === "var") { const f = fieldDef(x.field); return "还没指定「" + (f ? f.label : x.field) + "」" }
     if (x.kind === "after") return "得先跑一次「" + (MODES[x.mode] ? MODES[x.mode].label : x.mode) + "」"
@@ -2298,8 +2371,11 @@ async function run(m, force, userTxt, ask, stage2) {
       const tpl = (CFG.chat && CFG.chat.firstTurn) || "我上传了 {doc}，请先读它再回答。我的问题是："
       // 数据模块的"那份东西"是一组表（docListStr 就是它）；文献 / 稿件模块只有左栏这一份。
       // 别在这里用 docListStr 兜底：对那几个模块它返回的是【配套数值表】，不是正文那份。
-      const src = CFG.source.kind === "table" ? docListStr() : ""
-      q = tpl.replace("{doc}", src || "`" + docName + "`") + q
+      // {docs}（文献模块）= 本会话传进来的【全部】文献：一进来就直接提问时，模型得知道手上
+      // 有几篇，否则它只会去读左栏当前那一篇，而用户问的可能是"这几篇哪个样本量最大"。
+      const all = docFiles.map((f) => "`" + f.name + "`").join("、")
+      const src = CFG.source.kind === "table" ? docListStr() : all
+      q = tpl.replace("{docs}", src || "`" + docName + "`").replace("{doc}", "`" + docName + "`") + q
     }
     // 待发的交接卡拼在最前面（取走即清，与工作台的 wfCardPrefix 同一套规矩）。面板里对应地
     // 留一条转交记录 —— 卡片本身不进气泡，气泡里只有用户自己打的那句话。
@@ -2826,6 +2902,7 @@ async function restore() {
   // 既不显示、也不会随提示词发给模型，而用户完全看不出少了东西。
   docFiles = (isMulti() ? mine : mine.slice(0, 1)).map((f) => ({ name: f.name, size: f.size }))
   docName = docFiles[0].name; docSize = docFiles[0].size
+  PICKED = new Set(docFiles.map((f) => f.name))   // 兜底全勾；落盘过的勾选在下面读到 form 之后覆盖它
   // 配套数值表（refcheck）：上传目录里除原文之外、扩展名对得上的【全部】文件。
   // 只找第一个的话，刷新一次页面就只剩一份，另外几份既不显示也不会发给模型。
   if (CFG.extraUpload) {
@@ -2841,6 +2918,12 @@ async function restore() {
     // 都不做 withDefaults），整份替换会把 installConfig 播下去的默认值又冲掉，
     // 于是刷新一次，弹层里那五个字段重新变回「（不指定）」。
     if (st && st.state && st.state.form) SETTINGS = { ...SETTINGS, ...st.state.form }
+    // 勾选回来：与磁盘上真实存在的文件取交集 —— 落盘之后被删掉的那几篇不能再算进 {docs}，
+    // 否则模型会去读一个不存在的文件，然后自己编一份"读不到就按摘要推断"的结论。
+    if (canPick() && Array.isArray(SETTINGS.__picked)) {
+      const live = SETTINGS.__picked.filter((n) => docFiles.some((f) => f.name === n))
+      if (live.length) PICKED = new Set(live)
+    }
     // ★ 闸状态也要取。本壳服务的四个模块（文稿核查 / 语言润色 / 数据统计 / 文献导读）加起来有
     //   5 道质量闸，而服务端的【出件拦截是模块无关的】：用户在这儿说"导成 PDF"，闸红就中止本轮。
     //   此前本页对闸一无所知——既不显示哪道红了，也没有聊天页那个「仍要出件」的逃生口，
@@ -2994,6 +3077,9 @@ function wfFormValues() {
     v[CFG.source.field] = docFiles.map((f) => f.name)
     if (isMulti() && docName) for (const f of (CFG.vars && CFG.vars.fields) || []) v["__src_" + f] = docName
   } else if (CFG.source.field && docName) v[CFG.source.field] = [docName]
+  // 勾选也要落盘（服务端的 KEEP 白名单里放了 __picked）。它不是"界面状态"：这一轮的
+  // 多篇综合 / 对比到底读了哪几篇，是任务卡与事后复盘都要能查回来的事实。
+  if (canPick()) v.__picked = pickedNames()
   if (CFG.extraUpload && dataFiles.length) v[CFG.extraUpload.field] = dataFiles.map((f) => f.name)
   return v
 }

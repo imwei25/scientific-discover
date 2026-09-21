@@ -1227,7 +1227,7 @@ const MODULE_DEFS = {
   // 模块 id 保持 litread 不变（deploy 的 users/<名>.env 里 MODULES= 存的是 id，改名等于把老用户的授权改没）；
   // 变的是它做什么：从"检索一个方向的文献"改成"把用户上传的这一篇读透"（专用界面 web/reader.html）。
   litread:  { name: "文献研读",       group: "skills",
-              desc: "上传一篇 PDF / Word 文献，逐篇读透：自动导读理清核心与论证逻辑，可全文翻译、生成汇报 PPT，也能对着原文随时追问。" },
+              desc: "上传一篇或多篇 PDF / Word 文献，逐篇读透：自动导读理清核心与论证逻辑，可全文翻译、生成汇报 PPT，也能对着原文随时追问；传了多篇还能勾选其中几篇，一次出合并结论或逐维度对比表。" },
   refcheck: { name: "文稿核查与审校", group: "skills",
               // ⚠️ 别写成"识别伪造、篡改" —— data-integrity 技能的铁律是「只出待核信号、不下造假结论」
               // （signal not verdict）。首屏承诺"查得出造假"而实际只给待核清单，既让用户失望，本身也有风险。
@@ -5211,7 +5211,9 @@ export const server = http.createServer(async (req, res) => {
         //   于是发给模型的提示词从"机器认的，请你核"升级成「以我指定的为准」——
         //   正是 varsBlock 头注写明不许发生的那件事：给一个可能认错的列名披上用户的权威。
         //   （反方向也有：用户点过"就按这个来"后不发消息就刷新，__varsOK 丢失、确认白点。）
-        const KEEP = /^__vars/
+        // ★ `__picked`（文献研读：这一轮的多篇综合 / 对比勾了哪几篇）同样【必须落盘】：
+        //   剥掉之后刷新一次，用户精心勾的两篇会变回"全选"，而界面上看不出这一轮读的是几篇。
+        const KEEP = /^__(vars|picked)/
         const persist = Object.fromEntries(Object.entries(values).filter(([k]) => !k.startsWith("__") || KEEP.test(k)))
         st.form = { ...(st.form || {}), ...persist }
         if (stepId) st.cur = stepId
