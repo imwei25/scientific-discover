@@ -120,6 +120,75 @@ def default_profile_dir() -> Path:
     return Path.home() / ".sci-scholar-chrome"
 
 
+def memo_path(profile_dir: Path | None = None) -> Path:
+    """记住这台机器上识别到的机构入口。放在专用资料目录**旁边**，不塞进去——
+    那目录归 Chrome 管，我们别去掺和。"""
+    p = profile_dir or default_profile_dir()
+    return p.parent / "sci-institution.json"
+
+
+def load_memo(profile_dir: Path | None = None) -> dict:
+    try:
+        # utf-8-sig：这文件可能被用户/脚本用 PowerShell 重写过，PS 5.1 的 utf8 带 BOM，
+        # 按 utf-8 读会 JSONDecodeError（本仓库在别处已吃过这个亏）。
+        return json.loads(memo_path(profile_dir).read_text(encoding="utf-8-sig"))
+    except Exception:  # noqa: BLE001
+        return {}
+
+
+def save_memo(gateway: tuple[str, str], profile_dir: Path | None = None) -> None:
+    """只记一个入口地址，不记任何凭据。会话本身在 Chrome 自己的资料目录里。"""
+    try:
+        memo_path(profile_dir).write_text(json.dumps(
+            {"webvpn": f"{gateway[0]}://{gateway[1]}",
+             "saved_at": time.strftime("%Y-%m-%d %H:%M:%S")},
+            ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    except Exception as e:  # noqa: BLE001
+        log.debug("memo save failed: %s", e)
+
+
+_GUIDE_HTML = """<!doctype html><html lang="zh-CN"><meta charset="utf-8">
+<title>连接你所在机构的文献权限</title>
+<style>
+ body{font:16px/1.8 system-ui,"Microsoft YaHei",sans-serif;max-width:40em;
+      margin:8vh auto;padding:0 1.5em;color:#222}
+ h1{font-size:1.5em;margin-bottom:.2em}
+ .sub{color:#666;margin-top:0}
+ ol{padding-left:1.2em} li{margin:.8em 0}
+ .note{background:#f6f8fa;border-left:4px solid #999;padding:.8em 1em;margin:1.5em 0}
+ code{background:#f0f0f0;padding:.1em .35em;border-radius:3px}
+</style>
+<h1>请在这个窗口里登录你们单位的文献权限</h1>
+<p class="sub">登录一次就行，以后会记住。</p>
+<ol>
+  <li>在上面的地址栏打开<b>你们学校 / 医院图书馆的网站</b>，或者你平时用的
+      <b>WebVPN / 校外访问入口</b>——就是你平时查文献时用的那个地址。</li>
+  <li>按平时的方式登录（统一身份认证 / CARSI 选学校 / 图书馆账号都行）。</li>
+  <li>登录成功后<b>回到助手，说一声「登录好了」</b>即可，这个窗口别关。</li>
+</ol>
+<div class="note">
+  <b>为什么不是你平时那个 Chrome？</b><br>
+  新版 Chrome 不允许程序连接你日常使用的浏览器，所以这里只能用一个独立窗口。
+  它看不到你的收藏夹和已有登录，属于正常现象。
+</div>
+<div class="note">
+  <b>如果你们单位是按 IP 授权的</b>（你人就在单位网络里），那什么都不用做，
+  直接回助手说「继续」——不需要登录。
+</div>
+</html>
+"""
+
+
+def guide_page(profile_dir: Path | None = None) -> str:
+    """把引导页写到本地并返回 file:// 地址。比让用户对着 about:blank 发呆强。"""
+    p = (profile_dir or default_profile_dir()).parent / "sci-institution-guide.html"
+    try:
+        p.write_text(_GUIDE_HTML, encoding="utf-8")
+        return p.as_uri()
+    except Exception:  # noqa: BLE001
+        return "about:blank"
+
+
 def cdp_alive(cdp_url: str, timeout: float = 1.5) -> bool:
     try:
         with urllib.request.urlopen(  # noqa: S310（只打本机调试端口）
@@ -140,10 +209,16 @@ def launch_browser(cdp_url: str, profile_dir: Path | None = None,
     port = urllib.parse.urlparse(cdp_url).port or 9222
     profile = profile_dir or default_profile_dir()
     profile.mkdir(parents=True, exist_ok=True)
+    # 开哪个页面：上次识别到的机构门户 > 引导页 > 空白页。第一次用的人对着
+    # about:blank 是不知道该干嘛的，而我们**不知道也不该猜**他是哪个学校——
+    # 引导页只告诉他"打开你平时用的那个图书馆地址"，由他自己决定去哪。
+    landing = (load_memo(profile_dir).get("webvpn") or "").strip()
+    if not landing:
+        landing = guide_page(profile_dir)
     cmd = [exe, f"--remote-debugging-port={port}",
            f"--user-data-dir={profile}",
            "--no-first-run", "--no-default-browser-check",
-           "about:blank"]
+           landing]
     kwargs: dict = {}
     if sys.platform == "win32":
         # 脱离本进程：脚本跑完浏览器还在，用户下次直接复用，不用再等一次启动。
@@ -322,9 +397,22 @@ def detect_webvpn_from_cookies(context) -> tuple[str, str] | None:
     return None
 
 
-def auto_webvpn(context) -> tuple[str, str] | None:
-    """标签页优先（能同时确认端口），退回 cookie（更耐久但要探 origin）。"""
-    return detect_webvpn_gateway(context) or detect_webvpn_from_cookies(context)
+def auto_webvpn(context, profile_dir: Path | None = None,
+                remember: bool = True) -> tuple[str, str] | None:
+    """标签页优先（能同时确认端口），退回 cookie（更耐久但要探 origin），
+    再退回这台机器上次记下的入口（会话可能已过期，但地址仍然对）。"""
+    gw = detect_webvpn_gateway(context) or detect_webvpn_from_cookies(context)
+    if gw:
+        if remember:
+            save_memo(gw, profile_dir)
+        return gw
+    remembered = (load_memo(profile_dir).get("webvpn") or "").strip()
+    if remembered:
+        try:
+            return parse_webvpn_gateway(remembered)
+        except ValueError:
+            return None
+    return None
 
 
 def entry_url_for(doi: str, email: str, gateway: tuple[str, str] | None) -> str:
@@ -578,7 +666,7 @@ def run_diagnose(cdp_url: str, email: str, profile_dir: Path | None,
         # 分量很重：没识别到而订阅篇全败，多半是 IP 授权没生效或根本没在机构网里。
         gw = None
         if context is not None:
-            gw = auto_webvpn(context)
+            gw = auto_webvpn(context, profile_dir)
             report["webvpn"] = ({"detected": True, "gateway": f"{gw[0]}://{gw[1]}"}
                                 if gw else {"detected": False})
             if gw:
@@ -1117,7 +1205,7 @@ def main() -> int:
 
         # 没显式给网关时，看看用户是不是已经经 WebVPN 开着页面——是的话直接认出来。
         if gateway is None and not args.no_webvpn:
-            detected = auto_webvpn(context)
+            detected = auto_webvpn(context, profile_dir)
             if detected:
                 gateway = detected
                 print(f"· 自动识别到 WebVPN 网关：{detected[0]}://{detected[1]}"
