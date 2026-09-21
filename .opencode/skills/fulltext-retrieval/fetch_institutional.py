@@ -166,6 +166,155 @@ def launch_browser(cdp_url: str, profile_dir: Path | None = None,
 
 
 # ============================================================
+# WebVPN（国内高校常见的 URL 改写型代理）
+# ============================================================
+# 为什么非得单独支持：这类代理**只对带代理前缀的 URL 授权**。用户即便在浏览器里
+# 登录了学校 WebVPN，我们照常访问 https://doi.org/... 也一样拿不到——授权不是按
+# 会话给的，是按 URL 给的。所以必须把目标地址改写成代理形式再访问。
+#
+# 改写规则（据南京医科大学的真实样例反推，属这套方案的通行写法）：
+#   https://webofscience.clarivate.cn/wos/woscc/smart-search
+#   → http://webofscience-clarivate-cn-s.webvpn.njmu.edu.cn:8118/wos/woscc/smart-search
+#   即：主机名的点换成横杠；原站是 https 就再加后缀 -s（http 则不加）；
+#       然后接上网关主机名与端口；路径、查询串原样保留。
+#
+# ⚠ 这套方案各校部署有细微差异（尤其**目标站点带非标准端口**时的编码方式），本实现
+#   只覆盖最通行的写法。遇到改写后打不开，别猜——让用户在浏览器里手动打开一篇文献，
+#   把地址栏里的真实 URL 发回来对照。
+#
+# 另一个关键设计：**只改写入口 URL 就够了**。落地之后页面里的链接由 WebVPN 自己
+# 服务端改写过，collect_pdf_candidates 抓到的本来就是代理形式的地址，不用再动手。
+_WEBVPN_SAFE_HOST = re.compile(r"^[A-Za-z0-9.-]+(:\d+)?$")
+
+
+def parse_webvpn_gateway(raw: str) -> tuple[str, str]:
+    """把用户给的网关写成 (scheme, netloc)。接受 'webvpn.x.edu.cn:8118' 或带 scheme 的整串。"""
+    raw = (raw or "").strip().rstrip("/")
+    if "://" in raw:
+        p = urllib.parse.urlparse(raw)
+        scheme, netloc = (p.scheme or "https"), p.netloc
+    else:
+        netloc = raw
+        # 带自定义端口的部署实测多为 http（样例 :8118 即是）；不带端口默认 https。
+        scheme = "http" if ":" in netloc else "https"
+    if not netloc or not _WEBVPN_SAFE_HOST.match(netloc):
+        raise ValueError(f"WebVPN 网关写法不对：{raw!r}（应形如 webvpn.njmu.edu.cn:8118）")
+    return scheme, netloc
+
+
+def webvpn_rewrite(url: str, gateway: tuple[str, str]) -> str:
+    """把一个真实站点 URL 改写成 WebVPN 形式。非 http(s) 或已是代理形式的原样返回。"""
+    scheme, gw_netloc = gateway
+    p = urllib.parse.urlparse(url)
+    if p.scheme not in ("http", "https") or not p.hostname:
+        return url
+    gw_host = gw_netloc.split(":")[0]
+    if p.hostname.endswith(gw_host):        # 已经是代理地址，别套娃
+        return url
+    host = p.hostname.replace(".", "-")
+    if p.scheme == "https":
+        host += "-s"
+    if p.port:
+        # 目标站点带非标准端口的编码方式各校不一，这里不臆造：原样返回并警告，
+        # 让调用方如实记下来，好过默默生成一个打不开的地址。
+        log.warning("WebVPN：目标 %s 带非标准端口 %s，本实现不改写该形式，已原样使用",
+                    p.hostname, p.port)
+        return url
+    new = p._replace(scheme=scheme, netloc=f"{host}.{gw_netloc}")
+    return urllib.parse.urlunparse(new)
+
+
+def detect_webvpn_gateway(context) -> tuple[str, str] | None:
+    """从浏览器**已打开的标签页**里自动认出 WebVPN 网关，省掉让用户去查的麻烦。
+
+    网关的域名和端口是各校特有的，**猜不出来也不该猜**。但只要用户在那个窗口里
+    已经经 WebVPN 打开过任意一个页面，地址栏里就写着答案：
+      http://webofscience-clarivate-cn-s.webvpn.njmu.edu.cn:8118/...
+                                        └────── 网关 ──────┘ └端口┘
+    做法是找到主机名里的 webvpn 那一节，从它往后就是网关；它前面那一节是被编码的
+    目标站点。优先取**带前缀**的页面（能同时确认端口），退而求其次才用门户页本身。
+    """
+    best = None
+    try:
+        pages = list(context.pages)
+    except Exception:  # noqa: BLE001
+        return None
+    for page in pages:
+        try:
+            p = urllib.parse.urlparse(page.url)
+        except Exception:  # noqa: BLE001
+            continue
+        if p.scheme not in ("http", "https") or not p.hostname:
+            continue
+        labels = p.hostname.split(".")
+        idx = next((i for i, l in enumerate(labels) if "webvpn" in l.lower()), -1)
+        if idx < 0:
+            continue
+        netloc = ".".join(labels[idx:]) + (f":{p.port}" if p.port else "")
+        cand = (p.scheme, netloc)
+        if idx > 0:          # 带目标前缀 → 端口可信，直接采用
+            return cand
+        best = best or cand  # 门户页本身，作为兜底
+    return best
+
+
+def detect_webvpn_from_cookies(context) -> tuple[str, str] | None:
+    """第二条识别路径：看 cookie。
+
+    标签页识别要求用户**当时正好开着**一个 WebVPN 页面，这个条件太脆。而只要他登录过，
+    `.webvpn.xxx.edu.cn` 上的会话 cookie 就一直在，关了标签页也还在。代价是 cookie
+    只带域名、不带端口和协议，所以拿到域名后要探一下门户到底在哪个 origin 上。"""
+    try:
+        cookies = context.cookies()
+    except Exception:  # noqa: BLE001
+        return None
+    hosts = set()
+    for c in cookies:
+        d = (c.get("domain") or "").lstrip(".")
+        if "webvpn" in d.lower() and d.count(".") >= 1:
+            labels = d.split(".")
+            idx = next((i for i, l in enumerate(labels) if "webvpn" in l.lower()), -1)
+            if idx >= 0:
+                hosts.add(".".join(labels[idx:]))
+    for host in sorted(hosts, key=len):
+        for scheme, netloc in (("https", host), ("http", host),
+                               ("http", f"{host}:8118")):
+            try:
+                r = context.request.get(f"{scheme}://{netloc}/", timeout=8000,
+                                        max_redirects=2)
+                if r.status < 500:
+                    return (scheme, netloc)
+            except Exception:  # noqa: BLE001
+                continue
+    return None
+
+
+def auto_webvpn(context) -> tuple[str, str] | None:
+    """标签页优先（能同时确认端口），退回 cookie（更耐久但要探 origin）。"""
+    return detect_webvpn_gateway(context) or detect_webvpn_from_cookies(context)
+
+
+def entry_url_for(doi: str, email: str, gateway: tuple[str, str] | None) -> str:
+    """一条记录的入口地址。
+
+    不走 WebVPN 时就是 doi.org。走 WebVPN 时**先用 Crossref 把 DOI 解成出版商真实
+    落地页再改写**——而不是改写 doi.org 本身：多数 WebVPN 只放行白名单内的站点，
+    doi.org 往往不在名单里；而且它的 302 会跳到未改写的真实域名上，直接跳出代理。
+    Crossref 是公开 API，本机直连即可，不需要机构权限。"""
+    plain = f"https://doi.org/{urllib.parse.quote(doi, safe='/')}"
+    if not gateway:
+        return plain
+    try:
+        from fetch_oa import crossref_lookup  # noqa: PLC0415
+        for cand in crossref_lookup(doi, email):
+            if cand.startswith("http"):
+                return webvpn_rewrite(cand, gateway)
+    except Exception as e:  # noqa: BLE001
+        log.debug("crossref resolve failed for %s: %s", doi, e)
+    return webvpn_rewrite(plain, gateway)
+
+
+# ============================================================
 # 机构网络自检（--diagnose）
 # ============================================================
 # 为什么要有这个：真实的机构网络多半不在开发者手上，只能委托别人代跑。而"下不下来"
@@ -253,13 +402,15 @@ def diagnose_direct(doi: str, email: str) -> dict:
     return rec
 
 
-def diagnose_browser(context, doi: str) -> dict:
+def diagnose_browser(context, doi: str, email: str = CONTACT_EMAIL,
+                     gateway: tuple[str, str] | None = None) -> dict:
     """浏览器通道的**完整轨迹**——只记不留文件。逐步记录是关键：光有成败无法定位。"""
     rec: dict = {"ok": False}
     page = context.new_page()
     try:
-        page.goto(f"https://doi.org/{urllib.parse.quote(doi, safe='/')}",
-                  wait_until="domcontentloaded", timeout=NAV_TIMEOUT_MS)
+        entry = entry_url_for(doi, email, gateway)
+        rec["entry_url"] = entry[:200]
+        page.goto(entry, wait_until="domcontentloaded", timeout=NAV_TIMEOUT_MS)
         page.wait_for_timeout(SETTLE_MS)
         rec["landed_url"] = page.url[:200]
         try:
@@ -329,6 +480,13 @@ def render_diagnose_md(report: dict) -> str:
           "（常见：连了 VPN、连的是访客 WiFi），机构订阅本来就不会生效。", ""]
     L += ["## 二、运行环境", ""]
     L += [f"- {k}：{v}" for k, v in env.items()]
+    wv = report.get("webvpn") or {}
+    if wv.get("detected"):
+        L += [f"- **WebVPN 网关：{wv['gateway']}**（这所机构走 URL 改写型代理，"
+              "已自动识别，下载会经它走）"]
+    elif "webvpn" in report:
+        L += ["- WebVPN：未识别到（说明不是 URL 改写型代理，或用户还没在这个浏览器"
+              "窗口里登录过学校 VPN）"]
     L += ["", "## 三、逐篇探针结果", "",
           "| 出版商 | 直连 | 浏览器 | 判定 | 大小 |", "|---|---|---|---|---|"]
     for p in report["probes"]:
@@ -383,14 +541,23 @@ def run_diagnose(cdp_url: str, email: str, profile_dir: Path | None,
                            else browser.new_context())
             except Exception as e:  # noqa: BLE001
                 report["environment"]["cdp_connect_error"] = str(e)[:200]
+        # 识别出网关 = 这所机构走的是 URL 改写型代理（WebVPN）。这一项在远程定位里
+        # 分量很重：没识别到而订阅篇全败，多半是 IP 授权没生效或根本没在机构网里。
+        gw = None
+        if context is not None:
+            gw = auto_webvpn(context)
+            report["webvpn"] = ({"detected": True, "gateway": f"{gw[0]}://{gw[1]}"}
+                                if gw else {"detected": False})
+            if gw:
+                print(f"· 识别到 WebVPN 网关：{gw[0]}://{gw[1]}", flush=True)
         probes = []
         for i, p in enumerate(PROBES, 1):
             print(f"  [{i}/{len(PROBES)}] {p['publisher']} …", end=" ", flush=True)
             rec = {"doi": p["doi"], "publisher": p["publisher"],
                    "is_oa_control": bool(p.get("oa"))}
             rec["direct"] = diagnose_direct(p["doi"], email)
-            rec["browser"] = (diagnose_browser(context, p["doi"]) if context
-                              else {"ok": False, "verdict": "no-browser"})
+            rec["browser"] = (diagnose_browser(context, p["doi"], email, gw)
+                              if context else {"ok": False, "verdict": "no-browser"})
             probes.append(rec)
             print("直连 " + ("OK" if rec["direct"]["ok"] else "×")
                   + " / 浏览器 " + ("OK" if rec["browser"]["ok"] else "×"), flush=True)
@@ -645,7 +812,8 @@ def _try_take_pdf(context, page, outpath: Path) -> bool:
 
 
 def process_record(context, rec: dict, outdir: Path, email: str,
-                   login_timeout: int, ip_only: bool = False) -> tuple[str, str]:
+                   login_timeout: int, ip_only: bool = False,
+                   gateway: tuple[str, str] | None = None) -> tuple[str, str]:
     """一条记录：DOI 落实 → 浏览器落地 → 先直接取 PDF → 取不到再判登录墙。
 
     **先取后判**是刻意的：机构若是 **IP 授权制**（机器在校园网 / 机构网段内），
@@ -664,7 +832,7 @@ def process_record(context, rec: dict, outdir: Path, email: str,
 
     page = context.new_page()
     try:
-        page.goto(f"https://doi.org/{urllib.parse.quote(doi, safe='/')}",
+        page.goto(entry_url_for(doi, email, gateway),
                   wait_until="domcontentloaded", timeout=NAV_TIMEOUT_MS)
         page.wait_for_timeout(SETTLE_MS)
 
@@ -800,6 +968,13 @@ def main() -> int:
                              "端口的 Chrome/Edge，用专用资料目录）")
     parser.add_argument("--launch-browser", action="store_true",
                         help="只把带调试端口的浏览器起起来就退出（给用户先登录用），不下载")
+    parser.add_argument("--webvpn", default=os.environ.get("SCI_WEBVPN", ""),
+                        help="学校 WebVPN 网关（URL 改写型代理），形如 "
+                             "webvpn.njmu.edu.cn:8118。这类代理只对带前缀的 URL 授权，"
+                             "光在浏览器里登录不够，必须改写地址。不填则自动从浏览器"
+                             "已打开的页面里识别。亦可用环境变量 SCI_WEBVPN")
+    parser.add_argument("--no-webvpn", action="store_true",
+                        help="关掉 WebVPN 自动识别（识别错了、或你走的是 IP 授权/CARSI 时用）")
     parser.add_argument("--diagnose", action="store_true",
                         help="机构网络自检：查出口 IP 归属 + 对 7 篇探针（1 篇 OA 对照 + "
                              "6 家主流出版商）逐步取证，产出可发回的报告。远程代测必用")
@@ -827,6 +1002,16 @@ def main() -> int:
                         format="%(levelname)s: %(message)s")
 
     profile_dir = Path(args.profile_dir) if args.profile_dir else None
+
+    gateway = None
+    if args.webvpn:
+        try:
+            gateway = parse_webvpn_gateway(args.webvpn)
+        except ValueError as e:
+            print(f"❌ {e}")
+            return 2
+        print(f"· WebVPN 模式：目标地址将改写到 {gateway[0]}://…{gateway[1]}")
+        print("  前提：先在那个 Chrome 窗口里登录一次学校 WebVPN，否则会落到登录页。")
 
     # --launch-browser：只把浏览器起起来（给用户先登录 / 先确认在校园网里），不下载。
     if args.launch_browser:
@@ -880,6 +1065,15 @@ def main() -> int:
             return 2
         context = browser.contexts[0] if browser.contexts else browser.new_context()
 
+        # 没显式给网关时，看看用户是不是已经经 WebVPN 开着页面——是的话直接认出来。
+        if gateway is None and not args.no_webvpn:
+            detected = auto_webvpn(context)
+            if detected:
+                gateway = detected
+                print(f"· 自动识别到 WebVPN 网关：{detected[0]}://{detected[1]}"
+                      "（来自浏览器里已打开的页面）")
+                print("  识别错了或不想走代理：加 --no-webvpn。")
+
         stats = {"institutional": 0, "skip": 0, "fail": 0}
         fail_reasons: dict[str, int] = {}
         labels = {"institutional": "OK (机构通道)", "skip": "SKIP", "fail": "FAIL"}
@@ -889,7 +1083,7 @@ def main() -> int:
             try:
                 status, source = process_record(
                     context, rec, args.output, args.email, args.login_timeout,
-                    ip_only=args.ip_only)
+                    ip_only=args.ip_only, gateway=gateway)
             except Exception as e:  # noqa: BLE001
                 status, source = ("fail", "error")
                 log.debug("unhandled error for %s: %s", disp, e)
