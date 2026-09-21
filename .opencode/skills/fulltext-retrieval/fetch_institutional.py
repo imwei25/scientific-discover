@@ -241,21 +241,54 @@ def detect_webvpn_gateway(context) -> tuple[str, str] | None:
         return None
     for page in pages:
         try:
-            p = urllib.parse.urlparse(page.url)
+            url = page.url
         except Exception:  # noqa: BLE001
             continue
-        if p.scheme not in ("http", "https") or not p.hostname:
-            continue
-        labels = p.hostname.split(".")
+        for cand, has_prefix in _gateway_candidates(url):
+            if has_prefix:   # 带目标前缀 → 协议与端口都可信，直接采用
+                return cand
+            best = best or cand
+    return best
+
+
+def _gateway_candidates(url: str) -> list[tuple[tuple[str, str], bool]]:
+    """从一个 URL 里挖出可能的网关。返回 [( (scheme, netloc), 是否带目标前缀 )]。
+
+    除了 URL 本身，还要看查询串里**内嵌的回跳地址**——实测未登录访问改写地址会被
+    302 到门户，形如：
+      https://webvpn.njmu.edu.cn/portal/?redirect_uri=http%3A%2F%2Fwww-sciencedirect-com-s
+        .webvpn.njmu.edu.cn%3A8118%2F...#!/login
+    门户本身在 https:443，而真正给改写地址用的是 http:8118 —— 只看门户会取错协议和
+    端口。内嵌的那个 redirect_uri 才是权威样本。"""
+    out: list[tuple[tuple[str, str], bool]] = []
+    try:
+        p = urllib.parse.urlparse(url)
+    except Exception:  # noqa: BLE001
+        return out
+    if p.scheme not in ("http", "https") or not p.hostname:
+        return out
+
+    def add(parsed) -> None:
+        if parsed.scheme not in ("http", "https") or not parsed.hostname:
+            return
+        labels = parsed.hostname.split(".")
         idx = next((i for i, l in enumerate(labels) if "webvpn" in l.lower()), -1)
         if idx < 0:
-            continue
-        netloc = ".".join(labels[idx:]) + (f":{p.port}" if p.port else "")
-        cand = (p.scheme, netloc)
-        if idx > 0:          # 带目标前缀 → 端口可信，直接采用
-            return cand
-        best = best or cand  # 门户页本身，作为兜底
-    return best
+            return
+        netloc = ".".join(labels[idx:]) + (f":{parsed.port}" if parsed.port else "")
+        out.append(((parsed.scheme, netloc), idx > 0))
+
+    for vals in urllib.parse.parse_qs(p.query).values():
+        for v in vals:
+            if v.startswith(("http://", "https://")):
+                try:
+                    add(urllib.parse.urlparse(v))
+                except Exception:  # noqa: BLE001
+                    continue
+    add(p)
+    # 带前缀的排前面，让调用方优先采信
+    out.sort(key=lambda x: not x[1])
+    return out
 
 
 def detect_webvpn_from_cookies(context) -> tuple[str, str] | None:
@@ -649,6 +682,22 @@ def resolve_doi(rec: dict, email: str) -> str:
 # 浏览器侧：登录墙检测 → 等用户 → 找 PDF 链接 → 带会话下载
 # ============================================================
 
+def bounced_to_gateway(page, gateway: tuple[str, str] | None) -> bool:
+    """走 WebVPN 时被弹回**网关门户本身** = 没登录（或会话过期）。
+
+    实测未登录访问改写地址会 302 到 `https://<网关>/portal/?redirect_uri=...`。落地主机
+    等于网关主机、却没有被编码的目标前缀，就是这种情况。不单独判的话它会被记成
+    "no-pdf-link"，把"你没登录"说成"这篇没有全文链接"，方向就错了。"""
+    if not gateway:
+        return False
+    try:
+        host = (urllib.parse.urlparse(page.url).hostname or "").lower()
+    except Exception:  # noqa: BLE001
+        return False
+    gw_host = gateway[1].split(":")[0].lower()
+    return host == gw_host          # 带前缀时 host 是 xxx-s.<网关>，不会相等
+
+
 def looks_like_auth_page(page) -> bool:
     url = page.url.lower()
     if any(h in url for h in AUTH_URL_HINTS):
@@ -845,7 +894,8 @@ def process_record(context, rec: dict, outdir: Path, email: str,
         # 后者得去 CARSI 登录），混成一个标签只会把人引到错误的方向。
         # 顺序：先判人机验证，因为 looks_like_auth_page 的标题特征里混着验证页的词。
         blocker = ("challenge" if looks_like_challenge(page)
-                   else "needs-login" if looks_like_auth_page(page) else "")
+                   else "needs-login" if (bounced_to_gateway(page, gateway)
+                                          or looks_like_auth_page(page)) else "")
         if blocker:
             if ip_only:
                 # 纯 IP 制批量（无人值守）：不等人，记下来继续下一条。
