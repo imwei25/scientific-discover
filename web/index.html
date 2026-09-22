@@ -1740,6 +1740,9 @@
   .msel .mitem { display: flex; align-items: center; gap: 6px; padding: 7px 8px; border-radius: 6px; cursor: pointer; font-size: 13px; color: var(--text); }
   .msel .mitem:hover { background: #f3f6fb; }
   .msel .mitem.cur { color: var(--accent-deep); font-weight: 600; }
+  /* 档位被启动参数钉死时：仍然显示（用户要知道现在是哪一档），但点不动 */
+  .msel .mitem.off { opacity: .5; cursor: default; }
+  .msel .mitem.off:hover { background: transparent; }
   .msel .mmult { margin-left: auto; color: var(--faint); font-size: 11px; font-weight: 500; white-space: nowrap; }
   .modal { position: fixed; inset: 0; z-index: 70; display: none; align-items: center; justify-content: center; background: rgba(20,32,54,.35); backdrop-filter: blur(4px); padding: 24px; }
   .modal.on { display: flex; }
@@ -2870,7 +2873,15 @@ document.getElementById("logoutBtn").innerHTML = ic("logout") + "<span>退出登
 // ---- 模型切换器：显示 当前供应商·模型，可在同供应商下切换（仅接入网关时出现）----
 ;(function () {
   const sel = document.getElementById("modelSel"); if (!sel) return
-  let cur = "", prov = "", models = [], stale = false
+  let cur = "", prov = "", models = [], stale = false, effort = "standard", effortLocked = false
+  // 思考档位：同一个模型，"想多久再开口"。实测（GLM-5.3-flash，一篇 1.4 万字指南做导读）
+  // 默认 693 秒里有 2.1 万个思考 token，切到「快」是 60~100 秒、结论与引证基本持平 ——
+  // 所以这是个值得摆在明面上的选项，而不是藏在配置文件里的调参。
+  const EFFORTS = [
+    { v: "fast", t: "快", s: "读文献 / 翻译", d: "少想多写。读文献、翻译、润色这类照着原文做的活，实测快 3~8 倍，结论不掉" },
+    { v: "standard", t: "标准", s: "默认", d: "模型自己决定想多久" },
+    { v: "deep", t: "深思考", s: "方法学 / 统计", d: "尽量多想再答。方法学推敲、统计判断、找逻辑漏洞时用，慢但更稳" },
+  ]
   async function refresh() {
     // 拿不到就把 pill 恢复成上一次已知的模型名，【不能直接 return】：pick() 在发请求前把 pill
     // 改成了"🧠 切换中…"，若这里早返回不重绘，容器正在被唤醒/重启时 pill 会永久定格在"切换中"，
@@ -2890,6 +2901,8 @@ document.getElementById("logoutBtn").innerHTML = ic("logout") + "<span>退出登
     if (!m || (!m.gateway && !selfMulti)) { sel.hidden = true; return }
     if (direct && !selfMulti) { sel.hidden = true; return }   // 直连但只有一个模型：没什么可切的
     cur = m.modelID || ""
+    if (m.effort) effort = m.effort
+    effortLocked = !!m.effortLocked   // 运维用 OC_THINKING 钉死了 → 只显示不让改
     stale = !!m.modelStale   // 服务端说：这个模型已经不在你的档位里了（见 /api/model 的说明）
     // 先问本机网关要清单：云端账号形态下它来自服务器下发的档案（管理员在后台加了模型、
     // 勾进本档位，这里刷新一次就有 —— 打包版不用重装）。
@@ -2926,8 +2939,29 @@ document.getElementById("logoutBtn").innerHTML = ic("logout") + "<span>退出登
     }
     menu.innerHTML = (stale ? '<div class="mprov" style="color:#b03a34">当前模型「' + cur + '」已不在你的档位内，请选一个下面的</div>' : '')
       + (prov ? '<div class="mprov">' + prov + ' · 可选模型</div>' : '') + (models.length ? models.map(function (m) { return '<div class="mitem' + (m.id === cur ? ' cur' : '') + '" data-m="' + m.id + '">' + (m.id === cur ? '✓ ' : '') + m.label + (m.prov && !prov ? ' <span style="opacity:.6">· ' + m.prov + '</span>' : '') + multiplierText(m.multiplier) + '</div>' }).join("") : '<div class="mprov">无可选模型</div>')
+    // ---- 思考档位：跟"用哪个模型"是同一类决定，所以就放在这张菜单里，同一处改完 ----
+    menu.innerHTML += '<div class="mprov" style="margin-top:6px;border-top:1px solid rgba(0,0,0,.08);padding-top:6px">思考档位'
+      + (effortLocked ? '（本机由启动参数钉死）' : '') + '</div>'
+      + EFFORTS.map(function (e) {
+        // 说明只进 title：菜单本来就窄（跟着 pill 走），把一句话铺在行里会折成四行，
+        // 三个档位糊成一片，反而看不清哪个是当前档。
+        return '<div class="mitem' + (e.v === effort ? ' cur' : '') + (effortLocked ? ' off' : '') + '" data-e="' + e.v + '" title="' + e.d + '">'
+          + (e.v === effort ? '✓ ' : '') + e.t + '<span style="opacity:.55;font-size:12px"> · ' + e.s + '</span></div>'
+      }).join("")
     sel.querySelector("#mpill").onclick = function (e) { e.stopPropagation(); menu.classList.toggle("on") }
-    menu.querySelectorAll(".mitem").forEach(function (it) { it.onclick = async function () { const m = it.dataset.m; menu.classList.remove("on"); if (m !== cur) await pick(m) } })
+    menu.querySelectorAll(".mitem").forEach(function (it) { it.onclick = async function () {
+      if (it.dataset.e) { menu.classList.remove("on"); if (!effortLocked && it.dataset.e !== effort) await setEffort(it.dataset.e); return }
+      const m = it.dataset.m; menu.classList.remove("on"); if (m !== cur) await pick(m) } })
+  }
+  // 档位切换不重启 opencode（参数是转发时才贴的），所以正在跑的轮不受影响，也不必问用户。
+  // 本轮已经发出去的请求用的仍是旧档位 —— 下一轮才换，这符合直觉，不用特意说。
+  async function setEffort(v) {
+    const old = effort
+    effort = v; render()   // 先乐观改，失败再退回去：点一下要立刻看到 ✓ 挪过去
+    try {
+      const r = await (await fetch("api/model/effort", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ effort: v }) })).json()
+      if (!r.ok) { effort = old; render(); alert("设置失败：" + (r.err || "")) }
+    } catch (e) { effort = old; render(); alert("设置失败，请重试") }
   }
   // picking：切模型没有并发守卫时，用户点错后立刻改点另一个 → 两个 POST 并发，服务端两次
   // writeOcProvider + restartOpencode（无互斥），第二次重启可能踩在第一次的启动过程中间 →

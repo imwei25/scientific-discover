@@ -26,6 +26,8 @@ import * as Bridge from "./chat-bridge.mjs"
 import * as SkillGuard from "./skill-guard.mjs"
 import { readXlsx } from "./xlsx-lite.mjs"
 import * as Lib from "./library.mjs"
+import { PERF_ON, perfLog } from "./perf-log.mjs"
+import * as Ingest from "./ingest.mjs"
 
 // opencode 的完整流水线（标书/论文/系统综述）单轮可跑十几分钟，而 session.prompt 是“等整轮结束才返回”的请求；
 // undici 默认 5 分钟 headers/body 超时会让这类长轮假性抛错。关掉这两个超时（0=不限），连接超时保留。
@@ -104,7 +106,17 @@ const CUSTOM_PROVIDER_ID = "custom"
 const stripBom = (s) => (s.charCodeAt(0) === 0xfeff ? s.slice(1) : s)
 const readJsonFile = (p) => JSON.parse(stripBom(fs.readFileSync(p, "utf8")))
 const loadModelCfg = () => { try { return readJsonFile(MODEL_CFG_PATH) } catch { return null } }
-const saveModelCfg = (c) => { try { fs.writeFileSync(MODEL_CFG_PATH, JSON.stringify(c, null, 2)) } catch {} }
+// ★ 写入时保留 effort（思考档位）：本函数的各个调用方（切云端 / 切自设 / reset）都是
+//   整份覆盖，而档位是【跨路由的用户偏好】—— 不保留的话，用户换一次模型、切一次路由，
+//   他设的"快"就悄悄回到"标准"，而界面上的选中项还停在"快"。
+const saveModelCfg = (c) => {
+  // ★ 读旧值【必须】单独 try：readJsonFile 在文件不存在时是抛的，和写盘共用一个 try 的话，
+  //   第一次写（新装的机器、测试的临时目录）会连 writeFileSync 一起被跳过 —— 表现是
+  //   model-config.json 永远建不出来、整条云端路由静默失效。踩过一次，别再合并这两个 try。
+  let keep = null
+  try { const old = loadModelCfg(); if (old && old.effort && !("effort" in c)) keep = { effort: old.effort } } catch {}
+  try { fs.writeFileSync(MODEL_CFG_PATH, JSON.stringify({ ...c, ...keep }, null, 2)) } catch {}
+}
 // ---- 直连 API 的凭证档：勾了「记住」才落盘，最多 3 套 ----
 // 【必须与 model-config.json 分开存】后者只记「当前生效的那一套」，切回云端 / reset 时会被整个删掉；
 // 用户存下来备用的另外两套不该跟着陪葬 —— 那正是这个功能要解决的事（来回切别再重输 key）。
@@ -163,6 +175,45 @@ const _modelCost = () => {
 // 两个字段都发：不同厂商吃不同的那一个，多发一个无害（未识别的参数被忽略）。
 // 【默认不开】思考对方法学推理、统计判断是有价值的；关掉是拿质量换配额，要由使用者显式决定。
 const THINKING_OFF = String(process.env.OC_THINKING || "").toLowerCase() === "off"
+// 【档位】OC_THINKING 还收 low / high / max：把本机的思考档位钉死在「快」(low) 或「深思考」
+//（high、max 都归这一档——档位只有三级，不做第四级）。界面上的选择器此时置灰。
+// 缘由（2026-09-21 对着当前默认模型 GLM-5.3-flash 实测）：它【不支持关思考】，收到
+// thinking:{type:"disabled"} 或 reasoning_effort:"none" 一律回 400
+//「该模型始终思考，不支持关闭思考；请使用 low、high 或 max」—— 也就是说在这个模型上
+// OC_THINKING=off 不是"省配额"，是【每一条请求都失败】。档位是它唯一能用的调节手段。
+// 实测同一份「文献导读」（原文 1.4 万字）：默认思考 693s / 思考 21616 token；
+// reasoning_effort=low 61~100s / 思考≈0 token，正文长度与引证密度基本持平。
+const THINKING_EFFORT = ["low", "high", "max"].includes(String(process.env.OC_THINKING || "").toLowerCase())
+  ? String(process.env.OC_THINKING).toLowerCase() : ""
+// ==== 思考档位（用户可设的默认值）=========================================
+//
+// 三档给用户看的是「快 / 标准 / 深思考」，落到参数上【按厂商分两套】，因为两家的做法正好相反：
+//   A 套（智谱 GLM）：只认 reasoning_effort=low|high|max，发 disabled/none 一律 400
+//                    「该模型始终思考，不支持关闭思考；请使用 low、high 或 max」
+//   B 套（火山 Ark）：reasoning_effort=low/minimal 被【静默忽略】（毫无效果、也不报错），
+//                    只有 thinking={type:"disabled"} 与 reasoning_effort=none 真正生效
+// 所以不能只发一套，也不能只按名字猜：名字对不上就猜错，而猜错的两种后果差得很远 ——
+// 猜成 A 发给 Ark 是"白设一场、没人报错"，猜成 B 发给 GLM 是"每条请求都 400"。
+// 故：按模型名先猜一套（glm* → A，其余 → B），**再从上游的 400 里学**（见 cloudForward
+// 的 effortRetry）：被拒一次就把这个模型记成另一套，下一次直接用对的，自愈且不需要维护型号表。
+const EFFORT_FILE_KEY = "effort"                   // 存在 model-config.json 里（saveModelCfg 会保留它）
+const EFFORT_LEVELS = ["fast", "standard", "deep"]
+/** 这个模型先按哪一套发。学到的结果记在内存里（进程重启重新学，代价只是一次 400 重试）。 */
+const effortDialect = new Map()
+const effortDialectOf = (model) => effortDialect.get(model) || (/^glm/i.test(model || "") ? "A" : "B")
+/** 某一档 + 某一套 → 要贴到请求体上的字段（null = 什么都不发，即模型自己的默认） */
+function effortParams(level, dialect) {
+  if (level === "standard" || !EFFORT_LEVELS.includes(level)) return null
+  if (level === "deep") return dialect === "A" ? { reasoning_effort: "high" } : null   // B 套没有"更深"，默认就是深
+  return dialect === "A" ? { reasoning_effort: "low" } : { thinking: { type: "disabled" }, reasoning_effort: "none" }
+}
+/** 当前生效的档位：env 优先（运维可钉死），否则用户设的，再否则 standard */
+function currentEffort() {
+  if (THINKING_OFF) return "fast"
+  if (THINKING_EFFORT) return THINKING_EFFORT === "low" ? "fast" : "deep"
+  const v = loadModelCfg()?.[EFFORT_FILE_KEY]
+  return EFFORT_LEVELS.includes(v) ? v : "standard"
+}
 // models 传了就把【这套凭证下的所有模型】一并注册（modelID 只表示当前选中的那个）。
 // 这不只是好看：opencode 只在启动时读 opencode.json，provider 里声明了哪些模型，运行中就只能用哪些。
 // 全都声明进去之后，换模型只是改本进程的 MODEL.modelID —— 不必重启 opencode，用户正在跑的
@@ -172,6 +223,10 @@ const customProviderCfg = ({ baseURL, apiKey, modelID, models, cost }) => {
   const map = {}
   for (const id of ids) map[id] = {
     name: id, tool_call: true, attachment: true, cost: cost || _modelCost(),   // 开工具调用 + 注入定价（用于算成本额度）
+    // 【这条路只留给 OC_THINKING=off 的老部署，新代码别再往这儿加参数】
+    // 2026-09-21 实测：把 reasoning_effort 写进这里，请求打到上游时字段【不见了】
+    //（同一轮 usage 的 reasoning_tokens 照旧 9593）。openai-compatible provider 下它是哑的，
+    // 改了配置、重启了、日志也正常，唯独没有效果。思考档位一律在 cloudForward 注入。
     ...(THINKING_OFF ? { options: { thinking: { type: "disabled" }, reasoning_effort: "none" } } : {}),
   }
   return { npm: "@ai-sdk/openai-compatible", name: "Custom (OpenAI 兼容)", options: { baseURL, apiKey }, models: map }
@@ -2867,6 +2922,13 @@ function startJob(sid, sentText, modId, forceModel) {
     notices: [],
   }
   jobs.set(sid, job)
+  // ---- 单轮分阶段计时（SCI_PERF=1 才有；与 cloudForward 那份日志靠 sid 串起来）----
+  // 记的是界面上"一轮"的骨架：发出 prompt → 首个模型输出 → 各工具各花多久 → 收尾。
+  // 工具耗时按 callID 从第一次 running 记到 completed —— 这段里【没有】LLM 在跑，
+  // 与 llm.req/llm.done 交错着看，就能把一轮的墙钟时间分成"等模型"和"跑工具"两堆。
+  const perfTurn = PERF_ON ? { t0: Date.now(), tools: new Map(), done: [] } : null
+  if (perfTurn) perfLog("turn.start", { sid, mod: modId, promptChars: sentText.length,
+    preambleChars: sentText.length - job.sentUser.length })
   // 事件流的取消句柄：每轮都会 client.event.subscribe() 新开一条到 opencode 的长连接，
   // 若不主动取消，for-await 只有等"下一个任意事件到达"才会看到 job.finished 而 break ——
   // 末轮的订阅可能整夜不释放。SDK 的 subscribe(options) 会把 options.signal 一路透传到
@@ -2922,7 +2984,8 @@ function startJob(sid, sentText, modId, forceModel) {
   // 轮中进度定时器句柄（启动在 before 快照之后）；定义在 finish 之前，finish 无条件清
   let wfTick = null
   const clearWatchdog = () => { if (watchdog) { clearTimeout(watchdog); watchdog = null } }
-  const noteModelOutput = () => { if (sawOutput) return; sawOutput = true; clearWatchdog() }
+  const noteModelOutput = () => { if (sawOutput) return; sawOutput = true; clearWatchdog()
+    if (perfTurn) perfLog("turn.first_output", { sid, ms: Date.now() - perfTurn.t0 }) }
   const finish = () => {
     if (job.finished) return
     // ★ 本轮【没有任何终止事件】就收场 —— 必须补一条，否则用户什么都看不到。
@@ -2935,6 +2998,11 @@ function startJob(sid, sentText, modId, forceModel) {
       const msg = "本轮没有正常结束（后台没有给出结果，也没有报错）。这通常是上游模型服务这一次返回异常；直接重发一次通常就好。"
       try { for (const r of job.subs) sseWrite(r, "failed", { message: msg }) } catch {}
       noteError(sid, msg)
+    }
+    if (perfTurn) {
+      const toolMs = perfTurn.done.reduce((n, x) => n + x.ms, 0)
+      perfLog("turn.end", { sid, totalMs: Date.now() - perfTurn.t0, textChars: job.text.length,
+        toolCalls: perfTurn.done.length, toolMs, tools: perfTurn.done })
     }
     job.finished = true; job.running = false; jobs.delete(sid); runningCost.delete(sid)   // 本轮成本已由 addCost 入账，撤掉实时占位
     clearWatchdog()
@@ -3108,6 +3176,21 @@ function startJob(sid, sentText, modId, forceModel) {
           updateRunning()
         } else if (p.type === "tool" && p.state?.status) {
           noteModelOutput()   // 模型已经发出工具调用 = 上游在回应（长工具执行期的静默由此不再被误杀）
+          if (perfTurn && p.callID) {
+            if (!perfTurn.tools.has(p.callID)) perfTurn.tools.set(p.callID, Date.now())
+            else if (p.state.status === "completed" || p.state.status === "error") {
+              const st = perfTurn.tools.get(p.callID)
+              if (st > 0) {
+                perfTurn.tools.set(p.callID, -1)   // 收过一次就别重复记（同一 callID 会来多条事件）
+                const rec = { tool: p.tool, ms: Date.now() - st, at: Date.now() - perfTurn.t0,
+                  // 命令原文截断即可：要的是"哪一条慢"，不是把用户的脚本整段抄进日志
+                  what: String(p.state.input?.command || p.state.input?.name || p.state.input?.filePath || p.state.title || "").slice(0, 160),
+                  out: typeof p.state.output === "string" ? p.state.output.length : 0 }
+                perfTurn.done.push(rec)
+                perfLog("tool.done", { sid, ...rec })
+              }
+            }
+          }
           // ---- 模块/技能闸（强制层，不靠提示词自觉）----
           // 技能调用只放行白名单内的：受限模块 = 绑定的那一个技能；chat = 账号级技能白名单。
           // 受限模块还禁 task 子代理绕道（子代理的技能调用发生在子会话里，本循环按 sessionID 过滤
@@ -3668,6 +3751,34 @@ async function withQueueWatch(fn) {
 // 把 opencode 打到本机 /cloud/v1/* 的请求，贴上当前 access key 转给 sci-auth 的 /llm/*。
 // 计量、额度、模型强制、技能白名单全在服务端做，这里只做三件事：贴 key、透传、过期重试。
 const CLOUD_BODY_LIMIT = 32 * 1024 * 1024
+let cloudSeq = 0
+/**
+ * 把请求体拆成"这次到底送了多少东西上去"（只在 SCI_PERF=1 时调用）。
+ * 上游按 token 计价也按 token 耗时，而 token 数与字符数基本同阶 —— 分角色列字符数，
+ * 就能一眼看出一轮里是谁在撑爆上下文（十有八九是上一次 bash 读回来的 fulltext.md）。
+ */
+function perfBodyStat(body) {
+  try {
+    const b = JSON.parse(body.toString("utf8"))
+    const msgs = Array.isArray(b.messages) ? b.messages : []
+    const chars = (c) => typeof c === "string" ? c.length
+      : Array.isArray(c) ? c.reduce((n, p) => n + (typeof p?.text === "string" ? p.text.length : 0), 0) : 0
+    const byRole = {}
+    for (const m of msgs) byRole[m.role] = (byRole[m.role] || 0) + chars(m.content)
+    return { model: b.model, msgs: msgs.length, tools: (b.tools || []).length,
+      chars: msgs.reduce((n, m) => n + chars(m.content), 0), byRole,
+      // 最后一条消息往往是上一次工具调用的返回值 —— 它单独多大，直接回答"是不是正文太长"
+      lastMsg: msgs.length ? { role: msgs[msgs.length - 1].role, chars: chars(msgs[msgs.length - 1].content) } : null }
+  } catch { return { parse: "failed", bytes: body.length } }
+}
+/** 从 SSE 流的尾巴里捞上游报的 usage（各家格式不一，宽松匹配） */
+function perfUsage(tail) {
+  try {
+    const m = tail.match(/"usage"\s*:\s*(\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\})/g)
+    if (!m) return null
+    return JSON.parse(m[m.length - 1].replace(/^"usage"\s*:\s*/, ""))
+  } catch { return null }
+}
 async function cloudForward(req, res, u) {
   const base = Cloud.cloudBase()
   if (!base) return send(res, 503, "application/json", JSON.stringify({ error: { message: "未配置云端地址" } }))
@@ -3684,6 +3795,22 @@ async function cloudForward(req, res, u) {
     body = Buffer.concat(chunks)
   } catch { return send(res, 400, "application/json", JSON.stringify({ error: { message: "读取请求体失败" } })) }
 
+  // ---- 思考档位：在【这里】注入，不靠 opencode 的 model options（那条路是哑的，见 customProviderCfg）----
+  // 请求体就在手里，贴上字段，上游收到的就是它。effortHit 记下本次贴的是哪一套，
+  // 上游若因此回 400 就换另一套重发一次（见下面那段 400 重试）。
+  const effortLevel = currentEffort()
+  let effortModel = "", effortHit = null
+  if (effortLevel !== "standard" && u.pathname.endsWith("/chat/completions")) {
+    try {
+      const b = JSON.parse(body.toString("utf8"))
+      effortModel = String(b.model || "")
+      // 调用方自己已经指定了思考参数 → 尊重它，档位不越俎代庖
+      if (!b.reasoning_effort && !b.thinking) {
+        const p = effortParams(effortLevel, effortDialectOf(effortModel))
+        if (p) { effortHit = effortDialectOf(effortModel); body = Buffer.from(JSON.stringify({ ...b, ...p })) }
+      }
+    } catch { /* 不是 JSON（不该发生）→ 原样转发，绝不能因为一个可选开关把请求弄坏 */ }
+  }
   // /cloud/<rest> → 云端的 /llm/<rest>；例外是生图与图片识字，它们在云端各是一条独立通道
   // （/img 按张限额、/ocr 按次限额，都不按 token 计费，见 server/lib/imagegen.mjs 与
   // server/lib/ocrspace.mjs），别把它们套进 /llm 里去。
@@ -3700,6 +3827,11 @@ async function cloudForward(req, res, u) {
     // 不设超时：推理首字节可以很慢，误杀比挂着更糟（与 sci-auth 侧同一口径）
     return { r: await fetch(base + fwdPath, { method: req.method, headers, body: body.length ? body : undefined }) }
   }
+
+  // ---- 分阶段计时（SCI_PERF=1 才有；见 perf-log.mjs）----
+  const perfId = PERF_ON ? ++cloudSeq : 0
+  const perfT0 = PERF_ON ? Date.now() : 0
+  if (PERF_ON) perfLog("llm.req", { id: perfId, path: fwdPath, bytes: body.length, ...perfBodyStat(body) })
 
   let out
   try { out = await withQueueWatch(() => once(false)) } catch (e) { return send(res, 502, "application/json", JSON.stringify({ error: { message: "连不上云端：" + (e?.message || "网络错误") } })) }
@@ -3721,6 +3853,28 @@ async function cloudForward(req, res, u) {
         }
         r = again.r
       } catch { /* 续期本身失败就把原响应透传下去 */ }
+    }
+  }
+
+  // ---- 思考档位被上游拒了 → 换一套重发一次，并把这个模型记成另一套 ----
+  // 必须自愈，不能让用户看到一条"400 参数错误"：他只是在菜单里选了「快」，而报错来自
+  // 一个他根本看不见的字段。学到之后本进程后续请求直接用对的那套。
+  if (r.status === 400 && effortHit) {
+    let txt = ""
+    try { txt = await r.clone().text() } catch {}
+    // 认两类信号：明说不支持关思考的（GLM 的 1210），或点名 reasoning_effort / thinking 的参数错
+    if (/不支持关闭思考|reasoning_effort|thinking/i.test(txt)) {
+      const other = effortHit === "A" ? "B" : "A"
+      effortDialect.set(effortModel, other)
+      console.warn(`[effort] 模型 ${effortModel} 拒绝了${effortHit}套思考参数，改用${other}套重试：${txt.slice(0, 120)}`)
+      try {
+        const b = JSON.parse(body.toString("utf8"))
+        delete b.reasoning_effort; delete b.thinking
+        const p = effortParams(effortLevel, other)
+        body = Buffer.from(JSON.stringify(p ? { ...b, ...p } : b))
+        const again = await withQueueWatch(() => once(false))
+        if (again.r) r = again.r
+      } catch { /* 重试本身失败 → 把原来那条 400 透传下去，至少不吞错 */ }
     }
   }
 
@@ -3746,15 +3900,28 @@ async function cloudForward(req, res, u) {
   // 又调通了 = 跨了重置时刻或管理员调高了档位 → 撤掉封顶态，别让旧判定继续拦新消息
   if (r.ok && cloudQuotaBlock) cloudQuotaBlock = null
 
+  const perfHdrMs = PERF_ON ? Date.now() - perfT0 : 0
+
   res.writeHead(r.status, h)
-  if (!r.body) return res.end()
+  if (!r.body) {
+    if (PERF_ON) perfLog("llm.done", { id: perfId, status: r.status, hdrMs: perfHdrMs, body: 0 })
+    return res.end()
+  }
+  let perfFirstMs = 0, perfBytes = 0, perfTail = ""
   try {
     // 流式透传：一块来一块走，别攒包（SSE 攒住就没有"边生成边显示"了）
     for await (const chunk of r.body) {
+      if (PERF_ON) {
+        if (!perfFirstMs) perfFirstMs = Date.now() - perfT0
+        perfBytes += chunk.length
+        perfTail = (perfTail + Buffer.from(chunk).toString("utf8")).slice(-4000)   // 只留尾巴：usage 在最后一帧
+      }
       if (res.writableEnded) break
       res.write(Buffer.from(chunk))
     }
     res.end()
+    if (PERF_ON) perfLog("llm.done", { id: perfId, status: r.status, hdrMs: perfHdrMs,
+      ttfbMs: perfFirstMs, totalMs: Date.now() - perfT0, outBytes: perfBytes, usage: perfUsage(perfTail) })
   } catch (e) {
     console.error("[cloud] 上游流中断：" + (e?.message || e))
     try { res.destroy() } catch {}
@@ -5691,11 +5858,26 @@ export const server = http.createServer(async (req, res) => {
       if (autoReq === true) autoStates.set(sid, { rounds: 0, lastText: "", idle: 0 })
       else if (autoReq === false) autoStates.delete(sid)
       const autoOn = autoStates.has(sid)
+      // ---- 发出这一轮之前，先把上传的文献抽成正文（见 ingest.mjs 的头注）----
+      // 【为什么在这里而不是上传那一刻】上传接口不知道这个会话属于哪个模块（会话常常就是它
+      // 现建出来的），而只有文献研读要这份正文；放在这里，modId 已经定了，一次判断就够。
+      // 代价是用户在这一轮开头多等约 10 秒 —— 换掉的是模型自己摸索的 50~70 秒。
+      // 抽取失败不拦轮：ingestPreamble 会如实告诉模型哪几篇没成、该转哪条路。
+      let ingestLine = ""
+      if (modId === "litread" && PY_BIN) {
+        try {
+          const rs = await Ingest.ingestUploads(ws.up, ws.out, {
+            pyBin: PY_BIN, skillsRoot: path.join(ROOT, ".opencode", "skills"),
+            onDone: (r) => perfLog("ingest.done", { sid, name: r.name, file: r.file || "", ms: r.ms || 0, chars: r.chars || 0, err: r.err || "", cached: !!r.cached }),
+          })
+          ingestLine = Ingest.ingestPreamble(rs)
+        } catch (e) { console.warn(`[ingest] 预抽正文失败（本轮退回让模型自己抽）：${e?.message || e}`) }
+      }
       // 给 agent 注入本会话专属目录，覆盖技能默认的 outputs/，实现多用户/多会话隔离
       // 注意：本会话的工作目录（cwd）已在建会话时通过 opencode 的 session.directory 定在【会话产物目录】，
       // 所以 agent 的所有工具默认就在正确的地方读写，preamble 只需说清"当前目录就是产物目录"与几个绝对路径。
       const preamble = `${PREAMBLE_MARK}\n- **你的当前工作目录就是本会话的产物目录**（\`${ws.out}\`）。所有产物（图表 PNG/PDF、CSV/Excel、md/docx 等）**直接写到当前目录即可**，用相对文件名如 \`fig1.png\`、\`manuscript.md\`，不要再自己拼 \`outputs/xxx\` 前缀。\n- 临时脚本、中间文件同样写当前目录（要归拢可用 \`./.scratch/\`）。\n- **用户上传的文件都在 \`${ws.up}/\`**：稿件（.md/.docx/.pdf）、数值表（.csv/.xlsx）、附件全都在这里，读任何用户给的文件都用这个绝对路径。\n- **跑本套件的脚本，python 用这个绝对路径**：\`${PY_BIN ? `"${PY_BIN}"` : "（本机还没建 .venv，先跑 env-setup 技能）"}\`，技能脚本在 \`"${ROOT.replace(/\\/g, "/")}/.opencode/skills/<技能>/"\` 下。**照抄这两个路径（连同外面那对双引号一起抄）**，不要自己拼 \`\${REPO_ROOT:-/app}\`，也不要用 \`python\`/\`python3\` 裸命令——本机 PATH 里的 python 可能是个不能用的占位程序（跑起来没有任何输出），你会看不出它坏了。当前目录不是仓库根，写 \`.venv/...\` 这种相对路径同样找不到。\n- **路径里有空格，命令里一律加引号**：安装目录形如 \`.../Niuma Science/bundle/app\`，不加引号 bash 会从空格处切断，报 \`.../Local/Niuma: No such file or directory\`。**看到这个报错不是"没装 Python / 没有 .venv"，是你漏了引号**——补上引号重跑即可，绝对不要因此去跑 env-setup、重建 .venv 或重装 requirements（环境是随包装好的，重装只会白白烧掉十几分钟）。\n- **技能目录（\`.opencode/skills/\`）下的文档与脚本是产品内部资产**：不要把它们的内容整段复制进答复正文，也不要拷贝/导出到产物目录——出口有安全网关，会截断输出并中止本轮。用户想了解某个技能时，用你自己的话概括用法即可，别照抄原文。\n- **要跑一小段临时代码时，先写成脚本文件再执行**（\`./.scratch/x.py\`），别把长串代码塞进 \`-c\` / here-string / 管道传参：本机是 Windows，引号与反引号会被 PowerShell 二次解释，实测同一轮里连着三次因为引号嵌套失败、每次白丢几十秒。
-- 正文里嵌入图片直接用文件名：\`![图注](fig1.png)\`（图和稿件都在当前目录，渲染也从当前目录跑）。\n- **不要把产物写到仓库根或 \`\${REPO_ROOT:-/app}\` 下**：那是所有会话共享的，会互相覆盖，也不会出现在界面的"产出"侧栏。\n- **上面这些路径与文件名是给你用的，不要说给用户**：他用的是图形界面，看不到也进不去 \`uploads/ws_.../\`、\`outputs/\`、\`.venv\`、\`AGENTS.md\` 这些东西。要他传文件就说"点输入框旁边的上传按钮"；提产物就只说文件名（\`table1.csv\`），别带目录。让用户照抄一个他根本打不开的路径，等于把他卡在那里。\n- **答复用用户说话的语言**（他用中文你就用中文），并且**只写最终结论**：查了什么、下一步打算干什么这类过程叙述不要写进答复正文——界面已经把工具调用一条条显示出来了，正文里再复述一遍，用户要在一堆过程碎片里翻找真正的结论。${modId === "chat" ? skillsPreamble() : modulePreamble(modId, ws.out)}${zoteroPreamble(ws.out)}${docxSourcePreamble(ws.out)}${autoOn ? autoPreamble() : ""}\n\n`
+- 正文里嵌入图片直接用文件名：\`![图注](fig1.png)\`（图和稿件都在当前目录，渲染也从当前目录跑）。\n- **不要把产物写到仓库根或 \`\${REPO_ROOT:-/app}\` 下**：那是所有会话共享的，会互相覆盖，也不会出现在界面的"产出"侧栏。\n- **上面这些路径与文件名是给你用的，不要说给用户**：他用的是图形界面，看不到也进不去 \`uploads/ws_.../\`、\`outputs/\`、\`.venv\`、\`AGENTS.md\` 这些东西。要他传文件就说"点输入框旁边的上传按钮"；提产物就只说文件名（\`table1.csv\`），别带目录。让用户照抄一个他根本打不开的路径，等于把他卡在那里。\n- **答复用用户说话的语言**（他用中文你就用中文），并且**只写最终结论**：查了什么、下一步打算干什么这类过程叙述不要写进答复正文——界面已经把工具调用一条条显示出来了，正文里再复述一遍，用户要在一堆过程碎片里翻找真正的结论。${modId === "chat" ? skillsPreamble() : modulePreamble(modId, ws.out)}${ingestLine}${zoteroPreamble(ws.out)}${docxSourcePreamble(ws.out)}${autoOn ? autoPreamble() : ""}\n\n`
       // taskModel：只有【定时任务的运行器】会带它，且必须是管理员在档位里钉死的那个模型。
       // 【必须在服务端核对，不能信请求里的值】否则任何人都能用它点名一个贵模型跑一轮——
       // 云端网关的 pickModel 虽然也会拦（不在可调用集合里就静默打回默认），但那是最后一道，
@@ -6342,7 +6524,22 @@ export const server = http.createServer(async (req, res) => {
         //   /api/models 清单里已经没有的名字，而每一轮都被云端网关按档位默认模型改写：
         //   用户以为自己在用 A，实际在用 B。给个标志让 pill 打个提醒，不重启、不拔轮。
         modelStale: currentRoute() === "cloud" && !!MODEL.modelID && !modelAllowed(MODEL.modelID),
+        // 思考档位：当前值 + 是不是被运维用 env 钉死了（钉死时前端把选择器置灰，别让用户点了没反应）
+        effort: currentEffort(), effortLocked: !!(THINKING_OFF || THINKING_EFFORT),
       }))
+    }
+    // 设置默认思考档位（快 / 标准 / 深思考）。立刻生效，不重启 opencode —— 参数是转发时才贴的。
+    if (req.method === "POST" && u.pathname === "/api/model/effort") {
+      const chunks = []; for await (const c of req) chunks.push(c)
+      let level = ""
+      try { level = String(JSON.parse(Buffer.concat(chunks).toString() || "{}").effort || "") } catch {}
+      if (!EFFORT_LEVELS.includes(level))
+        return send(res, 400, "application/json", JSON.stringify({ ok: false, err: `未知档位：${level}` }))
+      if (THINKING_OFF || THINKING_EFFORT)
+        return send(res, 409, "application/json", JSON.stringify({ ok: false, err: "本机的思考档位由启动参数 OC_THINKING 钉死，界面改不了" }))
+      const c = loadModelCfg() || {}
+      saveModelCfg({ ...c, effort: level })
+      return send(res, 200, "application/json", JSON.stringify({ ok: true, effort: currentEffort() }))
     }
     // 测试一个 OpenAI 格式的 API（URL + key + 模型）是否可用
     if (req.method === "POST" && u.pathname === "/api/model/test") {
