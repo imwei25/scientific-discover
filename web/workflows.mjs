@@ -4,8 +4,10 @@
 //   ① 模块的技能白名单 —— MODULE_DEFS.skills 由 skillsOf() 从 steps 展开（此前是手写数组，
 //      结果与 AGENTS.md §三 的路由表漂了：paper 缺了脱敏/统计/作图整个前半段、litread 缺排版）。
 //      一份定义两用，从此不会再漂。
-//   ② 前端表单 —— /api/modules/<id>/workflow 下发 schema，前端只当渲染器。改流程走「界面包」
-//      热更新即可，不用重发桌面安装包。
+//   ② 前端表单 —— /api/modules/<id>/workflow 下发 schema，前端只当渲染器。改流程只动这一个文件，
+//      前端一行都不用改。⚠ 但【改这个文件要重发安装包】：它是 .mjs，界面包按设计一律拒收
+//      （server/lib/webpacks.mjs 的 rejectReason + web/web-update.mjs 的 MANAGED_EXT，两侧都拦）。
+//      "只动一个文件" 说的是改动范围小，不是能热更 —— 这两件事此前在本文件里被混成了一句话。
 //   ③ 任务卡 —— 表单值经 taskCard() 序列化成 【任务卡 · …】 文本块，拼在用户第一条消息前面。
 //      这条路是抄 index.html 的 zScopePrefix()（Zotero 检索范围前缀），实测有效、零 opencode 改动。
 //
@@ -112,7 +114,10 @@ const JOURNAL_FILTER = [
 //
 // 【前端只是渲染器】下面这份 reader 配置由 /api/modules/<id>/workflow 整份下发，
 // web/reader.html 不认识任何一个具体模块 —— 它只会照着 modes 画按钮、照着 prompt 发消息。
-// 所以改模式、改措辞、加一个新模式，都只动这个文件，走「界面包」热更新即可，不用重发安装包。
+// 所以改模式、改措辞、加一个新模式，都只动这个文件，reader.html 一行都不用改。
+// ⚠ 但那【不等于能热更】：本文件是 .mjs，界面包两侧都拒收（见文件头注 ②），改了要重发安装包。
+// 2026-09-21 踩到过：照这句话以为加两个新模式能走界面包发，打出来的包只带得动 reader.html，
+// 而模式清单全在本文件里 —— 发出去用户界面上一点变化都没有，白让所有客户端更新一次。
 //
 // 【mark 是模式信号，且只有这一处定义】用户点某个按钮 → 前端把 `mark` 拼在消息最前面 →
 // 模型照 `tell` 里教的去做 → 刷新页面时前端又靠 `mark` 把每一轮认回对应的面板。
@@ -2825,7 +2830,8 @@ export function workflowFor(mod, values) {
     // "reader" = 专用的 web/reader.html（左原文右助手）。工作台与聊天页据此决定往哪儿跳。
     ui: w.ui || null,
     // 阅读器壳的整份配置（模式、提示词、首屏文案、变量对应面板）。前端不认识任何具体模块，
-    // 全靠这一份下发 —— 所以改模式 / 改措辞只动 workflows.mjs，走界面包热更新即可。
+    // 全靠这一份下发 —— 所以改模式 / 改措辞只动 workflows.mjs，reader.html 不用动
+    //（但要重发安装包：.mjs 进不了界面包，见文件头注 ②）。
     // 里面的字段要能被 JSON 序列化：正则一律写成字符串（前端 new RegExp），别放函数。
     reader: w.reader
       ? { ...w.reader, intake: (w.reader.settings || []).concat(w.reader.intro?.ask || [], w.reader.vars?.fields || [])
