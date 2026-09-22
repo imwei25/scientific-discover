@@ -65,6 +65,11 @@ PAGE = 100
 # 显式给了 --limit N 时按 N 精确取，护栏不介入。
 DEFAULT_HARD_CAP = 5000
 
+# 截断取样（见 _year_stratified 的头注）：不给 --since 时往回摊开几年，以及留给
+# "不分年的领域基石"那一趟的名额占比。
+DEFAULT_YEARS_BACK = 10
+CLASSICS_SHARE = 0.2
+
 
 def _hard_cap():
     raw = (os.environ.get("SCI_SEARCH_MAX") or "").strip()
@@ -360,12 +365,41 @@ def _one_pass(query, limit, sort=None):
     return out if limit == math.inf else out[:limit]
 
 
+# ---- --since 的时间窗子句 ----
+# ★ 2026-09-22 实测的坑：EPMC 的 FIRST_PDATE（首次上线日）与记录的 pubYear（卷期年）
+#   经常差一年 —— SMART 试验 firstPubDate=2024-10-25 而 pubYear=2025。直接拿
+#   `FIRST_PDATE >= {since}` 过滤，用户选「2025 年起」就会把这篇【刚发的重磅】挡在外面，
+#   而证据表里其他 pubYear=2025 的文章照常在，看上去毫无异常 —— 查不出原因的那种漏检。
+#   NEJM / Nature 系这类 online-first 提前数月的期刊全部受影响，且越是重磅越早上线。
+# → 检索时把窗口【往前放宽一年】，取回来之后由 main() 里那道 pubYear 兜底过滤精确收口。
+#   多取的那一年在兜底过滤里会被剔掉，不会污染证据表。
+def _since_clause(since):
+    return f" AND (FIRST_PDATE:[{int(since) - 1}-01-01 TO 3000-12-31])" if since else ""
+
+
 def _hit_count(query):
-    """先问一句"总共命中多少"。既决定要不要分两趟取，也是 PRISMA 要记的命中数。"""
-    r = _get(EPMC, params={"query": query, "format": "json",
-                           "pageSize": 1, "resultType": "idlist"})
-    r.raise_for_status()
-    return int(r.json().get("hitCount") or 0)
+    """先问一句"总共命中多少"。既决定要不要分层取样，也是 PRISMA 要记的命中数。
+
+    ★ 返回 0 必须复核一次（2026-09-22 实测撞上）：同一条检索式，直接问是 7960 条，
+      改动后的回归跑里这一问却返回 hitCount=0，紧接着的检索照样取回 515 篇 ——
+      EPMC 在负载下会偶发返回 0。后果有两层，都不响：
+        ① `hits <= target` 成立 → 静默跳过分层取样，改动等于没生效；
+        ② 打印给用户的"命中 0 条"是 PRISMA 要记的数字，直接是假的。
+      真·零命中重试一次也就多一个请求，代价可以忽略；偶发 0 被纠正回来则救掉整轮检索。
+    """
+    def _ask():
+        r = _get(EPMC, params={"query": query, "format": "json",
+                               "pageSize": 1, "resultType": "idlist"})
+        r.raise_for_status()
+        return int(r.json().get("hitCount") or 0)
+    n = _ask()
+    if n == 0:
+        time.sleep(1.0)
+        n2 = _ask()
+        if n2:
+            sys.stderr.write(f"  (命中数第一次问到 0，复核得 {n2} —— 按 {n2} 处理)\n")
+        return n2
+    return n
 
 
 # 首屏表单勾的「纳入的研究设计」→ Europe PMC 的检索限定。
@@ -408,7 +442,7 @@ def design_topup(base_query, designs, since, per):
             continue
         q = f"({base_query}) AND ({filt})"
         if since:
-            q += f" AND (FIRST_PDATE:[{since}-01-01 TO 3000-12-31])"
+            q += _since_clause(since)
         try:
             hits = _hit_count(q)
         except Exception:
@@ -502,11 +536,154 @@ def landmark_pass(base_concept, names, per_area, per_trial, failed):
     return out
 
 
+# ---- 检索式合法性闸：OR 组里的多词词条必须自带括号 ----
+# ★ 2026-09-22 实测挖出来的静默失血点，比排序问题严重得多：
+#     ("GLP-1 receptor agonist" OR semaglutide) 这种写法，多词词条不加括号/引号时
+#     EPMC 按【词级结合】解析，整条布尔逻辑散架。实测同一个尾巴：
+#       (GLP-1 receptor agonist OR semaglutide) AND ...   → 命中 16410，目标文献【丢了】
+#       ((GLP-1 receptor agonist) OR (semaglutide)) AND ... → 命中 10725，目标文献在
+#       ("GLP-1 receptor agonist" OR "semaglutide") AND ... → 命中  7101，目标文献在
+#   最恶毒的地方在于：**命中数是涨的**。模型唯一能观察到的信号（"OR 展开后召回变宽了"）
+#   指向完全相反的方向，它不可能靠自省发现自己把该要的文献踢了出去 ——
+#   只有拿一篇已知该命中的文献去打靶才看得见。所以这件事不能指望模型写对，要在脚本里堵。
+# ★ 为什么补【括号】而不是补引号：加引号会把词条变成精确词组，比原意更窄（7101 < 10725）；
+#   补括号只修复优先级、保留词条内部的词级 AND，是"按用户原意理解"的那个修法。
+# ★ 全是单词的 OR 组（基因别名 EZH2 OR KMT6A OR PRC2 这类）本来就没有歧义，实测补不补
+#   括号都是 873 条 —— 这一闸对它们不做任何改动，不会平白改变既有检索行为。
+_FIELD_RE = re.compile(r"^[A-Za-z_]{2,}\s*:")
+
+
+def _wrapped_in_parens(s):
+    """整条被同一对括号包住（而不是 "(a) AND (b)" 那种首尾恰好是括号）。"""
+    if not (s.startswith("(") and s.endswith(")")):
+        return False
+    depth = 0
+    for i, c in enumerate(s):
+        if c == "(":
+            depth += 1
+        elif c == ")":
+            depth -= 1
+            if depth == 0:
+                return i == len(s) - 1
+    return False
+
+
+def _split_top(s, op):
+    """按顶层（括号深度 0、引号外）的 op 切开；切不开返回 None。"""
+    parts, cur, depth, in_q, i, pad = [], [], 0, False, 0, f" {op} "
+    while i < len(s):
+        c = s[i]
+        if c == '"':
+            in_q = not in_q
+        if not in_q:
+            if c == "(":
+                depth += 1
+            elif c == ")":
+                depth -= 1
+            elif depth == 0 and c == " " and s[i:i + len(pad)].upper() == pad:
+                parts.append("".join(cur))
+                cur = []
+                i += len(pad)
+                continue
+        cur.append(c)
+        i += 1
+    parts.append("".join(cur))
+    return parts if len(parts) > 1 else None
+
+
+def lint_query(q):
+    """补齐 OR 组里多词词条的括号。返回 (修好的检索式, [被改写的词条])。"""
+    changed = []
+
+    def fix(s):
+        s = s.strip()
+        ors = _split_top(s, "OR")
+        if ors:
+            out = []
+            for p in ors:
+                core = fix(p)
+                if (" " in core and not (core.startswith('"') and core.endswith('"'))
+                        and not _wrapped_in_parens(core) and not _FIELD_RE.match(core)):
+                    changed.append(core)
+                    core = f"({core})"
+                out.append(core)
+            return " OR ".join(out)
+        ands = _split_top(s, "AND")
+        if ands:
+            return " AND ".join(fix(p) for p in ands)
+        if _wrapped_in_parens(s):
+            return "(" + fix(s[1:-1]) + ")"
+        return s
+
+    return fix(q), changed
+
+
+# ---- 截断时的取样：按年分层，而不是"一半按被引降序 + 一半按时间倒排" ----
+# ★ 2026-09-22 实测（GLP-1 受体激动剂 × 慢性肾病 × 非糖尿病，命中 7772 条、取回 611 条）：
+#   旧的两趟取法在年份上取出一个【甜甜圈空洞】——
+#     2026 年 392 篇(64%)、2025 年 13 篇、2024 年 14 篇、2023 年 28 篇、2019 年 38 篇。
+#   两头厚、中间空，而 2024-2025 恰恰是"近期进展"类综述最要紧的窗口：新到还没积累被引、
+#   又不是当年新文，两趟都够不着。收窄检索式也不解决 —— 同一次实测收窄后取回 100 篇，
+#   **全部是 2026 年**，2022-2025 一篇都没有。
+#   后果是真漏文献：SMART 试验（Apperloo, Nat Med 2025, PMID 39455729 —— 非糖尿病 CKD
+#   人群唯一的专属肾脏结局 RCT）检索式明明命中它（与它的 EXT_ID 相与 hitCount=1），却
+#     · 按被引降序：它只有 93 次被引，前 600 名都进不去；
+#     · 按时间倒排：它 2024-10-25 首发，排在 2026 年那 1318 篇后面。
+#   真机综述因此写出"非糖尿病 CKD 只有替代终点证据"——而 SMART 正是那个终点证据，
+#   是审稿人一眼能看出的硬伤。
+# ★ 顺带修掉第二个毛病：全局 CITED desc 捞回来的【不是领域基石，是被引巨兽】。
+#   同一次实测前 8 名：Heart Disease and Stroke Statistics-2023(4027 引)、2024 版(2294)、
+#   AASLD 肝病指南(1874)、Therapeutic peptides 综述(1506)、2025 版统计(1064)、
+#   微生物-肠-脑轴(863) —— EPMC 是宽松全文匹配，正文提到检索词就算命中，于是跟题目
+#   关系很浅的超高被引文章横扫前排，半个检索配额就这么废了。按年分桶之后，这类文章
+#   在各自年份里只占 1 个名额，挤不动别人。
+# ★ 分层后实测：SMART 在 2024 桶（按 FIRST_PDATE 归年）内按被引排第 58 位 —— 每年取 60
+#   就能捞回来，而总量比旧取法还少。
+def _year_stratified(query, target, since):
+    """把 target 个名额按年份摊开：每年各按被引降序取一桶，另留一小份给不分年的领域基石。
+
+    为什么每桶内部仍按被引降序：桶内都是同年发表的，没有"新文挤老文"的问题，
+    此时被引降序就是【那一年最受认可的几篇】，正是想要的。
+    """
+    this_year = time.localtime().tm_year
+    # 与 _since_clause 一致地往前放宽一年：pubYear=since 但 FIRST_PDATE=since-1 的
+    # online-first 文章（SMART 就是）得有自己的桶，否则分层这一层又把它漏了。
+    lo = (int(since) - 1) if since else this_year - DEFAULT_YEARS_BACK + 1
+    lo = max(1900, min(lo, this_year))
+    years = list(range(this_year, lo - 1, -1))
+    classics = max(1, int(target * CLASSICS_SHARE))    # 留给不分年那一趟
+    per_year = max(1, (target - classics) // max(1, len(years)))
+    print(f"  按年分层取样：{len(years)} 个年份桶（{lo}-{this_year}）× 每桶最多 {per_year} 条，"
+          f"另加不分年的被引降序 {classics} 条兜底")
+    batches, got = [], 0
+    for i, y in enumerate(years):
+        if _HARD_END is not None:                      # 每年各分一段，别让第一个桶吃光预算
+            _phase(max(0.0, _HARD_END - time.monotonic()) / max(1, len(years) - i + 1))
+        yq = f"({query}) AND (FIRST_PDATE:[{y}-01-01 TO {y}-12-31])"
+        try:
+            recs = _one_pass(yq, per_year, sort="CITED desc")
+        except Exception as e:                         # 单桶失败不影响其余年份
+            print(f"    ⚠ {y} 年这一桶失败（{type(e).__name__}: {e}），跳过")
+            continue
+        got += len(recs)
+        batches.append(recs)
+        print(f"    {y}: 取回 {len(recs)} 条")
+    # 领域基石那一趟不分年（query 里已经带了用户选的 --since，这里不再另设）
+    if _HARD_END is not None:
+        _phase(max(0.0, _HARD_END - time.monotonic()))
+    try:
+        batches.append(_one_pass(query, max(classics, target - got), sort="CITED desc"))
+    except Exception as e:
+        print(f"    ⚠ 不分年的被引降序那一趟失败（{type(e).__name__}: {e}）")
+    return batches
+
+
 def one_query(q, limit, since):
     """取回该检索式的文献。默认【不限条数】：命中多少取多少。
 
-    只有在取不全时（显式 --limit N，或命中数超过跑飞护栏）才分两趟取：
-    一趟按被引降序捞经典，一趟默认顺序捞最新 —— 保证被截断的那份仍然两头兼顾。
+    只有在取不全时（显式 --limit N，或命中数超过跑飞护栏）才做取样：
+    **按年分层**，每年各按被引降序取一桶（见 _year_stratified 头注）——
+    保证被截断的那份在年份上是摊平的，而不是只剩当年新文加被引巨兽。
 
     ★ 为什么截断时不能只用默认顺序：EPMC 不给 sort 时按时间倒排，于是结果全是当年新文、
       cites 恒为 0，领域基石一篇都进不来（实测 25 篇里 23 篇当年、被引全 0）。医生问一个方向，
@@ -519,7 +696,7 @@ def one_query(q, limit, since):
     """
     query = q
     if since:
-        query += f" AND (FIRST_PDATE:[{since}-01-01 TO 3000-12-31])"
+        query += _since_clause(since)
     target = limit if (limit and limit > 0) else _hard_cap()
     try:
         hits = _hit_count(query)
@@ -531,11 +708,13 @@ def one_query(q, limit, since):
     if hits is not None and hits <= target:
         return _one_pass(query, math.inf if target == math.inf else target)
 
-    half = max(1, target // 2) if target != math.inf else math.inf
-    cited = _one_pass(query, half, sort="CITED desc")
-    recent = _one_pass(query, target - len(cited) + half if target != math.inf else math.inf, sort=None)
+    if target == math.inf:      # 命中数探测失败且没设上限：分不了层，退回两趟取法
+        batches = [_one_pass(query, math.inf, sort="CITED desc"),
+                   _one_pass(query, math.inf, sort=None)]
+    else:
+        batches = _year_stratified(query, target, since)
     merged, seen = [], set()
-    for rec in list(cited) + list(recent):          # 经典在前，同一篇只留一次
+    for rec in [r for b in batches for r in b]:     # 同一篇只留一次
         key = (rec.get("doi") or "").lower() or (rec.get("pmid") or "") or (rec.get("title") or "")[:80].lower()
         if not key or key in seen:
             continue
@@ -544,7 +723,7 @@ def one_query(q, limit, since):
     merged = merged if target == math.inf else merged[:target]
     if hits is not None and hits > target:
         print(f"  ⚠ 命中 {hits} 条 > 本次上限 {target} 条，只取回 {len(merged)} 条"
-              f"（一半按被引降序取经典、一半按时间取最新，避免只剩当年新文）。"
+              f"（按年分层取样：每年各按被引降序取一桶，避免中间年份被挤空）。"
               + ("检索式偏宽，建议收窄；要全取请设环境变量 SCI_SEARCH_MAX=0。"
                  if not (limit and limit > 0) else "这是你用 --limit 指定的条数。"))
     return merged
@@ -592,6 +771,22 @@ def main():
     global _HARD_END
     if args.budget_sec and args.budget_sec > 0:
         _HARD_END = time.monotonic() + args.budget_sec
+
+    # 检索式合法性闸（见 lint_query 头注）：OR 组里的多词词条补括号。
+    # 【必须响亮报告】—— 这一闸修正的是一种"命中数反而变多"的静默失血，
+    # 不说出来的话，模型和用户都会以为原来那条检索式是对的。
+    linted = []
+    for i, raw in enumerate(args.queries):
+        fixed, changed = lint_query(raw)
+        if changed:
+            linted.append((raw, fixed, changed))
+            args.queries[i] = fixed
+    for raw, fixed, changed in linted:
+        print(f"  ⚠ 检索式已修正（OR 组里的多词词条缺括号）：{'、'.join(changed)}")
+        print(f"      原式：{raw}")
+        print(f"      改为：{fixed}")
+        print(f"      原因：多词词条不加括号时 EPMC 按词级结合解析，布尔逻辑散架 ——"
+              f"【命中数会变多而不是变少】，看起来像召回变宽了，实际上会漏掉该命中的文献。")
 
     # 默认：多个概念用 AND 合成一条聚焦检索（取交集）——否则各自并集会掺入大量只命中单个
     # 概念的离题文献（实测 24 篇里 12 篇是纯 CKD 噪声）。要旧的并集行为显式加 --union。
