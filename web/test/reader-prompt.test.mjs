@@ -1,6 +1,6 @@
 // 阅读器的提示词拼装层：配置 → 模型真正收到的那段话。
 //
-// 【为什么单独测它】modes[].prompt 里有 {doc} / {data} / {vars} 三个占位符，前端替换后才发出去。
+// 【为什么单独测它】modes[].prompt 里有 {doc} / {docs} / {data} / {vars} 四个占位符，前端替换后才发出去。
 // 有值就替换；没值就把【占位符所在的那一句整句删掉】——那条正则是这层里唯一有风险的东西：
 // 删多了会把相邻的要求一起吃掉（而剩下的话读起来仍然通顺，从产物上完全看不出少了要求），
 // 删少了会把字面的 "{data}" 发给模型。两种都不会报错。
@@ -32,20 +32,23 @@ function grabFn(name) {
 /** 造一个跑得动 promptFor 的最小环境。
  *  docName   ：当前在左栏看的那一份
  *  docFiles  ：左栏那一组（多文件模块用，形如 [{ name, size }]）；不给就按只有 docName 一份算
- *  dataFiles ：配套数值表【可以有好几份】，promptFor 要把它们全列进去 */
-function makeEnv({ mod, docName = "", docFiles = null, dataFiles = [], settings = {} }) {
+ *  dataFiles ：配套数值表【可以有好几份】，promptFor 要把它们全列进去
+ *  picked    ：文件条上勾中的那几份（{docs} 的取值）；不给就按"全勾"算，与界面默认一致 */
+function makeEnv({ mod, docName = "", docFiles = null, dataFiles = [], settings = {}, picked = null }) {
   const w = WF.WORKFLOWS[mod]
   const cfg = WF.workflowFor(mod, {}).reader
   const MODES = {}
   for (const m of cfg.modes) MODES[m.id] = m
   const fieldDef = (id) => (cfg.intake || []).find((f) => f.id === id) || null
   // promptFor 依赖的整条链都要抠进来（少一个就是 ReferenceError，不是"测出问题"）：
-  // docListStr = {data} 的取值；settingsBlock/fmtSetting = 每轮跟着发的齿轮设定。
-  const src = ["varsBlock", "docListStr", "settingsBlock", "fmtSetting", "promptFor"].map(grabFn).join("\n")
-    + "\nreturn { promptFor, varsBlock, settingsBlock }"
-  const make = new Function("MODES", "CFG", "docName", "docFiles", "dataFiles", "SETTINGS", "fieldDef", src)
+  // docListStr = {data} 的取值；pickedNames = {docs} 的取值（勾中的那几份）；
+  // settingsBlock/fmtSetting = 每轮跟着发的齿轮设定。
+  const src = ["varsBlock", "docListStr", "pickedNames", "settingsBlock", "fmtSetting", "promptFor"].map(grabFn).join("\n")
+    + "\nreturn { promptFor, varsBlock, settingsBlock, pickedNames }"
+  const make = new Function("MODES", "CFG", "docName", "docFiles", "dataFiles", "SETTINGS", "fieldDef", "PICKED", src)
   const docs = docFiles || (docName ? [{ name: docName }] : [])
-  return { ...make(MODES, cfg, docName, docs, dataFiles, settings, fieldDef), cfg, MODES }
+  const PICKED = new Set(picked || docs.map((d) => d.name))
+  return { ...make(MODES, cfg, docName, docs, dataFiles, settings, fieldDef, PICKED), cfg, MODES }
 }
 
 const READER_MODS = Object.entries(WF.WORKFLOWS).filter(([, w]) => w.ui === "reader").map(([id]) => id)
@@ -61,11 +64,11 @@ test("占位符都有值时：全部替换掉，不留任何 {xxx}", () => {
       const out = promptFor(m.id)
       assert.match(out, new RegExp("^" + m.mark.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")),
         `${mod}.${m.id} 的输出没有以模式标记开头`)
-      assert.doesNotMatch(out, /\{(doc|data|vars)\}/,
+      assert.doesNotMatch(out, /\{(doc|docs|data|vars)\}/,
         `${mod}.${m.id} 还留着没替换的占位符：${out.match(/\{[a-z]+\}/g)}`)
       // 只在真的声明了文件占位符时才要求文件名出现。{vars} 不算——像 stats 的「出版级图」
       // 画的是"上面的分析结果"，靠同一会话的上下文，本来就不该再点一次文件名。
-      if (/\{(doc|data)\}/.test(m.prompt))
+      if (/\{(doc|docs|data)\}/.test(m.prompt))
         assert.ok(out.includes("原件.pdf") || out.includes("数据.csv"),
           `${mod}.${m.id} 声明了文件占位符却没把文件名带进去`)
     }
@@ -80,7 +83,7 @@ test("占位符没值时：只删掉它所在的那一句，别把相邻的要�
     for (const m of cfg.modes) {
       if (!m.prompt) continue
       const out = promptFor(m.id)
-      assert.doesNotMatch(out, /\{(doc|data|vars)\}/, `${mod}.${m.id} 没值时把字面占位符发了出去`)
+      assert.doesNotMatch(out, /\{(doc|docs|data|vars)\}/, `${mod}.${m.id} 没值时把字面占位符发了出去`)
       // 【关键】提示词的主体不能被那条正则吃掉。占位符通常只出现在开头一两句里，
       // 后面那一大段"要求 / 铁律"必须原样还在 —— 少了它们，模型照样会输出东西，
       // 只是没有了不许编数据、不许改结论强度这些约束，而产物看起来完全正常。
@@ -89,6 +92,27 @@ test("占位符没值时：只删掉它所在的那一句，别把相邻的要�
         `${mod}.${m.id} 占位符没值时，正文里的要求被一起删掉了`)
     }
   }
+})
+
+// {docs}（多篇综合 / 多篇对比）取的是【勾中的那几份】，不是会话里的全部。
+// 【为什么值得单测】勾选是用户对"这一轮读哪几篇"的唯一表态，而发错了不会报错：
+// 多发一篇 → 模型认认真真把不相干的那篇也综合进去，结论看起来完全正常；
+// 少发一篇 → 用户明明勾了三篇，拿回的是两篇的结论。两种都只能靠核对文件名才发现。
+test("{docs} 只带勾中的那几份，没勾的不许混进去", () => {
+  const files = [{ name: "甲.pdf" }, { name: "乙.pdf" }, { name: "丙.pdf" }]
+  const { promptFor } = makeEnv({
+    mod: "litread", docName: "甲.pdf", docFiles: files, picked: ["甲.pdf", "丙.pdf"],
+  })
+  for (const id of ["synth", "compare"]) {
+    const out = promptFor(id)
+    assert.ok(out.includes("`甲.pdf`") && out.includes("`丙.pdf`"), `${id} 漏了勾中的文献`)
+    assert.ok(!out.includes("乙.pdf"), `${id} 把没勾的「乙.pdf」也发了出去`)
+  }
+  // 单篇模式反过来：它们跟勾选无关，永远只读左栏当前那一篇。
+  // 混用的话，用户点「文献导读」会拿到一份把三篇搅在一起的东西，而他只是在看其中一篇。
+  const guide = promptFor("guide")
+  assert.ok(guide.includes("`甲.pdf`"), "导读没带上当前这一篇")
+  assert.ok(!guide.includes("丙.pdf"), "导读把勾中的其他文献也发了出去")
 })
 
 // 配套数值表是【一组】：一篇稿子的数据常常分散在主表 + 附表 + 随访表里。只把第一份发出去的话，
@@ -176,7 +200,9 @@ test("智能助手的文案归模块管，四个阅读器模块都要有", () =>
   for (const mod of READER_MODS) {
     const cfg = WF.workflowFor(mod, {}).reader
     assert.ok(cfg.chat && cfg.chat.placeholder && cfg.chat.firstTurn, `${mod} 缺 reader.chat 文案`)
-    assert.match(cfg.chat.firstTurn, /\{doc\}/, `${mod}.chat.firstTurn 里没有 {doc}，文件名带不进去`)
+    // {doc}（左栏当前那一份）或 {docs}（会话里的全部，文献研读这种可传多篇的用它）都行 ——
+    // 要的是"文件名带得进去"，不是非得哪一个占位符。
+    assert.match(cfg.chat.firstTurn, /\{docs?\}/, `${mod}.chat.firstTurn 里没有 {doc}/{docs}，文件名带不进去`)
   }
   // 数据模块不许再自称"文献"
   const stats = WF.workflowFor("stats", {}).reader.chat
