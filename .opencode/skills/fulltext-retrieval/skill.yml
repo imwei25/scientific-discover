@@ -40,7 +40,7 @@ purpose: "Resolve a DOI list to full-text PDFs — legitimate OA APIs first, the
 safety_boundaries:
   - "Tier 1 uses legitimate open-access sources only (Unpaywall, PMC / Europe PMC, OpenAlex, Crossref)."
   - "Tier 2 (fetch_institutional.py) only reuses the user's own logged-in Chrome session (CDP attach, same machine) and therefore only their institution's real entitlements; it never fills credentials, never automates CAPTCHAs, and hands every login wall back to the user."
-  - "Anti-abuse hard gates in tier 2: ≤20 records per run by default, ≥3 s between records — publisher bulk-download heuristics can suspend access for the whole institution."
+  - "Anti-abuse hard gates in tier 2: 20 records per run by default and a hard ceiling of 40 (--max is clamped), ≥3 s between records — publisher bulk-download heuristics can suspend access for the whole institution. A browser the script auto-launched is closed after the run (its CDP port is unauthenticated); --keep-browser opts out."
   - "Validates each download (>=10 KB and a %PDF- header) before accepting it."
 known_limitations:
   - "Content the user's institution has not licensed fails in both tiers by design; no unauthorized sources are ever used."

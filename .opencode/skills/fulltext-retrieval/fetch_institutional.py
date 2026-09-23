@@ -8,8 +8,11 @@
 - 只复用用户**自己**的登录态与机构订阅权限；绝不读取 / 存储 / 请求密码、OTP、
   恢复码——遇到登录页 / 人机验证只**等用户在浏览器窗口里自己完成**，脚本不代填。
 - 不绕过任何访问控制：拿不到就如实记 FAIL，绝不接野路子镜像站。
-- 限速 + 限量：逐条间隔默认 5s（下限 3s），单次默认 ≤20 条。出版商对批量下载
-  有风控，触发会连累**全机构**的访问权限（图书馆被封 IP 段是真实事故）。
+- 限速 + 限量：逐条间隔默认 5s（下限 3s），单次默认 ≤20 条、**绝对上限 40 条**
+  （`--max` 调多大都压回 40）。出版商对批量下载有风控，触发会连累**全机构**的
+  访问权限（图书馆被封 IP 段是真实事故）。
+- 调试端口不常开：本次自动起的浏览器跑完就关（`--keep-browser` 才留着）。它开着时
+  本机任何程序都能不经验证接管里面已登录的机构会话。
 
 用法：
     python fetch_institutional.py pdfs/manual_needed.txt -o pdfs/
@@ -59,6 +62,9 @@ DEFAULT_CDP_URL = os.environ.get("SCI_CDP_URL", "http://127.0.0.1:9222")
 MIN_DELAY_S = 3.0
 DEFAULT_DELAY_S = 5.0
 DEFAULT_MAX_RECORDS = 20
+# 绝对上限：--max 给多大都压回这里。这是闸不是默认值——出版商按 IP 段风控，
+# 一个人拉满批量，封的是全校。要更多就分批跑（已下到的会自动跳过）。
+HARD_MAX_RECORDS = 40
 DEFAULT_LOGIN_TIMEOUT_S = 240
 NAV_TIMEOUT_MS = 60_000
 SETTLE_MS = 3_000          # 落地后等 JS 跳转（DOI → 出版商 → 可能的 SSO）稳定
@@ -241,6 +247,36 @@ def launch_browser(cdp_url: str, profile_dir: Path | None = None,
     return (False,
             f"{Path(exe).name} 起来了但 {cdp_url} 没开：多半是**同一个专用资料目录**"
             f"已经有一个没带调试端口的窗口开着。把那个窗口关掉再试一次。")
+
+
+PORT_OPEN_WARNING = (
+    "⚠ 浏览器还开着，且带着调试端口（{url}）：本机其他程序可以不经任何验证操作这个"
+    "窗口里已登录的机构会话。用完请把这个浏览器窗口关掉。")
+
+
+def close_browser(browser) -> bool:
+    """真正关掉浏览器进程（connect_over_cdp 下 browser.close() 只断开连接，不关窗口）。
+
+    为什么要关：调试端口没有任何鉴权，浏览器开着一天，本机任何程序就能接管里面已登录
+    的机构会话一天。关掉的代价是会话级 cookie 丢失——有的机构下次要重登一次；持久
+    cookie 和记住的机构入口都在专用资料目录里，不受影响。"""
+    try:
+        browser.new_browser_cdp_session().send("Browser.close")
+        return True
+    except Exception as e:  # noqa: BLE001
+        log.debug("Browser.close failed: %s", e)
+        return False
+
+
+def finish_browser(browser, launched_here: bool, keep: bool, cdp_url: str) -> None:
+    """收尾：本次自己起的浏览器默认关掉；用户事先开着的不动它，但提醒端口还开着。"""
+    if launched_here and not keep and browser is not None and close_browser(browser):
+        print("· 已关掉本次自动打开的浏览器（带调试端口的窗口不常开）。登录状态存在专用"
+              "资料目录里，下次会自动重开；若机构登录是会话级的，需再登录一次。"
+              "要连着跑多批用 --keep-browser。", flush=True)
+        return
+    if cdp_alive(cdp_url):
+        print(PORT_OPEN_WARNING.format(url=cdp_url), flush=True)
 
 
 # ============================================================
@@ -568,9 +604,10 @@ def diagnose_browser(context, doi: str, email: str = CONTACT_EMAIL,
         cands = collect_pdf_candidates(page)
         rec["pdf_candidates"] = len(cands)
         rec["first_candidate"] = cands[0][:200] if cands else ""
+        rec["attempts"] = []
         for url in cands:
             absolute = urllib.parse.urljoin(page.url, url)
-            body = try_download(context, page, absolute, page.url)
+            body = try_download(context, page, absolute, page.url, rec["attempts"])
             if body:
                 rec.update(ok=True, size_bytes=len(body),
                            head=body[:8].decode("latin-1", "replace"))
@@ -634,6 +671,8 @@ def render_diagnose_md(report: dict) -> str:
     if wv.get("detected"):
         L += [f"- **WebVPN 网关：{wv['gateway']}**（这所机构走 URL 改写型代理，"
               "已自动识别，下载会经它走）"]
+    elif wv.get("disabled"):
+        L += ["- WebVPN：已按 --no-webvpn 关闭，全部直连"]
     elif "webvpn" in report:
         L += ["- WebVPN：未识别到（说明不是 URL 改写型代理，或用户还没在这个浏览器"
               "窗口里登录过学校 VPN）"]
@@ -641,10 +680,11 @@ def render_diagnose_md(report: dict) -> str:
           "| 出版商 | 直连 | 浏览器 | 判定 | 大小 |", "|---|---|---|---|---|"]
     for p in report["probes"]:
         d, b = p["direct"], p["browser"]
+        name = p["publisher"] + (f"<br>`{p['doi']}`" if p.get("known_ok") else "")
         size = b.get("size_bytes") or d.get("size_bytes") or 0
         verdict = ("成功" if (d["ok"] or b["ok"])
                    else _VERDICT_CN.get(b.get("verdict", ""), b.get("verdict", "?")))
-        L.append(f"| {p['publisher']} | {'✅' if d['ok'] else '❌'} | "
+        L.append(f"| {name} | {'✅' if d['ok'] else '❌'} | "
                  f"{'✅' if b['ok'] else '❌'} | {verdict} | "
                  f"{size // 1024} KB |")
     L += ["", "## 四、怎么读这份报告", "",
@@ -652,14 +692,26 @@ def render_diagnose_md(report: dict) -> str:
           "后面几行不用细看；它成功而订阅篇全败 → 网络通，问题在权限或出版商。",
           "2. 大量「未订购」→ 本机构确实没买这些刊，正常。",
           "3. 大量「人机验证」→ 让操作的人去那个浏览器窗口手动点一次验证，再重跑。",
-          "4. 大量「要登录」→ 该机构不是 IP 授权制，需要先在浏览器里经 CARSI / 图书馆登录。", "",
+          "4. 大量「要登录」→ 该机构不是 IP 授权制，需要先在浏览器里经 CARSI / 图书馆登录。",
+          "5. **「代测人提供（已知能下）」几行最硬**：这些篇机构一定有权限。它们成功 = "
+          "机构通道确实能下付费全文；它们失败、且判定不是「人机验证 / 要登录 / 网络不通」"
+          "= 本工具自己的问题，把 json 发回开发者。", "",
           "完整逐步轨迹（落地 URL、页面标题、找到几个候选链接等）在同名 .json 里。", ""]
     return "\n".join(L)
 
 
 def run_diagnose(cdp_url: str, email: str, profile_dir: Path | None,
-                 auto_launch: bool, delay: float) -> int:
-    print("机构网络自检：将访问 7 篇探针文献（1 篇 OA 对照 + 6 家主流出版商各 1 篇）。")
+                 auto_launch: bool, delay: float, extra_dois: list[str] | None = None,
+                 keep_browser: bool = False, no_webvpn: bool = False) -> int:
+    # 代测人自己提供的「在机构里确定能下」的 DOI，是整份报告里最硬的证据：6 家固定
+    # 探针只核实过"不是 OA"，没法核实对方机构订没订；代测人亲手下到过的文章，机构
+    # 一定有权限——这种篇我们也下不到，才是本工具自己的问题。
+    extra_dois = extra_dois or []
+    probes = list(PROBES) + [
+        {"doi": d, "publisher": "代测人提供（已知能下）", "known_ok": True}
+        for d in extra_dois]
+    print(f"机构网络自检：将访问 {len(probes)} 篇探针文献（1 篇 OA 对照 + 6 家主流出版商"
+          "各 1 篇" + (f" + 你提供的 {len(extra_dois)} 篇" if extra_dois else "") + "）。")
     print("⚠ 报告里会包含这台机器的**出口 IP 与网络归属**（用来判断你是否真的在机构"
           "网段里）。发给别人前请自行确认可接受。\n")
     report: dict = {
@@ -670,8 +722,10 @@ def run_diagnose(cdp_url: str, email: str, profile_dir: Path | None,
     print(f"· 出口 IP：{report['egress_ip'].get('ip', '?')}"
           f"（{report['egress_ip'].get('org', '未知')}）", flush=True)
 
+    launched_here = False
     if not cdp_alive(cdp_url) and auto_launch:
         ok, msg = launch_browser(cdp_url, profile_dir)
+        launched_here = ok
         print(("· ✅ " if ok else "· ❌ ") + msg, flush=True)
     report["environment"] = probe_environment(cdp_url)
 
@@ -682,6 +736,7 @@ def run_diagnose(cdp_url: str, email: str, profile_dir: Path | None,
         return 2
 
     pw = sync_playwright().start()
+    browser = None
     try:
         context = None
         if report["environment"]["cdp_alive"]:
@@ -694,27 +749,34 @@ def run_diagnose(cdp_url: str, email: str, profile_dir: Path | None,
         # 识别出网关 = 这所机构走的是 URL 改写型代理（WebVPN）。这一项在远程定位里
         # 分量很重：没识别到而订阅篇全败，多半是 IP 授权没生效或根本没在机构网里。
         gw = None
-        if context is not None:
+        if context is not None and no_webvpn:
+            # 必须能关：记忆里残留着别的机构（或已过期）的网关时，自检会把所有请求
+            # 送进那个网关、全部弹回登录页，连 OA 对照都失败，整份报告都是误导。
+            report["webvpn"] = {"detected": False, "disabled": True}
+        elif context is not None:
             gw = auto_webvpn(context, profile_dir)
             report["webvpn"] = ({"detected": True, "gateway": f"{gw[0]}://{gw[1]}"}
                                 if gw else {"detected": False})
             if gw:
-                print(f"· 识别到 WebVPN 网关：{gw[0]}://{gw[1]}", flush=True)
-        probes = []
-        for i, p in enumerate(PROBES, 1):
-            print(f"  [{i}/{len(PROBES)}] {p['publisher']} …", end=" ", flush=True)
+                print(f"· 识别到 WebVPN 网关：{gw[0]}://{gw[1]}"
+                      "（识别错了或会话已过期：加 --no-webvpn 重跑）", flush=True)
+        results = []
+        for i, p in enumerate(probes, 1):
+            print(f"  [{i}/{len(probes)}] {p['publisher']} {p['doi']} …", end=" ", flush=True)
             rec = {"doi": p["doi"], "publisher": p["publisher"],
-                   "is_oa_control": bool(p.get("oa"))}
+                   "is_oa_control": bool(p.get("oa")),
+                   "known_ok": bool(p.get("known_ok"))}
             rec["direct"] = diagnose_direct(p["doi"], email)
             rec["browser"] = (diagnose_browser(context, p["doi"], email, gw)
                               if context else {"ok": False, "verdict": "no-browser"})
-            probes.append(rec)
+            results.append(rec)
             print("直连 " + ("OK" if rec["direct"]["ok"] else "×")
                   + " / 浏览器 " + ("OK" if rec["browser"]["ok"] else "×"), flush=True)
-            if i < len(PROBES):
+            if i < len(probes):
                 time.sleep(delay)
-        report["probes"] = probes
+        report["probes"] = results
     finally:
+        finish_browser(browser, launched_here, keep_browser, cdp_url)
         pw.stop()
 
     Path("机构网络自检报告.json").write_text(
@@ -877,8 +939,11 @@ _FETCH_JS = """async url => {
 # 只读 DOM 文本，不点任何东西。命中只用来把 FAIL 的原因标成 paywalled，
 # 好让用户看得出"这篇是本机构没订"而不是"脚本没找着链接"。
 _PAYWALL_JS = """() => {
+  // 别用 [data-test*="access"] 这类宽匹配：Springer 的 OA 文章页上有
+  // data-test="access-count"（访问量指标），实测把 OA 文章误标成"本机构未订购"。
   const sel = '.access-options, .get-access, [class*="GetAccess"], ' +
-              '[class*="purchase"], [data-test*="access"], [class*="paywall"]';
+              '[class*="purchase"], [data-test="access-options"], ' +
+              '[data-test*="buy"], [class*="paywall"]';
   if (document.querySelector(sel)) return true;
   const t = (document.body ? document.body.innerText : '').slice(0, 20000);
   return /get access|purchase pdf|buy article|rent this article|订阅后可见|购买本文/i.test(t);
@@ -910,19 +975,28 @@ def collect_pdf_candidates(page) -> list[str]:
     return cands[:MAX_PDF_CANDIDATES]
 
 
-def try_download(context, page, url: str, referer: str) -> bytes | None:
+def try_download(context, page, url: str, referer: str,
+                 trace: list | None = None) -> bytes | None:
     """先走 context.request（共享浏览器 cookie、无 CORS 限制），失败再退回
-    页面内 fetch（真实浏览器指纹，对部分风控更稳，但受 CORS 约束）。"""
+    页面内 fetch（真实浏览器指纹，对部分风控更稳，但受 CORS 约束）。
+
+    trace：自检用，逐次记下状态码 / 类型 / 字节数。"找到了链接却没下到"偶发且难复现
+    （实测 Springer 一次失败、紧接着重跑又成功），没有这份记录就只能猜。"""
     try:
         resp = context.request.get(
             url, timeout=NAV_TIMEOUT_MS,
             headers={"Referer": referer, "Accept": "application/pdf,*/*"})
-        if resp.ok:
-            body = resp.body()
-            if is_valid_pdf(body):
-                return body
+        body = resp.body() if resp.ok else b""
+        if trace is not None:
+            trace.append({"url": url[:200], "via": "request", "status": resp.status,
+                          "type": (resp.headers.get("content-type") or "")[:60],
+                          "bytes": len(body), "head": body[:8].decode("latin-1", "replace")})
+        if body and is_valid_pdf(body):
+            return body
     except Exception as e:
         log.debug("context.request failed for %s: %s", url, e)
+        if trace is not None:
+            trace.append({"url": url[:200], "via": "request", "error": str(e)[:160]})
     try:
         b64 = page.evaluate(_FETCH_JS, url)
         if b64:
@@ -1170,14 +1244,20 @@ def main() -> int:
     parser.add_argument("--diagnose", action="store_true",
                         help="机构网络自检：查出口 IP 归属 + 对 7 篇探针（1 篇 OA 对照 + "
                              "6 家主流出版商）逐步取证，产出可发回的报告。远程代测必用")
+    parser.add_argument("--probe-doi", action="append", default=[], metavar="DOI",
+                        help="（配合 --diagnose）追加一篇**你在机构里确定能下到**的 DOI "
+                             "做探针，可重复多次。它是判断本工具能否下付费全文的决定性证据")
+    parser.add_argument("--keep-browser", action="store_true",
+                        help="跑完不关本次自动打开的浏览器（默认关掉：它带调试端口，开着时"
+                             "本机任何程序都能接管里面已登录的会话）。连着跑多批时用")
     parser.add_argument("--profile-dir", default=None,
                         help=f"浏览器专用资料目录（默认 {default_profile_dir()}）")
     parser.add_argument("--delay", type=float, default=DEFAULT_DELAY_S,
                         help=f"逐条间隔秒数（默认 {DEFAULT_DELAY_S}，下限 {MIN_DELAY_S}）")
     parser.add_argument("--max", type=int, default=DEFAULT_MAX_RECORDS,
                         dest="max_records",
-                        help=f"单次最多处理条数（默认 {DEFAULT_MAX_RECORDS}；防出版商"
-                             "批量下载风控，超出部分下次再跑）")
+                        help=f"单次最多处理条数（默认 {DEFAULT_MAX_RECORDS}，绝对上限 "
+                             f"{HARD_MAX_RECORDS}；防出版商批量下载风控，超出部分下次再跑）")
     parser.add_argument("--login-timeout", type=int, default=DEFAULT_LOGIN_TIMEOUT_S,
                         help="登录墙等待用户完成登录的秒数上限")
     parser.add_argument("--ip-only", action="store_true",
@@ -1213,11 +1293,18 @@ def main() -> int:
             print("这是一个**独立的浏览器资料目录**，和你平时用的 Chrome 互不影响。\n"
                   "· 学校/医院是 IP 授权制（机器就在单位网里）：不用登录任何东西，直接开下。\n"
                   "· 要走 CARSI / 图书馆账号：在这个新窗口里登录一次，以后一直复用。")
+            print(PORT_OPEN_WARNING.format(url=args.cdp))
         return 0 if ok else 2
 
     if args.diagnose:
+        probe_dois = [d.strip() for d in args.probe_doi if d.strip()]
+        bad = [d for d in probe_dois if not d.startswith("10.")]
+        if bad:
+            print(f"❌ --probe-doi 要填 DOI 本体（10. 开头，不带 https://doi.org/）：{bad}")
+            return 2
         return run_diagnose(args.cdp, args.email, profile_dir,
-                            not args.no_auto_launch, max(args.delay, MIN_DELAY_S))
+                            not args.no_auto_launch, max(args.delay, MIN_DELAY_S),
+                            probe_dois, args.keep_browser, args.no_webvpn)
 
     if args.input is None:
         parser.error("缺少 worklist（自检用 --diagnose，只起浏览器用 --launch-browser）")
@@ -1228,20 +1315,28 @@ def main() -> int:
         print(PW_HELP)
         return 2
 
-    # 探测不到调试端口就自己起一个——不让用户去敲 --remote-debugging-port。
-    if not cdp_alive(args.cdp) and not args.no_auto_launch:
-        print("· 没检测到带调试端口的浏览器，正在为你启动 …", flush=True)
-        ok, msg = launch_browser(args.cdp, profile_dir)
-        print(("  ✅ " if ok else "  ❌ ") + msg, flush=True)
-
+    # 先读清单再起浏览器：空清单不该留下一个带调试端口的窗口。
     records = load_worklist(args.input)
     if not records:
         print(f"{args.input} 里没有可处理的记录。")
         return 0
+
+    # 探测不到调试端口就自己起一个——不让用户去敲 --remote-debugging-port。
+    launched_here = False
+    if not cdp_alive(args.cdp) and not args.no_auto_launch:
+        print("· 没检测到带调试端口的浏览器，正在为你启动 …", flush=True)
+        ok, msg = launch_browser(args.cdp, profile_dir)
+        launched_here = ok
+        print(("  ✅ " if ok else "  ❌ ") + msg, flush=True)
+    if args.max_records > HARD_MAX_RECORDS:
+        print(f"⚠ --max {args.max_records} 超过绝对上限 {HARD_MAX_RECORDS}，已压回 "
+              f"{HARD_MAX_RECORDS}（出版商按 IP 段风控，批量过大封的是全机构）。")
+        args.max_records = HARD_MAX_RECORDS
+    args.max_records = max(1, args.max_records)
     if len(records) > args.max_records:
         print(f"⚠ 清单 {len(records)} 条 > 单次上限 {args.max_records} 条，本次只处理前 "
               f"{args.max_records} 条（机构通道刻意限量：出版商对批量下载有风控，"
-              f"触发会连累全机构访问权限）。剩余的再跑一次即可续传；确要放宽用 --max。")
+              f"触发会连累全机构访问权限）。剩余的再跑一次即可续传（已下到的自动跳过）。")
         records = records[:args.max_records]
 
     delay = max(args.delay, MIN_DELAY_S)
@@ -1249,6 +1344,7 @@ def main() -> int:
     report_path = args.report or (args.output / "retrieval_report.json")
 
     pw = sync_playwright().start()
+    browser = None
     try:
         try:
             browser = pw.chromium.connect_over_cdp(args.cdp)
@@ -1314,6 +1410,7 @@ def main() -> int:
               f"{report['counts']['institutional']}）")
         return 0
     finally:
+        finish_browser(browser, launched_here, args.keep_browser, args.cdp)
         pw.stop()
 
 

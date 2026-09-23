@@ -174,6 +174,8 @@ python fetch_institutional.py pdfs/manual_needed.txt -o pdfs/ --ip-only
 
 # 机构网络自检（下不到东西时先跑这个；远程委托别人代测必用）
 python fetch_institutional.py --diagnose
+# 追加用户"在机构里确定能下到"的文章做探针（可重复）——判断本工具能否下付费全文的决定性证据
+python fetch_institutional.py --diagnose --probe-doi 10.xxxx/yyyy --probe-doi 10.xxxx/zzzz
 ```
 
 ### 机构是 WebVPN（URL 改写型代理）时——自动识别，不用问用户
@@ -233,6 +235,14 @@ python fetch_institutional.py --diagnose
 4. 环境：浏览器起没起来、版本、CDP 通不通、playwright 版本，**以及有没有识别到 WebVPN
    网关**——这一项直接说明对方机构走的是哪种机制（识别到 = URL 改写型代理；没识别到而
    订阅篇全败 = 多半没在机构网段里或 IP 授权没生效）。
+5. **`--probe-doi` 追加的「已知能下」篇**（强烈建议带上）：6 家固定探针只核实过"不是 OA"，
+   核实不了对方机构订没订，全败也说明不了问题；用户亲手在机构里下到过的文章，权限是确定的。
+   它成功 = 通道确实能下付费全文；它失败且判定不是人机验证 / 要登录 / 网络不通 = 本工具的问题。
+   json 里每篇有 `attempts`（逐次状态码、类型、字节数），"找到链接却没下到"靠它定位。
+
+**WebVPN 记忆会串**：本机记着上次识别到的网关。换了机构、或那边会话过期时，自检会把全部请求
+送进旧网关、一律弹回登录页（连 OA 对照都失败）。遇到"对照组也判成要登录"且报告里列着一个网关
+→ 加 `--no-webvpn` 重跑。
 
 **报告里含出口 IP 与网络归属**，脚本跑之前会明说；让用户自行决定发不发给别人。
 向用户交代结论时按报告第四节的读法走，别把「网络不通」说成「没订购」。
@@ -262,7 +272,8 @@ python fetch_institutional.py --diagnose
 行为要点：
 
 - **遇登录墙 / 人机验证只等人**：检测到 CARSI/Shibboleth/OpenAthens/EZproxy/验证页时暂停，提示用户去 Chrome 窗口自己完成（默认最多等 240s，`--login-timeout` 可调），**脚本绝不读取、存储、代填任何密码/OTP**，也绝不自动过验证码。
-- **限量限速是硬闸**：单次默认 ≤20 条（`--max`）、逐条间隔默认 5s（下限 3s）。出版商对批量下载有风控，触发会**连累全机构的访问权限**——别为省事拉高上限做全刊批量抓取。
+- **限量限速是硬闸**：单次默认 20 条（`--max`），**绝对上限 40 条**（`--max` 给多大都压回 40），逐条间隔默认 5s（下限 3s）。出版商对批量下载有风控，触发会**连累全机构的访问权限**。清单更长就分批跑，已下到的会自动跳过；别为省事拆成多进程并发绕过上限。
+- **跑完自动关浏览器**：本次自动打开的浏览器带着调试端口，而调试端口**没有任何鉴权**——开着时本机任何程序都能接管里面已登录的机构会话。所以默认跑完就关；连着跑多批才加 `--keep-browser`。用户自己事先开着的浏览器不动它，但脚本会打警告，**向用户转述这句警告，提醒用完关掉窗口**。代价：会话级登录 cookie 随窗口关闭丢失，有的机构下次要再登录一次。
 - **结果并回同一份报告**：成功条目在 `retrieval_report.json` 里记 `status: "institutional"`（`counts.institutional` 单独计数），已下到的自动从 `manual_needed.txt` 划掉；同样做标题交叉核对。**向用户汇报时如实区分哪些走 OA、哪些走机构通道、哪些仍失败及原因**。
 - **优雅降级**：探测不到 CDP（服务器多用户部署、无浏览器环境）→ 打印启动指引后 exit 2，不影响 OA 主管线——与 `zotero-library` 的同机降级策略一致；此时失败清单仍走人工/馆际互借。
 - 每条独立隔离（同 fetch_oa），单条超时/异常绝不拖垮整批。
@@ -287,7 +298,10 @@ here, plus the in-library `find_available_pdf.js` snippet inside Zotero.
 
 ## Requirements
 
-- Python 3.10+ (stdlib only, no pip dependencies)
+- Python 3.10+
+- `fetch_oa.py`：只用标准库，零依赖
+- `fetch_institutional.py`：需要 `playwright`（只 attach 本机 Chrome/Edge，**不要**跑 `playwright install`）+ 本机装有 Chrome 或 Edge
+- `pdf_to_md.py`：需要 `pymupdf4llm`（见下文）
 - Contact email (required by Unpaywall Terms of Service)
 
 ## API Policies
